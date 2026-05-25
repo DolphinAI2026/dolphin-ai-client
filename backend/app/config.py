@@ -91,27 +91,14 @@ class Settings(BaseSettings):
     coding_model_opus_model: str = "claude-opus-4-6"
 
     # Dolphin omnigate 统一网关（OpenAI 兼容，gpt-5.5 通用模型）
+    # 注意：保留以下三个字段是因为 dolphin 提供了对外的 OpenAI 兼容 LLM API gateway。
+    # ai-builder 把它当作普通 LLM provider 使用 — 不构成"业务集成"。
     dolphin_base_url: str = ""
     dolphin_api_key: str = ""
     dolphin_model: str = "gpt-5.5"
 
-    # Dolphin Agent 平台 SSO（HelpAssistant + 内嵌 chat 用）
-    # 当前 trial 版没有 token-exchange API，所有 ai-builder 用户共用一个 service token；
-    # 待 dolphin 提供 user-impersonate API 后，dolphin_sso 路由切换到按 user 颁发短期 token。
-    dolphin_server_url: str = "https://dolphin-trial.definesys.cn"
-    dolphin_agent_code: str = ""  # HelpAssistant 浮窗的"产品答疑助手"
-    dolphin_app_adjust_agent_code: str = ""  # 应用详情页"AI 调整应用"按钮用的"应用调整助手"
-    dolphin_requirements_agent_code: str = ""  # AI 需求分析菜单用的"需求分析助手"（chat + cowork 整合）
-    dolphin_tenant_id: str = "default"
-    dolphin_service_token: str = ""  # 后端持有的 dolphin admin/service JWT，永远不下发到前端 build
-    # 是否用 ai-builder 用户在 dolphin 镜像账号的 token 调 chat（每用户独立身份显示）。
-    # 需要 dolphin admin 先把 agent (ad16e01570 / a73e75cd81) 设为 tenant 公开，否则
-    # 镜像用户调 chat send 会报"应用不存在"。默认 False，session 都在 admin 名下，
-    # 靠 project_id 隔离会话历史（u{ai_user_id} 应用 #{app_id}）。
-    dolphin_use_user_token: bool = False
-
-    # AI-Builder 自身的对外 chat URL — submit_design_doc MCP 工具用它生成 deeplink。
-    # dolphin 需求分析 agent 把 md push 到 cache 后，工具返回值带
+    # ai-builder 自身的对外 chat URL — 给外部 MCP 客户端生成 deeplink 时用。
+    # 外部 agent 把 md push 到 cache 后，工具返回值带
     # {ai_builder_chat_deeplink_base}/chat?from=requirements，agent 把这条链接
     # 贴在 chat 里让用户点击；用户点了在新 tab 跳到 ChatPage，自动从 cache 拿
     # md 走 ChooseAppTargetDialog（新建 / 更新现有应用）。

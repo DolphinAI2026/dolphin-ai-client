@@ -823,11 +823,11 @@ async def login(
         )
 
     # 登录成功后立刻往 current_app slot 写入 user→tenant 映射。
-    # 这是 P1 stop bleed 关键：dolphin agent 调 MCP 工具时反查 slot 拿真实 tenant_id，
-    # 避免 slot miss 后 fallback 到 admin（旧行为导致跨租户数据泄漏）。app_id=0 表示
-    # 用户已登录但未打开具体应用 —— 用户进 /apps 打开应用后会再调 set_current_app 覆盖。
-    # 2026-05-10：同时写 apaas_uid → 本地 (uid, tid) alias，让 dolphin SDK 透传 aPaaS
-    # 大整数 user_id 调 MCP 工具时 _resolve_identity 能命中缓存零 DB。
+    # 这是 stop bleed 关键：MCP 工具反查 slot 拿真实 tenant_id，避免 slot miss 后
+    # fallback 到 admin（旧行为导致跨租户数据泄漏）。app_id=0 表示用户已登录但未打开
+    # 具体应用 —— 用户进 /apps 打开应用后会再调 set_current_app 覆盖。
+    # 同时写 apaas_uid → 本地 (uid, tid) alias，让外部 agent 透传 aPaaS 大整数 user_id
+    # 调 MCP 工具时 _resolve_identity 能命中缓存零 DB。
     def _prime_slot(real_user_id: int, real_tenant_id: int) -> None:
         try:
             from app.routes.current_app import set_current_app, set_apaas_user_alias
@@ -836,19 +836,6 @@ async def login(
                 set_apaas_user_alias(user.apaas_user_id, real_user_id, real_tenant_id)
         except Exception as exc:
             logger.warning("登录后写 current_app slot 失败: %s", exc)
-
-    # P3 v2：同时尝试用 (username, plain_password) 调 dolphin login 拿真身 token。
-    # 成功 → 缓存进程内，/api/dolphin/config 优先返这个真身 token；让用户在 dolphin
-    # 那边落到自己真实账号（如 li.l.77 = sub=94 in 宝洁租户），而不是镜像账号 sub=120。
-    # 失败仅 silent log（用户 dolphin 没同名账号 / 密码不一致），ai-builder login 不阻断。
-    # 这是平滑过渡：现有用户没建好 dolphin 账号也能用 ai-builder UI，进 dolphin chat
-    # 时 fallback 到 v1 镜像账号机制。
-    async def _try_dolphin_real_login(real_user_id: int, plain_pw: str) -> None:
-        try:
-            from app.services.dolphin_sso_v2 import login_dolphin_for_user
-            await login_dolphin_for_user(real_user_id, user_data.username, plain_pw)
-        except Exception as exc:
-            logger.warning("登录后 dolphin 真身 login 失败 user_id=%s: %s", real_user_id, exc)
 
     # 2026-05-10 Phase 4：登 apaas 拿 token 同步存。前提：用户 ai-builder 密码 == apaas
     # 同名账号密码（生产很少同步，admin 团队偶尔统一）。失败 silent log，登录流程不阻断。
@@ -897,7 +884,6 @@ async def login(
     if user.is_platform_admin:
         tenant_id = await resolve_default_tenant_id_for_user(db, user.id)
         _prime_slot(user.id, tenant_id or 0)
-        await _try_dolphin_real_login(user.id, user_data.password)
         if tenant_id:
             await _try_apaas_real_login(user, user_data.password, tenant_id)
         access_token = create_access_token(user, tenant_id=tenant_id)
@@ -922,7 +908,6 @@ async def login(
         # 单租户 — 直接登录
         tenant_id = memberships[0].tenant_id
         _prime_slot(user.id, tenant_id)
-        await _try_dolphin_real_login(user.id, user_data.password)
         await _try_apaas_real_login(user, user_data.password, tenant_id)
         access_token = create_access_token(user, tenant_id=tenant_id)
         return LoginResponse(access_token=access_token)
@@ -950,7 +935,6 @@ async def login(
     # 如果有默认租户，自动选择
     if default_tid:
         _prime_slot(user.id, default_tid)
-        await _try_dolphin_real_login(user.id, user_data.password)
         await _try_apaas_real_login(user, user_data.password, default_tid)
         access_token = create_access_token(user, tenant_id=default_tid)
         return LoginResponse(access_token=access_token, tenants=tenants)
@@ -1226,23 +1210,12 @@ class TenantUpdateRequest(BaseModel):
     max_components: Optional[int] = None
     contact_name: Optional[str] = None
     contact_email: Optional[str] = None
-    # 2026-05-09 P3 v3：三平台绑定字段（ai-builder ↔ apaas ↔ dolphin 租户级身份对齐）
-    # UI 直接输 apaas_base_url + apaas_platform_tenant_id（不暴露 PlatformEnv 概念，
-    # 后端自动 maintain 一条对应 env 记录）
+    # apaas 平台绑定字段：UI 直接输 apaas_base_url + apaas_platform_tenant_id
+    # （不暴露 PlatformEnv 概念，后端自动 maintain 一条对应 env 记录）
     apaas_base_url: Optional[str] = None
     apaas_platform_tenant_id: Optional[str] = None
-    dolphin_tenant_code: Optional[str] = None
-    dolphin_copilot_agent_code: Optional[str] = None
-    dolphin_coding_agent_code: Optional[str] = None
-    # 2026-05-11 dolphin SDK 官方公开参数（per-tenant 配置）
-    dolphin_customer_name: Optional[str] = None
-    dolphin_server_url: Optional[str] = None
     # 高级字段（UI 默认不显示，特殊场景下走 API 直传）
     apaas_env_id: Optional[int] = None
-    dolphin_tenant_id_str: Optional[str] = None
-    dolphin_agent_code: Optional[str] = None
-    dolphin_app_adjust_agent_code: Optional[str] = None
-    dolphin_requirements_agent_code: Optional[str] = None
 
 
 class TenantAdminItem(BaseModel):
@@ -1262,22 +1235,11 @@ class TenantAdminItem(BaseModel):
     contact_email: Optional[str] = None
     member_count: int = 0
     created_at: Optional[str] = None
-    # 2026-05-09 P3 v3：三平台绑定（前端编辑用）
-    # apaas_base_url + apaas_platform_tenant_id 是从 PlatformEnv 反查回来的（前端 prefill）
+    # apaas 平台绑定（前端编辑用）：从 PlatformEnv 反查回来（前端 prefill）
     apaas_base_url: Optional[str] = None
     apaas_platform_tenant_id: Optional[str] = None
     apaas_env_id: Optional[int] = None
-    dolphin_tenant_code: Optional[str] = None
-    dolphin_tenant_id_str: Optional[str] = None
-    dolphin_agent_code: Optional[str] = None
-    dolphin_copilot_agent_code: Optional[str] = None
-    dolphin_coding_agent_code: Optional[str] = None
-    dolphin_app_adjust_agent_code: Optional[str] = None
-    dolphin_requirements_agent_code: Optional[str] = None
-    # 2026-05-11 dolphin SDK 官方公开参数
-    dolphin_customer_name: Optional[str] = None
-    dolphin_server_url: Optional[str] = None
-    # 1:1:1 完整性（admin 视图标红用）
+    # 绑定完整性（admin 视图标红用）
     binding_complete: bool = False
     missing_fields: list[str] = []
 
@@ -1286,10 +1248,6 @@ def _tenant_admin_item(t: Tenant, member_count: int) -> TenantAdminItem:
     missing: list[str] = []
     if not t.apaas_env_id:
         missing.append("apaas_env_id")
-    if not t.dolphin_customer_name:
-        missing.append("dolphin_customer_name")
-    if not (t.dolphin_copilot_agent_code or t.dolphin_agent_code):
-        missing.append("dolphin_(copilot|default)_agent_code")
     return TenantAdminItem(
         id=t.id,
         tenant_name=t.tenant_name,
@@ -1303,15 +1261,6 @@ def _tenant_admin_item(t: Tenant, member_count: int) -> TenantAdminItem:
         member_count=member_count,
         created_at=t.created_at.isoformat() if t.created_at else None,
         apaas_env_id=t.apaas_env_id,
-        dolphin_tenant_code=t.dolphin_tenant_code,
-        dolphin_tenant_id_str=t.dolphin_tenant_id_str,
-        dolphin_agent_code=t.dolphin_agent_code,
-        dolphin_copilot_agent_code=t.dolphin_copilot_agent_code,
-        dolphin_coding_agent_code=t.dolphin_coding_agent_code,
-        dolphin_app_adjust_agent_code=t.dolphin_app_adjust_agent_code,
-        dolphin_requirements_agent_code=t.dolphin_requirements_agent_code,
-        dolphin_customer_name=t.dolphin_customer_name,
-        dolphin_server_url=t.dolphin_server_url,
         binding_complete=not missing,
         missing_fields=missing,
     )
@@ -1483,8 +1432,8 @@ async def update_tenant(
     if data.contact_email is not None:
         t.contact_email = data.contact_email.strip() or None
 
-    # 三平台绑定字段（apaas + dolphin）
-    # apaas：admin 直接输 base_url + platform_tenant_id（不暴露 env_id）。
+    # apaas 平台绑定字段
+    # admin 直接输 base_url + platform_tenant_id（不暴露 env_id）。
     # 后端帮他 maintain 一条 PlatformEnv 记录：第一次绑定时创建，后续编辑就 update。
     base_url_in = (data.apaas_base_url or "").strip() if data.apaas_base_url is not None else None
     platform_tid_in = (data.apaas_platform_tenant_id or "").strip() if data.apaas_platform_tenant_id is not None else None
@@ -1531,22 +1480,6 @@ async def update_tenant(
                     detail=f"apaas_env_id={data.apaas_env_id} 属于租户 {env.tenant_id}，不能绑定到租户 {t.id}",
                 )
             t.apaas_env_id = data.apaas_env_id
-
-    # 简单 string 字段：非 None 则覆盖（空串 → None）
-    for field in (
-        "dolphin_tenant_code",
-        "dolphin_tenant_id_str",
-        "dolphin_agent_code",
-        "dolphin_copilot_agent_code",
-        "dolphin_coding_agent_code",
-        "dolphin_app_adjust_agent_code",
-        "dolphin_requirements_agent_code",
-        "dolphin_customer_name",
-        "dolphin_server_url",
-    ):
-        val = getattr(data, field)
-        if val is not None:
-            setattr(t, field, val.strip() or None)
 
     await db.commit()
     await db.refresh(t)

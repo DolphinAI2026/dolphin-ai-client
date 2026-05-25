@@ -176,23 +176,36 @@ def _build_vuex_state(token: str, tenant_id: str, username: str) -> str:
     return json.dumps(state, ensure_ascii=False)
 
 
+# 2026-05-25: 真实命中得帆云 v5 平台全局 nav 的 selectors (实测 admin/app-store/edit-app
+# 页面 inspect 到的). 老 selectors (.header-wrap / .layout-header / ...) 保留兜底,
+# 跨版本 apaas / 其他得帆云实例可能用到.
 _HEADER_SELECTORS = (
+    ".base-header,.base-header__container,"
     ".header-wrap,.layout-header,.main-header,.platform-header,"
     ".x-header,#header,header.el-header,.el-header,.tenant-header,.app-top-header"
 )
 
 def _inject_sso_script(html: str, vuex_state: str) -> str:
-    """在 </head> 前注入 SSO token + 强制显示导航栏"""
+    """在 </head> 前注入 SSO token + **强制隐藏**平台全局 nav.
+
+    2026-05-25 翻转: 老逻辑是强制 show 平台 nav (为了完整平台体验),
+    现在 ChatPage 有自己的 TopBar, 平台 nav (得帆云 logo / 资源市场 / 应用市场 /
+    用户头像) 全是冗余 chrome 跟外层重叠. 改成强制 hide.
+
+    保留: 伪装非 iframe (防平台 frame busting). 应用编辑 header + tab 栏 (不在
+    _HEADER_SELECTORS 范围) 不受影响 — 用户仍能切 \"应用信息/访问权限/...\" 等 tab.
+    """
     escaped = json.dumps(vuex_state)
 
-    # CSS：比平台自身样式晚声明，!important 确保覆盖平台的 iframe 隐藏规则
+    # CSS: 强制 hide 平台全局 nav. !important 覆盖平台默认样式
     style = (
         "\n<style id='apaas-builder-overrides'>\n"
         + ",\n".join(s.strip() for s in _HEADER_SELECTORS.split(",")) + " {\n"
-        "  display: revert !important;\n"
-        "  visibility: visible !important;\n"
-        "  opacity: 1 !important;\n"
-        "  pointer-events: auto !important;\n"
+        "  display: none !important;\n"
+        "  visibility: hidden !important;\n"
+        "  height: 0 !important;\n"
+        "  overflow: hidden !important;\n"
+        "  pointer-events: none !important;\n"
         "}\n"
         "</style>\n"
     )
@@ -200,7 +213,7 @@ def _inject_sso_script(html: str, vuex_state: str) -> str:
     script = (
         "\n<script>\n"
         "(function(){\n"
-        # 伪装成非 iframe，阻止平台触发隐藏导航逻辑
+        # 伪装非 iframe — 防平台 frame busting (top/parent 让 if(window!==top) 短路)
         "  ['top','parent','frameElement'].forEach(function(k){\n"
         "    try{\n"
         "      Object.defineProperty(window,k,{\n"
@@ -215,22 +228,21 @@ def _inject_sso_script(html: str, vuex_state: str) -> str:
         "    sessionStorage.setItem('__vuex__session'," + escaped + ");\n"
         "    console.log('[SSO] token injected');\n"
         "  }catch(ex){console.error('[SSO]',ex)}\n"
-        # MutationObserver：防止平台 JS 动态隐藏导航栏
+        # MutationObserver: 平台 JS 动态显示 nav 时也按下去 (反向 forceShow)
         "  var SEL='" + _HEADER_SELECTORS + "';\n"
-        "  function forceShow(el){\n"
-        "    el.style.removeProperty('display');\n"
-        "    el.style.removeProperty('visibility');\n"
-        "    el.style.removeProperty('opacity');\n"
+        "  function forceHide(el){\n"
+        "    el.style.setProperty('display','none','important');\n"
+        "    el.style.setProperty('visibility','hidden','important');\n"
+        "    el.style.setProperty('height','0','important');\n"
         "  }\n"
         "  function observe(){\n"
+        "    document.querySelectorAll(SEL).forEach(forceHide);\n"
         "    var obs=new MutationObserver(function(muts){\n"
         "      muts.forEach(function(m){\n"
         "        var el=m.target;\n"
         "        if(el.nodeType===1){\n"
         "          var cs=window.getComputedStyle(el);\n"
-        "          if(cs.display==='none'||cs.visibility==='hidden'||parseFloat(cs.opacity)<0.1){\n"
-        "            forceShow(el);\n"
-        "          }\n"
+        "          if(cs.display!=='none'){ forceHide(el); }\n"
         "        }\n"
         "      });\n"
         "    });\n"
@@ -277,12 +289,52 @@ async def proxy_init(request: Request):
     return {"ok": True}
 
 
+# 2026-05-25: 菜单类型 → 平台 editor sub-path. 跟 super-agents-dev openLowCodeEditorDirectly
+# 的 URL pattern 对齐. MODEL=数据模型(fn-config 子集), QUOTE=引用表单, 其他默认 fn-config.
+_MENU_TYPE_TO_EDITOR_PATH = {
+    "MODEL": "data-model-fn-config",
+    "MENU_TYPE_MODEL": "data-model-fn-config",
+    "QUOTE": "quote-fn-config",
+    "MENU_TYPE_QUOTE": "quote-fn-config",
+}
+
+
+def _build_menu_redirect_path(tid: str, apaas_app_id: str,
+                               menu_id: str = "", form_id: str = "",
+                               menu_type: str = "") -> str:
+    """根据菜单类型构建 platform iframe redirect_path.
+
+    - 不传 menu_id → 应用编辑总览页 (老行为)
+    - 传 menu_id  → 该菜单对应的表单/模型编辑器
+    """
+    if not menu_id.strip():
+        return f"/platform/{tid}/admin/app-store/edit-app?appId={apaas_app_id}&currentStepIndex=0"
+
+    sub_path = _MENU_TYPE_TO_EDITOR_PATH.get((menu_type or "").upper(), "fn-config")
+    base = f"/platform/{tid}/default/{sub_path}"
+    qs_parts = [
+        f"appId={apaas_app_id}",
+        f"menuId={menu_id}",
+    ]
+    if form_id.strip():
+        qs_parts.append(f"formId={form_id}")
+    qs_parts.extend(["processVersion=false", "embed=1", "hideClose=1"])
+    return f"{base}?{'&'.join(qs_parts)}"
+
+
 @router.get("/api/platform-proxy/entry")
 async def proxy_entry(
     app_id: int,
     request: Request,
+    menu_id: str = "",
+    form_id: str = "",
+    menu_type: str = "",
 ):
-    """iframe SSO 入口 — 获取平台信息、代理 HTML、注入 token"""
+    """iframe SSO 入口 — 获取平台信息、代理 HTML、注入 token.
+
+    2026-05-25 扩展: 可选 menu_id / form_id / menu_type 直接进对应菜单的编辑器.
+    AppMenuSidebar 点菜单后用这个 URL 切 iframe src.
+    """
     from app.models import Application
     from app.deps import get_auth_context_from_token
 
@@ -375,7 +427,9 @@ async def proxy_entry(
     # 生成 SSO 注入页面：先写 localStorage，再重定向到代理路径
     vuex = _build_vuex_state(env.token, tid, env.username or "")
     escaped_vuex = json.dumps(vuex)
-    redirect_path = f"/platform/{tid}/admin/app-store/edit-app?appId={app.apaas_app_id}&currentStepIndex=0"
+    redirect_path = _build_menu_redirect_path(
+        tid, app.apaas_app_id, menu_id=menu_id, form_id=form_id, menu_type=menu_type,
+    )
     redirect_json = json.dumps(redirect_path)
 
     html = (
@@ -476,6 +530,18 @@ async def _proxy_request(request: Request, path: str, inject_auth: bool = False)
     client = _get_client()
     try:
         body = await request.body() if request.method in ("POST", "PUT", "PATCH") else None
+        # 2026-05-25: 抓 business-event save 用 — 用户手动配事件时落到文件给我们当模板
+        if body and "event/save/event" in path:
+            try:
+                import os as _os, time as _t
+                _capture_dir = "/Users/mars/Vibe Coding/apaas-builder-ai/docs/captures"
+                _os.makedirs(_capture_dir, exist_ok=True)
+                fname = f"business-event-save-captured-{int(_t.time())}.json"
+                with open(f"{_capture_dir}/{fname}", "wb") as fp:
+                    fp.write(body)
+                logger.info(f"🎯 captured event/save body to {fname} ({len(body)} bytes)")
+            except Exception as exc:
+                logger.warning(f"capture event/save failed: {exc}")
         resp = await client.request(method=request.method, url=target, headers=headers, content=body)
 
         if resp.status_code == 401 and _proxy_state.get("username"):

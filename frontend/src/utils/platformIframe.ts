@@ -27,6 +27,22 @@ export function buildPlatformProxyEntryUrl(appId: number, token: string): string
   return `${API_PREFIX}/platform-proxy/entry?app_id=${appId}${authQuery}&_ts=${Date.now()}`
 }
 
+// 2026-05-25: 进入指定菜单的 form 编辑器 (跟 backend _build_menu_redirect_path 配套).
+// 不传 menu_id 等价于 buildPlatformProxyEntryUrl (落 app 编辑总览).
+export function buildPlatformProxyMenuUrl(
+  appId: number,
+  token: string,
+  opts: { menuId?: string; formId?: string | null; menuType?: string } = {},
+): string {
+  const parts = [`app_id=${appId}`]
+  if (token) parts.push(`_auth=${encodeURIComponent(token)}`)
+  if (opts.menuId) parts.push(`menu_id=${encodeURIComponent(opts.menuId)}`)
+  if (opts.formId) parts.push(`form_id=${encodeURIComponent(opts.formId)}`)
+  if (opts.menuType) parts.push(`menu_type=${encodeURIComponent(opts.menuType)}`)
+  parts.push(`_ts=${Date.now()}`)
+  return `${API_PREFIX}/platform-proxy/entry?${parts.join('&')}`
+}
+
 function normalizeText(value: string | null | undefined): string {
   return String(value || '').replace(/\s+/g, '').replace(/[:：*]/g, '').trim()
 }

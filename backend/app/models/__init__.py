@@ -12,7 +12,7 @@ from app.database import Base
 BigText = Text().with_variant(LONGTEXT, "mysql")
 
 # Import tenant models
-from app.models.tenant import Tenant, UserTenant, Role, Team, TeamMember, TenantDolphinAgent
+from app.models.tenant import Tenant, UserTenant, Role, Team, TeamMember
 from app.models.spec import Spec  # noqa: F401  — register ORM mapping
 from app.models.preference import UserPreference  # noqa: F401  — register ORM mapping
 from app.models.collaboration import (  # noqa: F401  — register ORM mapping
@@ -393,41 +393,6 @@ from app.models.runtime_v2 import (  # noqa: E402, F401
 from app.models.agent_prompt import AgentPrompt  # noqa: E402, F401  — agent prompt templates per-tenant per-phase
 from app.models.config_assistant_skill import ConfigAssistantSkill  # noqa: E402, F401  — 配置助手自学习 skills
 from app.models.config_chat import ConfigChatSession, ConfigChatMessage  # noqa: E402, F401  — 配置助手会话持久化 (2026-05-24)
-
-
-class DolphinUserLink(Base):
-    """ai-builder 用户 → dolphin trial 租户内对应账号的映射。
-    每个 ai-builder 用户在 dolphin 镜像出独立账号，浮窗 / iframe 用该账号 token，
-    会话历史 / 项目按用户隔离，不再都挂在 dolphin admin 名下。"""
-    __tablename__ = "dolphin_user_links"
-
-    user_id: Mapped[int] = mapped_column(Integer, ForeignKey("users.id"), primary_key=True)
-    dolphin_user_id: Mapped[int] = mapped_column(Integer, nullable=False, index=True)
-    dolphin_username: Mapped[str] = mapped_column(String(80), nullable=False, unique=True)
-    dolphin_password_enc: Mapped[str] = mapped_column(Text, nullable=False)  # Fernet 加密
-    last_login_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
-    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, nullable=False)
-
-
-class DolphinAppSession(Base):
-    """(ai-builder 用户, app) → 固定的 dolphin (project_id, session_id) 映射。
-
-    设计目的：每个用户在每个 app 永远复用同一个 dolphin 会话 — session 顶部一次
-    注入 [SYSTEM CTX] 锚点后永久存在，agent 看 conversation 历史就能确定当前
-    应用，不再被 mcp slot 跨 tab 污染。dolphin sidebar 不再每次进 app 累积新
-    session。dolphin SPA 自身加载慢是另一回事，本表不解决。
-    """
-    __tablename__ = "dolphin_app_sessions"
-
-    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
-    user_id: Mapped[int] = mapped_column(Integer, ForeignKey("users.id"), nullable=False, index=True)
-    app_id: Mapped[int] = mapped_column(Integer, nullable=False, index=True)
-    dolphin_project_id: Mapped[int] = mapped_column(Integer, nullable=False)
-    dolphin_session_id: Mapped[str] = mapped_column(String(80), nullable=False)
-    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, nullable=False)
-    __table_args__ = (
-        UniqueConstraint("user_id", "app_id", name="uniq_user_app"),
-    )
 
 
 class DbConnection(Base):

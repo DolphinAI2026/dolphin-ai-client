@@ -26,7 +26,6 @@ from app.routes import (
     conversations,
     current_app,
     db_connections,
-    dolphin_sso,
     generation_steps,
     git_connection,
     git_webhook,
@@ -213,7 +212,6 @@ app.include_router(vibe_coding_chat.router, prefix="/api")
 app.include_router(help_assistant.router, prefix="/api")
 app.include_router(voice.router, prefix="/api")
 app.include_router(sandboxes.router, prefix="/api")
-app.include_router(dolphin_sso.router, prefix="/api")
 app.include_router(requirements.router, prefix="/api")
 app.include_router(current_app.router, prefix="/api")
 app.include_router(admin_mcp.router, prefix="/api")

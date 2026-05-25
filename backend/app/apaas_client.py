@@ -1627,6 +1627,337 @@ class APaaSClient:
                 return data.get("data", {})
             raise Exception(data.get("message", "创建菜单失败"))
 
+    # 2026-05-25: 菜单分组 + 移动菜单到分组. 平台 /xdap-app/menu/save/menu endpoint
+    # 同时支持 menuType=GROUP (分组) 和 parentId (挂到 group 下).
+    async def create_menu_group(
+        self,
+        app_id: str,
+        group_name: str,
+        menu_order: int = 0,
+        parent_id: str = "",
+    ) -> dict:
+        """创建菜单分组 (menuType=GROUP, 无 formId). 可选 parent_id 嵌套到另一个分组下.
+
+        2026-05-25: payload 跟 super-agents-dev saveAppMenu 对齐 — 含 i18n / customIcon
+        / datasourceName 等占位字段, 否则平台 save 返 ok 但 query 不到 (静默丢)。
+        """
+        url = f"{self.base_url}/xdap-app/menu/save/menu"
+        payload = {
+            "appId": app_id,
+            "menuName": group_name,
+            "menuNameI18nResourceCode": "",
+            "menuNameI18nAssociated": False,
+            "menuNameI18n": {},
+            "menuType": "GROUP",
+            "menuDisplay": "ALL",
+            "menuOrder": menu_order,
+            "menuIcon": "userInfo",
+            "menuCustomIcon": "",
+            "iconColor": "#027AFF",
+            "datasourceId": "",
+            "datasourceName": "",
+            "datasourceCode": "",
+            "menuModelType": "",
+            "cusIconStatus": "DISABLE",
+            "cusModelPageStatus": "DISABLE",
+            "newWindowStatus": "DISABLE",
+        }
+        if parent_id and parent_id.strip():
+            payload["parentId"] = parent_id.strip()
+        _log_request("POST", url, payload)
+        start = time.time()
+        async with httpx.AsyncClient(verify=False, timeout=APAAS_HTTP_TIMEOUT) as client:
+            response = await client.post(url, headers=self._get_headers(app_id), json=payload)
+            elapsed_ms = (time.time() - start) * 1000
+            response.raise_for_status()
+            data = response.json()
+            _log_response(url, response.status_code, data, elapsed_ms)
+            if data.get("code") == "ok":
+                logger.info(f"菜单分组创建成功: {group_name}")
+                return data.get("data", {}) or {}
+            raise Exception(data.get("message", "创建菜单分组失败"))
+
+    async def update_menu_parent(
+        self,
+        app_id: str,
+        menu_id: str,
+        parent_id: str = "",
+        menu_order: int = 0,
+    ) -> dict:
+        """改菜单的父分组 — 用 interface-engine queue_xdap_appmenu 整树 reorder.
+
+        2026-05-25: 平台 save/menu 接受 parentId 但不真的更新已存 menu 的位置 (验证过).
+        正确做法 (跟 super-agents-dev saveMenuOrder 一致) — 构造完整菜单层级数组,
+        每个 group 把它的 submenus 嵌进去, target menu 移到目标 group 的 submenus
+        下并设 parentId. POST 整树到 /api/interface-engine/interfaces/by-code/queue_xdap_appmenu/execute.
+
+        parent_id="" = 移到根; parent_id=<group_id> = 挂到该 group 下.
+        """
+        # 先查当前菜单完整树 (manageAppMenu, 含 GROUP + 嵌套 submenus)
+        menus = await self.query_menus(app_id)
+
+        def _strip_clientside(m: dict) -> dict:
+            """去掉前端可能添加的字段, 跟 super-agents saveMenuOrder 一致."""
+            out = {k: v for k, v in m.items() if k not in ("isGroup", "submenus")}
+            return out
+
+        # 1) 平铺找 target, 然后把它从原位置摘出来
+        target = None
+        all_groups_by_id: dict[str, dict] = {}
+
+        def _walk(nodes: list, parent: dict | None = None) -> list:
+            """递归走 menu tree, 同步在 all_groups_by_id 记 group 索引."""
+            cleaned = []
+            for n in nodes or []:
+                if not isinstance(n, dict):
+                    continue
+                if str(n.get("id") or n.get("menuId") or "") == str(menu_id):
+                    nonlocal target
+                    target = n
+                    continue  # 摘出来, 一会儿重新插
+                copy = dict(n)
+                kids = n.get("submenus") or n.get("children") or []
+                if kids:
+                    copy["submenus"] = _walk(kids, copy)
+                else:
+                    copy["submenus"] = []
+                if str(copy.get("menuType") or "").upper() == "GROUP":
+                    all_groups_by_id[str(copy.get("id") or copy.get("menuId") or "")] = copy
+                cleaned.append(copy)
+            return cleaned
+
+        new_tree = _walk(menus or [])
+
+        if not target:
+            raise Exception(f"找不到 menu_id={menu_id} 的菜单, 无法更新父分组")
+
+        # 2) 把 target 摘下来 + 更新 parentId / menuOrder
+        target_copy = dict(target)
+        target_copy["parentId"] = parent_id.strip() if parent_id else ""
+        target_copy["menuOrder"] = menu_order
+        target_copy["submenus"] = []  # 子菜单不能嵌孙 (跟 super-agents 一致)
+
+        # 3) 插入到目标位置
+        if parent_id and parent_id.strip():
+            # 挂到指定 group 下 — 找那个 group 在 new_tree 里 (可能在 root 也可能在嵌套)
+            pid = parent_id.strip()
+            inserted = False
+
+            def _try_insert(nodes: list) -> bool:
+                for n in nodes:
+                    if str(n.get("id") or n.get("menuId") or "") == pid:
+                        n.setdefault("submenus", []).append(target_copy)
+                        return True
+                    if n.get("submenus"):
+                        if _try_insert(n["submenus"]):
+                            return True
+                return False
+
+            inserted = _try_insert(new_tree)
+            if not inserted:
+                raise Exception(f"找不到目标 group menu_id={pid}, 无法挂载")
+        else:
+            # 移到根
+            new_tree.append(target_copy)
+
+        # 4) 重新算 menuOrder (顺序按当前位置)
+        def _fix_order(nodes: list) -> None:
+            for i, n in enumerate(nodes):
+                n["menuOrder"] = i
+                if n.get("submenus"):
+                    for j, sub in enumerate(n["submenus"]):
+                        sub["menuOrder"] = j
+                        sub["parentId"] = n.get("id") or n.get("menuId") or ""
+
+        _fix_order(new_tree)
+
+        # 5) target 之前的完整原始字段透传 (含 objectVersionNumber, 平台乐观锁), 仅覆盖 parentId.
+        # interface-engine 不在 trial 平台 — 退回直接 save/menu, 带完整字段 + 乐观锁.
+        full_payload = {
+            k: v for k, v in target.items()
+            if k not in ("submenus", "children", "subMenus", "menuList")
+        }
+        full_payload["parentId"] = parent_id.strip() if parent_id else ""
+        full_payload["menuOrder"] = menu_order
+        # i18n / customIcon 占位 (super-agents 兼容)
+        full_payload.setdefault("menuNameI18nResourceCode", "")
+        full_payload.setdefault("menuNameI18n", {})
+        full_payload.setdefault("menuCustomIcon", "")
+        full_payload.setdefault("datasourceName", "")
+
+        url = f"{self.base_url}/xdap-app/menu/save/menu"
+        _log_request("POST", url, full_payload)
+        start = time.time()
+        async with httpx.AsyncClient(verify=False, timeout=APAAS_HTTP_TIMEOUT) as client:
+            response = await client.post(url, headers=self._get_headers(app_id), json=full_payload)
+            elapsed_ms = (time.time() - start) * 1000
+            response.raise_for_status()
+            data = response.json()
+            _log_response(url, response.status_code, data, elapsed_ms)
+            if data.get("code") != "ok":
+                raise Exception(data.get("message", "更新菜单父分组失败"))
+
+        # 关键: 平台 save/menu 对 existing menu 的 parentId 改动有时静默不持久化.
+        # 立刻 verify — re-query 看 parentId 真改了没.
+        verify_menus = await self.query_menus(app_id)
+        def _verify_walk(nodes, target_pid=""):
+            for n in nodes or []:
+                if str(n.get("id") or n.get("menuId") or "") == str(menu_id):
+                    return str(n.get("parentId") or "")
+                if n.get("submenus"):
+                    sub = _verify_walk(n["submenus"], target_pid)
+                    if sub is not None:
+                        return sub
+            return None
+        actual_parent = _verify_walk(verify_menus or [])
+        expected = parent_id.strip() if parent_id else ""
+        if str(actual_parent or "") != expected:
+            logger.warning(
+                f"菜单 {menu_id} parentId 改动未持久化: expected={expected!r} actual={actual_parent!r}"
+            )
+            raise Exception(
+                "平台 API 不支持移动现有菜单到分组 (save/menu 接受 parentId 但不持久化, "
+                "是 apaas trial 版限制). 解决方案: 1) 在平台『菜单功能』tab 内拖拽; "
+                "或 2) 直接在分组下用 create_apaas_form_menu(parent_id=...) 新建菜单."
+            )
+        logger.info(f"菜单 {menu_id} 父分组已更新 → {parent_id or '根'} (verified)")
+        return {"menu_id": menu_id, "parent_id": expected, "verified": True}
+
+    # ───────────────────── 业务事件 (research-business-event-api.md v2) ─────────────────────
+    # 9 个 endpoint 实证, 这里实现 6 个高频. 详 docs/research-business-event-api.md 第 5 节.
+
+    async def list_business_events(self, app_id: str, keyword: str = "",
+                                    page: int = 1, page_size: int = 20) -> dict:
+        """列应用业务事件 — GET /xdap-app/event/query/list."""
+        url = f"{self.base_url}/xdap-app/event/query/list"
+        params = {"appId": app_id, "keyword": keyword, "page": page, "pageSize": page_size}
+        _log_request("GET", url, params)
+        start = time.time()
+        async with httpx.AsyncClient(verify=False, timeout=APAAS_HTTP_TIMEOUT) as client:
+            response = await client.get(url, headers=self._get_headers(app_id), params=params)
+            elapsed_ms = (time.time() - start) * 1000
+            response.raise_for_status()
+            data = response.json()
+            _log_response(url, response.status_code, data, elapsed_ms, method="GET")
+            if data.get("code") != "ok":
+                raise Exception(data.get("message", "查询业务事件失败"))
+            return data.get("data") or {}
+
+    async def get_business_event_detail(self, event_id: str, app_id: str) -> dict:
+        """查事件详情 (含完整 DAG) — GET /xdap-app/event/query/detail."""
+        url = f"{self.base_url}/xdap-app/event/query/detail"
+        params = {"eventId": event_id, "appId": app_id}
+        _log_request("GET", url, params)
+        start = time.time()
+        async with httpx.AsyncClient(verify=False, timeout=APAAS_HTTP_TIMEOUT) as client:
+            response = await client.get(url, headers=self._get_headers(app_id), params=params)
+            elapsed_ms = (time.time() - start) * 1000
+            response.raise_for_status()
+            data = response.json()
+            _log_response(url, response.status_code, data, elapsed_ms, method="GET")
+            if data.get("code") != "ok":
+                raise Exception(data.get("message", "查询业务事件详情失败"))
+            return data.get("data") or {}
+
+    async def create_business_event(self, app_id: str, event_name: str,
+                                     event_type: str = "EVENT_OPERATION") -> dict:
+        """创建事件 metadata stub — POST /xdap-app/event/add/event.
+
+        返结构含 id (eventId 24hex). 后续 get_business_event_detail 拿 stub 完整 DAG
+        (平台自动填好 boCodeBORelationProperties 等元数据), agent 改 trigger / 加节点
+        后调 save_business_event 持久化.
+        """
+        url = f"{self.base_url}/xdap-app/event/add/event"
+        payload = {
+            "appId": app_id,
+            "eventType": event_type,
+            "eventName": event_name,
+            "version": "v3.0",
+        }
+        _log_request("POST", url, payload)
+        start = time.time()
+        async with httpx.AsyncClient(verify=False, timeout=APAAS_HTTP_TIMEOUT) as client:
+            response = await client.post(url, headers=self._get_headers(app_id), json=payload)
+            elapsed_ms = (time.time() - start) * 1000
+            response.raise_for_status()
+            data = response.json()
+            _log_response(url, response.status_code, data, elapsed_ms)
+            if data.get("code") != "ok":
+                raise Exception(data.get("message", "创建业务事件失败"))
+            return data.get("data") or {}
+
+    async def save_business_event(self, event_data: dict, app_id: str) -> dict:
+        """保存事件完整 DAG — POST /xdap-app/event/save/event.
+
+        event_data 是从 get_business_event_detail 拿到的完整结构 + agent 修改后传回.
+        包括 triggerNodeNd / eventNodeNdList / endNode + 顶层元数据.
+        """
+        url = f"{self.base_url}/xdap-app/event/save/event"
+        _log_request("POST", url, {
+            "_summary": "event save (full DAG)",
+            "eventName": event_data.get("eventName"),
+            "eventType": event_data.get("eventType"),
+            "nodes_count": len(event_data.get("eventNodeNdList") or []),
+        })
+        start = time.time()
+        async with httpx.AsyncClient(verify=False, timeout=APAAS_HTTP_TIMEOUT) as client:
+            response = await client.post(url, headers=self._get_headers(app_id), json=event_data)
+            elapsed_ms = (time.time() - start) * 1000
+            response.raise_for_status()
+            data = response.json()
+            _log_response(url, response.status_code, data, elapsed_ms)
+            if data.get("code") != "ok":
+                raise Exception(data.get("message", "保存业务事件失败"))
+            return data.get("data") or {}
+
+    async def delete_business_event(self, event_id: str, app_id: str) -> dict:
+        """删除事件 — GET /xdap-app/event/del/event ⚠️ 是 GET 不是 DELETE."""
+        url = f"{self.base_url}/xdap-app/event/del/event"
+        params = {"eventId": event_id, "appId": app_id}
+        _log_request("GET", url, params)
+        start = time.time()
+        async with httpx.AsyncClient(verify=False, timeout=APAAS_HTTP_TIMEOUT) as client:
+            response = await client.get(url, headers=self._get_headers(app_id), params=params)
+            elapsed_ms = (time.time() - start) * 1000
+            response.raise_for_status()
+            data = response.json()
+            _log_response(url, response.status_code, data, elapsed_ms, method="GET")
+            if data.get("code") != "ok":
+                raise Exception(data.get("message", "删除业务事件失败"))
+            return data.get("data") or {}
+
+    async def list_form_menus_for_event(self, app_id: str) -> list:
+        """列应用所有表单菜单, 给 agent 选 triggerFormId — GET /xdap-app/menu/queryAllFormMenu?eventFlag=true."""
+        url = f"{self.base_url}/xdap-app/menu/queryAllFormMenu"
+        params = {"appId": app_id, "eventFlag": "true"}
+        _log_request("GET", url, params)
+        start = time.time()
+        async with httpx.AsyncClient(verify=False, timeout=APAAS_HTTP_TIMEOUT) as client:
+            response = await client.get(url, headers=self._get_headers(app_id), params=params)
+            elapsed_ms = (time.time() - start) * 1000
+            response.raise_for_status()
+            data = response.json()
+            _log_response(url, response.status_code, data, elapsed_ms, method="GET")
+            if data.get("code") != "ok":
+                raise Exception(data.get("message", "查询表单菜单失败"))
+            raw = data.get("data") or []
+            # 平台返结构可能含嵌套, 平铺出来给 agent 用
+            out = []
+            def _walk(nodes):
+                for n in nodes or []:
+                    if not isinstance(n, dict):
+                        continue
+                    if n.get("formId") or n.get("bocCode"):
+                        out.append({
+                            "menu_id": str(n.get("id") or n.get("menuId") or ""),
+                            "menu_name": n.get("menuName") or "",
+                            "form_id": str(n.get("formId") or ""),
+                            "boc_code": str(n.get("bocCode") or n.get("boCode") or ""),
+                        })
+                    _walk(n.get("submenus") or n.get("children") or [])
+            _walk(raw if isinstance(raw, list) else [raw])
+            return out
+
     async def query_menus(self, app_id: str) -> list:
         """查询应用的菜单列表（包含表单）"""
         url = f"{self.base_url}/xdap-app/menu/query/manageAppMenu"
@@ -1803,3 +2134,75 @@ class APaaSClient:
 
         # 保存
         return await self.save_form_config(app_id, form_config)
+
+    # ───────────────────────────────────────────────────────────
+    # Business Events 补全 — 3 个旧版没有的方法
+    # （旧的 6 个在 1826-1959 行：list_business_events / get_business_event_detail /
+    #   create_business_event / save_business_event / delete_business_event /
+    #   list_form_menus_for_event；保留不动）
+    # ───────────────────────────────────────────────────────────
+
+    async def list_business_events_in_tenant(self, page: int = 1, page_size: int = 20, keyword: str = "") -> dict:
+        """租户业务事件中心 list — POST /xdap-app/event/query/allEventList
+
+        跨应用聚合的只读视图。返回 {table:[{eventId, appName, eventCode, callbackUrl, ...}], total}
+        """
+        url = f"{self.base_url}/xdap-app/event/query/allEventList"
+        payload = {"page": page, "pageSize": page_size, "keyword": keyword or ""}
+        _log_request("POST", url, payload)
+        start = time.time()
+        async with httpx.AsyncClient(verify=False, timeout=APAAS_HTTP_TIMEOUT) as client:
+            response = await client.post(url, headers=self._get_headers(), json=payload)
+            elapsed_ms = (time.time() - start) * 1000
+            response.raise_for_status()
+            data = response.json()
+            _log_response(url, response.status_code, data, elapsed_ms, method="POST", request_body=_to_json(payload))
+            if data.get("code") != "ok":
+                raise Exception(data.get("message", "查租户业务事件列表失败"))
+            return {"table": data.get("table") or [], "total": data.get("total") or 0}
+
+    async def query_business_event_trees(self, app_id: str) -> list:
+        """应用业务事件分类树 — GET /xdap-app/event/queryTrees
+
+        左侧分类菜单（外部触发 / 定时触发 / 表单触发 等分组）的 tree 结构
+        """
+        url = f"{self.base_url}/xdap-app/event/queryTrees"
+        params = {"appId": app_id}
+        _log_request("GET", url, params)
+        start = time.time()
+        async with httpx.AsyncClient(verify=False, timeout=APAAS_HTTP_TIMEOUT) as client:
+            response = await client.get(url, headers=self._get_headers(app_id), params=params)
+            elapsed_ms = (time.time() - start) * 1000
+            response.raise_for_status()
+            data = response.json()
+            _log_response(url, response.status_code, data, elapsed_ms, method="GET")
+            if data.get("code") != "ok":
+                raise Exception(data.get("message", "查业务事件分类树失败"))
+            return data.get("data") or []
+
+    async def list_business_event_execution_history(
+        self, event_id: str, app_id: str, page: int = 1, page_size: int = 10,
+        status: str = "", before_time: str = "", end_time: str = "",
+    ) -> dict:
+        """查业务事件执行历史 — POST /xdap-app/event/query/exeHistory/list
+
+        返回 {table:[{触发时间/执行时长/触发方式/触发人/状态/...}], total}
+        status: ENABLE/DISABLE 过滤；beforeTime/endTime: 时间区间过滤（"YYYY-MM-DD HH:mm:ss"）
+        """
+        url = f"{self.base_url}/xdap-app/event/query/exeHistory/list"
+        payload = {
+            "page": page, "pageSize": page_size, "status": status or "",
+            "beforeTime": before_time or "", "endTime": end_time or "",
+            "eventId": event_id,
+        }
+        _log_request("POST", url, payload)
+        start = time.time()
+        async with httpx.AsyncClient(verify=False, timeout=APAAS_HTTP_TIMEOUT) as client:
+            response = await client.post(url, headers=self._get_headers(app_id), json=payload)
+            elapsed_ms = (time.time() - start) * 1000
+            response.raise_for_status()
+            data = response.json()
+            _log_response(url, response.status_code, data, elapsed_ms, method="POST", request_body=_to_json(payload))
+            if data.get("code") != "ok":
+                raise Exception(data.get("message", "查业务事件执行历史失败"))
+            return {"table": data.get("table") or [], "total": data.get("total") or 0}

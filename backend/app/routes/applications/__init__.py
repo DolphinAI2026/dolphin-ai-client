@@ -2298,17 +2298,54 @@ _CONFIG_CHAT_TOOL_WHITELIST: set[str] = {
     "update_apaas_app_dict",
     "add_apaas_dict_option",
     "update_apaas_dict_option",
+    # 2026-05-25 补: 禁用字典 / 选项 (apaas 没真删, 禁用 = 终态)
+    "disable_apaas_app_dict",
+    "disable_apaas_dict_option",
     # —— 角色 ——
     "create_apaas_app_roles",
     "update_apaas_app_role",
     "delete_apaas_app_role",
+    # —— 菜单管理 (2026-05-25 补) ——
+    # 用户高频说"加菜单 / 加自开发页面 / 删菜单"用这 3 个, 不再让 agent 走 browser_*
+    # 模拟点击平台菜单设计器.
+    "create_apaas_form_menu",        # 普通表单菜单 (关联 formId)
+    "create_apaas_self_dev_menu",    # 自开发菜单 (linkUrl=组件名)
+    "delete_apaas_app_menu",         # 删菜单 (普通/表单/自开发都用这个)
+    # 2026-05-25 续: 菜单分组 + 移动菜单到分组下
+    "create_apaas_menu_group",       # 建分组 (menuType=GROUP)
+    "set_apaas_menu_parent",         # 改菜单父分组 (挂载/脱离)
+    # —— 业务事件 (BPM Engine, 2026-05-25 P1) ——
+    # 字段值改变事件 / 表单提交事件 / 定时事件 等核心 BPM 场景. agent 用 add → get_detail
+    # → 改 trigger + 加节点 → save 4 步建事件; 不再让用户去平台 UI 配.
+    "list_apaas_business_events",
+    "get_apaas_business_event_detail",
+    "create_apaas_business_event",
+    "save_apaas_business_event",
+    "delete_apaas_business_event",
+    "list_apaas_form_menus_for_event",
+    "list_apaas_business_events_in_tenant",
+    "query_apaas_business_event_trees",
+    "list_apaas_business_event_execution_history",
+    # 高层 wrapper — 一键建事件 (不用 agent 拼 DAG)
+    "create_form_event_with_python_code",
+    "create_time_event_with_python_code",
+    "create_apaas_value_change_assignment_event",   # 用户最高频"X 改成 Y → 填 Z"场景
+    # —— 表单字段权限 (2026-05-25 补) ——
+    "set_apaas_form_permissions",    # 配字段对角色的读/写/隐藏权限
     # —— 浏览器控制 (POC, 见 docs/rfc-2026-05-19-browser-control-poc.md) ——
     # MCP API 够不到的操作 (加表单组件 / 拖拽 / 改流程拓扑等) 走这里:
     # AI 先 browser_snapshot 看页面结构，再 click/type 操作。
-    # 要求用户 Chrome 已 --remote-debugging-port=9222；没开则工具调用降级失败。
+    # 2026-05-25: 升级到 frame 路由 — snapshot 返 frames[], click/type/wait/press_key
+    # 接 frame_id, 平台 UI 操作必须传 role="platform" 的 frame_id。
+    # 优先 chrome extension (apaas-builder-helper, ws://...:8000/ws/browser-ext);
+    # 没装时降级到 chrome-devtools-mcp (没 frame 路由, 只能操作 top frame, 应用
+    # iframe 内部 DOM 看不到).
     "browser_snapshot",
     "browser_click",
     "browser_type",
+    "browser_wait_for_text",
+    "browser_press_key",
+    # browser_navigate 故意保留白名单但 prompt 严禁在 ChatPage 场景下用
     "browser_navigate",
     "browser_screenshot",
     "browser_list_pages",
@@ -2871,41 +2908,54 @@ async def _config_chat_event_stream(
             "### 返回格式\n"
             "- 做了实际变更后（调了 update_*/create_*/delete_* 类工具且 ok=true），**在回复末尾**给 ```json 块带 summary + actions, **actions.type 必须是真工具名** (update_field / create_role / add_dict_option 等), 不要是 read/design 这种「建议型」占位\n"
             "- 只读问答（「列出当前菜单」）/ 浏览方案（「加自开发页面」但你只 browse 没真操作）**不要给 json 块** — 给 json 但没真做事会让前端误以为有 ChangePlan 可应用, 这是反模式\n\n"
-            "## ⚠️ 浏览器操作铁律 — 在用户 ChatPage tab 的 iframe 内操作, 不要 navigate 离开 (2026-05-21 用户实测痛点)\n\n"
-            "用户实际在用 `localhost:5173/ai-builder/chat?app_id=N` 这个 ChatPage tab, 里面嵌着 aPaaS 平台 iframe (src 是 `*.dfy.definesys.cn/platform/...`).\n"
-            "**当用户说『加自开发页面 / 改菜单 / 改流程』时，绝对不要 browser_navigate 跳到 aPaaS URL 开新 tab**，那会让你操作的 page 跟用户看的 iframe 是两个不同 context (不同 cookie + 不同步), 用户改完后没法在 ChatPage 看到效果.\n\n"
-            "正确流程:\n"
-            "1. browser_list_pages — 看所有 tab\n"
-            "2. browser_select_page — 优先选 URL 含 `localhost:5173/ai-builder/chat` 的 tab (用户当前正在用的)\n"
-            "3. browser_snapshot — 拿 a11y tree (content script 自动注入到 iframe `all_frames:true`, snapshot 会包含 iframe 内的 DOM)\n"
-            "4. 在 a11y tree 里找 iframe 内的元素 uid → browser_click / browser_type 操作\n"
-            "5. 如果 iframe 内需要切换页面 (如 ChatPage 内嵌 aPaaS 应用详情→菜单功能), 通过点击 iframe 内的 nav 元素让 iframe 自己跳, 不要 browser_navigate 父 tab\n\n"
-            "**禁忌**:\n"
-            "- ❌ browser_navigate('https://df-aigc.dfy.definesys.cn/...') 直接跳 aPaaS URL — 会脱离用户 ChatPage context\n"
-            "- ❌ browser_navigate('chrome://extensions') 之类系统页 — 没意义\n"
-            "- ❌ 跨多个 tab 来回 select_page — 用户只用一个 ChatPage tab\n\n"
-            "**例外**: 如果 a11y tree 显示 iframe 真不存在 (用户在 ai-chat 而不是 chat?app_id=N), 才考虑 navigate. 但要先反问用户确认.\n\n"
-            "## 浏览器控制兜底 (apaas 平台 MCP API 够不到时)\n"
-            "如果用户要做的事 (加表单组件 / 拖拽字段到表单 / 改流程拓扑 / 改菜单顺序等)\n"
-            "MCP API 没暴露，**不要直接告诉用户'我做不到，请手动操作'** — 试试浏览器工具：\n"
-            "  1. browser_navigate(url) — 跳到目标页面\n"
-            "  2. browser_snapshot — 拿当前 tab 的 a11y tree (含元素 uid)\n"
-            "  3. browser_click(uid) / browser_type(uid, text) — 操作元素\n"
-            "  4. browser_screenshot — 截图（直接渲染在会话面板让用户看）\n\n"
-            "**⚠️ uid 跨 snapshot 不稳定！**\n"
-            "- 每次 browser_snapshot 会重置 uid prefix (1_*, 2_*, 3_*...)\n"
-            "- 用旧 snapshot 的 uid 调 click/type 会失败或点错元素\n"
-            "- **铁律**：每次 click/type 前都先重新 browser_snapshot 拿当前 uid\n"
-            "- 点击后建议再 browser_snapshot 验证 'selected' 状态变了\n\n"
-            "**⚠️ 撞 'No page selected' 错？** chrome-devtools-mcp 内部 active page 状态丢了。修法:\n"
-            "  1. browser_list_pages 拿所有 tab 列表 (含 pageId + URL)\n"
-            "  2. 找用户当前要操作的 tab（一般是 localhost:5173/ai-builder/... 那个）\n"
-            "  3. browser_select_page(pageId) 切过去\n"
-            "  4. 再 snapshot/click 就行了\n\n"
-            "**操作完关键步骤建议 browser_screenshot 让用户视觉验收** —— Claude in Chrome\n"
-            "风格，截图会在右侧助手面板直接渲染缩略图，用户能确认 AI 真做对了。\n\n"
-            "前提：用户 Chrome 必须开 --remote-debugging-port=9222。\n"
-            "失败 (BRIDGE_NOT_STARTED) 时降级到出步骤指引让用户手动点。\n\n"
+            "## ⚠️ 浏览器操作铁律 — frame 级精确路由 (2026-05-25 升级)\n\n"
+            "用户在 `localhost:5173/ai-builder/chat?app_id=N` ChatPage tab 里看着一个 iframe, iframe src 是\n"
+            "`/api/platform-proxy/entry?...`, 会重定向到 `/platform/<tid>/admin/app-store/edit-app?appId=...`.\n\n"
+            "**整个 tab 有两个关键 frame**:\n"
+            "- **host frame** (顶层, URL 是 ChatPage 自己): ChatPage 的 Vue UI — 左侧对话 / 中间 hero / 右侧助手.\n"
+            "  这是开发者 UI, 不是用户要改的应用配置.\n"
+            "- **platform frame** (iframe, URL 含 `/platform/` 或 `/api/platform-proxy/entry`): 真正的 aPaaS 应用\n"
+            "  配置页 — 应用编辑 / 菜单管理 / 流程设计 / 角色权限. **所有 \"调整应用 UI\" 操作目标都在这里**.\n\n"
+            "### 正确操作流程\n"
+            "1. `browser_snapshot` → 看返回的 `frames[]` 数组. 找 `role == \"platform\"` 的那个 frame, 拿 `tree`.\n"
+            "   如果没有 role=\"platform\" 的 frame, 报错并停止 (见下「找不到 platform frame」铁律).\n"
+            "2. 在 platform frame 的 `tree` 里找你要操作的元素 uid.\n"
+            "3. `browser_click(uid=..., frame_role=\"platform\")` — **强烈推荐用 `frame_role` 而不是 `frame_id`**:\n"
+            "   - `frame_role=\"platform\"`: extension 现场枚举找当前 platform iframe, 抗 iframe 重建 (ChatPage 的\n"
+            "     Vue `:key` 会让 iframe 元素重新挂载, frame_id 跟着变; 用 role 寻址永远命中最新那个).\n"
+            "   - frame_id 可以传作为 hint, 但失效时 extension 自动 fallback 到 role 解析, response 里\n"
+            "     `self_healed: true` + `frame_id_was_stale: <旧 id>` 告诉你切了.\n"
+            "4. `browser_type(uid=..., text=..., frame_role=\"platform\")` — 同理.\n"
+            "5. `browser_wait_for_text(text=\"...\", frame_role=\"platform\", timeout_ms=5000)` — 等 platform 异步\n"
+            "   渲染完再做下一步.\n"
+            "6. `browser_press_key(key=\"Enter\", frame_role=\"platform\")` — 表单提交 / 弹窗关闭.\n\n"
+            "### 铁律\n"
+            "- ❌ **绝对不要 `browser_navigate(...)`**. ChatPage tab 是用户当前正在用的, navigate 替换整个 tab URL\n"
+            "  → ChatPage 消失 → 后续 snapshot 找不到 iframe → 用户白等. 切菜单/页面靠 click platform frame 内部\n"
+            "  的导航元素 (sidebar 菜单项 / breadcrumb / tab 标签), 让 iframe 自己跳, 不要碰父 tab.\n"
+            "- ❌ **不传 frame_role 也不传 frame_id** = 默认 frame_id=0 = host frame = 点错地方.\n"
+            "  操作 aPaaS 应用 UI 永远要 `frame_role=\"platform\"`.\n"
+            "- ❌ **撞 `error_code: \"PLATFORM_FRAME_LOST\"`**: extension 重新枚举后也找不到 platform iframe.\n"
+            "  说明 (a) 用户跳出 ChatPage 了, 或 (b) iframe 加载失败 (app 未部署 / 平台 token 过期 / proxy error).\n"
+            "  立刻给用户报「未检测到 platform iframe」错, 绝对不要为了\"看起来 work\"去操作 host frame.\n"
+            "- ❌ **撞 `Could not establish connection. Receiving end does not exist`**: 老 frame_id 过期 (iframe\n"
+            "  被 Vue 重建了). 改用 `frame_role=\"platform\"` 立刻好 (extension 重新枚举找当前 platform). 这不是扩展\n"
+            "  坏了, 是 frame_id 不耐用的本质 — 用 role 寻址一劳永逸.\n"
+            "- ❌ 用旧 snapshot 的 uid: 每次 snapshot 都重置 uid 池. 操作前必 snapshot, 不要缓存 uid.\n\n"
+            "### Frame 模型自检 (调用前心里过一遍)\n"
+            "- 这一步是改用户的 aPaaS 应用 UI 吗? → 用 **platform** frame_id.\n"
+            "- 这一步是看 ChatPage 自身状态吗? → 一般用不到; ChatPage 状态走 MCP API 类工具拿\n"
+            "  (`get_apaas_app_overview` / `list_apaas_app_menus` 等), 不要靠 snapshot host frame.\n\n"
+            "### 截图验收\n"
+            "- 关键步骤 (改完字段 / 改完菜单) 调 `browser_screenshot` 让用户视觉确认. screenshot 是整个 tab 视口,\n"
+            "  不分 frame — 用户能直接看到 iframe 内变化.\n\n"
+            "### Fallback (chrome extension 未连)\n"
+            "- snapshot 返 `source: \"cdm\"` 且 `frame_count: 1` → extension 没装, 走 chrome-devtools-mcp 的扁平视图,\n"
+            "  看不到 iframe 内部 DOM. 此时告诉用户去装 apaas-builder-helper extension, 不要在 cdm 模式下硬操作\n"
+            "  iframe 内元素 (会撞 ELEM_NOT_FOUND).\n\n"
+            "### 撞 'No page selected' (cdm 兜底路径)\n"
+            "- 如果 source=cdm 且报 No page selected: browser_list_pages 拿 tab 列表 → browser_select_page(pageId) 切\n"
+            "  到 localhost:5173/ai-builder/chat 那个 tab → 再 snapshot. 仅 fallback 场景用.\n\n"
             "## Skill 自学习（重要！）\n"
             "你有一套『自学习 skills』 — 用户教你一类操作后，**主动调 save_config_skill** "
             "把步骤总结成 markdown 存下来，下次同类指令进来你能直接 follow，不用从零摸索。\n\n"
@@ -3202,4 +3252,231 @@ async def browser_viewport_stream(
             "Pragma": "no-cache",
             "X-Accel-Buffering": "no",  # nginx 不要 buffer
         },
+    )
+
+
+# ────────────────────── ChatPage 原生 AppMenuSidebar 用 ──────────────────────
+# 2026-05-25: 不再走 ConfigChat agent (MCP loop), 直接给前端 sidebar 拉真实菜单.
+# 走 platform list_apaas_app_menus, 返结构含 menu_id / menu_name / menu_type /
+# form_id / icon / 父子嵌套 (isGroup + children).
+# 前端 AppMenuSidebar.vue 渲染后点菜单 → 切 platform-proxy entry iframe 的 src
+# 带上 menu_id/form_id/menu_type → 后端 _build_menu_redirect_path 算出对应表单
+# 编辑器 URL.
+
+@router.get("/{app_id}/apaas-menus")
+async def get_application_apaas_menus(
+    app_id: int,
+    ctx: Annotated[AuthContext, Depends(get_auth_context)],
+    db: Annotated[AsyncSession, Depends(get_db)],
+):
+    """拉应用在 aPaaS 平台上的真实菜单列表 — ChatPage 原生 sidebar 用.
+
+    返回:
+      {
+        ok: true,
+        env_id: 11,
+        apaas_app_id: "846351551214649344",
+        menus: [{
+          menu_id, menu_name, menu_type, form_id, form_code, icon, depth,
+          is_group, parent_menu_id, children?: [...]  # 嵌套
+        }, ...]
+      }
+    """
+    result = await db.execute(
+        select(Application).where(
+            Application.id == app_id,
+            Application.tenant_id == ctx.tenant_id,
+        )
+    )
+    app = result.scalar_one_or_none()
+    if not app:
+        raise HTTPException(status_code=404, detail="应用不存在")
+    await _require_application_permission(ctx, db, app, Action.VIEW)
+
+    if not app.platform_env_id:
+        return {"ok": False, "error_code": "APP_NOT_BOUND_ENV",
+                "message": "应用未绑定平台环境"}
+    if not app.apaas_app_id:
+        return {"ok": False, "error_code": "APP_NOT_DEPLOYED",
+                "message": "应用尚未部署到平台"}
+
+    # 2026-05-25: 直接调 client.query_menus (manageAppMenu) 拿管理视图 — 含 GROUP
+    # 跟 process workflow menus. mcp 的 list_apaas_app_menus 走 allAppMenu (runtime
+    # 视图, 过滤了 GROUP) 不适合 sidebar 用.
+    from app.coding.apaas_tools import _get_apaas_client  # type: ignore
+    try:
+        client = await _get_apaas_client(app.platform_env_id, db)
+        raw_menus_nested = await client.query_menus(app.apaas_app_id)
+    except Exception as exc:
+        return {
+            "ok": False, "error_code": "APAAS_FETCH_FAILED",
+            "message": f"拉取菜单失败: {exc}",
+            "env_id": app.platform_env_id,
+            "apaas_app_id": app.apaas_app_id,
+        }
+
+    # 平台返嵌套 (submenus 字段), 打平后给后续 normalize + tree-build 复用.
+    def _flat_with_parent(nodes: list, parent_id: str = ""):
+        out: list = []
+        for n in nodes or []:
+            if not isinstance(n, dict):
+                continue
+            # 注 platform 嵌套返结构里 submenus 已经是 dict 数组
+            n_with_parent = {**n, "parentId": parent_id or n.get("parentId")}
+            out.append(n_with_parent)
+            kids = n.get("submenus") or n.get("children") or []
+            cur_id = str(n.get("id") or n.get("menuId") or "")
+            if kids and cur_id:
+                out.extend(_flat_with_parent(kids, cur_id))
+        return out
+
+    menus_raw = _flat_with_parent(raw_menus_nested or [])
+
+    # 兜底: 若空, 把 raw 当作单 list (老 API 返 array 不带 submenus 的情况)
+    if not menus_raw and isinstance(raw_menus_nested, dict):
+        menus_raw = raw_menus_nested.get("menus") or raw_menus_nested.get("data") or []
+
+    def _normalize_menu(m: dict) -> dict:
+        # 平台字段名可能是 camelCase / snake_case 混合, 都接住
+        mtype = m.get("menu_type") or m.get("menuType") or ""
+        return {
+            "menu_id": str(m.get("menu_id") or m.get("menuId") or m.get("id") or ""),
+            "menu_name": m.get("menu_name") or m.get("menuName") or m.get("name") or "",
+            "menu_type": mtype,
+            "menu_display": m.get("menu_display") or m.get("menuDisplay") or "",
+            "form_id": str(m.get("form_id") or m.get("formId") or "") or None,
+            "form_code": m.get("form_code") or m.get("formCode") or None,
+            "icon": m.get("icon") or m.get("menu_icon") or m.get("menuIcon") or "",
+            "depth": m.get("depth") or m.get("level") or 0,
+            "path": m.get("path") or "",
+            "parent_menu_id": str(m.get("parent_menu_id") or m.get("parentMenuId") or m.get("parentId") or m.get("pid") or "") or None,
+            # menuType=GROUP 自动判为 group; 也兼容 is_group / isGroup 显式标记
+            "is_group": bool(m.get("is_group") or m.get("isGroup")
+                              or str(mtype).upper() == "GROUP"),
+            "dashboard_id": str(m.get("dashboard_id") or m.get("dashboardId") or "") or None,
+            "link_url": m.get("link_url") or m.get("linkUrl") or None,
+            "sort_order": m.get("sort_order") or m.get("sortOrder")
+                          or m.get("menuOrder") or 0,
+        }
+
+    # 2026-05-25: 过滤掉平台自动注入的系统菜单 (流程待办 / 我发起的 / 流程授权 etc)
+    # 这些是 runtime 用户看的, 不是 AI Builder 配置目标. 用户/AI 不需要在 sidebar 看到.
+    _SYSTEM_AUTO_MENU_TYPES = {
+        "TODO", "TO_CHECK", "MY_SUBMIT", "MY_PARTICIPATE",
+        "TODO_MANAGE", "PROC_AUTH", "PROC_FORWARD",
+    }
+    flat = [_normalize_menu(m) for m in menus_raw if isinstance(m, dict)]
+    flat = [m for m in flat if m["menu_type"].upper() not in _SYSTEM_AUTO_MENU_TYPES]
+
+    # 嵌套 — 按 parent_menu_id 构 tree (无 parent 的放根)
+    by_id: dict[str, dict] = {m["menu_id"]: {**m, "children": []} for m in flat if m["menu_id"]}
+    roots: list[dict] = []
+    for m in by_id.values():
+        pid = m.get("parent_menu_id")
+        if pid and pid in by_id:
+            by_id[pid]["children"].append(m)
+        else:
+            roots.append(m)
+    # 同层按 sort_order 排
+    def _sort(items: list[dict]) -> None:
+        items.sort(key=lambda x: (int(x.get("sort_order") or 0), x.get("menu_name") or ""))
+        for it in items:
+            if it.get("children"):
+                _sort(it["children"])
+    _sort(roots)
+
+    return {
+        "ok": True,
+        "env_id": app.platform_env_id,
+        "apaas_app_id": app.apaas_app_id,
+        "menus": roots,
+        "flat_count": len(flat),
+    }
+
+
+# 2026-05-25 续: ChatPage AppMenuSidebar 用户主动操作 menus 的 endpoint.
+# Pinia store 调 backend, backend 复用 mcp_server 的 _call_apaas_platform_tool 走平台.
+
+class _CreateMenuGroupReq(BaseModel):
+    group_name: str
+    menu_order: int = 0
+    parent_id: str = ""
+
+
+@router.post("/{app_id}/apaas-menu-group")
+async def create_apaas_menu_group(
+    app_id: int,
+    payload: _CreateMenuGroupReq,
+    ctx: Annotated[AuthContext, Depends(get_auth_context)],
+    db: Annotated[AsyncSession, Depends(get_db)],
+):
+    """sidebar 新建菜单分组 — 创建 menuType=GROUP 的菜单."""
+    result = await db.execute(
+        select(Application).where(
+            Application.id == app_id,
+            Application.tenant_id == ctx.tenant_id,
+        )
+    )
+    app = result.scalar_one_or_none()
+    if not app:
+        raise HTTPException(status_code=404, detail="应用不存在")
+    await _require_application_permission(ctx, db, app, Action.EDIT)
+
+    if not app.platform_env_id or not app.apaas_app_id:
+        return {"ok": False, "error_code": "APP_NOT_DEPLOYED",
+                "message": "应用未部署到平台"}
+
+    name = payload.group_name.strip()
+    if not name:
+        return {"ok": False, "error_code": "INVALID_NAME", "message": "分组名必填"}
+
+    # WRITE 类工具不在 _call_apaas_platform_tool 的 executor 字典里, 直接调 mcp tool fn
+    from app.mcp_server import create_apaas_menu_group as _mcp_create_group  # type: ignore
+    return await _mcp_create_group(
+        env_id=app.platform_env_id,
+        apaas_app_id=app.apaas_app_id,
+        group_name=name,
+        menu_order=payload.menu_order,
+        parent_id=payload.parent_id,
+    )
+
+
+class _SetMenuParentReq(BaseModel):
+    menu_id: str
+    parent_id: str = ""  # "" = 移到根
+    menu_order: int = 0
+
+
+@router.post("/{app_id}/apaas-menu-set-parent")
+async def set_apaas_menu_parent(
+    app_id: int,
+    payload: _SetMenuParentReq,
+    ctx: Annotated[AuthContext, Depends(get_auth_context)],
+    db: Annotated[AsyncSession, Depends(get_db)],
+):
+    """sidebar 把菜单挂到分组下 / 移出回根级."""
+    result = await db.execute(
+        select(Application).where(
+            Application.id == app_id,
+            Application.tenant_id == ctx.tenant_id,
+        )
+    )
+    app = result.scalar_one_or_none()
+    if not app:
+        raise HTTPException(status_code=404, detail="应用不存在")
+    await _require_application_permission(ctx, db, app, Action.EDIT)
+
+    if not app.platform_env_id or not app.apaas_app_id:
+        return {"ok": False, "error_code": "APP_NOT_DEPLOYED",
+                "message": "应用未部署到平台"}
+    if not payload.menu_id.strip():
+        return {"ok": False, "error_code": "INVALID_PARAMS", "message": "menu_id 必填"}
+
+    from app.mcp_server import set_apaas_menu_parent as _mcp_set_parent  # type: ignore
+    return await _mcp_set_parent(
+        env_id=app.platform_env_id,
+        apaas_app_id=app.apaas_app_id,
+        menu_id=payload.menu_id.strip(),
+        parent_id=payload.parent_id,
+        menu_order=payload.menu_order,
     )

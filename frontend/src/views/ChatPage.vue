@@ -87,39 +87,49 @@
     </TopBar>
     <div class="content-area">
 
-      <!-- 平台配置 iframe（v-show 保持不销毁） -->
-      <div v-show="SHOW_PLATFORM_CONFIG && activeView === 'platform'" class="platform-iframe-container">
-        <div v-if="platformLoading" class="platform-loading">
-          <span class="loading-spinner">⟳</span> 加载平台配置...
-        </div>
-        <div v-else-if="platformError" class="platform-error">
-          <p>{{ platformError }}</p>
-          <div class="platform-error-actions">
-            <button class="platform-retry-btn" @click="loadPlatformUrl">重试</button>
-            <button class="platform-open-btn" @click="openPlatformNewTab">在新窗口打开</button>
+      <!-- 平台配置 iframe + 原生菜单 sidebar（v-show 保持不销毁） -->
+      <div v-show="SHOW_PLATFORM_CONFIG && activeView === 'platform'" class="platform-shell">
+        <!-- 左侧原生菜单 sidebar (B-3, 2026-05-25) — 跟平台 iframe 联动: 点菜单切 iframe -->
+        <ApaasMenuSidebar
+          v-if="existingAppId && platformIframeAppId === existingAppId"
+          :app-id="existingAppId"
+          :selected-menu-id="selectedApaasMenuId"
+          @menu-selected="onApaasMenuSelected"
+          @menus-loaded="onApaasMenusLoaded"
+        />
+        <div class="platform-iframe-container">
+          <div v-if="platformLoading" class="platform-loading">
+            <span class="loading-spinner">⟳</span> 加载平台配置...
           </div>
-        </div>
-        <template v-else-if="platformIframeUrl">
-          <div v-if="platformLoginHint" class="platform-login-hint">
-            <span>💡 首次使用请在下方登录平台（账号: <b>{{ platformLoginHint }}</b>）</span>
-            <button class="hint-nav-btn" @click="navigateIframeToApp" title="登录后点击跳转到应用配置页">🔄 跳转到应用</button>
-            <button class="hint-dismiss-btn" @click="platformLoginHint = ''">✕</button>
+          <div v-else-if="platformError" class="platform-error">
+            <p>{{ platformError }}</p>
+            <div class="platform-error-actions">
+              <button class="platform-retry-btn" @click="loadPlatformUrl">重试</button>
+              <button class="platform-open-btn" @click="openPlatformNewTab">在新窗口打开</button>
+            </div>
           </div>
-          <iframe
-            :key="platformIframeKey"
-            ref="platformIframeRef"
-            :src="platformIframeUrl"
-            class="platform-iframe"
-            frameborder="0"
-            allow="clipboard-read; clipboard-write"
-            @load="onPlatformIframeLoad"
-            @error="onIframeError"
-          ></iframe>
-        </template>
-        <div v-else class="platform-error">
-          <p>应用尚未部署到平台，无法打开辅助搭建</p>
-          <div class="platform-error-actions">
-            <button class="platform-retry-btn" @click="loadPlatformUrl">重试</button>
+          <template v-else-if="platformIframeUrl">
+            <div v-if="platformLoginHint" class="platform-login-hint">
+              <span>💡 首次使用请在下方登录平台（账号: <b>{{ platformLoginHint }}</b>）</span>
+              <button class="hint-nav-btn" @click="navigateIframeToApp" title="登录后点击跳转到应用配置页">🔄 跳转到应用</button>
+              <button class="hint-dismiss-btn" @click="platformLoginHint = ''">✕</button>
+            </div>
+            <iframe
+              :key="platformIframeKey"
+              ref="platformIframeRef"
+              :src="platformIframeUrl"
+              class="platform-iframe"
+              frameborder="0"
+              allow="clipboard-read; clipboard-write"
+              @load="onPlatformIframeLoad"
+              @error="onIframeError"
+            ></iframe>
+          </template>
+          <div v-else class="platform-error">
+            <p>应用尚未部署到平台，无法打开辅助搭建</p>
+            <div class="platform-error-actions">
+              <button class="platform-retry-btn" @click="loadPlatformUrl">重试</button>
+            </div>
           </div>
         </div>
       </div>
@@ -654,7 +664,8 @@ import {
   extractAppCodeFromText,
   extractAppNameFromText,
 } from '@/utils/app'
-import { buildPlatformProxyEntryUrl, repairPlatformIframe } from '@/utils/platformIframe'
+import { buildPlatformProxyEntryUrl, buildPlatformProxyMenuUrl, repairPlatformIframe } from '@/utils/platformIframe'
+import ApaasMenuSidebar from '@/components/ApaasMenuSidebar.vue'
 import type { ConversationCreate, Message } from '@/types'
 import TopBar from '@/components/TopBar.vue'
 import WorkbenchShell from '@/components/WorkbenchShell.vue'
@@ -2128,6 +2139,43 @@ const platformLoginHint = ref('')
 const platformIframeRef = ref<HTMLIFrameElement | null>(null)
 const platformIframeAppId = ref<number | null>(null)
 const platformIframeRepairTimer = ref<number | null>(null)
+
+// 2026-05-25 B-4: 原生菜单 sidebar 选中态 + 切 iframe handler
+const selectedApaasMenuId = ref<string | null>(null)
+
+// 2026-05-25 修不伦不类: sidebar 加载完 menus 后, 若还没选过菜单, 自动跳第一个 form 菜单.
+// 跳过应用总览页 (app-store/edit-app) — 那个页面带平台一整套 chrome (得帆云 logo / nav /
+// 应用 tab 栏) 跟我们外层 ChatPage 重叠. 直接进 fn-config 干净设计器视觉一致.
+function onApaasMenusLoaded(_menus: any[], firstFormMenu: any) {
+  if (!firstFormMenu) return  // app 只有 task_center 等无表单菜单, 留在总览页
+  if (selectedApaasMenuId.value) return  // 用户已经手动选过菜单, 不要覆盖
+  onApaasMenuSelected(firstFormMenu)
+}
+
+function onApaasMenuSelected(menu: {
+  menu_id: string
+  menu_name?: string
+  menu_type?: string
+  form_id?: string | null
+  menu_display?: string
+}) {
+  if (!existingAppId.value) return
+  selectedApaasMenuId.value = menu.menu_id
+  const token = userStore.token || localStorage.getItem('token') || ''
+  // 仅在切到 platform 视图后才允许切菜单 — 避免误把 iframe 卡到 platform 模式
+  if (activeView.value !== 'platform') activeView.value = 'platform'
+  // 关键: 不要 bump platformIframeKey, 让 iframe 复用同一元素 navigate
+  // → chrome frameId 保持稳定, ConfigAssistant 的 frame_role="platform" 寻址不掉链
+  const nextUrl = buildPlatformProxyMenuUrl(existingAppId.value, token, {
+    menuId: menu.menu_id,
+    formId: menu.form_id || undefined,
+    menuType: menu.menu_type || menu.menu_display || undefined,
+  })
+  platformIframeUrl.value = nextUrl
+  platformAppUrl.value = nextUrl
+  platformIframeAppId.value = existingAppId.value
+  platformLoginHint.value = ''
+}
 
 const buildPlatformProxyUrl = (appId: number) => {
   return buildPlatformProxyEntryUrl(appId, userStore.token || localStorage.getItem('token') || '')
@@ -10891,8 +10939,16 @@ html[data-theme="light"] .msg-attachment-chip {
 
 
 /* ── 平台配置 iframe ── */
+/* 2026-05-25 B-4: platform-shell 是 sidebar + iframe 的 2 列 wrapper */
+.platform-shell {
+  flex: 1;
+  display: flex;
+  flex-direction: row;
+  min-height: 0;
+  min-width: 0;
+}
 .platform-iframe-container {
-  flex: 1; display: flex; flex-direction: column; min-height: 0;
+  flex: 1; display: flex; flex-direction: column; min-height: 0; min-width: 0;
 }
 .platform-tab-bar {
   display: flex; align-items: center; gap: 4px; padding: 4px 16px;
