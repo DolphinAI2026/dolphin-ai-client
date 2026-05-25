@@ -70,6 +70,7 @@
           @select="handleSelect"
           @toggle-group="toggleGroup"
           @move-to-parent="moveToParent"
+          @delete-group="deleteGroup"
         />
       </div>
     </div>
@@ -81,7 +82,7 @@ import { ref, computed, watch, onMounted, h, defineComponent, type PropType } fr
 import { ElIcon, ElInput, ElButton, ElMessage, ElMessageBox, ElDropdown, ElDropdownMenu, ElDropdownItem } from 'element-plus'
 import {
   Search, Refresh, Loading, Warning, Files, Expand, Fold,
-  Folder, FolderOpened, FolderAdd, ArrowRight, ArrowDown, More,
+  Folder, FolderOpened, FolderAdd, ArrowRight, ArrowDown, More, Delete,
   Tickets, DataAnalysis, Link, Bell, MagicStick, Document, Connection, Menu as MenuIcon,
 } from '@element-plus/icons-vue'
 import request from '@/utils/request'
@@ -264,6 +265,47 @@ async function moveToParent(menu: ApaasMenu, parentId: string, parentName: strin
   }
 }
 
+async function deleteGroup(menu: ApaasMenu) {
+  if (!props.appId) return
+  const childCount = (menu.children || []).length
+  if (childCount > 0) {
+    ElMessageBox.alert(
+      `分组「${menu.menu_name}」还有 ${childCount} 个子菜单，请先把子菜单移出分组（点子菜单 "..." → 移出分组到根级 / 移到其他分组），再删除分组。`,
+      '分组不为空',
+      { type: 'warning', confirmButtonText: '知道了' },
+    ).catch(() => {})
+    return
+  }
+  try {
+    await ElMessageBox.confirm(
+      `确定要删除空分组「${menu.menu_name}」吗？此操作不可恢复。`,
+      '删除分组',
+      {
+        type: 'warning',
+        confirmButtonText: '删除',
+        cancelButtonText: '取消',
+        confirmButtonClass: 'el-button--danger',
+      },
+    )
+  } catch {
+    return
+  }
+  try {
+    const resp = await request.post<any, any>(
+      `/applications/${props.appId}/apaas-menu-delete`,
+      { menu_id: menu.menu_id, menu_name: menu.menu_name || '' },
+    )
+    if (resp?.ok) {
+      ElMessage.success(`分组「${menu.menu_name}」已删除`)
+      await reload()
+    } else {
+      ElMessage.error(resp?.message || '删除分组失败')
+    }
+  } catch (e: any) {
+    ElMessage.error(e?.response?.data?.detail || e?.message || '操作失败')
+  }
+}
+
 watch(() => props.appId, () => reload(), { immediate: false })
 onMounted(() => reload())
 defineExpose({ reload })
@@ -293,28 +335,30 @@ const MenuNode = defineComponent({
     expandedGroups: { type: Object as PropType<Set<string>>, required: true },
     groupOptions: { type: Array as PropType<ApaasMenu[]>, default: () => [] },
   },
-  emits: ['select', 'toggle-group', 'move-to-parent'],
+  emits: ['select', 'toggle-group', 'move-to-parent', 'delete-group'],
   setup(p, { emit: emitNode }) {
     const hasChildren = computed(() => !!(p.menu.children && p.menu.children.length))
     const isGroup = computed(() => !!p.menu.is_group || (hasChildren.value && !p.menu.form_id))
     const isExpanded = computed(() => p.expandedGroups.has(p.menu.menu_id))
     const isSelected = computed(() => String(p.selectedId || '') === String(p.menu.menu_id))
 
-    function handleMoveCommand(cmd: { parentId: string; parentName: string }) {
-      emitNode('move-to-parent', p.menu, cmd.parentId, cmd.parentName)
+    // 下拉命令分发: 普通菜单走 move, group 走 delete
+    function handleCommand(cmd: any) {
+      if (cmd?.action === 'delete-group') {
+        emitNode('delete-group', p.menu)
+      } else if (cmd?.action === 'move') {
+        emitNode('move-to-parent', p.menu, cmd.parentId, cmd.parentName)
+      }
     }
 
     return () => {
       const iconComp = iconForMenu(p.menu, isExpanded.value)
       const padLeft = `${(p.depth || 0) * 12 + 10}px`
 
-      // "..." 下拉: 移动菜单到分组 (普通菜单可移, group 自身暂不支持移)
-      // 收起态 + group 自身 不显示
-      const showActions = !p.collapsed && !isGroup.value
+      // "..." 下拉: 收起态都不显示. group 显"删除分组", 普通菜单显移动选项.
+      const showActions = !p.collapsed
       const movableTargets = (p.groupOptions || []).filter(g =>
-        // 不能移到自己 (group 排除自己, menu 不在 groupOptions 里所以这条对 group 移动有用)
         String(g.menu_id) !== String(p.menu.menu_id)
-        // 不能移到当前已在的分组
         && String(g.menu_id) !== String(p.menu.parent_menu_id || ''),
       )
       const canMoveToRoot = !!p.menu.parent_menu_id
@@ -323,7 +367,7 @@ const MenuNode = defineComponent({
         ? h(ElDropdown, {
             trigger: 'click',
             placement: 'bottom-end',
-            onCommand: handleMoveCommand,
+            onCommand: handleCommand,
           }, {
             default: () => h('button', {
               class: 'amsn-actions',
@@ -331,19 +375,29 @@ const MenuNode = defineComponent({
               onClick: (e: Event) => e.stopPropagation(),
             }, [h(ElIcon, null, () => h(More))]),
             dropdown: () => h(ElDropdownMenu, null, () => {
-              const items = []
-              if (canMoveToRoot) {
+              const items: any[] = []
+              if (isGroup.value) {
                 items.push(h(ElDropdownItem, {
-                  command: { parentId: '', parentName: '根级' },
-                }, () => '↰ 移出分组到根级'))
-              }
-              if (movableTargets.length === 0 && !canMoveToRoot) {
-                items.push(h(ElDropdownItem, { disabled: true }, () => '暂无可移动的分组'))
-              }
-              for (const g of movableTargets) {
-                items.push(h(ElDropdownItem, {
-                  command: { parentId: g.menu_id, parentName: g.menu_name },
-                }, () => '📁 移到「' + (g.menu_name || '未命名') + '」'))
+                  command: { action: 'delete-group' },
+                  class: 'amsn-dd-danger',
+                }, () => [
+                  h(ElIcon, { style: 'margin-right:6px;vertical-align:-2px' }, () => h(Delete)),
+                  '删除分组',
+                ]))
+              } else {
+                if (canMoveToRoot) {
+                  items.push(h(ElDropdownItem, {
+                    command: { action: 'move', parentId: '', parentName: '根级' },
+                  }, () => '↰ 移出分组到根级'))
+                }
+                if (movableTargets.length === 0 && !canMoveToRoot) {
+                  items.push(h(ElDropdownItem, { disabled: true }, () => '暂无可移动的分组'))
+                }
+                for (const g of movableTargets) {
+                  items.push(h(ElDropdownItem, {
+                    command: { action: 'move', parentId: g.menu_id, parentName: g.menu_name },
+                  }, () => '📁 移到「' + (g.menu_name || '未命名') + '」'))
+                }
               }
               return items
             }),
@@ -402,6 +456,7 @@ const MenuNode = defineComponent({
                 'onToggle-group': (id: string) => emitNode('toggle-group', id),
                 'onMove-to-parent': (m: ApaasMenu, pid: string, pname: string) =>
                   emitNode('move-to-parent', m, pid, pname),
+                'onDelete-group': (m: ApaasMenu) => emitNode('delete-group', m),
               })),
             )
           : null,
@@ -662,9 +717,14 @@ const MenuNode = defineComponent({
   transition: opacity 0.12s, background 0.12s, color 0.12s;
 }
 .amsn:hover .amsn-actions,
-.amsn.selected .amsn-actions { opacity: 1; }
+.amsn.selected .amsn-actions,
+.amsn-group:hover .amsn-actions { opacity: 1; }
 .amsn-actions:hover { background: rgba(255, 255, 255, 0.1); color: var(--t-text-secondary, #fff); }
 .amsn-actions .el-icon { font-size: 14px; }
+
+/* 删除分组项 — 红色危险态 (作用于 el-dropdown-menu 内, 不能 scoped) */
+.amsn-dd-danger { color: #f56c6c !important; }
+.amsn-dd-danger:hover { background: rgba(245, 108, 108, 0.1) !important; color: #f56c6c !important; }
 
 /* ── 收起态 ── */
 .ams.collapsed .amsn {

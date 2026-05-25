@@ -3481,3 +3481,47 @@ async def set_apaas_menu_parent(
         parent_id=payload.parent_id,
         menu_order=payload.menu_order,
     )
+
+
+class _DeleteMenuReq(BaseModel):
+    menu_id: str
+    menu_name: str = ""
+
+
+@router.post("/{app_id}/apaas-menu-delete")
+async def delete_apaas_menu(
+    app_id: int,
+    payload: _DeleteMenuReq,
+    ctx: Annotated[AuthContext, Depends(get_auth_context)],
+    db: Annotated[AsyncSession, Depends(get_db)],
+):
+    """sidebar 删除菜单 — 普通菜单 / 表单菜单 / GROUP 分组 都用这个.
+
+    平台 /xdap-app/menu/delete/menu 通用. 删表单菜单会联动删表单本身.
+    删 GROUP 时前端应保证里面没子菜单 (否则平台行为是 cascade 还是 reject 没探过,
+    前端 UI 拦一道安全).
+    """
+    result = await db.execute(
+        select(Application).where(
+            Application.id == app_id,
+            Application.tenant_id == ctx.tenant_id,
+        )
+    )
+    app = result.scalar_one_or_none()
+    if not app:
+        raise HTTPException(status_code=404, detail="应用不存在")
+    await _require_application_permission(ctx, db, app, Action.EDIT)
+
+    if not app.platform_env_id or not app.apaas_app_id:
+        return {"ok": False, "error_code": "APP_NOT_DEPLOYED",
+                "message": "应用未部署到平台"}
+    if not payload.menu_id.strip():
+        return {"ok": False, "error_code": "INVALID_PARAMS", "message": "menu_id 必填"}
+
+    from app.mcp_server import delete_apaas_app_menu as _mcp_delete_menu  # type: ignore
+    return await _mcp_delete_menu(
+        env_id=app.platform_env_id,
+        apaas_app_id=app.apaas_app_id,
+        menu_id=payload.menu_id.strip(),
+        menu_name=payload.menu_name,
+    )
