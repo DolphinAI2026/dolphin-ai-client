@@ -3234,6 +3234,37 @@ async def set_apaas_menu_parent(
 
 
 @mcp.tool()
+async def rename_apaas_menu(
+    env_id: int,
+    apaas_app_id: str,
+    menu_id: str,
+    new_name: str,
+) -> dict:
+    """改菜单名 — 普通菜单 / 分组 / 自开发菜单 都用这个.
+
+    例: 把分组"测试"改成"业务核心":
+        rename_apaas_menu(env_id=49, apaas_app_id="846...",
+                          menu_id="846743128927895552", new_name="业务核心")
+
+    实现: GET 菜单完整字段 → POST /xdap-app/menu/save/menu 改 menuName → verify.
+    平台 save/menu 接受 menuName 更新 (跟改 parentId 不一样, menuName 正常持久化).
+    """
+    if not (apaas_app_id.strip() and menu_id.strip() and new_name.strip()):
+        return {"ok": False, "error_code": "INVALID_PARAMS",
+                "message": "apaas_app_id + menu_id + new_name 都必填"}
+    ok, raw = await _with_client(env_id, "改菜单名",
+        lambda c: c.rename_menu(apaas_app_id.strip(), menu_id.strip(), new_name.strip()))
+    if not ok:
+        return raw
+    return {
+        "ok": True,
+        "menu_id": menu_id,
+        "menu_name": new_name.strip(),
+        "message": f"菜单 {menu_id} 已改名为「{new_name}」",
+    }
+
+
+@mcp.tool()
 async def delete_apaas_app_menu(env_id: int, apaas_app_id: str, menu_id: str, menu_name: str = "") -> dict:
     """删除应用菜单（普通菜单 / 表单菜单 / 自开发菜单都用这个）。
 

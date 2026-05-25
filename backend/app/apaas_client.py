@@ -1677,6 +1677,83 @@ class APaaSClient:
                 return data.get("data", {}) or {}
             raise Exception(data.get("message", "创建菜单分组失败"))
 
+    async def rename_menu(
+        self,
+        app_id: str,
+        menu_id: str,
+        new_name: str,
+    ) -> dict:
+        """改菜单名 — POST /xdap-app/menu/save/menu (普通菜单 + GROUP 通用).
+
+        save/menu 接受 menuName 更新 (verified). 流程: query 拿 target 完整字段 → 替换
+        menuName → save → verify menuName 真改了.
+        """
+        # 1. 拿 target 完整原始字段
+        menus = await self.query_menus(app_id)
+        target = None
+
+        def _walk(nodes):
+            nonlocal target
+            for n in nodes or []:
+                if not isinstance(n, dict):
+                    continue
+                if str(n.get("id") or n.get("menuId") or "") == str(menu_id):
+                    target = n
+                    return
+                if n.get("submenus"):
+                    _walk(n["submenus"])
+
+        _walk(menus or [])
+        if not target:
+            raise Exception(f"找不到 menu_id={menu_id} 的菜单")
+
+        # 2. 构 payload — verbatim 透传 + 改 menuName + i18n 占位 (super-agents 兼容)
+        payload = {
+            k: v for k, v in target.items()
+            if k not in ("submenus", "children", "subMenus", "menuList")
+        }
+        payload["menuName"] = new_name.strip()
+        payload.setdefault("menuNameI18nResourceCode", "")
+        payload.setdefault("menuNameI18n", {})
+        payload.setdefault("menuCustomIcon", "")
+        payload.setdefault("datasourceName", "")
+
+        url = f"{self.base_url}/xdap-app/menu/save/menu"
+        _log_request("POST", url, {"_summary": "menu rename",
+                                    "menu_id": menu_id,
+                                    "old_name": target.get("menuName"),
+                                    "new_name": new_name})
+        start = time.time()
+        async with httpx.AsyncClient(verify=False, timeout=APAAS_HTTP_TIMEOUT) as client:
+            response = await client.post(url, headers=self._get_headers(app_id), json=payload)
+            elapsed_ms = (time.time() - start) * 1000
+            response.raise_for_status()
+            data = response.json()
+            _log_response(url, response.status_code, data, elapsed_ms)
+            if data.get("code") != "ok":
+                raise Exception(data.get("message", "改菜单名失败"))
+
+        # 3. verify
+        verify_menus = await self.query_menus(app_id)
+
+        def _verify(nodes):
+            for n in nodes or []:
+                if str(n.get("id") or n.get("menuId") or "") == str(menu_id):
+                    return n.get("menuName")
+                if n.get("submenus"):
+                    r = _verify(n["submenus"])
+                    if r is not None:
+                        return r
+            return None
+
+        actual = _verify(verify_menus or [])
+        if actual != new_name.strip():
+            raise Exception(
+                f"save 返 ok 但 menuName 未持久化: expected={new_name!r} actual={actual!r}"
+            )
+        logger.info(f"菜单 {menu_id} 改名 → 「{new_name}」 (verified)")
+        return {"menu_id": menu_id, "menu_name": new_name.strip(), "verified": True}
+
     async def update_menu_parent(
         self,
         app_id: str,

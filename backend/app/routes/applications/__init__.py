@@ -2314,6 +2314,7 @@ _CONFIG_CHAT_TOOL_WHITELIST: set[str] = {
     # 2026-05-25 续: 菜单分组 + 移动菜单到分组下
     "create_apaas_menu_group",       # 建分组 (menuType=GROUP)
     "set_apaas_menu_parent",         # 改菜单父分组 (挂载/脱离)
+    "rename_apaas_menu",             # 改菜单名 (普通菜单 / GROUP / 自开发 通用)
     # —— 业务事件 (BPM Engine, 2026-05-25 P1) ——
     # 字段值改变事件 / 表单提交事件 / 定时事件 等核心 BPM 场景. agent 用 add → get_detail
     # → 改 trigger + 加节点 → save 4 步建事件; 不再让用户去平台 UI 配.
