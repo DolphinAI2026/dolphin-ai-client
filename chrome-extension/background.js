@@ -79,8 +79,33 @@ function scheduleReconnect() {
 
 // ─────────────────────────── command dispatch ───────────────────────────
 
+// 2026-05-25: AI 助手 (配置助手) 是嵌在 /ai-builder/chat 里的, 它发的 browser_*
+// 命令目标永远是这个 tab 的 platform iframe. 但 chrome.tabs.query({active,
+// lastFocusedWindow:true}) 只看用户最后聚焦的窗口, 多窗口/tab 场景下用户切到任意
+// 其他 tab (e.g. 一个独立打开的 apaas-trial 后台已失效跳到 login), snapshot
+// 会抓到错 tab 的内容 (返 tab_url=https://apaas-trial.../platform/account/login).
+//
+// 修法: 先 query 全部 tab 找 /ai-builder/chat URL 命中的 (AI 助手所在 tab), 找
+// 到就用. 多个 ChatPage 优先选 active. 没找到才 fallback 老 lastFocusedWindow 逻辑.
+//
+// 注意: /ai-builder/coding 跟 /ai-builder/vibe 等其他页面 AI 路径暂不纳入 — 它们
+// 不操作 platform iframe, 不会撞这个 bug.
+const CHATPAGE_URL_PATTERN = /\/ai-builder\/chat(?:\?|#|$|\/)/i;
+
 async function getActiveTab() {
-  // 取用户当前 window 的 active tab
+  // 优先找 AI Builder ChatPage tab
+  try {
+    const all = await chrome.tabs.query({});
+    const chatTabs = all.filter(t => t.url && CHATPAGE_URL_PATTERN.test(t.url));
+    if (chatTabs.length > 0) {
+      // 多个 ChatPage: 优先选 active 那个 (用户当前正在看 / 最近交互过 ChatPage)
+      const activeOne = chatTabs.find(t => t.active);
+      return activeOne || chatTabs[0];
+    }
+  } catch (e) {
+    log("getActiveTab: chat tab query failed, fallback", e);
+  }
+  // Fallback: 老逻辑 — 没 ChatPage 时用户在用别的, 抓 lastFocusedWindow 的 active
   const [tab] = await chrome.tabs.query({ active: true, lastFocusedWindow: true });
   if (!tab) throw new Error("no active tab");
   return tab;
