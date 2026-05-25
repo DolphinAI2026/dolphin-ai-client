@@ -61,7 +61,7 @@
             <div class="ac-user-tag">我</div>
           </div>
 
-          <!-- assistant — dolphin 风格：方形蓝头像 + 无气泡 markdown 直渲 -->
+          <!-- assistant — 对话界面风格：方形蓝头像 + 无气泡 markdown 直渲 -->
           <div v-else-if="item.kind === 'assistant' || item.kind === 'streaming'" class="ac-row assistant">
             <div class="ac-avatar brand">A</div>
             <div class="ac-assistant-wrap">
@@ -92,7 +92,7 @@
             </div>
           </div>
 
-          <!-- tool — dolphin 风格：无独立头像，工具卡左缩进与 AI 头像对齐 -->
+          <!-- tool — 对话界面风格：无独立头像，工具卡左缩进与 AI 头像对齐 -->
           <div v-else-if="item.kind === 'tool' && item.tool" class="ac-row assistant tool-row">
             <div class="ac-avatar-spacer"></div>
             <div class="ac-bubble process">
@@ -165,7 +165,7 @@
       <!-- typing indicator -->
       <div v-if="typing" class="ac-row assistant">
         <slot name="typing">
-          <!-- dolphin 风格：8-bit 像素小怪兽（CSS box-shadow 拼），不带 ac-avatar / ac-bubble -->
+          <!-- 对话界面风格：8-bit 像素小怪兽（CSS box-shadow 拼），不带 ac-avatar / ac-bubble -->
           <div class="ac-pixel-monster" aria-label="AI 思考中">
             <div class="ac-pixel-monster-grid"></div>
           </div>
@@ -471,7 +471,7 @@ defineExpose({
   align-items: center;
   justify-content: center;
 }
-/* dolphin 风格：assistant 蓝色实底白字方形头像 'A' */
+/* 对话界面风格：assistant 蓝色实底白字方形头像 'A' */
 .ac-avatar.brand {
   background: #3b82f6 !important;
   color: #fff !important;
@@ -485,7 +485,7 @@ defineExpose({
   height: 1px;
 }
 
-/* dolphin 风格：assistant 消息 hover 时下方出现反馈按钮 */
+/* 对话界面风格：assistant 消息 hover 时下方出现反馈按钮 */
 .ac-assistant-wrap {
   display: flex;
   flex-direction: column;
@@ -549,14 +549,14 @@ defineExpose({
   overflow-wrap: anywhere;
   word-break: break-word;
 }
-/* dolphin 风格：assistant 消息无气泡 — markdown 直接渲染在背景上 */
+/* 对话界面风格：assistant 消息无气泡 — markdown 直接渲染在背景上 */
 .ac-bubble.assistant-naked {
   background: transparent;
   border-color: transparent;
   padding: 4px 0 0;
   max-width: min(880px, 92%);
 }
-/* dolphin 风格：user 消息浅灰圆角小气泡 */
+/* 对话界面风格：user 消息浅灰圆角小气泡 */
 .ac-bubble.user-bubble {
   background: rgba(116, 128, 171, 0.10);
   border-color: transparent;
@@ -583,7 +583,7 @@ defineExpose({
   border-color: rgba(239, 68, 68, 0.24);
 }
 
-/* dolphin 风格：user 消息右侧"我"标签 + 下方时间戳 */
+/* 对话界面风格：user 消息右侧"我"标签 + 下方时间戳 */
 .ac-user-wrap {
   display: flex;
   flex-direction: column;

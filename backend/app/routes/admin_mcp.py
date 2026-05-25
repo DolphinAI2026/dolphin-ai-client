@@ -1,13 +1,13 @@
 """Admin: MCP 工具浏览 API。
 
-给前端 /admin/mcp 页面用 — 列出**线上 dolphin 实际在调**的 MCP server (v2) 暴露的所有工具。
+给前端 /admin/mcp 页面用 — 列出**线上 MCP 客户端实际在调**的 MCP server (v2) 暴露的所有工具。
 
 2026-05-16 起改为 proxy 模式：不再 list ai-builder-ai 自己 backend 进程内嵌的
 mcp_server.py 的工具（80 个），而是 HTTP 调集群内 v2 svc 拿真实 77 工具。
 
 原因：双 mcp server 并存（[[mcp-dual-servers-analysis-2026-05-16]]），admin 看本机
-mcp 跟 dolphin 实际用的 v2 不一致 → 看到 vibe_* 老 host docker 工具 / apaas 精细
-CRUD 16 个会以为 dolphin 能调，实际不能。改 proxy 后 admin 视图跟 dolphin 一致。
+mcp 跟 MCP 客户端实际用的 v2 不一致 → 看到 vibe_* 老 host docker 工具 / apaas 精细
+CRUD 16 个会以为 agent 能调，实际不能。改 proxy 后 admin 视图跟 agent 一致。
 """
 from __future__ import annotations
 
@@ -189,7 +189,7 @@ async def _fetch_tools_from(path: str) -> list[dict]:
 async def list_mcp_tools(
     ctx: Annotated[AuthContext, Depends(get_auth_context)],
 ):
-    """列出线上 dolphin 实际在调的 v2 MCP server 暴露的所有工具。
+    """列出线上 MCP 客户端实际在调的 v2 MCP server 暴露的所有工具。
 
     走集群内 HTTP proxy 调 v2 `tools/list`，合并 main + design 两个 endpoint
     （builder/coding 子集是 main 的子集，会自动去重）。
@@ -256,7 +256,7 @@ async def list_mcp_tools(
         "server_info": {
             "name": "apaas-builder-mcp-server (v2, main + design)",
             "transport": "Streamable HTTP (proxied)",
-            "endpoint": "/mcp-server-v2/api/mcp/mcp (上游, dolphin 同款)",
+            "endpoint": "/mcp-server-v2/api/mcp/mcp (上游, agent 同款)",
             "auth_method": "Bearer (MCP_API_KEYS)",
         },
     }

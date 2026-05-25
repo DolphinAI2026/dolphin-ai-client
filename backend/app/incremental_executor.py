@@ -920,7 +920,7 @@ class IncrementalExecutor:
         """创建模型 — 增量执行路径
 
         工程化原则：md → JSON payload 不做任何隐式改写。命中本地保留字表的字段
-        直接 raise，让 dolphin agent 在 md 源头改字段编码。绝不在转换层偷偷
+        直接 raise，让 外部 agent 在 md 源头改字段编码。绝不在转换层偷偷
         改名造成 md 跟平台字段不一致的迷惑状态。
         """
         model_data = change.new_value or {}
@@ -938,7 +938,7 @@ class IncrementalExecutor:
             more = f"（共 {len(bad_fields)} 处）" if len(bad_fields) > 5 else ""
             raise Exception(
                 f"模型「{change.name}」字段编码命中保留字 {len(bad_fields)} 处: {listing}{more}"
-                f" — 请回 dolphin 让需求分析助手把这些字段编码加业务前缀重写（例如 status → "
+                f" — 请回外部 让需求分析助手把这些字段编码加业务前缀重写（例如 status → "
                 f"{change.code}_status）。**ai-builder 转换层不会自动改名**，必须在 md 源头修正。"
             )
 
@@ -1053,7 +1053,7 @@ class IncrementalExecutor:
         raw_code = (change.code or "").strip()
         if raw_code and raw_code.lower() in _RESERVED_FIELD_CODES:
             raise Exception(
-                f"字段「{change.name}」编码 `{raw_code}` 命中本地保留字表 — 请回 dolphin 让"
+                f"字段「{change.name}」编码 `{raw_code}` 命中本地保留字表 — 请回外部 让"
                 f"agent 把字段编码改成带业务前缀的形式（如 `{model_code}_{raw_code}`）。"
                 f"**ai-builder 转换层不会自动改名**，必须在 md 源头修正。"
             )

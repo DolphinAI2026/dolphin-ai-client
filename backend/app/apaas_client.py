@@ -504,7 +504,7 @@ class APaaSClient:
                         f"— **根因**: apaas 低代码平台自带流程管理（审批/审核），"
                         f"`approver_id` / `approval_time` / `approval_status` / `approval_note` / `applicant_id` "
                         f"这类字段由平台流程节点自动注入和管理，**业务数据模型不应该设计这些字段**。"
-                        f"请回 dolphin 让 agent 从 md 的数据模型部分**删除**这些审批/流程字段，"
+                        f"请回外部 让 agent 从 md 的数据模型部分**删除**这些审批/流程字段，"
                         f"流程相关需求改为在 apaas 流程节点配置（不是表单字段）里实现。"
                     ) from exc
 
@@ -515,7 +515,7 @@ class APaaSClient:
                     raise Exception(
                         f"{msg} — 字段命中 apaas 流程模块保留前缀（approval_*）: {head}{more} "
                         f"— **根因**: `approval_*` 整个命名空间由 apaas 流程模块管理（审批人/时间/状态/备注），"
-                        f"业务模型 md 里不应包含这些字段。请回 dolphin 让 agent **删除** `approval_*` 系列字段，"
+                        f"业务模型 md 里不应包含这些字段。请回外部 让 agent **删除** `approval_*` 系列字段，"
                         f"如有审批需求，在应用的「流程配置」节点里设置而不是写到表单字段里。"
                         f"完整字段: [{all_fields_dump}]"
                     ) from exc

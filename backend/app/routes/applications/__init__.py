@@ -567,7 +567,7 @@ async def get_application_spec_as_markdown(
 ):
     """返回应用当前 SPEC（config_preview）反向渲染的标准 markdown 设计文档。
 
-    给 dolphin agent / 其他 MCP 调用方用：直接把当前应用结构作为 6 章节 md
+    给 外部 agent / 其他 MCP 调用方用：直接把当前应用结构作为 6 章节 md
     返回，agent 可以基于它增量改字段而不用问用户'有哪些字段'。
 
     优先级：
@@ -956,9 +956,9 @@ async def auto_create_application(
         if env_obj:
             resolved_env_id = env_obj.id
 
-    # 🛡️ 2026-05-15 防 retry storm：dolphin agent 通过 MCP 工具
+    # 🛡️ 2026-05-15 防 retry storm：外部 agent 通过 MCP 工具
     # generate_app_from_doc 调本 endpoint 时不传 conversation_id（工具源码 v2
-    # mcp_server.py:1978 create_body 没该字段），撞失败后 dolphin omnigate 自动
+    # mcp_server.py:1978 create_body 没该字段），撞失败后 LLM gateway 自动
     # retry → 每次都进 INSERT 新行 — 实测一次 4 分钟内 13 行 dcs-service 失败
     # 占位。这里按 (tenant_id, app_code) 在 5 分钟窗口内复用最近一条 failed/draft
     # apaas_app_id 为空的占位行。conversation_id 模式不受影响（上面已 return）。

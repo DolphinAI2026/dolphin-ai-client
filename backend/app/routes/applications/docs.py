@@ -1826,7 +1826,7 @@ async def upload_doc_version(
 
     conversation_id 可选：
     - ai-builder UI 调用时会传，关联到当前对话；
-    - dolphin agent / 外部 MCP 调用时不传，后端自动用 0 占位（不写 conversation_messages）。
+    - 外部 agent / 外部 MCP 调用时不传，后端自动用 0 占位（不写 conversation_messages）。
     """
     if not file.filename or not file.filename.endswith('.md'):
         raise HTTPException(status_code=400, detail="仅支持 .md 格式文件")

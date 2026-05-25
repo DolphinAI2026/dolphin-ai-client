@@ -277,7 +277,7 @@ try:
                 return
             await self.app(scope, receive, send)
 
-    # dolphin 等现代 agent 平台用 Streamable HTTP transport（POST 单一 endpoint），
+    # MCP 客户端等现代 agent 平台用 Streamable HTTP transport（POST 单一 endpoint），
     # 不再支持老 HTTP+SSE。Streamable 是首选；保留 legacy SSE 给老 client 兜底。
     _mcp_streamable = _mcp_server.streamable_http_app()
     _mcp_sse = _mcp_server.sse_app()
@@ -299,7 +299,7 @@ except Exception as exc:
 #
 # 注意：这两个原本用 @app.middleware("http")（即 BaseHTTPMiddleware）实现，
 # 但 BaseHTTPMiddleware 的 call_next buffering 跟流式 SSE 不兼容，会切断 MCP
-# 服务器的 message 流（dolphin agent 拿不到 tools/list 响应）。
+# 服务器的 message 流（外部 agent 拿不到 tools/list 响应）。
 # 改成纯 ASGI middleware 后，对所有 mount（包括 /api/mcp）都安全透传。
 import re as _re
 from starlette.requests import Request as _StarletteRequest

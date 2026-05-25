@@ -2,20 +2,20 @@
 
 用途
 ====
-dolphin agent 通过 MCP 工具调过来时，agent 可以省略 app_id 参数 —— ai-builder
+外部 agent 通过 MCP 工具调过来时，agent 可以省略 app_id 参数 —— ai-builder
 MCP server 反查这里的状态拿到真实 app_id。同时 _resolve_identity 用此 slot
-把 dolphin 传过来的 user_id 反查成 (tenant_id, app_id, app_name)。
+把外部 agent 传过来的 user_id 反查成 (tenant_id, app_id, app_name)。
 
 设计变更（2026-05-09 v2 · stop bleed）
 ======================================
-**之前（v1）**：slot 是全局单 key（DOLPHIN_USER_SLOT=1），所有 ai-builder 用户的
-set_current_app 都覆盖到这个 key。dolphin 传 user_id=0 时 _resolve_identity 默
-认查 user 1 的 slot —— 实际效果：所有 dolphin chat 调用都拿 admin 的 slot 数据，
-跨租户数据泄漏（截图实证：宝洁 li.l.77 通过 dolphin agent 调 list_platform_envs
+**之前（v1）**：slot 是全局单 key（GLOBAL_USER_SLOT=1），所有 ai-builder 用户的
+set_current_app 都覆盖到这个 key。外部 agent 传 user_id=0 时 _resolve_identity 默
+认查 user 1 的 slot —— 实际效果：所有 MCP 客户端 chat 调用都拿 admin 的 slot 数据，
+跨租户数据泄漏（截图实证：宝洁 li.l.77 通过 外部 agent 调 list_platform_envs
 拿到 admin 租户 18 个环境）。
 
 **现在（v2）**：slot 按 ai-builder real_user_id 严格分 key。每个 user 自己一格，
-互不污染。dolphin 调 MCP 工具时**必须**明确传 user_id（依赖 dolphin agent prompt
+互不污染。agent 调 MCP 工具时**必须**明确传 user_id（依赖 外部 agent prompt
 从 [SYSTEM CTX 用户身份锚点] 读取并传过来），否则 _resolve_identity 直接 raise
 拒绝调用。
 
@@ -38,16 +38,16 @@ router = APIRouter(prefix="/builder", tags=["current-app"])
 
 
 # real_user_id → (real_tenant_id, app_id, app_name, ts)
-# 注意：之前 v1 是全局单 key (DOLPHIN_USER_SLOT=1)，现在按 real_user_id 分 key
+# 注意：之前 v1 是全局单 key (GLOBAL_USER_SLOT=1)，现在按 real_user_id 分 key
 _STATE: dict[int, tuple[int, int, str, float]] = {}
 _LOCK = RLock()
 _TTL_SECONDS = 30 * 60
 
 
 # 2026-05-10：aPaaS user_id → ai-builder 本地 (User.id, default tenant_id) 反查缓存。
-# 背景：dolphin chat MCP 调用时 caller 透传的 user_id 是 aPaaS 大整数（21 位 bigint），
+# 背景：MCP 客户端 chat MCP 调用时 caller 透传的 user_id 是 aPaaS 大整数（21 位 bigint），
 # 而 ai-builder 本地 User.id 是小整数自增。slot _STATE 是按本地 User.id 分 key 写入的
-# （登录 _prime_slot 那条），dolphin 用 aPaaS user_id 做查询永远 miss → fallback 用
+# （登录 _prime_slot 那条），agent 用 aPaaS user_id 做查询永远 miss → fallback 用
 # aPaaS 大整数签 JWT → 本地 backend get_auth_context 查不到 User → 401。
 # alias 缓存 + DB 反查解决这条断链：apaas_uid → local (uid, tid)。
 _APAAS_USER_CACHE: dict[int, tuple[int, int, float]] = {}
@@ -74,7 +74,7 @@ def get_current_app_for_user(real_user_id: int) -> Optional[tuple[int, int, int,
 
 def set_current_app(real_user_id: int, real_tenant_id: int, app_id: int, app_name: str) -> None:
     """登录或切应用时调一次写入 slot。app_id=0 表示用户已登录但未打开具体应用 ——
-    仍然写入 slot 是为了让 dolphin chat 调 MCP 工具时能用 user_id 反查 tenant_id。"""
+    仍然写入 slot 是为了让 MCP 客户端 chat 调 MCP 工具时能用 user_id 反查 tenant_id。"""
     if not real_user_id or real_user_id <= 0:
         return
     with _LOCK:
@@ -127,7 +127,7 @@ async def set_current_app_endpoint(
     ctx: Annotated[AuthContext, Depends(get_auth_context)],
 ):
     """前端进入应用编辑页时调一次，告诉后端"我现在在编辑 app_id=X"。
-    state 里同时记录用户真实 (user_id, tenant_id)，给 dolphin 调 mcp 时反查用。"""
+    state 里同时记录用户真实 (user_id, tenant_id)，给外部 agent 调 mcp 时反查用。"""
     set_current_app(ctx.user.id, ctx.tenant_id, req.app_id, req.app_name)
     return {"ok": True, "user_id": ctx.user.id, "tenant_id": ctx.tenant_id, "app_id": req.app_id}
 

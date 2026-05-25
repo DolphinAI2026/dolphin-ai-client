@@ -8,7 +8,7 @@
   实际操作的租户/用户身份通过得小帆"自定义 Body 字段"配置注入，每个 tool 形参带 _tenant_id / _user_id
 
 环境变量：
-- MCP_API_KEYS: 逗号分隔的合法 Bearer token（dolphin 配置里填其中一个）
+- MCP_API_KEYS: 逗号分隔的合法 Bearer token（agent 配置里填其中一个）
 - MCP_INTERNAL_BASE: 内部回环 base URL，默认跟随后端 settings.port
 """
 from __future__ import annotations
@@ -93,10 +93,10 @@ def _build_app_view_url(app_id: int | None) -> str | None:
 
 
 def _resolve_identity(tenant_id: int | None, user_id: int | None) -> tuple[int, int]:
-    """dolphin 自定义 Body 字段硬编码 (tenant_id=1, user_id=1)，但 ai-builder
+    """MCP 客户端自定义 Body 字段硬编码 (tenant_id=1, user_id=1)，但 ai-builder
     用户多租户多账号，直接用这俩调内部 API 会跨租户错位（看不到当前用户的应用）。
 
-    从 current_app 反查真实身份覆盖；找不到才用 dolphin 传的兜底。
+    从 current_app 反查真实身份覆盖；找不到才用 外部 agent 传的兜底。
     """
     from app.routes.current_app import get_current_app_for_user
     rec = get_current_app_for_user(int(user_id) if user_id else 1)
@@ -105,7 +105,7 @@ def _resolve_identity(tenant_id: int | None, user_id: int | None) -> tuple[int, 
         return int(real_tid), int(real_uid)
     if not tenant_id or not user_id:
         raise ValueError(
-            "缺少身份信息：dolphin Body 字段未注入 tenant_id/user_id 且 ai-builder 没有"
+            "缺少身份信息：agent Body 字段未注入 tenant_id/user_id 且 ai-builder 没有"
             "用户当前应用状态。请在 ai-builder 中打开某个应用页（让前端 sync 状态），"
             "或在得小帆 MCP 配置「自定义 Body 字段」里加上 tenant_id/user_id。"
         )
@@ -294,10 +294,10 @@ mcp = FastMCP(
     ),
     transport_security=_security,
     # stateless 模式：server 不跟踪 mcp-session-id，每个 POST 自包含。
-    # dolphin 等 agent 平台的 streamable HTTP client 不可靠传递 session id，
+    # MCP 客户端等 agent 平台的 streamable HTTP client 不可靠传递 session id，
     # 默认 stateful 会在第二个 request 报 400 Missing session ID。
     stateless_http=True,
-    # JSON 响应（非 SSE 流），dolphin 解析更稳定
+    # JSON 响应（非 SSE 流），MCP 客户端解析更稳定
     json_response=True,
 )
 
@@ -564,7 +564,7 @@ async def get_application(
 
 
 async def _normalize_md_via_llm(target_md: str, current_spec_md: str) -> str:
-    """LLM 兜底：dolphin agent 给的 md 若不符合严格 6 章节模板，
+    """LLM 兜底：外部 agent 给的 md 若不符合严格 6 章节模板，
     用 LLM 基于 current_spec_md（已知规范）+ target_md（agent 改动后）
     生成规范化的新版 md。
 
@@ -883,11 +883,11 @@ async def validate_builder_doc(artifact_id: int) -> dict:
 
 # ─────────────────────── 需求分析助手 → ai-builder 设计文档中转 ───────────────────────
 #
-# 设计目标：让需求分析助手（dolphin agent 81）写完标准 md 后，把文档内容传到 ai-builder
+# 设计目标：让需求分析助手（外部 agent 81）写完标准 md 后，把文档内容传到 ai-builder
 # 后端 cache，前端 RequirementsAssistantPage 的右侧 ArtifactPanel 轮询 cache 拉到展示，
 # 并提供「→ Builder」一键跳到 /chat 走应用建立流程。
 #
-# 用户身份反查：dolphin 自定义 Body 字段会注入 user_id（trial 阶段都是 1，但前面的
+# 用户身份反查：MCP 客户端自定义 Body 字段会注入 user_id（trial 阶段都是 1，但前面的
 # _resolve_identity 已经支持从 current_app 反查真实 ai-builder 用户）。我们用反查得到
 # 的 (tenant_id, user_id) 作为 cache key，避免多用户互相覆盖。
 #
@@ -975,7 +975,7 @@ async def submit_design_doc(
         "md_content": md_content,
         "score": score,
         "submitted_at": _time.time(),
-        "source": "dolphin-requirements-agent",
+        "source": "agent-requirements-agent",
         "tenant_id": tid,
     }
     _REQUIREMENTS_DOC_CACHE[uid] = rec
@@ -1011,7 +1011,7 @@ async def submit_design_doc(
 #
 # 设计：
 # - 工具实现在 coding/apaas_tools.py（双消费方：AI Coding agent 内部 + 本 MCP 外部）
-# - 这一层是给外部 agent（dolphin / Claude / Cursor）的薄壳子
+# - 这一层是给外部 agent（外部 agent / Claude / Cursor）的薄壳子
 # - 每个工具显式接 env_id 参数（让 caller 自己决定调哪个 aPaaS 环境）
 # - workspace 类的 read_attachment / write_artifact 不外暴（caller 没 workspace 上下文）
 # ═══════════════════════════════════════════════════════════════════════════
@@ -1280,7 +1280,7 @@ async def deploy_application(
       - 已部署后改了配置 → 调 publish_application 升 version
 
     SSE generate 超时控制：25s 内拿不到 complete 事件 → 后台 task 继续跑，工具立即
-    返 in_progress + polling_hint，避免 dolphin omnigate 30s timeout 拦截。
+    返 in_progress + polling_hint，避免 LLM gateway 30s timeout 拦截。
     """
     import asyncio as _asyncio
     tid, uid = _resolve_identity(tenant_id, user_id)
@@ -2538,7 +2538,7 @@ def _classify_publish_failure(ws_id: str, env_id: int, detail: str) -> dict:
 # Vibe Coding 工具集（11 个）— 平行于 layer 2 的 11 个 workspace 工具
 # 操作 Vibe Coding workspace（id 格式 oc_xxx，跟 layer 2 的 1_xxx 完全独立）
 #
-# 用途：让 dolphin / Claude 等外部 agent 能接入 vibe-coding 的"从零搭独立项目"能力，
+# 用途：让外部 agent / Claude 等外部 agent 能接入 vibe-coding 的"从零搭独立项目"能力，
 # 跟 aPaaS 无关，纯通用 IDE 开发。
 # ═══════════════════════════════════════════════════════════════════════════
 
@@ -4605,10 +4605,10 @@ async def disable_apaas_dict_option(
     }
 
 
-# ─── 业务数据查询（运行时 data，dolphin agent 看数据）──────────────────────
+# ─── 业务数据查询（运行时 data，外部 agent 看数据）──────────────────────
 # 之前所有 apaas 工具都在搭建层（角色 / 字典 / 模型 / 表单 / 权限 / 菜单），
 # 没工具能看运行时数据 — 用户在「请假申请」表单提交的具体请假记录。
-# 这是 dolphin agent 「我帮你查上周的请假情况」类对话的前置能力。
+# 这是 外部 agent 「我帮你查上周的请假情况」类对话的前置能力。
 #
 # 现阶段只暴露**只读**。写入（saveFormData）暂搁 — 风险高，得单独权限设计。
 

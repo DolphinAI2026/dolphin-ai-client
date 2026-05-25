@@ -77,7 +77,7 @@ async def generate_application(
 
     # 2026-05-16 夜：从 application.platform_env_id 查 platform_envs.token，不再
     # 走 user.apaas_token 老链路 — 老链路只对"用户手动在 admin 连过 apaas"的账户
-    # work，ai-chat/dolphin 切流后 admin 账户的 apaas_token 是过期 SQL workaround 塞的。
+    # work，ai-chat/agent 切流后 admin 账户的 apaas_token 是过期 SQL workaround 塞的。
     # 新链路：应用绑 env_id (FK)，token 从 platform_envs 读，env 刷新 token 自动跟。
     if not app.platform_env_id:
         raise HTTPException(

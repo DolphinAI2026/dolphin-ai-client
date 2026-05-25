@@ -1,14 +1,14 @@
-"""dev_scene_workflow — 给 dolphin agent 用的"按 scene_type 完整开发规范"。
+"""dev_scene_workflow — 给 外部 agent 用的"按 scene_type 完整开发规范"。
 
 设计原则
 ========
 1. **不动 vibe_agent.py**：vibe_agent 的 _build_prompt() 仍然是给 ai-builder 内置
    agent loop 用的（agent 工作流引导 + 规则），保持原样。
-2. **本文件给 dolphin agent 看**：dolphin agent 通过 MCP 工具 get_dev_scene_full_workflow
+2. **本文件给 外部 agent 看**：外部 agent 通过 MCP 工具 get_dev_scene_full_workflow
    拉取，注入到当前 chat context，让它跟 vibe_agent 拥有同等的"该写什么 / 不该写什么"
    知识。
 3. **结构跟 vibe_agent 不一样**：vibe_agent 拿到的是"先 glob 再 read 再 write"工作流；
-   dolphin agent 拿到的是"开发规范 + critical rules + 自检清单"——dolphin 自己的
+   外部 agent 拿到的是"开发规范 + critical rules + 自检清单"——agent 自己的
    skill prompt 已有工作流（V2 dev-coding.md），不需要在这里重复。
 4. **重要场景细致 / 不常用场景给指针**：form-component-dual / form-page / backend-api
    写完整规范；其他 scene 指向 list_dev_scenes 的 critical_warnings + file_outline。
@@ -548,7 +548,7 @@ _WORKFLOW_BY_SCENE: dict[str, str] = {
     "dashboard-component-dual": _DASHBOARD_COMPONENT_DUAL_WORKFLOW,
 }
 
-# 数据驱动场景：workflow 末尾追加 PLATFORM_API_QUICK_REF，让 dolphin agent 拿到
+# 数据驱动场景：workflow 末尾追加 PLATFORM_API_QUICK_REF，让 外部 agent 拿到
 # 写代码必备的 listPageBusinessData / detailBusinessData / form/save 等运行时 API。
 # form-component-dual / layout / plugin / web-login 不需要（不调表单数据接口）。
 _DATA_DRIVEN_SCENES = {"form-page", "menu-page", "form-list", "mobile-page"}
@@ -558,7 +558,7 @@ def get_full_workflow(scene_type: str) -> str:
     """按 scene_type 拿完整开发规范（critical rules / mixin / 目录铁则 / 自检清单
     + 数据驱动场景的运行时 API 速查）。
 
-    给 dolphin agent 通过 MCP 工具 get_dev_scene_full_workflow 拉取，注入到当前
+    给 外部 agent 通过 MCP 工具 get_dev_scene_full_workflow 拉取，注入到当前
     chat context。返回 markdown 字符串，agent 应该把它视为开发本场景的 single
     source of truth。
 

@@ -2,7 +2,7 @@
 
 设计目的
 ========
-dolphin agent 端到端写 form-page / form-list / mobile-page 自开发组件时，需要
+外部 agent 端到端写 form-page / form-list / mobile-page 自开发组件时，需要
 **直接知道** vue 代码里 `this.$request({...})` 该调哪些 endpoint、payload 怎么填、
 返回怎么解析。
 
@@ -243,7 +243,7 @@ def get_full_runtime_api_doc() -> str:
 
     数据源：docs/skills/apaas-form-data-api.md
     复杂场景（流程审批 / 待办 / 高级筛选）才需要——预留接口给 V2.6 把它写到
-    workspace 的 .cursor/rules/apaas-form-data-api.mdc，让 dolphin V2 agent
+    workspace 的 .cursor/rules/apaas-form-data-api.mdc，让 外部 V2 agent
     用 read_workspace_file 按需查。
     """
     from pathlib import Path

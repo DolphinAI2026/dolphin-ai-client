@@ -1,10 +1,10 @@
-"""dev_scene_spec — 自开发场景 SPEC 单一来源（给 dolphin agent / dev-coding skill 消费）。
+"""dev_scene_spec — 自开发场景 SPEC 单一来源（给 外部 agent / dev-coding skill 消费）。
 
 设计原则
 ========
 1. **不重复 vibe_agent prompt**：vibe_agent 写代码用的完整 workflow / critical rules
    仍在 `coding/vibe_agent.py::_build_prompt()` 里，那是给执行层用的。本文件输出的
-   是"场景 brief"——给协调层（dolphin agent）做需求理解、用户确认、参数收集用。
+   是"场景 brief"——给协调层（外部 agent）做需求理解、用户确认、参数收集用。
 2. **不动现有代码**：scenes.py SCENE_REGISTRY / vibe_agent prompt / workspace 脚手架都
    保持原样。本文件只**读** scenes.py，整合一份给 MCP 工具用。
 3. **跟 ProjectType 对齐**：scene_type 字段直接复用 `coding.workspace.ProjectType`
@@ -28,7 +28,7 @@ SPEC_VERSION = "2026-05-07"
 
 @dataclass
 class SceneBrief:
-    """给 dolphin agent 用的场景简介（非 vibe_agent 系统提示）。"""
+    """给 外部 agent 用的场景简介（非 vibe_agent 系统提示）。"""
 
     # ── 标识 ──
     scene_type: str            # 与 ProjectType 枚举值一致
@@ -38,7 +38,7 @@ class SceneBrief:
     platform: str              # web / mobile / both / server
 
     # ── 场景识别 ──
-    keywords: list[str]        # 关键词命中规则（用于 dolphin 简单分类）
+    keywords: list[str]        # 关键词命中规则（用于 agent 简单分类）
     when_to_use: list[str]     # 适用场景描述（自然语言）
     when_NOT_to_use: list[str] = field(default_factory=list)
 
@@ -56,7 +56,7 @@ class SceneBrief:
     # ── 部署能力 ──
     publishable: bool = True
     publish_target: str = "aPaaS 平台"
-    build_command_hint: str = "npm run build"  # 让 dolphin agent 知道大概要等多久
+    build_command_hint: str = "npm run build"  # 让 外部 agent 知道大概要等多久
 
     def to_dict(self) -> dict:
         d = asdict(self)
@@ -392,12 +392,12 @@ _SCENE_BRIEFS: dict[str, SceneBrief] = {
 }
 
 
-# 给 dolphin agent 用的关键词索引（场景识别 fallback 提示，不强制）
+# 给 外部 agent 用的关键词索引（场景识别 fallback 提示，不强制）
 def keyword_match(text: str) -> list[str]:
     """简单关键词命中：返回可能匹配的 scene_type 列表（按命中度降序）。
 
-    dolphin agent 拿到用户输入后，可以先调本函数拿候选场景，再问用户确认；
-    若一个都不匹配，回退到 LLM 分类（让 dolphin 自己判断）。
+    外部 agent 拿到用户输入后，可以先调本函数拿候选场景，再问用户确认；
+    若一个都不匹配，回退到 LLM 分类（让外部 agent 自己判断）。
     """
     if not text:
         return []
@@ -446,7 +446,7 @@ def all_scene_types() -> list[str]:
     return list(_SCENE_BRIEFS.keys())
 
 
-def build_dolphin_skill_section() -> str:
+def build_external_skill_section() -> str:
     """生成 skill markdown 里"场景索引"那一段（人话，给 LLM 看的）。
 
     skill 静态 prompt 不用复制全部场景细节——告诉 agent "调 list_dev_scenes 拿索引、
@@ -466,5 +466,5 @@ __all__ = [
     "get_scene_brief",
     "all_scene_types",
     "keyword_match",
-    "build_dolphin_skill_section",
+    "build_external_skill_section",
 ]

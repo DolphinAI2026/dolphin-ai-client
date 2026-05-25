@@ -28,7 +28,7 @@ const router = createRouter({
       component: () => import('@/views/ChatPage.vue'),
       meta: { requiresAuth: true },
       beforeEnter: (to, _from, next) => {
-        // dolphin 接管对话后，ChatPage 必须绑定到某个应用才有意义
+        // ChatPage 必须绑定到某个应用才有意义
         // 没 app_id / conversation_id / deploy_app_id 也没 pending 上传素材的话直接重定向应用列表
         // from=upload: Landing 传 md 创建新应用流程，靠 store.pendingFile
         // from=aichat: AIChatPage 把生成的设计文档送过来，靠 store.pendingMarkdown
@@ -50,12 +50,6 @@ const router = createRouter({
       name: 'AIChat',
       component: () => import('@/views/AIChatPage.vue'),
       meta: { requiresAuth: true }
-    },
-    {
-      path: '/requirements-assistant',
-      name: 'RequirementsAssistant',
-      component: () => import('@/views/RequirementsAssistantPage.vue'),
-      meta: { requiresAuth: true, navExpanded: true }
     },
     {
       // 存量 DB 快速接入 wizard：DB 连接 → 表多选 → 业务描述 → 进度。

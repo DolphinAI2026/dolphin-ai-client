@@ -1,8 +1,8 @@
 """Builder UI 试调 / 按钮 → MCP tool 的统一入口。
 
 2026-05-16 起改 proxy 模式：不再调本机 mcp_server.py 工具，而是 HTTP 调
-v2 svc 的 tools/call，跟 dolphin agent 走同一条路径，admin /mcp 试调结果
-跟 dolphin 实际行为一致。
+v2 svc 的 tools/call，跟 外部 agent 走同一条路径，admin /mcp 试调结果
+跟 MCP 客户端实际行为一致。
 
 身份桥接：浏览器 JWT → ctx.tenant_id / ctx.user_id 注入到 args，v2 工具签名
 大多 fallback 这两个参数（admin 模式 1, 1）。

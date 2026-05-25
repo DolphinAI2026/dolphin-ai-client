@@ -1,5 +1,5 @@
 <template>
-  <!-- dolphin 风格：一行 inline 极简卡片
+  <!-- 对话界面风格：一行 inline 极简卡片
        已完成 · 调用 list_apaas_apps_in_env · 工具调用 · 3.4s › -->
   <div
     class="tool-card"
@@ -86,7 +86,7 @@ const statusGlyph = computed(() => {
   }
 })
 
-// dolphin 风格状态文字标签（不是图标）
+// 对话界面风格状态文字标签（不是图标）
 const statusLabel = computed(() => {
   switch (props.tool.status) {
     case 'success': return '已完成'
@@ -97,7 +97,7 @@ const statusLabel = computed(() => {
   }
 })
 
-// 按工具名前缀推断动作动词（"调用 / 读取 / 写入 / 执行"），dolphin 风格"已完成 · 读取 SKILL.md · 文件读取"
+// 按工具名前缀推断动作动词（"调用 / 读取 / 写入 / 执行"），对话界面风格"已完成 · 读取 SKILL.md · 文件读取"
 const verbLabel = computed(() => {
   const n = (props.tool.name || '').toLowerCase()
   if (n.startsWith('read') || n.includes('_read')) return '读取'
@@ -122,7 +122,7 @@ function formatArgs(args: any): string {
 </script>
 
 <style scoped>
-/* dolphin 风格：极简一行 inline 横条卡片 */
+/* 对话界面风格：极简一行 inline 横条卡片 */
 .tool-card {
   border: 1px solid rgba(116, 128, 171, 0.14);
   border-radius: 999px;

@@ -1,7 +1,7 @@
 """通过 HTTP 调本机 MCP server，把 44 个工具桥接给 ai_chat agent 用。
 
 为什么走 HTTP 而不是 in-process import：
-- 跟外部 agent（dolphin / Claude / Cursor）的调法完全一致，方便排查
+- 跟外部 agent（外部 agent / Claude / Cursor）的调法完全一致，方便排查
 - mcp_server 未来如果拆独立 service，cowork 端不用改
 - 同 process 内 loopback HTTP 几乎零开销
 - 所有调用都进 MCP 调用日志，统一可观测

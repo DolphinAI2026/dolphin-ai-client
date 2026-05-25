@@ -62,7 +62,7 @@
         </button>
       </div>
 
-      <!-- 会话列表（dolphin 风格按 group 分组渲染；group 字段缺失时退化为平铺）-->
+      <!-- 会话列表（对话界面风格按 group 分组渲染；group 字段缺失时退化为平铺）-->
       <div class="session-list">
         <slot name="list-prefix" />
         <template v-for="(grp, gi) in groupedSessions" :key="`g-${gi}-${grp.label}`">
@@ -146,7 +146,7 @@ export interface SessionItem {
   badgeLabel?: string
   badgeTone?: 'cowork' | 'chat' | 'success' | 'danger' | 'default' | string
   meta?: string
-  // 分组标签（dolphin 风格：今天/昨天/7 天内/更早）。同 group 的 session 会聚在一起渲染。
+  // 分组标签（对话界面风格：今天/昨天/7 天内/更早）。同 group 的 session 会聚在一起渲染。
   // 不传则不分组（渲染为单一平铺列表）。
   group?: string
 }
@@ -430,7 +430,7 @@ function onBack() {
   flex-direction: column;
   gap: 2px;
 }
-/* dolphin 风格：分组标题（"今天" / "昨天" / "7 天内" / "更早"） */
+/* 对话界面风格：分组标题（"今天" / "昨天" / "7 天内" / "更早"） */
 .session-group-title {
   font-size: 11px;
   color: rgba(116, 128, 171, 0.7);

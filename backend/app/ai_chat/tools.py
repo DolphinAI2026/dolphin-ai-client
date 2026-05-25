@@ -1220,7 +1220,7 @@ async def execute_tool(
 
     ⚠️ Side-effect intercept (2026-05-21)：generate_app_from_doc / update_app_from_doc
     成功调用时，把 args.md_content 落 AIChatArtifact 表（用户能在右侧面板回看 SPEC）。
-    不污染 MCP 工具本身（外部 dolphin / Claude / Cursor 调那俩工具不受影响）。
+    不污染 MCP 工具本身（外部 外部 agent / Claude / Cursor 调那俩工具不受影响）。
     """
     handler = TOOL_HANDLERS.get(tool_name)
     if handler:

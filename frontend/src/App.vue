@@ -3,10 +3,6 @@ import { watch } from 'vue'
 import { RouterView, useRoute, type RouteLocationNormalized } from 'vue-router'
 import { useTabsStore } from '@/stores/tabs'
 
-// 2026-05-21 dolphin agent 浮窗 (HelpAssistant) 暂时下线 — 用户决策：
-// 现 /ai-chat 内置 gpt-5.5 加 MCP 工具能力后，浮窗 dolphin agent 变冗余。
-// 后端 dolphin_sso 路由 + HelpAssistant.vue + DolphinAgentEmbed 文件全保留可逆。
-
 const route = useRoute()
 const tabsStore = useTabsStore()
 

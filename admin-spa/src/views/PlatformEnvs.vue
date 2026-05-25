@@ -1,6 +1,6 @@
 <template>
   <PlaceholderView
-    title="平台环境 + Dolphin Agent 配置（待迁移）"
+    title="平台环境 + Agent 配置（已下线）"
     subtitle="从 ai-builder PlatformEnvs.vue (1700 行 / 4 Tabs) 复制改造"
     description="Phase 4.2 实现"
     :icon="Setting"
@@ -15,7 +15,7 @@ import PlaceholderView from '@/components/PlaceholderView.vue'
 const todo = [
   'TODO Phase 4.2：',
   '- Tab1 平台环境：GET/POST/PUT /api/platform-envs/* + alias 字段维护',
-  '- Tab2 dolphin agent：GET/POST/PUT /api/tenant-dolphin-agents/* + 顺序拖动',
+  '- Tab2 已下线 (agent 集成已移除)',
   '- Tab3 LLM 配置 → 抽出到独立 LlmConfigs.vue 页',
   '- Tab4 登录调试日志（只读）',
   '',

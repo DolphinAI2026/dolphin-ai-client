@@ -8,7 +8,6 @@
       <TabStrip v-if="showNav" />
       <slot />
     </div>
-    <!-- HelpAssistant 已抬到 App.vue 顶层挂一次，避免随路由切换重复 init -->
   </div>
 </template>
 

@@ -145,7 +145,7 @@ function onMenuClick(e: MouseEvent, item: NavItem) {
 function onLogout() {
   tenantMenuOpen.value = false
   user.logout()
-  // 顺手清掉所有 localStorage（包含 dolphin agent cache / theme / 折叠态 等历史 key），
+  // 顺手清掉所有 localStorage（包含 外部 agent cache / theme / 折叠态 等历史 key），
   // 避免换 aPaaS 实例 / 切账号时旧状态污染。
   try { localStorage.clear() } catch { /* private mode */ }
   router.push({ path: '/login' })

@@ -59,8 +59,8 @@
         </div>
       </template>
       <template #actions>
-        <!-- "AI 调整" 按钮已删（dolphin embed 是默认入口），"部署到预览" 按钮已删
-             （让 dolphin agent 调 publish_application 工具发布，统一对话 UX）-->
+        <!-- "AI 调整" 按钮已删（外部 embed 是默认入口），"部署到预览" 按钮已删
+             （让 外部 agent 调 publish_application 工具发布，统一对话 UX）-->
         <!-- 面板关闭时：顶部展示一个"展开产物面板"按钮；面板打开时由 SPEC 行内 .preview-panel-collapse 关闭，此处隐藏（合并成同一个 toggle） -->
         <button
           v-if="showBuilderArtifactToggle && !showAnyBuilderArtifactPanel"
@@ -153,24 +153,6 @@
           'artifacts-hidden': !showAnyBuilderArtifactPanel
         }"
       >
-      <!-- 左侧对话区 -->
-      <div v-if="showBuilderChatSide" class="chat-side">
-        <!-- ★ Dolphin Agent 嵌入：等 backend current_app state 同步完成后才挂载，
-             避免切 app 时 dolphin 拿到旧 app 的 ctx 跨应用污染。
-             5 秒超时兜底，即使 sync 失败也允许加载（init-app-context endpoint
-             内部也会强制写 state，二重保险）。 -->
-        <DolphinAgentEmbed
-          v-if="!builderCurrentAppId || currentAppSynced || syncTimeoutFallback"
-          :app-id="builderCurrentAppId"
-          :app-name="builderAppDisplayName"
-          title="AI-Builder 应用调整助手"
-        />
-        <div v-else class="dolphin-loading-pane">
-          <span class="loading-dot"></span>
-          <span>正在切换应用上下文…</span>
-        </div>
-      </div>
-
       <!-- 2026-05-19 image #29: 中间默认渲染 latest doc 的 MD。用户拍板"只保留 MD 预览"。
            判定改用 store.currentApp 实际状态而非 isPlatformDeployed（后者会被旧的
            completed deploySteps 误判为已部署）。pre-deploy 直接显示 MD；post-deploy
@@ -606,7 +588,7 @@
     />
   </el-drawer>
 
-  <!-- dolphin 需求分析助手 deeplink (?from=requirements) 进来后的应用目标选择 -->
+  <!-- 外部需求分析助手 deeplink (?from=requirements) 进来后的应用目标选择 -->
   <ChooseAppTargetDialog
     v-model="reqDialogVisible"
     :filename="reqDialogFilename"
@@ -670,7 +652,6 @@ import type { ConversationCreate, Message } from '@/types'
 import TopBar from '@/components/TopBar.vue'
 import WorkbenchShell from '@/components/WorkbenchShell.vue'
 import AppChatPanel from '@/components/AppChatPanel.vue'
-import DolphinAgentEmbed from '@/components/DolphinAgentEmbed.vue'
 import ChooseAppTargetDialog from '@/components/ChooseAppTargetDialog.vue'
 import SessionSidebar, { type SessionItem as SidebarSessionItem } from '@/components/common/SessionSidebar.vue'
 import StructuredDocRenderer from '@/components/StructuredDocRenderer.vue'
@@ -822,14 +803,14 @@ const builderCurrentAppId = computed<number | null>(() => {
   return null
 })
 
-// 把"当前编辑的应用"上报给后端，让 dolphin agent 调 MCP 工具时不传 app_id 也能拿到
+// 把"当前编辑的应用"上报给后端，让 外部 agent 调 MCP 工具时不传 app_id 也能拿到
 const currentAppSynced = ref(false)
 // 5 秒超时兜底：sync 失败也允许 iframe 加载（init-app-context endpoint 内部
-// 会再写一次 state，所以即使前端 sync 失败 dolphin 也能拿对当前应用）
+// 会再写一次 state，所以即使前端 sync 失败 外部 agent 也能拿对当前应用）
 const syncTimeoutFallback = ref(false)
 async function syncCurrentAppToBackend() {
   // ★ 优先用 URL query 里的 app_id（最权威），不要 fallback 到 builderCurrentAppId
-  // computed —— 它会回退到 store.currentApp，可能是切页前的旧值，导致 dolphin
+  // computed —— 它会回退到 store.currentApp，可能是切页前的旧值，导致 agent
   // 收到错误的 ctx app_id。
   const appIdFromQuery = Number(route.query.app_id)
   let appId: number | null = null
@@ -859,11 +840,11 @@ watch(() => [route.query.app_id, store.preview.appName], () => {
   currentAppSynced.value = false  // 切应用时立即清，避免旧 sync 状态误用
   syncTimeoutFallback.value = false
   void syncCurrentAppToBackend()
-  // 5 秒后无论 sync 成败都允许 DolphinAgentEmbed 渲染
+  // 5 秒后无论 sync 成败都允许内置组件渲染
   setTimeout(() => { syncTimeoutFallback.value = true }, 5000)
 })
 
-// dolphin agent 改完应用后右侧不联动 — 轮询应用 updated_at 变了就重新加载 SPEC
+// 外部 agent 改完应用后右侧不联动 — 轮询应用 updated_at 变了就重新加载 SPEC
 // 注意：不用 watch(builderCurrentAppId, ...) — 直接 ref source 建立 watcher 会
 // 在 setup 同步阶段触发 computed 求值，而 builderCurrentAppId 引用的 existingAppId
 // 在文件后面才声明，会触发 TDZ。改成 polling 内部对比 _lastAppId 检测切换。
@@ -943,7 +924,7 @@ function startAppPolling() {
     void pollAppForChanges()
   }, 5000)
   // tab 切回前台时立刻补一次轮询 — 否则要等下一个 5s 周期。
-  // 用户从 dolphin admin / 别的 tab 切回来的瞬间最可能想立刻看到右侧最新状态。
+  // 用户从 外部 admin / 别的 tab 切回来的瞬间最可能想立刻看到右侧最新状态。
   _appPollVisHandler = () => {
     if (document.visibilityState === 'visible') {
       void pollAppForChanges()
@@ -959,27 +940,6 @@ function stopAppPolling() {
   }
 }
 
-// "AI 调整" 按钮：新窗口打开 dolphin 完整 chat 页（享受 dolphin 完整对话/历史/记忆/项目管理）
-async function openDolphinFullChat() {
-  const appId = builderCurrentAppId.value
-  if (!appId) return
-  try {
-    const cfg = await request.get<unknown, {
-      server_url: string
-      app_adjust_agent_code: string
-    }>('/dolphin/config')
-    const code = cfg?.app_adjust_agent_code
-    if (!code) {
-      ElMessage.warning('Dolphin 应用调整助手未配置')
-      return
-    }
-    const url = `${cfg.server_url}/agent/${code}/chat?app_id=${appId}&app_name=${encodeURIComponent(builderAppDisplayName.value || '')}`
-    window.open(url, '_blank', 'noopener,noreferrer')
-  } catch (err) {
-    console.warn('[openDolphinFullChat] failed', err)
-    ElMessage.error('打开 AI 调整助手失败')
-  }
-}
 const chatGeneratedDocContent = computed(() => {
   for (let i = messages.length - 1; i >= 0; i -= 1) {
     const msg = messages[i]
@@ -1146,7 +1106,7 @@ const showBuilderPhaseStrip = computed(() =>
   showAnyBuilderArtifactPanel.value
 )
 // 2026-05-15 按 [[arch_decision_mcp_provider_2026_05_14]] "不再深度融合 ai_chat 等
-// 内置 agent" 决策砍掉左侧 AI 助手对话区（DolphinAgentEmbed iframe）：用户只需点
+// 内置 agent" 决策砍掉左侧 AI 助手对话区：用户只需点
 // 右上角"开始构建"按钮即可。右侧 SPEC 区因 .single-pane class 自动 full-width。
 // 老 computed 逻辑保留作 ref，下次彻底砍 chat-side block 时一并清。
 // 2026-05-18 撤销 cf75367 "恢复 chat panel" — 用户拍板 md 预览区不要 AI 助手。
@@ -2087,7 +2047,7 @@ function openCodingWorkspace(dispatchToken = '') {
 
 // ── Builder → AI Coding 自开发 handoff bridge ──
 // 把当前应用的结构（模型/表单/流程/角色）打包成 message 注入 Coding agent 首条对话，
-// 不依赖 Coding agent 主动 fetch（agent prompt 暂不动，本 session 用户决策不集成 dolphin admin）。
+// 不依赖 Coding agent 主动 fetch（agent prompt 暂不动，本 session 用户决策不集成 外部 admin）。
 // CodingPage.vue:maybeConsumeAiBuilderDispatch 会读 sessionStorage('ai_builder_pending_coding')
 // 然后把 message 作为 userInput 自动 sendMessage。
 function handoffToCodingForAppDev() {
@@ -7064,8 +7024,8 @@ function handleMessageAction(action: { kind?: string; label?: string }) {
   }
 }
 
-// ── dolphin 需求分析助手 deeplink (?from=requirements) ─────────────────────
-// 用户在 dolphin chat 里点 agent 给的 [→ Builder](deeplink) 链接进来，
+// ── 外部需求分析助手 deeplink (?from=requirements) ─────────────────────
+// 用户在 MCP 客户端 chat 里点 agent 给的 [→ Builder](deeplink) 链接进来，
 // 立刻从 backend cache 拿 md（agent 已通过 submit_design_doc 工具 push 进去），
 // 弹 ChooseAppTargetDialog 让用户选「新建应用」或「更新到现有应用」。
 const reqDialogVisible = ref(false)
@@ -7098,7 +7058,7 @@ async function tryLoadFromRequirements() {
       score?: number
     }>('/requirements/latest-doc')
     if (!res?.has_doc || !res.md_content) {
-      ElMessage.warning('暂无可用的设计文档 — 请回到 dolphin 让需求分析助手重新生成一份')
+      ElMessage.warning('暂无可用的设计文档 — 请回到外部 让需求分析助手重新生成一份')
       return
     }
     const filename = res.file_name || 'design-doc.md'
@@ -7150,9 +7110,9 @@ async function handleRequirementsConfirm(payload: { mode: 'new' } | { mode: 'upd
 
 onMounted(async () => {
   store.showConnectModal = false
-  // 同步当前应用到 backend（让 dolphin agent 通过 user_id 拿到 current app_id）
+  // 同步当前应用到 backend（让 外部 agent 通过 user_id 拿到 current app_id）
   void syncCurrentAppToBackend()
-  // dolphin 改 SPEC 后右侧自动刷新 — 启动 5s 轮询
+  // agent 改 SPEC 后右侧自动刷新 — 启动 5s 轮询
   startAppPolling()
   // 立刻拉一次基线 —— 不依赖第一次 5s tick 后才建立 baseline。
   // 若 agent 在 mount 后、第一次 tick 前改了 SPEC，原来"首次 tick 建基线"逻辑
@@ -7468,7 +7428,7 @@ onMounted(async () => {
 
   // pendingFile 处理已提前到 onMounted 最早（见上方）。
 
-  // 从 dolphin 需求分析助手 deeplink 进来 (?from=requirements)：拉 cache 弹选目标对话框
+  // 从 外部需求分析助手 deeplink 进来 (?from=requirements)：拉 cache 弹选目标对话框
   if (route.query.from === 'requirements') {
     await tryLoadFromRequirements()
   }
@@ -7853,25 +7813,6 @@ html[data-theme="dark"] .mode-btn-link:hover {
   border: 1px solid rgba(128, 145, 255, 0.12);
   background: linear-gradient(180deg, rgba(255,255,255,0.8), rgba(245, 248, 255, 0.86));
   box-shadow: 0 20px 50px rgba(31, 41, 85, 0.06), inset 0 1px 0 rgba(255,255,255,0.75);
-}
-
-.dolphin-loading-pane {
-  flex: 1;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  gap: 10px;
-  color: #8a9099;
-  font-size: 14px;
-  background: var(--b-bg, #fff);
-}
-
-.dolphin-loading-pane .loading-dot {
-  width: 10px;
-  height: 10px;
-  border-radius: 50%;
-  background: #7c3aed;
-  animation: pulse-dot 1s ease-in-out infinite;
 }
 
 @keyframes pulse-dot {

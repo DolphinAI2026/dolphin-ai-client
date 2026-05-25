@@ -5,7 +5,7 @@
 - aPaaS-后端自开发快速入门.md
 - aPaaS-后端自开发模版包打包规范.md
 
-用于 init_apaas_backend_workspace MCP 工具一键脚手架，让 dolphin agent 写后端
+用于 init_apaas_backend_workspace MCP 工具一键脚手架，让 外部 agent 写后端
 自开发代码时直接绕过坑 5 / 6 / 7 / 15 / 16 五大死亡坑：
 - 坑 7: @SpringBootApplication 放 src/main 让 aPaaS 发布卡死
 - 坑 15: INSERT 必须用 POJO，不接受原生 SQL

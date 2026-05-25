@@ -148,7 +148,7 @@ function renderIcon(name: string, size = 16): string {
             <path d="M18 18a4 4 0 0 0 0-8 6 6 0 0 0-12 1 4 4 0 0 0 0 8z" />
             <path d="M9 12l2 2 4-4" />
           </svg>
-          <span>本地 dev 模式无法访问生产 cluster — 显示的 MCP server 是 catalog 占位。生产环境会自动连接 dolphin v2 cluster。</span>
+          <span>本地 dev 模式无法访问生产 cluster — 显示的 MCP server 是 catalog 占位。生产环境会自动连接 v2 cluster。</span>
         </div>
 
         <!-- Summary cards -->

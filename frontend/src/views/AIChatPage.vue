@@ -122,7 +122,7 @@
 
       <!-- 输入区 -->
       <div class="input-area" v-if="currentSession">
-        <!-- 排队中提示卡（dolphin 风格：流式中输入第二条消息会进队列） -->
+        <!-- 排队中提示卡（对话界面风格：流式中输入第二条消息会进队列） -->
         <div v-if="pendingQueue.length > 0" class="queue-banner">
           <span class="queue-icon">🕐</span>
           <span class="queue-text">{{ pendingQueue.length }} 条消息排队中 · 当前回复结束后自动发送</span>
@@ -300,7 +300,7 @@ import AgentConversation from '@/components/common/AgentConversation.vue'
 import ChooseAppTargetDialog from '@/components/ChooseAppTargetDialog.vue'
 import type { AgentMessage } from '@/components/common/agent-conversation/types'
 import { ElMessage, ElMessageBox } from 'element-plus'
-// chat / cowork mode 已合并 — ChatDotRound 用作 session 列表前导 icon（dolphin 风格）
+// chat / cowork mode 已合并 — ChatDotRound 用作 session 列表前导 icon（对话界面风格）
 import { ChatDotRound } from '@element-plus/icons-vue'
 import { applicationApi } from '@/api/application'
 
@@ -323,7 +323,7 @@ type SessionFilter = 'all' | 'chat' | 'cowork'
 const sessionsFilter = ref<SessionFilter>('all')
 const filteredSessions = computed(() => sessions.value)
 
-// 按更新时间分组：今天 / 昨天 / 本周 / 本月 / 更早（dolphin 风格 sidebar）
+// 按更新时间分组：今天 / 昨天 / 本周 / 本月 / 更早（对话界面风格 sidebar）
 // 2026-05-21 UI audit Fix 11: 7 天内 → 本周/本月 更精细分组
 function _timeGroup(iso: string | null | undefined): string {
   if (!iso) return '更早'
@@ -1135,7 +1135,7 @@ function onFilesSelected(e: Event) {
   input.value = ''
 }
 
-// dolphin 风格：流式中可继续输入，按 Enter 进入队列等待
+// 对话界面风格：流式中可继续输入，按 Enter 进入队列等待
 const pendingQueue = ref<string[]>([])
 
 async function onSend() {
@@ -2319,7 +2319,7 @@ onMounted(async () => {
   flex-shrink: 0;
 }
 
-/* dolphin 风格队列提示卡 */
+/* 对话界面风格队列提示卡 */
 .queue-banner {
   display: flex;
   align-items: center;

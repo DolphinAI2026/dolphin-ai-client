@@ -154,7 +154,7 @@ _BASE_SERVER_META: dict[str, dict] = {
         "version": "2.3.1",
         "official": True,
         "tags": ["官方", "应用配置", "自开发"],
-        "desc": "v2 主 FastMCP — 应用生命周期 / workspace / 自开发 / 内省。dolphin agent 实际在调的版本。",
+        "desc": "v2 主 FastMCP — 应用生命周期 / workspace / 自开发 / 内省。外部 agent 实际在调的版本。",
     },
     "design": {
         "id": "mcp-v2-design",
