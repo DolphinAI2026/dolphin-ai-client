@@ -10985,21 +10985,19 @@ html[data-theme="light"] .msg-attachment-chip {
 .ca-fab-text { white-space: nowrap; }
 .ca-fab svg { flex-shrink: 0; }
 
-/* 浮动面板: overlay 在 chat-shell 右侧, 不挤 iframe */
+/* 2026-05-25 v3: 分屏模式 (不再 overlay) — 用户反馈 fixed 覆盖盖到平台按钮.
+   chat-shell 是 flex row, panel 作为 sibling 加进去自然 push iframe 缩小,
+   panel 内部 usePanelResize 还在, 用户能拖左边缘 handle 拉宽度 (320-880).
+   左侧 chat-main 是 flex:1 min-width:0, 永远填满剩余宽度. */
 .config-assistant.ca-floating {
-  position: fixed;
-  right: 0;
-  top: 0;
-  bottom: 0;
-  z-index: 49;
-  height: 100vh;
-  box-shadow: -8px 0 32px rgba(15, 23, 42, 0.12),
-              -2px 0 8px rgba(15, 23, 42, 0.04);
+  position: relative;  /* 让内部 ca-resize-handle (absolute) 锚定 */
+  flex-shrink: 0;
+  align-self: stretch;
+  box-shadow: -2px 0 8px rgba(15, 23, 42, 0.06);
   /* width 由 panel 内部 usePanelResize 控制, defaultWidth=420 */
 }
 html[data-theme="dark"] .config-assistant.ca-floating {
-  box-shadow: -8px 0 32px rgba(0, 0, 0, 0.4),
-              -2px 0 8px rgba(0, 0, 0, 0.2);
+  box-shadow: -2px 0 8px rgba(0, 0, 0, 0.25);
 }
 .platform-loading {
   flex: 1; display: flex; align-items: center; justify-content: center;
