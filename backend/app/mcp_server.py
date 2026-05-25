@@ -4769,32 +4769,32 @@ async def set_apaas_app_process(
     process_code: str,
     stages: list,
 ) -> dict:
-    """给某个表单菜单设置审批流程（按 menu_id 覆盖式 set，每个 form 菜单最多 1 流程）。
+    """给某个表单菜单设置审批流程 (用 /common/resource/processConfig 管理 API).
 
-    ⚠️ apaas 平台没暴露 list 流程的 endpoint — 这工具是「写盲」（不知道改前现状）。
-    每个表单菜单最多 1 个流程，所以覆盖只影响这个 menu 自己的流程，不动其他 form。
+    ⚠️ 2026-05-25 修: 老版调 /xdap-app/process/save/processConfig (BPMN XML), 实测
+    返 ok=true 但 平台 UI 流程设计页空白 — 那是个不同的 process 存储, 现代 UI 不读.
+    切到 super-agents-dev build-system.py 实证 work 的 /common/resource/processConfig
+    简单 schema (nodes+edges+approvers, 没 BPMN).
 
-    stages 数组每项：
-      - name: 阶段名（"部门主管审批"）
-      - approver_type: ROLE / SUBMITTER / USER（最常 ROLE）
-      - approver_code: 审批人 code（ROLE 时是 roleCode；USER 时是 userId）
-      - approver_name: 显示名（可选，默认用 name）
+    覆盖式: 每个表单最多 1 个流程, 重复调会覆盖.
 
-    示例 — 请假审批 2 级：
+    stages 数组每项:
+      - name: 阶段名 ("部门主管审批")
+      - approver_type: ROLE / SUBMITTER / USER (最常 ROLE)
+      - approver_code: 审批人 code (ROLE 时是 roleCode; USER 时是 userId)
+      - approver_name: 显示名 (可选, 默认用 stage.name)
+
+    工具自动加 "开始" + "结束" 2 个固定节点, stages 串成顺序审批节点.
+
+    示例 — 请假 2 级审批:
         stages=[
             {"name":"部门主管审批","approver_type":"ROLE","approver_code":"manager"},
             {"name":"HR 审批","approver_type":"ROLE","approver_code":"hr"}
         ]
 
-    工具自动加 START / START_HIDDEN（发起申请） / END 三个固定节点，
-    stages 串成 UserTask_1 → UserTask_2 → ... 顺序审批；想分支 / 会签等高级
-    场景请走 SPEC 文档流 + apaas 平台 UI 改。
-
-    menu_id 怎么拿：先 list_apaas_app_menus 看现有菜单，找 form_id 不空的那行。
-
-    approver_code 怎么拿：
-      - ROLE 时：先 list_apaas_app_roles 拿 role.roleCode（注意是 code 不是 id）
-      - USER 时：apaas 用户 id（暂没暴露 list_users 工具，得平台 UI 看）
+    前置:
+      - menu_id 从 list_apaas_app_menus 拿 (form_id 不空那行) — 工具会反查 form_code/form_name
+      - approver_code 从 list_apaas_app_roles 拿 role.roleCode (是 code 不是 id)
     """
     if not (apaas_app_id.strip() and menu_id.strip() and
             process_name.strip() and process_code.strip()):
@@ -4805,32 +4805,97 @@ async def set_apaas_app_process(
     if not isinstance(stages, list) or not stages:
         return {
             "ok": False, "error_code": "INVALID_STAGES",
-            "message": "stages 必须是非空数组（至少 1 个审批阶段）",
+            "message": "stages 必须是非空数组(至少 1 个审批阶段)",
         }
 
-    payload = _build_bpmn_payload_from_stages(
-        menu_id=menu_id.strip(),
-        name=process_name.strip(),
-        code=process_code.strip(),
-        stages=stages,
-    )
-    payload["appId"] = apaas_app_id.strip()  # client 拼 header 时也要
+    # 反查 form_code + form_name (管理 API 用 form_code 关联表单, 不是 menu_id)
+    ok_menus, menus_raw = await _with_client(env_id, "查菜单",
+        lambda c: c.query_menus(apaas_app_id.strip()))
+    if not ok_menus:
+        return menus_raw
+    form_code = None
+    form_name = None
+    # query_menus 返回平 list (含 submenus 嵌套) — 按 id 字段找
+    def _find(nodes):
+        for n in (nodes or []):
+            if not isinstance(n, dict):
+                continue
+            if str(n.get("id") or "") == menu_id.strip():
+                return n
+            sub = _find(n.get("submenus") or n.get("children") or [])
+            if sub:
+                return sub
+        return None
+    target = _find(menus_raw if isinstance(menus_raw, list) else [])
+    if target:
+        form_code = target.get("formCode") or target.get("form_code") or ""
+        form_name = target.get("menuName") or target.get("name") or target.get("menu_name") or ""
+    if not form_code:
+        return {
+            "ok": False, "error_code": "FORM_CODE_NOT_FOUND",
+            "message": f"menu_id={menu_id} 没找到 form_code (可能不是表单菜单 / menu 不存在). "
+                       f"先调 list_apaas_app_menus 找 form_id 不空那行 menu_id",
+        }
 
-    ok, raw = await _with_client(env_id, "设流程",
-        lambda c: c.save_process_config(apaas_app_id.strip(), payload))
+    # 构建 nodes/edges (build-system.py 同款简洁 schema)
+    process_nodes = [{"nodeName": "开始", "nodeId": "start", "approvers": [
+        {"approverType": "SUBMITTER", "approverName": "表单提交人", "approverCode": "SUBMITTER"},
+    ]}]
+    process_edges = []
+    prev_id = "start"
+    for idx, stage in enumerate(stages, start=1):
+        approver_type = (stage.get("approver_type") or "ROLE").strip().upper()
+        approver_code = str(stage.get("approver_code") or "").strip()
+        approver_name = (stage.get("approver_name") or stage.get("name")
+                         or approver_code or f"审批人 {idx}").strip()
+        if approver_type == "SUBMITTER":
+            approvers = [{"approverType": "SUBMITTER",
+                          "approverName": "表单提交人", "approverCode": "SUBMITTER"}]
+        else:
+            approvers = [{"approverType": approver_type,
+                          "approverName": approver_name,
+                          "approverCode": approver_code}]
+        nid = f"node_{idx}"
+        process_nodes.append({
+            "nodeName": stage.get("name") or f"审批 {idx}",
+            "nodeId": nid,
+            "approvers": approvers,
+        })
+        process_edges.append({
+            "edgeId": f"e_{idx}", "fromNodeId": prev_id, "targetNodeId": nid,
+        })
+        prev_id = nid
+    process_nodes.append({"nodeName": "结束", "nodeId": "end", "approvers": []})
+    process_edges.append({
+        "edgeId": f"e_end", "fromNodeId": prev_id, "targetNodeId": "end",
+    })
+
+    payload = [{
+        "appId": apaas_app_id.strip(),
+        "tenantId": "",  # client 会从 header xdaptenantid 拿
+        "formName": form_name or process_name.strip(),
+        "formCode": form_code,
+        "processNodes": process_nodes,
+        "processEdges": process_edges,
+    }]
+
+    ok, raw = await _with_client(env_id, "建流程",
+        lambda c: c.create_process_config(apaas_app_id.strip(), payload))
     if not ok:
         return raw
 
     return {
         "ok": True,
         "menu_id": menu_id,
+        "form_code": form_code,
+        "form_name": form_name,
         "process_name": process_name,
         "process_code": process_code,
         "stages_count": len(stages),
-        "nodes_count": len(payload["nodes"]),
-        "message": (f"流程「{process_name}」已设到菜单 {menu_id}："
-                    f"{len(stages)} 个审批阶段（含 START / END / 提交人 3 个固定节点）"),
-        "next_step": "调 republish_apaas_app 让运行时生效（重新发布应用）",
+        "nodes_count": len(process_nodes),
+        "platform_response": raw if isinstance(raw, dict) else {"raw": raw},
+        "message": (f"流程「{process_name}」已设到表单「{form_name}」"
+                    f"({len(stages)} 个审批阶段 + 开始 + 结束 = {len(process_nodes)} 节点)"),
     }
 
 

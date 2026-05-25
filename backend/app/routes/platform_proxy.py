@@ -642,6 +642,21 @@ async def _proxy_request(request: Request, path: str, inject_auth: bool = False)
                 logger.info(f"🎯 captured menu/{ep} body to {fname} ({len(body)} bytes) path={path}")
             except Exception as exc:
                 logger.warning(f"capture menu failed: {exc}")
+        # 2026-05-25: 抓流程相关 POST — 用户点 "开启流程" / 配审批节点 / 保存 时
+        # 平台 UI 真用啥端点 + 完整 payload, 给我们对照 MCP 工具输出.
+        if body and ("/xdap-app/process/" in path or "/common/resource/processConfig" in path
+                     or "/common/resource/flowConfig" in path) and "/query/" not in path:
+            try:
+                import os as _os, time as _t
+                _capture_dir = "/Users/mars/Vibe Coding/apaas-builder-ai/docs/captures"
+                _os.makedirs(_capture_dir, exist_ok=True)
+                ep = path.replace("/", "_").strip("_")[:80]
+                fname = f"process-{ep}-captured-{int(_t.time())}.json"
+                with open(f"{_capture_dir}/{fname}", "wb") as fp:
+                    fp.write(body)
+                logger.info(f"🎯 captured process body to {fname} ({len(body)} bytes) path={path}")
+            except Exception as exc:
+                logger.warning(f"capture process failed: {exc}")
         resp = await client.request(method=request.method, url=target, headers=headers, content=body)
 
         if resp.status_code == 401 and _proxy_state.get("username"):
