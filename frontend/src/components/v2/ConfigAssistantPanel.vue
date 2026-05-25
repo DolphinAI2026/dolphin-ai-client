@@ -45,6 +45,8 @@ const props = defineProps<{
 const emit = defineEmits<{
   /** 2026-05-21 Phase 2: 完成态 hero CTA 触发父组件刷新 iframe */
   (e: 'refresh-iframe'): void
+  /** 2026-05-25: 浮动模式 — 关闭面板回到 FAB */
+  (e: 'close'): void
 }>()
 
 // 拖宽 — 学 super-agents-dev PointerEvent + setPointerCapture, 比老 mousedown 稳
@@ -202,6 +204,16 @@ onUpdated(() => {
         <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
           <path d="M12 8v4l3 2" />
           <circle cx="12" cy="12" r="9" />
+        </svg>
+      </button>
+      <!-- 2026-05-25: 浮动模式 close 按钮 -->
+      <button
+        class="ca-top-btn"
+        title="收起助手"
+        @click="$emit('close')"
+      >
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+          <path d="M18 6L6 18M6 6l12 12" />
         </svg>
       </button>
     </div>

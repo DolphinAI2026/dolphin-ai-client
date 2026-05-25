@@ -560,14 +560,31 @@
         <div v-if="!deploySteps.length" class="dps-empty">正在初始化部署任务…</div>
       </div>
     </aside>
-    <!-- 2026-05-19 post-deploy 形态：右侧改成配置助手，聊增量调整 -->
-    <!-- 2026-05-21 Phase 2: @refresh-iframe 给完成态 hero CTA 用 — 改完 N 步直接 reload iframe 看效果 -->
-    <ConfigAssistantPanel
-      v-else-if="!embedMode && isPostDeploy && resolvedAppId"
-      :application-id="resolvedAppId"
-      :app-name="builderAppDisplayName || ''"
-      @refresh-iframe="platformIframeKey += 1"
-    />
+    <!-- 2026-05-19 post-deploy 形态: 配置助手, 聊增量调整 -->
+    <!-- 2026-05-25: 改浮动模式 — 默认收起 FAB, 点开 overlay 在 iframe 上, 不再挤 iframe 宽度 -->
+    <template v-if="!embedMode && isPostDeploy && resolvedAppId">
+      <!-- 收起态: 右下 FAB -->
+      <button
+        v-if="!assistantOpen"
+        class="ca-fab"
+        title="打开配置助手"
+        @click="toggleAssistant"
+      >
+        <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+          <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z" />
+        </svg>
+        <span class="ca-fab-text">AI 助手</span>
+      </button>
+      <!-- 展开态: 浮动 overlay 在右侧, 不再 push iframe 缩小 -->
+      <ConfigAssistantPanel
+        v-show="assistantOpen"
+        class="ca-floating"
+        :application-id="resolvedAppId"
+        :app-name="builderAppDisplayName || ''"
+        @close="toggleAssistant"
+        @refresh-iframe="platformIframeKey += 1"
+      />
+    </template>
   </div><!-- /chat-shell -->
 
   <!-- 用 AI 调整应用：右侧抽屉嵌 AppChatPanel（同 Vue 实例 / 同主题，不跳页不 iframe） -->
@@ -2086,6 +2103,15 @@ function handoffToCodingForAppDev() {
   const token = `app-dev-${Date.now().toString(36)}`
   codingDispatchToken.value = token
   openCodingWorkspace(token)
+}
+
+// ── 配置助手浮动 (2026-05-25) ──
+// 默认收起为 FAB, 不再挤压 iframe. localStorage 持久化用户偏好.
+const ASSISTANT_OPEN_KEY = 'apaas-config-assistant-open-v1'
+const assistantOpen = ref(localStorage.getItem(ASSISTANT_OPEN_KEY) === 'true')
+function toggleAssistant() {
+  assistantOpen.value = !assistantOpen.value
+  try { localStorage.setItem(ASSISTANT_OPEN_KEY, String(assistantOpen.value)) } catch { /* private mode */ }
 }
 
 // ── 平台配置 iframe ──
@@ -10891,12 +10917,9 @@ html[data-theme="light"] .msg-attachment-chip {
 .platform-iframe-container {
   flex: 1; display: flex; flex-direction: column;
   min-height: 0; min-width: 0;
-  /* 2026-05-25: 平台 form designer 内部 3 列布局 (字段树 + 预览 + 属性) ≈ 1100px 才不挤.
-     窄于 1100 时整 iframe 走横向滚动, 保完整功能. */
-  overflow-x: auto;
-}
-.platform-iframe-container > * {
-  flex-shrink: 0;  /* 别让子元素被压扁 */
+  /* 2026-05-25 v2: 配置助手改浮动 overlay 后, iframe 可吃整宽 — 放掉 min-width 1100 锁,
+     让 iframe 完全自适应宽度. 平台 form designer 自己负责内部排布. */
+  overflow: hidden;
 }
 .platform-tab-bar {
   display: flex; align-items: center; gap: 4px; padding: 4px 16px;
@@ -10926,9 +10949,57 @@ html[data-theme="light"] .msg-attachment-chip {
 .hint-dismiss-btn:hover { color: var(--t-text-secondary); }
 .platform-iframe {
   width: 100%; height: 100%; border: none; background: #fff; flex: 1;
-  /* 2026-05-25: 平台 form designer / 列表设计器 3 列布局最少需要 1100px.
-     宽不够时 iframe 不缩 — 父容器 overflow-x:auto 接横向滚动. */
-  min-width: 1100px;
+  /* 2026-05-25 v2: 配置助手改浮动后 iframe 拿全宽 — 不再设 min-width, 自适应 */
+  min-width: 0;
+}
+
+/* ──── 配置助手浮动模式 (2026-05-25) ──── */
+/* FAB: 右下浮按钮, 收起态显. brand 渐变胶囊, 不抢眼但好找 */
+.ca-fab {
+  position: fixed;
+  right: 20px;
+  bottom: 24px;
+  z-index: 50;
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  height: 44px;
+  padding: 0 16px 0 14px;
+  border: none;
+  border-radius: 22px;
+  background: var(--t-brand-gradient, linear-gradient(135deg, #4f6ef7, #6b8aff));
+  color: #fff;
+  font-size: 13px;
+  font-weight: 500;
+  cursor: pointer;
+  box-shadow: 0 4px 16px var(--t-brand-glow, rgba(79, 110, 247, 0.3)),
+              0 2px 4px rgba(0, 0, 0, 0.06);
+  transition: transform 0.15s ease, box-shadow 0.15s ease;
+}
+.ca-fab:hover {
+  transform: translateY(-2px);
+  box-shadow: 0 8px 24px var(--t-brand-glow, rgba(79, 110, 247, 0.4)),
+              0 4px 8px rgba(0, 0, 0, 0.08);
+}
+.ca-fab:active { transform: translateY(0); }
+.ca-fab-text { white-space: nowrap; }
+.ca-fab svg { flex-shrink: 0; }
+
+/* 浮动面板: overlay 在 chat-shell 右侧, 不挤 iframe */
+.config-assistant.ca-floating {
+  position: fixed;
+  right: 0;
+  top: 0;
+  bottom: 0;
+  z-index: 49;
+  height: 100vh;
+  box-shadow: -8px 0 32px rgba(15, 23, 42, 0.12),
+              -2px 0 8px rgba(15, 23, 42, 0.04);
+  /* width 由 panel 内部 usePanelResize 控制, defaultWidth=420 */
+}
+html[data-theme="dark"] .config-assistant.ca-floating {
+  box-shadow: -8px 0 32px rgba(0, 0, 0, 0.4),
+              -2px 0 8px rgba(0, 0, 0, 0.2);
 }
 .platform-loading {
   flex: 1; display: flex; align-items: center; justify-content: center;
