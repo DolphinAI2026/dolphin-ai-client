@@ -10889,7 +10889,14 @@ html[data-theme="light"] .msg-attachment-chip {
   min-width: 0;
 }
 .platform-iframe-container {
-  flex: 1; display: flex; flex-direction: column; min-height: 0; min-width: 0;
+  flex: 1; display: flex; flex-direction: column;
+  min-height: 0; min-width: 0;
+  /* 2026-05-25: 平台 form designer 内部 3 列布局 (字段树 + 预览 + 属性) ≈ 1100px 才不挤.
+     窄于 1100 时整 iframe 走横向滚动, 保完整功能. */
+  overflow-x: auto;
+}
+.platform-iframe-container > * {
+  flex-shrink: 0;  /* 别让子元素被压扁 */
 }
 .platform-tab-bar {
   display: flex; align-items: center; gap: 4px; padding: 4px 16px;
@@ -10919,6 +10926,9 @@ html[data-theme="light"] .msg-attachment-chip {
 .hint-dismiss-btn:hover { color: var(--t-text-secondary); }
 .platform-iframe {
   width: 100%; height: 100%; border: none; background: #fff; flex: 1;
+  /* 2026-05-25: 平台 form designer / 列表设计器 3 列布局最少需要 1100px.
+     宽不够时 iframe 不缩 — 父容器 overflow-x:auto 接横向滚动. */
+  min-width: 1100px;
 }
 .platform-loading {
   flex: 1; display: flex; align-items: center; justify-content: center;
