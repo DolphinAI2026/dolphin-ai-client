@@ -50,3 +50,7 @@ workspaces/
 extensions/ruijing-ai/dist/
 extensions/ruijing-ai/*.vsix
 .serena/
+
+# Stale dirs (cleaned up 2026-05-25)
+marketplace_store/
+examples/
