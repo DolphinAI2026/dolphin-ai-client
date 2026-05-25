@@ -542,6 +542,18 @@ async def _proxy_request(request: Request, path: str, inject_auth: bool = False)
                 logger.info(f"🎯 captured event/save body to {fname} ({len(body)} bytes)")
             except Exception as exc:
                 logger.warning(f"capture event/save failed: {exc}")
+        # 2026-05-25: 抓 menu/save 用 — 用户手动挂菜单到分组时落到文件
+        if body and "menu/save/menu" in path:
+            try:
+                import os as _os, time as _t
+                _capture_dir = "/Users/mars/Vibe Coding/apaas-builder-ai/docs/captures"
+                _os.makedirs(_capture_dir, exist_ok=True)
+                fname = f"menu-save-captured-{int(_t.time())}.json"
+                with open(f"{_capture_dir}/{fname}", "wb") as fp:
+                    fp.write(body)
+                logger.info(f"🎯 captured menu/save body to {fname} ({len(body)} bytes)")
+            except Exception as exc:
+                logger.warning(f"capture menu/save failed: {exc}")
         resp = await client.request(method=request.method, url=target, headers=headers, content=body)
 
         if resp.status_code == 401 and _proxy_state.get("username"):

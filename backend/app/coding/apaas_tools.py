@@ -103,13 +103,20 @@ async def _list_apaas_apps(args: dict, platform_env_id: int, db: AsyncSession) -
 
 
 async def _list_apaas_app_menus(args: dict, platform_env_id: int, db: AsyncSession) -> str:
-    """列应用菜单树（含 form_id / form_code，自开发场景从这里拿表单入口）。"""
+    """列应用菜单树（含 form_id / form_code，自开发场景从这里拿表单入口）。
+
+    2026-05-25 改: 从 allAppMenu 换 manageAppMenu, 因为前者过滤 GROUP 菜单
+    导致 agent 看不到分组 menu_id 没法挂菜单. manageAppMenu 含全菜单 (GROUP +
+    用户菜单 + 系统流程菜单), 我们过滤掉系统流程类 (TODO/TO_CHECK/PROC_* 等)
+    保留 GROUP + 用户表单菜单.
+    """
     apaas_app_id = (args.get("apaas_app_id") or "").strip()
     if not apaas_app_id:
         return _err("apaas_app_id 必填")
     try:
         client = await _get_apaas_client(platform_env_id, db)
-        menus = await client.query_all_app_menus(apaas_app_id)
+        # 用 manageAppMenu — 返完整树 (含 GROUP). 老 allAppMenu 过滤 GROUP, 无法挂菜单.
+        menus = await client.query_menus(apaas_app_id)
     except Exception as exc:
         return _err(f"查询菜单失败: {exc}")
 
@@ -153,6 +160,14 @@ async def _list_apaas_app_menus(args: dict, platform_env_id: int, db: AsyncSessi
         return out
 
     flat = flatten(menus)
+    # 过滤掉平台自动注入的系统流程菜单 (TODO/TO_CHECK/MY_SUBMIT/MY_PARTICIPATE/
+    # TODO_MANAGE/PROC_AUTH/PROC_FORWARD) — 用户配置事件 / 挂菜单时不需要这些.
+    # 保留 GROUP 类型 — agent 挂菜单到分组下需要 group menu_id.
+    _SYSTEM_AUTO_TYPES = {
+        "TODO", "TO_CHECK", "MY_SUBMIT", "MY_PARTICIPATE",
+        "TODO_MANAGE", "PROC_AUTH", "PROC_FORWARD",
+    }
+    flat = [m for m in flat if (m.get("menu_type") or "").upper() not in _SYSTEM_AUTO_TYPES]
     return _ok({
         "platform_env_id": platform_env_id,
         "apaas_app_id": apaas_app_id,
