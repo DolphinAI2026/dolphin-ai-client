@@ -3778,6 +3778,24 @@ async def create_time_event_with_python_code(
     }
 
 
+_VALUE_CHANGE_CAPTURE_PATH = (
+    "/Users/mars/Vibe Coding/apaas-builder-ai/"
+    "docs/captures/business-event-save-captured-1779695560.json"
+)
+_VALUE_CHANGE_CAPTURE_FORM_ID = "6a1272e174cfbc26cbf1e15c"   # 借阅记录 form (capture 来源)
+_VALUE_CHANGE_CACHED_TEMPLATE: dict | None = None
+
+
+def _load_value_change_template() -> dict:
+    """读 capture template (lazy, 缓存). 2026-05-25 用户手动建事件抓的真 schema."""
+    global _VALUE_CHANGE_CACHED_TEMPLATE
+    if _VALUE_CHANGE_CACHED_TEMPLATE is None:
+        import json as _j
+        with open(_VALUE_CHANGE_CAPTURE_PATH, encoding="utf-8") as f:
+            _VALUE_CHANGE_CACHED_TEMPLATE = _j.load(f)
+    return _VALUE_CHANGE_CACHED_TEMPLATE
+
+
 @mcp.tool()
 async def create_apaas_value_change_assignment_event(
     env_id: int,
@@ -3799,24 +3817,25 @@ async def create_apaas_value_change_assignment_event(
           target_field_label="归还日期",   value_expression="${dateNow}",
         )
 
-    内部流程:
-      1. list_apaas_form_components 拿字段 (label → uuid + bocCode)
-      2. 解析字典选项 (借阅状态='已归还' → 实际字典值如 returned_)
-      3. create_business_event stub
-      4. 构造最小 DAG: TRIGGER(VALUE_CHANGE) → ASSIGNMENT_NODE → END_NODE
-      5. save_business_event 持久化
-      6. 失败自动 delete stub 防残留
+    内部实现 (2026-05-25 v3, capture-as-template):
+      1. 加载用户手抓的真实 save body 当 template (含完整 boCodeBORelationProperties 19 字段)
+      2. list_apaas_form_components 拿字段 (label → uuid + bocCode + 字典选项)
+      3. 解析字典 (借阅状态='已归还' → returned_)
+      4. create_business_event stub → 拿 event_id
+      5. 深拷 template + 替换: id/eventName/eventCode/3 nodeId + trigger 字段 + assignment 字段 + value
+      6. save → 立刻 get_detail 验证持久化, 失败回滚
 
-    value_expression 取值:
-      - "${dateNow}"   当前日期/时间 (apaas 公式)
-      - "${userName}"  当前用户名
-      - "${userId}"    当前用户 ID
-      - 字面值如 "已审批"
+    value_expression 支持:
+      - "${dateNow}"   当前时间 (用 capture 的 formula record verbatim)
+      - 字面值如 "已审批"  (filterType=COMMON, filterDisplayValue={})
+      - 其他公式 (${userName} 等) 暂不支持 — 需要先创建对应 formula record
 
-    实证: trial 上跑过, 最小 payload (不带 boCodeBORelationProperties 元数据)
-    平台接受, save 返 ok.
+    ⚠️ 限制: 当前 template 绑死借阅记录 form_id `6a1272e174cfbc26cbf1e15c`,
+       因为 boCodeBORelationProperties 含该 form 全 19 字段元数据 (含 boId 等不可造的字段).
+       其他 form 用户先在平台 UI 配一个事件 + 我抓 capture 后再加 template.
     """
     import uuid as _uuid
+    import copy as _copy
 
     if not all([apaas_app_id.strip(), form_id.strip(), event_name.strip(),
                 trigger_field_label.strip(), trigger_value.strip(),
@@ -3824,8 +3843,20 @@ async def create_apaas_value_change_assignment_event(
         return {"ok": False, "error_code": "INVALID_PARAMS",
                 "message": "8 个参数都必填"}
 
+    # 限制: 仅借阅记录 form 有 template
+    if form_id.strip() != _VALUE_CHANGE_CAPTURE_FORM_ID:
+        return {
+            "ok": False,
+            "error_code": "FORM_TEMPLATE_NOT_FOUND",
+            "message": (
+                f"目前仅借阅记录 form_id={_VALUE_CHANGE_CAPTURE_FORM_ID} 有 schema template "
+                f"(2026-05-25 用户手动建事件抓的). 你给的 form_id={form_id} 还没采集 template. "
+                "解决方案: 在平台 UI 给该 form 手动建一个 VALUE_CHANGE 事件后我能抓 capture 加 template."
+            ),
+        }
+
     async def _do(c):
-        # 1. 拿表单字段 — label → uuid + bocCode
+        # 1. 拿表单字段 — label → uuid + bocCode + 字典选项
         comps = await c.query_form_components(apaas_app_id.strip(), form_id.strip())
         if not isinstance(comps, list):
             raise Exception(f"表单 {form_id} 没返字段列表")
@@ -3846,15 +3877,15 @@ async def create_apaas_value_change_assignment_event(
             )
         tgt = _find(target_field_label)
         if not tgt:
-            raise Exception(
-                f"表单里找不到名为「{target_field_label}」的字段"
-            )
+            raise Exception(f"表单里找不到名为「{target_field_label}」的字段")
 
         trig_uuid = trig.get("uuid") or ""
         trig_boc = trig.get("bocCode") or trig.get("boCode") or ""
+        trig_bo_type = trig.get("businessObjectComponentType") or "BOF_TEXT"
         tgt_boc = tgt.get("bocCode") or tgt.get("boCode") or ""
+        tgt_bo_type = tgt.get("businessObjectComponentType") or "BOF_DATE"
 
-        # 2. 触发字段是字典/下拉时, 解析 trigger_value 到 dict code
+        # 2. 触发字段是字典/下拉时, 解析 trigger_value 到 dict code (如 "已归还" → "returned_")
         actual_trigger_value = trigger_value.strip()
         dict_opts = (trig.get("dictionaryChooseOptions")
                       or trig.get("dictionary_choose_options")
@@ -3865,104 +3896,18 @@ async def create_apaas_value_change_assignment_event(
                 if not isinstance(opt, dict):
                     continue
                 lbl = str(opt.get("label") or opt.get("name") or "")
-                val = str(opt.get("value") or opt.get("code") or "")
+                # 平台字典选项实证字段优先级: id > value > code (id 是 dict code 真值, 如 returned_)
+                val = str(opt.get("id") or opt.get("value") or opt.get("code") or "")
+                if not val:
+                    continue
                 if lbl == trigger_value or val == trigger_value:
                     actual_trigger_value = val
                     break
 
-        # 3. 拿 form 的 bocCode (查 form_menus)
-        form_boc_code = ""
-        try:
-            menus = await c.list_form_menus_for_event(apaas_app_id.strip())
-            for m in (menus or []):
-                if str(m.get("form_id") or "") == form_id.strip():
-                    form_boc_code = m.get("boc_code") or ""
-                    break
-        except Exception:
-            pass
+        # 3. 拷 capture template 当蓝本
+        body = _copy.deepcopy(_load_value_change_template())
 
-        # 3.5 构造 boCodeBORelationProperties — 关键! 平台 save 需要这个完整 BO 元数据
-        # 否则静默不持久化. 字段元数据来自 form_components, 系统字段 (creation_date / owner
-        # 等) 用标准 schema 补.
-        def _conversion_type(bo_type: str) -> str:
-            t = (bo_type or "").upper()
-            if "DATE" in t or "TIME" in t: return "DATE"
-            if "PEOPLE" in t or "USER" in t: return "PEOPLE"
-            if "NUMBER" in t or "INT" in t or "DECIMAL" in t: return "NUMBER"
-            if "BOOL" in t: return "BOOLEAN"
-            return "STRING"
-
-        bo_props: dict = {}
-        for cc in comps:
-            if not isinstance(cc, dict):
-                continue
-            bcode = cc.get("bocCode") or cc.get("boCode") or ""
-            if not bcode:
-                continue
-            bo_props[bcode] = {
-                "boId": str(cc.get("boId") or ""),
-                "boCode": bcode,
-                "boLabel": cc.get("label") or cc.get("modelFieldName") or "",
-                "componentId": cc.get("uuid") or "",
-                "businessObjectComponentType": cc.get("businessObjectComponentType") or "BOF_TEXT",
-                "BOPropertiesType": "USER_DEFINED",
-                "modelCode": cc.get("modelCode") or "",
-                "modelField": cc.get("modelField") or "",
-                "dictionaryChooseOptions": cc.get("dictionaryChooseOptions") or [],
-                "lovAssociated": bool(cc.get("lovAssociated") or False),
-                "showLocationCenter": False,
-                "userPermission": False,
-                "saved": True,
-                "dataEncryptStatus": bool(cc.get("dataEncryptStatus") or False),
-                "sysBORelationProperties": False,
-                "readOnly": False,
-                "status": "ENABLE",
-                "conversionType": _conversion_type(cc.get("businessObjectComponentType") or ""),
-            }
-
-        # 系统字段 — 所有 form 通用, 平台 save 检查时需要这些占位元数据 (具体 boId 不强制, 给空也行)
-        model_code = ""
-        for cc in comps:
-            if isinstance(cc, dict) and cc.get("modelCode"):
-                model_code = cc["modelCode"]
-                break
-        if model_code:
-            _sys_fields = [
-                ("bof_code_id", "ID", "BOF_TEXT", "STRING"),
-                ("bof_code_owner", "数据所有人", "BOF_PEOPLE_SELECT", "PEOPLE"),
-                ("bof_code_created_by", "创建人", "BOF_PEOPLE_SELECT", "PEOPLE"),
-                ("bof_code_last_updated_by", "最后修改人", "BOF_PEOPLE_SELECT", "PEOPLE"),
-                ("bof_code_creation_date", "创建时间", "BOF_DATE", "DATE"),
-                ("bof_code_last_update_date", "最后修改时间", "BOF_DATE", "DATE"),
-                ("bof_code_status", "状态", "BOF_TEXT", "STRING"),
-                ("bof_code_document_id", "单据 ID", "BOF_TEXT", "STRING"),
-                ("bof_code_tab_doc_id", "子表 ID", "BOF_TEXT", "STRING"),
-                ("bof_code_approve_id", "审批人", "BOF_MULTI_PEOPLE_SELECT", "PEOPLE"),
-            ]
-            for sfcode, slabel, sbtype, sconv in _sys_fields:
-                if sfcode not in bo_props:
-                    bo_props[sfcode] = {
-                        "boId": "",
-                        "boCode": sfcode,
-                        "boLabel": slabel,
-                        "componentId": "",
-                        "businessObjectComponentType": sbtype,
-                        "BOPropertiesType": "PROCESS" if sfcode == "bof_code_approve_id" else "SYSTEM",
-                        "modelCode": model_code,
-                        "modelField": f"{model_code}.{sfcode.replace('bof_code_', '')}",
-                        "dictionaryChooseOptions": [],
-                        "lovAssociated": False,
-                        "showLocationCenter": False,
-                        "userPermission": False,
-                        "saved": False,
-                        "dataEncryptStatus": False,
-                        "sysBORelationProperties": True,
-                        "readOnly": False,
-                        "status": "ENABLE",
-                        "conversionType": sconv,
-                    }
-
-        # 4. 创建 stub
+        # 4. create stub event 拿 event_id
         stub = await c.create_business_event(
             apaas_app_id.strip(), event_name.strip(), event_type="EVENT_VALUE_CHANGE",
         )
@@ -3970,106 +3915,69 @@ async def create_apaas_value_change_assignment_event(
         if not event_id:
             raise Exception(f"stub 创建没拿到 event_id: {stub}")
 
-        # 5. 构造最小 DAG
-        trigger_node_id = _uuid.uuid4().hex
-        assign_node_id = _uuid.uuid4().hex
-        end_node_id = _uuid.uuid4().hex
+        # 5. 在 template 上做替换
+        # 顶层
+        body["id"] = event_id
+        body["eventName"] = event_name.strip()
+        body["eventCode"] = _uuid.uuid4().hex
+        body["objectVersionNumber"] = 1
+        # 删 audit (服务端重填)
+        for k in ("createdBy", "creationDate", "lastUpdatedBy", "lastUpdateDate",
+                  "owner", "tenantId", "editLockDto"):
+            body.pop(k, None)
 
-        event_data = {
-            "id": event_id,
-            "eventName": event_name.strip(),
-            "eventType": "EVENT_VALUE_CHANGE",
-            "appId": apaas_app_id.strip(),
-            "version": "v3.0",
-            "status": "ENABLE",
-            "eventCode": _uuid.uuid4().hex,
-            "triggerTypeName": "字段值改变触发",
-            "exeType": "",
-            "intactFlag": True,
-            "order": 0,
-            "useTableData": True,
-            "triggerNodeNd": {
-                "nodeId": trigger_node_id,
-                "nodeName": "字段值改变",
-                "nodeType": "TRIGGER_NODE",
-                "nextNodeId": [assign_node_id],
-                "triggerType": "VALUE_CHANGE",
-                "triggerWay": "FIELD",
-                "triggerEnv": "EVENT_FRONT",
-                "triggerFormId": form_id.strip(),
-                "triggerBocCode": form_boc_code,
-                "triggerFormName": "",
-                "boCode": trig_boc,
-                "componentUuid": trig_uuid,
-                "boCodeBORelationProperties": bo_props,
-                # 触发条件: 借阅状态 = '已归还'. 实证 schema 来自 trial save body 抓包.
-                "filterConditionGroupList": [{
-                    "uuid": trig_boc,
-                    "boCode": trig_boc,
-                    "conditionOption": "EQ",
-                    "connector": "AND",
-                    "tableFlag": False,
-                    "businessObjectComponentType": trig.get("businessObjectComponentType") or "BOF_TEXT",
-                    "filterInputs": [{
-                        "order": 0,
-                        "filterParams": [{
-                            "filterType": "COMMON",
-                            "filterBoCode": trig_boc,
-                            "filterComponentUuid": trig_uuid,
-                            "filterBoComponentType": trig.get("businessObjectComponentType") or "BOF_TEXT",
-                            "filterValue": actual_trigger_value,
-                            "filterValueType": "",
-                            "likeCondition": False,
-                            "tableFlag": False,
-                        }],
-                    }],
-                    "combineSign": False,
-                }],
-                "fieldChangeRange": [],
-                "beforeAndAfterDataFlag": False,
-                "triggerBuriedPoint": "DISABLE",
-                "validateStatus": "success",
-            },
-            "eventNodeNdList": [{
-                "nodeId": assign_node_id,
-                "nodeName": "字段赋值",
-                "nodeType": "ASSIGNMENT_NODE",
-                "nextNodeId": [end_node_id],
-                "relatedDataNodeId": trigger_node_id,
-                "targetFormId": form_id.strip(),
-                "targetBocCode": form_boc_code,
-                "boCodeBORelationProperties": bo_props,
-                "firstRules": [{
-                    "uuid": tgt_boc,
-                    "boCode": tgt_boc,
-                    "conditionOption": "UPGRADE",
-                    "connector": "AND",
-                    "tableFlag": False,
-                    "businessObjectComponentType": tgt.get("businessObjectComponentType") or "BOF_DATE",
-                    "filterInputs": [{
-                        "order": 0,
-                        "filterParams": [{
-                            "filterType": ("FORMULA" if value_expression.strip().startswith("${")
-                                           else "COMMON"),
-                            "filterBoCode": tgt_boc,
-                            "filterValue": value_expression.strip(),
-                        }],
-                    }],
-                    "combineSign": False,
-                }],
-            }],
-            "endNode": {
-                "nodeId": end_node_id,
-                "nodeName": "结束节点",
-                "nodeType": "END_NODE",
-                "nextNodeId": [],
-                "dataStatus": "COMPLETED",
-            },
-        }
+        # 3 个新 nodeId 避免冲突
+        new_trig_id = _uuid.uuid4().hex
+        new_assign_id = _uuid.uuid4().hex
+        new_end_id = _uuid.uuid4().hex
 
-        # 6. save (失败时回滚 stub)
+        # triggerNodeNd 改 nodeId + 监听字段 + 触发条件
+        trig_node = body["triggerNodeNd"]
+        trig_node["nodeId"] = new_trig_id
+        trig_node["nextNodeId"] = [new_assign_id]
+        trig_node["componentUuid"] = trig_uuid
+        trig_node["boCode"] = trig_boc
+        # filterConditionGroupList 嵌套结构: selectorFilterConditionList[0].filterInputs[0].filterParams[0].filterValue
         try:
-            saved = await c.save_business_event(event_data, apaas_app_id.strip())
+            cond = trig_node["filterConditionGroupList"][0]["selectorFilterConditionList"][0]
+            cond["uuid"] = trig_uuid
+            cond["boCode"] = trig_boc
+            cond["businessObjectComponentType"] = trig_bo_type
+            cond["filterInputs"][0]["filterParams"][0]["filterValue"] = actual_trigger_value
+        except (KeyError, IndexError) as e:
+            raise Exception(f"template filterConditionGroupList 结构异常: {e}")
+
+        # eventNodeNdList[0] (ASSIGNMENT_NODE) 改 nodeId + target 字段 + 值
+        assign_node = body["eventNodeNdList"][0]
+        assign_node["nodeId"] = new_assign_id
+        assign_node["nextNodeId"] = [new_end_id]
+        assign_node["relatedDataNodeId"] = new_trig_id
+        try:
+            rule = assign_node["firstRules"][0]
+            rule["uuid"] = tgt_boc
+            rule["boCode"] = tgt_boc
+            rule["businessObjectComponentType"] = tgt_bo_type
+            fparam = rule["filterInputs"][0]["filterParams"][0]
+            ve = value_expression.strip()
+            if ve == "${dateNow}":
+                # 公式: 保留 template 里捕获的 formula record id + filterDisplayValue verbatim
+                # (filterValue 是 formula record 24hex id, filterDisplayValue 是 formula 内容缓存)
+                pass  # 不改, template 里就是这个
+            else:
+                # 字面值: filterType=COMMON, filterDisplayValue={}, filterValue=ve
+                fparam["filterType"] = "COMMON"
+                fparam["filterValue"] = ve
+                fparam["filterDisplayValue"] = {}
+                fparam["filterBoComponentType"] = tgt_bo_type
+        except (KeyError, IndexError) as e:
+            raise Exception(f"template ASSIGNMENT_NODE.firstRules 结构异常: {e}")
+
+        # endNode 只改 nodeId
+        body["endNode"]["nodeId"] = new_end_id
+
+        # 6. save + 立刻验证
+        try:
+            saved = await c.save_business_event(body, apaas_app_id.strip())
         except Exception as save_exc:
             try:
                 await c.delete_business_event(event_id, apaas_app_id.strip())
@@ -4077,14 +3985,13 @@ async def create_apaas_value_change_assignment_event(
                 pass
             raise Exception(f"save 失败已回滚 stub: {save_exc}")
 
-        # 7. ⚠️ 验证 — 平台 save 有时返 ok 但实际不持久化 (跟改菜单父分组同 quirk).
-        # 立刻 get_detail 看事件结构真的写入了没 (含 triggerNode + middle nodes).
         try:
             verify = await c.get_business_event_detail(event_id, apaas_app_id.strip())
             verify_trig = (verify or {}).get("triggerNodeNd") or {}
             verify_nodes = (verify or {}).get("eventNodeNdList") or []
             verified = (
                 verify_trig.get("nodeType") == "TRIGGER_NODE"
+                and verify_trig.get("triggerType") == "VALUE_CHANGE"
                 and len(verify_nodes) >= 1
                 and verify_nodes[0].get("nodeType") == "ASSIGNMENT_NODE"
             )
@@ -4094,16 +4001,13 @@ async def create_apaas_value_change_assignment_event(
             verify_nodes = []
 
         if not verified:
-            # 回滚 stub
             try:
                 await c.delete_business_event(event_id, apaas_app_id.strip())
             except Exception:
                 pass
             raise Exception(
-                "平台 save 返 ok 但实际未持久化 DAG (stub 已回滚) — apaas-trial 业务事件接口需要完整 boCodeBORelationProperties 元数据, "
-                "最小 payload 不被接受. 解决方案: "
-                "1) 用 ConfigAssistant 引导用户在平台『触发业务事件 +』UI 配; "
-                "2) 等后续 wrapper 支持完整 BO 元数据 dump (待开发)."
+                "save 返 ok 但 get_detail 验证不匹配 (stub 已回滚). "
+                "可能 template 结构跟当前 form/字段不兼容."
             )
 
         return {
