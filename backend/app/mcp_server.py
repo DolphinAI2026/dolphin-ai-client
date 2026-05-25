@@ -4809,12 +4809,13 @@ async def set_apaas_app_process(
         }
 
     # 反查 form_code + form_name (管理 API 用 form_code 关联表单, 不是 menu_id)
+    # ⚠️ query_menus 返的菜单只有 formId 没 formCode, 必须二级反查 form/query/formContext
+    # 拿 formCode + formName.
     ok_menus, menus_raw = await _with_client(env_id, "查菜单",
         lambda c: c.query_menus(apaas_app_id.strip()))
     if not ok_menus:
         return menus_raw
-    form_code = None
-    form_name = None
+    form_id = None
     # query_menus 返回平 list (含 submenus 嵌套) — 按 id 字段找
     def _find(nodes):
         for n in (nodes or []):
@@ -4826,15 +4827,28 @@ async def set_apaas_app_process(
             if sub:
                 return sub
         return None
-    target = _find(menus_raw if isinstance(menus_raw, list) else [])
-    if target:
-        form_code = target.get("formCode") or target.get("form_code") or ""
-        form_name = target.get("menuName") or target.get("name") or target.get("menu_name") or ""
+    target_menu = _find(menus_raw if isinstance(menus_raw, list) else [])
+    if target_menu:
+        form_id = str(target_menu.get("formId") or "").strip()
+    if not form_id:
+        return {
+            "ok": False, "error_code": "MENU_NOT_FORM",
+            "message": f"menu_id={menu_id} 不是表单菜单 (formId 空) 或菜单不存在. "
+                       f"先调 list_apaas_app_menus 找 form_id 不空那行 menu_id",
+        }
+
+    # 二级反查表单配置拿 formCode + formName
+    ok_form, form_cfg = await _with_client(env_id, "查表单",
+        lambda c: c.query_form_config(apaas_app_id.strip(), form_id))
+    if not ok_form:
+        return form_cfg
+    form_code = (form_cfg or {}).get("formCode") or ""
+    form_name = (form_cfg or {}).get("formName") or target_menu.get("menuName") or ""
     if not form_code:
         return {
             "ok": False, "error_code": "FORM_CODE_NOT_FOUND",
-            "message": f"menu_id={menu_id} 没找到 form_code (可能不是表单菜单 / menu 不存在). "
-                       f"先调 list_apaas_app_menus 找 form_id 不空那行 menu_id",
+            "message": f"form_id={form_id} 的 formCode 字段为空 (表单元数据异常). "
+                       f"建议在平台 UI 表单设计页确认表单是否完整保存.",
         }
 
     # 构建 nodes/edges (build-system.py 同款简洁 schema)
