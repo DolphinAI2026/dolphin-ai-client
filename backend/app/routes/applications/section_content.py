@@ -492,6 +492,46 @@ async def get_section_content_business_events(
     )
 
 
+@router.get("/{app_id}/section-content/field-permissions", response_model=SectionContentResponse)
+async def get_section_content_field_permissions(
+    app_id: int,
+    ctx: Annotated[AuthContext, Depends(get_auth_context)],
+    db: Annotated[AsyncSession, Depends(get_db)],
+) -> SectionContentResponse:
+    """permission section / 字段权限 sub-tab: 列应用所有表单 (按表单管理字段权限).
+
+    note: apaas 平台字段权限是按 form 配的 (`list_apaas_form_permissions(form_id)`).
+    没有 app 维度 list. 这里列出所有 MODEL 菜单, 用户点击后再切到该表单的字段权限页.
+    """
+    source = "list_apaas_app_menus[for_field_permissions]"
+    app = await _load_app_and_check_view(app_id, ctx, db)
+    if not app.platform_env_id or not app.apaas_app_id:
+        return _app_not_deployed(app, source)
+    # 复用 MODEL 菜单列表 — 用户点哪个表单就跳到该表单字段权限编辑页
+    return await _menus_filtered_by_type(app, {"MODEL"}, source)
+
+
+@router.get("/{app_id}/section-content/menu-visibility", response_model=SectionContentResponse)
+async def get_section_content_menu_visibility(
+    app_id: int,
+    ctx: Annotated[AuthContext, Depends(get_auth_context)],
+    db: Annotated[AsyncSession, Depends(get_db)],
+) -> SectionContentResponse:
+    """permission section / 菜单可见性 sub-tab: 列应用所有菜单 (按菜单管理可见角色).
+
+    note: apaas 菜单可见性是 menu × role 矩阵, 没有 app 维度独立 list. 列所有菜单
+    (含 GROUP / TASK_CENTER / MODEL 等), 用户点击后配 visibility.
+    """
+    source = "list_apaas_app_menus[for_menu_visibility]"
+    app = await _load_app_and_check_view(app_id, ctx, db)
+    if not app.platform_env_id or not app.apaas_app_id:
+        return _app_not_deployed(app, source)
+    # 列出所有 menu_type (不过滤) — 菜单可见性 cover 全部菜单
+    return await _menus_filtered_by_type(
+        app, {"MODEL", "GROUP", "TASK_CENTER", "PAGE_CUSTOM_DEV", "QUOTE"}, source,
+    )
+
+
 @router.get("/{app_id}/section-content/roles", response_model=SectionContentResponse)
 async def get_section_content_roles(
     app_id: int,

@@ -142,6 +142,8 @@ export type ResourceKind =
   | 'processes'
   | 'business-events'
   | 'roles'
+  | 'field-permissions'
+  | 'menu-visibility'
 
 interface SectionContentItem {
   // backend 字段 — 我们做容错读取, 字段名差异通过 getItemName / getItemCode 兜底.
@@ -189,6 +191,8 @@ const KIND_LABEL: Record<ResourceKind, string> = {
   'processes': '流程',
   'business-events': '业务事件',
   'roles': '角色',
+  'field-permissions': '字段权限 (按表单)',
+  'menu-visibility': '菜单可见性',
 }
 
 const KIND_ICON: Record<ResourceKind, any> = {
@@ -199,6 +203,8 @@ const KIND_ICON: Record<ResourceKind, any> = {
   'processes': Operation,
   'business-events': Bell,
   'roles': User,
+  'field-permissions': User,
+  'menu-visibility': Grid,
 }
 
 const kindLabel = computed(() => KIND_LABEL[props.resourceKind] || props.resourceKind)

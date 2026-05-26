@@ -783,7 +783,7 @@ import {
   extractAppCodeFromText,
   extractAppNameFromText,
 } from '@/utils/app'
-import { buildPlatformProxyEntryUrl, buildPlatformProxyMenuUrl, repairPlatformIframe } from '@/utils/platformIframe'
+import { buildPlatformProxyEntryUrl, buildPlatformProxyMenuUrl, buildPlatformProxyStepUrl, repairPlatformIframe } from '@/utils/platformIframe'
 import ApaasMenuSidebar from '@/components/ApaasMenuSidebar.vue'
 import SectionNav from '@/components/v2/SectionNav.vue'
 import ExtensionSectionPanel from '@/components/v2/ExtensionSectionPanel.vue'
@@ -2293,7 +2293,7 @@ function onSwitchSection(section: string, tab?: string) {
 //   - ui:menus 走老 ApaasMenuSidebar (功能已成熟, 保留)
 //   - extension:* 走 ExtensionSectionPanel (PR6 已实现)
 //   - permission:field_perm / menu_vis 暂无后端 endpoint, fallback null (落 iframe)
-const SECTION_TAB_TO_KIND: Record<string, 'models' | 'dicts' | 'forms' | 'lists' | 'processes' | 'business-events' | 'roles'> = {
+const SECTION_TAB_TO_KIND: Record<string, 'models' | 'dicts' | 'forms' | 'lists' | 'processes' | 'business-events' | 'roles' | 'field-permissions' | 'menu-visibility'> = {
   'data:models': 'models',
   'data:dicts': 'dicts',
   'ui:forms': 'forms',
@@ -2301,6 +2301,8 @@ const SECTION_TAB_TO_KIND: Record<string, 'models' | 'dicts' | 'forms' | 'lists'
   'logic:processes': 'processes',
   'logic:events': 'business-events',
   'permission:roles': 'roles',
+  'permission:field_perm': 'field-permissions',
+  'permission:menu_vis': 'menu-visibility',
 }
 const currentSectionContentKind = computed(() => {
   const key = `${currentSection.value}:${currentSectionTab.value}`
@@ -2313,30 +2315,71 @@ const shouldShowSectionContent = computed(() => {
   return currentSectionContentKind.value !== null
 })
 function onSectionContentItemSelect(item: any) {
-  // P0: 仅 log; P1 接 iframe 跳转到对应 apaas 资源编辑页.
-  // ui:forms / ui:lists 走 menu 跳转 (item 有 menu_id + form_id) — 复用 onApaasMenuSelected.
-  if (
+  // 凡是 menu-based 的资源 (forms / lists / processes / field-permissions / menu-visibility)
+  // 都走 onApaasMenuSelected 跳到该菜单的编辑页. item 有 menu_id + form_id (来自 extra).
+  const isMenuBased = (
     (currentSection.value === 'ui' && (currentSectionTab.value === 'forms' || currentSectionTab.value === 'lists'))
     || (currentSection.value === 'logic' && currentSectionTab.value === 'processes')
-  ) {
-    if (item?.menu_id || item?.id) {
+    || (currentSection.value === 'permission' && (currentSectionTab.value === 'field_perm' || currentSectionTab.value === 'menu_vis'))
+  )
+  if (isMenuBased) {
+    // item.id 是规范化后的 menu_id (来自 backend normalize), extra 透传原始字段
+    const menuId = item?.menu_id || item?.id || item?.extra?.menu_id
+    if (menuId) {
       onApaasMenuSelected({
-        menu_id: item.menu_id || item.id,
-        form_id: item.form_id || item.extra?.form_id,
-        menu_type: item.menu_type || item.extra?.menu_type,
-        menu_display: item.extra?.menu_display,
+        menu_id: menuId,
+        form_id: item?.form_id || item?.extra?.form_id,
+        menu_type: item?.menu_type || item?.extra?.menu_type,
+        menu_display: item?.extra?.menu_display,
       } as any)
       return
     }
   }
-  // 其他资源 (model / dict / event / role): 平台没有直接 deeplink, 暂不跳.
-  // 让用户用配置助手 (右侧 AI 助手) 改, 或在 iframe 内手动导航.
+  // models / dicts / business-events / roles: 平台无直接 deeplink.
+  // P0 仅 log; 用户用配置助手对话改, 或在 iframe 内手动导航.
   console.log('[SectionContentList] selected item:', item)
 }
 function onSectionContentCreateRequest() {
   // P0: 提示用户用 AI 助手创建. P1 接对应 modal.
   console.log('[SectionContentList] create requested for', currentSectionContentKind.value)
 }
+
+// PR2b-followup (2026-05-26 P0-5): SectionNav section 切换驱动 iframe 跳到对应 apaas tab.
+// apaas 平台 app-store/edit-app 的 currentStepIndex 控制顶部 tab:
+//   0 = 应用信息 | 1 = 访问权限 | 2 = 菜单功能 | 3 = 数据可视化 | 4 = 高级设置
+// 我们的 SectionNav 5 section → step_index 映射:
+//   data       → 0 (应用信息) — 模型/字典管理多在该 tab 或独立页, P0 先落总览
+//   ui         → 2 (菜单功能) — 跟点菜单走 menu_id 路径前的总览一致
+//   logic      → 2 (菜单功能, 流程挂菜单上)
+//   permission → 1 (访问权限) — 角色管理在这
+//   extension  → 不跳 iframe (走 ExtensionSectionPanel)
+const SECTION_TO_STEP_INDEX: Record<string, number> = {
+  data: 0,
+  ui: 2,
+  logic: 2,
+  permission: 1,
+  extension: 0,  // 不会被用到, ExtensionSectionPanel 替代 iframe
+}
+function navigateIframeForSection(section: string) {
+  // extension 不操作 iframe (走 ExtensionSectionPanel)
+  if (section === 'extension') return
+  // 用户已经在某个具体菜单 (selectedApaasMenuId) 且当前 section=ui → 不重置, 让用户继续操作菜单
+  if (section === 'ui' && selectedApaasMenuId.value) return
+  if (!existingAppId.value) return
+  const stepIdx = SECTION_TO_STEP_INDEX[section] ?? 0
+  const token = userStore.token || localStorage.getItem('token') || ''
+  const nextUrl = buildPlatformProxyStepUrl(existingAppId.value, token, stepIdx)
+  if (platformIframeUrl.value === nextUrl) return  // 避免重复 set 触发 reload
+  platformIframeUrl.value = nextUrl
+  platformAppUrl.value = nextUrl
+  platformIframeAppId.value = existingAppId.value
+  selectedApaasMenuId.value = null  // 清菜单选中态, 走总览
+}
+// 监听 section 变化 (避免 onSwitchSection 调多次, 用 watch)
+watch(() => currentSection.value, (newSection, oldSection) => {
+  if (newSection === oldSection) return
+  navigateIframeForSection(newSection)
+})
 // 监听窗口 resize — 突然变窄退回 legacy 模式 (但 ?legacy=1 强制不可逆)
 const _hasLegacyQuery = (() => {
   try { return new URLSearchParams(window.location.search).get('legacy') === '1' } catch { return false }

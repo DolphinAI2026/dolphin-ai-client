@@ -43,6 +43,25 @@ export function buildPlatformProxyMenuUrl(
   return `${API_PREFIX}/platform-proxy/entry?${parts.join('&')}`
 }
 
+// 2026-05-26: SectionNav section 切换驱动 iframe — app-store/edit-app 的
+// currentStepIndex tab 切换. step_index ∈ {0..N}:
+//   0 = 应用信息 (data section 默认)
+//   1 = 访问权限 (permission section)
+//   2 = 菜单功能 (ui section)
+//   3 = 数据可视化
+// 不传 menu_id, iframe 显应用编辑总览页对应 tab.
+export function buildPlatformProxyStepUrl(
+  appId: number,
+  token: string,
+  stepIndex: number,
+): string {
+  const parts = [`app_id=${appId}`]
+  if (token) parts.push(`_auth=${encodeURIComponent(token)}`)
+  parts.push(`step_index=${stepIndex}`)
+  parts.push(`_ts=${Date.now()}`)
+  return `${API_PREFIX}/platform-proxy/entry?${parts.join('&')}`
+}
+
 function normalizeText(value: string | null | undefined): string {
   return String(value || '').replace(/\s+/g, '').replace(/[:：*]/g, '').trim()
 }

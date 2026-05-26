@@ -386,14 +386,19 @@ _MENU_TYPE_TO_EDITOR_PATH = {
 
 def _build_menu_redirect_path(tid: str, apaas_app_id: str,
                                menu_id: str = "", form_id: str = "",
-                               menu_type: str = "") -> str:
+                               menu_type: str = "",
+                               step_index: int = 0) -> str:
     """根据菜单类型构建 platform iframe redirect_path.
 
-    - 不传 menu_id → 应用编辑总览页 (老行为)
-    - 传 menu_id  → 该菜单对应的表单/模型编辑器
+    - 不传 menu_id → 应用编辑总览页, currentStepIndex=step_index 决定显哪个 tab
+      (0=应用信息 / 1=访问权限 / 2=菜单功能 / 3=数据可视化 / 4=高级设置 ...).
+    - 传 menu_id  → 该菜单对应的表单/模型编辑器 (step_index 忽略).
+
+    2026-05-26: 加 step_index 让 SectionNav 切 section 时 iframe 跳到对应 tab.
     """
     if not menu_id.strip():
-        return f"/platform/{tid}/admin/app-store/edit-app?appId={apaas_app_id}&currentStepIndex=0"
+        idx = step_index if 0 <= step_index <= 9 else 0
+        return f"/platform/{tid}/admin/app-store/edit-app?appId={apaas_app_id}&currentStepIndex={idx}"
 
     sub_path = _MENU_TYPE_TO_EDITOR_PATH.get((menu_type or "").upper(), "fn-config")
     base = f"/platform/{tid}/default/{sub_path}"
@@ -414,6 +419,7 @@ async def proxy_entry(
     menu_id: str = "",
     form_id: str = "",
     menu_type: str = "",
+    step_index: int = 0,
 ):
     """iframe SSO 入口 — 获取平台信息、代理 HTML、注入 token.
 
@@ -514,6 +520,7 @@ async def proxy_entry(
     escaped_vuex = json.dumps(vuex)
     redirect_path = _build_menu_redirect_path(
         tid, app.apaas_app_id, menu_id=menu_id, form_id=form_id, menu_type=menu_type,
+        step_index=step_index,
     )
     redirect_json = json.dumps(redirect_path)
 
