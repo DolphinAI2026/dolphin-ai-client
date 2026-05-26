@@ -276,8 +276,17 @@ async def _list_apaas_app_models(args: dict, platform_env_id: int, db: AsyncSess
                         {
                             "field_code": str(f.get("fieldCode") or f.get("boCode") or ""),
                             "field_name": str(f.get("fieldName") or f.get("name") or ""),
-                            "data_type": str(f.get("dataType") or ""),
-                            "required": bool(f.get("required", False)),
+                            "data_type": str(
+                                f.get("dataType")
+                                or f.get("fieldType")
+                                or f.get("databaseFieldType")
+                                or ""
+                            ),
+                            "required": bool(f.get("required") or f.get("isRequired") or False),
+                            "max_length": f.get("maxLength") or f.get("length") or None,
+                            "dictionary_code": str(f.get("dictionaryCode") or f.get("dictCode") or ""),
+                            "ref_model_code": str(f.get("refModelCode") or f.get("referenceModelCode") or ""),
+                            "description": str(f.get("description") or f.get("fieldDesc") or f.get("note") or ""),
                         }
                         for f in (fields or []) if isinstance(f, dict)
                     ]

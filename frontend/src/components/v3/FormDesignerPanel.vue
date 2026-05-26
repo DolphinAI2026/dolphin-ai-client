@@ -1,120 +1,946 @@
-<!-- FormDesignerPanel.vue — Native 表单设计器面板 (替 apaas form designer iframe).
+<!-- FormDesignerPanel.vue — Form Builder 3 列布局 (design-v4 Phase A).
 
-  2026-05-26 design-v3 P1-N2: 设计 tab + 表单/菜单 sub-tab 点选某个 menu 后,
-  右侧主区域显该 menu 对应模型的字段表格. 视觉跟 design 截图对齐:
-    - 标题: 申请表单 + 描述
-    - 字段表 (字段名 / Key / 类型 / 必填 / AI 校验 / 操作)
-    - 添加字段 / 批量编辑 CTA
+  2026-05-26 大下 session: 从 446 行 table 视图重写成 builder 视图, 跟 Claude
+  design 截图对齐. 命名保留 FormDesignerPanel 防 ChatPage import 扩散, 内部
+  实现已升级为 builder 范式 (3 col: 组件库 / 预览 canvas / 字段属性).
 
-  数据源: list_apaas_app_models with_fields=True (通过 /section-content/models?with_fields=true,
-  这里我们前端先简化复用 list_apaas_app_menus 的 form_id + 自己 fetch).
+  布局:
+    +--------+-------------------------+---------+
+    | 组件库 |   表单 preview canvas    | 属性面板 |
+    | 200px  |   flex: 1                | 280px   |
+    +--------+-------------------------+---------+
 
-  CRUD 暂未接入 (P2): + 新增字段 / 编辑字段 都 disabled, 提示用配置助手.
+  数据源: list_apaas_app_models with_fields=true (复用现有 endpoint).
+  写回 backend: P2 — 当前拖排/编辑/新增字段仅 local state, 提示走配置助手.
+
+  Props 跟旧版兼容 (appId/menuId/menuName/formId).
 -->
 <template>
-  <section class="fdp" aria-label="表单设计">
-    <div v-if="!menuId" class="fdp-empty">
-      <div class="fdp-empty-icon">📝</div>
+  <section class="fbp" aria-label="表单设计器">
+    <!-- 空态 1: 未选菜单 -->
+    <div v-if="!menuId" class="fbp-empty">
+      <div class="fbp-empty-icon">📝</div>
       <h3>选择一个表单</h3>
       <p>从左侧菜单列表点击某个表单, 这里显该表单的字段设计.</p>
     </div>
 
-    <template v-else>
-      <header class="fdp-head">
-        <div class="fdp-head-meta">
-          <h1 class="fdp-title">{{ menuName || '表单设计' }}</h1>
-          <p v-if="modelCode" class="fdp-sub">
-            <span class="fdp-code">{{ modelCode }}</span>
-            <span v-if="fields.length" class="fdp-stat">{{ fields.length }} 字段</span>
-          </p>
-        </div>
-        <div class="fdp-head-actions">
-          <button class="fdp-btn fdp-btn-ghost" :disabled="!fields.length" @click="onBatchEdit">批量编辑</button>
-          <button class="fdp-btn fdp-btn-primary" @click="onAddField">+ 新增字段</button>
-        </div>
-      </header>
+    <!-- 空态 2: 加载中 -->
+    <div v-else-if="loading" class="fbp-state">
+      <div class="fbp-spinner" />
+      加载字段…
+    </div>
 
-      <div v-if="loading" class="fdp-state">加载字段…</div>
-      <div v-else-if="error" class="fdp-state fdp-state-err">
-        {{ error }}
-        <button class="fdp-btn fdp-btn-ghost" @click="reload">重试</button>
-      </div>
-      <template v-else>
-        <div class="fdp-toolbar">
-          <div class="fdp-search">
-            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-              <circle cx="11" cy="11" r="7"/><path d="m21 21-4.3-4.3"/>
-            </svg>
-            <input v-model="searchKw" placeholder="搜索字段名 / Key" />
+    <!-- 空态 3: 错误 -->
+    <div v-else-if="error" class="fbp-state fbp-state-err">
+      <div class="fbp-state-icon">⚠️</div>
+      <p>{{ error }}</p>
+      <button class="fbp-btn fbp-btn-ghost" @click="reload">重试</button>
+    </div>
+
+    <!-- 3 列 builder -->
+    <div v-else class="fbp-3col">
+      <!-- ─── 左: 组件库 (2 tab: 数据模型 / 业务组件) ─────── -->
+      <aside class="fbp-lib" aria-label="组件库">
+        <div class="fbp-lib-tabs" role="tablist">
+          <button
+            class="fbp-lib-tab"
+            :class="{ active: libTab === 'model' }"
+            role="tab"
+            :aria-selected="libTab === 'model'"
+            @click="libTab = 'model'"
+          >
+            数据模型
+          </button>
+          <button
+            class="fbp-lib-tab"
+            :class="{ active: libTab === 'component' }"
+            role="tab"
+            :aria-selected="libTab === 'component'"
+            @click="libTab = 'component'"
+          >
+            业务组件
+          </button>
+        </div>
+
+        <!-- 业务组件 tab -->
+        <template v-if="libTab === 'component'">
+          <div class="fbp-lib-head">
+            <div class="fbp-lib-search">
+              <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <circle cx="11" cy="11" r="7"/><path d="m21 21-4.3-4.3"/>
+              </svg>
+              <input v-model="libSearchKw" placeholder="搜索组件" />
+            </div>
+          </div>
+          <div class="fbp-lib-body">
+            <div
+              v-for="cat in filteredCategories"
+              :key="cat.code"
+              class="fbp-lib-cat"
+            >
+              <button
+                class="fbp-lib-cat-head"
+                :aria-expanded="!collapsedCats[cat.code]"
+                @click="toggleCat(cat.code)"
+              >
+                <svg
+                  class="fbp-lib-cat-caret"
+                  :class="{ collapsed: collapsedCats[cat.code] }"
+                  width="10" height="10" viewBox="0 0 24 24"
+                  fill="none" stroke="currentColor" stroke-width="2.5"
+                >
+                  <polyline points="6 9 12 15 18 9"/>
+                </svg>
+                <span class="fbp-lib-cat-bar" />
+                <span>{{ cat.label }}</span>
+                <span class="fbp-lib-cat-count">{{ cat.widgets.length }}</span>
+              </button>
+              <div v-show="!collapsedCats[cat.code]" class="fbp-lib-chips">
+                <button
+                  v-for="w in cat.widgets"
+                  :key="w.type"
+                  class="fbp-lib-chip"
+                  :title="w.label"
+                  @click="onAddWidget(w)"
+                >
+                  <span class="fbp-lib-chip-icon">{{ w.icon }}</span>
+                  <span class="fbp-lib-chip-label">{{ w.label }}</span>
+                </button>
+              </div>
+            </div>
+          </div>
+        </template>
+
+        <!-- 数据模型 tab -->
+        <template v-else>
+          <div class="fbp-lib-head">
+            <div class="fbp-lib-search">
+              <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <circle cx="11" cy="11" r="7"/><path d="m21 21-4.3-4.3"/>
+              </svg>
+              <input v-model="libSearchKw" placeholder="输入模型名称" />
+            </div>
+          </div>
+          <div class="fbp-lib-body fbp-lib-model-body">
+            <button class="fbp-lib-model-add" disabled title="P2 接入: 走配置助手对话">
+              <span>+ </span><span>添加数据模型</span>
+              <span class="fbp-lib-help">?</span>
+            </button>
+            <div class="fbp-lib-model-list">
+              <button
+                v-for="m in filteredModels"
+                :key="m.id || m.extra?.model_id"
+                class="fbp-lib-model-item"
+                :class="{ active: String(m.id || m.extra?.model_id) === selectedLibModelId }"
+                @click="selectedLibModelId = String(m.id || m.extra?.model_id || '')"
+              >
+                <span class="fbp-lib-model-icon">主</span>
+                <span class="fbp-lib-model-name">{{ m.name }}</span>
+              </button>
+              <div v-if="filteredModels.length === 0" class="fbp-lib-empty">
+                <span v-if="libSearchKw">无匹配模型</span>
+                <span v-else>该应用暂无数据模型</span>
+              </div>
+            </div>
+
+            <!-- 选中 model 的已使用字段 -->
+            <div v-if="selectedLibModel" class="fbp-lib-model-detail">
+              <div class="fbp-lib-model-detail-head">
+                <span class="fbp-lib-model-detail-bar" />
+                <div class="fbp-lib-model-detail-info">
+                  <span class="fbp-lib-model-detail-name">{{ selectedLibModel.name }}</span>
+                  <span class="fbp-lib-model-detail-code mono">{{ selectedLibModel.code }}</span>
+                </div>
+              </div>
+              <div class="fbp-lib-model-detail-section">
+                <button class="fbp-lib-model-detail-toggle" @click="modelFieldsCollapsed = !modelFieldsCollapsed">
+                  <span>已使用组件</span>
+                  <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"
+                       :style="{ transform: modelFieldsCollapsed ? 'rotate(-90deg)' : 'rotate(0)' }">
+                    <polyline points="6 9 12 15 18 9"/>
+                  </svg>
+                </button>
+                <div v-show="!modelFieldsCollapsed" class="fbp-lib-chips fbp-lib-chips-model">
+                  <button
+                    v-for="(f, i) in selectedLibModelFields"
+                    :key="f.field_code + i"
+                    class="fbp-lib-chip"
+                    :title="`${f.field_name} - ${f.field_code}`"
+                    @click="onAddExistingField(f)"
+                  >
+                    <span class="fbp-lib-chip-icon">T</span>
+                    <span class="fbp-lib-chip-label">{{ f.field_name || f.field_code }}</span>
+                  </button>
+                  <div v-if="selectedLibModelFields.length === 0" class="fbp-lib-empty fbp-lib-empty-sm">
+                    该模型暂无字段
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+        </template>
+      </aside>
+
+      <!-- ─── 中: 预览 canvas ─────────────────────────────── -->
+      <main class="fbp-canvas" :class="{ 'viewport-mobile': canvasViewport === 'mobile' }" aria-label="表单预览">
+        <header class="fbp-canvas-head">
+          <div class="fbp-canvas-meta">
+            <h1 class="fbp-canvas-title">{{ menuName || '表单设计' }}</h1>
+            <p class="fbp-canvas-sub">
+              <span v-if="modelCode" class="fbp-code mono">{{ modelCode }}</span>
+              <span class="fbp-canvas-stat">{{ fields.length }} 字段</span>
+              <span v-if="fields.filter(f => f.required).length" class="fbp-canvas-stat">
+                {{ fields.filter(f => f.required).length }} 必填
+              </span>
+            </p>
+          </div>
+          <div class="fbp-canvas-actions">
+            <button class="fbp-btn fbp-btn-ghost" @click="showAiHelper = !showAiHelper">
+              <span class="fbp-btn-icon">✨</span> AI 助手
+            </button>
+            <button class="fbp-btn fbp-btn-primary" @click="onSaveForm">
+              保存
+            </button>
+          </div>
+        </header>
+
+        <!-- canvas toolbar (跟 apaas 原生一致: 查看业务对象 / PC-Mobile / 表单设置) -->
+        <div class="fbp-canvas-toolbar">
+          <button
+            class="fbp-toolbar-btn fbp-toolbar-btn-outline"
+            disabled
+            title="P2 接入"
+          >
+            查看业务对象
+          </button>
+          <div class="fbp-toolbar-viewport">
+            <button
+              class="fbp-toolbar-vp"
+              :class="{ active: canvasViewport === 'pc' }"
+              title="桌面视图"
+              @click="canvasViewport = 'pc'; canvasLayout = '2col'"
+            >
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <rect x="2" y="3" width="20" height="14" rx="2"/>
+                <path d="M8 21h8M12 17v4"/>
+              </svg>
+            </button>
+            <button
+              class="fbp-toolbar-vp"
+              :class="{ active: canvasViewport === 'mobile' }"
+              title="移动视图"
+              @click="canvasViewport = 'mobile'; canvasLayout = '1col'"
+            >
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <rect x="6" y="2" width="12" height="20" rx="2"/>
+                <line x1="12" y1="18" x2="12" y2="18"/>
+              </svg>
+            </button>
+          </div>
+          <button
+            class="fbp-toolbar-btn"
+            disabled
+            title="P2 接入"
+          >
+            表单设置
+          </button>
+        </div>
+
+        <div class="fbp-canvas-body">
+          <div v-if="fields.length === 0" class="fbp-canvas-empty">
+            <div class="fbp-canvas-empty-icon">🧩</div>
+            <p>该表单暂无字段</p>
+            <p class="hint">从左侧组件库点击或拖入字段</p>
+          </div>
+
+          <draggable
+            v-model="fields"
+            item-key="id"
+            handle=".fbp-card-handle"
+            ghost-class="fbp-card-ghost"
+            chosen-class="fbp-card-chosen"
+            animation="180"
+            class="fbp-card-list"
+            :class="{ 'fbp-card-list-1col': canvasLayout === '1col' }"
+            @change="onFieldsReorder"
+          >
+            <template #item="{ element: f, index: i }">
+              <div
+                class="fbp-card"
+                :class="{ active: selectedFieldId === f.id, 'fbp-card-fullwidth': isFullWidthWidget(f.type) }"
+                @click="onSelectField(f.id)"
+              >
+                <div class="fbp-card-handle" title="拖动排序">
+                  <svg width="10" height="14" viewBox="0 0 6 10" fill="currentColor">
+                    <circle cx="1.5" cy="1.5" r="0.9"/>
+                    <circle cx="4.5" cy="1.5" r="0.9"/>
+                    <circle cx="1.5" cy="5" r="0.9"/>
+                    <circle cx="4.5" cy="5" r="0.9"/>
+                    <circle cx="1.5" cy="8.5" r="0.9"/>
+                    <circle cx="4.5" cy="8.5" r="0.9"/>
+                  </svg>
+                </div>
+                <div class="fbp-card-body">
+                  <div class="fbp-card-label">
+                    <span class="fbp-card-name">{{ f.name || '未命名字段' }}</span>
+                    <span v-if="f.required" class="fbp-card-req">*</span>
+                    <span class="fbp-card-type-chip">{{ widgetLabel(f.type) }}</span>
+                    <span class="fbp-card-key mono">{{ f.code }}</span>
+                  </div>
+                  <div class="fbp-card-preview">
+                    <FieldPreview :field="f" />
+                  </div>
+                </div>
+                <div class="fbp-card-ops" @click.stop>
+                  <button
+                    class="fbp-icon-btn"
+                    title="删除字段 (本地)"
+                    @click="onRemoveField(f.id)"
+                  >
+                    <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                      <polyline points="3 6 5 6 21 6"/>
+                      <path d="M19 6l-2 14a2 2 0 01-2 2H9a2 2 0 01-2-2L5 6"/>
+                      <path d="M10 11v6M14 11v6"/>
+                    </svg>
+                  </button>
+                </div>
+              </div>
+            </template>
+          </draggable>
+
+          <div class="fbp-canvas-drop">
+            <span class="fbp-canvas-drop-icon">+</span>
+            <span>从左侧组件库点击或拖入字段 · 或</span>
+            <button class="fbp-link-btn" @click="showAiHelper = true">让 AI 添加</button>
           </div>
         </div>
 
-        <div class="fdp-table-wrap">
-          <table class="fdp-table">
-            <thead>
-              <tr>
-                <th class="num">#</th>
-                <th>字段名</th>
-                <th>Key</th>
-                <th>类型</th>
-                <th class="center">必填</th>
-                <th>注释</th>
-                <th class="ops">操作</th>
-              </tr>
-            </thead>
-            <tbody>
-              <tr v-if="filteredFields.length === 0">
-                <td colspan="7" class="empty">
-                  <p v-if="searchKw">无匹配「{{ searchKw }}」</p>
-                  <template v-else>
-                    <p>该表单暂无字段</p>
-                    <p class="hint">点击右上「+ 新增字段」, 或用配置助手对话添加</p>
-                  </template>
-                </td>
-              </tr>
-              <tr v-for="(f, i) in filteredFields" :key="f.field_code || i">
-                <td class="num">{{ i + 1 }}</td>
-                <td>{{ f.field_name || '—' }}</td>
-                <td class="mono">{{ f.field_code || '—' }}</td>
-                <td>
-                  <span class="fdp-type-chip">{{ formatType(f.data_type || f.field_type) }}</span>
-                </td>
-                <td class="center">
-                  <span v-if="f.required" class="fdp-req">●</span>
-                  <span v-else class="fdp-req fdp-req-off">○</span>
-                </td>
-                <td class="muted">{{ f.description || f.note || '—' }}</td>
-                <td class="ops">
-                  <button class="fdp-icon-btn" :disabled="true" title="P2 接入 - 编辑字段">
-                    <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                      <path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/>
-                      <path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/>
+        <!-- AI 助手 inline (右下角浮起) -->
+        <transition name="fbp-fade">
+          <div v-if="showAiHelper" class="fbp-ai">
+            <div class="fbp-ai-head">
+              <span class="fbp-ai-title">✨ AI 助手</span>
+              <button class="fbp-ai-close" @click="showAiHelper = false">×</button>
+            </div>
+            <div class="fbp-ai-chips">
+              <button class="fbp-ai-chip" @click="onAiPrompt('分析当前表单')">分析当前表单</button>
+              <button class="fbp-ai-chip" @click="onAiPrompt('帮我添加常用字段')">添加字段</button>
+              <button class="fbp-ai-chip" @click="onAiPrompt('生成 5 条测试数据')">生成测试数据</button>
+            </div>
+            <div class="fbp-ai-tips">
+              <p>试试问:</p>
+              <ul>
+                <li>"加一个金额字段, 必填, 最大 50000"</li>
+                <li>"把字段按使用频率排序"</li>
+                <li>"给请假类型加 5 个选项"</li>
+              </ul>
+            </div>
+            <div class="fbp-ai-input">
+              <input v-model="aiPrompt" placeholder="问 AI 帮你改表单…" @keyup.enter="onAiSubmit" />
+              <button class="fbp-btn fbp-btn-primary fbp-btn-sm" @click="onAiSubmit">发送</button>
+            </div>
+          </div>
+        </transition>
+      </main>
+
+      <!-- ─── 右: 字段属性面板 ────────────────────────────── -->
+      <aside class="fbp-props" aria-label="字段属性">
+        <div v-if="!selectedField" class="fbp-props-empty">
+          <div class="fbp-props-empty-icon">👈</div>
+          <p>选中一个字段查看属性</p>
+          <p class="hint">点击中央 canvas 任意字段卡</p>
+        </div>
+        <template v-else>
+          <div class="fbp-props-head">
+            <span class="fbp-card-type-chip">{{ widgetLabel(selectedField.type) }}</span>
+            <span class="fbp-props-title">字段属性</span>
+          </div>
+          <div class="fbp-props-body">
+            <div class="fbp-row">
+              <label>标题名称</label>
+              <input v-model="selectedField.name" placeholder="如 请假类型" />
+            </div>
+            <div class="fbp-row">
+              <label>字段 Key</label>
+              <input v-model="selectedField.code" class="mono" placeholder="如 leave_type" />
+            </div>
+            <div class="fbp-row">
+              <label>组件类型</label>
+              <select v-model="selectedField.type">
+                <optgroup v-for="cat in FIELD_CATEGORIES" :key="cat.code" :label="cat.label">
+                  <option v-for="w in cat.widgets" :key="w.type" :value="w.type">{{ w.label }}</option>
+                </optgroup>
+              </select>
+            </div>
+            <div v-if="modelCode" class="fbp-row">
+              <label>数据模型</label>
+              <input :value="modelCode" class="mono" readonly disabled />
+            </div>
+            <div v-if="selectedField._src?._model_field" class="fbp-row">
+              <label>模型字段</label>
+              <input
+                :value="`${selectedField._src._model_field.field_name}-${selectedField._src._model_field.field_code}`"
+                readonly
+                disabled
+              />
+            </div>
+            <div class="fbp-row">
+              <label>标题说明</label>
+              <textarea v-model="selectedField.description" placeholder="请输入" rows="2" class="fbp-row-textarea" />
+            </div>
+            <div class="fbp-row">
+              <label>提示文字</label>
+              <input v-model="selectedField.placeholder" placeholder="请输入" />
+            </div>
+            <div v-if="hasMaxLength(selectedField.type)" class="fbp-row">
+              <label>长度限制</label>
+              <input v-model.number="selectedField.max_length" type="number" placeholder="200" min="0" />
+            </div>
+            <div class="fbp-switch-grid">
+              <div class="fbp-switch-row">
+                <span>必填</span>
+                <button
+                  class="fbp-switch"
+                  :class="{ on: selectedField.required }"
+                  @click="selectedField.required = !selectedField.required"
+                >
+                  <span class="fbp-switch-knob" />
+                </button>
+              </div>
+              <div class="fbp-switch-row">
+                <span>可编辑</span>
+                <button
+                  class="fbp-switch"
+                  :class="{ on: selectedField.editable }"
+                  @click="selectedField.editable = !selectedField.editable"
+                >
+                  <span class="fbp-switch-knob" />
+                </button>
+              </div>
+              <div class="fbp-switch-row">
+                <span>AI 校验</span>
+                <button
+                  class="fbp-switch"
+                  :class="{ on: selectedField.ai_validate }"
+                  @click="selectedField.ai_validate = !selectedField.ai_validate"
+                >
+                  <span class="fbp-switch-knob" />
+                </button>
+              </div>
+            </div>
+
+            <!-- select/radio 类型显选项 list -->
+            <div v-if="needsOptions(selectedField.type)" class="fbp-options">
+              <div class="fbp-options-head">
+                <label>选项 ({{ (selectedField.options || []).length }})</label>
+                <button class="fbp-link-btn fbp-link-btn-sm" @click="onAddOption">+ 新增</button>
+              </div>
+              <div class="fbp-options-list">
+                <div
+                  v-for="(opt, i) in (selectedField.options || [])"
+                  :key="i"
+                  class="fbp-option-row"
+                >
+                  <input
+                    v-model="opt.name"
+                    placeholder="显示名"
+                    class="fbp-option-input"
+                  />
+                  <input
+                    v-model="opt.code"
+                    placeholder="value"
+                    class="fbp-option-input mono"
+                  />
+                  <button class="fbp-icon-btn" @click="onRemoveOption(i)" title="删除选项">
+                    <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                      <line x1="18" y1="6" x2="6" y2="18"/>
+                      <line x1="6" y1="6" x2="18" y2="18"/>
                     </svg>
                   </button>
-                </td>
-              </tr>
-            </tbody>
-          </table>
-        </div>
-      </template>
-    </template>
+                </div>
+              </div>
+              <div v-if="!(selectedField.options || []).length" class="fbp-options-empty">
+                无选项. 点击"+ 新增"添加.
+              </div>
+            </div>
+
+            <!-- AI prompt -->
+            <div class="fbp-row fbp-row-ai">
+              <label>问 AI</label>
+              <input
+                v-model="propsAiPrompt"
+                placeholder="如: 把字段按使用频率排序"
+                @keyup.enter="onPropsAiSubmit"
+              />
+            </div>
+          </div>
+        </template>
+      </aside>
+    </div>
   </section>
 </template>
 
 <script setup lang="ts">
-import { ref, computed, watch } from 'vue'
+import { ref, computed, watch, h, type PropType } from 'vue'
+import draggable from 'vuedraggable'
 import request from '@/utils/request'
 
-interface FieldRow {
-  field_code?: string
-  field_name?: string
-  data_type?: string
-  field_type?: string
-  required?: boolean
-  description?: string
-  note?: string
-  length?: number | string
+/* ────────────────────────────────────────────────────────────────
+   类型定义 + 注册表
+   ──────────────────────────────────────────────────────────────── */
+
+// 2026-05-26 设计 v4 对齐 apaas 38 组件 (3 分类) — 用宽松 string 避免 38 个 union
+// 维护负担, 关键类型在 FIELD_CATEGORIES + COMPONENT_TYPE_MAP 里登记.
+type FieldType = string
+
+interface FieldOption {
+  code: string
+  name: string
 }
+
+interface FormField {
+  id: string
+  code: string
+  name: string
+  type: FieldType
+  placeholder?: string
+  required: boolean
+  editable: boolean
+  ai_validate: boolean
+  options?: FieldOption[]
+  // apaas 额外属性 (跟低代码原生表单设计 一致)
+  description?: string   // 标题说明
+  hint?: string          // 提示文字 (placeholder 别名 — apaas 用 "提示文字")
+  max_length?: number    // 长度限制 (text/textarea/phone/idcard/email)
+  _src?: any
+}
+
+interface WidgetMeta {
+  type: FieldType
+  label: string
+  icon: string
+}
+
+interface WidgetCategory {
+  code: string
+  label: string
+  widgets: WidgetMeta[]
+}
+
+// 2026-05-26 设计 v4: 完全对齐 得帆云 aPaaS 业务组件 list (38 组件 3 类).
+// 不再用我们自己的 5 分类 — apaas 表单设计器超出此范围的 widget 没法存. 业务组件
+// type code 直接跟 apaas component_type 对应 (FORM_TEXT_INPUT → text 等).
+const FIELD_CATEGORIES: WidgetCategory[] = [
+  {
+    code: 'common',
+    label: '常用组件',
+    widgets: [
+      { type: 'text', label: '单行输入', icon: 'T' },
+      { type: 'textarea', label: '多行输入', icon: '¶' },
+      { type: 'number', label: '数字输入', icon: '#' },
+      { type: 'datetime', label: '日期时间', icon: '📅' },
+      { type: 'user', label: '人员选择', icon: '👤' },
+      { type: 'dept', label: '部门选择', icon: '🏢' },
+      { type: 'phone', label: '手机号码', icon: '📞' },
+      { type: 'email', label: '电子邮箱', icon: '✉' },
+      { type: 'idcard', label: '证件号', icon: '🆔' },
+      { type: 'radio', label: '单选框', icon: '◉' },
+      { type: 'multi_select', label: '多选框', icon: '☑' },
+      { type: 'select', label: '下拉框', icon: '▾' },
+      { type: 'select_single', label: '下拉单选', icon: '✓' },
+      { type: 'money', label: '金额', icon: '¥' },
+      { type: 'file', label: '附件上传', icon: '📎' },
+      { type: 'richtext', label: '富文本', icon: '§' },
+      { type: 'region', label: '地区地址', icon: '🚏' },
+      { type: 'location', label: '定位', icon: '📍' },
+      { type: 'hyperlink', label: '超链接', icon: '🔗' },
+      { type: 'switch', label: '开关', icon: '⊙' },
+    ],
+  },
+  {
+    code: 'advanced',
+    label: '高级组件',
+    widgets: [
+      { type: 'serial_no', label: '单据号', icon: 'N°' },
+      { type: 'data_select', label: '数据选择', icon: '⊟' },
+      { type: 'data_single', label: '数据单选', icon: '⊡' },
+      { type: 'ref_form', label: '关联表单', icon: '↗' },
+      { type: 'data_stat', label: '数据统计', icon: 'N' },
+      { type: 'cross_field', label: '他表字段', icon: 'T?' },
+      { type: 'form_button', label: '表单按钮', icon: '⊏' },
+      { type: 'subtable', label: '子表', icon: '⊞' },
+      { type: 'virtual_field', label: '虚拟字段', icon: 'V' },
+      { type: 'custom_dev', label: '自开发字段', icon: '</>' },
+    ],
+  },
+  {
+    code: 'layout',
+    label: '页面布局组件',
+    widgets: [
+      { type: 'static_text', label: '静态文本', icon: 'Aa' },
+      { type: 'static_image', label: '静态图片', icon: '🖼' },
+      { type: 'divider', label: '分隔符', icon: '━' },
+      { type: 'placeholder', label: '占位符', icon: '□' },
+      { type: 'collapse_layout', label: '折叠布局', icon: '⊟' },
+      { type: 'tab_layout', label: '分页布局', icon: '▤' },
+      { type: 'frame_layout', label: '框架布局', icon: '⊑' },
+      { type: 'template_file', label: '模板文件', icon: '📋' },
+    ],
+  },
+]
+
+const WIDGET_LABEL_MAP: Record<string, string> = Object.fromEntries(
+  FIELD_CATEGORIES.flatMap(c => c.widgets.map(w => [w.type, w.label]))
+)
+
+function widgetLabel(t: FieldType | string): string {
+  return WIDGET_LABEL_MAP[t] || t
+}
+
+function needsOptions(t: FieldType): boolean {
+  return ['select', 'select_multi', 'radio', 'multi_select', 'tag', 'select_single'].includes(t)
+}
+
+const HAS_MAX_LENGTH = new Set<string>([
+  'text', 'textarea', 'richtext', 'phone', 'email', 'idcard', 'hyperlink', 'serial_no', 'region',
+])
+function hasMaxLength(t: string): boolean {
+  return HAS_MAX_LENGTH.has(t)
+}
+
+/* ────────────────────────────────────────────────────────────────
+   Backend ↔ Builder field mapping
+   ──────────────────────────────────────────────────────────────── */
+
+// apaas form_components.component_type → 我们 widget type 映射 (form_id 路径).
+// 真实 component_type 取值 (从 /xdap-app/formComponent/query 抓的实际返回 + 推测):
+const COMPONENT_TYPE_MAP: Record<string, FieldType> = {
+  // 输入
+  FORM_TEXT_INPUT: 'text',
+  FORM_INPUT: 'text',
+  FORM_TEXTAREA_INPUT: 'textarea',
+  FORM_TEXTAREA: 'textarea',
+  FORM_NUMBER_INPUT: 'number',
+  FORM_NUMBER: 'number',
+  FORM_AMOUNT_INPUT: 'money',
+  FORM_AMOUNT: 'money',
+  FORM_RICH_TEXT_INPUT: 'richtext',
+  FORM_RICH_TEXT: 'richtext',
+  FORM_PHONE_INPUT: 'phone',
+  FORM_PHONE: 'phone',
+  FORM_MOBILE: 'phone',
+  FORM_EMAIL_INPUT: 'email',
+  FORM_EMAIL: 'email',
+  FORM_IDCARD_INPUT: 'idcard',
+  FORM_IDCARD: 'idcard',
+  // 日期
+  FORM_DATEPICK_INPUT: 'datetime',
+  FORM_DATEPICK: 'datetime',
+  FORM_DATE_INPUT: 'datetime',
+  FORM_DATETIME: 'datetime',
+  FORM_DATE: 'datetime',
+  FORM_TIME_INPUT: 'datetime',
+  // 选择
+  FORM_PEOPLE_SELECT: 'user',
+  FORM_PEOPLE: 'user',
+  FORM_USER_SELECT: 'user',
+  FORM_DEPT_SELECT: 'dept',
+  FORM_DEPT: 'dept',
+  FORM_DEPARTMENT_SELECT: 'dept',
+  FORM_RADIO_GROUP: 'radio',
+  FORM_RADIO: 'radio',
+  FORM_CHECKBOX_GROUP: 'multi_select',
+  FORM_CHECKBOX: 'multi_select',
+  FORM_SELECT_BOX: 'select',
+  FORM_SELECT: 'select',
+  FORM_DROPDOWN: 'select',
+  FORM_DROPDOWN_SINGLE: 'select_single',
+  FORM_SELECT_SINGLE: 'select_single',
+  FORM_DICTIONARY: 'select',
+  // 文件
+  FORM_FILE_UPLOAD: 'file',
+  FORM_FILE: 'file',
+  FORM_ATTACHMENT: 'file',
+  FORM_IMAGE_UPLOAD: 'static_image',
+  FORM_IMAGE: 'static_image',
+  // 其他常用
+  FORM_REGION_ADDRESS: 'region',
+  FORM_REGION: 'region',
+  FORM_ADDRESS: 'region',
+  FORM_LOCATION: 'location',
+  FORM_HYPERLINK: 'hyperlink',
+  FORM_LINK: 'hyperlink',
+  FORM_SWITCH: 'switch',
+  FORM_BOOLEAN: 'switch',
+  // 高级
+  FORM_DOCUMENT_NUMBER: 'serial_no',
+  FORM_SERIAL_NO: 'serial_no',
+  FORM_DATA_SELECT: 'data_select',
+  FORM_DATA_SINGLE: 'data_single',
+  FORM_DATA_SELECT_SINGLE: 'data_single',
+  FORM_REF_FORM: 'ref_form',
+  FORM_REFERENCE_FORM: 'ref_form',
+  FORM_DATA_STAT: 'data_stat',
+  FORM_DATA_STATISTICS: 'data_stat',
+  FORM_CROSS_FIELD: 'cross_field',
+  FORM_REFERENCE_FIELD: 'cross_field',
+  FORM_BUTTON: 'form_button',
+  FORM_SUBTABLE: 'subtable',
+  FORM_SUB_TABLE: 'subtable',
+  FORM_VIRTUAL_FIELD: 'virtual_field',
+  FORM_CUSTOM_DEV: 'custom_dev',
+  FORM_CUSTOM_DEVELOP: 'custom_dev',
+  // 页面布局
+  FORM_STATIC_TEXT: 'static_text',
+  FORM_TEXT: 'static_text',
+  FORM_STATIC_IMAGE: 'static_image',
+  FORM_DIVIDER: 'divider',
+  FORM_PLACEHOLDER: 'placeholder',
+  FORM_COLLAPSE_LAYOUT: 'collapse_layout',
+  FORM_TAB_LAYOUT: 'tab_layout',
+  FORM_TABS: 'tab_layout',
+  FORM_FRAME_LAYOUT: 'frame_layout',
+  FORM_TEMPLATE_FILE: 'template_file',
+}
+
+function componentTypeToWidget(t: string | undefined): FieldType {
+  if (!t) return 'text'
+  const norm = String(t).toUpperCase().trim()
+  return COMPONENT_TYPE_MAP[norm] || 'text'
+}
+
+// apaas 平台 dataType 可能 uppercase (STRING/BIG_TEXT/DATE/DICT_SINGLE) 或
+// lowercase. 全 normalize 成 lowercase 后查 map. (Model 字段 fallback 路径用)
+const BACKEND_TYPE_MAP: Record<string, FieldType> = {
+  // 文本
+  string: 'text', text: 'text', varchar: 'text', char: 'text',
+  big_text: 'textarea', long_text: 'textarea', textarea: 'textarea', text_area: 'textarea',
+  rich_text: 'richtext', richtext: 'richtext', html: 'richtext',
+  // 数字
+  integer: 'number', int: 'number', bigint: 'number', long: 'number',
+  number: 'number', decimal: 'number', float: 'number', double: 'number',
+  money: 'money', currency: 'money', amount: 'money',
+  // 日期/时间
+  date: 'date',
+  datetime: 'datetime', date_time: 'datetime', timestamp: 'datetime',
+  time: 'time',
+  daterange: 'daterange', date_range: 'daterange',
+  month: 'month',
+  // 布尔
+  boolean: 'switch', bool: 'switch', tinyint: 'switch',
+  // 选择
+  dict: 'dict', dict_single: 'select', dict_multi: 'select_multi',
+  dictionary: 'dict', dictionary_single: 'select', dictionary_multi: 'select_multi',
+  select: 'select', radio: 'radio', checkbox: 'multi_select',
+  // 引用
+  ref: 'ref', reference: 'ref', refer: 'ref',
+  // 人员/组织
+  user: 'user', employee: 'user', staff: 'user',
+  dept: 'dept', department: 'dept', org: 'dept',
+  role: 'role',
+  // 文件
+  file: 'file', attachment: 'file', upload: 'file',
+  image: 'image', picture: 'image', img: 'image',
+  // 其他
+  json: 'textarea', object: 'textarea',
+  color: 'color',
+}
+
+function backendTypeToWidget(t: string | undefined): FieldType {
+  if (!t) return 'text'
+  const norm = String(t).toLowerCase().replace(/_$/, '')
+  return BACKEND_TYPE_MAP[norm] || 'text'
+}
+
+let _uidCounter = 0
+function nextId(): string {
+  _uidCounter += 1
+  return `fb_${Date.now().toString(36)}_${_uidCounter}`
+}
+
+/* ────────────────────────────────────────────────────────────────
+   Inline FieldPreview component — 字段卡片真实预览 widget
+   ──────────────────────────────────────────────────────────────── */
+
+const FieldPreview = {
+  props: {
+    field: { type: Object as PropType<FormField>, required: true },
+  },
+  setup(props: { field: FormField }) {
+    return () => {
+      const f = props.field
+      const ph = f.placeholder || `请输入${f.name || '内容'}`
+      const cls = 'fbp-pv-input'
+      switch (f.type) {
+        case 'textarea':
+        case 'richtext':
+          return h('textarea', { class: cls, placeholder: ph, rows: 2, readonly: true })
+        case 'number':
+        case 'money':
+        case 'rating':
+        case 'slider':
+          return h('input', { class: cls, type: 'number', placeholder: ph, readonly: true })
+        case 'switch':
+          return h('div', { class: 'fbp-pv-switch' }, [
+            h('span', { class: 'fbp-pv-switch-knob' }),
+          ])
+        case 'select':
+        case 'dict':
+        case 'cascade':
+          return h('div', { class: 'fbp-pv-select' }, [
+            h('span', { class: 'fbp-pv-select-text' }, ph),
+            h('span', { class: 'fbp-pv-select-caret' }, '▾'),
+          ])
+        case 'select_multi':
+        case 'multi_select':
+        case 'tag': {
+          const opts = (f.options || []).slice(0, 3)
+          if (opts.length === 0) {
+            return h('div', { class: 'fbp-pv-select' }, [
+              h('span', { class: 'fbp-pv-select-text' }, '请选择…'),
+              h('span', { class: 'fbp-pv-select-caret' }, '▾'),
+            ])
+          }
+          return h('div', { class: 'fbp-pv-chips' }, opts.map(o =>
+            h('span', { class: 'fbp-pv-chip' }, o.name || o.code)
+          ))
+        }
+        case 'radio': {
+          const opts = (f.options || []).slice(0, 3)
+          if (opts.length === 0) {
+            return h('div', { class: 'fbp-pv-radio' }, [
+              h('span', { class: 'fbp-pv-radio-item' }, [h('span', { class: 'fbp-pv-radio-dot' }), '请选择']),
+            ])
+          }
+          return h('div', { class: 'fbp-pv-radio' }, opts.map(o =>
+            h('span', { class: 'fbp-pv-radio-item' }, [
+              h('span', { class: 'fbp-pv-radio-dot' }),
+              o.name || o.code,
+            ])
+          ))
+        }
+        case 'color':
+          return h('div', { class: 'fbp-pv-color' }, [
+            h('span', { class: 'fbp-pv-color-swatch', style: 'background:#3b82f6' }),
+            h('span', { class: 'fbp-pv-select-text' }, '#3b82f6'),
+          ])
+        case 'date':
+          return h('input', { class: cls, type: 'date', readonly: true })
+        case 'time':
+          return h('input', { class: cls, type: 'time', readonly: true })
+        case 'datetime':
+          return h('input', { class: cls, type: 'datetime-local', readonly: true })
+        case 'daterange':
+          return h('div', { class: 'fbp-pv-range' }, [
+            h('input', { class: cls, type: 'date', readonly: true }),
+            h('span', { class: 'fbp-pv-range-sep' }, '→'),
+            h('input', { class: cls, type: 'date', readonly: true }),
+          ])
+        case 'month':
+          return h('input', { class: cls, type: 'month', readonly: true })
+        case 'user':
+        case 'dept':
+        case 'role':
+          return h('div', { class: 'fbp-pv-pick' }, [
+            h('span', { class: 'fbp-pv-avatar' }, f.type === 'user' ? '👤' : f.type === 'dept' ? '🏢' : '🛡'),
+            h('span', { class: 'fbp-pv-select-text' }, ph),
+          ])
+        case 'image':
+        case 'file':
+          return h('div', { class: 'fbp-pv-upload' }, [
+            h('span', { class: 'fbp-pv-upload-icon' }, f.type === 'image' ? '🖼' : '📎'),
+            h('span', { class: 'fbp-pv-upload-text' }, f.type === 'image' ? '上传图片' : '上传文件'),
+          ])
+        case 'signature':
+          return h('div', { class: 'fbp-pv-sig' }, [
+            h('span', { class: 'fbp-pv-sig-line' }),
+            h('span', { class: 'fbp-pv-sig-text' }, '请在此签名'),
+          ])
+        case 'ref':
+        case 'ref_form':
+        case 'subtable':
+        case 'data_select':
+        case 'data_single':
+        case 'data_stat':
+        case 'cross_field':
+        case 'aggregate':
+          return h('div', { class: 'fbp-pv-select' }, [
+            h('span', { class: 'fbp-pv-select-text' }, ph || (
+              f.type === 'subtable' ? '子表数据' :
+              f.type === 'data_select' ? '请选择数据' :
+              f.type === 'data_single' ? '请选择一条数据' :
+              f.type === 'data_stat' ? '统计值' :
+              f.type === 'cross_field' ? '关联他表字段' :
+              f.type === 'ref_form' ? '关联表单数据' : '引用值'
+            )),
+            h('span', { class: 'fbp-pv-select-caret' }, '→'),
+          ])
+        // 新 apaas widget 类型 (v4)
+        case 'phone':
+          return h('input', { class: cls, type: 'tel', placeholder: ph || '请输入手机号', readonly: true })
+        case 'email':
+          return h('input', { class: cls, type: 'email', placeholder: ph || '请输入邮箱地址', readonly: true })
+        case 'idcard':
+          return h('input', { class: cls, type: 'text', placeholder: ph || '请输入证件号', readonly: true })
+        case 'region':
+          return h('div', { class: 'fbp-pv-select' }, [
+            h('span', { class: 'fbp-pv-select-text' }, ph || '请选择省/市/区'),
+            h('span', { class: 'fbp-pv-select-caret' }, '▾'),
+          ])
+        case 'location':
+          return h('div', { class: 'fbp-pv-select' }, [
+            h('span', { class: 'fbp-pv-select-text' }, '📍 ' + (ph || '点击定位')),
+            h('span', { class: 'fbp-pv-select-caret' }, '→'),
+          ])
+        case 'hyperlink':
+          return h('input', { class: cls, type: 'url', placeholder: ph || 'https://', readonly: true })
+        case 'serial_no':
+          return h('input', { class: cls, type: 'text', placeholder: 'SQDH-20260526-0001', readonly: true })
+        case 'select_single':
+          return h('div', { class: 'fbp-pv-select' }, [
+            h('span', { class: 'fbp-pv-select-text' }, ph || '请选择…'),
+            h('span', { class: 'fbp-pv-select-caret' }, '▾'),
+          ])
+        // 页面布局组件
+        case 'static_text':
+          return h('div', { class: 'fbp-pv-static' }, f.placeholder || f.name || '静态文本内容')
+        case 'static_image':
+          return h('div', { class: 'fbp-pv-upload' }, [
+            h('span', { class: 'fbp-pv-upload-icon' }, '🖼'),
+            h('span', { class: 'fbp-pv-upload-text' }, '静态图片'),
+          ])
+        case 'divider':
+          return h('div', { class: 'fbp-pv-divider' })
+        case 'placeholder':
+          return h('div', { class: 'fbp-pv-placeholder' })
+        case 'collapse_layout':
+        case 'tab_layout':
+        case 'frame_layout':
+          return h('div', { class: 'fbp-pv-layout' }, f.type === 'collapse_layout' ? '【折叠布局】' : f.type === 'tab_layout' ? '【分页布局】' : '【框架布局】')
+        case 'template_file':
+          return h('div', { class: 'fbp-pv-select' }, [
+            h('span', { class: 'fbp-pv-select-text' }, '📋 模板文件'),
+            h('span', { class: 'fbp-pv-select-caret' }, '→'),
+          ])
+        // 高级
+        case 'form_button':
+          return h('button', { class: 'fbp-pv-formbtn', type: 'button' }, f.name || '按钮')
+        case 'virtual_field':
+        case 'custom_dev':
+          return h('div', { class: 'fbp-pv-select' }, [
+            h('span', { class: 'fbp-pv-select-text' }, f.type === 'virtual_field' ? '虚拟字段 (公式计算)' : '自开发字段'),
+            h('span', { class: 'fbp-pv-select-caret' }, '→'),
+          ])
+        default:
+          return h('input', { class: cls, type: 'text', placeholder: ph, readonly: true })
+      }
+    }
+  },
+}
+
+/* ────────────────────────────────────────────────────────────────
+   Props / state
+   ──────────────────────────────────────────────────────────────── */
 
 const props = defineProps<{
   appId: number
@@ -123,42 +949,212 @@ const props = defineProps<{
   formId?: string
 }>()
 
-const fields = ref<FieldRow[]>([])
+const fields = ref<FormField[]>([])
 const modelCode = ref('')
 const loading = ref(false)
 const error = ref('')
-const searchKw = ref('')
+const dirty = ref(false)
 
-const filteredFields = computed(() => {
-  const kw = searchKw.value.trim().toLowerCase()
-  if (!kw) return fields.value
-  return fields.value.filter(f =>
-    (f.field_code || '').toLowerCase().includes(kw)
-    || (f.field_name || '').toLowerCase().includes(kw),
+const libSearchKw = ref('')
+const collapsedCats = ref<Record<string, boolean>>({})
+
+// sidebar 2 tab: 业务组件 (默认) / 数据模型
+const libTab = ref<'component' | 'model'>('component')
+// 数据模型 tab 的 source — 跟低代码原生 data-model-fn-config 一致, 来自 form/{form_id}/detail.
+// 不再用 list_apaas_app_models (那个会漏 borrow_apply 等 form-scoped model).
+const formDetailModels = ref<any[]>([])
+const formMainModelCode = ref<string>('')
+// 老 fallback: list_apaas_app_models 拿到的应用所有 model (form_id 为空或 form detail 失败兜底)
+const allModels = ref<any[]>([])
+const selectedLibModelId = ref<string>('')
+// sidebar 数据模型 list — 优先用 formDetailModels (form 关联真模型), 兜底 allModels (应用全部主表)
+const sidebarModelList = computed<any[]>(() => {
+  if (formDetailModels.value.length > 0) {
+    return formDetailModels.value.map((m: any) => ({
+      id: m.model_id,
+      name: m.model_name,
+      code: m.model_code,
+      is_main: m.is_main,
+      extra: { fields: m.fields, model_id: m.model_id, model_code: m.model_code, model_name: m.model_name },
+    }))
+  }
+  return allModels.value
+})
+const selectedLibModel = computed(() =>
+  sidebarModelList.value.find(m => String(m.id || m.extra?.model_id) === selectedLibModelId.value)
+)
+const selectedLibModelFields = computed<any[]>(() => {
+  const raw = (selectedLibModel.value?.extra?.fields || []) as any[]
+  return raw
+})
+
+function onAddExistingField(rawField: any) {
+  // 从数据模型 tab 拖/点一个已使用字段 → 加到 canvas (作 reuse, 同 code 跳过)
+  const code = String(rawField.field_code || '')
+  if (!code) return
+  if (fields.value.some(f => f.code === code)) {
+    alert(`字段 "${code}" 已在 form 上, 不重复加`)
+    return
+  }
+  const widgetType = backendTypeToWidget(rawField.data_type || rawField.field_type)
+  const newField: FormField = {
+    id: nextId(),
+    code,
+    name: String(rawField.field_name || code),
+    type: widgetType,
+    placeholder: '',
+    required: !!rawField.required,
+    editable: true,
+    ai_validate: false,
+    options: needsOptions(widgetType) ? [] : undefined,
+    _src: rawField,
+  }
+  fields.value.push(newField)
+  selectedFieldId.value = newField.id
+  dirty.value = true
+}
+
+const selectedFieldId = ref<string>('')
+const selectedField = computed<FormField | undefined>(() =>
+  fields.value.find(f => f.id === selectedFieldId.value)
+)
+
+const showAiHelper = ref(false)
+const aiPrompt = ref('')
+const propsAiPrompt = ref('')
+
+/* ────────────────────────────────────────────────────────────────
+   Computed
+   ──────────────────────────────────────────────────────────────── */
+
+const modelFieldsCollapsed = ref(false)
+
+// canvas 布局: 2 列 (default, 跟 apaas 一致) / 1 列 (mobile or 用户偏好)
+const canvasLayout = ref<'1col' | '2col'>('2col')
+const canvasViewport = ref<'pc' | 'mobile'>('pc')
+
+// 哪些 widget 必须占满 2 列 (跟 apaas 原生一致)
+const FULL_WIDTH_WIDGETS = new Set<string>([
+  'textarea', 'richtext',
+  'static_text', 'static_image', 'divider', 'placeholder',
+  'collapse_layout', 'tab_layout', 'frame_layout', 'template_file',
+  'subtable', 'data_select', 'data_stat',
+])
+function isFullWidthWidget(t: string): boolean {
+  return canvasLayout.value === '1col' || FULL_WIDTH_WIDGETS.has(t)
+}
+
+const filteredModels = computed(() => {
+  const kw = libSearchKw.value.trim().toLowerCase()
+  if (!kw) return sidebarModelList.value
+  return sidebarModelList.value.filter((m: any) =>
+    (m.name || '').toLowerCase().includes(kw)
+    || (m.code || '').toLowerCase().includes(kw)
   )
 })
 
-const TYPE_LABEL: Record<string, string> = {
-  string: '文本', text: '文本', long_text: '大文本', textarea: '大文本',
-  integer: '整数', int: '整数', number: '数字', decimal: '小数',
-  date: '日期', datetime: '日期时间', daterange: '日期区间',
-  boolean: '是/否', dict: '字典', select: '下拉', ref: '引用',
-  user: '人员', file: '附件', image: '图片', json: 'JSON',
+const filteredCategories = computed(() => {
+  const kw = libSearchKw.value.trim().toLowerCase()
+  if (!kw) return FIELD_CATEGORIES
+  return FIELD_CATEGORIES
+    .map(c => ({
+      ...c,
+      widgets: c.widgets.filter(w => w.label.toLowerCase().includes(kw) || w.type.includes(kw)),
+    }))
+    .filter(c => c.widgets.length > 0)
+})
+
+/* ────────────────────────────────────────────────────────────────
+   Methods
+   ──────────────────────────────────────────────────────────────── */
+
+function toggleCat(code: string) {
+  collapsedCats.value[code] = !collapsedCats.value[code]
 }
 
-function formatType(t: string | undefined): string {
-  if (!t) return '—'
-  return TYPE_LABEL[String(t).toLowerCase()] || t
+function onSelectField(id: string) {
+  selectedFieldId.value = id
 }
 
-function onAddField() {
-  // P2 接入. 当前提示走 AI 助手.
-  alert('新增字段 — 当前请用右侧配置助手对话:\n"给当前表单加个字段叫XX"')
+function onAddWidget(w: WidgetMeta) {
+  const newField: FormField = {
+    id: nextId(),
+    code: `${w.type}_${fields.value.length + 1}`,
+    name: w.label,
+    type: w.type,
+    placeholder: '',
+    required: false,
+    editable: true,
+    ai_validate: false,
+    options: needsOptions(w.type) ? [] : undefined,
+  }
+  fields.value.push(newField)
+  selectedFieldId.value = newField.id
+  dirty.value = true
 }
 
-function onBatchEdit() {
-  alert('批量编辑 — 当前请用右侧配置助手对话:\n"把所有金额字段加 max 校验 50000"')
+function onRemoveField(id: string) {
+  const idx = fields.value.findIndex(f => f.id === id)
+  if (idx < 0) return
+  fields.value.splice(idx, 1)
+  if (selectedFieldId.value === id) selectedFieldId.value = ''
+  dirty.value = true
 }
+
+function onFieldsReorder() {
+  dirty.value = true
+}
+
+function onAddOption() {
+  if (!selectedField.value) return
+  if (!selectedField.value.options) selectedField.value.options = []
+  const n = selectedField.value.options.length + 1
+  selectedField.value.options.push({ code: `opt_${n}`, name: `选项${n}` })
+}
+
+function onRemoveOption(i: number) {
+  if (!selectedField.value?.options) return
+  selectedField.value.options.splice(i, 1)
+}
+
+function onSaveForm() {
+  if (!dirty.value) {
+    alert('当前无修改')
+    return
+  }
+  alert(
+    '保存表单 — 当前 Phase A 仅 local state, 真写回 backend P2 接入.\n\n' +
+    '现在请用右侧配置助手对话:\n' +
+    '"把表单字段顺序保存"\n或\n"给当前表单加字段 XXX"'
+  )
+}
+
+function onAiPrompt(prompt: string) {
+  aiPrompt.value = prompt
+  onAiSubmit()
+}
+
+function onAiSubmit() {
+  if (!aiPrompt.value.trim()) return
+  alert(
+    `AI 助手 — Phase A 占位.\n\n您的输入:\n"${aiPrompt.value}"\n\n` +
+    '请到右侧配置助手浮窗对话, 它会真正调 MCP 工具改表单.'
+  )
+  aiPrompt.value = ''
+}
+
+function onPropsAiSubmit() {
+  if (!propsAiPrompt.value.trim()) return
+  alert(
+    `AI 改字段 — Phase A 占位.\n\n您的输入:\n"${propsAiPrompt.value}"\n\n` +
+    '请到右侧配置助手对话.'
+  )
+  propsAiPrompt.value = ''
+}
+
+/* ────────────────────────────────────────────────────────────────
+   Data load
+   ──────────────────────────────────────────────────────────────── */
 
 async function reload() {
   if (!props.appId || !props.menuId) {
@@ -168,14 +1164,66 @@ async function reload() {
   }
   loading.value = true
   error.value = ''
+  modelCode.value = ''  // 切 menu 前先 reset 防残留
   try {
-    // 走 section-content/models with_fields=true (复用现有 endpoint)
+    // ── 优先路径: form_id → /forms/{form_id}/detail (跟得帆云原生 data-model-fn-config 100% 对齐).
+    // 一次拿 components + models, sidebar 数据模型 tab 也用这个数据 (不再走漏 model 的 list_apaas_app_models).
+    if (props.formId) {
+      const respFD = await request.get<any, any>(
+        `/applications/${props.appId}/forms/${props.formId}/detail`
+      )
+      if (respFD?.ok) {
+        // 设 sidebar models (跟低代码原生页面一致 — form 关联的真模型, 不是应用全部 model)
+        formDetailModels.value = respFD.models || []
+        formMainModelCode.value = String(respFD.main_model_code || '')
+        // 默认选中 main model
+        if (formMainModelCode.value && formDetailModels.value.length > 0) {
+          const mm = formDetailModels.value.find((m: any) => m.model_code === formMainModelCode.value)
+          if (mm) selectedLibModelId.value = String(mm.model_id || mm.model_code)
+        }
+        // canvas 字段从 components
+        const comps = respFD.components || []
+        fields.value = comps.map((c: any): FormField => {
+          const compType = String(c.component_type || '')
+          const widgetType = componentTypeToWidget(compType)
+          const boCode = String(c.bo_code || '')
+          const [_modelCode, fieldCode] = boCode.includes('~') ? boCode.split('~') : ['', boCode]
+          if (_modelCode) modelCode.value = _modelCode
+          // 关联 model 字段 (查 model_code → fields → 拿 max_length / description)
+          const mm = (respFD.models || []).find((m: any) => m.model_code === _modelCode)
+          const mf = mm?.fields?.find((x: any) => x.field_code === fieldCode)
+          return {
+            id: nextId(),
+            code: fieldCode || `field_${Math.random().toString(36).slice(2, 6)}`,
+            name: String(c.label || fieldCode || '未命名'),
+            type: widgetType,
+            placeholder: '',
+            required: !!c.required,
+            editable: true,
+            ai_validate: false,
+            options: needsOptions(widgetType) ? [] : undefined,
+            description: '',
+            hint: '',
+            max_length: mf?.max_length ? Number(mf.max_length) : undefined,
+            _src: { ...c, _component_type: compType, _uuid: c.uuid, _model_field: mf },
+          }
+        })
+        if (!modelCode.value) modelCode.value = formMainModelCode.value
+        if (fields.value.length > 0 && !selectedFieldId.value) {
+          selectedFieldId.value = fields.value[0].id
+        }
+        dirty.value = false
+        return
+      }
+      // form/detail 没拿到 → 兜底走 model 路径
+    }
+
+    // ── 兜底路径: model name/id match (老逻辑, FormBuilder Phase A initial)
     const resp = await request.get<any, any>(
-      `/applications/${props.appId}/section-content/models?with_fields=true`,
+      `/applications/${props.appId}/section-content/models?with_fields=true`
     )
     if (resp?.ok) {
       const items: any[] = resp.items || []
-      // 匹配规则: menu_id 通常等于 model_id, 或通过 form_id; 兜底取 name 匹配
       const target = items.find(it => {
         const raw = it.extra || {}
         return String(raw.model_id) === String(props.menuId)
@@ -185,11 +1233,30 @@ async function reload() {
       if (target) {
         const raw = target.extra || {}
         modelCode.value = raw.model_code || target.code || ''
-        fields.value = Array.isArray(raw.fields) ? raw.fields : []
+        const rawFields = Array.isArray(raw.fields) ? raw.fields : []
+        fields.value = rawFields.map((rf: any): FormField => ({
+          id: nextId(),
+          code: rf.field_code || `field_${Math.random().toString(36).slice(2, 6)}`,
+          name: rf.field_name || rf.field_code || '未命名',
+          type: backendTypeToWidget(rf.data_type || rf.field_type),
+          placeholder: rf.placeholder || '',
+          required: !!rf.required,
+          editable: rf.editable !== false,
+          ai_validate: !!rf.ai_validate,
+          options: Array.isArray(rf.options) ? rf.options.map((o: any) => ({
+            code: String(o.code || o.value || ''),
+            name: String(o.name || o.label || o.code || ''),
+          })) : (needsOptions(backendTypeToWidget(rf.data_type || rf.field_type)) ? [] : undefined),
+          _src: rf,
+        }))
+        if (fields.value.length > 0 && !selectedFieldId.value) {
+          selectedFieldId.value = fields.value[0].id
+        }
       } else {
         fields.value = []
         modelCode.value = ''
       }
+      dirty.value = false
     } else {
       error.value = resp?.message || resp?.error_code || '加载失败'
     }
@@ -200,21 +1267,44 @@ async function reload() {
   }
 }
 
+// ── sidebar 数据模型 tab — list 应用 models + 已使用字段拖入 canvas ──
+async function loadAllModels() {
+  if (!props.appId) return
+  try {
+    const resp = await request.get<any, any>(
+      `/applications/${props.appId}/section-content/models?with_fields=true`
+    )
+    if (resp?.ok) {
+      allModels.value = resp.items || []
+      if (allModels.value.length > 0 && !selectedLibModelId.value) {
+        // 默认选首个 model (跟得帆云一致)
+        selectedLibModelId.value = String(allModels.value[0].id || allModels.value[0].extra?.model_id || '')
+      }
+    }
+  } catch {
+    /* sidebar model list 拉失败不影响 canvas */
+  }
+}
+
 watch(() => [props.appId, props.menuId, props.formId], () => reload(), { immediate: true })
+watch(() => props.appId, () => loadAllModels(), { immediate: true })
 </script>
 
 <style scoped>
-.fdp {
+.fbp {
   font-family: var(--font-sans);
   color: var(--text);
-  padding: 28px 36px;
   background: var(--bg);
   height: 100%;
-  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
   font-feature-settings: 'cv11', 'ss01';
+  overflow: hidden;
 }
 
-.fdp-empty {
+/* ─── Empty / state ─────────────────────────────────────────── */
+.fbp-empty,
+.fbp-state {
   display: flex;
   flex-direction: column;
   align-items: center;
@@ -223,224 +1313,1165 @@ watch(() => [props.appId, props.menuId, props.formId], () => reload(), { immedia
   height: 100%;
   color: var(--text-3);
   gap: 12px;
+  padding: 48px 16px;
 }
-.fdp-empty-icon { font-size: 48px; line-height: 1; }
-.fdp-empty h3 {
+.fbp-empty-icon,
+.fbp-state-icon { font-size: 40px; line-height: 1; }
+.fbp-empty h3 {
   margin: 0;
   font-size: 18px;
   font-weight: 600;
   color: var(--text);
 }
-.fdp-empty p {
-  margin: 0;
-  font-size: 13.5px;
+.fbp-empty p,
+.fbp-state p { margin: 0; font-size: 13.5px; }
+.fbp-state-err { color: var(--err); }
+.fbp-state-err .fbp-btn { margin-top: 8px; }
+
+.fbp-spinner {
+  width: 18px; height: 18px;
+  border: 2px solid var(--line-strong);
+  border-top-color: var(--brand);
+  border-radius: 50%;
+  animation: fbp-spin 0.9s linear infinite;
+}
+@keyframes fbp-spin { to { transform: rotate(360deg); } }
+
+/* ─── 3 列 shell ────────────────────────────────────────────── */
+.fbp-3col {
+  display: grid;
+  grid-template-columns: 220px 1fr 300px;
+  height: 100%;
+  min-height: 0;
 }
 
-.fdp-head {
+/* ─── 左: 组件库 ────────────────────────────────────────────── */
+.fbp-lib {
+  background: var(--surface);
+  border-right: 1px solid var(--line);
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+}
+/* sidebar 2 tab header */
+.fbp-lib-tabs {
+  display: flex;
+  border-bottom: 1px solid var(--line);
+  background: var(--surface);
+}
+.fbp-lib-tab {
+  flex: 1;
+  padding: 12px 8px 11px;
+  background: transparent;
+  border: none;
+  border-bottom: 2px solid transparent;
+  color: var(--text-3);
+  font-size: 13px;
+  font-weight: 500;
+  font-family: inherit;
+  cursor: pointer;
+  transition: color 0.12s, border-color 0.12s;
+}
+.fbp-lib-tab:hover { color: var(--text-2); }
+.fbp-lib-tab.active {
+  color: var(--brand);
+  border-bottom-color: var(--brand);
+  font-weight: 600;
+}
+
+.fbp-lib-head {
+  padding: 12px;
+  border-bottom: 1px solid var(--line);
+}
+.fbp-lib-search {
+  position: relative;
+  display: flex;
+  align-items: center;
+}
+.fbp-lib-search input {
+  width: 100%;
+  height: 30px;
+  padding: 0 10px 0 28px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: var(--surface-2);
+  color: var(--text);
+  font-size: 12.5px;
+  font-family: inherit;
+  outline: none;
+  transition: border-color 0.12s;
+}
+.fbp-lib-search input:focus { border-color: var(--brand); background: var(--surface); }
+.fbp-lib-search input::placeholder { color: var(--text-4); }
+.fbp-lib-search svg {
+  position: absolute;
+  left: 9px;
+  color: var(--text-4);
+  pointer-events: none;
+}
+
+.fbp-lib-body {
+  flex: 1;
+  overflow-y: auto;
+  padding: 4px 8px 16px;
+}
+.fbp-lib-cat { margin-top: 4px; }
+.fbp-lib-cat-head {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  width: 100%;
+  padding: 8px 6px;
+  background: transparent;
+  border: none;
+  cursor: pointer;
+  font-size: 11.5px;
+  font-weight: 600;
+  color: var(--text-3);
+  text-transform: uppercase;
+  letter-spacing: 0.4px;
+  text-align: left;
+  font-family: inherit;
+}
+.fbp-lib-cat-head:hover { color: var(--text-2); }
+.fbp-lib-cat-caret {
+  transition: transform 0.15s;
+  color: var(--text-4);
+}
+.fbp-lib-cat-caret.collapsed { transform: rotate(-90deg); }
+.fbp-lib-cat-bar {
+  display: inline-block;
+  width: 3px;
+  height: 12px;
+  background: var(--brand);
+  border-radius: 2px;
+}
+.fbp-lib-cat-count {
+  margin-left: auto;
+  font-size: 10.5px;
+  color: var(--text-4);
+  background: var(--surface-2);
+  padding: 1px 6px;
+  border-radius: 999px;
+  font-weight: 500;
+}
+
+.fbp-lib-chips {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 4px;
+  padding: 0 2px 4px;
+}
+.fbp-lib-chip {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 7px 8px;
+  background: var(--surface-2);
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  font-size: 12px;
+  font-family: inherit;
+  color: var(--text-2);
+  cursor: pointer;
+  text-align: left;
+  transition: all 0.12s;
+  min-width: 0;
+}
+.fbp-lib-chip:hover {
+  background: var(--brand-soft);
+  border-color: var(--brand-soft-2);
+  color: var(--brand);
+}
+.fbp-lib-chip-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 20px;
+  height: 20px;
+  font-size: 13px;
+  flex-shrink: 0;
+  color: var(--text-3);
+}
+.fbp-lib-chip:hover .fbp-lib-chip-icon { color: var(--brand); }
+.fbp-lib-chip-label {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-weight: 500;
+}
+
+/* ── 数据模型 tab ─────────────────────────────────────────── */
+.fbp-lib-model-body {
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+}
+.fbp-lib-model-add {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 12px 16px;
+  background: transparent;
+  border: none;
+  border-bottom: 1px solid var(--line);
+  color: var(--brand);
+  font-size: 13px;
+  font-family: inherit;
+  cursor: pointer;
+  text-align: left;
+  font-weight: 500;
+}
+.fbp-lib-model-add:disabled { opacity: 0.6; cursor: not-allowed; }
+.fbp-lib-help {
+  margin-left: auto;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 14px;
+  height: 14px;
+  border: 1px solid var(--line-strong);
+  border-radius: 50%;
+  font-size: 10px;
+  color: var(--text-4);
+  font-weight: normal;
+}
+.fbp-lib-model-list {
+  padding: 4px 8px;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  max-height: 280px;
+  overflow-y: auto;
+}
+.fbp-lib-model-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 10px;
+  background: transparent;
+  border: none;
+  border-radius: 6px;
+  font-size: 13px;
+  font-family: inherit;
+  color: var(--text-2);
+  cursor: pointer;
+  text-align: left;
+  transition: background 0.12s;
+}
+.fbp-lib-model-item:hover { background: var(--surface-2); }
+.fbp-lib-model-item.active {
+  background: var(--brand-soft);
+  color: var(--brand);
+  font-weight: 500;
+}
+.fbp-lib-model-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 18px;
+  height: 18px;
+  background: var(--surface-3);
+  border-radius: 3px;
+  font-size: 10px;
+  color: var(--text-3);
+  flex-shrink: 0;
+}
+.fbp-lib-model-item.active .fbp-lib-model-icon {
+  background: var(--brand);
+  color: #fff;
+}
+.fbp-lib-model-name {
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.fbp-lib-empty {
+  padding: 24px 12px;
+  text-align: center;
+  font-size: 12px;
+  color: var(--text-4);
+}
+.fbp-lib-empty-sm { padding: 8px 12px; font-size: 11.5px; }
+
+.fbp-lib-model-detail {
+  border-top: 1px solid var(--line);
+  padding: 12px 12px 16px;
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+.fbp-lib-model-detail-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 10px;
+}
+.fbp-lib-model-detail-bar {
+  width: 3px;
+  height: 28px;
+  background: var(--brand);
+  border-radius: 2px;
+  flex-shrink: 0;
+}
+.fbp-lib-model-detail-info {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+.fbp-lib-model-detail-name {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text);
+}
+.fbp-lib-model-detail-code {
+  font-size: 11.5px;
+  color: var(--text-3);
+}
+
+.fbp-lib-model-detail-section { display: flex; flex-direction: column; }
+.fbp-lib-model-detail-toggle {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 8px 12px;
+  background: var(--surface-2);
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  cursor: pointer;
+  font-size: 12px;
+  font-family: inherit;
+  color: var(--text-2);
+  margin-bottom: 8px;
+}
+.fbp-lib-model-detail-toggle:hover { background: var(--surface-3); }
+.fbp-lib-model-detail-toggle svg { transition: transform 0.15s; color: var(--text-4); }
+
+.fbp-lib-chips-model {
+  grid-template-columns: 1fr 1fr;
+  gap: 6px;
+}
+
+/* ─── 中: canvas ────────────────────────────────────────────── */
+.fbp-canvas {
+  background: var(--bg);
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  position: relative;
+}
+.fbp-canvas-head {
   display: flex;
   align-items: flex-start;
   justify-content: space-between;
-  gap: 24px;
-  margin-bottom: 20px;
-  padding-bottom: 20px;
+  gap: 16px;
+  padding: 20px 28px 16px;
   border-bottom: 1px solid var(--line);
+  background: var(--surface);
 }
-
-.fdp-title {
-  margin: 0 0 6px;
-  font-size: 22px;
+.fbp-canvas-title {
+  margin: 0 0 4px;
+  font-size: 20px;
   font-weight: 600;
   color: var(--text);
-  letter-spacing: -0.3px;
+  letter-spacing: -0.2px;
 }
-.fdp-sub {
+.fbp-canvas-sub {
   margin: 0;
   display: inline-flex;
   align-items: center;
   gap: 10px;
-}
-.fdp-code {
-  display: inline-block;
-  padding: 2px 8px;
-  font-size: 12px;
-  font-family: var(--font-mono);
-  background: var(--surface-2);
-  border-radius: 4px;
-  color: var(--text-3);
-}
-.fdp-stat {
+  flex-wrap: wrap;
   font-size: 12.5px;
   color: var(--text-3);
 }
+.fbp-code {
+  display: inline-block;
+  padding: 1px 7px;
+  font-size: 11.5px;
+  background: var(--surface-2);
+  border-radius: 4px;
+  color: var(--text-3);
+  border: 1px solid var(--line);
+}
+.fbp-canvas-sub > * + * {
+  position: relative;
+  padding-left: 14px;
+}
+.fbp-canvas-sub > * + *::before {
+  content: '·';
+  position: absolute;
+  left: 4px;
+  color: var(--text-4);
+}
+.fbp-canvas-stat { /* legacy class, layout inherited from > * + * */ }
 
-.fdp-head-actions {
+.fbp-canvas-actions {
   display: flex;
   gap: 8px;
   flex-shrink: 0;
 }
 
-.fdp-btn {
-  height: 32px;
-  padding: 0 16px;
+.fbp-canvas-body {
+  flex: 1;
+  overflow-y: auto;
+  padding: 20px 28px 24px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+/* canvas toolbar: 查看业务对象 / PC-Mobile / 表单设置 */
+.fbp-canvas-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  padding: 12px 28px;
+  border-bottom: 1px solid var(--line);
+  background: var(--surface);
+}
+.fbp-toolbar-btn {
+  height: 28px;
+  padding: 0 12px;
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: 5px;
+  font-size: 12.5px;
+  font-family: inherit;
+  color: var(--text-2);
+  cursor: pointer;
+}
+.fbp-toolbar-btn:not(:disabled):hover {
+  border-color: var(--brand);
+  color: var(--brand);
+}
+.fbp-toolbar-btn:disabled { opacity: 0.55; cursor: not-allowed; }
+.fbp-toolbar-btn-outline {
+  border-color: var(--brand);
+  color: var(--brand);
+}
+.fbp-toolbar-viewport {
+  margin-left: auto;
+  margin-right: auto;
+  display: inline-flex;
+  align-items: center;
+  gap: 0;
+  border: 1px solid var(--line);
   border-radius: 6px;
+  overflow: hidden;
+  background: var(--surface-2);
+}
+.fbp-toolbar-vp {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 36px;
+  height: 28px;
+  padding: 0;
+  background: transparent;
+  border: none;
+  color: var(--text-3);
+  cursor: pointer;
+  transition: background 0.12s, color 0.12s;
+}
+.fbp-toolbar-vp:hover { color: var(--text); }
+.fbp-toolbar-vp.active {
+  background: var(--surface);
+  color: var(--brand);
+  box-shadow: 0 0 0 1px var(--brand-soft-2) inset;
+}
+
+.fbp-canvas-empty {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  text-align: center;
+  padding: 56px 16px 40px;
+  color: var(--text-3);
+  background: var(--surface);
+  border: 1px dashed var(--line-strong);
+  border-radius: 10px;
+  gap: 6px;
+}
+.fbp-canvas-empty-icon { font-size: 36px; line-height: 1; margin-bottom: 6px; }
+.fbp-canvas-empty p { margin: 0; font-size: 14px; }
+.fbp-canvas-empty .hint { font-size: 12.5px; color: var(--text-4); }
+
+/* ─── 字段卡片 ──────────────────────────────────────────────── */
+.fbp-card-list {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 10px 14px;
+}
+.fbp-card-list-1col {
+  grid-template-columns: 1fr;
+}
+.fbp-card-fullwidth {
+  grid-column: 1 / -1;
+}
+/* viewport mobile 时 canvas body 收窄模拟手机宽度 */
+.fbp-canvas.viewport-mobile .fbp-canvas-body {
+  max-width: 420px;
+  margin: 0 auto;
+}
+.fbp-card {
+  display: flex;
+  align-items: stretch;
+  gap: 0;
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  cursor: pointer;
+  transition: border-color 0.12s, box-shadow 0.12s;
+  overflow: hidden;
+}
+.fbp-card:hover {
+  border-color: var(--line-strong);
+  box-shadow: var(--sh-2);
+}
+.fbp-card.active {
+  border-color: var(--brand);
+  box-shadow: 0 0 0 3px var(--brand-soft);
+}
+.fbp-card-ghost {
+  opacity: 0.4;
+  background: var(--brand-soft);
+}
+.fbp-card-chosen {
+  cursor: grabbing;
+}
+
+.fbp-card-handle {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  background: var(--surface-2);
+  color: var(--text-4);
+  cursor: grab;
+  flex-shrink: 0;
+}
+.fbp-card-handle:hover { color: var(--text-3); background: var(--surface-3); }
+.fbp-card-handle:active { cursor: grabbing; }
+
+.fbp-card-body {
+  flex: 1;
+  padding: 10px 14px 12px;
+  min-width: 0;
+}
+.fbp-card-label {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 6px;
+  flex-wrap: wrap;
+}
+.fbp-card-name {
+  font-size: 13.5px;
+  font-weight: 500;
+  color: var(--text);
+}
+.fbp-card-req {
+  color: var(--err);
+  font-weight: 700;
+  margin-left: -4px;
+}
+.fbp-card-type-chip {
+  display: inline-block;
+  padding: 1.5px 8px;
+  border-radius: 999px;
+  background: var(--brand-soft);
+  color: var(--brand);
+  font-size: 11px;
+  font-weight: 500;
+  letter-spacing: 0.1px;
+}
+.fbp-card-key {
+  font-size: 11.5px;
+  color: var(--text-4);
+  margin-left: auto;
+}
+.fbp-card-preview {
+  /* preview row */
+  display: block;
+  font-size: 12.5px;
+}
+
+.fbp-card-ops {
+  display: flex;
+  align-items: center;
+  padding: 0 10px;
+  opacity: 0;
+  transition: opacity 0.12s;
+}
+.fbp-card:hover .fbp-card-ops { opacity: 1; }
+
+/* ─── Preview widgets (inline FieldPreview renders these) ──── */
+:deep(.fbp-pv-input) {
+  width: 100%;
+  height: 30px;
+  padding: 0 10px;
+  border: 1px solid var(--line);
+  border-radius: 5px;
+  background: var(--surface-2);
+  color: var(--text-3);
+  font-size: 12.5px;
+  font-family: inherit;
+  outline: none;
+  resize: none;
+}
+:deep(textarea.fbp-pv-input) {
+  height: auto;
+  padding: 6px 10px;
+  line-height: 1.5;
+}
+:deep(.fbp-pv-select),
+:deep(.fbp-pv-pick),
+:deep(.fbp-pv-upload),
+:deep(.fbp-pv-color) {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  height: 30px;
+  padding: 0 10px;
+  border: 1px solid var(--line);
+  border-radius: 5px;
+  background: var(--surface-2);
+  font-size: 12.5px;
+  color: var(--text-3);
+}
+:deep(.fbp-pv-select-text),
+:deep(.fbp-pv-upload-text) { flex: 1; }
+:deep(.fbp-pv-select-caret) { color: var(--text-4); font-size: 11px; }
+:deep(.fbp-pv-switch) {
+  display: inline-flex;
+  align-items: center;
+  width: 32px;
+  height: 18px;
+  padding: 2px;
+  border-radius: 999px;
+  background: var(--line-strong);
+}
+:deep(.fbp-pv-switch-knob) {
+  width: 14px; height: 14px;
+  background: var(--surface);
+  border-radius: 50%;
+  box-shadow: var(--sh-1);
+}
+:deep(.fbp-pv-chips) {
+  display: flex;
+  gap: 4px;
+  flex-wrap: wrap;
+}
+:deep(.fbp-pv-chip) {
+  padding: 2px 8px;
+  border-radius: 4px;
+  background: var(--surface-2);
+  color: var(--text-2);
+  font-size: 11.5px;
+  border: 1px solid var(--line);
+}
+:deep(.fbp-pv-radio) {
+  display: flex;
+  gap: 12px;
+  font-size: 12.5px;
+  color: var(--text-2);
+}
+:deep(.fbp-pv-radio-item) {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+}
+:deep(.fbp-pv-radio-dot) {
+  width: 11px; height: 11px;
+  border: 1.5px solid var(--text-4);
+  border-radius: 50%;
+}
+:deep(.fbp-pv-color-swatch) {
+  width: 14px; height: 14px; border-radius: 3px;
+  border: 1px solid var(--line);
+}
+:deep(.fbp-pv-range) {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+:deep(.fbp-pv-range-sep) { color: var(--text-4); font-size: 12px; }
+:deep(.fbp-pv-avatar),
+:deep(.fbp-pv-upload-icon) {
   font-size: 13px;
+}
+:deep(.fbp-pv-sig) {
+  display: flex;
+  align-items: flex-end;
+  gap: 10px;
+  height: 40px;
+  padding: 0 10px 8px;
+  border: 1px dashed var(--line-strong);
+  border-radius: 5px;
+  background: var(--surface-2);
+}
+:deep(.fbp-pv-sig-line) {
+  flex: 1;
+  height: 1px;
+  background: var(--text-4);
+}
+:deep(.fbp-pv-sig-text) {
+  font-size: 11.5px;
+  color: var(--text-4);
+}
+:deep(.fbp-pv-static) {
+  padding: 6px 10px;
+  font-size: 13px;
+  color: var(--text);
+  background: var(--surface-2);
+  border-radius: 5px;
+}
+:deep(.fbp-pv-divider) {
+  height: 1px;
+  background: var(--line-strong);
+  margin: 8px 0;
+}
+:deep(.fbp-pv-placeholder) {
+  height: 24px;
+  background: repeating-linear-gradient(
+    45deg,
+    var(--surface-2),
+    var(--surface-2) 4px,
+    var(--surface-3) 4px,
+    var(--surface-3) 8px
+  );
+  border-radius: 4px;
+  border: 1px dashed var(--line-strong);
+}
+:deep(.fbp-pv-layout) {
+  padding: 12px 10px;
+  text-align: center;
+  font-size: 12px;
+  color: var(--text-3);
+  background: var(--surface-2);
+  border: 1px dashed var(--line-strong);
+  border-radius: 5px;
+}
+:deep(.fbp-pv-formbtn) {
+  padding: 6px 14px;
+  background: var(--brand);
+  color: #fff;
+  border: none;
+  border-radius: 5px;
+  font-size: 12.5px;
+  font-family: inherit;
+  cursor: default;
+}
+
+/* ─── canvas footer drop ───────────────────────────────────── */
+.fbp-canvas-drop {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  padding: 14px 12px;
+  margin-top: 4px;
+  border: 1px dashed var(--line-strong);
+  border-radius: 8px;
+  background: var(--surface);
+  color: var(--text-3);
+  font-size: 12.5px;
+}
+.fbp-canvas-drop-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+  background: var(--brand-soft);
+  color: var(--brand);
+  font-weight: 600;
+}
+
+/* ─── AI 浮起 ──────────────────────────────────────────────── */
+.fbp-ai {
+  position: absolute;
+  right: 28px;
+  bottom: 24px;
+  width: 300px;
+  background: var(--surface);
+  border: 1px solid var(--line-strong);
+  border-radius: 10px;
+  box-shadow: var(--sh-4);
+  z-index: 5;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+.fbp-ai-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 10px 14px;
+  border-bottom: 1px solid var(--line);
+}
+.fbp-ai-title {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text);
+}
+.fbp-ai-close {
+  width: 22px;
+  height: 22px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  background: transparent;
+  border: none;
+  color: var(--text-3);
+  font-size: 18px;
+  cursor: pointer;
+  border-radius: 4px;
+  font-family: inherit;
+}
+.fbp-ai-close:hover { background: var(--surface-2); color: var(--text); }
+
+.fbp-ai-chips {
+  display: flex;
+  gap: 6px;
+  padding: 10px 14px;
+  flex-wrap: wrap;
+}
+.fbp-ai-chip {
+  padding: 5px 10px;
+  background: var(--brand-soft);
+  border: 1px solid var(--brand-soft-2);
+  color: var(--brand);
+  border-radius: 999px;
+  font-size: 11.5px;
+  font-family: inherit;
+  cursor: pointer;
+  transition: background 0.12s;
+}
+.fbp-ai-chip:hover { background: var(--brand-soft-2); }
+
+.fbp-ai-tips {
+  padding: 0 14px 8px;
+  font-size: 11.5px;
+  color: var(--text-3);
+}
+.fbp-ai-tips p { margin: 0 0 4px; }
+.fbp-ai-tips ul {
+  margin: 0;
+  padding-left: 16px;
+}
+.fbp-ai-tips li { margin: 2px 0; color: var(--text-3); }
+
+.fbp-ai-input {
+  display: flex;
+  gap: 6px;
+  padding: 8px 12px 12px;
+  border-top: 1px solid var(--line);
+  background: var(--surface-2);
+}
+.fbp-ai-input input {
+  flex: 1;
+  height: 30px;
+  padding: 0 10px;
+  border: 1px solid var(--line);
+  border-radius: 5px;
+  background: var(--surface);
+  color: var(--text);
+  font-size: 12px;
+  font-family: inherit;
+  outline: none;
+}
+.fbp-ai-input input:focus { border-color: var(--brand); }
+
+/* ─── 右: 属性面板 ──────────────────────────────────────────── */
+.fbp-props {
+  background: var(--surface);
+  border-left: 1px solid var(--line);
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+}
+
+.fbp-props-empty {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  text-align: center;
+  height: 100%;
+  color: var(--text-3);
+  padding: 32px 16px;
+  gap: 6px;
+}
+.fbp-props-empty-icon { font-size: 28px; }
+.fbp-props-empty p { margin: 0; font-size: 13px; }
+.fbp-props-empty .hint { font-size: 11.5px; color: var(--text-4); }
+
+.fbp-props-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 14px 16px;
+  border-bottom: 1px solid var(--line);
+}
+.fbp-props-title {
+  font-size: 13.5px;
+  font-weight: 600;
+  color: var(--text);
+}
+
+.fbp-props-body {
+  flex: 1;
+  overflow-y: auto;
+  padding: 14px 16px 20px;
+}
+
+.fbp-row {
+  margin-bottom: 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+}
+.fbp-row label {
+  font-size: 11.5px;
+  color: var(--text-3);
+  font-weight: 500;
+}
+.fbp-row input,
+.fbp-row select {
+  height: 30px;
+  padding: 0 10px;
+  border: 1px solid var(--line);
+  border-radius: 5px;
+  background: var(--surface);
+  color: var(--text);
+  font-size: 12.5px;
+  font-family: inherit;
+  outline: none;
+  transition: border-color 0.12s;
+}
+.fbp-row input:focus,
+.fbp-row select:focus { border-color: var(--brand); }
+.fbp-row input.mono,
+.fbp-row select { font-family: var(--font-mono); font-size: 12px; }
+.fbp-row input[readonly],
+.fbp-row input:disabled {
+  background: var(--surface-2);
+  color: var(--text-3);
+  cursor: not-allowed;
+}
+.fbp-row-textarea {
+  min-height: 56px;
+  padding: 8px 10px;
+  border: 1px solid var(--line);
+  border-radius: 5px;
+  background: var(--surface);
+  color: var(--text);
+  font-family: inherit;
+  font-size: 12.5px;
+  resize: vertical;
+  outline: none;
+  transition: border-color 0.12s;
+}
+.fbp-row-textarea:focus { border-color: var(--brand); }
+
+.fbp-switch-grid {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin: 14px 0 16px;
+  padding: 12px 12px;
+  background: var(--surface-2);
+  border-radius: 8px;
+}
+.fbp-switch-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  font-size: 12.5px;
+  color: var(--text-2);
+}
+.fbp-switch {
+  width: 32px;
+  height: 18px;
+  padding: 2px;
+  border-radius: 999px;
+  background: var(--line-strong);
+  border: none;
+  cursor: pointer;
+  transition: background 0.18s;
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+}
+.fbp-switch.on { background: var(--brand); }
+.fbp-switch-knob {
+  width: 14px;
+  height: 14px;
+  background: var(--surface);
+  border-radius: 50%;
+  box-shadow: var(--sh-2);
+  transition: transform 0.18s var(--ease);
+}
+.fbp-switch.on .fbp-switch-knob { transform: translateX(14px); }
+
+.fbp-options {
+  margin: 16px 0;
+  padding: 12px;
+  background: var(--surface-2);
+  border-radius: 8px;
+}
+.fbp-options-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 8px;
+}
+.fbp-options-head label {
+  font-size: 11.5px;
+  font-weight: 500;
+  color: var(--text-3);
+}
+.fbp-options-list {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.fbp-option-row {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+.fbp-option-input {
+  flex: 1;
+  height: 26px;
+  padding: 0 8px;
+  border: 1px solid var(--line);
+  border-radius: 4px;
+  background: var(--surface);
+  color: var(--text);
+  font-size: 11.5px;
+  font-family: inherit;
+  outline: none;
+  min-width: 0;
+}
+.fbp-option-input.mono { font-family: var(--font-mono); font-size: 11px; }
+.fbp-option-input:focus { border-color: var(--brand); }
+.fbp-options-empty {
+  font-size: 11px;
+  color: var(--text-4);
+  text-align: center;
+  padding: 6px 0;
+}
+
+.fbp-row-ai {
+  margin-top: 18px;
+  padding-top: 14px;
+  border-top: 1px solid var(--line);
+}
+
+/* ─── Buttons ───────────────────────────────────────────────── */
+.fbp-btn {
+  height: 30px;
+  padding: 0 14px;
+  border-radius: 6px;
+  font-size: 12.5px;
   font-weight: 500;
   font-family: inherit;
   cursor: pointer;
   border: 1px solid transparent;
   white-space: nowrap;
   transition: background 0.12s, border-color 0.12s, color 0.12s;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
 }
-.fdp-btn:disabled { opacity: 0.5; cursor: not-allowed; }
-.fdp-btn-ghost {
+.fbp-btn:disabled { opacity: 0.5; cursor: not-allowed; }
+.fbp-btn-ghost {
   background: var(--surface);
   border-color: var(--line-strong);
   color: var(--text);
 }
-.fdp-btn-ghost:hover:not(:disabled) {
+.fbp-btn-ghost:hover:not(:disabled) {
   border-color: var(--brand);
   color: var(--brand);
 }
-.fdp-btn-primary {
+.fbp-btn-primary {
   background: var(--brand);
   color: #fff;
 }
-.fdp-btn-primary:hover:not(:disabled) {
+.fbp-btn-primary:hover:not(:disabled) {
   background: var(--brand-hover);
 }
+.fbp-btn-sm {
+  height: 26px;
+  padding: 0 10px;
+  font-size: 11.5px;
+}
+.fbp-btn-icon { font-size: 13px; line-height: 1; }
 
-.fdp-toolbar {
-  display: flex;
-  margin-bottom: 14px;
-}
-.fdp-search {
-  position: relative;
-  display: inline-flex;
-  align-items: center;
-}
-.fdp-search input {
-  height: 32px;
-  width: 280px;
-  padding: 0 12px 0 32px;
-  border: 1px solid var(--line);
-  border-radius: 6px;
-  background: var(--surface);
-  color: var(--text);
-  font-size: 13px;
-  font-family: inherit;
-  outline: none;
-  transition: border-color 0.12s;
-}
-.fdp-search input:focus { border-color: var(--brand); }
-.fdp-search input::placeholder { color: var(--text-4); }
-.fdp-search svg {
-  position: absolute;
-  left: 10px;
-  color: var(--text-4);
-  pointer-events: none;
-}
-
-.fdp-table-wrap {
-  background: var(--surface);
-  border: 1px solid var(--line);
-  border-radius: 10px;
-  overflow: hidden;
-  box-shadow: var(--sh-1);
-}
-
-.fdp-table {
-  width: 100%;
-  border-collapse: collapse;
-  font-size: 13px;
-}
-
-.fdp-table th {
-  text-align: left;
-  padding: 11px 16px;
-  background: var(--surface-2);
-  font-weight: 500;
-  color: var(--text-3);
-  font-size: 12.5px;
-  border-bottom: 1px solid var(--line);
-  white-space: nowrap;
-}
-.fdp-table th.center { text-align: center; }
-.fdp-table th.ops { width: 80px; text-align: center; }
-.fdp-table th.num { width: 50px; }
-
-.fdp-table td {
-  padding: 12px 16px;
-  border-bottom: 1px solid var(--line);
-  color: var(--text);
-  vertical-align: middle;
-}
-.fdp-table tr:last-child td { border-bottom: none; }
-.fdp-table tr:hover td:not(.empty) { background: var(--surface-2); }
-.fdp-table .num { color: var(--text-4); }
-.fdp-table .mono {
-  font-family: var(--font-mono);
-  font-size: 12.5px;
-  color: var(--text-2);
-}
-.fdp-table .center { text-align: center; }
-.fdp-table .ops { text-align: center; }
-.fdp-table .muted { color: var(--text-3); }
-.fdp-table .empty {
-  text-align: center;
-  padding: 48px 16px;
-  color: var(--text-4);
-}
-.fdp-table .empty .hint {
-  margin-top: 8px;
-  font-size: 12px;
-}
-
-.fdp-type-chip {
-  display: inline-block;
-  padding: 2px 10px;
-  border-radius: 999px;
-  background: var(--brand-soft);
-  color: var(--brand);
-  font-size: 12px;
-  font-weight: 500;
-}
-
-.fdp-req {
-  display: inline-block;
-  font-size: 13px;
-  color: var(--err);
-}
-.fdp-req.fdp-req-off {
-  color: var(--text-4);
-}
-
-.fdp-icon-btn {
+.fbp-icon-btn {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  width: 28px;
-  height: 28px;
+  width: 26px;
+  height: 26px;
   padding: 0;
   background: transparent;
   border: 1px solid var(--line);
   border-radius: 4px;
   color: var(--text-3);
   cursor: pointer;
-  transition: background 0.12s, color 0.12s, border-color 0.12s;
+  transition: all 0.12s;
 }
-.fdp-icon-btn:hover:not(:disabled) {
-  background: var(--brand-soft);
-  color: var(--brand);
-  border-color: var(--brand);
+.fbp-icon-btn:hover:not(:disabled) {
+  background: var(--err-soft);
+  color: var(--err);
+  border-color: var(--err);
 }
-.fdp-icon-btn:disabled { opacity: 0.5; cursor: not-allowed; }
 
-.fdp-state {
-  padding: 48px;
-  text-align: center;
-  color: var(--text-3);
-  font-size: 14px;
+.fbp-link-btn {
+  background: transparent;
+  border: none;
+  color: var(--brand);
+  cursor: pointer;
+  font-family: inherit;
+  font-size: 12.5px;
+  font-weight: 500;
+  padding: 0;
 }
-.fdp-state-err { color: var(--err); }
-.fdp-state-err .fdp-btn { margin-top: 12px; margin-left: 8px; }
+.fbp-link-btn:hover { color: var(--brand-hover); text-decoration: underline; }
+.fbp-link-btn-sm { font-size: 11.5px; }
+
+.mono { font-family: var(--font-mono); }
+
+/* ─── Transitions ───────────────────────────────────────────── */
+.fbp-fade-enter-active,
+.fbp-fade-leave-active {
+  transition: opacity 0.15s, transform 0.15s var(--ease);
+}
+.fbp-fade-enter-from,
+.fbp-fade-leave-to {
+  opacity: 0;
+  transform: translateY(8px);
+}
+
+/* ─── Responsive — narrow viewport (< 1200px) 收起属性面板 ─── */
+@media (max-width: 1200px) {
+  .fbp-3col {
+    grid-template-columns: 200px 1fr 260px;
+  }
+}
+@media (max-width: 1000px) {
+  .fbp-3col {
+    grid-template-columns: 180px 1fr;
+  }
+  .fbp-props { display: none; }
+}
 </style>

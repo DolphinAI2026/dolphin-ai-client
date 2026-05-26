@@ -21,7 +21,7 @@ from __future__ import annotations
 import logging
 from typing import Annotated, Any, Optional
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel, Field
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -237,10 +237,14 @@ async def get_section_content_models(
     app_id: int,
     ctx: Annotated[AuthContext, Depends(get_auth_context)],
     db: Annotated[AsyncSession, Depends(get_db)],
+    with_fields: bool = Query(False, description="True 时拉完整字段 (FormBuilder 用), 默认 False 省 token"),
 ) -> SectionContentResponse:
-    """data section: 列应用的数据模型 (走 list_apaas_app_models, with_fields=False 省 token).
+    """data section: 列应用的数据模型 (走 list_apaas_app_models).
 
-    返结构: items[].id = model_id, .name = model_name, .code = model_code.
+    默认 with_fields=False 省 token (用于左侧 list 渲染); FormBuilder 可传 with_fields=true
+    让 extra 含 fields[] 数组, 直接喂前端 widget 渲染.
+
+    返结构: items[].id = model_id, .name = model_name, .code = model_code, .extra = 整 model dict.
     """
     source = "list_apaas_app_models"
     app = await _load_app_and_check_view(app_id, ctx, db)
@@ -251,7 +255,7 @@ async def get_section_content_models(
         source,
         env_id=app.platform_env_id,
         apaas_app_id=str(app.apaas_app_id),
-        extra_args={"with_fields": False},
+        extra_args={"with_fields": with_fields},
     )
     if not ok:
         return _tool_error(app, source, raw_or_err["error_code"], raw_or_err["message"])
@@ -271,6 +275,114 @@ async def get_section_content_models(
         total=int(raw_or_err.get("total") or len(items)),
         source=source,
     )
+
+
+@router.get("/{app_id}/forms/{form_id}/components", response_model=SectionContentResponse)
+async def get_form_components(
+    app_id: int,
+    form_id: str,
+    ctx: Annotated[AuthContext, Depends(get_auth_context)],
+    db: Annotated[AsyncSession, Depends(get_db)],
+) -> SectionContentResponse:
+    """design-v4 Phase A: 拿表单的字段组件 (FormBuilder 用 form_id 直查, 替代 model 反查).
+
+    走 list_apaas_form_components MCP, 返字段 components list. 跟得帆云
+    `/data-model-fn-config?formId=...` 真路径对齐 — 表单字段是 form 维度,
+    不是 model 维度 (一个 form 绑一个 model, 字段配置在 form layout 上).
+
+    items[].id = uuid, .name = label, .code = bo_code, .extra = 整 component dict
+    含 component_type / required / choose_options / dictionary_choose_options.
+    """
+    source = "list_apaas_form_components"
+    app = await _load_app_and_check_view(app_id, ctx, db)
+    if not app.platform_env_id or not app.apaas_app_id:
+        return _app_not_deployed(app, source)
+    form_id = (form_id or "").strip()
+    if not form_id:
+        return _tool_error(app, source, "INVALID_FORM_ID", "form_id 不能为空")
+
+    ok, raw_or_err = await _safe_call_mcp_tool(
+        source,
+        env_id=app.platform_env_id,
+        apaas_app_id=str(app.apaas_app_id),
+        extra_args={"form_id": form_id},
+    )
+    if not ok:
+        return _tool_error(app, source, raw_or_err["error_code"], raw_or_err["message"])
+
+    items = _extract_items_from_mcp_result(
+        raw_or_err,
+        key_candidates=["components", "items"],
+        id_keys=["uuid", "id"],
+        name_keys=["label", "name"],
+        code_keys=["bo_code", "code"],
+    )
+    return SectionContentResponse(
+        ok=True,
+        env_id=app.platform_env_id,
+        apaas_app_id=str(app.apaas_app_id),
+        items=items,
+        total=int(raw_or_err.get("total") or len(items)),
+        source=source,
+    )
+
+
+@router.get("/{app_id}/forms/{form_id}/detail")
+async def get_form_detail(
+    app_id: int,
+    form_id: str,
+    ctx: Annotated[AuthContext, Depends(get_auth_context)],
+    db: Annotated[AsyncSession, Depends(get_db)],
+) -> dict:
+    """design-v4 Phase A+: 拿表单完整配置 (跟低代码原生 data-model-fn-config 100% 对齐).
+
+    走 get_apaas_form_detail MCP, 返:
+      - models: form 关联的所有 model (主表 + 子表 + 关联表), 每个含完整字段定义
+      - components: form 已用组件 list
+      - main_model_code: 主 model code (用于 sidebar 数据模型 tab 默认选中)
+
+    替代之前 list_apaas_app_models 路径 — 那个会漏 borrow_apply 等 form-scoped model.
+    """
+    source = "get_apaas_form_detail"
+    app = await _load_app_and_check_view(app_id, ctx, db)
+    if not app.platform_env_id or not app.apaas_app_id:
+        return {
+            "ok": False,
+            "error_code": "APP_NOT_DEPLOYED",
+            "message": "应用尚未部署到 aPaaS 平台",
+            "source": source,
+        }
+    form_id = (form_id or "").strip()
+    if not form_id:
+        return {"ok": False, "error_code": "INVALID_FORM_ID", "message": "form_id 不能为空", "source": source}
+
+    ok, raw_or_err = await _safe_call_mcp_tool(
+        source,
+        env_id=app.platform_env_id,
+        apaas_app_id=str(app.apaas_app_id),
+        extra_args={"form_id": form_id},
+    )
+    if not ok:
+        return {
+            "ok": False,
+            "error_code": raw_or_err["error_code"],
+            "message": raw_or_err["message"],
+            "source": source,
+        }
+    return {
+        "ok": True,
+        "env_id": app.platform_env_id,
+        "apaas_app_id": str(app.apaas_app_id),
+        "form_id": form_id,
+        "form_name": raw_or_err.get("form_name", ""),
+        "main_model_code": raw_or_err.get("main_model_code", ""),
+        "models": raw_or_err.get("models", []),
+        "components": raw_or_err.get("components", []),
+        "model_count": raw_or_err.get("model_count", 0),
+        "component_count": raw_or_err.get("component_count", 0),
+        "all_model_codes": raw_or_err.get("all_model_codes", []),
+        "source": source,
+    }
 
 
 @router.get("/{app_id}/section-content/dicts", response_model=SectionContentResponse)

@@ -2668,6 +2668,9 @@ function onApaasMenuSelected(menu: {
 }) {
   if (!existingAppId.value) return
   selectedApaasMenuId.value = menu.menu_id
+  // design-v4 Phase A: FormDesignerPanel 用 menu_name / form_id 反查 model
+  if (menu.menu_name) selectedApaasMenuName.value = menu.menu_name
+  if (menu.form_id) selectedApaasMenuFormId.value = String(menu.form_id)
   const token = userStore.token || localStorage.getItem('token') || ''
   // 仅在切到 platform 视图后才允许切菜单 — 避免误把 iframe 卡到 platform 模式
   if (activeView.value !== 'platform') activeView.value = 'platform'

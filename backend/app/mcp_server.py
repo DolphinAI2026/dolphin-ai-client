@@ -4247,6 +4247,110 @@ async def list_apaas_form_permissions(env_id: int, apaas_app_id: str, form_id: s
     }
 
 
+@mcp.tool()
+async def get_apaas_form_detail(env_id: int, apaas_app_id: str, form_id: str) -> dict:
+    """拿表单详情页完整配置 — FormBuilder 用的真 API (跟低代码原生 data-model-fn-config 一致).
+
+    底层调 query_detail_page_config (GET /xdap-app/formConfig/query/detailPageConfigById).
+    比 list_apaas_form_components 多返:
+      - models: 表单关联的所有 model + 完整字段定义 (含主表 + 子表 + 关联表)
+      - components: form 已使用组件 (跟 list_apaas_form_components 一致, 但 source of truth)
+      - meta: form_name / model_main_code
+
+    使用场景: FormBuilder 数据模型 tab 列 form 关联的真实 model + 已使用字段池,
+    不依赖 list_apaas_app_models (会漏 borrow_apply 等 form-scoped model).
+    """
+    if not (apaas_app_id.strip() and form_id.strip()):
+        return {"ok": False, "error_code": "INVALID_PARAMS", "message": "apaas_app_id+form_id 都必填"}
+    ok, raw = await _with_client(
+        env_id, "查表单详情配置",
+        lambda c: c.query_detail_page_config(apaas_app_id.strip(), form_id.strip()),
+    )
+    if not ok:
+        return raw
+
+    # modelWithFieldVoList: 关联 model 列表 (主表 + 子表 + 关联表)
+    models = []
+    for m in (raw.get("modelWithFieldVoList") or []):
+        if not isinstance(m, dict):
+            continue
+        fields_out = []
+        # apaas 平台 modelWithFieldVoList 里 fields 数组的 key 可能是 fields / fieldList /
+        # dataModelFields / dataModelFieldList / modelFields (没固定文档).
+        raw_fields = (
+            m.get("fields")
+            or m.get("fieldList")
+            or m.get("dataModelFields")
+            or m.get("dataModelFieldList")
+            or m.get("modelFields")
+            or m.get("modelFieldList")
+            or []
+        )
+        for f in raw_fields:
+            if not isinstance(f, dict):
+                continue
+            fields_out.append({
+                "field_code": str(f.get("fieldCode") or f.get("code") or ""),
+                "field_name": str(f.get("fieldName") or f.get("name") or f.get("displayName") or ""),
+                "data_type": str(
+                    f.get("dataType") or f.get("fieldType") or f.get("databaseFieldType") or ""
+                ),
+                "required": bool(f.get("required") or f.get("isRequired") or False),
+                "max_length": f.get("maxLength") or f.get("length"),
+                "dictionary_code": str(f.get("dictionaryCode") or f.get("dictCode") or ""),
+                "ref_model_code": str(f.get("refModelCode") or f.get("referenceModelCode") or ""),
+                "description": str(f.get("description") or f.get("fieldDesc") or ""),
+            })
+        models.append({
+            "model_id": str(m.get("id") or m.get("modelId") or m.get("dataModelId") or ""),
+            "model_code": str(m.get("modelCode") or m.get("code") or ""),
+            "model_name": str(m.get("modelName") or m.get("name") or m.get("displayName") or ""),
+            "model_type": str(m.get("modelType") or ""),
+            # apaas detailPageConfig 用 mainModel: bool 标记主表
+            "is_main": bool(m.get("mainModel") or m.get("isMain") or m.get("main") or False),
+            "fields": fields_out,
+            "field_count": len(fields_out),
+        })
+
+    # detailPage.formComponents: form 已用组件
+    detail_page = raw.get("detailPage") or {}
+    comps = []
+    for c in (detail_page.get("formComponents") or raw.get("formComponents") or []):
+        if not isinstance(c, dict):
+            continue
+        comps.append({
+            "uuid": str(c.get("uuid") or c.get("id") or ""),
+            "label": str(c.get("label") or c.get("name") or ""),
+            "component_type": str(c.get("componentType") or ""),
+            "bo_code": str(c.get("boCode") or ""),
+            "required": bool(c.get("required", False)),
+        })
+
+    # apaas detailPageConfigById raw 含 `modelCode` (form 绑定的主表) 直接用
+    main_model_code = str(raw.get("modelCode") or raw.get("mainModelCode") or "")
+    # 兜底: 从 models 里找 is_main
+    if not main_model_code:
+        for _mm in models:
+            if _mm.get("is_main"):
+                main_model_code = _mm["model_code"]
+                break
+    # 还没就用第一个
+    if not main_model_code and models:
+        main_model_code = models[0]["model_code"]
+
+    return {
+        "ok": True,
+        "form_id": form_id,
+        "form_name": str(raw.get("formName") or detail_page.get("formName") or ""),
+        "main_model_code": main_model_code,
+        "all_model_codes": raw.get("allModelCodes") or [],
+        "models": models,
+        "components": comps,
+        "model_count": len(models),
+        "component_count": len(comps),
+    }
+
+
 def _build_perm_payload_from_simple_rules(
     app_id: str,
     form_code: str,
