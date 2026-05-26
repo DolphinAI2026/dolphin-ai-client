@@ -5431,11 +5431,24 @@ async def build_apaas_feature_from_spec(
             comp["lengthLimit"] = max_length
         form_components.append(comp)
 
+    # 反查应用名 — 模型 useScope 字段需要这个 (否则模型显"全部应用" 而非"图书借阅管理系统")
+    ok_app, app_detail = await _with_client(env_id, "查应用",
+        lambda c: c.query_app_detail(apaas_app_id.strip()))
+    app_name_for_scope = ""
+    if ok_app and isinstance(app_detail, dict):
+        app_name_for_scope = str(app_detail.get("appName") or "").strip()
+    # 兜底: 拿 feature_name 当 scope (但更可能撞限制)
+    if not app_name_for_scope:
+        app_name_for_scope = feature_name
+
     model_payload = {
         "appId": apaas_app_id.strip(),
         "dataModels": [{
+            "appId": apaas_app_id.strip(),
             "modelName": feature_name, "modelCode": feature_code,
             "modelDescription": f"{feature_name} 数据模型",
+            "useScope": app_name_for_scope,   # 关键: 锚定到当前应用, 否则显"全部应用"
+            "internalResource": True,
             "fields": model_fields,
         }],
     }
