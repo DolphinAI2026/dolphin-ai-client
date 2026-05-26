@@ -175,16 +175,37 @@
 
       <!-- 平台配置 iframe + 原生菜单 sidebar（v-show 保持不销毁） -->
       <div v-show="SHOW_PLATFORM_CONFIG && activeView === 'platform'" class="platform-shell">
-        <!-- 左侧原生菜单 sidebar (B-3, 2026-05-25) — 跟平台 iframe 联动: 点菜单切 iframe -->
+        <!-- PR2b (SPEC v2 §1.1) — 左侧 SectionNav (200px) 替换原 ApaasMenuSidebar.
+             ApaasMenuSidebar 改作 ui section 内 sub-component (v-show 切显). -->
+        <SectionNav
+          v-if="existingAppId && platformIframeAppId === existingAppId && !legacyMode"
+          :current-section="currentSection"
+          :current-tab="currentSectionTab"
+          @switch-section="onSwitchSection"
+        />
+        <!-- 原 ApaasMenuSidebar — 现在仅 ui section + menus tab 时显, 作为 ui sub-component -->
         <ApaasMenuSidebar
-          v-if="existingAppId && platformIframeAppId === existingAppId"
+          v-if="existingAppId && platformIframeAppId === existingAppId
+                && (legacyMode || (currentSection === 'ui' && currentSectionTab === 'menus'))"
           ref="apaasMenuSidebarRef"
           :app-id="existingAppId"
           :selected-menu-id="selectedApaasMenuId"
           @menu-selected="onApaasMenuSelected"
           @menus-loaded="onApaasMenusLoaded"
         />
-        <div class="platform-iframe-container">
+        <!-- extension section — 显 ExtensionSectionPanel 替代 iframe (PR6 已实现) -->
+        <div
+          v-if="!legacyMode && currentSection === 'extension' && existingAppId"
+          class="platform-iframe-container"
+          style="padding: 24px; overflow: auto"
+        >
+          <ExtensionSectionPanel
+            :app-id="existingAppId"
+            :apaas-app-id="store.currentApp?.apaas_app_id || ''"
+            :env-id="store.currentApp?.platform_env_id || 0"
+          />
+        </div>
+        <div v-else class="platform-iframe-container">
           <div v-if="platformLoading" class="platform-loading">
             <span class="loading-spinner">⟳</span> 加载平台配置...
           </div>
@@ -752,6 +773,8 @@ import {
 } from '@/utils/app'
 import { buildPlatformProxyEntryUrl, buildPlatformProxyMenuUrl, repairPlatformIframe } from '@/utils/platformIframe'
 import ApaasMenuSidebar from '@/components/ApaasMenuSidebar.vue'
+import SectionNav from '@/components/v2/SectionNav.vue'
+import ExtensionSectionPanel from '@/components/v2/ExtensionSectionPanel.vue'
 import type { ConversationCreate, Message } from '@/types'
 import TopBar from '@/components/TopBar.vue'
 import WorkbenchShell from '@/components/WorkbenchShell.vue'
@@ -2204,6 +2227,56 @@ function toggleAssistant() {
 // ── 平台配置 iframe ──
 const platformIframeUrl = ref('')
 const platformIframeKey = ref(0)
+
+// PR2b (SPEC v2 §1.1) — SectionNav 状态
+// 5 section: data/ui/logic/permission/extension, 默认 ui (跟以前 ApaasMenuSidebar 行为对齐)
+// legacyMode: ?legacy=1 OR window 宽度 < 1280 → 老 ApaasMenuSidebar 直显, SectionNav 隐藏
+const SECTION_STORAGE_KEY = 'apaas-section-v1'
+const _initSection = (() => {
+  try { return localStorage.getItem(SECTION_STORAGE_KEY) || 'ui' } catch { return 'ui' }
+})()
+const currentSection = ref<string>(_initSection)
+const currentSectionTab = ref<string>('menus')
+const legacyMode = ref<boolean>((() => {
+  try {
+    if (new URLSearchParams(window.location.search).get('legacy') === '1') return true
+    return window.innerWidth < 1280
+  } catch { return false }
+})())
+function onSwitchSection(section: string, tab?: string) {
+  // SPEC v2 Issue #6: 切 section 前提示用户保存(dirty editor) — 通过 postMessage 探 iframe.
+  // P0 简化: 直接切, 后续 PR2c 在 ConfigAssistant 接入 dirty probe.
+  currentSection.value = section
+  if (tab) currentSectionTab.value = tab
+  else {
+    // 切到新 section 时 sub-tab 重置到默认 (跟 SectionNav 内部默认对齐)
+    const defaults: Record<string, string> = {
+      data: 'models',
+      ui: 'menus',
+      logic: 'processes',
+      permission: 'roles',
+      extension: 'devkits',
+    }
+    currentSectionTab.value = defaults[section] || ''
+  }
+  try { localStorage.setItem(SECTION_STORAGE_KEY, section) } catch { /* private mode */ }
+}
+// 监听窗口 resize — 突然变窄退回 legacy 模式 (但 ?legacy=1 强制不可逆)
+const _hasLegacyQuery = (() => {
+  try { return new URLSearchParams(window.location.search).get('legacy') === '1' } catch { return false }
+})()
+let _resizeHandler: (() => void) | null = null
+if (typeof window !== 'undefined') {
+  _resizeHandler = () => {
+    if (_hasLegacyQuery) return
+    legacyMode.value = window.innerWidth < 1280
+  }
+  window.addEventListener('resize', _resizeHandler)
+}
+onBeforeUnmount(() => {
+  if (_resizeHandler) window.removeEventListener('resize', _resizeHandler)
+})
+
 // 2026-05-26: sidebar 引用 — AI 完成调整后联动 reload, 让新建菜单立刻显
 const apaasMenuSidebarRef = ref<{ reload: () => Promise<void> } | null>(null)
 function refreshPlatformAndSidebar() {
