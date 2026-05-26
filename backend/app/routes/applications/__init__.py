@@ -2248,6 +2248,56 @@ async def deploy_status(
 # ============================================================================
 
 
+# PR2c (SPEC v2 §1.2): section-aware system prompt 软引导.
+# 提取到模块级让单测可直接调 _build_section_hint, 避免触发整个 _config_chat_event_stream.
+_CONFIG_CHAT_SECTION_HINTS: dict[str, str] = {
+    "data": (
+        "## 用户当前焦点：📊 数据 section\n"
+        "用户当前在「数据」section 看模型 / 字段 / 字典. 优先围绕模型结构 / 字段属性 / 字典选项展开.\n"
+        "工具优先级提示 (不锁): list_apaas_app_models / update_apaas_model_field / list_apaas_app_dicts / add_dict_option.\n"
+        "若用户问跨 section 的事 (改菜单 / 改流程 / 改权限), 直接调对应工具 — 不要拦, 不要建议\"先切到 X section\". 仅在歧义时反问.\n\n"
+    ),
+    "ui": (
+        "## 用户当前焦点：🎨 界面 section\n"
+        "用户当前在「界面」section 看菜单 / 表单 / 列表. 优先围绕导航结构 / 表单组件 / 列表视图展开.\n"
+        "工具优先级提示 (不锁): list_apaas_app_menus / add_apaas_menu / list_apaas_form_components / update_apaas_form_component.\n"
+        "若用户问跨 section 的事 (改字段 / 改流程 / 改权限), 直接调对应工具 — 不要拦, 不要建议\"先切到 X section\". 仅在歧义时反问.\n\n"
+    ),
+    "logic": (
+        "## 用户当前焦点：⚙️ 逻辑 section\n"
+        "用户当前在「逻辑」section 看流程 / 业务事件 / 触发器. 优先围绕审批流 / 流程节点 / 业务事件钩子展开.\n"
+        "工具优先级提示 (不锁): list_apaas_app_processes / set_apaas_app_process / list_apaas_business_events / create_business_event.\n"
+        "若用户问跨 section 的事 (改字段 / 改菜单 / 改权限), 直接调对应工具 — 不要拦, 不要建议\"先切到 X section\". 仅在歧义时反问.\n\n"
+    ),
+    "permission": (
+        "## 用户当前焦点：🔒 权限 section\n"
+        "用户当前在「权限」section 看角色 / 菜单授权 / 字段授权. 优先围绕角色定义 / 菜单可见性 / 字段读写权限展开.\n"
+        "工具优先级提示 (不锁): list_apaas_app_roles / create_apaas_app_roles / grant_app_access.\n"
+        "若用户问跨 section 的事 (改字段 / 改菜单 / 改流程), 直接调对应工具 — 不要拦, 不要建议\"先切到 X section\". 仅在歧义时反问.\n\n"
+    ),
+    "extension": (
+        "## 用户当前焦点：🧩 扩展 section\n"
+        "用户当前在「扩展」section 看自开发组件 / 自开发代码节点 / 平台资源. 这块在 ai-builder 内不直接操作 —\n"
+        "用户要扩展开发需跳走 ai-coding 或平台资源管理页. 此 section 下用户更可能问\"哪些扩展可用 / 怎么开发\"\n"
+        "而不是\"帮我改个字段\". 优先工具: list_application_dev_kits (查应用关联扩展) / list_workspaces (查可用 ai-coding 工作空间).\n"
+        "若用户问改字段 / 改菜单 / 改流程 / 改权限, 直接调对应工具 — 不要拦. 仅在歧义时反问.\n\n"
+    ),
+}
+
+
+def _build_section_hint(section: str | None) -> str:
+    """根据用户当前 section 返软引导 prompt 片段.
+
+    PR2c (SPEC v2 §1.2): 5 个白名单 section → 注入 focus hint;
+    任何其他值 (含 None / 空串 / 大小写不一致 / 未知 section) → 返空串,
+    跟旧行为兼容. 保守容错避免老前端 / agent 测试乱传字段.
+    """
+    if not section:
+        return ""
+    key = section.strip().lower()
+    return _CONFIG_CHAT_SECTION_HINTS.get(key, "")
+
+
 class ConfigChatReq(BaseModel):
     message: str  # 本轮用户自然语言诉求
     history: list[dict] = []  # 之前的对话 [{role: 'user'|'assistant', content: str}]
@@ -2786,45 +2836,10 @@ async def _config_chat_event_stream(
         })
 
         # SYSTEM prompt — 跟同步版完全一致, 加 PR2c 软 section hint.
+        # PR2c (SPEC v2 §1.2): section hint 提取到模块级 _build_section_hint 让单测可直接验.
         env_id_hint = app.platform_env_id or "(未绑定 platform_env)"
         apaas_app_id_hint = app.apaas_app_id or "(未部署到 apaas)"
-        # PR2c (SPEC v2 §1.2): section-aware 软引导 — 不切白名单, 只 hint focus 区.
-        # 任何非白名单值都视为 None 跳过, 保守容错避免老前端 / agent 测试乱传字段.
-        _SECTION_HINTS: dict[str, str] = {
-            "data": (
-                "## 用户当前焦点：📊 数据 section\n"
-                "用户当前在「数据」section 看模型 / 字段 / 字典. 优先围绕模型结构 / 字段属性 / 字典选项展开.\n"
-                "工具优先级提示 (不锁): list_apaas_app_models / update_apaas_model_field / list_apaas_app_dicts / add_dict_option.\n"
-                "若用户问跨 section 的事 (改菜单 / 改流程 / 改权限), 直接调对应工具 — 不要拦, 不要建议\"先切到 X section\". 仅在歧义时反问.\n\n"
-            ),
-            "ui": (
-                "## 用户当前焦点：🎨 界面 section\n"
-                "用户当前在「界面」section 看菜单 / 表单 / 列表. 优先围绕导航结构 / 表单组件 / 列表视图展开.\n"
-                "工具优先级提示 (不锁): list_apaas_app_menus / add_apaas_menu / list_apaas_form_components / update_apaas_form_component.\n"
-                "若用户问跨 section 的事 (改字段 / 改流程 / 改权限), 直接调对应工具 — 不要拦, 不要建议\"先切到 X section\". 仅在歧义时反问.\n\n"
-            ),
-            "logic": (
-                "## 用户当前焦点：⚙️ 逻辑 section\n"
-                "用户当前在「逻辑」section 看流程 / 业务事件 / 触发器. 优先围绕审批流 / 流程节点 / 业务事件钩子展开.\n"
-                "工具优先级提示 (不锁): list_apaas_app_processes / set_apaas_app_process / list_apaas_business_events / create_business_event.\n"
-                "若用户问跨 section 的事 (改字段 / 改菜单 / 改权限), 直接调对应工具 — 不要拦, 不要建议\"先切到 X section\". 仅在歧义时反问.\n\n"
-            ),
-            "permission": (
-                "## 用户当前焦点：🔒 权限 section\n"
-                "用户当前在「权限」section 看角色 / 菜单授权 / 字段授权. 优先围绕角色定义 / 菜单可见性 / 字段读写权限展开.\n"
-                "工具优先级提示 (不锁): list_apaas_app_roles / create_apaas_app_roles / grant_app_access.\n"
-                "若用户问跨 section 的事 (改字段 / 改菜单 / 改流程), 直接调对应工具 — 不要拦, 不要建议\"先切到 X section\". 仅在歧义时反问.\n\n"
-            ),
-            "extension": (
-                "## 用户当前焦点：🧩 扩展 section\n"
-                "用户当前在「扩展」section 看自开发组件 / 自开发代码节点 / 平台资源. 这块在 ai-builder 内不直接操作 —\n"
-                "用户要扩展开发需跳走 ai-coding 或平台资源管理页. 此 section 下用户更可能问\"哪些扩展可用 / 怎么开发\"\n"
-                "而不是\"帮我改个字段\". 优先工具: list_application_dev_kits (查应用关联扩展) / list_workspaces (查可用 ai-coding 工作空间).\n"
-                "若用户问改字段 / 改菜单 / 改流程 / 改权限, 直接调对应工具 — 不要拦. 仅在歧义时反问.\n\n"
-            ),
-        }
-        _section_key = (payload.section or "").strip().lower() if payload.section else ""
-        section_hint = _SECTION_HINTS.get(_section_key, "")
+        section_hint = _build_section_hint(payload.section)
         system_prompt = (
             "你是 aPaaS 应用的「配置调整助手」（部署后的精细化配置编辑器）。\n\n"
             f"{section_hint}"
