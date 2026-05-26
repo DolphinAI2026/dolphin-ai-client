@@ -80,6 +80,23 @@ export const extensionApi = {
    *
    * 后端 SSE endpoint 走 token query param (PR6 Critical #1) — EventSource 无法
    * set Authorization header. 后端 401 时不再 retry, 业务错由 onError 上报调用方.
+   *
+   * ⚠️ Security 警告 (PR6 reviewer P2 #3 — token in URL):
+   * JWT 走 query param 拼进 URL 会泄漏到 3 个地方:
+   *   1. nginx access log — 默认 log_format 含 $request, JWT 入文件 + 聚合到
+   *      ELK/Loki, 14 天回看可见
+   *   2. browser history — Chrome/Safari URL bar 历史保留 token, 共享设备风险
+   *   3. Referer header — SSE 之后跳转, 本页 URL 可能漏给第三方域名
+   *
+   * Trial 阶段接受此风险 (内部使用 + JWT 24h 短期). P1 升级路径:
+   *   - **首选**: 后端加 /auth/sse-token (60s TTL 短票) → 改本函数先 fetch
+   *     /auth/sse-token 拿短票, 再用短票连 SSE. 短票单次使用后吊销, 主 JWT 不入 URL.
+   *   - **备选 A**: cookie-based auth (HttpOnly+SameSite+Secure) — EventSource 自动
+   *     带 cookie, 不用 query param. 但要改 backend + 前端 localStorage 双轨改造.
+   *   - **备选 B**: fetch + ReadableStream 自己实现 SSE 解析 (能 set Authorization
+   *     header). 改动 ~200 行, 重连退避要重写, 不推荐.
+   *   - **运维侧 quick fix**: nginx log_format 屏蔽 ?token=* + `<meta name=referrer
+   *     content=no-referrer>` 防 Referer 泄漏. 治标, 治不了 history.
    */
   openUpdateEventStream(
     appId: number,

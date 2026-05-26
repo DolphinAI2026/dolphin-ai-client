@@ -53,6 +53,32 @@ _subscribers: dict[int, list[asyncio.Queue]] = {}
 _subscribers_lock = asyncio.Lock()
 
 
+# ---------------------------------------------------------------------------
+# Republish 幂等去重 — PR6 reviewer P2 #2
+# ---------------------------------------------------------------------------
+# 同 app_id 5s 窗口内重复"立即重发"请求只触发第一次实际 deploy, 后续 dedupe.
+# 用 monotonic time 防系统时钟跳变 + dict 写访问的 asyncio.Lock 防 race.
+# 进程内单实例 — 多 pod 时再换成 redis SETNX 或 DB 行级锁.
+_REPUBLISH_DEDUP_WINDOW_S = 5.0
+_republish_last_ts: dict[int, float] = {}
+_republish_dedup_lock = asyncio.Lock()
+
+
+async def _should_dedup_republish(app_id: int) -> tuple[bool, float]:
+    """检查 app_id 是否在去重窗口内. 返回 (是否 dedup, 距上次秒数).
+
+    一并记录本次 ts (无论是否 dedup) — 这样高频请求里只有第一个能 break out
+    of the window, 同时也防止 deploy 实际很慢时第二次请求滑过窗口.
+    """
+    now = time.monotonic()
+    async with _republish_dedup_lock:
+        last = _republish_last_ts.get(app_id)
+        if last is not None and (now - last) < _REPUBLISH_DEDUP_WINDOW_S:
+            return True, now - last
+        _republish_last_ts[app_id] = now
+        return False, 0.0
+
+
 async def _subscribe(app_id: int) -> asyncio.Queue:
     """注册一个新 subscriber, 返回它的事件队列."""
     queue: asyncio.Queue = asyncio.Queue(maxsize=64)
@@ -280,6 +306,25 @@ async def extension_update_events(
     2026-05-26 (PR6 reviewer Critical): EventSource 不支持 set Authorization
     header → 走 token query param 模式 (跟 incremental/execute-stream 一致). 调用方:
       new EventSource(`/api/applications/${id}/extension-update-events?token=${jwt}`)
+
+    ⚠️ Security 警告 (PR6 reviewer P2 #3 — token in URL):
+    JWT 走 query param 进 URL 会泄漏到 3 个地方:
+      1. nginx access log — 默认配置 log_format 含 $request, JWT 入文件 + 落日志
+         聚合系统 (ELK / Loki), 14 天回看可见
+      2. browser history — Chrome/Safari URL bar 历史保留 token, 共享设备风险
+      3. Referer header — SSE 之后页面跳转, 上游 URL 进 Referer 头被泄给第三方
+
+    Trial 阶段接受此风险 (内部使用 + JWT 24h 短期). P1 升级路径:
+      - **首选**: 用 /auth/sse-token 单独发 60s TTL 短票, 单次使用后吊销, 不复用
+        主 JWT. 后端校验 SSE 时只接受 sse_token type. (改动量: 1 endpoint + 前端
+        在 openUpdateEventStream 内先调 /auth/sse-token 再连 SSE)
+      - **备选 A**: nginx 配 `log_format` 屏蔽 ?token=* (`mask_token` 模块或 Lua),
+        + 前端 `<meta name=referrer content=no-referrer>`. 治标不治本.
+      - **备选 B**: 后端代理改走 cookie-based auth (HttpOnly + SameSite=strict +
+        Secure), nginx + EventSource 都自动带 cookie. 但前端 cookie 跟现有
+        localStorage JWT 双轨, 改动量大.
+      - **备选 C**: 前端用 fetch + ReadableStream 替 EventSource (能 set
+        Authorization header). 但要自己实现 SSE 协议解析 + 重连退避, 改动 ~200 行.
     """
     # PR6 Critical: SSE 走 query param 验证 token (EventSource 不能 set header)
     if not token:
@@ -352,9 +397,13 @@ async def notify_extension_update(
 
     跨进程 (ai-coding 在另一个 backend pod 或独立服务) 时由 agent 发起 HTTP POST.
     同进程 (ai-coding 是 backend 内部模块) 可直接调 publish_extension_update() 函数.
+
+    2026-05-26 (PR6 reviewer P2 #1): notify 是写动作 (向所有订阅者广播 → 触发前端
+    UI 状态变化), 必须 EDIT 权限. viewer 调本 endpoint 直接 403.
     """
-    # 检 app 存在 + 权限 (写权限, 因为这是触发动作的"发起者"端要求, 但只读侧才会订)
-    await _load_app_and_env(app_id, ctx, db)
+    # _load_app_and_env 已经做了 VIEW 检查 + app 存在性, 这里追加 EDIT 卡 viewer.
+    app, _env = await _load_app_and_env(app_id, ctx, db)
+    await check_resource_permission(ctx, db, app, "application", Action.EDIT)
     delivered = await publish_extension_update(app_id, body.event_type, body.payload)
     return NotifyExtensionUpdateResponse(ok=True, delivered=delivered)
 
@@ -369,6 +418,10 @@ async def republish_application(
 
     等价 MCP `republish_apaas_app(env_id, apaas_app_id)`, 直接调 apaas_client.deploy_app.
     版本号策略: 取 currentVersion → 失败时 patch+1 重试.
+
+    2026-05-26 (PR6 reviewer P2 #2): 加 5s 幂等窗口防 race. 两个客户端同时点
+    "立即重发" → 第二次直接返 deduped=True, 不再调平台 deploy 浪费版本号.
+    用 _should_dedup_republish() in-memory dict (单进程 P0 假设, 多 pod 时换 redis).
     """
     app, env = await _load_app_and_env(app_id, ctx, db)
     await check_resource_permission(ctx, db, app, "application", Action.EDIT)
@@ -377,6 +430,15 @@ async def republish_application(
         return RepublishResponse(ok=False, note="应用尚未部署到平台, 无法重发")
     if env is None:
         return RepublishResponse(ok=False, note="租户尚未配置 platform env")
+
+    # PR6 reviewer P2 #2: 5s 幂等窗口 — 防双击/并发"立即重发"撞两次 deploy.
+    deduped, since = await _should_dedup_republish(app_id)
+    if deduped:
+        logger.info(f"republish dedup app_id={app_id} since={since:.2f}s")
+        return RepublishResponse(
+            ok=True,
+            note=f"5 秒内重发已合并 (距上次 {since:.1f}s, 平台只会处理首次请求)",
+        )
 
     try:
         token = await _ensure_env_token(env, db)
