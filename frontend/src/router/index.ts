@@ -227,6 +227,43 @@ const router = createRouter({
       component: () => import('@/views/ExtensionSectionDemoPage.vue'),
       meta: { requiresAuth: true }
     },
+    // design-v4 主 nav stub 页 (P3 接入前的占位)
+    {
+      path: '/datasources',
+      name: 'Datasources',
+      component: () => import('@/views/stubs/DatasourcesView.vue'),
+      meta: { requiresAuth: true, navExpanded: true }
+    },
+    {
+      path: '/apis',
+      name: 'Apis',
+      component: () => import('@/views/stubs/ApisView.vue'),
+      meta: { requiresAuth: true, navExpanded: true }
+    },
+    {
+      path: '/docs',
+      name: 'Docs',
+      component: () => import('@/views/stubs/DocsView.vue'),
+      meta: { requiresAuth: true, navExpanded: true }
+    },
+    {
+      path: '/reports',
+      name: 'Reports',
+      component: () => import('@/views/stubs/ReportsView.vue'),
+      meta: { requiresAuth: true, navExpanded: true }
+    },
+    {
+      path: '/models',
+      name: 'Models',
+      component: () => import('@/views/stubs/ModelsView.vue'),
+      meta: { requiresAuth: true, navExpanded: true }
+    },
+    {
+      path: '/manage',
+      name: 'Manage',
+      component: () => import('@/views/stubs/ManageView.vue'),
+      meta: { requiresAuth: true, navExpanded: true }
+    },
     {
       path: '/platform-envs',
       name: 'PlatformEnvs',
