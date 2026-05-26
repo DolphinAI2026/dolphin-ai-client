@@ -182,10 +182,10 @@
           :current-tab="topTab"
           @switch-tab="onTopTabSwitch"
         />
-        <!-- sub-tab chip strip: 水平 chip, 顶部 tab 下方一行 (替代 200px 独立 sub-nav). -->
-        <!-- 2026-05-26 design-v3 修: 取消独立 sub-nav 列, sub-tab 改 chip 横排. -->
+        <!-- sub-tab chip strip: 顶部 tab 下方一行. 2026-05-26: 设计 tab 不显
+             chip (改用左侧菜单 list + 右侧 designer 4 sub-tab). 其他 tab 保留. -->
         <div
-          v-if="existingAppId && platformIframeAppId === existingAppId && !legacyMode"
+          v-if="existingAppId && platformIframeAppId === existingAppId && !legacyMode && topTab !== 'design'"
           class="sub-chip-strip"
         >
           <button
@@ -198,18 +198,12 @@
             {{ sub.label }}
           </button>
         </div>
-        <!-- tab content row: ApaasMenuSidebar | SectionContentList | iframe -->
+        <!-- tab content row -->
         <div class="platform-shell-row">
-          <AppConfigSubNav
-            v-if="false"
-            :top-tab="topTab"
-            :current-sub="currentSectionTab"
-            @switch-sub="onSubNavSwitch"
-          />
-          <!-- 设计 tab + menus sub: 走老 ApaasMenuSidebar (功能成熟) -->
+          <!-- 设计 tab: 左侧 ApaasMenuSidebar 长显 (不绑 sub-tab) -->
           <ApaasMenuSidebar
             v-if="existingAppId && platformIframeAppId === existingAppId
-                  && (legacyMode || (topTab === 'design' && currentSectionTab === 'menus'))"
+                  && (legacyMode || topTab === 'design')"
             ref="apaasMenuSidebarRef"
             :app-id="existingAppId"
             :selected-menu-id="selectedApaasMenuId"
@@ -243,31 +237,77 @@
               <div style="font-size: 13px;">P1 接入 — 用顶部 [历史] CTA 可看部署记录</div>
             </div>
           </div>
-          <!-- 2026-05-26 design-v3: native panel 替 iframe -->
+          <!-- 2026-05-26 design-v3 重构: native panel 替 iframe -->
+          <!-- 设计 tab: 选中菜单后显 designer shell (内 4 sub-tab: 表单/列表/流程/页面) -->
+          <div
+            v-else-if="!legacyMode && topTab === 'design' && existingAppId && selectedApaasMenuId"
+            class="platform-iframe-container mdsh"
+          >
+            <!-- designer 内顶部 4 sub-tab -->
+            <div class="mdsh-subnav">
+              <div class="mdsh-subnav-info">
+                <span class="mdsh-menu-name">{{ selectedApaasMenuName || '选中菜单' }}</span>
+                <span v-if="selectedApaasMenuFormId" class="mdsh-menu-code mono">{{ selectedApaasMenuFormId }}</span>
+              </div>
+              <div class="mdsh-subnav-tabs" role="tablist">
+                <button
+                  v-for="sub in DESIGNER_SUBS"
+                  :key="sub.code"
+                  class="mdsh-subnav-tab"
+                  :class="{ active: designerSub === sub.code }"
+                  role="tab"
+                  :aria-selected="designerSub === sub.code"
+                  @click="designerSub = sub.code"
+                >
+                  {{ sub.label }}
+                </button>
+              </div>
+            </div>
+            <!-- designer 内容 -->
+            <div class="mdsh-body">
+              <FormDesignerPanel
+                v-if="designerSub === 'form'"
+                :app-id="existingAppId"
+                :menu-id="selectedApaasMenuId"
+                :menu-name="selectedApaasMenuName"
+                :form-id="selectedApaasMenuFormId"
+              />
+              <ListDesignerPanel
+                v-else-if="designerSub === 'list'"
+                :app-id="existingAppId"
+                :menu-id="selectedApaasMenuId"
+                :menu-name="selectedApaasMenuName"
+                :form-id="selectedApaasMenuFormId"
+              />
+              <ProcessDesignerPanel
+                v-else-if="designerSub === 'process'"
+                :app-id="existingAppId"
+                :menu-id="selectedApaasMenuId"
+                :form-id="selectedApaasMenuFormId"
+              />
+              <div v-else-if="designerSub === 'page'" class="mdsh-placeholder">
+                <div class="mdsh-placeholder-icon">⚙️</div>
+                <h3>页面设置</h3>
+                <p>设置该菜单的标题 / 图标 / 默认视图 / 显示规则.</p>
+                <p class="hint">P1 接入 — 当前请用配置助手对话.</p>
+              </div>
+            </div>
+          </div>
+          <!-- 设计 tab + 未选菜单: 空态提示 -->
+          <div
+            v-else-if="!legacyMode && topTab === 'design' && existingAppId && !selectedApaasMenuId"
+            class="platform-iframe-container mdsh-empty"
+          >
+            <div class="mdsh-empty-icon">👈</div>
+            <h3>选择左侧菜单开始设计</h3>
+            <p>从左侧应用菜单列表点击一个菜单, 这里显示该菜单的<strong>表单 / 列表 / 流程 / 页面</strong>设计.</p>
+          </div>
           <!-- 流程 tab + 流程 sub: ProcessDesignerPanel (P0 mock 4 节点 demo, x6 driven) -->
           <ProcessDesignerPanel
             v-else-if="!legacyMode && topTab === 'logic' && currentSectionTab === 'processes' && existingAppId"
             class="platform-iframe-container"
             :app-id="existingAppId"
             :menu-id="selectedApaasMenuId || undefined"
-            :form-id="selectedApaasMenuFormId"
-          />
-          <!-- 设计 tab + 列表 sub + selectedMenu: ListDesignerPanel -->
-          <ListDesignerPanel
-            v-else-if="!legacyMode && topTab === 'design' && currentSectionTab === 'lists' && existingAppId && selectedApaasMenuId"
-            class="platform-iframe-container"
-            :app-id="existingAppId"
-            :menu-id="selectedApaasMenuId || undefined"
-            :menu-name="selectedApaasMenuName"
-            :form-id="selectedApaasMenuFormId"
-          />
-          <!-- 设计 tab + forms/menus 点中某 menu: 显 FormDesignerPanel -->
-          <FormDesignerPanel
-            v-else-if="!legacyMode && topTab === 'design' && existingAppId && selectedApaasMenuId"
-            class="platform-iframe-container"
-            :app-id="existingAppId"
-            :menu-id="selectedApaasMenuId || undefined"
-            :menu-name="selectedApaasMenuName"
             :form-id="selectedApaasMenuFormId"
           />
           <!-- 数据 tab + 数据模型 sub: 选中模型显字段表格 -->
@@ -2422,6 +2462,16 @@ const TOP_TAB_SUBS: Record<string, Array<{ code: string; label: string }>> = {
   ],
 }
 const currentSubTabsForTop = computed(() => TOP_TAB_SUBS[topTab.value] || [])
+
+// 2026-05-26 设计 tab 内部 designer sub-nav (跟 apaas form designer 顶部 4 tab 对齐).
+// 用户在左侧 ApaasMenuSidebar 选中菜单后, designer 主区域顶部 4 tab 切对应 panel.
+const DESIGNER_SUBS = [
+  { code: 'form', label: '表单设计' },
+  { code: 'list', label: '列表设计' },
+  { code: 'process', label: '流程设计' },
+  { code: 'page', label: '页面设置' },
+] as const
+const designerSub = ref<'form' | 'list' | 'process' | 'page'>('form')
 
 // P1-N6: 这些 sub-tab 走 native master-detail panel — 不需要再显 SectionContentList.
 const isNativeMasterDetailSubTab = computed(() => {
@@ -11567,6 +11617,145 @@ html[data-theme="light"] .msg-attachment-chip {
   background: var(--brand);
   color: #fff;
   border-color: var(--brand);
+}
+
+/* 2026-05-26 设计 tab designer shell (.mdsh — Menu Designer SHell) */
+.mdsh {
+  display: flex;
+  flex-direction: column;
+  background: var(--bg);
+  font-family: var(--font-sans);
+  overflow: hidden;
+}
+.mdsh-subnav {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 12px 24px;
+  background: var(--surface);
+  border-bottom: 1px solid var(--line);
+  flex-shrink: 0;
+}
+.mdsh-subnav-info {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+}
+.mdsh-menu-name {
+  font-size: 15px;
+  font-weight: 600;
+  color: var(--text);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.mdsh-menu-code {
+  font-family: var(--font-mono);
+  font-size: 11.5px;
+  color: var(--text-3);
+  background: var(--surface-2);
+  padding: 2px 6px;
+  border-radius: 4px;
+}
+.mdsh-subnav-tabs {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  background: var(--surface-2);
+  padding: 3px;
+  border-radius: 8px;
+  flex-shrink: 0;
+}
+.mdsh-subnav-tab {
+  height: 28px;
+  padding: 0 14px;
+  background: transparent;
+  border: none;
+  border-radius: 6px;
+  font-size: 13px;
+  font-family: inherit;
+  color: var(--text-3);
+  cursor: pointer;
+  white-space: nowrap;
+  transition: background 0.12s, color 0.12s;
+  outline: none;
+}
+.mdsh-subnav-tab:hover {
+  color: var(--text);
+}
+.mdsh-subnav-tab.active {
+  background: var(--surface);
+  color: var(--brand);
+  font-weight: 600;
+  box-shadow: 0 1px 2px rgba(11,27,63,0.05);
+}
+.mdsh-body {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+.mdsh-body > * {
+  flex: 1;
+  min-height: 0;
+}
+.mdsh-placeholder {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  text-align: center;
+  padding: 48px;
+  color: var(--text-3);
+  gap: 10px;
+}
+.mdsh-placeholder-icon {
+  font-size: 48px;
+}
+.mdsh-placeholder h3 {
+  margin: 0;
+  font-size: 18px;
+  font-weight: 600;
+  color: var(--text);
+}
+.mdsh-placeholder p {
+  margin: 0;
+  font-size: 14px;
+}
+.mdsh-placeholder .hint {
+  font-size: 12.5px;
+  color: var(--text-4);
+}
+
+/* 设计 tab 未选菜单空态 */
+.mdsh-empty {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  text-align: center;
+  padding: 48px;
+  color: var(--text-3);
+  gap: 12px;
+  background: var(--bg);
+  font-family: var(--font-sans);
+}
+.mdsh-empty-icon {
+  font-size: 56px;
+}
+.mdsh-empty h3 {
+  margin: 0;
+  font-size: 20px;
+  font-weight: 600;
+  color: var(--text);
+}
+.mdsh-empty p {
+  margin: 0;
+  font-size: 14px;
+  max-width: 460px;
 }
 .platform-iframe-container {
   flex: 1; display: flex; flex-direction: column;
