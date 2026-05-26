@@ -4485,6 +4485,92 @@ async def update_apaas_form_component(
     return result
 
 
+@mcp.tool()
+async def bind_apaas_form_field_to_dict(
+    env_id: int,
+    apaas_app_id: str,
+    form_id: str,
+    field_label: str,
+    dict_code: str,
+) -> dict:
+    """把表单字段的"数据来源"绑定到指定数据字典 (切组件 + source.type + 选项三件套).
+
+    适用场景: build_apaas_feature_from_spec 时漏了 dict_options, 后期用本工具补绑.
+    或者用户手动建的字段, 想绑字典.
+
+    单纯 update_apaas_form_component(updates={dictionaryChooseOptions:[...]}) 不够 —
+    平台的"数据来源"由 source.type 决定 (INPUT_TYPE=输入值, DICTIONARY_TYPE=数据字典),
+    缺 source 字段平台仍渲染为"输入值". 本工具会:
+      1. 反查 dict_code 拿 dictionary_id 和真实 options
+      2. 把组件类型改为 FORM_SELECT_INPUT_SINGLE (若不是)
+      3. 一并送 source + chooseOptions + dictionaryChooseOptions 给 update_form_component
+
+    前置:
+      - dict_code: 已经存在的字典 (没有就先 create_apaas_app_dict 建好)
+      - field_label: 字段精确 label (区分大小写, 跟 list_apaas_form_components 拿一致)
+
+    返回: {ok, dictionary_id, options_count, message}
+    """
+    if not (apaas_app_id.strip() and form_id.strip()
+            and field_label.strip() and dict_code.strip()):
+        return {"ok": False, "error_code": "INVALID_PARAMS",
+                "message": "apaas_app_id+form_id+field_label+dict_code 都必填"}
+
+    # 反查字典 — 拿 id + options
+    ok_dicts, dicts = await _with_client(env_id, "查字典",
+        lambda c: c.query_dicts(apaas_app_id.strip()))
+    if not ok_dicts:
+        return dicts
+    target_dict = None
+    for d in (dicts or []):
+        if isinstance(d, dict) and str(d.get("dictionaryCode") or "") == dict_code.strip():
+            target_dict = d
+            break
+    if not target_dict:
+        return {"ok": False, "error_code": "DICT_NOT_FOUND",
+                "message": f"字典 code={dict_code} 在应用里不存在. 先 create_apaas_app_dict 建好"}
+    dict_id = str(target_dict.get("id") or "")
+    options_raw = target_dict.get("dictionaryOptions") or []
+    # 构建 chooseOptions / dictionaryChooseOptions (平台 chooseOptions 跟 dictionaryChooseOptions
+    # 实际是同款 schema, 平台保存时分别用)
+    choose_options = []
+    for o in options_raw:
+        if isinstance(o, dict):
+            choose_options.append({
+                "id": o.get("optionCode") or o.get("code") or "",
+                "label": o.get("optionName") or o.get("name") or "",
+                "labelI18nAssociated": False,
+                "color": "#027AFF",
+                "status": "ENABLE",
+                "displayOrder": o.get("displayOrder") or 0,
+            })
+
+    # 构建 updates: 关键是 source 切 DICTIONARY_TYPE
+    updates = {
+        "componentType": "FORM_SELECT_INPUT_SINGLE",
+        "source": {"type": "DICTIONARY_TYPE", "id": dict_id},
+        "chooseOptions": choose_options,
+        "dictionaryChooseOptions": choose_options,
+    }
+
+    ok, raw = await _with_client(env_id, "绑字典",
+        lambda c: c.update_form_component(
+            apaas_app_id.strip(), form_id.strip(), field_label.strip(), updates))
+    if not ok:
+        return raw
+
+    return {
+        "ok": True,
+        "form_id": form_id,
+        "field_label": field_label,
+        "dictionary_id": dict_id,
+        "dictionary_code": dict_code,
+        "options_count": len(choose_options),
+        "message": (f"字段「{field_label}」已绑定字典「{dict_code}」"
+                    f"({len(choose_options)} 选项), 数据来源切为数据字典"),
+    }
+
+
 # ─── 字典 disable（补 CRUD 的 D）─────────────────────────────────────────
 # apaas 平台没真 delete，"禁用"是终态（运行时不再可选，但历史数据保留引用）。
 # 配套 incremental_executor._disable_dict / _disable_dict_option 用的 GET 接口。

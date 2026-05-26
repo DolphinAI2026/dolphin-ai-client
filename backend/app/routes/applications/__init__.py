@@ -2335,6 +2335,8 @@ _CONFIG_CHAT_TOOL_WHITELIST: set[str] = {
     # AI 先生 SPEC 给用户审, 用户同意后调本工具一把建好 模型+表单+菜单+(可选)流程.
     # 不走全量重新部署, 是真增量加 feature. 借鉴 super-agents-dev formDesign 流程.
     "build_apaas_feature_from_spec",
+    # 后期补绑字段到字典 (build_feature 漏 dict_options 时用; 或用户手动建的字段补绑)
+    "bind_apaas_form_field_to_dict",
     # —— 表单流程 (2026-05-25 补) ——
     # 给表单菜单设审批流程, 一键 N 阶段顺序审批 (START → 提交 → stage1 → ... → END)
     # AI 老路是引导用户 "我演示一下" 录制 → 录到的全是 AI 助手输入框里的 click 没用,
