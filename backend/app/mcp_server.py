@@ -5391,6 +5391,62 @@ async def build_apaas_feature_from_spec(
     feature_code = feature_code.strip()
     feature_name = feature_name.strip()
 
+    # ─── Step 0: 先把含 dict_options 的字段抽出来建字典 ────
+    # 字典必须先建好, 字段绑定才能引用 dictionaryCode. 字典字段类型: 下拉单选/下拉多选/
+    # 单选框/复选框 4 种 (跟 field_types._DICT_FIELD_TYPES 对齐).
+    _DICT_BOUND_COMPONENTS = {
+        "FORM_SELECT_INPUT_SINGLE", "FORM_SELECT_INPUT",
+        "FORM_RADIO_INPUT", "FORM_CHECKBOX_INPUT",
+    }
+    dict_payloads = []
+    field_to_dict_code: dict = {}  # fcode → dictionaryCode (after creation)
+    for f in fields:
+        if not isinstance(f, dict):
+            continue
+        opts = f.get("dict_options") or f.get("dictOptions")
+        if not opts or not isinstance(opts, list):
+            continue
+        dict_code = (f.get("dict_code") or f.get("dictCode") or f.get("code") + "_dict").strip()
+        dict_name = (f.get("dict_name") or f.get("dictName") or f.get("name") or dict_code).strip()
+        options_payload = []
+        for i, opt in enumerate(opts):
+            if isinstance(opt, str):
+                options_payload.append({"optionName": opt, "optionCode": f"{dict_code}_{i+1}",
+                                         "displayOrder": i + 1, "remarks": ""})
+            elif isinstance(opt, dict):
+                options_payload.append({
+                    "optionName": opt.get("name") or opt.get("label") or str(opt),
+                    "optionCode": opt.get("code") or opt.get("id") or f"{dict_code}_{i+1}",
+                    "displayOrder": i + 1, "remarks": opt.get("desc", ""),
+                })
+        dict_payloads.append({
+            "appId": apaas_app_id.strip(),
+            "dictionaryCode": dict_code,
+            "dictionaryName": dict_name,
+            "dictionaryOptions": options_payload,
+        })
+        field_to_dict_code[(f.get("code") or "").strip()] = dict_code
+
+    created_dicts_result = None
+    if dict_payloads:
+        ok_d, dict_result = await _with_client(env_id, "建字典",
+            lambda c: c.create_dicts(apaas_app_id.strip(), dict_payloads))
+        if not ok_d:
+            return {**dict_result, "step": "create_dicts",
+                    "rollback_hint": "字典建失败, 后续 模型/表单/菜单/流程 都没建"}
+        created_dicts_result = dict_result
+        # 平台可能给字典 code 加 _ 后缀 (重名), 更新映射
+        if isinstance(dict_result, list):
+            for i, item in enumerate(dict_result):
+                if isinstance(item, dict) and i < len(dict_payloads):
+                    actual_code = item.get("dictionaryCode") or item.get("code")
+                    if actual_code:
+                        original_code = dict_payloads[i]["dictionaryCode"]
+                        # 找回是哪个 field
+                        for fc, dc in list(field_to_dict_code.items()):
+                            if dc == original_code:
+                                field_to_dict_code[fc] = actual_code
+
     # ─── Step 1: 建模型 (含字段) ─────────────────────────────
     # 字段类型映射用 field_types.py 单一真相 (Builder 创建应用同款 SPEC):
     #   STRING (varchar) — 单行输入/手机/邮箱/单据号/超链接/身份证/字典选项/人员/部门
@@ -5429,6 +5485,23 @@ async def build_apaas_feature_from_spec(
         }
         if comp_type == "FORM_TEXT_INPUT" and max_length:
             comp["lengthLimit"] = max_length
+        # 字典绑定字段: 加 dictionarySelectConfig
+        if comp_type in _DICT_BOUND_COMPONENTS:
+            actual_dict_code = field_to_dict_code.get(fcode) or f.get("dict_code") or f.get("dictCode")
+            if actual_dict_code:
+                # 收集选项 (从 dict_payloads 找到对应)
+                dict_opts_for_field = []
+                for dp in dict_payloads:
+                    if dp["dictionaryCode"] in (actual_dict_code, field_to_dict_code.get(fcode)):
+                        dict_opts_for_field = [
+                            {"optionName": o["optionName"], "optionCode": o["optionCode"]}
+                            for o in dp["dictionaryOptions"]
+                        ]
+                        break
+                comp["dictionarySelectConfig"] = {
+                    "dictionaryCode": actual_dict_code,
+                    "dictionarySelectOptions": dict_opts_for_field,
+                }
         form_components.append(comp)
 
     # 反查应用名 — 模型 useScope 字段需要这个 (否则模型显"全部应用" 而非"图书借阅管理系统")
