@@ -4863,6 +4863,22 @@ def _build_process_payload_v2(
         source=prev_node_id, target="END",
     ))
 
+    # 2026-05-26 修 500: 平台必须有 processDataSource.objectId = boc_code_<form_id>
+    # 否则不知道流程绑哪张表 → 500. capture 实证.
+    process_data_source = {
+        "sourceType": "SOURCE_TYPE_BO",
+        "objectId": f"boc_code_{form_id}",
+    }
+    # processGlobalConfig 平台 UI 默认填的流程标题模板 (capture 实证)
+    process_global_config = {
+        "titleConfigList": [
+            {"componentId": "submitter", "name": "发起人", "type": "COMPONENT"},
+            {"value": "创建的", "type": "TEXT"},
+            {"componentId": "formName", "name": "表单名称", "type": "COMPONENT"},
+            {"value": "流程\\n\n", "type": "TEXT"},
+        ],
+        "processDisplayFieldList": [],
+    }
     return {
         "appId": app_id,
         "formId": form_id,
@@ -4877,8 +4893,8 @@ def _build_process_payload_v2(
         "edges": edges,
         "processRule": {},
         "globalSettings": {},
-        "processGlobalConfig": {},
-        "processDataSource": {},
+        "processGlobalConfig": process_global_config,
+        "processDataSource": process_data_source,
         "openProcessVersion": False,
         "boExist": True,
         "boRemindExist": True,
@@ -5120,103 +5136,67 @@ async def set_apaas_app_process(
 # 只增量加这一个 feature.
 # ═══════════════════════════════════════════════════════════════════════════
 
-# 平台 BOF 字段类型 → 表单组件类型 映射 (super-agents-dev PromptTemplate 同款)
-_BOF_TO_COMPONENT = {
-    "BOF_TEXT": "FORM_TEXT_INPUT",
-    "BOF_DOCUMENT_NUMBER": "FORM_DOCUMENT_NUMBER",
-    "BOF_NUMBER": "FORM_NUMBER_INPUT",
-    "BOF_MONEY": "FORM_MONEY_INPUT",
-    "BOF_DATE": "FORM_DATEPICK_INPUT",
-    "BOF_BOOLEAN": "FORM_SWITCH_SELECT",
-    "BOF_RICH_TEXT": "FORM_TEXTAREA_INPUT",
-    "BOF_MULTI_PEOPLE_SELECT": "FORM_PEOPLE_SELECT",
-    "BOF_MULTI_DEPARTMENT_SELECT": "FORM_DEPARTMENT_SELECT",
-    "BOF_RADIO_INPUT": "FORM_RADIO_INPUT",
-    "BOF_CHECKBOX_INPUT_SINGLE": "FORM_SELECT_INPUT_SINGLE",
-    "BOF_CHECKBOX_INPUT": "FORM_SELECT_INPUT",
-    "BOF_MULTI_FILE": "FORM_FILE_UPLOAD",
-    "BOF_AREA": "FORM_WIDGET_AREA",
-    "BOF_LOCATION": "FORM_WIDGET_LOCATION",
-}
-
-# 中文字段类型 → 组件类型 (AI 常用中文)
-_CN_TO_COMPONENT = {
-    "单行输入": "FORM_TEXT_INPUT",
-    "文本": "FORM_TEXT_INPUT",
-    "单据号": "FORM_DOCUMENT_NUMBER",
-    "多行输入": "FORM_TEXTAREA_INPUT",
-    "长文本": "FORM_TEXTAREA_INPUT",
-    "富文本": "FORM_TEXTAREA_INPUT",
-    "数字输入": "FORM_NUMBER_INPUT",
-    "数字": "FORM_NUMBER_INPUT",
-    "金额": "FORM_MONEY_INPUT",
-    "日期时间": "FORM_DATEPICK_INPUT",
-    "日期": "FORM_DATEPICK_INPUT",
-    "手机号码": "FORM_PHONE_INPUT",
-    "手机号": "FORM_PHONE_INPUT",
-    "电子邮箱": "FORM_EMAIL_INPUT",
-    "邮箱": "FORM_EMAIL_INPUT",
-    "证件号": "FORM_IDCARD_INPUT",
-    "人员选择": "FORM_PEOPLE_SELECT",
-    "部门选择": "FORM_DEPARTMENT_SELECT",
-    "单选框": "FORM_RADIO_INPUT",
-    "下拉单选": "FORM_SELECT_INPUT_SINGLE",
-    "下拉框": "FORM_SELECT_INPUT",
-    "多选框": "FORM_CHECKBOX_INPUT",
-    "附件上传": "FORM_FILE_UPLOAD",
-    "开关": "FORM_SWITCH_SELECT",
-    "地区地址": "FORM_WIDGET_AREA",
-    "定位": "FORM_WIDGET_LOCATION",
-    "超链接": "FORM_HYPERLINK_INPUT",
-}
-
-# 组件类型 → BO 字段类型 (建模型时用)
-_COMPONENT_TO_BOF = {
-    "FORM_TEXT_INPUT": "BOF_TEXT",
-    "FORM_DOCUMENT_NUMBER": "BOF_DOCUMENT_NUMBER",
-    "FORM_TEXTAREA_INPUT": "BOF_RICH_TEXT",
-    "FORM_NUMBER_INPUT": "BOF_NUMBER",
-    "FORM_MONEY_INPUT": "BOF_MONEY",
-    "FORM_DATEPICK_INPUT": "BOF_DATE",
-    "FORM_PHONE_INPUT": "BOF_TEXT",
-    "FORM_EMAIL_INPUT": "BOF_TEXT",
-    "FORM_IDCARD_INPUT": "BOF_TEXT",
-    "FORM_HYPERLINK_INPUT": "BOF_TEXT",
-    "FORM_PEOPLE_SELECT": "BOF_MULTI_PEOPLE_SELECT",
-    "FORM_DEPARTMENT_SELECT": "BOF_MULTI_DEPARTMENT_SELECT",
-    "FORM_RADIO_INPUT": "BOF_RADIO_INPUT",
-    "FORM_SELECT_INPUT_SINGLE": "BOF_CHECKBOX_INPUT_SINGLE",
-    "FORM_SELECT_INPUT": "BOF_CHECKBOX_INPUT",
-    "FORM_CHECKBOX_INPUT": "BOF_CHECKBOX_INPUT",
-    "FORM_FILE_UPLOAD": "BOF_MULTI_FILE",
-    "FORM_SWITCH_SELECT": "BOF_BOOLEAN",
-    "FORM_WIDGET_AREA": "BOF_AREA",
-    "FORM_WIDGET_LOCATION": "BOF_LOCATION",
-}
-
-
 def _normalize_field_type(field: dict) -> tuple[str, str]:
-    """从字段规格里反推 (component_type, bof_type).
+    """从字段规格里反推 (component_type, data_model_type).
 
-    支持多种输入形式:
+    走 app.field_types 单一真相源 — 跟 Builder 创建应用同款 SPEC 规范.
+    返回值:
+      - component_type: FORM_TEXT_INPUT / FORM_TEXTAREA_INPUT / FORM_NUMBER_INPUT / ...
+      - data_model_type: STRING / BIG_TEXT / NUM / DATE / ... (平台 fieldType 字段)
+
+    支持的输入形式:
+      - {"type": "单行输入" | "多行输入" | "数字" | ... } — 标准中文 (FIELD_TYPES key)
+      - {"type": "长文本" | "备注" | ... } — 别名 (_TYPE_ALIASES) 自动规范化
       - {"componentType": "FORM_TEXT_INPUT"} — 直给组件类型
-      - {"database_field_type": "BOF_TEXT"} — 给 BO 字段类型
-      - {"type": "单行输入"} — 中文
-      - 默认 FORM_TEXT_INPUT / BOF_TEXT
+      - {"database_field_type": "varchar" | "text" | ...} — DB 类型兜底 (_DB_TYPE_MAP)
+      - 默认 单行输入 (FORM_TEXT_INPUT + STRING)
     """
-    comp = (field.get("componentType") or field.get("component_type") or "").strip()
-    if comp and comp in _COMPONENT_TO_BOF:
-        return comp, _COMPONENT_TO_BOF[comp]
-    bof = (field.get("database_field_type") or field.get("databaseFieldType")
-           or field.get("bof_type") or "").strip()
-    if bof and bof in _BOF_TO_COMPONENT:
-        return _BOF_TO_COMPONENT[bof], bof
+    from app.field_types import (
+        FIELD_TYPES, get_all_types, get_type_aliases, get_db_type_map,
+    )
+    all_types = get_all_types()  # FIELD_TYPES + _COMPAT_TYPES
+    aliases = get_type_aliases()
+    db_map = get_db_type_map()
+
+    # 1. 显式中文 type — 最常用
     t = (field.get("type") or "").strip()
-    if t in _CN_TO_COMPONENT:
-        comp = _CN_TO_COMPONENT[t]
-        return comp, _COMPONENT_TO_BOF.get(comp, "BOF_TEXT")
-    # fallback
-    return "FORM_TEXT_INPUT", "BOF_TEXT"
+    if t:
+        # 直接命中
+        if t in all_types:
+            info = all_types[t]
+            return info.component_type, info.data_model_type
+        # 别名表 → 规范化
+        if t in aliases:
+            std = aliases[t]
+            if std in all_types:
+                info = all_types[std]
+                return info.component_type, info.data_model_type
+        # DB 类型兜底 (varchar / int / etc)
+        tl = t.lower()
+        if tl in db_map:
+            std = db_map[tl]
+            if std in all_types:
+                info = all_types[std]
+                return info.component_type, info.data_model_type
+
+    # 2. componentType 反查
+    comp = (field.get("componentType") or field.get("component_type") or "").strip()
+    if comp:
+        for info in all_types.values():
+            if info.component_type == comp:
+                return comp, info.data_model_type
+
+    # 3. database_field_type DB 类型 (varchar / longtext / int / ...)
+    dbt = (field.get("database_field_type") or field.get("databaseFieldType") or "").strip().lower()
+    if dbt and dbt in db_map:
+        std = db_map[dbt]
+        if std in all_types:
+            info = all_types[std]
+            return info.component_type, info.data_model_type
+
+    # fallback 单行输入
+    info = FIELD_TYPES["单行输入"]
+    return info.component_type, info.data_model_type
 
 
 @mcp.tool()
@@ -5262,6 +5242,11 @@ async def build_apaas_feature_from_spec(
     feature_name = feature_name.strip()
 
     # ─── Step 1: 建模型 (含字段) ─────────────────────────────
+    # 字段类型映射用 field_types.py 单一真相 (Builder 创建应用同款 SPEC):
+    #   STRING (varchar) — 单行输入/手机/邮箱/单据号/超链接/身份证/字典选项/人员/部门
+    #   BIG_TEXT (longtext) — 多行输入/富文本
+    #   NUM (decimal) — 数字/金额
+    #   DATE (datetime) — 日期时间
     model_fields = []
     form_components = []
     for f in fields:
@@ -5272,15 +5257,16 @@ async def build_apaas_feature_from_spec(
         if not fname or not fcode:
             return {"ok": False, "error_code": "FIELD_MISSING_NAME_OR_CODE",
                     "message": f"字段缺 name/code: {f}"}
-        comp_type, bof_type = _normalize_field_type(f)
+        comp_type, data_model_type = _normalize_field_type(f)
         max_length = int(f.get("max_length") or f.get("maxLength") or 200)
         required = bool(f.get("required", False))
-        # 模型字段
+        # 模型字段 — fieldType 用平台 data_model_type (STRING/BIG_TEXT/NUM/DATE)
         mf = {
             "fieldName": fname, "fieldCode": fcode,
-            "fieldType": bof_type, "required": required,
+            "fieldType": data_model_type, "required": required,
         }
-        if bof_type == "BOF_TEXT":
+        # 仅 STRING 类型加 maxLength (BIG_TEXT/NUM/DATE 无意义)
+        if data_model_type == "STRING":
             mf["maxLength"] = max_length
         model_fields.append(mf)
         # 表单组件
