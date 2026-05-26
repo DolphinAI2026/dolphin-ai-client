@@ -1433,6 +1433,99 @@ async def deploy_application(
     }
 
 
+# design-v4 J1: 拉 apaas 平台已有流程详情 (反向, 给 ProcessDesigner 渲染 canvas)
+@mcp.tool()
+async def get_apaas_process_detail(env_id: int, apaas_app_id: str, process_id: str) -> dict:
+    """拉 apaas 平台某流程的详情 (nodes + edges + bpmn).
+
+    走 apaas_client.query_process_config (尝试 /xdap-app/process/query/processConfig).
+    apaas 平台没固定文档化, 尝试失败时返 error_code=PROCESS_QUERY_NOT_AVAILABLE.
+
+    成功时翻译 apaas raw → ProcessDefinition shape:
+      {nodes: [{id, type, label, position, props}], edges: [{id, source, target, label, condition}]}
+
+    apaas → frontend type 反向映射 (跟 process_translator.py 正向对应):
+      START → start, END → end, APPROVE → assignee_approval (默认), 其他 → action 兜底.
+    """
+    from app.coding.apaas_tools import _get_apaas_client
+    from app.database import AsyncSessionLocal
+
+    if not (apaas_app_id.strip() and process_id.strip()):
+        return {"ok": False, "error_code": "INVALID_PARAMS", "message": "apaas_app_id+process_id 都必填"}
+
+    async with AsyncSessionLocal() as db:
+        try:
+            client = await _get_apaas_client(env_id, db)
+            raw_resp = await client.query_process_config(apaas_app_id.strip(), process_id.strip())
+        except Exception as exc:
+            return {"ok": False, "error_code": "APAAS_CLIENT_ERROR", "message": f"调 apaas 失败: {exc}"}
+
+    if not raw_resp.get("ok"):
+        return {
+            "ok": False,
+            "error_code": raw_resp.get("error_code") or "APAAS_PROCESS_DETAIL_FAILED",
+            "message": raw_resp.get("message") or "apaas 流程详情拉取失败",
+        }
+
+    raw = raw_resp.get("data") or {}
+    # apaas raw 结构推测: { nodes: [{nodeKey, nodeType, nodeName, x, y, approverType, ...}], edges: [...] }
+    nodes_out = []
+    edges_out = []
+    apaas_nodes = raw.get("nodes") or raw.get("nodeList") or []
+    apaas_edges = raw.get("edges") or raw.get("lineList") or raw.get("sequenceFlows") or []
+
+    APAAS_TO_FRONTEND = {
+        "START": "start",
+        "END": "end",
+        "APPROVE": "assignee_approval",
+        "USERTASK": "assignee_approval",
+        "GATEWAY": "condition",
+        "EXCLUSIVE_GATEWAY": "condition",
+        "PARALLEL_GATEWAY": "parallel_gateway",
+        "TIMER": "timer",
+        "WEBHOOK": "webhook",
+        "FORM": "fill_form",
+    }
+    for n in apaas_nodes:
+        if not isinstance(n, dict):
+            continue
+        apaas_type = str(n.get("nodeType") or n.get("type") or "").upper()
+        ft = APAAS_TO_FRONTEND.get(apaas_type, "fill_form")
+        nodes_out.append({
+            "id": str(n.get("nodeKey") or n.get("id") or n.get("key") or ""),
+            "type": ft,
+            "label": str(n.get("nodeName") or n.get("name") or n.get("label") or ""),
+            "position": {"x": float(n.get("x") or 0), "y": float(n.get("y") or 0)},
+            "props": {
+                "approverType": str(n.get("approverType") or ""),
+                "approveType": str(n.get("approveType") or ""),
+                "approvers": n.get("approvers") or [],
+                "_apaas_raw_type": apaas_type,
+            },
+        })
+    for e in apaas_edges:
+        if not isinstance(e, dict):
+            continue
+        edges_out.append({
+            "id": str(e.get("id") or e.get("flowId") or ""),
+            "source": str(e.get("sourceRef") or e.get("from") or e.get("source") or ""),
+            "target": str(e.get("targetRef") or e.get("to") or e.get("target") or ""),
+            "label": str(e.get("name") or e.get("label") or ""),
+            "condition": str(e.get("conditionExpression") or e.get("condition") or "") or None,
+        })
+
+    return {
+        "ok": True,
+        "process_id": process_id,
+        "process_name": str(raw.get("processName") or raw.get("name") or ""),
+        "nodes": nodes_out,
+        "edges": edges_out,
+        "node_count": len(nodes_out),
+        "edge_count": len(edges_out),
+        "_apaas_raw_keys": list(raw.keys())[:20],
+    }
+
+
 # design-v4 I4: ProcessDefinition 真同步到 apaas 平台 (basic 翻译, P6 完整)
 @mcp.tool()
 async def deploy_process_to_apaas(

@@ -158,10 +158,13 @@
           <div v-if="!nodeCount && activeProcess" class="pdp-canvas-hint">
             <div class="pdp-canvas-hint-icon">⊕</div>
             <p v-if="readOnly">
-              <strong>"{{ activeProcess.name || activeProcess.code }}"</strong> 流程详情拉取 P3 接入
-              <br />当前空画布 — 切到编辑模式可临时拖入节点试设计
+              <strong>"{{ activeProcess.name || activeProcess.code }}"</strong> 尚未保存本地定义
+              <br />
+              <span class="pdp-canvas-hint-sub">
+                apaas 平台未公开流程详情 API — 切到 ✏️ 编辑模式从左侧库拖入节点重新设计, 保存后再"部署"回 apaas
+              </span>
             </p>
-            <p v-else>左侧选节点, 点击添加到这里</p>
+            <p v-else>从左侧"节点库"点节点添加到画布</p>
           </div>
           <div v-if="!activeProcess" class="pdp-canvas-hint">
             <div class="pdp-canvas-hint-icon">👈</div>
@@ -798,7 +801,7 @@ function renderDefinition(defNodes: ProcessDefinitionNodeOut[], defEdges: Proces
   refreshCounts(g)
 }
 
-/** H2: 尝试从 backend 拉本地 ProcessDefinition; 404 → false (走 apaas 兜底). */
+/** H2: 尝试从 backend 拉本地 ProcessDefinition; 404 → 走 J1 apaas detail 兜底. */
 async function tryLoadLocalDefinition(processId: string): Promise<boolean> {
   if (!props.appId || !processId) return false
   try {
@@ -808,20 +811,49 @@ async function tryLoadLocalDefinition(processId: string): Promise<boolean> {
       edges?: ProcessDefinitionEdgeOut[]
       updated_at?: string
     }>(`/applications/${props.appId}/processes/${processId}/definition`)
-    if (resp?.ok && (Array.isArray(resp.nodes) || Array.isArray(resp.edges))) {
+    if (resp?.ok && (Array.isArray(resp.nodes) || Array.isArray(resp.edges)) && ((resp.nodes?.length || 0) + (resp.edges?.length || 0) > 0)) {
       await nextTick()
       renderDefinition(resp.nodes || [], resp.edges || [])
       lastSavedAt.value = resp.updated_at || null
       return true
     }
-    return false
+    // 空 definition — 走 J1 apaas 兜底
   } catch (e: unknown) {
     const err = e as { response?: { status?: number } }
+    if (err?.response?.status !== 404) {
+      // 非 404 是真错 — 但不阻塞 apaas 兜底
+    }
+  }
+  // J1 兜底: 拉 apaas 平台已有定义
+  return await tryLoadApaasDetail(processId)
+}
+
+/** J1: 本地 definition 没有时, 拉 apaas 平台真有的流程详情. */
+async function tryLoadApaasDetail(processId: string): Promise<boolean> {
+  if (!props.appId || !processId) return false
+  try {
+    const resp = await request.get<unknown, {
+      ok: boolean
+      nodes?: ProcessDefinitionNodeOut[]
+      edges?: ProcessDefinitionEdgeOut[]
+      source?: string
+    }>(`/applications/${props.appId}/processes/${processId}/apaas-detail`)
+    if (resp?.ok && (Array.isArray(resp.nodes) || Array.isArray(resp.edges)) && ((resp.nodes?.length || 0) + (resp.edges?.length || 0) > 0)) {
+      await nextTick()
+      renderDefinition(resp.nodes || [], resp.edges || [])
+      ElMessage.info({
+        message: `已从 apaas 平台加载流程 — 编辑后点"保存"会覆盖本地副本, 点"部署"才同步回 apaas`,
+        duration: 4000,
+      })
+      return true
+    }
+    return false
+  } catch (e: unknown) {
+    const err = e as { response?: { status?: number, data?: { detail?: string } } }
     if (err?.response?.status === 404) {
-      // 本地无定义 — 不是错误
+      // apaas 也没有 — 空画布, 显友好提示
       return false
     }
-    // 其他错误 (网络/500) — 静默返回 false, 走兜底
     return false
   }
 }
@@ -1362,5 +1394,13 @@ watch(
 }
 .pdp-canvas-hint p {
   margin: 0;
+}
+.pdp-canvas-hint-sub {
+  display: inline-block;
+  margin-top: 8px;
+  font-size: 12px;
+  color: var(--text-4);
+  max-width: 360px;
+  line-height: 1.55;
 }
 </style>

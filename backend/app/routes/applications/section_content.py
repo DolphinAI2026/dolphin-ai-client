@@ -1023,6 +1023,70 @@ async def get_process_definition(
 
 
 # ---------------------------------------------------------------------------
+# design-v4 J1: 拉 apaas 平台真有的流程详情 — fallback 路径 (本地 definition 不在时)
+# ---------------------------------------------------------------------------
+@router.get(
+    "/{app_id}/processes/{process_id}/apaas-detail",
+    response_model=ProcessDefinitionResponse,
+)
+async def get_process_apaas_detail(
+    app_id: int,
+    process_id: str,
+    ctx: Annotated[AuthContext, Depends(get_auth_context)],
+    db: Annotated[AsyncSession, Depends(get_db)],
+) -> ProcessDefinitionResponse:
+    """拉 apaas 平台已有流程详情 (用 get_apaas_process_detail MCP).
+
+    跟 H2 local definition GET 路径互补:
+      - frontend 优先调 .../definition (本地 ProcessDefinition 表)
+      - 404 时调 .../apaas-detail 拉 apaas 平台真定义
+      - 都没就空 canvas + 编辑提示
+
+    返跟 ProcessDefinitionResponse 一样的结构, source='apaas_process_detail'.
+    """
+    source = "get_apaas_process_detail"
+    app = await _load_app_and_check_view(app_id, ctx, db)
+    if not app.platform_env_id or not app.apaas_app_id:
+        raise HTTPException(status_code=400, detail="应用未部署到 apaas")
+
+    ok, raw_or_err = await _safe_call_mcp_tool(
+        source,
+        env_id=app.platform_env_id,
+        apaas_app_id=str(app.apaas_app_id),
+        extra_args={"process_id": process_id},
+    )
+    if not ok:
+        raise HTTPException(
+            status_code=404,
+            detail=f"{raw_or_err.get('error_code')}: {raw_or_err.get('message')}",
+        )
+
+    nodes: list[ProcessDefinitionNode] = []
+    for n in raw_or_err.get("nodes") or []:
+        try:
+            nodes.append(ProcessDefinitionNode(**n))
+        except Exception:
+            logger.warning(f"skip malformed apaas node: {n!r}")
+    edges: list[ProcessDefinitionEdge] = []
+    for e in raw_or_err.get("edges") or []:
+        try:
+            edges.append(ProcessDefinitionEdge(**e))
+        except Exception:
+            logger.warning(f"skip malformed apaas edge: {e!r}")
+
+    return ProcessDefinitionResponse(
+        ok=True,
+        process_id=process_id,
+        process_name=str(raw_or_err.get("process_name") or ""),
+        version=0,
+        updated_at=None,
+        nodes=nodes,
+        edges=edges,
+        source="apaas_process_detail",
+    )
+
+
+# ---------------------------------------------------------------------------
 # design-v4 I4: 部署 ProcessDefinition 到 apaas 平台 (真同步, 不只是本地 save)
 # ---------------------------------------------------------------------------
 class ProcessDeployResponse(BaseModel):

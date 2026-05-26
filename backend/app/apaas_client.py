@@ -764,6 +764,41 @@ class APaaSClient:
                 return inner if isinstance(inner, list) else []
             raise Exception(data.get("message", "list_table_fields 失败"))
 
+    async def query_process_config(self, app_id: str, process_id: str) -> dict:
+        """拉单个流程详情 — 尝试 apaas 平台 query 路径反推 (跟 save/processConfig 对称).
+
+        apaas 平台没固定文档化的 process query endpoint, 尝试 2 个常见路径:
+        1. POST /xdap-app/process/query/processConfig  body {processId}
+        2. POST /xdap-app/process/queryById            body {processId / id}
+
+        都失败返 {ok: False, error_code, message}. 上游 (MCP / endpoint) 拿到失败
+        返友好降级 ("apaas process detail API 未公开, 请用本地 definition + 部署").
+        """
+        sec_info = base64.b64encode(json.dumps({"appId": app_id}).encode()).decode().rstrip("=")
+        params = {"SECURITY_INFO": sec_info, "timestamp": self._get_timestamp()}
+        urls_to_try = [
+            f"{self.base_url}/xdap-app/process/query/processConfig",
+            f"{self.base_url}/xdap-app/process/queryById",
+        ]
+        last_err = ""
+        async with httpx.AsyncClient(verify=False, timeout=APAAS_HTTP_TIMEOUT) as client:
+            for url in urls_to_try:
+                payload = {"processId": process_id, "id": process_id, "appId": app_id}
+                _log_request("POST", url, payload, params=params)
+                start = time.time()
+                try:
+                    response = await client.post(url, headers=self._get_headers(app_id), params=params, json=payload)
+                    elapsed_ms = (time.time() - start) * 1000
+                    data = response.json() if response.headers.get("content-type", "").startswith("application/json") else {}
+                    _log_response(url, response.status_code, data, elapsed_ms, method="POST", request_body=_to_json(payload))
+                    if response.status_code == 200 and isinstance(data, dict) and data.get("code") in ("ok", 200):
+                        return {"ok": True, "data": data.get("data") or {}}
+                    last_err = f"{url}: code={data.get('code')} msg={data.get('message')}"
+                except Exception as exc:
+                    last_err = f"{url}: {exc}"
+                    continue
+        return {"ok": False, "error_code": "PROCESS_QUERY_NOT_AVAILABLE", "message": f"apaas 流程详情 API 试 2 路径都失败: {last_err}"}
+
     async def save_process_config(self, app_id: str, payload: dict) -> dict:
         """用平台内部 save API 创建/保存流程（需要完整的 nodes + edges + bpmn）"""
         url = f"{self.base_url}/xdap-app/process/save/processConfig"
