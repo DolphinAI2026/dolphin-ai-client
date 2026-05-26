@@ -51,6 +51,8 @@ async def init_db():
     import app.models.config_chat  # noqa: F401
     # 部署历史 + 回滚（2026-05-24）— DeployRecord
     import app.models.deploy_history  # noqa: F401
+    # 流程定义 JSON 本地存档（design-v4 H2）— ProcessDefinition
+    import app.models.process_definition  # noqa: F401
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
         await _migrate_legacy_builder_specs(conn, inspect)

@@ -18,7 +18,9 @@
 """
 from __future__ import annotations
 
+import json
 import logging
+from datetime import datetime
 from typing import Annotated, Any, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query
@@ -29,6 +31,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.database import get_db
 from app.deps import AuthContext, get_auth_context
 from app.models import Application
+from app.models.process_definition import ProcessDefinition
 from app.permissions import Action, check_resource_permission
 
 logger = logging.getLogger(__name__)
@@ -820,4 +823,200 @@ async def get_role_resource_matrix_endpoint(
         is_mock=bool(raw_or_err.get("is_mock", True)),
         note=str(raw_or_err.get("note") or "") or None,
         source=source,
+    )
+
+
+# ---------------------------------------------------------------------------
+# ProcessDefinition — design-v4 H2 简化 BPMN 序列化的本地 save/get
+# ---------------------------------------------------------------------------
+class ProcessDefinitionNodePos(BaseModel):
+    x: float = 0
+    y: float = 0
+
+
+class ProcessDefinitionNode(BaseModel):
+    id: str
+    type: str
+    label: Optional[str] = None
+    position: ProcessDefinitionNodePos = Field(default_factory=ProcessDefinitionNodePos)
+    props: dict[str, Any] = Field(default_factory=dict)
+
+
+class ProcessDefinitionEdge(BaseModel):
+    id: str
+    source: str
+    target: str
+    label: Optional[str] = None
+    condition: Optional[str] = None
+
+
+class ProcessDefinitionBody(BaseModel):
+    process_name: Optional[str] = None
+    nodes: list[ProcessDefinitionNode] = Field(default_factory=list)
+    edges: list[ProcessDefinitionEdge] = Field(default_factory=list)
+
+
+class ProcessDefinitionResponse(BaseModel):
+    ok: bool
+    process_id: str
+    process_name: Optional[str] = None
+    version: int = 1
+    updated_at: Optional[str] = None
+    nodes: list[ProcessDefinitionNode] = Field(default_factory=list)
+    edges: list[ProcessDefinitionEdge] = Field(default_factory=list)
+    source: str = "process_definitions"
+
+
+@router.post(
+    "/{app_id}/processes/{process_id}/save-definition",
+    response_model=ProcessDefinitionResponse,
+)
+async def save_process_definition(
+    app_id: int,
+    process_id: str,
+    body: ProcessDefinitionBody,
+    ctx: Annotated[AuthContext, Depends(get_auth_context)],
+    db: Annotated[AsyncSession, Depends(get_db)],
+) -> ProcessDefinitionResponse:
+    """保存 ProcessDefinition JSON 到本地 (design-v4 H2 简化版).
+
+    暂存到 backend `process_definitions` 表, 不转 BPMN/apaas 平台格式 (P5).
+    用户后续点"部署"才会触发 apaas 真同步.
+    """
+    # 加载应用 + 检 EDIT 权限
+    r = await db.execute(
+        select(Application).where(
+            Application.id == app_id,
+            Application.tenant_id == ctx.tenant_id,
+        )
+    )
+    app = r.scalar_one_or_none()
+    if not app:
+        raise HTTPException(status_code=404, detail="应用不存在")
+    await check_resource_permission(ctx, db, app, "application", Action.EDIT)
+
+    if not process_id:
+        raise HTTPException(status_code=400, detail="process_id 不能为空")
+
+    # 序列化 body 到 JSON 文本
+    definition_payload = {
+        "process_name": body.process_name,
+        "nodes": [n.model_dump() for n in body.nodes],
+        "edges": [e.model_dump() for e in body.edges],
+    }
+    definition_json = json.dumps(definition_payload, ensure_ascii=False)
+
+    # upsert — 先查再决定 INSERT/UPDATE (跨 dialect 通用)
+    existing_q = await db.execute(
+        select(ProcessDefinition).where(
+            ProcessDefinition.application_id == app_id,
+            ProcessDefinition.process_id == process_id,
+        )
+    )
+    existing = existing_q.scalar_one_or_none()
+    now = datetime.utcnow()
+    if existing:
+        existing.process_name = body.process_name
+        existing.definition_json = definition_json
+        existing.version = (existing.version or 1) + 1
+        existing.updated_at = now
+        await db.flush()
+        row = existing
+    else:
+        row = ProcessDefinition(
+            application_id=app_id,
+            process_id=process_id,
+            process_name=body.process_name,
+            definition_json=definition_json,
+            version=1,
+            created_at=now,
+            updated_at=now,
+        )
+        db.add(row)
+        await db.flush()
+    await db.commit()
+
+    return ProcessDefinitionResponse(
+        ok=True,
+        process_id=process_id,
+        process_name=row.process_name,
+        version=row.version,
+        updated_at=row.updated_at.isoformat() if row.updated_at else None,
+        nodes=body.nodes,
+        edges=body.edges,
+        source="process_definitions",
+    )
+
+
+@router.get(
+    "/{app_id}/processes/{process_id}/definition",
+    response_model=ProcessDefinitionResponse,
+)
+async def get_process_definition(
+    app_id: int,
+    process_id: str,
+    ctx: Annotated[AuthContext, Depends(get_auth_context)],
+    db: Annotated[AsyncSession, Depends(get_db)],
+) -> ProcessDefinitionResponse:
+    """读应用流程的本地 ProcessDefinition (没有 → 404).
+
+    前端 reload 流程时优先调本接口; 404 才走 apaas 平台 list 兜底.
+    """
+    r = await db.execute(
+        select(Application).where(
+            Application.id == app_id,
+            Application.tenant_id == ctx.tenant_id,
+        )
+    )
+    app = r.scalar_one_or_none()
+    if not app:
+        raise HTTPException(status_code=404, detail="应用不存在")
+    await check_resource_permission(ctx, db, app, "application", Action.VIEW)
+
+    def_q = await db.execute(
+        select(ProcessDefinition).where(
+            ProcessDefinition.application_id == app_id,
+            ProcessDefinition.process_id == process_id,
+        )
+    )
+    row = def_q.scalar_one_or_none()
+    if not row:
+        raise HTTPException(status_code=404, detail="本地暂无该流程定义")
+
+    try:
+        payload = json.loads(row.definition_json or "{}")
+    except (ValueError, TypeError):
+        payload = {}
+    raw_nodes = payload.get("nodes") if isinstance(payload, dict) else None
+    raw_edges = payload.get("edges") if isinstance(payload, dict) else None
+
+    nodes: list[ProcessDefinitionNode] = []
+    if isinstance(raw_nodes, list):
+        for it in raw_nodes:
+            if not isinstance(it, dict):
+                continue
+            try:
+                nodes.append(ProcessDefinitionNode(**it))
+            except Exception:  # noqa: BLE001 — 容忍坏 row, 不挡 reload
+                logger.warning(f"skip malformed node in process {process_id}: {it!r}")
+
+    edges: list[ProcessDefinitionEdge] = []
+    if isinstance(raw_edges, list):
+        for it in raw_edges:
+            if not isinstance(it, dict):
+                continue
+            try:
+                edges.append(ProcessDefinitionEdge(**it))
+            except Exception:  # noqa: BLE001
+                logger.warning(f"skip malformed edge in process {process_id}: {it!r}")
+
+    return ProcessDefinitionResponse(
+        ok=True,
+        process_id=row.process_id,
+        process_name=row.process_name,
+        version=row.version,
+        updated_at=row.updated_at.isoformat() if row.updated_at else None,
+        nodes=nodes,
+        edges=edges,
+        source="process_definitions",
     )

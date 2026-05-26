@@ -24,6 +24,8 @@ from app.models.collaboration import (  # noqa: F401  — register ORM mapping
 )
 # Import deploy history (DeployRecord) — 2026-05-24
 from app.models.deploy_history import DeployRecord  # noqa: F401
+# Import process definition (design-v4 H2) — 流程图 JSON 本地存档
+from app.models.process_definition import ProcessDefinition  # noqa: F401
 
 
 class User(Base):

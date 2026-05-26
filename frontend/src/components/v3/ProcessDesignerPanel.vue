@@ -69,7 +69,12 @@
           </button>
           <button class="pdp-btn pdp-btn-ghost" :disabled="true" title="P2 接入">自动布局</button>
           <button class="pdp-btn pdp-btn-ghost" :disabled="true" title="P2 接入">试跑</button>
-          <button class="pdp-btn pdp-btn-primary" :disabled="!activeProcess" @click="onSave">保存</button>
+          <button
+            class="pdp-btn pdp-btn-primary"
+            :disabled="!activeProcess || saving"
+            @click="onSave"
+            :title="lastSavedAt ? `上次本地保存: ${lastSavedAt}` : '保存到本地 (P5 deploy 才同步 apaas)'"
+          >{{ saving ? '保存中...' : '保存' }}</button>
         </div>
       </header>
 
@@ -174,7 +179,8 @@
 
 <script setup lang="ts">
 import { ref, computed, watch, onMounted, onBeforeUnmount, shallowRef, reactive, nextTick } from 'vue'
-import { Graph, type Node as X6Node } from '@antv/x6'
+import { Graph, type Node as X6Node, type Edge as X6Edge } from '@antv/x6'
+import { ElMessage } from 'element-plus'
 import ProcessNodePropsPanel from './ProcessNodePropsPanel.vue'
 import request from '@/utils/request'
 import {
@@ -227,6 +233,10 @@ const processListCollapsed = ref(false)
 
 /** 默认 read-only — toggle 切到 edit 后才能加节点 / 拖. */
 const readOnly = ref(true)
+
+/** H2: 保存按钮 loading + 上次本地保存时间 (ISO string). */
+const saving = ref(false)
+const lastSavedAt = ref<string | null>(null)
 
 const activeProcess = computed<ProcessItem | null>(() => {
   if (!activeProcessId.value) return null
@@ -530,7 +540,7 @@ function toggleEditMode() {
   }
 }
 
-function onSelectProcess(processId: string) {
+async function onSelectProcess(processId: string) {
   if (activeProcessId.value === processId) return
   // 切流程: 清当前 canvas state, 准备渲染新流程
   selectedNodeId.value = null
@@ -542,7 +552,8 @@ function onSelectProcess(processId: string) {
     edgeCount.value = 0
   }
   activeProcessId.value = processId
-  // 默认进 read-only — detail 拉取留 P3, 当前空画布 + 提示
+  lastSavedAt.value = null
+  // 默认进 read-only — 切到编辑才能改
   readOnly.value = true
   if (g) {
     g.setInteracting(() => ({
@@ -553,8 +564,9 @@ function onSelectProcess(processId: string) {
       arrowheadMovable: false,
     }))
   }
-  // P3: 这里应调 GET /applications/{appId}/processes/{processId}/detail 拉 BPMN
-  // → 解析 nodes/edges → graph.addNode/addEdge. 当前 backend 没 query API 故跳.
+  // H2: 优先拉本地 ProcessDefinition (前端 H2 简化序列化的产物);
+  // 404 → 走 apaas 平台 list 兜底 (G2 老逻辑当前空画布 + 提示 P3 接 detail).
+  await tryLoadLocalDefinition(processId)
 }
 
 async function reloadProcessList() {
@@ -585,15 +597,24 @@ async function reloadProcessList() {
         }
       })
       // 尝试按 form_id 自动选中匹配项 (来自 ChatPage 选菜单的 form_id)
+      let autoSelected: string | null = null
       if (props.formId && processList.value.length > 0) {
         const match = processList.value.find(p => p.form_id === props.formId)
         if (match) {
           activeProcessId.value = match.id
+          autoSelected = match.id
         }
       }
       // 没匹配但只有 1 个流程 → 自动选中
       if (!activeProcessId.value && processList.value.length === 1) {
         activeProcessId.value = processList.value[0].id
+        autoSelected = processList.value[0].id
+      }
+      // H2: 自动选中后尝试拉本地 definition (graph 可能还没 init, 这里 best-effort —
+      // 真正渲染在 onMounted/watch initGraph 完成后, 后续 onSelectProcess 也会再拉.)
+      if (autoSelected) {
+        // 不 await, 让 list 加载尽快 done
+        void tryLoadLocalDefinition(autoSelected)
       }
     } else {
       listError.value = resp?.message || resp?.error_code || '加载失败'
@@ -629,9 +650,200 @@ function onFitContent() {
   g.zoomToFit({ padding: 32, maxScale: 1.2 })
 }
 
-function onSave() {
-  // P2 接 set_apaas_app_process — 当前 alert 提示走配置助手
-  alert('保存流程 — P2 接入, 当前请用配置助手对话:\n"把当前流程保存到平台"')
+/** ProcessDefinition 序列化 — 应用层 JSON (不是 BPMN 2.0 XML).
+ * 给 H2 backend `/save-definition` 用的扁平 shape:
+ *   { process_name, nodes: [{id, type, label, position, props}], edges: [{id, source, target, label, condition}] }
+ */
+interface ProcessDefinitionNodeOut {
+  id: string
+  type: string
+  label: string
+  position: { x: number; y: number }
+  props: Record<string, unknown>
+}
+interface ProcessDefinitionEdgeOut {
+  id: string
+  source: string
+  target: string
+  label?: string
+  condition?: string
+}
+interface ProcessDefinitionOut {
+  process_name: string
+  nodes: ProcessDefinitionNodeOut[]
+  edges: ProcessDefinitionEdgeOut[]
+}
+
+function serializeGraph(): ProcessDefinitionOut {
+  const g = graphRef.value
+  if (!g) {
+    return { process_name: '', nodes: [], edges: [] }
+  }
+  const nodes: ProcessDefinitionNodeOut[] = []
+  for (const node of g.getNodes()) {
+    const id = node.id
+    const st = nodeStates[id]
+    const data = (node.getData() || {}) as { type?: string }
+    const type = st?.type || data.type || 'unknown'
+    const pos = node.getPosition()
+    // props = nodeStates[id] 里除 id/type/label/x/y/key 之外的所有字段
+    const propsObj: Record<string, unknown> = {}
+    if (st) {
+      for (const [k, v] of Object.entries(st)) {
+        if (['id', 'type', 'label', 'x', 'y', 'key'].includes(k)) continue
+        if (v === undefined) continue
+        propsObj[k] = v as unknown
+      }
+    }
+    nodes.push({
+      id,
+      type,
+      label: st?.label || (typeof node.getAttrByPath('label/text') === 'string'
+        ? String(node.getAttrByPath('label/text') ?? '')
+        : ''),
+      position: { x: pos.x, y: pos.y },
+      props: propsObj,
+    })
+  }
+  const edges: ProcessDefinitionEdgeOut[] = []
+  for (const edge of g.getEdges()) {
+    const sourceId = (edge as X6Edge).getSourceCellId() || ''
+    const targetId = (edge as X6Edge).getTargetCellId() || ''
+    if (!sourceId || !targetId) continue
+    const labelData = edge.getLabels()
+    const labelTxt = Array.isArray(labelData) && labelData.length > 0
+      ? String((labelData[0] as { attrs?: { label?: { text?: string } } })?.attrs?.label?.text ?? '')
+      : ''
+    const edgeData = (edge.getData() || {}) as { condition?: string }
+    edges.push({
+      id: edge.id,
+      source: sourceId,
+      target: targetId,
+      label: labelTxt || undefined,
+      condition: edgeData.condition || undefined,
+    })
+  }
+  return {
+    process_name: activeProcess.value?.name || activeProcess.value?.code || '',
+    nodes,
+    edges,
+  }
+}
+
+/** H2: 渲染本地 ProcessDefinition (从 GET /definition 拿到的 nodes/edges) 到 x6. */
+function renderDefinition(defNodes: ProcessDefinitionNodeOut[], defEdges: ProcessDefinitionEdgeOut[]) {
+  const g = graphRef.value
+  if (!g) return
+  g.clearCells()
+  for (const k of Object.keys(nodeStates)) delete nodeStates[k]
+  // 节点
+  for (const n of defNodes) {
+    const type = n.type as NodeType
+    const def = getNodeDef(type)
+    if (!def) {
+      // 未知 type — 跳过, 不挡其他节点渲染
+      continue
+    }
+    const spec = buildNodeSpec(type, n.label || def.label, def.icon)
+    g.addNode({
+      id: n.id,
+      x: n.position?.x ?? 100,
+      y: n.position?.y ?? 100,
+      ...spec,
+      data: { type, color: getNodeColor(type) },
+    } as never)
+    const st = makeDefaultNode(n.id, type, n.label || def.label)
+    st.x = n.position?.x
+    st.y = n.position?.y
+    // 把 props 合回 nodeStates (覆盖默认值)
+    if (n.props && typeof n.props === 'object') {
+      for (const [k, v] of Object.entries(n.props)) {
+        ;(st as unknown as Record<string, unknown>)[k] = v
+      }
+    }
+    nodeStates[n.id] = st
+  }
+  // 边
+  for (const e of defEdges) {
+    try {
+      g.addEdge({
+        id: e.id,
+        source: e.source,
+        target: e.target,
+        labels: e.label ? [{ attrs: { label: { text: e.label } } }] : undefined,
+        data: e.condition ? { condition: e.condition } : undefined,
+        attrs: {
+          line: {
+            stroke: '#94a3b8',
+            strokeWidth: 1.5,
+            targetMarker: { name: 'classic', size: 7 },
+          },
+        },
+      } as never)
+    } catch {
+      // ignore bad edge
+    }
+  }
+  refreshCounts(g)
+}
+
+/** H2: 尝试从 backend 拉本地 ProcessDefinition; 404 → false (走 apaas 兜底). */
+async function tryLoadLocalDefinition(processId: string): Promise<boolean> {
+  if (!props.appId || !processId) return false
+  try {
+    const resp = await request.get<unknown, {
+      ok: boolean
+      nodes?: ProcessDefinitionNodeOut[]
+      edges?: ProcessDefinitionEdgeOut[]
+      updated_at?: string
+    }>(`/applications/${props.appId}/processes/${processId}/definition`)
+    if (resp?.ok && (Array.isArray(resp.nodes) || Array.isArray(resp.edges))) {
+      await nextTick()
+      renderDefinition(resp.nodes || [], resp.edges || [])
+      lastSavedAt.value = resp.updated_at || null
+      return true
+    }
+    return false
+  } catch (e: unknown) {
+    const err = e as { response?: { status?: number } }
+    if (err?.response?.status === 404) {
+      // 本地无定义 — 不是错误
+      return false
+    }
+    // 其他错误 (网络/500) — 静默返回 false, 走兜底
+    return false
+  }
+}
+
+async function onSave() {
+  if (!props.appId || !activeProcess.value) {
+    ElMessage.warning('请先选择左侧流程')
+    return
+  }
+  if (saving.value) return
+  saving.value = true
+  try {
+    const payload = serializeGraph()
+    const resp = await request.post<unknown, {
+      ok: boolean
+      process_id?: string
+      version?: number
+      updated_at?: string
+      message?: string
+      error_code?: string
+    }>(`/applications/${props.appId}/processes/${activeProcess.value.id}/save-definition`, payload)
+    if (resp?.ok) {
+      lastSavedAt.value = resp.updated_at || new Date().toISOString()
+      ElMessage.success(`已保存 (v${resp.version ?? 1})`)
+    } else {
+      ElMessage.error(resp?.message || resp?.error_code || '保存失败')
+    }
+  } catch (e: unknown) {
+    const err = e as { response?: { data?: { detail?: string } }; message?: string }
+    ElMessage.error(err?.response?.data?.detail || err?.message || '网络错误')
+  } finally {
+    saving.value = false
+  }
 }
 
 function onAiQuery(query: string) {
