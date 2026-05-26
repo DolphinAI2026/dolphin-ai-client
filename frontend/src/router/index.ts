@@ -245,6 +245,13 @@ const router = createRouter({
       meta: { requiresAuth: true, requiresPlatformAdmin: true, navExpanded: true }
     },
     {
+      // PR2a 临时 demo 页 — SectionNav 组件验收 (PR2b 接入 ChatPage 后可删)
+      path: '/section-nav-demo',
+      name: 'SectionNavDemo',
+      component: () => import('@/views/SectionNavDemoPage.vue'),
+      meta: { requiresAuth: false }
+    },
+    {
       path: '/generate/:id?',
       name: 'Generate',
       // 重定向到 ChatPage 并自动打开部署面板
