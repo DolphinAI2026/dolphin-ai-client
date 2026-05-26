@@ -361,7 +361,19 @@ interface ResourceRow {
   name: string
 }
 type PermValue = 'all' | 'rw' | 'r' | 'none'
+type ResourceType = 'form' | 'model' | 'process' | 'app_setting'
 type MatrixData = Record<string, Record<string, PermValue>>
+
+// 单 cell 改动 dirty 状态 — key: "roleId::resourceId".
+interface DirtyCell {
+  roleId: string
+  resourceId: string
+  resourceType: ResourceType
+  before: PermValue
+  after: PermValue
+}
+// 单 cell 保存状态 — key 同上. status: 'saving' / 'failed'. 成功后清掉.
+type CellSaveStatus = 'saving' | 'failed'
 
 // ─── Const ────────────────────────────────────────────────────────────────
 const PERM_OPTIONS: { value: PermValue; label: string; name: string }[] = [
@@ -411,13 +423,23 @@ const dataResources = ref<ResourceRow[]>([])
 const processResources = ref<ResourceRow[]>([])
 const appSettingResources = ref<ResourceRow[]>([])
 const matrix = reactive<MatrixData>({})
+// initialMatrix — load 时 snapshot 当前矩阵, 用于 dirty diff 计算.
+const initialMatrix: MatrixData = {}
 const isMock = ref(true)
 
 // dropdown 状态
 const dropdownOpen = ref(false)
 const dropdownCurrent = ref<PermValue>('rw')
 const dropdownPos = reactive({ x: 0, y: 0 })
-const dropdownTarget = reactive({ roleId: '', resourceId: '' })
+const dropdownTarget = reactive({ roleId: '', resourceId: '', resourceType: 'form' as ResourceType })
+
+// dirty cell 跟踪 — key: roleId::resourceId.
+const dirtyCells = reactive<Record<string, DirtyCell>>({})
+// per-cell save status (saving / failed). key 同 dirtyCells.
+const cellSaveStatus = reactive<Record<string, CellSaveStatus>>({})
+// 全局 save 进度.
+const saving = ref(false)
+const saveProgress = reactive({ done: 0, total: 0 })
 
 // ─── Computed ─────────────────────────────────────────────────────────────
 const filteredRoles = computed(() => {
@@ -443,6 +465,24 @@ const totalMemberCount = computed(
 const hasMatrixData = computed(
   () => roles.value.length > 0 && totalResourceCount.value > 0,
 )
+const dirtyCellCount = computed(() => Object.keys(dirtyCells).length)
+const failedCellCount = computed(
+  () => Object.values(cellSaveStatus).filter(s => s === 'failed').length,
+)
+
+// resourceTypeOf — 给 resourceId 反查它属于哪个 ResourceType.
+// 这里用 4 个 resources list 做 lookup, 不需要 backend 字段.
+function resourceTypeOf(resourceId: string): ResourceType | null {
+  if (pageResources.value.some(r => r.id === resourceId)) return 'form'
+  if (dataResources.value.some(r => r.id === resourceId)) return 'model'
+  if (processResources.value.some(r => r.id === resourceId)) return 'process'
+  if (appSettingResources.value.some(r => r.id === resourceId)) return 'app_setting'
+  return null
+}
+
+function cellKey(roleId: string, resourceId: string): string {
+  return `${roleId}::${resourceId}`
+}
 
 // ─── Helpers ──────────────────────────────────────────────────────────────
 function firstChar(name: string): string {
@@ -459,11 +499,27 @@ function cellLabel(roleId: string, resourceId: string): string {
 
 function cellClass(roleId: string, resourceId: string): string {
   const perm = matrix[roleId]?.[resourceId] || 'none'
-  return `rmp-perm-${perm}`
+  const key = cellKey(roleId, resourceId)
+  const classes = [`rmp-perm-${perm}`]
+  if (dirtyCells[key]) classes.push('rmp-cell-dirty')
+  const status = cellSaveStatus[key]
+  if (status === 'saving') classes.push('rmp-cell-saving')
+  if (status === 'failed') classes.push('rmp-cell-failed')
+  return classes.join(' ')
 }
 
 function cellTitle(roleId: string, resourceId: string): string {
   const perm = (matrix[roleId]?.[resourceId] || 'none') as PermValue
+  const key = cellKey(roleId, resourceId)
+  const status = cellSaveStatus[key]
+  if (status === 'failed') {
+    return `${PERM_FULL_NAMES[perm]} — 上次保存失败, 点击重选`
+  }
+  const rtype = resourceTypeOf(resourceId)
+  if (rtype && rtype !== 'form') {
+    return `${PERM_FULL_NAMES[perm]} — ${rtype} 类型权限改动 P5 接入, 暂不真存`
+  }
+  if (dirtyCells[key]) return `${PERM_FULL_NAMES[perm]} — 未保存, 点击修改`
   return `${PERM_FULL_NAMES[perm]} — 点击修改`
 }
 
@@ -505,15 +561,24 @@ async function loadMatrix() {
 
     // matrix reactive replace.
     for (const k of Object.keys(matrix)) delete matrix[k]
+    for (const k of Object.keys(initialMatrix)) delete initialMatrix[k]
     const m = (resp.matrix || {}) as MatrixData
     for (const [roleId, row] of Object.entries(m)) {
       const inner: Record<string, PermValue> = {}
+      const initialInner: Record<string, PermValue> = {}
       for (const [resourceId, perm] of Object.entries(row || {})) {
-        inner[resourceId] = (perm as PermValue) || 'none'
+        const p = (perm as PermValue) || 'none'
+        inner[resourceId] = p
+        initialInner[resourceId] = p
       }
       matrix[roleId] = inner
+      initialMatrix[roleId] = initialInner
     }
     isMock.value = Boolean(resp.is_mock)
+
+    // 清 dirty + per-cell save 状态 — reload 完一切归零.
+    for (const k of Object.keys(dirtyCells)) delete dirtyCells[k]
+    for (const k of Object.keys(cellSaveStatus)) delete cellSaveStatus[k]
 
     error.value = ''
   } catch (e: any) {
@@ -570,6 +635,7 @@ function selectRole(roleId: string) {
 
 // ─── Cell dropdown ────────────────────────────────────────────────────────
 function onCellClick(roleId: string, resourceId: string, evt: MouseEvent) {
+  if (saving.value) return  // 保存中禁止改
   const target = evt.currentTarget as HTMLElement
   if (!target) return
   const rect = target.getBoundingClientRect()
@@ -580,19 +646,34 @@ function onCellClick(roleId: string, resourceId: string, evt: MouseEvent) {
   dropdownPos.y = rect.bottom - wrapRect.top + 4
   dropdownTarget.roleId = roleId
   dropdownTarget.resourceId = resourceId
+  dropdownTarget.resourceType = resourceTypeOf(resourceId) || 'form'
   dropdownCurrent.value = (matrix[roleId]?.[resourceId] || 'none') as PermValue
   dropdownOpen.value = true
 }
 
 function onPermSelect(perm: PermValue) {
-  const { roleId, resourceId } = dropdownTarget
+  const { roleId, resourceId, resourceType } = dropdownTarget
   if (!roleId || !resourceId) {
     closeDropdown()
     return
   }
-  // 本 session 只改 local state — P2 真接 set_role_resource_permission MCP.
+  const before = (matrix[roleId]?.[resourceId] || 'none') as PermValue
+  // 本地 state 立即更新 (优化感知).
   if (!matrix[roleId]) matrix[roleId] = {}
   matrix[roleId][resourceId] = perm
+
+  // dirty 跟踪: 跟 initialMatrix 比 (这里用 cellSaveStatus 之前 = before).
+  // 若新值跟 initial 一致, 移出 dirty; 否则加 dirty.
+  // initialMatrix 我们从 reload 时存的副本里查 — 这里简化: 跟 before 比即可.
+  const key = cellKey(roleId, resourceId)
+  const initial = initialMatrix[roleId]?.[resourceId] || 'none'
+  if (perm === initial) {
+    delete dirtyCells[key]
+  } else {
+    dirtyCells[key] = { roleId, resourceId, resourceType, before, after: perm }
+  }
+  // 清掉之前 failed 状态 — 用户重新选了
+  if (cellSaveStatus[key] === 'failed') delete cellSaveStatus[key]
   closeDropdown()
 }
 
@@ -618,6 +699,105 @@ function onAddRole() {
 
 function onAddMember() {
   alert('添加成员 — 当前请用右侧配置助手对话:\n"给运维专员A角色添加用户XX"')
+}
+
+// ─── Save matrix (Phase H1) ───────────────────────────────────────────────
+// 串行 POST per dirty cell. form 类型真存 apaas, 其他 P5 跳过.
+async function onSaveMatrix() {
+  const allDirty = Object.values(dirtyCells)
+  if (allDirty.length === 0) {
+    alert('暂无未保存的权限改动')
+    return
+  }
+  if (saving.value) return  // 防止双击
+
+  // form 类型 = 真存; 其他 = 跳过 (P5).
+  const formDirty = allDirty.filter(c => c.resourceType === 'form')
+  const skipDirty = allDirty.filter(c => c.resourceType !== 'form')
+
+  const okStr = window.confirm(
+    `保存 ${formDirty.length} 个权限改动 — 真存到 aPaaS?\n`
+    + (skipDirty.length > 0 ? `(另 ${skipDirty.length} 个 model/process/app_setting 改动 P5 接入, 本次跳过)\n` : '')
+    + '\n注: 表单权限是覆盖式写入, 会保留其他角色的现有权限.',
+  )
+  if (!okStr) return
+
+  if (formDirty.length === 0) {
+    alert(`暂无 form 类型改动可保存 (${skipDirty.length} 个非 form 改动 P5 接入)`)
+    return
+  }
+
+  saving.value = true
+  saveProgress.done = 0
+  saveProgress.total = formDirty.length
+
+  let successCount = 0
+  let failedCount = 0
+  const failedKeys: string[] = []
+
+  for (const cell of formDirty) {
+    const key = cellKey(cell.roleId, cell.resourceId)
+    cellSaveStatus[key] = 'saving'
+    try {
+      const resp = await request.post<any, any>(
+        `/applications/${props.appId}/role-resource-matrix/cell`,
+        {
+          role_id: cell.roleId,
+          resource_type: cell.resourceType,
+          resource_id: cell.resourceId,
+          permission: cell.after,
+        },
+      )
+      if (resp?.ok) {
+        successCount++
+        delete dirtyCells[key]
+        delete cellSaveStatus[key]
+        // 把 initialMatrix 也更新 (新值现在已是 source of truth).
+        if (!initialMatrix[cell.roleId]) initialMatrix[cell.roleId] = {}
+        initialMatrix[cell.roleId][cell.resourceId] = cell.after
+      } else {
+        failedCount++
+        failedKeys.push(key)
+        cellSaveStatus[key] = 'failed'
+        // eslint-disable-next-line no-console
+        console.warn('保存 cell 失败', key, resp)
+      }
+    } catch (e: any) {
+      failedCount++
+      failedKeys.push(key)
+      cellSaveStatus[key] = 'failed'
+      // eslint-disable-next-line no-console
+      console.error('保存 cell 异常', key, e)
+    }
+    saveProgress.done++
+  }
+
+  saving.value = false
+
+  if (failedCount === 0) {
+    alert(`已保存 ${successCount} 个权限改动`
+      + (skipDirty.length > 0 ? ` (${skipDirty.length} 个非 form 跳过)` : ''))
+    // 全成功 → reload 拉最新真值.
+    await loadMatrix()
+  } else if (successCount === 0) {
+    alert(`全部 ${failedCount} 个保存失败 — 检查 console 详情 (失败 cell 红色高亮)`)
+  } else {
+    alert(`已保存 ${successCount}/${formDirty.length}, ${failedCount} 个失败 — 检查 console (失败 cell 红色高亮)`)
+  }
+}
+
+// 丢弃未保存改动 — 回到 initialMatrix.
+function onDiscardChanges() {
+  if (Object.keys(dirtyCells).length === 0) return
+  if (!window.confirm(`丢弃 ${Object.keys(dirtyCells).length} 个未保存改动?`)) return
+  for (const [roleId, row] of Object.entries(initialMatrix)) {
+    for (const [resourceId, perm] of Object.entries(row || {})) {
+      if (!matrix[roleId]) matrix[roleId] = {}
+      matrix[roleId][resourceId] = perm
+    }
+  }
+  for (const k of Object.keys(dirtyCells)) delete dirtyCells[k]
+  for (const k of Object.keys(cellSaveStatus)) delete cellSaveStatus[k]
 }
 
 // ─── Lifecycle ────────────────────────────────────────────────────────────

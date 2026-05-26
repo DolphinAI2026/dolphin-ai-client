@@ -3128,6 +3128,271 @@ async def get_role_resource_matrix(env_id: int, apaas_app_id: str) -> dict:
     }
 
 
+# ─── Phase H1: 单 cell 权限改动真存 ───────────────────────────────────────────
+# 2026-05-26 design-v4 H1 — RoleManagePanel 矩阵 cell click 改后真写 apaas.
+#
+# 设计:
+#   - form: 走 list_apaas_form_permissions 拿当前 rules → 改这一 role 的 rule
+#           → set_apaas_form_permissions 覆盖写回 (覆盖式 API, 必须传完整 list)
+#   - model / process / app_setting: P5 接入 (apaas 平台对应权限 API 复杂或没文档)
+#
+# permission → actions 映射:
+#   'all'  → ['view','add','edit','delete','import','draft']  (5 op 全开)
+#   'rw'   → ['view','edit']                                   (查改, 不删/不增)
+#   'r'    → ['view']                                          (只读)
+#   'none' → []                                                (全关 / 等于移除这 role rule)
+#
+# 覆盖式语义: rules 里没有 role_id 的会被 apaas 清掉 (整 form 范围), 所以必须
+# 先读 list 再 merge 再 set, 不能只传一条 rule.
+
+
+_PERMISSION_TO_ACTIONS: dict[str, list[str]] = {
+    "all": ["view", "add", "edit", "delete", "import", "draft"],
+    "rw": ["view", "edit"],
+    "r": ["view"],
+    "none": [],
+}
+
+
+def _form_perms_to_rules(perms_resp: dict, exclude_role_id: str = "") -> list[dict]:
+    """把 list_apaas_form_permissions 返的 data_permissions + operation_permissions
+    转回 set_apaas_form_permissions 入参格式的 rules list.
+
+    同一 subject_value (role_id 或 ALL_USER) 在 data + operation 里可能各出现一次,
+    合并 actions 后归为一条 rule. exclude_role_id 不空时跳过该 role (用于改前剥离).
+    """
+    # subject_key → rule dict
+    by_subject: dict[str, dict] = {}
+
+    def _subject_key(subj: dict) -> str:
+        st = str(subj.get("type") or "").upper()
+        if st == "ALL_USER":
+            return "ALL_USER"
+        sv = str(subj.get("value") or "")
+        return f"{st}:{sv}"
+
+    def _ensure_rule(subj: dict, perm_name: str) -> dict:
+        key = _subject_key(subj)
+        if key in by_subject:
+            return by_subject[key]
+        st = str(subj.get("type") or "").upper()
+        # ROLE_USER (实测 apaas 返回的角色 type) 写回前面 _build_perm_payload
+        # 会自动 normalize, 我们透传原值即可.
+        sv = str(subj.get("value") or "")
+        rule = {
+            "subject_type": st or "ROLE_USER",
+            "subject_value": sv,
+            "subject_name": str(subj.get("name") or sv or perm_name),
+            "actions": [],
+            "range_type": str(subj.get("range_type") or "ALL").upper(),
+        }
+        by_subject[key] = rule
+        return rule
+
+    # data_permissions → view/edit/delete
+    for g in perms_resp.get("data_permissions") or []:
+        if not isinstance(g, dict):
+            continue
+        subj = g.get("subject") or {}
+        if not isinstance(subj, dict):
+            continue
+        # 跳过指定 role (要被覆盖)
+        st = str(subj.get("type") or "").upper()
+        sv = str(subj.get("value") or "")
+        if exclude_role_id and st in ("ROLE_USER", "ROLE") and sv == exclude_role_id:
+            continue
+        rule = _ensure_rule(subj, str(g.get("permission_name") or ""))
+        if g.get("can_view"): rule["actions"].append("view")
+        if g.get("can_edit"): rule["actions"].append("edit")
+        if g.get("can_delete"): rule["actions"].append("delete")
+
+    # operation_permissions → add/import/draft
+    for g in perms_resp.get("operation_permissions") or []:
+        if not isinstance(g, dict):
+            continue
+        subj = g.get("subject") or {}
+        if not isinstance(subj, dict):
+            continue
+        st = str(subj.get("type") or "").upper()
+        sv = str(subj.get("value") or "")
+        if exclude_role_id and st in ("ROLE_USER", "ROLE") and sv == exclude_role_id:
+            continue
+        rule = _ensure_rule(subj, str(g.get("permission_name") or ""))
+        if g.get("can_add"): rule["actions"].append("add")
+        if g.get("can_import"): rule["actions"].append("import")
+        if g.get("can_draft"): rule["actions"].append("draft")
+
+    # dedupe actions per rule
+    out: list[dict] = []
+    for rule in by_subject.values():
+        rule["actions"] = sorted(set(rule["actions"]))
+        out.append(rule)
+    return out
+
+
+@mcp.tool()
+async def set_role_resource_permission(
+    env_id: int,
+    apaas_app_id: str,
+    role_id: str,
+    resource_type: str,
+    resource_id: str,
+    permission: str,
+) -> dict:
+    """改单个 role × resource cell 权限 — design-v4 H1 PermissionMatrix 真存入口.
+
+    按 resource_type 分发:
+      - 'form': 走 list_apaas_form_permissions + set_apaas_form_permissions (覆盖式)
+                改这一 form 的 advancedPermissionGroups + operationPermissionGroups 里
+                该 role_id 的 rule.
+      - 'model' / 'process' / 'app_setting': P5 接入 (apaas 模型/流程/应用层权限 API 复杂).
+
+    permission ∈ {'all','rw','r','none'} 映射 actions:
+      'all'  → view+add+edit+delete+import+draft  (5+ op 全开)
+      'rw'   → view+edit                          (查改)
+      'r'    → view                               (只读)
+      'none' → []                                 (全关 / 等于移除该 role 的 rule)
+
+    返 {ok, source, message}, ok=True 时 message="已保存",
+       ok=False 时含 error_code + reason.
+
+    使用场景: 前端矩阵 cell click → dropdown 选权限 → 调本工具持久化.
+    """
+    # 参数校验
+    if not apaas_app_id.strip():
+        return {"ok": False, "source": "set_role_resource_permission",
+                "error_code": "INVALID_APAAS_APP_ID", "message": "apaas_app_id 必填"}
+    if not role_id.strip():
+        return {"ok": False, "source": "set_role_resource_permission",
+                "error_code": "INVALID_ROLE_ID", "message": "role_id 必填"}
+    if not resource_id.strip():
+        return {"ok": False, "source": "set_role_resource_permission",
+                "error_code": "INVALID_RESOURCE_ID", "message": "resource_id 必填"}
+
+    rtype = (resource_type or "").strip().lower()
+    if rtype not in ("form", "model", "process", "app_setting"):
+        return {"ok": False, "source": "set_role_resource_permission",
+                "error_code": "INVALID_RESOURCE_TYPE",
+                "message": f"resource_type 必须是 form/model/process/app_setting 之一, 实际: {resource_type!r}"}
+
+    perm = (permission or "").strip().lower()
+    if perm not in _PERMISSION_TO_ACTIONS:
+        return {"ok": False, "source": "set_role_resource_permission",
+                "error_code": "INVALID_PERMISSION",
+                "message": f"permission 必须是 all/rw/r/none 之一, 实际: {permission!r}"}
+
+    apaas_app_id_clean = apaas_app_id.strip()
+    role_id_clean = role_id.strip()
+    resource_id_clean = resource_id.strip()
+
+    # 非 form 类型 — P5 留尾.
+    if rtype != "form":
+        return {
+            "ok": False,
+            "source": "set_role_resource_permission",
+            "error_code": "NOT_IMPLEMENTED",
+            "resource_type": rtype,
+            "message": f"{rtype} 类型权限真存 P5 接入 — apaas 模型/流程/应用层权限 API 复杂, 当前只支持 form 类型.",
+        }
+
+    # ─── form 类型分支 ──────────────────────────────────────────────────────
+    # 1) 先反查 form_id 对应的 form_code (set_apaas_form_permissions 需要)
+    #    resource_id 在 design-v4 矩阵里就是 menu_id (从 list_apaas_app_menus 来),
+    #    需要找到对应的 form_id + form_code.
+    menus_resp = await list_apaas_app_menus(env_id, apaas_app_id_clean)
+    if not isinstance(menus_resp, dict) or not menus_resp.get("ok"):
+        return {
+            "ok": False,
+            "source": "set_role_resource_permission",
+            "error_code": "MENUS_LOAD_FAILED",
+            "message": f"查菜单失败: {menus_resp.get('message') if isinstance(menus_resp, dict) else 'unknown'}",
+        }
+
+    form_id = ""
+    form_code = ""
+    for m in (menus_resp.get("menus") or []):
+        if not isinstance(m, dict):
+            continue
+        # resource_id 在矩阵里是 menu_id
+        if str(m.get("menu_id") or "") == resource_id_clean:
+            form_id = str(m.get("form_id") or "")
+            form_code = str(m.get("form_code") or m.get("menu_code") or "")
+            break
+
+    if not form_id or not form_code:
+        return {
+            "ok": False,
+            "source": "set_role_resource_permission",
+            "error_code": "FORM_NOT_FOUND",
+            "message": f"resource_id={resource_id_clean} 未对应到 form (form_id+form_code 缺失). 这个 cell 可能不是 form 类型菜单.",
+        }
+
+    # 2) 读当前 form 权限快照 (拿其他 role 的 rules, 避免覆盖式 API 把它们清掉).
+    cur_perms = await list_apaas_form_permissions(env_id, apaas_app_id_clean, form_id)
+    if not isinstance(cur_perms, dict) or not cur_perms.get("ok"):
+        return {
+            "ok": False,
+            "source": "set_role_resource_permission",
+            "error_code": "FORM_PERMS_LOAD_FAILED",
+            "message": f"读 form 当前权限失败: {cur_perms.get('message') if isinstance(cur_perms, dict) else 'unknown'}",
+        }
+
+    # 3) 转回 rules list, 剥离本 role_id (要被新值覆盖).
+    other_rules = _form_perms_to_rules(cur_perms, exclude_role_id=role_id_clean)
+
+    # 4) 拼新 rule. perm='none' 时不加 (等同移除).
+    actions = _PERMISSION_TO_ACTIONS[perm]
+    new_rules = list(other_rules)
+    if actions:  # 'none' 时跳过新加, 等同 remove rule
+        new_rules.append({
+            "subject_type": "ROLE_USER",
+            "subject_value": role_id_clean,
+            "subject_name": f"角色{role_id_clean[-6:]}",  # 显示名透传 — apaas 平台会自动用 role_id 反查
+            "actions": actions,
+            "range_type": "ALL",
+        })
+
+    # 5) set_apaas_form_permissions 覆盖写回.
+    #    覆盖式 API rules 不能空 — 即使全 remove 也要传 placeholder.
+    if not new_rules:
+        # 全部 remove 时给个空 ALL_USER rule 让 API 接受 (相当于"全员无权限").
+        new_rules = [{
+            "subject_type": "ALL_USER",
+            "subject_value": "",
+            "subject_name": "全员",
+            "actions": [],
+            "range_type": "ALL",
+        }]
+
+    set_resp = await set_apaas_form_permissions(
+        env_id=env_id,
+        apaas_app_id=apaas_app_id_clean,
+        form_id=form_id,
+        form_code=form_code,
+        rules=new_rules,
+    )
+    if not isinstance(set_resp, dict) or not set_resp.get("ok"):
+        return {
+            "ok": False,
+            "source": "set_role_resource_permission",
+            "error_code": (set_resp.get("error_code") if isinstance(set_resp, dict) else "")
+                          or "FORM_PERMS_WRITE_FAILED",
+            "message": f"写 form 权限失败: {set_resp.get('message') if isinstance(set_resp, dict) else 'unknown'}",
+        }
+
+    return {
+        "ok": True,
+        "source": "set_role_resource_permission",
+        "resource_type": "form",
+        "form_id": form_id,
+        "form_code": form_code,
+        "role_id": role_id_clean,
+        "permission": perm,
+        "actions": actions,
+        "message": "已保存",
+    }
+
+
 @mcp.tool()
 async def create_apaas_app_roles(env_id: int, apaas_app_id: str, roles: list) -> dict:
     """批量创建 aPaaS 应用角色（不走 SPEC 文档流程，直接调 apaas 平台）。
