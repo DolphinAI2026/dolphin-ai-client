@@ -285,6 +285,13 @@
                 :menu-id="selectedApaasMenuId"
                 :form-id="selectedApaasMenuFormId"
               />
+              <DataSchemaEditor
+                v-else-if="designerSub === 'data'"
+                :app-id="existingAppId"
+                :menu-id="selectedApaasMenuId"
+                :menu-name="selectedApaasMenuName"
+                :form-id="selectedApaasMenuFormId"
+              />
               <div v-else-if="designerSub === 'page'" class="mdsh-placeholder">
                 <div class="mdsh-placeholder-icon">⚙️</div>
                 <h3>页面设置</h3>
@@ -912,6 +919,7 @@ import AppConfigSubNav from '@/components/v3/AppConfigSubNav.vue'
 import FormDesignerPanel from '@/components/v3/FormDesignerPanel.vue'
 import ListDesignerPanel from '@/components/v3/ListDesignerPanel.vue'
 import ProcessDesignerPanel from '@/components/v3/ProcessDesignerPanel.vue'
+import DataSchemaEditor from '@/components/v3/DataSchemaEditor.vue'
 import DataModelDetailPanel from '@/components/v3/DataModelDetailPanel.vue'
 import DictEditorPanel from '@/components/v3/DictEditorPanel.vue'
 import RoleManagePanel from '@/components/v3/RoleManagePanel.vue'
@@ -2469,9 +2477,10 @@ const DESIGNER_SUBS = [
   { code: 'form', label: '表单设计' },
   { code: 'list', label: '列表设计' },
   { code: 'process', label: '流程设计' },
+  { code: 'data', label: '数据 schema' },
   { code: 'page', label: '页面设置' },
 ] as const
-const designerSub = ref<'form' | 'list' | 'process' | 'page'>('form')
+const designerSub = ref<'form' | 'list' | 'process' | 'data' | 'page'>('form')
 
 // P1-N6: 这些 sub-tab 走 native master-detail panel — 不需要再显 SectionContentList.
 const isNativeMasterDetailSubTab = computed(() => {
