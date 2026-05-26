@@ -1,30 +1,60 @@
 <!-- ProcessDesignerPanel.vue — Native 流程设计器面板 (替 apaas process designer iframe).
 
   2026-05-26 design-v4 Phase C: 扩 24 节点 (4 分类 × 4-5 种) + 属性面板.
+    - 左 sidebar 顶部 "流程列表" panel (真拉 /section-content/processes)
     - 左 sidebar collapsible 4 分类: 入口出口 / 审批 / 逻辑 / 动作 (24 节点 chip grid 2 列)
-    - 中央顶部 toolbar: 流程名称 + 节点统计 + 自动布局/AI 优化/试跑/部署 (后 4 placeholder)
+    - 中央顶部 toolbar: 流程名称 + 节点统计 + 适应 + 编辑/查看 toggle + 保存
     - 中央 x6 canvas: 不同 shape/color 渲染 (entry 圆 / approval 圆角矩形 / logic 菱形 / action 矩形)
     - 右 ProcessNodePropsPanel: 按 node.type 显不同 props (~400 行新组件)
 
+  2026-05-26 G2: 接真应用流程 list — 不再依赖 menuId 入口.
+    - onMounted 拉 /applications/{appId}/section-content/processes
+    - 左 sidebar 顶部 "流程列表" 显真流程, 选中切 canvas
+    - props.formId 提示存在时尝试自动选中匹配流程 (form_id === formId)
+    - 顶部 toolbar 真统计 (graph.getNodes/getEdges)
+    - 编辑/查看 toggle — 默认 view (read-only 节点不可拖, 库 chip 不响应); edit 才能加
+    - 没流程时显 "应用无流程, 用配置助手对话创建" empty state
+    - BPMN 详情拉取 P3 (平台没 query process detail API), 留 alert 占位
+
   数据保存 (P2 接入):
-    - 加载 reload: 暂保留空画布 + "拖入节点开始" 占位, 不解 BPMN XML
+    - 加载 reload: BPMN detail 拉取 P3, 当前空画布
     - 保存按钮: alert 提示走配置助手对话
 
   样式: design-v3 token (全 var 化, 仅 x6 attrs hex 在 buildNodeSpec 用原始值)
 -->
 <template>
   <section class="pdp" aria-label="流程设计">
-    <div v-if="!menuId" class="pdp-empty">
-      <div class="pdp-empty-icon">🔀</div>
-      <h3>选择一个流程</h3>
-      <p>从左侧菜单点击带流程的表单, 这里显该表单的审批流程图.</p>
+    <!-- loading 应用流程 list -->
+    <div v-if="loadingList" class="pdp-empty">
+      <div class="pdp-empty-icon">⏳</div>
+      <h3>加载流程列表...</h3>
     </div>
 
+    <!-- 拉 list 出错 (应用未部署 / token 失效) -->
+    <div v-else-if="listError" class="pdp-empty">
+      <div class="pdp-empty-icon">⚠️</div>
+      <h3>加载失败</h3>
+      <p>{{ listError }}</p>
+      <button class="pdp-btn pdp-btn-ghost" @click="reloadProcessList">重试</button>
+    </div>
+
+    <!-- 应用无流程 -->
+    <div v-else-if="processList.length === 0" class="pdp-empty">
+      <div class="pdp-empty-icon">🔀</div>
+      <h3>应用暂无流程</h3>
+      <p>用配置助手对话创建审批流程, 或在表单菜单上挂流程后这里会出现.</p>
+    </div>
+
+    <!-- 有流程: 显完整设计器 -->
     <template v-else>
       <!-- 中央顶部 toolbar -->
       <header class="pdp-head">
         <div class="pdp-head-meta">
-          <h1 class="pdp-title">{{ menuName || '流程设计' }}</h1>
+          <h1 class="pdp-title">
+            {{ activeProcess?.name || activeProcess?.code || '选择左侧流程' }}
+            <span v-if="readOnly" class="pdp-mode-badge pdp-mode-view" title="只读模式 — 切到编辑才能改">查看</span>
+            <span v-else class="pdp-mode-badge pdp-mode-edit" title="编辑模式 — 加节点 / 连线">编辑</span>
+          </h1>
           <p class="pdp-sub">
             <span class="pdp-stat">{{ statsLine }}</span>
           </p>
@@ -34,17 +64,45 @@
             <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 7V3h4M21 7V3h-4M3 17v4h4M21 17v4h-4"/></svg>
             适应
           </button>
+          <button class="pdp-btn pdp-btn-ghost" @click="toggleEditMode" :title="readOnly ? '切到编辑模式' : '切到查看模式'">
+            {{ readOnly ? '✏️ 编辑' : '👁 查看' }}
+          </button>
           <button class="pdp-btn pdp-btn-ghost" :disabled="true" title="P2 接入">自动布局</button>
-          <button class="pdp-btn pdp-btn-ghost" :disabled="true" title="P2 接入">AI 优化</button>
           <button class="pdp-btn pdp-btn-ghost" :disabled="true" title="P2 接入">试跑</button>
-          <button class="pdp-btn pdp-btn-primary" :disabled="false" @click="onSave">保存</button>
-          <button class="pdp-btn pdp-btn-primary" :disabled="true" title="P2 接入">部署</button>
+          <button class="pdp-btn pdp-btn-primary" :disabled="!activeProcess" @click="onSave">保存</button>
         </div>
       </header>
 
       <div class="pdp-body">
-        <!-- 左 sidebar 4 分类 collapsible -->
-        <aside class="pdp-sidebar" aria-label="节点库">
+        <!-- 左 sidebar: 流程列表 + 节点库 -->
+        <aside class="pdp-sidebar" aria-label="流程列表 + 节点库">
+          <!-- ── 流程列表 panel ────────────────────────────────── -->
+          <div class="pdp-section">
+            <button
+              class="pdp-section-head"
+              @click="processListCollapsed = !processListCollapsed"
+              :aria-expanded="!processListCollapsed"
+            >
+              <span class="pdp-cat-arrow" :class="{ 'is-open': !processListCollapsed }">▸</span>
+              <span class="pdp-cat-label">流程列表</span>
+              <span class="pdp-cat-count">{{ processList.length }}</span>
+            </button>
+            <div v-if="!processListCollapsed" class="pdp-process-list">
+              <button
+                v-for="p in processList"
+                :key="p.id"
+                class="pdp-process-item"
+                :class="{ 'is-active': p.id === activeProcessId }"
+                :title="`${p.name || p.code}${p.code ? ` (${p.code})` : ''}`"
+                @click="onSelectProcess(p.id)"
+              >
+                <span class="pdp-process-icon">🔀</span>
+                <span class="pdp-process-name">{{ p.name || p.code || p.id }}</span>
+              </button>
+            </div>
+          </div>
+
+          <!-- ── 节点库 ────────────────────────────────────────── -->
           <h4 class="pdp-sidebar-title">节点库</h4>
           <div class="pdp-cat-list">
             <div
@@ -68,7 +126,8 @@
                   :key="n.type"
                   class="pdp-chip"
                   :data-cat="cat.code"
-                  :title="`加 ${n.label}`"
+                  :disabled="readOnly || !activeProcess"
+                  :title="readOnly ? '切到编辑模式才能加节点' : `加 ${n.label}`"
                   @click="onSidebarNodeClick(n.type)"
                 >
                   <span class="pdp-chip-icon">{{ n.icon }}</span>
@@ -77,15 +136,25 @@
               </div>
             </div>
           </div>
-          <p class="pdp-sidebar-foot">点击节点添加到画布 — 拖拽连线在画布上拖</p>
+          <p class="pdp-sidebar-foot">
+            {{ readOnly ? '只读模式 — 切到编辑模式后才能加节点' : '点击节点添加到画布 — 拖拽连线在画布上拖' }}
+          </p>
         </aside>
 
         <!-- 中央 x6 canvas -->
         <div class="pdp-canvas-wrap">
           <div ref="containerRef" class="pdp-canvas"></div>
-          <div v-if="!nodeCount" class="pdp-canvas-hint">
+          <div v-if="!nodeCount && activeProcess" class="pdp-canvas-hint">
             <div class="pdp-canvas-hint-icon">⊕</div>
-            <p>左侧选节点, 点击添加到这里</p>
+            <p v-if="readOnly">
+              <strong>"{{ activeProcess.name || activeProcess.code }}"</strong> 流程详情拉取 P3 接入
+              <br />当前空画布 — 切到编辑模式可临时拖入节点试设计
+            </p>
+            <p v-else>左侧选节点, 点击添加到这里</p>
+          </div>
+          <div v-if="!activeProcess" class="pdp-canvas-hint">
+            <div class="pdp-canvas-hint-icon">👈</div>
+            <p>从左侧"流程列表"选择一个流程</p>
           </div>
         </div>
 
@@ -107,6 +176,7 @@
 import { ref, computed, watch, onMounted, onBeforeUnmount, shallowRef, reactive, nextTick } from 'vue'
 import { Graph, type Node as X6Node } from '@antv/x6'
 import ProcessNodePropsPanel from './ProcessNodePropsPanel.vue'
+import request from '@/utils/request'
 import {
   NODE_CATEGORIES,
   type NodeType,
@@ -140,6 +210,29 @@ const collapsed = reactive<Record<NodeCategoryCode, boolean>>({
   action: false,
 })
 
+/** 流程列表 (从 /section-content/processes 真拉). */
+interface ProcessItem {
+  id: string
+  name: string
+  code: string
+  form_id?: string
+  status?: string
+  extra: Record<string, unknown>
+}
+const processList = ref<ProcessItem[]>([])
+const activeProcessId = ref<string | null>(null)
+const loadingList = ref(false)
+const listError = ref<string | null>(null)
+const processListCollapsed = ref(false)
+
+/** 默认 read-only — toggle 切到 edit 后才能加节点 / 拖. */
+const readOnly = ref(true)
+
+const activeProcess = computed<ProcessItem | null>(() => {
+  if (!activeProcessId.value) return null
+  return processList.value.find(p => p.id === activeProcessId.value) || null
+})
+
 const selectedNode = computed<ProcessNode | null>(() => {
   if (!selectedNodeId.value) return null
   return nodeStates[selectedNodeId.value] || null
@@ -147,7 +240,12 @@ const selectedNode = computed<ProcessNode | null>(() => {
 
 const statsLine = computed(() => {
   const entryN = Object.values(nodeStates).filter(n => getNodeCategoryCode(n.type) === 'entry').length
-  return `${entryN} 入口 · ${nodeCount.value} 节点 · ${edgeCount.value} 连线 · 最近运行 12 分钟前`
+  const procCount = processList.value.length
+  const procLine = procCount ? `${procCount} 个流程` : '0 个流程'
+  if (!activeProcess.value) {
+    return `${procLine} — 未选`
+  }
+  return `${procLine} · ${entryN} 入口 · ${nodeCount.value} 节点 · ${edgeCount.value} 连线`
 })
 
 /** 待 P2 接 list_apaas_app_models — 当前用 placeholder. */
@@ -388,6 +486,14 @@ function getCanvasCenter(): { x: number; y: number } {
 }
 
 function onSidebarNodeClick(type: NodeType) {
+  if (readOnly.value) {
+    alert('当前是查看模式 — 点顶部 "编辑" 切到编辑模式后才能加节点')
+    return
+  }
+  if (!activeProcess.value) {
+    alert('请先从左侧 "流程列表" 选择一个流程')
+    return
+  }
   const g = graphRef.value
   if (!g) return
   const def = getNodeDef(type)
@@ -406,6 +512,98 @@ function onSidebarNodeClick(type: NodeType) {
   nodeStates[id].x = pos.x
   nodeStates[id].y = pos.y
   selectedNodeId.value = id
+}
+
+function toggleEditMode() {
+  if (!activeProcess.value) {
+    alert('请先从左侧 "流程列表" 选择一个流程')
+    return
+  }
+  readOnly.value = !readOnly.value
+  // 同步 x6 interacting 配置 — read-only 时禁止 node 移动 + 连线
+  const g = graphRef.value
+  if (g) {
+    g.setInteracting(() => (readOnly.value
+      ? { nodeMovable: false, edgeMovable: false, edgeLabelMovable: false, magnetConnectable: false, arrowheadMovable: false }
+      : { nodeMovable: true }
+    ))
+  }
+}
+
+function onSelectProcess(processId: string) {
+  if (activeProcessId.value === processId) return
+  // 切流程: 清当前 canvas state, 准备渲染新流程
+  selectedNodeId.value = null
+  for (const k of Object.keys(nodeStates)) delete nodeStates[k]
+  const g = graphRef.value
+  if (g) {
+    g.clearCells()
+    nodeCount.value = 0
+    edgeCount.value = 0
+  }
+  activeProcessId.value = processId
+  // 默认进 read-only — detail 拉取留 P3, 当前空画布 + 提示
+  readOnly.value = true
+  if (g) {
+    g.setInteracting(() => ({
+      nodeMovable: false,
+      edgeMovable: false,
+      edgeLabelMovable: false,
+      magnetConnectable: false,
+      arrowheadMovable: false,
+    }))
+  }
+  // P3: 这里应调 GET /applications/{appId}/processes/{processId}/detail 拉 BPMN
+  // → 解析 nodes/edges → graph.addNode/addEdge. 当前 backend 没 query API 故跳.
+}
+
+async function reloadProcessList() {
+  if (!props.appId) return
+  loadingList.value = true
+  listError.value = null
+  try {
+    const resp = await request.get<unknown, {
+      ok: boolean
+      items?: Array<{ id: string; name: string; code?: string; extra?: Record<string, unknown> }>
+      message?: string
+      error_code?: string
+    }>(`/applications/${props.appId}/section-content/processes`)
+    if (resp?.ok) {
+      const items = resp.items || []
+      processList.value = items.map(it => {
+        const raw = (it.extra || {}) as Record<string, unknown>
+        return {
+          id: it.id,
+          name: it.name || '',
+          code: it.code || '',
+          form_id: typeof raw.form_id === 'string' ? raw.form_id
+            : typeof raw.formId === 'string' ? raw.formId
+            : typeof raw.bocCode === 'string' ? raw.bocCode
+            : undefined,
+          status: typeof raw.status === 'string' ? raw.status : undefined,
+          extra: raw,
+        }
+      })
+      // 尝试按 form_id 自动选中匹配项 (来自 ChatPage 选菜单的 form_id)
+      if (props.formId && processList.value.length > 0) {
+        const match = processList.value.find(p => p.form_id === props.formId)
+        if (match) {
+          activeProcessId.value = match.id
+        }
+      }
+      // 没匹配但只有 1 个流程 → 自动选中
+      if (!activeProcessId.value && processList.value.length === 1) {
+        activeProcessId.value = processList.value[0].id
+      }
+    } else {
+      listError.value = resp?.message || resp?.error_code || '加载失败'
+    }
+  } catch (e: unknown) {
+    const err = e as { response?: { data?: { detail?: string } }; message?: string }
+    listError.value = err?.response?.data?.detail || err?.message || '网络错误'
+  } finally {
+    loadingList.value = false
+  }
 }
 
 function clearSelection() {
@@ -442,8 +640,13 @@ function onAiQuery(query: string) {
 }
 
 onMounted(async () => {
+  await reloadProcessList()
   await nextTick()
-  if (props.menuId) initGraph()
+  // 流程 list 加载完, 不管有没有选中先 init graph 让 canvas 出现
+  // (canvas 区域始终显示, 是否有 node 由 activeProcess 决定)
+  if (processList.value.length > 0) {
+    initGraph()
+  }
 })
 
 onBeforeUnmount(() => {
@@ -452,19 +655,48 @@ onBeforeUnmount(() => {
 })
 
 watch(
-  () => props.menuId,
+  () => props.appId,
   async (next, prev) => {
     if (next === prev) return
+    // 应用切了: 清 graph + state, 重新拉 list
     graphRef.value?.dispose()
     graphRef.value = null
     selectedNodeId.value = null
-    // 清掉旧 state
+    activeProcessId.value = null
     for (const k of Object.keys(nodeStates)) delete nodeStates[k]
     nodeCount.value = 0
     edgeCount.value = 0
-    if (next) {
-      await nextTick()
+    processList.value = []
+    await reloadProcessList()
+    await nextTick()
+    if (processList.value.length > 0) {
       initGraph()
+    }
+  },
+)
+
+watch(
+  () => props.formId,
+  (next) => {
+    // ChatPage 切菜单 → 尝试匹配对应流程自动选中
+    if (next && processList.value.length > 0 && !activeProcessId.value) {
+      const match = processList.value.find(p => p.form_id === next)
+      if (match) {
+        onSelectProcess(match.id)
+      }
+    }
+  },
+)
+
+// 一旦 list 拉到 (从 0 → N), 触发 initGraph (template 才有 containerRef)
+watch(
+  () => processList.value.length,
+  async (next, prev) => {
+    if (next > 0 && prev === 0 && !graphRef.value) {
+      await nextTick()
+      if (containerRef.value && !graphRef.value) {
+        initGraph()
+      }
     }
   },
 )
@@ -592,12 +824,107 @@ watch(
   flex-direction: column;
 }
 .pdp-sidebar-title {
-  margin: 0 4px 12px;
+  margin: 8px 4px 12px;
   font-size: 11.5px;
   font-weight: 500;
   text-transform: uppercase;
   letter-spacing: 0.4px;
   color: var(--text-4);
+}
+
+/* ───── 流程列表 panel ───── */
+.pdp-section {
+  display: flex;
+  flex-direction: column;
+  margin-bottom: 14px;
+  padding-bottom: 12px;
+  border-bottom: 1px solid var(--line);
+}
+.pdp-section-head {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 8px;
+  background: transparent;
+  border: none;
+  cursor: pointer;
+  font-family: inherit;
+  font-size: 12.5px;
+  font-weight: 600;
+  color: var(--text-2);
+  text-align: left;
+  border-radius: 4px;
+  transition: background 0.12s;
+}
+.pdp-section-head:hover {
+  background: var(--surface-2);
+}
+.pdp-process-list {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  padding: 6px 4px 4px;
+  max-height: 200px;
+  overflow-y: auto;
+}
+.pdp-process-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 10px;
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  cursor: pointer;
+  font-family: inherit;
+  font-size: 12.5px;
+  color: var(--text-2);
+  text-align: left;
+  transition: background 0.12s, border-color 0.12s;
+  overflow: hidden;
+}
+.pdp-process-item:hover {
+  border-color: var(--brand);
+  background: var(--brand-soft);
+}
+.pdp-process-item.is-active {
+  border-color: var(--brand);
+  background: var(--brand-soft);
+  color: var(--brand);
+  font-weight: 500;
+}
+.pdp-process-icon {
+  font-size: 14px;
+  flex-shrink: 0;
+}
+.pdp-process-name {
+  flex: 1;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* ───── 编辑/查看 mode badge ───── */
+.pdp-mode-badge {
+  display: inline-flex;
+  align-items: center;
+  margin-left: 10px;
+  padding: 2px 8px;
+  border-radius: 10px;
+  font-size: 11px;
+  font-weight: 500;
+  letter-spacing: 0.3px;
+  vertical-align: 2px;
+}
+.pdp-mode-view {
+  background: var(--surface-2);
+  color: var(--text-3);
+  border: 1px solid var(--line);
+}
+.pdp-mode-edit {
+  background: var(--warn-soft, #fef3c7);
+  color: var(--warn, #92400e);
+  border: 1px solid var(--warn, #f59e0b);
 }
 .pdp-cat-list {
   flex: 1;
@@ -665,13 +992,17 @@ watch(
   font-family: inherit;
   transition: background 0.12s, border-color 0.12s, transform 0.12s;
 }
-.pdp-chip:hover {
+.pdp-chip:hover:not(:disabled) {
   border-color: var(--brand);
   background: var(--brand-soft);
   transform: translateY(-1px);
 }
-.pdp-chip:active {
+.pdp-chip:active:not(:disabled) {
   transform: translateY(0);
+}
+.pdp-chip:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
 }
 .pdp-chip-icon {
   font-size: 18px;
