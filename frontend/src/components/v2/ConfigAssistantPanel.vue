@@ -269,22 +269,74 @@ const quickActionChips = computed<QuickActionChip[]>(() => {
   return CHIP_MATRIX[`${top}:${sub}`] || DEFAULT_CHIPS
 })
 
-function onChipClick(chip: QuickActionChip) {
-  input.value = chip.prompt
-  // scrollToInput — 把焦点也带到 input 上, 让用户看到 prefill 内容.
+// 2026-05-26 (I2): chip click 真发 message — 占位 chip 只 prefill, 实指令直接发.
+// 占位标记: prompt 含 「」 (中文角括号成对) / 「…」 / XX (待用户填值).
+function chipHasPlaceholder(prompt: string): boolean {
+  return /「[^」]*」/.test(prompt) || prompt.includes('…') || /\bXX\b/.test(prompt)
+}
+
+// chip 点击高亮闪烁 (0.15s 蓝 ring) — flashingChip = chip.label, CSS 用 :class 加 is-flashing
+const flashingChip = ref<string | null>(null)
+// 自动发送中的 chip — 显 inline loading dot
+const autoSendingChip = ref<string | null>(null)
+
+async function onChipClick(chip: QuickActionChip) {
+  // 边界 1: 没选中应用
+  if (!props.applicationId || props.applicationId <= 0) {
+    ElMessage.warning('请先选应用')
+    return
+  }
+  // 边界 2: 正在发送 — 防重入
+  if (sending.value) {
+    ElMessage.info('正在发送中, 请稍候')
+    return
+  }
+
+  // 视觉: chip 高亮闪 0.15s
+  flashingChip.value = chip.label
   setTimeout(() => {
-    const ta = document.querySelector(
-      '.config-assistant .ca-input-area .ca-input',
-    ) as HTMLTextAreaElement | null
-    if (ta) {
-      ta.focus()
-      // cursor 移到末尾 (方便用户继续 edit)
-      const len = ta.value.length
-      try {
-        ta.setSelectionRange(len, len)
-      } catch { /* ignore */ }
-    }
-  }, 0)
+    if (flashingChip.value === chip.label) flashingChip.value = null
+  }, 200)
+
+  // 边界 3: input 已有内容 — 直接覆盖 (用户决策: 覆盖更轻快, confirm 太烦)
+  input.value = chip.prompt
+
+  if (chipHasPlaceholder(chip.prompt)) {
+    // 占位 chip: 只 prefill, focus 让用户填值
+    setTimeout(() => {
+      const ta = document.querySelector(
+        '.config-assistant .ca-input-area .ca-input',
+      ) as HTMLTextAreaElement | null
+      if (ta) {
+        ta.focus()
+        // 找第一个「」位置, 把光标放到「」之间方便用户立即输入
+        const m = ta.value.match(/「[^」]*」/)
+        if (m && m.index != null) {
+          const pos = m.index + 1
+          try {
+            ta.setSelectionRange(pos, pos + (m[0].length - 2))
+          } catch { /* ignore */ }
+        } else {
+          const len = ta.value.length
+          try {
+            ta.setSelectionRange(len, len)
+          } catch { /* ignore */ }
+        }
+      }
+    }, 0)
+    return
+  }
+
+  // 实指令 — 自动发送 (跟 input + send btn 同路径)
+  autoSendingChip.value = chip.label
+  try {
+    await send()
+  } catch (e: any) {
+    // send() 自身已 toast 错误, 这里兜底
+    ElMessage.error(e?.message || '发送失败')
+  } finally {
+    autoSendingChip.value = null
+  }
 }
 
 onMounted(() => {
@@ -363,17 +415,27 @@ onUpdated(() => {
     />
 
     <!-- Quick action chips — 按 currentSection + currentSectionTab 智能切.
-         点 chip 把 prompt 文本填到 input (不直接发送, 让用户 review/edit). -->
+         2026-05-26 (I2): 真发送链路.
+         - prompt 含 「」/「…」/XX 占位: 只 prefill, 让用户填值后自己 click send.
+         - 实指令 (无占位): 自动 send() 真发到 backend SSE endpoint.
+         视觉: click 闪 0.15s 蓝 ring; 自动发送中显 inline loading dot. -->
     <div v-if="quickActionChips.length" class="ca-quick-actions" role="toolbar" aria-label="快捷指令">
       <button
         v-for="chip in quickActionChips"
         :key="chip.label"
         class="ca-chip"
+        :class="{
+          'is-flashing': flashingChip === chip.label,
+          'is-sending': autoSendingChip === chip.label,
+          'is-placeholder': chipHasPlaceholder(chip.prompt),
+        }"
         type="button"
-        :title="chip.prompt"
+        :title="chipHasPlaceholder(chip.prompt) ? '点击预填, 修改后发送' : chip.prompt"
+        :disabled="sending && autoSendingChip !== chip.label"
         @click="onChipClick(chip)"
       >
         {{ chip.label }}
+        <span v-if="autoSendingChip === chip.label" class="ca-chip-dot" aria-hidden="true" />
       </button>
     </div>
 
@@ -534,5 +596,61 @@ onUpdated(() => {
 .ca-chip:focus-visible {
   outline: 2px solid var(--brand-ring, var(--brand));
   outline-offset: 1px;
+}
+
+/* 2026-05-26 (I2): chip 状态视觉 — flash / sending / placeholder. */
+.ca-chip[disabled] {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.ca-chip.is-flashing {
+  animation: ca-chip-flash 0.2s ease;
+}
+
+@keyframes ca-chip-flash {
+  0% {
+    box-shadow: 0 0 0 0 var(--brand-ring, var(--brand));
+    background: color-mix(in srgb, var(--brand) 20%, var(--surface));
+  }
+  100% {
+    box-shadow: 0 0 0 4px transparent;
+    background: var(--surface-2, var(--surface));
+  }
+}
+
+.ca-chip.is-sending {
+  border-color: var(--brand);
+  color: var(--brand);
+  background: color-mix(in srgb, var(--brand) 12%, var(--surface));
+  cursor: default;
+  opacity: 1;
+}
+
+/* 占位 chip — 加 dashed 下划线提示"需填值" */
+.ca-chip.is-placeholder {
+  border-style: dashed;
+}
+
+/* 自动发送 inline loading dot */
+.ca-chip-dot {
+  display: inline-block;
+  width: 6px;
+  height: 6px;
+  margin-left: 6px;
+  border-radius: 50%;
+  background: var(--brand);
+  animation: ca-chip-dot-pulse 1s ease infinite;
+}
+
+@keyframes ca-chip-dot-pulse {
+  0%, 100% {
+    opacity: 0.3;
+    transform: scale(1);
+  }
+  50% {
+    opacity: 1;
+    transform: scale(1.2);
+  }
 }
 </style>
