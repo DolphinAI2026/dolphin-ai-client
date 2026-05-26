@@ -44,8 +44,23 @@ const props = defineProps<{
    * 2026-05-26 (PR2c SPEC v2 §1.2): SectionNav 当前 section 软引导.
    * 父 ChatPage 跟左侧 SectionNav 同步, send 时透传给后端加 focus hint.
    * undefined / null / 空串 → 后端不加 hint (跟老行为兼容).
+   *
+   * 接受新旧两套语义 (跟 ChatPage 真实状态对齐):
+   *   - 老 SECTION 系: data/ui/logic/permission/extension
+   *   - 新 topTab 系: design/data/logic/perm/log
+   * quickActionChips computed 内部归一化到 topTab 系再匹配 chip 集合.
    */
   currentSection?: string | null
+  /**
+   * 2026-05-26 (quick action chips): 当前 sub-tab.
+   * 跟 currentSection 一起决定顶部 chips 集合.
+   *   design: menus / forms / lists
+   *   data:   models / dicts
+   *   logic:  processes / events
+   *   perm:   roles / field_perm / menu_vis
+   *   log:    op_log / deploy_history
+   */
+  currentSectionTab?: string | null
 }>()
 
 const emit = defineEmits<{
@@ -159,6 +174,119 @@ const emptyHint = computed(
   () => `配置「${props.appName ?? '应用'}」— 描述你想调整的字段、流程、权限...`,
 )
 
+// ─── Quick action chips ────────────────────────────────────────
+// 2026-05-26: 按 currentSection + currentSectionTab 智能切快捷指令.
+// 用户点 chip → input prefill (不直接发送, 留 review/edit 空间).
+
+interface QuickActionChip {
+  label: string
+  prompt: string
+}
+
+// 老 SECTION 系 → topTab 系归一化, chip 表只按 topTab 维护一份.
+const SECTION_TO_TOP: Record<string, string> = {
+  ui: 'design',
+  data: 'data',
+  logic: 'logic',
+  permission: 'perm',
+  extension: 'log',
+  // topTab 系自身原样透传 (容错 ChatPage 任一种语义)
+  design: 'design',
+  perm: 'perm',
+  log: 'log',
+}
+
+// (topTab, sub-tab) → chip 集合. 没匹配时 fallback 到 default 集合.
+const CHIP_MATRIX: Record<string, QuickActionChip[]> = {
+  'design:menus': [
+    { label: '分析当前菜单', prompt: '请分析当前应用的菜单结构，列出各菜单对应的表单/列表配置情况' },
+    { label: '新建菜单', prompt: '请帮我新建一个菜单，名字叫「」，绑定到表单「」' },
+    { label: '调整菜单顺序', prompt: '请把菜单「」调整到第「」位' },
+  ],
+  'design:forms': [
+    { label: '分析当前表单', prompt: '请分析当前表单的字段结构，列出字段名/类型/必填情况' },
+    { label: '添加字段', prompt: '请帮我在表单里添加一个字段：字段名「」、类型「」、是否必填「」' },
+    { label: '生成测试数据', prompt: '请帮我为当前表单生成 5 条测试数据' },
+    { label: '改字段必填', prompt: '请把字段「」改为「必填 / 非必填」' },
+  ],
+  'design:lists': [
+    { label: '分析列表配置', prompt: '请分析当前列表的列配置：显示哪些字段、排序、筛选条件' },
+    { label: '添加列', prompt: '请帮我在列表里添加一列：字段「」' },
+    { label: '调整列顺序', prompt: '请把列「」调整到第「」位' },
+  ],
+  'data:models': [
+    { label: '看模型结构', prompt: '请展示当前数据模型的完整字段定义（字段名/类型/约束）' },
+    { label: '加字段', prompt: '请在模型里加一个字段：字段名「」、类型「」' },
+    { label: '改字段类型', prompt: '请把字段「」的类型从「」改成「」' },
+  ],
+  'data:dicts': [
+    { label: '添加字典选项', prompt: '请在字典「」里添加选项：值「」、显示名「」' },
+    { label: '新建字典', prompt: '请帮我新建一个字典：名字「」、用于「」' },
+    { label: '看字典选项', prompt: '请列出字典「」的全部选项' },
+  ],
+  'logic:processes': [
+    { label: '看流程节点', prompt: '请展示当前流程的全部节点（开始/审批/分支/结束）以及流转规则' },
+    { label: '加审批节点', prompt: '请在流程里加一个审批节点：审批人「」、位置「」' },
+    { label: '改流程分支', prompt: '请帮我把流程的分支条件改成：「」' },
+  ],
+  'logic:events': [
+    { label: '看业务事件', prompt: '请列出当前应用配置的全部业务事件以及触发条件' },
+    { label: '新建业务事件', prompt: '请帮我新建一个业务事件：触发条件「」、动作「」' },
+  ],
+  'perm:roles': [
+    { label: '新建角色', prompt: '请帮我新建一个角色：名字「」、权限范围「」' },
+    { label: '给角色加成员', prompt: '请把用户「」加到角色「」' },
+    { label: '看角色配置', prompt: '请列出当前应用所有角色及其成员/权限范围' },
+  ],
+  'perm:field_perm': [
+    { label: '看字段权限', prompt: '请列出当前应用的字段级权限配置（哪些角色看不到哪些字段）' },
+    { label: '改字段权限', prompt: '请把字段「」对角色「」改成「只读 / 隐藏 / 可写」' },
+  ],
+  'perm:menu_vis': [
+    { label: '看菜单可见性', prompt: '请列出菜单可见性配置（哪些角色看不到哪些菜单）' },
+    { label: '改菜单可见性', prompt: '请把菜单「」对角色「」改成「可见 / 不可见」' },
+  ],
+  'log:op_log': [
+    { label: '查最近操作', prompt: '请查一下最近 1 天的操作日志' },
+  ],
+  'log:deploy_history': [
+    { label: '查部署历史', prompt: '请列出最近 5 次的部署记录及结果' },
+  ],
+}
+
+const DEFAULT_CHIPS: QuickActionChip[] = [
+  { label: '分析当前应用', prompt: '请分析当前应用的整体结构：菜单/表单/模型/角色/流程' },
+  { label: '添加字段', prompt: '请帮我在表单里添加一个字段：字段名「」、类型「」' },
+  { label: '新建表单', prompt: '请帮我新建一个表单：名字「」、绑定模型「」' },
+]
+
+const quickActionChips = computed<QuickActionChip[]>(() => {
+  const rawSection = (props.currentSection ?? '').trim()
+  if (!rawSection) return DEFAULT_CHIPS
+  const top = SECTION_TO_TOP[rawSection] || rawSection
+  const sub = (props.currentSectionTab ?? '').trim()
+  if (!sub) return DEFAULT_CHIPS
+  return CHIP_MATRIX[`${top}:${sub}`] || DEFAULT_CHIPS
+})
+
+function onChipClick(chip: QuickActionChip) {
+  input.value = chip.prompt
+  // scrollToInput — 把焦点也带到 input 上, 让用户看到 prefill 内容.
+  setTimeout(() => {
+    const ta = document.querySelector(
+      '.config-assistant .ca-input-area .ca-input',
+    ) as HTMLTextAreaElement | null
+    if (ta) {
+      ta.focus()
+      // cursor 移到末尾 (方便用户继续 edit)
+      const len = ta.value.length
+      try {
+        ta.setSelectionRange(len, len)
+      } catch { /* ignore */ }
+    }
+  }, 0)
+}
+
 onMounted(() => {
   const el = document.querySelector('.config-assistant .ca-scroll') as HTMLElement | null
   if (el) scrollerRef.value = el
@@ -233,6 +361,21 @@ onUpdated(() => {
       @toggle="viewportEnabled = $event"
       @open-full="openViewportFull"
     />
+
+    <!-- Quick action chips — 按 currentSection + currentSectionTab 智能切.
+         点 chip 把 prompt 文本填到 input (不直接发送, 让用户 review/edit). -->
+    <div v-if="quickActionChips.length" class="ca-quick-actions" role="toolbar" aria-label="快捷指令">
+      <button
+        v-for="chip in quickActionChips"
+        :key="chip.label"
+        class="ca-chip"
+        type="button"
+        :title="chip.prompt"
+        @click="onChipClick(chip)"
+      >
+        {{ chip.label }}
+      </button>
+    </div>
 
     <ConfigAssistantMessages
       :messages="messages"
@@ -335,5 +478,61 @@ onUpdated(() => {
 .ca-top-btn:hover {
   border-color: var(--brand);
   color: var(--brand);
+}
+
+/* ─── Quick action chips (顶部快捷指令) ───────────────────── */
+.ca-quick-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 12px;
+  border-bottom: 1px solid var(--line);
+  background: var(--surface);
+  overflow-x: auto;
+  overflow-y: hidden;
+  scrollbar-width: thin;
+  flex-shrink: 0;
+}
+
+.ca-quick-actions::-webkit-scrollbar {
+  height: 4px;
+}
+
+.ca-quick-actions::-webkit-scrollbar-thumb {
+  background: var(--line);
+  border-radius: 2px;
+}
+
+.ca-chip {
+  flex-shrink: 0;
+  display: inline-flex;
+  align-items: center;
+  padding: 6px 12px;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  background: var(--surface-2, var(--surface));
+  color: var(--text-2, var(--text));
+  font-family: inherit;
+  font-size: 14px;
+  font-weight: var(--fw-regular, 400);
+  line-height: 1;
+  white-space: nowrap;
+  cursor: pointer;
+  transition: all 0.12s ease;
+}
+
+.ca-chip:hover {
+  border-color: var(--brand);
+  background: color-mix(in srgb, var(--brand) 8%, var(--surface));
+  color: var(--brand);
+}
+
+.ca-chip:active {
+  transform: translateY(1px);
+}
+
+.ca-chip:focus-visible {
+  outline: 2px solid var(--brand-ring, var(--brand));
+  outline-offset: 1px;
 }
 </style>

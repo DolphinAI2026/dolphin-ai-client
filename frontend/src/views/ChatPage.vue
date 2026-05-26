@@ -771,6 +771,7 @@
         :application-id="resolvedAppId"
         :app-name="builderAppDisplayName || ''"
         :current-section="currentSection"
+        :current-section-tab="currentSectionTab"
         @close="toggleAssistant"
         @refresh-iframe="refreshPlatformAndSidebar"
       />
