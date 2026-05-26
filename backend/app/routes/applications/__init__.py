@@ -1852,6 +1852,10 @@ router.include_router(_section_content.router)
 from . import crud_endpoints as _crud_endpoints  # noqa: E402
 router.include_router(_crud_endpoints.router)
 
+# K4 (2026-05-27): 应用日志 — 4 kind aggregator (deploy / operation / ai / error)
+from . import logs_endpoint as _logs_endpoint  # noqa: E402
+router.include_router(_logs_endpoint.router)
+
 
 # ---------------------------------------------------------------------------
 # Phase F：Application 默认模式 (simple|pro|None) 端点

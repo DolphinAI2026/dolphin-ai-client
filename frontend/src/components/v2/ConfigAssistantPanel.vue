@@ -61,6 +61,17 @@ const props = defineProps<{
    *   log:    op_log / deploy_history
    */
   currentSectionTab?: string | null
+  /**
+   * 2026-05-26 design-v4 Polish F1 / K1: 设计 tab + 选中菜单后的 designer sub-tab.
+   * 取值 form / list / process / data / page (跟 ChatPage DESIGNER_SUBS 对齐).
+   * 父在 design tab 且 selectedApaasMenuId 存在时传, 否则传 null.
+   * 优先级: designerSub 非空 → 走 `designer:<sub>` chip 集合; 否则走老 currentSection+sub.
+   *
+   * K1 修复历史 (2026-05-26): F1 commit f760198 加过, 但 I2 commit c5862da
+   * 用 stale base 把 F1 改动整段覆盖丢. 本次 K1 重新加回 + watch + 加 design-v4
+   * 用户截图 bug (在流程设计 sub 但 chips 还显权限) 的 root cause 治掉.
+   */
+  designerSub?: string | null
 }>()
 
 const emit = defineEmits<{
@@ -197,7 +208,13 @@ const SECTION_TO_TOP: Record<string, string> = {
 }
 
 // (topTab, sub-tab) → chip 集合. 没匹配时 fallback 到 default 集合.
+//
+// 2026-05-26 design-v4 Polish F1 / K1: 设计 tab 选中菜单后走 designer:* 系
+// (form/list/process/data/page), 跟 ChatPage.DESIGNER_SUBS 一一对应.
+// 顶级 SECTION → topTab 映射在 SECTION_TO_TOP, designer:* 由 props.designerSub
+// 直接命中, 不走映射.
 const CHIP_MATRIX: Record<string, QuickActionChip[]> = {
+  // ─── design (设计 tab, 未选菜单) ──────────────────────────
   'design:menus': [
     { label: '分析当前菜单', prompt: '请分析当前应用的菜单结构，列出各菜单对应的表单/列表配置情况' },
     { label: '新建菜单', prompt: '请帮我新建一个菜单，名字叫「」，绑定到表单「」' },
@@ -214,6 +231,43 @@ const CHIP_MATRIX: Record<string, QuickActionChip[]> = {
     { label: '添加列', prompt: '请帮我在列表里添加一列：字段「」' },
     { label: '调整列顺序', prompt: '请把列「」调整到第「」位' },
   ],
+
+  // ─── designer:* (设计 tab, 选中菜单后顶部 4 sub-tab) ──────
+  // FormDesignerPanel (表单设计)
+  'designer:form': [
+    { label: '按使用频率排序字段', prompt: '请把当前表单的字段按使用频率从高到低排序，最常用的放前面' },
+    { label: '加金额字段 必填', prompt: '请给当前表单加一个金额字段，名字叫「金额」，类型 number，必填，最大值 50000' },
+    { label: '所有日期字段默认今天', prompt: '请把当前表单里所有日期字段的默认值都设置为「今天」' },
+    { label: '生成 5 条测试数据', prompt: '请帮我为当前表单生成 5 条测试数据，字段值要符合业务语义' },
+  ],
+  // ListDesignerPanel (列表设计)
+  'designer:list': [
+    { label: '加搜索框 图书名称', prompt: '请给当前列表加一个搜索框，按图书名称搜索' },
+    { label: '默认按申请日期倒序', prompt: '请把当前列表的默认排序改成按申请日期倒序排列' },
+    { label: '加 5 个查询条件', prompt: '请给当前列表加 5 个查询条件：借阅人、状态、申请日期范围（起始）、申请日期范围（结束）、归还日期' },
+  ],
+  // ProcessDesignerPanel (流程设计)
+  'designer:process': [
+    { label: '加部门主管→总监审批', prompt: '请给当前流程加一个审批流：先部门主管审批，通过后再到总监审批' },
+    { label: '改成会签', prompt: '请把当前流程的审批节点改成「会签」模式（所有审批人都同意才通过）' },
+    { label: '超 24h 自动通过', prompt: '请给当前流程加超时规则：审批节点超过 24 小时未处理，自动通过' },
+    { label: '加 webhook 通知', prompt: '请给当前流程加一个 webhook 通知节点：流程结束后回调指定 URL' },
+  ],
+  // DataSchemaEditor (数据 schema, 设计 tab 内 sub)
+  'designer:data': [
+    { label: '加 created_at / updated_at', prompt: '请给当前数据模型加 created_at 和 updated_at 两个时间戳字段（自动维护）' },
+    { label: 'status 字段加索引', prompt: '请给当前数据模型的 status 字段加一个普通索引' },
+    { label: '分析字段命名规范', prompt: '请分析当前数据表的字段命名规范，指出不一致的地方并给出统一建议' },
+    { label: '推荐 3 个候选索引', prompt: '请根据当前表的字段定义和典型查询模式，推荐 3 个可以加的候选索引' },
+  ],
+  // 页面设置 (设计 tab 内 sub, P1 placeholder)
+  'designer:page': [
+    { label: '改 title 为 XXX', prompt: '请把当前页面的 title 改成「」' },
+    { label: '图标换成 📅', prompt: '请把当前菜单的图标换成「📅」' },
+    { label: '加默认权限规则', prompt: '请给当前页面加一个默认权限规则：用户只能看到自己创建的记录' },
+  ],
+
+  // ─── data tab (数据) ──────────────────────────────────
   'data:models': [
     { label: '看模型结构', prompt: '请展示当前数据模型的完整字段定义（字段名/类型/约束）' },
     { label: '加字段', prompt: '请在模型里加一个字段：字段名「」、类型「」' },
@@ -233,10 +287,17 @@ const CHIP_MATRIX: Record<string, QuickActionChip[]> = {
     { label: '看业务事件', prompt: '请列出当前应用配置的全部业务事件以及触发条件' },
     { label: '新建业务事件', prompt: '请帮我新建一个业务事件：触发条件「」、动作「」' },
   ],
+  // 2026-05-26 F1: 权限矩阵 view 主用 chips (跟 RoleManagePanel 矩阵 UI 对齐)
   'perm:roles': [
-    { label: '新建角色', prompt: '请帮我新建一个角色：名字「」、权限范围「」' },
-    { label: '给角色加成员', prompt: '请把用户「」加到角色「」' },
-    { label: '看角色配置', prompt: '请列出当前应用所有角色及其成员/权限范围' },
+    { label: '管理员开所有权限', prompt: '请给「管理员」角色开通所有页面和所有数据的全部权限（可读 + 可写 + 可删除）' },
+    { label: '加角色 财务', prompt: '请新加一个角色叫「财务」，默认权限范围设置为相关数据可读' },
+    { label: '审批人全只读', prompt: '请把「审批人」角色对所有页面的权限改成只读' },
+  ],
+  // perm:matrix 跟 perm:roles 同义 (RoleManagePanel viewMode 切换时如果未来透传 matrix 也走同 chips)
+  'perm:matrix': [
+    { label: '管理员开所有权限', prompt: '请给「管理员」角色开通所有页面和所有数据的全部权限（可读 + 可写 + 可删除）' },
+    { label: '加角色 财务', prompt: '请新加一个角色叫「财务」，默认权限范围设置为相关数据可读' },
+    { label: '审批人全只读', prompt: '请把「审批人」角色对所有页面的权限改成只读' },
   ],
   'perm:field_perm': [
     { label: '看字段权限', prompt: '请列出当前应用的字段级权限配置（哪些角色看不到哪些字段）' },
@@ -261,6 +322,20 @@ const DEFAULT_CHIPS: QuickActionChip[] = [
 ]
 
 const quickActionChips = computed<QuickActionChip[]>(() => {
+  // 2026-05-26 F1 / K1: designer mode 优先 — design tab + 选中菜单后,
+  // ChatPage 把 designerSub (form/list/process/data/page) 透传过来,
+  // 这时 chips 直接走 designer:<sub> 集合, 跟当前 panel UI 对齐.
+  //
+  // K1 修 bug: 用户在设计 tab + 选中菜单 + 切到 "流程设计" sub 时,
+  // 老代码只看 currentSection+currentSectionTab — 但 ChatPage 在 design tab
+  // 内部切 designer sub-tab 时只改 designerSub ref, 不改 currentSectionTab,
+  // 所以 chips 一直停在切 topTab 时的旧 sub (常见情形: 用户先在 perm tab,
+  // 然后切到 design + 选菜单, currentSection 变 ui 但 currentSectionTab
+  // 还停在 perm 残留值, chips 就显权限相关). 加 designerSub 优先级根治.
+  const ds = (props.designerSub ?? '').trim()
+  if (ds) {
+    return CHIP_MATRIX[`designer:${ds}`] || DEFAULT_CHIPS
+  }
   const rawSection = (props.currentSection ?? '').trim()
   if (!rawSection) return DEFAULT_CHIPS
   const top = SECTION_TO_TOP[rawSection] || rawSection

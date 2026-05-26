@@ -57,10 +57,20 @@
             <span
               v-if="builderCurrentAppId"
               class="app-status-chip"
-              :class="appPublishStatus === 'published' ? 'published' : 'draft'"
-              :title="appPublishStatus === 'published' ? '应用已发布到 aPaaS 平台' : '应用尚未发布到平台（草稿）'"
+              :class="appPublishStatus"
+              :title="appPublishTooltip"
             >
-              {{ appPublishStatus === 'published' ? '已发布' : '草稿' }}
+              <span v-if="appPublishStatus === 'published'">
+                已发布
+                <span v-if="appPublishDetail.latest_deploy?.version" class="app-status-version">
+                  {{ appPublishDetail.latest_deploy.version }}
+                </span>
+              </span>
+              <span v-else-if="appPublishStatus === 'draft_on_published'">
+                <span class="app-status-dot" />
+                已发布 · 有 {{ appPublishDetail.pending_changes_count }} 个未提交
+              </span>
+              <span v-else>草稿</span>
             </span>
           </div>
           <!-- "查看应用"：应用部署完成后显示在顶部明显位置；点击在当前页切到
@@ -281,20 +291,12 @@
             @select-item="onSectionContentItemSelect"
             @request-create="onSectionContentCreateRequest"
           />
-          <!-- 日志 tab: 暂用 DeployHistoryDrawer 嵌入式 (P1 单独 panel) -->
-          <div
+          <!-- 日志 tab: design-v4 K4 — 4 sub-tab LogsPanel (deploy / operation / ai / error) -->
+          <LogsPanel
             v-if="!legacyMode && topTab === 'log' && existingAppId"
+            :app-id="existingAppId"
             class="platform-iframe-container"
-            style="padding: 24px; overflow: auto; background: var(--surface-2);"
-          >
-            <div style="text-align: center; padding: 80px 16px; color: var(--text-3);">
-              <div style="font-size: 32px; margin-bottom: 12px;">📋</div>
-              <div style="font-size: 16px; font-weight: 500; color: var(--text); margin-bottom: 8px;">
-                {{ currentSectionTab === 'deploy_history' ? '部署历史' : '操作日志' }}
-              </div>
-              <div style="font-size: 13px;">P1 接入 — 用顶部 [历史] CTA 可看部署记录</div>
-            </div>
-          </div>
+          />
           <!-- 2026-05-26 design-v3 重构: native panel 替 iframe -->
           <!-- 设计 tab: 选中菜单后显 designer shell (内 4 sub-tab: 表单/列表/流程/页面) -->
           <div
@@ -994,6 +996,7 @@ import DataSchemaEditor from '@/components/v3/DataSchemaEditor.vue'
 import DataModelDetailPanel from '@/components/v3/DataModelDetailPanel.vue'
 import DictEditorPanel from '@/components/v3/DictEditorPanel.vue'
 import RoleManagePanel from '@/components/v3/RoleManagePanel.vue'
+import LogsPanel from '@/components/v3/LogsPanel.vue'
 import type { ConversationCreate, Message } from '@/types'
 import TopBar from '@/components/TopBar.vue'
 import WorkbenchShell from '@/components/WorkbenchShell.vue'
@@ -3585,16 +3588,48 @@ const canDeployFromTopCTA = computed(() => !!builderCurrentAppId.value && (showS
 // ─────────────── 2026-05-26 design-v4 Polish F2 ───────────────
 // 应用发布状态 chip
 //   backend Application.status 枚举: draft/generating/updating/completed/failed
-//   兜底: apaas_app_id 存在 → published; status='completed' → published; 其他 → draft
-// 当前 backend 没有"已发布"独立字段 (deploy_records 表里才有真实部署记录),
-// 这里用 apaas_app_id 当近似. P2 接入 deploy_records 的 active version 后改这里.
-const appPublishStatus = computed<'published' | 'draft'>(() => {
-  const app = store.currentApp as any
-  if (!app) return 'draft'
-  if (app.apaas_app_id) return 'published'
-  if (app.status === 'completed') return 'published'
-  return 'draft'
+//   2026-05-27 design-v4 K3: 接 /applications/{id}/publish-status 真值 3 态:
+//     'draft' / 'published' / 'draft_on_published' (有未发布改动)
+const appPublishDetail = ref<{
+  status: 'draft' | 'published' | 'draft_on_published'
+  latest_deploy: { version?: string; completed_at?: string; user_id?: number } | null
+  pending_changes_count: number
+}>({ status: 'draft', latest_deploy: null, pending_changes_count: 0 })
+
+const appPublishStatus = computed<'published' | 'draft' | 'draft_on_published'>(() => appPublishDetail.value.status)
+const appPublishTooltip = computed(() => {
+  const d = appPublishDetail.value
+  if (d.status === 'published') {
+    return `已发布 ${d.latest_deploy?.version || ''} · ${d.latest_deploy?.completed_at?.slice(0, 19) || ''}`
+  }
+  if (d.status === 'draft_on_published') {
+    return `已发布 ${d.latest_deploy?.version || ''}, 但有 ${d.pending_changes_count} 个未发布改动`
+  }
+  return '应用尚未发布到平台（草稿）'
 })
+
+async function refreshAppPublishStatus() {
+  if (!existingAppId.value) return
+  try {
+    const resp = await request.get<any, any>(`/applications/${existingAppId.value}/publish-status`)
+    if (resp?.ok) {
+      appPublishDetail.value = {
+        status: resp.status || 'draft',
+        latest_deploy: resp.latest_deploy || null,
+        pending_changes_count: resp.pending_changes_count || 0,
+      }
+    }
+  } catch {
+    // 失败兜底用老逻辑
+    const app = store.currentApp as any
+    appPublishDetail.value = {
+      status: app?.apaas_app_id || app?.status === 'completed' ? 'published' : 'draft',
+      latest_deploy: null,
+      pending_changes_count: 0,
+    }
+  }
+}
+watch(() => existingAppId.value, () => refreshAppPublishStatus(), { immediate: true })
 
 // ─────────────── 2026-05-26 design-v4 I3: 应用 env toggle 真切 ───────────────
 // 应用栏 "开发 / 生产" toggle:
@@ -12770,6 +12805,32 @@ html[data-theme="dark"] .cta-btn.cta-deploy {
   background: var(--surface-2);
   color: var(--text-3);
   border-color: var(--line);
+}
+.builder-chat-crumbs .app-status-chip.draft_on_published {
+  background: var(--warn-soft);
+  color: var(--warn);
+  border-color: var(--warn);
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+.builder-chat-crumbs .app-status-chip .app-status-dot {
+  display: inline-block;
+  width: 6px;
+  height: 6px;
+  background: currentColor;
+  border-radius: 50%;
+  animation: status-pulse 1.5s ease-in-out infinite;
+}
+.builder-chat-crumbs .app-status-chip .app-status-version {
+  margin-left: 4px;
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+  opacity: 0.7;
+}
+@keyframes status-pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.4; }
 }
 
 /* 开发/生产 segmented toggle — RoleManagePanel 同款 */

@@ -1023,6 +1023,77 @@ async def get_process_definition(
 
 
 # ---------------------------------------------------------------------------
+# design-v4 K3: 应用发布状态 — 3 态判断 (draft / published / draft_on_published)
+# ---------------------------------------------------------------------------
+class PublishStatusResponse(BaseModel):
+    ok: bool
+    status: str  # 'draft' | 'published' | 'draft_on_published'
+    latest_deploy: Optional[dict[str, Any]] = None
+    pending_changes_count: int = 0
+    last_modified_at: Optional[str] = None
+    message: Optional[str] = None
+
+
+@router.get("/{app_id}/publish-status", response_model=PublishStatusResponse)
+async def get_publish_status(
+    app_id: int,
+    ctx: Annotated[AuthContext, Depends(get_auth_context)],
+    db: Annotated[AsyncSession, Depends(get_db)],
+) -> PublishStatusResponse:
+    """计算应用真发布状态 (K3).
+
+    逻辑:
+    - 查 deploy_records 最新 1 行 (status='success')
+    - 没有 → 'draft' (从未部署)
+    - 有 + application.updated_at > deploy_record.completed_at → 'draft_on_published'
+    - 有 + 一致 → 'published'
+    """
+    from app.models.deploy_history import DeployRecord
+    app = await _load_app_and_check_view(app_id, ctx, db)
+
+    # 查最新成功部署
+    q = await db.execute(
+        select(DeployRecord)
+        .where(DeployRecord.app_id == app_id, DeployRecord.status == "success")
+        .order_by(DeployRecord.completed_at.desc())
+        .limit(1)
+    )
+    latest = q.scalar_one_or_none()
+
+    last_modified = getattr(app, "updated_at", None) or getattr(app, "created_at", None)
+
+    if not latest:
+        return PublishStatusResponse(
+            ok=True,
+            status="draft",
+            latest_deploy=None,
+            pending_changes_count=1 if last_modified else 0,
+            last_modified_at=last_modified.isoformat() if last_modified else None,
+        )
+
+    deploy_dict = {
+        "deploy_id": latest.id,
+        "version": latest.version_label or f"v{latest.id}",
+        "completed_at": latest.completed_at.isoformat() if latest.completed_at else None,
+        "user_id": latest.user_id,
+        "deploy_type": latest.deploy_type,
+    }
+
+    has_pending = (
+        last_modified
+        and latest.completed_at
+        and last_modified > latest.completed_at
+    )
+    return PublishStatusResponse(
+        ok=True,
+        status="draft_on_published" if has_pending else "published",
+        latest_deploy=deploy_dict,
+        pending_changes_count=1 if has_pending else 0,
+        last_modified_at=last_modified.isoformat() if last_modified else None,
+    )
+
+
+# ---------------------------------------------------------------------------
 # design-v4 J1: 拉 apaas 平台真有的流程详情 — fallback 路径 (本地 definition 不在时)
 # ---------------------------------------------------------------------------
 @router.get(
