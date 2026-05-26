@@ -244,6 +244,14 @@
             </div>
           </div>
           <!-- 2026-05-26 design-v3: native panel 替 iframe -->
+          <!-- 流程 tab + 流程 sub: ProcessDesignerPanel (P0 mock 4 节点 demo, x6 driven) -->
+          <ProcessDesignerPanel
+            v-else-if="!legacyMode && topTab === 'logic' && currentSectionTab === 'processes' && existingAppId"
+            class="platform-iframe-container"
+            :app-id="existingAppId"
+            :menu-id="selectedApaasMenuId || undefined"
+            :form-id="selectedApaasMenuFormId"
+          />
           <!-- 设计 tab + 列表 sub + selectedMenu: ListDesignerPanel -->
           <ListDesignerPanel
             v-else-if="!legacyMode && topTab === 'design' && currentSectionTab === 'lists' && existingAppId && selectedApaasMenuId"
@@ -863,6 +871,7 @@ import AppConfigTopTabs from '@/components/v3/AppConfigTopTabs.vue'
 import AppConfigSubNav from '@/components/v3/AppConfigSubNav.vue'
 import FormDesignerPanel from '@/components/v3/FormDesignerPanel.vue'
 import ListDesignerPanel from '@/components/v3/ListDesignerPanel.vue'
+import ProcessDesignerPanel from '@/components/v3/ProcessDesignerPanel.vue'
 import DataModelDetailPanel from '@/components/v3/DataModelDetailPanel.vue'
 import DictEditorPanel from '@/components/v3/DictEditorPanel.vue'
 import RoleManagePanel from '@/components/v3/RoleManagePanel.vue'
