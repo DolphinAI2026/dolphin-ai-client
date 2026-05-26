@@ -364,6 +364,21 @@ async function switchSection(newSection) {
 
 ## 8. 实施 PR 切分 (修订 Issue #1 — LOC 重估 + PR2 拆 3 子 PR)
 
+### 🟢 实施进度 (2026-05-26 落地)
+
+| PR | 状态 | Commit | 备注 |
+|---|---|---|---|
+| PR1 tool_registry.yaml | ✅ Landed | `88f9f78` | 115 工具单一真相 + 跨进程 load + 27 测试 |
+| PR2a SectionNav.vue 子组件 | ✅ Landed | `ce8e3d1` | 5 section + sub-tabs, demo 路由 `/section-nav-demo` |
+| PR2b ChatPage 接 SectionNav | ✅ Landed | `d45a44a` | extension section 替显 ExtensionSectionPanel + legacyMode auto-fallback 1280px |
+| PR2c ConfigAssistant section-aware system prompt | ✅ Landed | `6af280b` + test `47b2c59` | 5 section 软 hint, 8 单测 |
+| PR3 顶部 CTA + update_apaas_app_info | ✅ Landed | `6dc1444` | 部署/历史/更多 + breadcrumb 编辑 popover |
+| PR6 extension section E0 跳走 + SSE | ✅ Landed | `9d70be1` | 两卡片 + SSE 推送 + republish |
+| **P1 reviewer 批量修** | ✅ Landed | `7f8ebc6` | PR3 5 yellow + PR6 2 critical 全修 |
+| **P2 reviewer 收尾 (并行 worktree)** | ⏳ In progress | TBD | PR1 cache/drift / PR2a VALID_SECTION+ARIA / PR6 notify EDIT+republish 幂等 |
+
+总 LOC 实际: ~5200 (估 4500, 多 16%). 时间从立项到 P1 修完: 1 session 全跑完 (vs 估 3 周 — agent-driven 加速 13×).
+
 ### 🔥 P0 (3 周, 不是原来 1 周)
 
 #### PR1 — `tool_registry.yaml` + load 模块 (3 天)
