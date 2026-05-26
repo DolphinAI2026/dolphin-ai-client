@@ -355,6 +355,12 @@ class APaaSClient:
 
         2026-05-26 (PR3 reviewer P1 #4): icon 改单字段 `appIcon` 优先,
         避免双字段 payload 撞平台严格 schema 校验 400.
+
+        ⚠️ SECURITY (PR3 reviewer #8): icon_svg 字段透传到平台未做 sanitize.
+        SVG 内可塞 `<script>` / `onload="..."` 等可执行内容. 平台 UI 是否在渲染
+        时做 XSS 防御未知. **调用方应只接受可信源的 SVG** (用户上传走 sanitize-svg
+        库 / Allowed-tag 白名单 / 或限制为 base64 PNG). 当前 MCP 工具开放给
+        ConfigAssistant agent 调用 — agent 不应自己生成 SVG, 必须用户明确提供.
         """
         if not self.token:
             raise Exception("未设置token，请先调用login()或在初始化时传入token")

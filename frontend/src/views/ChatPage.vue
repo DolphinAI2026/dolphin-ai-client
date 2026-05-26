@@ -3207,7 +3207,19 @@ async function saveAppInfo() {
       if (desc && store.currentApp) {
         store.currentApp = { ...store.currentApp, description: desc } as any
       }
-      ElMessage.success(`应用信息已更新（${(resp.updated_fields || []).join(', ') || '已保存'}）`)
+      // 2026-05-26 (PR3 reviewer #7): 同步更新 _editAppInfoInitial 基线 —
+      // popover 不关时再改回原值不会触发空操作 diff payload.
+      _editAppInfoInitial.value = { name, desc }
+      // 2026-05-26 (PR3 reviewer P1 #2): partial_success — 平台已改但 DB sync 失败时
+      // 给用户友好提示, 不当成"成功"也不当成"失败".
+      if (resp?.partial_success) {
+        ElMessage.warning(
+          `应用信息已存到平台 (${(resp.updated_fields || []).join(', ') || '已保存'})，`
+          + '本地缓存稍后会同步, 刷新页面看到最新',
+        )
+      } else {
+        ElMessage.success(`应用信息已更新（${(resp.updated_fields || []).join(', ') || '已保存'}）`)
+      }
       editAppInfoOpen.value = false
     } else if (resp?.error_code === 'NOT_IMPLEMENTED') {
       editAppInfoError.value = resp.message || '平台无对应更新接口，请到平台 UI 修改'
