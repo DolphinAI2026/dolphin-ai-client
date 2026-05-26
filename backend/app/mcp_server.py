@@ -2912,6 +2912,222 @@ async def list_apaas_app_roles(env_id: int, apaas_app_id: str, keyword: str = ""
     }
 
 
+# ─── Phase D: 权限矩阵 ─────────────────────────────────────────────────────────
+# 2026-05-26 Phase D — design-v4 RoleManagePanel 矩阵 view 数据源.
+# 聚合 roles × resources (page / data / process / app_setting) 一次返回.
+
+
+# matrix mock 配置 — 根据 role_code 关键字推断默认权限.
+# P2 真接 apaas 权限 API (list_apaas_form_permissions × N 拼 + 解析 dataPermGroups
+# + 解析 operPermGroups) 替换本表.
+_ROLE_CODE_PERMISSION_HINTS: list[tuple[tuple[str, ...], str]] = [
+    # (role_code 关键字, default perm) — 第一个匹配的 hint 胜出.
+    (("admin", "manager", "管理", "管理员", "超级"), "all"),
+    (("approver", "审批", "审核", "approve", "reviewer"), "rw"),
+    (("applicant", "submit", "发起", "申请", "员工", "user", "普通"), "rw"),
+    (("viewer", "view", "read", "查看", "只读", "guest", "访客"), "r"),
+]
+# 默认 perm — 没匹配 hint 时给 "rw".
+_DEFAULT_ROLE_PERM = "rw"
+
+# 应用设置 — 静态资源, 不来自 apaas API. design 显示的 4 个固定按钮.
+_APP_SETTING_RESOURCES: list[dict] = [
+    {"code": "app_create", "name": "创建应用"},
+    {"code": "app_settings", "name": "应用设置"},
+    {"code": "app_deploy", "name": "部署应用"},
+    {"code": "app_import_export", "name": "导入导出"},
+]
+
+
+def _infer_role_permission(role_code: str, role_name: str) -> str:
+    """根据 role_code / role_name 推断默认权限 — mock 实现.
+
+    返 'all' / 'rw' / 'r' / 'none' 之一. 多 hint 匹配时第一胜出.
+    """
+    text = (role_code + " " + role_name).lower()
+    for keywords, perm in _ROLE_CODE_PERMISSION_HINTS:
+        for kw in keywords:
+            if kw.lower() in text:
+                return perm
+    return _DEFAULT_ROLE_PERM
+
+
+def _mock_matrix_for_resource(
+    role_code: str, role_name: str, resource_type: str, resource_code: str,
+) -> str:
+    """根据 role + resource 双维度 mock 权限值.
+
+    简化策略 (本 session, P2 真接 apaas):
+      - 管理员对所有资源都 all
+      - 审批/审核对 page=rw / data=r / process=rw / app_setting=none
+      - 发起/申请对 page=rw / data=r / process=r / app_setting=none
+      - 查看/只读对 page=r / data=none / process=none / app_setting=none
+      - 默认 rw / page rw / data r / process r / app_setting none
+    """
+    base = _infer_role_permission(role_code, role_name)
+    if base == "all":
+        return "all"
+    if resource_type == "app_setting":
+        return "all" if base == "all" else "none"
+    if resource_type == "data":
+        if base == "rw":
+            return "r"
+        return base
+    if resource_type == "process":
+        if base == "r":
+            return "none"
+        return base
+    # page
+    if base == "none":
+        return "r"
+    return base
+
+
+@mcp.tool()
+async def get_role_resource_matrix(env_id: int, apaas_app_id: str) -> dict:
+    """聚合应用所有角色 × 资源的权限矩阵 (一次拉全, 给前端 design-v4 权限矩阵 view).
+
+    数据来源:
+      - 角色: list_apaas_app_roles (复用)
+      - 页面 (forms / lists): list_apaas_app_menus 过滤 menu_type=MODEL
+      - 数据 (models): list_apaas_app_models (with_fields=False 省 token)
+      - 流程 (processes): list_apaas_app_menus 过滤 menu_type=PROCESS, 没有就空 list
+      - 应用设置: 静态 4 项 (创建 / 设置 / 部署 / 导入导出)
+
+    matrix 字段:
+      role_id → resource_id → perm ∈ {'all', 'rw', 'r', 'none'}
+      暂走 mock 推断 (根据 role_code 关键字 + resource_type). P2 真接 apaas
+      list_apaas_form_permissions 取代 mock.
+
+    返结构:
+      {
+        ok: True, env_id, apaas_app_id,
+        roles: [{role_id, role_code, role_name, member_count}],
+        resources: {
+          page: [{id, code, name}],
+          data: [{id, code, name}],
+          process: [{id, code, name}],
+          app_setting: [{code, name}],
+        },
+        matrix: {role_id: {resource_id: perm}},
+        is_mock: True,  # 提示前端 P2 真接前都是 mock
+      }
+    """
+    if not apaas_app_id.strip():
+        return {"ok": False, "error_code": "INVALID_APAAS_APP_ID",
+                "message": "apaas_app_id 必填"}
+    apaas_app_id_clean = apaas_app_id.strip()
+
+    # 1) 拉角色 (复用工具). 失败直接返 — 矩阵核心维度.
+    roles_resp = await list_apaas_app_roles(env_id, apaas_app_id_clean)
+    if not roles_resp.get("ok"):
+        return roles_resp
+    roles_raw = roles_resp.get("roles") or []
+
+    # 2) 拉菜单 (页面 + 流程过滤). 失败时降级 — page/process 空 list 不阻断矩阵.
+    menus_resp = await list_apaas_app_menus(env_id, apaas_app_id_clean)
+    menus_raw: list = []
+    if isinstance(menus_resp, dict) and menus_resp.get("ok"):
+        m = menus_resp.get("menus") or []
+        if isinstance(m, list):
+            menus_raw = m
+
+    # 3) 拉模型 (数据维度). 失败时空 list 不阻断.
+    models_resp = await list_apaas_app_models(env_id, apaas_app_id_clean, with_fields=False)
+    models_raw: list = []
+    if isinstance(models_resp, dict) and models_resp.get("ok"):
+        ms = models_resp.get("models") or []
+        if isinstance(ms, list):
+            models_raw = ms
+
+    # 4) 归一资源 list.
+    page_resources: list[dict] = []
+    process_resources: list[dict] = []
+    for m in menus_raw:
+        if not isinstance(m, dict):
+            continue
+        mtype = str(m.get("menu_type") or "").upper()
+        item = {
+            "id": str(m.get("menu_id") or ""),
+            "code": str(m.get("form_code") or m.get("menu_code") or ""),
+            "name": str(m.get("menu_name") or ""),
+        }
+        if not item["id"]:
+            continue
+        if mtype == "MODEL":
+            page_resources.append(item)
+        elif mtype == "PROCESS":
+            process_resources.append(item)
+
+    data_resources: list[dict] = []
+    for d in models_raw:
+        if not isinstance(d, dict):
+            continue
+        data_resources.append({
+            "id": str(d.get("model_id") or d.get("id") or ""),
+            "code": str(d.get("model_code") or d.get("code") or ""),
+            "name": str(d.get("model_name") or d.get("name") or ""),
+        })
+    data_resources = [d for d in data_resources if d["id"]]
+
+    # app_setting 静态 4 项 — id == code 用于矩阵 key.
+    app_setting_resources: list[dict] = [
+        {"id": r["code"], "code": r["code"], "name": r["name"]}
+        for r in _APP_SETTING_RESOURCES
+    ]
+
+    # 5) 归一角色 list (member_count 暂走 0 — P2 真接 list_apaas_role_members).
+    roles_out: list[dict] = []
+    for r in roles_raw:
+        if not isinstance(r, dict):
+            continue
+        roles_out.append({
+            "role_id": str(r.get("role_id") or ""),
+            "role_code": str(r.get("role_code") or ""),
+            "role_name": str(r.get("role_name") or ""),
+            "member_count": 0,  # P2 真接成员数
+        })
+    roles_out = [r for r in roles_out if r["role_id"]]
+
+    # 6) 构建 matrix — role_id × resource_id → perm.
+    matrix: dict[str, dict[str, str]] = {}
+    for r in roles_out:
+        row: dict[str, str] = {}
+        for resource in page_resources:
+            row[resource["id"]] = _mock_matrix_for_resource(
+                r["role_code"], r["role_name"], "page", resource["code"],
+            )
+        for resource in data_resources:
+            row[resource["id"]] = _mock_matrix_for_resource(
+                r["role_code"], r["role_name"], "data", resource["code"],
+            )
+        for resource in process_resources:
+            row[resource["id"]] = _mock_matrix_for_resource(
+                r["role_code"], r["role_name"], "process", resource["code"],
+            )
+        for resource in app_setting_resources:
+            row[resource["id"]] = _mock_matrix_for_resource(
+                r["role_code"], r["role_name"], "app_setting", resource["code"],
+            )
+        matrix[r["role_id"]] = row
+
+    return {
+        "ok": True,
+        "env_id": env_id,
+        "apaas_app_id": apaas_app_id_clean,
+        "roles": roles_out,
+        "resources": {
+            "page": page_resources,
+            "data": data_resources,
+            "process": process_resources,
+            "app_setting": app_setting_resources,
+        },
+        "matrix": matrix,
+        "is_mock": True,
+        "note": "matrix 字段当前 mock — 根据 role_code 关键字推断. P2 真接 apaas list_apaas_form_permissions.",
+    }
+
+
 @mcp.tool()
 async def create_apaas_app_roles(env_id: int, apaas_app_id: str, roles: list) -> dict:
     """批量创建 aPaaS 应用角色（不走 SPEC 文档流程，直接调 apaas 平台）。

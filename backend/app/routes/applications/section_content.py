@@ -679,3 +679,145 @@ async def get_section_content_roles(
         total=int(raw_or_err.get("total") or len(items)),
         source=source,
     )
+
+
+# ---------------------------------------------------------------------------
+# Phase D: 权限矩阵 — RoleManagePanel 矩阵 view 数据源.
+# ---------------------------------------------------------------------------
+class RoleResourceMatrixResource(BaseModel):
+    id: str
+    code: Optional[str] = None
+    name: str
+
+
+class RoleResourceMatrixRole(BaseModel):
+    role_id: str
+    role_code: str
+    role_name: str
+    member_count: int = 0
+
+
+class RoleResourceMatrixResources(BaseModel):
+    page: list[RoleResourceMatrixResource] = Field(default_factory=list)
+    data: list[RoleResourceMatrixResource] = Field(default_factory=list)
+    process: list[RoleResourceMatrixResource] = Field(default_factory=list)
+    app_setting: list[RoleResourceMatrixResource] = Field(default_factory=list)
+
+
+class RoleResourceMatrixResponse(BaseModel):
+    ok: bool
+    env_id: Optional[int] = None
+    apaas_app_id: Optional[str] = None
+    roles: list[RoleResourceMatrixRole] = Field(default_factory=list)
+    resources: RoleResourceMatrixResources = Field(default_factory=RoleResourceMatrixResources)
+    # matrix: role_id -> resource_id -> perm ('all'/'rw'/'r'/'none')
+    matrix: dict[str, dict[str, str]] = Field(default_factory=dict)
+    is_mock: bool = True
+    note: Optional[str] = None
+    source: str = ""
+    error_code: Optional[str] = None
+    message: Optional[str] = None
+
+
+@router.get(
+    "/{app_id}/role-resource-matrix",
+    response_model=RoleResourceMatrixResponse,
+)
+async def get_role_resource_matrix_endpoint(
+    app_id: int,
+    ctx: Annotated[AuthContext, Depends(get_auth_context)],
+    db: Annotated[AsyncSession, Depends(get_db)],
+) -> RoleResourceMatrixResponse:
+    """聚合应用所有角色 × 资源 (页面/数据/流程/应用设置) 的权限矩阵.
+
+    给 design-v4 RoleManagePanel 矩阵 view 用 — 一次拉全, 前端不用串 4 个 list endpoint.
+    数据源走 get_role_resource_matrix MCP 工具 (内部聚合 roles + menus + models).
+    matrix 字段当前 mock — P2 真接 apaas list_apaas_form_permissions 取代.
+    """
+    source = "get_role_resource_matrix"
+    app = await _load_app_and_check_view(app_id, ctx, db)
+    if not app.platform_env_id or not app.apaas_app_id:
+        return RoleResourceMatrixResponse(
+            ok=False,
+            env_id=app.platform_env_id,
+            apaas_app_id=str(app.apaas_app_id) if app.apaas_app_id else None,
+            source=source,
+            error_code="APP_NOT_DEPLOYED",
+            message="应用尚未部署到 aPaaS 平台 — 部署后才能拉权限矩阵",
+        )
+
+    ok, raw_or_err = await _safe_call_mcp_tool(
+        source,
+        env_id=app.platform_env_id,
+        apaas_app_id=str(app.apaas_app_id),
+    )
+    if not ok:
+        return RoleResourceMatrixResponse(
+            ok=False,
+            env_id=app.platform_env_id,
+            apaas_app_id=str(app.apaas_app_id),
+            source=source,
+            error_code=raw_or_err.get("error_code") or "MCP_TOOL_FAILED",
+            message=raw_or_err.get("message") or "矩阵聚合工具调用失败",
+        )
+
+    # raw_or_err 是 get_role_resource_matrix MCP 工具返的完整 dict — 字段已 normalize.
+    roles_data = raw_or_err.get("roles") or []
+    resources_data = raw_or_err.get("resources") or {}
+    matrix_data = raw_or_err.get("matrix") or {}
+
+    def _coerce_resource_list(raw_list: Any) -> list[RoleResourceMatrixResource]:
+        if not isinstance(raw_list, list):
+            return []
+        out: list[RoleResourceMatrixResource] = []
+        for it in raw_list:
+            if not isinstance(it, dict):
+                continue
+            out.append(RoleResourceMatrixResource(
+                id=str(it.get("id") or ""),
+                code=str(it.get("code") or "") or None,
+                name=str(it.get("name") or ""),
+            ))
+        return [r for r in out if r.id]
+
+    resources = RoleResourceMatrixResources(
+        page=_coerce_resource_list(resources_data.get("page")),
+        data=_coerce_resource_list(resources_data.get("data")),
+        process=_coerce_resource_list(resources_data.get("process")),
+        app_setting=_coerce_resource_list(resources_data.get("app_setting")),
+    )
+
+    roles_norm: list[RoleResourceMatrixRole] = []
+    for r in roles_data:
+        if not isinstance(r, dict):
+            continue
+        roles_norm.append(RoleResourceMatrixRole(
+            role_id=str(r.get("role_id") or ""),
+            role_code=str(r.get("role_code") or ""),
+            role_name=str(r.get("role_name") or ""),
+            member_count=int(r.get("member_count") or 0),
+        ))
+    roles_norm = [r for r in roles_norm if r.role_id]
+
+    # matrix 字段保留原 shape — role_id → resource_id → perm.
+    matrix_norm: dict[str, dict[str, str]] = {}
+    if isinstance(matrix_data, dict):
+        for role_id, row in matrix_data.items():
+            if not isinstance(row, dict):
+                continue
+            inner: dict[str, str] = {}
+            for resource_id, perm in row.items():
+                inner[str(resource_id)] = str(perm or "none")
+            matrix_norm[str(role_id)] = inner
+
+    return RoleResourceMatrixResponse(
+        ok=True,
+        env_id=app.platform_env_id,
+        apaas_app_id=str(app.apaas_app_id),
+        roles=roles_norm,
+        resources=resources,
+        matrix=matrix_norm,
+        is_mock=bool(raw_or_err.get("is_mock", True)),
+        note=str(raw_or_err.get("note") or "") or None,
+        source=source,
+    )
