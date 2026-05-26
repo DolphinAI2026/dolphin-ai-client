@@ -102,14 +102,17 @@ import { computed, ref, watch } from 'vue'
  * - 父组件 / 内部 emit / template 校验全部走这套白名单, 防止打字错 / 上游污染
  *   传入 invalid section code 时 UI 落到空状态.
  */
-export const VALID_SECTION_CODES = [
+// 2026-05-26 fix: `<script setup>` 禁 `export const` — 删 export, 通过
+// defineExpose 暴露给 template ref. 未来如有跨文件复用需求, 把这俩 const + type
+// 移到 `frontend/src/components/v2/section-nav-constants.ts` 单独导出.
+const VALID_SECTION_CODES = [
   'data',
   'ui',
   'logic',
   'permission',
   'extension',
 ] as const
-export type SectionCode = typeof VALID_SECTION_CODES[number]
+type SectionCode = typeof VALID_SECTION_CODES[number]
 
 /** runtime 白名单判定 — 收紧 narrow 同时 console.warn. */
 function isValidSectionCode(code: unknown): code is SectionCode {
