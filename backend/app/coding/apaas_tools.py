@@ -308,10 +308,12 @@ async def _list_apaas_app_dicts(args: dict, platform_env_id: int, db: AsyncSessi
             if not isinstance(d, dict):
                 continue
             did = str(d.get("id") or "")
+            # 2026-05-26 fix: apaas 平台真实返字段是 dictionaryCode / dictionaryName,
+            # 不是 dictCode / dictName (后者是更老版本 / 别处的命名). 加 fallback.
             entry = {
                 "dict_id": did,
-                "dict_code": str(d.get("dictCode") or d.get("code") or ""),
-                "dict_name": str(d.get("dictName") or d.get("name") or ""),
+                "dict_code": str(d.get("dictionaryCode") or d.get("dictCode") or d.get("code") or ""),
+                "dict_name": str(d.get("dictionaryName") or d.get("dictName") or d.get("name") or ""),
             }
             if with_options and did:
                 try:

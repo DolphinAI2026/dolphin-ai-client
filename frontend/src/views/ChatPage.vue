@@ -193,6 +193,17 @@
           @menu-selected="onApaasMenuSelected"
           @menus-loaded="onApaasMenusLoaded"
         />
+        <!-- SectionContentList — 通用资源列表 (model / dict / form / list / process / event / role) -->
+        <SectionContentList
+          v-if="!legacyMode && existingAppId && platformIframeAppId === existingAppId
+                && shouldShowSectionContent && currentSectionContentKind"
+          :app-id="existingAppId"
+          :resource-kind="currentSectionContentKind"
+          :apaas-app-id="store.currentApp?.apaas_app_id || ''"
+          :env-id="store.currentApp?.platform_env_id || 0"
+          @select-item="onSectionContentItemSelect"
+          @request-create="onSectionContentCreateRequest"
+        />
         <!-- extension section — 显 ExtensionSectionPanel 替代 iframe (PR6 已实现) -->
         <div
           v-if="!legacyMode && currentSection === 'extension' && existingAppId"
@@ -776,6 +787,7 @@ import { buildPlatformProxyEntryUrl, buildPlatformProxyMenuUrl, repairPlatformIf
 import ApaasMenuSidebar from '@/components/ApaasMenuSidebar.vue'
 import SectionNav from '@/components/v2/SectionNav.vue'
 import ExtensionSectionPanel from '@/components/v2/ExtensionSectionPanel.vue'
+import SectionContentList from '@/components/v2/SectionContentList.vue'
 import type { ConversationCreate, Message } from '@/types'
 import TopBar from '@/components/TopBar.vue'
 import WorkbenchShell from '@/components/WorkbenchShell.vue'
@@ -2233,11 +2245,27 @@ const platformIframeKey = ref(0)
 // 5 section: data/ui/logic/permission/extension, 默认 ui (跟以前 ApaasMenuSidebar 行为对齐)
 // legacyMode: ?legacy=1 OR window 宽度 < 1280 → 老 ApaasMenuSidebar 直显, SectionNav 隐藏
 const SECTION_STORAGE_KEY = 'apaas-section-v1'
+const SECTION_TAB_STORAGE_KEY = 'apaas-section-tab-v1'
+// 各 section 默认 sub-tab — initial load + onSwitchSection 不传 tab 时用
+const SECTION_DEFAULT_TAB: Record<string, string> = {
+  data: 'models',
+  ui: 'menus',
+  logic: 'processes',
+  permission: 'roles',
+  extension: 'dev_kit',
+}
 const _initSection = (() => {
   try { return localStorage.getItem(SECTION_STORAGE_KEY) || 'ui' } catch { return 'ui' }
 })()
+const _initSectionTab = (() => {
+  try {
+    const saved = localStorage.getItem(SECTION_TAB_STORAGE_KEY)
+    if (saved) return saved
+  } catch { /* private mode */ }
+  return SECTION_DEFAULT_TAB[_initSection] || 'menus'
+})()
 const currentSection = ref<string>(_initSection)
-const currentSectionTab = ref<string>('menus')
+const currentSectionTab = ref<string>(_initSectionTab)
 const legacyMode = ref<boolean>((() => {
   try {
     if (new URLSearchParams(window.location.search).get('legacy') === '1') return true
@@ -2247,20 +2275,67 @@ const legacyMode = ref<boolean>((() => {
 function onSwitchSection(section: string, tab?: string) {
   // SPEC v2 Issue #6: 切 section 前提示用户保存(dirty editor) — 通过 postMessage 探 iframe.
   // P0 简化: 直接切, 后续 PR2c 在 ConfigAssistant 接入 dirty probe.
+  const sectionChanged = currentSection.value !== section
   currentSection.value = section
   if (tab) currentSectionTab.value = tab
-  else {
-    // 切到新 section 时 sub-tab 重置到默认 (跟 SectionNav 内部默认对齐)
-    const defaults: Record<string, string> = {
-      data: 'models',
-      ui: 'menus',
-      logic: 'processes',
-      permission: 'roles',
-      extension: 'devkits',
-    }
-    currentSectionTab.value = defaults[section] || ''
+  else if (sectionChanged) {
+    // 切到新 section 时 sub-tab 重置到该 section 默认
+    currentSectionTab.value = SECTION_DEFAULT_TAB[section] || ''
   }
-  try { localStorage.setItem(SECTION_STORAGE_KEY, section) } catch { /* private mode */ }
+  try {
+    localStorage.setItem(SECTION_STORAGE_KEY, section)
+    localStorage.setItem(SECTION_TAB_STORAGE_KEY, currentSectionTab.value)
+  } catch { /* private mode */ }
+}
+
+// PR2b-followup (2026-05-26): SectionNav sub-tab → SectionContentList resource kind mapping.
+// data/ui/logic/permission 大部分 sub-tab 都接 SectionContentList; 例外:
+//   - ui:menus 走老 ApaasMenuSidebar (功能已成熟, 保留)
+//   - extension:* 走 ExtensionSectionPanel (PR6 已实现)
+//   - permission:field_perm / menu_vis 暂无后端 endpoint, fallback null (落 iframe)
+const SECTION_TAB_TO_KIND: Record<string, 'models' | 'dicts' | 'forms' | 'lists' | 'processes' | 'business-events' | 'roles'> = {
+  'data:models': 'models',
+  'data:dicts': 'dicts',
+  'ui:forms': 'forms',
+  'ui:lists': 'lists',
+  'logic:processes': 'processes',
+  'logic:events': 'business-events',
+  'permission:roles': 'roles',
+}
+const currentSectionContentKind = computed(() => {
+  const key = `${currentSection.value}:${currentSectionTab.value}`
+  return SECTION_TAB_TO_KIND[key] || null
+})
+const shouldShowSectionContent = computed(() => {
+  if (legacyMode.value) return false
+  if (currentSection.value === 'extension') return false  // 走 ExtensionSectionPanel
+  if (currentSection.value === 'ui' && currentSectionTab.value === 'menus') return false  // 走 ApaasMenuSidebar
+  return currentSectionContentKind.value !== null
+})
+function onSectionContentItemSelect(item: any) {
+  // P0: 仅 log; P1 接 iframe 跳转到对应 apaas 资源编辑页.
+  // ui:forms / ui:lists 走 menu 跳转 (item 有 menu_id + form_id) — 复用 onApaasMenuSelected.
+  if (
+    (currentSection.value === 'ui' && (currentSectionTab.value === 'forms' || currentSectionTab.value === 'lists'))
+    || (currentSection.value === 'logic' && currentSectionTab.value === 'processes')
+  ) {
+    if (item?.menu_id || item?.id) {
+      onApaasMenuSelected({
+        menu_id: item.menu_id || item.id,
+        form_id: item.form_id || item.extra?.form_id,
+        menu_type: item.menu_type || item.extra?.menu_type,
+        menu_display: item.extra?.menu_display,
+      } as any)
+      return
+    }
+  }
+  // 其他资源 (model / dict / event / role): 平台没有直接 deeplink, 暂不跳.
+  // 让用户用配置助手 (右侧 AI 助手) 改, 或在 iframe 内手动导航.
+  console.log('[SectionContentList] selected item:', item)
+}
+function onSectionContentCreateRequest() {
+  // P0: 提示用户用 AI 助手创建. P1 接对应 modal.
+  console.log('[SectionContentList] create requested for', currentSectionContentKind.value)
 }
 // 监听窗口 resize — 突然变窄退回 legacy 模式 (但 ?legacy=1 强制不可逆)
 const _hasLegacyQuery = (() => {

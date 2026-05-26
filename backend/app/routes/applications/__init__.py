@@ -1747,6 +1747,11 @@ router.include_router(_deploy_history.router)
 from . import extension as _extension  # noqa: E402
 router.include_router(_extension.router)
 
+# PR2b-followup (2026-05-26): SectionNav sub-tab 资源列表 — 7 个 GET endpoint
+# 包 list_apaas_app_models / dicts / forms / lists / processes / business-events / roles
+from . import section_content as _section_content  # noqa: E402
+router.include_router(_section_content.router)
+
 
 # ---------------------------------------------------------------------------
 # Phase F：Application 默认模式 (simple|pro|None) 端点
