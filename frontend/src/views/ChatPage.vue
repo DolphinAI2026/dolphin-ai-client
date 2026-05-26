@@ -3135,7 +3135,17 @@ function runDeploy(_env: 'dev' | 'test' | 'prod') {
 // canEditApaasInfo / canDeployFromTopCTA 是只读 guard, 应用没部署 / 没生成内容时
 // 把按钮 disable 掉避免空打.
 
-const canEditApaasInfo = computed(() => !!(store.currentApp?.apaas_app_id && builderCurrentAppId.value))
+// 2026-05-26 (PR3 reviewer P1 #5): viewer 假阳性修复 — 检查 EDIT 权限.
+// store.currentApp.permissions.edit 在 fetchAppDetail 中由 /api/applications/{id} 返回填充
+// (后端 _UserAppPermissionsResp 包 view/edit/delete bool). viewer 没 edit 权限时
+// 编辑入口直接 disable, 不再让用户点开 popover 填完才被 403 拒.
+const canEditApaasInfo = computed(() => {
+  if (!store.currentApp?.apaas_app_id || !builderCurrentAppId.value) return false
+  // 老数据 / 老 API 不返 permissions 时不卡, 保留旧行为 (RBAC 在后端 enforce)
+  const perms = (store.currentApp as any)?.permissions
+  if (perms && typeof perms.edit === 'boolean') return perms.edit
+  return true
+})
 const canDeployFromTopCTA = computed(() => !!builderCurrentAppId.value && (showStartDeployButton.value || deployAllDone.value))
 
 const editAppInfoOpen = ref(false)

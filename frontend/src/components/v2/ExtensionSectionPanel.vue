@@ -150,7 +150,9 @@ const lastPollAt = ref('')
 const sseStatus = ref<'idle' | 'connecting' | 'open' | 'error' | 'closed'>('idle')
 
 let pollTimer: ReturnType<typeof setInterval> | null = null
-let eventSource: EventSource | null = null
+// 2026-05-26 (PR6 reviewer Critical #2): SSE 现在走 controlled handle (.close() +
+// 内部自管退避), 不再裸 EventSource. handle 是 { close: () => void }.
+let eventSource: { close: () => void } | null = null
 
 // ─────────────────────────────────────────────────────
 // Computed
@@ -274,7 +276,7 @@ function openSse() {
       },
       onError: () => {
         sseStatus.value = 'error'
-        // SSE 错时不退出 — EventSource 自动重连
+        // PR6 Critical: handle 内部用指数退避自管重连, 不再裸 EventSource 风暴.
       },
     })
   } catch (err) {

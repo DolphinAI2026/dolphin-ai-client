@@ -102,14 +102,21 @@ async def test_update_apaas_app_info_success_path():
 
 @pytest.mark.asyncio
 async def test_update_apaas_app_info_not_implemented_fallback():
-    """apaas_client 抛 NOT_IMPLEMENTED → tool 包装成 error_code=NOT_IMPLEMENTED."""
+    """apaas_client 抛 NotImplementedAPaaSError → _with_client 自动返 error_code=NOT_IMPLEMENTED.
+
+    2026-05-26 (PR3 reviewer P1 #1): 改用类型化异常代替字符串子串匹配.
+    _with_client 内部 catch NotImplementedAPaaSError 时直接 set error_code=NOT_IMPLEMENTED,
+    update_apaas_app_info tool 看见此 error_code 就走友好降级.
+    """
     from app import mcp_server
 
     async def fake_with_client(env_id, op, fn):
-        # 模拟 client.update_app 抛 NOT_IMPLEMENTED → _with_client 返 (False, error_dict)
+        # 模拟 _with_client 已识别 NotImplementedAPaaSError 后 set 的 error_code=NOT_IMPLEMENTED
         return False, {
-            "ok": False, "error_code": "APAAS_CALL_FAILED",
-            "message": "改应用信息失败：NOT_IMPLEMENTED: 平台没有 /xdap-app/apaasApplications/update 端点 (HTTP 404)",
+            "ok": False, "error_code": "NOT_IMPLEMENTED",
+            "message": "改应用信息失败：平台无对应接口 (/xdap-app/apaasApplications/update)",
+            "endpoint": "/xdap-app/apaasApplications/update",
+            "http_status": 404,
             "env_id": 1,
         }
 

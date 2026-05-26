@@ -1265,9 +1265,9 @@ async def update_apaas_app_info(
         ),
     )
     if not ok:
-        # _with_client 在异常时返 {"ok": False, ...}。识别 NOT_IMPLEMENTED 文案做友好降级
-        msg = str(raw.get("message", "")) if isinstance(raw, dict) else ""
-        if "NOT_IMPLEMENTED" in msg:
+        # PR3 P1 #1: _with_client 现在直接识别 NotImplementedAPaaSError → error_code=NOT_IMPLEMENTED.
+        # 这里只需补上 attempted_fields + UI 友好文案.
+        if isinstance(raw, dict) and raw.get("error_code") == "NOT_IMPLEMENTED":
             return {
                 "ok": False,
                 "error_code": "NOT_IMPLEMENTED",
@@ -1623,9 +1623,14 @@ _PLATFORM_FILE_TYPES_V2_6 = {
 
 
 async def _with_client(env_id: int, op: str, fn):
-    """统一桥接：按 env_id 拿 apaas_client → 调 fn(client) → 异常包装。"""
+    """统一桥接：按 env_id 拿 apaas_client → 调 fn(client) → 异常包装。
+
+    2026-05-26 (PR3 reviewer P1 #1): 识别 NotImplementedAPaaSError 类型化异常,
+    给前端返 error_code=NOT_IMPLEMENTED 让 UI 走友好降级 (替代原字符串子串匹配).
+    """
     from app.coding.apaas_tools import _get_apaas_client
     from app.database import AsyncSessionLocal
+    from app.apaas_client import NotImplementedAPaaSError
     async with AsyncSessionLocal() as db:
         try:
             client = await _get_apaas_client(env_id, db)
@@ -1636,6 +1641,13 @@ async def _with_client(env_id: int, op: str, fn):
             }
         try:
             return True, await fn(client)
+        except NotImplementedAPaaSError as exc:
+            return False, {
+                "ok": False, "error_code": "NOT_IMPLEMENTED",
+                "message": f"{op}失败：平台无对应接口 ({exc.endpoint})",
+                "endpoint": exc.endpoint, "http_status": exc.http_status,
+                "env_id": env_id,
+            }
         except Exception as exc:
             return False, {
                 "ok": False, "error_code": "APAAS_CALL_FAILED",

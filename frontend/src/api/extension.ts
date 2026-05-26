@@ -74,8 +74,12 @@ export const extensionApi = {
 
   /**
    * 订阅扩展更新 SSE 通道.
-   * 返回 EventSource 实例 (调用方需保留以便 .close()).
-   * onMessage 收到任何事件 (含 hello / ping / dev_kit_published / republish_done) 都会触发.
+   * 返回一个 controlled handle (.close() 停掉 + 取消所有挂起重连) 而非裸 EventSource —
+   * 2026-05-26 (PR6 reviewer Critical #2): 加指数退避防重连风暴 + 防 401 时
+   * EventSource 自带重连无限刷.
+   *
+   * 后端 SSE endpoint 走 token query param (PR6 Critical #1) — EventSource 无法
+   * set Authorization header. 后端 401 时不再 retry, 业务错由 onError 上报调用方.
    */
   openUpdateEventStream(
     appId: number,
@@ -84,38 +88,80 @@ export const extensionApi = {
       onError?: (e: Event) => void
       onOpen?: () => void
     },
-  ): EventSource {
-    // EventSource 自带带 cookie, 但 Bearer token 走不了 header — 用 query param 兜底.
-    // 后端 sse_starlette + sse_no_buffering middleware 已处理 X-Accel-Buffering.
+  ): { close: () => void } {
     const token = localStorage.getItem('token') || ''
-    const url = `${API_PREFIX}/applications/${appId}/extension-update-events${token ? `?_t=${encodeURIComponent(token)}` : ''}`
-    // 注意: 默认 EventSource 不传 Authorization header. backend cookie 模式 or
-    // 网关层 token rewrite 时可 work. 当前阶段先用最简单方式, P1 加 sse polyfill 支持 header.
-    const es = new EventSource(url, { withCredentials: true })
+    const url = `${API_PREFIX}/applications/${appId}/extension-update-events${token ? `?token=${encodeURIComponent(token)}` : ''}`
 
-    es.addEventListener('open', () => {
-      handlers.onOpen?.()
-    })
+    let es: EventSource | null = null
+    let reconnectTimer: number | null = null
+    let attempt = 0
+    let closed = false
+    // 浏览器自带 EventSource 撞 onerror 时会自动 retry (默认 3s 间隔), 没退避.
+    // 我们手动接管: onerror → close() → 退避 → reconnect, 防 backend 挂时风暴.
+    const MAX_BACKOFF_MS = 60_000   // 1 分钟封顶
+    const BASE_DELAY_MS = 1_000     // 1s 起点
 
-    const dispatch = (typeName: string) => (msg: MessageEvent) => {
-      try {
-        const data = msg.data ? JSON.parse(msg.data) : {}
-        handlers.onEvent?.({ type: typeName, ...data })
-      } catch {
-        handlers.onEvent?.({ type: typeName })
+    function scheduleReconnect() {
+      if (closed) return
+      const jitter = Math.random() * 500
+      const delay = Math.min(MAX_BACKOFF_MS, BASE_DELAY_MS * Math.pow(2, attempt)) + jitter
+      attempt++
+      reconnectTimer = window.setTimeout(connect, delay)
+    }
+
+    function connect() {
+      if (closed) return
+      // 创建前先确保旧的清掉, 防 onerror 期间多个 ES 实例并存
+      if (es) {
+        try { es.close() } catch { /* ignore */ }
+        es = null
+      }
+      const _es = new EventSource(url, { withCredentials: true })
+      es = _es
+
+      _es.addEventListener('open', () => {
+        attempt = 0  // reset backoff on successful connect
+        handlers.onOpen?.()
+      })
+
+      const dispatch = (typeName: string) => (msg: MessageEvent) => {
+        try {
+          const data = msg.data ? JSON.parse(msg.data) : {}
+          handlers.onEvent?.({ type: typeName, ...data })
+        } catch {
+          handlers.onEvent?.({ type: typeName })
+        }
+      }
+
+      ;['hello', 'ping', 'dev_kit_published', 'republish_done', 'dev_kit_attached'].forEach(name => {
+        _es.addEventListener(name, dispatch(name) as EventListener)
+      })
+
+      _es.onerror = (e) => {
+        // EventSource 默认会自动重连, 但没退避. 关 native ES + 自管退避.
+        // readyState: 0=CONNECTING, 1=OPEN, 2=CLOSED (后端拒后通常 0 然后跳 2)
+        handlers.onError?.(e)
+        try { _es.close() } catch { /* ignore */ }
+        if (_es === es) es = null
+        scheduleReconnect()
       }
     }
 
-    // 后端发的 event: hello / ping / dev_kit_published / republish_done / dev_kit_attached
-    ;['hello', 'ping', 'dev_kit_published', 'republish_done', 'dev_kit_attached'].forEach(name => {
-      es.addEventListener(name, dispatch(name) as EventListener)
-    })
+    connect()
 
-    es.onerror = (e) => {
-      handlers.onError?.(e)
+    return {
+      close() {
+        closed = true
+        if (reconnectTimer != null) {
+          clearTimeout(reconnectTimer)
+          reconnectTimer = null
+        }
+        if (es) {
+          try { es.close() } catch { /* ignore */ }
+          es = null
+        }
+      },
     }
-
-    return es
   },
 }
 

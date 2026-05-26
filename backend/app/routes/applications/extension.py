@@ -24,7 +24,8 @@ import logging
 import time
 from typing import Annotated, Optional
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Query
+from jose import JWTError, jwt
 from pydantic import BaseModel, Field
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -36,7 +37,7 @@ from app.crypto import decrypt_password
 from app.database import get_db
 from app.deps import AuthContext, get_auth_context
 from app.error_messages import APAAS_LOGIN_FAILED, is_apaas_token_error
-from app.models import Application, PlatformEnv
+from app.models import Application, PlatformEnv, User
 from app.permissions import Action, check_resource_permission
 
 logger = logging.getLogger(__name__)
@@ -261,8 +262,8 @@ async def list_dev_kits(
 @router.get("/{app_id}/extension-update-events")
 async def extension_update_events(
     app_id: int,
-    ctx: Annotated[AuthContext, Depends(get_auth_context)],
     db: Annotated[AsyncSession, Depends(get_db)],
+    token: Optional[str] = Query(None),
 ) -> EventSourceResponse:
     """SSE 通道: 当前应用的自开发资源 (扩展) 有外部更新时, 推送通知.
 
@@ -275,12 +276,39 @@ async def extension_update_events(
 
     客户端 (ChatPage / ExtensionSectionPanel) 用 EventSource API 订阅.
     无新事件时定时发 ping 防 nginx 60s 超时断流.
+
+    2026-05-26 (PR6 reviewer Critical): EventSource 不支持 set Authorization
+    header → 走 token query param 模式 (跟 incremental/execute-stream 一致). 调用方:
+      new EventSource(`/api/applications/${id}/extension-update-events?token=${jwt}`)
     """
-    # 检 app 存在 + 权限
-    await _load_app_and_env(app_id, ctx, db)
+    # PR6 Critical: SSE 走 query param 验证 token (EventSource 不能 set header)
+    if not token:
+        raise HTTPException(status_code=401, detail="缺少认证token (SSE 走 query param)")
+    try:
+        payload = jwt.decode(token, settings.jwt_secret_key, algorithms=[settings.jwt_algorithm])
+        user_id = int(payload.get("sub", 0))
+        tenant_id_claim = payload.get("tid")
+        if tenant_id_claim is None:
+            raise HTTPException(status_code=403, detail="平台管理员无法订阅应用 SSE")
+        tenant_id = int(tenant_id_claim)
+    except (JWTError, Exception) as exc:
+        if isinstance(exc, HTTPException):
+            raise
+        raise HTTPException(status_code=401, detail="无效的认证凭证")
+
+    user_row = (await db.execute(select(User).where(User.id == user_id))).scalar_one_or_none()
+    if not user_row:
+        raise HTTPException(status_code=401, detail="用户不存在")
+    # Tenant scoping 是主要安全边界 — 跟 incremental_update.execute_update_stream 一致.
+    # 细粒度 EDIT/VIEW 留给具体的 mutation endpoint (notify / republish) 用标准 ctx 路径检查.
+    app_row = (await db.execute(
+        select(Application).where(Application.id == app_id, Application.tenant_id == tenant_id)
+    )).scalar_one_or_none()
+    if not app_row:
+        raise HTTPException(status_code=404, detail="应用不存在")
 
     queue = await _subscribe(app_id)
-    logger.info(f"extension-update SSE subscribed app_id={app_id} user_id={ctx.user.id}")
+    logger.info(f"extension-update SSE subscribed app_id={app_id} user_id={user_id}")
 
     async def event_generator():
         try:

@@ -18,6 +18,22 @@ import threading
 from app.error_messages import APAAS_TOKEN_EXPIRED
 
 logger = logging.getLogger(__name__)
+
+
+class NotImplementedAPaaSError(Exception):
+    """平台没实现该 endpoint (404/405) — 调用方应降级到 fallback 文案.
+
+    2026-05-26 (PR3 reviewer P1 #1): 替代原来的字符串子串 `if "NOT_IMPLEMENTED" in msg`
+    脆弱判断, 走 isinstance 强类型. 调用方:
+      try:
+          await client.update_app(...)
+      except NotImplementedAPaaSError:
+          # 友好降级
+    """
+    def __init__(self, endpoint: str, http_status: int):
+        self.endpoint = endpoint
+        self.http_status = http_status
+        super().__init__(f"NOT_IMPLEMENTED: 平台没有 {endpoint} 端点 (HTTP {http_status})")
 DESKTOP_API_DEBUG_LOG = Path.home() / "Desktop" / "apaas_api_debug.log"
 
 # 查询所有模型的字段时，同时在飞的 query_model_fields 请求上限。
@@ -332,11 +348,13 @@ class APaaSClient:
         """改 aPaaS 应用基本信息（名称 / 描述 / 图标）。
 
         平台真实 endpoint 在 v1 抓包没复现 — 这里按 addApp 的对称路径
-        `POST /xdap-app/apaasApplications/update` 试调。若平台返 404 / 不识别
-        路径，上层包一层 `_business_error('NOT_IMPLEMENTED', ...)` 给用户走
-        UI 改名兜底。
+        `POST /xdap-app/apaasApplications/update` 试调。404/405 时抛
+        `NotImplementedAPaaSError` 让调用方按类型降级。
 
         任意字段空串表示不改；非空才进 payload。
+
+        2026-05-26 (PR3 reviewer P1 #4): icon 改单字段 `appIcon` 优先,
+        避免双字段 payload 撞平台严格 schema 校验 400.
         """
         if not self.token:
             raise Exception("未设置token，请先调用login()或在初始化时传入token")
@@ -348,9 +366,9 @@ class APaaSClient:
         if description.strip():
             payload["appDesc"] = description.strip()
         if icon_svg.strip():
-            # 平台 icon 字段名在抓包里未确认 — 同时尝试两种命名，让平台按需识别
+            # PR3 reviewer P1 #4: 单字段 appIcon — 跟 addApp 抓包对称.
+            # 若平台 schema 不认会返业务错, 上层降级提示用户.
             payload["appIcon"] = icon_svg.strip()
-            payload["iconSvg"] = icon_svg.strip()
 
         _log_request("POST", url, payload)
         start = time.time()
@@ -363,9 +381,12 @@ class APaaSClient:
                 logger.error("401 Unauthorized - token可能已过期或无效 (update_app)")
                 raise Exception(APAAS_TOKEN_EXPIRED)
 
-            # 平台可能用 404 / 405 表示 endpoint 路径错（v1 这条没抓包确认）
+            # PR3 reviewer P1 #1: 404/405 抛 typed exception 让调用方 isinstance 判
             if response.status_code in (404, 405):
-                raise Exception(f"NOT_IMPLEMENTED: 平台没有 /xdap-app/apaasApplications/update 端点 (HTTP {response.status_code})")
+                raise NotImplementedAPaaSError(
+                    endpoint="/xdap-app/apaasApplications/update",
+                    http_status=response.status_code,
+                )
 
             response.raise_for_status()
             data = response.json()

@@ -5,7 +5,7 @@ import re
 from datetime import datetime
 from typing import Annotated, List, Optional
 from fastapi import APIRouter, Depends, HTTPException, Query, UploadFile, File, Form
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from sqlalchemy import select, desc, func as sa_func, delete, and_, not_, or_
 from sqlalchemy.ext.asyncio import AsyncSession
 from sse_starlette.sse import EventSourceResponse
@@ -3547,9 +3547,13 @@ async def delete_apaas_menu(
 
 
 class _UpdateApaasAppInfoReq(BaseModel):
-    app_name: str = ""
-    description: str = ""
-    icon_svg: str = ""
+    # 2026-05-26 (PR3 reviewer P1 #3): pydantic max_length 统一前后端校验.
+    # app_name 上限跟前端 el-input maxlength=64 + saveAppInfo guard 对齐.
+    # description 200 跟前端 textarea maxlength=200 对齐.
+    # icon_svg 50KB 防超大 SVG 撑爆 payload (实际 svg 通常 <5KB).
+    app_name: str = Field(default="", max_length=64)
+    description: str = Field(default="", max_length=200)
+    icon_svg: str = Field(default="", max_length=50_000)
 
 
 @router.post("/{app_id}/update-apaas-info")
@@ -3600,6 +3604,9 @@ async def update_apaas_app_info_route(
     )
 
     # 平台改名成功 → 同步回 backend Application.app_name + description (UI 即时刷新源头)
+    # 2026-05-26 (PR3 reviewer P1 #2): commit 失败时不再 raise 500 — 平台已改好但本地
+    # DB 没改, 应该告知客户端 partial_success 让 UI 提示\"已存到平台, 本地缓存稍后同步\"
+    # 而不是误以为整体失败.
     if mcp_result.get("ok"):
         touched = False
         if payload.app_name.strip():
@@ -3612,9 +3619,23 @@ async def update_apaas_app_info_route(
             app.icon_svg = payload.icon_svg.strip()
             touched = True
         if touched:
-            await db.commit()
-            await db.refresh(app)
-            mcp_result["app_id"] = app.id
-            mcp_result["synced_local_name"] = app.app_name
+            try:
+                await db.commit()
+                await db.refresh(app)
+                mcp_result["app_id"] = app.id
+                mcp_result["synced_local_name"] = app.app_name
+            except Exception as exc:
+                logging.getLogger(__name__).warning(
+                    "update_apaas_app_info_route DB commit 失败 (平台已改) app_id=%s: %r",
+                    app_id, exc,
+                )
+                try:
+                    await db.rollback()
+                except Exception:
+                    pass
+                # 平台已改, 本地未同步 — UI 应显示"平台已更新, 下次刷新页面看到"提示
+                mcp_result["partial_success"] = True
+                mcp_result["db_sync_failed"] = True
+                mcp_result["db_sync_error"] = str(exc)[:200]
 
     return mcp_result
