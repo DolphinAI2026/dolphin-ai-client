@@ -12,7 +12,43 @@
           <div class="builder-chat-crumbs">
             <button type="button" @click="router.push('/apps')">应用</button>
             <span>/</span>
-            <span>{{ builderAppDisplayName || '新建应用' }}</span>
+            <!-- PR3 (SPEC v2 §2): 应用名 breadcrumb 可点编辑 (改名 / 描述).
+                 应用已部署到平台 (有 apaas_app_id) 才显示编辑能力, 否则跟以前一样显示 span. -->
+            <el-popover
+              v-if="canEditApaasInfo"
+              v-model:visible="editAppInfoOpen"
+              trigger="click"
+              :width="320"
+              placement="bottom-start"
+              popper-class="edit-app-info-popper"
+              @show="prefillEditAppInfo"
+            >
+              <template #reference>
+                <button type="button" class="app-name-clickable" :title="`点击编辑应用信息 — ${builderAppDisplayName || '新建应用'}`">
+                  {{ builderAppDisplayName || '新建应用' }}
+                  <span aria-hidden="true" class="app-name-edit-hint">✎</span>
+                </button>
+              </template>
+              <div class="edit-app-info-form">
+                <div class="edit-app-info-title">编辑应用信息</div>
+                <label class="edit-app-info-label">
+                  <span>应用名</span>
+                  <el-input v-model="editAppName" placeholder="应用名" size="small" maxlength="64" />
+                </label>
+                <label class="edit-app-info-label">
+                  <span>描述</span>
+                  <el-input v-model="editAppDesc" type="textarea" placeholder="可选，填给协作者看" :rows="3" maxlength="200" />
+                </label>
+                <div v-if="editAppInfoError" class="edit-app-info-error">{{ editAppInfoError }}</div>
+                <div class="edit-app-info-actions">
+                  <button type="button" class="eai-btn ghost" :disabled="editAppInfoSaving" @click="editAppInfoOpen = false">取消</button>
+                  <button type="button" class="eai-btn primary" :disabled="editAppInfoSaving || !editAppInfoDirty" @click="saveAppInfo">
+                    {{ editAppInfoSaving ? '保存中…' : '保存' }}
+                  </button>
+                </div>
+              </div>
+            </el-popover>
+            <span v-else>{{ builderAppDisplayName || '新建应用' }}</span>
             <span>/</span>
             <strong>AI-Builder</strong>
           </div>
@@ -77,6 +113,56 @@
             </svg>
           </span>
         </button>
+        <!-- PR3 (SPEC v2 §2): 顶部 [部署] / [历史] / [更多 ⋯] CTA 组. 复用现有 modal/drawer.
+             有 builderCurrentAppId 时才显示 (新建应用没保存前藏起来). -->
+        <div v-if="builderCurrentAppId" class="app-top-cta" role="group" aria-label="应用操作">
+          <button
+            type="button"
+            class="cta-btn cta-deploy"
+            :title="canDeployFromTopCTA ? '一键部署当前应用到平台' : '应用尚未生成可部署内容'"
+            :disabled="!canDeployFromTopCTA"
+            @click="onTopCtaDeploy"
+          >
+            <span class="cta-icon" aria-hidden="true">
+              <svg viewBox="0 0 16 16" fill="none">
+                <path d="M8 1.5l4 4.5v6H4v-6L8 1.5z" stroke="currentColor" stroke-width="1.3" stroke-linejoin="round" />
+                <path d="M6.5 9.5L9 7M9 7l2 0M9 7l0 2" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" />
+                <path d="M5 14h6" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" />
+              </svg>
+            </span>
+            <span>部署</span>
+          </button>
+          <button
+            type="button"
+            class="cta-btn cta-history"
+            title="查看部署历史 & 回滚"
+            @click="onTopCtaHistory"
+          >
+            <span class="cta-icon" aria-hidden="true">
+              <svg viewBox="0 0 16 16" fill="none">
+                <circle cx="8" cy="8" r="6" stroke="currentColor" stroke-width="1.3" />
+                <path d="M8 4.5V8l2.5 1.5" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" />
+              </svg>
+            </span>
+            <span>历史</span>
+          </button>
+          <el-dropdown trigger="click" placement="bottom-end" @command="onTopCtaMoreCommand">
+            <button type="button" class="cta-btn cta-more" title="更多操作">
+              更多
+              <span class="cta-more-dots" aria-hidden="true">⋯</span>
+            </button>
+            <template #dropdown>
+              <el-dropdown-menu>
+                <el-dropdown-item command="edit_info" :disabled="!canEditApaasInfo">
+                  ✎ 编辑应用信息
+                </el-dropdown-item>
+                <el-dropdown-item command="open_platform" :disabled="!(store.currentApp?.apaas_app_id || platformDirectUrl)">
+                  → 平台 UI
+                </el-dropdown-item>
+              </el-dropdown-menu>
+            </template>
+          </el-dropdown>
+        </div>
         <button
           v-if="SHOW_PLATFORM_CONFIG && activeView === 'platform' && platformIframeUrl"
           class="top-bar-icon-btn"
@@ -2965,6 +3051,118 @@ function runDeploy(_env: 'dev' | 'test' | 'prod') {
   // 2026-05-19 image #29: 部署 confirm 后立即关 modal，把执行过程放右侧。
   deployConfirmOpen.value = false
   startDeployFromArtifact()
+}
+
+// ─────────── PR3 (SPEC v2 §2): 顶部 CTA + 应用信息编辑 ───────────
+//
+// 复用现有 deployConfirmOpen / deployHistoryOpen — 不重写 DeployConfirmModal /
+// DeployHistoryDrawer. 这里只是给顶部 [部署] / [历史] / [更多] 按钮注入入口.
+//
+// canEditApaasInfo / canDeployFromTopCTA 是只读 guard, 应用没部署 / 没生成内容时
+// 把按钮 disable 掉避免空打.
+
+const canEditApaasInfo = computed(() => !!(store.currentApp?.apaas_app_id && builderCurrentAppId.value))
+const canDeployFromTopCTA = computed(() => !!builderCurrentAppId.value && (showStartDeployButton.value || deployAllDone.value))
+
+const editAppInfoOpen = ref(false)
+const editAppName = ref('')
+const editAppDesc = ref('')
+const editAppInfoSaving = ref(false)
+const editAppInfoError = ref('')
+const _editAppInfoInitial = ref({ name: '', desc: '' })
+
+const editAppInfoDirty = computed(() => {
+  const n = editAppName.value.trim()
+  const d = editAppDesc.value.trim()
+  return n !== _editAppInfoInitial.value.name || d !== _editAppInfoInitial.value.desc
+})
+
+function prefillEditAppInfo() {
+  const initName = (store.preview.appName || (store.currentApp as any)?.app_name || (store.currentApp as any)?.name || '').trim()
+  const initDesc = ((store.currentApp as any)?.description || (store.currentApp as any)?.appDesc || '').trim()
+  editAppName.value = initName
+  editAppDesc.value = initDesc
+  _editAppInfoInitial.value = { name: initName, desc: initDesc }
+  editAppInfoError.value = ''
+}
+
+async function saveAppInfo() {
+  const appId = builderCurrentAppId.value
+  if (!appId) {
+    editAppInfoError.value = '当前应用未保存，无法编辑'
+    return
+  }
+  const name = editAppName.value.trim()
+  const desc = editAppDesc.value.trim()
+  if (!name && !desc) {
+    editAppInfoError.value = '请填应用名或描述至少一个字段'
+    return
+  }
+  if (name && name.length > 64) {
+    editAppInfoError.value = '应用名最多 64 字符'
+    return
+  }
+  editAppInfoSaving.value = true
+  editAppInfoError.value = ''
+  try {
+    const resp = await request.post<any, any>(
+      `/applications/${appId}/update-apaas-info`,
+      {
+        app_name: name !== _editAppInfoInitial.value.name ? name : '',
+        description: desc !== _editAppInfoInitial.value.desc ? desc : '',
+      },
+    )
+    if (resp?.ok) {
+      // 同步本地 store, 让 builderAppDisplayName 立刻刷新
+      if (name) {
+        store.preview.appName = name
+        if (store.currentApp) {
+          store.currentApp = { ...store.currentApp, app_name: name, name: name } as any
+        }
+      }
+      if (desc && store.currentApp) {
+        store.currentApp = { ...store.currentApp, description: desc } as any
+      }
+      ElMessage.success(`应用信息已更新（${(resp.updated_fields || []).join(', ') || '已保存'}）`)
+      editAppInfoOpen.value = false
+    } else if (resp?.error_code === 'NOT_IMPLEMENTED') {
+      editAppInfoError.value = resp.message || '平台无对应更新接口，请到平台 UI 修改'
+    } else if (resp?.error_code === 'APP_NOT_DEPLOYED') {
+      editAppInfoError.value = resp.message || '应用尚未部署，先部署后才能编辑信息'
+    } else {
+      editAppInfoError.value = resp?.message || '保存失败'
+    }
+  } catch (e: any) {
+    editAppInfoError.value = e?.response?.data?.detail || e?.message || '网络错误'
+  } finally {
+    editAppInfoSaving.value = false
+  }
+}
+
+// 顶部 CTA handlers — 复用现有 deploy modal / history drawer / popover
+function onTopCtaDeploy() {
+  // 复用 SPEC 行内已有的 deployConfirmOpen 弹窗 (DeployConfirmModal)
+  openDeployModal()
+}
+function onTopCtaHistory() {
+  // 复用 SPEC 行内已有的 deployHistoryOpen drawer (DeployHistoryDrawer)
+  openDeployHistoryDrawer()
+}
+function onTopCtaMoreCommand(cmd: string) {
+  if (cmd === 'edit_info') {
+    if (!canEditApaasInfo.value) {
+      ElMessage.warning('应用尚未部署到平台，无法编辑应用信息')
+      return
+    }
+    prefillEditAppInfo()
+    editAppInfoOpen.value = true
+  } else if (cmd === 'open_platform') {
+    if (store.currentApp?.apaas_app_id || platformDirectUrl.value) {
+      openInPlatform()
+    } else {
+      ElMessage.warning('应用尚未部署，无法跳转平台 UI')
+    }
+  }
 }
 
 // 部署是否在跑（任意 step running 或刚启动尚未拿到 steps）
@@ -11557,6 +11755,178 @@ html[data-theme="dark"] .config-assistant.ca-floating {
   background: #f8fafc;
   color: #111827;
 }
+
+/* ─────────── PR3 (SPEC v2 §2): 顶部 [部署] / [历史] / [更多] CTA 组 ─────────── */
+.app-top-cta {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  margin-left: 4px;
+}
+.cta-btn {
+  height: 30px;
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  border-radius: 7px;
+  padding: 0 11px;
+  border: 1px solid #dbe2ea;
+  background: #fff;
+  color: #1f2937;
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: background 0.15s ease, border-color 0.15s ease, color 0.15s ease;
+}
+.cta-btn:hover:not(:disabled) {
+  background: #f8fafc;
+  border-color: #cbd5e1;
+}
+.cta-btn:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+.cta-btn .cta-icon {
+  width: 14px;
+  height: 14px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  color: currentColor;
+  opacity: 0.85;
+}
+.cta-btn .cta-icon svg { width: 14px; height: 14px; }
+.cta-btn.cta-deploy {
+  border-color: #2563eb;
+  background: #2563eb;
+  color: #fff;
+}
+.cta-btn.cta-deploy:hover:not(:disabled) {
+  background: #1d4ed8;
+  border-color: #1d4ed8;
+}
+.cta-btn.cta-deploy:disabled {
+  background: #94a3b8;
+  border-color: #94a3b8;
+  color: #fff;
+}
+.cta-btn.cta-more {
+  padding: 0 9px;
+}
+.cta-more-dots {
+  font-size: 14px;
+  line-height: 1;
+  margin-left: 2px;
+  letter-spacing: -1px;
+}
+html[data-theme="dark"] .cta-btn {
+  background: rgba(255,255,255,0.04);
+  border-color: rgba(255,255,255,0.14);
+  color: #e2e8f0;
+}
+html[data-theme="dark"] .cta-btn:hover:not(:disabled) {
+  background: rgba(255,255,255,0.08);
+  border-color: rgba(255,255,255,0.22);
+}
+html[data-theme="dark"] .cta-btn.cta-deploy {
+  background: #3b82f6;
+  border-color: #3b82f6;
+  color: #fff;
+}
+
+/* breadcrumb 应用名可点编辑 */
+.builder-chat-crumbs .app-name-clickable {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  border: 0;
+  background: transparent;
+  padding: 1px 4px;
+  margin: 0 -4px;
+  border-radius: 4px;
+  color: #1f2937;
+  font: inherit;
+  font-weight: 600;
+  cursor: pointer;
+  transition: background 0.15s ease;
+}
+.builder-chat-crumbs .app-name-clickable:hover {
+  background: #f1f5f9;
+}
+.builder-chat-crumbs .app-name-clickable .app-name-edit-hint {
+  font-size: 10px;
+  opacity: 0;
+  transition: opacity 0.15s ease;
+  color: #64748b;
+}
+.builder-chat-crumbs .app-name-clickable:hover .app-name-edit-hint {
+  opacity: 1;
+}
+html[data-theme="dark"] .builder-chat-crumbs .app-name-clickable {
+  color: #e2e8f0;
+}
+html[data-theme="dark"] .builder-chat-crumbs .app-name-clickable:hover {
+  background: rgba(255,255,255,0.06);
+}
+
+/* 编辑应用信息 popover 表单 */
+.edit-app-info-form {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 4px;
+}
+.edit-app-info-title {
+  font-size: 13px;
+  font-weight: 700;
+  color: #111827;
+}
+.edit-app-info-label {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  font-size: 11px;
+  color: #475569;
+  font-weight: 600;
+}
+.edit-app-info-error {
+  font-size: 11px;
+  color: #dc2626;
+  background: #fef2f2;
+  border: 1px solid #fecaca;
+  border-radius: 4px;
+  padding: 4px 8px;
+}
+.edit-app-info-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 6px;
+  margin-top: 2px;
+}
+.eai-btn {
+  height: 26px;
+  padding: 0 11px;
+  border-radius: 5px;
+  font-size: 12px;
+  font-weight: 600;
+  border: 1px solid #dbe2ea;
+  cursor: pointer;
+}
+.eai-btn.ghost {
+  background: #fff;
+  color: #475569;
+}
+.eai-btn.primary {
+  background: #2563eb;
+  border-color: #2563eb;
+  color: #fff;
+}
+.eai-btn.primary:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+.eai-btn.ghost:hover:not(:disabled) { background: #f8fafc; }
+.eai-btn.primary:hover:not(:disabled) { background: #1d4ed8; border-color: #1d4ed8; }
 
 .builder-top-action-icon {
   width: 15px;

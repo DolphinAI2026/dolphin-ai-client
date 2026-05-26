@@ -322,6 +322,62 @@ class APaaSClient:
             else:
                 raise Exception(f"创建应用失败: {data.get('message')}")
 
+    async def update_app(
+        self,
+        apaas_app_id: str,
+        app_name: str = "",
+        description: str = "",
+        icon_svg: str = "",
+    ) -> dict:
+        """改 aPaaS 应用基本信息（名称 / 描述 / 图标）。
+
+        平台真实 endpoint 在 v1 抓包没复现 — 这里按 addApp 的对称路径
+        `POST /xdap-app/apaasApplications/update` 试调。若平台返 404 / 不识别
+        路径，上层包一层 `_business_error('NOT_IMPLEMENTED', ...)` 给用户走
+        UI 改名兜底。
+
+        任意字段空串表示不改；非空才进 payload。
+        """
+        if not self.token:
+            raise Exception("未设置token，请先调用login()或在初始化时传入token")
+
+        url = f"{self.base_url}/xdap-app/apaasApplications/update"
+        payload: dict = {"id": apaas_app_id}
+        if app_name.strip():
+            payload["appName"] = app_name.strip()
+        if description.strip():
+            payload["appDesc"] = description.strip()
+        if icon_svg.strip():
+            # 平台 icon 字段名在抓包里未确认 — 同时尝试两种命名，让平台按需识别
+            payload["appIcon"] = icon_svg.strip()
+            payload["iconSvg"] = icon_svg.strip()
+
+        _log_request("POST", url, payload)
+        start = time.time()
+
+        async with httpx.AsyncClient(verify=False, timeout=45.0) as client:
+            response = await client.post(url, json=payload, headers=self._get_headers(app_id=apaas_app_id))
+            elapsed_ms = (time.time() - start) * 1000
+
+            if response.status_code == 401:
+                logger.error("401 Unauthorized - token可能已过期或无效 (update_app)")
+                raise Exception(APAAS_TOKEN_EXPIRED)
+
+            # 平台可能用 404 / 405 表示 endpoint 路径错（v1 这条没抓包确认）
+            if response.status_code in (404, 405):
+                raise Exception(f"NOT_IMPLEMENTED: 平台没有 /xdap-app/apaasApplications/update 端点 (HTTP {response.status_code})")
+
+            response.raise_for_status()
+            data = response.json()
+
+            _log_response(url, response.status_code, data, elapsed_ms, method="POST", request_body=_to_json(payload))
+
+            if data.get("code") in ("ok", 200):
+                logger.info(f"应用更新成功: id={apaas_app_id}")
+                return data.get("data") or {}
+            else:
+                raise Exception(f"更新应用失败: {data.get('message')}")
+
     @property
     def _manage_url(self) -> str:
         return f"{self.base_url}/xdap-app"

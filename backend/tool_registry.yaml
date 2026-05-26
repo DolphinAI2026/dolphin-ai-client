@@ -488,6 +488,11 @@ tools:
     agents: [builder, config]
     category: update
     description: "更新字典基本信息（不改选项，选项走 update_apaas_dict_option）。"
+  update_apaas_app_info:
+    sections: [global]
+    agents: [config]
+    category: update
+    description: "改应用基本信息 (名称/描述/图标). PR3 SPEC v2 顶部 breadcrumb 调用."
   update_apaas_app_model:
     sections: [data]
     agents: [builder]

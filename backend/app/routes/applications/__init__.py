@@ -2271,6 +2271,7 @@ class ConfigChatResp(BaseModel):
 
 # 2026-05-19 起: 配置助手能用的 MCP 工具白名单。
 # 2026-05-26 (SPEC v2 PR1): 改派生自 backend/tool_registry.yaml — 单一真相。
+# 2026-05-26 (PR3 合 PR1): update_apaas_app_info 通过 yaml entry 加入 (agents:[config]).
 #
 # 历史原则 (写入 yaml 时的 agents=[config] 分类依据):
 #   - "读取 apaas 真实状态" + "单字段/单菜单/单角色级精细修改" 全放
@@ -3491,3 +3492,80 @@ async def delete_apaas_menu(
         menu_id=payload.menu_id.strip(),
         menu_name=payload.menu_name,
     )
+
+
+# ───── 应用基本信息编辑（PR3, SPEC v2 §2 顶部 CTA）─────
+
+
+class _UpdateApaasAppInfoReq(BaseModel):
+    app_name: str = ""
+    description: str = ""
+    icon_svg: str = ""
+
+
+@router.post("/{app_id}/update-apaas-info")
+async def update_apaas_app_info_route(
+    app_id: int,
+    payload: _UpdateApaasAppInfoReq,
+    ctx: Annotated[AuthContext, Depends(get_auth_context)],
+    db: Annotated[AsyncSession, Depends(get_db)],
+):
+    """改应用基本信息 (名称 / 描述 / 图标), 内部包装 `update_apaas_app_info` MCP 工具.
+
+    ChatPage 顶部 breadcrumb 点应用名 → 弹小窗 → 保存调本接口. 跟 apaas-menu-delete
+    一样的模式: 鉴权 + 应用存在性检查 + 透传到 mcp_server tool.
+
+    保存成功后前端会刷新 builderAppDisplayName.
+    """
+    result = await db.execute(
+        select(Application).where(
+            Application.id == app_id,
+            Application.tenant_id == ctx.tenant_id,
+        )
+    )
+    app = result.scalar_one_or_none()
+    if not app:
+        raise HTTPException(status_code=404, detail="应用不存在")
+    await _require_application_permission(ctx, db, app, Action.EDIT)
+
+    if not app.platform_env_id or not app.apaas_app_id:
+        return {
+            "ok": False, "error_code": "APP_NOT_DEPLOYED",
+            "message": "应用未部署到平台，请先部署后再编辑应用信息",
+        }
+
+    has_any = any(v.strip() for v in (payload.app_name, payload.description, payload.icon_svg))
+    if not has_any:
+        return {
+            "ok": False, "error_code": "INVALID_PARAMS",
+            "message": "app_name / description / icon_svg 至少传一个非空字段",
+        }
+
+    from app.mcp_server import update_apaas_app_info as _mcp_update_app_info  # type: ignore
+    mcp_result = await _mcp_update_app_info(
+        env_id=app.platform_env_id,
+        apaas_app_id=app.apaas_app_id,
+        app_name=payload.app_name,
+        description=payload.description,
+        icon_svg=payload.icon_svg,
+    )
+
+    # 平台改名成功 → 同步回 backend Application.app_name + description (UI 即时刷新源头)
+    if mcp_result.get("ok"):
+        touched = False
+        if payload.app_name.strip():
+            app.app_name = payload.app_name.strip()
+            touched = True
+        if payload.description.strip():
+            app.description = payload.description.strip()
+            touched = True
+        if payload.icon_svg.strip():
+            app.icon_svg = payload.icon_svg.strip()
+            touched = True
+        if touched:
+            await db.commit()
+            await db.refresh(app)
+            mcp_result["app_id"] = app.id
+            mcp_result["synced_local_name"] = app.app_name
+
+    return mcp_result

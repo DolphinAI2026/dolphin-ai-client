@@ -1218,6 +1218,73 @@ async def get_apaas_app_overview(env_id: int, apaas_app_id: str) -> dict:
 
 
 @mcp.tool()
+async def update_apaas_app_info(
+    env_id: int,
+    apaas_app_id: str,
+    app_name: str = "",
+    description: str = "",
+    icon_svg: str = "",
+) -> dict:
+    """改应用基本信息（名称 / 描述 / 图标），不影响应用内的模型 / 表单 / 角色等结构。
+
+    任意字段空字符串 = 不改，非空才更新。三个字段全空时直接返 INVALID_PARAMS
+    避免空打。
+
+    返回 {ok, updated_fields, app_name, message}。
+
+    使用场景：用户在 ChatPage 顶部 breadcrumb 点应用名 → 弹小窗改名 → 保存。
+    Agent 主动改名场景少见 (一般是用户行为)，但留接口让 agent 在 "应用名拼错"
+    类反馈里能一键修。
+
+    注意：平台 update endpoint v1 没抓包证实，按 addApp 对称试调
+    `/xdap-app/apaasApplications/update`。撞 404 / 405 时返
+    NOT_IMPLEMENTED，让 UI 回落 "请到平台 UI 改" 文案。
+    """
+    if not apaas_app_id.strip():
+        return {"ok": False, "error_code": "INVALID_APAAS_APP_ID", "message": "apaas_app_id 不能为空"}
+
+    fields = {
+        "app_name": app_name.strip(),
+        "description": description.strip(),
+        "icon_svg": icon_svg.strip(),
+    }
+    updated = [k for k, v in fields.items() if v]
+    if not updated:
+        return {
+            "ok": False, "error_code": "INVALID_PARAMS",
+            "message": "app_name / description / icon_svg 至少传一个非空字段",
+        }
+
+    ok, raw = await _with_client(
+        env_id, "改应用信息",
+        lambda c: c.update_app(
+            apaas_app_id.strip(),
+            app_name=fields["app_name"],
+            description=fields["description"],
+            icon_svg=fields["icon_svg"],
+        ),
+    )
+    if not ok:
+        # _with_client 在异常时返 {"ok": False, ...}。识别 NOT_IMPLEMENTED 文案做友好降级
+        msg = str(raw.get("message", "")) if isinstance(raw, dict) else ""
+        if "NOT_IMPLEMENTED" in msg:
+            return {
+                "ok": False,
+                "error_code": "NOT_IMPLEMENTED",
+                "message": "平台无对应更新接口，请到平台 UI 修改",
+                "attempted_fields": updated,
+            }
+        return raw
+
+    return {
+        "ok": True,
+        "updated_fields": updated,
+        "app_name": fields["app_name"] or None,
+        "message": f"应用已更新 ({', '.join(updated)})",
+    }
+
+
+@mcp.tool()
 async def list_apaas_models_in_env(env_id: int) -> dict:
     """列指定环境内所有模型（跨应用，含 modelCode + appCode）。
 

@@ -34,12 +34,14 @@ from app.tool_registry import (
 # Baseline: PR1 落地前的硬编码 _CONFIG_CHAT_TOOL_WHITELIST.
 # 这是从 backend/app/routes/applications/__init__.py 2026-05-25 HEAD
 # (commit b7dc145 "加 bind_apaas_form_field_to_dict") 抓出来的 61 工具.
+# 2026-05-26 PR3 加 update_apaas_app_info → snapshot 升 62.
 # tool_registry.yaml 派生白名单必须 byte-equal 这个集合, 否则 ConfigAssistant 行为变了.
 # ─────────────────────────────────────────────────────
 _OLD_CONFIG_WHITELIST: frozenset[str] = frozenset({
     "add_apaas_dict_option",
     "add_apaas_model_field",
     "bind_apaas_form_field_to_dict",
+    "update_apaas_app_info",  # PR3 (SPEC v2 顶部 breadcrumb 编辑)
     "browser_click",
     "browser_list_pages",
     "browser_navigate",
@@ -185,7 +187,7 @@ def test_tool_meta_unknown_raises():
 
 
 def test_config_whitelist_unchanged():
-    """tool_registry.yaml 派生的 config 白名单 == PR1 之前的 61 工具硬编码."""
+    """tool_registry.yaml 派生的 config 白名单 == snapshot (PR1 61 + PR3 1 = 62)."""
     new = set(tools_for_agent("config"))
     diff = new ^ _OLD_CONFIG_WHITELIST
     assert not diff, (
@@ -193,7 +195,7 @@ def test_config_whitelist_unchanged():
         f"  only in new (yaml 派生): {sorted(new - _OLD_CONFIG_WHITELIST)}\n"
         f"  only in old (硬编码): {sorted(_OLD_CONFIG_WHITELIST - new)}"
     )
-    assert len(new) == 61, f"config 白名单总数应是 61, 实际 {len(new)}"
+    assert len(new) == 62, f"config 白名单总数应是 62 (PR3 加 update_apaas_app_info), 实际 {len(new)}"
 
 
 def test_builder_whitelist_count():
