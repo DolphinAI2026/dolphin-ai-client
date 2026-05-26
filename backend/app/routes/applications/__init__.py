@@ -1741,6 +1741,11 @@ router.include_router(_preflight.router)
 # 2026-05-24 部署历史 + 回滚 (Agent C cherry-pick)
 from . import deploy_history as _deploy_history  # noqa: E402
 router.include_router(_deploy_history.router)
+# 2026-05-26 PR6 (SPEC v2 §2 Section E0) — 扩展 section 子路由
+# 4 endpoint: /dev-kits 轮询 + /extension-update-events SSE +
+# /extension-update-notify 内部 hook + /republish 触发 aPaaS 重发
+from . import extension as _extension  # noqa: E402
+router.include_router(_extension.router)
 
 
 # ---------------------------------------------------------------------------

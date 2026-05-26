@@ -220,6 +220,13 @@ const router = createRouter({
       redirect: to => ({ path: '/chat', query: { app_id: String(to.params.appId) } }),
       meta: { requiresAuth: true }
     },
+    // PR6 — Extension Section 组件 demo / 验收用 (SPEC v2 §2 Section E0)
+    {
+      path: '/extension-demo',
+      name: 'ExtensionSectionDemo',
+      component: () => import('@/views/ExtensionSectionDemoPage.vue'),
+      meta: { requiresAuth: true }
+    },
     {
       path: '/platform-envs',
       name: 'PlatformEnvs',
