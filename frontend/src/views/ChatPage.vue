@@ -244,7 +244,16 @@
             </div>
           </div>
           <!-- 2026-05-26 design-v3: native panel 替 iframe -->
-          <!-- 设计 tab + forms/lists/menus 点中某 menu: 显 FormDesignerPanel -->
+          <!-- 设计 tab + 列表 sub + selectedMenu: ListDesignerPanel -->
+          <ListDesignerPanel
+            v-else-if="!legacyMode && topTab === 'design' && currentSectionTab === 'lists' && existingAppId && selectedApaasMenuId"
+            class="platform-iframe-container"
+            :app-id="existingAppId"
+            :menu-id="selectedApaasMenuId || undefined"
+            :menu-name="selectedApaasMenuName"
+            :form-id="selectedApaasMenuFormId"
+          />
+          <!-- 设计 tab + forms/menus 点中某 menu: 显 FormDesignerPanel -->
           <FormDesignerPanel
             v-else-if="!legacyMode && topTab === 'design' && existingAppId && selectedApaasMenuId"
             class="platform-iframe-container"
@@ -852,6 +861,7 @@ import SectionContentList from '@/components/v2/SectionContentList.vue'
 import AppConfigTopTabs from '@/components/v3/AppConfigTopTabs.vue'
 import AppConfigSubNav from '@/components/v3/AppConfigSubNav.vue'
 import FormDesignerPanel from '@/components/v3/FormDesignerPanel.vue'
+import ListDesignerPanel from '@/components/v3/ListDesignerPanel.vue'
 import DataModelDetailPanel from '@/components/v3/DataModelDetailPanel.vue'
 import DictEditorPanel from '@/components/v3/DictEditorPanel.vue'
 import RoleManagePanel from '@/components/v3/RoleManagePanel.vue'
