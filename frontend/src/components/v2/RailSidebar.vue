@@ -33,6 +33,13 @@ const NAV = computed<NavItem[]>(() => [
   // 数据接入 — DB 问数 wizard + 数据库连接管理
   { key: 'db-connections', label: '数据库连接', icon: 'database', path: '/db-connections' },
   { key: 'quick-db', label: 'DB 问数', icon: 'spark', path: '/quick-db' },
+  // design-v4 G3: 顶部 nav 6 stub 页 (跟 design 截图对齐 — 数据源/接口/文档/报表/模型/管理 8 项)
+  { key: 'datasources', label: '数据源', icon: 'database', path: '/datasources' },
+  { key: 'apis', label: '接口', icon: 'app', path: '/apis' },
+  { key: 'docs', label: '文档', icon: 'chat', path: '/docs' },
+  { key: 'reports', label: '报表', icon: 'spark', path: '/reports' },
+  { key: 'models', label: '模型', icon: 'store', path: '/models' },
+  { key: 'manage', label: '管理', icon: 'code', path: '/manage' },
 ])
 
 const userName = computed(() => user.user?.username || '未登录')
