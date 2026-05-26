@@ -7151,3 +7151,60 @@ async def browser_select_page(page_id: int, bring_to_front: bool = True, tenant_
         return _j.loads(raw)
     except Exception:
         return {"ok": True, "source": "cdm", "raw": raw}
+
+
+# ─────────────────────── Runtime drift detection (SPEC v2 PR1 round2-p2 #4) ───────────────────────
+
+
+def _assert_yaml_vs_registered_tools() -> tuple[set[str], set[str]]:
+    """启动时比 tool_registry.yaml 全量 vs FastMCP 实际 @mcp.tool() 注册的工具.
+
+    PR1 reviewer #4 留: yaml 跟源码 AST 一致 (test_yaml_matches_mcp_server_source)
+    只是静态对比, 真正跑起来 FastMCP 注册的工具集 (mcp._tool_manager._tools) 才是
+    实际暴露的 set — 比如 @mcp.tool() 装饰但函数被 try-except import 包住静默
+    失败, AST 对比看不出, runtime 才能发现.
+
+    返回 (only_in_yaml, only_in_registered) 用于测试 assert. 任一非空 log warning,
+    **不 raise** 避免阻断进程启动 — 真有 drift 通过日志看到比硬 fail-fast 安全
+    (生产突然挂比少几个工具风险大).
+    """
+    from app.tool_registry import all_tool_names as _yaml_tool_names
+
+    yaml_tools = _yaml_tool_names()
+    try:
+        registered_tools = {t.name for t in mcp._tool_manager.list_tools()}
+    except AttributeError:
+        # FastMCP 内部结构若升级, 用 fallback (不挡启动)
+        logger.warning(
+            "[tool-registry drift] FastMCP._tool_manager 不可访问, 跳过 runtime drift check"
+        )
+        return (set(), set())
+
+    only_yaml = yaml_tools - registered_tools
+    only_registered = registered_tools - yaml_tools
+
+    if only_yaml:
+        logger.warning(
+            "[tool-registry drift] yaml 列了但 FastMCP 未注册的工具 (%d): %s — "
+            "(yaml 多余 entry 或源码 @mcp.tool() 装饰失败)",
+            len(only_yaml),
+            sorted(only_yaml),
+        )
+    if only_registered:
+        logger.warning(
+            "[tool-registry drift] FastMCP 注册了但 yaml 缺 entry 的工具 (%d): %s — "
+            "(请在 backend/tool_registry.yaml 补 entry)",
+            len(only_registered),
+            sorted(only_registered),
+        )
+    if not only_yaml and not only_registered:
+        logger.info(
+            "[tool-registry drift] OK — yaml %d tools == FastMCP %d registered",
+            len(yaml_tools),
+            len(registered_tools),
+        )
+    return (only_yaml, only_registered)
+
+
+# 模块 import 时跑一次 drift check — 这时所有 @mcp.tool() 装饰都已执行
+_assert_yaml_vs_registered_tools()

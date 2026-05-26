@@ -17,7 +17,8 @@ from __future__ import annotations
 
 from functools import lru_cache
 from pathlib import Path
-from typing import Any
+from types import MappingProxyType
+from typing import Any, Mapping
 
 import yaml
 
@@ -30,11 +31,28 @@ VALID_SECTIONS: frozenset[str] = frozenset(
 VALID_AGENTS: frozenset[str] = frozenset({"builder", "coding", "vibe", "config"})
 
 
+def _freeze_registry(registry: dict[str, Any]) -> Mapping[str, Any]:
+    """把 load 出来的 registry 包成 read-only view (递归 proxy tools 字典).
+
+    PR1 reviewer #2 (round2-p2 state hygiene):
+    原 lru_cache 返回的是 dict 引用, 任何调用方都能改 load()['tools'] 污染整个进程 cache —
+    一次手贱写 `load()['tools']['__hacker__'] = ...` 就让所有后续读到的工具集都带这条脏数据.
+    用 types.MappingProxyType 包成只读, 任何 mutate 操作直接 raise TypeError. 双层 proxy
+    (outer registry + inner tools dict) — 否则 load()['tools'] 拿到的仍是可写 dict.
+
+    注: meta_dict 自身的 list (sections / agents) 还可改 — 但调用方都用 list comprehension
+    复制后用, 没有 in-place mutate, 风险可控. 真要彻底冻可改 tuple, 但侵入测试太多.
+    """
+    tools_proxy = MappingProxyType(registry["tools"])
+    return MappingProxyType({**registry, "tools": tools_proxy})
+
+
 @lru_cache(maxsize=1)
-def load() -> dict[str, Any]:
+def load() -> Mapping[str, Any]:
     """读 tool_registry.yaml, 缓存 (LRU size=1).
 
-    返回 dict: {"version": 1, "tools": {tool_name: meta_dict, ...}}
+    返回 read-only Mapping: {"version": 1, "tools": {tool_name: meta_dict, ...}}
+    顶层 + tools 字典都是 MappingProxyType, 调用方写入会 raise TypeError.
 
     若 yaml 缺失 / 解析失败, 抛 FileNotFoundError / yaml.YAMLError —
     fail fast 比兜底空 dict 安全 (静默漏工具会导致 ConfigAssistant 失能).
@@ -48,10 +66,10 @@ def load() -> dict[str, Any]:
     tools = registry.get("tools")
     if not isinstance(tools, dict) or not tools:
         raise ValueError("tool_registry.yaml tools 字段必须是非空 dict")
-    return registry
+    return _freeze_registry(registry)
 
 
-def reload() -> dict[str, Any]:
+def reload() -> Mapping[str, Any]:
     """显式清缓存重新 load (测试 / 热替场景用)."""
     load.cache_clear()
     return load()
