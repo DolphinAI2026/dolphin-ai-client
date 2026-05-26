@@ -11,12 +11,17 @@
     - 全部用 --t-* CSS token, light/dark 自动跟主题
     - 选中态由 props.currentSection / props.currentTab 控制 (受控组件)
   -->
-  <aside class="snv" :class="{ collapsed }" role="navigation" aria-label="应用配置区域">
+  <aside
+    class="snv"
+    :class="{ collapsed }"
+    role="navigation"
+    aria-label="应用配置分类导航"
+  >
     <div class="snv-head">
       <span class="snv-head-title">应用配置</span>
     </div>
 
-    <ul class="snv-list" role="tree">
+    <ul class="snv-list" role="tablist">
       <li
         v-for="section in SECTIONS"
         :key="section.code"
@@ -26,7 +31,10 @@
         <button
           type="button"
           class="snv-section"
-          :class="{ selected: section.code === props.currentSection }"
+          :class="{ selected: section.code === effectiveSection }"
+          role="tab"
+          :aria-selected="section.code === effectiveSection"
+          :aria-current="section.code === effectiveSection ? 'page' : undefined"
           :aria-expanded="isSectionExpanded(section.code)"
           :title="section.label"
           @click="handleSectionClick(section)"
@@ -46,6 +54,7 @@
           v-if="!collapsed && isSectionExpanded(section.code) && section.tabs.length"
           class="snv-tabs"
           role="group"
+          :aria-label="`${section.label} 子分类`"
         >
           <li
             v-for="tab in section.tabs"
@@ -55,11 +64,18 @@
             <button
               type="button"
               class="snv-tab"
+              role="tab"
               :class="{
                 selected:
-                  section.code === props.currentSection
+                  section.code === effectiveSection
                   && tab.code === props.currentTab,
               }"
+              :aria-selected="section.code === effectiveSection && tab.code === props.currentTab"
+              :aria-current="
+                section.code === effectiveSection && tab.code === props.currentTab
+                  ? 'page'
+                  : undefined
+              "
               :title="tab.label"
               @click="handleTabClick(section, tab)"
             >
@@ -77,15 +93,38 @@
 </template>
 
 <script setup lang="ts">
-import { ref, watch } from 'vue'
+import { computed, ref, watch } from 'vue'
 
 // ──────────────── 类型 ────────────────
+/**
+ * PR2a reviewer P2 (2026-05-26):
+ * - SECTION_CODES = SectionCode 的唯一 source-of-truth (与 SECTIONS 数据同步).
+ * - 父组件 / 内部 emit / template 校验全部走这套白名单, 防止打字错 / 上游污染
+ *   传入 invalid section code 时 UI 落到空状态.
+ */
+export const VALID_SECTION_CODES = [
+  'data',
+  'ui',
+  'logic',
+  'permission',
+  'extension',
+] as const
+export type SectionCode = typeof VALID_SECTION_CODES[number]
+
+/** runtime 白名单判定 — 收紧 narrow 同时 console.warn. */
+function isValidSectionCode(code: unknown): code is SectionCode {
+  return (
+    typeof code === 'string'
+    && (VALID_SECTION_CODES as readonly string[]).includes(code)
+  )
+}
+
 interface SectionTab {
   code: string
   label: string
 }
 interface Section {
-  code: string
+  code: SectionCode
   label: string
   icon: string
   tabs: SectionTab[]
@@ -142,10 +181,17 @@ const SECTIONS: Section[] = [
   },
 ]
 
+/** invalid currentSection prop 时回退到的 section. */
+const FALLBACK_SECTION: SectionCode = 'ui'
+
 // ──────────────── Props / Emits ────────────────
+/**
+ * PR2a reviewer P2: currentSection narrow 到 `SectionCode | string`
+ * — 保留 string 兼容老父组件 (未升级到 SectionCode), 但内部一律走 effectiveSection.
+ */
 const props = withDefaults(
   defineProps<{
-    currentSection?: string
+    currentSection?: SectionCode | string
     currentTab?: string
     /** P0 不实现折叠 UI, 留 prop 占位 — true 时只显 icon, 无 label / 无二级 */
     collapsed?: boolean
@@ -157,21 +203,59 @@ const props = withDefaults(
   },
 )
 
+/**
+ * PR2a reviewer P2: emit payload narrow 到 SectionCode 联合类型.
+ * 这样父组件 onSwitchSection 可以拿到精确类型, 不再是 string.
+ * 内部 emit 前会经过 isValidSectionCode 校验防内部 bug.
+ */
 const emit = defineEmits<{
-  (e: 'switch-section', section: string, tab?: string): void
+  'switch-section': [section: SectionCode, tab?: string]
 }>()
 
-// ──────────────── 内部展开状态 ────────────────
-// 默认: 当前 currentSection 是展开的; 其他可选展开 (多个互不影响, 不强制单展开)
-const expandedSections = ref<Set<string>>(new Set([props.currentSection]))
+// ──────────────── 防御性校验: effectiveSection ────────────────
+/**
+ * 父组件传 invalid currentSection 时 (打字错 / 上游数据污染 / lpc 攻击注入),
+ * UI 不会卡空状态 — fallback 到 FALLBACK_SECTION 并 console.warn.
+ * 全 template / 全 handler 一律走 effectiveSection.
+ */
+const effectiveSection = computed<SectionCode>(() => {
+  if (isValidSectionCode(props.currentSection)) {
+    return props.currentSection
+  }
+  // eslint-disable-next-line no-console
+  console.warn(
+    `[SectionNav] invalid currentSection="${String(props.currentSection)}", `
+    + `expected one of [${VALID_SECTION_CODES.join(', ')}]. `
+    + `Falling back to "${FALLBACK_SECTION}".`,
+  )
+  return FALLBACK_SECTION
+})
 
-function isSectionExpanded(code: string): boolean {
+// watch 单独打 warn, 避免每次 render 都触发 console.warn 噪音 (computed 已加 warn, 这里只在变化时再次提醒).
+watch(
+  () => props.currentSection,
+  (newCode) => {
+    if (newCode !== undefined && !isValidSectionCode(newCode)) {
+      // eslint-disable-next-line no-console
+      console.warn(
+        `[SectionNav] currentSection prop changed to invalid value "${String(newCode)}". `
+        + `Using fallback "${FALLBACK_SECTION}".`,
+      )
+    }
+  },
+)
+
+// ──────────────── 内部展开状态 ────────────────
+// 默认: 当前 effectiveSection 是展开的; 其他可选展开 (多个互不影响, 不强制单展开)
+const expandedSections = ref<Set<SectionCode>>(new Set([effectiveSection.value]))
+
+function isSectionExpanded(code: SectionCode): boolean {
   return expandedSections.value.has(code)
 }
 
-// 外部 currentSection 变 → 自动展开它 (但不收别的)
+// 外部 effectiveSection 变 → 自动展开它 (但不收别的)
 watch(
-  () => props.currentSection,
+  effectiveSection,
   (newCode) => {
     if (newCode && !expandedSections.value.has(newCode)) {
       expandedSections.value = new Set([...expandedSections.value, newCode])
@@ -180,8 +264,21 @@ watch(
 )
 
 // ──────────────── 行为 ────────────────
+/** PR2a reviewer P2: 内部 emit 前再校验一次 section.code, 防内部 bug 传 invalid. */
+function safeEmitSwitch(sectionCode: SectionCode, tab?: string) {
+  if (!isValidSectionCode(sectionCode)) {
+    // eslint-disable-next-line no-console
+    console.warn(
+      `[SectionNav] refusing to emit switch-section with invalid section="${String(sectionCode)}". `
+      + `Expected one of [${VALID_SECTION_CODES.join(', ')}].`,
+    )
+    return
+  }
+  emit('switch-section', sectionCode, tab)
+}
+
 function handleSectionClick(section: Section) {
-  const isCurrent = section.code === props.currentSection
+  const isCurrent = section.code === effectiveSection.value
   const isExpanded = expandedSections.value.has(section.code)
 
   if (isCurrent && isExpanded) {
@@ -197,18 +294,20 @@ function handleSectionClick(section: Section) {
     expandedSections.value = new Set([...expandedSections.value, section.code])
   }
   const defaultTab = section.tabs[0]?.code
-  emit('switch-section', section.code, defaultTab)
+  safeEmitSwitch(section.code, defaultTab)
 }
 
 function handleTabClick(section: Section, tab: SectionTab) {
   // 点 tab: 如果当前不是这个 section, 先切 section
-  emit('switch-section', section.code, tab.code)
+  safeEmitSwitch(section.code, tab.code)
 }
 
 // ──────────────── 暴露 (PR2b 测试用) ────────────────
 defineExpose({
   SECTIONS,
+  VALID_SECTION_CODES,
   expandedSections,
+  effectiveSection,
 })
 </script>
 
