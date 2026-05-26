@@ -2,11 +2,12 @@
      2026-05-24 从 ConfigAssistantPanel.vue 拆出 (refactor #9).
      主消息区 — 空态 + 消息列表 + thinking dot + plan card + hero CTA + change_plan info card. -->
 <script setup lang="ts">
+import { watch } from 'vue'
 import type { ChatMsg, Example } from './types'
 import { renderMd } from '@/utils/markdown'
 import { countModifyOps, extractPlan } from './composables/useConfigChat'
 
-defineProps<{
+const props = defineProps<{
   messages: ChatMsg[]
   examples: Example[]
   sending: boolean
@@ -27,6 +28,22 @@ function openScreenshot(dataUrl: string) {
     /* popup blocked */
   }
 }
+
+// 2026-05-26: AI 调完工具自动刷 iframe — 不再让用户点"刷新预览"按钮.
+// 检测: 消息列表里出现一个 assistant 消息, !streaming + countModifyOps>0, 且
+// 还没被自动刷过 (用 Set<id> 去重防多次触发). 满足就 emit refresh-iframe.
+const _autoRefreshed = new Set<number>()
+watch(() => props.messages, (msgs) => {
+  for (const m of msgs) {
+    if (m.role !== 'assistant') continue
+    if (m.streaming) continue
+    if (!m.id || _autoRefreshed.has(m.id)) continue
+    if (countModifyOps(m) <= 0) continue
+    _autoRefreshed.add(m.id)
+    // 略延 200ms 给 platform 端 API 真正落库
+    setTimeout(() => emit('refresh-iframe'), 200)
+  }
+}, { deep: true, immediate: false })
 </script>
 
 <template>
@@ -119,22 +136,23 @@ function openScreenshot(dataUrl: string) {
           <span class="ca-dot" /><span class="ca-dot" /><span class="ca-dot" />
         </div>
 
-        <!-- 2026-05-21 Phase 2: 完成态 hero CTA — 任务跑完且有修改类工具时显示 -->
+        <!-- 2026-05-21 Phase 2 / 2026-05-26 v2: 完成态 hero CTA.
+             改自动刷预览, 不再让用户点按钮. 按钮位降级为"已自动刷新"被动提示 + 兜底手动按钮. -->
         <div
           v-if="m.role === 'assistant' && !m.streaming && countModifyOps(m) > 0"
           class="ca-hero-cta"
         >
           <div class="ca-hero-text">
             <span class="ca-hero-icon">✅</span>
-            <span>已完成 <strong>{{ countModifyOps(m) }}</strong> 步调整</span>
+            <span>已完成 <strong>{{ countModifyOps(m) }}</strong> 步调整 · 已自动刷新预览</span>
           </div>
           <button
             type="button"
-            class="ca-hero-btn"
+            class="ca-hero-btn ca-hero-btn-subtle"
             @click="emit('refresh-iframe')"
-            title="刷新左侧 iframe 应用预览"
+            title="若预览没更新, 点这里手动刷新"
           >
-            刷新预览 ↻
+            ↻
           </button>
         </div>
 
@@ -524,6 +542,20 @@ function openScreenshot(dataUrl: string) {
 .ca-hero-btn:focus-visible {
   outline: 2px solid var(--line-focus, var(--brand-ring));
   outline-offset: 2px;
+}
+/* 2026-05-26: 自动刷新后, 按钮降级为兜底, 缩成纯图标 */
+.ca-hero-btn-subtle {
+  background: transparent;
+  color: var(--text-secondary, #64748b);
+  border: 1px solid var(--line, rgba(99, 102, 241, 0.15));
+  padding: 2px 8px;
+  font-size: 13px;
+}
+.ca-hero-btn-subtle:hover {
+  opacity: 1;
+  background: var(--bg-panel-hover, rgba(99, 102, 241, 0.06));
+  color: var(--brand);
+  border-color: var(--brand);
 }
 
 /* ─── Change plan 信息卡片 ──────────────────── */
