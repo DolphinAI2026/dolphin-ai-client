@@ -1,18 +1,16 @@
 <!-- ProcessDesignerPanel.vue — Native 流程设计器面板 (替 apaas process designer iframe).
 
-  2026-05-26 design-v3 P1-N3: 设计 tab + 流程 sub-tab 选中某菜单后,
-  显该菜单对应 process 的 BPMN-like 节点图. 用 @antv/x6 渲染.
+  2026-05-26 design-v4 Phase C: 扩 24 节点 (4 分类 × 4-5 种) + 属性面板.
+    - 左 sidebar collapsible 4 分类: 入口出口 / 审批 / 逻辑 / 动作 (24 节点 chip grid 2 列)
+    - 中央顶部 toolbar: 流程名称 + 节点统计 + 自动布局/AI 优化/试跑/部署 (后 4 placeholder)
+    - 中央 x6 canvas: 不同 shape/color 渲染 (entry 圆 / approval 圆角矩形 / logic 菱形 / action 矩形)
+    - 右 ProcessNodePropsPanel: 按 node.type 显不同 props (~400 行新组件)
 
-  P0 骨架:
-    - 左 sidebar (200px): 节点类型 list, 点击拖到画布 (P0 仅点击添加, 拖拽真接 P1)
-    - 中央 canvas: x6 Graph 实例
-    - 右侧 props panel (240px, v-if=有选中): 节点属性编辑
+  数据保存 (P2 接入):
+    - 加载 reload: 暂保留空画布 + "拖入节点开始" 占位, 不解 BPMN XML
+    - 保存按钮: alert 提示走配置助手对话
 
-  数据源:
-    - P0 mock 4 节点 + 3 边 demo
-    - P1 接 list_apaas_app_processes / list_apaas_app_menus 拿真 BPMN
-
-  样式与 FormDesignerPanel 对齐 — var(--brand) / var(--surface) / var(--text) / var(--line)
+  样式: design-v3 token (全 var 化, 仅 x6 attrs hex 在 buildNodeSpec 用原始值)
 -->
 <template>
   <section class="pdp" aria-label="流程设计">
@@ -23,106 +21,101 @@
     </div>
 
     <template v-else>
+      <!-- 中央顶部 toolbar -->
       <header class="pdp-head">
         <div class="pdp-head-meta">
           <h1 class="pdp-title">{{ menuName || '流程设计' }}</h1>
           <p class="pdp-sub">
-            <span class="pdp-stat">{{ nodeCount }} 节点 · {{ edgeCount }} 流转</span>
-            <span class="pdp-chip pdp-chip-warn">P0 demo 节点 — 接真数据 P1</span>
+            <span class="pdp-stat">{{ statsLine }}</span>
           </p>
         </div>
         <div class="pdp-head-actions">
-          <button class="pdp-btn pdp-btn-ghost" @click="onFitContent">适应画布</button>
-          <button class="pdp-btn pdp-btn-ghost" :disabled="true" title="P1 接入">保存</button>
-          <button class="pdp-btn pdp-btn-primary" :disabled="true" title="P1 接入">发布</button>
+          <button class="pdp-btn pdp-btn-ghost" @click="onFitContent" title="适应画布">
+            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 7V3h4M21 7V3h-4M3 17v4h4M21 17v4h-4"/></svg>
+            适应
+          </button>
+          <button class="pdp-btn pdp-btn-ghost" :disabled="true" title="P2 接入">自动布局</button>
+          <button class="pdp-btn pdp-btn-ghost" :disabled="true" title="P2 接入">AI 优化</button>
+          <button class="pdp-btn pdp-btn-ghost" :disabled="true" title="P2 接入">试跑</button>
+          <button class="pdp-btn pdp-btn-primary" :disabled="false" @click="onSave">保存</button>
+          <button class="pdp-btn pdp-btn-primary" :disabled="true" title="P2 接入">部署</button>
         </div>
       </header>
 
       <div class="pdp-body">
-        <aside class="pdp-sidebar" aria-label="节点类型">
-          <h4 class="pdp-sidebar-title">节点类型</h4>
-          <ul class="pdp-node-list">
-            <li
-              v-for="t in NODE_TYPES"
-              :key="t.id"
-              class="pdp-node-item"
-              :title="t.hint"
-              @click="onSidebarItemClick(t)"
+        <!-- 左 sidebar 4 分类 collapsible -->
+        <aside class="pdp-sidebar" aria-label="节点库">
+          <h4 class="pdp-sidebar-title">节点库</h4>
+          <div class="pdp-cat-list">
+            <div
+              v-for="cat in NODE_CATEGORIES"
+              :key="cat.code"
+              class="pdp-cat"
+              :data-cat="cat.code"
             >
-              <span class="pdp-node-icon" :style="{ background: t.color }" />
-              <div class="pdp-node-meta">
-                <span class="pdp-node-label">{{ t.label }}</span>
-                <span class="pdp-node-hint">{{ t.hint }}</span>
+              <button
+                class="pdp-cat-head"
+                @click="toggleCategory(cat.code)"
+                :aria-expanded="!collapsed[cat.code]"
+              >
+                <span class="pdp-cat-arrow" :class="{ 'is-open': !collapsed[cat.code] }">▸</span>
+                <span class="pdp-cat-label">{{ cat.label }}</span>
+                <span class="pdp-cat-count">{{ cat.nodes.length }}</span>
+              </button>
+              <div v-if="!collapsed[cat.code]" class="pdp-chip-grid">
+                <button
+                  v-for="n in cat.nodes"
+                  :key="n.type"
+                  class="pdp-chip"
+                  :data-cat="cat.code"
+                  :title="`加 ${n.label}`"
+                  @click="onSidebarNodeClick(n.type)"
+                >
+                  <span class="pdp-chip-icon">{{ n.icon }}</span>
+                  <span class="pdp-chip-label">{{ n.label }}</span>
+                </button>
               </div>
-            </li>
-          </ul>
-          <p class="pdp-sidebar-foot">点击节点添加 — 拖拽 P1 接入</p>
+            </div>
+          </div>
+          <p class="pdp-sidebar-foot">点击节点添加到画布 — 拖拽连线在画布上拖</p>
         </aside>
 
+        <!-- 中央 x6 canvas -->
         <div class="pdp-canvas-wrap">
           <div ref="containerRef" class="pdp-canvas"></div>
+          <div v-if="!nodeCount" class="pdp-canvas-hint">
+            <div class="pdp-canvas-hint-icon">⊕</div>
+            <p>左侧选节点, 点击添加到这里</p>
+          </div>
         </div>
 
-        <aside v-if="selected" class="pdp-props" aria-label="节点属性">
-          <header class="pdp-props-head">
-            <h4>节点属性</h4>
-            <button class="pdp-icon-btn" title="清除选中" @click="clearSelection">
-              <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                <path d="M18 6 6 18M6 6l12 12"/>
-              </svg>
-            </button>
-          </header>
-          <div class="pdp-props-body">
-            <label class="pdp-field">
-              <span class="pdp-field-label">节点 ID</span>
-              <input class="pdp-input pdp-input-readonly" :value="selected.id" readonly />
-            </label>
-            <label class="pdp-field">
-              <span class="pdp-field-label">节点名称</span>
-              <input class="pdp-input" v-model="selected.label" @input="onPropChange" />
-            </label>
-            <label class="pdp-field">
-              <span class="pdp-field-label">类型</span>
-              <input class="pdp-input pdp-input-readonly" :value="formatNodeType(selected.type)" readonly />
-            </label>
-            <label class="pdp-field">
-              <span class="pdp-field-label">分配人 / 角色</span>
-              <input
-                class="pdp-input"
-                v-model="selected.assignee"
-                placeholder="留空表示由发起人指定"
-                :disabled="selected.type === 'start' || selected.type === 'end'"
-                @input="onPropChange"
-              />
-            </label>
-            <p class="pdp-props-foot">编辑暂只改本地, 保存 / 发布 P1 接入.</p>
-          </div>
-        </aside>
+        <!-- 右节点属性面板 -->
+        <ProcessNodePropsPanel
+          v-if="selectedNode"
+          :node="selectedNode"
+          :model-options="modelOptions"
+          @change="onPropsChange"
+          @close="clearSelection"
+          @ai-query="onAiQuery"
+        />
       </div>
     </template>
   </section>
 </template>
 
 <script setup lang="ts">
-import { ref, watch, onMounted, onBeforeUnmount, shallowRef, nextTick } from 'vue'
-import { Graph } from '@antv/x6'
-
-type NodeType = 'start' | 'user_task' | 'gateway' | 'end'
-
-interface NodeTypeDef {
-  id: NodeType
-  label: string
-  hint: string
-  shape: 'circle' | 'rect' | 'polygon'
-  color: string
-}
-
-interface SelectedNode {
-  id: string
-  label: string
-  type: NodeType
-  assignee: string
-}
+import { ref, computed, watch, onMounted, onBeforeUnmount, shallowRef, reactive, nextTick } from 'vue'
+import { Graph, type Node as X6Node } from '@antv/x6'
+import ProcessNodePropsPanel from './ProcessNodePropsPanel.vue'
+import {
+  NODE_CATEGORIES,
+  type NodeType,
+  type NodeCategoryCode,
+  type ProcessNode,
+  getNodeDef,
+  getNodeCategoryCode,
+  getNodeColor,
+} from './processNodeRegistry'
 
 const props = defineProps<{
   appId: number
@@ -131,117 +124,188 @@ const props = defineProps<{
   formId?: string
 }>()
 
-const NODE_TYPES: NodeTypeDef[] = [
-  { id: 'start',     label: '开始节点',  hint: '流程起点',            shape: 'circle',  color: '#10b981' },
-  { id: 'user_task', label: '用户任务',  hint: '指派给人 / 角色审批', shape: 'rect',    color: '#3b82f6' },
-  { id: 'gateway',   label: '网关',      hint: '条件分支 / 汇聚',     shape: 'polygon', color: '#f59e0b' },
-  { id: 'end',       label: '结束节点',  hint: '流程终点',            shape: 'circle',  color: '#dc2626' },
-]
-
 const containerRef = ref<HTMLElement | null>(null)
 const graphRef = shallowRef<Graph | null>(null)
-const selected = ref<SelectedNode | null>(null)
+
+/** 全部 node state (reactive). 每个 node = id + 各 type 配置. */
+const nodeStates = reactive<Record<string, ProcessNode>>({})
+const selectedNodeId = ref<string | null>(null)
 const nodeCount = ref(0)
 const edgeCount = ref(0)
 
-/** Build node spec based on type. Reused for mock + sidebar-add. */
-function buildNodeSpec(type: NodeType, label: string) {
-  const def = (NODE_TYPES.find(t => t.id === type) || NODE_TYPES[1])!
-  if (type === 'start' || type === 'end') {
+const collapsed = reactive<Record<NodeCategoryCode, boolean>>({
+  entry: false,
+  approval: false,
+  logic: false,
+  action: false,
+})
+
+const selectedNode = computed<ProcessNode | null>(() => {
+  if (!selectedNodeId.value) return null
+  return nodeStates[selectedNodeId.value] || null
+})
+
+const statsLine = computed(() => {
+  const entryN = Object.values(nodeStates).filter(n => getNodeCategoryCode(n.type) === 'entry').length
+  return `${entryN} 入口 · ${nodeCount.value} 节点 · ${edgeCount.value} 连线 · 最近运行 12 分钟前`
+})
+
+/** 待 P2 接 list_apaas_app_models — 当前用 placeholder. */
+const modelOptions = computed(() => [
+  { code: 'apply_form', label: '申请表 (apply_form)' },
+  { code: 'approval_log', label: '审批日志 (approval_log)' },
+])
+
+function toggleCategory(code: NodeCategoryCode) {
+  collapsed[code] = !collapsed[code]
+}
+
+/** 用 cat code 决定 shape, 用 type/cat 决定 color. */
+function buildNodeSpec(type: NodeType, label: string, icon: string): Record<string, unknown> {
+  const cat = getNodeCategoryCode(type)
+  const color = getNodeColor(type)
+  const displayLabel = `${icon}  ${label}`
+
+  if (cat === 'entry') {
+    // 圆形 (start = 绿, end = 红, timer/webhook = entry 默认绿)
     return {
       shape: 'circle',
-      width: 56,
-      height: 56,
-      label,
+      width: 64,
+      height: 64,
+      label: displayLabel,
       attrs: {
-        body: { fill: def.color, stroke: def.color, strokeWidth: 2 },
-        label: { fill: '#fff', fontSize: 12, fontWeight: 600 },
+        body: {
+          fill: '#ffffff',
+          stroke: color,
+          strokeWidth: 2.5,
+        },
+        label: {
+          fill: color,
+          fontSize: 11,
+          fontWeight: 600,
+        },
       },
     }
   }
-  if (type === 'gateway') {
+
+  if (cat === 'logic') {
+    // 菱形 (条件分支 / 多分支 / 并行 / 汇聚 / 等待)
     return {
       shape: 'polygon',
-      width: 70,
+      width: 110,
       height: 70,
-      label,
+      label: displayLabel,
       attrs: {
         body: {
           refPoints: '0,10 10,0 20,10 10,20',
-          fill: '#fff7ed',
-          stroke: def.color,
+          fill: '#fffbeb',
+          stroke: color,
           strokeWidth: 2,
         },
-        label: { fill: '#92400e', fontSize: 12, fontWeight: 500 },
+        label: {
+          fill: '#92400e',
+          fontSize: 11.5,
+          fontWeight: 500,
+        },
       },
     }
   }
-  // user_task default
-  return {
-    shape: 'rect',
-    width: 120,
-    height: 56,
-    label,
-    attrs: {
-      body: {
-        fill: '#fff',
-        stroke: '#5B5BD6',
-        strokeWidth: 1.5,
-        rx: 6,
-        ry: 6,
-      },
-      label: { fill: '#1f2937', fontSize: 13, fontWeight: 500 },
-    },
-  }
-}
 
-function formatNodeType(t: NodeType): string {
-  const def = NODE_TYPES.find(x => x.id === t)
-  return def?.label || t
-}
-
-/** Add mock 4 nodes + 3 edges. Caller is responsible for graph state. */
-function loadMockGraph(graph: Graph) {
-  const mockNodes = [
-    { id: 'start',    type: 'start' as NodeType,     label: '开始',         x: 80,  y: 130 },
-    { id: 'approve1', type: 'user_task' as NodeType, label: '部门审批',     x: 220, y: 120 },
-    { id: 'approve2', type: 'user_task' as NodeType, label: '总经理审批',   x: 420, y: 120 },
-    { id: 'end',      type: 'end' as NodeType,       label: '结束',         x: 620, y: 130 },
-  ]
-  mockNodes.forEach(n => {
-    const spec = buildNodeSpec(n.type, n.label)
-    graph.addNode({
-      id: n.id,
-      x: n.x,
-      y: n.y,
-      ...spec,
-      data: { type: n.type, assignee: '' },
-    } as any)
-  })
-  const mockEdges: Array<[string, string]> = [
-    ['start', 'approve1'],
-    ['approve1', 'approve2'],
-    ['approve2', 'end'],
-  ]
-  mockEdges.forEach(([s, t]) => {
-    graph.addEdge({
-      source: s,
-      target: t,
+  if (cat === 'action') {
+    // 矩形 (动作类) — 紫色边
+    return {
+      shape: 'rect',
+      width: 140,
+      height: 50,
+      label: displayLabel,
       attrs: {
-        line: {
-          stroke: '#94a3b8',
+        body: {
+          fill: '#faf5ff',
+          stroke: color,
           strokeWidth: 1.5,
-          targetMarker: { name: 'classic', size: 7 },
+          rx: 4,
+          ry: 4,
+        },
+        label: {
+          fill: '#5b21b6',
+          fontSize: 12,
+          fontWeight: 500,
         },
       },
-    })
-  })
-  refreshCounts(graph)
+    }
+  }
+
+  // approval — 圆角矩形 (蓝色边)
+  return {
+    shape: 'rect',
+    width: 140,
+    height: 56,
+    label: displayLabel,
+    attrs: {
+      body: {
+        fill: '#eff6ff',
+        stroke: color,
+        strokeWidth: 1.5,
+        rx: 10,
+        ry: 10,
+      },
+      label: {
+        fill: '#1e40af',
+        fontSize: 12.5,
+        fontWeight: 500,
+      },
+    },
+  }
 }
 
 function refreshCounts(graph: Graph) {
   nodeCount.value = graph.getNodes().length
   edgeCount.value = graph.getEdges().length
+}
+
+/** 默认 ProcessNode 工厂 — 按 type 注入对应字段默认值. */
+function makeDefaultNode(id: string, type: NodeType, label: string): ProcessNode {
+  const idx = Object.keys(nodeStates).length + 1
+  const base: ProcessNode = {
+    id,
+    type,
+    label,
+    key: `n${idx}`,
+  }
+  if (['assignee_approval', 'role_approval', 'manager_approval', 'parallel_approval', 'cc'].includes(type)) {
+    base.approvers = []
+    base.strategy = 'single'
+    base.slaHours = 24
+    base.timeoutAutoApprove = false
+    base.allowAddApprover = true
+    base.allowReject = true
+  } else if (type === 'condition') {
+    base.expression = ''
+  } else if (type === 'multi_branch') {
+    base.branches = []
+  } else if (type === 'wait') {
+    base.waitMinutes = 60
+  } else if (type === 'write_data') {
+    base.targetModelCode = ''
+    base.fieldMappings = []
+  } else if (type === 'read_data') {
+    base.sourceModelCode = ''
+    base.filterExpression = ''
+    base.outputVar = 'result'
+  } else if (type === 'timer') {
+    base.cron = '0 0 9 * * ?'
+    base.description = '每天 9 点'
+  } else if (type === 'webhook') {
+    base.description = '外部系统回调'
+  } else if (type === 'fill_form') {
+    base.formCode = ''
+    base.assignee = ''
+  } else if (type === 'ai_judge' || type === 'ai_generate') {
+    base.prompt = ''
+    base.outputVar = type === 'ai_judge' ? 'ai_judge_result' : 'ai_text'
+    base.model = 'gpt-5.5'
+  }
+  return base
 }
 
 function initGraph() {
@@ -257,62 +321,124 @@ function initGraph() {
     panning: { enabled: true, eventTypes: ['leftMouseDown'] },
     mousewheel: { enabled: true, zoomAtMousePosition: true, modifiers: 'ctrl' },
     interacting: { nodeMovable: true },
+    connecting: {
+      router: 'manhattan',
+      connector: { name: 'rounded', args: { radius: 8 } },
+      allowBlank: false,
+      allowMulti: false,
+      allowLoop: false,
+      allowNode: false,
+      allowEdge: false,
+      allowPort: true,
+      snap: { radius: 20 },
+      createEdge() {
+        return this.createEdge({
+          attrs: {
+            line: {
+              stroke: '#94a3b8',
+              strokeWidth: 1.5,
+              targetMarker: { name: 'classic', size: 7 },
+            },
+          },
+        })
+      },
+    },
   })
 
-  // Sync selection with right panel.
+  // Selection — sync to right panel
   graph.on('node:click', ({ node }) => {
-    const data = (node.getData() as { type?: NodeType; assignee?: string }) || {}
-    const labelText = String((node.attr('label/text') as unknown) ?? '')
-    selected.value = {
-      id: node.id,
-      label: labelText,
-      type: data.type || 'user_task',
-      assignee: data.assignee || '',
-    }
+    selectedNodeId.value = node.id
   })
   graph.on('blank:click', () => {
-    selected.value = null
+    selectedNodeId.value = null
+  })
+  graph.on('node:added', () => refreshCounts(graph))
+  graph.on('node:removed', ({ node }) => {
+    delete nodeStates[node.id]
+    if (selectedNodeId.value === node.id) selectedNodeId.value = null
+    refreshCounts(graph)
+  })
+  graph.on('edge:added', () => refreshCounts(graph))
+  graph.on('edge:removed', () => refreshCounts(graph))
+  graph.on('node:moved', ({ node }) => {
+    const st = nodeStates[node.id]
+    if (st) {
+      const pos = node.getPosition()
+      st.x = pos.x
+      st.y = pos.y
+    }
   })
 
   graphRef.value = graph
-  loadMockGraph(graph)
+  refreshCounts(graph)
 }
 
-function onPropChange() {
+function getCanvasCenter(): { x: number; y: number } {
   const g = graphRef.value
-  const sel = selected.value
-  if (!g || !sel) return
-  const node = g.getCellById(sel.id)
-  if (!node) return
-  ;(node as any).attr('label/text', sel.label)
-  const prev = (node.getData() as Record<string, any>) || {}
-  node.setData({ ...prev, assignee: sel.assignee })
+  if (!g || !containerRef.value) return { x: 200, y: 200 }
+  const box = containerRef.value.getBoundingClientRect()
+  // 简化: 用容器中心 + 累计 offset 防节点重叠
+  const offsetCount = nodeCount.value
+  const offsetX = (offsetCount % 4) * 40
+  const offsetY = Math.floor(offsetCount / 4) * 40
+  return {
+    x: Math.max(80, box.width / 2 - 80 + offsetX),
+    y: Math.max(80, box.height / 2 - 40 + offsetY),
+  }
+}
+
+function onSidebarNodeClick(type: NodeType) {
+  const g = graphRef.value
+  if (!g) return
+  const def = getNodeDef(type)
+  if (!def) return
+  const id = `${type}_${Math.random().toString(36).slice(2, 8)}`
+  const spec = buildNodeSpec(type, def.label, def.icon)
+  const pos = getCanvasCenter()
+  g.addNode({
+    id,
+    x: pos.x,
+    y: pos.y,
+    ...spec,
+    data: { type, color: getNodeColor(type) },
+  } as never)
+  nodeStates[id] = makeDefaultNode(id, type, def.label)
+  nodeStates[id].x = pos.x
+  nodeStates[id].y = pos.y
+  selectedNodeId.value = id
 }
 
 function clearSelection() {
-  selected.value = null
+  selectedNodeId.value = null
+}
+
+function onPropsChange() {
+  // 把当前选中 node 的 label 同步回 x6.
+  const g = graphRef.value
+  const sel = selectedNode.value
+  if (!g || !sel) return
+  const node = g.getCellById(sel.id) as X6Node | null
+  if (!node) return
+  const def = getNodeDef(sel.type)
+  const icon = def?.icon || ''
+  ;(node as X6Node).attr('label/text', `${icon}  ${sel.label}`)
 }
 
 function onFitContent() {
   const g = graphRef.value
   if (!g) return
+  if (g.getNodes().length === 0) return
   g.zoomToFit({ padding: 32, maxScale: 1.2 })
 }
 
-function onSidebarItemClick(t: NodeTypeDef) {
-  // P0 — append a new node at a free spot near bottom-left of viewport.
-  const g = graphRef.value
-  if (!g) return
-  const id = `${t.id}_${Date.now().toString(36)}`
-  const spec = buildNodeSpec(t.id, t.label)
-  g.addNode({
-    id,
-    x: 120 + (nodeCount.value % 5) * 40,
-    y: 260 + Math.floor(nodeCount.value / 5) * 80,
-    ...spec,
-    data: { type: t.id, assignee: '' },
-  } as any)
-  refreshCounts(g)
+function onSave() {
+  // P2 接 set_apaas_app_process — 当前 alert 提示走配置助手
+  alert('保存流程 — P2 接入, 当前请用配置助手对话:\n"把当前流程保存到平台"')
+}
+
+function onAiQuery(query: string) {
+  // P2 接 ConfigAssistant — 当前 alert 占位
+  alert(`AI 提问占位 — P2 转给 ConfigAssistant:\n${query}`)
 }
 
 onMounted(async () => {
@@ -331,7 +457,11 @@ watch(
     if (next === prev) return
     graphRef.value?.dispose()
     graphRef.value = null
-    selected.value = null
+    selectedNodeId.value = null
+    // 清掉旧 state
+    for (const k of Object.keys(nodeStates)) delete nodeStates[k]
+    nodeCount.value = 0
+    edgeCount.value = 0
     if (next) {
       await nextTick()
       initGraph()
@@ -374,18 +504,20 @@ watch(
   font-size: 13.5px;
 }
 
+/* ───── 顶部 toolbar ───── */
 .pdp-head {
   display: flex;
   align-items: flex-start;
   justify-content: space-between;
   gap: 24px;
-  padding: 24px 32px 18px;
+  padding: 18px 28px 16px;
   border-bottom: 1px solid var(--line);
   flex-shrink: 0;
+  background: var(--surface);
 }
 .pdp-title {
   margin: 0 0 6px;
-  font-size: 22px;
+  font-size: 20px;
   font-weight: 600;
   color: var(--text);
   letter-spacing: -0.3px;
@@ -402,40 +534,32 @@ watch(
   font-size: 12.5px;
   color: var(--text-3);
 }
-.pdp-chip {
-  display: inline-block;
-  padding: 2px 8px;
-  border-radius: 4px;
-  font-size: 11.5px;
-  font-weight: 500;
-}
-.pdp-chip-warn {
-  background: #fef3c7;
-  color: #92400e;
-}
 
 .pdp-head-actions {
   display: flex;
-  gap: 8px;
+  gap: 6px;
   flex-shrink: 0;
 }
 .pdp-btn {
   height: 32px;
-  padding: 0 16px;
+  padding: 0 14px;
   border-radius: 6px;
-  font-size: 13px;
+  font-size: 12.5px;
   font-weight: 500;
   font-family: inherit;
   cursor: pointer;
   border: 1px solid transparent;
   white-space: nowrap;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
   transition: background 0.12s, border-color 0.12s, color 0.12s;
 }
 .pdp-btn:disabled { opacity: 0.5; cursor: not-allowed; }
 .pdp-btn-ghost {
   background: var(--surface);
   border-color: var(--line-strong);
-  color: var(--text);
+  color: var(--text-2);
 }
 .pdp-btn-ghost:hover:not(:disabled) {
   border-color: var(--brand);
@@ -449,80 +573,134 @@ watch(
   background: var(--brand-hover);
 }
 
+/* ───── 主区: 左 sidebar + 中央 canvas + 右属性 ───── */
 .pdp-body {
   flex: 1;
   display: flex;
   min-height: 0;
 }
 
+/* ───── 左 sidebar: 节点库 collapsible 分类 ───── */
 .pdp-sidebar {
-  width: 200px;
+  width: 240px;
   flex-shrink: 0;
   background: var(--surface);
   border-right: 1px solid var(--line);
   padding: 16px 12px;
   overflow-y: auto;
+  display: flex;
+  flex-direction: column;
 }
 .pdp-sidebar-title {
-  margin: 0 4px 10px;
+  margin: 0 4px 12px;
   font-size: 11.5px;
   font-weight: 500;
   text-transform: uppercase;
   letter-spacing: 0.4px;
   color: var(--text-4);
 }
-.pdp-node-list {
-  margin: 0;
-  padding: 0;
-  list-style: none;
+.pdp-cat-list {
+  flex: 1;
   display: flex;
   flex-direction: column;
-  gap: 6px;
+  gap: 8px;
 }
-.pdp-node-item {
+.pdp-cat {
+  display: flex;
+  flex-direction: column;
+}
+.pdp-cat-head {
   display: flex;
   align-items: center;
-  gap: 10px;
-  padding: 8px 10px;
-  border-radius: 6px;
+  gap: 6px;
+  padding: 6px 8px;
+  background: transparent;
+  border: none;
   cursor: pointer;
+  font-family: inherit;
+  font-size: 12.5px;
+  font-weight: 600;
+  color: var(--text-2);
+  text-align: left;
+  border-radius: 4px;
   transition: background 0.12s;
 }
-.pdp-node-item:hover {
+.pdp-cat-head:hover {
   background: var(--surface-2);
 }
-.pdp-node-icon {
-  width: 22px;
-  height: 22px;
-  border-radius: 4px;
-  flex-shrink: 0;
+.pdp-cat-arrow {
+  font-size: 9px;
+  color: var(--text-4);
+  display: inline-block;
+  transition: transform 0.15s var(--ease);
 }
-.pdp-node-meta {
+.pdp-cat-arrow.is-open {
+  transform: rotate(90deg);
+}
+.pdp-cat-label {
+  flex: 1;
+}
+.pdp-cat-count {
+  font-size: 11px;
+  color: var(--text-4);
+  font-weight: 400;
+}
+
+.pdp-chip-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 6px;
+  padding: 6px 4px 8px;
+}
+.pdp-chip {
   display: flex;
   flex-direction: column;
-  min-width: 0;
+  align-items: center;
+  gap: 4px;
+  padding: 10px 6px;
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  cursor: pointer;
+  font-family: inherit;
+  transition: background 0.12s, border-color 0.12s, transform 0.12s;
 }
-.pdp-node-label {
-  font-size: 13px;
-  font-weight: 500;
-  color: var(--text);
+.pdp-chip:hover {
+  border-color: var(--brand);
+  background: var(--brand-soft);
+  transform: translateY(-1px);
 }
-.pdp-node-hint {
+.pdp-chip:active {
+  transform: translateY(0);
+}
+.pdp-chip-icon {
+  font-size: 18px;
+  line-height: 1;
+}
+.pdp-chip-label {
   font-size: 11.5px;
-  color: var(--text-4);
-  margin-top: 2px;
+  color: var(--text-2);
+  text-align: center;
+  line-height: 1.3;
 }
+/* Category-tinted chip hover by data-cat */
+.pdp-chip[data-cat="entry"]:hover    { border-color: var(--ok);    background: var(--ok-soft); }
+.pdp-chip[data-cat="approval"]:hover { border-color: var(--brand); background: var(--brand-soft); }
+.pdp-chip[data-cat="logic"]:hover    { border-color: var(--warn);  background: var(--warn-soft); }
+.pdp-chip[data-cat="action"]:hover   { border-color: var(--info);  background: var(--info-soft); }
+
 .pdp-sidebar-foot {
-  margin: 16px 4px 0;
+  margin: 12px 4px 4px;
   font-size: 11.5px;
   color: var(--text-4);
   line-height: 1.5;
 }
 
+/* ───── 中央 canvas ───── */
 .pdp-canvas-wrap {
   flex: 1;
   min-width: 0;
-  background: #f8fafc;
+  background: var(--surface-2);
   position: relative;
 }
 .pdp-canvas {
@@ -531,92 +709,24 @@ watch(
   position: absolute;
   inset: 0;
 }
-
-.pdp-props {
-  width: 240px;
-  flex-shrink: 0;
-  background: var(--surface);
-  border-left: 1px solid var(--line);
-  display: flex;
-  flex-direction: column;
-}
-.pdp-props-head {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  padding: 14px 16px;
-  border-bottom: 1px solid var(--line);
-}
-.pdp-props-head h4 {
-  margin: 0;
-  font-size: 13.5px;
-  font-weight: 600;
-  color: var(--text);
-}
-.pdp-props-body {
-  flex: 1;
-  padding: 16px;
-  display: flex;
-  flex-direction: column;
-  gap: 14px;
-  overflow-y: auto;
-}
-.pdp-field {
-  display: flex;
-  flex-direction: column;
-  gap: 6px;
-}
-.pdp-field-label {
-  font-size: 11.5px;
-  font-weight: 500;
-  color: var(--text-3);
-  text-transform: uppercase;
-  letter-spacing: 0.4px;
-}
-.pdp-input {
-  height: 30px;
-  padding: 0 10px;
-  border: 1px solid var(--line);
-  border-radius: 5px;
-  background: var(--surface);
-  color: var(--text);
-  font-size: 13px;
-  font-family: inherit;
-  outline: none;
-  transition: border-color 0.12s;
-}
-.pdp-input:focus { border-color: var(--brand); }
-.pdp-input:disabled { opacity: 0.5; cursor: not-allowed; }
-.pdp-input-readonly {
-  background: var(--surface-2);
-  color: var(--text-3);
-  font-family: var(--font-mono);
-  font-size: 12px;
-}
-.pdp-props-foot {
-  margin: 4px 0 0;
-  font-size: 11.5px;
+.pdp-canvas-hint {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  pointer-events: none;
   color: var(--text-4);
-  line-height: 1.5;
+  text-align: center;
+  font-size: 13px;
 }
-
-.pdp-icon-btn {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  width: 24px;
-  height: 24px;
-  padding: 0;
-  background: transparent;
-  border: 1px solid var(--line);
-  border-radius: 4px;
-  color: var(--text-3);
-  cursor: pointer;
-  transition: background 0.12s, color 0.12s, border-color 0.12s;
+.pdp-canvas-hint-icon {
+  font-size: 48px;
+  line-height: 1;
+  color: var(--text-4);
+  margin-bottom: 8px;
+  opacity: 0.6;
 }
-.pdp-icon-btn:hover:not(:disabled) {
-  background: var(--brand-soft);
-  color: var(--brand);
-  border-color: var(--brand);
+.pdp-canvas-hint p {
+  margin: 0;
 }
 </style>
