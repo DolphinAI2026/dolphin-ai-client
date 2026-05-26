@@ -183,6 +183,11 @@ tools:
     agents: [builder]
     category: lifecycle
     description: "把 ai-builder 内 draft 应用首次部署到 aPaaS 平台（写入 apaas_app_id）。"
+  deploy_process_to_apaas:
+    sections: [logic]
+    agents: [builder, config]
+    category: lifecycle
+    description: "design-v4 I4: 把本地 ProcessDefinition 真同步到 apaas 平台 (24→17 节点翻译 + save_process_config)。"
   disable_apaas_app_dict:
     sections: [data]
     agents: [builder, config]

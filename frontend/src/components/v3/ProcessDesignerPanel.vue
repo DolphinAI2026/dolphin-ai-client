@@ -70,11 +70,17 @@
           <button class="pdp-btn pdp-btn-ghost" :disabled="true" title="P2 接入">自动布局</button>
           <button class="pdp-btn pdp-btn-ghost" :disabled="true" title="P2 接入">试跑</button>
           <button
-            class="pdp-btn pdp-btn-primary"
+            class="pdp-btn pdp-btn-ghost"
             :disabled="!activeProcess || saving"
             @click="onSave"
-            :title="lastSavedAt ? `上次本地保存: ${lastSavedAt}` : '保存到本地 (P5 deploy 才同步 apaas)'"
+            :title="lastSavedAt ? `上次本地保存: ${lastSavedAt}` : '保存到本地 (点部署才同步 apaas)'"
           >{{ saving ? '保存中...' : '保存' }}</button>
+          <button
+            class="pdp-btn pdp-btn-primary"
+            :disabled="!activeProcess || saving || deploying"
+            @click="onDeploy"
+            :title="lastDeployedAt ? `上次部署: ${lastDeployedAt} (v${lastDeployedVersion ?? '?'})` : '保存并真同步到 apaas 平台'"
+          >{{ deploying ? '部署中...' : '部署' }}</button>
         </div>
       </header>
 
@@ -237,6 +243,11 @@ const readOnly = ref(true)
 /** H2: 保存按钮 loading + 上次本地保存时间 (ISO string). */
 const saving = ref(false)
 const lastSavedAt = ref<string | null>(null)
+
+/** I4: 部署到 apaas 平台 loading + 上次同步时间/版本. */
+const deploying = ref(false)
+const lastDeployedAt = ref<string | null>(null)
+const lastDeployedVersion = ref<number | null>(null)
 
 const activeProcess = computed<ProcessItem | null>(() => {
   if (!activeProcessId.value) return null
@@ -843,6 +854,86 @@ async function onSave() {
     ElMessage.error(err?.response?.data?.detail || err?.message || '网络错误')
   } finally {
     saving.value = false
+  }
+}
+
+/** I4: 把本地 definition 真同步到 apaas 平台 — 先保存再调 deploy. */
+async function onDeploy() {
+  if (!props.appId || !activeProcess.value) {
+    ElMessage.warning('请先选择左侧流程')
+    return
+  }
+  if (deploying.value || saving.value) return
+
+  // Step 1: 先保存最新 definition (避免漂移)
+  saving.value = true
+  try {
+    const payload = serializeGraph()
+    const saveResp = await request.post<unknown, {
+      ok: boolean
+      version?: number
+      updated_at?: string
+      message?: string
+      error_code?: string
+    }>(`/applications/${props.appId}/processes/${activeProcess.value.id}/save-definition`, payload)
+    if (!saveResp?.ok) {
+      ElMessage.error(`保存失败: ${saveResp?.message || saveResp?.error_code || '未知错误'}`)
+      return
+    }
+    lastSavedAt.value = saveResp.updated_at || new Date().toISOString()
+  } catch (e: unknown) {
+    const err = e as { response?: { data?: { detail?: string } }; message?: string }
+    ElMessage.error(`保存失败: ${err?.response?.data?.detail || err?.message || '网络错误'}`)
+    return
+  } finally {
+    saving.value = false
+  }
+
+  // Step 2: 调 deploy endpoint
+  deploying.value = true
+  try {
+    const resp = await request.post<unknown, {
+      ok: boolean
+      deployed_version?: number
+      deployed_at?: string
+      apaas_app_id?: string
+      menu_id?: string
+      node_count?: number
+      edge_count?: number
+      unsupported_nodes?: Array<{ id: string; type: string; label?: string; reason?: string }>
+      apaas_response_code?: string
+      message?: string
+      error_code?: string
+    }>(`/applications/${props.appId}/processes/${activeProcess.value.id}/deploy`)
+
+    if (resp?.ok) {
+      lastDeployedAt.value = resp.deployed_at || new Date().toISOString()
+      lastDeployedVersion.value = resp.deployed_version ?? null
+      const unsupportedCount = (resp.unsupported_nodes || []).length
+      if (unsupportedCount > 0) {
+        const typesSet = new Set((resp.unsupported_nodes || []).map(n => n.type).filter(Boolean))
+        ElMessage.warning({
+          message: `已部署 v${resp.deployed_version ?? 1} (${resp.node_count ?? 0} 节点), 但 ${unsupportedCount} 类节点暂未支持: ${Array.from(typesSet).join(', ')} (P6 待实现)`,
+          duration: 7000,
+        })
+      } else {
+        ElMessage.success(`已部署到 apaas 平台 (v${resp.deployed_version ?? 1}, ${resp.node_count ?? 0} 节点)`)
+      }
+    } else {
+      const code = resp?.error_code || 'DEPLOY_FAILED'
+      if (code === 'APP_NOT_DEPLOYED') {
+        ElMessage.error('应用尚未部署到 apaas 平台 — 先部署应用再部署流程')
+      } else if (code === 'PROCESS_DEFINITION_NOT_FOUND') {
+        ElMessage.error('本地无该流程定义 — 请先保存再部署')
+      } else {
+        ElMessage.error(resp?.message || code)
+      }
+    }
+  } catch (e: unknown) {
+    const err = e as { response?: { data?: { detail?: string; message?: string } }; message?: string }
+    ElMessage.error(err?.response?.data?.detail || err?.response?.data?.message || err?.message || '部署网络错误')
+  } finally {
+    deploying.value = false
   }
 }
 

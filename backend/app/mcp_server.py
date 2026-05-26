@@ -1433,6 +1433,151 @@ async def deploy_application(
     }
 
 
+# design-v4 I4: ProcessDefinition 真同步到 apaas 平台 (basic 翻译, P6 完整)
+@mcp.tool()
+async def deploy_process_to_apaas(
+    app_id: int,
+    process_id: str,
+    tenant_id: int = 0,
+    user_id: int = 0,
+) -> dict:
+    """把 backend `process_definitions` 表里的本地 definition 真同步到 apaas 平台.
+
+    流程:
+      1) 加载 ai-builder Application 拿 platform_env_id + apaas_app_id
+      2) 从 `process_definitions` 读 (application_id, process_id) 行
+      3) 调 process_translator.translate_definition_to_apaas_schema 翻译 24→17 节点
+      4) 调 apaas_client.save_process_config(apaas_app_id, payload) 真存平台
+      5) 成功 → 更新 process_definitions.last_deployed_version + last_deployed_at
+
+    入参:
+      - app_id: ai-builder 应用 ID (Application.id, 不是 apaas_app_id)
+      - process_id: 流程 ID (来自前端 process list — 一般是 apaas menu_id)
+
+    返回:
+      - {ok, deployed_version, apaas_app_id, menu_id, unsupported_nodes, message}
+      - unsupported_nodes: P6 todo 的节点列表 (timer/webhook/condition/AI 等)
+
+    限制 (P6):
+      - 翻译只覆盖审批主链路 — 网关/分支/AI 等节点会被跳过 + 记入 unsupported_nodes
+      - 串行链路 (start → approves → end) — 不真按 frontend edges 拓扑还原
+    """
+    from app.database import AsyncSessionLocal
+    from app.models.process_definition import ProcessDefinition
+    from app.models import Application
+    from app.coding.apaas_tools import _get_apaas_client
+    from app.process_translator import translate_definition_to_apaas_schema
+    from sqlalchemy import select
+    from datetime import datetime as _dt
+    import json as _json
+
+    tid, uid = _resolve_identity(tenant_id, user_id)
+    if not app_id or app_id <= 0:
+        return {"ok": False, "error_code": "INVALID_APP_ID", "message": "app_id 必填"}
+    if not process_id or not process_id.strip():
+        return {"ok": False, "error_code": "INVALID_PROCESS_ID", "message": "process_id 必填"}
+    process_id = process_id.strip()
+
+    async with AsyncSessionLocal() as db:
+        # 1) 加载 Application
+        r = await db.execute(select(Application).where(Application.id == app_id, Application.tenant_id == tid))
+        app = r.scalar_one_or_none()
+        if not app:
+            return {"ok": False, "error_code": "APP_NOT_FOUND", "message": f"应用 {app_id} 不存在或无权访问"}
+        if not app.platform_env_id:
+            return {
+                "ok": False, "error_code": "APP_NOT_DEPLOYED",
+                "message": "应用未绑定平台环境 — 先 deploy_application 把应用部署到 apaas",
+            }
+        if not app.apaas_app_id:
+            return {
+                "ok": False, "error_code": "APP_NOT_DEPLOYED",
+                "message": "应用 apaas_app_id 为空 — 先 deploy_application 把应用真部署到 apaas 平台",
+            }
+
+        # 2) 读本地 ProcessDefinition
+        def_q = await db.execute(
+            select(ProcessDefinition).where(
+                ProcessDefinition.application_id == app_id,
+                ProcessDefinition.process_id == process_id,
+            )
+        )
+        row = def_q.scalar_one_or_none()
+        if not row:
+            return {
+                "ok": False, "error_code": "PROCESS_DEFINITION_NOT_FOUND",
+                "message": f"流程 {process_id} 在本地无 definition — 先在前端保存 (H2 onSave) 再部署",
+            }
+        try:
+            definition = _json.loads(row.definition_json or "{}")
+        except (ValueError, TypeError) as exc:
+            return {
+                "ok": False, "error_code": "INVALID_DEFINITION_JSON",
+                "message": f"definition_json 解析失败: {exc}",
+            }
+
+        # 3) 翻译 — 24 → apaas 17 schema
+        # menu_id 等于 process_id (apaas 流程是挂菜单上的)
+        try:
+            payload, unsupported = translate_definition_to_apaas_schema(
+                definition,
+                apaas_app_id=str(app.apaas_app_id),
+                menu_id=process_id,
+                role_codes=None,  # P6: 反查 role_codes 真名 — 当前用 code 占位
+            )
+        except Exception as exc:
+            logger.exception("translate_definition_to_apaas_schema failed app_id=%s process_id=%s", app_id, process_id)
+            return {
+                "ok": False, "error_code": "TRANSLATE_FAILED",
+                "message": f"翻译 ProcessDefinition 失败: {exc}",
+            }
+
+        # 4) 调 apaas_client 真同步
+        try:
+            client = await _get_apaas_client(app.platform_env_id, db)
+        except Exception as exc:
+            return {
+                "ok": False, "error_code": "ENV_NOT_READY",
+                "message": f"拿 apaas_client 失败: {exc}", "env_id": app.platform_env_id,
+            }
+
+        try:
+            apaas_resp = await client.save_process_config(str(app.apaas_app_id), payload)
+        except Exception as exc:
+            logger.exception("save_process_config failed app_id=%s process_id=%s", app_id, process_id)
+            return {
+                "ok": False, "error_code": "APAAS_SAVE_FAILED",
+                "message": f"apaas 平台保存流程失败: {exc}",
+                "unsupported_nodes": unsupported,
+            }
+
+        # 5) 更新 last_deployed_*
+        now = _dt.utcnow()
+        deployed_version = row.version or 1
+        row.last_deployed_version = deployed_version
+        row.last_deployed_at = now
+        await db.flush()
+        await db.commit()
+
+        return {
+            "ok": True,
+            "app_id": app_id,
+            "process_id": process_id,
+            "deployed_version": deployed_version,
+            "deployed_at": now.isoformat(),
+            "apaas_app_id": str(app.apaas_app_id),
+            "menu_id": process_id,
+            "node_count": len(payload.get("nodes") or []),
+            "edge_count": len(payload.get("edges") or []),
+            "unsupported_nodes": unsupported,
+            "apaas_response_code": (apaas_resp or {}).get("code"),
+            "message": (
+                f"已同步到 apaas 平台 (v{deployed_version}, {len(payload.get('nodes') or [])} 节点)"
+                + (f", {len(unsupported)} 类节点 P6 待支持" if unsupported else "")
+            ),
+        }
+
+
 # 2026-05-24 Agent C + 主分支补齐: 部署历史 + 回滚 MCP 工具
 @mcp.tool()
 async def list_deploy_records(

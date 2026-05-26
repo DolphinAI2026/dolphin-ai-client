@@ -50,3 +50,6 @@ class ProcessDefinition(Base):
     updated_at: Mapped[datetime] = mapped_column(
         DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False,
     )
+    # design-v4 I4: 真同步到 apaas 平台后回填 — 用来判断本地修改 vs 已部署版本.
+    last_deployed_version: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    last_deployed_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)

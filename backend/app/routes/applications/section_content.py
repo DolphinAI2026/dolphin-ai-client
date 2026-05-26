@@ -1023,6 +1023,138 @@ async def get_process_definition(
 
 
 # ---------------------------------------------------------------------------
+# design-v4 I4: 部署 ProcessDefinition 到 apaas 平台 (真同步, 不只是本地 save)
+# ---------------------------------------------------------------------------
+class ProcessDeployResponse(BaseModel):
+    ok: bool
+    process_id: str
+    deployed_version: Optional[int] = None
+    deployed_at: Optional[str] = None
+    apaas_app_id: Optional[str] = None
+    menu_id: Optional[str] = None
+    node_count: int = 0
+    edge_count: int = 0
+    unsupported_nodes: list[dict[str, str]] = Field(default_factory=list)
+    apaas_response_code: Optional[str] = None
+    message: Optional[str] = None
+    error_code: Optional[str] = None
+
+
+@router.post(
+    "/{app_id}/processes/{process_id}/deploy",
+    response_model=ProcessDeployResponse,
+)
+async def deploy_process_endpoint(
+    app_id: int,
+    process_id: str,
+    ctx: Annotated[AuthContext, Depends(get_auth_context)],
+    db: Annotated[AsyncSession, Depends(get_db)],
+) -> ProcessDeployResponse:
+    """把本地 ProcessDefinition 真同步到 apaas 平台 (design-v4 I4).
+
+    工作流:
+      1) 验 app 存在 + 检 EDIT 权限 + 应用已部署 (apaas_app_id 非空)
+      2) 调 MCP deploy_process_to_apaas (内含 24→17 翻译 + save_process_config)
+      3) 返同步结果 + unsupported_nodes (P6 todo 节点)
+
+    入参:
+      - app_id (path)
+      - process_id (path) — 一般是 apaas menu_id
+
+    不同于 POST .../save-definition (只本地存):
+      本接口走 apaas 真存, 流程在 apaas 平台立即生效.
+    """
+    r = await db.execute(
+        select(Application).where(
+            Application.id == app_id,
+            Application.tenant_id == ctx.tenant_id,
+        )
+    )
+    app = r.scalar_one_or_none()
+    if not app:
+        raise HTTPException(status_code=404, detail="应用不存在")
+    await check_resource_permission(ctx, db, app, "application", Action.EDIT)
+
+    if not process_id or not process_id.strip():
+        raise HTTPException(status_code=400, detail="process_id 不能为空")
+
+    if not app.platform_env_id or not app.apaas_app_id:
+        return ProcessDeployResponse(
+            ok=False,
+            process_id=process_id,
+            error_code="APP_NOT_DEPLOYED",
+            message="应用尚未部署到 aPaaS 平台 — 先 deploy_application 把应用部署后才能部署流程",
+        )
+
+    # 调 MCP 工具
+    try:
+        from app import mcp_server as _mcp
+    except Exception as exc:
+        return ProcessDeployResponse(
+            ok=False,
+            process_id=process_id,
+            error_code="MCP_MODULE_LOAD_FAILED",
+            message=f"mcp_server 模块加载失败: {exc}",
+        )
+
+    tool = getattr(_mcp, "deploy_process_to_apaas", None)
+    if tool is None or not callable(tool):
+        return ProcessDeployResponse(
+            ok=False,
+            process_id=process_id,
+            error_code="TOOL_NOT_AVAILABLE",
+            message="MCP 工具 deploy_process_to_apaas 未注册",
+        )
+
+    try:
+        result = await tool(
+            app_id=app_id,
+            process_id=process_id.strip(),
+            tenant_id=ctx.tenant_id,
+            user_id=ctx.user_id,
+        )
+    except Exception as exc:
+        logger.exception("deploy_process_to_apaas threw: app_id=%s process_id=%s", app_id, process_id)
+        return ProcessDeployResponse(
+            ok=False,
+            process_id=process_id,
+            error_code="MCP_TOOL_ERROR",
+            message=f"MCP 调用失败: {exc}",
+        )
+
+    if not isinstance(result, dict):
+        return ProcessDeployResponse(
+            ok=False,
+            process_id=process_id,
+            error_code="MCP_UNEXPECTED_SHAPE",
+            message=f"MCP 工具返非 dict: {type(result).__name__}",
+        )
+
+    if not result.get("ok"):
+        return ProcessDeployResponse(
+            ok=False,
+            process_id=process_id,
+            error_code=str(result.get("error_code") or "DEPLOY_FAILED"),
+            message=str(result.get("message") or "部署失败"),
+            unsupported_nodes=result.get("unsupported_nodes") or [],
+        )
+
+    return ProcessDeployResponse(
+        ok=True,
+        process_id=process_id,
+        deployed_version=result.get("deployed_version"),
+        deployed_at=result.get("deployed_at"),
+        apaas_app_id=str(result.get("apaas_app_id") or ""),
+        menu_id=str(result.get("menu_id") or ""),
+        node_count=int(result.get("node_count") or 0),
+        edge_count=int(result.get("edge_count") or 0),
+        unsupported_nodes=result.get("unsupported_nodes") or [],
+        apaas_response_code=str(result.get("apaas_response_code") or "") or None,
+        message=str(result.get("message") or "已部署"),
+    )
+
+
+# ---------------------------------------------------------------------------
 # Phase H1: 矩阵 cell 真存 — 单 cell 改动 dispatch 到对应 apaas 权限 API.
 # ---------------------------------------------------------------------------
 class RoleResourceCellRequest(BaseModel):

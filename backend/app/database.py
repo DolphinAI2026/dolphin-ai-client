@@ -111,6 +111,9 @@ async def init_db():
             # AIChat 工具调用：存 LLM 返回的原始 call id，跨轮 history 重建用
             "ALTER TABLE ai_chat_tool_calls ADD COLUMN provider_call_id VARCHAR(120)",
             "CREATE INDEX IF NOT EXISTS ix_ai_chat_tool_calls_provider_call_id ON ai_chat_tool_calls(provider_call_id)",
+            # design-v4 I4: ProcessDefinition 真同步到 apaas 后回填 last_deployed_*
+            "ALTER TABLE process_definitions ADD COLUMN last_deployed_version INTEGER",
+            "ALTER TABLE process_definitions ADD COLUMN last_deployed_at DATETIME",
         ]:
             try:
                 await conn.execute(text(stmt))
