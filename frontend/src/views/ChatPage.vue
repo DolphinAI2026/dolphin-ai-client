@@ -216,10 +216,12 @@
             @menu-selected="onApaasMenuSelected"
             @menus-loaded="onApaasMenusLoaded"
           />
-          <!-- 其他 sub-tab: 走通用 SectionContentList -->
+          <!-- 其他 sub-tab: 走通用 SectionContentList. 当 native panel 自带 master
+               (DictEditorPanel / RoleManagePanel) 时, 不再显 SectionContentList 防重复. -->
           <SectionContentList
             v-if="!legacyMode && existingAppId && platformIframeAppId === existingAppId
-                  && shouldShowSectionContent && currentSectionContentKind"
+                  && shouldShowSectionContent && currentSectionContentKind
+                  && !isNativeMasterDetailSubTab"
             :app-id="existingAppId"
             :resource-kind="currentSectionContentKind"
             :apaas-app-id="store.currentApp?.apaas_app_id || ''"
@@ -241,6 +243,39 @@
               <div style="font-size: 13px;">P1 接入 — 用顶部 [历史] CTA 可看部署记录</div>
             </div>
           </div>
+          <!-- 2026-05-26 design-v3: native panel 替 iframe -->
+          <!-- 设计 tab + forms/lists/menus 点中某 menu: 显 FormDesignerPanel -->
+          <FormDesignerPanel
+            v-else-if="!legacyMode && topTab === 'design' && existingAppId && selectedApaasMenuId"
+            class="platform-iframe-container"
+            :app-id="existingAppId"
+            :menu-id="selectedApaasMenuId || undefined"
+            :menu-name="selectedApaasMenuName"
+            :form-id="selectedApaasMenuFormId"
+          />
+          <!-- 数据 tab + 数据模型 sub: 选中模型显字段表格 -->
+          <DataModelDetailPanel
+            v-else-if="!legacyMode && topTab === 'data' && currentSectionTab === 'models' && existingAppId && selectedSectionItemId"
+            class="platform-iframe-container"
+            :app-id="existingAppId"
+            :model-id="selectedSectionItemId"
+            @back="onNativePanelBack"
+          />
+          <!-- 数据 tab + 字典 sub: master-detail -->
+          <DictEditorPanel
+            v-else-if="!legacyMode && topTab === 'data' && currentSectionTab === 'dicts' && existingAppId"
+            class="platform-iframe-container"
+            :app-id="existingAppId"
+            :apaas-app-id="store.currentApp?.apaas_app_id || ''"
+            :env-id="store.currentApp?.platform_env_id || 0"
+          />
+          <!-- 权限 tab + 角色 sub: master-detail -->
+          <RoleManagePanel
+            v-else-if="!legacyMode && topTab === 'perm' && currentSectionTab === 'roles' && existingAppId"
+            class="platform-iframe-container"
+            :app-id="existingAppId"
+          />
+          <!-- 默认 fallback: iframe (流程/业务事件/字段权限/菜单可见性 暂走 iframe, P2 改 native) -->
           <div v-else class="platform-iframe-container">
           <div v-if="platformLoading" class="platform-loading">
             <span class="loading-spinner">⟳</span> 加载平台配置...
@@ -816,6 +851,10 @@ import ExtensionSectionPanel from '@/components/v2/ExtensionSectionPanel.vue'
 import SectionContentList from '@/components/v2/SectionContentList.vue'
 import AppConfigTopTabs from '@/components/v3/AppConfigTopTabs.vue'
 import AppConfigSubNav from '@/components/v3/AppConfigSubNav.vue'
+import FormDesignerPanel from '@/components/v3/FormDesignerPanel.vue'
+import DataModelDetailPanel from '@/components/v3/DataModelDetailPanel.vue'
+import DictEditorPanel from '@/components/v3/DictEditorPanel.vue'
+import RoleManagePanel from '@/components/v3/RoleManagePanel.vue'
 import type { ConversationCreate, Message } from '@/types'
 import TopBar from '@/components/TopBar.vue'
 import WorkbenchShell from '@/components/WorkbenchShell.vue'
@@ -2363,6 +2402,13 @@ const TOP_TAB_SUBS: Record<string, Array<{ code: string; label: string }>> = {
   ],
 }
 const currentSubTabsForTop = computed(() => TOP_TAB_SUBS[topTab.value] || [])
+
+// P1-N6: 这些 sub-tab 走 native master-detail panel — 不需要再显 SectionContentList.
+const isNativeMasterDetailSubTab = computed(() => {
+  if (topTab.value === 'data' && currentSectionTab.value === 'dicts') return true
+  if (topTab.value === 'perm' && currentSectionTab.value === 'roles') return true
+  return false
+})
 const legacyMode = ref<boolean>((() => {
   try {
     if (new URLSearchParams(window.location.search).get('legacy') === '1') return true
@@ -2411,29 +2457,49 @@ const shouldShowSectionContent = computed(() => {
   if (currentSection.value === 'ui' && currentSectionTab.value === 'menus') return false  // 走 ApaasMenuSidebar
   return currentSectionContentKind.value !== null
 })
+// 2026-05-26 design-v3 P1-N6: 选中资源 item 时 native panel 用的 state.
+const selectedSectionItemId = ref<string>('')
+const selectedApaasMenuName = ref<string>('')
+const selectedApaasMenuFormId = ref<string>('')
+function onNativePanelBack() {
+  selectedSectionItemId.value = ''
+}
+
 function onSectionContentItemSelect(item: any) {
+  // 记下 native panel 用的 item id + 元信息
+  selectedSectionItemId.value = String(item?.id || item?.menu_id || '')
+  selectedApaasMenuName.value = String(item?.name || '')
+  selectedApaasMenuFormId.value = String(item?.form_id || item?.extra?.form_id || '')
+
   // 凡是 menu-based 的资源 (forms / lists / processes / field-permissions / menu-visibility)
   // 都走 onApaasMenuSelected 跳到该菜单的编辑页. item 有 menu_id + form_id (来自 extra).
+  // P1-N6: 设计 tab + forms/lists 时, 不切 iframe — FormDesignerPanel 直接显字段.
   const isMenuBased = (
     (currentSection.value === 'ui' && (currentSectionTab.value === 'forms' || currentSectionTab.value === 'lists'))
     || (currentSection.value === 'logic' && currentSectionTab.value === 'processes')
     || (currentSection.value === 'permission' && (currentSectionTab.value === 'field_perm' || currentSectionTab.value === 'menu_vis'))
   )
   if (isMenuBased) {
-    // item.id 是规范化后的 menu_id (来自 backend normalize), extra 透传原始字段
     const menuId = item?.menu_id || item?.id || item?.extra?.menu_id
     if (menuId) {
-      onApaasMenuSelected({
-        menu_id: menuId,
-        form_id: item?.form_id || item?.extra?.form_id,
-        menu_type: item?.menu_type || item?.extra?.menu_type,
-        menu_display: item?.extra?.menu_display,
-      } as any)
+      // 设计 tab + forms/lists: FormDesignerPanel 自己接 menu_id, 不需要切 iframe.
+      // 逻辑 tab + processes / 权限 tab + field_perm/menu_vis: 还走 iframe (P2 改 native).
+      if (topTab.value !== 'design') {
+        onApaasMenuSelected({
+          menu_id: menuId,
+          form_id: item?.form_id || item?.extra?.form_id,
+          menu_type: item?.menu_type || item?.extra?.menu_type,
+          menu_display: item?.extra?.menu_display,
+        } as any)
+      } else {
+        // design tab: 记下 selectedApaasMenuId 让 FormDesignerPanel 拿到
+        selectedApaasMenuId.value = String(menuId)
+      }
       return
     }
   }
   // models / dicts / business-events / roles: 平台无直接 deeplink.
-  // P0 仅 log; 用户用配置助手对话改, 或在 iframe 内手动导航.
+  // P1-N6 现在 data:models 走 DataModelDetailPanel — 由 selectedSectionItemId 触发.
   console.log('[SectionContentList] selected item:', item)
 }
 function onSectionContentCreateRequest() {
