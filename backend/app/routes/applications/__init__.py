@@ -27,6 +27,7 @@ from app.error_messages import (
     APAAS_TOKEN_EXPIRED_GENERIC,
     is_apaas_token_error,
 )
+from app.tool_registry import tools_for_agent as _registry_tools_for_agent
 
 from app.services.config_converter import convert_analysis_to_app_config
 from app.project_access import get_project_access, normalize_project_role, project_role_at_least, require_project_access
@@ -2268,113 +2269,20 @@ class ConfigChatResp(BaseModel):
     tool_trace: list[ConfigChatToolTrace] = []  # 本轮 agent loop 调过的工具痕迹
 
 
-# 2026-05-19：配置助手能用的 MCP 工具白名单。
-# 原则：「读取 apaas 真实状态」+「单字段/单菜单/单角色级精细修改」全放进来，
-# 不放整模型 CRUD（避免一调就给用户结构性大改）/不放 deploy 类（review 后另走链路）/
-# 不放 workspace 类（这是部署后 panel，不该碰本地 workspace）。
-_CONFIG_CHAT_TOOL_WHITELIST: set[str] = {
-    # —— 读取类 ——（agent 第一步几乎都要拉真实结构对齐用户问的"哪个模型/字段"）
-    "list_apaas_apps_in_env",
-    "get_apaas_app_overview",
-    "list_apaas_app_models",
-    "list_apaas_app_menus",
-    "list_apaas_form_views",
-    "list_apaas_form_components",
-    "list_apaas_form_permissions",
-    "list_apaas_app_dicts",
-    "list_apaas_models_in_env",
-    "list_apaas_app_roles",
-    # —— 查重 / 防冲突 ——
-    "check_app_code_conflict",
-    # —— 模型字段层 —— (字段名 / 类型 / 长度；改 required 走表单组件层)
-    "add_apaas_model_field",
-    "update_apaas_model_field",
-    "disable_apaas_model_field",
-    # —— 表单组件层 —— (改 required / label / placeholder / readonly / hidden / 默认值，
-    # 用户最常说的"把手机号改成必填"走这里)
-    "update_apaas_form_component",
-    # —— 字典 / 选项 ——
-    "create_apaas_app_dict",
-    "update_apaas_app_dict",
-    "add_apaas_dict_option",
-    "update_apaas_dict_option",
-    # 2026-05-25 补: 禁用字典 / 选项 (apaas 没真删, 禁用 = 终态)
-    "disable_apaas_app_dict",
-    "disable_apaas_dict_option",
-    # —— 角色 ——
-    "create_apaas_app_roles",
-    "update_apaas_app_role",
-    "delete_apaas_app_role",
-    # —— 菜单管理 (2026-05-25 补) ——
-    # 用户高频说"加菜单 / 加自开发页面 / 删菜单"用这 3 个, 不再让 agent 走 browser_*
-    # 模拟点击平台菜单设计器.
-    "create_apaas_form_menu",        # 普通表单菜单 (关联 formId)
-    "create_apaas_self_dev_menu",    # 自开发菜单 (linkUrl=组件名)
-    "delete_apaas_app_menu",         # 删菜单 (普通/表单/自开发都用这个)
-    # 2026-05-25 续: 菜单分组 + 移动菜单到分组下
-    "create_apaas_menu_group",       # 建分组 (menuType=GROUP)
-    "set_apaas_menu_parent",         # 改菜单父分组 (挂载/脱离)
-    "rename_apaas_menu",             # 改菜单名 (普通菜单 / GROUP / 自开发 通用)
-    # —— 业务事件 (BPM Engine, 2026-05-25 P1) ——
-    # 字段值改变事件 / 表单提交事件 / 定时事件 等核心 BPM 场景. agent 用 add → get_detail
-    # → 改 trigger + 加节点 → save 4 步建事件; 不再让用户去平台 UI 配.
-    "list_apaas_business_events",
-    "get_apaas_business_event_detail",
-    "create_apaas_business_event",
-    "save_apaas_business_event",
-    "delete_apaas_business_event",
-    "list_apaas_form_menus_for_event",
-    "list_apaas_business_events_in_tenant",
-    "query_apaas_business_event_trees",
-    "list_apaas_business_event_execution_history",
-    # 高层 wrapper — 一键建事件 (不用 agent 拼 DAG)
-    "create_form_event_with_python_code",
-    "create_time_event_with_python_code",
-    "create_apaas_value_change_assignment_event",   # 用户最高频"X 改成 Y → 填 Z"场景
-    # —— SPEC 驱动加新表单+流程 (2026-05-25 补) — 用户高频"加新功能"场景 ——
-    # AI 先生 SPEC 给用户审, 用户同意后调本工具一把建好 模型+表单+菜单+(可选)流程.
-    # 不走全量重新部署, 是真增量加 feature. 借鉴 super-agents-dev formDesign 流程.
-    "build_apaas_feature_from_spec",
-    # 后期补绑字段到字典 (build_feature 漏 dict_options 时用; 或用户手动建的字段补绑)
-    "bind_apaas_form_field_to_dict",
-    # —— 表单流程 (2026-05-25 补) ——
-    # 给表单菜单设审批流程, 一键 N 阶段顺序审批 (START → 提交 → stage1 → ... → END)
-    # AI 老路是引导用户 "我演示一下" 录制 → 录到的全是 AI 助手输入框里的 click 没用,
-    # 改成调这个工具直接 POST 流程配置到平台.
-    "set_apaas_app_process",
-    # —— 表单字段权限 (2026-05-25 补) ——
-    "set_apaas_form_permissions",    # 配字段对角色的读/写/隐藏权限
-    # —— 浏览器控制 (POC, 见 docs/rfc-2026-05-19-browser-control-poc.md) ——
-    # MCP API 够不到的操作 (加表单组件 / 拖拽 / 改流程拓扑等) 走这里:
-    # AI 先 browser_snapshot 看页面结构，再 click/type 操作。
-    # 2026-05-25: 升级到 frame 路由 — snapshot 返 frames[], click/type/wait/press_key
-    # 接 frame_id, 平台 UI 操作必须传 role="platform" 的 frame_id。
-    # 优先 chrome extension (apaas-builder-helper, ws://...:8000/ws/browser-ext);
-    # 没装时降级到 chrome-devtools-mcp (没 frame 路由, 只能操作 top frame, 应用
-    # iframe 内部 DOM 看不到).
-    "browser_snapshot",
-    "browser_click",
-    "browser_type",
-    "browser_wait_for_text",
-    "browser_press_key",
-    # browser_navigate 故意保留白名单但 prompt 严禁在 ChatPage 场景下用
-    "browser_navigate",
-    "browser_screenshot",
-    "browser_list_pages",
-    "browser_select_page",
-    # —— Skill 自学习（image #46） ——
-    # 用户教过 AI 一类操作后，AI 用 save_config_skill 把流程总结成 steps_md。
-    # 下次同类指令进来，system_prompt 自动注入相关 skills 让 AI 直接 follow。
-    "save_config_skill",
-    "list_config_skills",
-    "get_config_skill",
-    "delete_config_skill",
-    # —— Demonstration recording ——
-    # 用户说"我点一遍你看"：AI 调 start → 用户操作 → AI 调 stop 拿 event log →
-    # 自己 summarize 成 steps_md → save_config_skill
-    "browser_start_recording",
-    "browser_stop_recording",
-}
+# 2026-05-19 起: 配置助手能用的 MCP 工具白名单。
+# 2026-05-26 (SPEC v2 PR1): 改派生自 backend/tool_registry.yaml — 单一真相。
+#
+# 历史原则 (写入 yaml 时的 agents=[config] 分类依据):
+#   - "读取 apaas 真实状态" + "单字段/单菜单/单角色级精细修改" 全放
+#   - 不放整模型 CRUD (避免一调就给用户结构性大改)
+#   - 不放 deploy 类 (review 后另走链路)
+#   - 不放 workspace 类 (这是部署后 panel, 不该碰本地 workspace)
+#
+# 加 / 改工具走 backend/tool_registry.yaml — 改对应 entry 的 agents 字段:
+#   add `config`  → 进白名单
+#   remove `config` → 出白名单
+# 改完跑 `pytest backend/tests/test_tool_registry.py -v` 验证。
+_CONFIG_CHAT_TOOL_WHITELIST: set[str] = set(_registry_tools_for_agent("config"))
 
 
 @router.post("/{app_id}/config-chat", response_model=ConfigChatResp)

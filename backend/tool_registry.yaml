@@ -1,0 +1,590 @@
+# backend/tool_registry.yaml — Single source of truth for all MCP tool metadata.
+# Loaded at startup by backend (FastAPI) + mcp_server (separate process).
+# 派生视图: backend/app/tool_registry.py — tools_for_section(s) / tools_for_agent(a) / all_tool_names()
+#
+# 加新工具流程:
+#   1) backend/app/mcp_server.py 加 @mcp.tool() 装饰的 async def
+#   2) 本文件加 entry (sections + agents + category + description)
+#   3) 跑 backend/tests/test_tool_registry.py 确认 CI 过
+#
+# 字段含义:
+#   sections  ConfigAssistant 软引导 affinity (SPEC v2 §1.2 — 不是硬白名单)
+#             取值: data / ui / logic / permission / extension / global
+#   agents    dolphin agent prompt 白名单 — 决定哪些 agent 看到本工具
+#             取值: builder / coding / vibe / config
+#             空 list 表示工具已实现但 agent prompt 文档未列入 (维持现状, 别偷加)
+#   category  工具语义标签 (内省用, 不影响行为)
+#
+# 2026-05-26 生成: 114 工具 (mcp_server.py 实测).
+version: 1
+tools:
+  add_apaas_dict_option:
+    sections: [data]
+    agents: [builder, config]
+    category: update
+    description: "给字典加一个选项。"
+  add_apaas_model_field:
+    sections: [data]
+    agents: [builder, config]
+    category: update
+    description: "给已有模型加一个字段。"
+  attach_dev_packages_to_apaas_app:
+    sections: [extension]
+    agents: [coding]
+    category: other
+    description: "把已上传到 apaas 平台的自开发包（zip）关联到应用的「自开发资源」列表。"
+  bind_apaas_form_field_to_dict:
+    sections: [data, ui]
+    agents: [config]
+    category: other
+    description: "把表单字段的\"数据来源\"绑定到指定数据字典 (切组件 + source.type + 选项三件套)."
+  browser_click:
+    sections: [ui]
+    agents: [config]
+    category: browser_control
+    description: "点击 a11y tree 里的某个元素（uid 由 browser_snapshot 返回）。"
+  browser_list_pages:
+    sections: [ui]
+    agents: [config]
+    category: browser_control
+    description: "列出浏览器里所有打开的 tabs。优先 Chrome extension (chrome.tabs.query 拿全 tab,"
+  browser_navigate:
+    sections: [ui]
+    agents: [config]
+    category: browser_control
+    description: "让当前活动 tab 跳到指定 URL。等页面加载完返回。"
+  browser_press_key:
+    sections: [ui]
+    agents: [config]
+    category: browser_control
+    description: "在指定 frame 内按一个键 (Enter/Tab/Escape/ArrowDown/...)."
+  browser_screenshot:
+    sections: [ui]
+    agents: [config]
+    category: browser_control
+    description: "截当前 tab 视口（PNG），返 base64 data URL，前端 <img> 可直显示。"
+  browser_select_page:
+    sections: [ui]
+    agents: [config]
+    category: browser_control
+    description: "切换到指定 tab 当作\"活动 page\" — 后续 snapshot/click/type 都作用在它上。"
+  browser_snapshot:
+    sections: [ui]
+    agents: [config]
+    category: browser_control
+    description: "拿当前浏览器活动 tab 的 accessibility tree 快照, 按 frame 聚合返回。"
+  browser_start_recording:
+    sections: [ui]
+    agents: [config]
+    category: browser_control
+    description: "开始录制用户在浏览器里的操作。"
+  browser_stop_recording:
+    sections: [ui]
+    agents: [config]
+    category: browser_control
+    description: "停止录制 + 返回所有录到的事件。AI 拿到后总结成 steps_md。"
+  browser_type:
+    sections: [ui]
+    agents: [config]
+    category: browser_control
+    description: "往 a11y tree 里某个 input 元素填文本。先 browser_snapshot 拿 uid。"
+  browser_wait_for_text:
+    sections: [ui]
+    agents: [config]
+    category: browser_control
+    description: "在指定 frame 内等某段文字出现, 命中即返。常用来确认平台 iframe 已渲染完上一步操作的结果。"
+  build_apaas_feature_from_spec:
+    sections: [ui]
+    agents: [config]
+    category: other
+    description: "⭐ 一键建新表单+流程 (走 SPEC 驱动). 用户最高频\"加新功能\"场景."
+  check_app_code_conflict:
+    sections: [global]
+    agents: [builder, config]
+    category: other
+    description: "查 app_code 是否被占用（部署前预检）。"
+  create_apaas_app_dict:
+    sections: [data]
+    agents: [builder, config]
+    category: create
+    description: "新建一个字典到 aPaaS 应用（不走 SPEC 文档流，直接对话场景）。"
+  create_apaas_app_roles:
+    sections: [permission]
+    agents: [builder, config]
+    category: create
+    description: "批量创建 aPaaS 应用角色（不走 SPEC 文档流程，直接调 apaas 平台）。"
+  create_apaas_business_event:
+    sections: [logic]
+    agents: [config]
+    category: business_event
+    description: "创建业务事件 stub (仅 metadata, DAG 留空) — 返 event_id (24hex MongoDB ObjectId)."
+  create_apaas_form_menu:
+    sections: [ui]
+    agents: [builder, config]
+    category: create
+    description: "创建普通表单菜单（menuType=MENU/MODEL，关联到表单的 formId）。"
+  create_apaas_menu_group:
+    sections: [ui]
+    agents: [config]
+    category: create
+    description: "创建菜单分组 (menuType=GROUP, 用来归类菜单)."
+  create_apaas_self_dev_menu:
+    sections: [extension]
+    agents: [coding, config]
+    category: create
+    description: "在 aPaaS 应用菜单里创建一个自开发页面菜单（menuType=CUSTOM）。"
+  create_apaas_value_change_assignment_event:
+    sections: [logic]
+    agents: [config]
+    category: business_event
+    description: "🅳 一键建\"字段值改变 → 自动赋值\"事件 — 用户最高频的\"X 改成 Y 时填 Z\" 场景."
+  create_dev_workspace:
+    sections: [extension]
+    agents: [coding]
+    category: dev_workspace
+    description: "在 ai-builder /coding 下创建一个自开发 workspace（脚手架已就位、可以开始写代码）。"
+  create_form_event_with_python_code:
+    sections: [logic]
+    agents: [config]
+    category: business_event
+    description: "🅰️ 路线 A: 一键创建\"表单触发 + Python3 自定义节点\"业务事件."
+  create_time_event_with_python_code:
+    sections: [logic]
+    agents: [config]
+    category: business_event
+    description: "🅲️ 定时触发 + Python3 自定义节点 (路线 A 在 EVENT_TIME 上的应用)."
+  delete_apaas_app_form:
+    sections: [ui]
+    agents: [builder]
+    category: delete
+    description: "删除应用表单 — 实际走\"删菜单\"，apaas 内部联动删表单。"
+  delete_apaas_app_menu:
+    sections: [ui]
+    agents: [builder, config]
+    category: delete
+    description: "删除应用菜单（普通菜单 / 表单菜单 / 自开发菜单都用这个）。"
+  delete_apaas_app_role:
+    sections: [permission]
+    agents: [builder, config]
+    category: delete
+    description: "删除单个 aPaaS 角色（不走 SPEC 直接删）。"
+  delete_apaas_business_event:
+    sections: [logic]
+    agents: [config]
+    category: business_event
+    description: "删除业务事件 — ⚠️ 平台 endpoint 是 GET 不是 DELETE, 客户端已封装."
+  delete_config_skill:
+    sections: [global]
+    agents: [config]
+    category: skill_learning
+    description: "删除一个 skill — 用户说\"忘了这个流程\"/\"以后不要这么干\"时调。"
+  deploy_application:
+    sections: [global]
+    agents: [builder]
+    category: lifecycle
+    description: "把 ai-builder 内 draft 应用首次部署到 aPaaS 平台（写入 apaas_app_id）。"
+  disable_apaas_app_dict:
+    sections: [data]
+    agents: [builder, config]
+    category: delete
+    description: "禁用应用字典（apaas 没真 delete，禁用是终态）。"
+  disable_apaas_dict_option:
+    sections: [data]
+    agents: [builder, config]
+    category: delete
+    description: "禁用字典里某个选项（apaas 没真 delete，禁用是终态）。"
+  disable_apaas_model_field:
+    sections: [data]
+    agents: [builder, config]
+    category: delete
+    description: "禁用模型字段（apaas 不能真删字段，只能 status=DISABLE）。"
+  doctor_apaas_backend_workspace:
+    sections: [extension]
+    agents: [coding]
+    category: dev_workspace
+    description: "打包前置体检 — 不实际跑 mvn，3 秒内出结果。"
+  edit_workspace_files:
+    sections: [extension]
+    agents: [coding]
+    category: dev_workspace
+    description: "批量对多个文件做精确字符串替换（vibe_agent.edit_file 的 batch MCP 等价）。"
+  enable_apaas_self_dev_config:
+    sections: [extension]
+    agents: [coding]
+    category: other
+    description: "开启 / 关闭 aPaaS 应用的「自开发配置」开关（apaas 平台 → 应用 → 高级设置）。"
+  execute_change_plan:
+    sections: [global]
+    agents: [builder]
+    category: doc_pipeline
+    description: "执行变更计划：把 plan 里所有 actions 落到底层（创建/修改/删除模型、表单、权限等）。"
+  generate_app_from_doc:
+    sections: [global]
+    agents: [builder]
+    category: doc_pipeline
+    description: "根据标准 markdown 设计文档创建一个新的 aPaaS 低代码应用（一步到位）。"
+  get_apaas_app_overview:
+    sections: [global]
+    agents: [builder, coding, config]
+    category: introspection
+    description: "精简版应用全貌：模型清单 + 字典清单（不带字段/选项详情）。"
+  get_apaas_business_event_detail:
+    sections: [logic]
+    agents: [config]
+    category: business_event
+    description: "查业务事件完整详情 — 含 triggerNodeNd + eventNodeNdList + endNode + 完整 boCodeBORelationProperties."
+  get_apaas_doc_template_spec:
+    sections: [global]
+    agents: [builder]
+    category: doc_pipeline
+    description: "拿 aPaaS Builder 设计文档官方标准（章节 / 表头 / 命名规则 / 字段类型）。"
+  get_application:
+    sections: [global]
+    agents: [builder, coding]
+    category: introspection
+    description: "查看指定应用的完整详情，**包括当前 SPEC 的 markdown 文档**（含所有字段、表单、权限）。"
+  get_change_plan:
+    sections: [global]
+    agents: [builder]
+    category: doc_pipeline
+    description: "查看变更计划详情：包含所有 actions（新增/修改/删除的角色、字典、模型、表单、权限）。"
+  get_config_skill:
+    sections: [global]
+    agents: [config]
+    category: skill_learning
+    description: "读完整 skill 的 steps_md（list 只返摘要，要细节得调它）。"
+  get_dev_scene_full_workflow:
+    sections: [extension]
+    agents: [coding]
+    category: dev_scene
+    description: "拿到某个自开发场景的**完整开发规范**（critical rules / 目录铁则 / mixin 速查"
+  get_dev_scene_spec:
+    sections: [extension]
+    agents: [coding]
+    category: dev_scene
+    description: "拿到某个自开发场景的**完整规范**（关键警示 / 必问参数 / 输出文件清单 / 部署提示）。"
+  get_dev_workspace_status:
+    sections: [extension]
+    agents: [coding]
+    category: dev_workspace
+    description: "查询自开发 workspace 的当前状态（文件列表 / build 状态 / 关联对话 / 后台命令）。"
+  glob_workspace:
+    sections: [extension]
+    agents: [coding]
+    category: dev_workspace
+    description: "按 glob pattern 列工作区文件（vibe_agent.glob_files 等价）。"
+  grep_workspace:
+    sections: [extension]
+    agents: [coding]
+    category: dev_workspace
+    description: "在工作区内 grep 正则搜索（vibe_agent.grep_search 等价）。"
+  import_zip_to_workspace:
+    sections: [extension]
+    agents: [coding]
+    category: dev_workspace
+    description: "把外部 zip（base64）解压成新的 Vibe Coding workspace（不绑 aPaaS）。"
+  init_apaas_backend_workspace:
+    sections: [extension]
+    agents: [coding]
+    category: dev_workspace
+    description: "给 AI Coding workspace 写入 aPaaS 后端自开发模版包标准骨架（10 个文件）。"
+  lint_apaas_backend_workspace:
+    sections: [extension]
+    agents: [coding]
+    category: dev_workspace
+    description: "静态扫描 workspace 里的 Java 代码，找 16 坑里能 grep 出来的写法。"
+  list_apaas_app_dev_kits:
+    sections: [extension]
+    agents: [coding]
+    category: introspection
+    description: "列指定 apaas 应用可关联的自开发包（zip）—— 含 id / fileName / fileType。"
+  list_apaas_app_dicts:
+    sections: [data]
+    agents: [builder, coding, config]
+    category: introspection
+    description: "列指定应用下所有数据字典（下拉/单选选项的来源）。"
+  list_apaas_app_menus:
+    sections: [ui]
+    agents: [builder, coding, config]
+    category: introspection
+    description: "列指定应用的菜单树（含每个菜单关联的 form_id / form_code）。"
+  list_apaas_app_models:
+    sections: [data]
+    agents: [builder, coding, config]
+    category: introspection
+    description: "列指定应用下所有数据模型 + 字段定义。"
+  list_apaas_app_roles:
+    sections: [permission]
+    agents: [builder, coding, config]
+    category: introspection
+    description: "列指定 aPaaS 应用的角色清单（含 roleId / roleCode / roleName / 启用状态）。"
+  list_apaas_apps_in_env:
+    sections: [global]
+    agents: [builder, coding, config]
+    category: introspection
+    description: "列指定 aPaaS 环境下所有应用（含 apaas_app_id / app_code / app_name / status）。"
+  list_apaas_business_event_execution_history:
+    sections: [logic]
+    agents: [config]
+    category: business_event
+    description: "查业务事件执行历史 — POST /xdap-app/event/query/exeHistory/list."
+  list_apaas_business_events:
+    sections: [logic]
+    agents: [config]
+    category: business_event
+    description: "列指定应用的所有业务事件（字段值改变 / 表单提交触发 / 定时 / 审批节点等）。"
+  list_apaas_business_events_in_tenant:
+    sections: [logic]
+    agents: [config]
+    category: business_event
+    description: "列租户业务事件中心（跨应用聚合，只读运维视图）— POST /xdap-app/event/query/allEventList."
+  list_apaas_form_components:
+    sections: [ui]
+    agents: [builder, coding, config]
+    category: introspection
+    description: "列指定表单的所有组件（uuid → label 映射 + 下拉选项 + 字典选项）。"
+  list_apaas_form_menus_for_event:
+    sections: [logic]
+    agents: [config]
+    category: introspection
+    description: "列应用所有\"可作为事件触发源的表单菜单\" — 给 agent 选 triggerFormId / triggerBocCode 用."
+  list_apaas_form_permissions:
+    sections: [permission]
+    agents: [builder, coding, config]
+    category: introspection
+    description: "列出某个表单的权限矩阵（含数据权限组 + 操作权限组）。"
+  list_apaas_form_views:
+    sections: [ui]
+    agents: [builder, coding, config]
+    category: introspection
+    description: "列指定表单的所有视图（拿 tab_id）。"
+  list_apaas_models_in_env:
+    sections: [data]
+    agents: [builder, coding, config]
+    category: introspection
+    description: "列指定环境内所有模型（跨应用，含 modelCode + appCode）。"
+  list_apaas_resource_pool_kits:
+    sections: [extension]
+    agents: [coding]
+    category: introspection
+    description: "**全资源池**列 apaas 平台上所有自开发包（跨应用、跨 fileType）。"
+  list_config_skills:
+    sections: [global]
+    agents: [config]
+    category: skill_learning
+    description: "列出当前 tenant 的可用 skills（app_id=0 时列全局+所有 app 的；指定 app_id 列全局+该 app 的）。"
+  list_deploy_records:
+    sections: [global]
+    agents: []  # mcp_server 已实现, dolphin agent prompt 文档未列入 — 维持现状
+    category: lifecycle
+    description: "列指定 ai-builder 应用的部署历史 (含 deploy / publish / rollback 全周期记录)."
+  list_dev_scenes:
+    sections: [extension]
+    agents: [coding]
+    category: dev_scene
+    description: "列出 ai-builder 支持的所有自开发场景类型（首次接到自开发需求时**必调**）。"
+  list_my_applications:
+    sections: [global]
+    agents: [builder, coding]
+    category: introspection
+    description: "列出当前登录用户在当前租户下能访问的 Builder 应用（分页第 1 页，最多 50 条）。"
+  list_platform_envs:
+    sections: [global]
+    agents: [builder, coding]
+    category: introspection
+    description: "列出当前租户配置的所有低代码平台环境。"
+  parse_design_doc:
+    sections: [global]
+    agents: [builder]
+    category: doc_pipeline
+    description: "解析一份标准 markdown 设计文档，返回结构化 preview（不创建应用）。"
+  publish_application:
+    sections: [global]
+    agents: [builder]
+    category: lifecycle
+    description: "把应用上线：同步当前配置到底层 aPaaS 平台，让真实用户可访问。"
+  publish_dev_workspace:
+    sections: [extension]
+    agents: [coding]
+    category: dev_workspace
+    description: "把 AI Coding workspace build 产物部署到 aPaaS 平台。"
+  query_apaas_business_data:
+    sections: [global]
+    agents: [builder, coding]
+    category: other
+    description: "查询某表单的运行时业务数据（用户提交的数据行，分页）。"
+  query_apaas_business_event_trees:
+    sections: [logic]
+    agents: [config]
+    category: business_event
+    description: "查应用业务事件分类树 — GET /xdap-app/event/queryTrees."
+  read_workspace_file:
+    sections: [extension]
+    agents: [coding]
+    category: dev_workspace
+    description: "读取 workspace 内某个文件（vibe_agent.read_file 的 MCP 等价物）。"
+  rename_apaas_menu:
+    sections: [ui]
+    agents: [config]
+    category: other
+    description: "改菜单名 — 普通菜单 / 分组 / 自开发菜单 都用这个."
+  republish_apaas_app:
+    sections: [global]
+    agents: [coding]
+    category: lifecycle
+    description: "重新发布 aPaaS 应用版本（自开发变更必须 redeploy 才生效）。"
+  rollback_application:
+    sections: [global]
+    agents: []  # mcp_server 已实现, dolphin agent prompt 文档未列入 — 维持现状
+    category: lifecycle
+    description: "回滚 ai-builder 应用到指定历史部署记录的 SPEC 快照."
+  run_workspace_command:
+    sections: [extension]
+    agents: [coding]
+    category: dev_workspace
+    description: "在 workspace 根目录跑 shell 命令（vibe_agent.run_command 等价）。"
+  save_apaas_business_event:
+    sections: [logic]
+    agents: [config]
+    category: business_event
+    description: "保存业务事件完整 DAG (覆盖式) — agent 改完 get_detail 拿的结构后调这个持久化."
+  save_config_skill:
+    sections: [global]
+    agents: [config]
+    category: skill_learning
+    description: "把刚做完的一类操作存成 skill。下次用户说类似话，AI 能直接 follow 这个 skill 不用从零摸索。"
+  save_dev_spec:
+    sections: [extension]
+    agents: [coding]
+    category: dev_workspace
+    description: "Phase 1 必调：落盘双产物（技术 SPEC + 业务可视 HTML mockup）到 workspace。"
+  set_apaas_app_access:
+    sections: [permission]
+    agents: [builder]
+    category: configure
+    description: "设置应用访问授权（控制\"谁能进这个应用\"，覆盖式）。"
+  set_apaas_app_process:
+    sections: [logic]
+    agents: [builder, config]
+    category: process
+    description: "给某个表单菜单设置审批流程 (用 /common/resource/processConfig 管理 API)."
+  set_apaas_form_permissions:
+    sections: [permission]
+    agents: [builder, config]
+    category: configure
+    description: "覆盖式设置某个表单的权限矩阵（一次调用替换该表单的所有权限）。"
+  set_apaas_menu_parent:
+    sections: [ui]
+    agents: [config]
+    category: configure
+    description: "改菜单的父分组 — 把现有菜单移到某个 group 下, 或移出回根级."
+  submit_design_doc:
+    sections: [global]
+    agents: [builder]
+    category: doc_pipeline
+    description: "把当前 md 设计文档推送到 ai-builder cache，并返回一条 deeplink — agent 必须把这条"
+  update_apaas_app_dict:
+    sections: [data]
+    agents: [builder, config]
+    category: update
+    description: "更新字典基本信息（不改选项，选项走 update_apaas_dict_option）。"
+  update_apaas_app_model:
+    sections: [data]
+    agents: [builder]
+    category: update
+    description: "更新模型基本信息（改名/改 code）。不能改字段 — 字段走 add/update_apaas_model_field。"
+  update_apaas_app_role:
+    sections: [permission]
+    agents: [builder, config]
+    category: update
+    description: "更新单个 aPaaS 角色（不走 SPEC，直接对话改）。"
+  update_apaas_dict_option:
+    sections: [data]
+    agents: [builder, config]
+    category: update
+    description: "更新字典选项（改 code / name / 排序 / 颜色）。先 list_apaas_app_dicts(with_options=true) 拿 option_id。"
+  update_apaas_form_component:
+    sections: [ui]
+    agents: [builder, config]
+    category: update
+    description: "微调表单中某个组件的属性（按 label 精确匹配，单组件 update）。"
+  update_apaas_model_field:
+    sections: [data]
+    agents: [builder, config]
+    category: update
+    description: "更新字段属性（改名 / 改类型 / 改最大长度）。"
+  update_app_from_doc:
+    sections: [global]
+    agents: [builder]
+    category: doc_pipeline
+    description: "上传新版 markdown 设计文档作为应用 vN+1 版，自动 diff 出变更计划返回。"
+  upload_external_zip_to_apaas:
+    sections: [extension]
+    agents: [coding]
+    category: other
+    description: "直接上传一个外部 zip 到 apaas 平台 — 内部走 multipart upload + 智能查重 update/create。"
+  validate_apaas_builder_doc:
+    sections: [global]
+    agents: [builder]
+    category: doc_pipeline
+    description: "轻量校验 markdown 是否符合 aPaaS Builder 标准（不创建应用、不打远端）。"
+  validate_builder_doc:
+    sections: [global]
+    agents: [builder]
+    category: doc_pipeline
+    description: "校验一份 markdown 设计文档是否符合 aPaaS Builder 标准（不创建应用、不需要身份）。"
+  vibe_create_workspace:
+    sections: [extension]
+    agents: [vibe]
+    category: vibe_workspace
+    description: "在 Vibe Coding（纯自开发 / 通用 IDE）下创建一个新工作区。"
+  vibe_edit_file:
+    sections: [extension]
+    agents: [vibe]
+    category: vibe_workspace
+    description: "精确字符串替换 Vibe Coding workspace 内某个文件。old_string 必须唯一匹配，"
+  vibe_get_workspace_status:
+    sections: [extension]
+    agents: [vibe]
+    category: vibe_workspace
+    description: "查询 Vibe Coding workspace 状态（status / file_count / files / 沙箱状态等）。"
+  vibe_glob:
+    sections: [extension]
+    agents: [vibe]
+    category: vibe_workspace
+    description: "按 glob pattern 列 Vibe Coding workspace 文件（如 '**/*.vue' / 'src/**/*.ts'）。"
+  vibe_grep:
+    sections: [extension]
+    agents: [vibe]
+    category: vibe_workspace
+    description: "在 Vibe Coding workspace 内 grep 搜索（Python re 语法）。"
+  vibe_http_check:
+    sections: [extension]
+    agents: [vibe]
+    category: vibe_workspace
+    description: "HTTP 检查 Vibe Coding workspace 内服务的健康状态（agent 起 dev server 后用）。"
+  vibe_read_file:
+    sections: [extension]
+    agents: [vibe]
+    category: vibe_workspace
+    description: "读 Vibe Coding workspace 内某个文件的文本内容。"
+  vibe_run_command:
+    sections: [extension]
+    agents: [vibe]
+    category: vibe_workspace
+    description: "在 Vibe Coding workspace 内跑 shell 命令（如 'npm install' / 'npm run dev'）。"
+  vibe_todo_write:
+    sections: [extension]
+    agents: [vibe]
+    category: vibe_workspace
+    description: "更新 Vibe Coding workspace 的 TODO 列表（agent 拆任务用）。"
+  vibe_write_file:
+    sections: [extension]
+    agents: [vibe]
+    category: vibe_workspace
+    description: "把文本完整写入 Vibe Coding workspace 内某个文件（覆盖式）。目录不存在自动建。"
+  write_workspace_files:
+    sections: [extension]
+    agents: [coding]
+    category: dev_workspace
+    description: "批量写入多个文件到 workspace（一次 RPC 解决 30+ 文件场景）。"

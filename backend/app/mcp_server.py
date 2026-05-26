@@ -27,6 +27,11 @@ from mcp.server.transport_security import TransportSecuritySettings
 
 from app.config import settings
 from app.error_messages import is_apaas_token_error
+from app.tool_registry import load as _load_tool_registry
+
+# SPEC v2 PR1: 启动时 load tool_registry.yaml, fail-fast 检查 yaml syntax 跟 schema.
+# 若 yaml 缺失 / 不合法, 进程拒启 — 比生产环境静默漏工具安全.
+_load_tool_registry()
 
 # pydantic-settings 加载的是 settings.env_var；我们直接读 os.environ 的 MCP_API_KEYS。
 # 显式 load .env 兜底（生产 nohup 启动时 source .env 不一定继承环境变量）
