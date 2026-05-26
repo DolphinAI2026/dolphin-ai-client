@@ -420,11 +420,16 @@ async def proxy_entry(
     form_id: str = "",
     menu_type: str = "",
     step_index: int = 0,
+    env_id: int = 0,
 ):
     """iframe SSO 入口 — 获取平台信息、代理 HTML、注入 token.
 
     2026-05-25 扩展: 可选 menu_id / form_id / menu_type 直接进对应菜单的编辑器.
     AppMenuSidebar 点菜单后用这个 URL 切 iframe src.
+
+    2026-05-26 design-v4 I3 扩展: 可选 env_id 覆盖 app.platform_env_id —
+    应用栏 "开发 / 生产" toggle 切到 prod 时透传 env_id, 让 iframe 走 prod env
+    (而非 app 默认绑的 dev env).  env_id=0 / 不传 = 复用 app.platform_env_id.
     """
     from app.models import Application
     from app.deps import get_auth_context_from_token
@@ -459,11 +464,14 @@ async def proxy_entry(
             )
 
         # 辅助搭建必须严格使用应用绑定的平台环境，避免串到默认环境/其他已连接环境
+        # design-v4 I3: 若传 env_id (来自前端 prod toggle), 覆盖 app.platform_env_id
+        # 同时仍验 tenant_id 防越权 (拿不到其他 tenant 的 env)
         env = None
-        if app.platform_env_id:
+        target_env_id = env_id if env_id > 0 else app.platform_env_id
+        if target_env_id:
             r = await db.execute(
                 select(PlatformEnv).where(
-                    PlatformEnv.id == app.platform_env_id,
+                    PlatformEnv.id == target_env_id,
                     PlatformEnv.tenant_id == ctx.tenant_id,
                 )
             )

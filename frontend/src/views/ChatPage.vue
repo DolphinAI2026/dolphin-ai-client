@@ -51,6 +51,17 @@
             <span v-else>{{ builderAppDisplayName || '新建应用' }}</span>
             <span>/</span>
             <strong>AI-Builder</strong>
+            <!-- 2026-05-26 design-v4 Polish F2: 应用发布状态 chip
+                 backend 当前 status 枚举: draft/generating/updating/completed/failed
+                 兜底逻辑: apaas_app_id 存在或 status='completed' 视为"已发布". -->
+            <span
+              v-if="builderCurrentAppId"
+              class="app-status-chip"
+              :class="appPublishStatus === 'published' ? 'published' : 'draft'"
+              :title="appPublishStatus === 'published' ? '应用已发布到 aPaaS 平台' : '应用尚未发布到平台（草稿）'"
+            >
+              {{ appPublishStatus === 'published' ? '已发布' : '草稿' }}
+            </span>
           </div>
           <!-- "查看应用"：应用部署完成后显示在顶部明显位置；点击在当前页切到
                aPaaS 平台 inline iframe（走 platform_proxy SSO 免登），不开新标签页
@@ -113,13 +124,60 @@
             </svg>
           </span>
         </button>
-        <!-- PR3 (SPEC v2 §2): 顶部 [部署] / [历史] / [更多 ⋯] CTA 组. 复用现有 modal/drawer.
-             有 builderCurrentAppId 时才显示 (新建应用没保存前藏起来). -->
+        <!-- PR3 (SPEC v2 §2) + design-v4 Polish F2: 顶部 [开发/生产 toggle] / [保存] / [发布到生产] / [历史] / [更多 ⋯] CTA 组.
+             复用现有 modal/drawer. 有 builderCurrentAppId 时才显示 (新建应用没保存前藏起来).
+             - 开发/生产 toggle: P2 UI 占位, click "生产" 只 alert "P2 接入"
+             - 保存: P2 UI 占位, alert "P2 接入 — 当前请点'发布到生产'走完整保存+部署"
+             - 发布到生产: 原 [部署] CTA 重命名, 真触发 openDeployModal 走部署流程 -->
         <div v-if="builderCurrentAppId" class="app-top-cta" role="group" aria-label="应用操作">
+          <!-- 开发/生产 环境 toggle (segmented, design-v4 I3 真切环境)
+               - dev active: 蓝 brand
+               - prod active: 黄 warn (强提醒"正在查看生产环境")
+               - 未部署 / 无 prod env / token 过期 → prod btn disabled + tooltip -->
+          <div class="cta-env-toggle" role="group" aria-label="切换部署环境">
+            <button
+              type="button"
+              class="cta-env-btn"
+              :class="{ active: appEnvMode === 'dev', 'is-disabled': appEnvToggleDisabled }"
+              :aria-pressed="appEnvMode === 'dev'"
+              :aria-disabled="appEnvToggleDisabled || undefined"
+              :title="appEnvToggleDisabled ? '应用尚未部署到平台' : '开发环境'"
+              @click="onAppEnvSwitch('dev')"
+              @mouseenter="ensureAppEnvsLoaded"
+            >开发</button>
+            <button
+              type="button"
+              class="cta-env-btn"
+              :class="{
+                active: appEnvMode === 'prod',
+                'is-prod': appEnvMode === 'prod',
+                'is-disabled': prodEnvDisabled,
+              }"
+              :aria-pressed="appEnvMode === 'prod'"
+              :aria-disabled="prodEnvDisabled || undefined"
+              :title="prodEnvTooltip"
+              @click="onAppEnvSwitch('prod')"
+              @mouseenter="ensureAppEnvsLoaded"
+            >生产</button>
+          </div>
+          <button
+            type="button"
+            class="cta-btn cta-save"
+            title="保存当前应用配置 (P2 接入)"
+            @click="onTopCtaSave"
+          >
+            <span class="cta-icon" aria-hidden="true">
+              <svg viewBox="0 0 16 16" fill="none">
+                <path d="M3.5 2.5h7.2l2.8 2.8v8.2H3.5V2.5z" stroke="currentColor" stroke-width="1.3" stroke-linejoin="round" />
+                <path d="M5.5 2.5v4h5v-4M5.5 10h5v3.5h-5z" stroke="currentColor" stroke-width="1.3" stroke-linejoin="round" />
+              </svg>
+            </span>
+            <span>保存</span>
+          </button>
           <button
             type="button"
             class="cta-btn cta-deploy"
-            :title="canDeployFromTopCTA ? '一键部署当前应用到平台' : '应用尚未生成可部署内容'"
+            :title="canDeployFromTopCTA ? '发布当前应用到生产环境 (走完整部署流程)' : '应用尚未生成可部署内容'"
             :disabled="!canDeployFromTopCTA"
             @click="onTopCtaDeploy"
           >
@@ -130,7 +188,7 @@
                 <path d="M5 14h6" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" />
               </svg>
             </span>
-            <span>部署</span>
+            <span>发布到生产</span>
           </button>
           <button
             type="button"
@@ -341,6 +399,19 @@
           />
           <!-- 默认 fallback: iframe (流程/业务事件/字段权限/菜单可见性 暂走 iframe, P2 改 native) -->
           <div v-else class="platform-iframe-container">
+          <!-- design-v4 I3: prod 模式红色 banner — 强提醒"正在查看生产环境" -->
+          <div v-if="appEnvMode === 'prod'" class="prod-env-banner" role="alert">
+            <span class="prod-env-banner-icon" aria-hidden="true">⚠</span>
+            <span class="prod-env-banner-text">
+              正在查看生产环境<template v-if="prodEnvCandidate">「{{ prodEnvCandidate.env_name }}」</template> — 谨慎修改, 直接生效
+            </span>
+            <button
+              class="prod-env-banner-back"
+              type="button"
+              title="切回开发环境"
+              @click="onAppEnvSwitch('dev')"
+            >切回开发</button>
+          </div>
           <div v-if="platformLoading" class="platform-loading">
             <span class="loading-spinner">⟳</span> 加载平台配置...
           </div>
@@ -3510,6 +3581,198 @@ const canEditApaasInfo = computed(() => {
   return true
 })
 const canDeployFromTopCTA = computed(() => !!builderCurrentAppId.value && (showStartDeployButton.value || deployAllDone.value))
+
+// ─────────────── 2026-05-26 design-v4 Polish F2 ───────────────
+// 应用发布状态 chip
+//   backend Application.status 枚举: draft/generating/updating/completed/failed
+//   兜底: apaas_app_id 存在 → published; status='completed' → published; 其他 → draft
+// 当前 backend 没有"已发布"独立字段 (deploy_records 表里才有真实部署记录),
+// 这里用 apaas_app_id 当近似. P2 接入 deploy_records 的 active version 后改这里.
+const appPublishStatus = computed<'published' | 'draft'>(() => {
+  const app = store.currentApp as any
+  if (!app) return 'draft'
+  if (app.apaas_app_id) return 'published'
+  if (app.status === 'completed') return 'published'
+  return 'draft'
+})
+
+// ─────────────── 2026-05-26 design-v4 I3: 应用 env toggle 真切 ───────────────
+// 应用栏 "开发 / 生产" toggle:
+//   - dev: 走 application.platform_env_id 的 env (current iframe 默认)
+//   - prod: 调 /applications/{id}/envs 拿 list, 找 type='prod' env, 切 iframe URL
+//           (透传 env_id 给 backend proxy_entry, 覆盖 app.platform_env_id)
+//
+// 边界:
+//   - 应用未部署 (apaas_app_id 空): toggle disabled
+//   - prod env 未配置: prod button tooltip "未配置生产环境"
+//   - prod env token 失效: 切时 toast 引导
+//
+// 视觉:
+//   - prod active: button 黄色 (warn token)
+//   - prod mode: 顶部加红色 banner sticky
+interface AppEnvItem {
+  id: number
+  env_name: string
+  alias?: string | null
+  base_url: string
+  type: 'dev' | 'preview' | 'prod'
+  current: boolean
+  status: string
+  is_default: boolean
+  has_token: boolean
+  can_iframe: boolean
+}
+
+const appEnvMode = ref<'dev' | 'prod'>('dev')
+const appEnvs = ref<AppEnvItem[]>([])
+const appEnvsLoaded = ref(false)
+const appEnvsLoading = ref(false)
+const appEnvSwitching = ref(false)
+
+// 当前 env (= app.platform_env_id 对应的 env), 用作 dev mode 锚点
+const currentDevEnv = computed<AppEnvItem | null>(() => {
+  return appEnvs.value.find(e => e.current) || null
+})
+
+// 第一个 type='prod' 的 env (没就空)
+const prodEnvCandidate = computed<AppEnvItem | null>(() => {
+  return appEnvs.value.find(e => e.type === 'prod') || null
+})
+
+const hasProdEnv = computed(() => !!prodEnvCandidate.value)
+
+// toggle 整体能用 (有 builderCurrentAppId 才显示, 加上 apaas_app_id check 在外面已有)
+const appEnvToggleDisabled = computed(() => {
+  const app = store.currentApp as any
+  return !app?.apaas_app_id  // 未部署到 apaas → 没法切 env
+})
+
+// prod button 是否可点 (要有 prod env 配 + token)
+const prodEnvDisabled = computed(() => {
+  if (appEnvToggleDisabled.value) return true
+  if (!appEnvsLoaded.value) return false  // 没拉完之前先不 disable, 点的时候再拉
+  if (!hasProdEnv.value) return true
+  const prod = prodEnvCandidate.value
+  return !prod?.can_iframe  // 没 token 或 status 不是 connected
+})
+
+const prodEnvTooltip = computed(() => {
+  if (appEnvToggleDisabled.value) return '应用尚未部署到平台, 无法切换环境'
+  if (!appEnvsLoaded.value) return '生产环境'
+  if (!hasProdEnv.value) return '未配置生产环境, 请到平台环境管理添加 (env_name 含 "prod" / "生产")'
+  const prod = prodEnvCandidate.value
+  if (prod && !prod.has_token) return `生产环境「${prod.env_name}」未登录, 请到平台环境管理重新登录`
+  if (prod && prod.status !== 'connected') return `生产环境「${prod.env_name}」连接已失效, 请到平台环境管理重新登录`
+  return '切换到生产环境'
+})
+
+// 拉当前应用的 env list (lazy, 第一次需要时调)
+async function ensureAppEnvsLoaded(): Promise<void> {
+  if (appEnvsLoaded.value || appEnvsLoading.value) return
+  const appId = builderCurrentAppId.value
+  if (!appId) return
+  appEnvsLoading.value = true
+  try {
+    const resp = await request.get<any, any>(`/applications/${appId}/envs`)
+    if (resp?.ok && Array.isArray(resp.envs)) {
+      appEnvs.value = resp.envs as AppEnvItem[]
+      appEnvsLoaded.value = true
+    }
+  } catch (err) {
+    console.warn('[design-v4 I3] load app envs failed:', err)
+  } finally {
+    appEnvsLoading.value = false
+  }
+}
+
+async function onAppEnvSwitch(env: 'dev' | 'prod') {
+  if (appEnvSwitching.value) return
+  if (appEnvMode.value === env) return
+  if (appEnvToggleDisabled.value) {
+    ElMessage.warning('应用尚未部署到平台, 无法切换环境')
+    return
+  }
+
+  // 拉 env list (如果还没拉)
+  await ensureAppEnvsLoaded()
+
+  if (env === 'prod') {
+    if (!hasProdEnv.value) {
+      ElMessage.warning('未配置生产环境 — 请到 [运行时 / 环境管理] 添加一个 env_name 含 "生产" 或 "prod" 的环境')
+      return
+    }
+    const prod = prodEnvCandidate.value!
+    if (!prod.has_token) {
+      ElMessage.warning(`生产环境 token 已过期 — 请到 [运行时 / 环境管理] 重新登录「${prod.env_name}」`)
+      return
+    }
+    if (prod.status !== 'connected') {
+      ElMessage.warning(`生产环境「${prod.env_name}」连接已失效, 请到 [运行时 / 环境管理] 重连`)
+      return
+    }
+    appEnvSwitching.value = true
+    try {
+      // 切 iframe URL 走 prod env (透传 env_id, backend proxy_entry 覆盖 app.platform_env_id)
+      switchIframeToEnv(prod.id)
+      appEnvMode.value = 'prod'
+      ElMessage.success(`已切换到生产环境「${prod.env_name}」(只读)`)
+    } finally {
+      appEnvSwitching.value = false
+    }
+    return
+  }
+
+  // 切回 dev — 复用 application 默认 env
+  appEnvSwitching.value = true
+  try {
+    switchIframeToEnv(null)
+    appEnvMode.value = 'dev'
+    ElMessage.info('已切回开发环境')
+  } finally {
+    appEnvSwitching.value = false
+  }
+}
+
+// 真切 iframe URL — 透传 env_id 给 backend proxy_entry.
+//   env_id=null → 复用 app.platform_env_id (开发环境)
+//   env_id=<prod env id> → 覆盖到 prod env
+function switchIframeToEnv(envId: number | null) {
+  const appId = builderCurrentAppId.value
+  if (!appId) return
+  const token = userStore.token || localStorage.getItem('token') || ''
+  const params: string[] = [`app_id=${appId}`]
+  if (token) params.push(`_auth=${encodeURIComponent(token)}`)
+  if (envId) params.push(`env_id=${envId}`)
+  if (selectedApaasMenuId.value) params.push(`menu_id=${encodeURIComponent(selectedApaasMenuId.value)}`)
+  if (selectedApaasMenuFormId.value) params.push(`form_id=${encodeURIComponent(selectedApaasMenuFormId.value)}`)
+  params.push(`_ts=${Date.now()}`)
+  const nextUrl = `${API_PREFIX}/platform-proxy/entry?${params.join('&')}`
+  // 显式 reload iframe — env 切了, 别复用旧 frame
+  platformIframeUrl.value = nextUrl
+  platformAppUrl.value = nextUrl
+  platformIframeAppId.value = appId
+  platformIframeKey.value += 1
+  platformLoginHint.value = ''
+}
+
+// 监听 builderCurrentAppId 变化, 拉 envs (新应用 mount 时)
+watch(
+  () => builderCurrentAppId.value,
+  (newId, oldId) => {
+    if (newId && newId !== oldId) {
+      appEnvs.value = []
+      appEnvsLoaded.value = false
+      appEnvMode.value = 'dev'  // 切应用时重置回 dev
+    }
+  },
+)
+
+// 保存按钮 — P2 UI 占位
+function onTopCtaSave() {
+  ElMessage.info("P2 接入 — 当前请点 '发布到生产' 走完整保存+部署流程")
+}
+// ────────────────────────────────────────────────────────────────────────────
+// ────────────────────────────────────────────────────────────
 
 const editAppInfoOpen = ref(false)
 const editAppName = ref('')
@@ -12479,6 +12742,137 @@ html[data-theme="dark"] .cta-btn.cta-deploy {
   background: #3b82f6;
   border-color: #3b82f6;
   color: #fff;
+}
+
+/* ─────────── 2026-05-26 design-v4 Polish F2: status chip / env toggle / save btn ───────────
+ * 全用 --brand / --surface / --line / --text* token (design-v3-tokens.css),
+ * 不写 hex. 跟既有 .cta-btn 老 hex 风格不一致是有意为之 — v4 新增控件全走 token.
+ */
+.builder-chat-crumbs .app-status-chip {
+  display: inline-flex;
+  align-items: center;
+  height: 20px;
+  padding: 0 8px;
+  margin-left: 4px;
+  border-radius: 999px;
+  font-size: 11px;
+  font-weight: 600;
+  white-space: nowrap;
+  line-height: 1;
+  border: 1px solid transparent;
+}
+.builder-chat-crumbs .app-status-chip.published {
+  background: var(--brand-soft);
+  color: var(--brand);
+  border-color: var(--brand-ring);
+}
+.builder-chat-crumbs .app-status-chip.draft {
+  background: var(--surface-2);
+  color: var(--text-3);
+  border-color: var(--line);
+}
+
+/* 开发/生产 segmented toggle — RoleManagePanel 同款 */
+.cta-env-toggle {
+  display: inline-flex;
+  background: var(--surface-2);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 2px;
+  margin-right: 2px;
+  flex-shrink: 0;
+}
+.cta-env-btn {
+  height: 26px;
+  padding: 0 12px;
+  font-size: 12px;
+  font-weight: 500;
+  font-family: inherit;
+  background: transparent;
+  border: 0;
+  border-radius: 6px;
+  color: var(--text-3);
+  cursor: pointer;
+  transition: background 0.12s ease, color 0.12s ease;
+  white-space: nowrap;
+}
+.cta-env-btn:hover {
+  color: var(--text);
+}
+.cta-env-btn.active {
+  background: var(--surface);
+  color: var(--brand);
+  box-shadow: 0 1px 2px rgba(11, 27, 63, 0.06);
+}
+
+/* I3: prod active 用 warn 黄, 强提醒 — 不与 dev 同一蓝 */
+.cta-env-btn.active.is-prod {
+  background: var(--warn-soft, #fef3c7);
+  color: var(--warn, #c2410c);
+  border: 1px solid var(--warn-ring, #fbbf24);
+}
+
+/* I3: prod disabled (没 prod env / token 失效) — 灰且 cursor not-allowed */
+.cta-env-btn.is-disabled,
+.cta-env-btn[aria-disabled="true"] {
+  cursor: not-allowed;
+  color: var(--text-4, #94a3b8);
+  opacity: 0.6;
+}
+.cta-env-btn.is-disabled:hover {
+  background: transparent;
+  color: var(--text-4, #94a3b8);
+}
+
+/* I3: prod 模式下顶部红色 banner — 强提醒"正在查看生产环境" */
+.prod-env-banner {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  padding: 6px 16px;
+  background: var(--danger-soft, #fee2e2);
+  color: var(--danger, #b91c1c);
+  border-bottom: 1px solid var(--danger-ring, #fca5a5);
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: 0.2px;
+  position: sticky;
+  top: 0;
+  z-index: 50;
+}
+.prod-env-banner .prod-env-banner-icon {
+  font-size: 14px;
+  line-height: 1;
+}
+.prod-env-banner .prod-env-banner-text {
+  flex: 0 1 auto;
+}
+.prod-env-banner .prod-env-banner-back {
+  background: transparent;
+  border: 1px solid currentColor;
+  border-radius: 4px;
+  color: inherit;
+  font: inherit;
+  font-size: 11px;
+  padding: 1px 8px;
+  margin-left: 6px;
+  cursor: pointer;
+}
+.prod-env-banner .prod-env-banner-back:hover {
+  background: rgba(185, 28, 28, 0.08);
+}
+
+/* 保存按钮 ghost 风格 — 主色 outline, 不抢 cta-deploy 风头 */
+.cta-btn.cta-save {
+  border-color: var(--line-strong);
+  background: var(--surface);
+  color: var(--text);
+}
+.cta-btn.cta-save:hover:not(:disabled) {
+  border-color: var(--brand);
+  color: var(--brand);
+  background: var(--brand-soft);
 }
 
 /* breadcrumb 应用名可点编辑 */

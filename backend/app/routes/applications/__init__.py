@@ -1656,6 +1656,101 @@ async def get_application(
     }
 
 
+# ── 2026-05-26 design-v4 I3: 应用 env 切换 ──
+#
+# 应用栏 "开发 / 生产" toggle 需要知道当前 tenant 有哪些 env, 哪个是
+# 当前 (= application.platform_env_id 对应) 的 env. 这个 endpoint 列出来,
+# 让前端 toggle 切换时拿到目标 env 的 url + id, 调 platform-proxy/entry
+# 时透传 env_id 真切 iframe.
+#
+# env type 推断 (env_name 启发式 — current schema 没 type 字段):
+#   含 prod / production / 生产           → 'prod'
+#   含 trial / preview / sandbox / 预览    → 'preview'
+#   其他                                   → 'dev'
+def _infer_env_type(env_name: str) -> str:
+    name_lower = (env_name or "").lower()
+    if any(k in name_lower for k in ("prod", "production")) or "生产" in (env_name or ""):
+        return "prod"
+    if any(k in name_lower for k in ("trial", "preview", "sandbox")) or "预览" in (env_name or ""):
+        return "preview"
+    return "dev"
+
+
+@router.get("/{app_id}/envs")
+async def list_app_envs(
+    app_id: int,
+    ctx: Annotated[AuthContext, Depends(get_auth_context)],
+    db: Annotated[AsyncSession, Depends(get_db)],
+):
+    """列出当前应用可切换的平台环境.
+
+    返回当前 tenant 全部 envs (PlatformEnv), 推断每个 env 的 type
+    (dev / preview / prod), 标记 current=true 的是 application.platform_env_id
+    对应的那个.
+
+    前端应用栏 "开发 / 生产" toggle 用这个 endpoint:
+      - 默认显示 type=dev 那个 (current env 一般是 dev)
+      - 点 "生产" → 找 type=prod 的 env, 切 iframe URL 走那个 env_id
+      - 没 type=prod env → toast "未配置生产环境"
+
+    返:
+      ok: True
+      envs: [
+        { id, env_name, alias?, base_url, type, current, status,
+          has_token, can_iframe }
+      ]
+      current_env_id: int | None
+      has_prod_env: bool
+    """
+    result = await db.execute(
+        select(Application).where(
+            Application.id == app_id,
+            Application.tenant_id == ctx.tenant_id,
+        )
+    )
+    app = result.scalar_one_or_none()
+    if not app:
+        raise HTTPException(status_code=404, detail="应用不存在")
+    await _require_application_permission(ctx, db, app, Action.VIEW)
+
+    # 拉当前 tenant 所有 env
+    env_rows = await db.execute(
+        select(PlatformEnv)
+        .where(PlatformEnv.tenant_id == ctx.tenant_id)
+        .order_by(PlatformEnv.is_default.desc(), PlatformEnv.id.asc())
+    )
+    envs = env_rows.scalars().all()
+
+    out_envs = []
+    has_prod = False
+    for env in envs:
+        env_type = _infer_env_type(env.env_name)
+        if env_type == "prod":
+            has_prod = True
+        is_current = bool(app.platform_env_id and env.id == app.platform_env_id)
+        has_token = bool(env.token)
+        out_envs.append({
+            "id": env.id,
+            "env_name": env.env_name,
+            "alias": env.alias,
+            "base_url": env.base_url,
+            "type": env_type,
+            "current": is_current,
+            "status": env.status,
+            "is_default": env.is_default,
+            "has_token": has_token,
+            "can_iframe": has_token and env.status == "connected",
+        })
+
+    return {
+        "ok": True,
+        "envs": out_envs,
+        "current_env_id": app.platform_env_id,
+        "has_prod_env": has_prod,
+        "apaas_app_id": app.apaas_app_id,  # 前端判断是否能切 (没 apaas_app_id = 没部署)
+    }
+
+
 # ── API 调用日志 ──
 
 @router.get("/{app_id}/api-logs")
