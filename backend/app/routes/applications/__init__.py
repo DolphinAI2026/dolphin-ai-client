@@ -2331,6 +2331,10 @@ _CONFIG_CHAT_TOOL_WHITELIST: set[str] = {
     "create_form_event_with_python_code",
     "create_time_event_with_python_code",
     "create_apaas_value_change_assignment_event",   # 用户最高频"X 改成 Y → 填 Z"场景
+    # —— SPEC 驱动加新表单+流程 (2026-05-25 补) — 用户高频"加新功能"场景 ——
+    # AI 先生 SPEC 给用户审, 用户同意后调本工具一把建好 模型+表单+菜单+(可选)流程.
+    # 不走全量重新部署, 是真增量加 feature. 借鉴 super-agents-dev formDesign 流程.
+    "build_apaas_feature_from_spec",
     # —— 表单流程 (2026-05-25 补) ——
     # 给表单菜单设审批流程, 一键 N 阶段顺序审批 (START → 提交 → stage1 → ... → END)
     # AI 老路是引导用户 "我演示一下" 录制 → 录到的全是 AI 助手输入框里的 click 没用,
@@ -2991,6 +2995,9 @@ async def _config_chat_event_stream(
             "## ❌ 不要 demonstration 的场景 — 直接调专属 MCP\n"
             "下面这些操作 MCP 已封装好一键工具, 不要走 browser_start_recording / browser_click,\n"
             "也不要让用户『演示一下』 — 直接调对应 MCP 一把过, 比录制 + 重放快 100 倍 + 稳定:\n"
+            "  - **⭐ 加新表单/功能** → `build_apaas_feature_from_spec(env_id, apaas_app_id,\n"
+            "    feature_name, feature_code, fields=[...], process_stages=[...], parent_menu_id=...)`\n"
+            "    用户说『加一个借书申请表单, 字段X/Y/Z, 走管理员审批』走这个 (见下『SPEC 驱动加新表单』).\n"
             "  - **创建/修改表单流程** → `set_apaas_app_process(env_id, apaas_app_id, menu_id,\n"
             "    process_name, process_code, stages=[{name,approver_type,approver_code}, ...])`\n"
             "    示例: 借阅记录加管理员审核流程 → list_apaas_app_menus 拿 menu_id (form_id 不空那行)\n"
@@ -3000,12 +3007,32 @@ async def _config_chat_event_stream(
             "  - 加字段必填 → update_apaas_form_component (不是 browser_click)\n"
             "  - 加角色 → create_apaas_app_roles\n"
             "  - 加字典选项 → add_apaas_dict_option\n"
-            "  - 加菜单 → create_apaas_form_menu / create_apaas_self_dev_menu\n"
+            "  - 加菜单 (关联已有表单) → create_apaas_form_menu / create_apaas_self_dev_menu\n"
             "  - 业务事件 → create_apaas_value_change_assignment_event / create_form_event_with_python_code\n"
             "  - 字段权限 → set_apaas_form_permissions\n"
-            "**铁律**: 用户说『加流程』/『加审批』/『字段必填』/『加角色』/『加菜单』等明确意图时,\n"
-            "**先扫 MCP 工具列表找现成 wrapper, 找到就直接调**, 不要先 browser_snapshot 看页面,\n"
-            "不要劝用户『演示一下』. 没现成 wrapper 才 fallback browser_* 或 demonstration.\n"
+            "**铁律**: 用户说『加新表单』/『加新功能』/『加流程』/『加审批』/『字段必填』/『加角色』等明确\n"
+            "意图时, **先扫 MCP 工具列表找现成 wrapper, 找到就直接调**, 不要先 browser_snapshot 看页面,\n"
+            "不要劝用户『演示一下』. 没现成 wrapper 才 fallback browser_* 或 demonstration.\n\n"
+
+            "## ⭐ SPEC 驱动加新表单 (用户最高频场景)\n"
+            "当用户说『加一个 XX 表单』/『加一个 XX 功能』/『新增 XX 模块』时, 走 2 阶段流程:\n\n"
+            "**阶段 1: 生成 SPEC 给用户审核 (不调工具, 只回复)**\n"
+            "  - 先调 list_apaas_app_models / list_apaas_app_roles 扫已有上下文 (避免编码冲突)\n"
+            "  - 给用户出**简洁 SPEC** (markdown 即可, 不要塞一堆 XML 标签). 必含:\n"
+            "    - 表单名 + feature_code (snake_case, 譬如 `borrow_apply`, 避开已有 modelCode)\n"
+            "    - 字段表格: name / code / type / required / max_length / show_in_list\n"
+            "    - (若用户提到审批) 流程节点: name / approver_type / approver_code\n"
+            "  - 回复结尾问一句『按这个建吗？同意我就直接调工具一把建好』\n"
+            "  - **此阶段不调 build_apaas_feature_from_spec, 也不调其他写工具**\n\n"
+            "**阶段 2: 用户同意后执行 (一把调 build_apaas_feature_from_spec)**\n"
+            "  - 用户回复『同意』/『建』/『可以』/『go』 → 立刻调 build_apaas_feature_from_spec\n"
+            "  - feature_name = 表单中文名, feature_code = SPEC 里的 snake_case\n"
+            "  - fields = SPEC 字段表格转 [{name, code, type, required, max_length, show_in_list}, ...]\n"
+            "  - process_stages = SPEC 里流程节点 (没流程就传 None / 不传)\n"
+            "  - 工具会自动: 建模型 → 建表单 (含菜单) → 移分组 → 配流程\n"
+            "  - 返成功后回复 ID 列表 + 让用户刷新 iframe 看效果\n\n"
+            "**为啥要 2 阶段**: 用户要审 SPEC + 改 SPEC, 不能 AI 拍脑袋直接建. 这是 super-agents-dev\n"
+            "实证过的 AIAssistantService.formDesign 流程, 用户接受度最高.\n"
         )
 
         messages: list[dict] = [{"role": "system", "content": system_prompt}]

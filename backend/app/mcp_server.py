@@ -5114,6 +5114,282 @@ async def set_apaas_app_process(
 
 
 # ═══════════════════════════════════════════════════════════════════════════
+# 2026-05-25: SPEC 驱动的"加新表单+流程"一键工具.
+# 借鉴 super-agents-dev AIAssistantService.formDesign — AI 先生 SPEC 给用户审,
+# 用户同意后调本工具一把建好 模型+表单+菜单+(可选)流程. 不走全量 SPEC 重新部署,
+# 只增量加这一个 feature.
+# ═══════════════════════════════════════════════════════════════════════════
+
+# 平台 BOF 字段类型 → 表单组件类型 映射 (super-agents-dev PromptTemplate 同款)
+_BOF_TO_COMPONENT = {
+    "BOF_TEXT": "FORM_TEXT_INPUT",
+    "BOF_DOCUMENT_NUMBER": "FORM_DOCUMENT_NUMBER",
+    "BOF_NUMBER": "FORM_NUMBER_INPUT",
+    "BOF_MONEY": "FORM_MONEY_INPUT",
+    "BOF_DATE": "FORM_DATEPICK_INPUT",
+    "BOF_BOOLEAN": "FORM_SWITCH_SELECT",
+    "BOF_RICH_TEXT": "FORM_TEXTAREA_INPUT",
+    "BOF_MULTI_PEOPLE_SELECT": "FORM_PEOPLE_SELECT",
+    "BOF_MULTI_DEPARTMENT_SELECT": "FORM_DEPARTMENT_SELECT",
+    "BOF_RADIO_INPUT": "FORM_RADIO_INPUT",
+    "BOF_CHECKBOX_INPUT_SINGLE": "FORM_SELECT_INPUT_SINGLE",
+    "BOF_CHECKBOX_INPUT": "FORM_SELECT_INPUT",
+    "BOF_MULTI_FILE": "FORM_FILE_UPLOAD",
+    "BOF_AREA": "FORM_WIDGET_AREA",
+    "BOF_LOCATION": "FORM_WIDGET_LOCATION",
+}
+
+# 中文字段类型 → 组件类型 (AI 常用中文)
+_CN_TO_COMPONENT = {
+    "单行输入": "FORM_TEXT_INPUT",
+    "文本": "FORM_TEXT_INPUT",
+    "单据号": "FORM_DOCUMENT_NUMBER",
+    "多行输入": "FORM_TEXTAREA_INPUT",
+    "长文本": "FORM_TEXTAREA_INPUT",
+    "富文本": "FORM_TEXTAREA_INPUT",
+    "数字输入": "FORM_NUMBER_INPUT",
+    "数字": "FORM_NUMBER_INPUT",
+    "金额": "FORM_MONEY_INPUT",
+    "日期时间": "FORM_DATEPICK_INPUT",
+    "日期": "FORM_DATEPICK_INPUT",
+    "手机号码": "FORM_PHONE_INPUT",
+    "手机号": "FORM_PHONE_INPUT",
+    "电子邮箱": "FORM_EMAIL_INPUT",
+    "邮箱": "FORM_EMAIL_INPUT",
+    "证件号": "FORM_IDCARD_INPUT",
+    "人员选择": "FORM_PEOPLE_SELECT",
+    "部门选择": "FORM_DEPARTMENT_SELECT",
+    "单选框": "FORM_RADIO_INPUT",
+    "下拉单选": "FORM_SELECT_INPUT_SINGLE",
+    "下拉框": "FORM_SELECT_INPUT",
+    "多选框": "FORM_CHECKBOX_INPUT",
+    "附件上传": "FORM_FILE_UPLOAD",
+    "开关": "FORM_SWITCH_SELECT",
+    "地区地址": "FORM_WIDGET_AREA",
+    "定位": "FORM_WIDGET_LOCATION",
+    "超链接": "FORM_HYPERLINK_INPUT",
+}
+
+# 组件类型 → BO 字段类型 (建模型时用)
+_COMPONENT_TO_BOF = {
+    "FORM_TEXT_INPUT": "BOF_TEXT",
+    "FORM_DOCUMENT_NUMBER": "BOF_DOCUMENT_NUMBER",
+    "FORM_TEXTAREA_INPUT": "BOF_RICH_TEXT",
+    "FORM_NUMBER_INPUT": "BOF_NUMBER",
+    "FORM_MONEY_INPUT": "BOF_MONEY",
+    "FORM_DATEPICK_INPUT": "BOF_DATE",
+    "FORM_PHONE_INPUT": "BOF_TEXT",
+    "FORM_EMAIL_INPUT": "BOF_TEXT",
+    "FORM_IDCARD_INPUT": "BOF_TEXT",
+    "FORM_HYPERLINK_INPUT": "BOF_TEXT",
+    "FORM_PEOPLE_SELECT": "BOF_MULTI_PEOPLE_SELECT",
+    "FORM_DEPARTMENT_SELECT": "BOF_MULTI_DEPARTMENT_SELECT",
+    "FORM_RADIO_INPUT": "BOF_RADIO_INPUT",
+    "FORM_SELECT_INPUT_SINGLE": "BOF_CHECKBOX_INPUT_SINGLE",
+    "FORM_SELECT_INPUT": "BOF_CHECKBOX_INPUT",
+    "FORM_CHECKBOX_INPUT": "BOF_CHECKBOX_INPUT",
+    "FORM_FILE_UPLOAD": "BOF_MULTI_FILE",
+    "FORM_SWITCH_SELECT": "BOF_BOOLEAN",
+    "FORM_WIDGET_AREA": "BOF_AREA",
+    "FORM_WIDGET_LOCATION": "BOF_LOCATION",
+}
+
+
+def _normalize_field_type(field: dict) -> tuple[str, str]:
+    """从字段规格里反推 (component_type, bof_type).
+
+    支持多种输入形式:
+      - {"componentType": "FORM_TEXT_INPUT"} — 直给组件类型
+      - {"database_field_type": "BOF_TEXT"} — 给 BO 字段类型
+      - {"type": "单行输入"} — 中文
+      - 默认 FORM_TEXT_INPUT / BOF_TEXT
+    """
+    comp = (field.get("componentType") or field.get("component_type") or "").strip()
+    if comp and comp in _COMPONENT_TO_BOF:
+        return comp, _COMPONENT_TO_BOF[comp]
+    bof = (field.get("database_field_type") or field.get("databaseFieldType")
+           or field.get("bof_type") or "").strip()
+    if bof and bof in _BOF_TO_COMPONENT:
+        return _BOF_TO_COMPONENT[bof], bof
+    t = (field.get("type") or "").strip()
+    if t in _CN_TO_COMPONENT:
+        comp = _CN_TO_COMPONENT[t]
+        return comp, _COMPONENT_TO_BOF.get(comp, "BOF_TEXT")
+    # fallback
+    return "FORM_TEXT_INPUT", "BOF_TEXT"
+
+
+@mcp.tool()
+async def build_apaas_feature_from_spec(
+    env_id: int,
+    apaas_app_id: str,
+    feature_name: str,
+    feature_code: str,
+    fields: list,
+    process_stages: list | None = None,
+    parent_menu_id: str = "",
+) -> dict:
+    """⭐ 一键建新表单+流程 (走 SPEC 驱动). 用户最高频"加新功能"场景.
+
+    AI 先生 SPEC 给用户看 → 用户同意 → AI 调本工具 → 一次性串
+    建模型 → 建表单 → 建菜单 → (可选) 配审批流程. 不走全量重新部署.
+
+    Args:
+      feature_name: 功能/表单显示名, 譬如 "借书申请"
+      feature_code: 英文标识 (modelCode + formCode 用), snake_case, 譬如 "borrow_apply"
+      fields: 字段数组. 每项:
+        {"name": "申请人", "code": "applicant",
+         "type": "单行输入" | "数字" | "日期" | "人员选择" | "多行输入" | ...
+                 (或 "componentType": "FORM_TEXT_INPUT")
+                 (或 "database_field_type": "BOF_TEXT"),
+         "required": true | false (默认 false),
+         "max_length": 200 (单行/多行用),
+         "show_in_list": true | false (默认 true),
+         "searchable": true | false (默认 false)}
+      process_stages: 可选审批流程节点 [{"name":"管理员审批","approver_type":"ROLE","approver_code":"admin"}]
+      parent_menu_id: 可选父分组 id (从 list_apaas_app_menus 拿). 不传挂根级.
+
+    返回: {ok, model_id, form_id, menu_id, process_id?, urls{}}
+    """
+    if not (apaas_app_id.strip() and feature_name.strip() and feature_code.strip()):
+        return {"ok": False, "error_code": "INVALID_PARAMS",
+                "message": "apaas_app_id + feature_name + feature_code 必填"}
+    if not isinstance(fields, list) or not fields:
+        return {"ok": False, "error_code": "INVALID_FIELDS",
+                "message": "fields 必须非空数组 (至少 1 个字段)"}
+
+    feature_code = feature_code.strip()
+    feature_name = feature_name.strip()
+
+    # ─── Step 1: 建模型 (含字段) ─────────────────────────────
+    model_fields = []
+    form_components = []
+    for f in fields:
+        if not isinstance(f, dict):
+            continue
+        fname = (f.get("name") or "").strip()
+        fcode = (f.get("code") or "").strip()
+        if not fname or not fcode:
+            return {"ok": False, "error_code": "FIELD_MISSING_NAME_OR_CODE",
+                    "message": f"字段缺 name/code: {f}"}
+        comp_type, bof_type = _normalize_field_type(f)
+        max_length = int(f.get("max_length") or f.get("maxLength") or 200)
+        required = bool(f.get("required", False))
+        # 模型字段
+        mf = {
+            "fieldName": fname, "fieldCode": fcode,
+            "fieldType": bof_type, "required": required,
+        }
+        if bof_type == "BOF_TEXT":
+            mf["maxLength"] = max_length
+        model_fields.append(mf)
+        # 表单组件
+        comp = {
+            "componentType": comp_type, "label": fname,
+            "modelField": f"{feature_code}.{fcode}",
+            "required": required, "hidden": False, "readOnly": False,
+            "showInList": bool(f.get("show_in_list", f.get("showInList", True))),
+            "searchable": bool(f.get("searchable", False)),
+        }
+        if comp_type == "FORM_TEXT_INPUT" and max_length:
+            comp["lengthLimit"] = max_length
+        form_components.append(comp)
+
+    model_payload = {
+        "appId": apaas_app_id.strip(),
+        "dataModels": [{
+            "modelName": feature_name, "modelCode": feature_code,
+            "modelDescription": f"{feature_name} 数据模型",
+            "fields": model_fields,
+        }],
+    }
+    ok_m, model_result = await _with_client(env_id, "建模型",
+        lambda c: c.create_models(apaas_app_id.strip(), model_payload))
+    if not ok_m:
+        return {**model_result, "step": "create_models",
+                "rollback_hint": "模型建失败, 后续 form/menu/process 都没建"}
+
+    # 拿 modelCode (平台可能加 _ 后缀去重)
+    actual_model_code = feature_code
+    if isinstance(model_result, list) and model_result:
+        first = model_result[0] if isinstance(model_result[0], dict) else {}
+        actual_model_code = first.get("modelCode") or feature_code
+
+    # ─── Step 2: 建表单 config (会自动创建关联菜单) ──────────
+    # 如果平台加了 _ 后缀, 表单组件 modelField 也要更新
+    if actual_model_code != feature_code:
+        for comp in form_components:
+            if comp.get("modelField", "").startswith(f"{feature_code}."):
+                comp["modelField"] = comp["modelField"].replace(
+                    f"{feature_code}.", f"{actual_model_code}.", 1)
+
+    form_payload = [{
+        "formName": feature_name,
+        "formCode": f"{feature_code}_form",
+        "allModelCodes": [actual_model_code],
+        "formComponents": form_components,
+    }]
+    ok_f, form_result = await _with_client(env_id, "建表单",
+        lambda c: c.create_form_config(apaas_app_id.strip(), form_payload))
+    if not ok_f:
+        return {**form_result, "step": "create_form_config",
+                "partial_built": {"model_code": actual_model_code},
+                "rollback_hint": "表单建失败, 模型已建但表单/菜单/流程没建"}
+
+    form_id = ""
+    menu_id = ""
+    if isinstance(form_result, list) and form_result:
+        first = form_result[0] if isinstance(form_result[0], dict) else {}
+        form_id = str(first.get("id") or first.get("formId") or "")
+        menu_id = str(first.get("menuId") or "")
+
+    # ─── Step 3: (可选) 移到 parent_menu_id 分组下 ──────────
+    moved_to_parent = False
+    if parent_menu_id.strip() and menu_id:
+        try:
+            ok_mv, _ = await _with_client(env_id, "移菜单",
+                lambda c: c.update_menu_parent(
+                    apaas_app_id.strip(), menu_id, parent_menu_id.strip()))
+            moved_to_parent = ok_mv
+        except Exception:
+            pass  # 移分组失败不阻断主流程
+
+    # ─── Step 4: (可选) 配审批流程 ──────────────────────────
+    process_result = None
+    if process_stages and isinstance(process_stages, list) and menu_id:
+        try:
+            process_result = await set_apaas_app_process(
+                env_id=env_id, apaas_app_id=apaas_app_id.strip(),
+                menu_id=menu_id,
+                process_name=f"{feature_name}审批流程",
+                process_code=f"{feature_code}_process",
+                stages=process_stages,
+            )
+        except Exception as exc:
+            process_result = {"ok": False, "error": str(exc)}
+
+    return {
+        "ok": True,
+        "feature_name": feature_name,
+        "feature_code": feature_code,
+        "actual_model_code": actual_model_code,
+        "model_id": (model_result[0].get("id") if isinstance(model_result, list)
+                     and model_result and isinstance(model_result[0], dict) else None),
+        "form_id": form_id,
+        "menu_id": menu_id,
+        "fields_count": len(model_fields),
+        "moved_to_parent": moved_to_parent,
+        "process_result": process_result,
+        "message": (f"功能「{feature_name}」已建好: "
+                    f"模型 {actual_model_code} ({len(model_fields)} 字段) → 表单 → "
+                    f"菜单 (menu_id={menu_id})"
+                    + (f" → 流程 ({len(process_stages)} 节点)"
+                       if process_stages else "")),
+        "next_step": "刷新平台 iframe 看新菜单, 或调 republish_apaas_app 让运行时生效",
+    }
+
+
+# ═══════════════════════════════════════════════════════════════════════════
 # aPaaS 后端自开发模版包（papaas 4.1.1-rc）相关工具
 # 源自 docs/skills/apaas-backend-dev.md + 同事踩坑总结 16 坑
 #
