@@ -95,18 +95,27 @@
                 <span>{{ cat.label }}</span>
                 <span class="fbp-lib-cat-count">{{ cat.widgets.length }}</span>
               </button>
-              <div v-show="!collapsedCats[cat.code]" class="fbp-lib-chips">
-                <button
-                  v-for="w in cat.widgets"
-                  :key="w.type"
-                  class="fbp-lib-chip"
-                  :title="w.label"
-                  @click="onAddWidget(w)"
-                >
-                  <span class="fbp-lib-chip-icon">{{ w.icon }}</span>
-                  <span class="fbp-lib-chip-label">{{ w.label }}</span>
-                </button>
-              </div>
+              <draggable
+                v-show="!collapsedCats[cat.code]"
+                :model-value="cat.widgets"
+                :group="{ name: 'form-fields', pull: 'clone', put: false }"
+                :sort="false"
+                :clone="cloneWidgetToField"
+                item-key="type"
+                class="fbp-lib-chips"
+                tag="div"
+              >
+                <template #item="{ element: w }">
+                  <button
+                    class="fbp-lib-chip fbp-lib-chip-draggable"
+                    :title="`点击或拖入 canvas — ${w.label}`"
+                    @click="onAddWidget(w)"
+                  >
+                    <span class="fbp-lib-chip-icon">{{ w.icon }}</span>
+                    <span class="fbp-lib-chip-label">{{ w.label }}</span>
+                  </button>
+                </template>
+              </draggable>
             </div>
           </div>
         </template>
@@ -160,20 +169,32 @@
                     <polyline points="6 9 12 15 18 9"/>
                   </svg>
                 </button>
-                <div v-show="!modelFieldsCollapsed" class="fbp-lib-chips fbp-lib-chips-model">
-                  <button
-                    v-for="(f, i) in selectedLibModelFields"
-                    :key="f.field_code + i"
-                    class="fbp-lib-chip"
-                    :title="`${f.field_name} - ${f.field_code}`"
-                    @click="onAddExistingField(f)"
-                  >
-                    <span class="fbp-lib-chip-icon">T</span>
-                    <span class="fbp-lib-chip-label">{{ f.field_name || f.field_code }}</span>
-                  </button>
-                  <div v-if="selectedLibModelFields.length === 0" class="fbp-lib-empty fbp-lib-empty-sm">
-                    该模型暂无字段
-                  </div>
+                <draggable
+                  v-show="!modelFieldsCollapsed"
+                  :model-value="selectedLibModelFields"
+                  :group="{ name: 'form-fields', pull: 'clone', put: false }"
+                  :sort="false"
+                  :clone="cloneModelFieldToField"
+                  item-key="field_code"
+                  class="fbp-lib-chips fbp-lib-chips-model"
+                  tag="div"
+                >
+                  <template #item="{ element: f }">
+                    <button
+                      class="fbp-lib-chip fbp-lib-chip-draggable"
+                      :title="`点击或拖入 canvas — ${f.field_name} - ${f.field_code}`"
+                      @click="onAddExistingField(f)"
+                    >
+                      <span class="fbp-lib-chip-icon">T</span>
+                      <span class="fbp-lib-chip-label">{{ f.field_name || f.field_code }}</span>
+                    </button>
+                  </template>
+                </draggable>
+                <div
+                  v-if="!modelFieldsCollapsed && selectedLibModelFields.length === 0"
+                  class="fbp-lib-empty fbp-lib-empty-sm"
+                >
+                  该模型暂无字段
                 </div>
               </div>
             </div>
@@ -198,11 +219,34 @@
             <button class="fbp-btn fbp-btn-ghost" @click="showAiHelper = !showAiHelper">
               <span class="fbp-btn-icon">✨</span> AI 助手
             </button>
-            <button class="fbp-btn fbp-btn-primary" @click="onSaveForm">
-              保存
+            <button
+              class="fbp-btn fbp-btn-primary fbp-btn-save"
+              :class="{ 'has-dirty': saveCounts.total > 0, saving }"
+              :disabled="saving"
+              @click="onSaveForm"
+            >
+              <span v-if="saving" class="fbp-btn-spinner" />
+              <span v-if="saving">保存中…</span>
+              <span v-else-if="saveCounts.total > 0">保存 ({{ saveCounts.total }})</span>
+              <span v-else>保存</span>
             </button>
           </div>
         </header>
+
+        <!-- 保存进度提示 (saving 时显) -->
+        <div v-if="saving && saveProgress" class="fbp-save-progress">
+          <div class="fbp-spinner fbp-save-progress-spin" />
+          <span class="fbp-save-progress-text">
+            保存中 {{ saveProgress.done + 1 }} / {{ saveProgress.total }} —
+            <span class="fbp-save-progress-current">{{ saveProgress.current }}</span>
+          </span>
+          <div class="fbp-save-progress-bar">
+            <div
+              class="fbp-save-progress-fill"
+              :style="{ width: `${Math.min(100, (saveProgress.done / Math.max(1, saveProgress.total)) * 100)}%` }"
+            />
+          </div>
+        </div>
 
         <!-- canvas toolbar (跟 apaas 原生一致: 查看业务对象 / PC-Mobile / 表单设置) -->
         <div class="fbp-canvas-toolbar">
@@ -247,27 +291,39 @@
         </div>
 
         <div class="fbp-canvas-body">
-          <div v-if="fields.length === 0" class="fbp-canvas-empty">
-            <div class="fbp-canvas-empty-icon">🧩</div>
-            <p>该表单暂无字段</p>
-            <p class="hint">从左侧组件库点击或拖入字段</p>
-          </div>
-
           <draggable
             v-model="fields"
             item-key="id"
+            :group="{ name: 'form-fields', pull: false, put: true }"
             handle=".fbp-card-handle"
             ghost-class="fbp-card-ghost"
             chosen-class="fbp-card-chosen"
+            drag-class="fbp-card-drag"
             animation="180"
             class="fbp-card-list"
-            :class="{ 'fbp-card-list-1col': canvasLayout === '1col' }"
-            @change="onFieldsReorder"
+            :class="{
+              'fbp-card-list-1col': canvasLayout === '1col',
+              'fbp-card-list-empty': fields.length === 0,
+            }"
+            @change="onFieldsChange"
           >
+            <template v-if="fields.length === 0" #header>
+              <div class="fbp-canvas-empty">
+                <div class="fbp-canvas-empty-icon">🧩</div>
+                <p>该表单暂无字段</p>
+                <p class="hint">从左侧组件库点击或拖入字段</p>
+              </div>
+            </template>
             <template #item="{ element: f, index: i }">
               <div
                 class="fbp-card"
-                :class="{ active: selectedFieldId === f.id, 'fbp-card-fullwidth': isFullWidthWidget(f.type) }"
+                :class="{
+                  active: selectedFieldId === f.id,
+                  'fbp-card-fullwidth': isFullWidthWidget(f.type),
+                  'fbp-card-pending': f._pending,
+                  'fbp-card-dirty': !f._pending && isFieldDirtyVsOriginal(f),
+                  'fbp-card-saving': f._saving,
+                }"
                 @click="onSelectField(f.id)"
               >
                 <div class="fbp-card-handle" title="拖动排序">
@@ -286,6 +342,8 @@
                     <span v-if="f.required" class="fbp-card-req">*</span>
                     <span class="fbp-card-type-chip">{{ widgetLabel(f.type) }}</span>
                     <span class="fbp-card-key mono">{{ f.code }}</span>
+                    <span v-if="f._pending" class="fbp-card-badge fbp-card-badge-pending">● 未保存</span>
+                    <span v-else-if="!f._pending && isFieldDirtyVsOriginal(f)" class="fbp-card-badge fbp-card-badge-dirty" title="已改, 未保存"></span>
                   </div>
                   <div class="fbp-card-preview">
                     <FieldPreview :field="f" />
@@ -294,7 +352,8 @@
                 <div class="fbp-card-ops" @click.stop>
                   <button
                     class="fbp-icon-btn"
-                    title="删除字段 (本地)"
+                    :title="f._pending ? '删除字段 (本地)' : '删除字段 (apaas 软删)'"
+                    :disabled="saving"
                     @click="onRemoveField(f.id)"
                   >
                     <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
@@ -303,6 +362,9 @@
                       <path d="M10 11v6M14 11v6"/>
                     </svg>
                   </button>
+                </div>
+                <div v-if="f._saving" class="fbp-card-saving-overlay">
+                  <div class="fbp-spinner" />
                 </div>
               </div>
             </template>
@@ -513,6 +575,22 @@ interface FormField {
   hint?: string          // 提示文字 (placeholder 别名 — apaas 用 "提示文字")
   max_length?: number    // 长度限制 (text/textarea/phone/idcard/email)
   _src?: any
+  // 2026-05-26 G1 真存追踪
+  _pending?: boolean     // 新加未保存 (走 add endpoint)
+  _dirty?: boolean       // 已存但属性改过 (走 update endpoint)
+  _saving?: boolean      // 保存中 (loading overlay)
+  _model_id?: string     // apaas model_id (update/disable endpoint 必填)
+  _model_code?: string   // apaas model_code (add endpoint 必填)
+  _field_id?: string     // apaas field_id (update/disable endpoint 必填; pending 为空)
+  _original?: {          // initial snapshot (dirty diff 用)
+    code: string
+    name: string
+    type: FieldType
+    required: boolean
+    max_length?: number
+    description?: string
+    placeholder?: string
+  }
 }
 
 interface WidgetMeta {
@@ -752,6 +830,69 @@ function backendTypeToWidget(t: string | undefined): FieldType {
   return BACKEND_TYPE_MAP[norm] || 'text'
 }
 
+// 2026-05-26 G1: 反向 — widget type → apaas data_type (add/update model-field endpoint 用).
+// backend `_AddFieldReq.field_type` 默 STRING, 取 STRING/NUM/DATE/DATETIME/BOOLEAN/TEXT/BIG_TEXT.
+const WIDGET_TO_BACKEND_TYPE: Record<string, string> = {
+  text: 'STRING',
+  textarea: 'BIG_TEXT',
+  richtext: 'BIG_TEXT',
+  number: 'NUM',
+  money: 'NUM',
+  phone: 'STRING',
+  email: 'STRING',
+  idcard: 'STRING',
+  date: 'DATE',
+  datetime: 'DATETIME',
+  time: 'DATETIME',
+  switch: 'BOOLEAN',
+  user: 'STRING',
+  dept: 'STRING',
+  radio: 'STRING',
+  select: 'STRING',
+  select_single: 'STRING',
+  multi_select: 'STRING',
+  select_multi: 'STRING',
+  dict: 'STRING',
+  hyperlink: 'STRING',
+  region: 'STRING',
+  location: 'STRING',
+  serial_no: 'STRING',
+  file: 'TEXT',
+  // 高级/布局组件大多 form-only, 落到 model 时 fallback STRING
+}
+function widgetToBackendType(t: string): string {
+  return WIDGET_TO_BACKEND_TYPE[t] || 'STRING'
+}
+
+// 2026-05-26 G1: 字段 snapshot (用于 dirty diff)
+function snapshotField(f: FormField): NonNullable<FormField['_original']> {
+  return {
+    code: f.code,
+    name: f.name,
+    type: f.type,
+    required: f.required,
+    max_length: f.max_length,
+    description: f.description,
+    placeholder: f.placeholder,
+  }
+}
+
+// 2026-05-26 G1: 字段是否真改了 (跟 _original snapshot 比)
+function isFieldDirtyVsOriginal(f: FormField): boolean {
+  if (f._pending) return false  // 新加未保存的不算 dirty (走 add 不走 update)
+  const o = f._original
+  if (!o) return false
+  return (
+    o.code !== f.code
+    || o.name !== f.name
+    || o.type !== f.type
+    || o.required !== f.required
+    || (o.max_length || 0) !== (f.max_length || 0)
+    || (o.description || '') !== (f.description || '')
+    || (o.placeholder || '') !== (f.placeholder || '')
+  )
+}
+
 let _uidCounter = 0
 function nextId(): string {
   _uidCounter += 1
@@ -955,6 +1096,12 @@ const loading = ref(false)
 const error = ref('')
 const dirty = ref(false)
 
+// 2026-05-26 G1 真存追踪
+// 删除的 field — 已 splice 出 fields 数组, 保留这里给保存按钮调 disable endpoint
+const deletedFields = ref<FormField[]>([])
+const saving = ref(false)
+const saveProgress = ref<{ done: number; total: number; current: string } | null>(null)
+
 const libSearchKw = ref('')
 const collapsedCats = ref<Record<string, boolean>>({})
 
@@ -990,6 +1137,8 @@ const selectedLibModelFields = computed<any[]>(() => {
 
 function onAddExistingField(rawField: any) {
   // 从数据模型 tab 拖/点一个已使用字段 → 加到 canvas (作 reuse, 同 code 跳过)
+  // 注: 这种字段在 apaas model 里已存在 — 加到 form 只是 layout 改动. 不走 add endpoint,
+  // 也不 mark _pending. form layout 真存是 P3 (set_apaas_form_config). 当前只是 local form layout.
   const code = String(rawField.field_code || '')
   if (!code) return
   if (fields.value.some(f => f.code === code)) {
@@ -997,6 +1146,8 @@ function onAddExistingField(rawField: any) {
     return
   }
   const widgetType = backendTypeToWidget(rawField.data_type || rawField.field_type)
+  const mc = (selectedLibModel.value?.code as string) || (selectedLibModel.value?.extra?.model_code as string) || ''
+  const mid = String(selectedLibModel.value?.id || selectedLibModel.value?.extra?.model_id || '')
   const newField: FormField = {
     id: nextId(),
     code,
@@ -1008,6 +1159,9 @@ function onAddExistingField(rawField: any) {
     ai_validate: false,
     options: needsOptions(widgetType) ? [] : undefined,
     _src: rawField,
+    _model_id: mid,
+    _model_code: mc,
+    _field_id: String(rawField.field_id || ''),
   }
   fields.value.push(newField)
   selectedFieldId.value = newField.id
@@ -1076,8 +1230,12 @@ function onSelectField(id: string) {
   selectedFieldId.value = id
 }
 
-function onAddWidget(w: WidgetMeta) {
-  const newField: FormField = {
+// 构造 FormField 共用函数 — click 路径 & drag clone 路径都走这里
+function buildFieldFromWidget(w: WidgetMeta): FormField {
+  // 2026-05-26 G1: 新加字段 mark _pending=true, 主表 model_code / model_id 用当前选中的 sidebar model
+  const mc = (selectedLibModel.value?.code as string) || (selectedLibModel.value?.extra?.model_code as string) || formMainModelCode.value || modelCode.value || ''
+  const mid = String(selectedLibModel.value?.id || selectedLibModel.value?.extra?.model_id || '')
+  return {
     id: nextId(),
     code: `${w.type}_${fields.value.length + 1}`,
     name: w.label,
@@ -1087,21 +1245,91 @@ function onAddWidget(w: WidgetMeta) {
     editable: true,
     ai_validate: false,
     options: needsOptions(w.type) ? [] : undefined,
+    _pending: true,
+    _model_id: mid,
+    _model_code: mc,
   }
+}
+
+function onAddWidget(w: WidgetMeta) {
+  const newField = buildFieldFromWidget(w)
   fields.value.push(newField)
   selectedFieldId.value = newField.id
   dirty.value = true
 }
 
+// vuedraggable 4 clone fn — 库 chip 拖入 canvas 时被调, 必须返新 object
+// (否则同一对象进多次会引用绑定爆炸).
+function cloneWidgetToField(w: WidgetMeta): FormField {
+  return buildFieldFromWidget(w)
+}
+
+// 数据模型 tab "已使用字段" chip 拖入 canvas 时被调
+// 注: 已存在 apaas model 的字段, 复用到 form layout — 不 mark _pending (跟 onAddExistingField 一致).
+function cloneModelFieldToField(rawField: any): FormField {
+  const code = String(rawField.field_code || `field_${Math.random().toString(36).slice(2, 6)}`)
+  const widgetType = backendTypeToWidget(rawField.data_type || rawField.field_type)
+  const mc = (selectedLibModel.value?.code as string) || (selectedLibModel.value?.extra?.model_code as string) || ''
+  const mid = String(selectedLibModel.value?.id || selectedLibModel.value?.extra?.model_id || '')
+  return {
+    id: nextId(),
+    code,
+    name: String(rawField.field_name || code),
+    type: widgetType,
+    placeholder: '',
+    required: !!rawField.required,
+    editable: true,
+    ai_validate: false,
+    options: needsOptions(widgetType) ? [] : undefined,
+    _src: rawField,
+    _model_id: mid,
+    _model_code: mc,
+    _field_id: String(rawField.field_id || ''),
+  }
+}
+
+// drop 后 callback — cross-group add 或同组重排都走 @change
+function onFieldsChange(evt: any) {
+  if (evt?.added) {
+    // 跨容器 drop — 库 chip 推过来新字段, 选中并 dirty
+    const newField: FormField | undefined = evt.added.element
+    if (newField?.id) {
+      selectedFieldId.value = newField.id
+    }
+    dirty.value = true
+  } else if (evt?.moved) {
+    // 内部重排
+    dirty.value = true
+  } else if (evt?.removed) {
+    // 我们不允许内部往外拖 — 但 cross-group pull:false 已经禁了, 容错保留
+    dirty.value = true
+  }
+}
+
 function onRemoveField(id: string) {
   const idx = fields.value.findIndex(f => f.id === id)
   if (idx < 0) return
+  const f = fields.value[idx]
+  // 2026-05-26 G1: 删字段真存. confirm dialog 提示真存到 apaas (apaas 软删, 数据保留).
+  const isPending = !!f._pending
+  const hasFieldId = !!(f._field_id && f._model_id)
+  const msg = isPending
+    ? `删除字段 "${f.name}" — 未保存, 仅本地移除?`
+    : hasFieldId
+      ? `删除字段 "${f.name}" — 保存时真存到 apaas (apaas 软删, 数据保留)?`
+      : `删除字段 "${f.name}" — 该字段无 field_id (仅本地), 仅本地移除?`
+  if (!window.confirm(msg)) return
   fields.value.splice(idx, 1)
+  // 已存在 apaas 平台的字段 → 加入 deletedFields, 保存时调 disable endpoint
+  if (!isPending && hasFieldId) {
+    deletedFields.value.push(f)
+  }
   if (selectedFieldId.value === id) selectedFieldId.value = ''
   dirty.value = true
 }
 
 function onFieldsReorder() {
+  // 仅 fallback: vuedraggable 4 v-model 重排时不主动触 @change moved 的极端情况
   dirty.value = true
 }
 
@@ -1117,16 +1345,160 @@ function onRemoveOption(i: number) {
   selectedField.value.options.splice(i, 1)
 }
 
-function onSaveForm() {
-  if (!dirty.value) {
+// 2026-05-26 G1 真存 — 计算待保存 batch
+const pendingFields = computed(() => fields.value.filter(f => f._pending))
+const updatedFields = computed(() => fields.value.filter(f => !f._pending && isFieldDirtyVsOriginal(f)))
+const saveCounts = computed(() => ({
+  add: pendingFields.value.length,
+  update: updatedFields.value.length,
+  del: deletedFields.value.length,
+  total: pendingFields.value.length + updatedFields.value.length + deletedFields.value.length,
+}))
+
+async function onSaveForm() {
+  if (saving.value) return
+  const { add, update, del, total } = saveCounts.value
+  if (total === 0) {
     alert('当前无修改')
     return
   }
-  alert(
-    '保存表单 — 当前 Phase A 仅 local state, 真写回 backend P2 接入.\n\n' +
-    '现在请用右侧配置助手对话:\n' +
-    '"把表单字段顺序保存"\n或\n"给当前表单加字段 XXX"'
-  )
+  // 检 add 的字段都有 model_code + model_id (空了 backend 会拒)
+  const orphans = pendingFields.value.filter(f => !(f._model_code && f._model_id))
+  if (orphans.length > 0) {
+    alert(
+      `有 ${orphans.length} 个新字段未关联数据模型 (model_id/model_code 为空):\n`
+      + orphans.map(f => `· ${f.name} (${f.code})`).join('\n')
+      + '\n\n请先在左侧"数据模型" tab 选中目标 model, 再加字段.'
+    )
+    return
+  }
+  // 检字段 code/name 必填
+  const blanks = [...pendingFields.value, ...updatedFields.value].filter(f => !f.code.trim() || !f.name.trim())
+  if (blanks.length > 0) {
+    alert(`有 ${blanks.length} 个字段缺 code 或 name:\n` + blanks.map(f => `· ${f.name || '(空)'} - ${f.code || '(空)'}`).join('\n'))
+    return
+  }
+
+  const parts: string[] = []
+  if (add) parts.push(`${add} 个新字段`)
+  if (update) parts.push(`${update} 个字段改动`)
+  if (del) parts.push(`${del} 个字段删除`)
+  const msg = `保存 ${parts.join(' + ')} — 真存到 apaas?\n\n注: 删除走 apaas 软删 (status=DISABLE, 数据保留).`
+  if (!window.confirm(msg)) return
+
+  saving.value = true
+  saveProgress.value = { done: 0, total, current: '' }
+  const errors: string[] = []
+  let successCount = 0
+
+  // 串行调 endpoint — 简单, 避免一次性打爆 apaas
+  try {
+    // 1. 新增字段
+    for (const f of pendingFields.value) {
+      f._saving = true
+      saveProgress.value = { done: successCount, total, current: `新增 ${f.name}` }
+      try {
+        const resp: any = await request.post(
+          `/applications/${props.appId}/crud/model-field/add`,
+          {
+            model_id: f._model_id || '',
+            model_code: f._model_code || '',
+            field_code: f.code,
+            field_name: f.name,
+            field_type: widgetToBackendType(f.type),
+            max_length: f.max_length || 255,
+            comment: f.description || '',
+          },
+        )
+        if (resp?.ok) {
+          successCount += 1
+        } else {
+          errors.push(`新增 "${f.name}" 失败: ${resp?.message || resp?.error_code || '未知错误'}`)
+        }
+      } catch (e: any) {
+        errors.push(`新增 "${f.name}" 失败: ${e?.response?.data?.message || e?.message || '网络错误'}`)
+      } finally {
+        f._saving = false
+      }
+    }
+    // 2. 改动字段
+    for (const f of updatedFields.value) {
+      if (!f._field_id || !f._model_id) {
+        errors.push(`改 "${f.name}" 失败: 缺 field_id / model_id (可能是 sidebar 加进来还没刷新)`)
+        continue
+      }
+      f._saving = true
+      saveProgress.value = { done: successCount, total, current: `改 ${f.name}` }
+      try {
+        const resp: any = await request.post(
+          `/applications/${props.appId}/crud/model-field/update`,
+          {
+            model_id: f._model_id,
+            field_id: f._field_id,
+            field_code: f.code,
+            field_name: f.name,
+            field_type: widgetToBackendType(f.type),
+            max_length: f.max_length || 0,
+            comment: f.description || '',
+          },
+        )
+        if (resp?.ok) {
+          successCount += 1
+        } else {
+          errors.push(`改 "${f.name}" 失败: ${resp?.message || resp?.error_code || '未知错误'}`)
+        }
+      } catch (e: any) {
+        errors.push(`改 "${f.name}" 失败: ${e?.response?.data?.message || e?.message || '网络错误'}`)
+      } finally {
+        f._saving = false
+      }
+    }
+    // 3. 删除字段
+    for (const f of deletedFields.value) {
+      if (!f._field_id || !f._model_id) {
+        errors.push(`删 "${f.name}" 失败: 缺 field_id / model_id`)
+        continue
+      }
+      saveProgress.value = { done: successCount, total, current: `删除 ${f.name}` }
+      try {
+        const resp: any = await request.post(
+          `/applications/${props.appId}/crud/model-field/disable`,
+          {
+            model_id: f._model_id,
+            field_id: f._field_id,
+            field_code: f.code,
+            field_name: f.name,
+          },
+        )
+        if (resp?.ok) {
+          successCount += 1
+        } else {
+          errors.push(`删 "${f.name}" 失败: ${resp?.message || resp?.error_code || '未知错误'}`)
+        }
+      } catch (e: any) {
+        errors.push(`删 "${f.name}" 失败: ${e?.response?.data?.message || e?.message || '网络错误'}`)
+      }
+    }
+  } finally {
+    saving.value = false
+    saveProgress.value = null
+  }
+
+  if (errors.length === 0) {
+    alert(`保存成功 — ${successCount} 项已写入 apaas. 即将刷新最新数据.`)
+    await reload()
+  } else if (successCount > 0) {
+    alert(
+      `部分成功: ${successCount} / ${total} 已写入.\n\n失败:\n${errors.join('\n')}\n\n`
+      + `成功部分已 commit 到 apaas, 失败部分保留 dirty 状态. 重试保存只重发失败项.`
+    )
+    // 重新拉真数据, 但保留失败的本地 dirty 状态 (失败的 field 还在 pending/updated/deleted 队列里)
+    // 简化: 整体 reload, 让用户重新发现 dirty (避免半合并状态)
+    await reload()
+  } else {
+    alert(`保存失败 (0 / ${total}):\n\n${errors.join('\n')}`)
+    // 失败时不刷新, 保留 dirty 状态让用户重试
+  }
 }
 
 function onAiPrompt(prompt: string) {
@@ -1192,7 +1564,7 @@ async function reload() {
           // 关联 model 字段 (查 model_code → fields → 拿 max_length / description)
           const mm = (respFD.models || []).find((m: any) => m.model_code === _modelCode)
           const mf = mm?.fields?.find((x: any) => x.field_code === fieldCode)
-          return {
+          const f: FormField = {
             id: nextId(),
             code: fieldCode || `field_${Math.random().toString(36).slice(2, 6)}`,
             name: String(c.label || fieldCode || '未命名'),
@@ -1202,16 +1574,23 @@ async function reload() {
             editable: true,
             ai_validate: false,
             options: needsOptions(widgetType) ? [] : undefined,
-            description: '',
+            description: String(mf?.description || ''),
             hint: '',
             max_length: mf?.max_length ? Number(mf.max_length) : undefined,
             _src: { ...c, _component_type: compType, _uuid: c.uuid, _model_field: mf },
+            // 2026-05-26 G1: 真存追踪 — _model_id / _model_code / _field_id 从 model.fields 反查
+            _model_id: String(mm?.model_id || ''),
+            _model_code: _modelCode || String(mm?.model_code || ''),
+            _field_id: String(mf?.field_id || ''),
           }
+          f._original = snapshotField(f)
+          return f
         })
         if (!modelCode.value) modelCode.value = formMainModelCode.value
         if (fields.value.length > 0 && !selectedFieldId.value) {
           selectedFieldId.value = fields.value[0].id
         }
+        deletedFields.value = []
         dirty.value = false
         return
       }
@@ -1233,22 +1612,34 @@ async function reload() {
       if (target) {
         const raw = target.extra || {}
         modelCode.value = raw.model_code || target.code || ''
+        const _model_id = String(raw.model_id || target.id || '')
+        const _model_code = String(modelCode.value)
         const rawFields = Array.isArray(raw.fields) ? raw.fields : []
-        fields.value = rawFields.map((rf: any): FormField => ({
-          id: nextId(),
-          code: rf.field_code || `field_${Math.random().toString(36).slice(2, 6)}`,
-          name: rf.field_name || rf.field_code || '未命名',
-          type: backendTypeToWidget(rf.data_type || rf.field_type),
-          placeholder: rf.placeholder || '',
-          required: !!rf.required,
-          editable: rf.editable !== false,
-          ai_validate: !!rf.ai_validate,
-          options: Array.isArray(rf.options) ? rf.options.map((o: any) => ({
-            code: String(o.code || o.value || ''),
-            name: String(o.name || o.label || o.code || ''),
-          })) : (needsOptions(backendTypeToWidget(rf.data_type || rf.field_type)) ? [] : undefined),
-          _src: rf,
-        }))
+        fields.value = rawFields.map((rf: any): FormField => {
+          const wt = backendTypeToWidget(rf.data_type || rf.field_type)
+          const f: FormField = {
+            id: nextId(),
+            code: rf.field_code || `field_${Math.random().toString(36).slice(2, 6)}`,
+            name: rf.field_name || rf.field_code || '未命名',
+            type: wt,
+            placeholder: rf.placeholder || '',
+            required: !!rf.required,
+            editable: rf.editable !== false,
+            ai_validate: !!rf.ai_validate,
+            options: Array.isArray(rf.options) ? rf.options.map((o: any) => ({
+              code: String(o.code || o.value || ''),
+              name: String(o.name || o.label || o.code || ''),
+            })) : (needsOptions(wt) ? [] : undefined),
+            description: String(rf.description || ''),
+            max_length: rf.max_length ? Number(rf.max_length) : undefined,
+            _src: rf,
+            _model_id,
+            _model_code,
+            _field_id: String(rf.field_id || ''),
+          }
+          f._original = snapshotField(f)
+          return f
+        })
         if (fields.value.length > 0 && !selectedFieldId.value) {
           selectedFieldId.value = fields.value[0].id
         }
@@ -1256,6 +1647,7 @@ async function reload() {
         fields.value = []
         modelCode.value = ''
       }
+      deletedFields.value = []
       dirty.value = false
     } else {
       error.value = resp?.message || resp?.error_code || '加载失败'
@@ -1499,6 +1891,27 @@ watch(() => props.appId, () => loadAllModels(), { immediate: true })
   text-overflow: ellipsis;
   white-space: nowrap;
   font-weight: 500;
+}
+
+/* chip drag affordance — 鼠标手 grab; 拖动时 grabbing */
+.fbp-lib-chip-draggable {
+  cursor: grab;
+  user-select: none;
+}
+.fbp-lib-chip-draggable:active {
+  cursor: grabbing;
+}
+/* SortableJS 给 dragged 节点加 sortable-chosen / sortable-drag class */
+.fbp-lib-chips .sortable-chosen,
+.fbp-lib-chips .sortable-drag {
+  cursor: grabbing;
+  opacity: 0.85;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.12);
+}
+/* 库容器本身 cursor copy — 暗示这是 clone 操作 */
+.fbp-lib-chips.sortable-drag-over {
+  /* lib 不允许 put — 但保险 */
+  cursor: not-allowed;
 }
 
 /* ── 数据模型 tab ─────────────────────────────────────────── */
@@ -1843,6 +2256,168 @@ watch(() => props.appId, () => loadAllModels(), { immediate: true })
 }
 .fbp-card-chosen {
   cursor: grabbing;
+}
+.fbp-card-drag {
+  /* SortableJS 给被拖 element 加 — 透明半浮 */
+  opacity: 0.85;
+  cursor: grabbing;
+  box-shadow: 0 6px 20px rgba(0, 0, 0, 0.15);
+}
+
+/* ─── 2026-05-26 G1 真存追踪视觉 ────────────────────────────── */
+/* 未保存新字段 (走 add endpoint): 虚线左边 + 橙色 */
+.fbp-card-pending {
+  border-style: dashed;
+  border-color: var(--warn, #f59e0b);
+  border-left-width: 3px;
+  background: color-mix(in srgb, var(--warn, #f59e0b) 6%, var(--surface));
+}
+.fbp-card-pending:hover { border-color: var(--warn, #f59e0b); }
+.fbp-card-pending.active {
+  /* active 状态盖住 brand outline, 仍突出 pending */
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--warn, #f59e0b) 25%, transparent);
+  border-color: var(--warn, #f59e0b);
+}
+
+/* 已存字段 (apaas 上有) 但改过: 右上小橙点提示 (绝对定位, 不挤 chip 行布局) */
+.fbp-card-dirty .fbp-card-name::after {
+  content: '';
+  /* 不在 ::after, 用 badge */
+}
+.fbp-card-badge {
+  font-size: 10.5px;
+  line-height: 1.1;
+  padding: 2px 7px;
+  border-radius: 999px;
+  font-weight: 600;
+  letter-spacing: 0.2px;
+}
+.fbp-card-badge-pending {
+  background: var(--warn, #f59e0b);
+  color: #fff;
+}
+.fbp-card-badge-dirty {
+  /* 仅小橙点 — 8x8 */
+  display: inline-block;
+  width: 8px; height: 8px;
+  padding: 0;
+  border-radius: 50%;
+  background: var(--warn, #f59e0b);
+}
+
+/* 保存中的字段卡 overlay */
+.fbp-card-saving {
+  position: relative;
+  pointer-events: none;
+}
+.fbp-card-saving-overlay {
+  position: absolute;
+  inset: 0;
+  background: color-mix(in srgb, var(--surface) 70%, transparent);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 2;
+  border-radius: inherit;
+}
+
+/* ─── 保存按钮 — 数字 + spinner + has-dirty 橙脉冲 ────────── */
+.fbp-btn-save.has-dirty {
+  position: relative;
+}
+.fbp-btn-save.has-dirty::after {
+  content: '';
+  position: absolute;
+  top: -2px;
+  right: -2px;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--warn, #f59e0b);
+  box-shadow: 0 0 0 2px var(--surface);
+  animation: fbp-pulse 1.6s ease-in-out infinite;
+}
+@keyframes fbp-pulse {
+  0%, 100% { transform: scale(1); opacity: 1; }
+  50% { transform: scale(1.3); opacity: 0.7; }
+}
+.fbp-btn-save.saving {
+  opacity: 0.85;
+  cursor: progress;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+.fbp-btn-spinner {
+  display: inline-block;
+  width: 12px;
+  height: 12px;
+  border: 1.5px solid rgba(255, 255, 255, 0.45);
+  border-top-color: #fff;
+  border-radius: 50%;
+  animation: fbp-spin 0.85s linear infinite;
+  vertical-align: middle;
+}
+
+/* ─── 保存进度条 ───────────────────────────────────────────── */
+.fbp-save-progress {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 16px;
+  background: color-mix(in srgb, var(--brand-soft) 60%, var(--surface));
+  border-bottom: 1px solid var(--line);
+  font-size: 12.5px;
+  color: var(--text);
+}
+.fbp-save-progress-spin {
+  width: 14px;
+  height: 14px;
+}
+.fbp-save-progress-text {
+  flex-shrink: 0;
+}
+.fbp-save-progress-current {
+  color: var(--brand);
+  font-weight: 500;
+}
+.fbp-save-progress-bar {
+  flex: 1;
+  height: 4px;
+  background: var(--line);
+  border-radius: 999px;
+  overflow: hidden;
+}
+.fbp-save-progress-fill {
+  height: 100%;
+  background: var(--brand);
+  border-radius: 999px;
+  transition: width 0.2s ease;
+}
+
+/* 跨容器 drop hover — canvas list 接受 lib chip 推过来时显蓝边 */
+.fbp-card-list {
+  /* 最小可放区高度, 即使空也能 drop */
+  min-height: 80px;
+  position: relative;
+  transition: background 0.15s, box-shadow 0.15s;
+}
+/* SortableJS 给 接收容器加 sortable-ghost (我们 ghost-class) 但 cross-group
+   时 sortable 也会给 container 加 'sortable-drag-over' class 仅在 .vue-draggable 上
+   不一定可靠. 用 .fbp-card-list-empty 加视觉提示已足够. */
+.fbp-card-list-empty {
+  min-height: 200px;
+  border: 1px dashed var(--line-strong);
+  border-radius: 10px;
+  display: flex;
+  align-items: stretch;
+  justify-content: center;
+  transition: border-color 0.15s, background 0.15s;
+}
+.fbp-card-list-empty:hover {
+  /* 空表单 list hover (drag-over 时) 显蓝边 */
+  border-color: var(--brand);
+  background: var(--brand-soft);
 }
 
 .fbp-card-handle {

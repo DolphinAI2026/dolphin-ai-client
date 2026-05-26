@@ -4506,6 +4506,8 @@ async def get_apaas_form_detail(env_id: int, apaas_app_id: str, form_id: str) ->
             if not isinstance(f, dict):
                 continue
             fields_out.append({
+                # 2026-05-26 G1: 加 field_id (update/disable model-field endpoint 必填)
+                "field_id": str(f.get("id") or f.get("fieldId") or ""),
                 "field_code": str(f.get("fieldCode") or f.get("code") or ""),
                 "field_name": str(f.get("fieldName") or f.get("name") or f.get("displayName") or ""),
                 "data_type": str(

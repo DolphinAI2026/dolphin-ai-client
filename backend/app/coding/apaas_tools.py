@@ -274,6 +274,8 @@ async def _list_apaas_app_models(args: dict, platform_env_id: int, db: AsyncSess
                     fields = await client.query_model_fields(apaas_app_id, mid)
                     entry["fields"] = [
                         {
+                            # 2026-05-26 G1: 加 field_id (update/disable model-field endpoint 必填)
+                            "field_id": str(f.get("id") or f.get("fieldId") or ""),
                             "field_code": str(f.get("fieldCode") or f.get("boCode") or ""),
                             "field_name": str(f.get("fieldName") or f.get("name") or ""),
                             "data_type": str(
