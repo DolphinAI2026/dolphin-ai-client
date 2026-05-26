@@ -92,6 +92,7 @@
         <!-- 左侧原生菜单 sidebar (B-3, 2026-05-25) — 跟平台 iframe 联动: 点菜单切 iframe -->
         <ApaasMenuSidebar
           v-if="existingAppId && platformIframeAppId === existingAppId"
+          ref="apaasMenuSidebarRef"
           :app-id="existingAppId"
           :selected-menu-id="selectedApaasMenuId"
           @menu-selected="onApaasMenuSelected"
@@ -582,7 +583,7 @@
         :application-id="resolvedAppId"
         :app-name="builderAppDisplayName || ''"
         @close="toggleAssistant"
-        @refresh-iframe="platformIframeKey += 1"
+        @refresh-iframe="refreshPlatformAndSidebar"
       />
     </template>
   </div><!-- /chat-shell -->
@@ -2117,6 +2118,15 @@ function toggleAssistant() {
 // ── 平台配置 iframe ──
 const platformIframeUrl = ref('')
 const platformIframeKey = ref(0)
+// 2026-05-26: sidebar 引用 — AI 完成调整后联动 reload, 让新建菜单立刻显
+const apaasMenuSidebarRef = ref<{ reload: () => Promise<void> } | null>(null)
+function refreshPlatformAndSidebar() {
+  platformIframeKey.value += 1
+  // 略延 300ms 给平台 API 落库, 然后 reload 菜单树
+  setTimeout(() => {
+    try { apaasMenuSidebarRef.value?.reload?.() } catch { /* sidebar 还没 mount 时忽略 */ }
+  }, 300)
+}
 const platformAppUrl = ref('')  // 应用配置页 URL（登录后跳转用）
 const platformDirectUrl = ref('')
 const platformLoading = ref(false)
