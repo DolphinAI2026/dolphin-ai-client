@@ -4765,6 +4765,42 @@ def _approve_node_data_template(title: str, bpmn_id: str, approvers: list) -> di
     }
 
 
+def _start_node_data() -> dict:
+    """START 节点 data — 用户发起表单填报阶段, 含 终止/重新提交/撤回 3 个表单按钮.
+    capture 实证模板. 平台后端 deserialize 所有 node.data 成 NodeXxxConfig, 不给
+    data 字段会 NPE (Cannot invoke ... because newData is null)."""
+    return {
+        "type": "START", "nodeId": "START", "title": "开始",
+        "enableComponentPermission": True,
+        "remindList": [], "processEventStatus": False,
+        "approvePhraseConfig": {"handleType": "INPUT_TYPE", "phrase": "", "status": False},
+        "approveCommentConfig": {"required": False, "attachmentUpload": True, "requiredBtns": [], "show": True},
+        "formButtons": [
+            {"buttonCode": "NORMAL_TERMINATE", "buttonName": "终止", "buttonLabel": "终止", "buttonStatus": False, "buttonStyle": "primary", "buttonLabelI18nAssociated": False},
+            {"buttonCode": "RESTART", "buttonName": "重新提交", "buttonLabel": "重新提交", "buttonStatus": False, "buttonStyle": "primary", "buttonLabelI18nAssociated": False},
+            {"buttonCode": "WITHDRAW", "buttonName": "撤回", "buttonLabel": "撤回", "buttonStatus": False, "buttonStyle": "primary", "buttonLabelI18nAssociated": False, "withdrawalType": "NEXT_NODE", "withdrawalList": []},
+        ],
+        "externalSystemApproval": {"status": False, "linkUrl": "", "linkMobileUrl": ""},
+        "saveFlag": True, "titleI18nAssociated": False,
+    }
+
+
+def _end_node_data() -> dict:
+    """END 节点 data — 流程结束阶段, 含知会按钮. capture 实证模板."""
+    return {
+        "type": "END", "nodeId": "END", "title": "结束",
+        "enableComponentPermission": False,
+        "operationButtons": [
+            {"buttonCode": "INFORM", "buttonName": "知会", "buttonLabel": "知会", "buttonStatus": False, "buttonStyle": "primary", "buttonLabelI18nAssociated": False},
+        ],
+        "externalSystemApproval": {"status": False, "linkUrl": "", "linkMobileUrl": ""},
+        "formButtons": [
+            {"buttonCode": "INFORM", "buttonName": "知会", "buttonLabel": "知会", "buttonStatus": False, "buttonStyle": "primary", "buttonLabelI18nAssociated": False},
+        ],
+        "saveFlag": True, "titleI18nAssociated": False,
+    }
+
+
 def _process_edge_template(edge_cell_id: str, source: str, target: str) -> dict:
     """返一条 edge — 平台 BPMN 渲染必填一堆视觉配置."""
     return {
@@ -4799,6 +4835,83 @@ _MIN_BPMN_XML = (
 )
 
 
+def _build_executable_bpmn_xml(
+    process_def_id: str,
+    stages: list,  # [{bpmn_id, title, next_edge_bpmn_id?}, ...]
+    edges_data: list,  # [{bpmn_id, source, target}]
+) -> str:
+    """生成可执行 BPMN XML — Activiti 引擎要 isExecutable=true + 完整 userTask.
+
+    平台 capture 实证 BPMN 结构:
+      <definitions ...>
+        <process id="..." isExecutable="true">
+          <startEvent id="START"/>
+          <endEvent id="END">
+            <extensionElements>...activiti:executionListener...</extensionElements>
+          </endEvent>
+          <userTask id="{bpmn_id}" name="{title}" activiti:assignee="${{assignee}}">
+            <extensionElements>...</extensionElements>
+            <multiInstanceLoopCharacteristics ...activiti:collection="...processUsers..."/>
+          </userTask>
+          ...
+          <sequenceFlow id="SequenceFlow_{edge_bpmn_id}" sourceRef="..." targetRef="..."/>
+        </process>
+      </definitions>
+    """
+    parts = []
+    parts.append('<?xml version="1.0" encoding="UTF-8"?>')
+    parts.append('<definitions xmlns:bpmndi="http://www.omg.org/spec/BPMN/20100524/DI" '
+                 'xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" '
+                 'xmlns:di="http://www.omg.org/spec/DD/20100524/DI" '
+                 'xmlns:dc="http://www.omg.org/spec/DD/20100524/DC" '
+                 'xmlns="http://www.omg.org/spec/BPMN/20100524/MODEL" '
+                 'xmlns:activiti="http://activiti.org/bpmn" '
+                 f'id="Definitions_{process_def_id}" '
+                 'targetNamespace="http://bpmn.io/schema/bpmn" '
+                 'exporter="ai-builder" exporterVersion="1.0">')
+    parts.append(f'<process id="Process_{process_def_id}" isExecutable="true">')
+    # startEvent
+    parts.append('<startEvent id="START" name="开始"/>')
+    # endEvent
+    parts.append('<endEvent id="END" name="结束">'
+                 '<extensionElements>'
+                 '<activiti:executionListener xmlns:activiti="http://activiti.org/bpmn" event="start" delegateExpression="${executionListener}"/>'
+                 '<activiti:executionListener xmlns:activiti="http://activiti.org/bpmn" event="end" delegateExpression="${executionListener}"/>'
+                 '</extensionElements>'
+                 '</endEvent>')
+    # 每个审批 stage → userTask
+    for s in stages:
+        bid = s["bpmn_id"]
+        title = (s.get("title") or "审批").replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;").replace('"', "&quot;")
+        next_edge = s.get("next_edge_bpmn_id", "")
+        default_attr = f' default="SequenceFlow_{next_edge}"' if next_edge else ""
+        parts.append(
+            f'<userTask id="{bid}" name="{title}"{default_attr} activiti:assignee="${{assignee}}">'
+            '<extensionElements>'
+            '<activiti:executionListener xmlns:activiti="http://activiti.org/bpmn" event="start" delegateExpression="${executionListener}"/>'
+            '<activiti:executionListener xmlns:activiti="http://activiti.org/bpmn" event="end" delegateExpression="${executionListener}"/>'
+            '</extensionElements>'
+            '<multiInstanceLoopCharacteristics isSequential="false" '
+            'xmlns:activiti="http://activiti.org/bpmn" '
+            f'activiti:collection="${{procPersonHandle.processUsers(processId,&apos;{bid}&apos;,documentId,submitter)}}" '
+            'activiti:elementVariable="assignee">'
+            '<completionCondition>${nrOfCompletedInstances &gt; 0 and multiIsComplete}</completionCondition>'
+            '</multiInstanceLoopCharacteristics>'
+            '</userTask>'
+        )
+    # sequenceFlows
+    for e in edges_data:
+        bid = e["bpmn_id"]
+        src = e["source"]
+        tgt = e["target"]
+        parts.append(
+            f'<sequenceFlow id="SequenceFlow_{bid}" sourceRef="{src}" targetRef="{tgt}"/>'
+        )
+    parts.append('</process>')
+    parts.append('</definitions>')
+    return "\n".join(parts)
+
+
 def _build_process_payload_v2(
     app_id: str, form_id: str, menu_id: str,
     process_name: str, process_code: str,
@@ -4812,16 +4925,25 @@ def _build_process_payload_v2(
       - approver_value: ROLE 时是 role_id (snowflake, 用 query_roles 反查 role_code 拿到的 id); SUBMITTER 时填 "SUBMITTER"
       - approver_label: 显示名 (角色名 / "申请人")
     """
-    # START / END 节点 (位置固定, 跟平台 UI 默认对齐)
+    # START / END 节点 — 必须含完整 data 字段, 否则平台后端 deserialize 成
+    # NodeStartConfig/NodeEndConfig 时为 null → 触发 NPE "newData is null".
+    # 实证 docs/captures/process-*.json START/END 都有 type/formButtons/等完整 data.
     nodes = [
-        {"id": "START", "x": 372, "y": 32},
-        {"id": "END", "x": 372, "y": 32 + 96 * (len(stages_with_role) + 1)},
+        {"id": "START", "x": 372, "y": 32, "height": 64, "width": 64,
+         "timeBoudries": [], "data": _start_node_data(), "nodeId": "START"},
+        {"id": "END", "x": 372, "y": 32 + 96 * (len(stages_with_role) + 1),
+         "height": 64, "width": 64,
+         "timeBoudries": [], "data": _end_node_data(), "nodeId": "END"},
     ]
     edges = []
+    # 同时跟踪 stages 跟 edges 的 BPMN id, 给 BPMN XML 用
+    stage_bpmn_meta = []  # [{bpmn_id, title, next_edge_bpmn_id}]
+    edge_bpmn_meta = []   # [{bpmn_id, source, target}]
     prev_node_id = "START"
-    cell_idx = 1  # cell-N (cell-2 / cell-3 / ...) 从 2 起避免跟 START 冲突
-    edge_idx = len(stages_with_role) + 2  # edges 从 cell-N+2 起
+    cell_idx = 1
+    edge_idx = len(stages_with_role) + 2
     y_pos = 160
+    pending_edge_bpmn_ids = []  # 暂存每个 stage 之后的 edge bpmn id, 给 default 属性用
     for stage_idx, stage in enumerate(stages_with_role, start=1):
         cell_idx += 1
         cell_id = f"cell-{cell_idx}"
@@ -4839,29 +4961,57 @@ def _build_process_payload_v2(
                 "type": approver_type, "value": value,
                 "displayData": {"id": value, "label": label},
             }]
+        title = stage.get("name") or f"审批 {stage_idx}"
         nodes.append({
             "id": cell_id, "x": 348, "y": y_pos, "height": 48, "width": 112,
             "timeBoudries": [],
             "data": _approve_node_data_template(
-                title=stage.get("name") or f"审批 {stage_idx}",
-                bpmn_id=bpmn_id,
-                approvers=approvers,
+                title=title, bpmn_id=bpmn_id, approvers=approvers,
             ),
             "nodeId": bpmn_id,
         })
         edge_idx += 1
-        edges.append(_process_edge_template(
+        # edge bpmn id 必须跟 BPMN XML 里 sequenceFlow id 对齐
+        in_edge_bpmn_id = _bpmn_random_id()
+        edge_obj = _process_edge_template(
             edge_cell_id=f"cell-{edge_idx}",
             source=prev_node_id, target=cell_id,
-        ))
+        )
+        edge_obj["data"]["id"] = in_edge_bpmn_id
+        edges.append(edge_obj)
+        edge_bpmn_meta.append({"bpmn_id": in_edge_bpmn_id,
+                                "source": prev_node_id if prev_node_id != "START" else "START",
+                                "target": bpmn_id})
+        stage_bpmn_meta.append({"bpmn_id": bpmn_id, "title": title,
+                                "next_edge_bpmn_id": ""})  # fill after we know next edge
         prev_node_id = cell_id
+        # 记录指向当前 cell 的 edge id (给上一个 stage 用作 default)
+        if len(stage_bpmn_meta) >= 2:
+            # 之前那个 stage 后的 edge 就是当前 in_edge
+            stage_bpmn_meta[-2]["next_edge_bpmn_id"] = in_edge_bpmn_id
         y_pos += 96
     # 最后一条 edge 接 END
     edge_idx += 1
-    edges.append(_process_edge_template(
+    last_edge_bpmn_id = _bpmn_random_id()
+    last_edge_obj = _process_edge_template(
         edge_cell_id=f"cell-{edge_idx}",
         source=prev_node_id, target="END",
-    ))
+    )
+    last_edge_obj["data"]["id"] = last_edge_bpmn_id
+    edges.append(last_edge_obj)
+    # 最后一条 edge: BPMN sourceRef 用最后 stage 的 bpmn_id (不是 cell-N)
+    last_stage_bpmn_id = stage_bpmn_meta[-1]["bpmn_id"] if stage_bpmn_meta else "START"
+    edge_bpmn_meta.append({"bpmn_id": last_edge_bpmn_id,
+                            "source": last_stage_bpmn_id, "target": "END"})
+    if stage_bpmn_meta:
+        stage_bpmn_meta[-1]["next_edge_bpmn_id"] = last_edge_bpmn_id
+
+    # 生成可执行 BPMN XML (Activiti 引擎必需 isExecutable=true)
+    bpmn_xml = _build_executable_bpmn_xml(
+        process_def_id=_bpmn_random_id().replace("BPMN_", ""),
+        stages=stage_bpmn_meta,
+        edges_data=edge_bpmn_meta,
+    )
 
     # 2026-05-26 修 500: 平台必须有 processDataSource.objectId = boc_code_<form_id>
     # 否则不知道流程绑哪张表 → 500. capture 实证.
@@ -4886,7 +5036,7 @@ def _build_process_payload_v2(
         "tenantId": "",
         "processName": process_name,
         "processCode": process_code,
-        "bpmn": _MIN_BPMN_XML,
+        "bpmn": bpmn_xml,
         "status": "ENABLE",
         "engine": "VERSION_1.1",
         "nodes": nodes,
