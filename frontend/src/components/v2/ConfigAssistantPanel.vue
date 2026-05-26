@@ -40,6 +40,12 @@ import { configChatApi } from '@/api/configChat'
 const props = defineProps<{
   applicationId: number
   appName?: string
+  /**
+   * 2026-05-26 (PR2c SPEC v2 §1.2): SectionNav 当前 section 软引导.
+   * 父 ChatPage 跟左侧 SectionNav 同步, send 时透传给后端加 focus hint.
+   * undefined / null / 空串 → 后端不加 hint (跟老行为兼容).
+   */
+  currentSection?: string | null
 }>()
 
 const emit = defineEmits<{
@@ -96,6 +102,7 @@ const {
   applicationId: appIdRef,
   scrollerRef,
   modelId, // Agent B
+  currentSection: toRef(props, 'currentSection') as any, // PR2c (SPEC v2 §1.2)
 })
 
 // 2026-05-24 Agent A 集成: 历史会话抽屉

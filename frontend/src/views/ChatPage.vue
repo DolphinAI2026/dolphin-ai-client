@@ -689,6 +689,7 @@
         class="ca-floating"
         :application-id="resolvedAppId"
         :app-name="builderAppDisplayName || ''"
+        :current-section="currentSection"
         @close="toggleAssistant"
         @refresh-iframe="refreshPlatformAndSidebar"
       />

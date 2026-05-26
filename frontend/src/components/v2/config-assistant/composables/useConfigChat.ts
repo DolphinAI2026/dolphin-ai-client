@@ -52,8 +52,14 @@ export function useConfigChat(opts: {
    * 子组件 ConfigAssistantHeader 通过 v-model 写回这个 ref.
    */
   modelId?: Ref<number | null>
+  /**
+   * 2026-05-26 (PR2c SPEC v2 §1.2): SectionNav 当前 section — 软引导.
+   * 父 ChatPage 传过来 (跟左侧 SectionNav 同步), 每次 send 时透传给后端.
+   * undefined / null → 后端不加 hint (旧行为兼容).
+   */
+  currentSection?: Ref<string | null>
 }) {
-  const { applicationId, scrollerRef, modelId } = opts
+  const { applicationId, scrollerRef, modelId, currentSection } = opts
 
   const messages = ref<ChatMsg[]>([])
   const input = ref('')
@@ -101,11 +107,19 @@ export function useConfigChat(opts: {
 
     // 2026-05-24: 把 Header 选的 model_id 透传给后端 (0/null = 后端走默认)
     const requestedModelId = modelId?.value ?? null
+    // 2026-05-26 (PR2c): SectionNav 当前 section 透传 — 后端 system_prompt 软引导.
+    const requestedSection = currentSection?.value ?? null
 
     try {
       await configChatApi.chatStream(
         applicationId.value,
-        { message: msg, history, model_id: requestedModelId, session_id: sessionId.value },
+        {
+          message: msg,
+          history,
+          model_id: requestedModelId,
+          session_id: sessionId.value,
+          section: requestedSection,
+        },
         (ev: any) => {
           const slot = messages.value.find((m) => m.id === placeholderId) as ChatMsg | undefined
           if (!slot) return

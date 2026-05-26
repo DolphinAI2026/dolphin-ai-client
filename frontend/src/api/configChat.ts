@@ -25,6 +25,13 @@ export interface ConfigChatReq {
   model_id?: number | null
   /** 2026-05-24 会话持久化：0/undefined → 后端自动新建 session 并在 'started' 事件回 session_id */
   session_id?: number | null
+  /**
+   * 2026-05-26 (PR2c SPEC v2 §1.2): SectionNav 当前 section 软引导.
+   * 'data' | 'ui' | 'logic' | 'permission' | 'extension' 之一 → 后端 system_prompt
+   * 加 focus 提示. 任何其他值 / null / undefined → 后端不加 hint (跟老行为一致).
+   * **软引导**: 工具全集不变, agent 仍能跨 section 操作 — 避免上下文丢.
+   */
+  section?: string | null
 }
 
 /**
