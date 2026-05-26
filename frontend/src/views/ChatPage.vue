@@ -182,11 +182,26 @@
           :current-tab="topTab"
           @switch-tab="onTopTabSwitch"
         />
-        <!-- tab content row: 左 sub-nav + 中画布 -->
+        <!-- sub-tab chip strip: 水平 chip, 顶部 tab 下方一行 (替代 200px 独立 sub-nav). -->
+        <!-- 2026-05-26 design-v3 修: 取消独立 sub-nav 列, sub-tab 改 chip 横排. -->
+        <div
+          v-if="existingAppId && platformIframeAppId === existingAppId && !legacyMode"
+          class="sub-chip-strip"
+        >
+          <button
+            v-for="sub in currentSubTabsForTop"
+            :key="sub.code"
+            class="sub-chip"
+            :class="{ active: currentSectionTab === sub.code }"
+            @click="onSubNavSwitch(sub.code)"
+          >
+            {{ sub.label }}
+          </button>
+        </div>
+        <!-- tab content row: ApaasMenuSidebar | SectionContentList | iframe -->
         <div class="platform-shell-row">
-          <!-- 左侧 sub-nav (按 top tab 显不同子分类) -->
           <AppConfigSubNav
-            v-if="existingAppId && platformIframeAppId === existingAppId && !legacyMode"
+            v-if="false"
             :top-tab="topTab"
             :current-sub="currentSectionTab"
             @switch-sub="onSubNavSwitch"
@@ -2322,6 +2337,32 @@ function onSubNavSwitch(sub: string) {
   currentSectionTab.value = sub
   try { localStorage.setItem(SECTION_TAB_STORAGE_KEY, sub) } catch {}
 }
+// sub-tab chips for current top tab (5 个 top tab 各有自己的 sub-tab 集合)
+const TOP_TAB_SUBS: Record<string, Array<{ code: string; label: string }>> = {
+  design: [
+    { code: 'menus', label: '菜单' },
+    { code: 'forms', label: '表单' },
+    { code: 'lists', label: '列表' },
+  ],
+  data: [
+    { code: 'models', label: '数据模型' },
+    { code: 'dicts', label: '字典' },
+  ],
+  logic: [
+    { code: 'processes', label: '流程' },
+    { code: 'events', label: '业务事件' },
+  ],
+  perm: [
+    { code: 'roles', label: '角色' },
+    { code: 'field_perm', label: '字段权限' },
+    { code: 'menu_vis', label: '菜单可见性' },
+  ],
+  log: [
+    { code: 'op_log', label: '操作日志' },
+    { code: 'deploy_history', label: '部署历史' },
+  ],
+}
+const currentSubTabsForTop = computed(() => TOP_TAB_SUBS[topTab.value] || [])
 const legacyMode = ref<boolean>((() => {
   try {
     if (new URLSearchParams(window.location.search).get('legacy') === '1') return true
@@ -11402,6 +11443,44 @@ html[data-theme="light"] .msg-attachment-chip {
   flex: 1;
   min-height: 0;
   min-width: 0;
+}
+/* sub-tab chip strip: 顶部 tab 下方水平 chip 行 (替代 sub-nav 200px 列) */
+.sub-chip-strip {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 8px 20px;
+  background: var(--surface);
+  border-bottom: 1px solid var(--line);
+  flex-shrink: 0;
+  font-family: var(--font-sans);
+  overflow-x: auto;
+}
+.sub-chip {
+  display: inline-flex;
+  align-items: center;
+  height: 28px;
+  padding: 0 12px;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  background: var(--surface);
+  color: var(--text-2);
+  font-size: 12.5px;
+  font-weight: 500;
+  font-family: inherit;
+  cursor: pointer;
+  white-space: nowrap;
+  transition: background 0.12s, color 0.12s, border-color 0.12s;
+}
+.sub-chip:hover {
+  background: var(--surface-2);
+  color: var(--text);
+  border-color: var(--line-strong);
+}
+.sub-chip.active {
+  background: var(--brand);
+  color: #fff;
+  border-color: var(--brand);
 }
 .platform-iframe-container {
   flex: 1; display: flex; flex-direction: column;
