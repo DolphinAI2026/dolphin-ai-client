@@ -174,49 +174,59 @@
     <div class="content-area">
 
       <!-- 平台配置 iframe + 原生菜单 sidebar（v-show 保持不销毁） -->
-      <div v-show="SHOW_PLATFORM_CONFIG && activeView === 'platform'" class="platform-shell">
-        <!-- PR2b (SPEC v2 §1.1) — 左侧 SectionNav (200px) 替换原 ApaasMenuSidebar.
-             ApaasMenuSidebar 改作 ui section 内 sub-component (v-show 切显). -->
-        <SectionNav
+      <!-- 2026-05-26 design-v3: 整改 layout — 顶部 5 tab + 左 sub-nav + 中画布 + 右 AI. -->
+      <div v-show="SHOW_PLATFORM_CONFIG && activeView === 'platform'" class="platform-shell platform-shell-v3">
+        <!-- 顶部 5 tab: 设计 / 数据 / 流程 / 权限 / 日志 -->
+        <AppConfigTopTabs
           v-if="existingAppId && platformIframeAppId === existingAppId && !legacyMode"
-          :current-section="currentSection"
-          :current-tab="currentSectionTab"
-          @switch-section="onSwitchSection"
+          :current-tab="topTab"
+          @switch-tab="onTopTabSwitch"
         />
-        <!-- 原 ApaasMenuSidebar — 现在仅 ui section + menus tab 时显, 作为 ui sub-component -->
-        <ApaasMenuSidebar
-          v-if="existingAppId && platformIframeAppId === existingAppId
-                && (legacyMode || (currentSection === 'ui' && currentSectionTab === 'menus'))"
-          ref="apaasMenuSidebarRef"
-          :app-id="existingAppId"
-          :selected-menu-id="selectedApaasMenuId"
-          @menu-selected="onApaasMenuSelected"
-          @menus-loaded="onApaasMenusLoaded"
-        />
-        <!-- SectionContentList — 通用资源列表 (model / dict / form / list / process / event / role) -->
-        <SectionContentList
-          v-if="!legacyMode && existingAppId && platformIframeAppId === existingAppId
-                && shouldShowSectionContent && currentSectionContentKind"
-          :app-id="existingAppId"
-          :resource-kind="currentSectionContentKind"
-          :apaas-app-id="store.currentApp?.apaas_app_id || ''"
-          :env-id="store.currentApp?.platform_env_id || 0"
-          @select-item="onSectionContentItemSelect"
-          @request-create="onSectionContentCreateRequest"
-        />
-        <!-- extension section — 显 ExtensionSectionPanel 替代 iframe (PR6 已实现) -->
-        <div
-          v-if="!legacyMode && currentSection === 'extension' && existingAppId"
-          class="platform-iframe-container"
-          style="padding: 24px; overflow: auto"
-        >
-          <ExtensionSectionPanel
+        <!-- tab content row: 左 sub-nav + 中画布 -->
+        <div class="platform-shell-row">
+          <!-- 左侧 sub-nav (按 top tab 显不同子分类) -->
+          <AppConfigSubNav
+            v-if="existingAppId && platformIframeAppId === existingAppId && !legacyMode"
+            :top-tab="topTab"
+            :current-sub="currentSectionTab"
+            @switch-sub="onSubNavSwitch"
+          />
+          <!-- 设计 tab + menus sub: 走老 ApaasMenuSidebar (功能成熟) -->
+          <ApaasMenuSidebar
+            v-if="existingAppId && platformIframeAppId === existingAppId
+                  && (legacyMode || (topTab === 'design' && currentSectionTab === 'menus'))"
+            ref="apaasMenuSidebarRef"
             :app-id="existingAppId"
+            :selected-menu-id="selectedApaasMenuId"
+            @menu-selected="onApaasMenuSelected"
+            @menus-loaded="onApaasMenusLoaded"
+          />
+          <!-- 其他 sub-tab: 走通用 SectionContentList -->
+          <SectionContentList
+            v-if="!legacyMode && existingAppId && platformIframeAppId === existingAppId
+                  && shouldShowSectionContent && currentSectionContentKind"
+            :app-id="existingAppId"
+            :resource-kind="currentSectionContentKind"
             :apaas-app-id="store.currentApp?.apaas_app_id || ''"
             :env-id="store.currentApp?.platform_env_id || 0"
+            @select-item="onSectionContentItemSelect"
+            @request-create="onSectionContentCreateRequest"
           />
-        </div>
-        <div v-else class="platform-iframe-container">
+          <!-- 日志 tab: 暂用 DeployHistoryDrawer 嵌入式 (P1 单独 panel) -->
+          <div
+            v-if="!legacyMode && topTab === 'log' && existingAppId"
+            class="platform-iframe-container"
+            style="padding: 24px; overflow: auto; background: var(--surface-2);"
+          >
+            <div style="text-align: center; padding: 80px 16px; color: var(--text-3);">
+              <div style="font-size: 32px; margin-bottom: 12px;">📋</div>
+              <div style="font-size: 16px; font-weight: 500; color: var(--text); margin-bottom: 8px;">
+                {{ currentSectionTab === 'deploy_history' ? '部署历史' : '操作日志' }}
+              </div>
+              <div style="font-size: 13px;">P1 接入 — 用顶部 [历史] CTA 可看部署记录</div>
+            </div>
+          </div>
+          <div v-else class="platform-iframe-container">
           <div v-if="platformLoading" class="platform-loading">
             <span class="loading-spinner">⟳</span> 加载平台配置...
           </div>
@@ -251,6 +261,7 @@
             </div>
           </div>
         </div>
+        </div><!-- /.platform-shell-row -->
       </div>
 
       <!-- SPEC PhaseBar (Phase β: only when requirements agent is active) -->
@@ -788,6 +799,8 @@ import ApaasMenuSidebar from '@/components/ApaasMenuSidebar.vue'
 import SectionNav from '@/components/v2/SectionNav.vue'
 import ExtensionSectionPanel from '@/components/v2/ExtensionSectionPanel.vue'
 import SectionContentList from '@/components/v2/SectionContentList.vue'
+import AppConfigTopTabs from '@/components/v3/AppConfigTopTabs.vue'
+import AppConfigSubNav from '@/components/v3/AppConfigSubNav.vue'
 import type { ConversationCreate, Message } from '@/types'
 import TopBar from '@/components/TopBar.vue'
 import WorkbenchShell from '@/components/WorkbenchShell.vue'
@@ -2266,6 +2279,49 @@ const _initSectionTab = (() => {
 })()
 const currentSection = ref<string>(_initSection)
 const currentSectionTab = ref<string>(_initSectionTab)
+
+// 2026-05-26 design-v3: 顶部 5 tab (设计/数据/流程/权限/日志). 跟旧 currentSection 双向同步.
+// 旧 SECTION (data/ui/logic/permission/extension) 映射到新 TopTab:
+//   data → data, ui → design, logic → logic, permission → perm, extension → 日志 (extension 退场)
+const SECTION_TO_TOP_TAB: Record<string, string> = {
+  data: 'data',
+  ui: 'design',
+  logic: 'logic',
+  permission: 'perm',
+  extension: 'log',
+}
+const TOP_TAB_TO_SECTION: Record<string, string> = {
+  design: 'ui',
+  data: 'data',
+  logic: 'logic',
+  perm: 'permission',
+  log: 'log',  // 'log' 不在原 SECTION 集合, 单独处理
+}
+const TOP_TAB_DEFAULT_SUB: Record<string, string> = {
+  design: 'menus',
+  data: 'models',
+  logic: 'processes',
+  perm: 'roles',
+  log: 'op_log',
+}
+const topTab = ref<string>(SECTION_TO_TOP_TAB[_initSection] || 'design')
+function onTopTabSwitch(tab: string) {
+  topTab.value = tab
+  // 切回旧 section 系统兼容
+  const sec = TOP_TAB_TO_SECTION[tab] || 'ui'
+  currentSection.value = sec
+  // sub-tab 默认值
+  const defaultSub = TOP_TAB_DEFAULT_SUB[tab] || 'menus'
+  currentSectionTab.value = defaultSub
+  try {
+    localStorage.setItem(SECTION_STORAGE_KEY, sec)
+    localStorage.setItem(SECTION_TAB_STORAGE_KEY, defaultSub)
+  } catch {}
+}
+function onSubNavSwitch(sub: string) {
+  currentSectionTab.value = sub
+  try { localStorage.setItem(SECTION_TAB_STORAGE_KEY, sub) } catch {}
+}
 const legacyMode = ref<boolean>((() => {
   try {
     if (new URLSearchParams(window.location.search).get('legacy') === '1') return true
@@ -11329,10 +11385,21 @@ html[data-theme="light"] .msg-attachment-chip {
 
 /* ── 平台配置 iframe ── */
 /* 2026-05-25 B-4: platform-shell 是 sidebar + iframe 的 2 列 wrapper */
+/* 2026-05-26 design-v3: platform-shell-v3 改 vertical (顶部 tab + 下方 row) */
 .platform-shell {
   flex: 1;
   display: flex;
   flex-direction: row;
+  min-height: 0;
+  min-width: 0;
+}
+.platform-shell-v3 {
+  flex-direction: column;
+}
+.platform-shell-v3 > .platform-shell-row {
+  display: flex;
+  flex-direction: row;
+  flex: 1;
   min-height: 0;
   min-width: 0;
 }
