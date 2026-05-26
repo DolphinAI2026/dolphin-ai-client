@@ -454,12 +454,32 @@ async function reload() {
   loading.value = true
   error.value = ''
   try {
+    // 优先: form_id → /forms/{form_id}/detail (跟 FormDesignerPanel 一致, 拿 form 真关联 model)
+    if (props.formId) {
+      const respFD = await request.get<any, any>(
+        `/applications/${props.appId}/forms/${props.formId}/detail`,
+      )
+      if (respFD?.ok && Array.isArray(respFD.models) && respFD.models.length > 0) {
+        const mainCode = String(respFD.main_model_code || '')
+        allModels.value = respFD.models.map((m: any) => ({
+          model_id: m.model_id,
+          model_code: m.model_code,
+          model_name: m.model_name,
+          model_type: m.model_type,
+          is_main: m.is_main === true || m.model_code === mainCode,
+          fields: Array.isArray(m.fields) ? m.fields : [],
+          field_count: m.field_count,
+          form_id: props.formId,
+        }))
+        return
+      }
+    }
+    // 兜底: 走 list_apaas_app_models (应用主表 list)
     const resp = await request.get<any, any>(
       `/applications/${props.appId}/section-content/models?with_fields=true`,
     )
     if (resp?.ok) {
       const items: any[] = resp.items || []
-      // section-content endpoint 返 SectionContentItem 数组, 原 model 字段在 extra 里
       allModels.value = items.map(it => {
         const raw = it.extra || {}
         return {
