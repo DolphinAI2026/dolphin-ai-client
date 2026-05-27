@@ -252,9 +252,10 @@
           @switch-tab="onTopTabSwitch"
         />
         <!-- sub-tab chip strip: 顶部 tab 下方一行. 2026-05-26: 设计 tab 不显
-             chip (改用左侧菜单 list + 右侧 designer 4 sub-tab). 其他 tab 保留. -->
+             chip (改用左侧菜单 list + 右侧 designer 4 sub-tab). 其他 tab 保留.
+             Q2 2026-05-27: 数据源 tab 也不显 chip (扁平 panel, 无 sub). -->
         <div
-          v-if="existingAppId && platformIframeAppId === existingAppId && !legacyMode && topTab !== 'design'"
+          v-if="existingAppId && platformIframeAppId === existingAppId && !legacyMode && topTab !== 'design' && topTab !== 'datasource'"
           class="sub-chip-strip"
         >
           <button
@@ -405,6 +406,13 @@
           <RoleManagePanel
             v-else-if="!legacyMode && topTab === 'perm' && currentSectionTab === 'roles' && existingAppId"
             :key="`role-${designerRefreshKey}`"
+            class="platform-iframe-container"
+            :app-id="existingAppId"
+          />
+          <!-- 数据源 tab (Q2 2026-05-27): 应用关联的数据源 (DB connection 维度, 只读) -->
+          <AppDatasourcePanel
+            v-else-if="!legacyMode && topTab === 'datasource' && existingAppId"
+            :key="`appds-${designerRefreshKey}`"
             class="platform-iframe-container"
             :app-id="existingAppId"
           />
@@ -1006,6 +1014,7 @@ import DataModelDetailPanel from '@/components/v3/DataModelDetailPanel.vue'
 import DictEditorPanel from '@/components/v3/DictEditorPanel.vue'
 import RoleManagePanel from '@/components/v3/RoleManagePanel.vue'
 import LogsPanel from '@/components/v3/LogsPanel.vue'
+import AppDatasourcePanel from '@/components/v3/AppDatasourcePanel.vue'
 import type { ConversationCreate, Message } from '@/types'
 import TopBar from '@/components/TopBar.vue'
 import WorkbenchShell from '@/components/WorkbenchShell.vue'
@@ -2506,6 +2515,7 @@ const TOP_TAB_TO_SECTION: Record<string, string> = {
   logic: 'logic',
   perm: 'permission',
   log: 'log',  // 'log' 不在原 SECTION 集合, 单独处理
+  datasource: 'datasource',  // Q2 (2026-05-27): 扁平 panel, 不映射回旧 SECTION 集合
 }
 const TOP_TAB_DEFAULT_SUB: Record<string, string> = {
   design: 'menus',
@@ -2513,6 +2523,8 @@ const TOP_TAB_DEFAULT_SUB: Record<string, string> = {
   logic: 'processes',
   perm: 'roles',
   log: 'op_log',
+  // Q2 (2026-05-27): 数据源 tab 是扁平 panel 无 sub-tab, default empty.
+  datasource: '',
 }
 const topTab = ref<string>(SECTION_TO_TOP_TAB[_initSection] || 'design')
 function onTopTabSwitch(tab: string) {

@@ -625,14 +625,15 @@ async def get_section_content_processes(
             source="list_apaas_app_processes",
         )
 
-    # 兜底走 menus — 流程挂 MODEL 菜单上, 跟 forms/lists 同源, P0 全列出来,
-    # 真有流程的菜单后续可以加 has_process 过滤.
+    # 兜底走 menus 过滤 menu_type=PROCESS — MODEL 是数据表单, 不是流程, 不能混.
+    # 没真定义 BPMN 流程的应用 (例如 app_id=13 图书借阅管理系统) items 自然为空,
+    # 前端走友好空态.
     if raw_or_err.get("error_code") not in ("TOOL_NOT_AVAILABLE", "TOOL_SIGNATURE_MISMATCH"):
         logger.info(
             f"list_apaas_app_processes failed ({raw_or_err.get('error_code')}), "
-            "降级走 list_apaas_app_menus"
+            "降级走 list_apaas_app_menus[menu_type=PROCESS]"
         )
-    return await _menus_filtered_by_type(app, {"MODEL"}, source)
+    return await _menus_filtered_by_type(app, {"PROCESS"}, source)
 
 
 @router.get(
@@ -1447,4 +1448,300 @@ async def set_role_resource_cell_endpoint(
         role_id=str(raw_or_err.get("role_id") or body.role_id),
         permission=str(raw_or_err.get("permission") or body.permission),
         message=str(raw_or_err.get("message") or "已保存"),
+    )
+
+
+# ---------------------------------------------------------------------------
+# Q2 (2026-05-27): 应用数据源 endpoint — design-v4 4 tab 第二个 tab "数据源".
+#
+# 设计思路:
+#   apaas 平台没暴露 "list datasources for app" 公共 API, 但每个 model / menu
+#   都带 datasourceId 字段. 所以这个 endpoint 走聚合: 拉应用 models + menus,
+#   distinct datasource_id, 再按 datasource_id group count.
+#
+#   datasource 详情字段 (name/type/host/port/is_online) — 没有公开工具能拿,
+#   先返空 (fallback "未知" + datasource_id 当 name). P5 真接通 platform-admin
+#   /datasource/list API 再 join 填回.
+#
+# 实测真实样本: apaas 返 model dict 含 "datasourceId": "833831227906588672".
+# ---------------------------------------------------------------------------
+class AppDatasourceItem(BaseModel):
+    datasource_id: str
+    name: str  # 暂用 datasource_id 当 name (P5 接平台 API 填真名)
+    type: str  # MySQL/PostgreSQL/...
+    host: Optional[str] = None
+    port: Optional[int] = None
+    model_count: int  # 多少 model 用这个 datasource
+    is_online: Optional[bool] = None
+
+
+class AppDatasourcesResponse(BaseModel):
+    ok: bool
+    items: list[AppDatasourceItem] = Field(default_factory=list)
+    total: int = 0
+    source: str = ""  # 调了哪些 MCP 工具 (debug 用, 逗号分隔)
+    error_code: Optional[str] = None
+    message: Optional[str] = None
+
+
+def _aggregate_datasources_from_items(
+    items: list[dict],
+    id_keys: tuple[str, ...] = ("datasourceId", "datasource_id"),
+) -> dict[str, dict]:
+    """从 raw list (model 或 menu) 聚合 distinct datasource_id + count.
+
+    Returns: {datasource_id: {"count": int, "raw_first": dict}}
+    """
+    agg: dict[str, dict] = {}
+    for it in items or []:
+        if not isinstance(it, dict):
+            continue
+        ds_id = ""
+        for k in id_keys:
+            v = it.get(k)
+            if v:
+                ds_id = str(v).strip()
+                if ds_id:
+                    break
+        if not ds_id:
+            continue
+        slot = agg.setdefault(ds_id, {"count": 0, "raw_first": it})
+        slot["count"] += 1
+    return agg
+
+
+async def _try_enrich_datasource_detail(
+    env_id: int,
+    apaas_app_id: str,
+    datasource_id: str,
+) -> Optional[dict]:
+    """试着拿 datasource 详情 (name/type/host/port). 工具不存在返 None.
+
+    试 2 个可能存在的 MCP 工具名:
+      - get_apaas_datasource_detail
+      - list_apaas_datasources (return list + filter by id)
+    都没有就放弃, 返 None.
+    """
+    # 1) 先试 detail 工具
+    ok, raw = await _safe_call_mcp_tool(
+        "get_apaas_datasource_detail",
+        env_id=env_id,
+        apaas_app_id=apaas_app_id,
+        extra_args={"datasource_id": datasource_id},
+    )
+    if ok and isinstance(raw, dict):
+        return raw
+
+    # 2) 试 list 工具 — 一次拉所有再 filter (P5 接入时按需缓存)
+    ok2, raw2 = await _safe_call_mcp_tool(
+        "list_apaas_datasources",
+        env_id=env_id,
+        apaas_app_id=apaas_app_id,
+    )
+    if ok2 and isinstance(raw2, dict):
+        items_raw = raw2.get("items") or raw2.get("datasources") or raw2.get("list") or []
+        if isinstance(items_raw, list):
+            for it in items_raw:
+                if not isinstance(it, dict):
+                    continue
+                this_id = str(
+                    it.get("datasource_id") or it.get("datasourceId") or it.get("id") or ""
+                ).strip()
+                if this_id == datasource_id:
+                    return it
+    return None
+
+
+@router.get("/{app_id}/datasources", response_model=AppDatasourcesResponse)
+async def get_app_datasources(
+    app_id: int,
+    ctx: Annotated[AuthContext, Depends(get_auth_context)],
+    db: Annotated[AsyncSession, Depends(get_db)],
+) -> AppDatasourcesResponse:
+    """design-v4 Q2: 列应用关联的数据源 (DB 连接维度).
+
+    实现:
+      1. 调 list_apaas_app_models (with_fields=False) 拿 models — 每个 model
+         raw dict 应含 datasourceId.
+      2. 调 list_apaas_app_menus 拿 menus — 每菜单也带 datasource_id.
+      3. distinct + count = 总用量, model_count = 多少 model 用这数据源.
+      4. 每个 datasource_id 试 _try_enrich_datasource_detail 拿 name/type/host/port.
+         工具不存在 → 字段空, 前端显 "未知".
+    """
+    source = "list_apaas_app_models+menus"
+    app = await _load_app_and_check_view(app_id, ctx, db)
+    if not app.platform_env_id or not app.apaas_app_id:
+        return AppDatasourcesResponse(
+            ok=False,
+            items=[],
+            total=0,
+            source=source,
+            error_code="APP_NOT_DEPLOYED",
+            message="应用尚未部署到 aPaaS 平台 — 部署后才能拉数据源",
+        )
+
+    env_id = app.platform_env_id
+    apaas_app_id = str(app.apaas_app_id)
+
+    # ── 1) 拉 models — 提 datasource_id ────────────────────────────────────
+    # 注: _list_apaas_app_models normalize 后丢了 raw model 的 datasourceId 字段,
+    # 但 list_apaas_app_menus 返的 menus 保留了 datasource_id (已 flatten).
+    # 所以这里走 menus 主路径; models 当 secondary signal 兜底.
+    menu_agg: dict[str, dict] = {}
+    model_agg: dict[str, dict] = {}
+
+    ok_menus, menus_raw = await _safe_call_mcp_tool(
+        "list_apaas_app_menus",
+        env_id=env_id,
+        apaas_app_id=apaas_app_id,
+    )
+    if ok_menus and isinstance(menus_raw, dict):
+        menus_list = menus_raw.get("menus") or menus_raw.get("items") or []
+        if isinstance(menus_list, list):
+            menu_agg = _aggregate_datasources_from_items(
+                menus_list,
+                id_keys=("datasource_id", "datasourceId"),
+            )
+
+    # models 兜底 — _list_apaas_app_models normalize 不带 datasourceId,
+    # 但试着读 (未来扩展时 / 别处定制时可能加上).
+    ok_models, models_raw = await _safe_call_mcp_tool(
+        "list_apaas_app_models",
+        env_id=env_id,
+        apaas_app_id=apaas_app_id,
+        extra_args={"with_fields": False},
+    )
+    if ok_models and isinstance(models_raw, dict):
+        models_list = models_raw.get("models") or models_raw.get("items") or []
+        if isinstance(models_list, list):
+            model_agg = _aggregate_datasources_from_items(
+                models_list,
+                id_keys=("datasourceId", "datasource_id"),
+            )
+
+    # ── 2) merge: union of datasource_ids, model_count 优先 model_agg.count ─
+    all_ds_ids: set[str] = set(menu_agg.keys()) | set(model_agg.keys())
+    if not all_ds_ids:
+        # 没拉到 menus 也没拉到 models — 区分 "真没数据源" vs "MCP 工具失败"
+        if not ok_menus and not ok_models:
+            # 两边都失败 → 上报错误
+            err_msg = ""
+            err_code = ""
+            if isinstance(menus_raw, dict) and menus_raw.get("error_code"):
+                err_code = str(menus_raw["error_code"])
+                err_msg = str(menus_raw.get("message") or "")
+            elif isinstance(models_raw, dict) and models_raw.get("error_code"):
+                err_code = str(models_raw["error_code"])
+                err_msg = str(models_raw.get("message") or "")
+            return AppDatasourcesResponse(
+                ok=False,
+                items=[],
+                total=0,
+                source=source,
+                error_code=err_code or "MCP_TOOL_ERROR",
+                message=err_msg or "拉数据源列表失败",
+            )
+        # 否则真就是没数据源 (新建应用没 model 没 menu) — ok=True 空列表
+        return AppDatasourcesResponse(
+            ok=True,
+            items=[],
+            total=0,
+            source=source,
+        )
+
+    # ── 3) 富化 detail (name/type/host/port/is_online) — 尽力而为 ─────────
+    items_out: list[AppDatasourceItem] = []
+    for ds_id in sorted(all_ds_ids):
+        model_count = model_agg.get(ds_id, {}).get("count", 0)
+        # 没 model 信息时, 拿 menu count 当 fallback (虽然语义略差).
+        if model_count == 0:
+            model_count = menu_agg.get(ds_id, {}).get("count", 0)
+
+        # 默认字段 — 工具不可用时显
+        name = ds_id  # P5 接平台 datasource API 后填真名
+        ds_type = ""
+        host: Optional[str] = None
+        port: Optional[int] = None
+        is_online: Optional[bool] = None
+
+        # 试着读 raw_first 里的内联字段 (有些场景 menu/model 自带 datasourceName)
+        for agg in (model_agg.get(ds_id), menu_agg.get(ds_id)):
+            if not agg:
+                continue
+            raw_first = agg.get("raw_first") or {}
+            if not isinstance(raw_first, dict):
+                continue
+            inline_name = str(
+                raw_first.get("datasourceName")
+                or raw_first.get("datasource_name")
+                or raw_first.get("datasourceCode")
+                or ""
+            ).strip()
+            if inline_name and name == ds_id:
+                name = inline_name
+            inline_type = str(
+                raw_first.get("datasourceType")
+                or raw_first.get("dbType")
+                or ""
+            ).strip()
+            if inline_type and not ds_type:
+                ds_type = inline_type
+
+        # 再调 enrich 工具 (失败/不存在返 None)
+        try:
+            detail = await _try_enrich_datasource_detail(env_id, apaas_app_id, ds_id)
+        except Exception as exc:
+            logger.warning(f"get_app_datasources: enrich {ds_id} 失败: {exc}")
+            detail = None
+        if isinstance(detail, dict):
+            d_name = str(
+                detail.get("name")
+                or detail.get("datasourceName")
+                or detail.get("datasource_name")
+                or ""
+            ).strip()
+            if d_name:
+                name = d_name
+            d_type = str(
+                detail.get("type")
+                or detail.get("datasourceType")
+                or detail.get("dbType")
+                or ""
+            ).strip()
+            if d_type:
+                ds_type = d_type
+            d_host = str(
+                detail.get("host")
+                or detail.get("datasourceAddress")
+                or ""
+            ).strip()
+            if d_host:
+                host = d_host
+            d_port = detail.get("port") or detail.get("datasourcePort")
+            try:
+                if d_port is not None and d_port != "":
+                    port = int(d_port)
+            except (TypeError, ValueError):
+                pass
+            d_online = detail.get("is_online")
+            if d_online is None:
+                d_online = detail.get("isOnline")
+            if isinstance(d_online, bool):
+                is_online = d_online
+
+        items_out.append(AppDatasourceItem(
+            datasource_id=ds_id,
+            name=name,
+            type=ds_type,
+            host=host,
+            port=port,
+            model_count=int(model_count or 0),
+            is_online=is_online,
+        ))
+
+    return AppDatasourcesResponse(
+        ok=True,
+        items=items_out,
+        total=len(items_out),
+        source=source,
     )

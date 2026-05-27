@@ -45,11 +45,21 @@
       <button class="pdp-btn pdp-btn-ghost" @click="reloadProcessList">重试</button>
     </div>
 
-    <!-- 应用无流程 -->
-    <div v-else-if="processList.length === 0" class="pdp-empty">
-      <div class="pdp-empty-icon">🔀</div>
-      <h3>应用暂无流程</h3>
-      <p>用配置助手对话创建审批流程, 或在表单菜单上挂流程后这里会出现.</p>
+    <!-- 应用无流程 — 友好空态 + 引导对话 CTA.
+         注: 区别于 `pdp-canvas-hint` ("「X」尚无流程定义" 那个) — 那个是选中流程但定义空,
+         这里是整个应用一个流程都没有 (例如 app_id=13 图书借阅管理系统). -->
+    <div v-else-if="processList.length === 0" class="pdp-empty pdp-empty-process">
+      <div class="pdp-empty-icon" aria-hidden="true">🔀</div>
+      <h3>暂无业务流程</h3>
+      <p>用配置助手对话生成首个审批流, 例如：「为借书申请加管理员审批流程」</p>
+      <button
+        type="button"
+        class="pdp-btn pdp-btn-primary pdp-empty-cta"
+        @click="onRequestConfigChat"
+      >
+        <span aria-hidden="true">✨</span>
+        用对话创建流程
+      </button>
     </div>
 
     <!-- 有流程: 显完整设计器 -->
@@ -725,6 +735,14 @@ function onChatToEdit() {
   alert('用右下角配置助手对话, 比如:\n• "加一个总监审批节点"\n• "把审批人改成 XX"\n• "在部门主管审批后加一个并行抄送"')
 }
 
+/** 空态 "用对话创建流程" CTA — P0 暂时弹示例提示, 后续可 emit 'request-config-chat'
+ *  让 ChatPage 把 ConfigAssistant 输入框获焦 + 预填 "为 XX 创建审批流程". */
+function onRequestConfigChat() {
+  // eslint-disable-next-line no-console
+  console.log('[ProcessDesignerPanel] request-config-chat — appId=', props.appId)
+  alert('用右下角配置助手对话创建首个审批流程, 比如:\n• "为借书申请加管理员审批流程"\n• "新建报销审批: 部门主管 → 财务复核 → 总经理审批"\n• "为申请单加一个三级审批流"')
+}
+
 /** O2: 算 mock 实例进度 — 简化策略:
  *  - 总节点数 n, 已完成 = floor((n - 1) / 2) (start + 第 1 个审批)
  *  - currentNodeId = 第 floor((n - 1) / 2) 个 (即 mid 节点)
@@ -1377,6 +1395,32 @@ watch(
 .pdp-empty p {
   margin: 0;
   font-size: 13.5px;
+}
+/* 空态主 CTA — design-v3 token, 跟周围保持一致 */
+.pdp-empty-process {
+  padding: 32px 24px;
+  max-width: 480px;
+  margin: 0 auto;
+}
+.pdp-empty-process .pdp-empty-icon {
+  font-size: 56px;
+  opacity: 0.9;
+}
+.pdp-empty-process h3 {
+  margin-top: 4px;
+  letter-spacing: -0.3px;
+}
+.pdp-empty-process p {
+  color: var(--text-3);
+  line-height: 1.55;
+  max-width: 380px;
+}
+.pdp-empty-cta {
+  margin-top: 8px;
+  height: 36px;
+  padding: 0 18px;
+  font-size: 13px;
+  gap: 6px;
 }
 
 /* ───── 顶部 toolbar ───── */
