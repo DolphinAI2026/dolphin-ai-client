@@ -112,33 +112,57 @@ function reload() {
   iframeKey.value += 1
 }
 
-function onIframeLoad() {
-  loading.value = false
-  // 2026-05-27 S: 注入 CSS 隐藏 apaas form designer 内部顶栏 (← 图书管理 / Form Design
-  // tabs / Save / Close) — 我们外层 mdsh-subnav 已有这些信息 + 操作, 内部 chrome 冗余.
-  // best-effort: 找 common 选择器, 找不到默认 css 不生效, iframe 正常显.
-  // P5: 实测 apaas DOM 类名 (用户报告才能精确), 当前用 broad pattern guess.
+// 2026-05-27 S2: apaas 真实 DOM 实测后精确生效.
+// Tab id 映射 (apaas data-model-fn-config 内 el-tabs):
+//   tab-formBuildDesign / tab-listPageDesign / tab-workFlowDesign / tab-pageSetting
+const APAAS_TAB_ID_BY_SUB: Record<string, string> = {
+  form: 'tab-formBuildDesign',
+  list: 'tab-listPageDesign',
+  process: 'tab-workFlowDesign',
+  page: 'tab-pageSetting',
+}
+
+function injectIframeStyle(doc: Document) {
+  if (doc.querySelector('#aei-injected-style')) return
+  const style = doc.createElement('style')
+  style.id = 'aei-injected-style'
+  style.textContent = `
+    /* 2026-05-27 S2: 隐藏 apaas 表单/列表设计器内部顶栏 (.app-config-header).
+       实测真实类名 — el-tabs (Form/List/Process/Page) + back icon + edit icon
+       全在 .app-config-header 里. 我们外层 mdsh-subnav 已有 4 sub-tab + 菜单名,
+       这个 apaas 内部 chrome 完全冗余, 整段干掉. */
+    .app-config-header { display: none !important; }
+  `
+  ;(doc.head || doc.body || doc.documentElement).appendChild(style)
+}
+
+function activateDesignerTab(doc: Document, sub: string) {
+  const tabId = APAAS_TAB_ID_BY_SUB[sub]
+  if (!tabId) return
+  const tab = doc.getElementById(tabId)
+  if (!tab) return
+  // 已经 active 不需要再 click (避免触发 unsaved-changes prompt)
+  if (tab.className.includes('is-active')) return
+  ;(tab as HTMLElement).click()
+}
+
+function applyIframeCustomization() {
   try {
     const win = iframeRef.value?.contentWindow
     const doc = win?.document
-    if (doc && !doc.querySelector('#aei-injected-style')) {
-      const style = doc.createElement('style')
-      style.id = 'aei-injected-style'
-      style.textContent = `
-        /* apaas 表单/列表设计器内部顶栏 — 我们外层已显这些 */
-        .designer-header, .form-designer-header, .data-model-fn-config-header,
-        .fn-config-header, .editor-top-bar, .designer-top-bar,
-        .design-tabs, .designer-tabs, .editor-tabs,
-        .app-fn-config-header, .form-editor-header,
-        [class*="designerHeader"], [class*="DesignerHeader"] {
-          display: none !important;
-        }
-      `
-      ;(doc.head || doc.body).appendChild(style)
-    }
+    if (!doc) return
+    injectIframeStyle(doc)
+    activateDesignerTab(doc, props.designerSub)
   } catch {
-    /* cross-origin / 时序问题忽略 — best effort */
+    /* cross-origin / 时序问题忽略 */
   }
+}
+
+function onIframeLoad() {
+  loading.value = false
+  // apaas SPA route 切换不触发 iframe load — 调用一次后再延迟轮询几次确保命中
+  applyIframeCustomization()
+  ;[200, 600, 1200, 2400].forEach(delay => setTimeout(applyIframeCustomization, delay))
 }
 
 function onIframeError() {
