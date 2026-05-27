@@ -907,6 +907,21 @@ async def apply_spec(
                 app_id, exc,
             )
 
+        # 7. apply 后 invalidate section-content TTL 缓存 — 让前端 reload 拿新 apaas 状态.
+        # apaas 真改了后老缓存 stale, 不清的话用户看到的还是改前的资源列表.
+        if apaas_app_id:
+            try:
+                from app.routes.applications.section_content import (
+                    invalidate_section_cache_for_app,
+                )
+                cleared = invalidate_section_cache_for_app(apaas_app_id)
+                logger.info(
+                    "spec_apply: cleared %d section-content cache entries for apaas_app_id=%s",
+                    cleared, apaas_app_id,
+                )
+            except Exception as exc:  # noqa: BLE001 — 缓存清失败不挡 apply 主结果
+                logger.warning("spec_apply: section-content cache invalidate failed: %s", exc)
+
     duration_ms = int((datetime.utcnow() - start).total_seconds() * 1000)
 
     return {

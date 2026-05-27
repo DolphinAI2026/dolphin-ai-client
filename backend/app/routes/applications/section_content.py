@@ -116,11 +116,71 @@ def _tool_error(
     )
 
 
+# ---------------------------------------------------------------------------
+# Section content TTL 缓存 — apaas 每个 MCP 工具调用 1-3s, panel reload 一开就打 8-10
+# 个工具, 用户切应用 / 切 chapter / spec_change 刷新都重打全套 → 极慢.
+#
+# 2026-05-27: 加 process-level TTL 缓存 (180s = 3 min), apply 后失效全部.
+# 缓存只命中成功 (ok=True) 的工具结果; 失败结果不缓存 (下次再试).
+#
+# Force 模式: endpoint 加 ?force=true 跳过缓存 (前端"重试"按钮 / 调试用).
+# ---------------------------------------------------------------------------
+import time as _time
+
+_SECTION_CACHE_TTL_SECONDS = 180.0
+_section_cache: dict[tuple, tuple[float, dict]] = {}
+
+
+def _cache_key(
+    tool_name: str,
+    env_id: int,
+    apaas_app_id: str,
+    extra_args: Optional[dict],
+) -> tuple:
+    """缓存 key — 工具名 + env + app + extra args (sorted tuple, hashable)."""
+    extra_key: tuple = ()
+    if extra_args:
+        extra_key = tuple(sorted((k, str(v)) for k, v in extra_args.items()))
+    return (tool_name, int(env_id), str(apaas_app_id), extra_key)
+
+
+def invalidate_section_cache_for_app(apaas_app_id: str) -> int:
+    """spec_apply 成功后清这个 app 的全部 section 缓存 — 让下次 reload 拿新数据.
+
+    Returns: 清了多少条目 (便于 log).
+    """
+    key_str = str(apaas_app_id)
+    keys_to_drop = [k for k in _section_cache if k[2] == key_str]
+    for k in keys_to_drop:
+        _section_cache.pop(k, None)
+    return len(keys_to_drop)
+
+
+def _cache_get(key: tuple) -> Optional[dict]:
+    """命中 + 未过期 → 返 cached raw dict; 否则 None."""
+    entry = _section_cache.get(key)
+    if not entry:
+        return None
+    expires_at, raw = entry
+    if _time.time() > expires_at:
+        # 过期 — 清掉
+        _section_cache.pop(key, None)
+        return None
+    return raw
+
+
+def _cache_set(key: tuple, raw: dict) -> None:
+    """写缓存, TTL 跟 _SECTION_CACHE_TTL_SECONDS."""
+    _section_cache[key] = (_time.time() + _SECTION_CACHE_TTL_SECONDS, raw)
+
+
 async def _safe_call_mcp_tool(
     tool_name: str,
     env_id: int,
     apaas_app_id: str,
     extra_args: Optional[dict] = None,
+    *,
+    use_cache: bool = True,
 ) -> tuple[bool, dict]:
     """调 MCP 工具的统一封装 — 工具不存在 / 抛异常 / 返 ok=False 都统一兜底.
 
@@ -128,7 +188,19 @@ async def _safe_call_mcp_tool(
       (ok, raw_or_error)
       - ok=True 时 raw_or_error 是 MCP 工具的原始 dict 返回.
       - ok=False 时 raw_or_error 是 {error_code, message} 错误结构.
+
+    Cache:
+      use_cache=True (默) → 命中 TTL cache (180s) 直接返, 不打 apaas.
+      use_cache=False → 强制重打 (endpoint ?force=true 模式).
+      只缓存成功结果, 失败下次再试.
     """
+    # ── 缓存命中 fast path ────────────────────────────────────────────
+    cache_key = _cache_key(tool_name, env_id, apaas_app_id, extra_args)
+    if use_cache:
+        cached = _cache_get(cache_key)
+        if cached is not None:
+            return True, cached
+
     # 延迟 import — 避免 module import 时 mcp_server 副作用 (调 LLM client 等).
     try:
         from app import mcp_server as _mcp
@@ -173,11 +245,14 @@ async def _safe_call_mcp_tool(
 
     if not raw.get("ok", False):
         # MCP 工具显式失败 (e.g. INVALID_APAAS_APP_ID / APAAS_TOKEN_EXPIRED).
+        # 失败结果不缓存 — 下次再试.
         return False, {
             "error_code": str(raw.get("error_code") or "MCP_TOOL_FAILED"),
             "message": str(raw.get("message") or "MCP 工具返回 ok=False"),
         }
 
+    # 成功 → 写 TTL 缓存 (即便 use_cache=False 路径也写, 让后续 reload 命中).
+    _cache_set(cache_key, raw)
     return True, raw
 
 
