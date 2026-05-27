@@ -244,9 +244,10 @@
       <!-- 平台配置 iframe + 原生菜单 sidebar（v-show 保持不销毁） -->
       <!-- 2026-05-26 design-v3: 整改 layout — 顶部 5 tab + 左 sub-nav + 中画布 + 右 AI. -->
       <div v-show="SHOW_PLATFORM_CONFIG && activeView === 'platform'" class="platform-shell platform-shell-v3">
-        <!-- 顶部 5 tab: 设计 / 数据 / 流程 / 权限 / 日志 -->
+        <!-- 顶部 3 tab: 设计 / 权限 / 日志 (N1 2026-05-27 简化 — 删数据/流程跟 sub 撞)
+             v-if 放宽: 不依赖 platformIframeAppId (iframe 时序问题, 应用 load 后就显). -->
         <AppConfigTopTabs
-          v-if="existingAppId && platformIframeAppId === existingAppId && !legacyMode"
+          v-if="existingAppId && !legacyMode"
           :current-tab="topTab"
           @switch-tab="onTopTabSwitch"
         />

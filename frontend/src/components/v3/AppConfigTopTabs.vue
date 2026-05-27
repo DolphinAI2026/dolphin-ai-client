@@ -36,7 +36,10 @@
 </template>
 
 <script setup lang="ts">
-type TabCode = 'design' | 'data' | 'logic' | 'perm' | 'log'
+// N1 (2026-05-27): 顶部 tab 5 → 3 (设计/权限/日志).
+// 删 '数据' (跟设计 sub '数据 schema' 撞车) + '流程' (跟设计 sub '流程设计' 撞).
+// 现 model/process 编辑全归"设计 tab + 选菜单 + sub". 跨菜单 list view 用 ConfigAssistant 对话.
+type TabCode = 'design' | 'perm' | 'log'
 
 const TABS: Array<{ code: TabCode; label: string; icon: string }> = [
   {
@@ -44,16 +47,6 @@ const TABS: Array<{ code: TabCode; label: string; icon: string }> = [
     label: '设计',
     // pencil/sparkle SVG inline (avoid extra deps)
     icon: '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 19l7-7 3 3-7 7-3-3z"/><path d="M18 13l-1.5-7.5L2 2l3.5 14.5L13 18l5-5z"/><circle cx="6" cy="6" r="2"/></svg>',
-  },
-  {
-    code: 'data',
-    label: '数据',
-    icon: '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><ellipse cx="12" cy="5" rx="9" ry="3"/><path d="M3 5v14a9 3 0 0 0 18 0V5"/><path d="M3 12a9 3 0 0 0 18 0"/></svg>',
-  },
-  {
-    code: 'logic',
-    label: '流程',
-    icon: '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="6" height="6"/><rect x="15" y="3" width="6" height="6"/><rect x="9" y="15" width="6" height="6"/><path d="M6 9v3a3 3 0 0 0 3 3"/><path d="M18 9v3a3 3 0 0 1-3 3"/></svg>',
   },
   {
     code: 'perm',
