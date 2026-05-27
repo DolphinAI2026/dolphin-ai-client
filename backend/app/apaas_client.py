@@ -799,6 +799,32 @@ class APaaSClient:
                     continue
         return {"ok": False, "error_code": "PROCESS_QUERY_NOT_AVAILABLE", "message": f"apaas 流程详情 API 试 2 路径都失败: {last_err}"}
 
+    async def list_processes(self, app_id: str) -> list:
+        """列应用的所有流程 — GET /xdap-app/process/query/processList?appId={id}.
+
+        2026-05-27 实测发现: apaas 这个 endpoint **GET** (不是 POST), 用 query string
+        传 appId. 返完整 process 对象数组, 含 processName / processCode / id /
+        formId / menuId / nodes / edges. 4 个 trial app 都验过.
+
+        其他流程相关 URL 全 404 (process/list / process/queryByAppId 都不存在),
+        只有这个 query/processList 工作.
+        """
+        url = f"{self.base_url}/xdap-app/process/query/processList"
+        params = {"appId": app_id}
+        _log_request("GET", url, params=params)
+        start = time.time()
+        async with httpx.AsyncClient(verify=False, timeout=APAAS_HTTP_TIMEOUT) as client:
+            response = await client.get(url, headers=self._get_headers(app_id), params=params)
+            elapsed_ms = (time.time() - start) * 1000
+            response.raise_for_status()
+            data = response.json()
+            _log_response(url, response.status_code, data, elapsed_ms, method="GET")
+            if data.get("code") != "ok":
+                raise Exception(data.get("message", "list_processes 失败"))
+            processes = data.get("data") or []
+            logger.info(f"查询到 {len(processes)} 个流程")
+            return processes
+
     async def save_process_config(self, app_id: str, payload: dict) -> dict:
         """用平台内部 save API 创建/保存流程（需要完整的 nodes + edges + bpmn）"""
         url = f"{self.base_url}/xdap-app/process/save/processConfig"

@@ -1433,6 +1433,63 @@ async def deploy_application(
     }
 
 
+# 2026-05-27: 列应用全部流程 — apaas GET /xdap-app/process/query/processList?appId=
+# 之前 section_content.py 调这个 tool 但 tool 不存在 → fallback 走 menus 过滤 PROCESS,
+# 但 trial app 流程不是 PROCESS 类型菜单 → SPEC 章节"业务流程"始终空. 用户实测 4 个
+# 流程一直在 apaas 里. 实测 endpoint 工作后补这个工具.
+@mcp.tool()
+async def list_apaas_app_processes(env_id: int, apaas_app_id: str) -> dict:
+    """列 apaas 应用的全部流程 (含 form/menu 绑定 + nodes + edges 完整 schema).
+
+    走 apaas GET /xdap-app/process/query/processList?appId={id} (2026-05-27 实证).
+    返每条流程对象保留:
+      id, processName, processCode, formId, menuId, nodes_count, edges_count.
+    nodes/edges 完整 schema 留给 get_apaas_process_detail 再拉, 这里 list 只给摘要.
+    """
+    from app.coding.apaas_tools import _get_apaas_client
+    from app.database import AsyncSessionLocal
+
+    if not apaas_app_id.strip():
+        return {"ok": False, "error_code": "INVALID_PARAMS", "message": "apaas_app_id 必填"}
+
+    async with AsyncSessionLocal() as db:
+        try:
+            client = await _get_apaas_client(env_id, db)
+            raw_list = await client.list_processes(apaas_app_id.strip())
+        except Exception as exc:
+            return {
+                "ok": False,
+                "error_code": "APAAS_CLIENT_ERROR",
+                "message": f"调 apaas list_processes 失败: {exc}",
+            }
+
+    processes = []
+    for p in raw_list or []:
+        if not isinstance(p, dict):
+            continue
+        nodes = p.get("nodes") or []
+        edges = p.get("edges") or p.get("lineList") or p.get("sequenceFlows") or []
+        processes.append({
+            "id": str(p.get("id") or ""),
+            "process_id": str(p.get("id") or ""),  # alias for downstream callers
+            "name": str(p.get("processName") or p.get("name") or ""),
+            "process_name": str(p.get("processName") or p.get("name") or ""),
+            "code": str(p.get("processCode") or ""),
+            "process_code": str(p.get("processCode") or ""),
+            "form_id": str(p.get("formId") or ""),
+            "menu_id": str(p.get("menuId") or ""),
+            "node_count": len(nodes) if isinstance(nodes, list) else 0,
+            "edge_count": len(edges) if isinstance(edges, list) else 0,
+        })
+
+    return {
+        "ok": True,
+        "apaas_app_id": apaas_app_id,
+        "processes": processes,
+        "total": len(processes),
+    }
+
+
 # design-v4 J1: 拉 apaas 平台已有流程详情 (反向, 给 ProcessDesigner 渲染 canvas)
 @mcp.tool()
 async def get_apaas_process_detail(env_id: int, apaas_app_id: str, process_id: str) -> dict:
