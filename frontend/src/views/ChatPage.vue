@@ -2576,10 +2576,14 @@ const isNativeMasterDetailSubTab = computed(() => {
   if (topTab.value === 'perm' && currentSectionTab.value === 'roles') return true
   return false
 })
+// 2026-05-27 P3: 删自动 narrow-window 触发 (window.innerWidth < 1280).
+// 用户反馈 preview 窗口 1122px 触发 legacyMode → 整套 design-v4 (actt 3 tab + mdsh
+// FormDesigner/ListDesigner/ProcessDesigner panels) hide, 退回 iframe fallback, 跟
+// 宽屏 browser 显示 完全不一样. design-v4 现已是 standard, narrow 也得跑 design-v4.
+// 留 ?legacy=1 URL 显式 fallback (debug 用), resize handler 也跟着退化为只看 ?legacy=1.
 const legacyMode = ref<boolean>((() => {
   try {
-    if (new URLSearchParams(window.location.search).get('legacy') === '1') return true
-    return window.innerWidth < 1280
+    return new URLSearchParams(window.location.search).get('legacy') === '1'
   } catch { return false }
 })())
 function onSwitchSection(section: string, tab?: string) {
@@ -2710,21 +2714,9 @@ watch(() => currentSection.value, (newSection, oldSection) => {
   if (newSection === oldSection) return
   navigateIframeForSection(newSection)
 })
-// 监听窗口 resize — 突然变窄退回 legacy 模式 (但 ?legacy=1 强制不可逆)
-const _hasLegacyQuery = (() => {
-  try { return new URLSearchParams(window.location.search).get('legacy') === '1' } catch { return false }
-})()
-let _resizeHandler: (() => void) | null = null
-if (typeof window !== 'undefined') {
-  _resizeHandler = () => {
-    if (_hasLegacyQuery) return
-    legacyMode.value = window.innerWidth < 1280
-  }
-  window.addEventListener('resize', _resizeHandler)
-}
-onBeforeUnmount(() => {
-  if (_resizeHandler) window.removeEventListener('resize', _resizeHandler)
-})
+// 2026-05-27 P3: 删 resize → legacyMode 自动 toggle. design-v4 是 standard, 任何
+// 宽度都跑 design-v4. legacyMode 只剩 ?legacy=1 一种显式开法 (debug). resize 不再
+// 改 legacyMode.value, handler 完全摘掉.
 
 // 2026-05-26: sidebar 引用 — AI 完成调整后联动 reload, 让新建菜单立刻显
 const apaasMenuSidebarRef = ref<{ reload: () => Promise<void> } | null>(null)
