@@ -209,15 +209,20 @@ let _msgIdSeq = 1
 //   specChatRef.value?.focusInput?.()
 // 行为: textarea focus + scroll 自身到视口可见区 (右栏滚动 + 桌面端整页滚动兜底).
 function focusInput() {
-  const el = inputRef.value
-  if (!el) return
-  try {
-    el.focus({ preventScroll: false })
-    el.scrollIntoView({ behavior: 'smooth', block: 'nearest' })
-  } catch {
-    // 老浏览器兜底
-    try { el.focus() } catch { /* ignore */ }
-  }
+  // 2026-05-27 fix: 用 setTimeout 而不是同步 focus —
+  // 父组件 onEditChapter 改 activeChapter → SpecChatPanel 内部 watch 清 messages
+  // → DOM re-render. 同步 focus 在 re-render 前调, 浏览器再把 focus 还回 caller btn.
+  // 80ms 让 reactivity + smooth scroll 都完成后再 focus.
+  setTimeout(() => {
+    const el = inputRef.value
+    if (!el) return
+    try {
+      el.focus({ preventScroll: false })
+      el.scrollIntoView({ behavior: 'smooth', block: 'nearest' })
+    } catch {
+      try { el.focus() } catch { /* ignore */ }
+    }
+  }, 80)
 }
 defineExpose({ focusInput })
 

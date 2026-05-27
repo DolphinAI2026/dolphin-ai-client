@@ -269,13 +269,14 @@ async def _apply_patch_to_section(
     # 读现有 (可能不存在)
     existing = await read_spec_section(db, app_id, section_type, section_key)
     before_spec: dict = {}
-    if existing.get("ok"):
+    # 2026-05-27 fix: read_spec_section 总是返 ok=True, 用 exists 判 row 是否存在
+    row_exists = bool(existing.get("exists"))
+    if row_exists:
         before_spec = existing.get("section", {}).get("spec_json") or {}
         if not isinstance(before_spec, dict):
             before_spec = {}
 
     # 没有 → 直接新建一行 (绕开 NOT_FOUND)
-    row_exists = existing.get("ok")
     if not row_exists:
         # 新建草稿: spec_json = patch 自身, base_version=0 表示没从 apaas init 过
         new_row = SpecSection(
