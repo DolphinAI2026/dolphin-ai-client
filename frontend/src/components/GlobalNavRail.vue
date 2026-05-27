@@ -191,7 +191,7 @@ const primaryNavItems = [
   { key: 'docs', label: '文档', path: '/docs' },
   { key: 'reports', label: '报表', path: '/reports' },
   { key: 'models', label: '模型', path: '/models' },
-  { key: 'manage', label: '管理', path: '/manage' },
+  { key: 'manage', label: '管理', path: '/platform-admin' },
 ]
 
 const activeKey = computed(() => {
@@ -203,7 +203,7 @@ const activeKey = computed(() => {
   if (p.startsWith('/docs')) return 'docs'
   if (p.startsWith('/reports')) return 'reports'
   if (p.startsWith('/models')) return 'models'
-  if (p.startsWith('/manage')) return 'manage'
+  if (p.startsWith('/platform-admin')) return 'manage'
   return 'home'
 })
 

@@ -258,12 +258,8 @@ const router = createRouter({
       component: () => import('@/views/stubs/ModelsView.vue'),
       meta: { requiresAuth: true, navExpanded: true }
     },
-    {
-      path: '/manage',
-      name: 'Manage',
-      component: () => import('@/views/stubs/ManageView.vue'),
-      meta: { requiresAuth: true, navExpanded: true }
-    },
+    // L1 (2026-05-27): 删 /manage stub — 跟 admin-spa (PlatformAdminEmbed /platform-admin/*)
+    // 3 sub 重叠 (用户/租户/环境). 顶部 nav "管理" 改直跳 /platform-admin.
     {
       path: '/platform-envs',
       name: 'PlatformEnvs',

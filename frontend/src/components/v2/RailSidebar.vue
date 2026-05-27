@@ -39,7 +39,7 @@ const NAV = computed<NavItem[]>(() => [
   { key: 'docs', label: '文档', icon: 'chat', path: '/docs' },
   { key: 'reports', label: '报表', icon: 'spark', path: '/reports' },
   { key: 'models', label: '模型', icon: 'store', path: '/models' },
-  { key: 'manage', label: '管理', icon: 'code', path: '/manage' },
+  { key: 'manage', label: '管理', icon: 'code', path: '/platform-admin' },
 ])
 
 const userName = computed(() => user.user?.username || '未登录')
