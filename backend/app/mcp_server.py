@@ -5059,14 +5059,17 @@ async def get_apaas_form_detail(env_id: int, apaas_app_id: str, form_id: str) ->
     if not main_model_code and models:
         main_model_code = models[0]["model_code"]
 
-    # 2026-05-27 T: 抽 listPageView (queryConditions=查询条件 + queryList=列字段) —
-    # 列表设计真实配置. apaas detailPageConfigById raw 顶层带 listPageView (跟
-    # step_executor.py:804 + generator_v2.py:917 写入路径对齐).
-    list_page_view_raw = raw.get("listPageView") or detail_page.get("listPageView") or {}
-    list_page_view = {
-        "query_conditions": list_page_view_raw.get("queryConditions") or [],
-        "query_list": list_page_view_raw.get("queryList") or [],
-    }
+    # 2026-05-27 T → T2: 实测 detailPageConfigById 和 v2/form/query/formContext
+    # 都**不返 listPageView** (query_conditions/query_list). apaas 上配的查询条件
+    # + 列字段, 它们不在 simpleFormConfig 也不在 detailPageConfigById 响应里.
+    #
+    # 推测: list view 配置走独立 API (跟 query_form_views 拿 tabId 配套), 形如:
+    #   /xdap-app/formConfig/query/listPageViewById?tabId=...
+    # 但具体 endpoint 名 + 字段名待 apaas 端实测 / 抓包.
+    #
+    # P5 TODO: 拿到真实 endpoint 后填进来. 当前先返空, 前端 isListConfigured=false
+    # 显友好空态 "apaas 列表配置 API 待对接" — 比 mock 假数据诚实.
+    list_page_view = {"query_conditions": [], "query_list": []}
     return {
         "ok": True,
         "form_id": form_id,

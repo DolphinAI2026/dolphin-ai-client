@@ -156,8 +156,9 @@
             <div class="ldp-pv-empty-icon">📦</div>
             <!-- 2026-05-27 T: 区分两种空态 — list_page_view 未配 vs 已配但无数据 -->
             <template v-if="isListConfigured === false">
-              <p>该列表暂未配置查询条件和显示字段</p>
-              <p class="hint">用对话改"加查询条件 X / 列字段 Y", 或切到编辑模式去 apaas 原生编辑器配置</p>
+              <p>列表预览待对接 apaas 列表配置 API</p>
+              <p class="hint">apaas 上配的查询条件 / 列字段当前拉不到 (P5: 探明独立 API 后补),
+                              切到"编辑"模式可直接在 apaas 原生编辑器查看 / 修改</p>
             </template>
             <template v-else>
               <p v-if="!visibleColumns.length">该列表尚未配置可显字段</p>
