@@ -2236,6 +2236,39 @@ class APaaSClient:
                 return result
             raise Exception(data.get("message", "查询详情页配置失败"))
 
+    async def query_list_page_config(self, app_id: str, form_id: str) -> dict:
+        """查询表单列表设计配置 (列表 tab 设的查询条件 + 列字段).
+
+        2026-05-27 T2 实测: detailPageConfigById / formContext 都**不返**
+        listPageView 数据 — 列设计配置走独立 endpoint:
+            POST /xdap-app/formConfig/query/listPageConfigById?timestamp=...
+            body: { formId, appId }
+
+        返:
+          - listPageViews[]: 每个 view 含:
+              tabId, tabName, formId,
+              queryConditions[]: { uuid, boCode, label, componentType, filterType }
+              queryLists[]: { uuid, label, componentType, displayFlag, alignmentType }
+          - defaultQueryLists[]: 默认列字段池
+        """
+        ts = self._get_timestamp()
+        url = (
+            f"{self.base_url}/xdap-app/formConfig/query/"
+            f"listPageConfigById?timestamp={ts}"
+        )
+        payload = {"formId": form_id, "appId": app_id}
+        _log_request("POST", url, payload)
+        start = time.time()
+        async with httpx.AsyncClient(verify=False, timeout=APAAS_HTTP_TIMEOUT) as client:
+            response = await client.post(url, headers=self._get_headers(app_id), json=payload)
+            elapsed_ms = (time.time() - start) * 1000
+            response.raise_for_status()
+            data = response.json()
+            _log_response(url, response.status_code, data, elapsed_ms, method="POST")
+            if data.get("code") == "ok":
+                return data.get("data", {})
+            raise Exception(data.get("message", "查询列表设计配置失败"))
+
     async def save_form_config(self, app_id: str, form_config: dict) -> dict:
         """保存表单配置（全量更新）"""
         url = f"{self.base_url}/xdap-app/formConfig/save/formConfigDetail"

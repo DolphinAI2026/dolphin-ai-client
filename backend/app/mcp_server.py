@@ -5059,17 +5059,28 @@ async def get_apaas_form_detail(env_id: int, apaas_app_id: str, form_id: str) ->
     if not main_model_code and models:
         main_model_code = models[0]["model_code"]
 
-    # 2026-05-27 T → T2: 实测 detailPageConfigById 和 v2/form/query/formContext
-    # 都**不返 listPageView** (query_conditions/query_list). apaas 上配的查询条件
-    # + 列字段, 它们不在 simpleFormConfig 也不在 detailPageConfigById 响应里.
-    #
-    # 推测: list view 配置走独立 API (跟 query_form_views 拿 tabId 配套), 形如:
-    #   /xdap-app/formConfig/query/listPageViewById?tabId=...
-    # 但具体 endpoint 名 + 字段名待 apaas 端实测 / 抓包.
-    #
-    # P5 TODO: 拿到真实 endpoint 后填进来. 当前先返空, 前端 isListConfigured=false
-    # 显友好空态 "apaas 列表配置 API 待对接" — 比 mock 假数据诚实.
+    # 2026-05-27 T → T3: 通过 iframe 抓包 + Python 直调验证, 列表设计真 API:
+    #   POST /xdap-app/formConfig/query/listPageConfigById, body {formId, appId}
+    # 返 data.listPageViews[] (一个 view 一个 tab), 每 view 含:
+    #   - queryConditions[]: 查询条件 ({uuid, boCode, label, componentType, filterType})
+    #   - queryLists[]: 列字段 ({uuid, label, componentType, displayFlag, ...})
+    # 默认抽第一个 view (主 view).
     list_page_view = {"query_conditions": [], "query_list": []}
+    try:
+        list_cfg_ok, list_cfg_raw = await _with_client(
+            env_id, "查列表设计配置 (listPageConfigById)",
+            lambda c: c.query_list_page_config(apaas_app_id.strip(), form_id.strip()),
+        )
+        if list_cfg_ok and isinstance(list_cfg_raw, dict):
+            views = list_cfg_raw.get("listPageViews") or []
+            if views and isinstance(views[0], dict):
+                lpv = views[0]
+                list_page_view = {
+                    "query_conditions": lpv.get("queryConditions") or [],
+                    "query_list": lpv.get("queryLists") or [],
+                }
+    except Exception as exc:
+        logger.warning(f"query_list_page_config 失败 form_id={form_id}: {exc}")
     return {
         "ok": True,
         "form_id": form_id,

@@ -585,11 +585,23 @@ async function loadComponentsAndFields(): Promise<void> {
         const queryList: any[] = Array.isArray(lpv.query_list) ? lpv.query_list : []
         isListConfigured.value = (queryConditions.length + queryList.length) > 0
 
-        // 查询条件 — 严格按 apaas 配置 (没配就空)
+        // T3: apaas listPageConfigById 实测 — 引用字段用 `uuid` (跟 components
+        // 的 c.id 对齐); 老字段名 `fieldComponentUuid` 是其他 view 用的, 留兼容.
+        // boCode 用 `~` 分隔模型.字段 (e.g. "book_manage~book_title").
+        const resolveCol = (q: any): PreviewColumn | null => {
+          const candidates = [q.uuid, q.fieldComponentUuid, q.componentUuid, q.boCode, q.fieldCode, q.fieldComponentCode]
+          for (const ref of candidates) {
+            if (!ref) continue
+            const col = poolByCode.get(String(ref))
+            if (col) return col
+          }
+          return null
+        }
+
+        // 查询条件 — 严格按 apaas 配置
         filterFields.value = queryConditions
           .map((q: any) => {
-            const ref = String(q.fieldComponentUuid || q.componentUuid || q.fieldCode || q.fieldComponentCode || '')
-            const col = poolByCode.get(ref)
+            const col = resolveCol(q)
             if (!col) return null
             return {
               code: col.code,
@@ -606,13 +618,10 @@ async function loadComponentsAndFields(): Promise<void> {
           if (!(f.code in filterValues)) filterValues[f.code] = ''
         }
 
-        // 列表字段 — 严格按 apaas 配置
+        // 列表字段 — 严格按 apaas 配置 + displayFlag=false 过滤
         previewColumns.value = queryList
-          .map((q: any) => {
-            const ref = String(q.fieldComponentUuid || q.componentUuid || q.fieldCode || q.fieldComponentCode || '')
-            const col = poolByCode.get(ref)
-            return col || null
-          })
+          .filter((q: any) => q.displayFlag !== false)
+          .map((q: any) => resolveCol(q))
           .filter((x): x is PreviewColumn => x !== null)
 
         // 注: previewColumns 现可能是空, 模板靠 visibleColumns / isListConfigured 渲染空态
