@@ -68,12 +68,18 @@ const props = withDefaults(
     formId?: string | null
     menuType?: string
     mode?: 'config' | 'runtime'
+    /** 2026-05-27 S: 决定 iframe 内打开哪个 sub-designer (form/list/process/page).
+     *  form = 表单设计 (默认), list = 列表设计, process = 流程设计, page = 页面设置.
+     *  当前 URL 里追加 &designer_sub=X 让 backend / apaas 知道 (P5: apaas 真支持后落地).
+     */
+    designerSub?: 'form' | 'list' | 'process' | 'page'
   }>(),
   {
     menuId: '',
     formId: null,
     menuType: '',
     mode: 'config',
+    designerSub: 'form',
   },
 )
 
@@ -90,11 +96,14 @@ const iframeUrl = computed(() => {
     formId: props.formId || undefined,
     menuType: props.menuType || undefined,
   })
-  if (props.mode === 'runtime') {
-    const sep = base.includes('?') ? '&' : '?'
-    return `${base}${sep}redirect_kind=runtime`
-  }
-  return base
+  const params: string[] = []
+  if (props.mode === 'runtime') params.push('redirect_kind=runtime')
+  // 2026-05-27 S: 传 sub-designer 提示给 backend / apaas (P5: apaas 接通 designer_sub
+  // query 落地后自动跳对应 tab; 当前 apaas 可能忽略, iframe 显默认表单设计).
+  if (props.designerSub && props.designerSub !== 'form') params.push(`designer_sub=${props.designerSub}`)
+  if (params.length === 0) return base
+  const sep = base.includes('?') ? '&' : '?'
+  return `${base}${sep}${params.join('&')}`
 })
 
 function reload() {
@@ -105,8 +114,31 @@ function reload() {
 
 function onIframeLoad() {
   loading.value = false
-  // proxy 错误页会带 X-Proxy-Error header / data-proxy-error body, 但 iframe 跨 SSO
-  // 注入页面这层我们读不到. 用户实际遇到错误时显平台错误 HTML.
+  // 2026-05-27 S: 注入 CSS 隐藏 apaas form designer 内部顶栏 (← 图书管理 / Form Design
+  // tabs / Save / Close) — 我们外层 mdsh-subnav 已有这些信息 + 操作, 内部 chrome 冗余.
+  // best-effort: 找 common 选择器, 找不到默认 css 不生效, iframe 正常显.
+  // P5: 实测 apaas DOM 类名 (用户报告才能精确), 当前用 broad pattern guess.
+  try {
+    const win = iframeRef.value?.contentWindow
+    const doc = win?.document
+    if (doc && !doc.querySelector('#aei-injected-style')) {
+      const style = doc.createElement('style')
+      style.id = 'aei-injected-style'
+      style.textContent = `
+        /* apaas 表单/列表设计器内部顶栏 — 我们外层已显这些 */
+        .designer-header, .form-designer-header, .data-model-fn-config-header,
+        .fn-config-header, .editor-top-bar, .designer-top-bar,
+        .design-tabs, .designer-tabs, .editor-tabs,
+        .app-fn-config-header, .form-editor-header,
+        [class*="designerHeader"], [class*="DesignerHeader"] {
+          display: none !important;
+        }
+      `
+      ;(doc.head || doc.body).appendChild(style)
+    }
+  } catch {
+    /* cross-origin / 时序问题忽略 — best effort */
+  }
 }
 
 function onIframeError() {
@@ -117,7 +149,7 @@ function onIframeError() {
 // 切 menu / form / mode 时自动 re-mount, 强制 fresh load (避免 iframe 内部 SPA 缓存
 // 老菜单的状态)
 watch(
-  () => [props.appId, props.menuId, props.formId, props.menuType, props.mode],
+  () => [props.appId, props.menuId, props.formId, props.menuType, props.mode, props.designerSub],
   () => {
     reload()
   },

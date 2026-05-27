@@ -44,13 +44,11 @@
 
     <!-- preview / edit shell -->
     <div v-else class="fbp-shell">
-      <!-- ─── header (预览 + 编辑共用) ───────────────────────────────── -->
+      <!-- ─── header (预览 + 编辑共用) — 2026-05-27 S: 删 title/form_id 重复, 上面 mdsh-subnav 已有 -->
       <header class="fbp-canvas-head">
         <div class="fbp-canvas-meta">
-          <h1 class="fbp-canvas-title">{{ menuName || '表单设计' }}</h1>
           <p class="fbp-canvas-sub">
             <span v-if="modelCode" class="fbp-code mono">{{ modelCode }}</span>
-            <span v-if="formId" class="fbp-canvas-stat">表单 <span class="mono">{{ formId }}</span></span>
             <span v-if="fields.length" class="fbp-canvas-stat">{{ fields.length }} 字段</span>
             <span v-if="fields.filter(f => f.required).length" class="fbp-canvas-stat">
               {{ fields.filter(f => f.required).length }} 必填
@@ -101,13 +99,7 @@
           <span>业务视角预览 — 看到的就是最终用户填表样子, 改字段请用配置助手对话, 或切到"编辑"模式进 apaas 原生编辑器手动调.</span>
         </div>
         <div class="fbp-form-preview">
-          <div class="fbp-form-preview-head">
-            <h2 class="fbp-form-preview-title">{{ menuName || '表单' }}</h2>
-            <p class="fbp-form-preview-sub">
-              <span v-if="modelCode" class="fbp-code mono">{{ modelCode }}</span>
-              <span>{{ fields.length }} 字段</span>
-            </p>
-          </div>
+          <!-- 2026-05-27 S: 删 preview-head 内部 title/modelCode/字段数 重复 (header 已有) -->
           <div v-if="fields.length === 0" class="fbp-form-preview-empty">
             <div class="fbp-canvas-empty-icon">🧩</div>
             <p>该表单暂无字段</p>

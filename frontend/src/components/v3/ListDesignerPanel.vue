@@ -97,9 +97,8 @@
           <span v-if="dataSource === 'mock'" class="ldp-pv-mock-tag" title="未拉到真实业务数据, 显示 mock 示例">mock 数据</span>
         </div>
 
-        <!-- 标题区 -->
+        <!-- 标题区 — 2026-05-27 S: 删 title 重复 (mdsh-subnav 已显), 只留 stats -->
         <div class="ldp-pv-title-row">
-          <h1 class="ldp-pv-title">{{ menuName || '业务列表' }}</h1>
           <p class="ldp-pv-sub">
             <span v-if="modelCode" class="ldp-code">{{ modelCode }}</span>
             <span v-if="visibleColumns.length" class="ldp-stat">{{ visibleColumns.length }} 列</span>
@@ -242,6 +241,7 @@
         :form-id="props.formId"
         menu-type="MODEL"
         mode="config"
+        designer-sub="list"
       />
     </template>
   </section>
