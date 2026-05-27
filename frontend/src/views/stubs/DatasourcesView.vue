@@ -32,7 +32,15 @@
         </p>
       </div>
       <div class="ds-head-actions">
-        <button class="ds-btn ds-btn-ghost" disabled title="P5 接入 — 通用新增入口">
+        <button
+          class="ds-btn ds-btn-ghost"
+          title="用 AI 直接问数据 — 拖入数据源, 让 AI 跑 SQL / 生成报表"
+          @click="goQuickDb"
+        >
+          <span class="ds-btn-icon">✨</span>
+          DB 问数 (AI)
+        </button>
+        <button class="ds-btn ds-btn-primary" @click="goManageDb">
           <span class="ds-btn-icon">+</span>
           新增数据源
         </button>
@@ -259,6 +267,10 @@ function dbStatusClass(c: DbConnection): string {
 function dbStatusLabel(c: DbConnection): string {
   if (!c.last_tested_at) return '未验证'
   return c.status === 'active' ? '已连接' : '断开'
+}
+
+function goQuickDb() {
+  router.push('/quick-db')
 }
 
 function goManageDb() {

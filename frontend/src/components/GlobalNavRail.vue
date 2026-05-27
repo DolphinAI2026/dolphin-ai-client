@@ -187,10 +187,6 @@ const primaryNavItems = [
   { key: 'home', label: '智能搭建', path: '/' },
   { key: 'coding', label: '智能开发', path: '/coding' },
   { key: 'datasources', label: '数据源', path: '/datasources' },
-  { key: 'apis', label: '接口', path: '/apis' },
-  { key: 'docs', label: '文档', path: '/docs' },
-  { key: 'reports', label: '报表', path: '/reports' },
-  { key: 'models', label: '模型', path: '/models' },
   { key: 'manage', label: '管理', path: '/platform-admin' },
 ]
 
@@ -199,10 +195,6 @@ const activeKey = computed(() => {
   if (p === '/' || p.startsWith('/apps')) return 'home'
   if (p.startsWith('/coding')) return 'coding'
   if (p.startsWith('/datasources')) return 'datasources'
-  if (p.startsWith('/apis')) return 'apis'
-  if (p.startsWith('/docs')) return 'docs'
-  if (p.startsWith('/reports')) return 'reports'
-  if (p.startsWith('/models')) return 'models'
   if (p.startsWith('/platform-admin')) return 'manage'
   return 'home'
 })

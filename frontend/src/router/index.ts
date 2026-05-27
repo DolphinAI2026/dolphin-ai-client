@@ -234,32 +234,9 @@ const router = createRouter({
       component: () => import('@/views/stubs/DatasourcesView.vue'),
       meta: { requiresAuth: true, navExpanded: true }
     },
-    {
-      path: '/apis',
-      name: 'Apis',
-      component: () => import('@/views/stubs/ApisView.vue'),
-      meta: { requiresAuth: true, navExpanded: true }
-    },
-    {
-      path: '/docs',
-      name: 'Docs',
-      component: () => import('@/views/stubs/DocsView.vue'),
-      meta: { requiresAuth: true, navExpanded: true }
-    },
-    {
-      path: '/reports',
-      name: 'Reports',
-      component: () => import('@/views/stubs/ReportsView.vue'),
-      meta: { requiresAuth: true, navExpanded: true }
-    },
-    {
-      path: '/models',
-      name: 'Models',
-      component: () => import('@/views/stubs/ModelsView.vue'),
-      meta: { requiresAuth: true, navExpanded: true }
-    },
-    // L1 (2026-05-27): 删 /manage stub — 跟 admin-spa (PlatformAdminEmbed /platform-admin/*)
-    // 3 sub 重叠 (用户/租户/环境). 顶部 nav "管理" 改直跳 /platform-admin.
+    // M1 (2026-05-27): 删 4 stub 路由 (/apis /docs /reports /models) — 跟产品定位不符,
+    // ai-builder 核心是"对话驱动应用搭建", 这 4 个顶 nav 没业务需求.
+    // L1: 删 /manage stub — admin-spa 已是平台管理完整入口. nav 管理直跳 /platform-admin.
     {
       path: '/platform-envs',
       name: 'PlatformEnvs',
