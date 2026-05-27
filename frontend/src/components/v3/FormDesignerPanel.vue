@@ -37,10 +37,10 @@
       <button class="fbp-btn fbp-btn-ghost" @click="reload">重试</button>
     </div>
 
-    <!-- 3 列 builder -->
-    <div v-else class="fbp-3col">
+    <!-- 3 列 builder (preview mode 只显中央 canvas, edit mode 显 3 列) -->
+    <div v-else class="fbp-3col" :class="{ 'preview-mode': viewMode === 'preview' }">
       <!-- ─── 左: 组件库 (2 tab: 数据模型 / 业务组件) ─────── -->
-      <aside class="fbp-lib" aria-label="组件库">
+      <aside v-show="viewMode === 'edit'" class="fbp-lib" aria-label="组件库">
         <div class="fbp-lib-tabs" role="tablist">
           <button
             class="fbp-lib-tab"
@@ -216,7 +216,35 @@
             </p>
           </div>
           <div class="fbp-canvas-actions">
-            <button class="fbp-btn fbp-btn-ghost" @click="showAiHelper = !showAiHelper">
+            <!-- O2-Form: view/edit mode segmented toggle (default preview, 跟产品"业务视角"对齐) -->
+            <div class="fbp-mode-toggle" role="group" aria-label="切换视图模式">
+              <button
+                class="fbp-mode-btn"
+                :class="{ active: viewMode === 'preview' }"
+                title="业务视角 — 看真表单"
+                @click="viewMode = 'preview'"
+              >
+                <span aria-hidden="true">👁</span> 预览
+              </button>
+              <button
+                class="fbp-mode-btn"
+                :class="{ active: viewMode === 'edit' }"
+                title="配置视角 — 字段卡片 + 拖排"
+                @click="viewMode = 'edit'"
+              >
+                <span aria-hidden="true">✏️</span> 编辑
+              </button>
+            </div>
+            <!-- preview mode 显"用对话改"CTA, edit mode 显原 AI 助手 -->
+            <button
+              v-if="viewMode === 'preview'"
+              class="fbp-btn fbp-btn-ghost"
+              title="改字段请用配置助手对话, 比如 '把 ISBN 改成必填'"
+              @click="onOpenConfigAssistant"
+            >
+              <span class="fbp-btn-icon">✨</span> 用对话改
+            </button>
+            <button v-else class="fbp-btn fbp-btn-ghost" @click="showAiHelper = !showAiHelper">
               <span class="fbp-btn-icon">✨</span> AI 助手
             </button>
             <button
@@ -233,6 +261,12 @@
           </div>
         </header>
 
+        <!-- O2-Form: preview mode banner — 提示业务视角 -->
+        <div v-if="viewMode === 'preview'" class="fbp-preview-banner">
+          <span class="fbp-preview-banner-icon" aria-hidden="true">✨</span>
+          <span>业务视角预览 — 看到的就是最终用户填表样子, 改字段请用配置助手对话</span>
+        </div>
+
         <!-- 保存进度提示 (saving 时显) -->
         <div v-if="saving && saveProgress" class="fbp-save-progress">
           <div class="fbp-spinner fbp-save-progress-spin" />
@@ -248,8 +282,8 @@
           </div>
         </div>
 
-        <!-- canvas toolbar (跟 apaas 原生一致: 查看业务对象 / PC-Mobile / 表单设置) -->
-        <div class="fbp-canvas-toolbar">
+        <!-- canvas toolbar (跟 apaas 原生一致: 查看业务对象 / PC-Mobile / 表单设置) — 仅 edit mode -->
+        <div v-if="viewMode === 'edit'" class="fbp-canvas-toolbar">
           <button
             class="fbp-toolbar-btn fbp-toolbar-btn-outline"
             disabled
@@ -290,8 +324,56 @@
           </button>
         </div>
 
-        <div class="fbp-canvas-body">
+        <div class="fbp-canvas-body" :class="{ 'fbp-canvas-body-preview': viewMode === 'preview' }">
+          <!-- ─── O2-Form: preview mode 真业务表单 ───────────────────── -->
+          <div v-if="viewMode === 'preview'" class="fbp-form-preview">
+            <div class="fbp-form-preview-head">
+              <h2 class="fbp-form-preview-title">{{ menuName || '表单' }}</h2>
+              <p class="fbp-form-preview-sub">
+                <span v-if="modelCode" class="fbp-code mono">{{ modelCode }}</span>
+                <span>{{ fields.length }} 字段</span>
+              </p>
+            </div>
+            <div v-if="fields.length === 0" class="fbp-form-preview-empty">
+              <div class="fbp-canvas-empty-icon">🧩</div>
+              <p>该表单暂无字段</p>
+              <p class="hint">切到"编辑"模式从组件库添加, 或用配置助手对话生成</p>
+            </div>
+            <form v-else class="fbp-form-preview-grid" @submit.prevent="onPreviewSubmit">
+              <div
+                v-for="f in fields"
+                :key="f.id"
+                class="fbp-form-row"
+                :class="{ 'fbp-form-row-full': isFullWidthWidget(f.type) }"
+                @mouseenter="hoveredFieldId = f.id"
+                @mouseleave="hoveredFieldId = ''"
+              >
+                <label class="fbp-form-label">
+                  {{ f.name || '未命名字段' }}
+                  <span v-if="f.required" class="fbp-form-req">*</span>
+                  <button
+                    v-if="hoveredFieldId === f.id"
+                    type="button"
+                    class="fbp-form-edit-hint"
+                    title="改字段请用配置助手对话"
+                    @click="onInlineEditHint(f)"
+                  >改这个字段 →</button>
+                </label>
+                <FormPreviewInput :field="f" :model-value="formValues[f.code]" @update:model-value="(v: any) => formValues[f.code] = v" />
+                <p v-if="f.description" class="fbp-form-desc">{{ f.description }}</p>
+              </div>
+              <div class="fbp-form-actions">
+                <button type="button" class="fbp-btn fbp-btn-ghost" @click="onPreviewCancel">取消</button>
+                <button type="submit" class="fbp-btn fbp-btn-primary">
+                  <span aria-hidden="true">✓</span> 提交申请
+                </button>
+              </div>
+            </form>
+          </div>
+
+          <!-- ─── edit mode: 原 builder 卡片 list (G1/F3 真存追踪) ────── -->
           <draggable
+            v-else
             v-model="fields"
             item-key="id"
             :group="{ name: 'form-fields', pull: false, put: true }"
@@ -370,7 +452,7 @@
             </template>
           </draggable>
 
-          <div class="fbp-canvas-drop">
+          <div v-if="viewMode === 'edit'" class="fbp-canvas-drop">
             <span class="fbp-canvas-drop-icon">+</span>
             <span>从左侧组件库点击或拖入字段 · 或</span>
             <button class="fbp-link-btn" @click="showAiHelper = true">让 AI 添加</button>
@@ -405,8 +487,8 @@
         </transition>
       </main>
 
-      <!-- ─── 右: 字段属性面板 ────────────────────────────── -->
-      <aside class="fbp-props" aria-label="字段属性">
+      <!-- ─── 右: 字段属性面板 (preview mode 隐藏) ────────────── -->
+      <aside v-show="viewMode === 'edit'" class="fbp-props" aria-label="字段属性">
         <div v-if="!selectedField" class="fbp-props-empty">
           <div class="fbp-props-empty-icon">👈</div>
           <p>选中一个字段查看属性</p>
@@ -1080,6 +1162,142 @@ const FieldPreview = {
 }
 
 /* ────────────────────────────────────────────────────────────────
+   O2-Form: FormPreviewInput — preview mode 真业务表单 widget
+   字段以真表单形式渲染 (input/select/date 等), 用户可填. 不存数据.
+   ──────────────────────────────────────────────────────────────── */
+
+const FormPreviewInput = {
+  props: {
+    field: { type: Object as PropType<FormField>, required: true },
+    modelValue: { type: null as any, default: undefined },
+  },
+  emits: ['update:modelValue'],
+  setup(props: { field: FormField; modelValue: any }, { emit }: { emit: (e: 'update:modelValue', v: any) => void }) {
+    return () => {
+      const f = props.field
+      const v = props.modelValue
+      const ph = f.placeholder || `请输入${f.name || ''}`
+      const cls = 'fbp-fp-input'
+      const onInput = (e: Event) => emit('update:modelValue', (e.target as HTMLInputElement).value)
+      const opts = f.options || []
+      switch (f.type) {
+        case 'textarea':
+        case 'richtext':
+          return h('textarea', { class: cls, placeholder: ph, rows: 3, value: v ?? '', onInput })
+        case 'number':
+        case 'money':
+        case 'rating':
+        case 'slider':
+          return h('input', { class: cls, type: 'number', placeholder: ph, value: v ?? '', onInput })
+        case 'switch':
+          return h('label', { class: 'fbp-fp-switch', 'data-on': v ? 'true' : 'false' }, [
+            h('input', {
+              type: 'checkbox',
+              checked: !!v,
+              onChange: (e: Event) => emit('update:modelValue', (e.target as HTMLInputElement).checked),
+            }),
+            h('span', { class: 'fbp-fp-switch-track' }, [h('span', { class: 'fbp-fp-switch-knob' })]),
+          ])
+        case 'select':
+        case 'dict':
+        case 'select_single':
+          return h('select', { class: cls, value: v ?? '', onChange: (e: Event) => emit('update:modelValue', (e.target as HTMLSelectElement).value) }, [
+            h('option', { value: '' }, ph || '请选择…'),
+            ...opts.map(o => h('option', { value: o.code }, o.name || o.code)),
+          ])
+        case 'select_multi':
+        case 'multi_select':
+        case 'tag':
+          return h('select', {
+            class: cls,
+            multiple: true,
+            size: Math.min(4, Math.max(2, opts.length || 2)),
+            onChange: (e: Event) => emit('update:modelValue', Array.from((e.target as HTMLSelectElement).selectedOptions).map(o => o.value)),
+          }, opts.length === 0
+            ? [h('option', { disabled: true }, '无选项 — 请用配置助手配置')]
+            : opts.map(o => h('option', { value: o.code }, o.name || o.code)))
+        case 'radio':
+          return h('div', { class: 'fbp-fp-radio-group' }, opts.length === 0
+            ? [h('span', { class: 'fbp-fp-empty-hint' }, '无选项 — 请用配置助手配置')]
+            : opts.map(o => h('label', { class: 'fbp-fp-radio-item' }, [
+                h('input', { type: 'radio', name: f.code, value: o.code, checked: v === o.code, onChange: () => emit('update:modelValue', o.code) }),
+                h('span', null, o.name || o.code),
+              ])))
+        case 'date':
+          return h('input', { class: cls, type: 'date', value: v ?? '', onInput })
+        case 'time':
+          return h('input', { class: cls, type: 'time', value: v ?? '', onInput })
+        case 'datetime':
+          return h('input', { class: cls, type: 'datetime-local', value: v ?? '', onInput })
+        case 'daterange':
+          return h('div', { class: 'fbp-fp-range' }, [
+            h('input', { class: cls, type: 'date' }),
+            h('span', { class: 'fbp-fp-range-sep' }, '→'),
+            h('input', { class: cls, type: 'date' }),
+          ])
+        case 'month':
+          return h('input', { class: cls, type: 'month', value: v ?? '', onInput })
+        case 'user':
+        case 'dept':
+        case 'role':
+          return h('div', { class: 'fbp-fp-pick' }, [
+            h('span', { class: 'fbp-fp-pick-icon' }, f.type === 'user' ? '👤' : f.type === 'dept' ? '🏢' : '🛡'),
+            h('input', { class: cls, type: 'text', placeholder: ph, value: v ?? '', onInput, style: 'border:none;background:transparent;padding:0;flex:1;' }),
+          ])
+        case 'image':
+        case 'file':
+          return h('label', { class: 'fbp-fp-upload' }, [
+            h('span', { class: 'fbp-fp-upload-icon' }, f.type === 'image' ? '🖼' : '📎'),
+            h('span', { class: 'fbp-fp-upload-text' }, f.type === 'image' ? '点击上传图片' : '点击上传文件'),
+            h('input', { type: 'file', style: 'display:none' }),
+          ])
+        case 'phone':
+          return h('input', { class: cls, type: 'tel', placeholder: ph || '请输入手机号', value: v ?? '', onInput })
+        case 'email':
+          return h('input', { class: cls, type: 'email', placeholder: ph || '请输入邮箱地址', value: v ?? '', onInput })
+        case 'idcard':
+          return h('input', { class: cls, type: 'text', placeholder: ph || '请输入证件号', value: v ?? '', onInput })
+        case 'region':
+          return h('input', { class: cls, type: 'text', placeholder: ph || '请选择省/市/区', value: v ?? '', onInput })
+        case 'location':
+          return h('input', { class: cls, type: 'text', placeholder: ph || '📍 点击定位', value: v ?? '', onInput })
+        case 'hyperlink':
+          return h('input', { class: cls, type: 'url', placeholder: ph || 'https://', value: v ?? '', onInput })
+        case 'serial_no':
+          return h('input', { class: cls, type: 'text', placeholder: 'SQDH-XXXX (自动生成)', value: v ?? '', readonly: true })
+        case 'static_text':
+          return h('div', { class: 'fbp-fp-static' }, f.placeholder || f.name || '')
+        case 'static_image':
+          return h('div', { class: 'fbp-fp-static-img' }, [h('span', null, '🖼 静态图片')])
+        case 'divider':
+          return h('hr', { class: 'fbp-fp-divider' })
+        case 'placeholder':
+          return h('div', { class: 'fbp-fp-placeholder' })
+        case 'collapse_layout':
+        case 'tab_layout':
+        case 'frame_layout':
+          return h('div', { class: 'fbp-fp-layout-hint' }, f.type === 'collapse_layout' ? '【折叠布局】' : f.type === 'tab_layout' ? '【分页布局】' : '【框架布局】')
+        case 'form_button':
+          return h('button', { class: 'fbp-btn fbp-btn-ghost fbp-btn-sm', type: 'button' }, f.name || '按钮')
+        case 'ref':
+        case 'ref_form':
+        case 'subtable':
+        case 'data_select':
+        case 'data_single':
+        case 'data_stat':
+        case 'cross_field':
+        case 'virtual_field':
+        case 'custom_dev':
+        case 'template_file':
+          return h('input', { class: cls, type: 'text', placeholder: ph || '关联数据 (点击选择)', value: v ?? '', onInput })
+        default:
+          return h('input', { class: cls, type: 'text', placeholder: ph, value: v ?? '', onInput })
+      }
+    }
+  },
+}
+
+/* ────────────────────────────────────────────────────────────────
    Props / state
    ──────────────────────────────────────────────────────────────── */
 
@@ -1176,6 +1394,35 @@ const selectedField = computed<FormField | undefined>(() =>
 const showAiHelper = ref(false)
 const aiPrompt = ref('')
 const propsAiPrompt = ref('')
+
+/* ────────────────────────────────────────────────────────────────
+   O2-Form: view-mode 切换 (preview 默认 / edit)
+   preview mode 隐藏左库 + 右属性, 中央显真业务表单 (像最终用户填表).
+   edit mode 显原 3 列 builder.
+   ──────────────────────────────────────────────────────────────── */
+const viewMode = ref<'preview' | 'edit'>('preview')
+const hoveredFieldId = ref<string>('')
+// preview mode 用户填表的值 (仅 local, 切表单/切 mode reset, 不存)
+const formValues = ref<Record<string, any>>({})
+
+watch(
+  () => props.formId,
+  () => { formValues.value = {} }
+)
+watch(viewMode, () => { hoveredFieldId.value = '' })
+
+function onPreviewSubmit() {
+  alert('预览模式 — 提交不会真存. 改字段请用配置助手对话, 或切到"编辑"模式手动调.')
+}
+function onPreviewCancel() {
+  formValues.value = {}
+}
+function onInlineEditHint(f: FormField) {
+  alert(`请用右下角"配置助手"浮窗对话, 如:\n\n"把字段 ${f.name || f.code} 改成 XXX"\n"把 ${f.code} 改成必填"`)
+}
+function onOpenConfigAssistant() {
+  alert('改字段请用右下角"配置助手"浮窗对话, 比如:\n\n"把 ISBN 改成必填"\n"加一个备注字段, 多行输入, 不必填"\n"删掉申请说明字段"')
+}
 
 /* ────────────────────────────────────────────────────────────────
    Computed
@@ -1735,6 +1982,337 @@ watch(() => props.appId, () => loadAllModels(), { immediate: true })
   grid-template-columns: 220px 1fr 300px;
   height: 100%;
   min-height: 0;
+}
+/* O2-Form: preview mode — 只占中央 canvas, 左库 + 右属性 v-show 隐藏 */
+.fbp-3col.preview-mode {
+  grid-template-columns: 1fr;
+}
+
+/* ─── O2-Form: view-mode segmented toggle (跟"开发/生产"同款) ─ */
+.fbp-mode-toggle {
+  display: inline-flex;
+  background: var(--surface-2);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 2px;
+  flex-shrink: 0;
+}
+.fbp-mode-btn {
+  height: 26px;
+  padding: 0 12px;
+  font-size: 12px;
+  font-weight: 500;
+  font-family: inherit;
+  background: transparent;
+  border: 0;
+  border-radius: 6px;
+  color: var(--text-3);
+  cursor: pointer;
+  transition: background 0.12s, color 0.12s;
+  white-space: nowrap;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+.fbp-mode-btn:hover { color: var(--text); }
+.fbp-mode-btn.active {
+  background: var(--surface);
+  color: var(--brand);
+  box-shadow: 0 1px 2px rgba(11, 27, 63, 0.06);
+}
+
+/* ─── O2-Form: preview mode banner ──────────────────────────── */
+.fbp-preview-banner {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 28px;
+  background: var(--brand-soft);
+  color: var(--brand);
+  font-size: 12.5px;
+  border-bottom: 1px solid var(--line);
+}
+.fbp-preview-banner-icon {
+  font-size: 14px;
+}
+
+/* ─── O2-Form: 真业务表单 (preview mode) ────────────────────── */
+.fbp-canvas-body-preview {
+  padding: 24px;
+  align-items: center;
+  background: var(--bg);
+}
+.fbp-form-preview {
+  width: 100%;
+  max-width: 800px;
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  padding: 28px 32px 24px;
+  box-shadow: var(--sh-1);
+}
+.fbp-form-preview-head {
+  margin-bottom: 20px;
+  padding-bottom: 16px;
+  border-bottom: 1px solid var(--line);
+}
+.fbp-form-preview-title {
+  margin: 0 0 6px;
+  font-size: 22px;
+  font-weight: 600;
+  color: var(--text);
+  letter-spacing: -0.2px;
+}
+.fbp-form-preview-sub {
+  margin: 0;
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  font-size: 12.5px;
+  color: var(--text-3);
+}
+.fbp-form-preview-empty {
+  padding: 56px 16px 40px;
+  text-align: center;
+  color: var(--text-3);
+}
+.fbp-form-preview-empty .hint {
+  font-size: 12.5px;
+  color: var(--text-4);
+  margin-top: 4px;
+}
+.fbp-form-preview-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 18px 24px;
+}
+.fbp-form-row {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  min-width: 0;
+  position: relative;
+}
+.fbp-form-row-full {
+  grid-column: 1 / -1;
+}
+.fbp-form-label {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 14px;
+  font-weight: 500;
+  color: var(--text);
+  line-height: 1.2;
+}
+.fbp-form-req {
+  color: var(--err);
+  font-weight: 700;
+  margin-left: 2px;
+}
+.fbp-form-edit-hint {
+  margin-left: auto;
+  background: transparent;
+  border: none;
+  color: var(--brand);
+  font-size: 11.5px;
+  font-family: inherit;
+  cursor: pointer;
+  padding: 2px 6px;
+  border-radius: 4px;
+  transition: background 0.12s;
+}
+.fbp-form-edit-hint:hover {
+  background: var(--brand-soft);
+  text-decoration: underline;
+}
+.fbp-form-desc {
+  margin: 2px 0 0;
+  font-size: 11.5px;
+  color: var(--text-4);
+}
+.fbp-form-actions {
+  grid-column: 1 / -1;
+  display: flex;
+  justify-content: flex-end;
+  gap: 10px;
+  margin-top: 10px;
+  padding-top: 18px;
+  border-top: 1px solid var(--line);
+}
+
+/* responsive — narrow viewport preview 单列 */
+@media (max-width: 720px) {
+  .fbp-form-preview-grid {
+    grid-template-columns: 1fr;
+  }
+}
+
+/* ─── FormPreviewInput :deep styles (真 input 可填) ─────────── */
+:deep(.fbp-fp-input) {
+  width: 100%;
+  height: 36px;
+  padding: 0 12px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: var(--surface);
+  color: var(--text);
+  font-size: 13.5px;
+  font-family: inherit;
+  outline: none;
+  transition: border-color 0.12s, box-shadow 0.12s;
+  box-sizing: border-box;
+}
+:deep(.fbp-fp-input::placeholder) { color: var(--text-4); }
+:deep(.fbp-fp-input:focus) {
+  border-color: var(--brand);
+  box-shadow: 0 0 0 3px var(--brand-soft);
+}
+:deep(textarea.fbp-fp-input) {
+  height: auto;
+  min-height: 76px;
+  padding: 8px 12px;
+  line-height: 1.55;
+  resize: vertical;
+}
+:deep(select.fbp-fp-input) {
+  appearance: none;
+  background-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='10' height='10' viewBox='0 0 24 24' fill='none' stroke='%23748094' stroke-width='2'><polyline points='6 9 12 15 18 9'/></svg>");
+  background-repeat: no-repeat;
+  background-position: right 10px center;
+  padding-right: 30px;
+}
+:deep(select.fbp-fp-input[multiple]) {
+  height: auto;
+  padding: 6px 8px;
+  background-image: none;
+}
+:deep(.fbp-fp-switch) {
+  display: inline-flex;
+  align-items: center;
+  cursor: pointer;
+  height: 36px;
+}
+:deep(.fbp-fp-switch input) {
+  position: absolute;
+  opacity: 0;
+  pointer-events: none;
+}
+:deep(.fbp-fp-switch-track) {
+  display: inline-flex;
+  align-items: center;
+  width: 40px;
+  height: 22px;
+  padding: 2px;
+  border-radius: 999px;
+  background: var(--line-strong);
+  transition: background 0.15s;
+}
+:deep(.fbp-fp-switch[data-on="true"] .fbp-fp-switch-track) {
+  background: var(--brand);
+  justify-content: flex-end;
+}
+:deep(.fbp-fp-switch-knob) {
+  width: 18px;
+  height: 18px;
+  background: #fff;
+  border-radius: 50%;
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.18);
+  transition: transform 0.15s;
+}
+:deep(.fbp-fp-radio-group) {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 14px;
+  padding: 7px 0;
+  font-size: 13.5px;
+  color: var(--text);
+}
+:deep(.fbp-fp-radio-item) {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  cursor: pointer;
+}
+:deep(.fbp-fp-empty-hint) {
+  color: var(--text-4);
+  font-size: 12.5px;
+  font-style: italic;
+}
+:deep(.fbp-fp-range) {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+:deep(.fbp-fp-range-sep) { color: var(--text-4); font-size: 13px; }
+:deep(.fbp-fp-pick) {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  height: 36px;
+  padding: 0 12px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: var(--surface);
+}
+:deep(.fbp-fp-pick-icon) {
+  font-size: 14px;
+  color: var(--text-3);
+}
+:deep(.fbp-fp-upload) {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  height: 36px;
+  padding: 0 14px;
+  border: 1px dashed var(--line-strong);
+  border-radius: 6px;
+  background: var(--surface-2);
+  color: var(--text-3);
+  font-size: 13px;
+  cursor: pointer;
+  transition: border-color 0.12s, color 0.12s;
+}
+:deep(.fbp-fp-upload:hover) {
+  border-color: var(--brand);
+  color: var(--brand);
+}
+:deep(.fbp-fp-static) {
+  padding: 8px 12px;
+  font-size: 13.5px;
+  color: var(--text);
+  background: var(--surface-2);
+  border-radius: 6px;
+}
+:deep(.fbp-fp-static-img) {
+  padding: 16px;
+  text-align: center;
+  font-size: 13px;
+  color: var(--text-3);
+  background: var(--surface-2);
+  border: 1px dashed var(--line-strong);
+  border-radius: 6px;
+}
+:deep(.fbp-fp-divider) {
+  border: none;
+  height: 1px;
+  background: var(--line-strong);
+  margin: 8px 0;
+}
+:deep(.fbp-fp-placeholder) {
+  height: 24px;
+  background: repeating-linear-gradient(45deg, var(--surface-2), var(--surface-2) 4px, var(--surface-3) 4px, var(--surface-3) 8px);
+  border-radius: 4px;
+  border: 1px dashed var(--line-strong);
+}
+:deep(.fbp-fp-layout-hint) {
+  padding: 14px 12px;
+  text-align: center;
+  font-size: 12.5px;
+  color: var(--text-3);
+  background: var(--surface-2);
+  border: 1px dashed var(--line-strong);
+  border-radius: 6px;
 }
 
 /* ─── 左: 组件库 ────────────────────────────────────────────── */
