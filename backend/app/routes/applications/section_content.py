@@ -384,6 +384,10 @@ async def get_form_detail(
         "model_count": raw_or_err.get("model_count", 0),
         "component_count": raw_or_err.get("component_count", 0),
         "all_model_codes": raw_or_err.get("all_model_codes", []),
+        # 2026-05-27 T: 列表页真实配置 (apaas 列表设计 tab 的 queryConditions + queryList)
+        # ListDesignerPanel 用这个判 "用户在 apaas 上是否真配过列表" — 没配显空态而不是
+        # 自己猜全部字段当列.
+        "list_page_view": raw_or_err.get("list_page_view", {"query_conditions": [], "query_list": []}),
         "source": source,
     }
 

@@ -154,10 +154,17 @@
         <template v-else>
           <div v-if="filteredRows.length === 0" class="ldp-pv-empty">
             <div class="ldp-pv-empty-icon">📦</div>
-            <p v-if="!visibleColumns.length">该列表尚未配置可显字段</p>
-            <p v-else-if="hasActiveFilter">无匹配筛选条件的数据</p>
-            <p v-else>暂无业务数据</p>
-            <p class="hint" v-if="visibleColumns.length">通过左侧菜单内"新增"按钮录入数据, 或让用户在前台提交</p>
+            <!-- 2026-05-27 T: 区分两种空态 — list_page_view 未配 vs 已配但无数据 -->
+            <template v-if="isListConfigured === false">
+              <p>该列表暂未配置查询条件和显示字段</p>
+              <p class="hint">用对话改"加查询条件 X / 列字段 Y", 或切到编辑模式去 apaas 原生编辑器配置</p>
+            </template>
+            <template v-else>
+              <p v-if="!visibleColumns.length">该列表尚未配置可显字段</p>
+              <p v-else-if="hasActiveFilter">无匹配筛选条件的数据</p>
+              <p v-else>暂无业务数据</p>
+              <p class="hint" v-if="visibleColumns.length">通过左侧菜单内"新增"按钮录入数据, 或让用户在前台提交</p>
+            </template>
           </div>
           <div v-else class="ldp-pv-table-wrap">
             <table class="ldp-pv-table">
@@ -302,6 +309,10 @@ const filterFields = ref<FilterField[]>([])
 const filterValues = reactive<Record<string, string>>({})
 const allRows = ref<Record<string, any>[]>([])
 const dataSource = ref<'real' | 'mock'>('mock')
+// 2026-05-27 T: apaas 列表设计 tab 真实配置状态 — 区分"未配置"与"已配置但空".
+// null = 未拉到 detail (老 fallback 路径); true = apaas 上配过 query/columns;
+// false = apaas list_page_view 返了但 query_conditions/query_list 都是空数组.
+const isListConfigured = ref<boolean | null>(null)
 const totalRows = ref(0)
 const currentPage = ref(1)
 const pageSize = ref(10)
@@ -527,12 +538,14 @@ async function loadComponentsAndFields(): Promise<void> {
   // 优先用 form_id 直查 components (跟 FormDesigner 同源)
   if (props.formId) {
     try {
-      const resp = await request.get<any, any>(
-        `/applications/${props.appId}/forms/${props.formId}/components`,
-      )
-      if (resp?.ok && Array.isArray(resp.items)) {
-        const items: any[] = resp.items
-        // edit mode columns
+      // 2026-05-27 T: 并行拉 components (字段池) + detail (含 list_page_view 真配置)
+      const [compResp, detailResp] = await Promise.all([
+        request.get<any, any>(`/applications/${props.appId}/forms/${props.formId}/components`),
+        request.get<any, any>(`/applications/${props.appId}/forms/${props.formId}/detail`).catch(() => null),
+      ])
+      if (compResp?.ok && Array.isArray(compResp.items)) {
+        const items: any[] = compResp.items
+        // edit mode columns (用 components 全字段 — apaas iframe 自己用, 我们 edit mode 不显)
         columns.value = items.map(c => {
           const raw = c.extra || {}
           return {
@@ -545,38 +558,63 @@ async function loadComponentsAndFields(): Promise<void> {
             show_condition: '总是显示',
           }
         })
-        // preview mode columns
-        const pvCols: PreviewColumn[] = []
+        // 字段池 — 按 uuid + code 索引 (apaas list_page_view 用 fieldComponentUuid 引用)
+        const pvPool: PreviewColumn[] = []
+        const poolByCode = new Map<string, PreviewColumn>()
         for (const c of items) {
           const raw = c.extra || {}
           const cls = classifyField(raw)
-          pvCols.push({
-            code: c.id || c.code || raw.uuid || raw.bo_code,  // 优先 uuid (查 listPageBusinessData row key)
+          const code = c.id || c.code || raw.uuid || raw.bo_code
+          const col: PreviewColumn = {
+            code,
             label: c.name || raw.label || '未命名',
             kind: cls.kind,
             dataType: String(raw.data_type || raw.dataType || ''),
-          })
+          }
+          pvPool.push(col)
+          if (code) poolByCode.set(String(code), col)
+          // 别名: 字段 code (非 uuid) 也存一份, 提高 list_page_view 引用解析命中
+          const fieldCode = raw.bo_code || c.code
+          if (fieldCode && fieldCode !== code) poolByCode.set(String(fieldCode), col)
         }
-        previewColumns.value = pvCols
-        // filter fields — 取前 4 个非长文本 + 状态字段优先
-        const candidates = pvCols.filter(c => c.kind !== 'longtext')
-        const statusFields = candidates.filter(c => c.kind === 'status')
-        const otherFields = candidates.filter(c => c.kind !== 'status')
-        const picked = [...statusFields.slice(0, 1), ...otherFields].slice(0, 4)
-        filterFields.value = picked.map(c => ({
-          code: c.code,
-          label: c.label,
-          inputType:
-            c.kind === 'status' || c.kind === 'boolean' ? 'select'
-              : c.kind === 'date' ? 'date'
-              : 'text',
-          options: c.kind === 'status' ? STATUS_OPTIONS : undefined,
-        }))
-        // 初始化 filterValues
+
+        // T: 用 list_page_view 真配置过滤 — apaas 上没配 → 空列表 (不再瞎猜)
+        const lpv = detailResp?.list_page_view || { query_conditions: [], query_list: [] }
+        const queryConditions: any[] = Array.isArray(lpv.query_conditions) ? lpv.query_conditions : []
+        const queryList: any[] = Array.isArray(lpv.query_list) ? lpv.query_list : []
+        isListConfigured.value = (queryConditions.length + queryList.length) > 0
+
+        // 查询条件 — 严格按 apaas 配置 (没配就空)
+        filterFields.value = queryConditions
+          .map((q: any) => {
+            const ref = String(q.fieldComponentUuid || q.componentUuid || q.fieldCode || q.fieldComponentCode || '')
+            const col = poolByCode.get(ref)
+            if (!col) return null
+            return {
+              code: col.code,
+              label: q.label || q.title || col.label,
+              inputType:
+                col.kind === 'status' || col.kind === 'boolean' ? 'select' as const
+                  : col.kind === 'date' ? 'date' as const
+                  : 'text' as const,
+              options: col.kind === 'status' ? STATUS_OPTIONS : undefined,
+            }
+          })
+          .filter((x): x is FilterField => x !== null)
         for (const f of filterFields.value) {
           if (!(f.code in filterValues)) filterValues[f.code] = ''
         }
-        // modelCode 没法从 components 拿, 留空 / fallback 后面补
+
+        // 列表字段 — 严格按 apaas 配置
+        previewColumns.value = queryList
+          .map((q: any) => {
+            const ref = String(q.fieldComponentUuid || q.componentUuid || q.fieldCode || q.fieldComponentCode || '')
+            const col = poolByCode.get(ref)
+            return col || null
+          })
+          .filter((x): x is PreviewColumn => x !== null)
+
+        // 注: previewColumns 现可能是空, 模板靠 visibleColumns / isListConfigured 渲染空态
         return
       }
     } catch (_e) {

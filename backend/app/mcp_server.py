@@ -5059,6 +5059,14 @@ async def get_apaas_form_detail(env_id: int, apaas_app_id: str, form_id: str) ->
     if not main_model_code and models:
         main_model_code = models[0]["model_code"]
 
+    # 2026-05-27 T: 抽 listPageView (queryConditions=查询条件 + queryList=列字段) —
+    # 列表设计真实配置. apaas detailPageConfigById raw 顶层带 listPageView (跟
+    # step_executor.py:804 + generator_v2.py:917 写入路径对齐).
+    list_page_view_raw = raw.get("listPageView") or detail_page.get("listPageView") or {}
+    list_page_view = {
+        "query_conditions": list_page_view_raw.get("queryConditions") or [],
+        "query_list": list_page_view_raw.get("queryList") or [],
+    }
     return {
         "ok": True,
         "form_id": form_id,
@@ -5069,6 +5077,7 @@ async def get_apaas_form_detail(env_id: int, apaas_app_id: str, form_id: str) ->
         "components": comps,
         "model_count": len(models),
         "component_count": len(comps),
+        "list_page_view": list_page_view,
     }
 
 
