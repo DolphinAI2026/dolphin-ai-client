@@ -328,6 +328,7 @@
             <div class="mdsh-body">
               <FormDesignerPanel
                 v-if="designerSub === 'form'"
+                :key="`form-${selectedApaasMenuId}-${designerRefreshKey}`"
                 :app-id="existingAppId"
                 :menu-id="selectedApaasMenuId"
                 :menu-name="selectedApaasMenuName"
@@ -335,6 +336,7 @@
               />
               <ListDesignerPanel
                 v-else-if="designerSub === 'list'"
+                :key="`list-${selectedApaasMenuId}-${designerRefreshKey}`"
                 :app-id="existingAppId"
                 :menu-id="selectedApaasMenuId"
                 :menu-name="selectedApaasMenuName"
@@ -342,12 +344,14 @@
               />
               <ProcessDesignerPanel
                 v-else-if="designerSub === 'process'"
+                :key="`process-${selectedApaasMenuId}-${designerRefreshKey}`"
                 :app-id="existingAppId"
                 :menu-id="selectedApaasMenuId"
                 :form-id="selectedApaasMenuFormId"
               />
               <DataSchemaEditor
                 v-else-if="designerSub === 'data'"
+                :key="`data-${selectedApaasMenuId}-${designerRefreshKey}`"
                 :app-id="existingAppId"
                 :menu-id="selectedApaasMenuId"
                 :menu-name="selectedApaasMenuName"
@@ -373,6 +377,7 @@
           <!-- 流程 tab + 流程 sub: ProcessDesignerPanel (P0 mock 4 节点 demo, x6 driven) -->
           <ProcessDesignerPanel
             v-else-if="!legacyMode && topTab === 'logic' && currentSectionTab === 'processes' && existingAppId"
+            :key="`process-fb-${designerRefreshKey}`"
             class="platform-iframe-container"
             :app-id="existingAppId"
             :menu-id="selectedApaasMenuId || undefined"
@@ -381,6 +386,7 @@
           <!-- 数据 tab + 数据模型 sub: 选中模型显字段表格 -->
           <DataModelDetailPanel
             v-else-if="!legacyMode && topTab === 'data' && currentSectionTab === 'models' && existingAppId && selectedSectionItemId"
+            :key="`dmd-${selectedSectionItemId}-${designerRefreshKey}`"
             class="platform-iframe-container"
             :app-id="existingAppId"
             :model-id="selectedSectionItemId"
@@ -389,6 +395,7 @@
           <!-- 数据 tab + 字典 sub: master-detail -->
           <DictEditorPanel
             v-else-if="!legacyMode && topTab === 'data' && currentSectionTab === 'dicts' && existingAppId"
+            :key="`dict-${designerRefreshKey}`"
             class="platform-iframe-container"
             :app-id="existingAppId"
             :apaas-app-id="store.currentApp?.apaas_app_id || ''"
@@ -397,6 +404,7 @@
           <!-- 权限 tab + 角色 sub: master-detail -->
           <RoleManagePanel
             v-else-if="!legacyMode && topTab === 'perm' && currentSectionTab === 'roles' && existingAppId"
+            :key="`role-${designerRefreshKey}`"
             class="platform-iframe-container"
             :app-id="existingAppId"
           />
@@ -2450,6 +2458,11 @@ function toggleAssistant() {
 // ── 平台配置 iframe ──
 const platformIframeUrl = ref('')
 const platformIframeKey = ref(0)
+// 2026-05-27 P2: design-v4 panel 刷新 key — ConfigAssistant 完成调整后 bump 这个,
+// 让 FormDesignerPanel / ListDesignerPanel / ProcessDesignerPanel / DataSchemaEditor /
+// RoleManagePanel 重新挂载 + 重新拉数据 (替代老 iframe.reload). 5 panel 都 bind
+// :key="`{prefix}-${designerRefreshKey}`" 触发 remount.
+const designerRefreshKey = ref(0)
 
 // PR2b (SPEC v2 §1.1) — SectionNav 状态
 // 5 section: data/ui/logic/permission/extension, 默认 ui (跟以前 ApaasMenuSidebar 行为对齐)
@@ -2717,6 +2730,9 @@ onBeforeUnmount(() => {
 const apaasMenuSidebarRef = ref<{ reload: () => Promise<void> } | null>(null)
 function refreshPlatformAndSidebar() {
   platformIframeKey.value += 1
+  // 2026-05-27 P2: bump design-v4 panel key — 让 5 个 Vue 原生 panel re-mount + re-fetch
+  // (iframe key 留给老 fallback iframe view; design-v4 走原生组件路径).
+  designerRefreshKey.value += 1
   // 略延 300ms 给平台 API 落库, 然后 reload 菜单树
   setTimeout(() => {
     try { apaasMenuSidebarRef.value?.reload?.() } catch { /* sidebar 还没 mount 时忽略 */ }

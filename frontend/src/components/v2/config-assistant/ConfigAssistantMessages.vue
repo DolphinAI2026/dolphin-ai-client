@@ -29,9 +29,11 @@ function openScreenshot(dataUrl: string) {
   }
 }
 
-// 2026-05-26: AI 调完工具自动刷 iframe — 不再让用户点"刷新预览"按钮.
+// 2026-05-26 / 2026-05-27 P2: AI 调完工具自动刷预览 — 不再让用户点"刷新预览"按钮.
 // 检测: 消息列表里出现一个 assistant 消息, !streaming + countModifyOps>0, 且
 // 还没被自动刷过 (用 Set<id> 去重防多次触发). 满足就 emit refresh-iframe.
+// 注: design-v4 后 ChatPage 同步 bump designerRefreshKey 让 5 个原生 panel re-mount,
+// 不再纯依赖 iframe.reload — event 名暂留 'refresh-iframe' 不改 (兼容旧调用方).
 const _autoRefreshed = new Set<number>()
 watch(() => props.messages, (msgs) => {
   for (const m of msgs) {
