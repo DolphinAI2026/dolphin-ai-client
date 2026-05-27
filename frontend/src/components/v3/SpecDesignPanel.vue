@@ -370,14 +370,15 @@
         </template>
       </main>
 
-      <!-- RIGHT: chat slot (P2 接 ConfigAssistant) -->
+      <!-- RIGHT: chat slot — U7 接通 SpecChatPanel (内嵌对话改 SPEC 草稿) -->
       <aside class="sdp-chat-slot" aria-label="SPEC 对话助手">
-        <div class="chat-empty-state">
-          <div class="ic" aria-hidden="true">💬</div>
-          <h3>用对话改 SPEC</h3>
-          <p>点章节"✨ 用对话改这段"或顶部输入框, AI 会改 SPEC 草稿.</p>
-          <p class="hint">P2 接入 — 当前为 read-only 预览.</p>
-        </div>
+        <SpecChatPanel
+          :app-id="props.appId"
+          :apaas-app-id="props.apaasAppId"
+          :active-chapter="activeChapter"
+          :chapter-title="currentChapterTitle"
+          @spec-updated="onSpecUpdated"
+        />
       </aside>
     </div>
   </section>
@@ -385,7 +386,9 @@
 
 <script setup lang="ts">
 import { ref, computed, onMounted, watch, nextTick } from 'vue'
+import { ElMessage } from 'element-plus'
 import request from '@/utils/request'
+import SpecChatPanel from './SpecChatPanel.vue'
 
 // ── props ──────────────────────────────────────────────────────────────
 const props = defineProps<{
@@ -663,10 +666,43 @@ function onChapterClick(key: ChapterKey) {
 }
 
 function onEditChapter(key: ChapterKey) {
-  // P2 占位 — 真接通后会发事件到 ConfigAssistant 注入 prompt
+  // 切到对应章节, SpecChatPanel 会通过 watch(props.activeChapter) 清空 history,
+  // header ctx chip 也跟着切. 用户在 chat 里描述改动即可.
   activeChapter.value = key
-  // 当前 MVP 仅切高亮 — 后续接 chat 事件
+  // 滚动到对应章节让用户看到 "改这段" 的上下文
+  nextTick(() => {
+    const el = sectionRefs.value[key]
+    if (el) {
+      try { el.scrollIntoView({ behavior: 'smooth', block: 'start' }) } catch { /* ignore */ }
+    }
+  })
 }
+
+// ── U7 chat panel 回调 ────────────────────────────────────────────────
+// SpecChatPanel emit('spec-updated') 时调 — 重新拉对应章节数据 (MVP 简化:
+// 整个 reload 一次, 性能不是问题). 同时 toast 提示用户看到了改动.
+const SECTION_TYPE_TO_CHAPTER: Record<string, string> = {
+  data_model: '数据模型',
+  permission: '角色权限',
+  page: '菜单/页面',
+  form: '表单',
+  list: '列表',
+  process: '流程',
+}
+
+async function onSpecUpdated(sectionType: string, sectionKey: string) {
+  const label = SECTION_TYPE_TO_CHAPTER[sectionType] || sectionType
+  ElMessage.success(`已更新 SPEC 草稿: ${label} · ${sectionKey}`)
+  // 简化: 整页 reload — 让 SpecDesignPanel 的所有章节数据保持新鲜.
+  // P2 可以只 reload 对应章节, 避免闪烁.
+  await reload()
+}
+
+// ── 章节标题 (给 SpecChatPanel header ctx chip 用) ────────────────────
+const currentChapterTitle = computed(() => {
+  const ch = CHAPTERS.find(c => c.key === activeChapter.value)
+  return ch ? `${ch.num}、${ch.title}` : ''
+})
 
 // ── lifecycle ──────────────────────────────────────────────────────
 onMounted(() => {
@@ -1052,39 +1088,17 @@ watch(
 }
 
 /* ── RIGHT: chat slot ────────────────────────────────────────────── */
+/* U7: chat slot 现在装 SpecChatPanel — 让子组件自填充, 不再 center 显空态. */
 .sdp-chat-slot {
   background: var(--surface);
   border-left: 1px solid var(--line);
   display: flex;
   flex-direction: column;
-  align-items: center;
-  justify-content: center;
-  padding: 32px 24px;
+  min-height: 0;
+  overflow: hidden;
 }
-.chat-empty-state {
-  text-align: center;
-  max-width: 280px;
-  color: var(--text-3);
-}
-.chat-empty-state .ic {
-  font-size: 36px;
-  margin-bottom: 12px;
-  opacity: 0.75;
-}
-.chat-empty-state h3 {
-  font-size: 14px;
-  font-weight: 600;
-  color: var(--text);
-  margin: 0 0 8px;
-}
-.chat-empty-state p {
-  font-size: 12.5px;
-  line-height: 1.55;
-  margin: 0 0 6px;
-}
-.chat-empty-state .hint {
-  font-size: 11.5px;
-  color: var(--text-4);
-  margin-top: 12px;
+.sdp-chat-slot > :deep(.spc-shell) {
+  flex: 1;
+  min-height: 0;
 }
 </style>

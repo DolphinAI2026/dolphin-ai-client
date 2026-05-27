@@ -914,7 +914,9 @@
     </aside>
     <!-- 2026-05-19 post-deploy 形态: 配置助手, 聊增量调整 -->
     <!-- 2026-05-25: 改浮动模式 — 默认收起 FAB, 点开 overlay 在 iframe 上, 不再挤 iframe 宽度 -->
-    <template v-if="!embedMode && isPostDeploy && resolvedAppId">
+    <!-- U6 (2026-05-27): 设计 tab 隐藏浮窗 — SpecDesignPanel 自带内嵌 SPEC chat,
+         避免双 chat 心智混乱 (浮窗 = apaas 现场改 / 内嵌 = SPEC 草稿改). -->
+    <template v-if="!embedMode && isPostDeploy && resolvedAppId && topTab !== 'spec'">
       <!-- 收起态: 右下 FAB -->
       <button
         v-if="!assistantOpen"
