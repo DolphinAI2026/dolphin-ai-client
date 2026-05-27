@@ -26,6 +26,9 @@ from app.models.collaboration import (  # noqa: F401  — register ORM mapping
 from app.models.deploy_history import DeployRecord  # noqa: F401
 # Import process definition (design-v4 H2) — 流程图 JSON 本地存档
 from app.models.process_definition import ProcessDefinition  # noqa: F401
+# Import spec applied version + spec document (Y SPEC 版本快照 + markdown 缓存)
+from app.models.spec_applied_version import SpecAppliedVersion  # noqa: F401
+from app.models.spec_document import SpecDocument  # noqa: F401
 
 
 class User(Base):

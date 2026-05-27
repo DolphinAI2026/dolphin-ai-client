@@ -53,6 +53,9 @@ async def init_db():
     import app.models.deploy_history  # noqa: F401
     # 流程定义 JSON 本地存档（design-v4 H2）— ProcessDefinition
     import app.models.process_definition  # noqa: F401
+    # SPEC 版本快照 + markdown 缓存（Y SPEC 版本管理）
+    import app.models.spec_applied_version  # noqa: F401
+    import app.models.spec_document  # noqa: F401
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
         await _migrate_legacy_builder_specs(conn, inspect)

@@ -1865,6 +1865,16 @@ router.include_router(_spec_chat.router)
 from . import spec_apply as _spec_apply  # noqa: E402
 router.include_router(_spec_apply.router)
 
+# Y (2026-05-27): SPEC 版本管理 + markdown 缓存.
+# /spec/versions + /versions/{id} + /spec/markdown + /spec/export.md
+from . import spec_versions as _spec_versions  # noqa: E402
+router.include_router(_spec_versions.router)
+
+# Y (2026-05-27): 业务事件 endpoint — SPEC 设计 tab 章九用.
+# /business-events 包 list_apaas_business_events MCP.
+from . import business_events as _business_events  # noqa: E402
+router.include_router(_business_events.router)
+
 
 # ---------------------------------------------------------------------------
 # Phase F：Application 默认模式 (simple|pro|None) 端点

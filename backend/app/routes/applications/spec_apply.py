@@ -876,6 +876,37 @@ async def apply_spec(
         if synced_sections:
             await db.commit()
 
+    # 6. SPEC 版本快照 — Y 阶段加, 不影响 dry-run (dry-run 没改 db 状态).
+    #
+    # 即使 failed_steps > 0 也写一行 SpecAppliedVersion (审计用), 但 is_active=False;
+    # 全成时新行 is_active=True, 老 active 行降 False.
+    #
+    # version_label 规则 — 查最新 active 行 minor-bump (v1.0 → v1.1):
+    #   - 没历史 → v1.0
+    #   - v1.X → v1.(X+1)
+    #   - v1.X.Y → v1.X.(Y+1) (回滚专用 patch-bump, 这里不走)
+    #
+    # 同时 invalidate SpecDocument cache — 强 reset hash 让下次 GET /spec/markdown
+    # 重新生成 (因为 base_version bump 后 spec_sections 状态变了, raw apaas 也大概率变).
+    spec_version_id: Optional[int] = None
+    version_label: Optional[str] = None
+    if not body.dry_run:
+        try:
+            spec_version_id, version_label = await _create_spec_version_snapshot(
+                db=db,
+                app=app,
+                user_id=ctx.user.id,
+                total_steps=plan["total_steps"],
+                applied_steps=applied,
+                failed_steps=failed,
+                results=results,
+            )
+        except Exception as exc:  # noqa: BLE001 — 快照失败不挡 apply 主结果
+            logger.exception(
+                "spec_apply: 创建 SpecAppliedVersion 失败 (非致命) app_id=%s: %s",
+                app_id, exc,
+            )
+
     duration_ms = int((datetime.utcnow() - start).total_seconds() * 1000)
 
     return {
@@ -888,4 +919,166 @@ async def apply_spec(
         "results": results,
         "synced_sections": synced_sections,
         "duration_ms": duration_ms,
+        "spec_version_id": spec_version_id,
+        "version_label": version_label,
     }
+
+
+# ---------------------------------------------------------------------------
+# Snapshot helper — apply_spec 末尾调
+# ---------------------------------------------------------------------------
+async def _compute_next_version_label(db: AsyncSession, app_id: int) -> str:
+    """查最新 active SpecAppliedVersion 算 next minor-bump.
+
+    规则:
+      - 没历史 → "v1.0"
+      - "v1.X" → "v1.(X+1)"
+      - "v1.X.Y" → "v1.(X+1)" (patch 标记忽略, 走 minor-bump)
+      - "vN" / 其他 → "v(N+1).0"
+    """
+    from app.models.spec_applied_version import SpecAppliedVersion
+
+    q = await db.execute(
+        select(SpecAppliedVersion)
+        .where(SpecAppliedVersion.application_id == app_id)
+        .where(SpecAppliedVersion.is_active.is_(True))
+        .order_by(SpecAppliedVersion.applied_at.desc())
+        .limit(1)
+    )
+    latest = q.scalar_one_or_none()
+    if not latest:
+        # 也查 inactive 兜底 (避免重 v1.0 撞 unique)
+        q2 = await db.execute(
+            select(SpecAppliedVersion)
+            .where(SpecAppliedVersion.application_id == app_id)
+            .order_by(SpecAppliedVersion.applied_at.desc())
+            .limit(1)
+        )
+        latest = q2.scalar_one_or_none()
+
+    if not latest:
+        return "v1.0"
+
+    label = (latest.version_label or "").lstrip("v").lstrip("V")
+    parts = label.split(".")
+    try:
+        if len(parts) >= 2:
+            major = int(parts[0])
+            minor = int(parts[1])
+            return f"v{major}.{minor + 1}"
+        return f"v{int(parts[0]) + 1}.0"
+    except (ValueError, IndexError):
+        # 非标准 label 兜底
+        return f"v1.{int(datetime.utcnow().timestamp())}"
+
+
+async def _create_spec_version_snapshot(
+    db: AsyncSession,
+    app: Application,
+    user_id: int,
+    total_steps: int,
+    applied_steps: int,
+    failed_steps: int,
+    results: list[dict[str, Any]],
+) -> tuple[int, str]:
+    """新建一行 SpecAppliedVersion + invalidate SpecDocument cache.
+
+    Returns: (version_id, version_label).
+
+    全成 (failed=0) → is_active=True, 老 active 降 False.
+    部分失败 (failed>0) → is_active=False, 老 active 不动.
+    """
+    from app.models.spec_applied_version import SpecAppliedVersion
+    from app.models.spec_document import SpecDocument
+
+    version_label = await _compute_next_version_label(db, app.id)
+
+    # 收集所有 spec_sections 行 → sections_snapshot
+    sec_q = await db.execute(
+        select(SpecSection).where(SpecSection.application_id == app.id)
+    )
+    sec_rows = list(sec_q.scalars().all())
+    sections_payload: list[dict[str, Any]] = []
+    for sec in sec_rows:
+        try:
+            spec_json_parsed = json.loads(sec.spec_json) if sec.spec_json else {}
+        except (json.JSONDecodeError, TypeError):
+            spec_json_parsed = {}
+        sections_payload.append({
+            "id": sec.id,
+            "section_type": sec.section_type,
+            "section_key": sec.section_key,
+            "spec_json": spec_json_parsed,
+            "base_version": sec.base_version,
+            "draft_version": sec.draft_version,
+            "last_applied_at": (
+                sec.last_applied_at.isoformat() if sec.last_applied_at else None
+            ),
+        })
+
+    # 生成完整 SPEC.md 快照 — 调 generate_spec_markdown (capture apaas 实时状态)
+    markdown_snapshot: Optional[str] = None
+    try:
+        from app.services.spec_markdown_generator import generate_spec_markdown
+        markdown_snapshot, _hash = await generate_spec_markdown(db, app.id)
+    except Exception as exc:  # noqa: BLE001 — markdown 生成失败不挡 snapshot 落库
+        logger.warning(
+            "snapshot: generate_spec_markdown 失败 app_id=%s: %s", app.id, exc,
+        )
+
+    sections_snapshot = {
+        "sections": sections_payload,
+        "captured_at": datetime.utcnow().isoformat() + "Z",
+        "app_meta": {
+            "app_name": app.app_name,
+            "app_code": app.app_code,
+            "apaas_app_id": str(app.apaas_app_id) if app.apaas_app_id else None,
+        },
+    }
+
+    is_active_new = failed_steps == 0
+    if is_active_new:
+        # 老的 active 行全降 False
+        old_active_q = await db.execute(
+            select(SpecAppliedVersion).where(
+                SpecAppliedVersion.application_id == app.id,
+                SpecAppliedVersion.is_active.is_(True),
+            )
+        )
+        for old in old_active_q.scalars().all():
+            old.is_active = False
+
+    new_row = SpecAppliedVersion(
+        application_id=app.id,
+        version_label=version_label,
+        applied_by_user_id=user_id,
+        sections_snapshot=sections_snapshot,
+        markdown_snapshot=markdown_snapshot,
+        total_steps=total_steps,
+        applied_steps=applied_steps,
+        failed_steps=failed_steps,
+        apply_results=results,
+        is_active=is_active_new,
+    )
+    db.add(new_row)
+
+    # Invalidate SpecDocument cache — 把 hash 清空让下次 GET /spec/markdown 重生成.
+    # (markdown_snapshot 我们已写 SpecAppliedVersion, 这里 SpecDocument cache 也更新一致.)
+    cache_q = await db.execute(
+        select(SpecDocument).where(SpecDocument.application_id == app.id)
+    )
+    cached = cache_q.scalar_one_or_none()
+    if cached:
+        # 强 invalidate 让下次 read 重算 hash
+        cached.sections_hash = ""
+
+    await db.commit()
+    await db.refresh(new_row)
+
+    logger.info(
+        "spec_apply snapshot: app_id=%s version=%s id=%s is_active=%s "
+        "(total=%s applied=%s failed=%s)",
+        app.id, version_label, new_row.id, is_active_new,
+        total_steps, applied_steps, failed_steps,
+    )
+    return new_row.id, version_label

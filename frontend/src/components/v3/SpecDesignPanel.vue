@@ -4,7 +4,7 @@
   跟"功能" tab (直接 iframe apaas 原生, 短链: 改 1 处 = 1 处) 平行.
 
   布局: 3 pane —
-   - LEFT  nav-pane (240px):   10 章节, 4 分组
+   - LEFT  nav-pane (240px):   11 章节, 4 分组
    - CENTER doc-pane (1fr):    markdown 风格章节渲染, hover 出"用对话改这段"
    - RIGHT chat-slot (360px):  P2 接 ConfigAssistant — MVP 显 placeholder
 
@@ -26,11 +26,63 @@
   <section class="sdp" aria-label="SPEC 设计">
     <!-- ── 顶部 toolbar ────────────────────────────────────────────────── -->
     <div class="sdp-toolbar">
-      <!-- 版本 pill -->
-      <div class="version-pill" :title="draftHint">
-        <span class="dot draft" aria-hidden="true"></span>
-        <span class="version-pill-label">草稿</span>
-        <span class="arrow" aria-hidden="true">▾</span>
+      <!-- 版本 pill — 2026-05-27 升级: dropdown 列历史版本 -->
+      <div ref="versionDropdownRef" class="version-pill-wrap">
+        <button
+          class="version-pill"
+          :title="draftHint"
+          type="button"
+          :aria-expanded="versionDropdownOpen"
+          aria-haspopup="listbox"
+          @click="toggleVersionDropdown"
+        >
+          <span
+            class="dot"
+            :class="{ draft: selectedVersionId === null, prod: selectedVersionId !== null }"
+            aria-hidden="true"
+          ></span>
+          <span class="version-pill-label">{{ versionPillLabel }}</span>
+          <span class="arrow" aria-hidden="true">▾</span>
+        </button>
+        <div v-if="versionDropdownOpen" class="version-dropdown" role="listbox">
+          <button
+            class="version-dropdown-item"
+            :class="{ active: selectedVersionId === null }"
+            type="button"
+            role="option"
+            :aria-selected="selectedVersionId === null"
+            @click="onSelectVersion(null)"
+          >
+            <span class="version-dropdown-dot draft" aria-hidden="true"></span>
+            <span class="version-dropdown-main">
+              <span class="version-dropdown-label">草稿 (当前)</span>
+              <span class="version-dropdown-sub">{{ diffTotalCount > 0 ? `${diffTotalCount} 处未应用` : '尚无改动' }}</span>
+            </span>
+          </button>
+          <div v-if="versionsLoading" class="version-dropdown-empty">加载历史中…</div>
+          <template v-else-if="versions.length > 0">
+            <button
+              v-for="v in versions"
+              :key="String(v.id)"
+              class="version-dropdown-item"
+              :class="{ active: String(selectedVersionId) === String(v.id), 'is-active-prod': v.is_active }"
+              type="button"
+              role="option"
+              :aria-selected="String(selectedVersionId) === String(v.id)"
+              @click="onSelectVersion(v.id)"
+            >
+              <span class="version-dropdown-dot" :class="{ prod: v.is_active }" aria-hidden="true"></span>
+              <span class="version-dropdown-main">
+                <span class="version-dropdown-label">
+                  {{ v.version_label }}
+                  <span v-if="v.is_active" class="version-dropdown-tag">当前生产</span>
+                </span>
+                <span class="version-dropdown-sub">{{ versionSubtitle(v) || '—' }}</span>
+              </span>
+            </button>
+          </template>
+          <div v-else class="version-dropdown-empty">尚无应用过的历史版本</div>
+        </div>
       </div>
       <!-- mode pill (阅读 / 对比) — V1 Part B: 对比模式接通 -->
       <div class="mode-pill" role="tablist" aria-label="视图模式">
@@ -57,8 +109,14 @@
         </button>
       </div>
       <div class="toolbar-divider" aria-hidden="true"></div>
-      <button class="toolbar-btn" disabled title="P2 接入">
-        <span aria-hidden="true">⬇</span> 导出 .md
+      <button
+        class="toolbar-btn"
+        type="button"
+        :disabled="exporting"
+        :title="exporting ? '导出中…' : '导出 SPEC 为 .md 文件 (调 /spec/export.md)'"
+        @click="onExportMd"
+      >
+        <span aria-hidden="true">⬇</span> {{ exporting ? '导出中…' : '导出 .md' }}
       </button>
       <button class="toolbar-btn" disabled title="P2 接入">
         <span aria-hidden="true">📜</span> 历史
@@ -372,7 +430,7 @@
               </template>
             </template>
 
-            <!-- 八、流程 & 事件 -->
+            <!-- 八、业务流程 (2026-05-27: 拆出业务事件到九, 这里只渲流程) -->
             <template v-else-if="ch.key === 'process'">
               <div v-if="loadedProcesses.length === 0" class="subsection-empty">
                 尚未定义流程 — 用对话添加流程, 或去"功能"tab 选菜单 → 流程设计.
@@ -399,7 +457,33 @@
               </table>
             </template>
 
-            <!-- 九、集成 & 自开发 — X (2026-05-27): 真渲染 CUSTOM menu list -->
+            <!-- 九、业务事件 (2026-05-27: 新加 — 拉 /section-content/business-events) -->
+            <template v-else-if="ch.key === 'event'">
+              <div v-if="loadedEvents.length === 0" class="subsection-empty">
+                尚未定义业务事件 — 用对话添加事件触发器,
+                或去 "功能" tab → 流程设计 panel 查看.
+              </div>
+              <table v-else class="spec-table">
+                <thead>
+                  <tr>
+                    <th>事件名称</th>
+                    <th>编码</th>
+                    <th>触发类型</th>
+                    <th>关联资源</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  <tr v-for="e in loadedEvents" :key="e.id">
+                    <td>{{ e.name }}</td>
+                    <td><span class="mono">{{ e.code || '—' }}</span></td>
+                    <td><span class="type-chip">{{ describeExtra(e.extra, 'event_type') || describeExtra(e.extra, 'trigger') || '—' }}</span></td>
+                    <td><span class="mono">{{ describeExtra(e.extra, 'target') || describeExtra(e.extra, 'form_id') || '—' }}</span></td>
+                  </tr>
+                </tbody>
+              </table>
+            </template>
+
+            <!-- 十、集成 & 自开发 — X (2026-05-27): 真渲染 CUSTOM menu list -->
             <template v-else-if="ch.key === 'integration'">
               <div v-if="customMenus.length === 0" class="subsection-empty">
                 无自开发页面 (CUSTOM 菜单).
@@ -431,7 +515,7 @@
               </template>
             </template>
 
-            <!-- 十、数据源 -->
+            <!-- 十一、数据源 -->
             <template v-else-if="ch.key === 'datasource'">
               <div v-if="datasourceNote" class="subsection-empty subsection-empty-soft">
                 {{ datasourceNote }}
@@ -678,9 +762,9 @@
 </template>
 
 <script setup lang="ts">
-import { ref, computed, onMounted, watch, nextTick } from 'vue'
+import { ref, computed, onMounted, onBeforeUnmount, watch, nextTick } from 'vue'
 import { ElMessage } from 'element-plus'
-import request from '@/utils/request'
+import request, { API_PREFIX } from '@/utils/request'
 import SpecChatPanel from './SpecChatPanel.vue'
 import SpecApplyModal from './SpecApplyModal.vue'
 
@@ -700,6 +784,7 @@ type ChapterKey =
   | 'form'
   | 'list'
   | 'process'
+  | 'event'
   | 'integration'
   | 'datasource'
 
@@ -710,6 +795,7 @@ interface ChapterDef {
   num: string
 }
 
+// 2026-05-27 升级: 拆 "流程 & 事件" → 八、业务流程 + 九、业务事件 (10 → 11 章)
 const CHAPTERS: ChapterDef[] = [
   { key: 'app_info',    title: '应用信息',      group: '基础', num: '一' },
   { key: 'roles',       title: '角色与权限',    group: '基础', num: '二' },
@@ -718,9 +804,10 @@ const CHAPTERS: ChapterDef[] = [
   { key: 'menus',       title: '菜单结构',      group: '功能', num: '五' },
   { key: 'form',        title: '表单设计',      group: '功能', num: '六' },
   { key: 'list',        title: '列表设计',      group: '功能', num: '七' },
-  { key: 'process',     title: '流程 & 事件',   group: '功能', num: '八' },
-  { key: 'integration', title: '集成 & 自开发', group: '扩展', num: '九' },
-  { key: 'datasource',  title: '数据源',        group: '扩展', num: '十' },
+  { key: 'process',     title: '业务流程',      group: '功能', num: '八' },
+  { key: 'event',       title: '业务事件',      group: '功能', num: '九' },
+  { key: 'integration', title: '集成 & 自开发', group: '扩展', num: '十' },
+  { key: 'datasource',  title: '数据源',        group: '扩展', num: '十一' },
 ]
 
 const CHAPTER_GROUPS = computed(() => {
@@ -761,6 +848,25 @@ interface DatasourceItem {
   model_count?: number
 }
 
+// ── 2026-05-27 升级: 版本历史 (拉 /spec/versions, 优雅 404 fallback) ─────
+interface SpecVersion {
+  id: number | string
+  version_label: string
+  applied_at?: string | null
+  applied_by_user_id?: number | string | null
+  applied_by_username?: string | null
+  applied_steps?: number | null
+  failed_steps?: number | null
+  is_active?: boolean
+}
+
+const versions = ref<SpecVersion[]>([])
+const versionsLoading = ref(false)
+const versionDropdownOpen = ref(false)
+// 选中"草稿" (null) 或某历史版本 ID — MVP 仅做 UI 切换 + toast, 详细 snapshot 留 P3
+const selectedVersionId = ref<number | string | null>(null)
+const versionDropdownRef = ref<HTMLElement | null>(null)
+
 // ── reactive state ─────────────────────────────────────────────────────
 const loading = ref(true)
 const error = ref('')
@@ -792,6 +898,7 @@ const loadedModels = ref<SectionItem[]>([])
 const loadedDicts = ref<SectionItem[]>([])
 const loadedMenus = ref<SectionItem[]>([])
 const loadedProcesses = ref<SectionItem[]>([])
+const loadedEvents = ref<SectionItem[]>([])  // 2026-05-27: 业务事件章节 (九)
 
 // X (2026-05-27): 按 menu_type 分组 — 六/七 章用 MODEL 菜单, 九 章用 CUSTOM 菜单.
 // MODEL = 数据驱动表单/列表; CUSTOM = 自开发 Vue 页.
@@ -817,7 +924,7 @@ const datasourceNote = ref('')
 //
 // MVP 简化:
 //   - 只对 data_model 做精细 field-级 diff
-//   - 其他章节 (roles/dict/menus/process/form/list/integration/datasource) 显占位
+//   - 其他章节 (roles/dict/menus/process/event/form/list/integration/datasource) 显占位
 //   - update-level diff (字段 attr 改了, e.g., required) MVP 不算
 //   - 删除字段也算 — 草稿里没该 code 但生产里有 → 'del'
 const viewMode = ref<'read' | 'compare'>('read')
@@ -1200,6 +1307,94 @@ async function fetchApp(): Promise<void> {
   }
 }
 
+// 2026-05-27 升级: 拉版本历史 — Y agent backend 404 时优雅静默
+async function loadVersions(): Promise<void> {
+  if (!props.appId) return
+  versionsLoading.value = true
+  try {
+    const resp = await request.get<any, any>(
+      `/applications/${props.appId}/spec/versions`,
+    )
+    const arr = resp?.versions || resp?.items || []
+    if (Array.isArray(arr)) {
+      versions.value = arr as SpecVersion[]
+    } else {
+      versions.value = []
+    }
+  } catch {
+    // 静默 — Y agent 还没接 backend 时这里 404
+    versions.value = []
+  } finally {
+    versionsLoading.value = false
+  }
+}
+
+// 当前激活的版本 (is_active=true) — 用于版本 pill 副标 + 区分草稿
+const activeVersion = computed<SpecVersion | null>(() => {
+  return versions.value.find(v => v.is_active) || null
+})
+
+// 版本 pill 主标 (e.g. "草稿" / "v1.2 (生产)")
+const versionPillLabel = computed(() => {
+  if (selectedVersionId.value === null) {
+    if (diffTotalCount.value > 0) return `草稿 · ${diffTotalCount.value} 处未应用`
+    return '草稿'
+  }
+  const v = versions.value.find(x => String(x.id) === String(selectedVersionId.value))
+  return v ? v.version_label : '草稿'
+})
+
+function formatVersionTime(s: string | null | undefined): string {
+  if (!s) return ''
+  try {
+    const d = new Date(s)
+    if (isNaN(d.getTime())) return s
+    const pad = (n: number) => String(n).padStart(2, '0')
+    return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}`
+  } catch {
+    return s
+  }
+}
+
+function versionSubtitle(v: SpecVersion): string {
+  const parts: string[] = []
+  const ts = formatVersionTime(v.applied_at)
+  if (ts) parts.push(ts)
+  const who = v.applied_by_username || (v.applied_by_user_id ? `user#${v.applied_by_user_id}` : '')
+  if (who) parts.push(String(who))
+  if (typeof v.applied_steps === 'number') {
+    if (v.failed_steps && v.failed_steps > 0) {
+      parts.push(`${v.applied_steps} step, ${v.failed_steps} fail`)
+    } else if (v.applied_steps > 0) {
+      parts.push(`${v.applied_steps} step`)
+    }
+  }
+  return parts.join(' · ')
+}
+
+function onSelectVersion(versionId: number | string | null) {
+  selectedVersionId.value = versionId
+  versionDropdownOpen.value = false
+  if (versionId === null) {
+    // 切回"草稿" — 无副作用 (read mode 仍渲染 loadedModels)
+    return
+  }
+  // MVP: toast 提示 + 切到对比模式让用户看 diff 视图
+  // P3: 真拉 /spec/versions/{id} snapshot 用作 left col baseline 替换 loadedModels
+  ElMessage.info(`查看 ${versions.value.find(v => String(v.id) === String(versionId))?.version_label || '历史版本'} — 切到对比模式`)
+  if (viewMode.value !== 'compare') {
+    onSwitchMode('compare')
+  }
+}
+
+function toggleVersionDropdown() {
+  versionDropdownOpen.value = !versionDropdownOpen.value
+}
+
+function closeVersionDropdown() {
+  versionDropdownOpen.value = false
+}
+
 async function fetchDatasources(): Promise<void> {
   try {
     const resp = await request.get<any, any>(
@@ -1234,13 +1429,14 @@ async function reload(): Promise<void> {
     const base = `/applications/${props.appId}`
     // X (2026-05-27): dicts 加 with_options=true 拉真选项; menus 改 /apaas-menus
     // (旧 /section-content/menus 不存在 → 404)
-    const [, roles, models, dicts, menus, processes] = await Promise.all([
+    const [, roles, models, dicts, menus, processes, events] = await Promise.all([
       fetchApp(),
       fetchSection(`${base}/section-content/roles`),
       fetchSection(`${base}/section-content/models?with_fields=true`),
       fetchSection(`${base}/section-content/dicts?with_options=true`),
       fetchMenusFromApaas(`${base}/apaas-menus`),
       fetchSection(`${base}/section-content/processes`),
+      fetchSection(`${base}/section-content/business-events`),
       fetchDatasources(),
     ])
     loadedRoles.value = roles
@@ -1248,6 +1444,7 @@ async function reload(): Promise<void> {
     loadedDicts.value = dicts
     loadedMenus.value = menus
     loadedProcesses.value = processes
+    loadedEvents.value = events
     lastFetchedAt.value = new Date()
     // V1 Part B: 处在对比模式时同步刷新草稿 (例如换应用 / spec-updated 触发的 reload)
     if (viewMode.value === 'compare') {
@@ -1332,6 +1529,38 @@ async function onApplyDone() {
   await reload()
 }
 
+// ── 2026-05-27 升级: 导出 .md (调 /spec/export.md, fetch + blob 触发下载) ─
+const exporting = ref(false)
+async function onExportMd() {
+  if (exporting.value) return
+  exporting.value = true
+  try {
+    const token = localStorage.getItem('token') || ''
+    // 用绝对 API_PREFIX 走 fetch — axios 默认返 JSON, blob 用 fetch 直观
+    const url = `${API_PREFIX}/applications/${props.appId}/spec/export.md`
+    const resp = await fetch(url, {
+      headers: token ? { Authorization: `Bearer ${token}` } : {},
+    })
+    if (!resp.ok) {
+      throw new Error(`HTTP ${resp.status}`)
+    }
+    const blob = await resp.blob()
+    const dlUrl = URL.createObjectURL(blob)
+    const a = document.createElement('a')
+    a.href = dlUrl
+    a.download = `${appCode.value || `spec-app-${props.appId}`}.md`
+    document.body.appendChild(a)
+    a.click()
+    document.body.removeChild(a)
+    setTimeout(() => URL.revokeObjectURL(dlUrl), 1000)
+    ElMessage.success('已导出 SPEC.md')
+  } catch (e: any) {
+    ElMessage.error(`导出失败: ${e?.message || e}`)
+  } finally {
+    exporting.value = false
+  }
+}
+
 // ── 章节标题 (给 SpecChatPanel header ctx chip 用) ────────────────────
 const currentChapterTitle = computed(() => {
   const ch = CHAPTERS.find(c => c.key === activeChapter.value)
@@ -1339,14 +1568,32 @@ const currentChapterTitle = computed(() => {
 })
 
 // ── lifecycle ──────────────────────────────────────────────────────
+// 全局 click outside — 关闭版本 dropdown
+function onDocClick(ev: MouseEvent) {
+  if (!versionDropdownOpen.value) return
+  const wrap = versionDropdownRef.value
+  if (wrap && !wrap.contains(ev.target as Node)) {
+    closeVersionDropdown()
+  }
+}
+
 onMounted(() => {
   reload()
+  loadVersions()
+  document.addEventListener('click', onDocClick, { capture: true })
+})
+
+onBeforeUnmount(() => {
+  document.removeEventListener('click', onDocClick, { capture: true } as any)
 })
 
 watch(
   () => props.appId,
   (v, ov) => {
-    if (v && v !== ov) reload()
+    if (v && v !== ov) {
+      reload()
+      loadVersions()
+    }
   },
 )
 </script>
@@ -1372,6 +1619,10 @@ watch(
   border-bottom: 1px solid var(--line);
   flex-shrink: 0;
 }
+.version-pill-wrap {
+  position: relative;
+  display: inline-flex;
+}
 .version-pill {
   display: inline-flex;
   align-items: center;
@@ -1384,6 +1635,13 @@ watch(
   color: var(--text);
   cursor: pointer;
   font-weight: 500;
+  font-family: inherit;
+}
+.version-pill:hover { background: var(--surface); border-color: var(--line-strong); }
+.version-pill[aria-expanded="true"] {
+  background: var(--surface);
+  border-color: var(--brand);
+  box-shadow: 0 0 0 2px var(--brand-soft);
 }
 .version-pill .dot {
   width: 8px;
@@ -1391,8 +1649,88 @@ watch(
   border-radius: 50%;
 }
 .version-pill .dot.draft { background: var(--warn); }
+.version-pill .dot.prod { background: var(--ok); }
 .version-pill .arrow { color: var(--text-4); font-size: 11px; }
 .version-pill-label { color: var(--text); }
+
+/* 版本 dropdown — 2026-05-27 升级 */
+.version-dropdown {
+  position: absolute;
+  top: calc(100% + 6px);
+  left: 0;
+  z-index: 100;
+  min-width: 280px;
+  max-width: 360px;
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.12);
+  padding: 6px;
+  max-height: 320px;
+  overflow-y: auto;
+}
+.version-dropdown-item {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  width: 100%;
+  padding: 8px 10px;
+  background: transparent;
+  border: none;
+  border-radius: 6px;
+  cursor: pointer;
+  text-align: left;
+  font-family: inherit;
+  color: var(--text);
+}
+.version-dropdown-item:hover { background: var(--surface-2); }
+.version-dropdown-item.active { background: var(--brand-soft); }
+.version-dropdown-item.active .version-dropdown-label { color: var(--brand); font-weight: 600; }
+.version-dropdown-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--text-4);
+  margin-top: 6px;
+  flex-shrink: 0;
+}
+.version-dropdown-dot.draft { background: var(--warn); }
+.version-dropdown-dot.prod { background: var(--ok); }
+.version-dropdown-main {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+.version-dropdown-label {
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--text);
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+.version-dropdown-sub {
+  font-size: 11px;
+  color: var(--text-4);
+  font-family: var(--font-mono);
+  word-break: break-all;
+}
+.version-dropdown-tag {
+  padding: 1px 6px;
+  background: var(--ok-soft);
+  color: var(--ok);
+  border-radius: 4px;
+  font-size: 10px;
+  font-weight: 600;
+}
+.version-dropdown-empty {
+  padding: 14px 10px;
+  font-size: 12px;
+  color: var(--text-4);
+  text-align: center;
+}
 
 .mode-pill {
   display: inline-flex;
