@@ -76,8 +76,15 @@ logger = logging.getLogger(__name__)
 
 
 def _real_llm_enabled() -> bool:
-    """SPEC_CHAT_USE_REAL_LLM=true 启用真 LLM, 默 false 兼容 demo."""
-    return (os.getenv("SPEC_CHAT_USE_REAL_LLM") or "").strip().lower() in ("1", "true", "yes", "on")
+    """默认走真 LLM (production). 显式 SPEC_CHAT_USE_REAL_LLM=false 才关.
+
+    2026-05-27: 默 ON. 之前默 OFF 导致用户撞 mock parser「MVP 只能识别 5 关键词」.
+    真 LLM 在租户 LLM cfg 不可用时仍会优雅 fallback 到 mock parser, 不影响 demo.
+    """
+    val = (os.getenv("SPEC_CHAT_USE_REAL_LLM") or "").strip().lower()
+    if val in ("0", "false", "no", "off"):
+        return False
+    return True
 
 
 # ---------------------------------------------------------------------------
@@ -214,7 +221,7 @@ def _mock_parse_intent(message: str, chapter: str) -> dict:
             },
         }
 
-    if any(k in msg for k in ("流程", "process", "审批")):
+    if any(k in msg for k in ("流程", "process", "审批", "工作流")):
         proc_name = name_hint or "新流程"
         return {
             "kind": "add_process",
@@ -230,16 +237,205 @@ def _mock_parse_intent(message: str, chapter: str) -> dict:
             },
         }
 
+    if any(k in msg for k in ("表单", "form")):
+        form_name = name_hint or "新表单"
+        return {
+            "kind": "add_form",
+            "summary": f"加表单「{form_name}」",
+            "patch": {
+                "_added_forms": [
+                    {
+                        "name": form_name,
+                        "code": f"form_{int(datetime.utcnow().timestamp())}",
+                        "_pending": True,
+                    }
+                ]
+            },
+        }
+
+    if any(k in msg for k in ("列表", "list", "查询页", "列表页")):
+        list_name = name_hint or "新列表"
+        return {
+            "kind": "add_list",
+            "summary": f"加列表页「{list_name}」",
+            "patch": {
+                "_added_lists": [
+                    {
+                        "name": list_name,
+                        "code": f"list_{int(datetime.utcnow().timestamp())}",
+                        "_pending": True,
+                    }
+                ]
+            },
+        }
+
+    if any(k in msg for k in ("页面", "page", "自定义页", "自开发")):
+        page_name = name_hint or "新页面"
+        return {
+            "kind": "add_page",
+            "summary": f"加自定义页面「{page_name}」",
+            "patch": {
+                "_added_pages": [
+                    {
+                        "name": page_name,
+                        "code": f"page_{int(datetime.utcnow().timestamp())}",
+                        "_pending": True,
+                    }
+                ]
+            },
+        }
+
+    if any(k in msg for k in ("事件", "event", "触发器", "trigger")):
+        ev_name = name_hint or "新事件"
+        return {
+            "kind": "add_event",
+            "summary": f"加业务事件「{ev_name}」",
+            "patch": {
+                "_added_events": [
+                    {
+                        "name": ev_name,
+                        "code": f"event_{int(datetime.utcnow().timestamp())}",
+                        "_pending": True,
+                    }
+                ]
+            },
+        }
+
+    if any(k in msg for k in ("数据源", "datasource", "数据库连接", "db connection")):
+        ds_name = name_hint or "新数据源"
+        return {
+            "kind": "add_datasource",
+            "summary": f"加数据源「{ds_name}」",
+            "patch": {
+                "_added_datasources": [
+                    {
+                        "name": ds_name,
+                        "type": "mysql",
+                        "_pending": True,
+                    }
+                ]
+            },
+        }
+
+    if any(k in msg for k in ("集成", "integration", "api 调用", "对接", "webhook")):
+        integ_name = name_hint or "新集成"
+        return {
+            "kind": "add_integration",
+            "summary": f"加集成「{integ_name}」",
+            "patch": {
+                "_added_integrations": [
+                    {
+                        "name": integ_name,
+                        "_pending": True,
+                    }
+                ]
+            },
+        }
+
+    # ── 章节上下文兜底 (用户说"增加一个" / "新建" 但没说类型 → 按当前章节推断) ──
+    if any(k in msg for k in ("增加", "新建", "添加", "加个", "加一个", "创建", "弄一个")):
+        ctx_intent = _infer_intent_by_chapter(chapter, name_hint)
+        if ctx_intent:
+            return ctx_intent
+
     return {"kind": "noop", "summary": "", "patch": {}}
+
+
+def _infer_intent_by_chapter(chapter: str, name_hint: Optional[str]) -> Optional[dict]:
+    """当前章节上下文推断: e.g. 用户在 form 章节说"增加一个" → add_form."""
+    ts = int(datetime.utcnow().timestamp())
+    name = name_hint or "新项"
+
+    if chapter == "data_model":
+        return {
+            "kind": "add_field",
+            "summary": f"在数据模型加字段「{name}」",
+            "patch": {
+                "_added_fields": [
+                    {"name": name, "code": f"new_field_{ts}", "type": "VARCHAR",
+                     "required": False, "_pending": True}
+                ]
+            },
+        }
+    if chapter == "roles":
+        return {
+            "kind": "add_role",
+            "summary": f"加角色「{name}」",
+            "patch": {"_added_roles": [{"name": name, "code": f"role_{ts}", "_pending": True}]},
+        }
+    if chapter == "dict":
+        return {
+            "kind": "add_dict_option",
+            "summary": f"加字典选项「{name}」",
+            "patch": {"_added_dict_options": [{"name": name, "code": f"opt_{ts}", "_pending": True}]},
+        }
+    if chapter == "menus":
+        return {
+            "kind": "add_menu",
+            "summary": f"加菜单「{name}」",
+            "patch": {"_added_menus": [{"name": name, "code": f"menu_{ts}", "_pending": True}]},
+        }
+    if chapter == "form":
+        return {
+            "kind": "add_form",
+            "summary": f"加表单「{name}」",
+            "patch": {"_added_forms": [{"name": name, "code": f"form_{ts}", "_pending": True}]},
+        }
+    if chapter == "list":
+        return {
+            "kind": "add_list",
+            "summary": f"加列表页「{name}」",
+            "patch": {"_added_lists": [{"name": name, "code": f"list_{ts}", "_pending": True}]},
+        }
+    if chapter == "process":
+        return {
+            "kind": "add_process",
+            "summary": f"加流程「{name}」",
+            "patch": {"_added_processes": [{"name": name, "code": f"proc_{ts}", "_pending": True}]},
+        }
+    if chapter == "event":
+        return {
+            "kind": "add_event",
+            "summary": f"加业务事件「{name}」",
+            "patch": {"_added_events": [{"name": name, "code": f"event_{ts}", "_pending": True}]},
+        }
+    if chapter == "integration":
+        return {
+            "kind": "add_integration",
+            "summary": f"加集成「{name}」",
+            "patch": {"_added_integrations": [{"name": name, "_pending": True}]},
+        }
+    if chapter == "datasource":
+        return {
+            "kind": "add_datasource",
+            "summary": f"加数据源「{name}」",
+            "patch": {"_added_datasources": [{"name": name, "type": "mysql", "_pending": True}]},
+        }
+    return None
 
 
 def _mock_reply_text(intent: dict, chapter: str) -> str:
     """根据 intent 生成 AI 回复 (1-2 句中文)。"""
     if intent["kind"] == "noop":
+        # 章节相关提示: 用当前章节给具体例子, 而不是泛泛 5 关键词列表
+        chapter_examples = {
+            "data_model": "「加字段 备注」/「在用户模型加 phone 字段」",
+            "dict": "「加字典 订单状态」/「字典 待处理 加选项 已通过」",
+            "roles": "「加角色 财务专员」/「财务专员 加权限 查看订单」",
+            "menus": "「加菜单 报表中心」/「菜单 我的工作 改名 工作台」",
+            "form": "「加表单 报销单」/「报销单 加字段 金额」",
+            "list": "「加列表页 订单列表」/「订单列表 加筛选 状态」",
+            "process": "「加流程 报销审批」/「审批流加节点 财务复核」",
+            "event": "「加事件 订单创建后通知」/「报销提交时触发邮件」",
+            "integration": "「加集成 钉钉消息」/「对接 企业微信」",
+            "datasource": "「加数据源 主库」/「新建 MySQL 数据源 ods」",
+        }
+        hint = chapter_examples.get(chapter, "「加字段 备注」/「加角色 财务专员」")
         return (
-            "我理解你想做的方向 — 但目前 MVP 只能识别"
-            "「字段 / 角色 / 字典 / 菜单 / 流程」关键词. "
-            "试试: 「加字段 备注」或 「加角色 财务专员」."
+            "我没识别出具体的修改意图. "
+            "请告诉我「改什么 + 具体名字」, "
+            f"例如: {hint}. "
+            "如需 AI 真理解自然语言, 在平台管理→LLM 配置 给本租户绑定一个默认模型."
         )
     summary = intent["summary"]
     return (
@@ -360,13 +556,23 @@ async def _spec_chat_event_stream(
         await check_resource_permission(ctx, db, app, "application", Action.EDIT)
 
         # ── 2. 章节 → section_type 映射 ───────────────────────────────────
+        # 草稿层覆盖 7 章 (data_model / dict / roles / menus / form / list / process).
+        # 业务事件/集成/数据源/应用信息 4 章没草稿层 — 走对应的实际配置入口.
         section_type = _resolve_section_type(body.active_chapter)
         if not section_type:
+            chapter_route_hint = {
+                "event": "请去「功能」tab → 流程设计 panel, 在流程节点上挂事件触发器.",
+                "integration": "请去「数据源」tab → 集成 sub-tab 接入第三方系统.",
+                "datasource": "请去「数据源」tab → 数据库连接 sub-tab 新建数据源.",
+                "app_info": "请在顶部应用名右侧点编辑或去「更多 → 应用设置」改基础信息.",
+            }
+            hint = chapter_route_hint.get(
+                body.active_chapter,
+                "这个章节的修改请去对应的功能 tab 操作.",
+            )
             yield _sse("error", {
                 "message": (
-                    f"章节「{body.active_chapter}」当前不支持 chat 改 SPEC "
-                    f"(MVP 仅支持: data_model / dict / roles / menus / form / list / process). "
-                    f"切到支持的章节再发起对话."
+                    f"章节「{body.active_chapter}」的修改还没接入对话流. {hint}"
                 )
             })
             return
