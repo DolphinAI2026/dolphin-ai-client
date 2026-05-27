@@ -735,6 +735,12 @@ async function reload() {
 }
 
 watch(() => [props.appId, props.menuId, props.formId], () => reload(), { immediate: true })
+
+// 2026-05-27 S4: edit→preview 时 reload — apaas iframe 内用户可能改了
+// queryConditions/queryList, 切回预览自动拉真新配置 (避免显示旧的 mock / 空态).
+watch(viewMode, (mode, prev) => {
+  if (mode === 'preview' && prev === 'edit') reload()
+})
 </script>
 
 <style scoped>

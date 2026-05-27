@@ -128,15 +128,16 @@ function injectIframeStyle(doc: Document) {
   const style = doc.createElement('style')
   style.id = 'aei-injected-style'
   style.textContent = `
-    /* 2026-05-27 S2 → S3: apaas .app-config-header 3 子区: .left (back+title) /
-       .center (el-tabs Form/List/Process/Page) / .right (Save + Close).
-       hide 全部会丢 Save 按钮 → 用户改了配置没法保存. 只藏 .left + .center,
-       保留 .right (Save + Close 关键). header 变窄但功能完整.
-       - .left: 我们外层 mdsh-subnav 已显菜单名, 重复
-       - .center: el-tabs 跟我们外层 mdsh subnav 重复
-       - .right: 保存 + 关闭 必须保留 — 用户改字段后点保存 */
+    /* 2026-05-27 S2 → S3 → S4: apaas .app-config-header 3 子区:
+       .left (back+title) / .center (el-tabs) / .right (Save + Close).
+       - .left: mdsh-subnav 已有菜单名, 重复 → hide
+       - .center: el-tabs 跟外层 mdsh subnav 重复 → hide
+       - .right: 保存 + 关闭 必须保留, 推到右侧 (header flex 不再 stretch).
+       - S4: header 高度压缩 + Save/Close 右对齐 (空 left/center 视觉残留 fix). */
+    .app-config-header { padding: 8px 16px !important; min-height: 0 !important; justify-content: flex-end !important; }
     .app-config-header .left,
     .app-config-header .center { display: none !important; }
+    .app-config-header .right { margin-left: auto !important; }
   `
   ;(doc.head || doc.body || doc.documentElement).appendChild(style)
 }
