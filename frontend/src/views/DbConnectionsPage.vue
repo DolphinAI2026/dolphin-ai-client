@@ -1,5 +1,5 @@
 <template>
-  <BuilderFrame :breadcrumbs="[{ label: '设置' }, { label: '数据库连接管理' }]">
+  <BuilderFrame :breadcrumbs="[{ label: '设置' }, { label: '数据源' }]">
     <template #actions>
       <button class="new-btn" @click="openCreate">
         <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
@@ -8,8 +8,8 @@
     </template>
     <div class="db-main builder-page">
       <div class="page-header">
-        <div class="page-title">数据库连接管理</div>
-        <div class="page-summary">{{ connections.length }} 个数据库连接</div>
+        <div class="page-title">数据源</div>
+        <div class="page-summary">{{ connections.length }} 个数据源</div>
       </div>
 
       <div class="content-wrap">
@@ -18,7 +18,7 @@
         </div>
         <div v-else-if="connections.length === 0" class="empty-state">
           <EmptyState
-            title="暂无数据库连接"
+            title="暂无数据源"
             desc="添加一个连接，让 AI 直接读你的存量数据。支持 MYSQL / PostgreSQL / Oracle 等 6 种。"
           >
             <template #icon>
@@ -96,7 +96,7 @@
       <!-- ==================== 新增 / 编辑 Dialog ==================== -->
       <el-dialog
         v-model="dialogVisible"
-        :title="editing ? '编辑数据库连接' : '新增数据库连接'"
+        :title="editing ? '编辑数据源' : '新增数据源'"
         width="560px"
         :close-on-click-modal="false"
         class="env-dialog"
@@ -377,7 +377,7 @@ async function handleDelete(c: DbConnection) {
   try {
     await ElMessageBox.confirm(
       `确定删除「${c.name}」？该操作不可恢复，但如有应用引用该连接将不受影响。`,
-      '删除数据库连接',
+      '删除数据源',
       {
         confirmButtonText: '删除',
         cancelButtonText: '取消',

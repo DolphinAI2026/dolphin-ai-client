@@ -227,15 +227,13 @@ const router = createRouter({
       component: () => import('@/views/ExtensionSectionDemoPage.vue'),
       meta: { requiresAuth: true }
     },
-    // design-v4 主 nav stub 页 (P3 接入前的占位)
+    // M3 (2026-05-27): 删 /datasources stub — 用老 /db-connections 真页 (DbConnectionsPage)
+    // 当 "数据源" nav 入口. 重定向兼容 G3 老路径.
     {
       path: '/datasources',
-      name: 'Datasources',
-      component: () => import('@/views/stubs/DatasourcesView.vue'),
-      meta: { requiresAuth: true, navExpanded: true }
+      redirect: '/db-connections',
     },
-    // M1 (2026-05-27): 删 4 stub 路由 (/apis /docs /reports /models) — 跟产品定位不符,
-    // ai-builder 核心是"对话驱动应用搭建", 这 4 个顶 nav 没业务需求.
+    // M1: 删 4 stub 路由 (/apis /docs /reports /models) — 产品定位不符.
     // L1: 删 /manage stub — admin-spa 已是平台管理完整入口. nav 管理直跳 /platform-admin.
     {
       path: '/platform-envs',

@@ -30,11 +30,9 @@ const NAV = computed<NavItem[]>(() => [
   { key: 'builder', label: '睿鲸 AI Builder', icon: 'chat', path: '/ai-chat?mode=requirements' },
   { key: 'coding', label: '睿鲸 AI Coding', icon: 'code', path: '/coding', badge: codingWorkspaceCount.value || undefined },
   { key: 'vibe', label: 'Vibe Coding', icon: 'sparkles', path: '/vibe-coding' },
-  // 数据接入 — 统一入口 (合并老 /db-connections + /quick-db)
-  // M1 (2026-05-27): 砍 6 nav (接口/文档/报表/模型/DB问数/数据库连接) — 跟产品定位不符,
-  // ai-builder 核心是"对话驱动应用搭建", 这 4 个不是核心场景. DB 入口合并到 /datasources.
-  // M2 (2026-05-27): 砍 "管理" — 底部 "平台管理" 已有入口跳 /platform-admin, 重复.
-  { key: 'datasources', label: '数据源', icon: 'database', path: '/datasources' },
+  // 数据接入 — '数据源' (老 /db-connections 页面, 真有 list + CRUD)
+  // M3 (2026-05-27): 删 G3 stub /datasources, 用老 DbConnectionsPage 作"数据源"入口.
+  { key: 'datasources', label: '数据源', icon: 'database', path: '/db-connections' },
 ])
 
 const userName = computed(() => user.user?.username || '未登录')
