@@ -255,7 +255,7 @@
              chip (改用左侧菜单 list + 右侧 designer 4 sub-tab). 其他 tab 保留.
              Q2 2026-05-27: 数据源 tab 也不显 chip (扁平 panel, 无 sub). -->
         <div
-          v-if="existingAppId && platformIframeAppId === existingAppId && !legacyMode && topTab !== 'design' && topTab !== 'datasource'"
+          v-if="existingAppId && platformIframeAppId === existingAppId && !legacyMode && topTab !== 'design' && topTab !== 'datasource' && topTab !== 'spec'"
           class="sub-chip-strip"
         >
           <button
@@ -293,9 +293,18 @@
             @select-item="onSectionContentItemSelect"
             @request-create="onSectionContentCreateRequest"
           />
+          <!-- 设计 tab: U3 — SPEC 设计层 (跟"功能" tab 平行).
+               改 SPEC 文档 → AI 翻译成 apaas 配置. MVP read-only + P2 接 chat. -->
+          <SpecDesignPanel
+            v-if="!legacyMode && topTab === 'spec' && existingAppId"
+            :key="`spec-${designerRefreshKey}`"
+            class="platform-iframe-container"
+            :app-id="existingAppId"
+            :apaas-app-id="store.currentApp?.apaas_app_id || ''"
+          />
           <!-- 日志 tab: design-v4 K4 — 4 sub-tab LogsPanel (deploy / operation / ai / error) -->
           <LogsPanel
-            v-if="!legacyMode && topTab === 'log' && existingAppId"
+            v-else-if="!legacyMode && topTab === 'log' && existingAppId"
             :app-id="existingAppId"
             class="platform-iframe-container"
           />
@@ -1025,6 +1034,8 @@ import RoleManagePanel from '@/components/v3/RoleManagePanel.vue'
 import LogsPanel from '@/components/v3/LogsPanel.vue'
 import AppDatasourcePanel from '@/components/v3/AppDatasourcePanel.vue'
 import CustomPagePreviewPanel from '@/components/v3/CustomPagePreviewPanel.vue'
+// U3 (2026-05-27): SPEC 设计层 panel — 跟"功能" tab 平行的 SPEC 编辑层 (MVP read-only).
+import SpecDesignPanel from '@/components/v3/SpecDesignPanel.vue'
 import type { ConversationCreate, Message } from '@/types'
 import TopBar from '@/components/TopBar.vue'
 import WorkbenchShell from '@/components/WorkbenchShell.vue'
@@ -2520,6 +2531,9 @@ const SECTION_TO_TOP_TAB: Record<string, string> = {
   extension: 'log',
 }
 const TOP_TAB_TO_SECTION: Record<string, string> = {
+  // U3 (2026-05-27): 新增 'spec' tab — SPEC 编辑层 (跟"功能" tab 平行).
+  // 扁平 panel 无 sub, 不映射回旧 SECTION 集合.
+  spec: 'spec',
   design: 'ui',
   data: 'data',
   logic: 'logic',
@@ -2528,6 +2542,8 @@ const TOP_TAB_TO_SECTION: Record<string, string> = {
   datasource: 'datasource',  // Q2 (2026-05-27): 扁平 panel, 不映射回旧 SECTION 集合
 }
 const TOP_TAB_DEFAULT_SUB: Record<string, string> = {
+  // U3 (2026-05-27): spec tab 扁平 panel 无 sub.
+  spec: '',
   design: 'menus',
   data: 'models',
   logic: 'processes',
