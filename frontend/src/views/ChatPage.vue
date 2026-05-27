@@ -300,7 +300,16 @@
             class="platform-iframe-container"
           />
           <!-- 2026-05-26 design-v3 重构: native panel 替 iframe -->
-          <!-- 设计 tab: 选中菜单后显 designer shell (内 4 sub-tab: 表单/列表/流程/页面) -->
+          <!-- 2026-05-27 R: CUSTOM 菜单 (自开发 Vue) 走专门 panel: preview=iframe runtime, edit=跳 IDE -->
+          <CustomPagePreviewPanel
+            v-else-if="!legacyMode && topTab === 'design' && existingAppId && selectedApaasMenuId && selectedApaasMenuType === 'CUSTOM'"
+            :key="`cpp-${selectedApaasMenuId}-${designerRefreshKey}`"
+            class="platform-iframe-container"
+            :app-id="existingAppId"
+            :menu-id="selectedApaasMenuId"
+            :menu-name="selectedApaasMenuName"
+          />
+          <!-- 设计 tab: 选中 MODEL 菜单后显 designer shell (内 4 sub-tab: 表单/列表/流程/页面) -->
           <div
             v-else-if="!legacyMode && topTab === 'design' && existingAppId && selectedApaasMenuId"
             class="platform-iframe-container mdsh"
@@ -1015,6 +1024,7 @@ import DictEditorPanel from '@/components/v3/DictEditorPanel.vue'
 import RoleManagePanel from '@/components/v3/RoleManagePanel.vue'
 import LogsPanel from '@/components/v3/LogsPanel.vue'
 import AppDatasourcePanel from '@/components/v3/AppDatasourcePanel.vue'
+import CustomPagePreviewPanel from '@/components/v3/CustomPagePreviewPanel.vue'
 import type { ConversationCreate, Message } from '@/types'
 import TopBar from '@/components/TopBar.vue'
 import WorkbenchShell from '@/components/WorkbenchShell.vue'
@@ -2644,6 +2654,8 @@ const shouldShowSectionContent = computed(() => {
 const selectedSectionItemId = ref<string>('')
 const selectedApaasMenuName = ref<string>('')
 const selectedApaasMenuFormId = ref<string>('')
+// 2026-05-27 R: 选中菜单的 menu_type — CUSTOM/MODEL/PROCESS 等. CUSTOM 走 CustomPagePreviewPanel.
+const selectedApaasMenuType = ref<string>('')
 function onNativePanelBack() {
   selectedSectionItemId.value = ''
 }
@@ -2775,6 +2787,8 @@ function onApaasMenuSelected(menu: {
   // design-v4 Phase A: FormDesignerPanel 用 menu_name / form_id 反查 model
   if (menu.menu_name) selectedApaasMenuName.value = menu.menu_name
   if (menu.form_id) selectedApaasMenuFormId.value = String(menu.form_id)
+  // R (2026-05-27): 保存 menu_type 让 CUSTOM 菜单走 CustomPagePreviewPanel 分支
+  selectedApaasMenuType.value = (menu.menu_type || menu.menu_display || '').toUpperCase()
   const token = userStore.token || localStorage.getItem('token') || ''
   // 仅在切到 platform 视图后才允许切菜单 — 避免误把 iframe 卡到 platform 模式
   if (activeView.value !== 'platform') activeView.value = 'platform'

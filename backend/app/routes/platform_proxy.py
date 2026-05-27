@@ -387,7 +387,9 @@ _MENU_TYPE_TO_EDITOR_PATH = {
 def _build_menu_redirect_path(tid: str, apaas_app_id: str,
                                menu_id: str = "", form_id: str = "",
                                menu_type: str = "",
-                               step_index: int = 0) -> str:
+                               step_index: int = 0,
+                               app_code: str = "",
+                               redirect_kind: str = "config") -> str:
     """根据菜单类型构建 platform iframe redirect_path.
 
     - 不传 menu_id → 应用编辑总览页, currentStepIndex=step_index 决定显哪个 tab
@@ -395,7 +397,24 @@ def _build_menu_redirect_path(tid: str, apaas_app_id: str,
     - 传 menu_id  → 该菜单对应的表单/模型编辑器 (step_index 忽略).
 
     2026-05-26: 加 step_index 让 SectionNav 切 section 时 iframe 跳到对应 tab.
+
+    2026-05-27 R: 加 redirect_kind 参数:
+      - "config" (默认): 上面那套 editor URL (admin/app-store/edit-app / default/{sub})
+      - "runtime": 真应用 runtime URL (跟最终用户看应用一致), CUSTOM 自开发首页用.
+        runtime 走 `/platform/{tid}/{app_code}/page/{menu_id}` 兜底 pattern (app_code
+        从 app.app_code 拿; tenant_code 拿不到只能用 tid 兜底).
+        TODO 2026-05-27: 找 super-agents-dev / apaas 原生 SPA 真实 runtime URL pattern
+        替换. 当前兜底可能跟平台真实 runtime route 不一致 — 平台返 404 时改这个 fn.
     """
+    if redirect_kind == "runtime":
+        # 用户访问真应用首页 / 真菜单页 (跟最终用户用应用一致). CUSTOM 自开发页
+        # 用 — 因为 self-developed Vue 组件没有 editor URL.
+        # 兜底 pattern: 用 apaas_app_id 作 url 段 (app_code 可能没 syncronized).
+        seg = app_code.strip() or apaas_app_id
+        if menu_id.strip():
+            return f"/platform/{tid}/{seg}/page/{menu_id}"
+        return f"/platform/{tid}/{seg}/"
+
     if not menu_id.strip():
         idx = step_index if 0 <= step_index <= 9 else 0
         return f"/platform/{tid}/admin/app-store/edit-app?appId={apaas_app_id}&currentStepIndex={idx}"
@@ -421,6 +440,7 @@ async def proxy_entry(
     menu_type: str = "",
     step_index: int = 0,
     env_id: int = 0,
+    redirect_kind: str = "config",
 ):
     """iframe SSO 入口 — 获取平台信息、代理 HTML、注入 token.
 
@@ -430,6 +450,10 @@ async def proxy_entry(
     2026-05-26 design-v4 I3 扩展: 可选 env_id 覆盖 app.platform_env_id —
     应用栏 "开发 / 生产" toggle 切到 prod 时透传 env_id, 让 iframe 走 prod env
     (而非 app 默认绑的 dev env).  env_id=0 / 不传 = 复用 app.platform_env_id.
+
+    2026-05-27 R 扩展: 可选 redirect_kind ('config' | 'runtime'):
+      - 'config' (默认): 进 apaas 平台 editor 页面 (现状)
+      - 'runtime': 进真应用 runtime 页面 (跟最终用户看应用一致, CUSTOM 自开发首页 preview 用)
     """
     from app.models import Application
     from app.deps import get_auth_context_from_token
@@ -529,6 +553,8 @@ async def proxy_entry(
     redirect_path = _build_menu_redirect_path(
         tid, app.apaas_app_id, menu_id=menu_id, form_id=form_id, menu_type=menu_type,
         step_index=step_index,
+        app_code=app.app_code or "",
+        redirect_kind=redirect_kind,
     )
     redirect_json = json.dumps(redirect_path)
 

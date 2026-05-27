@@ -232,89 +232,17 @@
       </div>
 
       <!-- =========================================================== -->
-      <!-- edit mode — 字段 / 列配置 编辑 (保留原 503 行的字段表格逻辑) -->
+      <!-- edit mode — 2026-05-27 R: 删自写 503 行字段表格 UI, 改 iframe apaas 原生 -->
+      <!-- 用户手动改走 apaas 平台 (data-model-fn-config?embed=1); 业务改用对话 -->
       <!-- =========================================================== -->
-      <div v-else class="ldp-edit">
-        <header class="ldp-head">
-          <div class="ldp-head-meta">
-            <h1 class="ldp-title">{{ menuName || '列表设计' }}</h1>
-            <p class="ldp-sub">
-              <span v-if="modelCode" class="ldp-code">{{ modelCode }}</span>
-              <span v-if="columns.length" class="ldp-stat">{{ columns.length }} 列</span>
-            </p>
-          </div>
-          <div class="ldp-head-actions">
-            <button class="ldp-btn ldp-btn-ghost" :disabled="!columns.length" @click="onBatchEdit">批量编辑</button>
-            <button class="ldp-btn ldp-btn-primary" @click="onAddColumn">+ 添加列</button>
-          </div>
-        </header>
-
-        <div v-if="loading" class="ldp-state">加载列配置…</div>
-        <template v-else>
-          <div class="ldp-search-row">
-            <div class="ldp-search">
-              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                <circle cx="11" cy="11" r="7"/><path d="m21 21-4.3-4.3"/>
-              </svg>
-              <input v-model="searchKw" placeholder="搜索列名 / 字段绑定" />
-            </div>
-          </div>
-
-          <div class="ldp-table-wrap">
-            <table class="ldp-table">
-              <thead>
-                <tr>
-                  <th class="num">#</th>
-                  <th>列名</th>
-                  <th>字段绑定</th>
-                  <th class="w">宽度</th>
-                  <th class="center">排序</th>
-                  <th>显示条件</th>
-                  <th class="ops">操作</th>
-                </tr>
-              </thead>
-              <tbody>
-                <tr v-if="filteredColumns.length === 0">
-                  <td colspan="7" class="empty">
-                    <p v-if="searchKw">无匹配「{{ searchKw }}」</p>
-                    <template v-else>
-                      <p>该列表暂无可显字段</p>
-                      <p class="hint">点击右上「+ 添加列」, 或用配置助手对话添加</p>
-                    </template>
-                  </td>
-                </tr>
-                <tr v-for="(c, i) in filteredColumns" :key="c.field_code || i">
-                  <td class="num">{{ i + 1 }}</td>
-                  <td>{{ c.field_name || '—' }}</td>
-                  <td class="mono">{{ c.field_code || '—' }}</td>
-                  <td class="w mono">{{ c.width || 'auto' }}</td>
-                  <td class="center">
-                    <span class="ldp-sort-chip" :class="`ldp-sort-${c.sort_dir || 'none'}`">
-                      {{ SORT_LABEL[c.sort_dir || 'none'] }}
-                    </span>
-                  </td>
-                  <td class="muted">{{ c.show_condition || '总是显示' }}</td>
-                  <td class="ops">
-                    <button class="ldp-icon-btn" :disabled="true" title="P1 接入 - 编辑列" @click="onEditColumn(c)">
-                      <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                        <path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/>
-                        <path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/>
-                      </svg>
-                    </button>
-                    <button class="ldp-icon-btn ldp-icon-del" :disabled="true" title="P1 接入 - 删除列" @click="onDeleteColumn(c)">
-                      <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                        <path d="M3 6h18"/>
-                        <path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6"/>
-                        <path d="M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/>
-                      </svg>
-                    </button>
-                  </td>
-                </tr>
-              </tbody>
-            </table>
-          </div>
-        </template>
-      </div>
+      <ApaasEmbedIframe
+        v-else
+        :app-id="props.appId"
+        :menu-id="props.menuId"
+        :form-id="props.formId"
+        menu-type="MODEL"
+        mode="config"
+      />
     </template>
   </section>
 </template>
@@ -322,6 +250,7 @@
 <script setup lang="ts">
 import { ref, computed, watch, reactive } from 'vue'
 import request from '@/utils/request'
+import ApaasEmbedIframe from './ApaasEmbedIframe.vue'
 
 // 字段 → 列定义 (edit mode 用)
 interface ColumnRow {
