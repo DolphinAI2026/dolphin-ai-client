@@ -305,20 +305,71 @@
               </table>
             </template>
 
-            <!-- 六、表单设计 (汇总,详情去"功能"tab) -->
+            <!-- 六、表单设计 — X (2026-05-27): 真渲染每个 MODEL menu 的表单关联 -->
             <template v-else-if="ch.key === 'form'">
-              <div class="subsection-empty subsection-empty-soft">
-                表单字段汇总在<strong>三、数据模型</strong>章节; 表单布局 / 必填规则
-                / 字段权限请去"功能"tab 选菜单 → 表单设计 panel 查看真实配置.
+              <div v-if="modelMenus.length === 0" class="subsection-empty">
+                没有挂表单的菜单. 用对话加 "新建借书申请表单" 之类.
               </div>
+              <template v-else>
+                <p class="ch-intro">
+                  应用共 <strong>{{ modelMenus.length }}</strong> 个表单
+                  (跟 MODEL 类型菜单 1:1).
+                  字段定义详见<strong>三、数据模型</strong>; 这里列每个表单的菜单挂载点.
+                </p>
+                <table class="spec-table">
+                  <thead>
+                    <tr>
+                      <th>菜单名</th>
+                      <th>菜单编码</th>
+                      <th>关联表单 ID</th>
+                      <th>表单 code</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    <tr v-for="m in modelMenus" :key="m.id">
+                      <td>{{ m.name }}</td>
+                      <td><span class="mono">{{ m.code || '—' }}</span></td>
+                      <td><span class="mono">{{ describeExtra(m.extra, 'form_id') || '—' }}</span></td>
+                      <td><span class="mono">{{ describeExtra(m.extra, 'form_code') || '—' }}</span></td>
+                    </tr>
+                  </tbody>
+                </table>
+                <p class="hint">
+                  布局 / 必填 / 字段权限请去 "功能" tab 选对应菜单 → 表单设计 panel 改.
+                  下次 sprint 接 list_apaas_form_components 把字段标记 (必填 / 权限) 显这.
+                </p>
+              </template>
             </template>
 
-            <!-- 七、列表设计 (汇总) -->
+            <!-- 七、列表设计 — X (2026-05-27): 同样真渲染 MODEL menu list -->
             <template v-else-if="ch.key === 'list'">
-              <div class="subsection-empty subsection-empty-soft">
-                列表视图 (查询条件 / 列配置 / 过滤器) 跟数据模型一一对应, 请去"功能"
-                tab 选菜单 → 列表设计 panel 查看真实配置.
+              <div v-if="modelMenus.length === 0" class="subsection-empty">
+                没有挂列表的菜单.
               </div>
+              <template v-else>
+                <p class="ch-intro">
+                  每个 MODEL 菜单含 1 个列表视图 (跟表单 1:1 同 form_id).
+                </p>
+                <table class="spec-table">
+                  <thead>
+                    <tr>
+                      <th>菜单名</th>
+                      <th>表单 ID</th>
+                      <th>说明</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    <tr v-for="m in modelMenus" :key="m.id">
+                      <td>{{ m.name }}</td>
+                      <td><span class="mono">{{ describeExtra(m.extra, 'form_id') || '—' }}</span></td>
+                      <td class="text-3">查询条件 / 列字段 详见"功能" tab → 列表设计</td>
+                    </tr>
+                  </tbody>
+                </table>
+                <p class="hint">
+                  下次 sprint 接 listPageView (queryConditions + queryList) 直接显这.
+                </p>
+              </template>
             </template>
 
             <!-- 八、流程 & 事件 -->
@@ -348,12 +399,36 @@
               </table>
             </template>
 
-            <!-- 九、集成 & 自开发 -->
+            <!-- 九、集成 & 自开发 — X (2026-05-27): 真渲染 CUSTOM menu list -->
             <template v-else-if="ch.key === 'integration'">
-              <div class="subsection-empty subsection-empty-soft">
-                自开发页面 (Vue CUSTOM 菜单) / API 集成 / Webhook 配置等. 当前
-                MVP 仅汇总 — 详情去"功能"tab + CUSTOM 菜单查看 IDE 工作区.
+              <div v-if="customMenus.length === 0" class="subsection-empty">
+                无自开发页面 (CUSTOM 菜单).
+                <p class="hint">用 Vibe Coding / 在线 IDE 写自定义 Vue 页, 部署后挂菜单.</p>
               </div>
+              <template v-else>
+                <p class="ch-intro">
+                  应用含 <strong>{{ customMenus.length }}</strong> 个自开发 Vue 页 (CUSTOM 类型菜单).
+                </p>
+                <table class="spec-table">
+                  <thead>
+                    <tr>
+                      <th>菜单名</th>
+                      <th>组件 / 页面 code</th>
+                      <th>说明</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    <tr v-for="m in customMenus" :key="m.id">
+                      <td>{{ m.name }}</td>
+                      <td><span class="mono">{{ describeExtra(m.extra, 'link_url') || '—' }}</span></td>
+                      <td class="text-3">详见"功能" tab 选该菜单, 跳 IDE 改 Vue 源码</td>
+                    </tr>
+                  </tbody>
+                </table>
+                <p class="hint">
+                  P5: 加 API 集成 / Webhook 配置列表 (现 apaas 无对应 schema).
+                </p>
+              </template>
             </template>
 
             <!-- 十、数据源 -->
@@ -717,6 +792,17 @@ const loadedModels = ref<SectionItem[]>([])
 const loadedDicts = ref<SectionItem[]>([])
 const loadedMenus = ref<SectionItem[]>([])
 const loadedProcesses = ref<SectionItem[]>([])
+
+// X (2026-05-27): 按 menu_type 分组 — 六/七 章用 MODEL 菜单, 九 章用 CUSTOM 菜单.
+// MODEL = 数据驱动表单/列表; CUSTOM = 自开发 Vue 页.
+const modelMenus = computed(() => loadedMenus.value.filter(m => {
+  const t = String(m.extra?.menu_type || '').toUpperCase()
+  return t === 'MODEL' || t === 'MENU_TYPE_MODEL'
+}))
+const customMenus = computed(() => loadedMenus.value.filter(m => {
+  const t = String(m.extra?.menu_type || '').toUpperCase()
+  return t === 'CUSTOM' || t === 'MENU_TYPE_CUSTOM'
+}))
 const loadedDatasources = ref<DatasourceItem[]>([])
 const datasourceNote = ref('')
 
@@ -1058,6 +1144,42 @@ async function fetchSection(
   return fallback
 }
 
+// X (2026-05-27): apaas-menus 是 hierarchical (children/submenus nested), 不像
+// section-content endpoints 是 flat list. 单独 helper dfs flatten + map 到 SectionItem.
+async function fetchMenusFromApaas(endpoint: string): Promise<SectionItem[]> {
+  try {
+    const resp = await request.get<any, any>(endpoint)
+    const raw: any[] = resp?.items || resp?.menus || []
+    if (!Array.isArray(raw)) return []
+    const out: SectionItem[] = []
+    const dfs = (arr: any[], depth: number) => {
+      for (const m of arr) {
+        if (!m || typeof m !== 'object') continue
+        out.push({
+          id: String(m.menu_id || m.id || ''),
+          code: String(m.menu_code || m.form_code || m.link_url || ''),
+          name: String(m.menu_name || m.name || ''),
+          extra: {
+            menu_type: m.menu_type || m.type || '',
+            form_id: m.form_id || '',
+            form_code: m.form_code || '',
+            link_url: m.link_url || '',
+            depth,
+            parent_menu_id: m.parent_menu_id || '',
+            is_group: !!m.is_group,
+          },
+        })
+        const kids = m.children || m.submenus
+        if (Array.isArray(kids) && kids.length) dfs(kids, depth + 1)
+      }
+    }
+    dfs(raw, 0)
+    return out
+  } catch {
+    return []
+  }
+}
+
 async function fetchApp(): Promise<void> {
   try {
     const resp = await request.get<any, any>(`/applications/${props.appId}`)
@@ -1110,12 +1232,14 @@ async function reload(): Promise<void> {
   error.value = ''
   try {
     const base = `/applications/${props.appId}`
+    // X (2026-05-27): dicts 加 with_options=true 拉真选项; menus 改 /apaas-menus
+    // (旧 /section-content/menus 不存在 → 404)
     const [, roles, models, dicts, menus, processes] = await Promise.all([
       fetchApp(),
       fetchSection(`${base}/section-content/roles`),
       fetchSection(`${base}/section-content/models?with_fields=true`),
-      fetchSection(`${base}/section-content/dicts`),
-      fetchSection(`${base}/section-content/menus`),
+      fetchSection(`${base}/section-content/dicts?with_options=true`),
+      fetchMenusFromApaas(`${base}/apaas-menus`),
       fetchSection(`${base}/section-content/processes`),
       fetchDatasources(),
     ])

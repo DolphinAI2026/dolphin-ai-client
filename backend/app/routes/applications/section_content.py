@@ -476,8 +476,13 @@ async def get_section_content_dicts(
     app_id: int,
     ctx: Annotated[AuthContext, Depends(get_auth_context)],
     db: Annotated[AsyncSession, Depends(get_db)],
+    with_options: bool = Query(False, description="是否回填字典 options[] (省 token 默认 False)"),
 ) -> SectionContentResponse:
-    """data section: 列应用的字典 (走 list_apaas_app_dicts, with_options=False 省 token)."""
+    """data section: 列应用的字典.
+
+    走 list_apaas_app_dicts. with_options=True 时 MCP 会真拉每个 dict 的 options 数组
+    (跟 query_dict_options 同源), 适合 SPEC 设计 tab 一次展示全字典内容.
+    """
     source = "list_apaas_app_dicts"
     app = await _load_app_and_check_view(app_id, ctx, db)
     if not app.platform_env_id or not app.apaas_app_id:
@@ -487,7 +492,7 @@ async def get_section_content_dicts(
         source,
         env_id=app.platform_env_id,
         apaas_app_id=str(app.apaas_app_id),
-        extra_args={"with_options": False},
+        extra_args={"with_options": bool(with_options)},
     )
     if not ok:
         return _tool_error(app, source, raw_or_err["error_code"], raw_or_err["message"])
