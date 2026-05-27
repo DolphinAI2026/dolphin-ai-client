@@ -33,8 +33,8 @@ const NAV = computed<NavItem[]>(() => [
   // 数据接入 — 统一入口 (合并老 /db-connections + /quick-db)
   // M1 (2026-05-27): 砍 6 nav (接口/文档/报表/模型/DB问数/数据库连接) — 跟产品定位不符,
   // ai-builder 核心是"对话驱动应用搭建", 这 4 个不是核心场景. DB 入口合并到 /datasources.
+  // M2 (2026-05-27): 砍 "管理" — 底部 "平台管理" 已有入口跳 /platform-admin, 重复.
   { key: 'datasources', label: '数据源', icon: 'database', path: '/datasources' },
-  { key: 'manage', label: '管理', icon: 'code', path: '/platform-admin' },
 ])
 
 const userName = computed(() => user.user?.username || '未登录')

@@ -187,7 +187,6 @@ const primaryNavItems = [
   { key: 'home', label: '智能搭建', path: '/' },
   { key: 'coding', label: '智能开发', path: '/coding' },
   { key: 'datasources', label: '数据源', path: '/datasources' },
-  { key: 'manage', label: '管理', path: '/platform-admin' },
 ]
 
 const activeKey = computed(() => {
@@ -195,7 +194,6 @@ const activeKey = computed(() => {
   if (p === '/' || p.startsWith('/apps')) return 'home'
   if (p.startsWith('/coding')) return 'coding'
   if (p.startsWith('/datasources')) return 'datasources'
-  if (p.startsWith('/platform-admin')) return 'manage'
   return 'home'
 })
 
