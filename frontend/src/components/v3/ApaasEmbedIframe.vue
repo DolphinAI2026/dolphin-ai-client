@@ -123,15 +123,20 @@ const APAAS_TAB_ID_BY_SUB: Record<string, string> = {
 }
 
 function injectIframeStyle(doc: Document) {
-  if (doc.querySelector('#aei-injected-style')) return
+  // 先移除旧版 (可能是 hide 整个 header — 把保存按钮也藏没了 bug)
+  doc.querySelector('#aei-injected-style')?.remove()
   const style = doc.createElement('style')
   style.id = 'aei-injected-style'
   style.textContent = `
-    /* 2026-05-27 S2: 隐藏 apaas 表单/列表设计器内部顶栏 (.app-config-header).
-       实测真实类名 — el-tabs (Form/List/Process/Page) + back icon + edit icon
-       全在 .app-config-header 里. 我们外层 mdsh-subnav 已有 4 sub-tab + 菜单名,
-       这个 apaas 内部 chrome 完全冗余, 整段干掉. */
-    .app-config-header { display: none !important; }
+    /* 2026-05-27 S2 → S3: apaas .app-config-header 3 子区: .left (back+title) /
+       .center (el-tabs Form/List/Process/Page) / .right (Save + Close).
+       hide 全部会丢 Save 按钮 → 用户改了配置没法保存. 只藏 .left + .center,
+       保留 .right (Save + Close 关键). header 变窄但功能完整.
+       - .left: 我们外层 mdsh-subnav 已显菜单名, 重复
+       - .center: el-tabs 跟我们外层 mdsh subnav 重复
+       - .right: 保存 + 关闭 必须保留 — 用户改字段后点保存 */
+    .app-config-header .left,
+    .app-config-header .center { display: none !important; }
   `
   ;(doc.head || doc.body || doc.documentElement).appendChild(style)
 }
