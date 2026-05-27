@@ -30,9 +30,8 @@ const NAV = computed<NavItem[]>(() => [
   { key: 'builder', label: '睿鲸 AI Builder', icon: 'chat', path: '/ai-chat?mode=requirements' },
   { key: 'coding', label: '睿鲸 AI Coding', icon: 'code', path: '/coding', badge: codingWorkspaceCount.value || undefined },
   { key: 'vibe', label: 'Vibe Coding', icon: 'sparkles', path: '/vibe-coding' },
-  // 数据接入 — '数据源' (老 /db-connections 页面, 真有 list + CRUD)
-  // M3 (2026-05-27): 删 G3 stub /datasources, 用老 DbConnectionsPage 作"数据源"入口.
-  { key: 'datasources', label: '数据源', icon: 'database', path: '/db-connections' },
+  // M4 (2026-05-27): 数据源从工作台搬到平台管理 (admin-spa /datasources).
+  // 工作台 nav 仅留应用搭建相关 5 项, 平台级配置 (数据源 / LLM / 租户) 全归 admin-spa.
 ])
 
 const userName = computed(() => user.user?.username || '未登录')

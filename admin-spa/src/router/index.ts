@@ -26,6 +26,8 @@ const router = createRouter({
         { path: 'users',      component: () => import('@/views/PlatformUsers.vue') },
         { path: 'workspaces', component: () => import('@/views/SandboxMonitor.vue') },
         { path: 'logs',       component: () => import('@/views/CallLogs.vue') },
+        // M4 (2026-05-27): 数据源 — 从 ai-builder 工作台搬到平台管理
+        { path: 'datasources', component: () => import('@/views/PlatformDatasources.vue') },
       ],
     },
   ],

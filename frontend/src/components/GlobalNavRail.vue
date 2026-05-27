@@ -186,14 +186,12 @@ const expanded = ref(true)
 const primaryNavItems = [
   { key: 'home', label: '智能搭建', path: '/' },
   { key: 'coding', label: '智能开发', path: '/coding' },
-  { key: 'datasources', label: '数据源', path: '/db-connections' },
 ]
 
 const activeKey = computed(() => {
   const p = route.path
   if (p === '/' || p.startsWith('/apps')) return 'home'
   if (p.startsWith('/coding')) return 'coding'
-  if (p.startsWith('/db-connections') || p.startsWith('/datasources')) return 'datasources'
   return 'home'
 })
 
