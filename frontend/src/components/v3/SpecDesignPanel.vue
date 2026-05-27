@@ -32,18 +32,28 @@
         <span class="version-pill-label">草稿</span>
         <span class="arrow" aria-hidden="true">▾</span>
       </div>
-      <!-- mode pill (阅读 / 对比) -->
+      <!-- mode pill (阅读 / 对比) — V1 Part B: 对比模式接通 -->
       <div class="mode-pill" role="tablist" aria-label="视图模式">
-        <button class="active" role="tab" aria-selected="true">
+        <button
+          :class="{ active: viewMode === 'read' }"
+          role="tab"
+          :aria-selected="viewMode === 'read'"
+          type="button"
+          @click="onSwitchMode('read')"
+        >
           <span aria-hidden="true">📖</span> 阅读
         </button>
         <button
+          :class="{ active: viewMode === 'compare' }"
           role="tab"
-          aria-selected="false"
-          disabled
-          title="P2 接入"
+          :aria-selected="viewMode === 'compare'"
+          type="button"
+          :disabled="loading"
+          :title="viewMode === 'compare' ? '切回阅读模式' : '草稿 vs 生产 对比 (MVP 仅数据模型显精细差异)'"
+          @click="onSwitchMode('compare')"
         >
           <span aria-hidden="true">🔍</span> 对比
+          <span v-if="diffTotalCount > 0" class="mode-pill-badge">{{ diffTotalCount }}</span>
         </button>
       </div>
       <div class="toolbar-divider" aria-hidden="true"></div>
@@ -56,10 +66,12 @@
       <div class="spacer"></div>
       <button
         class="apply-cta"
-        disabled
-        title="P2 接入 — 需 SPEC 改动后才能生成"
+        :disabled="viewMode === 'compare'"
+        :title="applyCtaTitle"
+        @click="onOpenApplyModal"
       >
         <span aria-hidden="true">✨</span> 确认并生成
+        <span v-if="diffTotalCount > 0" class="apply-cta-count">[{{ diffTotalCount }}]</span>
       </button>
     </div>
 
@@ -84,12 +96,18 @@
           >
             <span class="num">{{ ch.num }}</span>
             <span class="label">{{ ch.title }}</span>
+            <!-- V1 Part B: 对比模式下显 +X / ~Y / 无差异 -->
+            <span
+              v-if="viewMode === 'compare'"
+              class="nav-diff-badge"
+              :class="{ 'nav-diff-badge-zero': chapterDiffLabel(ch.key) === '无差异' }"
+            >{{ chapterDiffLabel(ch.key) }}</span>
           </button>
         </div>
       </nav>
 
-      <!-- CENTER: SPEC doc -->
-      <main class="sdp-doc-pane" ref="docPaneRef">
+      <!-- CENTER: SPEC doc — 阅读模式 (read mode) -->
+      <main v-if="viewMode === 'read'" class="sdp-doc-pane" ref="docPaneRef">
         <!-- doc header -->
         <div class="doc-title-row">
           <h1 class="doc-title">{{ appName }}</h1>
@@ -370,9 +388,201 @@
         </template>
       </main>
 
+      <!-- V1 Part B: 对比模式 (compare mode) — side-by-side 2 col (v1.1 vs 草稿) -->
+      <main v-else-if="viewMode === 'compare'" class="sdp-compare-shell" aria-label="SPEC 对比">
+        <!-- LEFT col: 生产 (v1.1) -->
+        <div class="sdp-compare-col">
+          <div class="sdp-compare-col-head left">
+            <span class="sdp-compare-col-dot" aria-hidden="true">●</span>
+            <span class="sdp-compare-col-ver">v1.1 (生产)</span>
+            <span class="sdp-compare-col-meta">apaas 真实状态</span>
+          </div>
+
+          <!-- compare loading -->
+          <div v-if="compareLoading" class="state-block">
+            <div class="spinner" aria-hidden="true"></div>
+            <span>加载对比草稿中…</span>
+          </div>
+
+          <!-- 章节渲染 — 跟 read mode 一致结构, 但只渲 active section 让对照集中 -->
+          <template v-else>
+            <section
+              v-for="ch in CHAPTERS"
+              :key="`prod-${ch.key}`"
+              :id="`sec-prod-${ch.key}`"
+              class="section section-compare"
+            >
+              <div class="section-head section-head-compare">
+                <h2>{{ ch.num }}、{{ ch.title }}</h2>
+              </div>
+
+              <!-- 数据模型: 跟 read mode 同结构, 字段不染色 (这是基线) -->
+              <template v-if="ch.key === 'data_model'">
+                <div v-if="loadedModels.length === 0" class="subsection-empty">
+                  生产无数据模型.
+                </div>
+                <div v-for="m in loadedModels" :key="`prod-${m.id}`" class="subsection">
+                  <h3>
+                    {{ m.name }}
+                    <span v-if="m.code" class="mono code-after-h3">({{ m.code }})</span>
+                  </h3>
+                  <table v-if="modelFields(m).length" class="spec-table">
+                    <thead>
+                      <tr>
+                        <th>字段名</th>
+                        <th>code</th>
+                        <th>类型</th>
+                        <th>必填</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      <tr
+                        v-for="f in modelFields(m)"
+                        :key="`prod-${m.id}-${String(f.code || f.name)}`"
+                        :class="{ 'sdp-diff-row-del': isFieldDeletedInDraft(m, f) }"
+                      >
+                        <td><span :class="{ 'sdp-diff-cell-del': isFieldDeletedInDraft(m, f) }">{{ f.name || '—' }}</span></td>
+                        <td><span class="mono" :class="{ 'sdp-diff-cell-del': isFieldDeletedInDraft(m, f) }">{{ f.code || '—' }}</span></td>
+                        <td><span class="type-chip">{{ f.type || '—' }}</span></td>
+                        <td>
+                          <span v-if="f.required" class="required-mark">*</span>
+                          <span v-else class="muted">—</span>
+                        </td>
+                      </tr>
+                    </tbody>
+                  </table>
+                  <div v-else class="subsection-empty">该模型未拉到字段详情.</div>
+                </div>
+                <!-- 草稿新增的模型 在生产侧显占位 (跟 mockup 视图 ② 一致) -->
+                <div
+                  v-for="m in comparedModels.filter(x => x.is_added_in_draft)"
+                  :key="`prod-placeholder-${m.code}`"
+                  class="subsection sdp-compare-placeholder"
+                >
+                  <div class="subsection-empty subsection-empty-soft">
+                    (无 "{{ m.name }}" 模型 — 草稿新增)
+                  </div>
+                </div>
+              </template>
+
+              <!-- 非 data_model 章节: MVP 只显占位 (SPEC chat 当前只能改 4 类) -->
+              <template v-else>
+                <div class="subsection-empty subsection-empty-soft">
+                  <strong>{{ ch.title }}</strong> — 草稿 vs 生产 无差异 (MVP 仅数据模型支持精细 diff).
+                </div>
+              </template>
+            </section>
+          </template>
+        </div>
+
+        <!-- RIGHT col: 草稿 -->
+        <div class="sdp-compare-col">
+          <div class="sdp-compare-col-head right">
+            <span class="sdp-compare-col-dot draft" aria-hidden="true">●</span>
+            <span class="sdp-compare-col-ver">草稿</span>
+            <span class="sdp-compare-col-meta">{{ compareDraftMeta }}</span>
+          </div>
+
+          <div v-if="compareLoading" class="state-block">
+            <div class="spinner" aria-hidden="true"></div>
+            <span>加载对比草稿中…</span>
+          </div>
+
+          <template v-else>
+            <section
+              v-for="ch in CHAPTERS"
+              :key="`draft-${ch.key}`"
+              :id="`sec-draft-${ch.key}`"
+              class="section section-compare"
+            >
+              <div class="section-head section-head-compare">
+                <h2>{{ ch.num }}、{{ ch.title }}</h2>
+                <span
+                  v-if="viewMode === 'compare' && chapterDiffLabel(ch.key) !== '无差异'"
+                  class="sdp-changed-chip"
+                >{{ chapterDiffLabel(ch.key) }}</span>
+              </div>
+
+              <!-- 数据模型: 草稿渲染 + 新增字段 / 新增模型 染色 -->
+              <template v-if="ch.key === 'data_model'">
+                <div v-if="!hasAnyDraftModel && loadedModels.length === 0" class="subsection-empty">
+                  尚无草稿改动.
+                </div>
+                <!-- 渲染所有 (生产 ∪ 草稿) 的模型 -->
+                <div
+                  v-for="m in comparedModels"
+                  :key="`draft-${m.code || m.id}`"
+                  class="subsection"
+                  :class="{ 'sdp-diff-subsection-add': m.is_added_in_draft }"
+                >
+                  <h3>
+                    <span :class="{ 'sdp-diff-cell-add': m.is_added_in_draft }">
+                      {{ m.name }}
+                      <span v-if="m.code" class="mono code-after-h3">({{ m.code }})</span>
+                      <span v-if="m.is_added_in_draft" class="sdp-changed-chip">新模型</span>
+                    </span>
+                  </h3>
+                  <table v-if="m.compared_fields.length" class="spec-table">
+                    <thead>
+                      <tr>
+                        <th>字段名</th>
+                        <th>code</th>
+                        <th>类型</th>
+                        <th>必填</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      <tr
+                        v-for="f in m.compared_fields"
+                        :key="`draft-${m.code}-${String(f.code || f.name)}`"
+                        :class="{
+                          'sdp-diff-row-add': f.diff_kind === 'add',
+                          'sdp-diff-row-del': f.diff_kind === 'del',
+                        }"
+                      >
+                        <td>
+                          <span :class="{
+                            'sdp-diff-cell-add': f.diff_kind === 'add',
+                            'sdp-diff-cell-del': f.diff_kind === 'del',
+                          }">{{ f.name || '—' }}</span>
+                        </td>
+                        <td>
+                          <span class="mono" :class="{
+                            'sdp-diff-cell-add': f.diff_kind === 'add',
+                            'sdp-diff-cell-del': f.diff_kind === 'del',
+                          }">{{ f.code || '—' }}</span>
+                        </td>
+                        <td>
+                          <span class="type-chip" :class="{
+                            'sdp-diff-cell-add': f.diff_kind === 'add',
+                            'sdp-diff-cell-del': f.diff_kind === 'del',
+                          }">{{ f.type || '—' }}</span>
+                        </td>
+                        <td>
+                          <span v-if="f.required" class="required-mark">*</span>
+                          <span v-else class="muted">—</span>
+                        </td>
+                      </tr>
+                    </tbody>
+                  </table>
+                  <div v-else class="subsection-empty">该模型未拉到字段详情.</div>
+                </div>
+              </template>
+
+              <template v-else>
+                <div class="subsection-empty subsection-empty-soft">
+                  <strong>{{ ch.title }}</strong> — 草稿 vs 生产 无差异 (MVP 仅数据模型支持精细 diff).
+                </div>
+              </template>
+            </section>
+          </template>
+        </div>
+      </main>
+
       <!-- RIGHT: chat slot — U7 接通 SpecChatPanel (内嵌对话改 SPEC 草稿) -->
       <aside class="sdp-chat-slot" aria-label="SPEC 对话助手">
         <SpecChatPanel
+          ref="specChatRef"
           :app-id="props.appId"
           :apaas-app-id="props.apaasAppId"
           :active-chapter="activeChapter"
@@ -381,6 +591,14 @@
         />
       </aside>
     </div>
+
+    <!-- V3 (2026-05-27): 确认并生成 modal — list plan + 串行 MCP (MVP dry-run) -->
+    <SpecApplyModal
+      :app-id="props.appId"
+      :visible="applyModalOpen"
+      @close="applyModalOpen = false"
+      @applied="onApplyDone"
+    />
   </section>
 </template>
 
@@ -389,6 +607,7 @@ import { ref, computed, onMounted, watch, nextTick } from 'vue'
 import { ElMessage } from 'element-plus'
 import request from '@/utils/request'
 import SpecChatPanel from './SpecChatPanel.vue'
+import SpecApplyModal from './SpecApplyModal.vue'
 
 // ── props ──────────────────────────────────────────────────────────────
 const props = defineProps<{
@@ -480,6 +699,12 @@ function bindSectionRef(key: string, el: HTMLElement | null) {
   sectionRefs.value[key] = el
 }
 
+// V1 Part A: SpecChatPanel ref — 章节锚点 "用对话改这段" 联动 chat input focus.
+// 通过 defineExpose 暴露的 focusInput() 让用户点 "用对话改这段" 后:
+//   1. 切到该章节 (activeChapter.value = key) → ChatPanel ctx chip / quick chips 自动联动
+//   2. textarea autofocus + scroll into view → 用户无需再点 chat 区就能直接打字
+const specChatRef = ref<{ focusInput?: () => void } | null>(null)
+
 // app 元数据
 const appName = ref('')
 const appCode = ref('')
@@ -494,6 +719,44 @@ const loadedMenus = ref<SectionItem[]>([])
 const loadedProcesses = ref<SectionItem[]>([])
 const loadedDatasources = ref<DatasourceItem[]>([])
 const datasourceNote = ref('')
+
+// ── V1 Part B: 对比模式 (compare mode) state ────────────────────────────
+// viewMode = 'read'    单列 SPEC 渲染 (现有行为)
+// viewMode = 'compare' 双列 v1.1 (生产 / apaas 真状态) vs 草稿 (spec_sections)
+//
+// 数据来源:
+//   生产: loadedModels (现有, apaas /section-content/models 真实状态)
+//   草稿: draftSections (新加, /applications/{id}/spec-sections/data_model/{code})
+//         为 null 表示该模型尚无草稿 → diff=0
+//
+// MVP 简化:
+//   - 只对 data_model 做精细 field-级 diff
+//   - 其他章节 (roles/dict/menus/process/form/list/integration/datasource) 显占位
+//   - update-level diff (字段 attr 改了, e.g., required) MVP 不算
+//   - 删除字段也算 — 草稿里没该 code 但生产里有 → 'del'
+const viewMode = ref<'read' | 'compare'>('read')
+const compareLoading = ref(false)
+const compareDraftFetchedAt = ref<Date | null>(null)
+
+// draftSections: key = data_model.section_key (=model_code), value = { spec_json, draft_version, updated_at }
+interface DraftSectionEntry {
+  spec_json: any
+  draft_version: number
+  updated_at: string | null
+}
+const draftSections = ref<Record<string, DraftSectionEntry>>({})
+
+// 跟 read mode 拿到的 modelFields() 一致的 shape, 加 diff_kind
+interface ComparedField extends ModelField {
+  diff_kind?: 'add' | 'del' | 'unchanged'
+}
+interface ComparedModel {
+  id: string
+  code: string
+  name: string
+  is_added_in_draft: boolean   // 草稿里新增的模型 (生产无此 model_code)
+  compared_fields: ComparedField[]
+}
 
 // ── computed display ──────────────────────────────────────────────────
 const apaasAppIdShown = computed(() => props.apaasAppId || '')
@@ -558,6 +821,227 @@ function describeExtra(extra: Record<string, any> | undefined, key: string): str
   const v = extra[key]
   if (v === null || v === undefined) return ''
   return String(v)
+}
+
+// ── V1 Part B: 对比模式 helpers ─────────────────────────────────────────
+// 把 spec_json.fields 拍成跟 modelFields() 一致的 shape — 避免 template 两套字段名
+function draftFieldsAsModelFields(spec: any): ModelField[] {
+  const fields = spec?.fields
+  if (!Array.isArray(fields)) return []
+  return fields.map((f: any): ModelField => ({
+    id: String(f.id || ''),
+    name: String(f.label || f.name || f.field_name || ''),
+    code: String(f.code || f.field_code || ''),
+    type: String(f.field_type || f.type || 'STRING').toUpperCase(),
+    required: Boolean(f.required),
+    description: String(f.description || ''),
+  }))
+}
+
+// 判断生产里某字段在草稿里是否被删 — 用于左列染色 (del)
+function isFieldDeletedInDraft(m: SectionItem, f: ModelField): boolean {
+  const code = m.code || ''
+  if (!code) return false
+  const draft = draftSections.value[code]
+  if (!draft) return false
+  const draftFields = draftFieldsAsModelFields(draft.spec_json)
+  // 草稿里完全没字段 = 全删?  这是 hint 而非确定: backend init 时已写 fields[].
+  // 但 spec_json 异常时也别误判, 这里只在 fields[] 真存在且不含此 code 时才标 del.
+  if (draftFields.length === 0) return false
+  return !draftFields.some(df => (df.code || '') === (f.code || ''))
+}
+
+// 计算所有"已加载草稿的模型"的字段对比表
+const comparedModels = computed<ComparedModel[]>(() => {
+  // 用 model_code 索引生产
+  const prodByCode: Record<string, SectionItem> = {}
+  for (const m of loadedModels.value) {
+    if (m.code) prodByCode[m.code] = m
+  }
+  // 草稿里所有 model_code
+  const draftCodes = Object.keys(draftSections.value)
+
+  const result: ComparedModel[] = []
+
+  // 1. 先按生产模型顺序输出 (保留 read mode 顺序)
+  for (const m of loadedModels.value) {
+    const prodFields = modelFields(m)
+    const code = m.code || ''
+    const draft = code ? draftSections.value[code] : undefined
+    let compared: ComparedField[]
+    if (draft) {
+      const draftFields = draftFieldsAsModelFields(draft.spec_json)
+      compared = mergeFieldsForDiff(prodFields, draftFields)
+    } else {
+      // 无草稿 — 等同于生产 (无差异)
+      compared = prodFields.map(f => ({ ...f, diff_kind: 'unchanged' as const }))
+    }
+    result.push({
+      id: String(m.id),
+      code,
+      name: m.name || code || '(unnamed)',
+      is_added_in_draft: false,
+      compared_fields: compared,
+    })
+  }
+
+  // 2. 草稿里多出来的模型 (生产没该 code) — 标 is_added_in_draft
+  for (const code of draftCodes) {
+    if (code && prodByCode[code]) continue   // 已在生产里
+    const draft = draftSections.value[code]
+    const draftFields = draftFieldsAsModelFields(draft.spec_json)
+    // 整模型新加 — 全字段都标 add
+    const compared: ComparedField[] = draftFields.map(f => ({ ...f, diff_kind: 'add' as const }))
+    const draftName = (draft.spec_json?.model_name as string | undefined) || code
+    result.push({
+      id: `draft-only-${code}`,
+      code,
+      name: draftName || code,
+      is_added_in_draft: true,
+      compared_fields: compared,
+    })
+  }
+
+  return result
+})
+
+// 把生产 / 草稿两套 fields 按 code 合并 — 同 code 保留草稿版本 (unchanged), 多的来源标 add/del
+function mergeFieldsForDiff(prod: ModelField[], draft: ModelField[]): ComparedField[] {
+  const draftByCode: Record<string, ModelField> = {}
+  for (const f of draft) {
+    if (f.code) draftByCode[f.code] = f
+  }
+  const prodByCode: Record<string, ModelField> = {}
+  for (const f of prod) {
+    if (f.code) prodByCode[f.code] = f
+  }
+  const result: ComparedField[] = []
+  // 先按生产顺序; 同 code 在草稿里也存在 → unchanged; 生产有草稿没 → del
+  for (const f of prod) {
+    const code = f.code || ''
+    if (code && draftByCode[code]) {
+      result.push({ ...f, diff_kind: 'unchanged' })
+    } else if (code) {
+      // 草稿里删了这字段
+      result.push({ ...f, diff_kind: 'del' })
+    } else {
+      result.push({ ...f, diff_kind: 'unchanged' })
+    }
+  }
+  // 再追加草稿独有的 (新增字段)
+  for (const f of draft) {
+    const code = f.code || ''
+    if (code && !prodByCode[code]) {
+      result.push({ ...f, diff_kind: 'add' })
+    }
+  }
+  return result
+}
+
+const hasAnyDraftModel = computed(() => Object.keys(draftSections.value).length > 0)
+
+// 各章节差异 label — 左 nav 显示 (+X / ~Y / 无差异)
+function chapterDiffLabel(chapterKey: string): string {
+  if (chapterKey !== 'data_model') return '无差异'
+  let addCount = 0
+  let delCount = 0
+  for (const m of comparedModels.value) {
+    if (m.is_added_in_draft) {
+      addCount += 1  // 新模型本身算一个 add
+    }
+    for (const f of m.compared_fields) {
+      if (f.diff_kind === 'add') addCount += 1
+      else if (f.diff_kind === 'del') delCount += 1
+    }
+  }
+  if (addCount === 0 && delCount === 0) return '无差异'
+  const parts: string[] = []
+  if (addCount > 0) parts.push(`+${addCount}`)
+  if (delCount > 0) parts.push(`~${delCount}`)
+  return parts.join(' / ')
+}
+
+// 整页总差异数 (CTA badge + mode pill badge 用)
+const diffTotalCount = computed(() => {
+  let count = 0
+  for (const m of comparedModels.value) {
+    if (m.is_added_in_draft) count += 1
+    for (const f of m.compared_fields) {
+      if (f.diff_kind === 'add' || f.diff_kind === 'del') count += 1
+    }
+  }
+  return count
+})
+
+const applyCtaTitle = computed(() => {
+  if (viewMode.value === 'compare') return '切回阅读模式才能生成 (P2 接入)'
+  if (diffTotalCount.value === 0) return '无草稿改动 — 用对话改 SPEC 后即可生成 (P2)'
+  return 'P2 接入 — 需 SPEC 改动后才能生成'
+})
+
+const compareDraftMeta = computed(() => {
+  if (!compareDraftFetchedAt.value) return '加载中…'
+  const d = compareDraftFetchedAt.value
+  const pad = (n: number) => String(n).padStart(2, '0')
+  const dt = `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}`
+  return `${dt} 你的改动`
+})
+
+// 加载 data_model 草稿 — 为每个生产模型 GET 一次 spec_section.
+// 失败 (404 / exists:false) 静默 — 等同于无草稿 (无差异).
+async function fetchDraftSections(): Promise<void> {
+  if (!props.appId || loadedModels.value.length === 0) {
+    draftSections.value = {}
+    return
+  }
+  const tasks = loadedModels.value
+    .filter(m => !!m.code)
+    .map(async (m): Promise<[string, DraftSectionEntry | null]> => {
+      try {
+        const resp = await request.get<any, any>(
+          `/applications/${props.appId}/spec-sections/data_model/${encodeURIComponent(String(m.code))}`,
+        )
+        if (resp?.ok && resp.exists && resp.section) {
+          return [
+            String(m.code),
+            {
+              spec_json: resp.section.spec_json,
+              draft_version: Number(resp.section.draft_version || 0),
+              updated_at: resp.section.updated_at || null,
+            },
+          ]
+        }
+      } catch {
+        // 静默 — 单个 section 失败不阻塞整页
+      }
+      return [String(m.code), null]
+    })
+  const results = await Promise.allSettled(tasks)
+  const map: Record<string, DraftSectionEntry> = {}
+  for (const r of results) {
+    if (r.status !== 'fulfilled') continue
+    const [code, entry] = r.value
+    if (entry) map[code] = entry
+  }
+  draftSections.value = map
+  compareDraftFetchedAt.value = new Date()
+}
+
+// 切模式 — 'compare' 时按需加载草稿
+async function onSwitchMode(mode: 'read' | 'compare'): Promise<void> {
+  if (mode === viewMode.value) return
+  if (mode === 'compare') {
+    // 加载草稿 — 阻塞 UI 用 compareLoading
+    viewMode.value = 'compare'
+    compareLoading.value = true
+    try {
+      await fetchDraftSections()
+    } finally {
+      compareLoading.value = false
+    }
+  } else {
+    viewMode.value = 'read'
+  }
 }
 
 // ── 数据加载 ──────────────────────────────────────────────────────────
@@ -641,6 +1125,15 @@ async function reload(): Promise<void> {
     loadedMenus.value = menus
     loadedProcesses.value = processes
     lastFetchedAt.value = new Date()
+    // V1 Part B: 处在对比模式时同步刷新草稿 (例如换应用 / spec-updated 触发的 reload)
+    if (viewMode.value === 'compare') {
+      compareLoading.value = true
+      try {
+        await fetchDraftSections()
+      } finally {
+        compareLoading.value = false
+      }
+    }
   } catch (e: any) {
     error.value = e?.message || '加载 SPEC 失败'
   } finally {
@@ -666,15 +1159,21 @@ function onChapterClick(key: ChapterKey) {
 }
 
 function onEditChapter(key: ChapterKey) {
-  // 切到对应章节, SpecChatPanel 会通过 watch(props.activeChapter) 清空 history,
-  // header ctx chip 也跟着切. 用户在 chat 里描述改动即可.
+  // V1 Part A: 锚点联动 chat —
+  //   1. 切 activeChapter → SpecChatPanel 通过 props.activeChapter watch 自动:
+  //      - 清空 history (避 cross-chapter 串台)
+  //      - header ctx chip 显示新章节标题
+  //      - quick chips / placeholder 也跟着切
+  //   2. 滚 doc-pane 到对应章节让用户看到"改这段"的上下文
+  //   3. 调 specChatRef.focusInput() → textarea autofocus + scroll into view
   activeChapter.value = key
-  // 滚动到对应章节让用户看到 "改这段" 的上下文
   nextTick(() => {
     const el = sectionRefs.value[key]
     if (el) {
       try { el.scrollIntoView({ behavior: 'smooth', block: 'start' }) } catch { /* ignore */ }
     }
+    // chat input focus — 让用户无需再点 chat 区即可打字
+    try { specChatRef.value?.focusInput?.() } catch { /* ignore */ }
   })
 }
 
@@ -695,6 +1194,17 @@ async function onSpecUpdated(sectionType: string, sectionKey: string) {
   ElMessage.success(`已更新 SPEC 草稿: ${label} · ${sectionKey}`)
   // 简化: 整页 reload — 让 SpecDesignPanel 的所有章节数据保持新鲜.
   // P2 可以只 reload 对应章节, 避免闪烁.
+  await reload()
+}
+
+// ── V3 (2026-05-27): 确认并生成 modal ────────────────────────────────
+const applyModalOpen = ref(false)
+function onOpenApplyModal() {
+  applyModalOpen.value = true
+}
+async function onApplyDone() {
+  applyModalOpen.value = false
+  ElMessage.success('已应用草稿到 apaas (MVP dry-run)')
   await reload()
 }
 
@@ -1100,5 +1610,156 @@ watch(
 .sdp-chat-slot > :deep(.spc-shell) {
   flex: 1;
   min-height: 0;
+}
+
+/* ════════════════════════════════════════════════════════════════════ */
+/* V1 Part B: 对比模式 (compare mode)                                    */
+/* 视觉跟 mockup 视图 ② 100% 对齐                                          */
+/* ════════════════════════════════════════════════════════════════════ */
+
+/* doc 区改成 1fr 1fr 双列, 共享纵向滚动 — 左右各一道 sticky header */
+.sdp-compare-shell {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  background: var(--surface);
+  min-width: 0;
+  overflow: hidden;
+}
+.sdp-compare-col {
+  overflow-y: auto;
+  padding: 24px 32px;
+  background: var(--surface);
+  min-width: 0;
+}
+.sdp-compare-col + .sdp-compare-col {
+  border-left: 1px solid var(--line);
+}
+.sdp-compare-col-head {
+  position: sticky;
+  top: 0;
+  z-index: 2;
+  background: var(--surface);
+  padding: 12px 0;
+  margin: -24px 0 20px;       /* 反向抵 padding-top */
+  padding-top: 16px;
+  border-bottom: 1px solid var(--line);
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.sdp-compare-col-dot {
+  font-size: 12px;
+  color: var(--text-4);
+  line-height: 1;
+}
+.sdp-compare-col-dot.draft { color: var(--warn); }
+.sdp-compare-col-ver {
+  font-weight: 600;
+  font-size: 14px;
+}
+.sdp-compare-col-head.left .sdp-compare-col-ver { color: var(--text-2); }
+.sdp-compare-col-head.right .sdp-compare-col-ver { color: var(--brand); }
+.sdp-compare-col-meta {
+  font-size: 11px;
+  color: var(--text-4);
+  margin-left: auto;
+}
+
+/* compare 模式 section 头 — 不要 hover 出"用对话改"按钮 (在阅读模式才有) */
+.section-head-compare {
+  /* 跟 .section-head 一致, 但不要 hover btn (compare 模式无 edit) */
+}
+
+/* 字段 / 行 diff 染色 — 用 design-v3 token (--ok-soft / --err-soft) */
+.sdp-diff-cell-add {
+  display: inline-block;
+  background: var(--ok-soft);
+  border-left: 3px solid var(--ok);
+  padding: 1px 6px 1px 8px;
+  border-radius: 2px;
+  color: var(--text);
+}
+.sdp-diff-cell-del {
+  display: inline-block;
+  background: var(--err-soft);
+  border-left: 3px solid var(--err);
+  padding: 1px 6px 1px 8px;
+  border-radius: 2px;
+  color: var(--text);
+  text-decoration: line-through;
+  opacity: 0.7;
+}
+
+/* 整行级 — 给 td 加底色 (覆盖默认 td) */
+.spec-table tr.sdp-diff-row-add td {
+  background: var(--ok-soft);
+}
+.spec-table tr.sdp-diff-row-add td:first-child {
+  border-left: 3px solid var(--ok);
+}
+.spec-table tr.sdp-diff-row-del td {
+  background: var(--err-soft);
+  opacity: 0.75;
+}
+.spec-table tr.sdp-diff-row-del td:first-child {
+  border-left: 3px solid var(--err);
+}
+
+/* 整模型新增 — h3 + table 都标 */
+.sdp-diff-subsection-add {
+  border-left: 3px solid var(--ok);
+  padding-left: 12px;
+  background: linear-gradient(to right, var(--ok-soft), transparent 50%);
+  border-radius: 4px;
+}
+.sdp-diff-subsection-add > h3 {
+  margin-top: 6px;
+}
+
+/* 变更标签 chip — 跟 mockup .changed-chip 对齐 */
+.sdp-changed-chip {
+  padding: 1px 6px;
+  background: var(--warn-soft);
+  color: var(--warn);
+  border-radius: 4px;
+  font-size: 10px;
+  font-weight: 600;
+  margin-left: 6px;
+  vertical-align: middle;
+}
+
+/* 左 nav 章节差异 badge (+X / ~Y / 无差异) */
+.nav-diff-badge {
+  margin-left: auto;
+  font-size: 10px;
+  color: var(--brand);
+  font-weight: 500;
+}
+.nav-diff-badge-zero {
+  color: var(--text-4);
+  font-weight: 400;
+}
+
+/* mode-pill / CTA badge */
+.mode-pill-badge {
+  display: inline-block;
+  margin-left: 4px;
+  min-width: 16px;
+  padding: 0 4px;
+  background: var(--brand);
+  color: #fff;
+  border-radius: 8px;
+  font-size: 10px;
+  line-height: 14px;
+  font-weight: 600;
+  text-align: center;
+}
+.mode-pill button.active .mode-pill-badge {
+  background: var(--brand);
+}
+.apply-cta-count {
+  margin-left: 4px;
+  font-weight: 600;
+  opacity: 0.9;
 }
 </style>

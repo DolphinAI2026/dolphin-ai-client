@@ -13,36 +13,43 @@ URL prefix:  /applications/{app_id}/spec-chat-stream
 
 数据流:
     1. 用户消息进来 → 加载 app + spec_sections 已有 (作上下文)
-    2. (MVP) 用 hard-code 规则解析意图: 含"字段"→ 加 placeholder 字段;
-       含"角色" → 加角色; 含"字典" → 加字典等
-    3. (P2) 真接 LLM — system prompt 让 LLM 输出 JSON patch
-    4. 把 patch 应用到 spec_sections (调 update_spec_section, draft_version+1)
-    5. SSE stream 把 token + spec_change + done 事件吐回前端
+    2. 真 LLM (SPEC_CHAT_USE_REAL_LLM=true): system prompt 让 LLM 边输出文本边在结尾给 JSON patch
+       兜底 (env 没开 / cfg 不可用 / JSON 解析失败): 走 rule-based mock parser
+       含"字段"→ 加 placeholder 字段; 含"角色"→ 加角色; 含"字典"→ 加字典等
+    3. 把 patch 应用到 spec_sections (调 update_spec_section, draft_version+1)
+    4. SSE stream 把 token + spec_change + done 事件吐回前端
 
 事件类型 (跟前端 SpecChatPanel.vue 对齐):
-    started      { app_id, active_chapter }
+    started      { app_id, active_chapter, mock_llm }
     token        { content }              — AI 文本流, 前端 append 到当前气泡
     spec_change  { section_type, section_key, before, after, summary, mcp_tool }
                                           — 写入草稿后通知, 前端显 diff card
     done         { reply, applied: bool }
     error        { message }
 
-MVP 设计选择:
-    - 不真调 LLM (现有 LLMClient 调用有 cfg 加载复杂度), 用 echo bot + rule-based.
-    - 不写库 (chat_session 持久化由 P2 同 ConfigAssistant 一样接).
-    - 章节切回前端 props.active_chapter, backend 只决定改哪个 spec_section.
-    - spec_section 不存在时自动 init 一个空 (避开 NOT_FOUND 错挡), 让 demo flow 通.
+LLM 路径设计 (复用 /config-chat-stream 模式):
+    - LLM cfg 走 _resolve_builder_llm_cfg (跟 ConfigAssistant 同一套租户模型配置)
+    - 流式: LLMClient.chat_completion_stream → 每个 chunk 是 OpenAI delta 格式 JSON 字符串,
+      抽 choices[0].delta.content 转 SSE token 事件给前端
+    - LLM 输出格式: 自然语言摘要 + 末尾 ```json {"summary": "...", "patch": {...}} ``` 块
+    - 流完后正则抽 json 块, 解析失败兜底走 mock parser
+
+环境变量:
+    SPEC_CHAT_USE_REAL_LLM=true  → 启用真 LLM (默关, 保 demo 兼容)
+    SPEC_CHAT_USE_REAL_LLM=false / 不设 → 走 mock rule-based parser
 
 关键点:
     - section_type 跟 SpecSection model 严格对齐 — form/list/process/page/permission/data_model.
     - active_chapter 是前端章节 key (e.g. 'data_model' / 'roles' / 'dict'),
       _chapter_to_section_type 把 frontend 章节映射到 backend section_type.
+    - 不新建 LLMClient — 直接复用 app.llm_client.LLMClient (跟 config-chat-stream 一致).
 """
 from __future__ import annotations
 
 import asyncio
 import json
 import logging
+import os
 import re
 from datetime import datetime
 from typing import Annotated, Any, Optional
@@ -53,6 +60,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.database import get_db
+from app.llm_client import LLMClient
 from app.models import Application
 from app.models.spec_section import SpecSection, VALID_SECTION_TYPES
 from app.deps import get_auth_context, AuthContext
@@ -61,9 +69,15 @@ from app.mcp_spec_sections import (
     read_spec_section,
     update_spec_section,
 )
+from app.routes.applications._helpers import _resolve_builder_llm_cfg
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
+
+
+def _real_llm_enabled() -> bool:
+    """SPEC_CHAT_USE_REAL_LLM=true 启用真 LLM, 默 false 兼容 demo."""
+    return (os.getenv("SPEC_CHAT_USE_REAL_LLM") or "").strip().lower() in ("1", "true", "yes", "on")
 
 
 # ---------------------------------------------------------------------------
@@ -356,39 +370,166 @@ async def _spec_chat_event_stream(
             })
             return
 
-        # ── 3. started 事件 ────────────────────────────────────────────────
+        # ── 3. 决定走真 LLM 还是 mock ────────────────────────────────────
+        # 顺序: env 开 → 拉租户 LLM cfg → cfg 不可用 fallback mock.
+        section_key = _section_key_for(body.active_chapter, section_type)
+        use_real = _real_llm_enabled()
+        llm_cfg: Optional[dict] = None
+        cfg_load_err: Optional[str] = None
+        if use_real:
+            try:
+                llm_cfg = await _resolve_builder_llm_cfg(
+                    db,
+                    ctx.tenant_id,
+                    conversation_id=app.conversation_id,
+                )
+            except Exception as exc:  # noqa: BLE001
+                cfg_load_err = repr(exc)
+                logger.warning("spec_chat: _resolve_builder_llm_cfg failed: %s", exc)
+            if not llm_cfg:
+                logger.warning(
+                    "spec_chat: 真 LLM 启用但租户 %s 没可用配置, fallback mock", ctx.tenant_id
+                )
+                use_real = False
+
+        # started 事件 — 让前端日志看到走了哪条路径
         yield _sse("started", {
             "app_id": app_id,
             "active_chapter": body.active_chapter,
             "section_type": section_type,
-            "mock_llm": True,
+            "section_key": section_key,
+            "mock_llm": not use_real,
+            "model": (llm_cfg or {}).get("model") if use_real else None,
+            "provider": (llm_cfg or {}).get("provider") if use_real else None,
+            "cfg_load_err": cfg_load_err,
         })
 
-        # ── 4. 解析意图 + 生成回复 (mock) ──────────────────────────────────
-        intent = _mock_parse_intent(body.message, body.active_chapter)
-        reply_text = _mock_reply_text(intent, body.active_chapter)
+        # ── 4. 生成回复 + patch ─────────────────────────────────────────
+        # 两条路径产出同形 (reply_text, intent), 后面应用 patch 用同一段代码.
+        # ── 真 LLM 路径 ───────────────────────────────────────────────
+        if use_real and llm_cfg is not None:
+            try:
+                # 拉当前 section 现有 spec, 作 LLM 上下文 (空也行, LLM 自己处理)
+                existing_spec: dict = {}
+                try:
+                    existing = await read_spec_section(db, app_id, section_type, section_key)
+                    if existing.get("ok") and existing.get("exists"):
+                        raw_spec = existing.get("section", {}).get("spec_json")
+                        if isinstance(raw_spec, str):
+                            try:
+                                existing_spec = json.loads(raw_spec)
+                            except Exception:
+                                existing_spec = {}
+                        elif isinstance(raw_spec, dict):
+                            existing_spec = raw_spec
+                except Exception as exc:  # noqa: BLE001
+                    logger.warning("spec_chat: read_spec_section 读现状失败: %s", exc)
 
-        # ── 5. token-by-token 模拟 streaming (按字符切, 30ms/字) ──────────
-        for ch in reply_text:
-            yield _sse("token", {"content": ch})
-            # 真 streaming 节奏 — 让前端有"逐字打出"视觉
-            await asyncio.sleep(0.015)
+                chapter_title = _CHAPTER_TITLES_FALLBACK.get(body.active_chapter, body.active_chapter)
+                system_prompt = _build_llm_system_prompt(
+                    chapter=body.active_chapter,
+                    chapter_title=chapter_title,
+                    section_type=section_type,
+                    section_key=section_key,
+                    existing_spec=existing_spec,
+                )
+
+                # 拼 messages (system + 截前 8 轮 history + 本次 user)
+                messages: list[dict] = [{"role": "system", "content": system_prompt}]
+                for turn in (body.history or [])[-8:]:
+                    if turn.role in ("user", "assistant") and isinstance(turn.content, str):
+                        messages.append({"role": turn.role, "content": turn.content})
+                messages.append({"role": "user", "content": body.message})
+
+                # 跑 stream — 复用 LLMClient.chat_completion_stream
+                llm = LLMClient(
+                    api_key=llm_cfg["api_key"],
+                    base_url=llm_cfg["base_url"],
+                    model=llm_cfg["model"],
+                )
+                full_reply = ""
+                # 收集时只发"非 json 块"部分给前端 — 但流式中无法预知 json 块在哪.
+                # 策略: 全部 token 都发, 前端 SpecChatPanel 不显 ```json``` 块 (它是
+                # 普通 message append, ```json``` 包着的 patch 会自然嵌进文本流).
+                # 不影响功能 — 前端有 diff card UI 显 patch, json 块作为"原始 LLM 输出"
+                # 一起展示反而透明.
+                try:
+                    async for chunk_str in llm.chat_completion_stream(
+                        messages,
+                        max_tokens=llm_cfg.get("max_tokens", 2048),
+                    ):
+                        try:
+                            chunk = json.loads(chunk_str)
+                        except Exception:
+                            continue
+                        if not isinstance(chunk, dict):
+                            continue
+                        choices = chunk.get("choices") or []
+                        if not choices:
+                            continue
+                        delta = (choices[0] or {}).get("delta") or {}
+                        content = delta.get("content") or ""
+                        if content:
+                            full_reply += content
+                            yield _sse("token", {"content": content})
+                except Exception as exc:
+                    logger.exception("spec_chat: LLM stream failed")
+                    yield _sse("error", {
+                        "message": f"LLM 调用失败: {exc!r}; 可关闭 SPEC_CHAT_USE_REAL_LLM 回退 mock",
+                    })
+                    return
+
+                # ── 5a. 抽 JSON patch ─────────────────────────────────────
+                parsed = _extract_llm_patch(full_reply)
+                if parsed is None:
+                    # 解析失败 → 兜底走 mock parser, 起码让 demo flow 不死
+                    logger.info(
+                        "spec_chat: LLM 输出未给合法 JSON 块, fallback mock; preview=%r",
+                        full_reply[:200],
+                    )
+                    intent = _mock_parse_intent(body.message, body.active_chapter)
+                    reply_text = full_reply or _mock_reply_text(intent, body.active_chapter)
+                else:
+                    intent = {
+                        "kind": parsed["kind"],
+                        "summary": parsed["summary"] or f"修改 {section_type}",
+                        "patch": parsed["patch"] or {},
+                    }
+                    reply_text = _strip_json_block(full_reply) or parsed["summary"]
+                    # 真 LLM 给的 mcp_tool 优先, 没给 fallback 字典映射
+                    if parsed.get("mcp_tool"):
+                        intent["mcp_tool"] = parsed["mcp_tool"]
+
+            except Exception as exc:
+                logger.exception("spec_chat: 真 LLM 路径异常")
+                yield _sse("error", {"message": f"LLM 路径异常: {exc!r}"})
+                return
+
+        # ── mock 路径 (env 不开 / cfg 不可用 / 真 LLM 兜底进来) ───────────
+        else:
+            intent = _mock_parse_intent(body.message, body.active_chapter)
+            reply_text = _mock_reply_text(intent, body.active_chapter)
+            # token-by-token 模拟 streaming (按字符切, 15ms/字)
+            for ch in reply_text:
+                yield _sse("token", {"content": ch})
+                await asyncio.sleep(0.015)
 
         # ── 6. 如果有 patch, 应用到 spec_sections + 发 spec_change ──────
         applied = False
-        if intent["kind"] != "noop" and intent["patch"]:
-            # section_key 选择: data_model section 用 chapter 名 (e.g. 'main' / 'dict');
-            # permission section 用 'global'; 其他用 'default'.
-            section_key = _section_key_for(body.active_chapter, section_type)
+        intent_kind = intent.get("kind", "noop")
+        intent_patch = intent.get("patch") or {}
+        if intent_kind != "noop" and intent_kind != "other" and intent_patch:
             try:
                 diff = await _apply_patch_to_section(
                     db,
                     app_id=app_id,
                     section_type=section_type,
                     section_key=section_key,
-                    patch=intent["patch"],
-                    summary=intent["summary"],
+                    patch=intent_patch,
+                    summary=intent.get("summary") or "",
                 )
+                # mcp_tool: LLM 给了就用 LLM 的, 否则走 kind 映射
+                mcp_tool = intent.get("mcp_tool") or _intent_to_mcp_tool(intent_kind)
                 yield _sse("spec_change", {
                     "section_type": section_type,
                     "section_key": section_key,
@@ -396,9 +537,7 @@ async def _spec_chat_event_stream(
                     "after": diff["after"],
                     "summary": diff["summary"],
                     "created": diff.get("created", False),
-                    # P2 真接 LLM 后这里会带 mcp_tool 名 (e.g. add_apaas_model_field),
-                    # MVP 给 placeholder 让前端 UI 能渲染.
-                    "mcp_tool": _intent_to_mcp_tool(intent["kind"]),
+                    "mcp_tool": mcp_tool,
                 })
                 applied = True
             except HTTPException as exc:
@@ -415,7 +554,8 @@ async def _spec_chat_event_stream(
         yield _sse("done", {
             "reply": reply_text,
             "applied": applied,
-            "intent_kind": intent["kind"],
+            "intent_kind": intent_kind,
+            "used_real_llm": use_real,
         })
 
     except Exception as exc:
@@ -449,7 +589,7 @@ def _section_key_for(chapter: str, section_type: str) -> str:
 def _intent_to_mcp_tool(kind: str) -> str:
     """intent kind → MCP 工具名 (UI 显示用), MVP 占位.
 
-    P2 真接 LLM 后, LLM 自己产 mcp_tool 名; MVP 给固定映射让 UI 显得真.
+    真 LLM 时也可在 patch 里带 mcp_tool 字段; 没带就 fallback 到这个映射.
     """
     return {
         "add_field": "add_apaas_model_field",
@@ -458,6 +598,161 @@ def _intent_to_mcp_tool(kind: str) -> str:
         "add_menu": "create_apaas_menu",
         "add_process": "save_apaas_process",
     }.get(kind, "")
+
+
+# ---------------------------------------------------------------------------
+# 真 LLM — system prompt + JSON patch 抽取
+# ---------------------------------------------------------------------------
+#
+# 复用 /config-chat-stream 同一套 LLMClient + _resolve_builder_llm_cfg, 但 prompt
+# 完全不一样: spec_chat 不调 MCP 工具, 只生成 JSON patch 让 backend 自己应用到 spec_sections.
+#
+# LLM 输出协议:
+#   1. 先正常用中文回复用户 (1-3 句话, 描述要改啥)
+#   2. 末尾 ```json {"summary": "...", "patch": {...}, "mcp_tool": "..."} ``` 块
+#   3. patch 结构按 section_type 不同 (见 prompt 模板里给的示例)
+#
+# 兜底: JSON 块抽不出 / 解析失败 → 走 mock rule-based parser, 保证 demo flow 不死.
+
+
+def _build_llm_system_prompt(
+    chapter: str,
+    chapter_title: str,
+    section_type: str,
+    section_key: str,
+    existing_spec: dict,
+) -> str:
+    """造 spec_chat 专用 system prompt.
+
+    chapter_title 是中文章节名 (frontend 传不到 backend, 这里按 chapter 反推).
+    existing_spec 是当前 section 的 spec_json (dict, 可能为空), 序列化到 prompt.
+    """
+    spec_json_text = json.dumps(existing_spec, ensure_ascii=False, indent=2)[:4000]
+    if not existing_spec:
+        spec_json_text = "(当前章节还没草稿, 这次改动会自动新建)"
+
+    # patch 示例按 section_type 给, LLM 容易照样画
+    patch_examples = {
+        "data_model": (
+            '{"_added_fields": [{"name": "备注", "code": "remark", "type": "VARCHAR", '
+            '"required": false, "description": "AI 草稿"}]}'
+        ),
+        "permission": (
+            '{"_added_roles": [{"name": "财务专员", "code": "R_FINANCE", '
+            '"description": "AI 草稿 — 待用户调权限矩阵"}]}'
+        ),
+        "form": (
+            '{"_added_components": [{"name": "申请人", "code": "applicant", '
+            '"type": "TEXT", "required": true}]}'
+        ),
+        "list": (
+            '{"_added_columns": [{"name": "申请日期", "code": "apply_date", '
+            '"sortable": true, "width": 120}]}'
+        ),
+        "process": (
+            '{"_added_stages": [{"name": "经理审批", "code": "manager_approve", '
+            '"approver_type": "ROLE", "approver_code": "R_MANAGER"}]}'
+        ),
+        "page": (
+            '{"_added_menus": [{"name": "新菜单", "code": "new_menu", "parent_code": null}]}'
+        ),
+    }
+    patch_example = patch_examples.get(section_type, '{"_changes": [{"...": "..."}]}')
+
+    return (
+        "你是 SPEC 设计助手. 用户在编辑某 aPaaS 应用的 SPEC 文档草稿.\n\n"
+        f"## 当前章节\n"
+        f"- chapter: {chapter} (中文: {chapter_title})\n"
+        f"- section_type: {section_type}\n"
+        f"- section_key: {section_key}\n\n"
+        "## 当前 SPEC 草稿\n"
+        "```json\n"
+        f"{spec_json_text}\n"
+        "```\n\n"
+        "## 你的任务\n"
+        "用户提改动需求, 你输出:\n"
+        "1. **先用 1-3 句中文回复**描述你要做的改动 (不要写代码块, 不要写 markdown 标题)\n"
+        "2. **末尾紧跟一个 ```json``` 块**, 内容是 JSON patch 描述要改的内容\n\n"
+        "## JSON patch 协议\n\n"
+        "```json\n"
+        "{\n"
+        '  "summary": "1 句话总结要改什么 (UI 显示)",\n'
+        '  "kind": "add_field" / "add_role" / "add_menu" / "add_process" / "add_dict_option" / "other",\n'
+        '  "patch": <见下方 section_type 特定结构>,\n'
+        '  "mcp_tool": "(可选) 对应的 MCP 工具名, e.g. add_apaas_model_field"\n'
+        "}\n"
+        "```\n\n"
+        f"## 当前 section_type=\"{section_type}\" 的 patch 示例\n"
+        "```json\n"
+        f"{patch_example}\n"
+        "```\n\n"
+        "## 铁律\n"
+        "- patch 只放 **增量** — 不要重复已存在的字段/角色, backend 会自动 merge 进现有 spec\n"
+        "- 字段/角色/菜单的 code 用 snake_case 英文 (e.g. 'remark', 'R_FINANCE', 'borrow_apply'), 避开和现有 code 冲突\n"
+        "- 不确定的字段 (type/required/length 等) 给合理默认, 别空着\n"
+        "- 用户问『当前 SPEC 是什么样』这类只读问题时, kind=\"other\" + patch={} (不动 SPEC)\n"
+        "- 用户说『改 / 删 / 删除』时, kind=\"other\" 暂返提示『MVP 只支持加, 改删走具体 chapter 编辑器』\n"
+        "- 不要包含解释性 markdown 标题 / bullet list, 只要纯文本回复 + json 块\n"
+        "- json 块必须是合法 JSON (双引号, 不带 trailing comma, 不写 comment)\n"
+    )
+
+
+def _extract_llm_patch(full_reply: str) -> Optional[dict]:
+    """从 LLM 完整回复抽末尾的 ```json``` 块, 解析成 {summary, kind, patch, mcp_tool} dict.
+
+    抽不出或 JSON parse 失败返 None — 调用方 fallback 到 mock parser.
+    """
+    if not full_reply:
+        return None
+    # 优先抽最后一个 ```json``` 块 (LLM 可能在文本里也出现 json 词, 取末尾最稳)
+    matches = list(re.finditer(r"```json\s*(.*?)\s*```", full_reply, flags=re.DOTALL))
+    if not matches:
+        # 兜底: 直接找最后一个 {...} 块
+        m = re.search(r"\{[^{}]*\"patch\"[^{}]*\}", full_reply, flags=re.DOTALL)
+        if not m:
+            return None
+        raw = m.group(0)
+    else:
+        raw = matches[-1].group(1)
+
+    try:
+        parsed = json.loads(raw)
+    except (json.JSONDecodeError, ValueError) as exc:
+        logger.warning("spec_chat: LLM JSON 块解析失败: %s; raw[:200]=%r", exc, raw[:200])
+        return None
+    if not isinstance(parsed, dict):
+        logger.warning("spec_chat: LLM 输出不是 dict: type=%s", type(parsed).__name__)
+        return None
+
+    # 字段校验
+    if "patch" not in parsed or not isinstance(parsed["patch"], dict):
+        logger.warning("spec_chat: LLM 输出缺 patch 字段或非 dict")
+        return None
+
+    return {
+        "kind": str(parsed.get("kind") or "other"),
+        "summary": str(parsed.get("summary") or "").strip(),
+        "patch": parsed["patch"],
+        "mcp_tool": str(parsed.get("mcp_tool") or "").strip(),
+    }
+
+
+_CHAPTER_TITLES_FALLBACK = {
+    "data_model": "数据模型",
+    "dict": "数据字典",
+    "roles": "角色权限",
+    "menus": "菜单结构",
+    "form": "表单设计",
+    "list": "列表设计",
+    "process": "流程设计",
+}
+
+
+def _strip_json_block(text: str) -> str:
+    """LLM 回复里把 ```json``` 块剥掉, 留给前端 message 显示的"纯文本"."""
+    if not text:
+        return text
+    return re.sub(r"```json\s*.*?\s*```", "", text, flags=re.DOTALL).strip()
 
 
 # ---------------------------------------------------------------------------

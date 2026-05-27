@@ -1860,6 +1860,10 @@ router.include_router(_logs_endpoint.router)
 # 区分: 草稿层, 不立即生效, 等用户"确认并生成"). MVP 用 rule-based mock LLM.
 from . import spec_chat as _spec_chat  # noqa: E402
 router.include_router(_spec_chat.router)
+# V3 (2026-05-27): "确认并生成" modal — apply spec_sections 草稿到 apaas.
+# /spec/apply-plan + /spec/apply (MVP dry-run, P5 接通 MCP 真调).
+from . import spec_apply as _spec_apply  # noqa: E402
+router.include_router(_spec_apply.router)
 
 
 # ---------------------------------------------------------------------------

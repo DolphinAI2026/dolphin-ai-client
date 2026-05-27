@@ -124,6 +124,7 @@
     <div class="spc-input-area">
       <textarea
         v-model="inputText"
+        ref="inputRef"
         class="spc-textarea"
         :placeholder="placeholderText"
         :disabled="sending"
@@ -200,7 +201,25 @@ const inputText = ref('')
 const sending = ref(false)
 const errorBanner = ref('')
 const bodyEl = ref<HTMLElement | null>(null)
+const inputRef = ref<HTMLTextAreaElement | null>(null)
 let _msgIdSeq = 1
+
+// ── expose: focusInput — 父组件锚点联动用 ───────────────────────────────
+// SpecDesignPanel 章节 hover "用对话改这段" 点击时调:
+//   specChatRef.value?.focusInput?.()
+// 行为: textarea focus + scroll 自身到视口可见区 (右栏滚动 + 桌面端整页滚动兜底).
+function focusInput() {
+  const el = inputRef.value
+  if (!el) return
+  try {
+    el.focus({ preventScroll: false })
+    el.scrollIntoView({ behavior: 'smooth', block: 'nearest' })
+  } catch {
+    // 老浏览器兜底
+    try { el.focus() } catch { /* ignore */ }
+  }
+}
+defineExpose({ focusInput })
 
 // quick chips 按 chapter 切
 const quickChips = computed(() => {
