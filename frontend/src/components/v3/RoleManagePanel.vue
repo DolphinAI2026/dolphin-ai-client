@@ -1,9 +1,16 @@
-<!-- RoleManagePanel.vue — Native 角色权限 (矩阵 view + 列表 view 切换).
+<!-- RoleManagePanel.vue — Native 角色权限 (矩阵 view + 列表 view 切换 + preview/edit 模式).
 
   2026-05-26 design-v4 Phase D: 顶部 toggle 切矩阵 (默认) / 角色列表 2 view.
 
   矩阵 view: 角色 × 资源 (页面/数据/流程/应用设置) 4 状态 chip (all/rw/r/none).
   列表 view: 老 master-detail 保留 (左角色 list + 右成员 table).
+
+  O2 (2026-05-27): 业务视角 preview/edit 模式.
+    - 顶部业务视角 banner (蓝 brand-soft + brand)
+    - editMode toggle (👁 预览 默认 / ✏️ 编辑)
+    - matrix preview 模式: cell click 不响应 (dropdown 不显) / 顶部 "+ 新增角色" 隐
+      改成 [✨ 用对话改权限] 提示走配置助手
+    - list view: preview 模式 "+ 添加成员" / "+ 新增角色" 都隐
 
   数据源:
     - 矩阵 view: /role-resource-matrix endpoint (一次拉全)
@@ -13,6 +20,14 @@
 -->
 <template>
   <section class="rmp" aria-label="角色权限">
+    <!-- O2: 业务视角 banner -->
+    <div class="rmp-biz-banner" role="note">
+      <span class="rmp-biz-banner-icon" aria-hidden="true">✨</span>
+      <span class="rmp-biz-banner-text">
+        业务视角预览 — 这是应用的<strong>角色权限</strong>状态. 改角色 / 权限用配置助手对话.
+      </span>
+    </div>
+
     <!-- ── Header ─────────────────────────────────────────────── -->
     <header class="rmp-page-head">
       <div class="rmp-head-meta">
@@ -28,7 +43,30 @@
         <p v-else class="rmp-page-stat">加载中…</p>
       </div>
       <div class="rmp-head-actions">
-        <!-- 视图 toggle -->
+        <!-- O2: edit-mode toggle (preview / edit) — 放最前 -->
+        <div class="rmp-edit-toggle" role="group" aria-label="切换查看模式">
+          <button
+            type="button"
+            class="rmp-edit-btn"
+            :class="{ active: editMode === 'preview' }"
+            title="预览模式 — 业务视角查看, 不可改"
+            @click="editMode = 'preview'"
+          >
+            <span class="rmp-edit-icon">👁</span>
+            预览
+          </button>
+          <button
+            type="button"
+            class="rmp-edit-btn"
+            :class="{ active: editMode === 'edit' }"
+            title="编辑模式 — 可点 cell 改权限 / 新增角色"
+            @click="editMode = 'edit'"
+          >
+            <span class="rmp-edit-icon">✏️</span>
+            编辑
+          </button>
+        </div>
+        <!-- 视图 toggle (matrix / list) -->
         <div class="rmp-view-toggle" role="group" aria-label="切换视图">
           <button
             type="button"
@@ -43,18 +81,22 @@
             @click="setView('list')"
           >角色列表</button>
         </div>
-        <button class="rmp-btn rmp-btn-ghost" disabled title="P2 真接 AI 推荐">
+        <button v-if="editMode === 'edit'" class="rmp-btn rmp-btn-ghost" disabled title="P2 真接 AI 推荐">
           <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
             <path d="M12 2v4M12 18v4M4.93 4.93l2.83 2.83M16.24 16.24l2.83 2.83M2 12h4M18 12h4M4.93 19.07l2.83-2.83M16.24 7.76l2.83-2.83"/>
           </svg>
           AI 建议
         </button>
-        <button class="rmp-btn rmp-btn-primary" @click="onAddRole">+ 新增角色</button>
+        <button v-if="editMode === 'edit'" class="rmp-btn rmp-btn-primary" @click="onAddRole">+ 新增角色</button>
+        <button v-else class="rmp-btn rmp-btn-primary" @click="onPromptChatEdit">
+          <span class="rmp-btn-icon">✨</span>
+          用对话改权限
+        </button>
       </div>
     </header>
 
     <!-- ── Matrix view ────────────────────────────────────────── -->
-    <div v-if="viewMode === 'matrix'" class="rmp-matrix-wrap">
+    <div v-if="viewMode === 'matrix'" class="rmp-matrix-wrap" :class="{ 'rmp-matrix-wrap-preview': editMode === 'preview' }">
       <div v-if="matrixLoading" class="rmp-state">加载权限矩阵…</div>
       <div v-else-if="matrixError" class="rmp-state rmp-state-err">
         {{ matrixError }}
@@ -295,7 +337,11 @@
                 class="rmp-detail-search"
                 placeholder="搜索姓名 / 账号"
               />
-              <button class="rmp-btn rmp-btn-primary" @click="onAddMember">+ 添加成员</button>
+              <button v-if="editMode === 'edit'" class="rmp-btn rmp-btn-primary" @click="onAddMember">+ 添加成员</button>
+              <button v-else class="rmp-btn rmp-btn-primary" @click="onPromptChatEdit">
+                <span class="rmp-btn-icon">✨</span>
+                用对话改成员
+              </button>
             </div>
           </header>
 
@@ -403,6 +449,8 @@ const props = defineProps<{
 }>()
 
 const viewMode = ref<'matrix' | 'list'>('matrix')
+// O2: editMode — preview (默认, 业务视角只读) / edit (现状, 可改).
+const editMode = ref<'preview' | 'edit'>('preview')
 
 // 共享角色 list (两个 view 都用) — 用 matrix endpoint 的 roles 数据.
 const roles = ref<RoleRow[]>([])
@@ -510,6 +558,10 @@ function cellClass(roleId: string, resourceId: string): string {
 
 function cellTitle(roleId: string, resourceId: string): string {
   const perm = (matrix[roleId]?.[resourceId] || 'none') as PermValue
+  // O2: preview 模式只显权限名, 不提示"点击修改"
+  if (editMode.value === 'preview') {
+    return PERM_FULL_NAMES[perm]
+  }
   const key = cellKey(roleId, resourceId)
   const status = cellSaveStatus[key]
   if (status === 'failed') {
@@ -636,6 +688,8 @@ function selectRole(roleId: string) {
 // ─── Cell dropdown ────────────────────────────────────────────────────────
 function onCellClick(roleId: string, resourceId: string, evt: MouseEvent) {
   if (saving.value) return  // 保存中禁止改
+  // O2: preview 模式不响应 cell click
+  if (editMode.value === 'preview') return
   const target = evt.currentTarget as HTMLElement
   if (!target) return
   const rect = target.getBoundingClientRect()
@@ -699,6 +753,16 @@ function onAddRole() {
 
 function onAddMember() {
   alert('添加成员 — 当前请用右侧配置助手对话:\n"给运维专员A角色添加用户XX"')
+}
+
+// O2: preview 模式下点 "用对话改权限" CTA
+function onPromptChatEdit() {
+  alert(
+    '改权限 — 用右侧配置助手对话:\n\n'
+    + '例: "给运维专员角色加 借书申请 表单的读写权限"\n'
+    + '例: "新建一个审批人角色, 默认只读所有表单"\n'
+    + '例: "把张三加到 系统管理员 角色"',
+  )
 }
 
 // ─── Save matrix (Phase H1) ───────────────────────────────────────────────
@@ -832,6 +896,90 @@ onBeforeUnmount(() => {
   overflow: hidden;
   font-feature-settings: 'cv11', 'ss01';
   color: var(--text);
+}
+
+/* ── O2: 业务视角 banner ─────────────────────────────────────────── */
+.rmp-biz-banner {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 12px 16px;
+  margin: 16px 28px 0;
+  background: var(--brand-soft);
+  color: var(--brand);
+  border: 1px solid var(--brand);
+  border-left: 4px solid var(--brand);
+  border-radius: 8px;
+  font-size: 13px;
+  line-height: 1.5;
+  flex-shrink: 0;
+}
+.rmp-biz-banner-icon {
+  font-size: 16px;
+  line-height: 1;
+  flex-shrink: 0;
+}
+.rmp-biz-banner-text {
+  flex: 1;
+  color: var(--text-2);
+}
+.rmp-biz-banner-text strong {
+  color: var(--brand);
+  font-weight: 600;
+}
+
+/* ── O2: edit-mode toggle (preview / edit) ──────────────────────── */
+.rmp-edit-toggle {
+  display: inline-flex;
+  background: var(--surface-2);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 2px;
+  margin-right: 4px;
+}
+.rmp-edit-btn {
+  height: 28px;
+  padding: 0 12px;
+  font-size: 12.5px;
+  font-weight: 500;
+  font-family: inherit;
+  background: transparent;
+  border: 0;
+  border-radius: 6px;
+  color: var(--text-3);
+  cursor: pointer;
+  transition: background 0.12s, color 0.12s, box-shadow 0.12s;
+  white-space: nowrap;
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+}
+.rmp-edit-btn:hover { color: var(--text); }
+.rmp-edit-btn.active {
+  background: var(--surface);
+  color: var(--brand);
+  box-shadow: 0 1px 2px rgba(11, 27, 63, 0.06);
+}
+.rmp-edit-icon {
+  font-size: 12px;
+  line-height: 1;
+}
+
+.rmp-btn-icon {
+  font-size: 12px;
+  line-height: 1;
+}
+
+/* O2: matrix preview 模式 — cell 不可 hover 改 */
+.rmp-matrix-wrap-preview .rmp-mat-cell {
+  cursor: default;
+}
+.rmp-matrix-wrap-preview .rmp-mat-cell:hover {
+  background: var(--surface);
+  box-shadow: none;
+}
+.rmp-matrix-wrap-preview .rmp-mat-role-row:hover .rmp-mat-cell:not(:hover) {
+  background: var(--surface);
 }
 
 /* ── Page header ───────────────────────────────────────────────── */

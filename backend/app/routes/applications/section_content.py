@@ -388,6 +388,85 @@ async def get_form_detail(
     }
 
 
+@router.get("/{app_id}/forms/{form_id}/business-data")
+async def get_form_business_data(
+    app_id: int,
+    form_id: str,
+    ctx: Annotated[AuthContext, Depends(get_auth_context)],
+    db: Annotated[AsyncSession, Depends(get_db)],
+    page: int = Query(1, ge=1, description="页码 (1-based)"),
+    page_size: int = Query(20, ge=1, le=200, description="每页条数, 上限 200"),
+    tab_id: str = Query("", description="表单视图 id (空时自动取默认 tab)"),
+) -> dict:
+    """design-v4 O2-List: 拉表单的运行时业务数据 (用户提交的数据行).
+
+    走 query_apaas_business_data MCP, 跟得帆云原生表单"列表页"背后真接口一致.
+
+    返:
+      - items: 数据行数组 (每行 dict, key 是字段 uuid)
+      - total: 总行数
+      - tab_id: 实际用的视图 id
+      - page / page_size: 当前页
+
+    P0 简化: 不支持 server-side filter/sort, 客户端拿到后 in-memory 处理.
+    """
+    source = "query_apaas_business_data"
+    app = await _load_app_and_check_view(app_id, ctx, db)
+    if not app.platform_env_id or not app.apaas_app_id:
+        return {
+            "ok": False,
+            "error_code": "APP_NOT_DEPLOYED",
+            "message": "应用尚未部署到 aPaaS 平台",
+            "source": source,
+            "items": [],
+            "total": 0,
+        }
+    form_id = (form_id or "").strip()
+    if not form_id:
+        return {
+            "ok": False,
+            "error_code": "INVALID_FORM_ID",
+            "message": "form_id 不能为空",
+            "source": source,
+            "items": [],
+            "total": 0,
+        }
+
+    ok, raw_or_err = await _safe_call_mcp_tool(
+        source,
+        env_id=app.platform_env_id,
+        apaas_app_id=str(app.apaas_app_id),
+        extra_args={
+            "form_id": form_id,
+            "tab_id": tab_id or "",
+            "page": page,
+            "page_size": page_size,
+        },
+    )
+    if not ok:
+        return {
+            "ok": False,
+            "error_code": raw_or_err["error_code"],
+            "message": raw_or_err["message"],
+            "source": source,
+            "items": [],
+            "total": 0,
+        }
+    return {
+        "ok": True,
+        "env_id": app.platform_env_id,
+        "apaas_app_id": str(app.apaas_app_id),
+        "form_id": form_id,
+        "tab_id": raw_or_err.get("tab_id", ""),
+        "page": raw_or_err.get("page", page),
+        "page_size": raw_or_err.get("page_size", page_size),
+        "total": int(raw_or_err.get("total") or 0),
+        "items_count": raw_or_err.get("items_count", 0),
+        "items": raw_or_err.get("items", []),
+        "source": source,
+    }
+
+
 @router.get("/{app_id}/section-content/dicts", response_model=SectionContentResponse)
 async def get_section_content_dicts(
     app_id: int,
