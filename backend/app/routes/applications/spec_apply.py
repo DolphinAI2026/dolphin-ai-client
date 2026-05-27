@@ -1,4 +1,4 @@
-"""SPEC apply — 总览 + 模拟执行 (设计 tab "确认并生成" modal 后端).
+"""SPEC apply — 总览 + 真调 apaas (设计 tab "确认并生成" modal 后端).
 
 URL prefix:  /applications/{app_id}/spec/apply-plan
              /applications/{app_id}/spec/apply
@@ -10,12 +10,12 @@ URL prefix:  /applications/{app_id}/spec/apply-plan
     用对话生成 SPEC 草稿           把 SPEC 草稿 propagate 到 apaas
     每条用户消息一次小补丁         一次性消费所有 draft > base 的差异
     SSE 流式回复                   plan: 返一次 JSON; apply: 串行执行
-    写 spec_sections.spec_json     dry-run: 不真调 MCP; P5: 串调 MCP
+    写 spec_sections.spec_json     真调 apaas API + bump base_version
 
 mockup `docs/internal/design-tab-mockup-2026-05-27.html` 视图 ③ 是设计稿:
     - 4 分组 (数据模型 / 表单 / 菜单 / 流程)
     - 每条 change-item 含 typ chip (+模型 / +字段 / +角色 / ~关系) + desc + mcp_tool
-    - 警告 banner "失败自动回滚" (P5 真接 MCP 时落地)
+    - 警告 banner "失败自动回滚"
     - foot: 取消 / 仅保存 SPEC / 确认并生成 [N 步]
 
 数据来源:
@@ -26,22 +26,26 @@ mockup `docs/internal/design-tab-mockup-2026-05-27.html` 视图 ③ 是设计稿
         data_model section  → _added_fields[], _added_dict_options[]
         permission section  → _added_roles[]
         page section        → _added_menus[]
-        form section        → _added_forms[] (P5; 当前 spec_chat 不写, 用整 spec_json 兜底)
+        form section        → _added_forms[] (P6; 当前 spec_chat 不写)
         process section     → _added_processes[]
 
     本模块把每条 marker → 1 个 change-item, 按 section_type 归组.
 
-MVP 策略 (用户决策):
-    - apply endpoint = dry-run, sleep 1.5s * N, 不真调 MCP
-    - 接通 MCP 真调时改 _execute_step() 函数 (P5 接入点已标注)
-    - 不写 last_applied_at (因为没真 apply); 不动 spec_sections row
+W 阶段策略:
+    - 真调 apaas (通过 APaaSClient 实例方法; 之前 mock sleep 1.5s 已删)
+    - 2 tool 完整接通: create_apaas_app_roles + add_apaas_model_field
+    - 6 tool 兜底 NOT_IMPLEMENTED_P6: dict_options / menus / forms / processes
+      / business_rules / lists / models
+    - 成功的 step 把 spec_sections.base_version = draft_version (avoid 重复 apply)
+    - 失败的 step 不动 base_version (草稿仍在, 用户可改后再 apply)
+    - 不 abort — 跑完所有 step 返 partial results (用户能看到哪些成 / 哪些败)
 
-可选: SSE 进度流 — 当前为一次性 dict 返 (MVP 简单足够). P5 可改 SSE 让前端实时
-显进度. 留 stub 标记位 `_use_sse=False`.
+P6 留尾的 6 tool 需要 apaas API 复杂参数 (e.g. add_dict_option 需 dict_id 反查 +
+displayOrder, save_apaas_process 需完整 BPMN). 接通后改 _dispatch_to_apaas() 的
+elif 分支即可.
 """
 from __future__ import annotations
 
-import asyncio
 import json
 import logging
 from datetime import datetime
@@ -52,6 +56,7 @@ from pydantic import BaseModel
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.apaas_client import APaaSClient
 from app.database import get_db
 from app.models import Application
 from app.models.spec_section import SpecSection
@@ -122,7 +127,7 @@ def _items_from_section(section_type: str, spec_json: dict) -> list[dict[str, st
     每条 item: { typ, desc, mcp_tool }
         typ      — 显示在 chip (+字段 / +角色 / ~关系), 颜色由 typ 前缀决定 (add/del/mod)
         desc     — 给人读的描述 (一句话, 含核心实体名 bold 标 — frontend 用 <strong>)
-        mcp_tool — P5 接通时真调的 MCP 工具名 (mono 字体显示)
+        mcp_tool — 真调的 apaas tool 名 (mono 字体显示)
 
     spec_json 是 spec_chat 累积 merge 出的结果, 用 marker key 取增量:
         _added_fields[]        — data_model
@@ -252,7 +257,7 @@ async def _collect_drafted_sections(
     """读所有 draft_version > base_version 的 spec_sections row.
 
     P2 后再考虑加 `WHERE last_applied_at IS NULL OR updated_at > last_applied_at`
-    防重复 apply. MVP dry-run 不动 last_applied_at, 不需要.
+    防重复 apply. 当前用 base_version bump 防重复 (apply 成功 → base = draft).
     """
     result = await db.execute(
         select(SpecSection)
@@ -261,6 +266,20 @@ async def _collect_drafted_sections(
         .order_by(SpecSection.section_type, SpecSection.id)
     )
     return list(result.scalars().all())
+
+
+def _parse_spec_json(spec_section: SpecSection) -> dict[str, Any]:
+    """spec_sections.spec_json (text col) → dict."""
+    raw = spec_section.spec_json
+    if not raw:
+        return {}
+    if isinstance(raw, dict):
+        return raw
+    try:
+        loaded = json.loads(raw)
+        return loaded if isinstance(loaded, dict) else {}
+    except (json.JSONDecodeError, TypeError):
+        return {}
 
 
 def _build_plan(rows: list[SpecSection]) -> dict[str, Any]:
@@ -280,10 +299,7 @@ def _build_plan(rows: list[SpecSection]) -> dict[str, Any]:
     # 收集每 section_type 的所有 item — 多个 row (e.g. data_model.main + data_model.dict) 合并
     items_by_type: dict[str, list[dict[str, str]]] = {}
     for row in rows:
-        try:
-            spec_json = json.loads(row.spec_json) if row.spec_json else {}
-        except json.JSONDecodeError:
-            spec_json = {}
+        spec_json = _parse_spec_json(row)
         items = _items_from_section(row.section_type, spec_json)
         if not items:
             continue
@@ -383,53 +399,322 @@ async def get_apply_plan(
 
 
 class SpecApplyBody(BaseModel):
-    """MVP 不收参 — 直接按当前 draft 状态 apply.
+    """apply 入参.
 
-    P5 加: dry_run: bool / step_filter: list[str] / abort_on_error: bool.
+    dry_run: 默认 False — 真调 apaas. 为 True 时仍走 plan 收集逻辑但所有 step 返
+    {ok: True, mode: 'dry-run'} 不调底层 client (留给 frontend QA 自测 + 排查
+    plan 翻译逻辑).
     """
 
-    dry_run: bool = True  # MVP 强制 true, 等 P5 真接 MCP 后默认 false
+    dry_run: bool = False
+
+
+def _section_match_for_item(
+    rows: list[SpecSection], section_type: str, mcp_tool: str
+) -> Optional[SpecSection]:
+    """从 rows 里找跟 (section_type, mcp_tool) 匹配的第一条 spec_section.
+
+    用于 _execute_step 取草稿 marker. 同一 section_type 多 row 时 (e.g.
+    data_model.main + data_model.dict) 取第一条有对应 marker 的.
+
+    匹配规则 — mcp_tool 反推 marker key:
+        add_apaas_model_field  → _added_fields
+        add_apaas_dict_option  → _added_dict_options
+        create_apaas_app_roles → _added_roles
+        create_apaas_menu      → _added_menus
+        ...
+    """
+    marker_by_tool = {
+        "add_apaas_model_field": "_added_fields",
+        "add_apaas_dict_option": "_added_dict_options",
+        "create_apaas_app_roles": "_added_roles",
+        "create_apaas_menu": "_added_menus",
+        "save_apaas_process": "_added_processes",
+        "save_apaas_business_rule": "_added_business_rules",
+        "create_apaas_form": "_added_forms",
+        "create_apaas_list": "_added_lists",
+    }
+    marker = marker_by_tool.get(mcp_tool)
+    for row in rows:
+        if row.section_type != section_type:
+            continue
+        if not marker:
+            return row
+        spec_json = _parse_spec_json(row)
+        if spec_json.get(marker):
+            return row
+    # 兜底 — 没匹配 marker 也返第一个 section_type 一致的 row (P6 fallback).
+    for row in rows:
+        if row.section_type == section_type:
+            return row
+    return None
+
+
+async def _dispatch_to_apaas(
+    client: APaaSClient,
+    apaas_app_id: str,
+    item: dict[str, str],
+    spec_section: SpecSection,
+) -> dict[str, Any]:
+    """真调 apaas — 按 mcp_tool 分支.
+
+    返:
+        {ok: bool, mcp_tool, ...result-specific-fields}
+        失败时含 error_code + message + (optional) details.
+
+    完整接通的 2 个 tool:
+        - create_apaas_app_roles
+        - add_apaas_model_field (多字段循环)
+
+    P6 留尾的 6 个 tool:
+        - add_apaas_dict_option (需 dict_id 反查, 用 client.query_dicts)
+        - create_apaas_menu (需 form_id + datasource 反查)
+        - save_apaas_process (需完整 BPMN 翻译)
+        - save_apaas_business_rule (apaas 端 schema 未探完)
+        - create_apaas_form (需完整 formConfig)
+        - create_apaas_list (apaas 列表配置 schema)
+        - create_apaas_app_model (需完整 modelData)
+    """
+    tool_name = item.get("mcp_tool") or ""
+    spec_json = _parse_spec_json(spec_section)
+
+    # ---- 1. 角色: roles 直接是 (code, name) tuple list ----
+    if tool_name == "create_apaas_app_roles":
+        roles_raw = spec_json.get("_added_roles") or []
+        roles_payload = []
+        for r in roles_raw:
+            if not isinstance(r, dict):
+                continue
+            code = r.get("code") or r.get("role_code")
+            name = r.get("name") or r.get("role_name")
+            if not code or not name:
+                continue
+            roles_payload.append({"roleCode": code, "roleName": name})
+        if not roles_payload:
+            return {
+                "ok": False,
+                "mcp_tool": tool_name,
+                "error_code": "EMPTY_ROLES",
+                "message": "草稿无角色待 apply (缺 name / code)",
+            }
+        try:
+            result = await client.create_roles(apaas_app_id, roles_payload)
+        except Exception as exc:
+            logger.exception("create_apaas_app_roles failed apaas_app_id=%s", apaas_app_id)
+            return {
+                "ok": False,
+                "mcp_tool": tool_name,
+                "error_code": "APAAS_CALL_FAILED",
+                "message": str(exc),
+            }
+        return {
+            "ok": True,
+            "mcp_tool": tool_name,
+            "applied_count": len(roles_payload),
+            "raw_result": result if isinstance(result, dict) else {"data": result},
+        }
+
+    # ---- 2. 字段: 反查 model_id + 多字段循环 ----
+    if tool_name == "add_apaas_model_field":
+        fields_raw = spec_json.get("_added_fields") or []
+        if not fields_raw:
+            return {
+                "ok": False,
+                "mcp_tool": tool_name,
+                "error_code": "EMPTY_FIELDS",
+                "message": "草稿无字段待 apply",
+            }
+
+        # 拉 apaas model 列表, 反查 model_id by section_key (e.g. 'main' = 主表)
+        # 或第一个 model 作 fallback.
+        try:
+            apaas_models = await client.query_models(apaas_app_id)
+        except Exception as exc:
+            logger.exception("query_models failed apaas_app_id=%s", apaas_app_id)
+            return {
+                "ok": False,
+                "mcp_tool": tool_name,
+                "error_code": "MODEL_LIST_FAIL",
+                "message": f"无法拉取 apaas 模型列表: {exc}",
+            }
+        if not apaas_models:
+            return {
+                "ok": False,
+                "mcp_tool": tool_name,
+                "error_code": "MODEL_NOT_FOUND",
+                "message": "apaas 应用下没数据模型 (先建模再加字段)",
+            }
+
+        section_key = spec_section.section_key or ""
+        target_model = next(
+            (
+                m for m in apaas_models
+                if str(m.get("modelCode") or "") == section_key
+            ),
+            None,
+        )
+        if not target_model:
+            target_model = apaas_models[0]
+            logger.info(
+                "add_apaas_model_field: section_key=%r 没对应 modelCode, 用第一个 model %s",
+                section_key,
+                target_model.get("modelCode"),
+            )
+
+        model_id = str(target_model.get("id") or target_model.get("modelId") or "")
+        model_code = str(target_model.get("modelCode") or target_model.get("code") or "")
+        if not model_id:
+            return {
+                "ok": False,
+                "mcp_tool": tool_name,
+                "error_code": "MODEL_ID_MISSING",
+                "message": f"apaas model 没 id: code={model_code}",
+            }
+
+        # 多字段循环 — apaas 端 modelField/add 一次只加 1 个
+        details: list[dict[str, Any]] = []
+        for f in fields_raw:
+            if not isinstance(f, dict):
+                continue
+            field_code = f.get("code") or f.get("field_code") or ""
+            field_name = f.get("name") or f.get("field_name") or ""
+            if not field_code or not field_name:
+                details.append({
+                    "field": field_name or field_code or "(未命名)",
+                    "ok": False,
+                    "error_code": "MISSING_FIELD_NAME_OR_CODE",
+                })
+                continue
+
+            field_payload = {
+                "appId": apaas_app_id,
+                "modelId": model_id,
+                "dataModelId": model_id,
+                "modelCode": model_code,
+                "fieldCode": field_code,
+                "fieldName": field_name,
+                "fieldType": (f.get("type") or "STRING").upper(),
+                "fieldStatus": "ENABLE",
+                "fieldComment": f.get("description") or f.get("comment") or "",
+            }
+            max_length = f.get("max_length") or f.get("maxLength")
+            if max_length:
+                field_payload["maxLength"] = int(max_length)
+
+            try:
+                # 用底层 _post_resource 调 /xdap-app/modelField/add (apaas_client 没暴露
+                # add_field 方法; 直接复用 _post_resource pattern, 跟 incremental_executor
+                # 一致).
+                result = await client._post_resource(  # noqa: SLF001
+                    "/modelField/add", field_payload, apaas_app_id
+                )
+                details.append({
+                    "field": field_name,
+                    "code": field_code,
+                    "ok": True,
+                    "raw_result": result if isinstance(result, (dict, list)) else None,
+                })
+            except Exception as exc:
+                logger.exception(
+                    "add_apaas_model_field failed apaas_app_id=%s code=%s",
+                    apaas_app_id, field_code,
+                )
+                details.append({
+                    "field": field_name,
+                    "code": field_code,
+                    "ok": False,
+                    "error_code": "APAAS_CALL_FAILED",
+                    "message": str(exc),
+                })
+
+        all_ok = bool(details) and all(d.get("ok") for d in details)
+        return {
+            "ok": all_ok,
+            "mcp_tool": tool_name,
+            "model_id": model_id,
+            "model_code": model_code,
+            "details": details,
+        }
+
+    # ---- 3. P6 留尾的 6 个 tool — 都返 NOT_IMPLEMENTED_P6 ----
+    not_impl_tools = {
+        "add_apaas_dict_option",      # 需 dict_id 反查 + displayOrder 累计
+        "create_apaas_menu",          # 需 form_id + datasource 反查
+        "save_apaas_process",         # 需完整 BPMN 翻译 (incremental_executor 有 logic 但复杂)
+        "save_apaas_business_rule",   # apaas 端 schema 未探完
+        "create_apaas_form",          # 需完整 formConfig
+        "create_apaas_list",          # apaas 列表配置 schema
+        "create_apaas_app_model",     # 需完整 modelData
+    }
+    if tool_name in not_impl_tools:
+        return {
+            "ok": False,
+            "mcp_tool": tool_name,
+            "error_code": "NOT_IMPLEMENTED_P6",
+            "message": f"{tool_name} P6 接通中 — 当前 W 阶段只接通 roles + fields",
+        }
+
+    # ---- 4. 未识别工具 ----
+    return {
+        "ok": False,
+        "mcp_tool": tool_name,
+        "error_code": "UNKNOWN_TOOL",
+        "message": f"未识别 mcp_tool: {tool_name}",
+    }
 
 
 async def _execute_step(
     db: AsyncSession,
-    app_id: int,
+    client: Optional[APaaSClient],
+    apaas_app_id: Optional[str],
+    rows: list[SpecSection],
     item: dict[str, str],
+    section_type: str,
+    dry_run: bool,
 ) -> dict[str, Any]:
-    """执行单步 — MVP 仅 sleep 1.5s + 返成功.
+    """执行单步 — dispatch 到 _dispatch_to_apaas, 失败返 ok:False + error_code.
 
-    ⚠️ P5 接通 MCP 真调的接入点 — 改这里:
+    dry_run=True: 不调 apaas, 直接返 {ok: True, mode: 'dry-run'}.
 
-        from app.mcp_apaas_apps import (
-            create_apaas_app_model,
-            add_apaas_model_field,
-            create_apaas_app_roles,
-            ...
-        )
-
-        tool_name = item["mcp_tool"]
-        if tool_name == "add_apaas_model_field":
-            result = await add_apaas_model_field(db, app_id=app_id, ...)
-        elif tool_name == "create_apaas_app_roles":
-            result = await create_apaas_app_roles(db, app_id=app_id, ...)
-        # ...
-
-    每个 mcp_tool 的入参从 spec_sections.spec_json 取 (entity name / code / fields).
-    item desc 含 <strong>{name}</strong> 标记 — P5 实际不靠它取参, 解析 spec_json 取
-    完整结构 (避免 desc 跟 spec drift).
-
-    成功后写 last_applied_at + reset draft_version=base_version (避免重复 apply).
-    失败按 abort_on_error 决定回滚还是继续.
+    成功逻辑分两层:
+      _dispatch_to_apaas 返 ok=True → 上游 apply_spec 把对应 spec_section 的
+      base_version bump 成 draft_version (在 apply_spec 主循环里集中做, 不在这里).
     """
-    # MVP — 模拟执行延迟 (1.5s/step, mockup "预计 ~12 秒" 6 步 = 2s/step;
-    # 1.5s 留点 buffer 给 frontend animate transition).
-    await asyncio.sleep(1.5)
-    return {
-        "ok": True,
-        "mcp_tool": item.get("mcp_tool"),
-        "desc": item.get("desc"),
-        "mode": "dry-run",
-    }
+    tool_name = item.get("mcp_tool") or ""
+
+    if dry_run:
+        return {
+            "ok": True,
+            "mcp_tool": tool_name,
+            "desc": item.get("desc"),
+            "mode": "dry-run",
+        }
+
+    # 不是 dry-run 就要有 client + apaas_app_id
+    if not client or not apaas_app_id:
+        return {
+            "ok": False,
+            "mcp_tool": tool_name,
+            "error_code": "APP_NOT_DEPLOYED",
+            "message": "应用未部署到 apaas — 无 client / apaas_app_id",
+        }
+
+    spec_section = _section_match_for_item(rows, section_type, tool_name)
+    if not spec_section:
+        return {
+            "ok": False,
+            "mcp_tool": tool_name,
+            "error_code": "SPEC_SECTION_NOT_FOUND",
+            "message": f"找不到 section_type={section_type} 的草稿 (apply 进行中 spec 被删?)",
+        }
+
+    result = await _dispatch_to_apaas(client, apaas_app_id, item, spec_section)
+    result["desc"] = item.get("desc")
+    result["mode"] = "live"
+    # 把 section_type / section_key 透传给上游 — bump base_version 时用
+    result["_section_type"] = section_type
+    result["_section_id"] = spec_section.id
+    return result
 
 
 @router.post("/{app_id}/spec/apply")
@@ -439,34 +724,36 @@ async def apply_spec(
     ctx: Annotated[AuthContext, Depends(get_auth_context)],
     db: Annotated[AsyncSession, Depends(get_db)],
 ) -> dict[str, Any]:
-    """MVP dry-run — 不真调 MCP, 仅模拟串行执行 + 返进度.
+    """串行执行 apply plan — 真调 apaas (除非 body.dry_run=True).
 
     flow:
-      1. 复用 get_apply_plan 逻辑 (权限 + plan 构造)
-      2. 串行跑每个 item _execute_step (MVP sleep 1.5s)
-      3. 返 {ok, applied_steps, total_steps, mode, results}
+      1. 权限校验 + 拉应用
+      2. 拉 spec_sections plan (复用 get_apply_plan 逻辑)
+      3. 准备 APaaSClient (非 dry-run 时)
+      4. 串行跑每个 item _execute_step → _dispatch_to_apaas
+      5. 成功的 step 把对应 spec_section.base_version = draft_version (单 section 全
+         step 成功才 bump — 防 P6 部分 NOT_IMPLEMENTED step 误判成功)
+      6. 返 {ok, applied_steps, failed_steps, total_steps, mode, results}
 
-    返 (非 SSE — 一次性 dict, 客户端阻塞 N*1.5s):
+    返结构:
       {
         ok: true,
         app_id: 13,
-        mode: 'dry-run',
+        mode: 'live' | 'dry-run',
         total_steps: 6,
-        applied_steps: 6,
+        applied_steps: 4,
+        failed_steps: 2,
         results: [
-          { ok, mcp_tool, desc, mode }
+          { ok, mcp_tool, desc, mode, raw_result? / details? / error_code? }
         ],
+        synced_sections: ["data_model:main"],  # 哪些 section 真 bump base_version
         duration_ms: 9023,
       }
 
-    P5 接通 MCP 真调后:
-      - 改 _execute_step 体
-      - body.dry_run=false 时真调; true 时仍 sleep
-      - 任一 step 失败 → abort + 返 partial results + 触发 spec_sections 回滚
-        (last_applied_at 清空, draft_version 复原)
-      - 考虑改成 SSE 给 frontend 实时显进度 (本模块 _use_sse=False 留位)
+    错误策略: 不 abort — 跑完所有 step. 失败的 step 不 bump base_version, 草稿仍在.
+    用户在 SPEC 设计 tab 里能继续改 + 重 apply.
     """
-    # 1. 权限
+    # 1. 权限 + 拉应用
     result = await db.execute(
         select(Application).where(
             Application.id == app_id,
@@ -478,7 +765,7 @@ async def apply_spec(
         raise HTTPException(status_code=404, detail="应用不存在")
     await check_resource_permission(ctx, db, app, "application", Action.EDIT)
 
-    # 2. 拉 plan (复用)
+    # 2. 拉 plan + rows (rows 用于 _execute_step 反查 spec_json)
     rows = await _collect_drafted_sections(db, app_id)
     plan = _build_plan(rows)
 
@@ -486,52 +773,119 @@ async def apply_spec(
         return {
             "ok": True,
             "app_id": app_id,
-            "mode": "dry-run",
+            "mode": "dry-run" if body.dry_run else "live",
             "total_steps": 0,
             "applied_steps": 0,
+            "failed_steps": 0,
             "results": [],
+            "synced_sections": [],
             "duration_ms": 0,
             "message": "没有未 apply 的 SPEC 草稿改动",
         }
 
-    # 3. 串行执行
+    # 3. 准备 APaaSClient (非 dry-run)
+    client: Optional[APaaSClient] = None
+    apaas_app_id: Optional[str] = None
+    if not body.dry_run:
+        if not app.apaas_app_id:
+            raise HTTPException(
+                status_code=400,
+                detail="应用未关联 apaas 应用 (apaas_app_id 为空), 无法 apply. 先在生成 tab 部署.",
+            )
+        apaas_app_id = str(app.apaas_app_id)
+        try:
+            from app.routes.incremental_update import _get_platform_client_for_app
+            client = await _get_platform_client_for_app(app, ctx.user, db)
+        except HTTPException:
+            raise
+        except Exception as exc:
+            logger.exception("准备 apaas client 失败 app_id=%s", app_id)
+            raise HTTPException(
+                status_code=400,
+                detail=f"无法连接 apaas 平台: {exc}",
+            )
+
+    # 4. 串行执行 — 同时统计每个 spec_section 的 step 成败 (全成才 bump base_version)
     start = datetime.utcnow()
     results: list[dict[str, Any]] = []
     applied = 0
+    failed = 0
+    # section_id → {"all_ok": bool, "any_step": bool} — 跑完一节才决定 bump
+    section_step_status: dict[int, dict[str, Any]] = {}
+
     for group in plan["groups"]:
+        section_type = group["section_type"]
         for item in group["items"]:
             try:
-                step_result = await _execute_step(db, app_id, item)
-                results.append(step_result)
-                if step_result.get("ok"):
-                    applied += 1
+                step_result = await _execute_step(
+                    db, client, apaas_app_id, rows, item, section_type, body.dry_run,
+                )
             except Exception as exc:
+                # _execute_step 自己 catch 一般不漏出来. 兜底 — 不让一条 step 崩整批.
                 logger.exception(
-                    "spec_apply: step failed app_id=%s tool=%s",
+                    "spec_apply: step crashed app_id=%s tool=%s",
                     app_id,
                     item.get("mcp_tool"),
                 )
-                # P5: 这里触发回滚. MVP dry-run 不会到这.
-                results.append(
-                    {
-                        "ok": False,
-                        "mcp_tool": item.get("mcp_tool"),
-                        "desc": item.get("desc"),
-                        "error": str(exc),
-                    }
+                step_result = {
+                    "ok": False,
+                    "mcp_tool": item.get("mcp_tool"),
+                    "desc": item.get("desc"),
+                    "error_code": "STEP_CRASHED",
+                    "message": str(exc),
+                    "mode": "live",
+                }
+
+            # 把 _execute_step 留的 _section_id / _section_type 内部字段 pop 掉 (不返客户端)
+            step_result.pop("_section_type", None)
+            step_result.pop("_section_id", None)
+
+            # 跟踪 section bump base_version 用 — 同一 section 全 step 成才 bump
+            sec = _section_match_for_item(rows, section_type, item.get("mcp_tool") or "")
+            if sec:
+                track = section_step_status.setdefault(
+                    sec.id,
+                    {"all_ok": True, "any_step": False, "section": sec},
                 )
-                # MVP 不 abort — 继续跑后续 step (因为都是 sleep 没真副作用).
-                # P5 真接 MCP 时这里 break 触发回滚.
+                track["any_step"] = True
+                if not step_result.get("ok"):
+                    track["all_ok"] = False
+
+            results.append(step_result)
+            if step_result.get("ok"):
+                applied += 1
+            else:
+                failed += 1
+
+    # 5. bump base_version — 仅当该 section 全 step 成功 + 非 dry-run
+    synced_sections: list[str] = []
+    if not body.dry_run:
+        for sid, track in section_step_status.items():
+            if not track["any_step"] or not track["all_ok"]:
+                continue
+            sec: SpecSection = track["section"]
+            old_base = sec.base_version
+            sec.base_version = sec.draft_version
+            sec.last_applied_at = datetime.utcnow()
+            synced_sections.append(f"{sec.section_type}:{sec.section_key}")
+            logger.info(
+                "spec_apply: bumped base_version app_id=%s section=%s:%s %d→%d",
+                app_id, sec.section_type, sec.section_key,
+                old_base, sec.draft_version,
+            )
+        if synced_sections:
+            await db.commit()
 
     duration_ms = int((datetime.utcnow() - start).total_seconds() * 1000)
 
     return {
-        "ok": True,
+        "ok": failed == 0,
         "app_id": app_id,
-        "mode": "dry-run",
+        "mode": "dry-run" if body.dry_run else "live",
         "total_steps": plan["total_steps"],
         "applied_steps": applied,
+        "failed_steps": failed,
         "results": results,
+        "synced_sections": synced_sections,
         "duration_ms": duration_ms,
-        # P5: 真 apply 后这里加 deployed_section_ids / rollback_token 给前端回滚 btn 用.
     }
