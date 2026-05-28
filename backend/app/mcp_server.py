@@ -1513,18 +1513,28 @@ async def get_apaas_process_detail(env_id: int, apaas_app_id: str, process_id: s
     async with AsyncSessionLocal() as db:
         try:
             client = await _get_apaas_client(env_id, db)
-            raw_resp = await client.query_process_config(apaas_app_id.strip(), process_id.strip())
+            # 2026-05-28 修流程渲染空: 原走 query_process_config (猜的 /processConfig /queryById
+            # 两个 URL 都不通 → PROCESS_QUERY_NOT_AVAILABLE → 前端画布空). 改用实测可用的
+            # list_processes —— 它返回的每个流程对象**本来就带完整 nodes/edges**, 按 process_id
+            # 挑出对应那条即可, 不再多打一个不存在的 apaas 接口.
+            raw_list = await client.list_processes(apaas_app_id.strip())
         except Exception as exc:
-            return {"ok": False, "error_code": "APAAS_CLIENT_ERROR", "message": f"调 apaas 失败: {exc}"}
+            return {"ok": False, "error_code": "APAAS_CLIENT_ERROR", "message": f"调 apaas list_processes 失败: {exc}"}
 
-    if not raw_resp.get("ok"):
+    pid = process_id.strip()
+    raw = None
+    for p in raw_list or []:
+        if not isinstance(p, dict):
+            continue
+        if pid in (str(p.get("id") or ""), str(p.get("processCode") or ""), str(p.get("menuId") or "")):
+            raw = p
+            break
+    if raw is None:
         return {
             "ok": False,
-            "error_code": raw_resp.get("error_code") or "APAAS_PROCESS_DETAIL_FAILED",
-            "message": raw_resp.get("message") or "apaas 流程详情拉取失败",
+            "error_code": "PROCESS_NOT_FOUND",
+            "message": f"apaas 应用 {apaas_app_id} 下找不到流程 {pid} (该应用共 {len(raw_list or [])} 个流程)",
         }
-
-    raw = raw_resp.get("data") or {}
     # apaas raw 结构推测: { nodes: [{nodeKey, nodeType, nodeName, x, y, approverType, ...}], edges: [...] }
     nodes_out = []
     edges_out = []

@@ -107,33 +107,24 @@
               title="设计视角 — 加节点 / 连线 / 保存"
             >✏️ 设计</button>
           </div>
-          <button class="pdp-btn pdp-btn-ghost" @click="onFitContent" title="适应画布">
+          <!-- 适应画布 仅业务视角 (设计模式 center 是 apaas iframe, 原生 canvas 隐藏) -->
+          <button v-if="readOnly" class="pdp-btn pdp-btn-ghost" @click="onFitContent" title="适应画布">
             <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 7V3h4M21 7V3h-4M3 17v4h4M21 17v4h-4"/></svg>
             适应
           </button>
-          <!-- O2: edit-only 按钮组 — 自动布局 / 试跑 / 保存 / 部署 仅设计模式显 -->
-          <template v-if="!readOnly">
-            <button class="pdp-btn pdp-btn-ghost" :disabled="true" title="P2 接入">自动布局</button>
-            <button class="pdp-btn pdp-btn-ghost" :disabled="true" title="P2 接入">试跑</button>
-            <button
-              class="pdp-btn pdp-btn-ghost"
-              :disabled="!activeProcess || saving"
-              @click="onSave"
-              :title="lastSavedAt ? `上次本地保存: ${lastSavedAt}` : '保存到本地 (点部署才同步 apaas)'"
-            >{{ saving ? '保存中...' : '保存' }}</button>
-            <button
-              class="pdp-btn pdp-btn-primary"
-              :disabled="!activeProcess || saving || deploying"
-              @click="onDeploy"
-              :title="lastDeployedAt ? `上次部署: ${lastDeployedAt} (v${lastDeployedVersion ?? '?'})` : '保存并真同步到 apaas 平台'"
-            >{{ deploying ? '部署中...' : '部署' }}</button>
-          </template>
+          <!-- 设计模式 ✨ 用对话改流程 CTA (业务模式有自己的 banner CTA, 两种模式都可见) -->
+          <button
+            v-else
+            class="pdp-btn pdp-btn-ghost"
+            @click="onChatToEdit"
+            title="走配置助手对话改流程"
+          >✨ 用对话改流程</button>
         </div>
       </header>
 
       <div class="pdp-body">
-        <!-- 左 sidebar: 流程列表 + 节点库 (流程列表始终显; 节点库仅 edit mode) -->
-        <aside class="pdp-sidebar" aria-label="流程列表 + 节点库">
+        <!-- 左 sidebar: 流程列表 (始终显) + 模式提示 -->
+        <aside class="pdp-sidebar" aria-label="流程列表">
           <!-- ── 流程列表 panel ────────────────────────────────── -->
           <div class="pdp-section">
             <button
@@ -160,70 +151,49 @@
             </div>
           </div>
 
-          <!-- ── 节点库 (仅 edit mode) ─────────────────────────── -->
-          <template v-if="!readOnly">
-            <h4 class="pdp-sidebar-title">节点库</h4>
-            <div class="pdp-cat-list">
-              <div
-                v-for="cat in NODE_CATEGORIES"
-                :key="cat.code"
-                class="pdp-cat"
-                :data-cat="cat.code"
-              >
-                <button
-                  class="pdp-cat-head"
-                  @click="toggleCategory(cat.code)"
-                  :aria-expanded="!collapsed[cat.code]"
-                >
-                  <span class="pdp-cat-arrow" :class="{ 'is-open': !collapsed[cat.code] }">▸</span>
-                  <span class="pdp-cat-label">{{ cat.label }}</span>
-                  <span class="pdp-cat-count">{{ cat.nodes.length }}</span>
-                </button>
-                <div v-if="!collapsed[cat.code]" class="pdp-chip-grid">
-                  <button
-                    v-for="n in cat.nodes"
-                    :key="n.type"
-                    class="pdp-chip"
-                    :data-cat="cat.code"
-                    :disabled="!activeProcess"
-                    :title="`加 ${n.label}`"
-                    @click="onSidebarNodeClick(n.type)"
-                  >
-                    <span class="pdp-chip-icon">{{ n.icon }}</span>
-                    <span class="pdp-chip-label">{{ n.label }}</span>
-                  </button>
-                </div>
-              </div>
-            </div>
-            <p class="pdp-sidebar-foot">
-              点击节点添加到画布 — 拖拽连线在画布上拖
-            </p>
-          </template>
-          <!-- view mode: 占位提示 — 切到设计可加节点 -->
+          <!-- ── 设计模式: 提示走右侧 apaas 原生编辑器 (节点库 / 连线 / 审批人配置都在 iframe 里) ── -->
+          <p v-if="!readOnly" class="pdp-sidebar-foot pdp-sidebar-foot-view">
+            ✏️ 设计模式 — 在右侧 apaas 原生流程编辑器加节点 / 连线 / 配置审批人, 或用 ✨ 对话改流程
+          </p>
+          <!-- view mode: 占位提示 — 切到设计可改流程 -->
           <p v-else class="pdp-sidebar-foot pdp-sidebar-foot-view">
-            👁 业务视角 — 切到 ✏️ 设计模式后才能加节点 / 改流程
+            👁 业务视角 — 切到 ✏️ 设计模式后才能改流程
           </p>
         </aside>
 
-        <!-- 中央 x6 canvas -->
-        <div class="pdp-canvas-wrap">
+        <!-- 中央 x6 canvas — 业务视角原生只读视图.
+             用 v-show (非 v-if) 保持 containerRef 始终在 DOM, 切到设计模式不销毁 x6 graph 实例
+             (设计模式 center 改 apaas iframe, canvas 仅 display:none). -->
+        <div v-show="readOnly" class="pdp-canvas-wrap">
           <div ref="containerRef" class="pdp-canvas"></div>
           <div v-if="!nodeCount && activeProcess" class="pdp-canvas-hint">
             <div class="pdp-canvas-hint-icon">⊕</div>
-            <p v-if="readOnly">
+            <p>
               <strong>"{{ activeProcess.name || activeProcess.code }}"</strong> 尚无流程定义
               <br />
               <span class="pdp-canvas-hint-sub">
-                切到 ✏️ 设计模式从左侧节点库搭建流程, 或用配置助手对话快速生成
+                切到 ✏️ 设计模式用 apaas 原生编辑器搭建流程, 或用配置助手对话快速生成
               </span>
             </p>
-            <p v-else>从左侧"节点库"点节点添加到画布</p>
           </div>
           <div v-if="!activeProcess" class="pdp-canvas-hint">
             <div class="pdp-canvas-hint-icon">👈</div>
             <p>从左侧"流程列表"选择一个流程</p>
           </div>
         </div>
+
+        <!-- 设计模式 center — apaas 原生流程编辑器 iframe (designer-sub=process → 自动激活 tab-workFlowDesign).
+             menu-id 用 props.menuId; form-id 优先当前选中流程的 form_id, 兜底 props.formId. -->
+        <ApaasEmbedIframe
+          v-if="!readOnly"
+          class="pdp-iframe"
+          :app-id="props.appId"
+          :menu-id="props.menuId || ''"
+          :form-id="activeProcess?.form_id || props.formId || null"
+          menu-type="MODEL"
+          mode="config"
+          designer-sub="process"
+        />
 
         <!-- O2: 右 — view mode 显历史轨迹时间轴; edit mode 显节点属性面板 -->
         <aside v-if="readOnly && activeProcess" class="pdp-timeline" aria-label="历史轨迹">
@@ -282,11 +252,10 @@ import { ref, computed, watch, onMounted, onBeforeUnmount, shallowRef, reactive,
 import { Graph, type Node as X6Node, type Edge as X6Edge } from '@antv/x6'
 import { ElMessage } from 'element-plus'
 import ProcessNodePropsPanel from './ProcessNodePropsPanel.vue'
+import ApaasEmbedIframe from './ApaasEmbedIframe.vue'
 import request from '@/utils/request'
 import {
-  NODE_CATEGORIES,
   type NodeType,
-  type NodeCategoryCode,
   type ProcessNode,
   getNodeDef,
   getNodeCategoryCode,
@@ -308,13 +277,6 @@ const nodeStates = reactive<Record<string, ProcessNode>>({})
 const selectedNodeId = ref<string | null>(null)
 const nodeCount = ref(0)
 const edgeCount = ref(0)
-
-const collapsed = reactive<Record<NodeCategoryCode, boolean>>({
-  entry: false,
-  approval: false,
-  logic: false,
-  action: false,
-})
 
 /** 流程列表 (从 /section-content/processes 真拉). */
 interface ProcessItem {
@@ -438,10 +400,6 @@ const timelineItems = computed<TimelineItem[]>(() => {
   }
   return items
 })
-
-function toggleCategory(code: NodeCategoryCode) {
-  collapsed[code] = !collapsed[code]
-}
 
 /** Order nodes for timeline — 用 entry → end 拓扑 (best-effort)
  *  简化: 取 nodeStates 插入顺序; 后续 P2 可改 edges BFS.
@@ -663,49 +621,6 @@ function initGraph() {
   refreshCounts(graph)
 }
 
-function getCanvasCenter(): { x: number; y: number } {
-  const g = graphRef.value
-  if (!g || !containerRef.value) return { x: 200, y: 200 }
-  const box = containerRef.value.getBoundingClientRect()
-  // 简化: 用容器中心 + 累计 offset 防节点重叠
-  const offsetCount = nodeCount.value
-  const offsetX = (offsetCount % 4) * 40
-  const offsetY = Math.floor(offsetCount / 4) * 40
-  return {
-    x: Math.max(80, box.width / 2 - 80 + offsetX),
-    y: Math.max(80, box.height / 2 - 40 + offsetY),
-  }
-}
-
-function onSidebarNodeClick(type: NodeType) {
-  if (readOnly.value) {
-    alert('当前是查看模式 — 点顶部 "编辑" 切到编辑模式后才能加节点')
-    return
-  }
-  if (!activeProcess.value) {
-    alert('请先从左侧 "流程列表" 选择一个流程')
-    return
-  }
-  const g = graphRef.value
-  if (!g) return
-  const def = getNodeDef(type)
-  if (!def) return
-  const id = `${type}_${Math.random().toString(36).slice(2, 8)}`
-  const spec = buildNodeSpec(type, def.label, def.icon)
-  const pos = getCanvasCenter()
-  g.addNode({
-    id,
-    x: pos.x,
-    y: pos.y,
-    ...spec,
-    data: { type, color: getNodeColor(type) },
-  } as never)
-  nodeStates[id] = makeDefaultNode(id, type, def.label)
-  nodeStates[id].x = pos.x
-  nodeStates[id].y = pos.y
-  selectedNodeId.value = id
-}
-
 /** O2: 显式设视角 — 业务 (read=true) / 设计 (read=false). 自动同步 x6 interacting + 重绘 mock 进度. */
 function setViewMode(viewMode: boolean) {
   if (!activeProcess.value) {
@@ -725,7 +640,10 @@ function setViewMode(viewMode: boolean) {
   if (viewMode) {
     paintInstanceProgress()
   } else {
-    // 切到设计 — 还原默认节点 stroke 颜色 (清 mock 状态视觉)
+    // 切到设计 — center 改 apaas iframe, 原生 canvas 隐藏.
+    // 清原生节点选中 (否则切换后 ProcessNodePropsPanel 会跟 iframe 同时渲染).
+    selectedNodeId.value = null
+    // 还原默认节点 stroke 颜色 (清 mock 状态视觉, 切回业务视角时干净)
     clearInstanceProgress()
   }
 }
@@ -1700,6 +1618,12 @@ watch(
   min-width: 0;
   background: var(--surface-2);
   position: relative;
+}
+/* 设计模式 center — apaas 原生编辑器 iframe 占满中央区 (sidebar 右侧 flex:1). */
+.pdp-iframe {
+  flex: 1;
+  min-width: 0;
+  min-height: 0;
 }
 .pdp-canvas {
   width: 100%;

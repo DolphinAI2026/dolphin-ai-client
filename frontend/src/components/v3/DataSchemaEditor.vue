@@ -131,18 +131,9 @@
         </div>
       </header>
 
-      <!-- 2026-05-27 R: viewMode === 'edit' 时不显 4 sub-tab + 字段表, 改 iframe apaas data-model-fn-config -->
-      <ApaasEmbedIframe
-        v-if="viewMode === 'edit'"
-        :app-id="props.appId"
-        :menu-id="props.menuId || ''"
-        :form-id="props.formId || null"
-        menu-type="MODEL"
-        mode="config"
-      />
-
-      <!-- 4 sub-tab + 各 sub 内容: 仅 preview 模式显 (edit 模式整段被上面 iframe 替代) -->
-      <template v-else>
+      <!-- 4 sub-tab + 各 sub 内容: preview / edit 两种模式都显原生字段表.
+           edit 模式靠 viewMode === 'edit' 的 inline 编辑 / 操作列 / 新增字段 启用 CRUD
+           (对齐 apaas 数据模型详情页), 不再切 apaas iframe. -->
       <div class="dse-subnav" role="tablist">
         <button
           v-for="sub in SUB_TABS"
@@ -384,7 +375,6 @@
           </li>
         </ul>
       </div>
-      </template>
     </template>
 
     <!-- ─── 新增 / 编辑 字段 dialog ───────────────────────────────────────── -->
@@ -528,7 +518,6 @@
 import { ref, computed, watch, nextTick, reactive } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import request from '@/utils/request'
-import ApaasEmbedIframe from './ApaasEmbedIframe.vue'
 
 interface FieldRow {
   field_id?: string
