@@ -109,6 +109,7 @@
                 <strong>{{ app.app_name }}</strong>
                 <span class="apps-row-meta">
                   <code>{{ app.app_code || `app-${app.id}` }}</code>
+                  <span class="apps-type-tag" :class="app.app_type === 'ai-code' ? 'is-ai-code' : 'is-low-code'">{{ app.app_type === 'ai-code' ? 'AI 代码' : '低代码' }}</span>
                   <template v-if="latestHistory(app)">
                     <span class="apps-dot-sep"></span>
                     <button class="apps-history-link" type="button" @click.stop="openLatestConversation(app)">
@@ -175,6 +176,7 @@
             <h2>{{ app.app_name }}</h2>
             <div class="apps-card-code">
               <code>{{ app.app_code || `app-${app.id}` }}</code>
+              <span class="apps-type-tag" :class="app.app_type === 'ai-code' ? 'is-ai-code' : 'is-low-code'">{{ app.app_type === 'ai-code' ? 'AI 代码' : '低代码' }}</span>
               <span>{{ appUpdatedLabel(app) }}</span>
             </div>
             <div class="apps-card-progress">
@@ -1093,6 +1095,23 @@ onMounted(() => { refreshApps() })
   font-size: 11.5px;
   font-weight: var(--fw-semibold, 600);
   white-space: nowrap;
+}
+
+/* 应用类型标签: low-code (品牌蓝) / ai-code (ok 绿) */
+.apps-type-tag {
+  font-size: 11px;
+  font-weight: var(--fw-semibold, 600);
+  padding: 1px 7px;
+  border-radius: var(--r-full, 999px);
+  white-space: nowrap;
+}
+.apps-type-tag.is-low-code {
+  background: var(--brand-soft);
+  color: var(--brand);
+}
+.apps-type-tag.is-ai-code {
+  background: var(--ok-soft);
+  color: var(--ok);
 }
 
 /* active = 进行中 → warn (amber, in-progress signal) */

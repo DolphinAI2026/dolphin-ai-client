@@ -108,6 +108,8 @@ export interface MergedApplication {
   git_repo_url?: string | null
   git_provider?: string | null
   git_default_branch?: string | null
+  app_type?: string            // 'low-code' | 'ai-code'
+  source_workspace_id?: string | null
   created_at?: string
   updated_at?: string
 }

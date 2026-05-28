@@ -117,6 +117,9 @@ async def init_db():
             # design-v4 I4: ProcessDefinition 真同步到 apaas 后回填 last_deployed_*
             "ALTER TABLE process_definitions ADD COLUMN last_deployed_version INTEGER",
             "ALTER TABLE process_definitions ADD COLUMN last_deployed_at DATETIME",
+            # 统一应用类型: low-code (ai-builder/SPEC) | ai-code (vibe-coding)
+            "ALTER TABLE applications ADD COLUMN app_type VARCHAR(20) NOT NULL DEFAULT 'low-code'",
+            "ALTER TABLE applications ADD COLUMN source_workspace_id VARCHAR(60)",
         ]:
             try:
                 await conn.execute(text(stmt))
