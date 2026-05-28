@@ -23,7 +23,7 @@ import logging
 from datetime import datetime
 from typing import Annotated, Any, Optional
 
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from pydantic import BaseModel, Field
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -447,6 +447,224 @@ async def get_apaas_access_url(
         "app_code": str(detail.get("appCode") or ""),
         "tenant_code": str(detail.get("tenantCode") or ""),
     }
+
+
+def _custom_host_error_html(msg: str) -> str:
+    safe = (msg or "").replace("<", "&lt;").replace(">", "&gt;")
+    return (
+        "<!DOCTYPE html><html><head><meta charset='utf-8'><style>"
+        "body{margin:0;height:100vh;display:flex;align-items:center;justify-content:center;"
+        "font-family:-apple-system,sans-serif;background:#f8f8fc;color:#666}"
+        ".b{max-width:420px;text-align:center;padding:32px}h3{color:#333;margin:0 0 8px;font-size:15px}"
+        "p{font-size:13px;margin:0;line-height:1.6}</style></head>"
+        f"<body><div class='b'><h3>自开发组件预览暂不可用</h3><p>{safe}</p></div></body></html>"
+    )
+
+
+def _build_custom_page_host_html(
+    app_base: str, bundle_dir: str, component_tag: str,
+    api_base: str, apaas_app_id: str, tenant_id: str,
+) -> str:
+    """构建自开发整页组件的独立运行 host HTML.
+
+    思路: 不加载 apaas 完整运行态 SPA (有端用户登录闸 + 整套框架), 只把自开发组件的
+    UMD bundle 拉过来, 在我们自己提供的 Vue2 + ElementUI 宿主里 install + mount.
+    无登录闸 → 直接渲染页面骨架. 数据调用 (this.$request / window.df) 走同源 /apaas
+    代理 (后端注入平台 token); 取不到数据时组件仍渲染 UI — 对"预览长什么样"已足够.
+
+    bundle 是 Vue2 plugin: install(Vue){ Vue.component(component_tag, ...) }, UMD 全局名
+    = bundle_dir. 依赖实测: Vue2 + ElementUI (el-table/card/button/icon/tag/progress/empty),
+    无 echarts / 无 apaas base 组件.
+    """
+    import json as _json
+    cfg = _json.dumps({
+        "appBase": app_base, "bundleDir": bundle_dir, "componentTag": component_tag,
+        "apiBase": api_base, "apaasAppId": apaas_app_id, "tenantId": tenant_id,
+    })
+    # Vue2 + ElementUI 走 CDN (jsdelivr). 注: 这是预览宿主, 生产可换内网 CDN / vendored.
+    return (
+        "<!DOCTYPE html><html lang='zh-CN'><head><meta charset='utf-8'>"
+        "<meta name='viewport' content='width=device-width,initial-scale=1'>"
+        "<title>自开发页面预览</title>"
+        "<link rel='stylesheet' href='https://cdn.jsdelivr.net/npm/element-ui@2.15.14/lib/theme-chalk/index.css'>"
+        f"<link rel='stylesheet' href='{app_base}{bundle_dir}/{bundle_dir}.css'>"
+        "<style>"
+        "html,body{margin:0;height:100%;background:#f5f6fa;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif}"
+        "#app{min-height:100vh}"
+        "#host-loading{position:fixed;inset:0;display:flex;flex-direction:column;align-items:center;"
+        "justify-content:center;gap:12px;color:#888;font-size:13px;background:#f5f6fa;z-index:9999}"
+        ".host-spin{width:32px;height:32px;border:3px solid #e4e7ed;border-top-color:#5B5BD6;border-radius:50%;"
+        "animation:hs .7s linear infinite}@keyframes hs{to{transform:rotate(360deg)}}"
+        "#host-status{font-size:12px;max-width:80%;text-align:center}#host-status.err{color:#dc2626}"
+        "</style>"
+        "<script src='https://cdn.jsdelivr.net/npm/vue@2.7.16/dist/vue.min.js'></script>"
+        "<script src='https://cdn.jsdelivr.net/npm/element-ui@2.15.14/lib/index.js'></script>"
+        "</head><body>"
+        "<div id='host-loading'><div class='host-spin'></div><div id='host-status'>正在加载自开发组件…</div></div>"
+        "<div id='app'></div>"
+        "<script>\n"
+        f"var HOST_CFG = {cfg};\n"
+        "(function(){\n"
+        "  var C = HOST_CFG;\n"
+        "  function setStatus(m, err){ var e=document.getElementById('host-status'); if(e){ e.textContent=m; e.className=err?'err':''; } }\n"
+        "  function hideLoading(){ var e=document.getElementById('host-loading'); if(e) e.style.display='none'; }\n"
+        "  window.GLOBAL_ENV = window.GLOBAL_ENV || {};\n"
+        "  window.GLOBAL_ENV.VUE_APP_APP_ID = C.apaasAppId;\n"
+        "  window.GLOBAL_ENV.VUE_APP_TENANT_ID = C.tenantId;\n"
+        "  window.GLOBAL_ENV.VUE_APP_BASE_DOMAIN = C.apiBase;\n"
+        "  // $request shim — 同源 /apaas 代理 (后端注入 token). 得帆云 $request body 用 params.\n"
+        "  function apaasRequest(cfg){\n"
+        "    if (typeof cfg === 'string') cfg = { url: cfg };\n"
+        "    cfg = cfg || {}; var url = cfg.url || '';\n"
+        "    if (url.indexOf('http') !== 0) {\n"
+        "      if (url.charAt(0) !== '/') url = C.apiBase + '/' + url;\n"
+        "      else if (url.indexOf('/apaas') !== 0) url = C.apiBase + url;\n"
+        "    }\n"
+        "    var method = (cfg.method || 'get').toUpperCase();\n"
+        "    var params = cfg.params || cfg.data;\n"
+        "    var opts = { method: method, headers: { 'Content-Type': 'application/json' } };\n"
+        "    if (params && method === 'GET') {\n"
+        "      var qs = Object.keys(params).map(function(k){ return encodeURIComponent(k)+'='+encodeURIComponent(params[k]); }).join('&');\n"
+        "      if (qs) url += (url.indexOf('?')<0?'?':'&') + qs;\n"
+        "    } else if (params) { opts.body = typeof params==='string'?params:JSON.stringify(params); }\n"
+        "    return fetch(url, opts).then(function(r){ return r.json().catch(function(){ return null; }); })\n"
+        "      .then(function(j){ return (j && typeof j==='object' && 'data' in j) ? j : { data: j, success: true }; })\n"
+        "      .catch(function(e){ console.warn('[host] $request fail', url, e); return { data: null, success: false }; });\n"
+        "  }\n"
+        "  // window.df shim — 已知方法 + chainable no-op 兜底 (取不到的方法返 resolved Promise 防崩)\n"
+        "  var dfBase = {\n"
+        "    request: apaasRequest, http: apaasRequest,\n"
+        "    get: function(u,p){ return apaasRequest({url:u,method:'get',params:p}); },\n"
+        "    post: function(u,p){ return apaasRequest({url:u,method:'post',params:p}); },\n"
+        "    getToken: function(){ return ''; }, t: function(k){ return k; }, i18n: { t: function(k){ return k; } },\n"
+        "    user: {}, store: {}, env: window.GLOBAL_ENV,\n"
+        "  };\n"
+        "  window.df = new Proxy(dfBase, { get: function(t,k){ if (k in t) return t[k]; return function(){ return Promise.resolve(null); }; } });\n"
+        "  function boot(){\n"
+        "    var Vue = window.Vue;\n"
+        "    Vue.config.productionTip = false;\n"
+        "    Vue.config.errorHandler = function(err, vm, info){ console.error('[host] vue error', info, err); };\n"
+        "    Vue.prototype.$request = apaasRequest; Vue.prototype.$df = window.df;\n"
+        "    if (window.ELEMENT && window.ELEMENT.Message) { Vue.prototype.$message = window.ELEMENT.Message; }\n"
+        "    var s = document.createElement('script');\n"
+        "    s.src = C.appBase + C.bundleDir + '/' + C.bundleDir + '.umd.js';\n"
+        "    s.onload = function(){\n"
+        "      var raw = window[C.bundleDir];\n"
+        "      if (!raw) { setStatus('组件包已加载但找不到导出: ' + C.bundleDir, true); return; }\n"
+        "      // UMD 用 esModuleInterop 导出 { default: plugin, _Ctor } — 真插件在 .default\n"
+        "      var plugin = (raw && raw.default) ? raw.default : raw;\n"
+        "      try {\n"
+        "        if (plugin && typeof plugin.install === 'function') Vue.use(plugin);\n"
+        "        else if (plugin) Vue.component(C.componentTag, plugin);\n"
+        "      } catch(e){ console.error('[host] register fail', e); }\n"
+        "      if (!Vue.options.components[C.componentTag]) {\n"
+        "        setStatus('组件未注册成功: ' + C.componentTag, true); return;\n"
+        "      }\n"
+        "      try {\n"
+        "        new Vue({ render: function(h){ return h(C.componentTag); } }).$mount('#app');\n"
+        "        hideLoading();\n"
+        "      } catch(e){ setStatus('挂载组件失败: ' + (e&&e.message||e), true); console.error(e); }\n"
+        "    };\n"
+        "    s.onerror = function(){ setStatus('组件包加载失败 (404?): ' + s.src, true); };\n"
+        "    document.body.appendChild(s);\n"
+        "  }\n"
+        "  var tries = 0;\n"
+        "  (function wait(){\n"
+        "    if (window.Vue && window.ELEMENT) { boot(); return; }\n"
+        "    if (tries++ > 120) { setStatus('依赖加载超时 — Vue / ElementUI CDN 不可达', true); return; }\n"
+        "    setTimeout(wait, 100);\n"
+        "  })();\n"
+        "})();\n"
+        "</script></body></html>"
+    )
+
+
+@router.get("/{app_id}/custom-page-host")
+async def get_custom_page_host(
+    app_id: int,
+    menu_id: str,
+    request: Request,
+    db: Annotated[AsyncSession, Depends(get_db)],
+    _auth: str = "",
+):
+    """自开发整页 (CUSTOM 菜单) 的**独立运行 host** — 直接跑自开发组件 bundle.
+
+    2026-05-28: 之前 preview 是 iframe 整个 apaas 运行态 SPA, 但部署应用按租户做
+    端用户登录 → iframe 卡在 /account/login. 用户决策: 我们已经能拿到自开发组件的
+    UMD bundle, 直接在自己的 Vue2+ElementUI 宿主里 mount 它, 跳过 apaas 登录闸.
+
+    返 text/html 的 host 页 (iframe src 指这里). host 内: CDN Vue2+ElementUI +
+    window.df/$request shim + 拉 bundle umd + install + mount component_tag.
+
+    认证: iframe src GET 带不了 Authorization header → 走 ?_auth=<token> query param
+    (跟 platform-proxy/entry 一致), fallback header.
+    """
+    from fastapi.responses import HTMLResponse
+    from app.coding.apaas_tools import _get_apaas_client
+    from app.deps import get_auth_context_from_token
+
+    token = _auth or ""
+    if not token:
+        ah = request.headers.get("authorization", "")
+        if ah.startswith("Bearer "):
+            token = ah[7:]
+    try:
+        ctx = await get_auth_context_from_token(token)
+    except Exception:  # noqa: BLE001
+        return HTMLResponse(_custom_host_error_html("未认证 — 请重新登录后重试"))
+
+    app = await _load_app_and_check_view(app_id, ctx, db)
+    if not app.platform_env_id or not app.apaas_app_id:
+        return HTMLResponse(_custom_host_error_html("应用尚未部署到 aPaaS 平台"))
+    try:
+        client = await _get_apaas_client(app.platform_env_id, db)
+        detail = await client.query_app_detail(str(app.apaas_app_id))
+    except Exception as exc:  # noqa: BLE001
+        return HTMLResponse(_custom_host_error_html(f"拉应用详情失败: {exc}"))
+    detail = detail or {}
+    tenant_code = str(detail.get("tenantCode") or "")
+    app_code = str(detail.get("appCode") or "")
+    if not tenant_code or not app_code:
+        return HTMLResponse(_custom_host_error_html("应用详情缺 tenantCode / appCode — 可能尚未发布"))
+
+    # 解析 menu_id → link_url (= 注册的组件 tag, 如 apaas-custom-library-home-dashboard).
+    # 用 client.query_menus (manageAppMenu 管理视图, 含 linkUrl) — MCP list_apaas_app_menus
+    # 走 runtime allAppMenu 视图不带 linkUrl, 不能用.
+    try:
+        raw_menus_nested = await client.query_menus(str(app.apaas_app_id))
+    except Exception as exc:  # noqa: BLE001
+        return HTMLResponse(_custom_host_error_html(f"拉菜单失败: {exc}"))
+
+    def _find_link_url(nodes: Any, target: str) -> str:
+        for n in nodes or []:
+            if not isinstance(n, dict):
+                continue
+            nid = str(n.get("id") or n.get("menuId") or n.get("menu_id") or "")
+            if nid == str(target):
+                return str(n.get("linkUrl") or n.get("link_url") or "")
+            found = _find_link_url(n.get("submenus") or n.get("children") or [], target)
+            if found:
+                return found
+        return ""
+
+    link_url = _find_link_url(raw_menus_nested or [], str(menu_id))
+    if not link_url:
+        return HTMLResponse(_custom_host_error_html("没找到该菜单的自开发组件 (link_url 为空)"))
+
+    component_tag = link_url
+    # bundle 目录命名: apaas-custom-{X} 组件 → form-page-{X} bundle (实证).
+    if link_url.startswith("apaas-custom-"):
+        bundle_dir = "form-page-" + link_url[len("apaas-custom-"):]
+    else:
+        bundle_dir = link_url
+
+    app_base = f"/app/{tenant_code}/{app_code}/"
+    api_base = f"/apaas/backend/{tenant_code}/{app_code}"
+    html = _build_custom_page_host_html(
+        app_base, bundle_dir, component_tag, api_base,
+        str(app.apaas_app_id), str(detail.get("tenantId") or ""),
+    )
+    return HTMLResponse(html)
 
 
 @router.get("/{app_id}/forms/{form_id}/detail")

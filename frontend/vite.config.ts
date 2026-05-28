@@ -54,6 +54,15 @@ export default defineConfig({
         target: 'http://localhost:8000',
         changeOrigin: true
       },
+      // 2026-05-28: apaas 应用运行态 (自开发整页 Vue 预览) — /app/{tenantCode}/{appCode}/
+      '^/app(/|$)': {
+        target: 'http://localhost:8000',
+        changeOrigin: true
+      },
+      '^/m(/|$)': {
+        target: 'http://localhost:8000',
+        changeOrigin: true
+      },
       '/backend': {
         target: 'http://localhost:8000',
         changeOrigin: true

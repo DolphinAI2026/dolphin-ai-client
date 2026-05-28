@@ -10,6 +10,7 @@ Platform Reverse Proxy — 全量反向代理得帆云平台，实现 iframe SSO
 """
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 import re
@@ -90,12 +91,42 @@ async def _find_proxy_env() -> Optional[PlatformEnv]:
 def _get_client() -> httpx.AsyncClient:
     global _http_client
     if _http_client is None or _http_client.is_closed:
+        # connect 单独短超时 (10s) + keepalive 连接池复用 — iframe SPA 启动并发
+        # ~30+ 资源请求时, 复用连接避免每个都重新 TLS 建连压垮上游.
         _http_client = httpx.AsyncClient(
-            timeout=30.0,
+            timeout=httpx.Timeout(connect=10.0, read=30.0, write=30.0, pool=10.0),
+            limits=httpx.Limits(max_connections=64, max_keepalive_connections=32, keepalive_expiry=30.0),
             follow_redirects=True,
             verify=False,
         )
     return _http_client
+
+
+# 瞬时连接错误 — 连接未建立必定没发数据, 任何方法都可安全重试.
+_CONNECT_EXC = (httpx.ConnectTimeout, httpx.ConnectError, httpx.PoolTimeout)
+# 瞬时读错误 — 请求已发出, 只有幂等方法 (GET/HEAD/OPTIONS) 可安全重试.
+_READ_EXC = (httpx.ReadTimeout, httpx.ReadError, httpx.RemoteProtocolError)
+
+
+async def _request_with_retry(client: httpx.AsyncClient, *, method: str, url: str,
+                              headers: dict, content, attempts: int = 3) -> httpx.Response:
+    """对瞬时网络错误重试. iframe SPA 启动时并发拉 ~30+ 资源, 上游 TLS 建连偶发
+    超时会让关键 bootstrap 文件 (env.tmpl.js / browser.js) 502 → SPA 永远卡 loading.
+    重试 2 次几乎必成功 (实测同一批里其他连接立即成功).
+    """
+    idempotent = method.upper() in ("GET", "HEAD", "OPTIONS")
+    for i in range(attempts):
+        try:
+            return await client.request(method=method, url=url, headers=headers, content=content)
+        except _CONNECT_EXC:
+            if i >= attempts - 1:
+                raise
+            await asyncio.sleep(0.3 * (i + 1))
+        except _READ_EXC:
+            if not idempotent or i >= attempts - 1:
+                raise
+            await asyncio.sleep(0.3 * (i + 1))
+    raise RuntimeError("unreachable")  # pragma: no cover
 
 
 def _error_html(title: str, detail: str) -> str:
@@ -698,7 +729,7 @@ async def _proxy_request(request: Request, path: str, inject_auth: bool = False)
                 logger.info(f"🎯 captured process body to {fname} ({len(body)} bytes) path={path}")
             except Exception as exc:
                 logger.warning(f"capture process failed: {exc}")
-        resp = await client.request(method=request.method, url=target, headers=headers, content=body)
+        resp = await _request_with_retry(client, method=request.method, url=target, headers=headers, content=body)
 
         if resp.status_code == 401 and _proxy_state.get("username"):
             env = await _find_proxy_env()
@@ -711,7 +742,7 @@ async def _proxy_request(request: Request, path: str, inject_auth: bool = False)
                     headers["xdaptoken"] = _proxy_state.get("token", "")
                     headers["xdaptenantid"] = _proxy_state.get("tenant_id", "")
                     headers["xdaptimestamp"] = str(int(_time.time() * 1000))
-                resp = await client.request(method=request.method, url=target, headers=headers, content=body)
+                resp = await _request_with_retry(client, method=request.method, url=target, headers=headers, content=body)
 
         resp_headers = {}
         for k, v in resp.headers.items():
@@ -817,6 +848,21 @@ async def proxy_smartbi(request: Request, path: str):
 @router.api_route("/apaas/{path:path}", methods=["GET", "POST", "PUT", "DELETE", "OPTIONS"])
 async def proxy_apaas(request: Request, path: str):
     return await _proxy_request(request, f"apaas/{path}", inject_auth=True)
+
+
+# 2026-05-28: 代理 apaas 应用**运行态** /app/...（自开发整页 Vue 预览用）.
+# accessUrl = {host}/app/{tenantCode}/{appCode}/, 页面 + 全部静态资源 (js/css/img/
+# config) 都在这个前缀下 (实证). X-Frame-Options 未设 → 可 iframe 内嵌. 运行态的
+# API 调用走 /apaas/backend/... 已由上面 /apaas 代理覆盖.
+@router.api_route("/app/{path:path}", methods=["GET", "POST", "PUT", "DELETE", "OPTIONS"])
+async def proxy_app_runtime(request: Request, path: str):
+    return await _proxy_request(request, f"app/{path}", inject_auth=True)
+
+
+# 移动端运行态 /m/...
+@router.api_route("/m/{path:path}", methods=["GET", "POST", "PUT", "DELETE", "OPTIONS"])
+async def proxy_mobile_runtime(request: Request, path: str):
+    return await _proxy_request(request, f"m/{path}", inject_auth=True)
 
 
 # 代理平台插件包资源 /{32位hex}/... （插件 JS/CSS/图片等）

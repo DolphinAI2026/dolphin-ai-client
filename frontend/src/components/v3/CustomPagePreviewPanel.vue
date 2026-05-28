@@ -1,13 +1,15 @@
-<!-- CustomPagePreviewPanel.vue — design-v4 R (2026-05-27) / 信息卡重写 (2026-05-28)
+<!-- CustomPagePreviewPanel.vue — design-v4 R (2026-05-27) / 自开发组件独立运行 (2026-05-28)
   CUSTOM 菜单 (apaas 自开发整页 Vue) 预览 + 编辑入口.
 
   apaas menu_type=CUSTOM 菜单 link_url = 注册到运行态的 Vue 组件名
-  (例: apaas-custom-library-home-dashboard). 平台运行时按组件名扫描加载渲染.
+  (例: apaas-custom-library-home-dashboard). 组件被打成 UMD bundle 部署在 apaas.
 
-  2026-05-28: 之前 preview 用 iframe 塞 apaas runtime URL — 但 apaas 是 SPA, 运行态
-  路由我们拿不到精确 pattern (且 app 没发布到生产时运行页根本不存在) → iframe 空白.
-  改成信息卡 + 双入口 (用户决策): 显组件名 + 在 apaas 打开真应用 + 去 IDE 改源码.
-  比空白 iframe 诚实可用.
+  2026-05-28 v3 (用户决策"自开发包都拿到了, 直接自己跑起来"):
+  之前 iframe 整个 apaas 运行态 SPA → 部署应用按租户做端用户登录 → 卡在 /account/login.
+  改成: iframe 指向 backend 的 custom-page-host — 它只把自开发组件的 UMD bundle 拉过来,
+  在我们自己的 Vue2 + ElementUI 宿主里 install + mount, 没有登录闸, 直接渲染页面.
+  数据调用走同源 /apaas 代理 (注入平台 token); 取不到数据组件也渲染骨架.
+  "↗ 在 apaas 打开" 仍保留 — 跳真运行态 (用户自己的 apaas 登录态) 看带真数据的完整应用.
 -->
 <template>
   <section class="cpp">
@@ -16,57 +18,45 @@
         <h1 class="cpp-title">{{ menuName || '自开发页面' }}</h1>
         <span class="cpp-chip">🎨 自开发</span>
       </div>
+      <div class="cpp-head-actions">
+        <button type="button" class="cpp-mini-btn" title="在 apaas 打开真运行态 (带真数据)" @click="onOpenRuntime">↗ 在 apaas 打开</button>
+        <button type="button" class="cpp-mini-btn" title="刷新预览" @click="onReload">↻ 刷新</button>
+        <button type="button" class="cpp-mini-btn" @click="onGoToCoding">💻 IDE</button>
+      </div>
     </header>
 
-    <div class="cpp-body">
+    <!-- 自开发组件独立运行 host (backend 提供 Vue2+ElementUI 宿主 + 拉 bundle + mount) -->
+    <div v-if="hostUrl" class="cpp-frame-wrap">
+      <iframe
+        :key="iframeKey"
+        class="cpp-frame"
+        :src="hostUrl"
+        sandbox="allow-same-origin allow-scripts allow-forms allow-popups allow-modals allow-downloads"
+        title="自开发整页组件预览"
+      />
+    </div>
+
+    <!-- 没选菜单 / 缺 menu_id 兜底 -->
+    <div v-else class="cpp-body">
       <div class="cpp-card">
         <div class="cpp-card-icon">🧩</div>
         <h2>自开发整页 Vue 组件</h2>
-        <p>
-          这个菜单挂的是自开发的 Vue 页面, 在 apaas 应用运行时由平台
-          <strong>按组件名扫描加载</strong>渲染 — 不是数据驱动表单, 设计器无法静态
-          模拟它的交互.
-        </p>
-
-        <div v-if="pageCode" class="cpp-code-row">
-          <span class="cpp-code-label">组件名 / 页面码</span>
-          <code class="cpp-code-val">{{ pageCode }}</code>
-        </div>
-
-        <div v-if="accessUrl" class="cpp-code-row">
-          <span class="cpp-code-label">运行态地址</span>
-          <code class="cpp-code-val">{{ accessUrl }}</code>
-        </div>
-
+        <p>选中一个自开发菜单后, 这里直接运行它的组件 bundle 渲染页面预览.</p>
         <div class="cpp-actions">
-          <button
-            type="button"
-            class="cpp-cta cpp-cta-primary"
-            :disabled="loadingUrl"
-            @click="onOpenRuntime"
-          >
-            <span>🚀</span>
-            {{ loadingUrl ? '获取地址中…' : '打开运行态应用' }}
-          </button>
           <button type="button" class="cpp-cta cpp-cta-ghost" @click="onGoToCoding">
             <span>💻</span> 去 IDE 改源码
           </button>
         </div>
-
-        <p v-if="urlError" class="cpp-err">{{ urlError }}</p>
-        <p class="cpp-hint">
-          “打开运行态应用” 新开标签跳 apaas 真运行态 ({{ accessUrl ? '已就绪' : '需应用已部署' }}),
-          从菜单进这个自开发页看真效果; “去 IDE 改源码” 进 Vibe Coding 改 Vue / TS 源码.
-        </p>
       </div>
     </div>
   </section>
 </template>
 
 <script setup lang="ts">
-import { ref, watch } from 'vue'
+import { ref, computed } from 'vue'
 import { useRouter } from 'vue-router'
 import request from '@/utils/request'
+import { useUserStore } from '@/stores/user'
 
 const props = defineProps<{
   appId: number
@@ -77,36 +67,41 @@ const props = defineProps<{
 }>()
 
 const router = useRouter()
+const userStore = useUserStore()
 
-// 2026-05-28: apaas 真运行态 URL (accessUrl) — 从 backend /apaas-access-url 拉.
-// pattern {host}/app/{tenantCode}/{appCode}/ (实证), 不是 /platform/{tid}/... 编辑器.
+const iframeKey = ref(0)
+
+// 自开发组件独立运行 host — backend 解析 menu_id → bundle, 返 Vue2+ElementUI 宿主页.
+// _k 用于 ↻ 刷新强制 reload; _auth 走 query 传 token (iframe src GET 带不了 header).
+const hostUrl = computed(() => {
+  if (!props.appId || !props.menuId) return ''
+  const tok = userStore.token || localStorage.getItem('token') || ''
+  return `/api/applications/${props.appId}/custom-page-host`
+    + `?menu_id=${encodeURIComponent(props.menuId)}`
+    + `&_auth=${encodeURIComponent(tok)}&_k=${iframeKey.value}`
+})
+
+function onReload() {
+  iframeKey.value += 1
+}
+
+// apaas 真运行态地址 (accessUrl) — 仅给 "↗ 在 apaas 打开" 按钮用 (跳带真数据的完整应用).
 const accessUrl = ref('')
 const loadingUrl = ref(false)
-const urlError = ref('')
-
 async function fetchAccessUrl() {
-  if (!props.appId) return
+  if (!props.appId || loadingUrl.value) return
   loadingUrl.value = true
-  urlError.value = ''
   try {
-    const resp = await request.get<{
-      ok: boolean
-      access_url?: string
-      message?: string
-    }>(`/applications/${props.appId}/apaas-access-url`)
-    if (resp?.ok && resp.access_url) {
-      accessUrl.value = resp.access_url
-    } else {
-      urlError.value = resp?.message || '应用未部署到 apaas, 暂无运行态地址'
-    }
-  } catch (e: any) {
-    urlError.value = e?.message || '获取运行态地址失败'
+    const resp = await request.get<any, { ok: boolean; access_url?: string }>(
+      `/applications/${props.appId}/apaas-access-url`,
+    )
+    if (resp?.ok && resp.access_url) accessUrl.value = resp.access_url
+  } catch {
+    /* 按钮兜底: 点的时候没地址就忽略 */
   } finally {
     loadingUrl.value = false
   }
 }
-
-watch(() => props.appId, fetchAccessUrl, { immediate: true })
 
 function onGoToCoding() {
   router.push({ path: '/coding', query: { app_id: String(props.appId) } })
@@ -114,10 +109,11 @@ function onGoToCoding() {
 
 function onOpenRuntime() {
   if (accessUrl.value) {
-    // 真运行态 — 顶层新标签打开 (apaas SPA + session 在顶层窗口正常工作)
     window.open(accessUrl.value, '_blank', 'noopener')
-  } else if (!loadingUrl.value) {
-    fetchAccessUrl()
+  } else {
+    fetchAccessUrl().then(() => {
+      if (accessUrl.value) window.open(accessUrl.value, '_blank', 'noopener')
+    })
   }
 }
 </script>
@@ -134,7 +130,8 @@ function onOpenRuntime() {
 .cpp-head {
   display: flex;
   align-items: center;
-  padding: 16px 20px;
+  justify-content: space-between;
+  padding: 12px 20px;
   border-bottom: 1px solid var(--line);
   flex-shrink: 0;
 }
@@ -142,6 +139,38 @@ function onOpenRuntime() {
   display: flex;
   align-items: center;
   gap: 12px;
+}
+.cpp-head-actions {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.cpp-mini-btn {
+  padding: 5px 10px;
+  border: 1px solid var(--line-strong, var(--line));
+  border-radius: 6px;
+  background: var(--surface);
+  color: var(--text-2);
+  font-size: 12px;
+  font-family: inherit;
+  cursor: pointer;
+}
+.cpp-mini-btn:hover { background: var(--surface-2); color: var(--text-1); }
+.cpp-mini-btn:disabled { opacity: 0.5; cursor: not-allowed; }
+
+/* iframe 内嵌组件 host */
+.cpp-frame-wrap {
+  position: relative;
+  flex: 1;
+  min-height: 0;
+  background: var(--surface-2);
+}
+.cpp-frame {
+  width: 100%;
+  height: 100%;
+  border: 0;
+  display: block;
+  background: #fff;
 }
 .cpp-title {
   font-size: 18px;
@@ -191,41 +220,13 @@ function onOpenRuntime() {
   font-size: 13.5px;
   color: var(--text-2);
   line-height: 1.65;
-  margin: 0 0 10px;
-}
-.cpp-card p strong {
-  color: var(--text-1);
-  font-weight: 600;
-}
-
-.cpp-code-row {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  gap: 10px;
-  margin: 16px 0;
-  padding: 10px 14px;
-  background: var(--surface);
-  border: 1px solid var(--line);
-  border-radius: 8px;
-}
-.cpp-code-label {
-  font-size: 12px;
-  color: var(--text-3);
-  flex-shrink: 0;
-}
-.cpp-code-val {
-  font-family: var(--font-mono, ui-monospace, monospace);
-  font-size: 12.5px;
-  color: var(--ai, #1D89A8);
-  word-break: break-all;
+  margin: 0 0 16px;
 }
 
 .cpp-actions {
   display: flex;
   gap: 10px;
   justify-content: center;
-  margin: 20px 0 14px;
   flex-wrap: wrap;
 }
 .cpp-cta {
@@ -240,28 +241,10 @@ function onOpenRuntime() {
   cursor: pointer;
   transition: opacity 0.15s, background 0.15s;
 }
-.cpp-cta-primary {
-  background: var(--brand);
-  color: #fff;
-  border: none;
-}
-.cpp-cta-primary:hover { opacity: 0.88; }
 .cpp-cta-ghost {
   background: var(--surface);
   color: var(--text-1);
   border: 1px solid var(--line-strong, var(--line));
 }
 .cpp-cta-ghost:hover { background: var(--surface-2); }
-
-.cpp-err {
-  font-size: 12px !important;
-  color: var(--err, #dc2626) !important;
-  margin: 0 0 8px !important;
-}
-.cpp-hint {
-  font-size: 12px !important;
-  color: var(--text-3) !important;
-  line-height: 1.6;
-  margin: 0 !important;
-}
 </style>
