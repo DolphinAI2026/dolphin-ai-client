@@ -134,10 +134,31 @@
     </div>
 
     <!-- ── 3 pane shell ────────────────────────────────────────────────── -->
-    <div class="sdp-shell">
+    <div class="sdp-shell" :class="{ 'nav-collapsed': navCollapsed }">
+
+      <!-- 收起态: 浮动展开条 -->
+      <button
+        v-if="navCollapsed"
+        class="sdp-nav-expand"
+        type="button"
+        title="展开章节导航"
+        @click="toggleNav"
+      >
+        <span class="sdp-nav-expand-chevron">»</span>
+        <span class="sdp-nav-expand-text">章节</span>
+      </button>
 
       <!-- LEFT: chapter nav -->
-      <nav class="sdp-nav-pane" aria-label="章节导航">
+      <nav v-show="!navCollapsed" class="sdp-nav-pane" aria-label="章节导航">
+        <div class="sdp-nav-head">
+          <span class="sdp-nav-head-title">章节导航</span>
+          <button
+            class="sdp-nav-collapse-btn"
+            type="button"
+            title="收起章节导航"
+            @click="toggleNav"
+          >«</button>
+        </div>
         <div
           v-for="group in CHAPTER_GROUPS"
           :key="group.key"
@@ -926,6 +947,14 @@ const error = ref('')
 const lastFetchedAt = ref<Date | null>(null)
 // 默认选中第三章 (数据模型) — 跟 mockup 截图一致
 const activeChapter = ref<ChapterKey>('data_model')
+
+// 2026-05-28: 左侧章节导航收起 — 收起后正文 + 对话有更多空间. 持久化到 localStorage.
+const NAV_COLLAPSE_KEY = 'spec-design-nav-collapsed'
+const navCollapsed = ref<boolean>(localStorage.getItem(NAV_COLLAPSE_KEY) === '1')
+function toggleNav() {
+  navCollapsed.value = !navCollapsed.value
+  localStorage.setItem(NAV_COLLAPSE_KEY, navCollapsed.value ? '1' : '0')
+}
 
 const docPaneRef = ref<HTMLElement | null>(null)
 const sectionRefs = ref<Record<string, HTMLElement | null>>({})
@@ -1940,6 +1969,39 @@ watch(
   min-height: 0;
   background: var(--bg);
   overflow: hidden;
+  position: relative;
+  transition: grid-template-columns 0.18s ease;
+}
+/* 2026-05-28: 收起左侧章节导航 — 第一列归零, 正文 + 对话占满 */
+.sdp-shell.nav-collapsed {
+  grid-template-columns: 0 1fr 360px;
+}
+
+/* 收起态浮动展开条 — 贴左边竖排 */
+.sdp-nav-expand {
+  position: absolute;
+  top: 14px;
+  left: 0;
+  z-index: 6;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 4px;
+  padding: 8px 5px;
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-left: none;
+  border-radius: 0 8px 8px 0;
+  cursor: pointer;
+  color: var(--text-3);
+  box-shadow: 1px 1px 4px rgba(0, 0, 0, 0.05);
+}
+.sdp-nav-expand:hover { color: var(--brand); border-color: var(--line-strong); }
+.sdp-nav-expand-chevron { font-size: 13px; line-height: 1; }
+.sdp-nav-expand-text {
+  writing-mode: vertical-rl;
+  font-size: 11px;
+  letter-spacing: 2px;
 }
 
 /* ── LEFT: chapter nav ────────────────────────────────────────────── */
@@ -1947,8 +2009,39 @@ watch(
   background: var(--surface);
   border-right: 1px solid var(--line);
   overflow-y: auto;
-  padding: 12px 0;
+  padding: 0 0 12px;
 }
+/* nav 头 — 标题 + 收起按钮 */
+.sdp-nav-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 10px 12px 8px 16px;
+  position: sticky;
+  top: 0;
+  background: var(--surface);
+  z-index: 1;
+}
+.sdp-nav-head-title {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text-3);
+}
+.sdp-nav-collapse-btn {
+  width: 22px;
+  height: 22px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid var(--line);
+  border-radius: 5px;
+  background: var(--surface);
+  color: var(--text-3);
+  cursor: pointer;
+  font-size: 13px;
+  line-height: 1;
+}
+.sdp-nav-collapse-btn:hover { color: var(--brand); border-color: var(--line-strong); }
 .nav-section { margin-bottom: 12px; }
 .nav-section-title {
   padding: 4px 16px;
