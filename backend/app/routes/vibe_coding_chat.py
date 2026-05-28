@@ -91,6 +91,10 @@ def _thread_to_dict(t: VibeCodingThread) -> dict:
         "status": t.status,
         "selected_llm_config_id": t.selected_llm_config_id,
         "todos": t.todos or [],
+        "requirement_baseline": t.requirement_baseline or {
+            "roles": [], "features": [], "flows": [],
+            "external": [], "ai_points": [], "acceptance": [],
+        },
         "created_at": t.created_at.isoformat() if t.created_at else None,
         "updated_at": t.updated_at.isoformat() if t.updated_at else None,
     }

@@ -13,6 +13,10 @@ export interface VibeChatThread {
   status: string
   selected_llm_config_id: number | null
   todos: Array<{ id: string; content: string; status: 'pending' | 'in_progress' | 'completed' }>
+  requirement_baseline?: {
+    roles: string[]; features: string[]; flows: string[]
+    external: string[]; ai_points: string[]; acceptance: string[]
+  }
   created_at: string | null
   updated_at: string | null
 }

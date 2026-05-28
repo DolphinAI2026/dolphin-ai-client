@@ -274,6 +274,30 @@ TOOL_SCHEMAS: list[dict] = [
     {
         "type": "function",
         "function": {
+            "name": "requirement_write",
+            "description": (
+                "维护当前应用的「需求基线」——把用户需求结构化记录，实时显示在用户的「需求」tab。"
+                "每次调用都会**完整覆盖**当前基线（不是增量）。"
+                "澄清完关键点后调用一次；之后需求有变（用户改、范围调整）就再调更新。"
+                "所有字段都是字符串数组，可空；简单应用 external/ai_points 可留空。"
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "roles":      {"type": "array", "items": {"type": "string"}, "description": "使用角色，如 '管理员 — 管理用户与权限'"},
+                    "features":   {"type": "array", "items": {"type": "string"}, "description": "功能点列表"},
+                    "flows":      {"type": "array", "items": {"type": "string"}, "description": "关键业务流程，如 '员工提交 → 主管审批 → 财务打款'"},
+                    "external":   {"type": "array", "items": {"type": "string"}, "description": "外部交互/集成（第三方 API 等），无则空"},
+                    "ai_points":  {"type": "array", "items": {"type": "string"}, "description": "需要 AI 能力的决策点，无则空"},
+                    "acceptance": {"type": "array", "items": {"type": "string"}, "description": "验收标准"},
+                },
+                "required": ["roles", "features", "flows", "acceptance"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
             "name": "http_check",
             "description": (
                 "HTTP GET 一个 URL，验证服务起没起来。"
@@ -737,6 +761,25 @@ async def execute_todo_write(args: dict, thread: VibeCodingThread, db: AsyncSess
     return f"TODO 已更新（{len(cleaned)} 条）: {summary}"
 
 
+_REQ_FIELDS = ["roles", "features", "flows", "external", "ai_points", "acceptance"]
+
+
+async def execute_requirement_write(args: dict, thread: VibeCodingThread, db: AsyncSession) -> str:
+    cleaned: dict[str, list[str]] = {}
+    for key in _REQ_FIELDS:
+        val = args.get(key)
+        if val is None:
+            cleaned[key] = []
+            continue
+        if not isinstance(val, list):
+            return _err(f"{key} 必须是字符串数组")
+        cleaned[key] = [str(x).strip() for x in val if str(x).strip()]
+    thread.requirement_baseline = cleaned
+    await db.commit()
+    counts = ", ".join(f"{k}:{len(cleaned[k])}" for k in _REQ_FIELDS if cleaned[k])
+    return f"需求基线已更新（{counts or '空'}）"
+
+
 async def execute_http_check(args: dict, thread: VibeCodingThread, db: AsyncSession) -> str:
     url = (args.get("url") or "").strip()
     if not url:
@@ -848,6 +891,7 @@ TOOL_HANDLERS = {
     "grep": execute_grep,
     "run_command": execute_run_command,
     "todo_write": execute_todo_write,
+    "requirement_write": execute_requirement_write,
     "http_check": execute_http_check,
     "ask_clarifying_question": execute_ask_clarifying_question,
 }

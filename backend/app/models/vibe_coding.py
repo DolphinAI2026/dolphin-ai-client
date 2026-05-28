@@ -57,6 +57,8 @@ class VibeCodingThread(Base):
     selected_llm_config_id: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
     # 当前 todo list（agent 用 todo_write 维护），存 JSON：[{id, content, status}]
     todos: Mapped[Optional[list]] = mapped_column(JSON, nullable=True)
+    # 需求基线（agent 用 requirement_write 维护）：{roles,features,flows,external,ai_points,acceptance} 各 string[]
+    requirement_baseline: Mapped[Optional[dict]] = mapped_column(JSON, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, nullable=False)
     updated_at: Mapped[datetime] = mapped_column(
         DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False

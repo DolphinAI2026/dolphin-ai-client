@@ -475,6 +475,10 @@ async def run_agent(
             if tool_name == "todo_write" and tc_db.status == "success":
                 yield _sse("todos_updated", {"todos": thread.todos or []})
 
+            # requirement_write 成功 → 推送最新需求基线给「需求」tab
+            if tool_name == "requirement_write" and tc_db.status == "success":
+                yield _sse("requirement_updated", {"requirement": thread.requirement_baseline or {}})
+
             # run_command 后查一下 docker 沙箱端口映射 — agent 起 dev server 后前端可以立刻显示预览链接
             # 只推「既映射又监听」的端口，避免前端列出死链接
             if tool_name == "run_command" and tc_db.status == "success":

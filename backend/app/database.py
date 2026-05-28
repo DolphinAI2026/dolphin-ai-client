@@ -120,6 +120,8 @@ async def init_db():
             # 统一应用类型: low-code (ai-builder/SPEC) | ai-code (vibe-coding)
             "ALTER TABLE applications ADD COLUMN app_type VARCHAR(20) NOT NULL DEFAULT 'low-code'",
             "ALTER TABLE applications ADD COLUMN source_workspace_id VARCHAR(60)",
+            # ③需求基线: vibe agent 用 requirement_write 维护的结构化需求
+            "ALTER TABLE vibe_coding_threads ADD COLUMN requirement_baseline JSON",
         ]:
             try:
                 await conn.execute(text(stmt))
