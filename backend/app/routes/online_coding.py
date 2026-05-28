@@ -25,6 +25,8 @@ from app.config import settings
 from app.coding.workspace import WORKSPACE_ROOT
 from app.database import get_db
 from app.deps import AuthContext, get_auth_context
+from app.models import Application
+from sqlalchemy import select
 from app.routes.coding import (
     _align_local_code_server_base_url,
     _build_ide_proxy_api_base,
@@ -832,6 +834,30 @@ def _public_workspace(meta: dict) -> OnlineCodingWorkspace:
     )
 
 
+async def _register_ai_code_app(db: AsyncSession, meta: dict) -> None:
+    """给 vibe workspace 幂等登记一条 ai-code Application（让它出现在统一应用列表）。"""
+    workspace_id = meta.get("id")
+    if not workspace_id:
+        return
+    existing = await db.execute(
+        select(Application).where(Application.source_workspace_id == workspace_id)
+    )
+    if existing.scalar_one_or_none() is not None:
+        return
+    app = Application(
+        user_id=meta.get("user_id"),
+        tenant_id=meta.get("tenant_id"),
+        created_by=meta.get("user_id"),
+        app_name=(meta.get("task") or "AI Coding 应用")[:100],
+        app_code=f"aicode_{workspace_id}"[:50],
+        app_type="ai-code",
+        source_workspace_id=workspace_id,
+        status="developing",
+    )
+    db.add(app)
+    await db.commit()
+
+
 @router.post("/workspaces", response_model=OnlineCodingWorkspace)
 async def create_online_coding_workspace(
     req: OnlineCodingCreateRequest,
@@ -875,6 +901,7 @@ async def create_online_coding_workspace(
         _repo_path(ws_dir).mkdir(parents=True, exist_ok=True)
         meta = _mark_empty_repo_import(meta)
         _write_workspace(ws_dir, meta)
+    await _register_ai_code_app(db, meta)
     return _public_workspace(meta)
 
 
@@ -906,6 +933,7 @@ async def import_online_coding_workspace(
 @router.get("/workspaces", response_model=list[OnlineCodingWorkspace])
 async def list_online_coding_workspaces(
     ctx: Annotated[AuthContext, Depends(get_auth_context)],
+    db: Annotated[AsyncSession, Depends(get_db)],
 ):
     ONLINE_CODING_ROOT.mkdir(parents=True, exist_ok=True)
     items: list[OnlineCodingWorkspace] = []
@@ -916,6 +944,8 @@ async def list_online_coding_workspaces(
             continue
         if meta.get("user_id") != ctx.user.id:
             continue
+        # 历史 workspace 回填：确保每个都有对应 ai-code Application（幂等）
+        await _register_ai_code_app(db, meta)
         items.append(_public_workspace(meta))
     return sorted(items, key=lambda item: item.updated_at, reverse=True)
 
