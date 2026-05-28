@@ -183,6 +183,9 @@ interface FormField {
   options?: FieldOption[]
   description?: string
   max_length?: number
+  // 2026-05-28: 自开发组件 (FORM_CUSTOM_COMPONENT_*) — 保留 kind 给 preview 显
+  // 例如 "OPENAPI_SSE_CHAT". 标准内置组件这个字段为空.
+  customKind?: string
 }
 
 /* ────────────────────────────────────────────────────────────────
@@ -233,9 +236,24 @@ const COMPONENT_TYPE_MAP: Record<string, FieldType> = {
   FORM_TEMPLATE_FILE: 'template_file',
 }
 
+// 2026-05-28: apaas 自开发组件统一前缀 FORM_CUSTOM_COMPONENT_* (如
+// FORM_CUSTOM_COMPONENT_OPENAPI_SSE_CHAT). 全归到 custom_dev widget, preview
+// 渲成"自开发组件"卡片而非误导性文本框.
+const CUSTOM_COMPONENT_PREFIX = 'FORM_CUSTOM_COMPONENT_'
+
 function componentTypeToWidget(t: string | undefined): FieldType {
   if (!t) return 'text'
-  return COMPONENT_TYPE_MAP[String(t).toUpperCase().trim()] || 'text'
+  const up = String(t).toUpperCase().trim()
+  if (up.startsWith(CUSTOM_COMPONENT_PREFIX)) return 'custom_dev'
+  return COMPONENT_TYPE_MAP[up] || 'text'
+}
+
+// 抽 widget kind (去前缀) — 给 preview 卡片显. 不是自开发组件返空.
+function customComponentKind(t: string | undefined): string {
+  if (!t) return ''
+  const up = String(t).toUpperCase().trim()
+  if (up.startsWith(CUSTOM_COMPONENT_PREFIX)) return up.slice(CUSTOM_COMPONENT_PREFIX.length)
+  return ''
 }
 
 const BACKEND_TYPE_MAP: Record<string, FieldType> = {
@@ -272,6 +290,7 @@ const FULL_WIDTH_WIDGETS = new Set<string>([
   'static_text', 'static_image', 'divider', 'placeholder',
   'collapse_layout', 'tab_layout', 'frame_layout', 'template_file',
   'subtable', 'data_select', 'data_stat',
+  'custom_dev',  // 2026-05-28: 自开发组件卡片占整行
 ])
 function isFullWidthWidget(t: string): boolean {
   return FULL_WIDTH_WIDGETS.has(t)
@@ -408,9 +427,22 @@ const FormPreviewInput = {
         case 'data_stat':
         case 'cross_field':
         case 'virtual_field':
-        case 'custom_dev':
         case 'template_file':
           return h('input', { class: cls, type: 'text', placeholder: ph || '关联数据 (点击选择)', value: v ?? '', onInput })
+        case 'custom_dev':
+          // 2026-05-28: 自开发组件 — 不渲成文本框 (误导), 渲成区分卡片显 widget kind.
+          // 实际运行时由 apaas 平台加载对应 Vue 组件 (如 OpenAPI SSE 流式对话).
+          return h('div', { class: 'fbp-fp-custom-dev' }, [
+            h('div', { class: 'fbp-fp-custom-dev-head' }, [
+              h('span', { class: 'fbp-fp-custom-dev-icon', 'aria-hidden': 'true' }, '✨'),
+              h('span', { class: 'fbp-fp-custom-dev-title' }, '自开发组件'),
+              f.customKind
+                ? h('span', { class: 'fbp-fp-custom-dev-kind' }, f.customKind)
+                : null,
+            ]),
+            h('div', { class: 'fbp-fp-custom-dev-desc' },
+              '运行时由 apaas 平台加载自定义 Vue 组件渲染 — 此处预览不模拟其交互.'),
+          ])
         default:
           return h('input', { class: cls, type: 'text', placeholder: ph, value: v ?? '', onInput })
       }
@@ -493,6 +525,7 @@ async function reload() {
             options: needsOptions(widgetType) ? [] : undefined,
             description: String(mf?.description || ''),
             max_length: mf?.max_length ? Number(mf.max_length) : undefined,
+            customKind: customComponentKind(compType),
           }
         })
         if (!modelCode.value) modelCode.value = String(respFD.main_model_code || '')
@@ -956,6 +989,39 @@ select.fbp-fp-input { cursor: pointer; }
   color: var(--text-3);
   font-size: 12px;
   text-align: center;
+}
+/* 2026-05-28: 自开发组件预览卡片 (FORM_CUSTOM_COMPONENT_*) */
+.fbp-fp-custom-dev {
+  padding: 14px 16px;
+  border: 1px dashed var(--ai, #1D89A8);
+  border-radius: 8px;
+  background: linear-gradient(180deg, rgba(29, 137, 168, 0.06), rgba(29, 137, 168, 0.02));
+}
+.fbp-fp-custom-dev-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.fbp-fp-custom-dev-icon { font-size: 14px; line-height: 1; }
+.fbp-fp-custom-dev-title {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--ai, #1D89A8);
+}
+.fbp-fp-custom-dev-kind {
+  font-family: var(--font-mono, ui-monospace, monospace);
+  font-size: 11px;
+  padding: 1px 7px;
+  border-radius: 4px;
+  background: rgba(29, 137, 168, 0.12);
+  color: var(--ai, #1D89A8);
+  letter-spacing: 0.02em;
+}
+.fbp-fp-custom-dev-desc {
+  margin-top: 6px;
+  font-size: 12px;
+  color: var(--text-3);
+  line-height: 1.5;
 }
 
 .fbp-canvas-empty-icon { font-size: 36px; line-height: 1; margin-bottom: 6px; }
