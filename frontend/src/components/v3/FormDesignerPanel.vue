@@ -1199,7 +1199,57 @@ select.fbp-fp-input { cursor: pointer; }
   font-size: 12px;
   text-align: center;
 }
-/* 2026-05-28: 自开发组件预览卡片 (FORM_CUSTOM_COMPONENT_*) */
+/* 自开发组件 (custom-dev / OpenAPI 流式对话) 样式移到下方非 scoped <style> 块 —
+   它们由 h() 在独立 defineComponent (OpenApiSseChatPreview) 里渲染, 是 SFC 的孙
+   组件, 拿不到 scoped 的 data-v-xxx 作用域 ID, 所以必须全局 <style> 才生效. */
+
+.fbp-canvas-empty-icon { font-size: 36px; line-height: 1; margin-bottom: 6px; }
+
+/* ─── buttons ───────────────────────────────────────────────── */
+.fbp-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 5px 12px;
+  border: 0;
+  border-radius: 6px;
+  font-size: 12.5px;
+  font-weight: 500;
+  cursor: pointer;
+  font-family: inherit;
+  transition: background 0.12s, border-color 0.12s, color 0.12s;
+  white-space: nowrap;
+}
+.fbp-btn:disabled { opacity: 0.5; cursor: not-allowed; }
+.fbp-btn-ghost {
+  background: transparent;
+  border: 1px solid var(--line);
+  color: var(--text-2);
+}
+.fbp-btn-ghost:hover:not(:disabled) {
+  border-color: var(--text-3);
+  background: var(--surface-2);
+}
+.fbp-btn-primary {
+  background: var(--brand);
+  color: white;
+}
+.fbp-btn-primary:hover:not(:disabled) {
+  background: var(--brand-hover);
+}
+.fbp-btn-sm {
+  padding: 3px 8px;
+  font-size: 11.5px;
+}
+.fbp-btn-icon { font-size: 13px; line-height: 1; }
+.mono { font-family: var(--font-mono); }
+</style>
+
+<!-- 非 scoped — 自开发组件 (custom-dev / OpenApiSseChatPreview) 由 h() 在独立
+     defineComponent 里渲染, 是 SFC 孙组件, 拿不到 scoped data-v 作用域 ID.
+     类名 fbp-oac-/fbp-fp-custom-dev- 前缀够独特, 全局也安全. -->
+<style>
+/* 自开发组件预览卡片 (FORM_CUSTOM_COMPONENT_* 无专属渲染器时) */
 .fbp-fp-custom-dev {
   padding: 14px 16px;
   border: 1px dashed var(--ai, #1D89A8);
@@ -1300,7 +1350,11 @@ select.fbp-fp-input { cursor: pointer; }
   flex: 1;
   min-height: 90px;
   display: flex;
+  flex-direction: column;
+  gap: 8px;
   align-items: flex-start;
+  overflow-y: auto;
+  max-height: 260px;
 }
 .fbp-oac-welcome {
   background: var(--surface-2);
@@ -1310,12 +1364,6 @@ select.fbp-fp-input { cursor: pointer; }
   color: var(--text-2);
   max-width: 90%;
   line-height: 1.5;
-}
-.fbp-oac-chat-body {
-  flex-direction: column;
-  gap: 8px;
-  overflow-y: auto;
-  max-height: 260px;
 }
 .fbp-oac-msg {
   border-radius: 10px;
@@ -1359,8 +1407,9 @@ select.fbp-fp-input { cursor: pointer; }
   color: var(--ai, #1D89A8);
   border-radius: 14px;
   font-size: 12px;
-  cursor: not-allowed;
+  cursor: pointer;
 }
+.fbp-oac-quick-btn:disabled { cursor: not-allowed; opacity: 0.6; }
 .fbp-oac-input-row {
   display: flex;
   gap: 8px;
@@ -1372,9 +1421,10 @@ select.fbp-fp-input { cursor: pointer; }
   border: 1px solid var(--line-strong);
   border-radius: 7px;
   font-size: 12.5px;
-  background: var(--surface-2);
-  color: var(--text-3);
+  background: var(--surface);
+  color: var(--text);
 }
+.fbp-oac-input:disabled { background: var(--surface-2); color: var(--text-3); }
 .fbp-oac-send {
   padding: 0 16px;
   border: 0;
@@ -1382,9 +1432,9 @@ select.fbp-fp-input { cursor: pointer; }
   background: var(--ai, #1D89A8);
   color: #fff;
   font-size: 12.5px;
-  cursor: not-allowed;
-  opacity: 0.7;
+  cursor: pointer;
 }
+.fbp-oac-send:disabled { cursor: not-allowed; opacity: 0.5; }
 .fbp-oac-preview-col {
   flex: 1 1 40%;
   border-left: 1px dashed var(--line-strong);
@@ -1431,45 +1481,4 @@ select.fbp-fp-input { cursor: pointer; }
   text-overflow: ellipsis;
   white-space: nowrap;
 }
-
-.fbp-canvas-empty-icon { font-size: 36px; line-height: 1; margin-bottom: 6px; }
-
-/* ─── buttons ───────────────────────────────────────────────── */
-.fbp-btn {
-  display: inline-flex;
-  align-items: center;
-  gap: 5px;
-  padding: 5px 12px;
-  border: 0;
-  border-radius: 6px;
-  font-size: 12.5px;
-  font-weight: 500;
-  cursor: pointer;
-  font-family: inherit;
-  transition: background 0.12s, border-color 0.12s, color 0.12s;
-  white-space: nowrap;
-}
-.fbp-btn:disabled { opacity: 0.5; cursor: not-allowed; }
-.fbp-btn-ghost {
-  background: transparent;
-  border: 1px solid var(--line);
-  color: var(--text-2);
-}
-.fbp-btn-ghost:hover:not(:disabled) {
-  border-color: var(--text-3);
-  background: var(--surface-2);
-}
-.fbp-btn-primary {
-  background: var(--brand);
-  color: white;
-}
-.fbp-btn-primary:hover:not(:disabled) {
-  background: var(--brand-hover);
-}
-.fbp-btn-sm {
-  padding: 3px 8px;
-  font-size: 11.5px;
-}
-.fbp-btn-icon { font-size: 13px; line-height: 1; }
-.mono { font-family: var(--font-mono); }
 </style>
