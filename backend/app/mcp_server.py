@@ -1556,17 +1556,20 @@ async def get_apaas_process_detail(env_id: int, apaas_app_id: str, process_id: s
     for n in apaas_nodes:
         if not isinstance(n, dict):
             continue
-        apaas_type = str(n.get("nodeType") or n.get("type") or "").upper()
+        # 2026-05-28 实测 apaas list_processes 节点真实结构: type/title 嵌在 data 里,
+        # 不是顶层 nodeType/nodeName (旧代码读顶层 → 全落 fill_form 兜底 + label 空).
+        d = n.get("data") if isinstance(n.get("data"), dict) else {}
+        apaas_type = str(d.get("type") or n.get("nodeType") or n.get("type") or "").upper()
         ft = APAAS_TO_FRONTEND.get(apaas_type, "fill_form")
         nodes_out.append({
-            "id": str(n.get("nodeKey") or n.get("id") or n.get("key") or ""),
+            "id": str(n.get("id") or n.get("nodeId") or n.get("nodeKey") or n.get("key") or ""),
             "type": ft,
-            "label": str(n.get("nodeName") or n.get("name") or n.get("label") or ""),
+            "label": str(d.get("title") or n.get("nodeName") or n.get("name") or n.get("label") or ""),
             "position": {"x": float(n.get("x") or 0), "y": float(n.get("y") or 0)},
             "props": {
-                "approverType": str(n.get("approverType") or ""),
-                "approveType": str(n.get("approveType") or ""),
-                "approvers": n.get("approvers") or [],
+                "approverType": str(d.get("approverType") or n.get("approverType") or ""),
+                "approveType": str(d.get("approveType") or n.get("approveType") or ""),
+                "approvers": d.get("approvers") or n.get("approvers") or [],
                 "_apaas_raw_type": apaas_type,
             },
         })
@@ -1580,6 +1583,21 @@ async def get_apaas_process_detail(env_id: int, apaas_app_id: str, process_id: s
             "label": str(e.get("name") or e.get("label") or ""),
             "condition": str(e.get("conditionExpression") or e.get("condition") or "") or None,
         })
+
+    # 2026-05-28: apaas list_processes 不返显式连线 (edges 字段缺失). 对线性审批流,
+    # 按 y 坐标 (再 x) 排序推断顺序连线 START→审批→…→END, 让业务视角画布能连起来.
+    # (有显式 edges 时上面已建, 不覆盖; 仅在缺连线且 ≥2 节点时补.)
+    if not edges_out and len(nodes_out) >= 2:
+        ordered = sorted(nodes_out, key=lambda x: (x["position"]["y"], x["position"]["x"]))
+        for a, b in zip(ordered, ordered[1:]):
+            edges_out.append({
+                "id": f"{a['id']}->{b['id']}",
+                "source": a["id"],
+                "target": b["id"],
+                "label": "",
+                "condition": None,
+                "_inferred": True,
+            })
 
     return {
         "ok": True,
