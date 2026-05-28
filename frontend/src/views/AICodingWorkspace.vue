@@ -8,37 +8,60 @@
       请带应用进入：<code>/ai-coding/&lt;appId&gt;</code>
     </div>
     <div v-else class="aicoding-shell">
-      <!-- 左：对话栏（Task 7 接 SpecChatPanel） -->
+      <!-- 左：对话主线（复用 SpecChatPanel：对话改需求基线 + diff 接受/弃用） -->
       <section class="aicoding-chat" :style="{ flexBasis: chatWidth + 'px' }">
-        <div class="aicoding-chat-placeholder">左对话（Task 7 接 SpecChatPanel）</div>
+        <SpecChatPanel
+          :app-id="appId!"
+          :active-chapter="activeChapter"
+          :chapter-title="chapterTitle"
+          @spec-updated="onSpecUpdated"
+        />
         <div class="aicoding-resizer" @mousedown="startResize"></div>
       </section>
 
       <!-- 右：6 Tab 工作区 -->
       <section class="aicoding-work">
-        <WorkspaceTabs :app-id="appId" />
+        <WorkspaceTabs :key="refreshKey" :app-id="appId!" />
       </section>
     </div>
   </BuilderFrame>
 </template>
 
 <script setup lang="ts">
-import { ref, computed } from 'vue'
+import { ref, computed, onUnmounted } from 'vue'
 import { useRoute } from 'vue-router'
 import BuilderFrame from '@/components/BuilderFrame.vue'
 import WorkspaceTabs from '@/components/ai-coding/WorkspaceTabs.vue'
+import SpecChatPanel from '@/components/v3/SpecChatPanel.vue'
 
 const route = useRoute()
 
 const appId = computed<number | null>(() => {
   const raw = route.params.appId
   const n = Number(Array.isArray(raw) ? raw[0] : raw)
-  return Number.isFinite(n) && n > 0 ? n : null
+  // 仅接受正整数：拒掉 1.5 / NaN / 0 / 负数
+  return Number.isInteger(n) && n > 0 ? n : null
 })
 
+// 左对话聚焦的章节。章节联动（SpecDesignPanel 选章 → 对话跟随）留后续切片，
+// 本切片固定默认到数据模型。
+const activeChapter = ref('data_model')
+const chapterTitle = ref('数据模型')
+
+// 对话改了需求基线（spec-updated）→ 重挂 WorkspaceTabs，让其中的 SpecDesignPanel 重新拉数据
+const refreshKey = ref(0)
+function onSpecUpdated(_sectionType: string, _sectionKey: string) {
+  refreshKey.value++
+}
+
 const chatWidth = ref(420)
+// 拖拽中若组件卸载，用它兜底移除 window 监听
+let cleanupResize: (() => void) | null = null
 
 function startResize(e: MouseEvent) {
+  e.preventDefault()
+  document.body.style.userSelect = 'none'
+  document.body.style.cursor = 'ew-resize'
   const startX = e.clientX
   const startW = chatWidth.value
   const onMove = (ev: MouseEvent) => {
@@ -47,10 +70,16 @@ function startResize(e: MouseEvent) {
   const onUp = () => {
     window.removeEventListener('mousemove', onMove)
     window.removeEventListener('mouseup', onUp)
+    document.body.style.userSelect = ''
+    document.body.style.cursor = ''
+    cleanupResize = null
   }
+  cleanupResize = onUp
   window.addEventListener('mousemove', onMove)
   window.addEventListener('mouseup', onUp)
 }
+
+onUnmounted(() => cleanupResize?.())
 </script>
 
 <style scoped>
@@ -70,12 +99,6 @@ function startResize(e: MouseEvent) {
   flex-direction: column;
   min-width: 0;
   overflow: hidden;
-}
-
-.aicoding-chat-placeholder {
-  padding: 24px;
-  color: var(--text-3);
-  font-size: 13px;
 }
 
 .aicoding-resizer {
