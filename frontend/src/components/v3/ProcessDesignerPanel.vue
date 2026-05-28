@@ -134,11 +134,11 @@
             >
               <span class="pdp-cat-arrow" :class="{ 'is-open': !processListCollapsed }">▸</span>
               <span class="pdp-cat-label">流程列表</span>
-              <span class="pdp-cat-count">{{ processList.length }}</span>
+              <span class="pdp-cat-count">{{ visibleProcessList.length }}</span>
             </button>
             <div v-if="!processListCollapsed" class="pdp-process-list">
               <button
-                v-for="p in processList"
+                v-for="p in visibleProcessList"
                 :key="p.id"
                 class="pdp-process-item"
                 :class="{ 'is-active': p.id === activeProcessId }"
@@ -346,6 +346,15 @@ const activeProcess = computed<ProcessItem | null>(() => {
   return processList.value.find(p => p.id === activeProcessId.value) || null
 })
 
+// 2026-05-28: 流程列表只显示"当前表单/菜单"的流程 (用户反馈别把全应用流程都列出来)。
+// props.formId 在时按 form_id 过滤; 过滤后为空 (数据不一致) 则兜底显示全部, 避免一个都看不到。
+const visibleProcessList = computed<ProcessItem[]>(() => {
+  const fid = props.formId
+  if (!fid) return processList.value
+  const matched = processList.value.filter(p => p.form_id === fid)
+  return matched.length ? matched : processList.value
+})
+
 const selectedNode = computed<ProcessNode | null>(() => {
   if (!selectedNodeId.value) return null
   return nodeStates[selectedNodeId.value] || null
@@ -353,7 +362,7 @@ const selectedNode = computed<ProcessNode | null>(() => {
 
 const statsLine = computed(() => {
   const entryN = Object.values(nodeStates).filter(n => getNodeCategoryCode(n.type) === 'entry').length
-  const procCount = processList.value.length
+  const procCount = visibleProcessList.value.length
   const procLine = procCount ? `${procCount} 个流程` : '0 个流程'
   if (!activeProcess.value) {
     return `${procLine} — 未选`
@@ -984,12 +993,63 @@ function serializeGraph(): ProcessDefinitionOut {
   }
 }
 
+/** 2026-05-28: 干净的拓扑自动布局 —— apaas 原始 x/y 错位 (审批节点 x=348 / 开始结束 x=372)
+ *  导致连线歪七扭八。业务视角是只读预览, 直接按"入边数=0 的为起点 + BFS 分层"重排:
+ *  同层水平居中铺开, 逐层向下 → 线性流变成一条直的竖线, 分支左右对称。 */
+function computeAutoLayout(
+  nodes: { id: string }[],
+  edges: { source: string; target: string }[],
+): Map<string, { x: number; y: number }> {
+  const TOP = 40, VGAP = 110, HGAP = 200, CENTER = 320
+  const ids = nodes.map(n => n.id)
+  const idset = new Set(ids)
+  const incoming = new Map<string, number>(ids.map(id => [id, 0]))
+  const adj = new Map<string, string[]>(ids.map(id => [id, []]))
+  for (const e of edges) {
+    if (idset.has(e.source) && idset.has(e.target)) {
+      adj.get(e.source)!.push(e.target)
+      incoming.set(e.target, (incoming.get(e.target) || 0) + 1)
+    }
+  }
+  let roots = ids.filter(id => (incoming.get(id) || 0) === 0)
+  if (!roots.length && ids.length) roots = [ids[0]]
+  const level = new Map<string, number>(roots.map(r => [r, 0]))
+  const queue = [...roots]
+  while (queue.length) {
+    const u = queue.shift()!
+    const lu = level.get(u) || 0
+    for (const v of adj.get(u) || []) {
+      const nl = lu + 1
+      if (!level.has(v) || nl > (level.get(v) || 0)) { level.set(v, nl); queue.push(v) }
+    }
+  }
+  // 未被任何边连到的孤立节点 → 依次排到最底下, 不挤在一起
+  let maxL = 0; level.forEach(l => { if (l > maxL) maxL = l })
+  for (const id of ids) if (!level.has(id)) { maxL += 1; level.set(id, maxL) }
+  const byLevel = new Map<number, string[]>()
+  for (const id of ids) {
+    const l = level.get(id) || 0
+    if (!byLevel.has(l)) byLevel.set(l, [])
+    byLevel.get(l)!.push(id)
+  }
+  const pos = new Map<string, { x: number; y: number }>()
+  for (const [l, group] of byLevel) {
+    const n = group.length
+    group.forEach((id, i) => {
+      pos.set(id, { x: CENTER + (i - (n - 1) / 2) * HGAP, y: TOP + l * VGAP })
+    })
+  }
+  return pos
+}
+
 /** H2: 渲染本地 ProcessDefinition (从 GET /definition 拿到的 nodes/edges) 到 x6. */
 function renderDefinition(defNodes: ProcessDefinitionNodeOut[], defEdges: ProcessDefinitionEdgeOut[]) {
   const g = graphRef.value
   if (!g) return
   g.clearCells()
   for (const k of Object.keys(nodeStates)) delete nodeStates[k]
+  // 用拓扑自动布局覆盖 apaas 原始坐标 (拉直连线)
+  const layout = computeAutoLayout(defNodes, defEdges)
   // 节点
   for (const n of defNodes) {
     const type = n.type as NodeType
@@ -999,16 +1059,17 @@ function renderDefinition(defNodes: ProcessDefinitionNodeOut[], defEdges: Proces
       continue
     }
     const spec = buildNodeSpec(type, n.label || def.label, def.icon)
+    const p = layout.get(n.id) || n.position || { x: 100, y: 100 }
     g.addNode({
       id: n.id,
-      x: n.position?.x ?? 100,
-      y: n.position?.y ?? 100,
+      x: p.x,
+      y: p.y,
       ...spec,
       data: { type, color: getNodeColor(type) },
     } as never)
     const st = makeDefaultNode(n.id, type, n.label || def.label)
-    st.x = n.position?.x
-    st.y = n.position?.y
+    st.x = p.x
+    st.y = p.y
     // 把 props 合回 nodeStates (覆盖默认值)
     if (n.props && typeof n.props === 'object') {
       for (const [k, v] of Object.entries(n.props)) {
