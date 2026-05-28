@@ -186,6 +186,10 @@ interface FormField {
   // 2026-05-28: 自开发组件 (FORM_CUSTOM_COMPONENT_*) — 保留 kind 给 preview 显
   // 例如 "OPENAPI_SSE_CHAT". 标准内置组件这个字段为空.
   customKind?: string
+  // 自开发组件的声明式配置 (customComponentConfig) — 这些组件不是黑盒包,
+  // 行为完全由 config 参数化 (apiUrl / welcomeText / quickButtonsText / stream...),
+  // preview 用它真渲染组件 UI.
+  customConfig?: Record<string, any>
 }
 
 /* ────────────────────────────────────────────────────────────────
@@ -300,6 +304,84 @@ let _uidCounter = 0
 function nextId(): string {
   _uidCounter += 1
   return `fb_${Date.now().toString(36)}_${_uidCounter}`
+}
+
+/* ────────────────────────────────────────────────────────────────
+   自开发组件渲染器 — OPENAPI_SSE_CHAT (apaas 内置可配"OpenAPI 流式对话")
+   config 完全声明式, 真还原 UI (welcome / quick buttons / preview / input).
+   ──────────────────────────────────────────────────────────────── */
+
+// quickButtonsText 形态: "标签1|提示词1\n标签2|提示词2"
+function parseQuickButtons(text: unknown): { label: string; prompt: string }[] {
+  if (typeof text !== 'string' || !text.trim()) return []
+  return text.split('\n').map(line => {
+    const [label, ...rest] = line.split('|')
+    return { label: (label || '').trim(), prompt: rest.join('|').trim() }
+  }).filter(b => b.label)
+}
+
+function renderOpenApiSseChat(cfg: Record<string, any>) {
+  const welcome = String(cfg.welcomeText || '你好，我可以接入指定 OpenAPI 并流式展示回复。')
+  const placeholder = String(cfg.placeholder || '请输入要发送给接口的问题')
+  const quickBtns = parseQuickButtons(cfg.quickButtonsText)
+  const showPreview = cfg.showPreview !== false
+  const showHeader = cfg.showHeader === true
+  const previewHeight = Number(cfg.previewHeight) || 320
+  const apiUrl = String(cfg.apiUrl || '')
+  const method = String(cfg.method || 'POST').toUpperCase()
+  const isStream = cfg.stream !== false
+
+  // 左侧对话区
+  const chatCol = h('div', { class: 'fbp-oac-chat-col' }, [
+    showHeader
+      ? h('div', { class: 'fbp-oac-chat-header' }, 'OpenAPI 流式对话')
+      : null,
+    h('div', { class: 'fbp-oac-chat-body' }, [
+      h('div', { class: 'fbp-oac-welcome' }, welcome),
+    ]),
+    quickBtns.length
+      ? h('div', { class: 'fbp-oac-quick-row' },
+          quickBtns.map(b => h('button', {
+            class: 'fbp-oac-quick-btn',
+            type: 'button',
+            title: b.prompt,
+            disabled: true,
+          }, b.label)))
+      : null,
+    h('div', { class: 'fbp-oac-input-row' }, [
+      h('input', {
+        class: 'fbp-oac-input',
+        type: 'text',
+        placeholder,
+        disabled: true,
+      }),
+      h('button', { class: 'fbp-oac-send', type: 'button', disabled: true }, '发送'),
+    ]),
+  ])
+
+  // 右侧返回内容预览
+  const previewCol = showPreview
+    ? h('div', { class: 'fbp-oac-preview-col', style: `min-height:${Math.min(previewHeight, 360)}px` }, [
+        h('div', { class: 'fbp-oac-preview-title' }, '返回内容预览'),
+        h('div', { class: 'fbp-oac-preview-hint' }, '等待接口返回文件或 HTML — 接口返回 `html` / `file_list` / `answer` 时这里渲染.'),
+      ])
+    : null
+
+  return h('div', { class: 'fbp-oac' }, [
+    h('div', { class: 'fbp-oac-head' }, [
+      h('span', { class: 'fbp-oac-icon', 'aria-hidden': 'true' }, '⚡'),
+      h('span', { class: 'fbp-oac-title' }, 'OpenAPI 流式对话'),
+      h('span', { class: 'fbp-oac-kind' }, 'OPENAPI_SSE_CHAT'),
+    ]),
+    h('div', { class: 'fbp-oac-stage' }, [chatCol, previewCol]),
+    apiUrl
+      ? h('div', { class: 'fbp-oac-meta' }, [
+          h('span', { class: 'fbp-oac-meta-method' }, method),
+          isStream ? h('span', { class: 'fbp-oac-meta-stream' }, 'SSE 流式') : null,
+          h('span', { class: 'fbp-oac-meta-url' }, apiUrl),
+        ])
+      : null,
+  ])
 }
 
 /* ────────────────────────────────────────────────────────────────
@@ -429,9 +511,14 @@ const FormPreviewInput = {
         case 'virtual_field':
         case 'template_file':
           return h('input', { class: cls, type: 'text', placeholder: ph || '关联数据 (点击选择)', value: v ?? '', onInput })
-        case 'custom_dev':
-          // 2026-05-28: 自开发组件 — 不渲成文本框 (误导), 渲成区分卡片显 widget kind.
-          // 实际运行时由 apaas 平台加载对应 Vue 组件 (如 OpenAPI SSE 流式对话).
+        case 'custom_dev': {
+          // 2026-05-28: 自开发组件不是黑盒包 — config 完全声明式, 真渲染组件 UI.
+          const cfg = f.customConfig || {}
+          // ① OpenAPI 流式对话 — apaas 内置可配组件, 真还原 UI
+          if (f.customKind === 'OPENAPI_SSE_CHAT') {
+            return renderOpenApiSseChat(cfg)
+          }
+          // ② 其他自开发组件 — 暂无专属渲染器, 显 config 摘要卡片 (比纯占位强)
           return h('div', { class: 'fbp-fp-custom-dev' }, [
             h('div', { class: 'fbp-fp-custom-dev-head' }, [
               h('span', { class: 'fbp-fp-custom-dev-icon', 'aria-hidden': 'true' }, '✨'),
@@ -440,9 +527,17 @@ const FormPreviewInput = {
                 ? h('span', { class: 'fbp-fp-custom-dev-kind' }, f.customKind)
                 : null,
             ]),
-            h('div', { class: 'fbp-fp-custom-dev-desc' },
-              '运行时由 apaas 平台加载自定义 Vue 组件渲染 — 此处预览不模拟其交互.'),
+            Object.keys(cfg).length
+              ? h('div', { class: 'fbp-fp-custom-dev-cfg' },
+                  Object.entries(cfg).slice(0, 8).map(([k, val]) =>
+                    h('div', { class: 'fbp-fp-custom-dev-cfg-row' }, [
+                      h('span', { class: 'fbp-fp-custom-dev-cfg-k' }, k),
+                      h('span', { class: 'fbp-fp-custom-dev-cfg-v' },
+                        typeof val === 'string' ? val.slice(0, 60) : JSON.stringify(val).slice(0, 60)),
+                    ])))
+              : h('div', { class: 'fbp-fp-custom-dev-desc' }, '该自开发组件未带可读配置.'),
           ])
+        }
         default:
           return h('input', { class: cls, type: 'text', placeholder: ph, value: v ?? '', onInput })
       }
@@ -526,6 +621,9 @@ async function reload() {
             description: String(mf?.description || ''),
             max_length: mf?.max_length ? Number(mf.max_length) : undefined,
             customKind: customComponentKind(compType),
+            customConfig: c.custom_component_config && typeof c.custom_component_config === 'object'
+              ? c.custom_component_config as Record<string, any>
+              : undefined,
           }
         })
         if (!modelCode.value) modelCode.value = String(respFD.main_model_code || '')
@@ -1022,6 +1120,170 @@ select.fbp-fp-input { cursor: pointer; }
   font-size: 12px;
   color: var(--text-3);
   line-height: 1.5;
+}
+.fbp-fp-custom-dev-cfg {
+  margin-top: 8px;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+.fbp-fp-custom-dev-cfg-row {
+  display: flex;
+  gap: 8px;
+  font-size: 11.5px;
+}
+.fbp-fp-custom-dev-cfg-k {
+  flex: 0 0 110px;
+  color: var(--text-3);
+  font-family: var(--font-mono, ui-monospace, monospace);
+}
+.fbp-fp-custom-dev-cfg-v {
+  flex: 1;
+  color: var(--text-2);
+  word-break: break-all;
+}
+
+/* ─── OpenAPI 流式对话 自开发组件 真渲染 ─────────────────────── */
+.fbp-oac {
+  border: 1px solid var(--line-strong);
+  border-radius: 10px;
+  overflow: hidden;
+  background: var(--surface);
+}
+.fbp-oac-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 9px 14px;
+  background: linear-gradient(90deg, rgba(29, 137, 168, 0.10), rgba(29, 137, 168, 0.02));
+  border-bottom: 1px solid var(--line);
+}
+.fbp-oac-icon { font-size: 13px; line-height: 1; }
+.fbp-oac-title { font-size: 13px; font-weight: 600; color: var(--ai, #1D89A8); }
+.fbp-oac-kind {
+  font-family: var(--font-mono, ui-monospace, monospace);
+  font-size: 10.5px;
+  padding: 1px 6px;
+  border-radius: 4px;
+  background: rgba(29, 137, 168, 0.12);
+  color: var(--ai, #1D89A8);
+}
+.fbp-oac-stage {
+  display: flex;
+  gap: 0;
+}
+.fbp-oac-chat-col {
+  flex: 1 1 60%;
+  display: flex;
+  flex-direction: column;
+  padding: 14px;
+  min-width: 0;
+}
+.fbp-oac-chat-header {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text-2);
+  margin-bottom: 10px;
+}
+.fbp-oac-chat-body {
+  flex: 1;
+  min-height: 90px;
+  display: flex;
+  align-items: flex-start;
+}
+.fbp-oac-welcome {
+  background: var(--surface-2);
+  border-radius: 10px;
+  padding: 10px 13px;
+  font-size: 12.5px;
+  color: var(--text-2);
+  max-width: 90%;
+  line-height: 1.5;
+}
+.fbp-oac-quick-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin: 10px 0;
+}
+.fbp-oac-quick-btn {
+  padding: 4px 12px;
+  border: 1px solid rgba(29, 137, 168, 0.30);
+  background: rgba(29, 137, 168, 0.06);
+  color: var(--ai, #1D89A8);
+  border-radius: 14px;
+  font-size: 12px;
+  cursor: not-allowed;
+}
+.fbp-oac-input-row {
+  display: flex;
+  gap: 8px;
+  margin-top: 4px;
+}
+.fbp-oac-input {
+  flex: 1;
+  padding: 7px 11px;
+  border: 1px solid var(--line-strong);
+  border-radius: 7px;
+  font-size: 12.5px;
+  background: var(--surface-2);
+  color: var(--text-3);
+}
+.fbp-oac-send {
+  padding: 0 16px;
+  border: 0;
+  border-radius: 7px;
+  background: var(--ai, #1D89A8);
+  color: #fff;
+  font-size: 12.5px;
+  cursor: not-allowed;
+  opacity: 0.7;
+}
+.fbp-oac-preview-col {
+  flex: 1 1 40%;
+  border-left: 1px dashed var(--line-strong);
+  padding: 14px;
+  background: var(--surface-2);
+  min-width: 0;
+}
+.fbp-oac-preview-title {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text-2);
+  margin-bottom: 8px;
+}
+.fbp-oac-preview-hint {
+  font-size: 11.5px;
+  color: var(--text-3);
+  line-height: 1.5;
+}
+.fbp-oac-meta {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 7px 14px;
+  border-top: 1px solid var(--line);
+  background: var(--surface-2);
+  font-size: 11px;
+}
+.fbp-oac-meta-method {
+  font-family: var(--font-mono, ui-monospace, monospace);
+  font-weight: 600;
+  color: var(--ok, #16a34a);
+}
+.fbp-oac-meta-stream {
+  padding: 1px 6px;
+  border-radius: 4px;
+  background: rgba(29, 137, 168, 0.12);
+  color: var(--ai, #1D89A8);
+}
+.fbp-oac-meta-url {
+  flex: 1;
+  color: var(--text-3);
+  font-family: var(--font-mono, ui-monospace, monospace);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .fbp-canvas-empty-icon { font-size: 36px; line-height: 1; margin-bottom: 6px; }

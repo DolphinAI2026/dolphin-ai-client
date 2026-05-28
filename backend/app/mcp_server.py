@@ -5096,13 +5096,28 @@ async def get_apaas_form_detail(env_id: int, apaas_app_id: str, form_id: str) ->
     for c in (detail_page.get("formComponents") or raw.get("formComponents") or []):
         if not isinstance(c, dict):
             continue
-        comps.append({
+        comp_type = str(c.get("componentType") or "")
+        comp_out = {
             "uuid": str(c.get("uuid") or c.get("id") or ""),
             "label": str(c.get("label") or c.get("name") or ""),
-            "component_type": str(c.get("componentType") or ""),
+            "component_type": comp_type,
             "bo_code": str(c.get("boCode") or ""),
             "required": bool(c.get("required", False)),
-        })
+        }
+        # 2026-05-28: 自开发组件 (FORM_CUSTOM_COMPONENT_*) 透出声明式 config —
+        # 这些组件不是黑盒包, 行为完全由 customComponentConfig 参数化 (apiUrl /
+        # welcomeText / quickButtonsText / stream 等), 给前端真渲染用.
+        # 脱敏: authorization / token / secret 类字段静态预览用不到, 不泄漏到前端.
+        if comp_type.startswith("FORM_CUSTOM_COMPONENT_"):
+            ccc = c.get("customComponentConfig")
+            if isinstance(ccc, dict):
+                _SENSITIVE = ("authorization", "token", "secret", "apikey", "api_key", "password")
+                safe_cfg = {
+                    k: ("***" if any(s in str(k).lower() for s in _SENSITIVE) else v)
+                    for k, v in ccc.items()
+                }
+                comp_out["custom_component_config"] = safe_cfg
+        comps.append(comp_out)
 
     # apaas detailPageConfigById raw 含 `modelCode` (form 绑定的主表) 直接用
     main_model_code = str(raw.get("modelCode") or raw.get("mainModelCode") or "")
