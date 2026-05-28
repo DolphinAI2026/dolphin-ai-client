@@ -655,11 +655,12 @@ async def _spec_chat_event_stream(
                     model=llm_cfg["model"],
                 )
                 full_reply = ""
-                # 收集时只发"非 json 块"部分给前端 — 但流式中无法预知 json 块在哪.
-                # 策略: 全部 token 都发, 前端 SpecChatPanel 不显 ```json``` 块 (它是
-                # 普通 message append, ```json``` 包着的 patch 会自然嵌进文本流).
-                # 不影响功能 — 前端有 diff card UI 显 patch, json 块作为"原始 LLM 输出"
-                # 一起展示反而透明.
+                # 2026-05-28: 流式中只发"可见 prose"部分 — JSON patch 块 (```json...```
+                # 或裸 { } patch) 不进对话气泡 (它们拿去渲 diff 卡片, 不该污染对话文本).
+                # 策略: 每个 chunk 累进 full_reply, 算"安全可见前缀" (第一个 ``` 或裸
+                # patch 对象起始之前的文本), 只 emit 新增的可见部分. 一旦检测到 fence,
+                # 可见前缀就冻结, 后续 JSON token 不再 emit.
+                emitted_len = 0
                 try:
                     async for chunk_str in llm.chat_completion_stream(
                         messages,
@@ -678,7 +679,10 @@ async def _spec_chat_event_stream(
                         content = delta.get("content") or ""
                         if content:
                             full_reply += content
-                            yield _sse("token", {"content": content})
+                            visible = _visible_prose_prefix(full_reply)
+                            if len(visible) > emitted_len:
+                                yield _sse("token", {"content": visible[emitted_len:]})
+                                emitted_len = len(visible)
                 except Exception as exc:
                     logger.exception("spec_chat: LLM stream failed")
                     yield _sse("error", {
@@ -960,6 +964,32 @@ def _strip_json_block(text: str) -> str:
     if not text:
         return text
     return re.sub(r"```json\s*.*?\s*```", "", text, flags=re.DOTALL).strip()
+
+
+def _visible_prose_prefix(text: str) -> str:
+    """流式中算"可见 prose 安全前缀" — 第一个 ``` fence 或裸 JSON patch 对象之前.
+
+    一旦 LLM 开始输出 JSON patch 块, 后续都不该进对话气泡 (拿去渲 diff 卡片).
+    流式时 fence 可能还没闭合, 所以只要看到起始标记就冻结前缀.
+
+    截断点 (取最早出现的):
+      - ``` (代码 fence 起始, 含 ```json)
+      - 裸 patch 对象起始: 行首 `{` 后边跟着 "summary"/"kind"/"patch" 任一 key
+
+    注: 不 strip 已闭合块再返 (那是 _strip_json_block 终态用的); 这里是流式增量,
+    只需"到目前为止能安全显示的 prose".
+    """
+    if not text:
+        return ""
+    cut = len(text)
+    fence = text.find("```")
+    if fence >= 0:
+        cut = min(cut, fence)
+    # 裸 JSON patch 起始 (LLM 偶尔不加 fence) — 找 { 后近距离跟 patch 关键 key
+    m = re.search(r'\{\s*"(?:summary|kind|patch)"', text)
+    if m:
+        cut = min(cut, m.start())
+    return text[:cut].rstrip()
 
 
 # ---------------------------------------------------------------------------

@@ -481,9 +481,14 @@ function handleEvent(eventType: string, data: any, aiMsg: ChatMsg) {
   }
   if (eventType === 'done') {
     aiMsg.streaming = false
-    // backend 已写入草稿. 这里前端 emit 让 SpecDesignPanel 知道有改动.
-    // (P2 接入后改成"用户点'应用'再 emit", 现在为了 demo flow MVP 直接 emit.)
-    // 实际 emit 在 onAcceptChange — done 时不动.
+    // 2026-05-28: 用 done.reply (backend 已 strip 掉 ```json``` patch 块的纯文本)
+    // 作为权威最终文本 — 流式 token 只发可见 prose 前缀, 但 prose-after-JSON 的尾段
+    // 靠这里补全, 同时保证气泡里绝不残留 JSON.
+    if (typeof data.reply === 'string' && data.reply.trim()) {
+      aiMsg.content = data.reply.trim()
+    }
+    scrollToBottom()
+    // backend 已写入草稿. 实际 emit 在 onAcceptChange — done 时不动.
     return
   }
   if (eventType === 'error') {
