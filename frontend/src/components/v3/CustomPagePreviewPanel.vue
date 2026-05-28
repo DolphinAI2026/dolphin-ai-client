@@ -33,18 +33,30 @@
           <code class="cpp-code-val">{{ pageCode }}</code>
         </div>
 
+        <div v-if="accessUrl" class="cpp-code-row">
+          <span class="cpp-code-label">运行态地址</span>
+          <code class="cpp-code-val">{{ accessUrl }}</code>
+        </div>
+
         <div class="cpp-actions">
-          <button type="button" class="cpp-cta cpp-cta-primary" @click="onOpenInApaas">
-            <span>🚀</span> 在 apaas 平台打开
+          <button
+            type="button"
+            class="cpp-cta cpp-cta-primary"
+            :disabled="loadingUrl"
+            @click="onOpenRuntime"
+          >
+            <span>🚀</span>
+            {{ loadingUrl ? '获取地址中…' : '打开运行态应用' }}
           </button>
           <button type="button" class="cpp-cta cpp-cta-ghost" @click="onGoToCoding">
             <span>💻</span> 去 IDE 改源码
           </button>
         </div>
 
+        <p v-if="urlError" class="cpp-err">{{ urlError }}</p>
         <p class="cpp-hint">
-          “在 apaas 平台打开” 新开标签进该应用的平台页, 从菜单进这个自开发页看运行
-          效果; “去 IDE 改源码” 进 Vibe Coding 改这个组件的 Vue / TS 源码.
+          “打开运行态应用” 新开标签跳 apaas 真运行态 ({{ accessUrl ? '已就绪' : '需应用已部署' }}),
+          从菜单进这个自开发页看真效果; “去 IDE 改源码” 进 Vibe Coding 改 Vue / TS 源码.
         </p>
       </div>
     </div>
@@ -52,9 +64,9 @@
 </template>
 
 <script setup lang="ts">
+import { ref, watch } from 'vue'
 import { useRouter } from 'vue-router'
-import { useUserStore } from '@/stores/user'
-import { buildPlatformProxyEntryUrl } from '@/utils/platformIframe'
+import request from '@/utils/request'
 
 const props = defineProps<{
   appId: number
@@ -65,19 +77,48 @@ const props = defineProps<{
 }>()
 
 const router = useRouter()
-const userStore = useUserStore()
+
+// 2026-05-28: apaas 真运行态 URL (accessUrl) — 从 backend /apaas-access-url 拉.
+// pattern {host}/app/{tenantCode}/{appCode}/ (实证), 不是 /platform/{tid}/... 编辑器.
+const accessUrl = ref('')
+const loadingUrl = ref(false)
+const urlError = ref('')
+
+async function fetchAccessUrl() {
+  if (!props.appId) return
+  loadingUrl.value = true
+  urlError.value = ''
+  try {
+    const resp = await request.get<{
+      ok: boolean
+      access_url?: string
+      message?: string
+    }>(`/applications/${props.appId}/apaas-access-url`)
+    if (resp?.ok && resp.access_url) {
+      accessUrl.value = resp.access_url
+    } else {
+      urlError.value = resp?.message || '应用未部署到 apaas, 暂无运行态地址'
+    }
+  } catch (e: any) {
+    urlError.value = e?.message || '获取运行态地址失败'
+  } finally {
+    loadingUrl.value = false
+  }
+}
+
+watch(() => props.appId, fetchAccessUrl, { immediate: true })
 
 function onGoToCoding() {
   router.push({ path: '/coding', query: { app_id: String(props.appId) } })
 }
 
-function onOpenInApaas() {
-  const token = userStore.token || localStorage.getItem('token') || ''
-  // 2026-05-28: 用 entry (不带 menu) 落 apaas 应用总览页 — 可靠. CUSTOM 菜单的
-  // runtime 单页路由 (/platform/{tid}/{app_code}/page/{menu_id}) apaas SPA 不认 →
-  // 白屏, 所以不再直跳运行态; 落总览页让用户从菜单自己进运行态看效果.
-  const url = buildPlatformProxyEntryUrl(props.appId, token)
-  window.open(url, '_blank', 'noopener')
+function onOpenRuntime() {
+  if (accessUrl.value) {
+    // 真运行态 — 顶层新标签打开 (apaas SPA + session 在顶层窗口正常工作)
+    window.open(accessUrl.value, '_blank', 'noopener')
+  } else if (!loadingUrl.value) {
+    fetchAccessUrl()
+  }
 }
 </script>
 
@@ -212,6 +253,11 @@ function onOpenInApaas() {
 }
 .cpp-cta-ghost:hover { background: var(--surface-2); }
 
+.cpp-err {
+  font-size: 12px !important;
+  color: var(--err, #dc2626) !important;
+  margin: 0 0 8px !important;
+}
 .cpp-hint {
   font-size: 12px !important;
   color: var(--text-3) !important;

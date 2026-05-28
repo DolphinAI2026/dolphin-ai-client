@@ -405,6 +405,50 @@ async def get_form_components(
     )
 
 
+@router.get("/{app_id}/apaas-access-url")
+async def get_apaas_access_url(
+    app_id: int,
+    ctx: Annotated[AuthContext, Depends(get_auth_context)],
+    db: Annotated[AsyncSession, Depends(get_db)],
+) -> dict:
+    """拿应用在 apaas 的**真实运行态访问 URL** (跟最终用户访问应用一致).
+
+    2026-05-28 实证: apaas 应用详情 (query_app_detail) 含:
+      - accessUrl:       {host}/app/{tenantCode}/{appCode}/   ← PC 运行态
+      - accessMobileUrl: {host}/m/{tenantCode}/{appCode}/     ← 移动端
+    跟编辑器 URL (/platform/{tid}/admin/...) 完全不同前缀.
+    之前 CUSTOM 自开发页 preview 猜的 /platform/{tid}/{app_code}/page/{menu_id}
+    是错的 (apaas SPA 无此路由 → 白屏), 真路由走 accessUrl.
+
+    返: {ok, access_url, access_mobile_url, app_code, tenant_code}
+    """
+    from app.coding.apaas_tools import _get_apaas_client
+
+    app = await _load_app_and_check_view(app_id, ctx, db)
+    if not app.platform_env_id or not app.apaas_app_id:
+        return {"ok": False, "error_code": "APP_NOT_DEPLOYED",
+                "message": "应用尚未部署到 aPaaS 平台"}
+    try:
+        client = await _get_apaas_client(app.platform_env_id, db)
+        detail = await client.query_app_detail(str(app.apaas_app_id))
+    except Exception as exc:  # noqa: BLE001
+        return {"ok": False, "error_code": "APAAS_CLIENT_ERROR", "message": f"拉应用详情失败: {exc}"}
+    if not detail:
+        return {"ok": False, "error_code": "APP_NOT_FOUND",
+                "message": f"apaas 没找到应用 {app.apaas_app_id}"}
+    access_url = str(detail.get("accessUrl") or "")
+    if not access_url:
+        return {"ok": False, "error_code": "NO_ACCESS_URL",
+                "message": "应用详情没有 accessUrl — 可能尚未部署/发布"}
+    return {
+        "ok": True,
+        "access_url": access_url,
+        "access_mobile_url": str(detail.get("accessMobileUrl") or ""),
+        "app_code": str(detail.get("appCode") or ""),
+        "tenant_code": str(detail.get("tenantCode") or ""),
+    }
+
+
 @router.get("/{app_id}/forms/{form_id}/detail")
 async def get_form_detail(
     app_id: int,
