@@ -441,21 +441,129 @@ async def _render_business_events(
     return "\n".join(md), safe_events
 
 
+async def _collect_form_custom_widgets(
+    env_id: int,
+    apaas_app_id: str,
+    model_menus: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    """扫每个 MODEL 表单的 components, 抽 `FORM_CUSTOM_COMPONENT_*` 自开发组件.
+
+    apaas 命名约定 (2026-05-28 实证):
+      标准内置组件: FORM_TEXT_INPUT / FORM_DATEPICK_INPUT / FORM_RICH_TEXT / ...
+      自开发组件:   FORM_CUSTOM_COMPONENT_OPENAPI_SSE_CHAT / FORM_CUSTOM_COMPONENT_*
+
+    一个 form 含 0 ~ N 个自开发组件. 跨 form 并发拉 detail 拼总表.
+
+    Returns: list of {form_id, form_name, menu_name, menu_code, component_label,
+                       component_type, widget_kind, bo_code, uuid}
+      widget_kind = component_type 去掉 FORM_CUSTOM_COMPONENT_ 前缀 (e.g. OPENAPI_SSE_CHAT)
+    """
+    import asyncio as _asyncio
+
+    if not model_menus:
+        return []
+
+    CUSTOM_PREFIX = "FORM_CUSTOM_COMPONENT_"
+
+    async def fetch_one(menu: dict[str, Any]) -> list[dict[str, Any]]:
+        form_id = str(menu.get("form_id") or "")
+        if not form_id:
+            return []
+        ok, raw = await _call_tool(
+            "get_apaas_form_detail",
+            env_id=env_id,
+            apaas_app_id=apaas_app_id,
+            extra={"form_id": form_id},
+        )
+        if not ok:
+            return []
+        comps = raw.get("components") or []
+        widgets: list[dict[str, Any]] = []
+        for c in comps:
+            if not isinstance(c, dict):
+                continue
+            ct = str(c.get("component_type") or "")
+            if not ct.startswith(CUSTOM_PREFIX):
+                continue
+            widgets.append({
+                "form_id": form_id,
+                "form_name": raw.get("form_name") or menu.get("name") or "",
+                "menu_name": menu.get("name") or "",
+                "menu_code": menu.get("code") or "",
+                "component_label": str(c.get("label") or ""),
+                "component_type": ct,
+                "widget_kind": ct[len(CUSTOM_PREFIX):],  # e.g. "OPENAPI_SSE_CHAT"
+                "bo_code": str(c.get("bo_code") or ""),
+                "uuid": str(c.get("uuid") or ""),
+            })
+        return widgets
+
+    # 并发拉所有表单 detail
+    try:
+        per_form = await _asyncio.gather(
+            *(fetch_one(m) for m in model_menus),
+            return_exceptions=True,
+        )
+    except Exception as exc:  # noqa: BLE001
+        logger.warning(f"_collect_form_custom_widgets gather failed: {exc}")
+        return []
+
+    out: list[dict[str, Any]] = []
+    for r in per_form:
+        if isinstance(r, list):
+            out.extend(r)
+    return out
+
+
 def _render_integration(
     custom_menus: list[dict[str, Any]],
-) -> tuple[str, list[dict[str, Any]]]:
-    """十、集成 & 自开发 — menus 过 PAGE_CUSTOM_DEV."""
+    form_custom_widgets: list[dict[str, Any]],
+) -> tuple[str, dict[str, Any]]:
+    """十、集成 & 自开发 — 2 个子表:
+        A) 菜单级自开发页面 (PAGE_CUSTOM_DEV menus)
+        B) 表单内嵌自开发组件 (FORM_CUSTOM_COMPONENT_* widgets)
+
+    Returns parsed dict shape:
+        {"custom_pages": [...], "form_custom_widgets": [...]}
+    """
     md = ["## 十、集成 & 自开发", ""]
-    if not custom_menus:
-        md.append("_暂无自开发页面_")
-        md.append("")
-        return "\n".join(md), []
-    md.append("| 页面名称 | 菜单编码 |")
-    md.append("|---------|---------|")
-    for m in custom_menus:
-        md.append(f"| {m['name']} | `{m['code']}` |")
+
+    # A) 菜单级
+    md.append("### 自开发页面 (整页 Vue, 挂菜单)")
     md.append("")
-    return "\n".join(md), custom_menus
+    if not custom_menus:
+        md.append("_暂无自开发页面 (CUSTOM 菜单)_")
+        md.append("")
+    else:
+        md.append("| 页面名称 | 菜单编码 |")
+        md.append("|---------|---------|")
+        for m in custom_menus:
+            md.append(f"| {m['name']} | `{m['code']}` |")
+        md.append("")
+
+    # B) 表单内嵌组件
+    md.append("### 表单内嵌自开发组件")
+    md.append("")
+    if not form_custom_widgets:
+        md.append("_暂无表单内嵌自开发组件 (`FORM_CUSTOM_COMPONENT_*`)_")
+        md.append("")
+    else:
+        md.append("| 组件标题 | 组件类型 | 所属表单 | 字段编码 |")
+        md.append("|---------|---------|---------|---------|")
+        for w in form_custom_widgets:
+            md.append(
+                f"| {w.get('component_label') or '—'} "
+                f"| `{w.get('widget_kind') or '—'}` "
+                f"| {w.get('form_name') or w.get('menu_name') or '—'} "
+                f"| `{w.get('bo_code') or '—'}` |"
+            )
+        md.append("")
+
+    parsed = {
+        "custom_pages": custom_menus,
+        "form_custom_widgets": form_custom_widgets,
+    }
+    return "\n".join(md), parsed
 
 
 def _render_datasources(
@@ -604,10 +712,16 @@ async def generate_spec_markdown(
     parts.append(md9)
     raw_sections["business_events"] = raw9
 
-    # 十、集成 & 自开发
-    md10, raw10 = _render_integration(custom_menus)
+    # 十、集成 & 自开发 — 含菜单级 + 表单内嵌组件
+    # 2026-05-28: 加扫每个 MODEL 表单的 FORM_CUSTOM_COMPONENT_* widget.
+    form_custom_widgets = await _collect_form_custom_widgets(
+        env_id, apaas_app_id, model_menus,
+    )
+    md10, raw10 = _render_integration(custom_menus, form_custom_widgets)
     parts.append(md10)
     raw_sections["integration"] = raw10
+    # 单列一份 form_custom_widgets 给前端方便直接拿 (而不用 整 integration.dict)
+    raw_sections["form_custom_widgets"] = form_custom_widgets
 
     # 十一、数据源
     md11, raw11 = _render_datasources(all_menus, raw3)

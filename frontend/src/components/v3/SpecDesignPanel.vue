@@ -483,32 +483,85 @@
               </table>
             </template>
 
-            <!-- 十、集成 & 自开发 — X (2026-05-27): 真渲染 CUSTOM menu list -->
+            <!-- 十、集成 & 自开发 — 2 个子表:
+                 A) 菜单级自开发 (CUSTOM menu, 整页 Vue)
+                 B) 表单内嵌自开发组件 (FORM_CUSTOM_COMPONENT_* widget)
+                 2026-05-28: 加 B, 之前只有 A. -->
             <template v-else-if="ch.key === 'integration'">
-              <div v-if="customMenus.length === 0" class="subsection-empty">
-                无自开发页面 (CUSTOM 菜单).
-                <p class="hint">用 Vibe Coding / 在线 IDE 写自定义 Vue 页, 部署后挂菜单.</p>
+              <!-- 双 0 时友好空态 -->
+              <div
+                v-if="customMenus.length === 0 && loadedFormCustomWidgets.length === 0"
+                class="subsection-empty"
+              >
+                无自开发资产 (CUSTOM 菜单 0 个 + 表单内嵌自开发组件 0 个).
+                <p class="hint">
+                  用 Vibe Coding / 在线 IDE 写自定义 Vue 页 (整页), 或在 apaas 表单
+                  设计器拖入"自开发组件" (FORM_CUSTOM_COMPONENT_*).
+                </p>
               </div>
               <template v-else>
-                <p class="ch-intro">
-                  应用含 <strong>{{ customMenus.length }}</strong> 个自开发 Vue 页 (CUSTOM 类型菜单).
-                </p>
-                <table class="spec-table">
-                  <thead>
-                    <tr>
-                      <th>菜单名</th>
-                      <th>组件 / 页面 code</th>
-                      <th>说明</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    <tr v-for="m in customMenus" :key="m.id">
-                      <td>{{ m.name }}</td>
-                      <td><span class="mono">{{ describeExtra(m.extra, 'link_url') || '—' }}</span></td>
-                      <td class="text-3">详见"功能" tab 选该菜单, 跳 IDE 改 Vue 源码</td>
-                    </tr>
-                  </tbody>
-                </table>
+                <!-- ① 菜单级 -->
+                <div class="subsection-block">
+                  <h4 class="subsection-h">A) 自开发页面 (整页 Vue, 挂菜单)</h4>
+                  <div
+                    v-if="customMenus.length === 0"
+                    class="subsection-empty subsection-empty-soft"
+                  >
+                    无 CUSTOM 类型菜单
+                  </div>
+                  <table v-else class="spec-table">
+                    <thead>
+                      <tr>
+                        <th>菜单名</th>
+                        <th>组件 / 页面 code</th>
+                        <th>说明</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      <tr v-for="m in customMenus" :key="m.id">
+                        <td>{{ m.name }}</td>
+                        <td><span class="mono">{{ describeExtra(m.extra, 'link_url') || '—' }}</span></td>
+                        <td class="text-3">详见"功能" tab 选该菜单, 跳 IDE 改 Vue 源码</td>
+                      </tr>
+                    </tbody>
+                  </table>
+                </div>
+
+                <!-- ② 表单内嵌组件 -->
+                <div class="subsection-block">
+                  <h4 class="subsection-h">B) 表单内嵌自开发组件</h4>
+                  <div
+                    v-if="loadedFormCustomWidgets.length === 0"
+                    class="subsection-empty subsection-empty-soft"
+                  >
+                    无 FORM_CUSTOM_COMPONENT_* 类组件
+                  </div>
+                  <template v-else>
+                    <p class="ch-intro">
+                      应用表单中嵌入 <strong>{{ loadedFormCustomWidgets.length }}</strong> 个
+                      自开发组件 (apaas widget naming: <span class="mono">FORM_CUSTOM_COMPONENT_*</span>).
+                    </p>
+                    <table class="spec-table">
+                      <thead>
+                        <tr>
+                          <th>组件标题</th>
+                          <th>组件类型</th>
+                          <th>所属表单</th>
+                          <th>字段编码</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        <tr v-for="w in loadedFormCustomWidgets" :key="w.uuid || (w.form_id + w.bo_code)">
+                          <td>{{ w.component_label || '—' }}</td>
+                          <td><span class="mono">{{ w.widget_kind || '—' }}</span></td>
+                          <td>{{ w.form_name || w.menu_name || '—' }}</td>
+                          <td><span class="mono">{{ w.bo_code || '—' }}</span></td>
+                        </tr>
+                      </tbody>
+                    </table>
+                  </template>
+                </div>
+
                 <p class="hint">
                   P5: 加 API 集成 / Webhook 配置列表 (现 apaas 无对应 schema).
                 </p>
@@ -899,6 +952,19 @@ const loadedDicts = ref<SectionItem[]>([])
 const loadedMenus = ref<SectionItem[]>([])
 const loadedProcesses = ref<SectionItem[]>([])
 const loadedEvents = ref<SectionItem[]>([])  // 2026-05-27: 业务事件章节 (九)
+// 2026-05-28: 表单内嵌自开发组件 (FORM_CUSTOM_COMPONENT_*) — 章十 B 子表
+interface FormCustomWidget {
+  form_id: string
+  form_name: string
+  menu_name: string
+  menu_code: string
+  component_label: string
+  component_type: string
+  widget_kind: string  // e.g. "OPENAPI_SSE_CHAT"
+  bo_code: string
+  uuid: string
+}
+const loadedFormCustomWidgets = ref<FormCustomWidget[]>([])
 
 // X (2026-05-27): 按 menu_type 分组 — 六/七 章用 MODEL 菜单, 九 章用 CUSTOM 菜单.
 // MODEL = 数据驱动表单/列表; CUSTOM = 自开发 Vue 页.
@@ -1464,6 +1530,10 @@ async function reload(): Promise<void> {
         loadedMenus.value = _toSectionItems(s.menus, 'menu_id', 'menu_name', 'menu_code')
         loadedProcesses.value = _toSectionItems(s.processes, 'id', 'name', 'code')
         loadedEvents.value = _toSectionItems(s.business_events, 'id', 'name', 'code')
+        // 2026-05-28: form-level 自开发组件 (FORM_CUSTOM_COMPONENT_*)
+        loadedFormCustomWidgets.value = Array.isArray(s.form_custom_widgets)
+          ? s.form_custom_widgets as FormCustomWidget[]
+          : []
         // datasources 单独拉 (不在 spec 章节注册路径)
         await fetchDatasources()
         usedParsedCache = true
@@ -2061,6 +2131,20 @@ watch(
 .subsection-empty-soft strong {
   color: var(--brand);
   font-weight: 600;
+}
+/* 2026-05-28: 章十 双子表 (A/B 自开发) */
+.subsection-block {
+  margin-top: 16px;
+}
+.subsection-block:first-child {
+  margin-top: 0;
+}
+.subsection-h {
+  margin: 0 0 10px;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text-2);
+  letter-spacing: 0.01em;
 }
 
 /* table */
