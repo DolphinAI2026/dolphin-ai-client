@@ -834,28 +834,55 @@ def _public_workspace(meta: dict) -> OnlineCodingWorkspace:
     )
 
 
-async def _register_ai_code_app(db: AsyncSession, meta: dict) -> None:
-    """给 vibe workspace 幂等登记一条 ai-code Application（让它出现在统一应用列表）。"""
+async def _register_ai_code_app(
+    db: AsyncSession, meta: dict, fallback_tenant_id: int | None = None
+) -> None:
+    """给 vibe workspace upsert 一条 ai-code Application（出现在统一应用列表）。
+
+    - 不存在则创建；已存在则同步 app_name（workspace 改名后保持一致）。
+    - tenant_id 缺失时用 fallback 兜底。
+    - 单个 workspace 登记失败不影响列表里其他 workspace。
+    """
     workspace_id = meta.get("id")
     if not workspace_id:
         return
-    existing = await db.execute(
-        select(Application).where(Application.source_workspace_id == workspace_id)
-    )
-    if existing.scalar_one_or_none() is not None:
+    user_id = meta.get("user_id")
+    # 当前租户优先：老 workspace meta 里可能存的是旧租户，会跟列表的租户过滤不匹配而漏显
+    tenant_id = fallback_tenant_id or meta.get("tenant_id")
+    if user_id is None or tenant_id is None:
         return
-    app = Application(
-        user_id=meta.get("user_id"),
-        tenant_id=meta.get("tenant_id"),
-        created_by=meta.get("user_id"),
-        app_name=(meta.get("task") or "AI Coding 应用")[:100],
-        app_code=f"aicode_{workspace_id}"[:50],
-        app_type="ai-code",
-        source_workspace_id=workspace_id,
-        status="developing",
-    )
-    db.add(app)
-    await db.commit()
+    app_name = (meta.get("task") or "AI Coding 应用")[:100]
+    try:
+        existing = (
+            await db.execute(
+                select(Application).where(Application.source_workspace_id == workspace_id)
+            )
+        ).scalar_one_or_none()
+        if existing is not None:
+            changed = False
+            if existing.app_name != app_name:
+                existing.app_name = app_name
+                changed = True
+            if existing.tenant_id != tenant_id:
+                existing.tenant_id = tenant_id
+                changed = True
+            if changed:
+                await db.commit()
+            return
+        app = Application(
+            user_id=user_id,
+            tenant_id=tenant_id,
+            created_by=user_id,
+            app_name=app_name,
+            app_code=f"aicode_{workspace_id}"[:50],
+            app_type="ai-code",
+            source_workspace_id=workspace_id,
+            status="developing",
+        )
+        db.add(app)
+        await db.commit()
+    except Exception:
+        await db.rollback()
 
 
 @router.post("/workspaces", response_model=OnlineCodingWorkspace)
@@ -944,8 +971,8 @@ async def list_online_coding_workspaces(
             continue
         if meta.get("user_id") != ctx.user.id:
             continue
-        # 历史 workspace 回填：确保每个都有对应 ai-code Application（幂等）
-        await _register_ai_code_app(db, meta)
+        # 历史 workspace 回填：确保每个都有对应 ai-code Application（幂等 + 同步名）
+        await _register_ai_code_app(db, meta, fallback_tenant_id=ctx.tenant_id)
         items.append(_public_workspace(meta))
     return sorted(items, key=lambda item: item.updated_at, reverse=True)
 
