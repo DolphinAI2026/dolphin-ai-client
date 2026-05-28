@@ -125,7 +125,7 @@
                   @click="onInlineEditHint(f)"
                 >改这个字段 →</button>
               </label>
-              <FormPreviewInput :field="f" :model-value="formValues[f.code]" @update:model-value="(v: any) => formValues[f.code] = v" />
+              <FormPreviewInput :field="f" :model-value="formValues[f.code]" :app-id="props.appId" :form-id="props.formId || ''" @update:model-value="(v: any) => formValues[f.code] = v" />
               <p v-if="f.description" class="fbp-form-desc">{{ f.description }}</p>
             </div>
             <div class="fbp-form-actions">
@@ -157,8 +157,8 @@
 </template>
 
 <script setup lang="ts">
-import { ref, watch, h, type PropType } from 'vue'
-import request from '@/utils/request'
+import { ref, watch, h, defineComponent, type PropType } from 'vue'
+import request, { API_PREFIX } from '@/utils/request'
 import ApaasEmbedIframe from './ApaasEmbedIframe.vue'
 
 /* ────────────────────────────────────────────────────────────────
@@ -190,6 +190,8 @@ interface FormField {
   // 行为完全由 config 参数化 (apiUrl / welcomeText / quickButtonsText / stream...),
   // preview 用它真渲染组件 UI.
   customConfig?: Record<string, any>
+  // 完整 bo_code (含 ~ 前的 model_code) — P2 自开发组件 chat 代理定位组件用.
+  boCodeFull?: string
 }
 
 /* ────────────────────────────────────────────────────────────────
@@ -320,69 +322,170 @@ function parseQuickButtons(text: unknown): { label: string; prompt: string }[] {
   }).filter(b => b.label)
 }
 
-function renderOpenApiSseChat(cfg: Record<string, any>) {
-  const welcome = String(cfg.welcomeText || '你好，我可以接入指定 OpenAPI 并流式展示回复。')
-  const placeholder = String(cfg.placeholder || '请输入要发送给接口的问题')
-  const quickBtns = parseQuickButtons(cfg.quickButtonsText)
-  const showPreview = cfg.showPreview !== false
-  const showHeader = cfg.showHeader === true
-  const previewHeight = Number(cfg.previewHeight) || 320
-  const apiUrl = String(cfg.apiUrl || '')
-  const method = String(cfg.method || 'POST').toUpperCase()
-  const isStream = cfg.stream !== false
+// OPENAPI_SSE_CHAT 交互组件 — P2: 真发消息 + 流式收 (走 backend SSE 代理).
+// 预览里能真用: 输入/快捷按钮 → POST /forms/{id}/custom-widget/chat → 逐字流式追加.
+interface OacMessage { role: 'user' | 'assistant'; text: string }
 
-  // 左侧对话区
-  const chatCol = h('div', { class: 'fbp-oac-chat-col' }, [
-    showHeader
-      ? h('div', { class: 'fbp-oac-chat-header' }, 'OpenAPI 流式对话')
-      : null,
-    h('div', { class: 'fbp-oac-chat-body' }, [
-      h('div', { class: 'fbp-oac-welcome' }, welcome),
-    ]),
-    quickBtns.length
-      ? h('div', { class: 'fbp-oac-quick-row' },
-          quickBtns.map(b => h('button', {
-            class: 'fbp-oac-quick-btn',
+const OpenApiSseChatPreview = defineComponent({
+  name: 'OpenApiSseChatPreview',
+  props: {
+    appId: { type: Number, required: true },
+    formId: { type: String, required: true },
+    boCode: { type: String, default: '' },
+    config: { type: Object as PropType<Record<string, any>>, default: () => ({}) },
+  },
+  setup(props) {
+    const messages = ref<OacMessage[]>([])
+    const inputText = ref('')
+    const streaming = ref(false)
+    const errorMsg = ref('')
+
+    const cfg = props.config || {}
+    const welcome = String(cfg.welcomeText || '你好，我可以接入指定 OpenAPI 并流式展示回复。')
+    const placeholder = String(cfg.placeholder || '请输入要发送给接口的问题')
+    const quickBtns = parseQuickButtons(cfg.quickButtonsText)
+    const showPreview = cfg.showPreview !== false
+    const showHeader = cfg.showHeader === true
+    const previewHeight = Number(cfg.previewHeight) || 320
+    const apiUrl = String(cfg.apiUrl || '')
+    const method = String(cfg.method || 'POST').toUpperCase()
+    const isStream = cfg.stream !== false
+    const canChat = !!props.boCode && !!apiUrl
+
+    async function send(text: string) {
+      const msg = (text || '').trim()
+      if (!msg || streaming.value || !canChat) return
+      errorMsg.value = ''
+      messages.value.push({ role: 'user', text: msg })
+      const assistant: OacMessage = { role: 'assistant', text: '' }
+      messages.value.push(assistant)
+      streaming.value = true
+      inputText.value = ''
+      try {
+        const token = localStorage.getItem('token') || ''
+        const resp = await fetch(
+          `${API_PREFIX}/applications/${props.appId}/forms/${props.formId}/custom-widget/chat`,
+          {
+            method: 'POST',
+            headers: {
+              'Content-Type': 'application/json',
+              ...(token ? { Authorization: `Bearer ${token}` } : {}),
+            },
+            body: JSON.stringify({ bo_code: props.boCode, input: msg }),
+          },
+        )
+        if (!resp.ok || !resp.body) {
+          throw new Error(`HTTP ${resp.status}`)
+        }
+        // 解析 SSE: event: token\ndata: {"text":"..."}
+        const reader = resp.body.getReader()
+        const decoder = new TextDecoder('utf-8')
+        let buf = ''
+        let curEvent = ''
+        while (true) {
+          const { done, value } = await reader.read()
+          if (done) break
+          buf += decoder.decode(value, { stream: true })
+          const lines = buf.split('\n')
+          buf = lines.pop() || ''
+          for (const line of lines) {
+            const l = line.trimEnd()
+            if (l.startsWith('event:')) {
+              curEvent = l.slice(6).trim()
+            } else if (l.startsWith('data:')) {
+              const dataStr = l.slice(5).trim()
+              if (curEvent === 'token') {
+                try {
+                  const obj = JSON.parse(dataStr)
+                  if (obj.text) assistant.text += obj.text
+                } catch { /* ignore partial */ }
+              } else if (curEvent === 'error') {
+                try { errorMsg.value = JSON.parse(dataStr).message || '调用失败' }
+                catch { errorMsg.value = '调用失败' }
+              }
+            }
+          }
+        }
+      } catch (e: any) {
+        errorMsg.value = e?.message || '调用失败'
+        if (!assistant.text) assistant.text = `（调用失败: ${errorMsg.value}）`
+      } finally {
+        streaming.value = false
+      }
+    }
+
+    return () => {
+      // 对话区: welcome + 历史消息气泡
+      const bubbles: any[] = []
+      if (messages.value.length === 0) {
+        bubbles.push(h('div', { class: 'fbp-oac-welcome' }, welcome))
+      } else {
+        for (const m of messages.value) {
+          bubbles.push(h('div', {
+            class: ['fbp-oac-msg', m.role === 'user' ? 'fbp-oac-msg-user' : 'fbp-oac-msg-ai'],
+          }, m.text || (streaming.value ? '…' : '')))
+        }
+      }
+
+      const chatCol = h('div', { class: 'fbp-oac-chat-col' }, [
+        showHeader ? h('div', { class: 'fbp-oac-chat-header' }, 'OpenAPI 流式对话') : null,
+        h('div', { class: 'fbp-oac-chat-body' }, bubbles),
+        errorMsg.value ? h('div', { class: 'fbp-oac-err' }, errorMsg.value) : null,
+        quickBtns.length
+          ? h('div', { class: 'fbp-oac-quick-row' },
+              quickBtns.map(b => h('button', {
+                class: 'fbp-oac-quick-btn',
+                type: 'button',
+                title: b.prompt,
+                disabled: streaming.value || !canChat,
+                onClick: () => send(b.prompt || b.label),
+              }, b.label)))
+          : null,
+        h('div', { class: 'fbp-oac-input-row' }, [
+          h('input', {
+            class: 'fbp-oac-input',
+            type: 'text',
+            placeholder: canChat ? placeholder : '该组件未带 apiUrl, 无法交互',
+            value: inputText.value,
+            disabled: streaming.value || !canChat,
+            onInput: (e: Event) => { inputText.value = (e.target as HTMLInputElement).value },
+            onKeydown: (e: KeyboardEvent) => { if (e.key === 'Enter') send(inputText.value) },
+          }),
+          h('button', {
+            class: 'fbp-oac-send',
             type: 'button',
-            title: b.prompt,
-            disabled: true,
-          }, b.label)))
-      : null,
-    h('div', { class: 'fbp-oac-input-row' }, [
-      h('input', {
-        class: 'fbp-oac-input',
-        type: 'text',
-        placeholder,
-        disabled: true,
-      }),
-      h('button', { class: 'fbp-oac-send', type: 'button', disabled: true }, '发送'),
-    ]),
-  ])
-
-  // 右侧返回内容预览
-  const previewCol = showPreview
-    ? h('div', { class: 'fbp-oac-preview-col', style: `min-height:${Math.min(previewHeight, 360)}px` }, [
-        h('div', { class: 'fbp-oac-preview-title' }, '返回内容预览'),
-        h('div', { class: 'fbp-oac-preview-hint' }, '等待接口返回文件或 HTML — 接口返回 `html` / `file_list` / `answer` 时这里渲染.'),
+            disabled: streaming.value || !canChat || !inputText.value.trim(),
+            onClick: () => send(inputText.value),
+          }, streaming.value ? '…' : '发送'),
+        ]),
       ])
-    : null
 
-  return h('div', { class: 'fbp-oac' }, [
-    h('div', { class: 'fbp-oac-head' }, [
-      h('span', { class: 'fbp-oac-icon', 'aria-hidden': 'true' }, '⚡'),
-      h('span', { class: 'fbp-oac-title' }, 'OpenAPI 流式对话'),
-      h('span', { class: 'fbp-oac-kind' }, 'OPENAPI_SSE_CHAT'),
-    ]),
-    h('div', { class: 'fbp-oac-stage' }, [chatCol, previewCol]),
-    apiUrl
-      ? h('div', { class: 'fbp-oac-meta' }, [
-          h('span', { class: 'fbp-oac-meta-method' }, method),
-          isStream ? h('span', { class: 'fbp-oac-meta-stream' }, 'SSE 流式') : null,
-          h('span', { class: 'fbp-oac-meta-url' }, apiUrl),
-        ])
-      : null,
-  ])
-}
+      const previewCol = showPreview
+        ? h('div', { class: 'fbp-oac-preview-col', style: `min-height:${Math.min(previewHeight, 360)}px` }, [
+            h('div', { class: 'fbp-oac-preview-title' }, '返回内容预览'),
+            h('div', { class: 'fbp-oac-preview-hint' }, '等待接口返回文件或 HTML — 接口返回 `html` / `file_list` / `answer` 时这里渲染.'),
+          ])
+        : null
+
+      return h('div', { class: 'fbp-oac' }, [
+        h('div', { class: 'fbp-oac-head' }, [
+          h('span', { class: 'fbp-oac-icon', 'aria-hidden': 'true' }, '⚡'),
+          h('span', { class: 'fbp-oac-title' }, 'OpenAPI 流式对话'),
+          h('span', { class: 'fbp-oac-kind' }, 'OPENAPI_SSE_CHAT'),
+          canChat ? h('span', { class: 'fbp-oac-live' }, '● 可交互') : null,
+        ]),
+        h('div', { class: 'fbp-oac-stage' }, [chatCol, previewCol]),
+        apiUrl
+          ? h('div', { class: 'fbp-oac-meta' }, [
+              h('span', { class: 'fbp-oac-meta-method' }, method),
+              isStream ? h('span', { class: 'fbp-oac-meta-stream' }, 'SSE 流式') : null,
+              h('span', { class: 'fbp-oac-meta-url' }, apiUrl),
+            ])
+          : null,
+      ])
+    }
+  },
+})
 
 /* ────────────────────────────────────────────────────────────────
    FormPreviewInput — preview mode 真业务表单 widget
@@ -392,9 +495,11 @@ const FormPreviewInput = {
   props: {
     field: { type: Object as PropType<FormField>, required: true },
     modelValue: { type: null as any, default: undefined },
+    appId: { type: Number, default: 0 },
+    formId: { type: String, default: '' },
   },
   emits: ['update:modelValue'],
-  setup(props: { field: FormField; modelValue: any }, { emit }: { emit: (e: 'update:modelValue', v: any) => void }) {
+  setup(props: { field: FormField; modelValue: any; appId: number; formId: string }, { emit }: { emit: (e: 'update:modelValue', v: any) => void }) {
     return () => {
       const f = props.field
       const v = props.modelValue
@@ -514,9 +619,14 @@ const FormPreviewInput = {
         case 'custom_dev': {
           // 2026-05-28: 自开发组件不是黑盒包 — config 完全声明式, 真渲染组件 UI.
           const cfg = f.customConfig || {}
-          // ① OpenAPI 流式对话 — apaas 内置可配组件, 真还原 UI
+          // ① OpenAPI 流式对话 — apaas 内置可配组件, 真还原 UI + 真交互 (P2)
           if (f.customKind === 'OPENAPI_SSE_CHAT') {
-            return renderOpenApiSseChat(cfg)
+            return h(OpenApiSseChatPreview, {
+              appId: props.appId,
+              formId: props.formId,
+              boCode: f.boCodeFull || '',
+              config: cfg,
+            })
           }
           // ② 其他自开发组件 — 暂无专属渲染器, 显 config 摘要卡片 (比纯占位强)
           return h('div', { class: 'fbp-fp-custom-dev' }, [
@@ -624,6 +734,7 @@ async function reload() {
             customConfig: c.custom_component_config && typeof c.custom_component_config === 'object'
               ? c.custom_component_config as Record<string, any>
               : undefined,
+            boCodeFull: boCode,
           }
         })
         if (!modelCode.value) modelCode.value = String(respFD.main_model_code || '')
@@ -1199,6 +1310,41 @@ select.fbp-fp-input { cursor: pointer; }
   color: var(--text-2);
   max-width: 90%;
   line-height: 1.5;
+}
+.fbp-oac-chat-body {
+  flex-direction: column;
+  gap: 8px;
+  overflow-y: auto;
+  max-height: 260px;
+}
+.fbp-oac-msg {
+  border-radius: 10px;
+  padding: 8px 12px;
+  font-size: 12.5px;
+  line-height: 1.5;
+  max-width: 90%;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+.fbp-oac-msg-user {
+  align-self: flex-end;
+  background: var(--ai, #1D89A8);
+  color: #fff;
+}
+.fbp-oac-msg-ai {
+  align-self: flex-start;
+  background: var(--surface-2);
+  color: var(--text-2);
+}
+.fbp-oac-err {
+  font-size: 11.5px;
+  color: var(--err, #dc2626);
+  margin: 4px 0;
+}
+.fbp-oac-live {
+  font-size: 10.5px;
+  color: var(--ok, #16a34a);
+  margin-left: auto;
 }
 .fbp-oac-quick-row {
   display: flex;

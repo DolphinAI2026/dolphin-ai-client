@@ -467,6 +467,124 @@ async def get_form_detail(
     }
 
 
+class CustomWidgetChatBody(BaseModel):
+    """OPENAPI_SSE_CHAT 自开发组件 — 预览交互 chat 请求体."""
+    bo_code: str = Field(..., description="组件 bo_code (定位是哪个自开发组件)")
+    input: str = Field(..., description="用户消息")
+    session_id: Optional[str] = Field(None, description="覆盖 config 里的 sessionId; 空用 config 的")
+
+
+@router.post("/{app_id}/forms/{form_id}/custom-widget/chat")
+async def custom_widget_chat_proxy(
+    app_id: int,
+    form_id: str,
+    body: CustomWidgetChatBody,
+    ctx: Annotated[AuthContext, Depends(get_auth_context)],
+    db: Annotated[AsyncSession, Depends(get_db)],
+):
+    """P2: 自开发组件 OPENAPI_SSE_CHAT 真交互 — backend SSE 代理.
+
+    为什么走 backend 代理 (不前端直连):
+      - authorization bearer token 不下发前端 (前端拿到的 config 已脱敏成 ***)
+      - 规避 dolphin-trial CORS (前端 origin 不在白名单)
+      - 统一鉴权 (本 endpoint 走 ai-builder 自己的 ctx 权限校验)
+
+    流程:
+      1. 校 VIEW 权限 + 拉 RAW form detail (未脱敏, 含真 token)
+      2. 按 bo_code 定位自开发组件 + 取 customComponentConfig
+      3. 转发 POST apiUrl (body {input, sessionId, stream:true}), 透传 SSE
+      4. 逐 chunk re-emit {event:token, data:{text}} 给前端
+
+    2026-05-28 实证 dolphin agentChat OpenAPI 协议:
+      POST {apiUrl}  headers: Authorization + X-Tenant-Id + Content-Type
+      body: {"input": "<msg>", "sessionId": "<sid>", "stream": true}
+      SSE:  data: {"type":"TEXT","id":"...","text":"<token>"}
+    """
+    import httpx
+    from sse_starlette.sse import EventSourceResponse
+    from app.coding.apaas_tools import _get_apaas_client
+
+    app = await _load_app_and_check_view(app_id, ctx, db)
+    if not app.platform_env_id or not app.apaas_app_id:
+        raise HTTPException(status_code=400, detail="应用未部署到 aPaaS 平台")
+    fid = (form_id or "").strip()
+    if not fid:
+        raise HTTPException(status_code=400, detail="form_id 不能为空")
+
+    # ── 拉 RAW form detail (未脱敏) — 直调 apaas_client, 不走脱敏的 MCP 工具 ──
+    try:
+        client = await _get_apaas_client(app.platform_env_id, db)
+        raw = await client.query_detail_page_config(str(app.apaas_app_id), fid)
+    except Exception as exc:  # noqa: BLE001
+        raise HTTPException(status_code=502, detail=f"拉 apaas 表单配置失败: {exc}")
+
+    detail_page = raw.get("detailPage") or {}
+    comps = detail_page.get("formComponents") or raw.get("formComponents") or []
+    target = None
+    for c in comps:
+        if not isinstance(c, dict):
+            continue
+        ct = str(c.get("componentType") or "")
+        if ct.startswith("FORM_CUSTOM_COMPONENT_") and str(c.get("boCode") or "") == body.bo_code:
+            target = c
+            break
+    if not target:
+        raise HTTPException(status_code=404, detail=f"未找到自开发组件 bo_code={body.bo_code}")
+
+    ct = str(target.get("componentType") or "")
+    if ct != "FORM_CUSTOM_COMPONENT_OPENAPI_SSE_CHAT":
+        raise HTTPException(
+            status_code=400,
+            detail=f"组件类型 {ct} 暂不支持预览交互 (目前仅 OPENAPI_SSE_CHAT)",
+        )
+
+    cfg = target.get("customComponentConfig") or {}
+    api_url = str(cfg.get("apiUrl") or "")
+    authorization = str(cfg.get("authorization") or "")
+    tenant_id = str(cfg.get("tenantId") or "default")
+    session_id = body.session_id or str(cfg.get("sessionId") or "")
+    if not api_url or not authorization:
+        raise HTTPException(status_code=400, detail="自开发组件 config 缺 apiUrl / authorization")
+
+    fwd_headers = {
+        "Authorization": authorization,
+        "Content-Type": "application/json",
+        "X-Tenant-Id": tenant_id,
+    }
+    fwd_body = {"input": body.input, "sessionId": session_id, "stream": True}
+
+    async def event_stream():
+        try:
+            async with httpx.AsyncClient(verify=False, timeout=120.0) as h:
+                async with h.stream("POST", api_url, headers=fwd_headers, json=fwd_body) as resp:
+                    if resp.status_code != 200:
+                        err_txt = (await resp.aread()).decode("utf-8", "ignore")[:300]
+                        yield {"event": "error", "data": json.dumps(
+                            {"message": f"上游 HTTP {resp.status_code}: {err_txt}"},
+                            ensure_ascii=False,
+                        )}
+                        return
+                    async for line in resp.aiter_lines():
+                        if not line or not line.startswith("data:"):
+                            continue
+                        payload = line[len("data:"):].strip()
+                        if not payload or payload == "[DONE]":
+                            continue
+                        try:
+                            obj = json.loads(payload)
+                        except (ValueError, TypeError):
+                            continue
+                        text = obj.get("text")
+                        if text:
+                            yield {"event": "token", "data": json.dumps({"text": text}, ensure_ascii=False)}
+        except Exception as exc:  # noqa: BLE001
+            yield {"event": "error", "data": json.dumps({"message": f"代理转发失败: {exc}"}, ensure_ascii=False)}
+        finally:
+            yield {"event": "done", "data": "{}"}
+
+    return EventSourceResponse(event_stream())
+
+
 @router.get("/{app_id}/forms/{form_id}/business-data")
 async def get_form_business_data(
     app_id: int,
