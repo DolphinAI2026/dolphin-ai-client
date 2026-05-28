@@ -102,3 +102,19 @@ async def test_get_prototype_returns_html(db_session):
     res = await proto_mod.get_prototype_record(db_session, app_id=1, prototype_id=proto.id, tenant_id=1)
     assert res["html_content"] == "<html><body>ok</body></html>"
     assert res["version"] == 1
+
+
+@pytest.mark.asyncio
+async def test_get_prototype_returns_404_for_wrong_tenant(db_session):
+    from app.routes.applications import prototype as proto_mod
+    from fastapi import HTTPException
+
+    proto = AppPrototype(app_id=1, tenant_id=1, version=1, html_content="<html><body>x</body></html>")
+    db_session.add(proto)
+    await db_session.commit()
+    await db_session.refresh(proto)
+
+    # tenant_id=2 不该看到 tenant_id=1 的原型
+    with pytest.raises(HTTPException) as exc:
+        await proto_mod.get_prototype_record(db_session, app_id=1, prototype_id=proto.id, tenant_id=2)
+    assert exc.value.status_code == 404

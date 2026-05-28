@@ -8,12 +8,15 @@ from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy import select
 from sqlalchemy import func as sqlfunc
 from sqlalchemy.ext.asyncio import AsyncSession
+from sse_starlette.sse import EventSourceResponse
 
 from app.database import get_db
 from app.deps import get_auth_context, AuthContext
 from app.llm_client import LLMClient
-from app.mcp_spec_sections import read_spec_section
+from app.models import Application
 from app.models.app_prototype import AppPrototype
+from app.mcp_spec_sections import read_spec_section
+from app.permissions import Action, check_resource_permission
 from app.routes.applications._helpers import _resolve_builder_llm_cfg
 from app.routes.applications.spec_chat import _sse
 
@@ -214,6 +217,25 @@ async def get_prototype_record(
 router = APIRouter()
 
 
+async def _load_app_and_check_view(
+    app_id: int,
+    ctx: AuthContext,
+    db: AsyncSession,
+) -> Application:
+    """加载应用 + 检权 (VIEW). 应用不存在或不属于当前租户 → 404."""
+    r = await db.execute(
+        select(Application).where(
+            Application.id == app_id,
+            Application.tenant_id == ctx.tenant_id,
+        )
+    )
+    app = r.scalar_one_or_none()
+    if not app:
+        raise HTTPException(status_code=404, detail="应用不存在")
+    await check_resource_permission(ctx, db, app, "application", Action.VIEW)
+    return app
+
+
 @router.post("/{app_id}/prototype/generate")
 async def generate_prototype(
     app_id: int,
@@ -225,22 +247,7 @@ async def generate_prototype(
     读需求基线 → LLM 流式产出单文件 HTML → 落库 → SSE 吐事件。
     事件序列: started → progress(N 次) → prototype_ready | error
     """
-    from app.models import Application
-    from sqlalchemy import select as _select
-    from app.permissions import Action, check_resource_permission
-    from sse_starlette.sse import EventSourceResponse
-
-    # 校验 app_id 属于当前租户
-    r = await db.execute(
-        _select(Application).where(
-            Application.id == app_id,
-            Application.tenant_id == ctx.tenant_id,
-        )
-    )
-    app = r.scalar_one_or_none()
-    if not app:
-        raise HTTPException(status_code=404, detail="应用不存在")
-    await check_resource_permission(ctx, db, app, "application", Action.VIEW)
+    await _load_app_and_check_view(app_id, ctx, db)
 
     return EventSourceResponse(
         _generate_event_stream(
@@ -264,20 +271,6 @@ async def get_prototype(
     读取已生成的原型 HTML — 前端预览 Tab 用。
     返: {id, version, html_content}
     """
-    from app.models import Application
-    from sqlalchemy import select as _select
-    from app.permissions import Action, check_resource_permission
-
-    # 校验 app_id 属于当前租户
-    r = await db.execute(
-        _select(Application).where(
-            Application.id == app_id,
-            Application.tenant_id == ctx.tenant_id,
-        )
-    )
-    app = r.scalar_one_or_none()
-    if not app:
-        raise HTTPException(status_code=404, detail="应用不存在")
-    await check_resource_permission(ctx, db, app, "application", Action.VIEW)
+    await _load_app_and_check_view(app_id, ctx, db)
 
     return await get_prototype_record(db, app_id=app_id, prototype_id=prototype_id, tenant_id=ctx.tenant_id)
