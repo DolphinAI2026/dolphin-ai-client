@@ -411,6 +411,23 @@ def _remap_model_info_codes(model_info_entries: Dict[str, dict], code_map: Dict[
             info["code"] = code_map[current_code]
 
 
+async def _lazy_model_fields(client: APaaSClient, app_id: str, model_id: str) -> dict:
+    """懒加载单个模型的字段，返回 {"fields":[...]} 形状（喂给 _extract_fields/_extract_field_codes）。
+
+    2026-05-28 性能修复：替代"从 query_models(全量含字段) 结果里取某个模型字段"——
+    query_models 默认会给应用里**每个**模型都并发拉一次字段，建第 N 个模型时重复拉前面
+    所有模型的字段 = O(N²)（实测 112 模型生成打了 1.3 万次 modelField/query，~6.5h）。
+    改成只在真需要的那个 model_id 上单查。查重（模型编码唯一性）逻辑不受影响。
+    """
+    if not model_id:
+        return {"fields": []}
+    try:
+        return {"fields": await client.query_model_fields(app_id, model_id)}
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("懒加载模型字段失败 (model_id=%s): %s", model_id, exc)
+        return {"fields": []}
+
+
 async def execute_create_model(
     client: APaaSClient,
     app_id: str,
@@ -421,8 +438,9 @@ async def execute_create_model(
     """创建单个数据模型（含子表），返回 model_info 条目。"""
     model_info_entries: Dict[str, dict] = {}
 
-    # 检查是否已存在
-    existing_models = await client.query_models(app_id)
+    # 检查是否已存在 —— with_fields=False: 只要模型列表做编码/名称查重，不给每个模型捞字段
+    # （避免 O(N²)）。命中已存在模型后，才按 model_id 懒加载它的字段做字段级去重。
+    existing_models = await client.query_models(app_id, with_fields=False)
     existing_by_name = {m.get("modelName"): m for m in existing_models}
     existing_by_code = {
         str(m.get("modelCode") or "").strip(): m
@@ -434,9 +452,11 @@ async def execute_create_model(
 
     em = existing_by_code.get(mc) or existing_by_name.get(model["name"])
     if em:
-        existing_fields = _extract_fields(em)
-        existing_field_codes = _extract_field_codes(em)
         model_id = em.get("id") or em.get("modelId")
+        # 懒加载命中模型的字段做字段级去重（existing_models 已不含字段，避免 O(N²)）
+        em_fields = await _lazy_model_fields(client, app_id, model_id)
+        existing_fields = _extract_fields(em_fields)
+        existing_field_codes = _extract_field_codes(em_fields)
         model_info_entries[str(model_index)] = {
             "name": model["name"],
             "code": em["modelCode"],
@@ -455,12 +475,10 @@ async def execute_create_model(
             existing_field_codes,
         )
         if added_count:
-            # 刷新字段编码
-            refreshed = await client.query_models(app_id)
-            for rm in refreshed:
-                if rm.get("modelCode") == em["modelCode"]:
-                    model_info_entries[str(model_index)]["fields"] = _extract_fields(rm)
-                    break
+            # 刷新字段编码 — 只查这一个模型（懒加载，避免全量 O(N²)）
+            model_info_entries[str(model_index)]["fields"] = _extract_fields(
+                await _lazy_model_fields(client, app_id, model_id)
+            )
         # 复用子表
         for f in model.get("fields", []):
             if f.get("type") == "子表" and f.get("sub_fields"):
@@ -588,18 +606,20 @@ async def execute_create_model(
                 }
         raise
 
-    # 刷新字段（平台可能追加后缀）
-    refreshed = await client.query_models(app_id)
+    # 刷新字段（平台可能追加后缀）— with_fields=False 找 id, 再按需单查（避免全量 O(N²)）
+    refreshed = await client.query_models(app_id, with_fields=False)
     ref_by_code = {rm.get("modelCode"): rm for rm in refreshed}
     mi = model_info_entries.get(str(model_index))
     if mi and mi["code"] in ref_by_code:
-        mi["fields"] = _extract_fields(ref_by_code[mi["code"]])
+        _mid = ref_by_code[mi["code"]].get("id") or ref_by_code[mi["code"]].get("modelId")
+        mi["fields"] = _extract_fields(await _lazy_model_fields(client, app_id, _mid))
     for f in model.get("fields", []):
         if f.get("type") == "子表":
             sub_key = f"{model_index}_sub_{f['name']}"
             sub_mi = model_info_entries.get(sub_key)
             if sub_mi and sub_mi["code"] in ref_by_code:
-                sub_mi["fields"] = _extract_fields(ref_by_code[sub_mi["code"]])
+                _smid = ref_by_code[sub_mi["code"]].get("id") or ref_by_code[sub_mi["code"]].get("modelId")
+                sub_mi["fields"] = _extract_fields(await _lazy_model_fields(client, app_id, _smid))
 
     return {
         "model_info_entries": model_info_entries,

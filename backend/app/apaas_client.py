@@ -1361,8 +1361,15 @@ class APaaSClient:
                 return result if isinstance(result, list) else []
             return []
 
-    async def query_models(self, app_id: str) -> list:
-        """查询应用下的所有数据模型（含字段）"""
+    async def query_models(self, app_id: str, with_fields: bool = True) -> list:
+        """查询应用下的所有数据模型.
+
+        with_fields=True (默认, 向后兼容): 同时并发拉每个模型的字段.
+        with_fields=False: 只返模型列表 (id/modelCode/modelName), 不给每个模型捞字段 ——
+          用于只需"查重 / 找 model_id"的场景。避免 N 个模型 × 每步都全量捞字段
+          = O(N²) 的 modelField/query 风暴 (实测 112 模型生成打了 1.3 万次冗余查询, ~6.5h)。
+          调用方真需要某个模型的字段时, 自己按 model_id 单独 query_model_fields (懒加载)。
+        """
         ts = self._get_timestamp()
         url = f"{self.base_url}/xdap-app/dataModel/query/list"
         params = {
@@ -1395,27 +1402,32 @@ class APaaSClient:
             if not isinstance(models, list):
                 return []
 
-            # 并发查询每个模型的字段，避免原先串行 await 导致的 N * RTT 累计等待。
-            # 用 Semaphore 限流防止触发平台端速率限制；单个查询失败不影响整批。
-            semaphore = asyncio.Semaphore(QUERY_MODEL_FIELDS_CONCURRENCY)
-
-            async def _fetch_fields(model_id: str) -> list:
-                if not model_id:
-                    return []
-                async with semaphore:
-                    try:
-                        return await self.query_model_fields(app_id, model_id)
-                    except Exception as exc:
-                        logger.warning("query_model_fields 失败 (dataModelId=%s): %s", model_id, exc)
-                        return []
-
             model_ids = [
                 str(model.get("id", model.get("dataModelId", "")) or "").strip()
                 for model in models
             ]
-            fields_by_index = await asyncio.gather(
-                *[_fetch_fields(mid) for mid in model_ids]
-            )
+            if with_fields:
+                # 并发查询每个模型的字段，避免原先串行 await 导致的 N * RTT 累计等待。
+                # 用 Semaphore 限流防止触发平台端速率限制；单个查询失败不影响整批。
+                # ⚠️ O(N²) 警告：仅在真需要全量字段时传 with_fields=True；查重/找 id 用 False。
+                semaphore = asyncio.Semaphore(QUERY_MODEL_FIELDS_CONCURRENCY)
+
+                async def _fetch_fields(model_id: str) -> list:
+                    if not model_id:
+                        return []
+                    async with semaphore:
+                        try:
+                            return await self.query_model_fields(app_id, model_id)
+                        except Exception as exc:
+                            logger.warning("query_model_fields 失败 (dataModelId=%s): %s", model_id, exc)
+                            return []
+
+                fields_by_index = await asyncio.gather(
+                    *[_fetch_fields(mid) for mid in model_ids]
+                )
+            else:
+                # 懒加载模式：不给每个模型捞字段（调用方按需 query_model_fields(model_id)）
+                fields_by_index = [[] for _ in model_ids]
 
             normalized_models = []
             for model, model_id, fields in zip(models, model_ids, fields_by_index):
