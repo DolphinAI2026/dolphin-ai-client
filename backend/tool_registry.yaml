@@ -30,7 +30,7 @@ tools:
     description: "给已有模型加一个字段。"
   attach_dev_packages_to_apaas_app:
     sections: [extension]
-    agents: [coding]
+    agents: [coding, config]
     category: other
     description: "把已上传到 apaas 平台的自开发包（zip）关联到应用的「自开发资源」列表。"
   bind_apaas_form_field_to_dict:
@@ -140,7 +140,7 @@ tools:
     description: "🅳 一键建\"字段值改变 → 自动赋值\"事件 — 用户最高频的\"X 改成 Y 时填 Z\" 场景."
   create_dev_workspace:
     sections: [extension]
-    agents: [coding]
+    agents: [coding, config]
     category: dev_workspace
     description: "在 ai-builder /coding 下创建一个自开发 workspace（脚手架已就位、可以开始写代码）。"
   create_form_event_with_python_code:
@@ -210,7 +210,7 @@ tools:
     description: "打包前置体检 — 不实际跑 mvn，3 秒内出结果。"
   edit_workspace_files:
     sections: [extension]
-    agents: [coding]
+    agents: [coding, config]
     category: dev_workspace
     description: "批量对多个文件做精确字符串替换（vibe_agent.edit_file 的 batch MCP 等价）。"
   enable_apaas_self_dev_config:
@@ -270,7 +270,7 @@ tools:
     description: "拿到某个自开发场景的**完整规范**（关键警示 / 必问参数 / 输出文件清单 / 部署提示）。"
   get_dev_workspace_status:
     sections: [extension]
-    agents: [coding]
+    agents: [coding, config]
     category: dev_workspace
     description: "查询自开发 workspace 的当前状态（文件列表 / build 状态 / 关联对话 / 后台命令）。"
   get_role_resource_matrix:
@@ -280,17 +280,17 @@ tools:
     description: "聚合应用所有角色 × 资源 (页面/数据/流程/应用设置) 的权限矩阵 — design-v4 权限矩阵 view 数据源, matrix 字段当前 mock."
   glob_workspace:
     sections: [extension]
-    agents: [coding]
+    agents: [coding, config]
     category: dev_workspace
     description: "按 glob pattern 列工作区文件（vibe_agent.glob_files 等价）。"
   grep_workspace:
     sections: [extension]
-    agents: [coding]
+    agents: [coding, config]
     category: dev_workspace
     description: "在工作区内 grep 正则搜索（vibe_agent.grep_search 等价）。"
   import_zip_to_workspace:
     sections: [extension]
-    agents: [coding]
+    agents: [coding, config]
     category: dev_workspace
     description: "把外部 zip（base64）解压成新的 Vibe Coding workspace（不绑 aPaaS）。"
   init_apaas_backend_workspace:
@@ -390,7 +390,7 @@ tools:
     description: "列指定 ai-builder 应用的部署历史 (含 deploy / publish / rollback 全周期记录)."
   list_dev_scenes:
     sections: [extension]
-    agents: [coding]
+    agents: [coding, config]
     category: dev_scene
     description: "列出 ai-builder 支持的所有自开发场景类型（首次接到自开发需求时**必调**）。"
   list_my_applications:
@@ -415,7 +415,7 @@ tools:
     description: "把应用上线：同步当前配置到底层 aPaaS 平台，让真实用户可访问。"
   publish_dev_workspace:
     sections: [extension]
-    agents: [coding]
+    agents: [coding, config]
     category: dev_workspace
     description: "把 AI Coding workspace build 产物部署到 aPaaS 平台。"
   query_apaas_business_data:
@@ -430,7 +430,7 @@ tools:
     description: "查应用业务事件分类树 — GET /xdap-app/event/queryTrees."
   read_workspace_file:
     sections: [extension]
-    agents: [coding]
+    agents: [coding, config]
     category: dev_workspace
     description: "读取 workspace 内某个文件（vibe_agent.read_file 的 MCP 等价物）。"
   rename_apaas_menu:
@@ -440,7 +440,7 @@ tools:
     description: "改菜单名 — 普通菜单 / 分组 / 自开发菜单 都用这个."
   republish_apaas_app:
     sections: [global]
-    agents: [coding]
+    agents: [coding, config]
     category: lifecycle
     description: "重新发布 aPaaS 应用版本（自开发变更必须 redeploy 才生效）。"
   rollback_application:
@@ -450,7 +450,7 @@ tools:
     description: "回滚 ai-builder 应用到指定历史部署记录的 SPEC 快照."
   run_workspace_command:
     sections: [extension]
-    agents: [coding]
+    agents: [coding, config]
     category: dev_workspace
     description: "在 workspace 根目录跑 shell 命令（vibe_agent.run_command 等价）。"
   save_apaas_business_event:
@@ -465,7 +465,7 @@ tools:
     description: "把刚做完的一类操作存成 skill。下次用户说类似话，AI 能直接 follow 这个 skill 不用从零摸索。"
   save_dev_spec:
     sections: [extension]
-    agents: [coding]
+    agents: [coding, config]
     category: dev_workspace
     description: "Phase 1 必调：落盘双产物（技术 SPEC + 业务可视 HTML mockup）到 workspace。"
   set_apaas_app_access:
@@ -600,6 +600,6 @@ tools:
     description: "把文本完整写入 Vibe Coding workspace 内某个文件（覆盖式）。目录不存在自动建。"
   write_workspace_files:
     sections: [extension]
-    agents: [coding]
+    agents: [coding, config]
     category: dev_workspace
     description: "批量写入多个文件到 workspace（一次 RPC 解决 30+ 文件场景）。"

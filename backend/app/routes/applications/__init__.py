@@ -2410,9 +2410,9 @@ _CONFIG_CHAT_SECTION_HINTS: dict[str, str] = {
     ),
     "extension": (
         "## 用户当前焦点：🧩 扩展 section\n"
-        "用户当前在「扩展」section 看自开发组件 / 自开发代码节点 / 平台资源. 这块在 ai-builder 内不直接操作 —\n"
-        "用户要扩展开发需跳走 ai-coding 或平台资源管理页. 此 section 下用户更可能问\"哪些扩展可用 / 怎么开发\"\n"
-        "而不是\"帮我改个字段\". 优先工具: list_application_dev_kits (查应用关联扩展) / list_workspaces (查可用 ai-coding 工作空间).\n"
+        "用户当前在「扩展」section 看自开发组件 / 自开发整页 / 平台资源. **你能在这里一条龙做自开发整页**\n"
+        "(建工作区 → 写 Vue 组件 → npm build → publish → 挂菜单), 详见下方「自开发整页 SOP」. 别再把用户支走 ai-coding.\n"
+        "优先工具: list_dev_scenes / create_dev_workspace / write_workspace_files / run_workspace_command / publish_dev_workspace / create_apaas_self_dev_menu.\n"
         "若用户问改字段 / 改菜单 / 改流程 / 改权限, 直接调对应工具 — 不要拦. 仅在歧义时反问.\n\n"
     ),
 }
@@ -3025,7 +3025,19 @@ async def _config_chat_event_stream(
             "- 真有歧义才问，少而精\n\n"
             "### 返回格式\n"
             "- 做了实际变更后（调了 update_*/create_*/delete_* 类工具且 ok=true），**在回复末尾**给 ```json 块带 summary + actions, **actions.type 必须是真工具名** (update_field / create_role / add_dict_option 等), 不要是 read/design 这种「建议型」占位\n"
-            "- 只读问答（「列出当前菜单」）/ 浏览方案（「加自开发页面」但你只 browse 没真操作）**不要给 json 块** — 给 json 但没真做事会让前端误以为有 ChangePlan 可应用, 这是反模式\n\n"
+            "- 只读问答（「列出当前菜单」）**不要给 json 块** — 给 json 但没真做事会让前端误以为有 ChangePlan 可应用, 这是反模式\n\n"
+            "## 自开发整页 (CUSTOM 自开发页面) SOP ⭐ (2026-05-28 解锁: 你能一条龙做完, 别再把用户支走 ai-coding)\n\n"
+            "用户要\"自开发页面 / 自定义 Vue 页 / 看板 / 大屏 / 自开发组件\"(标准表单/列表满足不了的整页) 时, 走这条链:\n"
+            "1. 对齐需求 (页面长啥样 / 要什么数据), 复杂的先给 plan.\n"
+            "2. `list_dev_scenes` 选前端整页 scene → `create_dev_workspace(scene_type, project_name, display_name)` 拿 ws_id.\n"
+            "   **project_name 必须 kebab-case 且形如 `form-page-<X>`** (如 form-page-task-kanban).\n"
+            "3. `write_workspace_files` 写 Vue 组件源码 (脚手架已就位, 改 src/). 组件 install 注册名用 `apaas-custom-<X>` (跟 project_name 的 <X> 一致).\n"
+            "4. `run_workspace_command(ws_id, 'npm run build')` 构建. **构建慢 (可能几分钟)**: 工具早返/未完成时用 `get_dev_workspace_status(ws_id)` 轮询到 ready 再下一步, 同时告诉用户\"正在构建, 稍候\".\n"
+            "5. `publish_dev_workspace(ws_id, env_id)` 把产物 build+发布到 apaas (产出 `form-page-<X>.umd.js`).\n"
+            "6. `create_apaas_self_dev_menu(..., link_url='apaas-custom-<X>')` 挂菜单 (link_url = 第 3 步的组件注册名).\n\n"
+            "**命名铁律 (错一处就 404)**: workspace `form-page-<X>` ↔ 组件注册名 `apaas-custom-<X>` ↔ 菜单 link_url `apaas-custom-<X>`, 三者 <X> 必须一致 — 平台按 link_url 去 `/app/.../form-page-<X>/form-page-<X>.umd.js` 加载.\n"
+            "**❌ 绝不能只调 create_apaas_self_dev_menu 建空壳菜单就收工** — 那样菜单指向一个从没 build 出来的 umd.js, 用户一打开就是\"组件包加载失败 404\". 必须 build+publish 出组件 (第 2-5 步) 菜单才真能用.\n"
+            "已有 CUSTOM 菜单但报 404 → 就是组件没 build/publish: 用第 2-5 步补上, project_name 的 <X> 对齐已有菜单 link_url 的 <X>.\n\n"
             "## ⚠️ 浏览器操作铁律 — frame 级精确路由 (2026-05-25 升级)\n\n"
             "用户在 `localhost:5173/ai-builder/chat?app_id=N` ChatPage tab 里看着一个 iframe, iframe src 是\n"
             "`/api/platform-proxy/entry?...`, 会重定向到 `/platform/<tid>/admin/app-store/edit-app?appId=...`.\n\n"
