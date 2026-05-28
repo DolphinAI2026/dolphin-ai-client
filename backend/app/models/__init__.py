@@ -292,6 +292,11 @@ class Application(Base):
     git_repo_url: Mapped[Optional[str]] = mapped_column(String(500), nullable=True)
     git_provider: Mapped[Optional[str]] = mapped_column(String(20), nullable=True)  # 'gitlab' | 'github'
     git_default_branch: Mapped[Optional[str]] = mapped_column(String(100), nullable=True)
+    # 应用类型: low-code (ai-builder/SPEC 生成) | ai-code (vibe-coding 全代码生成)
+    # server_default 让加列时现有行自动填 low-code
+    app_type: Mapped[str] = mapped_column(String(20), default="low-code", server_default="low-code", nullable=False)
+    # ai-code 应用关联的 vibe coding workspace id（low-code 应用为空）
+    source_workspace_id: Mapped[Optional[str]] = mapped_column(String(60), nullable=True, index=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, nullable=False)
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False)
 
