@@ -59,6 +59,8 @@ class VibeCodingThread(Base):
     todos: Mapped[Optional[list]] = mapped_column(JSON, nullable=True)
     # 需求基线（agent 用 requirement_write 维护）：{roles,features,flows,external,ai_points,acceptance} 各 string[]
     requirement_baseline: Mapped[Optional[dict]] = mapped_column(JSON, nullable=True)
+    # ⑧ 可观测：累计 token 用量 {prompt_tokens, completion_tokens, total_tokens, estimated}
+    token_usage: Mapped[Optional[dict]] = mapped_column(JSON, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, nullable=False)
     updated_at: Mapped[datetime] = mapped_column(
         DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False

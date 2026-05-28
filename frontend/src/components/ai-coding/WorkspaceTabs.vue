@@ -12,6 +12,7 @@
       <ProgressTab v-else-if="active === 'progress'" :workspace-id="workspaceId" />
       <RuntimePreviewTab v-else-if="active === 'preview'" :workspace-id="workspaceId" />
       <OutputTab v-else-if="active === 'output'" :workspace-id="workspaceId" />
+      <ObservabilityTab v-else-if="active === 'observe'" :workspace-id="workspaceId" />
       <div v-else class="wt-placeholder">「{{ activeLabel }}」建设中（后续切片接入）</div>
     </div>
   </div>
@@ -23,6 +24,7 @@ import RequirementTab from './RequirementTab.vue'
 import ProgressTab from './ProgressTab.vue'
 import RuntimePreviewTab from './RuntimePreviewTab.vue'
 import OutputTab from './OutputTab.vue'
+import ObservabilityTab from './ObservabilityTab.vue'
 
 defineProps<{ workspaceId: string }>()
 const tabs = [

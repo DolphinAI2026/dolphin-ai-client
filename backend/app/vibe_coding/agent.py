@@ -91,9 +91,13 @@ async def _call_llm_stream(
         "temperature": DEFAULT_TEMPERATURE,
         "max_tokens": cfg.max_tokens,
         "stream": True,
+        # ⑧ 可观测：请求流式 usage（最后一个 chunk 带 token 用量）。标准 OpenAI 字段，
+        # 多数兼容网关支持/忽略；若某网关严格报错，删此行即可（estimation 兜底仍在）。
+        "stream_options": {"include_usage": True},
     }
     url = build_chat_completions_url(cfg.base_url)
     accumulated = ""
+    usage: Optional[dict] = None
     tool_buf: dict[int, dict] = {}
 
     async with httpx.AsyncClient(timeout=httpx.Timeout(connect=10, read=timeout, write=10, pool=10)) as client:
@@ -129,6 +133,9 @@ async def _call_llm_stream(
                     chunk = json.loads(data)
                 except Exception:
                     continue
+                # ⑧ usage chunk 通常 choices 为空、单独带 usage —— 在 skip 之前抓住
+                if chunk.get("usage"):
+                    usage = chunk["usage"]
                 choices = chunk.get("choices") or []
                 if not choices:
                     continue
@@ -164,6 +171,7 @@ async def _call_llm_stream(
             "content": accumulated,
             "tool_calls": final_tool_calls if final_tool_calls else None,
         },
+        "usage": usage,
     }
 
 
@@ -318,6 +326,7 @@ async def run_agent(
             return
 
         assistant_msg: Optional[dict] = None
+        turn_usage: Optional[dict] = None
         try:
             async for chunk in _call_llm_stream(cfg, messages, abort_event):
                 if chunk["type"] == "content_delta":
@@ -330,6 +339,7 @@ async def run_agent(
                     })
                 elif chunk["type"] == "done":
                     assistant_msg = chunk["message"]
+                    turn_usage = chunk.get("usage")
             if assistant_msg is None:
                 yield _sse("aborted", {"turn": turn})
                 yield _sse("done", {"ok": False, "aborted": True})
@@ -362,6 +372,24 @@ async def run_agent(
             "content": content,
             "tool_calls": tool_calls if tool_calls else None,
         })
+
+        # ⑧ 可观测：累加本轮 token 用量到 thread（gateway 不回 usage 时按字符数 /4 粗估，标 estimated）
+        _prev_tu = thread.token_usage or {}
+        if turn_usage and isinstance(turn_usage, dict):
+            _pt = int(turn_usage.get("prompt_tokens") or 0)
+            _ct = int(turn_usage.get("completion_tokens") or 0)
+            _est = bool(_prev_tu.get("estimated"))
+        else:
+            _pt = sum(len(str(m.get("content") or "")) for m in messages) // 4
+            _ct = len(content) // 4
+            _est = True
+        thread.token_usage = {
+            "prompt_tokens": int(_prev_tu.get("prompt_tokens") or 0) + _pt,
+            "completion_tokens": int(_prev_tu.get("completion_tokens") or 0) + _ct,
+            "total_tokens": int(_prev_tu.get("total_tokens") or 0) + _pt + _ct,
+            "estimated": bool(_prev_tu.get("estimated")) or _est,
+        }
+        await db.commit()
 
         if not tool_calls:
             # 终态：写库 final assistant 消息

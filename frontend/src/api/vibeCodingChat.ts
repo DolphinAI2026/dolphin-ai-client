@@ -17,6 +17,7 @@ export interface VibeChatThread {
     roles: string[]; features: string[]; flows: string[]
     external: string[]; ai_points: string[]; acceptance: string[]
   }
+  token_usage?: { prompt_tokens: number; completion_tokens: number; total_tokens: number; estimated?: boolean }
   created_at: string | null
   updated_at: string | null
 }

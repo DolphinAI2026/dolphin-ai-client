@@ -95,6 +95,9 @@ def _thread_to_dict(t: VibeCodingThread) -> dict:
             "roles": [], "features": [], "flows": [],
             "external": [], "ai_points": [], "acceptance": [],
         },
+        "token_usage": t.token_usage or {
+            "prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0, "estimated": False,
+        },
         "created_at": t.created_at.isoformat() if t.created_at else None,
         "updated_at": t.updated_at.isoformat() if t.updated_at else None,
     }
