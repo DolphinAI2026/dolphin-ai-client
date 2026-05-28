@@ -148,8 +148,9 @@
         <span class="sdp-nav-expand-text">章节</span>
       </button>
 
-      <!-- LEFT: chapter nav -->
-      <nav v-show="!navCollapsed" class="sdp-nav-pane" aria-label="章节导航">
+      <!-- LEFT: chapter nav — 收起时靠 grid track 0 + overflow hidden 收窄,
+           不能用 v-show (display:none 会让 grid 重排把正文挤成 0 宽) -->
+      <nav class="sdp-nav-pane" aria-label="章节导航">
         <div class="sdp-nav-head">
           <span class="sdp-nav-head-title">章节导航</span>
           <button
@@ -2010,6 +2011,12 @@ watch(
   border-right: 1px solid var(--line);
   overflow-y: auto;
   padding: 0 0 12px;
+  min-width: 0;  /* 允许被 grid track 0 收到 0 宽 (默认 min-width:auto 会撑住内容) */
+}
+/* 收起态: track 已是 0, 再 overflow hidden 把内容裁掉 + 去边框 */
+.sdp-shell.nav-collapsed .sdp-nav-pane {
+  overflow: hidden;
+  border-right: none;
 }
 /* nav 头 — 标题 + 收起按钮 */
 .sdp-nav-head {
