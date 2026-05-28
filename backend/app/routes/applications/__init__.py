@@ -831,6 +831,68 @@ class AutoCreateResponse(BaseModel):
     platform_env_name: Optional[str] = None
 
 
+def _extract_preview_data(config_preview) -> dict:
+    """从 application.config_preview (str / dict) 取出 data 部分 (取不到返 {})。"""
+    import json as _json
+    raw = config_preview
+    if isinstance(raw, str):
+        try:
+            raw = _json.loads(raw)
+        except Exception:  # noqa: BLE001
+            return {}
+    if not isinstance(raw, dict):
+        return {}
+    d = raw.get("data", raw)
+    return d if isinstance(d, dict) else {}
+
+
+def _merge_preview_data(old: dict, new: dict) -> dict:
+    """按 code 并集合并两份 preview.data 的列表资源 (模型/表单/角色/字典/权限)。
+
+    2026-05-28 增量建应用用: 同一 app_code 重复 generate 时, 把新批次合并进已有应用,
+    而不是覆盖/新建。new 覆盖同 code 的项 (取最新定义), old 独有的保留。appName/appCode
+    等标量取 new。
+    """
+    if not isinstance(new, dict):
+        return old if isinstance(old, dict) else {}
+    if not isinstance(old, dict) or not old:
+        return new
+    merged = dict(new)
+
+    def _key(item, keyfields):
+        if not isinstance(item, dict):
+            return None
+        for kf in keyfields:
+            v = item.get(kf)
+            if v:
+                return str(v).strip().lower()
+        # 权限等无 code: 用 (表单 + 角色) 兜底
+        fk = item.get("formCode") or item.get("formName") or item.get("form")
+        rk = item.get("roleCode") or item.get("role")
+        if fk or rk:
+            return f"{fk}|{rk}".lower()
+        return None
+
+    for field, keyfields in (
+        ("models", ("code", "modelCode")),
+        ("forms", ("code", "formCode")),
+        ("roles", ("code", "roleCode")),
+        ("dicts", ("code", "dictCode")),
+        ("permissions", ("code",)),
+    ):
+        old_list = old.get(field) if isinstance(old.get(field), list) else []
+        new_list = new.get(field) if isinstance(new.get(field), list) else []
+        by_key: dict = {}
+        order: list = []
+        for i, item in enumerate(list(old_list) + list(new_list)):
+            k = _key(item, keyfields) or f"__pos_{field}_{i}"
+            if k not in by_key:
+                order.append(k)
+            by_key[k] = item  # new 后写, 覆盖同 key 的 old
+        merged[field] = [by_key[k] for k in order]
+    return merged
+
+
 @router.post("/auto-create", response_model=AutoCreateResponse)
 async def auto_create_application(
     data: AutoCreateRequest,
@@ -911,10 +973,6 @@ async def auto_create_application(
             minimum_role="member",
         )
 
-    # 租户应用数配额（auto-create 走到这里说明确认要新建）
-    from app.tenant_quota import assert_tenant_quota
-    await assert_tenant_quota(db, ctx.tenant_id, "applications")
-
     # 生成 app_code：优先使用解析文档中的 appCode
     import hashlib
     preview_data = data.config_preview.get("data", data.config_preview) if isinstance(data.config_preview, dict) else {}
@@ -957,54 +1015,58 @@ async def auto_create_application(
         if env_obj:
             resolved_env_id = env_obj.id
 
-    # 🛡️ 2026-05-15 防 retry storm：外部 agent 通过 MCP 工具
-    # generate_app_from_doc 调本 endpoint 时不传 conversation_id（工具源码 v2
-    # mcp_server.py:1978 create_body 没该字段），撞失败后 LLM gateway 自动
-    # retry → 每次都进 INSERT 新行 — 实测一次 4 分钟内 13 行 dcs-service 失败
-    # 占位。这里按 (tenant_id, app_code) 在 5 分钟窗口内复用最近一条 failed/draft
-    # apaas_app_id 为空的占位行。conversation_id 模式不受影响（上面已 return）。
+    # 🔑 2026-05-28 appCode = 应用身份: 同租户同 app_code 已存在 → 复用同一应用 + 增量合并,
+    # 绝不建重复应用。修"大文档拆批 → 第二批同 appCode 撞'编码重复' → agent 加 -v1 →
+    # 建出 inn-idm / inn-idm-v1 多个残缺应用乱套"(用户实测)。apaas appCode 本就唯一, 同 code
+    # = 同一个应用 —— 不论状态/时间/有无 apaas_app_id 都复用 (保留 apaas_app_id 让 step
+    # executor 增量补缺失模型/表单, 而不是新建)。也顺带覆盖了 2026-05-15 的 retry-storm 去重。
+    # conversation_id 模式上面已 return, 不进这。
     if not data.conversation_id:
-        from datetime import datetime, timedelta
-        dedup_cutoff = datetime.utcnow() - timedelta(minutes=5)
-        recent = await db.execute(
+        existing_q = await db.execute(
             select(Application).where(
                 Application.tenant_id == ctx.tenant_id,
                 Application.app_code == ascii_code,
-                Application.status.in_(("draft", "failed")),
-                Application.apaas_app_id.is_(None),
-                Application.created_at > dedup_cutoff,
             ).order_by(Application.id.desc()).limit(1)
         )
-        existing_failed = recent.scalar_one_or_none()
-        if existing_failed:
-            existing_failed.app_name = data.app_name
-            existing_failed.config_preview = config_str
+        existing_app = existing_q.scalar_one_or_none()
+        if existing_app:
+            # 增量合并 config (按 code 并集模型/表单/角色/字典/权限), 保留 apaas_app_id
+            try:
+                merged_data = _merge_preview_data(
+                    _extract_preview_data(existing_app.config_preview), preview_data
+                )
+                existing_app.config_preview = _dump_preview_config({"type": "preview", "data": merged_data})
+            except Exception as merge_exc:  # noqa: BLE001
+                logger.warning("auto-create appCode 复用: 合并 config 失败, 退回用新 config: %s", merge_exc)
+                existing_app.config_preview = config_str
+            existing_app.app_name = data.app_name or existing_app.app_name
             if resolved_env_id:
-                existing_failed.platform_env_id = resolved_env_id
-            existing_failed.status = "draft"  # 重置让上游继续走部署链路
+                existing_app.platform_env_id = resolved_env_id
+            existing_app.status = "draft"  # 复跑部署链路, step executor 增量补缺失模型/表单
             await db.commit()
             logger.info(
-                "auto-create dedup: reusing app_id=%s (app_code=%s, prior_status=%s, "
-                "created_at=%s) — anti retry-storm 2026-05-15",
-                existing_failed.id, ascii_code,
-                existing_failed.status, existing_failed.created_at,
+                "auto-create appCode 复用: app_id=%s app_code=%s (复用同一应用 + 增量合并, 不新建)",
+                existing_app.id, ascii_code,
             )
-            new_env_name_d = None
+            reuse_env_name = None
             if resolved_env_id:
-                env_q_d = await db.execute(
-                    select(PlatformEnv).where(PlatformEnv.id == resolved_env_id)
-                )
-                env_obj_d = env_q_d.scalar_one_or_none()
-                if env_obj_d:
-                    new_env_name_d = env_obj_d.env_name
+                eq = await db.execute(select(PlatformEnv).where(PlatformEnv.id == resolved_env_id))
+                eo = eq.scalar_one_or_none()
+                if eo:
+                    reuse_env_name = eo.env_name
             return AutoCreateResponse(
-                app_id=existing_failed.id,
-                app_name=existing_failed.app_name,
-                app_code=existing_failed.app_code,
+                app_id=existing_app.id,
+                app_name=existing_app.app_name,
+                app_code=existing_app.app_code,
                 is_new=False,
                 platform_env_id=resolved_env_id,
-                platform_env_name=new_env_name_d,
+                platform_env_name=reuse_env_name,
             )
+
+    # 租户应用数配额: 仅真正新建时校验 (上面 appCode 复用/conversation 复用都已 return,
+    # 复用同一应用不应再撞配额 —— 否则"满配额租户改不了已有应用"反直觉)。
+    from app.tenant_quota import assert_tenant_quota
+    await assert_tenant_quota(db, ctx.tenant_id, "applications")
 
     app = Application(
         user_id=ctx.user.id,
@@ -2235,25 +2297,34 @@ async def deploy_from_artifact(
         if env_obj:
             resolved_env_id = env_obj.id
 
-    # 5. 复用同租户 + 同 app_code 的 draft / failed 占位行（防 retry storm）
-    from datetime import datetime as _dt, timedelta
-    dedup_cutoff = _dt.utcnow() - timedelta(minutes=5)
+    # 5. 🔑 2026-05-28 appCode = 应用身份: 同租户同 app_code 已存在 → 复用同一应用 + 增量合并 config,
+    #    绝不建重复应用。修"大文档拆批 → 第二批同 appCode 撞'编码重复' → agent 加 -v1 →
+    #    inn-idm / inn-idm-v1 多个残缺应用乱套"(用户实测)。apaas appCode 本就唯一, 同 code =
+    #    同一个应用 —— 不论状态/时间/有无 apaas_app_id 都复用 (保留 apaas_app_id 让 generate
+    #    pipeline 增量补缺失模型/表单, 而非新建)。顺带覆盖了原 retry-storm 去重 (5min 窗口)。
     config_str = _dump_preview_config(parsed)
     reused = (
         await db.execute(
             select(Application).where(
                 Application.tenant_id == ctx.tenant_id,
                 Application.app_code == ascii_code,
-                Application.status.in_(("draft", "failed", "generating")),
-                Application.apaas_app_id.is_(None),
-                Application.created_at > dedup_cutoff,
             ).order_by(Application.id.desc()).limit(1)
         )
     ).scalar_one_or_none()
 
     if reused:
-        reused.app_name = app_name
-        reused.config_preview = config_str
+        # 增量合并 config (按 code 并集模型/表单/角色/字典/权限), 保留 apaas_app_id
+        try:
+            merged_data = _merge_preview_data(
+                _extract_preview_data(reused.config_preview), preview_data
+            )
+            reused.config_preview = _dump_preview_config({"type": "preview", "data": merged_data})
+        except Exception as merge_exc:  # noqa: BLE001
+            logger.warning(
+                "deploy-from-artifact appCode 复用: 合并 config 失败, 退回新 config: %s", merge_exc
+            )
+            reused.config_preview = config_str
+        reused.app_name = app_name or reused.app_name
         reused.requirement_doc = art.content
         if resolved_env_id:
             reused.platform_env_id = resolved_env_id
@@ -2262,8 +2333,12 @@ async def deploy_from_artifact(
         await db.commit()
         await db.refresh(reused)
         app = reused
+        logger.info(
+            "deploy-from-artifact appCode 复用: app_id=%s app_code=%s (复用同一应用 + 增量合并, 不新建)",
+            app.id, ascii_code,
+        )
     else:
-        # 6. 租户应用配额
+        # 6. 租户应用配额 (仅真正新建时校验; 复用同一应用不撞配额)
         from app.tenant_quota import assert_tenant_quota
         await assert_tenant_quota(db, ctx.tenant_id, "applications")
 
