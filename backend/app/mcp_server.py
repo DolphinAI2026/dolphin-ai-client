@@ -6274,8 +6274,18 @@ async def set_apaas_app_process(
     process_name: str,
     process_code: str,
     stages: list,
+    append: bool = False,
+    replace_existing: bool = False,
 ) -> dict:
     """给某个表单菜单设置审批流程 (用 /common/resource/processConfig 管理 API).
+
+    ⚠️ 2026-05-28 防"加节点变成冲掉原节点": 本工具是覆盖式, 但"在已有流程上加一个审批节点"
+    很容易被误用成 stages=[新节点] → 把原有审批节点全冲掉 (实测: 给"还书"流程加 AAAA,
+    原"管理员审批"没了)。现在的保护:
+      - 该表单**已有**审批流程时, 默认**拒绝**静默覆盖, 返回 PROCESS_EXISTS + 现有节点清单。
+      - append=True  → 现有审批节点 + 你传的 stages (在末尾追加)。**加节点就用这个。**
+      - replace_existing=True → 用你传的 stages 整条替换 (显式确认要覆盖)。
+      - 首次创建 (无现有流程) → 直接按 stages 建, 不受影响。
 
     ⚠️ 2026-05-25 修: 老版调 /xdap-app/process/save/processConfig (BPMN XML), 实测
     返 ok=true 但 平台 UI 流程设计页空白 — 那是个不同的 process 存储, 现代 UI 不读.
@@ -6399,6 +6409,60 @@ async def set_apaas_app_process(
             "approver_value": role_id,
             "approver_label": role_label or "审批人",
         })
+
+    # 2026-05-28 防覆盖丢节点: 先拉该表单现有流程的审批节点 (apaas node.data.approvers
+    # 带 type/value=role_id, 可还原成 stage)。已有节点时按 append/replace_existing 决定,
+    # 都没传则拒绝静默覆盖, 把现有节点摆出来逼调用方明确选择。
+    existing_swr: list = []
+    try:
+        ok_list, procs_list = await _with_client(
+            env_id, "查现有流程", lambda c: c.list_processes(apaas_app_id.strip()))
+        if ok_list and isinstance(procs_list, list):
+            for pr in procs_list:
+                if not isinstance(pr, dict):
+                    continue
+                if str(pr.get("formId") or "") != form_id and str(pr.get("menuId") or "") != menu_id.strip():
+                    continue
+                ap_nodes = [
+                    n for n in (pr.get("nodes") or [])
+                    if isinstance(n, dict) and (n.get("data") or {}).get("type") == "APPROVE"
+                ]
+                ap_nodes.sort(key=lambda n: (float(n.get("y") or 0), float(n.get("x") or 0)))
+                for n in ap_nodes:
+                    d = n.get("data") or {}
+                    apv = (d.get("approvers") or [{}])
+                    apv0 = apv[0] if isinstance(apv, list) and apv else {}
+                    atype = str(apv0.get("type") or "ROLE").upper()
+                    aval = str(apv0.get("value") or "")
+                    title = str(d.get("title") or "审批")
+                    if atype == "SUBMITTER":
+                        existing_swr.append({"name": title, "approver_type": "SUBMITTER", "approver_value": "SUBMITTER", "approver_label": "申请人"})
+                    elif aval:
+                        existing_swr.append({"name": title, "approver_type": "ROLE", "approver_value": aval, "approver_label": role_by_id.get(aval, {}).get("name") or title})
+                break  # 一个表单最多一条流程
+    except Exception as exc:  # noqa: BLE001 — 读现有流程失败按"无现有"处理, 不挡新建
+        logger.warning("set_apaas_app_process: 读现有流程失败 (按无现有处理): %s", exc)
+
+    if existing_swr:
+        if append:
+            stages_with_role = existing_swr + stages_with_role
+        elif replace_existing:
+            pass  # 显式整条替换
+        else:
+            return {
+                "ok": False,
+                "error_code": "PROCESS_EXISTS",
+                "message": (
+                    f"该表单已有审批流程 (含 {len(existing_swr)} 个审批节点: "
+                    f"{[s['name'] for s in existing_swr]})。set 是覆盖式, 直接保存会把它们冲掉。"
+                    f"→ 要在末尾**加节点**: 重调本工具并传 append=True; 要**整条替换**: 传 replace_existing=True; "
+                    f"或自己在 stages 里带上要保留的节点。"
+                ),
+                "existing_stages": [
+                    {"name": s["name"], "approver_type": s["approver_type"], "approver_value": s["approver_value"]}
+                    for s in existing_swr
+                ],
+            }
 
     # 用 capture 实证 schema 构建 payload (BPMN nodes/edges + 10 button + voteConfig 等)
     payload = _build_process_payload_v2(
