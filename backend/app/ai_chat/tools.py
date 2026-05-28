@@ -108,6 +108,36 @@ TOOL_SCHEMAS: list[dict] = [
     {
         "type": "function",
         "function": {
+            "name": "create_artifact_from_attachment",
+            "description": (
+                "把用户上传的【本身已是结构化设计文档】的附件，原样全文转成设计文档 artifact"
+                "（服务端直接复制：不截断、不摘要、不改写），返回 artifact 供 "
+                "generate_app_from_doc 使用。"
+                "★超大文档（几十上百个模型/表单）必须用本工具——绝不要 read_attachment 读一遍再 "
+                "write_artifact 重抄一遍：read_attachment 会在 3 万字处截断，write_artifact 又受输出长度限制，"
+                "整篇会被你无意识地摘要/漏掉，导致只建出残缺应用。"
+                "本工具把整篇（哪怕 30 万字、132 个模型）一字不差落进 artifact，generate 时由确定性解析器解析全篇。"
+                "仅当附件是粗略需求 / PRD 散文、需要你转写成标准 6 章格式时，才改用 read_attachment + write_artifact。"
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "filename": {
+                        "type": "string",
+                        "description": "附件文件名（与上传时一致）",
+                    },
+                    "artifact_filename": {
+                        "type": "string",
+                        "description": "可选；产出物文件名（默认用附件名改成 .md）",
+                    },
+                },
+                "required": ["filename"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
             "name": "ask_clarifying_question",
             "description": (
                 "向用户提一个澄清问题，并提供候选答案。"
@@ -293,6 +323,55 @@ async def execute_write_artifact(
     return (
         f"已写入产出物 '{filename}' (v{new_version}, {len(content)} 字符)。"
         f"用户已能在右侧面板查看。{validation_note}"
+    )
+
+
+async def execute_create_artifact_from_attachment(
+    args: dict, session: AIChatSession, db: AsyncSession
+) -> str:
+    """把用户上传的附件【原样全文】转成设计文档 artifact（不截断/不摘要/不改写）。
+
+    2026-05-29 修"超大附件喂不进 generate"：用户上传含 132 模型 / 42 表单的 33 万字
+    标准设计文档时，老路径 read_attachment(截断 3 万字) + write_artifact(LLM 重抄, 受
+    输出长度限) 会把整篇摘要/漏掉 → 只建出残缺应用 + 反复撞 appCode。本工具服务端直接把
+    attachment.content_text 整篇复制进 artifact，generate_app_from_doc 用确定性解析器
+    (doc_pipeline.parse_document) 解析全篇 —— 实测同一份文档可完整还原 132 模型 / 42 表单。
+    """
+    filename = args.get("filename", "").strip()
+    if not filename:
+        return "错误：缺少 filename 参数"
+
+    res = await db.execute(
+        select(AIChatAttachment).where(
+            AIChatAttachment.session_id == session.id,
+            AIChatAttachment.filename == filename,
+        )
+    )
+    att = res.scalar_one_or_none()
+    if not att:
+        return f"错误：本会话不存在名为 '{filename}' 的附件"
+    if att.kind == "image":
+        return f"错误：'{filename}' 是图片附件，不能转设计文档"
+    content = att.content_text or ""
+    if not content.strip():
+        return f"错误：'{filename}' 解析为空，无法转 artifact"
+
+    # 产出物文件名：优先参数，否则把附件名改成 .md
+    art_name = (args.get("artifact_filename") or "").strip()
+    if not art_name:
+        art_name = os.path.splitext(filename)[0] + ".md"
+    elif not art_name.lower().endswith(".md"):
+        art_name = art_name + ".md"
+
+    # 复用 write_artifact 落库（版本管理 + 右栏展示 + 轻量 Builder 校验），content 是整篇原文
+    note = await execute_write_artifact(
+        {"filename": art_name, "content": content, "format": "md"}, session, db
+    )
+    return (
+        f"已把附件《{filename}》整篇原样写入设计文档 artifact '{art_name}'"
+        f"（{len(content)} 字符，未截断/未改写）。"
+        f"下一步直接 generate_app_from_doc 创建应用即可——整篇会被确定性解析，"
+        f"**不要**自己分批 / 摘要 / 重写文档。{note}"
     )
 
 
@@ -1185,6 +1264,7 @@ TOOL_HANDLERS = {
     "read_attachment": execute_read_attachment,
     "run_python": execute_run_python,
     "write_artifact": execute_write_artifact,
+    "create_artifact_from_attachment": execute_create_artifact_from_attachment,
     "ask_clarifying_question": execute_ask_clarifying_question,
     "export_apaas_app_design_doc": execute_export_apaas_app_design_doc,
 }
