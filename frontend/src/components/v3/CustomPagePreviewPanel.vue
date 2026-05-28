@@ -35,7 +35,7 @@
 
         <div class="cpp-actions">
           <button type="button" class="cpp-cta cpp-cta-primary" @click="onOpenInApaas">
-            <span>🚀</span> 在 apaas 打开真应用
+            <span>🚀</span> 在 apaas 平台打开
           </button>
           <button type="button" class="cpp-cta cpp-cta-ghost" @click="onGoToCoding">
             <span>💻</span> 去 IDE 改源码
@@ -43,8 +43,8 @@
         </div>
 
         <p class="cpp-hint">
-          “在 apaas 打开真应用” 会新开标签跳到平台运行态 (需应用已部署); “去 IDE
-          改源码” 进 Vibe Coding 改这个组件的 Vue / TS 源码.
+          “在 apaas 平台打开” 新开标签进该应用的平台页, 从菜单进这个自开发页看运行
+          效果; “去 IDE 改源码” 进 Vibe Coding 改这个组件的 Vue / TS 源码.
         </p>
       </div>
     </div>
@@ -54,7 +54,7 @@
 <script setup lang="ts">
 import { useRouter } from 'vue-router'
 import { useUserStore } from '@/stores/user'
-import { buildPlatformProxyMenuUrl } from '@/utils/platformIframe'
+import { buildPlatformProxyEntryUrl } from '@/utils/platformIframe'
 
 const props = defineProps<{
   appId: number
@@ -73,13 +73,11 @@ function onGoToCoding() {
 
 function onOpenInApaas() {
   const token = userStore.token || localStorage.getItem('token') || ''
-  const base = buildPlatformProxyMenuUrl(props.appId, token, {
-    menuId: props.menuId || undefined,
-    menuType: 'CUSTOM',
-  })
-  const sep = base.includes('?') ? '&' : '?'
-  // 顶层新标签打开运行态 — 比 sandbox iframe 更能承载 apaas SPA + 真 session
-  window.open(`${base}${sep}redirect_kind=runtime`, '_blank', 'noopener')
+  // 2026-05-28: 用 entry (不带 menu) 落 apaas 应用总览页 — 可靠. CUSTOM 菜单的
+  // runtime 单页路由 (/platform/{tid}/{app_code}/page/{menu_id}) apaas SPA 不认 →
+  // 白屏, 所以不再直跳运行态; 落总览页让用户从菜单自己进运行态看效果.
+  const url = buildPlatformProxyEntryUrl(props.appId, token)
+  window.open(url, '_blank', 'noopener')
 }
 </script>
 
