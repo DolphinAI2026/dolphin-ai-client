@@ -1422,30 +1422,79 @@ async function fetchDatasources(): Promise<void> {
   }
 }
 
+// 2026-05-28: 把 generator parsed_sections 原始字段映射成 SectionItem 形态
+// (id 用 code 兜底, code 用同字段, name 直取). 给前端章节渲染统一形态.
+function _toSectionItems(
+  arr: any,
+  idField: string,
+  nameField: string,
+  codeField: string,
+): SectionItem[] {
+  if (!Array.isArray(arr)) return []
+  return arr.map((it: any, idx: number) => {
+    const id = String(it?.[idField] ?? it?.id ?? it?.code ?? idx)
+    const name = String(it?.[nameField] ?? it?.name ?? '')
+    const code = String(it?.[codeField] ?? it?.code ?? '')
+    return { id, name, code, extra: it }
+  })
+}
+
 async function reload(): Promise<void> {
   loading.value = true
   error.value = ''
   try {
     const base = `/applications/${props.appId}`
-    // X (2026-05-27): dicts 加 with_options=true 拉真选项; menus 改 /apaas-menus
-    // (旧 /section-content/menus 不存在 → 404)
-    const [, roles, models, dicts, menus, processes, events] = await Promise.all([
-      fetchApp(),
-      fetchSection(`${base}/section-content/roles`),
-      fetchSection(`${base}/section-content/models?with_fields=true`),
-      fetchSection(`${base}/section-content/dicts?with_options=true`),
-      fetchMenusFromApaas(`${base}/apaas-menus`),
-      fetchSection(`${base}/section-content/processes`),
-      fetchSection(`${base}/section-content/business-events`),
-      fetchDatasources(),
-    ])
-    loadedRoles.value = roles
-    loadedModels.value = models
-    loadedDicts.value = dicts
-    loadedMenus.value = menus
-    loadedProcesses.value = processes
-    loadedEvents.value = events
-    lastFetchedAt.value = new Date()
+
+    // 2026-05-28: 优先走 /spec/parsed (DB cache 命中 1ms, 不命中 backend 跑
+    // generator 5-25s 同时落库). 失败 fallback 老 8-fetchSection 并发拉.
+    await fetchApp()
+    let usedParsedCache = false
+    try {
+      const parsedResp = await request.get<{
+        ok: boolean
+        sections?: Record<string, any>
+        cache_hit?: boolean
+      }>(`${base}/spec/parsed`)
+      if (parsedResp?.ok && parsedResp.sections) {
+        const s = parsedResp.sections
+        loadedRoles.value = _toSectionItems(s.roles, 'id', 'name', 'code')
+        loadedModels.value = _toSectionItems(s.models, 'id', 'name', 'code')
+        loadedDicts.value = _toSectionItems(s.dicts, 'id', 'name', 'code')
+        // generator 的 menus 已 flatten 含 menu_id / menu_name / menu_type, 透传
+        loadedMenus.value = _toSectionItems(s.menus, 'menu_id', 'menu_name', 'menu_code')
+        loadedProcesses.value = _toSectionItems(s.processes, 'id', 'name', 'code')
+        loadedEvents.value = _toSectionItems(s.business_events, 'id', 'name', 'code')
+        // datasources 单独拉 (不在 spec 章节注册路径)
+        await fetchDatasources()
+        usedParsedCache = true
+        lastFetchedAt.value = new Date()
+      }
+    } catch (parsedErr) {
+      // /spec/parsed 失败 (404 / 网络 / generator 崩) — 不挡, 走老路
+      console.warn('[SpecDesignPanel] /spec/parsed failed, fallback to 8-fetchSection', parsedErr)
+    }
+
+    if (!usedParsedCache) {
+      // Fallback: 老 8-endpoint 并发拉 (X commit 前的路径)
+      const [, roles, models, dicts, menus, processes, events] = await Promise.all([
+        Promise.resolve(),
+        fetchSection(`${base}/section-content/roles`),
+        fetchSection(`${base}/section-content/models?with_fields=true`),
+        fetchSection(`${base}/section-content/dicts?with_options=true`),
+        fetchMenusFromApaas(`${base}/apaas-menus`),
+        fetchSection(`${base}/section-content/processes`),
+        fetchSection(`${base}/section-content/business-events`),
+        fetchDatasources(),
+      ])
+      loadedRoles.value = roles
+      loadedModels.value = models
+      loadedDicts.value = dicts
+      loadedMenus.value = menus
+      loadedProcesses.value = processes
+      loadedEvents.value = events
+      lastFetchedAt.value = new Date()
+    }
+
     // V1 Part B: 处在对比模式时同步刷新草稿 (例如换应用 / spec-updated 触发的 reload)
     if (viewMode.value === 'compare') {
       compareLoading.value = true
