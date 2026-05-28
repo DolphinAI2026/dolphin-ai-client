@@ -174,6 +174,75 @@ async def get_spec_version(
 # ---------------------------------------------------------------------------
 # Endpoint 3 — GET /spec/markdown  (当前 SPEC.md, cache + 自动生成)
 # ---------------------------------------------------------------------------
+async def _get_or_refresh_spec_document(
+    db: AsyncSession,
+    app_id: int,
+) -> tuple[SpecDocument, bool]:
+    """Cache-aware fetch of SpecDocument — cache hit 直接返, miss 调 generator 写库.
+
+    Returns: (spec_doc_row, cache_hit_flag)
+
+    Notes:
+      - 优先策略: 若已存 row 且 markdown_content 非空 + parsed_sections_json 非空 +
+        cached <= 1h, 跳过 generator 直接返 cache. 否则跑 generator 重生.
+      - 真正的 hash 失效靠 spec_apply 设 sections_hash="" 显式触发 (跟 markdown
+        cache 之前同套机制). hash mismatch 时也重生.
+      - generator 重跑后用本次结果 UPSERT 整行 (markdown + hash + parsed_sections).
+    """
+    from datetime import datetime as _dt
+    import json as _json
+
+    q = await db.execute(
+        select(SpecDocument).where(SpecDocument.application_id == app_id)
+    )
+    cached = q.scalar_one_or_none()
+
+    # cache hit 短路: 已有 row + markdown 非空 + parsed 非空 + hash 非空 → 信任 cache.
+    # hash 失效靠 spec_apply 把 sections_hash="" 显式触发, 这里不重算.
+    # parsed_sections_json 空串/空 dict 都视为 miss (兼容老 row 没这列时的默认 "{}")
+    if (
+        cached
+        and cached.markdown_content
+        and cached.sections_hash
+        and cached.parsed_sections_json
+        and cached.parsed_sections_json not in ("{}", "")
+    ):
+        return cached, True
+
+    # cache miss → 跑 generator
+    try:
+        markdown, current_hash, parsed_sections = await generate_spec_markdown(
+            db, app_id
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc))
+    except Exception as exc:  # noqa: BLE001
+        logger.exception("generate_spec_markdown crashed app_id=%s", app_id)
+        raise HTTPException(
+            status_code=500, detail=f"生成 SPEC 失败: {exc}",
+        ) from exc
+
+    parsed_json = _json.dumps(parsed_sections, ensure_ascii=False, default=str)
+
+    if cached:
+        cached.markdown_content = markdown
+        cached.sections_hash = current_hash
+        cached.parsed_sections_json = parsed_json
+        cached.last_generated_at = _dt.utcnow()
+        spec_doc = cached
+    else:
+        spec_doc = SpecDocument(
+            application_id=app_id,
+            markdown_content=markdown,
+            sections_hash=current_hash,
+            parsed_sections_json=parsed_json,
+            last_generated_at=_dt.utcnow(),
+        )
+        db.add(spec_doc)
+    await db.commit()
+    return spec_doc, False
+
+
 @router.get("/{app_id}/spec/markdown")
 async def get_spec_markdown(
     app_id: int,
@@ -182,11 +251,8 @@ async def get_spec_markdown(
 ) -> dict[str, Any]:
     """读应用当前 SPEC.md.
 
-    缓存逻辑:
-      1. 调 generate_spec_markdown 拿 (markdown, current_hash)
-      2. SELECT FROM spec_documents
-      3. 不匹配 → UPSERT
-      4. 匹配 → 复用 cached row 的 markdown / last_generated_at
+    2026-05-28: 改走 _get_or_refresh_spec_document — 跟 /spec/parsed 同套缓存,
+    一次 generator 跑全 11 章 markdown + 结构化数据都落库, 两个 endpoint 都秒返.
 
     Returns:
       {
@@ -199,59 +265,97 @@ async def get_spec_markdown(
       }
     """
     app = await _load_app_for_view(app_id, ctx, db)
-
-    # 1. 实时拉 + 算 hash
-    try:
-        markdown, current_hash = await generate_spec_markdown(db, app.id)
-    except ValueError as exc:
-        raise HTTPException(status_code=404, detail=str(exc))
-    except Exception as exc:  # noqa: BLE001
-        logger.exception("generate_spec_markdown crashed app_id=%s", app.id)
-        raise HTTPException(
-            status_code=500, detail=f"生成 SPEC markdown 失败: {exc}",
-        ) from exc
-
-    # 2. 查 cache
-    q = await db.execute(
-        select(SpecDocument).where(SpecDocument.application_id == app.id)
-    )
-    cached = q.scalar_one_or_none()
-
-    from datetime import datetime as _dt
-
-    cache_hit = False
-    if cached and cached.sections_hash == current_hash:
-        cache_hit = True
-        # markdown 可能跟存的微差 (timestamp 头变), 用 cached.markdown_content 保稳定
-        served_markdown = cached.markdown_content
-        last_generated_at = cached.last_generated_at
-    else:
-        # UPSERT
-        if cached:
-            cached.markdown_content = markdown
-            cached.sections_hash = current_hash
-            cached.last_generated_at = _dt.utcnow()
-            last_generated_at = cached.last_generated_at
-        else:
-            new_row = SpecDocument(
-                application_id=app.id,
-                markdown_content=markdown,
-                sections_hash=current_hash,
-                last_generated_at=_dt.utcnow(),
-            )
-            db.add(new_row)
-            last_generated_at = new_row.last_generated_at
-        await db.commit()
-        served_markdown = markdown
+    spec_doc, cache_hit = await _get_or_refresh_spec_document(db, app.id)
 
     return {
         "ok": True,
         "app_id": app.id,
         "app_name": app.app_name or "",
         "app_code": app.app_code or "",
-        "markdown": served_markdown,
-        "sections_hash": current_hash,
-        "last_generated_at": last_generated_at.isoformat() if last_generated_at else None,
+        "markdown": spec_doc.markdown_content,
+        "sections_hash": spec_doc.sections_hash,
+        "last_generated_at": (
+            spec_doc.last_generated_at.isoformat() if spec_doc.last_generated_at else None
+        ),
+        "cache_hit": cache_hit,
+    }
+
+
+# ---------------------------------------------------------------------------
+# Endpoint 5 — GET /spec/parsed  (前端 panel 用, 替代 8 个 fetchSection 并发)
+# ---------------------------------------------------------------------------
+@router.get("/{app_id}/spec/parsed")
+async def get_spec_parsed(
+    app_id: int,
+    ctx: Annotated[AuthContext, Depends(get_auth_context)],
+    db: Annotated[AsyncSession, Depends(get_db)],
+) -> dict[str, Any]:
+    """读应用当前 SPEC 的结构化数据 (11 章 raw JSON).
+
+    cache hit 时秒返 (DB lookup ~5ms); miss 时跑 generator (5-8s) 同时落库
+    markdown + parsed_sections, 两个 endpoint 都受益. apply 后失效靠 spec_apply
+    把 sections_hash 置空 + 清 markdown_content.
+
+    Returns:
+      {
+        ok: true,
+        app_id, app_name, app_code,
+        sections: {
+            app_info:        {...},
+            roles:           [...],
+            models:          [...],
+            dicts:           [...],
+            menus:           [...],
+            forms:           [...],
+            lists:           [...],
+            processes:       [...],
+            business_events: [...],
+            integration:     [...],
+            datasources:     [...]
+        },
+        sections_hash: "...",
+        last_generated_at: ISO,
+        cache_hit: bool,
+      }
+
+    错误时 ok=false + error_code (不抛 500), 让前端 fallback 到老 8-fetchSection.
+    """
+    import json as _json
+
+    app = await _load_app_for_view(app_id, ctx, db)
+
+    try:
+        spec_doc, cache_hit = await _get_or_refresh_spec_document(db, app.id)
+    except HTTPException:
+        raise
+    except Exception as exc:  # noqa: BLE001
+        logger.exception("get_spec_parsed: refresh failed app_id=%s", app.id)
+        return {
+            "ok": False,
+            "app_id": app.id,
+            "error_code": "GENERATOR_FAILED",
+            "message": f"生成 SPEC 数据失败 — 前端 fallback 到 section-content: {exc}",
+        }
+
+    try:
+        sections = _json.loads(spec_doc.parsed_sections_json or "{}")
+    except (ValueError, TypeError) as exc:
+        logger.warning(
+            "get_spec_parsed: parsed_sections_json JSON 解析失败 app_id=%s: %s",
+            app.id, exc,
+        )
+        sections = {}
+
+    return {
+        "ok": True,
+        "app_id": app.id,
+        "app_name": app.app_name or "",
+        "app_code": app.app_code or "",
+        "sections": sections,
+        "sections_hash": spec_doc.sections_hash,
+        "last_generated_at": (
+            spec_doc.last_generated_at.isoformat() if spec_doc.last_generated_at else None
+        ),
         "cache_hit": cache_hit,
     }
 
@@ -271,46 +375,18 @@ async def export_spec_md(
     """
     app = await _load_app_for_view(app_id, ctx, db)
 
-    try:
-        markdown, current_hash = await generate_spec_markdown(db, app.id)
-    except ValueError as exc:
-        raise HTTPException(status_code=404, detail=str(exc))
-    except Exception as exc:  # noqa: BLE001
-        logger.exception("export_spec_md: generate failed app_id=%s", app.id)
-        raise HTTPException(
-            status_code=500, detail=f"生成 SPEC markdown 失败: {exc}",
-        ) from exc
-
-    # 也 UPSERT 一下 cache (跟 get_spec_markdown 同步)
-    q = await db.execute(
-        select(SpecDocument).where(SpecDocument.application_id == app.id)
-    )
-    cached = q.scalar_one_or_none()
-    from datetime import datetime as _dt
-    if cached and cached.sections_hash != current_hash:
-        cached.markdown_content = markdown
-        cached.sections_hash = current_hash
-        cached.last_generated_at = _dt.utcnow()
-        await db.commit()
-    elif not cached:
-        new_row = SpecDocument(
-            application_id=app.id,
-            markdown_content=markdown,
-            sections_hash=current_hash,
-            last_generated_at=_dt.utcnow(),
-        )
-        db.add(new_row)
-        await db.commit()
+    # 复用同一套 cache + generator (跟 /spec/markdown / /spec/parsed 共享 row)
+    spec_doc, _cache_hit = await _get_or_refresh_spec_document(db, app.id)
 
     # 文件名: app_code.spec.md (没 app_code 用 app-{id})
     safe_code = (app.app_code or f"app-{app.id}").replace("/", "_")
     filename = f"{safe_code}.spec.md"
 
     return Response(
-        content=markdown,
+        content=spec_doc.markdown_content,
         media_type="text/markdown; charset=utf-8",
         headers={
             "Content-Disposition": f'attachment; filename="{filename}"',
-            "X-Sections-Hash": current_hash,
+            "X-Sections-Hash": spec_doc.sections_hash,
         },
     )

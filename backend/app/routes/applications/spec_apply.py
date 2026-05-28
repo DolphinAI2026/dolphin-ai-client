@@ -1035,7 +1035,8 @@ async def _create_spec_version_snapshot(
     markdown_snapshot: Optional[str] = None
     try:
         from app.services.spec_markdown_generator import generate_spec_markdown
-        markdown_snapshot, _hash = await generate_spec_markdown(db, app.id)
+        # 2026-05-28: generator 返 3 元组 (md, hash, parsed_sections), 这里只要 md.
+        markdown_snapshot, _hash, _parsed = await generate_spec_markdown(db, app.id)
     except Exception as exc:  # noqa: BLE001 — markdown 生成失败不挡 snapshot 落库
         logger.warning(
             "snapshot: generate_spec_markdown 失败 app_id=%s: %s", app.id, exc,
@@ -1084,8 +1085,11 @@ async def _create_spec_version_snapshot(
     )
     cached = cache_q.scalar_one_or_none()
     if cached:
-        # 强 invalidate 让下次 read 重算 hash
+        # 强 invalidate 让下次 read 重算 hash — 清 hash + markdown + parsed_sections
+        # 三处, 任一不空就不会触发 cache miss → 必须全清.
         cached.sections_hash = ""
+        cached.markdown_content = ""
+        cached.parsed_sections_json = "{}"
 
     await db.commit()
     await db.refresh(new_row)

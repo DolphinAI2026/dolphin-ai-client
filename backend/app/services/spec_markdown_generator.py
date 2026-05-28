@@ -500,17 +500,21 @@ def _render_datasources(
 async def generate_spec_markdown(
     db: AsyncSession,
     app_id: int,
-) -> tuple[str, str]:
+) -> tuple[str, str, dict[str, Any]]:
     """生成应用的完整 SPEC.md.
+
+    2026-05-28 加返第 3 项 parsed_sections — 给前端 panel reload 用 (替代 8 个
+    /section-content/* fetchSection 并发打 apaas).
 
     Args:
         db: 异步 session
         app_id: 本地应用 id
 
     Returns:
-        (markdown_str, sections_hash)
-        markdown_str: 完整 SPEC.md 字符串
-        sections_hash: sha256(sorted JSON of all section raw data) — cache key
+        (markdown_str, sections_hash, parsed_sections)
+        - markdown_str: 完整 SPEC.md 字符串
+        - sections_hash: sha256(sorted JSON of all section raw data) — cache key
+        - parsed_sections: 结构化 dict (11 章 raw data) — 给 /spec/parsed 返
 
     raises:
         ValueError: 应用不存在
@@ -553,11 +557,12 @@ async def generate_spec_markdown(
             parts.append("_应用未部署到 apaas 平台, 无法拉取真实数据_")
             parts.append("")
         markdown = "\n".join(parts)
-        sections_hash = _compute_hash({
+        unbound_parsed: dict[str, Any] = {
             "app_info": raw1,
             "_unbound_apaas": True,
-        })
-        return markdown, sections_hash
+        }
+        sections_hash = _compute_hash(unbound_parsed)
+        return markdown, sections_hash, unbound_parsed
 
     env_id = app.platform_env_id
     apaas_app_id = str(app.apaas_app_id)
@@ -611,7 +616,7 @@ async def generate_spec_markdown(
 
     markdown = "\n".join(parts)
     sections_hash = _compute_hash(raw_sections)
-    return markdown, sections_hash
+    return markdown, sections_hash, raw_sections
 
 
 def _compute_hash(raw: dict[str, Any]) -> str:
