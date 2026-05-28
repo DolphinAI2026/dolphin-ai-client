@@ -149,6 +149,9 @@ class MergedAppResponse(BaseModel):
     git_repo_url: Optional[str] = None
     git_provider: Optional[str] = None
     git_default_branch: Optional[str] = None
+    # 应用类型: low-code (ai-builder/SPEC) | ai-code (vibe-coding)
+    app_type: str = "low-code"
+    source_workspace_id: Optional[str] = None
     created_at: Optional[str] = None
     updated_at: Optional[str] = None
 
