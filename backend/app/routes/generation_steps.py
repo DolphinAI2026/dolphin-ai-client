@@ -688,6 +688,87 @@ def _detect_code_conflict(error_msg: str, step_key: str, data: dict, models: lis
 # GET /status
 # ------------------------------------------------------------------
 
+# 2026-05-29: 进度面板按 apaas 真实对象重建（修「服务端 generate-run 跑完面板还显 1/182」）。
+# 根因：_build_steps 只读 state.steps_completed；逐步 /execute 路径会回写它，但服务端
+# 一把梭的 generate-run（run_complete_generation）不写 → 面板永远停在 create_app。
+# 这里查 apaas 真有的模型/角色/字典/菜单，把对应 step 标完成，与构建路径无关。
+# 进程内缓存 8s，避免前端轮询把 apaas 打爆（4 次 list 调用 / 8s）。
+_REALITY_TTL_S = 8.0
+_REALITY_CACHE: dict[int, tuple[float, set[str]]] = {}
+
+
+def _lc(v: object) -> str:
+    return str(v or "").strip().lower()
+
+
+async def _reality_completed_step_keys(app: Application, config: dict, db: AsyncSession) -> set[str]:
+    """查 apaas 真实对象 → 已完成的 step key 集合（进程内 8s 缓存）。失败返回已知部分，不抛。"""
+    import time as _time
+
+    apaas_app_id = app.apaas_app_id
+    if not apaas_app_id:
+        return set()
+    now = _time.time()
+    cached = _REALITY_CACHE.get(app.id)
+    if cached and (now - cached[0]) < _REALITY_TTL_S:
+        return cached[1]
+
+    keys: set[str] = {"create_app"}
+    data = config.get("data", config)
+    try:
+        # 局部 import 避免模块级循环依赖
+        from app.routes.applications.generate import _resolve_env_and_client
+        client, _env = await _resolve_env_and_client(app, db)
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("steps reality reconcile: 解析 client 失败 app=%s: %s", app.id, exc)
+        _REALITY_CACHE[app.id] = (now, keys)  # 缓存以免反复重试
+        return keys
+
+    aid = str(apaas_app_id)
+    # 模型（按 code 比对，apaas 实测 code 与 config 一致）
+    try:
+        ms = await client.query_models(aid, with_fields=False)
+        codes = {_lc(m.get("modelCode")) for m in ms}
+        names = {_lc(m.get("modelName")) for m in ms}
+        for idx, m in enumerate(data.get("models") or []):
+            if _lc(m.get("code") or m.get("modelCode")) in codes or _lc(m.get("name") or m.get("modelName")) in names:
+                keys.add(f"create_model:{idx}")
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("steps reality reconcile models 失败 app=%s: %s", app.id, exc)
+    # 角色（按名）
+    try:
+        rs = await client.query_roles(aid)
+        rnames = {_lc(r.get("roleName") or r.get("name")) for r in rs}
+        for idx, r in enumerate(data.get("roles") or []):
+            if _lc(r.get("name") or r.get("roleName")) in rnames:
+                keys.add(f"create_role:{idx}")
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("steps reality reconcile roles 失败 app=%s: %s", app.id, exc)
+    # 字典（按名 / code）
+    try:
+        ds = await client.query_dicts(aid)
+        dnames = {_lc(d.get("name") or d.get("dictName") or d.get("dictionaryName")) for d in ds}
+        dcodes = {_lc(d.get("code") or d.get("dictCode") or d.get("dictionaryCode")) for d in ds}
+        for idx, d in enumerate(data.get("dicts") or []):
+            if _lc(d.get("name") or d.get("dictName")) in dnames or _lc(d.get("code") or d.get("dictCode")) in dcodes:
+                keys.add(f"create_dict:{idx}")
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("steps reality reconcile dicts 失败 app=%s: %s", app.id, exc)
+    # 表单（按表单名比对 apaas 菜单名）
+    try:
+        menus = await client.query_menus(aid)
+        mnames = {_lc(x.get("name") or x.get("menuName") or x.get("title")) for x in menus}
+        for idx, form in enumerate(data.get("forms") or []):
+            fname = _lc(_first_form_value(form, "formName", "form_name", "name", default=""))
+            if fname and fname in mnames:
+                keys.add(f"create_form:{idx}")
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("steps reality reconcile forms 失败 app=%s: %s", app.id, exc)
+
+    _REALITY_CACHE[app.id] = (now, keys)
+    return keys
+
+
 @router.get("/applications/{app_id}/steps/status", response_model=GenerationStatusResponse)
 async def get_step_status(
     app_id: int,
@@ -698,6 +779,24 @@ async def get_step_status(
     config = _normalized_config_for_steps(app)
     state = _load_state(app)
     apaas_app_id = state.get("apaas_app_id") or app.apaas_app_id
+
+    # 已部署成功 → 一切就绪，直接全标完成（最强保证，且不打 apaas）。
+    if app.status == "completed":
+        steps = _build_steps(config, state, apaas_app_id)
+        for s in steps:
+            s.status = "completed"
+            s.deps_met = True
+        return GenerationStatusResponse(apaas_app_id=apaas_app_id, steps=steps)
+
+    # 进行中 / 失败但已建了一部分 → 按 apaas 真实对象补全进度（与构建路径无关）。
+    if apaas_app_id:
+        try:
+            reality = await _reality_completed_step_keys(app, config, db)
+            if reality:
+                state = {**state, "steps_completed": list(set(state.get("steps_completed", [])) | reality)}
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("steps reality reconcile 整体失败 app=%s: %s", app.id, exc)
+
     steps = _build_steps(config, state, apaas_app_id)
     return GenerationStatusResponse(
         apaas_app_id=apaas_app_id,
