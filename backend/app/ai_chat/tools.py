@@ -1225,6 +1225,35 @@ async def get_all_tool_schemas() -> list[dict]:
     return BASE_TOOL_SCHEMAS + mcp_schemas
 
 
+# 2026-05-28: 这几个 doc-pipeline 工具强依赖 artifact_id 指向"当前会话刚写的设计文档".
+# 但 LLM 经常传错/传旧的 artifact_id (跨会话残留 / 幻觉) → 拿错文档建错应用.
+# 实测: mega-erp(112 模型) 文档被建成无关的"人才管理系统"(14 HR 模型) — agent 传了别的 artifact_id.
+# dispatcher 这里按"当前会话最新 .md artifact"强制纠正 —— 会话是真相, 不信 LLM 给的 id.
+_ARTIFACT_DOC_TOOLS = {"generate_app_from_doc", "validate_builder_doc", "submit_design_doc"}
+
+
+async def _resolve_session_doc_artifact_id(
+    session: AIChatSession, db: AsyncSession
+) -> int | None:
+    """当前会话最新的设计文档 artifact id (优先 .md, 没有则最新任意). 找不到返 None."""
+    try:
+        rows = (await db.execute(
+            select(AIChatArtifact.id, AIChatArtifact.filename)
+            .where(AIChatArtifact.session_id == session.id)
+            .order_by(desc(AIChatArtifact.id))
+        )).all()
+        if not rows:
+            return None
+        for aid, fn in rows:
+            if str(fn or "").lower().endswith(".md"):
+                return aid
+        return rows[0][0]
+    except Exception as exc:  # noqa: BLE001
+        import logging
+        logging.getLogger(__name__).warning("_resolve_session_doc_artifact_id failed: %s", exc)
+        return None
+
+
 async def execute_tool(
     tool_name: str, args: dict, session: AIChatSession, db: AsyncSession
 ) -> str:
@@ -1232,6 +1261,9 @@ async def execute_tool(
 
     自动塞 session.tenant_id / session.user_id 给 MCP（很多 MCP 工具签名隐式接受
     tenant_id / user_id 做 fallback admin）。
+
+    ⚠️ artifact_id 自愈 (2026-05-28)：doc-pipeline 工具的 artifact_id 由 dispatcher 按
+    当前会话最新 .md 强制纠正 —— LLM 传错/传旧 id 会拿错文档建错应用 (实测 mega-erp→人才管理).
 
     ⚠️ Side-effect intercept (2026-05-21)：generate_app_from_doc / update_app_from_doc
     成功调用时，把 args.md_content 落 AIChatArtifact 表（用户能在右侧面板回看 SPEC）。
@@ -1247,6 +1279,16 @@ async def execute_tool(
     # 兜底：尝试通过 MCP bridge 调本机 MCP server
     from app.ai_chat.mcp_bridge import list_mcp_tool_names_cached, call_tool as _mcp_call
     if tool_name in list_mcp_tool_names_cached():
+        # artifact_id 自愈：用会话最新设计文档覆盖 LLM 给的 id (防张冠李戴)
+        if tool_name in _ARTIFACT_DOC_TOOLS:
+            real_id = await _resolve_session_doc_artifact_id(session, db)
+            if real_id and str(args.get("artifact_id") or "") != str(real_id):
+                import logging
+                logging.getLogger(__name__).info(
+                    "[ai_chat] %s artifact_id 纠正: LLM=%r → 会话最新 .md=%s (session %s)",
+                    tool_name, args.get("artifact_id"), real_id, session.id,
+                )
+                args = {**args, "artifact_id": real_id}
         result_text = await _mcp_call(
             tool_name, args,
             tenant_id=int(getattr(session, "tenant_id", 0) or 0),
