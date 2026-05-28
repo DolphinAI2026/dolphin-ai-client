@@ -4,7 +4,7 @@ import json
 import logging
 from typing import Annotated, AsyncIterator
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy import select
 from sqlalchemy import func as sqlfunc
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -73,7 +73,7 @@ async def build_prototype_prompt(db: AsyncSession, app_id: int) -> str:
 
 
 async def _llm_html_stream(
-    prompt: str, db: AsyncSession, tenant_id: int, app_id: int
+    prompt: str, db: AsyncSession, tenant_id: int
 ) -> AsyncIterator[str]:
     """调 LLMClient 流式产出 HTML chunk，每次 yield 一个 delta string。
 
@@ -143,10 +143,12 @@ async def _generate_event_stream(
 
     # ── 2. LLM 流式产出 HTML ─────────────────────────────────────────────
     html_parts: list[str] = []
+    total_chars = 0
     try:
-        async for chunk in _llm_html_stream(prompt, db, tenant_id, app_id):
+        async for chunk in _llm_html_stream(prompt, db, tenant_id):
             html_parts.append(chunk)
-            yield _sse("progress", {"chars": sum(len(p) for p in html_parts)})
+            total_chars += len(chunk)
+            yield _sse("progress", {"chars": total_chars})
     except Exception as exc:
         logger.exception("prototype: _llm_html_stream failed")
         yield _sse("error", {"message": f"原型生成失败：{exc}"})
@@ -171,6 +173,7 @@ async def _generate_event_stream(
             version=version,
             html_content=html,
             created_by=user_id,
+            # TODO: populate source_spec_version when spec version is tracked
         )
         db.add(proto)
         await db.commit()
@@ -184,7 +187,28 @@ async def _generate_event_stream(
 
 
 # ---------------------------------------------------------------------------
-# Router + Endpoint
+# Task 4: 读取原型记录
+# ---------------------------------------------------------------------------
+
+
+async def get_prototype_record(
+    db: AsyncSession, app_id: int, prototype_id: int, tenant_id: int
+) -> dict:
+    """按 prototype_id + app_id + tenant_id 读取原型记录，不存在 → 404。"""
+    row = (await db.execute(
+        select(AppPrototype).where(
+            AppPrototype.id == prototype_id,
+            AppPrototype.app_id == app_id,
+            AppPrototype.tenant_id == tenant_id,
+        )
+    )).scalar_one_or_none()
+    if row is None:
+        raise HTTPException(status_code=404, detail="原型不存在")
+    return {"id": row.id, "version": row.version, "html_content": row.html_content}
+
+
+# ---------------------------------------------------------------------------
+# Router + Endpoints
 # ---------------------------------------------------------------------------
 
 router = APIRouter()
@@ -201,7 +225,23 @@ async def generate_prototype(
     读需求基线 → LLM 流式产出单文件 HTML → 落库 → SSE 吐事件。
     事件序列: started → progress(N 次) → prototype_ready | error
     """
+    from app.models import Application
+    from sqlalchemy import select as _select
+    from app.permissions import Action, check_resource_permission
     from sse_starlette.sse import EventSourceResponse
+
+    # 校验 app_id 属于当前租户
+    r = await db.execute(
+        _select(Application).where(
+            Application.id == app_id,
+            Application.tenant_id == ctx.tenant_id,
+        )
+    )
+    app = r.scalar_one_or_none()
+    if not app:
+        raise HTTPException(status_code=404, detail="应用不存在")
+    await check_resource_permission(ctx, db, app, "application", Action.VIEW)
+
     return EventSourceResponse(
         _generate_event_stream(
             db,
@@ -210,3 +250,34 @@ async def generate_prototype(
             user_id=ctx.user.id,
         )
     )
+
+
+@router.get("/{app_id}/prototype/{prototype_id}")
+async def get_prototype(
+    app_id: int,
+    prototype_id: int,
+    ctx: Annotated[AuthContext, Depends(get_auth_context)],
+    db: Annotated[AsyncSession, Depends(get_db)],
+):
+    """GET /api/applications/{app_id}/prototype/{prototype_id}
+
+    读取已生成的原型 HTML — 前端预览 Tab 用。
+    返: {id, version, html_content}
+    """
+    from app.models import Application
+    from sqlalchemy import select as _select
+    from app.permissions import Action, check_resource_permission
+
+    # 校验 app_id 属于当前租户
+    r = await db.execute(
+        _select(Application).where(
+            Application.id == app_id,
+            Application.tenant_id == ctx.tenant_id,
+        )
+    )
+    app = r.scalar_one_or_none()
+    if not app:
+        raise HTTPException(status_code=404, detail="应用不存在")
+    await check_resource_permission(ctx, db, app, "application", Action.VIEW)
+
+    return await get_prototype_record(db, app_id=app_id, prototype_id=prototype_id, tenant_id=ctx.tenant_id)

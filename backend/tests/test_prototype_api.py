@@ -8,13 +8,6 @@ from app.models.app_prototype import AppPrototype
 # ---------------------------------------------------------------------------
 
 
-def _async_return(v):
-    """Return a coroutine that resolves to v (helper for monkeypatching async fns)."""
-    async def _f(*a, **k):
-        return v
-    return _f()
-
-
 @pytest.mark.asyncio
 async def test_generate_prototype_persists_and_emits_ready(db_session, monkeypatch):
     from app.routes.applications import prototype as proto_mod
@@ -26,7 +19,7 @@ async def test_generate_prototype_persists_and_emits_ready(db_session, monkeypat
     monkeypatch.setattr(proto_mod, "build_prototype_prompt", fake_build_prompt)
 
     # Patch _llm_html_stream to be a simple async generator yielding HTML chunks
-    async def fake_stream(prompt, db, tenant_id, app_id):
+    async def fake_stream(prompt, db, tenant_id):
         for chunk in ["<!DOCTYPE html><body>", "<div data-block='卡片'>x</div>", "</body>"]:
             yield chunk
 
@@ -90,3 +83,22 @@ async def test_app_prototype_insert_and_query(db_session):
     assert proto.app_id == 1
     assert proto.version == 1
     assert "<body>" in proto.html_content
+
+
+# ---------------------------------------------------------------------------
+# Task 4 — get_prototype_record: read prototype by id
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_get_prototype_returns_html(db_session):
+    from app.routes.applications import prototype as proto_mod
+
+    proto = AppPrototype(app_id=1, tenant_id=1, version=1, html_content="<html><body>ok</body></html>")
+    db_session.add(proto)
+    await db_session.commit()
+    await db_session.refresh(proto)
+
+    res = await proto_mod.get_prototype_record(db_session, app_id=1, prototype_id=proto.id, tenant_id=1)
+    assert res["html_content"] == "<html><body>ok</body></html>"
+    assert res["version"] == 1
