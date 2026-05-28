@@ -883,7 +883,39 @@ async def validate_builder_doc(artifact_id: int) -> dict:
             "error_code": "ARTIFACT_NOT_FOUND",
             "error": f"找不到 artifact_id={artifact_id} - 请重新 write_artifact 拿新 id.",
         }
-    return _do_validate_builder_doc(content)
+    result = _do_validate_builder_doc(content)
+
+    # 2026-05-28 修"假通过": _do_validate_builder_doc 只跑轻量 detect() (看 6 章标题/表头格式),
+    # 一份只有标题没有真表格的**摘要**能骗过它 (score≥90) → passes_strict=True; 但 generate_app_from_doc
+    # 用的是 parse_document (真把表格解析成结构), 摘要会炸 "forms/models/permissions 无法解析"。
+    # 校验器必须跟消费方(generate)一致: 这里跑一遍真 parser 做一致性校验, 过不了就如实标不通过,
+    # 不让假通过文档流到 generate (实测 329K 字大文档被 LLM 摘要后就撞这个坑)。
+    try:
+        from app.doc_pipeline import parse_document
+        preview = await parse_document(content)
+        pdata = preview.get("data", preview) if isinstance(preview, dict) else {}
+        n_models = len(pdata.get("models") or [])
+        n_forms = len(pdata.get("forms") or [])
+        n_perms = len(pdata.get("permissions") or [])
+        result["parse_check"] = {"ok": True, "models": n_models, "forms": n_forms, "permissions": n_perms}
+        if n_models == 0 and n_forms == 0:
+            result["passes_strict"] = False
+            result["advice"] = [
+                "❌ 真解析校验未过：parse_document 解析出 0 模型 / 0 表单 —— 章节标题在、但表格内容缺失或不可解析。"
+                "最常见原因：把完整设计文档**摘要/缩写**成了说明文字 (尤其大文档塞不进 artifact 时)。"
+                "修法：把**完整的 6 章表格原文**写进文档；大文档别让 LLM 重写, 直接在 Builder 工作台上传 .md。",
+                *result.get("advice", []),
+            ]
+    except Exception as exc:  # noqa: BLE001 — parse_document 抛 DocNotStandardError 等 = generate 也必炸
+        result["parse_check"] = {"ok": False, "error": str(exc)[:300]}
+        result["passes_strict"] = False
+        result["advice"] = [
+            f"❌ 真解析校验未过：parse_document 抛错 —— {str(exc)[:200]}。"
+            "validate 之前只看标题格式才误判通过; 这里跑了 generate 实际用的解析器, 它过不了 = generate 也会过不了。"
+            "请补齐可解析的 6 章表格原文 (或在 Builder 工作台直接上传完整 .md, 别经 LLM 摘要)。",
+            *result.get("advice", []),
+        ]
+    return result
 
 
 # ─────────────────────── 需求分析助手 → ai-builder 设计文档中转 ───────────────────────
