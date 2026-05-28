@@ -40,6 +40,7 @@ output/
 
 # Claude
 .claude/
+.superpowers/
 
 # Build artifacts
 frontend/dist/

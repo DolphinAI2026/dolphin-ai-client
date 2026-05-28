@@ -2,106 +2,47 @@
   <div class="wt-root">
     <nav class="wt-tabs">
       <button
-        v-for="t in tabs"
-        :key="t.key"
-        class="wt-tab"
-        :class="{ active: active === t.key, disabled: t.disabled }"
-        :disabled="t.disabled"
+        v-for="t in tabs" :key="t.key"
+        class="wt-tab" :class="{ active: active === t.key }"
         @click="active = t.key"
-      >
-        {{ t.label }}<span v-if="t.disabled" class="wt-soon">敬请期待</span>
-      </button>
+      >{{ t.label }}</button>
     </nav>
     <div class="wt-body">
-      <SpecDesignPanel v-if="active === 'requirement'" :app-id="appId" />
-      <PreviewTab
-        v-else-if="active === 'preview'"
-        :app-id="appId"
-        @select-block="$emit('select-block', $event)"
-      />
-      <div v-else class="wt-placeholder">「{{ activeLabel }}」敬请期待</div>
+      <RequirementTab v-if="active === 'requirement'" :workspace-id="workspaceId" />
+      <ProgressTab v-else-if="active === 'progress'" :workspace-id="workspaceId" />
+      <RuntimePreviewTab v-else-if="active === 'preview'" :workspace-id="workspaceId" />
+      <OutputTab v-else-if="active === 'output'" :workspace-id="workspaceId" />
+      <div v-else class="wt-placeholder">「{{ activeLabel }}」建设中（后续切片接入）</div>
     </div>
   </div>
 </template>
 
 <script setup lang="ts">
 import { ref, computed } from 'vue'
-import SpecDesignPanel from '@/components/v3/SpecDesignPanel.vue'
-import PreviewTab from '@/components/ai-coding/PreviewTab.vue'
+import RequirementTab from './RequirementTab.vue'
+import ProgressTab from './ProgressTab.vue'
+import RuntimePreviewTab from './RuntimePreviewTab.vue'
+import OutputTab from './OutputTab.vue'
 
-defineProps<{ appId: number }>()
-defineEmits<{ (e: 'select-block', label: string): void }>()
-
+defineProps<{ workspaceId: string }>()
 const tabs = [
-  { key: 'requirement', label: '需求', disabled: false },
-  { key: 'preview',     label: '预览', disabled: false },
-  { key: 'progress',   label: '进度', disabled: true },
-  { key: 'output',     label: '产出', disabled: true },
-  { key: 'tools',      label: '工具', disabled: true },
-  { key: 'observe',    label: '可观测', disabled: true },
+  { key: 'requirement', label: '需求' },
+  { key: 'progress',    label: '进度' },
+  { key: 'preview',     label: '预览' },
+  { key: 'output',      label: '产出' },
+  { key: 'tools',       label: '工具链' },
+  { key: 'observe',     label: '可观测' },
 ]
-
-const active = ref('requirement')
+const active = ref('progress')
 const activeLabel = computed(() => tabs.find(t => t.key === active.value)?.label ?? '')
 </script>
 
 <style scoped>
-.wt-root {
-  display: flex;
-  flex-direction: column;
-  height: 100%;
-}
-
-.wt-tabs {
-  display: flex;
-  gap: 4px;
-  padding: 8px;
-  border-bottom: 1px solid var(--line);
-  flex-shrink: 0;
-}
-
-.wt-tab {
-  border: 0;
-  background: transparent;
-  padding: 8px 12px;
-  border-radius: 8px;
-  color: var(--text-3);
-  cursor: pointer;
-  font-size: 13px;
-  transition: background 0.15s, color 0.15s;
-}
-
-.wt-tab:hover:not(.disabled) {
-  background: var(--surface-3);
-  color: var(--text-2);
-}
-
-.wt-tab.active {
-  background: var(--brand-soft);
-  color: var(--brand);
-  font-weight: 600;
-}
-
-.wt-tab.disabled {
-  color: var(--text-4);
-  cursor: not-allowed;
-}
-
-.wt-soon {
-  font-size: 10px;
-  margin-left: 4px;
-  opacity: 0.7;
-}
-
-.wt-body {
-  flex: 1 1 auto;
-  min-height: 0;
-  overflow: auto;
-}
-
-.wt-placeholder {
-  padding: 48px;
-  text-align: center;
-  color: var(--text-4);
-}
+.wt-root { display: flex; flex-direction: column; height: 100%; }
+.wt-tabs { display: flex; gap: 4px; padding: 8px; border-bottom: 1px solid var(--line); flex-shrink: 0; overflow-x: auto; }
+.wt-tab { border: 0; background: transparent; padding: 8px 14px; border-radius: 8px; color: var(--text-3); cursor: pointer; font-size: 13px; white-space: nowrap; transition: background .15s, color .15s; }
+.wt-tab:hover { background: var(--surface-3); color: var(--text-2); }
+.wt-tab.active { background: var(--brand-soft); color: var(--brand); font-weight: 600; }
+.wt-body { flex: 1 1 auto; min-height: 0; overflow: auto; }
+.wt-placeholder { padding: 48px; text-align: center; color: var(--text-4); }
 </style>
