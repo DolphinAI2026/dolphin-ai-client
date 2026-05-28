@@ -24,6 +24,7 @@ from sse_starlette.sse import EventSourceResponse
 from app.database import get_db, AsyncSessionLocal
 from app.deps import AuthContext, get_auth_context
 from app.models import (
+    Application,
     LLMConfig,
     VibeCodingThread,
     VibeCodingMessage,
@@ -160,7 +161,33 @@ async def _get_or_create_thread(
     db.add(thread)
     await db.commit()
     await db.refresh(thread)
+
+    # 统一应用：vibe workspace 登记成一条 ai-code Application（幂等，统一应用列表里可见）
+    await _ensure_ai_code_application(db, workspace_id, ctx, title)
     return thread
+
+
+async def _ensure_ai_code_application(
+    db: AsyncSession, workspace_id: str, ctx: AuthContext, title: str
+) -> None:
+    """给 vibe workspace 登记一条 ai-code Application。已存在则跳过（幂等）。"""
+    existing = await db.execute(
+        select(Application).where(Application.source_workspace_id == workspace_id)
+    )
+    if existing.scalar_one_or_none() is not None:
+        return
+    app = Application(
+        user_id=ctx.user.id,
+        tenant_id=ctx.tenant_id,
+        created_by=ctx.user.id,
+        app_name=title or "AI Coding 应用",
+        app_code=f"aicode_{workspace_id}"[:50],
+        app_type="ai-code",
+        source_workspace_id=workspace_id,
+        status="developing",
+    )
+    db.add(app)
+    await db.commit()
 
 
 # ═══════════════════════════ Endpoints ═══════════════════════════
