@@ -1,11 +1,13 @@
-<!-- CustomPagePreviewPanel.vue — design-v4 R (2026-05-27)
-  CUSTOM 菜单 (apaas 自开发 Vue 页) 预览 + 编辑入口.
+<!-- CustomPagePreviewPanel.vue — design-v4 R (2026-05-27) / 信息卡重写 (2026-05-28)
+  CUSTOM 菜单 (apaas 自开发整页 Vue) 预览 + 编辑入口.
 
-  - 默认 preview: iframe runtime URL (apaas 部署后的真运行页)
-  - 编辑: 跳 /coding?app_id=N (Vibe Coding / IDE 改源码)
+  apaas menu_type=CUSTOM 菜单 link_url = 注册到运行态的 Vue 组件名
+  (例: apaas-custom-library-home-dashboard). 平台运行时按组件名扫描加载渲染.
 
-  apaas menu_type=CUSTOM 菜单 link_url 是 dev workspace 的 page code
-  (例: apaas-custom-library-home-dashboard). runtime 走 apaas 应用域名.
+  2026-05-28: 之前 preview 用 iframe 塞 apaas runtime URL — 但 apaas 是 SPA, 运行态
+  路由我们拿不到精确 pattern (且 app 没发布到生产时运行页根本不存在) → iframe 空白.
+  改成信息卡 + 双入口 (用户决策): 显组件名 + 在 apaas 打开真应用 + 去 IDE 改源码.
+  比空白 iframe 诚实可用.
 -->
 <template>
   <section class="cpp">
@@ -14,74 +16,70 @@
         <h1 class="cpp-title">{{ menuName || '自开发页面' }}</h1>
         <span class="cpp-chip">🎨 自开发</span>
       </div>
-      <div class="cpp-head-actions">
-        <div class="cpp-view-toggle" role="group" aria-label="切换查看模式">
-          <button
-            type="button"
-            class="cpp-toggle-btn"
-            :class="{ active: viewMode === 'preview' }"
-            @click="viewMode = 'preview'"
-          >
-            <span class="cpp-toggle-icon">👁</span>
-            预览
-          </button>
-          <button
-            type="button"
-            class="cpp-toggle-btn"
-            :class="{ active: viewMode === 'edit' }"
-            @click="viewMode = 'edit'"
-          >
-            <span class="cpp-toggle-icon">✏️</span>
-            编辑
-          </button>
-        </div>
-      </div>
     </header>
 
-    <div v-if="viewMode === 'preview'" class="cpp-banner">
-      <span class="cpp-banner-icon">✨</span>
-      <span>业务视角预览 — 跟最终用户看的真页面一致. 改 UI 请去 IDE 改 Vue 源码.</span>
-    </div>
+    <div class="cpp-body">
+      <div class="cpp-card">
+        <div class="cpp-card-icon">🧩</div>
+        <h2>自开发整页 Vue 组件</h2>
+        <p>
+          这个菜单挂的是自开发的 Vue 页面, 在 apaas 应用运行时由平台
+          <strong>按组件名扫描加载</strong>渲染 — 不是数据驱动表单, 设计器无法静态
+          模拟它的交互.
+        </p>
 
-    <ApaasEmbedIframe
-      v-if="viewMode === 'preview'"
-      class="cpp-frame"
-      :app-id="props.appId"
-      :menu-id="props.menuId"
-      menu-type="CUSTOM"
-      mode="runtime"
-    />
+        <div v-if="pageCode" class="cpp-code-row">
+          <span class="cpp-code-label">组件名 / 页面码</span>
+          <code class="cpp-code-val">{{ pageCode }}</code>
+        </div>
 
-    <div v-else class="cpp-edit">
-      <div class="cpp-edit-card">
-        <div class="cpp-edit-icon">💻</div>
-        <h2>自开发 Vue 组件</h2>
-        <p>这个页面是用 Vue / TypeScript 写的, apaas 平台没有可视化编辑器.</p>
-        <p class="cpp-edit-hint">改 UI / 加交互 / 调样式 → 去 Vibe Coding / 在线 IDE 改源码.</p>
-        <button type="button" class="cpp-edit-cta" @click="onGoToCoding">
-          去 IDE 修改源码 →
-        </button>
+        <div class="cpp-actions">
+          <button type="button" class="cpp-cta cpp-cta-primary" @click="onOpenInApaas">
+            <span>🚀</span> 在 apaas 打开真应用
+          </button>
+          <button type="button" class="cpp-cta cpp-cta-ghost" @click="onGoToCoding">
+            <span>💻</span> 去 IDE 改源码
+          </button>
+        </div>
+
+        <p class="cpp-hint">
+          “在 apaas 打开真应用” 会新开标签跳到平台运行态 (需应用已部署); “去 IDE
+          改源码” 进 Vibe Coding 改这个组件的 Vue / TS 源码.
+        </p>
       </div>
     </div>
   </section>
 </template>
 
 <script setup lang="ts">
-import { ref } from 'vue'
 import { useRouter } from 'vue-router'
-import ApaasEmbedIframe from './ApaasEmbedIframe.vue'
+import { useUserStore } from '@/stores/user'
+import { buildPlatformProxyMenuUrl } from '@/utils/platformIframe'
 
 const props = defineProps<{
   appId: number
   menuId: string
   menuName?: string
+  /** apaas CUSTOM 菜单 link_url — 注册的 Vue 组件名 (apaas-custom-*). 可选. */
+  pageCode?: string
 }>()
 
-const viewMode = ref<'preview' | 'edit'>('preview')
 const router = useRouter()
+const userStore = useUserStore()
 
 function onGoToCoding() {
   router.push({ path: '/coding', query: { app_id: String(props.appId) } })
+}
+
+function onOpenInApaas() {
+  const token = userStore.token || localStorage.getItem('token') || ''
+  const base = buildPlatformProxyMenuUrl(props.appId, token, {
+    menuId: props.menuId || undefined,
+    menuType: 'CUSTOM',
+  })
+  const sep = base.includes('?') ? '&' : '?'
+  // 顶层新标签打开运行态 — 比 sandbox iframe 更能承载 apaas SPA + 真 session
+  window.open(`${base}${sep}redirect_kind=runtime`, '_blank', 'noopener')
 }
 </script>
 
@@ -96,26 +94,22 @@ function onGoToCoding() {
 
 .cpp-head {
   display: flex;
-  justify-content: space-between;
   align-items: center;
   padding: 16px 20px;
   border-bottom: 1px solid var(--line);
   flex-shrink: 0;
 }
-
 .cpp-head-meta {
   display: flex;
   align-items: center;
   gap: 12px;
 }
-
 .cpp-title {
   font-size: 18px;
   font-weight: 600;
   color: var(--text-1);
   margin: 0;
 }
-
 .cpp-chip {
   display: inline-flex;
   align-items: center;
@@ -128,129 +122,102 @@ function onGoToCoding() {
   font-weight: 500;
 }
 
-.cpp-head-actions {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-}
-
-.cpp-view-toggle {
-  display: inline-flex;
-  background: var(--surface-2);
-  border-radius: 8px;
-  padding: 2px;
-  border: 1px solid var(--line);
-}
-
-.cpp-toggle-btn {
-  display: inline-flex;
-  align-items: center;
-  gap: 4px;
-  padding: 6px 14px;
-  background: transparent;
-  border: none;
-  border-radius: 6px;
-  color: var(--text-3);
-  font-size: 13px;
-  font-family: inherit;
-  cursor: pointer;
-  transition: all 0.15s;
-}
-
-.cpp-toggle-btn:hover {
-  color: var(--text-1);
-}
-
-.cpp-toggle-btn.active {
-  background: var(--surface);
-  color: var(--brand);
-  font-weight: 600;
-  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.06);
-}
-
-.cpp-toggle-icon {
-  font-size: 13px;
-}
-
-.cpp-banner {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  padding: 10px 20px;
-  background: var(--brand-soft);
-  color: var(--brand);
-  font-size: 13px;
-  flex-shrink: 0;
-}
-
-.cpp-banner-icon {
-  font-size: 14px;
-}
-
-.cpp-frame {
-  flex: 1;
-  min-height: 400px;
-}
-
-.cpp-edit {
+.cpp-body {
   flex: 1;
   display: flex;
   align-items: center;
   justify-content: center;
   padding: 40px 20px;
+  overflow-y: auto;
 }
-
-.cpp-edit-card {
-  max-width: 480px;
+.cpp-card {
+  max-width: 520px;
   text-align: center;
-  padding: 40px 32px;
+  padding: 36px 32px;
   background: var(--surface-2);
   border: 1px solid var(--line);
   border-radius: 12px;
 }
-
-.cpp-edit-icon {
-  font-size: 56px;
-  margin-bottom: 16px;
+.cpp-card-icon {
+  font-size: 48px;
+  margin-bottom: 14px;
 }
-
-.cpp-edit-card h2 {
-  font-size: 20px;
+.cpp-card h2 {
+  font-size: 19px;
   font-weight: 600;
   color: var(--text-1);
-  margin: 0 0 8px;
+  margin: 0 0 10px;
 }
-
-.cpp-edit-card p {
-  font-size: 14px;
+.cpp-card p {
+  font-size: 13.5px;
   color: var(--text-2);
-  line-height: 1.6;
-  margin: 0 0 6px;
+  line-height: 1.65;
+  margin: 0 0 10px;
+}
+.cpp-card p strong {
+  color: var(--text-1);
+  font-weight: 600;
 }
 
-.cpp-edit-hint {
+.cpp-code-row {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  margin: 16px 0;
+  padding: 10px 14px;
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+}
+.cpp-code-label {
+  font-size: 12px;
   color: var(--text-3);
-  font-size: 13px;
-  margin-bottom: 24px !important;
+  flex-shrink: 0;
+}
+.cpp-code-val {
+  font-family: var(--font-mono, ui-monospace, monospace);
+  font-size: 12.5px;
+  color: var(--ai, #1D89A8);
+  word-break: break-all;
 }
 
-.cpp-edit-cta {
+.cpp-actions {
+  display: flex;
+  gap: 10px;
+  justify-content: center;
+  margin: 20px 0 14px;
+  flex-wrap: wrap;
+}
+.cpp-cta {
   display: inline-flex;
   align-items: center;
   gap: 6px;
-  padding: 10px 20px;
-  background: var(--brand);
-  color: white;
-  border: none;
+  padding: 9px 18px;
   border-radius: 8px;
-  font-size: 14px;
+  font-size: 13.5px;
   font-weight: 500;
   font-family: inherit;
   cursor: pointer;
-  transition: opacity 0.15s;
+  transition: opacity 0.15s, background 0.15s;
 }
+.cpp-cta-primary {
+  background: var(--brand);
+  color: #fff;
+  border: none;
+}
+.cpp-cta-primary:hover { opacity: 0.88; }
+.cpp-cta-ghost {
+  background: var(--surface);
+  color: var(--text-1);
+  border: 1px solid var(--line-strong, var(--line));
+}
+.cpp-cta-ghost:hover { background: var(--surface-2); }
 
-.cpp-edit-cta:hover {
-  opacity: 0.85;
+.cpp-hint {
+  font-size: 12px !important;
+  color: var(--text-3) !important;
+  line-height: 1.6;
+  margin: 0 !important;
 }
 </style>
