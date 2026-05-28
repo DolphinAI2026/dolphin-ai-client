@@ -14,7 +14,11 @@
     </nav>
     <div class="wt-body">
       <SpecDesignPanel v-if="active === 'requirement'" :app-id="appId" />
-      <div v-else-if="active === 'preview'" class="wt-placeholder">预览 Tab（Task 8 接入 iframe）</div>
+      <PreviewTab
+        v-else-if="active === 'preview'"
+        :app-id="appId"
+        @select-block="$emit('select-block', $event)"
+      />
       <div v-else class="wt-placeholder">「{{ activeLabel }}」敬请期待</div>
     </div>
   </div>
@@ -23,8 +27,10 @@
 <script setup lang="ts">
 import { ref, computed } from 'vue'
 import SpecDesignPanel from '@/components/v3/SpecDesignPanel.vue'
+import PreviewTab from '@/components/ai-coding/PreviewTab.vue'
 
 defineProps<{ appId: number }>()
+defineEmits<{ (e: 'select-block', label: string): void }>()
 
 const tabs = [
   { key: 'requirement', label: '需求', disabled: false },

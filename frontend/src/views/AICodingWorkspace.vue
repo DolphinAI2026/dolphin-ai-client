@@ -11,6 +11,7 @@
       <!-- 左：对话主线（复用 SpecChatPanel：对话改需求基线 + diff 接受/弃用） -->
       <section class="aicoding-chat" :style="{ flexBasis: chatWidth + 'px' }">
         <SpecChatPanel
+          ref="specChatRef"
           :app-id="appId!"
           :active-chapter="activeChapter"
           :chapter-title="chapterTitle"
@@ -21,7 +22,7 @@
 
       <!-- 右：6 Tab 工作区 -->
       <section class="aicoding-work">
-        <WorkspaceTabs :key="refreshKey" :app-id="appId!" />
+        <WorkspaceTabs :key="refreshKey" :app-id="appId!" @select-block="onSelectBlock" />
       </section>
     </div>
   </BuilderFrame>
@@ -30,11 +31,13 @@
 <script setup lang="ts">
 import { ref, computed, onUnmounted } from 'vue'
 import { useRoute } from 'vue-router'
+import { ElMessage } from 'element-plus'
 import BuilderFrame from '@/components/BuilderFrame.vue'
 import WorkspaceTabs from '@/components/ai-coding/WorkspaceTabs.vue'
 import SpecChatPanel from '@/components/v3/SpecChatPanel.vue'
 
 const route = useRoute()
+const specChatRef = ref<{ focusInput?: () => void } | null>(null)
 
 const appId = computed<number | null>(() => {
   const raw = route.params.appId
@@ -52,6 +55,13 @@ const chapterTitle = ref('数据模型')
 const refreshKey = ref(0)
 function onSpecUpdated(_sectionType: string, _sectionKey: string) {
   refreshKey.value++
+}
+
+// 在预览原型上点选某区块 → 聚焦左侧对话 + 提示。
+// SpecChatPanel 暂无外部预填能力（只 expose focusInput），完整「点选自动填入对话」留后续切片。
+function onSelectBlock(label: string) {
+  ElMessage.info(`已选中「${label}」，在左侧对话里说要怎么改`)
+  specChatRef.value?.focusInput?.()
 }
 
 const chatWidth = ref(420)
