@@ -122,7 +122,9 @@ async def assert_tenant_quota(
         raise ValueError(f"未知资源类型: {resource}")
 
     limit = getattr(tenant, _LIMIT_FIELD[resource])
-    if used >= limit:
+    # 2026-05-28: limit <= 0 / None = 不限制 (off switch). 给某租户设 max_applications=0
+    # 即"该租户应用数量无上限" —— trial / 内部测试租户用, 不必再撞 10 上限。
+    if limit and limit > 0 and used >= limit:
         raise HTTPException(
             status_code=409,
             detail=(
