@@ -1195,18 +1195,33 @@ BASE_TOOL_SCHEMAS = TOOL_SCHEMAS
 
 
 async def get_all_tool_schemas() -> list[dict]:
-    """合并 base 4 + MCP bridge 工具。MCP 不可用时退化到 base 4。
+    """合并 base 工具 + MCP bridge 工具 (按 agent 白名单过滤)。
 
     每次 agent turn 开始时调用——让"装上新 MCP 工具立即可用"，不用重启 backend。
+
+    2026-05-28: 之前把全部 117 个 MCP 工具无过滤塞给 LLM → 工具过载, agent 挑错工具/
+    漏参/反复重写 (实测 generate_app_from_doc 失灵 + write_artifact 缺 filename + 一份文档
+    写两个名字). 智能搭建 = unified builder+coding agent, 按 tool_registry 白名单砍到
+    builder ∪ coding (~71), 跟 config_chat 同套路. base 本地工具不在 registry, 永远保留.
     """
     from app.ai_chat.mcp_bridge import get_tool_schemas_openai
+    from app.tool_registry import tools_for_agent
     try:
         mcp_schemas = await get_tool_schemas_openai()
     except Exception as e:
         # MCP 不可用不影响 base 工具
         import logging as _log
-        _log.getLogger(__name__).warning("MCP bridge 加载失败，退化到 base 4 工具：%s", e)
+        _log.getLogger(__name__).warning("MCP bridge 加载失败，退化到 base 工具：%s", e)
         mcp_schemas = []
+    try:
+        allow = set(tools_for_agent("builder")) | set(tools_for_agent("coding"))
+        mcp_schemas = [
+            s for s in mcp_schemas
+            if s.get("function", {}).get("name") in allow
+        ]
+    except Exception as e:  # 白名单异常时不拦, 退化到全量 (有总比崩好)
+        import logging as _log
+        _log.getLogger(__name__).warning("工具白名单过滤失败, 退化到全量 MCP: %s", e)
     return BASE_TOOL_SCHEMAS + mcp_schemas
 
 
