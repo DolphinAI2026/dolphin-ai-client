@@ -47,6 +47,12 @@ from app.models import Application
 
 logger = logging.getLogger(__name__)
 
+# parsed_sections schema 版本 — 改 raw_sections 结构 (加章节/改字段名) 时 +1.
+# _get_or_refresh_spec_document 用它判 DB 缓存是否陈旧 (老版本 → 强制 regen),
+# 否则数据没变 hash 不变, schema 升级后老缓存会一直被服务 (实证: 章十自开发漏检).
+# v2 (2026-05-28): menus 加 menu_id/menu_type/link_url key + 章十 CUSTOM 过滤修 + form_custom_widgets.
+SPEC_GENERATOR_VERSION = 2
+
 
 # ---------------------------------------------------------------------------
 # Lightweight MCP tool dispatch helper (本地复刻 section_content 的 _safe_call_mcp_tool)
@@ -307,18 +313,28 @@ async def _render_menus(
             continue
         m_name = str(m.get("menu_name") or m.get("name") or "")
         m_code = str(m.get("menu_code") or m.get("code") or "")
-        m_type = str(m.get("menu_type") or "").upper()
-        form_id = str(m.get("form_id") or "")
+        m_type = str(m.get("menu_type") or m.get("type") or "").upper()
+        form_id = str(m.get("form_id") or m.get("formId") or "")
+        link_url = str(m.get("link_url") or m.get("linkUrl") or "")
+        menu_id = str(m.get("menu_id") or m.get("menuId") or m.get("id") or "")
         md.append(f"| {m_name} | `{m_code}` | {m_type} | `{form_id}` |")
         safe_menus.append({
+            # 前端 _toSectionItems(s.menus,'menu_id','menu_name','menu_code') + extra 读
+            # menu_type / link_url, 必须用这套 key (老的 name/type 前端读不到 → 章十 0 个).
+            "menu_id": menu_id, "menu_name": m_name, "menu_code": m_code,
+            "menu_type": m_type, "link_url": link_url, "form_id": form_id,
+            # 内部 _render_forms_lists / custom 过滤仍用 name/code/type
             "name": m_name, "code": m_code, "type": m_type,
-            "form_id": form_id,
             "datasource_id": str(m.get("datasource_id") or m.get("datasourceId") or ""),
         })
     md.append("")
 
-    # 章十: 集成 & 自开发 菜单 (custom menus)
-    custom_menus = [m for m in safe_menus if m.get("type") == "PAGE_CUSTOM_DEV"]
+    # 章十: 集成 & 自开发 菜单 (自开发整页 Vue). 实证 menu_type=CUSTOM (不是 PAGE_CUSTOM_DEV
+    # — 那是 form-page build 的 templateType, 不是 menu_type), 兼容别名.
+    custom_menus = [
+        m for m in safe_menus
+        if m.get("type") in ("CUSTOM", "PAGE_CUSTOM_DEV", "MENU_TYPE_CUSTOM")
+    ]
     return "\n".join(md), safe_menus, custom_menus
 
 
@@ -727,6 +743,9 @@ async def generate_spec_markdown(
     md11, raw11 = _render_datasources(all_menus, raw3)
     parts.append(md11)
     raw_sections["datasources"] = raw11
+
+    # 标记生成器版本 — 缓存陈旧判断用 (schema 升级 → 老缓存 _gen_version 不匹配 → regen)
+    raw_sections["_gen_version"] = SPEC_GENERATOR_VERSION
 
     markdown = "\n".join(parts)
     sections_hash = _compute_hash(raw_sections)

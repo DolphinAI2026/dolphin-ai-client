@@ -43,7 +43,23 @@ from app.models import Application
 from app.models.spec_applied_version import SpecAppliedVersion
 from app.models.spec_document import SpecDocument
 from app.permissions import Action, check_resource_permission
-from app.services.spec_markdown_generator import generate_spec_markdown
+from app.services.spec_markdown_generator import (
+    SPEC_GENERATOR_VERSION,
+    generate_spec_markdown,
+)
+
+
+def _parsed_gen_version(parsed_json: str | None) -> int:
+    """从缓存的 parsed_sections_json 抠 _gen_version. 缺/解析失败 → 0 (视为陈旧→regen).
+    生成器 schema 升级 (SPEC_GENERATOR_VERSION +1) 后, 老缓存 version 不匹配自动重生.
+    """
+    if not parsed_json:
+        return 0
+    try:
+        import json as _json
+        return int((_json.loads(parsed_json) or {}).get("_gen_version") or 0)
+    except Exception:  # noqa: BLE001
+        return 0
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
@@ -206,6 +222,7 @@ async def _get_or_refresh_spec_document(
         and cached.sections_hash
         and cached.parsed_sections_json
         and cached.parsed_sections_json not in ("{}", "")
+        and _parsed_gen_version(cached.parsed_sections_json) == SPEC_GENERATOR_VERSION
     ):
         return cached, True
 
