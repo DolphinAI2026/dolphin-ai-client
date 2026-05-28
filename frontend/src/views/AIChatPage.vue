@@ -741,6 +741,39 @@ function openAppReady(info: AppReadyInfo) {
   ElMessage.warning('找不到应用入口')
 }
 
+// ─────────── 2026-05-28 一键到底：草稿建好后自动触发服务端真生成 ───────────
+//
+// 痛点：点「生成应用」→ agent 调 generate_app_from_doc 只建本地草稿（status:draft，
+// 没碰 apaas）→ md 文档 ≠ 应用。用户还得跑到 Builder 工作台再点一次「生成应用」才真建。
+//
+// 修复：显式点过「生成应用」(pendingAutoGenerate=true) 后，一旦检测到草稿创建成功
+// (appReadyInfo 有 appId 且还没 apaasAppId)，自动 POST /generate-run 让服务端后台真生成。
+// 服务端跑（不依赖浏览器），进度可在「打开应用」后的工作台 timeline 看。
+// 用 pendingAutoGenerate 门控 + appId 去重 —— 避免打开历史会话时误触发。
+const pendingAutoGenerate = ref(false)
+const autoGenFiredFor = ref<number | null>(null)
+watch(appReadyInfo, async (info) => {
+  if (!pendingAutoGenerate.value) return
+  if (!info || !info.appId) return
+  if (info.apaasAppId) { pendingAutoGenerate.value = false; return }  // 已在平台上，无需再生成
+  if (autoGenFiredFor.value === info.appId) return
+  autoGenFiredFor.value = info.appId
+  pendingAutoGenerate.value = false
+  try {
+    const r = await applicationApi.generateRun(info.appId)
+    if (r?.started) {
+      ElMessage.success('已开始把应用真正生成到 apaas 平台（创建模型/表单/角色）—— 点「打开应用」看生成进度')
+    } else if (r?.already_running) {
+      ElMessage.info('应用正在生成中…')
+    }
+    // already_done：无需提示，CTA 直接打开
+  } catch (e: any) {
+    autoGenFiredFor.value = null  // 允许重试
+    const detail = e?.response?.data?.detail || e?.message || ''
+    ElMessage.warning(`自动生成未启动：${detail}（可在 Builder 工作台手动点「生成应用」）`)
+  }
+}, { immediate: false })
+
 // 把 messages + tool_calls + transient 按时间合成一条线
 type TLItem =
   | { kind: 'msg'; msg: AIChatMessage }
@@ -1566,6 +1599,9 @@ function onChooseDialogConfirm(payload: { mode: 'new' } | { mode: 'update'; appI
 async function sendGenerateAppMessage() {
   if (!canSendArtifactToBuilder.value || isSending.value) return
   if (!activeArtifactName.value) return
+  // 一键到底：标记"本次点击后要自动把草稿真生成到 apaas"。
+  // 只有显式点了「生成应用」才置 true —— 避免打开历史会话时 appReadyInfo 重算误触发生成。
+  pendingAutoGenerate.value = true
   inputText.value = `请基于《${activeArtifactName.value}》调用 generate_app_from_doc 工具直接生成应用，生成完告诉我 app_id。`
   await nextTick()
   onSend()

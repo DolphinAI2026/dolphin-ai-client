@@ -64,6 +64,10 @@ export const applicationApi = {
   executeStep(appId: number, step: string) {
     return request.post<any, any>(`/applications/${appId}/steps/execute`, { step })
   },
+  // 一键到底：服务端后台触发真 apaas 生成（创建模型/表单/角色），立即返回，进度走 getStepStatus 轮询
+  generateRun(appId: number) {
+    return request.post<any, { started: boolean; already_running?: boolean; already_done?: boolean; app_id: number; status?: string; apaas_app_id?: string }>(`/applications/${appId}/generate-run`)
+  },
   resetStep(appId: number, step?: string) {
     return request.post<any, any>(`/applications/${appId}/steps/reset`, { step: step || null })
   },

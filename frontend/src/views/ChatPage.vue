@@ -187,7 +187,7 @@
           <button
             type="button"
             class="cta-btn cta-deploy"
-            :title="canDeployFromTopCTA ? '发布当前应用到生产环境 (走完整部署流程)' : '应用尚未生成可部署内容'"
+            :title="!isPlatformDeployed ? '生成应用：把设计配置真正建到 apaas 平台（创建模型/表单/角色）' : (canDeployFromTopCTA ? '发布当前应用到生产环境 (走完整部署流程)' : '应用尚未生成可部署内容')"
             :disabled="!canDeployFromTopCTA"
             @click="onTopCtaDeploy"
           >
@@ -198,7 +198,7 @@
                 <path d="M5 14h6" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" />
               </svg>
             </span>
-            <span>发布到生产</span>
+            <span>{{ isPlatformDeployed ? '发布到生产' : '生成应用' }}</span>
           </button>
           <button
             type="button"
