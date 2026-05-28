@@ -510,11 +510,13 @@
            completed deploySteps 误判为已部署）。pre-deploy 直接显示 MD；post-deploy
            已经走 ConfigAssistantPanel 路径（apaas_app_id 存在时由 isPostDeploy 路由）。 -->
       <div
-        v-if="existingAppId && !store.currentApp?.apaas_app_id && !isDeploying && !deployAllDone"
+        v-if="existingAppId && !isDeploying"
         class="builder-md-viewer"
       >
         <div class="md-viewer-head">
           <div class="md-viewer-title">{{ lastParsedFilename || `${builderAppDisplayName || '功能设计文档'}.md` }}</div>
+          <!-- 2026-05-28: 已部署时把"打开应用"收成头部小按钮 (替代原中央占满的 🎉 hero, 太多余) -->
+          <button v-if="(store.currentApp?.apaas_app_id || platformDirectUrl) && deployAllDone" class="md-download-btn" style="margin-left: 6px" @click="openInPlatform" title="在 apaas 打开已部署应用">✅ 已部署 · 打开应用 →</button>
           <button v-if="latestDocContent || selectedDocDisplayContent" class="md-download-btn" @click="downloadCurrentDoc">下载 .md</button>
           <!-- 2026-05-24 Agent C: 部署历史 + 回滚入口 -->
           <button
@@ -538,36 +540,9 @@
         </div>
       </div>
 
-      <!-- 2026-05-21 中间 hero 区：deploy 进行中显示居中 placeholder（避免左右两侧都在
-           列步骤、中间一片空），deploy 完成后显示大 CTA "打开应用 →"。
-           右侧 .deploy-progress-side / ConfigAssistantPanel 各自承担 timeline / 配置 UI，
-           中间只承担"主要动作"。-->
-      <div
-        v-else-if="deployAllDone"
-        class="builder-deploy-hero"
-      >
-        <div class="bdh-card">
-          <div class="bdh-emoji" aria-hidden="true">🎉</div>
-          <div class="bdh-title">「{{ builderAppDisplayName || '应用' }}」已部署完成</div>
-          <div class="bdh-sub" v-if="store.currentApp?.apaas_app_id">
-            apaas_app_id = <code>{{ store.currentApp.apaas_app_id }}</code>
-          </div>
-          <div class="bdh-actions">
-            <button
-              v-if="store.currentApp?.apaas_app_id || platformDirectUrl"
-              type="button"
-              class="bdh-btn primary"
-              @click="openInPlatform"
-            >打开应用 →</button>
-            <button
-              v-if="showAnyBuilderArtifactPanel === false && showBuilderArtifactToggle"
-              type="button"
-              class="bdh-btn ghost"
-              @click="toggleArtifactPanel"
-            >看 SPEC</button>
-          </div>
-        </div>
-      </div>
+      <!-- 2026-05-28: 删掉 deploy 完成后的中央 🎉 大 hero (用户反馈"多余" — 应用早部署好,
+           点进来该看设计文档/配置, 不该被庆祝卡挡住)。"打开应用"已收进上方文档头小按钮 +
+           顶部"查看应用"。中央 hero 只保留 deploy 进行中的等待占位。-->
       <div
         v-else-if="isDeploying"
         class="builder-deploy-hero"
