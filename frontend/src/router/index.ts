@@ -227,6 +227,12 @@ const router = createRouter({
       component: () => import('@/views/ExtensionSectionDemoPage.vue'),
       meta: { requiresAuth: true }
     },
+    {
+      path: '/ai-coding/:appId?',
+      name: 'AICoding',
+      component: () => import('@/views/AICodingWorkspace.vue'),
+      meta: { requiresAuth: true }
+    },
     // M3 (2026-05-27): 删 /datasources stub — 用老 /db-connections 真页 (DbConnectionsPage)
     // 当 "数据源" nav 入口. 重定向兼容 G3 老路径.
     {
