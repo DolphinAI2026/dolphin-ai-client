@@ -20,8 +20,6 @@ const CRUMB_LABELS: Record<string, string> = {
   '/chat': '睿鲸 AI Builder',
   '/ai-chat': '睿鲸 AI Builder',
   '/coding': '睿鲸 AI Coding',
-  '/vibe': 'Vibe Coding',
-  '/vibe-coding': 'Vibe Coding',
   '/agents': '智能体配置',
   '/specs': '设计文档',
   '/industry': '行业知识库',
@@ -30,10 +28,6 @@ const CRUMB_LABELS: Record<string, string> = {
   '/admin/tenants': '平台管理',
   '/db-connections': '数据库连接',
   '/quick-db': 'DB 问数',
-  // v3 2026-05-20 fix: 之前 CRUMB_LABELS 写的 '/sandbox-monitor' / '/platform-tenants'
-  // 跟 router/index.ts 的真实 path 不匹配，永远不命中 → fall through 显 "页面"。
-  // 改成真路径：SandboxMonitor 是 /vibe-coding/sandboxes，PlatformTenants 是 /admin/tenants
-  '/vibe-coding/sandboxes': '沙箱监控',
   '/tenant-users': '成员管理',
   '/platform-envs': '平台环境',
   '/admin/tenants': '租户管理',

@@ -34,10 +34,6 @@
             <el-icon><Plus /></el-icon>
             <span>新建应用</span>
           </button>
-          <button class="btn btn-primary apps-toolbar-action" type="button" @click="router.push('/ai-coding/new')">
-            <el-icon><Plus /></el-icon>
-            <span>新建 AI 应用</span>
-          </button>
 
           <div class="apps-view-toggle" aria-label="视图切换">
             <button
@@ -421,20 +417,6 @@ function appWorkspaceQuery(app: MergedApplication) {
 }
 
 function openApp(app: MergedApplication) {
-  // ai-code 应用（vibe-coding 生成）进 vibe coding 工作台；low-code 才进 /chat 的 SPEC 流程
-  if (app.app_type === 'ai-code' && app.source_workspace_id) {
-    const wid = app.source_workspace_id
-    tabsStore.openTab({
-      id: `aicode:${wid}`,
-      path: `/ai-coding/${wid}`,
-      label: app.app_name || 'AI Coding',
-      icon: 'app',
-      closable: true,
-      kind: 'app',
-    })
-    router.push(`/ai-coding/${wid}`)
-    return
-  }
   // WorkspaceShell is not a complete editing surface yet. Keep the primary
   // application entry on ChatPage, which owns app-scoped SPEC/edit/deploy flow.
   const query = appWorkspaceQuery(app)

@@ -29,7 +29,6 @@ const NAV = computed<NavItem[]>(() => [
   { key: 'apps', label: '应用', icon: 'apps', path: '/apps', badge: appCount.value || undefined },
   { key: 'builder', label: '睿鲸 AI Builder', icon: 'chat', path: '/ai-chat?mode=requirements' },
   { key: 'coding', label: '睿鲸 AI Coding', icon: 'code', path: '/coding', badge: codingWorkspaceCount.value || undefined },
-  { key: 'vibe', label: 'Vibe Coding', icon: 'sparkles', path: '/vibe-coding' },
   // M4 (2026-05-27): 数据源从工作台搬到平台管理 (admin-spa /datasources).
   // 工作台 nav 仅留应用搭建相关 5 项, 平台级配置 (数据源 / LLM / 租户) 全归 admin-spa.
 ])

@@ -9,11 +9,10 @@ import { computed, ref } from 'vue'
 import { useRouter } from 'vue-router'
 import { usePreviewStore } from '@/stores/preview'
 
-type Mode = 'builder' | 'coding' | 'vibe'
-const MODES: { id: Mode; label: string; sub: string; tone: 'ai' | 'brand' | 'emerald' }[] = [
+type Mode = 'builder' | 'coding'
+const MODES: { id: Mode; label: string; sub: string; tone: 'ai' | 'brand' }[] = [
   { id: 'builder', label: '睿鲸 AI Builder', sub: '搭应用 + 应用内自开发（页面 / 接口）',   tone: 'ai' },
   { id: 'coding',  label: '睿鲸 AI Coding',  sub: '通用组件库 — 跨应用复用',                tone: 'brand' },
-  { id: 'vibe',    label: 'Vibe Coding',    sub: '浏览器 VS Code 全代码 + AI 协助',        tone: 'emerald' },
 ]
 
 const mode = ref<Mode>('builder')
@@ -28,17 +27,15 @@ const previewStore = usePreviewStore()
 const placeholder = computed(() => ({
   builder: '说说你想做什么。例：管理我们部门 200 台设备的领用、归还和报废…',
   coding:  '描述要做的通用组件。例：做一个支持多选 + 异步加载的客户树组件 / 一个 OCR 上传组件。',
-  vibe:    '描述你想做的代码任务，进入 Vibe Coding 工作区继续。',
 }[mode.value]))
 
 // 永久 hint 文字，显示在 textarea 下方
 const persistentHint = computed(() => ({
   builder: '💡 应用内做自开发（页面 / 后端接口）建议先进入应用，从应用里发起',
   coding:  '💡 通用组件可跨应用复用，进入 AI Coding 工作区后可挂载到任意应用',
-  vibe:    '💡 全代码模式 — 适合从零搭独立项目（Vue / Next / Go 等）',
 }[mode.value]))
 
-const cta = computed(() => ({ builder: '开始对话', coding: '开始生成', vibe: '打开工作区' }[mode.value]))
+const cta = computed(() => ({ builder: '开始对话', coding: '开始生成' }[mode.value]))
 
 const canSubmit = computed(() => {
   if (mode.value === 'builder') return !!text.value.trim() || files.value.length > 0
@@ -72,11 +69,9 @@ function submit() {
       path: '/ai-chat',
       query: { mode: 'requirements', ...(userPrompt ? { prompt: userPrompt } : {}) },
     })
-  } else if (mode.value === 'coding') {
-    // Landing 选应用 + 直接跳 /coding 的链路撤掉（UX 不顺）— 进 /coding 后由 agent 引导选目标 app
-    router.push({ path: '/coding', query: userPrompt ? { prompt: userPrompt } : {} })
   } else {
-    router.push({ path: '/vibe-coding', query: userPrompt ? { prompt: userPrompt } : {} })
+    // 进 /coding 后由 agent 引导选目标 app
+    router.push({ path: '/coding', query: userPrompt ? { prompt: userPrompt } : {} })
   }
 }
 </script>

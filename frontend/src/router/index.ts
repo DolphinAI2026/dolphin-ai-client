@@ -108,52 +108,10 @@ const router = createRouter({
       meta: { requiresAuth: true }
     },
     {
-      // /vibe — redirects to the real Vibe Coding workspace catalog
-      // (code-server iframe + AI chat lives at /vibe-coding).
-      path: '/vibe',
-      redirect: '/vibe-coding'
-    },
-    {
       path: '/workspace-catalog',
       name: 'WorkspaceCatalog',
       component: () => import('@/views/WorkspaceCatalogPage.vue'),
       meta: { requiresAuth: true }
-    },
-    {
-      path: '/vibe-coding',
-      name: 'OnlineCoding',
-      component: () => import('@/views/OnlineCodingWorkspacePage.vue'),
-      meta: { requiresAuth: true, navExpanded: true }
-    },
-    {
-      // 对话驱动：新建工作区不再弹表单，sidebar 直接 API 创建后跳 workspaces/:id；
-      // 旧 URL 访问时回到工作区列表 — 保留 query（autocreate / prompt 等）
-      path: '/vibe-coding/new',
-      redirect: to => ({ path: '/vibe-coding', query: to.query }),
-    },
-    {
-      path: '/vibe-coding/sandboxes',
-      name: 'SandboxMonitor',
-      component: () => import('@/views/SandboxMonitorPage.vue'),
-      meta: { requiresAuth: true, navExpanded: true }
-    },
-    {
-      path: '/vibe-coding/workspaces/:id',
-      name: 'OnlineCodingWorkspace',
-      component: () => import('@/views/OnlineCodingWorkspacePage.vue'),
-      meta: { requiresAuth: true, navExpanded: true }
-    },
-    {
-      path: '/online-coding',
-      redirect: '/vibe-coding',
-    },
-    {
-      path: '/online-coding/new',
-      redirect: '/vibe-coding/new',
-    },
-    {
-      path: '/online-coding/workspaces/:id',
-      redirect: to => ({ path: `/vibe-coding/workspaces/${to.params.id}`, query: to.query }),
     },
     {
       path: '/project/:id',
@@ -227,18 +185,6 @@ const router = createRouter({
       component: () => import('@/views/ExtensionSectionDemoPage.vue'),
       meta: { requiresAuth: true }
     },
-    {
-      path: '/ai-coding/new',
-      name: 'AICodingNew',
-      component: () => import('@/views/AiCodeEntryPage.vue'),
-      meta: { requiresAuth: true }
-    },
-    {
-      path: '/ai-coding/:wsId',
-      name: 'AICodingWorkspace',
-      component: () => import('@/views/AICodingWorkspace.vue'),
-      meta: { requiresAuth: true, navExpanded: true }
-    },
     // M3 (2026-05-27): 删 /datasources stub — 用老 /db-connections 真页 (DbConnectionsPage)
     // 当 "数据源" nav 入口. 重定向兼容 G3 老路径.
     {
@@ -298,19 +244,6 @@ function safeRedirectPath(raw: unknown): string {
 
 router.beforeEach(async (to, _from, next) => {
   const userStore = useUserStore()
-
-  if (to.path === '/coding' && to.query.type === 'full-code') {
-    const rawId = Array.isArray(to.query.online_workspace_id)
-      ? to.query.online_workspace_id[0]
-      : to.query.online_workspace_id || (Array.isArray(to.query.online_ws) ? to.query.online_ws[0] : to.query.online_ws)
-    const workspaceId = rawId ? String(rawId) : ''
-    const rawView = Array.isArray(to.query.online_view) ? to.query.online_view[0] : to.query.online_view
-    next({
-      path: workspaceId ? `/vibe-coding/workspaces/${workspaceId}` : '/vibe-coding',
-      query: rawView === 'ide' ? { view: 'ide' } : {},
-    })
-    return
-  }
 
   if (to.meta.requiresAuth && !userStore.token) {
     next({ path: '/login', query: { redirect: to.fullPath } })
