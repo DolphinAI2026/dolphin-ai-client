@@ -156,6 +156,37 @@ def _normalize_apaas_origin(base_url: str) -> str:
     return base
 
 
+def _is_allowed_apaas_base_url(base_url: Optional[str], allowlist: list[str]) -> bool:
+    """SSRF 防护: 校验用户传入的 apaas_base_url 是否在白名单内。
+
+    背景: /auth/exchange-apaas-token 无鉴权(SSO 换 token 设计上须允许未登录调), 却接受
+    用户任意 apaas_base_url 去发请求 → 未授权 SSRF。端点不能加登录, 故用 origin 白名单兜底:
+    传入 URL 归一化后的 origin(scheme://host:port) 必须匹配某条已配置 base_url 的 origin。
+    按 origin 比对(非整串前缀)防 host 子串/前缀绕过(如 apaas.x.cn.evil.com / evil.com/apaas.x.cn)。
+    白名单为空 → 拒绝一切, 不留口子。
+    """
+    if not base_url:
+        return False
+    from urllib.parse import urlparse
+
+    def _origin(u: str) -> Optional[tuple]:
+        try:
+            p = urlparse((u or "").strip())
+        except Exception:
+            return None
+        if not p.scheme or not p.netloc:
+            return None
+        return (p.scheme.lower(), p.hostname.lower() if p.hostname else "", p.port)
+
+    target = _origin(base_url)
+    if target is None:
+        return False
+    for allowed in allowlist or []:
+        if _origin(allowed) == target:
+            return True
+    return False
+
+
 def _normalize_tenant_code(value: str, fallback: str) -> str:
     code = re.sub(r"[^a-zA-Z0-9_-]+", "-", (value or "").strip().lower()).strip("-_")
     if not code:
@@ -1032,6 +1063,23 @@ async def exchange_apaas_token(
     apaas_base_url = (data.apaas_base_url or settings.apaas_base_url or "").rstrip("/")
     if not apaas_base_url:
         raise HTTPException(status_code=400, detail="缺 apaas_base_url（且 settings.apaas_base_url 为空）")
+
+    # ── SSRF 防护 ──────────────────────────────────────────────────────────
+    # 本端点无鉴权(SSO 换 token 须允许未登录调), 用户传入的 apaas_base_url 会被拿去发请求。
+    # 用白名单兜底: 只允许 settings 配置的 apaas_base_url + 数据库已配置 env 的 base_url,
+    # 拒绝任意 URL(防探测内网/云元数据)。白名单为空则拒绝一切。
+    allowlist: list[str] = []
+    if settings.apaas_base_url:
+        allowlist.append(settings.apaas_base_url)
+    try:
+        from app.models import PlatformEnv as _PEnv
+        envs = (await db.execute(select(_PEnv.base_url))).scalars().all()
+        allowlist.extend([b for b in envs if b])
+    except Exception as exc:
+        logger.warning("exchange-apaas-token: 加载 env base_url 白名单失败: %s", exc)
+    if not _is_allowed_apaas_base_url(apaas_base_url, allowlist):
+        logger.warning("exchange-apaas-token: 拒绝非白名单 apaas_base_url=%s", apaas_base_url)
+        raise HTTPException(status_code=400, detail="apaas_base_url 不在允许列表内")
 
     # tenant context for /user/info：入参优先，否则空字符串（apaas 自己 fallback）
     tenant_ctx = data.apaas_tenant_id or ""
