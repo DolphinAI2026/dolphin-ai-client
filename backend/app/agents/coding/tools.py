@@ -188,12 +188,45 @@ def build_coding_tools(registry: ToolRegistry | None = None) -> list[Tool]:
                             error="NO_PLATFORM_ENV",
                         )
                     from app.database import AsyncSessionLocal
-                    try:
+                    # 2026-05-29: apaas token 过期(httpx 401)自愈。这 11 个平台工具签名是
+                    # (args, env_id, db) — 套不了 call_apaas_with_relogin(它要 fn(client))，
+                    # 故同源复用 is_apaas_token_error + _relogin_apaas_env(签名 (env_id, db))。
+                    # 一处覆盖全部 11 工具的 Agent 执行路径(MCP 路径已在 _call_apaas_platform_tool
+                    # 用 _looks_like_apaas_401 自愈)。apaas_tools 失败约定返 "Error: ..." 字符串
+                    # (不抛异常)，token 失效的 401 串会落在返回值里 → 命中则重登重试一次。
+                    from app.error_messages import is_apaas_token_error
+                    from app.coding.apaas_tools import _relogin_apaas_env
+
+                    async def _run() -> str:
                         async with AsyncSessionLocal() as db:
-                            result_text = await fn_ref(args or {}, env_id, db)
+                            return await fn_ref(args or {}, env_id, db)
+
+                    async def _relogin() -> bool:
+                        async with AsyncSessionLocal() as db:
+                            return await _relogin_apaas_env(env_id, db)
+
+                    try:
+                        result_text = await _run()
+                        if (
+                            isinstance(result_text, str)
+                            and result_text.lstrip().startswith("Error:")
+                            and is_apaas_token_error(result_text)
+                            and await _relogin()
+                        ):
+                            result_text = await _run()
                     except Exception as e:
-                        logger.exception("apaas tool %s failed", tool_name)
-                        return ToolResult(success=False, content=f"Tool '{tool_name}' execution error: {e}", error=str(e))
+                        if is_apaas_token_error(str(e)):
+                            try:
+                                if await _relogin():
+                                    result_text = await _run()
+                                else:
+                                    raise
+                            except Exception as e2:
+                                logger.exception("apaas tool %s failed (after relogin)", tool_name)
+                                return ToolResult(success=False, content=f"Tool '{tool_name}' execution error: {e2}", error=str(e2))
+                        else:
+                            logger.exception("apaas tool %s failed", tool_name)
+                            return ToolResult(success=False, content=f"Tool '{tool_name}' execution error: {e}", error=str(e))
                     return _wrap_result(result_text)
                 return executor
 

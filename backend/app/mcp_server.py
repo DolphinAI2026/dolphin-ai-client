@@ -1478,7 +1478,7 @@ async def list_apaas_app_processes(env_id: int, apaas_app_id: str) -> dict:
       id, processName, processCode, formId, menuId, nodes_count, edges_count.
     nodes/edges 完整 schema 留给 get_apaas_process_detail 再拉, 这里 list 只给摘要.
     """
-    from app.coding.apaas_tools import _get_apaas_client
+    from app.coding.apaas_tools import call_apaas_with_relogin
     from app.database import AsyncSessionLocal
 
     if not apaas_app_id.strip():
@@ -1486,8 +1486,10 @@ async def list_apaas_app_processes(env_id: int, apaas_app_id: str) -> dict:
 
     async with AsyncSessionLocal() as db:
         try:
-            client = await _get_apaas_client(env_id, db)
-            raw_list = await client.list_processes(apaas_app_id.strip())
+            # 2026-05-29: 套 call_apaas_with_relogin — token 过期(401)自动重登重试。
+            raw_list = await call_apaas_with_relogin(
+                env_id, db, lambda client: client.list_processes(apaas_app_id.strip())
+            )
         except Exception as exc:
             return {
                 "ok": False,
@@ -1536,7 +1538,7 @@ async def get_apaas_process_detail(env_id: int, apaas_app_id: str, process_id: s
     apaas → frontend type 反向映射 (跟 process_translator.py 正向对应):
       START → start, END → end, APPROVE → assignee_approval (默认), 其他 → action 兜底.
     """
-    from app.coding.apaas_tools import _get_apaas_client
+    from app.coding.apaas_tools import call_apaas_with_relogin
     from app.database import AsyncSessionLocal
 
     if not (apaas_app_id.strip() and process_id.strip()):
@@ -1544,12 +1546,14 @@ async def get_apaas_process_detail(env_id: int, apaas_app_id: str, process_id: s
 
     async with AsyncSessionLocal() as db:
         try:
-            client = await _get_apaas_client(env_id, db)
             # 2026-05-28 修流程渲染空: 原走 query_process_config (猜的 /processConfig /queryById
             # 两个 URL 都不通 → PROCESS_QUERY_NOT_AVAILABLE → 前端画布空). 改用实测可用的
             # list_processes —— 它返回的每个流程对象**本来就带完整 nodes/edges**, 按 process_id
             # 挑出对应那条即可, 不再多打一个不存在的 apaas 接口.
-            raw_list = await client.list_processes(apaas_app_id.strip())
+            # 2026-05-29: 套 call_apaas_with_relogin — token 过期(401)自动重登重试。
+            raw_list = await call_apaas_with_relogin(
+                env_id, db, lambda client: client.list_processes(apaas_app_id.strip())
+            )
         except Exception as exc:
             return {"ok": False, "error_code": "APAAS_CLIENT_ERROR", "message": f"调 apaas list_processes 失败: {exc}"}
 
@@ -1743,16 +1747,14 @@ async def deploy_process_to_apaas(
             }
 
         # 4) 调 apaas_client 真同步
+        # 2026-05-29: 套 call_apaas_with_relogin — token 过期(401)自动重登重试。
+        # save_process_config 是写接口, 但 401 发生在认证层(请求没到业务), 重试无重复副作用, 安全。
+        from app.coding.apaas_tools import call_apaas_with_relogin
         try:
-            client = await _get_apaas_client(app.platform_env_id, db)
-        except Exception as exc:
-            return {
-                "ok": False, "error_code": "ENV_NOT_READY",
-                "message": f"拿 apaas_client 失败: {exc}", "env_id": app.platform_env_id,
-            }
-
-        try:
-            apaas_resp = await client.save_process_config(str(app.apaas_app_id), payload)
+            apaas_resp = await call_apaas_with_relogin(
+                app.platform_env_id, db,
+                lambda client: client.save_process_config(str(app.apaas_app_id), payload),
+            )
         except Exception as exc:
             logger.exception("save_process_config failed app_id=%s process_id=%s", app_id, process_id)
             return {
@@ -1983,19 +1985,14 @@ async def _with_client(env_id: int, op: str, fn):
     2026-05-26 (PR3 reviewer P1 #1): 识别 NotImplementedAPaaSError 类型化异常,
     给前端返 error_code=NOT_IMPLEMENTED 让 UI 走友好降级 (替代原字符串子串匹配).
     """
-    from app.coding.apaas_tools import _get_apaas_client
+    from app.coding.apaas_tools import call_apaas_with_relogin
     from app.database import AsyncSessionLocal
     from app.apaas_client import NotImplementedAPaaSError
     async with AsyncSessionLocal() as db:
         try:
-            client = await _get_apaas_client(env_id, db)
-        except Exception as exc:
-            return False, {
-                "ok": False, "error_code": "ENV_NOT_READY",
-                "message": f"{op}失败：{exc}", "env_id": env_id,
-            }
-        try:
-            return True, await fn(client)
+            # 2026-05-29: 委托 call_apaas_with_relogin — 拿 client + 调 fn, token 过期(401)
+            # 自动重登重试。NotImplementedAPaaSError / 其它异常会原样抛出, 下方 except 照常处理。
+            return True, await call_apaas_with_relogin(env_id, db, fn)
         except NotImplementedAPaaSError as exc:
             return False, {
                 "ok": False, "error_code": "NOT_IMPLEMENTED",
@@ -2304,7 +2301,8 @@ async def upload_external_zip_to_apaas(
         return {"ok": False, "error_code": "ZIP_TOO_LARGE", "message": f"zip {len(zip_bytes)} bytes > 20MB"}
 
     # 拿 apaas client + token
-    from app.coding.apaas_tools import _get_apaas_client
+    from app.coding.apaas_tools import _get_apaas_client, _relogin_apaas_env
+    from app.error_messages import is_apaas_token_error
     from app.database import AsyncSessionLocal
     import httpx
     async with AsyncSessionLocal() as db:
@@ -2313,11 +2311,19 @@ async def upload_external_zip_to_apaas(
         except Exception as exc:
             return {"ok": False, "error_code": "ENV_NOT_READY", "message": str(exc), "env_id": env_id}
 
-        # Step 1: 查重
+        # Step 1: 查重 (读接口)。2026-05-29: token 过期(401)自动重登 + 重新拿 client
+        # (新 client 带刷新后 token) → 后续 multipart upload 也用新 token。
         try:
             kits = await client.query_app_dev_kits("", file_name=fname.replace(".zip", ""))
         except Exception as exc:
-            return {"ok": False, "error_code": "QUERY_FAILED", "message": str(exc)}
+            if is_apaas_token_error(str(exc)) and await _relogin_apaas_env(env_id, db):
+                try:
+                    client = await _get_apaas_client(env_id, db)
+                    kits = await client.query_app_dev_kits("", file_name=fname.replace(".zip", ""))
+                except Exception as exc2:
+                    return {"ok": False, "error_code": "QUERY_FAILED", "message": str(exc2)}
+            else:
+                return {"ok": False, "error_code": "QUERY_FAILED", "message": str(exc)}
         existing = next((k for k in (kits or [])
                          if isinstance(k, dict) and (k.get("fileName") == fname)), None)
         action = "update" if existing else "create"
