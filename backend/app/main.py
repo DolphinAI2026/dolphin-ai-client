@@ -37,8 +37,6 @@ from app.routes import (
     marketplace,
     mcp_platform,
     mcp_hub,
-    online_coding,
-    online_coding_runtime,
     platform_envs,
     platform_proxy,
     preferences,
@@ -47,12 +45,10 @@ from app.routes import (
     proposals,
     requirements,
     runtime_v2,
-    sandboxes,
     spec,
     specs_v2,
     sse,
     templates,
-    vibe_coding_chat,
     voice,
     work_state,
 )
@@ -71,9 +67,6 @@ async def lifespan(app: FastAPI):
     except Exception as _exc:
         import logging as _logging
         _logging.getLogger(__name__).warning("MCP session manager 启动失败：%s", _exc)
-
-    # 启动时杀掉所有残留的 vibe-serve.js 进程（清理上次后端退出留下的孤儿进程）
-    subprocess.run(["pkill", "-f", "vibe-serve.js"], capture_output=True)
 
     # 启动时初始化数据库
     await init_db()
@@ -119,25 +112,6 @@ async def lifespan(app: FastAPI):
     import asyncio as _asyncio
     from app.coding.workspace import WorkspaceManager as _WM
     _asyncio.create_task(_WM().prewarm_template_deps())
-
-    # Vibe Coding 沙箱容器空闲回收 — 周期性 stop 长时间无活跃的容器（保留容器，下次 start 复用）
-    async def _vibe_reap_loop():
-        from app.vibe_coding.docker_runtime import get_runtime as _get_rt
-        import logging as _logging
-        _log = _logging.getLogger("vibe_coding.reaper")
-        while True:
-            await _asyncio.sleep(300)  # 5 分钟扫一次
-            try:
-                rt = _get_rt()
-                if not await rt.is_available():
-                    continue
-                stopped = await rt.reap_idle()
-                if stopped:
-                    _log.info("Reaped %d idle sandbox(es): %s", len(stopped), stopped)
-            except Exception as exc:
-                _log.warning("vibe reaper iteration failed: %s", exc)
-
-    _asyncio.create_task(_vibe_reap_loop())
 
     yield
     # 关闭时清理资源
@@ -206,12 +180,8 @@ app.include_router(git_connection.app_router, prefix="/api")
 app.include_router(git_webhook.router, prefix="/api")
 app.include_router(preferences.router, prefix="/api")
 app.include_router(work_state.router, prefix="/api")
-app.include_router(online_coding.router, prefix="/api")
-app.include_router(online_coding_runtime.router, prefix="/api")
-app.include_router(vibe_coding_chat.router, prefix="/api")
 app.include_router(help_assistant.router, prefix="/api")
 app.include_router(voice.router, prefix="/api")
-app.include_router(sandboxes.router, prefix="/api")
 app.include_router(requirements.router, prefix="/api")
 app.include_router(current_app.router, prefix="/api")
 app.include_router(admin_mcp.router, prefix="/api")

@@ -376,15 +376,6 @@ from app.models.ai_chat import (  # noqa: E402, F401
 )
 
 
-# Vibe Coding（全代码）模块 — 注册 ORM mapping
-from app.models.vibe_coding import (  # noqa: E402, F401
-    VibeCodingThread,
-    VibeCodingMessage,
-    VibeCodingToolCall,
-    VibeCodingWorkspaceMember,
-)
-
-
 # V2 redesign — agent configs / industry packs / runtime pipelines + deployments
 from app.models.agent_config import (  # noqa: E402, F401
     AgentConfig,
@@ -403,7 +394,6 @@ from app.models.runtime_v2 import (  # noqa: E402, F401
 from app.models.agent_prompt import AgentPrompt  # noqa: E402, F401  — agent prompt templates per-tenant per-phase
 from app.models.config_assistant_skill import ConfigAssistantSkill  # noqa: E402, F401  — 配置助手自学习 skills
 from app.models.config_chat import ConfigChatSession, ConfigChatMessage  # noqa: E402, F401  — 配置助手会话持久化 (2026-05-24)
-from app.models.app_prototype import AppPrototype  # noqa: E402, F401  — AI Coding HTML 原型快照
 
 
 class DbConnection(Base):

@@ -1937,11 +1937,6 @@ router.include_router(_spec_versions.router)
 from . import business_events as _business_events  # noqa: E402
 router.include_router(_business_events.router)
 
-# Task 3 (2026-05-28): AI Coding 原型生成 SSE endpoint.
-# POST /{app_id}/prototype/generate — LLM 流式产出单文件 HTML, 存 app_prototypes.
-from . import prototype as _prototype  # noqa: E402
-router.include_router(_prototype.router)
-
 
 # ---------------------------------------------------------------------------
 # Phase F：Application 默认模式 (simple|pro|None) 端点
