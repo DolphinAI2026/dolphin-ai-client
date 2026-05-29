@@ -23,17 +23,16 @@
 <template>
   <section class="fbp" aria-label="表单设计器">
     <!-- 空态 1: 未选菜单 -->
-    <div v-if="!menuId" class="fbp-empty">
-      <div class="fbp-empty-icon">📝</div>
-      <h3>选择一个表单</h3>
-      <p>从左侧菜单列表点击某个表单, 这里显该表单的字段设计.</p>
-    </div>
+    <EmptyState
+      v-if="!menuId"
+      title="选择一个表单"
+      desc="从左侧菜单列表点击某个表单, 这里显该表单的字段设计."
+    >
+      <template #icon>📝</template>
+    </EmptyState>
 
     <!-- 空态 2: 加载中 (preview mode) -->
-    <div v-else-if="loading && viewMode === 'preview'" class="fbp-state">
-      <div class="fbp-spinner" />
-      加载字段…
-    </div>
+    <SkeletonCard v-else-if="loading && viewMode === 'preview'" :lines="6" />
 
     <!-- 空态 3: 错误 (preview mode) -->
     <div v-else-if="error && viewMode === 'preview'" class="fbp-state fbp-state-err">
@@ -155,6 +154,8 @@
 import { ref, watch, h, defineComponent, type PropType } from 'vue'
 import request, { API_PREFIX } from '@/utils/request'
 import ApaasEmbedIframe from './ApaasEmbedIframe.vue'
+import EmptyState from '@/components/states/EmptyState.vue'
+import SkeletonCard from '@/components/states/SkeletonCard.vue'
 
 /* ────────────────────────────────────────────────────────────────
    类型 — preview 渲染用 (FormPreviewInput)
@@ -799,8 +800,7 @@ watch(() => [props.appId, props.menuId, props.formId], () => reload(), { immedia
   overflow: hidden;
 }
 
-/* ─── Empty / state ─────────────────────────────────────────── */
-.fbp-empty,
+/* ─── state (error 占位 — empty/loading 走共享 EmptyState / SkeletonCard) ─── */
 .fbp-state {
   display: flex;
   flex-direction: column;
@@ -810,29 +810,12 @@ watch(() => [props.appId, props.menuId, props.formId], () => reload(), { immedia
   height: 100%;
   color: var(--text-3);
   gap: 12px;
-  padding: 48px 16px;
+  padding: var(--s-12) var(--s-4);
 }
-.fbp-empty-icon,
 .fbp-state-icon { font-size: 40px; line-height: 1; }
-.fbp-empty h3 {
-  margin: 0;
-  font-size: 18px;
-  font-weight: 600;
-  color: var(--text);
-}
-.fbp-empty p,
 .fbp-state p { margin: 0; font-size: 13.5px; }
 .fbp-state-err { color: var(--err); }
 .fbp-state-err .fbp-btn { margin-top: 8px; }
-
-.fbp-spinner {
-  width: 18px; height: 18px;
-  border: 2px solid var(--line-strong);
-  border-top-color: var(--brand);
-  border-radius: 50%;
-  animation: fbp-spin 0.9s linear infinite;
-}
-@keyframes fbp-spin { to { transform: rotate(360deg); } }
 
 /* ─── shell ─────────────────────────────────────────────────── */
 .fbp-shell {
@@ -1247,7 +1230,7 @@ select.fbp-fp-input { cursor: pointer; }
 /* 自开发组件预览卡片 (FORM_CUSTOM_COMPONENT_* 无专属渲染器时) */
 .fbp-fp-custom-dev {
   padding: 14px 16px;
-  border: 1px dashed var(--ai, #1D89A8);
+  border: 1px dashed var(--brand);
   border-radius: 8px;
   background: linear-gradient(180deg, rgba(29, 137, 168, 0.06), rgba(29, 137, 168, 0.02));
 }
@@ -1260,7 +1243,7 @@ select.fbp-fp-input { cursor: pointer; }
 .fbp-fp-custom-dev-title {
   font-size: 13px;
   font-weight: 600;
-  color: var(--ai, #1D89A8);
+  color: var(--brand);
 }
 .fbp-fp-custom-dev-kind {
   font-family: var(--font-mono, ui-monospace, monospace);
@@ -1268,7 +1251,7 @@ select.fbp-fp-input { cursor: pointer; }
   padding: 1px 7px;
   border-radius: 4px;
   background: rgba(29, 137, 168, 0.12);
-  color: var(--ai, #1D89A8);
+  color: var(--brand);
   letter-spacing: 0.02em;
 }
 .fbp-fp-custom-dev-desc {
@@ -1315,14 +1298,14 @@ select.fbp-fp-input { cursor: pointer; }
   border-bottom: 1px solid var(--line);
 }
 .fbp-oac-icon { font-size: 13px; line-height: 1; }
-.fbp-oac-title { font-size: 13px; font-weight: 600; color: var(--ai, #1D89A8); }
+.fbp-oac-title { font-size: 13px; font-weight: 600; color: var(--brand); }
 .fbp-oac-kind {
   font-family: var(--font-mono, ui-monospace, monospace);
   font-size: 10.5px;
   padding: 1px 6px;
   border-radius: 4px;
   background: rgba(29, 137, 168, 0.12);
-  color: var(--ai, #1D89A8);
+  color: var(--brand);
 }
 .fbp-oac-stage {
   display: flex;
@@ -1371,8 +1354,8 @@ select.fbp-fp-input { cursor: pointer; }
 }
 .fbp-oac-msg-user {
   align-self: flex-end;
-  background: var(--ai, #1D89A8);
-  color: #fff;
+  background: var(--brand);
+  color: var(--text-inverse);
 }
 .fbp-oac-msg-ai {
   align-self: flex-start;
@@ -1399,7 +1382,7 @@ select.fbp-fp-input { cursor: pointer; }
   padding: 4px 12px;
   border: 1px solid rgba(29, 137, 168, 0.30);
   background: rgba(29, 137, 168, 0.06);
-  color: var(--ai, #1D89A8);
+  color: var(--brand);
   border-radius: 14px;
   font-size: 12px;
   cursor: pointer;
@@ -1424,8 +1407,8 @@ select.fbp-fp-input { cursor: pointer; }
   padding: 0 16px;
   border: 0;
   border-radius: 7px;
-  background: var(--ai, #1D89A8);
-  color: #fff;
+  background: var(--brand);
+  color: var(--text-inverse);
   font-size: 12.5px;
   cursor: pointer;
 }
@@ -1466,7 +1449,7 @@ select.fbp-fp-input { cursor: pointer; }
   padding: 1px 6px;
   border-radius: 4px;
   background: rgba(29, 137, 168, 0.12);
-  color: var(--ai, #1D89A8);
+  color: var(--brand);
 }
 .fbp-oac-meta-url {
   flex: 1;

@@ -20,11 +20,13 @@
 -->
 <template>
   <section class="ldp" aria-label="列表设计">
-    <div v-if="!menuId" class="ldp-empty">
-      <div class="ldp-empty-icon">📋</div>
-      <h3>选择一个列表</h3>
-      <p>从左侧菜单点击某个列表视图, 这里显该列表的业务数据.</p>
-    </div>
+    <EmptyState
+      v-if="!menuId"
+      title="选择一个列表"
+      desc="从左侧菜单点击某个列表视图, 这里显该列表的业务数据."
+    >
+      <template #icon>📋</template>
+    </EmptyState>
 
     <template v-else>
       <!-- 顶部 toolbar — view/edit toggle + reload + 对话 hint -->
@@ -77,10 +79,13 @@
       </header>
 
       <!-- 错误 -->
-      <div v-if="error" class="ldp-state ldp-state-err">
-        {{ error }}
-        <button class="ldp-btn ldp-btn-ghost" @click="reload">重试</button>
-      </div>
+      <ErrorCard
+        v-if="error"
+        level="err"
+        title="加载失败"
+        :message="error"
+        :actions="[{ label: '重试', onClick: reload }]"
+      />
 
       <!-- =========================================================== -->
       <!-- preview mode — 业务视角真列表 -->
@@ -150,7 +155,7 @@
         </div>
 
         <!-- 表格 -->
-        <div v-if="loading" class="ldp-state">加载列表数据…</div>
+        <SkeletonCard v-if="loading" :lines="5" />
         <template v-else>
           <div v-if="filteredRows.length === 0" class="ldp-pv-empty">
             <div class="ldp-pv-empty-icon">📦</div>
@@ -259,6 +264,9 @@
 import { ref, computed, watch, reactive } from 'vue'
 import request from '@/utils/request'
 import ApaasEmbedIframe from './ApaasEmbedIframe.vue'
+import EmptyState from '@/components/states/EmptyState.vue'
+import ErrorCard from '@/components/states/ErrorCard.vue'
+import SkeletonCard from '@/components/states/SkeletonCard.vue'
 
 // 字段 → 列定义 (edit mode 用)
 interface ColumnRow {
@@ -757,33 +765,11 @@ watch(viewMode, (mode, prev) => {
 .ldp {
   font-family: var(--font-sans);
   color: var(--text);
-  padding: 20px 32px;
+  padding: var(--s-5) var(--s-8);
   background: var(--bg);
   height: 100%;
   overflow-y: auto;
   font-feature-settings: 'cv11', 'ss01';
-}
-
-.ldp-empty {
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  justify-content: center;
-  text-align: center;
-  height: 100%;
-  color: var(--text-3);
-  gap: 12px;
-}
-.ldp-empty-icon { font-size: 48px; line-height: 1; }
-.ldp-empty h3 {
-  margin: 0;
-  font-size: 18px;
-  font-weight: 600;
-  color: var(--text);
-}
-.ldp-empty p {
-  margin: 0;
-  font-size: 13.5px;
 }
 
 /* ===================== Toolbar ===================== */
@@ -807,7 +793,7 @@ watch(viewMode, (mode, prev) => {
 .ldp-toolbar-right {
   display: flex;
   align-items: center;
-  gap: 8px;
+  gap: var(--s-2);
 }
 .ldp-mode-switch {
   display: inline-flex;
@@ -821,7 +807,7 @@ watch(viewMode, (mode, prev) => {
   align-items: center;
   gap: 5px;
   height: 30px;
-  padding: 0 12px;
+  padding: 0 var(--s-3);
   background: transparent;
   border: none;
   font-size: 12.5px;
@@ -846,7 +832,7 @@ watch(viewMode, (mode, prev) => {
 .ldp-hint-chip {
   display: inline-flex;
   align-items: center;
-  gap: 4px;
+  gap: var(--s-1);
   padding: 4px 10px;
   font-size: 12px;
   border: 1px dashed var(--brand);
@@ -865,7 +851,7 @@ watch(viewMode, (mode, prev) => {
   align-items: center;
   gap: 5px;
   height: 30px;
-  padding: 0 12px;
+  padding: 0 var(--s-3);
   border: 1px solid var(--line-strong);
   border-radius: 6px;
   background: var(--surface);
@@ -890,12 +876,12 @@ watch(viewMode, (mode, prev) => {
 .ldp-pv {
   display: flex;
   flex-direction: column;
-  gap: 16px;
+  gap: var(--s-4);
 }
 .ldp-pv-banner {
   display: flex;
   align-items: center;
-  gap: 8px;
+  gap: var(--s-2);
   padding: 10px 14px;
   background: var(--brand-soft);
   border-left: 3px solid var(--brand);
@@ -908,17 +894,17 @@ watch(viewMode, (mode, prev) => {
   margin-left: auto;
   padding: 1px 8px;
   font-size: 11px;
-  background: var(--warn-soft, #fff7e6);
-  color: var(--warn, #d4791f);
+  background: var(--warn-soft);
+  color: var(--warn);
   border-radius: 999px;
-  border: 1px solid var(--warn, #d4791f);
+  border: 1px solid var(--warn);
 }
 
 .ldp-pv-title-row {
   display: flex;
   align-items: baseline;
   gap: 14px;
-  margin-bottom: 4px;
+  margin-bottom: var(--s-1);
 }
 .ldp-pv-title {
   margin: 0;
@@ -950,7 +936,7 @@ watch(viewMode, (mode, prev) => {
 .ldp-pv-filter {
   display: flex;
   flex-wrap: wrap;
-  gap: 12px 16px;
+  gap: var(--s-3) var(--s-4);
   align-items: flex-end;
   padding: 14px 16px;
   background: var(--surface);
@@ -960,7 +946,7 @@ watch(viewMode, (mode, prev) => {
 .ldp-pv-filter-item {
   display: flex;
   flex-direction: column;
-  gap: 4px;
+  gap: var(--s-1);
   min-width: 180px;
   flex: 0 0 auto;
 }
@@ -992,7 +978,7 @@ select.ldp-pv-input { cursor: pointer; }
 
 .ldp-btn {
   height: 32px;
-  padding: 0 16px;
+  padding: 0 var(--s-4);
   border-radius: 6px;
   font-size: 13px;
   font-weight: 500;
@@ -1018,7 +1004,7 @@ select.ldp-pv-input { cursor: pointer; }
 }
 .ldp-btn-primary {
   background: var(--brand);
-  color: #fff;
+  color: var(--text-inverse);
 }
 .ldp-btn-primary:hover:not(:disabled) {
   background: var(--brand-hover);
@@ -1028,7 +1014,7 @@ select.ldp-pv-input { cursor: pointer; }
   display: flex;
   flex-direction: column;
   align-items: center;
-  gap: 8px;
+  gap: var(--s-2);
   padding: 60px 16px;
   background: var(--surface);
   border: 1px dashed var(--line);
@@ -1099,12 +1085,12 @@ select.ldp-pv-input { cursor: pointer; }
   font-weight: 500;
 }
 .ldp-pv-chip-success {
-  background: color-mix(in srgb, var(--ok, #16a34a) 14%, transparent);
-  color: var(--ok, #16a34a);
+  background: color-mix(in srgb, var(--ok) 14%, transparent);
+  color: var(--ok);
 }
 .ldp-pv-chip-warning {
-  background: var(--warn-soft, #fff7e6);
-  color: var(--warn, #d4791f);
+  background: var(--warn-soft);
+  color: var(--warn);
 }
 .ldp-pv-chip-danger {
   background: var(--err-soft);
@@ -1133,7 +1119,7 @@ select.ldp-pv-input { cursor: pointer; }
   display: flex;
   align-items: center;
   justify-content: space-between;
-  padding: 4px 4px 0;
+  padding: var(--s-1) var(--s-1) 0;
 }
 .ldp-pv-paging-info {
   font-size: 12.5px;
@@ -1141,13 +1127,13 @@ select.ldp-pv-input { cursor: pointer; }
 }
 .ldp-pv-paging-ctl {
   display: inline-flex;
-  gap: 4px;
+  gap: var(--s-1);
   align-items: center;
 }
 .ldp-pv-page-btn {
   min-width: 28px;
   height: 28px;
-  padding: 0 8px;
+  padding: 0 var(--s-2);
   background: var(--surface);
   border: 1px solid var(--line);
   border-radius: 4px;
@@ -1163,7 +1149,7 @@ select.ldp-pv-input { cursor: pointer; }
 }
 .ldp-pv-page-btn.active {
   background: var(--brand);
-  color: #fff;
+  color: var(--text-inverse);
   border-color: var(--brand);
 }
 .ldp-pv-page-btn:disabled { opacity: 0.4; cursor: not-allowed; }
@@ -1187,9 +1173,9 @@ select.ldp-pv-input { cursor: pointer; }
   display: flex;
   align-items: flex-start;
   justify-content: space-between;
-  gap: 24px;
-  margin-bottom: 20px;
-  padding-bottom: 20px;
+  gap: var(--s-6);
+  margin-bottom: var(--s-5);
+  padding-bottom: var(--s-5);
   border-bottom: 1px solid var(--line);
 }
 .ldp-title {
@@ -1208,7 +1194,7 @@ select.ldp-pv-input { cursor: pointer; }
 }
 .ldp-head-actions {
   display: flex;
-  gap: 8px;
+  gap: var(--s-2);
   flex-shrink: 0;
 }
 
@@ -1292,11 +1278,11 @@ select.ldp-pv-input { cursor: pointer; }
 .ldp-table .muted { color: var(--text-3); }
 .ldp-table .empty {
   text-align: center;
-  padding: 48px 16px;
+  padding: var(--s-12) var(--s-4);
   color: var(--text-4);
 }
 .ldp-table .empty .hint {
-  margin-top: 8px;
+  margin-top: var(--s-2);
   font-size: 12px;
 }
 
@@ -1343,13 +1329,4 @@ select.ldp-pv-input { cursor: pointer; }
   border-color: var(--err);
 }
 .ldp-icon-btn:disabled { opacity: 0.5; cursor: not-allowed; }
-
-.ldp-state {
-  padding: 48px;
-  text-align: center;
-  color: var(--text-3);
-  font-size: 14px;
-}
-.ldp-state-err { color: var(--err); }
-.ldp-state-err .ldp-btn { margin-top: 12px; margin-left: 8px; }
 </style>

@@ -97,16 +97,21 @@
 
     <!-- ── Matrix view ────────────────────────────────────────── -->
     <div v-if="viewMode === 'matrix'" class="rmp-matrix-wrap" :class="{ 'rmp-matrix-wrap-preview': editMode === 'preview' }">
-      <div v-if="matrixLoading" class="rmp-state">加载权限矩阵…</div>
-      <div v-else-if="matrixError" class="rmp-state rmp-state-err">
-        {{ matrixError }}
-        <button class="rmp-btn rmp-btn-ghost" @click="loadMatrix">重试</button>
-      </div>
-      <div v-else-if="!hasMatrixData" class="rmp-state rmp-state-empty">
-        <div class="rmp-empty-illustration">🛡️</div>
-        <p>暂无角色或资源</p>
-        <p class="hint">先创建角色 + 部署应用, 再回这里配权限</p>
-      </div>
+      <SkeletonCard v-if="matrixLoading" :lines="5" />
+      <ErrorCard
+        v-else-if="matrixError"
+        level="err"
+        title="加载失败"
+        :message="matrixError"
+        :actions="[{ label: '重试', onClick: loadMatrix }]"
+      />
+      <EmptyState
+        v-else-if="!hasMatrixData"
+        title="暂无角色或资源"
+        desc="先创建角色 + 部署应用, 再回这里配权限"
+      >
+        <template #icon>🛡️</template>
+      </EmptyState>
       <template v-else>
         <div class="rmp-matrix-scroll">
           <table class="rmp-matrix-table">
@@ -297,7 +302,7 @@
           <input v-model="search" placeholder="搜索角色" />
         </div>
 
-        <div v-if="loading" class="rmp-state">加载角色…</div>
+        <div v-if="loading" class="rmp-master-skel"><SkeletonCard :lines="5" /></div>
         <div v-else-if="error" class="rmp-state rmp-state-err">{{ error }}</div>
         <ul v-else-if="filteredRoles.length" class="rmp-master-list" role="list">
           <li
@@ -387,6 +392,9 @@
 <script setup lang="ts">
 import { ref, computed, watch, onMounted, onBeforeUnmount, reactive } from 'vue'
 import request from '@/utils/request'
+import SkeletonCard from '@/components/states/SkeletonCard.vue'
+import EmptyState from '@/components/states/EmptyState.vue'
+import ErrorCard from '@/components/states/ErrorCard.vue'
 
 // ─── Types ────────────────────────────────────────────────────────────────
 interface RoleRow {
@@ -903,8 +911,8 @@ onBeforeUnmount(() => {
   display: flex;
   align-items: center;
   gap: 10px;
-  padding: 12px 16px;
-  margin: 16px 28px 0;
+  padding: var(--s-3) var(--s-4);
+  margin: var(--s-4) 28px 0;
   background: var(--brand-soft);
   color: var(--brand);
   border: 1px solid var(--brand);
@@ -935,11 +943,11 @@ onBeforeUnmount(() => {
   border: 1px solid var(--line);
   border-radius: 8px;
   padding: 2px;
-  margin-right: 4px;
+  margin-right: var(--s-1);
 }
 .rmp-edit-btn {
   height: 28px;
-  padding: 0 12px;
+  padding: 0 var(--s-3);
   font-size: 12.5px;
   font-weight: 500;
   font-family: inherit;
@@ -987,8 +995,8 @@ onBeforeUnmount(() => {
   display: flex;
   align-items: flex-start;
   justify-content: space-between;
-  gap: 16px;
-  padding: 20px 28px 16px;
+  gap: var(--s-4);
+  padding: var(--s-5) 28px var(--s-4);
   border-bottom: 1px solid var(--line);
   background: var(--surface);
   flex-shrink: 0;
@@ -996,7 +1004,7 @@ onBeforeUnmount(() => {
 .rmp-head-meta {
   display: flex;
   flex-direction: column;
-  gap: 4px;
+  gap: var(--s-1);
   min-width: 0;
 }
 .rmp-page-title {
@@ -1012,7 +1020,7 @@ onBeforeUnmount(() => {
   color: var(--text-3);
   display: flex;
   align-items: center;
-  gap: 8px;
+  gap: var(--s-2);
 }
 .rmp-page-stat b {
   font-weight: 600;
@@ -1027,7 +1035,7 @@ onBeforeUnmount(() => {
 .rmp-head-actions {
   display: flex;
   align-items: center;
-  gap: 8px;
+  gap: var(--s-2);
   flex-shrink: 0;
 }
 
@@ -1038,7 +1046,7 @@ onBeforeUnmount(() => {
   border: 1px solid var(--line);
   border-radius: 8px;
   padding: 2px;
-  margin-right: 4px;
+  margin-right: var(--s-1);
 }
 .rmp-toggle-btn {
   height: 28px;
@@ -1080,7 +1088,7 @@ onBeforeUnmount(() => {
 }
 .rmp-btn-primary {
   background: var(--brand);
-  color: #fff;
+  color: var(--text-inverse);
 }
 .rmp-btn-primary:hover { background: var(--brand-hover); }
 .rmp-btn-ghost {
@@ -1103,7 +1111,7 @@ onBeforeUnmount(() => {
   display: flex;
   flex-direction: column;
   min-height: 0;
-  padding: 20px 28px 8px;
+  padding: var(--s-5) 28px var(--s-2);
   position: relative;
 }
 
@@ -1156,7 +1164,7 @@ onBeforeUnmount(() => {
 }
 .rmp-mat-group {
   height: 38px;
-  padding: 0 12px;
+  padding: 0 var(--s-3);
   border-bottom: 1px solid var(--line);
   border-right: 1px dashed var(--line);
   text-align: center;
@@ -1167,7 +1175,7 @@ onBeforeUnmount(() => {
   font-size: 12px;
   font-weight: 600;
   color: var(--text);
-  margin-right: 4px;
+  margin-right: var(--s-1);
 }
 .rmp-mat-group-n {
   font-size: 11px;
@@ -1184,7 +1192,7 @@ onBeforeUnmount(() => {
 
 .rmp-mat-resource {
   height: 56px;
-  padding: 6px 4px;
+  padding: 6px var(--s-1);
   border-bottom: 1px solid var(--line);
   border-right: 1px solid var(--line);
   text-align: center;
@@ -1201,7 +1209,7 @@ onBeforeUnmount(() => {
   overflow: hidden;
   line-height: 1.3;
   text-align: center;
-  padding: 0 4px;
+  padding: 0 var(--s-1);
 }
 
 /* ── Matrix body rows ─────────────────────────────────────────── */
@@ -1292,7 +1300,7 @@ onBeforeUnmount(() => {
   justify-content: center;
   min-width: 32px;
   height: 22px;
-  padding: 0 8px;
+  padding: 0 var(--s-2);
   border-radius: 4px;
   font-size: 11px;
   font-weight: 600;
@@ -1319,7 +1327,7 @@ onBeforeUnmount(() => {
 
 .rmp-mat-empty-row {
   text-align: center;
-  padding: 40px 16px;
+  padding: var(--s-10) var(--s-4);
   color: var(--text-4);
   font-size: 13px;
   background: var(--surface);
@@ -1328,7 +1336,7 @@ onBeforeUnmount(() => {
 /* ── Legend ────────────────────────────────────────────────────── */
 .rmp-legend {
   flex-shrink: 0;
-  padding: 14px 4px 12px;
+  padding: 14px var(--s-1) var(--s-3);
   display: flex;
   flex-direction: column;
   gap: 6px;
@@ -1360,7 +1368,7 @@ onBeforeUnmount(() => {
   border: 1px solid var(--line);
   border-radius: 8px;
   box-shadow: 0 10px 30px rgba(11, 27, 63, 0.16);
-  padding: 4px;
+  padding: var(--s-1);
   min-width: 140px;
   animation: rmp-fade-in 0.12s ease-out;
 }
@@ -1375,7 +1383,7 @@ onBeforeUnmount(() => {
   width: 100%;
   background: transparent;
   border: 0;
-  padding: 8px 10px;
+  padding: var(--s-2) 10px;
   border-radius: 5px;
   font-family: inherit;
   cursor: pointer;
@@ -1391,25 +1399,24 @@ onBeforeUnmount(() => {
 
 /* ── State (loading / error / empty) ──────────────────────────── */
 .rmp-state {
-  padding: 36px 16px;
+  padding: 36px var(--s-4);
   text-align: center;
   color: var(--text-3);
   font-size: 13px;
   display: flex;
   flex-direction: column;
   align-items: center;
-  gap: 12px;
+  gap: var(--s-3);
 }
 .rmp-state-err { color: var(--err); }
 .rmp-state-empty { color: var(--text-3); }
 .rmp-state-empty .hint {
-  margin-top: 4px;
+  margin-top: var(--s-1);
   font-size: 12px;
   color: var(--text-4);
 }
-.rmp-empty-illustration {
-  font-size: 36px;
-  opacity: 0.7;
+.rmp-master-skel {
+  padding: var(--s-3);
 }
 
 /* ─────────────────────────────────────────────────────────────────
@@ -1434,8 +1441,8 @@ onBeforeUnmount(() => {
 .rmp-master-head {
   display: flex;
   align-items: center;
-  gap: 8px;
-  padding: 14px 16px;
+  gap: var(--s-2);
+  padding: 14px var(--s-4);
   border-bottom: 1px solid var(--line);
   flex-shrink: 0;
 }
@@ -1448,19 +1455,19 @@ onBeforeUnmount(() => {
   font-size: 11px;
   color: var(--text-3);
   background: var(--surface-2);
-  padding: 1px 8px;
+  padding: 1px var(--s-2);
   border-radius: 999px;
 }
 
 .rmp-master-search {
   position: relative;
-  padding: 8px 12px;
+  padding: var(--s-2) var(--s-3);
   flex-shrink: 0;
 }
 .rmp-master-search input {
   width: 100%;
   height: 30px;
-  padding: 0 12px 0 32px;
+  padding: 0 var(--s-3) 0 var(--s-8);
   border: 1px solid var(--line);
   border-radius: 6px;
   background: var(--surface);
@@ -1481,7 +1488,7 @@ onBeforeUnmount(() => {
 .rmp-master-list {
   list-style: none;
   margin: 0;
-  padding: 4px 8px;
+  padding: var(--s-1) var(--s-2);
   flex: 1;
   overflow-y: auto;
 }
@@ -1489,7 +1496,7 @@ onBeforeUnmount(() => {
   display: flex;
   flex-direction: column;
   gap: 2px;
-  padding: 10px 12px;
+  padding: 10px var(--s-3);
   border-radius: 6px;
   cursor: pointer;
   transition: background 0.12s;
@@ -1533,7 +1540,7 @@ onBeforeUnmount(() => {
   text-align: center;
   height: 100%;
   color: var(--text-3);
-  gap: 12px;
+  gap: var(--s-3);
 }
 .rmp-detail-empty-icon { font-size: 48px; }
 .rmp-detail-empty p { margin: 0; font-size: 14px; }
@@ -1542,9 +1549,9 @@ onBeforeUnmount(() => {
   display: flex;
   align-items: flex-start;
   justify-content: space-between;
-  gap: 16px;
-  margin-bottom: 20px;
-  padding-bottom: 20px;
+  gap: var(--s-4);
+  margin-bottom: var(--s-5);
+  padding-bottom: var(--s-5);
   border-bottom: 1px solid var(--line);
 }
 .rmp-detail-title {
@@ -1556,7 +1563,7 @@ onBeforeUnmount(() => {
 .rmp-detail-sub { margin: 0; }
 .rmp-code {
   display: inline-block;
-  padding: 2px 8px;
+  padding: 2px var(--s-2);
   font-size: 12px;
   font-family: var(--font-mono);
   background: var(--surface-2);
@@ -1567,12 +1574,12 @@ onBeforeUnmount(() => {
 .rmp-detail-actions {
   display: flex;
   align-items: center;
-  gap: 8px;
+  gap: var(--s-2);
 }
 .rmp-detail-search {
   height: 32px;
   width: 200px;
-  padding: 0 12px;
+  padding: 0 var(--s-3);
   border: 1px solid var(--line);
   border-radius: 6px;
   background: var(--surface);
@@ -1597,7 +1604,7 @@ onBeforeUnmount(() => {
 }
 .rmp-table th {
   text-align: left;
-  padding: 11px 16px;
+  padding: 11px var(--s-4);
   background: var(--surface-2);
   font-weight: 500;
   color: var(--text-3);
@@ -1608,7 +1615,7 @@ onBeforeUnmount(() => {
 .rmp-table th.check { width: 40px; }
 .rmp-table th.ops { width: 60px; text-align: center; }
 .rmp-table td {
-  padding: 12px 16px;
+  padding: var(--s-3) var(--s-4);
   border-bottom: 1px solid var(--line);
   vertical-align: middle;
 }
@@ -1622,16 +1629,16 @@ onBeforeUnmount(() => {
 .rmp-table .check { text-align: center; }
 .rmp-table .empty {
   text-align: center;
-  padding: 56px 16px;
+  padding: 56px var(--s-4);
   color: var(--text-4);
 }
 .rmp-table .empty .empty-illustration {
   font-size: 36px;
   opacity: 0.6;
-  margin-bottom: 8px;
+  margin-bottom: var(--s-2);
 }
 .rmp-table .empty .hint {
-  margin-top: 8px;
+  margin-top: var(--s-2);
   font-size: 12px;
 }
 

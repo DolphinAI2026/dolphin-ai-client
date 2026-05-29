@@ -36,11 +36,14 @@
       <p>从左侧菜单列表点击某个表单, 这里显该表单关联模型的数据 schema.</p>
     </div>
 
-    <div v-else-if="loading" class="dse-state">加载 schema…</div>
-    <div v-else-if="error" class="dse-state dse-state-err">
-      {{ error }}
-      <button class="dse-btn dse-btn-ghost" @click="reload">重试</button>
-    </div>
+    <SkeletonCard v-else-if="loading" :lines="5" />
+    <ErrorCard
+      v-else-if="error"
+      level="err"
+      title="加载失败"
+      :message="error"
+      :actions="[{ label: '重试', onClick: reload }]"
+    />
     <div v-else-if="!currentModel" class="dse-state">
       <p>未找到与该表单关联的数据模型.</p>
       <button class="dse-btn dse-btn-ghost" @click="reload">重新加载</button>
@@ -518,6 +521,8 @@
 import { ref, computed, watch, nextTick, reactive } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import request from '@/utils/request'
+import SkeletonCard from '@/components/states/SkeletonCard.vue'
+import ErrorCard from '@/components/states/ErrorCard.vue'
 
 interface FieldRow {
   field_id?: string
@@ -1637,7 +1642,7 @@ async function confirmDeleteField(f: FieldRow) {
 }
 .dse-btn-primary {
   background: var(--brand);
-  color: #fff;
+  color: var(--text-inverse);
 }
 .dse-btn-primary:hover:not(:disabled) {
   background: var(--brand-hover);
@@ -2094,15 +2099,13 @@ async function confirmDeleteField(f: FieldRow) {
   font-size: 12.5px;
 }
 
-/* ─── state (loading / error) ──────────────────────────────────────────── */
+/* ─── state (未找到模型 — loading/error 走共享 SkeletonCard / ErrorCard) ──── */
 .dse-state {
   padding: 48px;
   text-align: center;
   color: var(--text-3);
   font-size: 14px;
 }
-.dse-state-err { color: var(--err); }
-.dse-state-err .dse-btn { margin-top: 12px; margin-left: 8px; }
 
 /* mono 类全局 */
 .mono {
@@ -2175,7 +2178,7 @@ async function confirmDeleteField(f: FieldRow) {
 }
 
 .dse-icon-btn-danger:hover:not(:disabled) {
-  background: var(--err-soft, #fef0f0);
+  background: var(--err-soft);
   color: var(--err);
   border-color: var(--err);
 }
@@ -2360,7 +2363,7 @@ select.dse-form-input {
   left: 2px;
   width: 16px;
   height: 16px;
-  background: #fff;
+  background: var(--surface);
   border-radius: 50%;
   box-shadow: 0 1px 2px rgba(0,0,0,0.15);
   transition: transform 0.18s;
@@ -2383,7 +2386,7 @@ select.dse-form-input {
 .dse-modal-err {
   margin: 0;
   padding: 8px 12px;
-  background: var(--err-soft, #fef0f0);
+  background: var(--err-soft);
   color: var(--err);
   font-size: 12.5px;
   border-radius: 6px;

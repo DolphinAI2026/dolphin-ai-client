@@ -63,8 +63,13 @@
           <button class="dep-btn dep-btn-primary" @click="onAddOption">+ 添加选项</button>
         </header>
 
-        <div v-if="loadingOptions" class="dep-state">加载选项…</div>
-        <div v-else-if="optionsErr" class="dep-state dep-state-err">{{ optionsErr }}</div>
+        <SkeletonCard v-if="loadingOptions" :lines="4" />
+        <ErrorCard
+          v-else-if="optionsErr"
+          level="err"
+          title="加载选项失败"
+          :message="optionsErr"
+        />
         <div v-else class="dep-table-wrap">
           <table class="dep-table">
             <thead>
@@ -109,6 +114,8 @@
 <script setup lang="ts">
 import { ref, computed, watch } from 'vue'
 import request from '@/utils/request'
+import SkeletonCard from '@/components/states/SkeletonCard.vue'
+import ErrorCard from '@/components/states/ErrorCard.vue'
 
 interface DictRow {
   id: string
@@ -236,7 +243,7 @@ watch(() => props.appId, () => loadMaster(), { immediate: true })
 .dep-master-head {
   display: flex;
   align-items: center;
-  gap: 8px;
+  gap: var(--s-2);
   padding: 14px 16px;
   border-bottom: 1px solid var(--line);
   flex-shrink: 0;
@@ -256,13 +263,13 @@ watch(() => props.appId, () => loadMaster(), { immediate: true })
 
 .dep-master-search {
   position: relative;
-  padding: 8px 12px;
+  padding: var(--s-2) var(--s-3);
   flex-shrink: 0;
 }
 .dep-master-search input {
   width: 100%;
   height: 30px;
-  padding: 0 12px 0 32px;
+  padding: 0 var(--s-3) 0 var(--s-8);
   border: 1px solid var(--line);
   border-radius: 6px;
   background: var(--surface);
@@ -283,7 +290,7 @@ watch(() => props.appId, () => loadMaster(), { immediate: true })
 .dep-master-list {
   list-style: none;
   margin: 0;
-  padding: 4px 8px;
+  padding: var(--s-1) var(--s-2);
   flex: 1;
   overflow-y: auto;
 }
@@ -339,7 +346,7 @@ watch(() => props.appId, () => loadMaster(), { immediate: true })
   text-align: center;
   height: 100%;
   color: var(--text-3);
-  gap: 12px;
+  gap: var(--s-3);
 }
 .dep-detail-empty-icon { font-size: 48px; line-height: 1; }
 .dep-detail-empty p { margin: 0; font-size: 14px; }
@@ -348,9 +355,9 @@ watch(() => props.appId, () => loadMaster(), { immediate: true })
   display: flex;
   align-items: flex-start;
   justify-content: space-between;
-  gap: 16px;
-  margin-bottom: 20px;
-  padding-bottom: 20px;
+  gap: var(--s-4);
+  margin-bottom: var(--s-5);
+  padding-bottom: var(--s-5);
   border-bottom: 1px solid var(--line);
 }
 
@@ -375,7 +382,7 @@ watch(() => props.appId, () => loadMaster(), { immediate: true })
 
 .dep-btn {
   height: 32px;
-  padding: 0 16px;
+  padding: 0 var(--s-4);
   border-radius: 6px;
   font-size: 13px;
   font-weight: 500;
@@ -387,7 +394,7 @@ watch(() => props.appId, () => loadMaster(), { immediate: true })
 }
 .dep-btn-primary {
   background: var(--brand);
-  color: #fff;
+  color: var(--text-inverse);
 }
 .dep-btn-primary:hover { background: var(--brand-hover); }
 
@@ -416,7 +423,7 @@ watch(() => props.appId, () => loadMaster(), { immediate: true })
 .dep-table th.num { width: 50px; }
 .dep-table th.ops { width: 60px; text-align: center; }
 .dep-table td {
-  padding: 12px 16px;
+  padding: var(--s-3) var(--s-4);
   border-bottom: 1px solid var(--line);
   vertical-align: middle;
 }
@@ -431,7 +438,7 @@ watch(() => props.appId, () => loadMaster(), { immediate: true })
 .dep-table .muted { color: var(--text-3); }
 .dep-table .empty {
   text-align: center;
-  padding: 48px 16px;
+  padding: var(--s-12) var(--s-4);
   color: var(--text-4);
 }
 .dep-table .empty .hint { margin-top: 8px; font-size: 12px; }
@@ -464,14 +471,14 @@ watch(() => props.appId, () => loadMaster(), { immediate: true })
 .dep-icon-btn:disabled { opacity: 0.5; cursor: not-allowed; }
 
 .dep-state {
-  padding: 32px 16px;
+  padding: var(--s-8) var(--s-4);
   text-align: center;
   color: var(--text-3);
   font-size: 13px;
 }
 .dep-state-err { color: var(--err); }
 .dep-state-empty .hint {
-  margin-top: 8px;
+  margin-top: var(--s-2);
   font-size: 12px;
   color: var(--text-4);
 }
