@@ -492,6 +492,20 @@
             </div>
           </div>
         </div>
+        <!-- 2026-05-29: 配置助手嵌入式右栏 — 对齐「设计」tab(SpecDesignPanel 内嵌 chat)的布局,
+             并排不浮盖中间内容。设计 tab(topTab==='spec')自带 SPEC chat, 这里不重复显。
+             收起态走右下 FAB(见 chat-shell 下), 展开态在此并排; 宽度由 panel 内 usePanelResize 控制。 -->
+        <ConfigAssistantPanel
+          v-if="!embedMode && isPostDeploy && resolvedAppId && topTab !== 'spec' && assistantOpen"
+          class="ca-embedded"
+          :application-id="resolvedAppId"
+          :app-name="builderAppDisplayName || ''"
+          :current-section="currentSection"
+          :current-section-tab="currentSectionTab"
+          @close="toggleAssistant"
+          @refresh-iframe="refreshPlatformAndSidebar"
+          @upload-doc="triggerDocVersionUpload"
+        />
         </div><!-- /.platform-shell-row -->
       </div>
 
@@ -882,8 +896,9 @@
     <!-- 2026-05-25: 改浮动模式 — 默认收起 FAB, 点开 overlay 在 iframe 上, 不再挤 iframe 宽度 -->
     <!-- U6 (2026-05-27): 设计 tab 隐藏浮窗 — SpecDesignPanel 自带内嵌 SPEC chat,
          避免双 chat 心智混乱 (浮窗 = apaas 现场改 / 内嵌 = SPEC 草稿改). -->
-    <template v-if="!embedMode && isPostDeploy && resolvedAppId && topTab !== 'spec'">
-      <!-- 收起态: 右下 FAB -->
+    <!-- 收起态 FAB: 展开面板已改为嵌入式右栏(在 .platform-shell-row 内, 对齐「设计」tab)。
+         FAB 仅在 platform 视图显 — 嵌入式面板挂在 platform-shell 里, builder 视图点开会落在 v-show 隐藏容器。 -->
+    <template v-if="!embedMode && isPostDeploy && resolvedAppId && topTab !== 'spec' && activeView === 'platform'">
       <button
         v-if="!assistantOpen"
         class="ca-fab"
@@ -895,18 +910,6 @@
         </svg>
         <span class="ca-fab-text">AI 助手</span>
       </button>
-      <!-- 展开态: 浮动 overlay 在右侧, 不再 push iframe 缩小 -->
-      <ConfigAssistantPanel
-        v-show="assistantOpen"
-        class="ca-floating"
-        :application-id="resolvedAppId"
-        :app-name="builderAppDisplayName || ''"
-        :current-section="currentSection"
-        :current-section-tab="currentSectionTab"
-        @close="toggleAssistant"
-        @refresh-iframe="refreshPlatformAndSidebar"
-        @upload-doc="triggerDocVersionUpload"
-      />
     </template>
   </div><!-- /chat-shell -->
 
@@ -12220,6 +12223,22 @@ html[data-theme="light"] .msg-attachment-chip {
 }
 html[data-theme="dark"] .config-assistant.ca-floating {
   box-shadow: -2px 0 8px rgba(0, 0, 0, 0.25);
+}
+
+/* 2026-05-29: 配置助手嵌入式右栏 — 对齐「设计」tab(SpecDesignPanel)布局。
+   在 .platform-shell-row(flex row) 内当最后一个并排子项, 不浮盖中间内容。
+   宽度由 panel 自带 usePanelResize(:style width) 控制 — 这里不设 width, 只 flex-shrink:0;
+   base .config-assistant 的 height:100% 在 row 里正好填满。左边缘有拖宽 handle。 */
+.config-assistant.ca-embedded {
+  position: relative;
+  flex-shrink: 0;
+  height: auto;
+  align-self: stretch;
+  border-left: 1px solid var(--t-border-subtle, #e2e8f0);
+  box-shadow: -2px 0 8px rgba(15, 23, 42, 0.04);
+}
+html[data-theme="dark"] .config-assistant.ca-embedded {
+  box-shadow: -2px 0 8px rgba(0, 0, 0, 0.2);
 }
 .platform-loading {
   flex: 1; display: flex; align-items: center; justify-content: center;
