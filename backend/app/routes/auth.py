@@ -4,6 +4,7 @@ from datetime import datetime
 from typing import Annotated, Optional
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy import select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 from jose import jwt, JWTError
 from app.database import get_db
@@ -1855,11 +1856,16 @@ async def delete_tenant(
             await db.commit()
         finally:
             # 恢复 FK 检查（即使前面失败 commit/rollback 后也尽量恢复）
+            # 恢复失败必须记日志：否则该 DB 会话残留 FOREIGN_KEY_CHECKS=0，
+            # 后续复用会绕过外键校验造成静默数据损坏，绝不能静默吞掉。
             try:
                 await db.execute(_sql_text("SET FOREIGN_KEY_CHECKS = 1"))
                 await db.commit()
-            except Exception:
-                pass
+            except Exception as exc:
+                logger.error(
+                    "delete_tenant: 恢复 FOREIGN_KEY_CHECKS=1 失败 tenant_id=%s: %s",
+                    tenant_id, exc,
+                )
     else:
         # has_data=False 路径（租户没残留）：直接删
         await db.delete(t)
@@ -2310,7 +2316,28 @@ async def invite_tenant_user(
             hashed_password=get_password_hash(req.password),
         )
         db.add(user)
-        await db.flush()
+        try:
+            await db.flush()
+        except IntegrityError:
+            # 并发邀请：两请求都过了上面的 null check 都去建同名用户，
+            # 第二个 flush 撞 username UNIQUE 约束。回滚后重查已被对方建好的用户，
+            # 继续走下面正常的 membership 关联流程（幂等）。
+            await db.rollback()
+            user_result = await db.execute(select(User).where(User.username == username))
+            user = user_result.scalar_one_or_none()
+            if not user:
+                # 撞约束却又查不到 —— 不是同名冲突，按冲突原样上报
+                raise HTTPException(status_code=409, detail="创建用户冲突，请重试")
+            # rollback 已让 role 实例过期，重查避免后续访问 role.id 触发异步 refresh 报错
+            role_result = await db.execute(
+                select(Role).where(
+                    Role.tenant_id == ctx.tenant_id,
+                    Role.role_code == role_code,
+                )
+            )
+            role = role_result.scalar_one_or_none()
+            if not role:
+                raise HTTPException(status_code=404, detail="角色不存在")
 
     membership_result = await db.execute(
         select(UserTenant).where(

@@ -128,7 +128,9 @@ async def run_full_build(
         yield {"stage": 3, "status": "done", "step": f"权限配置完成（{count} 个表单）"}
     except Exception as e:
         logger.error(f"权限配置失败: {e}", exc_info=True)
-        yield {"stage": 3, "status": "done", "step": f"权限配置跳过: {e}"}
+        # 权限失败不中断整体流程（仍继续发布），但状态必须标 error，
+        # 否则前端/调用方会把 done 当成功，导致失败被掩盖。
+        yield {"stage": 3, "status": "error", "step": f"权限配置跳过: {e}"}
 
     # Stage 4: 发布应用
     yield {"stage": 4, "status": "running", "step": "正在发布应用..."}
@@ -138,7 +140,9 @@ async def run_full_build(
         yield {"stage": 4, "status": "done", "step": f"应用发布成功 (v{version})"}
     except Exception as e:
         logger.error(f"应用发布失败: {e}", exc_info=True)
-        yield {"stage": 4, "status": "done", "step": f"应用发布跳过: {e}"}
+        # 发布失败不中断后续 complete 事件，但状态必须标 error，
+        # 否则前端/调用方会把 done 当成功，导致失败被掩盖。
+        yield {"stage": 4, "status": "error", "step": f"应用发布跳过: {e}"}
 
     yield {"type": "complete", "message": "应用生成完成", "app_id": app_id}
 

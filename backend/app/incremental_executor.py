@@ -14,6 +14,7 @@
 from __future__ import annotations
 import asyncio
 import time
+import random
 import logging
 from typing import Optional, Dict, Any, List, AsyncGenerator, Tuple
 from dataclasses import dataclass, field
@@ -32,7 +33,9 @@ logger = logging.getLogger(__name__)
 
 # ── 重试配置 ──
 MAX_RETRIES = 2
-RETRY_DELAY_SECONDS = 1.0
+RETRY_DELAY_SECONDS = 1.0          # 退避基数（首次重试约等待这么久）
+RETRY_MAX_DELAY_SECONDS = 4.0      # 指数退避上限，避免单次等待过长
+RETRY_JITTER_SECONDS = 0.5         # 抖动上限，错开多个变更的重试时刻，缓解重试风暴
 
 
 # ══════════════════════════════════════════════════════════════
@@ -521,11 +524,18 @@ class IncrementalExecutor:
             except Exception as e:
                 last_error = e
                 if attempt <= MAX_RETRIES:
+                    # 指数退避（1s, 2s, ... 封顶 RETRY_MAX_DELAY_SECONDS）+ 小抖动，
+                    # 错开多个变更同时失败时的重试时刻，缓解瞬时重试风暴
+                    backoff = min(
+                        RETRY_DELAY_SECONDS * (2 ** (attempt - 1)),
+                        RETRY_MAX_DELAY_SECONDS,
+                    )
+                    delay = backoff + random.uniform(0, RETRY_JITTER_SECONDS)
                     logger.warning(
                         f"{resource_type}「{resource_name}」第 {attempt} 次失败: {e}，"
-                        f"{RETRY_DELAY_SECONDS}s 后重试..."
+                        f"{delay:.1f}s 后重试..."
                     )
-                    await asyncio.sleep(RETRY_DELAY_SECONDS)
+                    await asyncio.sleep(delay)
                 else:
                     raise last_error
 

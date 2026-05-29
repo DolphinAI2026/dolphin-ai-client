@@ -354,7 +354,8 @@ async def extract_project_name(generator: CodingGenerator, message: str) -> str:
         if name and len(name) >= 3:
             return name
     except Exception:
-        pass
+        # LLM 提取失败不阻断流程，仍降级返回通用名，但记录原因避免静默
+        logger.warning(f"extract_project_name LLM 提取失败，降级为通用名: {traceback.format_exc()}")
 
     return "custom"
 
@@ -1447,6 +1448,7 @@ async def run_coding_pipeline(
             # 只取第一行（用户的直接意图），避免后面附带的 API 文档等内容干扰识别
             intent_snippet = detection_message.split("\n")[0][:300]
             fallback = SceneType.WEB_COMPONENT_DUAL
+            scene_detection_failed = False
             try:
                 scene_type = await _detect_scene_llm_call(params.tenant_id, effective_model, intent_snippet)
             except UnsupportedSceneError as exc:
@@ -1460,7 +1462,13 @@ async def run_coding_pipeline(
             except Exception:
                 logger.warning(f"场景识别失败，使用兜底场景 {fallback}: {traceback.format_exc()}")
                 scene_type = fallback
-            yield _record_event({"type": "step", "step": "detect_scene", "status": "done", "data": {"scene_type": scene_type.value}})
+                scene_detection_failed = True
+            # data 里带 fallback 标记（识别失败兜底时为 True），让前端可感知降级；
+            # 正常路径不带该 key，保持原有结构兼容
+            scene_done_data: dict = {"scene_type": scene_type.value}
+            if scene_detection_failed:
+                scene_done_data["fallback"] = True
+            yield _record_event({"type": "step", "step": "detect_scene", "status": "done", "data": scene_done_data})
             # 通知前端 scene_detected + conversation_id（如果已有）
             yield _record_event({"type": "scene_detected", "conversation_id": conversation_id})
         else:

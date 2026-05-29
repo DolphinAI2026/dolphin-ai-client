@@ -898,8 +898,10 @@ async def execute_step(
                 token = await ensure_platform_token(project, db)
                 user.apaas_token = token
                 await db.commit()
-            except Exception:
-                pass
+            except Exception as token_err:
+                # 平台 token 回退失败：保留原控制流（下方仍会校验 apaas_token 是否为空），
+                # 但不再完全静默——记录 warning 便于排查为何回退到用户级连接失败。
+                logger.warning(f"应用 {app.id} 平台 token 回退获取失败: {token_err}")
 
         if not user.apaas_token:
             raise HTTPException(status_code=400, detail="未配置平台环境，请在环境管理中添加并连接")
@@ -994,12 +996,15 @@ async def execute_step(
                 is_duplicate = any(kw in error_msg for kw in ["编码重复", "已存在", "duplicate"])
 
                 if is_dict_or_role_step and is_duplicate:
-                    # 字典/角色：直接复用
-                    logger.info(f"步骤 {step_key} 编码已存在，自动跳过: {error_msg}")
+                    # 字典/角色：编码已存在直接复用，视同该步骤完成。
+                    # 统一返回 completed（schema 文档允许值 completed|error|conflict），
+                    # 避免歧义的 "ok" —— 前端 execute 仅区分 conflict/error，其余按成功处理，
+                    # 且该步骤已写入 steps_completed，下次拉取状态即显示已完成。
+                    logger.info(f"步骤 {step_key} 编码已存在，自动跳过（复用）: {error_msg}")
                     state.setdefault("steps_completed", []).append(step_key)
                     state.get("step_errors", {}).pop(step_key, None)
                     _save_state(app, state)
-                    step_response = StepExecuteResponse(step=step_key, status="ok", error=None)
+                    step_response = StepExecuteResponse(step=step_key, status="completed", error=None)
                 elif (is_model_step or is_form_step) and is_duplicate:
                     # 模型/表单：不要自动改名，直接回到左侧对话区等待用户确认
                     logger.info(f"步骤 {step_key} 编码冲突，等待用户确认新编码: {error_msg}")

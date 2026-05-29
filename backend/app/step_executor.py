@@ -1347,11 +1347,25 @@ async def _bind_dicts_to_form(
                 *(client.query_dict_options(app_id, dict_id_map[dc]) for dc in ordered_codes),
                 return_exceptions=True,
             )
+            # 失败的字典 code 不进 dict_options_map → 对应下拉组件渲染缺选项。
+            # 逐条 warning 容易被淹没，这里额外汇总一条「N 中 M 个绑定失败」日志，
+            # 把失败的 dict codes 列清楚，便于排查表单部分坏掉的根因。
+            failed_codes: List[str] = []
             for dc, opts in zip(ordered_codes, results):
                 if isinstance(opts, Exception):
                     logger.warning(f"query_dict_options 失败 (dict={dc}): {opts}")
+                    failed_codes.append(dc)
                     continue
                 dict_options_map[dc] = opts
+            if failed_codes:
+                logger.error(
+                    "字典选项绑定汇总 (form=%s): %d 个字典中 %d 个查询失败，"
+                    "对应下拉组件将缺选项；失败 dict codes: %s",
+                    form_name,
+                    len(ordered_codes),
+                    len(failed_codes),
+                    ", ".join(failed_codes),
+                )
 
         def _bind_dict_to_comp(comp: dict) -> bool:
             """给单个组件绑定字典，返回是否有更新。"""
