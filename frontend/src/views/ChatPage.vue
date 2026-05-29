@@ -210,21 +210,6 @@
             <span>{{ isPlatformDeployed ? '发布到生产' : '生成应用' }}</span>
           </button>
           <button
-            v-if="showUpdateButton"
-            type="button"
-            class="cta-btn cta-update"
-            title="上传新版设计文档：与当前应用对比出变更计划，审核后增量更新"
-            @click="triggerDocVersionUpload"
-          >
-            <span class="cta-icon" aria-hidden="true">
-              <svg viewBox="0 0 16 16" fill="none">
-                <path d="M8 10.5V2.5M5 5.5L8 2.5l3 3" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round" />
-                <path d="M3 10.5v3h10v-3" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round" />
-              </svg>
-            </span>
-            <span>更新文档</span>
-          </button>
-          <button
             type="button"
             class="cta-btn cta-history"
             title="查看部署历史 & 回滚"
@@ -938,6 +923,7 @@
         :current-section-tab="currentSectionTab"
         @close="toggleAssistant"
         @refresh-iframe="refreshPlatformAndSidebar"
+        @upload-doc="triggerDocVersionUpload"
       />
     </template>
   </div><!-- /chat-shell -->

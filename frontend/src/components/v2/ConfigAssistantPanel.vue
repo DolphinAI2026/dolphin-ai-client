@@ -79,6 +79,8 @@ const emit = defineEmits<{
   (e: 'refresh-iframe'): void
   /** 2026-05-25: 浮动模式 — 关闭面板回到 FAB */
   (e: 'close'): void
+  /** 2026-05-29: 上传新设计文档更新应用 — 由父组件 ChatPage 触发 diff/审核流程 */
+  (e: 'upload-doc'): void
 }>()
 
 // 拖宽 — 学 super-agents-dev PointerEvent + setPointerCapture, 比老 mousedown 稳
@@ -438,8 +440,18 @@ onUpdated(() => {
     <!-- 左边缘拖拽 handle -->
     <div class="ca-resize-handle" @pointerdown="onResizeStart" title="拖拽调整宽度" />
 
-    <!-- 顶部 actions: 新对话 / 历史 / 部署历史 (固定在 panel 顶部右上角) -->
+    <!-- 顶部 actions: 上传文档 / 新对话 / 历史 / 部署历史 (固定在 panel 顶部右上角) -->
     <div class="ca-top-actions">
+      <button
+        class="ca-top-btn ca-top-btn-upload"
+        title="上传新设计文档 — 与当前应用对比生成变更计划，审核后增量更新"
+        @click="$emit('upload-doc')"
+      >
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+          <path d="M12 16V4M8 8l4-4 4 4" />
+          <path d="M4 16v2a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-2" />
+        </svg>
+      </button>
       <button
         class="ca-top-btn"
         title="新对话"
@@ -615,6 +627,17 @@ onUpdated(() => {
 .ca-top-btn:hover {
   border-color: var(--brand);
   color: var(--brand);
+}
+
+/* 上传文档入口 — 品牌色描边, 在一排图标里更显眼 (用户更新应用的主入口之一) */
+.ca-top-btn-upload {
+  color: var(--brand);
+  border-color: var(--brand-ring, var(--brand));
+  background: var(--brand-soft);
+}
+.ca-top-btn-upload:hover {
+  background: var(--brand);
+  color: #fff;
 }
 
 /* ─── Quick action chips (顶部快捷指令) ───────────────────── */
