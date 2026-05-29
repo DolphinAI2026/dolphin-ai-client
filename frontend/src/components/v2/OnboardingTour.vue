@@ -101,7 +101,7 @@ defineExpose({ open: () => { step.value = 0; visible.value = true } })
 
 <template>
   <Teleport to="body">
-    <div v-if="visible" class="onb-overlay" data-design="v2">
+    <div v-if="visible" class="onb-overlay">
       <div class="onb-panel">
         <header class="onb-head">
           <div class="onb-step-dots">

@@ -433,7 +433,6 @@ onUpdated(() => {
 <template>
   <aside
     class="config-assistant"
-    data-design="v2"
     :class="{ 'is-resizing': isResizing }"
     :style="{ width: panelWidth + 'px' }"
   >

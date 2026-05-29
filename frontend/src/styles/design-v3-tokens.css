@@ -217,6 +217,7 @@ html[data-theme="dark"] {
  * scope 内重定义 --surface 等 token，破坏 v3 dark。现在 v2 token 文件已删
  * (commit 02ae921 后)，反盖块也不再需要 — v3 :root 是唯一来源。
  *
- * data-design="v2" attribute 还在 WorkbenchShell.vue / Landing.vue 等 5 个文件
- * 上但已无 CSS 选择器匹配 → 完全 dead marker，下次清理可删。
+ * data-design="v2" attribute 已于 2026-05-29 视觉一致性收口时从 4 个组件清除
+ * (WorkbenchShell / OnboardingTour / ConfigAssistantPanel / ConfigAssistantSessionDrawer)。
+ * 无任何 CSS 选择器 / JS 依赖 — v3 :root 是唯一 token 来源。
  */

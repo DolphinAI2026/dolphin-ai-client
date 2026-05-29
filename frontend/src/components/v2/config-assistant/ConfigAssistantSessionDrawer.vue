@@ -139,7 +139,6 @@ function formatTime(iso: string): string {
     <div
       v-if="open"
       class="cas-drawer-overlay"
-      data-design="v2"
       @click="close"
     />
 
@@ -147,7 +146,6 @@ function formatTime(iso: string): string {
     <aside
       v-if="open"
       class="cas-drawer"
-      data-design="v2"
       role="dialog"
       aria-label="配置助手会话历史"
       @keydown.esc="close"
