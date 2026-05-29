@@ -1,7 +1,7 @@
 # backend/app/routes/agents_config.py
 """V2 Agent Config CRUD — /api/agents.
 
-`GET /api/agents` returns the 3 real agents (builder / coding / vibe) with
+`GET /api/agents` returns the 2 real agents (builder / coding) with
 their actual system prompts read from the agent modules. DB overrides are
 applied if present (admin edited prompt/model via PUT).
 `PUT /api/agents/{agent_id}` updates model / system_prompt (persisted in
@@ -17,8 +17,8 @@ are the unified 80-tool registry. The Skills/MCP rows on the page are now
 read-only.
 
 NOTE (2026-05-19 fix): Old impl returned empty because seed was disabled.
-We now return the 3 real agents straight from module-level prompt constants
-(builder_spec.agent / coding.prompts / vibe_coding.prompts), with DB
+We now return the 2 real agents straight from module-level prompt constants
+(builder_spec.agent / coding.prompts), with DB
 overrides preferred when present. No more lazy seed indirection.
 """
 from __future__ import annotations
@@ -38,13 +38,12 @@ from app.models.agent_config import (
 # Real agent prompts — read-only here, defined in their respective modules.
 from app.builder_spec.agent import SPEC_DRAFTING_PROMPT as _BUILDER_PROMPT
 from app.coding.prompts import AGENT_SYSTEM_PROMPT as _CODING_PROMPT
-from app.vibe_coding.prompts import SYSTEM_PROMPT as _VIBE_PROMPT
 
 router = APIRouter(prefix="/agents", tags=["agents-v2"])
 
 
 # ---------------------------------------------------------------------------
-# Default agent registry — 3 real agents wired to actual module prompts.
+# Default agent registry — 2 real agents wired to actual module prompts.
 # Frontend AgentsPage.vue defaults selectedId='builder' and treats id==='whale'
 # specially for one helper string; we use canonical id='coding' per task spec,
 # which makes the helper fall through to the generic label (harmless).
@@ -86,23 +85,6 @@ DEFAULT_AGENTS: list[dict] = [
             {"code": "form-page", "name": "页面生成", "desc": "生成 form-page 整页组件"},
             {"code": "backend-api", "name": "后端接口生成", "desc": "生成 aPaaS 后端 OpenAPI 接口"},
             {"code": "umd-build", "name": "UMD 打包", "desc": "编译为可挂载到平台的 UMD bundle"},
-        ],
-        "mcps": ["apaas-mcp"],
-        "knowledge": {"industry_packs": [], "spec_templates": []},
-    },
-    {
-        "agent_id": "vibe",
-        "name": "Vibe Coding",
-        "role": "全代码工作区助手",
-        "desc": "code-server 内置 Chat 扩展，对话式全代码 agent (Claude Code / Codex 同类)。",
-        "tone": "emerald",
-        "icon": "code",
-        "system_prompt": _VIBE_PROMPT,
-        "skills": [
-            {"code": "project-search", "name": "项目检索", "desc": "ripgrep + 语义搜索"},
-            {"code": "multi-edit", "name": "多文件编辑", "desc": "并行修改多个文件 + diff 预览"},
-            {"code": "terminal-exec", "name": "终端执行", "desc": "运行 npm / git / 测试命令"},
-            {"code": "git-aware", "name": "Git 上下文", "desc": "理解 branch / commit / 未提交变更"},
         ],
         "mcps": ["apaas-mcp"],
         "knowledge": {"industry_packs": [], "spec_templates": []},
@@ -198,7 +180,7 @@ async def list_agents(
     ctx: Annotated[AuthContext, Depends(get_auth_context)],
     db: Annotated[AsyncSession, Depends(get_db)],
 ):
-    """Return the 3 real agents (builder / coding / vibe) with their actual
+    """Return the 2 real agents (builder / coding) with their actual
     system prompts. DB rows (created on first PUT) override model + prompt."""
     rows = (await db.execute(
         select(AgentConfig).where(AgentConfig.tenant_id == ctx.tenant_id)

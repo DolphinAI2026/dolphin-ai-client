@@ -52,20 +52,8 @@ async def _count_components(db: AsyncSession, tenant_id: int) -> int:
 
 
 def _count_workspaces(tenant_id: int) -> int:
-    """Vibe Coding workspace 是文件系统态，扫 meta 数。"""
-    # 延迟 import 避免循环依赖
-    from app.routes.online_coding import _iter_workspace_meta_dirs, _meta_path
-    import json
-
-    count = 0
-    for ws_dir in _iter_workspace_meta_dirs():
-        try:
-            meta = json.loads(_meta_path(ws_dir).read_text(encoding="utf-8"))
-        except Exception:
-            continue
-        if int(meta.get("tenant_id") or 0) == int(tenant_id):
-            count += 1
-    return count
+    """Vibe Coding 已下线（2026-05-29），工作区配额维度恒为 0。"""
+    return 0
 
 
 async def _count_members(db: AsyncSession, tenant_id: int) -> int:

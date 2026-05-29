@@ -33,12 +33,8 @@ def _verify_token(ws_id: str, token: str):
     if payload.get("type") != "ide_access" or payload.get("ws") != ws_id:
         raise HTTPException(status_code=403, detail="访问令牌与当前工作区不匹配")
 
-    # 反查 workspace meta，比对 user/tenant
-    try:
-        from app.routes.online_coding import _find_workspace_dir
-        _, meta = _find_workspace_dir(ws_id)
-    except HTTPException:
-        meta = None
+    # Vibe online-coding workspaces 已下线（2026-05-29）；retained workspace 本就走 meta=None 跳过交叉校验
+    meta = None
     if meta is not None:
         token_user = payload.get("sub")
         token_tenant = payload.get("tid")

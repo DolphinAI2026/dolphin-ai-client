@@ -55,33 +55,6 @@ def _load_coding_prompts() -> dict[str, str]:
     return out
 
 
-def _load_vibe_prompts() -> dict[str, str]:
-    """Returns { phase: template } for the Vibe Coding (vibe) agent.
-
-    Vibe Coding has its OWN system prompt at app.vibe_coding.prompts.SYSTEM_PROMPT
-    (separate from Coding's prompt — different agent persona, dockerized sandbox,
-    port rules, etc).
-    """
-    from app.vibe_coding import prompts as p
-    out: dict[str, str] = {}
-    if hasattr(p, "SYSTEM_PROMPT"):
-        out["default"] = p.SYSTEM_PROMPT
-    for name in dir(p):
-        if name == "SYSTEM_PROMPT" or not name.endswith("_PROMPT"):
-            continue
-        val = getattr(p, name)
-        if not isinstance(val, str):
-            continue
-        parts = name.split("_")
-        if len(parts) >= 3:
-            phase = "_".join(parts[:-1]).lower()
-        else:
-            phase = name.lower().replace("_prompt", "")
-        if phase and phase not in out:
-            out[phase] = val
-    return out
-
-
 async def seed_coding_prompts_for_tenant(db: AsyncSession, tenant_id: int) -> int:
     """Insert default Coding + Vibe prompts for a tenant if rows don't exist.
 
@@ -90,7 +63,6 @@ async def seed_coding_prompts_for_tenant(db: AsyncSession, tenant_id: int) -> in
     inserted = 0
     loaders: list[tuple[str, callable, str]] = [
         ("whale", _load_coding_prompts, "app.coding.prompts.AGENT_SYSTEM_PROMPT"),
-        ("vibe", _load_vibe_prompts, "app.vibe_coding.prompts.SYSTEM_PROMPT"),
     ]
     for agent_id, loader, src in loaders:
         try:
