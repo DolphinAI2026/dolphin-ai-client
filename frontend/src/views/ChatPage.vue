@@ -179,20 +179,8 @@
               @mouseenter="ensureAppEnvsLoaded"
             >生产</button>
           </div>
-          <button
-            type="button"
-            class="cta-btn cta-save"
-            title="保存当前应用配置 (P2 接入)"
-            @click="onTopCtaSave"
-          >
-            <span class="cta-icon" aria-hidden="true">
-              <svg viewBox="0 0 16 16" fill="none">
-                <path d="M3.5 2.5h7.2l2.8 2.8v8.2H3.5V2.5z" stroke="currentColor" stroke-width="1.3" stroke-linejoin="round" />
-                <path d="M5.5 2.5v4h5v-4M5.5 10h5v3.5h-5z" stroke="currentColor" stroke-width="1.3" stroke-linejoin="round" />
-              </svg>
-            </span>
-            <span>保存</span>
-          </button>
+          <!-- 2026-05-29: 删「保存」按钮 — 纯 P2 占位无功能(点击只弹"P2 接入"提示),
+               真保存+部署走旁边的「发布到生产」。删按钮 + handler + .cta-save 样式。 -->
           <button
             type="button"
             class="cta-btn cta-deploy"
@@ -3862,11 +3850,6 @@ watch(
   },
 )
 
-// 保存按钮 — P2 UI 占位
-function onTopCtaSave() {
-  ElMessage.info("P2 接入 — 当前请点 '发布到生产' 走完整保存+部署流程")
-}
-// ────────────────────────────────────────────────────────────────────────────
 // ────────────────────────────────────────────────────────────
 
 const editAppInfoOpen = ref(false)
@@ -13050,18 +13033,6 @@ html[data-theme="dark"] .cta-btn.cta-deploy {
 }
 .prod-env-banner .prod-env-banner-back:hover {
   background: rgba(185, 28, 28, 0.08);
-}
-
-/* 保存按钮 ghost 风格 — 主色 outline, 不抢 cta-deploy 风头 */
-.cta-btn.cta-save {
-  border-color: var(--line-strong);
-  background: var(--surface);
-  color: var(--text);
-}
-.cta-btn.cta-save:hover:not(:disabled) {
-  border-color: var(--brand);
-  color: var(--brand);
-  background: var(--brand-soft);
 }
 
 /* breadcrumb 应用名可点编辑 */
