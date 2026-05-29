@@ -5,7 +5,7 @@
       x6 节点按 mock instance 状态着色 (completed 绿 / current 蓝 + 脉冲 / pending 灰),
       右侧 "历史轨迹" 时间轴 panel
     - edit: 保留 C/G/H/I/J/K 全部老逻辑 (sidebar + props panel + 拖入 + 保存 + 部署)
-    - 顶 segmented control "👁 业务 / ✏️ 设计" + "✨ 用对话改流程" CTA
+    - 顶 segmented control "👁 业务 / ✏️ 设计" (改流程走右栏常驻配置助手)
 
   2026-05-26 design-v4 Phase C: 扩 24 节点 (4 分类 × 4-5 种) + 属性面板.
     - 左 sidebar 顶部 "流程列表" panel (真拉 /section-content/processes)
@@ -72,9 +72,6 @@
           提交于 <strong>{{ mockInstance.submittedAgo }}</strong>,
           当前等待 <strong>[{{ mockInstance.currentApprover }}]</strong> 审批.
         </span>
-        <button class="pdp-biz-banner-cta" @click="onChatToEdit" title="走配置助手对话改流程">
-          ✨ 用对话改流程
-        </button>
       </div>
 
       <!-- 中央顶部 toolbar -->
@@ -112,13 +109,6 @@
             <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 7V3h4M21 7V3h-4M3 17v4h4M21 17v4h-4"/></svg>
             适应
           </button>
-          <!-- 设计模式 ✨ 用对话改流程 CTA (业务模式有自己的 banner CTA, 两种模式都可见) -->
-          <button
-            v-else
-            class="pdp-btn pdp-btn-ghost"
-            @click="onChatToEdit"
-            title="走配置助手对话改流程"
-          >✨ 用对话改流程</button>
         </div>
       </header>
 
@@ -655,11 +645,6 @@ function setViewMode(viewMode: boolean) {
     // 还原默认节点 stroke 颜色 (清 mock 状态视觉, 切回业务视角时干净)
     clearInstanceProgress()
   }
-}
-
-/** O2: ✨ 用对话改流程 CTA — 引导用户走配置助手. */
-function onChatToEdit() {
-  alert('用右下角配置助手对话, 比如:\n• "加一个总监审批节点"\n• "把审批人改成 XX"\n• "在部门主管审批后加一个并行抄送"')
 }
 
 /** 空态 "用对话创建流程" CTA — P0 暂时弹示例提示, 后续可 emit 'request-config-chat'

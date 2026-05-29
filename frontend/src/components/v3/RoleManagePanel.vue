@@ -9,7 +9,7 @@
     - 顶部业务视角 banner (蓝 brand-soft + brand)
     - editMode toggle (👁 预览 默认 / ✏️ 编辑)
     - matrix preview 模式: cell click 不响应 (dropdown 不显) / 顶部 "+ 新增角色" 隐
-      改成 [✨ 用对话改权限] 提示走配置助手
+      (改权限走右栏常驻配置助手; 2026-05-29 删了纯 alert 的「用对话改权限」死按钮)
     - list view: preview 模式 "+ 添加成员" / "+ 新增角色" 都隐
 
   数据源:
@@ -88,10 +88,6 @@
           AI 建议
         </button>
         <button v-if="editMode === 'edit'" class="rmp-btn rmp-btn-primary" @click="onAddRole">+ 新增角色</button>
-        <button v-else class="rmp-btn rmp-btn-primary" @click="onPromptChatEdit">
-          <span class="rmp-btn-icon">✨</span>
-          用对话改权限
-        </button>
       </div>
     </header>
 
@@ -343,10 +339,6 @@
                 placeholder="搜索姓名 / 账号"
               />
               <button v-if="editMode === 'edit'" class="rmp-btn rmp-btn-primary" @click="onAddMember">+ 添加成员</button>
-              <button v-else class="rmp-btn rmp-btn-primary" @click="onPromptChatEdit">
-                <span class="rmp-btn-icon">✨</span>
-                用对话改成员
-              </button>
             </div>
           </header>
 
@@ -763,15 +755,6 @@ function onAddMember() {
   alert('添加成员 — 当前请用右侧配置助手对话:\n"给运维专员A角色添加用户XX"')
 }
 
-// O2: preview 模式下点 "用对话改权限" CTA
-function onPromptChatEdit() {
-  alert(
-    '改权限 — 用右侧配置助手对话:\n\n'
-    + '例: "给运维专员角色加 借书申请 表单的读写权限"\n'
-    + '例: "新建一个审批人角色, 默认只读所有表单"\n'
-    + '例: "把张三加到 系统管理员 角色"',
-  )
-}
 
 // ─── Save matrix (Phase H1) ───────────────────────────────────────────────
 // 串行 POST per dirty cell. form 类型真存 apaas, 其他 P5 跳过.

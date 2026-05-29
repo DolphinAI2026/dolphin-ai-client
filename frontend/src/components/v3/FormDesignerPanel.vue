@@ -74,15 +74,8 @@
               <span aria-hidden="true">✏️</span> 编辑
             </button>
           </div>
-          <button
-            class="fbp-btn fbp-btn-ghost"
-            title="改字段请用配置助手对话, 比如 '把 ISBN 改成必填'"
-            @click="onOpenConfigAssistant"
-          >
-            <span class="fbp-btn-icon">✨</span> 用对话改
-          </button>
-          <!-- 2026-05-29: 删「保存」按钮 — 永远 disabled 死按钮(预览态无可存改动 / 编辑态
-               apaas 原生编辑器自带保存)。改字段走「用对话改」或「编辑」模式。 -->
+          <!-- 2026-05-29: 删「用对话改」「保存」死按钮 — 二者只弹 alert/永久 disabled。
+               改字段走常驻右栏「配置助手」或「编辑」模式(apaas 原生编辑器自带保存)。 -->
         </div>
       </header>
 
@@ -682,9 +675,6 @@ function onPreviewCancel() {
 }
 function onInlineEditHint(f: FormField) {
   alert(`请用右下角"配置助手"浮窗对话, 如:\n\n"把字段 ${f.name || f.code} 改成 XXX"\n"把 ${f.code} 改成必填"`)
-}
-function onOpenConfigAssistant() {
-  alert('改字段请用右下角"配置助手"浮窗对话, 比如:\n\n"把 ISBN 改成必填"\n"加一个备注字段, 多行输入, 不必填"\n"删掉申请说明字段"')
 }
 
 /* ────────────────────────────────────────────────────────────────

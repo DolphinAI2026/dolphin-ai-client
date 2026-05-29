@@ -5,7 +5,7 @@
   产品方向: 业务视角 — 用户看真列表 (像最终用户用应用), 编辑走对话.
 
   视图结构:
-    顶部 toolbar: [👁 预览] [✏️ 编辑]  |  [✨ 用对话改]  [刷新]
+    顶部 toolbar: [👁 预览] [✏️ 编辑]  [刷新]
     preview mode (默认):
       ✨ 业务视角预览 banner
       查询条件 form (3-4 个 input + 搜索/重置)
@@ -58,13 +58,6 @@
               编辑
             </button>
           </div>
-          <div class="ldp-tb-divider" />
-          <span class="ldp-hint-chip" @click="onUseAssistant" role="button" tabindex="0">
-            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-              <path d="M12 2l1.5 4.5L18 8l-4.5 1.5L12 14l-1.5-4.5L6 8l4.5-1.5z"/>
-            </svg>
-            用对话改
-          </span>
         </div>
         <div class="ldp-toolbar-right">
           <button class="ldp-tb-btn" @click="reload" :disabled="loading" title="刷新">
@@ -520,10 +513,6 @@ function onRowEdit(_row: Record<string, any>) {
   alert('编辑数据行 — P1 接入. 当前可通过 [运行] tab 进真应用编辑.')
 }
 
-function onUseAssistant() {
-  alert('用配置助手对话:\n"列表加一列显XX字段 / 删除XX列 / 加搜索条件 XX / 改默认排序"\n\n右侧聊天面板继续.')
-}
-
 function onAddColumn() {
   alert('添加列 — 当前请用右侧配置助手对话:\n"给当前列表加一列显XX字段"')
 }
@@ -824,28 +813,6 @@ watch(viewMode, (mode, prev) => {
 }
 .ldp-mode-btn + .ldp-mode-btn { border-left: 1px solid var(--line); }
 
-.ldp-tb-divider {
-  width: 1px;
-  height: 18px;
-  background: var(--line);
-}
-.ldp-hint-chip {
-  display: inline-flex;
-  align-items: center;
-  gap: var(--s-1);
-  padding: 4px 10px;
-  font-size: 12px;
-  border: 1px dashed var(--brand);
-  border-radius: 999px;
-  color: var(--brand);
-  cursor: pointer;
-  background: var(--brand-soft);
-  transition: background 0.12s;
-}
-.ldp-hint-chip:hover, .ldp-hint-chip:focus-visible {
-  background: color-mix(in srgb, var(--brand) 14%, transparent);
-  outline: none;
-}
 .ldp-tb-btn {
   display: inline-flex;
   align-items: center;

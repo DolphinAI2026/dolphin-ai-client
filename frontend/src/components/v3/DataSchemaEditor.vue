@@ -122,15 +122,7 @@
           >
             + 新增字段
           </button>
-          <button
-            v-else
-            class="dse-btn dse-btn-primary"
-            :title="'用配置助手对话改字段'"
-            @click="onPromptChatEdit"
-          >
-            <span class="dse-btn-icon">✨</span>
-            用对话改字段
-          </button>
+          <!-- 2026-05-29: 删「用对话改字段」死按钮(纯 alert 提示) — 改字段走常驻右栏配置助手 -->
         </div>
       </header>
 
@@ -1379,13 +1371,6 @@ function onPromptChatAddData() {
   )
 }
 
-function onPromptChatEdit() {
-  alert(
-    '改字段 — 用右侧配置助手对话:\n\n'
-    + '例: "给当前模型加一个字段, 字段名 = 备注, 类型 = 长文本"\n'
-    + '例: "把 apply_no 字段改名叫 申请单号"',
-  )
-}
 
 // ─── 删除字段 (apaas 软删) ─────────────────────────────────────────────────────
 async function confirmDeleteField(f: FieldRow) {
