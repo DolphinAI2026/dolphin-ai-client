@@ -3557,10 +3557,14 @@ async def get_application_apaas_menus(
     # 2026-05-25: 直接调 client.query_menus (manageAppMenu) 拿管理视图 — 含 GROUP
     # 跟 process workflow menus. mcp 的 list_apaas_app_menus 走 allAppMenu (runtime
     # 视图, 过滤了 GROUP) 不适合 sidebar 用.
-    from app.coding.apaas_tools import _get_apaas_client  # type: ignore
+    # 2026-05-29: 套 call_apaas_with_relogin — token 过期(含 httpx 401)自动重登重试,
+    # 不再裸调直接抛 401 给前端("拉取菜单失败 401"反复出现的根因)。
+    from app.coding.apaas_tools import call_apaas_with_relogin  # type: ignore
     try:
-        client = await _get_apaas_client(app.platform_env_id, db)
-        raw_menus_nested = await client.query_menus(app.apaas_app_id)
+        raw_menus_nested = await call_apaas_with_relogin(
+            app.platform_env_id, db,
+            lambda client: client.query_menus(app.apaas_app_id),
+        )
     except Exception as exc:
         return {
             "ok": False, "error_code": "APAAS_FETCH_FAILED",

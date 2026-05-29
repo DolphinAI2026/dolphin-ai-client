@@ -45,6 +45,14 @@ APAAS_TOKEN_MARKERS = (
     "Token已过期或无效",
     "Token已过期",
     "重新连接APaaS平台",
+    # 2026-05-29: httpx raise_for_status() 撞 apaas 401 时抛
+    # "Client error '401 ...' for url ..." — 纯英文, 不含上面中文标记。
+    # 历史上各调用点各自手动拼 `or "401" in msg`(generate.py / generation_steps.py /
+    # __init__.py / extension.py …), 唯独自愈核心 call_apaas_with_relogin 漏了 →
+    # 菜单等走自愈的读接口对 401 不重登, 反复报"拉取菜单失败 401"。
+    # 收进唯一真相源, 让自愈 + 所有调用点统一认得。
+    "401",
+    "Unauthorized",
 )
 
 
