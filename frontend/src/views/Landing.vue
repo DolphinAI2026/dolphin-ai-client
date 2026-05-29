@@ -26,7 +26,7 @@ const recent = ref<RecentApp[]>([])
 
 const FLOW_STEPS = [
   { n: '01', label: '描述需求',         tone: 'ai' },
-  { n: '02', label: '生成 SPEC',        tone: 'brand' },
+  { n: '02', label: 'AI 生成应用',      tone: 'brand' },
   { n: '03', label: '复用行业沉淀',     tone: 'emerald' },
   { n: '04', label: '部署上线',         tone: 'amber' },
 ]
@@ -88,7 +88,7 @@ async function loadLanding() {
 
   // 4-stat strip: apps / specs / deploys / packs.
   // - apps: total app count
-  // - specs: total conversation count (each builder conversation produces SPEC iterations)
+  // - specs(显示为「对话次数」): total builder conversation count
   // - deploys: sum of deploy counts across apps (apaas_app_id != null implies deployed)
   // - packs: industry packs from /industry/packs (defaults 0 if API down)
   const deployedCount = Array.isArray(apps)
@@ -149,7 +149,7 @@ onBeforeUnmount(() => {
           </div>
           <div class="stat-cell">
             <div class="stat-num">{{ stats.specs }}</div>
-            <div class="stat-lbl">SPEC 版本</div>
+            <div class="stat-lbl">对话次数</div>
           </div>
           <div class="stat-cell">
             <div class="stat-num">{{ stats.deploys }}</div>
