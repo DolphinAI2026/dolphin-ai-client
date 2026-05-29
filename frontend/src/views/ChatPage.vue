@@ -12722,6 +12722,14 @@ html[data-theme="dark"] .config-assistant.ca-embedded {
   color: #647085;
   font-size: 12px;
   font-weight: 600;
+  /* 2026-05-29: 窄屏防炸 — 强制单行, 不让长应用名把面包屑压成竖排撑高顶栏(实测窄屏曾达 142px)。
+     可变长的应用名按钮单独 ellipsis 截断(见 .app-name-clickable), 其余分隔符/固定项不收缩。 */
+  flex-wrap: nowrap;
+  overflow: hidden;
+  white-space: nowrap;
+}
+.builder-chat-crumbs > * {
+  flex-shrink: 0;
 }
 
 .builder-chat-crumbs button {
@@ -13071,6 +13079,33 @@ html[data-theme="dark"] .cta-btn.cta-deploy {
   font-weight: 600;
   cursor: pointer;
   transition: background 0.15s ease;
+  /* 2026-05-29: 应用名是面包屑里唯一可变长项 — 让它成为唯一可收缩+截断的元素,
+     窄屏长名显省略号而非把整行撑高。✎ 编辑提示 flex-shrink:0 不被截掉。 */
+  flex-shrink: 1;
+  min-width: 0;
+  max-width: 40vw;
+  overflow: hidden;
+  white-space: nowrap;
+}
+.builder-chat-crumbs .app-name-clickable > :first-child {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  min-width: 0;
+}
+.builder-chat-crumbs .app-name-edit-hint {
+  flex-shrink: 0;
+}
+/* v-else 分支(不可编辑时应用名是纯 span)也截断。
+   注: 分隔符 "/" 也是 span, 但内容只 1 字符不会触发收缩; 真正长的应用名 span 在这里
+   获得可收缩能力(覆盖上面 > * 的 flex-shrink:0), 窄屏显省略号而非撑高。app-status-chip
+   是固定徽章, 排除在外保持不被截断。 */
+.builder-chat-crumbs > span:not(.app-status-chip) {
+  flex-shrink: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 .builder-chat-crumbs .app-name-clickable:hover {
   background: #f1f5f9;
