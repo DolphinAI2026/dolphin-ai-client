@@ -12,7 +12,6 @@ import { usePreviewStore } from '@/stores/preview'
 type Mode = 'builder' | 'coding'
 const MODES: { id: Mode; label: string; sub: string; tone: 'ai' | 'brand' }[] = [
   { id: 'builder', label: '睿鲸 AI Builder', sub: '搭应用 + 应用内自开发（页面 / 接口）',   tone: 'ai' },
-  { id: 'coding',  label: '睿鲸 AI Coding',  sub: '通用组件库 — 跨应用复用',                tone: 'brand' },
 ]
 
 const mode = ref<Mode>('builder')
@@ -78,7 +77,7 @@ function submit() {
 
 <template>
   <div class="composer">
-    <div class="composer-modes">
+    <div v-if="MODES.length > 1" class="composer-modes">
       <button
         v-for="m in MODES"
         :key="m.id"
