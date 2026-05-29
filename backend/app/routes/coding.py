@@ -335,64 +335,6 @@ def _verify_ide_access_token(token: str, ws_id: str) -> dict[str, Any]:
     return payload
 
 
-def _inject_online_workspace_context(ws_id: str, payload: dict[str, Any]) -> None:
-    """Server-side safety net for online-coding IDE chats.
-
-    The VS Code web extension normally injects WORKSPACE_CONTEXT, but code-server
-    can keep a stale extension host alive across reloads. For online workspaces,
-    inject the same repo context at the backend proxy layer so the model never
-    asks the user to paste files that are already available on disk.
-    """
-    messages = payload.get("messages")
-    if not isinstance(messages, list):
-        return
-
-    for message in messages:
-        if isinstance(message, dict) and "WORKSPACE_CONTEXT" in str(message.get("content") or ""):
-            return
-
-    prompt = ""
-    for message in reversed(messages):
-        if isinstance(message, dict) and message.get("role") == "user":
-            prompt = str(message.get("content") or "")
-            break
-
-    try:
-        from app.routes.online_coding import (
-            _build_ide_workspace_context,
-            _find_workspace_dir,
-            _repo_path,
-        )
-
-        ws_dir, _ = _find_workspace_dir(ws_id)
-        repo_dir = _repo_path(ws_dir)
-        context_payload = _build_ide_workspace_context(repo_dir, prompt)
-        workspace_context = str(context_payload.get("context") or "")
-        read_files = context_payload.get("read_files") or []
-        if not workspace_context.strip():
-            return
-    except Exception as exc:
-        logger.warning("Failed to inject online workspace context for %s: %s", ws_id, exc)
-        return
-
-    context_message = {
-        "role": "system",
-        "content": (
-            "以下是当前 Vibe Coding 在线工作区的真实代码上下文，"
-            "请直接基于这些文件分析，不要再要求用户手动粘贴目录或代码。\n\n"
-            f"WORKSPACE_CONTEXT:\n{workspace_context[:60000]}"
-        ),
-    }
-
-    insert_at = 1 if messages and isinstance(messages[0], dict) and messages[0].get("role") == "system" else 0
-    messages.insert(insert_at, context_message)
-    logger.info(
-        "Injected online workspace context for %s: %s",
-        ws_id,
-        ", ".join(str(item) for item in read_files[:8]),
-    )
-
-
 def _code_server_chat_images_dir() -> Path:
     return Path.home() / ".local" / "share" / "code-server" / "User" / "workspaceStorage" / "vscode-chat-images"
 
@@ -1586,36 +1528,6 @@ async def ide_apply_file_edits(
         raise HTTPException(status_code=401, detail="缺少 IDE 访问令牌，请重新从 Builder 打开 Web IDE")
     token_payload = _verify_ide_access_token(ide_token, ws_id)
 
-    if ws_id.startswith("oc_"):
-        from app.routes.online_coding import (
-            _find_workspace_dir,
-            _repo_path,
-            _summarize_repo,
-            _write_workspace,
-        )
-
-        ws_dir, meta = _find_workspace_dir(ws_id)
-        if str(meta.get("user_id")) != str(token_payload.get("sub")):
-            raise HTTPException(status_code=403, detail="IDE 访问令牌与当前工作区用户不匹配")
-        if str(meta.get("tenant_id")) != str(token_payload.get("tid")):
-            raise HTTPException(status_code=403, detail="IDE 访问令牌与当前租户不匹配")
-
-        repo_dir = _repo_path(ws_dir)
-        repo_dir.mkdir(parents=True, exist_ok=True)
-        result = _apply_ide_edits_to_path(repo_dir, req.edits)
-        if result["applied"]:
-            file_count, files = _summarize_repo(repo_dir)
-            meta.update({
-                "status": "repo_imported",
-                "sandbox_status": "repo_ready",
-                "file_count": file_count,
-                "files": files,
-                "import_error": None,
-                "updated_at": datetime.utcnow().isoformat(),
-            })
-            _write_workspace(ws_dir, meta)
-        return result
-
     try:
         workspace_path = workspace_mgr.get_workspace_path(ws_id)
     except FileNotFoundError:
@@ -1744,9 +1656,6 @@ async def ide_chat_completions_proxy(
         payload = await request.json()
     except Exception:
         raise HTTPException(status_code=400, detail="无效的请求体")
-
-    if ws_id.startswith("oc_"):
-        _inject_online_workspace_context(ws_id, payload)
 
     tenant_config = None
     if db is not None:
