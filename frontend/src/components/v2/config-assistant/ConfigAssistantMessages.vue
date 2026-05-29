@@ -6,6 +6,7 @@ import { watch } from 'vue'
 import type { ChatMsg, Example } from './types'
 import { renderMd } from '@/utils/markdown'
 import { countModifyOps, extractPlan } from './composables/useConfigChat'
+import BaseChip from '@/components/BaseChip.vue'
 
 const props = defineProps<{
   messages: ChatMsg[]
@@ -58,14 +59,13 @@ watch(() => props.messages, (msgs) => {
       <div class="ca-empty-title">配置助手</div>
       <div class="ca-empty-hint">{{ emptyHint }}</div>
       <div class="ca-empty-examples">
-        <button
+        <BaseChip
           v-for="ex in examples"
           :key="ex.id"
-          class="ca-example"
           @click="emit('pick-example', ex.text)"
         >
           {{ ex.text }}
-        </button>
+        </BaseChip>
       </div>
     </div>
 
@@ -226,27 +226,6 @@ watch(() => props.messages, (msgs) => {
   margin-top: 8px;
   width: 100%;
   max-width: 280px;
-}
-.ca-example {
-  padding: 7px 10px;
-  border: 1px solid var(--line);
-  border-radius: var(--r-2, 4px);
-  background: var(--surface);
-  color: var(--text-2);
-  font-family: inherit;
-  font-size: 11.5px;
-  text-align: left;
-  cursor: pointer;
-  transition: all 0.12s ease;
-}
-.ca-example:hover {
-  border-color: var(--brand-ring, var(--brand));
-  color: var(--brand);
-  background: var(--brand-soft);
-}
-.ca-example:focus-visible {
-  outline: 2px solid var(--line-focus, var(--brand-ring));
-  outline-offset: -2px;
 }
 
 /* ─── 消息 ──────────────────────────────────── */

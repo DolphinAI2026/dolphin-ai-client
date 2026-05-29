@@ -11948,39 +11948,39 @@ html[data-theme="light"] .msg-attachment-chip {
 .sub-chip-strip {
   display: flex;
   align-items: center;
-  gap: 6px;
-  padding: 8px 20px;
+  gap: 4px;
+  padding: 0 20px;
   background: var(--surface);
   border-bottom: 1px solid var(--line);
   flex-shrink: 0;
   font-family: var(--font-sans);
   overflow-x: auto;
 }
+/* 2026-05-29 视觉收口: 胶囊 → 下划线二级 tab, 对齐日志(.lp-subnav-tab)/designer(.mdsh-subnav-tab) */
 .sub-chip {
+  position: relative;
   display: inline-flex;
   align-items: center;
-  height: 28px;
-  padding: 0 12px;
-  border: 1px solid var(--line);
-  border-radius: 999px;
-  background: var(--surface);
-  color: var(--text-2);
-  font-size: 12.5px;
+  padding: 11px 12px;
+  margin-bottom: -1px;
+  border: none;
+  border-bottom: 2px solid transparent;
+  background: transparent;
+  color: var(--text-3);
+  font-size: 13px;
   font-weight: 500;
   font-family: inherit;
   cursor: pointer;
   white-space: nowrap;
-  transition: background 0.12s, color 0.12s, border-color 0.12s;
+  transition: color 0.14s, border-color 0.14s;
 }
 .sub-chip:hover {
-  background: var(--surface-2);
   color: var(--text);
-  border-color: var(--line-strong);
 }
 .sub-chip.active {
-  background: var(--brand);
-  color: #fff;
-  border-color: var(--brand);
+  color: var(--brand);
+  border-bottom-color: var(--brand);
+  font-weight: 600;
 }
 
 /* 2026-05-26 设计 tab designer shell (.mdsh — Menu Designer SHell) */

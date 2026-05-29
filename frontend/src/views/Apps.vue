@@ -109,7 +109,7 @@
                 <strong>{{ app.app_name }}</strong>
                 <span class="apps-row-meta">
                   <code>{{ app.app_code || `app-${app.id}` }}</code>
-                  <span class="apps-type-tag" :class="app.app_type === 'ai-code' ? 'is-ai-code' : 'is-low-code'">{{ app.app_type === 'ai-code' ? 'AI 代码' : '低代码' }}</span>
+                  <BaseTag :tone="app.app_type === 'ai-code' ? 'brand' : 'neutral'">{{ app.app_type === 'ai-code' ? 'AI 代码' : '低代码' }}</BaseTag>
                   <template v-if="latestHistory(app)">
                     <span class="apps-dot-sep"></span>
                     <button class="apps-history-link" type="button" @click.stop="openLatestConversation(app)">
@@ -121,7 +121,7 @@
             </div>
 
             <div class="apps-row-stage">
-              <span class="apps-stage-pill" :class="appStage(app).tone">{{ appStage(app).label }}</span>
+              <BaseBadge :variant="stageBadgeVariant(app)">{{ appStage(app).label }}</BaseBadge>
             </div>
 
             <div class="apps-row-progress">
@@ -171,12 +171,12 @@
           >
             <div class="apps-card-top">
               <span class="apps-avatar large" :style="appAccentStyle(app)">{{ appIconInitial(app) }}</span>
-              <span class="apps-stage-pill" :class="appStage(app).tone">{{ appStage(app).label }}</span>
+              <BaseBadge :variant="stageBadgeVariant(app)">{{ appStage(app).label }}</BaseBadge>
             </div>
             <h2>{{ app.app_name }}</h2>
             <div class="apps-card-code">
               <code>{{ app.app_code || `app-${app.id}` }}</code>
-              <span class="apps-type-tag" :class="app.app_type === 'ai-code' ? 'is-ai-code' : 'is-low-code'">{{ app.app_type === 'ai-code' ? 'AI 代码' : '低代码' }}</span>
+              <BaseTag :tone="app.app_type === 'ai-code' ? 'brand' : 'neutral'">{{ app.app_type === 'ai-code' ? 'AI 代码' : '低代码' }}</BaseTag>
               <span>{{ appUpdatedLabel(app) }}</span>
             </div>
             <div class="apps-card-progress">
@@ -281,6 +281,8 @@ import ImportAppDialog from '@/components/ImportAppDialog.vue'
 import DeployHistoryDrawer from '@/components/v2/DeployHistoryDrawer.vue'
 import EmptyState from '@/components/states/EmptyState.vue'
 import SkeletonCard from '@/components/states/SkeletonCard.vue'
+import BaseBadge from '@/components/BaseBadge.vue'
+import BaseTag from '@/components/BaseTag.vue'
 import type { MergedApplication } from '@/types'
 
 type AppTab = 'all' | 'active' | 'deployed' | 'draft'
@@ -370,6 +372,15 @@ function appStage(app: MergedApplication): AppStage {
     return { group: 'active', label: '待部署', tone: 'active', progress: 70 }
   }
   return { group: 'draft', label: '需求理解', tone: 'draft', progress: 12 }
+}
+
+// stage tone → BaseBadge variant（纯展示映射，供模板用，保留 union 类型）
+function stageBadgeVariant(app: MergedApplication): 'success' | 'warn' | 'error' | 'info' | 'neutral' {
+  const tone = appStage(app).tone
+  return tone === 'success' ? 'success'
+    : tone === 'active' ? 'warn'
+    : tone === 'danger' ? 'error'
+    : 'neutral'
 }
 
 function appProgress(app: MergedApplication) {
@@ -1079,63 +1090,6 @@ onMounted(() => { refreshApps() })
 .apps-history-link:hover {
   color: var(--brand-hover);
   text-decoration: underline;
-}
-
-/* ── Stage pill — 4 tones per appStage(app).tone ──────────── */
-.apps-stage-pill {
-  height: 24px;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  border: 1px solid transparent;
-  border-radius: var(--r-full, 999px);
-  background: var(--surface-3);
-  color: var(--text-3);
-  padding: 0 10px;
-  font-size: 11.5px;
-  font-weight: var(--fw-semibold, 600);
-  white-space: nowrap;
-}
-
-/* 应用类型标签: low-code (品牌蓝) / ai-code (ok 绿) */
-.apps-type-tag {
-  font-size: 11px;
-  font-weight: var(--fw-semibold, 600);
-  padding: 1px 7px;
-  border-radius: var(--r-full, 999px);
-  white-space: nowrap;
-}
-.apps-type-tag.is-low-code {
-  background: var(--brand-soft);
-  color: var(--brand);
-}
-.apps-type-tag.is-ai-code {
-  background: var(--ok-soft);
-  color: var(--ok);
-}
-
-/* active = 进行中 → warn (amber, in-progress signal) */
-.apps-stage-pill.active {
-  background: var(--warn-soft);
-  color: var(--warn);
-}
-
-/* success = 已部署 → ok (green) */
-.apps-stage-pill.success {
-  background: var(--ok-soft);
-  color: var(--ok);
-}
-
-/* draft = 草稿 → muted neutral */
-.apps-stage-pill.draft {
-  background: var(--surface-3);
-  color: var(--text-3);
-}
-
-/* danger = 失败 → err (red) */
-.apps-stage-pill.danger {
-  background: var(--err-soft);
-  color: var(--err);
 }
 
 /* ── Progress bar — track + fill mirrors stage tone ───────── */
