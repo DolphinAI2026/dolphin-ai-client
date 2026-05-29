@@ -514,46 +514,14 @@
           'artifacts-hidden': !showAnyBuilderArtifactPanel
         }"
       >
-      <!-- 2026-05-19 image #29: 中间默认渲染 latest doc 的 MD。用户拍板"只保留 MD 预览"。
-           判定改用 store.currentApp 实际状态而非 isPlatformDeployed（后者会被旧的
-           completed deploySteps 误判为已部署）。pre-deploy 直接显示 MD；post-deploy
-           已经走 ConfigAssistantPanel 路径（apaas_app_id 存在时由 isPostDeploy 路由）。 -->
-      <div
-        v-if="existingAppId && !isDeploying"
-        class="builder-md-viewer"
-      >
-        <div class="md-viewer-head">
-          <div class="md-viewer-title">{{ lastParsedFilename || `${builderAppDisplayName || '功能设计文档'}.md` }}</div>
-          <!-- 2026-05-28: 已部署时把"打开应用"收成头部小按钮 (替代原中央占满的 🎉 hero, 太多余) -->
-          <button v-if="(store.currentApp?.apaas_app_id || platformDirectUrl) && deployAllDone" class="md-download-btn" style="margin-left: 6px" @click="openInPlatform" title="在 apaas 打开已部署应用">✅ 已部署 · 打开应用 →</button>
-          <button v-if="latestDocContent || selectedDocDisplayContent" class="md-download-btn" @click="downloadCurrentDoc">下载 .md</button>
-          <!-- 2026-05-24 Agent C: 部署历史 + 回滚入口 -->
-          <button
-            v-if="store.currentApp?.id"
-            class="md-download-btn"
-            style="margin-left: 6px"
-            @click="openDeployHistoryDrawer"
-            title="查看部署历史 & 回滚"
-          >📜 部署历史</button>
-        </div>
-        <div v-if="liveStructuredDocResult" class="md-viewer-body structured-doc-host">
-          <StructuredDocRenderer :doc-result="liveStructuredDocResult" />
-        </div>
-        <pre v-else-if="selectedDocDisplayContent" class="md-viewer-body plain-doc-fallback">{{ selectedDocDisplayContent }}</pre>
-        <pre v-else-if="latestDocContent" class="md-viewer-body plain-doc-fallback">{{ latestDocContent }}</pre>
-        <div v-else class="md-viewer-body md-viewer-empty">
-          <p>暂无设计文档。请回到
-            <router-link to="/ai-chat">睿鲸 AI Builder</router-link>
-            上传 .md 或对话生成。
-          </p>
-        </div>
-      </div>
+      <!-- 2026-05-29: 退休老 builder-md-viewer (平铺 SPEC dump)。读 SPEC 统一走「设计」tab
+           (SpecDesignPanel — 结构化分章 + 用对话改 + 确认并生成 + 版本/对比/导出)。
+           草稿应用由 restoreActiveViewForApp 路由到 platform + 设计 tab; 已部署走平台 iframe。
+           原 md-viewer 的"下载/打开应用/部署历史"已分别在 设计 tab 导出 / 顶部"查看应用" / 顶部"历史"。-->
 
-      <!-- 2026-05-28: 删掉 deploy 完成后的中央 🎉 大 hero (用户反馈"多余" — 应用早部署好,
-           点进来该看设计文档/配置, 不该被庆祝卡挡住)。"打开应用"已收进上方文档头小按钮 +
-           顶部"查看应用"。中央 hero 只保留 deploy 进行中的等待占位。-->
+      <!-- deploy 进行中的中央等待占位 (deploy 完成后的 🎉 hero 已于 2026-05-28 删) -->
       <div
-        v-else-if="isDeploying"
+        v-if="isDeploying"
         class="builder-deploy-hero"
       >
         <div class="bdh-card">
@@ -2955,7 +2923,10 @@ const restoreActiveViewForApp = async (app: any) => {
 
   const isDeployed = !!app.apaas_app_id || app.status === 'completed'
   if (!isDeployed) {
-    activeView.value = 'builder'
+    // 2026-05-29: 退休老 md-viewer 后, 草稿(未部署)应用也进 platform 视图的「设计」tab
+    // 看结构化 SPEC (SpecDesignPanel 不依赖 apaas 部署, 仅需 existingAppId)。
+    activeView.value = 'platform'
+    topTab.value = 'spec'
     return
   }
 
