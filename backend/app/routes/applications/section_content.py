@@ -426,6 +426,153 @@ async def get_form_components(
     )
 
 
+class FormPermRole(BaseModel):
+    role_id: str
+    role_name: str
+    is_all_user: bool = False
+
+
+class FormPermissionsResponse(BaseModel):
+    ok: bool
+    env_id: Optional[int] = None
+    apaas_app_id: Optional[str] = None
+    form_id: Optional[str] = None
+    roles: list[FormPermRole] = Field(default_factory=list)
+    # matrix: subject_key(role_id 或 "__ALL_USER__") -> {view,edit,delete,add,import: bool, range: str|None}
+    matrix: dict[str, dict[str, Any]] = Field(default_factory=dict)
+    source: str = ""
+    error_code: Optional[str] = None
+    message: Optional[str] = None
+
+
+@router.get("/{app_id}/forms/{form_id}/permissions", response_model=FormPermissionsResponse)
+async def get_form_permissions(
+    app_id: int,
+    form_id: str,
+    ctx: Annotated[AuthContext, Depends(get_auth_context)],
+    db: Annotated[AsyncSession, Depends(get_db)],
+) -> FormPermissionsResponse:
+    """表单级权限矩阵 (角色 × 查看/编辑/删除/新增/导入 + 数据范围).
+
+    读 list_apaas_form_permissions (真 apaas, 非 mock) + list_apaas_app_roles 拼角色名 →
+    归一成 {roles, matrix}. 给设计器「权限」子 tab 用. 只读; 写走 POST 同路径 (Phase B).
+    ALL_USER 主体 → 合成 "__ALL_USER__" 行排最前; USER/DEPT 主体 v1 不进矩阵 (留 P2).
+    """
+    source = "list_apaas_form_permissions"
+    app = await _load_app_and_check_view(app_id, ctx, db)
+    if not app.platform_env_id or not app.apaas_app_id:
+        return FormPermissionsResponse(
+            ok=False,
+            env_id=app.platform_env_id,
+            apaas_app_id=str(app.apaas_app_id) if app.apaas_app_id else None,
+            form_id=form_id,
+            source=source,
+            error_code="APP_NOT_DEPLOYED",
+            message="应用尚未部署到 aPaaS 平台 — 部署后才能配表单权限",
+        )
+    form_id = (form_id or "").strip()
+    if not form_id:
+        return FormPermissionsResponse(
+            ok=False,
+            env_id=app.platform_env_id,
+            apaas_app_id=str(app.apaas_app_id),
+            form_id=form_id,
+            source=source,
+            error_code="INVALID_FORM_ID",
+            message="form_id 不能为空",
+        )
+
+    env_id = app.platform_env_id
+    apaas_app_id = str(app.apaas_app_id)
+
+    # 1) 角色列表 (拼 role_name) — 失败不致命, 矩阵仍可显 ALL_USER / 已知 role_id.
+    roles_norm: list[FormPermRole] = []
+    ok_r, raw_r = await _safe_call_mcp_tool(
+        "list_apaas_app_roles", env_id=env_id, apaas_app_id=apaas_app_id,
+    )
+    if ok_r:
+        for r in _extract_items_from_mcp_result(
+            raw_r,
+            key_candidates=["roles", "items"],
+            id_keys=["role_id", "id"],
+            name_keys=["role_name", "name"],
+            code_keys=["role_code", "code"],
+        ):
+            rid = str(r.id or "")
+            if not rid:
+                continue
+            roles_norm.append(FormPermRole(role_id=rid, role_name=str(r.name or rid)))
+
+    # 2) 表单权限 (真 apaas)
+    ok_p, raw_p = await _safe_call_mcp_tool(
+        source, env_id=env_id, apaas_app_id=apaas_app_id, extra_args={"form_id": form_id},
+    )
+    if not ok_p:
+        return FormPermissionsResponse(
+            ok=False,
+            env_id=env_id,
+            apaas_app_id=apaas_app_id,
+            form_id=form_id,
+            roles=roles_norm,
+            source=source,
+            error_code=raw_p.get("error_code") or "MCP_TOOL_FAILED",
+            message=raw_p.get("message") or "读表单权限失败",
+        )
+
+    matrix: dict[str, dict[str, Any]] = {}
+
+    def _cell(subj: dict) -> Optional[dict[str, Any]]:
+        stype = subj.get("subject_type")
+        if stype == "ROLE":
+            key = str(subj.get("subject_value") or "")
+        elif stype == "ALL_USER":
+            key = "__ALL_USER__"
+        else:
+            return None  # USER / DEPT 主体 v1 不进矩阵
+        if not key:
+            return None
+        return matrix.setdefault(
+            key,
+            {"view": False, "edit": False, "delete": False, "add": False, "import": False, "range": None},
+        )
+
+    has_all_user = False
+    for g in (raw_p.get("data_permissions") or []):
+        subj = g.get("subject") or {}
+        c = _cell(subj)
+        if c is None:
+            continue
+        if subj.get("subject_type") == "ALL_USER":
+            has_all_user = True
+        c["view"] = c["view"] or bool(g.get("can_view"))
+        c["edit"] = c["edit"] or bool(g.get("can_edit"))
+        c["delete"] = c["delete"] or bool(g.get("can_delete"))
+        if subj.get("range_type"):
+            c["range"] = subj.get("range_type")
+    for g in (raw_p.get("operation_permissions") or []):
+        subj = g.get("subject") or {}
+        c = _cell(subj)
+        if c is None:
+            continue
+        if subj.get("subject_type") == "ALL_USER":
+            has_all_user = True
+        c["add"] = c["add"] or bool(g.get("can_add"))
+        c["import"] = c["import"] or bool(g.get("can_import"))
+
+    if has_all_user:
+        roles_norm.insert(0, FormPermRole(role_id="__ALL_USER__", role_name="所有人(默认)", is_all_user=True))
+
+    return FormPermissionsResponse(
+        ok=True,
+        env_id=env_id,
+        apaas_app_id=apaas_app_id,
+        form_id=form_id,
+        roles=roles_norm,
+        matrix=matrix,
+        source=source,
+    )
+
+
 @router.get("/{app_id}/apaas-access-url")
 async def get_apaas_access_url(
     app_id: int,
