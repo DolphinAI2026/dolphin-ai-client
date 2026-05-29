@@ -1,11 +1,10 @@
 <!-- frontend/src/views/v2/RuntimePage.vue -->
 <!--
   Runtime & Release — 运行与发布
-  One page, four tabs:
-    1. 沙箱     — code-server / 睿鲸 containers per workspace
-    2. 流水线   — CI/CD runs (master-detail)
-    3. 平台环境 — dev / test / prod aPaaS connections
-    4. 部署历史 — every deployment with rollback action
+  One page, three tabs:
+    1. 流水线   — CI/CD runs (master-detail)
+    2. 平台环境 — dev / test / prod aPaaS connections
+    3. 部署历史 — every deployment with rollback action
 
   Seed data inline (verbatim from $DESIGN_SRC/data.js lines 608-731). All
   action buttons are UI stubs (ElMessage.info) until backend wires land.
@@ -16,15 +15,10 @@ import { ref, computed, onMounted } from 'vue'
 import { useRouter } from 'vue-router'
 import { ElMessage } from 'element-plus'
 import WorkbenchShell from '@/components/WorkbenchShell.vue'
-import { useRuntimeSandboxStore } from '@/stores/sandbox'
-import type { RuntimeSandbox } from '@/api/sandbox'
 import { useRuntimeEnvStore } from '@/stores/runtimeEnv'
 import { useRuntimePipelineStore } from '@/stores/runtimePipeline'
 import { useRuntimeDeploymentStore } from '@/stores/runtimeDeployment'
 import type { PipelineRun } from '@/api/runtimePipeline'
-
-// Sandbox type now comes from `@/api/sandbox` (`RuntimeSandbox`). Replaced
-// inline `Sandbox` interface and `SANDBOXES` seed array — see useRuntimeSandboxStore below.
 
 // Pipeline + PipelineStage types now come from `@/api/runtimePipeline`
 // (snake_case `duration_s`). Inline `Pipeline`/`PipelineStage` interfaces +
@@ -38,8 +32,6 @@ import type { PipelineRun } from '@/api/runtimePipeline'
 // `app_code`). Inline `Deployment` interface + `DEPLOYMENTS` seed array
 // removed — see useRuntimeDeploymentStore below.
 
-// Sandboxes: real backend (Pinia store) — replaces the inline SANDBOXES seed.
-const sandboxStore = useRuntimeSandboxStore()
 // Environments: real backend (Pinia store) — replaces the inline ENVIRONMENTS seed.
 const envStore = useRuntimeEnvStore()
 // Pipelines + Deployments: real backend (Pinia store) — replaces the inline
@@ -47,7 +39,6 @@ const envStore = useRuntimeEnvStore()
 const pipelineStore = useRuntimePipelineStore()
 const deploymentStore = useRuntimeDeploymentStore()
 onMounted(() => {
-  sandboxStore.fetchSandboxes()
   envStore.fetchEnvironments()
   pipelineStore.fetchPipelines()
   deploymentStore.fetchDeployments()
@@ -58,7 +49,7 @@ onMounted(() => {
 
 const router = useRouter()
 
-const tab = ref<'sandboxes' | 'pipelines' | 'envs' | 'history'>('sandboxes')
+const tab = ref<'pipelines' | 'envs' | 'history'>('pipelines')
 const selectedRunId = ref<string>('')
 // Auto-select the first pipeline once the store finishes its first fetch.
 const cur = computed<PipelineRun | null>(() => {
@@ -70,8 +61,6 @@ const cur = computed<PipelineRun | null>(() => {
 
 // ─── Stats strip ─────────────────────────────────────────────────────────
 const stats = computed(() => {
-  const activeSb = sandboxStore.activeCount
-  const totalSb = sandboxStore.total
   const pipes = pipelineStore.pipelines
   const deps = deploymentStore.deployments
   const failedRuns = pipes.filter(p => p.status === 'failed').length
@@ -79,7 +68,6 @@ const stats = computed(() => {
   // Today = backend formatted time is "HH:MM" only (no "/" no "昨天").
   const todayDeps = deps.filter(d => d.time && !d.time.includes('/') && !d.time.includes('昨天')).length
   return [
-    { label: '运行中沙箱', v: String(activeSb), sub: `共 ${totalSb} 个`, tone: 'ok' as const, icon: 'check' },
     { label: '今日构建',   v: String(pipes.length), sub: `${failedRuns} 失败 · ${runningRuns} 进行中`, tone: 'brand' as const, icon: 'zap' },
     { label: '今日部署',   v: String(todayDeps), sub: '生产 1 · 测试 2', tone: 'info' as const, icon: 'cloud' },
     { label: '生产健康度', v: '99.8%', sub: '过去 7 天', tone: 'warn' as const, icon: 'shield' },
@@ -98,26 +86,7 @@ function formatDuration(s: number): string {
   return `${m}m ${r}s`
 }
 
-function resourceTone(value: number): 'brand' | 'amber' | 'rose' {
-  const v = Math.max(0, Math.min(1, value))
-  if (v > 0.85) return 'rose'
-  if (v > 0.6)  return 'amber'
-  return 'brand'
-}
-
-function resourcePct(value: number): string {
-  const v = Math.max(0, Math.min(1, value))
-  return (v * 100) + '%'
-}
-
 interface StatusMeta { label: string; cls: string }
-function sandboxStatusMeta(s: RuntimeSandbox['status']): StatusMeta {
-  return ({
-    active:    { label: '运行中', cls: 'badge-emerald' },
-    idle:      { label: '空闲',   cls: 'badge-amber' },
-    recycling: { label: '回收中', cls: 'badge-rose' },
-  } as Record<RuntimeSandbox['status'], StatusMeta>)[s]
-}
 
 function pipelineStatusMeta(s: string): StatusMeta {
   const map: Record<string, StatusMeta> = {
@@ -133,14 +102,6 @@ function pipelineStatusMeta(s: string): StatusMeta {
 // ─── Action handlers (stubs) ─────────────────────────────────────────────
 function notImpl(action: string) {
   ElMessage.info(`${action} 即将上线`)
-}
-
-function onOpenSandbox(sbx: RuntimeSandbox) {
-  if (sbx.flavor === 'Vibe') {
-    router.push('/vibe')
-  } else {
-    router.push('/coding')
-  }
 }
 
 function onOpenCodingWorkspace() {
@@ -170,7 +131,6 @@ function renderIcon(name: string, size = 16) {
 }
 
 const TABS = computed(() => [
-  { k: 'sandboxes' as const, l: '沙箱',     c: sandboxStore.total,                    ic: 'cloud' },
   { k: 'pipelines' as const, l: '流水线',   c: pipelineStore.pipelines.length,        ic: 'zap' },
   { k: 'envs'      as const, l: '平台环境', c: envStore.environments.length,          ic: 'admin' },
   { k: 'history'   as const, l: '部署历史', c: deploymentStore.deployments.length,    ic: 'book' },
@@ -196,7 +156,7 @@ const FAILURE_LOG = `  ▸ npm run build:component --name=客户工单看板
           <div>
             <h1 class="page-title">运行与发布</h1>
             <div class="page-subtitle">
-              统一查看：睿鲸 / Vibe 沙箱、CI/CD 流水线、得帆云 dev / test / prod 三套环境、所有应用与组件的部署历史。
+              统一查看：CI/CD 流水线、得帆云 dev / test / prod 三套环境、所有应用与组件的部署历史。
             </div>
           </div>
           <div style="display: flex; gap: 8px;">
@@ -232,92 +192,6 @@ const FAILURE_LOG = `  ▸ npm run build:component --name=客户工单看板
             <span class="icon" v-html="renderIcon(t.ic, 13)" /> {{ t.l }}
             <span class="apps-tab-count">{{ t.c }}</span>
           </button>
-        </div>
-
-        <!-- ───────────────────── Tab: Sandboxes ───────────────────── -->
-        <div v-if="tab === 'sandboxes'" style="margin-top: 14px;">
-          <div class="rt-banner">
-            <span class="icon" v-html="renderIcon('cloud', 14)" />
-            <div>
-              <b>沙箱托管在阿里云 ECS 集群。</b>
-              睿鲸沙箱用于组件构建（2C/4G 默认），Vibe 沙箱用于 code-server 编辑（4C/8G 默认）。
-              空闲 2 小时后自动回收，活动时 TTL 自动续期。
-            </div>
-            <button class="btn btn-secondary btn-sm" @click="notImpl('配置策略')">
-              <span class="icon" v-html="renderIcon('gear', 12)" /> 配置策略
-            </button>
-          </div>
-
-          <div class="card" style="padding: 0; overflow: hidden; margin-top: 14px;">
-            <div class="rt-table-head">
-              <div style="flex: 1.6;">沙箱</div>
-              <div style="width: 90px;">类型</div>
-              <div style="width: 220px;">CPU / 内存 / 磁盘</div>
-              <div style="width: 100px;">空闲</div>
-              <div style="width: 120px;">TTL</div>
-              <div style="width: 100px;">状态</div>
-              <div style="width: 110px; text-align: right;">操作</div>
-            </div>
-            <div
-              v-for="s in sandboxStore.sandboxes"
-              :key="s.id"
-              class="rt-table-row"
-            >
-              <div style="flex: 1.6; min-width: 0;">
-                <div class="rt-row-name">
-                  <span :class="['rt-dot', `rt-dot-${s.status}`]" />
-                  <span style="font-weight: 500;">{{ s.name }}</span>
-                </div>
-                <div class="rt-row-meta">
-                  <span class="mono">{{ s.id }}</span>
-                  <span>·</span>
-                  <span>{{ s.user }}</span>
-                  <span>·</span>
-                  <span class="mono" style="color: var(--text-3);">{{ s.image }}</span>
-                </div>
-              </div>
-              <div style="width: 90px;">
-                <span :class="['badge', s.flavor === '睿鲸' ? 'badge-brand' : 'badge-emerald']">{{ s.flavor }}</span>
-              </div>
-              <div style="width: 220px;">
-                <!-- Resource bars (inline ResourceBar component) -->
-                <div class="rt-resbar">
-                  <div class="rt-resbar-track">
-                    <div :class="['rt-resbar-fill', `rt-resbar-${resourceTone(s.cpu / s.cpu_max)}`]" :style="{ width: resourcePct(s.cpu / s.cpu_max) }" />
-                  </div>
-                  <div class="rt-resbar-label">{{ s.cpu.toFixed(1) }} / {{ s.cpu_max }} vCPU</div>
-                </div>
-                <div class="rt-resbar is-small">
-                  <div class="rt-resbar-track">
-                    <div :class="['rt-resbar-fill', `rt-resbar-${resourceTone(s.mem / s.mem_max)}`]" :style="{ width: resourcePct(s.mem / s.mem_max) }" />
-                  </div>
-                  <div class="rt-resbar-label">{{ s.mem.toFixed(1) }} / {{ s.mem_max }} GB</div>
-                </div>
-                <div class="rt-resbar is-small is-dim">
-                  <div class="rt-resbar-track">
-                    <div :class="['rt-resbar-fill', `rt-resbar-${resourceTone(s.disk / 10)}`]" :style="{ width: resourcePct(s.disk / 10) }" />
-                  </div>
-                  <div class="rt-resbar-label">{{ s.disk.toFixed(1) }} GB 磁盘</div>
-                </div>
-              </div>
-              <div :style="{ width: '100px', fontSize: '12.5px', color: s.idle === '0 min' ? 'var(--emerald)' : 'var(--text-3)' }">
-                {{ s.idle === '0 min' ? '● 活动中' : s.idle }}
-              </div>
-              <div :style="{ width: '120px', fontSize: '12px', color: s.status === 'recycling' ? 'var(--rose)' : 'var(--text-2)' }" class="mono">
-                {{ s.ttl }}
-              </div>
-              <div style="width: 100px;">
-                <span :class="['badge', sandboxStatusMeta(s.status).cls]">
-                  <span class="badge-dot" />{{ sandboxStatusMeta(s.status).label }}
-                </span>
-              </div>
-              <div style="width: 110px; display: flex; justify-content: flex-end; gap: 4px;">
-                <button class="btn btn-secondary btn-sm" @click="onOpenSandbox(s)">打开</button>
-                <button class="icon-btn" style="width: 26px; height: 26px;" title="重启" @click="notImpl('重启')" v-html="renderIcon('refresh', 12)" />
-                <button class="icon-btn" style="width: 26px; height: 26px; color: var(--rose);" title="终止" @click="notImpl('终止')" v-html="renderIcon('trash', 12)" />
-              </div>
-            </div>
-          </div>
         </div>
 
         <!-- ───────────────────── Tab: Pipelines ───────────────────── -->
@@ -672,7 +546,7 @@ const FAILURE_LOG = `  ▸ npm run build:component --name=客户工单看板
 
 /* ───── Stats strip (.mcp-summary) ───── */
 .mcp-summary {
-  display: grid; grid-template-columns: repeat(4, 1fr); gap: var(--s-3);
+  display: grid; grid-template-columns: repeat(3, 1fr); gap: var(--s-3);
   margin-top: var(--s-1); margin-bottom: var(--s-1);
 }
 .mcp-summary-card {
