@@ -1,8 +1,8 @@
 # 交接 — 2026-05-29 视觉一致性收口 session
 
-> 分支 `local/ui-redesign-2026-05-20`，HEAD `d39565e`，**工作区干净**。
-> 接上个 session 的 `6899d37`。本 session 8 commit（`8249281`..`d39565e`，2 文档 + 6 代码）。
-> ⚠️ **共享分支** → 全程路径限定提交 `git commit -- <path>`。**未 push**（本机 commit）。
+> 分支 `local/ui-redesign-2026-05-20`，HEAD `5b51712`，**工作区干净，✅ 已 push origin**（`6899d37..5b51712` fast-forward）。
+> 接上个 session 的 `6899d37`。本 session 9 commit（`8249281`..`5b51712`，3 文档 + 6 代码）。
+> ⚠️ **共享分支** → 全程路径限定提交 `git commit -- <path>`。push 前已 fetch 确认远端无发散。
 
 ---
 
@@ -53,4 +53,4 @@
 
 ---
 
-## 五、未 push。下一步可选：push / 做 DEFER 项 / 继续其它方向（IA 精简、假功能收口、配置助手强化 —— brainstorm 列的另几条线）。
+## 五、✅ 已 push origin。下一步可选：做 DEFER 项 / 继续其它方向（IA 精简、假功能收口、配置助手强化 —— brainstorm 列的另几条线，各自单独 brainstorm）。
