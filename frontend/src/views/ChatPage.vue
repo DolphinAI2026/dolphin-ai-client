@@ -519,9 +519,23 @@
            草稿应用由 restoreActiveViewForApp 路由到 platform + 设计 tab; 已部署走平台 iframe。
            原 md-viewer 的"下载/打开应用/部署历史"已分别在 设计 tab 导出 / 顶部"查看应用" / 顶部"历史"。-->
 
+      <!-- 2026-05-29: 退休 md-viewer 后, activeView='builder' 这段窗口(应用加载完 →
+           restoreActiveViewForApp 翻到 platform 之前)中间会空白。放加载占位别让用户盯白屏;
+           应用 load 完翻到 platform 后, builder-content 整体 v-show 隐藏, 此块自然消失。 -->
+      <div
+        v-if="existingAppId && !isDeploying"
+        class="builder-deploy-hero"
+      >
+        <div class="bdh-card">
+          <div class="bdh-emoji" aria-hidden="true">⏳</div>
+          <div class="bdh-title">正在进入应用…</div>
+          <div class="bdh-sub">加载应用配置中</div>
+        </div>
+      </div>
+
       <!-- deploy 进行中的中央等待占位 (deploy 完成后的 🎉 hero 已于 2026-05-28 删) -->
       <div
-        v-if="isDeploying"
+        v-else-if="isDeploying"
         class="builder-deploy-hero"
       >
         <div class="bdh-card">
