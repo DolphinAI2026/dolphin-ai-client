@@ -2,7 +2,7 @@
 
 **日期**：2026-05-29
 **分支**：`local/ui-redesign-2026-05-20`（⚠️ 共享分支 → 提交务必路径限定 `git commit -- <path>`）
-**状态**：待用户评审
+**状态**：✅ 已落地 T1–T10（HEAD `d39565e`，8 commit）；T11(ProcessDesigner SVG) + theme-vars token 去重 = DEFER（见末尾）
 **所属**：UI 打磨独立刀（不属 PRD AI Coding 主线，也不改低代码业务线）
 **前置**：上个 session 已落地嵌入式配置助手 / 隐藏 SPEC tab / 面包屑修复（HEAD `9fc668d`）。本刀只做视觉一致性。
 
