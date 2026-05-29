@@ -254,6 +254,7 @@ async def list_applications(
     team_scope: Optional[str] = Query(None),
     include_remote: bool = Query(True),
     source_filter: Optional[str] = Query(None),  # local / remote / linked
+    include_config: bool = Query(True),  # False → 省掉沉重的 config_preview blob（计数仍保留）
 ):
     """获取应用列表（本地 + 得帆云平台合并）"""
     # 1. 查本地应用
@@ -412,6 +413,12 @@ async def list_applications(
                 if source_filter and source_filter != "remote":
                     continue
                 merged.append(_build_remote(remote, env_base_url, env_tenant_id))
+
+    # include_config=False：列表场景（侧栏 / 计数）不需要每个应用的完整 config_preview。
+    # 计数字段(models/forms/roles/dicts)已由 _enrich 解析填好，这里只丢大 blob 本身。
+    if not include_config:
+        for m in merged:
+            m.config_preview = None
 
     return merged
 

@@ -3,7 +3,7 @@ import pytest
 from app.deps import AuthContext
 from app.models import Application, User
 from app.models.tenant import Tenant, UserTenant
-from app.routes.applications import list_applications_page
+from app.routes.applications import list_applications, list_applications_page
 
 
 async def _seed_user(db_session):
@@ -82,6 +82,54 @@ async def test_application_page_returns_page_and_counts(db_session):
         "deployed": 2,
         "draft": 25,
     }
+
+
+@pytest.mark.asyncio
+async def test_list_applications_include_config_false_omits_preview_keeps_counts(db_session):
+    """include_config=False 应省掉沉重的 config_preview blob，但 models/roles 等计数仍由
+    _enrich 解析得出，不能丢。"""
+    import json
+
+    tenant, user = await _seed_user(db_session)
+    cfg = {
+        "data": {
+            "appName": "WithCfg",
+            "appCode": "withcfg",
+            "models": [{"code": "m1"}, {"code": "m2"}],
+            "roles": [{"code": "r1"}],
+            "dicts": [],
+        }
+    }
+    db_session.add(Application(
+        user_id=user.id,
+        tenant_id=tenant.id,
+        created_by=user.id,
+        app_name="WithCfg",
+        app_code="withcfg",
+        status="draft",
+        config_preview=json.dumps(cfg),
+    ))
+    await db_session.commit()
+
+    # 默认 include_config=True：config_preview 内嵌
+    full = await list_applications(
+        _ctx(user, tenant.id), db_session,
+        team_scope=None, include_remote=False, source_filter=None, include_config=True,
+    )
+    assert len(full) == 1
+    assert full[0].config_preview is not None
+    assert full[0].models == 2
+    assert full[0].roles == 1
+
+    # include_config=False：config_preview 省掉，但计数保留
+    lean = await list_applications(
+        _ctx(user, tenant.id), db_session,
+        team_scope=None, include_remote=False, source_filter=None, include_config=False,
+    )
+    assert len(lean) == 1
+    assert lean[0].config_preview is None
+    assert lean[0].models == 2
+    assert lean[0].roles == 1
 
 
 @pytest.mark.asyncio

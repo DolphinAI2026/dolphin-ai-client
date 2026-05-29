@@ -1041,8 +1041,11 @@ const sidebarApps = ref<any[]>([])
 const sidebarLoadedOnce = ref(false)
 async function loadSidebarApps() {
   try {
-    const apps = await applicationApi.list({ include_remote: false }) as any[]
+    // 侧栏只用 id/name/code/status，不需要每个应用的完整 config_preview（省 ~1.5MB）。
+    // include_remote:false 也避免 N 次阻塞性远程 apaas 调用。
+    const apps = await applicationApi.list({ include_remote: false, include_config: false }) as any[]
     sidebarApps.value = Array.isArray(apps) ? apps : []
+    appCount.value = sidebarApps.value.length
     sidebarLoadedOnce.value = true
   } catch (e) {
     // 静默失败：sidebar 是辅助导航，不应阻塞主流程
@@ -1138,6 +1141,9 @@ function handleDeployHistoryRollback(_recordId: number) {
   }
 }
 
+// 初始加载完成前为 false：用于抑制加载期里"部署步骤全完成"误触发重量级远程 meta 刷新
+// （那条 list(include_remote:true) 是加载慢/卡 pending 的根因之一）。
+const appInitialLoadDone = ref(false)
 const parsedAppCode = ref('')
 const loadedAppCode = ref('')
 const currentRemoteStatus = ref('')
@@ -1210,21 +1216,15 @@ let _lastAppUpdatedAt = ''
 let _appPollTimer: any = null
 let _appPollVisHandler: (() => void) | null = null
 
-// onMounted 调用：立刻 fetch 一次拿基线（不等第一次轮询）。原来的"首次轮询建基线"
-// 设计有 bug — 如果 agent 在 mount 后、第一次轮询前改了 SPEC，第一次轮询会把
-// 已经改过的 updated_at 写成基线 → 永远检测不到这次变化（30~60s 后才会感知到下一次变化）。
-// 改成 onMounted 立刻拉一次 baseline，确保 baseline 是"最早可能"的时间点。
-async function primeAppPollingBaseline() {
-  let appId: number | null = null
-  try { appId = builderCurrentAppId.value } catch { return }
-  if (!appId) return
-  _lastAppId = appId
-  try {
-    const app: any = await applicationApi.get(appId)
-    _lastAppUpdatedAt = String(app?.updated_at || app?.last_updated_at || '')
-  } catch {
-    _lastAppUpdatedAt = ''
-  }
+// 用主加载已经取到的 app 对象建立轮询基线，避免为了一个 updated_at 再单独 GET 一次
+// 完整应用详情（大应用 config_preview ~948kB，原 primeAppPollingBaseline 是纯重复请求）。
+// 基线 = 加载时刻的 updated_at，仍是"最早可能"的时间点，先于第一次 5s tick，
+// 保持原来"避免首次 tick 把已改过的 updated_at 当基线"的语义。
+function seedAppPollingBaseline(app: any) {
+  const aid = Number(app?.id)
+  if (!Number.isFinite(aid) || aid <= 0) return
+  _lastAppId = aid
+  _lastAppUpdatedAt = String(app?.updated_at || app?.last_updated_at || '')
 }
 async function pollAppForChanges() {
   let appId: number | null = null
@@ -1410,13 +1410,19 @@ const resolvedAppId = computed(() => {
   const n = Number(raw)
   return Number.isFinite(n) && n > 0 ? n : null
 })
+// currentRemoteStatus 来自得帆云远程状态（需重量级 list(include_remote:true)，仅在
+// 发布/部署等用户动作后刷新）。加载态下不再拉远程列表，改用已加载的本地 publish-status
+// 兜底判断上线/发布中 —— 远程真值（'ENABLE'）可用时仍优先。
 const isAppOnline = computed(() =>
   currentRemoteStatus.value === 'ENABLE' ||
-  currentRemoteStatus.value === '已上线'
+  currentRemoteStatus.value === '已上线' ||
+  appPublishDetail.value.status === 'published' ||
+  appPublishDetail.value.status === 'draft_on_published'
 )
 const isAppPublishing = computed(() => {
   const status = String(currentRemoteStatus.value || '').toLowerCase()
-  return status.includes('publish') || status.includes('上线中') || status.includes('publishing')
+  if (status.includes('publish') || status.includes('上线中') || status.includes('publishing')) return true
+  return appPublishDetail.value.status === 'generating'
 })
 const isApplicationUpdateChatMode = ref(false)
 const shouldDefaultOpenArtifactPanel = () => {
@@ -2343,7 +2349,8 @@ const handleBuilderModelChange = async (nextValue: number | null) => {
 const appCount = ref(0)
 const fetchAppCount = async () => {
   try {
-    const apps = await applicationApi.list() as any[]
+    // 只数应用个数 — 走精简列表（无 config_preview、无远程 apaas 调用），别拉 1.5MB。
+    const apps = await applicationApi.list({ include_remote: false, include_config: false }) as any[]
     appCount.value = apps.length
   } catch { /* ignore */ }
 }
@@ -2934,6 +2941,9 @@ const restoreActiveViewForApp = async (app: any) => {
     activeView.value = 'builder'
     return
   }
+
+  // 主加载已取到完整 app — 顺手建立轮询基线，省掉原 primeAppPollingBaseline 的重复 GET。
+  seedAppPollingBaseline(app)
 
   const isDeployed = !!app.apaas_app_id || app.status === 'completed'
   if (!isDeployed) {
@@ -5274,7 +5284,9 @@ async function loadDeployStatus() {
     deploySteps.value = resp.steps || []
     if (deploySteps.value.length && deploySteps.value.every(step => step.status === 'completed')) {
       deployLastError.value = ''
-      await refreshCurrentAppRemoteMeta(deployAppId.value)
+      // 初始加载期不刷远程 meta（重量级 list(include_remote:true) → pending）；
+      // 上线徽章此时已由本地 publish-status 兜底。部署动作完成后（appInitialLoadDone=true）才刷真值。
+      if (appInitialLoadDone.value) await refreshCurrentAppRemoteMeta(deployAppId.value)
     }
   } catch { /* ignore */ }
 }
@@ -8152,10 +8164,8 @@ onMounted(async () => {
   void syncCurrentAppToBackend()
   // agent 改 SPEC 后右侧自动刷新 — 启动 5s 轮询
   startAppPolling()
-  // 立刻拉一次基线 —— 不依赖第一次 5s tick 后才建立 baseline。
-  // 若 agent 在 mount 后、第一次 tick 前改了 SPEC，原来"首次 tick 建基线"逻辑
-  // 会把改过的 updated_at 当成 baseline，永远检测不到这次变化。
-  void primeAppPollingBaseline()
+  // 轮询基线改由主加载路径用已取到的 app 对象 seedAppPollingBaseline() 建立，
+  // 不再为了一个 updated_at 单独 GET 一次完整应用详情（见 seedAppPollingBaseline 注释）。
   const initialPrompt = typeof route.query.prompt === 'string' ? route.query.prompt : ''
   // 加载左侧 sidebar 应用列表（不阻塞主流程）
   if (!embedMode.value) loadSidebarApps()
@@ -8255,9 +8265,12 @@ onMounted(async () => {
         loadedAppCode.value = app.app_code || pickAppCode(configData) || ''
         parsedAppCode.value = loadedAppCode.value
         deployAppId.value = aid
-        await loadDeployStatus()
-        await refreshCurrentAppRemoteMeta(aid)
+        // 先翻视图消占位（detail 已就绪），再后台拉部署步骤 —— 别让 8s 的 steps/status
+        // (后端按 apaas 真实对象远程重建进度) 把"加载应用配置中"占位卡 8 秒。
+        // restoreActiveViewForApp 只用 app 本身, 不依赖 deploySteps。
         await restoreActiveViewForApp(app)
+        void loadDeployStatus()
+        // 加载期不刷远程 meta（apaas_url 已由 GET /applications/{id} 提供，上线徽章走本地 publish-status）。
         const docVersionPayload = await loadLatestDocForApp(aid)
         await restorePendingChangePlan(aid, docVersionPayload)
         console.log(`Loaded app ${aid}: ${app.app_name}, status=${app.status}, conv=${app.conversation_id}`)
@@ -8348,7 +8361,7 @@ onMounted(async () => {
                 parsedAppCode.value = loadedAppCode.value
                 deployAppId.value = linkedApp.id
                 await loadDeployStatus()
-                await refreshCurrentAppRemoteMeta(linkedApp.id)
+                // 加载期不刷远程 meta（重量级 list(include_remote:true)）；上线徽章走本地 publish-status。
                 const docVersionPayload = await loadLatestDocForApp(linkedApp.id)
                 await restorePendingChangePlan(linkedApp.id, docVersionPayload)
                 // 更新 URL 为 app_id 模式
@@ -8398,7 +8411,7 @@ onMounted(async () => {
         parsedAppCode.value = loadedAppCode.value
         deployAppId.value = aid
         await loadDeployStatus()
-        await refreshCurrentAppRemoteMeta(aid)
+        // 加载期不刷远程 meta（apaas_url 已由 GET /applications/{id} 提供，上线徽章走本地 publish-status）。
         await restoreActiveViewForApp(app)
         const docVersionPayload = await loadLatestDocForApp(aid)
         await restorePendingChangePlan(aid, docVersionPayload)
@@ -8483,6 +8496,9 @@ onMounted(async () => {
 
   // 加载应用计数
   fetchAppCount()
+
+  // 初始加载流程结束 — 此后部署/发布动作触发的 loadDeployStatus 才允许刷新远程 meta。
+  appInitialLoadDone.value = true
 })
 
 // ── 监听 route.query.app_id 变化，实现侧栏点击切换应用 ──

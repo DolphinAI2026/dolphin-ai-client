@@ -3,7 +3,7 @@ import type { Application, MergedApplication } from '@/types'
 import { API_PREFIX } from '@/utils/request'
 
 export const applicationApi = {
-  list(params?: { include_remote?: boolean; source_filter?: string }) {
+  list(params?: { include_remote?: boolean; source_filter?: string; include_config?: boolean }) {
     return request.get<any, MergedApplication[]>('/applications', { params })
   },
   /** 按 app_name 模糊匹配本租户内当前用户可见的应用。AI-Chat → Builder 选目标弹框使用。 */
