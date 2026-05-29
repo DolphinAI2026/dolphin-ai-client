@@ -373,6 +373,13 @@
                 :menu-name="selectedApaasMenuName"
                 :form-id="selectedApaasMenuFormId"
               />
+              <FormPermPanel
+                v-else-if="designerSub === 'perm' && selectedApaasMenuFormId"
+                :key="`perm-${selectedApaasMenuId}-${designerRefreshKey}`"
+                :app-id="existingAppId"
+                :form-id="selectedApaasMenuFormId"
+                :menu-name="selectedApaasMenuName"
+              />
               <!-- 2026-05-29: 删「页面设置」sub-tab — 纯占位(⚙️ placeholder "P1 接入"),
                    点了无功能。改设置走配置助手对话。同步从 DESIGNER_SUBS 移除该 tab。 -->
             </div>
@@ -984,6 +991,7 @@ import FormDesignerPanel from '@/components/v3/FormDesignerPanel.vue'
 import ListDesignerPanel from '@/components/v3/ListDesignerPanel.vue'
 import ProcessDesignerPanel from '@/components/v3/ProcessDesignerPanel.vue'
 import DataSchemaEditor from '@/components/v3/DataSchemaEditor.vue'
+import FormPermPanel from '@/components/v3/FormPermPanel.vue'
 import DataModelDetailPanel from '@/components/v3/DataModelDetailPanel.vue'
 import DictEditorPanel from '@/components/v3/DictEditorPanel.vue'
 import RoleManagePanel from '@/components/v3/RoleManagePanel.vue'
@@ -2576,9 +2584,10 @@ const DESIGNER_SUBS = [
   { code: 'list', label: '列表设计' },
   { code: 'process', label: '流程设计' },
   { code: 'data', label: '数据 schema' },
+  { code: 'perm', label: '权限' },
   // 2026-05-29: 删「页面设置」(page) — 纯占位无功能, 改设置走配置助手对话。
 ] as const
-const designerSub = ref<'form' | 'list' | 'process' | 'data'>('form')
+const designerSub = ref<'form' | 'list' | 'process' | 'data' | 'perm'>('form')
 
 // P1-N6: 这些 sub-tab 走 native master-detail panel — 不需要再显 SectionContentList.
 const isNativeMasterDetailSubTab = computed(() => {
