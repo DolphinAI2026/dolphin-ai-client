@@ -82,13 +82,8 @@
           >
             <span class="fbp-btn-icon">✨</span> 用对话改
           </button>
-          <button
-            class="fbp-btn fbp-btn-primary"
-            disabled
-            :title="viewMode === 'edit' ? 'apaas 原生编辑器内部自带保存按钮' : '业务视角无可保存改动'"
-          >
-            保存
-          </button>
+          <!-- 2026-05-29: 删「保存」按钮 — 永远 disabled 死按钮(预览态无可存改动 / 编辑态
+               apaas 原生编辑器自带保存)。改字段走「用对话改」或「编辑」模式。 -->
         </div>
       </header>
 

@@ -373,12 +373,8 @@
                 :menu-name="selectedApaasMenuName"
                 :form-id="selectedApaasMenuFormId"
               />
-              <div v-else-if="designerSub === 'page'" class="mdsh-placeholder">
-                <div class="mdsh-placeholder-icon">⚙️</div>
-                <h3>页面设置</h3>
-                <p>设置该菜单的标题 / 图标 / 默认视图 / 显示规则.</p>
-                <p class="hint">P1 接入 — 当前请用配置助手对话.</p>
-              </div>
+              <!-- 2026-05-29: 删「页面设置」sub-tab — 纯占位(⚙️ placeholder "P1 接入"),
+                   点了无功能。改设置走配置助手对话。同步从 DESIGNER_SUBS 移除该 tab。 -->
             </div>
           </div>
           <!-- 设计 tab + 未选菜单: 空态提示 -->
@@ -2580,9 +2576,9 @@ const DESIGNER_SUBS = [
   { code: 'list', label: '列表设计' },
   { code: 'process', label: '流程设计' },
   { code: 'data', label: '数据 schema' },
-  { code: 'page', label: '页面设置' },
+  // 2026-05-29: 删「页面设置」(page) — 纯占位无功能, 改设置走配置助手对话。
 ] as const
-const designerSub = ref<'form' | 'list' | 'process' | 'data' | 'page'>('form')
+const designerSub = ref<'form' | 'list' | 'process' | 'data'>('form')
 
 // P1-N6: 这些 sub-tab 走 native master-detail panel — 不需要再显 SectionContentList.
 const isNativeMasterDetailSubTab = computed(() => {
