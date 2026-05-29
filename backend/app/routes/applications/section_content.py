@@ -573,6 +573,153 @@ async def get_form_permissions(
     )
 
 
+class FormPermSaveRequest(BaseModel):
+    # matrix: subject_key(role_id 或 "__ALL_USER__") -> {view,edit,delete,add,import: bool, range: str|None}
+    matrix: dict[str, dict[str, Any]] = Field(default_factory=dict)
+
+
+@router.post("/{app_id}/forms/{form_id}/permissions", response_model=FormPermissionsResponse)
+async def set_form_permissions(
+    app_id: int,
+    form_id: str,
+    body: FormPermSaveRequest,
+    ctx: Annotated[AuthContext, Depends(get_auth_context)],
+    db: Annotated[AsyncSession, Depends(get_db)],
+) -> FormPermissionsResponse:
+    """覆盖式写表单级权限 (RMW: 读现状→保留 USER/DEPT 主体→并入提交矩阵→整表覆盖).
+
+    ⚠️ 真写 apaas (set_apaas_form_permissions 覆盖式). 提交的 matrix 是 角色+ALL_USER 的
+    完整期望态(前端载入现状→改→提交全量); USER/DEPT 主体不在矩阵里, 从现状读出保留,
+    避免被覆盖式 API 清掉。自己按 _simplify_perm_object 真 key 转换(不用 mcp_server
+    的 _form_perms_to_rules — 它读 subj.get('type') 与现状的 'subject_type' 不匹配, 有 bug)。
+    """
+    source = "set_apaas_form_permissions"
+    app = await _load_app_and_check_view(app_id, ctx, db)
+    if not app.platform_env_id or not app.apaas_app_id:
+        return FormPermissionsResponse(
+            ok=False,
+            env_id=app.platform_env_id,
+            apaas_app_id=str(app.apaas_app_id) if app.apaas_app_id else None,
+            form_id=form_id, source=source,
+            error_code="APP_NOT_DEPLOYED", message="应用尚未部署 — 无法写权限",
+        )
+    form_id = (form_id or "").strip()
+    if not form_id:
+        return FormPermissionsResponse(
+            ok=False, env_id=app.platform_env_id, apaas_app_id=str(app.apaas_app_id),
+            form_id=form_id, source=source,
+            error_code="INVALID_FORM_ID", message="form_id 不能为空",
+        )
+
+    env_id = app.platform_env_id
+    apaas_app_id = str(app.apaas_app_id)
+
+    # 1) form_code 反查 (set 需要) — ⚠️ 菜单的 form_code 实测为 null (set_role_resource_permission
+    #    走菜单拿 form_code 对这类菜单也会失败). 用 get_apaas_form_detail 的 main_model_code:
+    #    apaas 表单 code = 主模型 code (如 "idm_erp_payable", 设计器 header 显的就是它).
+    ok_d, raw_d = await _safe_call_mcp_tool(
+        "get_apaas_form_detail", env_id=env_id, apaas_app_id=apaas_app_id, extra_args={"form_id": form_id},
+    )
+    form_code = str((raw_d or {}).get("main_model_code") or "") if ok_d else ""
+    if not form_code:
+        return FormPermissionsResponse(
+            ok=False, env_id=env_id, apaas_app_id=apaas_app_id, form_id=form_id, source=source,
+            error_code="FORM_CODE_NOT_FOUND",
+            message=((raw_d.get("message") if (not ok_d and isinstance(raw_d, dict)) else None)
+                     or f"form_id={form_id} 未取到 form_code(main_model_code)"),
+        )
+
+    # 2) 读现状 (保留 USER/DEPT 主体, 避免覆盖式 set 清掉) — 不走缓存拿最新.
+    ok_c, cur = await _safe_call_mcp_tool(
+        "list_apaas_form_permissions", env_id=env_id, apaas_app_id=apaas_app_id,
+        extra_args={"form_id": form_id}, use_cache=False,
+    )
+    if not ok_c:
+        return FormPermissionsResponse(
+            ok=False, env_id=env_id, apaas_app_id=apaas_app_id, form_id=form_id, source=source,
+            error_code=cur.get("error_code") or "READ_BEFORE_WRITE_FAILED",
+            message=cur.get("message") or "写前读现状失败",
+        )
+
+    preserved: dict[str, dict] = {}
+
+    def _preserve(group: dict, act_keys: list) -> None:
+        subj = group.get("subject") or {}
+        st = str(subj.get("subject_type") or "").upper()
+        if st not in ("USER", "DEPT"):
+            return  # 角色 / ALL_USER 由提交矩阵覆盖, 不在这里保留
+        sv = str(subj.get("subject_value") or "")
+        rule = preserved.setdefault(f"{st}:{sv}", {
+            "subject_type": st, "subject_value": sv,
+            "subject_name": str(subj.get("subject_name") or sv),
+            "actions": [], "range_type": str(subj.get("range_type") or "ALL").upper(),
+        })
+        for act, gk in act_keys:
+            if group.get(gk) and act not in rule["actions"]:
+                rule["actions"].append(act)
+
+    for g in (cur.get("data_permissions") or []):
+        if isinstance(g, dict):
+            _preserve(g, [("view", "can_view"), ("edit", "can_edit"), ("delete", "can_delete")])
+    for g in (cur.get("operation_permissions") or []):
+        if isinstance(g, dict):
+            _preserve(g, [("add", "can_add"), ("import", "can_import"), ("draft", "can_draft")])
+
+    # 3) 角色名 (subject_name 显示用)
+    role_names: dict[str, str] = {}
+    ok_r, raw_r = await _safe_call_mcp_tool("list_apaas_app_roles", env_id=env_id, apaas_app_id=apaas_app_id)
+    if ok_r:
+        for r in _extract_items_from_mcp_result(
+            raw_r, key_candidates=["roles", "items"],
+            id_keys=["role_id", "id"], name_keys=["role_name", "name"], code_keys=["role_code", "code"],
+        ):
+            if r.id:
+                role_names[str(r.id)] = str(r.name or r.id)
+
+    # 4) 提交矩阵 → rules (只建有权限的主体; 全 false = 无权限 = 不建 rule)
+    my_rules: list[dict] = []
+    ACTS = ["view", "edit", "delete", "add", "import"]
+    for key, cell in (body.matrix or {}).items():
+        if not isinstance(cell, dict):
+            continue
+        actions = [a for a in ACTS if cell.get(a)]
+        if not actions:
+            continue
+        rng = str(cell.get("range") or "ALL").upper()
+        if key == "__ALL_USER__":
+            my_rules.append({"subject_type": "ALL_USER", "subject_value": "",
+                             "subject_name": "全部人员", "actions": actions, "range_type": rng})
+        else:
+            my_rules.append({"subject_type": "ROLE_USER", "subject_value": key,
+                             "subject_name": role_names.get(key, key), "actions": actions, "range_type": rng})
+
+    new_rules = list(preserved.values()) + my_rules
+    if not new_rules:
+        return FormPermissionsResponse(
+            ok=False, env_id=env_id, apaas_app_id=apaas_app_id, form_id=form_id, source=source,
+            error_code="EMPTY_MATRIX",
+            message="矩阵全空 — 至少给一个角色/全员一项权限再保存(避免锁死表单访问)",
+        )
+
+    # 5) 覆盖写回真 apaas
+    ok_w, raw_w = await _safe_call_mcp_tool(
+        source, env_id=env_id, apaas_app_id=apaas_app_id,
+        extra_args={"form_id": form_id, "form_code": form_code, "rules": new_rules}, use_cache=False,
+    )
+    if not ok_w:
+        return FormPermissionsResponse(
+            ok=False, env_id=env_id, apaas_app_id=apaas_app_id, form_id=form_id, source=source,
+            error_code=raw_w.get("error_code") or "WRITE_FAILED",
+            message=raw_w.get("message") or "写表单权限失败",
+        )
+
+    invalidate_section_cache_for_app(apaas_app_id)  # 失效缓存, 前端 reload GET 拿最新
+    return FormPermissionsResponse(
+        ok=True, env_id=env_id, apaas_app_id=apaas_app_id, form_id=form_id, source=source,
+        message="表单权限已覆盖写入(apaas 运行时立即生效)",
+    )
+
+
 @router.get("/{app_id}/apaas-access-url")
 async def get_apaas_access_url(
     app_id: int,
