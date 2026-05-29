@@ -8661,7 +8661,7 @@ watch(conversationId, (id) => {
 /* v2 redesign (Session 5): 3-column shell wrapper that holds
    ChatConversationList + <main class="chat-main"> (existing chat-page-shell)
    + AppBlueprintPanel. Existing layout inside .chat-page-shell unchanged. */
-.chat-shell { display: flex; height: 100%; min-height: 0; background: var(--bg-app); }
+.chat-shell { display: flex; height: 100%; min-height: 0; background: var(--bg-app); position: relative; }
 .chat-main { flex: 1; min-width: 0; min-height: 0; height: 100%; display: flex; flex-direction: column; overflow: hidden; }
 /* ══════════════════════════════════════════════
    Theme — uses CSS custom properties (var(--t-*))
@@ -12205,11 +12205,17 @@ html[data-theme="light"] .msg-attachment-chip {
    panel 内部 usePanelResize 还在, 用户能拖左边缘 handle 拉宽度 (320-880).
    左侧 chat-main 是 flex:1 min-width:0, 永远填满剩余宽度. */
 .config-assistant.ca-floating {
-  position: relative;  /* 让内部 ca-resize-handle (absolute) 锚定 */
+  /* 2026-05-29: 真·浮动 overlay — 落在 48px TopBar 下面一层, 不再作为 flex sibling
+     挤压顶部工具栏 (用户实测顶部按钮被挤). chat-shell position:relative 锚定。
+     right/top/bottom 定位, 宽度由 panel 内部 usePanelResize 控制。 */
+  position: absolute;
+  top: 48px;
+  right: 0;
+  bottom: 0;
+  height: auto;  /* 覆盖 base .config-assistant 的 height:100% — 让 top/bottom 决定高度, 不溢出 */
+  z-index: 50;
   flex-shrink: 0;
-  align-self: stretch;
   box-shadow: -2px 0 8px rgba(15, 23, 42, 0.06);
-  /* width 由 panel 内部 usePanelResize 控制, defaultWidth=420 */
 }
 html[data-theme="dark"] .config-assistant.ca-floating {
   box-shadow: -2px 0 8px rgba(0, 0, 0, 0.25);
