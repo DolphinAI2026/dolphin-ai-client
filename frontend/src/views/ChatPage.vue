@@ -70,6 +70,15 @@
                 <span class="app-status-dot" />
                 已发布 · 有 {{ appPublishDetail.pending_changes_count }} 个未提交
               </span>
+              <span v-else-if="appPublishStatus === 'failed'">
+                <span class="app-status-dot" />
+                {{ appPublishDetail.partial ? '部分失败' : '生成失败' }}
+                <button type="button" class="app-status-retry" @click.stop="retryFailedGenerate">重试</button>
+              </span>
+              <span v-else-if="appPublishStatus === 'generating'">
+                <span class="app-status-dot" />
+                生成中…
+              </span>
               <span v-else>草稿</span>
             </span>
           </div>
@@ -3634,12 +3643,13 @@ const canDeployFromTopCTA = computed(() => !!builderCurrentAppId.value && (showS
 //   2026-05-27 design-v4 K3: 接 /applications/{id}/publish-status 真值 3 态:
 //     'draft' / 'published' / 'draft_on_published' (有未发布改动)
 const appPublishDetail = ref<{
-  status: 'draft' | 'published' | 'draft_on_published'
+  status: 'draft' | 'published' | 'draft_on_published' | 'failed' | 'generating'
   latest_deploy: { version?: string; completed_at?: string; user_id?: number } | null
   pending_changes_count: number
-}>({ status: 'draft', latest_deploy: null, pending_changes_count: 0 })
+  partial: boolean
+}>({ status: 'draft', latest_deploy: null, pending_changes_count: 0, partial: false })
 
-const appPublishStatus = computed<'published' | 'draft' | 'draft_on_published'>(() => appPublishDetail.value.status)
+const appPublishStatus = computed<'published' | 'draft' | 'draft_on_published' | 'failed' | 'generating'>(() => appPublishDetail.value.status)
 const appPublishTooltip = computed(() => {
   const d = appPublishDetail.value
   if (d.status === 'published') {
@@ -3647,6 +3657,14 @@ const appPublishTooltip = computed(() => {
   }
   if (d.status === 'draft_on_published') {
     return `已发布 ${d.latest_deploy?.version || ''}, 但有 ${d.pending_changes_count} 个未发布改动`
+  }
+  if (d.status === 'failed') {
+    return d.partial
+      ? '上次生成中途失败，已建了一部分模型/表单。点「重试」幂等续跑补全缺失项。'
+      : '上次生成失败。点「重试」重新生成。'
+  }
+  if (d.status === 'generating') {
+    return '正在生成到 aPaaS 平台…（创建模型/表单/角色）'
   }
   return '应用尚未发布到平台（草稿）'
 })
@@ -3660,6 +3678,7 @@ async function refreshAppPublishStatus() {
         status: resp.status || 'draft',
         latest_deploy: resp.latest_deploy || null,
         pending_changes_count: resp.pending_changes_count || 0,
+        partial: !!resp.partial,
       }
     }
   } catch {
@@ -3669,7 +3688,21 @@ async function refreshAppPublishStatus() {
       status: app?.apaas_app_id || app?.status === 'completed' ? 'published' : 'draft',
       latest_deploy: null,
       pending_changes_count: 0,
+      partial: false,
     }
+  }
+}
+
+// 2026-05-29: 失败应用的「重试」— 幂等 generate-run 续跑补全, 复用已建对象不撞冲突。
+async function retryFailedGenerate() {
+  if (!existingAppId.value) return
+  try {
+    await applicationApi.generateRun(existingAppId.value)
+    ElMessage.success('已重新触发生成，稍后刷新查看进度')
+    appPublishDetail.value = { ...appPublishDetail.value, status: 'generating' }
+    setTimeout(() => refreshAppPublishStatus(), 2000)
+  } catch (e: any) {
+    ElMessage.error('重试失败：' + (e?.response?.data?.detail || e?.message || '未知错误'))
   }
 }
 watch(() => existingAppId.value, () => refreshAppPublishStatus(), { immediate: true })
@@ -12856,6 +12889,38 @@ html[data-theme="dark"] .cta-btn.cta-deploy {
   display: inline-flex;
   align-items: center;
   gap: 4px;
+}
+.builder-chat-crumbs .app-status-chip.failed {
+  background: var(--danger-soft, #fee2e2);
+  color: var(--danger, #b91c1c);
+  border-color: var(--danger-ring, #fca5a5);
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+.builder-chat-crumbs .app-status-chip.generating {
+  background: var(--brand-soft);
+  color: var(--brand);
+  border-color: var(--brand-ring);
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+.builder-chat-crumbs .app-status-chip .app-status-retry {
+  margin-left: 2px;
+  padding: 0 7px;
+  height: 15px;
+  line-height: 15px;
+  font-size: 10px;
+  font-weight: 700;
+  color: #fff;
+  background: var(--danger, #b91c1c);
+  border: none;
+  border-radius: 999px;
+  cursor: pointer;
+}
+.builder-chat-crumbs .app-status-chip .app-status-retry:hover {
+  filter: brightness(1.1);
 }
 .builder-chat-crumbs .app-status-chip .app-status-dot {
   display: inline-block;

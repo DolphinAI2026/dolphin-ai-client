@@ -1601,11 +1601,14 @@ async def get_process_definition(
 # ---------------------------------------------------------------------------
 class PublishStatusResponse(BaseModel):
     ok: bool
-    status: str  # 'draft' | 'published' | 'draft_on_published'
+    status: str  # 'draft' | 'published' | 'draft_on_published' | 'failed' | 'generating'
     latest_deploy: Optional[dict[str, Any]] = None
     pending_changes_count: int = 0
     last_modified_at: Optional[str] = None
     message: Optional[str] = None
+    # 2026-05-29: 从未成功发布的应用, 暴露真实 app.status 而非一律 'draft'。
+    partial: bool = False  # status='failed' 且 apaas 已建了一部分 → 部分失败
+    app_status: Optional[str] = None  # 原始 application.status (调试/tooltip)
 
 
 @router.get("/{app_id}/publish-status", response_model=PublishStatusResponse)
@@ -1637,12 +1640,23 @@ async def get_publish_status(
     last_modified = getattr(app, "updated_at", None) or getattr(app, "created_at", None)
 
     if not latest:
+        # 从未成功发布 → 别一律显示"草稿"。看 application.status 暴露真实态:
+        #   failed → 生成失败 (apaas 已建了一部分则部分失败); generating/updating → 生成中。
+        app_status = (app.status or "").lower()
+        if app_status == "failed":
+            ui_status = "failed"
+        elif app_status in ("generating", "updating"):
+            ui_status = "generating"
+        else:
+            ui_status = "draft"
         return PublishStatusResponse(
             ok=True,
-            status="draft",
+            status=ui_status,
             latest_deploy=None,
             pending_changes_count=1 if last_modified else 0,
             last_modified_at=last_modified.isoformat() if last_modified else None,
+            partial=(ui_status == "failed" and bool(app.apaas_app_id)),
+            app_status=app.status,
         )
 
     deploy_dict = {
