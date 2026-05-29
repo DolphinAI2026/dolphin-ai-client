@@ -1060,7 +1060,8 @@ const sidebarSessionItems = computed<SidebarSessionItem[]>(() =>
 function buildSidebarAppQuery(app: any): Record<string, string> {
   const appId = String(app.id)
   const isGenerated = !!(app.apaas_app_id || app.local_status === 'completed' || app.status === 'completed')
-  if (isGenerated) return { app_id: appId, tab: 'spec', workspace: 'update' }
+  // 2026-05-29: spec(设计) tab 暂隐藏 — 已生成应用进来落「功能」(design) tab 而非 spec。
+  if (isGenerated) return { app_id: appId, tab: SPEC_TAB_ENABLED ? 'spec' : 'design', workspace: 'update' }
   return { app_id: appId }
 }
 function onSidebarSelectApp(id: string | number) {
@@ -2519,8 +2520,16 @@ const TOP_TAB_DEFAULT_SUB: Record<string, string> = {
   // Q2 (2026-05-27): 数据源 tab 是扁平 panel 无 sub-tab, default empty.
   datasource: '',
 }
-const topTab = ref<string>(SECTION_TO_TOP_TAB[_initSection] || 'design')
-function onTopTabSwitch(tab: string) {
+// 2026-05-29: 暂时隐藏「设计」(spec) tab — 用户反馈那一大坨 read-only SPEC 文档平铺太重,
+// 进应用直接用「功能」tab + 配置助手对话调整即可。改开关为 true 即整体恢复(组件/逻辑都保留,
+// 仅不显示 + 把落到 spec 的入口归一到 design)。⚠️ 别删 SpecDesignPanel 本体(low-code 核心线)。
+const SPEC_TAB_ENABLED = false
+function normalizeTopTab(tab: string): string {
+  return (!SPEC_TAB_ENABLED && tab === 'spec') ? 'design' : tab
+}
+const topTab = ref<string>(normalizeTopTab(SECTION_TO_TOP_TAB[_initSection] || 'design'))
+function onTopTabSwitch(rawTab: string) {
+  const tab = normalizeTopTab(rawTab)
   topTab.value = tab
   // 切回旧 section 系统兼容
   const sec = TOP_TAB_TO_SECTION[tab] || 'ui'
@@ -2938,10 +2947,10 @@ const restoreActiveViewForApp = async (app: any) => {
 
   const isDeployed = !!app.apaas_app_id || app.status === 'completed'
   if (!isDeployed) {
-    // 2026-05-29: 退休老 md-viewer 后, 草稿(未部署)应用也进 platform 视图的「设计」tab
-    // 看结构化 SPEC (SpecDesignPanel 不依赖 apaas 部署, 仅需 existingAppId)。
+    // 2026-05-29: 草稿(未部署)应用进 platform 视图。原默认落「设计」(spec) tab,
+    // 现 spec tab 暂隐藏(SPEC_TAB_ENABLED=false)→ 经 normalizeTopTab 落「功能」(design)。
     activeView.value = 'platform'
-    topTab.value = 'spec'
+    topTab.value = normalizeTopTab('spec')
     return
   }
 

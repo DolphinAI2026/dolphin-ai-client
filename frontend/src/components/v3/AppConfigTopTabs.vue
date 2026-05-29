@@ -23,7 +23,7 @@
 <template>
   <nav class="actt" role="tablist" aria-label="应用配置分类">
     <button
-      v-for="tab in TABS"
+      v-for="tab in visibleTabs"
       :key="tab.code"
       class="actt-tab"
       :class="{ active: currentTab === tab.code }"
@@ -39,6 +39,7 @@
 </template>
 
 <script setup lang="ts">
+import { computed } from 'vue'
 // N1 (2026-05-27): 顶部 tab 5 → 3 (设计/权限/日志).
 // 删 '数据' (跟设计 sub '数据 schema' 撞车) + '流程' (跟设计 sub '流程设计' 撞).
 // 现 model/process 编辑全归"设计 tab + 选菜单 + sub". 跨菜单 list view 用 ConfigAssistant 对话.
@@ -87,9 +88,18 @@ const TABS: Array<{ code: TabCode; label: string; icon: string }> = [
   },
 ]
 
-defineProps<{
+const props = withDefaults(defineProps<{
   currentTab: string
-}>()
+  // 2026-05-29: 暂隐藏「设计」(spec) tab — 用户反馈 SPEC 文档平铺太重, 进应用走「功能」+对话即可。
+  // 传 false 即恢复显示(组件/逻辑完整保留)。
+  hideSpec?: boolean
+}>(), {
+  hideSpec: true,
+})
+
+const visibleTabs = computed(() =>
+  props.hideSpec ? TABS.filter(t => t.code !== 'spec') : TABS
+)
 
 const emit = defineEmits<{
   (e: 'switch-tab', tab: TabCode): void
