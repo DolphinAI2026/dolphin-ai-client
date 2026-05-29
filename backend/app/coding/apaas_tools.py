@@ -78,6 +78,59 @@ async def _get_apaas_client(platform_env_id: int, db: AsyncSession):
     )
 
 
+async def _relogin_apaas_env(platform_env_id: int, db: AsyncSession) -> bool:
+    """用 env 账号密码重新登录 aPaaS，刷新并持久化 token。成功返 True。
+
+    aPaaS token 会过期 → 读接口撞 401。有 username/password_enc 的 env 自动重登，
+    用户无感。无凭据则返 False（调用方按原 401 处理）。
+    """
+    from app.models import PlatformEnv
+    from app.apaas_client import APaaSClient
+    from app.crypto import decrypt_password
+    from sqlalchemy import select
+
+    env = (
+        await db.execute(select(PlatformEnv).where(PlatformEnv.id == platform_env_id))
+    ).scalar_one_or_none()
+    if env is None or not env.username or not env.password_enc:
+        return False
+    try:
+        password = decrypt_password(env.password_enc)
+        tmp = APaaSClient(base_url=env.base_url, tenant_id=env.platform_tenant_id or "default")
+        res = await tmp.login(env.username, password)
+        new_token = ((res or {}).get("token") or "").strip()
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("apaas relogin env=%s 失败: %s", platform_env_id, exc)
+        return False
+    if not new_token:
+        return False
+    env.token = new_token
+    env.status = "connected"
+    await db.commit()
+    logger.info("apaas relogin env=%s 成功，token 已刷新", platform_env_id)
+    return True
+
+
+async def call_apaas_with_relogin(platform_env_id: int, db: AsyncSession, fn):
+    """跑一次 aPaaS 读调用；撞 token 失效(401) → 自动重登 + 重试一次。
+
+    fn: async callable(client) -> result。让 token 过期对用户无感（复用 env 账号密码）。
+    """
+    from app.error_messages import is_apaas_token_error
+
+    client = await _get_apaas_client(platform_env_id, db)
+    try:
+        return await fn(client)
+    except Exception as exc:  # noqa: BLE001
+        if not is_apaas_token_error(str(exc)):
+            raise
+        logger.info("apaas 调用撞 token 失效，尝试重登重试 env=%s", platform_env_id)
+        if not await _relogin_apaas_env(platform_env_id, db):
+            raise
+        client2 = await _get_apaas_client(platform_env_id, db)
+        return await fn(client2)
+
+
 # ═══════════════════════════════════════════════════════════════════════════
 # A. aPaaS 平台内省 — 11 个只读查询工具
 # ═══════════════════════════════════════════════════════════════════════════

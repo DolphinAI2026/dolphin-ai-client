@@ -221,39 +221,60 @@ async def _safe_call_mcp_tool(
     if extra_args:
         args.update(extra_args)
 
-    try:
-        raw = await tool(**args)
-    except TypeError as exc:
-        # 签名不匹配 (e.g. with_fields 不存在) — 当工具不可用处理而不是 500.
-        logger.warning(f"section_content: MCP tool {tool_name} TypeError: {exc}")
-        return False, {
-            "error_code": "TOOL_SIGNATURE_MISMATCH",
-            "message": f"MCP 工具 {tool_name} 签名不兼容: {exc}",
-        }
-    except Exception as exc:
-        logger.warning(f"section_content: MCP tool {tool_name} 抛错: {exc}")
-        return False, {
-            "error_code": "MCP_TOOL_ERROR",
-            "message": f"MCP 工具 {tool_name} 调用失败: {exc}",
-        }
+    from app.error_messages import is_apaas_token_error
 
-    if not isinstance(raw, dict):
-        return False, {
-            "error_code": "MCP_UNEXPECTED_SHAPE",
-            "message": f"MCP 工具 {tool_name} 返非 dict: {type(raw).__name__}",
-        }
+    async def _invoke() -> tuple[bool, dict, bool]:
+        """跑一次工具。返回 (ok, payload, is_token_err)。payload 成功=raw, 失败=错误 dict。"""
+        try:
+            raw_ = await tool(**args)
+        except TypeError as exc:
+            # 签名不匹配 (e.g. with_fields 不存在) — 当工具不可用处理而不是 500.
+            logger.warning(f"section_content: MCP tool {tool_name} TypeError: {exc}")
+            return False, {
+                "error_code": "TOOL_SIGNATURE_MISMATCH",
+                "message": f"MCP 工具 {tool_name} 签名不兼容: {exc}",
+            }, False
+        except Exception as exc:
+            logger.warning(f"section_content: MCP tool {tool_name} 抛错: {exc}")
+            return False, {
+                "error_code": "MCP_TOOL_ERROR",
+                "message": f"MCP 工具 {tool_name} 调用失败: {exc}",
+            }, is_apaas_token_error(str(exc))
+        if not isinstance(raw_, dict):
+            return False, {
+                "error_code": "MCP_UNEXPECTED_SHAPE",
+                "message": f"MCP 工具 {tool_name} 返非 dict: {type(raw_).__name__}",
+            }, False
+        if not raw_.get("ok", False):
+            # MCP 工具显式失败 (e.g. INVALID_APAAS_APP_ID / APAAS_TOKEN_EXPIRED).
+            err_code = str(raw_.get("error_code") or "MCP_TOOL_FAILED")
+            err_msg = str(raw_.get("message") or "MCP 工具返回 ok=False")
+            is_tok = is_apaas_token_error(err_msg) or is_apaas_token_error(err_code)
+            return False, {"error_code": err_code, "message": err_msg}, is_tok
+        return True, raw_, False
 
-    if not raw.get("ok", False):
-        # MCP 工具显式失败 (e.g. INVALID_APAAS_APP_ID / APAAS_TOKEN_EXPIRED).
+    ok, payload, is_tok = await _invoke()
+
+    # 2026-05-29: aPaaS token 过期撞 401 → 用 env 账号密码自动重登 + 重试一次, 用户无感。
+    if not ok and is_tok:
+        try:
+            from app.database import AsyncSessionLocal
+            from app.coding.apaas_tools import _relogin_apaas_env
+            async with AsyncSessionLocal() as _s:
+                relogged = await _relogin_apaas_env(env_id, _s)
+            if relogged:
+                logger.info("section_content: %s 撞 token 失效, 已重登, 重试一次", tool_name)
+                ok, payload, is_tok = await _invoke()
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("section_content: %s 重登重试失败: %s", tool_name, exc)
+
+    if not ok:
         # 失败结果不缓存 — 下次再试.
-        return False, {
-            "error_code": str(raw.get("error_code") or "MCP_TOOL_FAILED"),
-            "message": str(raw.get("message") or "MCP 工具返回 ok=False"),
-        }
+        return False, payload
 
     # 成功 → 写 TTL 缓存 (即便 use_cache=False 路径也写, 让后续 reload 命中).
-    _cache_set(cache_key, raw)
-    return True, raw
+    _cache_set(cache_key, payload)
+    return True, payload
 
 
 def _extract_items_from_mcp_result(
@@ -422,15 +443,17 @@ async def get_apaas_access_url(
 
     返: {ok, access_url, access_mobile_url, app_code, tenant_code}
     """
-    from app.coding.apaas_tools import _get_apaas_client
+    from app.coding.apaas_tools import call_apaas_with_relogin
 
     app = await _load_app_and_check_view(app_id, ctx, db)
     if not app.platform_env_id or not app.apaas_app_id:
         return {"ok": False, "error_code": "APP_NOT_DEPLOYED",
                 "message": "应用尚未部署到 aPaaS 平台"}
     try:
-        client = await _get_apaas_client(app.platform_env_id, db)
-        detail = await client.query_app_detail(str(app.apaas_app_id))
+        detail = await call_apaas_with_relogin(
+            app.platform_env_id, db,
+            lambda c: c.query_app_detail(str(app.apaas_app_id)),
+        )
     except Exception as exc:  # noqa: BLE001
         return {"ok": False, "error_code": "APAAS_CLIENT_ERROR", "message": f"拉应用详情失败: {exc}"}
     if not detail:
@@ -600,7 +623,7 @@ async def get_custom_page_host(
     (跟 platform-proxy/entry 一致), fallback header.
     """
     from fastapi.responses import HTMLResponse
-    from app.coding.apaas_tools import _get_apaas_client
+    from app.coding.apaas_tools import call_apaas_with_relogin
     from app.deps import get_auth_context_from_token
 
     token = _auth or ""
@@ -617,8 +640,10 @@ async def get_custom_page_host(
     if not app.platform_env_id or not app.apaas_app_id:
         return HTMLResponse(_custom_host_error_html("应用尚未部署到 aPaaS 平台"))
     try:
-        client = await _get_apaas_client(app.platform_env_id, db)
-        detail = await client.query_app_detail(str(app.apaas_app_id))
+        detail = await call_apaas_with_relogin(
+            app.platform_env_id, db,
+            lambda c: c.query_app_detail(str(app.apaas_app_id)),
+        )
     except Exception as exc:  # noqa: BLE001
         return HTMLResponse(_custom_host_error_html(f"拉应用详情失败: {exc}"))
     detail = detail or {}
@@ -631,7 +656,10 @@ async def get_custom_page_host(
     # 用 client.query_menus (manageAppMenu 管理视图, 含 linkUrl) — MCP list_apaas_app_menus
     # 走 runtime allAppMenu 视图不带 linkUrl, 不能用.
     try:
-        raw_menus_nested = await client.query_menus(str(app.apaas_app_id))
+        raw_menus_nested = await call_apaas_with_relogin(
+            app.platform_env_id, db,
+            lambda c: c.query_menus(str(app.apaas_app_id)),
+        )
     except Exception as exc:  # noqa: BLE001
         return HTMLResponse(_custom_host_error_html(f"拉菜单失败: {exc}"))
 
@@ -764,7 +792,7 @@ async def custom_widget_chat_proxy(
     """
     import httpx
     from sse_starlette.sse import EventSourceResponse
-    from app.coding.apaas_tools import _get_apaas_client
+    from app.coding.apaas_tools import call_apaas_with_relogin
 
     app = await _load_app_and_check_view(app_id, ctx, db)
     if not app.platform_env_id or not app.apaas_app_id:
@@ -775,8 +803,10 @@ async def custom_widget_chat_proxy(
 
     # ── 拉 RAW form detail (未脱敏) — 直调 apaas_client, 不走脱敏的 MCP 工具 ──
     try:
-        client = await _get_apaas_client(app.platform_env_id, db)
-        raw = await client.query_detail_page_config(str(app.apaas_app_id), fid)
+        raw = await call_apaas_with_relogin(
+            app.platform_env_id, db,
+            lambda c: c.query_detail_page_config(str(app.apaas_app_id), fid),
+        )
     except Exception as exc:  # noqa: BLE001
         raise HTTPException(status_code=502, detail=f"拉 apaas 表单配置失败: {exc}")
 
