@@ -548,56 +548,6 @@ tools:
     agents: [builder]
     category: doc_pipeline
     description: "校验一份 markdown 设计文档是否符合 aPaaS Builder 标准（不创建应用、不需要身份）。"
-  vibe_create_workspace:
-    sections: [extension]
-    agents: [vibe]
-    category: vibe_workspace
-    description: "在 Vibe Coding（纯自开发 / 通用 IDE）下创建一个新工作区。"
-  vibe_edit_file:
-    sections: [extension]
-    agents: [vibe]
-    category: vibe_workspace
-    description: "精确字符串替换 Vibe Coding workspace 内某个文件。old_string 必须唯一匹配，"
-  vibe_get_workspace_status:
-    sections: [extension]
-    agents: [vibe]
-    category: vibe_workspace
-    description: "查询 Vibe Coding workspace 状态（status / file_count / files / 沙箱状态等）。"
-  vibe_glob:
-    sections: [extension]
-    agents: [vibe]
-    category: vibe_workspace
-    description: "按 glob pattern 列 Vibe Coding workspace 文件（如 '**/*.vue' / 'src/**/*.ts'）。"
-  vibe_grep:
-    sections: [extension]
-    agents: [vibe]
-    category: vibe_workspace
-    description: "在 Vibe Coding workspace 内 grep 搜索（Python re 语法）。"
-  vibe_http_check:
-    sections: [extension]
-    agents: [vibe]
-    category: vibe_workspace
-    description: "HTTP 检查 Vibe Coding workspace 内服务的健康状态（agent 起 dev server 后用）。"
-  vibe_read_file:
-    sections: [extension]
-    agents: [vibe]
-    category: vibe_workspace
-    description: "读 Vibe Coding workspace 内某个文件的文本内容。"
-  vibe_run_command:
-    sections: [extension]
-    agents: [vibe]
-    category: vibe_workspace
-    description: "在 Vibe Coding workspace 内跑 shell 命令（如 'npm install' / 'npm run dev'）。"
-  vibe_todo_write:
-    sections: [extension]
-    agents: [vibe]
-    category: vibe_workspace
-    description: "更新 Vibe Coding workspace 的 TODO 列表（agent 拆任务用）。"
-  vibe_write_file:
-    sections: [extension]
-    agents: [vibe]
-    category: vibe_workspace
-    description: "把文本完整写入 Vibe Coding workspace 内某个文件（覆盖式）。目录不存在自动建。"
   write_workspace_files:
     sections: [extension]
     agents: [coding, config]

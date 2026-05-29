@@ -323,14 +323,6 @@ def test_coding_whitelist_count():
     assert len(tools) >= 35, f"coding 白名单 >= 35, 实际 {len(tools)}"
 
 
-def test_vibe_whitelist_is_vibe_prefixed():
-    """vibe 白名单全是 vibe_ 开头 — 严格隔离."""
-    tools = tools_for_agent("vibe")
-    assert tools, "vibe 白名单不能空"
-    for t in tools:
-        assert t.startswith("vibe_"), f"{t} 不是 vibe_ 前缀, 不该归 vibe agent"
-
-
 # ─────────────────────── 4. Section affinity ───────────────────────
 
 
@@ -371,10 +363,9 @@ def test_section_filter_permission_includes_role():
 
 
 def test_section_filter_extension_includes_workspace():
-    """extension section 软引导应含 workspace / vibe / dev_scene 工具."""
+    """extension section 软引导应含 workspace / dev_scene 工具."""
     ext_tools = set(tools_for_section("extension"))
     assert "create_dev_workspace" in ext_tools
-    assert "vibe_create_workspace" in ext_tools
     assert "list_dev_scenes" in ext_tools
 
 
