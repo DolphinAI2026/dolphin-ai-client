@@ -33,7 +33,6 @@ import { useRouter } from 'vue-router'
 import {
   ArrowRight,
   ChatDotRound,
-  Connection,
   DataAnalysis,
   Grid,
   HomeFilled,
@@ -52,7 +51,6 @@ const commandItems = [
   { icon: HomeFilled, title: '新建智能搭建', meta: '回到首页，用 Builder 生成设计文档', to: '/' },
   { icon: ChatDotRound, title: 'AI-Builder', meta: '继续现有搭建对话和部署流程', to: '/chat' },
   { icon: Grid, title: '我的应用', meta: '查看已生成应用和平台导入入口', to: '/apps' },
-  { icon: Connection, title: 'Vibe Coding', meta: '查看全代码仓库工作区和导入记录', to: '/vibe-coding' },
   { icon: Setting, title: '模型配置', meta: '真实模型供应商、API Key、默认模型管理', to: '/platform-envs?tab=llm' },
   { icon: DataAnalysis, title: '平台环境', meta: '真实得帆云连接、租户环境、默认环境管理', to: '/platform-envs?tab=envs' },
   { icon: Setting, title: '成员管理', meta: '真实组织成员、角色和启停状态管理', to: '/tenant-users' },
