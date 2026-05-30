@@ -65,7 +65,10 @@ async def _get_apaas_client(platform_env_id: int, db: AsyncSession):
     row = await db.execute(select(PlatformEnv).where(PlatformEnv.id == platform_env_id))
     env = row.scalar_one_or_none()
     if env is None:
-        raise ValueError(f"platform_env_id={platform_env_id} 不存在")
+        raise ValueError(
+            f"应用绑定的平台环境(platform_env_id={platform_env_id})不存在或已被删除，"
+            f"请在「平台环境」中重新连接该环境后重试"
+        )
     if not env.token:
         raise ValueError(
             f"platform_env_id={platform_env_id} 未登录 aPaaS（token 为空），"

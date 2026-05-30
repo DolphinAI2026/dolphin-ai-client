@@ -834,7 +834,15 @@ async def login(
     user_data: UserLogin,
     db: Annotated[AsyncSession, Depends(get_db)]
 ):
-    apaas_response = await _try_apaas_login_flow(user_data, db)
+    import httpx
+    try:
+        apaas_response = await _try_apaas_login_flow(user_data, db)
+    except httpx.RequestError as exc:
+        # aPaaS 平台网络抖动（连接失败/超时等）不应让登录端点直接 500。
+        # 降级到本地登录路径（与 _try_apaas_login_flow 返回 None 的语义一致），
+        # 本地账号仍可登录；aPaaS 账号会收到凭证错误并可重试（连接通常瞬时恢复）。
+        logger.warning("aPaaS 登录链路网络异常 (%s)，降级本地登录: %s", type(exc).__name__, exc)
+        apaas_response = None
     if apaas_response:
         return apaas_response
 
