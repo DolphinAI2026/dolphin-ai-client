@@ -1172,7 +1172,32 @@ async def run_complete_generation(
                         client, app_id, new_models_to_create, model_info
                     )
                 else:
-                    raise
+                    # 2026-05-30 韧性修复: 批量建模型失败(如某模型"字段总体超长")不再 raise
+                    # 崩掉整个生成 → 降级逐个建, 单个失败就跳过记录, 让其余模型 + 后续表单照常生成。
+                    logger.warning("批量建模型失败(%s), 降级逐个建", e)
+                    yield {"stage": 2, "status": "running", "step": f"批量建模型遇错({str(e)[:40]}), 降级逐个建…"}
+                    skipped_models: List[str] = []
+                    for one in new_models_to_create:
+                        m_name = str(one[1].get("name", "?"))
+                        try:
+                            one_payload = _build_model_payload_with_subs(
+                                [one], app_id, suffix, model_info
+                            )
+                            await client.create_models(app_id, one_payload)
+                        except Exception as e1:
+                            if "编码重复" in str(e1) or "已存在" in str(e1):
+                                await _rollback_models_to_reuse_by_name(
+                                    client, app_id, [one], model_info
+                                )
+                            else:
+                                skipped_models.append(m_name)
+                                logger.warning("模型 %s 建失败已跳过: %s", m_name, e1)
+                    await _refresh_model_codes_from_platform(
+                        client, app_id, new_models_to_create, model_info
+                    )
+                    if skipped_models:
+                        yield {"stage": 2, "status": "running",
+                               "step": f"⚠️ {len(skipped_models)} 个模型建失败已跳过(字段超长等): {'、'.join(skipped_models)}"}
 
         yield {"stage": 2, "status": "done", "step": f"模型完成（{len(model_info)} 个）"}
 
