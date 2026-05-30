@@ -47,7 +47,13 @@ def _sanitize_code(code: str) -> str:
         c = "c" + hashlib.md5(code.encode()).hexdigest()[:7]
     if c[0].isdigit():
         c = "f_" + c
-    return c.lower()
+    c = c.lower()
+    # 2026-05-30: apaas 禁止字段/模型 code 以 apaas、xdap 开头 (bizCode 12017
+    # "不能以apaas，xdap开头"). 如映射类模型的 apaas_target_model 字段 → 整模型建失败.
+    # 加 f_ 前缀绕开, 让这类 code 也能正常落库 (横跨字段/模型/字典/选项所有标识符).
+    if c.startswith(("apaas", "xdap")):
+        c = "f_" + c
+    return c
 
 
 _RESERVED = {
