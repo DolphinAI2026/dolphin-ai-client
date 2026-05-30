@@ -540,13 +540,15 @@ def _build_model_payload_with_subs(
     """构造 create_models 的 payload，同时登记 model_info（主模型 + 子表）。"""
     data_models: List[dict] = []
     for idx, m in new_models_to_create:
-        mc = f"{_sanitize_code(m.get('code', 'model'))}_{suffix}"
+        # 2026-05-30 修尾下划线: enable_code_suffix=False 时 suffix="", 旧写法 f"{code}_{suffix}"
+        # 会留下尾 "_"(idm_erp_bom_)。改用 _apply_suffix —— 空 suffix 时返回 code 原样不加 "_"。
+        mc = _apply_suffix(_sanitize_code(m.get('code', 'model')), suffix)
         fields_map = {}
 
         # 子表模型
         for f in m.get("fields", []):
             if f.get("type") == "子表" and f.get("sub_fields"):
-                sub_code = f"{_sanitize_code(f.get('sub_code') or m.get('code', 'model') + '_sub')}_{suffix}"
+                sub_code = _apply_suffix(_sanitize_code(f.get('sub_code') or m.get('code', 'model') + '_sub'), suffix)
                 sub_fields = []
                 sub_fields_map = {}
                 for sf in f["sub_fields"]:
@@ -945,7 +947,7 @@ def _classify_dicts(
             dict_codes[d.get("code", d["name"])] = pc
             reused_names.append(d["name"])
         else:
-            dc = f"{_sanitize_code(d.get('code', 'dict'))}_{suffix}"
+            dc = _apply_suffix(_sanitize_code(d.get('code', 'dict')), suffix)
             dict_codes[d["name"]] = dc
             dict_codes[d.get("code", d["name"])] = dc
             new_dicts.append(d)
@@ -983,7 +985,7 @@ async def _seed_dict_options(
                     json={
                         "appId": app_id,
                         "dictionaryId": dict_id,
-                        "valueCode": f"{_sanitize_code(opt_code_raw)}_{suffix}",
+                        "valueCode": _apply_suffix(_sanitize_code(opt_code_raw), suffix),
                         "valueName": opt_name,
                         "valueNameI18nAssociated": False,
                         "valueNameI18nResourceCode": "",
