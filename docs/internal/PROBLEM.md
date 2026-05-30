@@ -148,6 +148,33 @@ kill -9 <PID>
 - 业务角色如 `sales_admin / sales_user / finance_user` 能直接显示出来
 - 数据范围与查看/编辑/删除/导出等开关和文档一致
 
+### 2026-05-30 实测根因（app_id=26 SRM供应商档案管理 live 验证）
+
+把「设计器→表单→权限」第 5 子 tab 的**写入**端点 (`POST /applications/{id}/forms/{form_id}/permissions`
+→ MCP `set_apaas_form_permissions` → `apaas_client.create_form_permissions`
+→ `POST /xdap-app/common/resource/formPermission`) 跑通到底，抓到两层真相：
+
+**A. 写端点裸 500 的根因 = 3 段 payload bug（已逐一抓 apaas 响应体 `{"code":"error","message":"JsonError"}` 实证）：**
+1. `formCode` 用错——之前拿 `main_model_code`(modelCode) 当 formCode。实测
+   `formCode='idm-srm-supplier_file-form'`(横杠式) ≠ `modelCode='idm_srm_supplier_file'`(下划线式)。
+   真值在 `get_apaas_form_detail` 走的 `detailPageConfigById` 顶层 `formCode` 字段，直接读，零额外请求。
+2. `tenantId: ""` 空串——apaas DTO 里 tenantId 是 `Long`，Jackson 把 `""` 转 Long 抛 → JsonError。
+   修：`create_form_permissions` 发请求前用 client 已知真 `tenant_id` 填空（取不到就删 key 走 null，绝不传 `""`）。
+3. `permissionObjectType: "ROLE_USER"`——formPermission 写端点 enum 只认 `"ROLE"`（读端也序列化成 ROLE，
+   生成时 advancedPermissionGroups 用的也是 ROLE）。`_build_perm_payload_from_simple_rules` 之前把 ROLE→ROLE_USER
+   归一是错的，apaas 无此枚举常量 → JsonError。要反向 normalize ROLE_USER→ROLE。
+
+**B. ⚠️ 致命：三段都修好、apaas 返回 ok 之后，写入仍是「破坏性」的——印证本节标题。**
+   实测：写"成功"后立即 `list_apaas_form_permissions` 读回 **空矩阵**（原本 3 角色 idm_admin/idm_srm_user/
+   idm_readonly_user 全没了）。即 **formPermission 写口存储 ≠ 读口看的 `advancedPermissionGroups`**。
+   裸调写口 = 把读端可见的表单权限**清空**。对比同应用没碰过的表单（SRM供应商罚款）3 角色完好 → 实锤是写口干的。
+   - 恢复手法（已验证）：把 app status 翻成非 completed → 重跑 `generate-run`，forms 阶段按 SPEC 重写
+     formConfigDetail（含 advancedPermissionGroups）即可恢复被清空的权限。
+   - 结论：本 session 已把 3 段 payload 修复 + 诊断全部**回退**，写端点维持「失败-安全」(500) 状态，不留
+     「能调用但毁数据」的半截代码。**完整修复 = 上述 3 段 payload 修复 + 同时回写 form-detail config 的
+     advancedPermissionGroups/operationPermissionGroups/permissionGroups（§5 已指方向）+ §6 的一角色一权限组聚合**，
+     下次连同做完整、live 验证读回 3 角色不丢再落地。读端点 (`get_form_permissions` 只读矩阵) 不受影响，PA1-PA4 仍有效。
+
 ---
 
 ## 6. 权限组已生成，但页面中“权限对象”为空，且同一角色被拆成多个权限组
