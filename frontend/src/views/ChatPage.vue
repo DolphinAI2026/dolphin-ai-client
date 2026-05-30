@@ -82,25 +82,6 @@
               <span v-else>草稿</span>
             </span>
           </div>
-          <!-- "查看应用"：应用部署完成后显示在顶部明显位置；点击在当前页切到
-               aPaaS 平台 inline iframe（走 platform_proxy SSO 免登），不开新标签页
-               以免丢失登录态。复用创建过程面板里同名按钮的 openInPlatform 逻辑。 -->
-          <button
-            v-if="deployAllDone && (store.currentApp?.apaas_app_id || platformDirectUrl)"
-            type="button"
-            class="mode-btn mode-btn-link"
-            title="在当前页打开 aPaaS 平台查看/运行当前应用"
-            @click="openInPlatform"
-          >
-            <span class="mode-btn-icon" aria-hidden="true">
-              <svg viewBox="0 0 16 16" fill="none">
-                <rect x="2.3" y="3" width="11.4" height="8.4" rx="1.8" stroke="currentColor" stroke-width="1.3" />
-                <path d="M5.2 13h5.6" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" />
-                <path d="M5 6.5l2.5 2 3.5-3.5" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round" />
-              </svg>
-            </span>
-            <span>查看应用</span>
-          </button>
           <!-- "→ 自开发"：当前应用上下文里发起自开发任务，带应用结构跳到 AI Coding agent。
                这是 Builder→Coding handoff bridge，恢复 commit b63a8c8 误删的能力，
                但增强为：frontend 直接把 store.preview 应用结构序列化进 message，
@@ -143,91 +124,6 @@
             </svg>
           </span>
         </button>
-        <!-- PR3 (SPEC v2 §2) + design-v4 Polish F2: 顶部 [开发/生产 toggle] / [保存] / [发布到生产] / [历史] / [更多 ⋯] CTA 组.
-             复用现有 modal/drawer. 有 builderCurrentAppId 时才显示 (新建应用没保存前藏起来).
-             - 开发/生产 toggle: P2 UI 占位, click "生产" 只 alert "P2 接入"
-             - 保存: P2 UI 占位, alert "P2 接入 — 当前请点'发布到生产'走完整保存+部署"
-             - 发布到生产: 原 [部署] CTA 重命名, 真触发 openDeployModal 走部署流程 -->
-        <div v-if="builderCurrentAppId" class="app-top-cta" role="group" aria-label="应用操作">
-          <!-- 开发/生产 环境 toggle (segmented, design-v4 I3 真切环境)
-               - dev active: 蓝 brand
-               - prod active: 黄 warn (强提醒"正在查看生产环境")
-               - 未部署 / 无 prod env / token 过期 → prod btn disabled + tooltip -->
-          <div class="cta-env-toggle" role="group" aria-label="切换部署环境">
-            <button
-              type="button"
-              class="cta-env-btn"
-              :class="{ active: appEnvMode === 'dev', 'is-disabled': appEnvToggleDisabled }"
-              :aria-pressed="appEnvMode === 'dev'"
-              :aria-disabled="appEnvToggleDisabled || undefined"
-              :title="appEnvToggleDisabled ? '应用尚未部署到平台' : '开发环境'"
-              @click="onAppEnvSwitch('dev')"
-              @mouseenter="ensureAppEnvsLoaded"
-            >开发</button>
-            <button
-              type="button"
-              class="cta-env-btn"
-              :class="{
-                active: appEnvMode === 'prod',
-                'is-prod': appEnvMode === 'prod',
-                'is-disabled': prodEnvDisabled,
-              }"
-              :aria-pressed="appEnvMode === 'prod'"
-              :aria-disabled="prodEnvDisabled || undefined"
-              :title="prodEnvTooltip"
-              @click="onAppEnvSwitch('prod')"
-              @mouseenter="ensureAppEnvsLoaded"
-            >生产</button>
-          </div>
-          <!-- 2026-05-29: 删「保存」按钮 — 纯 P2 占位无功能(点击只弹"P2 接入"提示),
-               真保存+部署走旁边的「发布到生产」。删按钮 + handler + .cta-save 样式。 -->
-          <button
-            type="button"
-            class="cta-btn cta-deploy"
-            :title="!isPlatformDeployed ? '生成应用：把设计配置真正建到 apaas 平台（创建模型/表单/角色）' : (canDeployFromTopCTA ? '发布当前应用到生产环境 (走完整部署流程)' : '应用尚未生成可部署内容')"
-            :disabled="!canDeployFromTopCTA"
-            @click="onTopCtaDeploy"
-          >
-            <span class="cta-icon" aria-hidden="true">
-              <svg viewBox="0 0 16 16" fill="none">
-                <path d="M8 1.5l4 4.5v6H4v-6L8 1.5z" stroke="currentColor" stroke-width="1.3" stroke-linejoin="round" />
-                <path d="M6.5 9.5L9 7M9 7l2 0M9 7l0 2" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" />
-                <path d="M5 14h6" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" />
-              </svg>
-            </span>
-            <span>{{ isPlatformDeployed ? '发布到生产' : '生成应用' }}</span>
-          </button>
-          <button
-            type="button"
-            class="cta-btn cta-history"
-            title="查看部署历史 & 回滚"
-            @click="onTopCtaHistory"
-          >
-            <span class="cta-icon" aria-hidden="true">
-              <svg viewBox="0 0 16 16" fill="none">
-                <circle cx="8" cy="8" r="6" stroke="currentColor" stroke-width="1.3" />
-                <path d="M8 4.5V8l2.5 1.5" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" />
-              </svg>
-            </span>
-            <span>历史</span>
-          </button>
-          <el-dropdown trigger="click" placement="bottom-end" @command="onTopCtaMoreCommand">
-            <button type="button" class="cta-btn cta-more" title="更多操作">
-              更多
-              <span class="cta-more-dots" aria-hidden="true">⋯</span>
-            </button>
-            <template #dropdown>
-              <el-dropdown-menu>
-                <el-dropdown-item command="edit_info" :disabled="!canEditApaasInfo">
-                  ✎ 编辑应用信息
-                </el-dropdown-item>
-                <el-dropdown-item command="open_platform" :disabled="!(store.currentApp?.apaas_app_id || platformDirectUrl)">
-                  → 平台 UI
-                </el-dropdown-item>
-              </el-dropdown-menu>
-            </template>
-          </el-dropdown>
-        </div>
         <button
           v-if="SHOW_PLATFORM_CONFIG && activeView === 'platform' && platformIframeUrl"
           class="top-bar-icon-btn"
@@ -3621,7 +3517,6 @@ const canEditApaasInfo = computed(() => {
   if (perms && typeof perms.edit === 'boolean') return perms.edit
   return true
 })
-const canDeployFromTopCTA = computed(() => !!builderCurrentAppId.value && (showStartDeployButton.value || deployAllDone.value))
 
 // ─────────────── 2026-05-26 design-v4 Polish F2 ───────────────
 // 应用发布状态 chip
@@ -3745,23 +3640,7 @@ const appEnvToggleDisabled = computed(() => {
 })
 
 // prod button 是否可点 (要有 prod env 配 + token)
-const prodEnvDisabled = computed(() => {
-  if (appEnvToggleDisabled.value) return true
-  if (!appEnvsLoaded.value) return false  // 没拉完之前先不 disable, 点的时候再拉
-  if (!hasProdEnv.value) return true
-  const prod = prodEnvCandidate.value
-  return !prod?.can_iframe  // 没 token 或 status 不是 connected
-})
 
-const prodEnvTooltip = computed(() => {
-  if (appEnvToggleDisabled.value) return '应用尚未部署到平台, 无法切换环境'
-  if (!appEnvsLoaded.value) return '生产环境'
-  if (!hasProdEnv.value) return '未配置生产环境, 请到平台环境管理添加 (env_name 含 "prod" / "生产")'
-  const prod = prodEnvCandidate.value
-  if (prod && !prod.has_token) return `生产环境「${prod.env_name}」未登录, 请到平台环境管理重新登录`
-  if (prod && prod.status !== 'connected') return `生产环境「${prod.env_name}」连接已失效, 请到平台环境管理重新登录`
-  return '切换到生产环境'
-})
 
 // 拉当前应用的 env list (lazy, 第一次需要时调)
 async function ensureAppEnvsLoaded(): Promise<void> {
@@ -3954,14 +3833,6 @@ async function saveAppInfo() {
 }
 
 // 顶部 CTA handlers — 复用现有 deploy modal / history drawer / popover
-function onTopCtaDeploy() {
-  // 复用 SPEC 行内已有的 deployConfirmOpen 弹窗 (DeployConfirmModal)
-  openDeployModal()
-}
-function onTopCtaHistory() {
-  // 复用 SPEC 行内已有的 deployHistoryOpen drawer (DeployHistoryDrawer)
-  openDeployHistoryDrawer()
-}
 function onTopCtaMoreCommand(cmd: string) {
   if (cmd === 'edit_info') {
     if (!canEditApaasInfo.value) {
