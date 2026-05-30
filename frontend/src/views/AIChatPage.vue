@@ -88,21 +88,30 @@
           <div
             v-if="message.meta?.kind === 'app-ready' && message.meta?.info"
             class="app-ready-cta"
+            :class="{ 'is-generating': !ctaIsReady(message.meta.info) }"
             @click="openAppReady(message.meta.info)"
           >
-            <div class="cta-icon">🚀</div>
+            <div class="cta-icon">{{ ctaIsReady(message.meta.info) ? '🚀' : '⏳' }}</div>
             <div class="cta-body">
-              <div class="cta-title">应用「{{ message.meta.info.appName }}」已就绪</div>
-              <div class="cta-sub">
+              <div class="cta-title">
+                应用「{{ message.meta.info.appName }}」{{ ctaIsReady(message.meta.info) ? '已就绪' : '正在生成中…' }}
+              </div>
+              <div v-if="!ctaIsReady(message.meta.info)" class="cta-sub">
+                <span class="cta-progress-text">{{ ctaProgressText(message.meta.info) }}</span>
+              </div>
+              <div v-else class="cta-sub">
                 <span v-if="message.meta.info.appId">app_id={{ message.meta.info.appId }}</span>
                 <span v-if="message.meta.info.appId && message.meta.info.apaasAppId" class="cta-sub-sep">·</span>
                 <span v-if="message.meta.info.apaasAppId">apaas_app_id={{ message.meta.info.apaasAppId }}</span>
                 <span v-if="message.meta.info.appCode" class="cta-sub-sep">·</span>
                 <span v-if="message.meta.info.appCode">{{ message.meta.info.appCode }}</span>
               </div>
+              <div v-if="!ctaIsReady(message.meta.info)" class="cta-progress-bar">
+                <div class="cta-progress-fill" :style="{ width: ctaPercent(message.meta.info) + '%' }"></div>
+              </div>
             </div>
             <button class="cta-action" type="button" @click.stop="openAppReady(message.meta.info)">
-              打开应用 →
+              {{ ctaIsReady(message.meta.info) ? '打开应用 →' : '看生成进度 →' }}
             </button>
           </div>
         </template>
@@ -287,7 +296,7 @@
 </template>
 
 <script setup lang="ts">
-import { ref, computed, onMounted, nextTick, watch } from 'vue'
+import { ref, computed, onMounted, onUnmounted, nextTick, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { marked } from 'marked'
 import { aiChatApi, type AIChatSession, type AIChatMessage, type AIChatToolCall, type AIChatAttachment, type AIChatArtifact } from '@/api/aiChat'
@@ -672,6 +681,7 @@ interface AppReadyInfo {
   appName: string
   appCode: string | null
   appViewUrl: string | null     // 工具返回的 view url（若有，优先用）
+  status: string | null         // 最近 deploy/generate 工具自报 status (in_progress/completed/generating…)
 }
 const appReadyInfo = computed<AppReadyInfo | null>(() => {
   // 跨多个 tool 合并 — 不同工具返回不同字段：
@@ -686,6 +696,7 @@ const appReadyInfo = computed<AppReadyInfo | null>(() => {
   let appName: string = ''
   let appCode: string | null = null
   let appViewUrl: string | null = null
+  let toolStatus: string | null = null
   const TRIGGER_TOOLS = new Set(['generate_app_from_doc', 'deploy_application'])
   const MERGE_TOOLS = new Set(['generate_app_from_doc', 'deploy_application', 'get_application'])
   for (const tc of tcs) {
@@ -703,6 +714,7 @@ const appReadyInfo = computed<AppReadyInfo | null>(() => {
     if (r.app_name || r.application_name) appName = String(r.app_name || r.application_name)
     if (r.app_code) appCode = String(r.app_code)
     if (r.app_view_url) appViewUrl = String(r.app_view_url)
+    if (r.status) toolStatus = String(r.status)
     // 锚点：仅 TRIGGER_TOOLS 的最后一次成功；get_application 不算锚点（避免没生成/部署只读取时弹卡）
     if (TRIGGER_TOOLS.has(tc.tool_name)) {
       anchorToolId = tc.id
@@ -717,6 +729,7 @@ const appReadyInfo = computed<AppReadyInfo | null>(() => {
     appName: appName || '未命名应用',
     appCode,
     appViewUrl,
+    status: toolStatus,
   }
 })
 
@@ -773,6 +786,104 @@ watch(appReadyInfo, async (info) => {
     ElMessage.warning(`自动生成未启动：${detail}（可在 Builder 工作台手动点「生成应用」）`)
   }
 }, { immediate: false })
+
+// ─────────── 2026-05-30 真实生成进度监控 ───────────
+// 痛点：deploy_application 25s 超时早返 ok:true(status=in_progress)，apaas 后台还在异步
+// 生成模型/表单/菜单(可能几分钟)，但 CTA 直接谎报"已就绪 + 打开应用" → 用户进去看半成品以为是 bug。
+// 修：CTA 的"就绪"不信工具自报 status，改用 GET /steps/status(对比 apaas 真实已建对象 vs SPEC
+// 期望)轮询判定 —— 没真完成就显"正在生成 X/M"，完成才翻成"打开应用"。
+interface GenProgress {
+  appId: number
+  done: number
+  total: number
+  complete: boolean
+  byKind: Record<string, { done: number; total: number }>
+}
+const genProgress = ref<GenProgress | null>(null)
+const GEN_KIND_LABEL: Record<string, string> = {
+  create_model: '模型', create_form: '表单', create_menu: '菜单',
+  create_role: '角色', create_dict: '字典', create_perm: '权限',
+}
+let genPollTimer: number | null = null
+let genPollAppId: number | null = null
+let genPollCount = 0
+const GEN_POLL_MAX = 120  // 3s × 120 = 6min 上限，防失败步骤导致无限轮询
+
+function stopGenPoll() {
+  if (genPollTimer != null) { window.clearInterval(genPollTimer); genPollTimer = null }
+}
+
+async function pollGenProgress(appId: number) {
+  genPollCount++
+  if (genPollCount > GEN_POLL_MAX) { stopGenPoll(); return }
+  try {
+    const resp: any = await applicationApi.getStepStatus(appId)
+    const steps: any[] = Array.isArray(resp?.steps) ? resp.steps : []
+    if (!steps.length) {
+      // 无步骤信息(config_preview 空/无 SPEC) — 没东西可等，按就绪处理。
+      genProgress.value = { appId, done: 0, total: 0, complete: true, byKind: {} }
+      stopGenPoll()
+      return
+    }
+    const byKind: Record<string, { done: number; total: number }> = {}
+    let done = 0
+    for (const s of steps) {
+      const isDone = s?.status === 'completed'
+      if (isDone) done++
+      const kind = String(s?.key || '').split(':')[0] || ''
+      if (GEN_KIND_LABEL[kind]) {
+        const b = byKind[kind] || (byKind[kind] = { done: 0, total: 0 })
+        b.total++
+        if (isDone) b.done++
+      }
+    }
+    const total = steps.length
+    const complete = total > 0 && done >= total
+    genProgress.value = { appId, done, total, complete, byKind }
+    if (complete) stopGenPoll()
+  } catch {
+    // 读进度失败 — 静默，下次再试(不改 genProgress)
+  }
+}
+
+function startGenPoll(appId: number) {
+  if (genPollAppId === appId && genPollTimer != null) return
+  stopGenPoll()
+  genPollAppId = appId
+  genPollCount = 0
+  genProgress.value = null
+  pollGenProgress(appId)                                   // 立即拉一次
+  genPollTimer = window.setInterval(() => pollGenProgress(appId), 3000)
+}
+
+watch(appReadyInfo, (info) => {
+  if (info && info.appId) startGenPoll(info.appId)
+  else { stopGenPoll(); genProgress.value = null }
+}, { immediate: true })
+
+onUnmounted(stopGenPoll)
+
+// CTA 是否"真就绪"(权威：steps/status 全完成)。拿不到进度时保守：仅当工具自报 completed
+// 且已在平台才暂信(避免对历史/已完成应用误显生成中)。
+function ctaIsReady(info: AppReadyInfo): boolean {
+  const gp = genProgress.value
+  if (gp && gp.appId === info.appId) return gp.complete
+  return info.status === 'completed' && !!info.apaasAppId
+}
+function ctaProgressText(info: AppReadyInfo): string {
+  const gp = genProgress.value
+  if (!gp || gp.appId !== info.appId || gp.total === 0) return '正在后台生成模型 / 表单 / 菜单…'
+  const parts = Object.entries(gp.byKind)
+    .filter(([, b]) => b.total > 0)
+    .map(([k, b]) => `${GEN_KIND_LABEL[k]} ${b.done}/${b.total}`)
+  const head = `已生成 ${gp.done}/${gp.total} 步`
+  return parts.length ? `${head} · ${parts.join(' · ')}` : head
+}
+function ctaPercent(info: AppReadyInfo): number {
+  const gp = genProgress.value
+  if (!gp || gp.appId !== info.appId || gp.total === 0) return 8
+  return Math.max(8, Math.round((gp.done / gp.total) * 100))
+}
 
 // 把 messages + tool_calls + transient 按时间合成一条线
 type TLItem =
@@ -2297,6 +2408,34 @@ onMounted(async () => {
 }
 .app-ready-cta .cta-action:active {
   transform: scale(0.97);
+}
+/* 2026-05-30 生成中态: 蓝→琥珀(不谎报就绪) + 进度条/进度文字。配色沿用本组件硬编码风格 */
+.app-ready-cta.is-generating {
+  background: linear-gradient(135deg, rgba(245, 158, 11, 0.14), rgba(217, 119, 6, 0.08));
+  border-color: rgba(245, 158, 11, 0.42);
+}
+.app-ready-cta.is-generating:hover {
+  border-color: rgba(245, 158, 11, 0.7);
+  background: linear-gradient(135deg, rgba(245, 158, 11, 0.20), rgba(217, 119, 6, 0.12));
+}
+.app-ready-cta.is-generating .cta-action { background: #d97706; }
+.app-ready-cta.is-generating .cta-action:hover { background: #b45309; }
+.app-ready-cta .cta-progress-text {
+  font-family: system-ui, -apple-system, "PingFang SC", sans-serif;
+  color: var(--ac-text-mute, rgba(116, 128, 171, 0.95));
+}
+.app-ready-cta .cta-progress-bar {
+  margin-top: 8px;
+  height: 5px;
+  border-radius: 999px;
+  background: rgba(245, 158, 11, 0.18);
+  overflow: hidden;
+}
+.app-ready-cta .cta-progress-fill {
+  height: 100%;
+  border-radius: 999px;
+  background: #d97706;
+  transition: width 0.4s ease;
 }
 
 .dots { display: inline-flex; gap: 4px; vertical-align: middle; }
