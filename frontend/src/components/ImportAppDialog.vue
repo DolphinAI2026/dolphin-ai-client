@@ -222,15 +222,16 @@ async function doImport() {
 
 <style scoped>
 .import-body {
-  --import-primary: #6d5dd3;
-  --import-primary-soft: #f3f0ff;
-  --import-border: #e9e6f7;
-  --import-border-strong: #d9d2fb;
-  --import-text: #2d3553;
-  --import-text-soft: #7f88a8;
-  --import-bg: linear-gradient(180deg, #fcfbff 0%, #f6f8ff 100%);
+  /* 2026-05-30 视觉收口: 自定义紫色硬编码 → v3 token(修暗色破图 + 对齐品牌蓝) */
+  --import-primary: var(--brand);
+  --import-primary-soft: var(--brand-soft);
+  --import-border: var(--line);
+  --import-border-strong: var(--brand-ring, var(--brand));
+  --import-text: var(--text);
+  --import-text-soft: var(--text-3);
+  --import-bg: var(--surface-2);
   min-height: 220px;
-  color: var(--import-text);
+  color: var(--text);
 }
 
 .import-hero {
@@ -253,7 +254,7 @@ async function doImport() {
   border: 1px solid var(--import-border);
   border-radius: 20px;
   background: var(--import-bg);
-  box-shadow: 0 18px 40px rgba(109, 93, 211, 0.08);
+  box-shadow: var(--sh-2);
 }
 
 .app-list-section {
@@ -274,7 +275,7 @@ async function doImport() {
 .import-stats-item {
   padding: 4px 10px;
   border-radius: 999px;
-  background: rgba(255, 255, 255, 0.88);
+  background: var(--surface);
   border: 1px solid var(--import-border);
   color: var(--import-text-soft);
   font-size: 12px;
@@ -298,7 +299,7 @@ async function doImport() {
   overflow-y: auto;
   border: 1px solid var(--import-border);
   border-radius: 16px;
-  background: rgba(255, 255, 255, 0.92);
+  background: var(--surface);
 }
 
 .app-item {
@@ -309,7 +310,7 @@ async function doImport() {
   padding: 14px 16px;
   cursor: pointer;
   transition: background 0.2s, box-shadow 0.2s;
-  border-bottom: 1px solid rgba(233, 230, 247, 0.8);
+  border-bottom: 1px solid var(--line);
 }
 
 .app-item:last-child {
@@ -317,16 +318,16 @@ async function doImport() {
 }
 
 .app-item:hover {
-  background: #f7f4ff;
+  background: var(--surface-2);
 }
 
 .app-item.selected {
-  background: linear-gradient(180deg, #f2edff 0%, #ece7ff 100%);
+  background: var(--brand-soft);
   box-shadow: inset 0 0 0 1px var(--import-border-strong);
 }
 
 .app-item.imported {
-  background-image: linear-gradient(90deg, rgba(109, 93, 211, 0.03) 0%, rgba(109, 93, 211, 0) 100%);
+  background-image: none;
 }
 
 .app-item-left {
@@ -354,7 +355,7 @@ async function doImport() {
   height: 16px;
   margin-top: 4px;
   border-radius: 50%;
-  border: 2px solid #c7c2e8;
+  border: 2px solid var(--line-strong);
   flex-shrink: 0;
   transition: all 0.2s;
 }
@@ -362,19 +363,19 @@ async function doImport() {
 .radio-dot.active {
   border-color: var(--import-primary);
   background: var(--import-primary);
-  box-shadow: inset 0 0 0 3px #fff;
+  box-shadow: inset 0 0 0 3px var(--surface);
 }
 
 .app-item-name {
   font-size: 15px;
   font-weight: 700;
-  color: #29345d;
+  color: var(--text);
 }
 
 .app-item-code {
   margin-top: 4px;
   font-size: 12px;
-  color: #8b91ab;
+  color: var(--text-3);
 }
 
 .app-item-desc {
@@ -396,21 +397,28 @@ async function doImport() {
 }
 
 .tag-online {
-  background: #e9f8ec;
-  color: #2e7d32;
+  background: var(--ok-soft);
+  color: var(--ok);
 }
 
 .tag-imported {
-  background: #f2f3f8;
-  color: #7f88a8;
+  background: var(--surface-3);
+  color: var(--text-3);
 }
 
+/* 右侧文字是"选中后会发生什么"的提示, 不是按钮 — 默认弱化(灰)避免误以为可点;
+   仅选中行用 brand 强调(读作"选中项的去向")。整行点击=选中(radio+高亮已表达)。 */
 .app-item-action {
   flex-shrink: 0;
   align-self: center;
   font-size: 12px;
-  font-weight: 600;
-  color: var(--import-primary);
+  font-weight: var(--fw-medium, 500);
+  color: var(--text-4);
+}
+
+.app-item.selected .app-item-action {
+  color: var(--brand);
+  font-weight: var(--fw-semibold, 600);
 }
 
 .selection-tip {
@@ -420,8 +428,8 @@ async function doImport() {
   margin-top: 14px;
   padding: 12px 14px;
   border-radius: 14px;
-  background: rgba(109, 93, 211, 0.08);
-  border: 1px solid rgba(109, 93, 211, 0.14);
+  background: var(--brand-soft);
+  border: 1px solid var(--brand-ring, var(--line));
 }
 
 .selection-tip-label {
@@ -433,7 +441,7 @@ async function doImport() {
 .selection-tip-name {
   font-size: 12px;
   font-weight: 700;
-  color: #29345d;
+  color: var(--text);
 }
 
 .selection-tip-action {
