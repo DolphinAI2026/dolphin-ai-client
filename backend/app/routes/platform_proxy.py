@@ -871,4 +871,26 @@ async def proxy_mobile_runtime(request: Request, path: str):
 async def handle_plugin_asset_request(request: Request) -> Response:
     """处理插件资源请求：/{32位hex}/admin/..."""
     path = request.url.path.lstrip("/")
-    return await _proxy_request(request, path, inject_auth=False)
+    resp = await _proxy_request(request, path, inject_auth=False)
+    # 2026-05-30: apaas trial 环境个别业务组件没发布版本 → 编辑器请求其 admin 资源带
+    # 空 versionCode → apaas 返 404 → 编辑器 404-retry 狂刷(实测同一组件 umd 重试 9×) +
+    # 渲染引擎级联报错(engineContext null / "需要渲染场景" / undefined.type ×75) → 资源
+    # 耗尽 → 内嵌编辑器在部分浏览器崩溃回首页。缺组件是 apaas 侧问题(我们改不了它的环境),
+    # 这里把 404 的插件 admin 资源降级为无害空 stub(200)：掐断 404-retry 死循环, 让编辑器
+    # 不因单个缺失调色板组件而硬崩。该组件留空 — 用户表单并不引用它(实测 0 引用), 无影响。
+    if resp.status_code == 404 and "/admin/" in path:
+        low = path.lower()
+        if low.endswith(".css"):
+            return Response(
+                content="/* apaas plugin missing — stubbed empty by ai-builder proxy */",
+                media_type="text/css", status_code=200,
+                headers={"cache-control": "no-cache"},
+            )
+        if "index.umd.min.js" in low or low.endswith(".js"):
+            # 最小有效 JS：脚本加载成功(不再 404 → 不触发 onerror / 不重试), 不注册任何组件。
+            return Response(
+                content="/* apaas plugin missing — stubbed empty by ai-builder proxy */\n;(function(){})();",
+                media_type="application/javascript", status_code=200,
+                headers={"cache-control": "no-cache"},
+            )
+    return resp
