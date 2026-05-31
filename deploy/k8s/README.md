@@ -8,6 +8,21 @@
 
 **URL 方案**：路径前缀 `https://df-aigc.dfy.definesys.cn/ai-builder/`。前端镜像用 `--build-arg VITE_BASE_URL=/ai-builder/` 构建。
 
+## Dev 一键部署
+
+内测环境可以直接走脚本，不再通过 KubeSphere 浏览器终端手敲：
+
+```bash
+KUBECONFIG=~/.kube/dfy-host.yaml scripts/deploy_k8s_dev.sh
+```
+
+脚本会把当前 `HEAD` 推到 `origin/dev`，构建并推送 `hub.dfy.definesys.cn/ai-builder/apaas-builder:dev-<日期>-<sha>`，然后更新 `apaas-builder-dev` 的 StatefulSet / Service / Ingress / ConfigMap / Secret / PVC，并验证 `https://agent.dfy.definesys.cn/ai-builder/login`。
+
+前置条件：
+- 本机 `docker` 已登录 `hub.dfy.definesys.cn`
+- 本机 `kubectl` 能用 kubeconfig 直连集群
+- 工作区干净；如只想部署不推分支，可用 `PUSH_DEV=0 scripts/deploy_k8s_dev.sh`
+
 ## 架构
 
 ```
