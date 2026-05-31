@@ -507,7 +507,8 @@ function onRowView(row: Record<string, any>) {
 }
 
 function onRowEdit(_row: Record<string, any>) {
-  alert('编辑数据行 — P1 接入. 当前可通过 [运行] tab 进真应用编辑.')
+  // v1: 打开应用级运行态 URL (记录级深链留后续)
+  openApaasApp()
 }
 
 function onAddColumn() {
