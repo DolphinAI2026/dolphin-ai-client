@@ -141,8 +141,8 @@ build_and_push_image() {
 }
 
 clone_nginx_config() {
-  log "sync nginx ConfigMap ${SOURCE_NGINX_CM} -> ${NGINX_CM}"
-  kubectl -n "$NAMESPACE" get configmap "$SOURCE_NGINX_CM" -o jsonpath='{.data.default\.conf}' \
+  log "apply nginx ConfigMap from repo -> ${NGINX_CM}"
+  sed '1,/default.conf: |/d; s/^    //' "$REPO_ROOT/deploy/k8s/15-configmap-nginx.yaml" \
     > /tmp/apaas-builder-nginx-default.conf
   kubectl -n "$NAMESPACE" create configmap "$NGINX_CM" \
     --from-file=default.conf=/tmp/apaas-builder-nginx-default.conf \

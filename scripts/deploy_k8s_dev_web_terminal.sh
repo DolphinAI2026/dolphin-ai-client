@@ -123,6 +123,8 @@ generate_terminal_payload() {
   [ -n "$APAAS_TENANT_ID" ] || die "APAAS_TENANT_ID is empty. Set it in ${DEPLOY_ENV_FILE}"
   [ -n "$DEV_DATABASE_NAME" ] || die "DEV_DATABASE_NAME is empty. Set it in ${DEPLOY_ENV_FILE}"
   mkdir -p "$(dirname "$OUTPUT_FILE")"
+  local nginx_conf
+  nginx_conf="$(sed '1,/default.conf: |/d; s/^    //' "$REPO_ROOT/deploy/k8s/15-configmap-nginx.yaml")"
   cat > "$OUTPUT_FILE" <<EOF
 set -euo pipefail
 
@@ -150,8 +152,10 @@ ROLL_TIMEOUT='${ROLL_TIMEOUT}'
 echo "[1/6] checking namespace"
 kubectl get namespace "\$NAMESPACE" >/dev/null
 
-echo "[2/6] syncing nginx ConfigMap"
-kubectl -n "\$NAMESPACE" get configmap "\$SOURCE_NGINX_CM" -o jsonpath='{.data.default\\.conf}' > /tmp/apaas-builder-nginx-default.conf
+echo "[2/6] applying nginx ConfigMap from repo"
+cat > /tmp/apaas-builder-nginx-default.conf <<'NGINX_CONF'
+${nginx_conf}
+NGINX_CONF
 kubectl -n "\$NAMESPACE" create configmap "\$NGINX_CM" \\
   --from-file=default.conf=/tmp/apaas-builder-nginx-default.conf \\
   --dry-run=client -o yaml | kubectl apply -f -
