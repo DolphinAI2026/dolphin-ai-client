@@ -32,7 +32,7 @@ router = APIRouter(tags=["platform-proxy"])
 # ── 全局状态：当前代理目标 ──
 # iframe 入口设置后，后续的 /platform/ 和 /backend/ 请求都代理到同一个平台
 _proxy_state: dict = {
-    "host": "",       # e.g. https://apaas-dev8.dfy.definesys.cn
+    "host": "",       # e.g. https://your-apaas.example.com
     "token": "",
     "tenant_id": "",
     "username": "",

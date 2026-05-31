@@ -2181,7 +2181,7 @@ const INJECT_CODE = `(function(params) {{
         if result_json_path.exists():
             result_json_path.unlink()
 
-        # platform_url 通常以 /platform/ 结尾，提取 base（如 https://apaas-dev8.dfy.definesys.cn/）
+        # platform_url 通常以 /platform/ 结尾，这里提取平台 base。
         _base_url = platform_url.replace("/platform/", "/").rstrip("/") + "/"
         login_url = f"{platform_url}account/login"
 

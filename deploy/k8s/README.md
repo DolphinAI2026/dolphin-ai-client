@@ -16,7 +16,9 @@
 KUBECONFIG=~/.kube/dfy-host.yaml scripts/deploy_k8s_dev.sh
 ```
 
-脚本会把当前 `HEAD` 推到 `origin/dev`，构建并推送 `hub.dfy.definesys.cn/ai-builder/apaas-builder:dev-<日期>-<sha>`，然后更新 `apaas-builder-dev` 的 StatefulSet / Service / Ingress / ConfigMap / Secret / PVC，并验证 `https://agent.dfy.definesys.cn/ai-builder/login`。
+脚本会把当前 `HEAD` 推到 `origin/dev`，构建并推送 `hub.dfy.definesys.cn/ai-builder/apaas-builder:dev-<日期>-<sha>`，然后读取 `deploy/k8s/dev.env` 更新 `apaas-builder-dev` 的 StatefulSet / Service / Ingress / ConfigMap / Secret / PVC，并验证 `PUBLIC_URL`。
+
+dev 环境的 aPaaS 绑定只写在 [dev.env](dev.env)，部署脚本会从这里读取并写入 K8s Secret。
 
 前置条件：
 - 本机 `docker` 已登录 `hub.dfy.definesys.cn`
@@ -64,9 +66,6 @@ StatefulSet apaas-builder (replicas=1, nodeAffinity app-tier=true)
 准备一份生产版 `backend.env`（和本地 `/tmp/apaas-local/backend.env` 对照修改）：
 
 ```dotenv
-APAAS_BASE_URL=https://apaas-poc.definesys.cn/backend
-APAAS_TENANT_ID=743906758237356033
-
 LLM_API_BASE=https://api.minimaxi.com/anthropic
 LLM_API_KEY=<生产 API KEY>
 LLM_MODEL=MiniMax-M2.7

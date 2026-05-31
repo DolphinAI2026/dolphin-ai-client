@@ -1825,7 +1825,7 @@ def _get_platform_url(project: Optional[Any]) -> str:
         return base.replace("/backend", "/platform/")
     if base and not base.endswith("/"):
         return base + "/platform/"
-    return base + "platform/" if base else "https://apaas-dev8.dfy.definesys.cn/platform/"
+    return base + "platform/" if base else ""
 
 
 async def _write_history_for_ide(

@@ -23,7 +23,7 @@ class Settings(BaseSettings):
     )
 
     # aPaaS Platform
-    apaas_base_url: str = "https://apaas-poc.definesys.cn/backend"
+    apaas_base_url: str = ""
     apaas_tenant_id: str = ""
 
     # LLM Configuration

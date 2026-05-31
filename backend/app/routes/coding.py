@@ -2900,19 +2900,18 @@ def _get_platform_frontend_url(backend_url: str) -> str:
         return base.replace("/backend", "/platform/")
     if base and not base.endswith("/"):
         return base + "/platform/"
-    return base + "platform/" if base else "https://apaas-dev8.dfy.definesys.cn/platform/"
+    return base + "platform/" if base else ""
 
 
 def _get_user_platform_url(user) -> str:
     """从用户的平台连接信息推导出平台前端 URL"""
     base = user.apaas_base_url or settings.apaas_base_url or ""
-    # apaas_base_url 通常是后端地址如 https://apaas-dev8.dfy.definesys.cn/backend
-    # 平台前端地址是 https://apaas-dev8.dfy.definesys.cn/platform/
+    # apaas_base_url 通常是后端地址，平台前端地址由它推导。
     if "/backend" in base:
         return base.replace("/backend", "/platform/")
     if base and not base.endswith("/"):
         return base + "/platform/"
-    return base + "platform/" if base else "https://apaas-dev8.dfy.definesys.cn/platform/"
+    return base + "platform/" if base else ""
 
 
 def _sse(data: dict) -> str:

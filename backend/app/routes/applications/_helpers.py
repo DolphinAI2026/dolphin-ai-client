@@ -827,7 +827,10 @@ def _resolve_display_status(app: Application, remote_status: str | None = None) 
 
 def _build_apaas_url(apaas_app_id: str, base_url: str | None = None, tenant_id: str | None = None) -> str:
     """得帆云平台应用直达链接（从环境配置取地址）"""
-    host = base_url.rstrip("/").replace("/backend", "") if base_url else "https://apaas-poc.definesys.cn"
+    configured_base = base_url or settings.apaas_base_url
+    if not configured_base:
+        return ""
+    host = configured_base.rstrip("/").replace("/backend", "")
     tid = tenant_id or settings.apaas_tenant_id
     return f"{host}/platform/{tid}/admin/app-store/edit-app?appId={apaas_app_id}&currentStepIndex=0"
 

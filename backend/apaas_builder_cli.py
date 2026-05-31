@@ -42,15 +42,15 @@ def cli():
 @click.argument('config_file', type=click.Path(exists=True))
 @click.option('--account', '-a', required=True, help='aPaaS 账号')
 @click.option('--password', '-p', required=True, help='aPaaS 密码')
-@click.option('--base-url', default='https://apaas-poc.definesys.cn/backend', help='aPaaS Base URL')
-@click.option('--tenant-id', default='743906758237356033', help='租户 ID')
+@click.option('--base-url', default=None, help='aPaaS Base URL（缺省读取后端配置）')
+@click.option('--tenant-id', default=None, help='租户 ID（缺省读取后端配置）')
 @click.option('--output', '-o', type=click.Path(), help='保存进度文件路径')
-def create(config_file: str, account: str, password: str, base_url: str, tenant_id: str, output: Optional[str]):
+def create(config_file: str, account: str, password: str, base_url: Optional[str], tenant_id: Optional[str], output: Optional[str]):
     """从配置文件创建 aPaaS 应用"""
     asyncio.run(_create_app(config_file, account, password, base_url, tenant_id, output))
 
 
-async def _create_app(config_file: str, account: str, password: str, base_url: str, tenant_id: str, output: Optional[str]):
+async def _create_app(config_file: str, account: str, password: str, base_url: Optional[str], tenant_id: Optional[str], output: Optional[str]):
     """创建应用的异步实现"""
     try:
         # 延迟导入
@@ -90,7 +90,8 @@ async def _create_app(config_file: str, account: str, password: str, base_url: s
         click.echo(f"📝 App Code: {progress['app_code']}")
 
         # 6. 生成访问链接
-        access_url = f"https://apaas-poc.definesys.cn/platform/{tenant_id}/admin/app-store/list"
+        platform_host = client.base_url.rstrip("/").replace("/backend", "")
+        access_url = f"{platform_host}/platform/{client.tenant_id}/admin/app-store/list"
         click.echo(f"🔗 访问地址: {access_url}")
 
     except Exception as e:

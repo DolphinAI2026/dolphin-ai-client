@@ -18,6 +18,14 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
+DEPLOY_ENV_FILE="${DEPLOY_ENV_FILE:-$REPO_ROOT/deploy/k8s/dev.env}"
+
+if [ -f "$DEPLOY_ENV_FILE" ]; then
+  set -a
+  # shellcheck disable=SC1090
+  . "$DEPLOY_ENV_FILE"
+  set +a
+fi
 
 NAMESPACE="${NAMESPACE:-apaas-builder}"
 APP_NAME="${APP_NAME:-apaas-builder-dev}"
@@ -35,6 +43,8 @@ VITE_BASE_URL="${VITE_BASE_URL:-/ai-builder/}"
 DEV_HOST="${DEV_HOST:-agent.dfy.definesys.cn}"
 PROD_HOST="${PROD_HOST:-df-aigc.dfy.definesys.cn}"
 PUBLIC_URL="${PUBLIC_URL:-https://${DEV_HOST}/ai-builder/login}"
+APAAS_BASE_URL="${APAAS_BASE_URL:-}"
+APAAS_TENANT_ID="${APAAS_TENANT_ID:-}"
 
 SOURCE_NGINX_CM="${SOURCE_NGINX_CM:-${PROD_APP_NAME}-nginx}"
 NGINX_CM="${NGINX_CM:-${APP_NAME}-nginx}"
@@ -139,13 +149,40 @@ clone_nginx_config() {
 }
 
 clone_backend_secret() {
+  [ -n "$APAAS_BASE_URL" ] || die "APAAS_BASE_URL is empty. Set it in ${DEPLOY_ENV_FILE}"
+  [ -n "$APAAS_TENANT_ID" ] || die "APAAS_TENANT_ID is empty. Set it in ${DEPLOY_ENV_FILE}"
   log "sync backend Secret ${SOURCE_BACKEND_SECRET} -> ${BACKEND_SECRET}"
   kubectl -n "$NAMESPACE" get secret "$SOURCE_BACKEND_SECRET" -o jsonpath='{.data.backend\.env}' \
     | python3 -c 'import base64,sys; sys.stdout.buffer.write(base64.b64decode(sys.stdin.read()))' \
-    | sed "s#${PROD_HOST}#${DEV_HOST}#g" \
-    | kubectl -n "$NAMESPACE" create secret generic "$BACKEND_SECRET" \
-        --from-file=backend.env=/dev/stdin \
-        --dry-run=client -o yaml \
+    > /tmp/apaas-builder-backend.env
+  python3 - "$APAAS_BASE_URL" "$APAAS_TENANT_ID" /tmp/apaas-builder-backend.env <<'PY'
+from pathlib import Path
+import sys
+
+base_url, tenant_id, path = sys.argv[1:4]
+env_path = Path(path)
+values = {
+    "APAAS_BASE_URL": base_url,
+    "APAAS_TENANT_ID": tenant_id,
+}
+seen = set()
+lines = []
+for line in env_path.read_text().splitlines():
+    key = line.split("=", 1)[0] if "=" in line else ""
+    if key in values:
+        lines.append(f"{key}={values[key]}")
+        seen.add(key)
+    else:
+        lines.append(line)
+for key, value in values.items():
+    if key not in seen:
+        lines.append(f"{key}={value}")
+env_path.write_text("\n".join(lines) + "\n")
+PY
+  sed -i.bak "s#${PROD_HOST}#${DEV_HOST}#g" /tmp/apaas-builder-backend.env
+  kubectl -n "$NAMESPACE" create secret generic "$BACKEND_SECRET" \
+    --from-file=backend.env=/tmp/apaas-builder-backend.env \
+    --dry-run=client -o yaml \
     | kubectl apply -f -
 }
 

@@ -13,6 +13,14 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
+DEPLOY_ENV_FILE="${DEPLOY_ENV_FILE:-$REPO_ROOT/deploy/k8s/dev.env}"
+
+if [ -f "$DEPLOY_ENV_FILE" ]; then
+  set -a
+  # shellcheck disable=SC1090
+  . "$DEPLOY_ENV_FILE"
+  set +a
+fi
 
 NAMESPACE="${NAMESPACE:-apaas-builder}"
 APP_NAME="${APP_NAME:-apaas-builder-dev}"
@@ -30,6 +38,8 @@ VITE_BASE_URL="${VITE_BASE_URL:-/ai-builder/}"
 DEV_HOST="${DEV_HOST:-agent.dfy.definesys.cn}"
 PROD_HOST="${PROD_HOST:-df-aigc.dfy.definesys.cn}"
 PUBLIC_URL="${PUBLIC_URL:-https://${DEV_HOST}/ai-builder/login}"
+APAAS_BASE_URL="${APAAS_BASE_URL:-}"
+APAAS_TENANT_ID="${APAAS_TENANT_ID:-}"
 
 SOURCE_NGINX_CM="${SOURCE_NGINX_CM:-${PROD_APP_NAME}-nginx}"
 NGINX_CM="${NGINX_CM:-${APP_NAME}-nginx}"
@@ -108,6 +118,8 @@ build_and_push_image() {
 }
 
 generate_terminal_payload() {
+  [ -n "$APAAS_BASE_URL" ] || die "APAAS_BASE_URL is empty. Set it in ${DEPLOY_ENV_FILE}"
+  [ -n "$APAAS_TENANT_ID" ] || die "APAAS_TENANT_ID is empty. Set it in ${DEPLOY_ENV_FILE}"
   mkdir -p "$(dirname "$OUTPUT_FILE")"
   cat > "$OUTPUT_FILE" <<EOF
 set -euo pipefail
@@ -119,6 +131,8 @@ IMAGE='${IMAGE}'
 DEV_HOST='${DEV_HOST}'
 PROD_HOST='${PROD_HOST}'
 PUBLIC_URL='${PUBLIC_URL}'
+APAAS_BASE_URL='${APAAS_BASE_URL}'
+APAAS_TENANT_ID='${APAAS_TENANT_ID}'
 SOURCE_NGINX_CM='${SOURCE_NGINX_CM}'
 NGINX_CM='${NGINX_CM}'
 SOURCE_BACKEND_SECRET='${SOURCE_BACKEND_SECRET}'
@@ -143,9 +157,20 @@ echo "[3/6] syncing backend Secret"
 kubectl -n "\$NAMESPACE" get secret "\$SOURCE_BACKEND_SECRET" -o jsonpath='{.data.backend\\.env}' \\
   | base64 -d \\
   | sed "s#\${PROD_HOST}#\${DEV_HOST}#g" \\
-  | kubectl -n "\$NAMESPACE" create secret generic "\$BACKEND_SECRET" \\
-      --from-file=backend.env=/dev/stdin \\
-      --dry-run=client -o yaml \\
+  > /tmp/apaas-builder-backend.env
+if grep -q '^APAAS_BASE_URL=' /tmp/apaas-builder-backend.env; then
+  sed -i "s#^APAAS_BASE_URL=.*#APAAS_BASE_URL=\${APAAS_BASE_URL}#" /tmp/apaas-builder-backend.env
+else
+  printf 'APAAS_BASE_URL=%s\\n' "\$APAAS_BASE_URL" >> /tmp/apaas-builder-backend.env
+fi
+if grep -q '^APAAS_TENANT_ID=' /tmp/apaas-builder-backend.env; then
+  sed -i "s#^APAAS_TENANT_ID=.*#APAAS_TENANT_ID=\${APAAS_TENANT_ID}#" /tmp/apaas-builder-backend.env
+else
+  printf 'APAAS_TENANT_ID=%s\\n' "\$APAAS_TENANT_ID" >> /tmp/apaas-builder-backend.env
+fi
+kubectl -n "\$NAMESPACE" create secret generic "\$BACKEND_SECRET" \\
+  --from-file=backend.env=/tmp/apaas-builder-backend.env \\
+  --dry-run=client -o yaml \\
   | kubectl apply -f -
 
 echo "[4/6] applying workloads"

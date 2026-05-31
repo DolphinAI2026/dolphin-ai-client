@@ -12,12 +12,13 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 import httpx
 from app.apaas_client import APaaSClient
+from app.config import settings
 
 # ============================================================
 # 配置
 # ============================================================
-BASE_URL = "https://apaas-poc.definesys.cn/backend"
-TENANT_ID = "822201427723026433"
+BASE_URL = os.getenv("APAAS_BASE_URL", settings.apaas_base_url)
+TENANT_ID = os.getenv("APAAS_TENANT_ID", settings.apaas_tenant_id)
 USERNAME = "17621440039"
 PASSWORD = "definesys2019"
 APP_ID = "822254164473020416"  # 刚创建的应用
