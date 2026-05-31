@@ -354,7 +354,7 @@ async def list_platform_envs(
             {
               "id": 1,
               "name": "trial 环境",
-              "base_url": "https://apaas-trial.definesys.cn",
+              "base_url": "https://your-apaas.example.com/backend",
               "is_default": true,
               "status": "connected",   # connected | disconnected | unknown
             },
