@@ -92,7 +92,6 @@
           <span>
             业务视角预览 — 看到的就是用户看列表的样子. 改列 / 加查询条件用配置助手对话.
           </span>
-          <span v-if="dataSource === 'mock'" class="ldp-pv-mock-tag" title="未拉到真实业务数据, 显示 mock 示例">mock 数据</span>
         </div>
 
         <!-- 标题区 — 2026-05-27 S: 删 title 重复 (mdsh-subnav 已显), 只留 stats -->
@@ -162,7 +161,13 @@
               <p v-if="!visibleColumns.length">该列表尚未配置可显字段</p>
               <p v-else-if="hasActiveFilter">无匹配筛选条件的数据</p>
               <p v-else>暂无业务数据</p>
-              <p class="hint" v-if="visibleColumns.length">通过左侧菜单内"新增"按钮录入数据, 或让用户在前台提交</p>
+              <p class="hint" v-if="visibleColumns.length && !hasActiveFilter">数据由最终用户在前台录入</p>
+              <button
+                v-if="visibleColumns.length && !hasActiveFilter"
+                class="ldp-btn ldp-btn-primary ldp-btn-sm"
+                style="margin-top: 12px"
+                @click="openApaasApp()"
+              >打开应用录入数据</button>
             </template>
           </div>
           <div v-else class="ldp-pv-table-wrap">
@@ -310,7 +315,7 @@ const previewColumns = ref<PreviewColumn[]>([])
 const filterFields = ref<FilterField[]>([])
 const filterValues = reactive<Record<string, string>>({})
 const allRows = ref<Record<string, any>[]>([])
-const dataSource = ref<'real' | 'mock'>('mock')
+const dataSource = ref<'real' | 'empty' | 'error'>('empty')
 // 2026-05-27 T: apaas 列表设计 tab 真实配置状态 — 区分"未配置"与"已配置但空".
 // null = 未拉到 detail (老 fallback 路径); true = apaas 上配过 query/columns;
 // false = apaas list_page_view 返了但 query_conditions/query_list 都是空数组.
@@ -411,47 +416,13 @@ function classifyField(comp: any): { kind: PreviewColumn['kind']; inputType?: Fi
 }
 
 // ----------------------------------------------------------
-// Mock 数据生成 — 真业务数据拉不到时兜底
+// 状态选项 (renderCell / 筛选条件用)
 // ----------------------------------------------------------
-const MOCK_NAMES = ['张三', '李四', '王五', '赵六', '钱七', '孙八']
-const MOCK_BOOKS = ['设计模式', '算法导论', '重构: 改善既有代码的设计', '深入理解计算机系统', 'Clean Code']
 const STATUS_OPTIONS = [
   { value: 'pending', label: '待审批' },
   { value: 'approved', label: '已通过' },
   { value: 'rejected', label: '已拒绝' },
 ]
-
-function genMockRows(cols: PreviewColumn[], count: number): Record<string, any>[] {
-  const rows: Record<string, any>[] = []
-  for (let i = 0; i < count; i++) {
-    const row: Record<string, any> = {}
-    for (const c of cols) {
-      const label = c.label.toLowerCase()
-      if (c.kind === 'status') {
-        row[c.code] = STATUS_OPTIONS[i % STATUS_OPTIONS.length].value
-      } else if (c.kind === 'date') {
-        const d = new Date(2026, 4, 20 + (i % 8))
-        row[c.code] = d.toISOString().slice(0, 10)
-      } else if (c.kind === 'number') {
-        row[c.code] = (i + 1) * 100
-      } else if (c.kind === 'boolean') {
-        row[c.code] = i % 2 === 0 ? '是' : '否'
-      } else if (label.includes('人') || label.includes('user') || label.includes('申请') || label.includes('借阅')) {
-        row[c.code] = MOCK_NAMES[i % MOCK_NAMES.length]
-      } else if (label.includes('单号') || label.includes('编号') || label.includes('no') || label.includes('code')) {
-        row[c.code] = `${(c.code || 'NO').slice(0, 4).toUpperCase()}-${String(i + 1).padStart(3, '0')}`
-      } else if (label.includes('图书') || label.includes('物品') || label.includes('book') || label.includes('item') || label.includes('名称')) {
-        row[c.code] = MOCK_BOOKS[i % MOCK_BOOKS.length]
-      } else if (label.includes('备注') || label.includes('说明') || label.includes('remark')) {
-        row[c.code] = `示例 ${c.label} ${i + 1}`
-      } else {
-        row[c.code] = `${c.label} ${i + 1}`
-      }
-    }
-    rows.push(row)
-  }
-  return rows
-}
 
 // ----------------------------------------------------------
 // Cell 渲染
@@ -495,6 +466,22 @@ function onResetFilter() {
     filterValues[k] = ''
   }
   currentPage.value = 1
+}
+
+// 打开 apaas 真实运行态应用 (空态 CTA + 行编辑共用). 应用级 URL, 记录级深链留后续.
+async function openApaasApp() {
+  try {
+    const resp = await request.get<any, any>(
+      `/applications/${props.appId}/apaas-access-url`,
+    )
+    if (resp?.ok && resp.access_url) {
+      window.open(resp.access_url, '_blank')
+    } else {
+      alert(resp?.message || '应用尚未部署到 aPaaS, 无法打开')
+    }
+  } catch (e: any) {
+    alert(`打开应用失败: ${e?.message || '网络错误'}`)
+  }
 }
 
 function onRowClick(row: Record<string, any>, _i: number) {
@@ -698,26 +685,29 @@ async function loadBusinessData(): Promise<void> {
   if (!props.formId || !previewColumns.value.length) {
     allRows.value = []
     totalRows.value = 0
-    dataSource.value = 'mock'
+    dataSource.value = 'empty'
     return
   }
   try {
     const resp = await request.get<any, any>(
       `/applications/${props.appId}/forms/${props.formId}/business-data?page=1&page_size=50`,
     )
-    if (resp?.ok && Array.isArray(resp.items) && resp.items.length > 0) {
+    if (resp?.ok && Array.isArray(resp.items)) {
       allRows.value = resp.items
       totalRows.value = resp.total || resp.items.length
-      dataSource.value = 'real'
+      // 真实拉取成功: 有数据→real, 0 条→empty (显诚实空态, 不再造假行)
+      dataSource.value = resp.items.length > 0 ? 'real' : 'empty'
       return
     }
+    // ok=false (未部署等) → 空态, 不编造数据
+    allRows.value = []
+    totalRows.value = 0
+    dataSource.value = 'empty'
   } catch (_e) {
-    // fallback mock
+    allRows.value = []
+    totalRows.value = 0
+    dataSource.value = 'error'
   }
-  // mock fallback (5 行)
-  allRows.value = genMockRows(previewColumns.value, 5)
-  totalRows.value = 5
-  dataSource.value = 'mock'
 }
 
 async function reload() {
