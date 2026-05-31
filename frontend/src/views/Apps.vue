@@ -1,10 +1,10 @@
 <template>
-  <BuilderFrame :breadcrumbs="[{ label: '应用' }]">
+  <BuilderFrame :breadcrumbs="[{ label: '应用资产库' }]">
     <main class="apps-page builder-page">
-      <section class="apps-header page-head">
-        <div>
-          <h1 class="page-title">我的应用</h1>
-          <p class="page-subtitle">{{ appsSummary }}</p>
+      <section class="apps-header page-head" aria-label="应用概览">
+        <div class="apps-title-block">
+          <h1 class="page-title">应用资产库</h1>
+          <p class="page-subtitle">统一查看应用状态、构建进度和最近更新。</p>
         </div>
       </section>
 
@@ -346,7 +346,6 @@ watch(filteredApps, list => {
 
 const deployedCount = computed(() => apps.value.filter(app => appStage(app).group === 'deployed').length)
 const activeCount = computed(() => apps.value.filter(app => appStage(app).group === 'active').length)
-const appsSummary = computed(() => `${apps.value.length} 个应用 · ${deployedCount.value} 个已部署 · ${activeCount.value} 个进行中`)
 
 function matchesTab(app: MergedApplication, tab: AppTab) {
   if (tab === 'all') return true
@@ -738,43 +737,56 @@ onMounted(() => { refreshApps() })
 .apps-page {
   display: flex;
   flex-direction: column;
-  gap: 18px;
-  padding: 22px 28px 32px;
+  gap: 14px;
+  padding: 20px 28px 32px;
 }
 
 .apps-header {
   display: flex;
-  align-items: flex-end;
+  align-items: center;
   justify-content: space-between;
-  gap: 16px;
-  max-width: 1160px;
+  min-height: 92px;
+  max-width: 1240px;
   width: 100%;
+  box-sizing: border-box;
   margin: 0 auto;
+  padding: 22px 28px;
+  border: 1px solid var(--line);
+  border-radius: var(--r-3, 8px);
+  background: var(--surface);
+}
+
+.apps-title-block {
+  min-width: 0;
 }
 
 .apps-header h1 {
   margin: 0;
   color: var(--text);
-  font-size: var(--t-h2, 24px);
-  line-height: 1.25;
+  font-size: 28px;
+  line-height: 1.12;
   font-weight: var(--fw-bold, 700);
-  letter-spacing: -0.01em;
+  letter-spacing: 0;
 }
 
 .apps-header p {
-  margin: 6px 0 0;
+  margin: 8px 0 0;
   color: var(--text-3);
   font-size: 13px;
 }
 
 .apps-toolbar {
-  max-width: 1160px;
+  max-width: 1240px;
   width: 100%;
-  margin: 8px auto 2px;
+  margin: 0 auto 10px;
   display: flex;
   align-items: center;
   justify-content: space-between;
   gap: 14px;
+  padding: 8px 10px 8px 14px;
+  border: 1px solid var(--line);
+  border-radius: var(--r-3, 8px);
+  background: var(--surface);
 }
 
 .apps-toolbar-right {
@@ -897,7 +909,7 @@ onMounted(() => { refreshApps() })
 }
 
 .apps-content {
-  max-width: 1160px;
+  max-width: 1240px;
   width: 100%;
   margin: 0 auto;
 }
@@ -948,9 +960,8 @@ onMounted(() => { refreshApps() })
 .apps-table {
   overflow: hidden;
   border: 1px solid var(--line);
-  border-radius: var(--r-4, 12px);
+  border-radius: var(--r-3, 8px);
   background: var(--surface);
-  box-shadow: var(--sh-1);
 }
 
 .apps-table-head,
@@ -958,19 +969,19 @@ onMounted(() => { refreshApps() })
   display: grid;
   /* Fix 14 (2026-05-21): 加 "组成" 列展示 M/F/R/D 元数据，actions 区适度收窄给元数据腾位 */
   grid-template-columns:
-    minmax(280px, 1.2fr)   /* 应用 */
-    minmax(110px, 0.5fr)   /* 阶段 */
-    minmax(140px, 0.55fr)  /* 进度 */
-    minmax(220px, 0.85fr)  /* 组成 (M/F/R/D) */
-    minmax(100px, 0.4fr)   /* 更新 */
-    minmax(300px, 0.8fr);  /* actions */
+    minmax(280px, 1.35fr)  /* 应用 */
+    minmax(96px, 0.42fr)   /* 阶段 */
+    minmax(140px, 0.5fr)   /* 进度 */
+    minmax(220px, 0.82fr)  /* 组成 (M/F/R/D) */
+    minmax(104px, 0.38fr)  /* 更新 */
+    minmax(220px, 0.62fr); /* actions */
   align-items: center;
-  column-gap: 16px;
+  column-gap: 14px;
 }
 
 .apps-table-head {
-  min-height: 36px;
-  padding: 0 14px;
+  min-height: 40px;
+  padding: 0 18px;
   border-bottom: 1px solid var(--line);
   color: var(--text-3);
   font-size: 12px;
@@ -979,8 +990,8 @@ onMounted(() => { refreshApps() })
 }
 
 .apps-row {
-  min-height: 56px;
-  padding: 8px 14px;
+  min-height: 70px;
+  padding: 10px 18px;
   border-bottom: 1px solid var(--line);
   color: var(--text);
   cursor: pointer;
@@ -994,7 +1005,7 @@ onMounted(() => { refreshApps() })
 
 .apps-row:hover,
 .apps-row:focus-visible {
-  background: var(--surface-2);
+  background: color-mix(in srgb, var(--brand-soft) 28%, var(--surface));
 }
 
 .apps-row-app {
@@ -1007,8 +1018,8 @@ onMounted(() => { refreshApps() })
 /* avatar — appAccentStyle inline gradient drives the color via per-app accent;
    we set a fallback brand so the box never collapses when style is missing. */
 .apps-avatar {
-  width: 32px;
-  height: 32px;
+  width: 40px;
+  height: 40px;
   flex: 0 0 auto;
   border-radius: var(--r-3, 8px);
   display: grid;
@@ -1037,7 +1048,7 @@ onMounted(() => { refreshApps() })
 .apps-row-main strong {
   min-width: 0;
   color: var(--text);
-  font-size: 14px;
+  font-size: 15px;
   font-weight: var(--fw-semibold, 600);
   line-height: 1.2;
   overflow: hidden;
@@ -1106,7 +1117,7 @@ onMounted(() => { refreshApps() })
 
 .apps-progress-track {
   /* Fix 13 (2026-05-21): track 4px→6px 厚度更可读；--surface-2 浅灰提供柔和对比 */
-  width: 80px;
+  width: 92px;
   height: 6px;
   border-radius: var(--r-full, 999px);
   background: var(--surface-2);
@@ -1235,7 +1246,7 @@ onMounted(() => { refreshApps() })
   font-size: 16px;
   line-height: 1.35;
   font-weight: var(--fw-semibold, 600);
-  letter-spacing: -0.005em;
+  letter-spacing: 0;
 }
 
 .apps-card-code {
@@ -1298,7 +1309,7 @@ onMounted(() => { refreshApps() })
 
 /* ── Mini action buttons (对话 / 构建 / 发布 / 删除) ───────── */
 .apps-mini-action {
-  min-height: 30px;
+  min-height: 32px;
   border: 1px solid var(--line);
   border-radius: var(--r-2, 6px);
   background: var(--surface);
@@ -1396,9 +1407,18 @@ onMounted(() => { refreshApps() })
     padding: 18px 16px 28px;
   }
 
+  .apps-header {
+    align-items: stretch;
+    flex-direction: column;
+    gap: 16px;
+    min-height: 0;
+    padding: 18px;
+  }
+
   .apps-toolbar {
     align-items: stretch;
     flex-direction: column;
+    padding: 10px;
   }
 
   .apps-toolbar-right {
@@ -1530,7 +1550,7 @@ onMounted(() => { refreshApps() })
   margin: 0;
   font-size: var(--t-h2, 24px);
   font-weight: var(--fw-bold, 700);
-  letter-spacing: -0.02em;
+  letter-spacing: 0;
   line-height: 1.2;
   color: var(--text);
 }
@@ -1648,7 +1668,7 @@ html[data-theme="dark"] .apps-mini-action:hover {
 .apps-table-head {
   font-size: 11.5px;
   font-weight: var(--fw-semibold, 600);
-  letter-spacing: 0.02em;
+  letter-spacing: 0;
   color: var(--text-2);
   text-transform: none;
 }

@@ -10,7 +10,7 @@
       </div>
       <div class="ds-actions">
         <el-button :icon="Refresh" @click="load">刷新</el-button>
-        <el-button type="primary" :icon="Plus" @click="openFullManage">
+        <el-button type="primary" :icon="Plus" @click="() => openFullManage()">
           完整管理 / 新增连接
         </el-button>
       </div>
@@ -18,7 +18,7 @@
 
     <el-alert type="info" :closable="false" show-icon class="ds-tip">
       数据源管理已下沉到平台级 — 新增 / 编辑 / 测试连接 / 表清单等完整操作请用
-      <el-link type="primary" @click="openFullManage">"完整管理"</el-link> 入口
+      <el-link type="primary" @click="() => openFullManage()">"完整管理"</el-link> 入口
       (跳到 ai-builder DbConnectionsPage 真页).
     </el-alert>
 
@@ -53,7 +53,7 @@
     </el-table>
 
     <el-empty v-if="!loading && connections.length === 0" description="暂无数据源">
-      <el-button type="primary" @click="openFullManage">添加第一个数据源</el-button>
+      <el-button type="primary" @click="() => openFullManage()">添加第一个数据源</el-button>
     </el-empty>
   </div>
 </template>

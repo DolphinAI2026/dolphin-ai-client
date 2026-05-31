@@ -18,6 +18,8 @@ export interface GeneratedFile {
 export interface CodingConversation {
   id: number
   title: string
+  workspace_id?: string | null
+  selected_llm_config_id?: number | null
   created_at: string
   updated_at: string
 }
@@ -93,6 +95,19 @@ export const codingApi = {
   /** 获取Coding对话列表 */
   getConversations() {
     return request.get<any, CodingConversation[]>('/coding/conversations')
+  },
+
+  /** 创建 Coding 会话（和 AI Builder 的新建会话行为对齐） */
+  createConversation(selected_llm_config_id?: number | null) {
+    return request.post<any, CodingConversation>('/conversations', {
+      agent_type: 'coding',
+      selected_llm_config_id: selected_llm_config_id ?? null,
+    })
+  },
+
+  /** 获取 Coding v2 对话关联的工作区 */
+  getConversationWorkspace(conversationId: number) {
+    return request.get<any, { conversation_id: number; workspace_id: string | null }>(`/coding/v2/conversations/${conversationId}/workspace`)
   },
 
   /** 获取对话消息 */

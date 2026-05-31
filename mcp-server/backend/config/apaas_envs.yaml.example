@@ -1,0 +1,55 @@
+# apaas 环境凭证注册表（MCP server 自管，去耦 ai-builder DB）
+# 用户决策（2026-05-10）：env 凭证脱离 ai-builder PlatformEnv 表，独立成 MCP 配置
+# 改 yaml 后调 POST /api/dolphin/reload-env-config 触发热加载（无需重启 backend）
+#
+# ⚠️ 安全注意:
+# - 实际配置文件 apaas_envs.yaml 应 chmod 600（仅 root 可读）
+# - 不要 git commit（已在 .gitignore 中）
+# - 多实例部署时换 secrets manager（vault/sops/aws-secrets-manager）
+#
+# alias 命名约定:
+# - 短小且能区分客户/环境（如 dev8 / baogong / cosco-prod）
+# - 给到 dolphin agent 的全局记忆 `env: <alias>`，所以不要太长
+# - 全局唯一（一个 MCP server 一个 alias 命名空间）
+
+# 凭证有两种方式（二选一）：
+#
+# 方式 1: service_token（long-lived JWT，推荐用于生产）
+#   - 优势：不用存密码，token 直接用
+#   - 劣势：token 过期手动换 yaml + reload
+#
+# 方式 2: username + password（账密自动 login）
+#   - backend 启动时按账密调 apaas /api/auth/login 拿 token
+#   - token 进程内 cache，过期前 5min 自动重 login
+#   - 适合开发/测试 + 没 service_token 机制的 apaas 实例
+
+- alias: trial
+  env_name: trial-得帆
+  base_url: https://apaas-trial.definesys.cn/backend
+  apaas_tenant_id: "825007780652908545"
+  username: admin                # 方式 2: 账密
+  password: REPLACE_WITH_PASSWORD
+  status: connected
+
+- alias: dev8
+  env_name: dev环境-得帆
+  base_url: https://apaas-dev8.dfy.definesys.cn/backend
+  apaas_tenant_id: "566642786573484033"
+  username: cmb
+  password: REPLACE_WITH_PASSWORD
+  status: connected
+
+- alias: baogong
+  env_name: 宝洁
+  base_url: https://apaas-trial.definesys.cn/backend
+  apaas_tenant_id: "833850449709760513"
+  username: bj
+  password: REPLACE_WITH_PASSWORD
+  status: connected
+
+# - alias: cosco-prod
+#   env_name: 中远 (生产)
+#   base_url: https://apaas.cosco.com/backend
+#   apaas_tenant_id: "1234567890"
+#   service_token: eyJhbGc...     # 方式 1: long-lived token
+#   status: connected

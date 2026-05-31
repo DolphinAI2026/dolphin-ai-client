@@ -31,27 +31,16 @@
     <div class="coding-body">
       <SessionSidebar
         v-if="!embedMode && !embeddedAppId"
-        module-name="我的组件"
+        module-name="AI Coding"
         brand-color="#6366f1"
         :sessions="sidebarCodingItems"
         :active-id="sidebarCodingActiveId"
-        :new-label="'+ 新建组件'"
-        :new-options="codingNewOptions"
         collapse-key="coding:aside-collapsed"
-        :empty-hint="'还没有组件，点上面新建一个'"
+        empty-hint="还没有会话，点上面新建一个"
+        :enable-rename="false"
         @select="onSidebarCodingSelect"
         @create="onSidebarCodingCreate"
-        @create-with-option="onSidebarCodingCreateWithOption"
         @delete="onSidebarCodingDelete"
-        :enable-rename="false"
-      />
-      <!-- 隐藏 file input：导入 zip 用 -->
-      <input
-        ref="importZipInputRef"
-        type="file"
-        accept=".zip"
-        style="display: none"
-        @change="handleImportZipChange"
       />
       <!-- Main Content: 对话流 (B 重构 2026-05-17): 合并 Welcome / Chat / IDE -->
       <div class="main-content">
@@ -96,243 +85,47 @@
           </div>
         </div>
 
-        <!-- Welcome State (Codex-like command center) - 2026-05-17 B 重构：
-             去掉 ideUrl 阻塞 + 加 !codingStore.workspace 兜底（选了 ws 后即使 streamMessages 空也要进 chat 视图，
-             不再 Welcome 永远显示 regression） -->
-        <div v-if="!isStreaming && streamMessages.length === 0 && !codingStore.workspace" class="welcome-pane">
-          <div class="welcome-inner" :style="codingLandingVars">
-
-            <section class="qc-section coding-command-center">
-              <input
-                ref="fileInputRef"
-                type="file"
-                accept=".md,.pdf,.docx,.txt,.png,.jpg,.jpeg"
-                style="display: none"
-                @change="handleFileSelect"
-              />
-
-              <div class="coding-command-copy">
-                <!-- 2026-05-21 UI audit Fix 17: kicker 改"创建组件"语义化标识右栏（vs 左栏"我的组件"列表） -->
-                <p class="coding-command-kicker">创建组件 · 新工作区</p>
-                <h1 class="coding-command-title">你想开发什么？</h1>
-                <p class="coding-command-subtitle">描述组件、页面、接口或脚本，AI 会先形成开发任务，再创建工作区。</p>
-              </div>
-
-              <div class="qc-shell ai-surface">
-                <div class="qc-row" @paste="handlePaste">
-                  <textarea
-                    v-model="userInput"
-                    class="qc-input"
-                    :placeholder="`问 AI 开发一个 ${activeSceneCategoryLabel}，例如：项目总览分析页面…`"
-                    rows="1"
-                    @keydown.enter.exact.prevent="sendMessage"
-                    @keydown.meta.enter.prevent="sendMessage"
-                    @keydown.ctrl.enter.prevent="sendMessage"
-                    :disabled="isCreating"
-                  ></textarea>
-                  <button
-                    type="button"
-                    class="qc-submit"
-                    :disabled="(!userInput.trim() && !attachedFile) || isCreating"
-                    @click="sendMessage"
-                    title="进入开发 (Enter)"
-                  >
-                    <span v-if="!isCreating && !isUploading" class="qc-submit-arrow">↗</span>
-                    <span v-else class="composer-submit-spinner" />
-                  </button>
-                </div>
-
-                <!-- 附件预览 -->
-                <div v-if="attachedFile" class="qc-attach">
-                  <div v-if="attachedPreviewUrl" class="qc-attach-thumb">
-                    <img :src="attachedPreviewUrl" alt="preview" />
-                    <button class="qc-attach-remove" @click="removeAttachment">&times;</button>
-                  </div>
-                  <div v-else class="qc-attach-file">
-                    <span class="qc-attach-icon">&#128196;</span>
-                    <span class="qc-attach-name">{{ attachedFile.name }}</span>
-                    <button class="qc-attach-remove" @click="removeAttachment">&times;</button>
-                  </div>
-                </div>
-
-                <!-- Toolbar：附件 + 类型 + 模型 -->
-                <div class="qc-toolbar">
-                  <button
-                    type="button"
-                    class="qc-chip qc-icon-only"
-                    @click="fileInputRef?.click()"
-                    :disabled="isCreating"
-                    title="附加文件"
-                  >📎</button>
-
-                  <!-- 2026-05-17 C 改造: 删项目类型 chip (默认 PC 组件，agent 看 prompt 自动推断) -->
-
-                  <!-- 模型选择 -->
-                  <el-popover
-                    v-model:visible="codingModelPopoverVisible"
-                    placement="bottom-start"
-                    trigger="click"
-                    :width="360"
-                    popper-class="coding-model-popover"
-                    :disabled="codingModelLoading || updatingCodingModel || codingModelOptions.length === 0"
-                  >
-                    <template #reference>
-                      <button
-                        type="button"
-                        class="qc-chip"
-                        :class="{ 'is-open': codingModelPopoverVisible, 'is-disabled': codingModelLoading || updatingCodingModel || codingModelOptions.length === 0 }"
-                        :disabled="codingModelLoading || updatingCodingModel || codingModelOptions.length === 0"
-                        aria-label="选择模型"
-                      >
-                        <span>{{ selectedCodingModelOption?.config_name || '选择模型' }}</span>
-                        <el-icon><ArrowDown /></el-icon>
-                      </button>
-                    </template>
-                    <div class="coding-model-panel">
-                      <button
-                        v-for="option in codingModelOptions"
-                        :key="option.id"
-                        type="button"
-                        class="coding-model-panel-option"
-                        :class="{ 'is-active': selectedCodingModelValue === toCodingModelValue(option.id) }"
-                        @click="selectCodingModel(option)"
-                      >
-                        <div class="coding-model-panel-option-head">
-                          <span class="coding-model-panel-option-name">{{ option.config_name }}</span>
-                          <span v-if="option.is_default" class="coding-model-panel-option-default">默认</span>
-                        </div>
-                        <span class="coding-model-panel-option-meta">
-                          {{ formatCodingModelProvider(option.provider) }} / {{ option.model }}
-                        </span>
-                      </button>
-                    </div>
-                  </el-popover>
-
-                  <div class="qc-spacer"></div>
-
-                  <span class="qc-kbd-hint">Enter / ⌘↵</span>
-                </div>
-              </div>
-
-              <p v-if="topSuggestions.length" class="qc-hints">
-                <span class="qc-hints-label">试试</span>
-                <template v-for="(s, i) in topSuggestions" :key="s">
-                  <button type="button" class="qc-hint-item" @click="sendSuggestion(s)">{{ s }}</button>
-                  <span v-if="i < topSuggestions.length - 1" class="qc-hint-sep">·</span>
-                </template>
-              </p>
-            </section>
-
-            <div class="workspace-showcase">
-              <div class="workspace-showcase-header">
-                <div>
-                  <h3 class="workspace-showcase-title">已开发组件</h3>
-                </div>
-                <button
-                  v-if="existingWorkspaces.length > 0"
-                  class="workspace-showcase-more"
-                  @click="openWorkspaceCatalogPage"
-                >
-                  <span>查看全部</span>
-                  <span aria-hidden="true">→</span>
-                </button>
-              </div>
-
-              <div v-if="workspaceShowcaseItems.length > 0" class="workspace-cards-grid">
-                <article
-                  v-for="ws in workspaceShowcaseItems"
-                  :key="ws.id"
-                  class="workspace-card"
-                  @click="openExistingWorkspace(ws)"
-                >
-                  <div class="workspace-card-head">
-                    <div class="workspace-card-copy">
-                      <div class="workspace-card-name">{{ workspaceDisplayName(ws) }}</div>
-                      <div class="workspace-card-meta-row">
-                        <span v-if="workspaceCodeName(ws)" class="workspace-card-code">{{ workspaceCodeName(ws) }}</span>
-                      </div>
-                    </div>
-                    <span class="workspace-card-type">{{ workspaceTypeLabel(ws.project_type) }}</span>
-                  </div>
-                  <div class="workspace-card-footer">
-                    <div class="workspace-card-actions">
-                      <button
-                        :class="['workspace-card-action', 'workspace-card-action-primary', { 'is-loading': openingWsId === ws.id }]"
-                        :title="openingWsId === ws.id ? '打开中...' : '进入开发'"
-                        :disabled="openingWsId === ws.id"
-                        @click.stop="openExistingWorkspace(ws)"
-                      >
-                        <svg v-if="openingWsId !== ws.id" class="workspace-card-action-icon" viewBox="0 0 16 16" fill="none" aria-hidden="true">
-                          <path d="M5.25 3.5L11 8L5.25 12.5V3.5Z" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round" />
-                        </svg>
-                        <svg v-else class="workspace-card-action-icon spin" viewBox="0 0 16 16" fill="none" aria-hidden="true">
-                          <circle cx="8" cy="8" r="6" stroke="currentColor" stroke-width="1.5" stroke-dasharray="28 10" stroke-linecap="round" />
-                        </svg>
-                      </button>
-                      <button
-                        v-if="canUploadWorkspace(ws)"
-                        :class="['workspace-card-action', { 'is-loading': uploadingWsId === ws.id }]"
-                        :title="uploadingWsId === ws.id ? '上传中...' : '上传组件包'"
-                        :disabled="uploadingWsId === ws.id"
-                        @click.stop="uploadWorkspaceCard(ws)"
-                      >
-                        <svg v-if="uploadingWsId !== ws.id" class="workspace-card-action-icon" viewBox="0 0 16 16" fill="none" aria-hidden="true">
-                          <path d="M8 10V4.25" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" />
-                          <path d="M5.75 6.5L8 4.25L10.25 6.5" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" />
-                          <path d="M4 10.25V11.25C4 11.9404 4.55964 12.5 5.25 12.5H10.75C11.4404 12.5 12 11.9404 12 11.25V10.25" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" />
-                        </svg>
-                        <svg v-else class="workspace-card-action-icon spin" viewBox="0 0 16 16" fill="none" aria-hidden="true">
-                          <circle cx="8" cy="8" r="6" stroke="currentColor" stroke-width="1.5" stroke-dasharray="28 10" stroke-linecap="round" />
-                        </svg>
-                      </button>
-                      <button
-                        :class="['workspace-card-action', { 'is-loading': downloadingWsId === ws.id }]"
-                        :title="downloadingWsId === ws.id ? '下载中...' : '下载源码'"
-                        :disabled="downloadingWsId === ws.id"
-                        @click.stop="downloadWorkspaceArtifact(ws, 'src')"
-                      >
-                        <svg v-if="downloadingWsId !== ws.id" class="workspace-card-action-icon" viewBox="0 0 16 16" fill="none" aria-hidden="true">
-                          <path d="M8 4V9.75" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" />
-                          <path d="M10.25 7.5L8 9.75L5.75 7.5" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" />
-                          <path d="M4 10.25V11.25C4 11.9404 4.55964 12.5 5.25 12.5H10.75C11.4404 12.5 12 11.9404 12 11.25V10.25" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" />
-                        </svg>
-                        <svg v-else class="workspace-card-action-icon spin" viewBox="0 0 16 16" fill="none" aria-hidden="true">
-                          <circle cx="8" cy="8" r="6" stroke="currentColor" stroke-width="1.5" stroke-dasharray="28 10" stroke-linecap="round" />
-                        </svg>
-                      </button>
-                      <button
-                        v-if="canDeleteWorkspace(ws)"
-                        :class="['workspace-card-action', 'workspace-card-action-danger', { 'is-loading': deletingWsId === ws.id }]"
-                        :title="deletingWsId === ws.id ? '删除中...' : '删除工作区'"
-                        :disabled="deletingWsId === ws.id || openingWsId === ws.id || downloadingWsId === ws.id || uploadingWsId === ws.id"
-                        @click.stop="deleteWorkspace(ws)"
-                      >
-                        <svg v-if="deletingWsId !== ws.id" class="workspace-card-action-icon" viewBox="0 0 16 16" fill="none" aria-hidden="true">
-                          <path d="M3 4.5H13" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" />
-                          <path d="M6 4.5V3.25C6 2.83579 6.33579 2.5 6.75 2.5H9.25C9.66421 2.5 10 2.83579 10 3.25V4.5" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" />
-                          <path d="M4.5 4.5L5 12.25C5.03 12.8 5.5 13.25 6.05 13.25H9.95C10.5 13.25 10.97 12.8 11 12.25L11.5 4.5" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" />
-                          <path d="M6.75 7V11" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" />
-                          <path d="M9.25 7V11" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" />
-                        </svg>
-                        <svg v-else class="workspace-card-action-icon spin" viewBox="0 0 16 16" fill="none" aria-hidden="true">
-                          <circle cx="8" cy="8" r="6" stroke="currentColor" stroke-width="1.5" stroke-dasharray="28 10" stroke-linecap="round" />
-                        </svg>
-                      </button>
-                    </div>
-                  </div>
-                </article>
-              </div>
-
-              <div v-else class="workspace-showcase-empty">
-                暂无已开发组件。先描述一个开发需求，我们会创建工作区并保留交付记录。
-              </div>
+        <div v-if="showCodingUnselected" class="coding-unselected-pane">
+          <header class="coding-session-header">
+            <div class="coding-session-title-block">
+              <strong class="coding-session-title">未选择会话</strong>
             </div>
+          </header>
+          <div class="coding-unselected-welcome">
+            <h2>AI Coding</h2>
+            <p>从左侧选择一个开发会话继续，或点击上方「+ 新会话」开始新的自开发任务。AI 会在会话里整理任务、创建工作区，并持续生成页面、接口、脚本或扩展代码。</p>
           </div>
         </div>
 
         <!-- Stream Pane (对话流视图 - 2026-05-17 B 重构：永远显示，IDE/文件改抽屉) -->
         <div v-else class="stream-pane">
+          <header class="coding-session-header">
+            <div class="coding-session-title-block">
+              <span class="coding-session-kicker">AI Coding</span>
+              <strong class="coding-session-title">{{ activeCodingSessionTitle }}</strong>
+            </div>
+            <button
+              v-if="codingStore.workspace"
+              type="button"
+              class="coding-session-ide-btn"
+              :disabled="!canOpenIdeView"
+              @click="openIdeDrawer"
+            >
+              <el-icon :size="13"><Monitor /></el-icon>
+              <span>IDE</span>
+            </button>
+          </header>
+
+          <div
+            v-if="!isStreaming && streamMessages.length === 0"
+            class="coding-empty-thread"
+          >
+            <div class="coding-empty-title">这个开发会话还没有消息</div>
+            <div class="coding-empty-sub">直接在底部输入需求，AI 会整理任务并创建工作区。</div>
+          </div>
+
           <AgentConversation
+            v-else
             :messages="agentMessages"
             :typing="isStreaming"
             empty-title=""
@@ -419,61 +212,23 @@
 
           <!-- Chat 底部输入框（非流式时可用） -->
           <div v-if="!isStreaming" class="chat-input-bar">
-            <!-- 附件预览 -->
-            <div v-if="attachedFile" class="chat-attachment-preview">
-              <div v-if="attachedPreviewUrl" class="attachment-thumb">
-                <img :src="attachedPreviewUrl" alt="preview" />
-                <button class="attachment-remove" @click="removeAttachment">&times;</button>
-              </div>
-              <div v-else class="attachment-file">
-                <span class="attachment-file-icon">&#128196;</span>
-                <span class="attachment-file-name">{{ attachedFile.name }}</span>
-                <button class="attachment-remove" @click="removeAttachment">&times;</button>
-              </div>
-            </div>
-            <div class="chat-input-wrapper" @paste="handlePaste">
-              <input
-                ref="chatFileInputRef"
-                type="file"
-                accept=".md,.pdf,.docx,.txt,.png,.jpg,.jpeg"
-                style="display: none"
-                @change="handleFileSelect"
-              />
-              <el-button
-                text
-                class="attach-btn"
-                @click="chatFileInputRef?.click()"
-                :disabled="isCreating"
-                title="上传附件"
-              >
-                <el-icon :size="16"><Paperclip /></el-icon>
-              </el-button>
-              <VoiceInputButton v-model="userInput" :llm-config-id="selectedCodingModelOption?.id ?? null" />
-              <el-input
-                v-model="userInput"
-                type="textarea"
-                :rows="1"
-                :autosize="{ minRows: 1, maxRows: 4 }"
-                placeholder="继续描述修改需求... (Enter 发送，Shift+Enter 换行)"
-                @keydown.enter.exact.prevent="sendMessage"
-                @keydown.ctrl.enter.prevent="sendMessage"
-                @keydown.meta.enter.prevent="sendMessage"
-                :disabled="isCreating"
-                resize="none"
-                class="chat-input"
-              />
-              <el-button
-                type="primary"
-                class="send-btn"
-                :loading="isCreating"
-                @click="sendMessage"
-                :disabled="!userInput.trim() || isCreating"
-                circle
-                size="small"
-              >
-                <el-icon v-if="!isCreating"><TopRight /></el-icon>
-              </el-button>
-            </div>
+            <UnifiedChatComposer
+              v-model="userInput"
+              :attachments="codingComposerAttachments"
+              :disabled="isCreating"
+              :sending="isCreating"
+              :show-stop="false"
+              :send-disabled="!userInput.trim() || isCreating"
+              accept=".md,.pdf,.docx,.txt,.png,.jpg,.jpeg"
+              placeholder="输入需求，粘贴图片或点附件..."
+              @send="sendMessage"
+              @files-picked="handleComposerFiles"
+              @remove-attachment="removeAttachment"
+            >
+              <template #footer-left>
+                <VoiceInputButton v-model="userInput" :llm-config-id="selectedCodingModelOption?.id ?? null" />
+              </template>
+            </UnifiedChatComposer>
           </div>
         </div>
 
@@ -524,10 +279,8 @@
             📋 文件浏览 MVP — 当前展示 workspace 元信息，详细文件树后续接入。
           </p>
           <div v-if="codingStore.workspace" style="padding:0 16px;">
-            <div style="margin-bottom:12px;"><strong>名称：</strong>{{ codingStore.workspace.display_name || codingStore.workspace.name }}</div>
+            <div style="margin-bottom:12px;"><strong>名称：</strong>{{ codingStore.workspace.display_name || codingStore.workspace.project_name }}</div>
             <div style="margin-bottom:12px;"><strong>类型：</strong>{{ codingStore.workspace.project_type }}</div>
-            <div style="margin-bottom:12px;"><strong>关联应用：</strong>{{ codingStore.workspace.apaas_app_name || '-' }}</div>
-            <div style="margin-bottom:12px;"><strong>更新时间：</strong>{{ codingStore.workspace.updated_at }}</div>
           </div>
           <div v-else style="padding:16px;color:#999;">还没有打开工作区</div>
         </div>
@@ -721,7 +474,6 @@
     </div>
   </BuilderFrame>
 
-  <EnvSelectModal v-model="showUploadEnvModal" @selected="onUploadEnvSelected" />
 </template>
 
 <script setup lang="ts">
@@ -729,17 +481,16 @@ import { API_PREFIX } from '@/utils/request'
 import { ref, computed, onMounted, onUnmounted, watch, nextTick } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
-import { ArrowDown, ArrowLeft, Download, TopRight, Paperclip, Monitor, Delete, Fold, Expand, ChatDotRound } from '@element-plus/icons-vue'
+import { ArrowLeft, Download, Monitor, Delete, Fold, Expand, ChatDotRound } from '@element-plus/icons-vue'
 import { useCodingStore } from '@/stores/coding'
-import { platformEnvApi, type PlatformEnv } from '@/api/platformEnv'
+import type { PlatformEnv } from '@/api/platformEnv'
 import { useUserStore } from '@/stores/user'
 import { codingApi, isIdeUnavailableError } from '@/api/coding'
-import type { WorkspaceInfo, ReplayStreamMessage } from '@/api/coding'
+import type { CodingConversation, WorkspaceInfo, ReplayStreamMessage } from '@/api/coding'
 import { gitConnectionApi } from '@/api/gitConnection'
 import { applicationApi } from '@/api/application'
 import { useThemeStore } from '@/stores/theme'
 import BuilderFrame from '@/components/BuilderFrame.vue'
-import EnvSelectModal from '@/components/EnvSelectModal.vue'
 import FileCard from '@/components/FileCard.vue'
 import SessionSidebar, { type SessionItem as SidebarSessionItem } from '@/components/common/SessionSidebar.vue'
 import AgentConversation from '@/components/common/AgentConversation.vue'
@@ -750,6 +501,8 @@ import { useStreamMessages, renderMarkdown } from './coding/useStreamMessages'
 import { useIdeManager } from './coding/useIdeManager'
 import { useCodingWorkspace } from './coding/useCodingWorkspace'
 import { useCodingPipeline } from './coding/useCodingPipeline'
+import UnifiedChatComposer from '@/components/common/UnifiedChatComposer.vue'
+import type { UnifiedChatAttachment } from '@/components/common/chatComposer'
 
 const route = useRoute()
 const router = useRouter()
@@ -764,13 +517,6 @@ const themeStore = useThemeStore()
 // ============ Core State ============
 const userInput = ref('')
 const isCreating = ref(false)
-
-// Code mode uses the same calm blue family as the workbench primary action.
-const codingLandingVars: Record<string, string> = {
-  '--landing-mode-color': '#6f7ff2',
-  '--landing-mode-soft': 'rgba(111, 127, 242, 0.10)',
-  '--landing-mode-ink': '#4c5fda',
-}
 
 // ── IDE iframe 管理（已抽成 composable）──
 const {
@@ -883,7 +629,6 @@ const {
   toCodingModelValue,
   normalizeCodingModelValue,
   applyCodingModelSelection,
-  formatCodingModelProvider,
   loadCodingModelOptions,
   handleCodingModelChange,
   selectCodingModel,
@@ -908,22 +653,16 @@ const {
 const {
   allWorkspaces,
   isDownloading,
-  downloadingWsId,
-  embeddedProjectId,
   embeddedAppId,
   existingWorkspaces,
-  workspaceShowcaseItems,
   workspaceDisplayName,
-  workspaceCodeName,
-  workspaceTooltip,
-  workspaceTypeLabel,
-  downloadWorkspaceArtifact,
 } = useCodingWorkspace()
 
-/** 正在打开的工作区 id（卡片级 loading 标记，防止重复点击） */
+/** 正在打开的会话 id */
 const openingWsId = ref<string | null>(null)
 /** 正在删除的工作区 id */
 const deletingWsId = ref<string | null>(null)
+const codingConversations = ref<CodingConversation[]>([])
 
 // ── AgentConversation 公共契约映射（保留 streamMessages 原 reactive 对象，slot 直接引用 meta.streamMsg） ──
 const agentMessages = computed<AgentMessage[]>(() => {
@@ -1045,85 +784,199 @@ const toggleCodingArtifactPanel = () => {
   codingArtifactPanelUserToggle.value = !showCodingArtifactPanel.value
 }
 
-// ── 左侧 SessionSidebar 适配 ──
-const sidebarCodingItems = computed<SidebarSessionItem[]>(() =>
-  (existingWorkspaces.value || []).map((ws: any) => ({
-    id: ws.id,
-    title: workspaceDisplayName(ws) || ws.id,
-    meta: workspaceCodeName(ws) || undefined,
-  }))
+function codingTimeGroup(iso: string | null | undefined): string {
+  if (!iso) return '更早'
+  const t = new Date(iso).getTime()
+  if (Number.isNaN(t)) return '更早'
+  const now = new Date()
+  const today0 = new Date(now.getFullYear(), now.getMonth(), now.getDate()).getTime()
+  const dayMs = 24 * 60 * 60 * 1000
+  if (t >= today0) return '今天'
+  if (t >= today0 - dayMs) return '昨天'
+  if (t >= today0 - 7 * dayMs) return '本周'
+  if (t >= today0 - 30 * dayMs) return '本月'
+  return '更早'
+}
+
+function compactTitle(title: string | null | undefined, fallback: string) {
+  const raw = (title || '').trim() || fallback
+  return raw.length > 30 ? `${raw.slice(0, 30)}...` : raw
+}
+
+async function refreshCodingConversations() {
+  try {
+    const list = await codingApi.getConversations()
+    codingConversations.value = Array.isArray(list) ? list : []
+  } catch {
+    codingConversations.value = []
+  }
+}
+
+const sidebarWorkspaceFallbackItems = computed<SidebarSessionItem[]>(() => {
+  const workspaceIds = new Set(
+    codingConversations.value
+      .map(conv => conv.workspace_id)
+      .filter((id): id is string => !!id),
+  )
+  return (existingWorkspaces.value || [])
+    .filter((ws: any) => !workspaceIds.has(ws.id))
+    .map((ws: any) => ({
+      id: `ws:${ws.id}`,
+      title: workspaceDisplayName(ws) || ws.project_name || ws.id,
+      meta: ws.project_name || undefined,
+      group: '工作区',
+      badgeIcon: ChatDotRound,
+      badgeTone: 'chat',
+    }))
+})
+
+const sidebarCodingItems = computed<SidebarSessionItem[]>(() => {
+  const conversations = [...codingConversations.value].sort((a, b) => {
+    const ta = new Date(a.updated_at || a.created_at || 0).getTime()
+    const tb = new Date(b.updated_at || b.created_at || 0).getTime()
+    return tb - ta
+  })
+  return [
+    ...conversations.map(conv => ({
+      id: `conv:${conv.id}`,
+      title: compactTitle(conv.title, `开发会话 #${conv.id}`),
+      meta: conv.workspace_id || undefined,
+      group: codingTimeGroup(conv.updated_at || conv.created_at),
+      badgeIcon: ChatDotRound,
+      badgeTone: 'chat',
+    })),
+    ...sidebarWorkspaceFallbackItems.value,
+  ]
+})
+
+const sidebarCodingActiveId = computed<string | null>(() => {
+  if (codingStore.conversationId) return `conv:${codingStore.conversationId}`
+  if (codingStore.workspace?.id) return `ws:${codingStore.workspace.id}`
+  return null
+})
+
+const activeCodingConversation = computed(() =>
+  codingConversations.value.find(conv => conv.id === codingStore.conversationId) || null,
 )
-const sidebarCodingActiveId = computed<string | null>(() => codingStore.workspace?.id || null)
+
+const activeCodingSessionTitle = computed(() => {
+  if (activeCodingConversation.value) {
+    return compactTitle(activeCodingConversation.value.title, `开发会话 #${activeCodingConversation.value.id}`)
+  }
+  if (codingStore.workspace) {
+    return workspaceDisplayName(codingStore.workspace) || codingStore.workspace.project_name || '开发会话'
+  }
+  return '新建开发会话'
+})
+
+const showCodingUnselected = computed(() =>
+  !isStreaming.value &&
+  streamMessages.value.length === 0 &&
+  !codingStore.workspace &&
+  !codingStore.conversationId,
+)
+
+async function loadCodingConversationOnly(conversationId: number) {
+  const messages = await codingApi.getMessages(conversationId)
+  codingStore.reset()
+  codingStore.conversationId = conversationId
+  setWebIdeAvailable()
+  ideUrl.value = null
+  pendingIdeUrl.value = null
+  ideLoaded.value = false
+  activeView.value = 'chat'
+  localStorage.removeItem('coding_last_workspace_id')
+  loadConversationHistory(messages as any, [])
+}
+
+function normalizeCreatedCodingConversation(conv: CodingConversation): CodingConversation {
+  const now = new Date().toISOString()
+  return {
+    ...conv,
+    title: conv.title || '新开发会话',
+    workspace_id: conv.workspace_id ?? null,
+    selected_llm_config_id: conv.selected_llm_config_id ?? selectedCodingModelOption.value?.id ?? null,
+    created_at: conv.created_at || now,
+    updated_at: conv.updated_at || now,
+  }
+}
+
+async function createCodingConversation() {
+  const created = normalizeCreatedCodingConversation(
+    await codingApi.createConversation(selectedCodingModelOption.value?.id ?? null),
+  )
+  codingConversations.value = [
+    created,
+    ...codingConversations.value.filter(conv => conv.id !== created.id),
+  ]
+  codingStore.reset()
+  codingStore.conversationId = created.id
+  persistedCodingModelValue.value = normalizeCodingModelValue(selectedCodingModelValue.value)
+  setWebIdeAvailable()
+  ideUrl.value = null
+  pendingIdeUrl.value = null
+  ideLoaded.value = false
+  streamMessages.value = []
+  activeView.value = 'chat'
+  localStorage.removeItem('coding_last_workspace_id')
+  router.replace({ path: '/coding', query: { conversation_id: String(created.id) } }).catch(() => {})
+}
 
 async function onSidebarCodingSelect(id: string | number) {
-  const wsId = String(id)
-  if (sidebarCodingActiveId.value === wsId) return
-  if (openingWsId.value) return
-  openingWsId.value = wsId
+  const itemId = String(id)
+  if (sidebarCodingActiveId.value === itemId || openingWsId.value) return
+  openingWsId.value = itemId
   try {
-    await openWorkspaceById(wsId)
+    if (itemId.startsWith('conv:')) {
+      const conversationId = Number(itemId.slice(5))
+      if (!Number.isFinite(conversationId) || conversationId <= 0) return
+      const conversation = codingConversations.value.find(conv => conv.id === conversationId)
+      let workspaceId = conversation?.workspace_id || null
+      if (!workspaceId) {
+        try {
+          const relation = await codingApi.getConversationWorkspace(conversationId)
+          workspaceId = relation.workspace_id
+        } catch {
+          workspaceId = null
+        }
+      }
+      if (workspaceId) {
+        await openWorkspaceById(workspaceId)
+        router.replace({ path: '/coding', query: { conversation_id: String(conversationId), workspace_id: workspaceId } }).catch(() => {})
+      } else {
+        await loadCodingConversationOnly(conversationId)
+        router.replace({ path: '/coding', query: { conversation_id: String(conversationId) } }).catch(() => {})
+      }
+      return
+    }
+
+    if (itemId.startsWith('ws:')) {
+      const wsId = itemId.slice(3)
+      await openWorkspaceById(wsId)
+      router.replace({ path: '/coding', query: { workspace_id: wsId } }).catch(() => {})
+    }
   } finally {
     openingWsId.value = null
   }
 }
+
 function onSidebarCodingCreate() {
-  startNewWorkspace()
+  createCodingConversation().catch((e: any) => {
+    ElMessage.error(e?.response?.data?.detail || e?.message || '新建会话失败')
+  })
 }
 
-// 2026-05-19 image #25: 新建组件 dropdown 加"导入已有 zip"选项 — 用户可上传
-// form-component-upload-src.zip 等已建好的自开发包，进入 Coding 让 AI 二次调整。
-const codingNewOptions = [
-  { command: 'new',        title: '+ 新建组件',     hint: '基于 CLI 模板生成空脚手架' },
-  { command: 'import-zip', title: '📦 导入已有 zip', hint: '上传现有自开发包 → AI 二次调整' },
-]
-
-const importZipInputRef = ref<HTMLInputElement | null>(null)
-const isImportingZip = ref(false)
-
-function onSidebarCodingCreateWithOption(command: string) {
-  if (command === 'new') {
-    startNewWorkspace()
-  } else if (command === 'import-zip') {
-    importZipInputRef.value?.click()
-  }
-}
-
-async function handleImportZipChange(e: Event) {
-  const target = e.target as HTMLInputElement
-  const file = target.files?.[0]
-  target.value = ''
-  if (!file) return
-  if (!file.name.toLowerCase().endsWith('.zip')) {
-    ElMessage.error('请选择 .zip 文件')
-    return
-  }
-  if (file.size > 30 * 1024 * 1024) {
-    ElMessage.error(`zip 太大 (${(file.size / 1024 / 1024).toFixed(1)}MB > 30MB)`)
-    return
-  }
-  isImportingZip.value = true
-  try {
-    const ws: any = await codingApi.importZipToWorkspace(file)
-    ElMessage.success(`已导入「${ws.display_name || ws.project_name}」(${ws.imported_file_count || 0} 文件)`)
-    // 刷新左侧列表 + 选中新 ws
-    try {
-      const fresh = await codingApi.listWorkspaces()
-      allWorkspaces.value = fresh as any
-    } catch { /* swallow */ }
-    if (ws.id) {
-      onSidebarCodingSelect(ws.id)
-    }
-  } catch (err: any) {
-    ElMessage.error(err?.message || err?.response?.data?.detail || '导入失败')
-  } finally {
-    isImportingZip.value = false
-  }
-}
 async function onSidebarCodingDelete(s: SidebarSessionItem) {
-  const target = (existingWorkspaces.value || []).find((w: any) => w.id === s.id)
+  const itemId = String(s.id)
+  let workspaceId = itemId.startsWith('ws:') ? itemId.slice(3) : ''
+  if (itemId.startsWith('conv:')) {
+    const conversationId = Number(itemId.slice(5))
+    workspaceId = codingConversations.value.find(conv => conv.id === conversationId)?.workspace_id || ''
+  }
+  const target = (existingWorkspaces.value || []).find((w: any) => w.id === workspaceId)
   if (!target) return
   try {
-    await ElMessageBox.confirm(`删除组件「${s.title}」吗？该工作区会一并清理。`, '删除组件', {
+    await ElMessageBox.confirm(`删除会话「${s.title}」吗？关联工作区会一并清理。`, '删除会话', {
       confirmButtonText: '删除',
       cancelButtonText: '取消',
       type: 'warning',
@@ -1135,6 +988,7 @@ async function onSidebarCodingDelete(s: SidebarSessionItem) {
     if (codingStore.workspace?.id === target.id) {
       startNewWorkspace()
     }
+    await refreshCodingConversations()
     ElMessage.success('已删除')
   } catch {
     /* user cancelled */
@@ -1198,138 +1052,41 @@ watch(() => embeddedAppId.value, () => {
 const attachedFile = ref<File | null>(null)
 const attachedPreviewUrl = ref<string | null>(null)
 const isUploading = ref(false)
-const fileInputRef = ref<HTMLInputElement>()
-const chatFileInputRef = ref<HTMLInputElement>()
+const codingComposerAttachments = computed<UnifiedChatAttachment[]>(() => {
+  if (!attachedFile.value) return []
+  return [{
+    id: 'attached',
+    name: attachedFile.value.name,
+    previewUrl: attachedPreviewUrl.value,
+    kind: attachedPreviewUrl.value ? 'image' : 'file',
+  }]
+})
 
 // ============ Env Picker ============
 const showEnvPicker = ref(false)
 const platformEnvs = ref<PlatformEnv[]>([])
 
 
-// ============ Upload to Platform ============
-const uploadingWsId = ref<string | null>(null)
-const showUploadEnvModal = ref(false)
-const pendingUploadWs = ref<WorkspaceInfo | null>(null)
-
-function canUploadWorkspace(ws: WorkspaceInfo) {
-  return ws.permissions?.upload_to_platform !== false
-}
-
 function canDeleteWorkspace(ws: WorkspaceInfo) {
   return ws.permissions?.delete !== false
 }
 
-async function uploadWorkspaceCard(ws: WorkspaceInfo) {
-  uploadingWsId.value = ws.id
-
-  let envs: Awaited<ReturnType<typeof platformEnvApi.list>>
-  try {
-    envs = await platformEnvApi.list()
-  } catch {
-    ElMessage.error('获取平台环境失败')
-    uploadingWsId.value = null
-    return
-  }
-  const connectedEnvs = envs.filter(e => e.status === 'connected')
-
-  if (connectedEnvs.length === 0) {
-    ElMessage.warning('没有可用的平台环境，请先在环境管理中配置并连接平台')
-    uploadingWsId.value = null
-    return
-  }
-
-  if (connectedEnvs.length === 1) {
-    const env = connectedEnvs[0]
-    if (env) {
-      await doUploadWorkspace(ws, env.id)
-    }
-  } else {
-    uploadingWsId.value = null
-    pendingUploadWs.value = ws
-    showUploadEnvModal.value = true
-  }
-}
-
-async function doUploadWorkspace(ws: WorkspaceInfo, envId: number) {
-  uploadingWsId.value = ws.id
-  try {
-    await codingApi.uploadToPlatform(ws.id, envId)
-    ElMessage.success('上传成功')
-  } catch (e: any) {
-    ElMessage.error(e?.message || '上传失败')
-  } finally {
-    uploadingWsId.value = null
-  }
-}
-
-function onUploadEnvSelected(envId: number) {
-  if (pendingUploadWs.value) {
-    doUploadWorkspace(pendingUploadWs.value, envId)
-    pendingUploadWs.value = null
-  }
-}
-
 // ============ Scene Categories & Suggestions ============
-const sceneCategories = [
-  { key: 'component-pc', icon: '\uD83E\uDDE9', label: 'PC\u7EC4\u4EF6' },
-  { key: 'page-pc', icon: '\uD83D\uDDA5\uFE0F', label: 'PC\u9875\u9762' },
-  { key: 'component-mobile', icon: '\uD83D\uDCF1', label: 'Mobile\u7EC4\u4EF6' },
-  { key: 'page-mobile', icon: '\uD83D\uDCF1', label: 'Mobile\u9875\u9762' },
-  { key: 'backend', icon: '\u2699\uFE0F', label: '\u540E\u7AEF\u63A5\u53E3' },
-]
-
 const sceneSuggestions: Record<string, string[]> = {
-  'component-pc': [
-    '开发一个头像上传组件，支持裁剪和预览',
-    '实现一个日期范围选择器组件',
-    '做一个评分组件，支持半星和自定义颜色',
-    '创建一个图表分析组件，支持柱状图和饼图',
-  ],
-  'page-pc': [
-    '做一个项目进度甘特图页面，复用低代码任务表单服务',
-    '做一个数据查询表格页面，带搜索和分页',
-    '开发一个供应商管理弹窗选择页面',
-    '创建一个项目分析图表页面，包含统计卡片和趋势图',
-  ],
-  'component-mobile': [
-    '开发一个移动端签名板组件',
-    '做一个移动端图片选择上传组件',
-    '实现一个移动端级联选择器组件',
-    '创建一个移动端评分组件',
-  ],
-  'page-mobile': [
-    '做一个移动端数据查询列表页面',
-    '开发一个移动端审批详情页面',
-    '创建一个移动端任务看板页面',
-    '做一个移动端个人信息编辑页面',
-  ],
-  backend: [
-    '开发一个自定义数据查询接口',
-    '做一个批量导入的后端接口',
-    '创建一个报表统计的后端API',
+  auto: [
+    '做一个质量整改看板页面，按责任部门、状态和超期风险筛选',
+    '开发一个供应商月度评分接口，返回排名、扣分项和趋势',
+    '给设备台账加一个批量导入脚本，支持校验重复编号',
+    '做一个表单里的拍照上传扩展，支持压缩、预览和必填校验',
   ],
 }
 
-const activeSceneCategory = ref('component-pc')
+const activeSceneCategory = ref('auto')
 
-// Workspace-first 重设新增的派生状态
-const activeSceneCategoryLabel = computed(() =>
-  sceneCategories.find(c => c.key === activeSceneCategory.value)?.label || '组件'
-)
-const activeSceneCategoryIcon = computed(() =>
-  sceneCategories.find(c => c.key === activeSceneCategory.value)?.icon || '🧩'
-)
-const topSuggestions = computed(() =>
-  (sceneSuggestions[activeSceneCategory.value] || []).slice(0, 4)
-)
 const pendingSceneCategory = ref<string | null>(null)
 
 const sceneCategoryToProjectType: Record<string, string> = {
-  'component-pc': 'form-component',
-  'page-pc': 'menu-page',
-  'component-mobile': 'mobile-component',
-  'page-mobile': 'mobile-page',
-  backend: 'backend-api',
+  auto: '',
 }
 
 const AI_BUILDER_PENDING_CODING_KEY = 'ai_builder_pending_coding'
@@ -1389,6 +1146,7 @@ onMounted(async () => {
     const [workspaces] = await Promise.all([
       codingApi.listWorkspaces(),
       loadCodingModelOptions(),
+      refreshCodingConversations(),
     ])
     allWorkspaces.value = workspaces
   } catch (e) {
@@ -1399,8 +1157,13 @@ onMounted(async () => {
   if (wsId) {
     await openWorkspaceById(wsId)
   } else {
-    selectedCodingModelValue.value = normalizeCodingModelValue(selectedCodingModelValue.value)
-    await maybeConsumeAiBuilderDispatch()
+    const conversationId = Number(route.query.conversation_id)
+    if (Number.isFinite(conversationId) && conversationId > 0) {
+      await loadCodingConversationOnly(conversationId)
+    } else {
+      selectedCodingModelValue.value = normalizeCodingModelValue(selectedCodingModelValue.value)
+      await maybeConsumeAiBuilderDispatch()
+    }
   }
 })
 
@@ -1409,26 +1172,6 @@ onUnmounted(() => {
 })
 
 // ============ Workspace Operations ============
-
-async function openExistingWorkspace(ws: WorkspaceInfo) {
-  if (openingWsId.value === ws.id) return  // 防止重复点击
-  openingWsId.value = ws.id
-  try {
-    await openWorkspaceById(ws.id)
-  } finally {
-    openingWsId.value = null
-  }
-}
-
-async function openWorkspaceCatalogPage() {
-  await router.push({
-    path: '/workspace-catalog',
-    query: {
-      ...(embeddedProjectId.value ? { project_id: embeddedProjectId.value } : {}),
-      ...(embeddedAppId.value ? { app_id: embeddedAppId.value } : {}),
-    },
-  })
-}
 
 // 设置 IDE URL — 先销毁旧 iframe 再创建新的，避免 code-server session 缓存
 async function openWorkspaceById(wsId: string) {
@@ -1592,6 +1335,7 @@ function startNewWorkspace() {
   streamMessages.value = []
   activeView.value = 'chat'
   localStorage.removeItem('coding_last_workspace_id')
+  router.replace({ path: '/coding' }).catch(() => {})
 }
 
 async function deleteWorkspace(ws: WorkspaceInfo) {
@@ -1640,24 +1384,9 @@ async function deleteCurrentWorkspace() {
 
 // ============ Attachment Handling ============
 
-function handlePaste(event: ClipboardEvent) {
-  const items = event.clipboardData?.items
-  if (!items) return
-  for (const item of items) {
-    if (item.type.startsWith('image/')) {
-      event.preventDefault()
-      const file = item.getAsFile()
-      if (file) setAttachment(file)
-      return
-    }
-  }
-}
-
-function handleFileSelect(event: Event) {
-  const input = event.target as HTMLInputElement
-  const file = input.files?.[0]
+function handleComposerFiles(files: File[]) {
+  const file = files[0]
   if (file) setAttachment(file)
-  input.value = ''
 }
 
 function setAttachment(file: File) {
@@ -1678,13 +1407,13 @@ function removeAttachment() {
 }
 
 // ============ Send Message / Create Workspace ============
-// SSE handlers + upload + build request + consume SSE + load IDE URL + sendMessage / sendSuggestion
+// SSE handlers + upload + build request + consume SSE + load IDE URL + sendMessage
 // 全部抽到 useCodingPipeline composable
-const { sendMessage, sendSuggestion } = useCodingPipeline({
+const { sendMessage } = useCodingPipeline({
   model: { codingModelOptions, codingModelLoading, updatingCodingModel, selectedCodingModelValue, persistedCodingModelValue, codingModelPopoverVisible, selectedCodingModelOption, codingModelHint, codingModelSummary, toCodingModelValue, normalizeCodingModelValue, applyCodingModelSelection, loadCodingModelOptions, handleCodingModelChange, selectCodingModel } as any,
   stream: { streamMessages, isStreaming, streamContainerRef, scrollStreamToBottom, addStreamMsg, appendToLastThinking, appendToLastCommand, completeStepMsg, addStepRunningMsg, restoreReplayStreamMessages } as any,
   ide: { ideUrl, ideLoaded, ideLoadError, ideLoadingText, pendingIdeUrl, activeView, setIdeUrl, onIdeFrameLoad, onIdeFrameError, retryIdeLoad, openPendingIde } as any,
-  workspace: { allWorkspaces, isDownloading, embeddedAppId, existingWorkspaces, workspaceShowcaseItems, workspaceDisplayName, workspaceCodeName, workspaceTooltip, workspaceTypeLabel, downloadWorkspaceArtifact } as any,
+  workspace: { allWorkspaces, isDownloading, embeddedAppId, existingWorkspaces, workspaceDisplayName } as any,
   activeSceneCategory,
   pendingSceneCategory,
   sceneCategoryToProjectType,
@@ -1745,6 +1474,20 @@ watch(() => themeStore.mode, async (mode) => {
   } catch {
     // 主题同步失败不影响当前开发会话。
   }
+})
+
+watch(() => codingStore.conversationId, (id) => {
+  if (!id) return
+  window.setTimeout(() => {
+    refreshCodingConversations()
+  }, 300)
+})
+
+watch(() => codingStore.workspace?.id, (id) => {
+  if (!id) return
+  window.setTimeout(() => {
+    refreshCodingConversations()
+  }, 300)
 })
 
 watch(() => route.path, () => {
@@ -2370,23 +2113,18 @@ watch(() => route.path, () => {
   flex: 1;
   min-height: 0;
   overflow-y: auto;
-  background:
-    radial-gradient(circle at 50% 8%, rgba(97, 112, 238, 0.12), transparent 30%),
-    linear-gradient(rgba(97, 112, 238, 0.045) 1px, transparent 1px),
-    linear-gradient(90deg, rgba(97, 112, 238, 0.045) 1px, transparent 1px),
-    #f7f9fd;
-  background-size: auto, 26px 26px, 26px 26px, auto;
+  background: var(--t-bg-base, #f7f9fd);
 }
 
 .welcome-inner {
-  width: min(100%, 1180px);
+  width: min(100%, 900px);
   min-height: 100%;
   margin: 0 auto;
-  padding: 48px 28px 40px;
+  padding: 72px 32px 56px;
   display: flex;
   flex-direction: column;
-  justify-content: center;
-  gap: 26px;
+  justify-content: flex-start;
+  gap: 18px;
 }
 
 /* ============ Welcome Input Area ============ */
@@ -2792,7 +2530,7 @@ watch(() => route.path, () => {
 
 /* ============ Quick Composer (Workspace-first 重设) ============ */
 .qc-section {
-  width: min(100%, 860px);
+  width: min(100%, 760px);
   margin: 0 auto;
   display: flex;
   flex-direction: column;
@@ -2807,33 +2545,33 @@ watch(() => route.path, () => {
 .coding-command-copy {
   display: flex;
   flex-direction: column;
-  align-items: center;
+  align-items: flex-start;
   gap: 8px;
-  margin-bottom: 2px;
-  text-align: center;
+  margin-bottom: 6px;
+  text-align: left;
 }
 
 .coding-command-kicker {
   margin: 0;
   color: #6f7ff2;
-  font-size: 12px;
-  font-weight: 800;
-  letter-spacing: 0.13em;
-  text-transform: uppercase;
+  font-size: 13px;
+  font-weight: 700;
+  letter-spacing: 0;
+  text-transform: none;
 }
 
 .coding-command-title {
   margin: 0;
   color: var(--t-text-primary);
-  font-size: clamp(30px, 3.2vw, 42px);
-  line-height: 1.12;
-  font-weight: 760;
+  font-size: 26px;
+  line-height: 1.25;
+  font-weight: 720;
   letter-spacing: 0;
 }
 
 .coding-command-subtitle {
   margin: 0;
-  max-width: 560px;
+  max-width: 680px;
   color: var(--t-text-secondary);
   font-size: 13px;
   line-height: 1.65;
@@ -2845,6 +2583,7 @@ watch(() => route.path, () => {
   border-radius: 16px;
   background: #fff;
   overflow: hidden;
+  padding: 0;
   box-shadow: 0 10px 28px rgba(15, 23, 42, 0.05);
   transition: border-color 0.18s ease, box-shadow 0.18s ease;
 }
@@ -2852,6 +2591,54 @@ watch(() => route.path, () => {
 .qc-shell:focus-within {
   border-color: #c7d2fe;
   box-shadow: 0 0 0 3px rgba(111, 127, 242, 0.10);
+}
+
+.qc-shell :deep(.ucc) {
+  display: flex;
+}
+
+.qc-shell :deep(.ucc-box) {
+  border: 0;
+  border-radius: 0;
+  background: #fff;
+}
+
+.qc-shell :deep(.ucc-input) {
+  min-height: 58px;
+  padding: 14px 16px 2px;
+  font-size: 14px;
+  line-height: 1.55;
+}
+
+.qc-shell :deep(.ucc-input::placeholder) {
+  color: #73819a;
+}
+
+.qc-shell :deep(.ucc-footer) {
+  min-height: 42px;
+  padding: 0 12px 10px;
+}
+
+.qc-shell :deep(.ucc-attach) {
+  min-height: 36px;
+  padding: 0 13px;
+  border-radius: 8px;
+  font-size: 13.5px;
+  color: var(--text-2, #52617a);
+}
+
+.qc-shell :deep(.ucc-hint) {
+  font-size: 12.5px;
+}
+
+.qc-shell :deep(.ucc-send) {
+  width: 48px;
+  height: auto;
+  min-height: 48px;
+  border-radius: 0;
+  border-top: 0;
+  border-right: 0;
+  border-bottom: 0;
 }
 
 .qc-row {
@@ -3116,16 +2903,37 @@ watch(() => route.path, () => {
 
 @media (max-width: 760px) {
   .welcome-inner {
-    padding: 30px 18px 28px;
+    padding: 36px 18px 32px;
     gap: 20px;
   }
 
   .coding-command-title {
-    font-size: 30px;
+    font-size: 24px;
   }
 
   .qc-section {
     width: 100%;
+  }
+
+  .qc-shell {
+    padding: 0;
+    border-radius: 14px;
+  }
+
+  .qc-shell :deep(.ucc-input) {
+    min-height: 68px;
+    padding: 14px 14px 2px;
+    font-size: 15px;
+  }
+
+  .qc-shell :deep(.ucc-footer) {
+    padding-right: 12px;
+  }
+
+  .qc-shell :deep(.ucc-send) {
+    width: 46px;
+    min-height: 46px;
+    border-radius: 0;
   }
 
   .qc-row {
@@ -3419,6 +3227,125 @@ watch(() => route.path, () => {
   display: flex;
   flex-direction: column;
   overflow: hidden;
+  background: var(--t-bg-base, #f7f9fd);
+}
+
+.coding-unselected-pane {
+  flex: 1;
+  min-width: 0;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  background: var(--t-bg-base, #f7f9fd);
+}
+
+.coding-unselected-welcome {
+  flex: 1;
+  min-height: 0;
+  display: grid;
+  place-content: center;
+  justify-items: center;
+  gap: 10px;
+  padding: 32px;
+  text-align: center;
+  color: var(--t-text-secondary);
+}
+
+.coding-unselected-welcome h2 {
+  margin: 0;
+  color: var(--t-text-primary);
+  font-size: 22px;
+  line-height: 1.25;
+  font-weight: 720;
+}
+
+.coding-unselected-welcome p {
+  max-width: 560px;
+  margin: 0;
+  color: var(--t-text-muted);
+  font-size: 13px;
+  line-height: 1.7;
+}
+
+.coding-session-header {
+  flex-shrink: 0;
+  min-height: 58px;
+  padding: 10px 22px;
+  border-bottom: 1px solid var(--t-border-subtle, rgba(116, 128, 171, 0.16));
+  background: var(--t-bg-elevated, #fff);
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+}
+
+.coding-session-title-block {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.coding-session-kicker {
+  color: #6f7ff2;
+  font-size: 11px;
+  font-weight: 700;
+  line-height: 1.2;
+}
+
+.coding-session-title {
+  max-width: 520px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--t-text-primary);
+  font-size: 15px;
+  line-height: 1.3;
+}
+
+.coding-session-ide-btn {
+  height: 32px;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 0 12px;
+  border: 1px solid var(--t-border-subtle, rgba(116, 128, 171, 0.18));
+  border-radius: 8px;
+  background: var(--t-bg-base, #f8fafc);
+  color: var(--t-text-secondary);
+  font-size: 12px;
+  font-weight: 650;
+  cursor: pointer;
+}
+
+.coding-session-ide-btn:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+.coding-empty-thread {
+  flex: 1;
+  min-height: 0;
+  display: grid;
+  place-content: center;
+  gap: 6px;
+  text-align: center;
+  color: var(--t-text-muted);
+}
+
+.coding-empty-title {
+  color: var(--t-text-secondary);
+  font-size: 14px;
+  font-weight: 650;
+}
+
+.coding-empty-sub {
+  font-size: 12.5px;
+}
+
+.stream-pane :deep(.agent-conversation) {
+  flex: 1;
+  min-height: 0;
 }
 
 .stream-messages {
@@ -4419,6 +4346,7 @@ html[data-theme="dark"] .coding-page,
 html[data-theme="dark"] .coding-body,
 html[data-theme="dark"] .main-content,
 html[data-theme="dark"] .welcome-pane,
+html[data-theme="dark"] .coding-unselected-pane,
 html[data-theme="dark"] .stream-pane,
 html[data-theme="dark"] .stream-messages,
 html[data-theme="dark"] .ide-loading-overlay {
@@ -4427,6 +4355,7 @@ html[data-theme="dark"] .ide-loading-overlay {
 }
 
 html[data-theme="dark"] .coding-header,
+html[data-theme="dark"] .coding-session-header,
 html[data-theme="dark"] .content-view-toggle-bar,
 html[data-theme="dark"] .workspace-sidebar,
 html[data-theme="dark"] .embedded-panel,

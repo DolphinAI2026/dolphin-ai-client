@@ -137,40 +137,21 @@
           <span class="queue-text">{{ pendingQueue.length }} 条消息排队中 · 当前回复结束后自动发送</span>
           <button class="queue-clear" @click="pendingQueue = []" title="清空队列">×</button>
         </div>
-        <div class="input-card">
-          <div class="input-attaches" v-if="pendingFiles.length">
-            <span v-for="(f, i) in pendingFiles" :key="i" class="input-chip">
-              📎 {{ f.name }}
-              <button class="x" @click="pendingFiles.splice(i, 1)">×</button>
-            </span>
-          </div>
-          <div class="input-row">
-            <button class="icon-btn" title="上传附件" @click="fileInputRef?.click()">📎</button>
-            <input
-              ref="fileInputRef"
-              type="file"
-              multiple
-              hidden
-              @change="onFilesSelected"
-            />
-            <textarea
-              v-model="inputText"
-              class="textarea"
-              :placeholder="isSending ? '生成中 · 可继续输入，发送将进入队列等待' : '描述需求、追问或要求修改设计文档'"
-              rows="1"
-              ref="textareaRef"
-              @keydown.enter.exact.prevent="onSend"
-              @keydown.enter.shift.exact="inputText += '\n'"
-              @input="autosizeTextarea"
-            ></textarea>
-            <button v-if="isSending" class="send-btn stop" @click="onAbort" title="中断">
-              <svg width="11" height="11" viewBox="0 0 11 11" fill="currentColor"><rect x="1" y="1" width="9" height="9" rx="1"/></svg>
-            </button>
-            <button v-else class="send-btn" :disabled="!canSend" @click="onSend" title="发送">
-              <svg width="14" height="14" viewBox="0 0 14 14" fill="none"><path d="M12 2L6 8M12 2l-4 10-1.5-4.5L2 6 12 2z" stroke="currentColor" stroke-width="1.4" stroke-linejoin="round"/></svg>
-            </button>
-          </div>
-          <div class="input-foot">
+        <UnifiedChatComposer
+          v-model="inputText"
+          :attachments="composerAttachments"
+          :sending="isSending"
+          :allow-send-while-sending="true"
+          :send-disabled="!inputText.trim() && pendingFiles.length === 0"
+          :multiple="true"
+          accept=".md,.markdown,.txt,.doc,.docx,.pdf,.xls,.xlsx,.csv,.json,.png,.jpg,.jpeg,.gif,.webp,.svg"
+          placeholder="输入需求，粘贴图片或点附件..."
+          @send="onSend"
+          @stop="onAbort"
+          @files-picked="onComposerFilesPicked"
+          @remove-attachment="removePendingFileByIndex"
+        >
+          <template #footer-left>
             <select
               v-model="selectedLlmId"
               class="model-select-inline"
@@ -179,19 +160,14 @@
               <option :value="null">默认模型</option>
               <option v-for="m in llmOptions" :key="m.id" :value="m.id">{{ m.config_name }}</option>
             </select>
-            <!-- 2026-05-21 UI audit Fix 12: 字号 11.5 → 12.5 / faint → mute / 文案更明确 + ⓘ tooltip -->
-            <span
-              class="hint hint-info"
-              :title="messages.length === 0 ? '首条消息会使用当前选择的模型；切换模型只影响新发送的消息，不会回放历史对话' : '切换模型只影响下一条消息，之前的回复不会被替换'"
-            >
-              <span class="hint-info-icon" aria-hidden="true">ⓘ</span>
-              {{ messages.length === 0 ? '首条消息将使用当前模型' : '切换模型只影响下一条消息' }}
-            </span>
+          </template>
+          <template #footer-right>
+            <span class="hint">{{ isSending ? 'Enter 排队发送 · Shift+Enter 换行' : 'Enter 发送 · Shift+Enter 换行' }}</span>
             <!-- 等用户回答 (ask_clarifying_question) 时 agent 没在思考，把计时器藏起来；
                  否则显示 "AI 思考中 Ns" — 跟 typing 指示器同条件保持一致 -->
             <span v-if="durationSec > 0 && !lastEventIsAsk" class="hint timer">· AI 思考中 {{ durationSec }}s</span>
-          </div>
-        </div>
+          </template>
+        </UnifiedChatComposer>
       </div>
     </main>
 
@@ -309,6 +285,9 @@ import AgentConversation from '@/components/common/AgentConversation.vue'
 import ChooseAppTargetDialog from '@/components/ChooseAppTargetDialog.vue'
 import type { AgentMessage } from '@/components/common/agent-conversation/types'
 import { ElMessage, ElMessageBox } from 'element-plus'
+import { isImageFile } from '@/utils/pasteImages'
+import UnifiedChatComposer from '@/components/common/UnifiedChatComposer.vue'
+import type { UnifiedChatAttachment } from '@/components/common/chatComposer'
 // chat / cowork mode 已合并 — ChatDotRound 用作 session 列表前导 icon（对话界面风格）
 import { ChatDotRound } from '@element-plus/icons-vue'
 import { applicationApi } from '@/api/application'
@@ -384,9 +363,14 @@ const selectedLlmId = ref<number | null>(null)
 
 const inputText = ref('')
 const pendingFiles = ref<File[]>([])
-const fileInputRef = ref<HTMLInputElement>()
-const textareaRef = ref<HTMLTextAreaElement>()
 const messagesRef = ref<HTMLElement>()
+const composerAttachments = computed<UnifiedChatAttachment[]>(() =>
+  pendingFiles.value.map((file, index) => ({
+    id: index,
+    name: file.name,
+    kind: isImageFile(file) ? 'image' : 'file',
+  })),
+)
 
 const isSending = ref(false)
 const currentAbort = ref<AbortController | null>(null)
@@ -736,14 +720,12 @@ const appReadyInfo = computed<AppReadyInfo | null>(() => {
 function openAppReady(info: AppReadyInfo) {
   // 优先用 agent 工具返回的 view url（绝对路径或 /xxx 相对路径）
   if (info.appViewUrl) {
-    // 相对路径走 vue-router；绝对路径直接 window.location 跳
-    if (/^https?:\/\//i.test(info.appViewUrl)) {
-      window.location.assign(info.appViewUrl)
+    const localRoute = toLocalBuilderRoute(info.appViewUrl)
+    if (localRoute) {
+      router.push(localRoute)
       return
     }
-    // /ai-builder/chat?app_id=N → 剥 /ai-builder 前缀让 vue-router 接管（base 已含）
-    const stripped = info.appViewUrl.replace(/^\/ai-builder/, '')
-    router.push(stripped)
+    window.location.assign(info.appViewUrl)
     return
   }
   // fallback：用 app_id 跳 ChatPage
@@ -752,6 +734,22 @@ function openAppReady(info: AppReadyInfo) {
     return
   }
   ElMessage.warning('找不到应用入口')
+}
+
+function toLocalBuilderRoute(rawUrl: string): string | null {
+  if (!rawUrl) return null
+  try {
+    const parsed = new URL(rawUrl, window.location.origin)
+    let path = parsed.pathname || '/'
+    if (path.startsWith('/ai-builder/')) path = path.slice('/ai-builder'.length)
+    if (path === '/ai-builder') path = '/'
+    const isBuilderInternal = path === '/chat' || path.startsWith('/chat/') || path === '/ai-chat' || path.startsWith('/ai-chat/')
+    if (!isBuilderInternal && parsed.origin !== window.location.origin) return null
+    return `${path}${parsed.search}${parsed.hash}`
+  } catch {
+    const normalized = rawUrl.startsWith('/') ? rawUrl : `/${rawUrl}`
+    return normalized.replace(/^\/ai-builder(?=\/|$)/, '') || '/'
+  }
 }
 
 // ─────────── 2026-05-28 一键到底：草稿建好后自动触发服务端真生成 ───────────
@@ -1272,11 +1270,12 @@ async function onChangeLlm() {
   currentSession.value.selected_llm_config_id = updated.selected_llm_config_id
 }
 
-function onFilesSelected(e: Event) {
-  const input = e.target as HTMLInputElement
-  if (!input.files) return
-  pendingFiles.value.push(...Array.from(input.files))
-  input.value = ''
+function onComposerFilesPicked(files: File[]) {
+  pendingFiles.value.push(...files)
+}
+
+function removePendingFileByIndex(_: UnifiedChatAttachment, index: number) {
+  pendingFiles.value.splice(index, 1)
 }
 
 // 对话界面风格：流式中可继续输入，按 Enter 进入队列等待
@@ -1767,13 +1766,6 @@ function downloadArtifact() {
   a.download = activeArtifactName.value
   a.click()
   URL.revokeObjectURL(url)
-}
-
-function autosizeTextarea() {
-  const el = textareaRef.value
-  if (!el) return
-  el.style.height = 'auto'
-  el.style.height = Math.min(el.scrollHeight, 160) + 'px'
 }
 
 function scrollBottom() {

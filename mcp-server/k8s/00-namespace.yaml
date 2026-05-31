@@ -1,0 +1,7 @@
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: apaas-mcp-server
+  labels:
+    app.kubernetes.io/part-of: apaas-builder-mcp-server
+    owner: mars

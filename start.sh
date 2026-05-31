@@ -5,9 +5,11 @@ set -euo pipefail
 ROOT_DIR="$(cd "$(dirname "$0")" && pwd)"
 BACKEND_DIR="$ROOT_DIR/backend"
 FRONTEND_DIR="$ROOT_DIR/frontend"
+ADMIN_DIR="$ROOT_DIR/admin-spa"
 RUN_DIR="$ROOT_DIR/.run"
 BACKEND_LOG="$RUN_DIR/backend.log"
 FRONTEND_LOG="$RUN_DIR/frontend.log"
+ADMIN_BUILD_LOG="$RUN_DIR/admin-spa-build.log"
 CODE_SERVER_LOG="$RUN_DIR/code-server.log"
 BACKEND_PID_FILE="$RUN_DIR/backend.pid"
 FRONTEND_PID_FILE="$RUN_DIR/frontend.pid"
@@ -137,6 +139,20 @@ ensure_backend_env() {
     if [ ! -d "$FRONTEND_DIR/node_modules" ]; then
         echo "安装前端依赖..."
         (cd "$FRONTEND_DIR" && npm install)
+    fi
+
+    if [ ! -d "$ADMIN_DIR/node_modules" ]; then
+        echo "安装平台管理前端依赖..."
+        (cd "$ADMIN_DIR" && npm install)
+    fi
+}
+
+build_admin_spa() {
+    echo "构建平台管理前端静态资源..."
+    if ! (cd "$ADMIN_DIR" && npm run build >"$ADMIN_BUILD_LOG" 2>&1); then
+        echo "平台管理前端构建失败，日志见: $ADMIN_BUILD_LOG" >&2
+        tail -n 80 "$ADMIN_BUILD_LOG" || true
+        exit 1
     fi
 }
 
@@ -279,6 +295,7 @@ start_code_server() {
 echo "启动 aPaaS Builder AI..."
 ensure_mysql
 ensure_backend_env
+build_admin_spa
 start_code_server
 start_backend
 start_frontend
@@ -286,6 +303,7 @@ start_frontend
 echo
 echo "服务已就绪："
 echo "  前端: http://127.0.0.1:5173/ai-builder/"
+echo "  平台管理: http://127.0.0.1:5173/admin/mcp"
 echo "  后端: http://127.0.0.1:8000"
 echo "  Web IDE: $CODE_SERVER_URL"
 echo "  API文档: http://127.0.0.1:8000/docs"

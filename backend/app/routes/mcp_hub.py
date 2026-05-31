@@ -25,19 +25,17 @@ from app.routes.admin_mcp import _V2_TOOL_PATHS, _fetch_tools_from
 logger = logging.getLogger(__name__)
 
 
-# 2026-05-19: 本机 MCP server (mcp_server.py 80 工具) 作为第 1 条 server 暴露给
-# /mcp 管理页。之前 mcp_hub 只 discover v2 cluster 路径，本机 dev 8000 端口实际
-# 跑的真 MCP 完全没体现 — 页面显示 2 个 placeholder 0 工具，dev 体验崩。
+# 独立 MCP server 作为第 1 条 server 暴露给 /mcp 管理页。
 _LOCAL_SERVER_META: dict = {
-    "id": "local-mcp-server",
-    "name": "本地 MCP Server (dev)",
-    "code": "local-mcp-server",
+    "id": "standalone-mcp-server",
+    "name": "独立 MCP Server",
+    "code": "standalone-mcp-server",
     "transport": "http",
-    "endpoint": "/api/mcp/mcp",
+    "endpoint": "http://127.0.0.1:8004/api/mcp/mcp",
     "version": "local-dev",
     "official": False,
-    "tags": ["本地", "dev"],
-    "desc": "ai-builder backend 内嵌 FastMCP — ai_chat / cowork agent 实际在调的工具集（80 个）。",
+    "tags": ["本地", "独立服务"],
+    "desc": "mcp-server/backend 独立 FastMCP — ai_chat / cowork agent 默认调用的工具集。",
 }
 
 
@@ -203,8 +201,8 @@ async def list_servers(
     connected = 0
     errors = 0
 
-    # 2026-05-19: 本机 MCP server 永远是 servers[0]，保留 v2 placeholder 在后
-    # 作为 catalog（v2 cluster 不可达时显示 disabled，可达时显示真工具数）。
+    # 独立 MCP server 永远是 servers[0]，保留 v2 placeholder 在后作为 catalog
+    # （v2 cluster 不可达时显示 disabled，可达时显示真工具数）。
     local_server = await _build_local_server()
     servers.append(local_server)
     if local_server.status == "connected":

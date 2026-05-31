@@ -243,6 +243,16 @@ tools:
     agents: [builder]
     category: doc_pipeline
     description: "拿 aPaaS Builder 设计文档官方标准（章节 / 表头 / 命名规则 / 字段类型）。"
+  get_apaas_form_detail:
+    sections: [ui, data]
+    agents: [builder, coding, config]
+    category: introspection
+    description: "拿表单详情页完整配置：关联模型、字段定义、已使用组件和表单元信息。"
+  get_apaas_process_detail:
+    sections: [logic]
+    agents: [builder, config]
+    category: process
+    description: "拉取 aPaaS 平台已有流程详情，并转换为前端 ProcessDesigner 可渲染的节点和连线。"
   get_application:
     sections: [global]
     agents: [builder, coding]
@@ -323,6 +333,11 @@ tools:
     agents: [builder, coding, config]
     category: introspection
     description: "列指定应用下所有数据模型 + 字段定义。"
+  list_apaas_app_processes:
+    sections: [logic]
+    agents: [builder, config]
+    category: process
+    description: "列指定 aPaaS 应用的全部流程摘要，含流程、表单、菜单绑定和节点/连线数量。"
   list_apaas_app_roles:
     sections: [permission]
     agents: [builder, coding, config]
@@ -488,6 +503,11 @@ tools:
     agents: [config]
     category: configure
     description: "改菜单的父分组 — 把现有菜单移到某个 group 下, 或移出回根级."
+  set_role_resource_permission:
+    sections: [permission]
+    agents: [config]
+    category: configure
+    description: "修改单个角色 × 资源权限单元格；当前支持表单权限写回。"
   submit_design_doc:
     sections: [global]
     agents: [builder]

@@ -1,0 +1,333 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Browser Preview</title>
+<style>
+* { margin: 0; padding: 0; box-sizing: border-box; }
+body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; background: #1e1e1e; color: #ccc; overflow: hidden; height: 100vh; display: flex; flex-direction: column; }
+
+/* Toolbar */
+.toolbar { display: flex; align-items: center; gap: 4px; padding: 4px 8px; background: #2d2d2d; border-bottom: 1px solid #404040; flex-shrink: 0; height: 36px; }
+.toolbar button { background: #3c3c3c; border: 1px solid #555; color: #ccc; padding: 2px 8px; border-radius: 3px; cursor: pointer; font-size: 14px; height: 26px; line-height: 22px; }
+.toolbar button:hover { background: #505050; }
+.toolbar button:active { background: #606060; }
+.toolbar button.primary { background: #0e639c; border-color: #1177bb; color: #fff; }
+.toolbar button.primary:hover { background: #1177bb; }
+.toolbar button.danger { background: #a1260d; border-color: #c03; }
+.url-input { flex: 1; background: #3c3c3c; border: 1px solid #555; color: #ccc; padding: 2px 8px; border-radius: 3px; font-size: 12px; height: 26px; outline: none; }
+.url-input:focus { border-color: #007acc; }
+.status { font-size: 11px; color: #888; margin-left: 4px; white-space: nowrap; }
+.status.active { color: #4ec9b0; }
+.status.loading { color: #dcdcaa; }
+
+/* Browser viewport */
+.viewport { flex: 1; position: relative; overflow: hidden; background: #fff; cursor: default; }
+.viewport img { display: block; width: 100%; height: 100%; object-fit: contain; background: #fff; }
+.viewport .placeholder { display: flex; align-items: center; justify-content: center; width: 100%; height: 100%; color: #888; font-size: 14px; background: #1e1e1e; }
+
+/* Click indicator */
+.click-indicator { position: absolute; width: 20px; height: 20px; border: 2px solid #ff6600; border-radius: 50%; transform: translate(-50%, -50%); pointer-events: none; animation: click-fade 0.6s ease-out forwards; }
+@keyframes click-fade { 0% { opacity: 1; transform: translate(-50%, -50%) scale(0.5); } 100% { opacity: 0; transform: translate(-50%, -50%) scale(2); } }
+</style>
+</head>
+<body>
+<div class="toolbar">
+  <button onclick="goBack()" title="Back">&#9664;</button>
+  <button onclick="goForward()" title="Forward">&#9654;</button>
+  <button onclick="doRefresh()" title="Refresh">&#8635;</button>
+  <input class="url-input" id="urlInput" placeholder="Enter URL..." onkeydown="if(event.key==='Enter') doNavigate()">
+  <button onclick="doNavigate()">Go</button>
+  <button class="primary" onclick="doInject()" title="Inject component JS/CSS">&#9881; Inject</button>
+  <button class="danger" onclick="doClose()" title="Close session">&#10005;</button>
+  <span class="status" id="status">Disconnected</span>
+</div>
+
+<div class="viewport" id="viewport" tabindex="0">
+  <div class="placeholder" id="placeholder">
+    Click <b style="margin:0 4px;">Launch</b> or enter a URL to start
+  </div>
+  <img id="screenshot" style="display:none;" alt="Browser screenshot">
+</div>
+
+<script>
+// --- Config from URL params ---
+const params = new URLSearchParams(location.search);
+const wsId = params.get('ws_id') || '';
+const apiBase = params.get('api_base') || '';
+const token = params.get('token') || '';
+const initialUrl = params.get('initial_url') || '';
+
+const API = apiBase || `/api/coding/workspace/${wsId}/browser`;
+const AUTH_HEADER = token ? { 'Authorization': `Bearer ${token}` } : {};
+
+const screenshotImg = document.getElementById('screenshot');
+const placeholder = document.getElementById('placeholder');
+const urlInput = document.getElementById('urlInput');
+const statusEl = document.getElementById('status');
+const viewport = document.getElementById('viewport');
+
+let isActive = false;
+let pollTimer = null;
+let isLoading = false;
+
+// --- API calls ---
+async function apiPost(endpoint, body = {}) {
+  setStatus('loading', 'Loading...');
+  try {
+    const resp = await fetch(`${API}/${endpoint}`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', ...AUTH_HEADER },
+      body: JSON.stringify(body),
+    });
+    if (!resp.ok) {
+      const err = await resp.json().catch(() => ({ detail: resp.statusText }));
+      throw new Error(err.detail || resp.statusText);
+    }
+    const blob = await resp.blob();
+    updateScreenshot(blob);
+    setStatus('active', 'Connected');
+    isActive = true;
+    startPolling();
+  } catch (e) {
+    setStatus('', 'Error: ' + e.message);
+    console.error(e);
+    // 即使出错也尝试获取截图（可能页面已部分加载）
+    try {
+      const ssResp = await apiGet('screenshot');
+      if (ssResp && ssResp.ok) {
+        const blob = await ssResp.blob();
+        updateScreenshot(blob);
+        isActive = true;
+        setStatus('active', 'Connected (with errors)');
+        startPolling();
+      }
+    } catch (_) {}
+  }
+}
+
+async function apiGet(endpoint) {
+  try {
+    const resp = await fetch(`${API}/${endpoint}`, {
+      headers: AUTH_HEADER,
+    });
+    if (!resp.ok) return null;
+    return resp;
+  } catch (e) {
+    return null;
+  }
+}
+
+function updateScreenshot(blob) {
+  const url = URL.createObjectURL(blob);
+  screenshotImg.onload = () => URL.revokeObjectURL(screenshotImg._prevUrl || '');
+  screenshotImg._prevUrl = url;
+  screenshotImg.src = url;
+  screenshotImg.style.display = 'block';
+  placeholder.style.display = 'none';
+}
+
+function setStatus(type, text) {
+  statusEl.textContent = text;
+  statusEl.className = 'status ' + type;
+}
+
+// --- Actions ---
+async function doNavigate() {
+  const url = urlInput.value.trim();
+  if (!url) return;
+  if (!url.startsWith('http')) urlInput.value = 'https://' + url;
+  // Auto-launch if no active session
+  if (!isActive) {
+    await apiPost('launch', { url: urlInput.value });
+  } else {
+    await apiPost('navigate', { url: urlInput.value });
+  }
+}
+
+function goBack() { apiPost('back'); }
+function goForward() { apiPost('forward'); }
+function doRefresh() { apiPost('refresh'); }
+
+function doInject() {
+  // 优先用 auto-inject（自动从 workspace 读取组件信息）
+  apiPost('auto-inject', {}).catch(() => {
+    // fallback: 手动输入 URL
+    const scriptUrl = prompt('自动注入失败，请手动输入 UMD JS URL:', 'https://localhost:8086/component.umd.js');
+    if (!scriptUrl) return;
+    const cssUrl = scriptUrl.replace('.umd.js', '.css');
+    apiPost('inject', { script_url: scriptUrl, css_url: cssUrl });
+  });
+}
+
+function doClose() {
+  stopPolling();
+  fetch(`${API}/close`, { method: 'POST', headers: { 'Content-Type': 'application/json', ...AUTH_HEADER } });
+  screenshotImg.style.display = 'none';
+  placeholder.style.display = 'flex';
+  isActive = false;
+  setStatus('', 'Disconnected');
+}
+
+// --- Polling for HMR updates ---
+function startPolling() {
+  stopPolling();
+  pollTimer = setInterval(async () => {
+    if (!isActive || isLoading) return;
+    const resp = await apiGet('screenshot');
+    if (resp) {
+      const blob = await resp.blob();
+      updateScreenshot(blob);
+    }
+  }, 3000);
+}
+
+function stopPolling() {
+  if (pollTimer) { clearInterval(pollTimer); pollTimer = null; }
+}
+
+// --- Mouse interaction ---
+viewport.addEventListener('click', (e) => {
+  if (!isActive) return;
+  const rect = screenshotImg.getBoundingClientRect();
+  if (!rect.width || !rect.height) return;
+
+  // Calculate coordinates relative to the actual image content (accounting for object-fit: contain)
+  const imgNaturalW = 1280;
+  const imgNaturalH = 800;
+  const displayRatio = Math.min(rect.width / imgNaturalW, rect.height / imgNaturalH);
+  const displayW = imgNaturalW * displayRatio;
+  const displayH = imgNaturalH * displayRatio;
+  const offsetX = (rect.width - displayW) / 2;
+  const offsetY = (rect.height - displayH) / 2;
+
+  const localX = e.clientX - rect.left - offsetX;
+  const localY = e.clientY - rect.top - offsetY;
+
+  if (localX < 0 || localY < 0 || localX > displayW || localY > displayH) return;
+
+  const x = Math.round(localX / displayRatio);
+  const y = Math.round(localY / displayRatio);
+
+  // Show click indicator
+  showClickIndicator(e.clientX, e.clientY);
+  apiPost('click', { x, y });
+});
+
+viewport.addEventListener('dblclick', (e) => {
+  if (!isActive) return;
+  const rect = screenshotImg.getBoundingClientRect();
+  const imgNaturalW = 1280, imgNaturalH = 800;
+  const displayRatio = Math.min(rect.width / imgNaturalW, rect.height / imgNaturalH);
+  const displayW = imgNaturalW * displayRatio;
+  const displayH = imgNaturalH * displayRatio;
+  const offsetX = (rect.width - displayW) / 2;
+  const offsetY = (rect.height - displayH) / 2;
+  const localX = e.clientX - rect.left - offsetX;
+  const localY = e.clientY - rect.top - offsetY;
+  if (localX < 0 || localY < 0 || localX > displayW || localY > displayH) return;
+  const x = Math.round(localX / displayRatio);
+  const y = Math.round(localY / displayRatio);
+  e.preventDefault();
+  apiPost('dblclick', { x, y });
+});
+
+function showClickIndicator(cx, cy) {
+  const dot = document.createElement('div');
+  dot.className = 'click-indicator';
+  dot.style.left = cx + 'px';
+  dot.style.top = cy + 'px';
+  document.body.appendChild(dot);
+  setTimeout(() => dot.remove(), 600);
+}
+
+// --- Keyboard interaction (batched typing) ---
+let typingBuffer = '';
+let typingTimer = null;
+
+function flushTypingBuffer() {
+  if (typingBuffer) {
+    const text = typingBuffer;
+    typingBuffer = '';
+    apiPost('type', { text });
+  }
+}
+
+viewport.addEventListener('keydown', (e) => {
+  if (!isActive) return;
+  if (document.activeElement === urlInput) return;
+
+  e.preventDefault();
+
+  const specialKeys = ['Enter', 'Tab', 'Backspace', 'Delete', 'Escape', 'ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight', 'Home', 'End', 'PageUp', 'PageDown'];
+  if (specialKeys.includes(e.key)) {
+    flushTypingBuffer();
+    apiPost('press', { key: e.key });
+  } else if (e.key.length === 1 && !e.ctrlKey && !e.metaKey) {
+    // Batch characters - send after 300ms of no typing
+    typingBuffer += e.key;
+    clearTimeout(typingTimer);
+    typingTimer = setTimeout(flushTypingBuffer, 300);
+  } else if (e.ctrlKey || e.metaKey) {
+    flushTypingBuffer();
+    const combo = (e.ctrlKey ? 'Control+' : 'Meta+') + e.key;
+    apiPost('press', { key: combo });
+  }
+});
+
+// --- Scroll interaction ---
+viewport.addEventListener('wheel', (e) => {
+  if (!isActive) return;
+  e.preventDefault();
+  const rect = screenshotImg.getBoundingClientRect();
+  const imgNaturalW = 1280, imgNaturalH = 800;
+  const displayRatio = Math.min(rect.width / imgNaturalW, rect.height / imgNaturalH);
+  const displayW = imgNaturalW * displayRatio;
+  const displayH = imgNaturalH * displayRatio;
+  const offsetX = (rect.width - displayW) / 2;
+  const offsetY = (rect.height - displayH) / 2;
+  const localX = e.clientX - rect.left - offsetX;
+  const localY = e.clientY - rect.top - offsetY;
+  const x = Math.round(localX / displayRatio);
+  const y = Math.round(localY / displayRatio);
+  const deltaY = e.deltaY > 0 ? 300 : -300;
+  apiPost('scroll', { x, y, delta_x: 0, delta_y: deltaY });
+}, { passive: false });
+
+// --- Auto-focus viewport for keyboard ---
+viewport.addEventListener('mouseenter', () => viewport.focus());
+
+// --- Init: check if session already exists, or auto-launch with initial_url ---
+(async () => {
+  if (!wsId) {
+    setStatus('', 'No workspace ID');
+    return;
+  }
+  // Check existing session
+  const resp = await apiGet('status');
+  if (resp) {
+    const data = await resp.json();
+    if (data.active) {
+      isActive = true;
+      urlInput.value = data.url || '';
+      setStatus('active', 'Reconnected');
+      const ssResp = await apiGet('screenshot');
+      if (ssResp) {
+        const blob = await ssResp.blob();
+        updateScreenshot(blob);
+        startPolling();
+      }
+      return;
+    }
+  }
+  // Auto-launch if initial_url is provided
+  if (initialUrl) {
+    urlInput.value = initialUrl;
+    setStatus('loading', 'Launching...');
+    await apiPost('launch', { url: initialUrl });
+  }
+})();
+</script>
+</body>
+</html>

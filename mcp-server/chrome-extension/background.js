@@ -1,0 +1,210 @@
+// aPaaS Builder Helper — background service worker
+//
+// 职责：
+// 1. 保持 WebSocket 连到 backend (ws://localhost:8000/ws/browser-ext)
+// 2. 收到 backend 命令 → 转给 active tab 的 content script 执行
+// 3. 把 content script 的回执发回 backend
+// 4. 断线 5s 后自动重连
+
+const WS_URL = "ws://localhost:8000/ws/browser-ext";
+let socket = null;
+let reconnectTimer = null;
+let pingTimer = null;
+
+function log(...args) {
+  console.log("[apaas-helper bg]", ...args);
+}
+
+function connect() {
+  if (socket && socket.readyState <= 1) return; // already connecting/open
+  log("connecting", WS_URL);
+  try {
+    socket = new WebSocket(WS_URL);
+  } catch (e) {
+    log("connect fail", e);
+    scheduleReconnect();
+    return;
+  }
+
+  socket.addEventListener("open", () => {
+    log("connected");
+    // 上报 hello
+    socket.send(JSON.stringify({
+      type: "hello",
+      version: chrome.runtime.getManifest().version,
+      ua: navigator.userAgent.slice(0, 120),
+    }));
+    // 心跳，避免 60s idle 断
+    pingTimer = setInterval(() => {
+      if (socket && socket.readyState === 1) {
+        socket.send(JSON.stringify({ type: "ping", t: Date.now() }));
+      }
+    }, 25000);
+  });
+
+  socket.addEventListener("message", async (ev) => {
+    let msg;
+    try { msg = JSON.parse(ev.data); } catch (e) { log("bad json", e); return; }
+    if (msg.type === "pong") return;
+    // backend 派来命令: {type:'cmd', id, cmd, args}
+    if (msg.type !== "cmd") return;
+    try {
+      const result = await dispatchCommand(msg.cmd, msg.args || {});
+      socket.send(JSON.stringify({ type: "result", id: msg.id, ok: true, result }));
+    } catch (e) {
+      socket.send(JSON.stringify({
+        type: "result", id: msg.id, ok: false,
+        error: { message: String(e && e.message || e), stack: String(e && e.stack || "") },
+      }));
+    }
+  });
+
+  socket.addEventListener("close", () => {
+    log("closed");
+    clearInterval(pingTimer);
+    scheduleReconnect();
+  });
+  socket.addEventListener("error", (e) => {
+    log("error", e);
+  });
+}
+
+function scheduleReconnect() {
+  if (reconnectTimer) return;
+  reconnectTimer = setTimeout(() => {
+    reconnectTimer = null;
+    connect();
+  }, 5000);
+}
+
+// ─────────────────────────── command dispatch ───────────────────────────
+
+async function getActiveTab() {
+  // 取用户当前 window 的 active tab
+  const [tab] = await chrome.tabs.query({ active: true, lastFocusedWindow: true });
+  if (!tab) throw new Error("no active tab");
+  return tab;
+}
+
+async function sendToTab(tabId, message, opts = {}) {
+  return new Promise((resolve, reject) => {
+    chrome.tabs.sendMessage(tabId, message, opts, (resp) => {
+      if (chrome.runtime.lastError) {
+        reject(new Error(chrome.runtime.lastError.message));
+        return;
+      }
+      resolve(resp);
+    });
+  });
+}
+
+async function dispatchCommand(cmd, args) {
+  const tab = await getActiveTab();
+  switch (cmd) {
+    case "tab_info":
+      return { id: tab.id, url: tab.url, title: tab.title };
+    case "list_tabs": {
+      // 2026-05-21: 跟 backend browser_list_pages 字段名对齐 (pages 数组)
+      const all = await chrome.tabs.query({});
+      return {
+        count: all.length,
+        tabs: all.map(t => ({ id: t.id, url: t.url, title: t.title, active: t.active, windowId: t.windowId, type: "page" })),
+      };
+    }
+    case "select_tab": {
+      // 2026-05-21 新增 — 跟 backend browser_select_page 对齐 (chrome.tabs.update active)
+      const tabId = args.tabId;
+      if (typeof tabId !== "number") throw new Error("select_tab: tabId 必须是 number");
+      await chrome.tabs.update(tabId, { active: true });
+      if (args.bringToFront !== false) {
+        try {
+          const targetTab = await chrome.tabs.get(tabId);
+          if (targetTab.windowId !== undefined) {
+            await chrome.windows.update(targetTab.windowId, { focused: true });
+          }
+        } catch (e) { /* window 可能已关，忽略 */ }
+      }
+      return { ok: true, tabId };
+    }
+    case "screenshot": {
+      // 2026-05-21: 改用 chrome.tabs.captureVisibleTab 比 content script 截图快得多
+      // 直接拿 png dataUrl, 跟 backend browser_screenshot return schema 对齐
+      const dataUrl = await chrome.tabs.captureVisibleTab(tab.windowId, { format: "png" });
+      const sizeApprox = Math.floor((dataUrl.length - "data:image/png;base64,".length) * 0.75);
+      return {
+        ok: true,
+        image_data_url: dataUrl,
+        mime_type: "image/png",
+        data_size: sizeApprox,
+      };
+    }
+    case "capture_frame_jpeg": {
+      // 2026-05-21 Phase 3d: 给 MJPEG 实时流用的轻量 frame.
+      // 用 jpeg quality 60 + (隐含) 浏览器原生缩放, 单帧 ~30-50KB.
+      // backend MJPEG 流 endpoint 每 500ms 调一次, ~60-100KB/s 流量.
+      const quality = args.quality || 60;
+      const dataUrl = await chrome.tabs.captureVisibleTab(tab.windowId, {
+        format: "jpeg",
+        quality: quality,
+      });
+      const sizeApprox = Math.floor((dataUrl.length - "data:image/jpeg;base64,".length) * 0.75);
+      return {
+        ok: true,
+        image_data_url: dataUrl,
+        mime_type: "image/jpeg",
+        data_size: sizeApprox,
+        tab_url: tab.url,
+        tab_title: tab.title,
+      };
+    }
+    case "snapshot":
+    case "click":
+    case "type":
+    case "start_recording":
+    case "stop_recording":
+    case "evaluate":
+      // 转发给 content script 执行
+      return await sendToTab(tab.id, { type: "exec", cmd, args });
+    case "navigate":
+      await chrome.tabs.update(tab.id, { url: args.url });
+      return { ok: true, navigated: args.url };
+    default:
+      throw new Error(`unknown cmd ${cmd}`);
+  }
+}
+
+// 监听 popup 的状态查询
+chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
+  if (msg && msg.type === "get_ws_status") {
+    const connected = !!(socket && socket.readyState === 1);
+    sendResponse({ connected, readyState: socket ? socket.readyState : -1 });
+    return false;
+  }
+});
+
+// 启动
+connect();
+
+// MV3 service worker 会在 ~30s idle 后睡眠。用 chrome.alarms 每 25s 唤醒一次，
+// 确保 WS 心跳 + 重连 timer 持续运行。
+try {
+  chrome.alarms.create("apaas-keepalive", { periodInMinutes: 0.5 }); // 30s
+  chrome.alarms.onAlarm.addListener((alarm) => {
+    if (alarm.name === "apaas-keepalive") {
+      // 简单 touch：检查 socket 状态，没连就 connect
+      if (!socket || socket.readyState !== 1) {
+        log("keepalive: socket dead, reconnecting");
+        connect();
+      } else {
+        // 已连：发个 ping 保活
+        try { socket.send(JSON.stringify({ type: "ping", t: Date.now() })); } catch {}
+      }
+    }
+  });
+} catch (e) {
+  log("alarms unavailable", e);
+}
+
+// onStartup / onInstalled 也启动 connect，避免 idle 后失联
+chrome.runtime.onStartup && chrome.runtime.onStartup.addListener(() => connect());
+chrome.runtime.onInstalled && chrome.runtime.onInstalled.addListener(() => connect());

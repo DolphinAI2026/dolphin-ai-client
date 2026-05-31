@@ -137,13 +137,6 @@
       <!-- 平台配置 iframe + 原生菜单 sidebar（v-show 保持不销毁） -->
       <!-- 2026-05-26 design-v3: 整改 layout — 顶部 5 tab + 左 sub-nav + 中画布 + 右 AI. -->
       <div v-show="SHOW_PLATFORM_CONFIG && activeView === 'platform'" class="platform-shell platform-shell-v3">
-        <!-- 顶部 3 tab: 设计 / 权限 / 日志 (N1 2026-05-27 简化 — 删数据/流程跟 sub 撞)
-             v-if 放宽: 不依赖 platformIframeAppId (iframe 时序问题, 应用 load 后就显). -->
-        <AppConfigTopTabs
-          v-if="existingAppId && !legacyMode"
-          :current-tab="topTab"
-          @switch-tab="onTopTabSwitch"
-        />
         <!-- sub-tab chip strip: 顶部 tab 下方一行. 2026-05-26: 设计 tab 不显
              chip (改用左侧菜单 list + 右侧 designer 4 sub-tab). 其他 tab 保留.
              Q2 2026-05-27: 数据源 tab 也不显 chip (扁平 panel, 无 sub). -->
@@ -389,6 +382,7 @@
           :app-name="builderAppDisplayName || ''"
           :current-section="currentSection"
           :current-section-tab="currentSectionTab"
+          :designer-sub="topTab === 'design' && selectedApaasMenuId ? designerSub : null"
           @close="toggleAssistant"
           @refresh-iframe="refreshPlatformAndSidebar"
           @upload-doc="triggerDocVersionUpload"
@@ -428,9 +422,19 @@
         class="builder-deploy-hero"
       >
         <div class="bdh-card">
-          <div class="bdh-emoji" aria-hidden="true">⏳</div>
-          <div class="bdh-title">正在进入应用…</div>
-          <div class="bdh-sub">加载应用配置中</div>
+          <div class="bdh-loader" aria-hidden="true">
+            <span class="bdh-loader-ring"></span>
+          </div>
+          <div class="bdh-copy">
+            <div class="bdh-kicker">AI-Builder</div>
+            <div class="bdh-title">正在打开应用</div>
+            <div class="bdh-sub">同步菜单、表单和权限配置，完成后自动进入功能页。</div>
+          </div>
+          <div class="bdh-progress" aria-hidden="true">
+            <span class="is-done"></span>
+            <span class="is-active"></span>
+            <span></span>
+          </div>
         </div>
       </div>
 
@@ -440,9 +444,19 @@
         class="builder-deploy-hero"
       >
         <div class="bdh-card">
-          <div class="bdh-emoji" aria-hidden="true">⚙️</div>
-          <div class="bdh-title">正在创建应用，请耐心等待…</div>
-          <div class="bdh-sub">详细进度在右侧 timeline</div>
+          <div class="bdh-loader" aria-hidden="true">
+            <span class="bdh-loader-ring"></span>
+          </div>
+          <div class="bdh-copy">
+            <div class="bdh-kicker">生成中</div>
+            <div class="bdh-title">正在创建应用</div>
+            <div class="bdh-sub">AI 正在生成数据模型、表单和权限配置，右侧会持续更新进度。</div>
+          </div>
+          <div class="bdh-progress" aria-hidden="true">
+            <span class="is-active"></span>
+            <span></span>
+            <span></span>
+          </div>
         </div>
       </div>
 
@@ -869,6 +883,7 @@ import {
   isAutoDocSummaryMessage,
   suggestNextConflictCode,
 } from '@/utils/chatPage'
+import { getPastedImageFiles } from '@/utils/pasteImages'
 import {
   buildAppCode,
   pickAppCode,
@@ -881,7 +896,6 @@ import ApaasMenuSidebar from '@/components/ApaasMenuSidebar.vue'
 import SectionNav from '@/components/v2/SectionNav.vue'
 import ExtensionSectionPanel from '@/components/v2/ExtensionSectionPanel.vue'
 import SectionContentList from '@/components/v2/SectionContentList.vue'
-import AppConfigTopTabs from '@/components/v3/AppConfigTopTabs.vue'
 import AppConfigSubNav from '@/components/v3/AppConfigSubNav.vue'
 import FormDesignerPanel from '@/components/v3/FormDesignerPanel.vue'
 import ListDesignerPanel from '@/components/v3/ListDesignerPanel.vue'
@@ -2074,14 +2088,10 @@ const handleChatImageChange = (event: Event) => {
 }
 
 const handleComposerPaste = (event: ClipboardEvent) => {
-  const items = Array.from(event.clipboardData?.items || [])
-  const imageItem = items.find(item => item.type.startsWith('image/'))
-  if (!imageItem) return
-  const file = imageItem.getAsFile()
-  if (!file) return
+  const pastedImages = getPastedImageFiles(event, 'builder-pasted-image')
+  const pastedFile = pastedImages[0]
+  if (!pastedFile) return
   event.preventDefault()
-  const ext = (file.type.split('/')[1] || 'png').replace('jpeg', 'jpg')
-  const pastedFile = new File([file], `pasted-image-${Date.now()}.${ext}`, { type: file.type })
   attachPendingAttachmentFile(pastedFile, 'image')
 }
 
@@ -2365,6 +2375,8 @@ const designerRefreshKey = ref(0)
 // PR2b (SPEC v2 §1.1) — SectionNav 状态
 // 5 section: data/ui/logic/permission/extension, 默认 ui (跟以前 ApaasMenuSidebar 行为对齐)
 // legacyMode: ?legacy=1 OR window 宽度 < 1280 → 老 ApaasMenuSidebar 直显, SectionNav 隐藏
+// 2026-05-31: 顶部「功能 / 数据源 / 权限 / 日志」入口移除, 进入应用直接展示功能页。
+const APP_CONFIG_TOP_TABS_ENABLED = false
 const SECTION_STORAGE_KEY = 'apaas-section-v1'
 const SECTION_TAB_STORAGE_KEY = 'apaas-section-tab-v1'
 // 各 section 默认 sub-tab — initial load + onSwitchSection 不传 tab 时用
@@ -2376,9 +2388,11 @@ const SECTION_DEFAULT_TAB: Record<string, string> = {
   extension: 'dev_kit',
 }
 const _initSection = (() => {
+  if (!APP_CONFIG_TOP_TABS_ENABLED) return 'ui'
   try { return localStorage.getItem(SECTION_STORAGE_KEY) || 'ui' } catch { return 'ui' }
 })()
 const _initSectionTab = (() => {
+  if (!APP_CONFIG_TOP_TABS_ENABLED) return 'menus'
   try {
     const saved = localStorage.getItem(SECTION_TAB_STORAGE_KEY)
     if (saved) return saved
@@ -2398,50 +2412,15 @@ const SECTION_TO_TOP_TAB: Record<string, string> = {
   permission: 'perm',
   extension: 'log',
 }
-const TOP_TAB_TO_SECTION: Record<string, string> = {
-  // U3 (2026-05-27): 新增 'spec' tab — SPEC 编辑层 (跟"功能" tab 平行).
-  // 扁平 panel 无 sub, 不映射回旧 SECTION 集合.
-  spec: 'spec',
-  design: 'ui',
-  data: 'data',
-  logic: 'logic',
-  perm: 'permission',
-  log: 'log',  // 'log' 不在原 SECTION 集合, 单独处理
-  datasource: 'datasource',  // Q2 (2026-05-27): 扁平 panel, 不映射回旧 SECTION 集合
-}
-const TOP_TAB_DEFAULT_SUB: Record<string, string> = {
-  // U3 (2026-05-27): spec tab 扁平 panel 无 sub.
-  spec: '',
-  design: 'menus',
-  data: 'models',
-  logic: 'processes',
-  perm: 'roles',
-  log: 'op_log',
-  // Q2 (2026-05-27): 数据源 tab 是扁平 panel 无 sub-tab, default empty.
-  datasource: '',
-}
 // 2026-05-29: 暂时隐藏「设计」(spec) tab — 用户反馈那一大坨 read-only SPEC 文档平铺太重,
 // 进应用直接用「功能」tab + 配置助手对话调整即可。改开关为 true 即整体恢复(组件/逻辑都保留,
 // 仅不显示 + 把落到 spec 的入口归一到 design)。⚠️ 别删 SpecDesignPanel 本体(low-code 核心线)。
 const SPEC_TAB_ENABLED = false
 function normalizeTopTab(tab: string): string {
+  if (!APP_CONFIG_TOP_TABS_ENABLED) return 'design'
   return (!SPEC_TAB_ENABLED && tab === 'spec') ? 'design' : tab
 }
 const topTab = ref<string>(normalizeTopTab(SECTION_TO_TOP_TAB[_initSection] || 'design'))
-function onTopTabSwitch(rawTab: string) {
-  const tab = normalizeTopTab(rawTab)
-  topTab.value = tab
-  // 切回旧 section 系统兼容
-  const sec = TOP_TAB_TO_SECTION[tab] || 'ui'
-  currentSection.value = sec
-  // sub-tab 默认值
-  const defaultSub = TOP_TAB_DEFAULT_SUB[tab] || 'menus'
-  currentSectionTab.value = defaultSub
-  try {
-    localStorage.setItem(SECTION_STORAGE_KEY, sec)
-    localStorage.setItem(SECTION_TAB_STORAGE_KEY, defaultSub)
-  } catch {}
-}
 function onSubNavSwitch(sub: string) {
   currentSectionTab.value = sub
   try { localStorage.setItem(SECTION_TAB_STORAGE_KEY, sub) } catch {}
@@ -9280,31 +9259,64 @@ html[data-theme="dark"] .mode-btn-link:hover {
   display: flex;
   align-items: center;
   justify-content: center;
-  padding: 24px;
+  padding: 32px;
 }
 .bdh-card {
+  position: relative;
   width: 100%;
-  max-width: 560px;
+  max-width: 440px;
   display: flex;
-  flex-direction: column;
+  flex-direction: row;
   align-items: center;
-  gap: 14px;
-  padding: 48px 40px;
-  border-radius: 16px;
-  background: var(--t-bg-elevated, rgba(255,255,255,0.02));
-  border: 1px solid var(--t-border-subtle, rgba(255,255,255,0.06));
-  text-align: center;
+  gap: 16px;
+  padding: 22px 24px;
+  border-radius: 12px;
+  background: rgba(255, 255, 255, 0.82);
+  border: 1px solid rgba(214, 222, 235, 0.9);
+  box-shadow: 0 18px 42px rgba(42, 58, 87, 0.08);
+  text-align: left;
+  overflow: hidden;
 }
-.bdh-emoji { font-size: 56px; line-height: 1; }
+.bdh-loader {
+  width: 42px;
+  height: 42px;
+  border-radius: 12px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: 0 0 auto;
+  background: #eef4ff;
+  color: #2f5cf6;
+}
+.bdh-loader-ring {
+  width: 20px;
+  height: 20px;
+  border-radius: 999px;
+  border: 2px solid rgba(47, 92, 246, 0.18);
+  border-top-color: currentColor;
+  animation: bdh-spin 0.75s linear infinite;
+}
+.bdh-copy {
+  min-width: 0;
+  flex: 1;
+}
+.bdh-kicker {
+  margin-bottom: 3px;
+  font-size: 12px;
+  font-weight: 700;
+  color: #2f5cf6;
+}
 .bdh-title {
-  font-size: 22px;
-  font-weight: 600;
-  color: var(--t-text-primary);
-  line-height: 1.4;
+  font-size: 18px;
+  font-weight: 700;
+  color: #182236;
+  line-height: 1.35;
 }
 .bdh-sub {
+  margin-top: 6px;
   font-size: 13px;
-  color: var(--t-text-secondary);
+  color: #647085;
+  line-height: 1.55;
 }
 .bdh-sub code {
   font-family: 'SF Mono', Menlo, monospace;
@@ -9313,6 +9325,67 @@ html[data-theme="dark"] .mode-btn-link:hover {
   color: var(--t-brand-primary, #5b5bd6);
   padding: 2px 8px;
   border-radius: 4px;
+}
+.bdh-progress {
+  position: absolute;
+  left: 24px;
+  right: 24px;
+  bottom: 0;
+  height: 2px;
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 4px;
+}
+.bdh-progress span {
+  border-radius: 999px;
+  background: #dbe3f2;
+}
+.bdh-progress span.is-done {
+  background: #70b36a;
+}
+.bdh-progress span.is-active {
+  position: relative;
+  overflow: hidden;
+  background: rgba(47, 92, 246, 0.18);
+}
+.bdh-progress span.is-active::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  width: 45%;
+  border-radius: inherit;
+  background: #2f5cf6;
+  animation: bdh-progress 1.35s ease-in-out infinite;
+}
+@keyframes bdh-spin {
+  to { transform: rotate(360deg); }
+}
+@keyframes bdh-progress {
+  0% { transform: translateX(-110%); }
+  55%, 100% { transform: translateX(235%); }
+}
+@media (prefers-reduced-motion: reduce) {
+  .bdh-loader-ring,
+  .bdh-progress span.is-active::after {
+    animation: none;
+  }
+}
+html[data-theme="dark"] .bdh-card {
+  background: rgba(15, 23, 42, 0.84);
+  border-color: rgba(71, 85, 105, 0.62);
+  box-shadow: 0 18px 42px rgba(0, 0, 0, 0.24);
+}
+html[data-theme="dark"] .bdh-loader {
+  background: rgba(47, 92, 246, 0.14);
+}
+html[data-theme="dark"] .bdh-title {
+  color: #f8fafc;
+}
+html[data-theme="dark"] .bdh-sub {
+  color: #94a3b8;
+}
+html[data-theme="dark"] .bdh-progress span {
+  background: rgba(71, 85, 105, 0.62);
 }
 .bdh-actions {
   display: flex;

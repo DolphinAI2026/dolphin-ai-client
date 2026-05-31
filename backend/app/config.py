@@ -24,7 +24,7 @@ class Settings(BaseSettings):
 
     # aPaaS Platform
     apaas_base_url: str = "https://apaas-poc.definesys.cn/backend"
-    apaas_tenant_id: str = "743906758237356033"
+    apaas_tenant_id: str = ""
 
     # LLM Configuration
     # 兼容保留：运行时统一走 ANTHROPIC_BASE_URL，LLM_API_BASE 不再实际参与请求

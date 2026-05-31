@@ -1,0 +1,110 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="760" height="1320" viewBox="0 0 760 1320">
+  <defs>
+    <filter id="shadow" x="-20%" y="-10%" width="140%" height="120%">
+      <feDropShadow dx="0" dy="18" stdDeviation="24" flood-color="#1e293b" flood-opacity=".16"/>
+    </filter>
+    <linearGradient id="header" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#f8fbff"/>
+      <stop offset="1" stop-color="#eef5ff"/>
+    </linearGradient>
+    <style>
+      .bg { fill:#eef2f7; }
+      .panel { fill:#fff; filter:url(#shadow); }
+      .line { stroke:#e5eaf2; stroke-width:1; }
+      .muted { fill:#718096; font-family:-apple-system,BlinkMacSystemFont,"Segoe UI","PingFang SC","Microsoft YaHei",sans-serif; }
+      .text { fill:#17233c; font-family:-apple-system,BlinkMacSystemFont,"Segoe UI","PingFang SC","Microsoft YaHei",sans-serif; }
+      .strong { fill:#253858; font-weight:700; font-family:-apple-system,BlinkMacSystemFont,"Segoe UI","PingFang SC","Microsoft YaHei",sans-serif; }
+      .blue { fill:#2563eb; font-weight:700; font-family:-apple-system,BlinkMacSystemFont,"Segoe UI","PingFang SC","Microsoft YaHei",sans-serif; }
+      .chip { fill:#f7faff; stroke:#d9e5f7; stroke-width:1; }
+      .chip-on { fill:#eaf2ff; stroke:#b8cff8; stroke-width:1; }
+      .card { fill:#fff; stroke:#e7ecf4; stroke-width:1; }
+      .soft { fill:#f8fafc; stroke:#e6edf5; stroke-width:1; }
+      .primary { fill:#2563eb; }
+      .iconbox { fill:#fff; stroke:#dfe7f2; stroke-width:1; }
+      .divider { stroke:#edf1f6; stroke-width:1; }
+    </style>
+  </defs>
+
+  <rect class="bg" width="760" height="1320"/>
+  <rect x="70" y="42" width="620" height="1236" rx="22" class="panel"/>
+
+  <rect x="70" y="42" width="620" height="190" rx="22" fill="url(#header)"/>
+  <line x1="70" y1="232" x2="690" y2="232" class="line"/>
+
+  <text x="104" y="100" class="strong" font-size="28">配置助手</text>
+  <text x="104" y="132" class="muted" font-size="17">正在调整</text>
+  <text x="178" y="132" class="text" font-size="17">易景QMS质量管理系统</text>
+  <rect x="104" y="152" width="184" height="32" rx="16" fill="#ecfdf5" stroke="#bbf7d0"/>
+  <circle cx="124" cy="168" r="5" fill="#16a34a"/>
+  <text x="138" y="174" fill="#166534" font-size="14" font-family="-apple-system,BlinkMacSystemFont,'Segoe UI','PingFang SC','Microsoft YaHei',sans-serif">已连接当前菜单</text>
+
+  <rect x="455" y="74" width="42" height="42" rx="12" class="iconbox"/>
+  <path d="M476 86v18M467 95h18" stroke="#48617f" stroke-width="2.4" stroke-linecap="round"/>
+  <rect x="508" y="74" width="42" height="42" rx="12" class="iconbox"/>
+  <path d="M519 88h20M519 96h20M519 104h14" stroke="#48617f" stroke-width="2.2" stroke-linecap="round"/>
+  <rect x="561" y="74" width="42" height="42" rx="12" class="iconbox"/>
+  <circle cx="582" cy="95" r="10" fill="none" stroke="#48617f" stroke-width="2"/>
+  <path d="M582 89v7l5 3" stroke="#48617f" stroke-width="2" stroke-linecap="round"/>
+  <rect x="614" y="74" width="42" height="42" rx="12" class="iconbox"/>
+  <path d="M626 87l18 18M644 87l-18 18" stroke="#48617f" stroke-width="2.2" stroke-linecap="round"/>
+
+  <rect x="104" y="250" width="552" height="86" rx="16" class="card"/>
+  <text x="128" y="284" class="muted" font-size="15">当前菜单</text>
+  <text x="128" y="314" class="strong" font-size="22">质量标准文件库</text>
+  <rect x="374" y="268" width="72" height="28" rx="14" fill="#eef2ff"/>
+  <text x="394" y="288" fill="#3654b7" font-size="13" font-family="-apple-system,BlinkMacSystemFont,'Segoe UI','PingFang SC','Microsoft YaHei',sans-serif">表单</text>
+  <text x="374" y="318" class="muted" font-size="14">14 字段 · 5 必填 · 2 字典</text>
+  <rect x="548" y="272" width="82" height="40" rx="12" fill="#f8fafc" stroke="#dfe7f2"/>
+  <text x="568" y="298" class="blue" font-size="15">分析</text>
+
+  <text x="104" y="382" class="strong" font-size="18">你想做什么？</text>
+  <rect x="104" y="404" width="128" height="44" rx="22" class="chip-on"/>
+  <text x="134" y="432" class="blue" font-size="16">改字段</text>
+  <rect x="244" y="404" width="128" height="44" rx="22" class="chip"/>
+  <text x="274" y="432" class="text" font-size="16">新菜单</text>
+  <rect x="384" y="404" width="128" height="44" rx="22" class="chip"/>
+  <text x="414" y="432" class="text" font-size="16">调权限</text>
+  <rect x="524" y="404" width="132" height="44" rx="22" class="chip"/>
+  <text x="553" y="432" class="text" font-size="16">跑流程</text>
+
+  <rect x="104" y="474" width="552" height="164" rx="18" class="soft"/>
+  <text x="128" y="508" class="strong" font-size="17">推荐操作</text>
+  <text x="226" y="508" class="muted" font-size="14">基于当前菜单自动生成</text>
+  <rect x="128" y="528" width="504" height="30" rx="15" fill="#fff" stroke="#e7ecf4"/>
+  <text x="148" y="549" class="text" font-size="14">把「标准名称」设为必填，并同步列表高亮</text>
+  <rect x="128" y="568" width="504" height="30" rx="15" fill="#fff" stroke="#e7ecf4"/>
+  <text x="148" y="589" class="text" font-size="14">给「标准类型」字典新增一个选项</text>
+  <rect x="128" y="608" width="504" height="30" rx="15" fill="#fff" stroke="#e7ecf4"/>
+  <text x="148" y="629" class="text" font-size="14">新增「运维管理员」角色并授予查看/编辑权限</text>
+
+  <line x1="70" y1="670" x2="690" y2="670" class="divider"/>
+
+  <rect x="104" y="704" width="404" height="76" rx="18" fill="#f1f6ff" stroke="#d8e6fb"/>
+  <text x="128" y="733" fill="#2f4f87" font-size="15" font-family="-apple-system,BlinkMacSystemFont,'Segoe UI','PingFang SC','Microsoft YaHei',sans-serif">助手建议</text>
+  <text x="128" y="760" class="text" font-size="16">我可以直接修改配置，执行前会展示变更摘要。</text>
+  <circle cx="538" cy="742" r="22" fill="#2563eb"/>
+  <path d="M529 742h18M540 733l9 9-9 9" stroke="#fff" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"/>
+
+  <rect x="252" y="816" width="404" height="76" rx="18" fill="#fff" stroke="#e7ecf4"/>
+  <text x="276" y="846" class="text" font-size="16">把标准名称改成必填</text>
+  <text x="276" y="870" class="muted" font-size="14">用户输入</text>
+
+  <rect x="104" y="928" width="506" height="118" rx="18" fill="#fbfdff" stroke="#dbe7f6"/>
+  <text x="128" y="960" class="strong" font-size="17">待确认变更</text>
+  <text x="128" y="990" class="text" font-size="15">字段：标准名称</text>
+  <text x="128" y="1018" class="text" font-size="15">变更：必填 false → true</text>
+  <rect x="454" y="980" width="72" height="36" rx="12" fill="#fff" stroke="#dfe7f2"/>
+  <text x="478" y="1003" class="text" font-size="14">取消</text>
+  <rect x="536" y="980" width="54" height="36" rx="12" class="primary"/>
+  <text x="550" y="1003" fill="#fff" font-size="14" font-weight="700" font-family="-apple-system,BlinkMacSystemFont,'Segoe UI','PingFang SC','Microsoft YaHei',sans-serif">应用</text>
+
+  <line x1="70" y1="1100" x2="690" y2="1100" class="divider"/>
+  <rect x="104" y="1126" width="458" height="84" rx="16" fill="#fff" stroke="#dfe7f2"/>
+  <text x="128" y="1162" class="muted" font-size="17">描述你想调整的字段、菜单、流程或权限...</text>
+  <text x="128" y="1190" class="muted" font-size="13">Enter 发送 · Shift+Enter 换行</text>
+  <rect x="574" y="1142" width="82" height="52" rx="16" fill="#e8eef7"/>
+  <path d="M601 1167l31-15-12 30-7-11-12-4z" fill="none" stroke="#8da0ba" stroke-width="2" stroke-linejoin="round"/>
+  <text x="626" y="1174" fill="#8da0ba" font-size="16" font-weight="700" font-family="-apple-system,BlinkMacSystemFont,'Segoe UI','PingFang SC','Microsoft YaHei',sans-serif">发送</text>
+
+  <text x="104" y="1250" class="muted" font-size="13">注：页面感知由助手后台自动读取当前菜单，不再暴露“显示 AI 浏览器画面”开关。</text>
+</svg>

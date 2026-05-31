@@ -5,6 +5,7 @@ from urllib.parse import urlparse
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
+from starlette.exceptions import HTTPException as StarletteHTTPException
 from app.config import settings, APP_TITLE, APP_DESCRIPTION, APP_VERSION
 from app.database import init_db
 from app.routes import (
@@ -56,18 +57,6 @@ from app.routes import (
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    # 启动 MCP server 的 session manager — Streamable HTTP transport 在 mount 模式下
-    # 父 app lifespan 不会自动透传到子 ASGI，需要手动运行 session_manager。
-    # 用 AsyncExitStack 跟主 lifespan 生命周期对齐。
-    from contextlib import AsyncExitStack
-    _exit_stack = AsyncExitStack()
-    try:
-        from app.mcp_server import mcp as _mcp_for_lifespan
-        await _exit_stack.enter_async_context(_mcp_for_lifespan.session_manager.run())
-    except Exception as _exc:
-        import logging as _logging
-        _logging.getLogger(__name__).warning("MCP session manager 启动失败：%s", _exc)
-
     # 启动时初始化数据库
     await init_db()
 
@@ -117,7 +106,6 @@ async def lifespan(app: FastAPI):
     # 关闭时清理资源
     from app.coding.browser_service import BrowserService
     await BrowserService.get_instance().stop()
-    await _exit_stack.aclose()
 
 
 app = FastAPI(
@@ -201,76 +189,13 @@ app.include_router(agent_prompts.router, prefix="/api")
 app.include_router(platform_proxy.router)
 
 
-# ─────────────────────── MCP Server ───────────────────────
-# 把 ai-builder 应用领域能力封装为 MCP 工具暴露给得小帆等 agent 平台。
-# 详见 backend/app/mcp_server.py
-try:
-    from app.mcp_server import mcp as _mcp_server, is_valid_api_key as _mcp_is_valid_api_key
-
-    class _McpAuthMiddleware:
-        """ASGI 中间件：校验 Authorization: Bearer <MCP_API_KEY>（或 ?api_key=xxx）。
-
-        生产 nginx 反代 /ai-builder/api/* → :8003/api/*，要让 MCP advertise 的 message
-        endpoint 包含 /ai-builder 前缀，靠 uvicorn 启动参数 --root-path=/ai-builder
-        （ASGI 标准做法），这里中间件不动 scope。
-        """
-
-        def __init__(self, app):
-            self.app = app
-
-        async def __call__(self, scope, receive, send):
-            if scope["type"] != "http":
-                await self.app(scope, receive, send)
-                return
-            headers = {k.decode().lower(): v.decode() for k, v in scope.get("headers", [])}
-            auth = headers.get("authorization", "")
-            api_key = ""
-            if auth.lower().startswith("bearer "):
-                api_key = auth[7:].strip()
-            if not api_key:
-                # fallback: query string
-                qs = scope.get("query_string", b"").decode()
-                for part in qs.split("&"):
-                    if part.startswith("api_key="):
-                        api_key = part[len("api_key="):]
-                        break
-            if not _mcp_is_valid_api_key(api_key):
-                await send({
-                    "type": "http.response.start",
-                    "status": 401,
-                    "headers": [(b"content-type", b"application/json; charset=utf-8")],
-                })
-                await send({
-                    "type": "http.response.body",
-                    "body": b'{"error":"unauthorized: invalid or missing MCP API key"}',
-                })
-                return
-            await self.app(scope, receive, send)
-
-    # MCP 客户端等现代 agent 平台用 Streamable HTTP transport（POST 单一 endpoint），
-    # 不再支持老 HTTP+SSE。Streamable 是首选；保留 legacy SSE 给老 client 兜底。
-    _mcp_streamable = _mcp_server.streamable_http_app()
-    _mcp_sse = _mcp_server.sse_app()
-    # streamable_http_app 内 path 是 /mcp → 公开 URL: /api/mcp/mcp
-    app.mount("/api/mcp", _McpAuthMiddleware(_mcp_streamable))
-    # legacy SSE 单独前缀（同 /api/mcp 会被前面的 mount 屏蔽）
-    app.mount("/api/mcp-legacy", _McpAuthMiddleware(_mcp_sse))
-    import logging as _logging
-    _logging.getLogger(__name__).info(
-        "MCP server mounted: streamable=/api/mcp/mcp, legacy_sse=/api/mcp-legacy/sse"
-    )
-except Exception as exc:
-    import logging as _logging
-    _logging.getLogger(__name__).warning("MCP server 启用失败（不影响主应用）：%s", exc)
-
-
 # 平台插件资源中间件：/{32位hex}/... → 代理到平台
 # SSE 防缓冲 middleware：text/event-stream 响应自动注入 X-Accel-Buffering: no
 #
 # 注意：这两个原本用 @app.middleware("http")（即 BaseHTTPMiddleware）实现，
 # 但 BaseHTTPMiddleware 的 call_next buffering 跟流式 SSE 不兼容，会切断 MCP
 # 服务器的 message 流（外部 agent 拿不到 tools/list 响应）。
-# 改成纯 ASGI middleware 后，对所有 mount（包括 /api/mcp）都安全透传。
+# 改成纯 ASGI middleware 后，对所有 mount 都安全透传。
 import re as _re
 from starlette.requests import Request as _StarletteRequest
 _PLUGIN_HASH_RE = _re.compile(r'^/[0-9a-f]{32}/')
@@ -319,6 +244,23 @@ class _SseNoBufferingAsgiMiddleware:
 
 app.add_middleware(_SseNoBufferingAsgiMiddleware)
 app.add_middleware(_PluginAssetAsgiMiddleware)
+
+
+class _SpaStaticFiles(StaticFiles):
+    async def get_response(self, path, scope):
+        try:
+            return await super().get_response(path, scope)
+        except StarletteHTTPException as exc:
+            if exc.status_code != 404:
+                raise
+            return await super().get_response("index.html", scope)
+
+
+# 平台管理前端静态资源。开发时由 frontend:5173 代理 /admin 到这里，
+# 因此本地只需要 5173 + 8000 + 8004 三个端口。
+_admin_spa_dir = Path(__file__).resolve().parents[2] / "admin-spa" / "dist"
+if _admin_spa_dir.is_dir():
+    app.mount("/admin", _SpaStaticFiles(directory=str(_admin_spa_dir), html=True), name="admin-spa")
 
 
 # 静态文件（浏览器预览页面等）

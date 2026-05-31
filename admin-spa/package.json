@@ -4,7 +4,7 @@
   "private": true,
   "scripts": {
     "dev": "vite",
-    "build": "vue-tsc && VITE_API_BASE_URL=/mcp-server/api vite build --base=/mcp-server/admin/",
+    "build": "vue-tsc && VITE_API_BASE_URL=/api vite build --base=/admin/",
     "preview": "vite preview"
   },
   "dependencies": {

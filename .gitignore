@@ -11,12 +11,18 @@ venv/
 # Node
 node_modules/
 dist/
+*.tsbuildinfo
+pnpm-lock.yaml
 
 # Environment
 .env
 .env.local
 .env.*.local
 .env.bak*
+*.key
+*.pem
+*.p12
+*.pfx
 
 # IDE
 .idea/
@@ -37,6 +43,16 @@ Thumbs.db
 .playwright-mcp/
 output/
 /*.png
+/*.jpg
+/*.jpeg
+/*.webp
+
+# Debug captures and local evidence
+docs/captures/
+docs/internal/
+docs/reference/skills/.playwright-mcp/
+backend/form_config_*.json
+backend/templates/cli-generated/**/https/
 
 # Claude
 .claude/

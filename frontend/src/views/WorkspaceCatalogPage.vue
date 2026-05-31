@@ -1,44 +1,41 @@
 <template>
   <WorkbenchShell>
     <div class="catalog-main">
-      <!-- 大类切换：应用相关 vs 通用组件 — 第一维度（基于 ws.project_id 是否绑定应用） -->
-      <div class="category-bar">
-        <button
-          v-for="cat in CATEGORIES"
-          :key="cat.value"
-          :class="['category-tab', { active: activeCategory === cat.value }]"
-          @click="activeCategory = cat.value"
-        >
-          {{ cat.label }}
-          <span class="tab-count" v-if="categoryCounts[cat.value]">{{ categoryCounts[cat.value] }}</span>
-        </button>
-      </div>
-      <div class="filter-bar">
-        <div class="filter-tabs">
-          <button
-            v-for="tab in tabs"
-            :key="tab.value"
-            :class="['filter-tab', { active: activeTab === tab.value }]"
-            @click="activeTab = tab.value"
-          >
-            {{ tab.label }}
-            <span class="tab-count" v-if="tabCounts[tab.value]">{{ tabCounts[tab.value] }}</span>
-          </button>
+      <section class="catalog-header" aria-label="自开发资产库">
+        <div>
+          <h1>自开发资产库</h1>
+          <p>组件、页面、后端接口</p>
         </div>
-        <div class="view-toggle">
-          <button :class="['toggle-btn', { active: viewMode === 'grid' }]" @click="viewMode = 'grid'" title="卡片视图">
-            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="7" height="7"/><rect x="14" y="3" width="7" height="7"/><rect x="3" y="14" width="7" height="7"/><rect x="14" y="14" width="7" height="7"/></svg>
-          </button>
-          <button :class="['toggle-btn', { active: viewMode === 'list' }]" @click="viewMode = 'list'" title="列表视图">
-            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="8" y1="6" x2="21" y2="6"/><line x1="8" y1="12" x2="21" y2="12"/><line x1="8" y1="18" x2="21" y2="18"/><line x1="3" y1="6" x2="3.01" y2="6"/><line x1="3" y1="12" x2="3.01" y2="12"/><line x1="3" y1="18" x2="3.01" y2="18"/></svg>
-          </button>
+      </section>
+
+      <section class="catalog-toolbar" aria-label="资产筛选">
+        <div class="catalog-filter-bar">
+          <div class="filter-tabs">
+            <button
+              v-for="tab in tabs"
+              :key="tab.value"
+              :class="['filter-tab', { active: activeTab === tab.value }]"
+              @click="activeTab = tab.value"
+            >
+              {{ tab.label }}
+              <span class="tab-count" v-if="tabCounts[tab.value]">{{ tabCounts[tab.value] }}</span>
+            </button>
+          </div>
+          <div class="view-toggle">
+            <button :class="['toggle-btn', { active: viewMode === 'grid' }]" @click="viewMode = 'grid'" title="卡片视图">
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="7" height="7"/><rect x="14" y="3" width="7" height="7"/><rect x="3" y="14" width="7" height="7"/><rect x="14" y="14" width="7" height="7"/></svg>
+            </button>
+            <button :class="['toggle-btn', { active: viewMode === 'list' }]" @click="viewMode = 'list'" title="行视图">
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="8" y1="6" x2="21" y2="6"/><line x1="8" y1="12" x2="21" y2="12"/><line x1="8" y1="18" x2="21" y2="18"/><line x1="3" y1="6" x2="3.01" y2="6"/><line x1="3" y1="12" x2="3.01" y2="12"/><line x1="3" y1="18" x2="3.01" y2="18"/></svg>
+            </button>
+          </div>
         </div>
-      </div>
+      </section>
 
       <div class="catalog-content" :class="viewMode">
         <div v-if="loading" class="empty-state">加载中...</div>
         <div v-else-if="filteredWorkspaces.length === 0" class="empty-state">
-          {{ activeCategory === 'generic' ? '还没有通用组件 — 在 AI Coding 主页发起组件开发' : '还没有应用相关的自开发 — 进应用从「→ 自开发」发起' }}
+          还没有自开发资产
         </div>
 
         <template v-else-if="viewMode === 'grid'">
@@ -58,7 +55,7 @@
                 </div>
               </div>
               <div class="grid-card-badges">
-                <span v-if="workspaceAppName(ws)" class="app-badge">📦 {{ workspaceAppName(ws) }}</span>
+                <span v-if="workspaceAppName(ws)" class="app-badge">应用：{{ workspaceAppName(ws) }}</span>
                 <span class="source-badge">{{ workspaceGroupLabel(ws.project_type) }}</span>
                 <span class="card-status">{{ workspaceStatusLabel(ws.status) }}</span>
               </div>
@@ -96,7 +93,7 @@
                 <div class="card-info">
                   <div class="card-name-row">
                     <h3>{{ workspaceDisplayName(ws) }}</h3>
-                    <span v-if="workspaceAppName(ws)" class="app-badge">📦 {{ workspaceAppName(ws) }}</span>
+                    <span v-if="workspaceAppName(ws)" class="app-badge">应用：{{ workspaceAppName(ws) }}</span>
                     <span class="source-badge">{{ workspaceGroupLabel(ws.project_type) }}</span>
                     <span class="card-status">{{ workspaceStatusLabel(ws.status) }}</span>
                   </div>
@@ -146,16 +143,9 @@ const route = useRoute()
 const loading = ref(true)
 const workspaces = ref<WorkspaceInfo[]>([])
 const activeTab = ref('all')
-const activeCategory = ref<'all' | 'app-bound' | 'generic'>('all')
 const viewMode = ref<'grid' | 'list'>('grid')
 const appId = computed(() => String(route.query.app_id || ''))
 const appNameMap = ref<Record<number, string>>({})
-
-const CATEGORIES: Array<{ value: 'all' | 'app-bound' | 'generic'; label: string }> = [
-  { value: 'all',       label: '全部' },
-  { value: 'app-bound', label: '应用相关' },
-  { value: 'generic',   label: '通用组件' },
-]
 
 // 上传组件包相关状态
 const uploadingWsId = ref<string | null>(null)
@@ -163,24 +153,22 @@ const showEnvModal = ref(false)
 const pendingUploadWs = ref<WorkspaceInfo | null>(null)
 
 const groupMap: Record<string, { key: string; label: string }> = {
-  'form-component': { key: 'component-pc', label: 'PC组件' },
-  'form-component-dual': { key: 'component-pc', label: '双端组件' },
-  'menu-page': { key: 'page-pc', label: 'PC页面' },
-  'form-page': { key: 'page-pc', label: 'PC页面' },
-  'form-list': { key: 'list-view', label: '列表视图' },
-  layout: { key: 'layout', label: '应用布局' },
+  'form-component': { key: 'component', label: '组件' },
+  'form-component-dual': { key: 'component', label: '双端组件' },
+  'menu-page': { key: 'page', label: '页面' },
+  'form-page': { key: 'page', label: '页面' },
+  'form-list': { key: 'page', label: '页面' },
   plugin: { key: 'plugin', label: '扩展插件' },
   'backend-api': { key: 'backend', label: '后端接口' },
-  'backend-feign': { key: 'backend-feign', label: '外部调用' },
-  'backend-scheduled': { key: 'backend-scheduled', label: '定时任务' },
+  'backend-feign': { key: 'backend', label: '后端接口' },
+  'backend-scheduled': { key: 'backend', label: '后端接口' },
 }
 
 const tabs = [
   { label: '全部', value: 'all' },
-  { label: 'PC组件', value: 'component-pc' },
-  { label: 'PC页面', value: 'page-pc' },
-  { label: '列表视图', value: 'list-view' },
-  { label: '应用布局', value: 'layout' },
+  { label: '组件', value: 'component' },
+  { label: '页面', value: 'page' },
+  { label: '后端接口', value: 'backend' },
 ]
 
 // URL ?app_id=N 限定到具体应用 (从应用上下文跳过来的)；否则全部
@@ -189,39 +177,21 @@ const visibleWorkspaces = computed(() => {
   return workspaces.value.filter(ws => String(ws.project_id || '') === appId.value)
 })
 
-// 第一维度筛：全部 / 应用相关 (有 project_id) / 通用组件 (无 project_id)
-const categoryFilteredWorkspaces = computed(() => {
-  const all = visibleWorkspaces.value
-  if (activeCategory.value === 'all') return all
-  if (activeCategory.value === 'app-bound') return all.filter(ws => !!ws.project_id)
-  return all.filter(ws => !ws.project_id)
-})
-
-// 第二维度：再按 project_type tab 过滤
 const filteredWorkspaces = computed(() => {
-  const pool = categoryFilteredWorkspaces.value
+  const pool = visibleWorkspaces.value
   if (activeTab.value === 'all') return pool
   return pool.filter(ws => groupMap[ws.project_type]?.key === activeTab.value)
 })
 
 const tabCounts = computed(() => {
   const counts: Record<string, number> = {}
-  const pool = categoryFilteredWorkspaces.value
+  const pool = visibleWorkspaces.value
   for (const tab of tabs) {
     counts[tab.value] = tab.value === 'all'
       ? pool.length
       : pool.filter(ws => groupMap[ws.project_type]?.key === tab.value).length
   }
   return counts
-})
-
-const categoryCounts = computed(() => {
-  const all = visibleWorkspaces.value
-  return {
-    all: all.length,
-    'app-bound': all.filter(ws => !!ws.project_id).length,
-    generic: all.filter(ws => !ws.project_id).length,
-  } as Record<string, number>
 })
 
 function workspaceAppName(ws: WorkspaceInfo): string {
@@ -342,64 +312,60 @@ onMounted(async () => {
    r-/sh-/ease tokens, a11y rings. Status pill uses --ok-soft / --ok semantics. */
 
 .catalog-main {
+  --catalog-x: clamp(24px, 3vw, 56px);
   flex: 1;
   min-width: 0;
   display: flex;
   flex-direction: column;
+  gap: 14px;
+  padding: 20px var(--catalog-x) 32px;
+  overflow-y: auto;
+  background: var(--bg-app);
 }
 
-/* 大类切换条 — Phase 5: 应用相关 vs 通用组件 */
-.category-bar {
+.catalog-header {
+  min-height: 86px;
   display: flex;
-  gap: var(--s-2);
-  padding: var(--s-5) var(--s-6) 0;
-  max-width: 1200px;
-  margin: 0 auto;
-  width: 100%;
-  border-bottom: 1px solid var(--line);
-}
-
-.category-tab {
-  background: transparent;
-  border: none;
-  padding: 10px var(--s-5);
-  font-size: var(--t-body);
-  font-weight: var(--fw-medium);
-  color: var(--text-3);
-  display: inline-flex;
   align-items: center;
-  gap: var(--s-2);
-  cursor: pointer;
-  border-bottom: 2px solid transparent;
-  margin-bottom: -1px;
-  font-family: inherit;
-  transition: color 0.14s var(--ease), border-color 0.14s var(--ease);
+  justify-content: space-between;
+  padding: 20px 24px;
+  border: 1px solid var(--line);
+  border-radius: var(--r-3, 8px);
+  background: var(--surface);
 }
 
-.category-tab:hover {
+.catalog-header h1 {
+  margin: 0;
   color: var(--text);
+  font-size: 24px;
+  line-height: 1.16;
+  font-weight: var(--fw-bold, 700);
+  letter-spacing: 0;
 }
 
-.category-tab.active {
-  color: var(--brand);
-  font-weight: var(--fw-semibold);
-  border-bottom-color: var(--brand);
+.catalog-header p {
+  margin: 8px 0 0;
+  color: var(--text-3);
+  font-size: 13px;
 }
 
-.category-tab:focus-visible {
-  outline: 2px solid var(--line-focus);
-  outline-offset: -2px;
-  border-radius: var(--r-1);
+.catalog-toolbar {
+  display: flex;
+  align-items: center;
+  border: 1px solid var(--line);
+  border-radius: var(--r-3, 8px);
+  background: var(--surface);
+  overflow: hidden;
 }
 
-.filter-bar {
+.catalog-filter-bar {
   display: flex;
   align-items: center;
   justify-content: space-between;
   gap: var(--s-4);
-  padding: var(--s-4) var(--s-6) 0;
-  max-width: 1200px;
-  margin: 0 auto;
+  padding: 14px 16px;
+  max-width: none;
+  margin: 0;
   width: 100%;
 }
 
@@ -412,7 +378,8 @@ onMounted(async () => {
 .filter-tab {
   background: transparent;
   border: none;
-  padding: 7px var(--s-4);
+  min-height: 34px;
+  padding: 0 14px;
   font-size: var(--t-body);
   color: var(--text-3);
   display: inline-flex;
@@ -460,13 +427,14 @@ onMounted(async () => {
   display: flex;
   gap: 2px;
   background: var(--surface-2);
+  border: 1px solid var(--line);
   border-radius: var(--r-3);
   padding: 2px;
 }
 
 .toggle-btn {
   width: 32px;
-  height: 32px;
+  height: 28px;
   border: none;
   border-radius: var(--r-2);
   background: none;
@@ -483,8 +451,9 @@ onMounted(async () => {
 }
 
 .toggle-btn.active {
-  background: var(--brand-soft);
-  color: var(--brand-text);
+  background: var(--surface);
+  color: var(--brand);
+  box-shadow: var(--sh-1);
 }
 
 .toggle-btn:focus-visible {
@@ -493,12 +462,12 @@ onMounted(async () => {
 }
 
 .catalog-content {
-  flex: 1;
-  overflow-y: auto;
-  max-width: 1200px;
-  margin: 0 auto;
+  flex: 0 0 auto;
+  overflow: visible;
+  max-width: none;
+  margin: 0;
   width: 100%;
-  padding: var(--s-4) var(--s-6) 60px;
+  padding: 4px 0 32px;
 }
 
 .catalog-content.grid {
@@ -733,12 +702,18 @@ onMounted(async () => {
 }
 
 .empty-state {
-  min-height: 220px;
+  grid-column: 1 / -1;
+  min-height: 260px;
   display: flex;
   align-items: center;
   justify-content: center;
+  padding: 32px;
+  border: 1px solid var(--line);
+  border-radius: var(--r-3, 8px);
+  background: var(--surface);
   color: var(--text-3);
   font-size: var(--t-body);
+  text-align: center;
 }
 
 @media (max-width: 1200px) {
@@ -746,12 +721,25 @@ onMounted(async () => {
 }
 
 @media (max-width: 900px) {
-  .filter-bar {
-    padding: 14px var(--s-4) var(--s-2);
+  .catalog-main {
+    --catalog-x: var(--s-4);
+    padding-top: var(--s-4);
+    padding-bottom: var(--s-4);
+  }
+
+  .catalog-header {
+    min-height: 0;
+    padding: 18px;
+  }
+
+  .catalog-filter-bar {
+    align-items: flex-start;
+    flex-direction: column;
+    padding: 14px;
   }
 
   .catalog-content {
-    padding: var(--s-2) var(--s-4) 20px;
+    padding: 0 0 var(--s-4);
   }
 
   .catalog-content.grid {

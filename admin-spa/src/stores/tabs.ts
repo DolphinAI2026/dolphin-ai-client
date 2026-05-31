@@ -11,24 +11,36 @@ export interface TabItem {
   path: string           // router path
   label: string          // shown on tab
   icon: string           // icon key (matches admin sidebar menu icons)
-  closable: boolean      // 首页 / status 默认不可关
+  closable: boolean      // 首页默认不可关
   kind: 'nav' | 'app'    // nav = sidebar nav; app 预留
 }
 
 const STORAGE_KEY = 'admin-tabs-v1'
+const RETIRED_PATHS = new Set(['/status', '/datasources'])
 
 const HOME_TAB: TabItem = {
-  id: 'status',
-  path: '/status',
-  label: '系统状态',
-  icon: 'status',
+  id: '/mcp',
+  path: '/mcp',
+  label: 'MCP 接入',
+  icon: 'connection',
   closable: false,
   kind: 'nav',
 }
 
+function normalizePath(path: string): string {
+  return path.split('?')[0] || path
+}
+
+function isRestorableTab(tab: unknown): tab is TabItem {
+  if (!tab || typeof tab !== 'object') return false
+  const candidate = tab as Partial<TabItem>
+  if (typeof candidate.id !== 'string' || typeof candidate.path !== 'string') return false
+  return !RETIRED_PATHS.has(normalizePath(candidate.path))
+}
+
 export const useAdminTabsStore = defineStore('admin-tabs', () => {
   const tabs = ref<TabItem[]>([HOME_TAB])
-  const activeId = ref<string>('status')
+  const activeId = ref<string>(HOME_TAB.id)
 
   // Restore from localStorage
   try {
@@ -36,10 +48,13 @@ export const useAdminTabsStore = defineStore('admin-tabs', () => {
     if (raw) {
       const data = JSON.parse(raw)
       if (Array.isArray(data.tabs) && data.tabs.length) {
-        const hasHome = data.tabs.some((t: TabItem) => t.id === 'status')
-        tabs.value = hasHome ? data.tabs : [HOME_TAB, ...data.tabs]
+        const restoredTabs = data.tabs.filter(isRestorableTab)
+        const hasHome = restoredTabs.some((t: TabItem) => t.id === HOME_TAB.id)
+        tabs.value = hasHome ? restoredTabs : [HOME_TAB, ...restoredTabs]
       }
-      if (typeof data.activeId === 'string') activeId.value = data.activeId
+      if (typeof data.activeId === 'string' && tabs.value.some((t) => t.id === data.activeId)) {
+        activeId.value = data.activeId
+      }
     }
   } catch { /* ignore */ }
 

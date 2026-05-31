@@ -1,0 +1,15 @@
+{
+  "entry": "index.js",
+  "templateType": "LIST_VIEW",
+  "router": {},
+  "customWidgetList": [],
+  "list": {
+    "apaas-custom-demo": {
+      "renderLogic": "FORM_LIST_VIEW",
+      "desc": "描述",
+      "status": "ENABLE"
+    }
+  },
+  "copyAssets": ["public/form-view/form-view-demo"],
+  "outputName": "form-view-demo"
+}

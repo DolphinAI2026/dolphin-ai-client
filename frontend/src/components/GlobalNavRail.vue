@@ -39,13 +39,13 @@
           :title="item.label"
           @click="navigateTo(item.path)"
         >
-          <!-- home — 智能搭建 (构建) -->
+          <!-- home — AI Builder (构建) -->
           <svg v-if="item.key === 'home'" class="nav-icon" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true">
             <rect x="2" y="3" width="12" height="2" rx="1" />
             <rect x="2" y="7" width="8" height="2" rx="1" />
             <rect x="2" y="11" width="10" height="2" rx="1" />
           </svg>
-          <!-- coding — 智能开发 -->
+          <!-- coding — AI Coding -->
           <svg v-else-if="item.key === 'coding'" class="nav-icon" viewBox="0 0 16 16" fill="none" aria-hidden="true">
             <path d="M4.5 5L2 8l2.5 3M11.5 5L14 8l-2.5 3M9.5 4l-3 8" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round" />
           </svg>
@@ -184,8 +184,8 @@ const userStore = useUserStore()
 const expanded = ref(true)
 
 const primaryNavItems = [
-  { key: 'home', label: '智能搭建', path: '/' },
-  { key: 'coding', label: '智能开发', path: '/coding' },
+  { key: 'home', label: 'AI Builder', path: '/' },
+  { key: 'coding', label: 'AI Coding', path: '/coding' },
 ]
 
 const activeKey = computed(() => {
@@ -256,7 +256,7 @@ async function onTenantOptionClick(tenantId: number) {
 
 async function handleUserCommand(command: string | number | object) {
   if (command === 'admin') {
-    router.push('/admin')
+    router.push('/platform-admin')
     return
   }
   if (command === 'logout') {

@@ -891,6 +891,8 @@ async def list_coding_conversations(
         {
             "id": c.id,
             "title": c.title,
+            "workspace_id": c.workspace_id,
+            "selected_llm_config_id": c.selected_llm_config_id,
             "created_at": c.created_at.isoformat() if c.created_at else None,
             "updated_at": c.updated_at.isoformat() if c.updated_at else None,
         }

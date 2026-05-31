@@ -22,12 +22,22 @@ backend/apaas_builder.db
 backend/uvicorn.log
 backend/**/*.pyc
 backend/**/*.pyo
+*.key
+*.pem
+*.p12
+*.pfx
 
 # 前端本地环境（stage 1 会自己 npm ci）
 frontend/node_modules/
 frontend/dist/
 frontend/.vite/
+frontend/pnpm-lock.yaml
 frontend/*.log
+admin-spa/node_modules/
+admin-spa/dist/
+admin-spa/.vite/
+admin-spa/*.tsbuildinfo
+admin-spa/pnpm-lock.yaml
 
 # 运行时数据
 workspaces/
@@ -36,6 +46,8 @@ workspaces/
 docs/
 tests/
 examples/
+backend/form_config_*.json
+backend/templates/cli-generated/**/https/
 extensions/
 !extensions/
 !extensions/ruijing-ai/

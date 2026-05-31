@@ -1,0 +1,173 @@
+/* frontend/src/styles/design-v2-tokens.css
+ * Source-of-truth: design_handoff_apaas_builder/source/styles.css
+ * Indigo-violet + cyan AI accent token system from the Claude Design handoff.
+ * Scoped under [data-design="v2"] so it does not affect legacy components.
+ */
+
+:root {
+  --brand-50: #F2F0FE;
+  --brand-100: #E6E3FD;
+  --brand-200: #CDC8FB;
+  --brand-300: #ABA2F7;
+  --brand-400: #847AF0;
+  --brand-500: #5B5BD6;
+  --brand-600: #4747C2;
+  --brand-700: #38379E;
+  --brand-800: #2D2C7B;
+
+  --ai-50:  #ECF8FB;
+  --ai-100: #D2EEF5;
+  --ai-200: #A5DDEB;
+  --ai-300: #6BC2DA;
+  --ai-400: #34A4C2;
+  --ai-500: #1D89A8;
+  --ai-600: #156F8C;
+  --ai-700: #105A73;
+
+  --emerald-500: #10A37F;
+  --emerald-soft: rgba(16, 163, 127, 0.10);
+  --amber-500: #D97706;
+  --amber-soft: rgba(217, 119, 6, 0.10);
+  --rose-500: #DC2626;
+  --rose-soft: rgba(220, 38, 38, 0.10);
+  --sky-500: #0284C7;
+  --sky-soft: rgba(2, 132, 199, 0.10);
+
+  --d-font-sans: "Inter", "PingFang SC", -apple-system, "Helvetica Neue", system-ui, sans-serif;
+  --d-font-mono: "JetBrains Mono", "SF Mono", "Menlo", "Consolas", monospace;
+}
+
+[data-design="v2"],
+[data-design="v2"][data-theme="light"] {
+  --bg-base: #F4F2F9;
+  --bg-app: linear-gradient(180deg, #F6F4FB 0%, #F0EEF7 100%);
+  --bg-rail: #EDEAF6;
+  --surface: #FFFFFF;
+  --surface-2: #FAF9FD;
+  --surface-3: #F3F1F8;
+  --surface-overlay: rgba(255, 255, 255, 0.78);
+  --glass: rgba(255, 255, 255, 0.72);
+  --glass-strong: rgba(255, 255, 255, 0.92);
+
+  --border: rgba(58, 50, 121, 0.10);
+  --border-strong: rgba(58, 50, 121, 0.18);
+  --border-focus: rgba(91, 91, 214, 0.45);
+
+  --text: #18152E;
+  --text-2: #4F4A6E;
+  --text-3: #837EA0;
+  --text-4: #B5B1C9;
+  --text-inverse: #FFFFFF;
+
+  --brand: var(--brand-500);
+  --brand-hover: var(--brand-600);
+  --brand-text: var(--brand-700);
+  --brand-soft: var(--brand-50);
+  --brand-soft-2: var(--brand-100);
+  --brand-ring: rgba(91, 91, 214, 0.18);
+
+  --emerald: var(--emerald-500);
+  --emerald-bg: var(--emerald-soft);
+  --amber: var(--amber-500);
+  --amber-bg: var(--amber-soft);
+  --rose: var(--rose-500);
+  --rose-bg: var(--rose-soft);
+  --sky: var(--sky-500);
+  --sky-bg: var(--sky-soft);
+
+  --shadow-xs: 0 1px 2px rgba(28, 21, 73, 0.04);
+  --shadow-sm: 0 1px 3px rgba(28, 21, 73, 0.06), 0 1px 2px rgba(28, 21, 73, 0.04);
+  --shadow-md: 0 4px 12px rgba(28, 21, 73, 0.06), 0 2px 4px rgba(28, 21, 73, 0.04);
+  --shadow-lg: 0 12px 32px rgba(28, 21, 73, 0.10), 0 4px 12px rgba(28, 21, 73, 0.06);
+  --shadow-xl: 0 24px 60px rgba(28, 21, 73, 0.14), 0 8px 24px rgba(28, 21, 73, 0.08);
+
+  --code-bg: #F6F4FB;
+  --code-text: #38379E;
+
+  --ai: var(--ai-500);
+  --ai-hover: var(--ai-600);
+  --ai-text: var(--ai-600);
+  --ai-soft: var(--ai-50);
+  --ai-soft-2: var(--ai-100);
+  --ai-ring: rgba(29, 137, 168, 0.18);
+}
+
+[data-design="v2"][data-theme="dark"] {
+  --bg-base: #0B0A14;
+  --bg-app: linear-gradient(180deg, #0E0D1A 0%, #0A0913 100%);
+  --bg-rail: #100E1C;
+  --surface: #15131F;
+  --surface-2: #1A1727;
+  --surface-3: #211D31;
+  --surface-overlay: rgba(21, 19, 31, 0.78);
+  --glass: rgba(21, 19, 31, 0.78);
+  --glass-strong: rgba(21, 19, 31, 0.92);
+
+  --border: rgba(255, 255, 255, 0.07);
+  --border-strong: rgba(255, 255, 255, 0.13);
+  --border-focus: rgba(138, 138, 240, 0.55);
+
+  --text: #F2F1F8;
+  --text-2: #B8B4CB;
+  --text-3: #837F9C;
+  --text-4: #5A5670;
+  --text-inverse: #0B0A14;
+
+  --brand: #8A8AF0;
+  --brand-hover: #A0A0F5;
+  --brand-text: #B5B5F8;
+  --brand-soft: rgba(138, 138, 240, 0.12);
+  --brand-soft-2: rgba(138, 138, 240, 0.20);
+  --brand-ring: rgba(138, 138, 240, 0.28);
+
+  --emerald: #34D399;
+  --emerald-bg: rgba(52, 211, 153, 0.14);
+  --amber: #FBBF24;
+  --amber-bg: rgba(251, 191, 36, 0.14);
+  --rose: #F87171;
+  --rose-bg: rgba(248, 113, 113, 0.14);
+  --sky: #38BDF8;
+  --sky-bg: rgba(56, 189, 248, 0.14);
+
+  --shadow-xs: 0 1px 2px rgba(0, 0, 0, 0.3);
+  --shadow-sm: 0 1px 3px rgba(0, 0, 0, 0.4);
+  --shadow-md: 0 4px 12px rgba(0, 0, 0, 0.5);
+  --shadow-lg: 0 12px 32px rgba(0, 0, 0, 0.6);
+  --shadow-xl: 0 24px 60px rgba(0, 0, 0, 0.7);
+
+  --code-bg: #1A1727;
+  --code-text: #B5B5F8;
+
+  --ai: #5BBBD7;
+  --ai-hover: #7CCBE2;
+  --ai-text: #8DD3E5;
+  --ai-soft: rgba(91, 187, 215, 0.10);
+  --ai-soft-2: rgba(91, 187, 215, 0.18);
+  --ai-ring: rgba(91, 187, 215, 0.30);
+}
+
+/* Status badges. Used by ProjectSwitcher stage chips today and reusable for
+   Sessions 3-6 (Projects list cards, Specs status, Apps refresh chips). Scoped
+   under [data-design="v2"] so the legacy chrome remains untouched. */
+[data-design="v2"] .badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  height: 20px;
+  padding: 0 7px;
+  border-radius: 5px;
+  font-size: 11px;
+  font-weight: 500;
+  letter-spacing: 0;
+  background: var(--surface-3);
+  color: var(--text-2);
+  border: 1px solid transparent;
+  white-space: nowrap;
+}
+[data-design="v2"] .badge-dot { width: 6px; height: 6px; border-radius: 50%; background: currentColor; }
+[data-design="v2"] .badge-brand { background: var(--brand-soft); color: var(--brand-text); }
+[data-design="v2"] .badge-emerald { background: var(--emerald-bg); color: var(--emerald); }
+[data-design="v2"] .badge-amber { background: var(--amber-bg); color: var(--amber); }
+[data-design="v2"] .badge-rose { background: var(--rose-bg); color: var(--rose); }
+[data-design="v2"] .badge-sky { background: var(--sky-bg); color: var(--sky); }
+[data-design="v2"] .badge-outline { background: transparent; border-color: var(--border-strong); color: var(--text-2); }

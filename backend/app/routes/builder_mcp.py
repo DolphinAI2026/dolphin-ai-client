@@ -34,12 +34,12 @@ logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/builder", tags=["builder-mcp"])
 
-# 跟 admin_mcp.py 共用同样的 v2 endpoint 配置
+# 跟 admin_mcp.py 共用同样的独立 MCP endpoint 配置
 _V2_BASE = os.getenv(
     "MCP_V2_INTERNAL_BASE",
-    "http://apaas-builder-mcp-server:8004/api/mcp/mcp",
+    "http://127.0.0.1:8004/api/mcp/mcp",
 )
-_V2_HOST = os.getenv("MCP_V2_HOST", "agent.dfy.definesys.cn")
+_V2_HOST = os.getenv("MCP_V2_HOST", "127.0.0.1:8004")
 
 
 def _v2_headers() -> dict:

@@ -21,7 +21,7 @@
  * - 不再 v-if="!embedded" 隐藏 sidebar/header（永远显）
  * - embedded 模式下 header 多出 "← 返回工作台" 按钮跳父窗口
  *
- * 这样 localhost:5174/mcp 和 /platform-admin 两条路径视觉完全一致。
+ * 这样 /admin/mcp 和 /platform-admin 两条路径视觉完全一致。
  */
 import { computed, onMounted, onBeforeUnmount, ref, watch } from 'vue'
 import { useRoute } from 'vue-router'
@@ -43,12 +43,7 @@ const iframeSrc = computed(() => {
   const params = new URLSearchParams({ embed: '1' })
   if (token) params.set('handoff_token', token)
 
-  if (import.meta.env.DEV) {
-    return `${window.location.protocol}//${window.location.hostname}:5174${adminPath.value}?${params.toString()}`
-  }
-
-  const base = import.meta.env.BASE_URL.replace(/\/$/, '')
-  return `${base}/admin${adminPath.value}?${params.toString()}`
+  return `${window.location.origin}/admin${adminPath.value}?${params.toString()}`
 })
 
 watch(iframeSrc, () => {
@@ -60,7 +55,7 @@ watch(iframeSrc, () => {
 // missing cleanup 导致组件 unmount 后 listener 累积
 function handleAdminMessage(event: MessageEvent) {
   // 只接受来自 admin-spa iframe 的同 host message
-  // dev: admin-spa 在 :5174，prod: 同 origin /admin/
+  // admin-spa 由 backend 挂载到同源 /admin/
   const adminOriginAllowed = (() => {
     try {
       const adminUrl = new URL(iframeSrc.value)

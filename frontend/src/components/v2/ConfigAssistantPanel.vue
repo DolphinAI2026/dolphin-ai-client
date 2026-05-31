@@ -4,35 +4,28 @@
 
      2026-05-24 (refactor #9): 1207 行单文件 → 5 子组件 + 4 composables 拆分:
      - ConfigAssistantHeader.vue       (标题 + 副标题 + 模型选择 dropdown — Agent B)
-     - ConfigAssistantViewport.vue     (MJPEG mini preview)
      - ConfigAssistantMessages.vue     (主消息区 + plan card + hero CTA + change_plan info)
      - ConfigAssistantInput.vue        (输入框 + send btn)
      - ConfigAssistantSessionDrawer.vue (会话历史抽屉 — Agent A, 主容器集成于本文件)
      - composables/useConfigChat.ts    (messages / send / SSE 消费 / extractPlan / sessionId)
-     - composables/useDynamicExamples.ts (例子 chip 按真实 SPEC 动态生成)
-     - composables/useViewportStream.ts  (MJPEG 流 URL)
      - composables/usePanelResize.ts     (PointerEvent + setPointerCapture 拖宽)
 
      2026-05-24 (Agent A + B 集成):
      - sessionId 持久化 (useConfigChat 内, sticky from 'started' SSE event)
      - 新对话 / 历史抽屉 (SessionDrawer + drawerOpen state)
-     - modelId v-model (Header dropdown, localStorage 持久化 key apaas-config-assistant-model-v1)
+     - modelId 走后端默认配置, 不再在配置助手顶部暴露模型选择
 
      props / emit / localStorage key 兼容老版本, ChatPage.vue 不动. -->
 <script setup lang="ts">
-import { computed, onMounted, onUpdated, ref, toRef, watch } from 'vue'
+import { computed, onMounted, onUpdated, ref, toRef } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 
 import ConfigAssistantHeader from './config-assistant/ConfigAssistantHeader.vue'
-import ConfigAssistantViewport from './config-assistant/ConfigAssistantViewport.vue'
 import ConfigAssistantMessages from './config-assistant/ConfigAssistantMessages.vue'
 import ConfigAssistantInput from './config-assistant/ConfigAssistantInput.vue'
 import ConfigAssistantSessionDrawer from './config-assistant/ConfigAssistantSessionDrawer.vue'
-import DeployHistoryDrawer from './DeployHistoryDrawer.vue'
 
 import { useConfigChat } from './config-assistant/composables/useConfigChat'
-import { useDynamicExamples } from './config-assistant/composables/useDynamicExamples'
-import { useViewportStream } from './config-assistant/composables/useViewportStream'
 import { usePanelResize } from './config-assistant/composables/usePanelResize'
 
 import { configChatApi } from '@/api/configChat'
@@ -91,28 +84,10 @@ const { panelWidth, isResizing, onResizeStart } = usePanelResize({
   maxWidth: 880,
 })
 
-// MJPEG viewport
 const appIdRef = toRef(props, 'applicationId')
-const { viewportEnabled, viewportStreamUrl, openViewportFull } = useViewportStream(appIdRef)
 
-// 动态例子 chip (按当前应用真实 SPEC 生成)
-const { examples } = useDynamicExamples(appIdRef)
-
-// 2026-05-24 Agent B 集成: modelId 持久化, 跟 Header v-model 绑
-const MODEL_KEY = 'apaas-config-assistant-model-v1'
-const modelId = ref<number | null>((() => {
-  const v = localStorage.getItem(MODEL_KEY)
-  if (!v || v === 'null' || v === '') return null
-  const n = Number(v)
-  return Number.isFinite(n) && n > 0 ? n : null
-})())
-watch(modelId, (v) => {
-  try {
-    localStorage.setItem(MODEL_KEY, v == null ? '' : String(v))
-  } catch {
-    /* private mode */
-  }
-})
+// 2026-05-31: 模型选择从配置助手主界面移除, 这里固定走后端默认模型。
+const modelId = ref<number | null>(null)
 
 // Chat 核心逻辑 — scrollerRef 在 onMounted 后 querySelector 注入
 const scrollerRef = ref<HTMLElement | null>(null)
@@ -121,7 +96,6 @@ const {
   input,
   sending,
   send,
-  pickExample,
   // Agent A 新增 exports
   sessionId,
   clearMessages,
@@ -129,16 +103,13 @@ const {
 } = useConfigChat({
   applicationId: appIdRef,
   scrollerRef,
-  modelId, // Agent B
+  modelId,
   currentSection: toRef(props, 'currentSection') as any, // PR2c (SPEC v2 §1.2)
 })
 
 // 2026-05-24 Agent A 集成: 历史会话抽屉
 const drawerOpen = ref(false)
 const drawerRef = ref<InstanceType<typeof ConfigAssistantSessionDrawer> | null>(null)
-
-// 2026-05-24 Agent C 集成: 部署历史抽屉 (post-deploy 应用专属入口)
-const deployHistoryOpen = ref(false)
 
 async function onDelete(sid: number) {
   try {
@@ -184,8 +155,41 @@ function onNewSession() {
 }
 
 const emptyHint = computed(
-  () => `配置「${props.appName ?? '应用'}」— 描述你想调整的字段、流程、权限...`,
+  () => '直接描述需求，或点击常用调整。',
 )
+
+const SECTION_LABELS: Record<string, string> = {
+  ui: '功能页面',
+  design: '功能页面',
+  data: '数据配置',
+  logic: '流程配置',
+  permission: '权限配置',
+  perm: '权限配置',
+  log: '操作记录',
+}
+
+const DESIGNER_SUB_LABELS: Record<string, string> = {
+  form: '表单设计',
+  list: '列表设计',
+  process: '流程设计',
+  data: '数据 schema',
+  perm: '权限',
+}
+
+const contextTitle = computed(() => {
+  const sub = (props.designerSub || '').trim()
+  if (sub && DESIGNER_SUB_LABELS[sub]) return DESIGNER_SUB_LABELS[sub]
+  const section = (props.currentSection || '').trim()
+  return SECTION_LABELS[section] || '当前功能页面'
+})
+
+const contextMeta = computed(() => {
+  const tab = (props.currentSectionTab || '').trim()
+  const sub = (props.designerSub || '').trim()
+  if (sub) return '可直接描述字段、流程或权限调整'
+  if (tab) return `当前区域：${tab}`
+  return '已连接应用上下文'
+})
 
 // ─── Quick action chips ────────────────────────────────────────
 // 2026-05-26: 按 currentSection + currentSectionTab 智能切快捷指令.
@@ -312,9 +316,6 @@ const CHIP_MATRIX: Record<string, QuickActionChip[]> = {
   'log:op_log': [
     { label: '查最近操作', prompt: '请查一下最近 1 天的操作日志' },
   ],
-  'log:deploy_history': [
-    { label: '查部署历史', prompt: '请列出最近 5 次的部署记录及结果' },
-  ],
 }
 
 const DEFAULT_CHIPS: QuickActionChip[] = [
@@ -439,27 +440,8 @@ onUpdated(() => {
     <!-- 左边缘拖拽 handle -->
     <div class="ca-resize-handle" @pointerdown="onResizeStart" title="拖拽调整宽度" />
 
-    <!-- 顶部 actions: 上传文档 / 新对话 / 历史 / 部署历史 (固定在 panel 顶部右上角) -->
+    <!-- 顶部 actions: 会话列表 / 新对话 / 关闭. 附件上传移入输入区, 部署历史移出配置助手主流程. -->
     <div class="ca-top-actions">
-      <button
-        class="ca-top-btn ca-top-btn-upload"
-        title="上传新设计文档 — 与当前应用对比生成变更计划，审核后增量更新"
-        @click="$emit('upload-doc')"
-      >
-        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-          <path d="M12 16V4M8 8l4-4 4 4" />
-          <path d="M4 16v2a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-2" />
-        </svg>
-      </button>
-      <button
-        class="ca-top-btn"
-        title="新对话"
-        @click="onNewSession"
-      >
-        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-          <path d="M12 5v14M5 12h14" />
-        </svg>
-      </button>
       <button
         class="ca-top-btn"
         title="历史对话"
@@ -471,12 +453,11 @@ onUpdated(() => {
       </button>
       <button
         class="ca-top-btn"
-        title="部署历史 / 回滚"
-        @click="deployHistoryOpen = true"
+        title="新对话"
+        @click="onNewSession"
       >
         <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-          <path d="M12 8v4l3 2" />
-          <circle cx="12" cy="12" r="9" />
+          <path d="M12 5v14M5 12h14" />
         </svg>
       </button>
       <!-- 2026-05-25: 浮动模式 close 按钮 -->
@@ -491,46 +472,51 @@ onUpdated(() => {
       </button>
     </div>
 
-    <ConfigAssistantHeader :app-name="appName" v-model:model-id="modelId" />
+    <ConfigAssistantHeader :app-name="appName" />
 
-    <ConfigAssistantViewport
-      :enabled="viewportEnabled"
-      :stream-url="viewportStreamUrl"
-      @toggle="viewportEnabled = $event"
-      @open-full="openViewportFull"
-    />
+    <section class="ca-context-card" aria-label="当前上下文">
+      <div>
+        <div class="ca-context-title">{{ contextTitle }}</div>
+      </div>
+      <div class="ca-context-meta">{{ contextMeta }}</div>
+      <div class="ca-context-status">
+        <span class="ca-context-dot" />
+        已连接
+      </div>
+    </section>
 
     <!-- Quick action chips — 按 currentSection + currentSectionTab 智能切.
          2026-05-26 (I2): 真发送链路.
          - prompt 含 「」/「…」/XX 占位: 只 prefill, 让用户填值后自己 click send.
          - 实指令 (无占位): 自动 send() 真发到 backend SSE endpoint.
          视觉: click 闪 0.15s 蓝 ring; 自动发送中显 inline loading dot. -->
-    <div v-if="quickActionChips.length" class="ca-quick-actions" role="toolbar" aria-label="快捷指令">
-      <button
-        v-for="chip in quickActionChips"
-        :key="chip.label"
-        class="ca-chip"
-        :class="{
-          'is-flashing': flashingChip === chip.label,
-          'is-sending': autoSendingChip === chip.label,
-          'is-placeholder': chipHasPlaceholder(chip.prompt),
-        }"
-        type="button"
-        :title="chipHasPlaceholder(chip.prompt) ? '点击预填, 修改后发送' : chip.prompt"
-        :disabled="sending && autoSendingChip !== chip.label"
-        @click="onChipClick(chip)"
-      >
-        {{ chip.label }}
-        <span v-if="autoSendingChip === chip.label" class="ca-chip-dot" aria-hidden="true" />
-      </button>
-    </div>
+    <section v-if="quickActionChips.length" class="ca-quick-section" aria-label="常用调整">
+      <div class="ca-section-title">常用调整</div>
+      <div class="ca-quick-actions" role="toolbar" aria-label="快捷指令">
+        <button
+          v-for="chip in quickActionChips"
+          :key="chip.label"
+          class="ca-chip"
+          :class="{
+            'is-flashing': flashingChip === chip.label,
+            'is-sending': autoSendingChip === chip.label,
+            'is-placeholder': chipHasPlaceholder(chip.prompt),
+          }"
+          type="button"
+          :title="chipHasPlaceholder(chip.prompt) ? '点击预填, 修改后发送' : chip.prompt"
+          :disabled="sending && autoSendingChip !== chip.label"
+          @click="onChipClick(chip)"
+        >
+          {{ chip.label }}
+          <span v-if="autoSendingChip === chip.label" class="ca-chip-dot" aria-hidden="true" />
+        </button>
+      </div>
+    </section>
 
     <ConfigAssistantMessages
       :messages="messages"
-      :examples="examples"
       :sending="sending"
       :empty-hint="emptyHint"
-      @pick-example="pickExample"
       @refresh-iframe="emit('refresh-iframe')"
     />
 
@@ -538,6 +524,7 @@ onUpdated(() => {
       v-model="input"
       :sending="sending"
       @send="send"
+      @upload-doc="emit('upload-doc')"
     />
 
     <!-- 会话历史抽屉 (Agent A 新组件, 主容器集成) -->
@@ -552,13 +539,6 @@ onUpdated(() => {
       @rename="onRename"
     />
 
-    <!-- 部署历史抽屉 (Agent C 新组件, post-deploy 应用专属入口) -->
-    <DeployHistoryDrawer
-      v-model:open="deployHistoryOpen"
-      :application-id="applicationId"
-      :app-name="appName"
-      @rolled-back="emit('refresh-iframe')"
-    />
   </aside>
 </template>
 
@@ -601,10 +581,10 @@ onUpdated(() => {
 /* ─── 顶部 actions (新对话 / 历史) ────────────────────────── */
 .ca-top-actions {
   position: absolute;
-  top: 8px;
-  right: 10px;
+  top: 14px;
+  right: 14px;
   display: flex;
-  gap: 4px;
+  gap: 8px;
   z-index: 5;
 }
 
@@ -612,11 +592,11 @@ onUpdated(() => {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  width: 24px;
-  height: 24px;
+  width: 34px;
+  height: 34px;
   padding: 0;
   border: 1px solid var(--line);
-  border-radius: var(--r-2, 4px);
+  border-radius: 10px;
   background: var(--surface);
   color: var(--text-3);
   cursor: pointer;
@@ -628,29 +608,81 @@ onUpdated(() => {
   color: var(--brand);
 }
 
-/* 上传文档入口 — 品牌色描边, 在一排图标里更显眼 (用户更新应用的主入口之一) */
-.ca-top-btn-upload {
-  color: var(--brand);
-  border-color: var(--brand-ring, var(--brand));
-  background: var(--brand-soft);
+/* ─── 当前上下文卡片 ───────────────────────────── */
+.ca-context-card {
+  position: relative;
+  margin: 12px 14px;
+  padding: 11px 84px 11px 12px;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: var(--surface);
+  box-shadow: 0 8px 24px rgba(15, 23, 42, 0.04);
 }
-.ca-top-btn-upload:hover {
-  background: var(--brand);
-  color: #fff;
+
+.ca-context-title {
+  font-size: 14px;
+  font-weight: var(--fw-semibold, 600);
+  color: var(--text);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.ca-context-meta {
+  margin-top: 6px;
+  max-width: 100%;
+  font-size: 11px;
+  line-height: 1.2;
+  color: var(--text-3);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.ca-context-status {
+  position: absolute;
+  top: 12px;
+  right: 12px;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 3px 7px;
+  border-radius: 999px;
+  background: rgba(34, 197, 94, 0.09);
+  color: var(--ok, #16a34a);
+  font-size: 11px;
+}
+
+.ca-context-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: currentColor;
 }
 
 /* ─── Quick action chips (顶部快捷指令) ───────────────────── */
+.ca-quick-section {
+  padding: 0 14px 10px;
+  border-bottom: 1px solid var(--line);
+  background: var(--surface);
+  flex-shrink: 0;
+}
+
+.ca-section-title {
+  margin-bottom: 7px;
+  font-size: 12px;
+  font-weight: var(--fw-semibold, 600);
+  color: var(--text);
+}
+
 .ca-quick-actions {
   display: flex;
   align-items: center;
   gap: 8px;
-  padding: 8px 12px;
-  border-bottom: 1px solid var(--line);
-  background: var(--surface);
+  padding: 0;
   overflow-x: auto;
   overflow-y: hidden;
   scrollbar-width: thin;
-  flex-shrink: 0;
 }
 
 .ca-quick-actions::-webkit-scrollbar {
@@ -666,13 +698,14 @@ onUpdated(() => {
   flex-shrink: 0;
   display: inline-flex;
   align-items: center;
-  padding: 6px 12px;
+  min-height: 30px;
+  padding: 0 12px;
   border: 1px solid var(--line);
   border-radius: 999px;
   background: var(--surface-2, var(--surface));
   color: var(--text-2, var(--text));
   font-family: inherit;
-  font-size: 14px;
+  font-size: 12.5px;
   font-weight: var(--fw-regular, 400);
   line-height: 1;
   white-space: nowrap;

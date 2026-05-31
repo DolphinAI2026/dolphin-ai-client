@@ -1,0 +1,50 @@
+---
+name: apaas-builder-setup
+description: 搭建和配置 aPaaS Builder MCP / Dolphin 智能体时使用。负责区分 MCP、配置线上地址、鉴权头、发布检查；不负责写业务代码。
+---
+
+# aPaaS Builder 搭建 Skill
+
+## 目标
+
+把 Dolphin 智能体正确接到线上 MCP。只处理搭建、配置、联调、发布状态确认。
+
+## 当前线上 MCP
+
+优先配置前两个：
+
+| 智能体 | 服务编码 | 上游地址 | 用途 |
+|---|---|---|---|
+| 配置态 | `apaas-builder-config` | `https://df-aigc.dfy.definesys.cn/mcp-server/api/mcp-builder/mcp` | 设计文档、建应用、查应用结构 |
+| 开发态 | `apaas-builder-coding` | `https://df-aigc.dfy.definesys.cn/mcp-server/api/mcp-coding/mcp` | workspace、代码、单独打包、发布 |
+
+其他 MCP：
+
+| MCP | 上游地址 | 用途 |
+|---|---|---|
+| Design | `/api/mcp-design/mcp` | 只读设计规范 |
+| Vibe | `/api/mcp-vibe/mcp` | 独立沙箱预览 / PoC |
+
+## 配置规则
+
+1. 协议选 `Streamable HTTP`。
+2. 上游请求参数加 Header：`X-AI-GW-KEY`。
+3. `X-AI-GW-KEY` 用固定值，不要用 `${header.X-AI-GW-KEY}` 动态引用。
+4. 点“测试连接并获取工具列表”，成功后再保存。
+5. 保存后必须发布，看到状态 `已发布` 才算完成。
+6. 不要把密钥写进聊天、文档或截图说明。
+
+## 成功标准
+
+- `apaas-builder-config`：能发现配置态工具，例如 `save_design_draft`、`promote_draft_to_app`。
+- `apaas-builder-coding`：能发现开发态工具，例如 `create_dev_workspace`、`build_dev_workspace`、`publish_dev_workspace`。
+- 页面状态是 `已发布`。
+- 详情页出现 Dolphin 调用地址。
+
+## 常见误区
+
+- 低代码二次开发后端打包不走 `vibe sandbox`，而是由主服务容器执行。
+- `build_dev_workspace` 是单独打包，只产物，不上传、不 attach、不重新发布。
+- `publish_dev_workspace` 才是打包并上传到 aPaaS、关联应用、触发发布。
+- `apaas-builder-config` 不应该放代码读写和打包工具。
+- `apaas-builder-coding` 不负责从自然语言完整生成配置态应用。

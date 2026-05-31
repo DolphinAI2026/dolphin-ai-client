@@ -34,14 +34,9 @@ from app.tool_registry import (
 # ─────────────────────────────────────────────────────
 # Expected ConfigAssistant whitelist — post-PR1+PR3 current state.
 #
-# **NOT** PR1-之前的硬编码 baseline (那个是 61 工具). 这个集合包含 PR3 加的
-# update_apaas_app_info, 所以总数 62. 命名特意从 _OLD_* 改成 _EXPECTED_*, 防止
+# **NOT** PR1-之前的硬编码 baseline (那个是 61 工具). 这个集合包含后续加入
+# config agent 的工具, 所以总数会随 registry 同步更新。命名特意从 _OLD_* 改成 _EXPECTED_*, 防止
 # 误读为 "PR1 落地前的 baseline" — round2-p2 reviewer #1 报的标签混淆.
-#
-# 历史来源:
-#   - PR1 落地前 _CONFIG_CHAT_TOOL_WHITELIST 是 61 工具 (commit b7dc145, 2026-05-25)
-#   - PR3 加 update_apaas_app_info (SPEC v2 顶部 breadcrumb 编辑) → 升 62 (2026-05-26)
-#   - 加新工具到 config agent 时, 本常数 + tool_registry.yaml 同步改
 #
 # 测试用途: tool_registry.yaml 派生白名单必须 byte-equal 本集合 — 任何 yaml drift
 # (新工具忘加 agent='config' / 老工具被误删) CI 拦.
@@ -49,8 +44,8 @@ from app.tool_registry import (
 _EXPECTED_CONFIG_WHITELIST: frozenset[str] = frozenset({
     "add_apaas_dict_option",
     "add_apaas_model_field",
+    "attach_dev_packages_to_apaas_app",
     "bind_apaas_form_field_to_dict",
-    "update_apaas_app_info",  # PR3 (SPEC v2 顶部 breadcrumb 编辑)
     "browser_click",
     "browser_list_pages",
     "browser_navigate",
@@ -71,21 +66,32 @@ _EXPECTED_CONFIG_WHITELIST: frozenset[str] = frozenset({
     "create_apaas_menu_group",
     "create_apaas_self_dev_menu",
     "create_apaas_value_change_assignment_event",
+    "create_dev_workspace",
     "create_form_event_with_python_code",
     "create_time_event_with_python_code",
     "delete_apaas_app_menu",
     "delete_apaas_app_role",
     "delete_apaas_business_event",
     "delete_config_skill",
+    "deploy_process_to_apaas",
     "disable_apaas_app_dict",
     "disable_apaas_dict_option",
     "disable_apaas_model_field",
+    "edit_workspace_files",
     "get_apaas_app_overview",
     "get_apaas_business_event_detail",
+    "get_apaas_form_detail",
+    "get_apaas_process_detail",
     "get_config_skill",
+    "get_dev_workspace_status",
+    "get_role_resource_matrix",
+    "glob_workspace",
+    "grep_workspace",
+    "import_zip_to_workspace",
     "list_apaas_app_dicts",
     "list_apaas_app_menus",
     "list_apaas_app_models",
+    "list_apaas_app_processes",
     "list_apaas_app_roles",
     "list_apaas_apps_in_env",
     "list_apaas_business_event_execution_history",
@@ -97,18 +103,27 @@ _EXPECTED_CONFIG_WHITELIST: frozenset[str] = frozenset({
     "list_apaas_form_views",
     "list_apaas_models_in_env",
     "list_config_skills",
+    "list_dev_scenes",
+    "publish_dev_workspace",
     "query_apaas_business_event_trees",
+    "read_workspace_file",
     "rename_apaas_menu",
+    "republish_apaas_app",
+    "run_workspace_command",
     "save_apaas_business_event",
     "save_config_skill",
+    "save_dev_spec",
     "set_apaas_app_process",
     "set_apaas_form_permissions",
     "set_apaas_menu_parent",
+    "set_role_resource_permission",
     "update_apaas_app_dict",
+    "update_apaas_app_info",
     "update_apaas_app_role",
     "update_apaas_dict_option",
     "update_apaas_form_component",
     "update_apaas_model_field",
+    "write_workspace_files",
 })
 
 
@@ -295,11 +310,7 @@ def test_tool_meta_unknown_raises():
 
 
 def test_config_whitelist_matches_current_expected():
-    """tool_registry.yaml 派生的 config 白名单 == 当前期望集合 (post-PR1+PR3, 62 工具).
-
-    PR1 落地前是 61 (硬编码 _CONFIG_CHAT_TOOL_WHITELIST), PR3 加 update_apaas_app_info
-    升 62. 加新 config 工具到 yaml 时, 同步更新 _EXPECTED_CONFIG_WHITELIST.
-    """
+    """tool_registry.yaml 派生的 config 白名单 == 当前期望集合。"""
     new = set(tools_for_agent("config"))
     diff = new ^ _EXPECTED_CONFIG_WHITELIST
     assert not diff, (
@@ -307,7 +318,7 @@ def test_config_whitelist_matches_current_expected():
         f"  only in yaml (registered): {sorted(new - _EXPECTED_CONFIG_WHITELIST)}\n"
         f"  only in expected (yaml 漏): {sorted(_EXPECTED_CONFIG_WHITELIST - new)}"
     )
-    assert len(new) == 62, f"config 白名单总数应是 62 (post-PR1+PR3), 实际 {len(new)}"
+    assert len(new) == 82, f"config 白名单总数应是 82, 实际 {len(new)}"
 
 
 def test_builder_whitelist_count():

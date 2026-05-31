@@ -709,6 +709,11 @@ async def get_conversation_history(db: AsyncSession, conversation_id: int) -> li
 async def save_coding_message(db: AsyncSession, conversation_id: int, role: str, content: str):
     msg = Message(conversation_id=conversation_id, role=role, content=content)
     db.add(msg)
+    conv = await db.get(Conversation, conversation_id)
+    if conv:
+        conv.updated_at = datetime.utcnow()
+        if role == "user" and conv.title in {"智能开发", "新开发会话", "新对话"}:
+            conv.title = content.replace("\n", " ").strip()[:50] or conv.title
     await db.commit()
 
 

@@ -77,16 +77,6 @@
 
     <!-- ═══════════ 主区域 ═══════════ -->
     <div class="admin-main-col">
-      <header class="topbar">
-        <div class="topbar-crumb">
-          <span>aPaaS Builder</span>
-          <span class="topbar-crumb-sep">/</span>
-          <span class="topbar-crumb-mid">平台管理</span>
-          <span class="topbar-crumb-sep">/</span>
-          <span class="topbar-crumb-current">{{ currentTitle }}</span>
-        </div>
-      </header>
-
       <!-- 2026-05-22 多 tab 栏 — 跟工作台 frontend TabStrip 同款体验, 支持 cmd+click 开新 chrome tab -->
       <TabStrip />
 
@@ -117,15 +107,12 @@ interface MenuItem {
 }
 
 const menus: MenuItem[] = [
-  { path: '/status',      label: '系统状态',  icon: 'status', closable: false },
   { path: '/mcp',         label: 'MCP 接入',  icon: 'connection' },
   { path: '/tester',      label: 'MCP 测试',  icon: 'flask' },
   { path: '/logs',        label: '调用日志',  icon: 'logs' },
   { path: '/tenants',     label: 'aPaaS 租户', icon: 'building' },
   { path: '/llm-configs', label: 'LLM 配置',  icon: 'cpu' },
   { path: '/users',       label: 'aPaaS 用户', icon: 'user' },
-  // M4 (2026-05-27): 数据源从 ai-builder 工作台搬到平台管理 — 平台级配置归属
-  { path: '/datasources', label: '数据源',     icon: 'connection' },
 ]
 
 // 2026-05-22 多 tab 体系: rail 点击 → openTab + router.push, 让用户能同时开多个管理界面
@@ -174,8 +161,6 @@ watch(() => route.path, (path) => {
     }
   }
 }, { immediate: true })
-
-const currentTitle = computed(() => menus.find(m => m.path === route.path)?.label || '管理后台')
 
 const embedded = computed(() => {
   const queryEmbedded = route.query.embed === '1' || route.query.embed === 'true'
@@ -251,8 +236,8 @@ function returnWorkspace() {
   if (window.self !== window.top && window.top) {
     // 2026-05-21 修：之前先尝试 `window.top.location.href = '/ai-builder/'`
     // — **相对 URL** 不是按 top 的 origin 解析，而是按当前 iframe 的 origin 解析
-    // (admin-spa dev :5174)，结果 top 被导航到 http://localhost:5174/ai-builder/
-    // 整个 tab 跑到 admin-spa 端口去了。
+    // (admin-spa mounted at /admin)，结果 top 被导航到 /admin/ai-builder/
+    // 整个 tab 跑到 admin-spa 路径去了。
     //
     // 修法：永远走 postMessage 让 parent (frontend :5173 + import.meta.env.BASE_URL)
     // 自己决定跳哪个 URL。原 catch 分支早就是这个逻辑，干脆把它提到默认路径。
@@ -272,7 +257,7 @@ function returnWorkspace() {
     // 注意 admin-spa router base 是 '/'，所以这里不能用 router.push 跳到
     // frontend SPA，直接 window.location.assign 到 frontend dev origin。
     if (typeof window !== 'undefined') {
-      // dev: frontend 在 :5173，admin-spa 在 :5174；prod: 同 origin 不同 path
+      // frontend 是唯一浏览器入口；admin-spa 由 backend 挂载到同源 /admin。
       const frontendOrigin = import.meta.env.DEV
         ? `${window.location.protocol}//${window.location.hostname}:5173`
         : window.location.origin
@@ -625,54 +610,6 @@ function renderIcon(name: string): string {
 .logout-icon-btn:hover {
   background: var(--err-soft, rgba(220, 38, 38, 0.1));
   color: var(--err, #B91C1C);
-}
-
-/* ─── TopBar (跟 frontend ShellTopBar 1:1) ──────────────────── */
-.topbar {
-  display: flex;
-  align-items: center;
-  gap: 14px;
-  padding: 0 20px;
-  height: 48px;
-  background: var(--surface);
-  border-bottom: 1px solid var(--line);
-  position: relative;
-  z-index: 5;
-  flex-shrink: 0;
-}
-
-.topbar-crumb {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  font-size: 13px;
-  color: var(--text-3);
-  flex: 1;
-  min-width: 0;
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-
-.topbar-crumb > span:first-child {
-  color: var(--text-3);
-  font-weight: var(--fw-medium, 500);
-  letter-spacing: -0.005em;
-}
-
-.topbar-crumb-sep {
-  color: var(--text-4);
-  font-weight: 400;
-}
-
-.topbar-crumb-mid {
-  color: var(--text-2);
-}
-
-.topbar-crumb-current {
-  color: var(--text);
-  font-weight: var(--fw-semibold, 600);
-  letter-spacing: -0.005em;
 }
 
 /* ─── 内容区 ──────────────────────────────────────────────── */

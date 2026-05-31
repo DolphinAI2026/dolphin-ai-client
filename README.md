@@ -94,28 +94,38 @@ apaas-builder-ai/
 
 ## 🔧 环境配置
 
-环境变量已配置在 `backend/.env`：
+环境变量请在本地 `backend/.env` 配置，仓库只保留占位示例：
 
 ```env
 # aPaaS Platform
-APAAS_BASE_URL=https://apaas-poc.definesys.cn/backend
-APAAS_TENANT_ID=743906758237356033
+APAAS_BASE_URL=https://your-apaas.example.com/backend
+APAAS_TENANT_ID=<your-tenant-id>
 
 # LLM Configuration
-LLM_API_BASE=https://api.jiekou.ai/openai
-LLM_API_KEY=sk_PRw1U5P4FO8Ep_P4aqCn231Uq2jXvB4YXzNccYwT6Jg
-LLM_MODEL=claude-haiku-4-5-20251001
+LLM_API_BASE=https://your-llm-gateway.example.com/openai
+LLM_API_KEY=<your-llm-api-key>
+LLM_MODEL=<your-model-name>
 
 # Database
 DATABASE_URL=sqlite+aiosqlite:///./apaas_builder.db
 
 # JWT
-JWT_SECRET_KEY=STJNDwwzapqfloz3ccjpamqRXjeLJRhj3l-6-6rozGg
+JWT_SECRET_KEY=<generate-a-long-random-secret>
 ```
 
 ## 📚 开发文档
 
 详细开发指南请查看 [DEVELOPMENT.md](DEVELOPMENT.md)
+
+## MCP 服务
+
+独立 MCP 服务已放在 `mcp-server/`，与主前后端分开维护。需要本地联调 v2 MCP 时：
+
+```bash
+./start-mcp.sh --daemon
+```
+
+更多说明见 [MCP_SERVER.md](MCP_SERVER.md)。
 
 ## 🗺️ 开发计划
 

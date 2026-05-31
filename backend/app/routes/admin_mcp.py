@@ -34,21 +34,19 @@ logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/admin/mcp", tags=["admin-mcp"])
 
-# v2 svc 集群内 DNS：apaas-builder-mcp-server.apaas-builder.svc:8004
-# 短名 apaas-builder-mcp-server:8004 在同 namespace 内可达。
-# v2 把工具拆 4 个 FastMCP 实例 mount 到不同 path（main + design 是
-# 真正独立工具集；builder/coding 是 main 的子集 split 给不同 agent；vibe 暂空）。
-# admin 视图 union main + design 拿全集（builder/coding 子集会自动去重）。
+# 默认代理到仓库内 `mcp-server/backend` 独立服务（本地 8004）。
+# MCP 服务把工具拆成多个 FastMCP 实例 mount 到不同 path；admin 视图 union
+# main + design 拿全集（builder/coding 子集会自动去重）。
 _V2_BASE = os.getenv(
     "MCP_V2_INTERNAL_BASE",
-    "http://apaas-builder-mcp-server:8004",
+    "http://127.0.0.1:8004",
 )
 _V2_TOOL_PATHS = [
     "/api/mcp/mcp",          # main FastMCP — 应用生命周期 / workspace / 自开发 / 内省
     "/api/mcp-design/mcp",   # 独立 design FastMCP — design system / principle 4 工具
 ]
 # v2 TrustedHostMiddleware 只放行公网域名 host header，集群内调用必须显式带上
-_V2_HOST = os.getenv("MCP_V2_HOST", "agent.dfy.definesys.cn")
+_V2_HOST = os.getenv("MCP_V2_HOST", "127.0.0.1:8004")
 
 
 def _v2_api_key() -> str:

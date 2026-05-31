@@ -1,4 +1,4 @@
-"""通过 HTTP 调本机 MCP server，把 44 个工具桥接给 ai_chat agent 用。
+"""通过 HTTP 调 MCP server，把工具桥接给 ai_chat agent 用。
 
 为什么走 HTTP 而不是 in-process import：
 - 跟外部 agent（外部 agent / Claude / Cursor）的调法完全一致，方便排查
@@ -7,6 +7,7 @@
 - 所有调用都进 MCP 调用日志，统一可观测
 
 启动时拉 tools/list 是 lazy 的（第一次 get_tool_schemas_openai 时拉），之后用 cache。
+支持配置多个 MCP endpoint，把拆分后的工具在 AI Chat 里合并成一套工具池。
 
 注：MCP_API_KEYS 必须在 backend/.env 配，否则桥接不可用（cowork agent 只剩原 4 个工具）。
 """
@@ -35,20 +36,46 @@ logger = logging.getLogger(__name__)
 
 
 _LOADED: Optional[dict] = None
-# 默认连同进程 backend (uvicorn :8003 + FastMCP mount 在 /api/mcp/mcp)。
-#
-# 2026-05-17：拆出独立 env MCP_BRIDGE_BASE_URL，跟 mcp_server.py 的
-# MCP_INTERNAL_BASE 解耦：
-#   - mcp_bridge (ai-chat 调 MCP):  MCP_BRIDGE_BASE_URL  含 /mcp/mcp 完整端点
-#   - mcp_server (工具调 backend):  MCP_INTERNAL_BASE    只 /api 根路径
-# 之前两者共用一个 env，配 /api/mcp/mcp 后 mcp_server 调 /coding/* 时拼成
-# /api/mcp/mcp/coding/* 撞 MCP key 校验 401（create_dev_workspace 故障实证）。
-# 兼容老 env：BRIDGE 没配时 fallback MCP_INTERNAL_BASE（向后兼容）。
-_BASE_URL = (
-    os.getenv("MCP_BRIDGE_BASE_URL", "").strip()
-    or os.getenv("MCP_INTERNAL_BASE", "").strip()
-    or "http://127.0.0.1:8003/api/mcp/mcp"
-)
+
+
+def _split_csv_env(value: str) -> list[str]:
+    return [item.strip() for item in (value or "").split(",") if item.strip()]
+
+
+def _configured_base_urls() -> list[str]:
+    """Return MCP endpoints in priority order.
+
+    `MCP_BRIDGE_BASE_URLS` is the preferred multi-endpoint setting. The older
+    `MCP_BRIDGE_BASE_URL` remains supported for single-endpoint deployments.
+    """
+    urls: list[str] = []
+    urls.extend(_split_csv_env(os.getenv("MCP_BRIDGE_BASE_URLS", "")))
+    urls.extend(_split_csv_env(os.getenv("MCP_BRIDGE_BASE_URL", "")))
+    urls.extend(_split_csv_env(os.getenv("MCP_BRIDGE_EXTRA_BASE_URLS", "")))
+    if not urls:
+        legacy = os.getenv("MCP_INTERNAL_BASE", "").strip()
+        urls.append(legacy or "http://127.0.0.1:8004/api/mcp/mcp")
+
+    seen: set[str] = set()
+    deduped: list[str] = []
+    for url in urls:
+        normalized = url.rstrip("/")
+        if normalized and normalized not in seen:
+            seen.add(normalized)
+            deduped.append(normalized)
+    return deduped
+
+
+_BASE_URLS = _configured_base_urls()
+_INPROCESS_TOOL_URL = "__inprocess_mcp__"
+_CRITICAL_BUILDER_TOOLS = {
+    "generate_app_from_doc",
+    "validate_builder_doc",
+    "submit_design_doc",
+    "deploy_application",
+    "publish_application",
+    "get_application",
+}
 
 # 黑名单：这里曾有 4 个 stub 工具被屏蔽，现在全部已 ship 真实现，清空
 _STUB_TOOLS: set[str] = set()
@@ -65,27 +92,117 @@ def _get_api_key() -> Optional[str]:
     return None
 
 
-async def _fetch_mcp_tools() -> tuple[list[dict], Optional[str]]:
-    """HTTP 调本机 MCP server 拉 tools/list。返回 (tools, error_message)。"""
+async def _fetch_tools_from(base_url: str, headers: dict, body: dict) -> list[dict]:
+    async with httpx.AsyncClient(timeout=10.0) as client:
+        r = await client.post(base_url, headers=headers, json=body)
+        r.raise_for_status()
+        data = r.json()
+    return data.get("result", {}).get("tools", []) or []
+
+
+async def _fetch_inprocess_tools() -> tuple[list[dict], dict[str, str], Optional[str]]:
+    """兜底从同进程 FastMCP 实例读取工具。
+
+    AIChat 正常走 HTTP bridge，方便观测和未来拆服务。但本地/单进程启动时
+    8004 MCP 服务可能没起来；这时 Builder 核心工具不应该从模型 schema 里消失。
+    """
+    try:
+        from app import mcp_server
+
+        manager = getattr(getattr(mcp_server, "mcp", None), "_tool_manager", None)
+        registered = getattr(manager, "_tools", None) or {}
+        tools: list[dict] = []
+        tool_url_map: dict[str, str] = {}
+        for name, tool in registered.items():
+            if not name:
+                continue
+            tools.append({
+                "name": name,
+                "description": getattr(tool, "description", "") or "",
+                "inputSchema": getattr(tool, "parameters", None) or {
+                    "type": "object",
+                    "properties": {},
+                },
+            })
+            tool_url_map[name] = _INPROCESS_TOOL_URL
+        if tools:
+            return tools, tool_url_map, None
+        return [], {}, "同进程 MCP 未注册任何工具"
+    except Exception as exc:  # noqa: BLE001
+        return [], {}, f"同进程 MCP 加载失败: {exc}"
+
+
+async def _fetch_mcp_tools() -> tuple[list[dict], dict[str, str], Optional[str]]:
+    """HTTP 调 MCP server 拉 tools/list。返回 (tools, tool_url_map, error_message)。"""
     key = _get_api_key()
     if not key:
-        return [], "MCP_API_KEYS 未配置 — 在 backend/.env 加一行 MCP_API_KEYS=<key>"
+        tools, tool_url_map, fallback_error = await _fetch_inprocess_tools()
+        if tools:
+            logger.warning("MCP_API_KEYS 未配置，AIChat bridge 使用同进程 MCP 工具兜底")
+            return tools, tool_url_map, None
+        return [], {}, (
+            "MCP_API_KEYS 未配置 — 在 backend/.env 加一行 MCP_API_KEYS=<key>; "
+            f"{fallback_error}"
+        )
     headers = {
         "Authorization": f"Bearer {key}",
         "Content-Type": "application/json",
         "Accept": "application/json, text/event-stream",
     }
     body = {"jsonrpc": "2.0", "id": 1, "method": "tools/list"}
-    try:
-        async with httpx.AsyncClient(timeout=10.0) as client:
-            r = await client.post(_BASE_URL, headers=headers, json=body)
-            r.raise_for_status()
-            data = r.json()
-    except Exception as e:
-        logger.warning("MCP bridge tools/list 失败: %s", e)
-        return [], f"MCP tools/list 失败: {e}"
-    tools = data.get("result", {}).get("tools", []) or []
-    return tools, None
+    merged: list[dict] = []
+    tool_url_map: dict[str, str] = {}
+    errors: list[str] = []
+
+    for base_url in _BASE_URLS:
+        try:
+            tools = await _fetch_tools_from(base_url, headers, body)
+        except Exception as e:
+            logger.warning("MCP bridge tools/list 失败 url=%s: %s", base_url, e)
+            errors.append(f"{base_url}: {e}")
+            continue
+        for tool in tools:
+            name = tool.get("name")
+            if not name or name in tool_url_map:
+                continue
+            merged.append(tool)
+            tool_url_map[name] = base_url
+
+    if merged:
+        present = set(tool_url_map)
+        missing_critical = _CRITICAL_BUILDER_TOOLS - present
+        if missing_critical:
+            fallback_tools, fallback_map, fallback_error = await _fetch_inprocess_tools()
+            by_name = {t.get("name"): t for t in fallback_tools}
+            patched: list[str] = []
+            for name in sorted(missing_critical):
+                tool = by_name.get(name)
+                if not tool:
+                    continue
+                merged.append(tool)
+                tool_url_map[name] = fallback_map.get(name, _INPROCESS_TOOL_URL)
+                patched.append(name)
+            if patched:
+                logger.warning(
+                    "MCP bridge HTTP tools/list 缺少 Builder 核心工具，已同进程补齐：%s",
+                    ", ".join(patched),
+                )
+            elif fallback_error:
+                logger.warning(
+                    "MCP bridge HTTP tools/list 缺少 Builder 核心工具且补齐失败：%s",
+                    fallback_error,
+                )
+        if errors:
+            logger.warning("MCP bridge 部分 endpoint 加载失败：%s", " | ".join(errors))
+        return merged, tool_url_map, None
+    tools, inprocess_map, fallback_error = await _fetch_inprocess_tools()
+    if tools:
+        logger.warning(
+            "MCP bridge HTTP tools/list 全部失败，AIChat bridge 使用同进程 MCP 工具兜底：%s",
+            " | ".join(errors),
+        )
+        return tools, inprocess_map, None
+    return [], {}, "MCP tools/list 全部失败: " + " | ".join(errors + [fallback_error or ""])
 
 
 async def ensure_loaded(force: bool = False) -> dict:
@@ -93,13 +210,17 @@ async def ensure_loaded(force: bool = False) -> dict:
     global _LOADED
     if _LOADED is not None and not force:
         return _LOADED
-    tools, error = await _fetch_mcp_tools()
-    _LOADED = {"tools": tools, "error": error}
+    tools, tool_url_map, error = await _fetch_mcp_tools()
+    _LOADED = {"tools": tools, "tool_url_map": tool_url_map, "error": error}
     if error:
         logger.warning("MCP bridge 加载失败：%s（cowork agent 只能用原生 4 工具）", error)
     else:
-        logger.info("MCP bridge 加载成功：%d 个工具（去 stub 后 %d 个可用）",
-                    len(tools), len([t for t in tools if t.get("name") not in _STUB_TOOLS]))
+        logger.info(
+            "MCP bridge 加载成功：%d 个 endpoint, %d 个工具（去 stub 后 %d 个可用）",
+            len(_BASE_URLS),
+            len(tools),
+            len([t for t in tools if t.get("name") not in _STUB_TOOLS]),
+        )
     return _LOADED
 
 
@@ -161,18 +282,45 @@ def list_mcp_tool_names_cached() -> set[str]:
     }
 
 
+async def _call_inprocess_tool(tool_name: str, args: dict) -> str:
+    try:
+        from app import mcp_server
+
+        manager = getattr(getattr(mcp_server, "mcp", None), "_tool_manager", None)
+        tool = (getattr(manager, "_tools", None) or {}).get(tool_name)
+        if not tool:
+            return json.dumps({
+                "ok": False,
+                "error_code": "INPROCESS_TOOL_NOT_FOUND",
+                "message": f"同进程 MCP 未注册工具 {tool_name}",
+            }, ensure_ascii=False)
+        result = await tool.run(args or {}, convert_result=False)
+        if isinstance(result, str):
+            return result
+        return json.dumps(result, ensure_ascii=False)
+    except Exception as exc:  # noqa: BLE001
+        logger.exception("同进程 MCP 工具调用失败 tool=%s", tool_name)
+        return json.dumps({
+            "ok": False,
+            "error_code": "INPROCESS_TOOL_ERROR",
+            "message": str(exc),
+            "tool_name": tool_name,
+        }, ensure_ascii=False)
+
+
 async def call_tool(tool_name: str, args: dict, tenant_id: int = 0, user_id: int = 0) -> str:
     """调本机 MCP server 的某个工具，自动塞 tenant_id/user_id 到 args。
 
     返回 result 的第一个 content 块的 text（通常是 JSON 字符串，调用方自己 parse）。
     错误情况返回 {"ok": false, "error_code": ..., "message": ...} 的 JSON 串。
     """
-    key = _get_api_key()
-    if not key:
+    if not tenant_id or not user_id:
         return json.dumps({
-            "ok": False, "error_code": "NO_MCP_KEY",
-            "message": "MCP_API_KEYS 未配置",
-        })
+            "ok": False,
+            "error_code": "MISSING_LOCAL_IDENTITY",
+            "message": "AIChat 会话缺少当前 tenant_id/user_id，无法调用需要身份的 MCP 工具",
+            "tool_name": tool_name,
+        }, ensure_ascii=False)
 
     # 自动塞身份 — 强制覆盖。
     # 2026-05-14 修：之前用 `if 'tenant_id' not in enriched` 软合并，结果 LLM 看
@@ -183,6 +331,18 @@ async def call_tool(tool_name: str, args: dict, tenant_id: int = 0, user_id: int
     enriched = {**(args or {})}
     enriched["tenant_id"] = tenant_id
     enriched["user_id"] = user_id
+
+    loaded = await ensure_loaded()
+    tool_url = (loaded.get("tool_url_map") or {}).get(tool_name)
+    if tool_url == _INPROCESS_TOOL_URL:
+        return await _call_inprocess_tool(tool_name, enriched)
+
+    key = _get_api_key()
+    if not key:
+        return json.dumps({
+            "ok": False, "error_code": "NO_MCP_KEY",
+            "message": "MCP_API_KEYS 未配置",
+        })
 
     body = {
         "jsonrpc": "2.0", "id": 1,
@@ -195,8 +355,25 @@ async def call_tool(tool_name: str, args: dict, tenant_id: int = 0, user_id: int
         "Accept": "application/json, text/event-stream",
     }
     try:
+        from app.auth import create_mcp_service_token
+        headers["X-AiBuilder-Token"] = create_mcp_service_token(
+            user_id=int(user_id),
+            tenant_id=int(tenant_id),
+            ttl_minutes=15,
+        )
+    except Exception as exc:
+        logger.exception("MCP bridge failed to mint X-AiBuilder-Token")
+        return json.dumps({
+            "ok": False,
+            "error_code": "MCP_IDENTITY_TOKEN_FAIL",
+            "message": str(exc),
+            "tool_name": tool_name,
+        }, ensure_ascii=False)
+    try:
         async with httpx.AsyncClient(timeout=120.0) as client:
-            r = await client.post(_BASE_URL, headers=headers, json=body)
+            loaded = await ensure_loaded()
+            base_url = (loaded.get("tool_url_map") or {}).get(tool_name) or (_BASE_URLS[0] if _BASE_URLS else "")
+            r = await client.post(base_url, headers=headers, json=body)
             r.raise_for_status()
             data = r.json()
     except Exception as e:

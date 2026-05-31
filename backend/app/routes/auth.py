@@ -378,6 +378,34 @@ def _extract_default_tenant_item(payload: object) -> Optional[dict]:
     return found or {"tenantId": tenant_id, "tenantName": tenant_id, "tenantCode": tenant_id}
 
 
+def _is_placeholder_apaas_base_url() -> bool:
+    base_url = (settings.apaas_base_url or "").strip().lower()
+    return not base_url or "your-apaas.example.com" in base_url
+
+
+def _extract_login_error_message(*payloads: object) -> str:
+    keys = (
+        "message",
+        "msg",
+        "error",
+        "errorMessage",
+        "error_message",
+        "detail",
+        "description",
+    )
+    for payload in payloads:
+        if isinstance(payload, dict):
+            data = payload.get("data") if isinstance(payload.get("data"), dict) else payload
+            for key in keys:
+                value = data.get(key)
+                if isinstance(value, str) and value.strip():
+                    return value.strip()
+            code = data.get("code")
+            if code not in (None, "", "ok", 200, "200"):
+                return f"平台返回 code={code}"
+    return ""
+
+
 async def _apaas_platform_login(username: str, password: str) -> tuple[Optional[str], dict]:
     """Try aPaaS platform-admin login. Success means platform admin."""
     from app.routes import mcp_platform
@@ -417,16 +445,22 @@ async def _apaas_backend_login(username: str, password: str, tenant_id: str = ""
     rsa_public_key = await mcp_platform._get_apaas_rsa_public_key(base_url)
     ts = str(int(time.time() * 1000))
     url = f"{mcp_platform._api_base(base_url)}/xdap-admin/user/login?timestamp={ts}"
-    headers = mcp_platform._headers(base_url, tenant_id=tenant_id, rsa_public_key=rsa_public_key)
+    clean_tenant_id = (tenant_id or "").strip()
+    headers = mcp_platform._headers(
+        base_url,
+        tenant_id=clean_tenant_id or None,
+        rsa_public_key=rsa_public_key,
+    )
     headers["referer"] = f"{base_url}/platform/account/login"
     body = {
         "type": "account",
         "account": username,
         "password": mcp_platform._encrypt_apaas_password(password, rsa_public_key),
-        "tenantId": tenant_id,
         "loginType": "MANAGE",
         "securityCode": "",
     }
+    if clean_tenant_id:
+        body["tenantId"] = clean_tenant_id
     async with httpx.AsyncClient(timeout=20, verify=False) as client:
         resp = await client.post(url, headers=headers, json=body)
     try:
@@ -728,6 +762,14 @@ async def _try_apaas_login_flow(user_data: UserLogin, db: AsyncSession) -> Optio
     has_backend_identity = bool(backend_token and default_tenant_id)
 
     if not has_backend_identity and not is_platform_admin:
+        if not _is_placeholder_apaas_base_url():
+            message = _extract_login_error_message(platform_payload, backend_payload)
+            if not message:
+                message = "平台未返回有效 token 或租户信息，请确认 aPaaS 地址、账号、密码和租户权限"
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail=f"aPaaS 登录失败：{message}",
+            )
         return None
 
     all_tenants = await _apaas_all_tenants(platform_token) if platform_token else []

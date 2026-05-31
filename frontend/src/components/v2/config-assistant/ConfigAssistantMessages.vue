@@ -3,20 +3,17 @@
      主消息区 — 空态 + 消息列表 + thinking dot + plan card + hero CTA + change_plan info card. -->
 <script setup lang="ts">
 import { watch } from 'vue'
-import type { ChatMsg, Example } from './types'
+import type { ChatMsg } from './types'
 import { renderMd } from '@/utils/markdown'
 import { countModifyOps, extractPlan } from './composables/useConfigChat'
-import BaseChip from '@/components/BaseChip.vue'
 
 const props = defineProps<{
   messages: ChatMsg[]
-  examples: Example[]
   sending: boolean
   emptyHint: string
 }>()
 
 const emit = defineEmits<{
-  (e: 'pick-example', text: string): void
   (e: 'refresh-iframe'): void
 }>()
 
@@ -53,20 +50,10 @@ watch(() => props.messages, (msgs) => {
   <div class="ca-scroll">
     <!-- 空态 -->
     <div v-if="messages.length === 0" class="ca-empty">
-      <svg width="36" height="36" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round">
+      <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round">
         <path d="M21 12a8 8 0 0 1-11.9 7L4 21l1.6-4.4A8 8 0 1 1 21 12z" />
       </svg>
-      <div class="ca-empty-title">配置助手</div>
       <div class="ca-empty-hint">{{ emptyHint }}</div>
-      <div class="ca-empty-examples">
-        <BaseChip
-          v-for="ex in examples"
-          :key="ex.id"
-          @click="emit('pick-example', ex.text)"
-        >
-          {{ ex.text }}
-        </BaseChip>
-      </div>
     </div>
 
     <!-- 消息列表 -->
@@ -216,16 +203,11 @@ watch(() => props.messages, (msgs) => {
 .ca-empty-hint {
   font-size: 12px;
   color: var(--text-3);
-  line-height: 1.5;
-  max-width: 280px;
-}
-.ca-empty-examples {
-  display: flex;
-  flex-direction: column;
-  gap: 6px;
-  margin-top: 8px;
-  width: 100%;
-  max-width: 280px;
+  line-height: 1.2;
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 /* ─── 消息 ──────────────────────────────────── */

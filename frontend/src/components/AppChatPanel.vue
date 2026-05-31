@@ -34,28 +34,19 @@
     </div>
 
     <div class="app-chat-input" v-if="currentSession">
-      <textarea
-        ref="textareaRef"
+      <UnifiedChatComposer
         v-model="inputText"
-        class="input-textarea"
-        :placeholder="isSending ? 'AI 正在工作中...' : '描述要修改的内容，例：把客户表单加一个等级字段'"
+        :attachments="composerAttachments"
         :disabled="isSending"
-        @keydown.enter.exact.prevent="onSend"
-        @input="autosize"
+        :sending="isSending"
+        :send-disabled="!canSend"
+        :native-file-picker="false"
+        placeholder="输入需求，粘贴图片或点附件..."
+        @send="onSend"
+        @stop="onAbort"
+        @paste-images="onPasteImageFiles"
+        @remove-attachment="removePastedImage(Number($event.id))"
       />
-      <button
-        v-if="!isSending"
-        class="send-btn"
-        :disabled="!canSend"
-        @click="onSend"
-        title="发送 (Enter)"
-      >➤</button>
-      <button
-        v-else
-        class="abort-btn"
-        @click="onAbort"
-        title="中断"
-      >■</button>
     </div>
   </div>
 </template>
@@ -66,6 +57,8 @@ import { ElMessage } from 'element-plus'
 import AgentConversation from '@/components/common/AgentConversation.vue'
 import { aiChatApi, type AIChatMessage, type AIChatToolCall } from '@/api/aiChat'
 import { applicationApi } from '@/api/application'
+import UnifiedChatComposer from '@/components/common/UnifiedChatComposer.vue'
+import type { UnifiedChatAttachment } from '@/components/common/chatComposer'
 
 const props = defineProps<{
   visible: boolean
@@ -83,6 +76,16 @@ const isSending = ref(false)
 const applying = ref(false)
 const inputText = ref('')
 const textareaRef = ref<HTMLTextAreaElement | null>(null)
+type PastedImage = { id: number; name: string; previewUrl: string }
+const pastedImages = ref<PastedImage[]>([])
+const composerAttachments = computed<UnifiedChatAttachment[]>(() =>
+  pastedImages.value.map(item => ({
+    id: item.id,
+    name: item.name,
+    previewUrl: item.previewUrl,
+    kind: 'image',
+  })),
+)
 
 const currentSession = ref<{ id: number; title: string } | null>(null)
 const messages = ref<AIChatMessage[]>([])
@@ -126,10 +129,41 @@ watch(
 // ─── 发送消息（流式） ───
 const canSend = computed(() => inputText.value.trim().length > 0 && !isSending.value)
 
+function appendContextLine(line: string) {
+  const current = inputText.value.trimEnd()
+  inputText.value = current ? `${current}\n${line}` : line
+}
+
+function removePastedImage(id: number) {
+  const img = pastedImages.value.find(item => item.id === id)
+  if (img?.previewUrl) URL.revokeObjectURL(img.previewUrl)
+  pastedImages.value = pastedImages.value.filter(item => item.id !== id)
+}
+
+function clearPastedImages() {
+  pastedImages.value.forEach(item => URL.revokeObjectURL(item.previewUrl))
+  pastedImages.value = []
+}
+
+function onPasteImageFiles(images: File[]) {
+  if (!images.length) return
+  for (const file of images) {
+    const item = {
+      id: Date.now() + pastedImages.value.length,
+      name: file.name,
+      previewUrl: URL.createObjectURL(file),
+    }
+    pastedImages.value.push(item)
+    appendContextLine(`[已粘贴图片：${file.name}] 请结合这张图片理解我的需求。`)
+  }
+  nextTick(autosize)
+}
+
 async function onSend() {
   if (!currentSession.value || !canSend.value) return
   const text = inputText.value.trim()
   inputText.value = ''
+  clearPastedImages()
 
   // 立刻 push 用户消息让 UI 即时反馈
   const userMsg: AIChatMessage = {
@@ -316,6 +350,7 @@ watch(inputText, () => nextTick(autosize))
 
 onUnmounted(() => {
   if (abortCtl) abortCtl.abort()
+  clearPastedImages()
 })
 </script>
 
@@ -432,23 +467,77 @@ onUnmounted(() => {
   background: var(--t-bg-panel);
   flex-shrink: 0;
 }
-.input-textarea {
+.input-composer {
   flex: 1;
-  min-height: 36px;
-  max-height: 160px;
-  padding: 9px 12px;
+  min-width: 0;
   border: 1px solid var(--t-border-subtle);
   border-radius: 8px;
   background: var(--t-bg-input);
+  overflow: hidden;
+}
+.input-composer:focus-within {
+  border-color: var(--t-brand, #5a78ff);
+}
+.app-chat-attachments {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  padding: 8px 8px 0;
+}
+.app-chat-attachment {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  max-width: 100%;
+  min-height: 28px;
+  padding: 3px 6px 3px 3px;
+  border: 1px solid var(--t-border-subtle);
+  border-radius: 999px;
+  background: var(--t-bg-panel);
+  color: var(--t-text-muted);
+  font-size: 11px;
+}
+.app-chat-attachment img {
+  width: 22px;
+  height: 22px;
+  border-radius: 999px;
+  object-fit: cover;
+}
+.app-chat-attachment span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.app-chat-attachment button {
+  width: 18px;
+  height: 18px;
+  padding: 0;
+  border: 0;
+  border-radius: 999px;
+  background: transparent;
+  color: var(--t-text-muted);
+  cursor: pointer;
+  font-size: 14px;
+  line-height: 18px;
+}
+.app-chat-attachment button:hover {
+  background: var(--t-border-subtle);
+  color: var(--t-text-primary);
+}
+.input-textarea {
+  display: block;
+  width: 100%;
+  min-height: 36px;
+  max-height: 160px;
+  padding: 9px 12px;
+  border: 0;
+  background: transparent;
   color: var(--t-text-primary);
   font-size: 13px;
   font-family: inherit;
   resize: none;
   outline: none;
   line-height: 1.5;
-}
-.input-textarea:focus {
-  border-color: var(--t-brand, #5a78ff);
 }
 .send-btn,
 .abort-btn {

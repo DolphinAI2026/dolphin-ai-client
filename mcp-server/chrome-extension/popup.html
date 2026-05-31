@@ -1,0 +1,44 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <title>aPaaS Builder Helper</title>
+  <style>
+    body {
+      width: 280px;
+      margin: 0;
+      padding: 14px 16px;
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", sans-serif;
+      font-size: 13px;
+      color: #1f2937;
+    }
+    h2 { margin: 0 0 8px; font-size: 14px; }
+    .status { display: flex; align-items: center; gap: 8px; padding: 8px 10px; border-radius: 8px; background: #f3f4f6; margin-bottom: 10px; }
+    .dot { width: 8px; height: 8px; border-radius: 50%; }
+    .dot.ok { background: #10b981; }
+    .dot.err { background: #ef4444; }
+    .row { display: flex; justify-content: space-between; padding: 4px 0; color: #4b5563; }
+    code { font-family: "SF Mono", "Monaco", monospace; font-size: 11.5px; background: #e5e7eb; padding: 1px 4px; border-radius: 3px; }
+    a { color: #5b5bd6; text-decoration: none; }
+    a:hover { text-decoration: underline; }
+  </style>
+</head>
+<body>
+  <h2>aPaaS Builder Helper</h2>
+  <div class="status" id="statusBackend">
+    <div class="dot err" id="dotBackend"></div>
+    <div id="textBackend">检查 backend...</div>
+  </div>
+  <div class="status" id="statusWs">
+    <div class="dot err" id="dotWs"></div>
+    <div id="textWs">检查 WebSocket...</div>
+  </div>
+  <div class="row"><span>backend:</span><code id="backend">localhost:8000</code></div>
+  <div class="row"><span>version:</span><code id="version">-</code></div>
+  <div style="margin-top: 10px; color: #6b7280; font-size: 12px;">
+    都绿 ✓ 表示 AI 助手已能操作你这个 Chrome。详细见
+    <a href="#" id="docLink">browser-extension-setup.md</a>
+  </div>
+  <script src="popup.js"></script>
+</body>
+</html>

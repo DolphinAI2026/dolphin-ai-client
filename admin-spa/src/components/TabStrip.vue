@@ -2,7 +2,7 @@
   2026-05-22 — 平台管理多 tab 栏 (跟 frontend v2/TabStrip.vue 同款架构)
   - <a :href> + onTabClick 检测 modifier 让 cmd+click 真开新 chrome tab
   - 普通 click → 内部切 view (router.push + activeId)
-  - tab × 关闭, 首页 / 状态 不可关
+  - tab × 关闭, 首页不可关
 -->
 <script setup lang="ts">
 import { computed, onMounted, onBeforeUnmount, ref, nextTick, watch } from 'vue'
@@ -17,7 +17,6 @@ const activeId = computed(() => tabsStore.activeId)
 
 // admin-spa icon set — 跟 AdminLayout 的 menu icon 一致
 const ICONS: Record<string, string> = {
-  status:     '<path d="M3 12h4l3-9 4 18 3-9h4"/>',
   connection: '<path d="M9 12 5 8l4-4"/><path d="M5 8h14"/><path d="m15 12 4 4-4 4"/><path d="M19 16H5"/>',
   flask:      '<path d="M10 2v6L4 18a2 2 0 0 0 2 3h12a2 2 0 0 0 2-3l-6-10V2"/><path d="M8 14h8"/>',
   logs:       '<path d="M3 7h18M3 12h12M3 17h18"/>',

@@ -122,17 +122,20 @@
 
     <!-- ── 3. input area ─────────────────────────────────────────────── -->
     <div class="spc-input-area">
-      <textarea
+      <UnifiedChatComposer
         v-model="inputText"
-        ref="inputRef"
-        class="spc-textarea"
-        :placeholder="placeholderText"
+        :attachments="composerAttachments"
         :disabled="sending"
-        rows="2"
-        @keydown.enter.exact.prevent="onSend"
-      />
-      <div class="spc-input-bar">
-        <div class="spc-chips" role="group" aria-label="快捷指令">
+        :sending="sending"
+        :show-stop="false"
+        :send-disabled="!inputText.trim()"
+        :native-file-picker="false"
+        :placeholder="placeholderText"
+        @send="onSend"
+        @paste-images="onPasteImageFiles"
+        @remove-attachment="removePastedImage(Number($event.id))"
+      >
+        <template #footer-left>
           <button
             v-for="chip in quickChips"
             :key="chip"
@@ -141,24 +144,17 @@
             :disabled="sending"
             @click="onClickChip(chip)"
           >{{ chip }}</button>
-        </div>
-        <button
-          class="spc-send-btn"
-          type="button"
-          :disabled="!inputText.trim() || sending"
-          @click="onSend"
-        >
-          <span v-if="sending" class="spc-send-spinner" aria-hidden="true"></span>
-          <span>{{ sending ? '发送中…' : '发送' }}</span>
-        </button>
-      </div>
+        </template>
+      </UnifiedChatComposer>
     </div>
   </section>
 </template>
 
 <script setup lang="ts">
-import { ref, computed, nextTick, watch } from 'vue'
+import { ref, computed, nextTick, onBeforeUnmount, watch } from 'vue'
 import { API_PREFIX } from '@/utils/request'
+import UnifiedChatComposer from '@/components/common/UnifiedChatComposer.vue'
+import type { UnifiedChatAttachment } from '@/components/common/chatComposer'
 
 // ── props / emits ───────────────────────────────────────────────────────
 const props = defineProps<{
@@ -203,6 +199,16 @@ const errorBanner = ref('')
 const bodyEl = ref<HTMLElement | null>(null)
 const inputRef = ref<HTMLTextAreaElement | null>(null)
 let _msgIdSeq = 1
+type PastedImage = { id: number; name: string; previewUrl: string }
+const pastedImages = ref<PastedImage[]>([])
+const composerAttachments = computed<UnifiedChatAttachment[]>(() =>
+  pastedImages.value.map(item => ({
+    id: item.id,
+    name: item.name,
+    previewUrl: item.previewUrl,
+    kind: 'image',
+  })),
+)
 
 // ── expose: focusInput — 父组件锚点联动用 ───────────────────────────────
 // SpecDesignPanel 章节 hover "用对话改这段" 点击时调:
@@ -282,6 +288,35 @@ function scrollToBottom() {
       // ignore
     }
   })
+}
+
+function appendContextLine(line: string) {
+  const current = inputText.value.trimEnd()
+  inputText.value = current ? `${current}\n${line}` : line
+}
+
+function removePastedImage(id: number) {
+  const img = pastedImages.value.find(item => item.id === id)
+  if (img?.previewUrl) URL.revokeObjectURL(img.previewUrl)
+  pastedImages.value = pastedImages.value.filter(item => item.id !== id)
+}
+
+function clearPastedImages() {
+  pastedImages.value.forEach(item => URL.revokeObjectURL(item.previewUrl))
+  pastedImages.value = []
+}
+
+function onPasteImageFiles(images: File[]) {
+  if (!images.length) return
+  for (const file of images) {
+    const item = {
+      id: Date.now() + pastedImages.value.length,
+      name: file.name,
+      previewUrl: URL.createObjectURL(file),
+    }
+    pastedImages.value.push(item)
+    appendContextLine(`[已粘贴图片：${file.name}] 请结合这张图片理解我的需求。`)
+  }
 }
 
 function describeSection(sectionType: string, sectionKey: string): string {
@@ -504,6 +539,7 @@ async function onSend() {
   const text = inputText.value.trim()
   if (!text || sending.value) return
   inputText.value = ''
+  clearPastedImages()
   errorBanner.value = ''
   sending.value = true
   try {
@@ -542,9 +578,14 @@ watch(
     if (newCh !== oldCh && oldCh !== undefined) {
       messages.value = []
       errorBanner.value = ''
+      clearPastedImages()
     }
   },
 )
+
+onBeforeUnmount(() => {
+  clearPastedImages()
+})
 </script>
 
 <style scoped>
@@ -831,6 +872,53 @@ watch(
 .spc-textarea:disabled {
   background: var(--surface-2);
   cursor: not-allowed;
+}
+
+.spc-attachments {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 6px;
+}
+.spc-attachment {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  max-width: 100%;
+  min-height: 28px;
+  padding: 3px 6px 3px 3px;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  background: var(--surface-2);
+  color: var(--text-3);
+  font-size: 11px;
+}
+.spc-attachment img {
+  width: 22px;
+  height: 22px;
+  border-radius: 999px;
+  object-fit: cover;
+}
+.spc-attachment span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.spc-attachment button {
+  width: 18px;
+  height: 18px;
+  padding: 0;
+  border: 0;
+  border-radius: 999px;
+  background: transparent;
+  color: var(--text-4);
+  cursor: pointer;
+  font-size: 14px;
+  line-height: 18px;
+}
+.spc-attachment button:hover {
+  background: var(--line);
+  color: var(--text);
 }
 
 .spc-input-bar {

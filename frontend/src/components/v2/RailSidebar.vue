@@ -26,12 +26,13 @@ const effectiveCollapsed = computed(() =>
 
 const NAV = computed<NavItem[]>(() => [
   { key: 'home', label: '首页', icon: 'home', path: '/' },
-  { key: 'apps', label: '应用', icon: 'apps', path: '/apps', badge: appCount.value || undefined },
-  { key: 'builder', label: '睿鲸 AI Builder', icon: 'chat', path: '/ai-chat?mode=requirements' },
-  { key: 'coding', label: '睿鲸 AI Coding', icon: 'code', path: '/coding', badge: codingWorkspaceCount.value || undefined },
-  // M4 (2026-05-27): 数据源从工作台搬到平台管理 (admin-spa /datasources).
-  // 工作台 nav 仅留应用搭建相关 5 项, 平台级配置 (数据源 / LLM / 租户) 全归 admin-spa.
+  { key: 'apps', label: '应用资产库', icon: 'apps', path: '/apps', badge: appCount.value || undefined },
+  { key: 'builder', label: 'AI Builder', icon: 'chat', path: '/ai-chat?mode=requirements' },
+  { key: 'catalog', label: '自开发资产库', icon: 'store', path: '/workspace-catalog' },
+  { key: 'coding', label: 'AI Coding', icon: 'code', path: '/coding', badge: codingWorkspaceCount.value || undefined },
+  // 数据连接 / 运行发布先隐藏；平台级配置统一从平台管理工作台进入。
 ])
+const platformNavItem: NavItem = { key: 'platform', label: '平台管理', icon: 'shield', path: '/platform-admin' }
 
 const userName = computed(() => user.user?.username || '未登录')
 const tenantName = computed(() => user.user?.tenant_name || '未选择租户')
@@ -43,6 +44,7 @@ const currentTenantLabel = computed(() => {
 })
 const isDark = computed(() => theme.mode === 'dark')
 const platformActive = computed(() => route.path.startsWith('/platform-admin'))
+const platformHref = computed(() => resolveHref(platformNavItem.path))
 
 function closeTenantMenu() {
   tenantMenuOpen.value = false
@@ -106,7 +108,7 @@ async function selectTenant(value: number) {
 
 function go(path: string) {
   tenantMenuOpen.value = false
-  // 同时打开 tab — 7 个 nav 一级菜单点了在顶部 tab 栏建一个对应 tab
+  // 同时打开 tab — 一级菜单点了在顶部 tab 栏建一个对应 tab
   const nav = NAV.value.find((n) => n.path === path)
   if (nav) {
     tabsStore.openTab({
@@ -119,6 +121,19 @@ function go(path: string) {
     })
   }
   router.push(path)
+}
+
+function goPlatformAdmin() {
+  tenantMenuOpen.value = false
+  tabsStore.openTab({
+    id: platformNavItem.key,
+    path: platformNavItem.path,
+    label: platformNavItem.label,
+    icon: platformNavItem.icon,
+    closable: true,
+    kind: 'nav',
+  })
+  router.push(platformNavItem.path)
 }
 
 // 2026-05-23: rail nav 改 <a href> 让 Cmd+click / 中键 / 右键"在新标签中打开"
@@ -140,6 +155,14 @@ function onMenuClick(e: MouseEvent, item: NavItem) {
   go(item.path)
 }
 
+function onPlatformClick(e: MouseEvent) {
+  if (e.metaKey || e.ctrlKey || e.shiftKey || e.altKey || e.button !== 0) {
+    return
+  }
+  e.preventDefault()
+  goPlatformAdmin()
+}
+
 function onLogout() {
   tenantMenuOpen.value = false
   user.logout()
@@ -147,18 +170,6 @@ function onLogout() {
   // 避免换 aPaaS 实例 / 切账号时旧状态污染。
   try { localStorage.clear() } catch { /* private mode */ }
   router.push({ path: '/login' })
-}
-
-// v3 2026-05-20: 平台管理打开新 tab — 用 <a target="_blank"> 让浏览器原生处理
-// 之前用 JS window.open(..., 'noopener') 的 bug：noopener 让返回值永远 null
-// 导致 fallback router.push 总是触发，新 tab 开 + 当前页也跳了
-const platformAdminUrl = computed(() => {
-  const base = import.meta.env.BASE_URL.replace(/\/$/, '')
-  return `${base}/platform-admin`
-})
-
-function closePlatformMenu() {
-  tenantMenuOpen.value = false
 }
 
 // v3 2026-05-20: ACCENT_PRESETS 主题色 picker 删 — 让 admin/frontend brand 始终一致蓝色
@@ -286,19 +297,20 @@ function renderIcon(name: string): string {
           </div>
         </div>
 
-        <!-- v3 2026-05-20: <a target="_blank"> 替代 button + window.open
-             让浏览器原生处理新 tab，不会触发当前页面任何 navigation/refresh -->
         <a
           class="console-row platform-row"
           :class="{ active: platformActive }"
-          :href="platformAdminUrl"
-          target="_blank"
-          rel="noopener"
-          @click="closePlatformMenu"
+          :href="platformHref"
+          title="平台管理"
+          @click="onPlatformClick"
+          @auxclick="onPlatformClick"
         >
           <span class="console-row-icon" v-html="renderIcon('shield')" />
           <span>平台管理</span>
-          <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="margin-left:auto;opacity:0.5"><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/><polyline points="15 3 21 3 21 9"/><line x1="10" y1="14" x2="21" y2="3"/></svg>
+          <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="margin-left:auto;opacity:0.5">
+            <path d="M7 17 17 7" />
+            <path d="M7 7h10v10" />
+          </svg>
         </a>
 
         <!-- v3 2026-05-20: 删主题色 picker 让 admin/frontend brand 始终一致蓝；只保留浅深切换 -->
@@ -770,7 +782,7 @@ function renderIcon(name: string): string {
   font-weight: var(--fw-medium, 500);
   cursor: pointer;
   text-align: left;
-  /* v3 2026-05-20: 兼容 <a> 元素（平台管理新 tab 用 a 标签）
+  /* v3 2026-05-20: 兼容 <a> 元素（平台管理行用 a 标签）
      去掉 <a> 默认下划线，跟其他 console-row（button）视觉一致 */
   text-decoration: none;
   transition: background 0.14s var(--ease, cubic-bezier(0.2, 0.8, 0.2, 1)),
