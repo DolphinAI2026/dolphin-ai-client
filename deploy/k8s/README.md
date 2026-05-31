@@ -23,6 +23,14 @@ KUBECONFIG=~/.kube/dfy-host.yaml scripts/deploy_k8s_dev.sh
 - 本机 `kubectl` 能用 kubeconfig 直连集群
 - 工作区干净；如只想部署不推分支，可用 `PUSH_DEV=0 scripts/deploy_k8s_dev.sh`
 
+如果当前账号拿不到 kubeconfig，也可以走 KubeSphere Web 终端模式：
+
+```bash
+scripts/deploy_k8s_dev_web_terminal.sh
+```
+
+这个脚本只在本地完成 git push、镜像构建和镜像推送，然后生成 `.run/deploy-dev-kubesphere-terminal.sh`，并在 macOS 上自动复制到剪贴板。把这段内容粘到 KubeSphere 的 `kubectl` 终端执行即可。
+
 ## 架构
 
 ```
