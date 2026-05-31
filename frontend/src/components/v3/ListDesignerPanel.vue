@@ -149,27 +149,19 @@
         <!-- 表格 -->
         <SkeletonCard v-if="loading" :lines="5" />
         <template v-else>
-          <div v-if="filteredRows.length === 0" class="ldp-pv-empty">
+          <!-- 真没表可显 (列表未配置 / 无列字段) → 独立空态 -->
+          <div v-if="isListConfigured === false || !visibleColumns.length" class="ldp-pv-empty">
             <div class="ldp-pv-empty-icon">📦</div>
-            <!-- 2026-05-27 T: 区分两种空态 — list_page_view 未配 vs 已配但无数据 -->
             <template v-if="isListConfigured === false">
               <p>列表预览待对接 apaas 列表配置 API</p>
               <p class="hint">apaas 上配的查询条件 / 列字段当前拉不到 (P5: 探明独立 API 后补),
                               切到"编辑"模式可直接在 apaas 原生编辑器查看 / 修改</p>
             </template>
             <template v-else>
-              <p v-if="!visibleColumns.length">该列表尚未配置可显字段</p>
-              <p v-else-if="hasActiveFilter">无匹配筛选条件的数据</p>
-              <p v-else>暂无业务数据</p>
-              <p class="hint" v-if="visibleColumns.length && !hasActiveFilter">数据由最终用户在前台录入</p>
-              <button
-                v-if="visibleColumns.length && !hasActiveFilter"
-                class="ldp-btn ldp-btn-primary ldp-btn-sm"
-                style="margin-top: 12px"
-                @click="openApaasApp()"
-              >打开应用录入数据</button>
+              <p>该列表尚未配置可显字段</p>
             </template>
           </div>
+          <!-- 有列字段 → 表头常显; 0 条/筛选空时空态放进表体 (列结构始终可见, 对齐 apaas) -->
           <div v-else class="ldp-pv-table-wrap">
             <table class="ldp-pv-table">
               <thead>
@@ -180,28 +172,46 @@
                 </tr>
               </thead>
               <tbody>
-                <tr
-                  v-for="(row, i) in pagedRows"
-                  :key="i"
-                  @click="onRowClick(row, i)"
-                  class="ldp-pv-tr"
-                >
-                  <td class="num">{{ (currentPage - 1) * pageSize + i + 1 }}</td>
-                  <td v-for="c in visibleColumns" :key="c.code">
-                    <span
-                      v-if="c.kind === 'status'"
-                      class="ldp-pv-chip"
-                      :class="statusChipClass(row[c.code])"
-                    >
-                      {{ renderCell(row, c) }}
-                    </span>
-                    <span v-else class="ldp-pv-cell" :title="String(renderCell(row, c))">
-                      {{ renderCell(row, c) }}
-                    </span>
-                  </td>
-                  <td class="ops" @click.stop>
-                    <button class="ldp-pv-link" @click="onRowView(row)">查看</button>
-                    <button class="ldp-pv-link" @click="onRowEdit(row)">编辑</button>
+                <template v-if="filteredRows.length > 0">
+                  <tr
+                    v-for="(row, i) in pagedRows"
+                    :key="i"
+                    @click="onRowClick(row, i)"
+                    class="ldp-pv-tr"
+                  >
+                    <td class="num">{{ (currentPage - 1) * pageSize + i + 1 }}</td>
+                    <td v-for="c in visibleColumns" :key="c.code">
+                      <span
+                        v-if="c.kind === 'status'"
+                        class="ldp-pv-chip"
+                        :class="statusChipClass(row[c.code])"
+                      >
+                        {{ renderCell(row, c) }}
+                      </span>
+                      <span v-else class="ldp-pv-cell" :title="String(renderCell(row, c))">
+                        {{ renderCell(row, c) }}
+                      </span>
+                    </td>
+                    <td class="ops" @click.stop>
+                      <button class="ldp-pv-link" @click="onRowView(row)">查看</button>
+                      <button class="ldp-pv-link" @click="onRowEdit(row)">编辑</button>
+                    </td>
+                  </tr>
+                </template>
+                <tr v-else class="ldp-pv-empty-row">
+                  <td :colspan="visibleColumns.length + 2">
+                    <div class="ldp-pv-empty-inline">
+                      <div class="ldp-pv-empty-icon">📦</div>
+                      <p>{{ hasActiveFilter ? '无匹配筛选条件的数据' : '暂无业务数据' }}</p>
+                      <template v-if="!hasActiveFilter">
+                        <p class="hint">数据由最终用户在前台录入</p>
+                        <button
+                          class="ldp-btn ldp-btn-primary ldp-btn-sm"
+                          style="margin-top: 12px"
+                          @click="openApaasApp()"
+                        >打开应用录入数据</button>
+                      </template>
+                    </div>
                   </td>
                 </tr>
               </tbody>
@@ -990,6 +1000,19 @@ select.ldp-pv-input { cursor: pointer; }
   color: var(--text-3);
 }
 .ldp-pv-empty-icon { font-size: 40px; }
+
+/* 表体内空态 (0 条/筛选空时, 表头仍显, 空态居中铺整行) */
+.ldp-pv-empty-row td { padding: 0; cursor: default; }
+.ldp-pv-empty-row:hover td { background: transparent; }
+.ldp-pv-empty-inline {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: var(--s-2, 8px);
+  padding: 44px 16px;
+}
+.ldp-pv-empty-inline p { margin: 0; font-size: 13px; color: var(--text); }
+.ldp-pv-empty-inline .hint { font-size: 12px; color: var(--text-3); }
 .ldp-pv-empty p { margin: 0; font-size: 13.5px; }
 .ldp-pv-empty .hint { font-size: 12px; color: var(--text-4); }
 
