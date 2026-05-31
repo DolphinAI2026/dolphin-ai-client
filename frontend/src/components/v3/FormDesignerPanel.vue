@@ -622,38 +622,61 @@ const FormPreviewInput = {
         case 'form_button':
           return h('button', { class: 'fbp-btn fbp-btn-ghost fbp-btn-sm', type: 'button' }, f.name || '按钮')
         case 'subtable': {
-          // 2026-05-31: 子表渲染成真网格 (列头 + 示例行 + 添加行占位), 而非误导性
-          // 单行文本框. 列来自 c.table_column (apaas 已配置的子表列), 兜底子 model 字段.
+          // 2026-05-31: 子表渲染成 apaas 原生风格数据表 (工具栏 + 表头 + 暂无数据空态 +
+          // 分页), 对齐得帆云 AG-Grid 子表前台视觉. 列来自 c.table_column, 兜底子 model 字段.
           const cols = f.subColumns || []
           if (!cols.length) {
-            return h('div', { class: 'fbp-fp-subtable fbp-fp-subtable-empty' }, [
-              h('span', { class: 'fbp-fp-subtable-icon', 'aria-hidden': 'true' }, '📑'),
+            return h('div', { class: 'fbp-fp-st-nocols' }, [
+              h('span', { class: 'fbp-fp-st-nocols-icon', 'aria-hidden': 'true' }, '📑'),
               h('span', null, '子表 — 暂无列定义 (apaas 未配置子表列)'),
             ])
           }
-          return h('div', { class: 'fbp-fp-subtable' }, [
-            h('div', { class: 'fbp-fp-subtable-scroll' }, [
-              h('table', { class: 'fbp-fp-subtable-table' }, [
-                h('thead', null, [
-                  h('tr', null, [
-                    h('th', { class: 'fbp-fp-subtable-idx' }, '#'),
-                    ...cols.map(col => h('th', { key: col.code }, [
-                      h('span', null, col.name),
-                      col.required ? h('span', { class: 'fbp-fp-subtable-req' }, ' *') : null,
-                    ])),
+          const toolbarActions = ['搜索', '导出', '导入', '删除', '复制', '新建']
+          return h('div', { class: 'fbp-fp-st', title: '子表预览 — 实际录入在 aPaaS 运行时进行' }, [
+            // 工具栏 — 右对齐动作链 (apaas 原生: 搜索 导出 导入 删除 复制 新建)
+            h('div', { class: 'fbp-fp-st-toolbar' },
+              toolbarActions.map(a => h('span', {
+                key: a,
+                class: a === '搜索' ? 'fbp-fp-st-act fbp-fp-st-act-muted' : 'fbp-fp-st-act',
+              }, a)),
+            ),
+            // 表格 (横向可滚) — 表头 + 暂无数据空态
+            h('div', { class: 'fbp-fp-st-viewport' }, [
+              h('div', { class: 'fbp-fp-st-scroll' }, [
+                h('table', { class: 'fbp-fp-st-table' }, [
+                  h('thead', null, [
+                    h('tr', null, [
+                      h('th', { class: 'fbp-fp-st-check' }, h('span', { class: 'fbp-fp-st-checkbox', 'aria-hidden': 'true' })),
+                      ...cols.map(col => h('th', { key: col.code }, [
+                        col.required ? h('span', { class: 'fbp-fp-st-req' }, '* ') : null,
+                        col.name,
+                      ])),
+                    ]),
                   ]),
-                ]),
-                h('tbody', null, [
-                  h('tr', null, [
-                    h('td', { class: 'fbp-fp-subtable-idx' }, '1'),
-                    ...cols.map(col => h('td', { key: col.code }, [
-                      h('input', { class: 'fbp-fp-subtable-cell', type: 'text', placeholder: col.name, disabled: true }),
-                    ])),
+                  h('tbody', null, [
+                    h('tr', { class: 'fbp-fp-st-emptyrow' }, [
+                      h('td', { class: 'fbp-fp-st-emptycell', colspan: cols.length + 1 }, [
+                        h('div', { class: 'fbp-fp-st-empty' }, [
+                          h('svg', { class: 'fbp-fp-st-empty-svg', width: '42', height: '42', viewBox: '0 0 64 64', fill: 'none', 'aria-hidden': 'true' }, [
+                            h('path', { d: 'M12 28 L21 15 H43 L52 28 V46 a4 4 0 0 1-4 4 H16 a4 4 0 0 1-4-4 Z', stroke: 'currentColor', 'stroke-width': '2.5', 'stroke-linejoin': 'round' }),
+                            h('path', { d: 'M12 28 H24 a2 2 0 0 1 2 2 a4 4 0 0 0 4 4 h4 a4 4 0 0 0 4-4 a2 2 0 0 1 2-2 H52', stroke: 'currentColor', 'stroke-width': '2.5', 'stroke-linejoin': 'round' }),
+                          ]),
+                          h('span', null, '暂无数据'),
+                        ]),
+                      ]),
+                    ]),
                   ]),
                 ]),
               ]),
             ]),
-            h('div', { class: 'fbp-fp-subtable-add', 'aria-hidden': 'true' }, `+ 添加一行 (共 ${cols.length} 列, 预览不可编辑)`),
+            // 分页 — apaas 原生: 共 N 条 ‹ 1 › 50 条/页
+            h('div', { class: 'fbp-fp-st-pager' }, [
+              h('span', { class: 'fbp-fp-st-total' }, '共 0 条'),
+              h('span', { class: 'fbp-fp-st-pagebtn fbp-fp-st-pagebtn-off' }, '‹'),
+              h('span', { class: 'fbp-fp-st-pagenum' }, '1'),
+              h('span', { class: 'fbp-fp-st-pagebtn fbp-fp-st-pagebtn-off' }, '›'),
+              h('span', { class: 'fbp-fp-st-pagesize' }, '50 条/页'),
+            ]),
           ])
         }
         case 'ref':
@@ -1146,77 +1169,8 @@ watch(() => [props.appId, props.menuId, props.formId], () => reload(), { immedia
 textarea.fbp-fp-input { resize: vertical; min-height: 64px; font-family: inherit; }
 select.fbp-fp-input { cursor: pointer; }
 
-/* ─── 子表网格 (FORM_WIDGET_SON_TABLE) — 真表格预览 ─────────── */
-.fbp-fp-subtable { width: 100%; }
-.fbp-fp-subtable-scroll {
-  width: 100%;
-  overflow-x: auto;
-  border: 1px solid var(--line);
-  border-radius: 6px;
-}
-.fbp-fp-subtable-table {
-  width: 100%;
-  border-collapse: collapse;
-  font-size: 13px;
-  color: var(--text);
-}
-.fbp-fp-subtable-table th {
-  text-align: left;
-  font-weight: 500;
-  color: var(--text-3);
-  background: var(--surface-2);
-  padding: 7px 10px;
-  white-space: nowrap;
-  border-bottom: 1px solid var(--line);
-}
-.fbp-fp-subtable-table th:not(:last-child),
-.fbp-fp-subtable-table td:not(:last-child) {
-  border-right: 1px solid var(--line);
-}
-.fbp-fp-subtable-table td { padding: 4px 6px; }
-.fbp-fp-subtable-idx {
-  width: 36px;
-  text-align: center;
-  color: var(--text-4);
-}
-.fbp-fp-subtable-req { color: #e5484d; }
-.fbp-fp-subtable-cell {
-  width: 100%;
-  min-width: 96px;
-  padding: 5px 8px;
-  border: 1px solid transparent;
-  border-radius: 4px;
-  font-size: 13px;
-  color: var(--text);
-  background: var(--surface);
-  font-family: inherit;
-  outline: none;
-  box-sizing: border-box;
-}
-.fbp-fp-subtable-cell:disabled { background: transparent; color: var(--text-3); cursor: not-allowed; }
-.fbp-fp-subtable-add {
-  display: block;
-  padding: 7px 10px;
-  font-size: 12px;
-  color: var(--text-3);
-  border: 1px dashed var(--line);
-  border-top: none;
-  border-radius: 0 0 6px 6px;
-  text-align: center;
-  user-select: none;
-}
-.fbp-fp-subtable-empty {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  padding: 12px;
-  font-size: 13px;
-  color: var(--text-3);
-  border: 1px dashed var(--line);
-  border-radius: 6px;
-  background: var(--surface-2);
-}
-.fbp-fp-subtable-icon { font-size: 14px; }
+/* 子表 (FORM_WIDGET_SON_TABLE) 样式见下方非 scoped <style> 块 — FormPreviewInput
+   由 h() 渲染, 子表内层元素 (工具栏/表头/分页) 拿不到 scoped data-v 作用域 ID. */
 
 .fbp-fp-radio-group {
   display: flex;
@@ -1379,6 +1333,123 @@ select.fbp-fp-input { cursor: pointer; }
      defineComponent 里渲染, 是 SFC 孙组件, 拿不到 scoped data-v 作用域 ID.
      类名 fbp-oac-/fbp-fp-custom-dev- 前缀够独特, 全局也安全. -->
 <style>
+/* ─── 子表 (FORM_WIDGET_SON_TABLE) — 对齐 apaas 原生 AG-Grid 子表前台视觉 ───
+   必须全局: FormPreviewInput 由 h() 渲染, 子表内层元素拿不到 scoped data-v ID.
+   类名 fbp-fp-st- 前缀够独特, 全局也安全. */
+.fbp-fp-st {
+  width: 100%;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  overflow: hidden;
+  background: var(--surface);
+}
+/* 工具栏 — 右对齐动作链 */
+.fbp-fp-st-toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 16px;
+  padding: 8px 14px;
+  border-bottom: 1px solid var(--line);
+}
+.fbp-fp-st-act { font-size: 13px; color: var(--brand); user-select: none; white-space: nowrap; }
+.fbp-fp-st-act-muted { color: var(--text-3); }
+/* 横向滚动 + 右缘渐隐 (列多时暗示可滚), 渐隐放不滚动的 viewport 上 */
+.fbp-fp-st-viewport { position: relative; }
+.fbp-fp-st-viewport::after {
+  content: '';
+  position: absolute;
+  top: 0; right: 0; bottom: 0;
+  width: 24px;
+  pointer-events: none;
+  background: linear-gradient(to right, rgba(0, 0, 0, 0), var(--surface));
+}
+.fbp-fp-st-scroll { width: 100%; overflow-x: auto; }
+.fbp-fp-st-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 13px;
+  color: var(--text);
+}
+.fbp-fp-st-table th {
+  height: 40px;
+  text-align: left;
+  font-weight: 600;
+  font-size: 13px;
+  color: var(--text);
+  background: var(--surface-2);
+  padding: 0 12px;
+  white-space: nowrap;
+  border-bottom: 1px solid var(--line);
+}
+.fbp-fp-st-table th + th { border-left: 1px solid var(--line); }
+.fbp-fp-st-check { width: 40px; text-align: center; }
+.fbp-fp-st-checkbox {
+  display: inline-block;
+  width: 14px; height: 14px;
+  border: 1px solid var(--text-4);
+  border-radius: 3px;
+  vertical-align: middle;
+  background: var(--surface);
+}
+.fbp-fp-st-req { color: #e5484d; }
+.fbp-fp-st-emptycell { padding: 0; }
+.fbp-fp-st-empty {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  padding: 28px 0;
+  color: var(--text-4);
+  font-size: 13px;
+}
+.fbp-fp-st-empty-svg { color: var(--line); }
+/* 分页 — 共 N 条 ‹ 1 › N 条/页 */
+.fbp-fp-st-pager {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 10px;
+  padding: 8px 14px;
+  border-top: 1px solid var(--line);
+  font-size: 12px;
+  color: var(--text-3);
+}
+.fbp-fp-st-total { margin-right: auto; }
+.fbp-fp-st-pagebtn {
+  display: inline-flex; align-items: center; justify-content: center;
+  width: 22px; height: 22px;
+  border: 1px solid var(--line);
+  border-radius: 4px;
+  color: var(--text-4);
+}
+.fbp-fp-st-pagenum {
+  display: inline-flex; align-items: center; justify-content: center;
+  min-width: 22px; height: 22px; padding: 0 4px;
+  border: 1px solid var(--brand);
+  border-radius: 4px;
+  color: var(--brand);
+  font-variant-numeric: tabular-nums;
+}
+.fbp-fp-st-pagesize {
+  display: inline-flex; align-items: center;
+  height: 22px; padding: 0 8px;
+  border: 1px solid var(--line);
+  border-radius: 4px;
+  color: var(--text-3);
+}
+/* 无列定义兜底 */
+.fbp-fp-st-nocols {
+  display: flex; align-items: center; gap: 6px;
+  padding: 12px 14px;
+  font-size: 13px; color: var(--text-3);
+  border: 1px dashed var(--line);
+  border-radius: 6px;
+  background: var(--surface-2);
+}
+.fbp-fp-st-nocols-icon { font-size: 14px; }
+
 /* 自开发组件预览卡片 (FORM_CUSTOM_COMPONENT_* 无专属渲染器时) */
 .fbp-fp-custom-dev {
   padding: 14px 16px;
