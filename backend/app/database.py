@@ -69,6 +69,14 @@ async def init_db():
             "ALTER TABLE conversations ADD COLUMN project_id INTEGER",
             "ALTER TABLE users ADD COLUMN apaas_base_url VARCHAR(255)",
             "ALTER TABLE users ADD COLUMN apaas_tenant_id VARCHAR(50)",
+            # Tenant quota/contact columns added after early multi-tenant installs.
+            "ALTER TABLE tenants ADD COLUMN max_applications INTEGER NOT NULL DEFAULT 10",
+            "ALTER TABLE tenants ADD COLUMN max_workspaces INTEGER NOT NULL DEFAULT 20",
+            "ALTER TABLE tenants ADD COLUMN max_components INTEGER NOT NULL DEFAULT 50",
+            "ALTER TABLE tenants ADD COLUMN contact_name VARCHAR(64)",
+            "ALTER TABLE tenants ADD COLUMN contact_email VARCHAR(128)",
+            "ALTER TABLE tenants ADD COLUMN apaas_env_id INTEGER",
+            "ALTER TABLE tenants ADD COLUMN apaas_tenant_id_str VARCHAR(40)",
             # Projects table columns (in case table existed before new columns were added)
             "ALTER TABLE projects ADD COLUMN platform_username VARCHAR(100)",
             "ALTER TABLE projects ADD COLUMN platform_app_name VARCHAR(100)",
