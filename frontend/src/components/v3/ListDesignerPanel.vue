@@ -239,6 +239,16 @@
             </div>
           </div>
         </template>
+
+        <!-- 行详情抽屉 (复用已拉行数据, 零新端点) -->
+        <el-drawer v-model="detailVisible" title="数据详情" direction="rtl" size="420px">
+          <div v-if="detailRow" class="ldp-detail">
+            <div v-for="c in visibleColumns" :key="c.code" class="ldp-detail-row">
+              <span class="ldp-detail-label">{{ c.label }}</span>
+              <span class="ldp-detail-value">{{ renderCell(detailRow, c) }}</span>
+            </div>
+          </div>
+        </el-drawer>
       </div>
 
       <!-- =========================================================== -->
@@ -316,6 +326,9 @@ const filterFields = ref<FilterField[]>([])
 const filterValues = reactive<Record<string, string>>({})
 const allRows = ref<Record<string, any>[]>([])
 const dataSource = ref<'real' | 'empty' | 'error'>('empty')
+// 行详情抽屉 — 直接复用列表已拉到的 row, 零新端点
+const detailVisible = ref(false)
+const detailRow = ref<Record<string, any> | null>(null)
 // 2026-05-27 T: apaas 列表设计 tab 真实配置状态 — 区分"未配置"与"已配置但空".
 // null = 未拉到 detail (老 fallback 路径); true = apaas 上配过 query/columns;
 // false = apaas list_page_view 返了但 query_conditions/query_list 都是空数组.
@@ -485,11 +498,8 @@ async function openApaasApp() {
 }
 
 function onRowClick(row: Record<string, any>, _i: number) {
-  const summary = visibleColumns.value
-    .slice(0, 3)
-    .map(c => `${c.label}: ${renderCell(row, c)}`)
-    .join('\n')
-  alert(`查看详情 (P1 接入完整 detail 抽屉)\n\n${summary}`)
+  detailRow.value = row
+  detailVisible.value = true
 }
 
 function onRowView(row: Record<string, any>) {
@@ -1286,4 +1296,16 @@ select.ldp-pv-input { cursor: pointer; }
   border-color: var(--err);
 }
 .ldp-icon-btn:disabled { opacity: 0.5; cursor: not-allowed; }
+
+/* 行详情抽屉 */
+.ldp-detail { display: flex; flex-direction: column; }
+.ldp-detail-row {
+  display: flex;
+  gap: 12px;
+  padding: 10px 4px;
+  border-bottom: 1px solid var(--line);
+  font-size: 13px;
+}
+.ldp-detail-label { flex: 0 0 120px; color: var(--text-3); }
+.ldp-detail-value { flex: 1; color: var(--text); word-break: break-all; }
 </style>
