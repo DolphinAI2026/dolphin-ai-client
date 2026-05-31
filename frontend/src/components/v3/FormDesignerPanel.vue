@@ -181,6 +181,10 @@ interface FormField {
   customConfig?: Record<string, any>
   // 完整 bo_code (含 ~ 前的 model_code) — P2 自开发组件 chat 代理定位组件用.
   boCodeFull?: string
+  // 2026-05-31: 子表 (FORM_WIDGET_SON_TABLE) — 列定义 + 关联子 model code.
+  // preview 用它把子表渲染成真网格 (列头 + 行) 而非误导性单行文本框.
+  subColumns?: { code: string; name: string; type: FieldType; required: boolean }[]
+  subModelCode?: string
 }
 
 /* ────────────────────────────────────────────────────────────────
@@ -229,6 +233,28 @@ const COMPONENT_TYPE_MAP: Record<string, FieldType> = {
   FORM_TAB_LAYOUT: 'tab_layout', FORM_TABS: 'tab_layout',
   FORM_FRAME_LAYOUT: 'frame_layout',
   FORM_TEMPLATE_FILE: 'template_file',
+  // 2026-05-31: 上面一批键名是早期臆造的 (FORM_SUBTABLE / FORM_AMOUNT_INPUT / ...),
+  // apaas 实际下发的 componentType 用下面这批真名 — 对齐 backend lowcode_standards.py
+  // _PLATFORM_COMPONENT_ALIASES (权威, 跟真实 detailPageConfigById 解析一致).
+  // 漏了它们 → componentTypeToWidget 落默认 'text' → 子表/金额/地区等被渲成单行文本框.
+  FORM_WIDGET_SON_TABLE: 'subtable',   // 子表 (用户报的渲染 bug 根因)
+  FORM_MONEY_INPUT: 'money',           // 金额
+  FORM_WIDGET_AREA: 'region',          // 地区地址
+  FORM_WIDGET_LOCATION: 'location',    // 地理位置
+  FORM_ASSOCIATION: 'ref_form',        // 关联表单
+  FORM_DATE_PICKER: 'datetime',        // 日期时间
+  FORM_SERIAL: 'serial_no',            // 单据号
+  FORM_HYPERLINK_INPUT: 'hyperlink',   // 超链接
+  FORM_ID_CARD: 'idcard',              // 身份证号
+  FORM_DATA_SELECTOR: 'data_select',   // 数据选择
+  FORM_DATA_SELECTOR_SINGLE: 'data_single', // 数据单选
+  FORM_SELECT_INPUT_SINGLE: 'select',  // 下拉单选
+  FORM_SELECT_INPUT: 'multi_select',   // 下拉多选
+  FORM_SELECT_MULTI: 'multi_select',
+  FORM_RADIO_INPUT: 'radio',           // 单选框
+  FORM_CHECKBOX_INPUT: 'multi_select', // 复选框
+  FORM_SWITCH_SELECT: 'switch',        // 开关
+  FORM_UPLOAD: 'file',                 // 附件上传
 }
 
 // 2026-05-28: apaas 自开发组件统一前缀 FORM_CUSTOM_COMPONENT_* (如
@@ -595,9 +621,43 @@ const FormPreviewInput = {
           return h('div', { class: 'fbp-fp-layout-hint' }, f.type === 'collapse_layout' ? '【折叠布局】' : f.type === 'tab_layout' ? '【分页布局】' : '【框架布局】')
         case 'form_button':
           return h('button', { class: 'fbp-btn fbp-btn-ghost fbp-btn-sm', type: 'button' }, f.name || '按钮')
+        case 'subtable': {
+          // 2026-05-31: 子表渲染成真网格 (列头 + 示例行 + 添加行占位), 而非误导性
+          // 单行文本框. 列来自 c.table_column (apaas 已配置的子表列), 兜底子 model 字段.
+          const cols = f.subColumns || []
+          if (!cols.length) {
+            return h('div', { class: 'fbp-fp-subtable fbp-fp-subtable-empty' }, [
+              h('span', { class: 'fbp-fp-subtable-icon', 'aria-hidden': 'true' }, '📑'),
+              h('span', null, '子表 — 暂无列定义 (apaas 未配置子表列)'),
+            ])
+          }
+          return h('div', { class: 'fbp-fp-subtable' }, [
+            h('div', { class: 'fbp-fp-subtable-scroll' }, [
+              h('table', { class: 'fbp-fp-subtable-table' }, [
+                h('thead', null, [
+                  h('tr', null, [
+                    h('th', { class: 'fbp-fp-subtable-idx' }, '#'),
+                    ...cols.map(col => h('th', { key: col.code }, [
+                      h('span', null, col.name),
+                      col.required ? h('span', { class: 'fbp-fp-subtable-req' }, ' *') : null,
+                    ])),
+                  ]),
+                ]),
+                h('tbody', null, [
+                  h('tr', null, [
+                    h('td', { class: 'fbp-fp-subtable-idx' }, '1'),
+                    ...cols.map(col => h('td', { key: col.code }, [
+                      h('input', { class: 'fbp-fp-subtable-cell', type: 'text', placeholder: col.name, disabled: true }),
+                    ])),
+                  ]),
+                ]),
+              ]),
+            ]),
+            h('div', { class: 'fbp-fp-subtable-add', 'aria-hidden': 'true' }, `+ 添加一行 (共 ${cols.length} 列, 预览不可编辑)`),
+          ])
+        }
         case 'ref':
         case 'ref_form':
-        case 'subtable':
         case 'data_select':
         case 'data_single':
         case 'data_stat':
@@ -705,9 +765,37 @@ async function reload() {
           if (_modelCode) modelCode.value = _modelCode
           const mm = (respFD.models || []).find((m: any) => m.model_code === _modelCode)
           const mf = mm?.fields?.find((x: any) => x.field_code === fieldCode)
+          // 子表: 从 table_column 构建列 (model_field = modelCode.fieldCode);
+          // 兜底 table_column 空时用关联子 model 的字段定义.
+          let subColumns: FormField['subColumns']
+          let subModelCode: string | undefined
+          if (widgetType === 'subtable') {
+            subModelCode = String(c.table_model_code || '') || undefined
+            const rawCols: any[] = Array.isArray(c.table_column) ? c.table_column : []
+            if (rawCols.length) {
+              subColumns = rawCols.map((col: any) => {
+                const mfRaw = String(col.model_field || '')
+                const colCode = mfRaw.includes('.') ? mfRaw.split('.').pop() || '' : mfRaw
+                return {
+                  code: colCode || String(col.uuid || ''),
+                  name: String(col.label || colCode || '列'),
+                  type: componentTypeToWidget(String(col.component_type || '')),
+                  required: !!col.required,
+                }
+              })
+            } else if (subModelCode) {
+              const subModel = (respFD.models || []).find((m: any) => m.model_code === subModelCode)
+              subColumns = (subModel?.fields || []).map((sf: any) => ({
+                code: String(sf.field_code || ''),
+                name: String(sf.field_name || sf.field_code || '列'),
+                type: backendTypeToWidget(sf.data_type),
+                required: !!sf.required,
+              }))
+            }
+          }
           return {
             id: nextId(),
-            code: fieldCode || `field_${Math.random().toString(36).slice(2, 6)}`,
+            code: fieldCode || subModelCode || `field_${Math.random().toString(36).slice(2, 6)}`,
             name: String(c.label || fieldCode || '未命名'),
             type: widgetType,
             placeholder: '',
@@ -721,6 +809,8 @@ async function reload() {
               ? c.custom_component_config as Record<string, any>
               : undefined,
             boCodeFull: boCode,
+            subColumns,
+            subModelCode,
           }
         })
         if (!modelCode.value) modelCode.value = String(respFD.main_model_code || '')
@@ -1055,6 +1145,78 @@ watch(() => [props.appId, props.menuId, props.formId], () => reload(), { immedia
 .fbp-fp-input[readonly] { background: var(--surface-2); color: var(--text-3); }
 textarea.fbp-fp-input { resize: vertical; min-height: 64px; font-family: inherit; }
 select.fbp-fp-input { cursor: pointer; }
+
+/* ─── 子表网格 (FORM_WIDGET_SON_TABLE) — 真表格预览 ─────────── */
+.fbp-fp-subtable { width: 100%; }
+.fbp-fp-subtable-scroll {
+  width: 100%;
+  overflow-x: auto;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+}
+.fbp-fp-subtable-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 13px;
+  color: var(--text);
+}
+.fbp-fp-subtable-table th {
+  text-align: left;
+  font-weight: 500;
+  color: var(--text-3);
+  background: var(--surface-2);
+  padding: 7px 10px;
+  white-space: nowrap;
+  border-bottom: 1px solid var(--line);
+}
+.fbp-fp-subtable-table th:not(:last-child),
+.fbp-fp-subtable-table td:not(:last-child) {
+  border-right: 1px solid var(--line);
+}
+.fbp-fp-subtable-table td { padding: 4px 6px; }
+.fbp-fp-subtable-idx {
+  width: 36px;
+  text-align: center;
+  color: var(--text-4);
+}
+.fbp-fp-subtable-req { color: #e5484d; }
+.fbp-fp-subtable-cell {
+  width: 100%;
+  min-width: 96px;
+  padding: 5px 8px;
+  border: 1px solid transparent;
+  border-radius: 4px;
+  font-size: 13px;
+  color: var(--text);
+  background: var(--surface);
+  font-family: inherit;
+  outline: none;
+  box-sizing: border-box;
+}
+.fbp-fp-subtable-cell:disabled { background: transparent; color: var(--text-3); cursor: not-allowed; }
+.fbp-fp-subtable-add {
+  display: block;
+  padding: 7px 10px;
+  font-size: 12px;
+  color: var(--text-3);
+  border: 1px dashed var(--line);
+  border-top: none;
+  border-radius: 0 0 6px 6px;
+  text-align: center;
+  user-select: none;
+}
+.fbp-fp-subtable-empty {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 12px;
+  font-size: 13px;
+  color: var(--text-3);
+  border: 1px dashed var(--line);
+  border-radius: 6px;
+  background: var(--surface-2);
+}
+.fbp-fp-subtable-icon { font-size: 14px; }
 
 .fbp-fp-radio-group {
   display: flex;

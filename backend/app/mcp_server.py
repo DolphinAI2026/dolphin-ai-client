@@ -4930,6 +4930,24 @@ async def get_apaas_form_detail(env_id: int, apaas_app_id: str, form_id: str) ->
                     for k, v in ccc.items()
                 }
                 comp_out["custom_component_config"] = safe_cfg
+        # 2026-05-31: 子表组件 (FORM_WIDGET_SON_TABLE) — 透出子表 model + 列定义,
+        # 给前端 FormDesignerPanel 真渲染成网格 (而非误导性单行文本框).
+        # apaas 子表用 tableModelCode 关联子 model; tableColumn[] 是已配置的列,
+        # 每列含 modelField (modelCode.fieldCode) + componentType + label.
+        if comp_type == "FORM_WIDGET_SON_TABLE":
+            comp_out["table_model_code"] = str(c.get("tableModelCode") or "")
+            cols_out = []
+            for col in (c.get("tableColumn") or c.get("tableColumns") or []):
+                if not isinstance(col, dict):
+                    continue
+                cols_out.append({
+                    "uuid": str(col.get("uuid") or col.get("id") or ""),
+                    "label": str(col.get("label") or col.get("name") or ""),
+                    "component_type": str(col.get("componentType") or ""),
+                    "model_field": str(col.get("modelField") or ""),
+                    "required": bool(col.get("required", False)),
+                })
+            comp_out["table_column"] = cols_out
         comps.append(comp_out)
 
     # apaas detailPageConfigById raw 含 `modelCode` (form 绑定的主表) 直接用
