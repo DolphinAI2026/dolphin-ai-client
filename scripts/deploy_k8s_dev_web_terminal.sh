@@ -173,7 +173,7 @@ else
   printf 'APAAS_TENANT_ID=%s\\n' "\$APAAS_TENANT_ID" >> /tmp/apaas-builder-backend.env
 fi
 if grep -q '^DATABASE_URL=mysql' /tmp/apaas-builder-backend.env; then
-  sed -i -E "s#^(DATABASE_URL=mysql[^/]*/)[^?]*(.*)#\\1\${DEV_DATABASE_NAME}\\2#" /tmp/apaas-builder-backend.env
+  sed -i -E "s#^(DATABASE_URL=[^:]+://[^/]+/)[^?]*(.*)#\\1\${DEV_DATABASE_NAME}\\2#" /tmp/apaas-builder-backend.env
 else
   echo "ERROR: DATABASE_URL is missing or not mysql; refusing to deploy dev against an unknown database" >&2
   exit 1
