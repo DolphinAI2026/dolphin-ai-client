@@ -45,6 +45,7 @@ PROD_HOST="${PROD_HOST:-df-aigc.dfy.definesys.cn}"
 PUBLIC_URL="${PUBLIC_URL:-https://${DEV_HOST}/ai-builder/login}"
 APAAS_BASE_URL="${APAAS_BASE_URL:-}"
 APAAS_TENANT_ID="${APAAS_TENANT_ID:-}"
+DEV_DATABASE_NAME="${DEV_DATABASE_NAME:-apaas_builder_dev}"
 
 SOURCE_NGINX_CM="${SOURCE_NGINX_CM:-${PROD_APP_NAME}-nginx}"
 NGINX_CM="${NGINX_CM:-${APP_NAME}-nginx}"
@@ -151,15 +152,17 @@ clone_nginx_config() {
 clone_backend_secret() {
   [ -n "$APAAS_BASE_URL" ] || die "APAAS_BASE_URL is empty. Set it in ${DEPLOY_ENV_FILE}"
   [ -n "$APAAS_TENANT_ID" ] || die "APAAS_TENANT_ID is empty. Set it in ${DEPLOY_ENV_FILE}"
+  [ -n "$DEV_DATABASE_NAME" ] || die "DEV_DATABASE_NAME is empty. Set it in ${DEPLOY_ENV_FILE}"
   log "sync backend Secret ${SOURCE_BACKEND_SECRET} -> ${BACKEND_SECRET}"
   kubectl -n "$NAMESPACE" get secret "$SOURCE_BACKEND_SECRET" -o jsonpath='{.data.backend\.env}' \
     | python3 -c 'import base64,sys; sys.stdout.buffer.write(base64.b64decode(sys.stdin.read()))' \
     > /tmp/apaas-builder-backend.env
-  python3 - "$APAAS_BASE_URL" "$APAAS_TENANT_ID" /tmp/apaas-builder-backend.env <<'PY'
+  python3 - "$APAAS_BASE_URL" "$APAAS_TENANT_ID" "$DEV_DATABASE_NAME" /tmp/apaas-builder-backend.env <<'PY'
 from pathlib import Path
 import sys
+from urllib.parse import urlsplit, urlunsplit
 
-base_url, tenant_id, path = sys.argv[1:4]
+base_url, tenant_id, dev_db, path = sys.argv[1:5]
 env_path = Path(path)
 values = {
     "APAAS_BASE_URL": base_url,
@@ -172,6 +175,13 @@ for line in env_path.read_text().splitlines():
     if key in values:
         lines.append(f"{key}={values[key]}")
         seen.add(key)
+    elif key == "DATABASE_URL":
+        value = line.split("=", 1)[1]
+        parsed = urlsplit(value)
+        if parsed.scheme.startswith("mysql"):
+            lines.append(f"DATABASE_URL={urlunsplit((parsed.scheme, parsed.netloc, '/' + dev_db, parsed.query, parsed.fragment))}")
+        else:
+            raise SystemExit(f"unsupported DATABASE_URL for dev split: {parsed.scheme}")
     else:
         lines.append(line)
 for key, value in values.items():

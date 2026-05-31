@@ -40,6 +40,7 @@ PROD_HOST="${PROD_HOST:-df-aigc.dfy.definesys.cn}"
 PUBLIC_URL="${PUBLIC_URL:-https://${DEV_HOST}/ai-builder/login}"
 APAAS_BASE_URL="${APAAS_BASE_URL:-}"
 APAAS_TENANT_ID="${APAAS_TENANT_ID:-}"
+DEV_DATABASE_NAME="${DEV_DATABASE_NAME:-apaas_builder_dev}"
 
 SOURCE_NGINX_CM="${SOURCE_NGINX_CM:-${PROD_APP_NAME}-nginx}"
 NGINX_CM="${NGINX_CM:-${APP_NAME}-nginx}"
@@ -120,6 +121,7 @@ build_and_push_image() {
 generate_terminal_payload() {
   [ -n "$APAAS_BASE_URL" ] || die "APAAS_BASE_URL is empty. Set it in ${DEPLOY_ENV_FILE}"
   [ -n "$APAAS_TENANT_ID" ] || die "APAAS_TENANT_ID is empty. Set it in ${DEPLOY_ENV_FILE}"
+  [ -n "$DEV_DATABASE_NAME" ] || die "DEV_DATABASE_NAME is empty. Set it in ${DEPLOY_ENV_FILE}"
   mkdir -p "$(dirname "$OUTPUT_FILE")"
   cat > "$OUTPUT_FILE" <<EOF
 set -euo pipefail
@@ -133,6 +135,7 @@ PROD_HOST='${PROD_HOST}'
 PUBLIC_URL='${PUBLIC_URL}'
 APAAS_BASE_URL='${APAAS_BASE_URL}'
 APAAS_TENANT_ID='${APAAS_TENANT_ID}'
+DEV_DATABASE_NAME='${DEV_DATABASE_NAME}'
 SOURCE_NGINX_CM='${SOURCE_NGINX_CM}'
 NGINX_CM='${NGINX_CM}'
 SOURCE_BACKEND_SECRET='${SOURCE_BACKEND_SECRET}'
@@ -154,6 +157,7 @@ kubectl -n "\$NAMESPACE" create configmap "\$NGINX_CM" \\
   --dry-run=client -o yaml | kubectl apply -f -
 
 echo "[3/6] syncing backend Secret"
+echo "      using isolated dev database: \$DEV_DATABASE_NAME"
 kubectl -n "\$NAMESPACE" get secret "\$SOURCE_BACKEND_SECRET" -o jsonpath='{.data.backend\\.env}' \\
   | base64 -d \\
   | sed "s#\${PROD_HOST}#\${DEV_HOST}#g" \\
@@ -167,6 +171,12 @@ if grep -q '^APAAS_TENANT_ID=' /tmp/apaas-builder-backend.env; then
   sed -i "s#^APAAS_TENANT_ID=.*#APAAS_TENANT_ID=\${APAAS_TENANT_ID}#" /tmp/apaas-builder-backend.env
 else
   printf 'APAAS_TENANT_ID=%s\\n' "\$APAAS_TENANT_ID" >> /tmp/apaas-builder-backend.env
+fi
+if grep -q '^DATABASE_URL=mysql' /tmp/apaas-builder-backend.env; then
+  sed -i -E "s#^(DATABASE_URL=mysql[^/]*/)[^?]*(.*)#\\1\${DEV_DATABASE_NAME}\\2#" /tmp/apaas-builder-backend.env
+else
+  echo "ERROR: DATABASE_URL is missing or not mysql; refusing to deploy dev against an unknown database" >&2
+  exit 1
 fi
 kubectl -n "\$NAMESPACE" create secret generic "\$BACKEND_SECRET" \\
   --from-file=backend.env=/tmp/apaas-builder-backend.env \\

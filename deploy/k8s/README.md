@@ -18,7 +18,8 @@ KUBECONFIG=~/.kube/dfy-host.yaml scripts/deploy_k8s_dev.sh
 
 脚本会把当前 `HEAD` 推到 `origin/dev`，构建并推送 `hub.dfy.definesys.cn/ai-builder/apaas-builder:dev-<日期>-<sha>`，然后读取 `deploy/k8s/dev.env` 更新 `apaas-builder-dev` 的 StatefulSet / Service / Ingress / ConfigMap / Secret / PVC，并验证 `PUBLIC_URL`。
 
-dev 环境的 aPaaS 绑定只写在 [dev.env](dev.env)，部署脚本会从这里读取并写入 K8s Secret。
+dev 环境的 aPaaS 绑定和数据库名只写在 [dev.env](dev.env)，部署脚本会从这里读取并写入 K8s Secret。
+dev 必须使用独立库 `apaas_builder_dev`，不能复用正式环境 `apaas_builder`。
 
 前置条件：
 - 本机 `docker` 已登录 `hub.dfy.definesys.cn`

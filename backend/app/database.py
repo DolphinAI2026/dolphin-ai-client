@@ -77,6 +77,14 @@ async def init_db():
             "ALTER TABLE tenants ADD COLUMN contact_email VARCHAR(128)",
             "ALTER TABLE tenants ADD COLUMN apaas_env_id INTEGER",
             "ALTER TABLE tenants ADD COLUMN apaas_tenant_id_str VARCHAR(40)",
+            # PlatformEnv columns added after early installs. Existing dev/prod
+            # MySQL tables may predate these fields; login now queries them.
+            "ALTER TABLE platform_envs ADD COLUMN alias VARCHAR(50)",
+            "ALTER TABLE platform_envs ADD COLUMN is_default BOOLEAN NOT NULL DEFAULT FALSE",
+            "ALTER TABLE platform_envs ADD COLUMN status VARCHAR(20) NOT NULL DEFAULT 'disconnected'",
+            "ALTER TABLE platform_envs ADD COLUMN created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP",
+            "ALTER TABLE platform_envs ADD COLUMN updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP",
+            "CREATE UNIQUE INDEX uq_platform_envs_alias ON platform_envs(alias)",
             # Projects table columns (in case table existed before new columns were added)
             "ALTER TABLE projects ADD COLUMN platform_username VARCHAR(100)",
             "ALTER TABLE projects ADD COLUMN platform_app_name VARCHAR(100)",
