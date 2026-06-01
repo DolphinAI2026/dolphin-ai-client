@@ -744,10 +744,22 @@ async def get_apaas_access_url(
         return {"ok": False, "error_code": "APP_NOT_DEPLOYED",
                 "message": "应用尚未部署到 aPaaS 平台"}
     try:
-        detail = await call_apaas_with_relogin(
-            app.platform_env_id, db,
-            lambda c: c.query_app_detail(str(app.apaas_app_id)),
-        )
+        # 2026-06-01: 租户来源统一为「当前登录用户」—— 有 apaas_token 时直接用 ctx.user 三件套
+        # (base_url + tenant + token, 对齐 __init__.py 既有正确模式), 避免用 app 绑定环境里
+        # 残留的别家租户去查 → 拉不到 / 错租户。无当前用户 token 才退回 env 自愈路径 (保旧行为)。
+        if ctx.user.apaas_token:
+            from app.apaas_client import APaaSClient
+            user_client = APaaSClient(
+                base_url=ctx.user.apaas_base_url,
+                tenant_id=ctx.user.apaas_tenant_id,
+                token=ctx.user.apaas_token,
+            )
+            detail = await user_client.query_app_detail(str(app.apaas_app_id))
+        else:
+            detail = await call_apaas_with_relogin(
+                app.platform_env_id, db,
+                lambda c: c.query_app_detail(str(app.apaas_app_id)),
+            )
     except Exception as exc:  # noqa: BLE001
         return {"ok": False, "error_code": "APAAS_CLIENT_ERROR", "message": f"拉应用详情失败: {exc}"}
     if not detail:

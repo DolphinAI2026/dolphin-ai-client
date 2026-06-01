@@ -62,6 +62,7 @@ __all__ = [
     "_preview_data",
     "_render_doc_content_from_config",
     "_resolve_builder_llm_cfg",
+    "_resolve_current_apaas_tenant",
     "_resolve_display_status",
     "_sync_canonical_config_to_current_doc_version",
 ]
@@ -823,6 +824,23 @@ def _resolve_display_status(app: Application, remote_status: str | None = None) 
         return _REMOTE_STATUS_MAP.get(normalized_remote, _LOCAL_STATUS_MAP["completed"])
 
     return _LOCAL_STATUS_MAP.get(app.status, app.status)
+
+
+def _resolve_current_apaas_tenant(
+    user_apaas_tenant_id: str | None,
+    env_tenant_id: str | None = None,
+) -> str | None:
+    """「查看应用详情」类接口的租户来源 — 以当前登录用户的 aPaaS 租户为准。
+
+    优先 ``ctx.user.apaas_tenant_id``(当前登录用户真实租户),退到 app 绑定环境的租户,
+    都没有则 ``None``(调用方据此降级 / 不拼链接)。**绝不回退到写死的全局租户** —— 那会把
+    别人的应用链接 / 查询指向错租户(见 2026-06-01 租户写死 bug)。
+    """
+    return (
+        str(user_apaas_tenant_id or "").strip()
+        or str(env_tenant_id or "").strip()
+        or None
+    )
 
 
 def _build_apaas_url(apaas_app_id: str, base_url: str | None = None, tenant_id: str | None = None) -> str:

@@ -572,7 +572,10 @@ async def get_application(
             default_env = default_env_result.scalar_one_or_none()
             if default_env:
                 env_base_url, env_tenant_id = default_env.base_url, default_env.platform_tenant_id
-        resp.apaas_url = _build_apaas_url(str(app.apaas_app_id), env_base_url, env_tenant_id)
+        # 2026-06-01: 租户以「当前登录用户的 aPaaS 租户」为准 (ctx.user.apaas_tenant_id),
+        # env 仅兜底 —— 避免用 app 绑定环境 / 默认环境里残留的别家租户拼出错租户深链。
+        link_tenant_id = _resolve_current_apaas_tenant(ctx.user.apaas_tenant_id, env_tenant_id)
+        resp.apaas_url = _build_apaas_url(str(app.apaas_app_id), env_base_url, link_tenant_id)
 
     return resp
 
