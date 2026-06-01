@@ -30,6 +30,7 @@ from app.coding.scenes import SceneType, get_scene
 from app.coding.generator import CodingGenerator
 from app.coding.workspace import WorkspaceManager, ProjectType
 from app.coding.prompts import AGENT_SYSTEM_PROMPT
+from app.coding.read_query import classify_coding_intent, run_read_query
 
 logger = logging.getLogger(__name__)
 
@@ -1421,6 +1422,20 @@ async def run_coding_pipeline(
                 is_iteration = False
                 ws_id = None
                 yield _record_event({"type": "content", "content": "💡 检测到你想做一个新组件，正在为你创建新的工作区...\n\n"})
+
+        # ---- 意图门：仅对首轮(not is_iteration)生效 ----
+        # BUILD(保守兜底): 走原 codegen 流程，完全不变。
+        # READ: 用只读 aPaaS 工具直接答问题，不建 workspace、不 codegen。
+        if not is_iteration:
+            _intent = await classify_coding_intent(
+                params.tenant_id, effective_model,
+                params.message.split("\n")[0][:300],  # 只取首行，与 detect_scene 对齐
+            )
+            if _intent == "READ":
+                logger.info("[intent_gate] READ 路径，跳过 codegen")
+                async for _ev in run_read_query(params, db):
+                    yield _record_event(_ev)
+                return
 
         # 预加载对话历史（不含本轮 user message）。用途：
         # 1) 判断是否处于 brainstorm 续轮：若上一条 assistant 是 brainstorm 提案，
