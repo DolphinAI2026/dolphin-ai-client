@@ -1,0 +1,51 @@
+# Handoff 2026-06-01 — AI Coding/Builder v2 双支柱重定位
+
+> 一句话:Builder=纯配置(不 codegen,想写代码引导去 Coding)· Coding=纯开发(意图路由:读→读MCP答 / 建→codegen)· 常规读 MCP 两边复用。映射产品「智能配置 + 智能开发」。
+
+## 定位(v2,已锁)
+- **AI Builder** = 智能配置:对话搭表单/数据模型/流程/权限,**不再写自开发代码**。用户要写代码 → 引导去 AI Coding。
+- **AI Coding** = 智能开发:首轮先**意图路由**——
+  - READ(读/问:"有哪些应用""看下这个表结构")→ 走只读 MCP 工具直接回答,**不写 SPEC、不建 workspace**。
+  - BUILD(建/改:"做个图书首页双端组件")→ 走原 codegen 管线(detect_scene→inline SPEC→生成)。
+- 常规**只读 MCP 工具两边复用**(list_apaas_apps 等)。
+- spec: `docs/superpowers/specs/2026-06-01-ai-coding-overhaul-design.md` (v2)
+- plan: `docs/superpowers/plans/2026-06-01-ai-coding-overhaul.md`
+
+## 已完成 + 提交(dev 分支,倒序)
+| commit | 内容 |
+|---|---|
+| 20df9f9 | READ 路径**持久化会话历史** + 回看渲染为正常消息(不进思考卡) |
+| 6a7c4fc | N1 读路径补完:读工具走 `_call_apaas_platform_tool` token 自愈(**修 401**)+ 前端工具卡/清占位 |
+| fe78708 | **N2** Builder 去自开发 codegen(tool_registry 白名单摘 15 工具,82→67)+ 引导文案 |
+| 1f7f156 | **N1** 意图路由:`read_query.py`(classify_coding_intent + run_read_query)+ pipeline 首轮意图门 |
+| d678bb7 | spec v2 重定位文档 |
+| eab81d8 | **F1** 侧栏只列会话,消灭 conv:/ws: 双轨 |
+| d583dff | **B3** 去首轮 brainstorm 强制确认门,proposal 转 inline SPEC 直接 codegen |
+| e2e4756 | **B2** 孤儿 workspace 迁移脚本(幂等,main.py lifespan 启动跑) |
+| 6e4e966 | **B1** delete_coding_conversation 删除语义(会话+workspace 1:1)+ 测试 |
+| 19d98d5 | 会话删除按钮 + 恢复 Coding 模型选择器 + 自开发页移除冗余 3 按钮 |
+| bb7475f | 登录时给租户 env 灌账号密码(token 自愈可用)+ 修"token 为空"误导文案 |
+
+## 已 live 验证(preview 实测)
+- **N1 读意图**:问"读一下现在有哪些应用"→ 返回 26 应用 markdown 表格(RUNNING 11/SHUTDOWN 15),**不再写 SPEC**。意图分类 read/build 准。
+- **读工具 401 自愈**:首调触发 MANAGE 重登 → 200。
+- **读路径持久化**:会话存 user+assistant 两条;刷新/回看历史完整显示为表格消息(非折叠思考卡)。
+- **× 删除**:删会话连带清 workspace 目录(用户实测删了 5 个测试会话,行为正确)。
+- B4(结构化工具事件 SSE)、F2(前端工具卡渲染)其实代码早已存在,本轮接通即生效。
+
+## 剩余(下次开干)
+- **F3** Builder→Coding handoff:字段不一致 bug(ChatPage 写 `{app_id,app_name}` ↔ CodingPage 读 `{projectId,sceneCategory}`,导致 app 上下文丢)+ 带应用上下文跳转 + "← 回 Builder 配置"链。
+- **N3** 共享读 MCP 核对一致性(确认 Coding 的 `apaas_tools` 与 Builder MCP 读工具集一致)。
+- **F2**(可选/降级):结构化历史存 DB(现走 workspace chat-replay.json + messages 表 content)。
+- 测试 junk 清理:conv 8(空 新开发会话)、conv 9(我造的读测试)。
+- **mcp-server/**(~27 万行,占仓库 40% 的副本)后续整体删——见 ai_coding_prd_direction。
+
+## 环境 / key context(踩坑速查)
+- **dev 分支共享**(与 xhh 协作),commit 前先 `git pull --rebase`。
+- 本地 `backend/.env`(**gitignored,勿提交**):`APAAS_BASE_URL=https://apaas-trial.definesys.cn/backend`、`CODE_SERVER_BASE_URL=http://127.0.0.1:8080`、`DATABASE_URL=sqlite+aiosqlite:////tmp/fb_demo.db`、`APAAS_ENCRYPTION_KEY`、`JWT_SECRET_KEY=demo-secret-local`、`LLM_API_KEY=demo`。线上无 APAAS_BASE_URL(故本地需手配)。
+- workspace 根:`~/.apaas-builder-ai/workspaces`(仓库路径含空格,故落 home)。
+- **登录**:用真 aPaaS 平台管理员账号(产品租户 tid=57, user_id=1)。配 APAAS_BASE_URL 后本地 seed admin 不再可用。
+- preview servers(本机调试,**重启走 preview_stop+preview_start 别 nohup**):backend(8000)/frontend(5173)/admin-spa(5174)/code-server(8080)。`lsof -ti :8000 -sTCP:LISTEN` 释放(必带 -sTCP:LISTEN,否则杀浏览器连接)。
+- **两套 coding 后端**:老 `run_coding_pipeline`(harness/coding/pipeline,UI 在用,**N1 改的是这套**)+ `coding/v2`(未接 UI)。改前认准。
+- tsconfig.app.json `noUnusedLocals:true` → build 跑 `vue-tsc -b` → **死代码会断 build**(删按钮要连带删 import/handler)。
+- 消息持久化:stream_messages 落 workspace `chat-replay.json`(非 DB);`messages` 表只有 id/conversation_id/role/content/created_at。
