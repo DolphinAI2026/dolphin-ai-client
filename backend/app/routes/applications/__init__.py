@@ -3582,6 +3582,22 @@ async def get_application_apaas_menus(
         )
         client = APaaSClient(base_url=base_url, tenant_id=tenant_id, token=token)
         raw_menus_nested = await client.query_menus(app.apaas_app_id)
+        if not raw_menus_nested:
+            logger.info(
+                "应用 %s manageAppMenu 返回空，fallback allAppMenu app_id=%s",
+                app.id, app.apaas_app_id,
+            )
+            fallback = await client.query_all_app_menus(app.apaas_app_id)
+            if isinstance(fallback, dict):
+                raw_menus_nested = fallback.get("menus") or fallback.get("data") or fallback.get("items") or []
+            elif isinstance(fallback, list):
+                raw_menus_nested = fallback
+        if not raw_menus_nested:
+            logger.info(
+                "应用 %s allAppMenu 仍为空，fallback queryAllFormMenu app_id=%s",
+                app.id, app.apaas_app_id,
+            )
+            raw_menus_nested = await client.list_form_menus_for_event(app.apaas_app_id)
     except Exception as exc:
         return {
             "ok": False, "error_code": "APAAS_FETCH_FAILED",
