@@ -52,6 +52,19 @@ _READ_ONLY_EXECUTORS: dict[str, Any] = {
 # 读路径 tool-loop 最大轮数（避免 LLM 死循环）
 _READ_MAX_TURNS = 8
 
+# 只读工具 → 人话标签（给前端工具卡显示，避免暴露技术工具名）
+_TOOL_DISPLAY = {
+    "list_apaas_apps": "读取应用列表",
+    "list_apaas_app_menus": "读取菜单",
+    "list_apaas_form_views": "读取表单视图",
+    "list_apaas_form_components": "读取表单组件",
+    "list_apaas_app_models": "读取数据模型",
+    "list_apaas_app_dicts": "读取数据字典",
+    "get_apaas_app_overview": "读取应用概览",
+    "list_apaas_models_in_env": "读取环境模型",
+    "check_app_code_conflict": "检查应用编码",
+}
+
 # ─────────────────────────── 意图分类 ─────────────────────────────
 
 
@@ -293,14 +306,18 @@ async def run_read_query(
             yield {
                 "type": "tool",
                 "name": fn_name,
+                "display": _TOOL_DISPLAY.get(fn_name, fn_name),
                 "status": "running",
                 "args": args,
             }
 
-            # 执行工具
+            # 执行工具 —— 走 _call_apaas_platform_tool 复用 token 自愈
+            # (首次空 token→用 env 账号密码登录 + 撞 401→刷 token 重试一次)。
+            # 已在上面 line ~277 校验过 fn_name 在只读子集内，故只会调到只读工具。
             try:
-                executor = _READ_ONLY_EXECUTORS[fn_name]
-                result_str: str = await executor(args, platform_env_id, db)
+                from app.mcp_server import _call_apaas_platform_tool
+                _result_dict = await _call_apaas_platform_tool(fn_name, args, platform_env_id)
+                result_str = json.dumps(_result_dict, ensure_ascii=False)
             except Exception as exc:
                 result_str = f"Error: {exc}"
 

@@ -175,6 +175,25 @@ export function useCodingPipeline(deps: PipelineDeps) {
       const text = (parsed.content || '') as string
       if (text.trim()) addStreamMsg({ type: 'message', content: text })
     },
+    // N1 READ 路径:只读工具事件 → 工具卡 + 把"正在识别开发场景"占位换成"已理解为查询请求"
+    tool: (parsed) => {
+      const ph = streamMessages.value.find(
+        (m: any) => m.type === 'status' && m.stepKey === 'detect_scene' && !m.stepDone,
+      ) as any
+      if (ph) { ph.content = '已理解为查询请求'; ph.stepDone = true }
+      if (parsed.status === 'done') {
+        for (let i = streamMessages.value.length - 1; i >= 0; i--) {
+          const m = streamMessages.value[i] as any
+          if (m.type === 'tool') {
+            m.result = (parsed.result || '') as string
+            m.resultCollapsed = true
+            break
+          }
+        }
+      } else {
+        addStreamMsg({ type: 'tool', content: `🔧 ${parsed.display || parsed.name || '查询'}`, resultCollapsed: true } as any)
+      }
+    },
     agent_tool: (parsed) => {
       const handler = TOOL_HANDLERS[parsed.tool as string]
       if (handler) handler(parsed.args || {}, (parsed.input_preview || '') as string)
