@@ -10,7 +10,7 @@ from sqlalchemy import select, desc, func as sa_func, delete, and_, not_, or_
 from sqlalchemy.ext.asyncio import AsyncSession
 from sse_starlette.sse import EventSourceResponse
 from app.database import get_db
-from app.models import User, Application, DocumentVersion, ChangePlan, ApiCallLog, PlatformEnv, Conversation, ConfigSnapshot, Project, ProjectMember
+from app.models import User, Application, DocumentVersion, ChangePlan, ApiCallLog, PlatformEnv, Conversation, ConfigSnapshot, Project, ProjectMember, Tenant
 from app.models.collaboration import ApplicationMember
 from app.auth import get_current_user
 from app.schemas import ApplicationCreate, ApplicationPageResponse, ApplicationResponse, MergedAppResponse
@@ -92,6 +92,16 @@ def _application_stage_clause(stage: str | None):
     if stage == "draft":
         return and_(not_(deployed), not_(active))
     return None
+
+
+async def _resolve_current_apaas_tenant_id(db: AsyncSession, ctx: AuthContext) -> str:
+    """Return the aPaaS tenant bound to the currently selected AI Builder tenant."""
+    if not ctx.tenant_id:
+        return ""
+    result = await db.execute(
+        select(Tenant.apaas_tenant_id_str).where(Tenant.id == ctx.tenant_id)
+    )
+    return str(result.scalar_one_or_none() or "").strip()
 
 
 def _apply_application_list_filters(stmt, ctx: AuthContext, team_scope: str | None, source_filter: str | None, stage: str | None = None):
@@ -3556,20 +3566,17 @@ async def get_application_apaas_menus(
     # 视图, 过滤了 GROUP) 不适合 sidebar 用.
     # 线上环境绑定来自 backend.env / Secret，不再依赖 applications.platform_env_id
     # 反查 platform_envs。旧 app 里残留的 platform_env_id 只作为诊断信息返回。
+    tenant_id = await _resolve_current_apaas_tenant_id(db, ctx)
     try:
         base_url = (settings.apaas_base_url or ctx.user.apaas_base_url or "").rstrip("/")
-        tenant_id = (
-            ctx.apaas_tenant_id
-            or ctx.user.apaas_tenant_id
-            or ""
-        ).strip()
         token = (ctx.user.apaas_token or "").strip()
         if not base_url or not tenant_id:
             return {
                 "ok": False,
                 "error_code": "APAAS_CONTEXT_MISSING",
-                "message": "未获取到当前 aPaaS 地址或租户上下文，无法拉取菜单",
+                "message": "未获取到当前环境地址或当前租户绑定的 aPaaS 租户，无法拉取菜单",
                 "env_id": app.platform_env_id,
+                "tenant_id": ctx.tenant_id,
                 "apaas_app_id": app.apaas_app_id,
             }
         if not token:
@@ -3607,6 +3614,7 @@ async def get_application_apaas_menus(
             "ok": False, "error_code": "APAAS_FETCH_FAILED",
             "message": f"拉取菜单失败: {exc}",
             "env_id": app.platform_env_id,
+            "tenant_id": ctx.tenant_id,
             "apaas_tenant_id": tenant_id,
             "apaas_app_id": app.apaas_app_id,
         }
@@ -3684,6 +3692,7 @@ async def get_application_apaas_menus(
     return {
         "ok": True,
         "env_id": app.platform_env_id,
+        "tenant_id": ctx.tenant_id,
         "apaas_tenant_id": tenant_id,
         "apaas_app_id": app.apaas_app_id,
         "menus": roots,
