@@ -851,46 +851,24 @@ async function refreshCodingConversations() {
   }
 }
 
-const sidebarWorkspaceFallbackItems = computed<SidebarSessionItem[]>(() => {
-  const workspaceIds = new Set(
-    codingConversations.value
-      .map(conv => conv.workspace_id)
-      .filter((id): id is string => !!id),
-  )
-  return (existingWorkspaces.value || [])
-    .filter((ws: any) => !workspaceIds.has(ws.id))
-    .map((ws: any) => ({
-      id: `ws:${ws.id}`,
-      title: workspaceDisplayName(ws) || ws.project_name || ws.id,
-      meta: ws.project_name || undefined,
-      group: '工作区',
-      badgeIcon: ChatDotRound,
-      badgeTone: 'chat',
-    }))
-})
-
 const sidebarCodingItems = computed<SidebarSessionItem[]>(() => {
   const conversations = [...codingConversations.value].sort((a, b) => {
     const ta = new Date(a.updated_at || a.created_at || 0).getTime()
     const tb = new Date(b.updated_at || b.created_at || 0).getTime()
     return tb - ta
   })
-  return [
-    ...conversations.map(conv => ({
-      id: `conv:${conv.id}`,
-      title: compactTitle(conv.title, `开发会话 #${conv.id}`),
-      meta: conv.workspace_id || undefined,
-      group: codingTimeGroup(conv.updated_at || conv.created_at),
-      badgeIcon: ChatDotRound,
-      badgeTone: 'chat',
-    })),
-    ...sidebarWorkspaceFallbackItems.value,
-  ]
+  return conversations.map(conv => ({
+    id: `conv:${conv.id}`,
+    title: compactTitle(conv.title, `开发会话 #${conv.id}`),
+    meta: conv.workspace_id || undefined,
+    group: codingTimeGroup(conv.updated_at || conv.created_at),
+    badgeIcon: ChatDotRound,
+    badgeTone: 'chat',
+  }))
 })
 
 const sidebarCodingActiveId = computed<string | null>(() => {
   if (codingStore.conversationId) return `conv:${codingStore.conversationId}`
-  if (codingStore.workspace?.id) return `ws:${codingStore.workspace.id}`
   return null
 })
 
@@ -964,35 +942,27 @@ async function createCodingConversation() {
 async function onSidebarCodingSelect(id: string | number) {
   const itemId = String(id)
   if (sidebarCodingActiveId.value === itemId || openingWsId.value) return
+  if (!itemId.startsWith('conv:')) return
+  const conversationId = Number(itemId.slice(5))
+  if (!Number.isFinite(conversationId) || conversationId <= 0) return
   openingWsId.value = itemId
   try {
-    if (itemId.startsWith('conv:')) {
-      const conversationId = Number(itemId.slice(5))
-      if (!Number.isFinite(conversationId) || conversationId <= 0) return
-      const conversation = codingConversations.value.find(conv => conv.id === conversationId)
-      let workspaceId = conversation?.workspace_id || null
-      if (!workspaceId) {
-        try {
-          const relation = await codingApi.getConversationWorkspace(conversationId)
-          workspaceId = relation.workspace_id
-        } catch {
-          workspaceId = null
-        }
+    const conversation = codingConversations.value.find(conv => conv.id === conversationId)
+    let workspaceId = conversation?.workspace_id || null
+    if (!workspaceId) {
+      try {
+        const relation = await codingApi.getConversationWorkspace(conversationId)
+        workspaceId = relation.workspace_id
+      } catch {
+        workspaceId = null
       }
-      if (workspaceId) {
-        await openWorkspaceById(workspaceId)
-        router.replace({ path: '/coding', query: { conversation_id: String(conversationId), workspace_id: workspaceId } }).catch(() => {})
-      } else {
-        await loadCodingConversationOnly(conversationId)
-        router.replace({ path: '/coding', query: { conversation_id: String(conversationId) } }).catch(() => {})
-      }
-      return
     }
-
-    if (itemId.startsWith('ws:')) {
-      const wsId = itemId.slice(3)
-      await openWorkspaceById(wsId)
-      router.replace({ path: '/coding', query: { workspace_id: wsId } }).catch(() => {})
+    if (workspaceId) {
+      await openWorkspaceById(workspaceId)
+      router.replace({ path: '/coding', query: { conversation_id: String(conversationId), workspace_id: workspaceId } }).catch(() => {})
+    } else {
+      await loadCodingConversationOnly(conversationId)
+      router.replace({ path: '/coding', query: { conversation_id: String(conversationId) } }).catch(() => {})
     }
   } finally {
     openingWsId.value = null
@@ -1007,12 +977,10 @@ function onSidebarCodingCreate() {
 
 async function onSidebarCodingDelete(s: SidebarSessionItem) {
   const itemId = String(s.id)
-  const conversationId = itemId.startsWith('conv:') ? Number(itemId.slice(5)) : null
-  const workspaceId = itemId.startsWith('ws:')
-    ? itemId.slice(3)
-    : (conversationId != null
-        ? (codingConversations.value.find(conv => conv.id === conversationId)?.workspace_id || '')
-        : '')
+  if (!itemId.startsWith('conv:')) return
+  const conversationId = Number(itemId.slice(5))
+  if (!Number.isFinite(conversationId) || conversationId <= 0) return
+  const workspaceId = codingConversations.value.find(conv => conv.id === conversationId)?.workspace_id || ''
 
   // 1) 确认（用户取消 → 直接返回，不当成错误）
   try {
@@ -1026,16 +994,10 @@ async function onSidebarCodingDelete(s: SidebarSessionItem) {
     return // 取消
   }
 
-  // 2) 执行（独立 try/catch：真报错要弹出来，不再被静默吞掉）
-  // 会话项 → 删会话端点（孤儿会话/工作区已没也能删，后端 best-effort 清工作区）；
-  // 纯工作区项（无关联会话）→ 删工作区。
+  // 2) 执行（删会话，后端 best-effort 清工作区）
   try {
-    deletingWsId.value = workspaceId || ''
-    if (conversationId != null) {
-      await codingApi.deleteConversation(conversationId)
-    } else if (workspaceId) {
-      await codingApi.deleteWorkspace(workspaceId)
-    }
+    deletingWsId.value = workspaceId
+    await codingApi.deleteConversation(conversationId)
     if (workspaceId) {
       allWorkspaces.value = allWorkspaces.value.filter((w: any) => w.id !== workspaceId)
       if (codingStore.workspace?.id === workspaceId) {
