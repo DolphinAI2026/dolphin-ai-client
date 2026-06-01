@@ -3557,14 +3557,18 @@ async def get_application_apaas_menus(
     # 线上环境绑定来自 backend.env / Secret，不再依赖 applications.platform_env_id
     # 反查 platform_envs。旧 app 里残留的 platform_env_id 只作为诊断信息返回。
     try:
-        base_url = (settings.apaas_base_url or "").rstrip("/")
-        tenant_id = (settings.apaas_tenant_id or "").strip()
+        base_url = (settings.apaas_base_url or ctx.user.apaas_base_url or "").rstrip("/")
+        tenant_id = (
+            ctx.apaas_tenant_id
+            or ctx.user.apaas_tenant_id
+            or ""
+        ).strip()
         token = (ctx.user.apaas_token or "").strip()
         if not base_url or not tenant_id:
             return {
                 "ok": False,
-                "error_code": "CONFIG_ENV_MISSING",
-                "message": "未配置 APAAS_BASE_URL / APAAS_TENANT_ID，无法按配置环境拉取菜单",
+                "error_code": "APAAS_CONTEXT_MISSING",
+                "message": "未获取到当前 aPaaS 地址或租户上下文，无法拉取菜单",
                 "env_id": app.platform_env_id,
                 "apaas_app_id": app.apaas_app_id,
             }
@@ -3603,7 +3607,7 @@ async def get_application_apaas_menus(
             "ok": False, "error_code": "APAAS_FETCH_FAILED",
             "message": f"拉取菜单失败: {exc}",
             "env_id": app.platform_env_id,
-            "config_tenant_id": (settings.apaas_tenant_id or "").strip(),
+            "apaas_tenant_id": tenant_id,
             "apaas_app_id": app.apaas_app_id,
         }
 
@@ -3680,7 +3684,7 @@ async def get_application_apaas_menus(
     return {
         "ok": True,
         "env_id": app.platform_env_id,
-        "config_tenant_id": (settings.apaas_tenant_id or "").strip(),
+        "apaas_tenant_id": tenant_id,
         "apaas_app_id": app.apaas_app_id,
         "menus": roots,
         "flat_count": len(flat),

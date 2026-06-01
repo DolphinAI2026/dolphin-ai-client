@@ -1,6 +1,8 @@
 #!/usr/bin/env bash
-# Check that the running AI Builder backend is bound to the aPaaS environment
+# Check that the running AI Builder backend is bound to the aPaaS base URL
 # from backend.env / Secret, and show stale application platform_env_id values.
+# Runtime aPaaS tenant id must come from the current user/JWT tenant context,
+# not from a fixed env var.
 #
 # Usage:
 #   scripts/check_config_env_binding.sh
@@ -39,7 +41,7 @@ secret_env="$(
 
 printf '%s\n' "$secret_env" \
   | awk -F= '
-      $1=="APAAS_BASE_URL" || $1=="APAAS_TENANT_ID" || $1=="DATABASE_URL" {
+      $1=="APAAS_BASE_URL" || $1=="DATABASE_URL" {
         if ($1=="DATABASE_URL") {
           print $1"=<masked>"
         } else {
@@ -69,7 +71,7 @@ from urllib.parse import urlsplit
 
 db = urlsplit(settings.database_url)
 print(f"APAAS_BASE_URL={settings.apaas_base_url}")
-print(f"APAAS_TENANT_ID={settings.apaas_tenant_id}")
+print("APAAS_TENANT_ID=<runtime user/JWT tenant, not fixed config>")
 print(f"DATABASE_HOST={db.hostname or ''}")
 print(f"DATABASE_NAME={(db.path or '').lstrip('/')}")
 PY'
@@ -125,4 +127,4 @@ asyncio.run(main())
 PY'
 
 echo
-echo "Done. Runtime menu loading should use APAAS_BASE_URL/APAAS_TENANT_ID above; stale_platform_env_id is diagnostic only."
+echo "Done. Runtime menu loading uses APAAS_BASE_URL from config and aPaaS tenant from the current user/JWT; stale_platform_env_id is diagnostic only."
