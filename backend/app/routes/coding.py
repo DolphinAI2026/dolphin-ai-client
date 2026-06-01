@@ -908,8 +908,9 @@ async def delete_coding_conversation(
 ):
     """删除一个 coding 会话(含消息)。若有关联工作区,best-effort 一并清理。
 
-    工作区目录已不存在(孤儿会话)等情况**不报错** —— 保证孤儿会话也能删掉,
-    修掉「点 × 没反应、删不掉」的逻辑缺口。
+    架构语义: 会话是主单位,workspace 随会话删。Conversation.workspace_id 单值 1:1,
+    不存在多会话共享同一 workspace 的情况。工作区目录已不存在(孤儿会话)等情况
+    **不报错** —— 保证孤儿会话也能删掉,修掉「点 × 没反应、删不掉」的逻辑缺口。
     """
     conv = (
         await db.execute(
