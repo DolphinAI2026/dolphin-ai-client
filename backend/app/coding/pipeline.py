@@ -1433,8 +1433,28 @@ async def run_coding_pipeline(
             )
             if _intent == "READ":
                 logger.info("[intent_gate] READ 路径，跳过 codegen")
+                # 读路径也要存会话历史(否则刷新/回看时 Q&A 丢失)。
+                if not conversation_id:
+                    _read_conv = Conversation(
+                        title=params.message[:50], user_id=params.user_id,
+                        tenant_id=params.tenant_id, agent_type="coding",
+                        workspace_id=None, selected_llm_config_id=effective_model_config_id,
+                    )
+                    db.add(_read_conv)
+                    await db.commit()
+                    await db.refresh(_read_conv)
+                    conversation_id = _read_conv.id
+                await save_coding_message(db, conversation_id, "user", params.message)
+                _answer_parts: list[str] = []
                 async for _ev in run_read_query(params, db):
+                    if _ev.get("type") == "content":
+                        _answer_parts.append(str(_ev.get("content") or ""))
+                    if _ev.get("type") == "done":
+                        _ev["conversation_id"] = conversation_id
                     yield _record_event(_ev)
+                _read_answer = "\n\n".join(p for p in _answer_parts if p.strip()).strip()
+                if _read_answer:
+                    await save_coding_message(db, conversation_id, "assistant", _read_answer)
                 return
 
         # 预加载对话历史（不含本轮 user message）。用途：

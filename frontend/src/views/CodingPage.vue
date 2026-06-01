@@ -1278,8 +1278,12 @@ function loadConversationHistory(
           type: 'message',
           content: content.replace(/^<!-- BRAINSTORM_PROPOSAL -->/, '').trim(),
         })
-      } else {
+      } else if (/🔧|✨|Agent (完成|错误)|>\s*[✅❌]/.test(content)) {
+        // codegen 叙述(含工具/Agent 标记)→ 按原逻辑解析成工具/思考卡片
         parseAssistantHistory(content)
+      } else {
+        // 纯文本答案(如 READ 路径的查询回答)→ 正常 Markdown 消息,不塞进折叠思考卡
+        addStreamMsg({ type: 'message', content })
       }
     }
   }
