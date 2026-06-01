@@ -2848,11 +2848,11 @@ async def debug_workspace(
 
     if project and project.platform_url:
         _platform_url = req.platform_url or _get_platform_frontend_url(project.platform_url)
-        _tenant_id = req.tenant_id or project.platform_tenant_id or settings.apaas_tenant_id
+        _tenant_id = req.tenant_id or user.apaas_tenant_id or project.platform_tenant_id or ""
         _app_id = req.app_id or project.platform_app_id or "806997227284201472"
     else:
         _platform_url = req.platform_url or _get_user_platform_url(user)
-        _tenant_id = req.tenant_id or user.apaas_tenant_id or settings.apaas_tenant_id
+        _tenant_id = req.tenant_id or user.apaas_tenant_id or ""
         _app_id = req.app_id or "806997227284201472"
 
     # 4. 获取 app_code（用于应用 debug 模式）

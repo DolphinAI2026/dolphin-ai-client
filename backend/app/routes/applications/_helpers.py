@@ -831,7 +831,9 @@ def _build_apaas_url(apaas_app_id: str, base_url: str | None = None, tenant_id: 
     if not configured_base:
         return ""
     host = configured_base.rstrip("/").replace("/backend", "")
-    tid = tenant_id or settings.apaas_tenant_id
+    tid = (tenant_id or "").strip()
+    if not tid:
+        return ""
     return f"{host}/platform/{tid}/admin/app-store/edit-app?appId={apaas_app_id}&currentStepIndex=0"
 
 
