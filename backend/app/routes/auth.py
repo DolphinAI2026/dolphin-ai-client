@@ -537,7 +537,12 @@ def _merge_tenant_items(primary: list[dict], secondary: list[dict]) -> list[dict
     return [merged[tid] for tid in order]
 
 
-async def _ensure_apaas_tenant(db: AsyncSession, item: dict) -> Tenant:
+async def _ensure_apaas_tenant(
+    db: AsyncSession,
+    item: dict,
+    login_username: str | None = None,
+    login_password: str | None = None,
+) -> Tenant:
     platform_tid = _tenant_item_id(item)
     if not platform_tid:
         raise HTTPException(status_code=400, detail="aPaaS 租户缺 tenantId")
@@ -602,6 +607,11 @@ async def _ensure_apaas_tenant(db: AsyncSession, item: dict) -> Tenant:
             is_default=True,
             status="connected",
         )
+        # 2026-06-01 登录即把账号密码灌进 env → 让查模型等读接口的 token 自愈有凭据可用,
+        # 免去用户先手动「平台管理 → 刷新租户」。token 留空, 首次访问由 call_apaas_with_relogin 自愈拿。
+        if login_username and login_password:
+            env.username = login_username
+            env.password_enc = encrypt_password(login_password)
         db.add(env)
         await db.flush()
         tenant.apaas_env_id = env.id
@@ -610,6 +620,10 @@ async def _ensure_apaas_tenant(db: AsyncSession, item: dict) -> Tenant:
         env.base_url = (settings.apaas_base_url or "").rstrip("/")
         env.platform_tenant_id = platform_tid
         env.is_default = True
+        # 旧 env(早期登录建的, 无凭据) → 补上让自愈可用; 已有凭据不覆盖(可能是更高权限账号)
+        if login_username and login_password and (not env.username or not env.password_enc):
+            env.username = login_username
+            env.password_enc = encrypt_password(login_password)
     return tenant
 
 
@@ -776,7 +790,7 @@ async def _try_apaas_login_flow(user_data: UserLogin, db: AsyncSession) -> Optio
     if all_tenants:
         for item in all_tenants:
             try:
-                await _ensure_apaas_tenant(db, item)
+                await _ensure_apaas_tenant(db, item, username, password)
             except Exception as exc:
                 logger.warning("sync apaas tenant skipped: %s", exc)
     all_by_id = {_tenant_item_id(item): item for item in all_tenants if _tenant_item_id(item)}
@@ -814,7 +828,7 @@ async def _try_apaas_login_flow(user_data: UserLogin, db: AsyncSession) -> Optio
 
     local_tenants: list[Tenant] = []
     for idx, item in enumerate(available_items):
-        tenant = await _ensure_apaas_tenant(db, item)
+        tenant = await _ensure_apaas_tenant(db, item, username, password)
         local_tenants.append(tenant)
         if backend_token:
             user.apaas_token = backend_token

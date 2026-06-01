@@ -72,7 +72,7 @@ async def _get_apaas_client(platform_env_id: int, db: AsyncSession):
     if not env.token:
         raise ValueError(
             f"platform_env_id={platform_env_id} 未登录 aPaaS（token 为空），"
-            f"先在「平台环境」配置"
+            f"请先在「平台管理 → aPaaS 租户」点『刷新租户』，或在「平台环境」为该环境配置账号密码"
         )
     return APaaSClient(
         base_url=env.base_url,
