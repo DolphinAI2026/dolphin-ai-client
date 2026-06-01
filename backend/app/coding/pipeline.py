@@ -1621,35 +1621,42 @@ async def run_coding_pipeline(
                 yield _record_event({"type": "step", "step": "create_workspace", "status": "done", "data": _data})
 
         elif not is_iteration and scene_type in BRAINSTORM_SCENES:
-            # 首次发起 brainstorm：proposal 输出后等用户确认，工作区暂不创建
+            # 首次发起 brainstorm：生成开发 SPEC 作为 inline 提示后直接继续开发流程，
+            # 不再强制等待用户确认（B3: 去掉两段式确认门）。
+            # proposal 仍然输出，供用户阅读；workspace 在下方按需创建。
+            _inline_brainstorm_proposal: str = ""
             yield _record_event({"type": "step", "step": "brainstorm", "status": "running"})
             proposal = await _generate_brainstorm_proposal(
                 params.tenant_id, effective_model, scene_type,
                 requirement=params.message,
             )
             if proposal:
+                _inline_brainstorm_proposal = proposal
                 await save_coding_message(db, conversation_id, "assistant",
                                           BRAINSTORM_PROPOSAL_MARKER + proposal)
                 yield _record_event({"type": "step", "step": "brainstorm", "status": "done"})
                 yield _record_event({"type": "content", "content": proposal})
-                yield _record_event({
-                    "type": "done", "workspace_id": None,
-                    "conversation_id": conversation_id, "ide_url": None,
-                    "waiting_confirmation": True,
-                })
-                return
-            # proposal 失败降级直接走 codegen → 仍需先建工作区
-            yield _record_event({"type": "step", "step": "brainstorm", "status": "done"})
-            logger.warning("Brainstorm proposal generation failed, falling back to direct codegen")
+                # 用 SPEC 丰富代码生成上下文
+                effective_requirement = (
+                    f"{params.message}\n\n"
+                    f"[开发 SPEC 已生成，请严格按以下 SPEC 生成代码]\n"
+                    f"{proposal}"
+                )
+            else:
+                # proposal 失败：降级直接走 codegen，无 SPEC 上下文
+                yield _record_event({"type": "step", "step": "brainstorm", "status": "done"})
+                logger.warning("Brainstorm proposal generation failed, falling back to direct codegen")
 
-        # 走到这里有三种情况，且 ws_id 可能仍是 None：
+        # 走到这里有四种情况，且 ws_id 可能仍是 None：
         #   1. iteration 模式（ws_id 已存在，跳过）
         #   2. 非 brainstorm 场景
-        #   3. brainstorm proposal 失败降级
-        # 后两种 ws_id 仍是 None → 此时按用户原始消息命名创建工作区。
+        #   3. brainstorm 首轮（B3 去门：inline 输出提案后继续，_inline_brainstorm_proposal 有值）
+        #   4. brainstorm proposal 失败降级
+        # 情况 2/3/4 ws_id 仍是 None → 按 inline proposal（若有）或原始消息命名创建工作区。
         if not ws_id:
+            _naming_proposal = locals().get("_inline_brainstorm_proposal") or None
             yield _record_event({"type": "step", "step": "create_workspace", "status": "running"})
-            ws_id, _data = await _create_workspace_now(brainstorm_for_naming=None)
+            ws_id, _data = await _create_workspace_now(brainstorm_for_naming=_naming_proposal)
             yield _record_event({"type": "step", "step": "create_workspace", "status": "done", "data": _data})
 
         # ---- Agent 代码生成 ----
