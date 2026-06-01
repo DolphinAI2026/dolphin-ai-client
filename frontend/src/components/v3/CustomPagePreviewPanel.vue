@@ -18,11 +18,6 @@
         <h1 class="cpp-title">{{ menuName || '自开发页面' }}</h1>
         <span class="cpp-chip">🎨 自开发</span>
       </div>
-      <div class="cpp-head-actions">
-        <button type="button" class="cpp-mini-btn" title="在 apaas 打开真运行态 (带真数据)" @click="onOpenRuntime">↗ 在 apaas 打开</button>
-        <button type="button" class="cpp-mini-btn" title="刷新预览" @click="onReload">↻ 刷新</button>
-        <button type="button" class="cpp-mini-btn" @click="onGoToCoding">💻 IDE</button>
-      </div>
     </header>
 
     <!-- 自开发组件独立运行 host (backend 提供 Vue2+ElementUI 宿主 + 拉 bundle + mount) -->
@@ -55,7 +50,6 @@
 <script setup lang="ts">
 import { ref, computed } from 'vue'
 import { useRouter } from 'vue-router'
-import request from '@/utils/request'
 import { useUserStore } from '@/stores/user'
 
 const props = defineProps<{
@@ -81,40 +75,8 @@ const hostUrl = computed(() => {
     + `&_auth=${encodeURIComponent(tok)}&_k=${iframeKey.value}`
 })
 
-function onReload() {
-  iframeKey.value += 1
-}
-
-// apaas 真运行态地址 (accessUrl) — 仅给 "↗ 在 apaas 打开" 按钮用 (跳带真数据的完整应用).
-const accessUrl = ref('')
-const loadingUrl = ref(false)
-async function fetchAccessUrl() {
-  if (!props.appId || loadingUrl.value) return
-  loadingUrl.value = true
-  try {
-    const resp = await request.get<any, { ok: boolean; access_url?: string }>(
-      `/applications/${props.appId}/apaas-access-url`,
-    )
-    if (resp?.ok && resp.access_url) accessUrl.value = resp.access_url
-  } catch {
-    /* 按钮兜底: 点的时候没地址就忽略 */
-  } finally {
-    loadingUrl.value = false
-  }
-}
-
 function onGoToCoding() {
   router.push({ path: '/coding', query: { app_id: String(props.appId) } })
-}
-
-function onOpenRuntime() {
-  if (accessUrl.value) {
-    window.open(accessUrl.value, '_blank', 'noopener')
-  } else {
-    fetchAccessUrl().then(() => {
-      if (accessUrl.value) window.open(accessUrl.value, '_blank', 'noopener')
-    })
-  }
 }
 </script>
 

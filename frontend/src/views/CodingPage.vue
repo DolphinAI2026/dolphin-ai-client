@@ -104,16 +104,6 @@
               <span class="coding-session-kicker">AI Coding</span>
               <strong class="coding-session-title">{{ activeCodingSessionTitle }}</strong>
             </div>
-            <button
-              v-if="codingStore.workspace"
-              type="button"
-              class="coding-session-ide-btn"
-              :disabled="!canOpenIdeView"
-              @click="openIdeDrawer"
-            >
-              <el-icon :size="13"><Monitor /></el-icon>
-              <span>IDE</span>
-            </button>
           </header>
 
           <div
@@ -226,6 +216,54 @@
               @remove-attachment="removeAttachment"
             >
               <template #footer-left>
+                <div class="coding-model-inline">
+                  <el-popover
+                    v-model:visible="codingModelPopoverVisible"
+                    placement="top-start"
+                    trigger="click"
+                    :width="360"
+                    popper-class="coding-model-popover"
+                    :disabled="codingModelLoading || updatingCodingModel || codingModelOptions.length === 0"
+                  >
+                    <template #reference>
+                      <button
+                        type="button"
+                        class="coding-model-trigger"
+                        :class="{ 'is-open': codingModelPopoverVisible, 'is-disabled': codingModelLoading || updatingCodingModel || codingModelOptions.length === 0 }"
+                        :disabled="codingModelLoading || updatingCodingModel || codingModelOptions.length === 0"
+                        aria-label="选择模型"
+                      >
+                        <div class="coding-model-trigger-content">
+                          <div class="coding-model-trigger-main">
+                            <span class="coding-model-trigger-name">{{ selectedCodingModelOption?.config_name || '选择模型' }}</span>
+                          </div>
+                          <el-icon class="coding-model-trigger-icon">
+                            <ArrowDown />
+                          </el-icon>
+                        </div>
+                      </button>
+                    </template>
+                    <div class="coding-model-panel">
+                      <div class="coding-model-tip">{{ codingModelHint }}</div>
+                      <button
+                        v-for="option in codingModelOptions"
+                        :key="option.id"
+                        type="button"
+                        class="coding-model-panel-option"
+                        :class="{ 'is-active': selectedCodingModelValue === toCodingModelValue(option.id) }"
+                        @click="selectCodingModel(option)"
+                      >
+                        <div class="coding-model-panel-option-head">
+                          <span class="coding-model-panel-option-name">{{ option.config_name }}</span>
+                          <span v-if="option.is_default" class="coding-model-panel-option-default">默认</span>
+                        </div>
+                        <span class="coding-model-panel-option-meta">
+                          {{ formatCodingModelProvider(option.provider) }} / {{ option.model }}
+                        </span>
+                      </button>
+                    </div>
+                  </el-popover>
+                </div>
                 <VoiceInputButton v-model="userInput" :llm-config-id="selectedCodingModelOption?.id ?? null" />
               </template>
             </UnifiedChatComposer>
@@ -481,7 +519,7 @@ import { API_PREFIX } from '@/utils/request'
 import { ref, computed, onMounted, onUnmounted, watch, nextTick } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
-import { ArrowLeft, Download, Monitor, Delete, Fold, Expand, ChatDotRound } from '@element-plus/icons-vue'
+import { ArrowLeft, ArrowDown, Download, Monitor, Delete, Fold, Expand, ChatDotRound } from '@element-plus/icons-vue'
 import { useCodingStore } from '@/stores/coding'
 import type { PlatformEnv } from '@/api/platformEnv'
 import { useUserStore } from '@/stores/user'
@@ -632,6 +670,7 @@ const {
   loadCodingModelOptions,
   handleCodingModelChange,
   selectCodingModel,
+  formatCodingModelProvider,
 } = useCodingModel()
 
 // ============ Stream Messages (对话流) ============
@@ -968,13 +1007,14 @@ function onSidebarCodingCreate() {
 
 async function onSidebarCodingDelete(s: SidebarSessionItem) {
   const itemId = String(s.id)
-  let workspaceId = itemId.startsWith('ws:') ? itemId.slice(3) : ''
-  if (itemId.startsWith('conv:')) {
-    const conversationId = Number(itemId.slice(5))
-    workspaceId = codingConversations.value.find(conv => conv.id === conversationId)?.workspace_id || ''
-  }
-  const target = (existingWorkspaces.value || []).find((w: any) => w.id === workspaceId)
-  if (!target) return
+  const conversationId = itemId.startsWith('conv:') ? Number(itemId.slice(5)) : null
+  const workspaceId = itemId.startsWith('ws:')
+    ? itemId.slice(3)
+    : (conversationId != null
+        ? (codingConversations.value.find(conv => conv.id === conversationId)?.workspace_id || '')
+        : '')
+
+  // 1) 确认（用户取消 → 直接返回，不当成错误）
   try {
     await ElMessageBox.confirm(`删除会话「${s.title}」吗？关联工作区会一并清理。`, '删除会话', {
       confirmButtonText: '删除',
@@ -982,16 +1022,30 @@ async function onSidebarCodingDelete(s: SidebarSessionItem) {
       type: 'warning',
       confirmButtonClass: 'el-button--danger',
     })
-    deletingWsId.value = target.id
-    await codingApi.deleteWorkspace(target.id)
-    allWorkspaces.value = allWorkspaces.value.filter((w: any) => w.id !== target.id)
-    if (codingStore.workspace?.id === target.id) {
-      startNewWorkspace()
+  } catch {
+    return // 取消
+  }
+
+  // 2) 执行（独立 try/catch：真报错要弹出来，不再被静默吞掉）
+  // 会话项 → 删会话端点（孤儿会话/工作区已没也能删，后端 best-effort 清工作区）；
+  // 纯工作区项（无关联会话）→ 删工作区。
+  try {
+    deletingWsId.value = workspaceId || ''
+    if (conversationId != null) {
+      await codingApi.deleteConversation(conversationId)
+    } else if (workspaceId) {
+      await codingApi.deleteWorkspace(workspaceId)
+    }
+    if (workspaceId) {
+      allWorkspaces.value = allWorkspaces.value.filter((w: any) => w.id !== workspaceId)
+      if (codingStore.workspace?.id === workspaceId) {
+        startNewWorkspace()
+      }
     }
     await refreshCodingConversations()
     ElMessage.success('已删除')
-  } catch {
-    /* user cancelled */
+  } catch (e: any) {
+    ElMessage.error('删除失败：' + (e?.message || e?.detail || '请重试'))
   } finally {
     deletingWsId.value = null
   }

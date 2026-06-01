@@ -214,6 +214,11 @@ export const codingApi = {
     return request.delete<any, { status: string }>(`/coding/workspace/${wsId}`)
   },
 
+  /** 删除会话(含消息);有关联工作区则后端 best-effort 一并清理(孤儿会话也能删) */
+  deleteConversation(conversationId: number) {
+    return request.delete<any, { status: string }>(`/coding/conversations/${conversationId}`)
+  },
+
   // ========== Auto Pipeline API ==========
 
   /** 自动流水线 SSE URL（detect-scene → create-workspace → generate → install → serve） */

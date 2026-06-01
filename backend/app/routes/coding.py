@@ -21,7 +21,7 @@ from jose import JWTError, jwt
 from pydantic import BaseModel
 from sse_starlette.sse import EventSourceResponse
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select
+from sqlalchemy import select, delete
 
 from app.crypto import decrypt_password
 from app.database import get_db
@@ -898,6 +898,43 @@ async def list_coding_conversations(
         }
         for c in conversations
     ]
+
+
+@router.delete("/conversations/{conversation_id}")
+async def delete_coding_conversation(
+    conversation_id: int,
+    ctx: Annotated[AuthContext, Depends(get_auth_context)],
+    db: Annotated[AsyncSession, Depends(get_db)],
+):
+    """删除一个 coding 会话(含消息)。若有关联工作区,best-effort 一并清理。
+
+    工作区目录已不存在(孤儿会话)等情况**不报错** —— 保证孤儿会话也能删掉,
+    修掉「点 × 没反应、删不掉」的逻辑缺口。
+    """
+    conv = (
+        await db.execute(
+            select(Conversation).where(
+                Conversation.id == conversation_id,
+                Conversation.user_id == ctx.user.id,
+                Conversation.tenant_id == ctx.tenant_id,
+                Conversation.agent_type == "coding",
+            )
+        )
+    ).scalar_one_or_none()
+    if not conv:
+        raise HTTPException(status_code=404, detail="会话不存在")
+
+    ws_id = conv.workspace_id
+    if ws_id:
+        try:
+            await workspace_mgr.delete_workspace(ws_id)
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("[delete_conversation] 清理工作区 %s 失败(忽略,继续删会话): %s", ws_id, exc)
+
+    await db.execute(delete(Message).where(Message.conversation_id == conversation_id))
+    await db.delete(conv)
+    await db.commit()
+    return {"status": "ok"}
 
 
 @router.get("/conversations/{conversation_id}/messages")
