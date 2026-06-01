@@ -422,14 +422,14 @@ def test_config_chat_whitelist_includes_new_tools():
 
 
 def test_config_chat_whitelist_includes_menu_perm_dict_disable():
-    """2026-05-25: 菜单 / 表单权限 / 字典禁用 6 个高频工具必须在白名单内.
+    """2026-05-25: 菜单 / 表单权限 / 字典禁用 高频配置工具必须在白名单内.
 
-    填补 P0 能力缺口: 用户说'加菜单 / 加自开发页面 / 删菜单 / 改字段权限 / 禁用字典'
-    时不应该让 agent 退回去走 browser_* 模拟点击.
+    N2(2026-06-01): create_apaas_self_dev_menu 从白名单摘掉 — Builder 不做 codegen,
+    自开发菜单创建属于 codegen SOP 最后一步, 引导去 AI Coding 模块.
+    其余 5 个纯配置工具保留.
     """
     must = [
         "create_apaas_form_menu",
-        "create_apaas_self_dev_menu",
         "delete_apaas_app_menu",
         "set_apaas_form_permissions",
         "disable_apaas_app_dict",
@@ -437,3 +437,5 @@ def test_config_chat_whitelist_includes_menu_perm_dict_disable():
     ]
     missing = [t for t in must if t not in _CONFIG_CHAT_TOOL_WHITELIST]
     assert not missing, f"白名单漏了 {missing}"
+    # create_apaas_self_dev_menu 已从 config 白名单摘掉 (coding-only)
+    assert "create_apaas_self_dev_menu" not in _CONFIG_CHAT_TOOL_WHITELIST

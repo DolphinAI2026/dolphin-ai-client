@@ -41,10 +41,14 @@ from app.tool_registry import (
 # 测试用途: tool_registry.yaml 派生白名单必须 byte-equal 本集合 — 任何 yaml drift
 # (新工具忘加 agent='config' / 老工具被误删) CI 拦.
 # ─────────────────────────────────────────────────────
+# N2(2026-06-01): 摘掉 codegen/自开发工具(15 个) — Builder 不做 codegen, 引导去 AI Coding.
+# 摘掉: attach_dev_packages_to_apaas_app / create_apaas_self_dev_menu / create_dev_workspace /
+#        edit_workspace_files / get_dev_workspace_status / glob_workspace / grep_workspace /
+#        import_zip_to_workspace / list_dev_scenes / publish_dev_workspace / read_workspace_file /
+#        republish_apaas_app / run_workspace_command / save_dev_spec / write_workspace_files
 _EXPECTED_CONFIG_WHITELIST: frozenset[str] = frozenset({
     "add_apaas_dict_option",
     "add_apaas_model_field",
-    "attach_dev_packages_to_apaas_app",
     "bind_apaas_form_field_to_dict",
     "browser_click",
     "browser_list_pages",
@@ -64,9 +68,7 @@ _EXPECTED_CONFIG_WHITELIST: frozenset[str] = frozenset({
     "create_apaas_business_event",
     "create_apaas_form_menu",
     "create_apaas_menu_group",
-    "create_apaas_self_dev_menu",
     "create_apaas_value_change_assignment_event",
-    "create_dev_workspace",
     "create_form_event_with_python_code",
     "create_time_event_with_python_code",
     "delete_apaas_app_menu",
@@ -77,17 +79,12 @@ _EXPECTED_CONFIG_WHITELIST: frozenset[str] = frozenset({
     "disable_apaas_app_dict",
     "disable_apaas_dict_option",
     "disable_apaas_model_field",
-    "edit_workspace_files",
     "get_apaas_app_overview",
     "get_apaas_business_event_detail",
     "get_apaas_form_detail",
     "get_apaas_process_detail",
     "get_config_skill",
-    "get_dev_workspace_status",
     "get_role_resource_matrix",
-    "glob_workspace",
-    "grep_workspace",
-    "import_zip_to_workspace",
     "list_apaas_app_dicts",
     "list_apaas_app_menus",
     "list_apaas_app_models",
@@ -103,16 +100,10 @@ _EXPECTED_CONFIG_WHITELIST: frozenset[str] = frozenset({
     "list_apaas_form_views",
     "list_apaas_models_in_env",
     "list_config_skills",
-    "list_dev_scenes",
-    "publish_dev_workspace",
     "query_apaas_business_event_trees",
-    "read_workspace_file",
     "rename_apaas_menu",
-    "republish_apaas_app",
-    "run_workspace_command",
     "save_apaas_business_event",
     "save_config_skill",
-    "save_dev_spec",
     "set_apaas_app_process",
     "set_apaas_form_permissions",
     "set_apaas_menu_parent",
@@ -123,7 +114,6 @@ _EXPECTED_CONFIG_WHITELIST: frozenset[str] = frozenset({
     "update_apaas_dict_option",
     "update_apaas_form_component",
     "update_apaas_model_field",
-    "write_workspace_files",
 })
 
 
@@ -318,7 +308,8 @@ def test_config_whitelist_matches_current_expected():
         f"  only in yaml (registered): {sorted(new - _EXPECTED_CONFIG_WHITELIST)}\n"
         f"  only in expected (yaml 漏): {sorted(_EXPECTED_CONFIG_WHITELIST - new)}"
     )
-    assert len(new) == 82, f"config 白名单总数应是 82, 实际 {len(new)}"
+    # N2(2026-06-01): 82 → 67，摘掉 15 个 codegen/workspace 工具
+    assert len(new) == 67, f"config 白名单总数应是 67, 实际 {len(new)}"
 
 
 def test_builder_whitelist_count():
