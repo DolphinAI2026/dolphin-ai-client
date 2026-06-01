@@ -90,6 +90,18 @@ async def lifespan(app: FastAPI):
             "startup recovery sweep failed (非致命): %s", e,
         )
 
+    # 把孤儿 workspace（无会话指向）补建 owner 会话，保证 workspace ↔ 会话 1:1
+    try:
+        from app.coding.migrate_orphan_workspaces import migrate_orphan_workspaces
+        from app.database import AsyncSessionLocal
+        async with AsyncSessionLocal() as _mig_db:
+            await migrate_orphan_workspaces(_mig_db)
+    except Exception as e:
+        import logging as _logging
+        _logging.getLogger(__name__).warning(
+            "migrate_orphan_workspaces failed (非致命): %s", e,
+        )
+
     # 预热平台代理状态（避免首次请求 503）
     from app.routes.platform_proxy import _ensure_proxy_state
     try:
