@@ -40,6 +40,14 @@
 - 测试 junk 清理:conv 8(空 新开发会话)、conv 9(我造的读测试)。
 - **mcp-server/**(~27 万行,占仓库 40% 的副本)后续整体删——见 ai_coding_prd_direction。
 
+## 全模块测试结果(2026-06-02)
+跑了完整全模块测试,**本轮 11 commit 零回归**。
+- 后端 pytest:**427 passed** / 6 failed(全陈旧,父提交上同样失败,已铁证)/ 1 collection 错(陈旧 SpecSection);本轮新增 60 测试全绿。
+- 集成(真打 apaas-trial):意图分类 11/11、读工具→26 应用(401 自愈)、读路径持久化存 user+assistant。
+- 前端:`vite build` ✓;我改的 3 文件 0 TS 错(`vue-tsc` 严格检查 dev 上早已 400+ 陈旧错,非本轮)。
+- Live:READ 表格 / 回看历史 / 侧栏只列会话 / × 删除 / 模型选择器 全 ✓;**BUILD→codegen 完整跑通**(detect_scene=web_component_dual → 32 产物 + 双端 build 成功);**Builder config-chat-stream 正确引导去 AI Coding 不吐代码**。
+- 两个发现(已甩后台任务):① 7 个陈旧失败测试(JWT aud / create_access_token 签名 / query_models / SpecSection);② **同步 `/config-chat`(applications/__init__.py:2573)缺引导块**(会吐代码),UI 走 stream 不受影响,但端点活着——需补引导或删死端点。
+
 ## 环境 / key context(踩坑速查)
 - **dev 分支共享**(与 xhh 协作),commit 前先 `git pull --rebase`。
 - 本地 `backend/.env`(**gitignored,勿提交**):`APAAS_BASE_URL=https://apaas-trial.definesys.cn/backend`、`CODE_SERVER_BASE_URL=http://127.0.0.1:8080`、`DATABASE_URL=sqlite+aiosqlite:////tmp/fb_demo.db`、`APAAS_ENCRYPTION_KEY`、`JWT_SECRET_KEY=demo-secret-local`、`LLM_API_KEY=demo`。线上无 APAAS_BASE_URL(故本地需手配)。
