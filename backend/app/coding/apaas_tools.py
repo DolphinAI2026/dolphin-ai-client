@@ -121,7 +121,18 @@ async def call_apaas_with_relogin(platform_env_id: int, db: AsyncSession, fn):
     """
     from app.error_messages import is_apaas_token_error
 
-    client = await _get_apaas_client(platform_env_id, db)
+    async def _get_client_with_empty_token_relogin():
+        try:
+            return await _get_apaas_client(platform_env_id, db)
+        except Exception as exc:  # noqa: BLE001
+            if not is_apaas_token_error(str(exc)):
+                raise
+            logger.info("apaas env=%s token 不可用，尝试重登刷新", platform_env_id)
+            if not await _relogin_apaas_env(platform_env_id, db):
+                raise
+            return await _get_apaas_client(platform_env_id, db)
+
+    client = await _get_client_with_empty_token_relogin()
     try:
         return await fn(client)
     except Exception as exc:  # noqa: BLE001
@@ -130,7 +141,7 @@ async def call_apaas_with_relogin(platform_env_id: int, db: AsyncSession, fn):
         logger.info("apaas 调用撞 token 失效，尝试重登重试 env=%s", platform_env_id)
         if not await _relogin_apaas_env(platform_env_id, db):
             raise
-        client2 = await _get_apaas_client(platform_env_id, db)
+        client2 = await _get_client_with_empty_token_relogin()
         return await fn(client2)
 
 

@@ -3547,9 +3547,6 @@ async def get_application_apaas_menus(
         raise HTTPException(status_code=404, detail="应用不存在")
     await _require_application_permission(ctx, db, app, Action.VIEW)
 
-    if not app.platform_env_id:
-        return {"ok": False, "error_code": "APP_NOT_BOUND_ENV",
-                "message": "应用未绑定平台环境"}
     if not app.apaas_app_id:
         return {"ok": False, "error_code": "APP_NOT_DEPLOYED",
                 "message": "应用尚未部署到平台"}
@@ -3557,14 +3554,34 @@ async def get_application_apaas_menus(
     # 2026-05-25: 直接调 client.query_menus (manageAppMenu) 拿管理视图 — 含 GROUP
     # 跟 process workflow menus. mcp 的 list_apaas_app_menus 走 allAppMenu (runtime
     # 视图, 过滤了 GROUP) 不适合 sidebar 用.
-    # 2026-05-29: 套 call_apaas_with_relogin — token 过期(含 httpx 401)自动重登重试,
-    # 不再裸调直接抛 401 给前端("拉取菜单失败 401"反复出现的根因)。
-    from app.coding.apaas_tools import call_apaas_with_relogin  # type: ignore
+    # 线上环境绑定来自 backend.env / Secret，不再依赖 applications.platform_env_id
+    # 反查 platform_envs。旧 app 里残留的 platform_env_id 只作为诊断信息返回。
     try:
-        raw_menus_nested = await call_apaas_with_relogin(
-            app.platform_env_id, db,
-            lambda client: client.query_menus(app.apaas_app_id),
+        base_url = (settings.apaas_base_url or "").rstrip("/")
+        tenant_id = (settings.apaas_tenant_id or "").strip()
+        token = (ctx.user.apaas_token or "").strip()
+        if not base_url or not tenant_id:
+            return {
+                "ok": False,
+                "error_code": "CONFIG_ENV_MISSING",
+                "message": "未配置 APAAS_BASE_URL / APAAS_TENANT_ID，无法按配置环境拉取菜单",
+                "env_id": app.platform_env_id,
+                "apaas_app_id": app.apaas_app_id,
+            }
+        if not token:
+            return {
+                "ok": False,
+                "error_code": "CONFIG_ENV_TOKEN_MISSING",
+                "message": "当前登录用户没有可用的 aPaaS token，请重新登录",
+                "env_id": app.platform_env_id,
+                "apaas_app_id": app.apaas_app_id,
+            }
+        logger.info(
+            "应用 %s 按配置环境拉菜单 base_url=%s tenant_id=%s stale_platform_env_id=%s",
+            app.id, base_url, tenant_id, app.platform_env_id,
         )
+        client = APaaSClient(base_url=base_url, tenant_id=tenant_id, token=token)
+        raw_menus_nested = await client.query_menus(app.apaas_app_id)
     except Exception as exc:
         return {
             "ok": False, "error_code": "APAAS_FETCH_FAILED",

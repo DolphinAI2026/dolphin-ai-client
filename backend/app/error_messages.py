@@ -53,6 +53,9 @@ APAAS_TOKEN_MARKERS = (
     # 收进唯一真相源, 让自愈 + 所有调用点统一认得。
     "401",
     "Unauthorized",
+    # env.token was cleared/never persisted, but env username/password may still
+    # be present and can refresh it automatically.
+    "token 为空",
 )
 
 

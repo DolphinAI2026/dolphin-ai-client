@@ -48,6 +48,36 @@ async def test_relogin_retry_on_401_then_succeeds(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_relogin_when_initial_token_is_empty(monkeypatch):
+    """首次拿 client 就发现 token 为空 → 先重登拿新 client, 再执行 fn。"""
+    get_calls = []
+
+    async def fake_get_client(env_id, db):
+        get_calls.append(env_id)
+        if len(get_calls) == 1:
+            raise ValueError("platform_env_id=59 未登录 aPaaS（token 为空），先在「平台环境」配置")
+        return "client-after-login"
+
+    relogin_calls = []
+
+    async def fake_relogin(env_id, db):
+        relogin_calls.append(env_id)
+        return True
+
+    monkeypatch.setattr(apaas_tools, "_get_apaas_client", fake_get_client)
+    monkeypatch.setattr(apaas_tools, "_relogin_apaas_env", fake_relogin)
+
+    async def fn(client):
+        return {"client": client}
+
+    result = await apaas_tools.call_apaas_with_relogin(59, object(), fn)
+
+    assert result == {"client": "client-after-login"}
+    assert get_calls == [59, 59]
+    assert relogin_calls == [59]
+
+
+@pytest.mark.asyncio
 async def test_no_retry_when_relogin_fails(monkeypatch):
     """fn 抛 401 但 env 无凭据(relogin 返 False) → 不重试, 原样抛 401。"""
     async def fake_get_client(env_id, db):

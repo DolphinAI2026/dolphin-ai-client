@@ -26,6 +26,10 @@ def test_still_recognizes_legacy_chinese_markers():
     assert is_apaas_token_error("请重新连接APaaS平台") is True
 
 
+def test_recognizes_empty_token_message():
+    assert is_apaas_token_error("platform_env_id=59 未登录 aPaaS（token 为空）") is True
+
+
 def test_unrelated_errors_not_flagged_as_token_error():
     # 不含 401/Unauthorized/中文标记的普通业务错误不应被误判
     assert is_apaas_token_error("应用编码重复") is False
