@@ -2165,7 +2165,7 @@ class APaaSClient:
                 menus = data.get("data", [])
                 logger.info(f"查询到 {len(menus)} 个菜单")
                 return menus
-            return []
+            raise Exception(f"manageAppMenu 返回失败: code={data.get('code')}, message={data.get('message') or data.get('msg') or data}")
 
     async def query_form_views(self, app_id: str, form_id: str) -> list:
         """查询表单的列表视图清单（拿 tabId）。

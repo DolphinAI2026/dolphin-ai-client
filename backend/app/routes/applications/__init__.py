@@ -3587,6 +3587,7 @@ async def get_application_apaas_menus(
             "ok": False, "error_code": "APAAS_FETCH_FAILED",
             "message": f"拉取菜单失败: {exc}",
             "env_id": app.platform_env_id,
+            "config_tenant_id": (settings.apaas_tenant_id or "").strip(),
             "apaas_app_id": app.apaas_app_id,
         }
 
@@ -3663,6 +3664,7 @@ async def get_application_apaas_menus(
     return {
         "ok": True,
         "env_id": app.platform_env_id,
+        "config_tenant_id": (settings.apaas_tenant_id or "").strip(),
         "apaas_app_id": app.apaas_app_id,
         "menus": roots,
         "flat_count": len(flat),
