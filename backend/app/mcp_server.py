@@ -489,13 +489,48 @@ async def list_my_applications(
     tenant_id: int = 0,
     user_id: int = 0,
 ) -> dict:
-    """列出当前登录用户在当前租户下能访问的 Builder 应用（分页第 1 页，最多 50 条）。
+    """列出当前租户下的应用列表。
 
-    直接按注入的 tenant_id 查询应用列表；当前租户已通过 JWT / 切租户确定，
-    不需要先调用 list_platform_envs。只有新建/部署/远端 aPaaS 内省需要 env_id 时，
-    才考虑查询平台环境。
+    2026-06-02 用户决策：「查应用列表」统一查 aPaaS 平台全量（与 AI Coding 的
+    list_apaas_apps 一致，避免 Builder 只显示本地纳管的子集、两边数字对不上）。
+    解析租户默认 platform env → 查 apaas；无 env / apaas 失败时降级为 ai-builder 本地纳管应用。
     """
     tid, uid = _resolve_identity(tenant_id, user_id)
+
+    # 1) 优先查 aPaaS 平台全量（解析租户默认 env，与 list_platform_envs 同口径）
+    env_id = None
+    try:
+        from app.database import AsyncSessionLocal
+        from app.models import PlatformEnv
+        from sqlalchemy import select
+
+        async with AsyncSessionLocal() as _db:
+            _r = await _db.execute(
+                select(PlatformEnv)
+                .where(PlatformEnv.tenant_id == tid)
+                .order_by(PlatformEnv.is_default.desc(), PlatformEnv.id.asc())
+            )
+            _env = _r.scalars().first()
+        env_id = _env.id if _env else None
+    except Exception:
+        env_id = None
+
+    if env_id:
+        apaas_res = await _call_apaas_platform_tool("list_apaas_apps", {}, env_id)
+        if isinstance(apaas_res, dict) and apaas_res.get("ok"):
+            apaas_apps = apaas_res.get("apps") or apaas_res.get("applications") or []
+            apps = [
+                {
+                    "apaas_app_id": a.get("apaas_app_id") or a.get("app_id") or a.get("id"),
+                    "app_name": a.get("app_name"),
+                    "app_code": a.get("app_code"),
+                    "status": a.get("status"),
+                }
+                for a in apaas_apps
+            ]
+            return {"ok": True, "applications": apps, "total": len(apps), "source": "apaas"}
+
+    # 2) 降级：ai-builder 本地纳管应用（无 apaas env 的租户仍可用）
     res = await _api_call(
         "GET",
         "/applications/page",
@@ -515,7 +550,7 @@ async def list_my_applications(
         }
         for it in items
     ]
-    return {"ok": True, "applications": apps, "total": (res or {}).get("total", len(apps))}
+    return {"ok": True, "applications": apps, "total": (res or {}).get("total", len(apps)), "source": "local"}
 
 
 @mcp.tool()
