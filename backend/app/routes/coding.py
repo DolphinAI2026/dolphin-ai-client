@@ -899,6 +899,7 @@ async def list_coding_conversations(
             "title": c.title,
             "workspace_id": c.workspace_id,
             "selected_llm_config_id": c.selected_llm_config_id,
+            "coding_app_id": c.coding_app_id,  # 绑定应用,前端据此恢复「在应用上定制」绑定
             "created_at": c.created_at.isoformat() if c.created_at else None,
             "updated_at": c.updated_at.isoformat() if c.updated_at else None,
         }

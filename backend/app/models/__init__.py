@@ -150,6 +150,9 @@ class Conversation(Base):
     )
     coding_active_brainstorm_session_id: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
     coding_active_coding_session_id: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
+    # AI Coding「在应用上定制」绑定的本地 Application.id —— 持久化绑定,刷新/侧栏点开后仍记得是哪个应用,
+    # grounding/codegen 据此复用该应用的模型/菜单(不再因前端 ref 丢失而退回通用 SPEC)。
+    coding_app_id: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
     spec_id: Mapped[Optional[str]] = mapped_column(String(40), ForeignKey("builder_specs.id"), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, nullable=False)
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False)

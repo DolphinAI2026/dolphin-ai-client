@@ -997,7 +997,10 @@ const showCodingUnselected = computed(() =>
 
 async function loadCodingConversationOnly(conversationId: number) {
   handoffSourceApp.value = null  // F3: 切到已有会话时清掉 handoff 回跳链，避免串到别的会话
-  deployAppId.value = null; deployMode.value = 'bound'  // 同清分场景部署绑定，避免把上个会话选的应用串到这个会话(codegen app_id + 装回目标)
+  // 恢复「在应用上定制」绑定:会话持久化了 coding_app_id 就接着绑(刷新/侧栏点开仍记得是哪个应用),
+  // 没有才清空,避免把上个会话选的应用串过来。后端也会从会话回读做兜底,这里主要保证 UI 一致。
+  const _boundAppId = codingConversations.value.find(c => c.id === conversationId)?.coding_app_id ?? null
+  deployAppId.value = _boundAppId; deployMode.value = 'bound'
   const messages = await codingApi.getMessages(conversationId)
   codingStore.reset()
   codingStore.conversationId = conversationId

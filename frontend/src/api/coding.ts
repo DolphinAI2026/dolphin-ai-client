@@ -20,6 +20,7 @@ export interface CodingConversation {
   title: string
   workspace_id?: string | null
   selected_llm_config_id?: number | null
+  coding_app_id?: number | null  // 「在应用上定制」绑定的应用 id(后端持久化,刷新仍记得)
   created_at: string
   updated_at: string
 }

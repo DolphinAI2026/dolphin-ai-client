@@ -1775,12 +1775,22 @@ async def run_coding_pipeline(
         # 2026-05-19 不管是新建还是迭代（is_iteration=True 也算），conversation_id 为空时
         # 必须创建一条 Conversation，否则下面 save_coding_message 撞 NULL constraint。
         # 之前 `if not is_iteration` 包住创建逻辑导致 ws_id 存在但 conv 为 None 时直接挂。
+        # 「在应用上定制」绑定的本地 app_id:本轮请求带了就用,没带(刷新/侧栏点开导致前端 ref 丢失)
+        # 留到下方从会话回读。int 解析失败按未绑定处理。
+        _param_app_id_int: Optional[int] = None
+        try:
+            if getattr(params, "app_id", None):
+                _param_app_id_int = int(params.app_id)
+        except (ValueError, TypeError):
+            _param_app_id_int = None
+
         if not conversation_id:
             coding_conversation = Conversation(
                 title=params.message[:50], user_id=params.user_id,
                 tenant_id=params.tenant_id, agent_type="coding",
                 workspace_id=ws_id if is_iteration else None,
                 selected_llm_config_id=effective_model_config_id,
+                coding_app_id=_param_app_id_int,  # 首轮带 app_id 即记上,后续轮可回读
             )
             db.add(coding_conversation)
             await db.commit()
@@ -1790,6 +1800,18 @@ async def run_coding_pipeline(
             coding_conversation.selected_llm_config_id = effective_model_config_id
             await db.commit()
             await db.refresh(coding_conversation)
+
+        # ★ 绑定应用持久化 + 回读:本轮带 app_id → 回填到会话(首轮已在上面建会话时写,这里覆盖续轮变更);
+        #   本轮没带但会话里有 → 回读补回 params.app_id,让 grounding/codegen 始终记得是哪个应用,
+        #   不再因前端刷新/侧栏点开丢了 ref 而退回通用 SPEC。
+        if coding_conversation is not None:
+            if _param_app_id_int is not None:
+                if coding_conversation.coding_app_id != _param_app_id_int:
+                    coding_conversation.coding_app_id = _param_app_id_int
+                    await db.commit()
+            elif getattr(coding_conversation, "coding_app_id", None):
+                params.app_id = str(coding_conversation.coding_app_id)
+                logger.info("[bound-app] 从会话回读绑定应用 app_id=%s(本轮请求未带)", params.app_id)
 
         await save_coding_message(db, conversation_id, "user", params.message)
 
