@@ -194,18 +194,25 @@
             </div>
           </div>
 
-          <!-- Chat 底部输入框（非流式时可用） -->
-          <div v-if="!isStreaming && streamMessages.length > 0" class="chat-input-bar">
+          <!-- Chat 底部输入框（始终可见:流式中也能输入,按 Enter 进队列;红色按钮可停止生成） -->
+          <div v-if="streamMessages.length > 0" class="chat-input-bar">
+            <!-- 排队提示卡:流式中再输入会进队列,当前回复结束后自动发送(对齐 AI Builder) -->
+            <div v-if="pendingQueue.length > 0" class="coding-queue-banner">
+              <span class="cqb-icon">🕐</span>
+              <span class="cqb-text">{{ pendingQueue.length }} 条消息排队中 · 当前回复结束后自动发送</span>
+              <button class="cqb-clear" title="清空队列" @click="pendingQueue = []">×</button>
+            </div>
             <UnifiedChatComposer
               v-model="userInput"
               :attachments="codingComposerAttachments"
-              :disabled="isCreating"
-              :sending="isCreating"
-              :show-stop="false"
-              :send-disabled="!userInput.trim() || isCreating"
+              :sending="codingBusy"
+              :show-stop="true"
+              :allow-send-while-sending="true"
+              :send-disabled="!userInput.trim()"
               accept=".md,.pdf,.docx,.txt,.png,.jpg,.jpeg"
               placeholder="输入需求，粘贴图片或点附件..."
-              @send="sendMessage"
+              @send="sendOrQueue"
+              @stop="stopStream"
               @files-picked="handleComposerFiles"
               @remove-attachment="removeAttachment"
             >
@@ -841,6 +848,30 @@ watch(isStreaming, (on) => {
   }
 })
 onUnmounted(() => { if (_streamTimer) { clearInterval(_streamTimer); _streamTimer = null } })
+
+// ── 排队消息(对齐 AI Builder / 需求分析助手):流式中按 Enter → 进队列,当前回复结束自动发出 ──
+// codingBusy = 流式中 or 建工作区中(两者皆 false 才算真空闲,可发下一条);
+// sendOrQueue:忙时入队、闲时直接发;闲下来 watch 自动把队首发出去。
+const pendingQueue = ref<string[]>([])
+const codingBusy = computed(() => isStreaming.value || isCreating.value)
+function sendOrQueue() {
+  if (codingBusy.value) {
+    const txt = userInput.value.trim()
+    if (!txt) return
+    pendingQueue.value.push(txt)
+    userInput.value = ''
+    return
+  }
+  sendMessage()
+}
+watch(codingBusy, (now, prev) => {
+  // 上一轮彻底结束(流式 + 建区都 false)→ 把队首自动发出去,透气一帧让用户看见
+  if (prev && !now && pendingQueue.value.length > 0) {
+    const next = pendingQueue.value.shift()!
+    userInput.value = next
+    setTimeout(() => { sendMessage() }, 220)
+  }
+})
 
 function _formatSize(content: string | undefined | null): string {
   const bytes = content ? new Blob([content]).size : 0
@@ -1636,7 +1667,7 @@ function removeAttachment() {
 // ============ Send Message / Create Workspace ============
 // SSE handlers + upload + build request + consume SSE + load IDE URL + sendMessage
 // 全部抽到 useCodingPipeline composable
-const { sendMessage } = useCodingPipeline({
+const { sendMessage, stopStream } = useCodingPipeline({
   model: { codingModelOptions, codingModelLoading, updatingCodingModel, selectedCodingModelValue, persistedCodingModelValue, codingModelPopoverVisible, selectedCodingModelOption, codingModelHint, codingModelSummary, toCodingModelValue, normalizeCodingModelValue, applyCodingModelSelection, loadCodingModelOptions, handleCodingModelChange, selectCodingModel } as any,
   stream: { streamMessages, isStreaming, streamContainerRef, scrollStreamToBottom, addStreamMsg, appendToLastThinking, appendToLastCommand, completeStepMsg, addStepRunningMsg, restoreReplayStreamMessages } as any,
   ide: { ideUrl, ideLoaded, ideLoadError, ideLoadingText, pendingIdeUrl, activeView, setIdeUrl, onIdeFrameLoad, onIdeFrameError, retryIdeLoad, openPendingIde } as any,
@@ -4019,6 +4050,32 @@ watch(() => route.path, () => {
   max-width: 880px;
   margin-inline: auto;
 }
+
+/* 排队消息提示卡:流式中再输入会进队列,居中同列(880) */
+.coding-queue-banner {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  max-width: 880px;
+  margin: 0 auto 8px;
+  padding: 7px 12px;
+  border: 1px solid var(--t-border-subtle);
+  border-radius: 10px;
+  background: var(--t-bg-panel);
+  font-size: 12.5px;
+  color: var(--t-text-secondary);
+}
+.cqb-icon { flex-shrink: 0; font-size: 13px; }
+.cqb-text { flex: 1; min-width: 0; }
+.cqb-clear {
+  flex-shrink: 0;
+  width: 20px; height: 20px;
+  display: inline-flex; align-items: center; justify-content: center;
+  border: none; border-radius: 6px;
+  background: transparent; color: var(--t-text-muted);
+  font-size: 15px; line-height: 1; cursor: pointer;
+}
+.cqb-clear:hover { background: var(--t-bg-elevated); color: var(--t-text-primary); }
 
 /* 完成态卡片(对标 Builder「应用就绪」):明确终态 + 行动入口,居中同列 */
 .coding-done-card {

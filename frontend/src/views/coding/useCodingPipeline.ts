@@ -390,6 +390,13 @@ export function useCodingPipeline(deps: PipelineDeps) {
 
   // ── 主流程 ──
 
+  // 当前流式请求的中止器:用户点「停止」→ abort() → fetch/SSE 抛 AbortError → 收尾(不弹错)。
+  let currentAbort: AbortController | null = null
+  function stopStream() {
+    if (currentAbort) currentAbort.abort()
+    isStreaming.value = false  // 立即翻转,UI 不等 abort 落地;后续事件不会再把它设回 true
+  }
+
   async function sendMessage() {
     const message = userInput.value.trim()
     if (!message && !attachedFile.value) return
@@ -420,6 +427,7 @@ export function useCodingPipeline(deps: PipelineDeps) {
       pendingSceneCategory.value = null
       const body = buildPipelineRequest(finalMessage, sceneKey)
 
+      currentAbort = new AbortController()
       const response = await fetch(harnessApi.codingPipelineUrl, {
         method: 'POST',
         headers: {
@@ -427,6 +435,7 @@ export function useCodingPipeline(deps: PipelineDeps) {
           'Authorization': `Bearer ${userStore.token}`,
         },
         body: JSON.stringify(body),
+        signal: currentAbort.signal,
       })
 
       if (!response.ok) {
@@ -438,10 +447,16 @@ export function useCodingPipeline(deps: PipelineDeps) {
       await loadIdeUrlAfterPipeline()
 
     } catch (error: any) {
-      addStreamMsg({ type: 'error', content: error.message || '\u53D1\u751F\u9519\u8BEF' })
+      // \u7528\u6237\u4E3B\u52A8\u300C\u505C\u6B62\u300D\u2192 AbortError:\u9759\u9ED8\u6536\u5C3E,\u4E0D\u5F39\u9519\u3001\u8865\u4E00\u6761\u63D0\u793A\u3002
+      if (error?.name === 'AbortError') {
+        addStreamMsg({ type: 'status', content: '\u5DF2\u505C\u6B62\u751F\u6210' })
+      } else {
+        addStreamMsg({ type: 'error', content: error.message || '\u53D1\u751F\u9519\u8BEF' })
+      }
       isStreaming.value = false
     } finally {
       isCreating.value = false
+      currentAbort = null
     }
   }
 
@@ -454,6 +469,7 @@ export function useCodingPipeline(deps: PipelineDeps) {
   return {
     sendMessage,
     sendSuggestion,
+    stopStream,
     // 暴露给 replay / 其他地方用（很少直接用）
     consumePipelineSse,
     loadIdeUrlAfterPipeline,
