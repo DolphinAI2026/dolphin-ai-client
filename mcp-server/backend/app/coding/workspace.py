@@ -93,6 +93,12 @@ NPM_CACHE_ROOT = WORKSPACE_ROOT / ".npm-cache"
 DEFAULT_RULES_ROOT = Path(__file__).parent / "default_rules"
 FALLBACK_NPM_REGISTRY = "https://registry.npmmirror.com"
 
+# 得帆私有 npm 源（group 仓库：既供私有 @x-apaas/* scoped 包，也代理公共包）。
+# df-apaas-cli 脚手架（@x-apaas/df-apaas-cli）只发布在这里——公共源（npmmirror/npmjs）
+# 必然 404；且必须用 scoped 包名，裸名 df-apaas-cli 在任何源（含私有源）都 404。
+APAAS_SCOPE = "@x-apaas"
+APAAS_PRIVATE_NPM_REGISTRY_FALLBACK = "https://registry.dfy.definesys.cn/repository/apaas-npm-group/"
+
 
 def _safe_read_json(path: Path, default=None):
     """安全读取 JSON 文件。文件不存在、读取失败或解析失败时返回 default。
@@ -144,6 +150,20 @@ def _resolve_default_npm_registry() -> str:
 
 
 DEFAULT_NPM_REGISTRY = _resolve_default_npm_registry()
+
+
+def _resolve_apaas_private_npm_registry() -> str:
+    """@x-apaas/* scoped 包（含 df-apaas-cli 脚手架）的私有源。
+
+    允许用 APAAS_PRIVATE_NPM_REGISTRY 环境变量覆盖（如换 Nexus 地址），
+    默认走得帆 apaas-npm-group。注意：这是给 scoped 包用的，公共依赖仍走
+    DEFAULT_NPM_REGISTRY（npmmirror）以保证速度。
+    """
+    explicit = (os.environ.get("APAAS_PRIVATE_NPM_REGISTRY") or "").strip()
+    return explicit or APAAS_PRIVATE_NPM_REGISTRY_FALLBACK
+
+
+APAAS_PRIVATE_NPM_REGISTRY = _resolve_apaas_private_npm_registry()
 
 DISPLAY_NAME_HINTS = {
     "gantt-chart": "甘特图组件",
@@ -969,24 +989,45 @@ class WorkspaceManager:
         env.setdefault("FORCE_COLOR", "0")
         return env
 
+    @staticmethod
+    def _npmrc_content() -> str:
+        """npm install 用的 .npmrc 内容：默认源（公共依赖，快）+ @x-apaas scope 钉私有源。
+
+        公共依赖（vue / @vue/cli-service / sass …）走 DEFAULT_NPM_REGISTRY；
+        @x-apaas/* scoped 包（含运行时 SDK）走私有源，否则在公共源必然 404。
+        """
+        return (
+            f"registry={DEFAULT_NPM_REGISTRY}\n"
+            f"{APAAS_SCOPE}:registry={APAAS_PRIVATE_NPM_REGISTRY}\n"
+        )
+
     def _ensure_workspace_npmrc(self, ws_path: Path) -> None:
-        """确保 workspace 根目录有 .npmrc，指向私有 registry，避免 df-apaas-cli 内部 npm 调用使用公开源。"""
+        """确保 workspace 根目录有 .npmrc：默认源 + @x-apaas scope → 私有源。"""
         npmrc_path = ws_path / ".npmrc"
-        registry = DEFAULT_NPM_REGISTRY
-        content = f"registry={registry}\n"
-        # 如果已有同内容则跳过写入
+        scoped_line = f"{APAAS_SCOPE}:registry={APAAS_PRIVATE_NPM_REGISTRY}"
+        default_line = f"registry={DEFAULT_NPM_REGISTRY}"
+        # 已含两行（默认源 + scoped 私有源）才跳过；老的单行 .npmrc 要被升级补 scoped 行
         if npmrc_path.exists():
             try:
                 existing = npmrc_path.read_text(encoding="utf-8")
-                if registry in existing:
+                if scoped_line in existing and default_line in existing:
                     return
             except Exception:
                 pass
-        npmrc_path.write_text(content, encoding="utf-8")
-        logger.info(f"[workspace] wrote .npmrc with registry={registry} to {ws_path}")
+        npmrc_path.write_text(self._npmrc_content(), encoding="utf-8")
+        logger.info(
+            f"[workspace] wrote .npmrc (registry={DEFAULT_NPM_REGISTRY}, "
+            f"{APAAS_SCOPE}→{APAAS_PRIVATE_NPM_REGISTRY}) to {ws_path}"
+        )
 
     async def _ensure_df_apaas_cli(self) -> None:
-        """确保 df-apaas-cli 全局可用；若不存在则自动全局安装。"""
+        """确保 df-apaas-cli 脚手架全局可用；不存在则从私有源安装，失败大声报错。
+
+        @x-apaas/df-apaas-cli 是 scoped 私有包，只发布在得帆 apaas-npm-group。
+        公共源（npmmirror/npmjs）必然 404；裸名 df-apaas-cli 在任何源都 404。
+        装不上时直接 raise（不再静默 warn）——否则后续 `df-apaas-cli build`
+        会以「命令找不到 / 404」的模糊错误失败，让人误判成模板/源码问题。
+        """
         env = self._build_npm_env()
         if resolve_executable("df-apaas-cli", env):
             return
@@ -995,22 +1036,30 @@ class WorkspaceManager:
         if not npm_exec:
             raise RuntimeError("未检测到 npm，无法安装 df-apaas-cli，请检查 Node.js 安装或后端服务 PATH 配置")
 
-        logger.info("[workspace] df-apaas-cli not found globally, installing …")
+        registry = APAAS_PRIVATE_NPM_REGISTRY
+        logger.info("[workspace] df-apaas-cli not found globally, installing @x-apaas/df-apaas-cli from %s …", registry)
         proc = await asyncio.create_subprocess_exec(
             npm_exec, "install", "-g",
             "@x-apaas/df-apaas-cli",
-            "--registry", DEFAULT_NPM_REGISTRY,
-            "--prefer-offline",
+            "--registry", registry,
+            "--no-audit", "--no-fund",
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.STDOUT,
             env=env,
         )
         stdout, _ = await proc.communicate()
         output = stdout.decode("utf-8", errors="replace").strip()
-        if proc.returncode != 0:
-            logger.warning(f"[workspace] df-apaas-cli global install failed:\n{output}")
-        else:
-            logger.info("[workspace] df-apaas-cli installed globally successfully")
+
+        # returncode==0 但仍解析不到（如装到了不在 PATH 的 node 前缀）也算失败
+        if proc.returncode != 0 or not resolve_executable("df-apaas-cli", env):
+            raise RuntimeError(
+                "无法安装 df-apaas-cli 脚手架（@x-apaas/df-apaas-cli）。"
+                f"已尝试私有源 {registry}。请确认：① 该私有源可达；② 用 scoped 包名 "
+                "@x-apaas/df-apaas-cli（裸名 df-apaas-cli 在任何源都 404）；"
+                "③ 必要时设环境变量 APAAS_PRIVATE_NPM_REGISTRY 覆盖私有源地址。\n"
+                f"npm 输出（尾部）:\n{output[-800:]}"
+            )
+        logger.info("[workspace] df-apaas-cli installed globally from %s", registry)
 
     def _build_dependency_signature(self, ws_path: Path, install_dir: Optional[Path] = None) -> str:
         package_json_path = (install_dir or ws_path) / "package.json"
@@ -1148,9 +1197,8 @@ class WorkspaceManager:
         temp_dir = Path(tempfile.mkdtemp(prefix="apaas-prewarm.", dir=str(DEPENDENCY_CACHE_ROOT)))
         try:
             shutil.copy2(pkg_json_path, temp_dir / "package.json")
-            # 写入 .npmrc
-            npmrc_content = f"registry={DEFAULT_NPM_REGISTRY}\n"
-            (temp_dir / ".npmrc").write_text(npmrc_content, encoding="utf-8")
+            # 写入 .npmrc（默认源 + @x-apaas scope 钉私有源，与工作区一致）
+            (temp_dir / ".npmrc").write_text(self._npmrc_content(), encoding="utf-8")
 
             proc = await asyncio.create_subprocess_exec(
                 npm_exec, "install",
@@ -1535,13 +1583,15 @@ class WorkspaceManager:
         meta["status"] = WorkspaceStatus.BUILDING.value
         self._write_meta(ws_path, meta)
 
-        # 若本次构建需要 df-apaas-cli，确保其全局可用，并写入 .npmrc（私有源）
-        if self._uses_df_apaas_cli_build(ws_path):
-            await self._ensure_df_apaas_cli()
-            self._ensure_workspace_npmrc(ws_path)
-
         # 按项目类型分派
         try:
+            # 若本次构建需要 df-apaas-cli，确保其全局可用（从私有源），并写入 .npmrc。
+            # 放进 try：装不上时 _ensure_df_apaas_cli 会 raise，统一收成 build error
+            # 返回给上层（而非裸异常逃逸 build_project）。
+            if self._uses_df_apaas_cli_build(ws_path):
+                await self._ensure_df_apaas_cli()
+                self._ensure_workspace_npmrc(ws_path)
+
             if meta.get("project_type") == ProjectType.FORM_COMPONENT_DUAL.value:
                 result = await self._build_dual_project(ws_path, meta)
             else:
