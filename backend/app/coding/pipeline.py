@@ -1722,11 +1722,14 @@ async def run_coding_pipeline(
             is_brainstorm_continuation = _awaiting_followup
             if not is_brainstorm_continuation:
                 yield _record_event({"type": "step", "step": "detect_scene", "status": "running"})
-            # brainstorm / 澄清 续轮：必须用 original_requirement 而非 params.message(用户这句是确认/澄清回答)
-            detection_message = (
-                prior_original_requirement if prior_brainstorm_proposal
-                else (prior_clarify_requirement if prior_clarify_text else params.message)
-            )
+            # brainstorm / 澄清 续轮：用**最初**的原始需求识别场景,而非 params.message。
+            #   用户这句是"确认 / 选A / 澄清回答",拿它(或澄清答复)去识别场景会识别不出、
+            #   甚至误判成 unsupported,把已经确认的 SPEC 冤枉丢掉。取历史首条 user 消息最稳。
+            if is_brainstorm_continuation:
+                _first_user_msg = next((m.get("content", "") for m in prior_history if m.get("role") == "user"), "")
+                detection_message = _first_user_msg or prior_original_requirement or prior_clarify_requirement or params.message
+            else:
+                detection_message = params.message
             # 始终用 AI 从 message 识别场景，project_type 仅作降级兜底
             # 只取第一行（用户的直接意图），避免后面附带的 API 文档等内容干扰识别
             intent_snippet = detection_message.split("\n")[0][:300]
@@ -1735,13 +1738,20 @@ async def run_coding_pipeline(
             try:
                 scene_type = await _detect_scene_llm_call(params.tenant_id, effective_model, intent_snippet)
             except UnsupportedSceneError as exc:
-                yield _record_event({
-                    "type": "step", "step": "detect_scene", "status": "done",
-                    "data": {"scene_type": "unsupported_script"},
-                })
-                yield _record_event({"type": "message", "content": str(exc)})
-                yield _record_event({"type": "done", "ws_id": None, "ide_url": None, "conversation_id": conversation_id})
-                return
+                if is_brainstorm_continuation:
+                    # 续轮(用户已确认/改稿/答澄清):首轮已验证场景并出了 SPEC,这里再判 unsupported
+                    # 多半是分类器抖动或拿错了识别文本 —— 决不能把刚确认的 SPEC 丢掉,降级兜底继续 codegen。
+                    logger.warning("brainstorm 续轮场景再判为 unsupported,降级兜底 %s 继续: %s", fallback, exc)
+                    scene_type = fallback
+                    scene_detection_failed = True
+                else:
+                    yield _record_event({
+                        "type": "step", "step": "detect_scene", "status": "done",
+                        "data": {"scene_type": "unsupported_script"},
+                    })
+                    yield _record_event({"type": "message", "content": str(exc)})
+                    yield _record_event({"type": "done", "ws_id": None, "ide_url": None, "conversation_id": conversation_id})
+                    return
             except Exception:
                 logger.warning(f"场景识别失败，使用兜底场景 {fallback}: {traceback.format_exc()}")
                 scene_type = fallback
