@@ -34,11 +34,11 @@
 - B4(结构化工具事件 SSE)、F2(前端工具卡渲染)其实代码早已存在,本轮接通即生效。
 
 ## 剩余(下次开干)
-- **F3** Builder→Coding handoff:字段不一致 bug(ChatPage 写 `{app_id,app_name}` ↔ CodingPage 读 `{projectId,sceneCategory}`,导致 app 上下文丢)+ 带应用上下文跳转 + "← 回 Builder 配置"链。
-- **N3** 共享读 MCP 核对一致性(确认 Coding 的 `apaas_tools` 与 Builder MCP 读工具集一致)。
+- ✅ **F3 已完成(6dce9a5)**:消费端补读 app_id(URL)+ app_name(payload,之前被丢)+ 会话表头「← 回 Builder 配置「{app}」」回跳链(两种布局都显示)。live 验证往返通。注:真因不是「字段完全不一致」——app_id 一直在 URL query 里,只有 app_name 被丢 + 缺回跳 UI。
+- ✅ **N3 已核对**:8 个核心读工具两边一致 + 都走 apaas_client 共享层。3 个 latent 缺口:① 命名分叉 list_apaas_apps vs list_apaas_apps_in_env;② Coding 读路径是子集(缺 roles/processes/business-events/permissions,apaas_tools.py 未定义);③ 三套目录非单一真相。
 - **F2**(可选/降级):结构化历史存 DB(现走 workspace chat-replay.json + messages 表 content)。
-- 测试 junk 清理:conv 8(空 新开发会话)、conv 9(我造的读测试)。
 - **mcp-server/**(~27 万行,占仓库 40% 的副本)后续整体删——见 ai_coding_prd_direction。
+- 后台任务 chip(已甩):7 个陈旧失败测试 / 同步 config-chat 端点缺引导 / (可选)N3 三缺口。
 
 ## 全模块测试结果(2026-06-02)
 跑了完整全模块测试,**本轮 11 commit 零回归**。
