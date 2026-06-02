@@ -55,7 +55,7 @@
           </button>
           <div class="canvas-actions-right">
             <button class="canvas-action-btn" @click="filesDrawerOpen = true" title="文件">
-              <span>📋</span>
+              <el-icon :size="14"><Document /></el-icon>
               <span class="canvas-action-label">文件</span>
             </button>
             <button
@@ -69,7 +69,7 @@
               <span class="canvas-action-label">IDE</span>
             </button>
             <button class="canvas-action-btn" @click="editDrawerOpen = true" title="设置">
-              <span>⚙️</span>
+              <el-icon :size="14"><Setting /></el-icon>
               <span class="canvas-action-label">设置</span>
             </button>
             <button
@@ -78,7 +78,7 @@
               @click="toggleCodingArtifactPanel"
               :title="showCodingArtifactPanel ? '隐藏产物面板' : '查看产物 / 接入说明'"
             >
-              <span>📦</span>
+              <el-icon :size="14"><Box /></el-icon>
               <span class="canvas-action-label">产物</span>
               <span v-if="codingArtifactsHasAny" class="cap-count-pill">{{ codingArtifacts.new.length + codingArtifacts.modified.length }}</span>
             </button>
@@ -499,7 +499,7 @@ import { API_PREFIX } from '@/utils/request'
 import { ref, computed, onMounted, onUnmounted, watch, nextTick } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
-import { ArrowLeft, ArrowDown, Download, Monitor, Delete, Fold, Expand, ChatDotRound } from '@element-plus/icons-vue'
+import { ArrowLeft, ArrowDown, Download, Monitor, Delete, Fold, Expand, ChatDotRound, Document, Setting, Box } from '@element-plus/icons-vue'
 import { useCodingStore } from '@/stores/coding'
 import type { PlatformEnv } from '@/api/platformEnv'
 import { useUserStore } from '@/stores/user'
@@ -1763,10 +1763,10 @@ watch(() => route.path, () => {
   gap: 5px;
   height: 28px;
   padding: 0 10px;
-  border: 1px solid #3b82f6;
+  border: 1px solid var(--t-brand);
   border-radius: 7px;
   background: transparent;
-  color: #3b82f6;
+  color: var(--t-brand);
   font-size: 12px;
   font-weight: 500;
   cursor: pointer;
@@ -1774,8 +1774,8 @@ watch(() => route.path, () => {
   transition: all 0.15s ease;
 }
 .coding-back-to-builder:hover {
-  background: rgba(59, 130, 246, 0.12);
-  color: #2563eb;
+  background: color-mix(in srgb, var(--t-brand) 12%, transparent);
+  color: var(--t-brand);
 }
 
 .canvas-actions-right {
