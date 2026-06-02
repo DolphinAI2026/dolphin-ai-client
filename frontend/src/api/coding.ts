@@ -253,6 +253,19 @@ export const codingApi = {
     return request.post(`/coding/workspace/${wsId}/upload-to-platform`, { env_id: envId }, { timeout: 300000 })
   },
 
+  /** 装回应用 / 发布到资产库:bound 传 localAppId(上传→attach→页面建菜单→重发);lib 不传(只上传到组件库) */
+  deployToApp(wsId: string, localAppId?: number): Promise<{
+    status: 'installed' | 'uploaded_only'
+    app?: { local_app_id: number; name: string }
+    menu?: string | null
+    version?: string
+    kits?: string[]
+    hint?: string
+  }> {
+    return request.post(`/coding/workspace/${wsId}/deploy-to-app`,
+      { local_app_id: localAppId ?? null }, { timeout: 300000 })
+  },
+
   /** 打包发布（返回 zip blob） */
   async publish(wsId: string): Promise<Blob> {
     const token = localStorage.getItem('token') || ''
