@@ -15,6 +15,7 @@ from pathlib import Path
 from typing import Optional, Any, AsyncIterator
 from urllib.parse import urlencode, urlparse
 
+import httpx
 from jose import jwt
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -1372,6 +1373,114 @@ async def _resolve_bound_app(tenant_id, app_id, db):
     if not app or not getattr(app, "apaas_app_id", None) or not getattr(app, "platform_env_id", None):
         return None
     return (str(app.apaas_app_id), int(app.platform_env_id), app.app_name or "应用")
+
+
+_GROUNDING_MAX_TURNS = 4
+_GROUNDING_TOOL_NAMES = {"list_apaas_app_models", "list_apaas_app_menus"}
+
+
+async def _call_grounding_tool(name, args, env_id):
+    """grounding 工具执行 —— 走 mcp_server 平台工具(含 token 自愈)。抽出便于测试 mock。"""
+    from app.mcp_server import _call_apaas_platform_tool
+    return await _call_apaas_platform_tool(name, args, env_id)
+
+
+def _grounding_tool_defs():
+    """list_apaas_app_models / menus 的 function defs,移除 apaas_app_id 入参(后端锁定)。"""
+    from app.coding.apaas_tools import APAAS_TOOL_DEFINITIONS
+    out = []
+    for t in APAAS_TOOL_DEFINITIONS:
+        if t.get("function", {}).get("name") in _GROUNDING_TOOL_NAMES:
+            t2 = json.loads(json.dumps(t))
+            params = t2["function"].setdefault("parameters", {})
+            params.get("properties", {}).pop("apaas_app_id", None)
+            params["required"] = [r for r in params.get("required", []) if r != "apaas_app_id"]
+            out.append(t2)
+    return out
+
+
+async def _grounded_brainstorm(params, scene_type, apaas_app_id, platform_env_id, app_name, db):
+    """bound 首轮:先调读工具了解应用,再输出开发 SPEC。
+
+    async generator:yield read_app_context step 事件;最后 yield
+    {"__spec__": <markdown> or None}(None = 调用方回退旧 brainstorm)。
+    apaas_app_id 每次工具调用都被后端锁定,agent 改不了(防跨应用读)。
+    """
+    try:
+        from app.agents.coding.llm_config import load_coding_llm_config
+        base_url, api_key, llm_model = await load_coding_llm_config(
+            params.tenant_id, params.selected_model or "")
+    except Exception as exc:
+        logger.warning("[grounding] LLM 配置失败,回退: %s", exc)
+        yield {"__spec__": None}
+        return
+
+    system = (
+        f"你在为已有应用「{app_name}」做自开发扩展。**先调用读工具**了解该应用的数据模型、菜单"
+        f"(必要时多查几次),理解清楚后**只输出一份结构化「开发 SPEC 确认」markdown**"
+        f"(含:页面/组件名称、自开发类型、实现范围、功能概述、需求拆解与边界、页面结构)。"
+        f"SPEC 必须引用该应用的真实模型/字段/菜单,不要脑补。不要输出 SPEC 以外的话。"
+    )
+    messages = [
+        {"role": "system", "content": system},
+        {"role": "user", "content": (params.message or "")[:1000]},
+    ]
+    tool_defs = _grounding_tool_defs()
+
+    for _turn in range(_GROUNDING_MAX_TURNS):
+        try:
+            async with httpx.AsyncClient(
+                timeout=httpx.Timeout(connect=10, read=60, write=10, pool=10)
+            ) as client:
+                resp = await client.post(
+                    f"{base_url}/chat/completions",
+                    headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"},
+                    json={
+                        "model": llm_model, "messages": messages, "tools": tool_defs,
+                        "tool_choice": "auto", "temperature": 0.3, "max_tokens": 1500,
+                    },
+                )
+                resp.raise_for_status()
+                data = resp.json()
+        except Exception as exc:
+            logger.warning("[grounding] LLM 调用失败 turn=%d,回退: %s", _turn, exc)
+            yield {"__spec__": None}
+            return
+
+        msg = data.get("choices", [{}])[0].get("message", {})
+        tool_calls = msg.get("tool_calls") or []
+        content = (msg.get("content") or "").strip()
+        messages.append({"role": "assistant", "content": content, "tool_calls": tool_calls or None})
+
+        if not tool_calls:
+            yield {"__spec__": content or None}
+            return
+
+        for tc in tool_calls:
+            fn = tc.get("function", {}).get("name", "")
+            tc_id = tc.get("id") or fn
+            if fn not in _GROUNDING_TOOL_NAMES:
+                messages.append({"role": "tool", "tool_call_id": tc_id,
+                                 "content": f"Error: 工具 {fn!r} 不可用"})
+                continue
+            try:
+                args = json.loads(tc.get("function", {}).get("arguments") or "{}")
+            except json.JSONDecodeError:
+                args = {}
+            args["apaas_app_id"] = apaas_app_id  # 后端锁定,严防跨应用读
+            label = "读取应用模型" if fn == "list_apaas_app_models" else "读取应用菜单"
+            yield {"type": "step", "step": "read_app_context", "status": "running",
+                   "data": {"label": f"📖 {label}…", "app": app_name}}
+            try:
+                result = await _call_grounding_tool(fn, args, platform_env_id)
+                result_str = json.dumps(result, ensure_ascii=False)
+            except Exception as exc:
+                result_str = f"Error: {exc}"
+            yield {"type": "step", "step": "read_app_context", "status": "done",
+                   "data": {"label": f"📖 {label}", "app": app_name}}
+            messages.append({"role": "tool", "tool_call_id": tc_id, "content": result_str[:6000]})
+
+    yield {"__spec__": None}  # 轮次耗尽没出 SPEC → 回退
 
 
 # ── Pipeline 核心 ──────────────────────────────────

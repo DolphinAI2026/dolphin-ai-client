@@ -50,3 +50,58 @@ async def test_resolve_bound_app_none_when_missing_platform_fields():
 async def test_resolve_bound_app_none_when_no_app_id():
     from app.coding import pipeline as pl
     assert await pl._resolve_bound_app(tenant_id=1, app_id=None, db=MagicMock()) is None
+
+
+# ── Task 3: _grounded_brainstorm(tool-loop:先读应用再出 SPEC) ────
+
+async def test_grounded_brainstorm_reads_app_then_emits_spec(monkeypatch):
+    from app.coding import pipeline as pl
+
+    monkeypatch.setattr("app.agents.coding.llm_config.load_coding_llm_config",
+                        AsyncMock(return_value=("http://llm", "k", "m")))
+
+    # LLM 两次响应:① 要调 list_apaas_app_models  ② 无工具→输出 SPEC
+    calls = {"n": 0}
+    def _post(url, **kw):
+        calls["n"] += 1
+        if calls["n"] == 1:
+            msg = {"tool_calls": [{"id": "c1", "function": {"name": "list_apaas_app_models", "arguments": "{}"}}], "content": ""}
+        else:
+            msg = {"tool_calls": None, "content": "## 开发 SPEC 确认\n页面名称:商机看板"}
+        r = MagicMock(); r.raise_for_status = MagicMock()
+        r.json = MagicMock(return_value={"choices": [{"message": msg}]})
+        return r
+    client = MagicMock()
+    client.post = AsyncMock(side_effect=_post)
+    client.__aenter__ = AsyncMock(return_value=client)
+    client.__aexit__ = AsyncMock(return_value=False)
+    monkeypatch.setattr(pl.httpx, "AsyncClient", MagicMock(return_value=client))
+
+    # mock 工具执行(断言 apaas_app_id 被后端锁定)
+    seen = {}
+    async def _fake_tool(name, args, env_id):
+        seen["name"] = name; seen["apaas_app_id"] = args.get("apaas_app_id"); seen["env_id"] = env_id
+        return {"ok": True, "models": [{"name": "商机"}]}
+    monkeypatch.setattr(pl, "_call_grounding_tool", _fake_tool)
+
+    params = MagicMock(tenant_id=1, selected_model="m", message="给商机做个看板")
+    events = []; spec = None
+    async for ev in pl._grounded_brainstorm(params, "web_page", "84799", 3, "通用B2B CRM", db=MagicMock()):
+        if "__spec__" in ev:
+            spec = ev["__spec__"]
+        else:
+            events.append(ev)
+
+    assert "商机看板" in (spec or "")
+    assert seen["apaas_app_id"] == "84799"      # 后端锁定,agent 改不了
+    assert seen["env_id"] == 3
+    assert any(e.get("step") == "read_app_context" for e in events)
+
+
+async def test_grounded_brainstorm_fallbacks_on_llm_error(monkeypatch):
+    from app.coding import pipeline as pl
+    monkeypatch.setattr("app.agents.coding.llm_config.load_coding_llm_config",
+                        AsyncMock(side_effect=RuntimeError("no llm")))
+    params = MagicMock(tenant_id=1, selected_model="m", message="x")
+    out = [ev async for ev in pl._grounded_brainstorm(params, "web_page", "84799", 3, "X", db=MagicMock())]
+    assert out == [{"__spec__": None}]   # LLM 配置失败 → 回退信号
