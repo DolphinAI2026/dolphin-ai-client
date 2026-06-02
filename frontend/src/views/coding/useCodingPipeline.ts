@@ -112,6 +112,13 @@ export function useCodingPipeline(deps: PipelineDeps) {
         completeStepMsg('detect_scene', `识别为 ${label}`)
       },
     },
+    read_app_context: {
+      running: '正在读取应用上下文…',
+      done: '已读取应用上下文',
+      onDone: (data) => {
+        completeStepMsg('read_app_context', data?.label || '已读取应用上下文')
+      },
+    },
     create_workspace: {
       running: '正在初始化工程脚手架...',
       done: '工程脚手架已初始化',
