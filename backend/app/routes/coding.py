@@ -2538,6 +2538,80 @@ def _build_upload_form_data(
     return form
 
 
+async def _build_and_upload_kits(*, ws_mgr, ws_id: str, env, db) -> dict:
+    """构建 workspace → 上传 developmentKit(组件库)→ 用 fileName 反查 kit_id。
+
+    供 deploy-to-app 复用。调用方需先确保 env.token 有效(deploy_to_app 用
+    extension._ensure_env_token);故本函数内不再做 401 自愈。
+    返回 {kit_ids, file_type, project_type, display_name, file_names}。
+    """
+    import time as _t
+    import uuid as _u
+
+    ws_path = ws_mgr.get_workspace_path(ws_id)
+    meta = ws_mgr._read_meta(ws_path)
+    project_type = meta.get("project_type", "")
+    display_name = meta.get("display_name") or meta.get("project_name", ws_id)
+
+    # 1. 构建 + 打包(双端两包 / 后端 jar / 其余单 zip)
+    if project_type == ProjectType.FORM_COMPONENT_DUAL.value:
+        packages = await ws_mgr.build_and_package_dual(ws_id)  # [(path, fileType), ...]
+    else:
+        ft = _PROJECT_TYPE_TO_FILE_TYPE.get(project_type)
+        if not ft:
+            raise HTTPException(status_code=400, detail=f"不支持上传的项目类型: {project_type}")
+        if project_type in {"backend-api", "backend-feign", "backend-scheduled"}:
+            out_dir = ws_mgr._get_build_output_dir(ws_path)
+            jars = [j for j in out_dir.glob("*.jar") if not j.name.endswith(".original")]
+            if not jars:
+                raise HTTPException(status_code=500, detail="未找到编译产物 JAR,请先在 IDE 构建项目")
+            packages = [(str(jars[0]), ft)]
+        else:
+            packages = [(await ws_mgr.build_and_package(ws_id), ft)]
+
+    add_url = f"{env.base_url.rstrip('/')}/xdap-app/selfdevelopment/add/developmentKit"
+    update_url = f"{env.base_url.rstrip('/')}/xdap-app/selfdevelopment/update/developmentKit"
+    file_names = [Path(p).name for p, _ in packages]
+    key_word = file_names[0][:-4] if file_names[0].endswith(".zip") else file_names[0]
+    existing = await _query_existing_development_kits(
+        env.base_url, env.platform_tenant_id, env.token, key_word,
+    )
+
+    # 2. 逐包上传(update-if-exists)
+    for zip_str, ft in packages:
+        fp = Path(zip_str)
+        kit = _find_kit_by_filename(existing, fp.name)
+        form_data = _build_upload_form_data(
+            file_type=ft, description=f"{display_name} - 由 apaas-builder 装回",
+            version_code=_u.uuid4().hex, upload_id=str(int(_t.time() * 1000)), existing_kit=kit,
+        )
+        target = update_url if kit else add_url
+        ct = "application/java-archive" if fp.suffix == ".jar" else "application/zip"
+        async with httpx.AsyncClient(verify=False, timeout=120.0) as http:
+            r = await http.post(target, headers={
+                "xdaptenantid": env.platform_tenant_id, "xdaptoken": env.token,
+                "xdaptimestamp": str(int(_t.time() * 1000)),
+            }, files={"file": (fp.name, fp.read_bytes(), ct)}, data=form_data)
+        try:
+            rj = r.json()
+        except Exception:
+            raise HTTPException(status_code=502, detail=f"平台上传响应非 JSON (status={r.status_code})")
+        if rj.get("code") not in ("ok", 200):
+            raise HTTPException(status_code=500, detail=rj.get("message") or rj.get("msg") or "上传失败")
+
+    # 3. 反查 kit_id(add/update 响应不一定带 id)
+    client = APaaSClient(base_url=env.base_url, tenant_id=env.platform_tenant_id, token=env.token)
+    kits = await client.query_app_dev_kits("", file_name=key_word)
+    kit_ids = [str(k["id"]) for fn in file_names for k in kits if k.get("fileName") == fn and k.get("id")]
+    return {
+        "kit_ids": kit_ids,
+        "file_type": packages[0][1],
+        "project_type": project_type,
+        "display_name": display_name,
+        "file_names": file_names,
+    }
+
+
 @router.post("/workspace/{ws_id}/upload-to-platform")
 async def upload_workspace_to_platform(
     ws_id: str,
