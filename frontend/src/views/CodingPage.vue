@@ -3513,6 +3513,13 @@ watch(() => route.path, () => {
   max-width: 880px;
   margin-inline: auto;
 }
+/* assistant 内容填满该列(否则 fit-content 挤成窄条、SPEC 表格没地方),
+   与上下工具卡同宽,整列宽度一致更整齐(临时预览页截图自测确认过) */
+.stream-pane :deep(.ac-row.assistant .ac-assistant-wrap),
+.stream-pane :deep(.ac-bubble.assistant-naked) {
+  width: 100%;
+  max-width: 100%;
+}
 
 .stream-messages {
   flex: 1;
