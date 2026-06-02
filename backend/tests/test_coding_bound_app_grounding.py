@@ -105,3 +105,57 @@ async def test_grounded_brainstorm_fallbacks_on_llm_error(monkeypatch):
     params = MagicMock(tenant_id=1, selected_model="m", message="x")
     out = [ev async for ev in pl._grounded_brainstorm(params, "web_page", "84799", 3, "X", db=MagicMock())]
     assert out == [{"__spec__": None}]   # LLM 配置失败 → 回退信号
+
+
+# ── Task 4: _first_turn_brainstorm 分支选择 ─────────────────────
+
+async def test_unbound_skips_grounding(monkeypatch):
+    from app.coding import pipeline as pl
+    monkeypatch.setattr(pl, "_resolve_bound_app", AsyncMock(return_value=None))
+    called = {"grounded": False}
+    async def _g(*a, **k):
+        called["grounded"] = True
+        yield {"__spec__": "x"}
+    monkeypatch.setattr(pl, "_grounded_brainstorm", _g)
+    monkeypatch.setattr(pl, "_generate_brainstorm_proposal", AsyncMock(return_value="OLD SPEC"))
+    params = MagicMock(app_id=None, tenant_id=1, message="做个页面", selected_model="m")
+    spec = None
+    async for ev in pl._first_turn_brainstorm(params, "web_page", db=MagicMock(), effective_model="m"):
+        if "__spec__" in ev:
+            spec = ev["__spec__"]
+    assert called["grounded"] is False
+    assert spec == "OLD SPEC"
+
+
+async def test_bound_uses_grounding(monkeypatch):
+    from app.coding import pipeline as pl
+    monkeypatch.setattr(pl, "_resolve_bound_app", AsyncMock(return_value=("84799", 3, "通用B2B CRM")))
+    async def _g(params, scene_type, apaas_app_id, env_id, app_name, db):
+        yield {"type": "step", "step": "read_app_context", "status": "done", "data": {}}
+        yield {"__spec__": "GROUNDED SPEC 引用商机模型"}
+    monkeypatch.setattr(pl, "_grounded_brainstorm", _g)
+    monkeypatch.setattr(pl, "_generate_brainstorm_proposal", AsyncMock(return_value="OLD SPEC"))
+    params = MagicMock(app_id="10", tenant_id=1, message="给商机做看板", selected_model="m")
+    spec = None; steps = []
+    async for ev in pl._first_turn_brainstorm(params, "web_page", db=MagicMock(), effective_model="m"):
+        if "__spec__" in ev:
+            spec = ev["__spec__"]
+        else:
+            steps.append(ev)
+    assert spec == "GROUNDED SPEC 引用商机模型"
+    assert any(s.get("step") == "read_app_context" for s in steps)
+
+
+async def test_bound_grounding_none_falls_back_to_old(monkeypatch):
+    from app.coding import pipeline as pl
+    monkeypatch.setattr(pl, "_resolve_bound_app", AsyncMock(return_value=("84799", 3, "X")))
+    async def _g(*a, **k):
+        yield {"__spec__": None}
+    monkeypatch.setattr(pl, "_grounded_brainstorm", _g)
+    monkeypatch.setattr(pl, "_generate_brainstorm_proposal", AsyncMock(return_value="OLD SPEC"))
+    params = MagicMock(app_id="10", tenant_id=1, message="x", selected_model="m")
+    spec = None
+    async for ev in pl._first_turn_brainstorm(params, "web_page", db=MagicMock(), effective_model="m"):
+        if "__spec__" in ev:
+            spec = ev["__spec__"]
+    assert spec == "OLD SPEC"

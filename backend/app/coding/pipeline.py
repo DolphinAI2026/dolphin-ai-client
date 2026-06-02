@@ -1483,6 +1483,32 @@ async def _grounded_brainstorm(params, scene_type, apaas_app_id, platform_env_id
     yield {"__spec__": None}  # 轮次耗尽没出 SPEC → 回退
 
 
+async def _first_turn_brainstorm(params, scene_type, db, effective_model):
+    """首轮 brainstorm 统一入口。
+
+    bound(app_id 解析到平台应用)→ 走 _grounded_brainstorm(先读应用上下文再写 SPEC),
+    否则(含 grounded 回退)→ 旧 _generate_brainstorm_proposal。
+    async generator:yield read_app_context step 事件;最后 yield {"__spec__": <md or None>}。
+    """
+    handle = await _resolve_bound_app(params.tenant_id, getattr(params, "app_id", None), db)
+    if handle:
+        apaas_app_id, env_id, app_name = handle
+        got_spec = None
+        async for ev in _grounded_brainstorm(params, scene_type, apaas_app_id, env_id, app_name, db):
+            if "__spec__" in ev:
+                got_spec = ev["__spec__"]
+            else:
+                yield ev  # read_app_context running/done
+        if got_spec:
+            yield {"__spec__": got_spec}
+            return
+        # grounded 回退(没拉到/没出 SPEC)→ 落到旧逻辑
+
+    proposal = await _generate_brainstorm_proposal(
+        params.tenant_id, effective_model, scene_type, requirement=params.message)
+    yield {"__spec__": proposal or None}
+
+
 # ── Pipeline 核心 ──────────────────────────────────
 
 async def run_coding_pipeline(
@@ -1800,10 +1826,14 @@ async def run_coding_pipeline(
             # proposal 仍然输出，供用户阅读；workspace 在下方按需创建。
             _inline_brainstorm_proposal: str = ""
             yield _record_event({"type": "step", "step": "brainstorm", "status": "running"})
-            proposal = await _generate_brainstorm_proposal(
-                params.tenant_id, effective_model, scene_type,
-                requirement=params.message,
-            )
+            # bound「在应用上定制」→ 先读应用上下文再写 SPEC(read_app_context step 在此 yield);
+            # 否则走旧 _generate_brainstorm_proposal。两条路最终都给出 proposal markdown。
+            proposal = None
+            async for _ev in _first_turn_brainstorm(params, scene_type, db, effective_model):
+                if "__spec__" in _ev:
+                    proposal = _ev["__spec__"]
+                else:
+                    yield _record_event(_ev)
             if proposal:
                 _inline_brainstorm_proposal = proposal
                 await save_coding_message(db, conversation_id, "assistant",
