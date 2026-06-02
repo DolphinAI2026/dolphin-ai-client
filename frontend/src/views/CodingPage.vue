@@ -3505,6 +3505,15 @@ watch(() => route.path, () => {
   min-height: 0;
 }
 
+/* 把对话收进一个居中的可读列 —— 宽主区不再 edge-to-edge 左铺、右侧留大片空,
+   跟 Builder 侧栏 / Claude / ChatGPT 一样耐看。仅 CodingPage 作用域,不影响共享组件别处。
+   每行限宽居中,行内 user 右 / assistant 左 的对齐语义保持不变。 */
+.stream-pane :deep(.ac-row) {
+  width: 100%;
+  max-width: 880px;
+  margin-inline: auto;
+}
+
 .stream-messages {
   flex: 1;
   overflow-y: auto;
@@ -3904,6 +3913,11 @@ watch(() => route.path, () => {
   padding: 10px 16px 14px;
   border-top: 1px solid var(--t-border-subtle);
   background: var(--t-bg-base);
+}
+/* 输入框收进与对话同宽的居中列(880),全宽分隔线保留 */
+.chat-input-bar :deep(.ucc) {
+  max-width: 880px;
+  margin-inline: auto;
 }
 .chat-input-wrapper {
   display: flex;
