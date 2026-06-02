@@ -66,6 +66,7 @@ class PipelineParams:
         conversation_id: Optional[int] = None,
         selected_model: Optional[str] = None,
         project_id: Optional[int] = None,
+        app_id: Optional[str] = None,  # 分场景「在应用上定制」绑定的本地 Application.id
         # 预计算的 request-scoped 值
         code_server_base_url: str = "",
         api_base_builder: Optional[str] = None,  # 用于构建 IDE proxy URL 的函数
@@ -79,6 +80,7 @@ class PipelineParams:
         self.conversation_id = conversation_id
         self.selected_model = selected_model
         self.project_id = project_id
+        self.app_id = app_id
         self.code_server_base_url = code_server_base_url or settings.code_server_base_url or ""
         self.api_base_builder = api_base_builder
         self.ide_token = ide_token

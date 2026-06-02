@@ -83,6 +83,7 @@ class CodingProfile(HarnessProfile):
             conversation_id=meta.get("conversation_id") or thread_ctx.conversation_id,
             selected_model=meta.get("selected_model"),
             project_id=meta.get("project_id"),
+            app_id=meta.get("app_id"),
             code_server_base_url=meta.get("code_server_base_url", ""),
             api_base_builder=meta.get("api_base_builder"),
             ide_token=meta.get("ide_token"),

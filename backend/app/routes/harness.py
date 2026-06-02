@@ -161,6 +161,7 @@ class CodingPipelineRequest(BaseModel):
     conversation_id: int | None = None
     selected_model: str | None = None
     project_id: int | None = None
+    app_id: str | None = None  # 分场景「在应用上定制」选中的本地 Application.id
 
 
 class IDECodingPipelineRequest(BaseModel):
@@ -168,6 +169,7 @@ class IDECodingPipelineRequest(BaseModel):
     conversation_id: int | None = None
     selected_model: str | None = None
     project_id: int | None = None
+    app_id: str | None = None
 
 
 @router.post("/coding/pipeline")
@@ -188,6 +190,7 @@ async def coding_pipeline(
         "conversation_id": req.conversation_id,
         "selected_model": req.selected_model,
         "project_id": req.project_id,
+        "app_id": req.app_id,
     }
     _inject_coding_metadata(metadata, ctx, request)
 
