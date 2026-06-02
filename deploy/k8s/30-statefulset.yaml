@@ -60,6 +60,11 @@ spec:
               value: "/root/apaas-builder/workspaces"
             - name: APAAS_NPM_CACHE_DIR
               value: "/root/apaas-builder/workspaces/.npm-cache"
+            # df-apaas-cli 脚手架（@x-apaas/df-apaas-cli scoped 私有包）的源。
+            # 代码已默认走这个 group 源；显式注入便于运维查看/覆盖。
+            # 公共依赖仍走默认源（npmmirror），只有 @x-apaas/* 走这里。
+            - name: APAAS_PRIVATE_NPM_REGISTRY
+              value: "https://registry.dfy.definesys.cn/repository/apaas-npm-group/"
           ports:
             - { name: api, containerPort: 8003 }
             - { name: ide, containerPort: 8080 }
