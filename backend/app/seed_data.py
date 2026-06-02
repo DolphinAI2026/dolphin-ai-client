@@ -156,6 +156,7 @@ _OBSOLETE_BUILTIN_NAMES = {
     "内置 Coding Sonnet",
     "内置 Coding Opus",
     "内置通用模型 (Dolphin gpt-5.5)",  # 旧名，新版改成 "内置通用模型 (gpt-5.5)"
+    "dolphin.ai",  # 2026-06-02 旧 config_name(dolphin 集成已删，只剩 omnigate 网关）→ 清理，sync 会重新 seed 规范名
 }
 
 
