@@ -258,7 +258,6 @@
                     </div>
                   </el-popover>
                 </div>
-                <VoiceInputButton v-model="userInput" :llm-config-id="selectedCodingModelOption?.id ?? null" />
               </template>
             </UnifiedChatComposer>
           </div>
@@ -573,7 +572,6 @@ import BuilderFrame from '@/components/BuilderFrame.vue'
 import FileCard from '@/components/FileCard.vue'
 import SessionSidebar, { type SessionItem as SidebarSessionItem } from '@/components/common/SessionSidebar.vue'
 import AgentConversation from '@/components/common/AgentConversation.vue'
-import VoiceInputButton from '@/components/common/VoiceInputButton.vue'
 import type { AgentMessage, AgentToolPayload } from '@/components/common/agent-conversation/types'
 import { useCodingModel } from './coding/useCodingModel'
 import { useStreamMessages, renderMarkdown } from './coding/useStreamMessages'
