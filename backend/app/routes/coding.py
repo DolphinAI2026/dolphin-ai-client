@@ -31,6 +31,7 @@ from app.coding.scenes import SceneType, get_scene, get_all_scenes, get_scenes_b
 from app.coding.generator import CodingGenerator
 from app.coding.prompts import AGENT_SYSTEM_PROMPT
 from app.coding.workspace import WorkspaceManager, ProjectType
+from app.coding.apaas_tools import call_apaas_with_relogin
 from app.llm_client import LLMClient
 from app.apaas_client import APaaSClient
 from app.config import settings
@@ -2938,21 +2939,23 @@ async def _deploy_to_app_impl(ws_id: str, local_app_id, ctx, db) -> dict:
     if not up["kit_ids"]:
         raise HTTPException(status_code=502, detail="上传成功但反查不到 kit id,无法关联到应用")
 
-    client = APaaSClient(base_url=env.base_url, tenant_id=env.platform_tenant_id, token=env.token)
-    await client.enable_self_dev_config(apaas_app_id, "ENABLE")
-    await client.attach_apaas_source_relation(apaas_app_id, object_ids=up["kit_ids"])
+    # 所有 apaas write 走 call_apaas_with_relogin:token 过期 → 自动重登重试一次,
+    # 不再把 401「Unauthorized」抛给用户(铁律:apaas 调用别裸调)。
+    env_id = env.id
+    await call_apaas_with_relogin(env_id, db, lambda c: c.enable_self_dev_config(apaas_app_id, "ENABLE"))
+    await call_apaas_with_relogin(env_id, db, lambda c: c.attach_apaas_source_relation(apaas_app_id, object_ids=up["kit_ids"]))
 
     menu = None
     if up["project_type"] in _PAGE_TYPES:
         register = up.get("register_name") or up["display_name"]
-        await client.create_self_dev_menu(apaas_app_id, menu_name=up["display_name"], link_url=register)
+        await call_apaas_with_relogin(env_id, db, lambda c: c.create_self_dev_menu(apaas_app_id, menu_name=up["display_name"], link_url=register))
         menu = up["display_name"]
 
     # republish:取当前版本 → deploy_app;版本冲突则 patch+1 重试
-    detail = await client.query_app_detail(apaas_app_id)
+    detail = await call_apaas_with_relogin(env_id, db, lambda c: c.query_app_detail(apaas_app_id))
     version = str(detail.get("currentVersion") or detail.get("version") or "1.0.0")
     try:
-        await client.deploy_app(apaas_app_id, version, abstract="自开发装回自动重发")
+        await call_apaas_with_relogin(env_id, db, lambda c: c.deploy_app(apaas_app_id, version, abstract="自开发装回自动重发"))
     except Exception as e:
         if "版本" in str(e) or "version" in str(e).lower():
             parts = version.split(".")
@@ -2961,7 +2964,7 @@ async def _deploy_to_app_impl(ws_id: str, local_app_id, ctx, db) -> dict:
             except (ValueError, IndexError):
                 raise
             version = ".".join(parts)
-            await client.deploy_app(apaas_app_id, version, abstract="自开发装回自动重发")
+            await call_apaas_with_relogin(env_id, db, lambda c: c.deploy_app(apaas_app_id, version, abstract="自开发装回自动重发"))
         else:
             raise
 
