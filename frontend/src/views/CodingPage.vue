@@ -116,13 +116,12 @@
             </button>
           </header>
 
-          <div
+          <CodingSceneEntry
             v-if="!isStreaming && streamMessages.length === 0"
-            class="coding-empty-thread"
-          >
-            <div class="coding-empty-title">这个开发会话还没有消息</div>
-            <div class="coding-empty-sub">直接在底部输入需求，AI 会整理任务并创建工作区。</div>
-          </div>
+            :apps="sceneApps"
+            :default-app-id="sceneDefaultAppId"
+            @submit="onSceneSubmit"
+          />
 
           <AgentConversation
             v-else
@@ -165,7 +164,7 @@
           </AgentConversation>
 
           <!-- Chat 底部输入框（非流式时可用） -->
-          <div v-if="!isStreaming" class="chat-input-bar">
+          <div v-if="!isStreaming && streamMessages.length > 0" class="chat-input-bar">
             <UnifiedChatComposer
               v-model="userInput"
               :attachments="codingComposerAttachments"
@@ -396,6 +395,12 @@
         <!-- 产物清单 tab -->
         <div v-if="codingArtifactTab === 'files'" class="cap-scroll">
           <template v-if="codingArtifactsHasAny">
+            <div class="cap-deploy-cta">
+              <button class="cap-deploy-btn" @click="openInstallModal">
+                {{ isBoundDeploy ? '装回应用' : '发布到资产库' }}
+              </button>
+              <span class="cap-deploy-hint">{{ isBoundDeploy ? '关联到应用 + 重新发布让组件生效' : '上传到自开发资产库,跨应用复用' }}</span>
+            </div>
             <template v-if="codingArtifacts.new.length > 0">
               <div class="cap-section-head">
                 <span class="cap-badge cap-badge-emerald">新增 {{ codingArtifacts.new.length }}</span>
@@ -474,6 +479,17 @@
         </div>
       </aside>
     </div>
+    <InstallModal
+      :visible="installModalVisible"
+      :mode="isBoundDeploy ? 'bound' : 'lib'"
+      :kit-name="codingStore.workspace?.display_name || codingStore.workspace?.project_name || '自开发包'"
+      :app-name="isBoundDeploy ? (sceneApps.find(a => a.id === effectiveDeployAppId)?.name || '应用') : ''"
+      :rows="installRows"
+      :compiled="true"
+      :loading="installLoading"
+      @close="installModalVisible = false"
+      @confirm="confirmDeploy"
+    />
   </BuilderFrame>
 
 </template>
@@ -489,6 +505,8 @@ import type { PlatformEnv } from '@/api/platformEnv'
 import { useUserStore } from '@/stores/user'
 import { codingApi, isIdeUnavailableError } from '@/api/coding'
 import type { CodingConversation, WorkspaceInfo, ReplayStreamMessage } from '@/api/coding'
+import CodingSceneEntry from './coding/CodingSceneEntry.vue'
+import InstallModal from './coding/InstallModal.vue'
 import { gitConnectionApi } from '@/api/gitConnection'
 import { applicationApi } from '@/api/application'
 import { useThemeStore } from '@/stores/theme'
@@ -1101,6 +1119,69 @@ const sceneCategoryToProjectType: Record<string, string> = {
 const AI_BUILDER_PENDING_CODING_KEY = 'ai_builder_pending_coding'
 // F3 (2026-06-02): 记住 Builder→Coding handoff 的来源应用，给「← 回 Builder」回跳用。
 const handoffSourceApp = ref<{ id: string; name: string } | null>(null)
+
+// ── 分场景部署:装回应用 / 发布到资产库(借鉴 Claude Design 原型 CodingEntry + InstallModal）──
+const sceneApps = ref<{ id: number; name: string }[]>([])
+const deployMode = ref<'bound' | 'lib'>('bound')
+const deployAppId = ref<number | null>(null)
+const installModalVisible = ref(false)
+const installLoading = ref(false)
+
+const sceneDefaultAppId = computed<number | null>(() => {
+  const h = handoffSourceApp.value?.id
+  if (h != null && Number.isFinite(Number(h))) return Number(h)
+  const e = embeddedAppId.value
+  return e != null && Number.isFinite(Number(e)) ? Number(e) : null
+})
+const effectiveDeployAppId = computed<number | null>(() => deployAppId.value ?? sceneDefaultAppId.value)
+const isBoundDeploy = computed(() => deployMode.value === 'bound' && effectiveDeployAppId.value != null)
+const installRows = computed(() => isBoundDeploy.value ? [
+  { icon: 'doc', title: '应用页面 / 组件', desc: '页面类挂到应用菜单下;组件类在表单设计器中引用' },
+  { icon: 'flow', title: '路由 / 菜单', desc: '页面类自动注册自开发菜单' },
+  { icon: 'lock', title: '权限', desc: '沿用应用现有角色的数据范围' },
+  { icon: 'store', title: '资产登记', desc: '同时登记到自开发资产库,可跨应用复用' },
+] : [
+  { icon: 'store', title: '自开发资产库', desc: '上传到组件库,可在任意应用的表单设计器中引用' },
+])
+
+function onSceneSubmit(p: { mode: 'bound' | 'lib'; appId: number | null; text: string }) {
+  deployMode.value = p.mode
+  deployAppId.value = p.appId
+  userInput.value = p.text
+  nextTick(() => { sendMessage() })
+}
+function openInstallModal() { installModalVisible.value = true }
+async function confirmDeploy() {
+  const wsId = codingStore.workspace?.id
+  if (!wsId) { ElMessage.warning('还没有工作区,无法部署'); return }
+  installLoading.value = true
+  try {
+    const r = await codingApi.deployToApp(
+      String(wsId),
+      isBoundDeploy.value ? (effectiveDeployAppId.value ?? undefined) : undefined,
+    )
+    installModalVisible.value = false
+    if (r.status === 'installed') {
+      ElMessage.success(`已装回应用${r.app?.name ? '「' + r.app.name + '」' : ''}${r.version ? ' · v' + r.version : ''}`)
+    } else {
+      ElMessage.success(r.hint || '已发布到自开发资产库')
+    }
+  } catch (e: any) {
+    ElMessage.error(e?.response?.data?.detail || e?.message || '装回失败')
+  } finally {
+    installLoading.value = false
+  }
+}
+
+// apps 列表(给分场景入口的「目标应用」选择器)—— 单独 onMounted,additive 不动既有 onMounted
+onMounted(async () => {
+  try {
+    const apps = await applicationApi.list()
+    sceneApps.value = (apps || []).map((a: any) => ({
+      id: a.id, name: a.app_name || a.name || a.app_code || ('应用 ' + a.id),
+    }))
+  } catch { /* 列表加载失败不阻断入口 */ }
+})
 function backToBuilder() {
   const app = handoffSourceApp.value
   if (!app?.id) return
@@ -4065,6 +4146,30 @@ watch(() => route.path, () => {
   overflow-y: auto;
   padding: 12px;
 }
+.cap-deploy-cta {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 12px;
+  margin-bottom: 10px;
+  border-radius: 12px;
+  background: var(--brand-soft);
+  border: 1px solid var(--brand-soft-2);
+}
+.cap-deploy-btn {
+  height: 38px;
+  border: none;
+  border-radius: 8px;
+  cursor: pointer;
+  background: var(--blue-950);
+  color: #fff;
+  font-size: 13.5px;
+  font-weight: 600;
+  font-family: var(--font-mono);
+  transition: transform 0.15s;
+}
+.cap-deploy-btn:hover { transform: translateY(-1px); }
+.cap-deploy-hint { font-size: 11px; color: var(--text-3); text-align: center; }
 .cap-section-head {
   display: flex;
   align-items: center;
