@@ -1200,7 +1200,22 @@ onMounted(async () => {
   } else {
     const conversationId = Number(route.query.conversation_id)
     if (Number.isFinite(conversationId) && conversationId > 0) {
-      await loadCodingConversationOnly(conversationId)
+      // F2: 直接导航到 /coding?conversation_id=N 时，若该会话有 workspace（codegen 会话），
+      // 走 openWorkspaceById 恢复结构化工具卡历史（与 onSidebarCodingSelect 一致）；
+      // 无 workspace（如 READ 问答会话）才降级为纯文本 loadCodingConversationOnly。
+      let wsForConv: string | null = null
+      try {
+        const relation = await codingApi.getConversationWorkspace(conversationId)
+        wsForConv = relation.workspace_id
+      } catch {
+        wsForConv = null
+      }
+      if (wsForConv) {
+        await openWorkspaceById(wsForConv)
+        router.replace({ path: '/coding', query: { conversation_id: String(conversationId), workspace_id: wsForConv } }).catch(() => {})
+      } else {
+        await loadCodingConversationOnly(conversationId)
+      }
     } else {
       selectedCodingModelValue.value = normalizeCodingModelValue(selectedCodingModelValue.value)
       await maybeConsumeAiBuilderDispatch()
