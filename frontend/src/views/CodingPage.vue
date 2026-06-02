@@ -905,6 +905,7 @@ const showCodingUnselected = computed(() =>
 
 async function loadCodingConversationOnly(conversationId: number) {
   handoffSourceApp.value = null  // F3: 切到已有会话时清掉 handoff 回跳链，避免串到别的会话
+  deployAppId.value = null; deployMode.value = 'bound'  // 同清分场景部署绑定，避免把上个会话选的应用串到这个会话(codegen app_id + 装回目标)
   const messages = await codingApi.getMessages(conversationId)
   codingStore.reset()
   codingStore.conversationId = conversationId
@@ -1147,6 +1148,14 @@ const installRows = computed(() => isBoundDeploy.value ? [
 function onSceneSubmit(p: { mode: 'bound' | 'lib'; appId: number | null; text: string }) {
   deployMode.value = p.mode
   deployAppId.value = p.appId
+  // bound:记下选中的目标应用 —— codegen 经 boundAppId 拿 app_id 复用其模型/接口,
+  // 同时让会话头显示该应用(修「选了应用却没带过去」)。lib:清掉,不绑应用。
+  if (p.mode === 'bound' && p.appId != null) {
+    const name = sceneApps.value.find(a => a.id === p.appId)?.name || '应用'
+    handoffSourceApp.value = { id: String(p.appId), name }
+  } else {
+    handoffSourceApp.value = null
+  }
   userInput.value = p.text
   nextTick(() => { sendMessage() })
 }
@@ -1449,6 +1458,7 @@ function parseAssistantHistory(text: string) {
 
 function startNewWorkspace() {
   handoffSourceApp.value = null
+  deployAppId.value = null; deployMode.value = 'bound'  // 重置分场景部署绑定(新会话从分场景入口重新选)
   codingStore.reset()
   persistedCodingModelValue.value = null
   selectedCodingModelValue.value = normalizeCodingModelValue(selectedCodingModelValue.value)
@@ -1546,6 +1556,7 @@ const { sendMessage } = useCodingPipeline({
   attachedPreviewUrl,
   isUploading,
   isCreating,
+  boundAppId: deployAppId,
   onIdeUnavailable: setWebIdeUnavailable,
   onIdeAvailable: setWebIdeAvailable,
 })

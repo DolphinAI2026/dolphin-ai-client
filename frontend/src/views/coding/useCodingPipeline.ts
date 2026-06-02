@@ -47,6 +47,9 @@ export interface PipelineDeps {
   attachedPreviewUrl: Ref<string | null>
   isUploading: Ref<boolean>
   isCreating: Ref<boolean>
+  /** 分场景入口「在应用上定制」选中的目标应用 id —— 绑定给 codegen（首条消息带 app_id）。
+   *  不走 route.query.app_id：那个会触发 embeddedAppId 进嵌入式布局。 */
+  boundAppId?: Ref<number | null>
   onIdeUnavailable?: () => void
   onIdeAvailable?: () => void
 }
@@ -87,6 +90,7 @@ export function useCodingPipeline(deps: PipelineDeps) {
     attachedPreviewUrl,
     isUploading,
     isCreating,
+    boundAppId,
     onIdeUnavailable,
     onIdeAvailable,
   } = deps
@@ -343,7 +347,9 @@ export function useCodingPipeline(deps: PipelineDeps) {
       workspace_id: codingStore.workspace?.id || null,
       conversation_id: codingStore.conversationId || null,
       selected_model: selectedCodingModelValue.value || null,
-      app_id: (route.query.app_id as string) || null,
+      // 分场景入口选中的目标应用优先（codegen 据此复用 app 的模型/接口/枚举）；
+      // 回退 route.query.app_id（Builder handoff / 嵌入式）。
+      app_id: boundAppId?.value != null ? String(boundAppId.value) : ((route.query.app_id as string) || null),
       project_id: resolveRouteProjectId(),
       project_type: sceneCategoryToProjectType[sceneKey] || (route.query.type as string) || null,
     }
