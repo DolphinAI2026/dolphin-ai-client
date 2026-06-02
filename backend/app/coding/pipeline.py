@@ -1420,6 +1420,7 @@ async def _grounded_brainstorm(params, scene_type, apaas_app_id, platform_env_id
         f"(必要时多查几次),理解清楚后**只输出一份结构化「开发 SPEC 确认」markdown**"
         f"(含:页面/组件名称、自开发类型、实现范围、功能概述、需求拆解与边界、页面结构)。"
         f"SPEC 必须引用该应用的真实模型/字段/菜单,不要脑补。不要输出 SPEC 以外的话。"
+        f"**SPEC 要精简可扫读:控制在 900 字内、表格优先、短句,别三级嵌套列表、别贴大段代码。**"
     )
     messages = [
         {"role": "system", "content": system},
