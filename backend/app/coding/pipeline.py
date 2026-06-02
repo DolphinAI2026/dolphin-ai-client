@@ -1346,6 +1346,34 @@ def _get_brainstorm_state(history: list) -> tuple:
     return None, None, 0
 
 
+# ── bound「在应用上定制」grounding(先读应用上下文再写 SPEC) ──────────────
+
+async def _resolve_bound_app(tenant_id, app_id, db):
+    """本地 Application.id → (apaas_app_id, platform_env_id, app_name)。
+
+    缺 apaas_app_id 或 platform_env_id(应用没部署到平台 / 没绑环境)→ None,
+    调用方据此优雅退回「不带应用上下文」的旧 brainstorm。
+    """
+    if not app_id:
+        return None
+    try:
+        from app.models import Application
+        from sqlalchemy import select
+        res = await db.execute(
+            select(Application).where(
+                Application.id == int(app_id),
+                Application.tenant_id == tenant_id,
+            )
+        )
+        app = res.scalar_one_or_none()
+    except Exception as exc:
+        logger.warning("[grounding] 解析 bound app 失败 app_id=%r: %s", app_id, exc)
+        return None
+    if not app or not getattr(app, "apaas_app_id", None) or not getattr(app, "platform_env_id", None):
+        return None
+    return (str(app.apaas_app_id), int(app.platform_env_id), app.app_name or "应用")
+
+
 # ── Pipeline 核心 ──────────────────────────────────
 
 async def run_coding_pipeline(
