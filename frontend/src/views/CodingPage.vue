@@ -163,6 +163,24 @@
             </template>
           </AgentConversation>
 
+          <!-- 完成态卡片(对标 Builder「应用就绪」):codegen 完成且有产物时,给明确终态 + 行动入口 -->
+          <div
+            v-if="!isStreaming && streamMessages.length > 0 && codingArtifactsHasAny && !showCodingArtifactPanel"
+            class="coding-done-card"
+          >
+            <div class="cdc-main">
+              <el-icon class="cdc-check" :size="20"><CircleCheck /></el-icon>
+              <div class="cdc-text">
+                <strong>代码生成完成</strong>
+                <span>共 {{ codingArtifacts.new.length + codingArtifacts.modified.length }} 个文件已就绪</span>
+              </div>
+            </div>
+            <div class="cdc-actions">
+              <button class="cdc-btn-ghost" @click="toggleCodingArtifactPanel">查看产物</button>
+              <button class="cdc-btn-primary" @click="openInstallModal">{{ isBoundDeploy ? '装回应用' : '发布到资产库' }}</button>
+            </div>
+          </div>
+
           <!-- Chat 底部输入框（非流式时可用） -->
           <div v-if="!isStreaming && streamMessages.length > 0" class="chat-input-bar">
             <UnifiedChatComposer
@@ -499,7 +517,7 @@ import { API_PREFIX } from '@/utils/request'
 import { ref, computed, onMounted, onUnmounted, watch, nextTick } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
-import { ArrowLeft, ArrowDown, Download, Monitor, Delete, Fold, Expand, ChatDotRound, Document, Setting, Box } from '@element-plus/icons-vue'
+import { ArrowLeft, ArrowDown, Download, Monitor, Delete, Fold, Expand, ChatDotRound, Document, Setting, Box, CircleCheck } from '@element-plus/icons-vue'
 import { useCodingStore } from '@/stores/coding'
 import type { PlatformEnv } from '@/api/platformEnv'
 import { useUserStore } from '@/stores/user'
@@ -816,9 +834,9 @@ const codingArtifactPanelUserToggle = ref<boolean | null>(null)
 
 // 仅在「确有产物」时自动弹产物面板。去掉 isStreaming：之前一开始 streaming（含 READ 问答、
 // codegen 刚起步还没写文件）就弹空面板，体验差（用户反馈「还没产物不着急弹」）。
-const codingArtifactPanelAutoShow = computed(() =>
-  codingArtifactsHasAny.value
-)
+// 产物面板改为「按需唤出」(对齐 Builder 的设计文档面板):不再随产物自动弹出挤窄对话区。
+// 完成后由会话流里的「完成态卡片」提示 + 给「查看产物 / 装回应用」入口,需要时再点开面板。
+const codingArtifactPanelAutoShow = computed(() => false)
 
 const showCodingArtifactPanel = computed(() => {
   if (embeddedAppId.value) return false
@@ -3926,6 +3944,40 @@ watch(() => route.path, () => {
   max-width: 880px;
   margin-inline: auto;
 }
+
+/* 完成态卡片(对标 Builder「应用就绪」):明确终态 + 行动入口,居中同列 */
+.coding-done-card {
+  flex-shrink: 0;
+  width: calc(100% - 32px);
+  max-width: 880px;
+  margin: 0 auto 10px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 13px 16px;
+  border: 1px solid var(--t-border-subtle);
+  border-radius: 14px;
+  background: var(--t-bg-panel);
+}
+.cdc-main { display: flex; align-items: center; gap: 11px; min-width: 0; }
+.cdc-check { color: var(--t-success, #10b981); flex-shrink: 0; }
+.cdc-text { display: flex; flex-direction: column; gap: 1px; min-width: 0; }
+.cdc-text strong { font-size: 13.5px; font-weight: 650; color: var(--t-text-primary); }
+.cdc-text span { font-size: 12px; color: var(--t-text-muted); }
+.cdc-actions { display: flex; gap: 8px; flex-shrink: 0; }
+.cdc-btn-ghost {
+  height: 32px; padding: 0 14px; border: 1px solid var(--t-border-subtle);
+  border-radius: 8px; background: transparent; color: var(--t-text-secondary);
+  font-size: 13px; cursor: pointer; transition: all 0.15s ease;
+}
+.cdc-btn-ghost:hover { background: var(--t-bg-elevated); color: var(--t-text-primary); }
+.cdc-btn-primary {
+  height: 32px; padding: 0 16px; border: none; border-radius: 8px;
+  background: var(--t-brand); color: #fff; font-size: 13px; font-weight: 600;
+  cursor: pointer; transition: filter 0.15s ease;
+}
+.cdc-btn-primary:hover { filter: brightness(0.92); }
 .chat-input-wrapper {
   display: flex;
   align-items: flex-end;

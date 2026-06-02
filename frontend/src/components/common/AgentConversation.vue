@@ -667,7 +667,8 @@ defineExpose({
   padding: 6px 12px;
   text-align: left;
   vertical-align: top;
-  white-space: nowrap;
+  white-space: normal;     /* 允许长中文单元格换行,表格不再溢出窄列、不用横滚 */
+  word-break: break-word;
 }
 .ac-text :deep(table th) {
   background: rgba(116, 128, 171, 0.06);
