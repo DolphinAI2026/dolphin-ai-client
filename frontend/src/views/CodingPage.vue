@@ -217,54 +217,22 @@
               @remove-attachment="removeAttachment"
             >
               <template #footer-left>
-                <div class="coding-model-inline">
-                  <el-popover
-                    v-model:visible="codingModelPopoverVisible"
-                    placement="top-start"
-                    trigger="click"
-                    :width="360"
-                    popper-class="coding-model-popover"
-                    :disabled="codingModelLoading || updatingCodingModel || codingModelOptions.length === 0"
-                  >
-                    <template #reference>
-                      <button
-                        type="button"
-                        class="coding-model-trigger"
-                        :class="{ 'is-open': codingModelPopoverVisible, 'is-disabled': codingModelLoading || updatingCodingModel || codingModelOptions.length === 0 }"
-                        :disabled="codingModelLoading || updatingCodingModel || codingModelOptions.length === 0"
-                        aria-label="选择模型"
-                      >
-                        <div class="coding-model-trigger-content">
-                          <div class="coding-model-trigger-main">
-                            <span class="coding-model-trigger-name">{{ selectedCodingModelOption?.config_name || '选择模型' }}</span>
-                          </div>
-                          <el-icon class="coding-model-trigger-icon">
-                            <ArrowDown />
-                          </el-icon>
-                        </div>
-                      </button>
-                    </template>
-                    <div class="coding-model-panel">
-                      <div class="coding-model-tip">{{ codingModelHint }}</div>
-                      <button
-                        v-for="option in codingModelOptions"
-                        :key="option.id"
-                        type="button"
-                        class="coding-model-panel-option"
-                        :class="{ 'is-active': selectedCodingModelValue === toCodingModelValue(option.id) }"
-                        @click="selectCodingModel(option)"
-                      >
-                        <div class="coding-model-panel-option-head">
-                          <span class="coding-model-panel-option-name">{{ option.config_name }}</span>
-                          <span v-if="option.is_default" class="coding-model-panel-option-default">默认</span>
-                        </div>
-                        <span class="coding-model-panel-option-meta">
-                          {{ formatCodingModelProvider(option.provider) }} / {{ option.model }}
-                        </span>
-                      </button>
-                    </div>
-                  </el-popover>
-                </div>
+                <!-- 紧凑原生模型选择(对齐 AI Chat 的 model-select-inline,克制不抢眼) -->
+                <select
+                  class="coding-model-select"
+                  :value="selectedCodingModelValue ?? ''"
+                  :disabled="codingModelLoading || updatingCodingModel || codingModelOptions.length === 0"
+                  :title="codingModelHint"
+                  aria-label="选择模型"
+                  @change="handleCodingModelChange((($event.target as HTMLSelectElement).value) || null)"
+                >
+                  <option v-if="codingModelOptions.length === 0" value="">默认模型</option>
+                  <option
+                    v-for="option in codingModelOptions"
+                    :key="option.id"
+                    :value="toCodingModelValue(option.id) ?? ''"
+                  >{{ option.config_name }}{{ option.is_default ? ' · 默认' : '' }}</option>
+                </select>
               </template>
             </UnifiedChatComposer>
           </div>
@@ -2413,6 +2381,23 @@ watch(() => route.path, () => {
   width: min(100%, 1280px);
   margin-bottom: 12px;
 }
+
+/* 紧凑原生模型选择(对齐 AI Chat 的 model-select-inline,克制不抢眼) */
+.coding-model-select {
+  background: transparent;
+  border: 1px solid var(--t-border-subtle);
+  color: var(--t-text-muted);
+  padding: 3px 8px;
+  border-radius: 5px;
+  font-size: 12px;
+  font-family: inherit;
+  cursor: pointer;
+  outline: none;
+  max-width: 220px;
+  transition: border-color 0.14s ease, color 0.14s ease;
+}
+.coding-model-select:hover:not(:disabled) { border-color: var(--t-border-strong); color: var(--t-text-primary); }
+.coding-model-select:disabled { opacity: 0.55; cursor: not-allowed; }
 
 .coding-model-tip {
   display: block;
