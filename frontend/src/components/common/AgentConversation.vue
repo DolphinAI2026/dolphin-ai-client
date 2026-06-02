@@ -165,9 +165,9 @@
       <!-- typing indicator -->
       <div v-if="typing" class="ac-row assistant">
         <slot name="typing">
-          <!-- 对话界面风格：8-bit 像素小怪兽（CSS box-shadow 拼），不带 ac-avatar / ac-bubble -->
-          <div class="ac-pixel-monster" aria-label="AI 思考中">
-            <div class="ac-pixel-monster-grid"></div>
+          <!-- 克制的三点 typing 指示器（对齐 assistant 列），干净专业、Coding/Builder/AIChat 一致 -->
+          <div class="ac-typing" aria-label="AI 正在思考">
+            <span></span><span></span><span></span>
           </div>
         </slot>
       </div>
@@ -613,43 +613,25 @@ defineExpose({
   font-weight: 600;
 }
 
-/* 像素风 8-bit 小怪兽（流式生成中标志） */
-.ac-pixel-monster {
-  width: 100%;
-  display: flex;
-  justify-content: flex-start;
-  padding: 4px 0 4px 38px;
+/* 三点 typing 指示器（流式生成中），克制干净 */
+.ac-typing {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 8px 0 8px 38px;  /* 左缩进对齐 assistant 内容列 */
 }
-.ac-pixel-monster-grid {
-  width: 4px;
-  height: 4px;
-  background: transparent;
-  /* 14x14 像素网格，蓝色色块拼成"小怪兽"轮廓 + 触角 + 眼睛 */
-  /* 每个 box-shadow 是一个像素 (x_off y_off color)，scale = 4px */
-  box-shadow:
-    /* 触角 row -2 */
-    16px -8px #3b82f6, 36px -8px #3b82f6,
-    /* 触角 row -1 */
-    16px -4px #3b82f6, 36px -4px #3b82f6,
-    /* row 0 — 头顶 */
-    8px 0 #3b82f6, 12px 0 #3b82f6, 16px 0 #3b82f6, 20px 0 #3b82f6, 24px 0 #3b82f6, 28px 0 #3b82f6, 32px 0 #3b82f6, 36px 0 #3b82f6, 40px 0 #3b82f6, 44px 0 #3b82f6,
-    /* row 1 */
-    4px 4px #3b82f6, 8px 4px #3b82f6, 12px 4px #3b82f6, 16px 4px #3b82f6, 20px 4px #3b82f6, 24px 4px #3b82f6, 28px 4px #3b82f6, 32px 4px #3b82f6, 36px 4px #3b82f6, 40px 4px #3b82f6, 44px 4px #3b82f6, 48px 4px #3b82f6,
-    /* row 2 — 眼睛区 */
-    0 8px #3b82f6, 4px 8px #3b82f6, 8px 8px #1e293b, 12px 8px #1e293b, 16px 8px #3b82f6, 20px 8px #3b82f6, 24px 8px #3b82f6, 28px 8px #3b82f6, 32px 8px #1e293b, 36px 8px #1e293b, 40px 8px #3b82f6, 44px 8px #3b82f6, 48px 8px #3b82f6, 52px 8px #3b82f6,
-    /* row 3 */
-    0 12px #3b82f6, 4px 12px #3b82f6, 8px 12px #1e293b, 12px 12px #1e293b, 16px 12px #3b82f6, 20px 12px #3b82f6, 24px 12px #3b82f6, 28px 12px #3b82f6, 32px 12px #1e293b, 36px 12px #1e293b, 40px 12px #3b82f6, 44px 12px #3b82f6, 48px 12px #3b82f6, 52px 12px #3b82f6,
-    /* row 4 */
-    0 16px #3b82f6, 4px 16px #3b82f6, 8px 16px #3b82f6, 12px 16px #3b82f6, 16px 16px #3b82f6, 20px 16px #3b82f6, 24px 16px #3b82f6, 28px 16px #3b82f6, 32px 16px #3b82f6, 36px 16px #3b82f6, 40px 16px #3b82f6, 44px 16px #3b82f6, 48px 16px #3b82f6, 52px 16px #3b82f6,
-    /* row 5 — 腿外撇 */
-    0 20px #3b82f6, 4px 20px #3b82f6, 12px 20px #3b82f6, 16px 20px #3b82f6, 20px 20px #3b82f6, 24px 20px #3b82f6, 28px 20px #3b82f6, 32px 20px #3b82f6, 36px 20px #3b82f6, 40px 20px #3b82f6, 48px 20px #3b82f6, 52px 20px #3b82f6,
-    /* row 6 — 腿尖 */
-    0 24px #3b82f6, 8px 24px #3b82f6, 44px 24px #3b82f6, 52px 24px #3b82f6;
-  animation: ac-pixel-bounce 1.2s ease-in-out infinite;
+.ac-typing span {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--t-text-muted, #94a3b8);
+  animation: ac-typing-bounce 1.3s ease-in-out infinite;
 }
-@keyframes ac-pixel-bounce {
-  0%, 100% { transform: translateY(0); }
-  50% { transform: translateY(-4px); }
+.ac-typing span:nth-child(2) { animation-delay: 0.16s; }
+.ac-typing span:nth-child(3) { animation-delay: 0.32s; }
+@keyframes ac-typing-bounce {
+  0%, 70%, 100% { transform: translateY(0); opacity: 0.4; }
+  35% { transform: translateY(-4px); opacity: 0.85; }
 }
 
 .ac-text :deep(p) { margin: 0 0 6px; }

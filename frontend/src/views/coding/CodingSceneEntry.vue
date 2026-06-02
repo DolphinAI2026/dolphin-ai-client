@@ -117,7 +117,9 @@ function iconSvg(name: string, size: number, stroke: number): string {
 </script>
 
 <style scoped>
-.cse { height: 100%; overflow-y: auto; background: var(--bg-app); display: flex; flex-direction: column; align-items: center; justify-content: center; padding: 40px; }
+/* justify-content: safe center —— 内容比可视区高时退化为顶端对齐(不再把 hero/textarea 顶部裁掉),
+   矮屏/缩放下也不会「左上角被挡住」;放得下时与 center 表现一致。 */
+.cse { height: 100%; overflow-y: auto; background: var(--bg-app); display: flex; flex-direction: column; align-items: center; justify-content: safe center; padding: 40px; }
 .cse-inner { width: min(100%, 760px); }
 
 .cse-hero { text-align: center; margin-bottom: 26px; }
