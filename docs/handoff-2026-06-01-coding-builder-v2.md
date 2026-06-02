@@ -36,7 +36,7 @@
 ## 剩余(下次开干)
 - ✅ **F3 已完成(6dce9a5)**:消费端补读 app_id(URL)+ app_name(payload,之前被丢)+ 会话表头「← 回 Builder 配置「{app}」」回跳链(两种布局都显示)。live 验证往返通。注:真因不是「字段完全不一致」——app_id 一直在 URL query 里,只有 app_name 被丢 + 缺回跳 UI。
 - ✅ **N3 已核对**:8 个核心读工具两边一致 + 都走 apaas_client 共享层。3 个 latent 缺口:① 命名分叉 list_apaas_apps vs list_apaas_apps_in_env;② Coding 读路径是子集(缺 roles/processes/business-events/permissions,apaas_tools.py 未定义);③ 三套目录非单一真相。
-- **F2**(可选/降级):结构化历史存 DB(现走 workspace chat-replay.json + messages 表 content)。
+- ✅ **F2 已完成(a71024b)**:实时工具卡(Step2/3)早已工作;本次补 Step4——直达 `/coding?conversation_id=N`(URL 无 workspace_id)的 codegen 会话,onMounted 先查 workspace → 有则 openWorkspaceById 恢复 stream_messages 富工具卡(与侧栏一致),无则降级纯文本。注:富 replay 走 workspace chat-replay.json(非 DB);parseAssistantHistory 保留为无结构化数据的兜底。build 验证过;live 视觉待用户重登(token 过期)。
 - **mcp-server/**(~27 万行,占仓库 40% 的副本)后续整体删——见 ai_coding_prd_direction。
 - 后台任务 chip(已甩):7 个陈旧失败测试 / 同步 config-chat 端点缺引导 / (可选)N3 三缺口。
 
