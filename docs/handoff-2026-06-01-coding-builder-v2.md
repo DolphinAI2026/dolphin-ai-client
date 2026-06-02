@@ -48,6 +48,14 @@
 - Live:READ 表格 / 回看历史 / 侧栏只列会话 / × 删除 / 模型选择器 全 ✓;**BUILD→codegen 完整跑通**(detect_scene=web_component_dual → 32 产物 + 双端 build 成功);**Builder config-chat-stream 正确引导去 AI Coding 不吐代码**。
 - 两个发现(已甩后台任务):① 7 个陈旧失败测试(JWT aud / create_access_token 签名 / query_models / SpecSection);② **同步 `/config-chat`(applications/__init__.py:2573)缺引导块**(会吐代码),UI 走 stream 不受影响,但端点活着——需补引导或删死端点。
 
+## 2026-06-02 UX 反馈轮 + UI 统一立项
+用户 live 试用后的快速反馈,已修:
+- **da7c254** 产物面板不再空弹(自动显示去 isStreaming,仅有产物才弹)+ Coding 首条占位改中性「正在理解你的需求」(READ 不再误显「识别开发场景」)。
+- **51e3cf8** Builder `list_my_applications` 改查 **apaas 平台全量(26)**,与 Coding 一致(之前 Builder 查本地库 2 个、Coding 查 apaas 26,用户问「为啥不一样」)。解析租户默认 env→查 apaas,无 env 降级本地。
+- **fd2e89e** 还原:**模型名 dolphin.ai 是预期名,勿改**(我一度误当陈旧名改掉,已撤销 dc18d85 + DB 改回)。
+- **9358edd** 🎯 **UI/UX 统一立项 spec**:`docs/superpowers/specs/2026-06-02-coding-builder-ui-unification.md` —— Coding 会话区复用 Builder `AgentConversation`,统一工具卡/表格列/间距颜色/布局空态。**待独立 session 带可视化迭代执行**(本轮卡登出态盲改故立项;composer 已共用 UnifiedChatComposer 不动)。
+- ⚠️ 教训:UI/UX 视觉活必须能登录看 live 再改;盲改复杂会话区 = 高风险。
+
 ## 环境 / key context(踩坑速查)
 - **dev 分支共享**(与 xhh 协作),commit 前先 `git pull --rebase`。
 - 本地 `backend/.env`(**gitignored,勿提交**):`APAAS_BASE_URL=https://apaas-trial.definesys.cn/backend`、`CODE_SERVER_BASE_URL=http://127.0.0.1:8080`、`DATABASE_URL=sqlite+aiosqlite:////tmp/fb_demo.db`、`APAAS_ENCRYPTION_KEY`、`JWT_SECRET_KEY=demo-secret-local`、`LLM_API_KEY=demo`。线上无 APAAS_BASE_URL(故本地需手配)。
