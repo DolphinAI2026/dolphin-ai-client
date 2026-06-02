@@ -3444,7 +3444,7 @@ watch(() => route.path, () => {
 }
 
 .coding-session-kicker {
-  color: #6f7ff2;
+  color: var(--t-brand);
   font-size: 11px;
   font-weight: 700;
   line-height: 1.2;
@@ -4365,8 +4365,6 @@ html[data-theme="dark"] .coding-body,
 html[data-theme="dark"] .main-content,
 html[data-theme="dark"] .welcome-pane,
 html[data-theme="dark"] .coding-unselected-pane,
-html[data-theme="dark"] .stream-pane,
-html[data-theme="dark"] .stream-messages,
 html[data-theme="dark"] .ide-loading-overlay {
   background: #090b10 !important;
   color: rgba(248, 250, 252, 0.94) !important;

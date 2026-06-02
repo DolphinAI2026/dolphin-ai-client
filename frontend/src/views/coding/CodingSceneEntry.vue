@@ -122,8 +122,8 @@ function iconSvg(name: string, size: number, stroke: number): string {
 
 .cse-hero { text-align: center; margin-bottom: 26px; }
 .cse-hero-icon { width: 60px; height: 60px; border-radius: 16px; margin: 0 auto 18px; display: grid; place-items: center; color: #fff; background: linear-gradient(145deg, var(--blue-800), var(--blue-950)); box-shadow: var(--sh-brand-lg); }
-.cse-tag { display: inline-flex; align-items: center; gap: 6px; height: 26px; padding: 0 10px; border-radius: 999px; font-size: 12.5px; font-weight: 600; color: var(--brand); background: var(--brand-soft); border: 1px solid var(--brand-soft-2); font-family: var(--font-mono); margin-bottom: 14px; }
-.cse-h1 { font-size: 34px; font-weight: 700; letter-spacing: -0.02em; margin: 6px 0 10px; font-family: var(--font-mono); color: var(--text); }
+.cse-tag { display: inline-flex; align-items: center; gap: 6px; height: 26px; padding: 0 10px; border-radius: 999px; font-size: 12.5px; font-weight: 600; color: var(--brand); background: var(--brand-soft); border: 1px solid var(--brand-soft-2); font-family: var(--font-sans); margin-bottom: 14px; }
+.cse-h1 { font-size: 34px; font-weight: 700; letter-spacing: -0.02em; margin: 6px 0 10px; font-family: var(--font-sans); color: var(--text); }
 .cse-sub { font-size: 15px; color: var(--text-2); line-height: 1.6; max-width: 560px; margin: 0 auto; }
 
 .cse-modes { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-bottom: 12px; }
@@ -138,21 +138,21 @@ function iconSvg(name: string, size: number, stroke: number): string {
 .cse-mode-desc { font-size: 11.5px; color: var(--text-3); line-height: 1.45; padding-left: 34px; }
 
 .cse-target { display: flex; align-items: center; gap: 10px; margin-bottom: 12px; padding: 11px 14px; background: var(--surface); border: 1px solid var(--line-strong); border-radius: 12px; box-shadow: var(--sh-1); flex-wrap: wrap; }
-.cse-target-label { font-size: 11.5px; color: var(--text-3); font-weight: 600; font-family: var(--font-mono); white-space: nowrap; }
+.cse-target-label { font-size: 11.5px; color: var(--text-3); font-weight: 600; font-family: var(--font-sans); white-space: nowrap; }
 .cse-target-chip { display: inline-flex; align-items: center; gap: 7px; font-size: 12.5px; font-weight: 600; color: var(--brand); padding: 5px 11px; border-radius: 999px; background: var(--brand-soft); white-space: nowrap; }
 .cse-target-select { font-size: 12.5px; font-weight: 600; color: var(--brand); padding: 5px 11px; border-radius: 999px; background: var(--brand-soft); border: 1px solid var(--brand-soft-2); cursor: pointer; max-width: 240px; }
 .cse-target-hint { font-size: 11.5px; color: var(--text-4); white-space: nowrap; }
 
 .cse-input-card { background: var(--surface); border: 1px solid var(--line-strong); border-radius: 18px; padding: 18px; box-shadow: var(--sh-4); }
-.cse-textarea { width: 100%; min-height: 90px; border: none; outline: none; resize: none; font-family: var(--font-mono); font-size: 14px; line-height: 1.65; color: var(--text); background: transparent; }
+.cse-textarea { width: 100%; min-height: 90px; border: none; outline: none; resize: none; font-family: var(--font-sans); font-size: 14px; line-height: 1.65; color: var(--text); background: transparent; }
 .cse-textarea::placeholder { color: var(--text-4); }
 .cse-input-foot { display: flex; align-items: center; justify-content: space-between; margin-top: 10px; padding-top: 12px; border-top: 1px solid var(--line); }
-.cse-input-hint { display: inline-flex; align-items: center; gap: 7px; font-size: 12.5px; color: var(--text-3); font-weight: 500; font-family: var(--font-mono); }
-.cse-send { display: inline-flex; align-items: center; gap: 8px; height: 40px; padding: 0 16px; border-radius: 8px; border: none; cursor: pointer; font-size: 13.5px; font-weight: 600; font-family: var(--font-mono); color: #fff; background: var(--blue-950); box-shadow: var(--sh-3); transition: transform 0.15s; }
+.cse-input-hint { display: inline-flex; align-items: center; gap: 7px; font-size: 12.5px; color: var(--text-3); font-weight: 500; font-family: var(--font-sans); }
+.cse-send { display: inline-flex; align-items: center; gap: 8px; height: 40px; padding: 0 16px; border-radius: 8px; border: none; cursor: pointer; font-size: 13.5px; font-weight: 600; font-family: var(--font-sans); color: #fff; background: var(--blue-950); box-shadow: var(--sh-3); transition: transform 0.15s; }
 .cse-send:hover:not(:disabled) { transform: translateY(-1px); }
 .cse-send:disabled { opacity: 0.5; cursor: not-allowed; }
 
 .cse-examples { display: flex; flex-wrap: wrap; gap: 8px; justify-content: center; margin-top: 18px; }
-.cse-ex { font-size: 12px; color: var(--text-2); padding: 8px 13px; border-radius: 999px; background: var(--surface); border: 1px solid var(--line); cursor: pointer; font-family: var(--font-mono); font-weight: 500; }
+.cse-ex { font-size: 12px; color: var(--text-2); padding: 8px 13px; border-radius: 999px; background: var(--surface); border: 1px solid var(--line); cursor: pointer; font-family: var(--font-sans); font-weight: 500; }
 .cse-ex:hover { border-color: var(--brand-ring); color: var(--brand); }
 </style>
