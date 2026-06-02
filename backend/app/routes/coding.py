@@ -37,6 +37,11 @@ from app.config import settings
 from app.coding.verifier import ComponentVerifier
 from app.routes.llm_configs import list_llm_configs_for_purpose
 from app.project_access import project_role_at_least, require_project_access
+from app.routes.applications.extension import (
+    _load_app_and_env,
+    _ensure_env_token,
+    publish_extension_update,
+)
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/coding", tags=["coding"])
@@ -2603,12 +2608,21 @@ async def _build_and_upload_kits(*, ws_mgr, ws_id: str, env, db) -> dict:
     client = APaaSClient(base_url=env.base_url, tenant_id=env.platform_tenant_id, token=env.token)
     kits = await client.query_app_dev_kits("", file_name=key_word)
     kit_ids = [str(k["id"]) for fn in file_names for k in kits if k.get("fileName") == fn and k.get("id")]
+
+    # 页面类建菜单的 link_url = 自开发组件注册名(取 workspace apaas.json 的 outputName)
+    try:
+        _cfg = ws_mgr._read_apaas_config(ws_path)
+        register_name = ws_mgr._resolve_output_name(_cfg, display_name) if isinstance(_cfg, dict) else display_name
+    except Exception:
+        register_name = display_name
+
     return {
         "kit_ids": kit_ids,
         "file_type": packages[0][1],
         "project_type": project_type,
         "display_name": display_name,
         "file_names": file_names,
+        "register_name": register_name,
     }
 
 
@@ -2876,6 +2890,101 @@ async def upload_workspace_to_platform(
     else:
         msg = resp_data.get("message") or resp_data.get("msg") or "上传失败"
         raise HTTPException(status_code=500, detail=msg)
+
+
+class DeployToAppRequest(BaseModel):
+    local_app_id: Optional[int] = None   # bound 模式传本地 app_id;lib 模式不传
+
+
+_PAGE_TYPES = {"menu-page", "form-page", "mobile-page"}
+
+
+async def _deploy_to_app_impl(ws_id: str, local_app_id, ctx, db) -> dict:
+    """装回应用编排:upload → (bound) enable→attach→页面建菜单→republish。
+
+    - bound(传 local_app_id):部署到该应用并重发。
+    - lib(不传):只上传到自开发资产库(组件库),不 attach。
+    两个 id 别混:attach/menu 走平台 apaas_app_id;republish/广播走本地 app_id。
+    """
+    from app.models import PlatformEnv
+
+    ws_mgr = WorkspaceManager()
+
+    # ── lib:只上传到组件库 ──
+    if not local_app_id:
+        env = (await db.execute(
+            select(PlatformEnv).where(PlatformEnv.tenant_id == ctx.tenant_id)
+        )).scalars().first()
+        if not env:
+            raise HTTPException(status_code=400, detail="租户未配置平台环境")
+        env.token = await _ensure_env_token(env, db)
+        up = await _build_and_upload_kits(ws_mgr=ws_mgr, ws_id=ws_id, env=env, db=db)
+        return {
+            "status": "uploaded_only",
+            "kits": up["file_names"],
+            "hint": "已传到自开发资产库,可在表单设计器引用 / 去 Builder 关联到应用",
+        }
+
+    # ── bound:部署到应用 ──
+    app, env = await _load_app_and_env(local_app_id, ctx, db)
+    if not getattr(app, "apaas_app_id", None):
+        raise HTTPException(status_code=400, detail="应用尚未部署到平台(无 apaas_app_id),无法装回")
+    if env is None:
+        raise HTTPException(status_code=400, detail="租户未配置平台环境")
+    env.token = await _ensure_env_token(env, db)
+    apaas_app_id = str(app.apaas_app_id)
+
+    up = await _build_and_upload_kits(ws_mgr=ws_mgr, ws_id=ws_id, env=env, db=db)
+    if not up["kit_ids"]:
+        raise HTTPException(status_code=502, detail="上传成功但反查不到 kit id,无法关联到应用")
+
+    client = APaaSClient(base_url=env.base_url, tenant_id=env.platform_tenant_id, token=env.token)
+    await client.enable_self_dev_config(apaas_app_id, "ENABLE")
+    await client.attach_apaas_source_relation(apaas_app_id, object_ids=up["kit_ids"])
+
+    menu = None
+    if up["project_type"] in _PAGE_TYPES:
+        register = up.get("register_name") or up["display_name"]
+        await client.create_self_dev_menu(apaas_app_id, menu_name=up["display_name"], link_url=register)
+        menu = up["display_name"]
+
+    # republish:取当前版本 → deploy_app;版本冲突则 patch+1 重试
+    detail = await client.query_app_detail(apaas_app_id)
+    version = str(detail.get("currentVersion") or detail.get("version") or "1.0.0")
+    try:
+        await client.deploy_app(apaas_app_id, version, abstract="自开发装回自动重发")
+    except Exception as e:
+        if "版本" in str(e) or "version" in str(e).lower():
+            parts = version.split(".")
+            try:
+                parts[-1] = str(int(parts[-1]) + 1)
+            except (ValueError, IndexError):
+                raise
+            version = ".".join(parts)
+            await client.deploy_app(apaas_app_id, version, abstract="自开发装回自动重发")
+        else:
+            raise
+
+    await publish_extension_update(app.id, "republish_done", {"kits": up["file_names"]})
+    return {
+        "status": "installed",
+        "app": {"local_app_id": app.id, "name": getattr(app, "name", "")},
+        "menu": menu,
+        "version": version,
+        "kits": up["file_names"],
+    }
+
+
+@router.post("/workspace/{ws_id}/deploy-to-app")
+async def deploy_to_app(
+    ws_id: str,
+    body: DeployToAppRequest,
+    ctx: Annotated[AuthContext, Depends(get_auth_context)],
+    db: Annotated[AsyncSession, Depends(get_db)],
+):
+    """装回应用 / 发布到资产库:见 _deploy_to_app_impl。"""
+    await _ensure_workspace_access(ws_id, ctx, db, minimum_project_role="admin")
+    return await _deploy_to_app_impl(ws_id, body.local_app_id, ctx, db)
 
 
 @router.get("/workspace/{ws_id}/debug/screenshot/{filename}")
