@@ -8,7 +8,7 @@
     <div class="tc-head" @click="$emit('toggle')">
       <span class="tc-status-label" :class="tool.status">{{ statusLabel }}</span>
       <span class="tc-sep">·</span>
-      <span class="tc-verb">{{ verbLabel }}</span>
+      <span v-if="verbLabel" class="tc-verb">{{ verbLabel }}</span>
       <span class="tc-name">{{ tool.name }}</span>
       <span v-if="brief" class="tc-args">{{ brief }}</span>
       <span class="tc-spacer"></span>
@@ -100,6 +100,9 @@ const statusLabel = computed(() => {
 // 按工具名前缀推断动作动词（"调用 / 读取 / 写入 / 执行"），对话界面风格"已完成 · 读取 SKILL.md · 文件读取"
 const verbLabel = computed(() => {
   const n = (props.tool.name || '').toLowerCase()
+  // name 本身含中文(如睿鲸 Coding 把 '读取 X' / '扫描 Y' 直接当 name)时不再叠加动词,
+  // 避免 "调用 读取 X" 冗余;Builder / AIChat 的 name 是 ASCII 工具名,不受影响。
+  if (/[一-鿿]/.test(props.tool.name || '')) return ''
   if (n.startsWith('read') || n.includes('_read')) return '读取'
   if (n.startsWith('write') || n.includes('_write')) return '写入'
   if (n.startsWith('edit') || n.includes('_edit')) return '编辑'

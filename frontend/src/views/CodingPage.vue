@@ -133,41 +133,8 @@
           >
             <template #custom="{ message }">
               <template v-if="streamCustom(message)?.sm">
-                <!-- thinking -->
-                <template v-if="streamCustom(message).sm.type === 'thinking'">
-                  <div class="msg-thinking-card" :class="{ 'is-collapsed': streamCustom(message).sm.collapsed }">
-                    <div class="thinking-card-header" @click="streamCustom(message).sm.collapsed = !streamCustom(message).sm.collapsed">
-                      <svg class="thinking-card-icon" viewBox="0 0 16 16" fill="none">
-                        <circle cx="8" cy="8" r="6.5" stroke="currentColor" stroke-width="1.2"/>
-                        <path d="M8 5v3.5l2 1.5" stroke="currentColor" stroke-width="1.2" stroke-linecap="round"/>
-                      </svg>
-                      <span class="thinking-card-label">思考过程</span>
-                      <span class="thinking-card-chars">{{ streamCustom(message).sm.content.length }} 字</span>
-                      <svg class="thinking-card-chevron" :class="{ rotated: !streamCustom(message).sm.collapsed }" viewBox="0 0 16 16" fill="none">
-                        <path d="M4 6l4 4 4-4" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
-                      </svg>
-                    </div>
-                    <div v-show="!streamCustom(message).sm.collapsed" class="thinking-card-body">
-                      <span class="thinking-text markdown-body" v-html="renderMarkdown(streamCustom(message).sm.content)"></span>
-                      <span v-if="streamCustom(message).isLast && isStreaming" class="thinking-cursor">|</span>
-                    </div>
-                  </div>
-                </template>
-                <!-- status -->
-                <template v-else-if="streamCustom(message).sm.type === 'status'">
-                  <div v-if="streamCustom(message).sm.stepDone" class="msg-step-badge">
-                    <svg class="step-badge-icon" viewBox="0 0 16 16" fill="none">
-                      <circle cx="8" cy="8" r="7" fill="currentColor" opacity="0.15"/>
-                      <path d="M5 8l2.5 2.5L11 5.5" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
-                    </svg>
-                    <span>{{ streamCustom(message).sm.content }}</span>
-                  </div>
-                  <div v-else class="msg-status" :class="{ 'status-progress': streamCustom(message).sm.content.endsWith('...') }">
-                    <span class="status-content">{{ streamCustom(message).sm.content }}</span>
-                  </div>
-                </template>
-                <!-- file_write / file_edit -->
-                <template v-else-if="['file_write', 'file_edit'].includes(streamCustom(message).sm.type)">
+                <!-- file_write / file_edit（native 无对应 kind,保留 FileCard）-->
+                <template v-if="['file_write', 'file_edit'].includes(streamCustom(message).sm.type)">
                   <FileCard
                     :action="streamCustom(message).sm.type === 'file_write' ? 'write' : 'edit'"
                     :file-name="streamCustom(message).sm.fileName"
@@ -176,21 +143,7 @@
                     @toggle="streamCustom(message).sm.collapsed = !streamCustom(message).sm.collapsed"
                   />
                 </template>
-                <!-- tool -->
-                <template v-else-if="streamCustom(message).sm.type === 'tool'">
-                  <div class="msg-tool-row" :class="{ 'has-result': streamCustom(message).sm.result }">
-                    <div class="tool-row-header" @click="streamCustom(message).sm.result && (streamCustom(message).sm.resultCollapsed = !streamCustom(message).sm.resultCollapsed)">
-                      <span class="tool-row-text">{{ streamCustom(message).sm.content }}</span>
-                      <svg v-if="streamCustom(message).sm.result" class="tool-row-chevron" :class="{ rotated: !streamCustom(message).sm.resultCollapsed }" viewBox="0 0 16 16" fill="none">
-                        <path d="M4 6l4 4 4-4" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
-                      </svg>
-                    </div>
-                    <div v-if="streamCustom(message).sm.result && !streamCustom(message).sm.resultCollapsed" class="tool-row-result">
-                      <pre>{{ streamCustom(message).sm.result }}</pre>
-                    </div>
-                  </div>
-                </template>
-                <!-- command -->
+                <!-- command（native 无对应 kind,保留命令卡）-->
                 <template v-else-if="streamCustom(message).sm.type === 'command'">
                   <div class="msg-command-card">
                     <div class="command-card-header">
@@ -200,6 +153,7 @@
                     <pre v-if="streamCustom(message).sm.content.includes('\n')" class="command-output">{{ streamCustom(message).sm.content.split('\n').slice(1).join('\n') }}</pre>
                   </div>
                 </template>
+                <!-- thinking / status / tool 已迁移到 AgentConversation 原生 kind（见 agentMessages 映射）-->
               </template>
             </template>
 
@@ -543,7 +497,7 @@ import FileCard from '@/components/FileCard.vue'
 import SessionSidebar, { type SessionItem as SidebarSessionItem } from '@/components/common/SessionSidebar.vue'
 import AgentConversation from '@/components/common/AgentConversation.vue'
 import VoiceInputButton from '@/components/common/VoiceInputButton.vue'
-import type { AgentMessage } from '@/components/common/agent-conversation/types'
+import type { AgentMessage, AgentToolPayload } from '@/components/common/agent-conversation/types'
 import { useCodingModel } from './coding/useCodingModel'
 import { useStreamMessages, renderMarkdown } from './coding/useStreamMessages'
 import { useIdeManager } from './coding/useIdeManager'
@@ -726,8 +680,18 @@ const agentMessages = computed<AgentMessage[]>(() => {
       out.push({ id: 'sm' + i, kind: 'assistant', content: msg.content })
     } else if (msg.type === 'error') {
       out.push({ id: 'sm' + i, kind: 'error', content: msg.content })
+    } else if (msg.type === 'thinking') {
+      // 全面 native:thinking → AgentConversation 原生 thinking(斜体),对齐 Builder / AIChat
+      out.push({ id: 'sm' + i, kind: 'thinking', thinking: { text: msg.content } })
+    } else if (msg.type === 'tool') {
+      // 全面 native:tool → 原生 ToolCard 结果芯片(✓ 已完成 · …),对齐 Builder
+      out.push({ id: 'sm' + i, kind: 'tool', tool: toolPayloadFromStreamMsg(msg, 'sm' + i, i === list.length - 1) })
+    } else if (msg.type === 'status') {
+      // 全面 native:status → AgentConversation 原生 status(居中胶囊);完成步骤补 ✓ 保留里程碑信号
+      const text = msg.stepDone && !/^[✓✅]/.test(msg.content || '') ? `✓ ${msg.content}` : msg.content
+      out.push({ id: 'sm' + i, kind: 'status', content: text })
     } else {
-      // thinking / status / file_write / file_edit / tool / command — 走 #custom slot
+      // file_write / file_edit / command — native 无对应 kind,仍走 #custom slot
       const isLast = i === list.length - 1
       out.push({
         id: 'sm' + i,
@@ -743,6 +707,22 @@ const agentMessages = computed<AgentMessage[]>(() => {
 function streamCustom(message: AgentMessage): { sm: any; isLast: boolean } {
   const meta = (message.meta || {}) as { streamMsg?: any; isLast?: boolean }
   return { sm: meta.streamMsg || {}, isLast: !!meta.isLast }
+}
+
+/** Coding 的 tool StreamMessage(展示字符串模型,content='📖 读取 X' / '🔧 <display>',
+ *  live 时可选 toolName=真实工具名)→ AgentConversation 原生 ToolCard payload。
+ *  replay 老数据无 toolName → 去掉前导 emoji 后整段当 name 兜底。 */
+function toolPayloadFromStreamMsg(msg: any, id: string, isLast: boolean): AgentToolPayload {
+  const raw = String(msg.content || '').trim()
+  const display = raw.replace(/^[\u{1F000}-\u{1FAFF}\u{2600}-\u{27BF}✅❌️\s]+/u, '').trim()
+  const realName: string | undefined = msg.toolName
+  return {
+    id,
+    name: realName || display || '工具',
+    argsBrief: realName ? display : undefined,
+    result: msg.result || undefined,
+    status: msg.result ? 'success' : (isLast && isStreaming.value ? 'running' : 'success'),
+  }
 }
 
 // ── v2 redesign: 产物清单 / 接入说明 面板 ──
@@ -3597,172 +3577,9 @@ watch(() => route.path, () => {
   color: var(--t-text-secondary);
 }
 
-/* ---- 思考过程卡片（可折叠） ---- */
-.msg-thinking-card {
-  border: 1px solid var(--t-border-subtle);
-  border-radius: var(--t-radius-sm);
-  overflow: hidden;
-  margin: 4px 0;
-  background: var(--t-bg-panel);
-}
-
-.thinking-card-header {
-  display: flex;
-  align-items: center;
-  gap: 7px;
-  padding: 7px 12px;
-  cursor: pointer;
-  user-select: none;
-  transition: background 0.15s;
-}
-.thinking-card-header:hover {
-  background: var(--t-bg-panel-hover);
-}
-
-.thinking-card-icon {
-  width: 14px;
-  height: 14px;
-  color: var(--t-text-muted);
-  flex-shrink: 0;
-}
-
-.thinking-card-label {
-  font-size: 12px;
-  font-weight: 500;
-  color: var(--t-text-secondary);
-}
-
-.thinking-card-chars {
-  font-size: 11px;
-  color: var(--t-text-muted);
-  margin-left: 2px;
-}
-
-.thinking-card-chevron {
-  width: 14px;
-  height: 14px;
-  color: var(--t-text-muted);
-  margin-left: auto;
-  transition: transform 0.2s;
-  flex-shrink: 0;
-}
-.thinking-card-chevron.rotated {
-  transform: rotate(180deg);
-}
-
-.thinking-card-body {
-  padding: 10px 14px 12px;
-  border-top: 1px solid var(--t-border-subtle);
-  background: var(--t-bg-subtle);
-}
-
-.thinking-text {
-  font-size: 13px;
-  line-height: 1.65;
-  color: var(--t-text-secondary);
-  display: block;
-}
-
-.thinking-cursor {
-  animation: blink 1s step-end infinite;
-  color: var(--t-brand);
-}
-@keyframes blink { 50% { opacity: 0; } }
-
-/* ---- 状态消息 ---- */
-/* 进行中状态文字 */
-.msg-status {
-  font-size: 12px;
-  color: var(--t-text-muted);
-  padding: 1px 0;
-  line-height: 1.5;
-}
-.status-dot { display: none; }
-.status-content {
-  display: -webkit-box;
-  -webkit-line-clamp: 2;
-  -webkit-box-orient: vertical;
-  overflow: hidden;
-  word-break: break-all;
-}
-
-/* 步骤完成 badge 芯片 */
-.msg-step-badge {
-  display: inline-flex;
-  align-items: center;
-  gap: 5px;
-  padding: 3px 10px 3px 6px;
-  border-radius: 20px;
-  background: var(--t-success-subtle);
-  color: var(--t-success);
-  font-size: 12px;
-  font-weight: 500;
-  margin: 1px 0;
-}
-.step-badge-icon {
-  width: 14px;
-  height: 14px;
-  flex-shrink: 0;
-}
-
-/* ---- 工具调用行（含可折叠结果） ---- */
-.msg-tool-row {
-  border: 1px solid var(--t-border-subtle);
-  border-radius: 6px;
-  background: var(--t-bg-input);
-  overflow: hidden;
-  margin: 1px 0;
-  display: inline-flex;
-  flex-direction: column;
-  max-width: 100%;
-}
-.tool-row-header {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  padding: 3px 10px;
-}
-.msg-tool-row.has-result .tool-row-header {
-  cursor: pointer;
-}
-.msg-tool-row.has-result .tool-row-header:hover {
-  background: var(--t-bg-panel-hover);
-}
-.tool-row-text {
-  font-size: 12px;
-  color: var(--t-text-secondary);
-  font-family: 'SF Mono', 'Monaco', 'Menlo', monospace;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  flex: 1;
-}
-.tool-row-chevron {
-  width: 13px;
-  height: 13px;
-  color: var(--t-text-muted);
-  flex-shrink: 0;
-  transition: transform 0.2s;
-}
-.tool-row-chevron.rotated {
-  transform: rotate(180deg);
-}
-.tool-row-result {
-  border-top: 1px solid var(--t-border-subtle);
-  background: var(--t-bg-code);
-  padding: 8px 12px;
-  max-height: 200px;
-  overflow: auto;
-}
-.tool-row-result pre {
-  margin: 0;
-  font-size: 11px;
-  line-height: 1.55;
-  font-family: 'SF Mono', 'Monaco', 'Menlo', monospace;
-  color: var(--t-text-secondary);
-  white-space: pre-wrap;
-  word-break: break-all;
-}
+/* thinking / status / tool 的卡片样式已随「迁移到 AgentConversation 原生 kind」一并移除
+   （thinking→原生 thinking、tool→ToolCard、status→原生 status pill;见 agentMessages 映射 + ToolCard.vue）。
+   command / file 卡 native 无对应 kind,仍走 #custom slot,样式见下方 .msg-command-card / .msg-file-card。 */
 
 /* ---- 文件卡片（写入 / 编辑） ---- */
 .msg-file-card {

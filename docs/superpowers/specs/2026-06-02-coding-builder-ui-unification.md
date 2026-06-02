@@ -1,6 +1,7 @@
 # AI Coding ↔ AI Builder 会话区 UI/UX 统一 — 设计 spec
 
-> **状态**:立项(2026-06-02),待独立 session 执行。**必须带可视化迭代**(改一步→截图→收敛),不能盲跑。
+> **状态**:✅ **已落地**(2026-06-02,分支 `feat/coding-builder-ui-unify`)。core 统一(thinking/tool/status→native)+ 表格列 prompt 完成,replay(公告通知 53 行)+ live READ + `vite build` 验证。详见文末「✅ 已落地记录」。
+> **关键修正**:spec 原假设「Coding 没用 AgentConversation、要从零迁移」**不准** —— Coding 早已用 `<AgentConversation :messages>`,只是全走 `#custom` slot 重渲自有 markup;真正工作 = 把有 native 对应的 type 改走 native kind(窄、低风险)。
 > **缘由**:用户反馈两边会话区体验不一致,要求统一 4 项:① 工具/状态卡样式 ② 应用表格列 ③ 间距/颜色细节 ④ 整体布局/空态。
 
 ## 目标
@@ -64,3 +65,23 @@ AgentConversation 的 timeline kind **不直接覆盖** Coding 的 status-step /
 
 ## 执行建议
 独立 session + 可视化迭代。先方案 A 的最小闭环(普通消息 + thinking + READ 工具 chip 对齐),跑通 READ 体验与 Builder 一致,再逐步并入 BUILD 的 command/file-write 卡。每步 `vite build` + 刷新截图验证。
+
+---
+
+## ✅ 已落地记录(2026-06-02,分支 `feat/coding-builder-ui-unify`)
+
+**做法**:方案 A,但因 AgentConversation 已是 Coding 的 shell,只改 `agentMessages` 映射把有 native 对应的 type 切到 native kind,不重建组件。
+
+**改动文件(3 个)**:
+- `frontend/src/views/CodingPage.vue`:`agentMessages` 新增 `thinking→kind:'thinking'` / `tool→kind:'tool'`(`toolPayloadFromStreamMsg` 去 emoji 解析 content,live 可带 `toolName`)/ `status→kind:'status'`(stepDone 补 `✓`);`#custom` slot 精简到只剩 `file_write/file_edit`+`command`(native 无对应 kind);删除已死的 `.msg-thinking-card`/`.msg-status`/`.msg-step-badge`/`.msg-tool-row` 等 ~165 行 CSS。
+- `frontend/src/components/common/agent-conversation/ToolCard.vue`:`verbLabel` 当 `name` 含中文时返回 ''(Coding 把「读取 X」整段当 name,避免「调用 读取 X」冗余);`tc-verb` 加 `v-if`。Builder/AIChat 的 name 是 ASCII 工具名,无影响。
+- `backend/app/coding/read_query.py`:`_READ_SYSTEM_PROMPT` 固定应用列表为 4 列 `序号|应用名称|应用编码|状态`,去掉 apaas_app_id 长数字。
+
+**4 项达成**:① 工具/状态卡 ✅(native ToolCard +「已完成 · 读取 X ›」/ native status pill);② 表格列 ✅(read_query prompt 固定列;注:Builder 侧 AI Chat 走 `list_my_applications` 自由格式、且 prompt 含 doc 生成强约束不宜动,故只统一 Coding READ 侧);③ 间距/颜色 ✅(native kind 自动继承 `.ac-*`);④ 布局/空态 ✅(沿用 `.ac-list`,两个空态视觉 OK,未强行并入 empty slot)。
+
+**验证**:`vite build` 多次通过(不靠 vue-tsc);公告通知 BUILD 会话 replay 53 行(thinking14/tool5/status10/file8/command9 全对);live READ 路径正常 + native 渲染;回归点(产物面板/IDE 按钮/embedded/dolphin.ai 模型名/composer/历史回放直达 URL)均无伤(改动只碰消息区映射)。
+
+**遗留/备注**:
+- replay 老数据里「command/工具输出被存成 status」的长 `✅ ...[exit code:0]` 会变成偏宽的 native status 块(可接受;真要收口可给 `.ac-status` 加 max-width+省略)。
+- live tool 暂用 content 解析(未在 pipeline 落 `toolName`);如需 live 显示真实工具名 + Builder 式「✓ 找到 N」结果摘要,可在 `useCodingPipeline` 的 tool/agent_tool 处理里存 `toolName`,并把 AIChatPage 的 `summarizeToolResult` 抽到共享模块复用。
+- `#custom` slot 的 dark-theme 变种里仍留少量死选择器引用(与 live 的 `.msg-command-card` 同选择器组,无害,未拆)。
