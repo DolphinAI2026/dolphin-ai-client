@@ -1822,9 +1822,9 @@ async def run_coding_pipeline(
                 yield _record_event({"type": "step", "step": "create_workspace", "status": "done", "data": _data})
 
         elif not is_iteration and scene_type in BRAINSTORM_SCENES:
-            # 首次发起 brainstorm：生成开发 SPEC 作为 inline 提示后直接继续开发流程，
-            # 不再强制等待用户确认（B3: 去掉两段式确认门）。
-            # proposal 仍然输出，供用户阅读；workspace 在下方按需创建。
+            # 首次发起 brainstorm：生成开发 SPEC 后**停住等用户确认**(确认门,2026-06 重新加回)。
+            # 不再一股脑直接 codegen;下一轮(续轮)由 _get_brainstorm_state 识别为等待确认态,
+            # 走上方 continuation 分支分类「确认 → 建工作区 + codegen / 改稿 → 重出 SPEC 继续等」。
             _inline_brainstorm_proposal: str = ""
             yield _record_event({"type": "step", "step": "brainstorm", "status": "running"})
             # bound「在应用上定制」→ 先读应用上下文再写 SPEC(read_app_context step 在此 yield);
@@ -1841,12 +1841,15 @@ async def run_coding_pipeline(
                                           BRAINSTORM_PROPOSAL_MARKER + proposal)
                 yield _record_event({"type": "step", "step": "brainstorm", "status": "done"})
                 yield _record_event({"type": "content", "content": proposal})
-                # 用 SPEC 丰富代码生成上下文
-                effective_requirement = (
-                    f"{params.message}\n\n"
-                    f"[开发 SPEC 已生成，请严格按以下 SPEC 生成代码]\n"
-                    f"{proposal}"
-                )
+                # ★ 确认门:出完开发 SPEC 就停住,等用户「确认 / 调整」再生成代码,不一股脑直接开发。
+                #   确认 → 续轮判定后建工作区 + codegen;改稿 → 续轮重出 SPEC 继续等。
+                #   (SPEC 已存为带 BRAINSTORM marker 的 assistant 消息,_get_brainstorm_state 据此识别等待态。)
+                yield _record_event({
+                    "type": "done", "workspace_id": None,
+                    "conversation_id": conversation_id, "ide_url": None,
+                    "waiting_confirmation": True,
+                })
+                return
             else:
                 # proposal 失败：降级直接走 codegen，无 SPEC 上下文
                 yield _record_event({"type": "step", "step": "brainstorm", "status": "done"})

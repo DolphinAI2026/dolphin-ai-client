@@ -163,6 +163,18 @@
             </template>
           </AgentConversation>
 
+          <!-- SPEC 确认门:出了开发 SPEC、待确认 → 一键「确认开发」+ 提示可直接补充调整(不一股脑直接开发) -->
+          <div v-if="awaitingSpecConfirm" class="coding-confirm-bar">
+            <div class="ccb-text">
+              <strong>开发 SPEC 已生成，待你确认</strong>
+              <span>确认无误即开始写代码；要调整就直接在下方补充需求。</span>
+            </div>
+            <button class="ccb-btn" @click="confirmSpec">
+              <el-icon :size="16"><CircleCheck /></el-icon>
+              <span>确认，开始开发</span>
+            </button>
+          </div>
+
           <!-- 完成态卡片(对标 Builder「应用就绪」):codegen 完成且有产物时,给明确终态 + 行动入口 -->
           <div
             v-if="!isStreaming && streamMessages.length > 0 && codingArtifactsHasAny && !showCodingArtifactPanel"
@@ -807,6 +819,15 @@ const specMarkdown = computed<string>(() => {
   }
   return ''
 })
+// SPEC 确认门:出了开发 SPEC、还没产物、不在流式 → 等用户确认(不一股脑直接开发)
+const awaitingSpecConfirm = computed(() =>
+  !isStreaming.value && streamMessages.value.length > 0 && !!specMarkdown.value && !codingArtifactsHasAny.value
+)
+function confirmSpec() {
+  if (isStreaming.value) return
+  userInput.value = '确认,按这份开发 SPEC 开始生成代码'
+  nextTick(() => { sendMessage() })
+}
 
 function _formatSize(content: string | undefined | null): string {
   const bytes = content ? new Blob([content]).size : 0
@@ -4019,6 +4040,32 @@ watch(() => route.path, () => {
   cursor: pointer; transition: filter 0.15s ease;
 }
 .cdc-btn-primary:hover { filter: brightness(0.92); }
+
+/* SPEC 确认门 bar(出 SPEC 后等确认,brand 强调) */
+.coding-confirm-bar {
+  flex-shrink: 0;
+  width: calc(100% - 32px);
+  max-width: 880px;
+  margin: 0 auto 10px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 13px 16px;
+  border: 1px solid var(--t-brand);
+  border-radius: 14px;
+  background: color-mix(in srgb, var(--t-brand) 7%, var(--t-bg-panel));
+}
+.ccb-text { display: flex; flex-direction: column; gap: 1px; min-width: 0; }
+.ccb-text strong { font-size: 13.5px; font-weight: 650; color: var(--t-text-primary); }
+.ccb-text span { font-size: 12px; color: var(--t-text-muted); }
+.ccb-btn {
+  display: inline-flex; align-items: center; gap: 6px;
+  height: 34px; padding: 0 16px; border: none; border-radius: 9px;
+  background: var(--t-brand); color: #fff; font-size: 13px; font-weight: 600;
+  cursor: pointer; flex-shrink: 0; transition: filter 0.15s ease;
+}
+.ccb-btn:hover { filter: brightness(0.92); }
 .chat-input-wrapper {
   display: flex;
   align-items: flex-end;
