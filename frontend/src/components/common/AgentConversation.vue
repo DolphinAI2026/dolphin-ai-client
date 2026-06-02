@@ -165,9 +165,12 @@
       <!-- typing indicator -->
       <div v-if="typing" class="ac-row assistant">
         <slot name="typing">
-          <!-- 克制的三点 typing 指示器（对齐 assistant 列），干净专业、Coding/Builder/AIChat 一致 -->
-          <div class="ac-typing" aria-label="AI 正在思考">
-            <span></span><span></span><span></span>
+          <!-- 克制的三点 typing 指示器（对齐 assistant 列）+ 计时,干净专业、Coding/Builder/AIChat 一致 -->
+          <div class="ac-typing-row">
+            <div class="ac-typing" aria-label="AI 正在思考">
+              <span></span><span></span><span></span>
+            </div>
+            <span v-if="(typingSeconds || 0) > 0" class="ac-typing-secs">AI 思考中 {{ typingSeconds }}s</span>
           </div>
         </slot>
       </div>
@@ -200,6 +203,8 @@ const props = withDefaults(defineProps<{
   defaultOpenRunning?: boolean
   emptyTitle?: string
   emptyHint?: string
+  /** 流式生成已用秒数(给 typing 指示器显示「AI 思考中 Ns」,对齐 Builder)。0/省略则不显示 */
+  typingSeconds?: number
 }>(), {
   typing: false,
   loading: false,
@@ -613,12 +618,23 @@ defineExpose({
   font-weight: 600;
 }
 
-/* 三点 typing 指示器（流式生成中），克制干净 */
+/* 三点 typing 指示器（流式生成中）+ 计时,克制干净 */
+.ac-typing-row {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 0 8px 38px;  /* 左缩进对齐 assistant 内容列 */
+}
 .ac-typing {
   display: inline-flex;
   align-items: center;
   gap: 5px;
-  padding: 8px 0 8px 38px;  /* 左缩进对齐 assistant 内容列 */
+}
+.ac-typing-secs {
+  font-size: 12px;
+  color: var(--t-text-muted, #94a3b8);
+  font-variant-numeric: tabular-nums;  /* 数字等宽,秒数跳动不抖 */
+  letter-spacing: 0.01em;
 }
 .ac-typing span {
   width: 7px;
@@ -846,26 +862,6 @@ defineExpose({
   display: flex;
   flex-direction: column;
   gap: 4px;
-}
-
-.ac-typing {
-  display: inline-flex;
-  gap: 4px;
-  padding: 4px 0;
-}
-.ac-typing .dot {
-  width: 6px;
-  height: 6px;
-  border-radius: 999px;
-  background: var(--t-text-muted);
-  opacity: 0.4;
-  animation: ac-typing 1.2s infinite;
-}
-.ac-typing .dot:nth-child(2) { animation-delay: 0.15s; }
-.ac-typing .dot:nth-child(3) { animation-delay: 0.3s; }
-@keyframes ac-typing {
-  0%, 60%, 100% { opacity: 0.3; transform: translateY(0); }
-  30% { opacity: 1; transform: translateY(-3px); }
 }
 
 .ac-status {

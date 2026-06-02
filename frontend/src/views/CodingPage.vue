@@ -127,6 +127,7 @@
             v-else
             :messages="agentMessages"
             :typing="isStreaming"
+            :typing-seconds="streamSeconds"
             empty-title=""
             empty-hint=""
           >
@@ -828,6 +829,20 @@ function confirmSpec() {
   userInput.value = '确认,按这份开发 SPEC 开始生成代码'
   nextTick(() => { sendMessage() })
 }
+
+// 流式计时:对齐 Builder 的「AI 思考中 Ns」。开始流式起秒表,停了清零。
+const streamSeconds = ref(0)
+let _streamTimer: ReturnType<typeof setInterval> | null = null
+watch(isStreaming, (on) => {
+  if (_streamTimer) { clearInterval(_streamTimer); _streamTimer = null }
+  if (on) {
+    streamSeconds.value = 0
+    _streamTimer = setInterval(() => { streamSeconds.value += 1 }, 1000)
+  } else {
+    streamSeconds.value = 0
+  }
+})
+onUnmounted(() => { if (_streamTimer) { clearInterval(_streamTimer); _streamTimer = null } })
 
 function _formatSize(content: string | undefined | null): string {
   const bytes = content ? new Blob([content]).size : 0
