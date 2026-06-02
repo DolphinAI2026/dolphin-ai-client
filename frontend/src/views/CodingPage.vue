@@ -176,7 +176,7 @@
               </div>
             </div>
             <div class="cdc-actions">
-              <button class="cdc-btn-ghost" @click="toggleCodingArtifactPanel">查看产物</button>
+              <button class="cdc-btn-ghost" @click="codingArtifactTab = 'files'; toggleCodingArtifactPanel()">查看产物</button>
               <button class="cdc-btn-primary" @click="openInstallModal">{{ isBoundDeploy ? '装回应用' : '发布到资产库' }}</button>
             </div>
           </div>
@@ -399,6 +399,12 @@
           <button
             type="button"
             class="cap-tab"
+            :class="{ active: codingArtifactTab === 'spec' }"
+            @click="codingArtifactTab = 'spec'"
+          >开发文档</button>
+          <button
+            type="button"
+            class="cap-tab"
             :class="{ active: codingArtifactTab === 'files' }"
             @click="codingArtifactTab = 'files'"
           >产物清单</button>
@@ -410,8 +416,30 @@
           >接入说明</button>
         </div>
 
+        <!-- 开发文档 tab(对标 Builder 设计文档:把开发 SPEC 当一等文档,渲染/原文切换)-->
+        <div v-if="codingArtifactTab === 'spec'" class="cap-scroll">
+          <template v-if="specMarkdown">
+            <div class="cap-spec-bar">
+              <div class="cap-spec-seg">
+                <button type="button" :class="{ on: specViewMode === 'render' }" @click="specViewMode = 'render'">渲染</button>
+                <button type="button" :class="{ on: specViewMode === 'raw' }" @click="specViewMode = 'raw'">原文</button>
+              </div>
+              <button
+                v-if="isBoundDeploy && codingArtifactsHasAny"
+                type="button" class="cap-spec-cta" @click="openInstallModal"
+              >装回应用</button>
+            </div>
+            <div v-if="specViewMode === 'render'" class="cap-spec-doc" v-html="renderMarkdown(specMarkdown)"></div>
+            <pre v-else class="cap-spec-raw">{{ specMarkdown }}</pre>
+          </template>
+          <div v-else class="cap-empty">
+            <p>暂无开发文档。</p>
+            <p class="cap-empty-hint">在左侧描述需求,AI 会先产出「开发 SPEC」——这里就是它的文档视图(可渲染 / 看原文),对标 Builder 的设计文档。</p>
+          </div>
+        </div>
+
         <!-- 产物清单 tab -->
-        <div v-if="codingArtifactTab === 'files'" class="cap-scroll">
+        <div v-else-if="codingArtifactTab === 'files'" class="cap-scroll">
           <template v-if="codingArtifactsHasAny">
             <div class="cap-deploy-cta">
               <button class="cap-deploy-btn" @click="openInstallModal">
@@ -765,7 +793,20 @@ function toolPayloadFromStreamMsg(msg: any, id: string, isLast: boolean): AgentT
 // 把 streamMessages 里的 file_write / file_edit 整成 new/modified 两组，
 // 提供给右侧 CodingArtifactPanel 渲染。最后一条 file_write 在 isStreaming
 // 时视为「正在写入」展示 spinner。
-const codingArtifactTab = ref<'files' | 'integrate'>('files')
+const codingArtifactTab = ref<'spec' | 'files' | 'integrate'>('spec')
+const specViewMode = ref<'render' | 'raw'>('render')
+// 开发文档(对标 Builder 设计文档):从对话流取最新「开发 SPEC」md。
+// live(content 事件落 streamMsg)+ 历史回放(带 BRAINSTORM marker)都覆盖,marker 去掉。
+const specMarkdown = computed<string>(() => {
+  const list = streamMessages.value as any[]
+  for (let i = list.length - 1; i >= 0; i--) {
+    const c = String(list[i]?.content || '')
+    if (/开发\s*SPEC\s*确认|📋\s*开发\s*SPEC/.test(c)) {
+      return c.replace(/^<!--\s*BRAINSTORM_PROPOSAL\s*-->\s*/, '').trim()
+    }
+  }
+  return ''
+})
 
 function _formatSize(content: string | undefined | null): string {
   const bytes = content ? new Blob([content]).size : 0
@@ -4199,6 +4240,27 @@ watch(() => route.path, () => {
   border-bottom: 1px solid var(--ai-soft-2);
   line-height: 1.55;
 }
+
+/* ── 开发文档 tab(对标 Builder 设计文档:渲染/原文 + 文档观感)── */
+.cap-spec-bar { display: flex; align-items: center; justify-content: space-between; gap: 10px; margin-bottom: 12px; }
+.cap-spec-seg { display: inline-flex; border: 1px solid var(--t-border-subtle); border-radius: 8px; overflow: hidden; }
+.cap-spec-seg button { height: 28px; padding: 0 12px; border: none; background: transparent; color: var(--t-text-secondary); font-size: 12.5px; cursor: pointer; }
+.cap-spec-seg button.on { background: var(--t-brand); color: #fff; }
+.cap-spec-cta { height: 28px; padding: 0 14px; border: none; border-radius: 8px; background: var(--t-brand); color: #fff; font-size: 12.5px; font-weight: 600; cursor: pointer; }
+.cap-spec-raw { margin: 0; padding: 12px; background: var(--t-bg-soft, rgba(15, 23, 42, 0.05)); border-radius: 10px; font-size: 12px; line-height: 1.6; white-space: pre-wrap; word-break: break-word; color: var(--t-text-primary); font-family: var(--font-mono, ui-monospace, monospace); }
+.cap-spec-doc { font-size: 13px; line-height: 1.7; color: var(--t-text-primary); }
+.cap-spec-doc :deep(h1), .cap-spec-doc :deep(h2) { font-size: 15.5px; font-weight: 700; margin: 14px 0 8px; }
+.cap-spec-doc :deep(h3) { font-size: 13.5px; font-weight: 650; margin: 13px 0 6px; }
+.cap-spec-doc :deep(p) { margin: 0 0 8px; }
+.cap-spec-doc :deep(ul), .cap-spec-doc :deep(ol) { margin: 6px 0; padding-left: 20px; }
+.cap-spec-doc :deep(li) { margin: 3px 0; }
+.cap-spec-doc :deep(table) { border-collapse: collapse; width: 100%; margin: 10px 0; font-size: 12px; }
+.cap-spec-doc :deep(th), .cap-spec-doc :deep(td) { border: 1px solid var(--t-border-subtle); padding: 6px 9px; text-align: left; vertical-align: top; word-break: break-word; }
+.cap-spec-doc :deep(th) { background: var(--t-bg-soft, rgba(15, 23, 42, 0.04)); font-weight: 600; }
+.cap-spec-doc :deep(code) { background: var(--t-bg-soft, rgba(15, 23, 42, 0.06)); padding: 1px 5px; border-radius: 4px; font-size: 12px; font-family: var(--font-mono, ui-monospace, monospace); }
+.cap-spec-doc :deep(hr) { border: none; border-top: 1px solid var(--t-border-subtle); margin: 12px 0; }
+.cap-spec-doc :deep(strong) { font-weight: 650; }
+
 .cap-tabs {
   display: flex;
   border-bottom: 1px solid var(--border, #e5e5ea);
