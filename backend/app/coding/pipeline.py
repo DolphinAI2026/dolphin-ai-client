@@ -725,6 +725,17 @@ async def save_coding_message(db: AsyncSession, conversation_id: int, role: str,
 
 BRAINSTORM_PROPOSAL_MARKER = "<!-- BRAINSTORM_PROPOSAL -->"
 BRAINSTORM_MAX_REVISIONS = 8  # 仅用于记录多轮修订，不再强制进入代码生成
+
+# ── 澄清门(2026-06):出 SPEC 前,若需求不清晰先问澄清问题(选项/自由输入),不一股脑直接写 SPEC ──
+# 澄清提问以独立 marker 存历史,使续轮能识别「用户在回答澄清」状态(区别于「确认 SPEC」)。
+CLARIFY_PROPOSAL_MARKER = "<!-- BRAINSTORM_CLARIFY -->"
+CLARIFY_HEADER = "## 🤔"          # 澄清提问的固定一级标题前缀(LLM 必须以此开头,据此判定 spec/clarify)
+CLARIFY_MAX_ROUNDS = 2            # 最多澄清 2 轮,之后强制基于已知信息直接出 SPEC,防无限提问
+
+def _looks_like_clarification(text: str) -> bool:
+    """brainstorm 输出是「澄清提问」还是「开发 SPEC」?
+    正向判定:仅当以 `## 🤔` 开头才算澄清(默认按 SPEC 走,避免误把 SPEC 当澄清丢了确认门)。"""
+    return bool(text) and text.lstrip().startswith(CLARIFY_HEADER)
 BRAINSTORM_SCENES = {
     SceneType.WEB_COMPONENT_DUAL,
     SceneType.WEB_PAGE,
@@ -1347,6 +1358,35 @@ def _get_brainstorm_state(history: list) -> tuple:
     return None, None, 0
 
 
+def _get_pending_clarification(history: list) -> tuple:
+    """检查对话是否处于「等待用户回答澄清问题」状态。
+    Returns: (clarify_text, original_requirement) or (None, None)
+
+    仅当**最后一条** assistant 消息带 CLARIFY_PROPOSAL_MARKER(即刚抛出澄清提问、用户还没回)时算等待澄清。
+    original_requirement 取**首条**用户消息(真正的原始需求,而非澄清回答那句)。
+    """
+    for msg in reversed(history):
+        if msg["role"] == "assistant":
+            content = msg.get("content", "")
+            if content.startswith(CLARIFY_PROPOSAL_MARKER):
+                original_req = ""
+                for m in history:
+                    if m["role"] == "user":
+                        original_req = m.get("content", "")
+                        break
+                return content[len(CLARIFY_PROPOSAL_MARKER):].strip(), original_req
+            break  # 最后一条 assistant 不是澄清 → 非等待态
+    return None, None
+
+
+def _count_clarify_rounds(history: list) -> int:
+    """历史中已抛出的澄清提问轮数(用于 CLARIFY_MAX_ROUNDS 封顶,防无限澄清)。"""
+    return sum(
+        1 for m in history
+        if m.get("role") == "assistant" and m.get("content", "").startswith(CLARIFY_PROPOSAL_MARKER)
+    )
+
+
 # ── bound「在应用上定制」grounding(先读应用上下文再写 SPEC) ──────────────
 
 async def _resolve_bound_app(tenant_id, app_id, db):
@@ -1399,11 +1439,15 @@ def _grounding_tool_defs():
     return out
 
 
-async def _grounded_brainstorm(params, scene_type, apaas_app_id, platform_env_id, app_name, db):
-    """bound 首轮:先调读工具了解应用,再输出开发 SPEC。
+async def _grounded_brainstorm(params, scene_type, apaas_app_id, platform_env_id, app_name, db,
+                               history_summary: str = "", force_spec: bool = False):
+    """bound 首轮:先调读工具了解应用,再输出开发 SPEC(或先抛澄清问题)。
 
     async generator:yield read_app_context step 事件;最后 yield
     {"__spec__": <markdown> or None}(None = 调用方回退旧 brainstorm)。
+    返回文本可能是「📋 开发 SPEC 确认」**或**「## 🤔 澄清提问」,由调用方按 _looks_like_clarification 分流。
+    history_summary:已有对话(原始需求 + 上一轮澄清问答)摘要,续轮带上让 LLM 接着澄清结果写 SPEC。
+    force_spec:已澄清达上限 → 强制本轮直接出 SPEC,不再提问。
     apaas_app_id 每次工具调用都被后端锁定,agent 改不了(防跨应用读)。
     """
     try:
@@ -1415,16 +1459,35 @@ async def _grounded_brainstorm(params, scene_type, apaas_app_id, platform_env_id
         yield {"__spec__": None}
         return
 
+    # 澄清门:出 SPEC 前先判断需求是否清晰,不清晰先问(选项/自由输入),清晰才写 SPEC。
+    if force_spec:
+        clarify_clause = (
+            f"用户已澄清多轮,**本轮必须直接输出「📋 开发 SPEC 确认」**,基于已知信息做合理假设,**不要再提问**。"
+        )
+    else:
+        clarify_clause = (
+            f"**读完后先判断需求是否清晰**:若关键信息缺失或有歧义(如:改哪个页面/字段没说清、"
+            f"触发条件/交互细节/边界不明确、多种合理做法需用户拍板),**先不要写 SPEC**,而是"
+            f"以「{CLARIFY_HEADER} 开始前,先和你对齐几点」开头,列 1-3 个澄清问题——每个问题尽量给"
+            f"A/B/C 选项供快速选择,并注明可自由补充;问完即止,不要带 SPEC。"
+            f"**若需求已足够清晰(或用户已回答过澄清)**,才直接输出「📋 开发 SPEC 确认」。"
+        )
     system = (
         f"你在为已有应用「{app_name}」做自开发扩展。**先调用读工具**了解该应用的数据模型、菜单"
-        f"(必要时多查几次),理解清楚后**只输出一份结构化「开发 SPEC 确认」markdown**"
-        f"(含:页面/组件名称、自开发类型、实现范围、功能概述、需求拆解与边界、页面结构)。"
-        f"SPEC 必须引用该应用的真实模型/字段/菜单,不要脑补。不要输出 SPEC 以外的话。"
+        f"(必要时多查几次)。{clarify_clause}"
+        f"SPEC 含:页面/组件名称、自开发类型、实现范围、功能概述、需求拆解与边界、页面结构;"
+        f"必须引用该应用的真实模型/字段/菜单,不要脑补。不要输出 SPEC 或澄清问题以外的话。"
         f"**SPEC 要精简可扫读:控制在 900 字内、表格优先、短句,别三级嵌套列表、别贴大段代码。**"
     )
+    user_content = (params.message or "")[:1000]
+    if history_summary:
+        user_content = (
+            f"【已有对话(含原始需求与你上一轮的澄清提问)】\n{history_summary[:1500]}\n\n"
+            f"【用户最新回答 / 补充】\n{user_content}"
+        )
     messages = [
         {"role": "system", "content": system},
-        {"role": "user", "content": (params.message or "")[:1000]},
+        {"role": "user", "content": user_content},
     ]
     tool_defs = _grounding_tool_defs()
 
@@ -1484,18 +1547,22 @@ async def _grounded_brainstorm(params, scene_type, apaas_app_id, platform_env_id
     yield {"__spec__": None}  # 轮次耗尽没出 SPEC → 回退
 
 
-async def _first_turn_brainstorm(params, scene_type, db, effective_model):
+async def _first_turn_brainstorm(params, scene_type, db, effective_model,
+                                 history_summary: str = "", force_spec: bool = False):
     """首轮 brainstorm 统一入口。
 
-    bound(app_id 解析到平台应用)→ 走 _grounded_brainstorm(先读应用上下文再写 SPEC),
-    否则(含 grounded 回退)→ 旧 _generate_brainstorm_proposal。
+    bound(app_id 解析到平台应用)→ 走 _grounded_brainstorm(先读应用上下文,需求不清晰先澄清、清晰才写 SPEC),
+    否则(含 grounded 回退)→ 旧 _generate_brainstorm_proposal(仅出 SPEC,不澄清)。
     async generator:yield read_app_context step 事件;最后 yield {"__spec__": <md or None>}。
+    返回文本可能是 SPEC 或澄清提问,调用方按 _looks_like_clarification 分流。
+    history_summary / force_spec:澄清续轮上下文 + 封顶,透传给 grounded。
     """
     handle = await _resolve_bound_app(params.tenant_id, getattr(params, "app_id", None), db)
     if handle:
         apaas_app_id, env_id, app_name = handle
         got_spec = None
-        async for ev in _grounded_brainstorm(params, scene_type, apaas_app_id, env_id, app_name, db):
+        async for ev in _grounded_brainstorm(params, scene_type, apaas_app_id, env_id, app_name, db,
+                                             history_summary=history_summary, force_spec=force_spec):
             if "__spec__" in ev:
                 got_spec = ev["__spec__"]
             else:
@@ -1505,8 +1572,12 @@ async def _first_turn_brainstorm(params, scene_type, db, effective_model):
             return
         # grounded 回退(没拉到/没出 SPEC)→ 落到旧逻辑
 
+    # 非 bound / grounded 回退:旧 brainstorm 只出 SPEC。澄清续轮时把已有对话拼进需求,避免丢原始诉求。
+    _req = params.message
+    if history_summary:
+        _req = f"{history_summary[:1500]}\n\n【用户最新回答/补充】{params.message}"
     proposal = await _generate_brainstorm_proposal(
-        params.tenant_id, effective_model, scene_type, requirement=params.message)
+        params.tenant_id, effective_model, scene_type, requirement=_req)
     yield {"__spec__": proposal or None}
 
 
@@ -1589,10 +1660,23 @@ async def run_coding_pipeline(
                 ws_id = None
                 yield _record_event({"type": "content", "content": "💡 检测到你想做一个新组件，正在为你创建新的工作区...\n\n"})
 
-        # ---- 意图门：仅对首轮(not is_iteration)生效 ----
+        # 预加载对话历史 + brainstorm/澄清 续轮状态 —— 必须在「意图门」之前判定:
+        # 用户回的「确认 / 改稿 / 澄清回答」不是一句新的 READ/BUILD 指令,不能再过意图门
+        # (否则「确认」「选 A」会被误判成 READ 直接去查询)。也供下游场景识别 / brainstorm 复用。
+        prior_history: list = []
+        if conversation_id and not is_iteration:
+            try:
+                prior_history = await get_conversation_history(db, conversation_id)
+            except Exception:
+                prior_history = []
+        prior_brainstorm_proposal, prior_original_requirement, prior_revision_count = _get_brainstorm_state(prior_history)
+        prior_clarify_text, prior_clarify_requirement = _get_pending_clarification(prior_history)
+        _awaiting_followup = bool(prior_brainstorm_proposal) or bool(prior_clarify_text)
+
+        # ---- 意图门：仅对首轮(not is_iteration)、且非 brainstorm/澄清续轮生效 ----
         # BUILD(保守兜底): 走原 codegen 流程，完全不变。
         # READ: 用只读 aPaaS 工具直接答问题，不建 workspace、不 codegen。
-        if not is_iteration:
+        if not is_iteration and not _awaiting_followup:
             _intent = await classify_coding_intent(
                 params.tenant_id, effective_model,
                 params.message.split("\n")[0][:300],  # 只取首行，与 detect_scene 对齐
@@ -1623,19 +1707,9 @@ async def run_coding_pipeline(
                     await save_coding_message(db, conversation_id, "assistant", _read_answer)
                 return
 
-        # 预加载对话历史（不含本轮 user message）。用途：
-        # 1) 判断是否处于 brainstorm 续轮：若上一条 assistant 是 brainstorm 提案，
-        #    本轮 user message 是 confirm/revise/abort 回复，**不能**用它做场景识别
-        #    （否则"确认"两个字会被识别成业务事件弹窗）
-        # 2) brainstorm 续轮时用 original_requirement（首条用户消息）重做场景识别
-        # 3) 提供给 brainstorm 决策与 agent 上下文使用，避免重复 fetch
-        prior_history: list = []
-        if conversation_id and not is_iteration:
-            try:
-                prior_history = await get_conversation_history(db, conversation_id)
-            except Exception:
-                prior_history = []
-        prior_brainstorm_proposal, prior_original_requirement, prior_revision_count = _get_brainstorm_state(prior_history)
+        # （对话历史 prior_history + brainstorm/澄清 续轮状态已在「意图门」之前加载，见上方。
+        #   续轮判断的意义:用户回的"确认/改稿/澄清回答"不能拿来做场景识别，
+        #   否则"确认"两个字会被识别成业务事件弹窗。）
 
         # ---- Step 1: 场景检测 ----
         if not replay_stream_messages:
@@ -1645,11 +1719,14 @@ async def run_coding_pipeline(
             # brainstorm 续轮（用户回复"确认/再改一下"）：场景已在首轮识别并通知过前端，
             # 本轮只做静默识别（scene_type 下游还要用，例如选 brainstorm 模板、生成 project_type），
             # 不再 emit detect_scene step / scene_detected，避免前端出现两张 "识别为..." badge
-            is_brainstorm_continuation = bool(prior_brainstorm_proposal)
+            is_brainstorm_continuation = _awaiting_followup
             if not is_brainstorm_continuation:
                 yield _record_event({"type": "step", "step": "detect_scene", "status": "running"})
-            # brainstorm 续轮：必须用 original_requirement 而非 params.message
-            detection_message = prior_original_requirement if prior_brainstorm_proposal else params.message
+            # brainstorm / 澄清 续轮：必须用 original_requirement 而非 params.message(用户这句是确认/澄清回答)
+            detection_message = (
+                prior_original_requirement if prior_brainstorm_proposal
+                else (prior_clarify_requirement if prior_clarify_text else params.message)
+            )
             # 始终用 AI 从 message 识别场景，project_type 仅作降级兜底
             # 只取第一行（用户的直接意图），避免后面附带的 API 文档等内容干扰识别
             intent_snippet = detection_message.split("\n")[0][:300]
@@ -1822,19 +1899,38 @@ async def run_coding_pipeline(
                 yield _record_event({"type": "step", "step": "create_workspace", "status": "done", "data": _data})
 
         elif not is_iteration and scene_type in BRAINSTORM_SCENES:
-            # 首次发起 brainstorm：生成开发 SPEC 后**停住等用户确认**(确认门,2026-06 重新加回)。
-            # 不再一股脑直接 codegen;下一轮(续轮)由 _get_brainstorm_state 识别为等待确认态,
-            # 走上方 continuation 分支分类「确认 → 建工作区 + codegen / 改稿 → 重出 SPEC 继续等」。
+            # 首轮发起(或澄清回答后的续轮)。两道门,本轮都不 codegen:
+            #   · 澄清门:需求不清晰 → 先抛澄清问题(选项/自由输入),等用户回答。
+            #   · 确认门:需求清晰 → 出开发 SPEC 后停住等确认。
+            #   下一轮由 _get_pending_clarification / _get_brainstorm_state 识别等待态,走对应分支。
             _inline_brainstorm_proposal: str = ""
             yield _record_event({"type": "step", "step": "brainstorm", "status": "running"})
-            # bound「在应用上定制」→ 先读应用上下文再写 SPEC(read_app_context step 在此 yield);
-            # 否则走旧 _generate_brainstorm_proposal。两条路最终都给出 proposal markdown。
+            # bound「在应用上定制」→ 先读应用上下文,再决定澄清 or 写 SPEC(read_app_context step 在此 yield);
+            # 否则走旧 _generate_brainstorm_proposal(只出 SPEC,不澄清)。
+            # 澄清已达上限 → 强制本轮直接出 SPEC,不再提问;conversation_summary 带上已有问答让 SPEC 接着写。
+            _force_spec = _count_clarify_rounds(prior_history) >= CLARIFY_MAX_ROUNDS
             proposal = None
-            async for _ev in _first_turn_brainstorm(params, scene_type, db, effective_model):
+            async for _ev in _first_turn_brainstorm(params, scene_type, db, effective_model,
+                                                    history_summary=conversation_summary,
+                                                    force_spec=_force_spec):
                 if "__spec__" in _ev:
                     proposal = _ev["__spec__"]
                 else:
                     yield _record_event(_ev)
+            if proposal and _looks_like_clarification(proposal):
+                # ★ 澄清门:需求不清晰 → 抛澄清问题,不出 SPEC、不建工作区、不 codegen。
+                #   存为带 CLARIFY marker 的消息,下一轮 _get_pending_clarification 识别「等回答澄清」→
+                #   跳过意图门 + 用原始需求识别场景 + 带问答重做 brainstorm(再判清晰度)。
+                await save_coding_message(db, conversation_id, "assistant",
+                                          CLARIFY_PROPOSAL_MARKER + proposal)
+                yield _record_event({"type": "step", "step": "brainstorm", "status": "done"})
+                yield _record_event({"type": "content", "content": proposal})
+                yield _record_event({
+                    "type": "done", "workspace_id": None,
+                    "conversation_id": conversation_id, "ide_url": None,
+                    "waiting_clarification": True,
+                })
+                return
             if proposal:
                 _inline_brainstorm_proposal = proposal
                 await save_coding_message(db, conversation_id, "assistant",

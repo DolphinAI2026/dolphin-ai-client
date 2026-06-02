@@ -130,7 +130,7 @@ async def test_unbound_skips_grounding(monkeypatch):
 async def test_bound_uses_grounding(monkeypatch):
     from app.coding import pipeline as pl
     monkeypatch.setattr(pl, "_resolve_bound_app", AsyncMock(return_value=("84799", 3, "通用B2B CRM")))
-    async def _g(params, scene_type, apaas_app_id, env_id, app_name, db):
+    async def _g(params, scene_type, apaas_app_id, env_id, app_name, db, **_kw):
         yield {"type": "step", "step": "read_app_context", "status": "done", "data": {}}
         yield {"__spec__": "GROUNDED SPEC 引用商机模型"}
     monkeypatch.setattr(pl, "_grounded_brainstorm", _g)

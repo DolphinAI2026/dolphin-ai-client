@@ -284,9 +284,10 @@ export function useCodingPipeline(deps: PipelineDeps) {
         if (!ideUrl.value) setIdeUrl(parsed.ide_url)
       }
       if ('Notification' in window && Notification.permission === 'granted') {
-        new Notification('aPaaS Builder', {
-          body: parsed.waiting_confirmation ? '开发 SPEC 已生成，请确认后开始生成代码' : '代码已生成完成，快来看看吧',
-        })
+        const _notifyBody = parsed.waiting_clarification
+          ? '有几个问题想先和你对齐一下，回答后继续'
+          : (parsed.waiting_confirmation ? '开发 SPEC 已生成，请确认后开始生成代码' : '代码已生成完成，快来看看吧')
+        new Notification('aPaaS Builder', { body: _notifyBody })
       }
       playDoneChime()
     },
