@@ -168,12 +168,18 @@
           <div v-if="awaitingSpecConfirm" class="coding-confirm-bar">
             <div class="ccb-text">
               <strong>开发 SPEC 已生成，待你确认</strong>
-              <span>确认无误即开始写代码；要调整就直接在下方补充需求。</span>
+              <span>完整 SPEC 在右侧「开发文档」查看；确认无误即开始写代码，要调整就直接在下方补充需求。</span>
             </div>
-            <button class="ccb-btn" @click="confirmSpec">
-              <el-icon :size="16"><CircleCheck /></el-icon>
-              <span>确认，开始开发</span>
-            </button>
+            <div class="ccb-actions">
+              <button class="ccb-btn-ghost" @click="openCodingArtifactTab('spec')">
+                <el-icon :size="15"><Document /></el-icon>
+                <span>查看开发文档</span>
+              </button>
+              <button class="ccb-btn" @click="confirmSpec">
+                <el-icon :size="16"><CircleCheck /></el-icon>
+                <span>确认，开始开发</span>
+              </button>
+            </div>
           </div>
 
           <!-- 完成态卡片(对标 Builder「应用就绪」):codegen 完成且有产物时,给明确终态 + 行动入口 -->
@@ -727,7 +733,12 @@ const agentMessages = computed<AgentMessage[]>(() => {
     if (msg.type === 'user') {
       out.push({ id: 'sm' + i, kind: 'user', content: msg.content })
     } else if (msg.type === 'message') {
-      out.push({ id: 'sm' + i, kind: 'assistant', content: msg.content })
+      // 开发 SPEC 不在对话里大段铺(和右侧「开发文档」重复)——收成一行里程碑提示,完整 SPEC 去产物看。
+      if (/开发\s*SPEC\s*确认|📋\s*开发\s*SPEC/.test(msg.content || '')) {
+        out.push({ id: 'sm' + i, kind: 'status', content: '📋 已生成开发 SPEC —— 在右侧「开发文档」查看完整内容' })
+      } else {
+        out.push({ id: 'sm' + i, kind: 'assistant', content: msg.content })
+      }
     } else if (msg.type === 'error') {
       out.push({ id: 'sm' + i, kind: 'error', content: msg.content })
     } else if (msg.type === 'thinking') {
@@ -923,6 +934,12 @@ const showCodingArtifactPanel = computed(() => {
 const toggleCodingArtifactPanel = () => {
   // 反转当前显示状态，把意志写入 userToggle（之后跟随用户，不再随 auto 变）
   codingArtifactPanelUserToggle.value = !showCodingArtifactPanel.value
+}
+
+// 明确「打开」产物面板到指定 tab(不是切换)——给确认条/完成卡的「查看开发文档/产物」用
+function openCodingArtifactTab(tab: 'spec' | 'files' | 'integrate') {
+  codingArtifactTab.value = tab
+  codingArtifactPanelUserToggle.value = true
 }
 
 function codingTimeGroup(iso: string | null | undefined): string {
@@ -4117,6 +4134,7 @@ watch(() => route.path, () => {
 .ccb-text { display: flex; flex-direction: column; gap: 1px; min-width: 0; }
 .ccb-text strong { font-size: 13.5px; font-weight: 650; color: var(--t-text-primary); }
 .ccb-text span { font-size: 12px; color: var(--t-text-muted); }
+.ccb-actions { display: flex; align-items: center; gap: 8px; flex-shrink: 0; }
 .ccb-btn {
   display: inline-flex; align-items: center; gap: 6px;
   height: 34px; padding: 0 16px; border: none; border-radius: 9px;
@@ -4124,6 +4142,13 @@ watch(() => route.path, () => {
   cursor: pointer; flex-shrink: 0; transition: filter 0.15s ease;
 }
 .ccb-btn:hover { filter: brightness(0.92); }
+.ccb-btn-ghost {
+  display: inline-flex; align-items: center; gap: 6px;
+  height: 34px; padding: 0 13px; border: 1px solid var(--t-border-strong); border-radius: 9px;
+  background: transparent; color: var(--t-text-secondary); font-size: 13px; font-weight: 500;
+  cursor: pointer; flex-shrink: 0; transition: all 0.15s ease;
+}
+.ccb-btn-ghost:hover { border-color: var(--t-brand); color: var(--t-brand); }
 .chat-input-wrapper {
   display: flex;
   align-items: flex-end;
