@@ -395,7 +395,9 @@ export function useCodingPipeline(deps: PipelineDeps) {
       addStreamMsg({ type: 'status', content: '───' })
     }
     addStreamMsg({ type: 'user', content: message })
-    addStreamMsg({ type: 'status', content: codingStore.workspace ? '正在处理...' : '正在识别开发场景...', stepKey: codingStore.workspace ? undefined : 'detect_scene' })
+    // 首条占位用中性文案：此时还没分类 read/build,不能预设"识别开发场景"(那是 codegen 话术,
+    // READ 问答会显得不对)。READ → tool 事件把它换成"已理解为查询请求";BUILD → detect_scene 完成换成"识别为 X"。
+    addStreamMsg({ type: 'status', content: codingStore.workspace ? '正在处理...' : '正在理解你的需求...', stepKey: codingStore.workspace ? undefined : 'detect_scene' })
 
     try {
       const finalMessage = await uploadAttachmentIfPresent(message, currentAttachment, currentPreviewUrl)

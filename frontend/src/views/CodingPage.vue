@@ -816,8 +816,10 @@ const codingArtifactsHasAny = computed(() =>
 // 解决之前 "codingArtifactsHasAny.value return true" 把用户 toggle 意志盖掉的问题。
 const codingArtifactPanelUserToggle = ref<boolean | null>(null)
 
+// 仅在「确有产物」时自动弹产物面板。去掉 isStreaming：之前一开始 streaming（含 READ 问答、
+// codegen 刚起步还没写文件）就弹空面板，体验差（用户反馈「还没产物不着急弹」）。
 const codingArtifactPanelAutoShow = computed(() =>
-  codingArtifactsHasAny.value || isStreaming.value
+  codingArtifactsHasAny.value
 )
 
 const showCodingArtifactPanel = computed(() => {

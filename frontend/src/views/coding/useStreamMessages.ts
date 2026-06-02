@@ -80,6 +80,7 @@ function cleanThinkTags(text: string): string {
 
 // ── replay 历史消息识别模式 ──
 const STEP_RUNNING_PATTERNS = [
+  '正在理解你的需求',
   '正在识别开发场景',
   '正在生成开发 SPEC',
   '正在初始化工程脚手架',
