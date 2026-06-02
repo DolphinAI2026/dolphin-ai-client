@@ -104,6 +104,16 @@
               <span class="coding-session-kicker">AI Coding</span>
               <strong class="coding-session-title">{{ activeCodingSessionTitle }}</strong>
             </div>
+            <!-- F3: Builder→Coding handoff 来源应用的「← 回 Builder」回跳链 -->
+            <button
+              v-if="handoffSourceApp"
+              class="coding-back-to-builder"
+              @click="backToBuilder"
+              :title="`回到 AI Builder 配置「${handoffSourceApp.name}」`"
+            >
+              <el-icon :size="14"><ArrowLeft /></el-icon>
+              <span>回 Builder 配置「{{ handoffSourceApp.name }}」</span>
+            </button>
           </header>
 
           <div
@@ -894,6 +904,7 @@ const showCodingUnselected = computed(() =>
 )
 
 async function loadCodingConversationOnly(conversationId: number) {
+  handoffSourceApp.value = null  // F3: 切到已有会话时清掉 handoff 回跳链，避免串到别的会话
   const messages = await codingApi.getMessages(conversationId)
   codingStore.reset()
   codingStore.conversationId = conversationId
@@ -1106,6 +1117,13 @@ const sceneCategoryToProjectType: Record<string, string> = {
 }
 
 const AI_BUILDER_PENDING_CODING_KEY = 'ai_builder_pending_coding'
+// F3 (2026-06-02): 记住 Builder→Coding handoff 的来源应用，给「← 回 Builder」回跳用。
+const handoffSourceApp = ref<{ id: string; name: string } | null>(null)
+function backToBuilder() {
+  const app = handoffSourceApp.value
+  if (!app?.id) return
+  router.push({ path: '/chat', query: { app_id: app.id, tab: 'spec' } }).catch(() => {})
+}
 async function maybeConsumeAiBuilderDispatch() {
   if (route.query.from_ai_builder !== '1') return
   if (route.query.workspace_id || route.query.ws) return
@@ -1114,7 +1132,7 @@ async function maybeConsumeAiBuilderDispatch() {
   const raw = sessionStorage.getItem(AI_BUILDER_PENDING_CODING_KEY)
   if (!raw) return
 
-  let payload: { message?: string; projectId?: number | null; sceneCategory?: string } | null = null
+  let payload: { message?: string; projectId?: number | null; sceneCategory?: string; app_id?: number | string; app_name?: string } | null = null
   try {
     payload = JSON.parse(raw)
   } catch {
@@ -1135,6 +1153,13 @@ async function maybeConsumeAiBuilderDispatch() {
   if (payload.sceneCategory && sceneSuggestions[payload.sceneCategory]?.length) {
     activeSceneCategory.value = payload.sceneCategory
     pendingSceneCategory.value = payload.sceneCategory
+  }
+
+  // F3: 记住来源应用做「← 回 Builder」回跳。app_id 在 URL query（buildCodingRouteQuery 已带），
+  // app_name 在 sessionStorage payload（之前被丢弃，这里补上）。
+  const srcAppId = payload.app_id ?? route.query.app_id
+  if (srcAppId) {
+    handoffSourceApp.value = { id: String(srcAppId), name: payload.app_name || '应用' }
   }
 
   userInput.value = payload.message.trim()
@@ -1345,6 +1370,7 @@ function parseAssistantHistory(text: string) {
 }
 
 function startNewWorkspace() {
+  handoffSourceApp.value = null
   codingStore.reset()
   persistedCodingModelValue.value = null
   selectedCodingModelValue.value = normalizeCodingModelValue(selectedCodingModelValue.value)
@@ -1639,6 +1665,28 @@ watch(() => route.path, () => {
 .canvas-actions-back:hover {
   background: var(--t-bg-elevated);
   color: var(--t-text-primary);
+}
+/* F3: 会话表头里的「← 回 Builder」回跳链，靠右、蓝色 accent */
+.coding-back-to-builder {
+  margin-left: auto;
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  height: 28px;
+  padding: 0 10px;
+  border: 1px solid #3b82f6;
+  border-radius: 7px;
+  background: transparent;
+  color: #3b82f6;
+  font-size: 12px;
+  font-weight: 500;
+  cursor: pointer;
+  white-space: nowrap;
+  transition: all 0.15s ease;
+}
+.coding-back-to-builder:hover {
+  background: rgba(59, 130, 246, 0.12);
+  color: #2563eb;
 }
 
 .canvas-actions-right {
