@@ -888,7 +888,7 @@ const sidebarCodingItems = computed<SidebarSessionItem[]>(() => {
   return conversations.map(conv => ({
     id: `conv:${conv.id}`,
     title: compactTitle(conv.title, `开发会话 #${conv.id}`),
-    meta: conv.workspace_id || undefined,
+    meta: undefined,  // 不暴露 workspace_id 内部 ID(对用户无意义的噪声);时间已在分组头(今天/昨天)
     group: codingTimeGroup(conv.updated_at || conv.created_at),
     badgeIcon: ChatDotRound,
     badgeTone: 'chat',
