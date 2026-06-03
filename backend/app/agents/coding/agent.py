@@ -193,6 +193,9 @@ class CodingAgent(BaseAgent[dict]):
         # AutoFix 重试路径：driver.py 每轮重跑时注入
         fix_hint = self.ctx.input.get("fix_hint") or None
         round_index = int((self.ctx.extra or {}).get("round_index", 0))
+        # 「在应用上定制」bound 模式：pipeline 把绑定应用上下文塞进 ctx.input["app_context"]
+        # → prompt 里提示 agent 先读工具核对真实模型/菜单(工具范围后端已锁本应用)。
+        app_context = self.ctx.input.get("app_context") or None
 
         # 获取 workspace info（project_name / project_type / files）
         workspace_info: dict[str, Any] = {}
@@ -220,6 +223,7 @@ class CodingAgent(BaseAgent[dict]):
             spec_brief=spec_brief,
             fix_hint=fix_hint,
             round_index=round_index,
+            app_context=app_context,
         )
 
     def should_terminate(self) -> tuple[bool, str]:

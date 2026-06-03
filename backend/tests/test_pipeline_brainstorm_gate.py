@@ -145,3 +145,14 @@ async def test_first_message_brainstorm_scene_gates_on_confirmation():
         "Pipeline 触发了 create_workspace —— 确认门应在建工作区前就 return。\n"
         f"All events: {events}"
     )
+
+    # ── Assert 3: brainstorm done step 带 data.outcome="spec" —— 供前端区分胶囊文案 ──
+    bs_done = [
+        e for e in events
+        if e.get("type") == "step" and e.get("step") == "brainstorm" and e.get("status") == "done"
+    ]
+    assert bs_done, f"应有 brainstorm done step;events={events}"
+    assert bs_done[-1].get("data", {}).get("outcome") == "spec", (
+        "SPEC 分支的 brainstorm done 应带 outcome='spec'(前端据此显示「开发 SPEC 待确认」)。\n"
+        f"brainstorm done={bs_done}"
+    )

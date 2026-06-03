@@ -698,6 +698,7 @@ def build_user_prompt(
     spec_brief: str | None = None,
     fix_hint: str | None = None,
     round_index: int = 0,
+    app_context: dict[str, Any] | None = None,
 ) -> str:
     """构造 CodingAgent 的首条 user message（替代 VibeCodingAgent._build_prompt）。
 
@@ -755,6 +756,23 @@ def build_user_prompt(
             "以下是 brainstorm agent 与用户确认后产出的结构化规格。**优先按此段实现，"
             "Task 段只是用户原话，细节以 Spec 为准**。\n\n"
             + spec_brief.rstrip()
+        )
+
+    # 「在应用上定制」bound 模式：告诉 agent 挂在哪个真实应用上 + 先读工具核对真实结构。
+    # 工具范围已在后端锁定到本应用(apaas_app_id 强制),agent 无需也不该改 app_id。
+    if app_context and app_context.get("app_name"):
+        _app_name = app_context.get("app_name")
+        parts.append(
+            "\n## 关联应用上下文（在已有应用上做自开发扩展）\n"
+            f"本次开发挂在已有 aPaaS 应用「{_app_name}」上。生成的代码要对接该应用的**真实**"
+            "数据模型、字段、菜单——**不要脑补**模型码 / 字段码 / 接口路径。\n\n"
+            "**动手写代码前，先调用读工具核对真实结构**：\n"
+            "- `list_apaas_app_models`（带 `with_fields=true`）→ 拿该应用的模型 + 字段定义"
+            "（modelCode / 字段码 / 类型）\n"
+            "- `list_apaas_app_menus` → 拿菜单树（form_id / form_code）\n\n"
+            "应用范围**已自动锁定**到本应用：调这些工具时无需也不要改 `apaas_app_id`（后端已锁，"
+            "传任何值都会被强制成本应用，也读不到别的应用）。生成的 `this.$request` 调用与字段绑定"
+            "必须用上面查到的真实 modelCode 和字段码。"
         )
 
     parts.extend([

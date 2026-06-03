@@ -112,6 +112,20 @@ def _wrap_result(text: str) -> ToolResult:
     )
 
 
+def _apply_bound_app_scope(args: dict[str, Any], ctx: AgentContext, accepts_app_id: bool) -> dict[str, Any]:
+    """「在应用上定制」bound 模式 → 把 apaas_app_id 锁死成绑定应用。
+
+    codegen 在已有应用上做扩展时(ctx.extra['bound_apaas_app_id'] 有值),所有吃 apaas_app_id
+    的平台读工具都强制查这个应用,**无视 LLM 传的值** —— 既防 agent 跨应用读(隔离),也防它
+    没绑定/传错 app_id 读不到东西(对齐 grounding 的 args['apaas_app_id']=... 锁定)。
+    非 bound 或工具不吃 apaas_app_id → 原样不动。
+    """
+    locked = (ctx.extra or {}).get("bound_apaas_app_id") if isinstance(ctx.extra, dict) else None
+    if locked and accepts_app_id:
+        return {**(args or {}), "apaas_app_id": str(locked)}
+    return args or {}
+
+
 def build_coding_tools(registry: ToolRegistry | None = None) -> list[Tool]:
     """从 tool_registry 构造 BaseAgent 的 Tool 列表 + 注入 aPaaS 工具集。
 
@@ -174,8 +188,10 @@ def build_coding_tools(registry: ToolRegistry | None = None) -> list[Tool]:
         # 平台查询类（需 platform_env_id）
         if name in APAAS_TOOL_EXECUTORS_PLATFORM:
             executor_fn = APAAS_TOOL_EXECUTORS_PLATFORM[name]
+            # 该工具 schema 是否吃 apaas_app_id —— bound 模式据此决定是否锁定应用范围
+            accepts_app_id = "apaas_app_id" in ((parameters or {}).get("properties") or {})
 
-            def _make_platform_executor(tool_name: str, fn_ref):
+            def _make_platform_executor(tool_name: str, fn_ref, tool_accepts_app_id: bool):
                 async def executor(args: dict[str, Any], ctx: AgentContext) -> ToolResult:
                     env_id = await _resolve_platform_env_id(ctx)
                     if not env_id:
@@ -187,6 +203,8 @@ def build_coding_tools(registry: ToolRegistry | None = None) -> list[Tool]:
                             ),
                             error="NO_PLATFORM_ENV",
                         )
+                    # bound「在应用上定制」→ 强制 apaas_app_id = 绑定应用(防跨应用读/传错)
+                    args = _apply_bound_app_scope(args, ctx, tool_accepts_app_id)
                     from app.database import AsyncSessionLocal
                     # 2026-05-29: apaas token 过期(httpx 401)自愈。这 11 个平台工具签名是
                     # (args, env_id, db) — 套不了 call_apaas_with_relogin(它要 fn(client))，
@@ -234,7 +252,7 @@ def build_coding_tools(registry: ToolRegistry | None = None) -> list[Tool]:
                 name=name,
                 description=description,
                 parameters_schema=parameters,
-                execute=_make_platform_executor(name, executor_fn),
+                execute=_make_platform_executor(name, executor_fn, accepts_app_id),
             ))
 
         # workspace 产物 / 附件类（用 workspace_path）

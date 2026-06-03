@@ -149,6 +149,12 @@ async def test_first_turn_clarification_gates_without_codegen():
     )
     # 没有把澄清误存成 brainstorm SPEC marker(否则会被当成等待确认)
     assert not any(content.startswith(BRAINSTORM_PROPOSAL_MARKER) for _r, content in saved)
+    # 4) brainstorm done step 带 data.outcome="clarify" —— 前端据此显示「澄清问题待回答」而非「开发 SPEC 待确认」
+    bs_done = [e for e in events
+               if e.get("type") == "step" and e.get("step") == "brainstorm" and e.get("status") == "done"]
+    assert bs_done and bs_done[-1].get("data", {}).get("outcome") == "clarify", (
+        f"澄清分支的 brainstorm done 应带 outcome='clarify';bs_done={bs_done}"
+    )
 
 
 @pytest.mark.asyncio
@@ -197,3 +203,9 @@ async def test_first_turn_structured_clarify_emits_chips():
     assert cm, f"应以 CLARIFY marker 存档;saved={saved}"
     payload = _json.loads(cm[0][len(CLARIFY_PROPOSAL_MARKER):])
     assert payload["options"] == ["商机阶段", "负责人"]
+    # brainstorm done step 带 data.outcome="clarify"(结构化 chips 分支)
+    bs_done = [e for e in events
+               if e.get("type") == "step" and e.get("step") == "brainstorm" and e.get("status") == "done"]
+    assert bs_done and bs_done[-1].get("data", {}).get("outcome") == "clarify", (
+        f"结构化澄清分支的 brainstorm done 应带 outcome='clarify';bs_done={bs_done}"
+    )

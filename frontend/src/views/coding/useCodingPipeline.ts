@@ -131,7 +131,20 @@ export function useCodingPipeline(deps: PipelineDeps) {
         try { allWorkspaces.value = await codingApi.listWorkspaces() } catch {}
       },
     },
-    brainstorm: { running: '正在生成开发 SPEC...', done: '开发 SPEC 待确认' },
+    brainstorm: {
+      running: '正在生成开发 SPEC...',
+      done: '',  // label 据后端 data.outcome 动态生成(clarify/spec/skip)
+      onDone: (data) => {
+        // 澄清轮不该贴「开发 SPEC 待确认」—— 那轮没出 SPEC,是抛了澄清问题等回答。
+        const outcome = data?.outcome
+        const label = outcome === 'clarify'
+          ? '澄清问题待回答'
+          : outcome === 'skip'
+            ? '已分析需求'
+            : '开发 SPEC 待确认'
+        completeStepMsg('brainstorm', label)
+      },
+    },
     generate: { running: 'AI 开始编写代码...', done: '代码生成完成' },
   }
 

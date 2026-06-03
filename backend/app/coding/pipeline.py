@@ -1415,6 +1415,27 @@ async def _resolve_bound_app(tenant_id, app_id, db):
     return (str(app.apaas_app_id), int(app.platform_env_id), app.app_name or "应用")
 
 
+def _codegen_app_context_overlays(
+    bound_handle: Optional[tuple], system_prompt: str,
+) -> tuple[dict[str, Any], dict[str, Any]]:
+    """构造 codegen AgentContext 的 (input, extra)。
+
+    bound「在应用上定制」(_resolve_bound_app 返回 (apaas_app_id, env_id, app_name))→
+      · extra.bound_apaas_app_id:让 aPaaS 读工具把 apaas_app_id 锁定本应用(防跨应用,见 tools._apply_bound_app_scope)
+      · extra.platform_env_id:tools._resolve_platform_env_id 优先读它,锁定 env(不走租户默认兜底)
+      · input.app_context:prompt 渲染「关联应用上下文」段,提示 agent 先读真实模型/菜单
+    非 bound → 只带 system_prompt,extra 空,codegen 行为不变。
+    """
+    _input: dict[str, Any] = {"system_prompt": system_prompt}
+    _extra: dict[str, Any] = {}
+    if bound_handle:
+        app_id, env_id, app_name = bound_handle
+        _extra["bound_apaas_app_id"] = app_id
+        _extra["platform_env_id"] = env_id
+        _input["app_context"] = {"app_name": app_name, "apaas_app_id": app_id}
+    return _input, _extra
+
+
 _GROUNDING_MAX_TURNS = 4
 _GROUNDING_TOOL_NAMES = {"list_apaas_app_models", "list_apaas_app_menus"}
 
@@ -2008,7 +2029,9 @@ async def run_coding_pipeline(
                 #   下一轮 _get_pending_clarification 识别「等回答澄清」→ 带问答重做 brainstorm。
                 _saved = CLARIFY_PROPOSAL_MARKER + json.dumps(clarify_data, ensure_ascii=False)
                 await save_coding_message(db, conversation_id, "assistant", _saved)
-                yield _record_event({"type": "step", "step": "brainstorm", "status": "done"})
+                # outcome=clarify → 前端胶囊显示「澄清问题待回答」(而非「开发 SPEC 待确认」)
+                yield _record_event({"type": "step", "step": "brainstorm", "status": "done",
+                                     "data": {"outcome": "clarify"}})
                 yield _record_event({
                     "type": "clarify",
                     "question": clarify_data.get("question", ""),
@@ -2026,7 +2049,9 @@ async def run_coding_pipeline(
                 #   跳过意图门 + 用原始需求识别场景 + 带问答重做 brainstorm(再判清晰度)。
                 await save_coding_message(db, conversation_id, "assistant",
                                           CLARIFY_PROPOSAL_MARKER + proposal)
-                yield _record_event({"type": "step", "step": "brainstorm", "status": "done"})
+                # outcome=clarify(markdown 版澄清,legacy fallback):胶囊显示「澄清问题待回答」
+                yield _record_event({"type": "step", "step": "brainstorm", "status": "done",
+                                     "data": {"outcome": "clarify"}})
                 yield _record_event({"type": "content", "content": proposal})
                 yield _record_event({
                     "type": "done", "workspace_id": None,
@@ -2038,7 +2063,9 @@ async def run_coding_pipeline(
                 _inline_brainstorm_proposal = proposal
                 await save_coding_message(db, conversation_id, "assistant",
                                           BRAINSTORM_PROPOSAL_MARKER + proposal)
-                yield _record_event({"type": "step", "step": "brainstorm", "status": "done"})
+                # outcome=spec → 胶囊显示「开发 SPEC 待确认」
+                yield _record_event({"type": "step", "step": "brainstorm", "status": "done",
+                                     "data": {"outcome": "spec"}})
                 yield _record_event({"type": "content", "content": proposal})
                 # ★ 确认门:出完开发 SPEC 就停住,等用户「确认 / 调整」再生成代码,不一股脑直接开发。
                 #   确认 → 续轮判定后建工作区 + codegen;改稿 → 续轮重出 SPEC 继续等。
@@ -2051,7 +2078,9 @@ async def run_coding_pipeline(
                 return
             else:
                 # proposal 失败：降级直接走 codegen，无 SPEC 上下文
-                yield _record_event({"type": "step", "step": "brainstorm", "status": "done"})
+                # outcome=skip → 胶囊显示中性「已分析需求」(没出 SPEC 也没澄清)
+                yield _record_event({"type": "step", "step": "brainstorm", "status": "done",
+                                     "data": {"outcome": "skip"}})
                 logger.warning("Brainstorm proposal generation failed, falling back to direct codegen")
 
         # 走到这里有四种情况，且 ws_id 可能仍是 None：
@@ -2092,6 +2121,18 @@ async def run_coding_pipeline(
             fallback=AGENT_SYSTEM_PROMPT,
         )
 
+        # 「在应用上定制」bound 模式:解析绑定应用 → 把 apaas_app_id/env 注入 ctx,
+        # 让 codegen 的 aPaaS 读工具锁定本应用(防跨应用读)+ prompt 提示 agent 先读真实模型/菜单。
+        # 覆盖所有 codegen 入口(确认 SPEC / brainstorm 降级 / 迭代);非 bound(独立组件)→ 无 app_context,行为不变。
+        try:
+            _bound_handle = await _resolve_bound_app(params.tenant_id, getattr(params, "app_id", None), db)
+        except Exception:
+            _bound_handle = None
+        _coding_input, _coding_extra = _codegen_app_context_overlays(_bound_handle, _coding_system_prompt)
+        if _bound_handle:
+            logger.info("[codegen] bound app 上下文已注入: app=%s apaas_app_id=%s env=%s",
+                        _bound_handle[2], _bound_handle[0], _bound_handle[1])
+
         _coding_ctx = AgentContext(
             session_id=f"cs_{ws_id}",
             conversation_id=conversation_id or 0,
@@ -2099,7 +2140,8 @@ async def run_coding_pipeline(
             tenant_id=params.tenant_id,
             model=_cfg_model,
             workspace_id=ws_id,
-            input={"system_prompt": _coding_system_prompt},
+            input=_coding_input,
+            extra=_coding_extra,
             publisher=InMemoryEventPublisher(),   # adapter 会 wrap 成 queue publisher
             trace_writer=InMemoryTraceWriter(),   # Stage 4 后接 DB
             llm_client=_coding_llm,
