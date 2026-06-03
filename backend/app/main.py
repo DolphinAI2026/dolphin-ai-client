@@ -22,8 +22,6 @@ from app.routes import (
     chat,
     config_chat_sessions,
     coding,
-    coding_v2,
-    coding_v2_spec,
     conversations,
     current_app,
     db_connections,
@@ -170,8 +168,6 @@ app.include_router(browser.router, prefix="/api")
 app.include_router(harness.router, prefix="/api")
 app.include_router(spec.router, prefix="/api")
 app.include_router(sse.router, prefix="/api")
-app.include_router(coding_v2.router, prefix="/api")
-app.include_router(coding_v2_spec.router, prefix="/api")
 app.include_router(application_members.router, prefix="/api")
 app.include_router(proposals.app_router, prefix="/api")
 app.include_router(proposals.prop_router, prefix="/api")

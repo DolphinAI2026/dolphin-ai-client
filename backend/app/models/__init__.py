@@ -29,6 +29,7 @@ from app.models.process_definition import ProcessDefinition  # noqa: F401
 # Import spec applied version + spec document (Y SPEC 版本快照 + markdown 缓存)
 from app.models.spec_applied_version import SpecAppliedVersion  # noqa: F401
 from app.models.spec_document import SpecDocument  # noqa: F401
+from app.models.spec_section import SpecSection  # noqa: F401  — design-v4 草稿层 SpecSection
 
 
 class User(Base):

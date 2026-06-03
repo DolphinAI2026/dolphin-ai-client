@@ -1,13 +1,14 @@
 """Agent 架构相关数据模型（P1.2）。
 
-7 张表：
-- agent_messages          用户可见的消息流
-- brainstorm_sessions     BrainstormAgent 会话状态
-- specs                   Spec 契约版本链
-- coding_sessions         CodingAgent 执行记录
-- verification_reports    AC 验收报告
+6 张表（2026-06-03: 删 agent_messages + verification_reports 孤儿表 —— 随 v2
+orchestrator 死栈一起退役、无活跃引用；brainstorm_sessions/specs/coding_sessions
+虽也不再写入，但被活跃的 agent_error_events FK 链锁住，暂留）：
+- brainstorm_sessions     BrainstormAgent 会话状态（FK 链保留）
+- specs                   Spec 契约版本链（FK 链保留）
+- coding_sessions         CodingAgent 执行记录（FK 链保留）
 - agent_traces            Agent 内部调试 trace
-- conversation_events     SSE 事件缓存（支持断线重连）
+- conversation_events     SSE 事件缓存（支持断线重连，活跃）
+- agent_error_events      CodingAgent 错误记录（活跃，提示词优化用）
 
 所有 id 字段使用 String(64)，存 ULID/UUID hex。
 JSON 字段同时兼容 SQLite 和 MySQL。
@@ -31,53 +32,6 @@ from sqlalchemy import (
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.database import Base
-
-
-# ══════════════════════════════════════════════════════════════
-# 1. agent_messages — 用户可见消息流
-# ══════════════════════════════════════════════════════════════
-
-class AgentMessage(Base):
-    """用户可见的消息流（含用户说的、agent 说的、反问气泡、Spec emit 通知等）。
-
-    与旧 messages 表的区别：
-    - 支持多 agent source 标注
-    - 支持 content_type（text / markdown / spec_draft / verification_report）
-    - 支持 extra 元数据（question_id / spec_id / tool_name 等）
-    - 不存 agent 内部 tool loop 每一步（那些走 agent_traces）
-    """
-    __tablename__ = "agent_messages"
-
-    id: Mapped[str] = mapped_column(String(64), primary_key=True)
-    conversation_id: Mapped[int] = mapped_column(
-        Integer, ForeignKey("conversations.id"), nullable=False, index=True,
-    )
-
-    source: Mapped[str] = mapped_column(
-        String(32), nullable=False,
-        comment="user / brainstorm / coding / verification / system",
-    )
-    source_session_id: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
-
-    role: Mapped[str] = mapped_column(
-        String(16), nullable=False,
-        comment="user / assistant / system",
-    )
-    content_type: Mapped[str] = mapped_column(
-        String(32), nullable=False, default="text",
-        comment="text / markdown / spec_draft / verification_report / tool_summary / question",
-    )
-    content: Mapped[str] = mapped_column(Text, nullable=False)
-
-    extra: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict, nullable=False)
-
-    created_at: Mapped[datetime] = mapped_column(
-        DateTime, default=datetime.utcnow, nullable=False, index=True,
-    )
-
-    __table_args__ = (
-        Index("ix_agent_messages_conv_time", "conversation_id", "created_at"),
-    )
 
 
 # ══════════════════════════════════════════════════════════════
@@ -221,40 +175,6 @@ class CodingSession(Base):
     started_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
     ended_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
     error_message: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
-
-
-# ══════════════════════════════════════════════════════════════
-# 5. verification_reports
-# ══════════════════════════════════════════════════════════════
-
-class VerificationReport(Base):
-    """VerificationAgent 的 AC 验收报告。"""
-    __tablename__ = "verification_reports"
-
-    id: Mapped[str] = mapped_column(String(64), primary_key=True)
-    coding_session_id: Mapped[str] = mapped_column(
-        String(64), ForeignKey("coding_sessions.id"), nullable=False, index=True,
-    )
-    spec_id: Mapped[str] = mapped_column(
-        String(64), nullable=False, index=True,
-        comment="冗余，方便按 Spec 查所有报告",
-    )
-
-    overall_status: Mapped[str] = mapped_column(
-        String(16), nullable=False,
-        comment="passed / failed / partial",
-    )
-    passed_count: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
-    failed_count: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
-
-    # 每条 AC 的检查结果 [{ac_id / ac_index, description, status, evidence, confidence}]
-    items: Mapped[list[dict[str, Any]]] = mapped_column(JSON, default=list, nullable=False)
-    # constraints 检查结果 [{text, severity, status, evidence}]
-    constraint_results: Mapped[list[dict[str, Any]]] = mapped_column(JSON, default=list, nullable=False)
-
-    model_used: Mapped[Optional[str]] = mapped_column(String(100), nullable=True)
-
-    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, nullable=False)
 
 
 # ══════════════════════════════════════════════════════════════

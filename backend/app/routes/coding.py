@@ -1584,62 +1584,6 @@ async def ide_apply_file_edits(
     return _apply_ide_edits_to_path(workspace_path, req.edits)
 
 
-@router.get("/skills")
-async def list_skills(
-    keyword: str = Query(default=""),
-    skill_type: Optional[str] = Query(default=None),
-):
-    """列出可用技能（Skills 2.0）。"""
-    from app.coding.skills_v2 import SkillRegistry, SkillType
-
-    registry = SkillRegistry.get_instance()
-    st = SkillType(skill_type) if skill_type else None
-    results = registry.query(keyword=keyword, skill_type=st)
-    return {"skills": [s.model_dump() for s in results]}
-
-
-@router.post("/skills/{skill_name}/execute")
-async def execute_skill(
-    skill_name: str,
-    request: Request,
-    ctx: Annotated[AuthContext, Depends(get_auth_context)] = None,
-):
-    """执行一个 Skill 的 action。"""
-    from app.coding.skills_v2 import SkillRegistry
-
-    registry = SkillRegistry.get_instance()
-    skill = registry.get(skill_name)
-    if not skill:
-        raise HTTPException(status_code=404, detail=f"Skill '{skill_name}' not found")
-
-    if not skill.actions:
-        raise HTTPException(status_code=400, detail=f"Skill '{skill_name}' has no executable actions")
-
-    try:
-        payload = await request.json()
-    except Exception:
-        payload = {}
-
-    action_name = payload.get("action", skill.actions[0].name)
-    action = next((a for a in skill.actions if a.name == action_name), None)
-    if not action:
-        raise HTTPException(status_code=400, detail=f"Action '{action_name}' not found in skill '{skill_name}'")
-
-    # Dynamic import and call
-    try:
-        module_path, func_name = action.entry.rsplit(".", 1)
-        import importlib
-        module = importlib.import_module(module_path)
-        func = getattr(module, func_name)
-
-        args = payload.get("args", {})
-        result = await func(**args) if args else await func()
-        return {"status": "ok", "result": result}
-    except Exception as e:
-        logger.error(f"Skill execution failed: {skill_name}.{action_name}: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
-
-
 @router.post("/workspace/{ws_id}/ide/pipeline")
 async def ide_coding_pipeline(
     ws_id: str,
