@@ -36,7 +36,6 @@ import {
   DataAnalysis,
   Grid,
   HomeFilled,
-  Monitor,
   Promotion,
   Search,
   Setting,
@@ -54,7 +53,6 @@ const commandItems = [
   { icon: Setting, title: '模型配置', meta: '真实模型供应商、API Key、默认模型管理', to: '/platform-envs?tab=llm' },
   { icon: DataAnalysis, title: '平台环境', meta: '真实得帆云连接、租户环境、默认环境管理', to: '/platform-envs?tab=envs' },
   { icon: Setting, title: '成员管理', meta: '真实组织成员、角色和启停状态管理', to: '/tenant-users' },
-  { icon: Monitor, title: 'AI Coding', meta: '进入真实代码开发工作区', to: '/coding' },
   { icon: Promotion, title: 'DevOps 总览', meta: '第一阶段 mock：流水线、环境、审批', to: '/devops' },
 ]
 

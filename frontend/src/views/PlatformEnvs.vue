@@ -106,7 +106,7 @@
       <div v-else-if="llmConfigs.length === 0" class="empty-state">
         <EmptyState
           title="暂无模型配置"
-          desc="新增一个大模型配置，AI Builder / AI Coding 会自动消费这里的 API Key 与默认模型。"
+          desc="新增一个大模型配置，AI Builder / 二次开发 会自动消费这里的 API Key 与默认模型。"
         >
           <template #icon>
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2a4 4 0 0 0-4 4v2H6a2 2 0 0 0-2 2v10a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V10a2 2 0 0 0-2-2h-2V6a4 4 0 0 0-4-4z"/><circle cx="12" cy="15" r="2"/></svg>

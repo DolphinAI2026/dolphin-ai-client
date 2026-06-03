@@ -4,7 +4,7 @@
       <!-- hero -->
       <div class="cse-hero">
         <div class="cse-hero-icon" v-html="iconSvg('coding', 30, 2.2)"></div>
-        <span class="cse-tag"><span v-html="iconSvg('coding', 13, 1.9)"></span> AI Coding</span>
+        <span class="cse-tag"><span v-html="iconSvg('coding', 13, 1.9)"></span> 二次开发</span>
         <h1 class="cse-h1">配置装不下的,写代码搞定</h1>
         <p class="cse-sub">在已有应用上做定制页面、可复用组件、复杂接口。对话即生成代码,配在线 IDE 实时预览,产物可装回应用、跨应用复用。</p>
       </div>

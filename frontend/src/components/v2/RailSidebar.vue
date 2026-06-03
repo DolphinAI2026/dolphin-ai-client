@@ -17,7 +17,6 @@ const tabsStore = useTabsStore()
 const RAIL_COLLAPSE_KEY = 'apaas-rail-collapsed-v1'
 const internalCollapsed = ref<boolean>(localStorage.getItem(RAIL_COLLAPSE_KEY) === '1')
 const appCount = ref<number | undefined>(undefined)
-const codingWorkspaceCount = ref<number | undefined>(undefined)
 const tenantMenuOpen = ref(false)
 
 const effectiveCollapsed = computed(() =>
@@ -29,7 +28,6 @@ const NAV = computed<NavItem[]>(() => [
   { key: 'apps', label: '应用资产库', icon: 'apps', path: '/apps', badge: appCount.value || undefined },
   { key: 'builder', label: 'AI Builder', icon: 'chat', path: '/ai-chat?mode=requirements' },
   { key: 'catalog', label: '自开发资产库', icon: 'store', path: '/workspace-catalog' },
-  { key: 'coding', label: 'AI Coding', icon: 'code', path: '/coding', badge: codingWorkspaceCount.value || undefined },
   // 数据连接 / 运行发布先隐藏；平台级配置统一从平台管理工作台进入。
 ])
 const platformNavItem: NavItem = { key: 'platform', label: '平台管理', icon: 'shield', path: '/platform-admin' }
@@ -57,16 +55,6 @@ onMounted(async () => {
     appCount.value = Array.isArray(apps) ? apps.length : (apps?.items?.length ?? apps?.total ?? 0)
   } catch {
     appCount.value = undefined
-  }
-
-  try {
-    const { codingApi } = await import('@/api/coding')
-    const workspaces: any = (await (codingApi as any).listWorkspaces?.()) ?? []
-    codingWorkspaceCount.value = Array.isArray(workspaces)
-      ? workspaces.length
-      : (workspaces?.items?.length ?? workspaces?.total ?? 0)
-  } catch {
-    codingWorkspaceCount.value = undefined
   }
 
   try {

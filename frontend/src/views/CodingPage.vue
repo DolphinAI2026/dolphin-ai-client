@@ -31,7 +31,7 @@
     <div class="coding-body">
       <SessionSidebar
         v-if="!embedMode && !embeddedAppId"
-        module-name="AI Coding"
+        module-name="IDE 工作区"
         brand-color="#6366f1"
         :sessions="sidebarCodingItems"
         :active-id="sidebarCodingActiveId"
@@ -92,7 +92,7 @@
             </div>
           </header>
           <div class="coding-unselected-welcome">
-            <h2>AI Coding</h2>
+            <h2>IDE 工作区</h2>
             <p>从左侧选择一个开发会话继续，或点击上方「+ 新会话」开始新的自开发任务。AI 会在会话里整理任务、创建工作区，并持续生成页面、接口、脚本或扩展代码。</p>
           </div>
         </div>
@@ -101,7 +101,7 @@
         <div v-else class="stream-pane">
           <header class="coding-session-header">
             <div class="coding-session-title-block">
-              <span class="coding-session-kicker">AI Coding</span>
+              <span class="coding-session-kicker">IDE 工作区</span>
               <strong class="coding-session-title">{{ activeCodingSessionTitle }}</strong>
             </div>
             <!-- F3: Builder→Coding handoff 来源应用的「← 回 Builder」回跳链 -->
@@ -239,7 +239,7 @@
                     v-for="option in codingModelOptions"
                     :key="option.id"
                     :value="toCodingModelValue(option.id) ?? ''"
-                  >{{ option.config_name }}{{ option.is_default ? ' · 默认' : '' }}</option>
+                  >{{ option.config_name }}</option>
                 </select>
               </template>
             </UnifiedChatComposer>

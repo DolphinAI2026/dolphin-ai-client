@@ -326,9 +326,9 @@ function renderIcon(name: string, size = 16): string {
                   <span class="icon" v-html="renderIcon('check', 11)" /> AI 对话（智能搭建）
                 </span>
                 <span class="mcp-scope-chip mcp-scope-on">
-                  <span class="icon" v-html="renderIcon('check', 11)" /> 睿鲸 AI Coding
+                  <span class="icon" v-html="renderIcon('check', 11)" /> 二次开发
                 </span>
-                <span class="mcp-scope-chip mcp-scope-off">Vibe Coding 全代码</span>
+                <span class="mcp-scope-chip mcp-scope-off">IDE 工作区</span>
               </div>
             </div>
           </div>

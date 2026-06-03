@@ -93,7 +93,7 @@
             v-if="builderCurrentAppId && store.currentApp?.apaas_app_id"
             type="button"
             class="mode-btn mode-btn-link"
-            title="把当前应用的结构（模型/表单/流程）带进 AI Coding 工作区，做自开发页面或后端接口"
+            title="把当前应用的结构（模型/表单/流程）带进 IDE 工作区，做二次开发页面或后端接口"
             @click="handoffToCodingForAppDev"
           >
             <span class="mode-btn-icon" aria-hidden="true">

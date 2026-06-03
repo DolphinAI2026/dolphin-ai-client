@@ -66,7 +66,7 @@
                 <span>包名：{{ workspaceCodeName(ws) || ws.project_name }}</span>
               </div>
               <div class="grid-card-actions" @click.stop>
-                <button class="action-btn primary" @click.stop="openWorkspace(ws)" title="进入开发">
+                <button class="action-btn primary" @click.stop="openWorkspace(ws)" title="打开 IDE">
                   <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polygon points="5 3 19 12 5 21 5 3"/></svg>
                 </button>
                 <button :class="['action-btn', { 'is-loading': uploadingWsId === ws.id }]" @click.stop="uploadWorkspace(ws)" :disabled="uploadingWsId === ws.id" :title="uploadingWsId === ws.id ? '上传中...' : '上传组件包'">
@@ -103,7 +103,7 @@
                 </div>
               </div>
               <div class="card-actions" @click.stop>
-                <button class="action-btn primary" @click.stop="openWorkspace(ws)" title="进入开发">
+                <button class="action-btn primary" @click.stop="openWorkspace(ws)" title="打开 IDE">
                   <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polygon points="5 3 19 12 5 21 5 3"/></svg>
                 </button>
                 <button :class="['action-btn', { 'is-loading': uploadingWsId === ws.id }]" @click.stop="uploadWorkspace(ws)" :disabled="uploadingWsId === ws.id" :title="uploadingWsId === ws.id ? '上传中...' : '上传组件包'">
@@ -126,20 +126,58 @@
   </WorkbenchShell>
 
   <EnvSelectModal v-model="showEnvModal" @selected="onEnvSelected" />
+
+  <!-- 全屏 IDE 抽屉：点击工作区直接进 code-server 看/改代码（不再跳 Coding 工作台） -->
+  <el-drawer
+    v-model="ideDrawerOpen"
+    title="IDE 编辑器"
+    direction="rtl"
+    size="100%"
+    body-class="wsc-ide-drawer-body"
+    :append-to-body="true"
+    :destroy-on-close="false"
+  >
+    <div class="ide-pane">
+      <iframe
+        v-if="ideUrl"
+        :key="ideUrl"
+        :src="ideUrl"
+        class="ide-frame"
+        allow="clipboard-read; clipboard-write"
+        @load="onIdeFrameLoad"
+        @error="onIdeFrameError"
+      ></iframe>
+      <div v-if="!ideLoaded" class="ide-loading-overlay">
+        <div class="ide-loading-content">
+          <template v-if="ideLoadError">
+            <div class="ide-error-icon">⚠️</div>
+            <span>{{ ideLoadError }}</span>
+            <button class="ide-retry-btn" @click="retryIdeLoad">重新加载</button>
+          </template>
+          <template v-else>
+            <div class="ide-loading-spinner"></div>
+            <span>{{ ideLoadingText }}</span>
+          </template>
+        </div>
+      </div>
+    </div>
+  </el-drawer>
 </template>
 
 <script setup lang="ts">
 import { computed, onMounted, ref } from 'vue'
-import { useRoute, useRouter } from 'vue-router'
+import { useRoute } from 'vue-router'
 import { ElMessage } from 'element-plus'
 import WorkbenchShell from '@/components/WorkbenchShell.vue'
 import EnvSelectModal from '@/components/EnvSelectModal.vue'
 import { codingApi, type WorkspaceInfo } from '@/api/coding'
 import { applicationApi } from '@/api/application'
 import { platformEnvApi } from '@/api/platformEnv'
+import { useIdeManager } from '@/views/coding/useIdeManager'
 
-const router = useRouter()
 const route = useRoute()
+const { ideUrl, ideLoaded, ideLoadError, ideLoadingText, setIdeUrl, onIdeFrameLoad, onIdeFrameError, retryIdeLoad } = useIdeManager()
+const ideDrawerOpen = ref(false)
 const loading = ref(true)
 const workspaces = ref<WorkspaceInfo[]>([])
 const activeTab = ref('all')
@@ -219,13 +257,21 @@ function workspaceStatusLabel(status: string) {
 }
 
 async function openWorkspace(ws: WorkspaceInfo) {
-  await router.push({
-    path: '/coding',
-    query: {
-      ...(appId.value ? { app_id: appId.value } : {}),
-      workspace_id: ws.id,
-    },
-  })
+  // 直接在资产库内全屏打开该工作区的 Web IDE（code-server），不再跳 Coding 工作台
+  ideDrawerOpen.value = true  // 先弹抽屉显示 loading，再取 IDE URL
+  try {
+    const res = await codingApi.getIdeUrl(ws.id)
+    const url = res?.ide_url
+    if (!url) {
+      ElMessage.error('该工作区暂无可用的 Web IDE')
+      ideDrawerOpen.value = false
+      return
+    }
+    await setIdeUrl(url)
+  } catch (e: any) {
+    ElMessage.error(e?.message || '打开 IDE 失败')
+    ideDrawerOpen.value = false
+  }
 }
 
 async function downloadWorkspace(ws: WorkspaceInfo, type: 'src' | 'dist') {
@@ -766,6 +812,66 @@ onMounted(async () => {
 </style>
 
 <style>
+/* 全屏 IDE 抽屉（append-to-body teleport 到 body，scoped 触不到，必须非 scoped）。 */
+.wsc-ide-drawer-body {
+  padding: 0 !important;
+  display: flex !important;
+  flex-direction: column;
+  overflow: hidden;
+}
+.wsc-ide-drawer-body .ide-pane {
+  flex: 1 1 auto;
+  position: relative;
+  width: 100%;
+  height: 100%;
+  min-height: 0;
+  overflow: hidden;
+}
+.wsc-ide-drawer-body .ide-frame {
+  width: 100% !important;
+  height: 100% !important;
+  border: 0;
+}
+.wsc-ide-drawer-body .ide-loading-overlay {
+  position: absolute;
+  inset: 0;
+  z-index: 10;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--t-bg-base);
+}
+.wsc-ide-drawer-body .ide-loading-content {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 16px;
+  color: var(--t-text-secondary);
+  font-size: 14px;
+}
+.wsc-ide-drawer-body .ide-loading-spinner {
+  width: 36px;
+  height: 36px;
+  border: 3px solid var(--t-border-subtle);
+  border-top-color: var(--t-brand);
+  border-radius: 50%;
+  animation: wsc-ide-spin 0.8s linear infinite;
+}
+@keyframes wsc-ide-spin { to { transform: rotate(360deg); } }
+.wsc-ide-drawer-body .ide-error-icon { font-size: 32px; margin-bottom: 4px; }
+.wsc-ide-drawer-body .ide-retry-btn {
+  margin-top: 12px;
+  padding: 8px 24px;
+  border: 1px solid var(--t-brand, #646cff);
+  border-radius: 8px;
+  background: transparent;
+  color: var(--t-brand, #646cff);
+  font-size: 14px;
+  cursor: pointer;
+  transition: all 0.2s;
+}
+.wsc-ide-drawer-body .ide-retry-btn:hover { background: var(--t-brand, #646cff); color: #fff; }
+
 /* v3 dark theme — all explicit colors swapped to v3 dark tokens.
    The :root[data-theme="dark"] block in design-v3-tokens.css already remaps
    --surface / --text / --brand etc, so most rules can use the same vars. */

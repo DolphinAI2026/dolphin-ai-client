@@ -517,7 +517,7 @@
               >
                 无自开发资产 (CUSTOM 菜单 0 个 + 表单内嵌自开发组件 0 个).
                 <p class="hint">
-                  用 Vibe Coding / 在线 IDE 写自定义 Vue 页 (整页), 或在 apaas 表单
+                  用在线 IDE 写自定义 Vue 页 (整页), 或在 apaas 表单
                   设计器拖入"自开发组件" (FORM_CUSTOM_COMPONENT_*).
                 </p>
               </div>

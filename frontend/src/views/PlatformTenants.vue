@@ -26,7 +26,7 @@
           </div>
         </div>
         <div class="dashboard-card">
-          <div class="dashboard-card-label">Vibe Coding 工作区</div>
+          <div class="dashboard-card-label">IDE 工作区</div>
           <div class="dashboard-card-value">
             {{ dashboard.totals.workspaces.used }}
             <span class="dashboard-card-suffix">/ {{ dashboard.totals.workspaces.max }}</span>
@@ -164,7 +164,7 @@
           <el-form-item label="低代码应用数量上限">
             <el-input-number v-model="createForm.max_applications" :min="1" :max="10000" :step="10" style="width: 100%" />
           </el-form-item>
-          <el-form-item label="Vibe Coding 工作区数量上限">
+          <el-form-item label="IDE 工作区数量上限">
             <el-input-number v-model="createForm.max_workspaces" :min="0" :max="10000" :step="5" style="width: 100%" />
           </el-form-item>
           <el-form-item label="自开发组件数量上限">
@@ -195,7 +195,7 @@
           <el-form-item label="低代码应用数量上限">
             <el-input-number v-model="editForm.max_applications" :min="1" :max="10000" :step="10" style="width: 100%" />
           </el-form-item>
-          <el-form-item label="Vibe Coding 工作区数量上限">
+          <el-form-item label="IDE 工作区数量上限">
             <el-input-number v-model="editForm.max_workspaces" :min="0" :max="10000" :step="5" style="width: 100%" />
           </el-form-item>
           <el-form-item label="自开发组件数量上限">
@@ -227,7 +227,7 @@
             <div v-if="detailLoading" class="detail-muted">加载中…</div>
             <div v-else-if="detailUsage" class="usage-grid">
               <UsageBar label="低代码应用" :used="detailUsage.applications.used" :max="detailUsage.applications.max" />
-              <UsageBar label="Vibe Coding 工作区" :used="detailUsage.workspaces.used" :max="detailUsage.workspaces.max" />
+              <UsageBar label="IDE 工作区" :used="detailUsage.workspaces.used" :max="detailUsage.workspaces.max" />
               <UsageBar label="自开发组件" :used="detailUsage.components.used" :max="detailUsage.components.max" />
               <div class="usage-row">
                 <span class="usage-label">活跃成员</span>

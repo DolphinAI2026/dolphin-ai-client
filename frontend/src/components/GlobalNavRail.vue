@@ -45,10 +45,6 @@
             <rect x="2" y="7" width="8" height="2" rx="1" />
             <rect x="2" y="11" width="10" height="2" rx="1" />
           </svg>
-          <!-- coding — AI Coding -->
-          <svg v-else-if="item.key === 'coding'" class="nav-icon" viewBox="0 0 16 16" fill="none" aria-hidden="true">
-            <path d="M4.5 5L2 8l2.5 3M11.5 5L14 8l-2.5 3M9.5 4l-3 8" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round" />
-          </svg>
           <!-- datasources — 数据源 (database cylinder) -->
           <svg v-else-if="item.key === 'datasources'" class="nav-icon" viewBox="0 0 16 16" fill="none" aria-hidden="true">
             <ellipse cx="8" cy="3.5" rx="5" ry="1.8" stroke="currentColor" stroke-width="1.3" />
@@ -185,13 +181,11 @@ const expanded = ref(true)
 
 const primaryNavItems = [
   { key: 'home', label: 'AI Builder', path: '/' },
-  { key: 'coding', label: 'AI Coding', path: '/coding' },
 ]
 
 const activeKey = computed(() => {
   const p = route.path
   if (p === '/' || p.startsWith('/apps')) return 'home'
-  if (p.startsWith('/coding')) return 'coding'
   return 'home'
 })
 

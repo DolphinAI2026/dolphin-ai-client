@@ -1975,7 +1975,7 @@ onMounted(async () => {
 }
 .model-select-inline {
   background: transparent;
-  border: 1px solid var(--ac-border-strong);
+  border: 1px solid var(--ac-border);
   color: var(--ac-text-mute);
   padding: 3px 8px;
   border-radius: 5px;
@@ -2482,7 +2482,7 @@ onMounted(async () => {
 /* ─── Input area ─── */
 .input-area {
   border-top: 1px solid var(--ac-border);
-  padding: 16px 24px calc(20px + env(safe-area-inset-bottom, 0px));
+  padding: 10px 16px calc(14px + env(safe-area-inset-bottom, 0px));
   flex-shrink: 0;
 }
 

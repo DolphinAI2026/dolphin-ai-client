@@ -6,7 +6,7 @@ import { isImageFile } from '@/utils/pasteImages'
 import UnifiedChatComposer from '@/components/common/UnifiedChatComposer.vue'
 import type { UnifiedChatAttachment } from '@/components/common/chatComposer'
 
-type Mode = 'builder' | 'coding'
+type Mode = 'builder'
 const MODES: { id: Mode; label: string; sub: string; tone: 'ai' | 'brand' }[] = [
   { id: 'builder', label: 'AI Builder', sub: '搭应用 + 应用内自开发（页面 / 接口）',   tone: 'ai' },
 ]
@@ -19,13 +19,9 @@ const previewStore = usePreviewStore()
 
 const placeholder = computed(() => ({
   builder: '例如：给质量部搭一个 QMS 整改闭环，包含问题登记、责任人派发、整改验证、超期提醒和月度统计。',
-  coding:  '描述要做的通用组件。例：做一个支持多选 + 异步加载的客户树组件 / 一个 OCR 上传组件。',
 }[mode.value]))
 
-const canSubmit = computed(() => {
-  if (mode.value === 'builder') return !!text.value.trim() || files.value.length > 0
-  return !!text.value.trim()
-})
+const canSubmit = computed(() => !!text.value.trim() || files.value.length > 0)
 
 const composerAttachments = computed<UnifiedChatAttachment[]>(() =>
   files.value.map((file, index) => ({
@@ -46,17 +42,12 @@ function removeComposerFile(_: UnifiedChatAttachment, index: number) {
 function submit() {
   if (!canSubmit.value) return
   const userPrompt = text.value.trim()
-  if (mode.value === 'builder') {
-    // 把多文件交给 store，prompt 走 URL；AIChatPage onMounted 已经会消费 pendingAiChatFiles + ?prompt
-    previewStore.pendingAiChatFiles = [...files.value]
-    router.push({
-      path: '/ai-chat',
-      query: { mode: 'requirements', ...(userPrompt ? { prompt: userPrompt } : {}) },
-    })
-  } else {
-    // 进 /coding 后由 agent 引导选目标 app
-    router.push({ path: '/coding', query: userPrompt ? { prompt: userPrompt } : {} })
-  }
+  // 把多文件交给 store，prompt 走 URL；AIChatPage onMounted 已经会消费 pendingAiChatFiles + ?prompt
+  previewStore.pendingAiChatFiles = [...files.value]
+  router.push({
+    path: '/ai-chat',
+    query: { mode: 'requirements', ...(userPrompt ? { prompt: userPrompt } : {}) },
+  })
 }
 </script>
 

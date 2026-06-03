@@ -17,7 +17,7 @@
         @click="openAiCoding"
       >
         <div class="ext-card-icon" aria-hidden="true">💻</div>
-        <h4 class="ext-card-title">用 AI Coding 开发自开发包</h4>
+        <h4 class="ext-card-title">二次开发自开发包</h4>
         <p class="ext-card-desc">
           对话式开发前端组件 / 后端服务.
           完成 publish 后自动通知本页面, 一键 republish 让组件生效.
@@ -89,7 +89,7 @@
       </ul>
 
       <div v-else-if="!loading && !errorNote" class="ext-empty">
-        暂无关联的自开发包 — 用上方"AI Coding 开发自开发包"卡片创建一个.
+        暂无关联的自开发包 — 用上方"二次开发自开发包"卡片创建一个.
       </div>
 
       <div v-if="errorNote" class="ext-error-note">

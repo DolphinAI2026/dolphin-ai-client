@@ -19,7 +19,6 @@ const CRUMB_LABELS: Record<string, string> = {
   '/apps': '应用资产库',
   '/chat': 'AI Builder',
   '/ai-chat': 'AI Builder',
-  '/coding': 'AI Coding',
   '/workspace-catalog': '自开发资产库',
   '/agents': '智能体配置',
   '/specs': '设计文档',

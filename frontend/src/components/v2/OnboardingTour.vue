@@ -49,12 +49,12 @@ const CONCEPTS = computed(() => [
   { name: '应用',         desc: '一个完整的 aPaaS 应用，含模型 / 表单 / 流程 / 权限',  icon: 'apps',     count: counts.value.apps > 0 ? `${counts.value.apps} 个` : '—' },
   { name: 'SPEC',         desc: '设计文档，AI Builder 对话产生的中间产物，可版本管理', icon: 'doc',      count: counts.value.specs > 0 ? `${counts.value.specs} 版本` : '—' },
   { name: '行业知识库',   desc: '行业最佳实践沉淀的可复用「行业包」，含业务对象图谱',  icon: 'industry', count: counts.value.industry > 0 ? `${counts.value.industry} 包` : '—' },
-  { name: '组件市场',     desc: '睿鲸 AI Coding 产出的低代码组件 / 页面 / 接口',       icon: 'store',    count: counts.value.marketplace > 0 ? `${counts.value.marketplace} 个` : '—' },
+  { name: '组件市场',     desc: '二次开发产出的低代码组件 / 页面 / 接口',             icon: 'store',    count: counts.value.marketplace > 0 ? `${counts.value.marketplace} 个` : '—' },
 ])
 
 const ROLES = [
   { id: 'business', name: '业务顾问',     tone: 'ai',      desc: '描述需求 → SPEC → 部署',         positions: '实施顾问 / 产品经理',         path: '睿鲸 AI Builder',     recommended: false },
-  { id: 'developer', name: '开发人员',    tone: 'brand',   desc: '业务搭建 ↔ 自研组件',           positions: '前端 / 全栈工程师',           path: '睿鲸 AI Coding · Vibe Coding', recommended: false },
+  { id: 'developer', name: '开发人员',    tone: 'brand',   desc: '业务搭建 ↔ 自研组件',           positions: '前端 / 全栈工程师',           path: '二次开发(IDE 工作区)', recommended: false },
   { id: 'hybrid',   name: '双栖',         tone: 'brand-strong', desc: '业务+开发 全链路',         positions: '产品技术负责人 / 资深实施',   path: '全部',                  recommended: true },
   { id: 'admin',    name: '平台管理员',   tone: 'rose',    desc: '运行与发布 + 平台管理',         positions: '运维 / IT 负责人',           path: '运行与发布 · 平台管理', recommended: false },
 ]
