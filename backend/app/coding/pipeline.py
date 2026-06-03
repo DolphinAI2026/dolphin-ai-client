@@ -1468,9 +1468,8 @@ async def _grounded_brainstorm(params, scene_type, apaas_app_id, platform_env_id
         clarify_clause = (
             f"**读完后先判断需求是否清晰**:若关键信息缺失或有歧义(如:改哪个页面/字段没说清、"
             f"触发条件/交互细节/边界不明确、多种合理做法需用户拍板),**先不要写 SPEC**,而是"
-            f"以「{CLARIFY_HEADER} 开始前,先和你对齐几点」开头,列 1-3 个澄清问题——每个问题尽量给"
-            f"A/B/C 选项供快速选择,并注明可自由补充;问完即止,不要带 SPEC。"
-            f"**若需求已足够清晰(或用户已回答过澄清)**,才直接输出「📋 开发 SPEC 确认」。"
+            f"**调用 ask_clarifying_question 工具**问一个澄清问题(带 2-4 个选项供快速选择,用户也可自由补充);"
+            f"一次问一个最关键的。**若需求已足够清晰(或用户已回答过澄清)**,才直接输出「📋 开发 SPEC 确认」。"
         )
     system = (
         f"你在为已有应用「{app_name}」做自开发扩展。**先调用读工具**了解该应用的数据模型、菜单"
@@ -1489,7 +1488,27 @@ async def _grounded_brainstorm(params, scene_type, apaas_app_id, platform_env_id
         {"role": "system", "content": system},
         {"role": "user", "content": user_content},
     ]
-    tool_defs = _grounding_tool_defs()
+    tool_defs = list(_grounding_tool_defs())
+    if not force_spec:
+        # 澄清走工具(结构化 question+options),前端渲染成可点选项卡片,和 Builder 一致。
+        tool_defs.append({
+            "type": "function",
+            "function": {
+                "name": "ask_clarifying_question",
+                "description": "需求不清晰/有歧义时调用:向用户提**一个**最关键的澄清问题,给 2-4 个选项供快速选择(用户也可自由补充)。调用即停止,不要再写 SPEC。",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "question": {"type": "string", "description": "要问用户的澄清问题,一句话"},
+                        "options": {
+                            "type": "array", "items": {"type": "string"},
+                            "description": "2-4 个候选答案,每个简洁一句话",
+                        },
+                    },
+                    "required": ["question", "options"],
+                },
+            },
+        })
 
     for _turn in range(_GROUNDING_MAX_TURNS):
         try:
@@ -1523,6 +1542,20 @@ async def _grounded_brainstorm(params, scene_type, apaas_app_id, platform_env_id
         for tc in tool_calls:
             fn = tc.get("function", {}).get("name", "")
             tc_id = tc.get("id") or fn
+            if fn == "ask_clarifying_question":
+                # 模型决定要澄清:产出结构化 {question, options},停住等用户选/答。
+                try:
+                    _a = json.loads(tc.get("function", {}).get("arguments") or "{}")
+                except json.JSONDecodeError:
+                    _a = {}
+                _q = (_a.get("question") or "").strip()
+                _opts = [str(o).strip() for o in (_a.get("options") or []) if str(o).strip()][:4]
+                if _q:
+                    yield {"__clarify__": {"question": _q, "options": _opts}}
+                    return
+                messages.append({"role": "tool", "tool_call_id": tc_id,
+                                 "content": "Error: question 不能为空"})
+                continue
             if fn not in _GROUNDING_TOOL_NAMES:
                 messages.append({"role": "tool", "tool_call_id": tc_id,
                                  "content": f"Error: 工具 {fn!r} 不可用"})
@@ -1561,12 +1594,18 @@ async def _first_turn_brainstorm(params, scene_type, db, effective_model,
     if handle:
         apaas_app_id, env_id, app_name = handle
         got_spec = None
+        got_clarify = None
         async for ev in _grounded_brainstorm(params, scene_type, apaas_app_id, env_id, app_name, db,
                                              history_summary=history_summary, force_spec=force_spec):
-            if "__spec__" in ev:
+            if "__clarify__" in ev:
+                got_clarify = ev["__clarify__"]
+            elif "__spec__" in ev:
                 got_spec = ev["__spec__"]
             else:
                 yield ev  # read_app_context running/done
+        if got_clarify:
+            yield {"__clarify__": got_clarify}
+            return
         if got_spec:
             yield {"__spec__": got_spec}
             return
@@ -1954,13 +1993,33 @@ async def run_coding_pipeline(
             # 澄清已达上限 → 强制本轮直接出 SPEC,不再提问;conversation_summary 带上已有问答让 SPEC 接着写。
             _force_spec = _count_clarify_rounds(prior_history) >= CLARIFY_MAX_ROUNDS
             proposal = None
+            clarify_data = None
             async for _ev in _first_turn_brainstorm(params, scene_type, db, effective_model,
                                                     history_summary=conversation_summary,
                                                     force_spec=_force_spec):
-                if "__spec__" in _ev:
+                if "__clarify__" in _ev:
+                    clarify_data = _ev["__clarify__"]
+                elif "__spec__" in _ev:
                     proposal = _ev["__spec__"]
                 else:
                     yield _record_event(_ev)
+            if clarify_data and clarify_data.get("question"):
+                # ★ 澄清门(结构化,可点选项卡片,对齐 Builder):存 JSON,emit clarify 事件,停住等用户选/答。
+                #   下一轮 _get_pending_clarification 识别「等回答澄清」→ 带问答重做 brainstorm。
+                _saved = CLARIFY_PROPOSAL_MARKER + json.dumps(clarify_data, ensure_ascii=False)
+                await save_coding_message(db, conversation_id, "assistant", _saved)
+                yield _record_event({"type": "step", "step": "brainstorm", "status": "done"})
+                yield _record_event({
+                    "type": "clarify",
+                    "question": clarify_data.get("question", ""),
+                    "options": clarify_data.get("options", []),
+                })
+                yield _record_event({
+                    "type": "done", "workspace_id": None,
+                    "conversation_id": conversation_id, "ide_url": None,
+                    "waiting_clarification": True,
+                })
+                return
             if proposal and _looks_like_clarification(proposal):
                 # ★ 澄清门:需求不清晰 → 抛澄清问题,不出 SPEC、不建工作区、不 codegen。
                 #   存为带 CLARIFY marker 的消息,下一轮 _get_pending_clarification 识别「等回答澄清」→

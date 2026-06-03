@@ -14,13 +14,18 @@ import { marked } from 'marked'
 import type { ReplayStreamMessage } from '@/api/coding'
 
 export interface StreamMessage {
-  type: 'user' | 'thinking' | 'tool' | 'file_write' | 'file_edit' | 'command' | 'status' | 'error' | 'message'
+  type: 'user' | 'thinking' | 'tool' | 'file_write' | 'file_edit' | 'command' | 'status' | 'error' | 'message' | 'clarify'
   content: string
   fileName?: string
   fileContent?: string
   collapsed?: boolean
   result?: string
   resultCollapsed?: boolean
+  /** type=clarify 用:澄清问题 + 可点选项(对齐 Builder 的 ask_clarifying_question) */
+  question?: string
+  options?: string[]
+  /** 用户已选/答的选项(选后置灰) */
+  answered?: string
   /** pipeline step 归属，用于原地更新 */
   stepKey?: string
   /** true = 显示为完成 badge 芯片 */

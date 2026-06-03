@@ -186,6 +186,15 @@ export function useCodingPipeline(deps: PipelineDeps) {
       const text = (parsed.content || '') as string
       if (text.trim()) addStreamMsg({ type: 'message', content: text })
     },
+    // 澄清门:结构化问题 + 可点选项(对齐 Builder),渲染成 ask 卡片
+    clarify: (parsed) => {
+      addStreamMsg({
+        type: 'clarify',
+        content: (parsed.question || '') as string,
+        question: (parsed.question || '') as string,
+        options: Array.isArray(parsed.options) ? parsed.options : [],
+      })
+    },
     // N1 READ 路径:只读工具事件 → 工具卡 + 把"正在识别开发场景"占位换成"已理解为查询请求"
     tool: (parsed) => {
       const ph = streamMessages.value.find(

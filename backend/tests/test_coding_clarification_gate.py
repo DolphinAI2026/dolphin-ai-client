@@ -149,3 +149,51 @@ async def test_first_turn_clarification_gates_without_codegen():
     )
     # 没有把澄清误存成 brainstorm SPEC marker(否则会被当成等待确认)
     assert not any(content.startswith(BRAINSTORM_PROPOSAL_MARKER) for _r, content in saved)
+
+
+@pytest.mark.asyncio
+async def test_first_turn_structured_clarify_emits_chips():
+    """grounded brainstorm 调 ask_clarifying_question → pipeline 应 emit 结构化 clarify 事件
+    (question + options,给前端渲染可点选项卡片),并以 CLARIFY marker + JSON 存档。"""
+    import json as _json
+    params = PipelineParams(
+        message="给商机做个看板", user_id=1, tenant_id=1, workspace_id=None, conversation_id=None,
+    )
+    db = _fake_db()
+
+    async def _ftb(*a, **k):
+        yield {"__clarify__": {"question": "看板按什么分列?", "options": ["商机阶段", "负责人"]}}
+
+    saved: list = []
+
+    async def _save(_db, _conv, role, content):
+        saved.append((role, content))
+
+    with (
+        patch("app.coding.pipeline._detect_scene_llm_call", new=AsyncMock(return_value=_BRAINSTORM_SCENE)),
+        patch("app.coding.pipeline.classify_coding_intent", new=AsyncMock(return_value="BUILD")),
+        patch("app.coding.pipeline._first_turn_brainstorm", new=_ftb),
+        patch("app.coding.pipeline.resolve_effective_coding_model", new=AsyncMock(return_value=("m", 1))),
+        patch("app.agents.coding.llm_config.load_coding_llm_config", new=AsyncMock(return_value=("u", "k", "m"))),
+        patch("app.coding.pipeline.save_coding_message", new=_save),
+        patch("app.coding.pipeline.get_conversation_history", new=AsyncMock(return_value=[])),
+        patch("app.coding.pipeline.WorkspaceManager.create_workspace",
+              return_value={"id": "w", "project_name": "p", "display_name": "d", "ide_url": "u"}),
+        patch("app.coding.pipeline.WorkspaceManager.get_workspace_info", return_value={}),
+        patch("app.coding.pipeline.append_event_to_stream_replay"),
+    ):
+        events = await _collect(run_coding_pipeline(params, db))
+
+    # 结构化 clarify 事件
+    clar = [e for e in events if e.get("type") == "clarify"]
+    assert clar, f"应 emit clarify 事件;events={[e.get('type') for e in events]}"
+    assert clar[0]["question"] == "看板按什么分列?"
+    assert clar[0]["options"] == ["商机阶段", "负责人"]
+    # 等澄清 + 不建工作区
+    assert any(e.get("waiting_clarification") for e in events)
+    assert not [e for e in events if e.get("type") == "step" and e.get("step") == "create_workspace"]
+    # 存档:CLARIFY marker + JSON(可还原 chips)
+    cm = [c for r, c in saved if c.startswith(CLARIFY_PROPOSAL_MARKER)]
+    assert cm, f"应以 CLARIFY marker 存档;saved={saved}"
+    payload = _json.loads(cm[0][len(CLARIFY_PROPOSAL_MARKER):])
+    assert payload["options"] == ["商机阶段", "负责人"]

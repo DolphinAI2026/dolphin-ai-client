@@ -130,6 +130,7 @@
             :typing-seconds="streamSeconds"
             empty-title=""
             empty-hint=""
+            @answer-ask="onAnswerAsk"
           >
             <template #custom="{ message }">
               <template v-if="streamCustom(message)?.sm">
@@ -735,6 +736,9 @@ const agentMessages = computed<AgentMessage[]>(() => {
       } else {
         out.push({ id: 'sm' + i, kind: 'assistant', content: msg.content })
       }
+    } else if (msg.type === 'clarify') {
+      // 澄清 → 共享 ask 卡片(可点选项,对齐 Builder);点选项走 @answer-ask
+      out.push({ id: 'sm' + i, kind: 'ask', ask: { question: msg.question || msg.content, options: msg.options || [], answered: msg.answered } })
     } else if (msg.type === 'error') {
       out.push({ id: 'sm' + i, kind: 'error', content: msg.content })
     } else if (msg.type === 'thinking') {
@@ -807,6 +811,17 @@ const awaitingSpecConfirm = computed(() =>
 function confirmSpec() {
   if (isStreaming.value) return
   userInput.value = '确认,按这份开发 SPEC 开始生成代码'
+  nextTick(() => { sendMessage() })
+}
+
+// 点澄清选项卡片(对齐 Builder):置灰已选 + 把选项作为回答发出
+function onAnswerAsk(option: string) {
+  if (isStreaming.value || isCreating.value || !option) return
+  for (let i = streamMessages.value.length - 1; i >= 0; i--) {
+    const m = streamMessages.value[i] as any
+    if (m && m.type === 'clarify' && !m.answered) { m.answered = option; break }
+  }
+  userInput.value = option
   nextTick(() => { sendMessage() })
 }
 
@@ -1488,12 +1503,24 @@ function loadConversationHistory(
   // fallback：没有 stream_messages 时用 messages 整体重建
   //（通常是旧数据或生成失败的会话）
   streamMessages.value = []
-  for (const msg of messages) {
+  for (let k = 0; k < messages.length; k++) {
+    const msg = messages[k]
+    if (!msg) continue
     const content = msg.content || ''
     if (msg.role === 'user') {
       addStreamMsg({ type: 'user', content })
     } else if (msg.role === 'assistant') {
-      if (content.startsWith('<!-- BRAINSTORM_PROPOSAL -->')) {
+      if (content.startsWith('<!-- BRAINSTORM_CLARIFY -->')) {
+        // 澄清(JSON)→ 还原成可点选项卡片;若后面已有 user 回答则置灰
+        const raw = content.replace(/^<!-- BRAINSTORM_CLARIFY -->/, '').trim()
+        let q = raw; let opts: string[] = []
+        try {
+          const parsed = JSON.parse(raw)
+          q = parsed.question || raw; opts = Array.isArray(parsed.options) ? parsed.options : []
+        } catch { /* 非 JSON(旧 markdown 澄清)→ 当问题文本展示 */ }
+        const nextUser = messages.slice(k + 1).find(m => m?.role === 'user')
+        addStreamMsg({ type: 'clarify', content: q, question: q, options: opts, answered: nextUser?.content })
+      } else if (content.startsWith('<!-- BRAINSTORM_PROPOSAL -->')) {
         addStreamMsg({
           type: 'message',
           content: content.replace(/^<!-- BRAINSTORM_PROPOSAL -->/, '').trim(),
