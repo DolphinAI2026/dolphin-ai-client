@@ -2731,7 +2731,7 @@ async def save_dev_spec(
       5. 等用户表态 OK 后继续 write_workspace_files 写代码
 
     入参：
-      ws_id         workspace ID（AI Coding 'X_xxx' 或 Vibe 'oc_xxx' 都行）
+      ws_id         AI Coding workspace ID（'X_xxx' 格式）
       project_name  英文短名（kebab-case），决定 .dev-spec 子目录
       spec_md       技术 SPEC markdown（至少 100 字符）
       mockup_html   业务 HTML（可选；看板类强烈建议）
@@ -2748,25 +2748,12 @@ async def save_dev_spec(
                 "message": f"spec_md 太短 ({len(spec_md.strip())} 字符)，至少 100 字符"}
     tid, uid = _resolve_identity(tenant_id, user_id)
 
-    # 同时支持 AI Coding workspace 和 Vibe Coding workspace
-    if ws_id.startswith("oc_"):
-        # Vibe workspace: 走 online_coding._find_workspace_dir
-        from app.routes.online_coding import _find_workspace_dir
-        try:
-            ws_dir, _meta = _find_workspace_dir(ws_id)
-            repo_dir = ws_dir / "repo"
-            repo_dir.mkdir(parents=True, exist_ok=True)
-        except Exception as exc:
-            return {"ok": False, "error_code": "WORKSPACE_NOT_FOUND",
-                    "message": f"vibe workspace {ws_id} 找不到: {exc}"}
-    else:
-        # AI Coding workspace: WorkspaceManager
-        from app.coding.workspace import WorkspaceManager
-        try:
-            repo_dir = WorkspaceManager().get_workspace_path(ws_id)
-        except FileNotFoundError:
-            return {"ok": False, "error_code": "WORKSPACE_NOT_FOUND",
-                    "message": f"workspace {ws_id} 找不到"}
+    from app.coding.workspace import WorkspaceManager
+    try:
+        repo_dir = WorkspaceManager().get_workspace_path(ws_id)
+    except FileNotFoundError:
+        return {"ok": False, "error_code": "WORKSPACE_NOT_FOUND",
+                "message": f"workspace {ws_id} 找不到"}
 
     spec_root = repo_dir / ".dev-spec" / project_name
     spec_root.mkdir(parents=True, exist_ok=True)
@@ -2793,101 +2780,6 @@ async def save_dev_spec(
         out["mockup_bytes"] = len(mockup_html.encode("utf-8"))
         out["has_mockup"] = True
     return out
-
-
-@mcp.tool()
-async def import_zip_to_workspace(
-    task: str,
-    zip_b64: str,
-    project_name: str = "",
-    tenant_id: int = 0,
-    user_id: int = 0,
-) -> dict:
-    """把外部 zip（base64）解压成新的 Vibe Coding workspace（不绑 aPaaS）。
-
-    用例：二次开发场景接现有项目，用户提供项目 zip。
-
-    入参：
-      task         workspace 一句话任务（写到 meta）
-      zip_b64      zip 文件 base64 编码（不带 data: 前缀，建议 < 8MB）
-      project_name 可选 — 解压后的根目录名
-
-    返回 {ok, ws_id, file_count, files_sample, task}
-    """
-    import base64 as _b64
-    import io
-    import zipfile
-
-    if not zip_b64.strip():
-        return {"ok": False, "error_code": "EMPTY_ZIP", "message": "zip_b64 不能为空"}
-
-    # 解码 base64
-    try:
-        raw = _b64.b64decode(zip_b64, validate=False)
-    except Exception as exc:
-        return {"ok": False, "error_code": "B64_DECODE_FAILED", "message": str(exc)}
-    if len(raw) > 20 * 1024 * 1024:
-        return {"ok": False, "error_code": "ZIP_TOO_LARGE",
-                "message": f"zip 解码后 {len(raw)} bytes > 20MB"}
-
-    # 解析 zip 结构（先校验合法 + 列文件）
-    try:
-        zf = zipfile.ZipFile(io.BytesIO(raw), "r")
-        names = zf.namelist()
-    except zipfile.BadZipFile:
-        return {"ok": False, "error_code": "BAD_ZIP", "message": "不是合法的 zip 文件"}
-
-    # 先建一个新 vibe workspace
-    tid, uid = _resolve_identity(tenant_id, user_id)
-    create_payload = {"task": task or "导入 zip 项目", "repo_url": None}
-    res = await _api_call("POST", "/online-coding/workspaces",
-                          tenant_id=tid, user_id=uid, json_body=create_payload)
-    if not isinstance(res, dict) or not (res.get("id") or "").startswith("oc_"):
-        return {"ok": False, "error_code": "WS_CREATE_FAILED",
-                "message": "创建 workspace 失败", "raw": res}
-    ws_id = res["id"]
-
-    # 解压到 workspace/repo
-    from app.routes.online_coding import _find_workspace_dir
-    try:
-        ws_dir, _meta = _find_workspace_dir(ws_id)
-        repo_dir = ws_dir / "repo"
-        repo_dir.mkdir(parents=True, exist_ok=True)
-    except Exception as exc:
-        return {"ok": False, "error_code": "WS_RESOLVE_FAILED", "message": str(exc), "ws_id": ws_id}
-
-    # 安全解压（防 zip slip）
-    safe_count = 0
-    for member in zf.namelist():
-        # 拒绝绝对路径 / 包含 ..
-        if member.startswith("/") or ".." in member.split("/"):
-            continue
-        # 拒绝以 / 开头的成员
-        target = (repo_dir / member).resolve()
-        try:
-            target.relative_to(repo_dir.resolve())
-        except ValueError:
-            continue  # 越界
-        if member.endswith("/"):
-            target.mkdir(parents=True, exist_ok=True)
-            continue
-        target.parent.mkdir(parents=True, exist_ok=True)
-        with zf.open(member) as src, open(target, "wb") as dst:
-            dst.write(src.read())
-        safe_count += 1
-
-    return {
-        "ok": True,
-        "ws_id": ws_id,
-        "task": task,
-        "file_count": safe_count,
-        "files_sample": names[:10],
-        "next_steps": [
-            f"vibe_get_workspace_status('{ws_id}') 看完整状态",
-            f"vibe_glob('{ws_id}', 'package.json') 找入口配置",
-            "看完代码后用 vibe_run_command('npm install') 装依赖",
-        ],
-    }
 
 
 @mcp.tool()

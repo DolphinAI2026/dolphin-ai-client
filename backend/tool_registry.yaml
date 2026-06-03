@@ -298,11 +298,6 @@ tools:
     agents: [coding]
     category: dev_workspace
     description: "在工作区内 grep 正则搜索（vibe_agent.grep_search 等价）。"
-  import_zip_to_workspace:
-    sections: [extension]
-    agents: [coding]
-    category: dev_workspace
-    description: "把外部 zip（base64）解压成新的 Vibe Coding workspace（不绑 aPaaS）。"
   init_apaas_backend_workspace:
     sections: [extension]
     agents: [coding]
