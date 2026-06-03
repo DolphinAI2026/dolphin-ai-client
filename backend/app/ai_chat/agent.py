@@ -290,28 +290,10 @@ async def _resolve_llm_config(
             .limit(1)
         )
         cfg = res.scalar_one_or_none()
+    # 注意:删掉了原「跨租户兜底」两步(借任意租户的 is_default / 任意 active 模型)。
+    # 那既是产品上要去掉的「兜底模型」,又是租户隔离泄漏 —— 等于拿别的租户的 API Key 跑当前租户的对话。
+    # 现在只认**当前租户**的配置(上面 step1 selected + step2 tenant default),没有就明确提示去平台管理加。
     if not cfg:
-        # 兜底：某些旧会话 tenant_id / 模型绑定漂移时，仍允许使用全局 active 默认模型。
-        res = await db.execute(
-            select(LLMConfig)
-            .where(
-                LLMConfig.is_default == True,  # noqa: E712
-                LLMConfig.status == "active",
-            )
-            .order_by(LLMConfig.tenant_id == session.tenant_id, LLMConfig.id.asc())
-            .limit(1)
-        )
-        cfg = res.scalar_one_or_none()
-    if not cfg:
-        res = await db.execute(
-            select(LLMConfig)
-            .where(LLMConfig.status == "active")
-            .order_by(LLMConfig.id.asc())
-            .limit(1)
-        )
-        cfg = res.scalar_one_or_none()
-    if not cfg:
-        # 不再兜底:没配模型就明确提示去平台管理添加(与 Coding 文案一致)。
         raise RuntimeError(
             "当前租户还没有配置可用的大模型,请到「平台管理 → 模型配置」添加一个模型后再使用。"
         )
