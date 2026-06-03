@@ -164,24 +164,6 @@ def _component_type_label(value: str, model_type: str = "") -> str:
     return label
 
 
-def _field_ref_meta(field_meta: dict) -> tuple[str, str, str]:
-    ref = field_meta.get("ref") or {}
-    association = field_meta.get("formAssociationConfig") or field_meta.get("form_association_config") or {}
-    if isinstance(association, dict) and association.get("targetModelCode"):
-        return (
-            str(association.get("targetModelCode") or ""),
-            str(association.get("targetFieldCode") or ""),
-            str(association.get("originFieldCode") or ""),
-        )
-    if isinstance(ref, dict):
-        return (
-            str(ref.get("model") or ""),
-            str(ref.get("display_field") or ref.get("target_field") or ref.get("field") or ""),
-            "",
-        )
-    return "", "", ""
-
-
 def _field_ref_meta_from_component(
     component: dict,
     field_meta: dict,

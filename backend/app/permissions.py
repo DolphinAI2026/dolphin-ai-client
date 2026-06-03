@@ -52,11 +52,6 @@ def has_org_permission(permissions: dict | None, resource_type: str, action: str
     return bool(permissions.get(key, False))
 
 
-def _all_permissions_true() -> dict[str, bool]:
-    """Return a dict with all permission codes set to True (for admins)."""
-    return {code: True for code in PERMISSION_CODES}
-
-
 async def _get_team_role(db: AsyncSession, user_id: int, team_id: int) -> str | None:
     """Get a user's role in a specific team, or None if not a member."""
     result = await db.execute(
@@ -143,23 +138,6 @@ async def check_resource_permission(
                 status_code=status.HTTP_403_FORBIDDEN,
                 detail="只有创建者可以操作该资源",
             )
-
-
-async def get_resource_permissions(
-    ctx,  # AuthContext
-    db: AsyncSession,
-    resource,
-    resource_type: str,
-) -> dict[str, bool]:
-    """Return a dict of {action: bool} for the user on this resource."""
-    result = {}
-    for action in (Action.EDIT, Action.DELETE, Action.CLONE):
-        try:
-            await check_resource_permission(ctx, db, resource, resource_type, action)
-            result[action] = True
-        except HTTPException:
-            result[action] = False
-    return result
 
 
 async def batch_get_permissions(

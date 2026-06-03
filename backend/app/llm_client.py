@@ -12,22 +12,6 @@ from app.config import settings
 logger = logging.getLogger(__name__)
 
 
-def encode_image_base64(image_path: str) -> str:
-    """Read image file and return base64-encoded data URL."""
-    path = Path(image_path)
-    suffix = path.suffix.lower().lstrip(".")
-    mime_map = {
-        "png": "image/png",
-        "jpg": "image/jpeg",
-        "jpeg": "image/jpeg",
-        "gif": "image/gif",
-        "webp": "image/webp",
-    }
-    mime = mime_map.get(suffix, "image/png")
-    data = base64.b64encode(path.read_bytes()).decode()
-    return f"data:{mime};base64,{data}"
-
-
 class LLMClient:
     def __init__(self, api_key: str = None, base_url: str = None, model: str = None):
         self.api_key = api_key or settings.llm_api_key

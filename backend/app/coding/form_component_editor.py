@@ -1385,105 +1385,6 @@ def _normalize_widget_methods(data: dict) -> None:
         data["methods"] = {}
 
 
-
-def normalize_widget_config_setting_code(content: str, setting_code: str) -> str:
-    normalized = content
-
-    def _replace(match: re.Match[str]) -> str:
-        array_body = _remove_setting_code_lines(match.group("body"), setting_code)
-        indent = _detect_array_indent(array_body) or "        "
-        trimmed_body = array_body.rstrip()
-        suffix = array_body[len(trimmed_body):]
-        anchor = re.search(r"\n(?P<indent>\s*)'FORMULA_RULE'[^\n]*", trimmed_body)
-        if anchor:
-            insert_at = anchor.start()
-            inserted_body = (
-                f"{trimmed_body[:insert_at]}\n"
-                f"{indent}'{setting_code}',"
-                f"{trimmed_body[insert_at:]}"
-                f"{suffix}"
-            )
-        else:
-            normalized_trimmed_body = _ensure_last_array_item_has_comma(trimmed_body)
-            inserted_body = f"{normalized_trimmed_body}\n{indent}'{setting_code}',{suffix}"
-
-        return f"{match.group('prefix')}{inserted_body}{match.group('suffix')}"
-
-    pattern = re.compile(
-        r"(?P<prefix>editor\s*:\s*\{\s*config\s*:\s*\[\n)(?P<body>.*?)(?P<suffix>\n\s*\])",
-        re.DOTALL,
-    )
-    return pattern.sub(_replace, normalized)
-
-
-def normalize_widget_config_icon(spec: FormComponentEditorSpec, content: str) -> str:
-    current_icon = _extract_widget_icon(content)
-    if current_icon and _is_feature_svg_icon(current_icon):
-        return content
-
-    svg_icon = render_widget_svg_icon(spec, content)
-    icon_pattern = re.compile(r"icon:\s*'[^']*'")
-    if icon_pattern.search(content):
-        return icon_pattern.sub(f"icon: '{svg_icon}'", content, count=1)
-    return content
-
-
-def normalize_widget_config_labels(spec: FormComponentEditorSpec, content: str) -> str:
-    title = _resolve_widget_title(spec, content)
-    description = _resolve_widget_description(spec, content, title)
-
-    normalized = content
-    text_pattern = re.compile(r"text:\s*'[^']*'")
-    description_pattern = re.compile(r"description:\s*'[^']*'")
-    label_pattern = re.compile(r"label:\s*'[^']*'")
-
-    if text_pattern.search(normalized):
-        normalized = text_pattern.sub(f"text: '{_escape_js_single_quoted(title)}'", normalized, count=1)
-    if description_pattern.search(normalized):
-        normalized = description_pattern.sub(
-            f"description: '{_escape_js_single_quoted(description)}'",
-            normalized,
-            count=1,
-        )
-    if label_pattern.search(normalized):
-        normalized = label_pattern.sub(f"label: '{_escape_js_single_quoted(title)}'", normalized, count=1)
-
-    return normalized
-
-
-def normalize_widget_config_component_model_field(spec: FormComponentEditorSpec, content: str) -> str:
-    model_field = _infer_component_model_field(spec, content)
-    bof_type = COMPONENT_MODEL_FIELD_TO_BOF_TYPE[model_field]
-
-    normalized = re.sub(
-        r"(?ms)^[ \t]*componentModelField\s*:\s*\[[^\]]*\],?\n?",
-        "",
-        content,
-    )
-    normalized = re.sub(
-        r"frontBusinessObjectComponentType\s*:\s*'[^']*'",
-        f"frontBusinessObjectComponentType: '{bof_type}'",
-        normalized,
-        count=1,
-    )
-
-    anchor = re.search(r"(?m)^(?P<indent>\s*)(client|methods|formatValueSchema)\s*:", normalized)
-    component_model_field_entry = f"  componentModelField: ['{model_field}'],\n"
-    if anchor:
-        normalized = normalized[:anchor.start()] + component_model_field_entry + normalized[anchor.start():]
-    elif re.search(r"(?m)^}\s*$", normalized):
-        normalized = re.sub(
-            r"(?m)^}\s*$",
-            component_model_field_entry + "}",
-            normalized,
-            count=1,
-        )
-    else:
-        normalized = normalized.rstrip() + "\n" + component_model_field_entry
-
-    return normalized
-
-
 def _infer_component_model_field(spec: FormComponentEditorSpec, content: str) -> str:
     metadata = " ".join(
         part
@@ -1674,28 +1575,6 @@ def render_widget_svg_icon(spec: FormComponentEditorSpec, content: str) -> str:
     )
 
 
-def _resolve_widget_title(spec: FormComponentEditorSpec, content: str) -> str:
-    desc_text = _extract_named_single_quoted_value(content, "text")
-    display_label = _extract_widget_display_label(content)
-
-    if _is_meaningful_widget_meta(desc_text, spec):
-        return desc_text
-    if _is_meaningful_widget_meta(display_label, spec):
-        return display_label
-
-    title, _ = _infer_widget_title_and_description(spec, content)
-    return title
-
-
-def _resolve_widget_description(spec: FormComponentEditorSpec, content: str, title: str) -> str:
-    current_description = _extract_named_single_quoted_value(content, "description")
-    if _is_meaningful_widget_description(current_description, spec, title):
-        return current_description
-
-    _, description = _infer_widget_title_and_description(spec, content)
-    return description
-
-
 def _infer_widget_title_and_description(spec: FormComponentEditorSpec, content: str) -> tuple[str, str]:
     keywords = f"{spec.short_kebab} {content}".lower()
 
@@ -1730,17 +1609,6 @@ def _infer_widget_title_and_description(spec: FormComponentEditorSpec, content: 
 
     title = _humanize_short_kebab(spec.short_kebab)
     return title, f"支持{title}配置与展示"
-
-
-def _extract_widget_icon(content: str) -> str:
-    match = re.search(r"icon:\s*'(?P<icon>[^']*)'", content)
-    if not match:
-        return ""
-    return match.group("icon").strip()
-
-
-def _extract_widget_display_label(content: str) -> str:
-    return _extract_named_single_quoted_value(content, "label")
 
 
 def _extract_named_single_quoted_value(content: str, field_name: str) -> str:
@@ -1805,10 +1673,6 @@ def _humanize_short_kebab(short_kebab: str) -> str:
     if not parts:
         return "自定义组件"
     return "".join(part.capitalize() for part in parts)
-
-
-def _escape_js_single_quoted(value: str) -> str:
-    return (value or "").replace("\\", "\\\\").replace("'", "\\'")
 
 
 _SCAFFOLD_PLACEHOLDER_NAMES = {"form-component-custom-dev", "form-component-demo"}
@@ -1888,35 +1752,6 @@ def _setting_content_score(content: str) -> int:
     if validate_setting_component_contract(content):
         score -= 50000
     return score
-
-
-def _detect_array_indent(content: str) -> str | None:
-    for line in content.splitlines():
-        stripped = line.strip()
-        if stripped.startswith("'"):
-            return line[: len(line) - len(line.lstrip())]
-    return None
-
-
-def _ensure_last_array_item_has_comma(content: str) -> str:
-    lines = content.splitlines()
-    for index in range(len(lines) - 1, -1, -1):
-        stripped = lines[index].strip()
-        if not stripped:
-            continue
-        if stripped.startswith("'") and not stripped.endswith(","):
-            lines[index] = f"{lines[index]},"
-        break
-    return "\n".join(lines)
-
-
-def _remove_setting_code_lines(content: str, setting_code: str) -> str:
-    lines = content.splitlines()
-    filtered_lines = [
-        line for line in lines
-        if setting_code not in line
-    ]
-    return "\n".join(filtered_lines)
 
 
 _DUAL_SCENE_DIRS = ("edit", "ide", "list", "print", "read", "search", "search-ide")

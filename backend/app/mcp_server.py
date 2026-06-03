@@ -5521,29 +5521,6 @@ _COMMENT_CONFIG = {"required": False, "attachmentUpload": True, "requiredBtns": 
 _PHRASE_CONFIG = {"handleType": "INPUT_TYPE", "phrase": "", "status": False}
 
 
-def _make_bpmn_node(node_id: str, title: str, ntype: str, y: float, approvers=None) -> dict:
-    """构造单个 BPMN node — 同 step_executor._make_node 的逻辑。"""
-    n = {
-        "id": node_id, "nodeId": node_id, "timeBoudries": [],
-        "width": "64.0" if ntype in ("START", "END") else "122.0",
-        "height": "64.0" if ntype in ("START", "END") else "48.0",
-        "x": 372.0, "y": y,
-        "data": {
-            "nodeId": node_id, "title": title, "type": ntype,
-            "enableComponentPermission": True, "titleI18nAssociated": False,
-            "approveCommentConfig": _COMMENT_CONFIG, "approvePhraseConfig": _PHRASE_CONFIG,
-            "remindList": [], "processEventStatus": False, "saveFlag": True,
-        },
-    }
-    if ntype == "START":
-        n["data"]["formButtons"] = _START_BUTTONS
-    elif ntype == "APPROVE":
-        n["data"]["approveType"] = "SINGLE"
-        n["data"]["approveButtons"] = _APPROVE_BUTTONS
-        n["data"]["approvers"] = approvers or []
-    return n
-
-
 def _bpmn_random_id() -> str:
     """生成平台风格的 BPMN_xxx id (16 hex chars)."""
     import secrets
@@ -5897,70 +5874,6 @@ def _build_process_payload_v2(
         "boExist": True,
         "boRemindExist": True,
         "predictionFlag": False,
-    }
-
-
-def _build_bpmn_payload_from_stages(menu_id: str, name: str, code: str, stages: list) -> dict:
-    """把 LLM 友好的 stages 数组转成 apaas processConfig API 的 payload。
-
-    stages: [{name, approver_type ROLE|SUBMITTER|USER, approver_code, approver_name?}]
-    """
-    nodes = [
-        _make_bpmn_node("START", "开始", "START", 32.0),
-        _make_bpmn_node("START_HIDDEN", "发起申请", "APPROVE", 128.0,
-                        [{"approverType": "SUBMITTER",
-                          "approverName": "表单提交人",
-                          "approverCode": "SUBMITTER"}]),
-    ]
-
-    y_pos = 224.0
-    for idx, stage in enumerate(stages, start=1):
-        approver_type = (stage.get("approver_type") or "ROLE").strip().upper()
-        approver_code = str(stage.get("approver_code") or "").strip()
-        approver_name = (stage.get("approver_name") or stage.get("name")
-                         or approver_code).strip()
-
-        if approver_type == "SUBMITTER":
-            approvers = [{"approverType": "SUBMITTER",
-                          "approverName": "表单提交人", "approverCode": "SUBMITTER"}]
-        elif approver_type in ("ROLE", "ROLE_USER"):
-            approvers = [{"approverType": "ROLE",
-                          "approverName": approver_name,
-                          "approverCode": approver_code}]
-        elif approver_type == "USER":
-            approvers = [{"approverType": "USER",
-                          "approverName": approver_name,
-                          "approverCode": approver_code}]
-        else:
-            # 兜底
-            approvers = [{"approverType": "ROLE",
-                          "approverName": approver_name,
-                          "approverCode": approver_code or "default"}]
-
-        stage_name = stage.get("name") or f"审批 {idx}"
-        nodes.append(_make_bpmn_node(f"UserTask_{idx}", stage_name, "APPROVE", y_pos, approvers))
-        y_pos += 96.0
-
-    nodes.append(_make_bpmn_node("END", "结束", "END", y_pos))
-
-    # 顺序连边
-    edges = []
-    for i in range(len(nodes) - 1):
-        edges.append({
-            "id": f"SequenceFlow_{nodes[i+1]['id']}",
-            "source": nodes[i]["id"],
-            "target": nodes[i+1]["id"],
-            "data": {"titleI18nAssociated": False},
-        })
-
-    return {
-        "appId": "",  # client 会从 header xdapappid 拿
-        "menuId": menu_id,
-        "processCode": code,
-        "processName": name,
-        "bpmn": _BPMN_MIN_XML,
-        "nodes": nodes,
-        "edges": edges,
     }
 
 
@@ -7101,7 +7014,6 @@ async def doctor_apaas_backend_workspace(
             else f"先修 {len(fatal)} 个 fatal 问题（看每个 check 的 hint）"
         ),
     }
-
 
 
 # ─────────────────────────── Browser control (chrome-devtools-mcp) ───────────────────────────

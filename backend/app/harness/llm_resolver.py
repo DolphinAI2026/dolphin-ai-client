@@ -61,16 +61,6 @@ async def resolve_llm_config(
     )
 
 
-def build_chat_completions_url(base_url: str) -> str:
-    """构建 OpenAI 兼容的 chat/completions URL。"""
-    base = base_url.rstrip("/")
-    if base.endswith("/chat/completions"):
-        return base
-    if base.endswith("/v1"):
-        return f"{base}/chat/completions"
-    return f"{base}/v1/chat/completions"
-
-
 async def stream_with_config(
     config: Optional[ResolvedLLMConfig],
     messages: list,

@@ -2267,22 +2267,6 @@ async def run_coding_pipeline(
 
 # ── 内部辅助 ──────────────────────────────────────
 
-def _get_platform_url(project: Optional[Any]) -> str:
-    """从项目配置推导平台前端 URL。"""
-    if project and getattr(project, 'platform_url', None):
-        base = project.platform_url or ""
-        if "/backend" in base:
-            return base.replace("/backend", "/platform/")
-        if base and not base.endswith("/"):
-            return base + "/platform/"
-        return base + "platform/" if base else ""
-    base = settings.apaas_base_url or ""
-    if "/backend" in base:
-        return base.replace("/backend", "/platform/")
-    if base and not base.endswith("/"):
-        return base + "/platform/"
-    return base + "platform/" if base else ""
-
 
 async def _write_history_for_ide(
     ws_mgr: WorkspaceManager,

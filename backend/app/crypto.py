@@ -22,10 +22,3 @@ def decrypt_password(encrypted: str) -> str:
     return _get_fernet().decrypt(encrypted.encode()).decode()
 
 
-def migrate_base64_to_fernet(base64_enc: str) -> str:
-    """将旧的 base64 编码迁移为 Fernet 加密"""
-    try:
-        plain = base64.b64decode(base64_enc).decode()
-        return encrypt_password(plain)
-    except Exception:
-        return base64_enc  # 已经是 Fernet 格式或无效，原样返回

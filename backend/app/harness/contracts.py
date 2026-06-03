@@ -46,13 +46,3 @@ class ThreadInfo(BaseModel):
     updated_at: datetime
 
 
-class TurnInfo(BaseModel):
-    """Turn API 响应。"""
-    id: int
-    thread_id: int
-    turn_index: int
-    user_input: str
-    status: str
-    result_summary: Optional[str] = None
-    started_at: datetime
-    completed_at: Optional[datetime] = None

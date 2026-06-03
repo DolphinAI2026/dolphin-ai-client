@@ -198,58 +198,6 @@ WORKFLOW_PROMPT = """你是得帆云低代码平台的流程设计专家。
 # 大文档预处理
 # ──────────────────────────────────────────────
 
-def _summarize_doc_for_skeleton(text: str) -> str:
-    """从大文档中提取结构摘要，只保留表单名、角色、字典名（不含详细字段/选项）。
-    这样骨架阶段只需处理几千 token 而不是几万。"""
-
-    lines = []
-    lines.append("# 文档结构摘要（省略了字段详情和字典选项）\n")
-
-    # 提取表单名称（从 ## 表单N：XXX 格式）
-    form_headers = re.findall(r'^##\s+表单.+?：(.+?)$', text, re.MULTILINE)
-    if form_headers:
-        lines.append(f"## 表单列表（共 {len(form_headers)} 个）")
-        for h in form_headers:
-            # 提取中文名和英文code，如 "品牌档案（BrandArchive）"
-            lines.append(f"- {h.strip()}")
-        lines.append("")
-
-    # 提取角色表（通常较短，完整保留）
-    role_match = re.search(r'<roles>(.*?)</roles>', text, re.DOTALL)
-    if role_match:
-        lines.append("## 角色")
-        lines.append(role_match.group(1).strip())
-        lines.append("")
-
-    # 提取字典名称（只取标题行，不取选项）
-    dict_headers = re.findall(r'^###\s+(.+?)$', text, re.MULTILINE)
-    # 过滤：只保留字典相关的（在 <dictionarys> 段内的）
-    dict_section = re.search(r'<dictionarys>(.*?)</dictionarys>', text, re.DOTALL)
-    if dict_section:
-        dict_names = re.findall(r'^###\s+(.+?)$', dict_section.group(1), re.MULTILINE)
-        if dict_names:
-            lines.append(f"## 字典列表（共 {len(dict_names)} 个）")
-            for d in dict_names:
-                lines.append(f"- {d.strip()}")
-            lines.append("")
-
-    # 提取流程相关信息（从 processConfig 段）
-    process_sections = re.findall(r'<business-form-processConfig-\d+>(.*?)</business-form-processConfig-\d+>', text, re.DOTALL)
-    if process_sections:
-        lines.append(f"## 审批流程（共 {len(process_sections)} 个表单有流程）")
-        for ps in process_sections:
-            # 提取流程描述中的关键信息
-            flow_lines = [l.strip() for l in ps.strip().split('\n') if l.strip() and not l.strip().startswith('|---')]
-            for fl in flow_lines[:5]:  # 只取前几行
-                lines.append(f"  {fl}")
-        lines.append("")
-
-    # 如果提取不到结构化信息（非标准格式），退回到截断
-    if len(lines) <= 2:
-        return text[:20000] + "\n\n... [文档过长，已截断] ..."
-
-    return "\n".join(lines)
-
 
 def _extract_form_section(text: str, form_name: str, form_code: str) -> str:
     """从文档中提取指定表单的完整内容段落，用于模型字段生成。"""

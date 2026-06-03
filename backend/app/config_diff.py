@@ -591,13 +591,6 @@ def _compare_dicts(
     return changes
 
 
-def _get_field_comment(field: Optional[Dict]) -> str:
-    """读取字段备注，兼容 preview 的 description 写法。"""
-    if not field:
-        return ""
-    return field.get("fieldComment", field.get("description", ""))
-
-
 def _get_remote_model_id(model: Optional[Dict]) -> Optional[str]:
     """读取远端模型 ID，兼容 id / modelId。"""
     if not model:

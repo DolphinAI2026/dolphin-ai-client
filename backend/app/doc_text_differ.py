@@ -145,22 +145,6 @@ def diff_sections(v1_text: str, v2_text: str) -> Dict:
     }
 
 
-def build_changed_text(diff_result: Dict) -> str:
-    """将 added + modified 的章节拼接成文本，供 AI 解析。
-
-    只包含变更部分，未变更的章节不传给 LLM，节省 token。
-    """
-    parts: List[str] = []
-
-    for item in diff_result.get("added", []):
-        parts.append(item["content"])
-
-    for item in diff_result.get("modified", []):
-        parts.append(item["v2_content"])
-
-    return "\n\n".join(parts)
-
-
 def get_diff_stats(diff_result: Dict) -> Dict:
     """获取 diff 的统计信息，用于 SSE 进度汇报"""
     return {

@@ -122,19 +122,3 @@ async def acquire_app_lock(app_id: int, operation: str = ""):
             logger.debug(f"应用 {app_id} 锁已释放")
 
 
-async def cleanup_stale_locks():
-    """清理超时的锁条目（可定期调用）"""
-    async with _registry_lock:
-        stale_ids = [
-            app_id for app_id, entry in _registry.items()
-            if _is_stale(entry)
-        ]
-        for app_id in stale_ids:
-            entry = _registry[app_id]
-            logger.warning(f"清理超时锁: app_id={app_id}, holder={entry.holder}")
-            try:
-                entry.lock.release()
-            except RuntimeError:
-                pass
-            entry.acquired_at = 0
-            entry.holder = ""

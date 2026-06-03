@@ -271,45 +271,6 @@ async def parse_doc_with_ai(
 # 已有编码提取 & prompt 构建
 # ================================================================
 
-def extract_existing_codes(parsed_config: Dict) -> Dict:
-    """从已有的 parsed_config 中提取所有编码信息，用于增量解析时传给 AI。
-
-    返回:
-    {
-        "model_codes": ["work_order", "engineer", ...],
-        "dict_codes": ["customer_level", "work_order_status", ...],
-        "role_codes": ["admin", "dispatcher", ...],
-        "field_codes": {"work_order": ["order_no", "title", ...], ...}
-    }
-    """
-    model_codes = []
-    field_codes = {}
-    for m in parsed_config.get("models", []):
-        code = m.get("code", "")
-        if code:
-            model_codes.append(code)
-            fields = []
-            for f in m.get("fields", []):
-                fc = f.get("code", "")
-                if fc:
-                    fields.append(fc)
-                for sf in f.get("sub_fields", []):
-                    sfc = sf.get("code", "")
-                    if sfc:
-                        fields.append(sfc)
-            if fields:
-                field_codes[code] = fields
-
-    dict_codes = [d.get("code", "") for d in parsed_config.get("dicts", []) if d.get("code")]
-    role_codes = [r.get("code", "") for r in parsed_config.get("roles", []) if r.get("code")]
-
-    return {
-        "model_codes": model_codes,
-        "dict_codes": dict_codes,
-        "role_codes": role_codes,
-        "field_codes": field_codes,
-    }
-
 
 def _build_existing_codes_prompt(existing_codes: Dict) -> str:
     """构建"复用已有编码"的 prompt 片段。"""

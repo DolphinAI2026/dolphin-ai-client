@@ -68,8 +68,6 @@ class ConversationResponse(BaseModel):
 
 
 # Message schemas
-class MessageCreate(BaseModel):
-    content: str
 
 
 class MessageResponse(BaseModel):
@@ -181,11 +179,6 @@ class ChatRequest(BaseModel):
     application_id: Optional[int] = None
     # 从已落库但未收到助手回复的最后一条用户消息恢复，不重复保存用户消息
     resume_from_message_id: Optional[int] = None
-
-
-class ChatStreamEvent(BaseModel):
-    type: str  # message/preview/progress/error/done
-    data: Union[dict, str]
 
 
 # Generation Step schemas (Copilot 模式)

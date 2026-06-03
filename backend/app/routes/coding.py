@@ -2379,7 +2379,6 @@ async def get_serve_status(
     return ws_mgr.is_serve_running(ws_id)
 
 
-
 @router.post("/workspace/{ws_id}/publish")
 async def publish_workspace(
     ws_id: str,
@@ -3117,67 +3116,6 @@ def _get_user_platform_url(user) -> str:
 def _sse(data: dict) -> str:
     """SSE 事件格式化"""
     return json.dumps(data, ensure_ascii=False)
-
-
-def _append_agent_event_to_history(history_parts: list[str], event: dict[str, Any]):
-    """将 Agent 的关键执行输出整理成可持久化的文本记录。"""
-    event_type = event.get("type")
-
-    if event_type == "content":
-        content = event.get("content")
-        if isinstance(content, str) and content:
-            history_parts.append(content)
-        return
-
-    if event_type == "agent_tool":
-        tool_name = event.get("tool_display") or event.get("tool") or "工具"
-        preview = event.get("input_preview") or ""
-        if preview:
-            history_parts.append(f"\n🔧 **{tool_name}** `{preview}`\n")
-        else:
-            history_parts.append(f"\n🔧 **{tool_name}**\n")
-        return
-
-    if event_type == "agent_result":
-        preview = event.get("output_preview")
-        if event.get("is_error"):
-            history_parts.append(f"> ❌ {preview or '执行失败'}\n\n")
-        elif isinstance(preview, str) and preview and preview != "(empty)":
-            clipped = preview[:300] + "..." if len(preview) > 300 else preview
-            history_parts.append(f"> ✅ {clipped}\n\n")
-        else:
-            history_parts.append("> ✅ 完成\n\n")
-        return
-
-    if event_type == "agent_command_output":
-        chunk = event.get("chunk")
-        if isinstance(chunk, str) and chunk:
-            history_parts.append(chunk)
-        return
-
-    if event_type == "agent_done":
-        turns = event.get("num_turns") or "?"
-        history_parts.append(f"\n---\n✨ **Agent 完成** ({turns} 轮对话)\n")
-        return
-
-    if event_type == "agent_error":
-        message = event.get("message") or "发生未知错误"
-        history_parts.append(f"\n❌ **Agent 错误**: {message}\n")
-
-
-def _scene_to_project_type(scene_type: SceneType) -> str:
-    """场景类型转项目类型"""
-    mapping = {
-        SceneType.WEB_COMPONENT_DUAL: "form-component-dual",
-        SceneType.WEB_PAGE: "form-page",
-        SceneType.WEB_LIST_VIEW: "form-list",
-        SceneType.WEB_LAYOUT: "layout",
-        SceneType.WEB_PLUGIN: "plugin",
-        SceneType.BACKEND_API: "backend-api",
-        SceneType.MOBILE_PAGE: "mobile-page",
-        SceneType.WEB_LOGIN: "web-login",
-    }
-    return mapping.get(scene_type, "form-component-dual")
 
 
 async def _extract_project_name(generator: CodingGenerator, message: str) -> str:
