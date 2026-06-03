@@ -140,6 +140,7 @@
                     :action="streamCustom(message).sm.type === 'file_write' ? 'write' : 'edit'"
                     :file-name="streamCustom(message).sm.fileName"
                     :file-content="streamCustom(message).sm.fileContent"
+                    :old-content="streamCustom(message).sm.oldContent"
                     :collapsed="streamCustom(message).sm.collapsed"
                     @toggle="streamCustom(message).sm.collapsed = !streamCustom(message).sm.collapsed"
                   />

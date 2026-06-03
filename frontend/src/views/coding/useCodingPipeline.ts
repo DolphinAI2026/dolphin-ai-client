@@ -142,7 +142,13 @@ export function useCodingPipeline(deps: PipelineDeps) {
     },
     edit_file: (args, preview) => {
       const fileName = ((args.file_path || '') as string).split('/').pop() || preview
-      addStreamMsg({ type: 'file_edit', content: '', fileName, fileContent: args.new_string || undefined, collapsed: true })
+      // old + new 都带上,FileCard 渲染红绿 diff(对齐 Claude Code)
+      addStreamMsg({
+        type: 'file_edit', content: '', fileName,
+        fileContent: (args.new_string ?? args.content) || undefined,
+        oldContent: args.old_string || undefined,
+        collapsed: true,
+      })
     },
     run_command: (args, preview) => addStreamMsg({ type: 'command', content: (args.command || preview || '') as string }),
     read_file: (_args, preview) => addStreamMsg({ type: 'tool', content: `\uD83D\uDCC4 \u8BFB\u53D6 ${preview}` }),
@@ -216,7 +222,8 @@ export function useCodingPipeline(deps: PipelineDeps) {
     },
     agent_tool: (parsed) => {
       const handler = TOOL_HANDLERS[parsed.tool as string]
-      if (handler) handler(parsed.args || {}, (parsed.input_preview || '') as string)
+      // 后端 write_file/edit_file 把内容放在 parsed.input(不是 args);兼容旧字段。
+      if (handler) handler(parsed.input || parsed.args || {}, (parsed.input_preview || '') as string)
     },
     agent_command_output: (parsed) => {
       const chunk = (parsed.chunk || '') as string

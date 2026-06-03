@@ -312,11 +312,19 @@ class CodingAgent(BaseAgent[dict]):
             "tool_display": TOOL_ICONS.get(tool.name, tool.name),
             "input_preview": preview,
         }
-        # write_file / edit_file 透传内容给前端展示
-        if tool.name in ("write_file", "edit_file"):
+        # write_file / edit_file 透传内容给前端展示。
+        # edit_file 透传 old_string + new_string,前端据此渲染红绿 diff(对齐 Claude Code)。
+        if tool.name == "write_file":
             event_data["input"] = {
                 "file_path": args.get("file_path", ""),
-                "content": args.get("content") or args.get("new_string") or "",
+                "content": args.get("content") or "",
+            }
+        elif tool.name == "edit_file":
+            event_data["input"] = {
+                "file_path": args.get("file_path", ""),
+                "old_string": args.get("old_string") or "",
+                "new_string": args.get("new_string") or "",
+                "content": args.get("new_string") or "",  # 兼容旧前端
             }
         await self._publish("agent_tool", event_data)
         return args

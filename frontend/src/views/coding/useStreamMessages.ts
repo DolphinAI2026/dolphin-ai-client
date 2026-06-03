@@ -18,6 +18,8 @@ export interface StreamMessage {
   content: string
   fileName?: string
   fileContent?: string
+  /** type=file_edit 用:修改前内容,FileCard 据 old→new 渲染红绿 diff */
+  oldContent?: string
   collapsed?: boolean
   result?: string
   resultCollapsed?: boolean
