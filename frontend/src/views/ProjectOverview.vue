@@ -229,15 +229,41 @@ const goToAppBuilder = () => {
   router.push({ path: '/chat', query: { project_id: String(projectId) } })
 }
 
-const goToCoding = () => {
-  localStorage.setItem('coding_last_project_id', String(projectId))
-  router.push({ path: '/coding', query: { project_id: String(projectId) } })
+// 二次开发入口 — 结构化交接到 AI Builder（AIChatPage）在应用上下文里做开发，
+// 不再跳独立 /coding（CodingPage 不消费 project_id，跳过去只是裸 IDE 宿主）。
+// 契约：sessionStorage('ai_builder_pending_app_dev') + /ai-chat?app_dev=1，
+// 消费端在 AIChatPage.vue onMounted（只读 .message，故应用标识写进 message 文本）。
+const dispatchAppDev = (kind: 'component' | 'page') => {
+  const p = project.value
+  const connected = Boolean(p?.platform_connected && p?.platform_app_id)
+  const kindLabel = kind === 'page' ? '页面（菜单页 / 弹窗 / 数据查询）' : '组件 / 后端代码'
+  let message: string
+  if (connected && p) {
+    const appName = p.platform_app_name || p.name
+    const codePart = p.platform_app_code ? `，应用编码 ${p.platform_app_code}` : ''
+    message =
+      `我要为应用「${appName}」（app_id=${p.platform_app_id}${codePart}）做二次开发，开发自开发${kindLabel}。`
+      + `请先用工具读这个应用的真实结构（数据模型 / 菜单 / 页面），再问我具体要开发什么。`
+  } else {
+    message =
+      `我要在项目「${p?.name || '当前项目'}」下做${kind === 'page' ? '页面' : '组件'}二次开发，`
+      + `但这个项目还没有连接 aPaaS 应用。请先引导我连接 / 选择一个应用，再开始开发。`
+  }
+  sessionStorage.setItem(
+    'ai_builder_pending_app_dev',
+    JSON.stringify({
+      message,
+      app_id: p?.platform_app_id || '',
+      app_name: p?.platform_app_name || '',
+      from: 'project-overview',
+      dev_kind: kind,
+    }),
+  )
+  router.push({ path: '/ai-chat', query: { app_dev: '1' } })
 }
 
-const goToPageDev = () => {
-  localStorage.setItem('coding_last_project_id', String(projectId))
-  router.push({ path: '/coding', query: { project_id: String(projectId), type: 'page' } })
-}
+const goToCoding = () => dispatchAppDev('component')
+const goToPageDev = () => dispatchAppDev('page')
 
 const goToGitSetup = () => {
   router.push(`/project/${projectId}/git`)
