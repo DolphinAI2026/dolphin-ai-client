@@ -2,8 +2,11 @@
      2026-05-24 从 ConfigAssistantPanel.vue 拆出 (refactor #9).
      主消息区 — 空态 + 消息列表 + thinking dot + plan card + hero CTA + change_plan info card. -->
 <script setup lang="ts">
-import { watch } from 'vue'
+import { computed, ref, watch } from 'vue'
 import type { ChatMsg } from './types'
+import type { ConfigChatToolTrace } from '@/api/configChat'
+import type { AgentToolPayload } from '@/components/common/agent-conversation/types'
+import ToolCard from '@/components/common/agent-conversation/ToolCard.vue'
 import { renderMd } from '@/utils/markdown'
 import { countModifyOps, extractPlan } from './composables/useConfigChat'
 
@@ -44,10 +47,56 @@ watch(() => props.messages, (msgs) => {
     setTimeout(() => emit('refresh-iframe'), 200)
   }
 }, { deep: true, immediate: false })
+
+// 工具执行记录：展开态（key = msgId-index）+ ConfigChatToolTrace → AgentToolPayload 映射
+const expandedTools = ref<Set<string>>(new Set())
+function toggleTool(key: string) {
+  const s = new Set(expandedTools.value)
+  if (s.has(key)) s.delete(key)
+  else s.add(key)
+  expandedTools.value = s
+}
+function toAgentTool(t: ConfigChatToolTrace): AgentToolPayload {
+  return {
+    name: t.tool_name,
+    args: t.args,
+    result: t.result || t.summary || '',
+    resultSummary: t.summary,
+    status: t.ok ? 'success' : 'error',
+    duration_ms: t.duration_ms,
+  }
+}
+
+// 产出物：本次会话配置变更汇总（聚合所有 assistant 轮的 actions_summary + 修改步数）
+const digestOpen = ref(false)
+const changeDigest = computed(() => {
+  const actions: string[] = []
+  let modifyCount = 0
+  for (const m of props.messages) {
+    if (m.role !== 'assistant') continue
+    modifyCount += countModifyOps(m)
+    if (m.actions_summary && m.actions_summary.length) actions.push(...m.actions_summary)
+  }
+  return { actions, modifyCount }
+})
 </script>
 
 <template>
   <div class="ca-scroll">
+    <!-- 产出物：本次配置变更汇总（sticky 顶部，有改动才显示） -->
+    <div v-if="changeDigest.modifyCount > 0" class="ca-digest">
+      <button type="button" class="ca-digest-head" @click="digestOpen = !digestOpen">
+        <span class="ca-digest-icon">📦</span>
+        <span class="ca-digest-title">本次配置变更</span>
+        <span class="ca-digest-count">{{ changeDigest.modifyCount }}</span>
+        <span class="ca-digest-toggle">{{ digestOpen ? '收起 ▲' : '展开 ▼' }}</span>
+      </button>
+      <ul v-if="digestOpen && changeDigest.actions.length" class="ca-digest-list">
+        <li v-for="(a, i) in changeDigest.actions" :key="i">{{ a }}</li>
+      </ul>
+      <div v-else-if="digestOpen" class="ca-digest-empty">本次已执行 {{ changeDigest.modifyCount }} 步修改</div>
+    </div>
+
     <!-- 空态 -->
     <div v-if="messages.length === 0" class="ca-empty">
       <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round">
@@ -64,20 +113,18 @@ watch(() => props.messages, (msgs) => {
       :class="`ca-msg-${m.role}`"
     >
       <div class="ca-bubble">
-        <!-- 工具卡片 chips -->
+        <!-- 工具执行记录 — 复用 ai-builder 的可展开 ToolCard（参数 / 输出 / 耗时） -->
         <div
           v-if="m.role === 'assistant' && m.tool_trace && m.tool_trace.length"
-          class="ca-tool-chips"
+          class="ca-tool-list"
         >
-          <span
+          <ToolCard
             v-for="(t, i) in m.tool_trace"
             :key="i"
-            class="ca-tool-chip"
-            :class="t.ok ? 'ca-tool-chip-ok' : 'ca-tool-chip-err'"
-            :title="t.summary"
-          >
-            {{ t.ok ? '✓' : '✗' }} {{ t.tool_name }}
-          </span>
+            :tool="toAgentTool(t)"
+            :expanded="expandedTools.has(`${m.id}-${i}`)"
+            @toggle="toggleTool(`${m.id}-${i}`)"
+          />
         </div>
 
         <!-- 浏览器截图直接渲染 (Claude in Chrome 风格) -->
@@ -395,7 +442,63 @@ watch(() => props.messages, (msgs) => {
   font-family: var(--font-mono, monospace);
 }
 
-/* ─── 工具 chip ──────────────────────────────── */
+/* ─── 产出物：配置变更汇总（sticky 顶部）─────────── */
+.ca-digest {
+  position: sticky;
+  top: 0;
+  z-index: 5;
+  margin-bottom: 8px;
+  border: 1px solid var(--brand-ring, var(--brand));
+  border-radius: var(--r-2, 4px);
+  background: var(--surface);
+  overflow: hidden;
+}
+.ca-digest-head {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 10px;
+  background: var(--brand-soft);
+  border: 0;
+  cursor: pointer;
+  font-family: inherit;
+  font-size: 12px;
+  color: var(--text-2);
+}
+.ca-digest-icon { font-size: 13px; }
+.ca-digest-title { font-weight: var(--fw-semibold, 600); color: var(--text); }
+.ca-digest-count {
+  min-width: 18px;
+  padding: 0 6px;
+  border-radius: var(--r-full, 999px);
+  background: var(--brand);
+  color: var(--text-inverse, #fff);
+  font-size: 11px;
+  line-height: 18px;
+  text-align: center;
+}
+.ca-digest-toggle { margin-left: auto; color: var(--brand); font-size: 11px; }
+.ca-digest-list {
+  margin: 0;
+  padding: 8px 10px 8px 28px;
+  font-size: 12px;
+  color: var(--text);
+  max-height: 160px;
+  overflow-y: auto;
+}
+.ca-digest-list li { margin: 3px 0; line-height: 1.5; }
+.ca-digest-empty { padding: 8px 10px; font-size: 12px; color: var(--text-3); }
+
+/* ─── 工具执行记录（ToolCard 列表）─────────────── */
+.ca-tool-list {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin: 0 0 6px;
+}
+
+/* ─── 工具 chip（旧，保留兼容）──────────────────── */
 .ca-tool-chips {
   display: flex;
   flex-wrap: wrap;

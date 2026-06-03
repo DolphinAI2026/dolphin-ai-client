@@ -140,6 +140,9 @@ export function useConfigChat(opts: {
               args: ev.args,
               ok: ev.ok,
               summary: ev.summary,
+              result: ev.result,
+              duration_ms: ev.duration_ms,
+              image_data_url: ev.image_data_url,
             })
             slot.progressLog!.push(`${ev.ok ? '✓' : '✗'} ${ev.tool_name}`)
           } else if (ev.type === 'assistant') {

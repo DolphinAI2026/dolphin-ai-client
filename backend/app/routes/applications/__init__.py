@@ -2,6 +2,7 @@ from __future__ import annotations
 import json
 import logging
 import re
+import time
 from datetime import datetime
 from typing import Annotated, List, Optional
 from fastapi import APIRouter, Depends, HTTPException, Query, UploadFile, File, Form
@@ -3305,6 +3306,7 @@ async def _config_chat_event_stream(
                     tc_args = {}
 
                 yield _sse("tool_call", {"tool_name": tool_name, "args": tc_args})
+                _tc_start = time.monotonic()
 
                 if tool_name not in _CONFIG_CHAT_TOOL_WHITELIST:
                     result_text = json.dumps({
@@ -3341,9 +3343,15 @@ async def _config_chat_event_stream(
                     pass
 
                 summary = result_text[:200] + ("..." if len(result_text) > 200 else "")
+                # 完整结果（放开 200 截断，供可展开工具卡的「输出」；截 4000 防超长/base64 爆）
+                result_full = result_text[:4000] + ("..." if len(result_text) > 4000 else "")
+                if image_data_url:
+                    result_full = "(已截图，渲染在会话面板内)"
                 trace_item = {
                     "tool_name": tool_name, "args": tc_args,
                     "ok": ok_flag, "summary": summary,
+                    "result": result_full,
+                    "duration_ms": int((time.monotonic() - _tc_start) * 1000),
                 }
                 if image_data_url:
                     trace_item["image_data_url"] = image_data_url

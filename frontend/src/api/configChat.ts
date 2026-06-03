@@ -54,6 +54,10 @@ export interface ConfigChatToolTrace {
   args: Record<string, any>
   ok: boolean
   summary: string
+  /** 完整结果文本（后端放开 200 截断后；可展开工具卡的「输出」用） */
+  result?: string
+  /** 工具执行耗时（ms） */
+  duration_ms?: number
   /** browser_screenshot 截图返回的 data URL，前端 <img> 直显 */
   image_data_url?: string
 }
