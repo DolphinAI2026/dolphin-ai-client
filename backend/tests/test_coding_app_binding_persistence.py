@@ -76,6 +76,7 @@ async def test_app_id_read_back_from_conversation_when_request_missing():
         patch("app.coding.pipeline.save_coding_message", new=AsyncMock()),
         patch("app.coding.pipeline.get_conversation_history", new=AsyncMock(return_value=[])),
         patch("app.coding.pipeline.append_event_to_stream_replay"),
+        patch("app.agents.coding.llm_config.load_coding_llm_config", new=AsyncMock(return_value=("http://fake/v1", "k", "gpt-x"))),
     ):
         await _collect(run_coding_pipeline(params, db))
 
@@ -113,6 +114,7 @@ async def test_app_id_persisted_to_conversation_when_request_has_it():
         patch("app.coding.pipeline.save_coding_message", new=AsyncMock()),
         patch("app.coding.pipeline.get_conversation_history", new=AsyncMock(return_value=[])),
         patch("app.coding.pipeline.append_event_to_stream_replay"),
+        patch("app.agents.coding.llm_config.load_coding_llm_config", new=AsyncMock(return_value=("http://fake/v1", "k", "gpt-x"))),
     ):
         await _collect(run_coding_pipeline(params, db))
 

@@ -131,6 +131,7 @@ async def test_first_turn_clarification_gates_without_codegen():
               return_value={"id": "ws-x", "project_name": "p", "display_name": "d", "ide_url": "u"}),
         patch("app.coding.pipeline.WorkspaceManager.get_workspace_info", return_value={}),
         patch("app.coding.pipeline.append_event_to_stream_replay"),
+        patch("app.agents.coding.llm_config.load_coding_llm_config", new=AsyncMock(return_value=("http://fake/v1", "k", "gpt-x"))),
     ):
         events = await _collect(run_coding_pipeline(params, db))
 

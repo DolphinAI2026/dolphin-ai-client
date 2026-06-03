@@ -122,6 +122,10 @@ async def test_first_message_brainstorm_scene_gates_on_confirmation():
         patch(
             "app.coding.pipeline.append_event_to_stream_replay",
         ),
+        patch(
+            "app.agents.coding.llm_config.load_coding_llm_config",
+            new=AsyncMock(return_value=("http://fake/v1", "k", "gpt-x")),
+        ),
     ):
         events = await _collect(run_coding_pipeline(params, db))
 

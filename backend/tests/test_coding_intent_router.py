@@ -333,7 +333,9 @@ class TestPipelineIntegration:
              patch.object(pl, "_detect_scene_llm_call",
                          new=AsyncMock(side_effect=Exception("测试提前终止"))), \
              patch("app.coding.pipeline.resolve_effective_coding_model",
-                   new=AsyncMock(return_value=("model", 1))):
+                   new=AsyncMock(return_value=("model", 1))), \
+             patch("app.agents.coding.llm_config.load_coding_llm_config",
+                   new=AsyncMock(return_value=("http://fake/v1", "k", "gpt-x"))):
             db = AsyncMock()
             mock_result = MagicMock()
             mock_result.scalar_one_or_none.return_value = None
@@ -381,7 +383,9 @@ class TestPipelineIntegration:
              patch.object(pl, "_detect_scene_llm_call",
                          new=AsyncMock(side_effect=AssertionError("不应调 detect_scene"))) as mock_detect, \
              patch("app.coding.pipeline.resolve_effective_coding_model",
-                   new=AsyncMock(return_value=("model", 1))):
+                   new=AsyncMock(return_value=("model", 1))), \
+             patch("app.agents.coding.llm_config.load_coding_llm_config",
+                   new=AsyncMock(return_value=("http://fake/v1", "k", "gpt-x"))):
             db = AsyncMock()
             mock_result = MagicMock()
             mock_result.scalar_one_or_none.return_value = None
@@ -426,7 +430,9 @@ class TestPipelineIntegration:
              patch.object(pl, "_detect_scene_llm_call",
                          new=AsyncMock(return_value=SceneType.WEB_COMPONENT_DUAL)) as mock_detect, \
              patch("app.coding.pipeline.resolve_effective_coding_model",
-                   new=AsyncMock(return_value=("model", 1))):
+                   new=AsyncMock(return_value=("model", 1))), \
+             patch("app.agents.coding.llm_config.load_coding_llm_config",
+                   new=AsyncMock(return_value=("http://fake/v1", "k", "gpt-x"))):
             db = AsyncMock()
             mock_result = MagicMock()
             mock_result.scalar_one_or_none.return_value = None

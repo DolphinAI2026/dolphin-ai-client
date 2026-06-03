@@ -311,8 +311,9 @@ async def _resolve_llm_config(
         )
         cfg = res.scalar_one_or_none()
     if not cfg:
+        # 不再兜底:没配模型就明确提示去平台管理添加(与 Coding 文案一致)。
         raise RuntimeError(
-            "找不到可用的 LLM 配置，请先在「大模型管理」里配置一个并设为默认。"
+            "当前租户还没有配置可用的大模型,请到「平台管理 → 模型配置」添加一个模型后再使用。"
         )
     return LLMConfigSnapshot(
         base_url=cfg.base_url,

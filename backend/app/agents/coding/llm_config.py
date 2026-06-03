@@ -20,6 +20,16 @@ from typing import Optional, Tuple
 
 logger = logging.getLogger(__name__)
 
+# 未配置模型时的统一提示文案(Builder / Coding 共用),引导用户去平台管理添加,而不是静默兜底。
+NO_MODEL_HINT = "当前租户还没有配置可用的大模型,请到「平台管理 → 模型配置」添加一个模型后再使用。"
+
+
+class NoLLMConfigError(RuntimeError):
+    """租户未配置可用模型,且不再有内置兜底模型。调用方据此提示用户去平台管理添加。"""
+
+    def __init__(self, message: str = NO_MODEL_HINT):
+        super().__init__(message)
+
 
 def _normalize_base_url(base_url: str) -> str:
     """把 LLM base URL 归一化为 OpenAI-compatible 格式（以 /v1 结尾）。"""
@@ -100,17 +110,12 @@ async def load_coding_llm_config(
         except Exception:
             logger.exception("DB resolve_llm_config failed, falling back to .env")
 
-    # 2) .env fallback
+    # 2) 不再兜底到内置 minimax。只认**显式** .env 覆盖(本地脚本/开发用,无默认值);
+    #    DB 没配、.env 也没显式配 → 抛 NoLLMConfigError,由调用方提示用户去平台管理添加模型。
     env = _load_agent_env()
-    base_url_raw = (
-        env.get("VIBE_AGENT_BASE_URL")
-        or env.get("ANTHROPIC_BASE_URL", "https://api.minimax.chat/v1")
-    )
-    base_url = _normalize_base_url(base_url_raw)
-    api_key = env.get("VIBE_AGENT_API_KEY") or env.get("ANTHROPIC_API_KEY", "")
-    llm_model = (
-        model_override
-        or env.get("VIBE_AGENT_MODEL")
-        or env.get("ANTHROPIC_MODEL", "MiniMax-M2.7")
-    )
-    return base_url, api_key, llm_model
+    base_url_raw = env.get("VIBE_AGENT_BASE_URL") or env.get("ANTHROPIC_BASE_URL")
+    api_key = env.get("VIBE_AGENT_API_KEY") or env.get("ANTHROPIC_API_KEY")
+    llm_model = model_override or env.get("VIBE_AGENT_MODEL") or env.get("ANTHROPIC_MODEL")
+    if not (base_url_raw and api_key and llm_model):
+        raise NoLLMConfigError()
+    return _normalize_base_url(base_url_raw), api_key, llm_model

@@ -1610,6 +1610,18 @@ async def run_coding_pipeline(
         db, params.tenant_id, requested_model=params.selected_model,
     )
 
+    # 模型可用性预检:没配可用模型就直接提示去平台管理添加,不再静默兜底到内置 minimax。
+    # 早返,避免后面建会话/工作区/跑 brainstorm 才在半路报错。
+    try:
+        from app.agents.coding.llm_config import load_coding_llm_config, NoLLMConfigError
+        await load_coding_llm_config(params.tenant_id, model_override=effective_model)
+    except NoLLMConfigError as _exc:
+        # 前端 error handler 读的是 message 字段(useCodingPipeline.ts),用 message 才能把提示显出来。
+        yield _record_event({"type": "error", "message": str(_exc), "content": str(_exc)})
+        yield _record_event({"type": "done", "workspace_id": None,
+                             "conversation_id": conversation_id, "ide_url": None})
+        return
+
     # 如果有已有对话，恢复模型配置
     coding_conversation: Optional[Conversation] = None
     if conversation_id:

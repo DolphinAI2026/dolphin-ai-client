@@ -596,7 +596,9 @@ async def _get_default_coding_model_id(db: AsyncSession, tenant_id: int | None) 
     config = await _resolve_tenant_coding_model_config(db, tenant_id, None)
     if config:
         return _llm_config_model_id(config)
-    return settings.llm_model
+    # 不再兜底到内置 minimax(settings.llm_model):没配模型就返回空,
+    # 下游 load_coding_llm_config 解析不到会抛 NoLLMConfigError,提示去平台管理添加。
+    return ""
 
 
 async def _resolve_effective_coding_model(
