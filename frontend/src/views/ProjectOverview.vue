@@ -174,6 +174,8 @@
       :project="project"
       @saved="onProjectSaved"
     />
+
+    <WorkspaceIdeDrawer ref="ideDrawer" />
   </div>
 </template>
 
@@ -184,6 +186,7 @@ import { projectsApi, type Project, type ProjectMember } from '@/api/projects'
 import type { WorkspaceInfo } from '@/api/coding'
 import ProjectSettingsModal from '@/components/ProjectSettingsModal.vue'
 import ThemeToggle from '@/components/ThemeToggle.vue'
+import WorkspaceIdeDrawer from '@/components/common/WorkspaceIdeDrawer.vue'
 
 const route = useRoute()
 const router = useRouter()
@@ -192,6 +195,7 @@ const project = ref<Project | null>(null)
 const workspaces = ref<WorkspaceInfo[]>([])
 const members = ref<ProjectMember[]>([])
 const showSettingsModal = ref(false)
+const ideDrawer = ref<InstanceType<typeof WorkspaceIdeDrawer>>()
 
 const projectId = Number(route.params.id)
 
@@ -240,8 +244,8 @@ const goToGitSetup = () => {
 }
 
 const openWorkspace = (ws: WorkspaceInfo) => {
-  localStorage.setItem('coding_last_project_id', String(projectId))
-  router.push({ path: '/coding', query: { project_id: String(projectId), workspace_id: ws.id } })
+  // 在当前页全屏打开该工作区的 Web IDE（不再跳 Coding 工作台）
+  ideDrawer.value?.openWorkspace(ws.id)
 }
 
 const openSettings = () => {
