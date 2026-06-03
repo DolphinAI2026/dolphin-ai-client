@@ -2657,6 +2657,25 @@ const resultPath = '{str(result_json_path)}'
 
     # ========== 内部方法 ==========
 
+    def stamp_tenant_id(self, ws_id: str, tenant_id: int) -> bool:
+        """给缺 tenant_id 的老 workspace 回填真实租户(由调用方从其会话推断)。
+
+        幂等:已有 tenant_id 则不动、返回 False。best-effort,失败静默。
+        回填后 list_accessible_workspaces 的严格过滤即可正确隔离,不再靠 user_id 兜底跨租户泄漏。
+        """
+        try:
+            ws_path = self.get_workspace_path(ws_id)
+            if not (ws_path / ".workspace.json").exists():
+                return False
+            meta = self._read_meta(ws_path)
+            if meta.get("tenant_id") is not None:
+                return False
+            meta["tenant_id"] = int(tenant_id)
+            self._write_meta(ws_path, meta)
+            return True
+        except Exception:
+            return False
+
     def _read_meta(self, ws_path: Path) -> dict:
         meta_file = ws_path / ".workspace.json"
         return json.loads(meta_file.read_text())

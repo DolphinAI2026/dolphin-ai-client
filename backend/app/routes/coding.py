@@ -2072,6 +2072,35 @@ async def list_workspaces(
     workspaces = workspace_mgr.list_accessible_workspaces(
         ctx.user.id, list(project_ids), tenant_id=ctx.tenant_id
     )
+
+    # 租户隔离收紧:list_accessible_workspaces 对「缺 tenant_id 的老 workspace」按 user_id 兜底放行,
+    # 导致同一用户(如 admin)切租户后仍看到别租户的老自开发资产(「切了租户数据没变」)。
+    # 这里用 workspace 关联会话的 tenant_id 推断真实归属:别租户的剔除,本租户的回填 .workspace.json
+    # (回填后下次走严格过滤,自愈)。无会话的孤儿 workspace 维持 user_id 归属(仅本人可见,非跨用户泄漏)。
+    legacy_ids = [str(ws.get("id")) for ws in workspaces if ws.get("tenant_id") in (None, "")]
+    if legacy_ids:
+        owner_rows = await db.execute(
+            select(Conversation.workspace_id, Conversation.tenant_id).where(
+                Conversation.workspace_id.in_(legacy_ids),
+                Conversation.tenant_id.isnot(None),
+            )
+        )
+        ws_owner_tenant: dict[str, int] = {}
+        for ws_id_val, tenant_val in owner_rows.all():
+            if ws_id_val and tenant_val is not None:
+                ws_owner_tenant.setdefault(str(ws_id_val), int(tenant_val))
+        kept: list[dict[str, Any]] = []
+        for ws in workspaces:
+            if ws.get("tenant_id") in (None, ""):
+                owner_tenant = ws_owner_tenant.get(str(ws.get("id")))
+                if owner_tenant is not None and owner_tenant != ctx.tenant_id:
+                    continue  # 属于别的租户 → 隐藏
+                if owner_tenant == ctx.tenant_id:
+                    if workspace_mgr.stamp_tenant_id(str(ws.get("id")), ctx.tenant_id):
+                        ws["tenant_id"] = ctx.tenant_id  # 回填,UI 也立即一致
+            kept.append(ws)
+        workspaces = kept
+
     decorated: list[dict[str, Any]] = []
     for ws in workspaces:
         project_id = ws.get("project_id")
