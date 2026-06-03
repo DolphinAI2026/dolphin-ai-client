@@ -21,6 +21,15 @@
               <span class="tab-count" v-if="tabCounts[tab.value]">{{ tabCounts[tab.value] }}</span>
             </button>
           </div>
+          <div class="catalog-query">
+            <el-input v-model="searchQ" placeholder="搜名称 / 包名 / 应用" clearable size="small" class="query-search" />
+            <el-select v-model="statusFilter" size="small" class="query-select">
+              <el-option v-for="o in statusOptions" :key="o.value" :label="o.label" :value="o.value" />
+            </el-select>
+            <el-select v-if="!appId && appOptions.length" v-model="appFilter" size="small" class="query-select" clearable placeholder="全部应用">
+              <el-option v-for="o in appOptions" :key="o.value" :label="o.label" :value="o.value" />
+            </el-select>
+          </div>
           <div class="view-toggle">
             <button :class="['toggle-btn', { active: viewMode === 'grid' }]" @click="viewMode = 'grid'" title="卡片视图">
               <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="7" height="7"/><rect x="14" y="3" width="7" height="7"/><rect x="3" y="14" width="7" height="7"/><rect x="14" y="14" width="7" height="7"/></svg>
@@ -40,7 +49,7 @@
 
         <template v-else-if="viewMode === 'grid'">
           <article
-            v-for="ws in filteredWorkspaces"
+            v-for="ws in pagedWorkspaces"
             :key="ws.id"
             class="grid-card"
             @click="openWorkspace(ws)"
@@ -82,45 +91,54 @@
         </template>
 
         <template v-else>
-          <article
-            v-for="ws in filteredWorkspaces"
-            :key="`list-${ws.id}`"
-            class="list-card"
-            @click="openWorkspace(ws)"
-          >
-            <div class="card-header">
-              <div class="card-left">
-                <div class="card-info">
-                  <div class="card-name-row">
-                    <h3>{{ workspaceDisplayName(ws) }}</h3>
-                    <span v-if="workspaceAppName(ws)" class="app-badge">应用：{{ workspaceAppName(ws) }}</span>
-                    <span class="source-badge">{{ workspaceGroupLabel(ws.project_type) }}</span>
-                    <span class="card-status">{{ workspaceStatusLabel(ws.status) }}</span>
-                  </div>
-                  <div class="card-meta">
-                    <span v-if="workspaceCodeName(ws)" class="card-code">{{ workspaceCodeName(ws) }}</span>
-                  </div>
+          <el-table :data="pagedWorkspaces" stripe class="ws-table" @row-click="(row) => openWorkspace(row)">
+            <el-table-column label="名称" min-width="170">
+              <template #default="{ row }"><span class="ws-table-name">{{ workspaceDisplayName(row) }}</span></template>
+            </el-table-column>
+            <el-table-column label="包名" min-width="150">
+              <template #default="{ row }">{{ workspaceCodeName(row) || row.project_name }}</template>
+            </el-table-column>
+            <el-table-column label="类型" width="110">
+              <template #default="{ row }">{{ workspaceGroupLabel(row.project_type) }}</template>
+            </el-table-column>
+            <el-table-column label="所属应用" min-width="130">
+              <template #default="{ row }">{{ workspaceAppName(row) || '—' }}</template>
+            </el-table-column>
+            <el-table-column label="状态" width="92">
+              <template #default="{ row }">{{ workspaceStatusLabel(row.status) }}</template>
+            </el-table-column>
+            <el-table-column label="更新时间" width="150">
+              <template #default="{ row }">{{ formatTime(row.updated_at) }}</template>
+            </el-table-column>
+            <el-table-column label="操作" width="132" fixed="right">
+              <template #default="{ row }">
+                <div class="ws-table-actions" @click.stop>
+                  <button class="action-btn primary" @click.stop="openWorkspace(row)" title="打开 IDE">
+                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polygon points="5 3 19 12 5 21 5 3"/></svg>
+                  </button>
+                  <button :class="['action-btn', { 'is-loading': uploadingWsId === row.id }]" @click.stop="uploadWorkspace(row)" :disabled="uploadingWsId === row.id" :title="uploadingWsId === row.id ? '上传中...' : '上传组件包'">
+                    <svg v-if="uploadingWsId !== row.id" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg>
+                    <svg v-else width="14" height="14" class="spin" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="12" cy="12" r="9" stroke-dasharray="42 15"/></svg>
+                  </button>
+                  <button class="action-btn" @click.stop="downloadWorkspace(row, 'src')" title="下载源码">
+                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
+                  </button>
                 </div>
-              </div>
-              <div class="card-actions" @click.stop>
-                <button class="action-btn primary" @click.stop="openWorkspace(ws)" title="打开 IDE">
-                  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polygon points="5 3 19 12 5 21 5 3"/></svg>
-                </button>
-                <button :class="['action-btn', { 'is-loading': uploadingWsId === ws.id }]" @click.stop="uploadWorkspace(ws)" :disabled="uploadingWsId === ws.id" :title="uploadingWsId === ws.id ? '上传中...' : '上传组件包'">
-                  <svg v-if="uploadingWsId !== ws.id" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg>
-                  <svg v-else width="14" height="14" class="spin" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="12" cy="12" r="9" stroke-dasharray="42 15"/></svg>
-                </button>
-                <button class="action-btn" @click.stop="downloadWorkspace(ws, 'src')" title="下载源码">
-                  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
-                </button>
-              </div>
-            </div>
-            <div class="card-stats">
-              <span>文件类型：{{ workspaceGroupLabel(ws.project_type) }}</span>
-              <span>包名：{{ workspaceCodeName(ws) || ws.project_name }}</span>
-            </div>
-          </article>
+              </template>
+            </el-table-column>
+          </el-table>
         </template>
+      </div>
+
+      <div v-if="!loading && filteredWorkspaces.length > pageSize" class="catalog-pagination">
+        <el-pagination
+          v-model:current-page="currentPage"
+          v-model:page-size="pageSize"
+          :total="filteredWorkspaces.length"
+          :page-sizes="[12, 24, 48, 96]"
+          layout="total, sizes, prev, pager, next, jumper"
+          background
+        />
       </div>
     </div>
   </WorkbenchShell>
@@ -132,7 +150,7 @@
 </template>
 
 <script setup lang="ts">
-import { computed, onMounted, ref } from 'vue'
+import { computed, onMounted, ref, watch } from 'vue'
 import { useRoute } from 'vue-router'
 import { ElMessage } from 'element-plus'
 import WorkbenchShell from '@/components/WorkbenchShell.vue'
@@ -150,6 +168,19 @@ const activeTab = ref('all')
 const viewMode = ref<'grid' | 'list'>('grid')
 const appId = computed(() => String(route.query.app_id || ''))
 const appNameMap = ref<Record<number, string>>({})
+
+// 查询 + 分页（纯前端；workspaces 全量返回、量小）
+const searchQ = ref('')
+const statusFilter = ref('all')
+const appFilter = ref('')
+const currentPage = ref(1)
+const pageSize = ref(12)
+const statusOptions = [
+  { label: '全部状态', value: 'all' },
+  { label: '已生成', value: 'ready' },
+  { label: '生成中', value: 'building' },
+  { label: '本地', value: 'local' },
+]
 
 // 上传组件包相关状态
 const uploadingWsId = ref<string | null>(null)
@@ -182,10 +213,41 @@ const visibleWorkspaces = computed(() => {
 })
 
 const filteredWorkspaces = computed(() => {
-  const pool = visibleWorkspaces.value
-  if (activeTab.value === 'all') return pool
-  return pool.filter(ws => groupMap[ws.project_type]?.key === activeTab.value)
+  let pool = visibleWorkspaces.value
+  if (activeTab.value !== 'all') {
+    pool = pool.filter(ws => groupMap[ws.project_type]?.key === activeTab.value)
+  }
+  if (appFilter.value) {
+    pool = pool.filter(ws => String(ws.project_id || '') === appFilter.value)
+  }
+  if (statusFilter.value !== 'all') {
+    pool = pool.filter(ws => workspaceStatusKey(ws.status) === statusFilter.value)
+  }
+  const q = searchQ.value.trim().toLowerCase()
+  if (q) {
+    pool = pool.filter(ws =>
+      workspaceDisplayName(ws).toLowerCase().includes(q)
+      || (ws.project_name || '').toLowerCase().includes(q)
+      || workspaceAppName(ws).toLowerCase().includes(q),
+    )
+  }
+  return pool
 })
+
+const pagedWorkspaces = computed(() =>
+  filteredWorkspaces.value.slice((currentPage.value - 1) * pageSize.value, currentPage.value * pageSize.value),
+)
+
+// 所属应用下拉（来自当前可见 workspaces 出现过的应用），无 ?app_id 限定时才显示
+const appOptions = computed(() => {
+  const seen = new Map<string, string>()
+  for (const ws of visibleWorkspaces.value) {
+    if (ws.project_id) seen.set(String(ws.project_id), workspaceAppName(ws))
+  }
+  return Array.from(seen, ([value, label]) => ({ value, label }))
+})
+
+watch([searchQ, statusFilter, appFilter, activeTab, appId], () => { currentPage.value = 1 })
 
 const tabCounts = computed(() => {
   const counts: Record<string, number> = {}
@@ -220,6 +282,20 @@ function workspaceStatusLabel(status: string) {
   if (status === 'ready') return '已生成'
   if (status === 'building') return '生成中'
   return '本地'
+}
+
+function workspaceStatusKey(status: string) {
+  if (status === 'ready') return 'ready'
+  if (status === 'building') return 'building'
+  return 'local'
+}
+
+function formatTime(iso?: string) {
+  if (!iso) return '—'
+  const d = new Date(iso)
+  if (Number.isNaN(d.getTime())) return '—'
+  const p = (n: number) => String(n).padStart(2, '0')
+  return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())} ${p(d.getHours())}:${p(d.getMinutes())}`
 }
 
 function openWorkspace(ws: WorkspaceInfo) {
@@ -761,6 +837,28 @@ onMounted(async () => {
     font-size: 14px;
   }
 }
+
+/* —— #4 资产库优化：查询栏 + 分页 + 表格视图 —— */
+.catalog-query {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex: 1;
+  justify-content: flex-end;
+  min-width: 0;
+}
+.catalog-query .query-search { width: 220px; max-width: 40vw; }
+.catalog-query .query-select { width: 132px; }
+
+.catalog-pagination {
+  display: flex;
+  justify-content: flex-end;
+  padding: 4px var(--catalog-x) 8px;
+}
+
+.ws-table { width: 100%; cursor: pointer; }
+.ws-table-name { font-weight: var(--fw-semibold, 600); color: var(--text); }
+.ws-table-actions { display: flex; gap: 6px; }
 
 </style>
 

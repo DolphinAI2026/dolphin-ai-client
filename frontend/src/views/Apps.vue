@@ -26,6 +26,7 @@
         </div>
 
         <div class="apps-toolbar-right">
+          <el-input v-model="searchQ" placeholder="搜应用名 / 编码" clearable size="small" style="width: 200px" />
           <button class="btn btn-secondary apps-toolbar-action" type="button" @click="importDialogOpen = true">
             <el-icon><Download /></el-icon>
             <span>导入应用</span>
@@ -301,6 +302,7 @@ const appHistoryMap = ref<Record<number, ConversationWithApp[]>>({})
 const loading = ref(true)
 const activeTab = ref<AppTab>('all')
 const viewMode = ref<ViewMode>('list')
+const searchQ = ref('')
 const importDialogOpen = ref(false)
 const publishingIds = ref<Set<number>>(new Set())
 
@@ -325,8 +327,15 @@ const tabs = computed(() =>
 )
 
 const filteredApps = computed(() => {
+  const q = searchQ.value.trim().toLowerCase()
   return [...apps.value]
     .filter(app => matchesTab(app, activeTab.value))
+    .filter(app => {
+      if (!q) return true
+      const name = (app.app_name || '').toLowerCase()
+      const code = String((app as any).app_code || '').toLowerCase()
+      return name.includes(q) || code.includes(q)
+    })
     .sort((a, b) => appTimeMs(b.updated_at || b.created_at) - appTimeMs(a.updated_at || a.created_at))
 })
 
@@ -337,7 +346,7 @@ const pagedApps = computed(() => {
   const start = (currentPage.value - 1) * PAGE_SIZE
   return filteredApps.value.slice(start, start + PAGE_SIZE)
 })
-watch(activeTab, () => { currentPage.value = 1 })
+watch([activeTab, searchQ], () => { currentPage.value = 1 })
 // filteredApps 数量缩到当前页之外（比如删了某个 app）→ 回到合法页
 watch(filteredApps, list => {
   const lastPage = Math.max(1, Math.ceil(list.length / PAGE_SIZE))

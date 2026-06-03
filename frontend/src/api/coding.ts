@@ -60,6 +60,9 @@ export interface WorkspaceInfo {
   user_id: number
   status: string
   files?: string[]
+  updated_at?: string      // 后端 _decorate_workspace_meta 返回（最近活动时间，ISO）
+  activity_ts?: number
+  tenant_id?: number
   access_role?: 'owner' | 'admin' | 'member'
   permissions?: {
     edit?: boolean
