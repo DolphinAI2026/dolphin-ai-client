@@ -27,6 +27,7 @@ from mcp.server.transport_security import TransportSecuritySettings
 
 from app.config import settings
 from app.error_messages import is_apaas_token_error
+from app.step_executor import _apply_dictionary_binding_to_component
 from app.tool_registry import load as _load_tool_registry
 
 # SPEC v2 PR1: 启动时 load tool_registry.yaml, fail-fast 检查 yaml syntax 跟 schema.
@@ -6158,6 +6159,281 @@ def _normalize_field_type(field: dict) -> tuple[str, str]:
     return info.component_type, info.data_model_type
 
 
+def _model_field_suffix(model_field: str) -> str:
+    text = str(model_field or "").strip()
+    return text.split(".", 1)[1] if "." in text else text
+
+
+def _find_component_by_field_or_label(components: list, *, field_code: str = "", label: str = "") -> dict | None:
+    field_code = str(field_code or "").strip()
+    label = str(label or "").strip()
+    for comp in components or []:
+        if not isinstance(comp, dict):
+            continue
+        model_field = str(comp.get("modelField") or "").strip()
+        if field_code and (
+            model_field.endswith(f".{field_code}")
+            or _model_field_suffix(model_field) == field_code
+            or str(comp.get("fieldCode") or comp.get("code") or "").strip() == field_code
+        ):
+            return comp
+        if label and str(comp.get("label") or comp.get("name") or "").strip() == label:
+            return comp
+    return None
+
+
+def _iter_form_components(form_config: dict) -> list:
+    groups = []
+    for candidate in (
+        (form_config.get("detailPage") or {}).get("formComponents"),
+        form_config.get("components"),
+        form_config.get("formComponents"),
+    ):
+        if isinstance(candidate, list):
+            groups.append(candidate)
+    return groups
+
+
+def _build_display_component_refs(target_components: list, display_field_codes: list[str]) -> list[dict]:
+    refs: list[dict] = []
+    for field_code in display_field_codes:
+        comp = _find_component_by_field_or_label(target_components, field_code=field_code)
+        if not comp:
+            continue
+        comp_id = str(comp.get("uuid") or comp.get("id") or "").strip()
+        if not comp_id:
+            continue
+        refs.append({
+            "id": comp_id,
+            "name": comp.get("label") or comp.get("name") or field_code,
+            "componentType": comp.get("componentType") or "FORM_TEXT_INPUT",
+        })
+    return refs
+
+
+def _extract_ref_target(field: dict) -> tuple[str, str]:
+    ref = field.get("ref") or {}
+    target_model = (
+        field.get("ref_model_code") or field.get("refModelCode")
+        or field.get("target_model_code") or field.get("targetModelCode")
+        or (ref.get("model") if isinstance(ref, dict) else "")
+        or ""
+    )
+    target_field = (
+        field.get("ref_display_field_code") or field.get("refDisplayFieldCode")
+        or field.get("target_field_code") or field.get("targetFieldCode")
+        or (ref.get("field") if isinstance(ref, dict) else "")
+        or ""
+    )
+    return str(target_model).strip(), str(target_field).strip()
+
+
+def _default_feature_permission_rules(roles: list) -> list[dict]:
+    rules = [{
+        "subject_type": "ALL_USER",
+        "subject_name": "全部人员",
+        "actions": ["all"],
+        "range_type": "ALL",
+    }]
+    for role in roles or []:
+        if not isinstance(role, dict):
+            continue
+        role_name = str(role.get("roleName") or role.get("role_name") or role.get("name") or "").strip()
+        role_code = str(role.get("roleCode") or role.get("role_code") or role.get("code") or "").strip()
+        role_id = str(role.get("id") or role.get("roleId") or "").strip()
+        marker = f"{role_name} {role_code}".lower()
+        if role_id and any(token in marker for token in ("admin", "管理员", "管理")):
+            rules.append({
+                "subject_type": "ROLE_USER",
+                "subject_value": role_id,
+                "subject_name": role_name or role_code or "管理员",
+                "actions": ["all"],
+                "range_type": "ALL",
+            })
+    return rules
+
+
+async def _post_configure_feature_form_quality(
+    client,
+    *,
+    app_id: str,
+    form_id: str,
+    form_code: str,
+    fields: list,
+    field_to_dict_code: dict,
+) -> dict:
+    result = {
+        "dict_bound": 0,
+        "data_selector_bound": 0,
+        "permissions_configured": False,
+        "warnings": [],
+    }
+    if not form_id:
+        result["warnings"].append("form_id 为空，无法后处理表单配置")
+        return result
+
+    dict_codes = {code for code in field_to_dict_code.values() if code}
+    for field in fields:
+        if isinstance(field, dict):
+            direct_dict = str(field.get("dict_code") or field.get("dictCode") or field.get("dictionaryCode") or "").strip()
+            if direct_dict:
+                dict_codes.add(direct_dict)
+    if dict_codes:
+        try:
+            all_dicts = await client.query_dicts(app_id)
+            dict_by_code = {
+                str(d.get("dictionaryCode") or "").strip(): d
+                for d in (all_dicts or [])
+                if isinstance(d, dict)
+            }
+            options_by_code: dict[str, list] = {}
+            for dict_code in dict_codes:
+                dict_id = str((dict_by_code.get(dict_code) or {}).get("id") or "").strip()
+                if dict_id:
+                    options_by_code[dict_code] = await client.query_dict_options(app_id, dict_id)
+
+            form_config = await client.query_form_config(app_id, form_id)
+            updated = False
+            for field in fields:
+                if not isinstance(field, dict):
+                    continue
+                fcode = str(field.get("code") or "").strip()
+                dict_code = field_to_dict_code.get(fcode) or str(field.get("dict_code") or field.get("dictCode") or "").strip()
+                dict_id = str((dict_by_code.get(dict_code) or {}).get("id") or "").strip()
+                if not dict_code or not dict_id:
+                    continue
+                for group in _iter_form_components(form_config):
+                    comp = _find_component_by_field_or_label(
+                        group,
+                        field_code=fcode,
+                        label=str(field.get("name") or ""),
+                    )
+                    if comp and _apply_dictionary_binding_to_component(
+                        comp,
+                        dict_code,
+                        dict_id,
+                        options_by_code.get(dict_code, []),
+                    ):
+                        updated = True
+                        result["dict_bound"] += 1
+            if updated:
+                await client.save_form_config(app_id, form_config)
+        except Exception as exc:
+            result["warnings"].append(f"字典选项回写失败: {exc}")
+
+    ref_fields: list[dict] = []
+    for field in fields:
+        if not isinstance(field, dict):
+            continue
+        comp_type, _ = _normalize_field_type(field)
+        if comp_type in {"FORM_DATA_SELECTOR_SINGLE", "FORM_DATA_SELECTOR"}:
+            ref_fields.append(field)
+
+    if ref_fields:
+        try:
+            form_menus = await client.list_form_menus_for_event(app_id)
+            target_by_model: dict[str, dict] = {}
+            for menu in form_menus or []:
+                target_form_id = str((menu or {}).get("form_id") or "").strip()
+                if not target_form_id or target_form_id == form_id:
+                    continue
+                try:
+                    detail = await client.query_detail_page_config(app_id, target_form_id)
+                except Exception:
+                    continue
+                target_model_code = str(detail.get("modelCode") or detail.get("mainModelCode") or "").strip()
+                if target_model_code:
+                    target_by_model[target_model_code] = {
+                        "form_id": target_form_id,
+                        "form_name": detail.get("formName") or (menu or {}).get("menu_name") or "",
+                        "detail": detail,
+                    }
+                for model_code in detail.get("allModelCodes") or []:
+                    if model_code and model_code not in target_by_model:
+                        target_by_model[str(model_code)] = {
+                            "form_id": target_form_id,
+                            "form_name": detail.get("formName") or (menu or {}).get("menu_name") or "",
+                            "detail": detail,
+                        }
+
+            current_detail = await client.query_detail_page_config(app_id, form_id)
+            current_components = (current_detail.get("detailPage") or {}).get("formComponents") or []
+            updated = False
+            for field in ref_fields:
+                fcode = str(field.get("code") or "").strip()
+                fname = str(field.get("name") or "").strip()
+                target_model, target_field = _extract_ref_target(field)
+                target = target_by_model.get(target_model)
+                if not target:
+                    result["warnings"].append(f"字段「{fname}」未找到目标表单: {target_model}")
+                    continue
+                target_components = (target["detail"].get("detailPage") or {}).get("formComponents") or []
+                target_component = _find_component_by_field_or_label(target_components, field_code=target_field)
+                if not target_component:
+                    result["warnings"].append(f"字段「{fname}」未找到目标显示字段: {target_model}.{target_field}")
+                    continue
+                component = _find_component_by_field_or_label(current_components, field_code=fcode, label=fname)
+                if not component:
+                    result["warnings"].append(f"字段「{fname}」未找到当前表单组件")
+                    continue
+                target_comp_id = str(target_component.get("uuid") or target_component.get("id") or "").strip()
+                desired_selector = {
+                    "type": "LOV_CHOOSE",
+                    "otherFormId": target["form_id"],
+                    "otherFormName": target["form_name"],
+                    "otherComponent": target_comp_id,
+                    "otherComponentName": target_component.get("label") or target_field,
+                    "otherComponentType": target_component.get("componentType") or "FORM_TEXT_INPUT",
+                    "displayComponents": _build_display_component_refs(target_components, [target_field]) or [{
+                        "id": target_comp_id,
+                        "name": target_component.get("label") or target_field,
+                        "componentType": target_component.get("componentType") or "FORM_TEXT_INPUT",
+                    }],
+                }
+                comp_type, _ = _normalize_field_type(field)
+                changed = False
+                if component.get("componentType") != comp_type:
+                    component["componentType"] = comp_type
+                    changed = True
+                if component.get("dataSelector") != desired_selector:
+                    component["dataSelector"] = desired_selector
+                    changed = True
+                bof_type = "BOF_SINGLE_DATA_SELECTOR" if comp_type == "FORM_DATA_SELECTOR_SINGLE" else "BOF_DATA_SELECTOR"
+                if component.get("businessObjectComponentType") != bof_type:
+                    component["businessObjectComponentType"] = bof_type
+                    changed = True
+                if component.get("placeholder") != "请选择":
+                    component["placeholder"] = "请选择"
+                    changed = True
+                for stale_key in (
+                    "associationFormId", "associationField", "displayFields", "displayStyle",
+                    "quoteViewType", "assocAllowNew", "assocTabId", "tableOrders",
+                    "formAssociationConfig", "dataSelectorConfig",
+                ):
+                    if stale_key in component:
+                        component.pop(stale_key, None)
+                        changed = True
+                if changed:
+                    updated = True
+                    result["data_selector_bound"] += 1
+            if updated:
+                await client.save_form_config(app_id, current_detail)
+        except Exception as exc:
+            result["warnings"].append(f"数据选择回写失败: {exc}")
+
+    try:
+        roles = await client.query_roles(app_id)
+        permission_rules = _default_feature_permission_rules(roles)
+        payload = _build_perm_payload_from_simple_rules(app_id, form_code, form_id, permission_rules)
+        await client.create_form_permissions(app_id, [payload])
+        result["permissions_configured"] = True
+        result["permission_rules_count"] = len(permission_rules)
+    except Exception as exc:
+        result["warnings"].append(f"默认权限配置失败: {exc}")
+
+    return result
+
+
 @mcp.tool()
 async def build_apaas_feature_from_spec(
     env_id: int,
@@ -6206,9 +6482,6 @@ async def build_apaas_feature_from_spec(
     feature_code = feature_code.strip()
     feature_name = feature_name.strip()
 
-    # ─── Step 0: 先把含 dict_options 的字段抽出来建字典 ────
-    # 字典必须先建好, 字段绑定才能引用 dictionaryCode. 字典字段类型: 下拉单选/下拉多选/
-    # 单选框/复选框 4 种 (跟 field_types._DICT_FIELD_TYPES 对齐).
     _DICT_BOUND_COMPONENTS = {
         "FORM_SELECT_INPUT_SINGLE", "FORM_SELECT_INPUT",
         "FORM_RADIO_INPUT", "FORM_CHECKBOX_INPUT",
@@ -6216,6 +6489,43 @@ async def build_apaas_feature_from_spec(
     _REF_BOUND_COMPONENTS = {
         "FORM_DATA_SELECTOR_SINGLE", "FORM_DATA_SELECTOR", "FORM_ASSOCIATION",
     }
+
+    # 先做完整性校验，避免先创建字典/模型后才发现表单字段缺来源。
+    for f in fields:
+        if not isinstance(f, dict):
+            continue
+        fname = (f.get("name") or "").strip()
+        fcode = (f.get("code") or "").strip()
+        if not fname or not fcode:
+            return {"ok": False, "error_code": "FIELD_MISSING_NAME_OR_CODE",
+                    "message": f"字段缺 name/code: {f}"}
+        comp_type, _ = _normalize_field_type(f)
+        if comp_type in _DICT_BOUND_COMPONENTS:
+            has_dict = bool(f.get("dict_options") or f.get("dictOptions") or f.get("dict_code") or f.get("dictCode"))
+            if not has_dict:
+                return {
+                    "ok": False,
+                    "error_code": "SELECT_FIELD_NEEDS_DICTIONARY",
+                    "message": (
+                        f"字段「{fname}」是下拉/单选类字段，必须提供 dict_options "
+                        "或已有 dict_code，不能创建空下拉控件。"
+                    ),
+                }
+        if comp_type in _REF_BOUND_COMPONENTS:
+            target_model, target_field = _extract_ref_target(f)
+            if not target_model or not target_field:
+                return {
+                    "ok": False,
+                    "error_code": "DATA_SELECTOR_NEEDS_REF",
+                    "message": (
+                        f"字段「{fname}」是数据选择/关联表单字段，必须提供 "
+                        "ref.model 和 ref.field，不能创建无数据来源的选择控件。"
+                    ),
+                }
+
+    # ─── Step 0: 先把含 dict_options 的字段抽出来建字典 ────
+    # 字典必须先建好, 字段绑定才能引用 dictionaryCode. 字典字段类型: 下拉单选/下拉多选/
+    # 单选框/复选框 4 种 (跟 field_types._DICT_FIELD_TYPES 对齐).
     dict_payloads = []
     field_to_dict_code: dict = {}  # fcode → dictionaryCode (after creation)
     for f in fields:
@@ -6279,9 +6589,6 @@ async def build_apaas_feature_from_spec(
             continue
         fname = (f.get("name") or "").strip()
         fcode = (f.get("code") or "").strip()
-        if not fname or not fcode:
-            return {"ok": False, "error_code": "FIELD_MISSING_NAME_OR_CODE",
-                    "message": f"字段缺 name/code: {f}"}
         comp_type, data_model_type = _normalize_field_type(f)
         max_length = int(f.get("max_length") or f.get("maxLength") or 200)
         required = bool(f.get("required", False))
@@ -6331,30 +6638,7 @@ async def build_apaas_feature_from_spec(
             }
 
         if comp_type in _REF_BOUND_COMPONENTS:
-            ref = f.get("ref") or {}
-            target_model = (
-                f.get("ref_model_code") or f.get("refModelCode")
-                or f.get("target_model_code") or f.get("targetModelCode")
-                or (ref.get("model") if isinstance(ref, dict) else "")
-                or ""
-            )
-            target_field = (
-                f.get("ref_display_field_code") or f.get("refDisplayFieldCode")
-                or f.get("target_field_code") or f.get("targetFieldCode")
-                or (ref.get("field") if isinstance(ref, dict) else "")
-                or ""
-            )
-            target_model = str(target_model).strip()
-            target_field = str(target_field).strip()
-            if not target_model or not target_field:
-                return {
-                    "ok": False,
-                    "error_code": "DATA_SELECTOR_NEEDS_REF",
-                    "message": (
-                        f"字段「{fname}」是数据选择/关联表单字段，必须提供 "
-                        "ref.model 和 ref.field，不能创建无数据来源的选择控件。"
-                    ),
-                }
+            target_model, target_field = _extract_ref_target(f)
             if comp_type in {"FORM_DATA_SELECTOR_SINGLE", "FORM_DATA_SELECTOR"}:
                 comp["dataSelectorConfig"] = {
                     "type": "LOV_CHOOSE",
@@ -6432,10 +6716,29 @@ async def build_apaas_feature_from_spec(
 
     form_id = ""
     menu_id = ""
+    actual_form_code = f"{feature_code}_form"
     if isinstance(form_result, list) and form_result:
         first = form_result[0] if isinstance(form_result[0], dict) else {}
         form_id = str(first.get("id") or first.get("formId") or "")
         menu_id = str(first.get("menuId") or "")
+        actual_form_code = str(first.get("formCode") or actual_form_code)
+
+    # ─── Step 2b: 创建后强制回写下拉值、数据选择真实目标和默认权限 ───
+    post_config_result = None
+    if form_id:
+        ok_post, post_raw = await _with_client(
+            env_id,
+            "表单质量后处理",
+            lambda c: _post_configure_feature_form_quality(
+                c,
+                app_id=apaas_app_id.strip(),
+                form_id=form_id,
+                form_code=actual_form_code,
+                fields=fields,
+                field_to_dict_code=field_to_dict_code,
+            ),
+        )
+        post_config_result = post_raw if ok_post else post_raw
 
     # ─── Step 3: (可选) 移到 parent_menu_id 分组下 ──────────
     moved_to_parent = False
@@ -6470,9 +6773,11 @@ async def build_apaas_feature_from_spec(
         "model_id": (model_result[0].get("id") if isinstance(model_result, list)
                      and model_result and isinstance(model_result[0], dict) else None),
         "form_id": form_id,
+        "form_code": actual_form_code,
         "menu_id": menu_id,
         "fields_count": len(model_fields),
         "moved_to_parent": moved_to_parent,
+        "post_config_result": post_config_result,
         "process_result": process_result,
         "message": (f"功能「{feature_name}」已建好: "
                     f"模型 {actual_model_code} ({len(model_fields)} 字段) → 表单 → "
