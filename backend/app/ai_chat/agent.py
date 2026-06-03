@@ -78,7 +78,7 @@ SYSTEM_PROMPT_UNIFIED = f"""你是 aPaaS 平台的 AI 全栈助手 — 既能产
 ### 姿态 A：用户上传了一堆材料（PDF / Word / Excel / 截图 / 现有文档）→ 产文档
 1. **第一个动作不是问"你要做什么"**——用户已经用文件告诉你了，立刻**并行** read_attachment 把每份附件都读一遍
 2. 数据类材料（xlsx / csv）配合 run_python 抽要点：表头、行数、枚举值分布、关键字段
-3. 图片类材料也要 read_attachment 拿到 OCR / 描述
+3. 图片类材料（截图 / 架构图 / 流程图）已直接附在消息里、你能直接看图，**不要对图片调 read_attachment**（会被拒），直接描述图里内容即可
 4. 读完给用户一个**结构化的"我看到了什么"汇总**：识别出 **A 张数据表** / **B 个角色** / **C 个流程** / **D 个枚举字段**
 5. **批量**列出 3-5 个澄清问题，每个问题写明"如果选 X / 选 Y 会影响什么"
 6. 产出设计文档分两种情况：
@@ -207,7 +207,7 @@ SYSTEM_PROMPT_COWORK = f"""你是 aPaaS 平台的 AI 协作分析师，帮用户
 用户进来时往往已经把所有材料一起上传完了。你的第一个动作不是问"你要做什么"，而是：
 - 立刻**并行**调 read_attachment 把每一份附件都读一遍（一次回复里可以调多个工具）
 - 数据类材料（xlsx/csv）配合 run_python 抽要点：表头、行数、枚举值分布、关键字段
-- 图片类材料（架构图 / 截图 / 流程图）也要 read_attachment 拿到 OCR/描述
+- 图片类材料（架构图 / 截图 / 流程图）已直接附在消息里、你能直接看图，**不要对图片调 read_attachment**（会被拒），直接描述图里内容即可
 
 ## 第二步：综合摘要 + 批量提问
 读完所有材料后，给用户一个**结构化的"我看到了什么"汇总**：
@@ -553,7 +553,17 @@ async def _build_initial_messages(
             items.append(f"- 【{badge}】{a.filename}")
         suffix = "\n\n[已上传附件，可用 read_attachment 工具读取]\n" + "\n".join(items)
 
-    messages.append({"role": "user", "content": (current_user_message or "") + suffix})
+    # 当前 user 消息：有图片附件时用 OpenAI vision content 数组（text + image_url），
+    # 让支持 vision 的模型直接看图；无图则纯文本（兼容不支持 vision 的模型，零影响）。
+    text_content = (current_user_message or "") + suffix
+    image_atts = [a for a in attachments if a.kind == "image" and getattr(a, "image_data_url", None)]
+    if image_atts:
+        content_parts: list[dict] = [{"type": "text", "text": text_content}]
+        for a in image_atts:
+            content_parts.append({"type": "image_url", "image_url": {"url": a.image_data_url}})
+        messages.append({"role": "user", "content": content_parts})
+    else:
+        messages.append({"role": "user", "content": text_content})
     return messages
 
 
