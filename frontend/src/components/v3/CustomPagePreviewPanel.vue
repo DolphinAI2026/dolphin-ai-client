@@ -76,7 +76,21 @@ const hostUrl = computed(() => {
 })
 
 function onGoToCoding() {
-  router.push({ path: '/coding', query: { app_id: String(props.appId) } })
+  // 结构化交接到 AI Builder（AIChatPage）在应用上下文里做二次开发，不再跳独立 /coding。
+  const pageLabel = props.menuName || props.pageCode || props.menuId
+  const message =
+    `我要在应用（app_id=${props.appId}）上对自开发页面「${pageLabel}」做二次开发 / 改源码。`
+    + `请先读这个应用的结构和该页面，再问我具体要改什么。`
+  sessionStorage.setItem(
+    'ai_builder_pending_app_dev',
+    JSON.stringify({
+      message,
+      app_id: props.appId,
+      app_name: '',
+      page: { menu_id: props.menuId, page_code: props.pageCode || '', name: props.menuName || '' },
+    }),
+  )
+  router.push({ path: '/ai-chat', query: { app_dev: '1' } })
 }
 </script>
 

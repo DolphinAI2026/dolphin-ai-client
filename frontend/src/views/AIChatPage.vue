@@ -1802,6 +1802,28 @@ onMounted(async () => {
   if (idParam) {
     await loadSession(idParam)
   }
+  // 从 AI Builder 各处「二次开发」入口结构化交接：读 sessionStorage，在应用上下文里发起开发。
+  // 落点从旧的 /coding 改到这里 —— AIChatPage 的 agent 已有 coding 工具(create_dev_workspace 等)。
+  const appDevRaw = route.query.app_dev === '1' ? sessionStorage.getItem('ai_builder_pending_app_dev') : null
+  if (!currentSession.value && appDevRaw) {
+    sessionStorage.removeItem('ai_builder_pending_app_dev')
+    try {
+      const payload = JSON.parse(appDevRaw) as { message?: string }
+      const created = await aiChatApi.createSession({ selected_llm_config_id: selectedLlmId.value })
+      sessions.value.unshift(created)
+      await loadSession(created.id)
+      inputText.value = (payload.message || '').trim()
+        || '我要在这个应用上做二次开发，请先读它的结构再问我具体要做什么。'
+      router.replace({ path: `/ai-chat/${created.id}` })
+      await nextTick()
+      onSend()
+    } catch (e) {
+      console.error('AI Builder 二次开发交接失败', e)
+      ElMessage.error('进入二次开发失败')
+    }
+    return
+  }
+
   // 从 Landing 页带过来的首条 prompt + 可选附件：建会话 → 上传附件 → 把 prompt 发出去
   const incomingPrompt = typeof route.query.prompt === 'string' ? route.query.prompt.trim() : ''
   const incomingFiles = (previewStore.pendingAiChatFiles || []).slice()
