@@ -119,7 +119,11 @@ class CodingProfile(HarnessProfile):
                             "tool": event.get("tool", ""),
                             "tool_display": event.get("tool_display", ""),
                             "preview": event.get("input_preview", ""),
-                            "args": event.get("args", {}),
+                            # CodingAgent.before_tool_call 把 write_file/edit_file 的富数据
+                            # (file_path/old_string/new_string/content)放在 "input";转发它
+                            # 前端才能渲染 edit 红绿 diff + write 行号(否则只剩 preview 字符串)。
+                            # 旧字段 "args" 兜底(当前 agent 不发 args,留作前向兼容)。
+                            "args": event.get("input") or event.get("args") or {},
                         },
                         item_kind="tool_call",
                     )
