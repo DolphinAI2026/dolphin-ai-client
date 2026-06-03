@@ -118,6 +118,9 @@ async def _parse_uploaded_document(file: UploadFile) -> str:
     if ext in text_like_exts or content_type.startswith("text/"):
         return content.decode("utf-8", errors="ignore")
 
+    if ext == ".zip":
+        return _extract_text_from_zip(content)
+
     suffix = ext or ".tmp"
     with tempfile.NamedTemporaryFile(suffix=suffix, delete=False) as tmp:
         tmp.write(content)
@@ -190,6 +193,50 @@ async def _parse_uploaded_document(file: UploadFile) -> str:
         return ""
     finally:
         os.unlink(tmp_path)
+
+
+def _extract_text_from_zip(content: bytes) -> str:
+    """解压 zip：列文件清单 + 提取其中文本类文件内容（代码 / 配置 / 文档）。
+    二进制文件（图片 / pdf 等）只列名不提内容。"""
+    import io
+    import zipfile
+
+    text_like = {
+        ".md", ".markdown", ".txt", ".csv", ".json", ".yaml", ".yml", ".xml",
+        ".html", ".htm", ".js", ".ts", ".jsx", ".tsx", ".vue", ".css", ".scss",
+        ".less", ".py", ".java", ".go", ".rs", ".rb", ".php", ".sh", ".sql",
+        ".env", ".cfg", ".ini", ".toml", ".properties", ".gradle",
+    }
+    names: list[str] = []
+    parts: list[str] = []
+    try:
+        with zipfile.ZipFile(io.BytesIO(content)) as zf:
+            for info in zf.infolist():
+                if info.is_dir():
+                    continue
+                name = info.filename
+                base = os.path.basename(name)
+                if name.startswith("__MACOSX") or base.startswith("."):
+                    continue
+                names.append(name)
+                inner_ext = os.path.splitext(name)[1].lower()
+                if inner_ext in text_like and info.file_size <= 512 * 1024 and len(parts) < 80:
+                    try:
+                        parts.append(f"--- {name} ---\n{zf.read(info).decode('utf-8', errors='ignore')}")
+                    except Exception:
+                        pass
+    except zipfile.BadZipFile:
+        return "(zip 解压失败：文件损坏或非法 zip)"
+    except Exception as e:  # noqa: BLE001 — 解析容错，任何异常都降级为提示
+        return f"(zip 解析失败：{e})"
+    if not names:
+        return "(zip 为空或只含目录)"
+    header = f"# Zip 文件清单（{len(names)} 个文件）\n" + "\n".join(f"- {n}" for n in names[:200])
+    if len(names) > 200:
+        header += f"\n…（还有 {len(names) - 200} 个）"
+    body = "\n\n".join(parts)
+    return (header + "\n\n" + body).strip()
+
 
 BUILDER_SYSTEM_PROMPT = """你是 aPaaS Builder AI，得帆云低代码平台的智能搭建助手。你的任务是通过多轮对话帮用户理清应用需求，然后生成结构化的应用配置。
 
