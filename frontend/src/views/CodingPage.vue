@@ -680,17 +680,13 @@ const {
   updatingCodingModel,
   selectedCodingModelValue,
   persistedCodingModelValue,
-  codingModelPopoverVisible,
   selectedCodingModelOption,
   codingModelHint,
-  codingModelSummary,
   toCodingModelValue,
   normalizeCodingModelValue,
   applyCodingModelSelection,
   loadCodingModelOptions,
   handleCodingModelChange,
-  selectCodingModel,
-  formatCodingModelProvider,
 } = useCodingModel()
 
 // ============ Stream Messages (对话流) ============
@@ -1656,7 +1652,7 @@ function removeAttachment() {
 // SSE handlers + upload + build request + consume SSE + load IDE URL + sendMessage
 // 全部抽到 useCodingPipeline composable
 const { sendMessage, stopStream } = useCodingPipeline({
-  model: { codingModelOptions, codingModelLoading, updatingCodingModel, selectedCodingModelValue, persistedCodingModelValue, codingModelPopoverVisible, selectedCodingModelOption, codingModelHint, codingModelSummary, toCodingModelValue, normalizeCodingModelValue, applyCodingModelSelection, loadCodingModelOptions, handleCodingModelChange, selectCodingModel } as any,
+  model: { codingModelOptions, codingModelLoading, updatingCodingModel, selectedCodingModelValue, persistedCodingModelValue, selectedCodingModelOption, codingModelHint, toCodingModelValue, normalizeCodingModelValue, applyCodingModelSelection, loadCodingModelOptions, handleCodingModelChange } as any,
   stream: { streamMessages, isStreaming, streamContainerRef, scrollStreamToBottom, addStreamMsg, appendToLastThinking, appendToLastCommand, completeStepMsg, addStepRunningMsg, restoreReplayStreamMessages } as any,
   ide: { ideUrl, ideLoaded, ideLoadError, ideLoadingText, pendingIdeUrl, activeView, setIdeUrl, onIdeFrameLoad, onIdeFrameError, retryIdeLoad, openPendingIde } as any,
   workspace: { allWorkspaces, isDownloading, embeddedAppId, existingWorkspaces, workspaceDisplayName } as any,
@@ -2419,177 +2415,6 @@ watch(() => route.path, () => {
 .coding-model-select:hover:not(:disabled) { border-color: var(--t-border-strong); color: var(--t-text-primary); }
 .coding-model-select:disabled { opacity: 0.55; cursor: not-allowed; }
 
-.coding-model-tip {
-  display: block;
-  font-size: 10px;
-  color: #8b98b3;
-  line-height: 1.4;
-}
-
-.coding-model-trigger {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  min-width: 212px;
-  width: 258px;
-  max-width: 100%;
-  padding: 0 10px;
-  min-height: 36px;
-  border-radius: 12px;
-  border: 2px solid rgba(97, 112, 238, 0.78);
-  background: rgba(255, 255, 255, 0.92);
-  box-shadow:
-    0 8px 20px rgba(102, 115, 201, 0.08),
-    inset 0 1px 0 rgba(255, 255, 255, 0.86);
-  cursor: pointer;
-  text-align: left;
-  transition: transform 0.2s ease, box-shadow 0.2s ease, border-color 0.2s ease;
-}
-
-.coding-model-trigger:hover:not(:disabled),
-.coding-model-trigger.is-open {
-  border-color: rgba(97, 112, 238, 0.96);
-  box-shadow:
-    0 12px 26px rgba(99, 102, 241, 0.12),
-    inset 0 1px 0 rgba(255, 255, 255, 0.82);
-}
-
-.coding-model-trigger:hover:not(:disabled) {
-  transform: translateY(-1px);
-}
-
-.coding-model-trigger.is-disabled {
-  opacity: 0.62;
-  cursor: not-allowed;
-}
-
-.coding-model-trigger-content {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 8px;
-  min-width: 0;
-  width: 100%;
-}
-
-.coding-model-trigger-main {
-  display: flex;
-  flex-direction: column;
-  min-width: 0;
-}
-
-.coding-model-trigger-name {
-  color: #26314f;
-  font-size: 13px;
-  font-weight: 600;
-  line-height: 1.25;
-}
-
-.coding-model-trigger-meta {
-  color: #7f8fae;
-  font-size: 11px;
-  font-weight: 600;
-  line-height: 1.35;
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-
-.coding-model-trigger-icon {
-  flex-shrink: 0;
-  width: 18px;
-  height: 18px;
-  border-radius: 7px;
-  color: #8a9abd;
-  background: transparent;
-  box-shadow: none;
-  transition: transform 0.2s ease, color 0.2s ease;
-}
-
-.coding-model-trigger.is-open .coding-model-trigger-icon {
-  transform: rotate(180deg);
-  color: #6070d9;
-}
-
-.coding-model-panel {
-  display: flex;
-  flex-direction: column;
-  gap: 0;
-  padding: 8px;
-}
-
-.coding-model-panel-option {
-  display: flex;
-  flex-direction: column;
-  align-items: flex-start;
-  width: 100%;
-  padding: 13px 14px;
-  border: none;
-  background: transparent;
-  text-align: left;
-  cursor: pointer;
-  transition: background 0.2s ease, transform 0.2s ease;
-}
-
-.coding-model-panel-option:hover {
-  background: rgba(241, 244, 255, 0.88);
-}
-
-.coding-model-panel-option.is-active {
-  background: linear-gradient(180deg, rgba(239, 243, 255, 0.96), rgba(232, 238, 252, 0.96));
-  border-radius: 16px;
-}
-
-.coding-model-panel-option + .coding-model-panel-option {
-  border-top: 1px solid rgba(122, 136, 178, 0.12);
-}
-
-.coding-model-panel-option-head {
-  width: 100%;
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 12px;
-}
-
-.coding-model-panel-option-name {
-  color: #26314f;
-  font-size: 12px;
-  font-weight: 700;
-  line-height: 1.3;
-}
-
-.coding-model-panel-option-default {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  height: 20px;
-  padding: 0 8px;
-  border-radius: 999px;
-  background: rgba(99, 102, 241, 0.12);
-  color: #5668da;
-  font-size: 10px;
-  font-weight: 700;
-}
-
-.coding-model-panel-option-meta {
-  width: 100%;
-  margin-top: 4px;
-  color: #8190ab;
-  font-size: 10px;
-  font-weight: 600;
-  line-height: 1.35;
-}
-
-:global(.coding-model-popover.el-popover.el-popper) {
-  padding: 0;
-  border-radius: 24px;
-  border: 1px solid rgba(122, 136, 178, 0.16);
-  background: rgba(255, 255, 255, 0.96);
-  box-shadow: 0 24px 52px rgba(95, 107, 153, 0.18);
-  overflow: hidden;
-}
-
 .input-wrapper {
   display: flex;
   flex-direction: column;
@@ -2615,14 +2440,6 @@ watch(() => route.path, () => {
   gap: 8px;
   padding-bottom: 6px;
   border-bottom: 1px solid rgba(123, 138, 178, 0.12);
-}
-
-.coding-model-inline {
-  display: flex;
-  flex-direction: column;
-  align-items: flex-start;
-  gap: 6px;
-  min-width: 0;
 }
 
 .input-mainline {
@@ -2710,25 +2527,14 @@ watch(() => route.path, () => {
 }
 
 @media (max-width: 820px) {
-  .coding-model-trigger {
-    width: 100%;
-    min-width: 0;
-    max-width: none;
-  }
-
   .welcome-hero {
     min-height: auto;
     justify-content: flex-start;
   }
 
-  .composer-topline,
-  .coding-model-inline {
+  .composer-topline {
     flex-direction: column;
     align-items: stretch;
-  }
-
-  .coding-model-tip {
-    white-space: normal;
   }
 
   .input-wrapper {
@@ -4675,7 +4481,6 @@ html[data-theme="dark"] .welcome-title {
 }
 
 html[data-theme="dark"] .welcome-desc,
-html[data-theme="dark"] .coding-model-tip,
 html[data-theme="dark"] .workspace-card-meta,
 html[data-theme="dark"] .creating-text,
 html[data-theme="dark"] .stream-actions-hint,
@@ -4688,7 +4493,6 @@ html[data-theme="dark"] .toggle-bar-back-btn,
 html[data-theme="dark"] .header-btn,
 html[data-theme="dark"] .qc-shell,
 html[data-theme="dark"] .qc-chip,
-html[data-theme="dark"] .coding-model-trigger,
 html[data-theme="dark"] .input-wrapper,
 html[data-theme="dark"] .attach-btn,
 html[data-theme="dark"] .workspace-card,
@@ -4714,9 +4518,7 @@ html[data-theme="dark"] .qc-shell {
 }
 
 html[data-theme="dark"] .input-wrapper:focus-within,
-html[data-theme="dark"] .chat-input-wrapper:focus-within,
-html[data-theme="dark"] .coding-model-trigger:hover:not(:disabled),
-html[data-theme="dark"] .coding-model-trigger.is-open {
+html[data-theme="dark"] .chat-input-wrapper:focus-within {
   border-color: rgba(124, 140, 255, 0.36) !important;
   box-shadow: 0 0 0 3px rgba(124, 140, 255, 0.12) !important;
 }
@@ -4739,8 +4541,6 @@ html[data-theme="dark"] .tool-row-result {
   border-color: rgba(148, 163, 184, 0.14) !important;
 }
 
-html[data-theme="dark"] .coding-model-trigger-name,
-html[data-theme="dark"] .coding-model-panel-option-name,
 html[data-theme="dark"] .workspace-showcase-title,
 html[data-theme="dark"] .workspace-card-name,
 html[data-theme="dark"] .file-card-name,
@@ -4758,8 +4558,6 @@ html[data-theme="dark"] .chat-input-wrapper .chat-input .el-textarea__inner::pla
   color: rgba(148, 163, 184, 0.56) !important;
 }
 
-html[data-theme="dark"] .coding-model-trigger-meta,
-html[data-theme="dark"] .coding-model-panel-option-meta,
 html[data-theme="dark"] .thinking-text,
 html[data-theme="dark"] .command-text,
 html[data-theme="dark"] .command-output,
@@ -4806,8 +4604,7 @@ html[data-theme="dark"] .qc-hint-item:hover {
 }
 
 html[data-theme="dark"] .view-toggle-btn.active,
-html[data-theme="dark"] .workspace-card-action-primary,
-html[data-theme="dark"] .coding-model-panel-option.is-active {
+html[data-theme="dark"] .workspace-card-action-primary {
   background: rgba(124, 140, 255, 0.14) !important;
   border-color: rgba(124, 140, 255, 0.30) !important;
   color: #b6c2ff !important;
@@ -4830,8 +4627,7 @@ html[data-theme="dark"] .workspace-showcase {
 }
 
 html[data-theme="dark"] .workspace-card:hover,
-html[data-theme="dark"] .workspace-card-action:hover,
-html[data-theme="dark"] .coding-model-panel-option:hover {
+html[data-theme="dark"] .workspace-card-action:hover {
   background: #1a1d24 !important;
   border-color: rgba(124, 140, 255, 0.26) !important;
   color: rgba(248, 250, 252, 0.92) !important;
@@ -4848,11 +4644,5 @@ html[data-theme="dark"] .msg-error-row {
   background: rgba(248, 113, 113, 0.12) !important;
   border-color: rgba(248, 113, 113, 0.22) !important;
   color: #fca5a5 !important;
-}
-
-html[data-theme="dark"] .coding-model-popover.el-popover.el-popper {
-  background: #111318 !important;
-  border-color: rgba(148, 163, 184, 0.16) !important;
-  box-shadow: 0 24px 60px rgba(0, 0, 0, 0.52) !important;
 }
 </style>
