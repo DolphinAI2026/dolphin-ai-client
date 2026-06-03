@@ -1,7 +1,5 @@
 <script setup lang="ts">
 import { computed, ref } from 'vue'
-import { useRouter } from 'vue-router'
-import { usePreviewStore } from '@/stores/preview'
 import { isImageFile } from '@/utils/pasteImages'
 import UnifiedChatComposer from '@/components/common/UnifiedChatComposer.vue'
 import type { UnifiedChatAttachment } from '@/components/common/chatComposer'
@@ -14,8 +12,8 @@ const MODES: { id: Mode; label: string; sub: string; tone: 'ai' | 'brand' }[] = 
 const mode = ref<Mode>('builder')
 const text = ref('')
 const files = ref<File[]>([])
-const router = useRouter()
-const previewStore = usePreviewStore()
+
+const emit = defineEmits<{ (e: 'submit', payload: { prompt: string; files: File[] }): void }>()
 
 const placeholder = computed(() => ({
   builder: '例如：给质量部搭一个 QMS 整改闭环，包含问题登记、责任人派发、整改验证、超期提醒和月度统计。',
@@ -41,13 +39,10 @@ function removeComposerFile(_: UnifiedChatAttachment, index: number) {
 
 function submit() {
   if (!canSubmit.value) return
-  const userPrompt = text.value.trim()
-  // 把多文件交给 store，prompt 走 URL；AIChatPage onMounted 已经会消费 pendingAiChatFiles + ?prompt
-  previewStore.pendingAiChatFiles = [...files.value]
-  router.push({
-    path: '/ai-chat',
-    query: { mode: 'requirements', ...(userPrompt ? { prompt: userPrompt } : {}) },
-  })
+  // 就地交给父组件（AIChatPage 空状态）发起新会话；不再 router.push 跳转。
+  emit('submit', { prompt: text.value.trim(), files: [...files.value] })
+  text.value = ''
+  files.value = []
 }
 </script>
 
@@ -78,7 +73,7 @@ function submit() {
         :max-height="260"
         :multiple="true"
         attach-label="上传材料"
-        accept=".md,.markdown,.txt,.doc,.docx,.pdf,.xls,.xlsx,.csv,.json,.png,.jpg,.jpeg,.gif,.webp,.svg"
+        accept=".md,.markdown,.txt,.doc,.docx,.pdf,.xls,.xlsx,.csv,.json,.png,.jpg,.jpeg,.gif,.webp,.svg,.html,.htm,.yaml,.yml,.xml,.zip"
         @send="submit"
         @files-picked="onComposerFilesPicked"
         @remove-attachment="removeComposerFile"

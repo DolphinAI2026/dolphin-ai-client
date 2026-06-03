@@ -15,7 +15,7 @@ const props = defineProps<{
 const route = useRoute()
 
 const CRUMB_LABELS: Record<string, string> = {
-  '/': '新建',
+  '/': 'AI Builder',
   '/apps': '应用资产库',
   '/chat': 'AI Builder',
   '/ai-chat': 'AI Builder',

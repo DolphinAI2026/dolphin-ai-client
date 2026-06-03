@@ -24,10 +24,11 @@ const effectiveCollapsed = computed(() =>
 )
 
 const NAV = computed<NavItem[]>(() => [
-  { key: 'home', label: '首页', icon: 'home', path: '/' },
+  { key: 'home', label: 'AI Builder', icon: 'chat', path: '/' },
   { key: 'apps', label: '应用资产库', icon: 'apps', path: '/apps', badge: appCount.value || undefined },
-  { key: 'builder', label: 'AI Builder', icon: 'chat', path: '/ai-chat?mode=requirements' },
   { key: 'catalog', label: '自开发资产库', icon: 'store', path: '/workspace-catalog' },
+  // AI Builder（/）= 首页融合页，与 /ai-chat 同组件：新建对话 + 历史会话一体。
+  // 改已有应用从「应用资产库」点进工作室 (/chat)，/chat 不挂菜单。
   // 数据连接 / 运行发布先隐藏；平台级配置统一从平台管理工作台进入。
 ])
 const platformNavItem: NavItem = { key: 'platform', label: '平台管理', icon: 'shield', path: '/platform-admin' }
@@ -78,7 +79,8 @@ function toggleCollapsed() {
 
 function isActive(path: string) {
   const basePath = path.split('?')[0]
-  if (basePath === '/') return route.path === '/'
+  // AI Builder（/）= 融合页，/ai-chat 系列是同一功能，一并高亮。
+  if (basePath === '/') return route.path === '/' || route.path.startsWith('/ai-chat')
   return route.path === basePath || route.path.startsWith(basePath + '/')
 }
 

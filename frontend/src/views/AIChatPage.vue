@@ -125,8 +125,15 @@
         </template>
       </AgentConversation>
       <div v-else class="welcome">
-        <h2>👋 AI Chat</h2>
-        <p>新建一个会话，**直接描述需求**或者**上传材料**（PDF / Word / Excel / 截图 / 现有文档），AI 会帮你梳理需求并生成符合 Builder 规范的标准设计文档。还能调 aPaaS 平台工具查应用 / 生成应用 / 校验文档等。</p>
+        <div class="welcome-hero">
+          <div class="welcome-badge">
+            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3 14 9l6 2-6 2-2 6-2-6-6-2 6-2z"/><path d="M19 17l1 3 3 1-3 1-1 3-1-3-3-1 3-1z"/></svg>
+            <span>AI Builder</span>
+          </div>
+          <h1 class="welcome-title">把<span class="hl">业务流程</span>说清楚，睿鲸 AI 直接搭<span class="hl">应用</span>。</h1>
+          <p class="welcome-sub">描述需求或上传材料（PDF / Word / Excel / 截图），AI 帮你梳理字段、角色、流程并生成设计文档。左侧能看历史会话，点开继续。</p>
+        </div>
+        <LandingComposer @submit="onStartNew" />
       </div>
 
       <!-- 输入区 -->
@@ -144,7 +151,7 @@
           :allow-send-while-sending="true"
           :send-disabled="!inputText.trim() && pendingFiles.length === 0"
           :multiple="true"
-          accept=".md,.markdown,.txt,.doc,.docx,.pdf,.xls,.xlsx,.csv,.json,.png,.jpg,.jpeg,.gif,.webp,.svg"
+          accept=".md,.markdown,.txt,.doc,.docx,.pdf,.xls,.xlsx,.csv,.json,.png,.jpg,.jpeg,.gif,.webp,.svg,.html,.htm,.yaml,.yml,.xml,.zip"
           placeholder="输入需求，粘贴图片或点附件..."
           @send="onSend"
           @stop="onAbort"
@@ -287,6 +294,7 @@ import type { AgentMessage } from '@/components/common/agent-conversation/types'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { isImageFile } from '@/utils/pasteImages'
 import UnifiedChatComposer from '@/components/common/UnifiedChatComposer.vue'
+import LandingComposer from '@/components/v2/LandingComposer.vue'
 import type { UnifiedChatAttachment } from '@/components/common/chatComposer'
 // chat / cowork mode 已合并 — ChatDotRound 用作 session 列表前导 icon（对话界面风格）
 import { ChatDotRound } from '@element-plus/icons-vue'
@@ -1263,6 +1271,27 @@ async function onCreateSession(_mode?: SessionFilter | string) {
   await loadSession(s.id)
 }
 
+// 空状态（首页 / AI Builder 融合页）就地新建：建会话 → 把首条需求/附件发出去。
+// 复用 onMounted 里 Landing prompt 那套逻辑，不再靠 router.push 跳转。
+async function onStartNew(payload: { prompt: string; files: File[] }) {
+  if (isSending.value || currentSession.value) return
+  const text = (payload?.prompt || '').trim()
+  const files = payload?.files || []
+  if (!text && files.length === 0) return
+  try {
+    const created = await aiChatApi.createSession({ selected_llm_config_id: selectedLlmId.value })
+    sessions.value.unshift(created)
+    await loadSession(created.id)
+    if (files.length) pendingFiles.value.push(...files)
+    inputText.value = text || '材料都在附件里了，请先并行读完所有附件，给我综合摘要 + 关键澄清问题。'
+    router.replace({ path: `/ai-chat/${created.id}` })
+    await nextTick()
+    onSend()
+  } catch (e: any) {
+    ElMessage.error(`创建会话失败：${e?.message || e}`)
+  }
+}
+
 async function onChangeLlm() {
   // 没当前会话：只更新本地 selectedLlmId（作为新建会话的默认模型）
   if (!currentSession.value) return
@@ -2099,8 +2128,12 @@ onMounted(async () => {
 .model-select:disabled { opacity: 0.4; }
 
 .messages { flex: 1; overflow-y: auto; padding: 24px 0; }
-.welcome { max-width: 600px; margin: 80px auto; padding: 0 24px; text-align: center; color: var(--ac-text-mute); }
-.welcome h2 { color: var(--ac-text); }
+.welcome { max-width: 780px; margin: 0 auto; padding: 64px 24px 40px; display: flex; flex-direction: column; align-items: center; justify-content: center; min-height: 100%; color: var(--ac-text-mute); }
+.welcome-hero { text-align: center; margin-bottom: 26px; }
+.welcome-badge { display: inline-flex; align-items: center; gap: 7px; height: 38px; padding: 0 15px; border-radius: 999px; background: var(--ai-soft); color: var(--ai-text); font-weight: 700; font-size: 13px; border: 1px solid var(--ai-soft-2); margin-bottom: 18px; }
+.welcome-title { font-size: 34px; font-weight: 600; color: var(--ac-text); line-height: 1.15; margin: 0 0 12px; }
+.welcome-title .hl { font-weight: 700; color: var(--ac-brand); }
+.welcome-sub { font-size: 14px; color: var(--ac-text-mute); max-width: 600px; margin: 0 auto; line-height: 1.6; }
 
 .timeline-item { max-width: 760px; margin: 0 auto 18px; padding: 0 24px; }
 .msg.user { display: flex; justify-content: flex-end; }

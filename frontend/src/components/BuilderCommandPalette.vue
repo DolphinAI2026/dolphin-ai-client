@@ -47,8 +47,8 @@ const query = ref('')
 const inputRef = ref<HTMLInputElement | null>(null)
 
 const commandItems = [
-  { icon: HomeFilled, title: '新建应用', meta: '回到首页，用 AI Builder 生成设计文档', to: '/' },
-  { icon: ChatDotRound, title: 'AI Builder', meta: '继续现有搭建对话和部署流程', to: '/chat' },
+  { icon: HomeFilled, title: 'AI Builder', meta: '新建应用对话 + 历史会话', to: '/' },
+  { icon: ChatDotRound, title: '应用工作室', meta: '继续现有搭建对话和部署流程', to: '/chat' },
   { icon: Grid, title: '应用资产库', meta: '查看已生成应用和平台导入入口', to: '/apps' },
   { icon: Setting, title: '模型配置', meta: '真实模型供应商、API Key、默认模型管理', to: '/platform-envs?tab=llm' },
   { icon: DataAnalysis, title: '平台环境', meta: '真实得帆云连接、租户环境、默认环境管理', to: '/platform-envs?tab=envs' },
