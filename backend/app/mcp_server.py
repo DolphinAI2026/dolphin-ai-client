@@ -1,14 +1,14 @@
-"""AI-Builder MCP Server — 把应用领域能力封装成 MCP 工具暴露给得小帆等 agent 平台。
+"""AI-Builder MCP Server — 把应用领域能力封装成 MCP 工具供同进程 Python 代码消费。
 
 设计：
-- FastMCP 实例 mount 到主 FastAPI 进程的 /api/mcp/sse 子路径，复用 :8003 + 现有 nginx
-- 每个工具内部用临时 service JWT 调本机 :8003 现有 HTTP API（不复制业务逻辑）
+- 本模块是**进程内 FastMCP 工具库**，由同进程的 mcp_bridge / agent pipeline 直接 import 使用，
+  不对外 mount HTTP endpoint，也不做入站 Bearer 鉴权。
+- 每个工具内部用临时 service JWT 调本机 HTTP API（不复制业务逻辑）
 - SSE 流式 endpoint 用 httpx 自己 consume 到 done 事件再返回，对调用方表现为同步
-- 鉴权：MCP server 自身要 Bearer API key（防外网随便调）；
-  实际操作的租户/用户身份通过得小帆"自定义 Body 字段"配置注入，每个 tool 形参带 _tenant_id / _user_id
+- MCP_API_KEYS 仅由 mcp_bridge / builder_mcp / admin_mcp 等出站调用时读取，
+  用于向外部 MCP 服务鉴权；本模块不读该变量。
 
 环境变量：
-- MCP_API_KEYS: 逗号分隔的合法 Bearer token（agent 配置里填其中一个）
 - MCP_INTERNAL_BASE: 内部回环 base URL，默认跟随后端 settings.port
 """
 from __future__ import annotations
@@ -33,7 +33,6 @@ from app.tool_registry import load as _load_tool_registry
 # 若 yaml 缺失 / 不合法, 进程拒启 — 比生产环境静默漏工具安全.
 _load_tool_registry()
 
-# pydantic-settings 加载的是 settings.env_var；我们直接读 os.environ 的 MCP_API_KEYS。
 # 显式 load .env 兜底（生产 nohup 启动时 source .env 不一定继承环境变量）
 try:
     from dotenv import load_dotenv as _load_dotenv
@@ -50,25 +49,10 @@ logger = logging.getLogger(__name__)
 # ─────────────────────── 配置 ───────────────────────
 
 
-def _load_api_keys() -> set[str]:
-    raw = (os.getenv("MCP_API_KEYS") or "").strip()
-    return {k.strip() for k in raw.split(",") if k.strip()}
-
-
 _INTERNAL_BASE = (
     os.getenv("MCP_INTERNAL_BASE", "").strip()
     or f"http://127.0.0.1:{getattr(settings, 'port', 8000)}/api"
 )
-_API_KEYS = _load_api_keys()
-
-
-def is_valid_api_key(key: str | None) -> bool:
-    """供 main.py 在 SSE handshake middleware 里调用。空 keys 配置时拒绝所有请求。"""
-    if not _API_KEYS:
-        return False
-    if not key:
-        return False
-    return key in _API_KEYS
 
 
 # ─────────────────────── 内部 HTTP 调用 helper ───────────────────────
