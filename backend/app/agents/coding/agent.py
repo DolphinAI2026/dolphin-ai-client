@@ -188,7 +188,7 @@ class CodingAgent(BaseAgent[dict]):
         """
         requirement = self.ctx.input.get("requirement", "")
         summary = self.ctx.input.get("conversation_summary", "")
-        # Spec 驱动时 spec_bridge 会塞 spec_brief；未传时保持旧行为
+        # Spec 驱动时上游会塞 spec_brief；未传时保持旧行为
         spec_brief = self.ctx.input.get("spec_brief") or None
         # AutoFix 重试路径：driver.py 每轮重跑时注入
         fix_hint = self.ctx.input.get("fix_hint") or None
