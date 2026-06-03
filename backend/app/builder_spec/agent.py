@@ -21,6 +21,16 @@ if TYPE_CHECKING:  # avoid hard dep at import time / in tests
 logger = logging.getLogger(__name__)
 
 
+FORM_MODELING_RULES = """【表单建模硬规则】
+- 表单/对象命名要能直接看出业务用途；不要只叫"表单""测试表单""新增表单"。
+- 字段类型按业务含义选：客户、供应商、员工、部门、项目、产品等选择业务数据的字段，优先用"数据单选/数据选择"并带 ref；不要落成"单行输入"。
+- 状态、类型、等级、是否等固定枚举字段用"下拉单选/单选框"并创建 dict；不要只建空下拉。
+- 申请人、负责人、经办人、审批人用"人员选择"；申请部门/归属部门用"部门选择"。
+- 金额、数量、日期、备注分别用"金额/数字/日期时间/多行输入"，不要都用文本。
+- 权限要同时考虑页面访问、数据范围、字段可见/可编辑；每个核心对象至少有发起人/普通用户和管理员或业务角色的规则。
+"""
+
+
 SPEC_GATHERING_PROMPT = """你是 aPaaS 业务分析师。当前 SPEC 状态：
 {spec_summary}
 
@@ -45,7 +55,7 @@ SPEC_GATHERING_PROMPT = """你是 aPaaS 业务分析师。当前 SPEC 状态：
 【对话语言】
 - 用业务语言，对业务用户避免"枚举""数据模型"等技术术语。
 - 对话节奏像顾问聊需求：先给判断，再问少量真正阻塞的问题。
-"""
+""" + FORM_MODELING_RULES
 
 
 SPEC_DRAFTING_PROMPT = """你正在整理 SPEC 草案。当前 SPEC：
@@ -74,7 +84,7 @@ SPEC_DRAFTING_PROMPT = """你正在整理 SPEC 草案。当前 SPEC：
 【对话语言】
 - 简短解释你正在做什么（"我已经补了 3 个权限规则，还需要确认 2 个点"），不要长篇大论。
 - 不要把问题长篇写在正文里，问题正文和选项放到 ask_clarifying_question。
-"""
+""" + FORM_MODELING_RULES
 
 
 SPEC_REVISION_PROMPT = """你正在维护一份已经生成过的 SPEC 草案。当前 SPEC：
@@ -91,7 +101,7 @@ SPEC_REVISION_PROMPT = """你正在维护一份已经生成过的 SPEC 草案。
 - 不要主动 confirm_*；确认由用户在文档级按钮或明确确认语义触发。
 - 不要整段重写文档正文；结构化变更必须通过 tool 表达。
 - 应用编码、部署环境、平台登录这类应用元数据不属于 SPEC，不要臆造到角色/对象里；只用简短文本说明需要更新应用设置。
-"""
+""" + FORM_MODELING_RULES
 
 
 SPEC_BOOTSTRAP_SILENT_PROMPT = """你正在从一份完整的需求文档自动初始化 SPEC。
@@ -114,7 +124,7 @@ SPEC_BOOTSTRAP_SILENT_PROMPT = """你正在从一份完整的需求文档自动�
 ---
 {doc_text}
 ---
-"""
+""" + FORM_MODELING_RULES
 
 
 SPEC_BOOTSTRAP_INTERACTIVE_PROMPT = """你正在从一份初稿文档预填 SPEC，但文档不够规范，需要用户审核。
@@ -129,7 +139,7 @@ SPEC_BOOTSTRAP_INTERACTIVE_PROMPT = """你正在从一份初稿文档预填 SPEC
 ---
 {doc_text}
 ---
-"""
+""" + FORM_MODELING_RULES
 
 
 SPEC_BOOTSTRAP_DIFF_PROMPT = """你正在基于已存在的 SPEC 应用文档增量。
@@ -152,7 +162,7 @@ SPEC_BOOTSTRAP_DIFF_PROMPT = """你正在基于已存在的 SPEC 应用文档增
 - code 不变 → 视作"修改"，用 update_*
 - code 不存在了 → 视作"删除"，用 dismiss_*
 - 新 code 出现 → 视作"新增"，用 add_*
-"""
+""" + FORM_MODELING_RULES
 
 
 def _phase_key_for_spec(spec: Spec) -> str:

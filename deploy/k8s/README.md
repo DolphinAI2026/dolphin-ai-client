@@ -34,6 +34,8 @@ scripts/deploy_k8s_dev_web_terminal.sh
 
 这个脚本只在本地完成 git push、镜像构建和镜像推送，然后生成 `.run/deploy-dev-kubesphere-terminal.sh`，并在 macOS 上自动复制到剪贴板。把这段内容粘到 KubeSphere 的 `kubectl` 终端执行即可。
 
+KubeSphere 终端部署的固定留档见 [dev-kubesphere-terminal-deploy.md](dev-kubesphere-terminal-deploy.md)。部署完成必须确认 `MCP_TOOLS_HTTP 200`，否则 MCP 接入链路未闭环。
+
 ## 架构
 
 ```

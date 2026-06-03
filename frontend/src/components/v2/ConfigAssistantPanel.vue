@@ -13,11 +13,11 @@
      2026-05-24 (Agent A + B 集成):
      - sessionId 持久化 (useConfigChat 内, sticky from 'started' SSE event)
      - 新对话 / 历史抽屉 (SessionDrawer + drawerOpen state)
-     - modelId 走后端默认配置, 不再在配置助手顶部暴露模型选择
+     - 配置助手顶部展示 builder 模型选择；选中 LlmConfig.id 透传给后端
 
      props / emit / localStorage key 兼容老版本, ChatPage.vue 不动. -->
 <script setup lang="ts">
-import { computed, onMounted, onUpdated, ref, toRef } from 'vue'
+import { computed, onMounted, onUpdated, ref, toRef, watch } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 
 import ConfigAssistantHeader from './config-assistant/ConfigAssistantHeader.vue'
@@ -29,6 +29,7 @@ import { useConfigChat } from './config-assistant/composables/useConfigChat'
 import { usePanelResize } from './config-assistant/composables/usePanelResize'
 
 import { configChatApi } from '@/api/configChat'
+import { llmConfigApi, type BuilderModelOption } from '@/api/llmConfig'
 
 const props = defineProps<{
   applicationId: number
@@ -86,8 +87,69 @@ const { panelWidth, isResizing, onResizeStart } = usePanelResize({
 
 const appIdRef = toRef(props, 'applicationId')
 
-// 2026-05-31: 模型选择从配置助手主界面移除, 这里固定走后端默认模型。
+// 配置助手模型选择：后端支持 payload.model_id；前端优先选默认项，没有默认项则选第一项。
 const modelId = ref<number | null>(null)
+const modelOptions = ref<BuilderModelOption[]>([])
+const modelLoading = ref(false)
+const modelError = ref('')
+
+const modelStorageKey = computed(() =>
+  props.applicationId ? `apaas-config-assistant-model:${props.applicationId}` : '',
+)
+
+function readStoredModelId(): number | null {
+  const key = modelStorageKey.value
+  if (!key) return null
+  const raw = localStorage.getItem(key)
+  if (!raw) return null
+  const parsed = Number(raw)
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : null
+}
+
+function normalizeModelId(candidate?: number | null): number | null {
+  const ids = new Set(modelOptions.value.map((option) => option.id))
+  if (candidate != null && ids.has(candidate)) return candidate
+  return modelOptions.value.find((option) => option.is_default)?.id
+    ?? modelOptions.value[0]?.id
+    ?? null
+}
+
+function persistModelId() {
+  const key = modelStorageKey.value
+  if (!key) return
+  if (modelId.value && modelId.value > 0) {
+    localStorage.setItem(key, String(modelId.value))
+  } else {
+    localStorage.removeItem(key)
+  }
+}
+
+async function loadModelOptions() {
+  modelLoading.value = true
+  modelError.value = ''
+  try {
+    modelOptions.value = await llmConfigApi.listOptions('builder')
+    modelId.value = normalizeModelId(modelId.value ?? readStoredModelId())
+    persistModelId()
+  } catch (e: any) {
+    console.error('配置助手模型列表加载失败:', e)
+    modelOptions.value = []
+    modelId.value = null
+    modelError.value = e?.response?.data?.detail || e?.message || '模型列表加载失败'
+  } finally {
+    modelLoading.value = false
+  }
+}
+
+watch(() => props.applicationId, () => {
+  modelId.value = null
+  loadModelOptions()
+}, { immediate: true })
+
+watch(modelId, () => {
+  modelId.value = normalizeModelId(modelId.value)
+  persistModelId()
+})
 
 // Chat 核心逻辑 — scrollerRef 在 onMounted 后 querySelector 注入
 const scrollerRef = ref<HTMLElement | null>(null)
@@ -472,7 +534,13 @@ onUpdated(() => {
       </button>
     </div>
 
-    <ConfigAssistantHeader :app-name="appName" />
+    <ConfigAssistantHeader
+      v-model:model-id="modelId"
+      :app-name="appName"
+      :model-options="modelOptions"
+      :model-loading="modelLoading"
+      :model-error="modelError"
+    />
 
     <section class="ca-context-card" aria-label="当前上下文">
       <div>

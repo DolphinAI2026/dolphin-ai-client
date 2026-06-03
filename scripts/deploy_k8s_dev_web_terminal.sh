@@ -32,11 +32,14 @@ ALLOW_DIRTY="${ALLOW_DIRTY:-0}"
 
 IMAGE_REPO="${IMAGE_REPO:-hub.dfy.definesys.cn/ai-builder/apaas-builder}"
 IMAGE_TAG="${IMAGE_TAG:-}"
+IMAGE="${IMAGE:-}"
+SKIP_IMAGE_BUILD="${SKIP_IMAGE_BUILD:-0}"
 PLATFORM="${PLATFORM:-linux/amd64}"
 VITE_BASE_URL="${VITE_BASE_URL:-/ai-builder/}"
 
 DEV_HOST="${DEV_HOST:-agent.dfy.definesys.cn}"
 PROD_HOST="${PROD_HOST:-df-aigc.dfy.definesys.cn}"
+VITE_MCP_PUBLIC_BASE="${VITE_MCP_PUBLIC_BASE:-https://${DEV_HOST}}"
 PUBLIC_URL="${PUBLIC_URL:-https://${DEV_HOST}/ai-builder/login}"
 APAAS_BASE_URL="${APAAS_BASE_URL:-}"
 APAAS_TENANT_ID="${APAAS_TENANT_ID:-}"
@@ -91,6 +94,12 @@ push_dev_branch() {
 }
 
 build_and_push_image() {
+  if [ "$SKIP_IMAGE_BUILD" = "1" ]; then
+    [ -n "$IMAGE" ] || die "SKIP_IMAGE_BUILD=1 requires IMAGE=<repo:tag>"
+    warn "SKIP_IMAGE_BUILD=1, reuse image: ${IMAGE}"
+    return
+  fi
+
   local sha
   sha="$(git rev-parse --short HEAD)"
   if [ -z "$IMAGE_TAG" ]; then
@@ -103,6 +112,7 @@ build_and_push_image() {
     docker buildx build \
       --platform "$PLATFORM" \
       --build-arg "VITE_BASE_URL=${VITE_BASE_URL}" \
+      --build-arg "VITE_MCP_PUBLIC_BASE=${VITE_MCP_PUBLIC_BASE}" \
       -f "$REPO_ROOT/deploy/docker/Dockerfile" \
       -t "$IMAGE" \
       --push \
@@ -110,6 +120,7 @@ build_and_push_image() {
   else
     docker build \
       --build-arg "VITE_BASE_URL=${VITE_BASE_URL}" \
+      --build-arg "VITE_MCP_PUBLIC_BASE=${VITE_MCP_PUBLIC_BASE}" \
       -f "$REPO_ROOT/deploy/docker/Dockerfile" \
       -t "$IMAGE" \
       "$REPO_ROOT"
@@ -187,7 +198,11 @@ kubectl -n "\$NAMESPACE" create secret generic "\$BACKEND_SECRET" \\
   --dry-run=client -o yaml \\
   | kubectl apply -f -
 
-echo "[4/6] applying workloads"
+echo "[4/7] deleting old StatefulSet/Pods so stale probes cannot survive"
+kubectl -n "\$NAMESPACE" delete statefulset "\$APP_NAME" --ignore-not-found=true --wait=true
+kubectl -n "\$NAMESPACE" delete pod -l app="\$APP_NAME" --ignore-not-found=true --wait=true || true
+
+echo "[5/7] applying workloads"
 kubectl apply -f - <<YAML
 apiVersion: v1
 kind: PersistentVolumeClaim
@@ -259,7 +274,7 @@ spec:
       initContainers:
         - name: copy-frontend-dist
           image: \${IMAGE}
-          imagePullPolicy: IfNotPresent
+          imagePullPolicy: Always
           command:
             - sh
             - -c
@@ -274,7 +289,7 @@ spec:
       containers:
         - name: apaas-builder
           image: \${IMAGE}
-          imagePullPolicy: IfNotPresent
+          imagePullPolicy: Always
           env:
             - name: CODE_SERVER_BIND_HOST
               value: "127.0.0.1"
@@ -297,16 +312,14 @@ spec:
               subPath: backend.env
               readOnly: true
           readinessProbe:
-            httpGet:
-              path: /api/health
+            tcpSocket:
               port: api
             initialDelaySeconds: 30
             periodSeconds: 10
             timeoutSeconds: 5
             failureThreshold: 6
           livenessProbe:
-            httpGet:
-              path: /api/health
+            tcpSocket:
               port: api
             initialDelaySeconds: 180
             periodSeconds: 30
@@ -393,20 +406,58 @@ spec:
                   name: http
 YAML
 
-echo "[5/6] checking host conflicts"
+echo "[6/7] checking host conflicts"
 kubectl get ingress -A \\
   -o custom-columns='NAMESPACE:.metadata.namespace,NAME:.metadata.name,HOSTS:.spec.rules[*].host' \\
   --no-headers \\
   | awk -v host="\$DEV_HOST" -v ns="\$NAMESPACE" -v app="\$APP_NAME" '\$0 ~ host && !(\$1 == ns && \$2 == app) {print "WARNING host conflict:", \$0}'
 
-echo "[6/6] waiting for rollout"
+echo "probe config now in StatefulSet:"
+kubectl -n "\$NAMESPACE" get statefulset "\$APP_NAME" -o yaml | sed -n '/readinessProbe:/,/resources:/p'
+
+echo "[7/7] waiting for rollout"
 kubectl -n "\$NAMESPACE" rollout status "statefulset/\$APP_NAME" --timeout="\$ROLL_TIMEOUT"
 kubectl -n "\$NAMESPACE" get pods,sts,svc,ingress,pvc | grep -E "NAME|\${PROD_APP_NAME}|\${APP_NAME}|mcp|ming" || true
+echo "statefulset images:"
+kubectl -n "\$NAMESPACE" get statefulset "\$APP_NAME" -o jsonpath='{range .spec.template.spec.initContainers[*]}init/{.name}={.image}{"\n"}{end}{range .spec.template.spec.containers[*]}container/{.name}={.image}{"\n"}{end}'
+POD="\$(kubectl -n "\$NAMESPACE" get pod -l app="\$APP_NAME" -o jsonpath='{.items[0].metadata.name}')"
+echo "running pod: \$POD"
+kubectl -n "\$NAMESPACE" exec "\$POD" -c apaas-builder -- python - <<'PY' || true
+from pathlib import Path
+from urllib.request import urlopen
+
+main = Path("/app/backend/app/main.py").read_text()
+try:
+    print("health_before_routers=", main.index('@app.get("/api/health")') < main.index('app.include_router(auth.router, prefix="/api")'))
+except ValueError as exc:
+    print("health_order_check_failed=", exc)
+
+try:
+    with urlopen("http://127.0.0.1:8003/api/health", timeout=5) as resp:
+        print("IN_POD_HEALTH_HTTP", resp.status)
+        print(resp.read(200).decode("utf-8", "replace"))
+except Exception as exc:
+    print("IN_POD_HEALTH_FAILED", repr(exc))
+PY
 
 if command -v curl >/dev/null 2>&1; then
   curl -k -sS -o /tmp/apaas-builder-dev-login.html \\
     -w "HTTP %{http_code}\\nURL %{url_effective}\\nTYPE %{content_type}\\nSIZE %{size_download}\\n" \\
     "\$PUBLIC_URL" || true
+  MCP_API_KEY="\$(awk -F= '/^MCP_API_KEYS=/{print \$2; exit}' /tmp/apaas-builder-backend.env | cut -d, -f1)"
+  if [ -n "\$MCP_API_KEY" ]; then
+    curl -k -sS -o /tmp/apaas-builder-dev-mcp-tools.json \\
+      -w "MCP_TOOLS_HTTP %{http_code}\\n" \\
+      -X POST "https://\${DEV_HOST}/api/mcp/mcp" \\
+      -H "Authorization: Bearer \$MCP_API_KEY" \\
+      -H "Content-Type: application/json" \\
+      -H "Accept: application/json, text/event-stream" \\
+      --data '{"jsonrpc":"2.0","id":1,"method":"tools/list"}' || true
+    head -c 200 /tmp/apaas-builder-dev-mcp-tools.json || true
+    echo
+  else
+    echo "MCP_TOOLS_HTTP skipped: MCP_API_KEYS missing in backend env"
+  fi
 fi
 
 echo "done: \$PUBLIC_URL"

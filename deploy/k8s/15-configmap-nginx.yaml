@@ -111,8 +111,9 @@ data:
             proxy_send_timeout 600s;
         }
 
-        # 平台代理路由（根路径上的 /platform/、/backend/ 等，前端带 /ai-builder 前缀访问）
-        location ~ ^/ai-builder/(platform|backend|smartbi|xdap-|apaas)(/|$) {
+        # 平台代理路由：与 backend/app/routes/platform_proxy.py 中声明的顶层路径保持一致。
+        # 这些路径都是 aPaaS iframe 内部页面 / API / 运行态 / 插件资源，不能落到 SPA fallback。
+        location ~ ^/ai-builder/(platform|backend|plugin|xdap-admin|xdap-plugin|xdap-app|xdap-open|common|smartbi|apaas|app|m)(/|$) {
             rewrite ^/ai-builder/(.*)$ /$1 break;
             proxy_pass http://127.0.0.1:8003;
             proxy_http_version 1.1;
@@ -129,18 +130,66 @@ data:
             proxy_send_timeout 600s;
         }
 
+        # aPaaS iframe 内部会跳转/加载根路径绝对地址（例如 /platform/...、/backend/...）。
+        # dev 站点的 Ingress 同时把 "/" 转到本服务，所以这些根路径也必须交给后端平台代理；
+        # 否则会落到 sidecar nginx 静态文件查找，页面显示 nginx/1.29.1 的 404。
+        location ~ ^/(platform|backend|plugin|xdap-admin|xdap-plugin|xdap-app|xdap-open|common|smartbi|apaas|app|m)(/|$) {
+            proxy_pass http://127.0.0.1:8003;
+            proxy_http_version 1.1;
+
+            proxy_buffering off;
+            proxy_set_header Connection "";
+
+            proxy_set_header Host $host;
+            proxy_set_header X-Real-IP $remote_addr;
+            proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+            proxy_set_header X-Forwarded-Proto $proxy_x_forwarded_proto;
+
+            proxy_read_timeout 600s;
+            proxy_send_timeout 600s;
+        }
+
         # 平台插件资源：/{32位hex}/... —— 后端 middleware 识别
-        # 注意：这类 URL 是绝对路径（不带 /ai-builder 前缀），不经过 ingress 前缀匹配时进不来。
-        # 如果前端代码生成的插件 URL 也带了 /ai-builder/ 前缀，就会先 match 上面的 SPA fallback。
-        # 实际运行中遇到 404 再排查。
+        # aPaaS iframe 在 /ai-builder 前缀下时，插件资源可能被浏览器解析成
+        # /ai-builder/{32位hex}/...，需要先剥掉前缀再交给后端 middleware。
+        location ~ "^/ai-builder/[0-9a-f]{32}/" {
+            rewrite ^/ai-builder/(.*)$ /$1 break;
+            proxy_pass http://127.0.0.1:8003;
+            proxy_http_version 1.1;
+            proxy_set_header Host $host;
+        }
+
+        # aPaaS iframe 里可能出现不带 /platform 前缀的静态资源绝对路径。
+        # 排除前端自己的 /ai-builder/assets 后，其他资源型请求交给后端平台代理兜底。
+        location ~ "^/ai-builder/(?!assets/).+\\.(js|css|map|json|png|jpe?g|gif|svg|ico|webp|woff2?|ttf|eot)$" {
+            rewrite ^/ai-builder/(.*)$ /$1 break;
+            proxy_pass http://127.0.0.1:8003;
+            proxy_http_version 1.1;
+            proxy_set_header Host $host;
+            proxy_set_header X-Real-IP $remote_addr;
+            proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+            proxy_set_header X-Forwarded-Proto $proxy_x_forwarded_proto;
+        }
+
         location ~ "^/[0-9a-f]{32}/" {
             proxy_pass http://127.0.0.1:8003;
             proxy_http_version 1.1;
             proxy_set_header Host $host;
         }
 
+        # 平台 HTML 还可能以根路径加载 env.tmpl.js / browser.js / 图片字体等资源。
+        # 前端自己的构建产物都在 /ai-builder/assets/，所以根路径资源可以交给平台代理。
+        location ~ "^/(env\\.tmpl\\.js|browser\\.js|favicon\\.ico|.+\\.(js|css|map|json|png|jpe?g|gif|svg|ico|webp|woff2?|ttf|eot))$" {
+            proxy_pass http://127.0.0.1:8003;
+            proxy_http_version 1.1;
+            proxy_set_header Host $host;
+            proxy_set_header X-Real-IP $remote_addr;
+            proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+            proxy_set_header X-Forwarded-Proto $proxy_x_forwarded_proto;
+        }
+
         # 静态资源（带 hash 的 assets，Vite 构建产物）
-        location /ai-builder/assets/ {
+        location ^~ /ai-builder/assets/ {
             alias /usr/share/nginx/html/assets/;
             access_log off;
             expires 7d;

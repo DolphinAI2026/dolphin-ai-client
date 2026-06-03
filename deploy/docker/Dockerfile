@@ -38,12 +38,15 @@ RUN node_modules/.bin/vite build
 # ------------------------------------------------------------
 FROM node:20-bookworm-slim AS admin-spa-builder
 
+ARG VITE_MCP_PUBLIC_BASE=http://127.0.0.1:8004
+
 WORKDIR /build/admin-spa
 
 COPY admin-spa/package.json admin-spa/package-lock.json* ./
 RUN npm ci --prefer-offline --no-audit --progress=false
 
 COPY admin-spa/ ./
+ENV VITE_MCP_PUBLIC_BASE=${VITE_MCP_PUBLIC_BASE}
 RUN npm run build
 
 

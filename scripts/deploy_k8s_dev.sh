@@ -42,6 +42,7 @@ VITE_BASE_URL="${VITE_BASE_URL:-/ai-builder/}"
 
 DEV_HOST="${DEV_HOST:-agent.dfy.definesys.cn}"
 PROD_HOST="${PROD_HOST:-df-aigc.dfy.definesys.cn}"
+VITE_MCP_PUBLIC_BASE="${VITE_MCP_PUBLIC_BASE:-https://${DEV_HOST}}"
 PUBLIC_URL="${PUBLIC_URL:-https://${DEV_HOST}/ai-builder/login}"
 APAAS_BASE_URL="${APAAS_BASE_URL:-}"
 APAAS_TENANT_ID="${APAAS_TENANT_ID:-}"
@@ -125,6 +126,7 @@ build_and_push_image() {
     docker buildx build \
       --platform "$PLATFORM" \
       --build-arg "VITE_BASE_URL=${VITE_BASE_URL}" \
+      --build-arg "VITE_MCP_PUBLIC_BASE=${VITE_MCP_PUBLIC_BASE}" \
       -f "$REPO_ROOT/deploy/docker/Dockerfile" \
       -t "$IMAGE" \
       --push \
@@ -132,6 +134,7 @@ build_and_push_image() {
   else
     docker build \
       --build-arg "VITE_BASE_URL=${VITE_BASE_URL}" \
+      --build-arg "VITE_MCP_PUBLIC_BASE=${VITE_MCP_PUBLIC_BASE}" \
       -f "$REPO_ROOT/deploy/docker/Dockerfile" \
       -t "$IMAGE" \
       "$REPO_ROOT"

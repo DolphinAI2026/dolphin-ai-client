@@ -10,6 +10,7 @@ import logging
 from typing import Any
 
 from app.app_code import coerce_app_code
+from app.field_types import get_comp_type_map
 from app.lowcode_standards import normalize_database_field_type, safe_field_code
 
 logger = logging.getLogger(__name__)
@@ -97,6 +98,13 @@ TYPE_ICON_MAP: dict[str, str] = {
 SKIP_FIELDS = {"id", "created_at", "updated_at", "deleted_at", "created_by", "updated_by",
                "create_time", "update_time", "creator", "modifier", "tenant_id", "org_id"}
 
+SELECT_FIELD_TYPES = {"下拉单选", "下拉多选", "单选框", "复选框"}
+REFERENCE_FIELD_TYPES = {"数据单选", "数据选择", "关联表单"}
+GENERIC_FORM_NAMES = {"", "表单", "测试表单", "新增表单", "编辑表单", "查看表单", "维护表单"}
+GENERIC_FORM_SUFFIXES = ("表单", "新增", "编辑", "查看", "维护")
+
+COMP_TYPE_MAP = get_comp_type_map()
+
 PLATFORM_TO_DB_TYPE_MAP: dict[str, str] = {
     "单据号": "VARCHAR",
     "单行输入": "VARCHAR",
@@ -173,6 +181,161 @@ def _normalize_type(raw_type: str, field_name: str = "", has_dict: bool = False)
     return "单行输入"
 
 
+def _split_option_text(text: str) -> list[str]:
+    parts = re.split(r"[,，、/|;；\n]+", text or "")
+    return [part.strip() for part in parts if part.strip()]
+
+
+def _extract_field_options(field: dict[str, Any]) -> list[dict[str, str]]:
+    raw_options = (
+        field.get("options")
+        or field.get("items")
+        or field.get("enum_values")
+        or field.get("enumValues")
+        or field.get("values")
+        or field.get("dict_options")
+        or field.get("dictOptions")
+        or []
+    )
+    if isinstance(raw_options, str):
+        raw_options = _split_option_text(raw_options)
+    if not isinstance(raw_options, list):
+        return []
+
+    options: list[dict[str, str]] = []
+    for idx, raw in enumerate(raw_options, start=1):
+        if isinstance(raw, str):
+            name = raw.strip()
+            code = _normalize_code(name) or f"option_{idx}"
+        elif isinstance(raw, dict):
+            name = str(
+                raw.get("item_name")
+                or raw.get("name")
+                or raw.get("label")
+                or raw.get("value")
+                or ""
+            ).strip()
+            code = _normalize_code(str(
+                raw.get("item_code")
+                or raw.get("code")
+                or raw.get("id")
+                or name
+            ))
+        else:
+            name = str(raw).strip()
+            code = _normalize_code(name) or f"option_{idx}"
+        if name:
+            options.append({"name": name, "code": code or f"option_{idx}"})
+    return options
+
+
+def _is_generic_form_name(name: str, model_name: str, model_code: str) -> bool:
+    text = str(name or "").strip()
+    if text in GENERIC_FORM_NAMES:
+        return True
+    if text == str(model_code or "").strip():
+        return True
+    if not text:
+        return True
+    if text in {"form", "new_form", "test_form"}:
+        return True
+    return False
+
+
+def _dedupe_form_name(raw_name: str, model_name: str, model_code: str, used_names: set[str]) -> str:
+    candidate = str(raw_name or "").strip()
+    model_label = str(model_name or "").strip() or str(model_code or "").strip() or "业务对象"
+    if _is_generic_form_name(candidate, model_label, model_code):
+        candidate = f"{model_label}-新增表单"
+    if candidate in used_names:
+        if not any(candidate.endswith(suffix) for suffix in GENERIC_FORM_SUFFIXES):
+            candidate = f"{model_label}-新增表单"
+        base = candidate
+        seq = 2
+        while candidate in used_names:
+            candidate = f"{base}-{seq}"
+            seq += 1
+    used_names.add(candidate)
+    return candidate
+
+
+def _compact_business_name(name: str) -> str:
+    text = str(name or "").strip().lower()
+    text = re.sub(r"^t_", "", text)
+    text = re.sub(r"(_?(info|profile|archive|record|records|table|form|apply|application|detail|details))$", "", text)
+    text = re.sub(r"(档案|信息|资料|管理|台账|记录|表单|表|申请|明细)$", "", text)
+    return text.strip("_- ")
+
+
+def _table_display_field(table: dict[str, Any]) -> str:
+    fields = [field for field in table.get("fields", []) or [] if isinstance(field, dict)]
+    preferred_name_tokens = ("名称", "姓名", "标题", "编号", "编码", "name", "title", "no", "code")
+    for token in preferred_name_tokens:
+        for field in fields:
+            field_code = _normalize_code(str(field.get("field_code") or ""))
+            field_name = str(field.get("field_name") or "")
+            if not field_code or field_code in SKIP_FIELDS or field.get("is_pk"):
+                continue
+            haystack = f"{field_code} {field_name}".lower()
+            if token.lower() in haystack:
+                return field_code
+    for field in fields:
+        field_code = _normalize_code(str(field.get("field_code") or ""))
+        if field_code and field_code not in SKIP_FIELDS and not field.get("is_pk"):
+            return field_code
+    return ""
+
+
+def _build_reference_candidates(tables_raw: list[dict[str, Any]]) -> list[dict[str, str]]:
+    candidates: list[dict[str, str]] = []
+    for table in tables_raw:
+        if not isinstance(table, dict):
+            continue
+        table_type = str(table.get("table_type", "主表")).strip().lower()
+        if table_type in {"子表", "sub", "child"}:
+            continue
+        code = _normalize_code(str(table.get("table_code") or ""))
+        name = str(table.get("table_name") or "").strip()
+        if not code or not name:
+            continue
+        aliases = {
+            code,
+            code.removeprefix("t_"),
+            name,
+            _compact_business_name(code),
+            _compact_business_name(name),
+        }
+        candidates.append({
+            "code": code,
+            "name": name,
+            "display_field": _table_display_field(table),
+            "aliases": "|".join(alias for alias in aliases if alias),
+        })
+    return candidates
+
+
+def _infer_reference_target(
+    *,
+    field_code: str,
+    field_name: str,
+    current_model_code: str,
+    reference_candidates: list[dict[str, str]],
+) -> dict[str, str] | None:
+    haystack = f"{field_code} {field_name}".lower()
+    for candidate in reference_candidates:
+        target_code = candidate["code"]
+        if target_code == current_model_code:
+            continue
+        aliases = [alias for alias in candidate.get("aliases", "").split("|") if alias]
+        for alias in aliases:
+            alias_l = alias.lower()
+            if not alias_l or len(alias_l) < 2:
+                continue
+            if alias_l in haystack:
+                return candidate
+    return None
+
+
 def _normalize_database_field_type(raw_db_type: str, platform_field_type: str) -> str:
     return normalize_database_field_type(raw_db_type, component_type=platform_field_type)
 
@@ -222,43 +385,23 @@ def _ops_to_op(operations: list[str]) -> str:
 
 
 def _field_type_to_component_type(field_type: str) -> str:
-    mapping = {
-        "单行输入": "FORM_TEXT_INPUT",
-        "多行输入": "FORM_TEXTAREA",
-        "富文本": "FORM_RICH_TEXT",
-        "日期时间": "FORM_DATE_PICKER",
-        "金额": "FORM_NUMBER_INPUT",
-        "数字": "FORM_NUMBER_INPUT",
-        "下拉单选": "FORM_SELECT",
-        "下拉多选": "FORM_SELECT_MULTI",
-        "单选框": "FORM_RADIO",
-        "复选框": "FORM_CHECKBOX",
-        "人员选择": "FORM_USER_SELECT",
-        "部门选择": "FORM_DEPT_SELECT",
-        "附件上传": "FORM_UPLOAD",
-        "开关": "FORM_SWITCH",
-        "单据号": "FORM_SERIAL",
-        "数据选择": "FORM_DATA_SELECT",
-        "关联表单": "FORM_DATA_SELECT",
-        "地理位置": "FORM_LOCATION",
-        "地区地址": "FORM_ADDRESS",
-        "手机号码": "FORM_PHONE",
-        "电子邮箱": "FORM_EMAIL",
-        "超链接": "FORM_LINK",
-        "身份证号": "FORM_ID_CARD",
-        "子表": "FORM_WIDGET_SON_TABLE",
-    }
-    return mapping.get(str(field_type or "").strip(), "FORM_TEXT_INPUT")
+    return COMP_TYPE_MAP.get(str(field_type or "").strip(), "FORM_TEXT_INPUT")
 
 
 def _build_forms_from_models(models: list[dict[str, Any]]) -> list[dict[str, Any]]:
     forms: list[dict[str, Any]] = []
+    used_form_names: set[str] = set()
     for idx, model in enumerate(models):
         if str(model.get("table_type", model.get("type", ""))).strip().lower() in {"子表", "sub", "child"}:
             continue
         model_code = model.get("code", f"model_{idx + 1}")
-        form_code = model.get("form_code", model.get("code", f"form_{idx + 1}"))
-        form_name = model.get("form_name", model.get("name", form_code))
+        form_code = model.get("form_code") or model.get("code", f"form_{idx + 1}")
+        form_name = _dedupe_form_name(
+            model.get("form_name") or model.get("name") or form_code,
+            model.get("name", ""),
+            model_code,
+            used_form_names,
+        )
         components: list[dict[str, Any]] = []
 
         for field_idx, field in enumerate(model.get("fields", []) or []):
@@ -289,12 +432,21 @@ def _build_forms_from_models(models: list[dict[str, Any]]) -> list[dict[str, Any
                 })
                 continue
 
-            components.append({
+            component = {
                 "label": field_name,
                 "componentType": component_type,
                 "modelField": f"{model_code}.{field_code}",
                 "required": bool(field.get("required", False)),
-            })
+            }
+            if field.get("dict"):
+                component["dict"] = field.get("dict")
+                component["dict_code"] = field.get("dict")
+            if field.get("ref"):
+                component["ref"] = field.get("ref")
+                if isinstance(field.get("ref"), dict):
+                    component["ref_model_code"] = field["ref"].get("model")
+                    component["ref_display_field_code"] = field["ref"].get("field")
+            components.append(component)
 
         forms.append({
             "name": form_name,
@@ -321,9 +473,6 @@ def convert_analysis_to_app_config(doc_result: dict[str, Any]) -> dict[str, Any]
     tables_raw = doc_result.get("tables", [])
     flows_raw = doc_result.get("flows", [])
     mappings_raw = doc_result.get("role_table_mapping", [])
-
-    # Build dict code set for field type inference
-    dict_codes = {d.get("dict_code", "") for d in dicts_raw}
 
     # ── appName & appCode ──
     app_name = app_info.get("name", "新应用")
@@ -356,6 +505,28 @@ def convert_analysis_to_app_config(doc_result: dict[str, Any]) -> dict[str, Any]
 
     # Build a map from dict_code → dict for field lookup
     dict_by_code = {d["code"]: d for d in dicts}
+    dict_codes = set(dict_by_code.keys())
+    reference_candidates = _build_reference_candidates(tables_raw)
+
+    def ensure_field_dict(table_code: str, field_code: str, field_name: str, options: list[dict[str, str]]) -> str | None:
+        if not options:
+            return None
+        base_code = _normalize_code(f"{table_code}_{field_code}_dict") or _normalize_code(f"{field_code}_dict")
+        dict_code = base_code
+        seq = 2
+        while dict_code in dict_by_code:
+            # Reuse an existing synthesized dict for the same field when possible.
+            existing = dict_by_code[dict_code]
+            if existing.get("options") == options:
+                return dict_code
+            dict_code = f"{base_code}_{seq}"
+            seq += 1
+        dict_name = f"{field_name}选项"
+        dict_item = {"name": dict_name, "code": dict_code, "options": options}
+        dicts.append(dict_item)
+        dict_by_code[dict_code] = dict_item
+        dict_codes.add(dict_code)
+        return dict_code
 
     # ── models (from tables) ──
     models = []
@@ -388,11 +559,21 @@ def convert_analysis_to_app_config(doc_result: dict[str, Any]) -> dict[str, Any]
             raw_db_type = f.get("database_field_type") or f.get("databaseFieldType") or raw_type
             raw_length = f.get("length") or f.get("max_length") or f.get("maxLength") or ""
             desc = f.get("description", "")
+            field_options = _extract_field_options(f)
 
             # Check if this field references a dict
-            field_dict = None
+            raw_field_dict = (
+                f.get("dict")
+                or f.get("dict_code")
+                or f.get("dictCode")
+                or f.get("dictionary_code")
+                or f.get("dictionaryCode")
+            )
+            field_dict = _normalize_code(str(raw_field_dict or ""))
+            if field_dict and field_dict not in dict_by_code:
+                field_dict = None
             for dc in dict_codes:
-                if dc and (dc in f_code or dc in desc.lower()):
+                if not field_dict and dc and (dc in f_code or dc in desc.lower()):
                     field_dict = dc
                     break
 
@@ -407,13 +588,46 @@ def convert_analysis_to_app_config(doc_result: dict[str, Any]) -> dict[str, Any]
             has_dict = field_dict is not None
             field_type = _normalize_type(raw_type, f_name, has_dict)
 
+            if field_options and field_type not in REFERENCE_FIELD_TYPES:
+                field_type = "下拉单选"
+                if not field_dict:
+                    field_dict = ensure_field_dict(t_code, f_code, f_name, field_options)
+                    has_dict = field_dict is not None
+
             # If type is select-like but no dict, try to find one
-            if field_type in ("下拉单选", "下拉多选", "单选框", "复选框") and not field_dict:
+            if field_type in SELECT_FIELD_TYPES and not field_dict:
                 # Try matching by field code/name
                 for dc, d_obj in dict_by_code.items():
                     if dc in f_code or d_obj["name"] in f_name:
                         field_dict = dc
                         break
+
+            reference_target = None
+            raw_ref = f.get("ref") or f.get("reference") or {}
+            if isinstance(raw_ref, dict):
+                target_model = _normalize_code(str(
+                    raw_ref.get("model")
+                    or raw_ref.get("target_model")
+                    or raw_ref.get("targetModelCode")
+                    or ""
+                ))
+                if target_model:
+                    reference_target = next((item for item in reference_candidates if item["code"] == target_model), None)
+            if not reference_target:
+                reference_target = _infer_reference_target(
+                    field_code=f_code,
+                    field_name=f_name,
+                    current_model_code=t_code,
+                    reference_candidates=reference_candidates,
+                )
+            if reference_target:
+                field_type = "数据单选"
+                field_dict = None
+            elif field_type == "单行输入":
+                if any(token in f_name for token in ("申请人", "负责人", "经办人", "审批人", "员工", "人员")):
+                    field_type = "人员选择"
+                elif "部门" in f_name:
+                    field_type = "部门选择"
 
             field_entry: dict[str, Any] = {
                 "name": f_name,
@@ -432,9 +646,16 @@ def convert_analysis_to_app_config(doc_result: dict[str, Any]) -> dict[str, Any]
             if field_dict:
                 field_entry["dict"] = field_dict
                 # Ensure type is select-like
-                if field_type not in ("下拉单选", "下拉多选", "单选框", "复选框"):
+                if field_type not in SELECT_FIELD_TYPES:
                     field_entry["type"] = "下拉单选"
                     field_entry["icon"] = "▼"
+            if reference_target:
+                field_entry["ref"] = {
+                    "model": reference_target["code"],
+                    "field": reference_target.get("display_field") or "",
+                }
+                field_entry["target_model_code"] = reference_target["code"]
+                field_entry["target_field_code"] = reference_target.get("display_field") or ""
 
             fields.append(field_entry)
 
@@ -448,6 +669,8 @@ def convert_analysis_to_app_config(doc_result: dict[str, Any]) -> dict[str, Any]
             models.append({
                 "name": t_name,
                 "code": t_code,
+                "form_name": t.get("form_name") or t.get("formName"),
+                "form_code": _normalize_code(str(t.get("form_code") or t.get("formCode") or "")) or None,
                 "fields": fields,
                 "_subtables": [],  # will be filled in second pass
             })

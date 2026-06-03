@@ -6178,13 +6178,19 @@ async def build_apaas_feature_from_spec(
       feature_code: 英文标识 (modelCode + formCode 用), snake_case, 譬如 "borrow_apply"
       fields: 字段数组. 每项:
         {"name": "申请人", "code": "applicant",
-         "type": "单行输入" | "数字" | "日期" | "人员选择" | "多行输入" | ...
+         "type": "单行输入" | "数字" | "日期" | "人员选择" | "部门选择" | "数据单选" | "下拉单选" | "多行输入" | ...
                  (或 "componentType": "FORM_TEXT_INPUT")
                  (或 "database_field_type": "BOF_TEXT"),
          "required": true | false (默认 false),
          "max_length": 200 (单行/多行用),
          "show_in_list": true | false (默认 true),
-         "searchable": true | false (默认 false)}
+         "searchable": true | false (默认 false),
+         "ref": {"model": "customer_profile", "field": "customer_name"}  # 数据选择必填,
+         "dict_options": [{"name": "草稿", "code": "draft"}]              # 下拉/单选必填, 或传已有 dict_code}
+      约束:
+        - 客户/供应商/员工档案/部门/项目/产品等业务对象选择字段，必须用 数据单选/数据选择 + ref，不能建成单行输入。
+        - 状态/类型/等级/是否等固定枚举字段，必须传 dict_options 或已有 dict_code；工具会绑定数据字典。
+        - 申请人/负责人/经办人/审批人用人员选择，申请部门/归属部门用部门选择。
       process_stages: 可选审批流程节点 [{"name":"管理员审批","approver_type":"ROLE","approver_code":"admin"}]
       parent_menu_id: 可选父分组 id (从 list_apaas_app_menus 拿). 不传挂根级.
 
@@ -6206,6 +6212,9 @@ async def build_apaas_feature_from_spec(
     _DICT_BOUND_COMPONENTS = {
         "FORM_SELECT_INPUT_SINGLE", "FORM_SELECT_INPUT",
         "FORM_RADIO_INPUT", "FORM_CHECKBOX_INPUT",
+    }
+    _REF_BOUND_COMPONENTS = {
+        "FORM_DATA_SELECTOR_SINGLE", "FORM_DATA_SELECTOR", "FORM_ASSOCIATION",
     }
     dict_payloads = []
     field_to_dict_code: dict = {}  # fcode → dictionaryCode (after creation)
@@ -6264,6 +6273,7 @@ async def build_apaas_feature_from_spec(
     #   DATE (datetime) — 日期时间
     model_fields = []
     form_components = []
+    referenced_model_codes: list[str] = []
     for f in fields:
         if not isinstance(f, dict):
             continue
@@ -6297,20 +6307,68 @@ async def build_apaas_feature_from_spec(
         # 字典绑定字段: 加 dictionarySelectConfig
         if comp_type in _DICT_BOUND_COMPONENTS:
             actual_dict_code = field_to_dict_code.get(fcode) or f.get("dict_code") or f.get("dictCode")
-            if actual_dict_code:
-                # 收集选项 (从 dict_payloads 找到对应)
-                dict_opts_for_field = []
-                for dp in dict_payloads:
-                    if dp["dictionaryCode"] in (actual_dict_code, field_to_dict_code.get(fcode)):
-                        dict_opts_for_field = [
-                            {"optionName": o["optionName"], "optionCode": o["optionCode"]}
-                            for o in dp["dictionaryOptions"]
-                        ]
-                        break
-                comp["dictionarySelectConfig"] = {
-                    "dictionaryCode": actual_dict_code,
-                    "dictionarySelectOptions": dict_opts_for_field,
+            if not actual_dict_code:
+                return {
+                    "ok": False,
+                    "error_code": "SELECT_FIELD_NEEDS_DICTIONARY",
+                    "message": (
+                        f"字段「{fname}」是下拉/单选类字段，必须提供 dict_options "
+                        "或已有 dict_code，不能创建空下拉控件。"
+                    ),
                 }
+            # 收集选项 (从 dict_payloads 找到对应)
+            dict_opts_for_field = []
+            for dp in dict_payloads:
+                if dp["dictionaryCode"] in (actual_dict_code, field_to_dict_code.get(fcode)):
+                    dict_opts_for_field = [
+                        {"optionName": o["optionName"], "optionCode": o["optionCode"]}
+                        for o in dp["dictionaryOptions"]
+                    ]
+                    break
+            comp["dictionarySelectConfig"] = {
+                "dictionaryCode": actual_dict_code,
+                "dictionarySelectOptions": dict_opts_for_field,
+            }
+
+        if comp_type in _REF_BOUND_COMPONENTS:
+            ref = f.get("ref") or {}
+            target_model = (
+                f.get("ref_model_code") or f.get("refModelCode")
+                or f.get("target_model_code") or f.get("targetModelCode")
+                or (ref.get("model") if isinstance(ref, dict) else "")
+                or ""
+            )
+            target_field = (
+                f.get("ref_display_field_code") or f.get("refDisplayFieldCode")
+                or f.get("target_field_code") or f.get("targetFieldCode")
+                or (ref.get("field") if isinstance(ref, dict) else "")
+                or ""
+            )
+            target_model = str(target_model).strip()
+            target_field = str(target_field).strip()
+            if not target_model or not target_field:
+                return {
+                    "ok": False,
+                    "error_code": "DATA_SELECTOR_NEEDS_REF",
+                    "message": (
+                        f"字段「{fname}」是数据选择/关联表单字段，必须提供 "
+                        "ref.model 和 ref.field，不能创建无数据来源的选择控件。"
+                    ),
+                }
+            if comp_type in {"FORM_DATA_SELECTOR_SINGLE", "FORM_DATA_SELECTOR"}:
+                comp["dataSelectorConfig"] = {
+                    "type": "LOV_CHOOSE",
+                    "otherModelCode": target_model,
+                    "otherFieldCode": target_field,
+                }
+            else:
+                comp["formAssociationConfig"] = {
+                    "originFieldCode": fcode,
+                    "targetModelCode": target_model,
+                    "targetFieldCode": target_field,
+                }
+            if target_model not in referenced_model_codes:
+                referenced_model_codes.append(target_model)
         form_components.append(comp)
 
     # 反查应用名 — 模型 useScope 字段需要这个 (否则模型显"全部应用" 而非"图书借阅管理系统")
@@ -6354,10 +6412,15 @@ async def build_apaas_feature_from_spec(
                 comp["modelField"] = comp["modelField"].replace(
                     f"{feature_code}.", f"{actual_model_code}.", 1)
 
+    all_model_codes = [actual_model_code]
+    for ref_code in referenced_model_codes:
+        if ref_code and ref_code not in all_model_codes:
+            all_model_codes.append(ref_code)
+
     form_payload = [{
         "formName": feature_name,
         "formCode": f"{feature_code}_form",
-        "allModelCodes": [actual_model_code],
+        "allModelCodes": all_model_codes,
         "formComponents": form_components,
     }]
     ok_f, form_result = await _with_client(env_id, "建表单",
