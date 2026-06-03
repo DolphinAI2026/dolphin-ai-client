@@ -119,13 +119,7 @@ JWT_SECRET_KEY=<generate-a-long-random-secret>
 
 ## MCP 服务
 
-独立 MCP 服务已放在 `mcp-server/`，与主前后端分开维护。需要本地联调 v2 MCP 时：
-
-```bash
-./start-mcp.sh --daemon
-```
-
-更多说明见 [MCP_SERVER.md](MCP_SERVER.md)。
+独立 MCP 服务在单独仓库 [`apaas-builder-mcp-server`](https://github.com/Mars-hub404/apaas-builder-mcp-server) 维护并部署（k8s，端口 `8004`），不再随本仓库 vendoring。主后端通过 bridge 调用它（默认 `http://127.0.0.1:8004/api/mcp/mcp`；未启动时优雅降级，Builder 核心工具不受影响）。需要本地联调时，克隆该仓库按其 README 启动 8004 即可，或用 `MCP_V2_INTERNAL_BASE` 指向已有的 MCP 服务。
 
 ## 🗺️ 开发计划
 

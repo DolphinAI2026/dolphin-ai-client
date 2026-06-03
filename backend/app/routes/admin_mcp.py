@@ -34,7 +34,7 @@ logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/admin/mcp", tags=["admin-mcp"])
 
-# 默认代理到仓库内 `mcp-server/backend` 独立服务（本地 8004）。
+# 默认代理到独立 MCP 服务（本地 8004，由 apaas-builder-mcp-server 仓库提供；线上为 k8s pod）。
 # MCP 服务把工具拆成多个 FastMCP 实例 mount 到不同 path；admin 视图 union
 # main + design 拿全集（builder/coding 子集会自动去重）。
 _V2_BASE = os.getenv(

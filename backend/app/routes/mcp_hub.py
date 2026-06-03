@@ -35,7 +35,7 @@ _LOCAL_SERVER_META: dict = {
     "version": "local-dev",
     "official": False,
     "tags": ["本地", "独立服务"],
-    "desc": "mcp-server/backend 独立 FastMCP — ai_chat / cowork agent 默认调用的工具集。",
+    "desc": "独立 MCP 服务（apaas-builder-mcp-server 仓库 / k8s）的 FastMCP — ai_chat / cowork agent 默认调用的工具集。",
 }
 
 
