@@ -49,6 +49,7 @@ from app.tool_registry import (
 _EXPECTED_CONFIG_WHITELIST: frozenset[str] = frozenset({
     "add_apaas_dict_option",
     "add_apaas_model_field",
+    "attach_dev_packages_to_apaas_app",
     "bind_apaas_form_field_to_dict",
     "browser_click",
     "browser_list_pages",
@@ -85,6 +86,7 @@ _EXPECTED_CONFIG_WHITELIST: frozenset[str] = frozenset({
     "get_apaas_process_detail",
     "get_config_skill",
     "get_role_resource_matrix",
+    "list_apaas_app_dev_kits",
     "list_apaas_app_dicts",
     "list_apaas_app_menus",
     "list_apaas_app_models",
@@ -102,6 +104,7 @@ _EXPECTED_CONFIG_WHITELIST: frozenset[str] = frozenset({
     "list_config_skills",
     "query_apaas_business_event_trees",
     "rename_apaas_menu",
+    "republish_apaas_app",
     "save_apaas_business_event",
     "save_config_skill",
     "set_apaas_app_process",
@@ -114,6 +117,7 @@ _EXPECTED_CONFIG_WHITELIST: frozenset[str] = frozenset({
     "update_apaas_dict_option",
     "update_apaas_form_component",
     "update_apaas_model_field",
+    "upload_external_zip_to_apaas",
 })
 
 
@@ -309,7 +313,8 @@ def test_config_whitelist_matches_current_expected():
         f"  only in expected (yaml 漏): {sorted(_EXPECTED_CONFIG_WHITELIST - new)}"
     )
     # N2(2026-06-01): 82 → 67，摘掉 15 个 codegen/workspace 工具
-    assert len(new) == 67, f"config 白名单总数应是 67, 实际 {len(new)}"
+    # 2026-06-03: +4 自开发工具(upload_external_zip / republish / list_dev_kits / attach)进 config → 71
+    assert len(new) == 71, f"config 白名单总数应是 71, 实际 {len(new)}"
 
 
 def test_builder_whitelist_count():

@@ -30,7 +30,7 @@ tools:
     description: "给已有模型加一个字段。"
   attach_dev_packages_to_apaas_app:
     sections: [extension]
-    agents: [coding]
+    agents: [coding, config]
     category: other
     description: "把已上传到 apaas 平台的自开发包（zip）关联到应用的「自开发资源」列表。"
   bind_apaas_form_field_to_dict:
@@ -310,7 +310,7 @@ tools:
     description: "静态扫描 workspace 里的 Java 代码，找 16 坑里能 grep 出来的写法。"
   list_apaas_app_dev_kits:
     sections: [extension]
-    agents: [coding]
+    agents: [coding, config]
     category: introspection
     description: "列指定 apaas 应用可关联的自开发包（zip）—— 含 id / fileName / fileType。"
   list_apaas_app_dicts:
@@ -450,7 +450,7 @@ tools:
     description: "改菜单名 — 普通菜单 / 分组 / 自开发菜单 都用这个."
   republish_apaas_app:
     sections: [global]
-    agents: [coding]
+    agents: [coding, config]
     category: lifecycle
     description: "重新发布 aPaaS 应用版本（自开发变更必须 redeploy 才生效）。"
   rollback_application:
@@ -550,7 +550,7 @@ tools:
     description: "上传新版 markdown 设计文档作为应用 vN+1 版，自动 diff 出变更计划返回。"
   upload_external_zip_to_apaas:
     sections: [extension]
-    agents: [coding]
+    agents: [coding, config]
     category: other
     description: "直接上传一个外部 zip 到 apaas 平台 — 内部走 multipart upload + 智能查重 update/create。"
   validate_apaas_builder_doc:
