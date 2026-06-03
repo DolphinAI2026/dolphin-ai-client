@@ -160,10 +160,10 @@ IMAGE_PULL_SECRET='${IMAGE_PULL_SECRET}'
 NODE_AFFINITY_KEY='${NODE_AFFINITY_KEY}'
 ROLL_TIMEOUT='${ROLL_TIMEOUT}'
 
-echo "[1/6] checking namespace"
+echo "[1/7] checking namespace"
 kubectl get namespace "\$NAMESPACE" >/dev/null
 
-echo "[2/6] applying nginx ConfigMap from repo"
+echo "[2/7] applying nginx ConfigMap from repo"
 cat > /tmp/apaas-builder-nginx-default.conf <<'NGINX_CONF'
 ${nginx_conf}
 NGINX_CONF
@@ -171,7 +171,7 @@ kubectl -n "\$NAMESPACE" create configmap "\$NGINX_CM" \\
   --from-file=default.conf=/tmp/apaas-builder-nginx-default.conf \\
   --dry-run=client -o yaml | kubectl apply -f -
 
-echo "[3/6] syncing backend Secret"
+echo "[3/7] syncing backend Secret"
 echo "      using isolated dev database: \$DEV_DATABASE_NAME"
 kubectl -n "\$NAMESPACE" get secret "\$SOURCE_BACKEND_SECRET" -o jsonpath='{.data.backend\\.env}' \\
   | base64 -d \\
