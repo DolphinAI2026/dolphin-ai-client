@@ -22,7 +22,7 @@
           对话式开发前端组件 / 后端服务.
           完成 publish 后自动通知本页面, 一键 republish 让组件生效.
         </p>
-        <span class="ext-card-cta">→ 打开 (新标签)</span>
+        <span class="ext-card-cta">→ 进入对话式开发</span>
       </button>
 
       <button
@@ -108,6 +108,7 @@
 
 <script setup lang="ts">
 import { ref, computed, onMounted, onBeforeUnmount, watch } from 'vue'
+import { useRouter } from 'vue-router'
 import { ElAlert, ElButton, ElMessage } from 'element-plus'
 import extensionApi, { type DevKitItem, type ExtensionUpdateEvent } from '@/api/extension'
 
@@ -115,8 +116,6 @@ const props = withDefaults(defineProps<{
   appId: number
   apaasAppId: string
   envId: number
-  /** 跳 AI Coding 时的 from 标签 (留 telemetry / 回流定位用) */
-  fromTag?: string
   /** 平台自开发资源管理 URL — 不传则按当前 trial / 默认推断 */
   platformDevKitUrl?: string
   /** 轮询频率, 默认 30s */
@@ -124,7 +123,6 @@ const props = withDefaults(defineProps<{
   /** 显示连接状态 footer (生产环境可关掉) */
   showDebug?: boolean
 }>(), {
-  fromTag: 'ChatPageExtension',
   platformDevKitUrl: '',
   pollIntervalMs: 30000,
   showDebug: false,
@@ -135,6 +133,8 @@ const emit = defineEmits<{
   (e: 'external-update', payload: ExtensionUpdateEvent): void
   (e: 'republished', version: string): void
 }>()
+
+const router = useRouter()
 
 // ─────────────────────────────────────────────────────
 // State
@@ -166,15 +166,24 @@ const platformDevKitUrl = computed(() => {
 })
 
 // ─────────────────────────────────────────────────────
-// 跳走逻辑 — 新标签打开, 不切走当前 tab
+// 二次开发入口 — 结构化交接到 AI Builder（AIChatPage）在应用上下文里做开发.
+// 同标签进 /ai-chat?app_dev=1, 不再开新标签到独立 /coding.
 // ─────────────────────────────────────────────────────
 function openAiCoding() {
   if (!canOpenAiCoding.value) return
-  // SPEC §2 Section E: window.open('/ai-coding/chat?app_id=N&from=extension', '_blank')
-  // 当前 worktree 路由是 /coding (CodingPage), ai-coding 是 v2 后续 PR 才补.
-  // 先用 /coding 作为入口, 把 from / app_id 透传过去.
-  const url = `/coding?app_id=${encodeURIComponent(String(props.appId))}&from=${encodeURIComponent(props.fromTag)}`
-  window.open(url, '_blank', 'noopener')
+  const message =
+    `我要为应用（app_id=${props.appId}）开发自开发包(组件 / 页面 / 接口)。`
+    + `请先读这个应用的结构,再问我具体要开发什么。`
+  sessionStorage.setItem(
+    'ai_builder_pending_app_dev',
+    JSON.stringify({
+      message,
+      app_id: props.appId,
+      app_name: '',
+      from: 'extension',
+    }),
+  )
+  router.push({ path: '/ai-chat', query: { app_dev: '1' } })
   emit('navigated', 'ai-coding')
 }
 

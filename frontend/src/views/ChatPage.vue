@@ -2311,11 +2311,10 @@ function openCodingWorkspace(dispatchToken = '') {
   })
 }
 
-// ── Builder → AI Coding 自开发 handoff bridge ──
-// 把当前应用的结构（模型/表单/流程/角色）打包成 message 注入 Coding agent 首条对话，
-// 不依赖 Coding agent 主动 fetch（agent prompt 暂不动，本 session 用户决策不集成 外部 admin）。
-// CodingPage.vue:maybeConsumeAiBuilderDispatch 会读 sessionStorage('ai_builder_pending_coding')
-// 然后把 message 作为 userInput 自动 sendMessage。
+// ── Builder → 二次开发 handoff bridge ──
+// 把当前应用的结构（模型/表单/流程/角色）打包成 message，结构化交接到 AIChatPage 在应用上下文里
+// 做二次开发，不再跳独立 /coding。AIChatPage.vue onMounted 读 sessionStorage('ai_builder_pending_app_dev')
+// （route.query.app_dev=1 时）建会话并把 message 作为首条发出。
 function handoffToCodingForAppDev() {
   const appId = builderCurrentAppId.value
   if (!appId) return
@@ -2347,11 +2346,12 @@ function handoffToCodingForAppDev() {
 
   const message = lines.join('\n')
   try {
-    sessionStorage.setItem(AI_BUILDER_PENDING_CODING_KEY, JSON.stringify({ message, app_id: appId, app_name: appName }))
-  } catch { /* sessionStorage 不可用就不传，Coding 页 fallback */ }
-  const token = `app-dev-${Date.now().toString(36)}`
-  codingDispatchToken.value = token
-  openCodingWorkspace(token)
+    sessionStorage.setItem(
+      'ai_builder_pending_app_dev',
+      JSON.stringify({ message, app_id: appId, app_name: appName }),
+    )
+  } catch { /* sessionStorage 不可用就不传，AIChatPage 侧 fallback */ }
+  router.push({ path: '/ai-chat', query: { app_dev: '1' } })
 }
 
 // ── 配置助手浮动 (2026-05-25) ──
