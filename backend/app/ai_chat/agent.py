@@ -579,7 +579,7 @@ async def _build_initial_messages(
 
 # ─────────────────────────── 主 agent loop ───────────────────────────
 
-MAX_TURNS = 20  # 工具循环最大轮数
+MAX_TURNS = 25  # 工具循环最大轮数（统一 config 的 25：app 配置/codegen 多步任务需要）
 
 
 def _sse(event: str, data: dict) -> dict:

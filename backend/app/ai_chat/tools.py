@@ -1388,8 +1388,8 @@ async def get_all_tool_schemas() -> list[dict]:
 
     2026-05-28: 之前把全部 117 个 MCP 工具无过滤塞给 LLM → 工具过载, agent 挑错工具/
     漏参/反复重写 (实测 generate_app_from_doc 失灵 + write_artifact 缺 filename + 一份文档
-    写两个名字). 智能搭建 = unified builder+coding agent, 按 tool_registry 白名单砍到
-    builder ∪ coding (~71), 跟 config_chat 同套路. base 本地工具不在 registry, 永远保留.
+    写两个名字). 智能搭建 = unified builder+coding+config agent, 按 tool_registry 白名单砍到
+    builder ∪ coding ∪ config (~85), 跟 config_chat 同套路. base 本地工具不在 registry, 永远保留.
     """
     from app.ai_chat.mcp_bridge import get_tool_schemas_openai
     from app.tool_registry import tools_for_agent
@@ -1401,7 +1401,11 @@ async def get_all_tool_schemas() -> list[dict]:
         _log.getLogger(__name__).warning("MCP bridge 加载失败，退化到 base 工具：%s", e)
         mcp_schemas = []
     try:
-        allow = set(tools_for_agent("builder")) | set(tools_for_agent("coding"))
+        allow = (
+            set(tools_for_agent("builder"))
+            | set(tools_for_agent("coding"))
+            | set(tools_for_agent("config"))
+        )
         mcp_schemas = [
             s for s in mcp_schemas
             if s.get("function", {}).get("name") in allow
