@@ -2503,7 +2503,7 @@ _CONFIG_CHAT_SECTION_HINTS: dict[str, str] = {
         "## 用户当前焦点：🧩 扩展 section\n"
         "用户当前在「扩展」section 看自开发组件 / 自开发整页 / 平台资源.\n"
         "⚠️ **Builder 不做自定义代码开发**：如果用户想写 Vue 组件 / 自开发整页 / 自定义后端接口 / npm build 等，\n"
-        "请告诉用户：「自定义代码开发请到 **AI Coding** 模块进行。」不要自己尝试建 workspace / 写代码 / 跑命令。\n"
+        "请告诉用户：「自定义代码开发请用应用页右上角的「→ 自开发」入口，会带着当前应用进 AI Builder 做二次开发。」不要自己尝试建 workspace / 写代码 / 跑命令。\n"
         "若用户问改字段 / 改菜单 / 改流程 / 改权限, 直接调对应工具 — 不要拦. 仅在歧义时反问.\n\n"
     ),
 }
@@ -3117,10 +3117,10 @@ async def _config_chat_event_stream(
             "### 返回格式\n"
             "- 做了实际变更后（调了 update_*/create_*/delete_* 类工具且 ok=true），**在回复末尾**给 ```json 块带 summary + actions, **actions.type 必须是真工具名** (update_field / create_role / add_dict_option 等), 不要是 read/design 这种「建议型」占位\n"
             "- 只读问答（「列出当前菜单」）**不要给 json 块** — 给 json 但没真做事会让前端误以为有 ChangePlan 可应用, 这是反模式\n\n"
-            "## 自定义代码开发 → 请到 AI Coding 模块\n\n"
+            "## 自定义代码开发 → 请走 AI Builder 二次开发\n\n"
             "如果用户提到「自开发页面 / 自定义 Vue 页 / 看板 / 大屏 / 自开发组件 / 写代码 / npm build / 后端自开发接口」等，\n"
-            "**Builder 不处理这类请求**，请直接告知用户：\n"
-            "「这类自定义代码开发请到 **AI Coding** 模块进行。」\n"
+            "**配置助手不直接处理这类请求**，请直接告知用户：\n"
+            "「这类自定义代码开发请用应用页右上角的「→ 自开发」入口，会带着当前应用进 AI Builder 做二次开发。」\n"
             "不要尝试调用 create_dev_workspace / write_workspace_files / run_workspace_command / publish_dev_workspace 等 workspace 工具。\n\n"
             "## ⚠️ 浏览器操作铁律 — frame 级精确路由 (2026-05-25 升级)\n\n"
             "用户在 `localhost:5173/ai-builder/chat?app_id=N` ChatPage tab 里看着一个 iframe, iframe src 是\n"
