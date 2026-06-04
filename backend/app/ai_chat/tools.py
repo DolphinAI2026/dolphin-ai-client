@@ -1385,6 +1385,8 @@ BASE_TOOL_SCHEMAS = TOOL_SCHEMAS
 # 并强制注入到声明了这两参数的 apaas 工具 —— 覆盖 LLM 给的值。
 # 这样即使 LLM 幻觉传了别的应用 id，工具也只会操作当前会话锁定的应用。
 # 自由会话 (app_id=None) 完全不受影响，行为与之前一致。
+# 护栏覆盖两个执行路径：base-handler 工具 (TOOL_HANDLERS，含 export_apaas_app_design_doc)
+# 和 MCP bridge 工具 —— schema 门控保证只注入实际声明了这两参数的工具。
 
 _LAST_TOOL_SCHEMAS: list[dict] = []  # get_all_tool_schemas 每次调用后更新，供 _tool_declares_param 用
 
@@ -1416,10 +1418,7 @@ async def _resolve_locked_app_ctx(session: "AIChatSession", db: "AsyncSession"):
             apaas_app_id = getattr(app, "apaas_app_id", None)
     except Exception:
         pass
-    try:
-        session._locked_app_ctx = (env_id, apaas_app_id)
-    except Exception:
-        pass
+    session._locked_app_ctx = (env_id, apaas_app_id)
     return (env_id, apaas_app_id)
 
 
@@ -1519,6 +1518,7 @@ async def execute_tool(
     """
     handler = TOOL_HANDLERS.get(tool_name)
     if handler:
+        args = await _inject_locked_app_ctx(tool_name, args, session, db)
         try:
             return await handler(args, session, db)
         except Exception as e:
