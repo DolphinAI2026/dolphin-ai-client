@@ -91,9 +91,13 @@ async def _load_skills(db: AsyncSession, app_id: int, tenant_id: Optional[int]) 
 
 async def build_app_context_block(
     db: AsyncSession, app_id: Optional[int], section: Optional[str] = None,
-    tenant_id: Optional[int] = None,
+    tenant_id: Optional[int] = None, view_context: Optional[str] = None,
 ) -> str:
-    """组装应用上下文块。无 app_id / db 时返回空串。"""
+    """组装应用上下文块。无 app_id / db 时返回空串。
+
+    view_context: 前端传入的「用户此刻在看哪个表单/菜单/tab」的人话描述，让 agent
+    知道「当前/这个」指的是哪个，不必去读浏览器页面（嵌入面板里浏览器工具不可用）。
+    """
     if not app_id or db is None:
         return ""
     app = await _load_application(db, app_id)
@@ -104,7 +108,11 @@ async def build_app_context_block(
         f"- 应用：{app['name']}（内部 id={app['id']}，apaas_app_id={app.get('apaas_app_id')}，env={app.get('platform_env_id')}）",
         "- 你正在这个应用内工作。配置改动立即生效；二次开发 / codegen 你现在就能干（相关工具已具备）。",
         "- 不要新建其它应用、不要跨应用操作；apaas 工具的 env_id / apaas_app_id 由后端按锁定应用填死。",
+        "- 要了解应用结构（模型/表单/字段/菜单/流程）就用 list_apaas_* 等 MCP 工具直接查；"
+        "不要用 browser_* / 浏览器快照类工具读页面 —— 嵌入式面板里没有可用浏览器 tab，必失败。",
     ]
+    if view_context:
+        parts.append(f"- 用户此刻正在看：{view_context}（用户说「当前/这个」表单/页面/字段时，默认指这个）")
     if section and section in _SECTION_HINTS:
         parts.append(f"- {_SECTION_HINTS[section]}")
     spec = await _load_spec_text(db, app_id)
