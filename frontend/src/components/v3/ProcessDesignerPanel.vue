@@ -92,27 +92,8 @@
             :form-id="activeProcess?.form_id || props.formId || null"
             title="在低代码后台编辑此流程"
           />
-          <!-- O2: segmented control 业务 / 设计 -->
-          <div class="pdp-mode-segment" role="tablist" aria-label="视角切换">
-            <button
-              class="pdp-mode-segment-btn"
-              :class="{ 'is-active': readOnly }"
-              role="tab"
-              :aria-selected="readOnly"
-              @click="setViewMode(true)"
-              title="业务视角 — 看实例进度"
-            >👁 业务</button>
-            <button
-              class="pdp-mode-segment-btn"
-              :class="{ 'is-active': !readOnly }"
-              role="tab"
-              :aria-selected="!readOnly"
-              @click="setViewMode(false)"
-              title="设计视角 — 加节点 / 连线 / 保存"
-            >✏️ 设计</button>
-          </div>
-          <!-- 适应画布 仅业务视角 (设计模式 center 是 apaas iframe, 原生 canvas 隐藏) -->
-          <button v-if="readOnly" class="pdp-btn pdp-btn-ghost" @click="onFitContent" title="适应画布">
+          <!-- 适应画布: 渲染后自动适应, 此处供手动重新适应 -->
+          <button class="pdp-btn pdp-btn-ghost" @click="onFitContent" title="适应画布">
             <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 7V3h4M21 7V3h-4M3 17v4h4M21 17v4h-4"/></svg>
             适应
           </button>
@@ -148,13 +129,9 @@
             </div>
           </div>
 
-          <!-- ── 设计模式: 提示走右侧 apaas 原生编辑器 (节点库 / 连线 / 审批人配置都在 iframe 里) ── -->
-          <p v-if="!readOnly" class="pdp-sidebar-foot pdp-sidebar-foot-view">
-            ✏️ 设计模式 — 在右侧 apaas 原生流程编辑器加节点 / 连线 / 配置审批人, 或用 ✨ 对话改流程
-          </p>
-          <!-- view mode: 占位提示 — 切到设计可改流程 -->
-          <p v-else class="pdp-sidebar-foot pdp-sidebar-foot-view">
-            👁 业务视角 — 切到 ✏️ 设计模式后才能改流程
+          <!-- 只读视图 — 改流程去配置助手对话 或 打开低代码后台 -->
+          <p class="pdp-sidebar-foot pdp-sidebar-foot-view">
+            👁 只读视图 — 改流程用 ✨ 配置助手对话, 或点上方「打开低代码后台」进 apaas 原生编辑器
           </p>
         </aside>
 
@@ -169,7 +146,7 @@
               <strong>"{{ activeProcess.name || activeProcess.code }}"</strong> 尚无流程定义
               <br />
               <span class="pdp-canvas-hint-sub">
-                切到 ✏️ 设计模式用 apaas 原生编辑器搭建流程, 或用配置助手对话快速生成
+                点上方「打开低代码后台」用 apaas 原生编辑器搭建流程, 或用配置助手对话快速生成
               </span>
             </p>
           </div>
@@ -178,19 +155,6 @@
             <p>从左侧"流程列表"选择一个流程</p>
           </div>
         </div>
-
-        <!-- 设计模式 center — apaas 原生流程编辑器 iframe (designer-sub=process → 自动激活 tab-workFlowDesign).
-             menu-id 用 props.menuId; form-id 优先当前选中流程的 form_id, 兜底 props.formId. -->
-        <ApaasEmbedIframe
-          v-if="!readOnly"
-          class="pdp-iframe"
-          :app-id="props.appId"
-          :menu-id="props.menuId || ''"
-          :form-id="activeProcess?.form_id || props.formId || null"
-          menu-type="MODEL"
-          mode="config"
-          designer-sub="process"
-        />
 
         <!-- O2: 右 — view mode 显历史轨迹时间轴; edit mode 显节点属性面板 -->
         <aside v-if="readOnly && activeProcess" class="pdp-timeline" aria-label="历史轨迹">
@@ -231,14 +195,6 @@
           </ol>
         </aside>
 
-        <ProcessNodePropsPanel
-          v-else-if="!readOnly && selectedNode"
-          :node="selectedNode"
-          :model-options="modelOptions"
-          @change="onPropsChange"
-          @close="clearSelection"
-          @ai-query="onAiQuery"
-        />
       </div>
     </template>
   </section>
@@ -248,8 +204,6 @@
 import { ref, computed, watch, onMounted, onBeforeUnmount, shallowRef, reactive, nextTick } from 'vue'
 import { Graph, type Node as X6Node, type Edge as X6Edge } from '@antv/x6'
 import { ElMessage } from 'element-plus'
-import ProcessNodePropsPanel from './ProcessNodePropsPanel.vue'
-import ApaasEmbedIframe from './ApaasEmbedIframe.vue'
 import OpenLowcodeBackendButton from '@/components/v3/OpenLowcodeBackendButton.vue'
 import request from '@/utils/request'
 import {
@@ -295,13 +249,8 @@ const processListCollapsed = ref(false)
 const readOnly = ref(true)
 
 /** H2: 保存按钮 loading + 上次本地保存时间 (ISO string). */
-const saving = ref(false)
 const lastSavedAt = ref<string | null>(null)
 
-/** I4: 部署到 apaas 平台 loading + 上次同步时间/版本. */
-const deploying = ref(false)
-const lastDeployedAt = ref<string | null>(null)
-const lastDeployedVersion = ref<number | null>(null)
 
 /** O2: 业务视角 — mock 流程实例 (P2 接真 apaas runtime API 才有).
  *  完整状态: completedNodes (已通过) / currentNodeId (当前) / pendingNodes (未到).
@@ -628,33 +577,6 @@ function initGraph() {
   refreshCounts(graph)
 }
 
-/** O2: 显式设视角 — 业务 (read=true) / 设计 (read=false). 自动同步 x6 interacting + 重绘 mock 进度. */
-function setViewMode(viewMode: boolean) {
-  if (!activeProcess.value) {
-    // 允许切但不弹错 — 业务视角即使没流程也无害
-    readOnly.value = viewMode
-    return
-  }
-  readOnly.value = viewMode
-  const g = graphRef.value
-  if (g) {
-    g.setInteracting(() => (viewMode
-      ? { nodeMovable: false, edgeMovable: false, edgeLabelMovable: false, magnetConnectable: false, arrowheadMovable: false }
-      : { nodeMovable: true }
-    ))
-  }
-  // 切到业务视角时重新画一次 mock 进度 (edit 改了节点也能看到最新进度)
-  if (viewMode) {
-    paintInstanceProgress()
-  } else {
-    // 切到设计 — center 改 apaas iframe, 原生 canvas 隐藏.
-    // 清原生节点选中 (否则切换后 ProcessNodePropsPanel 会跟 iframe 同时渲染).
-    selectedNodeId.value = null
-    // 还原默认节点 stroke 颜色 (清 mock 状态视觉, 切回业务视角时干净)
-    clearInstanceProgress()
-  }
-}
-
 /** 空态 "用对话创建流程" CTA — P0 暂时弹示例提示, 后续可 emit 'request-config-chat'
  *  让 ChatPage 把 ConfigAssistant 输入框获焦 + 预填 "为 XX 创建审批流程". */
 function onRequestConfigChat() {
@@ -930,111 +852,6 @@ interface ProcessDefinitionOut {
   edges: ProcessDefinitionEdgeOut[]
 }
 
-function serializeGraph(): ProcessDefinitionOut {
-  const g = graphRef.value
-  if (!g) {
-    return { process_name: '', nodes: [], edges: [] }
-  }
-  const nodes: ProcessDefinitionNodeOut[] = []
-  for (const node of g.getNodes()) {
-    const id = node.id
-    const st = nodeStates[id]
-    const data = (node.getData() || {}) as { type?: string }
-    const type = st?.type || data.type || 'unknown'
-    const pos = node.getPosition()
-    // props = nodeStates[id] 里除 id/type/label/x/y/key 之外的所有字段
-    const propsObj: Record<string, unknown> = {}
-    if (st) {
-      for (const [k, v] of Object.entries(st)) {
-        if (['id', 'type', 'label', 'x', 'y', 'key'].includes(k)) continue
-        if (v === undefined) continue
-        propsObj[k] = v as unknown
-      }
-    }
-    nodes.push({
-      id,
-      type,
-      label: st?.label || (typeof node.getAttrByPath('label/text') === 'string'
-        ? String(node.getAttrByPath('label/text') ?? '')
-        : ''),
-      position: { x: pos.x, y: pos.y },
-      props: propsObj,
-    })
-  }
-  const edges: ProcessDefinitionEdgeOut[] = []
-  for (const edge of g.getEdges()) {
-    const sourceId = (edge as X6Edge).getSourceCellId() || ''
-    const targetId = (edge as X6Edge).getTargetCellId() || ''
-    if (!sourceId || !targetId) continue
-    const labelData = edge.getLabels()
-    const labelTxt = Array.isArray(labelData) && labelData.length > 0
-      ? String((labelData[0] as { attrs?: { label?: { text?: string } } })?.attrs?.label?.text ?? '')
-      : ''
-    const edgeData = (edge.getData() || {}) as { condition?: string }
-    edges.push({
-      id: edge.id,
-      source: sourceId,
-      target: targetId,
-      label: labelTxt || undefined,
-      condition: edgeData.condition || undefined,
-    })
-  }
-  return {
-    process_name: activeProcess.value?.name || activeProcess.value?.code || '',
-    nodes,
-    edges,
-  }
-}
-
-/** 2026-05-28: 干净的拓扑自动布局 —— apaas 原始 x/y 错位 (审批节点 x=348 / 开始结束 x=372)
- *  导致连线歪七扭八。业务视角是只读预览, 直接按"入边数=0 的为起点 + BFS 分层"重排:
- *  同层水平居中铺开, 逐层向下 → 线性流变成一条直的竖线, 分支左右对称。 */
-function computeAutoLayout(
-  nodes: { id: string }[],
-  edges: { source: string; target: string }[],
-): Map<string, { x: number; y: number }> {
-  const TOP = 40, VGAP = 110, HGAP = 200, CENTER = 320
-  const ids = nodes.map(n => n.id)
-  const idset = new Set(ids)
-  const incoming = new Map<string, number>(ids.map(id => [id, 0]))
-  const adj = new Map<string, string[]>(ids.map(id => [id, []]))
-  for (const e of edges) {
-    if (idset.has(e.source) && idset.has(e.target)) {
-      adj.get(e.source)!.push(e.target)
-      incoming.set(e.target, (incoming.get(e.target) || 0) + 1)
-    }
-  }
-  let roots = ids.filter(id => (incoming.get(id) || 0) === 0)
-  if (!roots.length && ids.length) roots = [ids[0]]
-  const level = new Map<string, number>(roots.map(r => [r, 0]))
-  const queue = [...roots]
-  while (queue.length) {
-    const u = queue.shift()!
-    const lu = level.get(u) || 0
-    for (const v of adj.get(u) || []) {
-      const nl = lu + 1
-      if (!level.has(v) || nl > (level.get(v) || 0)) { level.set(v, nl); queue.push(v) }
-    }
-  }
-  // 未被任何边连到的孤立节点 → 依次排到最底下, 不挤在一起
-  let maxL = 0; level.forEach(l => { if (l > maxL) maxL = l })
-  for (const id of ids) if (!level.has(id)) { maxL += 1; level.set(id, maxL) }
-  const byLevel = new Map<number, string[]>()
-  for (const id of ids) {
-    const l = level.get(id) || 0
-    if (!byLevel.has(l)) byLevel.set(l, [])
-    byLevel.get(l)!.push(id)
-  }
-  const pos = new Map<string, { x: number; y: number }>()
-  for (const [l, group] of byLevel) {
-    const n = group.length
-    group.forEach((id, i) => {
-      pos.set(id, { x: CENTER + (i - (n - 1) / 2) * HGAP, y: TOP + l * VGAP })
-    })
-  }
-  return pos
-}
-
 /** H2: 渲染本地 ProcessDefinition (从 GET /definition 拿到的 nodes/edges) 到 x6. */
 function renderDefinition(defNodes: ProcessDefinitionNodeOut[], defEdges: ProcessDefinitionEdgeOut[]) {
   const g = graphRef.value
@@ -1153,117 +970,6 @@ async function tryLoadApaasDetail(processId: string): Promise<boolean> {
       return false
     }
     return false
-  }
-}
-
-async function onSave() {
-  if (!props.appId || !activeProcess.value) {
-    ElMessage.warning('请先选择左侧流程')
-    return
-  }
-  if (saving.value) return
-  saving.value = true
-  try {
-    const payload = serializeGraph()
-    const resp = await request.post<unknown, {
-      ok: boolean
-      process_id?: string
-      version?: number
-      updated_at?: string
-      message?: string
-      error_code?: string
-    }>(`/applications/${props.appId}/processes/${activeProcess.value.id}/save-definition`, payload)
-    if (resp?.ok) {
-      lastSavedAt.value = resp.updated_at || new Date().toISOString()
-      ElMessage.success(`已保存 (v${resp.version ?? 1})`)
-    } else {
-      ElMessage.error(resp?.message || resp?.error_code || '保存失败')
-    }
-  } catch (e: unknown) {
-    const err = e as { response?: { data?: { detail?: string } }; message?: string }
-    ElMessage.error(err?.response?.data?.detail || err?.message || '网络错误')
-  } finally {
-    saving.value = false
-  }
-}
-
-/** I4: 把本地 definition 真同步到 apaas 平台 — 先保存再调 deploy. */
-async function onDeploy() {
-  if (!props.appId || !activeProcess.value) {
-    ElMessage.warning('请先选择左侧流程')
-    return
-  }
-  if (deploying.value || saving.value) return
-
-  // Step 1: 先保存最新 definition (避免漂移)
-  saving.value = true
-  try {
-    const payload = serializeGraph()
-    const saveResp = await request.post<unknown, {
-      ok: boolean
-      version?: number
-      updated_at?: string
-      message?: string
-      error_code?: string
-    }>(`/applications/${props.appId}/processes/${activeProcess.value.id}/save-definition`, payload)
-    if (!saveResp?.ok) {
-      ElMessage.error(`保存失败: ${saveResp?.message || saveResp?.error_code || '未知错误'}`)
-      return
-    }
-    lastSavedAt.value = saveResp.updated_at || new Date().toISOString()
-  } catch (e: unknown) {
-    const err = e as { response?: { data?: { detail?: string } }; message?: string }
-    ElMessage.error(`保存失败: ${err?.response?.data?.detail || err?.message || '网络错误'}`)
-    return
-  } finally {
-    saving.value = false
-  }
-
-  // Step 2: 调 deploy endpoint
-  deploying.value = true
-  try {
-    const resp = await request.post<unknown, {
-      ok: boolean
-      deployed_version?: number
-      deployed_at?: string
-      apaas_app_id?: string
-      menu_id?: string
-      node_count?: number
-      edge_count?: number
-      unsupported_nodes?: Array<{ id: string; type: string; label?: string; reason?: string }>
-      apaas_response_code?: string
-      message?: string
-      error_code?: string
-    }>(`/applications/${props.appId}/processes/${activeProcess.value.id}/deploy`)
-
-    if (resp?.ok) {
-      lastDeployedAt.value = resp.deployed_at || new Date().toISOString()
-      lastDeployedVersion.value = resp.deployed_version ?? null
-      const unsupportedCount = (resp.unsupported_nodes || []).length
-      if (unsupportedCount > 0) {
-        const typesSet = new Set((resp.unsupported_nodes || []).map(n => n.type).filter(Boolean))
-        ElMessage.warning({
-          message: `已部署 v${resp.deployed_version ?? 1} (${resp.node_count ?? 0} 节点), 但 ${unsupportedCount} 类节点暂未支持: ${Array.from(typesSet).join(', ')} (P6 待实现)`,
-          duration: 7000,
-        })
-      } else {
-        ElMessage.success(`已部署到 apaas 平台 (v${resp.deployed_version ?? 1}, ${resp.node_count ?? 0} 节点)`)
-      }
-    } else {
-      const code = resp?.error_code || 'DEPLOY_FAILED'
-      if (code === 'APP_NOT_DEPLOYED') {
-        ElMessage.error('应用尚未部署到 apaas 平台 — 先部署应用再部署流程')
-      } else if (code === 'PROCESS_DEFINITION_NOT_FOUND') {
-        ElMessage.error('本地无该流程定义 — 请先保存再部署')
-      } else {
-        ElMessage.error(resp?.message || code)
-      }
-    }
-  } catch (e: unknown) {
-    const err = e as { response?: { data?: { detail?: string; message?: string } }; message?: string }
-    ElMessage.error(err?.response?.data?.detail || err?.response?.data?.message || err?.message || '部署网络错误')
-  } finally {
-    deploying.value = false
   }
 }
 
@@ -1674,11 +1380,6 @@ watch(
   position: relative;
 }
 /* 设计模式 center — apaas 原生编辑器 iframe 占满中央区 (sidebar 右侧 flex:1). */
-.pdp-iframe {
-  flex: 1;
-  min-width: 0;
-  min-height: 0;
-}
 .pdp-canvas {
   width: 100%;
   height: 100%;
@@ -1760,37 +1461,6 @@ watch(
 .pdp-biz-banner-cta:hover {
   background: var(--brand-hover, #1d4ed8);
   transform: translateY(-1px);
-}
-
-/* ─── 顶部 segmented control ─── */
-.pdp-mode-segment {
-  display: inline-flex;
-  background: var(--surface-2);
-  border: 1px solid var(--line);
-  border-radius: 7px;
-  padding: 2px;
-  margin-right: 4px;
-}
-.pdp-mode-segment-btn {
-  height: 26px;
-  padding: 0 12px;
-  background: transparent;
-  border: none;
-  border-radius: 5px;
-  cursor: pointer;
-  font-family: inherit;
-  font-size: 12px;
-  font-weight: 500;
-  color: var(--text-3);
-  transition: background 0.12s, color 0.12s;
-}
-.pdp-mode-segment-btn:hover:not(.is-active) {
-  color: var(--text);
-}
-.pdp-mode-segment-btn.is-active {
-  background: var(--surface);
-  color: var(--brand);
-  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.06);
 }
 
 /* ─── view mode sidebar 占位文案 ─── */
