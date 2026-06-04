@@ -49,6 +49,7 @@ def _serialize_tenant_user(user: User, membership: UserTenant, role: Optional[Ro
     return {
         "id": user.id,
         "username": user.username,
+        "display_name": user.display_name,
         "is_active": user.is_active,
         "is_platform_admin": user.is_platform_admin,
         "tenant_id": membership.tenant_id,
@@ -100,6 +101,7 @@ def _serialize_platform_user(user: User, memberships: list[tuple[UserTenant, Ten
     return {
         "id": user.id,
         "username": user.username,
+        "display_name": user.display_name,
         "is_active": user.is_active,
         "is_platform_admin": user.is_platform_admin,
         "tenant_id": None,
@@ -235,6 +237,26 @@ def _extract_apaas_user(payload: object, username: str) -> dict:
             if found:
                 return found
     return {"account": username, "username": username}
+
+
+def _extract_user_display_name(user_info: dict, fallback: str = "") -> str:
+    if not isinstance(user_info, dict):
+        return ""
+    for key in (
+        "displayName",
+        "display_name",
+        "realName",
+        "real_name",
+        "nickName",
+        "nickname",
+        "name",
+        "userName",
+        "username",
+    ):
+        value = str(user_info.get(key) or "").strip()
+        if value and value != fallback:
+            return value
+    return ""
 
 
 def _tenant_item_id(item: object) -> str:
@@ -629,6 +651,7 @@ async def _ensure_apaas_tenant(
 
 async def _ensure_apaas_user(db: AsyncSession, username: str, password: str, user_info: dict, is_platform_admin: bool) -> User:
     apaas_uid = str(user_info.get("id") or user_info.get("userId") or user_info.get("user_id") or "").strip() or None
+    display_name = _extract_user_display_name(user_info, fallback=username)
     user = None
     if apaas_uid:
         user = (await db.execute(select(User).where(User.apaas_user_id == apaas_uid))).scalar_one_or_none()
@@ -637,6 +660,7 @@ async def _ensure_apaas_user(db: AsyncSession, username: str, password: str, use
     if not user:
         user = User(
             username=username,
+            display_name=display_name or None,
             hashed_password=get_password_hash(password),
             apaas_user_id=apaas_uid,
             is_platform_admin=is_platform_admin,
@@ -646,6 +670,8 @@ async def _ensure_apaas_user(db: AsyncSession, username: str, password: str, use
         await db.flush()
     else:
         user.username = username
+        if display_name:
+            user.display_name = display_name
         user.hashed_password = get_password_hash(password)
         if apaas_uid:
             user.apaas_user_id = apaas_uid
@@ -1616,6 +1642,7 @@ class TenantMemberAddRequest(BaseModel):
 class TenantMemberItem(BaseModel):
     user_id: int
     username: str
+    display_name: Optional[str] = None
     is_active: bool
     is_platform_admin: bool
     tenant_role: str  # tenant_admin / developer / viewer / member
@@ -1632,6 +1659,7 @@ def _serialize_tenant_member(
     return TenantMemberItem(
         user_id=user.id,
         username=user.username,
+        display_name=user.display_name,
         is_active=user.is_active,
         is_platform_admin=user.is_platform_admin,
         tenant_role=tenant_role,
@@ -2201,7 +2229,7 @@ async def list_platform_users(
 ):
     """列出全平台 active 账号（仅平台管理员），供「租户管理 → 加成员」从已有账号里选。
 
-    返回精简：id / username / is_platform_admin。不返密码 hash。
+    返回精简：id / username / display_name / is_platform_admin。不返密码 hash。
     """
     _require_platform_admin(ctx)
     rows = (
@@ -2213,6 +2241,7 @@ async def list_platform_users(
         {
             "id": u.id,
             "username": u.username,
+            "display_name": u.display_name,
             "is_platform_admin": u.is_platform_admin,
         }
         for u in rows
@@ -2248,7 +2277,7 @@ async def list_users(ctx: Annotated[AuthContext, Depends(get_auth_context)], db:
     """获取同租户下的所有用户（用于团队成员选择）"""
     if ctx.tenant_id:
         result = await db.execute(
-            select(User.id, User.username)
+            select(User.id, User.username, User.display_name)
             .join(UserTenant, User.id == UserTenant.user_id)
             .where(
                 UserTenant.tenant_id == ctx.tenant_id,
@@ -2257,8 +2286,8 @@ async def list_users(ctx: Annotated[AuthContext, Depends(get_auth_context)], db:
             )
         )
     else:
-        result = await db.execute(select(User.id, User.username).where(User.is_active == True))
-    return [{"id": row[0], "username": row[1]} for row in result.fetchall()]
+        result = await db.execute(select(User.id, User.username, User.display_name).where(User.is_active == True))
+    return [{"id": row[0], "username": row[1], "display_name": row[2]} for row in result.fetchall()]
 
 
 @router.get("/tenant-roles")
@@ -2592,6 +2621,7 @@ async def get_me(ctx: Annotated[AuthContext, Depends(get_auth_context)], db: Ann
     return UserInfo(
         id=ctx.user.id,
         username=ctx.user.username,
+        display_name=ctx.user.display_name,
         is_active=ctx.user.is_active,
         created_at=ctx.user.created_at,
         tenant_id=ctx.tenant_id if ctx.tenant_id else None,

@@ -3,7 +3,7 @@
     <div class="page-header">
       <div>
         <h1>MCP 测试台</h1>
-        <p>获取工具列表只校验 MCP 凭证；调用具体工具时再填写 aPaaS 用户凭证、租户 ID 和工具参数。</p>
+        <p>使用当前平台管理登录态，直接测试 ai-builder backend 进程内注册的 MCP 工具。</p>
       </div>
     </div>
 
@@ -23,11 +23,11 @@
         <el-form-item label="服务 URL">
           <el-input v-model="form.url" disabled />
         </el-form-item>
-        <el-form-item label="MCP 凭证">
-          <el-input v-model="form.key" type="password" show-password />
+        <el-form-item label="鉴权方式">
+          <el-input v-model="form.authMode" disabled />
         </el-form-item>
       </el-form>
-      <el-button type="primary" :loading="loadingTools" @click="() => loadTools()">测试连接并获取工具</el-button>
+      <el-button type="primary" :loading="loadingTools" @click="() => loadTools()">获取同进程工具</el-button>
       <el-alert
         v-if="toolsMessage"
         :title="toolsMessage"
@@ -51,7 +51,7 @@
         <!-- v3 2026-05-20 UED 报告 P3: "No Data" 英文残留 → 中文引导 + 指示下一步 -->
         <template #empty>
           <div style="padding: 24px 16px; color: var(--text-3); font-size: 13px; line-height: 1.6">
-            暂无工具数据，请先在上方填写 MCP 服务地址并点击「连接服务」获取工具列表。
+            暂无工具数据，请先点击「获取同进程工具」。
           </div>
         </template>
       </el-table>
@@ -69,32 +69,6 @@
               :value="item.name"
             />
           </el-select>
-        </el-form-item>
-        <el-form-item label="租户管理员">
-          <div class="inline-row">
-            <el-select
-              v-model="selectedTenantUserKey"
-              filterable
-              placeholder="选择租户管理员用户"
-              style="width: 460px"
-              @change="onTenantUserChange"
-            >
-              <el-option
-                v-for="item in tenantUsers"
-                :key="item.key"
-                :label="`${item.tenantName} / ${item.username || item.account}（${item.account}）`"
-                :value="item.key"
-              />
-            </el-select>
-            <el-input v-model="tenantPassword" type="password" show-password placeholder="租户管理员密码" style="width: 260px" />
-            <el-button :loading="tokenLoading" :disabled="!selectedTenantUserKey" @click="fetchTenantUserToken">获取 Token</el-button>
-          </div>
-        </el-form-item>
-        <el-form-item label="aPaaS 用户凭证">
-          <el-input v-model="callForm.apaasToken" placeholder="调用具体工具时必填" type="password" show-password />
-        </el-form-item>
-        <el-form-item label="租户 ID">
-          <el-input v-model="callForm.tenantId" placeholder="调用具体工具时必填" />
         </el-form-item>
         <el-form-item label="工具参数 JSON">
           <el-input
@@ -129,125 +103,61 @@ interface ToolItem {
   inputSchema?: any
 }
 
-interface AdminRow {
-  id: string
-  name: string
-  account: string
-  is_default: boolean
-}
-
-interface TenantUserRow {
-  key: string
-  id: string
-  account: string
-  username: string
-  tenantId: string
-  tenantName: string
-  tenantCode: string
-}
-
 const route = useRoute()
-const mcpPublicBase = (import.meta.env.VITE_MCP_PUBLIC_BASE || 'http://127.0.0.1:8004').replace(/\/+$/, '')
 
 const services = [
-  { name: '统一工具服务', code: 'apaas-builder-mcp', url: resolvePublicMcpUrl('/api/mcp/mcp'), tools: 70 },
+  { name: '同进程工具服务', code: 'ai-builder-inprocess', url: '/api/admin/mcp/call', tools: 111 },
 ]
 
 const form = reactive({
-  serviceCode: 'apaas-builder-mcp',
-  url: resolvePublicMcpUrl('/api/mcp/mcp'),
-  key: '',
+  serviceCode: 'ai-builder-inprocess',
+  url: '/api/admin/mcp/call',
+  authMode: '平台管理登录态',
 })
 
 const callForm = reactive({
   toolName: '',
-  apaasToken: '',
-  tenantId: '',
   argsJson: '{}',
 })
 
 const tools = ref<ToolItem[]>([])
-const admins = ref<AdminRow[]>([])
-const tenantUsers = ref<TenantUserRow[]>([])
-const selectedTenantUserKey = ref('')
-const tenantPassword = ref('')
 const toolsMessage = ref('')
 const resultText = ref('')
 const loadingTools = ref(false)
 const calling = ref(false)
-const tokenLoading = ref(false)
 // v3 2026-05-21 UED 报告 P1: 切服务时回滚用 — 记住上一次成功的 serviceCode
-const lastServiceCode = ref('apaas-builder-mcp')
+const lastServiceCode = ref('ai-builder-inprocess')
 const selectedTool = computed(() => tools.value.find((item) => item.name === callForm.toolName))
-const ENV_PARAM_KEYS = new Set(['env', 'env_id', 'alias', 'platform_env_id'])
+const ENV_PARAM_KEYS = new Set(['env', 'env_id', 'alias', 'platform_env_id', 'tenant_id', 'user_id'])
 const argsPlaceholder = computed(() => {
   if (!selectedTool.value?.inputSchema) return '例如：{}'
   return JSON.stringify(buildExampleFromSchema(selectedTool.value.inputSchema), null, 2)
 })
 
-function headers(includeApaas = false) {
-  const rawKey = form.key.trim().replace(/^Bearer\s+/i, '')
-  const h: Record<string, string> = {
-    Accept: 'application/json, text/event-stream',
-    'Content-Type': 'application/json',
-    Authorization: `Bearer ${rawKey}`,
-  }
-  if (includeApaas) {
-    h['X-APaaS-Token'] = callForm.apaasToken.trim()
-    h['X-APaaS-Tenant-Id'] = callForm.tenantId.trim()
-  }
-  return h
-}
-
-function resolvePublicMcpUrl(url: string) {
-  const raw = (url || '').trim()
-  if (!raw) return raw
-  if (/^https?:\/\//i.test(raw)) return raw
-  return `${mcpPublicBase}${raw.startsWith('/') ? raw : `/${raw}`}`
-}
-
-function resolveMcpRequestUrl(url: string) {
-  const raw = (url || '').trim()
-  if (!raw) return raw
-  if (/^https?:\/\//i.test(raw)) return raw
-  if (raw === '/api') return `${mcpPublicBase}/api`
-  if (raw.startsWith('/api/')) return `${mcpPublicBase}${raw}`
-  if (raw.startsWith('api/')) return `${mcpPublicBase}/${raw}`
-  return raw
-}
-
 async function loadTools(silent = false): Promise<boolean> {
-  if (!form.url || !form.key.trim()) {
-    if (!silent) ElMessage.warning('请选择 MCP 服务并填写 MCP 凭证')
+  if (!form.url) {
+    if (!silent) ElMessage.warning('请选择 MCP 服务')
     return false
   }
   loadingTools.value = true
   toolsMessage.value = silent ? '切换中…' : ''
   resultText.value = ''
   try {
-    const resp = await fetch(resolveMcpRequestUrl(form.url), {
-      method: 'POST',
-      headers: headers(false),
-      body: JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'tools/list', params: {} }),
-    })
-    const text = await resp.text()
-    resultText.value = text
-    let data: any
-    try {
-      data = JSON.parse(text)
-    } catch {
-      data = {}
-    }
-    const list = data?.result?.tools || data?.tools || []
-    tools.value = Array.isArray(list) ? list : []
+    const data = await apiGet<any>('/admin/mcp/tools')
+    resultText.value = JSON.stringify(data, null, 2)
+    const list = data?.tools || []
+    tools.value = Array.isArray(list)
+      ? list.map((item: any) => ({
+          name: item.name,
+          description: [item.title, item.description].filter(Boolean).join('\n'),
+          inputSchema: item.inputSchema || item.input_schema,
+        }))
+      : []
     if (tools.value.length) {
       toolsMessage.value = `获取成功，共 ${tools.value.length} 个工具`
       return true
-    } else if (text.includes('missing end-user identity')) {
-      toolsMessage.value = '后端当前仍要求用户身份。需要把工具清单放开为只校验 MCP 凭证。'
-      return false
     } else {
-      toolsMessage.value = `未获取到工具列表：HTTP ${resp.status}，${text.slice(0, 160)}`
+      toolsMessage.value = '未获取到工具列表'
       return false
     }
   } catch (err: any) {
@@ -291,14 +201,6 @@ async function onServiceChange(code: string) {
   form.url = service.url
   tools.value = []
   resultText.value = ''
-  // v3 2026-05-21 UED 报告 P1: 切换服务后自动重新拉工具列表，
-  // 不要让用户再手动点"测试连接并获取工具列表"。
-  // 没填 MCP 凭证 / 失败时静默回滚到上一个服务，提示用户。
-  if (!form.key.trim()) {
-    toolsMessage.value = '请先填写 MCP 凭证'
-    lastServiceCode.value = code
-    return
-  }
   toolsMessage.value = '切换中…'
   const ok = await loadTools(true)
   if (ok) {
@@ -316,88 +218,7 @@ async function onServiceChange(code: string) {
   }
 }
 
-async function loadAdmins() {
-  const resp = await apiGet<{ items: AdminRow[] }>('/mcp-platform/apaas-admins').catch(() => ({ items: [] }))
-  admins.value = resp.items || []
-}
-
-function flattenTenantAdmins(tenants: any[]): TenantUserRow[] {
-  const seen = new Set<string>()
-  const result: TenantUserRow[] = []
-  for (const tenant of tenants || []) {
-    const adminList = Array.isArray(tenant?.adminList) ? tenant.adminList : []
-    const tenantId = String(tenant?.tenantId || tenant?.tenant_id || tenant?.id || '')
-    for (const item of adminList) {
-      const key = `${tenantId}:${item?.id || item?.account || item?.username || ''}`
-      if (seen.has(key)) continue
-      seen.add(key)
-      result.push({
-        key,
-        id: String(item?.id || ''),
-        account: item?.account || '',
-        username: item?.username || item?.name || '',
-        tenantId,
-        tenantName: tenant?.name || tenant?.tenantName || '',
-        tenantCode: tenant?.tenantCode || tenant?.code || '',
-      })
-    }
-  }
-  return result
-}
-
-async function loadTenantUsers() {
-  const resp = await apiGet<{ items: any[] }>('/mcp-platform/apaas-tenants', { page_size: 100 }).catch(() => ({ items: [] }))
-  tenantUsers.value = flattenTenantAdmins(resp.items || [])
-}
-
-function onTenantUserChange(key: string) {
-  const user = tenantUsers.value.find((item) => item.key === key)
-  callForm.tenantId = user?.tenantId || ''
-  tenantPassword.value = ''
-}
-
-async function fetchTenantUserToken() {
-  const user = tenantUsers.value.find((item) => item.key === selectedTenantUserKey.value)
-  if (!user) {
-    ElMessage.warning('请先选择租户管理员')
-    return
-  }
-  if (!tenantPassword.value.trim()) {
-    ElMessage.warning('请填写租户管理员密码')
-    return
-  }
-  tokenLoading.value = true
-  try {
-    const resp = await apiPost<{
-      token: string
-      fingerprint?: string
-      tenant_id?: string
-      app_api_ok?: boolean
-      app_api_error?: string
-    }>('/mcp-platform/apaas-user-token', {
-      tenant_id: user.tenantId,
-      account: user.account,
-      password: tenantPassword.value,
-    })
-    callForm.apaasToken = resp.token || ''
-    callForm.tenantId = resp.tenant_id || user.tenantId
-    if (resp.app_api_ok === false) {
-      ElMessage.warning(`Token 已获取，但 aPaaS 应用接口探测失败：${resp.app_api_error || '未知错误'}`)
-    } else {
-      ElMessage.success(`已获取租户用户 Token：${resp.fingerprint || '成功'}`)
-    }
-  } catch (e: any) {
-    ElMessage.error(e?.response?.data?.detail || e?.message || '获取 Token 失败')
-  } finally {
-    tokenLoading.value = false
-  }
-}
-
 async function callTool() {
-  if (!callForm.apaasToken.trim() || !callForm.tenantId.trim()) {
-    ElMessage.warning('调用工具需要填写 aPaaS 用户凭证和租户 ID')
-    return
-  }
   calling.value = true
   resultText.value = ''
   try {
@@ -411,31 +232,19 @@ async function callTool() {
     if (args && typeof args === 'object' && !Array.isArray(args)) {
       for (const key of ENV_PARAM_KEYS) delete args[key]
     }
-    const resp = await fetch(resolveMcpRequestUrl(form.url), {
-      method: 'POST',
-      headers: headers(true),
-      body: JSON.stringify({
-        jsonrpc: '2.0',
-        id: Date.now(),
-        method: 'tools/call',
-        params: {
-          name: callForm.toolName,
-          arguments: args,
-        },
-      }),
+    const resp = await apiPost<any>('/admin/mcp/call', {
+      tool_name: callForm.toolName,
+      args,
     })
-    resultText.value = await resp.text()
+    resultText.value = JSON.stringify(resp, null, 2)
   } catch (err: any) {
-    resultText.value = err?.message || '调用失败'
+    resultText.value = err?.response?.data?.detail || err?.message || '调用失败'
   } finally {
     calling.value = false
   }
 }
 
 onMounted(async () => {
-  await Promise.all([loadAdmins(), loadTenantUsers()])
-  const access = await apiGet<{ key: string }>('/mcp-platform/mcp-access').catch(() => null)
-  form.key = access?.key || ''
   const serviceCode = route.query.service
   if (typeof serviceCode === 'string' && services.some((item) => item.code === serviceCode)) {
     form.serviceCode = serviceCode
@@ -444,7 +253,7 @@ onMounted(async () => {
   }
   const url = route.query.url
   if (typeof url === 'string' && url) {
-    const service = services.find((item) => item.url === resolvePublicMcpUrl(url))
+    const service = services.find((item) => item.url === url)
     if (service) {
       form.serviceCode = service.code
       form.url = service.url

@@ -37,6 +37,7 @@ class User(Base):
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     username: Mapped[str] = mapped_column(String(50), unique=True, nullable=False, index=True)
+    display_name: Mapped[Optional[str]] = mapped_column(String(100), nullable=True)
     hashed_password: Mapped[str] = mapped_column(String(255), nullable=False)
     apaas_token: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     apaas_user_id: Mapped[Optional[str]] = mapped_column(String(50), nullable=True)

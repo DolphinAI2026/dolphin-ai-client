@@ -18,6 +18,7 @@ class Token(BaseModel):
 class UserInfo(BaseModel):
     id: int
     username: str
+    display_name: Optional[str] = None
     is_active: bool
     created_at: datetime
     tenant_id: Optional[int] = None

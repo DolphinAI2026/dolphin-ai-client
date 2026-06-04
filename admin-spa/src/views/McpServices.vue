@@ -3,7 +3,7 @@
     <section class="mcp-hero">
       <div>
         <h1>MCP 接入</h1>
-        <p>统一使用一组接入凭证，所有工具都从主 MCP 服务入口接入。</p>
+        <p>平台管理直接使用 ai-builder backend 进程内 MCP 工具，便于本地单独测试。</p>
       </div>
     </section>
 
@@ -18,7 +18,7 @@
         </div>
       </article>
       <article class="summary-card">
-        <div class="summary-label">认证请求头</div>
+        <div class="summary-label">认证方式</div>
         <div class="summary-value-row">
           <strong>{{ authHeaderText }}</strong>
           <button type="button" class="icon-copy" aria-label="复制认证请求头" @click="copyText(authHeaderText, '认证请求头已复制')">
@@ -67,13 +67,9 @@
       <div class="panel-head">
         <div>
           <strong>接入参数</strong>
-          <span>客户端请求示例</span>
+          <span>管理端请求示例</span>
         </div>
         <div class="panel-actions">
-          <button type="button" class="ghost-button" @click="showFullKey = !showFullKey" :aria-label="showFullKey ? '隐藏完整凭证' : '显示完整凭证'">
-            <el-icon><View v-if="!showFullKey" /><Hide v-else /></el-icon>
-            {{ showFullKey ? '隐藏完整凭证' : '显示完整凭证' }}
-          </button>
           <button type="button" class="copy-button" :class="{ 'copy-button-success': copiedExample }" @click="onCopyRequestExample">
             <el-icon><CopyDocument /></el-icon>
             {{ copiedExample ? '已复制 ✓' : '复制' }}
@@ -87,26 +83,22 @@
       <div class="panel-head">
         <div>
           <strong>接入凭证</strong>
-          <span>用于访问上方 MCP 服务入口</span>
+          <span>当前改为平台管理登录态访问</span>
         </div>
         <div class="panel-actions">
-          <button type="button" class="copy-button" :class="{ 'copy-button-success': copiedKey }" @click="onCopyKey">
-            <el-icon><CopyDocument /></el-icon>
-            {{ copiedKey ? '已复制 ✓' : '复制凭证' }}
-          </button>
-          <button type="button" class="danger-button" @click="onResetKey">重置凭证</button>
+          <button type="button" class="danger-button" @click="onResetKey">说明</button>
         </div>
       </div>
       <div class="key-grid">
         <div>
-          <span>当前凭证指纹</span>
-          <strong>{{ currentKey.fingerprint }}</strong>
+          <span>当前模式</span>
+          <strong>同进程工具</strong>
         </div>
         <div>
           <span>状态</span>
           <strong class="success-text">启用</strong>
         </div>
-        <p>凭证用于客户端准入；真实业务身份和租户仍由调用工具时传入的 aPaaS 用户凭证与租户 ID 决定。</p>
+        <p>测试工具时由主后端注入当前平台管理用户的 Builder 租户身份，不再要求独立 8004 MCP 服务或 MCP_API_KEY。</p>
       </div>
     </section>
   </div>
@@ -116,17 +108,14 @@
 Request example:
 POST {{ services[0].publicUrl }}
 Content-Type: application/json
-Authorization: Bearer &lt;MCP_API_KEY&gt;
-X-APaaS-Token: &lt;当前 aPaaS 用户凭证&gt;
-X-APaaS-Tenant-Id: &lt;租户 ID&gt;
+Authorization: Bearer &lt;平台管理登录态&gt;
 -->
 
 <script setup lang="ts">
-import { computed, onMounted, reactive, ref } from 'vue'
+import { computed, ref } from 'vue'
 import { useRouter } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
-import { CopyDocument, View, Hide } from '@element-plus/icons-vue'
-import { apiGet } from '@/api/client'
+import { CopyDocument } from '@element-plus/icons-vue'
 
 interface ServiceRow {
   name: string
@@ -140,47 +129,31 @@ interface ServiceRow {
 
 const router = useRouter()
 const origin = window.location.origin
-const mcpPublicBase = (import.meta.env.VITE_MCP_PUBLIC_BASE || 'http://127.0.0.1:8004').replace(/\/+$/, '')
-const currentKey = reactive({
-  value: '',
-  fingerprint: '-',
-})
-
-// v3 2026-05-21 UED 报告 P1: Bearer Token 默认脱敏 + toggle 显示
-const showFullKey = ref(false)
 const copiedExample = ref(false)
-const copiedKey = ref(false)
 
-function maskKey(key: string): string {
-  if (!key) return '<MCP_API_KEY>'
-  if (key.length <= 12) return key
-  return `${key.slice(0, 8)}...${key.slice(-6)}`
-}
-
-const displayKey = computed(() => showFullKey.value ? currentKey.value : maskKey(currentKey.value))
-const authHeaderText = computed(() => currentKey.value ? `Authorization: Bearer ${displayKey.value}` : 'Authorization: Bearer <MCP_API_KEY>')
+const authHeaderText = computed(() => 'Authorization: Bearer <平台管理登录态>')
 const requestExample = computed(() => [
   `POST ${services[0].publicUrl}`,
   'Content-Type: application/json',
   authHeaderText.value,
-  'X-APaaS-Token: <当前 aPaaS 用户凭证>',
-  'X-APaaS-Tenant-Id: <租户 ID>',
+  '',
+  JSON.stringify({ tool_name: 'list_platform_envs', args: {} }, null, 2),
 ].join('\n'))
 
 function resolvePublicMcpUrl(apiPath: string) {
   const raw = (apiPath || '').trim()
   if (/^https?:\/\//i.test(raw)) return raw
-  return `${mcpPublicBase}${raw.startsWith('/') ? raw : `/${raw}`}`
+  return `${origin}${raw.startsWith('/') ? raw : `/${raw}`}`
 }
 
 const services: ServiceRow[] = [
   {
-    name: '统一工具服务',
-    code: 'apaas-builder-mcp',
-    transport: 'Streamable HTTP',
-    url: '/api/mcp/mcp',
-    publicUrl: resolvePublicMcpUrl('/api/mcp/mcp'),
-    tools: 70,
+    name: '同进程工具服务',
+    code: 'ai-builder-inprocess',
+    transport: 'FastMCP in-process',
+    url: '/api/admin/mcp/call',
+    publicUrl: resolvePublicMcpUrl('/api/admin/mcp/call'),
+    tools: 111,
     status: 'online',
   },
 ]
@@ -194,44 +167,27 @@ async function copyText(value: string, message: string) {
   ElMessage.success(message)
 }
 
-async function onCopyKey() {
-  if (!currentKey.value) {
-    ElMessage.warning('当前未读取到 MCP 接入凭证')
-    return
-  }
-  const value = `Bearer ${currentKey.value}`
-  await copyText(value, '当前接入凭证已复制')
-  copiedKey.value = true
-  setTimeout(() => { copiedKey.value = false }, 1600)
-}
-
 // v3 2026-05-21 UED 报告 P2: 复制按钮反馈 + 始终复制完整 key (不受脱敏影响)
 async function onCopyRequestExample() {
   const fullExample = [
     `POST ${services[0].publicUrl}`,
     'Content-Type: application/json',
-    currentKey.value ? `Authorization: Bearer ${currentKey.value}` : 'Authorization: Bearer <MCP_API_KEY>',
-    'X-APaaS-Token: <当前 aPaaS 用户凭证>',
-    'X-APaaS-Tenant-Id: <租户 ID>',
+    'Authorization: Bearer <平台管理登录态>',
+    '',
+    JSON.stringify({ tool_name: 'list_platform_envs', args: {} }, null, 2),
   ].join('\n')
-  await copyText(fullExample, '接入参数已复制（含完整凭证）')
+  await copyText(fullExample, '请求示例已复制')
   copiedExample.value = true
   setTimeout(() => { copiedExample.value = false }, 1600)
 }
 
 function onResetKey() {
   ElMessageBox.alert(
-    '重置凭证会让当前客户端配置立即失效，需要后端密钥持久化接口和审计日志支持后再启用。',
-    '重置凭证',
+    '当前平台管理测试台调用同进程 MCP 工具，不再使用独立 MCP_API_KEY。外部客户端接入如需恢复，可再单独接回 HTTP MCP 服务。',
+    '同进程 MCP',
     { confirmButtonText: '知道了' },
   )
 }
-
-onMounted(async () => {
-  const resp = await apiGet<{ key: string; fingerprint?: string }>('/mcp-platform/mcp-access').catch(() => null)
-  currentKey.value = resp?.key || ''
-  currentKey.fingerprint = resp?.fingerprint || '-'
-})
 </script>
 
 <style scoped>

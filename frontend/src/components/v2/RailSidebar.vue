@@ -33,13 +33,30 @@ const NAV = computed<NavItem[]>(() => [
 ])
 const platformNavItem: NavItem = { key: 'platform', label: '平台管理', icon: 'shield', path: '/platform-admin' }
 
-const userName = computed(() => user.user?.username || '未登录')
-const tenantName = computed(() => user.user?.tenant_name || '未选择租户')
+const userAccount = computed(() => user.user?.username || '')
+const userName = computed(() => user.user?.display_name || userAccount.value || '未登录')
+const userAvatarText = computed(() => Array.from(userName.value.trim())[0]?.toUpperCase() || 'U')
 const tenantOptions = computed(() => user.availableTenants || [])
 const currentTenantValue = computed(() => user.tenantId ? String(user.tenantId) : '')
+function looksLikeLongId(value?: string | null) {
+  return /^\d{12,}$/.test(String(value || '').trim())
+}
+
+function tenantLabel(tenant?: { tenant_name?: string | null; tenant_code?: string | null; tenant_id?: number | string | null }) {
+  const name = String(tenant?.tenant_name || '').trim()
+  const code = String(tenant?.tenant_code || '').trim()
+  if (name && !looksLikeLongId(name)) return name
+  if (code && !looksLikeLongId(code)) return code
+  return name || code || (tenant?.tenant_id ? `租户 ${tenant.tenant_id}` : '未选择租户')
+}
+
 const currentTenantLabel = computed(() => {
   const match = tenantOptions.value.find((tenant) => String(tenant.tenant_id) === currentTenantValue.value)
-  return match?.tenant_name || tenantName.value
+  return tenantLabel(match || {
+    tenant_name: user.user?.tenant_name,
+    tenant_code: undefined,
+    tenant_id: user.tenantId,
+  })
 })
 const isDark = computed(() => theme.mode === 'dark')
 const platformActive = computed(() => route.path.startsWith('/platform-admin'))
@@ -268,7 +285,7 @@ function renderIcon(name: string): string {
             @click="toggleTenantMenu"
           >
             <span class="tenant-icon" v-html="renderIcon('bldg')" />
-            <span class="tenant-name">{{ currentTenantLabel }}</span>
+            <span class="tenant-name" :title="user.user?.tenant_name || currentTenantLabel">{{ currentTenantLabel }}</span>
             <span class="tenant-arrow" v-html="renderIcon('chevronDown')" />
           </button>
           <div v-if="tenantMenuOpen" class="tenant-menu" role="menu">
@@ -281,7 +298,8 @@ function renderIcon(name: string): string {
               role="menuitem"
               @click="selectTenant(Number(tenant.tenant_id))"
             >
-              {{ tenant.tenant_name }}
+              <span class="tenant-option-name" :title="tenant.tenant_name">{{ tenantLabel(tenant) }}</span>
+              <span v-if="tenant.tenant_code && tenant.tenant_code !== tenantLabel(tenant)" class="tenant-option-code">{{ tenant.tenant_code }}</span>
             </button>
             <div v-if="!tenantOptions.length" class="tenant-empty">暂无可切换租户</div>
           </div>
@@ -317,10 +335,10 @@ function renderIcon(name: string): string {
         </button>
 
         <div class="account-row">
-          <div class="rail-avatar">{{ userName.slice(0, 1).toUpperCase() }}</div>
+          <div class="rail-avatar">{{ userAvatarText }}</div>
           <div class="rail-user-info">
-            <div class="rail-user-name">{{ userName }}</div>
-            <div class="rail-user-status"><span />在线</div>
+            <div class="rail-user-name" :title="userName">{{ userName }}</div>
+            <div class="rail-user-status" :title="userAccount || userName"><span />{{ userAccount || '在线' }}</div>
           </div>
           <button
             type="button"
@@ -723,7 +741,7 @@ function renderIcon(name: string): string {
 .tenant-option {
   width: 100%;
   min-height: 32px;
-  padding: 0 10px;
+  padding: 6px 10px;
   color: var(--text);
   background: transparent;
   border: none;
@@ -733,8 +751,25 @@ function renderIcon(name: string): string {
   font-weight: var(--fw-medium, 500);
   text-align: left;
   cursor: pointer;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
   transition: background 0.14s var(--ease, cubic-bezier(0.2, 0.8, 0.2, 1)),
               color 0.14s var(--ease, cubic-bezier(0.2, 0.8, 0.2, 1));
+}
+
+.tenant-option-name,
+.tenant-option-code {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.tenant-option-code {
+  color: var(--text-3);
+  font-size: 11px;
+  font-weight: var(--fw-regular, 400);
 }
 
 .tenant-option:hover,

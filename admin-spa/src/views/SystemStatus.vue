@@ -100,21 +100,20 @@ const router = useRouter()
 const auth = useAuthStore()
 const loading = ref(false)
 const health = ref('')
-const mcpPublicBase = (import.meta.env.VITE_MCP_PUBLIC_BASE || 'http://127.0.0.1:8004').replace(/\/+$/, '')
 
 function resolvePublicMcpUrl(apiPath: string) {
   const raw = (apiPath || '').trim()
   if (/^https?:\/\//i.test(raw)) return raw
-  return `${mcpPublicBase}${raw.startsWith('/') ? raw : `/${raw}`}`
+  return `${window.location.origin}${raw.startsWith('/') ? raw : `/${raw}`}`
 }
 
 const services: ServiceRow[] = [
   {
-    name: '统一 MCP 工具服务',
-    code: 'apaas-builder-mcp',
-    desc: '统一暴露 Builder、Coding、Vibe、设计解析和应用生命周期工具。',
-    publicUrl: resolvePublicMcpUrl('/api/mcp/mcp'),
-    tools: 70,
+    name: '同进程 MCP 工具服务',
+    code: 'ai-builder-inprocess',
+    desc: '直接使用 ai-builder backend 进程内 FastMCP 工具注册表。',
+    publicUrl: resolvePublicMcpUrl('/api/admin/mcp/call'),
+    tools: 111,
     status: 'connected',
     statusText: '已连接',
   },
