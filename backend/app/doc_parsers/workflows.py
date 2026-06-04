@@ -14,8 +14,12 @@ from __future__ import annotations
 
 from typing import List, Tuple
 
+import re
+
 from app.doc_section_splitter import split_subsections
 from app.doc_table_parser import parse_table
+
+_NUM_PREFIX_RE = re.compile(r"^\d+\.\d+\s*")
 
 
 def parse(section_text: str) -> Tuple[List[dict], List[str]]:
@@ -25,6 +29,8 @@ def parse(section_text: str) -> Tuple[List[dict], List[str]]:
         return workflows, errors
 
     for name, form_code, _tag, content in split_subsections(section_text):
+        # 容忍 agent 写成 `### 7.1 报告审批流（…）`：去掉 7.1 这种数字前缀，流程名才干净
+        name = _NUM_PREFIX_RE.sub("", name).strip()
         if not form_code:
             errors.append(
                 f"审批流程 '{name}'：未标注关联表单，跳过（正确写法：### {name}（关联表单：form_code））"

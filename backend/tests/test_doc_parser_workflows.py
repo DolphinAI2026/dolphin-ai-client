@@ -48,3 +48,36 @@ def test_workflow_without_valid_nodes_warned():
     flows, errors = wf_parser.parse(bad)
     assert flows == []
     assert errors
+
+
+def test_numeric_prefix_stripped_from_name():
+    flows, _ = wf_parser.parse(
+        "### 7.1 报告审批流（关联表单：test_report）\n| 顺序 | 审批节点 | 审批人角色编码 |\n|---|---|---|\n| 1 | 审批 | role_a |\n"
+    )
+    assert flows[0]["name"] == "报告审批流"  # 7.1 前缀被去掉
+
+
+def test_full_pipeline_routes_chapter_to_config():
+    """端到端：整篇 doc 过 doc_standard_parser → config['workflows'] 非空。
+
+    回归保护 split_sections 不再把 `### 名称（关联表单：…）` 当成章节边界吃掉「七、审批流程」。
+    """
+    from app.doc_standard_parser import parse as parse_doc
+
+    doc = """## 一、应用信息
+| 字段 | 值 |
+|---|---|
+| 应用名称 | 测试 |
+| 应用编码 | test-app |
+## 七、审批流程
+### 报告审批流（关联表单：test_report）
+| 顺序 | 审批节点 | 审批人角色编码 |
+|---|---|---|
+| 1 | 班组长审批 | role_a |
+| 2 | 质量经理审批 | role_b |
+"""
+    r = parse_doc(doc)
+    wfs = r.config.get("workflows")
+    assert wfs, f"工作流没被解析进 config（split_sections 又把章节吃了？）：{wfs}"
+    assert wfs[0]["form_code"] == "test_report"
+    assert [n["role_code"] for n in wfs[0]["nodes"]] == ["role_a", "role_b"]
