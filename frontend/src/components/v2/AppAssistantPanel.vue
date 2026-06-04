@@ -319,6 +319,7 @@ onMounted(() => {
       empty-title="配置助手"
       empty-hint="描述你想改的配置或要开发的功能"
       @open-trace="onOpenTrace"
+      @answer-ask="(opt) => send(opt)"
     />
 
     <!-- 输入区 -->
