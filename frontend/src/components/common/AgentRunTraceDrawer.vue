@@ -114,7 +114,7 @@ async function selectRun(runId: string) {
   }
 }
 
-function statusLabel(s: string) { return ({ success: '成功', error: '失败', running: '运行中' } as any)[s] || s }
+function statusLabel(s: string) { return ({ success: '成功', error: '失败', running: '运行中', aborted: '已中止' } as any)[s] || s }
 function fmtMs(ms: number | null) { return ms == null ? '—' : ms >= 1000 ? (ms / 1000).toFixed(1) + 's' : ms + 'ms' }
 function fmtTime(t: string | null) { return t ? new Date(t).toLocaleString() : '—' }
 function pretty(o: any) { try { return JSON.stringify(o, null, 2) } catch { return String(o) } }

@@ -604,8 +604,13 @@ async def run_agent(
             yield event
     finally:
         if holder["run_id"]:
-            await recorder.end_run(
-                holder["run_id"], status=holder["status"], error=holder["error"]
+            # shield：SSE 客户端断开会往本 task 抛 CancelledError（非 Exception 子类，
+            # recorder 自身的 try/except 拦不住）。不 shield 的话 end_run 可能在 commit
+            # 中途被取消，run 永远卡在 "running"。与本文件主流程 commit 用 shield 同理。
+            await asyncio.shield(
+                recorder.end_run(
+                    holder["run_id"], status=holder["status"], error=holder["error"]
+                )
             )
 
 
@@ -655,8 +660,9 @@ async def _run_agent_inner(
 
     for turn in range(MAX_TURNS):
         if abort_event.is_set():
+            holder["status"] = "aborted"
             yield _sse("aborted", {"turn": turn})
-            yield _sse("done", {"ok": False, "aborted": True})
+            yield _sse("done", {"ok": False, "aborted": True, "run_id": holder["run_id"]})
             return
 
         # 流式调用 LLM，逐 token 把 content_delta 推给前端
@@ -719,8 +725,9 @@ async def _run_agent_inner(
                     )
             if assistant_msg is None:
                 # 流被外部 abort 了
+                holder["status"] = "aborted"
                 yield _sse("aborted", {"turn": turn})
-                yield _sse("done", {"ok": False, "aborted": True})
+                yield _sse("done", {"ok": False, "aborted": True, "run_id": holder["run_id"]})
                 return
         except httpx.HTTPStatusError as e:
             # 流式 response 必须 aread 才能拿 .text；老代码直接 .text 会被
@@ -855,8 +862,9 @@ async def _run_agent_inner(
 
         for tc in tool_calls:
             if abort_event.is_set():
+                holder["status"] = "aborted"
                 yield _sse("aborted", {"turn": turn})
-                yield _sse("done", {"ok": False, "aborted": True})
+                yield _sse("done", {"ok": False, "aborted": True, "run_id": holder["run_id"]})
                 return
 
             tc_id = tc.get("id", "")

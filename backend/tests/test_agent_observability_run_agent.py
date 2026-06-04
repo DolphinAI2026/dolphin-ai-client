@@ -166,6 +166,31 @@ async def test_tool_run_records_tool_step(shared_db, monkeypatch):
     assert tool_step.args_json == {"id": 1}
 
 
+@pytest.mark.asyncio
+async def test_aborted_run_records_aborted_status(shared_db, monkeypatch):
+    # 进 loop 前就 abort → 命中 turn-start 中止出口；run 应记 status="aborted"（非 error）
+    s = await _seed_session(shared_db)
+    monkeypatch.setattr(agent_mod, "_resolve_llm_config", _aval(types_ns(model="gpt-5.5")))
+    monkeypatch.setattr(
+        agent_mod, "_build_initial_messages",
+        _aval([{"role": "system", "content": "x"}, {"role": "user", "content": "hi"}]),
+    )
+    monkeypatch.setattr(agent_mod, "get_all_tool_schemas", _aval([]))
+
+    abort = asyncio.Event()
+    abort.set()
+    events = []
+    async for ev in agent_mod.run_agent(shared_db, s, "hi", abort):
+        events.append((ev["event"], ev["data"]))
+
+    run_id = [json.loads(d) for (e, d) in events if e == "run_started"][0]["run_id"]
+    run = (await shared_db.execute(select(AgentRun).where(AgentRun.run_id == run_id))).scalar_one()
+    assert run.status == "aborted"
+    # 中止的 done 事件也带 run_id（跟其它出口一致）
+    done = [json.loads(d) for (e, d) in events if e == "done"]
+    assert done and done[-1].get("run_id") == run_id
+
+
 # ── 小工具：把一个值包成 async 函数（monkeypatch 用） ──
 def _aval(value):
     async def _f(*a, **kw):
