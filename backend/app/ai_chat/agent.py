@@ -402,9 +402,12 @@ async def _call_llm_stream(
         "temperature": cfg.temperature,
         "max_tokens": cfg.max_tokens,
         "stream": True,
+        # 让 OpenAI 兼容网关在 [DONE] 前回一个带 usage 的 chunk（token 必采）
+        "stream_options": {"include_usage": True},
     }
     _apply_provider_payload_compat(cfg, payload)
     accumulated_content = ""
+    usage_data: Optional[dict] = None
     tool_buf: dict[int, dict] = {}
 
     async with httpx.AsyncClient(timeout=httpx.Timeout(connect=10, read=timeout, write=10, pool=10)) as client:
@@ -436,6 +439,9 @@ async def _call_llm_stream(
                     chunk = json.loads(data)
                 except Exception:
                     continue
+                # usage chunk：choices 为空、带 usage（include_usage 开启后 [DONE] 前到达）
+                if chunk.get("usage"):
+                    usage_data = chunk["usage"]
                 choices = chunk.get("choices") or []
                 if not choices:
                     continue
@@ -472,6 +478,7 @@ async def _call_llm_stream(
             "content": accumulated_content,
             "tool_calls": final_tool_calls if final_tool_calls else None,
         },
+        "usage": usage_data,
     }
 
 
