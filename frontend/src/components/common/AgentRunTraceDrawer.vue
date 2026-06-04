@@ -127,7 +127,8 @@ function truncate(t: string) { return t.length > 4000 ? t.slice(0, 4000) + '\n�
 .run-item { display: flex; gap: 10px; align-items: center; padding: 7px 8px; font-size: 12.5px;
   cursor: pointer; border-radius: 6px; }
 .run-item:hover { background: var(--t-bg-soft, #f3f4f6); }
-.run-item.active { background: var(--t-bg-soft, #eef2ff); }
+/* active 用独立 token + 独立蓝色兜底，避免跟 hover 的 --t-bg-soft 解析成同色 */
+.run-item.active { background: var(--t-bg-active, #dbe4ff); }
 .run-meta, .run-dur, .run-time { color: var(--t-text-muted, #6b7280); }
 .run-time { margin-left: auto; }
 .run-status { font-weight: 600; }

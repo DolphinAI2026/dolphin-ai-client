@@ -1224,6 +1224,7 @@ async function loadSession(id: number) {
     pendingFinalMessage.value = null
     stopDrain()
     isSending.value = false
+    currentRunId.value = null  // 切会话清掉上个会话的 run 提示，避免「Agent 活动」带过去的陈旧 preferRunId
   }
   try {
     const data = await aiChatApi.getSession(id)

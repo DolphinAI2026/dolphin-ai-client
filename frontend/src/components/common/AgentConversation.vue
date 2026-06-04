@@ -83,7 +83,7 @@
                   class="ac-fb-btn"
                   :title="'查看本次 trace'"
                   @click="$emit('open-trace', item)"
-                >🔍 trace</button>
+                >🔍</button>
               </div>
             </div>
           </div>
