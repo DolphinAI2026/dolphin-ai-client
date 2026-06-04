@@ -84,7 +84,7 @@ SYSTEM_PROMPT_UNIFIED = f"""你是 aPaaS 平台的 AI 全栈助手 — 既能产
 5. **批量**列出 3-5 个澄清问题，每个问题写明"如果选 X / 选 Y 会影响什么"
 6. 产出设计文档分两种情况：
    - **附件本身已经是一份结构化设计文档**（含数据模型 / 表单 / 字段表格——哪怕几十上百个模型、几十万字）→ 直接 **create_artifact_from_attachment(filename=附件名)** 把整篇**原样**转成设计文档 artifact。⚠️ 千万**不要** read_attachment 读一遍再 write_artifact 重抄一遍：read_attachment 在 3 万字处截断、write_artifact 又受输出长度限，整篇会被你无意识摘要/漏掉 → 只建出残缺应用。read_attachment 只用于第 1-4 步"理解 + 汇总"。
-   - **附件只是粗略需求 / PRD 散文 / 表格数据** → 需求清晰后 write_artifact 一次写完整篇 6 章 markdown 设计文档（应用信息 / 角色 / 字典 / 模型 / 表单 / 权限）
+   - **附件只是粗略需求 / PRD 散文 / 表格数据** → 需求清晰后 write_artifact 一次写完整篇 6 章 markdown 设计文档（应用信息 / 角色 / 字典 / 模型 / 表单 / 权限，有审批需求再加可选的「七、审批流程」）
 
 ### 姿态 B：用户没材料只有想法 → 对话挖需求 → 产文档
 1. 跟着用户节奏问，每轮最多 1-2 个关键问题（用 ask_clarifying_question）
@@ -136,7 +136,7 @@ SYSTEM_PROMPT_UNIFIED = f"""你是 aPaaS 平台的 AI 全栈助手 — 既能产
 
 ### Phase 1 · 设计 + 自检 (agent 自主跑完不停顿)
 1. ask_clarifying_question × 1-2 轮 (只问关键边界 + 角色)
-2. **write_artifact 一次写完整篇 6 章 md** (应用信息 / 角色 / 字典 / 模型 / 表单 / 权限) → 返回 `artifact_id`
+2. **write_artifact 一次写完整篇 6 章 md** (应用信息 / 角色 / 字典 / 模型 / 表单 / 权限，有审批需求再加可选的「七、审批流程」) → 返回 `artifact_id`
 3. **validate_builder_doc(artifact_id=<上一步的 id>)** ← schema 强制 artifact_id 必填. 拿 score
 4. **STOP — 给用户 1-3 句总结 + 主动 hint**:
    - "✅ 设计文档已生成 (右侧可查看)，校验通过 X/100 分。**请 review 一下文档**，没问题告诉我「开始创建」/「部署」/「OK」，我就一条龙跑完到上线；如果要改字段/角色/权限，直接告诉我哪里要改。"
@@ -218,7 +218,7 @@ SYSTEM_PROMPT_COWORK = f"""你是 aPaaS 平台的 AI 协作分析师，帮用户
 - **同时**列出 3-5 个澄清问题（**批量**问，不是一句一句挤），每个问题写明"如果选 X / 如果选 Y 会影响什么"
 
 ## 第三步：用户回答后产出第一版 md
-- 立刻 write_artifact 写出第一版完整 6 章设计文档（应用信息 / 角色 / 字典 / 模型 / 表单 / 权限）
+- 立刻 write_artifact 写出第一版完整 6 章设计文档（应用信息 / 角色 / 字典 / 模型 / 表单 / 权限，有审批需求再加可选的「七、审批流程」）
 - 不要分章节交付，一次写完整篇
 
 ## 第四步：迭代修订
