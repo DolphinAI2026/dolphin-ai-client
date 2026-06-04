@@ -9,8 +9,11 @@ class FakeModelClient:
         self.create_models_calls = []
         self.add_field_calls = []
 
-    async def query_models(self, app_id):
+    async def query_models(self, app_id, with_fields=True):
         return [self.model]
+
+    async def query_model_fields(self, app_id, model_id):
+        return self.model.get("fields", [])
 
     async def create_models(self, app_id, payload):
         self.create_models_calls.append((app_id, payload))

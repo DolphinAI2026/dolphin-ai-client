@@ -100,7 +100,10 @@ SKIP_FIELDS = {"id", "created_at", "updated_at", "deleted_at", "created_by", "up
 
 SELECT_FIELD_TYPES = {"下拉单选", "下拉多选", "单选框", "复选框"}
 REFERENCE_FIELD_TYPES = {"数据单选", "数据选择", "关联表单"}
-GENERIC_FORM_NAMES = {"", "表单", "测试表单", "新增表单", "编辑表单", "查看表单", "维护表单"}
+GENERIC_FORM_NAMES = {
+    "", "表单", "测试表单", "新增表单", "编辑表单", "查看表单", "维护表单",
+    "用户表", "用户信息表", "用户信息", "数据表", "业务表", "主表",
+}
 GENERIC_FORM_SUFFIXES = ("表单", "新增", "编辑", "查看", "维护")
 
 COMP_TYPE_MAP = get_comp_type_map()
@@ -231,7 +234,10 @@ def _extract_field_options(field: dict[str, Any]) -> list[dict[str, str]]:
 
 def _is_generic_form_name(name: str, model_name: str, model_code: str) -> bool:
     text = str(name or "").strip()
+    model_text = str(model_name or "").strip()
     if text in GENERIC_FORM_NAMES:
+        return True
+    if model_text in GENERIC_FORM_NAMES and text == model_text:
         return True
     if text == str(model_code or "").strip():
         return True
@@ -246,6 +252,8 @@ def _dedupe_form_name(raw_name: str, model_name: str, model_code: str, used_name
     candidate = str(raw_name or "").strip()
     model_label = str(model_name or "").strip() or str(model_code or "").strip() or "业务对象"
     if _is_generic_form_name(candidate, model_label, model_code):
+        if model_label in GENERIC_FORM_NAMES:
+            model_label = str(model_code or "").strip() or "业务对象"
         candidate = f"{model_label}-新增表单"
     if candidate in used_names:
         if not any(candidate.endswith(suffix) for suffix in GENERIC_FORM_SUFFIXES):
@@ -257,6 +265,42 @@ def _dedupe_form_name(raw_name: str, model_name: str, model_code: str, used_name
             seq += 1
     used_names.add(candidate)
     return candidate
+
+
+def _copy_field_business_meta(source: dict[str, Any], target: dict[str, Any]) -> None:
+    """Keep dict/ref/options metadata alive when a model field becomes a form component."""
+    for key in (
+        "dict", "dictCode", "dict_code", "dictionaryCode",
+        "ref", "ref_model_code", "refModelCode", "ref_display_field_code", "refDisplayFieldCode",
+        "target_model_code", "targetModelCode", "target_field_code", "targetFieldCode",
+        "selector_form_code", "selectorFormCode", "selector_field_code", "selectorFieldCode",
+        "association_form_code", "associationFormCode",
+        "association_origin_field_code", "associationOriginFieldCode",
+        "association_target_field_code", "associationTargetFieldCode",
+        "options", "items", "enum_values", "enumValues", "dict_options", "dictOptions",
+    ):
+        if source.get(key) not in (None, ""):
+            target[key] = source.get(key)
+    dict_code = target.get("dict") or target.get("dictCode") or target.get("dict_code")
+    if dict_code:
+        target["dict"] = dict_code
+        target["dict_code"] = dict_code
+        if str(target.get("componentType") or "") in {
+            "FORM_SELECT_INPUT_SINGLE", "FORM_SELECT_INPUT", "FORM_RADIO_INPUT", "FORM_CHECKBOX_INPUT",
+        }:
+            target["dictionarySelectConfig"] = {
+                "dictionaryCode": dict_code,
+                "dictionarySelectOptions": [],
+            }
+    ref = target.get("ref")
+    if isinstance(ref, dict):
+        target["ref_model_code"] = target.get("ref_model_code") or ref.get("model") or ref.get("target_model")
+        target["ref_display_field_code"] = (
+            target.get("ref_display_field_code")
+            or ref.get("field")
+            or ref.get("display_field")
+            or ref.get("target_field")
+        )
 
 
 def _compact_business_name(name: str) -> str:
@@ -417,12 +461,14 @@ def _build_forms_from_models(models: list[dict[str, Any]]) -> list[dict[str, Any
                     sub_field_code = sub_field.get("code", f"sub_field_{sub_idx + 1}")
                     sub_field_name = sub_field.get("name", sub_field_code)
                     sub_field_type = sub_field.get("type", "单行输入")
-                    table_columns.append({
+                    sub_component = {
                         "label": sub_field_name,
                         "componentType": _field_type_to_component_type(sub_field_type),
                         "modelField": f"{sub_code}.{sub_field_code}",
                         "required": bool(sub_field.get("required", False)),
-                    })
+                    }
+                    _copy_field_business_meta(sub_field, sub_component)
+                    table_columns.append(sub_component)
                 components.append({
                     "label": field_name,
                     "componentType": component_type,
@@ -446,6 +492,7 @@ def _build_forms_from_models(models: list[dict[str, Any]]) -> list[dict[str, Any
                 if isinstance(field.get("ref"), dict):
                     component["ref_model_code"] = field["ref"].get("model")
                     component["ref_display_field_code"] = field["ref"].get("field")
+            _copy_field_business_meta(field, component)
             components.append(component)
 
         forms.append({
