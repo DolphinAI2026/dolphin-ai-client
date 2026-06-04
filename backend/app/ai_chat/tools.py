@@ -1294,7 +1294,10 @@ async def get_all_tool_schemas() -> list[dict]:
         _log.getLogger(__name__).warning("MCP bridge 加载失败，退化到 base 工具：%s", e)
         mcp_schemas = []
     try:
-        allow = set(tools_for_agent("builder")) | set(tools_for_agent("coding"))
+        # AI Builder chat 的主路径是需求梳理、设计文档和低代码应用生成。
+        # 之前把 coding 工具也暴露给同一个 LLM turn，schemas 变大且更容易触发
+        # 部分 OpenAI-compatible 网关连接中断；AI Coding 页面有自己的 pipeline。
+        allow = set(tools_for_agent("builder"))
         mcp_schemas = [
             s for s in mcp_schemas
             if s.get("function", {}).get("name") in allow

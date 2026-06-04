@@ -44,6 +44,36 @@ from app.ai_chat.tools import TOOL_SCHEMAS, execute_tool, get_all_tool_schemas
 
 logger = logging.getLogger(__name__)
 
+LLM_RETRY_ATTEMPTS = 2
+
+
+def _is_retryable_llm_error(exc: Exception) -> bool:
+    return isinstance(
+        exc,
+        (
+            httpx.ConnectError,
+            httpx.ConnectTimeout,
+            httpx.ReadTimeout,
+            httpx.RemoteProtocolError,
+            httpx.PoolTimeout,
+        ),
+    )
+
+
+async def _sleep_before_llm_retry(attempt: int) -> None:
+    await asyncio.sleep(0.8 * (attempt + 1))
+
+
+def _format_llm_error(exc: Exception) -> str:
+    if isinstance(exc, httpx.ConnectError):
+        return "连接模型网关失败，请稍后重试或检查模型服务网络。"
+    if isinstance(exc, httpx.ConnectTimeout):
+        return "连接模型网关超时，请稍后重试或检查模型服务网络。"
+    if isinstance(exc, httpx.ReadTimeout):
+        return "模型网关响应超时，请稍后重试。"
+    detail = str(exc).strip()
+    return detail or exc.__class__.__name__
+
 
 # ─────────────────────────── System prompts ──────────────────────────
 #
@@ -365,18 +395,28 @@ async def _call_llm(
         "max_tokens": cfg.max_tokens,
     }
     _apply_provider_payload_compat(cfg, payload)
-    async with httpx.AsyncClient(timeout=httpx.Timeout(connect=10, read=timeout, write=10, pool=10)) as client:
-        resp = await client.post(
-            f"{cfg.base_url}/chat/completions",
-            headers={
-                "Authorization": f"Bearer {cfg.api_key}",
-                "Content-Type": "application/json",
-            },
-            json=payload,
-        )
-        resp.raise_for_status()
-        data = resp.json()
-    return data["choices"][0]["message"]
+    last_error: Exception | None = None
+    for attempt in range(LLM_RETRY_ATTEMPTS):
+        try:
+            async with httpx.AsyncClient(timeout=httpx.Timeout(connect=10, read=timeout, write=10, pool=10)) as client:
+                resp = await client.post(
+                    f"{cfg.base_url}/chat/completions",
+                    headers={
+                        "Authorization": f"Bearer {cfg.api_key}",
+                        "Content-Type": "application/json",
+                    },
+                    json=payload,
+                )
+                resp.raise_for_status()
+                data = resp.json()
+            return data["choices"][0]["message"]
+        except Exception as exc:
+            last_error = exc
+            if attempt >= LLM_RETRY_ATTEMPTS - 1 or not _is_retryable_llm_error(exc):
+                raise
+            logger.warning("LLM non-stream request failed, retrying: %s", _format_llm_error(exc))
+            await _sleep_before_llm_retry(attempt)
+    raise last_error or RuntimeError("LLM 调用失败")
 
 
 async def _call_llm_stream(
@@ -404,75 +444,125 @@ async def _call_llm_stream(
         "stream": True,
     }
     _apply_provider_payload_compat(cfg, payload)
-    accumulated_content = ""
-    tool_buf: dict[int, dict] = {}
+    last_error: Exception | None = None
+    for attempt in range(LLM_RETRY_ATTEMPTS):
+        accumulated_content = ""
+        tool_buf: dict[int, dict] = {}
+        emitted_anything = False
+        try:
+            async with httpx.AsyncClient(timeout=httpx.Timeout(connect=10, read=timeout, write=10, pool=10)) as client:
+                async with client.stream(
+                    "POST",
+                    f"{cfg.base_url}/chat/completions",
+                    headers={
+                        "Authorization": f"Bearer {cfg.api_key}",
+                        "Content-Type": "application/json",
+                        "Accept": "text/event-stream",
+                    },
+                    json=payload,
+                ) as resp:
+                    if resp.status_code >= 400:
+                        await resp.aread()
+                        resp.raise_for_status()
+                    async for raw_line in resp.aiter_lines():
+                        if abort_event.is_set():
+                            break
+                        if not raw_line:
+                            continue
+                        line = raw_line.strip()
+                        if not line.startswith("data:"):
+                            continue
+                        data = line[len("data:"):].strip()
+                        if data == "[DONE]":
+                            break
+                        try:
+                            chunk = json.loads(data)
+                        except Exception:
+                            continue
+                        choices = chunk.get("choices") or []
+                        if not choices:
+                            continue
+                        delta = choices[0].get("delta") or {}
+                        if delta.get("content"):
+                            text = delta["content"]
+                            accumulated_content += text
+                            emitted_anything = True
+                            yield {"type": "content_delta", "text": text}
+                        for tc in (delta.get("tool_calls") or []):
+                            idx = tc.get("index", 0)
+                            buf = tool_buf.setdefault(
+                                idx,
+                                {"id": "", "type": "function", "function": {"name": "", "arguments": ""}},
+                            )
+                            if tc.get("id"):
+                                buf["id"] = tc["id"]
+                            fn = tc.get("function") or {}
+                            if fn.get("name"):
+                                buf["function"]["name"] = fn["name"]
+                            if fn.get("arguments"):
+                                buf["function"]["arguments"] += fn["arguments"]
+                            emitted_anything = True
+                            yield {
+                                "type": "tool_call_delta",
+                                "index": idx,
+                                "id": buf["id"],
+                                "name": buf["function"]["name"],
+                                "arguments_so_far": buf["function"]["arguments"],
+                            }
 
-    async with httpx.AsyncClient(timeout=httpx.Timeout(connect=10, read=timeout, write=10, pool=10)) as client:
-        async with client.stream(
-            "POST",
-            f"{cfg.base_url}/chat/completions",
-            headers={
-                "Authorization": f"Bearer {cfg.api_key}",
-                "Content-Type": "application/json",
-                "Accept": "text/event-stream",
-            },
-            json=payload,
-        ) as resp:
-            if resp.status_code >= 400:
-                await resp.aread()
-                resp.raise_for_status()
-            async for raw_line in resp.aiter_lines():
-                if abort_event.is_set():
-                    break
-                if not raw_line:
-                    continue
-                line = raw_line.strip()
-                if not line.startswith("data:"):
-                    continue
-                data = line[len("data:"):].strip()
-                if data == "[DONE]":
-                    break
-                try:
-                    chunk = json.loads(data)
-                except Exception:
-                    continue
-                choices = chunk.get("choices") or []
-                if not choices:
-                    continue
-                delta = choices[0].get("delta") or {}
-                if delta.get("content"):
-                    text = delta["content"]
-                    accumulated_content += text
-                    yield {"type": "content_delta", "text": text}
-                for tc in (delta.get("tool_calls") or []):
-                    idx = tc.get("index", 0)
-                    buf = tool_buf.setdefault(
-                        idx,
-                        {"id": "", "type": "function", "function": {"name": "", "arguments": ""}},
-                    )
-                    if tc.get("id"):
-                        buf["id"] = tc["id"]
-                    fn = tc.get("function") or {}
-                    if fn.get("name"):
-                        buf["function"]["name"] = fn["name"]
-                    if fn.get("arguments"):
-                        buf["function"]["arguments"] += fn["arguments"]
-                    yield {
-                        "type": "tool_call_delta",
-                        "index": idx,
-                        "id": buf["id"],
-                        "name": buf["function"]["name"],
-                        "arguments_so_far": buf["function"]["arguments"],
-                    }
+            final_tool_calls = [tool_buf[k] for k in sorted(tool_buf.keys())]
+            yield {
+                "type": "done",
+                "message": {
+                    "content": accumulated_content,
+                    "tool_calls": final_tool_calls if final_tool_calls else None,
+                },
+            }
+            return
+        except Exception as exc:
+            last_error = exc
+            if emitted_anything or attempt >= LLM_RETRY_ATTEMPTS - 1 or not _is_retryable_llm_error(exc):
+                raise
+            logger.warning("LLM stream request failed before output, retrying: %s", _format_llm_error(exc))
+            await _sleep_before_llm_retry(attempt)
+    raise last_error or RuntimeError("LLM 调用失败")
 
-    final_tool_calls = [tool_buf[k] for k in sorted(tool_buf.keys())]
-    yield {
-        "type": "done",
-        "message": {
-            "content": accumulated_content,
-            "tool_calls": final_tool_calls if final_tool_calls else None,
-        },
-    }
+
+async def _call_llm_stream_with_fallback(
+    cfg: LLMConfigSnapshot,
+    messages: list[dict],
+    tools: list[dict],
+    abort_event: asyncio.Event,
+    timeout: int = 180,
+) -> AsyncIterator[dict]:
+    """Prefer streaming; if the gateway refuses streaming, fall back to non-streaming."""
+    try:
+        async for chunk in _call_llm_stream(cfg, messages, tools, abort_event, timeout=timeout):
+            yield chunk
+        return
+    except httpx.HTTPStatusError:
+        raise
+    except Exception as stream_exc:
+        if not _is_retryable_llm_error(stream_exc):
+            raise
+        logger.warning(
+            "LLM stream failed after retries; falling back to non-stream request: %s",
+            _format_llm_error(stream_exc),
+        )
+        message = await _call_llm(cfg, messages, tools, timeout=timeout)
+        content = message.get("content") or ""
+        if content:
+            yield {"type": "content_delta", "text": content}
+        for idx, tc in enumerate(message.get("tool_calls") or []):
+            fn = tc.get("function") or {}
+            yield {
+                "type": "tool_call_delta",
+                "index": idx,
+                "id": tc.get("id"),
+                "name": fn.get("name"),
+                "arguments_so_far": fn.get("arguments") or "",
+            }
+        yield {"type": "done", "message": message}
 
 
 # ─────────────────────────── 构建 agent 输入 ───────────────────────────
@@ -634,7 +724,7 @@ async def run_agent(
             return _sse("assistant_delta", {"text": text})
 
         try:
-            async for chunk in _call_llm_stream(cfg, messages, tool_schemas, abort_event):
+            async for chunk in _call_llm_stream_with_fallback(cfg, messages, tool_schemas, abort_event):
                 if chunk["type"] == "content_delta":
                     _delta_buf.append(chunk["text"])
                     _delta_buf_len += len(chunk["text"])
@@ -679,7 +769,7 @@ async def run_agent(
             yield _sse("done", {"ok": False})
             return
         except Exception as e:
-            yield _sse("error", {"error": f"LLM 调用失败：{e}"})
+            yield _sse("error", {"error": f"LLM 调用失败：{_format_llm_error(e)}"})
             yield _sse("done", {"ok": False})
             return
 
@@ -717,7 +807,7 @@ async def run_agent(
                 _delta_buf_len = 0
                 _delta_last_flush = time.monotonic()
                 try:
-                    async for chunk in _call_llm_stream(cfg, retry_messages, tool_schemas, abort_event):
+                    async for chunk in _call_llm_stream_with_fallback(cfg, retry_messages, tool_schemas, abort_event):
                         if chunk["type"] == "content_delta":
                             _delta_buf.append(chunk["text"])
                             _delta_buf_len += len(chunk["text"])
