@@ -279,7 +279,7 @@ onMounted(() => {
     <!-- 顶部 actions: 会话列表 / 新对话 / Agent 活动 / 关闭 -->
     <header class="aa-header">
       <div class="aa-header-info">
-        <div class="aa-header-title">配置助手</div>
+        <div class="aa-header-title">AI Builder</div>
         <div class="aa-header-sub" :title="contextTitle">{{ contextTitle }}</div>
       </div>
       <div class="aa-top-actions">
@@ -316,7 +316,7 @@ onMounted(() => {
       :typing="typing"
       :typing-seconds="typingSeconds"
       :tool-grouping="true"
-      empty-title="配置助手"
+      empty-title="AI Builder"
       empty-hint="描述你想改的配置或要开发的功能"
       @open-trace="onOpenTrace"
       @answer-ask="(opt) => send(opt)"
