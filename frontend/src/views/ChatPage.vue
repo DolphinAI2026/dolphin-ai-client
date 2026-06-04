@@ -324,7 +324,7 @@
         <!-- 2026-05-29: 配置助手嵌入式右栏 — 对齐「设计」tab(SpecDesignPanel 内嵌 chat)的布局,
              并排不浮盖中间内容。设计 tab(topTab==='spec')自带 SPEC chat, 这里不重复显。
              收起态走右下 FAB(见 chat-shell 下), 展开态在此并排; 宽度由 panel 内 usePanelResize 控制。 -->
-        <ConfigAssistantPanel
+        <AppAssistantPanel
           v-if="!embedMode && isPostDeploy && resolvedAppId && topTab !== 'spec' && assistantOpen"
           class="ca-embedded"
           :application-id="resolvedAppId"
@@ -332,6 +332,8 @@
           :current-section="currentSection"
           :current-section-tab="currentSectionTab"
           :designer-sub="topTab === 'design' && selectedApaasMenuId ? designerSub : null"
+          :selected-menu-name="selectedApaasMenuName"
+          :selected-menu-id="selectedApaasMenuId"
           @close="toggleAssistant"
           @refresh-iframe="refreshPlatformAndSidebar"
           @upload-doc="triggerDocVersionUpload"
@@ -878,7 +880,7 @@ import SpecCanvas from '@/components/spec/SpecCanvas.vue'
 import SpecInspector from '@/components/spec/SpecInspector.vue'
 // v2 redesign (Session 5): 3-column shell — left conversation rail + right SPEC blueprint.
 // Existing center content unchanged; new components are pure presentation, no logic.
-import ConfigAssistantPanel from '@/components/v2/ConfigAssistantPanel.vue'
+import AppAssistantPanel from '@/components/v2/AppAssistantPanel.vue'
 import DeployConfirmModal from '@/components/v2/DeployConfirmModal.vue'
 
 const router = useRouter()
