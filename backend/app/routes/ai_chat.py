@@ -52,8 +52,6 @@ class CreateSessionRequest(BaseModel):
     mode: Optional[str] = None
     # 锁定应用上下文：右栏配置助手创建会话时传入，run_agent 据此注入 app 上下文
     app_id: Optional[int] = None
-    # 当前设计器 section 软提示：data / ui / logic / permission / extension
-    section: Optional[str] = None
 
 
 class UpdateSessionRequest(BaseModel):
@@ -65,7 +63,7 @@ class UpdateSessionRequest(BaseModel):
 class SendMessageRequest(BaseModel):
     message: str
     attachment_ids: Optional[List[int]] = None  # 引用本会话已上传的附件
-    # 每条消息可携带当前设计器 section 软提示，后续 run_agent 任务中消费
+    # 每条消息可携带当前设计器 section 软提示（run_agent 注入 app 上下文时用；按消息传，随用户切 tab 变）
     section: Optional[str] = None
 
 
