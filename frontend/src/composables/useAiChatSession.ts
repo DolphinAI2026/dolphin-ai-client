@@ -289,7 +289,7 @@ export function useAiChatSession(opts?: UseAiChatSessionOptions): UseAiChatSessi
     const versions = artifacts.value
       .filter(a => a.filename === fname)
       .sort((a, b) => a.version - b.version)
-    return versions.length ? versions[versions.length - 1] : null
+    return versions[versions.length - 1] ?? null
   }
 
   // 把同名连续 ≥2 次的 tool calls 折叠成 group；段尾 write_artifact 成功 → artifact 卡；
@@ -298,12 +298,13 @@ export function useAiChatSession(opts?: UseAiChatSessionOptions): UseAiChatSessi
     const out: TLItem[] = []
     let i = 0
     while (i < tcs.length) {
+      const base = tcs[i]!
       let j = i + 1
-      while (j < tcs.length && tcs[j].tool_name === tcs[i].tool_name) j++
+      while (j < tcs.length && tcs[j]!.tool_name === base.tool_name) j++
       if (j - i >= 2) {
         out.push({ kind: 'tool_group', tools: tcs.slice(i, j) })
       } else {
-        out.push({ kind: 'tool', tool: tcs[i] })
+        out.push({ kind: 'tool', tool: base })
       }
       const last = tcs[j - 1]
       if (last && last.tool_name === 'write_artifact' && last.status === 'success') {
