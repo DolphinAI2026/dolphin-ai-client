@@ -488,7 +488,8 @@ async def _call_llm_stream(
 # ─────────────────────────── 构建 agent 输入 ───────────────────────────
 
 async def _build_initial_messages(
-    db: AsyncSession, session: AIChatSession, current_user_message: str
+    db: AsyncSession, session: AIChatSession, current_user_message: str,
+    section: Optional[str] = None,
 ) -> list[dict]:
     """从历史消息 + 当前 user message 构造 LLM messages。
 
@@ -498,6 +499,12 @@ async def _build_initial_messages(
       - tool_result 完整保留（已在执行时截断到 30K），让 LLM 跨轮看得到，避免重复 read
     """
     system_prompt = _select_system_prompt(getattr(session, "mode", None))
+    app_id = getattr(session, "app_id", None)
+    if app_id:
+        from app.ai_chat.app_context import build_app_context_block
+        system_prompt = system_prompt + await build_app_context_block(
+            db, app_id, section=section, tenant_id=getattr(session, "tenant_id", None)
+        )
     messages: list[dict] = [{"role": "system", "content": system_prompt}]
 
     # 历史消息（不含本次 user 消息——routes 已经写库了，这里读回来时要排除最新那条）
@@ -591,6 +598,7 @@ async def run_agent(
     session: AIChatSession,
     current_user_message: str,
     abort_event: asyncio.Event,
+    section: Optional[str] = None,
 ) -> AsyncIterator[dict]:
     """对外入口：包一层 run 生命周期（可观测），把事件原样透传。
 
@@ -600,7 +608,7 @@ async def run_agent(
     holder: dict = {"run_id": None, "status": "error", "error": None}
     try:
         async for event in _run_agent_inner(
-            db, session, current_user_message, abort_event, holder
+            db, session, current_user_message, abort_event, holder, section
         ):
             yield event
     finally:
@@ -621,6 +629,7 @@ async def _run_agent_inner(
     current_user_message: str,
     abort_event: asyncio.Event,
     holder: dict,
+    section: Optional[str] = None,
 ) -> AsyncIterator[dict]:
     """主 agent loop body。run 生命周期由外层 run_agent wrapper 管。
     holder = {"run_id": str|None, "status": "running"/"success"/"error", "error": str|None}
@@ -640,13 +649,14 @@ async def _run_agent_inner(
         tenant_id=getattr(session, "tenant_id", None),
         user_id=getattr(session, "user_id", None),
         session_id=session.id,
+        app_id=getattr(session, "app_id", None),
         model=cfg.model,
     )
     yield _sse("run_started", {"run_id": holder["run_id"]})
     _obs_seq = 0  # run 内 step 单调递增序号
 
     try:
-        messages = await _build_initial_messages(db, session, current_user_message)
+        messages = await _build_initial_messages(db, session, current_user_message, section)
     except Exception as e:
         holder["error"] = f"构建上下文失败：{e}"
         yield _sse("error", {"error": holder["error"]})

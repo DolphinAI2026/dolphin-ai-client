@@ -490,7 +490,7 @@ async def send_message(
                                 "data": json.dumps(_session_to_dict(stream_s), ensure_ascii=False),
                             }
 
-                async for event in run_agent(stream_db, stream_s, body.message, abort_event):
+                async for event in run_agent(stream_db, stream_s, body.message, abort_event, section=body.section):
                     yield event
             except Exception as e:
                 import traceback
