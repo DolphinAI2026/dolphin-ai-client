@@ -140,6 +140,11 @@ async def init_db():
             # 统一应用类型: low-code (ai-builder/SPEC) | ai-code (vibe-coding)
             "ALTER TABLE applications ADD COLUMN app_type VARCHAR(20) NOT NULL DEFAULT 'low-code'",
             "ALTER TABLE applications ADD COLUMN source_workspace_id VARCHAR(60)",
+            # 配置助手统一到 unified：会话级应用上下文常驻锁
+            "ALTER TABLE ai_chat_sessions ADD COLUMN app_id INTEGER",
+            "CREATE INDEX IF NOT EXISTS ix_ai_chat_sessions_app_id ON ai_chat_sessions(app_id)",
+            # config_chat → ai_chat 一次性迁移幂等标记
+            "ALTER TABLE config_chat_sessions ADD COLUMN migrated_session_id INTEGER",
         ]:
             try:
                 await conn.execute(text(stmt))

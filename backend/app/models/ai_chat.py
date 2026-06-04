@@ -40,6 +40,9 @@ class AIChatSession(Base):
     mode: Mapped[str] = mapped_column(String(20), default="chat", nullable=False)
     # 用户选择的 LLM 配置（拉自 llm_configs.options，purpose='all'）
     selected_llm_config_id: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    # 应用上下文常驻锁：非空 = 锁定该内部 applications.id（app 配置/二次开发态）；
+    # 空 = 自由态（/ai-chat 0-1 创建/通用）。不加 FK，沿用 ai_chat 解耦风格。
+    app_id: Mapped[Optional[int]] = mapped_column(Integer, nullable=True, index=True)
     # workspace 目录路径（per-session tmp 目录，用于 run_python 的 cwd + 附件存储）
     workspace_dir: Mapped[Optional[str]] = mapped_column(String(500), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, nullable=False)
