@@ -76,6 +76,13 @@ watch(() => props.modelValue, (v) => {
   if (v) void load()
 })
 watch(open, (v) => emit('update:modelValue', v))
+// 抽屉已开着时再点另一条消息的「查看本次 trace」：只 tracePreferRunId 变、modelValue 不变，
+// 上面那个 watcher 不会触发。这里补一个 —— 已加载到 runs 里就直接切到那条 run。
+watch(() => props.preferRunId, (rid) => {
+  if (open.value && rid && rid !== selectedRunId.value && runs.value.some(r => r.run_id === rid)) {
+    void selectRun(rid)
+  }
+})
 
 async function load() {
   if (!props.sessionId) { runs.value = []; detail.value = null; return }
