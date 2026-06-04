@@ -82,6 +82,13 @@
           </p>
         </div>
         <div class="dse-head-actions">
+          <OpenLowcodeBackendButton
+            :app-id="props.appId"
+            menu-type="MODEL"
+            :menu-id="props.menuId || ''"
+            :form-id="props.formId || null"
+            title="在低代码后台编辑此数据模型"
+          />
           <!-- O2: view-mode toggle -->
           <div class="dse-view-toggle" role="group" aria-label="切换查看模式">
             <button
@@ -514,6 +521,7 @@ import { ref, computed, watch, nextTick, reactive } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import request from '@/utils/request'
 import SkeletonCard from '@/components/states/SkeletonCard.vue'
+import OpenLowcodeBackendButton from '@/components/v3/OpenLowcodeBackendButton.vue'
 import ErrorCard from '@/components/states/ErrorCard.vue'
 
 interface FieldRow {

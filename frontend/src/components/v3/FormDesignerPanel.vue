@@ -74,6 +74,13 @@
               <span aria-hidden="true">✏️</span> 编辑
             </button>
           </div>
+          <OpenLowcodeBackendButton
+            :app-id="props.appId"
+            menu-type="MODEL"
+            :menu-id="props.menuId || ''"
+            :form-id="props.formId || null"
+            title="在低代码后台编辑此表单"
+          />
           <!-- 2026-05-29: 删「用对话改」「保存」死按钮 — 二者只弹 alert/永久 disabled。
                改字段走常驻右栏「配置助手」或「编辑」模式(apaas 原生编辑器自带保存)。 -->
         </div>
@@ -148,6 +155,7 @@ import { ref, watch, h, defineComponent, type PropType } from 'vue'
 import request, { API_PREFIX } from '@/utils/request'
 import ApaasEmbedIframe from './ApaasEmbedIframe.vue'
 import EmptyState from '@/components/states/EmptyState.vue'
+import OpenLowcodeBackendButton from '@/components/v3/OpenLowcodeBackendButton.vue'
 import SkeletonCard from '@/components/states/SkeletonCard.vue'
 
 /* ────────────────────────────────────────────────────────────────

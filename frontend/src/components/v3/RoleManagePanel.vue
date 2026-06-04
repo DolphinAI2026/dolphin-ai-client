@@ -43,6 +43,10 @@
         <p v-else class="rmp-page-stat">加载中…</p>
       </div>
       <div class="rmp-head-actions">
+        <OpenLowcodeBackendButton
+          :app-id="props.appId"
+          title="在低代码后台编辑角色权限"
+        />
         <!-- O2: edit-mode toggle (preview / edit) — 放最前 -->
         <div class="rmp-edit-toggle" role="group" aria-label="切换查看模式">
           <button
@@ -385,6 +389,7 @@
 import { ref, computed, watch, onMounted, onBeforeUnmount, reactive } from 'vue'
 import request from '@/utils/request'
 import SkeletonCard from '@/components/states/SkeletonCard.vue'
+import OpenLowcodeBackendButton from '@/components/v3/OpenLowcodeBackendButton.vue'
 import EmptyState from '@/components/states/EmptyState.vue'
 import ErrorCard from '@/components/states/ErrorCard.vue'
 

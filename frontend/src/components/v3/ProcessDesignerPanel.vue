@@ -85,6 +85,13 @@
           </p>
         </div>
         <div class="pdp-head-actions">
+          <OpenLowcodeBackendButton
+            :app-id="props.appId"
+            menu-type="MODEL"
+            :menu-id="props.menuId || ''"
+            :form-id="activeProcess?.form_id || props.formId || null"
+            title="在低代码后台编辑此流程"
+          />
           <!-- O2: segmented control 业务 / 设计 -->
           <div class="pdp-mode-segment" role="tablist" aria-label="视角切换">
             <button
@@ -243,6 +250,7 @@ import { Graph, type Node as X6Node, type Edge as X6Edge } from '@antv/x6'
 import { ElMessage } from 'element-plus'
 import ProcessNodePropsPanel from './ProcessNodePropsPanel.vue'
 import ApaasEmbedIframe from './ApaasEmbedIframe.vue'
+import OpenLowcodeBackendButton from '@/components/v3/OpenLowcodeBackendButton.vue'
 import request from '@/utils/request'
 import {
   type NodeType,
