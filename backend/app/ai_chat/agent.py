@@ -158,12 +158,13 @@ SYSTEM_PROMPT_UNIFIED = f"""你是 aPaaS 平台的 AI 全栈助手 — 既能产
   **但如果用户上传的附件本身就是设计文档, 用 create_artifact_from_attachment 让服务端整篇原样收录, 别让 LLM 重抄** (省 token + 防超大文档被截断漏内容)
 - validate_builder_doc / generate_app_from_doc 的 md_content 参数 **2026-05-23/24 已删除** —
   schema 强制 artifact_id 必填. 漏传 → MISSING_ARTIFACT_ID; 没 fallback
-- 实在改 md → 重新 write_artifact (同名 filename 自动 version++) 拿新 artifact_id, 后续工具用新 id
+- **小改 md（改个字段/编码/某段）→ edit_artifact**：先 read_artifact 拿精确原文，再 old_string→new_string 精确替换，**不要整篇重写**（省 token + 避免大文档被截断漏内容）。同名自动 version++。
+- 整篇推倒重来 / 首版生成才用 write_artifact。改完后续工具自动取本会话最新 .md（一般不用手填 artifact_id）
 - update_app_from_doc 暂未强制 schema, 仍然接受 md_content (评估中)
 
 ### 关键反模式（不要做）
 - ❌ **Phase 1 走完 submit 后立刻 generate_app_from_doc** — 必须先停下让用户 review SPEC！跳过审核 = 错了部署后改回来贵 10 倍。
-- ❌ **Phase 1 末用户审核完, 不要再 write_artifact 重写同一份 md** — write_artifact 已经把 doc 写到右栏 artifact, 不要重复! 用户要改字段 → update_app_from_doc (Phase 2 工具), 不是 write_artifact 重写整篇.
+- ❌ **不要为了改一处就 write_artifact 重写整篇 md** — 要改 doc 里某个字段/编码/小段 → edit_artifact 精确改那一处; 应用已创建后要改的是平台配置 → update_app_from_doc (Phase 2 工具)。
 - ❌ **Phase 2 内 generate_app_from_doc 完成后停下等用户** — 用户已经在 Phase 1 末说"创建/部署"，意思是要"真能用"，不是"建个 draft"。Phase 2 内继续 deploy + publish 直到上线。
 - ❌ **Phase 2 内每个工具调完都问"要继续吗 / 是否部署"** — 用户在 Phase 1 末已确认，Phase 2 自主推进。
 - ❌ **遇到 appCode 冲突就改 app_code / 加 -v1 -v2 后缀重试** — appCode = 应用身份, 同 code 就是同一个应用！backend 已自动"同 app_code 复用同一应用 + 增量合并"(2026-05-28)，你**保持原 app_code 重试即可**，千万别加 -v1/-v2 后缀——那会建出一堆残缺重复应用，乱套。同理一份大文档**一次性 generate 整篇**，不要自己拆成多批分别 generate（拆批就会撞 appCode）。
@@ -221,7 +222,7 @@ SYSTEM_PROMPT_COWORK = f"""你是 aPaaS 平台的 AI 协作分析师，帮用户
 - 不要分章节交付，一次写完整篇
 
 ## 第四步：迭代修订
-- 用户继续提修订意见时，read_attachment 拿到当前 artifact，做精准修改后 write_artifact 同名覆盖
+- 用户提小修订（改字段/编码/某段）时，read_artifact 拿当前 artifact 原文，再 edit_artifact 精确替换那一处，别整篇 write_artifact 重发；整篇推倒重来才 write_artifact 同名覆盖
 - 涉及到字段命名、模型关联、权限矩阵这种细节，主动用 run_python 验证一致性
 
 {_FORMAT_CONSTRAINTS}
@@ -940,7 +941,7 @@ async def _run_agent_inner(
             # 2026-05-24: generate_app_from_doc 改强制 artifact_id 后, 不再产新 artifact
             # (用户 write_artifact 已经落表), 从列表去掉.
             _emits_artifact = (
-                (tool_name == "write_artifact" and tc_db.status == "success")
+                (tool_name in ("write_artifact", "edit_artifact") and tc_db.status == "success")
                 or (tool_name in (
                     "update_app_from_doc",
                     "export_apaas_app_design_doc",
@@ -951,7 +952,7 @@ async def _run_agent_inner(
                 # write_artifact: filename 在 args；generate/update_app_from_doc:
                 # 不知道 dispatcher 落 artifact 用了什么 filename，直接拉本 session
                 # 最近落的那条
-                if tool_name == "write_artifact":
+                if tool_name in ("write_artifact", "edit_artifact"):
                     res = await db.execute(
                         select(AIChatArtifact)
                         .where(

@@ -108,6 +108,59 @@ TOOL_SCHEMAS: list[dict] = [
     {
         "type": "function",
         "function": {
+            "name": "read_artifact",
+            "description": (
+                "读回某个已有产出物的当前完整内容。"
+                "调 edit_artifact 之前**必须**先 read_artifact 拿到精确原文，再据此构造 old_string，"
+                "不要凭记忆/上一轮的内容拼 old_string（文档可能已被改过）。"
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "filename": {
+                        "type": "string",
+                        "description": "产出物文件名，例如 'seal-lab-mgmt-design.md'",
+                    },
+                },
+                "required": ["filename"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "edit_artifact",
+            "description": (
+                "在已有产出物上做精确的字符串替换（找到 old_string 替换成 new_string），"
+                "**只改动那一处、不整篇重写**。改设计文档里一个字段/编码/小段落时用它，别用 write_artifact 整篇重发。\n"
+                "用法要求：① 先 read_artifact 拿到精确原文，old_string 必须**逐字匹配**（含空白和缩进）；"
+                "② old_string 必须在文中**恰好出现一次**——若返回'出现 N 次'，多带几行上下文让它唯一；"
+                "③ 若返回'未找到 old_string'，重新 read_artifact 刷新内容再重建 old_string。"
+                "替换后会自动落新版本(version++)并重新校验。"
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "filename": {
+                        "type": "string",
+                        "description": "要编辑的产出物文件名（必须已存在）",
+                    },
+                    "old_string": {
+                        "type": "string",
+                        "description": "文中要被替换的原文片段，逐字复制自 read_artifact 结果，不要凭记忆拼。",
+                    },
+                    "new_string": {
+                        "type": "string",
+                        "description": "替换成的新内容",
+                    },
+                },
+                "required": ["filename", "old_string", "new_string"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
             "name": "create_artifact_from_attachment",
             "description": (
                 "把用户上传的【本身已是结构化设计文档】的附件，原样全文转成设计文档 artifact"
@@ -323,6 +376,58 @@ async def execute_write_artifact(
     return (
         f"已写入产出物 '{filename}' (v{new_version}, {len(content)} 字符)。"
         f"用户已能在右侧面板查看。{validation_note}"
+    )
+
+
+async def execute_read_artifact(
+    args: dict, session: AIChatSession, db: AsyncSession
+) -> str:
+    """读回某个产出物的当前完整内容 —— 给 edit_artifact 构造精确 old_string 用。"""
+    filename = args.get("filename", "").strip()
+    if not filename:
+        return "错误：缺少 filename 参数"
+    latest = await _latest_artifact(db, session.id, filename)
+    if latest is None:
+        return f"错误：产出物 '{filename}' 不存在（确认文件名，或先用 write_artifact 新建）。"
+    return f"产出物 '{filename}' (v{latest.version}) 当前内容：\n\n{latest.content or ''}"
+
+
+async def execute_edit_artifact(
+    args: dict, session: AIChatSession, db: AsyncSession
+) -> str:
+    """在已有产出物上做 old_string→new_string 精确替换（不整篇重写）。
+
+    复用 execute_write_artifact 落新版本（version++ + Builder 静默校验），所以下游
+    generate_app_from_doc 仍拿到一份完整可解析的文档。old_string 必须在文中恰好出现一次。
+    """
+    filename = args.get("filename", "").strip()
+    old_string = args.get("old_string", "")
+    new_string = args.get("new_string", "")
+    if not filename:
+        return "错误：缺少 filename 参数"
+    if not old_string:
+        return "错误：缺少 old_string 参数"
+    latest = await _latest_artifact(db, session.id, filename)
+    if latest is None:
+        return f"错误：产出物 '{filename}' 不存在（确认文件名，或先用 write_artifact 新建）。"
+    content = latest.content or ""
+    n = content.count(old_string)
+    if n == 0:
+        return (
+            f"错误：在 '{filename}' 中未找到 old_string。"
+            "请先 read_artifact 拿到精确原文（含空白/缩进）再重试。"
+        )
+    if n > 1:
+        return (
+            f"错误：old_string 在 '{filename}' 中出现 {n} 次，无法定位。"
+            "请提供更长、更唯一的片段（多带几行上下文）。"
+        )
+    new_content = content.replace(old_string, new_string, 1)
+    # 走 write_artifact：version++ + 校验 + 让上层 agent loop 发 artifact_created 刷新右栏
+    return await execute_write_artifact(
+        {"filename": filename, "content": new_content, "format": latest.format},
+        session,
+        db,
     )
 
 
@@ -1264,6 +1369,8 @@ TOOL_HANDLERS = {
     "read_attachment": execute_read_attachment,
     "run_python": execute_run_python,
     "write_artifact": execute_write_artifact,
+    "read_artifact": execute_read_artifact,
+    "edit_artifact": execute_edit_artifact,
     "create_artifact_from_attachment": execute_create_artifact_from_attachment,
     "ask_clarifying_question": execute_ask_clarifying_question,
     "export_apaas_app_design_doc": execute_export_apaas_app_design_doc,
