@@ -1,6 +1,7 @@
 """数据模型解析器"""
 from __future__ import annotations
 
+import hashlib
 import re
 from typing import List, Optional, Tuple
 
@@ -8,7 +9,7 @@ from app.doc_section_splitter import split_subsections
 from app.doc_table_parser import parse_table, parse_all_tables
 from app.config_validator import _normalize_field_type, RESERVED_FIELD_CODES
 from app.field_types import get_db_type_map, get_dict_field_types, get_ref_field_types
-from app.lowcode_standards import normalize_component_type, normalize_database_field_type, safe_field_code
+from app.lowcode_standards import normalize_component_type, normalize_database_field_type, safe_field_code, _snake
 
 
 # 单一真相源都在 app.field_types；下面只是模块级缓存，保持名字不变、下游 0 改动。
@@ -17,6 +18,22 @@ _DB_TYPE_MAP = get_db_type_map()
 _DICT_TYPES = get_dict_field_types()
 _REF_TYPES = get_ref_field_types()
 _SUB_TABLE_TYPE = "子表"
+
+_MODEL_CODE_RE = re.compile(r'^[a-zA-Z][a-zA-Z0-9_]*$')
+
+
+def _sanitize_model_code(code: str) -> str:
+    """不合规(含中文等)的模型编码 → 合法 ascii snake_case；纯非 ascii 退化成基于原编码
+    的确定性 hash。
+
+    历史 bug：旧逻辑正则一拦直接 continue，把整张模型连字段一起静默丢掉(文档还报高分)。
+    改成规范化保留。**只依赖 code 本身、确定性**：聚合格式里字段归组(4.2)与模型行(4.1)
+    两处要算出同一个 key，否则字段会被孤立丢掉。
+    """
+    snaked = _snake(code)
+    if snaked and snaked[0].isalpha():
+        return snaked
+    return "c_" + hashlib.md5(str(code).encode("utf-8")).hexdigest()[:7]
 
 
 def parse(section_text: str) -> Tuple[List[dict], List[str]]:
@@ -47,9 +64,10 @@ def parse(section_text: str) -> Tuple[List[dict], List[str]]:
             errors.append(f"模型 '{name}'：未能找到模型编码（标题或表格均无）")
             continue
 
-        if not re.match(r'^[a-zA-Z][a-zA-Z0-9_]*$', code):
-            errors.append(f"模型 '{name}'：编码 '{code}' 不合规")
-            continue
+        if not _MODEL_CODE_RE.match(code):
+            fixed = _sanitize_model_code(code)
+            errors.append(f"模型 '{name}'：编码 '{code}' 含非法字符，已规范化为 '{fixed}'")
+            code = fixed
         if code in seen_codes:
             errors.append(f"模型编码 '{code}' 重复，已跳过")
             continue
@@ -120,6 +138,9 @@ def _parse_aggregate_tables(section_text: str) -> Tuple[List[dict], List[str]]:
             model_code = (row.get("模型编码") or "").strip().lower()
             if not model_code:
                 continue
+            # 跟模型行用同一个确定性规范化，保证字段挂到规范化后的模型 code 上、不被孤立
+            if not _MODEL_CODE_RE.match(model_code):
+                model_code = _sanitize_model_code(model_code)
             field_rows_by_model.setdefault(model_code, []).append(row)
     else:
         # 格式 B：按 #### 子节分块，字段归属来自子节内的 "模型编码：xxx" 元数据
@@ -151,9 +172,10 @@ def _parse_aggregate_tables(section_text: str) -> Tuple[List[dict], List[str]]:
         name = (row.get("模型名称") or code).strip()
         if not code:
             continue
-        if not re.match(r'^[a-zA-Z][a-zA-Z0-9_]*$', code):
-            errors.append(f"模型 '{name}'：编码 '{code}' 不合规")
-            continue
+        if not _MODEL_CODE_RE.match(code):
+            fixed = _sanitize_model_code(code)
+            errors.append(f"模型 '{name}'：编码 '{code}' 含非法字符，已规范化为 '{fixed}'")
+            code = fixed
         if code in seen_codes:
             errors.append(f"模型编码 '{code}' 重复，已跳过")
             continue

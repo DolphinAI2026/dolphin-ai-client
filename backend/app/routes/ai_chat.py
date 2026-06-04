@@ -108,6 +108,8 @@ def _message_to_dict(m: AIChatMessage) -> dict:
         "session_id": m.session_id,
         "role": m.role,
         "content": m.content,
+        # 从 extra_meta 透出 run_id，让刷新后的历史 assistant 消息也能挂「查看本次 trace」
+        "run_id": (m.extra_meta or {}).get("run_id"),
         "extra_meta": m.extra_meta or {},
         "created_at": m.created_at.isoformat() if m.created_at else None,
     }

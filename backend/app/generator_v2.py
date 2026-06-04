@@ -6,6 +6,7 @@
   Phase 2  创建数据模型
   Phase 3  创建表单 + 绑定字典
   Phase 4  配置权限
+  Phase 5  创建审批流程（可选，非核心，失败不阻断）
 """
 from __future__ import annotations
 
@@ -20,6 +21,7 @@ import httpx
 
 from app.apaas_client import APaaSClient
 from app.config import settings
+from app.workflow_phase import create_workflows
 
 logger = logging.getLogger(__name__)
 
@@ -1554,6 +1556,14 @@ async def run_complete_generation(
             yield {"stage": 4, "status": "done", "step": f"权限配置跳过: {e}"}
     else:
         yield {"stage": 4, "status": "done", "step": "无权限配置"}
+
+    # ==================================================================
+    # Phase 5: 审批流程（可选；非核心，失败不阻断 —— create_workflows 自带逐条容错）
+    # ==================================================================
+    async for _wf_ev in create_workflows(
+        client, app_id, data.get("workflows", []), form_results, role_code_map
+    ):
+        yield _wf_ev
 
     # ==================================================================
     # 完成

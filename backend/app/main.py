@@ -10,6 +10,7 @@ from app.config import settings, APP_TITLE, APP_DESCRIPTION, APP_VERSION
 from app.database import init_db
 from app.routes import (
     admin_mcp,
+    agent_observability,
     agent_prompts,
     agents_config,
     ai_chat,
@@ -152,6 +153,7 @@ app.include_router(auth.router, prefix="/api")
 app.include_router(conversations.router, prefix="/api")
 app.include_router(chat.router, prefix="/api")
 app.include_router(ai_chat.router, prefix="/api")
+app.include_router(agent_observability.router, prefix="/api")
 app.include_router(applications.router, prefix="/api")
 app.include_router(config_chat_sessions.router, prefix="/api")  # 配置助手会话持久化 (2026-05-24)
 app.include_router(apaas.router, prefix="/api")

@@ -57,6 +57,7 @@ async def init_db():
     # SPEC 版本快照 + markdown 缓存（Y SPEC 版本管理）
     import app.models.spec_applied_version  # noqa: F401
     import app.models.spec_document  # noqa: F401
+    import app.models.agent_observability  # noqa: F401  — Agent 可观测底座
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
         await _migrate_legacy_builder_specs(conn, inspect)

@@ -72,7 +72,12 @@ def split_sections(text: str) -> Dict[str, str]:
 
     for line in lines:
         m = _SECTION_HEADER_RE.match(line)
-        if m:
+        # 审批流程子章节 `### 名称（关联表单：xxx）` 不是章节边界：它没有 `4.1` 这种数字
+        # 前缀，会被 _SECTION_HEADER_RE 误当成主章节、把「七、审批流程」内容切断成空。
+        # 跟 _SECTION_HEADER_RE 里 (?!\d+\.\d) 排除 `### 4.1` 同理，这里排除工作流子章节。
+        # 守卫是文档全局的（不限「七」章节内），但命中条件极具体（固定串 `关联表单：`），
+        # 其他章节标题不会有这串，不会误伤；万一出现也只是被当作上一章内容、非新边界。
+        if m and not _WORKFLOW_SUBSECTION_RE.match(line):
             # 保存上一章节
             if current_key:
                 sections[current_key] = "\n".join(current_lines).strip()

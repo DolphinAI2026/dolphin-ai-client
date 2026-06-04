@@ -18,6 +18,7 @@ from app.doc_parsers import dicts as dicts_parser
 from app.doc_parsers import models as models_parser
 from app.doc_parsers import forms as forms_parser
 from app.doc_parsers import permissions as permissions_parser
+from app.doc_parsers import workflows as workflows_parser
 
 logger = logging.getLogger(__name__)
 
@@ -134,6 +135,11 @@ def parse(text: str) -> ParseResult:
         result.errors.append('缺少"六、权限配置"章节')
         result.failed_modules.add("permissions")
 
+    # ── 7. 审批流程（可选章节）──
+    workflows, workflow_errors = workflows_parser.parse(sections.get("workflows", ""))
+    if workflow_errors:
+        result.errors.extend(workflow_errors)
+
     # ── 组装 config ───────────────────────────────────────────
     result.config = {
         "appName": app_name,
@@ -142,7 +148,7 @@ def parse(text: str) -> ParseResult:
         "dicts": dicts,
         "models": models,
         "forms": forms,
-        "workflows": [],
+        "workflows": workflows,
         "permissions": permissions,
     }
 

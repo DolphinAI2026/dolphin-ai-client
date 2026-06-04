@@ -41,6 +41,7 @@ from app.models import (
     LLMConfig,
 )
 from app.ai_chat.tools import TOOL_SCHEMAS, execute_tool, get_all_tool_schemas
+from app.observability import recorder
 
 logger = logging.getLogger(__name__)
 
@@ -92,7 +93,7 @@ _FORMAT_CONSTRAINTS = f"""⚠️ 你产出的 markdown 会被 aPaaS Builder 的 
 - 一次回复里可以连续调多个工具（并行）
 - 不要凭空捏造，所有结论都基于读到的材料 + 用户确认的边界
 - 反问要少而精，只问真正影响设计的关键点
-- 输出 md 时严格按上面 6 个章节顺序，章节不能跳过；缺信息留空单元格即可，不要写"未定义"、"待定"占位文字
+- 输出 md 时严格按上面 6 个必填章节顺序，必填章节不能跳过（第 7 章「审批流程」可选，有审批需求才追加在最后）；缺信息留空单元格即可，不要写"未定义"、"待定"占位文字
 - 模型/表单/字段命名：英文 snake_case + 业务前缀（避免 name/status 这种通用字段直接用，要 ncr_status / supplier_name）
 - **应用编码（appCode）必须满足**：只允许小写字母 / 数字 / 中划线 `-`，以小写字母开头，长度 ≤ 17 字符（正则 `^[a-z][a-z0-9-]{0,16}$`）。**禁止下划线**。如果业务名很长，要主动缩写（如"电力设备管理系统" → `power-equip-mgmt` 或 `power-equip` 而不是 `power_equipment_management`）
 - 数据模型只描述"字段在数据库怎么存"，不要在数据模型表里写字典/关联/组件，那些都在「五、表单定义」里
@@ -113,7 +114,7 @@ SYSTEM_PROMPT_UNIFIED = f"""你是 aPaaS 平台的 AI 全栈助手 — 既能产
 5. **批量**列出 3-5 个澄清问题，每个问题写明"如果选 X / 选 Y 会影响什么"
 6. 产出设计文档分两种情况：
    - **附件本身已经是一份结构化设计文档**（含数据模型 / 表单 / 字段表格——哪怕几十上百个模型、几十万字）→ 直接 **create_artifact_from_attachment(filename=附件名)** 把整篇**原样**转成设计文档 artifact。⚠️ 千万**不要** read_attachment 读一遍再 write_artifact 重抄一遍：read_attachment 在 3 万字处截断、write_artifact 又受输出长度限，整篇会被你无意识摘要/漏掉 → 只建出残缺应用。read_attachment 只用于第 1-4 步"理解 + 汇总"。
-   - **附件只是粗略需求 / PRD 散文 / 表格数据** → 需求清晰后 write_artifact 一次写完整篇 6 章 markdown 设计文档（应用信息 / 角色 / 字典 / 模型 / 表单 / 权限）
+   - **附件只是粗略需求 / PRD 散文 / 表格数据** → 需求清晰后 write_artifact 一次写完整篇 6 章 markdown 设计文档（应用信息 / 角色 / 字典 / 模型 / 表单 / 权限，有审批需求再加可选的「七、审批流程」）
 
 ### 姿态 B：用户没材料只有想法 → 对话挖需求 → 产文档
 1. 跟着用户节奏问，每轮最多 1-2 个关键问题（用 ask_clarifying_question）
@@ -165,7 +166,7 @@ SYSTEM_PROMPT_UNIFIED = f"""你是 aPaaS 平台的 AI 全栈助手 — 既能产
 
 ### Phase 1 · 设计 + 自检 (agent 自主跑完不停顿)
 1. ask_clarifying_question × 1-2 轮 (只问关键边界 + 角色)
-2. **write_artifact 一次写完整篇 6 章 md** (应用信息 / 角色 / 字典 / 模型 / 表单 / 权限) → 返回 `artifact_id`
+2. **write_artifact 一次写完整篇 6 章 md** (应用信息 / 角色 / 字典 / 模型 / 表单 / 权限，有审批需求再加可选的「七、审批流程」) → 返回 `artifact_id`
 3. **validate_builder_doc(artifact_id=<上一步的 id>)** ← schema 强制 artifact_id 必填. 拿 score
 4. **STOP — 给用户 1-3 句总结 + 主动 hint**:
    - "✅ 设计文档已生成 (右侧可查看)，校验通过 X/100 分。**请 review 一下文档**，没问题告诉我「开始创建」/「部署」/「OK」，我就一条龙跑完到上线；如果要改字段/角色/权限，直接告诉我哪里要改。"
@@ -187,12 +188,13 @@ SYSTEM_PROMPT_UNIFIED = f"""你是 aPaaS 平台的 AI 全栈助手 — 既能产
   **但如果用户上传的附件本身就是设计文档, 用 create_artifact_from_attachment 让服务端整篇原样收录, 别让 LLM 重抄** (省 token + 防超大文档被截断漏内容)
 - validate_builder_doc / generate_app_from_doc 的 md_content 参数 **2026-05-23/24 已删除** —
   schema 强制 artifact_id 必填. 漏传 → MISSING_ARTIFACT_ID; 没 fallback
-- 实在改 md → 重新 write_artifact (同名 filename 自动 version++) 拿新 artifact_id, 后续工具用新 id
+- **小改 md（改个字段/编码/某段）→ edit_artifact**：先 read_artifact 拿精确原文，再 old_string→new_string 精确替换，**不要整篇重写**（省 token + 避免大文档被截断漏内容）。同名自动 version++。
+- 整篇推倒重来 / 首版生成才用 write_artifact。改完后续工具自动取本会话最新 .md（一般不用手填 artifact_id）
 - update_app_from_doc 暂未强制 schema, 仍然接受 md_content (评估中)
 
 ### 关键反模式（不要做）
 - ❌ **Phase 1 走完 submit 后立刻 generate_app_from_doc** — 必须先停下让用户 review SPEC！跳过审核 = 错了部署后改回来贵 10 倍。
-- ❌ **Phase 1 末用户审核完, 不要再 write_artifact 重写同一份 md** — write_artifact 已经把 doc 写到右栏 artifact, 不要重复! 用户要改字段 → update_app_from_doc (Phase 2 工具), 不是 write_artifact 重写整篇.
+- ❌ **不要为了改一处就 write_artifact 重写整篇 md** — 要改 doc 里某个字段/编码/小段 → edit_artifact 精确改那一处; 应用已创建后要改的是平台配置 → update_app_from_doc (Phase 2 工具)。
 - ❌ **Phase 2 内 generate_app_from_doc 完成后停下等用户** — 用户已经在 Phase 1 末说"创建/部署"，意思是要"真能用"，不是"建个 draft"。Phase 2 内继续 deploy + publish 直到上线。
 - ❌ **Phase 2 内每个工具调完都问"要继续吗 / 是否部署"** — 用户在 Phase 1 末已确认，Phase 2 自主推进。
 - ❌ **遇到 appCode 冲突就改 app_code / 加 -v1 -v2 后缀重试** — appCode = 应用身份, 同 code 就是同一个应用！backend 已自动"同 app_code 复用同一应用 + 增量合并"(2026-05-28)，你**保持原 app_code 重试即可**，千万别加 -v1/-v2 后缀——那会建出一堆残缺重复应用，乱套。同理一份大文档**一次性 generate 整篇**，不要自己拆成多批分别 generate（拆批就会撞 appCode）。
@@ -246,11 +248,11 @@ SYSTEM_PROMPT_COWORK = f"""你是 aPaaS 平台的 AI 协作分析师，帮用户
 - **同时**列出 3-5 个澄清问题（**批量**问，不是一句一句挤），每个问题写明"如果选 X / 如果选 Y 会影响什么"
 
 ## 第三步：用户回答后产出第一版 md
-- 立刻 write_artifact 写出第一版完整 6 章设计文档（应用信息 / 角色 / 字典 / 模型 / 表单 / 权限）
+- 立刻 write_artifact 写出第一版完整 6 章设计文档（应用信息 / 角色 / 字典 / 模型 / 表单 / 权限，有审批需求再加可选的「七、审批流程」）
 - 不要分章节交付，一次写完整篇
 
 ## 第四步：迭代修订
-- 用户继续提修订意见时，read_attachment 拿到当前 artifact，做精准修改后 write_artifact 同名覆盖
+- 用户提小修订（改字段/编码/某段）时，read_artifact 拿当前 artifact 原文，再 edit_artifact 精确替换那一处，别整篇 write_artifact 重发；整篇推倒重来才 write_artifact 同名覆盖
 - 涉及到字段命名、模型关联、权限矩阵这种细节，主动用 run_python 验证一致性
 
 {_FORMAT_CONSTRAINTS}
@@ -430,9 +432,10 @@ async def _call_llm_stream(
 
     - {"type": "content_delta", "text": "..."}
     - {"type": "tool_call_delta", "index": int, "id": str|None, "name": str|None, "arguments": str|None}
-    - {"type": "done", "message": {content, tool_calls}}
+    - {"type": "done", "message": {content, tool_calls}, "usage": dict|None}
 
-    上层 run_agent 拼装好 final message 之后再走持久化。
+    usage 来自 OpenAI 兼容网关的 include_usage chunk（prompt_tokens/completion_tokens/…），
+    网关不支持时为 None。上层 run_agent 拼装好 final message 之后再走持久化。
     """
     payload = {
         "model": cfg.model,
@@ -442,11 +445,14 @@ async def _call_llm_stream(
         "temperature": cfg.temperature,
         "max_tokens": cfg.max_tokens,
         "stream": True,
+        # 让 OpenAI 兼容网关在 [DONE] 前回一个带 usage 的 chunk（token 必采）
+        "stream_options": {"include_usage": True},
     }
     _apply_provider_payload_compat(cfg, payload)
     last_error: Exception | None = None
     for attempt in range(LLM_RETRY_ATTEMPTS):
         accumulated_content = ""
+        usage_data: Optional[dict] = None
         tool_buf: dict[int, dict] = {}
         emitted_anything = False
         try:
@@ -479,6 +485,9 @@ async def _call_llm_stream(
                             chunk = json.loads(data)
                         except Exception:
                             continue
+                        # usage chunk：choices 为空、带 usage（include_usage 开启后 [DONE] 前到达）
+                        if chunk.get("usage"):
+                            usage_data = chunk["usage"]
                         choices = chunk.get("choices") or []
                         if not choices:
                             continue
@@ -517,6 +526,7 @@ async def _call_llm_stream(
                     "content": accumulated_content,
                     "tool_calls": final_tool_calls if final_tool_calls else None,
                 },
+                "usage": usage_data,
             }
             return
         except Exception as exc:
@@ -562,7 +572,7 @@ async def _call_llm_stream_with_fallback(
                 "name": fn.get("name"),
                 "arguments_so_far": fn.get("arguments") or "",
             }
-        yield {"type": "done", "message": message}
+        yield {"type": "done", "message": message, "usage": None}
 
 
 # ─────────────────────────── 构建 agent 输入 ───────────────────────────
@@ -672,7 +682,39 @@ async def run_agent(
     current_user_message: str,
     abort_event: asyncio.Event,
 ) -> AsyncIterator[dict]:
-    """主 agent loop。yield SSE 事件给 routes 转发到前端。"""
+    """对外入口：包一层 run 生命周期（可观测），把事件原样透传。
+
+    用 try/finally 保证 end_run 在所有正常退出点 + SSE 客户端中途断开
+    （GeneratorExit）时都恰好触发一次。recorder 自身吞异常，这里不会反噬主流程。
+    """
+    holder: dict = {"run_id": None, "status": "error", "error": None}
+    try:
+        async for event in _run_agent_inner(
+            db, session, current_user_message, abort_event, holder
+        ):
+            yield event
+    finally:
+        if holder["run_id"]:
+            # shield：SSE 客户端断开会往本 task 抛 CancelledError（非 Exception 子类，
+            # recorder 自身的 try/except 拦不住）。不 shield 的话 end_run 可能在 commit
+            # 中途被取消，run 永远卡在 "running"。与本文件主流程 commit 用 shield 同理。
+            await asyncio.shield(
+                recorder.end_run(
+                    holder["run_id"], status=holder["status"], error=holder["error"]
+                )
+            )
+
+
+async def _run_agent_inner(
+    db: AsyncSession,
+    session: AIChatSession,
+    current_user_message: str,
+    abort_event: asyncio.Event,
+    holder: dict,
+) -> AsyncIterator[dict]:
+    """主 agent loop body。run 生命周期由外层 run_agent wrapper 管。
+    holder = {"run_id": str|None, "status": "running"/"success"/"error", "error": str|None}
+    """
     try:
         cfg = await _resolve_llm_config(db, session)
     except RuntimeError as e:
@@ -682,11 +724,23 @@ async def run_agent(
 
     yield _sse("thinking", {"text": f"使用模型：{cfg.model}"})
 
+    # ── 可观测：开 run（旁路；config 解析失败的早退发生在此之前，不记） ──
+    holder["run_id"] = await recorder.start_run(
+        agent_type="ai_builder",
+        tenant_id=getattr(session, "tenant_id", None),
+        user_id=getattr(session, "user_id", None),
+        session_id=session.id,
+        model=cfg.model,
+    )
+    yield _sse("run_started", {"run_id": holder["run_id"]})
+    _obs_seq = 0  # run 内 step 单调递增序号
+
     try:
         messages = await _build_initial_messages(db, session, current_user_message)
     except Exception as e:
-        yield _sse("error", {"error": f"构建上下文失败：{e}"})
-        yield _sse("done", {"ok": False})
+        holder["error"] = f"构建上下文失败：{e}"
+        yield _sse("error", {"error": holder["error"]})
+        yield _sse("done", {"ok": False, "run_id": holder["run_id"]})
         return
 
     asked_user = False  # 一旦 ask_user，loop 提前退出
@@ -697,8 +751,9 @@ async def run_agent(
 
     for turn in range(MAX_TURNS):
         if abort_event.is_set():
+            holder["status"] = "aborted"
             yield _sse("aborted", {"turn": turn})
-            yield _sse("done", {"ok": False, "aborted": True})
+            yield _sse("done", {"ok": False, "aborted": True, "run_id": holder["run_id"]})
             return
 
         # 流式调用 LLM，逐 token 把 content_delta 推给前端
@@ -752,10 +807,18 @@ async def run_agent(
                     if evt is not None:
                         yield evt
                     assistant_msg = chunk["message"]
+                    _obs_usage = chunk.get("usage") or {}
+                    _obs_seq += 1
+                    await recorder.record_step(
+                        holder["run_id"], step_type="llm", seq=_obs_seq,
+                        prompt_tokens=_obs_usage.get("prompt_tokens"),
+                        completion_tokens=_obs_usage.get("completion_tokens"),
+                    )
             if assistant_msg is None:
                 # 流被外部 abort 了
+                holder["status"] = "aborted"
                 yield _sse("aborted", {"turn": turn})
-                yield _sse("done", {"ok": False, "aborted": True})
+                yield _sse("done", {"ok": False, "aborted": True, "run_id": holder["run_id"]})
                 return
         except httpx.HTTPStatusError as e:
             # 流式 response 必须 aread 才能拿 .text；老代码直接 .text 会被
@@ -765,12 +828,14 @@ async def run_agent(
                 detail = e.response.text[:300]
             except Exception:
                 detail = "(响应体读取失败)"
-            yield _sse("error", {"error": f"LLM 调用失败 {e.response.status_code}: {detail}"})
-            yield _sse("done", {"ok": False})
+            holder["error"] = f"LLM 调用失败 {e.response.status_code}: {detail}"
+            yield _sse("error", {"error": holder["error"]})
+            yield _sse("done", {"ok": False, "run_id": holder["run_id"]})
             return
         except Exception as e:
-            yield _sse("error", {"error": f"LLM 调用失败：{_format_llm_error(e)}"})
-            yield _sse("done", {"ok": False})
+            holder["error"] = f"LLM 调用失败：{_format_llm_error(e)}"
+            yield _sse("error", {"error": holder["error"]})
+            yield _sse("done", {"ok": False, "run_id": holder["run_id"]})
             return
 
         tool_calls = assistant_msg.get("tool_calls") or []
@@ -823,6 +888,13 @@ async def run_agent(
                             if evt is not None:
                                 yield evt
                             retry_assistant = chunk["message"]
+                            _obs_ru = chunk.get("usage") or {}
+                            _obs_seq += 1
+                            await recorder.record_step(
+                                holder["run_id"], step_type="llm", seq=_obs_seq,
+                                prompt_tokens=_obs_ru.get("prompt_tokens"),
+                                completion_tokens=_obs_ru.get("completion_tokens"),
+                            )
                         # 忽略 tool_call_delta — system 已经禁止工具调用，万一 LLM 不听话也不执行
                 except Exception as e:
                     logger.warning("final-summary retry failed: %s", e)
@@ -841,6 +913,7 @@ async def run_agent(
                     session_id=session.id,
                     role="assistant",
                     content=content,
+                    extra_meta={"run_id": holder["run_id"]},
                 )
                 db.add(asst_db)
                 await asyncio.shield(db.commit())
@@ -850,9 +923,11 @@ async def run_agent(
                     "session_id": asst_db.session_id,
                     "role": "assistant",
                     "content": content,
+                    "run_id": holder["run_id"],
                     "created_at": asst_db.created_at.isoformat(),
                 })
-            yield _sse("done", {"ok": True})
+            holder["status"] = "success"
+            yield _sse("done", {"ok": True, "run_id": holder["run_id"]})
             return
 
         # 有工具调用：每个执行一遍
@@ -878,8 +953,9 @@ async def run_agent(
 
         for tc in tool_calls:
             if abort_event.is_set():
+                holder["status"] = "aborted"
                 yield _sse("aborted", {"turn": turn})
-                yield _sse("done", {"ok": False, "aborted": True})
+                yield _sse("done", {"ok": False, "aborted": True, "run_id": holder["run_id"]})
                 return
 
             tc_id = tc.get("id", "")
@@ -940,6 +1016,14 @@ async def run_agent(
                 "duration_ms": tc_db.duration_ms,
             })
 
+            # ── 可观测：双写 tool step（AIChatToolCall 已写，这里给统一底座再记一笔） ──
+            _obs_seq += 1
+            await recorder.record_step(
+                holder["run_id"], step_type="tool", seq=_obs_seq,
+                tool_name=tool_name, args=args, result_text=result_text,
+                status=tc_db.status, duration_ms=tc_db.duration_ms,
+            )
+
             # 特殊：write_artifact 成功 → 单独通知前端刷新右栏
             # 2026-05-21 扩展：update_app_from_doc / export_apaas_app_design_doc 也会
             # 被 dispatcher 拦截把 md_content 落 artifact（见 tools._persist_spec_artifact），
@@ -947,7 +1031,7 @@ async def run_agent(
             # 2026-05-24: generate_app_from_doc 改强制 artifact_id 后, 不再产新 artifact
             # (用户 write_artifact 已经落表), 从列表去掉.
             _emits_artifact = (
-                (tool_name == "write_artifact" and tc_db.status == "success")
+                (tool_name in ("write_artifact", "edit_artifact") and tc_db.status == "success")
                 or (tool_name in (
                     "update_app_from_doc",
                     "export_apaas_app_design_doc",
@@ -958,7 +1042,7 @@ async def run_agent(
                 # write_artifact: filename 在 args；generate/update_app_from_doc:
                 # 不知道 dispatcher 落 artifact 用了什么 filename，直接拉本 session
                 # 最近落的那条
-                if tool_name == "write_artifact":
+                if tool_name in ("write_artifact", "edit_artifact"):
                     res = await db.execute(
                         select(AIChatArtifact)
                         .where(
@@ -1008,9 +1092,11 @@ async def run_agent(
 
         if asked_user:
             # 提了问题就停 loop，等下一轮 user send
-            yield _sse("done", {"ok": True, "awaiting_user": True})
+            holder["status"] = "success"
+            yield _sse("done", {"ok": True, "awaiting_user": True, "run_id": holder["run_id"]})
             return
 
     # 超过 MAX_TURNS
-    yield _sse("error", {"error": f"达到最大循环次数 {MAX_TURNS}，已停止"})
-    yield _sse("done", {"ok": False})
+    holder["error"] = f"达到最大循环次数 {MAX_TURNS}，已停止"
+    yield _sse("error", {"error": holder["error"]})
+    yield _sse("done", {"ok": False, "run_id": holder["run_id"]})

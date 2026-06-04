@@ -46,6 +46,14 @@
         </div>
         <div class="header-actions">
           <button
+            v-if="currentSession"
+            class="trace-entry-btn"
+            title="查看本次会话的 Agent 活动 / Trace"
+            @click="openSessionTrace"
+          >
+            Agent 活动
+          </button>
+          <button
             v-if="artifacts.length > 0"
             class="artifacts-toggle"
             :class="{ active: artifactsPanelOpen }"
@@ -62,6 +70,7 @@
         :typing="isSending && !lastEventIsAsk && !streamingText"
         :tool-grouping="true"
         @answer-ask="onAgentAnswerAsk"
+        @open-trace="onOpenTrace"
       >
         <template #artifact="{ artifact }">
           <div class="artifact-card" @click="openArtifactInPanel(artifact.raw)">
@@ -275,6 +284,11 @@
     :loading="chooseDialogLoading"
     @confirm="onChooseDialogConfirm"
   />
+  <AgentRunTraceDrawer
+    v-model="traceDrawerVisible"
+    :session-id="currentSession?.id ?? null"
+    :prefer-run-id="tracePreferRunId"
+  />
   </WorkbenchShell>
 </template>
 
@@ -289,6 +303,7 @@ import { useThemeStore } from '@/stores/theme'
 import WorkbenchShell from '@/components/WorkbenchShell.vue'
 import SessionSidebar, { type SessionItem, type SessionTab, type NewSessionOption } from '@/components/common/SessionSidebar.vue'
 import AgentConversation from '@/components/common/AgentConversation.vue'
+import AgentRunTraceDrawer from '@/components/common/AgentRunTraceDrawer.vue'
 import ChooseAppTargetDialog from '@/components/ChooseAppTargetDialog.vue'
 import type { AgentMessage } from '@/components/common/agent-conversation/types'
 import { ElMessage, ElMessageBox } from 'element-plus'
@@ -312,6 +327,9 @@ const router = useRouter()
 const sessions = ref<AIChatSession[]>([])
 const currentSession = ref<AIChatSession | null>(null)
 const currentSessionId = computed(() => currentSession.value?.id ?? null)
+const currentRunId = ref<string | null>(null)       // 最近一次实时 run（会话级入口默认选中）
+const traceDrawerVisible = ref(false)
+const tracePreferRunId = ref<string | null>(null)    // 抽屉打开时希望预选的 run
 
 // chat / cowork mode 已合并 — 单一模式入口（agent 看附件情况自动切流程）
 // 保留 SessionFilter 类型只是为了下面 onCreateSession 签名兼容；实际不再筛选。
@@ -1059,7 +1077,12 @@ const agentMessages = computed<AgentMessage[]>(() => {
       })
     } else if (item.kind === 'msg' && item.msg.role === 'assistant') {
       if (item.msg.content) {
-        out.push({ id: 'm' + item.msg.id, kind: 'assistant', content: item.msg.content })
+        out.push({
+          id: 'm' + item.msg.id,
+          kind: 'assistant',
+          content: item.msg.content,
+          meta: (item.msg as any).run_id ? { run_id: (item.msg as any).run_id } : undefined,
+        })
       }
     } else if (item.kind === 'tool') {
       out.push({ id: 't' + item.tool.id, kind: 'tool', tool: mapTool(item.tool) })
@@ -1108,6 +1131,19 @@ const agentMessages = computed<AgentMessage[]>(() => {
 
 function onAgentAnswerAsk(option: string) {
   onAnswerAsk(option)
+}
+
+// 每条回复脚注点「查看本次 trace」
+function onOpenTrace(message: any) {
+  const rid = message?.meta?.run_id
+  if (!rid) return
+  tracePreferRunId.value = rid
+  traceDrawerVisible.value = true
+}
+// 会话头部「Agent 活动」入口（默认选最近一次 run）
+function openSessionTrace() {
+  tracePreferRunId.value = currentRunId.value
+  traceDrawerVisible.value = true
 }
 
 const lastEventIsAsk = computed(() => {
@@ -1210,6 +1246,7 @@ async function loadSession(id: number) {
     pendingFinalMessage.value = null
     stopDrain()
     isSending.value = false
+    currentRunId.value = null  // 切会话清掉上个会话的 run 提示，避免「Agent 活动」带过去的陈旧 preferRunId
   }
   try {
     const data = await aiChatApi.getSession(id)
@@ -1434,6 +1471,10 @@ function handleSseEvent(eventName: string, data: any) {
   switch (eventName) {
     case 'user_message':
       messages.value.push(data)
+      break
+    case 'run_started':
+      // agent loop 起跑：记下本次实时 run_id（会话级 trace 入口默认选中它）
+      currentRunId.value = data.run_id || null
       break
     case 'thinking':
       // "使用模型 xxx" 之类元事件
@@ -2036,6 +2077,18 @@ onMounted(async () => {
   font-size: 11px;
   font-family: ui-monospace, Menlo, monospace;
 }
+.trace-entry-btn {
+  appearance: none;
+  background: var(--ac-input);
+  border: 1px solid var(--ac-border-strong);
+  color: var(--ac-text-mute);
+  padding: 5px 12px;
+  border-radius: 6px;
+  font-size: 12.5px;
+  cursor: pointer;
+  transition: all 0.15s;
+}
+.trace-entry-btn:hover { color: var(--ac-text); border-color: var(--ac-border-strong); }
 
 /* 输入框底部工具栏（模型选择 + 提示） */
 .input-foot {
