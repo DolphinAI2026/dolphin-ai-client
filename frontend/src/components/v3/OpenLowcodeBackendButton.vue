@@ -40,12 +40,18 @@ async function onClick() {
 </script>
 
 <style scoped>
+/* 跟随全局主题 token（design-v3-tokens.css 亮/暗双版本），对齐面板里 .fbp-btn-ghost 等按钮。
+   不用浅色硬 fallback —— 之前 --t-* 那套在本 app 没定义，暗色下浅底浅字几乎看不见。 */
 .open-lowcode-btn {
   display: inline-flex; align-items: center; gap: 6px;
-  padding: 5px 12px; font-size: 12.5px; border-radius: 6px;
-  border: 1px solid var(--t-border-soft, #d1d5db); background: var(--t-bg-soft, #f3f4f6);
-  color: var(--t-text-primary, #1f2937); cursor: pointer;
+  padding: 5px 12px; font-size: 12px; border-radius: 6px;
+  border: 1px solid var(--line); background: var(--surface-2);
+  color: var(--text-2); cursor: pointer;
+  font-family: inherit; white-space: nowrap;
+  transition: color .15s, background .15s, border-color .15s;
 }
-.open-lowcode-btn:hover:not(:disabled) { background: var(--t-bg-input, #e5e7eb); }
+.open-lowcode-btn:hover:not(:disabled) {
+  color: var(--text); border-color: var(--text-3); background: var(--surface);
+}
 .open-lowcode-btn:disabled { opacity: .6; cursor: default; }
 </style>
