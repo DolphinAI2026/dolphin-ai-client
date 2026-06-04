@@ -7,6 +7,8 @@
 4. migrated_session_id 回写（幂等标记）
 5. app_id 正确传递
 6. 第二次运行幂等（不重复插入）
+7. tool_call 字段保真（tool_name / status / result_text / duration_ms）
+8. 增量迁移：第一次迁完后新增的 config 会话在第二次调用时被迁移
 """
 import pytest
 from sqlalchemy import text
@@ -48,6 +50,14 @@ async def test_migration_copies_and_is_idempotent():
         marker = (await conn.execute(text("SELECT migrated_session_id FROM config_chat_sessions WHERE id=1"))).scalar()
         new_app_id = (await conn.execute(text("SELECT app_id FROM ai_chat_sessions LIMIT 1"))).scalar()
         new_extra = (await conn.execute(text("SELECT extra_meta FROM ai_chat_messages WHERE role='assistant'"))).scalar()
+        # tool_call 字段保真验证
+        tc_row = (await conn.execute(text(
+            "SELECT tool_name, status, result_text, duration_ms FROM ai_chat_tool_calls LIMIT 1"
+        ))).fetchone()
+        assert tc_row[0] == "update_apaas_model_field"
+        assert tc_row[1] == "success"   # ok=true → success
+        assert tc_row[2] == "ok"        # result_text = summary
+        assert tc_row[3] == 120
         await _migrate_config_chat_to_ai_chat(conn)  # second run — idempotent
         n2 = (await conn.execute(text("SELECT COUNT(*) FROM ai_chat_sessions"))).scalar()
 
@@ -56,3 +66,28 @@ async def test_migration_copies_and_is_idempotent():
     assert new_app_id == 42
     assert new_extra and "电话改必填" in new_extra  # change_plan/actions_summary folded into extra_meta
     assert n2 == 1  # idempotent
+
+
+@pytest.mark.asyncio
+async def test_incremental_migration_picks_up_new_sessions():
+    engine = create_async_engine(
+        "sqlite+aiosqlite:///:memory:",
+        connect_args={"check_same_thread": False}, poolclass=StaticPool,
+    )
+    async with engine.begin() as conn:
+        await conn.run_sync(Base.metadata.create_all)
+        await conn.execute(text(
+            "INSERT INTO config_chat_sessions(id,app_id,tenant_id,user_id,title,created_at,updated_at) "
+            "VALUES (1,42,7,3,'s1','2026-06-01 00:00:00','2026-06-01 00:00:00')"))
+        await _migrate_config_chat_to_ai_chat(conn)
+        assert (await conn.execute(text("SELECT COUNT(*) FROM ai_chat_sessions"))).scalar() == 1
+        # 第一次迁完后又来一条新 config 会话
+        await conn.execute(text(
+            "INSERT INTO config_chat_sessions(id,app_id,tenant_id,user_id,title,created_at,updated_at) "
+            "VALUES (2,43,7,3,'s2','2026-06-02 00:00:00','2026-06-02 00:00:00')"))
+        await _migrate_config_chat_to_ai_chat(conn)
+        n = (await conn.execute(text("SELECT COUNT(*) FROM ai_chat_sessions"))).scalar()
+        migrated_markers = (await conn.execute(text(
+            "SELECT COUNT(*) FROM config_chat_sessions WHERE migrated_session_id IS NOT NULL"))).scalar()
+    assert n == 2          # 新会话被增量迁移
+    assert migrated_markers == 2

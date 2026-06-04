@@ -1,3 +1,6 @@
+import json
+import logging
+
 from sqlalchemy import inspect, text
 from sqlalchemy.ext.asyncio import create_async_engine, AsyncSession, async_sessionmaker
 from sqlalchemy.orm import DeclarativeBase
@@ -194,13 +197,11 @@ async def init_db():
         try:
             await _migrate_config_chat_to_ai_chat(conn)
         except Exception as e:
-            import logging
             logging.getLogger(__name__).warning("config_chat 迁移跳过（非致命）：%s", e)
 
 
 def _maybe_json(v):
     """解析 JSON 字段：SQLite 返回字符串，MySQL 返回 dict/list；None 原样返回。"""
-    import json
     if v is None:
         return None
     if isinstance(v, (list, dict)):
@@ -222,8 +223,6 @@ async def _migrate_config_chat_to_ai_chat(conn) -> None:
     - 回写 migrated_session_id（幂等标记），旧表保留作 archive
     - 并发护栏：MySQL GET_LOCK 抢到才跑；SQLite 无此函数 → 直接跑
     """
-    import json
-    import logging
     log = logging.getLogger(__name__)
     try:
         got = (await conn.execute(text("SELECT GET_LOCK('migrate_config_chat', 0)"))).scalar()
@@ -248,7 +247,7 @@ async def _migrate_config_chat_to_ai_chat(conn) -> None:
                         "app": app_id, "c": created_at, "up": updated_at})
                     # lastrowid is available on aiosqlite CursorResult; fall back for edge cases
                     new_sid = res.lastrowid
-                    if not new_sid:
+                    if new_sid is None and conn.dialect.name == "sqlite":
                         new_sid = (await conn.execute(text("SELECT last_insert_rowid()"))).scalar()
                     msgs = (await conn.execute(text(
                         "SELECT id, role, content, tool_trace_json, change_plan_json, actions_summary_json, created_at "
@@ -266,9 +265,12 @@ async def _migrate_config_chat_to_ai_chat(conn) -> None:
                         ), {"s": new_sid, "r": role, "c": content or "",
                             "e": json.dumps(extra, ensure_ascii=False) if extra else None, "ts": mcreated})
                         new_mid = mres.lastrowid
-                        if not new_mid:
+                        if new_mid is None and conn.dialect.name == "sqlite":
                             new_mid = (await conn.execute(text("SELECT last_insert_rowid()"))).scalar()
-                        for tc in (_maybe_json(trace) or []):
+                        parsed_trace = _maybe_json(trace)
+                        if trace is not None and parsed_trace is None:
+                            log.warning("[migrate] config message %s tool_trace_json 解析失败，tool_calls 丢弃", mid)
+                        for tc in (parsed_trace or []):
                             if not isinstance(tc, dict):
                                 continue
                             await conn.execute(text(
