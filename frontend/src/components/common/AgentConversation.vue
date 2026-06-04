@@ -78,6 +78,12 @@
                   {{ copiedId === (item.id ?? '') ? '✓' : '📋' }}
                 </button>
                 <button class="ac-fb-btn" :title="'反馈：回复不准确'" @click="$emit('feedback', item)">👎</button>
+                <button
+                  v-if="item.meta?.run_id"
+                  class="ac-fb-btn"
+                  :title="'查看本次 trace'"
+                  @click="$emit('open-trace', item)"
+                >🔍 trace</button>
               </div>
             </div>
           </div>
@@ -218,6 +224,7 @@ defineEmits<{
   (e: 'open-artifact', artifact: any, message: AgentMessage): void
   (e: 'scroll', payload: { atBottom: boolean; scrollTop: number }): void
   (e: 'feedback', message: AgentMessage): void
+  (e: 'open-trace', message: AgentMessage): void
 }>()
 
 const copiedId = ref<string | number | ''>('')

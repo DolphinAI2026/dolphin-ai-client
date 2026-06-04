@@ -17,6 +17,7 @@ export interface AIChatMessage {
   session_id: number
   role: 'user' | 'assistant' | 'system'
   content: string
+  run_id?: string | null
   extra_meta?: Record<string, any>
   created_at: string | null
 }
