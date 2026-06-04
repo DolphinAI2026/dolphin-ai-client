@@ -778,6 +778,44 @@ async def get_apaas_access_url(
     }
 
 
+@router.get("/{app_id}/editor-url")
+async def get_editor_url(
+    app_id: int,
+    ctx: Annotated[AuthContext, Depends(get_auth_context)],
+    db: Annotated[AsyncSession, Depends(get_db)],
+    menu_type: str = "",
+    menu_id: str = "",
+    form_id: str = "",
+) -> dict:
+    """返回 host-absolute 的 aPaaS 原生编辑器深链（前端 window.open 新标签页用）。
+
+    host = 应用绑定环境 PlatformEnv.base_url（去 /backend）；tid = platform_tenant_id。
+    路径由 app.apaas_editor_url.build_editor_path 构建。
+    """
+    from app.apaas_editor_url import build_editor_path
+    from app.models import PlatformEnv
+
+    app = await _load_app_and_check_view(app_id, ctx, db)
+    if not app.platform_env_id or not app.apaas_app_id:
+        return {"ok": False, "error_code": "APP_NOT_DEPLOYED", "message": "应用尚未部署到 aPaaS 平台"}
+    env = (
+        await db.execute(
+            select(PlatformEnv).where(
+                PlatformEnv.id == app.platform_env_id,
+                PlatformEnv.tenant_id == ctx.tenant_id,
+            )
+        )
+    ).scalar_one_or_none()
+    if not env or not env.base_url or not env.platform_tenant_id:
+        return {"ok": False, "error_code": "ENV_NOT_BOUND", "message": "应用未绑定有效平台环境"}
+    host = env.base_url.rstrip("/").replace("/backend", "")
+    path = build_editor_path(
+        menu_type, apaas_app_id=str(app.apaas_app_id),
+        menu_id=menu_id, form_id=form_id, tid=str(env.platform_tenant_id),
+    )
+    return {"ok": True, "url": f"{host}{path}"}
+
+
 def _custom_host_error_html(msg: str) -> str:
     safe = (msg or "").replace("<", "&lt;").replace(">", "&gt;")
     return (
