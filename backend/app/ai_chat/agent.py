@@ -390,9 +390,10 @@ async def _call_llm_stream(
 
     - {"type": "content_delta", "text": "..."}
     - {"type": "tool_call_delta", "index": int, "id": str|None, "name": str|None, "arguments": str|None}
-    - {"type": "done", "message": {content, tool_calls}}
+    - {"type": "done", "message": {content, tool_calls}, "usage": dict|None}
 
-    上层 run_agent 拼装好 final message 之后再走持久化。
+    usage 来自 OpenAI 兼容网关的 include_usage chunk（prompt_tokens/completion_tokens/…），
+    网关不支持时为 None。上层 run_agent 拼装好 final message 之后再走持久化。
     """
     payload = {
         "model": cfg.model,
