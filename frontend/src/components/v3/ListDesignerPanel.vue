@@ -29,36 +29,8 @@
     </EmptyState>
 
     <template v-else>
-      <!-- 顶部 toolbar — view/edit toggle + reload + 对话 hint -->
+      <!-- 顶部 toolbar — 刷新 + 打开低代码后台 (只读, 编辑去后台) -->
       <header class="ldp-toolbar">
-        <div class="ldp-toolbar-left">
-          <div class="ldp-mode-switch">
-            <button
-              class="ldp-mode-btn"
-              :class="{ active: viewMode === 'preview' }"
-              @click="viewMode = 'preview'"
-              title="业务视角预览"
-            >
-              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                <path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/>
-                <circle cx="12" cy="12" r="3"/>
-              </svg>
-              预览
-            </button>
-            <button
-              class="ldp-mode-btn"
-              :class="{ active: viewMode === 'edit' }"
-              @click="viewMode = 'edit'"
-              title="字段 / 列配置 编辑"
-            >
-              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                <path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/>
-                <path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/>
-              </svg>
-              编辑
-            </button>
-          </div>
-        </div>
         <div class="ldp-toolbar-right">
           <button class="ldp-tb-btn" @click="reload" :disabled="loading" title="刷新">
             <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
@@ -90,7 +62,7 @@
       <!-- =========================================================== -->
       <!-- preview mode — 业务视角真列表 -->
       <!-- =========================================================== -->
-      <div v-else-if="viewMode === 'preview'" class="ldp-pv">
+      <div v-else class="ldp-pv">
         <!-- banner -->
         <div class="ldp-pv-banner">
           <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
@@ -268,19 +240,6 @@
         </el-drawer>
       </div>
 
-      <!-- =========================================================== -->
-      <!-- edit mode — 2026-05-27 R: 删自写 503 行字段表格 UI, 改 iframe apaas 原生 -->
-      <!-- 用户手动改走 apaas 平台 (data-model-fn-config?embed=1); 业务改用对话 -->
-      <!-- =========================================================== -->
-      <ApaasEmbedIframe
-        v-else
-        :app-id="props.appId"
-        :menu-id="props.menuId"
-        :form-id="props.formId"
-        menu-type="MODEL"
-        mode="config"
-        designer-sub="list"
-      />
     </template>
   </section>
 </template>
@@ -288,22 +247,10 @@
 <script setup lang="ts">
 import { ref, computed, watch, reactive } from 'vue'
 import request from '@/utils/request'
-import ApaasEmbedIframe from './ApaasEmbedIframe.vue'
 import EmptyState from '@/components/states/EmptyState.vue'
 import OpenLowcodeBackendButton from '@/components/v3/OpenLowcodeBackendButton.vue'
 import ErrorCard from '@/components/states/ErrorCard.vue'
 import SkeletonCard from '@/components/states/SkeletonCard.vue'
-
-// 字段 → 列定义 (edit mode 用)
-interface ColumnRow {
-  field_code?: string
-  field_name?: string
-  data_type?: string
-  field_type?: string
-  width?: string
-  sort_dir?: 'asc' | 'desc' | 'none'
-  show_condition?: string
-}
 
 // preview mode 表头列
 interface PreviewColumn {
@@ -328,15 +275,10 @@ const props = defineProps<{
   formId?: string
 }>()
 
-// ---------- view mode toggle ----------
-const viewMode = ref<'preview' | 'edit'>('preview')
-
 // ---------- 共享 state ----------
-const columns = ref<ColumnRow[]>([])
 const modelCode = ref('')
 const loading = ref(false)
 const error = ref('')
-const searchKw = ref('')
 
 // ---------- preview state ----------
 const previewColumns = ref<PreviewColumn[]>([])
@@ -354,22 +296,6 @@ const isListConfigured = ref<boolean | null>(null)
 const totalRows = ref(0)
 const currentPage = ref(1)
 const pageSize = ref(10)
-
-const SORT_LABEL: Record<string, string> = {
-  asc: '升序',
-  desc: '降序',
-  none: '无',
-}
-
-// edit mode 过滤
-const filteredColumns = computed(() => {
-  const kw = searchKw.value.trim().toLowerCase()
-  if (!kw) return columns.value
-  return columns.value.filter(c =>
-    (c.field_code || '').toLowerCase().includes(kw)
-    || (c.field_name || '').toLowerCase().includes(kw),
-  )
-})
 
 // preview — 可见列 (头 7 列, 跳过 longtext)
 const visibleColumns = computed<PreviewColumn[]>(() => {
@@ -529,22 +455,6 @@ function onRowEdit(_row: Record<string, any>) {
   openApaasApp()
 }
 
-function onAddColumn() {
-  alert('添加列 — 当前请用右侧配置助手对话:\n"给当前列表加一列显XX字段"')
-}
-
-function onBatchEdit() {
-  alert('批量编辑 — 当前请用右侧配置助手对话:\n"把所有金额列加千分位格式 / 调宽到 150px"')
-}
-
-function onEditColumn(_c: ColumnRow) {
-  alert('编辑列 — 当前请用右侧配置助手对话:\n"把XX列宽度改成 200 / 加默认排序"')
-}
-
-function onDeleteColumn(_c: ColumnRow) {
-  alert('删除列 — 当前请用右侧配置助手对话:\n"列表里不要XX列了"')
-}
-
 // ----------------------------------------------------------
 // 数据加载
 // ----------------------------------------------------------
@@ -559,19 +469,6 @@ async function loadComponentsAndFields(): Promise<void> {
       ])
       if (compResp?.ok && Array.isArray(compResp.items)) {
         const items: any[] = compResp.items
-        // edit mode columns (用 components 全字段 — apaas iframe 自己用, 我们 edit mode 不显)
-        columns.value = items.map(c => {
-          const raw = c.extra || {}
-          return {
-            field_code: c.code || raw.bo_code,
-            field_name: c.name || raw.label,
-            data_type: String(raw.data_type || raw.dataType || ''),
-            field_type: String(raw.component_type || raw.componentType || ''),
-            width: 'auto',
-            sort_dir: 'none' as const,
-            show_condition: '总是显示',
-          }
-        })
         // 字段池 — 按 uuid + code 索引 (apaas list_page_view 用 fieldComponentUuid 引用)
         const pvPool: PreviewColumn[] = []
         const poolByCode = new Map<string, PreviewColumn>()
@@ -659,7 +556,6 @@ async function loadComponentsAndFields(): Promise<void> {
       || (props.menuName && raw.model_name === props.menuName)
   })
   if (!target) {
-    columns.value = []
     previewColumns.value = []
     modelCode.value = ''
     return
@@ -667,15 +563,6 @@ async function loadComponentsAndFields(): Promise<void> {
   const raw = target.extra || {}
   modelCode.value = raw.model_code || target.code || ''
   const rawFields: any[] = Array.isArray(raw.fields) ? raw.fields : []
-  columns.value = rawFields.map(f => ({
-    field_code: f.field_code,
-    field_name: f.field_name,
-    data_type: f.data_type,
-    field_type: f.field_type,
-    width: 'auto',
-    sort_dir: 'none' as const,
-    show_condition: '总是显示',
-  }))
   // preview columns from model fields
   const pvCols: PreviewColumn[] = rawFields.map(f => {
     const cls = classifyField({
@@ -741,7 +628,6 @@ async function loadBusinessData(): Promise<void> {
 
 async function reload() {
   if (!props.appId || !props.menuId) {
-    columns.value = []
     previewColumns.value = []
     allRows.value = []
     modelCode.value = ''
@@ -761,12 +647,6 @@ async function reload() {
 }
 
 watch(() => [props.appId, props.menuId, props.formId], () => reload(), { immediate: true })
-
-// 2026-05-27 S4: edit→preview 时 reload — apaas iframe 内用户可能改了
-// queryConditions/queryList, 切回预览自动拉真新配置 (避免显示旧的 mock / 空态).
-watch(viewMode, (mode, prev) => {
-  if (mode === 'preview' && prev === 'edit') reload()
-})
 </script>
 
 <style scoped>
@@ -793,44 +673,12 @@ watch(viewMode, (mode, prev) => {
   background: var(--bg);
   z-index: 5;
 }
-.ldp-toolbar-left {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-}
 .ldp-toolbar-right {
   display: flex;
   align-items: center;
   gap: var(--s-2);
+  margin-left: auto;
 }
-.ldp-mode-switch {
-  display: inline-flex;
-  border: 1px solid var(--line-strong);
-  border-radius: 6px;
-  background: var(--surface);
-  overflow: hidden;
-}
-.ldp-mode-btn {
-  display: inline-flex;
-  align-items: center;
-  gap: 5px;
-  height: 30px;
-  padding: 0 var(--s-3);
-  background: transparent;
-  border: none;
-  font-size: 12.5px;
-  font-family: inherit;
-  color: var(--text-3);
-  cursor: pointer;
-  transition: background 0.12s, color 0.12s;
-  user-select: none;
-}
-.ldp-mode-btn:hover { color: var(--text); }
-.ldp-mode-btn.active {
-  background: var(--brand-soft);
-  color: var(--brand);
-}
-.ldp-mode-btn + .ldp-mode-btn { border-left: 1px solid var(--line); }
 
 .ldp-tb-btn {
   display: inline-flex;
