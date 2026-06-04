@@ -157,7 +157,7 @@
 
 <script setup lang="ts">
 import { ref, computed, watch, onMounted, onBeforeUnmount, shallowRef, reactive, nextTick } from 'vue'
-import { Graph, type Node as X6Node, type Edge as X6Edge } from '@antv/x6'
+import { Graph } from '@antv/x6'
 import { ElMessage } from 'element-plus'
 import OpenLowcodeBackendButton from '@/components/v3/OpenLowcodeBackendButton.vue'
 import request from '@/utils/request'
@@ -221,11 +221,6 @@ const visibleProcessList = computed<ProcessItem[]>(() => {
   return matched.length ? matched : processList.value
 })
 
-const selectedNode = computed<ProcessNode | null>(() => {
-  if (!selectedNodeId.value) return null
-  return nodeStates[selectedNodeId.value] || null
-})
-
 const statsLine = computed(() => {
   const entryN = Object.values(nodeStates).filter(n => getNodeCategoryCode(n.type) === 'entry').length
   const procCount = visibleProcessList.value.length
@@ -236,11 +231,6 @@ const statsLine = computed(() => {
   return `${procLine} · ${entryN} 入口 · ${nodeCount.value} 节点 · ${edgeCount.value} 连线`
 })
 
-/** 待 P2 接 list_apaas_app_models — 当前用 placeholder. */
-const modelOptions = computed(() => [
-  { code: 'apply_form', label: '申请表 (apply_form)' },
-  { code: 'approval_log', label: '审批日志 (approval_log)' },
-])
 
 /** 用 cat code 决定 shape, 用 type/cat 决定 color. */
 function buildNodeSpec(type: NodeType, label: string, icon: string): Record<string, unknown> {
@@ -550,22 +540,6 @@ async function reloadProcessList() {
   }
 }
 
-function clearSelection() {
-  selectedNodeId.value = null
-}
-
-function onPropsChange() {
-  // 把当前选中 node 的 label 同步回 x6.
-  const g = graphRef.value
-  const sel = selectedNode.value
-  if (!g || !sel) return
-  const node = g.getCellById(sel.id) as X6Node | null
-  if (!node) return
-  const def = getNodeDef(sel.type)
-  const icon = def?.icon || ''
-  ;(node as X6Node).attr('label/text', `${icon}  ${sel.label}`)
-}
-
 function onFitContent() {
   const g = graphRef.value
   if (!g) return
@@ -591,10 +565,52 @@ interface ProcessDefinitionEdgeOut {
   label?: string
   condition?: string
 }
-interface ProcessDefinitionOut {
-  process_name: string
-  nodes: ProcessDefinitionNodeOut[]
-  edges: ProcessDefinitionEdgeOut[]
+
+/** 自动布局 — 按入度拓扑分层 (BFS) + 每层水平居中铺开, 返回 nodeId → {x,y}. */
+function computeAutoLayout(
+  nodes: { id: string }[],
+  edges: { source: string; target: string }[],
+): Map<string, { x: number; y: number }> {
+  const TOP = 40, VGAP = 110, HGAP = 200, CENTER = 320
+  const ids = nodes.map(n => n.id)
+  const idset = new Set(ids)
+  const incoming = new Map<string, number>(ids.map(id => [id, 0]))
+  const adj = new Map<string, string[]>(ids.map(id => [id, []]))
+  for (const e of edges) {
+    if (idset.has(e.source) && idset.has(e.target)) {
+      adj.get(e.source)!.push(e.target)
+      incoming.set(e.target, (incoming.get(e.target) || 0) + 1)
+    }
+  }
+  let roots = ids.filter(id => (incoming.get(id) || 0) === 0)
+  if (!roots.length && ids.length) roots = [ids[0]]
+  const level = new Map<string, number>(roots.map(r => [r, 0]))
+  const queue = [...roots]
+  while (queue.length) {
+    const u = queue.shift()!
+    const lu = level.get(u) || 0
+    for (const v of adj.get(u) || []) {
+      const nl = lu + 1
+      if (!level.has(v) || nl > (level.get(v) || 0)) { level.set(v, nl); queue.push(v) }
+    }
+  }
+  // 未被任何边连到的孤立节点 → 依次排到最底下, 不挤在一起
+  let maxL = 0; level.forEach(l => { if (l > maxL) maxL = l })
+  for (const id of ids) if (!level.has(id)) { maxL += 1; level.set(id, maxL) }
+  const byLevel = new Map<number, string[]>()
+  for (const id of ids) {
+    const l = level.get(id) || 0
+    if (!byLevel.has(l)) byLevel.set(l, [])
+    byLevel.get(l)!.push(id)
+  }
+  const pos = new Map<string, { x: number; y: number }>()
+  for (const [l, group] of byLevel) {
+    const n = group.length
+    group.forEach((id, i) => {
+      pos.set(id, { x: CENTER + (i - (n - 1) / 2) * HGAP, y: TOP + l * VGAP })
+    })
+  }
+  return pos
 }
 
 /** H2: 渲染本地 ProcessDefinition (从 GET /definition 拿到的 nodes/edges) 到 x6. */
@@ -716,11 +732,6 @@ async function tryLoadApaasDetail(processId: string): Promise<boolean> {
     }
     return false
   }
-}
-
-function onAiQuery(query: string) {
-  // P2 接 ConfigAssistant — 当前 alert 占位
-  alert(`AI 提问占位 — P2 转给 ConfigAssistant:\n${query}`)
 }
 
 onMounted(async () => {
