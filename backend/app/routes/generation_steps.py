@@ -12,13 +12,13 @@ import re
 from typing import Annotated, Optional
 
 from fastapi import APIRouter, Depends, HTTPException
-from sqlalchemy import select
+from sqlalchemy import desc, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.crypto import decrypt_password
 from app.database import get_db
 from app.deps import get_auth_context, AuthContext
-from app.models import Application, User, ApiCallLog
+from app.models import Application, DeployRecord, User, ApiCallLog
 from app.app_code import normalize_app_code
 from app.routes.applications import _dump_preview_config
 from app.schemas import (
@@ -104,6 +104,18 @@ def _load_state(app: Application) -> dict:
 
 def _save_state(app: Application, state: dict):
     app.generation_state = json.dumps(state, ensure_ascii=False)
+
+
+async def _latest_generation_error(app: Application, db: AsyncSession) -> str | None:
+    if app.status != "failed":
+        return None
+    record = (await db.execute(
+        select(DeployRecord)
+        .where(DeployRecord.app_id == app.id, DeployRecord.status == "failed")
+        .order_by(desc(DeployRecord.completed_at), desc(DeployRecord.id))
+        .limit(1)
+    )).scalar_one_or_none()
+    return (record.error_message if record else None) or "应用生成失败，请检查平台连接后重试"
 
 
 def _load_config(app: Application) -> dict:
@@ -761,6 +773,7 @@ async def get_step_status(
     config = _normalized_config_for_steps(app)
     state = _load_state(app)
     apaas_app_id = state.get("apaas_app_id") or app.apaas_app_id
+    error_message = await _latest_generation_error(app, db)
 
     # 已部署成功 → 一切就绪，直接全标完成（最强保证，且不打 apaas）。
     if app.status == "completed":
@@ -768,7 +781,12 @@ async def get_step_status(
         for s in steps:
             s.status = "completed"
             s.deps_met = True
-        return GenerationStatusResponse(apaas_app_id=apaas_app_id, steps=steps)
+        return GenerationStatusResponse(
+            apaas_app_id=apaas_app_id,
+            app_status=app.status,
+            error_message=None,
+            steps=steps,
+        )
 
     # 进行中 / 失败但已建了一部分 → 按 apaas 真实对象补全进度（与构建路径无关）。
     if apaas_app_id:
@@ -782,6 +800,8 @@ async def get_step_status(
     steps = _build_steps(config, state, apaas_app_id)
     return GenerationStatusResponse(
         apaas_app_id=apaas_app_id,
+        app_status=app.status,
+        error_message=error_message,
         steps=steps,
     )
 

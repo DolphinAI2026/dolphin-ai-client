@@ -204,6 +204,8 @@ class StepStatus(BaseModel):
 
 class GenerationStatusResponse(BaseModel):
     apaas_app_id: Optional[str] = None
+    app_status: Optional[str] = None
+    error_message: Optional[str] = None
     steps: List[StepStatus]
 
 

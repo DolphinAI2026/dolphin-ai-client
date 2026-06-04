@@ -97,7 +97,8 @@ async def generate_application(
     # 2026-05-23 token 首次自愈 (P0 C 方案 A): env.token 为空时自动 login 拿 token.
     # 跟 mcp_server._call_apaas_platform_tool 的首次自愈对齐 (commit 6cb7ce0), 解决
     # 之前 deploy_application 撞 'token 为空' hard fail 让用户去 admin 重连的体验.
-    if not env_obj.token and env_obj.username and env_obj.password_enc:
+    # 2026-06-04: token 有值但过期也会让后台生成秒失败；生成前若有账号密码，先刷新一次。
+    if env_obj.username and env_obj.password_enc:
         try:
             password = decrypt_password(env_obj.password_enc)
             tmp_client = APaaSClient(
@@ -110,9 +111,9 @@ async def generate_application(
                 env_obj.token = new_token
                 env_obj.status = "connected"
                 await db.commit()
-                logger.info("generate /apps/%s/generate: token 首次自愈成功 env=%s", app_id, env_obj.id)
+                logger.info("generate /apps/%s/generate: token 刷新成功 env=%s", app_id, env_obj.id)
         except Exception as exc:
-            logger.warning("generate /apps/%s/generate: token 首次自愈失败 env=%s: %s", app_id, env_obj.id, exc)
+            logger.warning("generate /apps/%s/generate: token 刷新失败 env=%s: %s", app_id, env_obj.id, exc)
 
     if not env_obj.token:
         raise HTTPException(
@@ -243,7 +244,7 @@ async def _resolve_env_and_client(app_obj: Application, session: AsyncSession):
     )).scalar_one_or_none()
     if not env_obj:
         raise ValueError(f"应用关联的环境 (id={app_obj.platform_env_id}) 不存在，请在 admin 重连")
-    if not env_obj.token and env_obj.username and env_obj.password_enc:
+    if env_obj.username and env_obj.password_enc:
         try:
             password = decrypt_password(env_obj.password_enc)
             tmp_client = APaaSClient(base_url=env_obj.base_url, tenant_id=env_obj.platform_tenant_id)
@@ -253,8 +254,9 @@ async def _resolve_env_and_client(app_obj: Application, session: AsyncSession):
                 env_obj.token = new_token
                 env_obj.status = "connected"
                 await session.commit()
+                logger.info("generate-run: token 刷新成功 env=%s", env_obj.id)
         except Exception as exc:  # noqa: BLE001
-            logger.warning("generate-run token 首次自愈失败 env=%s: %s", env_obj.id, exc)
+            logger.warning("generate-run token 刷新失败 env=%s: %s", env_obj.id, exc)
     if not env_obj.token:
         raise ValueError(f"环境 (id={app_obj.platform_env_id}) 无可用 token 且自动登录失败，请在 admin 重连刷新")
     client = APaaSClient(

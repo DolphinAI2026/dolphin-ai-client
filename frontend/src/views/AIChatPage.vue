@@ -88,13 +88,13 @@
           <div
             v-if="message.meta?.kind === 'app-ready' && message.meta?.info"
             class="app-ready-cta"
-            :class="{ 'is-generating': !ctaIsReady(message.meta.info) }"
+            :class="{ 'is-generating': !ctaIsReady(message.meta.info) && !ctaIsFailed(message.meta.info), 'is-failed': ctaIsFailed(message.meta.info) }"
             @click="openAppReady(message.meta.info)"
           >
-            <div class="cta-icon">{{ ctaIsReady(message.meta.info) ? '🚀' : '⏳' }}</div>
+            <div class="cta-icon">{{ ctaIsReady(message.meta.info) ? '🚀' : (ctaIsFailed(message.meta.info) ? '!' : '⏳') }}</div>
             <div class="cta-body">
               <div class="cta-title">
-                应用「{{ message.meta.info.appName }}」{{ ctaIsReady(message.meta.info) ? '已就绪' : '正在生成中…' }}
+                应用「{{ message.meta.info.appName }}」{{ ctaIsReady(message.meta.info) ? '已就绪' : (ctaIsFailed(message.meta.info) ? '生成失败' : '正在生成中…') }}
               </div>
               <div v-if="!ctaIsReady(message.meta.info)" class="cta-sub">
                 <span class="cta-progress-text">{{ ctaProgressText(message.meta.info) }}</span>
@@ -106,12 +106,12 @@
                 <span v-if="message.meta.info.appCode" class="cta-sub-sep">·</span>
                 <span v-if="message.meta.info.appCode">{{ message.meta.info.appCode }}</span>
               </div>
-              <div v-if="!ctaIsReady(message.meta.info)" class="cta-progress-bar">
+              <div v-if="!ctaIsReady(message.meta.info) && !ctaIsFailed(message.meta.info)" class="cta-progress-bar">
                 <div class="cta-progress-fill" :style="{ width: ctaPercent(message.meta.info) + '%' }"></div>
               </div>
             </div>
             <button class="cta-action" type="button" @click.stop="openAppReady(message.meta.info)">
-              {{ ctaIsReady(message.meta.info) ? '打开应用 →' : '看生成进度 →' }}
+              {{ ctaIsReady(message.meta.info) ? '打开应用 →' : (ctaIsFailed(message.meta.info) ? '查看详情 →' : '看生成进度 →') }}
             </button>
           </div>
         </template>
@@ -803,6 +803,8 @@ interface GenProgress {
   done: number
   total: number
   complete: boolean
+  failed?: boolean
+  errorMessage?: string
   byKind: Record<string, { done: number; total: number }>
 }
 const genProgress = ref<GenProgress | null>(null)
@@ -825,6 +827,19 @@ async function pollGenProgress(appId: number) {
   try {
     const resp: any = await applicationApi.getStepStatus(appId)
     const steps: any[] = Array.isArray(resp?.steps) ? resp.steps : []
+    if (resp?.app_status === 'failed') {
+      genProgress.value = {
+        appId,
+        done: steps.filter((s: any) => s?.status === 'completed').length,
+        total: steps.length,
+        complete: false,
+        failed: true,
+        errorMessage: String(resp?.error_message || '应用生成失败，请检查平台连接后重试'),
+        byKind: {},
+      }
+      stopGenPoll()
+      return
+    }
     if (!steps.length) {
       // 无步骤信息(config_preview 空/无 SPEC) — 没东西可等，按就绪处理。
       genProgress.value = { appId, done: 0, total: 0, complete: true, byKind: {} }
@@ -876,8 +891,15 @@ function ctaIsReady(info: AppReadyInfo): boolean {
   if (gp && gp.appId === info.appId) return gp.complete
   return info.status === 'completed' && !!info.apaasAppId
 }
+function ctaIsFailed(info: AppReadyInfo): boolean {
+  const gp = genProgress.value
+  return !!(gp && gp.appId === info.appId && gp.failed)
+}
 function ctaProgressText(info: AppReadyInfo): string {
   const gp = genProgress.value
+  if (gp && gp.appId === info.appId && gp.failed) {
+    return gp.errorMessage || '应用生成失败，请检查平台连接后重试'
+  }
   if (!gp || gp.appId !== info.appId || gp.total === 0) return '正在后台生成模型 / 表单 / 菜单…'
   const parts = Object.entries(gp.byKind)
     .filter(([, b]) => b.total > 0)
@@ -2467,6 +2489,20 @@ onMounted(async () => {
 }
 .app-ready-cta.is-generating .cta-action { background: #d97706; }
 .app-ready-cta.is-generating .cta-action:hover { background: #b45309; }
+.app-ready-cta.is-failed {
+  background: linear-gradient(135deg, rgba(239, 68, 68, 0.12), rgba(220, 38, 38, 0.06));
+  border-color: rgba(239, 68, 68, 0.38);
+}
+.app-ready-cta.is-failed:hover {
+  border-color: rgba(239, 68, 68, 0.62);
+  background: linear-gradient(135deg, rgba(239, 68, 68, 0.16), rgba(220, 38, 38, 0.09));
+}
+.app-ready-cta.is-failed .cta-icon {
+  color: #dc2626;
+  background: rgba(239, 68, 68, 0.12);
+}
+.app-ready-cta.is-failed .cta-action { background: #dc2626; }
+.app-ready-cta.is-failed .cta-action:hover { background: #b91c1c; }
 .app-ready-cta .cta-progress-text {
   font-family: system-ui, -apple-system, "PingFang SC", sans-serif;
   color: var(--ac-text-mute, rgba(116, 128, 171, 0.95));
