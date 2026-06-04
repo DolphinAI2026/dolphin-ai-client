@@ -1,6 +1,11 @@
 import pytest
 
 from app.services.config_converter import convert_analysis_to_app_config
+from app.generator_v2 import (
+    _finalize_created_form_config as finalize_generated_form_config,
+    _find_permission_for_form,
+    _sync_form_permissions_to_form_config as sync_generated_form_permissions,
+)
 from app.step_executor import execute_configure_permissions, execute_create_form
 
 
@@ -167,3 +172,98 @@ async def test_execute_configure_permissions_syncs_form_config_by_form_code():
     saved_target = next(item for item in client.saved_configs if item["formCode"] == "target_form")
     assert saved_target["advancedPermissionGroups"][0]["permissionObjects"][0]["permissionObjectType"] == "ROLE_USER"
     assert saved_target["detailPage"]["advancedPermissionGroups"][0]["permissionObjects"][0]["permissionObjectType"] == "ROLE_USER"
+
+
+@pytest.mark.asyncio
+async def test_generator_v2_finalizes_created_form_detail_config():
+    class FakeClient:
+        def __init__(self):
+            self.calls = []
+            self.saved = None
+
+        async def query_detail_page_config(self, app_id, form_id):
+            self.calls.append(("query_detail_page_config", app_id, form_id))
+            return {
+                "formName": "我的待办",
+                "formCode": "old_form",
+                "detailPage": {"formName": "我的待办", "formCode": "old_form"},
+            }
+
+        async def save_form_config(self, app_id, form_config):
+            self.calls.append(("save_form_config", app_id, form_config))
+            self.saved = form_config
+            return {"code": "ok"}
+
+    client = FakeClient()
+    await finalize_generated_form_config(
+        client,
+        "app-1",
+        form_id="form-1",
+        form_name="退市审核表",
+        form_code="delisting_review_form",
+        all_model_codes=["delisting_apply"],
+        menu_id="menu-1",
+    )
+
+    methods = [call[0] for call in client.calls]
+    assert methods == ["query_detail_page_config", "save_form_config"]
+    assert client.saved["id"] == "form-1"
+    assert client.saved["appId"] == "app-1"
+    assert client.saved["menuId"] == "menu-1"
+    assert client.saved["formName"] == "退市审核表"
+    assert client.saved["formCode"] == "delisting_review_form"
+    assert client.saved["allModelCodes"] == ["delisting_apply"]
+    assert client.saved["detailPage"]["formName"] == "退市审核表"
+    assert client.saved["detailPage"]["formCode"] == "delisting_review_form"
+    assert client.saved["detailPage"]["webFormSettings"] == {}
+    assert client.saved["formModelType"] == "DATABASE"
+
+
+def test_generator_v2_permission_match_prefers_form_code_then_model_code():
+    permissions = [
+        {"form": "同名表单", "rules": [{"role": "all"}]},
+        {"modelCode": "target_model", "rules": [{"role": "model_role"}]},
+        {"formCode": "target_form", "rules": [{"role": "form_role"}]},
+    ]
+
+    assert _find_permission_for_form({"formName": "同名表单", "formCode": "target_form", "modelCode": "target_model"}, permissions)["rules"][0]["role"] == "form_role"
+    assert _find_permission_for_form({"formName": "同名表单", "formCode": "missing", "modelCode": "target_model"}, permissions)["rules"][0]["role"] == "all"
+    assert _find_permission_for_form({"formName": "另一个表单", "formCode": "missing", "modelCode": "target_model"}, permissions)["rules"][0]["role"] == "model_role"
+
+
+@pytest.mark.asyncio
+async def test_generator_v2_permission_sync_writes_page_config_role_user():
+    class FakeClient:
+        def __init__(self):
+            self.saved = None
+
+        async def query_detail_page_config(self, app_id, form_id):
+            return {"id": form_id, "formName": "同名表单", "detailPage": {}}
+
+        async def save_form_config(self, app_id, form_config):
+            self.saved = form_config
+            return {"code": "ok"}
+
+    client = FakeClient()
+    await sync_generated_form_permissions(
+        client,
+        "app-1",
+        "form-1",
+        rules=[
+            {"role": "product_manager", "op": "all", "data": "ALL"},
+            {"role": "all", "op": "view", "data": "SELF"},
+        ],
+        role_code_map={"product_manager": {"id": "role-1", "roleCode": "product_manager", "roleName": "产品经理"}},
+        form_name="退市审核表",
+        form_code="delisting_review_form",
+        all_model_codes=["delisting_apply"],
+    )
+
+    saved = client.saved
+    assert saved["formName"] == "退市审核表"
+    assert saved["formCode"] == "delisting_review_form"
+    assert saved["advancedPermissionGroups"][0]["permissionObjects"][0]["permissionObjectType"] == "ROLE_USER"
+    assert saved["detailPage"]["advancedPermissionGroups"][0]["permissionObjects"][0]["permissionObjectType"] == "ROLE_USER"
+    all_user = saved["advancedPermissionGroups"][1]["permissionObjects"][0]
+    assert all_user["permissionObjectType"] == "ALL_USER"
+    assert all_user["permissionObjectValue"] == ""

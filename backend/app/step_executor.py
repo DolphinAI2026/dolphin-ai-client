@@ -1004,6 +1004,16 @@ def _is_form_save_conflict(exc: Exception) -> bool:
     return any(token in text for token in ("当前页面状态已改变", "页面状态已改变", "乐观锁", "版本", "version", "stale"))
 
 
+async def _query_saveable_form_config(client: APaaSClient, app_id: str, form_id: str) -> dict:
+    query_context = getattr(client, "query_form_context_config", None)
+    if callable(query_context):
+        try:
+            return await query_context(app_id, form_id)
+        except Exception as exc:
+            logger.warning("query_form_context_config 失败，回退 detailPageConfigById (formId=%s): %s", form_id, exc)
+    return await client.query_detail_page_config(app_id, form_id)
+
+
 async def _save_form_config_with_retry(
     client: APaaSClient,
     app_id: str,
@@ -1019,7 +1029,7 @@ async def _save_form_config_with_retry(
         if not _is_form_save_conflict(exc) or not form_id:
             raise
         logger.warning("save_form_config 冲突，重新查询后重试 (formId=%s, reason=%s): %s", form_id, reason, exc)
-        latest = await client.query_detail_page_config(app_id, form_id)
+        latest = await _query_saveable_form_config(client, app_id, form_id)
         if apply_latest:
             apply_latest(latest)
         return await client.save_form_config(app_id, latest)
@@ -1049,7 +1059,7 @@ async def _finalize_created_form_config(
             menu_id=menu_id,
         )
 
-    form_config = await client.query_detail_page_config(app_id, form_id)
+    form_config = await _query_saveable_form_config(client, app_id, form_id)
     _apply_latest(form_config)
     logger.info("save_form_config reason: 创建后固化表单详情 (form=%s, formId=%s)", form_name, form_id)
     await _save_form_config_with_retry(
@@ -2048,7 +2058,7 @@ async def _sync_form_component_references(
 
     form_map = _form_identity_map(all_forms)
     comp_def_map = _component_definition_map(form_def.get("components", []) or [])
-    form_config = await client.query_detail_page_config(app_id, form_id)
+    form_config = await _query_saveable_form_config(client, app_id, form_id)
     components = form_config.get("detailPage", {}).get("formComponents", [])
     updated = False
 

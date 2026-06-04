@@ -180,12 +180,25 @@ def _build_permission_groups_for_form_config(
 _STATE_CHANGED_MARKERS = ("页面状态已改变", "无法保存")
 
 
+async def _query_saveable_form_config(client: APaaSClient, app_id: str, form_id: str) -> dict:
+    query_context = getattr(client, "query_form_context_config", None)
+    if callable(query_context):
+        try:
+            return await query_context(app_id, form_id)
+        except Exception as exc:
+            logger.warning("query_form_context_config 失败，回退 detailPageConfigById (formId=%s): %s", form_id, exc)
+    return await client.query_detail_page_config(app_id, form_id)
+
+
 def _force_form_identity(
     form_config: dict,
     *,
     form_name: str,
     form_code: str,
     all_model_codes: List[str],
+    app_id: str = "",
+    form_id: str = "",
+    menu_id: str = "",
 ) -> None:
     """save_form_config 前强制覆盖表单标识字段。
 
@@ -196,6 +209,9 @@ def _force_form_identity(
         return
     desired_name = str(form_name or "").strip()
     desired_code = str(form_code or "").strip()
+    desired_app_id = str(app_id or "").strip()
+    desired_form_id = str(form_id or "").strip()
+    desired_menu_id = str(menu_id or "").strip()
     desired_models = [str(c).strip() for c in (all_model_codes or []) if str(c).strip()]
 
     def _apply(target: dict) -> None:
@@ -207,9 +223,105 @@ def _force_form_identity(
             target["formCode"] = desired_code
         if desired_models:
             target["allModelCodes"] = desired_models
+        if desired_app_id:
+            target["appId"] = desired_app_id
+        if desired_form_id and not target.get("id"):
+            target["id"] = desired_form_id
+        if desired_menu_id:
+            target["menuId"] = desired_menu_id
 
     _apply(form_config)
     _apply(form_config.get("simpleFormConfig", {}))
+    detail_page = form_config.setdefault("detailPage", {})
+    if isinstance(detail_page, dict):
+        _apply(detail_page)
+        detail_page.setdefault("webFormSettings", {})
+        detail_page.setdefault("mobileFormSettings", {})
+        detail_page.setdefault("previewLanguage", "zh-CN")
+        detail_page.setdefault("formVersionConfig", {})
+    form_config.setdefault("formModelType", "DATABASE")
+
+
+def _clone_for_form_config_permissions(value):
+    if isinstance(value, list):
+        return [_clone_for_form_config_permissions(item) for item in value]
+    if isinstance(value, dict):
+        cloned = {k: _clone_for_form_config_permissions(v) for k, v in value.items()}
+        for type_key, value_key in (
+            ("permissionObjectType", "permissionObjectValue"),
+            ("permissionType", "permissionValue"),
+        ):
+            if cloned.get(type_key) == "ROLE":
+                cloned[type_key] = "ROLE_USER"
+            if cloned.get(type_key) == "ALL_USER":
+                cloned[value_key] = ""
+        return cloned
+    return value
+
+
+async def _save_form_config_with_retry(
+    client: APaaSClient,
+    app_id: str,
+    form_config: dict,
+    *,
+    form_id: str,
+    apply_latest=None,
+    reason: str = "",
+) -> None:
+    last_exc: Exception | None = None
+    for attempt in range(2):
+        try:
+            await client.save_form_config(app_id, form_config)
+            return
+        except Exception as exc:
+            msg = str(exc)
+            if any(marker in msg for marker in _STATE_CHANGED_MARKERS) and attempt == 0 and form_id:
+                logger.warning("save_form_config 冲突，重查后重试 (formId=%s, reason=%s): %s", form_id, reason, msg)
+                form_config = await _query_saveable_form_config(client, app_id, form_id)
+                if apply_latest:
+                    apply_latest(form_config)
+                last_exc = exc
+                continue
+            raise
+    if last_exc is not None:
+        raise last_exc
+
+
+async def _finalize_created_form_config(
+    client: APaaSClient,
+    app_id: str,
+    *,
+    form_id: str,
+    form_name: str,
+    form_code: str,
+    all_model_codes: List[str],
+    menu_id: str = "",
+) -> None:
+    if not form_id:
+        return
+
+    def _apply_latest(config: dict) -> None:
+        _force_form_identity(
+            config,
+            form_name=form_name,
+            form_code=form_code,
+            all_model_codes=all_model_codes,
+            app_id=app_id,
+            form_id=form_id,
+            menu_id=menu_id,
+        )
+
+    form_config = await _query_saveable_form_config(client, app_id, form_id)
+    _apply_latest(form_config)
+    logger.info("save_form_config reason: 创建后固化表单详情 (formId=%s, formName=%s)", form_id, form_name)
+    await _save_form_config_with_retry(
+        client,
+        app_id,
+        form_config,
+        form_id=form_id,
+        apply_latest=_apply_latest,
+        reason="创建后固化表单详情",
+    )
 
 
 async def _sync_form_permissions_to_form_config(
@@ -231,43 +343,57 @@ async def _sync_form_permissions_to_form_config(
     save 前必须把建表时确定的 form_name/form_code/all_model_codes 强制写回去，
     否则所有表单的名字都会变成"我的待办"（参见 step_executor.py 同名函数注释）。
     """
-    last_exc: Exception | None = None
-    for attempt in range(2):
-        form_config = await client.query_detail_page_config(app_id, form_id)
+    permission_groups, advanced_groups, operation_groups = _build_permission_groups_for_form_config(
+        rules,
+        role_code_map,
+    )
+    permission_groups = _clone_for_form_config_permissions(permission_groups)
+    advanced_groups = _clone_for_form_config_permissions(advanced_groups)
+    operation_groups = _clone_for_form_config_permissions(operation_groups)
+
+    def _apply_latest(form_config: dict) -> None:
         permission_groups, advanced_groups, operation_groups = _build_permission_groups_for_form_config(
             rules,
             role_code_map,
         )
+        permission_groups = _clone_for_form_config_permissions(permission_groups)
+        advanced_groups = _clone_for_form_config_permissions(advanced_groups)
+        operation_groups = _clone_for_form_config_permissions(operation_groups)
         form_config["permissionGroups"] = permission_groups
         form_config["advancedPermissionGroups"] = advanced_groups
         form_config["operationPermissionGroups"] = operation_groups
+        detail_page = form_config.setdefault("detailPage", {})
+        if isinstance(detail_page, dict):
+            detail_page["permissionGroups"] = permission_groups
+            detail_page["advancedPermissionGroups"] = advanced_groups
+            detail_page["operationPermissionGroups"] = operation_groups
         _force_form_identity(
             form_config,
             form_name=form_name,
             form_code=form_code,
             all_model_codes=all_model_codes or [],
+            app_id=app_id,
+            form_id=form_id,
         )
-        logger.info(
-            "save_form_config reason: 回写表单权限 (formId=%s, formName=%s, permissionGroups=%s, advanced=%s, operation=%s, attempt=%s)",
-            form_id,
-            form_name or "<unknown>",
-            len(permission_groups),
-            len(advanced_groups),
-            len(operation_groups),
-            attempt + 1,
-        )
-        try:
-            await client.save_form_config(app_id, form_config)
-            return
-        except Exception as exc:
-            msg = str(exc)
-            if any(marker in msg for marker in _STATE_CHANGED_MARKERS) and attempt == 0:
-                logger.warning("save_form_config 冲突，重试一次 (formId=%s): %s", form_id, msg)
-                last_exc = exc
-                continue
-            raise
-    if last_exc is not None:
-        raise last_exc
+
+    form_config = await _query_saveable_form_config(client, app_id, form_id)
+    _apply_latest(form_config)
+    logger.info(
+        "save_form_config reason: 回写表单权限 (formId=%s, formName=%s, permissionGroups=%s, advanced=%s, operation=%s)",
+        form_id,
+        form_name or "<unknown>",
+        len(permission_groups),
+        len(advanced_groups),
+        len(operation_groups),
+    )
+    await _save_form_config_with_retry(
+        client,
+        app_id,
+        form_config,
+        form_id=form_id,
+        apply_latest=_apply_latest,
+        reason="回写表单权限",
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -785,6 +911,34 @@ def _build_permission_payload_for_form(
     return perm_payload, sync_job
 
 
+def _find_permission_for_form(form_result: dict, permissions: List[dict]) -> Optional[dict]:
+    form_code = str(form_result.get("formCode") or "").strip()
+    form_name = str(form_result.get("formName") or "").strip()
+    model_code = str(form_result.get("modelCode") or "").strip()
+    if form_code:
+        matched = next((
+            p for p in permissions
+            if str(p.get("formCode") or p.get("form_code") or "").strip() == form_code
+        ), None)
+        if matched:
+            return matched
+    if form_name:
+        matched = next((
+            p for p in permissions
+            if str(p.get("form") or p.get("formName") or p.get("form_name") or "").strip() == form_name
+        ), None)
+        if matched:
+            return matched
+    if model_code:
+        matched = next((
+            p for p in permissions
+            if str(p.get("modelCode") or p.get("model_code") or "").strip() == model_code
+        ), None)
+        if matched:
+            return matched
+    return None
+
+
 async def _apply_permissions_and_sync(
     client: APaaSClient,
     app_id: str,
@@ -1243,11 +1397,6 @@ async def run_complete_generation(
                 yield {"stage": 3, "status": "running", "step": f"跳过 {form_name}（无模型）"}
                 continue
 
-            if form_name in existing_forms:
-                form_results.append({"formId": existing_forms[form_name], "formName": form_name})
-                yield {"stage": 3, "status": "running", "step": f"复用: {form_name}"}
-                continue
-
             all_model_codes = []
             all_model_source = form.get("allModelCodes") or form.get("all_model_codes") or [model_code]
             if isinstance(all_model_source, str):
@@ -1257,6 +1406,32 @@ async def run_complete_generation(
                 if resolved_code:
                     all_model_codes.append(resolved_code)
             all_model_codes = list(dict.fromkeys(all_model_codes or [mi["code"]]))
+            requested_form_code = str(
+                form.get("formCode") or form.get("form_code") or form.get("code") or ""
+            ).strip()
+
+            if form_name in existing_forms:
+                existing_form_id = existing_forms[form_name]
+                form_results.append({
+                    "formId": existing_form_id,
+                    "formName": form_name,
+                    "formCode": requested_form_code,
+                    "modelCode": model_code or mi["code"],
+                    "allModelCodes": all_model_codes,
+                })
+                try:
+                    await _finalize_created_form_config(
+                        client,
+                        app_id,
+                        form_id=existing_form_id,
+                        form_name=form_name,
+                        form_code=requested_form_code,
+                        all_model_codes=all_model_codes,
+                    )
+                except Exception as save_err:
+                    logger.warning("复用表单固化详情失败（%s）: %s", form_name, save_err)
+                yield {"stage": 3, "status": "running", "step": f"复用: {form_name}"}
+                continue
 
             components, query_conditions, query_list = _build_form_components_from_definition(
                 form=form,
@@ -1296,15 +1471,36 @@ async def run_complete_generation(
                             form_id = fr["id"]
                             form_results.append({
                                 "formId": form_id,
-                                "formName": fr.get("formName", form_name),
-                                "formCode": fr.get("formCode", ""),
+                                "formName": form_name,
+                                "formCode": fr.get("formCode") or form_payload[0].get("formCode", ""),
                                 "menuId": fr.get("menuId", ""),
+                                "modelCode": model_code or mi["code"],
+                                "allModelCodes": all_model_codes,
                             })
                             # formConfig API 创建的菜单不可见，需要额外创建菜单
+                            menu_id = str(fr.get("menuId") or "")
                             try:
-                                await client.create_menu(app_id, form_name, form_id, menu_order=idx)
+                                menu_result = await client.create_menu(app_id, form_name, form_id, menu_order=idx)
+                                menu_id = str(
+                                    (menu_result or {}).get("id")
+                                    or (menu_result or {}).get("menuId")
+                                    or menu_id
+                                )
                             except Exception as menu_err:
                                 logger.warning(f"创建菜单失败（{form_name}）: {menu_err}")
+                            form_results[-1]["menuId"] = menu_id
+                            try:
+                                await _finalize_created_form_config(
+                                    client,
+                                    app_id,
+                                    form_id=form_id,
+                                    form_name=form_name,
+                                    form_code=form_results[-1]["formCode"],
+                                    all_model_codes=all_model_codes,
+                                    menu_id=menu_id,
+                                )
+                            except Exception as save_err:
+                                logger.warning("创建后固化表单详情失败（%s）: %s", form_name, save_err)
                 yield {"stage": 3, "status": "running", "step": f"创建: {form_name}"}
             except Exception as e:
                 yield {"stage": 3, "status": "running", "step": f"失败 {form_name}: {e}"}
@@ -1338,7 +1534,7 @@ async def run_complete_generation(
             perm_payloads: List[dict] = []
             permission_sync_jobs: List[dict] = []
             for fr in form_results:
-                user_perm = next((p for p in permissions if p.get("form") == fr.get("formName")), None)
+                user_perm = _find_permission_for_form(fr, permissions)
                 built = _build_permission_payload_for_form(fr, user_perm, role_code_map, app_id)
                 if built is not None:
                     perm_payload, sync_job = built
