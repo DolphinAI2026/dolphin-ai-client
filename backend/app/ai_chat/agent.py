@@ -490,6 +490,7 @@ async def _call_llm_stream(
 async def _build_initial_messages(
     db: AsyncSession, session: AIChatSession, current_user_message: str,
     section: Optional[str] = None,
+    view_context: Optional[str] = None,
 ) -> list[dict]:
     """从历史消息 + 当前 user message 构造 LLM messages。
 
@@ -503,7 +504,8 @@ async def _build_initial_messages(
     if app_id:
         from app.ai_chat.app_context import build_app_context_block
         system_prompt = system_prompt + await build_app_context_block(
-            db, app_id, section=section, tenant_id=getattr(session, "tenant_id", None)
+            db, app_id, section=section, tenant_id=getattr(session, "tenant_id", None),
+            view_context=view_context,
         )
     messages: list[dict] = [{"role": "system", "content": system_prompt}]
 
@@ -599,6 +601,7 @@ async def run_agent(
     current_user_message: str,
     abort_event: asyncio.Event,
     section: Optional[str] = None,
+    view_context: Optional[str] = None,
 ) -> AsyncIterator[dict]:
     """对外入口：包一层 run 生命周期（可观测），把事件原样透传。
 
@@ -608,7 +611,7 @@ async def run_agent(
     holder: dict = {"run_id": None, "status": "error", "error": None}
     try:
         async for event in _run_agent_inner(
-            db, session, current_user_message, abort_event, holder, section
+            db, session, current_user_message, abort_event, holder, section, view_context
         ):
             yield event
     finally:
@@ -630,6 +633,7 @@ async def _run_agent_inner(
     abort_event: asyncio.Event,
     holder: dict,
     section: Optional[str] = None,
+    view_context: Optional[str] = None,
 ) -> AsyncIterator[dict]:
     """主 agent loop body。run 生命周期由外层 run_agent wrapper 管。
     holder = {"run_id": str|None, "status": "running"/"success"/"error", "error": str|None}
@@ -656,7 +660,7 @@ async def _run_agent_inner(
     _obs_seq = 0  # run 内 step 单调递增序号
 
     try:
-        messages = await _build_initial_messages(db, session, current_user_message, section)
+        messages = await _build_initial_messages(db, session, current_user_message, section, view_context)
     except Exception as e:
         holder["error"] = f"构建上下文失败：{e}"
         yield _sse("error", {"error": holder["error"]})

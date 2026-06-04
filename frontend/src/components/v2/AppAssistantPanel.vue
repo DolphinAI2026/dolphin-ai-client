@@ -16,7 +16,7 @@
      没有前端单测 runner，验证只能靠 `npm run build:nocheck` 编译；reactivity / binding bug 只会
      在 live 测试时暴露。 -->
 <script setup lang="ts">
-import { computed, onMounted, ref, toRef, watch } from 'vue'
+import { computed, onMounted, ref, toRef, watch, type Ref } from 'vue'
 import { ElMessage } from 'element-plus'
 
 import AgentConversation from '@/components/common/AgentConversation.vue'
@@ -37,6 +37,10 @@ const props = defineProps<{
   currentSectionTab?: string | null
   /** design tab 选中菜单后的 designer sub（保留兼容 ChatPage 契约） */
   designerSub?: string | null
+  /** 当前选中的菜单名（来自 ChatPage selectedApaasMenuName） */
+  selectedMenuName?: string | null
+  /** 当前选中的菜单 id（来自 ChatPage selectedApaasMenuId） */
+  selectedMenuId?: string | null
 }>()
 
 const emit = defineEmits<{
@@ -61,6 +65,16 @@ const { panelWidth, isResizing, onResizeStart } = usePanelResize({
 // Ref<number | null | undefined>，建会话带 app_id、loadSessions 按它过滤。
 const appIdRef = toRef(props, 'applicationId')
 const sectionRef = toRef(props, 'currentSection')
+// 当前视图上下文：「菜单名」+「设计器 tab」组合成人话字符串，透传到后端注入 app-context 系统提示。
+const viewContext = computed<string | null>(() => {
+  const name = props.selectedMenuName
+  if (!name) return null
+  const sub = props.designerSub === 'form' ? '表单设计器'
+    : props.designerSub === 'list' ? '列表设计器'
+    : props.designerSub === 'process' ? '流程设计器'
+    : (props.currentSectionTab || props.currentSection || '')
+  return `「${name}」${sub ? '（' + sub + '）' : ''}`
+})
 // 模型选择：unified 引擎下暂不暴露选择器（ensureSession 不传 selectedLlmId → 后端走会话默认 / 平台配置）。
 const selectedLlmId = ref<number | null>(null)
 
@@ -80,6 +94,7 @@ const {
 } = useAiChatSession({
   appId: appIdRef,
   section: sectionRef,
+  viewContext: viewContext as Ref<string | null | undefined>,
   selectedLlmId,
 })
 

@@ -28,6 +28,8 @@ export interface UseAiChatSessionOptions {
   appId?: Ref<number | null | undefined>
   /** 业务段落标识（建会话 + 每次 send 透传到后端） */
   section?: Ref<string | null | undefined>
+  /** 当前视图上下文（表单/菜单名 + 设计器 tab，每次 send 透传到后端注入 app 上下文） */
+  viewContext?: import('vue').Ref<string | null | undefined>
   /** 选用的 LLM 配置 id（建会话时带上） */
   selectedLlmId?: Ref<number | null | undefined>
 }
@@ -645,7 +647,7 @@ export function useAiChatSession(opts?: UseAiChatSessionOptions): UseAiChatSessi
     try {
       await aiChatApi.sendMessage(
         session.id,
-        { message: msg, attachment_ids: uploadedAttIds, section: opts?.section?.value ?? null },
+        { message: msg, attachment_ids: uploadedAttIds, section: opts?.section?.value ?? null, view_context: opts?.viewContext?.value ?? null },
         {
           signal: currentAbort.value.signal,
           onEvent: handleSseEvent,

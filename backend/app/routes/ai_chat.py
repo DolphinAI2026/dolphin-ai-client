@@ -65,6 +65,7 @@ class SendMessageRequest(BaseModel):
     attachment_ids: Optional[List[int]] = None  # 引用本会话已上传的附件
     # 每条消息可携带当前设计器 section 软提示（run_agent 注入 app 上下文时用；按消息传，随用户切 tab 变）
     section: Optional[str] = None
+    view_context: Optional[str] = None
 
 
 # ─────────────────────────── 会话存活的 abort 标志 ───────────────────────────
@@ -488,7 +489,7 @@ async def send_message(
                                 "data": json.dumps(_session_to_dict(stream_s), ensure_ascii=False),
                             }
 
-                async for event in run_agent(stream_db, stream_s, body.message, abort_event, section=body.section):
+                async for event in run_agent(stream_db, stream_s, body.message, abort_event, section=body.section, view_context=body.view_context):
                     yield event
             except Exception as e:
                 import traceback

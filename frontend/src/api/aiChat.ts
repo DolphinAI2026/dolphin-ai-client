@@ -110,7 +110,7 @@ export const aiChatApi = {
    */
   async sendMessage(
     sessionId: number,
-    body: { message: string; attachment_ids?: number[]; section?: string | null },
+    body: { message: string; attachment_ids?: number[]; section?: string | null; view_context?: string | null },
     options: {
       onEvent: (eventName: string, data: any) => void
       signal?: AbortSignal
