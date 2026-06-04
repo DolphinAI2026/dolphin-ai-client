@@ -41,6 +41,7 @@ from app.models import (
     LLMConfig,
 )
 from app.ai_chat.tools import TOOL_SCHEMAS, execute_tool, get_all_tool_schemas
+from app.observability import recorder
 
 logger = logging.getLogger(__name__)
 
@@ -590,7 +591,34 @@ async def run_agent(
     current_user_message: str,
     abort_event: asyncio.Event,
 ) -> AsyncIterator[dict]:
-    """主 agent loop。yield SSE 事件给 routes 转发到前端。"""
+    """对外入口：包一层 run 生命周期（可观测），把事件原样透传。
+
+    用 try/finally 保证 end_run 在所有正常退出点 + SSE 客户端中途断开
+    （GeneratorExit）时都恰好触发一次。recorder 自身吞异常，这里不会反噬主流程。
+    """
+    holder: dict = {"run_id": None, "status": "error", "error": None}
+    try:
+        async for event in _run_agent_inner(
+            db, session, current_user_message, abort_event, holder
+        ):
+            yield event
+    finally:
+        if holder["run_id"]:
+            await recorder.end_run(
+                holder["run_id"], status=holder["status"], error=holder["error"]
+            )
+
+
+async def _run_agent_inner(
+    db: AsyncSession,
+    session: AIChatSession,
+    current_user_message: str,
+    abort_event: asyncio.Event,
+    holder: dict,
+) -> AsyncIterator[dict]:
+    """主 agent loop body。run 生命周期由外层 run_agent wrapper 管。
+    holder = {"run_id": str|None, "status": "running"/"success"/"error", "error": str|None}
+    """
     try:
         cfg = await _resolve_llm_config(db, session)
     except RuntimeError as e:
@@ -600,11 +628,23 @@ async def run_agent(
 
     yield _sse("thinking", {"text": f"使用模型：{cfg.model}"})
 
+    # ── 可观测：开 run（旁路；config 解析失败的早退发生在此之前，不记） ──
+    holder["run_id"] = await recorder.start_run(
+        agent_type="ai_builder",
+        tenant_id=getattr(session, "tenant_id", None),
+        user_id=getattr(session, "user_id", None),
+        session_id=session.id,
+        model=cfg.model,
+    )
+    yield _sse("run_started", {"run_id": holder["run_id"]})
+    _obs_seq = 0  # run 内 step 单调递增序号
+
     try:
         messages = await _build_initial_messages(db, session, current_user_message)
     except Exception as e:
-        yield _sse("error", {"error": f"构建上下文失败：{e}"})
-        yield _sse("done", {"ok": False})
+        holder["error"] = f"构建上下文失败：{e}"
+        yield _sse("error", {"error": holder["error"]})
+        yield _sse("done", {"ok": False, "run_id": holder["run_id"]})
         return
 
     asked_user = False  # 一旦 ask_user，loop 提前退出
@@ -670,6 +710,13 @@ async def run_agent(
                     if evt is not None:
                         yield evt
                     assistant_msg = chunk["message"]
+                    _obs_usage = chunk.get("usage") or {}
+                    _obs_seq += 1
+                    await recorder.record_step(
+                        holder["run_id"], step_type="llm", seq=_obs_seq,
+                        prompt_tokens=_obs_usage.get("prompt_tokens"),
+                        completion_tokens=_obs_usage.get("completion_tokens"),
+                    )
             if assistant_msg is None:
                 # 流被外部 abort 了
                 yield _sse("aborted", {"turn": turn})
@@ -683,12 +730,14 @@ async def run_agent(
                 detail = e.response.text[:300]
             except Exception:
                 detail = "(响应体读取失败)"
-            yield _sse("error", {"error": f"LLM 调用失败 {e.response.status_code}: {detail}"})
-            yield _sse("done", {"ok": False})
+            holder["error"] = f"LLM 调用失败 {e.response.status_code}: {detail}"
+            yield _sse("error", {"error": holder["error"]})
+            yield _sse("done", {"ok": False, "run_id": holder["run_id"]})
             return
         except Exception as e:
-            yield _sse("error", {"error": f"LLM 调用失败：{e}"})
-            yield _sse("done", {"ok": False})
+            holder["error"] = f"LLM 调用失败：{e}"
+            yield _sse("error", {"error": holder["error"]})
+            yield _sse("done", {"ok": False, "run_id": holder["run_id"]})
             return
 
         tool_calls = assistant_msg.get("tool_calls") or []
@@ -741,6 +790,13 @@ async def run_agent(
                             if evt is not None:
                                 yield evt
                             retry_assistant = chunk["message"]
+                            _obs_ru = chunk.get("usage") or {}
+                            _obs_seq += 1
+                            await recorder.record_step(
+                                holder["run_id"], step_type="llm", seq=_obs_seq,
+                                prompt_tokens=_obs_ru.get("prompt_tokens"),
+                                completion_tokens=_obs_ru.get("completion_tokens"),
+                            )
                         # 忽略 tool_call_delta — system 已经禁止工具调用，万一 LLM 不听话也不执行
                 except Exception as e:
                     logger.warning("final-summary retry failed: %s", e)
@@ -759,6 +815,7 @@ async def run_agent(
                     session_id=session.id,
                     role="assistant",
                     content=content,
+                    extra_meta={"run_id": holder["run_id"]},
                 )
                 db.add(asst_db)
                 await asyncio.shield(db.commit())
@@ -768,9 +825,11 @@ async def run_agent(
                     "session_id": asst_db.session_id,
                     "role": "assistant",
                     "content": content,
+                    "run_id": holder["run_id"],
                     "created_at": asst_db.created_at.isoformat(),
                 })
-            yield _sse("done", {"ok": True})
+            holder["status"] = "success"
+            yield _sse("done", {"ok": True, "run_id": holder["run_id"]})
             return
 
         # 有工具调用：每个执行一遍
@@ -858,6 +917,14 @@ async def run_agent(
                 "duration_ms": tc_db.duration_ms,
             })
 
+            # ── 可观测：双写 tool step（AIChatToolCall 已写，这里给统一底座再记一笔） ──
+            _obs_seq += 1
+            await recorder.record_step(
+                holder["run_id"], step_type="tool", seq=_obs_seq,
+                tool_name=tool_name, args=args, result_text=result_text,
+                status=tc_db.status, duration_ms=tc_db.duration_ms,
+            )
+
             # 特殊：write_artifact 成功 → 单独通知前端刷新右栏
             # 2026-05-21 扩展：update_app_from_doc / export_apaas_app_design_doc 也会
             # 被 dispatcher 拦截把 md_content 落 artifact（见 tools._persist_spec_artifact），
@@ -926,9 +993,11 @@ async def run_agent(
 
         if asked_user:
             # 提了问题就停 loop，等下一轮 user send
-            yield _sse("done", {"ok": True, "awaiting_user": True})
+            holder["status"] = "success"
+            yield _sse("done", {"ok": True, "awaiting_user": True, "run_id": holder["run_id"]})
             return
 
     # 超过 MAX_TURNS
-    yield _sse("error", {"error": f"达到最大循环次数 {MAX_TURNS}，已停止"})
-    yield _sse("done", {"ok": False})
+    holder["error"] = f"达到最大循环次数 {MAX_TURNS}，已停止"
+    yield _sse("error", {"error": holder["error"]})
+    yield _sse("done", {"ok": False, "run_id": holder["run_id"]})
