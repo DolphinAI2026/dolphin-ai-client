@@ -63,6 +63,10 @@ async def list_agent_runs(
     offset: int = 0,
 ):
     """当前租户的 run 列表（按创建时间倒序）。"""
+    # limit/offset 用普通 int 默认（兼容本仓直调路由函数的测试约定，跟 list_sessions 一致），
+    # 这里手动 clamp 补回边界：避免恶意/误传 limit 一次拉爆全表。
+    limit = max(1, min(limit, 200))
+    offset = max(0, offset)
     q = select(AgentRun).where(AgentRun.tenant_id == ctx.tenant_id)
     if agent_type:
         q = q.where(AgentRun.agent_type == agent_type)
