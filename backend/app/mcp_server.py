@@ -4910,6 +4910,121 @@ async def get_apaas_form_detail(env_id: int, apaas_app_id: str, form_id: str) ->
     }
 
 
+@mcp.tool()
+async def repair_empty_apaas_form_from_model(
+    env_id: int,
+    apaas_app_id: str,
+    form_id: str,
+    model_code: str = "",
+    dry_run: bool = False,
+) -> dict:
+    """修复已创建但组件为空的表单。
+
+    使用场景：平台表单设计器左侧/画布显示空白，但表单已经绑定了数据模型。
+    工具只在当前表单组件数为 0 时生效；已有组件的表单会跳过，避免覆盖用户手工设计。
+    """
+    if not (apaas_app_id.strip() and form_id.strip()):
+        return {"ok": False, "error_code": "INVALID_PARAMS", "message": "apaas_app_id+form_id 都必填"}
+
+    async def _repair(client):
+        detail = await client.query_detail_page_config(apaas_app_id.strip(), form_id.strip())
+        detail_page = detail.get("detailPage") or {}
+        detail_components = detail_page.get("formComponents") or detail.get("formComponents") or []
+        if detail_components:
+            return {
+                "ok": True,
+                "skipped": True,
+                "reason": "FORM_ALREADY_HAS_COMPONENTS",
+                "form_id": form_id,
+                "component_count": len(detail_components),
+                "message": f"表单已有 {len(detail_components)} 个组件，未覆盖。",
+            }
+
+        main_code = str(model_code or detail.get("modelCode") or detail.get("mainModelCode") or "").strip()
+        models = _extract_detail_models(detail)
+        main_model = _pick_main_model(models, main_code)
+        if not main_model:
+            return {
+                "ok": False,
+                "error_code": "NO_BOUND_MODEL",
+                "form_id": form_id,
+                "message": "表单详情里没有关联模型，无法从模型字段补表单组件。",
+            }
+
+        main_code = str(main_model.get("model_code") or main_code).strip()
+        fields = [
+            field for field in (main_model.get("fields") or [])
+            if str(field.get("field_code") or "").strip()
+        ]
+        if not fields:
+            model_id = str(main_model.get("model_id") or "").strip()
+            if model_id:
+                raw_fields = await client.query_model_fields(apaas_app_id.strip(), model_id)
+                fields = [{
+                    "field_id": str(f.get("id") or f.get("fieldId") or ""),
+                    "field_code": str(f.get("fieldCode") or f.get("code") or ""),
+                    "field_name": str(f.get("fieldName") or f.get("name") or f.get("displayName") or ""),
+                    "data_type": str(f.get("dataType") or f.get("fieldType") or f.get("databaseFieldType") or ""),
+                    "required": bool(f.get("required") or f.get("isRequired") or False),
+                    "max_length": f.get("maxLength") or f.get("length"),
+                    "dictionary_code": str(f.get("dictionaryCode") or f.get("dictCode") or ""),
+                } for f in raw_fields if isinstance(f, dict) and str(f.get("fieldCode") or f.get("code") or "").strip()]
+        if not fields:
+            return {
+                "ok": False,
+                "error_code": "NO_MODEL_FIELDS",
+                "form_id": form_id,
+                "model_code": main_code,
+                "message": f"模型 {main_code} 没有可用字段，无法补表单组件。",
+            }
+
+        new_components = [
+            _build_basic_component_from_model_field(field, main_code)
+            for field in fields
+        ]
+        if dry_run:
+            return {
+                "ok": True,
+                "dry_run": True,
+                "form_id": form_id,
+                "model_code": main_code,
+                "generated_component_count": len(new_components),
+                "components": new_components,
+                "message": f"将从模型 {main_code} 生成 {len(new_components)} 个表单组件。",
+            }
+
+        form_config = await client.query_form_config(apaas_app_id.strip(), form_id.strip())
+        simple_components = (form_config.get("detailPage") or {}).get("formComponents") or []
+        if simple_components:
+            return {
+                "ok": True,
+                "skipped": True,
+                "reason": "FORM_ALREADY_HAS_COMPONENTS",
+                "form_id": form_id,
+                "component_count": len(simple_components),
+                "message": f"表单已有 {len(simple_components)} 个组件，未覆盖。",
+            }
+        form_config.setdefault("detailPage", {})["formComponents"] = new_components
+        if main_code:
+            form_config["modelCode"] = form_config.get("modelCode") or main_code
+            all_model_codes = form_config.get("allModelCodes")
+            if not isinstance(all_model_codes, list) or main_code not in all_model_codes:
+                form_config["allModelCodes"] = [main_code]
+
+        await client.save_form_config(apaas_app_id.strip(), form_config)
+        return {
+            "ok": True,
+            "form_id": form_id,
+            "model_code": main_code,
+            "created_component_count": len(new_components),
+            "field_count": len(fields),
+            "message": f"已从模型 {main_code} 补回 {len(new_components)} 个表单组件，请刷新表单设计器。",
+        }
+
+    ok, raw = await _with_client(env_id, "修复空表单组件", _repair)
+    return raw if ok else raw
+
+
 def _build_perm_payload_from_simple_rules(
     app_id: str,
     form_code: str,
@@ -6209,6 +6324,100 @@ def _build_display_component_refs(target_components: list, display_field_codes: 
             "componentType": comp.get("componentType") or "FORM_TEXT_INPUT",
         })
     return refs
+
+
+def _extract_detail_models(raw: dict) -> list[dict]:
+    models = []
+    for m in (raw.get("modelWithFieldVoList") or []):
+        if not isinstance(m, dict):
+            continue
+        raw_fields = (
+            m.get("fields")
+            or m.get("fieldList")
+            or m.get("dataModelFields")
+            or m.get("dataModelFieldList")
+            or m.get("modelFields")
+            or m.get("modelFieldList")
+            or []
+        )
+        fields_out = []
+        for f in raw_fields:
+            if not isinstance(f, dict):
+                continue
+            fields_out.append({
+                "field_id": str(f.get("id") or f.get("fieldId") or ""),
+                "field_code": str(f.get("fieldCode") or f.get("code") or ""),
+                "field_name": str(f.get("fieldName") or f.get("name") or f.get("displayName") or ""),
+                "data_type": str(f.get("dataType") or f.get("fieldType") or f.get("databaseFieldType") or ""),
+                "required": bool(f.get("required") or f.get("isRequired") or False),
+                "max_length": f.get("maxLength") or f.get("length"),
+                "dictionary_code": str(f.get("dictionaryCode") or f.get("dictCode") or ""),
+                "ref_model_code": str(f.get("refModelCode") or f.get("referenceModelCode") or ""),
+                "description": str(f.get("description") or f.get("fieldDesc") or ""),
+            })
+        models.append({
+            "model_id": str(m.get("id") or m.get("modelId") or m.get("dataModelId") or ""),
+            "model_code": str(m.get("modelCode") or m.get("code") or ""),
+            "model_name": str(m.get("modelName") or m.get("name") or m.get("displayName") or ""),
+            "model_type": str(m.get("modelType") or ""),
+            "is_main": bool(m.get("mainModel") or m.get("isMain") or m.get("main") or False),
+            "fields": fields_out,
+            "field_count": len(fields_out),
+        })
+    return models
+
+
+def _component_type_from_model_field(field: dict) -> str:
+    dict_code = str(field.get("dictionary_code") or field.get("dictionaryCode") or "").strip()
+    if dict_code:
+        return "FORM_SELECT_INPUT_SINGLE"
+
+    data_type = str(field.get("data_type") or field.get("fieldType") or "").strip().upper()
+    if data_type in {"BIG_TEXT", "TEXT", "LONGTEXT", "CLOB"}:
+        return "FORM_TEXTAREA_INPUT"
+    if data_type in {"NUM", "NUMBER", "DECIMAL", "DOUBLE", "FLOAT", "INT", "INTEGER", "BIGINT"}:
+        return "FORM_NUMBER_INPUT"
+    if data_type in {"DATE", "DATETIME", "TIMESTAMP"}:
+        return "FORM_DATEPICK_INPUT"
+    return "FORM_TEXT_INPUT"
+
+
+def _build_basic_component_from_model_field(field: dict, model_code: str) -> dict:
+    field_code = str(field.get("field_code") or field.get("fieldCode") or "").strip()
+    field_name = str(field.get("field_name") or field.get("fieldName") or field_code).strip()
+    comp_type = _component_type_from_model_field(field)
+    component = {
+        "componentType": comp_type,
+        "label": field_name,
+        "modelField": f"{model_code}.{field_code}",
+        "required": bool(field.get("required", False)),
+        "hidden": False,
+        "readOnly": False,
+        "showInList": True,
+        "searchable": False,
+    }
+    max_length = field.get("max_length") or field.get("maxLength")
+    if comp_type == "FORM_TEXT_INPUT" and max_length:
+        component["lengthLimit"] = max_length
+    dict_code = str(field.get("dictionary_code") or field.get("dictionaryCode") or "").strip()
+    if dict_code and comp_type == "FORM_SELECT_INPUT_SINGLE":
+        component["dictionarySelectConfig"] = {
+            "dictionaryCode": dict_code,
+            "dictionarySelectOptions": [],
+        }
+    return component
+
+
+def _pick_main_model(models: list[dict], preferred_model_code: str = "") -> dict | None:
+    preferred_model_code = str(preferred_model_code or "").strip()
+    if preferred_model_code:
+        for model in models:
+            if str(model.get("model_code") or "").strip() == preferred_model_code:
+                return model
+    for model in models:
+        if model.get("is_main"):
+            return model
+    return models[0] if models else None
 
 
 def _extract_ref_target(field: dict) -> tuple[str, str]:

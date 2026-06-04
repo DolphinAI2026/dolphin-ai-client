@@ -248,6 +248,11 @@ tools:
     agents: [builder, coding, config]
     category: introspection
     description: "拿表单详情页完整配置：关联模型、字段定义、已使用组件和表单元信息。"
+  repair_empty_apaas_form_from_model:
+    sections: [ui, data]
+    agents: [config]
+    category: update
+    description: "修复已创建但组件为空的表单：从绑定主模型字段补回基础表单组件；已有组件时跳过。"
   get_apaas_process_detail:
     sections: [logic]
     agents: [builder, config]

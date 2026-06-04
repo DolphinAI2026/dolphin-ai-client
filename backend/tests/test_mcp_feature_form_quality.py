@@ -162,3 +162,94 @@ async def test_post_configure_binds_dropdown_selector_and_permissions():
     assert payload["formCode"] == "delisting_apply_form"
     assert len(payload["dataPermissionGroups"]) == 2
     assert len(payload["operationPermissionGroups"]) == 2
+
+
+@pytest.mark.asyncio
+async def test_repair_empty_form_rebuilds_components_from_bound_model(monkeypatch):
+    class FakeClient:
+        def __init__(self):
+            self.saved_forms = []
+
+        async def query_detail_page_config(self, app_id, form_id):
+            return {
+                "id": form_id,
+                "formName": "行业表单",
+                "modelCode": "industry",
+                "detailPage": {"formComponents": []},
+                "modelWithFieldVoList": [
+                    {
+                        "id": "model_1",
+                        "modelCode": "industry",
+                        "mainModel": True,
+                        "fields": [
+                            {"fieldCode": "industry_name", "fieldName": "行业名称", "fieldType": "STRING", "required": True},
+                            {"fieldCode": "remark", "fieldName": "备注", "fieldType": "BIG_TEXT"},
+                        ],
+                    }
+                ],
+            }
+
+        async def query_form_config(self, app_id, form_id):
+            return {
+                "id": form_id,
+                "formName": "行业表单",
+                "detailPage": {"formComponents": []},
+            }
+
+        async def query_model_fields(self, app_id, model_id):
+            return []
+
+        async def save_form_config(self, app_id, form_config):
+            self.saved_forms.append(form_config)
+            return {"ok": True}
+
+    fake = FakeClient()
+
+    async def fake_with_client(env_id, label, fn):
+        return True, await fn(fake)
+
+    monkeypatch.setattr(mcp_server, "_with_client", fake_with_client)
+
+    result = await mcp_server.repair_empty_apaas_form_from_model(
+        env_id=1,
+        apaas_app_id="app_1",
+        form_id="form_industry",
+    )
+
+    assert result["ok"] is True
+    assert result["created_component_count"] == 2
+    assert len(fake.saved_forms) == 1
+    components = fake.saved_forms[0]["detailPage"]["formComponents"]
+    assert components[0]["label"] == "行业名称"
+    assert components[0]["modelField"] == "industry.industry_name"
+    assert components[0]["required"] is True
+    assert components[1]["componentType"] == "FORM_TEXTAREA_INPUT"
+
+
+@pytest.mark.asyncio
+async def test_repair_empty_form_skips_when_components_exist(monkeypatch):
+    class FakeClient:
+        async def query_detail_page_config(self, app_id, form_id):
+            return {
+                "id": form_id,
+                "detailPage": {
+                    "formComponents": [
+                        {"label": "行业名称", "modelField": "industry.industry_name"},
+                    ]
+                },
+            }
+
+    async def fake_with_client(env_id, label, fn):
+        return True, await fn(FakeClient())
+
+    monkeypatch.setattr(mcp_server, "_with_client", fake_with_client)
+
+    result = await mcp_server.repair_empty_apaas_form_from_model(
+        env_id=1,
+        apaas_app_id="app_1",
+        form_id="form_industry",
+    )
+
+    assert result["ok"] is True
+    assert result["skipped"] is True
+    assert result["reason"] == "FORM_ALREADY_HAS_COMPONENTS"
