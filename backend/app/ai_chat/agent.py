@@ -672,6 +672,13 @@ async def _run_agent_inner(
     # 每个 session 的第一轮拉一次合并 schemas（base 4 + MCP bridge 注入的 N 个）
     # 这是 lazy 设计 — backend 启动时 MCP 可能还没 ready，所以放在 turn loop 外的第一次调用
     tool_schemas = await get_all_tool_schemas()
+    if getattr(session, "app_id", None):
+        # 嵌入式应用面板里浏览器工具（browser_*）没有可用 tab，必失败 —— 锁定 app 时直接不暴露，
+        # 让 agent 用 list_apaas_* 等 MCP 工具读应用结构，不浪费一轮去调注定失败的浏览器快照。
+        tool_schemas = [
+            t for t in tool_schemas
+            if not str(t.get("function", {}).get("name", "")).startswith("browser_")
+        ]
 
     for turn in range(MAX_TURNS):
         if abort_event.is_set():
