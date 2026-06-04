@@ -25,6 +25,7 @@ _NUM_PREFIX_RE = re.compile(r"^\d+\.\d+\s*")
 def parse(section_text: str) -> Tuple[List[dict], List[str]]:
     workflows: List[dict] = []
     errors: List[str] = []
+    seen_form_codes: set = set()
     if not section_text or not section_text.strip():
         return workflows, errors
 
@@ -36,6 +37,10 @@ def parse(section_text: str) -> Tuple[List[dict], List[str]]:
                 f"审批流程 '{name}'：未标注关联表单，跳过（正确写法：### {name}（关联表单：form_code））"
             )
             continue
+        if form_code in seen_form_codes:
+            # V1 一表单一流程：proc_<form_code> 编码相同会在平台互相覆盖，保留第一条、警告其余
+            errors.append(f"审批流程 '{name}'：表单 '{form_code}' 已有流程，V1 一表单一流程，忽略本条")
+            continue
         nodes: List[dict] = []
         for row in parse_table(content):
             node_name = (row.get("审批节点") or "").strip()
@@ -46,6 +51,7 @@ def parse(section_text: str) -> Tuple[List[dict], List[str]]:
         if not nodes:
             errors.append(f"审批流程 '{name}'：没有有效审批节点（需要『审批节点』+『审批人角色编码』两列），跳过")
             continue
+        seen_form_codes.add(form_code)
         workflows.append({"name": name, "form_code": form_code, "nodes": nodes})
 
     return workflows, errors

@@ -50,6 +50,17 @@ def test_workflow_without_valid_nodes_warned():
     assert errors
 
 
+def test_duplicate_form_code_keeps_first_warns_rest():
+    dup = (
+        "### 流程A（关联表单：test_report）\n| 顺序 | 审批节点 | 审批人角色编码 |\n|---|---|---|\n| 1 | 审批 | role_a |\n\n"
+        "### 流程B（关联表单：test_report）\n| 顺序 | 审批节点 | 审批人角色编码 |\n|---|---|---|\n| 1 | 审批 | role_b |\n"
+    )
+    flows, errors = wf_parser.parse(dup)
+    assert len(flows) == 1  # 同表单只留第一条
+    assert flows[0]["name"] == "流程A"
+    assert errors and "已有流程" in errors[0]
+
+
 def test_numeric_prefix_stripped_from_name():
     flows, _ = wf_parser.parse(
         "### 7.1 报告审批流（关联表单：test_report）\n| 顺序 | 审批节点 | 审批人角色编码 |\n|---|---|---|\n| 1 | 审批 | role_a |\n"

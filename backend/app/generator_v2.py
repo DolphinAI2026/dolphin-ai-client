@@ -1246,7 +1246,14 @@ async def run_complete_generation(
                 continue
 
             if form_name in existing_forms:
-                form_results.append({"formId": existing_forms[form_name], "formName": form_name})
+                # 复用分支也带 formCode：否则 Phase 5 审批流程按表单编码反查不到、re-gen 时
+                # 工作流被静默跳过（formCode 与文档表单编码一致、平台不加后缀）。menuId 复用态
+                # 拿不到（需额外查菜单），留空；Phase 5 用 boc_code_{formId} 绑表，formId 已有。
+                form_results.append({
+                    "formId": existing_forms[form_name],
+                    "formName": form_name,
+                    "formCode": str(form.get("code") or "").strip(),
+                })
                 yield {"stage": 3, "status": "running", "step": f"复用: {form_name}"}
                 continue
 
