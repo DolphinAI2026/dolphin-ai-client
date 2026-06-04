@@ -1380,6 +1380,61 @@ TOOL_HANDLERS = {
 # 原 4 个 base 工具的 schemas（保持原有 TOOL_SCHEMAS 引用名兼容老代码）
 BASE_TOOL_SCHEMAS = TOOL_SCHEMAS
 
+# ── 锁定 app 上下文注入 (Task A4, 2026-06-04) ──────────────────────────────────
+# 当 AIChatSession.app_id 非空时，把内部 app_id → (env_id, apaas_app_id) 解析出来，
+# 并强制注入到声明了这两参数的 apaas 工具 —— 覆盖 LLM 给的值。
+# 这样即使 LLM 幻觉传了别的应用 id，工具也只会操作当前会话锁定的应用。
+# 自由会话 (app_id=None) 完全不受影响，行为与之前一致。
+
+_LAST_TOOL_SCHEMAS: list[dict] = []  # get_all_tool_schemas 每次调用后更新，供 _tool_declares_param 用
+
+
+def _tool_declares_param(tool_name: str, param: str) -> bool:
+    """该工具的 schema 是否声明了 param（用 _LAST_TOOL_SCHEMAS 缓存判断）。"""
+    for s in _LAST_TOOL_SCHEMAS:
+        fn = s.get("function", {})
+        if fn.get("name") == tool_name:
+            props = (fn.get("parameters") or {}).get("properties") or {}
+            return param in props
+    return False
+
+
+async def _resolve_locked_app_ctx(session: "AIChatSession", db: "AsyncSession"):
+    """internal session.app_id → (env_id, apaas_app_id)。找不到或异常返 (None, None)。
+
+    结果带 per-session 缓存（_locked_app_ctx 属性），同一会话多次工具调用只查一次 DB。
+    """
+    cached = getattr(session, "_locked_app_ctx", None)
+    if cached is not None:
+        return cached
+    env_id, apaas_app_id = None, None
+    try:
+        from app.models import Application
+        app = await db.get(Application, int(getattr(session, "app_id", 0) or 0))
+        if app:
+            env_id = getattr(app, "platform_env_id", None)
+            apaas_app_id = getattr(app, "apaas_app_id", None)
+    except Exception:
+        pass
+    try:
+        session._locked_app_ctx = (env_id, apaas_app_id)
+    except Exception:
+        pass
+    return (env_id, apaas_app_id)
+
+
+async def _inject_locked_app_ctx(tool_name: str, args: dict, session: "AIChatSession", db) -> dict:
+    """把锁定应用的 env_id / apaas_app_id 注入 args（schema 门控 + 仅非 None 值注入）。"""
+    if not getattr(session, "app_id", None) or db is None:
+        return args
+    env_id, apaas_app_id = await _resolve_locked_app_ctx(session, db)
+    out = dict(args)
+    if env_id is not None and _tool_declares_param(tool_name, "env_id"):
+        out["env_id"] = env_id
+    if apaas_app_id and _tool_declares_param(tool_name, "apaas_app_id"):
+        out["apaas_app_id"] = apaas_app_id
+    return out
+
 
 async def get_all_tool_schemas() -> list[dict]:
     """合并 base 工具 + MCP bridge 工具 (按 agent 白名单过滤)。
@@ -1413,7 +1468,9 @@ async def get_all_tool_schemas() -> list[dict]:
     except Exception as e:  # 白名单异常时不拦, 退化到全量 (有总比崩好)
         import logging as _log
         _log.getLogger(__name__).warning("工具白名单过滤失败, 退化到全量 MCP: %s", e)
-    return BASE_TOOL_SCHEMAS + mcp_schemas
+    global _LAST_TOOL_SCHEMAS
+    _LAST_TOOL_SCHEMAS = BASE_TOOL_SCHEMAS + mcp_schemas
+    return _LAST_TOOL_SCHEMAS
 
 
 # 2026-05-28: 这几个 doc-pipeline 工具强依赖 artifact_id 指向"当前会话刚写的设计文档".
@@ -1480,6 +1537,8 @@ async def execute_tool(
                     tool_name, args.get("artifact_id"), real_id, session.id,
                 )
                 args = {**args, "artifact_id": real_id}
+        # 锁定 app 上下文注入：强制覆盖 LLM 给的 env_id / apaas_app_id (Task A4)
+        args = await _inject_locked_app_ctx(tool_name, args, session, db)
         result_text = await _mcp_call(
             tool_name, args,
             tenant_id=int(getattr(session, "tenant_id", 0) or 0),
