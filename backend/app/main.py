@@ -38,7 +38,6 @@ from app.routes import (
     mcp_platform,
     mcp_hub,
     platform_envs,
-    platform_proxy,
     preferences,
     projects,
     quick_db,
@@ -100,13 +99,6 @@ async def lifespan(app: FastAPI):
         _logging.getLogger(__name__).warning(
             "migrate_orphan_workspaces failed (非致命): %s", e,
         )
-
-    # 预热平台代理状态（避免首次请求 503）
-    from app.routes.platform_proxy import _ensure_proxy_state
-    try:
-        await _ensure_proxy_state()
-    except Exception:
-        pass
 
     # 后台预热模板依赖缓存（不阻塞启动）
     import asyncio as _asyncio
@@ -195,34 +187,12 @@ app.include_router(industry.router, prefix="/api")
 app.include_router(specs_v2.router, prefix="/api")
 app.include_router(runtime_v2.router, prefix="/api")
 app.include_router(agent_prompts.router, prefix="/api")
-# 平台代理路由注册在根路径（/platform/... 和 /backend/... 需要直接匹配）
-app.include_router(platform_proxy.router)
-
-
-# 平台插件资源中间件：/{32位hex}/... → 代理到平台
 # SSE 防缓冲 middleware：text/event-stream 响应自动注入 X-Accel-Buffering: no
 #
-# 注意：这两个原本用 @app.middleware("http")（即 BaseHTTPMiddleware）实现，
-# 但 BaseHTTPMiddleware 的 call_next buffering 跟流式 SSE 不兼容，会切断 MCP
+# 注意：原本用 @app.middleware("http")（即 BaseHTTPMiddleware）实现，但
+# BaseHTTPMiddleware 的 call_next buffering 跟流式 SSE 不兼容，会切断 MCP
 # 服务器的 message 流（外部 agent 拿不到 tools/list 响应）。
 # 改成纯 ASGI middleware 后，对所有 mount 都安全透传。
-import re as _re
-from starlette.requests import Request as _StarletteRequest
-_PLUGIN_HASH_RE = _re.compile(r'^/[0-9a-f]{32}/')
-
-
-class _PluginAssetAsgiMiddleware:
-    def __init__(self, app):
-        self.app = app
-
-    async def __call__(self, scope, receive, send):
-        if scope["type"] == "http" and _PLUGIN_HASH_RE.match(scope.get("path", "")):
-            from app.routes.platform_proxy import handle_plugin_asset_request
-            request = _StarletteRequest(scope, receive=receive)
-            response = await handle_plugin_asset_request(request)
-            await response(scope, receive, send)
-            return
-        await self.app(scope, receive, send)
 
 
 class _SseNoBufferingAsgiMiddleware:
@@ -253,7 +223,6 @@ class _SseNoBufferingAsgiMiddleware:
 
 
 app.add_middleware(_SseNoBufferingAsgiMiddleware)
-app.add_middleware(_PluginAssetAsgiMiddleware)
 
 
 class _SpaStaticFiles(StaticFiles):

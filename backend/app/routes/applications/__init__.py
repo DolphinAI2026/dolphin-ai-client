@@ -1930,11 +1930,6 @@ router.include_router(_extension.router)
 from . import section_content as _section_content  # noqa: E402
 router.include_router(_section_content.router)
 
-# P2-D (2026-05-26): CRUD endpoint 包 MCP 工具 — 给 native panel 用
-# add/update/disable model-field + dict-option + role
-from . import crud_endpoints as _crud_endpoints  # noqa: E402
-router.include_router(_crud_endpoints.router)
-
 # K4 (2026-05-27): 应用日志 — 4 kind aggregator (deploy / operation / ai / error)
 from . import logs_endpoint as _logs_endpoint  # noqa: E402
 router.include_router(_logs_endpoint.router)
