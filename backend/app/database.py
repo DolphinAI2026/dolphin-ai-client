@@ -190,6 +190,109 @@ async def init_db():
             except Exception:
                 pass
 
+        # 配置助手统一：一次性把旧 config_chat 会话迁到 ai_chat（幂等，可回滚——旧表保留）
+        try:
+            await _migrate_config_chat_to_ai_chat(conn)
+        except Exception as e:
+            import logging
+            logging.getLogger(__name__).warning("config_chat 迁移跳过（非致命）：%s", e)
+
+
+def _maybe_json(v):
+    """解析 JSON 字段：SQLite 返回字符串，MySQL 返回 dict/list；None 原样返回。"""
+    import json
+    if v is None:
+        return None
+    if isinstance(v, (list, dict)):
+        return v
+    try:
+        return json.loads(v)
+    except Exception:
+        return None
+
+
+async def _migrate_config_chat_to_ai_chat(conn) -> None:
+    """一次性幂等：config_chat_* → ai_chat_*。
+
+    - 选未迁（migrated_session_id IS NULL）的 config 会话，逐条复制
+    - 每个会话用 SAVEPOINT 包成原子单元：中途失败回滚该会话（不留半条 + 无 marker→下次重试干净），
+      其它会话与 schema 不受影响
+    - tool_trace_json 尽量还原成 ai_chat_tool_calls 行（provider_call_id 留空）
+    - change_plan_json + actions_summary_json 折进 ai_chat_messages.extra_meta
+    - 回写 migrated_session_id（幂等标记），旧表保留作 archive
+    - 并发护栏：MySQL GET_LOCK 抢到才跑；SQLite 无此函数 → 直接跑
+    """
+    import json
+    import logging
+    log = logging.getLogger(__name__)
+    try:
+        got = (await conn.execute(text("SELECT GET_LOCK('migrate_config_chat', 0)"))).scalar()
+        if got == 0:
+            return  # 别的 pod 正在迁
+    except Exception:
+        pass  # SQLite 无 GET_LOCK
+    migrated = 0
+    try:
+        rows = (await conn.execute(text(
+            "SELECT id, app_id, tenant_id, user_id, title, created_at, updated_at "
+            "FROM config_chat_sessions WHERE migrated_session_id IS NULL"
+        ))).fetchall()
+        for r in rows:
+            old_sid, app_id, tenant_id, user_id, title, created_at, updated_at = r
+            try:
+                async with conn.begin_nested():  # 每会话原子 (SAVEPOINT)
+                    res = await conn.execute(text(
+                        "INSERT INTO ai_chat_sessions(tenant_id,user_id,title,status,mode,app_id,created_at,updated_at) "
+                        "VALUES (:t,:u,:title,'active','chat',:app,:c,:up)"
+                    ), {"t": tenant_id, "u": user_id, "title": title or "新会话",
+                        "app": app_id, "c": created_at, "up": updated_at})
+                    # lastrowid is available on aiosqlite CursorResult; fall back for edge cases
+                    new_sid = res.lastrowid
+                    if not new_sid:
+                        new_sid = (await conn.execute(text("SELECT last_insert_rowid()"))).scalar()
+                    msgs = (await conn.execute(text(
+                        "SELECT id, role, content, tool_trace_json, change_plan_json, actions_summary_json, created_at "
+                        "FROM config_chat_messages WHERE session_id=:s ORDER BY id ASC"
+                    ), {"s": old_sid})).fetchall()
+                    for mid, role, content, trace, plan, summary, mcreated in msgs:
+                        extra = {}
+                        if plan:
+                            extra["change_plan"] = _maybe_json(plan)
+                        if summary:
+                            extra["actions_summary"] = _maybe_json(summary)
+                        mres = await conn.execute(text(
+                            "INSERT INTO ai_chat_messages(session_id,role,content,extra_meta,created_at) "
+                            "VALUES (:s,:r,:c,:e,:ts)"
+                        ), {"s": new_sid, "r": role, "c": content or "",
+                            "e": json.dumps(extra, ensure_ascii=False) if extra else None, "ts": mcreated})
+                        new_mid = mres.lastrowid
+                        if not new_mid:
+                            new_mid = (await conn.execute(text("SELECT last_insert_rowid()"))).scalar()
+                        for tc in (_maybe_json(trace) or []):
+                            if not isinstance(tc, dict):
+                                continue
+                            await conn.execute(text(
+                                "INSERT INTO ai_chat_tool_calls(session_id,message_id,tool_name,args_json,result_text,status,duration_ms,created_at) "
+                                "VALUES (:s,:m,:name,:args,:res,:st,:dur,:ts)"
+                            ), {"s": new_sid, "m": new_mid, "name": tc.get("tool_name", "unknown"),
+                                "args": json.dumps(tc.get("args"), ensure_ascii=False) if tc.get("args") is not None else None,
+                                "res": tc.get("summary") or "", "st": "success" if tc.get("ok") else "error",
+                                "dur": tc.get("duration_ms"), "ts": mcreated})
+                    await conn.execute(text(
+                        "UPDATE config_chat_sessions SET migrated_session_id=:n WHERE id=:o"
+                    ), {"n": new_sid, "o": old_sid})
+                migrated += 1
+            except Exception as exc:
+                log.warning("[migrate] config session %s 迁移失败，跳过：%r", old_sid, exc)
+                continue
+        if migrated:
+            log.info("[migrate] config_chat → ai_chat 迁移 %d 会话", migrated)
+    finally:
+        try:
+            await conn.execute(text("SELECT RELEASE_LOCK('migrate_config_chat')"))
+        except Exception:
+            pass
+
 
 async def _migrate_legacy_builder_specs(conn, inspect_fn) -> None:
     """Move pre-split AI Builder SPEC rows out of the old `specs` table.
