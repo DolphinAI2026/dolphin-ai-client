@@ -45,15 +45,7 @@
       <!-- ─── header (预览 + 编辑共用) — 2026-05-27 S: 删 title/form_id 重复, 上面 mdsh-subnav 已有 -->
       <header class="fbp-canvas-head">
         <div class="fbp-canvas-actions">
-          <OpenLowcodeBackendButton
-            :app-id="props.appId"
-            menu-type="MODEL"
-            :menu-id="props.menuId || ''"
-            :form-id="props.formId || null"
-            title="在低代码后台编辑此表单"
-          />
-          <!-- 2026-05-29: 删「用对话改」「保存」死按钮 — 二者只弹 alert/永久 disabled。
-               改字段走常驻右栏「配置助手」或「编辑」模式(apaas 原生编辑器自带保存)。 -->
+          <!-- 「打开低代码后台」按钮已移至外层 tab 条统一承载。 -->
         </div>
       </header>
 
@@ -106,7 +98,6 @@
 import { ref, watch, h, defineComponent, onUnmounted, type PropType } from 'vue'
 import request, { API_PREFIX } from '@/utils/request'
 import EmptyState from '@/components/states/EmptyState.vue'
-import OpenLowcodeBackendButton from '@/components/v3/OpenLowcodeBackendButton.vue'
 import SkeletonCard from '@/components/states/SkeletonCard.vue'
 
 /* ────────────────────────────────────────────────────────────────

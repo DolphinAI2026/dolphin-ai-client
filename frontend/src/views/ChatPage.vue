@@ -198,6 +198,14 @@
                   {{ sub.label }}
                 </button>
               </div>
+              <OpenLowcodeBackendButton
+                v-if="existingAppId"
+                class="mdsh-subnav-lowcode"
+                :app-id="existingAppId"
+                menu-type="MODEL"
+                :menu-id="selectedApaasMenuId"
+                :form-id="selectedApaasMenuFormId"
+              />
             </div>
             <!-- designer 内容 -->
             <div class="mdsh-body">
@@ -224,6 +232,13 @@
                 :app-id="existingAppId"
                 :menu-id="selectedApaasMenuId"
                 :form-id="selectedApaasMenuFormId"
+                :hide-lowcode-btn="true"
+              />
+              <BusinessEventPanel
+                v-else-if="designerSub === 'event'"
+                :key="`event-${selectedApaasMenuId}-${designerRefreshKey}`"
+                :app-id="existingAppId"
+                :menu-name="selectedApaasMenuName"
               />
               <DataSchemaEditor
                 v-else-if="designerSub === 'data'"
@@ -831,6 +846,7 @@ import ListDesignerPanel from '@/components/v3/ListDesignerPanel.vue'
 import ProcessDesignerPanel from '@/components/v3/ProcessDesignerPanel.vue'
 import DataSchemaEditor from '@/components/v3/DataSchemaEditor.vue'
 import FormPermPanel from '@/components/v3/FormPermPanel.vue'
+import BusinessEventPanel from '@/components/v3/BusinessEventPanel.vue'
 import OpenLowcodeBackendButton from '@/components/v3/OpenLowcodeBackendButton.vue'
 import DataModelDetailPanel from '@/components/v3/DataModelDetailPanel.vue'
 import DictEditorPanel from '@/components/v3/DictEditorPanel.vue'
@@ -2323,11 +2339,12 @@ const DESIGNER_SUBS = [
   { code: 'form', label: '表单设计' },
   { code: 'list', label: '列表设计' },
   { code: 'process', label: '流程设计' },
-  { code: 'data', label: '数据 schema' },
+  { code: 'event', label: '业务事件' },
+  { code: 'data', label: '数据模型' },
   { code: 'perm', label: '权限' },
   // 2026-05-29: 删「页面设置」(page) — 纯占位无功能, 改设置走配置助手对话。
 ] as const
-const designerSub = ref<'form' | 'list' | 'process' | 'data' | 'perm'>('form')
+const designerSub = ref<'form' | 'list' | 'process' | 'event' | 'data' | 'perm'>('form')
 
 // P1-N6: 这些 sub-tab 走 native master-detail panel — 不需要再显 SectionContentList.
 const isNativeMasterDetailSubTab = computed(() => {
@@ -11376,6 +11393,13 @@ html[data-theme="light"] .msg-attachment-chip {
   background: var(--surface-2);
   padding: 3px;
   border-radius: 8px;
+  flex-shrink: 0;
+  /* 2026-06-05: subnav 现有 3 个子项(info / tabs / 共享低代码按钮)。
+     space-between 会把 tabs 推到中间, 这里用 margin-left:auto 让 info 留左、
+     tabs + 低代码按钮一起靠右贴合。 */
+  margin-left: auto;
+}
+.mdsh-subnav-lowcode {
   flex-shrink: 0;
 }
 .mdsh-subnav-tab {

@@ -82,6 +82,7 @@
         </div>
         <div class="pdp-head-actions">
           <OpenLowcodeBackendButton
+            v-if="!hideLowcodeBtn"
             :app-id="props.appId"
             menu-type="MODEL"
             :menu-id="props.menuId || ''"
@@ -170,6 +171,9 @@ const props = defineProps<{
   menuId?: string
   menuName?: string
   formId?: string
+  /** 隐藏「打开低代码后台」按钮 — 该面板在设计 tab + 逻辑 tab 双处复用，
+      外层 tab 条已统一承载该按钮时传 true 隐藏内部按钮，避免重复。默认显示。 */
+  hideLowcodeBtn?: boolean
 }>()
 
 const containerRef = ref<HTMLElement | null>(null)

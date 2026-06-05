@@ -13,11 +13,6 @@
         </p>
         <p v-else-if="loading" class="fpp-stat">加载中…</p>
       </div>
-      <OpenLowcodeBackendButton
-        :app-id="props.appId"
-        :form-id="props.formId"
-        title="在低代码后台编辑表单权限"
-      />
       <button class="fpp-btn fpp-btn-ghost" :disabled="loading" @click="load">
         <span aria-hidden="true">⟲</span> 刷新
       </button>
@@ -83,7 +78,6 @@
 import { ref, watch } from 'vue'
 import request from '@/utils/request'
 import SkeletonCard from '@/components/states/SkeletonCard.vue'
-import OpenLowcodeBackendButton from '@/components/v3/OpenLowcodeBackendButton.vue'
 import EmptyState from '@/components/states/EmptyState.vue'
 import ErrorCard from '@/components/states/ErrorCard.vue'
 import BaseBadge from '@/components/BaseBadge.vue'

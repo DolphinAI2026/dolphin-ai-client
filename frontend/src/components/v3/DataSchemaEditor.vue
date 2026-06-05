@@ -66,14 +66,7 @@
           </p>
         </div>
         <div class="dse-head-actions">
-          <OpenLowcodeBackendButton
-            :app-id="props.appId"
-            menu-type="MODEL"
-            :menu-id="props.menuId || ''"
-            :form-id="props.formId || null"
-            title="在低代码后台编辑此数据模型"
-          />
-          <!-- 加 / 改 / 删字段请点上方「打开低代码后台」进 apaas 原生编辑器, 或用配置助手对话 -->
+          <!-- 「打开低代码后台」按钮已移至外层 tab 条统一承载。 -->
         </div>
       </header>
 
@@ -253,7 +246,6 @@ import { ref, computed, watch } from 'vue'
 import { ElMessage } from 'element-plus'
 import request from '@/utils/request'
 import SkeletonCard from '@/components/states/SkeletonCard.vue'
-import OpenLowcodeBackendButton from '@/components/v3/OpenLowcodeBackendButton.vue'
 import ErrorCard from '@/components/states/ErrorCard.vue'
 
 interface FieldRow {

@@ -40,13 +40,6 @@
             </svg>
             刷新
           </button>
-          <OpenLowcodeBackendButton
-            :app-id="props.appId"
-            menu-type="MODEL"
-            :menu-id="props.menuId || ''"
-            :form-id="props.formId || null"
-            title="在低代码后台编辑此列表"
-          />
         </div>
       </header>
 
@@ -237,7 +230,6 @@
 import { ref, computed, watch, reactive } from 'vue'
 import request from '@/utils/request'
 import EmptyState from '@/components/states/EmptyState.vue'
-import OpenLowcodeBackendButton from '@/components/v3/OpenLowcodeBackendButton.vue'
 import ErrorCard from '@/components/states/ErrorCard.vue'
 import SkeletonCard from '@/components/states/SkeletonCard.vue'
 

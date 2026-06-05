@@ -2,6 +2,35 @@ import request from '@/utils/request'
 import type { Application, MergedApplication } from '@/types'
 import { API_PREFIX } from '@/utils/request'
 
+// ── 业务事件 (对应后端 BusinessEventsResponse / BusinessEventItem) ──────────────
+export interface BusinessEventItem {
+  event_id: string
+  event_name: string
+  event_code?: string | null
+  event_type: string
+  status: string
+  trigger?: {
+    form_id?: string | null
+    boc_code?: string | null
+    field_code?: string | null
+  } | null
+  target?: string | null
+  last_update?: string | null
+  extra?: Record<string, any>
+}
+
+export interface BusinessEventsResponse {
+  ok: boolean
+  app_id: number
+  env_id?: number | null
+  apaas_app_id?: string | null
+  items: BusinessEventItem[]
+  total: number
+  source: string
+  error_code?: string | null
+  message?: string | null
+}
+
 export const applicationApi = {
   list(params?: { include_remote?: boolean; source_filter?: string; include_config?: boolean }) {
     return request.get<any, MergedApplication[]>('/applications', { params })
@@ -267,5 +296,10 @@ export const applicationApi = {
       message: string
       next_action: string
     }>(`/applications/${appId}/rollback`, { to_record_id: toRecordId })
+  },
+
+  /** 拉应用业务事件 (只读). 应用未部署 → ok=false + error_code=APP_NOT_DEPLOYED + items=[]. */
+  getBusinessEvents(appId: number) {
+    return request.get<any, BusinessEventsResponse>(`/applications/${appId}/business-events`)
   },
 }
