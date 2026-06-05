@@ -46,6 +46,39 @@ from app.observability import recorder
 logger = logging.getLogger(__name__)
 
 
+# ─────────────────────── Deferred-tool helpers ───────────────────────
+
+
+def _parse_activated(result_text: str) -> list[str]:
+    """从 search_tools 的结果 JSON 里取 activated 名单;非 JSON / 无字段返 []。"""
+    try:
+        d = json.loads(result_text or "")
+        return list(d.get("activated") or []) if isinstance(d, dict) else []
+    except Exception:
+        return []
+
+
+async def _reconstruct_active_tools(db: AsyncSession, session) -> set[str]:
+    """从历史推导本会话已激活的延迟工具:
+    过去 search_tools 调用的 activated 名单 + 已成功调用过的工具名(兜底:用过的保持可用)。
+    无状态、重启不丢(从持久化 tool_calls 推)。"""
+    from sqlalchemy import select as _sel
+    from app.models.ai_chat import AIChatToolCall
+    active: set[str] = set()
+    try:
+        rows = (await db.execute(
+            _sel(AIChatToolCall).where(AIChatToolCall.session_id == session.id)
+        )).scalars().all()
+        for tc in rows:
+            if tc.tool_name == "search_tools":
+                active.update(_parse_activated(tc.result_text or ""))
+            else:
+                active.add(tc.tool_name)
+    except Exception:
+        pass
+    return active
+
+
 # ─────────────────────────── System prompts ──────────────────────────
 #
 # 两种工作模式共享同一段格式硬约束（_FORMAT_CONSTRAINTS），但前面的
