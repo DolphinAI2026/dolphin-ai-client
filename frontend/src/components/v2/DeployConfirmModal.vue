@@ -24,9 +24,9 @@ const emit = defineEmits<{
 }>()
 
 const ENVS = [
-  { id: 'dev', label: '开发', tone: 'outline' },
+  { id: 'dev', label: '开发', tone: 'outline', isDefault: false },
   { id: 'test', label: '测试', tone: 'sky', isDefault: true },
-  { id: 'prod', label: '生产', tone: 'rose' },
+  { id: 'prod', label: '生产', tone: 'rose', isDefault: false },
 ] as const
 
 // 2026-05-19 image #30: 用户拍板"每个租户对应唯一 1 个低代码租户"，不需要选 env。

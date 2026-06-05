@@ -165,7 +165,7 @@ async def sync_builtin_llm_configs(
     *,
     commit: bool = True,
 ):
-    """把 .env 中的内置模型同步到 llm_configs，避免前台重复手工配置。
+    """把 .env 中的内置模型同步到平台级 llm_configs，避免前台重复手工配置。
 
     同时清理 _OBSOLETE_BUILTIN_NAMES 列表里的旧 builtin（之前 seed 出来现在
     不再要的），避免每次重启又出现一堆默认模型。
@@ -179,29 +179,24 @@ async def sync_builtin_llm_configs(
         tenants = (await db.execute(select(Tenant))).scalars().all()
     if not tenants:
         return
+    platform_tenant_id = tenants[0].id
 
     specs = _builtin_llm_specs()
     managed_names = {spec["config_name"] for spec in specs}
 
-    for tenant in tenants:
-        # 1. 清理 obsolete builtin（不影响用户手工添加的同名 / 自定义命名 config）
-        obsolete_rows = (await db.execute(
-            select(LLMConfig).where(
-                LLMConfig.tenant_id == tenant.id,
-                LLMConfig.config_name.in_(_OBSOLETE_BUILTIN_NAMES),
-            )
-        )).scalars().all()
-        for row in obsolete_rows:
-            await db.delete(row)
-        await db.flush()  # 让后续 select 看到删除结果
+    # 1. 清理 obsolete builtin（不影响用户手工添加的同名 / 自定义命名 config）。
+    obsolete_rows = (await db.execute(
+        select(LLMConfig).where(
+            LLMConfig.config_name.in_(_OBSOLETE_BUILTIN_NAMES),
+        )
+    )).scalars().all()
+    for row in obsolete_rows:
+        await db.delete(row)
+    await db.flush()  # 让后续 select 看到删除结果
 
-        if not specs:
-            continue
-
-        # 2. 已有同 (provider, model, purpose) 的用户配置则跳过新建（防止 builtin 跟用户自定义重复）
-        existing = (
-            await db.execute(select(LLMConfig).where(LLMConfig.tenant_id == tenant.id))
-        ).scalars().all()
+    if specs:
+        # 2. 已有同 (provider, model, purpose) 的用户配置则跳过新建（防止 builtin 跟用户自定义重复）。
+        existing = (await db.execute(select(LLMConfig))).scalars().all()
         existing_duplicate_by_key: dict[tuple[str, str, str], LLMConfig] = {}
         for row in existing:
             if row.config_name in managed_names:
@@ -230,7 +225,7 @@ async def sync_builtin_llm_configs(
                     continue
             if row is None:
                 row = LLMConfig(
-                    tenant_id=tenant.id,
+                    tenant_id=platform_tenant_id,
                     config_name=spec["config_name"],
                     provider=spec["provider"],
                     base_url=spec["base_url"],

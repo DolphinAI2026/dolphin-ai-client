@@ -1,5 +1,6 @@
 import subprocess
 from contextlib import asynccontextmanager
+import os
 from pathlib import Path
 from urllib.parse import urlparse
 from fastapi import FastAPI
@@ -178,6 +179,51 @@ app.include_router(admin_mcp.router, prefix="/api")
 app.include_router(mcp_platform.router, prefix="/api")
 app.include_router(builder_mcp.router, prefix="/api")
 app.include_router(mcp_hub.router)
+
+
+class _McpBearerAuthAsgiMiddleware:
+    """Protect the embedded Streamable HTTP MCP endpoint with MCP_API_KEYS."""
+
+    def __init__(self, app):
+        self.app = app
+
+    async def __call__(self, scope, receive, send):
+        if scope["type"] != "http":
+            await self.app(scope, receive, send)
+            return
+        raw_keys = (os.getenv("MCP_API_KEYS") or os.getenv("MCP_API_KEY") or "").strip()
+        keys = {item.strip() for item in raw_keys.split(",") if item.strip()}
+        if not keys:
+            await self._send_json(send, 503, b'{"detail":"MCP_API_KEYS not configured"}')
+            return
+        headers = {
+            key.decode("latin1").lower(): value.decode("latin1")
+            for key, value in scope.get("headers") or []
+        }
+        auth = headers.get("authorization", "")
+        token = auth.removeprefix("Bearer ").strip() if auth.startswith("Bearer ") else ""
+        if token not in keys:
+            await self._send_json(send, 401, b'{"detail":"Invalid MCP bearer token"}')
+            return
+        await self.app(scope, receive, send)
+
+    async def _send_json(self, send, status: int, body: bytes):
+        await send({
+            "type": "http.response.start",
+            "status": status,
+            "headers": [(b"content-type", b"application/json")],
+        })
+        await send({"type": "http.response.body", "body": body})
+
+
+# Embedded MCP endpoint for Dolphin / external agents:
+# mount path + FastMCP default path => /api/mcp/mcp
+from app.mcp_server import mcp as _main_mcp  # noqa: E402
+app.mount(
+    "/api/mcp",
+    _McpBearerAuthAsgiMiddleware(_main_mcp.streamable_http_app()),
+    name="main-mcp",
+)
 # 2026-05-19 Chrome extension WebSocket bridge — image #50 follow-up POC
 from app.routes import browser_ext_ws  # noqa: E402
 app.include_router(browser_ext_ws.router)

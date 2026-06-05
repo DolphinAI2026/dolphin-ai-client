@@ -777,6 +777,41 @@ def _pick(row: dict[str, Any], *keys: str) -> Any:
     return None
 
 
+def _pick_tenant_display_name(row: dict[str, Any], fallback: str) -> str:
+    code_values = {
+        str(value or "").strip()
+        for value in (
+            row.get("tenantCode"),
+            row.get("tenant_code"),
+            row.get("code"),
+            row.get("tenantId"),
+            row.get("tenant_id"),
+            row.get("id"),
+            fallback,
+        )
+        if str(value or "").strip()
+    }
+    for key in (
+        "displayName",
+        "display_name",
+        "tenantDisplayName",
+        "tenant_display_name",
+        "label",
+        "orgName",
+        "org_name",
+        "companyName",
+        "company_name",
+    ):
+        value = str(row.get(key) or "").strip()
+        if value and value not in code_values:
+            return value
+    for key in ("tenantName", "tenant_name", "name"):
+        value = str(row.get(key) or "").strip()
+        if value and value not in code_values:
+            return value
+    return str(_pick(row, "tenantName", "tenant_name", "name") or fallback).strip()
+
+
 def _tenant_status_enabled(value: Any) -> bool:
     if value in (1, "1", True):
         return True
@@ -835,7 +870,7 @@ async def _sync_apaas_tenants_to_local(
         platform_tid = str(_pick(raw, "tenantId", "tenant_id", "id") or "").strip()
         if not platform_tid:
             continue
-        tenant_name = str(_pick(raw, "tenantName", "tenant_name", "name") or platform_tid).strip()
+        tenant_name = _pick_tenant_display_name(raw, platform_tid)
         preferred_code = str(_pick(raw, "tenantCode", "tenant_code", "code") or tenant_name or platform_tid)
         enabled = _tenant_status_enabled(_pick(raw, "status", "state"))
 

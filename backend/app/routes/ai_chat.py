@@ -234,10 +234,10 @@ async def create_session(
 ):
     selected_llm_config_id: Optional[int] = None
     if body.selected_llm_config_id is not None and body.selected_llm_config_id > 0:
-        from app.routes.llm_configs import get_active_llm_config_by_id
-        cfg = await get_active_llm_config_by_id(db, ctx.tenant_id, body.selected_llm_config_id)
+        from app.routes.llm_configs import get_active_llm_config_by_id_for_purpose
+        cfg = await get_active_llm_config_by_id_for_purpose(db, ctx.tenant_id, body.selected_llm_config_id, "builder")
         if not cfg:
-            raise HTTPException(status_code=400, detail="所选模型不可用或不属于当前租户")
+            raise HTTPException(status_code=400, detail="所选模型不可用或不支持 AI Builder")
         selected_llm_config_id = cfg.id
     s = AIChatSession(
         tenant_id=ctx.tenant_id,
@@ -345,10 +345,10 @@ async def update_session(
         s.title = body.title
     if body.selected_llm_config_id is not None:
         if body.selected_llm_config_id > 0:
-            from app.routes.llm_configs import get_active_llm_config_by_id
-            cfg = await get_active_llm_config_by_id(db, ctx.tenant_id, body.selected_llm_config_id)
+            from app.routes.llm_configs import get_active_llm_config_by_id_for_purpose
+            cfg = await get_active_llm_config_by_id_for_purpose(db, ctx.tenant_id, body.selected_llm_config_id, "builder")
             if not cfg:
-                raise HTTPException(status_code=400, detail="所选模型不可用或不属于当前租户")
+                raise HTTPException(status_code=400, detail="所选模型不可用或不支持 AI Builder")
             s.selected_llm_config_id = cfg.id
         else:
             s.selected_llm_config_id = None

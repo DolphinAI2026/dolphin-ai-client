@@ -245,6 +245,68 @@ function buildOperations(row: TableRow) {
   return operations
 }
 
+function firstRowValue(row: TableRow, keys: string[]) {
+  for (const key of keys) {
+    const value = row[key]
+    if (value) return value
+  }
+  return ''
+}
+
+function buildFormComponentFromRow(
+  row: TableRow,
+  options: {
+    rowIdx: number
+    sectionType: 'main' | 'sub'
+    modelCode: string
+    fieldCodeKeys: string[]
+    fieldNameKeys: string[]
+    fallbackCodePrefix: string
+    fallbackNamePrefix: string
+    tableModelCode?: string
+    subGroupName?: string
+    fullRelationMeta?: boolean
+  },
+) {
+  const fieldCode = firstRowValue(row, options.fieldCodeKeys) || `${options.fallbackCodePrefix}_${options.rowIdx + 1}`
+  const fieldName = firstRowValue(row, options.fieldNameKeys) || fieldCode || `${options.fallbackNamePrefix}${options.rowIdx + 1}`
+  const componentType = row['组件类型'] || ''
+  const targetModelCode = row['目标模型编码'] || ''
+  const targetFieldCode = row['目标字段编码'] || ''
+  const component: Record<string, any> = {
+    field_code: fieldCode,
+    field_name: fieldName,
+    component_type: componentType,
+    raw_component_type: componentType,
+    section_type: options.sectionType,
+    model_code: options.modelCode,
+    required: boolCell(row['必填'] || row['是否必填']),
+    hidden: boolCell(row['隐藏'] || row['是否隐藏']),
+    readonly: boolCell(row['只读'] || row['是否只读']),
+    show_in_list: boolCell(row['列表展示'] || row['是否列表展示']),
+    searchable: boolCell(row['查询条件'] || row['是否查询条件']),
+    dict_code: row['字典编码'] || '',
+    ref_model_code: targetModelCode,
+    ref_display_field_code: targetFieldCode,
+    association_origin_field_code: row['本表关联字段编码'] || '',
+    description: row['说明'] || '',
+  }
+  if (options.tableModelCode) component.table_model_code = options.tableModelCode
+  if (options.subGroupName !== undefined) component.sub_group_name = options.subGroupName
+  if (options.fullRelationMeta) {
+    component.selector_form_code = targetModelCode
+    component.selector_form_name = ''
+    component.selector_field_code = targetFieldCode
+    component.selector_field_name = ''
+    component.association_form_code = componentType === '关联表单' ? targetModelCode : ''
+    component.association_form_name = ''
+    component.association_origin_field_name = ''
+    component.association_target_field_code = componentType === '关联表单' ? targetFieldCode : ''
+    component.association_target_field_name = ''
+  }
+  return component
+}
+
 export function buildStructuredDocFromPreviewConfig(
   data: any,
   options?: {
@@ -552,7 +614,7 @@ export function standardDocMdToStructuredDoc(markdown: string) {
     .flat()
   const formCodeByName = new Map(formListRows.map(row => [row['表单名称'] || '', row['表单编码'] || '']))
 
-  let forms = formListRows.map((row, idx) => {
+  let forms: any[] = formListRows.map((row, idx) => {
     const formName = row['表单名称'] || `表单${idx + 1}`
     const rawModelValue = row['绑定主表模型'] || ''
     const mainModelCode = modelCodeByName.get(rawModelValue) || rawModelValue || `model_${idx + 1}`
@@ -567,69 +629,33 @@ export function standardDocMdToStructuredDoc(markdown: string) {
     const components = [
       ...mainFieldRows
         .filter(fieldRow => (fieldRow['表单名称'] || '') === formName)
-        .map((fieldRow, rowIdx) => {
-          return {
-            field_code: fieldRow['字段编码'] || `field_${rowIdx + 1}`,
-            field_name: fieldRow['字段名称'] || fieldRow['字段编码'] || `字段${rowIdx + 1}`,
-            component_type: fieldRow['组件类型'] || '',
-            raw_component_type: fieldRow['组件类型'] || '',
-            section_type: 'main',
-            model_code: mainModelCode,
-            required: boolCell(fieldRow['必填'] || fieldRow['是否必填']),
-            hidden: boolCell(fieldRow['隐藏'] || fieldRow['是否隐藏']),
-            readonly: boolCell(fieldRow['只读'] || fieldRow['是否只读']),
-            show_in_list: boolCell(fieldRow['列表展示'] || fieldRow['是否列表展示']),
-            searchable: boolCell(fieldRow['查询条件'] || fieldRow['是否查询条件']),
-            dict_code: fieldRow['字典编码'] || '',
-            selector_form_code: fieldRow['目标模型编码'] || '',
-            selector_form_name: '',
-            selector_field_code: fieldRow['目标字段编码'] || '',
-            selector_field_name: '',
-            association_form_code: fieldRow['组件类型'] === '关联表单' ? (fieldRow['目标模型编码'] || '') : '',
-            association_form_name: '',
-            association_origin_field_code: fieldRow['本表关联字段编码'] || '',
-            association_origin_field_name: '',
-            association_target_field_code: fieldRow['组件类型'] === '关联表单' ? (fieldRow['目标字段编码'] || '') : '',
-            association_target_field_name: '',
-            ref_model_code: fieldRow['目标模型编码'] || '',
-            ref_display_field_code: fieldRow['目标字段编码'] || '',
-            description: fieldRow['说明'] || '',
-          }
-        }),
+        .map((fieldRow, rowIdx) => buildFormComponentFromRow(fieldRow, {
+          rowIdx,
+          sectionType: 'main',
+          modelCode: mainModelCode,
+          fieldCodeKeys: ['字段编码'],
+          fieldNameKeys: ['字段名称', '字段编码'],
+          fallbackCodePrefix: 'field',
+          fallbackNamePrefix: '字段',
+          fullRelationMeta: true,
+        })),
       ...subFieldRows
         .filter(fieldRow => (fieldRow['表单名称'] || '') === formName)
         .map((fieldRow, rowIdx) => {
           const subGroupName = fieldRow['子表区域名称'] || ''
           const subModelCode = subRegionMap.get(subGroupName) || `sub_model_${rowIdx + 1}`
-          return {
-            field_code: fieldRow['字段编码'] || `sub_field_${rowIdx + 1}`,
-            field_name: fieldRow['字段名称'] || fieldRow['字段编码'] || `子表字段${rowIdx + 1}`,
-            component_type: fieldRow['组件类型'] || '',
-            raw_component_type: fieldRow['组件类型'] || '',
-            section_type: 'sub',
-            model_code: subModelCode,
-            table_model_code: subModelCode,
-            sub_group_name: subGroupName,
-            required: boolCell(fieldRow['必填'] || fieldRow['是否必填']),
-            hidden: boolCell(fieldRow['隐藏'] || fieldRow['是否隐藏']),
-            readonly: boolCell(fieldRow['只读'] || fieldRow['是否只读']),
-            show_in_list: boolCell(fieldRow['列表展示'] || fieldRow['是否列表展示']),
-            searchable: boolCell(fieldRow['查询条件'] || fieldRow['是否查询条件']),
-            dict_code: fieldRow['字典编码'] || '',
-            selector_form_code: fieldRow['目标模型编码'] || '',
-            selector_form_name: '',
-            selector_field_code: fieldRow['目标字段编码'] || '',
-            selector_field_name: '',
-            association_form_code: fieldRow['组件类型'] === '关联表单' ? (fieldRow['目标模型编码'] || '') : '',
-            association_form_name: '',
-            association_origin_field_code: fieldRow['本表关联字段编码'] || '',
-            association_origin_field_name: '',
-            association_target_field_code: fieldRow['组件类型'] === '关联表单' ? (fieldRow['目标字段编码'] || '') : '',
-            association_target_field_name: '',
-            ref_model_code: fieldRow['目标模型编码'] || '',
-            ref_display_field_code: fieldRow['目标字段编码'] || '',
-            description: fieldRow['说明'] || '',
-          }
+          return buildFormComponentFromRow(fieldRow, {
+            rowIdx,
+            sectionType: 'sub',
+            modelCode: subModelCode,
+            fieldCodeKeys: ['字段编码'],
+            fieldNameKeys: ['字段名称', '字段编码'],
+            fallbackCodePrefix: 'sub_field',
+            fallbackNamePrefix: '子表字段',
+            tableModelCode: subModelCode,
+            subGroupName,
+            fullRelationMeta: true,
+          })
         }),
     ]
 
@@ -669,23 +695,14 @@ export function standardDocMdToStructuredDoc(markdown: string) {
       })
 
       const components = [
-        ...mainRows.map((row, rowIdx) => ({
-          field_code: row['字段编码'] || `field_${rowIdx + 1}`,
-          field_name: row['字段名称'] || row['字段编码'] || `字段${rowIdx + 1}`,
-          component_type: row['组件类型'] || '',
-          raw_component_type: row['组件类型'] || '',
-          section_type: 'main',
-          model_code: mainModelCode,
-          required: boolCell(row['必填'] || row['是否必填']),
-          hidden: boolCell(row['隐藏'] || row['是否隐藏']),
-          readonly: boolCell(row['只读'] || row['是否只读']),
-          show_in_list: boolCell(row['列表展示'] || row['是否列表展示']),
-          searchable: boolCell(row['查询条件'] || row['是否查询条件']),
-          dict_code: row['字典编码'] || '',
-          ref_model_code: row['目标模型编码'] || '',
-          ref_display_field_code: row['目标字段编码'] || '',
-          association_origin_field_code: row['本表关联字段编码'] || '',
-          description: row['说明'] || '',
+        ...mainRows.map((row, rowIdx) => buildFormComponentFromRow(row, {
+          rowIdx,
+          sectionType: 'main',
+          modelCode: mainModelCode,
+          fieldCodeKeys: ['字段编码'],
+          fieldNameKeys: ['字段名称', '字段编码'],
+          fallbackCodePrefix: 'field',
+          fallbackNamePrefix: '字段',
         })),
         ...subDefRows.flatMap((subRow, subIdx) => {
           const subModelCode = subRow['子表模型编码'] || `sub_model_${subIdx + 1}`
@@ -693,25 +710,16 @@ export function standardDocMdToStructuredDoc(markdown: string) {
           const rows = subFieldTableByName.get(normalizeSubtableName(subModelName))
             || subFieldTableByName.get(normalizeSubtableName(subRow['子表模型名称'] || ''))
             || []
-          return rows.map((row, rowIdx) => ({
-            field_code: row['子表字段编码'] || `sub_field_${rowIdx + 1}`,
-            field_name: row['子表字段名称'] || row['子表字段编码'] || `子表字段${rowIdx + 1}`,
-            component_type: row['组件类型'] || '',
-            raw_component_type: row['组件类型'] || '',
-            section_type: 'sub',
-            model_code: subModelCode,
-            table_model_code: subModelCode,
-            sub_group_name: subModelName,
-            required: boolCell(row['必填'] || row['是否必填']),
-            hidden: boolCell(row['隐藏'] || row['是否隐藏']),
-            readonly: boolCell(row['只读'] || row['是否只读']),
-            show_in_list: boolCell(row['列表展示'] || row['是否列表展示']),
-            searchable: boolCell(row['查询条件'] || row['是否查询条件']),
-            dict_code: row['字典编码'] || '',
-            ref_model_code: row['目标模型编码'] || '',
-            ref_display_field_code: row['目标字段编码'] || '',
-            association_origin_field_code: row['本表关联字段编码'] || '',
-            description: row['说明'] || '',
+          return rows.map((row, rowIdx) => buildFormComponentFromRow(row, {
+            rowIdx,
+            sectionType: 'sub',
+            modelCode: subModelCode,
+            fieldCodeKeys: ['子表字段编码'],
+            fieldNameKeys: ['子表字段名称', '子表字段编码'],
+            fallbackCodePrefix: 'sub_field',
+            fallbackNamePrefix: '子表字段',
+            tableModelCode: subModelCode,
+            subGroupName: subModelName,
           }))
         }),
       ]

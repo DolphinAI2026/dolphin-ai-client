@@ -10,6 +10,7 @@
 """
 from __future__ import annotations
 
+import copy
 import hashlib
 import logging
 import random
@@ -244,6 +245,43 @@ def _force_form_identity(
     form_config.setdefault("formModelType", "DATABASE")
 
 
+def _ensure_canvas_form_components(
+    form_config: dict,
+    fallback_components: Optional[List[dict]] = None,
+) -> None:
+    if not isinstance(form_config, dict):
+        return
+    detail_page = form_config.setdefault("detailPage", {})
+    if not isinstance(detail_page, dict):
+        form_config["detailPage"] = {}
+        detail_page = form_config["detailPage"]
+
+    components = detail_page.get("formComponents")
+    if not isinstance(components, list):
+        components = None
+    if not components and fallback_components:
+        components = copy.deepcopy(fallback_components)
+    if components is None:
+        return
+    detail_page["formComponents"] = components
+
+    def _prepare_component(component: dict, index_path: str) -> None:
+        if not isinstance(component, dict):
+            return
+        if not str(component.get("uuid") or "").strip():
+            field_code = str(component.get("modelField") or component.get("tableModelCode") or "").split(".")[-1]
+            label = str(component.get("label") or component.get("name") or field_code or "component")
+            base = _sanitize_code(label) or "component"
+            component["uuid"] = f"{base}-{index_path}-{_rand(6)}"
+        component.setdefault("componentType", "FORM_TEXT_INPUT")
+        component.setdefault("width", 6)
+        for column_index, column in enumerate(component.get("tableColumn", []) or [], start=1):
+            _prepare_component(column, f"{index_path}-{column_index}")
+
+    for index, component in enumerate(components, start=1):
+        _prepare_component(component, str(index))
+
+
 def _clone_for_form_config_permissions(value):
     if isinstance(value, list):
         return [_clone_for_form_config_permissions(item) for item in value]
@@ -298,6 +336,7 @@ async def _finalize_created_form_config(
     form_code: str,
     all_model_codes: List[str],
     menu_id: str = "",
+    form_components: Optional[List[dict]] = None,
 ) -> None:
     if not form_id:
         return
@@ -312,6 +351,7 @@ async def _finalize_created_form_config(
             form_id=form_id,
             menu_id=menu_id,
         )
+        _ensure_canvas_form_components(config, form_components)
 
     form_config = await _query_saveable_form_config(client, app_id, form_id)
     _apply_latest(form_config)
@@ -335,6 +375,8 @@ async def _sync_form_permissions_to_form_config(
     form_name: str = "",
     form_code: str = "",
     all_model_codes: Optional[List[str]] = None,
+    fallback_components: Optional[List[dict]] = None,
+    menu_id: str = "",
 ) -> None:
     """回写表单权限到 formConfig。
 
@@ -376,7 +418,9 @@ async def _sync_form_permissions_to_form_config(
             all_model_codes=all_model_codes or [],
             app_id=app_id,
             form_id=form_id,
+            menu_id=menu_id,
         )
+        _ensure_canvas_form_components(form_config, fallback_components)
 
     form_config = await _query_saveable_form_config(client, app_id, form_id)
     _apply_latest(form_config)
@@ -909,6 +953,8 @@ def _build_permission_payload_for_form(
         "form_name": form_result.get("formName", ""),
         "form_code": form_code,
         "all_model_codes": list(form_result.get("allModelCodes") or []),
+        "form_components": copy.deepcopy(form_result.get("formComponents") or []),
+        "menu_id": form_result.get("menuId", ""),
     }
     return perm_payload, sync_job
 
@@ -960,6 +1006,8 @@ async def _apply_permissions_and_sync(
             form_name=job.get("form_name", ""),
             form_code=job.get("form_code", ""),
             all_model_codes=job.get("all_model_codes", []),
+            fallback_components=job.get("form_components") or [],
+            menu_id=job.get("menu_id", ""),
         )
 
 
@@ -1023,6 +1071,7 @@ async def _rebind_dicts_on_forms(
     form_ids: List[str],
     models: List[dict],
     dict_codes: Dict[str, str],
+    form_results: Optional[List[dict]] = None,
 ) -> int:
     """用平台实际字典选项回写到每个表单的下拉组件。返回成功更新的表单数。"""
     all_platform_dicts = await client.query_dicts(app_id)
@@ -1032,13 +1081,20 @@ async def _rebind_dicts_on_forms(
         dict_options_map[dc] = await client.query_dict_options(app_id, did)
 
     label_dict = _collect_label_dict_map(models, dict_codes)
+    form_result_by_id = {
+        str(item.get("formId") or "").strip(): item
+        for item in (form_results or [])
+        if str(item.get("formId") or "").strip()
+    }
 
     bound_count = 0
     for form_id in form_ids:
         try:
             fc = await client.query_form_config(app_id, form_id)
+            form_result = form_result_by_id.get(str(form_id).strip(), {})
+            fallback_components = form_result.get("formComponents") or []
+            updated = _ensure_canvas_form_components(fc, fallback_components)
             comps = fc.get("detailPage", {}).get("formComponents", [])
-            updated = False
 
             for comp in comps:
                 if _bind_dict_on_component(comp, label_dict, dict_id_map, dict_options_map):
@@ -1050,7 +1106,27 @@ async def _rebind_dicts_on_forms(
                             updated = True
 
             if updated:
-                await client.save_form_config(app_id, fc)
+                def _apply_latest(latest: dict) -> None:
+                    _force_form_identity(
+                        latest,
+                        form_name=str(form_result.get("formName") or ""),
+                        form_code=str(form_result.get("formCode") or ""),
+                        all_model_codes=list(form_result.get("allModelCodes") or []),
+                        app_id=app_id,
+                        form_id=str(form_id),
+                        menu_id=str(form_result.get("menuId") or ""),
+                    )
+                    _ensure_canvas_form_components(latest, fallback_components)
+
+                _apply_latest(fc)
+                await _save_form_config_with_retry(
+                    client,
+                    app_id,
+                    fc,
+                    form_id=str(form_id),
+                    apply_latest=_apply_latest,
+                    reason="字典绑定回写",
+                )
                 bound_count += 1
         except Exception as e:
             logger.warning(f"绑定表单 {form_id} 字典失败: {e}")
@@ -1355,6 +1431,14 @@ async def run_complete_generation(
                         yield {"stage": 2, "status": "running",
                                "step": f"⚠️ {len(skipped_models)} 个模型建失败已跳过(字段超长等): {'、'.join(skipped_models)}"}
 
+        if len(model_info) < len(models):
+            missing_count = len(models) - len(model_info)
+            yield {
+                "stage": 2,
+                "status": "error",
+                "step": f"模型未完整创建，缺少 {missing_count} 个",
+            }
+            return
         yield {"stage": 2, "status": "done", "step": f"模型完成（{len(model_info)} 个）"}
 
     except Exception as e:
@@ -1420,6 +1504,7 @@ async def run_complete_generation(
                     "formCode": requested_form_code,
                     "modelCode": model_code or mi["code"],
                     "allModelCodes": all_model_codes,
+                    "formComponents": copy.deepcopy(components),
                 })
                 try:
                     await _finalize_created_form_config(
@@ -1429,6 +1514,7 @@ async def run_complete_generation(
                         form_name=form_name,
                         form_code=requested_form_code,
                         all_model_codes=all_model_codes,
+                        form_components=components,
                     )
                 except Exception as save_err:
                     logger.warning("复用表单固化详情失败（%s）: %s", form_name, save_err)
@@ -1478,6 +1564,7 @@ async def run_complete_generation(
                                 "menuId": fr.get("menuId", ""),
                                 "modelCode": model_code or mi["code"],
                                 "allModelCodes": all_model_codes,
+                                "formComponents": copy.deepcopy(form_payload[0].get("formComponents", [])),
                             })
                             # formConfig API 创建的菜单不可见，需要额外创建菜单
                             menu_id = str(fr.get("menuId") or "")
@@ -1500,6 +1587,7 @@ async def run_complete_generation(
                                     form_code=form_results[-1]["formCode"],
                                     all_model_codes=all_model_codes,
                                     menu_id=menu_id,
+                                    form_components=form_payload[0].get("formComponents", []),
                                 )
                             except Exception as save_err:
                                 logger.warning("创建后固化表单详情失败（%s）: %s", form_name, save_err)
@@ -1512,13 +1600,22 @@ async def run_complete_generation(
         if dicts and form_ids:
             try:
                 bound_count = await _rebind_dicts_on_forms(
-                    client, app_id, form_ids, models, dict_codes
+                    client, app_id, form_ids, models, dict_codes, form_results
                 )
                 if bound_count:
                     yield {"stage": 3, "status": "running", "step": f"字典绑定: {bound_count} 个表单"}
             except Exception as e:
                 logger.warning(f"字典绑定阶段失败（不阻断）: {e}")
 
+        expected_form_count = len(forms_to_build)
+        if len(form_results) < expected_form_count:
+            missing_count = expected_form_count - len(form_results)
+            yield {
+                "stage": 3,
+                "status": "error",
+                "step": f"表单未完整创建，缺少 {missing_count} 个",
+            }
+            return
         yield {"stage": 3, "status": "done", "step": f"表单完成（{len(form_results)} 个）"}
 
     except Exception as e:

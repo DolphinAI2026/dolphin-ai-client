@@ -62,7 +62,13 @@ export const llmConfigApi = {
   delete: (id: number) => request.delete(`/llm-configs/${id}`),
 
   /** 测试连接 */
-  test: (id: number) => request.post<any, { ok: boolean; message: string; error?: string }>(`/llm-configs/${id}/test`),
+  test: (id: number) => request.post<any, {
+    ok?: boolean
+    success?: boolean
+    message?: string
+    reply?: string
+    error?: string
+  }>(`/llm-configs/${id}/test`),
 
   /** 设为默认 */
   setDefault: (id: number) => request.post(`/llm-configs/${id}/set-default`),

@@ -11,7 +11,7 @@ from sqlalchemy import select, desc, func as sa_func, delete, and_, not_, or_
 from sqlalchemy.ext.asyncio import AsyncSession
 from sse_starlette.sse import EventSourceResponse
 from app.database import get_db
-from app.models import User, Application, DocumentVersion, ChangePlan, ApiCallLog, PlatformEnv, Conversation, ConfigSnapshot, Project, ProjectMember, Tenant
+from app.models import User, Application, DocumentVersion, ChangePlan, ApiCallLog, PlatformEnv, Conversation, ConfigSnapshot, Project, ProjectMember, Tenant, APaaSUserCredential
 from app.models.collaboration import ApplicationMember
 from app.auth import get_current_user
 from app.schemas import ApplicationCreate, ApplicationPageResponse, ApplicationResponse, MergedAppResponse
@@ -103,6 +103,58 @@ async def _resolve_current_apaas_tenant_id(db: AsyncSession, ctx: AuthContext) -
         select(Tenant.apaas_tenant_id_str).where(Tenant.id == ctx.tenant_id)
     )
     return str(result.scalar_one_or_none() or "").strip()
+
+
+async def _resolve_apaas_call_context(db: AsyncSession, ctx: AuthContext) -> tuple[str, str, str, str]:
+    """Resolve base_url / tenant_id / token for the current local tenant.
+
+    The legacy User.apaas_token is a single mutable token. Platform admins can
+    switch across many aPaaS tenants, so using that field for a tenant-scoped
+    app may send the right request with the wrong tenant token. Prefer the
+    tenant platform environment token, then the per-local-tenant user
+    credential, before falling back to the legacy field.
+    """
+    bound_tenant_id = await _resolve_current_apaas_tenant_id(db, ctx)
+
+    env_result = await db.execute(
+        select(PlatformEnv)
+        .where(PlatformEnv.tenant_id == ctx.tenant_id)
+        .where(PlatformEnv.status == "connected")
+        .order_by(desc(PlatformEnv.is_default), desc(PlatformEnv.updated_at), desc(PlatformEnv.id))
+        .limit(1)
+    )
+    env = env_result.scalar_one_or_none()
+    if env and (env.token or "").strip():
+        return (
+            (settings.apaas_base_url or env.base_url or "").rstrip("/"),
+            (env.platform_tenant_id or bound_tenant_id or "").strip(),
+            (env.token or "").strip(),
+            f"platform_env:{env.id}",
+        )
+
+    cred_result = await db.execute(
+        select(APaaSUserCredential)
+        .where(APaaSUserCredential.user_id == ctx.user.id)
+        .where(APaaSUserCredential.local_tenant_id == ctx.tenant_id)
+        .where(APaaSUserCredential.status == "connected")
+        .order_by(desc(APaaSUserCredential.last_login_at), desc(APaaSUserCredential.updated_at), desc(APaaSUserCredential.id))
+        .limit(1)
+    )
+    cred = cred_result.scalar_one_or_none()
+    if cred and (cred.token or "").strip():
+        return (
+            (settings.apaas_base_url or cred.base_url or "").rstrip("/"),
+            (cred.apaas_tenant_id or bound_tenant_id or "").strip(),
+            (cred.token or "").strip(),
+            f"user_credential:{cred.id}",
+        )
+
+    return (
+        (settings.apaas_base_url or ctx.user.apaas_base_url or "").rstrip("/"),
+        (bound_tenant_id or ctx.apaas_tenant_id or ctx.user.apaas_tenant_id or "").strip(),
+        (ctx.user.apaas_token or "").strip(),
+        "user_legacy",
+    )
 
 
 def _apply_application_list_filters(stmt, ctx: AuthContext, team_scope: str | None, source_filter: str | None, stage: str | None = None):
@@ -3571,10 +3623,8 @@ async def get_application_apaas_menus(
     # 视图, 过滤了 GROUP) 不适合 sidebar 用.
     # 线上环境绑定来自 backend.env / Secret，不再依赖 applications.platform_env_id
     # 反查 platform_envs。旧 app 里残留的 platform_env_id 只作为诊断信息返回。
-    tenant_id = await _resolve_current_apaas_tenant_id(db, ctx)
     try:
-        base_url = (settings.apaas_base_url or ctx.user.apaas_base_url or "").rstrip("/")
-        token = (ctx.user.apaas_token or "").strip()
+        base_url, tenant_id, token, credential_source = await _resolve_apaas_call_context(db, ctx)
         if not base_url or not tenant_id:
             return {
                 "ok": False,
@@ -3593,8 +3643,8 @@ async def get_application_apaas_menus(
                 "apaas_app_id": app.apaas_app_id,
             }
         logger.info(
-            "应用 %s 按配置环境拉菜单 base_url=%s tenant_id=%s stale_platform_env_id=%s",
-            app.id, base_url, tenant_id, app.platform_env_id,
+            "应用 %s 按当前租户拉菜单 base_url=%s tenant_id=%s credential_source=%s stale_platform_env_id=%s",
+            app.id, base_url, tenant_id, credential_source, app.platform_env_id,
         )
         client = APaaSClient(base_url=base_url, tenant_id=tenant_id, token=token)
         raw_menus_nested = await client.query_menus(app.apaas_app_id)

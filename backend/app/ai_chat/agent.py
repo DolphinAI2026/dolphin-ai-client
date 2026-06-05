@@ -24,7 +24,7 @@ import json
 import logging
 import time
 from datetime import datetime
-from typing import AsyncIterator, Optional
+from typing import Any, AsyncIterator, Optional
 
 import httpx
 from sqlalchemy import select
@@ -46,6 +46,77 @@ from app.observability import recorder
 logger = logging.getLogger(__name__)
 
 LLM_RETRY_ATTEMPTS = 2
+PERSISTED_TOOL_ARG_PREVIEW_CHARS = 240
+PERSISTED_TOOL_ARG_MAX_CHARS = 20_000
+_CONTENT_ARG_KEYS = {
+    "content",
+    "md_content",
+    "markdown",
+    "html",
+    "css",
+    "code",
+    "old_str",
+    "new_str",
+    "old_string",
+    "new_string",
+    "image_data_url",
+}
+
+
+def _summarize_persisted_text(value: str) -> dict:
+    preview = value[:PERSISTED_TOOL_ARG_PREVIEW_CHARS]
+    if len(value) > PERSISTED_TOOL_ARG_PREVIEW_CHARS:
+        preview += f"\n... [omitted, {len(value)} chars total]"
+    return {
+        "_omitted_large_text": True,
+        "chars": len(value),
+        "preview": preview,
+    }
+
+
+def _compact_tool_arg_value(value: Any, key: str | None = None) -> Any:
+    """Keep tool-call persistence small without changing the live tool input."""
+    if isinstance(value, dict):
+        return {k: _compact_tool_arg_value(v, str(k)) for k, v in value.items()}
+    if isinstance(value, list):
+        return [_compact_tool_arg_value(v, key) for v in value]
+    if isinstance(value, str):
+        if (key or "").lower() in _CONTENT_ARG_KEYS:
+            return _summarize_persisted_text(value)
+        if len(value) > PERSISTED_TOOL_ARG_PREVIEW_CHARS * 4:
+            return _summarize_persisted_text(value)
+    return value
+
+
+def _compact_tool_args_for_storage(tool_name: str, args: dict) -> dict:
+    compacted = _compact_tool_arg_value(args)
+    text = json.dumps(compacted, ensure_ascii=False, default=str)
+    if len(text) <= PERSISTED_TOOL_ARG_MAX_CHARS:
+        return compacted
+    return {
+        "_compacted": True,
+        "tool_name": tool_name,
+        "original_json_chars": len(text),
+        "summary": "工具参数过大，已从会话持久化记录中省略；实际工具执行使用的是完整参数。",
+    }
+
+
+def _compact_tool_call_for_storage(tool_call: dict) -> dict:
+    compacted = dict(tool_call)
+    fn = dict(compacted.get("function") or {})
+    tool_name = str(fn.get("name") or "")
+    raw_args = fn.get("arguments") or "{}"
+    try:
+        parsed_args = json.loads(raw_args) if isinstance(raw_args, str) else raw_args
+    except Exception:
+        parsed_args = {"_raw_arguments": str(raw_args)}
+    if isinstance(parsed_args, dict):
+        stored_args = _compact_tool_args_for_storage(tool_name, parsed_args)
+    else:
+        stored_args = _compact_tool_arg_value(parsed_args)
+    fn["arguments"] = json.dumps(stored_args, ensure_ascii=False, default=str)
+    compacted["function"] = fn
+    return compacted
 
 
 def _is_retryable_llm_error(exc: Exception) -> bool:
@@ -300,34 +371,47 @@ def _apply_provider_payload_compat(cfg: LLMConfigSnapshot, payload: dict) -> dic
 async def _resolve_llm_config(
     db: AsyncSession, session: AIChatSession
 ) -> LLMConfigSnapshot:
-    """优先用 session.selected_llm_config_id；没指定则取该 tenant 的 default。"""
+    """优先用 session.selected_llm_config_id；没指定则取平台级 default。"""
     cfg: Optional[LLMConfig] = None
     if session.selected_llm_config_id:
         res = await db.execute(
             select(LLMConfig).where(
                 LLMConfig.id == session.selected_llm_config_id,
-                LLMConfig.tenant_id == session.tenant_id,
+                LLMConfig.status == "active",
+                LLMConfig.purpose.in_(("builder", "all")),
             )
         )
         cfg = res.scalar_one_or_none()
     if not cfg:
-        # fallback：tenant default
+        # fallback：平台级 default，优先 builder，其次 all。
         res = await db.execute(
             select(LLMConfig)
             .where(
-                LLMConfig.tenant_id == session.tenant_id,
                 LLMConfig.is_default == True,  # noqa: E712
                 LLMConfig.status == "active",
+                LLMConfig.purpose.in_(("builder", "all")),
             )
-            .limit(1)
         )
-        cfg = res.scalar_one_or_none()
-    # 注意:删掉了原「跨租户兜底」两步(借任意租户的 is_default / 任意 active 模型)。
-    # 那既是产品上要去掉的「兜底模型」,又是租户隔离泄漏 —— 等于拿别的租户的 API Key 跑当前租户的对话。
-    # 现在只认**当前租户**的配置(上面 step1 selected + step2 tenant default),没有就明确提示去平台管理加。
+        defaults = res.scalars().all()
+        cfg = next((item for item in defaults if item.purpose == "builder"), None)
+        if not cfg:
+            cfg = next((item for item in defaults if item.purpose == "all"), None)
+    if not cfg:
+        res = await db.execute(
+            select(LLMConfig)
+            .where(
+                LLMConfig.status == "active",
+                LLMConfig.purpose.in_(("builder", "all")),
+            )
+            .order_by(LLMConfig.created_at.desc(), LLMConfig.id.desc())
+        )
+        rows = res.scalars().all()
+        cfg = next((item for item in rows if item.purpose == "builder"), None)
+        if not cfg:
+            cfg = next((item for item in rows if item.purpose == "all"), None)
     if not cfg:
         raise RuntimeError(
-            "当前租户还没有配置可用的大模型,请到「平台管理 → 模型配置」添加一个模型后再使用。"
+            "平台还没有配置可用的大模型,请到「平台管理 → 模型配置」添加一个模型后再使用。"
         )
     return LLMConfigSnapshot(
         base_url=cfg.base_url,
@@ -685,6 +769,43 @@ def _sse(event: str, data: dict) -> dict:
     return {"event": event, "data": json.dumps(data, ensure_ascii=False)}
 
 
+async def _persist_assistant_notice(
+    db: AsyncSession,
+    session: AIChatSession,
+    content: str,
+    run_id: Optional[str] = None,
+) -> Optional[AIChatMessage]:
+    """Persist a visible assistant notice so stream failures survive refresh."""
+    try:
+        msg = AIChatMessage(
+            session_id=session.id,
+            role="assistant",
+            content=content,
+            extra_meta={"run_id": run_id} if run_id else None,
+        )
+        db.add(msg)
+        await asyncio.shield(db.commit())
+        await db.refresh(msg)
+        return msg
+    except Exception as exc:
+        logger.warning("persist assistant notice failed: %r", exc)
+        return None
+
+
+def _assistant_message_event(msg: AIChatMessage) -> dict:
+    meta = msg.extra_meta if isinstance(msg.extra_meta, dict) else {}
+    payload = {
+        "id": msg.id,
+        "session_id": msg.session_id,
+        "role": "assistant",
+        "content": msg.content,
+        "created_at": msg.created_at.isoformat(),
+    }
+    if meta.get("run_id"):
+        payload["run_id"] = meta["run_id"]
+    return _sse("assistant_message", payload)
+
+
 async def run_agent(
     db: AsyncSession,
     session: AIChatSession,
@@ -849,12 +970,20 @@ async def _run_agent_inner(
                 detail = e.response.text[:300]
             except Exception:
                 detail = "(响应体读取失败)"
-            holder["error"] = f"LLM 调用失败 {e.response.status_code}: {detail}"
+            error_text = f"本轮执行中断：模型调用失败 {e.response.status_code}: {detail}"
+            holder["error"] = error_text
+            msg = await _persist_assistant_notice(db, session, error_text, run_id=holder["run_id"])
+            if msg:
+                yield _assistant_message_event(msg)
             yield _sse("error", {"error": holder["error"]})
             yield _sse("done", {"ok": False, "run_id": holder["run_id"]})
             return
         except Exception as e:
-            holder["error"] = f"LLM 调用失败：{_format_llm_error(e)}"
+            error_text = f"本轮执行中断：模型调用失败：{_format_llm_error(e)}。已完成的工具结果会保留，可稍后重试。"
+            holder["error"] = error_text
+            msg = await _persist_assistant_notice(db, session, error_text, run_id=holder["run_id"])
+            if msg:
+                yield _assistant_message_event(msg)
             yield _sse("error", {"error": holder["error"]})
             yield _sse("done", {"ok": False, "run_id": holder["run_id"]})
             return
@@ -919,6 +1048,10 @@ async def _run_agent_inner(
                         # 忽略 tool_call_delta — system 已经禁止工具调用，万一 LLM 不听话也不执行
                 except Exception as e:
                     logger.warning("final-summary retry failed: %s", e)
+                    content = (
+                        "前面的工具执行已完成，但生成最终总结时模型网关连接失败。"
+                        "已完成的产出物已保留，请查看右侧产出物或稍后重试。"
+                    )
                 if retry_assistant:
                     forced = (retry_assistant.get("content") or "").strip()
                     if forced:
@@ -939,14 +1072,7 @@ async def _run_agent_inner(
                 db.add(asst_db)
                 await asyncio.shield(db.commit())
                 await db.refresh(asst_db)
-                yield _sse("assistant_message", {
-                    "id": asst_db.id,
-                    "session_id": asst_db.session_id,
-                    "role": "assistant",
-                    "content": content,
-                    "run_id": holder["run_id"],
-                    "created_at": asst_db.created_at.isoformat(),
-                })
+                yield _assistant_message_event(asst_db)
             holder["status"] = "success"
             yield _sse("done", {"ok": True, "run_id": holder["run_id"]})
             return
@@ -960,11 +1086,12 @@ async def _run_agent_inner(
         # ── 持久化 assistant 这条 tool_use turn 到 DB（跨轮 history 重建必需）──
         # 把 LLM 返回的 tool_calls 序列化进 extra_meta（以便下次 _build_initial_messages
         # 重建消息时拼回完整的 assistant.tool_calls + role:tool 配对）
+        persisted_tool_calls = [_compact_tool_call_for_storage(tc) for tc in tool_calls]
         asst_tool_use_db = AIChatMessage(
             session_id=session.id,
             role="assistant",
             content=content or "",
-            extra_meta={"tool_calls": tool_calls},
+            extra_meta={"tool_calls": persisted_tool_calls},
         )
         db.add(asst_tool_use_db)
         # 2026-05-21 fix: shield 防 cancel — 见上方注释
@@ -986,6 +1113,7 @@ async def _run_agent_inner(
                 args = json.loads(fn.get("arguments") or "{}")
             except Exception:
                 args = {}
+            persisted_args = _compact_tool_args_for_storage(tool_name, args)
 
             # 持久化工具调用记录（关联 assistant message + 存 LLM 原始 call_id）
             # 用 monotonic 算 duration — MySQL DATETIME(0) round 到秒导致 refresh 后
@@ -997,7 +1125,7 @@ async def _run_agent_inner(
                 message_id=asst_message_id,
                 provider_call_id=tc_id or None,
                 tool_name=tool_name,
-                args_json=args,
+                args_json=persisted_args,
                 status="running",
                 started_at=_start_dt,
             )
@@ -1008,7 +1136,7 @@ async def _run_agent_inner(
             yield _sse("tool_call_start", {
                 "id": tc_db.id,
                 "tool_name": tool_name,
-                "args": args,
+                "args": persisted_args,
                 "started_at": _start_dt.isoformat(),
             })
 

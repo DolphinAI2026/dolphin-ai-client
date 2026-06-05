@@ -1546,11 +1546,15 @@ async function reload(): Promise<void> {
     await fetchApp()
     let usedParsedCache = false
     try {
-      const parsedResp = await request.get<{
+      const parsedResp = await request.get<any, {
         ok: boolean
         sections?: Record<string, any>
         cache_hit?: boolean
-      }>(`${base}/spec/parsed`)
+      }>(`${base}/spec/parsed`) as unknown as {
+        ok: boolean
+        sections?: Record<string, any>
+        cache_hit?: boolean
+      }
       if (parsedResp?.ok && parsedResp.sections) {
         const s = parsedResp.sections
         loadedRoles.value = _toSectionItems(s.roles, 'id', 'name', 'code')

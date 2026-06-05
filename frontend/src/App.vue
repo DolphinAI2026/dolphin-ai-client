@@ -2,13 +2,24 @@
 import { watch } from 'vue'
 import { RouterView, useRoute, type RouteLocationNormalized } from 'vue-router'
 import { useTabsStore } from '@/stores/tabs'
+import { useUserStore } from '@/stores/user'
+import { initDolphinAgent } from '@/utils/dolphinAgent'
 
 const route = useRoute()
 const tabsStore = useTabsStore()
+const userStore = useUserStore()
 
 watch(
   () => route.fullPath,
   (path) => tabsStore.syncFromRoute(path),
+  { immediate: true },
+)
+
+watch(
+  () => [userStore.token, userStore.tenantId] as const,
+  ([token, tenantId]) => {
+    void initDolphinAgent(token, tenantId)
+  },
   { immediate: true },
 )
 

@@ -34,6 +34,35 @@ class ConvertConfigRequest(BaseModel):
     doc_result: dict
 
 
+def _load_generation_state(raw: object) -> dict:
+    if not raw:
+        return {"steps_completed": [], "step_errors": {}}
+    try:
+        state = loads_if_str(raw)
+        if isinstance(state, dict):
+            state.setdefault("steps_completed", [])
+            state.setdefault("step_errors", {})
+            return state
+    except Exception:  # noqa: BLE001
+        pass
+    return {"steps_completed": [], "step_errors": {}}
+
+
+def _mark_stage_completed_keys(config: dict, stage: int) -> set[str]:
+    data = config.get("data", config)
+    keys: set[str] = set()
+    if stage == 1:
+        keys.update(f"create_role:{i}" for i, _ in enumerate(data.get("roles") or []))
+        keys.update(f"create_dict:{i}" for i, _ in enumerate(data.get("dicts") or []))
+    elif stage == 2:
+        keys.update(f"create_model:{i}" for i, _ in enumerate(data.get("models") or []))
+    elif stage == 3:
+        keys.update(f"create_form:{i}" for i, _ in enumerate(data.get("forms") or []))
+    elif stage == 4:
+        keys.add("configure_permissions")
+    return keys
+
+
 @router.get("/{app_id}/generate")
 async def generate_application(
     app_id: int,
@@ -157,6 +186,8 @@ async def generate_application(
             event_log: list[dict] = []  # SSE event 累计快照（截断防爆 JSON）
             error_msg_for_record: Optional[str] = None
             success = False
+            state = _load_generation_state(app_obj.generation_state)
+            completed_keys = set(state.get("steps_completed") or [])
 
             try:
                 if not existing_apaas_app_id:
@@ -172,21 +203,51 @@ async def generate_application(
                     app_obj.status = "generating"
                     await session.commit()
                     yield {"event": "progress", "data": json.dumps({"stage": -1, "status": "running", "step": f"复用已有平台应用: {apaas_app_id}"}, ensure_ascii=False)}
+                completed_keys.add("create_app")
+                state["apaas_app_id"] = apaas_app_id
+                state["steps_completed"] = sorted(completed_keys)
+                app_obj.generation_state = json.dumps(state, ensure_ascii=False)
+                await session.commit()
 
                 async for event in run_complete_generation(client, apaas_app_id, config):
                     # 累积 event 到 record event_log（限制 200 条防止 JSON 太大）
                     if len(event_log) < 200:
                         event_log.append(event)
                     yield {"event": "progress", "data": json.dumps(event, ensure_ascii=False)}
-                    if event.get("type") == "complete":
-                        app_obj.status = "completed"
+                    if event.get("status") == "done":
+                        completed_keys.update(_mark_stage_completed_keys(config, int(event.get("stage", -1))))
+                        state["steps_completed"] = sorted(completed_keys)
+                        app_obj.generation_state = json.dumps(state, ensure_ascii=False)
                         await session.commit()
+                    if event.get("type") == "complete":
                         success = True
                     elif event.get("status") == "error":
                         app_obj.status = "failed"
+                        step_errors = state.setdefault("step_errors", {})
+                        stage = event.get("stage")
+                        if stage is not None:
+                            step_errors[f"stage:{stage}"] = event.get("step") or event.get("message") or "生成失败"
+                        app_obj.generation_state = json.dumps(state, ensure_ascii=False)
                         await session.commit()
                         success = False
                         error_msg_for_record = event.get("error") or event.get("message") or "未知错误"
+
+                if success:
+                    from app.routes.generation_steps import _critical_step_keys, _reality_completed_step_keys
+
+                    reality = await _reality_completed_step_keys(app_obj, config, session)
+                    completed_keys.update(reality)
+                    critical = _critical_step_keys(config)
+                    missing = sorted(critical - completed_keys)
+                    state["steps_completed"] = sorted(completed_keys)
+                    app_obj.generation_state = json.dumps(state, ensure_ascii=False)
+                    if missing:
+                        success = False
+                        error_msg_for_record = f"平台生成未完整完成，缺少步骤：{', '.join(missing)}"
+                        app_obj.status = "failed"
+                    else:
+                        app_obj.status = "completed"
+                    await session.commit()
 
                 yield {"event": "done", "data": json.dumps({"type": "done"})}
             except Exception as e:
@@ -294,6 +355,8 @@ async def _run_generation_detached(app_id: int, record_id: int) -> None:
         try:
             client, _env = await _resolve_env_and_client(app_obj, session)
             config = loads_if_str(app_obj.config_preview)
+            state = _load_generation_state(app_obj.generation_state)
+            completed_keys = set(state.get("steps_completed") or [])
             if not app_obj.apaas_app_id:
                 apaas_result = await client.create_app(
                     app_obj.app_name, app_obj.app_code, app_obj.description or ""
@@ -303,20 +366,48 @@ async def _run_generation_detached(app_id: int, record_id: int) -> None:
                     else str(apaas_result.get("id", apaas_result.get("appId", "")))
                 )
                 logger.info("generate-run: app %s 平台壳创建成功 apaas_app_id=%s", app_id, app_obj.apaas_app_id)
+            completed_keys.add("create_app")
+            state["apaas_app_id"] = app_obj.apaas_app_id
             app_obj.status = "generating"
+            state["steps_completed"] = sorted(completed_keys)
+            app_obj.generation_state = json.dumps(state, ensure_ascii=False)
             await session.commit()
 
             async for event in run_complete_generation(client, app_obj.apaas_app_id, config):
                 if len(event_log) < 200:
                     event_log.append(event)
-                if event.get("type") == "complete":
-                    app_obj.status = "completed"
+                if event.get("status") == "done":
+                    completed_keys.update(_mark_stage_completed_keys(config, int(event.get("stage", -1))))
+                    state["steps_completed"] = sorted(completed_keys)
+                    app_obj.generation_state = json.dumps(state, ensure_ascii=False)
                     await session.commit()
+                if event.get("type") == "complete":
                     success = True
                 elif event.get("status") == "error":
                     app_obj.status = "failed"
+                    step_errors = state.setdefault("step_errors", {})
+                    stage = event.get("stage")
+                    if stage is not None:
+                        step_errors[f"stage:{stage}"] = event.get("step") or event.get("message") or "生成失败"
+                    app_obj.generation_state = json.dumps(state, ensure_ascii=False)
                     await session.commit()
                     err_msg = event.get("error") or event.get("message") or "未知错误"
+            if success:
+                from app.routes.generation_steps import _critical_step_keys, _reality_completed_step_keys
+
+                reality = await _reality_completed_step_keys(app_obj, config, session)
+                completed_keys.update(reality)
+                critical = _critical_step_keys(config)
+                missing = sorted(critical - completed_keys)
+                state["steps_completed"] = sorted(completed_keys)
+                app_obj.generation_state = json.dumps(state, ensure_ascii=False)
+                if missing:
+                    success = False
+                    err_msg = f"平台生成未完整完成，缺少步骤：{', '.join(missing)}"
+                    app_obj.status = "failed"
+                else:
+                    app_obj.status = "completed"
+                await session.commit()
             logger.info("generate-run: app %s 生成结束 success=%s", app_id, success)
         except Exception as exc:  # noqa: BLE001
             logger.error("generate-run: app %s 后台生成异常: %s", app_id, exc)
@@ -370,7 +461,13 @@ async def generate_application_async(
     if app.status == "generating":
         return {"started": False, "already_running": True, "app_id": app_id, "status": "generating"}
     if app.status == "completed" and app.apaas_app_id:
-        return {"started": False, "already_done": True, "app_id": app_id, "apaas_app_id": app.apaas_app_id}
+        from app.routes.generation_steps import _critical_step_keys
+
+        config = loads_if_str(app.config_preview)
+        state = _load_generation_state(app.generation_state)
+        completed = set(state.get("steps_completed") or [])
+        if _critical_step_keys(config).issubset(completed):
+            return {"started": False, "already_done": True, "app_id": app_id, "apaas_app_id": app.apaas_app_id}
 
     # 提前校验 env/token 可解析（fail fast，给用户明确错误而非后台静默失败）
     try:

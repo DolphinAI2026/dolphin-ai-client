@@ -4430,7 +4430,7 @@ const diffChangeSummary = computed(() => {
 // triggerDocUpload / handleDocVersionUpload removed — doc upload is via chat input only
 
 // ── 部署面板 ──
-interface DeployStep { key: string; label: string; status: 'pending' | 'completed' | 'error'; deps_met: boolean; error?: string; result?: any }
+interface DeployStep { key: string; label: string; status: 'pending' | 'running' | 'completed' | 'error'; deps_met: boolean; error?: string; result?: any }
 interface UpdateExecutionItem {
   id: string
   groupKey: string
@@ -6667,10 +6667,6 @@ const sendMessage = async () => {
   })
   scrollToBottom()
   isTyping.value = true
-
-  if (!conversationId.value && pendingInitialConversationPromise) {
-    await pendingInitialConversationPromise
-  }
 
   const isApplicationUpdateMessage = isApplicationUpdateChatMode.value && isPlatformDeployed.value && !!existingAppId.value
 

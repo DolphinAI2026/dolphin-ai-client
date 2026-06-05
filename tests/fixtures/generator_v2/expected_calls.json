@@ -36,7 +36,7 @@
       "payload": [
         {
           "appId": "fake_app_id",
-          "dictionaryCode": "status_",
+          "dictionaryCode": "status",
           "dictionaryName": "状态",
           "dictionaryOptions": []
         }
@@ -66,24 +66,24 @@
           {
             "appId": "fake_app_id",
             "modelName": "任务",
-            "modelCode": "task_",
+            "modelCode": "task",
             "modelDescription": "任务模型",
             "fields": [
               {
                 "fieldName": "标题",
-                "fieldCode": "title",
+                "fieldCode": "title_field",
                 "fieldType": "STRING",
                 "fieldDescription": "单行输入"
               },
               {
                 "fieldName": "状态",
-                "fieldCode": "status",
+                "fieldCode": "status_field",
                 "fieldType": "STRING",
                 "fieldDescription": "下拉单选"
               },
               {
                 "fieldName": "描述",
-                "fieldCode": "desc",
+                "fieldCode": "desc_field",
                 "fieldType": "BIG_TEXT",
                 "fieldDescription": "多行输入"
               }
@@ -114,35 +114,35 @@
           "formName": "任务",
           "formCode": "form_",
           "allModelCodes": [
-            "task_"
+            "task"
           ],
           "formComponents": [
             {
               "componentType": "FORM_TEXT_INPUT",
               "label": "标题",
-              "modelField": "task_.title"
+              "modelField": "task.title_field"
             },
             {
               "componentType": "FORM_TEXT_INPUT",
               "label": "状态",
-              "modelField": "task_.status"
+              "modelField": "task.status_field"
             },
             {
               "componentType": "FORM_TEXT_INPUT",
               "label": "描述",
-              "modelField": "task_.desc"
+              "modelField": "task.desc_field"
             }
           ],
           "listPageView": {
             "queryConditions": [
-              "task_.title",
-              "task_.status",
-              "task_.desc"
+              "task.title_field",
+              "task.status_field",
+              "task.desc_field"
             ],
             "queryList": [
-              "task_.title",
-              "task_.status",
-              "task_.desc"
+              "task.title_field",
+              "task.status_field",
+              "task.desc_field"
             ]
           }
         }
@@ -156,6 +156,67 @@
       "name": "任务",
       "form_id": "1004",
       "menu_order": 0
+    }
+  },
+  {
+    "method": "query_detail_page_config",
+    "args": {
+      "app_id": "fake_app_id",
+      "form_id": "1004"
+    }
+  },
+  {
+    "method": "save_form_config",
+    "args": {
+      "app_id": "fake_app_id",
+      "form_config": {
+        "detailPage": {
+          "formComponents": [
+            {
+              "componentType": "FORM_TEXT_INPUT",
+              "label": "标题",
+              "modelField": "task.title_field",
+              "uuid": "c32c65d8-1-",
+              "width": 6
+            },
+            {
+              "componentType": "FORM_TEXT_INPUT",
+              "label": "状态",
+              "modelField": "task.status_field",
+              "uuid": "c3fea7ca-2-",
+              "width": 6
+            },
+            {
+              "componentType": "FORM_TEXT_INPUT",
+              "label": "描述",
+              "modelField": "task.desc_field",
+              "uuid": "c3bdd08a-3-",
+              "width": 6
+            }
+          ],
+          "formName": "任务",
+          "formCode": "form_",
+          "allModelCodes": [
+            "task"
+          ],
+          "appId": "fake_app_id",
+          "id": "1004",
+          "menuId": "1006",
+          "webFormSettings": {},
+          "mobileFormSettings": {},
+          "previewLanguage": "zh-CN",
+          "formVersionConfig": {}
+        },
+        "formName": "任务",
+        "formCode": "form_",
+        "allModelCodes": [
+          "task"
+        ],
+        "appId": "fake_app_id",
+        "id": "1004",
+        "menuId": "1006",
+        "formModelType": "DATABASE"
+      }
     }
   },
   {
@@ -307,7 +368,173 @@
       "app_id": "fake_app_id",
       "form_config": {
         "detailPage": {
-          "formComponents": []
+          "formComponents": [
+            {
+              "componentType": "FORM_TEXT_INPUT",
+              "label": "标题",
+              "modelField": "task.title_field",
+              "uuid": "c32c65d8-1-",
+              "width": 6
+            },
+            {
+              "componentType": "FORM_TEXT_INPUT",
+              "label": "状态",
+              "modelField": "task.status_field",
+              "uuid": "c3fea7ca-2-",
+              "width": 6
+            },
+            {
+              "componentType": "FORM_TEXT_INPUT",
+              "label": "描述",
+              "modelField": "task.desc_field",
+              "uuid": "c3bdd08a-3-",
+              "width": 6
+            }
+          ],
+          "permissionGroups": [
+            {
+              "groupConditions": [],
+              "selectorFilterConditionList": [],
+              "dataPermissions": [
+                {
+                  "permissionType": "ALL_USER",
+                  "permissionValue": "",
+                  "queryPermission": true,
+                  "updatePermission": true,
+                  "deletePermission": true,
+                  "addPermission": true
+                }
+              ]
+            },
+            {
+              "groupConditions": [],
+              "selectorFilterConditionList": [],
+              "dataPermissions": [
+                {
+                  "permissionType": "ALL_USER",
+                  "permissionValue": "",
+                  "queryPermission": true,
+                  "updatePermission": false,
+                  "deletePermission": false,
+                  "addPermission": true
+                }
+              ]
+            }
+          ],
+          "advancedPermissionGroups": [
+            {
+              "permissionName": "管理员权限",
+              "permissionDescribe": "",
+              "permissionOperationType": {
+                "queryPermission": true,
+                "updatePermission": true,
+                "deletePermission": true,
+                "commentPermission": true,
+                "dataSharePermission": true,
+                "exportPermission": false,
+                "logPermission": true,
+                "printPermission": true,
+                "queryApprovalInfoPermission": true
+              },
+              "filterConditionGroups": [],
+              "permissionObjects": [
+                {
+                  "permissionObjectType": "ROLE_USER",
+                  "permissionObjectValue": "1001",
+                  "permissionObjectDisplayName": "管理员",
+                  "permissionRange": {
+                    "rangeType": "ALL"
+                  }
+                }
+              ]
+            },
+            {
+              "permissionName": "普通用户权限",
+              "permissionDescribe": "",
+              "permissionOperationType": {
+                "queryPermission": true,
+                "updatePermission": false,
+                "deletePermission": false,
+                "commentPermission": true,
+                "dataSharePermission": true,
+                "exportPermission": false,
+                "logPermission": true,
+                "printPermission": true,
+                "queryApprovalInfoPermission": true
+              },
+              "filterConditionGroups": [],
+              "permissionObjects": [
+                {
+                  "permissionObjectType": "ROLE_USER",
+                  "permissionObjectValue": "1002",
+                  "permissionObjectDisplayName": "普通用户",
+                  "permissionRange": {
+                    "rangeType": "SELF"
+                  }
+                }
+              ]
+            }
+          ],
+          "operationPermissionGroups": [
+            {
+              "uuid": "perm-op-1",
+              "permissionName": "管理员操作权限",
+              "permissionDescribe": "",
+              "permissionOperationType": {
+                "temporaryStoragePermission": false,
+                "addPermission": true,
+                "importPermission": false,
+                "copyAddPermission": false,
+                "batchDeletePermission": false,
+                "batchRejectPermission": false,
+                "batchAgreePermission": false,
+                "shareFormPermission": false,
+                "processAnalysisPermission": false
+              },
+              "permissionObjects": [
+                {
+                  "permissionObjectType": "ROLE_USER",
+                  "permissionObjectValue": "1001",
+                  "permissionObjectDisplayName": "管理员"
+                }
+              ]
+            },
+            {
+              "uuid": "perm-op-2",
+              "permissionName": "普通用户操作权限",
+              "permissionDescribe": "",
+              "permissionOperationType": {
+                "temporaryStoragePermission": false,
+                "addPermission": true,
+                "importPermission": false,
+                "copyAddPermission": false,
+                "batchDeletePermission": false,
+                "batchRejectPermission": false,
+                "batchAgreePermission": false,
+                "shareFormPermission": false,
+                "processAnalysisPermission": false
+              },
+              "permissionObjects": [
+                {
+                  "permissionObjectType": "ROLE_USER",
+                  "permissionObjectValue": "1002",
+                  "permissionObjectDisplayName": "普通用户"
+                }
+              ]
+            }
+          ],
+          "formName": "任务",
+          "formCode": "form_",
+          "allModelCodes": [
+            "task"
+          ],
+          "appId": "fake_app_id",
+          "id": "1004",
+          "menuId": "1006",
+          "webFormSettings": {},
+          "mobileFormSettings": {},
+          "previewLanguage": "zh-CN",
+          "formVersionConfig": {}
         },
         "permissionGroups": [
           {
@@ -316,7 +543,7 @@
             "dataPermissions": [
               {
                 "permissionType": "ALL_USER",
-                "permissionValue": "ALL_USER",
+                "permissionValue": "",
                 "queryPermission": true,
                 "updatePermission": true,
                 "deletePermission": true,
@@ -330,7 +557,7 @@
             "dataPermissions": [
               {
                 "permissionType": "ALL_USER",
-                "permissionValue": "ALL_USER",
+                "permissionValue": "",
                 "queryPermission": true,
                 "updatePermission": false,
                 "deletePermission": false,
@@ -357,7 +584,7 @@
             "filterConditionGroups": [],
             "permissionObjects": [
               {
-                "permissionObjectType": "ROLE",
+                "permissionObjectType": "ROLE_USER",
                 "permissionObjectValue": "1001",
                 "permissionObjectDisplayName": "管理员",
                 "permissionRange": {
@@ -383,7 +610,7 @@
             "filterConditionGroups": [],
             "permissionObjects": [
               {
-                "permissionObjectType": "ROLE",
+                "permissionObjectType": "ROLE_USER",
                 "permissionObjectValue": "1002",
                 "permissionObjectDisplayName": "普通用户",
                 "permissionRange": {
@@ -411,7 +638,7 @@
             },
             "permissionObjects": [
               {
-                "permissionObjectType": "ROLE",
+                "permissionObjectType": "ROLE_USER",
                 "permissionObjectValue": "1001",
                 "permissionObjectDisplayName": "管理员"
               }
@@ -434,13 +661,22 @@
             },
             "permissionObjects": [
               {
-                "permissionObjectType": "ROLE",
+                "permissionObjectType": "ROLE_USER",
                 "permissionObjectValue": "1002",
                 "permissionObjectDisplayName": "普通用户"
               }
             ]
           }
-        ]
+        ],
+        "formName": "任务",
+        "formCode": "form_",
+        "allModelCodes": [
+          "task"
+        ],
+        "appId": "fake_app_id",
+        "id": "1004",
+        "menuId": "1006",
+        "formModelType": "DATABASE"
       }
     }
   }

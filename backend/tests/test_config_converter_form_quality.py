@@ -130,6 +130,13 @@ async def test_execute_create_form_finalizes_detail_config_after_create():
     assert client.saved["menuId"] == "menu-1"
     assert client.saved["detailPage"]["formName"] == "退市申请表"
     assert client.saved["detailPage"]["formCode"] == "delisting_apply_form"
+    components = client.saved["detailPage"]["formComponents"]
+    assert components
+    assert components[0]["label"] == "申请名称"
+    assert components[0]["componentType"] == "FORM_TEXT_INPUT"
+    assert components[0]["modelField"] == "delisting_apply.apply_name"
+    assert components[0]["uuid"]
+    assert components[0]["width"] == 6
 
 
 @pytest.mark.asyncio
@@ -160,7 +167,24 @@ async def test_execute_configure_permissions_syncs_form_config_by_form_code():
         ],
         form_results=[
             {"formId": "form-a", "formName": "同名表单", "formCode": "other_form", "modelCode": "other"},
-            {"formId": "form-b", "formName": "同名表单", "formCode": "target_form", "modelCode": "target"},
+            {
+                "formId": "form-b",
+                "formName": "同名表单",
+                "formCode": "target_form",
+                "modelCode": "target",
+                "formComponents": [
+                    {
+                        "label": "计划编号",
+                        "componentType": "FORM_DOCUMENT_NUMBER",
+                        "modelField": "target.visit_plan_no",
+                    },
+                    {
+                        "label": "客户",
+                        "componentType": "FORM_TEXT_INPUT",
+                        "modelField": "target.customer",
+                    },
+                ],
+            },
         ],
         role_codes={"product_manager": {"id": "role-1", "roleCode": "product_manager", "roleName": "产品经理"}},
         all_forms=[],
@@ -172,6 +196,9 @@ async def test_execute_configure_permissions_syncs_form_config_by_form_code():
     saved_target = next(item for item in client.saved_configs if item["formCode"] == "target_form")
     assert saved_target["advancedPermissionGroups"][0]["permissionObjects"][0]["permissionObjectType"] == "ROLE_USER"
     assert saved_target["detailPage"]["advancedPermissionGroups"][0]["permissionObjects"][0]["permissionObjectType"] == "ROLE_USER"
+    components = saved_target["detailPage"]["formComponents"]
+    assert {item["label"] for item in components} >= {"计划编号", "客户"}
+    assert all(item.get("uuid") and item.get("width") for item in components)
 
 
 @pytest.mark.asyncio
@@ -203,6 +230,13 @@ async def test_generator_v2_finalizes_created_form_detail_config():
         form_code="delisting_review_form",
         all_model_codes=["delisting_apply"],
         menu_id="menu-1",
+        form_components=[
+            {
+                "label": "审核意见",
+                "componentType": "FORM_TEXTAREA_INPUT",
+                "modelField": "delisting_apply.review_opinion",
+            },
+        ],
     )
 
     methods = [call[0] for call in client.calls]
@@ -217,6 +251,12 @@ async def test_generator_v2_finalizes_created_form_detail_config():
     assert client.saved["detailPage"]["formCode"] == "delisting_review_form"
     assert client.saved["detailPage"]["webFormSettings"] == {}
     assert client.saved["formModelType"] == "DATABASE"
+    components = client.saved["detailPage"]["formComponents"]
+    assert components
+    assert components[0]["label"] == "审核意见"
+    assert components[0]["modelField"] == "delisting_apply.review_opinion"
+    assert components[0]["uuid"]
+    assert components[0]["width"] == 6
 
 
 def test_generator_v2_permission_match_prefers_form_code_then_model_code():
@@ -257,6 +297,13 @@ async def test_generator_v2_permission_sync_writes_page_config_role_user():
         form_name="退市审核表",
         form_code="delisting_review_form",
         all_model_codes=["delisting_apply"],
+        fallback_components=[
+            {
+                "label": "审核意见",
+                "componentType": "FORM_TEXTAREA_INPUT",
+                "modelField": "delisting_apply.review_opinion",
+            },
+        ],
     )
 
     saved = client.saved
@@ -264,6 +311,8 @@ async def test_generator_v2_permission_sync_writes_page_config_role_user():
     assert saved["formCode"] == "delisting_review_form"
     assert saved["advancedPermissionGroups"][0]["permissionObjects"][0]["permissionObjectType"] == "ROLE_USER"
     assert saved["detailPage"]["advancedPermissionGroups"][0]["permissionObjects"][0]["permissionObjectType"] == "ROLE_USER"
+    assert saved["detailPage"]["formComponents"][0]["label"] == "审核意见"
+    assert saved["detailPage"]["formComponents"][0]["uuid"]
     all_user = saved["advancedPermissionGroups"][1]["permissionObjects"][0]
     assert all_user["permissionObjectType"] == "ALL_USER"
     assert all_user["permissionObjectValue"] == ""

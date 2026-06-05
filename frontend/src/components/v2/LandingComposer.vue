@@ -16,7 +16,7 @@ const files = ref<File[]>([])
 const emit = defineEmits<{ (e: 'submit', payload: { prompt: string; files: File[] }): void }>()
 
 const placeholder = computed(() => ({
-  builder: '例如：给质量部搭一个 QMS 整改闭环，包含问题登记、责任人派发、整改验证、超期提醒和月度统计。',
+  builder: '例如：给质量部搭一个 QMS 整改闭环，包含问题登记、责任人派发、整改验证、超期提醒和月度统计；后面还要能改页面样式、接审批接口、修构建报错。',
 }[mode.value]))
 
 const canSubmit = computed(() => !!text.value.trim() || files.value.length > 0)
@@ -83,7 +83,7 @@ function submit() {
 </template>
 
 <style scoped>
-.composer { width: min(100%, 920px); margin: 0 auto; }
+.composer { width: min(100%, 880px); margin: 0 auto; }
 .composer-modes { display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px; margin-bottom: 14px; }
 .mode-pill {
   padding: 12px 14px;
@@ -99,7 +99,7 @@ function submit() {
   background: var(--surface);
   border-color: var(--brand-ring, var(--brand));
 }
-.mode-pill-label { font-size: 13.5px; font-weight: 600; color: var(--text); letter-spacing: -0.005em; }
+.mode-pill-label { font-size: 13.5px; font-weight: 600; color: var(--text); letter-spacing: 0; }
 .mode-pill-sub { font-size: 11.5px; color: var(--text-3); margin-top: 3px; }
 .mode-pill.active {
   border-color: currentColor;
@@ -112,10 +112,10 @@ function submit() {
 
 .composer-card {
   position: relative;
-  padding: 18px;
+  padding: 14px;
   background: var(--surface);
   border: 1px solid var(--border-strong);
-  border-radius: 20px;
+  border-radius: 8px;
   box-shadow: 0 20px 48px rgba(27, 46, 87, 0.12);
   overflow: hidden;
 }
@@ -134,13 +134,13 @@ function submit() {
 }
 
 .composer-card :deep(.ucc-box) {
-  border-radius: 14px;
+  border-radius: 8px;
   border-color: var(--line, var(--border));
   background: var(--surface);
 }
 
 .composer-card :deep(.ucc-input) {
-  min-height: 142px;
+  min-height: 164px;
   padding: 20px 22px 12px;
   font-size: 16px;
   line-height: 1.65;
@@ -151,7 +151,7 @@ function submit() {
 }
 
 .composer-card :deep(.ucc-footer) {
-  min-height: 50px;
+  min-height: 54px;
   padding: 0 78px 14px 18px;
 }
 
@@ -174,7 +174,7 @@ function submit() {
   width: 42px;
   height: 42px;
   min-height: 42px;
-  border-radius: 10px;
+  border-radius: 8px;
 }
 
 @media (max-width: 720px) {

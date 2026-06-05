@@ -70,6 +70,8 @@ export interface AgentMessage {
 
   /** kind=user 用：附件（chips） */
   attachments?: AgentAttachment[]
+  /** 可选展示时间 */
+  timestamp?: string | number
 
   /** kind=tool 用 */
   tool?: AgentToolPayload

@@ -308,6 +308,113 @@ async def _open_stream(client: httpx.AsyncClient, base_url: str, api_key: str, p
             yield line
 
 
+@dataclass
+class _LlmTurnResult:
+    full_content: str
+    assistant_msg: dict
+    tool_calls: list[dict]
+
+
+async def _stream_llm_turn(
+    client: httpx.AsyncClient,
+    base_url: str,
+    api_key: str,
+    model: str,
+    messages: list[dict],
+    turn: int,
+    spec: Spec,
+) -> AsyncIterator[SpecAgentEvent | _LlmTurnResult]:
+    payload = {
+        "model": model,
+        "messages": messages,
+        "tools": TOOL_DEFINITIONS,
+        "max_tokens": 4096,
+        "temperature": 0.2,
+        "stream": True,
+    }
+    full_content = ""
+    tool_calls_map: dict = {}
+
+    stream = _open_stream(client, base_url, api_key, payload)
+    async for line in stream:
+        if not line.startswith("data: "):
+            continue
+        data_str = line[6:]
+        if data_str.strip() == "[DONE]":
+            break
+        try:
+            chunk = json.loads(data_str)
+        except json.JSONDecodeError:
+            continue
+        choices = chunk.get("choices") or []
+        if not choices:
+            continue
+        delta = choices[0].get("delta", {})
+        if delta.get("content"):
+            full_content += delta["content"]
+            yield SpecAgentEvent(
+                kind="assistant_delta", spec=spec, text=delta["content"]
+            )
+        if delta.get("tool_calls"):
+            for tc in delta["tool_calls"]:
+                idx = tc.get("index", 0)
+                entry = tool_calls_map.setdefault(
+                    idx, {"id": "", "name": "", "arguments": ""}
+                )
+                if tc.get("id"):
+                    entry["id"] = tc["id"]
+                func = tc.get("function", {})
+                if func.get("name"):
+                    entry["name"] = func["name"]
+                if func.get("arguments"):
+                    entry["arguments"] += func["arguments"]
+
+    assistant_msg: dict = {"role": "assistant", "content": full_content or None}
+    assembled: list[dict] = []
+    for idx in sorted(tool_calls_map.keys()):
+        entry = tool_calls_map[idx]
+        if not entry["name"]:
+            continue
+        raw = entry["arguments"] or "{}"
+        try:
+            json.loads(raw)
+            valid_args = raw
+        except json.JSONDecodeError:
+            valid_args = "{}"
+        assembled.append({
+            "id": entry["id"] or f"call_{turn}_{idx}",
+            "type": "function",
+            "function": {"name": entry["name"], "arguments": valid_args},
+        })
+    if assembled:
+        assistant_msg["tool_calls"] = assembled
+    yield _LlmTurnResult(full_content, assistant_msg, assembled)
+
+
+def _dispatch_spec_tool(
+    spec: Spec,
+    name: str,
+    args: dict,
+    *,
+    enforce_first_turn: bool,
+) -> tuple[Spec, str, list[SpecAgentEvent]]:
+    events = [SpecAgentEvent(kind="tool_call", spec=spec, tool_name=name, tool_args=args)]
+    try:
+        next_spec = dispatch_tool(
+            spec, name, args, enforce_first_turn=enforce_first_turn
+        )
+        events.append(SpecAgentEvent(kind="spec_patch", spec=next_spec, tool_name=name))
+        return next_spec, "ok", events
+    except ToolError as e:
+        events.append(SpecAgentEvent(
+            kind="tool_error",
+            spec=spec,
+            tool_name=name,
+            message=str(e),
+        ))
+        return spec, f"Error: {e}", events
+
+
 class SpecAgent:
     def __init__(
         self,
@@ -350,72 +457,20 @@ class SpecAgent:
             timeout=httpx.Timeout(connect=10, read=300, write=10, pool=10)
         ) as client:
             for turn in range(self.max_turns):
-                payload = {
-                    "model": self.model,
-                    "messages": messages,
-                    "tools": TOOL_DEFINITIONS,
-                    "max_tokens": 4096,
-                    "temperature": 0.2,
-                    "stream": True,
-                }
-                full_content = ""
-                tool_calls_map: dict = {}
+                turn_result: _LlmTurnResult | None = None
+                async for item in _stream_llm_turn(
+                    client, self.base_url, self.api_key, self.model, messages, turn, spec
+                ):
+                    if isinstance(item, SpecAgentEvent):
+                        yield item
+                    else:
+                        turn_result = item
+                if turn_result is None:
+                    continue
 
-                stream = _open_stream(client, self.base_url, self.api_key, payload)
-                async for line in stream:
-                    if not line.startswith("data: "):
-                        continue
-                    data_str = line[6:]
-                    if data_str.strip() == "[DONE]":
-                        break
-                    try:
-                        chunk = json.loads(data_str)
-                    except json.JSONDecodeError:
-                        continue
-                    choices = chunk.get("choices") or []
-                    if not choices:
-                        continue
-                    delta = choices[0].get("delta", {})
-                    if delta.get("content"):
-                        full_content += delta["content"]
-                        yield SpecAgentEvent(
-                            kind="assistant_delta", spec=spec, text=delta["content"]
-                        )
-                    if delta.get("tool_calls"):
-                        for tc in delta["tool_calls"]:
-                            idx = tc.get("index", 0)
-                            entry = tool_calls_map.setdefault(
-                                idx, {"id": "", "name": "", "arguments": ""}
-                            )
-                            if tc.get("id"):
-                                entry["id"] = tc["id"]
-                            func = tc.get("function", {})
-                            if func.get("name"):
-                                entry["name"] = func["name"]
-                            if func.get("arguments"):
-                                entry["arguments"] += func["arguments"]
-
-                # Reconstruct assistant message
-                assistant_msg: dict = {"role": "assistant", "content": full_content or None}
-                assembled: list[dict] = []
-                for idx in sorted(tool_calls_map.keys()):
-                    entry = tool_calls_map[idx]
-                    if not entry["name"]:
-                        continue
-                    raw = entry["arguments"] or "{}"
-                    try:
-                        json.loads(raw)
-                        valid_args = raw
-                    except json.JSONDecodeError:
-                        valid_args = "{}"
-                    assembled.append({
-                        "id": entry["id"] or f"call_{turn}_{idx}",
-                        "type": "function",
-                        "function": {"name": entry["name"], "arguments": valid_args},
-                    })
-                if assembled:
-                    assistant_msg["tool_calls"] = assembled
-                messages.append(assistant_msg)
+                full_content = turn_result.full_content
+                assembled = turn_result.tool_calls
+                messages.append(turn_result.assistant_msg)
 
                 if not assembled:
                     # No tool calls → agent done for this user turn
@@ -430,25 +485,11 @@ class SpecAgent:
                         args = json.loads(tc["function"]["arguments"] or "{}")
                     except json.JSONDecodeError:
                         args = {}
-                    yield SpecAgentEvent(
-                        kind="tool_call", spec=spec, tool_name=name, tool_args=args
+                    spec, result_str, events = _dispatch_spec_tool(
+                        spec, name, args, enforce_first_turn=enforce_first
                     )
-                    try:
-                        spec = dispatch_tool(
-                            spec, name, args, enforce_first_turn=enforce_first
-                        )
-                        result_str = "ok"
-                        yield SpecAgentEvent(
-                            kind="spec_patch", spec=spec, tool_name=name
-                        )
-                    except ToolError as e:
-                        result_str = f"Error: {e}"
-                        yield SpecAgentEvent(
-                            kind="tool_error",
-                            spec=spec,
-                            tool_name=name,
-                            message=str(e),
-                        )
+                    for event in events:
+                        yield event
                     messages.append({
                         "role": "tool",
                         "tool_call_id": tc["id"],
@@ -507,71 +548,20 @@ class SpecAgent:
             timeout=httpx.Timeout(connect=10, read=300, write=10, pool=10)
         ) as client:
             for turn in range(self.max_turns):
-                payload = {
-                    "model": self.model,
-                    "messages": messages,
-                    "tools": TOOL_DEFINITIONS,
-                    "max_tokens": 4096,
-                    "temperature": 0.2,
-                    "stream": True,
-                }
-                full_content = ""
-                tool_calls_map: dict = {}
+                turn_result: _LlmTurnResult | None = None
+                async for item in _stream_llm_turn(
+                    client, self.base_url, self.api_key, self.model, messages, turn, spec
+                ):
+                    if isinstance(item, SpecAgentEvent):
+                        yield item
+                    else:
+                        turn_result = item
+                if turn_result is None:
+                    continue
 
-                stream = _open_stream(client, self.base_url, self.api_key, payload)
-                async for line in stream:
-                    if not line.startswith("data: "):
-                        continue
-                    data_str = line[6:]
-                    if data_str.strip() == "[DONE]":
-                        break
-                    try:
-                        chunk = json.loads(data_str)
-                    except json.JSONDecodeError:
-                        continue
-                    choices = chunk.get("choices") or []
-                    if not choices:
-                        continue
-                    delta = choices[0].get("delta", {})
-                    if delta.get("content"):
-                        full_content += delta["content"]
-                        yield SpecAgentEvent(
-                            kind="assistant_delta", spec=spec, text=delta["content"]
-                        )
-                    if delta.get("tool_calls"):
-                        for tc in delta["tool_calls"]:
-                            idx = tc.get("index", 0)
-                            entry = tool_calls_map.setdefault(
-                                idx, {"id": "", "name": "", "arguments": ""}
-                            )
-                            if tc.get("id"):
-                                entry["id"] = tc["id"]
-                            func = tc.get("function", {})
-                            if func.get("name"):
-                                entry["name"] = func["name"]
-                            if func.get("arguments"):
-                                entry["arguments"] += func["arguments"]
-
-                assistant_msg: dict = {"role": "assistant", "content": full_content or None}
-                assembled: list[dict] = []
-                for idx in sorted(tool_calls_map.keys()):
-                    entry = tool_calls_map[idx]
-                    if not entry["name"]:
-                        continue
-                    raw = entry["arguments"] or "{}"
-                    try:
-                        json.loads(raw)
-                        valid_args = raw
-                    except json.JSONDecodeError:
-                        valid_args = "{}"
-                    assembled.append({
-                        "id": entry["id"] or f"call_{turn}_{idx}",
-                        "type": "function",
-                        "function": {"name": entry["name"], "arguments": valid_args},
-                    })
-                if assembled:
-                    assistant_msg["tool_calls"] = assembled
-                messages.append(assistant_msg)
+                full_content = turn_result.full_content
+                assembled = turn_result.tool_calls
+                messages.append(turn_result.assistant_msg)
 
                 if not assembled:
                     yield SpecAgentEvent(kind="final", spec=spec, text=full_content)
@@ -584,23 +574,11 @@ class SpecAgent:
                         args = json.loads(tc["function"]["arguments"] or "{}")
                     except json.JSONDecodeError:
                         args = {}
-                    yield SpecAgentEvent(
-                        kind="tool_call", spec=spec, tool_name=name, tool_args=args
+                    spec, result_str, events = _dispatch_spec_tool(
+                        spec, name, args, enforce_first_turn=False
                     )
-                    try:
-                        spec = dispatch_tool(spec, name, args, enforce_first_turn=False)
-                        result_str = "ok"
-                        yield SpecAgentEvent(
-                            kind="spec_patch", spec=spec, tool_name=name
-                        )
-                    except ToolError as e:
-                        result_str = f"Error: {e}"
-                        yield SpecAgentEvent(
-                            kind="tool_error",
-                            spec=spec,
-                            tool_name=name,
-                            message=str(e),
-                        )
+                    for event in events:
+                        yield event
                     messages.append({
                         "role": "tool",
                         "tool_call_id": tc["id"],

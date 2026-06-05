@@ -16,7 +16,7 @@
         </p>
       </div>
       <div class="lp-head-actions">
-        <button class="lp-btn lp-btn-ghost" :disabled="loading" @click="reload">
+        <button class="lp-btn lp-btn-ghost" :disabled="loading" @click="() => reload()">
           <span class="lp-btn-icon">⟲</span> 刷新
         </button>
         <label class="lp-toggle">
@@ -46,7 +46,7 @@
     </div>
     <div v-else-if="error" class="lp-state lp-state-err">
       ⚠️ {{ error }}
-      <button class="lp-btn lp-btn-ghost" @click="reload">重试</button>
+      <button class="lp-btn lp-btn-ghost" @click="() => reload()">重试</button>
     </div>
     <div v-else-if="items.length === 0" class="lp-state">
       <div class="lp-state-icon">📋</div>

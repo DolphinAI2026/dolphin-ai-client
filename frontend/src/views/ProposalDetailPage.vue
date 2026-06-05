@@ -1,5 +1,5 @@
 <template>
-  <BuilderFrame :breadcrumbs="[{ label: '提案', href: '/devops' }, { label: detail?.title || proposalId }]">
+  <BuilderFrame :breadcrumbs="[{ label: '提案', to: '/devops' }, { label: detail?.title || proposalId }]">
     <div v-if="loading" class="loading">加载中…</div>
     <div v-else-if="error" class="error">{{ error }}</div>
     <main v-else-if="detail" class="proposal-detail">
