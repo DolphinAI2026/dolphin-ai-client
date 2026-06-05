@@ -25,6 +25,7 @@ import { usePanelResize } from './config-assistant/composables/usePanelResize'
 import { useAiChatSession } from '@/composables/useAiChatSession'
 import { aiChatApi, type AIChatSession } from '@/api/aiChat'
 import { renderMd } from '@/utils/markdown'
+import { getPastedImageFiles } from '@/utils/pasteImages'
 import type { AgentMessage } from '@/components/common/agent-conversation/types'
 
 // props/emit 跟 ChatPage 当前传给 ConfigAssistantPanel 的完全同名，保证 controller 一行 tag swap。
@@ -113,6 +114,13 @@ function onFilesChosen(e: Event) {
   if (files.length) pendingFiles.value = [...pendingFiles.value, ...files]
   // 清空原生 input，方便重复选同名文件
   el.value = ''
+}
+// 截图/图片直接 Ctrl/Cmd+V 粘进输入框 —— 取剪贴板里的图片当附件。
+function onPaste(e: ClipboardEvent) {
+  const imgs = getPastedImageFiles(e)
+  if (!imgs.length) return // 普通文本粘贴照常
+  e.preventDefault()
+  pendingFiles.value = [...pendingFiles.value, ...imgs]
 }
 function removePendingFile(idx: number) {
   pendingFiles.value = pendingFiles.value.filter((_, i) => i !== idx)
@@ -416,8 +424,9 @@ onMounted(() => {
           v-model="inputText"
           class="aa-input"
           rows="1"
-          placeholder="描述你想改的配置或要开发的功能…"
+          placeholder="描述你想改的配置或要开发的功能…（可直接粘贴截图）"
           @keydown="onInputKeydown"
+          @paste="onPaste"
         />
         <button
           v-if="sending"
