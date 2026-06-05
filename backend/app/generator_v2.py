@@ -238,8 +238,10 @@ def _force_form_identity(
     detail_page = form_config.setdefault("detailPage", {})
     if isinstance(detail_page, dict):
         _apply(detail_page)
-        detail_page.setdefault("webFormSettings", {})
-        detail_page.setdefault("mobileFormSettings", {})
+        # ⚠️ 不要注入 webFormSettings / mobileFormSettings —— apaas 会把空 {} 展开成
+        # formTitleConfigList 指向不存在的 "formName" 标题组件, 表单设计器加载时崩
+        # (控制台报 renderLogic / engineContext null, 画布显"暂无数据"=字段渲染不出来)。
+        # 原生 + 对话(build_apaas_feature_from_spec)建的表单都不带这俩, 交给 apaas 自处理。
         detail_page.setdefault("previewLanguage", "zh-CN")
         detail_page.setdefault("formVersionConfig", {})
     form_config.setdefault("formModelType", "DATABASE")

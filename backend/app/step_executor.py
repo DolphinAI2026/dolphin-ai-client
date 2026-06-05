@@ -986,8 +986,9 @@ def _apply_form_identity_to_form_config(
     detail_page = form_config["detailPage"]
     _apply(detail_page)
     for required_key, default_value in (
-        ("webFormSettings", {}),
-        ("mobileFormSettings", {}),
+        # ⚠️ 不要注入 webFormSettings / mobileFormSettings —— apaas 把空 {} 展开成指向不存在
+        # "formName" 标题组件的 formTitleConfigList, 表单设计器画布渲染崩(暂无数据)。详见
+        # generator_v2 同处注释。原生/对话建的表单都不带这俩。
         ("previewLanguage", "zh-CN"),
         ("formVersionConfig", {}),
     ):
