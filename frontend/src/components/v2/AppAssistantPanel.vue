@@ -237,7 +237,11 @@ watch(
       const key = String(m.id)
       if (_autoRefreshed.has(key)) continue
       _autoRefreshed.add(key)
-      setTimeout(() => emit('refresh-iframe'), 200)
+      // apaas 写后读有传播延迟：写工具已成功(原生编辑器即时生效),但 get_apaas_form_detail
+      // 读接口要一会儿才追上。早刷一次(快路径)+ 晚刷一次(等 apaas 读追上写),否则重挂的
+      // GET form detail 拿到改前 stale(实测:原生后台已必填、中间预览没变)。
+      setTimeout(() => emit('refresh-iframe'), 250)
+      setTimeout(() => emit('refresh-iframe'), 2000)
     }
   },
   { deep: true },
