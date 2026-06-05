@@ -404,22 +404,24 @@ def _apply_provider_payload_compat(cfg: LLMConfigSnapshot, payload: dict) -> dic
 async def _resolve_llm_config(
     db: AsyncSession, session: AIChatSession
 ) -> LLMConfigSnapshot:
-    """优先用 session.selected_llm_config_id；没指定则取平台级 default。"""
+    """优先用 session.selected_llm_config_id；没指定则取本租户 default。"""
     cfg: Optional[LLMConfig] = None
     if session.selected_llm_config_id:
         res = await db.execute(
             select(LLMConfig).where(
                 LLMConfig.id == session.selected_llm_config_id,
+                LLMConfig.tenant_id == session.tenant_id,
                 LLMConfig.status == "active",
                 LLMConfig.purpose.in_(("builder", "all")),
             )
         )
         cfg = res.scalar_one_or_none()
     if not cfg:
-        # fallback：平台级 default，优先 builder，其次 all。
+        # fallback：本租户 default，优先 builder，其次 all。
         res = await db.execute(
             select(LLMConfig)
             .where(
+                LLMConfig.tenant_id == session.tenant_id,
                 LLMConfig.is_default == True,  # noqa: E712
                 LLMConfig.status == "active",
                 LLMConfig.purpose.in_(("builder", "all")),
@@ -433,6 +435,7 @@ async def _resolve_llm_config(
         res = await db.execute(
             select(LLMConfig)
             .where(
+                LLMConfig.tenant_id == session.tenant_id,
                 LLMConfig.status == "active",
                 LLMConfig.purpose.in_(("builder", "all")),
             )
