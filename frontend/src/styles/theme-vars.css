@@ -29,6 +29,15 @@ html[data-theme="light"] {
   --t-border-subtle: rgba(99, 102, 241, 0.08);
   --t-border-strong: rgba(99, 102, 241, 0.15);
 
+  /* Legacy soft/active aliases — 多个 agent UI 组件(AgentRunTraceDrawer /
+     AgentConversation / ToolCard / SessionSidebar / VoiceInputButton / CodingPage)
+     早期写了 --t-bg-soft / --t-border-soft / --t-bg-active 这几个**从未定义**的 token,
+     一直 fallback 到写死的浅色 → 暗色主题下永远是浅底(step-body 浅底+浅字=看不见)。
+     这里用已有 token 做别名:var() 在使用处按当前主题解析, 一处定义自动适配明暗。 */
+  --t-bg-soft: var(--t-bg-panel-hover);
+  --t-bg-active: var(--t-brand-subtle);
+  --t-border-soft: var(--t-border-subtle);
+
   /* Brand — Blue / Indigo */
   --t-brand: #4f6ef7;
   --t-brand-light: #6b8aff;
