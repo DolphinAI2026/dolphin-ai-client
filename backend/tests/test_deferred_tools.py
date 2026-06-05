@@ -61,3 +61,19 @@ def test_search_uses_hint(monkeypatch):
 def test_search_no_match_returns_empty():
     deferred = {"foo_tool":{"function":{"name":"foo_tool","description":"bar"}}}
     assert search_deferred_tools("完全不相关的词xyz", deferred) == []
+
+
+# ─────────────────────── build_deferred_manifest ───────────────────────
+
+from app.ai_chat.tools import build_deferred_manifest
+
+
+def test_manifest_lists_each_deferred_with_desc():
+    deferred = {"update_apaas_model_field": {"function": {"name": "update_apaas_model_field", "description": "改模型字段必填/类型"}}}
+    m = build_deferred_manifest(deferred)
+    assert "update_apaas_model_field" in m and "改模型字段" in m
+    assert "search_tools" in m  # 引导句提到先 search
+
+
+def test_manifest_empty_when_no_deferred():
+    assert build_deferred_manifest({}) == ""

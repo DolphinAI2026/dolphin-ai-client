@@ -1470,6 +1470,28 @@ def search_deferred_tools(
     return [n for _, n in scored[:limit]]
 
 
+def build_deferred_manifest(deferred_by_name: dict[str, dict]) -> str:
+    """把延迟工具列成一行清单（name: desc(关键词)），注入 system prompt。
+
+    比完整 schema 小得多；模型据此知道有哪些工具、用前先 search_tools 加载。
+    空集时返回空串，不注入任何额外文本。
+    """
+    if not deferred_by_name:
+        return ""
+    lines = [
+        "\n\n## 可按需加载的工具(先 search_tools 再用)",
+        "下面这些工具**不在当前 tools 列表里**;要用,先调 `search_tools`(关键词或 `select:工具名`)把它们加载进来,下一轮即可调用:",
+    ]
+    for name in sorted(deferred_by_name):
+        desc = (deferred_by_name[name].get("function", {}).get("description") or "").strip().replace("\n", " ")
+        hint = _search_hint_for(name)
+        line = f"- {name}: {desc[:80]}"
+        if hint:
+            line += f"(关键词: {hint})"
+        lines.append(line)
+    return "\n".join(lines)
+
+
 # ── 锁定 app 上下文注入 (Task A4, 2026-06-04) ──────────────────────────────────
 # 当 AIChatSession.app_id 非空时，把内部 app_id → (env_id, apaas_app_id) 解析出来，
 # 并强制注入到声明了这两参数的 apaas 工具 —— 覆盖 LLM 给的值。
