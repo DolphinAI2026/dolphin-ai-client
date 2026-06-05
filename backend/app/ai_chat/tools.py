@@ -244,6 +244,24 @@ TOOL_SCHEMAS: list[dict] = [
             },
         },
     },
+    {
+        "type": "function",
+        "function": {
+            "name": "search_tools",
+            "description": (
+                "按需加载延迟工具:当你要用的工具不在当前 tools 列表(但在系统提示的"
+                "「可按需加载的工具」清单里)时,先调这个把它加载进来,下一轮就能直接调用。"
+                "query 用关键词(如「改字段 必填」),或用 'select:工具名1,工具名2' 精确选。"
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "query": {"type": "string", "description": "关键词,或 select:工具名 精确选"},
+                },
+                "required": ["query"],
+            },
+        },
+    },
 ]
 
 
@@ -1490,6 +1508,32 @@ def build_deferred_manifest(deferred_by_name: dict[str, dict]) -> str:
             line += f"(关键词: {hint})"
         lines.append(line)
     return "\n".join(lines)
+
+
+async def _handle_search_tools(args: dict, session, db) -> str:
+    """search_tools 工具处理器 — 在延迟工具集里搜索并返回命中名列表。
+
+    handler 签名与其他 TOOL_HANDLERS 一致: (args, session, db) -> str (JSON)
+    """
+    _core, deferred = split_core_deferred(_LAST_TOOL_SCHEMAS or [])
+    names = search_deferred_tools(args.get("query", ""), deferred)
+    if not names:
+        return json.dumps(
+            {"ok": True, "activated": [], "message": "无匹配工具;换个关键词或用 select:工具名"},
+            ensure_ascii=False,
+        )
+    return json.dumps(
+        {
+            "ok": True,
+            "activated": names,
+            "message": f"已加载 {len(names)} 个工具,下一轮可直接调用: {', '.join(names)}",
+        },
+        ensure_ascii=False,
+    )
+
+
+# search_tools handler registered after its definition (TOOL_HANDLERS dict is above)
+TOOL_HANDLERS["search_tools"] = _handle_search_tools
 
 
 # ── 锁定 app 上下文注入 (Task A4, 2026-06-04) ──────────────────────────────────

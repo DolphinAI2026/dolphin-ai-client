@@ -77,3 +77,36 @@ def test_manifest_lists_each_deferred_with_desc():
 
 def test_manifest_empty_when_no_deferred():
     assert build_deferred_manifest({}) == ""
+
+
+# ─────────────────────── search_tools handler (Task 4) ───────────────────────
+
+import json
+import pytest
+
+
+@pytest.mark.asyncio
+async def test_search_tools_handler_returns_activated():
+    import app.ai_chat.tools as t
+    t._LAST_TOOL_SCHEMAS = [
+        {"type":"function","function":{"name":"update_apaas_model_field","description":"改模型字段","parameters":{"type":"object","properties":{}}}},
+        {"type":"function","function":{"name":"read_attachment","description":"读附件","parameters":{"type":"object","properties":{}}}},
+    ]
+    res = await t._handle_search_tools({"query":"select:update_apaas_model_field"}, session=None, db=None)
+    data = json.loads(res)
+    assert data["ok"] is True and "update_apaas_model_field" in data["activated"]
+
+
+@pytest.mark.asyncio
+async def test_search_tools_no_match():
+    import app.ai_chat.tools as t
+    t._LAST_TOOL_SCHEMAS = [{"type":"function","function":{"name":"foo_tool","description":"bar","parameters":{}}}]
+    res = await t._handle_search_tools({"query":"完全无关xyz"}, session=None, db=None)
+    data = json.loads(res)
+    assert data["ok"] is True and data["activated"] == []
+
+
+def test_search_tools_in_base_schemas():
+    from app.ai_chat.tools import TOOL_SCHEMAS
+    names = {s["function"]["name"] for s in TOOL_SCHEMAS}
+    assert "search_tools" in names
