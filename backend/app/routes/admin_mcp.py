@@ -1,25 +1,21 @@
-"""Admin: MCP 工具浏览 API。
+"""Admin: MCP 工具浏览 / 测试 API。
 
-给前端 /admin/mcp 页面用 — 列出**线上 MCP 客户端实际在调**的 MCP server (v2) 暴露的所有工具。
-
-2026-05-16 起改为 proxy 模式：不再 list ai-builder-ai 自己 backend 进程内嵌的
-mcp_server.py 的工具（80 个），而是 HTTP 调集群内 v2 svc 拿真实 77 工具。
-
-原因：双 mcp server 并存（[[mcp-dual-servers-analysis-2026-05-16]]），admin 看本机
-mcp 跟 MCP 客户端实际用的 v2 不一致 → 看到 vibe_* 老 host docker 工具 / apaas 精细
-CRUD 16 个会以为 agent 能调，实际不能。改 proxy 后 admin 视图跟 agent 一致。
+平台管理页默认使用当前 backend 进程内的 FastMCP 工具注册表，方便本地开发时
+只启动 ai-builder backend/frontend 就能单独测试工具，不再依赖独立 8004 MCP 服务。
 """
 from __future__ import annotations
 
 import logging
 import os
 from pathlib import Path
-from typing import Annotated
+from typing import Annotated, Any
 
 import httpx
 from fastapi import APIRouter, Depends, HTTPException
+from pydantic import BaseModel, Field
 
 from app.deps import AuthContext, get_auth_context
+from app.mcp_inprocess import call_inprocess_tool, list_inprocess_tools
 
 # pydantic-settings 不 export 到 os.environ；显式 load .env 兜底，跟 mcp_server.py 一致
 try:
@@ -187,26 +183,19 @@ async def _fetch_tools_from(path: str) -> list[dict]:
 async def list_mcp_tools(
     ctx: Annotated[AuthContext, Depends(get_auth_context)],
 ):
-    """列出线上 MCP 客户端实际在调的 v2 MCP server 暴露的所有工具。
-
-    走集群内 HTTP proxy 调 v2 `tools/list`，合并 main + design 两个 endpoint
-    （builder/coding 子集是 main 的子集，会自动去重）。
-    """
+    """列出当前 backend 进程内 FastMCP 注册的工具。"""
     seen: set[str] = set()
     tools_raw: list[dict] = []
     try:
-        for path in _V2_TOOL_PATHS:
-            for t in await _fetch_tools_from(path):
-                name = t.get("name") or ""
-                if not name or name in seen:
-                    continue
-                seen.add(name)
-                tools_raw.append(t)
-    except HTTPException:
-        raise
+        for t in list_inprocess_tools():
+            name = t.get("name") or ""
+            if not name or name in seen:
+                continue
+            seen.add(name)
+            tools_raw.append(t)
     except Exception as exc:
-        logger.exception("admin /mcp/tools proxy 调 v2 异常")
-        raise HTTPException(status_code=502, detail=f"v2 MCP 不可达: {exc}")
+        logger.exception("admin /mcp/tools 读取同进程 MCP 工具失败")
+        raise HTTPException(status_code=500, detail=f"同进程 MCP 工具不可用: {exc}")
 
     result = []
     for t in tools_raw:
@@ -233,6 +222,7 @@ async def list_mcp_tools(
             "description": rest,
             "category_key": cat_key,
             "category_label": cat_label,
+            "inputSchema": schema,
             "input_schema": schema,
             "params": params,
             "params_count": len(params),
@@ -252,9 +242,37 @@ async def list_mcp_tools(
         "tools": result,
         "categories": list(by_category.values()),
         "server_info": {
-            "name": "apaas-builder-mcp-server (v2, main + design)",
-            "transport": "Streamable HTTP (proxied)",
-            "endpoint": "/mcp-server-v2/api/mcp/mcp (上游, agent 同款)",
-            "auth_method": "Bearer (MCP_API_KEYS)",
+            "name": "ai-builder backend in-process MCP",
+            "transport": "FastMCP in-process",
+            "endpoint": "/api/admin/mcp/tools + /api/admin/mcp/call",
+            "auth_method": "平台管理登录态",
         },
+    }
+
+
+class InvokeMcpRequest(BaseModel):
+    tool_name: str
+    args: dict = Field(default_factory=dict)
+
+
+@router.post("/call")
+async def call_mcp_tool(
+    body: InvokeMcpRequest,
+    ctx: Annotated[AuthContext, Depends(get_auth_context)],
+):
+    """调用当前 backend 进程内 FastMCP 工具，用于平台管理测试台。"""
+    args = dict(body.args or {})
+    args["tenant_id"] = int(ctx.tenant_id or 0)
+    args["user_id"] = int(ctx.user.id or 0)
+
+    result: Any = await call_inprocess_tool(body.tool_name, args)
+    is_error = isinstance(result, dict) and (
+        result.get("ok") is False
+        or result.get("error_code")
+        or str(result.get("message") or "").startswith("错误")
+    )
+    return {
+        "ok": not is_error,
+        "tool_name": body.tool_name,
+        "result": result,
     }

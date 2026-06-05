@@ -50,6 +50,12 @@ export default defineConfig({
         target: 'http://localhost:8000',
         changeOrigin: true
       },
+      '/ai-builder/ide': {
+        target: 'http://127.0.0.1:8080',
+        changeOrigin: true,
+        ws: true,
+        rewrite: (path) => path.replace(/^\/ai-builder\/ide/, '')
+      },
       '^/admin(/|$)': {
         target: 'http://localhost:8000',
         changeOrigin: true
@@ -94,6 +100,27 @@ export default defineConfig({
       '/apaas': {
         target: 'http://localhost:8000',
         changeOrigin: true
+      }
+    }
+  },
+  build: {
+    rollupOptions: {
+      output: {
+        manualChunks(id) {
+          if (!id.includes('node_modules')) return
+          if (id.includes('/element-plus/')) return 'vendor-element-plus'
+          if (id.includes('/@antv/x6/')) return 'vendor-x6'
+          if (id.includes('/marked/') || id.includes('/highlight.js/')) return 'vendor-markdown'
+          if (
+            id.includes('/vue/') ||
+            id.includes('/vue-router/') ||
+            id.includes('/pinia/') ||
+            id.includes('/@vue/')
+          ) {
+            return 'vendor-vue'
+          }
+          return 'vendor'
+        }
       }
     }
   }

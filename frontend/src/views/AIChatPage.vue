@@ -16,6 +16,7 @@
       :new-options="newSessionOptions"
       :collapsible="true"
       collapse-key="aichat:aside-collapsed"
+      new-label="+ 新会话"
       back-route="/apps"
       back-label="返回应用"
       empty-hint="还没有会话，点上面新建一个"
@@ -54,6 +55,13 @@
             Agent 活动
           </button>
           <button
+            v-if="automationRunnerEnabled"
+            class="automation-toggle"
+            :class="{ active: automationPanelOpen, running: automationRunning }"
+            @click="automationPanelOpen = !automationPanelOpen"
+            :title="automationPanelOpen ? '收起脚本回放面板' : '打开脚本回放面板'"
+          >脚本回放</button>
+          <button
             v-if="artifacts.length > 0"
             class="artifacts-toggle"
             :class="{ active: artifactsPanelOpen }"
@@ -72,6 +80,36 @@
         @answer-ask="onAgentAnswerAsk"
         @open-trace="onOpenTrace"
       >
+        <template #empty>
+          <div class="welcome welcome-in-conversation">
+            <div class="welcome-hero">
+              <div class="welcome-badge">
+                <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3 14 9l6 2-6 2-2 6-2-6-6-2 6-2z"/><path d="M19 17l1 3 3 1-3 1-1 3-1-3-3-1 3-1z"/></svg>
+                <span>AI Builder</span>
+              </div>
+              <h1 class="welcome-title">{{ welcomeTitle }}</h1>
+              <p class="welcome-sub">{{ welcomeIntro }}</p>
+            </div>
+            <div class="welcome-examples" aria-label="开场示例">
+              <button
+                v-for="example in introExamples"
+                :key="example.title"
+                type="button"
+                class="welcome-example"
+                @click="startFromIntroExample(example.prompt)"
+              >
+                <span class="welcome-example-title">{{ example.title }}</span>
+                <span class="welcome-example-text">{{ example.short }}</span>
+              </button>
+            </div>
+            <div class="welcome-capabilities" aria-label="AI Builder 能力范围">
+              <span><i></i>整理需求</span>
+              <span><i></i>生成 / 更新应用</span>
+              <span><i></i>自开发页面和组件</span>
+              <span><i></i>联调接口与修错</span>
+            </div>
+          </div>
+        </template>
         <template #artifact="{ artifact }">
           <div class="artifact-card" @click="openArtifactInPanel(artifact.raw)">
             <div class="art-card-head">
@@ -97,13 +135,13 @@
           <div
             v-if="message.meta?.kind === 'app-ready' && message.meta?.info"
             class="app-ready-cta"
-            :class="{ 'is-generating': !ctaIsReady(message.meta.info) }"
+            :class="{ 'is-generating': !ctaIsReady(message.meta.info) && !ctaIsFailed(message.meta.info), 'is-failed': ctaIsFailed(message.meta.info) }"
             @click="openAppReady(message.meta.info)"
           >
-            <div class="cta-icon">{{ ctaIsReady(message.meta.info) ? '🚀' : '⏳' }}</div>
+            <div class="cta-icon">{{ ctaIsReady(message.meta.info) ? '🚀' : (ctaIsFailed(message.meta.info) ? '!' : '⏳') }}</div>
             <div class="cta-body">
               <div class="cta-title">
-                应用「{{ message.meta.info.appName }}」{{ ctaIsReady(message.meta.info) ? '已就绪' : '正在生成中…' }}
+                应用「{{ message.meta.info.appName }}」{{ ctaIsReady(message.meta.info) ? '已就绪' : (ctaIsFailed(message.meta.info) ? '生成失败' : '正在生成中…') }}
               </div>
               <div v-if="!ctaIsReady(message.meta.info)" class="cta-sub">
                 <span class="cta-progress-text">{{ ctaProgressText(message.meta.info) }}</span>
@@ -115,12 +153,12 @@
                 <span v-if="message.meta.info.appCode" class="cta-sub-sep">·</span>
                 <span v-if="message.meta.info.appCode">{{ message.meta.info.appCode }}</span>
               </div>
-              <div v-if="!ctaIsReady(message.meta.info)" class="cta-progress-bar">
+              <div v-if="!ctaIsReady(message.meta.info) && !ctaIsFailed(message.meta.info)" class="cta-progress-bar">
                 <div class="cta-progress-fill" :style="{ width: ctaPercent(message.meta.info) + '%' }"></div>
               </div>
             </div>
             <button class="cta-action" type="button" @click.stop="openAppReady(message.meta.info)">
-              {{ ctaIsReady(message.meta.info) ? '打开应用 →' : '看生成进度 →' }}
+              {{ ctaIsReady(message.meta.info) ? '打开应用 →' : (ctaIsFailed(message.meta.info) ? '查看详情 →' : '看生成进度 →') }}
             </button>
           </div>
         </template>
@@ -139,10 +177,28 @@
             <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3 14 9l6 2-6 2-2 6-2-6-6-2 6-2z"/><path d="M19 17l1 3 3 1-3 1-1 3-1-3-3-1 3-1z"/></svg>
             <span>AI Builder</span>
           </div>
-          <h1 class="welcome-title">把<span class="hl">业务流程</span>说清楚，睿鲸 AI 直接搭<span class="hl">应用</span>。</h1>
-          <p class="welcome-sub">描述需求或上传材料（PDF / Word / Excel / 截图），AI 帮你梳理字段、角色、流程并生成设计文档。左侧能看历史会话，点开继续。</p>
+          <h1 class="welcome-title">{{ welcomeTitle }}</h1>
+          <p class="welcome-sub">{{ welcomeIntro }}</p>
         </div>
         <LandingComposer @submit="onStartNew" />
+        <div class="welcome-examples" aria-label="开场示例">
+          <button
+            v-for="example in introExamples"
+            :key="example.title"
+            type="button"
+            class="welcome-example"
+            @click="startFromIntroExample(example.prompt)"
+          >
+            <span class="welcome-example-title">{{ example.title }}</span>
+            <span class="welcome-example-text">{{ example.short }}</span>
+          </button>
+        </div>
+        <div class="welcome-capabilities" aria-label="AI Builder 能力范围">
+          <span><i></i>整理需求</span>
+          <span><i></i>生成 / 更新应用</span>
+          <span><i></i>自开发页面和组件</span>
+          <span><i></i>联调接口与修错</span>
+        </div>
       </div>
 
       <!-- 输入区 -->
@@ -275,6 +331,72 @@
         <p class="muted">点击左侧文件查看</p>
       </div>
     </aside>
+
+    <section
+      v-if="automationRunnerEnabled && automationPanelOpen"
+      class="automation-panel"
+      aria-label="脚本回放面板"
+    >
+      <div class="automation-head">
+        <div>
+          <div class="automation-title">脚本回放</div>
+          <div class="automation-subtitle">{{ automationStatusText }}</div>
+        </div>
+        <button
+          class="automation-icon-btn"
+          type="button"
+          @click="automationPanelOpen = false"
+          title="收起脚本回放面板"
+          aria-label="收起脚本回放面板"
+        >×</button>
+      </div>
+      <textarea
+        v-model="automationPrompt"
+        class="automation-textarea"
+        :disabled="automationRunning"
+        aria-label="自动化脚本需求"
+      ></textarea>
+      <div class="automation-actions">
+        <button
+          class="automation-primary"
+          type="button"
+          :disabled="automationRunning || !automationPrompt.trim()"
+          @click="runAutomationScript"
+        >执行创建应用脚本</button>
+        <button
+          class="automation-secondary"
+          type="button"
+          :disabled="!automationRunning"
+          @click="stopAutomationScript"
+        >停止</button>
+        <button
+          class="automation-secondary"
+          type="button"
+          :disabled="automationRunning || automationLogs.length === 0"
+          @click="clearAutomationLogs"
+        >清空</button>
+        <button
+          class="automation-secondary"
+          type="button"
+          :disabled="automationLogs.length === 0"
+          @click="copyAutomationLogs"
+        >复制日志</button>
+      </div>
+      <div class="automation-logs" aria-live="polite">
+        <div v-if="automationLogs.length === 0" class="automation-log-empty">
+          运行后这里会记录发送、工具调用、文档生成和应用生成进度。
+        </div>
+        <div
+          v-for="(log, index) in automationLogs"
+          :key="`${log.ts}-${index}`"
+          class="automation-log-row"
+          :class="`level-${log.level}`"
+        >
+          <span class="automation-log-time">{{ log.ts }}</span>
+          <span class="automation-log-text">{{ log.text }}</span>
+        </div>
+      </div>
+    </section>
   </div>
   <ChooseAppTargetDialog
     v-model="chooseDialogVisible"
@@ -300,6 +422,7 @@ import { aiChatApi, type AIChatSession, type AIChatMessage, type AIChatToolCall,
 import { llmConfigApi, type BuilderModelOption } from '@/api/llmConfig'
 import { usePreviewStore } from '@/stores/preview'
 import { useThemeStore } from '@/stores/theme'
+import { useUserStore } from '@/stores/user'
 import WorkbenchShell from '@/components/WorkbenchShell.vue'
 import SessionSidebar, { type SessionItem, type SessionTab, type NewSessionOption } from '@/components/common/SessionSidebar.vue'
 import AgentConversation from '@/components/common/AgentConversation.vue'
@@ -317,6 +440,7 @@ import { applicationApi } from '@/api/application'
 
 const previewStore = usePreviewStore()
 const themeStore = useThemeStore()
+const userStore = useUserStore()
 
 marked.setOptions({ breaks: true, gfm: true })
 
@@ -384,8 +508,61 @@ const toolCalls = ref<AIChatToolCall[]>([])
 const attachments = ref<AIChatAttachment[]>([])
 const artifacts = ref<AIChatArtifact[]>([])
 
+const welcomeTitle = '说出目标，AI 帮你搭应用，也能继续开发。'
+const welcomeIntro = '这里不分“需求入口”和“开发入口”。你可以描述业务流程、上传材料、指定要改的页面或贴出运行报错，AI 会先理清上下文，再生成应用、修改代码、联调验证。'
+const introExamples = [
+  {
+    title: '从业务目标开始',
+    short: '搭一个整改闭环或审批系统',
+    prompt: '给质量部搭一个 QMS 整改闭环，包含问题登记、责任人派发、整改验证、超期提醒和月度统计。',
+  },
+  {
+    title: '从现有应用继续改',
+    short: '改页面、补字段、接流程',
+    prompt: '我想调整现有应用：新增一个审批状态字段，列表里支持按状态筛选，并把详情页的关键字段重新分组。',
+  },
+  {
+    title: '从报错和联调接入',
+    short: '贴接口、截图或构建错误',
+    prompt: '我遇到一个接口联调问题，下面会贴报错和请求参数，请帮我定位原因并给出修改方案。',
+  },
+]
+
 const llmOptions = ref<BuilderModelOption[]>([])
 const selectedLlmId = ref<number | null>(null)
+const defaultLlmId = computed(() =>
+  llmOptions.value.find(option => option.is_default)?.id
+  ?? llmOptions.value[0]?.id
+  ?? null
+)
+
+function normalizeLlmId(id?: number | null): number | null {
+  const ids = new Set(llmOptions.value.map(option => option.id))
+  if (id != null && ids.has(id)) return id
+  return defaultLlmId.value
+}
+
+function resetChatTenantState() {
+  currentSession.value = null
+  messages.value = []
+  toolCalls.value = []
+  attachments.value = []
+  artifacts.value = []
+  activeArtifactId.value = null
+  activeArtifactName.value = ''
+  activeArtifactContent.value = ''
+  activeArtifactVersions.value = []
+  artifactsPanelOpen.value = false
+  transientItems.value = []
+  streamingText.value = ''
+  streamingTools.value = {}
+  pendingChars.value = []
+  pendingFinalMessage.value = null
+  pendingQueue.value = []
+  stopDrain()
+  stopGenPoll()
+  genProgress.value = null
+}
 
 const inputText = ref('')
 const pendingFiles = ref<File[]>([])
@@ -473,6 +650,8 @@ let drainTimer: ReturnType<typeof setInterval> | null = null
 
 // 等流式 buffer 排空后才能推持久化消息（避免 streaming bubble 还在打字时被持久化消息抢走）
 const pendingFinalMessage = ref<AIChatMessage | null>(null)
+const currentTurnAssistantMessageReceived = ref(false)
+const currentTurnFallbackErrorShown = ref(false)
 
 function ensureDrain() {
   if (drainTimer) return
@@ -484,6 +663,7 @@ function ensureDrain() {
         const m = pendingFinalMessage.value
         pendingFinalMessage.value = null
         streamingText.value = ''
+        currentTurnAssistantMessageReceived.value = true
         messages.value.push(m)
       }
       return
@@ -537,6 +717,45 @@ const artifactRawView = ref(false)
 // 右栏 tab：rendered / raw
 type PanelTab = 'rendered' | 'raw'
 const panelTab = ref<PanelTab>('rendered')
+
+// 内置脚本回放：给已经登录好的浏览器一个可视化自动执行入口。
+type AutomationLogLevel = 'info' | 'warn' | 'error'
+interface AutomationLog {
+  ts: string
+  level: AutomationLogLevel
+  text: string
+}
+const AUTOMATION_PROMPT_KEY = 'ai-builder:script-runner-prompt'
+const DEFAULT_AUTOMATION_PROMPT = `请基于以下需求直接生成一份标准应用设计文档，信息不足时请合理假设，不要继续追问。
+
+我要创建一个客户拜访管理应用：
+1. 管理客户档案，包含客户名称、行业、联系人、联系电话、客户等级、状态。
+2. 管理拜访计划，包含客户、拜访人、拜访时间、拜访目的、计划状态。
+3. 管理拜访记录，包含关联计划、拜访结论、后续动作、附件备注。
+4. 需要列表、详情、创建、编辑、筛选和状态流转。
+5. 设计文档完成后，继续调用工具生成应用。`
+const storedAutomationPrompt = (() => {
+  try { return localStorage.getItem(AUTOMATION_PROMPT_KEY) || '' }
+  catch { return '' }
+})()
+const automationRunnerEnabled = computed(() => {
+  if (route.query.script === '1' || route.query.e2e === '1') return true
+  try {
+    if (localStorage.getItem('ai-builder:script-runner') === '1') return true
+  } catch { /* ignore */ }
+  return Boolean(import.meta.env.DEV)
+})
+const automationPanelOpen = ref(route.query.script === '1' || route.query.e2e === '1')
+const automationPrompt = ref(storedAutomationPrompt || DEFAULT_AUTOMATION_PROMPT)
+const automationLogs = ref<AutomationLog[]>([])
+const automationRunning = ref(false)
+const automationStopRequested = ref(false)
+const automationStatusText = computed(() => {
+  if (automationRunning.value) return '正在执行，可以在页面里观察每一步'
+  if (automationLogs.value.some(l => l.level === 'error')) return '上次执行有错误，日志里可查看'
+  if (automationLogs.value.length > 0) return '脚本已结束'
+  return '登录后点击执行，会在当前页面一步步跑'
+})
 
 // ── Render helpers ──
 
@@ -821,6 +1040,8 @@ interface GenProgress {
   done: number
   total: number
   complete: boolean
+  failed?: boolean
+  errorMessage?: string
   byKind: Record<string, { done: number; total: number }>
 }
 const genProgress = ref<GenProgress | null>(null)
@@ -843,6 +1064,19 @@ async function pollGenProgress(appId: number) {
   try {
     const resp: any = await applicationApi.getStepStatus(appId)
     const steps: any[] = Array.isArray(resp?.steps) ? resp.steps : []
+    if (resp?.app_status === 'failed') {
+      genProgress.value = {
+        appId,
+        done: steps.filter((s: any) => s?.status === 'completed').length,
+        total: steps.length,
+        complete: false,
+        failed: true,
+        errorMessage: String(resp?.error_message || '应用生成失败，请检查平台连接后重试'),
+        byKind: {},
+      }
+      stopGenPoll()
+      return
+    }
     if (!steps.length) {
       // 无步骤信息(config_preview 空/无 SPEC) — 没东西可等，按就绪处理。
       genProgress.value = { appId, done: 0, total: 0, complete: true, byKind: {} }
@@ -894,8 +1128,15 @@ function ctaIsReady(info: AppReadyInfo): boolean {
   if (gp && gp.appId === info.appId) return gp.complete
   return info.status === 'completed' && !!info.apaasAppId
 }
+function ctaIsFailed(info: AppReadyInfo): boolean {
+  const gp = genProgress.value
+  return !!(gp && gp.appId === info.appId && gp.failed)
+}
 function ctaProgressText(info: AppReadyInfo): string {
   const gp = genProgress.value
+  if (gp && gp.appId === info.appId && gp.failed) {
+    return gp.errorMessage || '应用生成失败，请检查平台连接后重试'
+  }
   if (!gp || gp.appId !== info.appId || gp.total === 0) return '正在后台生成模型 / 表单 / 菜单…'
   const parts = Object.entries(gp.byKind)
     .filter(([, b]) => b.total > 0)
@@ -1198,12 +1439,20 @@ async function loadLlmOptions() {
     // 拉所有 purpose=builder 的可用模型；'all' 不是合法 purpose
     const opts = await llmConfigApi.listOptions('builder')
     llmOptions.value = (opts || []) as any
-    if (selectedLlmId.value == null) {
-      const def = (opts as any[]).find(o => o.is_default)
-      if (def) selectedLlmId.value = def.id
+    selectedLlmId.value = normalizeLlmId(currentSession.value?.selected_llm_config_id ?? selectedLlmId.value)
+    if (
+      currentSession.value &&
+      currentSession.value.selected_llm_config_id !== selectedLlmId.value
+    ) {
+      const updated = await aiChatApi.updateSession(currentSession.value.id, {
+        selected_llm_config_id: selectedLlmId.value ?? 0,
+      })
+      currentSession.value.selected_llm_config_id = updated.selected_llm_config_id
     }
   } catch (e: any) {
     console.error('拉模型列表失败', e)
+    llmOptions.value = []
+    selectedLlmId.value = null
     ElMessage.warning(`模型列表加载失败：${e?.response?.data?.detail || e?.message || e}`)
   }
 }
@@ -1233,10 +1482,8 @@ async function loadSession(id: number) {
     toolCalls.value = data.tool_calls
     attachments.value = data.attachments
     artifacts.value = data.artifacts
-    // 切到的 session 显式绑了 llm → 用 session 的；否则保留全局 selectedLlmId
-    if (data.session.selected_llm_config_id != null) {
-      selectedLlmId.value = data.session.selected_llm_config_id
-    }
+    // 只接受当前租户 options 中存在的会话模型；否则回到当前租户默认模型。
+    selectedLlmId.value = normalizeLlmId(data.session.selected_llm_config_id ?? selectedLlmId.value)
     transientItems.value = []
     streamingText.value = ''
     if (route.params.id !== String(id)) {
@@ -1246,6 +1493,12 @@ async function loadSession(id: number) {
     scrollBottom()
   } catch (e) {
     console.error(e)
+    currentSession.value = null
+    messages.value = []
+    toolCalls.value = []
+    attachments.value = []
+    artifacts.value = []
+    selectedLlmId.value = normalizeLlmId(selectedLlmId.value)
     ElMessage.error('加载会话失败')
   }
 }
@@ -1308,6 +1561,17 @@ async function onCreateSession(_mode?: SessionFilter | string) {
   await loadSession(s.id)
 }
 
+let bootstrappingBlankSession = false
+async function createBlankSessionForEntry() {
+  if (currentSession.value || bootstrappingBlankSession) return
+  bootstrappingBlankSession = true
+  try {
+    await onCreateSession()
+  } finally {
+    bootstrappingBlankSession = false
+  }
+}
+
 // 空状态（首页 / AI Builder 融合页）就地新建：建会话 → 把首条需求/附件发出去。
 // 复用 onMounted 里 Landing prompt 那套逻辑，不再靠 router.push 跳转。
 async function onStartNew(payload: { prompt: string; files: File[] }) {
@@ -1323,16 +1587,25 @@ async function onStartNew(payload: { prompt: string; files: File[] }) {
     inputText.value = text || '材料都在附件里了，请先并行读完所有附件，给我综合摘要 + 关键澄清问题。'
     router.replace({ path: `/ai-chat/${created.id}` })
     await nextTick()
-    onSend()
+    await onSend()
   } catch (e: any) {
     ElMessage.error(`创建会话失败：${e?.message || e}`)
   }
 }
 
+async function startFromIntroExample(prompt: string) {
+  if (currentSession.value) {
+    inputText.value = prompt
+    await nextTick()
+    return
+  }
+  await onStartNew({ prompt, files: [] })
+}
+
 async function onChangeLlm() {
   // 没当前会话：只更新本地 selectedLlmId（作为新建会话的默认模型）
   if (!currentSession.value) return
-  const updated = await aiChatApi.updateSession(currentSession.value.id, { selected_llm_config_id: selectedLlmId.value })
+  const updated = await aiChatApi.updateSession(currentSession.value.id, { selected_llm_config_id: selectedLlmId.value ?? 0 })
   currentSession.value.selected_llm_config_id = updated.selected_llm_config_id
 }
 
@@ -1360,13 +1633,10 @@ async function onSend() {
   if (!canSend.value) return
   const text = inputText.value.trim()
   inputText.value = ''
-  if (
-    selectedLlmId.value != null &&
-    currentSession.value.selected_llm_config_id !== selectedLlmId.value
-  ) {
+  if (currentSession.value.selected_llm_config_id !== selectedLlmId.value) {
     try {
       const updated = await aiChatApi.updateSession(currentSession.value.id, {
-        selected_llm_config_id: selectedLlmId.value,
+        selected_llm_config_id: selectedLlmId.value ?? 0,
       })
       currentSession.value.selected_llm_config_id = updated.selected_llm_config_id
     } catch (e: any) {
@@ -1395,6 +1665,8 @@ async function onSend() {
   streamingTools.value = {}
   pendingChars.value = []
   pendingFinalMessage.value = null
+  currentTurnAssistantMessageReceived.value = false
+  currentTurnFallbackErrorShown.value = false
   stopDrain()
   currentAbort.value = new AbortController()
   try {
@@ -1424,6 +1696,8 @@ async function onSend() {
     currentAbort.value = null
     transientItems.value = []
     streamingText.value = ''
+    currentTurnAssistantMessageReceived.value = false
+    currentTurnFallbackErrorShown.value = false
     // 重新拉一次 session 拿到完整持久化数据（messages + tool_calls + artifacts）
     if (currentSession.value) await loadSession(currentSession.value.id)
     // 队列消费：上一轮跑完后，把队列里第一条自动发出去
@@ -1522,6 +1796,7 @@ function handleSseEvent(eventName: string, data: any) {
       break
     case 'assistant_message':
       // 等 drain 把 pendingChars 排空后再展示持久化消息（让打字效果走完）
+      currentTurnAssistantMessageReceived.value = true
       if (pendingChars.value.length === 0) {
         streamingText.value = ''
         messages.value.push(data)
@@ -1546,7 +1821,23 @@ function handleSseEvent(eventName: string, data: any) {
       }
       break
     case 'error':
-      ElMessage.error(data.error || '出错了')
+      {
+        const message = data.error || data.message || '出错了'
+        if (!currentTurnAssistantMessageReceived.value && !currentTurnFallbackErrorShown.value && currentSession.value) {
+          currentTurnFallbackErrorShown.value = true
+          messages.value.push({
+            id: -Date.now(),
+            session_id: currentSession.value.id,
+            role: 'assistant',
+            content: message,
+            extra_meta: { local_error: true },
+            created_at: new Date().toISOString(),
+          })
+        }
+        transientItems.value.push({ kind: 'thinking', text: `错误：${message}`, ts: Date.now() })
+        if (automationRunning.value) addAutomationLog('error', message)
+        ElMessage.error(message)
+      }
       break
   }
   nextTick(scrollBottom)
@@ -1784,8 +2075,186 @@ async function sendGenerateAppMessage() {
   pendingAutoGenerate.value = true
   inputText.value = `请基于《${activeArtifactName.value}》调用 generate_app_from_doc 工具直接生成应用，生成完告诉我 app_id。`
   await nextTick()
-  onSend()
+  await onSend()
 }
+
+function automationNow(): string {
+  return new Date().toLocaleTimeString('zh-CN', { hour12: false })
+}
+
+function addAutomationLog(level: AutomationLogLevel, text: string) {
+  automationLogs.value.push({ ts: automationNow(), level, text })
+  if (automationLogs.value.length > 240) automationLogs.value.splice(0, automationLogs.value.length - 240)
+}
+
+function automationDelay(ms: number) {
+  return new Promise<void>((resolve) => window.setTimeout(resolve, ms))
+}
+
+function automationArtifactKey(artifact: AIChatArtifact): string {
+  return `${artifact.id}:${artifact.filename}:${artifact.version}`
+}
+
+async function waitForAutomationStep(
+  label: string,
+  predicate: () => boolean,
+  timeoutMs = 180000,
+  intervalMs = 500,
+) {
+  const startedAt = Date.now()
+  while (!predicate()) {
+    if (automationStopRequested.value) throw new Error('脚本已停止')
+    if (Date.now() - startedAt > timeoutMs) throw new Error(`${label}超时`)
+    await automationDelay(intervalMs)
+  }
+}
+
+async function runAutomationScript() {
+  if (automationRunning.value) return
+  const prompt = automationPrompt.value.trim()
+  if (!prompt) {
+    ElMessage.warning('请先填写脚本需求')
+    return
+  }
+  automationPanelOpen.value = true
+  automationRunning.value = true
+  automationStopRequested.value = false
+  const initialArtifactCount = artifacts.value.length
+  const initialArtifactKeys = new Set(artifacts.value.map(automationArtifactKey))
+  const findNewArtifact = () => artifacts.value.find(a => !initialArtifactKeys.has(automationArtifactKey(a)))
+  try {
+    addAutomationLog('info', '开始执行创建应用脚本')
+    await waitForAutomationStep('等待上一轮回复结束', () => !isSending.value, 300000)
+    if (currentSession.value) {
+      addAutomationLog('info', `复用当前会话 #${currentSession.value.id} 发送需求`)
+      inputText.value = prompt
+      await nextTick()
+      await onSend()
+    } else {
+      addAutomationLog('info', '创建新会话并发送需求')
+      await onStartNew({ prompt, files: [] })
+    }
+
+    addAutomationLog('info', '等待设计文档或 app_id 返回')
+    await waitForAutomationStep(
+      '等待设计文档生成',
+      () => !!appReadyInfo.value || !!findNewArtifact() || (initialArtifactCount === 0 && uniqueFilenames.value.length > 0),
+      360000,
+    )
+
+    if (!appReadyInfo.value) {
+      artifactsPanelOpen.value = true
+      await nextTick()
+      const filename = findNewArtifact()?.filename || uniqueFilenames.value[0]
+      if (!filename) throw new Error('没有检测到可用于生成应用的设计文档')
+      addAutomationLog('info', `打开设计文档：${filename}`)
+      await loadArtifactByName(filename)
+      await waitForAutomationStep('等待设计文档载入', () => !!activeArtifactName.value && !!activeArtifactContent.value, 60000)
+      await waitForAutomationStep('等待对话空闲', () => !isSending.value, 300000)
+      addAutomationLog('info', `触发生成应用：${activeArtifactName.value}`)
+      await sendGenerateAppMessage()
+    }
+
+    await waitForAutomationStep(
+      '等待应用生成结果',
+      () => !!appReadyInfo.value?.appId || !!appReadyInfo.value?.apaasAppId,
+      360000,
+    )
+    const info = appReadyInfo.value
+    addAutomationLog('info', `已拿到应用信息：${info?.appName || '未命名应用'}${info?.appId ? ` app_id=${info.appId}` : ''}`)
+
+    if (info?.appId) {
+      addAutomationLog('info', '等待真实生成步骤完成')
+      await waitForAutomationStep(
+        '等待真实生成步骤完成',
+        () => {
+          const gp = genProgress.value
+          return !!gp && gp.appId === info.appId && (gp.complete || !!gp.failed)
+        },
+        480000,
+        1000,
+      )
+      const gp = genProgress.value
+      if (gp?.failed) throw new Error(gp.errorMessage || '应用生成失败')
+      addAutomationLog('info', `真实生成完成：${gp?.done ?? 0}/${gp?.total ?? 0}`)
+    }
+
+    addAutomationLog('info', '脚本执行完成')
+    ElMessage.success('脚本执行完成')
+  } catch (e: any) {
+    const message = e?.message || String(e)
+    if (message === '脚本已停止') {
+      addAutomationLog('warn', '脚本已停止')
+      ElMessage.info('脚本已停止')
+    } else {
+      addAutomationLog('error', message)
+      ElMessage.error(`脚本执行失败：${message}`)
+    }
+  } finally {
+    automationRunning.value = false
+    automationStopRequested.value = false
+  }
+}
+
+async function stopAutomationScript() {
+  if (!automationRunning.value) return
+  automationStopRequested.value = true
+  addAutomationLog('warn', '正在停止脚本')
+  if (isSending.value) await onAbort()
+}
+
+function clearAutomationLogs() {
+  automationLogs.value = []
+}
+
+async function copyAutomationLogs() {
+  const text = automationLogs.value.map(l => `[${l.ts}] ${l.level.toUpperCase()} ${l.text}`).join('\n')
+  try {
+    await navigator.clipboard.writeText(text)
+    ElMessage.success('日志已复制')
+  } catch {
+    ElMessage.warning('复制失败，请手动选中日志内容')
+  }
+}
+
+watch(automationPrompt, (value) => {
+  try { localStorage.setItem(AUTOMATION_PROMPT_KEY, value) }
+  catch { /* ignore */ }
+})
+
+watch(
+  () => toolCalls.value.map(t => `${t.id}:${t.tool_name}:${t.status}:${t.duration_ms ?? ''}`).join('|'),
+  () => {
+    if (!automationRunning.value) return
+    const latest = toolCalls.value[toolCalls.value.length - 1]
+    if (!latest) return
+    const resultBrief = summarizeToolResult(latest.tool_name, latest.status, latest.result_text)
+    const statusText = latest.status === 'running' ? '执行中' : latest.status
+    addAutomationLog('info', `工具 ${latest.tool_name} ${statusText}${resultBrief ? `：${resultBrief}` : ''}`)
+  },
+)
+
+watch(appReadyInfo, (info) => {
+  if (!automationRunning.value || !info) return
+  addAutomationLog('info', `应用信息更新：${info.appName}${info.appId ? ` app_id=${info.appId}` : ''}${info.apaasAppId ? ` apaas_app_id=${info.apaasAppId}` : ''}`)
+})
+
+watch(
+  () => {
+    const gp = genProgress.value
+    return gp ? `${gp.appId}:${gp.done}:${gp.total}:${gp.complete}:${gp.failed || false}` : ''
+  },
+  () => {
+    if (!automationRunning.value) return
+    const gp = genProgress.value
+    if (!gp) return
+    if (gp.failed) {
+      addAutomationLog('error', gp.errorMessage || '应用生成失败')
+      return
+    }
+    addAutomationLog('info', `生成进度 ${gp.done}/${gp.total}${gp.complete ? '，已完成' : ''}`)
+  },
+)
 
 // 把右侧当前打开的设计文档送到 Builder：先弹"新建/更新"选目标对话框
 async function sendArtifactToBuilder() {
@@ -1864,6 +2333,23 @@ watch(
   },
 )
 
+watch(
+  () => userStore.tenantId,
+  async (newTenantId, oldTenantId) => {
+    if (!oldTenantId || newTenantId === oldTenantId) return
+    if (currentAbort.value) {
+      try { currentAbort.value.abort() } catch { /* ignore */ }
+      currentAbort.value = null
+    }
+    resetChatTenantState()
+    await Promise.all([loadLlmOptions(), loadSessions()])
+    if (route.path.startsWith('/ai-chat')) {
+      await router.replace('/ai-chat')
+      await createBlankSessionForEntry()
+    }
+  },
+)
+
 onMounted(async () => {
   await Promise.all([loadSessions(), loadLlmOptions()])
 
@@ -1924,6 +2410,16 @@ onMounted(async () => {
     } catch (e) {
       console.error('从 Landing 进入 AI Chat 失败', e)
       ElMessage.error('创建会话失败')
+    }
+    return
+  }
+
+  if (!currentSession.value) {
+    try {
+      await createBlankSessionForEntry()
+    } catch (e) {
+      console.error('创建入口新会话失败', e)
+      ElMessage.error('创建新会话失败')
     }
   }
 })
@@ -2055,7 +2551,8 @@ onMounted(async () => {
   font-size: 11px;
   font-family: ui-monospace, Menlo, monospace;
 }
-.trace-entry-btn {
+.trace-entry-btn,
+.automation-toggle {
   appearance: none;
   background: var(--ac-input);
   border: 1px solid var(--ac-border-strong);
@@ -2067,6 +2564,189 @@ onMounted(async () => {
   transition: all 0.15s;
 }
 .trace-entry-btn:hover { color: var(--ac-text); border-color: var(--ac-border-strong); }
+.automation-toggle {
+  min-height: 32px;
+  font-weight: 700;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+.automation-toggle:hover {
+  color: var(--ac-text);
+  border-color: var(--ac-border-strong);
+}
+.automation-toggle.active {
+  color: var(--ac-text);
+  border-color: color-mix(in srgb, #0f9f8f 52%, transparent);
+  background: color-mix(in srgb, #0f9f8f 12%, var(--ac-input));
+}
+.automation-toggle.running {
+  color: #0f9f8f;
+  border-color: color-mix(in srgb, #0f9f8f 60%, transparent);
+}
+
+.automation-panel {
+  position: fixed;
+  right: 22px;
+  bottom: 22px;
+  z-index: 40;
+  width: min(440px, calc(100vw - 44px));
+  max-height: min(680px, calc(100dvh - 44px));
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 14px;
+  border: 1px solid var(--ac-border-strong);
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--ac-panel) 94%, #ffffff);
+  box-shadow: 0 18px 48px rgba(15, 23, 42, 0.24);
+}
+.theme-dark .automation-panel {
+  background: color-mix(in srgb, var(--ac-input) 92%, #0f172a);
+  box-shadow: 0 20px 54px rgba(0, 0, 0, 0.42);
+}
+.automation-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+}
+.automation-title {
+  color: var(--ac-text);
+  font-size: 13px;
+  font-weight: 800;
+  line-height: 1.3;
+}
+.automation-subtitle {
+  margin-top: 3px;
+  color: var(--ac-text-faint);
+  font-size: 12px;
+  line-height: 1.45;
+}
+.automation-icon-btn {
+  width: 30px;
+  height: 30px;
+  border-radius: 6px;
+  border: 1px solid var(--ac-border);
+  background: transparent;
+  color: var(--ac-text-mute);
+  cursor: pointer;
+  font-size: 18px;
+  line-height: 1;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+.automation-icon-btn:hover {
+  color: var(--ac-text);
+  background: var(--ac-border-faint);
+}
+.automation-textarea {
+  width: 100%;
+  min-height: 138px;
+  max-height: 220px;
+  resize: vertical;
+  border: 1px solid var(--ac-border);
+  border-radius: 7px;
+  background: var(--ac-input);
+  color: var(--ac-text);
+  padding: 10px 11px;
+  font-family: inherit;
+  font-size: 12.5px;
+  line-height: 1.65;
+  outline: none;
+}
+.automation-textarea:focus {
+  border-color: color-mix(in srgb, var(--ac-brand) 48%, transparent);
+}
+.automation-textarea:disabled {
+  opacity: 0.72;
+  cursor: not-allowed;
+}
+.automation-actions {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) repeat(3, auto);
+  gap: 8px;
+  align-items: center;
+}
+.automation-primary,
+.automation-secondary {
+  min-height: 34px;
+  border-radius: 6px;
+  font-size: 12.5px;
+  font-weight: 750;
+  cursor: pointer;
+  white-space: nowrap;
+  transition: all 0.15s;
+}
+.automation-primary {
+  border: 1px solid color-mix(in srgb, #0f9f8f 65%, transparent);
+  background: #0f9f8f;
+  color: #fff;
+  padding: 0 13px;
+}
+.automation-primary:hover:not(:disabled) {
+  background: color-mix(in srgb, #0f9f8f 88%, #0f172a);
+}
+.automation-secondary {
+  border: 1px solid var(--ac-border);
+  background: transparent;
+  color: var(--ac-text-mute);
+  padding: 0 10px;
+}
+.automation-secondary:hover:not(:disabled) {
+  color: var(--ac-text);
+  background: var(--ac-border-faint);
+}
+.automation-primary:disabled,
+.automation-secondary:disabled {
+  opacity: 0.48;
+  cursor: not-allowed;
+}
+.automation-logs {
+  min-height: 132px;
+  max-height: 260px;
+  overflow-y: auto;
+  border: 1px solid var(--ac-border);
+  border-radius: 7px;
+  background: color-mix(in srgb, var(--ac-bg) 72%, transparent);
+  padding: 8px;
+}
+.automation-log-empty {
+  color: var(--ac-text-faint);
+  font-size: 12px;
+  line-height: 1.6;
+  padding: 4px 2px;
+}
+.automation-log-row {
+  display: grid;
+  grid-template-columns: 72px minmax(0, 1fr);
+  gap: 8px;
+  padding: 5px 4px;
+  border-radius: 5px;
+  color: var(--ac-text-mute);
+  font-size: 12px;
+  line-height: 1.45;
+}
+.automation-log-row + .automation-log-row {
+  margin-top: 1px;
+}
+.automation-log-row.level-warn {
+  color: #c2630b;
+  background: rgba(245, 158, 11, 0.08);
+}
+.automation-log-row.level-error {
+  color: #dc2626;
+  background: rgba(220, 38, 38, 0.08);
+}
+.automation-log-time {
+  font-family: ui-monospace, Menlo, monospace;
+  color: var(--ac-text-faint);
+}
+.automation-log-text {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
 
 /* 输入框底部工具栏（模型选择 + 提示） */
 .input-foot {
@@ -2163,12 +2843,32 @@ onMounted(async () => {
 .art-version-select:hover { border-color: var(--ac-border-strong); }
 /* ─── Chat main ─── */
 .chat-main { display: flex; flex-direction: column; overflow: hidden; min-width: 0; min-height: 0; }
+.ai-chat-app :deep(.new-btn) {
+  height: 36px;
+  border-color: color-mix(in srgb, var(--ac-brand) 16%, var(--ac-border));
+  background: color-mix(in srgb, var(--ac-brand) 5%, var(--ac-panel));
+  color: var(--ac-text);
+  font-size: 13px;
+  font-weight: 750;
+  box-shadow: none;
+}
+.ai-chat-app :deep(.new-btn:hover) {
+  border-color: color-mix(in srgb, var(--ac-brand) 28%, var(--ac-border));
+  background: color-mix(in srgb, var(--ac-brand) 8%, var(--ac-panel));
+  color: var(--ac-text);
+}
+.ai-chat-app :deep(.session-sidebar.is-empty .empty-hint) {
+  padding-top: 58px;
+  color: #94a3b8;
+  font-size: 18px;
+  text-align: center;
+}
 .chat-header {
   padding: 12px 24px; border-bottom: 1px solid var(--ac-border);
   display: flex; align-items: center; justify-content: space-between;
 }
-.chat-title { font-size: 14px; font-weight: 500; }
-.title-placeholder { color: var(--ac-text-faint); }
+.chat-title { font-size: 14px; font-weight: 650; }
+.title-placeholder { color: var(--ac-text-mute); }
 .title-input {
   background: var(--ac-input); border: 1px solid var(--ac-border-strong); color: var(--ac-text);
   padding: 4px 10px; border-radius: 4px; outline: none; font-size: 14px; min-width: 280px;
@@ -2181,12 +2881,132 @@ onMounted(async () => {
 .model-select:disabled { opacity: 0.4; }
 
 .messages { flex: 1; overflow-y: auto; padding: 24px 0; }
-.welcome { max-width: 780px; margin: 0 auto; padding: 64px 24px 40px; display: flex; flex-direction: column; align-items: center; justify-content: center; min-height: 100%; color: var(--ac-text-mute); }
-.welcome-hero { text-align: center; margin-bottom: 26px; }
+.welcome { width: min(100%, 900px); margin: 0 auto; padding: 72px 24px 40px; display: flex; flex-direction: column; align-items: stretch; justify-content: flex-start; min-height: 100%; color: var(--ac-text-mute); }
+.welcome-in-conversation {
+  width: min(100%, 880px);
+  min-height: auto;
+  padding: 46px 0 18px;
+}
+.welcome-hero { text-align: left; margin: 0 auto 26px; width: min(100%, 880px); }
 .welcome-badge { display: inline-flex; align-items: center; gap: 7px; height: 38px; padding: 0 15px; border-radius: 999px; background: var(--ai-soft); color: var(--ai-text); font-weight: 700; font-size: 13px; border: 1px solid var(--ai-soft-2); margin-bottom: 18px; }
-.welcome-title { font-size: 34px; font-weight: 600; color: var(--ac-text); line-height: 1.15; margin: 0 0 12px; }
-.welcome-title .hl { font-weight: 700; color: var(--ac-brand); }
-.welcome-sub { font-size: 14px; color: var(--ac-text-mute); max-width: 600px; margin: 0 auto; line-height: 1.6; }
+.welcome-title { max-width: 820px; font-size: 32px; font-weight: 750; color: var(--ac-text); line-height: 1.24; letter-spacing: 0; margin: 0 0 14px; word-break: break-word; }
+.welcome-title .hl { font-weight: 750; color: var(--ac-brand); }
+.welcome-sub { font-size: 14px; color: var(--ac-text-mute); max-width: 760px; margin: 0; line-height: 1.7; }
+.welcome-examples {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 10px;
+  width: min(100%, 880px);
+  margin: 16px auto 0;
+}
+.welcome-example {
+  min-width: 0;
+  min-height: 76px;
+  padding: 13px 14px;
+  border-radius: 8px;
+  border: 1px solid var(--ac-border);
+  background: color-mix(in srgb, var(--ac-panel) 86%, transparent);
+  color: var(--ac-text-mute);
+  text-align: left;
+  font: inherit;
+  cursor: pointer;
+  transition: border-color 0.15s ease, background 0.15s ease, transform 0.15s ease;
+}
+.welcome-example:hover {
+  border-color: color-mix(in srgb, var(--ac-brand) 38%, var(--ac-border));
+  background: color-mix(in srgb, var(--ac-brand) 5%, var(--ac-panel));
+  transform: translateY(-1px);
+}
+.welcome-example:focus-visible {
+  outline: 2px solid color-mix(in srgb, var(--ac-brand) 45%, transparent);
+  outline-offset: 2px;
+}
+.welcome-example-title {
+  display: block;
+  color: var(--ac-text);
+  font-size: 13px;
+  font-weight: 750;
+  line-height: 1.35;
+}
+.welcome-example-text {
+  display: block;
+  margin-top: 5px;
+  color: var(--ac-text-faint);
+  font-size: 12px;
+  line-height: 1.45;
+}
+.welcome-capabilities {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  width: min(100%, 880px);
+  margin: 22px auto 0;
+}
+.welcome-capabilities span {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  height: 34px;
+  padding: 0 12px;
+  border-radius: 8px;
+  border: 1px solid var(--ac-border);
+  background: color-mix(in srgb, var(--ac-panel) 78%, transparent);
+  color: var(--ac-text-mute);
+  font-size: 12px;
+  font-weight: 700;
+}
+.welcome-capabilities i {
+  width: 7px;
+  height: 7px;
+  border-radius: 999px;
+  background: #0f9f8f;
+}
+.ai-chat-app :deep(.ac-empty) {
+  align-items: flex-start;
+  justify-content: center;
+  padding: 28px 22px 36px;
+}
+
+@media (max-width: 1280px) {
+  .welcome { width: min(100%, 680px); padding-top: 58px; }
+  .welcome-in-conversation { width: min(100%, 680px); padding-top: 34px; }
+  .welcome-title { font-size: 26px; max-width: 560px; line-height: 1.3; }
+  .welcome-sub { max-width: 600px; }
+  .welcome-examples { grid-template-columns: 1fr; width: min(100%, 680px); }
+  .welcome-example { min-height: 64px; }
+}
+
+@media (max-width: 720px) {
+  .chat-header {
+    padding: 10px 14px;
+    gap: 10px;
+  }
+  .header-actions {
+    gap: 8px;
+  }
+  .automation-toggle,
+  .artifacts-toggle {
+    min-height: 34px;
+    padding: 5px 9px;
+    font-size: 12px;
+  }
+  .automation-panel {
+    left: 10px;
+    right: 10px;
+    bottom: 10px;
+    width: auto;
+    max-height: calc(100dvh - 20px);
+  }
+  .automation-actions {
+    grid-template-columns: 1fr 1fr;
+  }
+  .automation-primary {
+    grid-column: 1 / -1;
+  }
+  .automation-logs {
+    max-height: 220px;
+  }
+}
 
 .timeline-item { max-width: 760px; margin: 0 auto 18px; padding: 0 24px; }
 .msg.user { display: flex; justify-content: flex-end; }
@@ -2520,6 +3340,20 @@ onMounted(async () => {
 }
 .app-ready-cta.is-generating .cta-action { background: #d97706; }
 .app-ready-cta.is-generating .cta-action:hover { background: #b45309; }
+.app-ready-cta.is-failed {
+  background: linear-gradient(135deg, rgba(239, 68, 68, 0.12), rgba(220, 38, 38, 0.06));
+  border-color: rgba(239, 68, 68, 0.38);
+}
+.app-ready-cta.is-failed:hover {
+  border-color: rgba(239, 68, 68, 0.62);
+  background: linear-gradient(135deg, rgba(239, 68, 68, 0.16), rgba(220, 38, 38, 0.09));
+}
+.app-ready-cta.is-failed .cta-icon {
+  color: #dc2626;
+  background: rgba(239, 68, 68, 0.12);
+}
+.app-ready-cta.is-failed .cta-action { background: #dc2626; }
+.app-ready-cta.is-failed .cta-action:hover { background: #b91c1c; }
 .app-ready-cta .cta-progress-text {
   font-family: system-ui, -apple-system, "PingFang SC", sans-serif;
   color: var(--ac-text-mute, rgba(116, 128, 171, 0.95));

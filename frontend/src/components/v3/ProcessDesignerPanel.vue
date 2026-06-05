@@ -465,7 +465,7 @@ async function onSelectProcess(processId: string) {
   // 默认进 read-only — 切到编辑才能改
   readOnly.value = true
   if (g) {
-    g.setInteracting(() => ({
+    ;(g as any).setInteracting(() => ({
       nodeMovable: false,
       edgeMovable: false,
       edgeLabelMovable: false,

@@ -12,13 +12,13 @@ import re
 from typing import Annotated, Optional
 
 from fastapi import APIRouter, Depends, HTTPException
-from sqlalchemy import select
+from sqlalchemy import desc, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.crypto import decrypt_password
 from app.database import get_db
 from app.deps import get_auth_context, AuthContext
-from app.models import Application, User, ApiCallLog
+from app.models import Application, DeployRecord, User, ApiCallLog
 from app.app_code import normalize_app_code
 from app.routes.applications import _dump_preview_config
 from app.schemas import (
@@ -104,6 +104,18 @@ def _load_state(app: Application) -> dict:
 
 def _save_state(app: Application, state: dict):
     app.generation_state = json.dumps(state, ensure_ascii=False)
+
+
+async def _latest_generation_error(app: Application, db: AsyncSession) -> str | None:
+    if app.status != "failed":
+        return None
+    record = (await db.execute(
+        select(DeployRecord)
+        .where(DeployRecord.app_id == app.id, DeployRecord.status == "failed")
+        .order_by(desc(DeployRecord.completed_at), desc(DeployRecord.id))
+        .limit(1)
+    )).scalar_one_or_none()
+    return (record.error_message if record else None) or "应用生成失败，请检查平台连接后重试"
 
 
 def _load_config(app: Application) -> dict:
@@ -493,6 +505,17 @@ def _build_steps(config: dict, state: dict, apaas_app_id: str = None) -> list[St
     return steps
 
 
+def _critical_step_keys(config: dict) -> set[str]:
+    """Steps that can be verified from platform objects."""
+    data = config.get("data", config)
+    keys = {"create_app"}
+    keys.update(f"create_role:{i}" for i, _ in enumerate(data.get("roles") or []))
+    keys.update(f"create_dict:{i}" for i, _ in enumerate(data.get("dicts") or []))
+    keys.update(f"create_model:{i}" for i, _ in enumerate(data.get("models") or []))
+    keys.update(f"create_form:{i}" for i, _ in enumerate(data.get("forms") or []))
+    return keys
+
+
 def _sync_platform_codes_to_config(app: Application, state: dict, data: dict):
     """部署完成后，将平台真实编码回写到 config_preview"""
     try:
@@ -761,16 +784,10 @@ async def get_step_status(
     config = _normalized_config_for_steps(app)
     state = _load_state(app)
     apaas_app_id = state.get("apaas_app_id") or app.apaas_app_id
+    error_message = await _latest_generation_error(app, db)
 
-    # 已部署成功 → 一切就绪，直接全标完成（最强保证，且不打 apaas）。
-    if app.status == "completed":
-        steps = _build_steps(config, state, apaas_app_id)
-        for s in steps:
-            s.status = "completed"
-            s.deps_met = True
-        return GenerationStatusResponse(apaas_app_id=apaas_app_id, steps=steps)
-
-    # 进行中 / 失败但已建了一部分 → 按 apaas 真实对象补全进度（与构建路径无关）。
+    # 按 apaas 真实对象补全进度（与构建路径无关）。不能因为本地 status=completed
+    # 就全量置绿；平台对象缺失时必须让进度面板暴露出来。
     if apaas_app_id:
         try:
             reality = await _reality_completed_step_keys(app, config, db)
@@ -780,8 +797,20 @@ async def get_step_status(
             logger.warning("steps reality reconcile 整体失败 app=%s: %s", app.id, exc)
 
     steps = _build_steps(config, state, apaas_app_id)
+    if app.status == "completed":
+        critical = _critical_step_keys(config)
+        done = {s.key for s in steps if s.status == "completed"}
+        # 权限步骤当前没有稳定查询接口。只有当平台可核对对象均真实存在时，
+        # 才允许把本地 completed 作为权限完成的佐证。
+        if critical.issubset(done):
+            for s in steps:
+                if s.key == "configure_permissions":
+                    s.status = "completed"
+                    s.deps_met = True
     return GenerationStatusResponse(
         apaas_app_id=apaas_app_id,
+        app_status=app.status,
+        error_message=error_message,
         steps=steps,
     )
 

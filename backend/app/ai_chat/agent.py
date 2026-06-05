@@ -24,7 +24,7 @@ import json
 import logging
 import time
 from datetime import datetime
-from typing import AsyncIterator, Optional
+from typing import Any, AsyncIterator, Optional
 
 import httpx
 from sqlalchemy import select
@@ -44,6 +44,107 @@ from app.ai_chat.tools import TOOL_SCHEMAS, execute_tool, get_all_tool_schemas, 
 from app.observability import recorder
 
 logger = logging.getLogger(__name__)
+
+LLM_RETRY_ATTEMPTS = 2
+PERSISTED_TOOL_ARG_PREVIEW_CHARS = 240
+PERSISTED_TOOL_ARG_MAX_CHARS = 20_000
+_CONTENT_ARG_KEYS = {
+    "content",
+    "md_content",
+    "markdown",
+    "html",
+    "css",
+    "code",
+    "old_str",
+    "new_str",
+    "old_string",
+    "new_string",
+    "image_data_url",
+}
+
+
+def _summarize_persisted_text(value: str) -> dict:
+    preview = value[:PERSISTED_TOOL_ARG_PREVIEW_CHARS]
+    if len(value) > PERSISTED_TOOL_ARG_PREVIEW_CHARS:
+        preview += f"\n... [omitted, {len(value)} chars total]"
+    return {
+        "_omitted_large_text": True,
+        "chars": len(value),
+        "preview": preview,
+    }
+
+
+def _compact_tool_arg_value(value: Any, key: str | None = None) -> Any:
+    """Keep tool-call persistence small without changing the live tool input."""
+    if isinstance(value, dict):
+        return {k: _compact_tool_arg_value(v, str(k)) for k, v in value.items()}
+    if isinstance(value, list):
+        return [_compact_tool_arg_value(v, key) for v in value]
+    if isinstance(value, str):
+        if (key or "").lower() in _CONTENT_ARG_KEYS:
+            return _summarize_persisted_text(value)
+        if len(value) > PERSISTED_TOOL_ARG_PREVIEW_CHARS * 4:
+            return _summarize_persisted_text(value)
+    return value
+
+
+def _compact_tool_args_for_storage(tool_name: str, args: dict) -> dict:
+    compacted = _compact_tool_arg_value(args)
+    text = json.dumps(compacted, ensure_ascii=False, default=str)
+    if len(text) <= PERSISTED_TOOL_ARG_MAX_CHARS:
+        return compacted
+    return {
+        "_compacted": True,
+        "tool_name": tool_name,
+        "original_json_chars": len(text),
+        "summary": "工具参数过大，已从会话持久化记录中省略；实际工具执行使用的是完整参数。",
+    }
+
+
+def _compact_tool_call_for_storage(tool_call: dict) -> dict:
+    compacted = dict(tool_call)
+    fn = dict(compacted.get("function") or {})
+    tool_name = str(fn.get("name") or "")
+    raw_args = fn.get("arguments") or "{}"
+    try:
+        parsed_args = json.loads(raw_args) if isinstance(raw_args, str) else raw_args
+    except Exception:
+        parsed_args = {"_raw_arguments": str(raw_args)}
+    if isinstance(parsed_args, dict):
+        stored_args = _compact_tool_args_for_storage(tool_name, parsed_args)
+    else:
+        stored_args = _compact_tool_arg_value(parsed_args)
+    fn["arguments"] = json.dumps(stored_args, ensure_ascii=False, default=str)
+    compacted["function"] = fn
+    return compacted
+
+
+def _is_retryable_llm_error(exc: Exception) -> bool:
+    return isinstance(
+        exc,
+        (
+            httpx.ConnectError,
+            httpx.ConnectTimeout,
+            httpx.ReadTimeout,
+            httpx.RemoteProtocolError,
+            httpx.PoolTimeout,
+        ),
+    )
+
+
+async def _sleep_before_llm_retry(attempt: int) -> None:
+    await asyncio.sleep(0.8 * (attempt + 1))
+
+
+def _format_llm_error(exc: Exception) -> str:
+    if isinstance(exc, httpx.ConnectError):
+        return "连接模型网关失败，请稍后重试或检查模型服务网络。"
+    if isinstance(exc, httpx.ConnectTimeout):
+        return "连接模型网关超时，请稍后重试或检查模型服务网络。"
+    if isinstance(exc, httpx.ReadTimeout):
+        return "模型网关响应超时，请稍后重试。"
+    detail = str(exc).strip()
+    return detail or exc.__class__.__name__
 
 
 # ─────────────────────── Deferred-tool helpers ───────────────────────
@@ -303,34 +404,47 @@ def _apply_provider_payload_compat(cfg: LLMConfigSnapshot, payload: dict) -> dic
 async def _resolve_llm_config(
     db: AsyncSession, session: AIChatSession
 ) -> LLMConfigSnapshot:
-    """优先用 session.selected_llm_config_id；没指定则取该 tenant 的 default。"""
+    """优先用 session.selected_llm_config_id；没指定则取平台级 default。"""
     cfg: Optional[LLMConfig] = None
     if session.selected_llm_config_id:
         res = await db.execute(
             select(LLMConfig).where(
                 LLMConfig.id == session.selected_llm_config_id,
-                LLMConfig.tenant_id == session.tenant_id,
+                LLMConfig.status == "active",
+                LLMConfig.purpose.in_(("builder", "all")),
             )
         )
         cfg = res.scalar_one_or_none()
     if not cfg:
-        # fallback：tenant default
+        # fallback：平台级 default，优先 builder，其次 all。
         res = await db.execute(
             select(LLMConfig)
             .where(
-                LLMConfig.tenant_id == session.tenant_id,
                 LLMConfig.is_default == True,  # noqa: E712
                 LLMConfig.status == "active",
+                LLMConfig.purpose.in_(("builder", "all")),
             )
-            .limit(1)
         )
-        cfg = res.scalar_one_or_none()
-    # 注意:删掉了原「跨租户兜底」两步(借任意租户的 is_default / 任意 active 模型)。
-    # 那既是产品上要去掉的「兜底模型」,又是租户隔离泄漏 —— 等于拿别的租户的 API Key 跑当前租户的对话。
-    # 现在只认**当前租户**的配置(上面 step1 selected + step2 tenant default),没有就明确提示去平台管理加。
+        defaults = res.scalars().all()
+        cfg = next((item for item in defaults if item.purpose == "builder"), None)
+        if not cfg:
+            cfg = next((item for item in defaults if item.purpose == "all"), None)
+    if not cfg:
+        res = await db.execute(
+            select(LLMConfig)
+            .where(
+                LLMConfig.status == "active",
+                LLMConfig.purpose.in_(("builder", "all")),
+            )
+            .order_by(LLMConfig.created_at.desc(), LLMConfig.id.desc())
+        )
+        rows = res.scalars().all()
+        cfg = next((item for item in rows if item.purpose == "builder"), None)
+        if not cfg:
+            cfg = next((item for item in rows if item.purpose == "all"), None)
     if not cfg:
         raise RuntimeError(
-            "当前租户还没有配置可用的大模型,请到「平台管理 → 模型配置」添加一个模型后再使用。"
+            "平台还没有配置可用的大模型,请到「平台管理 → 模型配置」添加一个模型后再使用。"
         )
     return LLMConfigSnapshot(
         base_url=cfg.base_url,
@@ -400,18 +514,28 @@ async def _call_llm(
         "max_tokens": cfg.max_tokens,
     }
     _apply_provider_payload_compat(cfg, payload)
-    async with httpx.AsyncClient(timeout=httpx.Timeout(connect=10, read=timeout, write=10, pool=10)) as client:
-        resp = await client.post(
-            f"{cfg.base_url}/chat/completions",
-            headers={
-                "Authorization": f"Bearer {cfg.api_key}",
-                "Content-Type": "application/json",
-            },
-            json=payload,
-        )
-        resp.raise_for_status()
-        data = resp.json()
-    return data["choices"][0]["message"]
+    last_error: Exception | None = None
+    for attempt in range(LLM_RETRY_ATTEMPTS):
+        try:
+            async with httpx.AsyncClient(timeout=httpx.Timeout(connect=10, read=timeout, write=10, pool=10)) as client:
+                resp = await client.post(
+                    f"{cfg.base_url}/chat/completions",
+                    headers={
+                        "Authorization": f"Bearer {cfg.api_key}",
+                        "Content-Type": "application/json",
+                    },
+                    json=payload,
+                )
+                resp.raise_for_status()
+                data = resp.json()
+            return data["choices"][0]["message"]
+        except Exception as exc:
+            last_error = exc
+            if attempt >= LLM_RETRY_ATTEMPTS - 1 or not _is_retryable_llm_error(exc):
+                raise
+            logger.warning("LLM non-stream request failed, retrying: %s", _format_llm_error(exc))
+            await _sleep_before_llm_retry(attempt)
+    raise last_error or RuntimeError("LLM 调用失败")
 
 
 async def _call_llm_stream(
@@ -442,80 +566,130 @@ async def _call_llm_stream(
         "stream_options": {"include_usage": True},
     }
     _apply_provider_payload_compat(cfg, payload)
-    accumulated_content = ""
-    usage_data: Optional[dict] = None
-    tool_buf: dict[int, dict] = {}
+    last_error: Exception | None = None
+    for attempt in range(LLM_RETRY_ATTEMPTS):
+        accumulated_content = ""
+        usage_data: Optional[dict] = None
+        tool_buf: dict[int, dict] = {}
+        emitted_anything = False
+        try:
+            async with httpx.AsyncClient(timeout=httpx.Timeout(connect=10, read=timeout, write=10, pool=10)) as client:
+                async with client.stream(
+                    "POST",
+                    f"{cfg.base_url}/chat/completions",
+                    headers={
+                        "Authorization": f"Bearer {cfg.api_key}",
+                        "Content-Type": "application/json",
+                        "Accept": "text/event-stream",
+                    },
+                    json=payload,
+                ) as resp:
+                    if resp.status_code >= 400:
+                        await resp.aread()
+                        resp.raise_for_status()
+                    async for raw_line in resp.aiter_lines():
+                        if abort_event.is_set():
+                            break
+                        if not raw_line:
+                            continue
+                        line = raw_line.strip()
+                        if not line.startswith("data:"):
+                            continue
+                        data = line[len("data:"):].strip()
+                        if data == "[DONE]":
+                            break
+                        try:
+                            chunk = json.loads(data)
+                        except Exception:
+                            continue
+                        # usage chunk：choices 为空、带 usage（include_usage 开启后 [DONE] 前到达）
+                        if chunk.get("usage"):
+                            usage_data = chunk["usage"]
+                        choices = chunk.get("choices") or []
+                        if not choices:
+                            continue
+                        delta = choices[0].get("delta") or {}
+                        if delta.get("content"):
+                            text = delta["content"]
+                            accumulated_content += text
+                            emitted_anything = True
+                            yield {"type": "content_delta", "text": text}
+                        for tc in (delta.get("tool_calls") or []):
+                            idx = tc.get("index", 0)
+                            buf = tool_buf.setdefault(
+                                idx,
+                                {"id": "", "type": "function", "function": {"name": "", "arguments": ""}},
+                            )
+                            if tc.get("id"):
+                                buf["id"] = tc["id"]
+                            fn = tc.get("function") or {}
+                            if fn.get("name"):
+                                buf["function"]["name"] = fn["name"]
+                            if fn.get("arguments"):
+                                buf["function"]["arguments"] += fn["arguments"]
+                            emitted_anything = True
+                            yield {
+                                "type": "tool_call_delta",
+                                "index": idx,
+                                "id": buf["id"],
+                                "name": buf["function"]["name"],
+                                "arguments_so_far": buf["function"]["arguments"],
+                            }
 
-    async with httpx.AsyncClient(timeout=httpx.Timeout(connect=10, read=timeout, write=10, pool=10)) as client:
-        async with client.stream(
-            "POST",
-            f"{cfg.base_url}/chat/completions",
-            headers={
-                "Authorization": f"Bearer {cfg.api_key}",
-                "Content-Type": "application/json",
-                "Accept": "text/event-stream",
-            },
-            json=payload,
-        ) as resp:
-            if resp.status_code >= 400:
-                await resp.aread()
-                resp.raise_for_status()
-            async for raw_line in resp.aiter_lines():
-                if abort_event.is_set():
-                    break
-                if not raw_line:
-                    continue
-                line = raw_line.strip()
-                if not line.startswith("data:"):
-                    continue
-                data = line[len("data:"):].strip()
-                if data == "[DONE]":
-                    break
-                try:
-                    chunk = json.loads(data)
-                except Exception:
-                    continue
-                # usage chunk：choices 为空、带 usage（include_usage 开启后 [DONE] 前到达）
-                if chunk.get("usage"):
-                    usage_data = chunk["usage"]
-                choices = chunk.get("choices") or []
-                if not choices:
-                    continue
-                delta = choices[0].get("delta") or {}
-                if delta.get("content"):
-                    text = delta["content"]
-                    accumulated_content += text
-                    yield {"type": "content_delta", "text": text}
-                for tc in (delta.get("tool_calls") or []):
-                    idx = tc.get("index", 0)
-                    buf = tool_buf.setdefault(
-                        idx,
-                        {"id": "", "type": "function", "function": {"name": "", "arguments": ""}},
-                    )
-                    if tc.get("id"):
-                        buf["id"] = tc["id"]
-                    fn = tc.get("function") or {}
-                    if fn.get("name"):
-                        buf["function"]["name"] = fn["name"]
-                    if fn.get("arguments"):
-                        buf["function"]["arguments"] += fn["arguments"]
-                    yield {
-                        "type": "tool_call_delta",
-                        "index": idx,
-                        "id": buf["id"],
-                        "name": buf["function"]["name"],
-                        "arguments_so_far": buf["function"]["arguments"],
-                    }
+            final_tool_calls = [tool_buf[k] for k in sorted(tool_buf.keys())]
+            yield {
+                "type": "done",
+                "message": {
+                    "content": accumulated_content,
+                    "tool_calls": final_tool_calls if final_tool_calls else None,
+                },
+                "usage": usage_data,
+            }
+            return
+        except Exception as exc:
+            last_error = exc
+            if emitted_anything or attempt >= LLM_RETRY_ATTEMPTS - 1 or not _is_retryable_llm_error(exc):
+                raise
+            logger.warning("LLM stream request failed before output, retrying: %s", _format_llm_error(exc))
+            await _sleep_before_llm_retry(attempt)
+    raise last_error or RuntimeError("LLM 调用失败")
 
-    final_tool_calls = [tool_buf[k] for k in sorted(tool_buf.keys())]
-    yield {
-        "type": "done",
-        "message": {
-            "content": accumulated_content,
-            "tool_calls": final_tool_calls if final_tool_calls else None,
-        },
-        "usage": usage_data,
-    }
+
+async def _call_llm_stream_with_fallback(
+    cfg: LLMConfigSnapshot,
+    messages: list[dict],
+    tools: list[dict],
+    abort_event: asyncio.Event,
+    timeout: int = 180,
+) -> AsyncIterator[dict]:
+    """Prefer streaming; if the gateway refuses streaming, fall back to non-streaming."""
+    try:
+        async for chunk in _call_llm_stream(cfg, messages, tools, abort_event, timeout=timeout):
+            yield chunk
+        return
+    except httpx.HTTPStatusError:
+        raise
+    except Exception as stream_exc:
+        if not _is_retryable_llm_error(stream_exc):
+            raise
+        logger.warning(
+            "LLM stream failed after retries; falling back to non-stream request: %s",
+            _format_llm_error(stream_exc),
+        )
+        message = await _call_llm(cfg, messages, tools, timeout=timeout)
+        content = message.get("content") or ""
+        if content:
+            yield {"type": "content_delta", "text": content}
+        for idx, tc in enumerate(message.get("tool_calls") or []):
+            fn = tc.get("function") or {}
+            yield {
+                "type": "tool_call_delta",
+                "index": idx,
+                "id": tc.get("id"),
+                "name": fn.get("name"),
+                "arguments_so_far": fn.get("arguments") or "",
+            }
+        yield {"type": "done", "message": message, "usage": None}
 
 
 # ─────────────────────────── 构建 agent 输入 ───────────────────────────
@@ -626,6 +800,43 @@ MAX_TURNS = 25  # 工具循环最大轮数（统一 config 的 25：app 配置/c
 
 def _sse(event: str, data: dict) -> dict:
     return {"event": event, "data": json.dumps(data, ensure_ascii=False)}
+
+
+async def _persist_assistant_notice(
+    db: AsyncSession,
+    session: AIChatSession,
+    content: str,
+    run_id: Optional[str] = None,
+) -> Optional[AIChatMessage]:
+    """Persist a visible assistant notice so stream failures survive refresh."""
+    try:
+        msg = AIChatMessage(
+            session_id=session.id,
+            role="assistant",
+            content=content,
+            extra_meta={"run_id": run_id} if run_id else None,
+        )
+        db.add(msg)
+        await asyncio.shield(db.commit())
+        await db.refresh(msg)
+        return msg
+    except Exception as exc:
+        logger.warning("persist assistant notice failed: %r", exc)
+        return None
+
+
+def _assistant_message_event(msg: AIChatMessage) -> dict:
+    meta = msg.extra_meta if isinstance(msg.extra_meta, dict) else {}
+    payload = {
+        "id": msg.id,
+        "session_id": msg.session_id,
+        "role": "assistant",
+        "content": msg.content,
+        "created_at": msg.created_at.isoformat(),
+    }
+    if meta.get("run_id"):
+        payload["run_id"] = meta["run_id"]
+    return _sse("assistant_message", payload)
 
 
 async def run_agent(
@@ -753,7 +964,7 @@ async def _run_agent_inner(
         tool_schemas = core_schemas + [deferred_by_name[n] for n in active_tool_names if n in deferred_by_name]
 
         try:
-            async for chunk in _call_llm_stream(cfg, messages, tool_schemas, abort_event):
+            async for chunk in _call_llm_stream_with_fallback(cfg, messages, tool_schemas, abort_event):
                 if chunk["type"] == "content_delta":
                     _delta_buf.append(chunk["text"])
                     _delta_buf_len += len(chunk["text"])
@@ -802,12 +1013,20 @@ async def _run_agent_inner(
                 detail = e.response.text[:300]
             except Exception:
                 detail = "(响应体读取失败)"
-            holder["error"] = f"LLM 调用失败 {e.response.status_code}: {detail}"
+            error_text = f"本轮执行中断：模型调用失败 {e.response.status_code}: {detail}"
+            holder["error"] = error_text
+            msg = await _persist_assistant_notice(db, session, error_text, run_id=holder["run_id"])
+            if msg:
+                yield _assistant_message_event(msg)
             yield _sse("error", {"error": holder["error"]})
             yield _sse("done", {"ok": False, "run_id": holder["run_id"]})
             return
         except Exception as e:
-            holder["error"] = f"LLM 调用失败：{e}"
+            error_text = f"本轮执行中断：模型调用失败：{_format_llm_error(e)}。已完成的工具结果会保留，可稍后重试。"
+            holder["error"] = error_text
+            msg = await _persist_assistant_notice(db, session, error_text, run_id=holder["run_id"])
+            if msg:
+                yield _assistant_message_event(msg)
             yield _sse("error", {"error": holder["error"]})
             yield _sse("done", {"ok": False, "run_id": holder["run_id"]})
             return
@@ -846,7 +1065,7 @@ async def _run_agent_inner(
                 _delta_buf_len = 0
                 _delta_last_flush = time.monotonic()
                 try:
-                    async for chunk in _call_llm_stream(cfg, retry_messages, tool_schemas, abort_event):
+                    async for chunk in _call_llm_stream_with_fallback(cfg, retry_messages, tool_schemas, abort_event):
                         if chunk["type"] == "content_delta":
                             _delta_buf.append(chunk["text"])
                             _delta_buf_len += len(chunk["text"])
@@ -872,6 +1091,10 @@ async def _run_agent_inner(
                         # 忽略 tool_call_delta — system 已经禁止工具调用，万一 LLM 不听话也不执行
                 except Exception as e:
                     logger.warning("final-summary retry failed: %s", e)
+                    content = (
+                        "前面的工具执行已完成，但生成最终总结时模型网关连接失败。"
+                        "已完成的产出物已保留，请查看右侧产出物或稍后重试。"
+                    )
                 if retry_assistant:
                     forced = (retry_assistant.get("content") or "").strip()
                     if forced:
@@ -892,14 +1115,7 @@ async def _run_agent_inner(
                 db.add(asst_db)
                 await asyncio.shield(db.commit())
                 await db.refresh(asst_db)
-                yield _sse("assistant_message", {
-                    "id": asst_db.id,
-                    "session_id": asst_db.session_id,
-                    "role": "assistant",
-                    "content": content,
-                    "run_id": holder["run_id"],
-                    "created_at": asst_db.created_at.isoformat(),
-                })
+                yield _assistant_message_event(asst_db)
             holder["status"] = "success"
             yield _sse("done", {"ok": True, "run_id": holder["run_id"]})
             return
@@ -913,11 +1129,12 @@ async def _run_agent_inner(
         # ── 持久化 assistant 这条 tool_use turn 到 DB（跨轮 history 重建必需）──
         # 把 LLM 返回的 tool_calls 序列化进 extra_meta（以便下次 _build_initial_messages
         # 重建消息时拼回完整的 assistant.tool_calls + role:tool 配对）
+        persisted_tool_calls = [_compact_tool_call_for_storage(tc) for tc in tool_calls]
         asst_tool_use_db = AIChatMessage(
             session_id=session.id,
             role="assistant",
             content=content or "",
-            extra_meta={"tool_calls": tool_calls},
+            extra_meta={"tool_calls": persisted_tool_calls},
         )
         db.add(asst_tool_use_db)
         # 2026-05-21 fix: shield 防 cancel — 见上方注释
@@ -939,6 +1156,7 @@ async def _run_agent_inner(
                 args = json.loads(fn.get("arguments") or "{}")
             except Exception:
                 args = {}
+            persisted_args = _compact_tool_args_for_storage(tool_name, args)
 
             # 持久化工具调用记录（关联 assistant message + 存 LLM 原始 call_id）
             # 用 monotonic 算 duration — MySQL DATETIME(0) round 到秒导致 refresh 后
@@ -950,7 +1168,7 @@ async def _run_agent_inner(
                 message_id=asst_message_id,
                 provider_call_id=tc_id or None,
                 tool_name=tool_name,
-                args_json=args,
+                args_json=persisted_args,
                 status="running",
                 started_at=_start_dt,
             )
@@ -961,7 +1179,7 @@ async def _run_agent_inner(
             yield _sse("tool_call_start", {
                 "id": tc_db.id,
                 "tool_name": tool_name,
-                "args": args,
+                "args": persisted_args,
                 "started_at": _start_dt.isoformat(),
             })
 

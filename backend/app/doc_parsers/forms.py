@@ -81,6 +81,23 @@ def _apply_model_field_defaults(component: dict, model_field: dict, field_code: 
     return component
 
 
+def _build_default_component(field_code: str, model_field: dict, model_code: str, show_in_list: bool) -> dict:
+    field_type = model_field.get("type", "单行输入")
+    return {
+        "code": field_code,
+        "label": model_field.get("name", field_code),
+        "componentType": _COMP_TYPE_MAP.get(field_type, "FORM_TEXT_INPUT"),
+        "modelField": f"{model_code}.{field_code}",
+        "modelCode": model_code,
+        "sectionType": "main",
+        "hidden": False,
+        "readonly": False,
+        "required": False,
+        "showInList": show_in_list,
+        "searchable": False,
+    }
+
+
 def _is_reference_component(comp_type_raw: str, field_type: str) -> bool:
     return bool((comp_type_raw or "").strip() in _REFERENCE_COMPONENT_TYPES or (field_type or "").strip() in _REFERENCE_COMPONENT_TYPES)
 
@@ -294,18 +311,8 @@ def parse(section_text: str, models: List[dict]) -> Tuple[List[dict], List[str]]
         for fc, mf in model_fields.items():
             if fc in seen:
                 continue
-            ft = mf.get("type", "单行输入")
             default_show = list_shown < _DEFAULT_LIST_SHOW_COUNT
-            components.append({
-                "code": fc,
-                "label": mf.get("name", fc),
-                "componentType": _COMP_TYPE_MAP.get(ft, "FORM_TEXT_INPUT"),
-                "modelField": f"{model_code}.{fc}",
-                "modelCode": model_code,
-                "sectionType": "main",
-                "hidden": False, "readonly": False, "required": False,
-                "showInList": default_show, "searchable": False,
-            })
+            components.append(_build_default_component(fc, mf, model_code, default_show))
             if default_show:
                 list_shown += 1
 
@@ -494,21 +501,8 @@ def _parse_aggregate_tables(section_text: str, models: List[dict]) -> Tuple[List
         for fc, mf in model_fields.items():
             if fc in seen:
                 continue
-            ft = mf.get("type", "单行输入")
             default_show = list_shown < _DEFAULT_LIST_SHOW_COUNT
-            components.append({
-                "code": fc,
-                "label": mf.get("name", fc),
-                "componentType": _COMP_TYPE_MAP.get(ft, "FORM_TEXT_INPUT"),
-                "modelField": f"{model_code}.{fc}",
-                "modelCode": model_code,
-                "sectionType": "main",
-                "hidden": False,
-                "readonly": False,
-                "required": False,
-                "showInList": default_show,
-                "searchable": False,
-            })
+            components.append(_build_default_component(fc, mf, model_code, default_show))
             if default_show:
                 list_shown += 1
 

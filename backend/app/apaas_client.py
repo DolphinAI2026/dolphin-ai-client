@@ -2274,6 +2274,35 @@ class APaaSClient:
                 return result
             raise Exception(data.get("message", "查询详情页配置失败"))
 
+    async def query_form_context_config(self, app_id: str, form_id: str) -> dict:
+        """查询可直接保存的 simpleFormConfig。
+
+        formConfig/save/formConfigDetail 要求提交 v2/form/query/formContext 返回的
+        simpleFormConfig 完整对象；detailPageConfigById 返回的结构能读详情，但部分
+        元信息（如 formName）保存后不会生效。
+        """
+        url = f"{self.base_url}/xdap-app/v2/form/query/formContext?formId={form_id}"
+        _log_request("GET", url)
+        start = time.time()
+
+        async with httpx.AsyncClient(verify=False, timeout=APAAS_HTTP_TIMEOUT) as client:
+            response = await client.get(url, headers=self._get_headers(app_id))
+            elapsed_ms = (time.time() - start) * 1000
+            response.raise_for_status()
+            data = response.json()
+
+            _log_response(url, response.status_code, data, elapsed_ms, method="GET")
+
+            if data.get("code") == "ok":
+                result = data.get("data", {})
+                simple = result.get("simpleFormConfig") if isinstance(result, dict) else None
+                if isinstance(simple, dict):
+                    logger.info("查询表单上下文配置成功: formId=%s", form_id)
+                    return simple
+                if isinstance(result, dict):
+                    return result
+            raise Exception(data.get("message", "查询表单上下文配置失败"))
+
     async def query_list_page_config(self, app_id: str, form_id: str) -> dict:
         """查询表单列表设计配置 (列表 tab 设的查询条件 + 列字段).
 

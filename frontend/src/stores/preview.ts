@@ -8,7 +8,13 @@ const APP_NAME_DEFAULTS = new Set(['', '未命名应用', '业务应用', '应�
 
 export const usePreviewStore = defineStore('preview', () => {
   // currentApp 只保留应用元数据（id/status/apaas 关联），名字请统一从 preview.appName 读
-  const currentApp = ref<{ id?: number; status: string; apaas_app_id?: string } | null>(null)
+  const currentApp = ref<{
+    id?: number
+    status: string
+    apaas_app_id?: string
+    platform_env_id?: number | null
+    remote_status?: string
+  } | null>(null)
   const previewTab = ref('overview')
   const previewFormIdx = ref(0)
   const connected = ref(false)

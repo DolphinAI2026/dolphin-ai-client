@@ -211,7 +211,7 @@ const tenantPopoverVisible = ref(false)
 async function loadMyTenants() {
   tenantsLoading.value = true
   try {
-    myTenants.value = await authApi.myTenants()
+    myTenants.value = await authApi.listMyTenants()
   } catch {
     myTenants.value = []
   } finally {

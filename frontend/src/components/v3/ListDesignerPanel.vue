@@ -512,7 +512,7 @@ async function loadComponentsAndFields(): Promise<void> {
               options: col.kind === 'status' ? STATUS_OPTIONS : undefined,
             }
           })
-          .filter((x): x is FilterField => x !== null)
+          .filter((x): x is NonNullable<typeof x> => x !== null) as FilterField[]
         for (const f of filterFields.value) {
           if (!(f.code in filterValues)) filterValues[f.code] = ''
         }

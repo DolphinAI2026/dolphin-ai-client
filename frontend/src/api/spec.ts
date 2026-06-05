@@ -12,13 +12,13 @@ export interface CreateSpecResponse {
 
 export const specApi = {
   create(body: CreateSpecRequest = {}) {
-    return request.post<CreateSpecResponse>('/spec', body)
+    return request.post<any, CreateSpecResponse>('/spec', body) as unknown as Promise<CreateSpecResponse>
   },
   get(specId: string) {
-    return request.get<Spec>(`/spec/${specId}`)
+    return request.get<any, Spec>(`/spec/${specId}`) as unknown as Promise<Spec>
   },
   transitionPhase(specId: string, target: Phase, reason = 'user request') {
-    return request.put<Spec>(`/spec/${specId}/phase`, { target, reason })
+    return request.put<any, Spec>(`/spec/${specId}/phase`, { target, reason }) as unknown as Promise<Spec>
   },
   updateItem(
     specId: string,
@@ -27,9 +27,9 @@ export const specApi = {
     action: ItemAction,
     payload: Record<string, unknown> = {}
   ) {
-    return request.put<Spec>(
+    return request.put<any, Spec>(
       `/spec/${specId}/items/${itemType}/${itemCode}`,
       { action, payload }
-    )
+    ) as unknown as Promise<Spec>
   },
 }

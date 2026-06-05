@@ -262,6 +262,11 @@ tools:
     agents: [builder, config]
     category: process
     description: "拉取 aPaaS 平台已有流程详情，并转换为前端 ProcessDesigner 可渲染的节点和连线。"
+  get_dev_fix_policy:
+    sections: [global]
+    agents: [config]
+    category: issue_assistant
+    description: "返回右侧问题助手的 dev 自动修复与 19:00 自动部署策略；明确 main 分支禁止修改。"
   get_application:
     sections: [global]
     agents: [builder, coding]
@@ -422,6 +427,11 @@ tools:
     agents: [builder, coding]
     category: introspection
     description: "列出当前租户配置的所有低代码平台环境。"
+  list_product_issues:
+    sections: [global]
+    agents: [config]
+    category: issue_assistant
+    description: "列出右侧问题助手记录的问题，支持按 classification/status 过滤。"
   parse_design_doc:
     sections: [global]
     agents: [builder]
@@ -463,6 +473,11 @@ tools:
     category: lifecycle
     description: "重新发布 aPaaS 应用版本（自开发变更必须 redeploy 才生效）。"
     search_hint: "发布 上线 release 重新发布 redeploy 生效"
+  record_product_issue:
+    sections: [global]
+    agents: [config]
+    category: issue_assistant
+    description: "记录右侧问题助手识别出的咨询、配置问题、疑似 Bug 或需求建议；只记录，不改 git，不部署。"
   rollback_application:
     sections: [global]
     agents: []  # mcp_server 已实现, dolphin agent prompt 文档未列入 — 维持现状

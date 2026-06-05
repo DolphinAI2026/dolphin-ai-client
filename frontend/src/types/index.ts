@@ -1,6 +1,7 @@
 export interface User {
   id: number
   username: string
+  display_name?: string | null
   is_active: boolean
   created_at: string
   tenant_id?: number

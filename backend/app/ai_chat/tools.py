@@ -1618,6 +1618,8 @@ async def get_all_tool_schemas() -> list[dict]:
         _log.getLogger(__name__).warning("MCP bridge 加载失败，退化到 base 工具：%s", e)
         mcp_schemas = []
     try:
+        # Unified AI Builder uses builder/config tools in the embedded app assistant,
+        # while coding tools remain available for self-dev deployment flows.
         allow = (
             set(tools_for_agent("builder"))
             | set(tools_for_agent("coding"))

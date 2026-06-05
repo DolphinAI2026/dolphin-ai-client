@@ -230,7 +230,7 @@ server {
     client_max_body_size 100M;
     absolute_redirect off;
 
-    location /ai-builder/ide/ {
+    location ^~ /ai-builder/ide/ {
         rewrite ^/ai-builder/ide/(.*)$ /$1 break;
         proxy_pass http://127.0.0.1:8080;
         proxy_http_version 1.1;

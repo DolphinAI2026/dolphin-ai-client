@@ -1,5 +1,6 @@
 export type DiffStatus = 'same' | 'added' | 'removed' | 'modified'
 
+type AnyRecord = Record<string, any>
 type CellMeta = Record<string, DiffStatus>
 
 export interface DiffRowMeta {
@@ -63,8 +64,8 @@ function createRowMeta(status: DiffStatus, columns: string[]): DiffRowMeta {
 }
 
 function compareCells(
-  leftRow: Record<string, any> | undefined,
-  rightRow: Record<string, any> | undefined,
+  leftRow: AnyRecord | undefined,
+  rightRow: AnyRecord | undefined,
   columns: string[],
 ) {
   const leftMeta: CellMeta = {}
@@ -86,9 +87,10 @@ function compareCells(
     }
   }
 
+  const rowStatus: DiffStatus = hasModified ? 'modified' : 'same'
   return {
-    left: { status: hasModified ? 'modified' : (hasSame ? 'same' : 'same'), cells: leftMeta },
-    right: { status: hasModified ? 'modified' : (hasSame ? 'same' : 'same'), cells: rightMeta },
+    left: { status: rowStatus, cells: leftMeta },
+    right: { status: rowStatus, cells: rightMeta },
     hasModified,
     hasSame,
   }
@@ -143,8 +145,16 @@ function mergeStatuses(statuses: DiffStatus[]): DiffStatus {
   return 'same'
 }
 
-function groupTitleStatus(selfColumns: DiffStatus[], nestedStatuses: DiffStatus[]) {
+function groupTitleStatus(selfColumns: DiffStatus[], nestedStatuses: DiffStatus[]): DiffStatus {
   return mergeStatuses([...selfColumns, ...nestedStatuses])
+}
+
+function keyedMap(rows: any[], keyGetter: (row: any, index: number) => string): Map<string, AnyRecord> {
+  return new Map(rows.map((row, index) => [keyGetter(row, index), row as AnyRecord]))
+}
+
+function mergedKeys(...maps: Array<Map<string, AnyRecord>>): string[] {
+  return Array.from(new Set(maps.flatMap(map => Array.from(map.keys()))))
 }
 
 function addStats(target: StructuredDocDiffResult['stats'], source: StructuredDocDiffResult['stats'] | { added: number; removed: number; modified: number; same: number }) {
@@ -226,7 +236,7 @@ function normalizeFormForDiff(form: any) {
   ))
     .filter(Boolean)
     .map((groupKey) => {
-      const [modelCode = '', groupName = ''] = groupKey.split('::')
+      const [modelCode = '', groupName = ''] = String(groupKey).split('::')
       return {
         model_code: modelCode,
         group_name: groupName,
@@ -271,9 +281,9 @@ export function computeStructuredDocDiff(leftDoc: any, rightDoc: any): Structure
 
   const leftDicts = leftDoc?.data_dictionary || leftDoc?.dicts || []
   const rightDicts = rightDoc?.data_dictionary || rightDoc?.dicts || []
-  const leftDictMap = new Map(leftDicts.map((dict: any, index: number) => [dictKey(dict, index), dict]))
-  const rightDictMap = new Map(rightDicts.map((dict: any, index: number) => [dictKey(dict, index), dict]))
-  for (const key of new Set([...leftDictMap.keys(), ...rightDictMap.keys()])) {
+  const leftDictMap = keyedMap(leftDicts, dictKey)
+  const rightDictMap = keyedMap(rightDicts, dictKey)
+  for (const key of mergedKeys(leftDictMap, rightDictMap)) {
     const leftDict = leftDictMap.get(key)
     const rightDict = rightDictMap.get(key)
     if (leftDict && !rightDict) {
@@ -311,9 +321,9 @@ export function computeStructuredDocDiff(leftDoc: any, rightDoc: any): Structure
 
   const leftTables = leftDoc?.tables || leftDoc?.models || []
   const rightTables = rightDoc?.tables || rightDoc?.models || []
-  const leftTableMap = new Map(leftTables.map((table: any, index: number) => [tableKey(table, index), table]))
-  const rightTableMap = new Map(rightTables.map((table: any, index: number) => [tableKey(table, index), table]))
-  for (const key of new Set([...leftTableMap.keys(), ...rightTableMap.keys()])) {
+  const leftTableMap = keyedMap(leftTables, tableKey)
+  const rightTableMap = keyedMap(rightTables, tableKey)
+  for (const key of mergedKeys(leftTableMap, rightTableMap)) {
     const leftTable = leftTableMap.get(key)
     const rightTable = rightTableMap.get(key)
     if (leftTable && !rightTable) {
@@ -356,15 +366,15 @@ export function computeStructuredDocDiff(leftDoc: any, rightDoc: any): Structure
 
   const leftForms = leftDoc?.forms || []
   const rightForms = rightDoc?.forms || []
-  const leftFormMap = new Map(leftForms.map((form: any, index: number) => {
+  const leftFormMap = new Map<string, AnyRecord>(leftForms.map((form: any, index: number) => {
     const normalized = normalizeFormForDiff(form)
     return [formKey(normalized, index), normalized]
   }))
-  const rightFormMap = new Map(rightForms.map((form: any, index: number) => {
+  const rightFormMap = new Map<string, AnyRecord>(rightForms.map((form: any, index: number) => {
     const normalized = normalizeFormForDiff(form)
     return [formKey(normalized, index), normalized]
   }))
-  for (const key of new Set([...leftFormMap.keys(), ...rightFormMap.keys()])) {
+  for (const key of mergedKeys(leftFormMap, rightFormMap)) {
     const leftForm = leftFormMap.get(key)
     const rightForm = rightFormMap.get(key)
     if (leftForm && !rightForm) {
@@ -398,12 +408,12 @@ export function computeStructuredDocDiff(leftDoc: any, rightDoc: any): Structure
 
     const leftSubGroups = leftForm.sub_groups || []
     const rightSubGroups = rightForm.sub_groups || []
-    const leftSubMap = new Map(leftSubGroups.map((group: any, index: number) => [subGroupKey(group, index), group]))
-    const rightSubMap = new Map(rightSubGroups.map((group: any, index: number) => [subGroupKey(group, index), group]))
+    const leftSubMap = keyedMap(leftSubGroups, subGroupKey)
+    const rightSubMap = keyedMap(rightSubGroups, subGroupKey)
     const leftSubMeta: Record<string, DiffGroupMeta> = {}
     const rightSubMeta: Record<string, DiffGroupMeta> = {}
     const subStatuses: DiffStatus[] = []
-    for (const subKey of new Set([...leftSubMap.keys(), ...rightSubMap.keys()])) {
+    for (const subKey of mergedKeys(leftSubMap, rightSubMap)) {
       const leftSub = leftSubMap.get(subKey)
       const rightSub = rightSubMap.get(subKey)
       if (leftSub && !rightSub) {
@@ -466,9 +476,9 @@ export function computeStructuredDocDiff(leftDoc: any, rightDoc: any): Structure
 
   const leftPerms = leftDoc?.role_table_mapping || []
   const rightPerms = rightDoc?.role_table_mapping || []
-  const leftPermMap = new Map(leftPerms.map((item: any, index: number) => [permissionGroupKey(item, index), item]))
-  const rightPermMap = new Map(rightPerms.map((item: any, index: number) => [permissionGroupKey(item, index), item]))
-  for (const key of new Set([...leftPermMap.keys(), ...rightPermMap.keys()])) {
+  const leftPermMap = keyedMap(leftPerms, permissionGroupKey)
+  const rightPermMap = keyedMap(rightPerms, permissionGroupKey)
+  for (const key of mergedKeys(leftPermMap, rightPermMap)) {
     const leftGroup = leftPermMap.get(key)
     const rightGroup = rightPermMap.get(key)
     if (leftGroup && !rightGroup) {

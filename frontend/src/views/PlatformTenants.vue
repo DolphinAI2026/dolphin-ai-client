@@ -256,10 +256,11 @@
               <li v-for="m in detailMembers" :key="m.user_id" class="member-row">
                 <div class="member-info">
                   <span class="member-username">
-                    {{ m.username }}
+                    {{ userDisplayName(m) }}
                     <span v-if="m.is_default" class="member-default" title="该用户的默认租户">默认</span>
                   </span>
                   <span class="member-meta">
+                    <span v-if="m.username !== userDisplayName(m)">{{ m.username }}</span>
                     <span v-if="m.is_platform_admin" class="member-platform">平台管理员</span>
                     <span v-if="!m.is_active" class="member-inactive">已禁用</span>
                   </span>
@@ -304,10 +305,11 @@
               <el-option
                 v-for="u in availablePlatformUsers"
                 :key="u.id"
-                :label="u.username"
+                :label="`${userDisplayName(u)} ${u.username}`"
                 :value="u.username"
               >
-                <span>{{ u.username }}</span>
+                <span>{{ userDisplayName(u) }}</span>
+                <span v-if="u.username !== userDisplayName(u)" class="member-account-option">{{ u.username }}</span>
                 <span v-if="u.is_platform_admin" class="member-platform" style="margin-left:8px;">平台管理员</span>
               </el-option>
             </el-select>
@@ -412,6 +414,10 @@ const availablePlatformUsers = computed(() => {
 const isExistingUsername = computed(() =>
   platformUsers.value.some((u) => u.username === addMemberForm.value.username)
 )
+
+function userDisplayName(user: { username: string; display_name?: string | null }) {
+  return user.display_name || user.username
+}
 
 async function load() {
   loading.value = true
@@ -985,6 +991,11 @@ onMounted(() => {
   font-size: 13px;
   font-weight: var(--fw-medium);
   color: var(--text);
+}
+.member-account-option {
+  margin-left: 8px;
+  color: var(--text-3);
+  font-size: 12px;
 }
 .member-meta {
   display: flex;

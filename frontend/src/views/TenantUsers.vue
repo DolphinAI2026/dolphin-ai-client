@@ -16,7 +16,7 @@
       <div class="tenant-users-filter">
         <el-input
           v-model="filterQ"
-          placeholder="按用户名搜索"
+          placeholder="按姓名或账号搜索"
           clearable
           style="width: 240px"
         />
@@ -66,7 +66,14 @@
               </template>
             </EmptyState>
           </template>
-          <el-table-column prop="username" label="用户名" min-width="180" />
+          <el-table-column label="姓名 / 账号" min-width="220">
+            <template #default="{ row }">
+              <div class="user-identity">
+                <strong>{{ userDisplayName(row) }}</strong>
+                <span v-if="row.username !== userDisplayName(row)">{{ row.username }}</span>
+              </div>
+            </template>
+          </el-table-column>
           <el-table-column v-if="isPlatformAdmin" label="所属组织" min-width="220">
             <template #default="{ row }">
               {{ row.tenant_summary || row.tenant_name || '-' }}
@@ -141,7 +148,7 @@
       </div>
 
       <!-- 重置密码对话框 -->
-      <el-dialog v-model="resetPwdVisible" :title="`重置密码 — ${resetPwdTarget?.username || ''}`" width="420px">
+      <el-dialog v-model="resetPwdVisible" :title="`重置密码 — ${resetPwdTarget ? userDisplayName(resetPwdTarget) : ''}`" width="420px">
         <el-form label-position="top">
           <el-form-item label="新密码" required>
             <el-input
@@ -263,6 +270,10 @@ const resetPwdTarget = ref<TenantUser | null>(null)
 const resetPwdSaving = ref(false)
 const resetPwdForm = ref({ new_password: '', confirm: '' })
 
+function userDisplayName(row: Pick<TenantUser, 'username' | 'display_name'>): string {
+  return row.display_name || row.username
+}
+
 function canResetPassword(row: TenantUser): boolean {
   // 不能改自己（自己改密码走个人设置）
   if (row.id === userStore.user?.id) return false
@@ -292,7 +303,7 @@ async function submitResetPwd() {
   try {
     await authApi.resetUserPassword(resetPwdTarget.value.id, pw)
     resetPwdVisible.value = false
-    ElMessage.success(`「${resetPwdTarget.value.username}」密码已重置，请通过安全渠道告知用户`)
+    ElMessage.success(`「${userDisplayName(resetPwdTarget.value)}」密码已重置，请通过安全渠道告知用户`)
   } catch (err: any) {
     ElMessage.error(err?.response?.data?.detail || err?.message || '重置失败')
   } finally {
@@ -321,7 +332,10 @@ const filteredUsers = computed(() => {
   const tenant = filterTenant.value.trim()
   const role = filterRole.value.trim()
   return users.value.filter((u) => {
-    if (q && !u.username.toLowerCase().includes(q)) return false
+    if (q) {
+      const haystack = `${u.display_name || ''} ${u.username || ''}`.toLowerCase()
+      if (!haystack.includes(q)) return false
+    }
     if (tenant) {
       const summary = (u.tenant_summary || u.tenant_name || '')
       if (!summary.includes(tenant)) return false
@@ -411,7 +425,7 @@ async function updateRole(user: TenantUser, roleCode: string) {
   try {
     const updated = await authApi.updateTenantUserRole(user.id, roleCode)
     users.value = users.value.map(item => (item.id === user.id ? updated : item))
-    ElMessage.success(`已更新 ${user.username} 的角色`)
+    ElMessage.success(`已更新 ${userDisplayName(user)} 的角色`)
   } catch (error: any) {
     ElMessage.error(error.message || '更新角色失败')
   }
@@ -421,7 +435,7 @@ async function updateStatus(user: TenantUser, enabled: boolean) {
   try {
     const updated = await authApi.updateTenantUserStatus(user.id, enabled ? 1 : 0)
     users.value = users.value.map(item => (item.id === user.id ? updated : item))
-    ElMessage.success(`${enabled ? '已启用' : '已禁用'} ${user.username}`)
+    ElMessage.success(`${enabled ? '已启用' : '已禁用'} ${userDisplayName(user)}`)
   } catch (error: any) {
     ElMessage.error(error.message || '更新状态失败')
   }
@@ -720,6 +734,31 @@ onMounted(() => {
 
 .row-action-disabled {
   color: var(--text-4);
+  font-size: 12px;
+}
+
+.user-identity {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.user-identity strong,
+.user-identity span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.user-identity strong {
+  color: var(--text);
+  font-size: 13px;
+}
+
+.user-identity span {
+  color: var(--text-3);
   font-size: 12px;
 }
 

@@ -12,6 +12,7 @@ export interface TenantRoleOption {
 export interface TenantUser {
   id: number
   username: string
+  display_name?: string | null
   is_active: boolean
   is_platform_admin?: boolean
   tenant_id?: number | null
@@ -29,6 +30,7 @@ export interface TenantUser {
 export interface ActiveTenantUser {
   id: number
   username: string
+  display_name?: string | null
 }
 
 export interface TenantAdminItem {
@@ -90,6 +92,7 @@ export interface TenantDashboard {
 export interface TenantMemberItem {
   user_id: number
   username: string
+  display_name?: string | null
   is_active: boolean
   is_platform_admin: boolean
   tenant_role: string

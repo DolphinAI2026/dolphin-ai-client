@@ -1,5 +1,8 @@
 <template>
-  <aside class="session-sidebar" :class="{ collapsed: isCollapsed }">
+  <aside
+    class="session-sidebar"
+    :class="{ collapsed: isCollapsed, 'has-sessions': sessions.length > 0, 'is-empty': sessions.length === 0 }"
+  >
     <template v-if="!isCollapsed">
       <div class="sidebar-head">
         <div class="brand">

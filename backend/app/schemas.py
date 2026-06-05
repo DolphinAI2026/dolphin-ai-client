@@ -18,6 +18,7 @@ class Token(BaseModel):
 class UserInfo(BaseModel):
     id: int
     username: str
+    display_name: Optional[str] = None
     is_active: bool
     created_at: datetime
     tenant_id: Optional[int] = None
@@ -204,6 +205,8 @@ class StepStatus(BaseModel):
 
 class GenerationStatusResponse(BaseModel):
     apaas_app_id: Optional[str] = None
+    app_status: Optional[str] = None
+    error_message: Optional[str] = None
     steps: List[StepStatus]
 
 

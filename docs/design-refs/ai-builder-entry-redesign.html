@@ -1,0 +1,601 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>AI Builder Entry Redesign</title>
+  <style>
+    :root {
+      --bg: #f5f7fb;
+      --surface: #ffffff;
+      --surface-soft: #f8fafc;
+      --line: #e4e9f2;
+      --line-strong: #d7deeb;
+      --text: #162033;
+      --muted: #66758d;
+      --subtle: #94a1b5;
+      --blue: #2457e6;
+      --blue-weak: #edf3ff;
+      --teal: #0f9f8f;
+      --amber: #d97706;
+      --shadow: 0 18px 45px rgba(22, 32, 51, 0.08);
+      --radius: 8px;
+      font-family: Inter, "PingFang SC", "Microsoft YaHei", Arial, sans-serif;
+    }
+
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      min-height: 100vh;
+      background: #d9dde5;
+      color: var(--text);
+    }
+
+    .stage {
+      width: 100vw;
+      height: 100vh;
+      margin: 0;
+      padding: 16px;
+      background: linear-gradient(180deg, #eef2f8 0%, #dce2eb 100%);
+    }
+
+    .app {
+      display: grid;
+      grid-template-columns: 230px 284px minmax(0, 1fr);
+      grid-template-rows: 42px 1fr;
+      width: 100%;
+      height: 100%;
+      overflow: hidden;
+      background: var(--bg);
+      border: 1px solid #cfd6e3;
+      border-radius: 14px;
+      box-shadow: 0 22px 70px rgba(12, 20, 35, 0.2);
+    }
+
+    .top-tabs {
+      grid-column: 2 / 4;
+      grid-row: 1;
+      display: flex;
+      align-items: center;
+      gap: 4px;
+      padding: 0 12px;
+      background: #fbfcff;
+      border-bottom: 1px solid var(--line);
+      overflow: hidden;
+    }
+
+    .tab {
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      height: 42px;
+      padding: 0 12px;
+      border-right: 1px solid #eef2f7;
+      color: #506078;
+      font-size: 13px;
+      white-space: nowrap;
+    }
+
+    .tab.active {
+      color: var(--blue);
+      background: #fff;
+      box-shadow: inset 0 -2px 0 var(--blue);
+      font-weight: 650;
+    }
+
+    .tab .close { color: #9aa7ba; font-size: 15px; }
+
+    .sidebar {
+      grid-column: 1;
+      grid-row: 1 / 3;
+      display: flex;
+      flex-direction: column;
+      background: #fbfcff;
+      border-right: 1px solid var(--line);
+    }
+
+    .brand {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      height: 86px;
+      padding: 0 22px;
+    }
+
+    .brand-mark {
+      width: 34px;
+      height: 34px;
+      border-radius: 9px;
+      background: var(--blue);
+      display: grid;
+      grid-template-columns: repeat(2, 7px);
+      grid-template-rows: repeat(2, 7px);
+      gap: 4px;
+      place-content: center;
+      box-shadow: 0 10px 20px rgba(36, 87, 230, 0.22);
+    }
+
+    .brand-mark span { background: #fff; border-radius: 2px; opacity: 0.95; }
+    .brand-title { font-size: 18px; font-weight: 800; }
+    .brand-sub { margin-top: 4px; color: var(--muted); font-size: 13px; }
+
+    .nav {
+      padding: 12px;
+      display: grid;
+      gap: 6px;
+    }
+
+    .nav-item {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      height: 42px;
+      padding: 0 13px;
+      border-radius: var(--radius);
+      color: #41506a;
+      font-size: 14px;
+      font-weight: 600;
+    }
+
+    .nav-item.active {
+      color: var(--blue);
+      background: var(--blue-weak);
+      box-shadow: inset 3px 0 0 var(--blue);
+    }
+
+    .nav-icon {
+      width: 18px;
+      height: 18px;
+      border: 2px solid currentColor;
+      border-radius: 5px;
+      position: relative;
+    }
+
+    .nav-icon.chat { border-radius: 50%; }
+    .nav-icon.chat::after {
+      content: "";
+      position: absolute;
+      width: 6px;
+      height: 6px;
+      left: 1px;
+      bottom: -4px;
+      border-left: 2px solid currentColor;
+      border-bottom: 2px solid currentColor;
+      transform: skew(-15deg);
+    }
+
+    .tenant {
+      margin-top: auto;
+      border-top: 1px solid var(--line);
+      padding: 14px;
+      color: var(--muted);
+      font-size: 12px;
+    }
+
+    .tenant-box {
+      margin-top: 10px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 10px 12px;
+      background: #fff;
+      border: 1px solid var(--line);
+      border-radius: var(--radius);
+      color: #2d3a50;
+      font-weight: 700;
+      font-size: 14px;
+    }
+
+    .user {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      margin-top: 14px;
+      color: #23314a;
+      font-size: 14px;
+      font-weight: 650;
+    }
+
+    .avatar {
+      width: 32px;
+      height: 32px;
+      border-radius: 50%;
+      background: var(--blue);
+      color: #fff;
+      display: grid;
+      place-items: center;
+      font-weight: 800;
+    }
+
+    .session-rail {
+      grid-column: 2;
+      grid-row: 2;
+      background: #fff;
+      border-right: 1px solid var(--line);
+      display: flex;
+      flex-direction: column;
+    }
+
+    .rail-head {
+      padding: 18px 18px 14px;
+      border-bottom: 1px solid var(--line);
+    }
+
+    .rail-title-row {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      margin-bottom: 12px;
+    }
+
+    .rail-title {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      font-weight: 800;
+      color: #202b40;
+    }
+
+    .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--amber); }
+
+    .primary-btn {
+      width: 100%;
+      height: 40px;
+      border: 0;
+      border-radius: var(--radius);
+      background: var(--blue);
+      color: #fff;
+      font-size: 14px;
+      font-weight: 800;
+      box-shadow: 0 12px 22px rgba(36, 87, 230, 0.22);
+    }
+
+    .rail-body { padding: 14px; overflow: auto; }
+
+    .mode-label {
+      color: var(--subtle);
+      font-size: 12px;
+      font-weight: 700;
+      margin: 6px 4px 8px;
+    }
+
+    .recent {
+      margin-top: 4px;
+      display: grid;
+      gap: 8px;
+    }
+
+    .recent-item {
+      padding: 11px 12px;
+      border-radius: var(--radius);
+      background: var(--surface-soft);
+      border: 1px solid #eef2f7;
+    }
+
+    .recent-name {
+      font-size: 13px;
+      color: #2c3a52;
+      font-weight: 700;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+
+    .recent-meta { margin-top: 5px; font-size: 12px; color: var(--subtle); }
+
+    .rail-tip {
+      margin-top: 18px;
+      padding: 12px;
+      border-radius: var(--radius);
+      background: #f8fafc;
+      border: 1px dashed #cbd5e1;
+      color: #64748b;
+      line-height: 1.55;
+      font-size: 12px;
+    }
+
+    .rail-capability {
+      display: grid;
+      gap: 8px;
+      padding: 12px;
+      border-radius: var(--radius);
+      background: #f3f7ff;
+      border: 1px solid #dbe6ff;
+      color: #43546f;
+      font-size: 12px;
+      line-height: 1.55;
+    }
+
+    .capability-line {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      font-weight: 750;
+      color: #24324a;
+    }
+
+    .capability-dot {
+      width: 7px;
+      height: 7px;
+      border-radius: 50%;
+      background: var(--blue);
+    }
+
+    .main {
+      grid-column: 3;
+      grid-row: 2;
+      display: flex;
+      flex-direction: column;
+      min-width: 0;
+      background: radial-gradient(circle at 65% 18%, rgba(36, 87, 230, 0.08), transparent 28%), var(--bg);
+    }
+
+    .main-top {
+      height: 58px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 0 28px;
+      background: rgba(255, 255, 255, 0.8);
+      border-bottom: 1px solid var(--line);
+      backdrop-filter: blur(8px);
+    }
+
+    .crumb {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      color: #33435d;
+      font-size: 15px;
+      font-weight: 800;
+    }
+
+    .crumb span { color: var(--subtle); font-weight: 600; }
+
+    .top-actions {
+      display: flex;
+      gap: 10px;
+    }
+
+    .ghost-btn {
+      height: 34px;
+      padding: 0 12px;
+      border-radius: var(--radius);
+      border: 1px solid var(--line);
+      background: #fff;
+      color: #42516b;
+      font-weight: 700;
+      font-size: 13px;
+    }
+
+    .workspace {
+      width: min(880px, calc(100% - 56px));
+      margin: 74px auto 0;
+    }
+
+    .eyebrow {
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      height: 32px;
+      padding: 0 12px;
+      border-radius: 999px;
+      background: #fff;
+      border: 1px solid #dbe6ff;
+      color: var(--blue);
+      font-size: 13px;
+      font-weight: 800;
+      box-shadow: 0 8px 20px rgba(36, 87, 230, 0.08);
+    }
+
+    h1 {
+      margin: 22px 0 10px;
+      font-size: 34px;
+      line-height: 1.25;
+      letter-spacing: 0;
+      color: #111827;
+    }
+
+    .lead {
+      width: min(760px, 100%);
+      margin: 0 0 24px;
+      color: #5f6f88;
+      font-size: 15px;
+      line-height: 1.65;
+    }
+
+    .composer {
+      position: relative;
+      background: #fff;
+      border: 1px solid #dbe3ef;
+      border-top: 4px solid var(--blue);
+      border-radius: 10px;
+      box-shadow: var(--shadow);
+      overflow: hidden;
+    }
+
+    .composer textarea {
+      width: 100%;
+      height: 164px;
+      resize: none;
+      border: 0;
+      outline: 0;
+      padding: 22px 24px 10px;
+      color: #1f2937;
+      font-size: 16px;
+      line-height: 1.65;
+      font-family: inherit;
+    }
+
+    .composer textarea::placeholder { color: #7b8aa2; }
+
+    .composer-foot {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      height: 62px;
+      padding: 0 16px 14px 18px;
+    }
+
+    .composer-left {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+    }
+
+    .tool-btn {
+      height: 36px;
+      padding: 0 12px;
+      border-radius: var(--radius);
+      border: 1px solid var(--line);
+      background: var(--surface-soft);
+      color: #33435d;
+      font-size: 13px;
+      font-weight: 800;
+    }
+
+    .composer-hint { color: var(--subtle); font-size: 12px; }
+
+    .send-btn {
+      width: 42px;
+      height: 42px;
+      border: 0;
+      border-radius: var(--radius);
+      background: var(--blue);
+      color: #fff;
+      font-size: 20px;
+      font-weight: 900;
+      box-shadow: 0 12px 22px rgba(36, 87, 230, 0.24);
+    }
+
+    .capability-strip {
+      margin-top: 22px;
+      display: flex;
+      gap: 10px;
+      flex-wrap: wrap;
+    }
+
+    .capability-pill {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      padding: 8px 10px;
+      border-radius: var(--radius);
+      background: rgba(255, 255, 255, 0.7);
+      border: 1px solid #e8edf5;
+      color: #66758d;
+      font-size: 12px;
+      font-weight: 750;
+    }
+
+    .pill-dot { width: 7px; height: 7px; border-radius: 50%; background: var(--teal); }
+
+    .annotation { display: none; }
+  </style>
+</head>
+<body>
+  <div class="stage">
+    <main class="app">
+      <aside class="sidebar">
+        <div class="brand">
+          <div class="brand-mark" aria-hidden="true"><span></span><span></span><span></span><span></span></div>
+          <div>
+            <div class="brand-title">睿鲸AI</div>
+            <div class="brand-sub">AI · 低代码</div>
+          </div>
+        </div>
+        <nav class="nav">
+          <div class="nav-item active"><span class="nav-icon chat"></span>AI Builder</div>
+          <div class="nav-item"><span class="nav-icon"></span>应用资产库</div>
+          <div class="nav-item"><span class="nav-icon"></span>自开发资产库</div>
+        </nav>
+        <div class="tenant">
+          当前租户
+          <div class="tenant-box">得帆 <span>⌄</span></div>
+          <div class="nav-item" style="padding:0 4px;margin-top:10px;"><span class="nav-icon"></span>平台管理</div>
+          <div class="nav-item" style="padding:0 4px;"><span class="nav-icon"></span>浅色模式</div>
+          <div class="user"><span class="avatar">A</span><span>admin<br><small style="color:#0f9f8f;font-weight:700;">在线</small></span></div>
+        </div>
+      </aside>
+
+      <div class="top-tabs">
+        <div class="tab active">⌂ AI Builder</div>
+        <div class="tab">▦ 应用资产库 <span class="close">×</span></div>
+        <div class="tab">▦ 易景QMS质量管理系统 <span class="close">×</span></div>
+        <div class="tab">▦ 平台管理 <span class="close">×</span></div>
+        <div class="tab">▣ 自开发资产库 <span class="close">×</span></div>
+        <div class="tab">⌘ AI Coding <span class="close">×</span></div>
+        <div class="tab">▦ 产品上市退市管理系统 <span class="close">×</span></div>
+      </div>
+
+      <section class="session-rail">
+        <div class="rail-head">
+          <div class="rail-title-row">
+            <div class="rail-title"><span class="dot"></span>AI 对话</div>
+            <span style="color:#94a1b5;">«</span>
+          </div>
+          <button class="primary-btn">+ 开始构建</button>
+        </div>
+        <div class="rail-body">
+          <div class="rail-capability">
+            <div class="capability-line"><span class="capability-dot"></span>一个入口处理完整交付</div>
+            描述你要做的新应用、要改的页面、要接的接口或遇到的报错。AI 会按需要进入需求整理、应用搭建或自开发。
+          </div>
+
+          <div class="recent">
+            <div class="mode-label">最近会话</div>
+            <div class="recent-item">
+              <div class="recent-name">QMS 整改闭环系统</div>
+              <div class="recent-meta">昨天 · 已生成设计文档</div>
+            </div>
+            <div class="recent-item">
+              <div class="recent-name">专家信息采集与线上评审</div>
+              <div class="recent-meta">周二 · 等待补充流程</div>
+            </div>
+          </div>
+
+          <div class="rail-tip">
+            可以直接把 PRD、Excel、截图、代码报错一起丢进来。入口不变，AI 根据上下文判断下一步该搭应用还是改代码。
+          </div>
+        </div>
+      </section>
+
+      <section class="main">
+        <div class="main-top">
+          <div class="crumb">AI Builder <span>/</span> 构建工作台</div>
+          <div class="top-actions">
+            <button class="ghost-btn">查看历史</button>
+          </div>
+        </div>
+
+        <div class="workspace">
+          <div class="eyebrow">✦ AI Builder</div>
+          <h1>说出目标，AI 帮你搭应用，也能继续开发。</h1>
+          <p class="lead">这里不分“需求入口”和“开发入口”。你可以描述业务流程、上传材料、指定要改的页面或贴出运行报错，AI 会先理清上下文，再生成应用、修改代码、联调验证。</p>
+
+          <div class="composer">
+            <textarea placeholder="例如：给质量部搭一个 QMS 整改闭环，包含问题登记、责任人派发、整改验证、超期提醒和月度统计；后面还要能改页面样式、接审批接口、修构建报错。"></textarea>
+            <div class="composer-foot">
+              <div class="composer-left">
+                <button class="tool-btn">上传材料</button>
+                <button class="tool-btn">关联已有应用</button>
+              </div>
+              <div class="composer-left">
+                <span class="composer-hint">Enter 发送 · Shift+Enter 换行</span>
+                <button class="send-btn">→</button>
+              </div>
+            </div>
+          </div>
+
+          <div class="capability-strip">
+            <span class="capability-pill"><span class="pill-dot"></span>整理需求</span>
+            <span class="capability-pill"><span class="pill-dot"></span>生成 / 更新应用</span>
+            <span class="capability-pill"><span class="pill-dot"></span>自开发页面和组件</span>
+            <span class="capability-pill"><span class="pill-dot"></span>联调接口与修错</span>
+          </div>
+        </div>
+      </section>
+    </main>
+  </div>
+</body>
+</html>

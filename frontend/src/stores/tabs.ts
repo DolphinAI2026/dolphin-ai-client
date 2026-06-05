@@ -6,12 +6,14 @@
 // - openTab(tab): add or activate
 // - closeTab(id): remove + auto-switch to neighbor
 // - syncFromRoute(path): when user navigates (back/forward/typed URL), match an
-//   existing tab as active; if no match, do nothing (avoid creating phantom tabs)
+//   existing tab as active; after refresh, create only the current known nav tab
 //
-// Persistence: localStorage key 'ai-builder-tabs-v1'
+// Tabs are intentionally in-memory only:
+// - browser refresh resets to HOME_TAB
+// - tenant switch calls resetTabs() before reloading
 
 import { defineStore } from 'pinia'
-import { ref, watch } from 'vue'
+import { ref } from 'vue'
 
 export interface TabItem {
   id: string             // unique stable key (use path for nav tabs, app:{id} for app tabs)
@@ -22,7 +24,7 @@ export interface TabItem {
   kind: 'nav' | 'app'    // nav = sidebar nav item; app = opened app instance
 }
 
-const STORAGE_KEY = 'ai-builder-tabs-v1'
+const LEGACY_STORAGE_KEY = 'ai-builder-tabs-v1'
 
 const HOME_TAB: TabItem = {
   id: 'home',
@@ -33,30 +35,48 @@ const HOME_TAB: TabItem = {
   kind: 'nav',
 }
 
+const NAV_TABS: TabItem[] = [
+  HOME_TAB,
+  {
+    id: 'apps',
+    path: '/apps',
+    label: '应用资产库',
+    icon: 'apps',
+    closable: true,
+    kind: 'nav',
+  },
+  {
+    id: 'catalog',
+    path: '/workspace-catalog',
+    label: '自开发资产库',
+    icon: 'store',
+    closable: true,
+    kind: 'nav',
+  },
+  {
+    id: 'platform',
+    path: '/platform-admin',
+    label: '平台管理',
+    icon: 'shield',
+    closable: true,
+    kind: 'nav',
+  },
+]
+
 export const useTabsStore = defineStore('tabs', () => {
   const tabs = ref<TabItem[]>([HOME_TAB])
   const activeId = ref<string>('home')
 
-  // Restore from localStorage
+  // Stop restoring persisted workbench tabs. Older builds wrote this key; remove
+  // it once so a stale tab list does not reappear after deployment.
   try {
-    const raw = localStorage.getItem(STORAGE_KEY)
-    if (raw) {
-      const data = JSON.parse(raw)
-      if (Array.isArray(data.tabs) && data.tabs.length) {
-        const hasHome = data.tabs.some((t: TabItem) => t.id === 'home')
-        tabs.value = hasHome ? data.tabs : [HOME_TAB, ...data.tabs]
-      }
-      if (typeof data.activeId === 'string') activeId.value = data.activeId
-    }
+    localStorage.removeItem(LEGACY_STORAGE_KEY)
   } catch { /* ignore */ }
 
-  function persist() {
-    try {
-      localStorage.setItem(STORAGE_KEY, JSON.stringify({ tabs: tabs.value, activeId: activeId.value }))
-    } catch { /* ignore (quota / private mode) */ }
+  function resetTabs() {
+    tabs.value = [HOME_TAB]
+    activeId.value = HOME_TAB.id
   }
-
-  watch([tabs, activeId], persist, { deep: true })
 
   function openTab(tab: TabItem) {
     const existing = tabs.value.find((t) => t.id === tab.id)
@@ -94,8 +114,7 @@ export const useTabsStore = defineStore('tabs', () => {
 
   /**
    * Called by App.vue watch(route.fullPath) — if path matches an existing tab,
-   * activate it AND update tab.path to the new path (so refresh restores the
-   * last-browsed location, not the initial openTab path).
+   * activate it AND update tab.path to the new path.
    *
    * Matching priority:
    *   1. exact fullPath match
@@ -104,10 +123,8 @@ export const useTabsStore = defineStore('tabs', () => {
    *      - nav tab: same base or path is a sub-path (e.g., /ai-chat ↔ /ai-chat/15)
    *   3. home '/' 特判：仅当 path === '/' 时 match (防 home 兜底污染)
    *
-   * No auto-create (避免每次浏览都建 phantom tab).
-   *
-   * Phase 4 #1 (2026-05-23): tab.path 跟随浏览实时更新 — 解决刷新还原丢
-   * 失浏览位置 (e.g., /chat?app_id=4&tab=spec → &tab=preview 切回 spec) 的问题.
+   * 没有 localStorage 恢复后，刷新在 /apps / platform-admin 等一级路由时，
+   * 只创建当前路由对应 tab，不恢复旧的整排 tab。
    */
   function syncFromRoute(path: string) {
     // ?? '' fallback 兼容 TS strict noUncheckedIndexedAccess (split[0] 类型是 string | undefined)
@@ -150,7 +167,16 @@ export const useTabsStore = defineStore('tabs', () => {
       hit = candidates[0]
     }
 
-    if (!hit) return
+    if (!hit) {
+      const nav = NAV_TABS.find((t) => {
+        const tBase = t.path.split('?')[0] ?? ''
+        if (tBase === '/') return pathBase === '/'
+        return pathBase === tBase || pathBase.startsWith(tBase + '/')
+      })
+      if (!nav) return
+      openTab({ ...nav, path })
+      return
+    }
     activeId.value = hit.id
 
     // 2026-05-23 Phase 4 #1: 把 tab.path 更新成最新浏览路径,
@@ -162,5 +188,5 @@ export const useTabsStore = defineStore('tabs', () => {
     return tabs.value.find((t) => t.id === id)
   }
 
-  return { tabs, activeId, openTab, closeTab, setActive, syncFromRoute, findTab }
+  return { tabs, activeId, openTab, closeTab, setActive, syncFromRoute, findTab, resetTabs }
 })

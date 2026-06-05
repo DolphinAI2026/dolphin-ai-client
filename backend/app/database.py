@@ -71,6 +71,7 @@ async def init_db():
             "ALTER TABLE conversations ADD COLUMN workspace_id VARCHAR(50)",
             "ALTER TABLE conversations ADD COLUMN selected_llm_config_id INTEGER",
             "ALTER TABLE conversations ADD COLUMN project_id INTEGER",
+            "ALTER TABLE users ADD COLUMN display_name VARCHAR(100)",
             "ALTER TABLE users ADD COLUMN apaas_base_url VARCHAR(255)",
             "ALTER TABLE users ADD COLUMN apaas_tenant_id VARCHAR(50)",
             # Tenant quota/contact columns added after early multi-tenant installs.
