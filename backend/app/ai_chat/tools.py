@@ -1380,6 +1380,60 @@ TOOL_HANDLERS = {
 # 原 4 个 base 工具的 schemas（保持原有 TOOL_SCHEMAS 引用名兼容老代码）
 BASE_TOOL_SCHEMAS = TOOL_SCHEMAS
 
+# ── 锁定 app 上下文注入 (Task A4, 2026-06-04) ──────────────────────────────────
+# 当 AIChatSession.app_id 非空时，把内部 app_id → (env_id, apaas_app_id) 解析出来，
+# 并强制注入到声明了这两参数的 apaas 工具 —— 覆盖 LLM 给的值。
+# 这样即使 LLM 幻觉传了别的应用 id，工具也只会操作当前会话锁定的应用。
+# 自由会话 (app_id=None) 完全不受影响，行为与之前一致。
+# 护栏覆盖两个执行路径：base-handler 工具 (TOOL_HANDLERS，含 export_apaas_app_design_doc)
+# 和 MCP bridge 工具 —— schema 门控保证只注入实际声明了这两参数的工具。
+
+_LAST_TOOL_SCHEMAS: list[dict] = []  # get_all_tool_schemas 每次调用后更新，供 _tool_declares_param 用
+
+
+def _tool_declares_param(tool_name: str, param: str) -> bool:
+    """该工具的 schema 是否声明了 param（用 _LAST_TOOL_SCHEMAS 缓存判断）。"""
+    for s in _LAST_TOOL_SCHEMAS:
+        fn = s.get("function", {})
+        if fn.get("name") == tool_name:
+            props = (fn.get("parameters") or {}).get("properties") or {}
+            return param in props
+    return False
+
+
+async def _resolve_locked_app_ctx(session: "AIChatSession", db: "AsyncSession"):
+    """internal session.app_id → (env_id, apaas_app_id)。找不到或异常返 (None, None)。
+
+    结果带 per-session 缓存（_locked_app_ctx 属性），同一会话多次工具调用只查一次 DB。
+    """
+    cached = getattr(session, "_locked_app_ctx", None)
+    if cached is not None:
+        return cached
+    env_id, apaas_app_id = None, None
+    try:
+        from app.models import Application
+        app = await db.get(Application, int(getattr(session, "app_id", 0) or 0))
+        if app:
+            env_id = getattr(app, "platform_env_id", None)
+            apaas_app_id = getattr(app, "apaas_app_id", None)
+    except Exception:
+        pass
+    session._locked_app_ctx = (env_id, apaas_app_id)
+    return (env_id, apaas_app_id)
+
+
+async def _inject_locked_app_ctx(tool_name: str, args: dict, session: "AIChatSession", db) -> dict:
+    """把锁定应用的 env_id / apaas_app_id 注入 args（schema 门控 + 仅非 None 值注入）。"""
+    if not getattr(session, "app_id", None) or db is None:
+        return args
+    env_id, apaas_app_id = await _resolve_locked_app_ctx(session, db)
+    out = dict(args)
+    if env_id is not None and _tool_declares_param(tool_name, "env_id"):
+        out["env_id"] = env_id
+    if apaas_app_id and _tool_declares_param(tool_name, "apaas_app_id"):
+        out["apaas_app_id"] = apaas_app_id
+    return out
+
 
 async def get_all_tool_schemas() -> list[dict]:
     """合并 base 工具 + MCP bridge 工具 (按 agent 白名单过滤)。
@@ -1388,8 +1442,8 @@ async def get_all_tool_schemas() -> list[dict]:
 
     2026-05-28: 之前把全部 117 个 MCP 工具无过滤塞给 LLM → 工具过载, agent 挑错工具/
     漏参/反复重写 (实测 generate_app_from_doc 失灵 + write_artifact 缺 filename + 一份文档
-    写两个名字). 智能搭建 = unified builder+coding agent, 按 tool_registry 白名单砍到
-    builder ∪ coding (~71), 跟 config_chat 同套路. base 本地工具不在 registry, 永远保留.
+    写两个名字). 智能搭建 = unified builder+coding+config agent, 按 tool_registry 白名单砍到
+    builder ∪ coding ∪ config (~85), 跟 config_chat 同套路. base 本地工具不在 registry, 永远保留.
     """
     from app.ai_chat.mcp_bridge import get_tool_schemas_openai
     from app.tool_registry import tools_for_agent
@@ -1401,10 +1455,13 @@ async def get_all_tool_schemas() -> list[dict]:
         _log.getLogger(__name__).warning("MCP bridge 加载失败，退化到 base 工具：%s", e)
         mcp_schemas = []
     try:
-        # AI Builder chat 的主路径是需求梳理、设计文档和低代码应用生成。
-        # 之前把 coding 工具也暴露给同一个 LLM turn，schemas 变大且更容易触发
-        # 部分 OpenAI-compatible 网关连接中断；AI Coding 页面有自己的 pipeline。
-        allow = set(tools_for_agent("builder"))
+        # Unified AI Builder uses builder/config tools in the embedded app assistant,
+        # while coding tools remain available for self-dev deployment flows.
+        allow = (
+            set(tools_for_agent("builder"))
+            | set(tools_for_agent("coding"))
+            | set(tools_for_agent("config"))
+        )
         mcp_schemas = [
             s for s in mcp_schemas
             if s.get("function", {}).get("name") in allow
@@ -1412,7 +1469,9 @@ async def get_all_tool_schemas() -> list[dict]:
     except Exception as e:  # 白名单异常时不拦, 退化到全量 (有总比崩好)
         import logging as _log
         _log.getLogger(__name__).warning("工具白名单过滤失败, 退化到全量 MCP: %s", e)
-    return BASE_TOOL_SCHEMAS + mcp_schemas
+    global _LAST_TOOL_SCHEMAS
+    _LAST_TOOL_SCHEMAS = BASE_TOOL_SCHEMAS + mcp_schemas
+    return _LAST_TOOL_SCHEMAS
 
 
 # 2026-05-28: 这几个 doc-pipeline 工具强依赖 artifact_id 指向"当前会话刚写的设计文档".
@@ -1461,6 +1520,7 @@ async def execute_tool(
     """
     handler = TOOL_HANDLERS.get(tool_name)
     if handler:
+        args = await _inject_locked_app_ctx(tool_name, args, session, db)
         try:
             return await handler(args, session, db)
         except Exception as e:
@@ -1479,6 +1539,8 @@ async def execute_tool(
                     tool_name, args.get("artifact_id"), real_id, session.id,
                 )
                 args = {**args, "artifact_id": real_id}
+        # 锁定 app 上下文注入：强制覆盖 LLM 给的 env_id / apaas_app_id (Task A4)
+        args = await _inject_locked_app_ctx(tool_name, args, session, db)
         result_text = await _mcp_call(
             tool_name, args,
             tenant_id=int(getattr(session, "tenant_id", 0) or 0),

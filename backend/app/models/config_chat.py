@@ -47,6 +47,8 @@ class ConfigChatSession(Base):
     updated_at: Mapped[datetime] = mapped_column(
         DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False
     )
+    # 一次性迁到 ai_chat_sessions 后回写新 session id（幂等标记；非空=已迁）
+    migrated_session_id: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
 
 
 class ConfigChatMessage(Base):

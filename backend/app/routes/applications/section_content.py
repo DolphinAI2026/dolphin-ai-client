@@ -778,6 +778,44 @@ async def get_apaas_access_url(
     }
 
 
+@router.get("/{app_id}/editor-url")
+async def get_editor_url(
+    app_id: int,
+    ctx: Annotated[AuthContext, Depends(get_auth_context)],
+    db: Annotated[AsyncSession, Depends(get_db)],
+    menu_type: str = "",
+    menu_id: str = "",
+    form_id: str = "",
+) -> dict:
+    """返回 host-absolute 的 aPaaS 原生编辑器深链（前端 window.open 新标签页用）。
+
+    host = 应用绑定环境 PlatformEnv.base_url（去 /backend）；tid = platform_tenant_id。
+    路径由 app.apaas_editor_url.build_editor_path 构建。
+    """
+    from app.apaas_editor_url import build_editor_path
+    from app.models import PlatformEnv
+
+    app = await _load_app_and_check_view(app_id, ctx, db)
+    if not app.platform_env_id or not app.apaas_app_id:
+        return {"ok": False, "error_code": "APP_NOT_DEPLOYED", "message": "应用尚未部署到 aPaaS 平台"}
+    env = (
+        await db.execute(
+            select(PlatformEnv).where(
+                PlatformEnv.id == app.platform_env_id,
+                PlatformEnv.tenant_id == ctx.tenant_id,
+            )
+        )
+    ).scalar_one_or_none()
+    if not env or not env.base_url or not env.platform_tenant_id:
+        return {"ok": False, "error_code": "ENV_NOT_BOUND", "message": "应用未绑定有效平台环境"}
+    host = env.base_url.rstrip("/").replace("/backend", "")
+    path = build_editor_path(
+        menu_type, apaas_app_id=str(app.apaas_app_id),
+        menu_id=menu_id, form_id=form_id, tid=str(env.platform_tenant_id),
+    )
+    return {"ok": True, "url": f"{host}{path}"}
+
+
 def _custom_host_error_html(msg: str) -> str:
     safe = (msg or "").replace("<", "&lt;").replace(">", "&gt;")
     return (
@@ -2182,87 +2220,6 @@ async def deploy_process_endpoint(
         message=str(result.get("message") or "已部署"),
     )
 
-
-# ---------------------------------------------------------------------------
-# Phase H1: 矩阵 cell 真存 — 单 cell 改动 dispatch 到对应 apaas 权限 API.
-# ---------------------------------------------------------------------------
-class RoleResourceCellRequest(BaseModel):
-    """单 cell 权限改动入参."""
-    role_id: str
-    resource_type: str  # 'form' / 'model' / 'process' / 'app_setting'
-    resource_id: str
-    permission: str  # 'all' / 'rw' / 'r' / 'none'
-
-
-class RoleResourceCellResponse(BaseModel):
-    ok: bool
-    source: str = ""
-    resource_type: Optional[str] = None
-    form_id: Optional[str] = None
-    form_code: Optional[str] = None
-    role_id: Optional[str] = None
-    permission: Optional[str] = None
-    message: Optional[str] = None
-    error_code: Optional[str] = None
-
-
-@router.post(
-    "/{app_id}/role-resource-matrix/cell",
-    response_model=RoleResourceCellResponse,
-)
-async def set_role_resource_cell_endpoint(
-    app_id: int,
-    body: RoleResourceCellRequest,
-    ctx: Annotated[AuthContext, Depends(get_auth_context)],
-    db: Annotated[AsyncSession, Depends(get_db)],
-) -> RoleResourceCellResponse:
-    """改单个矩阵 cell 权限, 走 set_role_resource_permission MCP 工具.
-
-    按 resource_type 分发: form 真存到 apaas 平台 (走 list+set form permissions),
-    其他类型 P5 接入返 NOT_IMPLEMENTED.
-
-    入参: {role_id, resource_type, resource_id, permission}
-    返: {ok, source, message, ...} — ok=True 时 message="已保存".
-    """
-    source = "set_role_resource_permission"
-    app = await _load_app_and_check_view(app_id, ctx, db)
-    if not app.platform_env_id or not app.apaas_app_id:
-        return RoleResourceCellResponse(
-            ok=False,
-            source=source,
-            error_code="APP_NOT_DEPLOYED",
-            message="应用尚未部署到 aPaaS 平台 — 部署后才能写权限",
-        )
-
-    ok, raw_or_err = await _safe_call_mcp_tool(
-        source,
-        env_id=app.platform_env_id,
-        apaas_app_id=str(app.apaas_app_id),
-        extra_args={
-            "role_id": body.role_id.strip(),
-            "resource_type": body.resource_type.strip().lower(),
-            "resource_id": body.resource_id.strip(),
-            "permission": body.permission.strip().lower(),
-        },
-    )
-    if not ok:
-        return RoleResourceCellResponse(
-            ok=False,
-            source=source,
-            error_code=raw_or_err.get("error_code") or "MCP_TOOL_FAILED",
-            message=raw_or_err.get("message") or "权限写入失败",
-        )
-
-    return RoleResourceCellResponse(
-        ok=True,
-        source=source,
-        resource_type=str(raw_or_err.get("resource_type") or body.resource_type),
-        form_id=str(raw_or_err.get("form_id") or "") or None,
-        form_code=str(raw_or_err.get("form_code") or "") or None,
-        role_id=str(raw_or_err.get("role_id") or body.role_id),
-        permission=str(raw_or_err.get("permission") or body.permission),
-        message=str(raw_or_err.get("message") or "已保存"),
-    )
 
 
 # ---------------------------------------------------------------------------

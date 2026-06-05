@@ -50,6 +50,8 @@ class CreateSessionRequest(BaseModel):
     selected_llm_config_id: Optional[int] = None
     # 工作模式：'chat'（从零理需求）/ 'cowork'（批量材料整合）
     mode: Optional[str] = None
+    # 锁定应用上下文：右栏配置助手创建会话时传入，run_agent 据此注入 app 上下文
+    app_id: Optional[int] = None
 
 
 class UpdateSessionRequest(BaseModel):
@@ -61,6 +63,9 @@ class UpdateSessionRequest(BaseModel):
 class SendMessageRequest(BaseModel):
     message: str
     attachment_ids: Optional[List[int]] = None  # 引用本会话已上传的附件
+    # 每条消息可携带当前设计器 section 软提示（run_agent 注入 app 上下文时用；按消息传，随用户切 tab 变）
+    section: Optional[str] = None
+    view_context: Optional[str] = None
 
 
 # ─────────────────────────── 会话存活的 abort 标志 ───────────────────────────
@@ -97,6 +102,7 @@ def _session_to_dict(s: AIChatSession) -> dict:
         "mode": getattr(s, "mode", None) or "chat",
         "selected_llm_config_id": s.selected_llm_config_id,
         "workspace_dir": s.workspace_dir,
+        "app_id": getattr(s, "app_id", None),
         "created_at": s.created_at.isoformat() if s.created_at else None,
         "updated_at": s.updated_at.isoformat() if s.updated_at else None,
     }
@@ -203,16 +209,19 @@ async def list_sessions(
     ctx: Annotated[AuthContext, Depends(get_auth_context)],
     db: Annotated[AsyncSession, Depends(get_db)],
     limit: int = 50,
+    app_id: Optional[int] = None,
 ):
-    res = await db.execute(
+    query = (
         select(AIChatSession)
         .where(
             AIChatSession.user_id == ctx.user.id,
             AIChatSession.tenant_id == ctx.tenant_id,
         )
-        .order_by(desc(AIChatSession.updated_at))
-        .limit(limit)
     )
+    if app_id is not None:
+        query = query.where(AIChatSession.app_id == app_id)
+    query = query.order_by(desc(AIChatSession.updated_at)).limit(limit)
+    res = await db.execute(query)
     sessions = res.scalars().all()
     return {"sessions": [_session_to_dict(s) for s in sessions]}
 
@@ -237,6 +246,7 @@ async def create_session(
         selected_llm_config_id=selected_llm_config_id,
         mode="cowork" if body.mode == "cowork" else "chat",
         status="active",
+        app_id=body.app_id,
     )
     db.add(s)
     await db.flush()  # 拿到 id
@@ -479,7 +489,7 @@ async def send_message(
                                 "data": json.dumps(_session_to_dict(stream_s), ensure_ascii=False),
                             }
 
-                async for event in run_agent(stream_db, stream_s, body.message, abort_event):
+                async for event in run_agent(stream_db, stream_s, body.message, abort_event, section=body.section, view_context=body.view_context):
                     yield event
             except Exception as e:
                 import traceback

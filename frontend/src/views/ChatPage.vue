@@ -124,12 +124,6 @@
             </svg>
           </span>
         </button>
-        <button
-          v-if="SHOW_PLATFORM_CONFIG && activeView === 'platform' && platformIframeUrl"
-          class="top-bar-icon-btn"
-          @click="openPlatformNewTab"
-          title="在新窗口打开"
-        >↗</button>
       </template>
     </TopBar>
     <div class="content-area">
@@ -141,7 +135,7 @@
              chip (改用左侧菜单 list + 右侧 designer 4 sub-tab). 其他 tab 保留.
              Q2 2026-05-27: 数据源 tab 也不显 chip (扁平 panel, 无 sub). -->
         <div
-          v-if="existingAppId && platformIframeAppId === existingAppId && !legacyMode && topTab !== 'design' && topTab !== 'datasource' && topTab !== 'spec'"
+          v-if="existingAppId && topTab !== 'design' && topTab !== 'datasource' && topTab !== 'spec'"
           class="sub-chip-strip"
         >
           <button
@@ -158,8 +152,7 @@
         <div class="platform-shell-row">
           <!-- 设计 tab: 左侧 ApaasMenuSidebar 长显 (不绑 sub-tab) -->
           <ApaasMenuSidebar
-            v-if="existingAppId && platformIframeAppId === existingAppId
-                  && (legacyMode || topTab === 'design')"
+            v-if="existingAppId && topTab === 'design'"
             ref="apaasMenuSidebarRef"
             :app-id="existingAppId"
             :selected-menu-id="selectedApaasMenuId"
@@ -169,8 +162,7 @@
           <!-- 其他 sub-tab: 走通用 SectionContentList. 当 native panel 自带 master
                (DictEditorPanel / RoleManagePanel) 时, 不再显 SectionContentList 防重复. -->
           <SectionContentList
-            v-if="!legacyMode && existingAppId && platformIframeAppId === existingAppId
-                  && shouldShowSectionContent && currentSectionContentKind
+            v-if="existingAppId && shouldShowSectionContent && currentSectionContentKind
                   && !isNativeMasterDetailSubTab"
             :app-id="existingAppId"
             :resource-kind="currentSectionContentKind"
@@ -182,7 +174,7 @@
           <!-- 设计 tab: U3 — SPEC 设计层 (跟"功能" tab 平行).
                改 SPEC 文档 → AI 翻译成 apaas 配置. MVP read-only + P2 接 chat. -->
           <SpecDesignPanel
-            v-if="!legacyMode && topTab === 'spec' && existingAppId"
+            v-if="topTab === 'spec' && existingAppId"
             :key="`spec-${designerRefreshKey}`"
             class="platform-iframe-container"
             :app-id="existingAppId"
@@ -190,14 +182,14 @@
           />
           <!-- 日志 tab: design-v4 K4 — 4 sub-tab LogsPanel (deploy / operation / ai / error) -->
           <LogsPanel
-            v-else-if="!legacyMode && topTab === 'log' && existingAppId"
+            v-else-if="topTab === 'log' && existingAppId"
             :app-id="existingAppId"
             class="platform-iframe-container"
           />
           <!-- 2026-05-26 design-v3 重构: native panel 替 iframe -->
           <!-- 2026-05-27 R: CUSTOM 菜单 (自开发 Vue) 走专门 panel: preview=iframe runtime, edit=跳 IDE -->
           <CustomPagePreviewPanel
-            v-else-if="!legacyMode && topTab === 'design' && existingAppId && selectedApaasMenuId && selectedApaasMenuType === 'CUSTOM'"
+            v-else-if="topTab === 'design' && existingAppId && selectedApaasMenuId && selectedApaasMenuType === 'CUSTOM'"
             :key="`cpp-${selectedApaasMenuId}-${designerRefreshKey}`"
             class="platform-iframe-container"
             :app-id="existingAppId"
@@ -206,7 +198,7 @@
           />
           <!-- 设计 tab: 选中 MODEL 菜单后显 designer shell (内 4 sub-tab: 表单/列表/流程/页面) -->
           <div
-            v-else-if="!legacyMode && topTab === 'design' && existingAppId && selectedApaasMenuId"
+            v-else-if="topTab === 'design' && existingAppId && selectedApaasMenuId"
             class="platform-iframe-container mdsh"
           >
             <!-- designer 内顶部 4 sub-tab -->
@@ -275,7 +267,7 @@
           </div>
           <!-- 设计 tab + 未选菜单: 空态提示 -->
           <div
-            v-else-if="!legacyMode && topTab === 'design' && existingAppId && !selectedApaasMenuId"
+            v-else-if="topTab === 'design' && existingAppId && !selectedApaasMenuId"
             class="platform-iframe-container mdsh-empty"
           >
             <div class="mdsh-empty-icon">👈</div>
@@ -284,7 +276,7 @@
           </div>
           <!-- 流程 tab + 流程 sub: ProcessDesignerPanel (P0 mock 4 节点 demo, x6 driven) -->
           <ProcessDesignerPanel
-            v-else-if="!legacyMode && topTab === 'logic' && currentSectionTab === 'processes' && existingAppId"
+            v-else-if="topTab === 'logic' && currentSectionTab === 'processes' && existingAppId"
             :key="`process-fb-${designerRefreshKey}`"
             class="platform-iframe-container"
             :app-id="existingAppId"
@@ -293,7 +285,7 @@
           />
           <!-- 数据 tab + 数据模型 sub: 选中模型显字段表格 -->
           <DataModelDetailPanel
-            v-else-if="!legacyMode && topTab === 'data' && currentSectionTab === 'models' && existingAppId && selectedSectionItemId"
+            v-else-if="topTab === 'data' && currentSectionTab === 'models' && existingAppId && selectedSectionItemId"
             :key="`dmd-${selectedSectionItemId}-${designerRefreshKey}`"
             class="platform-iframe-container"
             :app-id="existingAppId"
@@ -302,7 +294,7 @@
           />
           <!-- 数据 tab + 字典 sub: master-detail -->
           <DictEditorPanel
-            v-else-if="!legacyMode && topTab === 'data' && currentSectionTab === 'dicts' && existingAppId"
+            v-else-if="topTab === 'data' && currentSectionTab === 'dicts' && existingAppId"
             :key="`dict-${designerRefreshKey}`"
             class="platform-iframe-container"
             :app-id="existingAppId"
@@ -311,71 +303,28 @@
           />
           <!-- 权限 tab + 角色 sub: master-detail -->
           <RoleManagePanel
-            v-else-if="!legacyMode && topTab === 'perm' && currentSectionTab === 'roles' && existingAppId"
+            v-else-if="topTab === 'perm' && currentSectionTab === 'roles' && existingAppId"
             :key="`role-${designerRefreshKey}`"
             class="platform-iframe-container"
             :app-id="existingAppId"
           />
           <!-- 数据源 tab (Q2 2026-05-27): 应用关联的数据源 (DB connection 维度, 只读) -->
           <AppDatasourcePanel
-            v-else-if="!legacyMode && topTab === 'datasource' && existingAppId"
+            v-else-if="topTab === 'datasource' && existingAppId"
             :key="`appds-${designerRefreshKey}`"
             class="platform-iframe-container"
             :app-id="existingAppId"
           />
-          <!-- 默认 fallback: iframe (流程/业务事件/字段权限/菜单可见性 暂走 iframe, P2 改 native) -->
-          <div v-else class="platform-iframe-container">
-          <!-- design-v4 I3: prod 模式红色 banner — 强提醒"正在查看生产环境" -->
-          <div v-if="appEnvMode === 'prod'" class="prod-env-banner" role="alert">
-            <span class="prod-env-banner-icon" aria-hidden="true">⚠</span>
-            <span class="prod-env-banner-text">
-              正在查看生产环境<template v-if="prodEnvCandidate">「{{ prodEnvCandidate.env_name }}」</template> — 谨慎修改, 直接生效
-            </span>
-            <button
-              class="prod-env-banner-back"
-              type="button"
-              title="切回开发环境"
-              @click="onAppEnvSwitch('dev')"
-            >切回开发</button>
+          <!-- 非原生 tab（业务事件/字段权限/菜单可见性等）: 去内嵌, 占位 + 深链低代码后台 -->
+          <div v-else class="platform-iframe-container lowcode-deeplink-placeholder">
+            <div class="lcd-ph-icon" aria-hidden="true">🔧</div>
+            <p class="lcd-ph-hint">这块配置在低代码后台编辑。</p>
+            <OpenLowcodeBackendButton v-if="existingAppId" :app-id="existingAppId" />
           </div>
-          <div v-if="platformLoading" class="platform-loading">
-            <span class="loading-spinner">⟳</span> 加载平台配置...
-          </div>
-          <div v-else-if="platformError" class="platform-error">
-            <p>{{ platformError }}</p>
-            <div class="platform-error-actions">
-              <button class="platform-retry-btn" @click="loadPlatformUrl">重试</button>
-              <button class="platform-open-btn" @click="openPlatformNewTab">在新窗口打开</button>
-            </div>
-          </div>
-          <template v-else-if="platformIframeUrl">
-            <div v-if="platformLoginHint" class="platform-login-hint">
-              <span>💡 首次使用请在下方登录平台（账号: <b>{{ platformLoginHint }}</b>）</span>
-              <button class="hint-nav-btn" @click="navigateIframeToApp" title="登录后点击跳转到应用配置页">🔄 跳转到应用</button>
-              <button class="hint-dismiss-btn" @click="platformLoginHint = ''">✕</button>
-            </div>
-            <iframe
-              :key="platformIframeKey"
-              ref="platformIframeRef"
-              :src="platformIframeUrl"
-              class="platform-iframe"
-              frameborder="0"
-              allow="clipboard-read; clipboard-write"
-              @load="onPlatformIframeLoad"
-              @error="onIframeError"
-            ></iframe>
-          </template>
-          <div v-else class="platform-error">
-            <p>应用尚未部署到平台，无法打开辅助搭建</p>
-            <div class="platform-error-actions">
-              <button class="platform-retry-btn" @click="loadPlatformUrl">重试</button>
-            </div>
-          </div>
-        </div>
         <!-- 2026-05-29: 配置助手嵌入式右栏 — 对齐「设计」tab(SpecDesignPanel 内嵌 chat)的布局,
              并排不浮盖中间内容。设计 tab(topTab==='spec')自带 SPEC chat, 这里不重复显。
              收起态走右下 FAB(见 chat-shell 下), 展开态在此并排; 宽度由 panel 内 usePanelResize 控制。 -->
-        <ConfigAssistantPanel
+        <AppAssistantPanel
           v-if="!embedMode && isPostDeploy && resolvedAppId && topTab !== 'spec' && assistantOpen"
           class="ca-embedded"
           :application-id="resolvedAppId"
@@ -383,6 +332,8 @@
           :current-section="currentSection"
           :current-section-tab="currentSectionTab"
           :designer-sub="topTab === 'design' && selectedApaasMenuId ? designerSub : null"
+          :selected-menu-name="selectedApaasMenuName"
+          :selected-menu-id="selectedApaasMenuId"
           @close="toggleAssistant"
           @refresh-iframe="refreshPlatformAndSidebar"
           @upload-doc="triggerDocVersionUpload"
@@ -891,7 +842,6 @@ import {
   extractAppCodeFromText,
   extractAppNameFromText,
 } from '@/utils/app'
-import { buildPlatformProxyEntryUrl, buildPlatformProxyMenuUrl, buildPlatformProxyStepUrl, repairPlatformIframe } from '@/utils/platformIframe'
 import ApaasMenuSidebar from '@/components/ApaasMenuSidebar.vue'
 import SectionNav from '@/components/v2/SectionNav.vue'
 import ExtensionSectionPanel from '@/components/v2/ExtensionSectionPanel.vue'
@@ -902,6 +852,7 @@ import ListDesignerPanel from '@/components/v3/ListDesignerPanel.vue'
 import ProcessDesignerPanel from '@/components/v3/ProcessDesignerPanel.vue'
 import DataSchemaEditor from '@/components/v3/DataSchemaEditor.vue'
 import FormPermPanel from '@/components/v3/FormPermPanel.vue'
+import OpenLowcodeBackendButton from '@/components/v3/OpenLowcodeBackendButton.vue'
 import DataModelDetailPanel from '@/components/v3/DataModelDetailPanel.vue'
 import DictEditorPanel from '@/components/v3/DictEditorPanel.vue'
 import RoleManagePanel from '@/components/v3/RoleManagePanel.vue'
@@ -929,7 +880,7 @@ import SpecCanvas from '@/components/spec/SpecCanvas.vue'
 import SpecInspector from '@/components/spec/SpecInspector.vue'
 // v2 redesign (Session 5): 3-column shell — left conversation rail + right SPEC blueprint.
 // Existing center content unchanged; new components are pure presentation, no logic.
-import ConfigAssistantPanel from '@/components/v2/ConfigAssistantPanel.vue'
+import AppAssistantPanel from '@/components/v2/AppAssistantPanel.vue'
 import DeployConfirmModal from '@/components/v2/DeployConfirmModal.vue'
 
 const router = useRouter()
@@ -2341,8 +2292,6 @@ function toggleAssistant() {
 }
 
 // ── 平台配置 iframe ──
-const platformIframeUrl = ref('')
-const platformIframeKey = ref(0)
 // 2026-05-27 P2: design-v4 panel 刷新 key — ConfigAssistant 完成调整后 bump 这个,
 // 让 FormDesignerPanel / ListDesignerPanel / ProcessDesignerPanel / DataSchemaEditor /
 // RoleManagePanel 重新挂载 + 重新拉数据 (替代老 iframe.reload). 5 panel 都 bind
@@ -2351,7 +2300,6 @@ const designerRefreshKey = ref(0)
 
 // PR2b (SPEC v2 §1.1) — SectionNav 状态
 // 5 section: data/ui/logic/permission/extension, 默认 ui (跟以前 ApaasMenuSidebar 行为对齐)
-// legacyMode: ?legacy=1 OR window 宽度 < 1280 → 老 ApaasMenuSidebar 直显, SectionNav 隐藏
 // 2026-05-31: 顶部「功能 / 数据源 / 权限 / 日志」入口移除, 进入应用直接展示功能页。
 const APP_CONFIG_TOP_TABS_ENABLED = false
 const SECTION_STORAGE_KEY = 'apaas-section-v1'
@@ -2447,16 +2395,6 @@ const isNativeMasterDetailSubTab = computed(() => {
   if (topTab.value === 'perm' && currentSectionTab.value === 'roles') return true
   return false
 })
-// 2026-05-27 P3: 删自动 narrow-window 触发 (window.innerWidth < 1280).
-// 用户反馈 preview 窗口 1122px 触发 legacyMode → 整套 design-v4 (actt 3 tab + mdsh
-// FormDesigner/ListDesigner/ProcessDesigner panels) hide, 退回 iframe fallback, 跟
-// 宽屏 browser 显示 完全不一样. design-v4 现已是 standard, narrow 也得跑 design-v4.
-// 留 ?legacy=1 URL 显式 fallback (debug 用), resize handler 也跟着退化为只看 ?legacy=1.
-const legacyMode = ref<boolean>((() => {
-  try {
-    return new URLSearchParams(window.location.search).get('legacy') === '1'
-  } catch { return false }
-})())
 function onSwitchSection(section: string, tab?: string) {
   // SPEC v2 Issue #6: 切 section 前提示用户保存(dirty editor) — 通过 postMessage 探 iframe.
   // P0 简化: 直接切, 后续 PR2c 在 ConfigAssistant 接入 dirty probe.
@@ -2494,7 +2432,6 @@ const currentSectionContentKind = computed(() => {
   return SECTION_TAB_TO_KIND[key] || null
 })
 const shouldShowSectionContent = computed(() => {
-  if (legacyMode.value) return false
   if (currentSection.value === 'extension') return false  // 走 ExtensionSectionPanel
   if (currentSection.value === 'ui' && currentSectionTab.value === 'menus') return false  // 走 ApaasMenuSidebar
   return currentSectionContentKind.value !== null
@@ -2560,57 +2497,16 @@ function onSectionContentCreateRequest() {
 //   logic      → 2 (菜单功能, 流程挂菜单上)
 //   permission → 1 (访问权限) — 角色管理在这
 //   extension  → 不跳 iframe (走 ExtensionSectionPanel)
-const SECTION_TO_STEP_INDEX: Record<string, number> = {
-  data: 0,
-  ui: 2,
-  logic: 2,
-  permission: 1,
-  extension: 0,  // 不会被用到, ExtensionSectionPanel 替代 iframe
-}
-function navigateIframeForSection(section: string) {
-  // extension 不操作 iframe (走 ExtensionSectionPanel)
-  if (section === 'extension') return
-  // 用户已经在某个具体菜单 (selectedApaasMenuId) 且当前 section=ui → 不重置, 让用户继续操作菜单
-  if (section === 'ui' && selectedApaasMenuId.value) return
-  if (!existingAppId.value) return
-  const stepIdx = SECTION_TO_STEP_INDEX[section] ?? 0
-  const token = userStore.token || localStorage.getItem('token') || ''
-  const nextUrl = buildPlatformProxyStepUrl(existingAppId.value, token, stepIdx)
-  if (platformIframeUrl.value === nextUrl) return  // 避免重复 set 触发 reload
-  platformIframeUrl.value = nextUrl
-  platformAppUrl.value = nextUrl
-  platformIframeAppId.value = existingAppId.value
-  selectedApaasMenuId.value = null  // 清菜单选中态, 走总览
-}
-// 监听 section 变化 (避免 onSwitchSection 调多次, 用 watch)
-watch(() => currentSection.value, (newSection, oldSection) => {
-  if (newSection === oldSection) return
-  navigateIframeForSection(newSection)
-})
-// 2026-05-27 P3: 删 resize → legacyMode 自动 toggle. design-v4 是 standard, 任何
-// 宽度都跑 design-v4. legacyMode 只剩 ?legacy=1 一种显式开法 (debug). resize 不再
-// 改 legacyMode.value, handler 完全摘掉.
-
 // 2026-05-26: sidebar 引用 — AI 完成调整后联动 reload, 让新建菜单立刻显
 const apaasMenuSidebarRef = ref<{ reload: () => Promise<void> } | null>(null)
 function refreshPlatformAndSidebar() {
-  platformIframeKey.value += 1
-  // 2026-05-27 P2: bump design-v4 panel key — 让 5 个 Vue 原生 panel re-mount + re-fetch
-  // (iframe key 留给老 fallback iframe view; design-v4 走原生组件路径).
+  // bump design-v4 panel key — 让 5 个 Vue 原生 panel re-mount + re-fetch
   designerRefreshKey.value += 1
   // 略延 300ms 给平台 API 落库, 然后 reload 菜单树
   setTimeout(() => {
     try { apaasMenuSidebarRef.value?.reload?.() } catch { /* sidebar 还没 mount 时忽略 */ }
   }, 300)
 }
-const platformAppUrl = ref('')  // 应用配置页 URL（登录后跳转用）
-const platformDirectUrl = ref('')
-const platformLoading = ref(false)
-const platformError = ref('')
-const platformLoginHint = ref('')
-const platformIframeRef = ref<HTMLIFrameElement | null>(null)
-const platformIframeAppId = ref<number | null>(null)
-const platformIframeRepairTimer = ref<number | null>(null)
 
 // 2026-05-25 B-4: 原生菜单 sidebar 选中态 + 切 iframe handler
 const selectedApaasMenuId = ref<string | null>(null)
@@ -2638,57 +2534,8 @@ function onApaasMenuSelected(menu: {
   if (menu.form_id) selectedApaasMenuFormId.value = String(menu.form_id)
   // R (2026-05-27): 保存 menu_type 让 CUSTOM 菜单走 CustomPagePreviewPanel 分支
   selectedApaasMenuType.value = (menu.menu_type || menu.menu_display || '').toUpperCase()
-  const token = userStore.token || localStorage.getItem('token') || ''
-  // 仅在切到 platform 视图后才允许切菜单 — 避免误把 iframe 卡到 platform 模式
+  // 仅在切到 platform 视图后才允许切菜单
   if (activeView.value !== 'platform') activeView.value = 'platform'
-  // 关键: 不要 bump platformIframeKey, 让 iframe 复用同一元素 navigate
-  // → chrome frameId 保持稳定, ConfigAssistant 的 frame_role="platform" 寻址不掉链
-  const nextUrl = buildPlatformProxyMenuUrl(existingAppId.value, token, {
-    menuId: menu.menu_id,
-    formId: menu.form_id || undefined,
-    menuType: menu.menu_type || menu.menu_display || undefined,
-  })
-  platformIframeUrl.value = nextUrl
-  platformAppUrl.value = nextUrl
-  platformIframeAppId.value = existingAppId.value
-  platformLoginHint.value = ''
-}
-
-const buildPlatformProxyUrl = (appId: number) => {
-  return buildPlatformProxyEntryUrl(appId, userStore.token || localStorage.getItem('token') || '')
-}
-
-const clearPlatformIframeRepairTimer = () => {
-  if (platformIframeRepairTimer.value !== null) {
-    window.clearInterval(platformIframeRepairTimer.value)
-    platformIframeRepairTimer.value = null
-  }
-}
-
-const onPlatformIframeLoad = () => {
-  clearPlatformIframeRepairTimer()
-
-  // 检测后端返回的错误页（通过 body 上的标记 data 属性）
-  try {
-    const iframe = platformIframeRef.value
-    const doc = iframe?.contentDocument
-    if (doc?.body?.dataset?.proxyError) {
-      const text = doc.querySelector('h3')?.textContent || '平台页面加载失败'
-      platformIframeUrl.value = ''
-      platformError.value = text
-      return
-    }
-    const repaired = repairPlatformIframe(iframe)
-    const hasPasswordInput = !!doc?.querySelector('input[type="password"]')
-    if (repaired && hasPasswordInput && iframe?.contentWindow) {
-      const localAuth = iframe.contentWindow.localStorage.getItem('__vuex__local') || ''
-      const sessionAuth = iframe.contentWindow.sessionStorage.getItem('__vuex__session') || ''
-      if (localAuth && localAuth !== sessionAuth) {
-        iframe.contentWindow.sessionStorage.setItem('__vuex__session', localAuth)
-        iframe.contentWindow.location.reload()
-      }
-    }
-  } catch { /* 跨域页面无法访问 contentDocument，忽略 */ }
 }
 
 const refreshCurrentAppRemoteMeta = async (appId: number) => {
@@ -2696,7 +2543,6 @@ const refreshCurrentAppRemoteMeta = async (appId: number) => {
     const apps = await applicationApi.list({ include_remote: true }) as any[]
     const current = apps.find((item: any) => String(item.id) === String(appId))
     currentRemoteStatus.value = current?.remote_status || ''
-    platformDirectUrl.value = current?.apaas_url || platformDirectUrl.value || ''
     if (current?.apaas_app_id && store.currentApp) {
       store.currentApp = { ...store.currentApp, apaas_app_id: current.apaas_app_id, status: current.local_status || store.currentApp.status, remote_status: current.remote_status }
     }
@@ -2705,53 +2551,8 @@ const refreshCurrentAppRemoteMeta = async (appId: number) => {
   }
 }
 
-const loadPlatformUrl = async () => {
-  if (!existingAppId.value) {
-    platformError.value = '当前应用未关联，无法打开辅助搭建'
-    return
-  }
-  platformLoading.value = true
-  platformError.value = ''
-  platformIframeUrl.value = ''
-  platformIframeKey.value += 1
-  await Promise.resolve()  // 让 Vue 渲染一帧，显示 loading 旋转器
-  try {
-    const proxyUrl = buildPlatformProxyUrl(existingAppId.value)
-    platformIframeUrl.value = proxyUrl
-    platformAppUrl.value = proxyUrl
-    platformIframeAppId.value = existingAppId.value
-    platformLoginHint.value = ''
-  } catch (e: any) {
-    platformError.value = e?.response?.data?.detail || e?.message || '获取平台链接失败'
-  } finally {
-    platformLoading.value = false
-  }
-}
-
 const switchToPlatform = () => {
   activeView.value = 'platform'
-  loadPlatformUrl()
-}
-
-const navigateIframeToApp = () => {
-  if (platformIframeRef.value && platformAppUrl.value) {
-    platformIframeRef.value.src = platformAppUrl.value
-    platformLoginHint.value = ''
-  }
-}
-
-const openPlatformNewTab = () => {
-  const appId = existingAppId.value || platformIframeAppId.value
-  if (appId) {
-    const proxyUrl = buildPlatformProxyUrl(Number(appId))
-    platformAppUrl.value = proxyUrl
-    window.open(proxyUrl, '_blank', 'noopener,noreferrer')
-    return
-  }
-
-  if (platformAppUrl.value || platformIframeUrl.value) {
-    window.open(platformAppUrl.value || platformIframeUrl.value, '_blank', 'noopener,noreferrer')
-  }
 }
 
 const publishCurrentApp = async () => {
@@ -2772,11 +2573,6 @@ const publishCurrentApp = async () => {
   } finally {
     publishingApp.value = false
   }
-}
-
-const onIframeError = () => {
-  clearPlatformIframeRepairTimer()
-  platformError.value = '平台页面加载失败，可能不支持 iframe 嵌入'
 }
 
 const setActiveView = (view: 'builder' | 'platform' | 'coding') => {
@@ -2819,9 +2615,6 @@ const restoreActiveViewForApp = async (app: any) => {
   // 2026-05-19 post-deploy 默认进 platform iframe（中间区域），避免空白黑屏；
   // 仅当显式 ?view=builder 才回到 builder 视图。
   activeView.value = requestedView === 'builder' ? 'builder' : 'platform'
-  if (activeView.value === 'platform' && existingAppId.value) {
-    loadPlatformUrl()
-  }
 }
 
 // 字段类型图标映射（兜底，防止后端返回中文导致竖排）
@@ -3544,163 +3337,6 @@ async function retryFailedGenerate() {
 }
 watch(() => existingAppId.value, () => refreshAppPublishStatus(), { immediate: true })
 
-// ─────────────── 2026-05-26 design-v4 I3: 应用 env toggle 真切 ───────────────
-// 应用栏 "开发 / 生产" toggle:
-//   - dev: 走 application.platform_env_id 的 env (current iframe 默认)
-//   - prod: 调 /applications/{id}/envs 拿 list, 找 type='prod' env, 切 iframe URL
-//           (透传 env_id 给 backend proxy_entry, 覆盖 app.platform_env_id)
-//
-// 边界:
-//   - 应用未部署 (apaas_app_id 空): toggle disabled
-//   - prod env 未配置: prod button tooltip "未配置生产环境"
-//   - prod env token 失效: 切时 toast 引导
-//
-// 视觉:
-//   - prod active: button 黄色 (warn token)
-//   - prod mode: 顶部加红色 banner sticky
-interface AppEnvItem {
-  id: number
-  env_name: string
-  alias?: string | null
-  base_url: string
-  type: 'dev' | 'preview' | 'prod'
-  current: boolean
-  status: string
-  is_default: boolean
-  has_token: boolean
-  can_iframe: boolean
-}
-
-const appEnvMode = ref<'dev' | 'prod'>('dev')
-const appEnvs = ref<AppEnvItem[]>([])
-const appEnvsLoaded = ref(false)
-const appEnvsLoading = ref(false)
-const appEnvSwitching = ref(false)
-
-// 当前 env (= app.platform_env_id 对应的 env), 用作 dev mode 锚点
-const currentDevEnv = computed<AppEnvItem | null>(() => {
-  return appEnvs.value.find(e => e.current) || null
-})
-
-// 第一个 type='prod' 的 env (没就空)
-const prodEnvCandidate = computed<AppEnvItem | null>(() => {
-  return appEnvs.value.find(e => e.type === 'prod') || null
-})
-
-const hasProdEnv = computed(() => !!prodEnvCandidate.value)
-
-// toggle 整体能用 (有 builderCurrentAppId 才显示, 加上 apaas_app_id check 在外面已有)
-const appEnvToggleDisabled = computed(() => {
-  const app = store.currentApp as any
-  return !app?.apaas_app_id  // 未部署到 apaas → 没法切 env
-})
-
-// prod button 是否可点 (要有 prod env 配 + token)
-
-
-// 拉当前应用的 env list (lazy, 第一次需要时调)
-async function ensureAppEnvsLoaded(): Promise<void> {
-  if (appEnvsLoaded.value || appEnvsLoading.value) return
-  const appId = builderCurrentAppId.value
-  if (!appId) return
-  appEnvsLoading.value = true
-  try {
-    const resp = await request.get<any, any>(`/applications/${appId}/envs`)
-    if (resp?.ok && Array.isArray(resp.envs)) {
-      appEnvs.value = resp.envs as AppEnvItem[]
-      appEnvsLoaded.value = true
-    }
-  } catch (err) {
-    console.warn('[design-v4 I3] load app envs failed:', err)
-  } finally {
-    appEnvsLoading.value = false
-  }
-}
-
-async function onAppEnvSwitch(env: 'dev' | 'prod') {
-  if (appEnvSwitching.value) return
-  if (appEnvMode.value === env) return
-  if (appEnvToggleDisabled.value) {
-    ElMessage.warning('应用尚未部署到平台, 无法切换环境')
-    return
-  }
-
-  // 拉 env list (如果还没拉)
-  await ensureAppEnvsLoaded()
-
-  if (env === 'prod') {
-    if (!hasProdEnv.value) {
-      ElMessage.warning('未配置生产环境 — 请到 [运行时 / 环境管理] 添加一个 env_name 含 "生产" 或 "prod" 的环境')
-      return
-    }
-    const prod = prodEnvCandidate.value!
-    if (!prod.has_token) {
-      ElMessage.warning(`生产环境 token 已过期 — 请到 [运行时 / 环境管理] 重新登录「${prod.env_name}」`)
-      return
-    }
-    if (prod.status !== 'connected') {
-      ElMessage.warning(`生产环境「${prod.env_name}」连接已失效, 请到 [运行时 / 环境管理] 重连`)
-      return
-    }
-    appEnvSwitching.value = true
-    try {
-      // 切 iframe URL 走 prod env (透传 env_id, backend proxy_entry 覆盖 app.platform_env_id)
-      switchIframeToEnv(prod.id)
-      appEnvMode.value = 'prod'
-      ElMessage.success(`已切换到生产环境「${prod.env_name}」(只读)`)
-    } finally {
-      appEnvSwitching.value = false
-    }
-    return
-  }
-
-  // 切回 dev — 复用 application 默认 env
-  appEnvSwitching.value = true
-  try {
-    switchIframeToEnv(null)
-    appEnvMode.value = 'dev'
-    ElMessage.info('已切回开发环境')
-  } finally {
-    appEnvSwitching.value = false
-  }
-}
-
-// 真切 iframe URL — 透传 env_id 给 backend proxy_entry.
-//   env_id=null → 复用 app.platform_env_id (开发环境)
-//   env_id=<prod env id> → 覆盖到 prod env
-function switchIframeToEnv(envId: number | null) {
-  const appId = builderCurrentAppId.value
-  if (!appId) return
-  const token = userStore.token || localStorage.getItem('token') || ''
-  const params: string[] = [`app_id=${appId}`]
-  if (token) params.push(`_auth=${encodeURIComponent(token)}`)
-  if (envId) params.push(`env_id=${envId}`)
-  if (selectedApaasMenuId.value) params.push(`menu_id=${encodeURIComponent(selectedApaasMenuId.value)}`)
-  if (selectedApaasMenuFormId.value) params.push(`form_id=${encodeURIComponent(selectedApaasMenuFormId.value)}`)
-  params.push(`_ts=${Date.now()}`)
-  const nextUrl = `${API_PREFIX}/platform-proxy/entry?${params.join('&')}`
-  // 显式 reload iframe — env 切了, 别复用旧 frame
-  platformIframeUrl.value = nextUrl
-  platformAppUrl.value = nextUrl
-  platformIframeAppId.value = appId
-  platformIframeKey.value += 1
-  platformLoginHint.value = ''
-}
-
-// 监听 builderCurrentAppId 变化, 拉 envs (新应用 mount 时)
-watch(
-  () => builderCurrentAppId.value,
-  (newId, oldId) => {
-    if (newId && newId !== oldId) {
-      appEnvs.value = []
-      appEnvsLoaded.value = false
-      appEnvMode.value = 'dev'  // 切应用时重置回 dev
-    }
-  },
-)
-
-// ────────────────────────────────────────────────────────────
-
 const editAppInfoOpen = ref(false)
 const editAppName = ref('')
 const editAppDesc = ref('')
@@ -3798,7 +3434,7 @@ function onTopCtaMoreCommand(cmd: string) {
     prefillEditAppInfo()
     editAppInfoOpen.value = true
   } else if (cmd === 'open_platform') {
-    if (store.currentApp?.apaas_app_id || platformDirectUrl.value) {
+    if (store.currentApp?.apaas_app_id) {
       openInPlatform()
     } else {
       ElMessage.warning('应用尚未部署，无法跳转平台 UI')
@@ -4990,14 +4626,6 @@ function resetConversationWorkspace() {
   apiLogFilter.value = ''
 
   activeView.value = 'builder'
-  platformIframeUrl.value = ''
-  platformIframeKey.value = 0
-  platformAppUrl.value = ''
-  platformDirectUrl.value = ''
-  platformIframeAppId.value = null
-  platformLoading.value = false
-  platformError.value = ''
-  platformLoginHint.value = ''
 
   docVersions.value = []
   docVersionsLoading.value = false
@@ -7935,7 +7563,6 @@ onMounted(async () => {
       loadedAppCode.value = ''
       try {
         const app = await applicationApi.get(aid) as any
-        platformDirectUrl.value = app.apaas_url || ''
         // 恢复配置
         let configData: any = null
         if (app.config_preview) {
@@ -7950,7 +7577,6 @@ onMounted(async () => {
           store.preview.permissions = data.permissions || []
           setPreviewCustomDevelopment(data)
           store.currentApp = { status: app.status || 'ready', apaas_app_id: app.apaas_app_id }
-          platformDirectUrl.value = app.apaas_url || ''
           parseReady.value = store.preview.models.length > 0 || store.preview.forms.length > 0
           currentAgent.value = 'builder'
         }
@@ -8085,7 +7711,6 @@ onMounted(async () => {
       // 加载应用信息到预览
       try {
         const app = await applicationApi.get(aid) as any
-        platformDirectUrl.value = app.apaas_url || ''
         let configData: any = null
         if (app.config_preview) {
           const data = app.config_preview.data || app.config_preview
@@ -8219,14 +7844,6 @@ watch(() => route.query.app_id, async (newAppId, oldAppId) => {
   latestDocConversationId.value = null
   conversationId.value = null
   activeView.value = 'builder'
-  platformIframeUrl.value = ''
-  platformIframeKey.value = 0
-  platformAppUrl.value = ''
-  platformDirectUrl.value = ''
-  platformIframeAppId.value = null
-  platformLoading.value = false
-  platformError.value = ''
-  platformLoginHint.value = ''
   deployOpen.value = false
 
   try {
@@ -8245,7 +7862,6 @@ watch(() => route.query.app_id, async (newAppId, oldAppId) => {
       store.preview.permissions = data.permissions || []
       setPreviewCustomDevelopment(data)
       store.currentApp = { status: app.status || 'ready', apaas_app_id: app.apaas_app_id }
-      platformDirectUrl.value = app.apaas_url || ''
       parseReady.value = store.preview.models.length > 0 || store.preview.forms.length > 0
       currentAgent.value = 'builder'
     }
@@ -8295,7 +7911,6 @@ watch(() => route.query.view, (nextView) => {
 
 onBeforeUnmount(() => {
   clearPendingChatAttachments()
-  clearPlatformIframeRepairTimer()
   stopAppPolling()
 })
 
@@ -11923,6 +11538,14 @@ html[data-theme="light"] .msg-attachment-chip {
      让 iframe 完全自适应宽度. 平台 form designer 自己负责内部排布. */
   overflow: hidden;
 }
+.lowcode-deeplink-placeholder {
+  align-items: center;
+  justify-content: center;
+  gap: 12px;
+  color: var(--text-3);
+}
+.lcd-ph-icon { font-size: 40px; }
+.lcd-ph-hint { margin: 0; font-size: 13px; }
 .platform-tab-bar {
   display: flex; align-items: center; gap: 4px; padding: 4px 16px;
   border-bottom: 1px solid var(--t-border-subtle);

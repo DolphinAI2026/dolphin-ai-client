@@ -1,4 +1,4 @@
-<!-- FormDesignerPanel.vue — 表单 业务视角 preview + iframe edit (design-v4 R).
+<!-- FormDesignerPanel.vue — 表单 业务视角 preview (只读) + 深链低代码后台 (design-v4 R).
 
   2026-05-27 R: 按 SPEC 重构. 业务视角 + 对话 = 我们做; 手动改 = iframe apaas 原生.
 
@@ -14,9 +14,8 @@
     - vuedraggable + 字段属性面板 + 拖排
     - dirty/pending tracking / 保存 batch (走 iframe 后, apaas 自己存)
     - 字段 model 拉取 logic (preview 只读, 走 components endpoint 拿数据)
-  新:
-    - viewMode === 'edit' 时渲染 <ApaasEmbedIframe>
-      menuType='MODEL', mode='config' (默认), apaas 原生 fn-config 编辑器.
+  2026-06-04: 去内嵌编辑 — 只读 preview + 「打开低代码后台」深链 (OpenLowcodeBackendButton),
+    手动改字段去 apaas 原生编辑器新标签页. 删 viewMode / ApaasEmbedIframe.
 
   Props 跟旧版兼容 (appId/menuId/menuName/formId).
 -->
@@ -32,10 +31,10 @@
     </EmptyState>
 
     <!-- 空态 2: 加载中 (preview mode) -->
-    <SkeletonCard v-else-if="loading && viewMode === 'preview'" :lines="6" />
+    <SkeletonCard v-else-if="loading" :lines="6" />
 
     <!-- 空态 3: 错误 (preview mode) -->
-    <div v-else-if="error && viewMode === 'preview'" class="fbp-state fbp-state-err">
+    <div v-else-if="error" class="fbp-state fbp-state-err">
       <div class="fbp-state-icon">⚠️</div>
       <p>{{ error }}</p>
       <button class="fbp-btn fbp-btn-ghost" @click="reload">重试</button>
@@ -55,42 +54,30 @@
           </p>
         </div>
         <div class="fbp-canvas-actions">
-          <!-- view/edit mode segmented toggle -->
-          <div class="fbp-mode-toggle" role="group" aria-label="切换视图模式">
-            <button
-              class="fbp-mode-btn"
-              :class="{ active: viewMode === 'preview' }"
-              title="业务视角 — 看真表单"
-              @click="viewMode = 'preview'"
-            >
-              <span aria-hidden="true">👁</span> 预览
-            </button>
-            <button
-              class="fbp-mode-btn"
-              :class="{ active: viewMode === 'edit' }"
-              title="跳到 apaas 原生编辑器手动改"
-              @click="viewMode = 'edit'"
-            >
-              <span aria-hidden="true">✏️</span> 编辑
-            </button>
-          </div>
+          <OpenLowcodeBackendButton
+            :app-id="props.appId"
+            menu-type="MODEL"
+            :menu-id="props.menuId || ''"
+            :form-id="props.formId || null"
+            title="在低代码后台编辑此表单"
+          />
           <!-- 2026-05-29: 删「用对话改」「保存」死按钮 — 二者只弹 alert/永久 disabled。
                改字段走常驻右栏「配置助手」或「编辑」模式(apaas 原生编辑器自带保存)。 -->
         </div>
       </header>
 
       <!-- ─── preview mode body ──────────────────────────────────────── -->
-      <div v-if="viewMode === 'preview'" class="fbp-canvas-body fbp-canvas-body-preview">
+      <div class="fbp-canvas-body fbp-canvas-body-preview">
         <div class="fbp-preview-banner">
           <span class="fbp-preview-banner-icon" aria-hidden="true">✨</span>
-          <span>业务视角预览 — 看到的就是最终用户填表样子, 改字段请用配置助手对话, 或切到"编辑"模式进 apaas 原生编辑器手动调.</span>
+          <span>业务视角预览 — 看到的就是最终用户填表样子, 改字段请用配置助手对话, 或点上方「打开低代码后台」进 apaas 原生编辑器手动调.</span>
         </div>
         <div class="fbp-form-preview">
           <!-- 2026-05-27 S: 删 preview-head 内部 title/modelCode/字段数 重复 (header 已有) -->
           <div v-if="fields.length === 0" class="fbp-form-preview-empty">
             <div class="fbp-canvas-empty-icon">🧩</div>
             <p>该表单暂无字段</p>
-            <p class="hint">切到"编辑"模式进 apaas 原生编辑器添加, 或用配置助手对话生成</p>
+            <p class="hint">点上方「打开低代码后台」进 apaas 原生编辑器添加, 或用配置助手对话生成</p>
           </div>
           <form v-else class="fbp-form-preview-grid" @submit.prevent="onPreviewSubmit">
             <div
@@ -124,21 +111,6 @@
           </form>
         </div>
       </div>
-
-      <!-- ─── edit mode body — apaas 原生 iframe ─────────────────────── -->
-      <div v-else class="fbp-canvas-body fbp-canvas-body-edit">
-        <div class="fbp-edit-banner">
-          <span class="fbp-edit-banner-icon" aria-hidden="true">✏️</span>
-          <span>编辑模式 — apaas 平台原生表单编辑器. 改字段后请在 iframe 内点保存, 然后切回预览模式看效果.</span>
-        </div>
-        <ApaasEmbedIframe
-          :app-id="props.appId"
-          :menu-id="props.menuId"
-          :form-id="props.formId"
-          menu-type="MODEL"
-          mode="config"
-        />
-      </div>
     </div>
   </section>
 </template>
@@ -146,8 +118,8 @@
 <script setup lang="ts">
 import { ref, watch, h, defineComponent, type PropType } from 'vue'
 import request, { API_PREFIX } from '@/utils/request'
-import ApaasEmbedIframe from './ApaasEmbedIframe.vue'
 import EmptyState from '@/components/states/EmptyState.vue'
+import OpenLowcodeBackendButton from '@/components/v3/OpenLowcodeBackendButton.vue'
 import SkeletonCard from '@/components/states/SkeletonCard.vue'
 
 /* ────────────────────────────────────────────────────────────────
@@ -743,15 +715,13 @@ const modelCode = ref('')
 const loading = ref(false)
 const error = ref('')
 
-const viewMode = ref<'preview' | 'edit'>('preview')
 const hoveredFieldId = ref<string>('')
 const formValues = ref<Record<string, any>>({})
 
 watch(() => props.formId, () => { formValues.value = {} })
-watch(viewMode, () => { hoveredFieldId.value = '' })
 
 function onPreviewSubmit() {
-  alert('预览模式 — 提交不会真存. 改字段请用配置助手对话, 或切到"编辑"模式手动调.')
+  alert('预览模式 — 提交不会真存. 改字段请用配置助手对话, 或点上方「打开低代码后台」手动调.')
 }
 function onPreviewCancel() {
   formValues.value = {}
@@ -928,36 +898,6 @@ watch(() => [props.appId, props.menuId, props.formId], () => reload(), { immedia
   min-height: 0;
 }
 
-/* ─── view-mode segmented toggle ────────────────────────────── */
-.fbp-mode-toggle {
-  display: inline-flex;
-  background: var(--surface-2);
-  border: 1px solid var(--line);
-  border-radius: 8px;
-  padding: 2px;
-  flex-shrink: 0;
-}
-.fbp-mode-btn {
-  display: inline-flex;
-  align-items: center;
-  gap: 4px;
-  padding: 4px 10px;
-  background: transparent;
-  border: 0;
-  border-radius: 6px;
-  color: var(--text-3);
-  font-size: 12px;
-  cursor: pointer;
-  transition: color 0.15s, background 0.15s;
-  font-family: inherit;
-  white-space: nowrap;
-}
-.fbp-mode-btn:hover { color: var(--text); }
-.fbp-mode-btn.active {
-  background: var(--surface);
-  color: var(--brand);
-  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.04);
-}
 
 /* ─── canvas header ─────────────────────────────────────────── */
 .fbp-canvas-head {
@@ -1021,11 +961,6 @@ watch(() => [props.appId, props.menuId, props.formId], () => reload(), { immedia
   overflow: auto;
   padding: 0;
 }
-.fbp-canvas-body-edit {
-  display: flex;
-  flex-direction: column;
-  background: var(--surface);
-}
 
 /* ─── preview banner ────────────────────────────────────────── */
 .fbp-preview-banner {
@@ -1040,18 +975,6 @@ watch(() => [props.appId, props.menuId, props.formId], () => reload(), { immedia
 }
 .fbp-preview-banner-icon { font-size: 14px; }
 
-.fbp-edit-banner {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  padding: 10px 24px;
-  background: var(--surface-2);
-  color: var(--text-2);
-  font-size: 12px;
-  border-bottom: 1px solid var(--line);
-  flex-shrink: 0;
-}
-.fbp-edit-banner-icon { font-size: 14px; }
 
 /* ─── 真业务表单 (preview mode) ─────────────────────────────── */
 .fbp-form-preview {

@@ -70,10 +70,11 @@ export interface AIChatSessionDetail {
 }
 
 export const aiChatApi = {
-  listSessions(): Promise<{ sessions: AIChatSession[] }> {
-    return request.get<any, { sessions: AIChatSession[] }>('/ai-chat/sessions')
+  listSessions(params?: { app_id?: number }): Promise<{ sessions: AIChatSession[] }> {
+    const qs = params?.app_id != null ? `?app_id=${params.app_id}` : ''
+    return request.get<any, { sessions: AIChatSession[] }>(`/ai-chat/sessions${qs}`)
   },
-  createSession(body: { title?: string; selected_llm_config_id?: number | null; mode?: 'chat' | 'cowork' }): Promise<AIChatSession> {
+  createSession(body: { title?: string; selected_llm_config_id?: number | null; mode?: 'chat' | 'cowork'; app_id?: number | null; section?: string | null }): Promise<AIChatSession> {
     return request.post<any, AIChatSession>('/ai-chat/sessions', body)
   },
   getSession(id: number): Promise<AIChatSessionDetail> {
@@ -109,7 +110,7 @@ export const aiChatApi = {
    */
   async sendMessage(
     sessionId: number,
-    body: { message: string; attachment_ids?: number[] },
+    body: { message: string; attachment_ids?: number[]; section?: string | null; view_context?: string | null },
     options: {
       onEvent: (eventName: string, data: any) => void
       signal?: AbortSignal

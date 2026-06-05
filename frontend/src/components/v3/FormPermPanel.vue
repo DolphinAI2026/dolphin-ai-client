@@ -1,7 +1,7 @@
 <!-- FormPermPanel.vue — 表单级权限矩阵 (设计器第5子tab「权限」).
      角色 × 查看/编辑/删除/新增/导入 + 数据范围。读真 apaas:
      GET /applications/{appId}/forms/{formId}/permissions(list_apaas_form_permissions 归一)。
-     2026-05-29 Phase A: 只读渲染。edit/保存(写回 set_apaas_form_permissions)= Phase B。
+     只读渲染。改权限去低代码后台(点上方「打开低代码后台」深链)或用配置助手对话。
      视觉对齐 LogsPanel 表格 + 复用 states/ 组件 + BaseBadge/BaseTag,全 token。 -->
 <template>
   <section class="fpp" aria-label="表单权限">
@@ -13,6 +13,11 @@
         </p>
         <p v-else-if="loading" class="fpp-stat">加载中…</p>
       </div>
+      <OpenLowcodeBackendButton
+        :app-id="props.appId"
+        :form-id="props.formId"
+        title="在低代码后台编辑表单权限"
+      />
       <button class="fpp-btn fpp-btn-ghost" :disabled="loading" @click="load">
         <span aria-hidden="true">⟲</span> 刷新
       </button>
@@ -78,6 +83,7 @@
 import { ref, watch } from 'vue'
 import request from '@/utils/request'
 import SkeletonCard from '@/components/states/SkeletonCard.vue'
+import OpenLowcodeBackendButton from '@/components/v3/OpenLowcodeBackendButton.vue'
 import EmptyState from '@/components/states/EmptyState.vue'
 import ErrorCard from '@/components/states/ErrorCard.vue'
 import BaseBadge from '@/components/BaseBadge.vue'

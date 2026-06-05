@@ -1,4 +1,10 @@
-<!-- ProcessDesignerPanel.vue — Native 流程设计器面板 (替 apaas process designer iframe).
+<!-- ProcessDesignerPanel.vue — Native 流程设计器面板 (只读自渲拓扑 + 深链低代码后台).
+
+  2026-06-04: 去内嵌编辑 + 去 mock 实例 — 只读流程拓扑 + 「打开低代码后台」深链。
+    删 业务/设计 切换 / ApaasEmbedIframe 内嵌 / ProcessNodePropsPanel / 编辑机器
+    (onSave/onDeploy/serializeGraph) / mock 实例进度(banner / 时间轴 / 节点着色)。
+    留 x6 只读画布 + 节点拓扑; renderDefinition 后自动 onFitContent 适应视口。
+    ⚠️ 以下为历史 changelog, 多数功能已删。
 
   2026-05-27 O2-Process: 业务视角强化 — view-mode 像在看运行实例进度.
     - view (默认): 顶部蓝色 banner "申请单 SQDH-2026-001 提交于 3 分钟前", 左 sidebar / 右属性面板隐藏,
@@ -64,16 +70,6 @@
 
     <!-- 有流程: 显完整设计器 -->
     <template v-else>
-      <!-- O2: 业务视角 banner (仅 view mode 显) -->
-      <div v-if="readOnly && activeProcess" class="pdp-biz-banner" role="status">
-        <span class="pdp-biz-banner-icon">✨</span>
-        <span class="pdp-biz-banner-text">
-          业务视角预览 — 申请单 <strong>{{ mockInstance.instanceCode }}</strong>
-          提交于 <strong>{{ mockInstance.submittedAgo }}</strong>,
-          当前等待 <strong>[{{ mockInstance.currentApprover }}]</strong> 审批.
-        </span>
-      </div>
-
       <!-- 中央顶部 toolbar -->
       <header class="pdp-head">
         <div class="pdp-head-meta">
@@ -85,27 +81,15 @@
           </p>
         </div>
         <div class="pdp-head-actions">
-          <!-- O2: segmented control 业务 / 设计 -->
-          <div class="pdp-mode-segment" role="tablist" aria-label="视角切换">
-            <button
-              class="pdp-mode-segment-btn"
-              :class="{ 'is-active': readOnly }"
-              role="tab"
-              :aria-selected="readOnly"
-              @click="setViewMode(true)"
-              title="业务视角 — 看实例进度"
-            >👁 业务</button>
-            <button
-              class="pdp-mode-segment-btn"
-              :class="{ 'is-active': !readOnly }"
-              role="tab"
-              :aria-selected="!readOnly"
-              @click="setViewMode(false)"
-              title="设计视角 — 加节点 / 连线 / 保存"
-            >✏️ 设计</button>
-          </div>
-          <!-- 适应画布 仅业务视角 (设计模式 center 是 apaas iframe, 原生 canvas 隐藏) -->
-          <button v-if="readOnly" class="pdp-btn pdp-btn-ghost" @click="onFitContent" title="适应画布">
+          <OpenLowcodeBackendButton
+            :app-id="props.appId"
+            menu-type="MODEL"
+            :menu-id="props.menuId || ''"
+            :form-id="activeProcess?.form_id || props.formId || null"
+            title="在低代码后台编辑此流程"
+          />
+          <!-- 适应画布: 渲染后自动适应, 此处供手动重新适应 -->
+          <button class="pdp-btn pdp-btn-ghost" @click="onFitContent" title="适应画布">
             <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 7V3h4M21 7V3h-4M3 17v4h4M21 17v4h-4"/></svg>
             适应
           </button>
@@ -141,19 +125,13 @@
             </div>
           </div>
 
-          <!-- ── 设计模式: 提示走右侧 apaas 原生编辑器 (节点库 / 连线 / 审批人配置都在 iframe 里) ── -->
-          <p v-if="!readOnly" class="pdp-sidebar-foot pdp-sidebar-foot-view">
-            ✏️ 设计模式 — 在右侧 apaas 原生流程编辑器加节点 / 连线 / 配置审批人, 或用 ✨ 对话改流程
-          </p>
-          <!-- view mode: 占位提示 — 切到设计可改流程 -->
-          <p v-else class="pdp-sidebar-foot pdp-sidebar-foot-view">
-            👁 业务视角 — 切到 ✏️ 设计模式后才能改流程
+          <!-- 只读视图 — 改流程去配置助手对话 或 打开低代码后台 -->
+          <p class="pdp-sidebar-foot pdp-sidebar-foot-view">
+            👁 只读视图 — 改流程用 ✨ 配置助手对话, 或点上方「打开低代码后台」进 apaas 原生编辑器
           </p>
         </aside>
 
-        <!-- 中央 x6 canvas — 业务视角原生只读视图.
-             用 v-show (非 v-if) 保持 containerRef 始终在 DOM, 切到设计模式不销毁 x6 graph 实例
-             (设计模式 center 改 apaas iframe, canvas 仅 display:none). -->
+        <!-- 中央 x6 canvas — 只读拓扑视图 (v-show 恒真, 保 containerRef 常驻 DOM). -->
         <div v-show="readOnly" class="pdp-canvas-wrap">
           <div ref="containerRef" class="pdp-canvas"></div>
           <div v-if="!nodeCount && activeProcess" class="pdp-canvas-hint">
@@ -162,7 +140,7 @@
               <strong>"{{ activeProcess.name || activeProcess.code }}"</strong> 尚无流程定义
               <br />
               <span class="pdp-canvas-hint-sub">
-                切到 ✏️ 设计模式用 apaas 原生编辑器搭建流程, 或用配置助手对话快速生成
+                点上方「打开低代码后台」用 apaas 原生编辑器搭建流程, 或用配置助手对话快速生成
               </span>
             </p>
           </div>
@@ -172,66 +150,6 @@
           </div>
         </div>
 
-        <!-- 设计模式 center — apaas 原生流程编辑器 iframe (designer-sub=process → 自动激活 tab-workFlowDesign).
-             menu-id 用 props.menuId; form-id 优先当前选中流程的 form_id, 兜底 props.formId. -->
-        <ApaasEmbedIframe
-          v-if="!readOnly"
-          class="pdp-iframe"
-          :app-id="props.appId"
-          :menu-id="props.menuId || ''"
-          :form-id="activeProcess?.form_id || props.formId || null"
-          menu-type="MODEL"
-          mode="config"
-          designer-sub="process"
-        />
-
-        <!-- O2: 右 — view mode 显历史轨迹时间轴; edit mode 显节点属性面板 -->
-        <aside v-if="readOnly && activeProcess" class="pdp-timeline" aria-label="历史轨迹">
-          <header class="pdp-timeline-head">
-            <h3 class="pdp-timeline-title">进度时间轴</h3>
-            <p class="pdp-timeline-sub">{{ mockInstance.instanceCode }} · 已 {{ mockInstance.submittedAgo }}</p>
-          </header>
-          <ol class="pdp-timeline-list">
-            <li
-              v-for="item in timelineItems"
-              :key="item.nodeId"
-              class="pdp-timeline-item"
-              :class="['is-' + item.status]"
-            >
-              <span class="pdp-timeline-dot" :class="['is-' + item.status]">
-                <span v-if="item.status === 'completed'">✓</span>
-                <span v-else-if="item.status === 'current'">◉</span>
-                <span v-else>○</span>
-              </span>
-              <div class="pdp-timeline-body">
-                <div class="pdp-timeline-row">
-                  <span class="pdp-timeline-name">{{ item.label }}</span>
-                  <span v-if="item.status === 'current'" class="pdp-timeline-tag">← 当前</span>
-                </div>
-                <p class="pdp-timeline-meta">
-                  <template v-if="item.status === 'completed'">
-                    by {{ item.by }} · {{ item.at }}
-                  </template>
-                  <template v-else-if="item.status === 'current'">
-                    等待 <strong>{{ item.by }}</strong>
-                  </template>
-                  <template v-else>
-                    未开始
-                  </template>
-                </p>
-              </div>
-            </li>
-          </ol>
-        </aside>
-
-        <ProcessNodePropsPanel
-          v-else-if="!readOnly && selectedNode"
-          :node="selectedNode"
-          :model-options="modelOptions"
-          @change="onPropsChange"
-          @close="clearSelection"
-          @ai-query="onAiQuery"
-        />
       </div>
     </template>
   </section>
@@ -239,10 +157,9 @@
 
 <script setup lang="ts">
 import { ref, computed, watch, onMounted, onBeforeUnmount, shallowRef, reactive, nextTick } from 'vue'
-import { Graph, type Node as X6Node, type Edge as X6Edge } from '@antv/x6'
+import { Graph } from '@antv/x6'
 import { ElMessage } from 'element-plus'
-import ProcessNodePropsPanel from './ProcessNodePropsPanel.vue'
-import ApaasEmbedIframe from './ApaasEmbedIframe.vue'
+import OpenLowcodeBackendButton from '@/components/v3/OpenLowcodeBackendButton.vue'
 import request from '@/utils/request'
 import {
   type NodeType,
@@ -287,49 +204,8 @@ const processListCollapsed = ref(false)
 const readOnly = ref(true)
 
 /** H2: 保存按钮 loading + 上次本地保存时间 (ISO string). */
-const saving = ref(false)
 const lastSavedAt = ref<string | null>(null)
 
-/** I4: 部署到 apaas 平台 loading + 上次同步时间/版本. */
-const deploying = ref(false)
-const lastDeployedAt = ref<string | null>(null)
-const lastDeployedVersion = ref<number | null>(null)
-
-/** O2: 业务视角 — mock 流程实例 (P2 接真 apaas runtime API 才有).
- *  完整状态: completedNodes (已通过) / currentNodeId (当前) / pendingNodes (未到).
- *  history: 已完成节点的审批轨迹 (谁审 / 何时).
- */
-type NodeProgressStatus = 'completed' | 'current' | 'pending'
-interface MockHistoryEntry {
-  nodeId: string
-  action: string
-  by: string
-  at: string
-}
-interface MockInstanceState {
-  instanceCode: string
-  submittedAgo: string
-  currentNodeId: string | null
-  currentApprover: string
-  completedNodes: string[]
-  pendingNodes: string[]
-  startedAt: string
-  history: MockHistoryEntry[]
-}
-const mockInstance = ref<MockInstanceState>({
-  instanceCode: 'SQDH-2026-001',
-  submittedAgo: '3 分钟前',
-  currentNodeId: null,
-  currentApprover: '张三',
-  completedNodes: [],
-  pendingNodes: [],
-  startedAt: new Date(Date.now() - 3 * 60_000).toISOString(),
-  history: [],
-})
-
-/** mock 假名池 — calcMockInstanceProgress 给每个节点分配审批人. */
-const MOCK_APPROVERS = ['张三', '李四', '王五', '赵六', '孙七', '周八']
-const MOCK_ACTIONS = ['提交申请', '审批通过', '审批通过', '审批通过', '审批通过']
 
 const activeProcess = computed<ProcessItem | null>(() => {
   if (!activeProcessId.value) return null
@@ -345,11 +221,6 @@ const visibleProcessList = computed<ProcessItem[]>(() => {
   return matched.length ? matched : processList.value
 })
 
-const selectedNode = computed<ProcessNode | null>(() => {
-  if (!selectedNodeId.value) return null
-  return nodeStates[selectedNodeId.value] || null
-})
-
 const statsLine = computed(() => {
   const entryN = Object.values(nodeStates).filter(n => getNodeCategoryCode(n.type) === 'entry').length
   const procCount = visibleProcessList.value.length
@@ -360,52 +231,6 @@ const statsLine = computed(() => {
   return `${procLine} · ${entryN} 入口 · ${nodeCount.value} 节点 · ${edgeCount.value} 连线`
 })
 
-/** 待 P2 接 list_apaas_app_models — 当前用 placeholder. */
-const modelOptions = computed(() => [
-  { code: 'apply_form', label: '申请表 (apply_form)' },
-  { code: 'approval_log', label: '审批日志 (approval_log)' },
-])
-
-/** O2: 历史轨迹 timeline 数据 — 按 graph 节点拓扑顺序 (简化 = nodeStates 插入序) +
- *  按 mockInstance 三段状态分类.
- */
-interface TimelineItem {
-  nodeId: string
-  label: string
-  status: NodeProgressStatus
-  by: string
-  at: string
-}
-const timelineItems = computed<TimelineItem[]>(() => {
-  const items: TimelineItem[] = []
-  const m = mockInstance.value
-  const order = orderedNodeIds()
-  for (const id of order) {
-    const st = nodeStates[id]
-    if (!st) continue
-    let status: NodeProgressStatus = 'pending'
-    if (m.completedNodes.includes(id)) status = 'completed'
-    else if (m.currentNodeId === id) status = 'current'
-    // 找 history entry
-    const hist = m.history.find(h => h.nodeId === id)
-    const label = st.label || st.type
-    items.push({
-      nodeId: id,
-      label,
-      status,
-      by: hist?.by || (status === 'current' ? m.currentApprover : ''),
-      at: hist?.at || '',
-    })
-  }
-  return items
-})
-
-/** Order nodes for timeline — 用 entry → end 拓扑 (best-effort)
- *  简化: 取 nodeStates 插入顺序; 后续 P2 可改 edges BFS.
- */
-function orderedNodeIds(): string[] {
-  return Object.keys(nodeStates)
-}
 
 /** 用 cat code 决定 shape, 用 type/cat 决定 color. */
 function buildNodeSpec(type: NodeType, label: string, icon: string): Record<string, unknown> {
@@ -620,172 +445,12 @@ function initGraph() {
   refreshCounts(graph)
 }
 
-/** O2: 显式设视角 — 业务 (read=true) / 设计 (read=false). 自动同步 x6 interacting + 重绘 mock 进度. */
-function setViewMode(viewMode: boolean) {
-  if (!activeProcess.value) {
-    // 允许切但不弹错 — 业务视角即使没流程也无害
-    readOnly.value = viewMode
-    return
-  }
-  readOnly.value = viewMode
-  const g = graphRef.value
-  if (g) {
-    g.setInteracting(() => (viewMode
-      ? { nodeMovable: false, edgeMovable: false, edgeLabelMovable: false, magnetConnectable: false, arrowheadMovable: false }
-      : { nodeMovable: true }
-    ))
-  }
-  // 切到业务视角时重新画一次 mock 进度 (edit 改了节点也能看到最新进度)
-  if (viewMode) {
-    paintInstanceProgress()
-  } else {
-    // 切到设计 — center 改 apaas iframe, 原生 canvas 隐藏.
-    // 清原生节点选中 (否则切换后 ProcessNodePropsPanel 会跟 iframe 同时渲染).
-    selectedNodeId.value = null
-    // 还原默认节点 stroke 颜色 (清 mock 状态视觉, 切回业务视角时干净)
-    clearInstanceProgress()
-  }
-}
-
 /** 空态 "用对话创建流程" CTA — P0 暂时弹示例提示, 后续可 emit 'request-config-chat'
  *  让 ChatPage 把 ConfigAssistant 输入框获焦 + 预填 "为 XX 创建审批流程". */
 function onRequestConfigChat() {
   // eslint-disable-next-line no-console
   console.log('[ProcessDesignerPanel] request-config-chat — appId=', props.appId)
   alert('用右下角配置助手对话创建首个审批流程, 比如:\n• "为借书申请加管理员审批流程"\n• "新建报销审批: 部门主管 → 财务复核 → 总经理审批"\n• "为申请单加一个三级审批流"')
-}
-
-/** O2: 算 mock 实例进度 — 简化策略:
- *  - 总节点数 n, 已完成 = floor((n - 1) / 2) (start + 第 1 个审批)
- *  - currentNodeId = 第 floor((n - 1) / 2) 个 (即 mid 节点)
- *  - pending = mid+1..end
- *  - history: 给每个 completed 节点编 by + at (从 startedAt 倒推 X 分钟)
- *  - currentApprover: 从 MOCK_APPROVERS 取 mid index
- */
-function calcMockInstanceProgress(orderedIds: string[]): void {
-  const n = orderedIds.length
-  if (n === 0) {
-    mockInstance.value.completedNodes = []
-    mockInstance.value.pendingNodes = []
-    mockInstance.value.currentNodeId = null
-    mockInstance.value.history = []
-    return
-  }
-  // 至少 1 个 completed (start), 中间 1 个 current; 其余 pending.
-  const completedCount = Math.max(1, Math.floor((n - 1) / 2))
-  const currentIdx = Math.min(completedCount, n - 1)
-  const completedNodes = orderedIds.slice(0, completedCount)
-  const currentNodeId = orderedIds[currentIdx] || null
-  const pendingNodes = orderedIds.slice(currentIdx + 1)
-
-  // history: 已完成的每个节点编 by + at (从 startedAt 起每隔 +15 min)
-  const startMs = Date.parse(mockInstance.value.startedAt) || Date.now() - 3 * 60_000
-  const history: MockHistoryEntry[] = []
-  for (let i = 0; i < completedNodes.length; i++) {
-    const id = completedNodes[i]
-    const by = MOCK_APPROVERS[i % MOCK_APPROVERS.length]
-    const action = MOCK_ACTIONS[i] || '审批通过'
-    const ts = new Date(startMs + i * 15 * 60_000)
-    const at = `${ts.getHours().toString().padStart(2, '0')}:${ts.getMinutes().toString().padStart(2, '0')}`
-    history.push({ nodeId: id, action, by, at })
-  }
-  // currentApprover: 用 currentIdx 对应名
-  const currentApprover = MOCK_APPROVERS[currentIdx % MOCK_APPROVERS.length] || '张三'
-
-  mockInstance.value.completedNodes = completedNodes
-  mockInstance.value.currentNodeId = currentNodeId
-  mockInstance.value.pendingNodes = pendingNodes
-  mockInstance.value.history = history
-  mockInstance.value.currentApprover = currentApprover
-}
-
-/** O2: 把 mock instance 状态画到 x6 节点 attrs.
- *  completed: 绿色 stroke + 浅绿 fill + ✓ 前缀
- *  current: 蓝色 stroke + brand-soft fill + 脉冲 class
- *  pending: 默认 (灰边 / 浅 fill)
- */
-function paintInstanceProgress(): void {
-  const g = graphRef.value
-  if (!g) return
-  const orderedIds = orderedNodeIds()
-  calcMockInstanceProgress(orderedIds)
-  const m = mockInstance.value
-  for (const id of orderedIds) {
-    const node = g.getCellById(id) as X6Node | null
-    if (!node) continue
-    const st = nodeStates[id]
-    const def = st ? getNodeDef(st.type) : null
-    const baseLabel = st?.label || (def?.label || '')
-    const icon = def?.icon || ''
-    let status: NodeProgressStatus = 'pending'
-    if (m.completedNodes.includes(id)) status = 'completed'
-    else if (m.currentNodeId === id) status = 'current'
-
-    if (status === 'completed') {
-      node.attr('body/stroke', '#16a34a')
-      node.attr('body/strokeWidth', 2.5)
-      node.attr('body/fill', '#dcfce7')
-      node.attr('label/text', `✓  ${icon}  ${baseLabel}`)
-      node.attr('label/fill', '#14532d')
-      node.removeAttrByPath('body/strokeDasharray')
-      // 静态 stroke (no animation)
-    } else if (status === 'current') {
-      node.attr('body/stroke', '#2563eb')
-      node.attr('body/strokeWidth', 3)
-      node.attr('body/fill', '#dbeafe')
-      node.attr('label/text', `${icon}  ${baseLabel}`)
-      node.attr('label/fill', '#1e40af')
-      // 加 CSS class 让 SVG 节点 animate (脉冲)
-      const view = g.findViewByCell(node)
-      if (view) {
-        const el = (view as unknown as { container?: SVGGElement }).container
-        if (el && el.classList) {
-          el.classList.add('pdp-node-current-pulse')
-        }
-      }
-    } else {
-      // pending — 灰
-      node.attr('body/stroke', '#cbd5e1')
-      node.attr('body/strokeWidth', 1.5)
-      node.attr('body/fill', '#f8fafc')
-      node.attr('label/text', `${icon}  ${baseLabel}`)
-      node.attr('label/fill', '#64748b')
-      const view = g.findViewByCell(node)
-      if (view) {
-        const el = (view as unknown as { container?: SVGGElement }).container
-        if (el && el.classList) {
-          el.classList.remove('pdp-node-current-pulse')
-        }
-      }
-    }
-  }
-}
-
-/** O2: 还原节点默认 stroke + fill — 给 setViewMode(false) 切到 edit 时清 mock 视觉. */
-function clearInstanceProgress(): void {
-  const g = graphRef.value
-  if (!g) return
-  for (const id of Object.keys(nodeStates)) {
-    const node = g.getCellById(id) as X6Node | null
-    if (!node) continue
-    const st = nodeStates[id]
-    if (!st) continue
-    const def = getNodeDef(st.type)
-    if (!def) continue
-    const spec = buildNodeSpec(st.type, st.label || def.label, def.icon)
-    const bodyAttrs = ((spec.attrs as Record<string, unknown>)?.body || {}) as Record<string, unknown>
-    const labelAttrs = ((spec.attrs as Record<string, unknown>)?.label || {}) as Record<string, unknown>
-    if (typeof bodyAttrs.fill === 'string') node.attr('body/fill', bodyAttrs.fill)
-    if (typeof bodyAttrs.stroke === 'string') node.attr('body/stroke', bodyAttrs.stroke)
-    if (typeof bodyAttrs.strokeWidth === 'number') node.attr('body/strokeWidth', bodyAttrs.strokeWidth)
-    if (typeof labelAttrs.fill === 'string') node.attr('label/fill', labelAttrs.fill)
-    node.attr('label/text', `${def.icon}  ${st.label || def.label}`)
-    const view = g.findViewByCell(node)
-    if (view) {
-      const el = (view as unknown as { container?: SVGGElement }).container
-      if (el && el.classList) el.classList.remove('pdp-node-current-pulse')
-    }
-  }
 }
 
 async function onSelectProcess(processId: string) {
@@ -875,22 +540,6 @@ async function reloadProcessList() {
   }
 }
 
-function clearSelection() {
-  selectedNodeId.value = null
-}
-
-function onPropsChange() {
-  // 把当前选中 node 的 label 同步回 x6.
-  const g = graphRef.value
-  const sel = selectedNode.value
-  if (!g || !sel) return
-  const node = g.getCellById(sel.id) as X6Node | null
-  if (!node) return
-  const def = getNodeDef(sel.type)
-  const icon = def?.icon || ''
-  ;(node as X6Node).attr('label/text', `${icon}  ${sel.label}`)
-}
-
 function onFitContent() {
   const g = graphRef.value
   if (!g) return
@@ -916,71 +565,8 @@ interface ProcessDefinitionEdgeOut {
   label?: string
   condition?: string
 }
-interface ProcessDefinitionOut {
-  process_name: string
-  nodes: ProcessDefinitionNodeOut[]
-  edges: ProcessDefinitionEdgeOut[]
-}
 
-function serializeGraph(): ProcessDefinitionOut {
-  const g = graphRef.value
-  if (!g) {
-    return { process_name: '', nodes: [], edges: [] }
-  }
-  const nodes: ProcessDefinitionNodeOut[] = []
-  for (const node of g.getNodes()) {
-    const id = node.id
-    const st = nodeStates[id]
-    const data = (node.getData() || {}) as { type?: string }
-    const type = st?.type || data.type || 'unknown'
-    const pos = node.getPosition()
-    // props = nodeStates[id] 里除 id/type/label/x/y/key 之外的所有字段
-    const propsObj: Record<string, unknown> = {}
-    if (st) {
-      for (const [k, v] of Object.entries(st)) {
-        if (['id', 'type', 'label', 'x', 'y', 'key'].includes(k)) continue
-        if (v === undefined) continue
-        propsObj[k] = v as unknown
-      }
-    }
-    nodes.push({
-      id,
-      type,
-      label: st?.label || (typeof node.getAttrByPath('label/text') === 'string'
-        ? String(node.getAttrByPath('label/text') ?? '')
-        : ''),
-      position: { x: pos.x, y: pos.y },
-      props: propsObj,
-    })
-  }
-  const edges: ProcessDefinitionEdgeOut[] = []
-  for (const edge of g.getEdges()) {
-    const sourceId = (edge as X6Edge).getSourceCellId() || ''
-    const targetId = (edge as X6Edge).getTargetCellId() || ''
-    if (!sourceId || !targetId) continue
-    const labelData = edge.getLabels()
-    const labelTxt = Array.isArray(labelData) && labelData.length > 0
-      ? String((labelData[0] as { attrs?: { label?: { text?: string } } })?.attrs?.label?.text ?? '')
-      : ''
-    const edgeData = (edge.getData() || {}) as { condition?: string }
-    edges.push({
-      id: edge.id,
-      source: sourceId,
-      target: targetId,
-      label: labelTxt || undefined,
-      condition: edgeData.condition || undefined,
-    })
-  }
-  return {
-    process_name: activeProcess.value?.name || activeProcess.value?.code || '',
-    nodes,
-    edges,
-  }
-}
-
-/** 2026-05-28: 干净的拓扑自动布局 —— apaas 原始 x/y 错位 (审批节点 x=348 / 开始结束 x=372)
- *  导致连线歪七扭八。业务视角是只读预览, 直接按"入边数=0 的为起点 + BFS 分层"重排:
- *  同层水平居中铺开, 逐层向下 → 线性流变成一条直的竖线, 分支左右对称。 */
+/** 自动布局 — 按入度拓扑分层 (BFS) + 每层水平居中铺开, 返回 nodeId → {x,y}. */
 function computeAutoLayout(
   nodes: { id: string }[],
   edges: { source: string; target: string }[],
@@ -1085,9 +671,9 @@ function renderDefinition(defNodes: ProcessDefinitionNodeOut[], defEdges: Proces
     }
   }
   refreshCounts(g)
-  // O2: 渲染后, 如果当前是业务视角, 立即画 mock instance 进度
+  // 渲染后自动适应视口, 免得图渲在视口外要手点「适应」
   if (readOnly.value) {
-    paintInstanceProgress()
+    void nextTick(() => onFitContent())
   }
 }
 
@@ -1146,122 +732,6 @@ async function tryLoadApaasDetail(processId: string): Promise<boolean> {
     }
     return false
   }
-}
-
-async function onSave() {
-  if (!props.appId || !activeProcess.value) {
-    ElMessage.warning('请先选择左侧流程')
-    return
-  }
-  if (saving.value) return
-  saving.value = true
-  try {
-    const payload = serializeGraph()
-    const resp = await request.post<unknown, {
-      ok: boolean
-      process_id?: string
-      version?: number
-      updated_at?: string
-      message?: string
-      error_code?: string
-    }>(`/applications/${props.appId}/processes/${activeProcess.value.id}/save-definition`, payload)
-    if (resp?.ok) {
-      lastSavedAt.value = resp.updated_at || new Date().toISOString()
-      ElMessage.success(`已保存 (v${resp.version ?? 1})`)
-    } else {
-      ElMessage.error(resp?.message || resp?.error_code || '保存失败')
-    }
-  } catch (e: unknown) {
-    const err = e as { response?: { data?: { detail?: string } }; message?: string }
-    ElMessage.error(err?.response?.data?.detail || err?.message || '网络错误')
-  } finally {
-    saving.value = false
-  }
-}
-
-/** I4: 把本地 definition 真同步到 apaas 平台 — 先保存再调 deploy. */
-async function onDeploy() {
-  if (!props.appId || !activeProcess.value) {
-    ElMessage.warning('请先选择左侧流程')
-    return
-  }
-  if (deploying.value || saving.value) return
-
-  // Step 1: 先保存最新 definition (避免漂移)
-  saving.value = true
-  try {
-    const payload = serializeGraph()
-    const saveResp = await request.post<unknown, {
-      ok: boolean
-      version?: number
-      updated_at?: string
-      message?: string
-      error_code?: string
-    }>(`/applications/${props.appId}/processes/${activeProcess.value.id}/save-definition`, payload)
-    if (!saveResp?.ok) {
-      ElMessage.error(`保存失败: ${saveResp?.message || saveResp?.error_code || '未知错误'}`)
-      return
-    }
-    lastSavedAt.value = saveResp.updated_at || new Date().toISOString()
-  } catch (e: unknown) {
-    const err = e as { response?: { data?: { detail?: string } }; message?: string }
-    ElMessage.error(`保存失败: ${err?.response?.data?.detail || err?.message || '网络错误'}`)
-    return
-  } finally {
-    saving.value = false
-  }
-
-  // Step 2: 调 deploy endpoint
-  deploying.value = true
-  try {
-    const resp = await request.post<unknown, {
-      ok: boolean
-      deployed_version?: number
-      deployed_at?: string
-      apaas_app_id?: string
-      menu_id?: string
-      node_count?: number
-      edge_count?: number
-      unsupported_nodes?: Array<{ id: string; type: string; label?: string; reason?: string }>
-      apaas_response_code?: string
-      message?: string
-      error_code?: string
-    }>(`/applications/${props.appId}/processes/${activeProcess.value.id}/deploy`)
-
-    if (resp?.ok) {
-      lastDeployedAt.value = resp.deployed_at || new Date().toISOString()
-      lastDeployedVersion.value = resp.deployed_version ?? null
-      const unsupportedCount = (resp.unsupported_nodes || []).length
-      if (unsupportedCount > 0) {
-        const typesSet = new Set((resp.unsupported_nodes || []).map(n => n.type).filter(Boolean))
-        ElMessage.warning({
-          message: `已部署 v${resp.deployed_version ?? 1} (${resp.node_count ?? 0} 节点), 但 ${unsupportedCount} 类节点暂未支持: ${Array.from(typesSet).join(', ')} (P6 待实现)`,
-          duration: 7000,
-        })
-      } else {
-        ElMessage.success(`已部署到 apaas 平台 (v${resp.deployed_version ?? 1}, ${resp.node_count ?? 0} 节点)`)
-      }
-    } else {
-      const code = resp?.error_code || 'DEPLOY_FAILED'
-      if (code === 'APP_NOT_DEPLOYED') {
-        ElMessage.error('应用尚未部署到 apaas 平台 — 先部署应用再部署流程')
-      } else if (code === 'PROCESS_DEFINITION_NOT_FOUND') {
-        ElMessage.error('本地无该流程定义 — 请先保存再部署')
-      } else {
-        ElMessage.error(resp?.message || code)
-      }
-    }
-  } catch (e: unknown) {
-    const err = e as { response?: { data?: { detail?: string; message?: string } }; message?: string }
-    ElMessage.error(err?.response?.data?.detail || err?.response?.data?.message || err?.message || '部署网络错误')
-  } finally {
-    deploying.value = false
-  }
-}
-
-function onAiQuery(query: string) {
-  // P2 接 ConfigAssistant — 当前 alert 占位
-  alert(`AI 提问占位 — P2 转给 ConfigAssistant:\n${query}`)
 }
 
 onMounted(async () => {
@@ -1555,8 +1025,6 @@ watch(
   text-overflow: ellipsis;
 }
 
-/* O2: 老 .pdp-mode-badge 移除 — segmented control 代替 (新 .pdp-mode-segment 定义在文件末尾 O2 块). */
-
 .pdp-cat-list {
   flex: 1;
   display: flex;
@@ -1665,12 +1133,6 @@ watch(
   background: var(--surface-2);
   position: relative;
 }
-/* 设计模式 center — apaas 原生编辑器 iframe 占满中央区 (sidebar 右侧 flex:1). */
-.pdp-iframe {
-  flex: 1;
-  min-width: 0;
-  min-height: 0;
-}
 .pdp-canvas {
   width: 100%;
   height: 100%;
@@ -1706,85 +1168,6 @@ watch(
   line-height: 1.55;
 }
 
-/* ════════════════════════════════════════════════════════════
-   O2: 业务视角 — banner / segmented control / timeline / 节点脉冲
-   ════════════════════════════════════════════════════════════ */
-
-/* ─── 顶部业务视角 banner ─── */
-.pdp-biz-banner {
-  display: flex;
-  align-items: center;
-  gap: 12px;
-  padding: 12px 24px;
-  background: var(--brand-soft, #eff6ff);
-  color: var(--brand, #2563eb);
-  border-bottom: 1px solid var(--brand, #2563eb);
-  flex-shrink: 0;
-  font-size: 13px;
-  line-height: 1.45;
-}
-.pdp-biz-banner-icon {
-  font-size: 16px;
-  flex-shrink: 0;
-}
-.pdp-biz-banner-text {
-  flex: 1;
-  color: var(--text);
-}
-.pdp-biz-banner-text strong {
-  color: var(--brand, #2563eb);
-  font-weight: 600;
-}
-.pdp-biz-banner-cta {
-  flex-shrink: 0;
-  height: 30px;
-  padding: 0 14px;
-  border-radius: 15px;
-  background: var(--brand, #2563eb);
-  color: #fff;
-  border: none;
-  cursor: pointer;
-  font-family: inherit;
-  font-size: 12.5px;
-  font-weight: 500;
-  transition: background 0.12s, transform 0.12s;
-}
-.pdp-biz-banner-cta:hover {
-  background: var(--brand-hover, #1d4ed8);
-  transform: translateY(-1px);
-}
-
-/* ─── 顶部 segmented control ─── */
-.pdp-mode-segment {
-  display: inline-flex;
-  background: var(--surface-2);
-  border: 1px solid var(--line);
-  border-radius: 7px;
-  padding: 2px;
-  margin-right: 4px;
-}
-.pdp-mode-segment-btn {
-  height: 26px;
-  padding: 0 12px;
-  background: transparent;
-  border: none;
-  border-radius: 5px;
-  cursor: pointer;
-  font-family: inherit;
-  font-size: 12px;
-  font-weight: 500;
-  color: var(--text-3);
-  transition: background 0.12s, color 0.12s;
-}
-.pdp-mode-segment-btn:hover:not(.is-active) {
-  color: var(--text);
-}
-.pdp-mode-segment-btn.is-active {
-  background: var(--surface);
-  color: var(--brand);
-  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.06);
-}
-
 /* ─── view mode sidebar 占位文案 ─── */
 .pdp-sidebar-foot-view {
   margin-top: 12px;
@@ -1797,136 +1180,4 @@ watch(
   text-align: center;
 }
 
-/* ─── 右: 历史轨迹时间轴 panel ─── */
-.pdp-timeline {
-  width: 280px;
-  flex-shrink: 0;
-  border-left: 1px solid var(--line);
-  background: var(--surface);
-  display: flex;
-  flex-direction: column;
-  overflow: hidden;
-}
-.pdp-timeline-head {
-  padding: 16px 18px 12px;
-  border-bottom: 1px solid var(--line);
-  flex-shrink: 0;
-}
-.pdp-timeline-title {
-  margin: 0 0 4px;
-  font-size: 14px;
-  font-weight: 600;
-  color: var(--text);
-}
-.pdp-timeline-sub {
-  margin: 0;
-  font-size: 11.5px;
-  color: var(--text-4);
-}
-.pdp-timeline-list {
-  list-style: none;
-  margin: 0;
-  padding: 16px 18px 24px;
-  flex: 1;
-  overflow-y: auto;
-  position: relative;
-}
-/* 左竖线 — 从第一个 dot 到最后一个 dot */
-.pdp-timeline-list::before {
-  content: '';
-  position: absolute;
-  left: 26px;
-  top: 28px;
-  bottom: 36px;
-  width: 1px;
-  background: var(--line);
-}
-.pdp-timeline-item {
-  position: relative;
-  padding: 0 0 18px 28px;
-  min-height: 36px;
-}
-.pdp-timeline-item:last-child {
-  padding-bottom: 0;
-}
-.pdp-timeline-dot {
-  position: absolute;
-  left: 0;
-  top: 2px;
-  width: 18px;
-  height: 18px;
-  border-radius: 50%;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  font-size: 11px;
-  font-weight: 700;
-  color: #fff;
-  background: var(--line-strong, #cbd5e1);
-  z-index: 1;
-}
-.pdp-timeline-dot.is-completed {
-  background: #16a34a;
-}
-.pdp-timeline-dot.is-current {
-  background: var(--brand, #2563eb);
-  box-shadow: 0 0 0 4px var(--brand-soft, #dbeafe);
-  animation: pdp-pulse-dot 1.5s ease-in-out infinite;
-}
-.pdp-timeline-dot.is-pending {
-  background: var(--surface);
-  border: 1.5px solid var(--line-strong, #cbd5e1);
-  color: var(--text-4);
-}
-.pdp-timeline-body {
-  font-size: 12.5px;
-  line-height: 1.5;
-}
-.pdp-timeline-row {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-}
-.pdp-timeline-name {
-  font-weight: 500;
-  color: var(--text);
-}
-.pdp-timeline-item.is-pending .pdp-timeline-name {
-  color: var(--text-3);
-  font-weight: 400;
-}
-.pdp-timeline-tag {
-  display: inline-flex;
-  align-items: center;
-  padding: 1px 8px;
-  border-radius: 10px;
-  font-size: 10.5px;
-  font-weight: 500;
-  background: var(--brand-soft, #dbeafe);
-  color: var(--brand, #2563eb);
-}
-.pdp-timeline-meta {
-  margin: 3px 0 0;
-  font-size: 11.5px;
-  color: var(--text-4);
-}
-.pdp-timeline-meta strong {
-  color: var(--brand, #2563eb);
-}
-
-/* ─── x6 节点脉冲动画 (current 节点 SVG container) ─── */
-@keyframes pdp-node-current-pulse {
-  0%   { filter: drop-shadow(0 0 0 rgba(37, 99, 235, 0.4)); }
-  50%  { filter: drop-shadow(0 0 6px rgba(37, 99, 235, 0.7)); }
-  100% { filter: drop-shadow(0 0 0 rgba(37, 99, 235, 0.4)); }
-}
-:deep(.pdp-node-current-pulse) {
-  animation: pdp-node-current-pulse 1.6s ease-in-out infinite;
-}
-
-@keyframes pdp-pulse-dot {
-  0%   { box-shadow: 0 0 0 4px var(--brand-soft, #dbeafe); }
-  50%  { box-shadow: 0 0 0 7px rgba(37, 99, 235, 0.18); }
-  100% { box-shadow: 0 0 0 4px var(--brand-soft, #dbeafe); }
-}
 </style>

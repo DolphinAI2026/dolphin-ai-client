@@ -696,7 +696,7 @@ defineExpose({
 .ac-text :deep(table th) {
   background: rgba(116, 128, 171, 0.06);
   font-weight: 600;
-  color: rgba(31, 41, 55, 0.95);
+  color: inherit;  /* 继承 .ac-text 主题色 — 写死深色会在暗色模式黑字黑底看不见 */
 }
 .ac-text :deep(table tr:nth-child(even) td) {
   background: rgba(116, 128, 171, 0.025);
