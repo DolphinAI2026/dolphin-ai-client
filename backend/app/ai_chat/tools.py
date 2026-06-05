@@ -1380,6 +1380,36 @@ TOOL_HANDLERS = {
 # 原 4 个 base 工具的 schemas（保持原有 TOOL_SCHEMAS 引用名兼容老代码）
 BASE_TOOL_SCHEMAS = TOOL_SCHEMAS
 
+# ── 延迟工具拆分: CORE vs DEFERRED ──────────────────────────────────────────────
+# 核心集: 恒在每轮 tools 数组，不延迟。= base 本地工具 + search_tools + 数据驱动的高频 apaas 读。
+# search_tools 本体在后续 Task 2 添加到 TOOL_SCHEMAS；这里先把名字加入集合，不影响当前行为。
+_BASE_LOCAL_NAMES: set[str] = {s["function"]["name"] for s in TOOL_SCHEMAS}
+_CORE_HOT_READS: set[str] = {
+    "list_apaas_app_models",
+    "list_apaas_app_menus",
+    "get_apaas_app_overview",
+    "list_apaas_app_dicts",
+    "list_apaas_app_roles",
+}
+CORE_TOOL_NAMES: set[str] = _BASE_LOCAL_NAMES | {"search_tools"} | _CORE_HOT_READS
+
+
+def split_core_deferred(all_schemas: list[dict]) -> tuple[list[dict], dict[str, dict]]:
+    """把全集拆成 (core_schemas 列表, deferred_by_name 字典)。
+
+    core 进每轮 tools，deferred 只列清单（名称 + 描述），按需加载完整 schema。
+    """
+    core: list[dict] = []
+    deferred: dict[str, dict] = {}
+    for s in all_schemas:
+        name = s.get("function", {}).get("name", "")
+        if name in CORE_TOOL_NAMES:
+            core.append(s)
+        else:
+            deferred[name] = s
+    return core, deferred
+
+
 # ── 锁定 app 上下文注入 (Task A4, 2026-06-04) ──────────────────────────────────
 # 当 AIChatSession.app_id 非空时，把内部 app_id → (env_id, apaas_app_id) 解析出来，
 # 并强制注入到声明了这两参数的 apaas 工具 —— 覆盖 LLM 给的值。
