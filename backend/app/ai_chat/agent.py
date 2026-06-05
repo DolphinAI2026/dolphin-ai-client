@@ -40,7 +40,7 @@ from app.models import (
     AIChatArtifact,
     LLMConfig,
 )
-from app.ai_chat.tools import TOOL_SCHEMAS, execute_tool, get_all_tool_schemas
+from app.ai_chat.tools import TOOL_SCHEMAS, execute_tool, get_all_tool_schemas, split_core_deferred, build_deferred_manifest
 from app.observability import recorder
 
 logger = logging.getLogger(__name__)
@@ -712,11 +712,12 @@ async def _run_agent_inner(
             if not str(t.get("function", {}).get("name", "")).startswith("browser_")
         ]
     # 延迟工具:核心集恒在；长尾只在 system prompt 列清单，按需 search_tools 激活。
-    from app.ai_chat.tools import split_core_deferred, build_deferred_manifest
     core_schemas, deferred_by_name = split_core_deferred(all_schemas)
     _manifest = build_deferred_manifest(deferred_by_name)
     if _manifest and messages and isinstance(messages[0], dict) and messages[0].get("role") == "system":
         messages[0]["content"] = (messages[0].get("content") or "") + _manifest
+    elif _manifest:
+        logger.warning("deferred manifest skipped: messages[0] is not a system message")
     active_tool_names: set[str] = await _reconstruct_active_tools(db, session)
 
     for turn in range(MAX_TURNS):

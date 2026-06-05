@@ -1515,7 +1515,14 @@ async def _handle_search_tools(args: dict, session, db) -> str:
 
     handler 签名与其他 TOOL_HANDLERS 一致: (args, session, db) -> str (JSON)
     """
-    _core, deferred = split_core_deferred(_LAST_TOOL_SCHEMAS or [])
+    universe = _LAST_TOOL_SCHEMAS or []
+    # 与 run_agent 的工具集保持一致:锁定 app 时浏览器工具被排除,search 也不该"激活"它们
+    if session is not None and getattr(session, "app_id", None):
+        universe = [
+            t for t in universe
+            if not str(t.get("function", {}).get("name", "")).startswith("browser_")
+        ]
+    _core, deferred = split_core_deferred(universe)
     names = search_deferred_tools(args.get("query", ""), deferred)
     if not names:
         return json.dumps(
