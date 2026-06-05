@@ -2561,8 +2561,10 @@ onMounted(async () => {
   border: 1px solid var(--ac-border-strong);
   color: var(--ac-text-mute);
   padding: 5px 12px;
+  min-height: 32px;
   border-radius: 6px;
   font-size: 12.5px;
+  font-weight: 500;
   cursor: pointer;
   display: inline-flex;
   align-items: center;
@@ -2609,7 +2611,7 @@ onMounted(async () => {
   cursor: pointer;
   transition: all 0.15s;
   min-height: 32px;
-  font-weight: 700;
+  font-weight: 500;
   display: inline-flex;
   align-items: center;
   justify-content: center;
