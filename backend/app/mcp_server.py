@@ -576,12 +576,39 @@ async def get_application(
         spec_version = (spec or {}).get("version")
     except Exception as exc:
         logger.warning("get_application spec-markdown 拉取失败: %s", exc)
+    # 生成进度 — 只在还没完成时拉(status=completed 不用查, 省 apaas 调用)。
+    # 让轮询的 agent 看到"表单 4/9"这种真实进度, 知道 generating=没完、别 publish/宣布完成。
+    status_val = (meta or {}).get("status")
+    gen_progress = None
+    if status_val in ("generating", "in_progress", "draft"):
+        try:
+            st = await _api_call("GET", f"/applications/{app_id}/steps/status", tenant_id=tid, user_id=uid)
+            steps = (st or {}).get("steps") or []
+
+            def _cnt(prefix: str) -> str:
+                tot = [s for s in steps if str(s.get("key", "")).startswith(prefix)]
+                done = [s for s in tot if s.get("status") == "completed"]
+                return f"{len(done)}/{len(tot)}"
+
+            done_all = sum(1 for s in steps if s.get("status") == "completed")
+            gen_progress = {
+                "app_status": (st or {}).get("app_status") or status_val,
+                "steps": f"{done_all}/{len(steps)}",
+                "roles": _cnt("create_role:"),
+                "dicts": _cnt("create_dict:"),
+                "models": _cnt("create_model:"),
+                "forms": _cnt("create_form:"),
+                "hint": "status 还是 generating/in_progress → 后台还在生成, 别 publish、别说已完成, 继续轮询直到 status='completed'。",
+            }
+        except Exception as exc:
+            logger.warning("get_application 取生成进度失败 app_id=%s: %s", app_id, exc)
     return {
         "ok": True,
         "app_id": (meta or {}).get("id"),
         "app_name": (meta or {}).get("app_name"),
         "app_code": (meta or {}).get("app_code"),
-        "status": (meta or {}).get("status"),
+        "status": status_val,
+        "generation_progress": gen_progress,
         "current_doc_version": (meta or {}).get("current_doc_version"),
         "platform_env_id": (meta or {}).get("platform_env_id"),
         "apaas_app_id": (meta or {}).get("apaas_app_id"),
@@ -757,10 +784,26 @@ async def publish_application(
 ) -> dict:
     """把应用上线：同步当前配置到底层 aPaaS 平台，让真实用户可访问。
 
-    app_id 可省略（=0）：自动用当前编辑应用。"""
+    app_id 可省略（=0）：自动用当前编辑应用。
+
+    ⚠️ 前置：应用必须 status='completed'。deploy 起的后台生成(模型/表单/权限)没跑完时
+    (status='generating'/'in_progress')，本工具会被后端硬门拒(error_code=STILL_GENERATING)；
+    这时**别**跟用户说"已上线/已完成"，继续用 get_application 轮询 status 到 'completed' 再调本工具。"""
     tid, uid = _resolve_identity(tenant_id, user_id)
     app_id, _ = _resolve_app_id(app_id, uid)
-    res = await _api_call("POST", f"/applications/{app_id}/publish", tenant_id=tid, user_id=uid)
+    try:
+        res = await _api_call("POST", f"/applications/{app_id}/publish", tenant_id=tid, user_id=uid)
+    except RuntimeError as exc:
+        msg = str(exc)
+        if "(409)" in msg or "还在生成中" in msg:
+            return {
+                "ok": False,
+                "error_code": "STILL_GENERATING",
+                "app_id": app_id,
+                "message": ("应用还在后台生成中(模型/表单/权限尚未全部就绪)，不能上线。"
+                            "用 get_application 轮询 status 到 'completed' 再 publish；这期间别跟用户说已上线。"),
+            }
+        return {"ok": False, "error_code": "PUBLISH_FAILED", "app_id": app_id, "message": msg[:500]}
     return {"ok": True, "app_id": app_id, "result": res}
 
 
@@ -1445,13 +1488,17 @@ async def deploy_application(
             "app_id": app_id,
             "status": "in_progress",
             "summary": (
-                f"部署已启动并在后台继续运行（generate 流 >{int(FAST_RETURN_TIMEOUT)}s 还在跑）。"
-                f"下一步：等 30-60 秒后用 `get_application(app_id={app_id})` 查 apaas_app_id 是否写入。"
+                f"部署已启动，后台正在生成模型/表单/权限（generate 流 >{int(FAST_RETURN_TIMEOUT)}s 还在跑）。"
+                f"⚠️ 这**还没生成完**。下一步：轮询 `get_application(app_id={app_id})` 直到 status='completed'"
+                f"（不是 'generating'）才算就绪；大应用(多表单)可能要几分钟。status=generating 期间**别 publish、"
+                f"也别跟用户说'已完成/已上线'**（提前 publish 会被后端拒：STILL_GENERATING）。"
             ),
             "polling_hint": {
                 "next_tool": "get_application",
                 "next_args": {"app_id": app_id},
-                "wait_seconds": 30,
+                "wait_seconds": 20,
+                "until": "status == 'completed'",
+                "note": "别用 apaas_app_id 是否写入来判断完成——它生成早期就有了；只认 status='completed'。",
             },
         }
 

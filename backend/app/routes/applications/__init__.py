@@ -1529,6 +1529,14 @@ async def publish_application(
         raise HTTPException(status_code=404, detail="应用不存在")
     if not app.apaas_app_id:
         raise HTTPException(status_code=400, detail="应用尚未部署，不能上线")
+    # 生成未完成不能上线 —— deploy 起的后台生成(模型/表单/权限)可能还在跑(apaas_app_id
+    # 在生成早期就写入, 不能当"已就绪"的依据)。此时 publish 会发出半成品版本(表单缺失)。
+    # 硬门要求 status=completed 再发, 同时挡住 agent 提前宣布"已上线"和 UI 提前发布。
+    if app.status in ("generating", "in_progress"):
+        raise HTTPException(
+            status_code=409,
+            detail="应用还在生成中（模型/表单/权限尚未全部就绪），请等生成完成（status=completed）后再上线。可轮询 get_application / 步骤状态查进度。",
+        )
 
     permissions = await _require_application_permission(ctx, db, app, Action.EDIT)
     if not permissions.get("publish", False):
