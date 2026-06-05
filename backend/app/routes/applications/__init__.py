@@ -3728,12 +3728,16 @@ async def get_application_apaas_menus(
 
     # 2026-05-25: 过滤掉平台自动注入的系统菜单 (流程待办 / 我发起的 / 流程授权 etc)
     # 这些是 runtime 用户看的, 不是 AI Builder 配置目标. 用户/AI 不需要在 sidebar 看到.
+    # 2026-06-05: 加 TASK_CENTER（异步任务管理）—— 平台自动注入的系统菜单, 不是配置目标。
     _SYSTEM_AUTO_MENU_TYPES = {
         "TODO", "TO_CHECK", "MY_SUBMIT", "MY_PARTICIPATE",
-        "TODO_MANAGE", "PROC_AUTH", "PROC_FORWARD",
+        "TODO_MANAGE", "PROC_AUTH", "PROC_FORWARD", "TASK_CENTER",
     }
-    flat = [_normalize_menu(m) for m in menus_raw if isinstance(m, dict)]
-    flat = [m for m in flat if m["menu_type"].upper() not in _SYSTEM_AUTO_MENU_TYPES]
+    flat_all = [_normalize_menu(m) for m in menus_raw if isinstance(m, dict)]
+    # 哪些分组在原始数据里本来有子菜单 —— 用于下面只剔「被系统过滤掏空」的分组,
+    # 不误伤用户刚建、本来就空的分组。
+    _parents_with_children = {m["parent_menu_id"] for m in flat_all if m.get("parent_menu_id")}
+    flat = [m for m in flat_all if m["menu_type"].upper() not in _SYSTEM_AUTO_MENU_TYPES]
 
     # 嵌套 — 按 parent_menu_id 构 tree (无 parent 的放根)
     by_id: dict[str, dict] = {m["menu_id"]: {**m, "children": []} for m in flat if m["menu_id"]}
@@ -3751,6 +3755,18 @@ async def get_application_apaas_menus(
             if it.get("children"):
                 _sort(it["children"])
     _sort(roots)
+
+    # 剔掉「被系统菜单过滤掏空」的分组(如只装了 异步任务管理 的「系统管理」组)。
+    # 只剔本来有子菜单、过滤后变空的分组; 用户新建的本来就空的分组保留(不在 _parents_with_children)。
+    def _prune_emptied_groups(items: list[dict]) -> list[dict]:
+        out: list[dict] = []
+        for it in items:
+            it["children"] = _prune_emptied_groups(it.get("children") or [])
+            if it.get("is_group") and not it["children"] and it["menu_id"] in _parents_with_children:
+                continue
+            out.append(it)
+        return out
+    roots = _prune_emptied_groups(roots)
 
     return {
         "ok": True,

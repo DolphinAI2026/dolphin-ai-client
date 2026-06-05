@@ -1609,7 +1609,7 @@ async def get_all_tool_schemas() -> list[dict]:
     builder ∪ coding ∪ config (~85), 跟 config_chat 同套路. base 本地工具不在 registry, 永远保留.
     """
     from app.ai_chat.mcp_bridge import get_tool_schemas_openai
-    from app.tool_registry import tools_for_agent
+    from app.tool_registry import tools_for_agent, load as _load_registry
     try:
         mcp_schemas = await get_tool_schemas_openai()
     except Exception as e:
@@ -1625,6 +1625,15 @@ async def get_all_tool_schemas() -> list[dict]:
             | set(tools_for_agent("coding"))
             | set(tools_for_agent("config"))
         )
+        # 2026-06-05: 业务事件功能暂停 —— 生成的自定义节点 Python 不符平台 definesys 规范、
+        # 建出来的事件不可执行（详 docs/research-apaas-event-python-spec-2026-06-05.md）。
+        # 不让助手用任何业务事件 MCP 工具，免得它继续建坏事件。修好生成后删掉这段即恢复。
+        _paused = {
+            name for name, meta in _load_registry()["tools"].items()
+            if (meta.get("category") == "business_event")
+        }
+        _paused.add("list_apaas_form_menus_for_event")  # 只为建事件服务的 helper, 一并停
+        allow -= _paused
         mcp_schemas = [
             s for s in mcp_schemas
             if s.get("function", {}).get("name") in allow
