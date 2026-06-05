@@ -166,6 +166,230 @@ SINGLE_SYSTEM_PROMPT = f"""你是得帆云低代码平台的功能设计专家�
 
 
 # ================================================================
+# 下拉↔字典 调和兜底 (治大文档分块解析丢下拉字典引用)
+# ================================================================
+
+_SELECT_COMPONENT_TYPES = ("FORM_SELECT_INPUT_SINGLE", "FORM_SELECT_INPUT")
+_SELECT_FIELD_TYPES = ("下拉单选", "下拉多选")
+
+
+def _is_dropdown_component(c: dict) -> bool:
+    ct = str(c.get("componentType") or c.get("type") or "")
+    return ct in _SELECT_COMPONENT_TYPES or ct in _SELECT_FIELD_TYPES
+
+
+def _component_dict_ref(c: dict) -> str:
+    return str(c.get("dict") or c.get("dictCode") or "").strip()
+
+
+def _dict_code_set(data: dict) -> set:
+    return {str(d.get("code")).strip() for d in (data.get("dicts") or []) if d.get("code")}
+
+
+def _reconcile_norm(s) -> str:
+    return str(s or "").strip().lower().replace(" ", "")
+
+
+def find_unlinked_dropdown_components(data: dict) -> List[dict]:
+    """找出 dict 缺失 / 不解析到已定义字典的下拉组件。
+
+    每项: {key, form_code, form_name, label, model_field, comp(原对象引用)}。
+    注意: app5 实测 下拉性挂在【表单组件】componentType=FORM_SELECT_* 上, 模型字段反而是
+    单行输入, 所以这里以组件为准, 不只看 model field。
+    """
+    if not isinstance(data, dict):
+        return []
+    codes = _dict_code_set(data)
+    out: List[dict] = []
+    for fo in (data.get("forms") or []):
+        if not isinstance(fo, dict):
+            continue
+        for c in (fo.get("components") or fo.get("fields") or []):
+            if not isinstance(c, dict) or not _is_dropdown_component(c):
+                continue
+            ref = _component_dict_ref(c)
+            if ref and ref in codes:
+                continue  # 已绑且能解析 — 不动
+            mf = str(c.get("modelField") or "")
+            label = c.get("label") or c.get("name") or (mf.split(".")[-1] if mf else "") or c.get("code") or ""
+            out.append({
+                "key": mf or f"{fo.get('code')}::{label}",
+                "form_code": fo.get("code"),
+                "form_name": fo.get("name"),
+                "label": label,
+                "model_field": mf,
+                "comp": c,
+            })
+    return out
+
+
+def _set_component_dict(comp: dict, code: str, data: dict, model_field: str) -> None:
+    """给下拉组件绑 dict, 并同步回模型字段(field.dict + 类型修正为下拉), 保持一致。"""
+    comp["dict"] = code
+    comp["dictCode"] = code
+    if model_field and "." in model_field:
+        mcode, fcode = model_field.split(".", 1)
+        for m in (data.get("models") or []):
+            if str(m.get("code")) == mcode:
+                for f in (m.get("fields") or []):
+                    if str(f.get("code")) == fcode:
+                        f["dict"] = code
+                        if str(f.get("type") or "") not in _SELECT_FIELD_TYPES:
+                            f["type"] = "下拉单选"
+                        break
+                break
+
+
+def reconcile_dropdown_dicts(data: dict, *, relink_fn=None) -> dict:
+    """解析后兜底: 把无字典引用的下拉组件连回已定义字典。
+
+    ① 确定性: 组件 label 精确(或规范化后)== 某字典名 → 直连。
+    ② 残余: 若给了 relink_fn(语义匹配, 通常是 LLM), 调它拿 {key: dict_code} 映射, 只接受
+       解析到已定义字典的映射(防乱绑)。
+    ③ 仍连不上的列进 unlinked, 交上层标记(不在这里阻断生成)。
+
+    返回 {linked_by_name, linked_by_relink, unlinked:[{label,model_field,form_code}]}。
+    """
+    result = {"linked_by_name": 0, "linked_by_relink": 0, "unlinked": []}
+    if not isinstance(data, dict):
+        return result
+    dicts = data.get("dicts") or []
+    unlinked = find_unlinked_dropdown_components(data)
+    if not unlinked:
+        return result
+
+    name_to_code: Dict[str, str] = {}
+    for d in dicts:
+        code = str(d.get("code") or "").strip()
+        name = str(d.get("name") or "").strip()
+        if code and name:
+            name_to_code.setdefault(name, code)
+            name_to_code.setdefault(_reconcile_norm(name), code)
+
+    still: List[dict] = []
+    for u in unlinked:
+        code = name_to_code.get(u["label"]) or name_to_code.get(_reconcile_norm(u["label"]))
+        if code:
+            _set_component_dict(u["comp"], code, data, u["model_field"])
+            result["linked_by_name"] += 1
+        else:
+            still.append(u)
+
+    if still and relink_fn is not None and dicts:
+        valid = _dict_code_set(data)
+        try:
+            mapping = relink_fn(still, dicts) or {}
+        except Exception as e:  # relink 失败不阻断, 残余照常列 unlinked
+            logger.warning(f"下拉字典 relink_fn 失败, 跳过: {e}")
+            mapping = {}
+        remaining: List[dict] = []
+        for u in still:
+            code = mapping.get(u["key"])
+            if code and str(code).strip() in valid:
+                _set_component_dict(u["comp"], str(code).strip(), data, u["model_field"])
+                result["linked_by_relink"] += 1
+            else:
+                remaining.append(u)
+        still = remaining
+
+    result["unlinked"] = [
+        {"label": u["label"], "model_field": u["model_field"], "form_code": u["form_code"]}
+        for u in still
+    ]
+    return result
+
+
+def downgrade_unbindable_dropdowns(data: dict) -> List[dict]:
+    """把仍连不上字典的下拉组件降级成【单行输入】(用户决策 A: 消除空的 选项1/2/3 下拉)。
+
+    根因: 大文档生成时, 文档里本是「单行输入」、无选项的字段, 被 LLM 按"状态/类型→下拉"规则
+    误升级成下拉, 既无字典也无选项可补 → 渲染成 选项1/2/3 垃圾。无字典可绑就回归单行输入,
+    合文档原意。同步把模型字段类型也改回单行输入 + 清 dict。返回被降级列表。
+    """
+    downgraded: List[dict] = []
+    for u in find_unlinked_dropdown_components(data):
+        c = u["comp"]
+        c["componentType"] = "FORM_TEXT_INPUT"
+        for k in ("dict", "dictCode", "chooseOptions", "dictionaryChooseOptions", "source", "chooseType", "multicolor"):
+            c.pop(k, None)
+        mf = u["model_field"]
+        if mf and "." in mf:
+            mcode, fcode = mf.split(".", 1)
+            for m in (data.get("models") or []):
+                if str(m.get("code")) == mcode:
+                    for f in (m.get("fields") or []):
+                        if str(f.get("code")) == fcode:
+                            if str(f.get("type") or "") in _SELECT_FIELD_TYPES:
+                                f["type"] = "单行输入"
+                            f.pop("dict", None)
+                            break
+                    break
+        downgraded.append({"label": u["label"], "model_field": mf, "form_code": u["form_code"]})
+    return downgraded
+
+
+async def _relink_dropdowns_via_llm(unlinked: List[dict], dicts: List[dict], llm_cfg: Optional[Dict] = None) -> Dict[str, str]:
+    """语义重连线: 给 LLM 一批无字典下拉 + 一批已定义字典, 返回 {下拉key: 字典code}。
+
+    确定性名字匹配兜不住的(如「标准分类」↔「标准类型」)交给它。保守: 没把握就别放进结果。
+    """
+    if not unlinked or not dicts:
+        return {}
+    client = LLMClient(api_key=llm_cfg.get("api_key"), base_url=llm_cfg.get("base_url"), model=llm_cfg.get("model")) if llm_cfg else LLMClient()
+    fields_desc = [{"key": u["key"], "field": u["label"], "form": u.get("form_name")} for u in unlinked]
+    dicts_desc = []
+    for d in dicts:
+        opts = [str(o.get("label") or o.get("valueName") or o.get("name") or o.get("value") or "")
+                for o in (d.get("options") or d.get("items") or [])]
+        dicts_desc.append({"code": d.get("code"), "name": d.get("name"), "options": [o for o in opts if o][:8]})
+    sys = ("你是低代码配置专家。给定一批下拉字段和一批已定义的数据字典, 把每个下拉字段匹配到"
+           "语义最贴切的那个字典。**只在有把握时匹配**, 没有语义贴切的就不要放进结果(宁缺毋滥, "
+           "错绑比不绑更糟)。dict code 必须从给定字典列表里选, 不要编。只返回一个 JSON 对象 "
+           "{下拉字段key: 字典code}, 不要任何解释/markdown 包裹。")
+    user = (f"下拉字段(key 是稳定标识, 原样回填):\n{json.dumps(fields_desc, ensure_ascii=False)}\n\n"
+            f"已定义字典:\n{json.dumps(dicts_desc, ensure_ascii=False)}\n\n返回 JSON:")
+    try:
+        r = await client.chat_completion(
+            [{"role": "system", "content": sys}, {"role": "user", "content": user}],
+            max_tokens=2048, timeout=60.0, temperature=0.0,
+        )
+        content = r["choices"][0]["message"]["content"]
+        parsed = _extract_json(content) or {}
+        if not isinstance(parsed, dict):
+            return {}
+        return {str(k): str(v) for k, v in parsed.items() if k and v}
+    except Exception as e:
+        logger.warning(f"[dropdown-dict] LLM relink 调用失败, 跳过: {e}")
+        return {}
+
+
+async def _reconcile_dropdown_dicts_with_llm(data: dict, llm_cfg: Optional[Dict] = None) -> None:
+    """流水线用: ①确定性名字匹配 ②残余 LLM 语义重连线 ③仍连不上的一律降级为单行输入。
+
+    ③ 是用户决策 A —— 无字典可绑(字典本就没生成 / 文档无选项)的下拉, 与其渲染成空的
+    选项1/2/3, 不如回归单行输入(合文档原意)。降级即使在"压根没字典"时也要跑。
+    """
+    if not isinstance(data, dict) or not data.get("forms"):
+        return
+    if data.get("dicts"):
+        # ① 确定性: label==字典名
+        reconcile_dropdown_dicts(data)
+        # ② 残余 → LLM 语义重连线
+        still = find_unlinked_dropdown_components(data)
+        if still:
+            mapping = await _relink_dropdowns_via_llm(still, data["dicts"], llm_cfg)
+            if mapping:
+                reconcile_dropdown_dicts(data, relink_fn=lambda _u, _d: mapping)
+    # ③ 仍连不上的一律降级单行输入(消除空下拉)
+    downgraded = downgrade_unbindable_dropdowns(data)
+    if downgraded:
+        logger.warning(
+            "[dropdown-dict] %d 个下拉无字典可绑, 已降级为单行输入(消除空下拉): %s",
+            len(downgraded), [d["label"] for d in downgraded][:10],
+        )
+
+
+# ================================================================
 # 公开接口
 # ================================================================
 
@@ -256,6 +480,14 @@ async def parse_doc_with_ai(
         if (not isinstance(forms, list) or len(forms) == 0) and isinstance(models, list) and models:
             data["forms"] = derive_default_forms(models)
             logger.info("AI 解析结果未提供 forms，已根据 %s 个模型自动派生 %s 个默认表单", len(models), len(data["forms"]))
+
+    # 下拉↔字典 调和兜底 —— 治大文档分块解析丢字典引用(详见
+    # docs/research-0to1-dropdown-dict-rootcause-2026-06-05.md)。forms 备好后做, 这样
+    # derive_default_forms 派生的组件也一起兜。失败不阻断解析。
+    try:
+        await _reconcile_dropdown_dicts_with_llm(data, llm_cfg)
+    except Exception as e:
+        logger.warning(f"[dropdown-dict] 调和兜底异常(不阻断): {e}")
 
     summary = (
         f"解析完成！{len(data.get('forms', []))} 个表单、"
