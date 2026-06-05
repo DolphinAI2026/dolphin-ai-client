@@ -110,3 +110,21 @@ def test_search_tools_in_base_schemas():
     from app.ai_chat.tools import TOOL_SCHEMAS
     names = {s["function"]["name"] for s in TOOL_SCHEMAS}
     assert "search_tools" in names
+
+
+def test_per_turn_tools_rebuild_only_includes_active_deferred():
+    from app.ai_chat.tools import split_core_deferred
+    schemas = [
+        {"type": "function", "function": {"name": "read_attachment", "description": "d", "parameters": {}}},      # core
+        {"type": "function", "function": {"name": "search_tools", "description": "d", "parameters": {}}},          # core
+        {"type": "function", "function": {"name": "list_apaas_app_models", "description": "d", "parameters": {}}}, # core (hot read)
+        {"type": "function", "function": {"name": "update_apaas_model_field", "description": "d", "parameters": {}}}, # deferred
+        {"type": "function", "function": {"name": "add_apaas_dict_option", "description": "d", "parameters": {}}},  # deferred
+    ]
+    core, deferred = split_core_deferred(schemas)
+    active = {"update_apaas_model_field"}  # only one activated
+    tools = core + [deferred[n] for n in active if n in deferred]
+    names = {t["function"]["name"] for t in tools}
+    assert "read_attachment" in names and "search_tools" in names and "list_apaas_app_models" in names
+    assert "update_apaas_model_field" in names          # activated deferred → included
+    assert "add_apaas_dict_option" not in names         # not activated → excluded

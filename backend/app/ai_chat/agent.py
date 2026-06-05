@@ -704,14 +704,20 @@ async def _run_agent_inner(
 
     # 每个 session 的第一轮拉一次合并 schemas（base 4 + MCP bridge 注入的 N 个）
     # 这是 lazy 设计 — backend 启动时 MCP 可能还没 ready，所以放在 turn loop 外的第一次调用
-    tool_schemas = await get_all_tool_schemas()
+    all_schemas = await get_all_tool_schemas()
     if getattr(session, "app_id", None):
-        # 嵌入式应用面板里浏览器工具（browser_*）没有可用 tab，必失败 —— 锁定 app 时直接不暴露，
-        # 让 agent 用 list_apaas_* 等 MCP 工具读应用结构，不浪费一轮去调注定失败的浏览器快照。
-        tool_schemas = [
-            t for t in tool_schemas
+        # 嵌入式应用面板里浏览器工具没有可用 tab，必失败 —— 锁定 app 时直接不暴露。
+        all_schemas = [
+            t for t in all_schemas
             if not str(t.get("function", {}).get("name", "")).startswith("browser_")
         ]
+    # 延迟工具:核心集恒在；长尾只在 system prompt 列清单，按需 search_tools 激活。
+    from app.ai_chat.tools import split_core_deferred, build_deferred_manifest
+    core_schemas, deferred_by_name = split_core_deferred(all_schemas)
+    _manifest = build_deferred_manifest(deferred_by_name)
+    if _manifest and messages and isinstance(messages[0], dict) and messages[0].get("role") == "system":
+        messages[0]["content"] = (messages[0].get("content") or "") + _manifest
+    active_tool_names: set[str] = await _reconstruct_active_tools(db, session)
 
     for turn in range(MAX_TURNS):
         if abort_event.is_set():
@@ -741,6 +747,9 @@ async def _run_agent_inner(
             _delta_buf_len = 0
             _delta_last_flush = time.monotonic()
             return _sse("assistant_delta", {"text": text})
+
+        # 每轮重算 tool_schemas：core 恒在 + 本轮已激活的延迟工具
+        tool_schemas = core_schemas + [deferred_by_name[n] for n in active_tool_names if n in deferred_by_name]
 
         try:
             async for chunk in _call_llm_stream(cfg, messages, tool_schemas, abort_event):
@@ -960,6 +969,8 @@ async def _run_agent_inner(
                 result_text = await execute_tool(tool_name, args, session, db)
                 tc_db.status = "success"
                 tc_db.result_text = result_text
+                if tool_name == "search_tools":
+                    active_tool_names.update(_parse_activated(result_text))
             except Exception as e:
                 tc_db.status = "error"
                 tc_db.error_message = str(e)
