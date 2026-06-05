@@ -26,7 +26,7 @@
               <template #reference>
                 <button type="button" class="app-name-clickable" :title="`点击编辑应用信息 — ${builderAppDisplayName || '新建应用'}`">
                   {{ builderAppDisplayName || '新建应用' }}
-                  <span aria-hidden="true" class="app-name-edit-hint">✎</span>
+                  <span aria-hidden="true" class="app-name-edit-hint"><AppIcon name="pencil" :size="12" /></span>
                 </button>
               </template>
               <div class="edit-app-info-form">
@@ -264,7 +264,7 @@
             v-else-if="topTab === 'design' && existingAppId && !selectedApaasMenuId"
             class="platform-iframe-container mdsh-empty"
           >
-            <div class="mdsh-empty-icon">👈</div>
+            <div class="mdsh-empty-icon"><AppIcon name="point-left" :size="32" /></div>
             <h3>选择左侧菜单开始设计</h3>
             <p>从左侧应用菜单列表点击一个菜单, 这里显示该菜单的<strong>表单 / 列表 / 流程 / 页面</strong>设计.</p>
           </div>
@@ -311,7 +311,7 @@
           />
           <!-- 非原生 tab（业务事件/字段权限/菜单可见性等）: 去内嵌, 占位 + 深链低代码后台 -->
           <div v-else class="platform-iframe-container lowcode-deeplink-placeholder">
-            <div class="lcd-ph-icon" aria-hidden="true">🔧</div>
+            <div class="lcd-ph-icon" aria-hidden="true"><AppIcon name="wrench" :size="32" /></div>
             <p class="lcd-ph-hint">这块配置在低代码后台编辑。</p>
             <OpenLowcodeBackendButton v-if="existingAppId" :app-id="existingAppId" />
           </div>
@@ -457,13 +457,13 @@
         <div v-if="isUpdateExecutionMode" class="deploy-groups">
           <div v-for="group in updateExecutionGroups" :key="group.key" class="dg" :class="{ done: group.allDone, current: group.hasCurrent, err: group.hasError }">
             <div class="dg-hd">
-              <span class="dg-icon">{{ group.icon }}</span>
+              <span class="dg-icon"><AppIcon :name="group.icon" :size="14" /></span>
               <span class="dg-name">{{ group.title }}</span>
               <span class="dg-badge" :class="group.allDone ? 'done' : group.hasError ? 'err' : ''">{{ group.doneCount }}/{{ group.items.length }}</span>
             </div>
             <div v-for="item in group.items" :key="item.id" class="ds" :class="{ [item.status]: true, current: item.status === 'current' }">
               <div class="ds-dot" :class="item.status === 'current' ? 'pulse' : item.status">
-                <span v-if="item.status === 'completed'">✓</span>
+                <span v-if="item.status === 'completed'"><AppIcon name="check" :size="12" /></span>
                 <span v-else-if="item.status === 'error'">!</span>
               </div>
               <div class="ds-body">
@@ -476,7 +476,7 @@
         <div v-else-if="isUpdateReviewMode" class="deploy-groups update-review-groups">
           <div v-for="group in updateReviewGroups" :key="group.title" class="dg update">
             <div class="dg-hd">
-              <span class="dg-icon">{{ group.icon }}</span>
+              <span class="dg-icon"><AppIcon :name="group.icon" :size="14" /></span>
               <span class="dg-name">{{ group.title }}</span>
               <span class="dg-badge">{{ group.items.length }}</span>
             </div>
@@ -493,13 +493,13 @@
         <div v-else-if="deployOpen && !isUpdateExecutionMode" class="deploy-groups">
           <div v-for="group in deployGroups" :key="group.title" class="dg" :class="{ done: group.allDone, err: group.hasError, current: group.steps.some(step => step.key === deployExecuting) }">
             <div class="dg-hd">
-              <span class="dg-icon">{{ group.icon }}</span>
+              <span class="dg-icon"><AppIcon :name="group.icon" :size="14" /></span>
               <span class="dg-name">{{ group.title }}</span>
               <span class="dg-badge" :class="group.allDone ? 'done' : group.hasError ? 'err' : ''">{{ group.doneCount }}/{{ group.steps.length }}</span>
             </div>
             <div v-for="step in group.steps" :key="step.key" class="ds" :class="{ [step.status]: true, current: deployExecuting === step.key }">
               <div class="ds-dot" :class="deployExecuting === step.key ? 'pulse' : step.status">
-                <span v-if="step.status === 'completed'">✓</span>
+                <span v-if="step.status === 'completed'"><AppIcon name="check" :size="12" /></span>
                 <span v-else-if="step.status === 'error'">!</span>
               </div>
               <div class="ds-body">
@@ -510,7 +510,7 @@
                 <span v-if="deployExecuting === step.key" class="ds-spin"></span>
                 <button v-else-if="step.status === 'error'" class="ds-btn retry" @click="deployRedo(step.key)">重试</button>
                 <button v-else-if="step.status !== 'completed' && step.deps_met" class="ds-btn run" @click="deployExec(step.key)">执行</button>
-                <span v-else-if="!step.deps_met && step.status !== 'completed'" class="ds-lock">🔒</span>
+                <span v-else-if="!step.deps_met && step.status !== 'completed'" class="ds-lock"><AppIcon name="lock" :size="12" /></span>
               </div>
             </div>
           </div>
@@ -657,7 +657,7 @@
               <td class="log-url" :title="log.url">{{ log.url?.split('/').pop() }}</td>
               <td class="log-status" :class="log.success ? 'ok' : 'fail'">{{ log.response_status }}</td>
               <td class="log-ms">{{ log.elapsed_ms }}ms</td>
-              <td class="log-result">{{ log.success ? '✓' : log.error_message?.slice(0, 40) }}</td>
+              <td class="log-result"><template v-if="log.success"><AppIcon name="check" :size="13" /></template><template v-else>{{ log.error_message?.slice(0, 40) }}</template></td>
             </tr>
           </tbody>
         </table>
@@ -716,7 +716,7 @@
     <!-- 2026-05-19 image #29: 部署执行中时右侧改成 progress 面板（用户："执行过程放右侧"） -->
     <aside v-if="!embedMode && isDeploying" class="deploy-progress-side">
       <div class="dps-head">
-        <div class="dps-title">🚀 部署进行中</div>
+        <div class="dps-title"><AppIcon name="rocket" :size="15" /> 部署进行中</div>
         <div class="dps-subtitle">{{ store.preview.appName || builderAppDisplayName }}</div>
       </div>
       <div class="dps-steps">
@@ -727,8 +727,8 @@
           :class="['status-' + step.status, { current: step.key === deployExecuting }]"
         >
           <span class="dps-step-icon">
-            <span v-if="step.status === 'completed'">✓</span>
-            <span v-else-if="step.status === 'error'">✗</span>
+            <span v-if="step.status === 'completed'"><AppIcon name="check" :size="12" /></span>
+            <span v-else-if="step.status === 'error'"><AppIcon name="x" :size="12" /></span>
             <span v-else-if="step.status === 'running' || step.key === deployExecuting" class="dps-spin">○</span>
             <span v-else>·</span>
           </span>
@@ -838,6 +838,7 @@ import {
 } from '@/utils/app'
 import ApaasMenuSidebar from '@/components/ApaasMenuSidebar.vue'
 import SectionNav from '@/components/v2/SectionNav.vue'
+import AppIcon from '@/components/common/AppIcon.vue'
 import ExtensionSectionPanel from '@/components/v2/ExtensionSectionPanel.vue'
 import SectionContentList from '@/components/v2/SectionContentList.vue'
 import AppConfigSubNav from '@/components/v3/AppConfigSubNav.vue'
@@ -1857,10 +1858,10 @@ const updateFormDiffItems = computed(() =>
 
 
 const updateReviewGroups = computed(() => [
-  { title: '角色', icon: '👥', items: updateRoleDiffItems.value },
-  { title: '数据字典', icon: '📖', items: updateDictDiffItems.value },
-  { title: '数据模型', icon: '🗃', items: updateModelDiffItems.value },
-  { title: '表单配置', icon: '📋', items: updateFormDiffItems.value },
+  { title: '角色', icon: 'users', items: updateRoleDiffItems.value },
+  { title: '数据字典', icon: 'book-open', items: updateDictDiffItems.value },
+  { title: '数据模型', icon: 'database', items: updateModelDiffItems.value },
+  { title: '表单配置', icon: 'clipboard', items: updateFormDiffItems.value },
 ].filter(group => group.items.length > 0))
 
 const BUILDER_WELCOME_MESSAGE_ID = -10001
@@ -1969,7 +1970,7 @@ const buildUserChatAttachmentContent = (
             <span class="chat-inline-upload-name">${escapeHtml(attachment.file.name)}</span>
           </div>
           <div class="chat-inline-upload-file-row">
-            <span class="chat-inline-upload-file-icon">📄</span>
+            <span class="chat-inline-upload-file-icon"><AppIcon name="file" :size="14" /></span>
             <span class="chat-inline-upload-file-tip">发送后会带着这个附件一起参与对话</span>
           </div>
         </div>`
@@ -3843,10 +3844,10 @@ interface UpdateReviewBannerItem {
 const updateReviewChangeSummary = computed<UpdateReviewBannerItem[]>(() => {
   if (!isUpdateReviewMode.value) return []
   return [
-    { icon: '👥', label: '角色', count: updateRoleDiffItems.value.length },
-    { icon: '📖', label: '字典', count: updateDictDiffItems.value.length },
-    { icon: '🗃', label: '模型', count: updateModelDiffItems.value.length },
-    { icon: '📋', label: '表单', count: updateFormDiffItems.value.length },
+    { icon: 'users', label: '角色', count: updateRoleDiffItems.value.length },
+    { icon: 'book-open', label: '字典', count: updateDictDiffItems.value.length },
+    { icon: 'database', label: '模型', count: updateModelDiffItems.value.length },
+    { icon: 'clipboard', label: '表单', count: updateFormDiffItems.value.length },
   ].filter(item => item.count > 0)
 })
 const docDiffStats = computed(() => ({
@@ -4641,12 +4642,12 @@ function resetPreviewForNewParse() {
 
 const deployGroups = computed(() => {
   const defs = [
-    { title: '初始化', icon: '🚀', test: (s: DeployStep) => s.key === 'create_app' },
-    { title: '角色', icon: '👥', test: (s: DeployStep) => s.key.startsWith('create_role:') || s.key === 'create_roles_dicts' },
-    { title: '数据字典', icon: '📖', test: (s: DeployStep) => s.key.startsWith('create_dict:') },
-    { title: '数据模型', icon: '🗃', test: (s: DeployStep) => s.key.startsWith('create_model:') },
-    { title: '表单配置', icon: '📋', test: (s: DeployStep) => s.key.startsWith('create_form:') },
-    { title: '权限配置', icon: '🔐', test: (s: DeployStep) => s.key === 'configure_permissions' },
+    { title: '初始化', icon: 'rocket', test: (s: DeployStep) => s.key === 'create_app' },
+    { title: '角色', icon: 'users', test: (s: DeployStep) => s.key.startsWith('create_role:') || s.key === 'create_roles_dicts' },
+    { title: '数据字典', icon: 'book-open', test: (s: DeployStep) => s.key.startsWith('create_dict:') },
+    { title: '数据模型', icon: 'database', test: (s: DeployStep) => s.key.startsWith('create_model:') },
+    { title: '表单配置', icon: 'clipboard', test: (s: DeployStep) => s.key.startsWith('create_form:') },
+    { title: '权限配置', icon: 'lock', test: (s: DeployStep) => s.key === 'configure_permissions' },
   ]
   return defs.map(d => {
     const ss = deploySteps.value.filter(d.test)
@@ -4656,12 +4657,12 @@ const deployGroups = computed(() => {
 
 const updateExecutionGroups = computed(() => {
   const defs = [
-    { key: 'roles', title: '角色', icon: '👥' },
-    { key: 'dicts', title: '数据字典', icon: '📖' },
-    { key: 'models', title: '数据模型', icon: '🗃' },
-    { key: 'forms', title: '表单', icon: '📋' },
-    { key: 'permissions', title: '权限', icon: '🔐' },
-    { key: 'other', title: '其他', icon: '🧩' },
+    { key: 'roles', title: '角色', icon: 'users' },
+    { key: 'dicts', title: '数据字典', icon: 'book-open' },
+    { key: 'models', title: '数据模型', icon: 'database' },
+    { key: 'forms', title: '表单', icon: 'clipboard' },
+    { key: 'permissions', title: '权限', icon: 'lock' },
+    { key: 'other', title: '其他', icon: 'puzzle' },
   ]
   return defs.map((def) => {
     const items = updateExecutionItems.value.filter(item => item.groupKey === def.key)

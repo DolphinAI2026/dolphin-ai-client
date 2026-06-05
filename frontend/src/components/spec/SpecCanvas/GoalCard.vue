@@ -2,6 +2,7 @@
 import { useSpecStore } from '@/stores/spec'
 import type { Goal } from '@/types/spec'
 import { ElMessage } from 'element-plus'
+import AppIcon from '@/components/common/AppIcon.vue'
 
 const props = defineProps<{ goal: Goal }>()
 const spec = useSpecStore()
@@ -29,7 +30,7 @@ void spec
   <article class="spec-card goal-card" :class="{ confirmed: goal.confirmed }">
     <header class="spec-card-header">
       <h3 class="spec-card-title">{{ goal.title }}</h3>
-      <span v-if="goal.confirmed" class="spec-card-status">✓ 已采纳</span>
+      <span v-if="goal.confirmed" class="spec-card-status"><AppIcon name="check" :size="14" /> 已采纳</span>
     </header>
     <p class="spec-card-desc"><strong>业务问题：</strong>{{ goal.business_problem }}</p>
     <p class="spec-card-desc"><strong>系统简介：</strong>{{ goal.summary }}</p>

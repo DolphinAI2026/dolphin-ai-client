@@ -56,9 +56,15 @@
         <div class="tm-form-row">
           <el-form-item label="图标" class="tm-form-half">
             <el-select v-model="form.icon" placeholder="选择图标">
-              <el-option label="👥 用户" value="users" />
-              <el-option label="🔧 工具" value="wrench" />
-              <el-option label="📋 剪贴板" value="clipboard" />
+              <el-option label="用户" value="users">
+                <span class="tm-icon-option"><AppIcon name="users" :size="14" /> 用户</span>
+              </el-option>
+              <el-option label="工具" value="wrench">
+                <span class="tm-icon-option"><AppIcon name="wrench" :size="14" /> 工具</span>
+              </el-option>
+              <el-option label="剪贴板" value="clipboard">
+                <span class="tm-icon-option"><AppIcon name="clipboard" :size="14" /> 剪贴板</span>
+              </el-option>
             </el-select>
           </el-form-item>
           <el-form-item label="分类" class="tm-form-half">
@@ -91,6 +97,7 @@ import { ref, watch } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { handleError } from '@/utils/errorHandler'
 import request from '@/utils/request'
+import AppIcon from '@/components/common/AppIcon.vue'
 
 interface TemplateItem {
   code: string
@@ -270,6 +277,11 @@ const handleUpload = async (e: Event) => {
 }
 .tm-form-half {
   flex: 1;
+}
+.tm-icon-option {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
 }
 .tm-editor :deep(.el-textarea__inner) {
   font-family: 'Fira Code', 'Consolas', monospace;

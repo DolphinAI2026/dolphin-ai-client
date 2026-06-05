@@ -17,7 +17,7 @@
       </div>
       <div class="lp-head-actions">
         <button class="lp-btn lp-btn-ghost" :disabled="loading" @click="() => reload()">
-          <span class="lp-btn-icon">⟲</span> 刷新
+          <span class="lp-btn-icon"><AppIcon name="refresh" :size="13" /></span> 刷新
         </button>
         <label class="lp-toggle">
           <input v-model="autoRefresh" type="checkbox" />
@@ -45,11 +45,11 @@
       <div class="lp-spinner" /> 加载中…
     </div>
     <div v-else-if="error" class="lp-state lp-state-err">
-      ⚠️ {{ error }}
+      <AppIcon name="warning" :size="16" /> {{ error }}
       <button class="lp-btn lp-btn-ghost" @click="() => reload()">重试</button>
     </div>
     <div v-else-if="items.length === 0" class="lp-state">
-      <div class="lp-state-icon">📋</div>
+      <div class="lp-state-icon"><AppIcon name="clipboard" :size="36" /></div>
       <p>暂无{{ currentSubLabel }}记录</p>
       <p class="hint">用配置助手或部署应用触发动作后会有日志</p>
     </div>
@@ -99,7 +99,7 @@
         <div class="lp-modal">
           <div class="lp-modal-head">
             <h3>{{ detailItem.type }} 详情</h3>
-            <button class="lp-modal-close" @click="detailItem = null">×</button>
+            <button class="lp-modal-close" @click="detailItem = null"><AppIcon name="x" :size="22" /></button>
           </div>
           <div class="lp-modal-body">
             <div class="lp-modal-row"><label>时间</label><div>{{ detailItem.timestamp }}</div></div>
@@ -120,6 +120,7 @@
 
 <script setup lang="ts">
 import { ref, computed, watch, onMounted, onBeforeUnmount } from 'vue'
+import AppIcon from '@/components/common/AppIcon.vue'
 import request from '@/utils/request'
 
 interface LogItem {

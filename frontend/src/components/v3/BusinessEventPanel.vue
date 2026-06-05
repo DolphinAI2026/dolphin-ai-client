@@ -47,7 +47,7 @@
 
     <!-- empty -->
     <div v-else-if="!events.length" class="bep-empty">
-      <div class="bep-empty-icon">⚡</div>
+      <div class="bep-empty-icon"><AppIcon name="zap" :size="40" /></div>
       <h3>暂无业务事件</h3>
       <p>该应用还没有配置业务事件. 需要时请进低代码后台添加, 或用配置助手对话.</p>
     </div>
@@ -126,6 +126,7 @@ import { applicationApi } from '@/api/application'
 import type { BusinessEventItem } from '@/api/application'
 import SkeletonCard from '@/components/states/SkeletonCard.vue'
 import ErrorCard from '@/components/states/ErrorCard.vue'
+import AppIcon from '@/components/common/AppIcon.vue'
 
 const props = defineProps<{
   appId: number

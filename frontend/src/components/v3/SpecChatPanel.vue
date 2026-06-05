@@ -35,7 +35,7 @@
     <!-- ── 1. header ─────────────────────────────────────────────────── -->
     <div class="spc-head">
       <div class="spc-title">
-        <span class="spc-title-ic" aria-hidden="true">✨</span>
+        <span class="spc-title-ic" aria-hidden="true"><AppIcon name="sparkles" :size="14" /></span>
         <span>用对话改 SPEC</span>
       </div>
       <div class="spc-ctx">
@@ -51,7 +51,7 @@
     <div class="spc-body" ref="bodyEl">
       <!-- 空态 -->
       <div v-if="messages.length === 0" class="spc-empty">
-        <div class="spc-empty-ic" aria-hidden="true">💬</div>
+        <div class="spc-empty-ic" aria-hidden="true"><AppIcon name="message" :size="32" /></div>
         <h4>用自然语言改这章</h4>
         <p>例如 "加字段 '备注'" / "加角色 '财务专员'" / "加字典选项 '已批准'".</p>
         <p class="spc-empty-hint">AI 把改动写入 SPEC 草稿; 你审核后点上方"确认并生成"才会真同步 apaas.</p>
@@ -76,7 +76,7 @@
         <!-- AI 气泡的 diff card (来自 spec_change 事件) -->
         <div v-if="msg.role === 'ai' && msg.spec_change" class="spc-diff-card">
           <div class="spc-diff-card-head">
-            <span aria-hidden="true">📌</span>
+            <AppIcon name="pin" :size="12" />
             <span>{{ describeSection(msg.spec_change.section_type, msg.spec_change.section_key) }}</span>
             <span v-if="msg.spec_change.mcp_tool" class="spc-mcp-chip">{{ msg.spec_change.mcp_tool }}</span>
           </div>
@@ -94,19 +94,19 @@
               class="spc-btn-mini spc-btn-mini-primary"
               type="button"
               @click="onAcceptChange(idx)"
-            >✓ 应用到草稿</button>
+            ><AppIcon name="check" :size="14" /> 应用到草稿</button>
             <button
               class="spc-btn-mini"
               type="button"
               @click="onDismissChange(idx)"
-            >✗ 弃用</button>
+            ><AppIcon name="x" :size="14" /> 弃用</button>
           </div>
           <div v-else-if="msg.spec_change.accepted" class="spc-accept-status accepted">
-            <span aria-hidden="true">✓</span>
+            <AppIcon name="check" :size="12" />
             已写入草稿 (draft +1)
           </div>
           <div v-else class="spc-accept-status dismissed">
-            <span aria-hidden="true">✗</span>
+            <AppIcon name="x" :size="12" />
             已弃用 — backend 已落库 (MVP), 真回滚 P2 接入
           </div>
         </div>
@@ -114,9 +114,9 @@
 
       <!-- error 横幅 -->
       <div v-if="errorBanner" class="spc-error-banner">
-        <span aria-hidden="true">⚠️</span>
+        <AppIcon name="warning" :size="13" />
         <span>{{ errorBanner }}</span>
-        <button class="spc-error-close" type="button" @click="errorBanner = ''">×</button>
+        <button class="spc-error-close" type="button" @click="errorBanner = ''"><AppIcon name="x" :size="14" /></button>
       </div>
     </div>
 
@@ -154,6 +154,7 @@
 import { ref, computed, nextTick, onBeforeUnmount, watch } from 'vue'
 import { API_PREFIX } from '@/utils/request'
 import UnifiedChatComposer from '@/components/common/UnifiedChatComposer.vue'
+import AppIcon from '@/components/common/AppIcon.vue'
 import type { UnifiedChatAttachment } from '@/components/common/chatComposer'
 
 // ── props / emits ───────────────────────────────────────────────────────

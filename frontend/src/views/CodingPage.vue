@@ -206,9 +206,9 @@
           <div v-if="streamMessages.length > 0" class="chat-input-bar">
             <!-- 排队提示卡:流式中再输入会进队列,当前回复结束后自动发送(对齐 AI Builder) -->
             <div v-if="pendingQueue.length > 0" class="coding-queue-banner">
-              <span class="cqb-icon">🕐</span>
+              <span class="cqb-icon"><AppIcon name="clock" :size="13" /></span>
               <span class="cqb-text">{{ pendingQueue.length }} 条消息排队中 · 当前回复结束后自动发送</span>
-              <button class="cqb-clear" title="清空队列" @click="pendingQueue = []">×</button>
+              <button class="cqb-clear" title="清空队列" @click="pendingQueue = []"><AppIcon name="x" :size="14" /></button>
             </div>
             <UnifiedChatComposer
               v-model="userInput"
@@ -273,7 +273,7 @@
           <div v-if="!ideLoaded" class="ide-loading-overlay">
             <div class="ide-loading-content">
               <template v-if="ideLoadError">
-                <div class="ide-error-icon">⚠️</div>
+                <div class="ide-error-icon"><AppIcon name="warning" :size="32" /></div>
                 <span>{{ ideLoadError }}</span>
                 <button class="ide-retry-btn" @click="retryIdeLoad">重新加载</button>
               </template>
@@ -290,7 +290,7 @@
       <el-drawer v-model="filesDrawerOpen" title="工作区文件" direction="rtl" size="40%" body-class="coding-files-drawer-body" :append-to-body="true">
         <div class="files-drawer-body">
           <p style="color:#999;font-size:13px;padding:16px;">
-            📋 文件浏览 MVP — 当前展示 workspace 元信息，详细文件树后续接入。
+            <AppIcon name="clipboard" :size="13" /> 文件浏览 MVP — 当前展示 workspace 元信息，详细文件树后续接入。
           </p>
           <div v-if="codingStore.workspace" style="padding:0 16px;">
             <div style="margin-bottom:12px;"><strong>名称：</strong>{{ codingStore.workspace.display_name || codingStore.workspace.project_name }}</div>
@@ -542,6 +542,7 @@ import { useRoute, useRouter } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { ArrowLeft, ArrowDown, Download, Monitor, Delete, Fold, Expand, ChatDotRound, Document, Setting, Box, CircleCheck } from '@element-plus/icons-vue'
 import { useCodingStore } from '@/stores/coding'
+import AppIcon from '@/components/common/AppIcon.vue'
 import type { PlatformEnv } from '@/api/platformEnv'
 import { useUserStore } from '@/stores/user'
 import { codingApi, isIdeUnavailableError } from '@/api/coding'

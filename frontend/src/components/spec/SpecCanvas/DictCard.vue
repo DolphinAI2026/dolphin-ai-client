@@ -2,6 +2,7 @@
 import { useSpecStore } from '@/stores/spec'
 import type { DictSpec } from '@/types/spec'
 import { ElMessage, ElMessageBox } from 'element-plus'
+import AppIcon from '@/components/common/AppIcon.vue'
 
 const props = defineProps<{ dict: DictSpec }>()
 const spec = useSpecStore()
@@ -39,9 +40,9 @@ async function dismiss() {
       </li>
     </ul>
     <footer class="spec-card-actions">
-      <span v-if="dict.confirmed" class="spec-card-status">✓ 已采纳</span>
+      <span v-if="dict.confirmed" class="spec-card-status"><AppIcon name="check" :size="14" /> 已采纳</span>
       <template v-else>
-        <button class="action-btn confirm" @click="confirm">✓ 采纳</button>
+        <button class="action-btn confirm" @click="confirm"><AppIcon name="check" :size="14" /> 采纳</button>
         <button class="action-btn dismiss" @click="dismiss">忽略</button>
       </template>
     </footer>

@@ -86,6 +86,7 @@ import {
   Tickets, DataAnalysis, Link, Bell, MagicStick, Document, Connection, Menu as MenuIcon,
 } from '@element-plus/icons-vue'
 import request from '@/utils/request'
+import AppIcon from '@/components/common/AppIcon.vue'
 
 interface ApaasMenu {
   menu_id: string
@@ -396,7 +397,10 @@ const MenuNode = defineComponent({
                 for (const g of movableTargets) {
                   items.push(h(ElDropdownItem, {
                     command: { action: 'move', parentId: g.menu_id, parentName: g.menu_name },
-                  }, () => '📁 移到「' + (g.menu_name || '未命名') + '」'))
+                  }, () => [
+                    h(AppIcon, { name: 'folder', size: 13, style: 'margin-right:6px;vertical-align:-2px' }),
+                    '移到「' + (g.menu_name || '未命名') + '」',
+                  ]))
                 }
               }
               return items

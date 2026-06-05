@@ -7,6 +7,7 @@ import type { ChatMsg } from './types'
 import type { ConfigChatToolTrace } from '@/api/configChat'
 import type { AgentToolPayload } from '@/components/common/agent-conversation/types'
 import ToolCard from '@/components/common/agent-conversation/ToolCard.vue'
+import AppIcon from '@/components/common/AppIcon.vue'
 import { renderMd } from '@/utils/markdown'
 import { countModifyOps, extractPlan } from './composables/useConfigChat'
 
@@ -86,7 +87,7 @@ const changeDigest = computed(() => {
     <!-- 产出物：本次配置变更汇总（sticky 顶部，有改动才显示） -->
     <div v-if="changeDigest.modifyCount > 0" class="ca-digest">
       <button type="button" class="ca-digest-head" @click="digestOpen = !digestOpen">
-        <span class="ca-digest-icon">📦</span>
+        <span class="ca-digest-icon"><AppIcon name="package" :size="13" /></span>
         <span class="ca-digest-title">本次配置变更</span>
         <span class="ca-digest-count">{{ changeDigest.modifyCount }}</span>
         <span class="ca-digest-toggle">{{ digestOpen ? '收起 ▲' : '展开 ▼' }}</span>
@@ -138,7 +139,7 @@ const changeDigest = computed(() => {
             class="ca-screenshot"
           >
             <img :src="t.image_data_url" alt="browser screenshot" @click="openScreenshot(t.image_data_url!)" />
-            <figcaption>📸 {{ t.tool_name }}</figcaption>
+            <figcaption><AppIcon name="camera" :size="14" /> {{ t.tool_name }}</figcaption>
           </figure>
         </div>
 
@@ -154,7 +155,7 @@ const changeDigest = computed(() => {
         <template v-if="m.role === 'assistant' && m.content">
           <div v-if="extractPlan(m.content).planMd" class="ca-plan-card">
             <div class="ca-plan-head">
-              <span class="ca-plan-icon">📋</span>
+              <span class="ca-plan-icon"><AppIcon name="clipboard" :size="14" /></span>
               <span class="ca-plan-title">执行计划</span>
               <span v-if="m.streaming" class="ca-plan-status">执行中…</span>
               <span v-else class="ca-plan-status ca-plan-status-done">已完成</span>
@@ -179,7 +180,7 @@ const changeDigest = computed(() => {
           class="ca-hero-cta"
         >
           <div class="ca-hero-text">
-            <span class="ca-hero-icon">✅</span>
+            <span class="ca-hero-icon"><AppIcon name="check-circle" :size="14" /></span>
             <span>已完成 <strong>{{ countModifyOps(m) }}</strong> 步调整 · 已自动刷新预览</span>
           </div>
           <button
@@ -188,19 +189,19 @@ const changeDigest = computed(() => {
             @click="emit('refresh-iframe')"
             title="若预览没更新, 点这里手动刷新"
           >
-            ↻
+            <AppIcon name="refresh" :size="13" />
           </button>
         </div>
 
         <!-- 2026-05-21 Task #13: ChangePlan 纯信息卡片 (无按钮, agent 真要改配置直接调真工具) -->
         <div v-if="m.change_plan" class="ca-change-card ca-change-card-info">
-          <div class="ca-change-title">📋 AI 给的方案分析</div>
+          <div class="ca-change-title"><AppIcon name="clipboard" :size="12" /> AI 给的方案分析</div>
           <ul v-if="m.actions_summary && m.actions_summary.length" class="ca-change-list">
             <li v-for="(a, i) in m.actions_summary" :key="i">{{ a }}</li>
           </ul>
           <pre v-else class="ca-change-json">{{ JSON.stringify(m.change_plan, null, 2) }}</pre>
           <div class="ca-change-note">
-            💡 仅展示 — 如要实际改配置，直接告诉 AI「把 XX 字段改成必填 / 加角色 / 加字典选项」让它调真工具。
+            <AppIcon name="bulb" :size="12" /> 仅展示 — 如要实际改配置，直接告诉 AI「把 XX 字段改成必填 / 加角色 / 加字典选项」让它调真工具。
           </div>
         </div>
       </div>

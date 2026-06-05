@@ -21,12 +21,15 @@ import { ElMessage } from 'element-plus'
 
 import AgentConversation from '@/components/common/AgentConversation.vue'
 import AgentRunTraceDrawer from '@/components/common/AgentRunTraceDrawer.vue'
+import UnifiedChatComposer from '@/components/common/UnifiedChatComposer.vue'
 import { usePanelResize } from './config-assistant/composables/usePanelResize'
 import { useAiChatSession } from '@/composables/useAiChatSession'
 import { aiChatApi, type AIChatSession } from '@/api/aiChat'
+import { llmConfigApi, type BuilderModelOption } from '@/api/llmConfig'
 import { renderMd } from '@/utils/markdown'
-import { getPastedImageFiles } from '@/utils/pasteImages'
+import { isImageFile } from '@/utils/pasteImages'
 import type { AgentMessage } from '@/components/common/agent-conversation/types'
+import type { UnifiedChatAttachment } from '@/components/common/chatComposer'
 
 // props/emit 跟 ChatPage 当前传给 ConfigAssistantPanel 的完全同名，保证 controller 一行 tag swap。
 const props = defineProps<{
@@ -77,8 +80,10 @@ const viewContext = computed<string | null>(() => {
     : (props.currentSectionTab || props.currentSection || '')
   return `「${name}」${sub ? '（' + sub + '）' : ''}`
 })
-// 模型选择：unified 引擎下暂不暴露选择器（ensureSession 不传 selectedLlmId → 后端走会话默认 / 平台配置）。
+// 模型选择：跟 AIChatPage 一致 —— 拉 builder 模型列表，底部选择器切换，落到会话
+// （ensureSession 建会话带上、切换时 updateSession 落库）。
 const selectedLlmId = ref<number | null>(null)
+const llmOptions = ref<BuilderModelOption[]>([])
 
 const {
   currentSession,
@@ -100,30 +105,24 @@ const {
   selectedLlmId,
 })
 
-// ─── 输入框 ───
+// ─── 输入框 —— 复用共享 UnifiedChatComposer（自动撑高 / Shift+Enter 换行 / 附件 / 停止） ───
 const inputText = ref('')
-const fileInputRef = ref<HTMLInputElement | null>(null)
 const pendingFiles = ref<File[]>([])
+// 待发附件映射成 composer 的展示模型（图片走缩略 kind=image）。
+const composerAttachments = computed<UnifiedChatAttachment[]>(() =>
+  pendingFiles.value.map((file, index) => ({
+    id: index,
+    name: file.name,
+    kind: isImageFile(file) ? 'image' : 'file',
+  })),
+)
 
-function onPickFiles() {
-  fileInputRef.value?.click()
-}
-function onFilesChosen(e: Event) {
-  const el = e.target as HTMLInputElement
-  const files = el.files ? Array.from(el.files) : []
+// composer 的附件按钮 / 粘贴截图都 emit files-picked → 累积到 pendingFiles。
+function onComposerFilesPicked(files: File[]) {
   if (files.length) pendingFiles.value = [...pendingFiles.value, ...files]
-  // 清空原生 input，方便重复选同名文件
-  el.value = ''
 }
-// 截图/图片直接 Ctrl/Cmd+V 粘进输入框 —— 取剪贴板里的图片当附件。
-function onPaste(e: ClipboardEvent) {
-  const imgs = getPastedImageFiles(e)
-  if (!imgs.length) return // 普通文本粘贴照常
-  e.preventDefault()
-  pendingFiles.value = [...pendingFiles.value, ...imgs]
-}
-function removePendingFile(idx: number) {
-  pendingFiles.value = pendingFiles.value.filter((_, i) => i !== idx)
+function removePendingFileByIndex(_: UnifiedChatAttachment, index: number) {
+  pendingFiles.value = pendingFiles.value.filter((_, i) => i !== index)
 }
 
 async function doSend() {
@@ -139,19 +138,44 @@ async function doSend() {
   }
 }
 
-function onInputKeydown(e: KeyboardEvent) {
-  // Enter 发送，Shift+Enter 换行（与 unified 输入习惯一致）
-  if (e.key === 'Enter' && !e.shiftKey && !e.isComposing) {
-    e.preventDefault()
-    void doSend()
-  }
-}
-
 async function onStop() {
   try {
     await stop()
   } catch {
     /* ignore */
+  }
+}
+
+// ─── 模型选择 —— 拉 builder 模型列表 + 切换落库（对齐 AIChatPage） ───
+function syncSelectedLlmFromSession() {
+  const sessionLlm = currentSession.value?.selected_llm_config_id ?? null
+  const ids = new Set(llmOptions.value.map(o => o.id))
+  selectedLlmId.value = sessionLlm != null && ids.has(sessionLlm)
+    ? sessionLlm
+    : (llmOptions.value.find(o => o.is_default)?.id ?? null)
+}
+
+async function loadLlmOptions() {
+  try {
+    const opts = await llmConfigApi.listOptions('builder')
+    llmOptions.value = (opts || []) as BuilderModelOption[]
+    syncSelectedLlmFromSession()
+  } catch {
+    llmOptions.value = []
+    selectedLlmId.value = null
+  }
+}
+
+async function onChangeLlm() {
+  // 没当前会话：只留本地，作为下次 ensureSession 的默认模型。
+  if (!currentSession.value) return
+  try {
+    const updated = await aiChatApi.updateSession(currentSession.value.id, {
+      selected_llm_config_id: selectedLlmId.value ?? 0,
+    })
+    currentSession.value.selected_llm_config_id = updated.selected_llm_config_id
+  } catch (e: any) {
+    ElMessage.error(e?.message || '切换模型失败')
   }
 }
 
@@ -172,6 +196,7 @@ async function onSelectSession(s: AIChatSession) {
   if (currentSession.value && currentSession.value.id === s.id) return
   try {
     await loadSession(s.id)
+    syncSelectedLlmFromSession()
   } catch (e: any) {
     ElMessage.error(e?.message || '加载历史失败')
   }
@@ -329,6 +354,7 @@ const contextTitle = computed(() => {
 })
 
 onMounted(() => {
+  void loadLlmOptions()
   void loadSessions().catch(() => { /* ignore */ })
 })
 </script>
@@ -355,7 +381,9 @@ onMounted(() => {
           title="查看本次会话的 Agent 活动 / Trace"
           @click="openSessionTrace"
         >
-          Agent 活动
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M22 12h-4l-3 9L9 3l-3 9H2" />
+          </svg>
         </button>
         <button class="aa-top-btn" title="历史对话" @click="openDrawer">
           <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
@@ -389,69 +417,33 @@ onMounted(() => {
       @answer-ask="(opt) => send(opt)"
     />
 
-    <!-- 输入区 -->
+    <!-- 输入区 — 复用共享 UnifiedChatComposer（撑高 / Shift+Enter 换行 / 附件 / 模型选择 / 停止） -->
     <div class="aa-input-area">
-      <div v-if="pendingFiles.length" class="aa-attach-row">
-        <span
-          v-for="(f, i) in pendingFiles"
-          :key="i"
-          class="aa-attach-chip"
-        >
-          <span class="aa-attach-name">📎 {{ f.name }}</span>
-          <button class="aa-attach-x" type="button" title="移除" @click="removePendingFile(i)">×</button>
-        </span>
-      </div>
-      <div class="aa-input-box">
-        <button
-          class="aa-attach-btn"
-          type="button"
-          title="添加附件"
-          :disabled="sending"
-          @click="onPickFiles"
-        >
-          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-            <path d="M21.44 11.05l-9.19 9.19a6 6 0 0 1-8.49-8.49l9.19-9.19a4 4 0 0 1 5.66 5.66l-9.2 9.19a2 2 0 0 1-2.83-2.83l8.49-8.48" />
-          </svg>
-        </button>
-        <input
-          ref="fileInputRef"
-          type="file"
-          multiple
-          class="aa-file-input"
-          @change="onFilesChosen"
-        />
-        <textarea
-          v-model="inputText"
-          class="aa-input"
-          rows="1"
-          placeholder="描述你想改的配置或要开发的功能…（可直接粘贴截图）"
-          @keydown="onInputKeydown"
-          @paste="onPaste"
-        />
-        <button
-          v-if="sending"
-          class="aa-send-btn aa-stop-btn"
-          type="button"
-          title="停止"
-          @click="onStop"
-        >
-          <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor">
-            <rect x="6" y="6" width="12" height="12" rx="2" />
-          </svg>
-        </button>
-        <button
-          v-else
-          class="aa-send-btn"
-          type="button"
-          title="发送 (Enter)"
-          :disabled="!inputText.trim() && pendingFiles.length === 0"
-          @click="doSend"
-        >
-          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-            <path d="M22 2L11 13M22 2l-7 20-4-9-9-4 20-7z" />
-          </svg>
-        </button>
-      </div>
+      <UnifiedChatComposer
+        v-model="inputText"
+        :attachments="composerAttachments"
+        :sending="sending"
+        :send-disabled="!inputText.trim() && pendingFiles.length === 0"
+        :multiple="true"
+        placeholder="描述你想改的配置或要开发的功能…（可直接粘贴截图）"
+        @send="doSend"
+        @stop="onStop"
+        @files-picked="onComposerFilesPicked"
+        @remove-attachment="removePendingFileByIndex"
+      >
+        <template #footer-left>
+          <select
+            v-if="llmOptions.length"
+            v-model="selectedLlmId"
+            class="aa-model-select"
+            title="切换模型"
+            @change="onChangeLlm"
+          >
+            <option :value="null">默认模型</option>
+            <option v-for="m in llmOptions" :key="m.id" :value="m.id">{{ m.config_name }}</option>
+          </select>
+        </template>
+      </UnifiedChatComposer>
     </div>
 
     <!-- 会话历史抽屉（app-scoped：loadSessions 已按 applicationId 过滤） -->
@@ -570,7 +562,7 @@ onMounted(() => {
   flex: 1;
 }
 .aa-header-title {
-  font-size: 14px;
+  font-size: 13px;
   font-weight: var(--fw-semibold, 600);
   color: var(--text);
 }
@@ -606,134 +598,45 @@ onMounted(() => {
   border-color: var(--brand);
   color: var(--brand);
 }
-.aa-trace-btn {
-  width: auto;
-  padding: 0 10px;
-  font-family: inherit;
-  font-size: 12px;
-}
 
 /* ─── 对话区 ──────────────────────────────────────────── */
 .aa-conversation {
   flex: 1;
   min-height: 0;
 }
+/* 这是窄右栏，整体字号比 AIChatPage 主对话缩一档（:deep 覆盖共享 AgentConversation，
+   作用域仅限本面板，不影响 AIChatPage） */
+.aa-conversation :deep(.ac-bubble) { font-size: 12.5px; }
+.aa-conversation :deep(.ac-text h2) { font-size: 14px; }
+.aa-conversation :deep(.ac-text h3) { font-size: 13px; }
 
-/* ─── 输入区 ──────────────────────────────────────────── */
+/* ─── 输入区 —— UnifiedChatComposer 容器 ─────────────────── */
 .aa-input-area {
   flex-shrink: 0;
   padding: 10px 14px 14px;
   border-top: 1px solid var(--line);
   background: var(--surface);
 }
-.aa-attach-row {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 6px;
-  margin-bottom: 8px;
-}
-.aa-attach-chip {
-  display: inline-flex;
-  align-items: center;
-  gap: 4px;
+/* 窄栏里输入/提示也缩一档（composer scoped 默认 14/12px） */
+.aa-input-area :deep(.ucc-input) { font-size: 13px; }
+.aa-input-area :deep(.ucc-hint) { font-size: 11px; }
+
+/* 底部模型选择器（用面板 token，不是 AIChatPage 的 --ac-*） */
+.aa-model-select {
+  background: transparent;
+  border: 1px solid var(--line);
+  color: var(--text-3);
   padding: 3px 8px;
-  border-radius: 999px;
-  background: var(--surface-2, var(--surface));
-  border: 1px solid var(--line);
-  font-size: 11px;
-  color: var(--text-2, var(--text));
-  max-width: 100%;
-}
-.aa-attach-name {
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  max-width: 200px;
-}
-.aa-attach-x {
-  border: 0;
-  background: transparent;
-  color: var(--text-3);
-  cursor: pointer;
-  font-size: 14px;
-  line-height: 1;
-  padding: 0;
-}
-.aa-attach-x:hover {
-  color: var(--err, #dc2626);
-}
-.aa-input-box {
-  display: flex;
-  align-items: flex-end;
-  gap: 6px;
-  padding: 6px 8px;
-  border: 1px solid var(--line);
-  border-radius: 12px;
-  background: var(--surface);
-  transition: border-color 0.12s ease;
-}
-.aa-input-box:focus-within {
-  border-color: var(--brand);
-}
-.aa-attach-btn,
-.aa-send-btn {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  width: 32px;
-  height: 32px;
-  flex-shrink: 0;
-  border: 0;
-  border-radius: 8px;
-  background: transparent;
-  color: var(--text-3);
-  cursor: pointer;
-  transition: all 0.12s ease;
-}
-.aa-attach-btn:hover:not(:disabled) {
-  color: var(--brand);
-  background: color-mix(in srgb, var(--brand) 8%, var(--surface));
-}
-.aa-attach-btn:disabled {
-  opacity: 0.5;
-  cursor: not-allowed;
-}
-.aa-file-input {
-  display: none;
-}
-.aa-input {
-  flex: 1;
-  min-width: 0;
-  border: 0;
-  outline: none;
-  resize: none;
-  background: transparent;
-  color: var(--text);
+  border-radius: 6px;
   font-family: inherit;
-  font-size: 13px;
-  line-height: 1.5;
-  max-height: 140px;
-  padding: 6px 2px;
+  font-size: 11.5px;
+  cursor: pointer;
+  outline: none;
+  max-width: 168px;
 }
-.aa-input::placeholder {
-  color: var(--text-4, var(--text-3));
-}
-.aa-send-btn {
-  background: var(--brand);
-  color: var(--text-inverse, #fff);
-}
-.aa-send-btn:hover:not(:disabled) {
-  opacity: 0.88;
-}
-.aa-send-btn:disabled {
-  opacity: 0.45;
-  cursor: not-allowed;
-}
-.aa-stop-btn {
-  background: var(--err, #dc2626);
-}
-.aa-stop-btn:hover {
-  opacity: 0.88;
+.aa-model-select:hover {
+  border-color: var(--brand);
+  color: var(--text);
 }
 
 /* ─── 会话抽屉 ────────────────────────────────────────── */

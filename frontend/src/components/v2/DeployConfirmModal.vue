@@ -3,6 +3,7 @@
 import { computed, ref, watch, onBeforeUnmount } from 'vue'
 import { ElDialog, ElButton } from 'element-plus'
 import { applicationApi } from '@/api/application'
+import AppIcon from '@/components/common/AppIcon.vue'
 
 const props = defineProps<{
   modelValue: boolean
@@ -193,7 +194,7 @@ function backToConfirm() {
           <div v-if="e.isDefault" class="env-default">默认</div>
         </button>
       </div>
-      <div v-if="isProd" class="warn-bar">⚠️ 生产环境部署不可逆，提交前需输入应用编码确认</div>
+      <div v-if="isProd" class="warn-bar"><AppIcon name="warning" :size="14" /> 生产环境部署不可逆，提交前需输入应用编码确认</div>
     </div>
 
     <div v-else-if="phase === 'confirm'" class="dep">
@@ -232,7 +233,7 @@ function backToConfirm() {
         </label>
         <input v-model="confirmCode" class="input" :placeholder="appCode" />
       </div>
-      <div class="safety">✓ 部署前自动备份 · 失败可一键回滚</div>
+      <div class="safety"><AppIcon name="check" :size="14" /> 部署前自动备份 · 失败可一键回滚</div>
     </div>
 
     <div v-else-if="phase === 'running'" class="dep dep-center">
@@ -251,7 +252,7 @@ function backToConfirm() {
     </div>
 
     <div v-else class="dep dep-center">
-      <div class="success-mark">✓</div>
+      <div class="success-mark"><AppIcon name="check" :size="24" /></div>
       <div>已部署到 <b>{{ env }}</b></div>
       <div v-if="appName" class="success-app">{{ appName }}</div>
       <div v-if="deployedAppId" class="success-app">应用 ID: {{ deployedAppId }}</div>

@@ -95,13 +95,13 @@
               class="session-menu-btn"
               @click.stop="$emit('rename', s)"
               title="重命名"
-            >✎</button>
+            ><AppIcon name="pencil" :size="12" /></button>
             <button
               v-if="enableDelete !== false"
               class="session-menu-btn danger"
               @click.stop="$emit('delete', s)"
               title="删除"
-            >×</button>
+            ><AppIcon name="x" :size="12" /></button>
           </div>
         </template>
         <div v-if="sessions.length === 0" class="empty-hint">
@@ -141,6 +141,7 @@
 <script setup lang="ts">
 import { computed, ref, watch } from 'vue'
 import { useRouter } from 'vue-router'
+import AppIcon from '@/components/common/AppIcon.vue'
 
 export interface SessionItem {
   id: string | number

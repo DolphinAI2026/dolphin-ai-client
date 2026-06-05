@@ -38,14 +38,14 @@
 
     <!-- error (网络 / 5xx) -->
     <div v-else-if="error" class="ads-state ads-state-err">
-      <div class="ads-state-icon">⚠️</div>
+      <div class="ads-state-icon"><AppIcon name="warning" :size="40" /></div>
       <p>{{ error }}</p>
       <button class="ads-btn ads-btn-ghost" @click="reload">重试</button>
     </div>
 
     <!-- 业务降级 (app_not_deployed / tool_not_available / 4xx) — 友好空态 + 提示 -->
     <div v-else-if="businessNote" class="ads-state">
-      <div class="ads-state-icon">{{ businessNoteIcon }}</div>
+      <div class="ads-state-icon"><AppIcon :name="businessNoteIcon" :size="40" /></div>
       <p>{{ businessNote }}</p>
       <div class="ads-empty-actions">
         <button class="ads-btn ads-btn-primary" @click="goPlatformAdmin">
@@ -57,7 +57,7 @@
 
     <!-- 空态: 真没数据源 -->
     <div v-else-if="items.length === 0" class="ads-state">
-      <div class="ads-state-icon">🗄️</div>
+      <div class="ads-state-icon"><AppIcon name="database" :size="40" /></div>
       <p>该应用还未关联任何数据源</p>
       <p class="hint">部署应用 / 配置模型后会显示这里关联的数据源.</p>
       <div class="ads-empty-actions">
@@ -139,6 +139,7 @@ import { ref, computed, watch } from 'vue'
 import { useRouter } from 'vue-router'
 import request from '@/utils/request'
 import { usePreviewStore } from '@/stores/preview'
+import AppIcon from '@/components/common/AppIcon.vue'
 
 interface DatasourceItem {
   datasource_id: string
@@ -162,7 +163,7 @@ const total = ref(0)
 const loading = ref(false)
 const error = ref('')                  // 网络 / 5xx 系统错
 const businessNote = ref('')           // app_not_deployed / tool_not_available 等业务降级
-const businessNoteIcon = ref('💡')
+const businessNoteIcon = ref('bulb')
 
 const appDisplayName = computed(() =>
   store.preview.appName || `应用 ${props.appId}`,
@@ -210,13 +211,13 @@ async function reload() {
       total.value = 0
       if (code === 'APP_NOT_DEPLOYED') {
         businessNote.value = msg || '应用尚未部署到 aPaaS 平台 — 部署后才能拉数据源'
-        businessNoteIcon.value = '🚧'
+        businessNoteIcon.value = 'warning'
       } else if (code === 'TOOL_NOT_AVAILABLE' || code === 'TOOL_SIGNATURE_MISMATCH') {
         businessNote.value = '后端数据源 API 尚未就绪 — 请到平台管理查看完整数据源.'
-        businessNoteIcon.value = '🔧'
+        businessNoteIcon.value = 'wrench'
       } else {
         businessNote.value = msg
-        businessNoteIcon.value = '⚠️'
+        businessNoteIcon.value = 'warning'
       }
     }
   } catch (e: any) {
@@ -226,7 +227,7 @@ async function reload() {
       items.value = []
       total.value = 0
       businessNote.value = '后端数据源接口未上线 — 请到平台管理查看数据源.'
-      businessNoteIcon.value = '🔧'
+      businessNoteIcon.value = 'wrench'
     } else {
       error.value = e?.response?.data?.detail || e?.message || '网络错误'
     }

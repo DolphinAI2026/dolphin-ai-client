@@ -2,6 +2,8 @@
      2026-05-21 Phase 3d Browser viewport mini preview MJPEG 流嵌入.
      2026-05-24 从 ConfigAssistantPanel.vue 拆出 (refactor #9). -->
 <script setup lang="ts">
+import AppIcon from '@/components/common/AppIcon.vue'
+
 defineProps<{
   enabled: boolean
   streamUrl: string
@@ -17,9 +19,9 @@ const emit = defineEmits<{
   <!-- MJPEG 流, <img> 浏览器原生解码自动播放. 扩展未连时显示 placeholder hint. -->
   <div class="ca-viewport" v-if="enabled">
     <div class="ca-viewport-head">
-      <span class="ca-viewport-icon">🖥️</span>
+      <span class="ca-viewport-icon"><AppIcon name="monitor" :size="12" /></span>
       <span class="ca-viewport-label">AI 看到的画面 (2fps)</span>
-      <button class="ca-viewport-toggle" @click="emit('toggle', false)" title="收起">×</button>
+      <button class="ca-viewport-toggle" @click="emit('toggle', false)" title="收起"><AppIcon name="x" :size="14" /></button>
     </div>
     <img
       :src="streamUrl"
@@ -29,7 +31,7 @@ const emit = defineEmits<{
     />
   </div>
   <button v-else class="ca-viewport-show-btn" @click="emit('toggle', true)">
-    🖥️ 显示 AI 浏览器画面
+    <AppIcon name="monitor" :size="14" /> 显示 AI 浏览器画面
   </button>
 </template>
 

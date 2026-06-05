@@ -25,7 +25,7 @@
           :class="{ selected: selected === app.id }"
           @click="selected = app.id"
         >
-          <div class="cand-icon">📦</div>
+          <div class="cand-icon"><AppIcon name="package" :size="18" /></div>
           <div class="cand-detail">
             <div class="cand-name">{{ app.app_name }}</div>
             <div class="cand-meta">
@@ -36,7 +36,7 @@
               <span v-if="app.updated_at">{{ formatTime(app.updated_at) }}</span>
             </div>
           </div>
-          <div v-if="selected === app.id" class="cand-check">&#10003;</div>
+          <div v-if="selected === app.id" class="cand-check"><AppIcon name="check" :size="16" /></div>
         </div>
       </div>
       <div v-else class="no-cand">没有找到相近的应用，将创建新应用。</div>
@@ -56,6 +56,7 @@
 
 <script setup lang="ts">
 import { ref, watch } from 'vue'
+import AppIcon from '@/components/common/AppIcon.vue'
 
 interface CandidateApp {
   id: number

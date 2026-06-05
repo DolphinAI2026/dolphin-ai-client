@@ -1,16 +1,17 @@
 <template>
   <section class="activity-card proposal-card" @click="$emit('click')">
-    <h4>🔍 {{ proposal.title }}</h4>
+    <h4><AppIcon name="search" :size="15" /> {{ proposal.title }}</h4>
     <span class="status-badge" :class="`status-${proposal.status}`">{{ STATUS_DISPLAY_NAMES[proposal.status] || proposal.status }}</span>
     <p class="muted small">提案者：用户 {{ proposal.created_by }} · {{ formatDate(proposal.created_at) }}</p>
     <button v-if="canApprove" class="builder-btn builder-btn-primary" type="button" @click.stop="$emit('approve')">
-      Approve ✓
+      Approve <AppIcon name="check" :size="14" />
     </button>
   </section>
 </template>
 
 <script setup lang="ts">
 import { computed } from 'vue'
+import AppIcon from '@/components/common/AppIcon.vue'
 import { type ProposalSummary, STATUS_DISPLAY_NAMES } from '@/types/proposal'
 import { type ProjectRole, roleAtLeast } from '@/types/collaboration'
 

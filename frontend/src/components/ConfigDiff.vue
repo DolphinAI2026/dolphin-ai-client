@@ -6,7 +6,7 @@
     </div>
 
     <div v-if="!hasChanges" class="no-changes">
-      <span class="icon">✓</span>
+      <span class="icon"><AppIcon name="check" :size="20" /></span>
       <span>配置无变更</span>
     </div>
 
@@ -21,7 +21,7 @@
       <!-- 角色变更 -->
       <div v-if="roleChanges.length > 0" class="diff-section">
         <div class="section-title">
-          <span class="icon">👤</span>
+          <span class="icon"><AppIcon name="user" :size="16" /></span>
           <span>角色变更 ({{ roleChanges.length }})</span>
         </div>
         <div class="change-list">
@@ -59,7 +59,7 @@
       <!-- 字典变更 -->
       <div v-if="dictChanges.length > 0" class="diff-section">
         <div class="section-title">
-          <span class="icon">📖</span>
+          <span class="icon"><AppIcon name="book-open" :size="16" /></span>
           <span>字典变更 ({{ dictChanges.length }})</span>
         </div>
         <div class="change-list">
@@ -102,7 +102,7 @@
       <!-- 模型变更 -->
       <div v-if="modelChanges.length > 0" class="diff-section">
         <div class="section-title">
-          <span class="icon">📊</span>
+          <span class="icon"><AppIcon name="bar-chart" :size="16" /></span>
           <span>模型变更 ({{ modelChanges.length }})</span>
         </div>
         <div class="change-list">
@@ -145,7 +145,7 @@
       <!-- 表单变更 -->
       <div v-if="formChanges.length > 0" class="diff-section">
         <div class="section-title">
-          <span class="icon">📝</span>
+          <span class="icon"><AppIcon name="edit" :size="16" /></span>
           <span>表单变更 ({{ formChanges.length }})</span>
         </div>
         <div class="change-list">
@@ -210,7 +210,7 @@
       <!-- 流程变更 -->
       <div v-if="processChanges.length > 0" class="diff-section">
         <div class="section-title">
-          <span class="icon">⚡</span>
+          <span class="icon"><AppIcon name="zap" :size="16" /></span>
           <span>流程变更 ({{ processChanges.length }})</span>
         </div>
         <div class="change-list">
@@ -247,7 +247,7 @@
       <!-- 警告 -->
       <div v-if="warnings.length > 0" class="warnings-section">
         <div class="section-title warning">
-          <span class="icon">⚠️</span>
+          <span class="icon"><AppIcon name="warning" :size="16" /></span>
           <span>注意事项</span>
         </div>
         <ul class="warning-list">
@@ -258,7 +258,7 @@
       <!-- 不支持的变更 -->
       <div v-if="unsupportedChanges.length > 0" class="unsupported-section">
         <div class="section-title unsupported">
-          <span class="icon">🚫</span>
+          <span class="icon"><AppIcon name="ban" :size="16" /></span>
           <span>不支持的变更</span>
         </div>
         <ul class="unsupported-list">
@@ -281,6 +281,7 @@
 import { ref, computed, watch } from 'vue'
 import type { ChangeItem, DictChange, ModelChange, FormChange } from '@/api/incremental'
 import SideBySideDiff from './SideBySideDiff.vue'
+import AppIcon from '@/components/common/AppIcon.vue'
 
 interface Props {
   hasChanges: boolean

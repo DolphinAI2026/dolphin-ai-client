@@ -1,7 +1,7 @@
 <template>
   <section v-if="show" class="paa-card">
     <div class="paa-header">
-      <span class="paa-icon">🤖</span>
+      <span class="paa-icon"><AppIcon name="bot" :size="18" /></span>
       <h4>AI 准备好一次变更</h4>
     </div>
     <div class="paa-meta">
@@ -22,6 +22,7 @@
 import { ref, computed } from 'vue'
 import { proposalsApi } from '@/api/proposals'
 import { useWorkspaceStore } from '@/stores/workspace'
+import AppIcon from '@/components/common/AppIcon.vue'
 
 const props = defineProps<{
   draftSpecId: string | null

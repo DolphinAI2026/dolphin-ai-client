@@ -49,7 +49,7 @@
 
     <div class="dep-detail">
       <div v-if="!selectedDictId" class="dep-detail-empty">
-        <div class="dep-detail-empty-icon">📚</div>
+        <div class="dep-detail-empty-icon"><AppIcon name="book" :size="48" /></div>
         <p>从左侧选择一个字典, 这里显该字典的选项</p>
       </div>
       <template v-else>
@@ -100,7 +100,7 @@
                 <td class="muted">{{ i + 1 }}</td>
                 <td class="muted">{{ o.description || '—' }}</td>
                 <td class="ops">
-                  <button class="dep-icon-btn" disabled title="P2 编辑选项">⋯</button>
+                  <button class="dep-icon-btn" disabled title="P2 编辑选项"><AppIcon name="more" :size="14" /></button>
                 </td>
               </tr>
             </tbody>
@@ -116,6 +116,7 @@ import { ref, computed, watch } from 'vue'
 import request from '@/utils/request'
 import SkeletonCard from '@/components/states/SkeletonCard.vue'
 import ErrorCard from '@/components/states/ErrorCard.vue'
+import AppIcon from '@/components/common/AppIcon.vue'
 
 interface DictRow {
   id: string

@@ -230,7 +230,7 @@
                   <el-dropdown-menu>
                     <el-dropdown-item v-if="canViewSpec(app)" command="spec">查看 SPEC</el-dropdown-item>
                     <el-dropdown-item v-if="canOpenInPlatform(app)" command="platform">进入应用 ↗</el-dropdown-item>
-                    <el-dropdown-item v-if="canViewDeployHistory(app)" command="history">📜 部署历史</el-dropdown-item>
+                    <el-dropdown-item v-if="canViewDeployHistory(app)" command="history"><AppIcon name="scroll" :size="14" /> 部署历史</el-dropdown-item>
                     <el-dropdown-item v-if="canDeleteApp(app)" command="delete" divided class="apps-more-danger">删除应用</el-dropdown-item>
                   </el-dropdown-menu>
                 </template>
@@ -273,6 +273,7 @@ import { computed, onMounted, ref, watch } from 'vue'
 import { useRouter } from 'vue-router'
 import { Download, Grid, List, MoreFilled, Plus } from '@element-plus/icons-vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
+import AppIcon from '@/components/common/AppIcon.vue'
 import { handleError } from '@/utils/errorHandler'
 import { applicationApi } from '@/api/application'
 import { conversationApi, type ConversationWithApp } from '@/api/conversation'

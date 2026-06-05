@@ -16,7 +16,7 @@
     <header class="cpp-head">
       <div class="cpp-head-meta">
         <h1 class="cpp-title">{{ menuName || '自开发页面' }}</h1>
-        <span class="cpp-chip">🎨 自开发</span>
+        <span class="cpp-chip"><AppIcon name="palette" :size="14" /> 自开发</span>
       </div>
     </header>
 
@@ -34,12 +34,12 @@
     <!-- 没选菜单 / 缺 menu_id 兜底 -->
     <div v-else class="cpp-body">
       <div class="cpp-card">
-        <div class="cpp-card-icon">🧩</div>
+        <div class="cpp-card-icon"><AppIcon name="puzzle" :size="48" /></div>
         <h2>自开发整页 Vue 组件</h2>
         <p>选中一个自开发菜单后, 这里直接运行它的组件 bundle 渲染页面预览.</p>
         <div class="cpp-actions">
           <button type="button" class="cpp-cta cpp-cta-ghost" @click="onGoToCoding">
-            <span>💻</span> 去 IDE 改源码
+            <AppIcon name="laptop" :size="14" /> 去 IDE 改源码
           </button>
         </div>
       </div>
@@ -51,6 +51,7 @@
 import { ref, computed } from 'vue'
 import { useRouter } from 'vue-router'
 import { useUserStore } from '@/stores/user'
+import AppIcon from '@/components/common/AppIcon.vue'
 
 const props = defineProps<{
   appId: number

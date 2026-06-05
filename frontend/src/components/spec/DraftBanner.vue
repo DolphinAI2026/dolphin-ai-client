@@ -1,7 +1,7 @@
 <template>
   <div class="draft-banner">
     <div class="banner-content">
-      <span class="banner-icon">✏️</span>
+      <span class="banner-icon"><AppIcon name="pencil" :size="16" /></span>
       <span class="banner-text">
         你正在编辑草稿
         <span v-if="canonicalVersion">（基于 canonical v{{ canonicalVersion }}）</span>
@@ -24,6 +24,7 @@
 
 <script setup lang="ts">
 import type { ProposalSummary } from '@/types/proposal'
+import AppIcon from '@/components/common/AppIcon.vue'
 
 defineProps<{
   canonicalVersion?: number | null

@@ -1,6 +1,6 @@
 <template>
   <section class="activity-card">
-    <h4>🔗 Git 仓库</h4>
+    <h4><AppIcon name="link" :size="15" /> Git 仓库</h4>
     <p>
       <a v-if="git.repo_url" :href="git.repo_url" target="_blank">{{ git.provider || 'git' }} ↗</a>
     </p>
@@ -12,6 +12,8 @@
 </template>
 
 <script setup lang="ts">
+import AppIcon from '@/components/common/AppIcon.vue'
+
 defineProps<{
   git: { repo_url: string; provider: string | null; default_branch: string | null; connected: boolean }
 }>()

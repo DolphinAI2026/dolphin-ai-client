@@ -2,6 +2,7 @@
 import { useSpecStore } from '@/stores/spec'
 import type { Role } from '@/types/spec'
 import { ElMessage, ElMessageBox } from 'element-plus'
+import AppIcon from '@/components/common/AppIcon.vue'
 
 const props = defineProps<{ role: Role }>()
 const spec = useSpecStore()
@@ -45,9 +46,9 @@ async function dismiss() {
     </header>
     <p v-if="role.description" class="spec-card-desc">{{ role.description }}</p>
     <footer class="spec-card-actions">
-      <span v-if="role.confirmed" class="spec-card-status">✓ 已采纳</span>
+      <span v-if="role.confirmed" class="spec-card-status"><AppIcon name="check" :size="14" /> 已采纳</span>
       <template v-else>
-        <button class="action-btn confirm" @click="confirm">✓ 采纳</button>
+        <button class="action-btn confirm" @click="confirm"><AppIcon name="check" :size="14" /> 采纳</button>
         <button class="action-btn dismiss" @click="dismiss">忽略</button>
       </template>
     </footer>

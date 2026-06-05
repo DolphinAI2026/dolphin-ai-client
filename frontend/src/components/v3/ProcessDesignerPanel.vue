@@ -39,13 +39,13 @@
   <section class="pdp" aria-label="流程设计">
     <!-- loading 应用流程 list -->
     <div v-if="loadingList" class="pdp-empty">
-      <div class="pdp-empty-icon">⏳</div>
+      <div class="pdp-empty-icon"><AppIcon name="hourglass" :size="48" /></div>
       <h3>加载流程列表...</h3>
     </div>
 
     <!-- 拉 list 出错 (应用未部署 / token 失效) -->
     <div v-else-if="listError" class="pdp-empty">
-      <div class="pdp-empty-icon">⚠️</div>
+      <div class="pdp-empty-icon"><AppIcon name="warning" :size="48" /></div>
       <h3>加载失败</h3>
       <p>{{ listError }}</p>
       <button class="pdp-btn pdp-btn-ghost" @click="reloadProcessList">重试</button>
@@ -55,7 +55,7 @@
          注: 区别于 `pdp-canvas-hint` ("「X」尚无流程定义" 那个) — 那个是选中流程但定义空,
          这里是整个应用一个流程都没有 (例如 app_id=13 图书借阅管理系统). -->
     <div v-else-if="processList.length === 0" class="pdp-empty pdp-empty-process">
-      <div class="pdp-empty-icon" aria-hidden="true">🔀</div>
+      <div class="pdp-empty-icon" aria-hidden="true"><AppIcon name="shuffle" :size="48" /></div>
       <h3>暂无业务流程</h3>
       <p>用配置助手对话生成首个审批流, 例如：「为借书申请加管理员审批流程」</p>
       <button
@@ -63,7 +63,7 @@
         class="pdp-btn pdp-btn-primary pdp-empty-cta"
         @click="onRequestConfigChat"
       >
-        <span aria-hidden="true">✨</span>
+        <AppIcon name="sparkles" :size="14" />
         用对话创建流程
       </button>
     </div>
@@ -120,7 +120,7 @@
                 :title="`${p.name || p.code}${p.code ? ` (${p.code})` : ''}`"
                 @click="onSelectProcess(p.id)"
               >
-                <span class="pdp-process-icon">🔀</span>
+                <span class="pdp-process-icon"><AppIcon name="shuffle" :size="14" /></span>
                 <span class="pdp-process-name">{{ p.name || p.code || p.id }}</span>
               </button>
             </div>
@@ -142,7 +142,7 @@
             </p>
           </div>
           <div v-if="!activeProcess" class="pdp-canvas-hint">
-            <div class="pdp-canvas-hint-icon">👈</div>
+            <div class="pdp-canvas-hint-icon"><AppIcon name="point-left" :size="28" /></div>
             <p>从左侧"流程列表"选择一个流程</p>
           </div>
         </div>
@@ -156,6 +156,7 @@
 import { ref, computed, watch, onMounted, onBeforeUnmount, shallowRef, reactive, nextTick } from 'vue'
 import { Graph } from '@antv/x6'
 import { ElMessage } from 'element-plus'
+import AppIcon from '@/components/common/AppIcon.vue'
 import OpenLowcodeBackendButton from '@/components/v3/OpenLowcodeBackendButton.vue'
 import request from '@/utils/request'
 import {

@@ -18,7 +18,7 @@
   <section class="rmp" aria-label="角色权限">
     <!-- O2: 业务视角 banner -->
     <div class="rmp-biz-banner" role="note">
-      <span class="rmp-biz-banner-icon" aria-hidden="true">✨</span>
+      <span class="rmp-biz-banner-icon" aria-hidden="true"><AppIcon name="sparkles" :size="16" /></span>
       <span class="rmp-biz-banner-text">
         业务视角预览 — 这是应用的<strong>角色权限</strong>状态. 改角色 / 权限用配置助手对话.
       </span>
@@ -76,7 +76,7 @@
         title="暂无角色或资源"
         desc="先创建角色 + 部署应用, 再回这里配权限"
       >
-        <template #icon>🛡️</template>
+        <template #icon><AppIcon name="shield" :size="32" /></template>
       </EmptyState>
       <template v-else>
         <div class="rmp-matrix-scroll">
@@ -260,7 +260,7 @@
 
       <div class="rmp-detail">
         <div v-if="!selectedRoleId" class="rmp-detail-empty">
-          <div class="rmp-detail-empty-icon">👥</div>
+          <div class="rmp-detail-empty-icon"><AppIcon name="users" :size="48" /></div>
           <p>从左侧选择一个角色, 这里显该角色的成员</p>
         </div>
         <template v-else>
@@ -295,7 +295,7 @@
               <tbody>
                 <tr v-if="members.length === 0">
                   <td colspan="6" class="empty">
-                    <div class="empty-illustration">📋</div>
+                    <div class="empty-illustration"><AppIcon name="clipboard" :size="36" /></div>
                     <p>暂无数据</p>
                     <p class="hint">用配置助手对话添加成员, 或点上方「打开低代码后台」</p>
                   </td>
@@ -307,7 +307,7 @@
                   <td>{{ m.phone || '—' }}</td>
                   <td>{{ m.email || '—' }}</td>
                   <td class="ops">
-                    <button class="rmp-icon-btn" disabled>⋯</button>
+                    <button class="rmp-icon-btn" disabled><AppIcon name="more" :size="14" /></button>
                   </td>
                 </tr>
               </tbody>
@@ -326,6 +326,7 @@ import SkeletonCard from '@/components/states/SkeletonCard.vue'
 import OpenLowcodeBackendButton from '@/components/v3/OpenLowcodeBackendButton.vue'
 import EmptyState from '@/components/states/EmptyState.vue'
 import ErrorCard from '@/components/states/ErrorCard.vue'
+import AppIcon from '@/components/common/AppIcon.vue'
 
 // ─── Types ────────────────────────────────────────────────────────────────
 interface RoleRow {

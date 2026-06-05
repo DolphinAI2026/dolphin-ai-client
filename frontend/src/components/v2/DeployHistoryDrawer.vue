@@ -13,7 +13,7 @@
                 <h2 class="dh-title">{{ title }}</h2>
                 <p v-if="appName" class="dh-subtitle">{{ appName }}</p>
               </div>
-              <button class="dh-close" type="button" @click="closeDrawer" aria-label="关闭">×</button>
+              <button class="dh-close" type="button" @click="closeDrawer" aria-label="关闭"><AppIcon name="x" :size="24" /></button>
             </header>
 
             <div class="dh-toolbar">
@@ -34,7 +34,7 @@
                 <span>加载中…</span>
               </div>
               <div v-else-if="!loading && records.length === 0" class="dh-empty">
-                <div class="dh-empty-icon">📜</div>
+                <div class="dh-empty-icon"><AppIcon name="scroll" :size="36" /></div>
                 <p>尚无部署记录</p>
                 <span class="dh-empty-hint">第一次部署后这里会出现历史版本</span>
               </div>
@@ -144,6 +144,7 @@
 import { ref, watch, computed, reactive } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { applicationApi } from '@/api/application'
+import AppIcon from '@/components/common/AppIcon.vue'
 
 type Status = 'in_progress' | 'success' | 'failed' | 'rolled_back'
 type DeployType = 'deploy' | 'publish' | 'rollback'

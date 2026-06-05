@@ -37,7 +37,7 @@
           <template v-for="(group, gi) in stepGroups" :key="gi">
             <div class="group" :class="{ 'group-done': group.allDone, 'group-error': group.hasError }">
               <div class="group-hd">
-                <span class="group-icon">{{ group.icon }}</span>
+                <span class="group-icon"><AppIcon :name="group.icon" :size="14" /></span>
                 <span class="group-name">{{ group.title }}</span>
                 <span v-if="group.allDone" class="group-badge done">完成</span>
                 <span v-else-if="group.hasError" class="group-badge error">失败</span>
@@ -47,7 +47,7 @@
                 <div v-for="s in group.steps" :key="s.key" class="step" :class="[s.status, { running: executingStep === s.key }]">
                   <div class="dot-col">
                     <div class="dot" :class="[s.status, { pulse: executingStep === s.key }]">
-                      <template v-if="s.status === 'completed'">✓</template>
+                      <template v-if="s.status === 'completed'"><AppIcon name="check" :size="13" /></template>
                       <template v-else-if="s.status === 'error'">!</template>
                     </div>
                   </div>
@@ -61,7 +61,7 @@
                       <span class="spinner"></span>
                     </template>
                     <template v-else-if="s.status === 'completed'">
-                      <button class="act-btn redo" :disabled="runningAll" @click="resetAndExecute(s.key)" title="重新执行">↻</button>
+                      <button class="act-btn redo" :disabled="runningAll" @click="resetAndExecute(s.key)" title="重新执行"><AppIcon name="refresh" :size="13" /></button>
                     </template>
                     <template v-else-if="s.status === 'error'">
                       <button class="act-btn retry" :disabled="runningAll" @click="executeOne(s.key)">重试</button>
@@ -70,7 +70,7 @@
                       <button class="act-btn run" :disabled="runningAll" @click="executeOne(s.key)">执行</button>
                     </template>
                     <template v-else>
-                      <span class="lock">🔒</span>
+                      <span class="lock"><AppIcon name="lock" :size="13" /></span>
                     </template>
                   </div>
                 </div>
@@ -81,7 +81,7 @@
 
         <!-- 完成 -->
         <div v-if="allDone" class="done-card">
-          <div class="done-emoji">🎉</div>
+          <div class="done-emoji"><AppIcon name="party" :size="40" /></div>
           <div class="done-info">
             <h3>部署完成</h3>
             <p>所有 {{ steps.length }} 个步骤已成功执行</p>
@@ -98,6 +98,7 @@ import { computed, onMounted, ref } from 'vue'
 import { useRouter, useRoute } from 'vue-router'
 import { ArrowLeft } from '@element-plus/icons-vue'
 import { ElIcon, ElMessage, ElMessageBox } from 'element-plus'
+import AppIcon from '@/components/common/AppIcon.vue'
 import { applicationApi } from '@/api/application'
 
 interface Step { key: string; label: string; status: 'pending' | 'completed' | 'error'; deps_met: boolean; model_index?: number; error?: string; result?: Record<string, any> }
@@ -118,11 +119,11 @@ const allDone = computed(() => steps.value.length > 0 && completedCount.value ==
 // 分组
 const stepGroups = computed(() => {
   const groups = [
-    { title: '初始化', icon: '🚀', keys: (s: Step) => s.key === 'create_app' },
-    { title: '公共资源', icon: '📦', keys: (s: Step) => s.key === 'create_roles_dicts' },
-    { title: '数据模型', icon: '🗃', keys: (s: Step) => s.key.startsWith('create_model:') },
-    { title: '表单配置', icon: '📋', keys: (s: Step) => s.key.startsWith('create_form:') },
-    { title: '权限配置', icon: '🔐', keys: (s: Step) => s.key === 'configure_permissions' },
+    { title: '初始化', icon: 'rocket', keys: (s: Step) => s.key === 'create_app' },
+    { title: '公共资源', icon: 'package', keys: (s: Step) => s.key === 'create_roles_dicts' },
+    { title: '数据模型', icon: 'database', keys: (s: Step) => s.key.startsWith('create_model:') },
+    { title: '表单配置', icon: 'clipboard', keys: (s: Step) => s.key.startsWith('create_form:') },
+    { title: '权限配置', icon: 'lock', keys: (s: Step) => s.key === 'configure_permissions' },
   ]
   return groups.map(g => {
     const ss = steps.value.filter(g.keys)

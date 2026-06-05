@@ -6,7 +6,7 @@
       <div v-if="!timeline.length && !loading" class="ac-empty">
         <slot name="empty">
           <div class="ac-empty-default">
-            <h2>{{ emptyTitle || '👋 开始对话' }}</h2>
+            <h2><AppIcon v-if="!emptyTitle" name="wave" :size="18" /> {{ emptyTitle || '开始对话' }}</h2>
             <p>{{ emptyHint || '在下方输入问题或描述需求。' }}</p>
           </div>
         </slot>
@@ -19,7 +19,7 @@
           <div class="ac-bubble process">
             <div class="ac-tool-group" :class="{ expanded: isGroupOpen(item.id, item), running: groupRunning(item) }">
               <div class="ac-tool-head" @click="toggleGroup(item.id, item)">
-                <span class="ac-tool-icon">{{ toolIcon(item.name) }}</span>
+                <span class="ac-tool-icon"><AppIcon :name="toolIcon(item.name)" :size="13" /></span>
                 <span class="ac-tool-name">{{ item.name }}</span>
                 <span class="ac-group-count">×{{ item.tools.length }}</span>
                 <span class="ac-tool-args">{{ groupSummary(item) }}</span>
@@ -48,7 +48,7 @@
                 <div class="ac-text">{{ item.content }}</div>
                 <div v-if="item.attachments && item.attachments.length" class="ac-attach-chips">
                   <span v-for="a in item.attachments" :key="a.id ?? a.filename" class="ac-attach-chip">
-                    <span class="icon">{{ a.kind === 'image' ? '🖼️' : '📄' }}</span>
+                    <span class="icon"><AppIcon :name="a.kind === 'image' ? 'image' : 'file'" :size="13" /></span>
                     <span class="name">{{ a.filename }}</span>
                   </span>
                 </div>
@@ -75,15 +75,15 @@
                 class="ac-feedback"
               >
                 <button class="ac-fb-btn" :title="'复制'" @click="onCopyMessage(item)">
-                  {{ copiedId === (item.id ?? '') ? '✓' : '📋' }}
+                  <AppIcon :name="copiedId === (item.id ?? '') ? 'check' : 'clipboard'" :size="13" />
                 </button>
-                <button class="ac-fb-btn" :title="'反馈：回复不准确'" @click="$emit('feedback', item)">👎</button>
+                <button class="ac-fb-btn" :title="'反馈：回复不准确'" @click="$emit('feedback', item)"><AppIcon name="thumbs-down" :size="13" /></button>
                 <button
                   v-if="item.meta?.run_id"
                   class="ac-fb-btn"
                   :title="'查看本次 trace'"
                   @click="$emit('open-trace', item)"
-                >🔍</button>
+                ><AppIcon name="search" :size="13" /></button>
               </div>
             </div>
           </div>
@@ -134,12 +134,12 @@
 
           <!-- artifact card（inline） -->
           <div v-else-if="item.kind === 'artifact' && item.artifact" class="ac-row assistant">
-            <div class="ac-avatar tool">📄</div>
+            <div class="ac-avatar tool"><AppIcon name="file" :size="14" /></div>
             <div class="ac-bubble process">
               <slot name="artifact" :artifact="item.artifact" :message="item">
                 <div class="ac-artifact-card" @click="$emit('open-artifact', item.artifact, item)">
                   <div class="ac-art-head">
-                    <span class="ac-art-icon">📄</span>
+                    <span class="ac-art-icon"><AppIcon name="file" :size="13" /></span>
                     <span class="ac-art-name">{{ item.artifact.filename }}</span>
                     <span v-if="item.artifact.version" class="ac-art-version">v{{ item.artifact.version }}</span>
                     <span class="ac-art-arrow">›</span>
@@ -192,6 +192,7 @@
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { marked } from 'marked'
 import { useThemeStore } from '@/stores/theme'
+import AppIcon from '@/components/common/AppIcon.vue'
 import ToolCard from './agent-conversation/ToolCard.vue'
 import type { AgentMessage, AgentToolPayload, AgentToolGroup, AgentTimelineItem } from './agent-conversation/types'
 
@@ -358,14 +359,14 @@ function formatTime(ts: number | string | undefined): string {
 
 function toolIcon(name: string): string {
   const n = (name || '').toLowerCase()
-  if (n.includes('read') || n.includes('cat')) return '📖'
-  if (n.includes('write') || n.includes('edit')) return '✏️'
-  if (n.includes('bash') || n.includes('exec') || n.includes('run')) return '⚡'
-  if (n.includes('search') || n.includes('grep') || n.includes('find')) return '🔍'
-  if (n.includes('list') || n.includes('ls')) return '📋'
-  if (n.includes('todo')) return '✅'
-  if (n.includes('ask')) return '❓'
-  return '⚒'
+  if (n.includes('read') || n.includes('cat')) return 'book-open'
+  if (n.includes('write') || n.includes('edit')) return 'pencil'
+  if (n.includes('bash') || n.includes('exec') || n.includes('run')) return 'zap'
+  if (n.includes('search') || n.includes('grep') || n.includes('find')) return 'search'
+  if (n.includes('list') || n.includes('ls')) return 'clipboard'
+  if (n.includes('todo')) return 'check-circle'
+  if (n.includes('ask')) return 'help-circle'
+  return 'tool'
 }
 
 // ── 自动滚动 ──

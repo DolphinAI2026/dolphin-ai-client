@@ -46,7 +46,7 @@
       </div>
 
       <div v-if="dashboard?.near_limit?.length" class="near-limit-banner">
-        <strong>⚠ {{ dashboard.near_limit.length }} 个租户接近配额上限：</strong>
+        <strong><AppIcon name="warning" :size="14" /> {{ dashboard.near_limit.length }} 个租户接近配额上限：</strong>
         <span v-for="(item, idx) in dashboard.near_limit.slice(0, 5)" :key="`${item.tenant_id}-${item.resource}`">
           {{ idx > 0 ? '、' : '' }}
           <a class="near-limit-link" @click="jumpTenant(item.tenant_id)">{{ item.tenant_name }}</a>
@@ -355,6 +355,7 @@ import {
   type TenantUsage,
 } from '@/api/auth'
 import UsageBar from '@/components/UsageBar.vue'
+import AppIcon from '@/components/common/AppIcon.vue'
 import { useUserStore } from '@/stores/user'
 
 const userStore = useUserStore()

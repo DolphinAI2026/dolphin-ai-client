@@ -1,12 +1,13 @@
 <template>
   <button class="open-lowcode-btn" :disabled="loading" :title="title" @click="onClick">
-    <span aria-hidden="true">🔧</span> {{ loading ? '打开中…' : '打开低代码后台' }}
+    <AppIcon name="wrench" :size="14" /> {{ loading ? '打开中…' : '打开低代码后台' }}
   </button>
 </template>
 
 <script setup lang="ts">
 import { ref } from 'vue'
 import { getEditorUrl } from '@/api/editorUrl'
+import AppIcon from '@/components/common/AppIcon.vue'
 
 const props = defineProps<{
   appId: number

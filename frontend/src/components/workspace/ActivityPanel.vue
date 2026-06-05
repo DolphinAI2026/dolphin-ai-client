@@ -14,7 +14,7 @@
 
     <div v-if="mode === 'simple'" class="advanced-link">
       <a href="#" @click.prevent="$router.push('/devops?application_id=' + applicationId)">
-        🔧 高级 (DevOps) ↗
+        <AppIcon name="wrench" :size="13" /> 高级 (DevOps) ↗
       </a>
     </div>
   </div>
@@ -22,6 +22,7 @@
 
 <script setup lang="ts">
 import { computed } from 'vue'
+import AppIcon from '@/components/common/AppIcon.vue'
 import DraftCard from './activity/DraftCard.vue'
 import ProposalCard from './activity/ProposalCard.vue'
 import DeployedCard from './activity/DeployedCard.vue'

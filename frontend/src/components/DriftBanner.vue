@@ -1,7 +1,7 @@
 <template>
   <div v-if="status?.drift" class="drift-banner">
     <div class="banner-content">
-      <span class="banner-icon">⚠</span>
+      <span class="banner-icon"><AppIcon name="warning" :size="16" /></span>
       <span class="banner-text">
         Git main 与 Builder 状态不一致：
         <code>git={{ status.git_sha?.slice(0, 8) || 'none' }}</code>
@@ -18,6 +18,7 @@
 
 <script setup lang="ts">
 import type { DriftStatus } from '@/api/gitConnection'
+import AppIcon from '@/components/common/AppIcon.vue'
 
 defineProps<{
   status?: DriftStatus | null

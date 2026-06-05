@@ -1,6 +1,6 @@
 <template>
   <section class="activity-card">
-    <h4>📋 当前草稿</h4>
+    <h4><AppIcon name="clipboard" :size="14" /> 当前草稿</h4>
     <p class="muted">v{{ draft.version }} · 完整度 {{ draft.completeness_confirmed }}/{{ draft.completeness_total }}</p>
     <p class="muted small">最后更新 {{ formatDate(draft.updated_at) }}</p>
     <button v-if="mode === 'pro'" class="builder-btn builder-btn-primary" type="button">Promote to Proposal ↗</button>
@@ -8,6 +8,8 @@
 </template>
 
 <script setup lang="ts">
+import AppIcon from '@/components/common/AppIcon.vue'
+
 defineProps<{
   draft: { id: string; version: number; completeness_confirmed: number; completeness_total: number; updated_at: string }
   mode: 'simple' | 'pro'

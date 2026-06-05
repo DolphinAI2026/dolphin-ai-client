@@ -25,7 +25,7 @@
 <template>
   <section class="dse" aria-label="数据 schema 编辑器">
     <div v-if="!menuId" class="dse-empty">
-      <div class="dse-empty-icon">🗄️</div>
+      <div class="dse-empty-icon"><AppIcon name="database" :size="48" /></div>
       <h3>选择一个表单</h3>
       <p>从左侧菜单列表点击某个表单, 这里显该表单关联模型的数据 schema.</p>
     </div>
@@ -119,8 +119,8 @@
                 <span class="mono dse-type-text">{{ formatSqlType(f) }}</span>
               </td>
               <td class="col-null">
-                <span v-if="!isRequired(f)" class="dse-null-yes" title="允许 NULL">✓</span>
-                <span v-else class="dse-null-no" title="不允许 NULL">✗</span>
+                <span v-if="!isRequired(f)" class="dse-null-yes" title="允许 NULL"><AppIcon name="check" :size="14" /></span>
+                <span v-else class="dse-null-no" title="不允许 NULL"><AppIcon name="x" :size="14" /></span>
               </td>
               <td class="col-key">
                 <span
@@ -153,18 +153,18 @@
           </div>
           <div class="dse-data-head-actions">
             <button class="dse-btn dse-btn-ghost" @click="onRefreshMockData" title="重新生成示例数据">
-              <span class="dse-btn-icon">⟲</span>
+              <span class="dse-btn-icon"><AppIcon name="refresh" :size="13" /></span>
               刷新
             </button>
             <button class="dse-btn dse-btn-primary" @click="onPromptChatAddData">
-              <span class="dse-btn-icon">✨</span>
+              <span class="dse-btn-icon"><AppIcon name="sparkles" :size="13" /></span>
               新增数据 — 用对话
             </button>
           </div>
         </div>
 
         <div v-if="dataPreviewColumns.length === 0" class="dse-data-empty">
-          <div class="dse-data-empty-icon">📊</div>
+          <div class="dse-data-empty-icon"><AppIcon name="bar-chart" :size="36" /></div>
           <h3>该模型暂无字段</h3>
           <p>先在 "结构" tab 加字段, 再查看数据预览.</p>
         </div>
@@ -219,7 +219,7 @@
       <!-- 关系 tab — 显当前模型的 FK list -->
       <div v-else-if="subTab === 'relations'" class="dse-rel-wrap">
         <div v-if="foreignKeyFields.length === 0" class="dse-placeholder">
-          <div class="dse-placeholder-icon">🔗</div>
+          <div class="dse-placeholder-icon"><AppIcon name="link" :size="40" /></div>
           <h3>无外键关联</h3>
           <p>该模型未定义引用其他模型的字段.</p>
           <p class="hint">若需关联, 用配置助手对话新加引用字段 (类型 = 引用).</p>
@@ -247,6 +247,7 @@ import { ElMessage } from 'element-plus'
 import request from '@/utils/request'
 import SkeletonCard from '@/components/states/SkeletonCard.vue'
 import ErrorCard from '@/components/states/ErrorCard.vue'
+import AppIcon from '@/components/common/AppIcon.vue'
 
 interface FieldRow {
   field_id?: string

@@ -1,6 +1,6 @@
 <template>
   <section class="activity-card">
-    <h4>✅ 已部署</h4>
+    <h4><AppIcon name="check-circle" :size="14" /> 已部署</h4>
     <p>canonical v{{ canonical.version }} · {{ formatDate(canonical.updated_at) }}</p>
     <details v-if="history.length">
       <summary>近 {{ history.length }} 次 apply</summary>
@@ -15,6 +15,7 @@
 </template>
 
 <script setup lang="ts">
+import AppIcon from '@/components/common/AppIcon.vue'
 import type { ProposalSummary } from '@/types/proposal'
 
 defineProps<{

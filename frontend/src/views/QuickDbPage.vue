@@ -15,6 +15,7 @@ import { ElMessage } from 'element-plus'
 import ShellTopBar from '@/components/v2/ShellTopBar.vue'
 import WorkbenchShell from '@/components/WorkbenchShell.vue'
 import EmptyState from '@/components/states/EmptyState.vue'
+import AppIcon from '@/components/common/AppIcon.vue'
 import { quickDbApi, type TableHealth } from '@/api/quickDb'
 import { usePreviewStore } from '@/stores/preview'
 
@@ -491,7 +492,7 @@ onMounted(() => {
             <div class="bulk-actions">
               <button class="link-btn" @click="toggleAllVisible(true)">全选当前</button>
               <button class="link-btn" @click="toggleAllVisible(false)">全不选</button>
-              <span class="muted">💡 框架表（SPRING_* / flyway_* 等）已默认跳过</span>
+              <span class="muted"><AppIcon name="bulb" :size="13" /> 框架表（SPRING_* / flyway_* 等）已默认跳过</span>
             </div>
             <div class="table-list">
               <label

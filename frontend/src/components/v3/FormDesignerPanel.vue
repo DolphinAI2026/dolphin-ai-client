@@ -27,7 +27,7 @@
       title="选择一个表单"
       desc="从左侧菜单列表点击某个表单, 这里显该表单的字段设计."
     >
-      <template #icon>📝</template>
+      <template #icon><AppIcon name="pencil" :size="22" /></template>
     </EmptyState>
 
     <!-- 空态 2: 加载中 (preview mode) -->
@@ -35,7 +35,7 @@
 
     <!-- 空态 3: 错误 (preview mode) -->
     <div v-else-if="error" class="fbp-state fbp-state-err">
-      <div class="fbp-state-icon">⚠️</div>
+      <div class="fbp-state-icon"><AppIcon name="warning" :size="40" /></div>
       <p>{{ error }}</p>
       <button class="fbp-btn fbp-btn-ghost" @click="() => reload()">重试</button>
     </div>
@@ -54,7 +54,7 @@
         <div class="fbp-form-preview">
           <!-- 2026-05-27 S: 删 preview-head 内部 title/modelCode/字段数 重复 (header 已有) -->
           <div v-if="fields.length === 0" class="fbp-form-preview-empty">
-            <div class="fbp-canvas-empty-icon">🧩</div>
+            <div class="fbp-canvas-empty-icon"><AppIcon name="puzzle" :size="36" /></div>
             <p>该表单暂无字段</p>
             <p class="hint">点上方「打开低代码后台」进 apaas 原生编辑器添加, 或用配置助手对话生成</p>
           </div>
@@ -84,7 +84,7 @@
             <div class="fbp-form-actions">
               <button type="button" class="fbp-btn fbp-btn-ghost" @click="onPreviewCancel">取消</button>
               <button type="submit" class="fbp-btn fbp-btn-primary">
-                <span aria-hidden="true">✓</span> 提交申请
+                <AppIcon name="check" :size="14" /> 提交申请
               </button>
             </div>
           </form>
@@ -99,6 +99,7 @@ import { ref, watch, h, defineComponent, onUnmounted, type PropType } from 'vue'
 import request, { API_PREFIX } from '@/utils/request'
 import EmptyState from '@/components/states/EmptyState.vue'
 import SkeletonCard from '@/components/states/SkeletonCard.vue'
+import AppIcon from '@/components/common/AppIcon.vue'
 
 /* ────────────────────────────────────────────────────────────────
    类型 — preview 渲染用 (FormPreviewInput)
@@ -434,7 +435,7 @@ const OpenApiSseChatPreview = defineComponent({
 
       return h('div', { class: 'fbp-oac' }, [
         h('div', { class: 'fbp-oac-head' }, [
-          h('span', { class: 'fbp-oac-icon', 'aria-hidden': 'true' }, '⚡'),
+          h('span', { class: 'fbp-oac-icon', 'aria-hidden': 'true' }, h(AppIcon, { name: 'zap', size: 13 })),
           h('span', { class: 'fbp-oac-title' }, 'OpenAPI 流式对话'),
           h('span', { class: 'fbp-oac-kind' }, 'OPENAPI_SSE_CHAT'),
           canChat ? h('span', { class: 'fbp-oac-live' }, '● 可交互') : null,
@@ -533,13 +534,13 @@ const FormPreviewInput = {
         case 'dept':
         case 'role':
           return h('div', { class: 'fbp-fp-pick' }, [
-            h('span', { class: 'fbp-fp-pick-icon' }, f.type === 'user' ? '👤' : f.type === 'dept' ? '🏢' : '🛡'),
+            h('span', { class: 'fbp-fp-pick-icon' }, h(AppIcon, { name: f.type === 'user' ? 'user' : f.type === 'dept' ? 'building' : 'shield', size: 14 })),
             h('input', { class: cls, type: 'text', placeholder: ph, value: v ?? '', onInput, style: 'border:none;background:transparent;padding:0;flex:1;' }),
           ])
         case 'image':
         case 'file':
           return h('label', { class: 'fbp-fp-upload' }, [
-            h('span', { class: 'fbp-fp-upload-icon' }, f.type === 'image' ? '🖼' : '📎'),
+            h('span', { class: 'fbp-fp-upload-icon' }, h(AppIcon, { name: f.type === 'image' ? 'image' : 'paperclip', size: 13 })),
             h('span', { class: 'fbp-fp-upload-text' }, f.type === 'image' ? '点击上传图片' : '点击上传文件'),
             h('input', { type: 'file', style: 'display:none' }),
           ])
@@ -560,7 +561,7 @@ const FormPreviewInput = {
         case 'static_text':
           return h('div', { class: 'fbp-fp-static' }, f.placeholder || f.name || '')
         case 'static_image':
-          return h('div', { class: 'fbp-fp-static-img' }, [h('span', null, '🖼 静态图片')])
+          return h('div', { class: 'fbp-fp-static-img' }, [h('span', null, [h(AppIcon, { name: 'image', size: 13 }), ' 静态图片'])])
         case 'divider':
           return h('hr', { class: 'fbp-fp-divider' })
         case 'placeholder':
@@ -577,7 +578,7 @@ const FormPreviewInput = {
           const cols = f.subColumns || []
           if (!cols.length) {
             return h('div', { class: 'fbp-fp-st-nocols' }, [
-              h('span', { class: 'fbp-fp-st-nocols-icon', 'aria-hidden': 'true' }, '📑'),
+              h('span', { class: 'fbp-fp-st-nocols-icon', 'aria-hidden': 'true' }, h(AppIcon, { name: 'files', size: 14 })),
               h('span', null, '子表 — 暂无列定义 (apaas 未配置子表列)'),
             ])
           }
@@ -653,7 +654,7 @@ const FormPreviewInput = {
           // ② 其他自开发组件 — 暂无专属渲染器, 显 config 摘要卡片 (比纯占位强)
           return h('div', { class: 'fbp-fp-custom-dev' }, [
             h('div', { class: 'fbp-fp-custom-dev-head' }, [
-              h('span', { class: 'fbp-fp-custom-dev-icon', 'aria-hidden': 'true' }, '✨'),
+              h('span', { class: 'fbp-fp-custom-dev-icon', 'aria-hidden': 'true' }, h(AppIcon, { name: 'sparkles', size: 14 })),
               h('span', { class: 'fbp-fp-custom-dev-title' }, '自开发组件'),
               f.customKind
                 ? h('span', { class: 'fbp-fp-custom-dev-kind' }, f.customKind)

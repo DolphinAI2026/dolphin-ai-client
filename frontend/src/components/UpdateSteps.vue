@@ -10,9 +10,9 @@
     <div class="steps-list">
       <div v-for="(step, idx) in steps" :key="step.key" class="step-item" :class="step.status">
         <div class="step-icon">
-          <span v-if="step.status === 'completed'" class="icon-done">✓</span>
-          <span v-else-if="step.status === 'running'" class="icon-running">⟳</span>
-          <span v-else-if="step.status === 'error'" class="icon-error">✕</span>
+          <span v-if="step.status === 'completed'" class="icon-done"><AppIcon name="check" :size="14" /></span>
+          <span v-else-if="step.status === 'running'" class="icon-running"><AppIcon name="refresh" :size="14" /></span>
+          <span v-else-if="step.status === 'error'" class="icon-error"><AppIcon name="x" :size="14" /></span>
           <span v-else class="icon-pending">{{ idx + 1 }}</span>
         </div>
         <div class="step-content">
@@ -63,6 +63,7 @@
 
 <script setup lang="ts">
 import { computed } from 'vue'
+import AppIcon from '@/components/common/AppIcon.vue'
 
 interface Step {
   key: string

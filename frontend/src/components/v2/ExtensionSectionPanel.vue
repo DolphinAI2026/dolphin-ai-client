@@ -16,7 +16,7 @@
         :class="{ 'ext-card--disabled': !canOpenAiCoding }"
         @click="openAiCoding"
       >
-        <div class="ext-card-icon" aria-hidden="true">💻</div>
+        <div class="ext-card-icon" aria-hidden="true"><AppIcon name="laptop" :size="28" /></div>
         <h4 class="ext-card-title">二次开发自开发包</h4>
         <p class="ext-card-desc">
           对话式开发前端组件 / 后端服务.
@@ -31,7 +31,7 @@
         :class="{ 'ext-card--disabled': !platformDevKitUrl }"
         @click="openPlatformDevKit"
       >
-        <div class="ext-card-icon" aria-hidden="true">📦</div>
+        <div class="ext-card-icon" aria-hidden="true"><AppIcon name="package" :size="28" /></div>
         <h4 class="ext-card-title">平台自开发资源管理</h4>
         <p class="ext-card-desc">
           直接在 aPaaS 平台界面管理自开发资源 / 上传 zip / 关联应用.
@@ -110,6 +110,7 @@
 import { ref, computed, onMounted, onBeforeUnmount, watch } from 'vue'
 import { useRouter } from 'vue-router'
 import { ElAlert, ElButton, ElMessage } from 'element-plus'
+import AppIcon from '@/components/common/AppIcon.vue'
 import extensionApi, { type DevKitItem, type ExtensionUpdateEvent } from '@/api/extension'
 
 const props = withDefaults(defineProps<{

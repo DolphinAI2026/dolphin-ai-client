@@ -35,7 +35,7 @@
           <!-- ── head ───────────────────────────────────────────────────── -->
           <div class="sam-head">
             <h3 id="sam-title">
-              <span aria-hidden="true">✨</span> 确认并生成
+              <AppIcon name="sparkles" :size="16" /> 确认并生成
             </h3>
             <p v-if="loading">正在加载草稿差异…</p>
             <p v-else-if="loadError">加载失败: {{ loadError }}</p>
@@ -66,7 +66,7 @@
 
             <!-- 空态 -->
             <div v-else-if="plan && plan.total_steps === 0" class="sam-empty">
-              <p>📭 当前 SPEC 草稿跟已部署生产版本一致, 没有需要 apply 的改动.</p>
+              <p><AppIcon name="inbox" :size="14" /> 当前 SPEC 草稿跟已部署生产版本一致, 没有需要 apply 的改动.</p>
               <p class="sam-empty-hint">
                 先用「设计」tab 内嵌 chat 改改 SPEC, 草稿写入后再回来 apply.
               </p>
@@ -109,13 +109,13 @@
                     v-else-if="running && stepIndex > itemAbsoluteIdx(g, idx)"
                     class="sam-step-indicator sam-step-indicator--done"
                     aria-label="已完成"
-                  >✓</span>
+                  ><AppIcon name="check" :size="12" /></span>
                 </div>
               </div>
 
               <!-- 警告 banner -->
               <div v-if="plan.total_steps > 0" class="sam-warn-banner">
-                <span aria-hidden="true">⚠️</span>
+                <AppIcon name="warning" :size="12" />
                 上线后立即生效, 失败自动回滚草稿不动. 已部署版本会留 1 周做 rollback 兜底.
               </div>
             </template>
@@ -130,7 +130,7 @@
 
             <!-- 执行完成 banner -->
             <div v-if="applyResult && !applyError" class="sam-ok-banner">
-              <span aria-hidden="true">✅</span>
+              <AppIcon name="check-circle" :size="12" />
               已完成 {{ applyResult.applied_steps }} / {{ applyResult.total_steps }} 步
               (耗时 {{ Math.round((applyResult.duration_ms || 0) / 100) / 10 }} 秒,
               模式: {{ applyResult.mode }})
@@ -165,7 +165,7 @@
                 已完成
               </span>
               <span v-else>
-                <span aria-hidden="true">✨</span>
+                <AppIcon name="sparkles" :size="13" />
                 确认并生成 ({{ plan?.total_steps || 0 }} 步) →
               </span>
             </button>
@@ -179,6 +179,7 @@
 <script setup lang="ts">
 import { computed, ref, watch } from 'vue'
 import request from '@/utils/request'
+import AppIcon from '@/components/common/AppIcon.vue'
 
 // ── props / emits ─────────────────────────────────────────────────────────
 

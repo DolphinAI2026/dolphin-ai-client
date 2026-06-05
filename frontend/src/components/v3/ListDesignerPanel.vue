@@ -25,7 +25,7 @@
       title="选择一个列表"
       desc="从左侧菜单点击某个列表视图, 这里显该列表的业务数据."
     >
-      <template #icon>📋</template>
+      <template #icon><AppIcon name="clipboard" :size="22" /></template>
     </EmptyState>
 
     <template v-else>
@@ -112,7 +112,7 @@
         <template v-else>
           <!-- 真没表可显 (列表未配置 / 无列字段) → 独立空态 -->
           <div v-if="isListConfigured === false || !visibleColumns.length" class="ldp-pv-empty">
-            <div class="ldp-pv-empty-icon">📦</div>
+            <div class="ldp-pv-empty-icon"><AppIcon name="package" :size="40" /></div>
             <template v-if="isListConfigured === false">
               <p>列表预览待对接 apaas 列表配置 API</p>
               <p class="hint">apaas 上配的查询条件 / 列字段当前拉不到 (P5: 探明独立 API 后补),
@@ -162,7 +162,7 @@
                 <tr v-else class="ldp-pv-empty-row">
                   <td :colspan="visibleColumns.length + 2">
                     <div class="ldp-pv-empty-inline">
-                      <div class="ldp-pv-empty-icon">📦</div>
+                      <div class="ldp-pv-empty-icon"><AppIcon name="package" :size="40" /></div>
                       <p>{{ hasActiveFilter ? '无匹配筛选条件的数据' : '暂无业务数据' }}</p>
                       <template v-if="!hasActiveFilter">
                         <p class="hint">数据由最终用户在前台录入</p>
@@ -232,6 +232,7 @@ import request from '@/utils/request'
 import EmptyState from '@/components/states/EmptyState.vue'
 import ErrorCard from '@/components/states/ErrorCard.vue'
 import SkeletonCard from '@/components/states/SkeletonCard.vue'
+import AppIcon from '@/components/common/AppIcon.vue'
 
 // preview mode 表头列
 interface PreviewColumn {

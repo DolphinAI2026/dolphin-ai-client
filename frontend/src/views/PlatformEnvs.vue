@@ -48,7 +48,7 @@
                 <div class="env-status-dot" :class="env.status"></div>
                 <h3 class="env-name">
                   {{ env.env_name }}
-                  <span v-if="env.is_default" class="default-star">&#11088;</span>
+                  <span v-if="env.is_default" class="default-star"><AppIcon name="star" :size="12" /></span>
                 </h3>
               </div>
               <span class="env-status-tag" :class="env.status">
@@ -125,7 +125,7 @@
                 <div class="env-status-dot" :class="cfg.status === 'active' ? 'connected' : 'disconnected'"></div>
                 <h3 class="env-name">
                   {{ cfg.config_name }}
-                  <span v-if="cfg.is_default" class="default-star">&#11088;</span>
+                  <span v-if="cfg.is_default" class="default-star"><AppIcon name="star" :size="12" /></span>
                 </h3>
               </div>
               <span class="env-status-tag" :class="cfg.status === 'active' ? 'connected' : 'disconnected'">
@@ -336,6 +336,7 @@ import { providerOptions, providerLabel, purposeLabel } from '@/utils/llmConfig'
 import BuilderFrame from '@/components/BuilderFrame.vue'
 import EmptyState from '@/components/states/EmptyState.vue'
 import SkeletonCard from '@/components/states/SkeletonCard.vue'
+import AppIcon from '@/components/common/AppIcon.vue'
 
 const route = useRoute()
 const router = useRouter()

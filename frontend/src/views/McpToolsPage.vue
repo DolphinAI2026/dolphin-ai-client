@@ -91,7 +91,7 @@
             <header class="mcp-card-header">
               <div class="mcp-card-title-line">
                 <span class="mcp-card-icon" :class="`cat-${tool.category_key}`">
-                  {{ categoryIcon(tool.category_key) }}
+                  <AppIcon :name="categoryIcon(tool.category_key)" :size="16" />
                 </span>
                 <code class="mcp-card-name">{{ tool.name }}</code>
                 <span class="mcp-card-cat">{{ tool.category_label }}</span>
@@ -124,7 +124,7 @@
                 {{ expanded[tool.name] ? '收起描述 ▲' : '展开详情 ▼' }}
               </button>
               <button class="mcp-try-btn" @click="openTryDialog(tool)" title="在线试调这个工具">
-                ⚡ 试调
+                <AppIcon name="zap" :size="12" /> 试调
               </button>
             </div>
 
@@ -143,10 +143,10 @@
         <div class="mcp-try-card">
           <header class="mcp-try-header">
             <div>
-              <h3>⚡ 试调 <code>{{ tryDialog.tool?.name }}</code></h3>
+              <h3><AppIcon name="zap" :size="15" /> 试调 <code>{{ tryDialog.tool?.name }}</code></h3>
               <p>{{ tryDialog.tool?.title }}</p>
             </div>
-            <button class="mcp-try-close" @click="closeTryDialog">✕</button>
+            <button class="mcp-try-close" @click="closeTryDialog"><AppIcon name="x" :size="16" /></button>
           </header>
 
           <section class="mcp-try-body">
@@ -192,6 +192,7 @@ import BuilderFrame from '@/components/BuilderFrame.vue'
 import EmptyState from '@/components/states/EmptyState.vue'
 import ErrorCard from '@/components/states/ErrorCard.vue'
 import SkeletonCard from '@/components/states/SkeletonCard.vue'
+import AppIcon from '@/components/common/AppIcon.vue'
 import request from '@/utils/request'
 
 interface ToolParam {
@@ -330,12 +331,12 @@ const filteredTools = computed(() => {
 
 function categoryIcon(key: string): string {
   return {
-    apaas_introspect: '🔍',
-    doc: '📋',
-    app_lifecycle: '🚀',
-    env: '🌐',
-    other: '🔧',
-  }[key] || '🔧'
+    apaas_introspect: 'search',
+    doc: 'clipboard',
+    app_lifecycle: 'rocket',
+    env: 'globe',
+    other: 'wrench',
+  }[key] || 'wrench'
 }
 
 async function loadTools() {

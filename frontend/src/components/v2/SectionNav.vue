@@ -39,7 +39,7 @@
           :title="section.label"
           @click="handleSectionClick(section)"
         >
-          <span class="snv-icon" aria-hidden="true">{{ section.icon }}</span>
+          <AppIcon class="snv-icon" :name="section.icon" :size="18" />
           <span v-if="!collapsed" class="snv-label">{{ section.label }}</span>
           <span
             v-if="!collapsed && section.tabs.length"
@@ -94,6 +94,7 @@
 
 <script setup lang="ts">
 import { computed, ref, watch } from 'vue'
+import AppIcon from '@/components/common/AppIcon.vue'
 
 // ──────────────── 类型 ────────────────
 /**
@@ -138,7 +139,7 @@ const SECTIONS: Section[] = [
   {
     code: 'data',
     label: '数据',
-    icon: '📊',
+    icon: 'bar-chart',
     tabs: [
       { code: 'models', label: '数据模型' },
       { code: 'dicts', label: '字典' },
@@ -147,7 +148,7 @@ const SECTIONS: Section[] = [
   {
     code: 'ui',
     label: '界面',
-    icon: '🎨',
+    icon: 'palette',
     tabs: [
       { code: 'menus', label: '菜单' },
       { code: 'forms', label: '表单' },
@@ -157,7 +158,7 @@ const SECTIONS: Section[] = [
   {
     code: 'logic',
     label: '逻辑',
-    icon: '⚙️',
+    icon: 'settings',
     tabs: [
       { code: 'processes', label: '流程' },
       { code: 'events', label: '业务事件' },
@@ -166,7 +167,7 @@ const SECTIONS: Section[] = [
   {
     code: 'permission',
     label: '权限',
-    icon: '🔒',
+    icon: 'lock',
     tabs: [
       { code: 'roles', label: '角色' },
       { code: 'field_perm', label: '字段权限' },
@@ -176,7 +177,7 @@ const SECTIONS: Section[] = [
   {
     code: 'extension',
     label: '扩展',
-    icon: '🧩',
+    icon: 'puzzle',
     tabs: [
       { code: 'dev_kit', label: '自开发组件' },
       { code: 'code_node', label: '代码节点' },

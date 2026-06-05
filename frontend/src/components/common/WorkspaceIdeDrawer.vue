@@ -14,6 +14,7 @@ import { ref } from 'vue'
 import { ElMessage } from 'element-plus'
 import { codingApi } from '@/api/coding'
 import { useIdeManager } from '@/views/coding/useIdeManager'
+import AppIcon from '@/components/common/AppIcon.vue'
 
 const open = ref(false)
 const {
@@ -72,7 +73,7 @@ defineExpose({ openWorkspace })
       <div v-if="!ideLoaded" class="ide-loading-overlay">
         <div class="ide-loading-content">
           <template v-if="ideLoadError">
-            <div class="ide-error-icon">⚠️</div>
+            <div class="ide-error-icon"><AppIcon name="warning" :size="32" /></div>
             <span>{{ ideLoadError }}</span>
             <button class="ide-retry-btn" @click="retryIdeLoad">重新加载</button>
           </template>

@@ -2,6 +2,7 @@
 import { useSpecStore } from '@/stores/spec'
 import type { ObjectSpec } from '@/types/spec'
 import { ElMessage, ElMessageBox } from 'element-plus'
+import AppIcon from '@/components/common/AppIcon.vue'
 
 const props = defineProps<{ object: ObjectSpec }>()
 const spec = useSpecStore()
@@ -61,17 +62,17 @@ async function dismissField(fieldCode: string, fieldName: string) {
         <span v-if="f.required" class="field-req">必填</span>
         <span class="field-actions">
           <template v-if="!f.confirmed">
-            <button class="action-btn confirm" title="采纳字段" aria-label="采纳字段" @click="confirmField(f.code)">✓</button>
+            <button class="action-btn confirm" title="采纳字段" aria-label="采纳字段" @click="confirmField(f.code)"><AppIcon name="check" :size="14" /></button>
             <button class="action-btn dismiss" title="忽略字段" aria-label="忽略字段" @click="dismissField(f.code, f.name)">忽</button>
           </template>
-          <span v-else class="field-status">✓</span>
+          <span v-else class="field-status"><AppIcon name="check" :size="14" /></span>
         </span>
       </li>
     </ul>
     <footer class="spec-card-actions">
-      <span v-if="object.confirmed" class="spec-card-status">✓ 已采纳</span>
+      <span v-if="object.confirmed" class="spec-card-status"><AppIcon name="check" :size="14" /> 已采纳</span>
       <template v-else>
-        <button class="action-btn confirm" @click="confirmObject">✓ 采纳对象</button>
+        <button class="action-btn confirm" @click="confirmObject"><AppIcon name="check" :size="14" /> 采纳对象</button>
         <button class="action-btn dismiss" @click="dismissObject">忽略对象</button>
       </template>
     </footer>

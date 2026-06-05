@@ -93,7 +93,7 @@
           type="button"
           @click="onSwitchMode('read')"
         >
-          <span aria-hidden="true">📖</span> 阅读
+          <AppIcon name="book-open" :size="12" /> 阅读
         </button>
         <button
           :class="{ active: viewMode === 'compare' }"
@@ -104,7 +104,7 @@
           :title="viewMode === 'compare' ? '切回阅读模式' : '草稿 vs 生产 对比 (MVP 仅数据模型显精细差异)'"
           @click="onSwitchMode('compare')"
         >
-          <span aria-hidden="true">🔍</span> 对比
+          <AppIcon name="search" :size="12" /> 对比
           <span v-if="diffTotalCount > 0" class="mode-pill-badge">{{ diffTotalCount }}</span>
         </button>
       </div>
@@ -116,10 +116,10 @@
         :title="exporting ? '导出中…' : '导出 SPEC 为 .md 文件 (调 /spec/export.md)'"
         @click="onExportMd"
       >
-        <span aria-hidden="true">⬇</span> {{ exporting ? '导出中…' : '导出 .md' }}
+        <AppIcon name="download" :size="13" /> {{ exporting ? '导出中…' : '导出 .md' }}
       </button>
       <button class="toolbar-btn" disabled title="P2 接入">
-        <span aria-hidden="true">📜</span> 历史
+        <AppIcon name="scroll" :size="13" /> 历史
       </button>
       <div class="spacer"></div>
       <button
@@ -128,7 +128,7 @@
         :title="applyCtaTitle"
         @click="onOpenApplyModal"
       >
-        <span aria-hidden="true">✨</span> 确认并生成
+        <AppIcon name="sparkles" :size="13" /> 确认并生成
         <span v-if="diffTotalCount > 0" class="apply-cta-count">[{{ diffTotalCount }}]</span>
       </button>
     </div>
@@ -202,7 +202,7 @@
 
         <!-- 草稿提示 banner -->
         <div class="doc-version-banner" role="status">
-          <span aria-hidden="true">⚠️</span>
+          <AppIcon name="warning" :size="13" />
           <span>
             这里渲染应用的 <strong>SPEC 文档</strong> — 跟"功能" tab 直接改 apaas
             不同, 设计 tab 改的是<strong>语义描述</strong>, 由 AI 把改动翻译成
@@ -218,7 +218,7 @@
 
         <!-- error -->
         <div v-else-if="error" class="state-block state-err">
-          <div class="state-icon" aria-hidden="true">⚠️</div>
+          <div class="state-icon" aria-hidden="true"><AppIcon name="warning" :size="40" /></div>
           <p>{{ error }}</p>
           <button class="toolbar-btn" type="button" @click="reload">重试</button>
         </div>
@@ -240,7 +240,7 @@
                 @click="onEditChapter(ch.key)"
                 title="P2 接入 — 用对话改这段 SPEC"
               >
-                <span aria-hidden="true">✨</span> 用对话改这段
+                <AppIcon name="sparkles" :size="11" /> 用对话改这段
               </button>
             </div>
 
@@ -842,6 +842,7 @@ import { ElMessage } from 'element-plus'
 import request, { API_PREFIX } from '@/utils/request'
 import SpecChatPanel from './SpecChatPanel.vue'
 import SpecApplyModal from './SpecApplyModal.vue'
+import AppIcon from '@/components/common/AppIcon.vue'
 
 // ── props ──────────────────────────────────────────────────────────────
 const props = defineProps<{

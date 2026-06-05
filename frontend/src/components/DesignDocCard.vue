@@ -8,7 +8,7 @@
     <!-- 应用信息 -->
     <div class="ddc-section" v-if="docResult.app_info">
       <div class="ddc-section-head">
-        <span class="ddc-icon">📱</span>
+        <span class="ddc-icon"><AppIcon name="smartphone" :size="14" /></span>
         <span>{{ docResult.app_info.name }}</span>
         <code class="ddc-code">{{ docResult.app_info.code }}</code>
       </div>
@@ -18,7 +18,7 @@
     <!-- 角色 -->
     <div class="ddc-section" v-if="docResult.roles?.length">
       <div class="ddc-section-head" @click="toggleSection('roles')">
-        <span class="ddc-icon">👥</span>
+        <span class="ddc-icon"><AppIcon name="users" :size="14" /></span>
         <span>角色清单</span>
         <span class="ddc-count">{{ docResult.roles.length }}</span>
         <span class="ddc-arrow" :class="{ open: openSections.has('roles') }">▸</span>
@@ -35,7 +35,7 @@
     <!-- 数据字典 -->
     <div class="ddc-section" v-if="docResult.data_dictionary?.length">
       <div class="ddc-section-head" @click="toggleSection('dicts')">
-        <span class="ddc-icon">📚</span>
+        <span class="ddc-icon"><AppIcon name="book" :size="14" /></span>
         <span>数据字典</span>
         <span class="ddc-count">{{ docResult.data_dictionary.length }}</span>
         <span class="ddc-arrow" :class="{ open: openSections.has('dicts') }">▸</span>
@@ -53,7 +53,7 @@
     <!-- 数据表 -->
     <div class="ddc-section" v-if="docResult.tables?.length">
       <div class="ddc-section-head" @click="toggleSection('tables')">
-        <span class="ddc-icon">🗃️</span>
+        <span class="ddc-icon"><AppIcon name="database" :size="14" /></span>
         <span>数据表</span>
         <span class="ddc-count">{{ docResult.tables.length }}</span>
         <span class="ddc-arrow" :class="{ open: openSections.has('tables') }">▸</span>
@@ -76,7 +76,7 @@
     <!-- 权限 -->
     <div class="ddc-section" v-if="docResult.role_table_mapping?.length">
       <div class="ddc-section-head" @click="toggleSection('perms')">
-        <span class="ddc-icon">🔐</span>
+        <span class="ddc-icon"><AppIcon name="lock" :size="14" /></span>
         <span>权限矩阵</span>
         <span class="ddc-count">{{ docResult.role_table_mapping.length }}</span>
         <span class="ddc-arrow" :class="{ open: openSections.has('perms') }">▸</span>
@@ -121,6 +121,7 @@
 
 <script setup lang="ts">
 import { ref } from 'vue'
+import AppIcon from '@/components/common/AppIcon.vue'
 
 const props = defineProps<{
   docResult: any

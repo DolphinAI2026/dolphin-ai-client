@@ -2,7 +2,7 @@
   <div class="app-chat-panel" v-if="visible">
     <header class="app-chat-header">
       <div class="app-chat-title">
-        <span class="title-icon">💬</span>
+        <span class="title-icon"><AppIcon name="message" :size="16" /></span>
         <span class="title-text">用 AI 调整应用</span>
         <span v-if="boundAppName" class="title-app">— {{ boundAppName }}</span>
       </div>
@@ -12,8 +12,8 @@
           :disabled="applying || !currentSession"
           @click="applyToBuilder"
           title="把当前对话产出的最新 md 应用到 Builder（生成新版变更计划）"
-        >{{ applying ? '应用中...' : '📥 应用最新 md 到 Builder' }}</button>
-        <button class="close-btn" @click="$emit('close')" title="关闭">✕</button>
+        ><template v-if="applying">应用中...</template><template v-else><AppIcon name="download" :size="14" /> 应用最新 md 到 Builder</template></button>
+        <button class="close-btn" @click="$emit('close')" title="关闭"><AppIcon name="x" :size="14" /></button>
       </div>
     </header>
 
@@ -55,6 +55,7 @@
 import { computed, nextTick, onUnmounted, ref, watch } from 'vue'
 import { ElMessage } from 'element-plus'
 import AgentConversation from '@/components/common/AgentConversation.vue'
+import AppIcon from '@/components/common/AppIcon.vue'
 import { aiChatApi, type AIChatMessage, type AIChatToolCall } from '@/api/aiChat'
 import { applicationApi } from '@/api/application'
 import UnifiedChatComposer from '@/components/common/UnifiedChatComposer.vue'

@@ -14,12 +14,12 @@
         <p v-else-if="loading" class="fpp-stat">加载中…</p>
       </div>
       <button class="fpp-btn fpp-btn-ghost" :disabled="loading" @click="load">
-        <span aria-hidden="true">⟲</span> 刷新
+        <AppIcon name="refresh" :size="14" /> 刷新
       </button>
     </header>
 
     <div class="fpp-banner">
-      <span aria-hidden="true">✨</span>
+      <AppIcon name="sparkles" :size="14" />
       业务视角预览 — 这个表单的<strong>角色权限</strong>(查看/编辑/删除/新增/导入 + 数据范围)。当前只读，编辑能力下一步接入。
     </div>
 
@@ -37,7 +37,7 @@
         title="暂无角色"
         desc="先在「权限 → 角色」创建角色 / 部署应用，再回这里配这个表单的权限"
       >
-        <template #icon>🔑</template>
+        <template #icon><AppIcon name="key" :size="32" /></template>
       </EmptyState>
       <div v-else class="fpp-table-wrap">
         <table class="fpp-table">
@@ -55,7 +55,7 @@
                 <BaseTag v-if="role.is_all_user" tone="brand">默认</BaseTag>
               </td>
               <td v-for="col in COLS" :key="col.key" class="fpp-cell">
-                <span v-if="cellOf(role.role_id)[col.key]" class="fpp-on" title="有权限">✓</span>
+                <span v-if="cellOf(role.role_id)[col.key]" class="fpp-on" title="有权限"><AppIcon name="check" :size="14" /></span>
                 <span v-else class="fpp-off" title="无权限">—</span>
               </td>
               <td class="fpp-col-range">
@@ -82,6 +82,7 @@ import EmptyState from '@/components/states/EmptyState.vue'
 import ErrorCard from '@/components/states/ErrorCard.vue'
 import BaseBadge from '@/components/BaseBadge.vue'
 import BaseTag from '@/components/BaseTag.vue'
+import AppIcon from '@/components/common/AppIcon.vue'
 
 interface PermRole { role_id: string; role_name: string; is_all_user?: boolean }
 interface PermCell { view: boolean; edit: boolean; delete: boolean; add: boolean; import: boolean; range: string | null }

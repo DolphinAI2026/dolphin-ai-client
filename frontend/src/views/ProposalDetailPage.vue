@@ -42,7 +42,7 @@
             <div v-if="detail.validation_report">
               <div v-for="(check, name) in validationChecks" :key="name" class="check-row">
                 <span :class="check.ok ? 'check-pass' : 'check-fail'">
-                  {{ check.ok ? '✓' : '✗' }}
+                  <AppIcon :name="check.ok ? 'check' : 'x'" :size="14" />
                 </span>
                 <strong>{{ checkLabel(String(name)) }}</strong>
                 <ul v-if="check.issues.length">
@@ -100,7 +100,7 @@
               <summary>平台部署详情（{{ executorResult.journal.length }} 个资源）</summary>
               <ul class="journal-list">
                 <li v-for="(entry, idx) in executorResult.journal" :key="idx">
-                  <span class="journal-icon">{{ entry.platform_id ? '✓' : '✗' }}</span>
+                  <span class="journal-icon"><AppIcon :name="entry.platform_id ? 'check' : 'x'" :size="14" /></span>
                   <code>{{ entry.operation }} {{ entry.resource_type }}:{{ entry.resource_code }}</code>
                   <span v-if="entry.platform_id" class="muted small">(id: {{ entry.platform_id }})</span>
                 </li>
@@ -118,7 +118,7 @@
               </ul>
             </details>
             <p v-if="fixupProposalId" class="fixup-link">
-              🔧 系统已自动创建 fix-up proposal：
+              <AppIcon name="wrench" :size="14" /> 系统已自动创建 fix-up proposal：
               <button class="builder-btn builder-btn-primary" type="button" @click="goToProposal(fixupProposalId)">
                 查看 fix-up
               </button>
@@ -134,7 +134,7 @@
       <!-- 不可逆确认 modal -->
       <div v-if="confirmModal" class="modal-backdrop" @click.self="confirmModal = null">
         <div class="modal">
-          <h3>⚠ 包含不可逆操作</h3>
+          <h3><AppIcon name="warning" :size="16" /> 包含不可逆操作</h3>
           <p>下列变更 apply 后<strong>无法直接撤销</strong>，请仔细确认：</p>
           <ul class="irreversible-list">
             <li v-for="(op, idx) in confirmModal" :key="idx">
@@ -160,6 +160,7 @@ import { useRoute, useRouter } from 'vue-router'
 import BuilderFrame from '@/components/BuilderFrame.vue'
 import DriftBanner from '@/components/DriftBanner.vue'
 import BaseToast from '@/components/BaseToast.vue'
+import AppIcon from '@/components/common/AppIcon.vue'
 import { proposalsApi } from '@/api/proposals'
 import { gitConnectionApi, type DriftStatus } from '@/api/gitConnection'
 import {
