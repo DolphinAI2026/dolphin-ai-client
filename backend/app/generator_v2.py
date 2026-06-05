@@ -1083,6 +1083,14 @@ async def _rebind_dicts_on_forms(
         dict_options_map[dc] = await client.query_dict_options(app_id, did)
 
     label_dict = _collect_label_dict_map(models, dict_codes)
+    # 兜底绑定: spec 常没把下拉字段连到字典(field.dict 缺失), 导致下拉组件 source=None、
+    # 设计器/运行时下拉空。这里按"字典名 == 组件 label"补映射(如 字段「报修类型」↔ 字典「报修类型」),
+    # 让下拉仍能绑到平台字典。不覆盖已有的显式映射(显式优先)。
+    for _d in all_platform_dicts:
+        _dn = str(_d.get("dictionaryName") or "").strip()
+        _dcode = _d.get("dictionaryCode")
+        if _dn and _dcode and _dn not in label_dict:
+            label_dict[_dn] = _dcode
     form_result_by_id = {
         str(item.get("formId") or "").strip(): item
         for item in (form_results or [])
