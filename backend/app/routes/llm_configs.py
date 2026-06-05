@@ -511,10 +511,11 @@ async def update_llm_config_status(
 # ── Helpers ──
 
 async def _clear_defaults(db: AsyncSession, tenant_id: int, purpose: str):
-    """清除平台所有默认配置；默认模型平台唯一。"""
+    """清除本租户所有默认配置；默认模型每租户唯一。"""
     await db.execute(
         update(LLMConfig)
         .where(
+            LLMConfig.tenant_id == tenant_id,
             LLMConfig.is_default == True,
         )
         .values(is_default=False)
@@ -527,10 +528,11 @@ async def _assign_replacement_default(
     purpose: str,
     exclude_id: Optional[int] = None,
 ):
-    """当默认模型被禁用时，尽量补一个平台级同用途的可用默认。"""
+    """当默认模型被禁用时，尽量补一个本租户同用途的可用默认。"""
     stmt = (
         select(LLMConfig)
         .where(
+            LLMConfig.tenant_id == tenant_id,
             LLMConfig.purpose == purpose,
             LLMConfig.status == "active",
         )
@@ -544,11 +546,12 @@ async def _assign_replacement_default(
 
 
 async def get_llm_config_for_purpose(db: AsyncSession, tenant_id: int, purpose: str) -> Optional[LLMConfig]:
-    """获取平台级指定用途的默认 LLM 配置（供其他模块使用）。"""
+    """获取本租户指定用途的默认 LLM 配置（供其他模块使用）。"""
     # 先找精确匹配的 purpose
     result = await db.execute(
         select(LLMConfig)
         .where(
+            LLMConfig.tenant_id == tenant_id,
             LLMConfig.purpose == purpose,
             LLMConfig.is_default == True,
             LLMConfig.status == "active",
@@ -563,6 +566,7 @@ async def get_llm_config_for_purpose(db: AsyncSession, tenant_id: int, purpose: 
     result = await db.execute(
         select(LLMConfig)
         .where(
+            LLMConfig.tenant_id == tenant_id,
             LLMConfig.purpose == "all",
             LLMConfig.is_default == True,
             LLMConfig.status == "active",
@@ -573,10 +577,11 @@ async def get_llm_config_for_purpose(db: AsyncSession, tenant_id: int, purpose: 
     if config:
         return config
 
-    # 兜底选一个可用模型，避免历史数据没有 default 时平台功能不可用。
+    # 兜底选一个本租户可用模型，避免历史数据没有 default 时功能不可用。
     result = await db.execute(
         select(LLMConfig)
         .where(
+            LLMConfig.tenant_id == tenant_id,
             LLMConfig.status == "active",
         )
         .order_by(LLMConfig.created_at.desc(), LLMConfig.id.desc())
@@ -597,9 +602,10 @@ async def get_default_llm_config_id_for_purpose(db: AsyncSession, tenant_id: int
 
 
 async def list_llm_configs_for_purpose(db: AsyncSession, tenant_id: int, purpose: str) -> list[LLMConfig]:
-    """列出平台级指定用途可用的 LLM 配置，精确用途优先，其次 purpose=all。"""
+    """列出本租户指定用途可用的 LLM 配置，精确用途优先，其次 purpose=all。"""
     result = await db.execute(
         select(LLMConfig).where(
+            LLMConfig.tenant_id == tenant_id,
             LLMConfig.status == "active",
         )
     )
@@ -620,12 +626,13 @@ async def get_active_llm_config_by_id(
     tenant_id: int,
     config_id: int,
 ) -> Optional[LLMConfig]:
-    """按 id 查平台级 active LLM 配置；不限 purpose。
+    """按 id 查本租户 active LLM 配置；不限 purpose。
 
     用于 vibe_coding / ai_chat 这类不限 purpose 的会话级 selected_llm_config_id 校验。
     """
     result = await db.execute(
         select(LLMConfig).where(
+            LLMConfig.tenant_id == tenant_id,
             LLMConfig.id == config_id,
             LLMConfig.status == "active",
         )
@@ -641,6 +648,7 @@ async def get_active_llm_config_by_id_for_purpose(
 ) -> Optional[LLMConfig]:
     result = await db.execute(
         select(LLMConfig).where(
+            LLMConfig.tenant_id == tenant_id,
             LLMConfig.id == config_id,
             LLMConfig.status == "active",
         )
