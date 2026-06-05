@@ -11,6 +11,7 @@ import httpx
 from app.database import get_db
 from app.deps import AuthContext, get_auth_context, require_tenant_admin, resolve_effective_tenant_id
 from app.models import LLMConfig
+from app.models.tenant import Tenant
 from app.crypto import encrypt_password, decrypt_password
 from app.llm_client import LLMClient
 
@@ -274,6 +275,12 @@ async def create_llm_config(
 ):
     """新增 LLM 配置（管理员）"""
     target_tid = await _resolve_target_tenant_id(db, ctx, req.tenant_id)
+    if _is_platform_admin(ctx) and req.tenant_id is not None:
+        target_tenant = (await db.execute(
+            select(Tenant).where(Tenant.id == req.tenant_id, Tenant.status == 1)
+        )).scalar_one_or_none()
+        if not target_tenant:
+            raise HTTPException(status_code=400, detail="目标租户不存在或已停用")
     if req.is_default:
         await _clear_defaults(db, target_tid, req.purpose)
 
@@ -525,7 +532,7 @@ def _is_platform_admin(ctx: AuthContext) -> bool:
 async def _resolve_target_tenant_id(db: AsyncSession, ctx: AuthContext, requested: Optional[int]) -> int:
     """平台管理员用 requested(缺省回退 effective tenant);租户管理员强制自己租户。"""
     if _is_platform_admin(ctx):
-        return requested if requested else await resolve_effective_tenant_id(db, ctx)
+        return requested if requested is not None else await resolve_effective_tenant_id(db, ctx)
     return ctx.tenant_id
 
 

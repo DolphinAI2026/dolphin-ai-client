@@ -97,3 +97,33 @@ async def test_tenant_admin_create_ignores_body_tenant_id(db_session):
     created = await create_llm_config(req, ctx, db_session)
     row = (await db_session.get(LLMConfig, created.id))
     assert row.tenant_id == t_a.id, "租户管理员创建必须落到自己租户"
+
+
+@pytest.mark.asyncio
+async def test_platform_admin_create_rejects_unknown_tenant(db_session):
+    t_a, t_b, a_cfg, b_cfg = await _setup(db_session)
+    ctx = _ctx(db_session, t_a.id, platform=True)
+    req = LLMConfigCreate(
+        config_name="new", provider="dolphin", base_url="https://new/v1",
+        api_key="k", model="gpt-5.5", purpose="all", tenant_id=999999,
+    )
+    with pytest.raises(HTTPException) as exc:
+        await create_llm_config(req, ctx, db_session)
+    assert exc.value.status_code == 400
+
+
+@pytest.mark.asyncio
+async def test_platform_admin_create_rejects_disabled_tenant(db_session):
+    from app.models.tenant import Tenant
+    t_a, t_b, a_cfg, b_cfg = await _setup(db_session)
+    t_disabled = Tenant(tenant_name="D", tenant_code="td", status=0)
+    db_session.add(t_disabled)
+    await db_session.flush()
+    ctx = _ctx(db_session, t_a.id, platform=True)
+    req = LLMConfigCreate(
+        config_name="new", provider="dolphin", base_url="https://new/v1",
+        api_key="k", model="gpt-5.5", purpose="all", tenant_id=t_disabled.id,
+    )
+    with pytest.raises(HTTPException) as exc:
+        await create_llm_config(req, ctx, db_session)
+    assert exc.value.status_code == 400
