@@ -33,6 +33,7 @@ tools:
     agents: [coding, config]
     category: other
     description: "把已上传到 apaas 平台的自开发包（zip）关联到应用的「自开发资源」列表。"
+    search_hint: "绑定 关联 挂载 自开发包 二次开发 zip 应用资源"
   bind_apaas_form_field_to_dict:
     sections: [data, ui]
     agents: [config]
@@ -98,6 +99,7 @@ tools:
     agents: [config]
     category: other
     description: "⭐ 一键建新表单+流程 (走 SPEC 驱动). 用户最高频\"加新功能\"场景."
+    search_hint: "新功能 新增功能 搭建 建表单 建流程 从零 SPEC scaffold"
   check_app_code_conflict:
     sections: [global]
     agents: [builder, config]
@@ -188,6 +190,7 @@ tools:
     agents: [builder, config]
     category: lifecycle
     description: "design-v4 I4: 把本地 ProcessDefinition 真同步到 apaas 平台 (24→17 节点翻译 + save_process_config)。"
+    search_hint: "流程 审批流 同步 提交流程 process workflow 部署流程"
   disable_apaas_app_dict:
     sections: [data]
     agents: [builder, config]
@@ -253,6 +256,7 @@ tools:
     agents: [config]
     category: update
     description: "修复已创建但组件为空的表单：从绑定主模型字段补回基础表单组件；已有组件时跳过。"
+    search_hint: "修复 空表单 表单为空 补字段 重建 fix empty form"
   get_apaas_process_detail:
     sections: [logic]
     agents: [builder, config]
@@ -458,6 +462,7 @@ tools:
     agents: [coding, config]
     category: lifecycle
     description: "重新发布 aPaaS 应用版本（自开发变更必须 redeploy 才生效）。"
+    search_hint: "发布 上线 release 重新发布 redeploy 生效"
   rollback_application:
     sections: [global]
     agents: []  # mcp_server 已实现, dolphin agent prompt 文档未列入 — 维持现状
@@ -558,6 +563,7 @@ tools:
     agents: [coding, config]
     category: other
     description: "直接上传一个外部 zip 到 apaas 平台 — 内部走 multipart upload + 智能查重 update/create。"
+    search_hint: "自开发包 zip 上传 外部 import 安装 打包 二次开发"
   validate_apaas_builder_doc:
     sections: [global]
     agents: [builder]

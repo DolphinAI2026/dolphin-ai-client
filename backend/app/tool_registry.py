@@ -129,6 +129,17 @@ def tools_for_agent(agent: str) -> list[str]:
     ]
 
 
+def search_hints() -> dict[str, str]:
+    """name -> search_hint (tool_registry.yaml 可选字段); 缺省空串。
+
+    search_hint 是给 search_deferred_tools 用的额外关键词索引：
+    用于工具名/描述不直观、用户会用不同词搜索的场景。
+    例如 republish_apaas_app → "发布 上线 release 重新发布"。
+    """
+    reg = load()
+    return {name: (meta.get("search_hint") or "") for name, meta in (reg.get("tools") or {}).items()}
+
+
 def valid_sections() -> frozenset[str]:
     """允许的 section 取值."""
     return VALID_SECTIONS

@@ -1410,6 +1410,66 @@ def split_core_deferred(all_schemas: list[dict]) -> tuple[list[dict], dict[str, 
     return core, deferred
 
 
+# ── 延迟工具搜索 ──────────────────────────────────────────────────────────────
+
+def _search_hint_for(name: str) -> str:
+    """从 tool_registry.yaml search_hint 字段取额外关键词索引；异常时静默返空串。"""
+    try:
+        from app.tool_registry import search_hints
+        return search_hints().get(name, "")
+    except Exception:
+        return ""
+
+
+def _tokenize(name: str) -> list[str]:
+    """把 snake_case/camelCase 工具名拆成小写词列表，供名称命中打分用。"""
+    # camelCase → snake_case (防御性，工具名其实都是 snake_case)
+    s = re.sub(r"(?<!^)(?=[A-Z])", "_", name)
+    return [p for p in re.split(r"[_\W]+", s.lower()) if p]
+
+
+def search_deferred_tools(
+    query: str,
+    deferred_by_name: dict[str, dict],
+    limit: int = 8,
+) -> list[str]:
+    """在 deferred 工具集里搜索匹配 query 的工具名列表。
+
+    两种模式：
+    - select: 前缀  → 精确按名称列表返回（逗号分隔），用于 ToolSearch select:<name>,...
+    - keyword 搜索  → 对名称 tokens + description + search_hint 打分排序，返 top-limit
+
+    scoring:
+      名称词命中 +3，描述/hint 文本命中 +1；分数 0 的排除。
+    """
+    q = (query or "").strip()
+    if q.lower().startswith("select:"):
+        want = [x.strip() for x in q[len("select:"):].split(",") if x.strip()]
+        return [n for n in want if n in deferred_by_name]
+
+    terms = [w for w in re.split(r"[\s,]+", q.lower()) if w]
+    if not terms:
+        return []
+
+    scored: list[tuple[int, str]] = []
+    for name, schema in deferred_by_name.items():
+        desc = (schema.get("function", {}).get("description") or "")
+        hint = _search_hint_for(name)
+        name_tokens = set(_tokenize(name))
+        text = (desc + " " + hint).lower()
+        score = 0
+        for term in terms:
+            if term in name_tokens:
+                score += 3
+            elif term in text:
+                score += 1
+        if score > 0:
+            scored.append((score, name))
+
+    scored.sort(key=lambda x: (-x[0], x[1]))
+    return [n for _, n in scored[:limit]]
+
+
 # ── 锁定 app 上下文注入 (Task A4, 2026-06-04) ──────────────────────────────────
 # 当 AIChatSession.app_id 非空时，把内部 app_id → (env_id, apaas_app_id) 解析出来，
 # 并强制注入到声明了这两参数的 apaas 工具 —— 覆盖 LLM 给的值。
