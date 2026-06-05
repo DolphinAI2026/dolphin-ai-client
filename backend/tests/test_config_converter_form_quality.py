@@ -249,7 +249,10 @@ async def test_generator_v2_finalizes_created_form_detail_config():
     assert client.saved["allModelCodes"] == ["delisting_apply"]
     assert client.saved["detailPage"]["formName"] == "退市审核表"
     assert client.saved["detailPage"]["formCode"] == "delisting_review_form"
-    assert client.saved["detailPage"]["webFormSettings"] == {}
+    # 不再注入 webFormSettings/mobileFormSettings(会让设计器画布崩, 见 3a546040 +
+    # test_form_no_webform_settings_injection.py)。
+    assert "webFormSettings" not in client.saved["detailPage"]
+    assert "mobileFormSettings" not in client.saved["detailPage"]
     assert client.saved["formModelType"] == "DATABASE"
     components = client.saved["detailPage"]["formComponents"]
     assert components

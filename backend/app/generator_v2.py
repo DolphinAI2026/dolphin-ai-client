@@ -1030,17 +1030,62 @@ def _collect_label_dict_map(
     return label_dict
 
 
+def _collect_spec_component_dict_map(
+    form_results: Optional[List[dict]],
+    dict_codes: Dict[str, str],
+) -> Dict[str, str]:
+    """从 spec 表单组件收集 {组件 label: 平台字典 code}。
+
+    spec 生成的表单组件自带权威 dict 引用(comp.dictCode/dict), 且其 label 与平台保存后的
+    组件 label 一致(如「化学体系」)。平台 save_form_config 会把 dict/dictCode 从组件上剥掉,
+    所以回写绑定时只能从 spec 组件(form_results[*].formComponents)取这个引用 —— 比「平台字典名
+    == 字段 label」的兜底可靠(字典名常与字段 label 不同, 如 字典「电池化学体系」vs 字段「化学体系」)。
+    """
+    out: Dict[str, str] = {}
+
+    def _walk(comps: Optional[List[dict]]) -> None:
+        for c in comps or []:
+            if not isinstance(c, dict):
+                continue
+            ref = c.get("dictCode") or c.get("dict")
+            label = str(c.get("label") or "").strip()
+            if ref and label:
+                out[label] = dict_codes.get(ref, ref)
+            # 子表列组件
+            if c.get("componentType") == "FORM_WIDGET_SON_TABLE":
+                _walk(c.get("tableColumn"))
+
+    for fr in form_results or []:
+        if isinstance(fr, dict):
+            _walk(fr.get("formComponents"))
+    return out
+
+
 def _bind_dict_on_component(
     comp: dict,
     label_dict: Dict[str, str],
     dict_id_map: Dict[str, str],
     dict_options_map: Dict[str, list],
+    dict_codes: Optional[Dict[str, str]] = None,
 ) -> bool:
-    """把单个下拉组件绑定到平台字典选项；命中改动返回 True。"""
+    """把单个下拉组件绑定到平台字典选项；命中改动返回 True。
+
+    绑定优先级:
+      1) 组件自带的权威 dict 引用(comp.dictCode/dict)—— spec 生成时就写在组件上,
+         经 dict_codes 翻译成平台 dictionaryCode(空表/缺键时按原值)。
+      2) 兜底:按"字典名 == 组件 label"在 label_dict 里查。
+    历史只走 (2),当平台字典名 ≠ 字段 label 时(如 字典「电池化学体系」vs 字段「化学体系」)
+    会漏绑;(1) 用组件自带 code 直绑,不依赖名字巧合。
+    """
     ct = comp.get("componentType")
     if ct not in ("FORM_SELECT_INPUT_SINGLE", "FORM_SELECT_INPUT"):
         return False
-    dc = label_dict.get(comp.get("label", ""), "")
+    dc = ""
+    comp_dict_ref = comp.get("dictCode") or comp.get("dict")
+    if comp_dict_ref:
+        dc = (dict_codes or {}).get(comp_dict_ref, comp_dict_ref)
+    if not dc or dc not in dict_id_map:
+        dc = label_dict.get(comp.get("label", ""), "")
     if not dc or dc not in dict_id_map:
         return False
     did = dict_id_map[dc]
@@ -1083,6 +1128,9 @@ async def _rebind_dicts_on_forms(
         dict_options_map[dc] = await client.query_dict_options(app_id, did)
 
     label_dict = _collect_label_dict_map(models, dict_codes)
+    # 权威补充: 用 spec 表单组件自带的 dict 引用(按组件 label)覆盖/补全 —— 平台 save 会剥掉组件上的
+    # dict/dictCode, 这里从 form_results 的 spec 组件取, 比下面"字典名==label"的兜底可靠。
+    label_dict.update(_collect_spec_component_dict_map(form_results, dict_codes))
     # 兜底绑定: spec 常没把下拉字段连到字典(field.dict 缺失), 导致下拉组件 source=None、
     # 设计器/运行时下拉空。这里按"字典名 == 组件 label"补映射(如 字段「报修类型」↔ 字典「报修类型」),
     # 让下拉仍能绑到平台字典。不覆盖已有的显式映射(显式优先)。
@@ -1107,12 +1155,12 @@ async def _rebind_dicts_on_forms(
             comps = fc.get("detailPage", {}).get("formComponents", [])
 
             for comp in comps:
-                if _bind_dict_on_component(comp, label_dict, dict_id_map, dict_options_map):
+                if _bind_dict_on_component(comp, label_dict, dict_id_map, dict_options_map, dict_codes):
                     updated = True
                 # 子表内的列组件
                 if comp.get("componentType") == "FORM_WIDGET_SON_TABLE":
                     for col in comp.get("tableColumn", []):
-                        if _bind_dict_on_component(col, label_dict, dict_id_map, dict_options_map):
+                        if _bind_dict_on_component(col, label_dict, dict_id_map, dict_options_map, dict_codes):
                             updated = True
 
             if updated:
