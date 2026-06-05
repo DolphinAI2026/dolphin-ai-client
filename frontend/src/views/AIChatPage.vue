@@ -136,7 +136,7 @@
             v-if="message.meta?.kind === 'app-ready' && message.meta?.info"
             class="app-ready-cta"
             :class="{ 'is-generating': !ctaIsReady(message.meta.info) && !ctaIsFailed(message.meta.info), 'is-failed': ctaIsFailed(message.meta.info) }"
-            @click="openAppReady(message.meta.info)"
+            @click="(ctaIsReady(message.meta.info) || ctaIsFailed(message.meta.info)) && openAppReady(message.meta.info)"
           >
             <div class="cta-icon">{{ ctaIsReady(message.meta.info) ? '🚀' : (ctaIsFailed(message.meta.info) ? '!' : '⏳') }}</div>
             <div class="cta-body">
@@ -157,8 +157,13 @@
                 <div class="cta-progress-fill" :style="{ width: ctaPercent(message.meta.info) + '%' }"></div>
               </div>
             </div>
-            <button class="cta-action" type="button" @click.stop="openAppReady(message.meta.info)">
-              {{ ctaIsReady(message.meta.info) ? '打开应用 →' : (ctaIsFailed(message.meta.info) ? '查看详情 →' : '看生成进度 →') }}
+            <button
+              v-if="ctaIsReady(message.meta.info) || ctaIsFailed(message.meta.info)"
+              class="cta-action"
+              type="button"
+              @click.stop="openAppReady(message.meta.info)"
+            >
+              {{ ctaIsReady(message.meta.info) ? '打开应用 →' : '查看详情 →' }}
             </button>
           </div>
         </template>
@@ -3333,10 +3338,12 @@ onMounted(async () => {
 .app-ready-cta.is-generating {
   background: linear-gradient(135deg, rgba(245, 158, 11, 0.14), rgba(217, 119, 6, 0.08));
   border-color: rgba(245, 158, 11, 0.42);
+  cursor: default;
 }
 .app-ready-cta.is-generating:hover {
   border-color: rgba(245, 158, 11, 0.7);
   background: linear-gradient(135deg, rgba(245, 158, 11, 0.20), rgba(217, 119, 6, 0.12));
+  transform: none;
 }
 .app-ready-cta.is-generating .cta-action { background: #d97706; }
 .app-ready-cta.is-generating .cta-action:hover { background: #b45309; }
