@@ -44,15 +44,6 @@
     <div v-else class="fbp-shell">
       <!-- ─── header (预览 + 编辑共用) — 2026-05-27 S: 删 title/form_id 重复, 上面 mdsh-subnav 已有 -->
       <header class="fbp-canvas-head">
-        <div class="fbp-canvas-meta">
-          <p class="fbp-canvas-sub">
-            <span v-if="modelCode" class="fbp-code mono">{{ modelCode }}</span>
-            <span v-if="fields.length" class="fbp-canvas-stat">{{ fields.length }} 字段</span>
-            <span v-if="fields.filter(f => f.required).length" class="fbp-canvas-stat">
-              {{ fields.filter(f => f.required).length }} 必填
-            </span>
-          </p>
-        </div>
         <div class="fbp-canvas-actions">
           <OpenLowcodeBackendButton
             :app-id="props.appId"
@@ -68,10 +59,6 @@
 
       <!-- ─── preview mode body ──────────────────────────────────────── -->
       <div class="fbp-canvas-body fbp-canvas-body-preview">
-        <div class="fbp-preview-banner">
-          <span class="fbp-preview-banner-icon" aria-hidden="true">✨</span>
-          <span>业务视角预览 — 看到的就是最终用户填表样子, 改字段请用配置助手对话, 或点上方「打开低代码后台」进 apaas 原生编辑器手动调.</span>
-        </div>
         <div class="fbp-form-preview">
           <!-- 2026-05-27 S: 删 preview-head 内部 title/modelCode/字段数 重复 (header 已有) -->
           <div v-if="fields.length === 0" class="fbp-form-preview-empty">

@@ -125,10 +125,6 @@
             </div>
           </div>
 
-          <!-- 只读视图 — 改流程去配置助手对话 或 打开低代码后台 -->
-          <p class="pdp-sidebar-foot pdp-sidebar-foot-view">
-            👁 只读视图 — 改流程用 ✨ 配置助手对话, 或点上方「打开低代码后台」进 apaas 原生编辑器
-          </p>
         </aside>
 
         <!-- 中央 x6 canvas — 只读拓扑视图 (v-show 恒真, 保 containerRef 常驻 DOM). -->

@@ -44,16 +44,6 @@
     </div>
 
     <template v-else>
-      <!-- O2: 业务视角 banner -->
-      <div class="dse-biz-banner" role="note">
-        <span class="dse-biz-banner-icon" aria-hidden="true">✨</span>
-        <span class="dse-biz-banner-text">
-          业务视角预览 — 这是
-          <strong>{{ menuName || currentModel.model_name || currentModel.model_code || '该' }}</strong>
-          模型的真数据 / 字段配置. 改字段用配置助手对话.
-        </span>
-      </div>
-
       <!-- 表头 -->
       <header class="dse-head">
         <div class="dse-head-meta">

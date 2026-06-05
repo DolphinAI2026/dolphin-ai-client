@@ -82,27 +82,6 @@
               <span v-else>草稿</span>
             </span>
           </div>
-          <!-- "→ 自开发"：当前应用上下文里发起自开发任务，带应用结构跳到 AI Coding agent。
-               这是 Builder→Coding handoff bridge，恢复 commit b63a8c8 误删的能力，
-               但增强为：frontend 直接把 store.preview 应用结构序列化进 message，
-               不依赖 Coding agent 主动 fetch（agent prompt 暂不动）。
-               2026-05-21 加 apaas_app_id 守卫：draft 应用（status=draft / apaas_app_id=NULL）
-               没 formId/uuid，自开发拿不到真实表单 ID 直接挂。等 deploy_application 跑完
-               写入 apaas_app_id 后才显示这个按钮。 -->
-          <button
-            v-if="builderCurrentAppId && store.currentApp?.apaas_app_id"
-            type="button"
-            class="mode-btn mode-btn-link"
-            title="把当前应用的结构（模型/表单/流程）带进 IDE 工作区，做二次开发页面或后端接口"
-            @click="handoffToCodingForAppDev"
-          >
-            <span class="mode-btn-icon" aria-hidden="true">
-              <svg viewBox="0 0 16 16" fill="none">
-                <path d="m6 4-3 4 3 4M10 4l3 4-3 4" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round" />
-              </svg>
-            </span>
-            <span>→ 自开发</span>
-          </button>
         </div>
       </template>
       <template #actions>
@@ -205,7 +184,6 @@
             <div class="mdsh-subnav">
               <div class="mdsh-subnav-info">
                 <span class="mdsh-menu-name">{{ selectedApaasMenuName || '选中菜单' }}</span>
-                <span v-if="selectedApaasMenuFormId" class="mdsh-menu-code mono">{{ selectedApaasMenuFormId }}</span>
               </div>
               <div class="mdsh-subnav-tabs" role="tablist">
                 <button
@@ -2244,45 +2222,6 @@ const loadUploadedDocumentSpec = async (specId?: string | null) => {
 // 把当前应用的结构（模型/表单/流程/角色）打包成 message，结构化交接到 AIChatPage 在应用上下文里
 // 做二次开发，不再跳独立 /coding。AIChatPage.vue onMounted 读 sessionStorage('ai_builder_pending_app_dev')
 // （route.query.app_dev=1 时）建会话并把 message 作为首条发出。
-function handoffToCodingForAppDev() {
-  const appId = builderCurrentAppId.value
-  if (!appId) return
-  const appName = builderAppDisplayName.value || '当前应用'
-  const appCode = displayAppCode.value || ''
-  const models = (store.preview.models || []) as any[]
-  const forms = (store.preview.forms || []) as any[]
-  const flows = (store.preview.flows || []) as any[]
-  const roles = (store.preview.roles || []) as any[]
-
-  const lines: string[] = []
-  lines.push(`[应用上下文] 用户已从 AI Builder 切到 AI Coding，要给「${appName}」做自开发。`)
-  lines.push(`- app_id: ${appId}`)
-  if (appCode) lines.push(`- app_code: ${appCode}`)
-  if (models.length) {
-    lines.push(`- 数据模型 (${models.length})：${models.map((m: any) => `${m?.name || m?.code}${m?.code ? `(${m.code})` : ''}`).filter(Boolean).slice(0, 12).join('、')}`)
-  }
-  if (forms.length) {
-    lines.push(`- 表单 (${forms.length})：${forms.map((f: any) => `${f?.formName || f?.name || f?.code}${f?.modelCode ? `→${f.modelCode}` : ''}`).filter(Boolean).slice(0, 12).join('、')}`)
-  }
-  if (flows.length) {
-    lines.push(`- 业务流程 (${flows.length})：${flows.map((f: any) => f?.name || f?.flowName).filter(Boolean).slice(0, 8).join('、')}`)
-  }
-  if (roles.length) {
-    lines.push(`- 角色：${roles.map((r: any) => r?.name || r?.code).filter(Boolean).slice(0, 8).join('、')}`)
-  }
-  lines.push('')
-  lines.push('请问候我并询问要做什么类型的自开发任务（自开发页面 / 后端接口 / 移动端 / 定时任务），同时基于以上应用结构给出 1-2 个合理建议。')
-
-  const message = lines.join('\n')
-  try {
-    sessionStorage.setItem(
-      'ai_builder_pending_app_dev',
-      JSON.stringify({ message, app_id: appId, app_name: appName }),
-    )
-  } catch { /* sessionStorage 不可用就不传，AIChatPage 侧 fallback */ }
-  router.push({ path: '/ai-chat', query: { app_dev: '1' } })
-}
-
 // ── 配置助手浮动 (2026-05-25) ──
 // 默认收起为 FAB, 不再挤压 iframe. localStorage 持久化用户偏好.
 const ASSISTANT_OPEN_KEY = 'apaas-config-assistant-open-v1'

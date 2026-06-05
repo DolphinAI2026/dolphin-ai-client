@@ -63,21 +63,10 @@
       <!-- preview mode — 业务视角真列表 -->
       <!-- =========================================================== -->
       <div v-else class="ldp-pv">
-        <!-- banner -->
-        <div class="ldp-pv-banner">
-          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-            <path d="M12 2l1.5 4.5L18 8l-4.5 1.5L12 14l-1.5-4.5L6 8l4.5-1.5z"/>
-          </svg>
-          <span>
-            业务视角预览 — 看到的就是用户看列表的样子. 改列 / 加查询条件用配置助手对话.
-          </span>
-        </div>
-
         <!-- 标题区 — 2026-05-27 S: 删 title 重复 (mdsh-subnav 已显), 只留 stats -->
         <div class="ldp-pv-title-row">
           <p class="ldp-pv-sub">
             <span v-if="modelCode" class="ldp-code">{{ modelCode }}</span>
-            <span v-if="visibleColumns.length" class="ldp-stat">{{ visibleColumns.length }} 列</span>
             <span v-if="totalRows" class="ldp-stat">共 {{ totalRows }} 条</span>
           </p>
         </div>
