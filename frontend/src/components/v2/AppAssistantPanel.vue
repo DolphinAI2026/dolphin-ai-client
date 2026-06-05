@@ -24,6 +24,7 @@ import AgentRunTraceDrawer from '@/components/common/AgentRunTraceDrawer.vue'
 import { usePanelResize } from './config-assistant/composables/usePanelResize'
 import { useAiChatSession } from '@/composables/useAiChatSession'
 import { aiChatApi, type AIChatSession } from '@/api/aiChat'
+import { renderMd } from '@/utils/markdown'
 import type { AgentMessage } from '@/components/common/agent-conversation/types'
 
 // props/emit 跟 ChatPage 当前传给 ConfigAssistantPanel 的完全同名，保证 controller 一行 tag swap。
@@ -217,6 +218,45 @@ function openSessionTrace() {
   traceDrawerVisible.value = true
 }
 
+// ─── 产物（设计文档 md）查看抽屉 ───
+// AgentConversation 的 artifact 卡 emit('open-artifact', artifact)；AIChatPage 走自己的
+// 右栏面板，这里(嵌在 ChatPage 右栏)没有那套，自带一个抽屉渲染全文。否则点卡片无反应。
+const artifactDrawerVisible = ref(false)
+const artifactName = ref('')
+const artifactContent = ref('')
+const artifactLoading = ref(false)
+async function onOpenArtifact(artifact: any) {
+  if (!artifact) return
+  artifactName.value = artifact.filename || '设计文档'
+  artifactContent.value = ''
+  artifactDrawerVisible.value = true
+  if (!currentSession.value) {
+    artifactContent.value = artifact.preview || ''
+    return
+  }
+  artifactLoading.value = true
+  try {
+    const ver =
+      artifact.version != null && !Number.isNaN(Number(artifact.version))
+        ? Number(artifact.version)
+        : undefined
+    const detail = await aiChatApi.getArtifact(currentSession.value.id, artifact.filename, ver)
+    artifactContent.value = detail.content || artifact.preview || ''
+  } catch {
+    ElMessage.error('加载设计文档失败')
+    artifactContent.value = artifact.preview || ''
+  } finally {
+    artifactLoading.value = false
+  }
+}
+function copyArtifact() {
+  if (!artifactContent.value) return
+  navigator.clipboard
+    .writeText(artifactContent.value)
+    .then(() => ElMessage.success('已复制'))
+    .catch(() => {})
+}
+
 // ─── C3：工具成功改配置 → emit refresh-iframe ───
 // 复用 config 的规则（ConfigAssistantMessages.vue ~L38-49 + useConfigChat.ts ~L15）：
 // 工具名匹配 /^(update_|create_|add_|delete_|disable_|set_)/ 且 status==='success'。
@@ -337,6 +377,7 @@ onMounted(() => {
       empty-title="AI Builder"
       empty-hint="描述你想改的配置或要开发的功能"
       @open-trace="onOpenTrace"
+      @open-artifact="onOpenArtifact"
       @answer-ask="(opt) => send(opt)"
     />
 
@@ -444,6 +485,30 @@ onMounted(() => {
       :session-id="currentSession?.id ?? null"
       :prefer-run-id="tracePreferRunId"
     />
+
+    <!-- 设计文档（artifact md）查看抽屉 -->
+    <el-drawer
+      v-model="artifactDrawerVisible"
+      :title="artifactName"
+      direction="rtl"
+      size="680px"
+      :append-to-body="true"
+    >
+      <div class="aa-art-drawer">
+        <div v-if="artifactLoading" class="aa-art-loading">加载中…</div>
+        <template v-else>
+          <div class="aa-art-actions">
+            <button class="aa-art-copy" type="button" @click="copyArtifact">复制全文</button>
+          </div>
+          <div
+            v-if="artifactContent"
+            class="aa-art-md md"
+            v-html="renderMd(artifactContent)"
+          ></div>
+          <div v-else class="aa-art-empty">文档内容为空</div>
+        </template>
+      </div>
+    </el-drawer>
   </aside>
 </template>
 
@@ -743,5 +808,45 @@ onMounted(() => {
 .aa-drawer-del:hover {
   color: var(--err, #dc2626);
   background: rgba(220, 38, 38, 0.08);
+}
+
+/* ─── 设计文档（artifact md）查看抽屉 ─── */
+.aa-art-drawer { padding: 4px 2px 24px; }
+.aa-art-loading, .aa-art-empty {
+  padding: 40px 0; text-align: center; color: var(--text-3); font-size: 13px;
+}
+.aa-art-actions { display: flex; justify-content: flex-end; margin-bottom: 10px; }
+.aa-art-copy {
+  appearance: none; border: 1px solid var(--line); background: var(--surface-2);
+  color: var(--text-2); padding: 4px 12px; font-size: 12px; border-radius: 6px;
+  cursor: pointer; transition: color .15s, border-color .15s;
+}
+.aa-art-copy:hover { color: var(--text); border-color: var(--text-3); }
+.aa-art-md {
+  font-size: 13px; line-height: 1.7; color: var(--text);
+  white-space: normal; word-break: break-word;
+}
+.aa-art-md :deep(h1) { font-size: 18px; margin: 16px 0 8px; font-weight: 600; }
+.aa-art-md :deep(h2) { font-size: 15px; margin: 14px 0 6px; font-weight: 600; }
+.aa-art-md :deep(h3) { font-size: 13.5px; margin: 12px 0 6px; font-weight: 600; }
+.aa-art-md :deep(p) { margin: 0 0 8px; }
+.aa-art-md :deep(ul), .aa-art-md :deep(ol) { margin: 4px 0 10px 20px; padding: 0; }
+.aa-art-md :deep(li) { margin-bottom: 2px; }
+.aa-art-md :deep(table) { border-collapse: collapse; width: 100%; margin: 8px 0; font-size: 12px; }
+.aa-art-md :deep(th), .aa-art-md :deep(td) { border: 1px solid var(--line); padding: 5px 9px; }
+.aa-art-md :deep(th) { background: var(--surface-2); }
+.aa-art-md :deep(code) {
+  background: var(--surface-2); padding: 1px 6px; border-radius: 3px; color: #f0824a;
+  font-family: ui-monospace, Menlo, monospace; font-size: 11.5px;
+}
+.aa-art-md :deep(pre) {
+  background: var(--surface-2); border: 1px solid var(--line);
+  border-radius: 6px; padding: 10px 12px; overflow-x: auto;
+}
+.aa-art-md :deep(pre code) { background: transparent; padding: 0; color: var(--text); }
+.aa-art-md :deep(a) { color: var(--brand); }
+.aa-art-md :deep(blockquote) {
+  border-left: 3px solid var(--line); padding-left: 10px;
+  color: var(--text-3); margin: 8px 0;
 }
 </style>
