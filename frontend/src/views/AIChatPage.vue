@@ -52,7 +52,9 @@
             title="查看本次会话的 Agent 活动 / Trace"
             @click="openSessionTrace"
           >
-            Agent 活动
+            <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+              <path d="M22 12h-4l-3 9L9 3l-3 9H2" />
+            </svg>
           </button>
           <button
             v-if="automationRunnerEnabled"
@@ -67,7 +69,7 @@
             :class="{ active: artifactsPanelOpen }"
             @click="artifactsPanelOpen = !artifactsPanelOpen"
             :title="artifactsPanelOpen ? '收起设计文档' : '展开设计文档'"
-          >📄 设计文档 <span class="badge">{{ artifacts.length }}</span></button>
+          ><AppIcon name="file" :size="14" /> 设计文档 <span class="badge">{{ artifacts.length }}</span></button>
         </div>
       </header>
 
@@ -113,7 +115,7 @@
         <template #artifact="{ artifact }">
           <div class="artifact-card" @click="openArtifactInPanel(artifact.raw)">
             <div class="art-card-head">
-              <span class="art-card-icon">📄</span>
+              <span class="art-card-icon"><AppIcon name="file" :size="16" /></span>
               <span class="art-card-name">{{ artifact.filename }}</span>
               <span class="art-card-version">v{{ artifact.version }}</span>
               <button
@@ -138,7 +140,11 @@
             :class="{ 'is-generating': !ctaIsReady(message.meta.info) && !ctaIsFailed(message.meta.info), 'is-failed': ctaIsFailed(message.meta.info) }"
             @click="(ctaIsReady(message.meta.info) || ctaIsFailed(message.meta.info)) && openAppReady(message.meta.info)"
           >
-            <div class="cta-icon">{{ ctaIsReady(message.meta.info) ? '🚀' : (ctaIsFailed(message.meta.info) ? '!' : '⏳') }}</div>
+            <div class="cta-icon">
+              <AppIcon v-if="ctaIsReady(message.meta.info)" name="rocket" :size="18" />
+              <span v-else-if="ctaIsFailed(message.meta.info)">!</span>
+              <AppIcon v-else name="hourglass" :size="18" />
+            </div>
             <div class="cta-body">
               <div class="cta-title">
                 应用「{{ message.meta.info.appName }}」{{ ctaIsReady(message.meta.info) ? '已就绪' : (ctaIsFailed(message.meta.info) ? '生成失败' : '正在生成中…') }}
@@ -210,7 +216,7 @@
       <div class="input-area" v-if="currentSession">
         <!-- 排队中提示卡（对话界面风格：流式中输入第二条消息会进队列） -->
         <div v-if="pendingQueue.length > 0" class="queue-banner">
-          <span class="queue-icon">🕐</span>
+          <span class="queue-icon"><AppIcon name="clock" :size="14" /></span>
           <span class="queue-text">{{ pendingQueue.length }} 条消息排队中 · 当前回复结束后自动发送</span>
           <button class="queue-clear" @click="pendingQueue = []" title="清空队列">×</button>
         </div>
@@ -277,7 +283,7 @@
           :class="{ active: activeArtifactName === fname }"
           @click="loadArtifactByName(fname)"
         >
-          <span class="art-card-dot">📄</span>
+          <span class="art-card-dot"><AppIcon name="file" :size="13" /></span>
           <span class="art-card-fname">{{ fname }}</span>
           <span class="art-card-vbadge">v{{ latestVersionFor(fname) }}</span>
         </div>
@@ -330,6 +336,16 @@
         </div>
         <!-- Tab body -->
         <pre v-if="panelTab === 'raw'" class="art-preview-body">{{ activeArtifactContent }}</pre>
+        <!-- HTML 产物: 用沙箱 iframe 原样渲染(等同本地打开), 不要走 markdown 渲染器
+             (markdown 会把缩进的 HTML 当代码块, 且不应用文件自带 <style>)。 -->
+        <iframe
+          v-else-if="isHtmlArtifact"
+          class="art-preview-frame"
+          :srcdoc="activeArtifactContent"
+          sandbox="allow-scripts allow-popups"
+          referrerpolicy="no-referrer"
+          title="HTML 产物预览"
+        ></iframe>
         <div v-else class="art-preview-body md" v-html="renderMd(activeArtifactContent)"></div>
       </div>
       <div v-else class="art-empty">
@@ -437,6 +453,7 @@ import type { AgentMessage } from '@/components/common/agent-conversation/types'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { isImageFile } from '@/utils/pasteImages'
 import UnifiedChatComposer from '@/components/common/UnifiedChatComposer.vue'
+import AppIcon from '@/components/common/AppIcon.vue'
 import LandingComposer from '@/components/v2/LandingComposer.vue'
 import type { UnifiedChatAttachment } from '@/components/common/chatComposer'
 // chat / cowork mode 已合并 — ChatDotRound 用作 session 列表前导 icon（对话界面风格）
@@ -1965,6 +1982,15 @@ function isMarkdownArtifact(a: AIChatArtifact): boolean {
   return /\.md$/i.test(a.filename || '')
 }
 
+// HTML 产物(文件名 .html/.htm 或内容以 <!doctype/<html 开头)→ 用 iframe 原样渲染,
+// 不走 markdown(否则缩进 HTML 被当代码块 + 文件自带样式不生效)。
+const isHtmlArtifact = computed<boolean>(() => {
+  const name = (activeArtifactName.value || '').toLowerCase()
+  if (/\.html?$/.test(name)) return true
+  const head = (activeArtifactContent.value || '').trimStart().slice(0, 200).toLowerCase()
+  return head.startsWith('<!doctype html') || head.startsWith('<html')
+})
+
 const canSendArtifactToBuilder = computed(() =>
   !!activeArtifactName.value
   && !!activeArtifactContent.value
@@ -2556,7 +2582,22 @@ onMounted(async () => {
   font-size: 11px;
   font-family: ui-monospace, Menlo, monospace;
 }
-.trace-entry-btn,
+.trace-entry-btn {
+  appearance: none;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 32px;
+  height: 32px;
+  padding: 0;
+  background: var(--ac-input);
+  border: 1px solid var(--ac-border-strong);
+  color: var(--ac-text-mute);
+  border-radius: 6px;
+  cursor: pointer;
+  transition: all 0.15s;
+}
+.trace-entry-btn:hover { color: var(--ac-text); border-color: var(--ac-border-strong); }
 .automation-toggle {
   appearance: none;
   background: var(--ac-input);
@@ -2567,9 +2608,6 @@ onMounted(async () => {
   font-size: 12.5px;
   cursor: pointer;
   transition: all 0.15s;
-}
-.trace-entry-btn:hover { color: var(--ac-text); border-color: var(--ac-border-strong); }
-.automation-toggle {
   min-height: 32px;
   font-weight: 700;
   display: inline-flex;
@@ -3606,6 +3644,15 @@ onMounted(async () => {
   margin: 0; padding: 16px 18px;
   font-family: ui-monospace, Menlo, monospace; font-size: 11.5px;
   color: var(--ac-text-mute); white-space: pre-wrap; word-break: break-word;
+}
+/* HTML 产物预览: 沙箱 iframe 铺满预览区, 白底(等同本地打开浏览器) */
+.art-preview-frame {
+  flex: 1 1 auto;
+  width: 100%;
+  min-height: 600px;
+  border: 0;
+  background: #fff;
+  display: block;
 }
 .art-preview-body.md {
   font-family: -apple-system, BlinkMacSystemFont, "PingFang SC", sans-serif;
