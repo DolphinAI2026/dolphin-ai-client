@@ -1045,6 +1045,7 @@ async def get_form_detail(
     form_id: str,
     ctx: Annotated[AuthContext, Depends(get_auth_context)],
     db: Annotated[AsyncSession, Depends(get_db)],
+    force: bool = Query(False, description="True 时跳过 180s 缓存强制重拉 — 写后刷新用 (apaas 改完读模型才追上, 缓存命中会返 stale)"),
 ) -> dict:
     """design-v4 Phase A+: 拿表单完整配置 (跟低代码原生 data-model-fn-config 100% 对齐).
 
@@ -1073,6 +1074,7 @@ async def get_form_detail(
         env_id=app.platform_env_id,
         apaas_app_id=str(app.apaas_app_id),
         extra_args={"form_id": form_id},
+        use_cache=not force,
     )
     if not ok:
         return {

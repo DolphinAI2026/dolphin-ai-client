@@ -225,11 +225,12 @@
             <div class="mdsh-body">
               <FormDesignerPanel
                 v-if="designerSub === 'form'"
-                :key="`form-${selectedApaasMenuId}-${designerRefreshKey}`"
+                :key="`form-${selectedApaasMenuId}`"
                 :app-id="existingAppId"
                 :menu-id="selectedApaasMenuId"
                 :menu-name="selectedApaasMenuName"
                 :form-id="selectedApaasMenuFormId"
+                :refresh-nonce="designerRefreshKey"
               />
               <ListDesignerPanel
                 v-else-if="designerSub === 'list'"

@@ -37,7 +37,7 @@
     <div v-else-if="error" class="fbp-state fbp-state-err">
       <div class="fbp-state-icon">⚠️</div>
       <p>{{ error }}</p>
-      <button class="fbp-btn fbp-btn-ghost" @click="reload">重试</button>
+      <button class="fbp-btn fbp-btn-ghost" @click="() => reload()">重试</button>
     </div>
 
     <!-- preview / edit shell -->
@@ -116,7 +116,7 @@
 </template>
 
 <script setup lang="ts">
-import { ref, watch, h, defineComponent, type PropType } from 'vue'
+import { ref, watch, h, defineComponent, onUnmounted, type PropType } from 'vue'
 import request, { API_PREFIX } from '@/utils/request'
 import EmptyState from '@/components/states/EmptyState.vue'
 import OpenLowcodeBackendButton from '@/components/v3/OpenLowcodeBackendButton.vue'
@@ -708,6 +708,8 @@ const props = defineProps<{
   menuId?: string
   menuName?: string
   formId?: string
+  /** 写后刷新信号：父级每次 +1 → 触发静默重试拉取（跨越 aPaaS 写后读延迟）。 */
+  refreshNonce?: number
 }>()
 
 const fields = ref<FormField[]>([])
@@ -734,21 +736,26 @@ function onInlineEditHint(f: FormField) {
    Data load (preview-only, components → fields)
    ──────────────────────────────────────────────────────────────── */
 
-async function reload() {
+async function reload(opts: { silent?: boolean; force?: boolean } = {}) {
   if (!props.appId || !props.menuId) {
     fields.value = []
     modelCode.value = ''
     return
   }
-  loading.value = true
-  error.value = ''
-  modelCode.value = ''
+  // silent: 写后刷新用 — 不闪 skeleton(不置 loading)、保留旧字段可见,
+  // 拿到新数据再原地替换;失败也不闪错误态。普通加载/菜单切换走非 silent。
+  if (!opts.silent) {
+    loading.value = true
+    error.value = ''
+    modelCode.value = ''
+  }
   try {
     if (props.formId) {
-      const respFD = await request.get<any, any>(
-        `/applications/${props.appId}/forms/${props.formId}/detail`
-      )
+      // force=true 跳过后端 180s 缓存 — 写后刷新必须绕过, 否则命中缓存返改前 stale。
+      const detailUrl = `/applications/${props.appId}/forms/${props.formId}/detail${opts.force ? '?force=true' : ''}`
+      const respFD = await request.get<any, any>(detailUrl)
       if (respFD?.ok) {
+        error.value = ''  // silent 重试成功时清掉旧错误态, 让表单显出来
         const comps = respFD.components || []
         fields.value = comps.map((c: any): FormField => {
           const compType = String(c.component_type || '')
@@ -852,13 +859,36 @@ async function reload() {
       error.value = resp?.message || resp?.error_code || '加载失败'
     }
   } catch (e: any) {
-    error.value = e?.response?.data?.detail || e?.message || '网络错误'
+    // silent 刷新失败: 保留旧字段、不闪错误态(下一档重试或手动刷新再处理)
+    if (!opts.silent) {
+      error.value = e?.response?.data?.detail || e?.message || '网络错误'
+    }
   } finally {
-    loading.value = false
+    if (!opts.silent) loading.value = false
   }
 }
 
 watch(() => [props.appId, props.menuId, props.formId], () => reload(), { immediate: true })
+
+// 写后刷新: refreshNonce 每变一次 → 静默多档重试拉取。
+// 根因: aPaaS formConfig save 后, detailPageConfigById 读模型要数秒才反映改动
+// (实测写本身 ~3.7s, 之后读模型再 ~0-3s 追上)。单次刷新常落在 stale 窗口内 →
+// 旧表现"改完中间预览不刷新, 手动刷新才对"。多档静默重试(0/2.5/6s)跨越该窗口,
+// 取到新数据原地替换, 不闪 skeleton。
+let _refreshTimers: ReturnType<typeof setTimeout>[] = []
+function _clearRefreshTimers() {
+  _refreshTimers.forEach(t => clearTimeout(t))
+  _refreshTimers = []
+}
+watch(() => props.refreshNonce, (n, o) => {
+  if (!n || n === o) return
+  _clearRefreshTimers()
+  // force:true 绕过 180s 后端缓存(根因);多档(0/2.5/6s)再覆盖 apaas 自身写后读 ~3s 延迟。
+  for (const delay of [0, 2500, 6000]) {
+    _refreshTimers.push(setTimeout(() => { void reload({ silent: true, force: true }) }, delay))
+  }
+})
+onUnmounted(_clearRefreshTimers)
 </script>
 
 <style scoped>
