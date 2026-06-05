@@ -88,6 +88,31 @@ def _to_json(obj: Any) -> str:
     return json.dumps(obj, ensure_ascii=False, indent=2)
 
 
+def _normalize_business_event_list(resp: Any) -> dict:
+    """规整 apaas /event/query/list 响应为 {table:[...], total:N}。
+
+    apaas 把事件放在【顶层 table/total】(trial 实测), 不是包在 data 里。老代码
+    `return data.get("data") or {}` —— 响应没有 data 键 → 永远空 → 业务事件查不到。
+    这里优先取顶层 table/records/list, 个别环境若包了一层 data 也兜底。
+    """
+    if not isinstance(resp, dict):
+        return {"table": [], "total": 0}
+    table = resp.get("table") or resp.get("records") or resp.get("list")
+    total = resp.get("total")
+    if table is None:
+        inner = resp.get("data")
+        if isinstance(inner, dict):
+            table = inner.get("table") or inner.get("records") or inner.get("list")
+            if total is None:
+                total = inner.get("total")
+        elif isinstance(inner, list):
+            table = inner
+    table = table if isinstance(table, list) else []
+    if not isinstance(total, int):
+        total = len(table)
+    return {"table": table, "total": total}
+
+
 def _append_desktop_api_debug_log(event: str, payload: dict[str, Any]) -> None:
     """将关键 APaaS 调用单独落到桌面，方便手工联调时直接查看。"""
     record = {
@@ -2029,7 +2054,8 @@ class APaaSClient:
             _log_response(url, response.status_code, data, elapsed_ms, method="GET")
             if data.get("code") != "ok":
                 raise Exception(data.get("message", "查询业务事件失败"))
-            return data.get("data") or {}
+            # apaas 把事件放顶层 {total, table:[...]}, 不是 data 里 —— 规整后路由才取得到。
+            return _normalize_business_event_list(data)
 
     async def get_business_event_detail(self, event_id: str, app_id: str) -> dict:
         """查事件详情 (含完整 DAG) — GET /xdap-app/event/query/detail."""

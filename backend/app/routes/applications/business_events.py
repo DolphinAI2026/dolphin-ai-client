@@ -263,10 +263,12 @@ async def list_business_events(
                 event_id=str(ev.get("eventId") or ev.get("id") or ev.get("_id") or ""),
                 event_name=str(ev.get("eventName") or ev.get("name") or ""),
                 event_code=str(ev.get("eventCode") or ev.get("code") or "") or None,
-                event_type=str(ev.get("eventType") or ev.get("type") or ""),
+                # list 接口不返 eventType code, 只有 triggerType 人话串("…表单提交成功后"); 用它兜底
+                event_type=str(ev.get("eventType") or ev.get("type") or ev.get("triggerType") or ""),
                 status=str(ev.get("status") or ""),
                 trigger=_extract_trigger(ev),
-                target=_extract_target_summary(ev),
+                # detail 才有节点 DAG; list 用 executionEvent("自定义节点"/"流程"…)兜底当动作摘要
+                target=_extract_target_summary(ev) or (str(ev.get("executionEvent") or "").strip() or None),
                 last_update=str(
                     ev.get("lastUpdateDate") or ev.get("updatedAt") or ev.get("update_time") or ""
                 ) or None,
