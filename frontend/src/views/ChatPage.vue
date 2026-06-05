@@ -2339,7 +2339,10 @@ const DESIGNER_SUBS = [
   { code: 'form', label: '表单设计' },
   { code: 'list', label: '列表设计' },
   { code: 'process', label: '流程设计' },
-  { code: 'event', label: '业务事件' },
+  // 2026-06-05: 业务事件 tab 暂时隐藏 —— 生成的自定义节点 Python 不符合平台 definesys 规范
+  // (agent 瞎猜 API/拿不到字段 uuid → 事件建出来不可执行)。读侧/写侧 spec 见
+  // docs/research-apaas-event-python-spec-2026-06-05.md。修好生成后把下面这行取消注释即恢复。
+  // { code: 'event', label: '业务事件' },
   { code: 'data', label: '数据模型' },
   { code: 'perm', label: '权限' },
   // 2026-05-29: 删「页面设置」(page) — 纯占位无功能, 改设置走配置助手对话。
