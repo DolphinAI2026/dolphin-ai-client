@@ -996,6 +996,19 @@ async def get_custom_page_host(
     if not tenant_code or not app_code:
         return HTMLResponse(_custom_host_error_html("应用详情缺 tenantCode / appCode — 可能尚未发布"))
 
+    # 运行态状态门：自开发整页 bundle 挂在 apaas **运行态** /app/{tenant}/{app}/ 下,
+    # 应用「已下线」(status=SHUTDOWN) 时整个运行态路径被 apaas 404 → bundle 拉不到 →
+    # 之前只弹「组件包加载失败 (404?)」这种天书。这里提前判 status, 给一句人话。
+    # (RUNNING=已上线 才真在跑; 其余 SHUTDOWN/启动中 等都没法预览。)
+    app_status = str(detail.get("status") or "").upper()
+    if app_status and app_status != "RUNNING":
+        status_name = str(detail.get("statusName") or "未运行")
+        app_label = str(detail.get("appName") or app_code)
+        return HTMLResponse(_custom_host_error_html(
+            f"应用「{app_label}」在 aPaaS 当前为「{status_name}」,未处于运行态 — "
+            f"自开发页面要应用上线运行后才能预览。请先到 aPaaS 启动/上线该应用,再回来刷新预览。"
+        ))
+
     # 解析 menu_id → link_url (= 注册的组件 tag, 如 apaas-custom-library-home-dashboard).
     # 用 client.query_menus (manageAppMenu 管理视图, 含 linkUrl) — MCP list_apaas_app_menus
     # 走 runtime allAppMenu 视图不带 linkUrl, 不能用.

@@ -44,6 +44,7 @@ from app.routes import (
     quick_db,
     proposals,
     requirements,
+    runtime_proxy,
     runtime_v2,
     spec,
     specs_v2,
@@ -179,6 +180,9 @@ app.include_router(admin_mcp.router, prefix="/api")
 app.include_router(mcp_platform.router, prefix="/api")
 app.include_router(builder_mcp.router, prefix="/api")
 app.include_router(mcp_hub.router)
+# 自开发整页预览的运行态反向代理 (/app + /apaas, 根级无前缀) —— 复活自 e361c7bc
+# 误删的 platform_proxy 运行态部分。详见 app/routes/runtime_proxy.py 顶注。
+app.include_router(runtime_proxy.router)
 
 
 class _McpBearerAuthAsgiMiddleware:
