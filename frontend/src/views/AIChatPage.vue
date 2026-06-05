@@ -338,11 +338,14 @@
         <pre v-if="panelTab === 'raw'" class="art-preview-body">{{ activeArtifactContent }}</pre>
         <!-- HTML 产物: 用沙箱 iframe 原样渲染(等同本地打开), 不要走 markdown 渲染器
              (markdown 会把缩进的 HTML 当代码块, 且不应用文件自带 <style>)。 -->
+        <!-- sandbox 不给 allow-scripts: AI 产出的 HTML 可能含恶意/越权脚本, 而 allow-same-origin
+             + allow-scripts 同时给 = 脚本能读父页 token/越权。设计文档多是静态 CSS 布局, 去掉
+             allow-scripts 仍能原样渲染样式/布局(等同本地打开), 又挡住脚本越权。 -->
         <iframe
           v-else-if="isHtmlArtifact"
           class="art-preview-frame"
           :srcdoc="activeArtifactContent"
-          sandbox="allow-scripts allow-popups"
+          sandbox="allow-same-origin allow-popups"
           referrerpolicy="no-referrer"
           title="HTML 产物预览"
         ></iframe>
@@ -2572,6 +2575,9 @@ onMounted(async () => {
   transition: all 0.15s;
 }
 .artifacts-toggle:hover { color: var(--ac-text); border-color: var(--ac-border-strong); }
+/* AppIcon 的 .app-icon 撞上全局 builder.css 的 .app-icon(app 磁贴 36×36)→ 图标被撑到 36px,
+   按钮被顶到 48px。这里把它收回内联图标尺寸(贴着 14px svg), 按钮才回到 32px 跟另俩齐。 */
+.artifacts-toggle :deep(.app-icon) { width: auto; height: auto; border-radius: 0; }
 .artifacts-toggle.active {
   background: color-mix(in srgb, var(--ac-brand) 12%, transparent);
   border-color: color-mix(in srgb, var(--ac-brand) 50%, transparent);
