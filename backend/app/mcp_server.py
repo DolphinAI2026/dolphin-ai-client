@@ -3235,27 +3235,61 @@ def _form_perms_to_rules(perms_resp: dict, exclude_role_id: str = "") -> list[di
     # subject_key → rule dict
     by_subject: dict[str, dict] = {}
 
+    def _subject_type(subj: dict) -> str:
+        return str(
+            subj.get("type")
+            or subj.get("subject_type")
+            or subj.get("permissionObjectType")
+            or ""
+        ).upper()
+
+    def _subject_value(subj: dict) -> str:
+        return str(
+            subj.get("value")
+            or subj.get("subject_value")
+            or subj.get("permissionObjectValue")
+            or ""
+        )
+
+    def _subject_name(subj: dict) -> str:
+        return str(
+            subj.get("name")
+            or subj.get("subject_name")
+            or subj.get("permissionObjectDisplayName")
+            or ""
+        )
+
+    def _subject_range_type(subj: dict) -> str:
+        perm_range = subj.get("permissionRange") if isinstance(subj.get("permissionRange"), dict) else {}
+        return str(
+            subj.get("range_type")
+            or subj.get("rangeType")
+            or perm_range.get("rangeType")
+            or "ALL"
+        ).upper()
+
     def _subject_key(subj: dict) -> str:
-        st = str(subj.get("type") or "").upper()
+        st = _subject_type(subj)
         if st == "ALL_USER":
             return "ALL_USER"
-        sv = str(subj.get("value") or "")
+        sv = _subject_value(subj)
         return f"{st}:{sv}"
 
     def _ensure_rule(subj: dict, perm_name: str) -> dict:
         key = _subject_key(subj)
         if key in by_subject:
             return by_subject[key]
-        st = str(subj.get("type") or "").upper()
+        st = _subject_type(subj)
         # ROLE_USER (实测 apaas 返回的角色 type) 写回前面 _build_perm_payload
         # 会自动 normalize, 我们透传原值即可.
-        sv = str(subj.get("value") or "")
+        sv = _subject_value(subj)
+        sn = _subject_name(subj)
         rule = {
             "subject_type": st or "ROLE_USER",
             "subject_value": sv,
-            "subject_name": str(subj.get("name") or sv or perm_name),
+            "subject_name": sn or sv or perm_name,
             "actions": [],
-            "range_type": str(subj.get("range_type") or "ALL").upper(),
+            "range_type": _subject_range_type(subj),
         }
         by_subject[key] = rule
         return rule
@@ -3268,8 +3302,8 @@ def _form_perms_to_rules(perms_resp: dict, exclude_role_id: str = "") -> list[di
         if not isinstance(subj, dict):
             continue
         # 跳过指定 role (要被覆盖)
-        st = str(subj.get("type") or "").upper()
-        sv = str(subj.get("value") or "")
+        st = _subject_type(subj)
+        sv = _subject_value(subj)
         if exclude_role_id and st in ("ROLE_USER", "ROLE") and sv == exclude_role_id:
             continue
         rule = _ensure_rule(subj, str(g.get("permission_name") or ""))
@@ -3284,8 +3318,8 @@ def _form_perms_to_rules(perms_resp: dict, exclude_role_id: str = "") -> list[di
         subj = g.get("subject") or {}
         if not isinstance(subj, dict):
             continue
-        st = str(subj.get("type") or "").upper()
-        sv = str(subj.get("value") or "")
+        st = _subject_type(subj)
+        sv = _subject_value(subj)
         if exclude_role_id and st in ("ROLE_USER", "ROLE") and sv == exclude_role_id:
             continue
         rule = _ensure_rule(subj, str(g.get("permission_name") or ""))
@@ -3384,18 +3418,48 @@ async def set_role_resource_permission(
     for m in (menus_resp.get("menus") or []):
         if not isinstance(m, dict):
             continue
-        # resource_id 在矩阵里是 menu_id
-        if str(m.get("menu_id") or "") == resource_id_clean:
-            form_id = str(m.get("form_id") or "")
-            form_code = str(m.get("form_code") or m.get("menu_code") or "")
+        menu_id = str(m.get("menu_id") or m.get("id") or "")
+        menu_form_id = str(m.get("form_id") or m.get("formId") or "")
+        # resource_id 在矩阵里通常是 menu_id；兼容直接传 form_id 的调用。
+        if menu_id == resource_id_clean or (menu_form_id and menu_form_id == resource_id_clean):
+            form_id = menu_form_id
+            form_code = str(m.get("form_code") or m.get("formCode") or m.get("menu_code") or "")
             break
+
+    # 部分平台菜单只返回 formId，不带 formCode。此时用表单详情里的主模型编码兜底；
+    # aPaaS formPermission API 的 formCode 实测与主模型 code 对齐。
+    if form_id and not form_code:
+        detail_resp = await get_apaas_form_detail(env_id, apaas_app_id_clean, form_id)
+        if isinstance(detail_resp, dict) and detail_resp.get("ok"):
+            form_code = str(
+                detail_resp.get("form_code")
+                or detail_resp.get("main_model_code")
+                or detail_resp.get("model_code")
+                or ""
+            ).strip()
+
+    # 兼容调用方直接把 form_id 放在 resource_id，且该 form 没出现在菜单树的情况。
+    if not form_id:
+        detail_resp = await get_apaas_form_detail(env_id, apaas_app_id_clean, resource_id_clean)
+        if isinstance(detail_resp, dict) and detail_resp.get("ok"):
+            form_id = resource_id_clean
+            form_code = str(
+                detail_resp.get("form_code")
+                or detail_resp.get("main_model_code")
+                or detail_resp.get("model_code")
+                or ""
+            ).strip()
 
     if not form_id or not form_code:
         return {
             "ok": False,
             "source": "set_role_resource_permission",
             "error_code": "FORM_NOT_FOUND",
-            "message": f"resource_id={resource_id_clean} 未对应到 form (form_id+form_code 缺失). 这个 cell 可能不是 form 类型菜单.",
+            "message": (
+                f"resource_id={resource_id_clean} 未对应到可写表单 "
+                f"(form_id={form_id or '缺失'}, form_code={form_code or '缺失'}). "
+                "这个 cell 可能不是 form 类型菜单，或表单详情未返回主模型编码。"
+            ),
         }
 
     # 2) 读当前 form 权限快照 (拿其他 role 的 rules, 避免覆盖式 API 把它们清掉).
@@ -5097,14 +5161,15 @@ def _build_perm_payload_from_simple_rules(
     operation_groups = []
 
     for rule in rules:
-        # 2026-05-14 实测纠正：apaas 平台 advancedPermissionGroups 返回的角色类型是
-        # "ROLE_USER"，写入用 "ROLE" 平台会接受但读回是 "ROLE_USER"，导致下次 set
-        # 时白名单不匹配。统一用 "ROLE_USER"，并把 "ROLE" 当 alias 自动 normalize。
+        # aPaaS 权限接口读写不对称：
+        # - detailPageConfig 读回的角色主体是 ROLE_USER
+        # - formPermission 写入接口稳定接受的是 ROLE
+        # 所以入参兼容 ROLE_USER，但最终 payload 必须写 ROLE，否则平台会 500。
         subj_type = str(rule.get("subject_type") or "").strip().upper()
-        if subj_type == "ROLE":
-            subj_type = "ROLE_USER"  # alias normalize
-        if subj_type not in ("ROLE_USER", "ALL_USER", "USER", "DEPT"):
-            subj_type = "ROLE_USER"
+        if subj_type in ("ROLE", "ROLE_USER"):
+            subj_type = "ROLE"
+        elif subj_type not in ("ALL_USER", "USER", "DEPT"):
+            subj_type = "ROLE"
 
         if subj_type == "ALL_USER":
             subj_value = ""  # 平台规定：ALL_USER 时 permissionObjectValue 必须空串

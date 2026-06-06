@@ -21,7 +21,9 @@ appCode 在两类 path 里都带 (accessUrl=/app/{tc}/{ac}/, 数据=/apaas/backe
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
+import secrets
 import time as _time
 from typing import Optional
 
@@ -41,6 +43,86 @@ _static_cache: dict = {}                 # 静态资源缓存 {url: (content, co
 _appcode_env: dict[str, int] = {}        # app_code -> platform_env_id (应用→环境稳定, 可缓存)
 _env_creds: dict[int, dict] = {}         # env_id -> {"host","token","tenant_id"}
 _fallback_host: dict = {"host": ""}      # 解析不到应用时的兜底 host (静态仍可加载)
+_editor_sessions: dict[str, dict] = {}   # sid -> {"host","token","tenant_id","expires_at"}
+_EDITOR_COOKIE = "ab_editor_sid"
+_EDITOR_SESSION_TTL_SECONDS = 60 * 60
+
+
+def register_editor_session(*, host: str, token: str, tenant_id: str) -> str:
+    """注册一个短期低代码后台编辑会话，供 /platform 和 /backend 代理注入登录态。"""
+    _cleanup_editor_sessions()
+    sid = secrets.token_urlsafe(24)
+    _editor_sessions[sid] = {
+        "host": (host or "").rstrip("/"),
+        "token": token or "",
+        "tenant_id": tenant_id or "",
+        "expires_at": _time.time() + _EDITOR_SESSION_TTL_SECONDS,
+    }
+    return sid
+
+
+def _cleanup_editor_sessions() -> None:
+    now = _time.time()
+    for sid, data in list(_editor_sessions.items()):
+        if float(data.get("expires_at") or 0) <= now:
+            _editor_sessions.pop(sid, None)
+
+
+def _editor_session_from_request(request: Request) -> Optional[dict]:
+    _cleanup_editor_sessions()
+    sid = request.cookies.get(_EDITOR_COOKIE) or request.query_params.get("_ab_editor_sid") or ""
+    data = _editor_sessions.get(sid)
+    if not data:
+        return None
+    # 滑动续期，避免用户编辑超过首次加载窗口后静态/API 资源失效。
+    data["expires_at"] = _time.time() + _EDITOR_SESSION_TTL_SECONDS
+    return data
+
+
+def _platform_auth_bootstrap_script(creds: dict) -> str:
+    """给代理版 /platform HTML 注入 Vuex 持久化登录态。"""
+    token = creds.get("token") or ""
+    tenant_id = creds.get("tenant_id") or ""
+    local_state = {
+        "authModule": {
+            "userInfo": {},
+            "tenantBlock": {"token": token, "oriToken": None},
+            "platformBlock": {"token": token, "oriToken": None},
+            "orgs": [],
+            "wxInfo": None,
+            "adminAuth": {},
+            "accountConfiguration": {},
+            "appFormat": {},
+            "accountSecurity": {},
+            "variableConfigInfo": None,
+        }
+    }
+    session_state = {
+        "tenantModule": {
+            "currentOrg": {"id": tenant_id},
+            "orgs": [{"id": tenant_id}],
+        }
+    }
+    payload = json.dumps(
+        {
+            "token": token,
+            "tenantId": tenant_id,
+            "localState": local_state,
+            "sessionState": session_state,
+        },
+        ensure_ascii=False,
+    )
+    return (
+        "<script>(function(){try{"
+        f"var p={payload};"
+        "localStorage.setItem('__vuex__local',JSON.stringify(p.localState));"
+        "sessionStorage.setItem('__vuex__session',JSON.stringify(p.sessionState));"
+        "localStorage.setItem('xdaptoken',p.token);"
+        "sessionStorage.setItem('xdaptoken',p.token);"
+        "localStorage.setItem('xdaptenantid',p.tenantId);"
+        "sessionStorage.setItem('xdaptenantid',p.tenantId);"
+        "}catch(e){console.warn('AI Builder 写入 aPaaS 登录态失败',e)}})();</script>"
+    )
 
 
 def _extract_app_code(path: str) -> str:
@@ -259,6 +341,67 @@ async def _proxy_request(request: Request, path: str, *, need_token: bool) -> Re
         )
 
 
+async def _proxy_editor_request(request: Request, path: str) -> Response:
+    """代理 aPaaS 管理后台编辑器，基于 editor-entry 建立的短期会话注入登录态。"""
+    creds = _editor_session_from_request(request)
+    if not creds:
+        return Response(
+            content=_error_html("低代码后台会话已失效", "请从 AI Builder 重新点击「打开低代码后台」。"),
+            media_type="text/html",
+            status_code=401,
+        )
+    host = creds["host"]
+    target_path = path if path.startswith("/") else f"/{path}"
+    qs_items = [(k, v) for k, v in request.query_params.multi_items() if k != "_ab_editor_sid"]
+    qs = str(httpx.QueryParams(qs_items))
+    target = f"{host}{target_path}"
+    if qs:
+        target += f"?{qs}"
+
+    headers: dict = {}
+    if creds.get("token"):
+        headers.update(_auth_headers(creds))
+    for h in ("content-type", "accept", "accept-language", "appid"):
+        val = request.headers.get(h)
+        if val:
+            headers[h] = val
+
+    client = _get_client()
+    try:
+        body = await request.body() if request.method in ("POST", "PUT", "PATCH") else None
+        resp = await _request_with_retry(client, method=request.method, url=target, headers=headers, content=body)
+        resp_headers = {}
+        for k, v in resp.headers.items():
+            if k.lower() in ("content-type", "cache-control", "etag", "last-modified", "content-disposition"):
+                resp_headers[k] = v
+
+        content = resp.content
+        ct = resp.headers.get("content-type", "")
+        if request.method == "GET" and "text/html" in ct.lower() and path.startswith("/platform/"):
+            try:
+                text = content.decode(resp.encoding or "utf-8", errors="replace")
+                script = _platform_auth_bootstrap_script(creds)
+                if "</head>" in text:
+                    text = text.replace("</head>", script + "</head>", 1)
+                else:
+                    text = script + text
+                content = text.encode("utf-8")
+                resp_headers["content-type"] = "text/html; charset=utf-8"
+            except Exception as exc:  # noqa: BLE001
+                logger.warning("注入 aPaaS 编辑器登录态失败: %s", exc)
+
+        return Response(content=content, status_code=resp.status_code, headers=resp_headers)
+    except Exception as exc:  # noqa: BLE001
+        detail = str(exc) or type(exc).__name__
+        logger.error("Editor proxy error [%s]: %s", path, detail)
+        return Response(
+            content=_error_html("连接低代码后台失败", detail),
+            media_type="text/html",
+            status_code=502,
+            headers={"X-Proxy-Error": "editor-connection-failed"},
+        )
+
+
 # 代理运行态数据请求 /apaas/...  (自开发组件 $request → /apaas/backend/{tenant}/{app}/...)
 # 需鉴权 → 按 path 里 appCode 锁定该应用环境, 注入它自己的 token (治跨租户串号)。
 @router.api_route("/apaas/{path:path}", methods=["GET", "POST", "PUT", "DELETE", "OPTIONS"])
@@ -271,3 +414,13 @@ async def proxy_apaas(request: Request, path: str):
 @router.api_route("/app/{path:path}", methods=["GET", "POST", "PUT", "DELETE", "OPTIONS"])
 async def proxy_app_runtime(request: Request, path: str):
     return await _proxy_request(request, f"app/{path}", need_token=False)
+
+
+@router.api_route("/platform/{path:path}", methods=["GET", "POST", "PUT", "DELETE", "OPTIONS"])
+async def proxy_platform_editor(request: Request, path: str):
+    return await _proxy_editor_request(request, f"/platform/{path}")
+
+
+@router.api_route("/backend/{path:path}", methods=["GET", "POST", "PUT", "DELETE", "OPTIONS"])
+async def proxy_platform_backend(request: Request, path: str):
+    return await _proxy_editor_request(request, f"/backend/{path}")
