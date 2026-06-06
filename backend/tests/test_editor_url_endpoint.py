@@ -1,4 +1,4 @@
-"""editor-url 端点：返回 AI Builder 同源 aPaaS 编辑器入口。直接调路由函数（本仓约定）。"""
+"""editor-url 端点：返回 host-absolute aPaaS 编辑器深链。直接调路由函数（本仓约定）。"""
 from __future__ import annotations
 
 import pytest
@@ -29,7 +29,7 @@ async def _seed_app(db, *, tenant_id, apaas_app_id="AP123", env_id=None):
 
 
 @pytest.mark.asyncio
-async def test_editor_url_builds_local_editor_entry(db_session):
+async def test_editor_url_builds_host_absolute(db_session):
     from app.models import PlatformEnv
     env = PlatformEnv(
         tenant_id=7, env_name="dev", base_url="https://apaas.example.com/backend",
@@ -43,7 +43,8 @@ async def test_editor_url_builds_local_editor_entry(db_session):
     out = await get_editor_url(app.id, _ctx(user, 7), db_session,
                                menu_type="MODEL", menu_id="M9", form_id="F3")
     assert out["ok"] is True
-    assert out["url"] == f"/api/applications/{app.id}/editor-entry?menu_type=MODEL&menu_id=M9&form_id=F3"
+    # host 去掉 /backend；路径来自 build_editor_path
+    assert out["url"] == "https://apaas.example.com/platform/TID9/default/data-model-fn-config?appId=AP123&menuId=M9&formId=F3&processVersion=false"
 
 
 @pytest.mark.asyncio

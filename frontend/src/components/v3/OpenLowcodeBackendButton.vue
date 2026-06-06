@@ -28,6 +28,7 @@ async function onClick() {
       form_id: props.formId || '',
     })
     if (resp?.ok && resp.url) {
+      // 直链深链到真 aPaaS host（不走代理桥接）— 生产挂在 aPaaS 下已登录态免登。
       window.open(resp.url, '_blank')
     } else {
       alert(resp?.message || '应用尚未部署到 aPaaS，无法打开后台')

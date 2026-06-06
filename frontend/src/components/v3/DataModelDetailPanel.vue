@@ -130,6 +130,7 @@ import request from '@/utils/request'
 const props = defineProps<{
   appId: number
   modelId: string
+  refreshNonce?: number
 }>()
 
 defineEmits<{
@@ -227,13 +228,13 @@ function onEditName() {
   alert('编辑模型名 — P1 接入. 当前请用配置助手对话改名.')
 }
 
-async function reload() {
+async function reload(opts: { force?: boolean } = {}) {
   if (!props.appId || !props.modelId) return
   loading.value = true
   error.value = ''
   try {
     const resp = await request.get<any, any>(
-      `/applications/${props.appId}/section-content/models?with_fields=true`,
+      `/applications/${props.appId}/section-content/models?with_fields=true${opts.force ? '&force=true' : ''}`,
     )
     if (resp?.ok) {
       const items: any[] = resp.items || []
@@ -265,6 +266,12 @@ async function reload() {
 }
 
 watch(() => [props.appId, props.modelId], () => reload(), { immediate: true })
+
+// 写后刷新: refreshNonce 变 → 绕过 180s 后端缓存重拉最新模型字段（对齐 FormDesignerPanel）。
+watch(() => props.refreshNonce, (n, o) => {
+  if (n === o || n == null) return
+  void reload({ force: true })
+})
 </script>
 
 <style scoped>

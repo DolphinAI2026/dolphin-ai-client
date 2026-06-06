@@ -242,11 +242,12 @@
               />
               <DataSchemaEditor
                 v-else-if="designerSub === 'data'"
-                :key="`data-${selectedApaasMenuId}-${designerRefreshKey}`"
+                :key="`data-${selectedApaasMenuId}`"
                 :app-id="existingAppId"
                 :menu-id="selectedApaasMenuId"
                 :menu-name="selectedApaasMenuName"
                 :form-id="selectedApaasMenuFormId"
+                :refresh-nonce="designerRefreshKey"
               />
               <FormPermPanel
                 v-else-if="designerSub === 'perm' && selectedApaasMenuFormId"
@@ -280,10 +281,11 @@
           <!-- 数据 tab + 数据模型 sub: 选中模型显字段表格 -->
           <DataModelDetailPanel
             v-else-if="topTab === 'data' && currentSectionTab === 'models' && existingAppId && selectedSectionItemId"
-            :key="`dmd-${selectedSectionItemId}-${designerRefreshKey}`"
+            :key="`dmd-${selectedSectionItemId}`"
             class="platform-iframe-container"
             :app-id="existingAppId"
             :model-id="selectedSectionItemId"
+            :refresh-nonce="designerRefreshKey"
             @back="onNativePanelBack"
           />
           <!-- 数据 tab + 字典 sub: master-detail -->

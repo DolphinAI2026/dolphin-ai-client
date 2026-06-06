@@ -22,7 +22,6 @@ import json
 import logging
 from datetime import datetime
 from typing import Annotated, Any, Optional
-from urllib.parse import urlencode
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from fastapi.responses import HTMLResponse
@@ -339,11 +338,14 @@ async def get_section_content_models(
     ctx: Annotated[AuthContext, Depends(get_auth_context)],
     db: Annotated[AsyncSession, Depends(get_db)],
     with_fields: bool = Query(False, description="True 时拉完整字段 (FormBuilder 用), 默认 False 省 token"),
+    force: bool = Query(False, description="True 时绕过 180s 缓存重打 aPaaS (写后刷新用)"),
 ) -> SectionContentResponse:
     """data section: 列应用的数据模型 (走 list_apaas_app_models).
 
     默认 with_fields=False 省 token (用于左侧 list 渲染); FormBuilder 可传 with_fields=true
     让 extra 含 fields[] 数组, 直接喂前端 widget 渲染.
+
+    force=true 绕过 180s 缓存 (对齐 get_form_detail) — 写后/在低代码后台改完回看必须能拿最新.
 
     返结构: items[].id = model_id, .name = model_name, .code = model_code, .extra = 整 model dict.
     """
@@ -357,6 +359,7 @@ async def get_section_content_models(
         env_id=app.platform_env_id,
         apaas_app_id=str(app.apaas_app_id),
         extra_args={"with_fields": with_fields},
+        use_cache=not force,
     )
     if not ok:
         return _tool_error(app, source, raw_or_err["error_code"], raw_or_err["message"])
@@ -525,7 +528,9 @@ async def get_form_permissions(
 
     def _cell(subj: dict) -> Optional[dict[str, Any]]:
         stype = subj.get("subject_type")
-        if stype == "ROLE":
+        # apaas detailPageConfig 读回的角色主体实测是 ROLE_USER（ROLE 是写入别名）。
+        # 两者都要建角色行，否则改完权限回看矩阵全空（与 mcp_server _build_perm_payload 归一一致）。
+        if stype in ("ROLE", "ROLE_USER"):
             key = str(subj.get("subject_value") or "")
         elif stype == "ALL_USER":
             key = "__ALL_USER__"
@@ -789,90 +794,34 @@ async def get_editor_url(
     menu_id: str = "",
     form_id: str = "",
 ) -> dict:
-    """返回 AI Builder 同源低代码后台入口（前端 window.open 新标签页用）。"""
+    """返回 host-absolute 的 aPaaS 原生编辑器深链（前端 window.open 新标签页用）。
+
+    host = 应用绑定环境 PlatformEnv.base_url（去 /backend）；tid = platform_tenant_id。
+    路径由 app.apaas_editor_url.build_editor_path 构建。直接深链到真 aPaaS（不走代理桥接）：
+    生产挂在 aPaaS 下已登录态免登；测试浏览器没登过 aPaaS 时弹一次登录页、登一次后免登。
+    """
+    from app.apaas_editor_url import build_editor_path
+    from app.models import PlatformEnv
+
     app = await _load_app_and_check_view(app_id, ctx, db)
     if not app.platform_env_id or not app.apaas_app_id:
         return {"ok": False, "error_code": "APP_NOT_DEPLOYED", "message": "应用尚未部署到 aPaaS 平台"}
-    params = {
-        "menu_type": menu_type or "",
-        "menu_id": menu_id or "",
-        "form_id": form_id or "",
-    }
-    return {"ok": True, "url": f"/api/applications/{app_id}/editor-entry?{urlencode(params)}"}
-
-
-@router.get("/{app_id}/editor-entry", response_class=HTMLResponse)
-async def open_editor_entry(
-    app_id: int,
-    ctx: Annotated[AuthContext, Depends(get_auth_context)],
-    db: Annotated[AsyncSession, Depends(get_db)],
-    menu_type: str = "",
-    menu_id: str = "",
-    form_id: str = "",
-) -> HTMLResponse:
-    """建立短期 aPaaS 编辑会话并跳到同源 /platform 代理版低代码后台。
-
-    直接打开 aPaaS 裸链接依赖目标域 cookie/localStorage，在无痕模式或新浏览器里会进登录页。
-    这里用当前登录用户/租户缓存的 aPaaS token 写入本地代理页的登录态，再由代理转发到真实平台。
-    """
-    from app.apaas_editor_url import build_editor_path
-    from app.routes.applications import _resolve_apaas_call_context
-    from app.routes.runtime_proxy import _EDITOR_COOKIE, _EDITOR_SESSION_TTL_SECONDS, register_editor_session
-
-    app = await _load_app_and_check_view(app_id, ctx, db)
-    if not app.platform_env_id or not app.apaas_app_id:
-        return HTMLResponse(_editor_entry_error_html("应用尚未部署到 aPaaS 平台"), status_code=404)
-
-    base_url, tenant_id, token, _credential_source = await _resolve_apaas_call_context(db, ctx)
-    if not base_url or not tenant_id or not token:
-        return HTMLResponse(
-            _editor_entry_error_html("当前用户没有可用的 aPaaS 缓存登录态，请重新登录或连接平台环境。"),
-            status_code=401,
+    env = (
+        await db.execute(
+            select(PlatformEnv).where(
+                PlatformEnv.id == app.platform_env_id,
+                PlatformEnv.tenant_id == ctx.tenant_id,
+            )
         )
-    host = base_url.rstrip("/").replace("/backend", "")
+    ).scalar_one_or_none()
+    if not env or not env.base_url or not env.platform_tenant_id:
+        return {"ok": False, "error_code": "ENV_NOT_BOUND", "message": "应用未绑定有效平台环境"}
+    host = env.base_url.rstrip("/").replace("/backend", "")
     path = build_editor_path(
         menu_type, apaas_app_id=str(app.apaas_app_id),
-        menu_id=menu_id, form_id=form_id, tid=str(tenant_id),
+        menu_id=menu_id, form_id=form_id, tid=str(env.platform_tenant_id),
     )
-    sid = register_editor_session(host=host, token=token, tenant_id=str(tenant_id))
-    sep = "&" if "?" in path else "?"
-    target = f"{path}{sep}_ab_editor_sid={sid}"
-    html = (
-        "<!DOCTYPE html><html><head><meta charset='utf-8'>"
-        "<title>正在打开低代码后台...</title>"
-        "<style>body{margin:0;height:100vh;display:grid;place-items:center;"
-        "font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;color:#334155;background:#f8fafc}"
-        ".box{padding:28px 32px;border:1px solid #e2e8f0;border-radius:10px;background:#fff;"
-        "box-shadow:0 18px 60px rgba(15,23,42,.08)}"
-        ".t{font-size:15px;font-weight:700;margin-bottom:8px}.m{font-size:13px;color:#64748b}</style>"
-        "</head><body><div class='box'><div class='t'>正在打开低代码后台</div>"
-        "<div class='m'>正在使用 AI Builder 缓存的 aPaaS 登录态...</div></div>"
-        f"<script>location.replace({json.dumps(target, ensure_ascii=False)});</script>"
-        "</body></html>"
-    )
-    resp = HTMLResponse(html)
-    resp.set_cookie(
-        _EDITOR_COOKIE,
-        sid,
-        max_age=_EDITOR_SESSION_TTL_SECONDS,
-        httponly=True,
-        samesite="lax",
-        path="/",
-    )
-    return resp
-
-
-def _editor_entry_error_html(message: str) -> str:
-    safe = (message or "").replace("<", "&lt;").replace(">", "&gt;")
-    return (
-        "<!DOCTYPE html><html><head><meta charset='utf-8'><title>无法打开低代码后台</title>"
-        "<style>body{margin:0;height:100vh;display:grid;place-items:center;"
-        "font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;background:#f8fafc;color:#334155}"
-        ".box{max-width:420px;padding:28px 32px;border:1px solid #e2e8f0;border-radius:10px;background:#fff;"
-        "box-shadow:0 18px 60px rgba(15,23,42,.08)}h1{font-size:16px;margin:0 0 10px}"
-        "p{font-size:13px;line-height:1.7;color:#64748b;margin:0}</style></head>"
-        f"<body><div class='box'><h1>无法打开低代码后台</h1><p>{safe}</p></div></body></html>"
-    )
+    return {"ok": True, "url": f"{host}{path}"}
 
 
 def _custom_host_error_html(msg: str) -> str:
@@ -1349,6 +1298,9 @@ async def get_form_business_data(
             "page": page,
             "page_size": page_size,
         },
+        # 业务数据是用户实时提交的数据行（非元数据），不能走 180s 缓存，否则
+        # 新增/编辑后回列表点刷新看不到、要等 180s。每次直打 aPaaS。
+        use_cache=False,
     )
     if not ok:
         return {

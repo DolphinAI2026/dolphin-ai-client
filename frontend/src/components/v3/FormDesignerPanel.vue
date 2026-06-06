@@ -738,7 +738,13 @@ async function reload(opts: { silent?: boolean; force?: boolean } = {}) {
         const comps = respFD.components || []
         fields.value = comps.map((c: any): FormField => {
           const compType = String(c.component_type || '')
-          const widgetType = componentTypeToWidget(compType)
+          let widgetType = componentTypeToWidget(compType)
+          // 0-1 生成把下拉单选 FORM_SELECT_INPUT_SINGLE 写成多选别名 FORM_SELECT_INPUT
+          // (平台用 chooseType 区分单/多)，但 choose_type 仍是 SINGLE → 按它纠回单选 select，
+          // 否则只读面板把单选下拉误渲成可多选。
+          if (compType === 'FORM_SELECT_INPUT' && String(c.choose_type || '').toUpperCase() === 'SINGLE') {
+            widgetType = 'select'
+          }
           const boCode = String(c.bo_code || '')
           const [_modelCode, fieldCode] = boCode.includes('~') ? boCode.split('~') : ['', boCode]
           if (_modelCode) modelCode.value = _modelCode
@@ -780,7 +786,11 @@ async function reload(opts: { silent?: boolean; force?: boolean } = {}) {
             placeholder: '',
             required: !!c.required,
             editable: true,
-            options: needsOptions(widgetType) ? [] : undefined,
+            options: needsOptions(widgetType)
+              ? (Array.isArray(c.choose_options)
+                  ? c.choose_options.map((o: any) => ({ code: String(o.code ?? ''), name: String(o.name ?? o.code ?? '') }))
+                  : [])
+              : undefined,
             description: String(mf?.description || ''),
             max_length: mf?.max_length ? Number(mf.max_length) : undefined,
             customKind: customComponentKind(compType),

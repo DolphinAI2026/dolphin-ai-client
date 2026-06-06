@@ -293,6 +293,7 @@ const props = defineProps<{
   menuId?: string
   menuName?: string
   formId?: string
+  refreshNonce?: number
 }>()
 
 const SUB_TABS = [
@@ -498,7 +499,7 @@ function computeKeyBadges(f: FieldRow): KeyBadge[] {
 }
 
 // ─── 加载 ───────────────────────────────────────────────────────────────────
-async function reload() {
+async function reload(opts: { force?: boolean } = {}) {
   if (!props.appId || !props.menuId) {
     allModels.value = []
     return
@@ -509,7 +510,7 @@ async function reload() {
     // 优先: form_id → /forms/{form_id}/detail (跟 FormDesignerPanel 一致, 拿 form 真关联 model)
     if (props.formId) {
       const respFD = await request.get<any, any>(
-        `/applications/${props.appId}/forms/${props.formId}/detail`,
+        `/applications/${props.appId}/forms/${props.formId}/detail${opts.force ? '?force=true' : ''}`,
       )
       if (respFD?.ok && Array.isArray(respFD.models) && respFD.models.length > 0) {
         const mainCode = String(respFD.main_model_code || '')
@@ -528,7 +529,7 @@ async function reload() {
     }
     // 兜底: 走 list_apaas_app_models (应用主表 list)
     const resp = await request.get<any, any>(
-      `/applications/${props.appId}/section-content/models?with_fields=true`,
+      `/applications/${props.appId}/section-content/models?with_fields=true${opts.force ? '&force=true' : ''}`,
     )
     if (resp?.ok) {
       const items: any[] = resp.items || []
@@ -557,6 +558,12 @@ async function reload() {
 }
 
 watch(() => [props.appId, props.menuId, props.formId], () => reload(), { immediate: true })
+
+// 写后刷新: refreshNonce 每变一次 → 绕过 180s 后端缓存重拉最新数据模型（对齐 FormDesignerPanel）。
+watch(() => props.refreshNonce, (n, o) => {
+  if (n === o || n == null) return
+  void reload({ force: true })
+})
 
 // ─── O2: 数据预览 mock 生成器 ──────────────────────────────────────────────────
 //

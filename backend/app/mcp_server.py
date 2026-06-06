@@ -4944,6 +4944,25 @@ async def get_apaas_form_detail(env_id: int, apaas_app_id: str, form_id: str) ->
             "bo_code": str(c.get("boCode") or ""),
             "required": bool(c.get("required", False)),
         }
+        # 选项类组件 (下拉单选/多选/单选框/复选框) 的选项透出 — 否则只读表单设计器下拉永远空,
+        # 绑了字典也拉不到. apaas 组件平铺 dictionaryChooseOptions / chooseOptions ({value,label,code})
+        # + chooseType (SINGLE/MULTIPLE) + dictionaryCode. 归一成前端 FieldCard 期望的 {code,name}.
+        _raw_opts = c.get("dictionaryChooseOptions") or c.get("chooseOptions") or []
+        _opts_out = []
+        for _o in _raw_opts:
+            if isinstance(_o, dict):
+                _opts_out.append({
+                    "code": str(_o.get("value") or _o.get("code") or _o.get("id") or ""),
+                    "name": str(_o.get("label") or _o.get("name") or _o.get("text") or _o.get("value") or ""),
+                })
+            elif isinstance(_o, (str, int, float)):
+                _opts_out.append({"code": str(_o), "name": str(_o)})
+        if _opts_out:
+            comp_out["choose_options"] = _opts_out
+        if c.get("chooseType"):
+            comp_out["choose_type"] = str(c.get("chooseType"))
+        if c.get("dictionaryCode"):
+            comp_out["dictionary_code"] = str(c.get("dictionaryCode"))
         # 2026-05-28: 自开发组件 (FORM_CUSTOM_COMPONENT_*) 透出声明式 config —
         # 这些组件不是黑盒包, 行为完全由 customComponentConfig 参数化 (apiUrl /
         # welcomeText / quickButtonsText / stream 等), 给前端真渲染用.
