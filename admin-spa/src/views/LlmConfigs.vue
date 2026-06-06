@@ -367,8 +367,9 @@ async function loadTenants() {
     if (!selectedTenantId.value && tenants.value.length) {
       selectedTenantId.value = tenants.value[0].id
     }
-  } catch {
+  } catch (error) {
     tenants.value = []
+    ElMessage.error(errorMessage(error, '加载租户列表失败'))
   }
 }
 
@@ -467,11 +468,11 @@ async function saveConfig() {
   await formRef.value?.validate()
   saving.value = true
   try {
-    const payload: Partial<LlmForm> = { ...form }
+    const payload: Partial<LlmForm> & { tenant_id?: number } = { ...form }
     if (editingConfig.value && !payload.api_key) delete payload.api_key
     if (!editingConfig.value) {
       delete payload.status
-      ;(payload as any).tenant_id = selectedTenantId.value ?? undefined
+      payload.tenant_id = selectedTenantId.value ?? undefined
     }
 
     if (editingConfig.value) {
