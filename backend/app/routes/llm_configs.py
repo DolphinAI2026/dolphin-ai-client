@@ -189,7 +189,7 @@ async def get_provider_presets():
 async def list_llm_configs(
     ctx: Annotated[AuthContext, Depends(require_tenant_admin)],
     db: Annotated[AsyncSession, Depends(get_db)],
-    tenant_id: Optional[int] = Query(None),
+    tenant_id: Optional[int] = None,
 ):
     """列出某租户的 LLM 配置。平台管理员可用 ?tenant_id= 指定;租户管理员强制本租户。"""
     effective_tid = await _resolve_target_tenant_id(db, ctx, tenant_id)
