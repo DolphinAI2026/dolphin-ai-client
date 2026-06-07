@@ -11,7 +11,7 @@ set -euo pipefail
 NAMESPACE="${NAMESPACE:-apaas-builder}"
 APP_NAME="${APP_NAME:-apaas-builder-dev}"
 NGINX_CM="${NGINX_CM:-${APP_NAME}-nginx}"
-IMAGE="${IMAGE:-hub.dfy.definesys.cn/ai-builder/apaas-builder:dev-202606080045-admin-route-fix}"
+IMAGE="${IMAGE:-hub.dfy.definesys.cn/ai-builder/apaas-builder:dev-202606080055-admin-route-fix}"
 BACKEND_CONTAINER="${BACKEND_CONTAINER:-apaas-builder}"
 DIST_INIT_CONTAINER="${DIST_INIT_CONTAINER:-copy-frontend-dist}"
 ROLL_TIMEOUT="${ROLL_TIMEOUT:-300s}"
@@ -139,6 +139,24 @@ server {
 
     location = /admin {
         return 302 /admin/;
+    }
+
+    location ^~ /platform-admin/ {
+        proxy_pass http://127.0.0.1:8003;
+        proxy_http_version 1.1;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $proxy_x_forwarded_proto;
+    }
+
+    location = /platform-admin {
+        proxy_pass http://127.0.0.1:8003;
+        proxy_http_version 1.1;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $proxy_x_forwarded_proto;
     }
 
     # 平台代理路由：与 backend/app/routes/platform_proxy.py 中声明的顶层路径保持一致。
@@ -279,12 +297,12 @@ fi
 
 if command -v curl >/dev/null 2>&1; then
   log "health check: ${PUBLIC_URL}"
-  curl -k -sS -o /tmp/apaas-builder-dev-login.html \
+  curl -k -L -sS -o /tmp/apaas-builder-dev-login.html \
     -w 'LOGIN_HTTP %{http_code} SIZE %{size_download}\n' \
     "${PUBLIC_URL}" || true
 
   log "admin route check: ${ADMIN_URL}"
-  curl -k -sS -o /tmp/apaas-builder-dev-platform-admin.html \
+  curl -k -L -sS -o /tmp/apaas-builder-dev-platform-admin.html \
     -w 'ADMIN_HTTP %{http_code} SIZE %{size_download}\n' \
     "${ADMIN_URL}" || true
 fi

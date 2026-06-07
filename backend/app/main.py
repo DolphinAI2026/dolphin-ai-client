@@ -9,6 +9,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from starlette.exceptions import HTTPException as StarletteHTTPException
+from starlette.responses import FileResponse
 from app.config import settings, APP_TITLE, APP_DESCRIPTION, APP_VERSION
 from app.database import init_db
 from app.routes import (
@@ -381,6 +382,10 @@ class _SpaStaticFiles(StaticFiles):
 # 因此本地只需要 5173 + 8000 + 8004 三个端口。
 _admin_spa_dir = Path(__file__).resolve().parents[2] / "admin-spa" / "dist"
 if _admin_spa_dir.is_dir():
+    @app.get("/platform-admin", include_in_schema=False)
+    async def platform_admin_index():
+        return FileResponse(_admin_spa_dir / "index.html")
+
     app.mount("/admin", _SpaStaticFiles(directory=str(_admin_spa_dir), html=True), name="admin-spa")
     # 线上入口 /ai-builder/platform-admin 由主前端接管；若外层 nginx/Ingress
     # 暂时把该路径转到后端，也返回管理台 SPA，避免直接暴露 FastAPI 404。
