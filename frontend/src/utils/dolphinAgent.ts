@@ -1,9 +1,9 @@
 import request from '@/utils/request'
 
 const DOLPHIN_SCRIPT_ID = 'dolphin-agent-sdk'
-const DOLPHIN_SERVER_URL = 'https://dolphin-trial.definesys.cn'
-const DOLPHIN_AGENT_CODE = '030a123e61'
-const DOLPHIN_BUTTON_TEXT = '问题助手'
+const DOLPHIN_SERVER_URL = String(import.meta.env.VITE_DOLPHIN_SERVER_URL || 'https://dolphin-trial.definesys.cn').trim()
+const DOLPHIN_AGENT_CODE = String(import.meta.env.VITE_DOLPHIN_AGENT_CODE || '').trim()
+const DOLPHIN_BUTTON_TEXT = String(import.meta.env.VITE_DOLPHIN_BUTTON_TEXT || '问题助手').trim()
 
 interface DolphinAgentOptions {
   serverUrl: string
@@ -95,7 +95,7 @@ async function fetchApaasEmbedCredentials(key: string) {
 export async function initDolphinAgent(authToken: string | null | undefined, localTenantId: number | string | null | undefined) {
   if (typeof window === 'undefined') return
   const version = ++syncVersion
-  if (!authToken || !localTenantId) {
+  if (!authToken || !localTenantId || !DOLPHIN_SERVER_URL || !DOLPHIN_AGENT_CODE) {
     destroyDolphinAgent()
     return
   }

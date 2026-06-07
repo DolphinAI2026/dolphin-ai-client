@@ -28,6 +28,8 @@ from app.routes.auth import (
     update_tenant,
     update_tenant_member_role,
     update_tenant_status,
+    _apaas_membership_role_preference,
+    _sync_user_membership,
 )
 
 
@@ -69,7 +71,12 @@ async def test_switch_tenant_signs_new_token_for_member(db_session):
         db_session,
     )
 
-    payload = jwt.decode(res.access_token, settings.jwt_secret_key, algorithms=[settings.jwt_algorithm])
+    payload = jwt.decode(
+        res.access_token,
+        settings.jwt_secret_key,
+        algorithms=[settings.jwt_algorithm],
+        options={"verify_aud": False},
+    )
     assert payload["tid"] == tenants[1].id
     assert int(payload["sub"]) == user.id
 
@@ -112,7 +119,12 @@ async def test_platform_admin_can_switch_to_any_active_tenant(db_session):
         ctx,
         db_session,
     )
-    payload = jwt.decode(res.access_token, settings.jwt_secret_key, algorithms=[settings.jwt_algorithm])
+    payload = jwt.decode(
+        res.access_token,
+        settings.jwt_secret_key,
+        algorithms=[settings.jwt_algorithm],
+        options={"verify_aud": False},
+    )
     assert payload["tid"] == tenants[1].id
 
 
@@ -318,6 +330,84 @@ async def test_add_tenant_member_existing_user_no_password_required(db_session):
         ctx, db_session,
     )
     assert m.username == "bob"
+
+
+@pytest.mark.asyncio
+async def test_sync_user_membership_defaults_to_developer_role(db_session):
+    from app.models.tenant import Role
+
+    tenant = Tenant(tenant_name="Sync Dev", tenant_code="sync-dev", status=1)
+    user = User(username="sync_dev_user", hashed_password=get_password_hash("x"), is_active=True)
+    db_session.add_all([tenant, user])
+    await db_session.flush()
+    dev_role = Role(tenant_id=tenant.id, role_name="Dev", role_code="R_developer", permissions={}, is_system=False)
+    admin_role = Role(tenant_id=tenant.id, role_name="Admin", role_code="R_tenant_admin", permissions={}, is_system=True)
+    db_session.add_all([dev_role, admin_role])
+    await db_session.flush()
+
+    membership = await _sync_user_membership(db_session, user, tenant, is_default=True)
+
+    assert membership.role_id == dev_role.id
+
+
+@pytest.mark.asyncio
+async def test_sync_user_membership_can_prefer_tenant_admin_role(db_session):
+    from app.models.tenant import Role
+
+    tenant = Tenant(tenant_name="Sync Admin", tenant_code="sync-admin", status=1)
+    user = User(username="sync_admin_user", hashed_password=get_password_hash("x"), is_active=True)
+    db_session.add_all([tenant, user])
+    await db_session.flush()
+    dev_role = Role(tenant_id=tenant.id, role_name="Dev", role_code="R_developer", permissions={}, is_system=False)
+    admin_role = Role(tenant_id=tenant.id, role_name="Admin", role_code="R_tenant_admin", permissions={}, is_system=True)
+    db_session.add_all([dev_role, admin_role])
+    await db_session.flush()
+
+    membership = await _sync_user_membership(
+        db_session,
+        user,
+        tenant,
+        is_default=True,
+        preferred_role_codes=("R_tenant_admin", "admin", "R_developer"),
+    )
+
+    assert membership.role_id == admin_role.id
+
+
+def test_apaas_membership_role_preference_defaults_to_developer():
+    preference = _apaas_membership_role_preference(
+        {"tenantId": "t1"},
+        "alice",
+        {"id": "u1"},
+        admin_tenant_ids=set(),
+        is_platform_admin=False,
+    )
+
+    assert preference == ("R_developer", "R_tenant_admin", "admin")
+
+
+def test_apaas_membership_role_preference_uses_admin_tenant_list():
+    preference = _apaas_membership_role_preference(
+        {"tenantId": "t1"},
+        "alice",
+        {"id": "u1"},
+        admin_tenant_ids={"t1"},
+        is_platform_admin=False,
+    )
+
+    assert preference == ("R_tenant_admin", "admin", "R_developer")
+
+
+def test_apaas_membership_role_preference_uses_admin_list_match():
+    preference = _apaas_membership_role_preference(
+        {"tenantId": "t1", "adminList": [{"account": "alice"}]},
+        "alice",
+        {"id": "u1"},
+        admin_tenant_ids=set(),
+        is_platform_admin=False,
+    )
+
+    assert preference == ("R_tenant_admin", "admin", "R_developer")
 
 
 @pytest.mark.asyncio

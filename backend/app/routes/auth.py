@@ -616,6 +616,22 @@ def _merge_tenant_items(primary: list[dict], secondary: list[dict]) -> list[dict
     return [merged[tid] for tid in order]
 
 
+def _apaas_membership_role_preference(
+    item: dict,
+    username: str,
+    user_info: dict,
+    admin_tenant_ids: set[str],
+    is_platform_admin: bool,
+) -> tuple[str, ...]:
+    if (
+        is_platform_admin
+        or _tenant_item_id(item) in admin_tenant_ids
+        or _tenant_admin_matches(item, username, user_info)
+    ):
+        return ("R_tenant_admin", "admin", "R_developer")
+    return ("R_developer", "R_tenant_admin", "admin")
+
+
 async def _ensure_apaas_tenant(
     db: AsyncSession,
     item: dict,
@@ -802,15 +818,22 @@ async def _upsert_user_credential(
     row.last_error = None
 
 
-async def _sync_user_membership(db: AsyncSession, user: User, tenant: Tenant, is_default: bool) -> UserTenant:
-    role = (
+async def _sync_user_membership(
+    db: AsyncSession,
+    user: User,
+    tenant: Tenant,
+    is_default: bool,
+    preferred_role_codes: tuple[str, ...] = ("R_developer", "R_tenant_admin", "admin"),
+) -> UserTenant:
+    roles = (
         await db.execute(
             select(Role)
             .where(Role.tenant_id == tenant.id)
-            .where(Role.role_code.in_(["R_developer", "R_tenant_admin", "admin"]))
-            .order_by(Role.role_code.asc())
+            .where(Role.role_code.in_(list(preferred_role_codes)))
         )
-    ).scalars().first()
+    ).scalars().all()
+    roles_by_code = {role.role_code: role for role in roles}
+    role = next((roles_by_code.get(code) for code in preferred_role_codes if roles_by_code.get(code)), None)
     membership = (
         await db.execute(
             select(UserTenant).where(UserTenant.user_id == user.id, UserTenant.tenant_id == tenant.id)
@@ -909,6 +932,7 @@ async def _try_apaas_login_flow(user_data: UserLogin, db: AsyncSession) -> Optio
     switchable_items: list[dict] = []
     if has_backend_identity and not is_platform_admin:
         switchable_items = await _apaas_switchable_tenants(backend_token, default_tenant_id)
+    admin_tenant_ids = {_tenant_item_id(item) for item in switchable_items if _tenant_item_id(item)}
 
     if has_backend_identity:
         if is_platform_admin:
@@ -948,7 +972,19 @@ async def _try_apaas_login_flow(user_data: UserLogin, db: AsyncSession) -> Optio
                 user.apaas_user_id,
                 tenant.apaas_tenant_id_str or _tenant_item_id(item),
             )
-        await _sync_user_membership(db, user, tenant, is_default=idx == 0)
+        await _sync_user_membership(
+            db,
+            user,
+            tenant,
+            is_default=idx == 0,
+            preferred_role_codes=_apaas_membership_role_preference(
+                item,
+                username,
+                user_info,
+                admin_tenant_ids,
+                is_platform_admin,
+            ),
+        )
 
     await db.commit()
 

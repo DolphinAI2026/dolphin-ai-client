@@ -42,6 +42,7 @@ from app.models import (
 )
 from app.ai_chat.tools import TOOL_SCHEMAS, execute_tool, get_all_tool_schemas, split_core_deferred, build_deferred_manifest
 from app.observability import recorder
+from app.routes.llm_configs import build_llm_chat_completions_url
 
 logger = logging.getLogger(__name__)
 
@@ -401,6 +402,11 @@ def _apply_provider_payload_compat(cfg: LLMConfigSnapshot, payload: dict) -> dic
     return payload
 
 
+def _llm_chat_completions_url(cfg: LLMConfigSnapshot) -> str:
+    """Use the same OpenAI-compatible URL normalization as LLM config tests."""
+    return build_llm_chat_completions_url(cfg.base_url)
+
+
 async def _resolve_llm_config(
     db: AsyncSession, session: AIChatSession
 ) -> LLMConfigSnapshot:
@@ -476,7 +482,7 @@ async def generate_title(
     try:
         async with httpx.AsyncClient(timeout=httpx.Timeout(connect=10, read=20, write=10, pool=10)) as client:
             resp = await client.post(
-                f"{cfg.base_url}/chat/completions",
+                _llm_chat_completions_url(cfg),
                 headers={
                     "Authorization": f"Bearer {cfg.api_key}",
                     "Content-Type": "application/json",
@@ -522,7 +528,7 @@ async def _call_llm(
         try:
             async with httpx.AsyncClient(timeout=httpx.Timeout(connect=10, read=timeout, write=10, pool=10)) as client:
                 resp = await client.post(
-                    f"{cfg.base_url}/chat/completions",
+                    _llm_chat_completions_url(cfg),
                     headers={
                         "Authorization": f"Bearer {cfg.api_key}",
                         "Content-Type": "application/json",
@@ -579,7 +585,7 @@ async def _call_llm_stream(
             async with httpx.AsyncClient(timeout=httpx.Timeout(connect=10, read=timeout, write=10, pool=10)) as client:
                 async with client.stream(
                     "POST",
-                    f"{cfg.base_url}/chat/completions",
+                    _llm_chat_completions_url(cfg),
                     headers={
                         "Authorization": f"Bearer {cfg.api_key}",
                         "Content-Type": "application/json",

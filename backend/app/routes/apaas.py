@@ -5,7 +5,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 from app.database import get_db
-from app.models import User
+from app.models import APaaSUserCredential, User
 from app.models.tenant import Tenant
 from app.auth import get_current_user
 from app.deps import AuthContext, get_auth_context
@@ -31,6 +31,38 @@ class APaaSEmbedCredentials(BaseModel):
     connected: bool
     apaas_token: Optional[str] = None
     apaas_tenant_id: Optional[str] = None
+
+
+async def _resolve_embed_credentials(db: AsyncSession, ctx: AuthContext) -> tuple[str, str]:
+    bound_tenant_id = ""
+    if ctx.tenant_id:
+        result = await db.execute(select(Tenant.apaas_tenant_id_str).where(Tenant.id == ctx.tenant_id))
+        bound_tenant_id = (result.scalar_one_or_none() or "").strip()
+
+        cred_result = await db.execute(
+            select(APaaSUserCredential)
+            .where(APaaSUserCredential.user_id == ctx.user.id)
+            .where(APaaSUserCredential.local_tenant_id == ctx.tenant_id)
+            .where(APaaSUserCredential.status == "connected")
+            .where(APaaSUserCredential.token.isnot(None))
+            .order_by(
+                APaaSUserCredential.last_login_at.desc(),
+                APaaSUserCredential.updated_at.desc(),
+                APaaSUserCredential.id.desc(),
+            )
+            .limit(1)
+        )
+        cred = cred_result.scalar_one_or_none()
+        if cred and (cred.token or "").strip():
+            return (
+                (cred.token or "").strip(),
+                (cred.apaas_tenant_id or bound_tenant_id).strip(),
+            )
+
+    return (
+        (ctx.user.apaas_token or "").strip(),
+        (bound_tenant_id or ctx.apaas_tenant_id or ctx.user.apaas_tenant_id or "").strip(),
+    )
 
 
 @router.post("/login")
@@ -91,12 +123,7 @@ async def apaas_embed_credentials(
     db: Annotated[AsyncSession, Depends(get_db)],
 ):
     """返回当前登录用户用于嵌入式助手的 aPaaS 凭证。"""
-    token = (ctx.user.apaas_token or "").strip()
-    tenant_id = (ctx.apaas_tenant_id or ctx.user.apaas_tenant_id or "").strip()
-
-    if not tenant_id and ctx.tenant_id:
-        result = await db.execute(select(Tenant.apaas_tenant_id_str).where(Tenant.id == ctx.tenant_id))
-        tenant_id = (result.scalar_one_or_none() or "").strip()
+    token, tenant_id = await _resolve_embed_credentials(db, ctx)
 
     if not token or not tenant_id:
         return APaaSEmbedCredentials(connected=False)
