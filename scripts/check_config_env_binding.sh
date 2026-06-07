@@ -71,7 +71,7 @@ from urllib.parse import urlsplit
 
 db = urlsplit(settings.database_url)
 print(f"APAAS_BASE_URL={settings.apaas_base_url}")
-print("APAAS_TENANT_ID=<runtime user/JWT tenant, not fixed config>")
+print("APAAS_TENANT_ID=<not configured; runtime uses platform login response and user/JWT tenant>")
 print(f"DATABASE_HOST={db.hostname or ''}")
 print(f"DATABASE_NAME={(db.path or '').lstrip('/')}")
 PY'

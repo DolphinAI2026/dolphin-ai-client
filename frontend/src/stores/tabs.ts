@@ -55,7 +55,7 @@ const NAV_TABS: TabItem[] = [
   },
   {
     id: 'platform',
-    path: '/platform-admin',
+    path: '/platform-envs',
     label: '平台管理',
     icon: 'shield',
     closable: true,
@@ -123,7 +123,7 @@ export const useTabsStore = defineStore('tabs', () => {
    *      - nav tab: same base or path is a sub-path (e.g., /ai-chat ↔ /ai-chat/15)
    *   3. home '/' 特判：仅当 path === '/' 时 match (防 home 兜底污染)
    *
-   * 没有 localStorage 恢复后，刷新在 /apps / platform-admin 等一级路由时，
+   * 没有 localStorage 恢复后，刷新在 /apps / platform-envs 等一级路由时，
    * 只创建当前路由对应 tab，不恢复旧的整排 tab。
    */
   function syncFromRoute(path: string) {

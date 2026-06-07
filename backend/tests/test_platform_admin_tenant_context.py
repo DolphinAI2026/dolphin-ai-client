@@ -2,15 +2,17 @@ from types import SimpleNamespace
 
 import pytest
 from jose import jwt
+from sqlalchemy import select
 
 from app.auth import create_access_token, get_password_hash
 from app.config import settings
 from app.deps import AuthContext, get_auth_context, resolve_effective_tenant_id
-from app.models import LLMConfig, PlatformEnv, User
+from app.models import APaaSPlatformCredential, APaaSUserCredential, LLMConfig, PlatformEnv, User
 from app.models.tenant import Tenant, UserTenant
+from app.routes import auth as auth_routes
+from app.routes.auth import _ensure_apaas_tenant, _try_apaas_login_flow, login
 from app.routes.llm_configs import list_llm_config_options, list_llm_configs
 from app.routes.platform_envs import list_envs
-from app.routes.auth import login
 from app.schemas import UserLogin
 
 
@@ -124,3 +126,98 @@ async def test_platform_admin_routes_fall_back_to_active_tenant_without_membersh
 
     env_rows = await list_envs(ctx, db_session)
     assert [row["env_name"] for row in env_rows] == ["测试环境"]
+
+
+@pytest.mark.asyncio
+async def test_apaas_platform_admin_login_does_not_sync_all_tenants_or_llm_configs(
+    db_session,
+    monkeypatch,
+):
+    monkeypatch.setattr(settings, "apaas_base_url", "https://apaas-trial.definesys.cn/backend")
+    monkeypatch.setattr(settings, "apaas_tenant_id", "")
+
+    async def fake_platform_login(_username, _password):
+        return "platform.token.sig", {"data": {"token": "platform.token.sig"}}
+
+    async def fake_backend_login(_username, _password, _tenant_id=""):
+        return "backend.token.sig", {
+            "data": {
+                "token": "backend.token.sig",
+                "defaultTenantId": "822902364821258241",
+                "user": {"id": "apaas-user-1", "username": "admin"},
+            }
+        }
+
+    async def fail_all_tenants(_platform_token):
+        raise AssertionError("login must not sync all aPaaS tenants")
+
+    monkeypatch.setattr(auth_routes, "_apaas_platform_login", fake_platform_login)
+    monkeypatch.setattr(auth_routes, "_apaas_backend_login", fake_backend_login)
+    monkeypatch.setattr(auth_routes, "_apaas_all_tenants", fail_all_tenants)
+
+    response = await _try_apaas_login_flow(UserLogin(username="admin", password="secret"), db_session)
+
+    assert response is not None
+    assert response.is_platform_admin is True
+    assert response.has_tenant_context is True
+    assert len(response.tenants) == 1
+
+    tenants = (await db_session.execute(select(Tenant))).scalars().all()
+    assert len(tenants) == 1
+    assert tenants[0].apaas_tenant_id_str == "822902364821258241"
+
+    llm_rows = (await db_session.execute(select(LLMConfig))).scalars().all()
+    assert llm_rows == []
+
+    platform_creds = (await db_session.execute(select(APaaSPlatformCredential))).scalars().all()
+    user_creds = (await db_session.execute(select(APaaSUserCredential))).scalars().all()
+    assert len(platform_creds) == 1
+    assert len(user_creds) == 1
+
+
+@pytest.mark.asyncio
+async def test_ensure_apaas_tenant_reuses_existing_env_for_tenant(db_session, monkeypatch):
+    monkeypatch.setattr(settings, "apaas_base_url", "https://apaas-trial.definesys.cn/backend")
+
+    tenant = Tenant(
+        tenant_name="得帆-旧",
+        tenant_code="df",
+        status=1,
+        apaas_tenant_id_str="822902364821258241",
+    )
+    db_session.add(tenant)
+    await db_session.flush()
+
+    env = PlatformEnv(
+        tenant_id=tenant.id,
+        env_name="得帆-旧",
+        alias="df",
+        base_url="https://old.example/backend",
+        platform_tenant_id="old-platform-tenant",
+        is_default=True,
+        status="connected",
+    )
+    db_session.add(env)
+    await db_session.flush()
+
+    result = await _ensure_apaas_tenant(
+        db_session,
+        {
+            "tenantId": "822902364821258241",
+            "tenantName": "得帆-新",
+            "tenantCode": "df",
+        },
+        login_username="admin",
+        login_password="secret",
+    )
+    await db_session.flush()
+
+    assert result.id == tenant.id
+    env_rows = (await db_session.execute(select(PlatformEnv))).scalars().all()
+    assert len(env_rows) == 1
+    assert env_rows[0].id == env.id
+    assert env_rows[0].env_name == "得帆-新"
+    assert env_rows[0].base_url == "https://apaas-trial.definesys.cn/backend"
+    assert env_rows[0].platform_tenant_id == "822902364821258241"
+    assert env_rows[0].username == "admin"
+    assert env_rows[0].password_enc

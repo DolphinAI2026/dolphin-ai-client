@@ -478,6 +478,11 @@ tools:
     agents: [config]
     category: issue_assistant
     description: "记录右侧问题助手识别出的咨询、配置问题、疑似 Bug 或需求建议；只记录，不改 git，不部署。"
+  record_support_triage:
+    sections: [global]
+    agents: [config]
+    category: issue_assistant
+    description: "记录外挂问题分诊智能体对用户问题的分类、判断原因和回复内容；分类为操作问题 / Bug / 需求 / 待确认。"
   rollback_application:
     sections: [global]
     agents: []  # mcp_server 已实现, dolphin agent prompt 文档未列入 — 维持现状

@@ -34,23 +34,6 @@ RUN node_modules/.bin/vite build
 
 
 # ------------------------------------------------------------
-# stage 1b: 构建平台管理前端（admin-spa）
-# ------------------------------------------------------------
-FROM node:20-bookworm-slim AS admin-spa-builder
-
-ARG VITE_MCP_PUBLIC_BASE=http://127.0.0.1:8004
-
-WORKDIR /build/admin-spa
-
-COPY admin-spa/package.json admin-spa/package-lock.json* ./
-RUN npm ci --prefer-offline --no-audit --progress=false
-
-COPY admin-spa/ ./
-ENV VITE_MCP_PUBLIC_BASE=${VITE_MCP_PUBLIC_BASE}
-RUN npm run build
-
-
-# ------------------------------------------------------------
 # stage 2: 构建 code-server 睿鲸扩展
 # ------------------------------------------------------------
 FROM node:20-bookworm-slim AS ruijing-extension-builder
@@ -215,7 +198,6 @@ RUN rm -rf /app/backend/.env /app/backend/.venv /app/backend/venv \
 
 # --- 拷前端构建产物（直接落在镜像内，不再 VOLUME 挂出）---------
 COPY --from=frontend-builder /build/frontend/dist /app/frontend/dist
-COPY --from=admin-spa-builder /build/admin-spa/dist /app/admin-spa/dist
 
 # --- 挂载点 & 目录 ------------------------------------------
 # workspaces 卷由 compose 在运行时挂入（路径由 ${APAAS_WORKSPACE_ROOT} 决定，

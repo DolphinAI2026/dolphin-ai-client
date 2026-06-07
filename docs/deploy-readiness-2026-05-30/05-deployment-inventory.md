@@ -79,7 +79,6 @@
 | `JWT_SECRET_KEY` | ✅ **是**（pydantic 无默认，缺则启动崩） | 🔑 | 签发平台 JWT | `your-secret-key-change-in-production` |
 | `DATABASE_URL` | ✅ 生产是（prod 必接 MySQL） | 🔑（含库密码） | 数据库连接串 | dev 默认 `mysql+aiomysql://root:password@localhost:3306/apaas_builder`；支持 `sqlite+aiosqlite:///...`（dev）；prod 例 `mysql+aiomysql://apaas:apaas2024@host:3306/apaas_builder?charset=utf8mb4` |
 | `APAAS_BASE_URL` | ✅ 是（核心功能依赖 aPaaS） | 否 | 得帆云 aPaaS 后端地址 | `https://apaas-poc.definesys.cn/backend` |
-| `APAAS_TENANT_ID` | ✅ 是 | 否 | aPaaS 默认租户 ID | `743906758237356033`（**得帆 POC 租户，硬编码默认值**） |
 | `ENCRYPTION_KEY` | ✅ **强烈建议**（生产必改） | 🔑 | Fernet 派生密钥，加密 aPaaS/平台账号密码存库（`crypto.py` SHA256 派生） | `default-key-change-in-production-32b`（**不安全默认**） |
 | `ANTHROPIC_BASE_URL` | 否 | 否 | 运行时实际走的 LLM 网关（OpenAI/Anthropic 兼容） | `https://api.minimaxi.com/anthropic` |
 | `ANTHROPIC_API_KEY` | 否（缺则回退 `LLM_API_KEY`） | 🔑 | 同上密钥 | 空 |
@@ -238,7 +237,7 @@
 
 3. **默认连得帆自家 aPaaS + LLM，默认值写死在 `config.py`**
    - 实证：`config.py:26-27`（`apaas-poc.definesys.cn` + 租户 `743906758237356033`）、`:31,36`（`api.minimaxi.com`）。
-   - 处置：客户部署**必须**在 backend.env 覆盖 `APAAS_BASE_URL`/`APAAS_TENANT_ID`/`ANTHROPIC_BASE_URL`/`ANTHROPIC_API_KEY`/`LLM_API_KEY` 为客户自己的 aPaaS 与 LLM 凭据。
+   - 处置：客户部署**必须**在 backend.env 覆盖 `APAAS_BASE_URL`/`ANTHROPIC_BASE_URL`/`ANTHROPIC_API_KEY`/`LLM_API_KEY` 为客户自己的 aPaaS 与 LLM 凭据；不配置固定租户 ID。
 
 ### 🟠 P1 — 需改配置/文档才能交付
 
@@ -310,7 +309,7 @@
 **必填配置（backend.env，由部署脚本生成 Secret）**
 6. `LLM_API_KEY`、`JWT_SECRET_KEY`（缺这两个**启动直接崩**）。
 7. `DATABASE_URL` 指向客户 MySQL。
-8. `APAAS_BASE_URL` + `APAAS_TENANT_ID` 指向**客户自己的 aPaaS 租户**（覆盖得帆 POC 默认值）。
+8. `APAAS_BASE_URL` 指向**客户自己的 aPaaS 平台**（覆盖得帆 POC 默认值），租户由平台登录响应和用户上下文决定。
 9. `ANTHROPIC_BASE_URL` + `ANTHROPIC_API_KEY`（+ 模型名）指向客户 LLM。
 10. **随机生成并固化**：`ENCRYPTION_KEY`（落库密码加密）、`JWT_SECRET_KEY`，用 git 功能再加 `BUILDER_FERNET_KEY`。绝不用默认值。
 11. 进程 env 显式注入：`APAAS_WORKSPACE_ROOT`（= 卷挂载路径）、`PORT`、`CODE_SERVER_BIND_HOST`；要 Web IDE 则设 `CODE_SERVER_BASE_URL=https://<host>/ai-builder/ide/`。

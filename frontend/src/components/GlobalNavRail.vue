@@ -250,7 +250,7 @@ async function onTenantOptionClick(tenantId: number) {
 
 async function handleUserCommand(command: string | number | object) {
   if (command === 'admin') {
-    router.push('/platform-admin')
+    router.push('/platform-envs')
     return
   }
   if (command === 'logout') {

@@ -66,7 +66,7 @@ const hasCustomCrumbs = computed(() => Array.isArray(props.breadcrumbs) && props
     </div>
     <!-- Per-page action surface. BuilderFrame forwards its `#actions` slot here
          so pages (Apps / TenantUsers / PlatformTenants / PlatformEnvs /
-         McpToolsPage / OnlineCodingPage / OnlineCodingWorkspacePage) keep
+         CodingPage / OnlineCodingWorkspacePage) keep
          their toolbars rendered in the topbar. -->
     <div class="topbar-page-actions">
       <slot name="actions" />

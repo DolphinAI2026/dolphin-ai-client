@@ -109,6 +109,7 @@ _EXPECTED_CONFIG_WHITELIST: frozenset[str] = frozenset({
     "rename_apaas_menu",
     "republish_apaas_app",
     "record_product_issue",
+    "record_support_triage",
     "save_apaas_business_event",
     "save_config_skill",
     "set_apaas_app_process",

@@ -665,12 +665,8 @@ async def _ensure_apaas_tenant(
         )
         db.add(tenant)
         await db.flush()
-        from app.seed_data import seed_default_roles, sync_builtin_llm_configs
+        from app.seed_data import seed_default_roles
         await seed_default_roles(db, tenant.id, commit=False)
-        try:
-            await sync_builtin_llm_configs(db, tenant_ids=[tenant.id], commit=False)
-        except Exception as exc:
-            logger.warning("sync builtin llm skipped for apaas tenant %s: %s", tenant.id, exc)
     else:
         tenant.tenant_name = name
         tenant.status = 1 if _tenant_enabled(item) else 0
@@ -685,6 +681,14 @@ async def _ensure_apaas_tenant(
                     PlatformEnv.tenant_id == tenant.id,
                     PlatformEnv.platform_tenant_id == platform_tid,
                 )
+            )
+        ).scalar_one_or_none()
+    if not env:
+        env = (
+            await db.execute(
+                select(PlatformEnv)
+                .where(PlatformEnv.tenant_id == tenant.id)
+                .order_by(PlatformEnv.is_default.desc(), PlatformEnv.id.asc())
             )
         ).scalar_one_or_none()
     if not env:
@@ -914,19 +918,6 @@ async def _try_apaas_login_flow(user_data: UserLogin, db: AsyncSession) -> Optio
             )
         return None
 
-    all_tenants = await _apaas_all_tenants(platform_token) if platform_token else []
-    if all_tenants:
-        for item in all_tenants:
-            try:
-                await _ensure_apaas_tenant(db, item, username, password)
-            except Exception as exc:
-                logger.warning("sync apaas tenant skipped: %s", exc)
-    all_by_id = {_tenant_item_id(item): item for item in all_tenants if _tenant_item_id(item)}
-    if default_tenant_item and default_tenant_id in all_by_id:
-        default_tenant_item = {**default_tenant_item, **all_by_id[default_tenant_id]}
-        if str(default_tenant_item.get("tenantName") or "") == default_tenant_id and default_tenant_item.get("name"):
-            default_tenant_item["tenantName"] = default_tenant_item["name"]
-
     user_info = _extract_apaas_user(backend_payload or platform_payload, username)
 
     switchable_items: list[dict] = []
@@ -936,11 +927,9 @@ async def _try_apaas_login_flow(user_data: UserLogin, db: AsyncSession) -> Optio
 
     if has_backend_identity:
         if is_platform_admin:
-            # 平台管理员能切到所有 aPaaS 同步进来的租户，跟 aPaaS 平台原生行为对齐
-            # （aPaaS 那边 admin 在租户切换下拉里能看到所有租户）
             available_items = _merge_tenant_items(
                 [default_tenant_item] if default_tenant_item else [],
-                all_tenants,
+                [],
             )
         else:
             available_items = _merge_tenant_items(

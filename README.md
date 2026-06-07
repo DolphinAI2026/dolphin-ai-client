@@ -99,7 +99,6 @@ apaas-builder-ai/
 ```env
 # aPaaS Platform
 APAAS_BASE_URL=https://your-apaas.example.com/backend
-APAAS_TENANT_ID=<your-tenant-id>
 
 # LLM Configuration
 LLM_API_BASE=https://your-llm-gateway.example.com/openai

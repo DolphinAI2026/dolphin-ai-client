@@ -124,6 +124,10 @@ def _classify_tool(name: str) -> tuple[str, str]:
     if name == "query_apaas_business_data":
         return ("apaas_business_data", "aPaaS 业务数据")
 
+    # 外挂问题分诊助手
+    if name == "record_support_triage":
+        return ("support_triage", "问题分诊记录")
+
     # aPaaS 平台内省（元数据查询）
     if name.startswith("list_apaas_") or name.startswith("get_apaas_") or \
        name.startswith("check_app_") or name.startswith("validate_"):

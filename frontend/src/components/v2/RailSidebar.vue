@@ -29,9 +29,9 @@ const NAV = computed<NavItem[]>(() => [
   { key: 'catalog', label: '自开发资产库', icon: 'store', path: '/workspace-catalog' },
   // AI Builder（/）= 首页融合页，与 /ai-chat 同组件：新建对话 + 历史会话一体。
   // 改已有应用从「应用资产库」点进工作室 (/chat)，/chat 不挂菜单。
-  // 数据连接 / 运行发布先隐藏；平台级配置统一从平台管理工作台进入。
+  // 数据连接 / 运行发布先隐藏；平台级配置统一从主应用设置页进入。
 ])
-const platformNavItem: NavItem = { key: 'platform', label: '平台管理', icon: 'shield', path: '/platform-admin' }
+const platformNavItem: NavItem = { key: 'platform', label: '平台管理', icon: 'shield', path: '/platform-envs' }
 
 const userAccount = computed(() => user.user?.username || '')
 const userName = computed(() => user.user?.display_name || userAccount.value || '未登录')
@@ -59,7 +59,11 @@ const currentTenantLabel = computed(() => {
   })
 })
 const isDark = computed(() => theme.mode === 'dark')
-const platformActive = computed(() => route.path.startsWith('/platform-admin'))
+const platformActive = computed(() =>
+  route.path.startsWith('/platform-envs')
+  || route.path.startsWith('/tenant-users')
+  || route.path.startsWith('/admin/tenants')
+)
 const platformHref = computed(() => resolveHref(platformNavItem.path))
 
 function closeTenantMenu() {
@@ -144,7 +148,7 @@ function goPlatformAdmin() {
 }
 
 // 2026-05-23: rail nav 改 <a href> 让 Cmd+click / 中键 / 右键"在新标签中打开"
-// 真开 chrome tab — 跟 admin-spa AdminLayout 一致体验
+// 真开 chrome tab，保留浏览器原生导航体验。
 function resolveHref(path: string): string {
   try {
     return router.resolve(path).href
@@ -253,7 +257,7 @@ function renderIcon(name: string): string {
 
     <nav class="rail-scroll" aria-label="主导航">
       <!-- 2026-05-23: button → <a href> 让 cmd+click / 中键 / 右键"在新标签中打开" 真开 chrome tab.
-           普通 click → 内部 openTab + router.push (走多 tab 体系). 跟 admin-spa AdminLayout 一致. -->
+           普通 click → 内部 openTab + router.push (走多 tab 体系). -->
       <a
         v-for="it in NAV"
         :key="it.key"
@@ -322,9 +326,9 @@ function renderIcon(name: string): string {
           </svg>
         </a>
 
-        <!-- v3 2026-05-20: 删主题色 picker 让 admin/frontend brand 始终一致蓝；只保留浅深切换 -->
+        <!-- v3 2026-05-20: 删主题色 picker 让主应用 brand 始终一致蓝；只保留浅深切换 -->
         <!-- 2026-05-21 整 row 改成 button — 之前 label 跟太阳 icon 视觉分离体验割裂。
-             现在 icon + 文字 + 切换方向提示一体，跟 admin-spa AdminLayout 一致 -->
+             现在 icon + 文字 + 切换方向提示一体 -->
         <button
           type="button"
           class="theme-row"
@@ -528,7 +532,7 @@ function renderIcon(name: string): string {
   font-weight: var(--fw-medium, 500);
   text-align: left;
   cursor: pointer;
-  /* 2026-05-23 button → <a> 后禁默认下划线, 跟 admin-spa AdminLayout 一致 */
+  /* 2026-05-23 button → <a> 后禁默认下划线 */
   text-decoration: none;
   transition: background 0.14s var(--ease, cubic-bezier(0.2, 0.8, 0.2, 1)),
               color 0.14s var(--ease, cubic-bezier(0.2, 0.8, 0.2, 1));

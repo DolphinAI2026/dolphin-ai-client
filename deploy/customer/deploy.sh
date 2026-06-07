@@ -112,7 +112,7 @@ validate_backend_env() {
   fi
   grep -q '__GENERATE__' "$BACKEND_ENV_FILE" && die "backend.env 残留 __GENERATE__ 占位，疑似生成异常，请删除 $BACKEND_ENV_FILE 重跑。"
   local missing=()
-  for k in DATABASE_URL APAAS_BASE_URL APAAS_TENANT_ID LLM_API_KEY JWT_SECRET_KEY ENCRYPTION_KEY; do
+  for k in DATABASE_URL APAAS_BASE_URL LLM_API_KEY JWT_SECRET_KEY ENCRYPTION_KEY; do
     local v; v="$(grep -E "^$k=" "$BACKEND_ENV_FILE" | head -1 | cut -d= -f2-)"
     [ -n "$v" ] || missing+=("$k")
   done

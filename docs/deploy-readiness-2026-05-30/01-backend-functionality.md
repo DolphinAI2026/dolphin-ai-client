@@ -455,7 +455,7 @@ create_artifact_from_attachment() / submit_design_doc (MCP)
 | 服务 | 用途 | 配置项 | 备注 |
 |------|------|--------|------|
 | **MySQL 8.x** | 本系统主数据库（用户/应用/对话/MCP 工具调用日志等 30+ 张表） | `DATABASE_URL=mysql+aiomysql://...` | 必须；SQLite 仅开发用 |
-| **aPaaS 平台（得帆云）** | 生成应用的目标平台；所有 create/update/deploy 均调其 REST API | `APAAS_BASE_URL`, `APAAS_TENANT_ID` | 每个租户需独立的 xdaptoken；需开通 API 权限 |
+| **aPaaS 平台（得帆云）** | 生成应用的目标平台；所有 create/update/deploy 均调其 REST API | `APAAS_BASE_URL` | 每个租户需独立的 xdaptoken；租户来自平台登录响应和用户上下文；需开通 API 权限 |
 | **LLM Gateway（主模型）** | 驱动 BrainstormAgent / SpecAgent / ChatPage / AI Chat 的 LLM | `LLM_API_KEY`, `LLM_API_BASE`, `LLM_MODEL`（默认 MiniMax-M2.7） | 也支持 Anthropic SDK（`ANTHROPIC_API_KEY`, `ANTHROPIC_BASE_URL`） |
 | **JWT 密钥** | 所有 API 认证 + ide_access token 签发 | `JWT_SECRET_KEY` | 多实例部署须共享同一 key |
 | **Fernet 加密密钥** | aPaaS 平台密码、PAT、DB 密码等 at-rest 加密 | `ENCRYPTION_KEY`（32 字节 Fernet key） | 丢失则所有加密凭据不可解密 |
@@ -489,7 +489,6 @@ MCP_API_KEYS=<key1>,<key2>
 
 # aPaaS 平台（必填）
 APAAS_BASE_URL=https://your-apaas.definesys.cn/backend
-APAAS_TENANT_ID=<默认租户 ID>
 
 # 按功能选填
 CODE_SERVER_BASE_URL=https://your-ide.example.com

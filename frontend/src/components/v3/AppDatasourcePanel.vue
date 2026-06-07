@@ -237,7 +237,7 @@ async function reload() {
 }
 
 function goPlatformAdmin() {
-  router.push('/platform-admin').catch(() => {})
+  router.push('/db-connections').catch(() => {})
 }
 
 watch(() => props.appId, () => { reload() }, { immediate: true })

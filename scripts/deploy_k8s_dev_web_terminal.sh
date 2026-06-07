@@ -42,7 +42,6 @@ PROD_HOST="${PROD_HOST:-df-aigc.dfy.definesys.cn}"
 VITE_MCP_PUBLIC_BASE="${VITE_MCP_PUBLIC_BASE:-https://${DEV_HOST}}"
 PUBLIC_URL="${PUBLIC_URL:-https://${DEV_HOST}/ai-builder/login}"
 APAAS_BASE_URL="${APAAS_BASE_URL:-}"
-APAAS_TENANT_ID="${APAAS_TENANT_ID:-}"
 DEV_DATABASE_NAME="${DEV_DATABASE_NAME:-apaas_builder_dev}"
 
 SOURCE_NGINX_CM="${SOURCE_NGINX_CM:-${PROD_APP_NAME}-nginx}"
@@ -131,7 +130,6 @@ build_and_push_image() {
 
 generate_terminal_payload() {
   [ -n "$APAAS_BASE_URL" ] || die "APAAS_BASE_URL is empty. Set it in ${DEPLOY_ENV_FILE}"
-  [ -n "$APAAS_TENANT_ID" ] || die "APAAS_TENANT_ID is empty. Set it in ${DEPLOY_ENV_FILE}"
   [ -n "$DEV_DATABASE_NAME" ] || die "DEV_DATABASE_NAME is empty. Set it in ${DEPLOY_ENV_FILE}"
   mkdir -p "$(dirname "$OUTPUT_FILE")"
   local nginx_conf
@@ -147,7 +145,6 @@ DEV_HOST='${DEV_HOST}'
 PROD_HOST='${PROD_HOST}'
 PUBLIC_URL='${PUBLIC_URL}'
 APAAS_BASE_URL='${APAAS_BASE_URL}'
-APAAS_TENANT_ID='${APAAS_TENANT_ID}'
 DEV_DATABASE_NAME='${DEV_DATABASE_NAME}'
 SOURCE_NGINX_CM='${SOURCE_NGINX_CM}'
 NGINX_CM='${NGINX_CM}'
@@ -182,11 +179,7 @@ if grep -q '^APAAS_BASE_URL=' /tmp/apaas-builder-backend.env; then
 else
   printf 'APAAS_BASE_URL=%s\\n' "\$APAAS_BASE_URL" >> /tmp/apaas-builder-backend.env
 fi
-if grep -q '^APAAS_TENANT_ID=' /tmp/apaas-builder-backend.env; then
-  sed -i "s#^APAAS_TENANT_ID=.*#APAAS_TENANT_ID=\${APAAS_TENANT_ID}#" /tmp/apaas-builder-backend.env
-else
-  printf 'APAAS_TENANT_ID=%s\\n' "\$APAAS_TENANT_ID" >> /tmp/apaas-builder-backend.env
-fi
+sed -i '/^APAAS_TENANT_ID=/d' /tmp/apaas-builder-backend.env
 if grep -q '^DATABASE_URL=mysql' /tmp/apaas-builder-backend.env; then
   sed -i -E "s#^(DATABASE_URL=[^:]+://[^/]+/)[^?]*(.*)#\\1\${DEV_DATABASE_NAME}\\2#" /tmp/apaas-builder-backend.env
 else
