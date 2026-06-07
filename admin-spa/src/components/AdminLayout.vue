@@ -228,6 +228,18 @@ onBeforeUnmount(() => {
 
 function onLogout() {
   auth.logout()
+  if (embedded.value && typeof window !== 'undefined') {
+    const parentOrigin = (() => {
+      try {
+        if (document.referrer) return new URL(document.referrer).origin
+        if (window.location.ancestorOrigins?.length) return window.location.ancestorOrigins[0]
+        return null
+      } catch { return null }
+    })()
+    if (parentOrigin) {
+      window.parent?.postMessage({ type: 'admin-logout' }, parentOrigin)
+    }
+  }
   router.push('/login')
 }
 

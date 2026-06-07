@@ -1,4 +1,5 @@
 import { createRouter, createWebHistory } from 'vue-router'
+import { useAuthStore } from '@/stores/auth'
 
 const router = createRouter({
   // 2026-05-13: 跟 vite --base 自动同步。dev 时 /, prod build 时 /mcp-server/admin/
@@ -32,7 +33,7 @@ const router = createRouter({
   ],
 })
 
-router.beforeEach((to, _from, next) => {
+router.beforeEach(async (to, _from, next) => {
   const handoffToken = Array.isArray(to.query.handoff_token) ? to.query.handoff_token[0] : to.query.handoff_token
   if (handoffToken) {
     localStorage.setItem('admin_token', String(handoffToken))
@@ -46,13 +47,27 @@ router.beforeEach((to, _from, next) => {
     localStorage.setItem('admin_token', builderToken)
   }
 
-  if (to.path === '/login' && localStorage.getItem('admin_token')) {
+  const token = localStorage.getItem('admin_token')
+  if (!token) {
+    if (to.meta.requiresAdmin) return next('/login')
+    return next()
+  }
+
+  const auth = useAuthStore()
+  if (!auth.user) {
+    await auth.fetchMe()
+  }
+  if (!auth.isAdmin) {
+    auth.logout()
+    if (to.path !== '/login') return next('/login')
+    return next()
+  }
+
+  if (to.path === '/login') {
     return next('/')
   }
 
   if (!to.meta.requiresAdmin) return next()
-  const token = localStorage.getItem('admin_token')
-  if (!token) return next('/login')
   next()
 })
 

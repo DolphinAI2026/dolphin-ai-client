@@ -29,6 +29,7 @@ api.interceptors.response.use(
   (error: AxiosError) => {
     if (error.response?.status === 401) {
       localStorage.removeItem('admin_token')
+      localStorage.removeItem('token')
       // 当前不在 /login 才跳
       if (!window.location.pathname.endsWith('/login')) {
         window.location.href = `${import.meta.env.BASE_URL}login`

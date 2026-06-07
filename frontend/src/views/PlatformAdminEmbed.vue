@@ -24,10 +24,11 @@
  * 这样 /admin/mcp 和 /platform-admin 两条路径视觉完全一致。
  */
 import { computed, onMounted, onBeforeUnmount, ref, watch } from 'vue'
-import { useRoute } from 'vue-router'
+import { useRoute, useRouter } from 'vue-router'
 import { useUserStore } from '@/stores/user'
 
 const route = useRoute()
+const router = useRouter()
 const userStore = useUserStore()
 const loading = ref(true)
 
@@ -67,6 +68,11 @@ function handleAdminMessage(event: MessageEvent) {
   if (!adminOriginAllowed) return
   if (event.data?.type === 'admin-return-workspace') {
     window.location.href = `${import.meta.env.BASE_URL || '/ai-builder/'}`
+  }
+  if (event.data?.type === 'admin-logout') {
+    userStore.logout()
+    try { localStorage.removeItem('admin_token') } catch { /* ignore */ }
+    router.push({ path: '/login' })
   }
 }
 

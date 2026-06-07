@@ -62,7 +62,24 @@
             :class="{ active: automationPanelOpen, running: automationRunning }"
             @click="automationPanelOpen = !automationPanelOpen"
             :title="automationPanelOpen ? '收起脚本回放面板' : '打开脚本回放面板'"
-          >脚本回放</button>
+            :aria-label="automationPanelOpen ? '收起脚本回放面板' : '打开脚本回放面板'"
+          >
+            <svg
+              width="14"
+              height="14"
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="currentColor"
+              stroke-width="2"
+              stroke-linecap="round"
+              stroke-linejoin="round"
+              aria-hidden="true"
+            >
+              <path d="M3 12a9 9 0 1 0 3-6.7" />
+              <path d="M3 4v5h5" />
+              <path d="m10 8 6 4-6 4z" fill="currentColor" stroke="none" />
+            </svg>
+          </button>
           <button
             v-if="artifacts.length > 0"
             class="artifacts-toggle"
@@ -764,6 +781,7 @@ const storedAutomationPrompt = (() => {
   catch { return '' }
 })()
 const automationRunnerEnabled = computed(() => {
+  if (!userStore.isPlatformAdmin) return false
   if (route.query.script === '1' || route.query.e2e === '1') return true
   try {
     if (localStorage.getItem('ai-builder:script-runner') === '1') return true
@@ -2590,7 +2608,8 @@ onMounted(async () => {
   font-size: 11px;
   font-family: ui-monospace, Menlo, monospace;
 }
-.trace-entry-btn {
+.trace-entry-btn,
+.automation-toggle {
   appearance: none;
   display: inline-flex;
   align-items: center;
@@ -2598,38 +2617,40 @@ onMounted(async () => {
   width: 32px;
   height: 32px;
   padding: 0;
-  background: var(--ac-input);
+  background: var(--ac-btn);
   border: 1px solid var(--ac-border-strong);
   color: var(--ac-text-mute);
   border-radius: 6px;
   cursor: pointer;
   transition: all 0.15s;
 }
-.trace-entry-btn:hover { color: var(--ac-text); border-color: var(--ac-border-strong); }
-.automation-toggle {
-  appearance: none;
-  background: var(--ac-input);
-  border: 1px solid var(--ac-border-strong);
-  color: var(--ac-text-mute);
-  padding: 5px 12px;
-  border-radius: 6px;
-  font-size: 12.5px;
-  cursor: pointer;
-  transition: all 0.15s;
-  min-height: 32px;
-  font-weight: 500;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-}
+.trace-entry-btn:hover,
 .automation-toggle:hover {
   color: var(--ac-text);
   border-color: var(--ac-border-strong);
+  background: var(--ac-input);
+}
+.theme-light .trace-entry-btn,
+.theme-light .automation-toggle {
+  background: #ffffff;
+  border-color: #cbd5e1;
+  color: #334155;
+}
+.theme-light .trace-entry-btn:hover,
+.theme-light .automation-toggle:hover {
+  background: #f8fafc;
+  border-color: #94a3b8;
+  color: #0f172a;
 }
 .automation-toggle.active {
   color: var(--ac-text);
   border-color: color-mix(in srgb, #0f9f8f 52%, transparent);
   background: color-mix(in srgb, #0f9f8f 12%, var(--ac-input));
+}
+.theme-light .automation-toggle.active {
+  color: #0f766e;
+  border-color: #5eead4;
+  background: #ecfeff;
 }
 .automation-toggle.running {
   color: #0f9f8f;
@@ -3035,7 +3056,11 @@ onMounted(async () => {
   .header-actions {
     gap: 8px;
   }
-  .automation-toggle,
+  .trace-entry-btn,
+  .automation-toggle {
+    width: 34px;
+    height: 34px;
+  }
   .artifacts-toggle {
     min-height: 34px;
     padding: 5px 9px;

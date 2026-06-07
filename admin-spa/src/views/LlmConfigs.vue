@@ -7,26 +7,12 @@
           <div class="llm-hero-badges">
             <el-tag size="small" effect="plain">{{ configs.length }} 个配置</el-tag>
             <el-tag size="small" type="success" effect="plain">{{ activeCount }} 启用</el-tag>
-            <el-tag size="small" type="info" effect="plain" :title="defaultConfigLabel">当前租户默认：{{ defaultConfigLabel }}</el-tag>
+            <el-tag size="small" type="info" effect="plain" :title="defaultConfigLabel">平台默认：{{ defaultConfigLabel }}</el-tag>
           </div>
         </div>
         <p>集中维护睿鲸AI可用的大模型供应商、模型、API Key 和默认模型，前台 Builder 与 AI Coding 直接消费这里的配置。</p>
       </div>
       <div class="hero-actions">
-        <el-select
-          v-model="selectedTenantId"
-          class="tenant-select"
-          placeholder="选择租户"
-          filterable
-          @change="loadConfigs"
-        >
-          <el-option
-            v-for="t in tenants"
-            :key="t.id"
-            :label="`${t.tenant_name}（${t.tenant_code}）`"
-            :value="t.id"
-          />
-        </el-select>
         <el-input
           v-model="keyword"
           class="search-input"
@@ -255,10 +241,6 @@ const providerLabels: Record<string, string> = {
   anthropic: 'Anthropic',
 }
 
-interface TenantOption { id: number; tenant_name: string; tenant_code: string }
-const tenants = ref<TenantOption[]>([])
-const selectedTenantId = ref<number | null>(null)
-
 const configs = ref<LlmConfig[]>([])
 const presets = ref<Record<string, PresetValue>>({})
 const keyword = ref('')
@@ -360,19 +342,6 @@ function errorMessage(error: unknown, fallback: string) {
   return err?.response?.data?.detail || err?.message || fallback
 }
 
-async function loadTenants() {
-  try {
-    const list = await apiGet<TenantOption[]>('/auth/tenants')
-    tenants.value = Array.isArray(list) ? list : []
-    if (!selectedTenantId.value && tenants.value.length) {
-      selectedTenantId.value = tenants.value[0].id
-    }
-  } catch (error) {
-    tenants.value = []
-    ElMessage.error(errorMessage(error, '加载租户列表失败'))
-  }
-}
-
 async function loadPresets() {
   presets.value = await apiGet<Record<string, PresetValue>>('/llm-configs/presets').catch(() => ({
     dolphin: {
@@ -385,7 +354,7 @@ async function loadPresets() {
 async function loadConfigs() {
   loading.value = true
   try {
-    const list = await apiGet<LlmConfig[]>('/llm-configs', { tenant_id: selectedTenantId.value ?? undefined })
+    const list = await apiGet<LlmConfig[]>('/llm-configs')
     configs.value = Array.isArray(list) ? list : []
   } catch (error) {
     configs.value = []
@@ -468,11 +437,10 @@ async function saveConfig() {
   await formRef.value?.validate()
   saving.value = true
   try {
-    const payload: Partial<LlmForm> & { tenant_id?: number } = { ...form }
+    const payload: Partial<LlmForm> = { ...form }
     if (editingConfig.value && !payload.api_key) delete payload.api_key
     if (!editingConfig.value) {
       delete payload.status
-      payload.tenant_id = selectedTenantId.value ?? undefined
     }
 
     if (editingConfig.value) {
@@ -549,7 +517,7 @@ async function removeConfig(config: LlmConfig) {
 }
 
 onMounted(async () => {
-  await Promise.all([loadPresets(), loadTenants()])
+  await loadPresets()
   await loadConfigs()
 })
 </script>
@@ -581,10 +549,6 @@ onMounted(async () => {
   gap: 8px;
   flex-wrap: wrap;
   justify-content: flex-end;
-}
-
-.tenant-select {
-  width: 200px;
 }
 
 .search-input {

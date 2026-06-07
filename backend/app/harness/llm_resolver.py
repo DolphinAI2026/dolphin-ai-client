@@ -1,7 +1,7 @@
 """Harness Core — LLM 配置统一解析
 
 消除 routes/chat.py、routes/requirements.py、coding/vibe_agent.py 三处
-重复的 _get_tenant_llm_config + _serialize_llm_config 逻辑。
+重复的 LLM 配置解析与序列化逻辑。
 """
 from dataclasses import dataclass
 from typing import Optional, AsyncIterator
@@ -39,8 +39,8 @@ async def resolve_llm_config(
 
     优先级：
     1. selected_config_id（会话选择的模型）
-    2. 租户默认的 purpose 模型
-    3. 租户默认的 "all" 模型
+    2. 平台默认的 purpose 模型
+    3. 平台默认的 "all" 模型
     4. 返回 None（调用方回退到 LLMClient 环境变量）
     """
     from app.crypto import decrypt_password

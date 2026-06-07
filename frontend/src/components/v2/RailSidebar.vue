@@ -306,6 +306,7 @@ function renderIcon(name: string): string {
         </div>
 
         <a
+          v-if="user.isPlatformAdmin"
           class="console-row platform-row"
           :class="{ active: platformActive }"
           :href="platformHref"

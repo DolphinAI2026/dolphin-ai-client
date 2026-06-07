@@ -9,7 +9,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 import httpx
 
 from app.database import get_db
-from app.deps import AuthContext, get_auth_context, require_tenant_admin, resolve_effective_tenant_id
+from app.deps import AuthContext, get_auth_context
 from app.models import LLMConfig
 from app.models.tenant import Tenant
 from app.crypto import encrypt_password, decrypt_password
@@ -45,7 +45,6 @@ class LLMConfigCreate(BaseModel):
     is_default: bool = False
     max_tokens: int = 8192
     temperature: float = 0.3
-    tenant_id: Optional[int] = None  # 仅平台管理员可指定目标租户;租户管理员忽略
 
 
 class LLMConfigUpdate(BaseModel):
@@ -187,15 +186,13 @@ async def get_provider_presets():
 
 @router.get("")
 async def list_llm_configs(
-    ctx: Annotated[AuthContext, Depends(require_tenant_admin)],
+    ctx: Annotated[AuthContext, Depends(get_auth_context)],
     db: Annotated[AsyncSession, Depends(get_db)],
-    tenant_id: Optional[int] = None,
 ):
-    """列出某租户的 LLM 配置。平台管理员可用 ?tenant_id= 指定;租户管理员强制本租户。"""
-    effective_tid = await _resolve_target_tenant_id(db, ctx, tenant_id)
+    """列出平台级 LLM 配置。"""
+    _require_platform_admin(ctx)
     result = await db.execute(
         select(LLMConfig)
-        .where(LLMConfig.tenant_id == effective_tid)
         .order_by(LLMConfig.is_default.desc(), LLMConfig.created_at.desc())
     )
     rows = result.scalars().all()
@@ -209,17 +206,17 @@ async def list_llm_config_options(
     purpose: str = Query("builder"),
 ):
     """列出指定用途可用的模型选项（面向普通用户的只读列表）。"""
-    tenant_id = await resolve_effective_tenant_id(db, ctx)
-    rows = await list_llm_configs_for_purpose(db, tenant_id, purpose)
+    rows = await list_llm_configs_for_purpose(db, 0, purpose)
     return [LLMConfigOptionResponse.from_db(row) for row in rows]
 
 
 @router.post("/models")
 async def fetch_llm_models(
     req: LLMModelsFetchRequest,
-    ctx: Annotated[AuthContext, Depends(require_tenant_admin)],
+    ctx: Annotated[AuthContext, Depends(get_auth_context)],
 ):
     """使用管理员填写的 API Key 从模型服务拉取可用模型。"""
+    _require_platform_admin(ctx)
     if not req.api_key.strip():
         raise HTTPException(status_code=400, detail="请先填写 API Key，再拉取模型")
     if not req.base_url.strip():
@@ -270,22 +267,17 @@ async def fetch_llm_models(
 @router.post("")
 async def create_llm_config(
     req: LLMConfigCreate,
-    ctx: Annotated[AuthContext, Depends(require_tenant_admin)],
+    ctx: Annotated[AuthContext, Depends(get_auth_context)],
     db: Annotated[AsyncSession, Depends(get_db)],
 ):
-    """新增 LLM 配置（管理员）"""
-    target_tid = await _resolve_target_tenant_id(db, ctx, req.tenant_id)
-    if _is_platform_admin(ctx) and req.tenant_id is not None:
-        target_tenant = (await db.execute(
-            select(Tenant).where(Tenant.id == req.tenant_id, Tenant.status == 1)
-        )).scalar_one_or_none()
-        if not target_tenant:
-            raise HTTPException(status_code=400, detail="目标租户不存在或已停用")
+    """新增平台级 LLM 配置（平台管理员）"""
+    _require_platform_admin(ctx)
+    storage_tenant_id = await _platform_storage_tenant_id(db)
     if req.is_default:
-        await _clear_defaults(db, target_tid, req.purpose)
+        await _clear_defaults(db, req.purpose)
 
     config = LLMConfig(
-        tenant_id=target_tid,
+        tenant_id=storage_tenant_id,
         config_name=req.config_name,
         provider=req.provider,
         base_url=req.base_url.rstrip("/"),
@@ -306,17 +298,17 @@ async def create_llm_config(
 async def update_llm_config(
     config_id: int,
     req: LLMConfigUpdate,
-    ctx: Annotated[AuthContext, Depends(require_tenant_admin)],
+    ctx: Annotated[AuthContext, Depends(get_auth_context)],
     db: Annotated[AsyncSession, Depends(get_db)],
 ):
-    """编辑 LLM 配置（管理员）"""
+    """编辑平台级 LLM 配置（平台管理员）"""
+    _require_platform_admin(ctx)
     result = await db.execute(
         select(LLMConfig).where(LLMConfig.id == config_id)
     )
     config = result.scalar_one_or_none()
     if not config:
         raise HTTPException(status_code=404, detail="配置不存在")
-    _assert_tenant_access(ctx, config.tenant_id)
 
     if req.config_name is not None:
         config.config_name = req.config_name
@@ -341,14 +333,14 @@ async def update_llm_config(
     if req.is_default is True:
         if config.status != "active":
             raise HTTPException(status_code=400, detail="未启用模型不能设为默认")
-        await _clear_defaults(db, config.tenant_id, config.purpose)
+        await _clear_defaults(db, config.purpose)
         config.is_default = True
     elif req.is_default is False:
         config.is_default = False
 
     if config.status == "inactive" and config.is_default:
         config.is_default = False
-        await _assign_replacement_default(db, config.tenant_id, config.purpose, exclude_id=config.id)
+        await _assign_replacement_default(db, config.purpose, exclude_id=config.id)
 
     await db.commit()
     await db.refresh(config)
@@ -358,17 +350,17 @@ async def update_llm_config(
 @router.delete("/{config_id}")
 async def delete_llm_config(
     config_id: int,
-    ctx: Annotated[AuthContext, Depends(require_tenant_admin)],
+    ctx: Annotated[AuthContext, Depends(get_auth_context)],
     db: Annotated[AsyncSession, Depends(get_db)],
 ):
-    """删除 LLM 配置（管理员）"""
+    """删除平台级 LLM 配置（平台管理员）"""
+    _require_platform_admin(ctx)
     result = await db.execute(
         select(LLMConfig).where(LLMConfig.id == config_id)
     )
     config = result.scalar_one_or_none()
     if not config:
         raise HTTPException(status_code=404, detail="配置不存在")
-    _assert_tenant_access(ctx, config.tenant_id)
 
     await db.delete(config)
     await db.commit()
@@ -382,13 +374,13 @@ async def test_llm_config(
     db: Annotated[AsyncSession, Depends(get_db)],
 ):
     """测试 LLM 配置连接"""
+    _require_platform_admin(ctx)
     result = await db.execute(
         select(LLMConfig).where(LLMConfig.id == config_id)
     )
     config = result.scalar_one_or_none()
     if not config:
         raise HTTPException(status_code=404, detail="配置不存在")
-    _assert_tenant_access(ctx, config.tenant_id)
 
     api_key = decrypt_password(config.api_key_enc)
 
@@ -473,21 +465,21 @@ async def test_llm_config(
 @router.post("/{config_id}/set-default")
 async def set_default_llm_config(
     config_id: int,
-    ctx: Annotated[AuthContext, Depends(require_tenant_admin)],
+    ctx: Annotated[AuthContext, Depends(get_auth_context)],
     db: Annotated[AsyncSession, Depends(get_db)],
 ):
-    """设为默认 LLM 配置"""
+    """设为平台默认 LLM 配置"""
+    _require_platform_admin(ctx)
     result = await db.execute(
         select(LLMConfig).where(LLMConfig.id == config_id)
     )
     config = result.scalar_one_or_none()
     if not config:
         raise HTTPException(status_code=404, detail="配置不存在")
-    _assert_tenant_access(ctx, config.tenant_id)
     if config.status != "active":
         raise HTTPException(status_code=400, detail="请先启用模型后再设为默认")
 
-    await _clear_defaults(db, config.tenant_id, config.purpose)
+    await _clear_defaults(db, config.purpose)
     config.is_default = True
     await db.commit()
     await db.refresh(config)
@@ -498,10 +490,11 @@ async def set_default_llm_config(
 async def update_llm_config_status(
     config_id: int,
     req: LLMConfigStatusUpdate,
-    ctx: Annotated[AuthContext, Depends(require_tenant_admin)],
+    ctx: Annotated[AuthContext, Depends(get_auth_context)],
     db: Annotated[AsyncSession, Depends(get_db)],
 ):
-    """全局启用/禁用模型配置。"""
+    """启用/禁用平台模型配置。"""
+    _require_platform_admin(ctx)
     if req.status not in {"active", "inactive"}:
         raise HTTPException(status_code=400, detail="状态只支持 active 或 inactive")
 
@@ -511,12 +504,11 @@ async def update_llm_config_status(
     config = result.scalar_one_or_none()
     if not config:
         raise HTTPException(status_code=404, detail="配置不存在")
-    _assert_tenant_access(ctx, config.tenant_id)
 
     config.status = req.status
     if req.status == "inactive" and config.is_default:
         config.is_default = False
-        await _assign_replacement_default(db, config.tenant_id, config.purpose, exclude_id=config.id)
+        await _assign_replacement_default(db, config.purpose, exclude_id=config.id)
 
     await db.commit()
     await db.refresh(config)
@@ -529,27 +521,30 @@ def _is_platform_admin(ctx: AuthContext) -> bool:
     return ctx.tenant_role == "platform_admin" or ctx.user.is_platform_admin
 
 
-async def _resolve_target_tenant_id(db: AsyncSession, ctx: AuthContext, requested: Optional[int]) -> int:
-    """平台管理员用 requested(缺省回退 effective tenant);租户管理员强制自己租户。"""
-    if _is_platform_admin(ctx):
-        return requested if requested is not None else await resolve_effective_tenant_id(db, ctx)
-    return ctx.tenant_id
-
-
-def _assert_tenant_access(ctx: AuthContext, tenant_id: int) -> None:
-    """平台管理员可访问任意租户;否则只能访问自己租户(越权按 404,不泄漏存在性)。"""
+def _require_platform_admin(ctx: AuthContext) -> None:
     if _is_platform_admin(ctx):
         return
-    if ctx.tenant_id != tenant_id:
-        raise HTTPException(status_code=404, detail="配置不存在")
+    raise HTTPException(status_code=403, detail="需要平台管理员权限")
 
 
-async def _clear_defaults(db: AsyncSession, tenant_id: int, purpose: str):
-    """清除本租户所有默认配置；默认模型每租户唯一。"""
+async def _platform_storage_tenant_id(db: AsyncSession) -> int:
+    """llm_configs.tenant_id 是历史非空外键；这里只作为存储占位，不参与模型权限或默认逻辑。"""
+    tenant_id = (await db.execute(
+        select(Tenant.id)
+        .where(Tenant.status == 1)
+        .order_by(Tenant.created_at.asc(), Tenant.id.asc())
+        .limit(1)
+    )).scalar_one_or_none()
+    if not tenant_id:
+        raise HTTPException(status_code=400, detail="未找到平台存储占位租户")
+    return int(tenant_id)
+
+
+async def _clear_defaults(db: AsyncSession, purpose: str):
+    """清除平台默认配置。"""
     await db.execute(
         update(LLMConfig)
         .where(
-            LLMConfig.tenant_id == tenant_id,
             LLMConfig.is_default == True,
         )
         .values(is_default=False)
@@ -558,15 +553,13 @@ async def _clear_defaults(db: AsyncSession, tenant_id: int, purpose: str):
 
 async def _assign_replacement_default(
     db: AsyncSession,
-    tenant_id: int,
     purpose: str,
     exclude_id: Optional[int] = None,
 ):
-    """当默认模型被禁用时，尽量补一个本租户同用途的可用默认。"""
+    """当默认模型被禁用时，尽量补一个同用途的可用平台默认。"""
     stmt = (
         select(LLMConfig)
         .where(
-            LLMConfig.tenant_id == tenant_id,
             LLMConfig.purpose == purpose,
             LLMConfig.status == "active",
         )
@@ -579,13 +572,12 @@ async def _assign_replacement_default(
         replacement.is_default = True
 
 
-async def get_llm_config_for_purpose(db: AsyncSession, tenant_id: int, purpose: str) -> Optional[LLMConfig]:
-    """获取本租户指定用途的默认 LLM 配置（供其他模块使用）。"""
+async def get_llm_config_for_purpose(db: AsyncSession, _tenant_id: int, purpose: str) -> Optional[LLMConfig]:
+    """获取平台指定用途的默认 LLM 配置。"""
     # 先找精确匹配的 purpose
     result = await db.execute(
         select(LLMConfig)
         .where(
-            LLMConfig.tenant_id == tenant_id,
             LLMConfig.purpose == purpose,
             LLMConfig.is_default == True,
             LLMConfig.status == "active",
@@ -600,7 +592,6 @@ async def get_llm_config_for_purpose(db: AsyncSession, tenant_id: int, purpose: 
     result = await db.execute(
         select(LLMConfig)
         .where(
-            LLMConfig.tenant_id == tenant_id,
             LLMConfig.purpose == "all",
             LLMConfig.is_default == True,
             LLMConfig.status == "active",
@@ -611,11 +602,10 @@ async def get_llm_config_for_purpose(db: AsyncSession, tenant_id: int, purpose: 
     if config:
         return config
 
-    # 兜底选一个本租户可用模型，避免历史数据没有 default 时功能不可用。
+    # 兜底选一个平台可用模型，避免历史数据没有 default 时功能不可用。
     result = await db.execute(
         select(LLMConfig)
         .where(
-            LLMConfig.tenant_id == tenant_id,
             LLMConfig.status == "active",
         )
         .order_by(LLMConfig.created_at.desc(), LLMConfig.id.desc())
@@ -630,16 +620,15 @@ async def get_llm_config_for_purpose(db: AsyncSession, tenant_id: int, purpose: 
     return None
 
 
-async def get_default_llm_config_id_for_purpose(db: AsyncSession, tenant_id: int, purpose: str) -> Optional[int]:
-    config = await get_llm_config_for_purpose(db, tenant_id, purpose)
+async def get_default_llm_config_id_for_purpose(db: AsyncSession, _tenant_id: int, purpose: str) -> Optional[int]:
+    config = await get_llm_config_for_purpose(db, 0, purpose)
     return config.id if config else None
 
 
-async def list_llm_configs_for_purpose(db: AsyncSession, tenant_id: int, purpose: str) -> list[LLMConfig]:
-    """列出本租户指定用途可用的 LLM 配置，精确用途优先，其次 purpose=all。"""
+async def list_llm_configs_for_purpose(db: AsyncSession, _tenant_id: int, purpose: str) -> list[LLMConfig]:
+    """列出平台指定用途可用的 LLM 配置，精确用途优先，其次 purpose=all。"""
     result = await db.execute(
         select(LLMConfig).where(
-            LLMConfig.tenant_id == tenant_id,
             LLMConfig.status == "active",
         )
     )
@@ -657,16 +646,15 @@ async def list_llm_configs_for_purpose(db: AsyncSession, tenant_id: int, purpose
 
 async def get_active_llm_config_by_id(
     db: AsyncSession,
-    tenant_id: int,
+    _tenant_id: int,
     config_id: int,
 ) -> Optional[LLMConfig]:
-    """按 id 查本租户 active LLM 配置；不限 purpose。
+    """按 id 查平台 active LLM 配置；不限 purpose。
 
     用于 vibe_coding / ai_chat 这类不限 purpose 的会话级 selected_llm_config_id 校验。
     """
     result = await db.execute(
         select(LLMConfig).where(
-            LLMConfig.tenant_id == tenant_id,
             LLMConfig.id == config_id,
             LLMConfig.status == "active",
         )
@@ -676,13 +664,12 @@ async def get_active_llm_config_by_id(
 
 async def get_active_llm_config_by_id_for_purpose(
     db: AsyncSession,
-    tenant_id: int,
+    _tenant_id: int,
     config_id: int,
     purpose: str,
 ) -> Optional[LLMConfig]:
     result = await db.execute(
         select(LLMConfig).where(
-            LLMConfig.tenant_id == tenant_id,
             LLMConfig.id == config_id,
             LLMConfig.status == "active",
         )
@@ -697,17 +684,17 @@ async def get_active_llm_config_by_id_for_purpose(
 
 async def resolve_llm_config_for_purpose(
     db: AsyncSession,
-    tenant_id: int,
+    _tenant_id: int,
     purpose: str,
     selected_config_id: Optional[int] = None,
 ) -> Optional[LLMConfig]:
     if selected_config_id:
         config = await get_active_llm_config_by_id_for_purpose(
             db,
-            tenant_id,
+            0,
             selected_config_id,
             purpose,
         )
         if config:
             return config
-    return await get_llm_config_for_purpose(db, tenant_id, purpose)
+    return await get_llm_config_for_purpose(db, 0, purpose)

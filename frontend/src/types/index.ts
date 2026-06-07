@@ -3,6 +3,7 @@ export interface User {
   username: string
   display_name?: string | null
   is_active: boolean
+  is_platform_admin?: boolean
   created_at: string
   tenant_id?: number
   tenant_name?: string
