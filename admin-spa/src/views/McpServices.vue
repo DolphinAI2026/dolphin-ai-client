@@ -51,13 +51,16 @@
           </div>
           <span class="transport">{{ service.transport }}</span>
           <div class="url-cell">
-            <code>{{ service.publicUrl }}</code>
+            <div class="url-stack">
+              <code>{{ service.publicUrl }}</code>
+              <span v-if="service.exampleTool" class="tool-hint">tool_name: {{ service.exampleTool }}</span>
+            </div>
             <button type="button" class="icon-copy" :aria-label="`复制${service.name}地址`" @click="copyText(service.publicUrl, '服务地址已复制')">
               <el-icon><CopyDocument /></el-icon>
             </button>
           </div>
           <span class="tool-count">{{ service.tools }} <small class="tool-count-unit">个工具</small></span>
-          <span class="status-pill" :class="service.status">{{ service.status === 'online' ? '在线' : '待接入' }}</span>
+          <span class="status-pill" :class="service.status">{{ statusLabel(service.status) }}</span>
           <button type="button" class="test-button" @click="openTester(service)">测试与工具</button>
         </div>
       </div>
@@ -175,6 +178,12 @@ function openTester(row: ServiceRow) {
   router.push({ path: '/tester', query: { service: row.code } })
 }
 
+function statusLabel(status: string) {
+  if (status === 'online') return '在线'
+  if (status === 'missing') return '工具未加载'
+  return '检测失败'
+}
+
 async function copyText(value: string, message: string) {
   await navigator.clipboard.writeText(value).catch(() => null)
   ElMessage.success(message)
@@ -207,9 +216,9 @@ onMounted(async () => {
     const data = await apiGet<any>('/admin/mcp/tools')
     const tools = Array.isArray(data?.tools) ? data.tools : []
     services.value[0].tools = tools.length || services.value[0].tools
-    services.value[1].status = tools.some((item: any) => item?.name === 'record_support_triage')
-      ? 'online'
-      : 'pending'
+    const hasSupportTriage = tools.some((item: any) => item?.name === 'record_support_triage')
+    services.value[1].tools = hasSupportTriage ? 1 : 0
+    services.value[1].status = hasSupportTriage ? 'online' : 'missing'
   } catch {
     services.value[1].status = 'pending'
   }
@@ -411,6 +420,21 @@ onMounted(async () => {
   gap: 8px;
 }
 
+.url-stack {
+  min-width: 0;
+  display: grid;
+  gap: 2px;
+}
+
+.tool-hint {
+  overflow: hidden;
+  color: var(--text-3);
+  font-family: var(--font-mono, 'JetBrains Mono', ui-monospace, monospace);
+  font-size: 10.5px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 code {
   min-width: 0;
   overflow: hidden;
@@ -433,6 +457,12 @@ code {
 .status-pill.online {
   color: var(--ok);
   background: var(--ok-soft);
+}
+
+.status-pill.missing,
+.status-pill.pending {
+  color: var(--warn);
+  background: var(--warn-soft);
 }
 
 .test-button,
