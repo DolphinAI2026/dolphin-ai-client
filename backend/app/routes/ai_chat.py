@@ -36,6 +36,7 @@ from app.models import (
     AIChatToolCall,
     AIChatAttachment,
     AIChatArtifact,
+    DeployRecord,
 )
 from app.routes.chat import _parse_uploaded_document  # 复用现有文档解析
 from app.ai_chat.agent import run_agent, generate_title
@@ -94,8 +95,8 @@ def _sse(event: str, data: dict) -> dict:
 
 # ─────────────────────────── 工具函数 ───────────────────────────
 
-def _session_to_dict(s: AIChatSession) -> dict:
-    return {
+def _session_to_dict(s: AIChatSession, generation: Optional[dict] = None) -> dict:
+    data = {
         "id": s.id,
         "title": s.title,
         "status": s.status,
@@ -106,6 +107,109 @@ def _session_to_dict(s: AIChatSession) -> dict:
         "created_at": s.created_at.isoformat() if s.created_at else None,
         "updated_at": s.updated_at.isoformat() if s.updated_at else None,
     }
+    if generation:
+        data["generation"] = generation
+    return data
+
+
+def _extract_generated_app_from_tool(t: AIChatToolCall) -> Optional[dict]:
+    try:
+        result = json.loads(t.result_text or "{}")
+    except Exception:  # noqa: BLE001
+        return None
+    if not isinstance(result, dict) or result.get("ok") is False:
+        return None
+    app_id = result.get("app_id") or result.get("application_id")
+    if not app_id:
+        return None
+    try:
+        app_id_int = int(app_id)
+    except Exception:  # noqa: BLE001
+        return None
+    return {
+        "app_id": app_id_int,
+        "app_name": result.get("app_name") or result.get("application_name"),
+        "app_code": result.get("app_code"),
+        "is_new": result.get("is_new"),
+        "tool_status": result.get("status"),
+    }
+
+
+def _deploy_error_from_record(record: Optional[DeployRecord]) -> Optional[str]:
+    if not record:
+        return None
+    if record.error_message and record.error_message != "未知错误":
+        return record.error_message
+    raw_events = record.event_log_json or []
+    if isinstance(raw_events, str):
+        try:
+            events = json.loads(raw_events)
+        except Exception:  # noqa: BLE001
+            events = []
+    else:
+        events = raw_events
+    if isinstance(events, list):
+        for event in reversed(events):
+            if not isinstance(event, dict):
+                continue
+            if event.get("status") == "error" or event.get("type") in ("error", "exception"):
+                for key in ("error", "message", "step"):
+                    value = event.get(key)
+                    if value not in (None, "", "未知错误"):
+                        return str(value)
+    return record.error_message
+
+
+def _generation_status_label(status: str) -> str:
+    return {
+        "success": "生成成功",
+        "failed": "生成失败",
+        "running": "生成中",
+        "in_progress": "生成中",
+        "draft": "草稿",
+    }.get(status, status)
+
+
+async def _session_generation_meta(db: AsyncSession, sessions: List[AIChatSession]) -> dict[int, dict]:
+    if not sessions:
+        return {}
+    session_ids = [s.id for s in sessions]
+    res = await db.execute(
+        select(AIChatToolCall)
+        .where(
+            AIChatToolCall.session_id.in_(session_ids),
+            AIChatToolCall.tool_name == "generate_app_from_doc",
+            AIChatToolCall.status == "success",
+        )
+        .order_by(AIChatToolCall.id.desc())
+    )
+    latest_by_session: dict[int, AIChatToolCall] = {}
+    for tool_call in res.scalars().all():
+        latest_by_session.setdefault(tool_call.session_id, tool_call)
+
+    out: dict[int, dict] = {}
+    for session_id, tool_call in latest_by_session.items():
+        generated = _extract_generated_app_from_tool(tool_call)
+        if not generated:
+            continue
+        record = (await db.execute(
+            select(DeployRecord)
+            .where(
+                DeployRecord.app_id == generated["app_id"],
+                DeployRecord.created_at >= tool_call.created_at,
+            )
+            .order_by(DeployRecord.created_at.asc(), DeployRecord.id.asc())
+            .limit(1)
+        )).scalar_one_or_none()
+        status_value = record.status if record else str(generated.get("tool_status") or "draft")
+        out[session_id] = {
+            **generated,
+            "status": status_value,
+            "label": _generation_status_label(str(status_value)),
+            "deploy_record_id": record.id if record else None,
+            "error_message": _deploy_error_from_record(record),
+        }
+    return out
 
 
 def _message_to_dict(m: AIChatMessage) -> dict:
@@ -223,7 +327,8 @@ async def list_sessions(
     query = query.order_by(desc(AIChatSession.updated_at)).limit(limit)
     res = await db.execute(query)
     sessions = res.scalars().all()
-    return {"sessions": [_session_to_dict(s) for s in sessions]}
+    generation_by_session = await _session_generation_meta(db, sessions)
+    return {"sessions": [_session_to_dict(s, generation_by_session.get(s.id)) for s in sessions]}
 
 
 @router.post("/sessions")
@@ -304,8 +409,10 @@ async def get_session(
     )
     artifacts = art_res.scalars().all()
 
+    generation_by_session = await _session_generation_meta(db, [s])
+
     return {
-        "session": _session_to_dict(s),
+        "session": _session_to_dict(s, generation_by_session.get(s.id)),
         "messages": [_message_to_dict(m) for m in messages],
         "tool_calls": [_tool_call_to_dict(t) for t in tool_calls],
         "attachments": [_attachment_to_dict(a) for a in attachments],

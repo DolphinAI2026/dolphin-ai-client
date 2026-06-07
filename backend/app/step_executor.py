@@ -691,15 +691,26 @@ async def _merge_existing_form_components(
             "label",
             "hidden",
             "readonly",
+            "readOnly",
             "required",
             "showInList",
             "searchable",
             "dict",
             "dictCode",
             "dict_code",
+            "source",
+            "chooseOptions",
+            "dictionaryChooseOptions",
+            "chooseType",
+            "multicolor",
+            "dictionaryMulticolorStatus",
             "dictionarySelectConfig",
             "dataSelectorConfig",
             "formAssociationConfig",
+            "placeholder",
+            "validators",
+            "lengthLimit",
+            "width",
         ):
             if key not in desired:
                 continue
@@ -1430,6 +1441,8 @@ def _apply_dictionary_binding_to_component(
         "dictionaryCode": dict_code,
         "dictionarySelectOptions": choose,
     }
+    if component_type == "FORM_SELECT_INPUT_SINGLE":
+        component["componentType"] = "FORM_SELECT_INPUT"
     after = {
         "source": component.get("source"),
         "chooseOptions": component.get("chooseOptions"),

@@ -4,6 +4,16 @@ export interface AIChatSession {
   id: number
   title: string
   status: string
+  generation?: {
+    app_id: number
+    app_name?: string | null
+    app_code?: string | null
+    is_new?: boolean | null
+    status: string
+    label: string
+    deploy_record_id?: number | null
+    error_message?: string | null
+  } | null
   /** 工作模式：'chat'（从零理需求）/ 'cowork'（批量材料整合） */
   mode?: 'chat' | 'cowork' | string
   selected_llm_config_id: number | null

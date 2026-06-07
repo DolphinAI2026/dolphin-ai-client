@@ -63,6 +63,15 @@ def _mark_stage_completed_keys(config: dict, stage: int) -> set[str]:
     return keys
 
 
+def _generation_event_error_message(event: dict) -> str:
+    """Extract a user-facing failure reason from a generator event."""
+    for key in ("error", "message", "step"):
+        value = event.get(key)
+        if value not in (None, ""):
+            return str(value)
+    return "未知错误"
+
+
 @router.get("/{app_id}/generate")
 async def generate_application(
     app_id: int,
@@ -230,7 +239,7 @@ async def generate_application(
                         app_obj.generation_state = json.dumps(state, ensure_ascii=False)
                         await session.commit()
                         success = False
-                        error_msg_for_record = event.get("error") or event.get("message") or "未知错误"
+                        error_msg_for_record = _generation_event_error_message(event)
 
                 if success:
                     from app.routes.generation_steps import _critical_step_keys, _reality_completed_step_keys
@@ -391,7 +400,7 @@ async def _run_generation_detached(app_id: int, record_id: int) -> None:
                         step_errors[f"stage:{stage}"] = event.get("step") or event.get("message") or "生成失败"
                     app_obj.generation_state = json.dumps(state, ensure_ascii=False)
                     await session.commit()
-                    err_msg = event.get("error") or event.get("message") or "未知错误"
+                    err_msg = _generation_event_error_message(event)
             if success:
                 from app.routes.generation_steps import _critical_step_keys, _reality_completed_step_keys
 

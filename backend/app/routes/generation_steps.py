@@ -106,16 +106,47 @@ def _save_state(app: Application, state: dict):
     app.generation_state = json.dumps(state, ensure_ascii=False)
 
 
+def _first_meaningful_generation_error(*, state: dict | None = None, event_log: object = None) -> str | None:
+    state_errors = (state or {}).get("step_errors") if isinstance(state, dict) else None
+    if isinstance(state_errors, dict):
+        for value in state_errors.values():
+            if value not in (None, "", "未知错误"):
+                return str(value)
+
+    try:
+        events = loads_if_str(event_log) if event_log else []
+    except Exception:  # noqa: BLE001
+        events = []
+    if isinstance(events, list):
+        for event in reversed(events):
+            if not isinstance(event, dict):
+                continue
+            if event.get("status") == "error" or event.get("type") in ("error", "exception"):
+                for key in ("error", "message", "step"):
+                    value = event.get(key)
+                    if value not in (None, "", "未知错误"):
+                        return str(value)
+    return None
+
+
 async def _latest_generation_error(app: Application, db: AsyncSession) -> str | None:
     if app.status != "failed":
         return None
+    state = _load_state(app)
     record = (await db.execute(
         select(DeployRecord)
         .where(DeployRecord.app_id == app.id, DeployRecord.status == "failed")
         .order_by(desc(DeployRecord.completed_at), desc(DeployRecord.id))
         .limit(1)
     )).scalar_one_or_none()
-    return (record.error_message if record else None) or "应用生成失败，请检查平台连接后重试"
+    record_message = record.error_message if record else None
+    if record_message and record_message != "未知错误":
+        return record_message
+    recovered = _first_meaningful_generation_error(
+        state=state,
+        event_log=record.event_log_json if record else None,
+    )
+    return recovered or record_message or "应用生成失败，请检查平台连接后重试"
 
 
 def _load_config(app: Application) -> dict:

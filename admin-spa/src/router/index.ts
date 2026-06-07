@@ -24,6 +24,7 @@ const router = createRouter({
         { path: 'tenants',    component: () => import('@/views/PlatformTenants.vue') },
         { path: 'envs',       component: () => import('@/views/PlatformEnvs.vue') },
         { path: 'llm-configs', component: () => import('@/views/LlmConfigs.vue') },
+        { path: 'assistant-settings', component: () => import('@/views/AssistantSettings.vue') },
         { path: 'users',      component: () => import('@/views/PlatformUsers.vue') },
         { path: 'workspaces', component: () => import('@/views/SandboxMonitor.vue') },
         { path: 'logs',       component: () => import('@/views/CallLogs.vue') },

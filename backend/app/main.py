@@ -16,6 +16,7 @@ from app.routes import (
     agents_config,
     ai_chat,
     apaas,
+    assistant_settings,
     builder_mcp,
     application_members,
     applications,
@@ -147,6 +148,7 @@ app.include_router(auth.router, prefix="/api")
 app.include_router(conversations.router, prefix="/api")
 app.include_router(chat.router, prefix="/api")
 app.include_router(ai_chat.router, prefix="/api")
+app.include_router(assistant_settings.router, prefix="/api")
 app.include_router(agent_observability.router, prefix="/api")
 app.include_router(applications.router, prefix="/api")
 app.include_router(config_chat_sessions.router, prefix="/api")  # 配置助手会话持久化 (2026-05-24)

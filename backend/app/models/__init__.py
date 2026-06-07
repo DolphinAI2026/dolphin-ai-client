@@ -15,6 +15,7 @@ BigText = Text().with_variant(LONGTEXT, "mysql")
 from app.models.tenant import Tenant, UserTenant, Role, Team, TeamMember
 from app.models.spec import Spec  # noqa: F401  — register ORM mapping
 from app.models.preference import UserPreference  # noqa: F401  — register ORM mapping
+from app.models.assistant_settings import AssistantSetting  # noqa: F401  — register ORM mapping
 from app.models.collaboration import (  # noqa: F401  — register ORM mapping
     ApplicationMember,
     ChangeProposal,

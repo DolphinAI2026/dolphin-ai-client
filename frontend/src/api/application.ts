@@ -52,7 +52,7 @@ export const applicationApi = {
     return request.put<any, Application>(`/applications/${id}`, data)
   },
   /** 首次生成配置时自动创建应用（不重复创建） */
-  autoCreate(data: { app_name: string; config_preview: any; conversation_id?: number; project_id?: number }) {
+  autoCreate(data: { app_name: string; config_preview: any; conversation_id?: number; project_id?: number; create_mode?: 'reuse' | 'new' }) {
     return request.post<any, { app_id: number; app_name: string; app_code: string; is_new: boolean }>('/applications/auto-create', data)
   },
   /** 从平台导入已有应用 */

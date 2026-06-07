@@ -156,6 +156,7 @@ const router = createRouter({
         const rawTab = Array.isArray(to.query.tab) ? to.query.tab[0] : to.query.tab
         const tab = String(rawTab || 'llm')
         if (tab === 'envs') return { path: '/platform-envs', query: { tab: 'envs' } }
+        if (tab === 'assistant') return { path: '/platform-envs', query: { tab: 'assistant' } }
         if (tab === 'team' || tab === 'members') return { path: '/tenant-users' }
         return { path: '/platform-envs', query: { tab: 'llm' } }
       },

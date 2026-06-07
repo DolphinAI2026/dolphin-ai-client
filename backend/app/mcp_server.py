@@ -397,6 +397,7 @@ async def generate_app_from_doc(
     artifact_id: int,
     app_name: str | None = None,
     env_id: int = 0,
+    create_mode: str = "reuse",
     tenant_id: int = 0,
     user_id: int = 0,
 ) -> dict:
@@ -417,6 +418,7 @@ async def generate_app_from_doc(
     - app_name：可选；不填会从 md 「一、应用信息」推断
     - env_id：部署到哪个 PlatformEnv。**强烈建议先调 list_platform_envs
       让用户确认**。0 表示用租户默认环境（fallback：找一个 connected 环境）。
+    - create_mode：reuse(默认)=同 app_code 复用；new=同编码已存在时自动加后缀新建。
 
     返回 { app_id, app_name, app_code, status="draft", app_view_url, env: {id, name} }。
     """
@@ -451,6 +453,8 @@ async def generate_app_from_doc(
     create_body: dict = {"app_name": final_app_name, "config_preview": {"data": preview}}
     if env_id and env_id > 0:
         create_body["platform_env_id"] = int(env_id)
+    if (create_mode or "").strip().lower() in {"new", "create_new", "force_new"}:
+        create_body["create_mode"] = "new"
     create_res = await _api_call(
         "POST",
         "/applications/auto-create",
@@ -8216,7 +8220,7 @@ async def record_product_issue(
     tenant_id: int = 0,
     user_id: int = 0,
 ) -> dict:
-    """记录右侧问题助手识别出的产品问题或疑似 Bug。
+    """记录右侧得小帆识别出的产品问题或疑似 Bug。
 
     classification 取值：bug / howto / config / permission / feature_request / needs_info。
     只有 classification=bug 且 can_auto_fix=true 时，后续才允许进入 dev 分支修复流程。
@@ -8295,7 +8299,7 @@ async def list_product_issues(
     tenant_id: int = 0,
     user_id: int = 0,
 ) -> dict:
-    """列出右侧问题助手记录的问题。默认只看当前租户。"""
+    """列出右侧得小帆记录的问题。默认只看当前租户。"""
     tid, _uid = _resolve_identity(tenant_id, user_id)
     rows = _read_issue_reports(limit=500)
     if tid:
@@ -8313,7 +8317,7 @@ async def list_product_issues(
 
 @mcp.tool()
 async def get_dev_fix_policy(tenant_id: int = 0, user_id: int = 0) -> dict:
-    """返回问题助手自动修复与 dev 部署策略。
+    """返回得小帆自动修复与 dev 部署策略。
 
     用于回答用户"能不能自动修"、"什么时候部署"、"会不会动 main"等问题。
     """
@@ -8332,7 +8336,7 @@ async def get_dev_fix_policy(tenant_id: int = 0, user_id: int = 0) -> dict:
             "schedule": "每天 19:00 自动部署 dev",
             "automation_id": "19-00-dev",
             "deploy_command": "scripts/deploy_k8s_dev.sh",
-            "production_deploy": "不由问题助手自动触发",
+            "production_deploy": "不由得小帆自动触发",
         },
         "reply_template": (
             "如果确认是 Bug，我会记录问题；可自动修复的只提交到 dev 分支。"

@@ -3,10 +3,10 @@
     <div class="page-header">
       <div>
         <h1>成员管理</h1>
-        <p>成员来源于 aPaaS 登录镜像，平台管理员和租户成员分开展示；账号、密码和权限仍以 aPaaS 为准。</p>
+        <p>成员来源于 aPaaS 登录镜像，平台管理员和租户管理员分开展示；账号、密码和权限仍以 aPaaS 为准。</p>
       </div>
       <div class="page-actions">
-        <el-input v-model="keyword" class="search-input" clearable placeholder="搜索账号、租户、角色" />
+        <el-input v-model="keyword" class="search-input" clearable placeholder="搜索姓名、账号、租户、身份" />
         <el-button @click="load" :loading="loading">刷新</el-button>
       </div>
     </div>
@@ -21,7 +21,7 @@
         <strong>{{ filteredPlatformAdmins.length }}</strong>
       </article>
       <article class="summary-card">
-        <span>租户成员</span>
+        <span>租户管理员</span>
         <strong>{{ filteredTenantMembers.length }}</strong>
       </article>
     </section>
@@ -34,10 +34,13 @@
         </div>
       </div>
       <el-table :data="filteredPlatformAdmins" v-loading="membersLoading" stripe empty-text="暂无平台管理员">
+        <el-table-column label="姓名" min-width="160" show-overflow-tooltip>
+          <template #default="{ row }">{{ userDisplayName(row) }}</template>
+        </el-table-column>
         <el-table-column label="账号" prop="username" min-width="180" show-overflow-tooltip />
         <el-table-column label="身份" min-width="150">
           <template #default="{ row }">
-            <el-tag type="success" size="small">{{ roleLabel(row.tenant_role, row.role_name) }}</el-tag>
+            <el-tag type="success" size="small">{{ roleLabel(row) }}</el-tag>
           </template>
         </el-table-column>
         <el-table-column label="状态" width="110">
@@ -52,18 +55,21 @@
     <section class="member-panel">
       <div class="panel-head">
         <div>
-          <strong>租户成员</strong>
+          <strong>租户管理员</strong>
           <span>一个账号只算一个成员，多个租户会合并到租户列</span>
         </div>
       </div>
-      <el-table :data="filteredTenantMembers" v-loading="membersLoading" stripe empty-text="暂无租户成员">
+      <el-table :data="filteredTenantMembers" v-loading="membersLoading" stripe empty-text="暂无租户管理员">
+        <el-table-column label="姓名" min-width="160" show-overflow-tooltip>
+          <template #default="{ row }">{{ userDisplayName(row) }}</template>
+        </el-table-column>
         <el-table-column label="账号" prop="username" min-width="180" show-overflow-tooltip />
         <el-table-column label="租户" min-width="260" show-overflow-tooltip>
           <template #default="{ row }">{{ row.tenant_summary || row.tenant_name || '未加入租户' }}</template>
         </el-table-column>
         <el-table-column label="身份" min-width="150">
           <template #default="{ row }">
-            <el-tag :type="roleTag(row.tenant_role)" size="small">{{ roleLabel(row.tenant_role, row.role_name) }}</el-tag>
+            <el-tag :type="roleTag(row)" size="small">{{ roleLabel(row) }}</el-tag>
           </template>
         </el-table-column>
         <el-table-column label="状态" width="110">
@@ -85,6 +91,7 @@ import { apiGet } from '@/api/client'
 interface MemberRow {
   id: number
   username: string
+  display_name?: string | null
   is_active: boolean
   is_platform_admin: boolean
   tenant_name?: string | null
@@ -103,11 +110,11 @@ const filteredMembers = computed(() => {
   const kw = keyword.value.trim().toLowerCase()
   if (!kw) return members.value
   return members.value.filter((row) => [
+    row.display_name,
     row.username,
     row.tenant_name,
     row.tenant_summary,
-    row.tenant_role,
-    row.role_name,
+    roleLabel(row),
   ].some((value) => String(value || '').toLowerCase().includes(kw)))
 })
 
@@ -135,19 +142,16 @@ async function load() {
   }
 }
 
-function roleLabel(role: string, roleName?: string | null) {
-  if (role === 'platform_admin') return '平台管理员'
-  if (role === 'tenant_admin') return roleName || '租户管理员'
-  if (role === 'developer') return roleName || '开发者'
-  if (role === 'viewer') return roleName || '查看者'
-  return roleName || '成员'
+function userDisplayName(row: Pick<MemberRow, 'username' | 'display_name'>) {
+  return row.display_name || row.username
 }
 
-function roleTag(role: string) {
-  if (role === 'platform_admin') return 'success'
-  if (role === 'tenant_admin') return 'warning'
-  if (role === 'developer') return 'primary'
-  return 'info'
+function roleLabel(row: Pick<MemberRow, 'is_platform_admin' | 'tenant_role'>) {
+  return row.is_platform_admin || row.tenant_role === 'platform_admin' ? '平台管理员' : '租户管理员'
+}
+
+function roleTag(row: Pick<MemberRow, 'is_platform_admin' | 'tenant_role'>) {
+  return row.is_platform_admin || row.tenant_role === 'platform_admin' ? 'success' : 'warning'
 }
 
 onMounted(load)

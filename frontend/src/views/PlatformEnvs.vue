@@ -1,5 +1,5 @@
 <template>
-  <BuilderFrame :breadcrumbs="[{ label: '设置' }, { label: activeTab === 'envs' ? '平台环境' : '模型配置' }]">
+  <BuilderFrame :breadcrumbs="[{ label: '设置' }, { label: activeTabLabel }]">
     <template #actions>
       <button v-if="activeTab === 'envs'" class="new-btn" @click="openCreate">
         <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
@@ -15,9 +15,10 @@
         <div class="tabs-group">
           <button :class="['tab-item', { active: activeTab === 'envs' }]" @click="setActiveTab('envs')">平台环境</button>
           <button :class="['tab-item', { active: activeTab === 'llm' }]" @click="setActiveTab('llm')">模型配置</button>
+          <button :class="['tab-item', { active: activeTab === 'assistant' }]" @click="setActiveTab('assistant')">得小帆</button>
         </div>
         <div class="tabs-summary">
-          {{ activeTab === 'envs' ? `${envs.length} 个环境连接` : `${llmConfigs.length} 个模型配置` }}
+          {{ tabSummary }}
         </div>
       </div>
 
@@ -186,6 +187,49 @@
       </template>
       </div>
 
+      <!-- ==================== Tab 3: 得小帆 ==================== -->
+      <div v-show="activeTab === 'assistant'" class="env-content">
+        <div v-if="assistantLoading" class="empty-state">
+          <SkeletonCard :lines="3" with-footer />
+        </div>
+        <div v-else class="assistant-settings-panel">
+          <section class="assistant-settings-card">
+            <div class="assistant-settings-head">
+              <div>
+                <h3>得小帆</h3>
+                <p>配置 Dolphin 嵌入式得小帆，全局加载右下角浮窗。</p>
+              </div>
+              <el-switch
+                v-model="assistantForm.enabled"
+                active-text="启用"
+                inactive-text="停用"
+              />
+            </div>
+
+            <el-form label-position="top" class="env-form assistant-form">
+              <el-form-item label="Dolphin 服务地址" required>
+                <el-input v-model="assistantForm.server_url" placeholder="https://dolphin-trial.definesys.cn" />
+              </el-form-item>
+              <el-form-item label="Agent Code" required>
+                <el-input v-model="assistantForm.agent_code" placeholder="填写得小帆发布后的 agent code" />
+              </el-form-item>
+              <el-form-item label="浮窗按钮文案">
+                <el-input v-model="assistantForm.button_text" placeholder="得小帆" />
+              </el-form-item>
+            </el-form>
+
+            <div class="assistant-settings-footer">
+              <div class="assistant-status" :class="{ active: assistantForm.enabled && assistantForm.agent_code.trim() }">
+                {{ assistantStatusText }}
+              </div>
+              <button class="new-btn" type="button" :disabled="assistantSaving" @click="saveAssistantSettings">
+                {{ assistantSaving ? '保存中...' : '保存配置' }}
+              </button>
+            </div>
+          </section>
+        </div>
+      </div>
+
       <!-- ==================== 平台环境 Dialog ==================== -->
       <el-dialog
       v-model="dialogVisible"
@@ -332,6 +376,7 @@ import { ElMessage, ElMessageBox } from 'element-plus'
 import { handleError } from '@/utils/errorHandler'
 import { platformEnvApi, type PlatformEnv } from '@/api/platformEnv'
 import { llmConfigApi, type LlmConfig, type ProviderPreset } from '@/api/llmConfig'
+import { assistantSettingsApi } from '@/api/assistantSettings'
 import { providerOptions, providerLabel, purposeLabel } from '@/utils/llmConfig'
 import BuilderFrame from '@/components/BuilderFrame.vue'
 import EmptyState from '@/components/states/EmptyState.vue'
@@ -341,17 +386,26 @@ import AppIcon from '@/components/common/AppIcon.vue'
 const route = useRoute()
 const router = useRouter()
 
-function normalizeTab(value: unknown): 'envs' | 'llm' {
+type SettingsTab = 'envs' | 'llm' | 'assistant'
+
+function normalizeTab(value: unknown): SettingsTab {
   const raw = Array.isArray(value) ? value[0] : value
+  if (raw === 'assistant') return 'assistant'
   return raw === 'llm' ? 'llm' : 'envs'
 }
 
-const activeTab = ref<'envs' | 'llm'>(normalizeTab(route.query.tab))
+const activeTab = ref<SettingsTab>(normalizeTab(route.query.tab))
+const activeTabLabel = computed(() => {
+  if (activeTab.value === 'envs') return '平台环境'
+  if (activeTab.value === 'llm') return '模型配置'
+  return '得小帆'
+})
 
-async function setActiveTab(tab: 'envs' | 'llm') {
+async function setActiveTab(tab: SettingsTab) {
   activeTab.value = tab
   router.replace({ path: '/platform-envs', query: { ...route.query, tab } })
   if (tab === 'llm') await loadLlmConfigs()
+  if (tab === 'assistant') await loadAssistantSettings()
 }
 
 // ==================== 平台环境相关 ====================
@@ -754,11 +808,81 @@ async function handleLlmDelete(cfg: LlmConfig) {
   } catch { /* cancelled */ }
 }
 
+// ==================== 得小帆配置 ====================
+
+const assistantLoading = ref(false)
+const assistantSaving = ref(false)
+const assistantLoaded = ref(false)
+const assistantForm = reactive({
+  enabled: false,
+  server_url: 'https://dolphin-trial.definesys.cn',
+  agent_code: '',
+  button_text: '得小帆',
+})
+const tabSummary = computed(() => {
+  if (activeTab.value === 'envs') return `${envs.value.length} 个环境连接`
+  if (activeTab.value === 'llm') return `${llmConfigs.value.length} 个模型配置`
+  return assistantForm.enabled && assistantForm.agent_code.trim() ? '得小帆已启用' : '得小帆未启用'
+})
+const assistantStatusText = computed(() => {
+  if (assistantForm.enabled && assistantForm.agent_code.trim()) return '已配置，刷新页面后会加载浮窗'
+  if (assistantForm.enabled) return '已启用，但还缺 Agent Code'
+  return '当前停用'
+})
+
+async function loadAssistantSettings() {
+  if (assistantLoaded.value) return
+  assistantLoading.value = true
+  try {
+    const data = await assistantSettingsApi.getDolphin()
+    assistantForm.enabled = !!data.enabled
+    assistantForm.server_url = data.server_url || 'https://dolphin-trial.definesys.cn'
+    assistantForm.agent_code = data.agent_code || ''
+    assistantForm.button_text = !data.button_text || data.button_text === '问题助手' ? '得小帆' : data.button_text
+    assistantLoaded.value = true
+  } catch (e: any) {
+    handleError(e, { fallback: '加载得小帆配置失败' })
+  } finally {
+    assistantLoading.value = false
+  }
+}
+
+async function saveAssistantSettings() {
+  if (!assistantForm.server_url.trim()) {
+    ElMessage.warning('请填写 Dolphin 服务地址')
+    return
+  }
+  if (assistantForm.enabled && !assistantForm.agent_code.trim()) {
+    ElMessage.warning('启用前请填写 Agent Code')
+    return
+  }
+  assistantSaving.value = true
+  try {
+    const data = await assistantSettingsApi.saveDolphin({
+      enabled: assistantForm.enabled,
+      server_url: assistantForm.server_url,
+      agent_code: assistantForm.agent_code,
+      button_text: assistantForm.button_text || '得小帆',
+    })
+    assistantForm.enabled = !!data.enabled
+    assistantForm.server_url = data.server_url
+    assistantForm.agent_code = data.agent_code
+    assistantForm.button_text = data.button_text
+    assistantLoaded.value = true
+    ElMessage.success('得小帆配置已保存，刷新页面后生效')
+  } catch (e: any) {
+    handleError(e, { fallback: '保存得小帆配置失败' })
+  } finally {
+    assistantSaving.value = false
+  }
+}
+
 // ==================== Lifecycle ====================
 
 onMounted(() => {
   loadEnvs()
   if (activeTab.value === 'llm') loadLlmConfigs()
+  if (activeTab.value === 'assistant') loadAssistantSettings()
 })
 
 watch(
@@ -767,6 +891,7 @@ watch(
     const next = normalizeTab(value)
     activeTab.value = next
     if (next === 'llm') loadLlmConfigs()
+    if (next === 'assistant') loadAssistantSettings()
   }
 )
 </script>
@@ -1235,6 +1360,72 @@ watch(
 .llm-switch-label {
   font-size: 13px;
   color: var(--text-2);
+}
+
+/* ── Assistant settings ── */
+.assistant-settings-panel {
+  max-width: 760px;
+}
+.assistant-settings-card {
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: var(--r-4, 12px);
+  padding: 18px;
+  box-shadow: var(--sh-1);
+}
+.assistant-settings-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 18px;
+  padding-bottom: 16px;
+  border-bottom: 1px solid var(--line);
+}
+.assistant-settings-head h3 {
+  margin: 0 0 5px;
+  color: var(--text);
+  font-size: 15px;
+  font-weight: 700;
+  letter-spacing: 0;
+}
+.assistant-settings-head p {
+  margin: 0;
+  color: var(--text-3);
+  font-size: 12.5px;
+  line-height: 1.6;
+}
+.assistant-form {
+  padding-top: 16px;
+}
+.assistant-settings-footer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 14px;
+  padding-top: 14px;
+  border-top: 1px solid var(--line);
+}
+.assistant-status {
+  min-height: 26px;
+  display: inline-flex;
+  align-items: center;
+  padding: 0 9px;
+  border-radius: var(--r-1, 4px);
+  background: var(--surface-3);
+  color: var(--text-3);
+  font-size: 12px;
+  font-weight: 650;
+}
+.assistant-status.active {
+  background: var(--ok-soft);
+  color: var(--ok);
+}
+.new-btn:disabled,
+.new-btn:disabled:hover {
+  opacity: 0.55;
+  cursor: not-allowed;
+  background: var(--brand);
+  border-color: var(--brand);
 }
 
 /* ── Scrollbar ── */

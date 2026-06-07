@@ -43,7 +43,7 @@
           <span v-else-if="currentSession" @dblclick="startEditTitle" :title="'双击重命名'">
             {{ currentSession.title }}
           </span>
-          <span v-else class="title-placeholder">未选择会话</span>
+          <span v-else class="title-placeholder">{{ isRestoringRouteSession ? '正在恢复会话...' : '新会话' }}</span>
         </div>
         <div class="header-actions">
           <button
@@ -92,7 +92,7 @@
 
       <!-- 消息流 -->
       <AgentConversation
-        v-if="currentSession"
+        v-if="currentSession || isDraftSessionView"
         :messages="agentMessages"
         :typing="isSending && !lastEventIsAsk && !streamingText"
         :tool-grouping="true"
@@ -199,38 +199,15 @@
           </div>
         </template>
       </AgentConversation>
-      <div v-else class="welcome">
-        <div class="welcome-hero">
-          <div class="welcome-badge">
-            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3 14 9l6 2-6 2-2 6-2-6-6-2 6-2z"/><path d="M19 17l1 3 3 1-3 1-1 3-1-3-3-1 3-1z"/></svg>
-            <span>AI Builder</span>
-          </div>
-          <h1 class="welcome-title">{{ welcomeTitle }}</h1>
-          <p class="welcome-sub">{{ welcomeIntro }}</p>
-        </div>
-        <LandingComposer @submit="onStartNew" />
-        <div class="welcome-examples" aria-label="开场示例">
-          <button
-            v-for="example in introExamples"
-            :key="example.title"
-            type="button"
-            class="welcome-example"
-            @click="startFromIntroExample(example.prompt)"
-          >
-            <span class="welcome-example-title">{{ example.title }}</span>
-            <span class="welcome-example-text">{{ example.short }}</span>
-          </button>
-        </div>
-        <div class="welcome-capabilities" aria-label="AI Builder 能力范围">
-          <span><i></i>整理需求</span>
-          <span><i></i>生成 / 更新应用</span>
-          <span><i></i>自开发页面和组件</span>
-          <span><i></i>联调接口与修错</span>
+      <div v-else-if="isRestoringRouteSession" class="session-restore-state">
+        <div class="session-restore-card">
+          <AppIcon name="hourglass" :size="18" />
+          <span>正在恢复会话...</span>
         </div>
       </div>
 
       <!-- 输入区 -->
-      <div class="input-area" v-if="currentSession">
+      <div class="input-area" v-if="currentSession || isDraftSessionView">
         <!-- 排队中提示卡（对话界面风格：流式中输入第二条消息会进队列） -->
         <div v-if="pendingQueue.length > 0" class="queue-banner">
           <span class="queue-icon"><AppIcon name="clock" :size="14" /></span>
@@ -240,13 +217,13 @@
         <UnifiedChatComposer
           v-model="inputText"
           :attachments="composerAttachments"
-          :sending="isSending"
+          :sending="isSending || draftSessionCreating"
           :allow-send-while-sending="true"
           :send-disabled="!inputText.trim() && pendingFiles.length === 0"
           :multiple="true"
           accept=".md,.markdown,.txt,.doc,.docx,.pdf,.xls,.xlsx,.csv,.json,.png,.jpg,.jpeg,.gif,.webp,.svg,.html,.htm,.yaml,.yml,.xml,.zip"
           placeholder="输入需求，粘贴图片或点附件..."
-          @send="onSend"
+          @send="currentSession ? onSend() : onDraftSend()"
           @stop="onAbort"
           @files-picked="onComposerFilesPicked"
           @remove-attachment="removePendingFileByIndex"
@@ -474,7 +451,6 @@ import { ElMessage, ElMessageBox } from 'element-plus'
 import { isImageFile } from '@/utils/pasteImages'
 import UnifiedChatComposer from '@/components/common/UnifiedChatComposer.vue'
 import AppIcon from '@/components/common/AppIcon.vue'
-import LandingComposer from '@/components/v2/LandingComposer.vue'
 import type { UnifiedChatAttachment } from '@/components/common/chatComposer'
 // chat / cowork mode 已合并 — ChatDotRound 用作 session 列表前导 icon（对话界面风格）
 import { ChatDotRound } from '@element-plus/icons-vue'
@@ -492,6 +468,9 @@ const router = useRouter()
 // ── State ──
 const sessions = ref<AIChatSession[]>([])
 const currentSession = ref<AIChatSession | null>(null)
+const isRestoringRouteSession = ref(!!route.params.id)
+const draftSessionCreating = ref(false)
+const isDraftSessionView = computed(() => !currentSession.value && !isRestoringRouteSession.value)
 const currentSessionId = computed(() => currentSession.value?.id ?? null)
 const currentRunId = ref<string | null>(null)       // 最近一次实时 run（会话级入口默认选中）
 const traceDrawerVisible = ref(false)
@@ -521,6 +500,21 @@ function _timeGroup(iso: string | null | undefined): string {
 
 // SessionSidebar 适配 — 加 group 字段触发 SessionSidebar 的分组渲染
 // 2026-05-21 UI audit Fix 11: 加 badgeIcon 让条目有视觉锚点
+function sessionGenerationMeta(s: AIChatSession): string | undefined {
+  const g = s.generation
+  if (!g?.label) return undefined
+  const appText = g.app_id ? `app_id=${g.app_id}` : (g.app_name || '')
+  return appText ? `${g.label} · ${appText}` : g.label
+}
+
+function sessionBadgeTone(s: AIChatSession): string {
+  const status = s.generation?.status
+  if (status === 'success' || status === 'completed') return 'success'
+  if (status === 'failed' || status === 'error') return 'danger'
+  if (status === 'running' || status === 'in_progress') return 'cowork'
+  return 'chat'
+}
+
 const sessionItems = computed<SessionItem[]>(() => {
   // 按 updated_at 倒序（最新在前）
   const sorted = [...filteredSessions.value].sort((a, b) => {
@@ -533,7 +527,9 @@ const sessionItems = computed<SessionItem[]>(() => {
     title: s.title,
     group: _timeGroup(s.updated_at || s.created_at),
     badgeIcon: ChatDotRound,
-    badgeTone: 'chat',
+    badgeTone: sessionBadgeTone(s),
+    badgeLabel: s.generation?.error_message || s.generation?.label,
+    meta: sessionGenerationMeta(s),
   }))
 })
 const sessionsById = computed(() => {
@@ -954,7 +950,11 @@ interface AppReadyInfo {
   appCode: string | null
   appViewUrl: string | null     // 工具返回的 view url（若有，优先用）
   status: string | null         // 最近 deploy/generate 工具自报 status (in_progress/completed/generating…)
+  statusLabel: string | null    // 后端按部署记录推导出的展示文案
+  errorMessage: string | null   // 后端记录的最终失败原因
 }
+const FINAL_SUCCESS_STATUSES = new Set(['success', 'completed'])
+const FINAL_FAILED_STATUSES = new Set(['failed', 'error'])
 const appReadyInfo = computed<AppReadyInfo | null>(() => {
   // 跨多个 tool 合并 — 不同工具返回不同字段：
   //   - generate_app_from_doc → app_id / app_name / app_code
@@ -994,14 +994,20 @@ const appReadyInfo = computed<AppReadyInfo | null>(() => {
   }
   if (anchorToolId == null) return null
   if (!appId && !apaasAppId) return null
+  const generation = currentSession.value?.generation
+  const generationMatches = !!generation?.app_id && appId != null && Number(generation.app_id) === Number(appId)
+  const finalGeneration = generationMatches ? generation : null
+  const finalStatus = finalGeneration?.status ? String(finalGeneration.status) : toolStatus
   return {
     anchorToolId,
     appId,
     apaasAppId,
-    appName: appName || '未命名应用',
-    appCode,
+    appName: finalGeneration?.app_name || appName || '未命名应用',
+    appCode: finalGeneration?.app_code || appCode,
     appViewUrl,
-    status: toolStatus,
+    status: finalStatus,
+    statusLabel: finalGeneration?.label || null,
+    errorMessage: finalGeneration?.error_message || null,
   }
 })
 
@@ -1167,18 +1173,27 @@ onUnmounted(stopGenPoll)
 // CTA 是否"真就绪"(权威：steps/status 全完成)。拿不到进度时保守：仅当工具自报 completed
 // 且已在平台才暂信(避免对历史/已完成应用误显生成中)。
 function ctaIsReady(info: AppReadyInfo): boolean {
+  if (FINAL_FAILED_STATUSES.has(String(info.status || ''))) return false
+  if (FINAL_SUCCESS_STATUSES.has(String(info.status || ''))) return true
   const gp = genProgress.value
   if (gp && gp.appId === info.appId) return gp.complete
   return info.status === 'completed' && !!info.apaasAppId
 }
 function ctaIsFailed(info: AppReadyInfo): boolean {
   const gp = genProgress.value
+  if (FINAL_FAILED_STATUSES.has(String(info.status || ''))) return true
   return !!(gp && gp.appId === info.appId && gp.failed)
 }
 function ctaProgressText(info: AppReadyInfo): string {
+  if (FINAL_FAILED_STATUSES.has(String(info.status || ''))) {
+    return info.errorMessage || info.statusLabel || '应用生成失败，请检查平台连接后重试'
+  }
   const gp = genProgress.value
   if (gp && gp.appId === info.appId && gp.failed) {
     return gp.errorMessage || '应用生成失败，请检查平台连接后重试'
+  }
+  if (FINAL_SUCCESS_STATUSES.has(String(info.status || ''))) {
+    return info.statusLabel || '生成成功'
   }
   if (!gp || gp.appId !== info.appId || gp.total === 0) return '正在后台生成模型 / 表单 / 菜单…'
   const parts = Object.entries(gp.byKind)
@@ -1501,6 +1516,7 @@ async function loadLlmOptions() {
 }
 
 async function loadSession(id: number) {
+  isRestoringRouteSession.value = true
   // 切到不同 session 之前，先 abort 进行中的 SSE — 否则旧 stream 的 chunk 会继续
   // 通过 handleSseEvent 写到 transientItems / streamingText，造成"新会话主区显示
   // 旧会话尾巴消息"的串会话错觉（DB 实际是干净的）。
@@ -1543,6 +1559,8 @@ async function loadSession(id: number) {
     artifacts.value = []
     selectedLlmId.value = normalizeLlmId(selectedLlmId.value)
     ElMessage.error('加载会话失败')
+  } finally {
+    isRestoringRouteSession.value = false
   }
 }
 
@@ -1662,6 +1680,29 @@ function removePendingFileByIndex(_: UnifiedChatAttachment, index: number) {
 
 // 对话界面风格：流式中可继续输入，按 Enter 进入队列等待
 const pendingQueue = ref<string[]>([])
+
+async function onDraftSend() {
+  if (draftSessionCreating.value || currentSession.value) return
+  if (!inputText.value.trim() && pendingFiles.value.length === 0) return
+  draftSessionCreating.value = true
+  try {
+    const created = await aiChatApi.createSession({
+      selected_llm_config_id: selectedLlmId.value,
+      mode: 'chat',
+    })
+    sessions.value.unshift(created)
+    await loadSession(created.id)
+    if (route.params.id !== String(created.id)) {
+      router.replace({ path: `/ai-chat/${created.id}` })
+    }
+    await nextTick()
+    await onSend()
+  } catch (e: any) {
+    ElMessage.error(`创建会话失败：${e?.response?.data?.detail || e?.message || e}`)
+  } finally {
+    draftSessionCreating.value = false
+  }
+}
 
 async function onSend() {
   if (!currentSession.value) return
@@ -2043,6 +2084,7 @@ const chooseDialogFilename = ref('')
 const chooseDialogSuggestedName = ref('')
 const chooseDialogContent = ref('')
 const chooseDialogSourceSessionId = ref<number | string | null>(null)
+const chooseDialogPurpose = ref<'builder' | 'generate'>('builder')
 
 // 从 md 正文里抓 H1（## 之前的第一行 # XXX）当作应用名候选
 function extractAppNameFromMarkdown(md: string): string {
@@ -2060,10 +2102,16 @@ function fallbackNameFromFilename(filename: string): string {
     .trim()
 }
 
-async function openChooseDialog(filename: string, content: string, sourceSessionId?: number | string | null) {
+async function openChooseDialog(
+  filename: string,
+  content: string,
+  sourceSessionId?: number | string | null,
+  purpose: 'builder' | 'generate' = 'builder',
+) {
   chooseDialogFilename.value = filename
   chooseDialogContent.value = content
   chooseDialogSourceSessionId.value = sourceSessionId ?? null
+  chooseDialogPurpose.value = purpose
   const inferred = extractAppNameFromMarkdown(content) || fallbackNameFromFilename(filename)
   chooseDialogSuggestedName.value = inferred
   chooseDialogCandidates.value = []
@@ -2112,7 +2160,25 @@ function handleChooseUpdate(appId: number, appName: string) {
   router.push({ path: '/chat', query: { app_id: String(appId), from: 'aichat' } })
 }
 
-function onChooseDialogConfirm(payload: { mode: 'new' } | { mode: 'update'; appId: number; appName: string }) {
+async function sendGeneratePrompt(mode: 'new' | 'update', appId?: number, appName?: string) {
+  if (!activeArtifactName.value || isSending.value) return
+  if (mode === 'new') {
+    pendingAutoGenerate.value = true
+    inputText.value = `请基于《${activeArtifactName.value}》调用 generate_app_from_doc 工具生成一个全新应用，create_mode 必须传 "new"；不要复用已有 app_code。生成完告诉我 app_id。`
+  } else {
+    pendingAutoGenerate.value = false
+    inputText.value = `请把《${activeArtifactName.value}》作为新版设计文档更新到现有应用「${appName || ''}」(app_id=${appId})。请先 read_artifact 读取完整 md 内容，再调用 update_app_from_doc(app_id=${appId}, md_content=完整 md 内容)；不要调用 generate_app_from_doc，也不要新建应用。`
+  }
+  await nextTick()
+  await onSend()
+}
+
+async function onChooseDialogConfirm(payload: { mode: 'new' } | { mode: 'update'; appId: number; appName: string }) {
+  if (chooseDialogPurpose.value === 'generate') {
+    if (payload.mode === 'new') await sendGeneratePrompt('new')
+    else await sendGeneratePrompt('update', payload.appId, payload.appName)
+    return
+  }
   if (payload.mode === 'new') handleChooseNew()
   else handleChooseUpdate(payload.appId, payload.appName)
 }
@@ -2121,13 +2187,13 @@ function onChooseDialogConfirm(payload: { mode: 'new' } | { mode: 'update'; appI
 // 取代过时的"切到 AI 需求分析菜单"引导。
 async function sendGenerateAppMessage() {
   if (!canSendArtifactToBuilder.value || isSending.value) return
-  if (!activeArtifactName.value) return
-  // 一键到底：标记"本次点击后要自动把草稿真生成到 apaas"。
-  // 只有显式点了「生成应用」才置 true —— 避免打开历史会话时 appReadyInfo 重算误触发生成。
-  pendingAutoGenerate.value = true
-  inputText.value = `请基于《${activeArtifactName.value}》调用 generate_app_from_doc 工具直接生成应用，生成完告诉我 app_id。`
-  await nextTick()
-  await onSend()
+  if (!activeArtifactName.value || !activeArtifactContent.value) return
+  await openChooseDialog(
+    activeArtifactName.value,
+    activeArtifactContent.value,
+    currentSession.value?.id,
+    'generate',
+  )
 }
 
 function automationNow(): string {
@@ -2381,6 +2447,8 @@ watch(
     const id = newId ? Number(newId) : null
     if (id && currentSession.value?.id !== id) {
       await loadSession(id)
+    } else if (!id) {
+      isRestoringRouteSession.value = false
     }
   },
 )
@@ -3032,6 +3100,26 @@ onMounted(async () => {
   height: 7px;
   border-radius: 999px;
   background: #0f9f8f;
+}
+.session-restore-state {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 28px;
+  color: var(--ac-text-mute);
+}
+.session-restore-card {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 40px;
+  padding: 0 14px;
+  border: 1px solid var(--ac-border);
+  border-radius: 8px;
+  background: var(--ac-panel);
+  font-size: 13px;
+  font-weight: 650;
 }
 .ai-chat-app :deep(.ac-empty) {
   align-items: flex-start;

@@ -190,7 +190,7 @@ def test_form_dict_binding_uses_model_field_when_component_lacks_dict():
 
     assert dict_code == "employee_status"
     assert changed is True
-    assert component["componentType"] == "FORM_SELECT_INPUT_SINGLE"
+    assert component["componentType"] == "FORM_SELECT_INPUT"
     assert component["source"] == {"type": "DICTIONARY_TYPE", "id": "dict-id-1"}
     assert component["chooseType"] == "SINGLE"
     assert component["dictionarySelectConfig"]["dictionaryCode"] == "employee_status"
@@ -269,3 +269,69 @@ async def test_reused_form_syncs_component_flags_and_list_view():
         "t_employee_profile.name",
         "t_employee_profile.employee_status",
     ]
+
+
+@pytest.mark.asyncio
+async def test_reused_form_syncs_select_binding_props_for_existing_component():
+    class FakeClient:
+        def __init__(self):
+            self.form_config = {
+                "formName": "客户档案",
+                "components": [{
+                    "componentType": "FORM_TEXT_INPUT",
+                    "label": "客户等级",
+                    "modelField": "customer_profile.customer_level",
+                }],
+            }
+            self.saved = None
+
+        async def query_form_config(self, _app_id, _form_id):
+            return self.form_config
+
+        async def save_form_config(self, _app_id, form_config):
+            self.saved = form_config
+            return {"code": "ok"}
+
+    choose_options = [{
+        "id": "A",
+        "label": "A级",
+        "labelI18nAssociated": False,
+        "color": "#027AFF",
+        "status": "ENABLE",
+        "checked": False,
+        "displayOrder": 0,
+    }]
+    desired_components = [{
+        "componentType": "FORM_SELECT_INPUT",
+        "label": "客户等级",
+        "modelField": "customer_profile.customer_level",
+        "dict": "customer_level",
+        "source": {"type": "DICTIONARY_TYPE", "id": "dict-id-1"},
+        "chooseType": "SINGLE",
+        "chooseOptions": choose_options,
+        "dictionaryChooseOptions": choose_options,
+        "dictionarySelectConfig": {
+            "dictionaryCode": "customer_level",
+            "dictionarySelectOptions": choose_options,
+        },
+        "multicolor": True,
+        "dictionaryMulticolorStatus": "ENABLE",
+    }]
+
+    client = FakeClient()
+    changed_count = await _merge_existing_form_components(
+        client,
+        "app-1",
+        "form-1",
+        "客户档案",
+        desired_components,
+    )
+
+    assert changed_count == 1
+    component = client.saved["components"][0]
+    assert component["componentType"] == "FORM_SELECT_INPUT"
+    assert component["source"] == {"type": "DICTIONARY_TYPE", "id": "dict-id-1"}
+    assert component["chooseType"] == "SINGLE"
+    assert component["chooseOptions"] == choose_options
+    assert component["dictionaryChooseOptions"] == choose_options
+    assert component["dictionarySelectConfig"]["dictionaryCode"] == "customer_level"

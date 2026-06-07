@@ -1,5 +1,5 @@
 <template>
-  <WorkbenchShell>
+  <BuilderFrame :breadcrumbs="[{ label: '自开发资产库' }]">
     <div class="catalog-main">
       <section class="catalog-header" aria-label="自开发资产库">
         <div>
@@ -31,11 +31,11 @@
             </el-select>
           </div>
           <div class="view-toggle">
-            <button :class="['toggle-btn', { active: viewMode === 'grid' }]" @click="viewMode = 'grid'" title="卡片视图">
-              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="7" height="7"/><rect x="14" y="3" width="7" height="7"/><rect x="3" y="14" width="7" height="7"/><rect x="14" y="14" width="7" height="7"/></svg>
-            </button>
             <button :class="['toggle-btn', { active: viewMode === 'list' }]" @click="viewMode = 'list'" title="行视图">
-              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="8" y1="6" x2="21" y2="6"/><line x1="8" y1="12" x2="21" y2="12"/><line x1="8" y1="18" x2="21" y2="18"/><line x1="3" y1="6" x2="3.01" y2="6"/><line x1="3" y1="12" x2="3.01" y2="12"/><line x1="3" y1="18" x2="3.01" y2="18"/></svg>
+              <el-icon><List /></el-icon>
+            </button>
+            <button :class="['toggle-btn', { active: viewMode === 'grid' }]" @click="viewMode = 'grid'" title="卡片视图">
+              <el-icon><Grid /></el-icon>
             </button>
           </div>
         </div>
@@ -141,7 +141,7 @@
         />
       </div>
     </div>
-  </WorkbenchShell>
+  </BuilderFrame>
 
   <EnvSelectModal v-model="showEnvModal" @selected="onEnvSelected" />
 
@@ -152,8 +152,9 @@
 <script setup lang="ts">
 import { computed, onMounted, ref, watch } from 'vue'
 import { useRoute } from 'vue-router'
+import { Grid, List } from '@element-plus/icons-vue'
 import { ElMessage } from 'element-plus'
-import WorkbenchShell from '@/components/WorkbenchShell.vue'
+import BuilderFrame from '@/components/BuilderFrame.vue'
 import EnvSelectModal from '@/components/EnvSelectModal.vue'
 import { codingApi, type WorkspaceInfo } from '@/api/coding'
 import { applicationApi } from '@/api/application'
@@ -387,23 +388,27 @@ onMounted(async () => {
    r-/sh-/ease tokens, a11y rings. Status pill uses --ok-soft / --ok semantics. */
 
 .catalog-main {
-  --catalog-x: clamp(24px, 3vw, 56px);
   flex: 1;
   min-width: 0;
+  min-height: 0;
   display: flex;
   flex-direction: column;
   gap: 14px;
-  padding: 20px var(--catalog-x) 32px;
+  padding: 20px 28px 32px;
   overflow-y: auto;
   background: var(--bg-app);
 }
 
 .catalog-header {
-  min-height: 86px;
+  min-height: 92px;
   display: flex;
   align-items: center;
   justify-content: space-between;
-  padding: 20px 24px;
+  max-width: 1240px;
+  width: 100%;
+  box-sizing: border-box;
+  margin: 0 auto;
+  padding: 22px 28px;
   border: 1px solid var(--line);
   border-radius: var(--r-3, 8px);
   background: var(--surface);
@@ -412,8 +417,8 @@ onMounted(async () => {
 .catalog-header h1 {
   margin: 0;
   color: var(--text);
-  font-size: 24px;
-  line-height: 1.16;
+  font-size: 28px;
+  line-height: 1.12;
   font-weight: var(--fw-bold, 700);
   letter-spacing: 0;
 }
@@ -425,6 +430,10 @@ onMounted(async () => {
 }
 
 .catalog-toolbar {
+  max-width: 1240px;
+  width: 100%;
+  box-sizing: border-box;
+  margin: 0 auto 10px;
   display: flex;
   align-items: center;
   border: 1px solid var(--line);
@@ -438,7 +447,7 @@ onMounted(async () => {
   align-items: center;
   justify-content: space-between;
   gap: var(--s-4);
-  padding: 14px 16px;
+  padding: 8px 10px 8px 14px;
   max-width: none;
   margin: 0;
   width: 100%;
@@ -539,16 +548,16 @@ onMounted(async () => {
 .catalog-content {
   flex: 0 0 auto;
   overflow: visible;
-  max-width: none;
-  margin: 0;
+  max-width: 1240px;
+  margin: 0 auto;
   width: 100%;
-  padding: 4px 0 32px;
+  padding: 0;
 }
 
 .catalog-content.grid {
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
-  gap: var(--s-4);
+  grid-template-columns: repeat(auto-fill, minmax(286px, 1fr));
+  gap: 14px;
   align-content: start;
 }
 
@@ -778,13 +787,13 @@ onMounted(async () => {
 
 .empty-state {
   grid-column: 1 / -1;
-  min-height: 260px;
+  min-height: 340px;
   display: flex;
   align-items: center;
   justify-content: center;
   padding: 32px;
   border: 1px solid var(--line);
-  border-radius: var(--r-3, 8px);
+  border-radius: var(--r-4, 12px);
   background: var(--surface);
   color: var(--text-3);
   font-size: var(--t-body);
@@ -797,9 +806,7 @@ onMounted(async () => {
 
 @media (max-width: 900px) {
   .catalog-main {
-    --catalog-x: var(--s-4);
-    padding-top: var(--s-4);
-    padding-bottom: var(--s-4);
+    padding: 18px 16px 28px;
   }
 
   .catalog-header {
@@ -853,7 +860,11 @@ onMounted(async () => {
 .catalog-pagination {
   display: flex;
   justify-content: flex-end;
-  padding: 4px var(--catalog-x) 8px;
+  max-width: 1240px;
+  width: 100%;
+  box-sizing: border-box;
+  margin: 0 auto;
+  padding: 6px 4px 4px;
 }
 
 .ws-table { width: 100%; cursor: pointer; }

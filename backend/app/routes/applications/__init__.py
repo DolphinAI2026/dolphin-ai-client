@@ -893,6 +893,7 @@ class AutoCreateRequest(BaseModel):
     conversation_id: Optional[int] = None
     project_id: Optional[int] = None
     platform_env_id: Optional[int] = None  # 2026-05-06: 让 MCP / agent 在创建时绑定环境
+    create_mode: Optional[str] = None  # reuse(默认)=同 app_code 复用; new=同名时自动加后缀新建
 
 
 class AutoCreateResponse(BaseModel):
@@ -964,6 +965,24 @@ def _merge_preview_data(old: dict, new: dict) -> dict:
             by_key[k] = item  # new 后写, 覆盖同 key 的 old
         merged[field] = [by_key[k] for k in order]
     return merged
+
+
+async def _next_available_app_code(db: AsyncSession, tenant_id: int, base_code: str) -> str:
+    """Return base_code or base_code-N when a local app already uses it."""
+    normalized = _normalize_app_code(base_code) or "app"
+    candidate = normalized
+    suffix = 2
+    while True:
+        exists = (await db.execute(
+            select(Application.id).where(
+                Application.tenant_id == tenant_id,
+                Application.app_code == candidate,
+            ).limit(1)
+        )).scalar_one_or_none()
+        if not exists:
+            return candidate
+        candidate = f"{normalized}-{suffix}"
+        suffix += 1
 
 
 @router.post("/auto-create", response_model=AutoCreateResponse)
@@ -1058,6 +1077,14 @@ async def auto_create_application(
         preview_data["appCode"] = ascii_code
         preview_data["app_code"] = ascii_code
 
+    create_mode = (data.create_mode or "reuse").strip().lower()
+    force_new = create_mode in {"new", "create_new", "force_new"}
+    if force_new and not data.conversation_id:
+        ascii_code = await _next_available_app_code(db, ctx.tenant_id, ascii_code)
+        if isinstance(preview_data, dict):
+            preview_data["appCode"] = ascii_code
+            preview_data["app_code"] = ascii_code
+
     config_str = _dump_preview_config(data.config_preview)
 
     # 2026-05-06: 决定 platform_env_id
@@ -1094,7 +1121,7 @@ async def auto_create_application(
     # = 同一个应用 —— 不论状态/时间/有无 apaas_app_id 都复用 (保留 apaas_app_id 让 step
     # executor 增量补缺失模型/表单, 而不是新建)。也顺带覆盖了 2026-05-15 的 retry-storm 去重。
     # conversation_id 模式上面已 return, 不进这。
-    if not data.conversation_id:
+    if not data.conversation_id and not force_new:
         existing_q = await db.execute(
             select(Application).where(
                 Application.tenant_id == ctx.tenant_id,

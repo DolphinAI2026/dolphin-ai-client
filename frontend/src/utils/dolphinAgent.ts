@@ -1,9 +1,10 @@
 import request from '@/utils/request'
+import { assistantSettingsApi, type DolphinAssistantSetting } from '@/api/assistantSettings'
 
 const DOLPHIN_SCRIPT_ID = 'dolphin-agent-sdk'
 const DOLPHIN_SERVER_URL = String(import.meta.env.VITE_DOLPHIN_SERVER_URL || 'https://dolphin-trial.definesys.cn').trim()
 const DOLPHIN_AGENT_CODE = String(import.meta.env.VITE_DOLPHIN_AGENT_CODE || '').trim()
-const DOLPHIN_BUTTON_TEXT = String(import.meta.env.VITE_DOLPHIN_BUTTON_TEXT || '问题助手').trim()
+const DOLPHIN_BUTTON_TEXT = String(import.meta.env.VITE_DOLPHIN_BUTTON_TEXT || '得小帆').trim()
 
 interface DolphinAgentOptions {
   serverUrl: string
@@ -34,6 +35,8 @@ let sdkPromise: Promise<DolphinAgentGlobal> | null = null
 let initializedKey = ''
 let credentialsPromise: Promise<ApaasEmbedCredentials> | null = null
 let credentialsPromiseKey = ''
+let settingsPromise: Promise<DolphinAssistantSetting> | null = null
+let settingsPromiseKey = ''
 let syncVersion = 0
 
 function destroyDolphinAgent() {
@@ -45,7 +48,7 @@ function destroyDolphinAgent() {
   initializedKey = ''
 }
 
-function loadDolphinSdk(): Promise<DolphinAgentGlobal> {
+function loadDolphinSdk(serverUrl: string): Promise<DolphinAgentGlobal> {
   if (window.DolphinAgent) return Promise.resolve(window.DolphinAgent)
   if (sdkPromise) return sdkPromise
 
@@ -68,7 +71,7 @@ function loadDolphinSdk(): Promise<DolphinAgentGlobal> {
 
     const script = document.createElement('script')
     script.id = DOLPHIN_SCRIPT_ID
-    script.src = `${DOLPHIN_SERVER_URL}/embed/sdk.js`
+    script.src = `${serverUrl}/embed/sdk.js`
     script.async = true
     script.onload = handleLoaded
     script.onerror = () => reject(new Error('DolphinAgent SDK failed to load'))
@@ -92,10 +95,39 @@ async function fetchApaasEmbedCredentials(key: string) {
   return credentialsPromise
 }
 
+async function fetchDolphinSettings(key: string) {
+  if (!settingsPromise || settingsPromiseKey !== key) {
+    settingsPromiseKey = key
+    settingsPromise = assistantSettingsApi.getDolphinPublic()
+      .finally(() => {
+        if (settingsPromiseKey === key) {
+          settingsPromise = null
+          settingsPromiseKey = ''
+        }
+      })
+  }
+  return settingsPromise
+}
+
 export async function initDolphinAgent(authToken: string | null | undefined, localTenantId: number | string | null | undefined) {
   if (typeof window === 'undefined') return
   const version = ++syncVersion
-  if (!authToken || !localTenantId || !DOLPHIN_SERVER_URL || !DOLPHIN_AGENT_CODE) {
+  if (!authToken || !localTenantId) {
+    destroyDolphinAgent()
+    return
+  }
+
+  const configured = await fetchDolphinSettings(`${localTenantId}:${authToken}`).catch((error) => {
+    console.warn('[DolphinAgent] failed to fetch assistant settings', error)
+    return null
+  })
+  if (version !== syncVersion) return
+  const serverUrl = String(configured?.server_url || DOLPHIN_SERVER_URL || '').trim().replace(/\/+$/, '')
+  const agentCode = String(configured?.agent_code || DOLPHIN_AGENT_CODE || '').trim()
+  const configuredApaasTenantId = String(configured?.apaas_tenant_id || '').trim()
+  const buttonText = String(configured?.button_text || DOLPHIN_BUTTON_TEXT || '得小帆').trim()
+  const enabled = configured ? !!configured.enabled : !!DOLPHIN_AGENT_CODE
+  if (!enabled || !serverUrl || !agentCode || (configured && !configuredApaasTenantId)) {
     destroyDolphinAgent()
     return
   }
@@ -108,25 +140,25 @@ export async function initDolphinAgent(authToken: string | null | undefined, loc
   if (version !== syncVersion) return
 
   const apaasToken = String(credentials?.apaas_token || '').trim()
-  const apaasTenantId = String(credentials?.apaas_tenant_id || '').trim()
+  const apaasTenantId = configuredApaasTenantId || String(credentials?.apaas_tenant_id || '').trim()
   if (!credentials?.connected || !apaasToken || !apaasTenantId) {
     destroyDolphinAgent()
     return
   }
 
-  const nextKey = `${apaasTenantId}:${apaasToken}`
+  const nextKey = `${serverUrl}:${agentCode}:${buttonText}:${apaasTenantId}:${apaasToken}`
   if (nextKey === initializedKey) return
 
   try {
-    const dolphinAgent = await loadDolphinSdk()
+    const dolphinAgent = await loadDolphinSdk(serverUrl)
     if (version !== syncVersion) return
     destroyDolphinAgent()
     dolphinAgent.init({
-      serverUrl: DOLPHIN_SERVER_URL,
-      agentCode: DOLPHIN_AGENT_CODE,
+      serverUrl,
+      agentCode,
       apaasToken,
       apaasTenantId,
-      buttonText: DOLPHIN_BUTTON_TEXT,
+      buttonText,
     })
     initializedKey = nextKey
   } catch (error) {
