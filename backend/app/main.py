@@ -6,6 +6,7 @@ from urllib.parse import urlparse
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
+from starlette.exceptions import HTTPException as StarletteHTTPException
 from app.config import settings, APP_TITLE, APP_DESCRIPTION, APP_VERSION
 from app.database import init_db
 from app.routes import (
@@ -274,6 +275,23 @@ class _SseNoBufferingAsgiMiddleware:
 
 
 app.add_middleware(_SseNoBufferingAsgiMiddleware)
+
+
+class _SpaStaticFiles(StaticFiles):
+    async def get_response(self, path, scope):
+        try:
+            return await super().get_response(path, scope)
+        except StarletteHTTPException as exc:
+            if exc.status_code != 404:
+                raise
+            return await super().get_response("index.html", scope)
+
+
+# 平台管理前端静态资源。开发时由 frontend:5173 代理 /admin 到这里，
+# 因此本地只需要 5173 + 8000 + 8004 三个端口。
+_admin_spa_dir = Path(__file__).resolve().parents[2] / "admin-spa" / "dist"
+if _admin_spa_dir.is_dir():
+    app.mount("/admin", _SpaStaticFiles(directory=str(_admin_spa_dir), html=True), name="admin-spa")
 
 
 # 静态文件（浏览器预览页面等）

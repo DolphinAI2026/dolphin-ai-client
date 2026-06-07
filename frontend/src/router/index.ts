@@ -171,7 +171,7 @@ const router = createRouter({
     {
       path: '/admin/mcp',
       name: 'McpTools',
-      redirect: '/platform-envs',
+      component: () => import('@/views/McpToolsPage.vue'),
       meta: { requiresAuth: true, navExpanded: true }
     },
     {
@@ -194,7 +194,7 @@ const router = createRouter({
       redirect: '/db-connections',
     },
     // M1: 删 4 stub 路由 (/apis /docs /reports /models) — 产品定位不符.
-    // /platform-admin 是旧 MCP admin-spa 入口；保留重定向兼容老书签，不再暴露旧管理台。
+    // L1: 删 /manage stub — admin-spa 已是平台管理完整入口. nav 管理直跳 /platform-admin.
     {
       path: '/platform-envs',
       name: 'PlatformEnvs',
@@ -203,8 +203,8 @@ const router = createRouter({
     },
     {
       path: '/platform-admin/:pathMatch(.*)*',
-      name: 'LegacyPlatformAdmin',
-      redirect: '/platform-envs',
+      name: 'PlatformAdmin',
+      component: () => import('@/views/PlatformAdminEmbed.vue'),
       meta: { requiresAuth: true, requiresPlatformAdmin: true, navExpanded: true }
     },
     {
@@ -288,9 +288,9 @@ router.beforeEach(async (to, _from, next) => {
     to.meta.requiresAuth
     && userStore.isPlatformAdmin
     && !userStore.tenantId
-    && !to.path.startsWith('/platform-envs')
+    && !to.path.startsWith('/platform-admin')
   ) {
-    next('/platform-envs')
+    next('/platform-admin')
     return
   }
 
