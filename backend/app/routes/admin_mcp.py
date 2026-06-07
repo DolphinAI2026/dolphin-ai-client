@@ -17,6 +17,7 @@ from pydantic import BaseModel, Field
 
 from app.deps import AuthContext, get_auth_context
 from app.mcp_inprocess import call_inprocess_tool, list_inprocess_tools
+from app.support_triage_records import write_support_triage_record
 
 # pydantic-settings 不 export 到 os.environ；显式 load .env 兜底，跟 mcp_server.py 一致
 try:
@@ -189,6 +190,7 @@ async def list_mcp_tools(
     ctx: Annotated[AuthContext, Depends(get_auth_context)],
 ):
     """列出当前 backend 进程内 FastMCP 注册的工具。"""
+    started = time.perf_counter()
     seen: set[str] = set()
     tools_raw: list[dict] = []
     try:
@@ -204,35 +206,7 @@ async def list_mcp_tools(
 
     result = []
     for t in tools_raw:
-        name = t.get("name") or ""
-        cat_key, cat_label = _classify_tool(name)
-        full_desc = (t.get("description") or "").strip()
-        first_line = full_desc.split("\n")[0].strip()
-        rest = full_desc[len(first_line):].lstrip("\n")
-        schema = t.get("inputSchema") or {}
-        properties = schema.get("properties") or {}
-        required = set(schema.get("required") or [])
-        params = []
-        for p_name, p_def in properties.items():
-            params.append({
-                "name": p_name,
-                "type": p_def.get("type") or "any",
-                "description": p_def.get("description") or p_def.get("title") or "",
-                "required": p_name in required,
-                "default": p_def.get("default"),
-            })
-        result.append({
-            "name": name,
-            "title": first_line,
-            "description": rest,
-            "category_key": cat_key,
-            "category_label": cat_label,
-            "inputSchema": schema,
-            "input_schema": schema,
-            "params": params,
-            "params_count": len(params),
-            "required_count": len(required),
-        })
+        result.append(_format_tool_for_admin(t))
 
     by_category: dict[str, dict] = {}
     for t in result:
@@ -241,7 +215,7 @@ async def list_mcp_tools(
             by_category[key] = {"key": key, "label": t["category_label"], "tools": []}
         by_category[key]["tools"].append(t)
 
-    return {
+    payload = {
         "ok": True,
         "total": len(result),
         "tools": result,
@@ -253,11 +227,77 @@ async def list_mcp_tools(
             "auth_method": "平台管理登录态",
         },
     }
+    _append_admin_mcp_log(
+        service="ai-builder-inprocess",
+        path="/api/admin/mcp/tools",
+        rpc_method="tools/list",
+        tool=None,
+        request_arguments={"service": "ai-builder-inprocess"},
+        ctx=ctx,
+        success=True,
+        status_code=200,
+        started=started,
+    )
+    return payload
+
+
+@router.get("/support-triage-tools")
+async def list_support_triage_tools(
+    ctx: Annotated[AuthContext, Depends(get_auth_context)],
+):
+    """列出问题分诊记录 MCP 的工具，用于平台管理测试台。"""
+    started = time.perf_counter()
+    from app.support_triage_mcp import mcp as support_mcp
+
+    registered = getattr(getattr(support_mcp, "_tool_manager", None), "_tools", None) or {}
+    result = [
+        _format_tool_for_admin({
+            "name": name,
+            "description": getattr(tool, "description", "") or "",
+            "inputSchema": getattr(tool, "parameters", None) or {
+                "type": "object",
+                "properties": {},
+            },
+        })
+        for name, tool in sorted(registered.items())
+    ]
+    payload = {
+        "ok": True,
+        "total": len(result),
+        "tools": result,
+        "categories": [{"key": "support_triage", "label": "问题分诊记录", "tools": result}],
+        "server_info": {
+            "name": "问题分诊记录 MCP",
+            "transport": "Streamable HTTP",
+            "endpoint": "/api/support-triage-mcp/mcp",
+            "auth_method": "MCP_API_KEYS",
+        },
+    }
+    _append_admin_mcp_log(
+        service="support-triage",
+        path="/api/support-triage-mcp/mcp",
+        rpc_method="tools/list",
+        tool=None,
+        request_arguments={"service": "support-triage"},
+        ctx=ctx,
+        success=True,
+        status_code=200,
+        started=started,
+    )
+    return payload
 
 
 class InvokeMcpRequest(BaseModel):
     tool_name: str
     args: dict = Field(default_factory=dict)
+
+
+def _is_tool_error(result: Any) -> bool:
+    return isinstance(result, dict) and (
+        result.get("ok") is False
+        or result.get("error_code")
+        or str(result.get("message") or "").startswith("错误")
+    )
 
 
 @router.post("/call")
@@ -272,33 +312,137 @@ async def call_mcp_tool(
     args["user_id"] = int(ctx.user.id or 0)
 
     result: Any = await call_inprocess_tool(body.tool_name, args)
-    is_error = isinstance(result, dict) and (
-        result.get("ok") is False
-        or result.get("error_code")
-        or str(result.get("message") or "").startswith("错误")
+    is_error = _is_tool_error(result)
+    _append_admin_mcp_log(
+        service="ai-builder-inprocess",
+        path="/api/admin/mcp/call",
+        rpc_method="tools/call",
+        tool=body.tool_name,
+        request_arguments=args,
+        ctx=ctx,
+        success=not is_error,
+        status_code=200 if not is_error else 500,
+        error=(result.get("message") or result.get("error_code")) if isinstance(result, dict) and is_error else None,
+        started=started,
     )
-    try:
-        from app.routes.mcp_platform import append_mcp_call_log
-        if body.tool_name != "record_support_triage":
-            append_mcp_call_log({
-                "service": "ai-builder-inprocess",
-                "path": "/api/admin/mcp/call",
-                "rpc_method": "tools/call",
-                "tool": body.tool_name,
-                "request_arguments": args,
-                "request_headers": {"authorization": "Bearer <平台管理登录态>"},
-                "status_code": 200 if not is_error else 500,
-                "success": not is_error,
-                "error": (result.get("message") or result.get("error_code")) if isinstance(result, dict) and is_error else None,
-                "auth_source": "platform_admin_session",
-                "local_user_id": int(ctx.user.id or 0),
-                "local_tenant_id": int(ctx.tenant_id or 0),
-                "elapsed_ms": int((time.perf_counter() - started) * 1000),
-            })
-    except Exception:
-        pass
     return {
         "ok": not is_error,
         "tool_name": body.tool_name,
         "result": result,
     }
+
+
+@router.post("/support-triage-call")
+async def call_support_triage_tool(
+    body: InvokeMcpRequest,
+    ctx: Annotated[AuthContext, Depends(get_auth_context)],
+):
+    """调用问题分诊 MCP 工具，用于平台管理测试台。"""
+    started = time.perf_counter()
+    if body.tool_name != "record_support_triage":
+        raise HTTPException(status_code=400, detail="问题分诊 MCP 只支持 record_support_triage")
+
+    args = dict(body.args or {})
+    args["tenant_id"] = int(ctx.tenant_id or 0)
+    args["user_id"] = int(ctx.user.id or 0)
+    args.setdefault("source", "admin_tester")
+
+    result = write_support_triage_record(
+        user_question=str(args.get("user_question") or ""),
+        category=str(args.get("category") or ""),
+        summary=str(args.get("summary") or ""),
+        reason=str(args.get("reason") or ""),
+        user_reply=str(args.get("user_reply") or ""),
+        confidence=str(args.get("confidence") or "中"),
+        missing_info=str(args.get("missing_info") or ""),
+        priority=str(args.get("priority") or "P2"),
+        status=str(args.get("status") or "新建"),
+        source=str(args.get("source") or "admin_tester"),
+        tenant_id=int(args.get("tenant_id") or 0),
+        user_id=int(args.get("user_id") or 0),
+    )
+    is_error = _is_tool_error(result)
+    if is_error and isinstance(result, dict) and result.get("error_code") in {"INVALID_CATEGORY", "INVALID_PARAMS"}:
+        _append_admin_mcp_log(
+            service="support-triage",
+            path="/api/support-triage-mcp/mcp",
+            rpc_method="tools/call",
+            tool=body.tool_name,
+            request_arguments=args,
+            ctx=ctx,
+            success=False,
+            status_code=400,
+            error=result.get("message") or result.get("error_code"),
+            started=started,
+        )
+    return {
+        "ok": not is_error,
+        "tool_name": body.tool_name,
+        "result": result,
+    }
+
+
+def _format_tool_for_admin(t: dict) -> dict:
+    name = t.get("name") or ""
+    cat_key, cat_label = _classify_tool(name)
+    full_desc = (t.get("description") or "").strip()
+    first_line = full_desc.split("\n")[0].strip()
+    rest = full_desc[len(first_line):].lstrip("\n")
+    schema = t.get("inputSchema") or {}
+    properties = schema.get("properties") or {}
+    required = set(schema.get("required") or [])
+    params = []
+    for p_name, p_def in properties.items():
+        params.append({
+            "name": p_name,
+            "type": p_def.get("type") or "any",
+            "description": p_def.get("description") or p_def.get("title") or "",
+            "required": p_name in required,
+            "default": p_def.get("default"),
+        })
+    return {
+        "name": name,
+        "title": first_line,
+        "description": rest,
+        "category_key": cat_key,
+        "category_label": cat_label,
+        "inputSchema": schema,
+        "input_schema": schema,
+        "params": params,
+        "params_count": len(params),
+        "required_count": len(required),
+    }
+
+
+def _append_admin_mcp_log(
+    *,
+    service: str,
+    path: str,
+    rpc_method: str,
+    tool: str | None,
+    request_arguments: dict,
+    ctx: AuthContext,
+    success: bool,
+    status_code: int,
+    started: float,
+    error: str | None = None,
+) -> None:
+    try:
+        from app.routes.mcp_platform import append_mcp_call_log
+        append_mcp_call_log({
+            "service": service,
+            "path": path,
+            "rpc_method": rpc_method,
+            "tool": tool,
+            "request_arguments": request_arguments,
+            "request_headers": {"authorization": "Bearer <平台管理登录态>"},
+            "status_code": status_code,
+            "success": success,
+            "error": error,
+            "auth_source": "platform_admin_session",
+            "local_user_id": int(ctx.user.id or 0),
+            "local_tenant_id": int(ctx.tenant_id or 0),
+            "elapsed_ms": int((time.perf_counter() - started) * 1000),
+        })
+    except Exception:
+        pass

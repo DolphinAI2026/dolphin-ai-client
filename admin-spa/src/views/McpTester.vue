@@ -15,7 +15,7 @@
             <el-option
               v-for="item in services"
               :key="item.code"
-              :label="`${item.name}（${item.tools} 个工具）`"
+              :label="serviceLabel(item)"
               :value="item.code"
             />
           </el-select>
@@ -106,6 +106,7 @@ interface ServiceItem {
   name: string
   code: string
   url: string
+  callUrl: string
   tools: number
   authMode: string
   toolNames?: string[]
@@ -113,30 +114,10 @@ interface ServiceItem {
 
 const route = useRoute()
 
-const services: ServiceItem[] = [
-  { name: '同进程工具服务', code: 'ai-builder-inprocess', url: '/api/admin/mcp/call', tools: 111, authMode: '平台管理登录态' },
-  { name: '问题分诊记录 MCP', code: 'support-triage', url: '/api/support-triage-mcp/mcp', tools: 1, authMode: '外部 MCP 使用 MCP_API_KEYS；本测试台使用平台管理登录态', toolNames: ['record_support_triage'] },
-]
-const SUPPORT_TRIAGE_TOOL: ToolItem = {
-  name: 'record_support_triage',
-  description: '记录用户问题分诊结果。category 取值：操作问题 / Bug / 需求 / 待确认。',
-  inputSchema: {
-    type: 'object',
-    required: ['user_question', 'category', 'summary', 'reason', 'user_reply'],
-    properties: {
-      user_question: { type: 'string', description: '用户原始问题' },
-      category: { type: 'string', enum: ['操作问题', 'Bug', '需求', '待确认'], description: '问题分类' },
-      confidence: { type: 'string', enum: ['高', '中', '低'], default: '中', description: '判断置信度' },
-      summary: { type: 'string', description: '一句话概括' },
-      reason: { type: 'string', description: '分类原因' },
-      user_reply: { type: 'string', description: '准备回复给用户的完整内容' },
-      missing_info: { type: 'string', default: '', description: '缺失信息，没有则为空' },
-      priority: { type: 'string', enum: ['P0', 'P1', 'P2', 'P3'], default: 'P2', description: '优先级' },
-      status: { type: 'string', default: '新建', description: '记录状态' },
-      source: { type: 'string', default: 'admin_tester', description: '来源' },
-    },
-  },
-}
+const services = ref<ServiceItem[]>([
+  { name: '同进程工具服务', code: 'ai-builder-inprocess', url: '/api/admin/mcp/call', callUrl: '/admin/mcp/call', tools: 0, authMode: '平台管理登录态' },
+  { name: '问题分诊记录 MCP', code: 'support-triage', url: '/api/support-triage-mcp/mcp', callUrl: '/admin/mcp/call', tools: 0, authMode: '外部 MCP 使用 MCP_API_KEYS；本测试台使用平台管理登录态', toolNames: ['record_support_triage'] },
+])
 
 const form = reactive({
   serviceCode: 'ai-builder-inprocess',
@@ -163,6 +144,18 @@ const argsPlaceholder = computed(() => {
   return JSON.stringify(buildExampleFromSchema(selectedTool.value.inputSchema), null, 2)
 })
 
+function serviceLabel(item: ServiceItem) {
+  return item.tools > 0 ? `${item.name}（${item.tools} 个工具）` : `${item.name}（获取后显示）`
+}
+
+function normalizeTools(list: any[]): ToolItem[] {
+  return list.map((item: any) => ({
+    name: item.name,
+    description: [item.title, item.description].filter(Boolean).join('\n'),
+    inputSchema: item.inputSchema || item.input_schema,
+  }))
+}
+
 async function loadTools(silent = false): Promise<boolean> {
   if (!form.url) {
     if (!silent) ElMessage.warning('请选择 MCP 服务')
@@ -172,30 +165,40 @@ async function loadTools(silent = false): Promise<boolean> {
   toolsMessage.value = silent ? '切换中…' : ''
   resultText.value = ''
   try {
-    const service = services.find((item) => item.code === form.serviceCode)
+    const service = services.value.find((item) => item.code === form.serviceCode)
     if (service?.code === 'support-triage') {
-      tools.value = [SUPPORT_TRIAGE_TOOL]
-      callForm.toolName = SUPPORT_TRIAGE_TOOL.name
-      callForm.argsJson = JSON.stringify(buildExampleFromSchema(SUPPORT_TRIAGE_TOOL.inputSchema), null, 2)
+      const data = await apiGet<any>('/admin/mcp/tools')
+      const list = Array.isArray(data?.tools) ? data.tools.filter((item: any) => item?.name === 'record_support_triage') : []
+      tools.value = normalizeTools(list)
       resultText.value = JSON.stringify({
-        ok: true,
-        service: service.name,
-        endpoint: service.url,
+        ok: !!tools.value.length,
+        total: tools.value.length,
         tools: tools.value,
+        server_info: {
+          name: service.name,
+          endpoint: service.url,
+          source: '/api/admin/mcp/tools',
+        },
       }, null, 2)
-      toolsMessage.value = '获取成功，共 1 个工具'
-      return true
+      service.tools = tools.value.length
+      if (tools.value[0]) {
+        callForm.toolName = tools.value[0].name
+        callForm.argsJson = JSON.stringify(buildExampleFromSchema(tools.value[0].inputSchema), null, 2)
+      }
+      if (tools.value.length) {
+        toolsMessage.value = `获取成功，共 ${tools.value.length} 个工具`
+        return true
+      }
+      toolsMessage.value = '未获取到工具列表'
+      return false
     }
     const data = await apiGet<any>('/admin/mcp/tools')
     resultText.value = JSON.stringify(data, null, 2)
     const list = data?.tools || []
     tools.value = Array.isArray(list)
-      ? list.map((item: any) => ({
-          name: item.name,
-          description: [item.title, item.description].filter(Boolean).join('\n'),
-          inputSchema: item.inputSchema || item.input_schema,
-        }))
+      ? normalizeTools(list)
       : []
+    if (service) service.tools = tools.value.length
     if (tools.value.length) {
       toolsMessage.value = `获取成功，共 ${tools.value.length} 个工具`
       return true
@@ -239,7 +242,7 @@ function buildExampleFromSchema(schema: any) {
 }
 
 async function onServiceChange(code: string) {
-  const service = services.find((item) => item.code === code)
+  const service = services.value.find((item) => item.code === code)
   if (!service) return
   form.url = service.url
   form.authMode = service.authMode
@@ -254,7 +257,7 @@ async function onServiceChange(code: string) {
     if (lastServiceCode.value && lastServiceCode.value !== code) {
       ElMessage.warning(`切到「${service.name || code}」失败，已回到上一个服务`)
       form.serviceCode = lastServiceCode.value
-      const prev = services.find((item) => item.code === lastServiceCode.value)
+      const prev = services.value.find((item) => item.code === lastServiceCode.value)
       if (prev) form.url = prev.url
     } else {
       lastServiceCode.value = code
@@ -276,7 +279,8 @@ async function callTool() {
     if (args && typeof args === 'object' && !Array.isArray(args)) {
       for (const key of ENV_PARAM_KEYS) delete args[key]
     }
-    const resp = await apiPost<any>('/admin/mcp/call', {
+    const service = services.value.find((item) => item.code === form.serviceCode)
+    const resp = await apiPost<any>(service?.callUrl || '/admin/mcp/call', {
       tool_name: callForm.toolName,
       args,
     })
@@ -290,19 +294,21 @@ async function callTool() {
 
 onMounted(async () => {
   const serviceCode = route.query.service
-  if (typeof serviceCode === 'string' && services.some((item) => item.code === serviceCode)) {
+  if (typeof serviceCode === 'string' && services.value.some((item) => item.code === serviceCode)) {
     form.serviceCode = serviceCode
-    onServiceChange(serviceCode)
+    await onServiceChange(serviceCode)
     return
   }
   const url = route.query.url
   if (typeof url === 'string' && url) {
-    const service = services.find((item) => item.url === url)
+    const service = services.value.find((item) => item.url === url)
     if (service) {
       form.serviceCode = service.code
       form.url = service.url
+      form.authMode = service.authMode
     }
   }
+  await loadTools(true)
 })
 </script>
 

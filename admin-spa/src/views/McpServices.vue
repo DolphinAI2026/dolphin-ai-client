@@ -132,6 +132,15 @@ interface ServiceRow {
   exampleTool: string
 }
 
+interface ToolItem {
+  name: string
+  description?: string
+  inputSchema?: any
+  input_schema?: any
+}
+
+const SUPPORT_TRIAGE_TOOL_NAME = 'record_support_triage'
+
 const router = useRouter()
 const origin = window.location.origin
 const copiedExample = ref(false)
@@ -158,7 +167,7 @@ const services = ref<ServiceRow[]>([
     transport: 'FastMCP in-process',
     url: '/api/admin/mcp/call',
     publicUrl: resolvePublicMcpUrl('/api/admin/mcp/call'),
-    tools: 111,
+    tools: 0,
     status: 'online',
     exampleTool: 'list_platform_envs',
   },
@@ -168,7 +177,7 @@ const services = ref<ServiceRow[]>([
     transport: 'Streamable HTTP',
     url: '/api/support-triage-mcp/mcp',
     publicUrl: resolvePublicMcpUrl('/api/support-triage-mcp/mcp'),
-    tools: 1,
+    tools: 0,
     status: 'online',
     exampleTool: 'record_support_triage',
   },
@@ -181,6 +190,7 @@ function openTester(row: ServiceRow) {
 function statusLabel(status: string) {
   if (status === 'online') return '在线'
   if (status === 'missing') return '工具未加载'
+  if (status === 'checking') return '检测中'
   return '检测失败'
 }
 
@@ -212,13 +222,25 @@ function onResetKey() {
 }
 
 onMounted(async () => {
+  let inprocessTools: ToolItem[] = []
   try {
     const data = await apiGet<any>('/admin/mcp/tools')
-    const tools = Array.isArray(data?.tools) ? data.tools : []
-    services.value[0].tools = tools.length || services.value[0].tools
+    inprocessTools = Array.isArray(data?.tools) ? data.tools : []
+    services.value[0].tools = inprocessTools.length
+    services.value[0].status = inprocessTools.length ? 'online' : 'missing'
   } catch {
     services.value[0].status = 'pending'
   }
+
+  const triageFromInprocess = inprocessTools.filter((tool) => tool?.name === SUPPORT_TRIAGE_TOOL_NAME)
+  if (triageFromInprocess.length) {
+    services.value[1].tools = triageFromInprocess.length
+    services.value[1].status = 'online'
+    return
+  }
+
+  services.value[1].tools = 0
+  services.value[1].status = 'missing'
 })
 </script>
 

@@ -1,6 +1,8 @@
 import subprocess
 from contextlib import asynccontextmanager
+import json
 import os
+import time
 from pathlib import Path
 from urllib.parse import urlparse
 from fastapi import FastAPI
@@ -190,8 +192,9 @@ app.include_router(runtime_proxy.router)
 class _McpBearerAuthAsgiMiddleware:
     """Protect the embedded Streamable HTTP MCP endpoint with MCP_API_KEYS."""
 
-    def __init__(self, app):
+    def __init__(self, app, service: str | None = None):
         self.app = app
+        self.service = service
 
     async def __call__(self, scope, receive, send):
         if scope["type"] != "http":
@@ -211,7 +214,41 @@ class _McpBearerAuthAsgiMiddleware:
         if token not in keys:
             await self._send_json(send, 401, b'{"detail":"Invalid MCP bearer token"}')
             return
-        await self.app(scope, receive, send)
+
+        if not self.service:
+            await self.app(scope, receive, send)
+            return
+
+        started = time.perf_counter()
+        body = await self._read_body(receive)
+        method = self._mcp_method(body)
+        status_code = 200
+        body_sent = False
+
+        async def replay_receive():
+            nonlocal body_sent
+            if body_sent:
+                return {"type": "http.request", "body": b"", "more_body": False}
+            body_sent = True
+            return {"type": "http.request", "body": body, "more_body": False}
+
+        async def send_with_status(message):
+            nonlocal status_code
+            if message.get("type") == "http.response.start":
+                status_code = int(message.get("status") or 200)
+            await send(message)
+
+        try:
+            await self.app(scope, replay_receive, send_with_status)
+        finally:
+            if method == "tools/list":
+                self._append_mcp_log(
+                    scope=scope,
+                    method=method,
+                    status_code=status_code,
+                    success=200 <= status_code < 400,
+                    elapsed_ms=int((time.perf_counter() - started) * 1000),
+                )
 
     async def _send_json(self, send, status: int, body: bytes):
         await send({
@@ -220,6 +257,53 @@ class _McpBearerAuthAsgiMiddleware:
             "headers": [(b"content-type", b"application/json")],
         })
         await send({"type": "http.response.body", "body": body})
+
+    async def _read_body(self, receive) -> bytes:
+        chunks: list[bytes] = []
+        while True:
+            message = await receive()
+            if message.get("type") != "http.request":
+                break
+            chunks.append(message.get("body") or b"")
+            if not message.get("more_body"):
+                break
+        return b"".join(chunks)
+
+    def _mcp_method(self, body: bytes) -> str | None:
+        try:
+            data = json.loads(body.decode("utf-8") or "{}")
+        except Exception:
+            return None
+        if isinstance(data, dict):
+            return data.get("method")
+        return None
+
+    def _append_mcp_log(
+        self,
+        *,
+        scope,
+        method: str,
+        status_code: int,
+        success: bool,
+        elapsed_ms: int,
+    ) -> None:
+        try:
+            from app.routes.mcp_platform import append_mcp_call_log
+            append_mcp_call_log({
+                "service": self.service,
+                "path": scope.get("path"),
+                "rpc_method": method,
+                "tool": None,
+                "request_arguments": {},
+                "request_headers": {"authorization": "Bearer <MCP_API_KEYS>"},
+                "status_code": status_code,
+                "success": success,
+                "error": None if success else f"HTTP {status_code}",
+                "auth_source": "mcp_api_key",
+                "elapsed_ms": elapsed_ms,
+            })
+        except Exception:
+            pass
 
 
 # Embedded MCP endpoint for Dolphin / external agents:
@@ -233,7 +317,7 @@ app.mount(
 from app.support_triage_mcp import mcp as _support_triage_mcp  # noqa: E402
 app.mount(
     "/api/support-triage-mcp",
-    _McpBearerAuthAsgiMiddleware(_support_triage_mcp.streamable_http_app()),
+    _McpBearerAuthAsgiMiddleware(_support_triage_mcp.streamable_http_app(), service="support-triage"),
     name="support-triage-mcp",
 )
 # 2026-05-19 Chrome extension WebSocket bridge — image #50 follow-up POC

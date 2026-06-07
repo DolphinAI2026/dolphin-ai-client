@@ -107,19 +107,28 @@ function resolvePublicMcpUrl(apiPath: string) {
   return `${window.location.origin}${raw.startsWith('/') ? raw : `/${raw}`}`
 }
 
-const services: ServiceRow[] = [
+const services = ref<ServiceRow[]>([
   {
     name: '同进程 MCP 工具服务',
     code: 'ai-builder-inprocess',
     desc: '直接使用 ai-builder backend 进程内 FastMCP 工具注册表。',
     publicUrl: resolvePublicMcpUrl('/api/admin/mcp/call'),
-    tools: 111,
+    tools: 0,
     status: 'connected',
     statusText: '已连接',
   },
-]
+  {
+    name: '问题分诊记录 MCP',
+    code: 'support-triage',
+    desc: '标准 Streamable HTTP MCP，只暴露 record_support_triage。',
+    publicUrl: resolvePublicMcpUrl('/api/support-triage-mcp/mcp'),
+    tools: 0,
+    status: 'connected',
+    statusText: '已连接',
+  },
+])
 
-const totalTools = computed(() => services.reduce((sum, service) => sum + service.tools, 0))
+const totalTools = computed(() => services.value.reduce((sum, service) => sum + service.tools, 0))
 const healthText = computed(() => (health.value === 'ok' ? '正常' : health.value ? '需检查' : '检查中'))
 
 const cards = computed(() => [
@@ -133,7 +142,7 @@ const cards = computed(() => [
   {
     title: 'MCP 服务',
     desc: 'aPaaS 工具、Builder、Coding、设计解析',
-    value: `${services.length} 个`,
+    value: `${services.value.length} 个`,
     tone: 'tone-purple',
     icon: markRaw(Connection),
   },
@@ -168,7 +177,7 @@ const cards = computed(() => [
 ])
 
 const activities = computed(() => [
-  { time: '14:23', title: `MCP 服务 ${services[0].name} 可用`, meta: `共 ${totalTools.value} 个工具 · ${auth.user?.username || 'admin'}`, tone: 'green' },
+  { time: '14:23', title: `MCP 服务 ${services.value[0].name} 可用`, meta: `共 ${totalTools.value} 个工具 · ${auth.user?.username || 'admin'}`, tone: 'green' },
   { time: '13:50', title: '模型配置已同步到 Builder 前台', meta: 'Default Tenant · admin', tone: 'purple' },
   { time: '11:02', title: '组件市场入口已连接 AI Coding', meta: 'AI Coding · 组件发布', tone: 'blue' },
 ])
@@ -178,6 +187,15 @@ async function load() {
   try {
     const resp = await apiGet<{ status: string }>('/health').catch(() => null)
     health.value = resp?.status || 'unreachable'
+    const toolsResp = await apiGet<any>('/admin/mcp/tools').catch(() => null)
+    const tools = Array.isArray(toolsResp?.tools) ? toolsResp.tools : []
+    services.value[0].tools = tools.length
+    services.value[0].status = toolsResp ? 'connected' : 'warning'
+    services.value[0].statusText = toolsResp ? '已连接' : '需检查'
+    const triageTools = tools.filter((tool: any) => tool?.name === 'record_support_triage')
+    services.value[1].tools = triageTools.length
+    services.value[1].status = triageTools.length ? 'connected' : 'warning'
+    services.value[1].statusText = triageTools.length ? '已连接' : '工具未加载'
   } finally {
     loading.value = false
   }

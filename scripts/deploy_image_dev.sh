@@ -10,7 +10,7 @@ set -euo pipefail
 
 NAMESPACE="${NAMESPACE:-apaas-builder}"
 APP_NAME="${APP_NAME:-apaas-builder-dev}"
-IMAGE="${IMAGE:-hub.dfy.definesys.cn/ai-builder/apaas-builder:dev-20260607-c9b4c022}"
+IMAGE="${IMAGE:-hub.dfy.definesys.cn/ai-builder/apaas-builder:dev-202606080026-support-triage-mcp}"
 BACKEND_CONTAINER="${BACKEND_CONTAINER:-apaas-builder}"
 DIST_INIT_CONTAINER="${DIST_INIT_CONTAINER:-copy-frontend-dist}"
 ROLL_TIMEOUT="${ROLL_TIMEOUT:-300s}"
