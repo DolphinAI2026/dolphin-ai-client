@@ -284,8 +284,18 @@ kubectl -n "${NAMESPACE}" set image \
   "${BACKEND_CONTAINER}=${IMAGE}"
 
 log "update frontend dist initContainer image and restart pod"
-kubectl -n "${NAMESPACE}" patch "statefulset/${APP_NAME}" --type=strategic -p \
-  "{"spec":{"template":{"metadata":{"annotations":{"deploy-image/restartedAt":"$(date -u +%Y-%m-%dT%H:%M:%SZ)"}},"spec":{"initContainers":[{"name":"${DIST_INIT_CONTAINER}","image":"${IMAGE}"}]}}}}"
+cat > /tmp/apaas-builder-statefulset-image-patch.yaml <<EOF
+spec:
+  template:
+    metadata:
+      annotations:
+        deploy-image/restartedAt: "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+    spec:
+      initContainers:
+        - name: ${DIST_INIT_CONTAINER}
+          image: ${IMAGE}
+EOF
+kubectl -n "${NAMESPACE}" patch "statefulset/${APP_NAME}" --type=strategic --patch-file /tmp/apaas-builder-statefulset-image-patch.yaml
 
 log "wait for rollout"
 kubectl -n "${NAMESPACE}" rollout status "statefulset/${APP_NAME}" --timeout="${ROLL_TIMEOUT}"
