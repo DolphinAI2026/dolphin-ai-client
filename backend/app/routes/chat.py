@@ -310,7 +310,7 @@ BUILDER_SYSTEM_PROMPT = """你是 aPaaS Builder AI，得帆云低代码平台的
 - 需要枚举选项的字段，**必须**先在dicts中定义字典，再在字段中用dict引用
 - 有明细行的表单（如订单明细），使用"子表"字段类型
 - 所有code字段只用英文、数字、下划线，以字母开头
-- code必须避免数据库保留字，如name/status/type/order/date/number/code/description/title/content/note/remark/contact/price/total/quantity/company/customer/product/service/region等。建议加业务前缀，如customer_name、order_status
+- code 必须避免使用单个数据库/平台保留短词（如 id、type、status、date、time、code、no）。组合业务编码可以正常使用这些词作为语义片段，例如 customer_id、visit_time、plan_status、order_status。
 - **【禁止】** 在任何表单的 fields 中出现 id、创建时间、更新时间、创建人、更新人及其英文变体（create_time、update_time、created_by、updated_by、creator 等），这些由平台自动维护
 - **【禁止】** 创建"员工"、"全体员工"等通用性角色，需要表达全员时直接在 permissions 中使用 role="all"
 - **【禁止】** 创建"直属上级"、"部门经理"等层级角色，层级关系由平台组织架构自动处理

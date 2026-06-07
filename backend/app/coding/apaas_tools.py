@@ -493,7 +493,7 @@ _DOC_TEMPLATE_SPEC = {
     ],
     "naming_rules": {
         "model_code": "lower_snake_case, 8~40 chars, [a-z][a-z0-9_]*",
-        "field_code": "lower_snake_case, 不可用 application_id / approver_id 等保留字",
+        "field_code": "lower_snake_case, 不可用 approver_id / approval_* 等流程保留字",
         "app_code": "lower_kebab-case 或 lower_snake_case",
     },
     "model_table_headers": [
@@ -501,7 +501,7 @@ _DOC_TEMPLATE_SPEC = {
         "约束", "校验规则", "说明",
     ],
     "tips": [
-        "模型字段编码不允许平台保留字段（application_id / approver_id / approval_* 等）",
+        "模型字段编码不允许平台保留字段（approver_id / approval_* 等流程字段）",
         "字典编码必须显式声明在「数据字典」章节，引用处仅写编码",
         "权限矩阵用列：角色 × 模型/表单 × 操作（CRUD + 自定义 action）",
     ],
@@ -523,7 +523,7 @@ async def _validate_builder_doc(args: dict, platform_env_id: int, db: AsyncSessi
         if section not in md:
             missing.append(section)
     reserved_hits = []
-    for token in re.findall(r"\b(application_id|approver_id|approval_[a-z_]+)\b", md):
+    for token in re.findall(r"\b(approver_id|approval_[a-z_]+)\b", md):
         reserved_hits.append(token)
     return _ok({
         "valid": (not missing and not reserved_hits),

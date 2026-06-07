@@ -3,7 +3,7 @@ import pytest
 from app.deps import AuthContext
 from app.models import Application, User
 from app.models.tenant import Tenant, UserTenant
-from app.routes.applications import list_applications, list_applications_page
+from app.routes.applications import list_applications, list_applications_page, match_applications_by_name
 
 
 async def _seed_user(db_session):
@@ -167,3 +167,91 @@ async def test_application_page_stage_filter_and_page_clamp(db_session):
     assert result["page"] == 1
     assert result["total_pages"] == 1
     assert [item.app_code for item in result["items"]] == ["generating"]
+
+
+@pytest.mark.asyncio
+async def test_match_applications_by_name_handles_generic_suffix_similarity(db_session):
+    tenant, user = await _seed_user(db_session)
+    db_session.add_all([
+        Application(
+            user_id=user.id,
+            tenant_id=tenant.id,
+            created_by=user.id,
+            app_name="客户拜访管理",
+            app_code="customer_visit",
+            status="completed",
+        ),
+        Application(
+            user_id=user.id,
+            tenant_id=tenant.id,
+            created_by=user.id,
+            app_name="仓库库存管理",
+            app_code="warehouse_inventory",
+            status="draft",
+        ),
+    ])
+    await db_session.commit()
+
+    result = await match_applications_by_name(
+        _ctx(user, tenant.id),
+        db_session,
+        app_name_like="客户拜访管理应用",
+        app_code_like="",
+        limit=5,
+    )
+
+    assert [item.app_name for item in result] == ["客户拜访管理"]
+
+
+@pytest.mark.asyncio
+async def test_match_applications_by_name_flags_same_code_and_name_change(db_session):
+    tenant, user = await _seed_user(db_session)
+    db_session.add(Application(
+        user_id=user.id,
+        tenant_id=tenant.id,
+        created_by=user.id,
+        app_name="客户拜访管理",
+        app_code="customer_visit",
+        status="completed",
+    ))
+    await db_session.commit()
+
+    result = await match_applications_by_name(
+        _ctx(user, tenant.id),
+        db_session,
+        app_name_like="客户拜访管理应用",
+        app_code_like="customer_visit",
+        limit=5,
+    )
+
+    assert len(result) == 1
+    assert result[0].app_name == "客户拜访管理"
+    assert "code_exact" in result[0].match_reasons
+    assert result[0].name_will_change is True
+
+
+@pytest.mark.asyncio
+async def test_match_applications_by_name_matches_by_code_without_name(db_session):
+    tenant, user = await _seed_user(db_session)
+    db_session.add(Application(
+        user_id=user.id,
+        tenant_id=tenant.id,
+        created_by=user.id,
+        app_name="客户拜访管理",
+        app_code="customer_visit",
+        status="completed",
+    ))
+    await db_session.commit()
+
+    result = await match_applications_by_name(
+        _ctx(user, tenant.id),
+        db_session,
+        app_name_like="",
+        app_code_like="customer_visit",
+        limit=5,
+    )
+
+    assert len(result) == 1
+    assert result[0].app_name == "客户拜访管理"
+    assert result[0].match_reasons == ["code_exact"]
+    assert result[0].name_will_change is False

@@ -12,11 +12,14 @@
     <p class="choose-hint" v-if="suggestedName">
       推断应用名：<strong>{{ suggestedName }}</strong>
     </p>
+    <p class="choose-hint" v-if="suggestedCode">
+      推断应用编码：<strong>{{ suggestedCode }}</strong>
+    </p>
 
     <div v-if="loading" class="loading-row">正在查找匹配的现有应用...</div>
 
     <template v-else>
-      <div class="section-label">在租户内找到 {{ candidates.length }} 个名字相近的应用：</div>
+      <div class="section-label">在租户内找到 {{ candidates.length }} 个重复或相近的应用：</div>
       <div class="cand-list" v-if="candidates.length > 0">
         <div
           v-for="app in candidates"
@@ -27,7 +30,10 @@
         >
           <div class="cand-icon"><AppIcon name="package" :size="18" /></div>
           <div class="cand-detail">
-            <div class="cand-name">{{ app.app_name }}</div>
+            <div class="cand-name">
+              {{ app.app_name }}
+              <span v-for="reason in reasonLabels(app)" :key="reason" class="cand-tag">{{ reason }}</span>
+            </div>
             <div class="cand-meta">
               <span>{{ app.app_code }}</span>
               <span class="dot">·</span>
@@ -35,11 +41,14 @@
               <span v-if="app.updated_at" class="dot">·</span>
               <span v-if="app.updated_at">{{ formatTime(app.updated_at) }}</span>
             </div>
+            <div v-if="app.name_will_change" class="cand-warning">
+              编码相同；更新后现有应用名称会改为「{{ suggestedName }}」。
+            </div>
           </div>
           <div v-if="selected === app.id" class="cand-check"><AppIcon name="check" :size="16" /></div>
         </div>
       </div>
-      <div v-else class="no-cand">没有找到相近的应用，将创建新应用。</div>
+      <div v-else class="no-cand">没有找到重复或相近的应用，将创建新应用。</div>
     </template>
 
     <template #footer>
@@ -49,7 +58,7 @@
         :disabled="!selected"
         @click="onConfirmUpdate"
       >更新到选中应用</el-button>
-      <el-button type="primary" @click="onConfirmNew">{{ candidates.length > 0 ? '不更新，新建应用' : '新建应用' }}</el-button>
+      <el-button type="primary" @click="onConfirmNew">{{ candidates.length > 0 ? '不更新，仍新建' : '新建应用' }}</el-button>
     </template>
   </el-dialog>
 </template>
@@ -65,11 +74,14 @@ interface CandidateApp {
   status: string
   apaas_app_id?: string | null
   updated_at?: string | null
+  match_reasons?: string[]
+  name_will_change?: boolean
 }
 
 const props = defineProps<{
   filename: string
   suggestedName: string
+  suggestedCode: string
   candidates: CandidateApp[]
   loading: boolean
 }>()
@@ -108,6 +120,15 @@ function formatTime(iso: string): string {
     if (diffMs < 7 * day) return `${Math.floor(diffMs / day)} 天前`
     return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`
   } catch { return '' }
+}
+
+function reasonLabels(app: CandidateApp): string[] {
+  const reasons = new Set(app.match_reasons || [])
+  const labels: string[] = []
+  if (reasons.has('code_exact')) labels.push('编码相同')
+  if (reasons.has('name_exact')) labels.push('名称相同')
+  if (reasons.has('name_similar')) labels.push('名称相近')
+  return labels
 }
 
 function onCancel() {
@@ -184,9 +205,22 @@ function onConfirmUpdate() {
   font-size: 14px;
   font-weight: 500;
   color: var(--t-text-primary);
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+.cand-tag {
+  display: inline-flex;
+  align-items: center;
+  height: 18px;
+  padding: 0 6px;
+  border-radius: 4px;
+  background: rgba(37, 99, 235, 0.12);
+  color: var(--t-brand);
+  font-size: 11px;
+  font-weight: 600;
+  line-height: 18px;
 }
 .cand-meta {
   display: flex;
@@ -195,6 +229,12 @@ function onConfirmUpdate() {
   font-size: 12px;
   color: var(--t-text-muted);
   margin-top: 2px;
+}
+.cand-warning {
+  color: #b45309;
+  font-size: 12px;
+  line-height: 1.45;
+  margin-top: 6px;
 }
 .dot { opacity: 0.5; }
 .cand-check {

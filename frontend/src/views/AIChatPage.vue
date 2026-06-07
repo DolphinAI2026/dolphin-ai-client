@@ -93,7 +93,7 @@
       <!-- 消息流 -->
       <AgentConversation
         v-if="currentSession || isDraftSessionView"
-        :messages="agentMessages"
+        :messages="visibleAgentMessages"
         :typing="isSending && !lastEventIsAsk && !streamingText"
         :tool-grouping="true"
         @answer-ask="onAgentAnswerAsk"
@@ -154,8 +154,8 @@
           <div
             v-if="message.meta?.kind === 'app-ready' && message.meta?.info"
             class="app-ready-cta"
-            :class="{ 'is-generating': !ctaIsReady(message.meta.info) && !ctaIsFailed(message.meta.info), 'is-failed': ctaIsFailed(message.meta.info) }"
-            @click="(ctaIsReady(message.meta.info) || ctaIsFailed(message.meta.info)) && openAppReady(message.meta.info)"
+            :class="{ 'is-generating': ctaIsRunning(message.meta.info), 'is-failed': ctaIsFailed(message.meta.info), 'is-draft': ctaIsDraft(message.meta.info) }"
+            @click="ctaIsOpenable(message.meta.info) && openAppReady(message.meta.info)"
           >
             <div class="cta-icon">
               <AppIcon v-if="ctaIsReady(message.meta.info)" name="rocket" :size="18" />
@@ -164,7 +164,7 @@
             </div>
             <div class="cta-body">
               <div class="cta-title">
-                应用「{{ message.meta.info.appName }}」{{ ctaIsReady(message.meta.info) ? '已就绪' : (ctaIsFailed(message.meta.info) ? '生成失败' : '正在生成中…') }}
+                应用「{{ message.meta.info.appName }}」{{ ctaTitle(message.meta.info) }}
               </div>
               <div v-if="!ctaIsReady(message.meta.info)" class="cta-sub">
                 <span class="cta-progress-text">{{ ctaProgressText(message.meta.info) }}</span>
@@ -176,17 +176,17 @@
                 <span v-if="message.meta.info.appCode" class="cta-sub-sep">·</span>
                 <span v-if="message.meta.info.appCode">{{ message.meta.info.appCode }}</span>
               </div>
-              <div v-if="!ctaIsReady(message.meta.info) && !ctaIsFailed(message.meta.info)" class="cta-progress-bar">
+              <div v-if="ctaIsRunning(message.meta.info)" class="cta-progress-bar">
                 <div class="cta-progress-fill" :style="{ width: ctaPercent(message.meta.info) + '%' }"></div>
               </div>
             </div>
             <button
-              v-if="ctaIsReady(message.meta.info) || ctaIsFailed(message.meta.info)"
+              v-if="ctaIsOpenable(message.meta.info)"
               class="cta-action"
               type="button"
               @click.stop="openAppReady(message.meta.info)"
             >
-              {{ ctaIsReady(message.meta.info) ? '打开应用 →' : '查看详情 →' }}
+              {{ ctaActionLabel(message.meta.info) }}
             </button>
           </div>
         </template>
@@ -420,6 +420,7 @@
     v-model="chooseDialogVisible"
     :filename="chooseDialogFilename"
     :suggested-name="chooseDialogSuggestedName"
+    :suggested-code="chooseDialogSuggestedCode"
     :candidates="chooseDialogCandidates"
     :loading="chooseDialogLoading"
     @confirm="onChooseDialogConfirm"
@@ -455,6 +456,7 @@ import type { UnifiedChatAttachment } from '@/components/common/chatComposer'
 // chat / cowork mode 已合并 — ChatDotRound 用作 session 列表前导 icon（对话界面风格）
 import { ChatDotRound } from '@element-plus/icons-vue'
 import { applicationApi } from '@/api/application'
+import { extractAppCodeFromText, extractAppNameFromText } from '@/utils/app'
 
 const previewStore = usePreviewStore()
 const themeStore = useThemeStore()
@@ -545,6 +547,7 @@ const messages = ref<AIChatMessage[]>([])
 const toolCalls = ref<AIChatToolCall[]>([])
 const attachments = ref<AIChatAttachment[]>([])
 const artifacts = ref<AIChatArtifact[]>([])
+const loadedHistoryMessages = ref<AgentMessage[]>([])
 
 const welcomeTitle = '说出目标，AI 帮你搭应用，也能继续开发。'
 const welcomeIntro = '这里不分“需求入口”和“开发入口”。你可以描述业务流程、上传材料、指定要改的页面或贴出运行报错，AI 会先理清上下文，再生成应用、修改代码、联调验证。'
@@ -586,6 +589,7 @@ function resetChatTenantState() {
   toolCalls.value = []
   attachments.value = []
   artifacts.value = []
+  loadedHistoryMessages.value = []
   activeArtifactId.value = null
   activeArtifactName.value = ''
   activeArtifactContent.value = ''
@@ -816,10 +820,17 @@ const renderMd = (text: string): string => {
 
 const toolArgsBrief = (tc: AIChatToolCall): string => {
   const a = tc.args_json || {}
-  if (tc.tool_name === 'read_attachment') return a.filename || ''
-  if (tc.tool_name === 'write_artifact') return `${a.filename} (${a.format || 'md'})`
-  if (tc.tool_name === 'run_python') return (a.code || '').slice(0, 60).replace(/\n/g, ' ') + '…'
-  if (tc.tool_name === 'ask_clarifying_question') return a.question?.slice(0, 80) || ''
+  const textOf = (value: any): string => {
+    if (value == null) return ''
+    if (typeof value === 'string') return value
+    if (typeof value === 'number' || typeof value === 'boolean') return String(value)
+    if (typeof value === 'object' && typeof value.preview === 'string') return value.preview
+    try { return JSON.stringify(value) } catch { return String(value) }
+  }
+  if (tc.tool_name === 'read_attachment') return textOf(a.filename)
+  if (tc.tool_name === 'write_artifact') return `${textOf(a.filename)} (${textOf(a.format) || 'md'})`
+  if (tc.tool_name === 'run_python') return textOf(a.code).slice(0, 60).replace(/\n/g, ' ') + '…'
+  if (tc.tool_name === 'ask_clarifying_question') return textOf(a.question).slice(0, 80)
   return ''
 }
 
@@ -952,63 +963,55 @@ interface AppReadyInfo {
   status: string | null         // 最近 deploy/generate 工具自报 status (in_progress/completed/generating…)
   statusLabel: string | null    // 后端按部署记录推导出的展示文案
   errorMessage: string | null   // 后端记录的最终失败原因
+  isLatest: boolean
 }
 const FINAL_SUCCESS_STATUSES = new Set(['success', 'completed'])
 const FINAL_FAILED_STATUSES = new Set(['failed', 'error'])
-const appReadyInfo = computed<AppReadyInfo | null>(() => {
-  // 跨多个 tool 合并 — 不同工具返回不同字段：
-  //   - generate_app_from_doc → app_id / app_name / app_code
-  //   - deploy_application    → ok / app_view_url (apaas_app_id 有时缺)
-  //   - get_application       → app_name / apaas_app_id / status
-  // 任一成功就触发；锚点是"最新一次成功"的 tool id（CTA 卡插它后面）。
-  const tcs = toolCalls.value
-  let anchorToolId: number | null = null
-  let appId: number | null = null
-  let apaasAppId: string | null = null
-  let appName: string = ''
-  let appCode: string | null = null
-  let appViewUrl: string | null = null
-  let toolStatus: string | null = null
-  const TRIGGER_TOOLS = new Set(['generate_app_from_doc', 'deploy_application'])
-  const MERGE_TOOLS = new Set(['generate_app_from_doc', 'deploy_application', 'get_application'])
-  for (const tc of tcs) {
-    if (!tc) continue
-    if (tc.status !== 'success') continue
-    if (!MERGE_TOOLS.has(tc.tool_name)) continue
-    const r = _parseToolResult(tc.result_text)
-    if (!r || r.ok === false) continue
-    // merge fields — 后写的覆盖（保留最新），但只有非空才覆盖（不能把好数据洗掉）
-    if (appId == null) {
-      const aid = typeof r.app_id === 'number' ? r.app_id : (typeof r.application_id === 'number' ? r.application_id : null)
-      if (aid != null) appId = aid
-    }
-    if (r.apaas_app_id) apaasAppId = String(r.apaas_app_id)
-    if (r.app_name || r.application_name) appName = String(r.app_name || r.application_name)
-    if (r.app_code) appCode = String(r.app_code)
-    if (r.app_view_url) appViewUrl = String(r.app_view_url)
-    if (r.status) toolStatus = String(r.status)
-    // 锚点：仅 TRIGGER_TOOLS 的最后一次成功；get_application 不算锚点（避免没生成/部署只读取时弹卡）
-    if (TRIGGER_TOOLS.has(tc.tool_name)) {
-      anchorToolId = tc.id
-    }
-  }
-  if (anchorToolId == null) return null
-  if (!appId && !apaasAppId) return null
-  const generation = currentSession.value?.generation
-  const generationMatches = !!generation?.app_id && appId != null && Number(generation.app_id) === Number(appId)
-  const finalGeneration = generationMatches ? generation : null
-  const finalStatus = finalGeneration?.status ? String(finalGeneration.status) : toolStatus
+function appIdFromToolResult(result: any): number | null {
+  const raw = result?.app_id ?? result?.application_id
+  const n = raw != null ? Number(raw) : NaN
+  return Number.isFinite(n) && n > 0 ? n : null
+}
+
+function buildAppReadyInfoFromTool(tc: AIChatToolCall, isLatest = false): AppReadyInfo | null {
+  if (!tc || tc.tool_name !== 'generate_app_from_doc' || tc.status !== 'success') return null
+  const r = _parseToolResult(tc.result_text)
+  if (!r || r.ok === false) return null
+  const aid = tc.generation?.app_id || appIdFromToolResult(r)
+  if (!aid) return null
+  const sessionGeneration = currentSession.value?.generation
+  const generationMatchesSession = !!sessionGeneration?.app_id && Number(sessionGeneration.app_id) === Number(aid)
+  const generation = tc.generation || (generationMatchesSession ? sessionGeneration : null)
   return {
-    anchorToolId,
-    appId,
-    apaasAppId,
-    appName: finalGeneration?.app_name || appName || '未命名应用',
-    appCode: finalGeneration?.app_code || appCode,
-    appViewUrl,
-    status: finalStatus,
-    statusLabel: finalGeneration?.label || null,
-    errorMessage: finalGeneration?.error_message || null,
+    anchorToolId: tc.id,
+    appId: aid,
+    apaasAppId: r.apaas_app_id ? String(r.apaas_app_id) : null,
+    appName: generation?.app_name || r.app_name || r.application_name || '未命名应用',
+    appCode: generation?.app_code || r.app_code || null,
+    appViewUrl: r.app_view_url ? String(r.app_view_url) : null,
+    status: generation?.status ? String(generation.status) : (r.status ? String(r.status) : null),
+    statusLabel: generation?.label || null,
+    errorMessage: generation?.error_message || null,
+    isLatest,
   }
+}
+
+const appReadyInfos = computed<AppReadyInfo[]>(() => {
+  const infos = toolCalls.value
+    .map(tc => buildAppReadyInfoFromTool(tc))
+    .filter(Boolean) as AppReadyInfo[]
+  return infos.map((info, index) => ({ ...info, isLatest: index === infos.length - 1 }))
+})
+
+const appReadyInfoByToolId = computed<Map<number, AppReadyInfo>>(() => {
+  const map = new Map<number, AppReadyInfo>()
+  for (const info of appReadyInfos.value) map.set(info.anchorToolId, info)
+  return map
+})
+
+const appReadyInfo = computed<AppReadyInfo | null>(() => {
+  const infos = appReadyInfos.value
+  return infos.length ? infos[infos.length - 1] : null
 })
 
 function openAppReady(info: AppReadyInfo) {
@@ -1164,8 +1167,33 @@ function startGenPoll(appId: number) {
 }
 
 watch(appReadyInfo, (info) => {
-  if (info && info.appId) startGenPoll(info.appId)
-  else { stopGenPoll(); genProgress.value = null }
+  if (!info || !info.appId) {
+    stopGenPoll()
+    genProgress.value = null
+    return
+  }
+  const finalStatus = String(info.status || '')
+  if (FINAL_FAILED_STATUSES.has(finalStatus)) {
+    stopGenPoll()
+    genPollAppId = info.appId
+    genProgress.value = {
+      appId: info.appId,
+      done: 0,
+      total: 0,
+      complete: false,
+      failed: true,
+      errorMessage: info.errorMessage || info.statusLabel || '应用生成失败，请检查平台连接后重试',
+      byKind: {},
+    }
+    return
+  }
+  if (FINAL_SUCCESS_STATUSES.has(finalStatus)) {
+    stopGenPoll()
+    genPollAppId = info.appId
+    genProgress.value = { appId: info.appId, done: 0, total: 0, complete: true, byKind: {} }
+    return
+  }
+  startGenPoll(info.appId)
 }, { immediate: true })
 
 onUnmounted(stopGenPoll)
@@ -1184,6 +1212,28 @@ function ctaIsFailed(info: AppReadyInfo): boolean {
   if (FINAL_FAILED_STATUSES.has(String(info.status || ''))) return true
   return !!(gp && gp.appId === info.appId && gp.failed)
 }
+function ctaIsDraft(info: AppReadyInfo): boolean {
+  if (ctaIsReady(info) || ctaIsFailed(info)) return false
+  const gp = genProgress.value
+  if (gp && gp.appId === info.appId) return false
+  return String(info.status || '') === 'draft'
+}
+function ctaIsRunning(info: AppReadyInfo): boolean {
+  return !ctaIsReady(info) && !ctaIsFailed(info) && !ctaIsDraft(info)
+}
+function ctaIsOpenable(info: AppReadyInfo): boolean {
+  return ctaIsReady(info) || ctaIsFailed(info) || ctaIsDraft(info)
+}
+function ctaTitle(info: AppReadyInfo): string {
+  if (ctaIsReady(info)) return '已就绪'
+  if (ctaIsFailed(info)) return '生成失败'
+  if (ctaIsDraft(info)) return '已创建草稿'
+  return '正在生成中…'
+}
+function ctaActionLabel(info: AppReadyInfo): string {
+  if (ctaIsFailed(info)) return '查看详情 →'
+  return '打开应用 →'
+}
 function ctaProgressText(info: AppReadyInfo): string {
   if (FINAL_FAILED_STATUSES.has(String(info.status || ''))) {
     return info.errorMessage || info.statusLabel || '应用生成失败，请检查平台连接后重试'
@@ -1194,6 +1244,9 @@ function ctaProgressText(info: AppReadyInfo): string {
   }
   if (FINAL_SUCCESS_STATUSES.has(String(info.status || ''))) {
     return info.statusLabel || '生成成功'
+  }
+  if (ctaIsDraft(info)) {
+    return info.statusLabel || '应用草稿已创建，可打开后继续生成或编辑'
   }
   if (!gp || gp.appId !== info.appId || gp.total === 0) return '正在后台生成模型 / 表单 / 菜单…'
   const parts = Object.entries(gp.byKind)
@@ -1340,7 +1393,7 @@ const agentMessages = computed<AgentMessage[]>(() => {
     status: mapStatus(tc.status),
     duration_ms: tc.duration_ms ?? undefined,
   })
-  const ctaInfo = appReadyInfo.value
+  const ctaInfoByToolId = appReadyInfoByToolId.value
   for (const item of renderTimeline.value) {
     if (item.kind === 'msg' && item.msg.role === 'user') {
       const atts = userMessageAttachments(item.msg)
@@ -1363,7 +1416,8 @@ const agentMessages = computed<AgentMessage[]>(() => {
       }
     } else if (item.kind === 'tool') {
       out.push({ id: 't' + item.tool.id, kind: 'tool', tool: mapTool(item.tool) })
-      if (ctaInfo && item.tool.id === ctaInfo.anchorToolId) {
+      const ctaInfo = ctaInfoByToolId.get(item.tool.id)
+      if (ctaInfo) {
         out.push({ id: 'cta-app-ready-' + ctaInfo.anchorToolId, kind: 'custom', meta: { kind: 'app-ready', info: ctaInfo } })
       }
     } else if (item.kind === 'tool_group') {
@@ -1375,7 +1429,8 @@ const agentMessages = computed<AgentMessage[]>(() => {
       // AIChat 的 collapseTools 保证了 group 内 tool 是连续的，传单条 + toolGrouping=true 即可
       for (const t of item.tools) {
         out.push({ id: 't' + t.id, kind: 'tool', tool: mapTool(t) })
-        if (ctaInfo && t.id === ctaInfo.anchorToolId) {
+        const ctaInfo = ctaInfoByToolId.get(t.id)
+        if (ctaInfo) {
           out.push({ id: 'cta-app-ready-' + ctaInfo.anchorToolId, kind: 'custom', meta: { kind: 'app-ready', info: ctaInfo } })
         }
       }
@@ -1404,6 +1459,41 @@ const agentMessages = computed<AgentMessage[]>(() => {
     }
   }
   return out
+})
+
+function rawMessagesToAgentMessages(rawMessages: AIChatMessage[], rawAttachments: AIChatAttachment[] = attachments.value): AgentMessage[] {
+  const fallback: AgentMessage[] = []
+  const attachmentById = new Map(rawAttachments.map(a => [a.id, a]))
+  for (const msg of rawMessages) {
+    const content = (msg.content || '').trim()
+    const ids = msg.role === 'user' ? (msg.extra_meta?.attachment_ids || []) : []
+    const atts = ids.map((id: number) => attachmentById.get(id)).filter(Boolean) as AIChatAttachment[]
+    if (!content && atts.length === 0) continue
+    if (msg.role === 'user') {
+      fallback.push({
+        id: 'raw-user-' + msg.id,
+        kind: 'user',
+        content,
+        attachments: atts.length
+          ? atts.map(a => ({ id: a.id, kind: (a.kind === 'image' ? 'image' : 'file') as 'image' | 'file', filename: a.filename }))
+          : undefined,
+      })
+    } else if (msg.role === 'assistant') {
+      fallback.push({
+        id: 'raw-assistant-' + msg.id,
+        kind: 'assistant',
+        content,
+        meta: (msg as any).run_id ? { run_id: (msg as any).run_id } : undefined,
+      })
+    }
+  }
+  return fallback
+}
+
+const visibleAgentMessages = computed<AgentMessage[]>(() => {
+  if (agentMessages.value.length > 0) return agentMessages.value
+  if (loadedHistoryMessages.value.length > 0) return loadedHistoryMessages.value
+  return rawMessagesToAgentMessages(messages.value)
 })
 
 function onAgentAnswerAsk(option: string) {
@@ -1535,12 +1625,27 @@ async function loadSession(id: number) {
     currentRunId.value = null  // 切会话清掉上个会话的 run 提示，避免「Agent 活动」带过去的陈旧 preferRunId
   }
   try {
-    const data = await aiChatApi.getSession(id)
+    const appIdParam = route.query.app_id != null ? Number(route.query.app_id) : null
+    const data = await aiChatApi.getSession(id, Number.isFinite(appIdParam) && appIdParam ? { app_id: appIdParam } : undefined)
     currentSession.value = data.session
-    messages.value = data.messages
-    toolCalls.value = data.tool_calls
-    attachments.value = data.attachments
-    artifacts.value = data.artifacts
+    const sessionIndex = sessions.value.findIndex(s => s.id === data.session.id)
+    if (sessionIndex >= 0) {
+      sessions.value.splice(sessionIndex, 1, data.session)
+    } else {
+      sessions.value.unshift(data.session)
+    }
+    messages.value = Array.isArray(data.messages) ? data.messages : []
+    toolCalls.value = Array.isArray(data.tool_calls) ? data.tool_calls : []
+    attachments.value = Array.isArray(data.attachments) ? data.attachments : []
+    artifacts.value = Array.isArray(data.artifacts) ? data.artifacts : []
+    loadedHistoryMessages.value = rawMessagesToAgentMessages(messages.value, attachments.value)
+    console.info('[AIChat] session loaded', {
+      id,
+      messages: messages.value.length,
+      visibleMessages: loadedHistoryMessages.value.length,
+      toolCalls: toolCalls.value.length,
+      artifacts: artifacts.value.length,
+    })
     // 只接受当前租户 options 中存在的会话模型；否则回到当前租户默认模型。
     selectedLlmId.value = normalizeLlmId(data.session.selected_llm_config_id ?? selectedLlmId.value)
     transientItems.value = []
@@ -1548,17 +1653,20 @@ async function loadSession(id: number) {
     if (route.params.id !== String(id)) {
       router.replace(`/ai-chat/${id}`)
     }
-    await nextTick()
-    scrollBottom()
-  } catch (e) {
-    console.error(e)
+    nextTick()
+      .then(() => scrollBottom())
+      .catch(err => console.warn('会话加载后的滚动定位失败', err))
+  } catch (e: any) {
+    console.error('加载会话失败', e)
     currentSession.value = null
     messages.value = []
     toolCalls.value = []
     attachments.value = []
     artifacts.value = []
+    loadedHistoryMessages.value = []
     selectedLlmId.value = normalizeLlmId(selectedLlmId.value)
-    ElMessage.error('加载会话失败')
+    const detail = e?.response?.data?.detail || e?.response?.data?.message || e?.message
+    ElMessage.error(detail ? `加载会话失败：${detail}` : '加载会话失败')
   } finally {
     isRestoringRouteSession.value = false
   }
@@ -1602,6 +1710,7 @@ async function onDeleteSession(s: AIChatSession) {
       toolCalls.value = []
       attachments.value = []
       artifacts.value = []
+      loadedHistoryMessages.value = []
       router.replace('/ai-chat')
     }
     ElMessage.success('已删除')
@@ -2079,9 +2188,10 @@ function getCachedAppId(sessionId: number | string, filename: string): number | 
 // 先按推断的 app_name 调 /applications/match-by-name 拉候选，弹框让用户选「新建」或「更新到 X」
 const chooseDialogVisible = ref(false)
 const chooseDialogLoading = ref(false)
-const chooseDialogCandidates = ref<Array<{ id: number; app_name: string; app_code: string; status: string; apaas_app_id?: string | null; updated_at?: string | null }>>([])
+const chooseDialogCandidates = ref<Array<{ id: number; app_name: string; app_code: string; status: string; apaas_app_id?: string | null; updated_at?: string | null; match_reasons?: string[]; name_will_change?: boolean }>>([])
 const chooseDialogFilename = ref('')
 const chooseDialogSuggestedName = ref('')
+const chooseDialogSuggestedCode = ref('')
 const chooseDialogContent = ref('')
 const chooseDialogSourceSessionId = ref<number | string | null>(null)
 const chooseDialogPurpose = ref<'builder' | 'generate'>('builder')
@@ -2089,6 +2199,8 @@ const chooseDialogPurpose = ref<'builder' | 'generate'>('builder')
 // 从 md 正文里抓 H1（## 之前的第一行 # XXX）当作应用名候选
 function extractAppNameFromMarkdown(md: string): string {
   if (!md) return ''
+  const standardName = extractAppNameFromText(md)
+  if (standardName) return standardName.slice(0, 60)
   const m = md.match(/^\s*#\s+([^\n]+?)\s*$/m)
   if (m) return m[1].trim().slice(0, 60)
   return ''
@@ -2113,13 +2225,15 @@ async function openChooseDialog(
   chooseDialogSourceSessionId.value = sourceSessionId ?? null
   chooseDialogPurpose.value = purpose
   const inferred = extractAppNameFromMarkdown(content) || fallbackNameFromFilename(filename)
+  const inferredCode = extractAppCodeFromText(content)
   chooseDialogSuggestedName.value = inferred
+  chooseDialogSuggestedCode.value = inferredCode
   chooseDialogCandidates.value = []
   chooseDialogVisible.value = true
-  if (!inferred) return  // 无候选关键词 → 弹框只提供「新建」按钮
+  if (!inferred && !inferredCode) return  // 无候选关键词 → 弹框只提供「新建」按钮
   chooseDialogLoading.value = true
   try {
-    chooseDialogCandidates.value = await applicationApi.matchByName(inferred, 5)
+    chooseDialogCandidates.value = await applicationApi.matchByName(inferred, 5, inferredCode)
   } catch (e) {
     console.warn('match-by-name failed', e)
     chooseDialogCandidates.value = []
@@ -2167,13 +2281,37 @@ async function sendGeneratePrompt(mode: 'new' | 'update', appId?: number, appNam
     inputText.value = `请基于《${activeArtifactName.value}》调用 generate_app_from_doc 工具生成一个全新应用，create_mode 必须传 "new"；不要复用已有 app_code。生成完告诉我 app_id。`
   } else {
     pendingAutoGenerate.value = false
-    inputText.value = `请把《${activeArtifactName.value}》作为新版设计文档更新到现有应用「${appName || ''}」(app_id=${appId})。请先 read_artifact 读取完整 md 内容，再调用 update_app_from_doc(app_id=${appId}, md_content=完整 md 内容)；不要调用 generate_app_from_doc，也不要新建应用。`
+    inputText.value = `请把《${activeArtifactName.value}》作为新版设计文档更新到现有应用「${appName || ''}」(app_id=${appId})。请严格按以下流程执行：
+1. 先 read_artifact 读取完整 md 内容。
+2. 调用 update_app_from_doc(app_id=${appId}, md_content=完整 md 内容)，只生成待确认的变更计划。
+3. 如果工具返回 change_plan_id/actions_preview/change_plan，请把变更内容逐条列给我确认，至少按新增、修改、删除分类展示；不能只写计数摘要。
+4. 到这里必须停下，问我是否确认执行这些变更。
+5. 在我明确回复确认前，不要调用 execute_change_plan，不要说“已完成更新”，也不要调用 generate_app_from_doc 或新建应用。`
   }
   await nextTick()
   await onSend()
 }
 
 async function onChooseDialogConfirm(payload: { mode: 'new' } | { mode: 'update'; appId: number; appName: string }) {
+  if (payload.mode === 'new') {
+    const codeDuplicate = chooseDialogCandidates.value.find(app => (app.match_reasons || []).includes('code_exact'))
+    if (codeDuplicate) {
+      try {
+        await ElMessageBox.confirm(
+          `检测到应用编码「${chooseDialogSuggestedCode.value || codeDuplicate.app_code}」已被现有应用「${codeDuplicate.app_name}」使用。继续新建会为新应用编码自动加后缀，生成后的应用名称/编码可能不再与文档完全一致；如果要沿用这个编码，请选择更新现有应用。`,
+          '应用编码重复',
+          {
+            confirmButtonText: '仍然新建',
+            cancelButtonText: '返回选择',
+            type: 'warning',
+          },
+        )
+      } catch {
+        chooseDialogVisible.value = true
+        return
+      }
+    }
+  }
   if (chooseDialogPurpose.value === 'generate') {
     if (payload.mode === 'new') await sendGeneratePrompt('new')
     else await sendGeneratePrompt('update', payload.appId, payload.appName)
@@ -3506,6 +3644,16 @@ onMounted(async () => {
 }
 .app-ready-cta.is-generating .cta-action { background: #d97706; }
 .app-ready-cta.is-generating .cta-action:hover { background: #b45309; }
+.app-ready-cta.is-draft {
+  background: linear-gradient(135deg, rgba(59, 130, 246, 0.10), rgba(37, 99, 235, 0.05));
+  border-color: rgba(59, 130, 246, 0.28);
+}
+.app-ready-cta.is-draft:hover {
+  border-color: rgba(59, 130, 246, 0.46);
+  background: linear-gradient(135deg, rgba(59, 130, 246, 0.14), rgba(37, 99, 235, 0.08));
+}
+.app-ready-cta.is-draft .cta-action { background: #2563eb; }
+.app-ready-cta.is-draft .cta-action:hover { background: #1d4ed8; }
 .app-ready-cta.is-failed {
   background: linear-gradient(135deg, rgba(239, 68, 68, 0.12), rgba(220, 38, 38, 0.06));
   border-color: rgba(239, 68, 68, 0.38);

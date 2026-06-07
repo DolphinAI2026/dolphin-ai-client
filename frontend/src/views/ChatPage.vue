@@ -784,6 +784,7 @@
     v-model="reqDialogVisible"
     :filename="reqDialogFilename"
     :suggested-name="reqDialogSuggestedName"
+    :suggested-code="reqDialogSuggestedCode"
     :candidates="reqDialogCandidates"
     :loading="reqDialogLoading"
     @confirm="handleRequirementsConfirm"
@@ -7361,11 +7362,14 @@ const reqDialogVisible = ref(false)
 const reqDialogLoading = ref(false)
 const reqDialogFilename = ref('')
 const reqDialogSuggestedName = ref('')
-const reqDialogCandidates = ref<Array<{ id: number; app_name: string; app_code: string; status: string; apaas_app_id?: string | null; updated_at?: string | null }>>([])
+const reqDialogSuggestedCode = ref('')
+const reqDialogCandidates = ref<Array<{ id: number; app_name: string; app_code: string; status: string; apaas_app_id?: string | null; updated_at?: string | null; match_reasons?: string[]; name_will_change?: boolean }>>([])
 let reqPendingMd: { filename: string; content: string; pendingId: string | null } | null = null
 
 function _extractAppNameFromMd(md: string): string {
   if (!md) return ''
+  const standardName = extractAppNameFromText(md)
+  if (standardName) return standardName.slice(0, 60)
   const m = md.match(/^\s*#\s+([^\n]+?)\s*$/m)
   if (m) return m[1].trim().slice(0, 60)
   return ''
@@ -7392,15 +7396,17 @@ async function tryLoadFromRequirements() {
     }
     const filename = res.file_name || 'design-doc.md'
     const inferred = _extractAppNameFromMd(res.md_content) || _fallbackNameFromFilename(filename)
+    const inferredCode = extractAppCodeFromText(res.md_content)
     reqPendingMd = { filename, content: res.md_content, pendingId: res.pending_id || null }
     reqDialogFilename.value = filename
     reqDialogSuggestedName.value = inferred
+    reqDialogSuggestedCode.value = inferredCode
     reqDialogCandidates.value = []
     reqDialogVisible.value = true
-    if (inferred) {
+    if (inferred || inferredCode) {
       reqDialogLoading.value = true
       try {
-        reqDialogCandidates.value = await applicationApi.matchByName(inferred, 5)
+        reqDialogCandidates.value = await applicationApi.matchByName(inferred, 5, inferredCode)
       } catch { /* 列表为空也能用「新建」 */ }
       reqDialogLoading.value = false
     }
@@ -7412,6 +7418,26 @@ async function tryLoadFromRequirements() {
 async function handleRequirementsConfirm(payload: { mode: 'new' } | { mode: 'update'; appId: number; appName: string }) {
   if (!reqPendingMd) return
   const pending = reqPendingMd
+  if (payload.mode === 'new') {
+    const codeDuplicate = reqDialogCandidates.value.find(app => (app.match_reasons || []).includes('code_exact'))
+    if (codeDuplicate) {
+      try {
+        await ElMessageBox.confirm(
+          `检测到应用编码「${reqDialogSuggestedCode.value || codeDuplicate.app_code}」已被现有应用「${codeDuplicate.app_name}」使用。继续新建会为新应用编码自动加后缀，生成后的应用名称/编码可能不再与文档完全一致；如果要沿用这个编码，请选择更新现有应用。`,
+          '应用编码重复',
+          {
+            confirmButtonText: '仍然新建',
+            cancelButtonText: '返回选择',
+            type: 'warning',
+          },
+        )
+      } catch {
+        reqPendingMd = pending
+        reqDialogVisible.value = true
+        return
+      }
+    }
+  }
   reqPendingMd = null
   // consume cache，避免下次进 ChatPage 又被同一份 md 触发弹窗
   if (pending.pendingId) {
@@ -11363,9 +11389,9 @@ html[data-theme="light"] .msg-attachment-chip {
 .mdsh-subnav {
   display: flex;
   align-items: center;
-  justify-content: space-between;
-  gap: 16px;
-  padding: 12px 24px;
+  justify-content: flex-start;
+  gap: 10px;
+  padding: 10px 20px;
   background: var(--surface);
   border-bottom: 1px solid var(--line);
   flex-shrink: 0;
@@ -11407,6 +11433,7 @@ html[data-theme="light"] .msg-attachment-chip {
 }
 .mdsh-subnav-lowcode {
   flex-shrink: 0;
+  margin-left: 2px;
 }
 .mdsh-subnav-tab {
   height: 28px;

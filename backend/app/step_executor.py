@@ -1205,6 +1205,11 @@ _DICT_BIND_COMPONENT_TYPES = {
     "FORM_CHECKBOX_INPUT",
 }
 _DICT_MULTI_COMPONENT_TYPES = {"FORM_SELECT_INPUT", "FORM_CHECKBOX_INPUT"}
+_SELECT_COMPONENT_TYPES = {"FORM_SELECT_INPUT_SINGLE", "FORM_SELECT_INPUT"}
+
+
+def _choose_type_for_dict_component(component_type: str) -> str:
+    return "MULTIPLE" if str(component_type or "").strip() in _DICT_MULTI_COMPONENT_TYPES else "SINGLE"
 
 
 def _normalize_dict_code(raw_code: Any, dict_codes: Dict[str, str]) -> str:
@@ -1434,7 +1439,7 @@ def _apply_dictionary_binding_to_component(
     component["source"] = {"type": "DICTIONARY_TYPE", "id": dict_id}
     component["chooseOptions"] = choose
     component["dictionaryChooseOptions"] = choose
-    component["chooseType"] = "MULTIPLE" if component_type in _DICT_MULTI_COMPONENT_TYPES else "SINGLE"
+    component["chooseType"] = _choose_type_for_dict_component(component_type)
     component["multicolor"] = True
     component["dictionaryMulticolorStatus"] = "ENABLE"
     component["dictionarySelectConfig"] = {
@@ -1681,6 +1686,8 @@ def _build_form_components(
         dict_code = _lookup_component_dict_code({**comp, **built}, dict_lookup)
         if dict_code and str(built.get("componentType") or "") in _DICT_BIND_COMPONENT_TYPES:
             built["dict"] = dict_code
+            if str(built.get("componentType") or "") in _SELECT_COMPONENT_TYPES:
+                built["chooseType"] = _choose_type_for_dict_component(str(built.get("componentType") or ""))
             built["dictionarySelectConfig"] = {
                 "dictionaryCode": dict_code,
                 "dictionarySelectOptions": [],

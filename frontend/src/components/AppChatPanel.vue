@@ -97,7 +97,7 @@ let abortCtl: AbortController | null = null
 
 // ─── 加载会话 ───
 async function loadSession(sessionId: number) {
-  const detail = await aiChatApi.getSession(sessionId)
+  const detail = await aiChatApi.getSession(sessionId, props.appId ? { app_id: props.appId } : undefined)
   currentSession.value = { id: detail.session.id, title: detail.session.title }
   messages.value = detail.messages || []
   toolCalls.value = detail.tool_calls || []

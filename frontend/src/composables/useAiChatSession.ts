@@ -568,11 +568,18 @@ export function useAiChatSession(opts?: UseAiChatSessionOptions): UseAiChatSessi
       sending.value = false
       currentRunId.value = null
     }
-    const data = await aiChatApi.getSession(id)
+    const appId = opts?.appId?.value
+    const data = await aiChatApi.getSession(id, appId != null ? { app_id: appId } : undefined)
     currentSession.value = data.session
-    messages.value = data.messages
-    toolCalls.value = data.tool_calls
-    artifacts.value = data.artifacts
+    const sessionIndex = sessions.value.findIndex(s => s.id === data.session.id)
+    if (sessionIndex >= 0) {
+      sessions.value.splice(sessionIndex, 1, data.session)
+    } else {
+      sessions.value.unshift(data.session)
+    }
+    messages.value = Array.isArray(data.messages) ? data.messages : []
+    toolCalls.value = Array.isArray(data.tool_calls) ? data.tool_calls : []
+    artifacts.value = Array.isArray(data.artifacts) ? data.artifacts : []
     transientItems.value = []
     streamingText.value = ''
   }

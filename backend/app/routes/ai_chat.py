@@ -17,6 +17,7 @@ from __future__ import annotations
 import asyncio
 import json
 import os
+import re
 import tempfile
 from datetime import datetime
 from pathlib import Path
@@ -37,11 +38,14 @@ from app.models import (
     AIChatAttachment,
     AIChatArtifact,
     DeployRecord,
+    Application,
 )
 from app.routes.chat import _parse_uploaded_document  # 复用现有文档解析
 from app.ai_chat.agent import run_agent, generate_title
 
 router = APIRouter(prefix="/ai-chat", tags=["ai-chat"])
+
+_DEFAULT_SESSION_TITLES = {"", "新会话"}
 
 
 # ─────────────────────────── 请求 / 响应 schemas ───────────────────────────
@@ -112,6 +116,56 @@ def _session_to_dict(s: AIChatSession, generation: Optional[dict] = None) -> dic
     return data
 
 
+def _clean_session_title(value: str) -> str:
+    title = re.sub(r"\s+", " ", str(value or "")).strip(' "\'`「」# ')
+    title = re.sub(r"\.(md|markdown|txt|docx|pdf|xlsx|pptx)$", "", title, flags=re.IGNORECASE)
+    title = title.replace("_", " ").replace("-", " ")
+    title = re.sub(r"\s+", " ", title).strip()
+    if re.search(r"[\u4e00-\u9fff]", title):
+        title = title.replace(" ", "")
+    return title[:30]
+
+
+def _title_from_markdown(content: str) -> str:
+    for line in str(content or "").splitlines()[:40]:
+        match = re.match(r"^\s*#\s+(.+?)\s*$", line)
+        if match:
+            title = _clean_session_title(match.group(1))
+            if title:
+                return title
+    return ""
+
+
+def _derive_session_title(
+    *,
+    user_message: str = "",
+    attachments: Optional[List[AIChatAttachment]] = None,
+    artifacts: Optional[List[AIChatArtifact]] = None,
+    messages: Optional[List[AIChatMessage]] = None,
+) -> str:
+    """Infer a readable title when the first turn is attachment-only."""
+    if user_message.strip():
+        return _clean_session_title(user_message)
+
+    for artifact in artifacts or []:
+        title = _title_from_markdown(getattr(artifact, "content", "") or "")
+        if title:
+            return title
+
+    for item in [*(attachments or []), *(artifacts or [])]:
+        title = _clean_session_title(getattr(item, "filename", "") or "")
+        if title:
+            return title
+
+    for message in messages or []:
+        content = (getattr(message, "content", "") or "").strip()
+        if content:
+            title = _clean_session_title(content)
+            if title:
+                return title
+    return ""
+
+
 def _extract_generated_app_from_tool(t: AIChatToolCall) -> Optional[dict]:
     try:
         result = json.loads(t.result_text or "{}")
@@ -170,7 +224,48 @@ def _generation_status_label(status: str) -> str:
     }.get(status, status)
 
 
-async def _session_generation_meta(db: AsyncSession, sessions: List[AIChatSession]) -> dict[int, dict]:
+async def _generation_meta_from_generated_app(
+    db: AsyncSession,
+    generated: dict,
+    *,
+    tool_created_at: Optional[datetime] = None,
+) -> dict:
+    app = (await db.execute(
+        select(Application).where(Application.id == generated["app_id"])
+    )).scalar_one_or_none()
+    record_query = (
+        select(DeployRecord)
+        .where(DeployRecord.app_id == generated["app_id"])
+        .order_by(DeployRecord.created_at.asc(), DeployRecord.id.asc())
+        .limit(1)
+    )
+    if tool_created_at is not None:
+        record_query = (
+            select(DeployRecord)
+            .where(
+                DeployRecord.app_id == generated["app_id"],
+                DeployRecord.created_at >= tool_created_at,
+            )
+            .order_by(DeployRecord.created_at.asc(), DeployRecord.id.asc())
+            .limit(1)
+        )
+    record = (await db.execute(record_query)).scalar_one_or_none()
+    status_value = record.status if record else str((app.status if app else None) or generated.get("tool_status") or "draft")
+    return {
+        **generated,
+        "status": status_value,
+        "label": _generation_status_label(str(status_value)),
+        "deploy_record_id": record.id if record else None,
+        "error_message": _deploy_error_from_record(record),
+    }
+
+
+async def _session_generation_meta(
+    db: AsyncSession,
+    sessions: List[AIChatSession],
+    *,
+    target_app_id: Optional[int] = None,
+) -> dict[int, dict]:
     if not sessions:
         return {}
     session_ids = [s.id for s in sessions]
@@ -185,6 +280,11 @@ async def _session_generation_meta(db: AsyncSession, sessions: List[AIChatSessio
     )
     latest_by_session: dict[int, AIChatToolCall] = {}
     for tool_call in res.scalars().all():
+        generated = _extract_generated_app_from_tool(tool_call)
+        if not generated:
+            continue
+        if target_app_id is not None and generated["app_id"] != int(target_app_id):
+            continue
         latest_by_session.setdefault(tool_call.session_id, tool_call)
 
     out: dict[int, dict] = {}
@@ -192,23 +292,30 @@ async def _session_generation_meta(db: AsyncSession, sessions: List[AIChatSessio
         generated = _extract_generated_app_from_tool(tool_call)
         if not generated:
             continue
-        record = (await db.execute(
-            select(DeployRecord)
-            .where(
-                DeployRecord.app_id == generated["app_id"],
-                DeployRecord.created_at >= tool_call.created_at,
-            )
-            .order_by(DeployRecord.created_at.asc(), DeployRecord.id.asc())
-            .limit(1)
-        )).scalar_one_or_none()
-        status_value = record.status if record else str(generated.get("tool_status") or "draft")
-        out[session_id] = {
-            **generated,
-            "status": status_value,
-            "label": _generation_status_label(str(status_value)),
-            "deploy_record_id": record.id if record else None,
-            "error_message": _deploy_error_from_record(record),
-        }
+        out[session_id] = await _generation_meta_from_generated_app(
+            db,
+            generated,
+            tool_created_at=tool_call.created_at,
+        )
+    return out
+
+
+async def _tool_call_generation_meta(
+    db: AsyncSession,
+    tool_calls: List[AIChatToolCall],
+) -> dict[int, dict]:
+    out: dict[int, dict] = {}
+    for tool_call in tool_calls:
+        if tool_call.tool_name != "generate_app_from_doc" or tool_call.status != "success":
+            continue
+        generated = _extract_generated_app_from_tool(tool_call)
+        if not generated:
+            continue
+        out[tool_call.id] = await _generation_meta_from_generated_app(
+            db,
+            generated,
+            tool_created_at=tool_call.created_at,
+        )
     return out
 
 
@@ -225,8 +332,8 @@ def _message_to_dict(m: AIChatMessage) -> dict:
     }
 
 
-def _tool_call_to_dict(t: AIChatToolCall) -> dict:
-    return {
+def _tool_call_to_dict(t: AIChatToolCall, generation: Optional[dict] = None) -> dict:
+    data = {
         "id": t.id,
         "session_id": t.session_id,
         "message_id": t.message_id,
@@ -239,6 +346,9 @@ def _tool_call_to_dict(t: AIChatToolCall) -> dict:
         "started_at": t.started_at.isoformat() if t.started_at else None,
         "ended_at": t.ended_at.isoformat() if t.ended_at else None,
     }
+    if generation:
+        data["generation"] = generation
+    return data
 
 
 def _attachment_to_dict(a: AIChatAttachment) -> dict:
@@ -327,7 +437,7 @@ async def list_sessions(
     query = query.order_by(desc(AIChatSession.updated_at)).limit(limit)
     res = await db.execute(query)
     sessions = res.scalars().all()
-    generation_by_session = await _session_generation_meta(db, sessions)
+    generation_by_session = await _session_generation_meta(db, sessions, target_app_id=app_id)
     return {"sessions": [_session_to_dict(s, generation_by_session.get(s.id)) for s in sessions]}
 
 
@@ -366,6 +476,7 @@ async def get_session(
     session_id: int,
     ctx: Annotated[AuthContext, Depends(get_auth_context)],
     db: Annotated[AsyncSession, Depends(get_db)],
+    app_id: Optional[int] = None,
 ):
     s = await _load_session_or_404(db, session_id, ctx)
 
@@ -394,6 +505,7 @@ async def get_session(
         .order_by(AIChatToolCall.id.asc())
     )
     tool_calls = tool_res.scalars().all()
+    tool_generation_by_id = await _tool_call_generation_meta(db, tool_calls)
 
     att_res = await db.execute(
         select(AIChatAttachment)
@@ -409,12 +521,23 @@ async def get_session(
     )
     artifacts = art_res.scalars().all()
 
-    generation_by_session = await _session_generation_meta(db, [s])
+    if (s.title or "") in _DEFAULT_SESSION_TITLES:
+        derived_title = _derive_session_title(
+            attachments=attachments,
+            artifacts=artifacts,
+            messages=messages,
+        )
+        if derived_title:
+            s.title = derived_title
+            await db.commit()
+            await db.refresh(s)
+
+    generation_by_session = await _session_generation_meta(db, [s], target_app_id=app_id or getattr(s, "app_id", None))
 
     return {
         "session": _session_to_dict(s, generation_by_session.get(s.id)),
         "messages": [_message_to_dict(m) for m in messages],
-        "tool_calls": [_tool_call_to_dict(t) for t in tool_calls],
+        "tool_calls": [_tool_call_to_dict(t, tool_generation_by_id.get(t.id)) for t in tool_calls],
         "attachments": [_attachment_to_dict(a) for a in attachments],
         "artifacts": [_artifact_to_dict(a) for a in artifacts],
     }
@@ -561,7 +684,7 @@ async def send_message(
 
     user_msg_dict = _message_to_dict(user_msg)
     initial_title = s.title
-    is_first_user_message = body.message.strip() and initial_title in ("新会话", "")
+    is_default_title = (initial_title or "") in _DEFAULT_SESSION_TITLES
 
     async def event_stream():
         # 流式必须用一个全新的 AsyncSession：FastAPI 的依赖注入 session 在响应函数返回后
@@ -577,8 +700,8 @@ async def send_message(
 
                 yield {"event": "user_message", "data": json.dumps(user_msg_dict, ensure_ascii=False)}
 
-                # 第一条消息自动生成标题
-                if is_first_user_message:
+                # 第一轮自动生成/推断标题。附件-only 会话也要命名，不能永远显示"新会话"。
+                if is_default_title:
                     msg_count_res = await stream_db.execute(
                         select(AIChatMessage).where(
                             AIChatMessage.session_id == stream_s.id,
@@ -586,7 +709,20 @@ async def send_message(
                         )
                     )
                     if len(msg_count_res.scalars().all()) <= 1:
-                        new_title = await generate_title(stream_db, stream_s, body.message)
+                        new_title = None
+                        if body.message.strip():
+                            new_title = await generate_title(stream_db, stream_s, body.message)
+                        if not new_title:
+                            att_res = await stream_db.execute(
+                                select(AIChatAttachment).where(
+                                    AIChatAttachment.session_id == stream_s.id,
+                                    AIChatAttachment.id.in_(body.attachment_ids or [-1]),
+                                )
+                            )
+                            new_title = _derive_session_title(
+                                user_message=body.message,
+                                attachments=att_res.scalars().all(),
+                            )
                         if new_title:
                             stream_s.title = new_title
                             await stream_db.commit()

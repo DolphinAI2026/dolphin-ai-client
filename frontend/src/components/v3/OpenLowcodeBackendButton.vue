@@ -45,15 +45,36 @@ async function onClick() {
 /* 跟随全局主题 token（design-v3-tokens.css 亮/暗双版本），对齐面板里 .fbp-btn-ghost 等按钮。
    不用浅色硬 fallback —— 之前 --t-* 那套在本 app 没定义，暗色下浅底浅字几乎看不见。 */
 .open-lowcode-btn {
-  display: inline-flex; align-items: center; gap: 6px;
-  padding: 5px 12px; font-size: 12px; border-radius: 6px;
-  border: 1px solid var(--line); background: var(--surface-2);
-  color: var(--text-2); cursor: pointer;
-  font-family: inherit; white-space: nowrap;
-  transition: color .15s, background .15s, border-color .15s;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  height: 32px;
+  min-width: 0;
+  padding: 0 12px;
+  font-size: 12.5px;
+  font-weight: 500;
+  line-height: 1;
+  border-radius: 6px;
+  border: 1px solid var(--line-strong);
+  background: var(--surface);
+  color: var(--text-2);
+  cursor: pointer;
+  font-family: inherit;
+  white-space: nowrap;
+  box-shadow: var(--sh-1, 0 1px 2px rgba(11, 27, 63, 0.04));
+  transition: color .15s, background .15s, border-color .15s, box-shadow .15s;
 }
 .open-lowcode-btn:hover:not(:disabled) {
-  color: var(--text); border-color: var(--text-3); background: var(--surface);
+  color: var(--brand);
+  border-color: var(--brand-ring, var(--line-focus));
+  background: var(--brand-soft);
+  box-shadow: none;
 }
+.open-lowcode-btn:focus-visible {
+  outline: 2px solid var(--brand-ring, var(--line-focus));
+  outline-offset: 2px;
+}
+.open-lowcode-btn :deep(svg) { color: var(--brand); }
 .open-lowcode-btn:disabled { opacity: .6; cursor: default; }
 </style>

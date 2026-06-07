@@ -22,6 +22,17 @@ export interface AIChatSession {
   updated_at: string | null
 }
 
+export interface AIChatGenerationMeta {
+  app_id: number
+  app_name?: string | null
+  app_code?: string | null
+  is_new?: boolean | null
+  status: string
+  label: string
+  deploy_record_id?: number | null
+  error_message?: string | null
+}
+
 export interface AIChatMessage {
   id: number
   session_id: number
@@ -44,6 +55,7 @@ export interface AIChatToolCall {
   duration_ms: number | null
   started_at: string | null
   ended_at: string | null
+  generation?: AIChatGenerationMeta | null
 }
 
 export interface AIChatAttachment {
@@ -87,8 +99,9 @@ export const aiChatApi = {
   createSession(body: { title?: string; selected_llm_config_id?: number | null; mode?: 'chat' | 'cowork'; app_id?: number | null; section?: string | null }): Promise<AIChatSession> {
     return request.post<any, AIChatSession>('/ai-chat/sessions', body)
   },
-  getSession(id: number): Promise<AIChatSessionDetail> {
-    return request.get<any, AIChatSessionDetail>(`/ai-chat/sessions/${id}`)
+  getSession(id: number, params?: { app_id?: number | null }): Promise<AIChatSessionDetail> {
+    const qs = params?.app_id != null ? `?app_id=${params.app_id}` : ''
+    return request.get<any, AIChatSessionDetail>(`/ai-chat/sessions/${id}${qs}`)
   },
   updateSession(id: number, body: { title?: string; selected_llm_config_id?: number | null; status?: string }): Promise<AIChatSession> {
     return request.patch<any, AIChatSession>(`/ai-chat/sessions/${id}`, body)

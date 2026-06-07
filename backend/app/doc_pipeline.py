@@ -16,6 +16,7 @@ from app.doc_standard_parser import parse, ParseResult
 from app.doc_section_splitter import split_sections
 from app.module_standardizer import standardize_module
 from app.config_validator import validate_full_config
+from app.form_component_sanitizer import sync_form_components_with_model_fields
 
 logger = logging.getLogger(__name__)
 
@@ -132,6 +133,36 @@ def _detect_incomplete_modules(text: str, result: ParseResult) -> set[str]:
     return incomplete
 
 
+_AUTO_FIX_MARKERS = (
+    "已自动",
+    "已规范化",
+    "已改为",
+    "已降级",
+    "已映射",
+    "已移除",
+    "自动同步",
+)
+
+
+def _split_parse_messages(messages: List[str]) -> tuple[List[str], List[str]]:
+    """把解析消息拆成阻塞问题和自动修复记录。
+
+    解析器会先记录“未知类型已降级”等 warning，随后 config 已经完成修复。
+    这些信息对用户有价值，但不应继续作为待确认/阻塞错误暴露给后续助手。
+    """
+    errors: List[str] = []
+    auto_fixes: List[str] = []
+    for msg in messages or []:
+        text = str(msg or "").strip()
+        if not text:
+            continue
+        if any(marker in text for marker in _AUTO_FIX_MARKERS):
+            auto_fixes.append(text)
+        else:
+            errors.append(text)
+    return errors, auto_fixes
+
+
 async def parse_document(
     text: str,
     llm_cfg: Optional[Dict[str, Any]] = None,
@@ -226,6 +257,16 @@ async def parse_document(
             decision=decision,
         ) from e
 
+    component_fixes = sync_form_components_with_model_fields(result.config)
+    if component_fixes:
+        for fix in component_fixes:
+            result.errors.append(
+                f"表单组件 '{fix['form']}.{fix['field']}' 已按模型字段类型 "
+                f"'{fix['field_type']}' 从 '{fix['from']}' 自动同步为 '{fix['to']}'"
+            )
+
+    blocking_errors, auto_fixes = _split_parse_messages(result.errors)
+
     await progress("解析完成")
 
     return {
@@ -237,7 +278,8 @@ async def parse_document(
             "decision": decision,
             "large_doc": is_large_doc,
             "fixed_modules": [],
-            "errors": result.errors[:20],
+            "errors": blocking_errors[:20],
+            "auto_fixes": auto_fixes[:50],
         },
     }
 

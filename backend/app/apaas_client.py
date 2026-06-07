@@ -534,9 +534,9 @@ class APaaSClient:
                     more = f"（共 {len(diag_lines)} 条，详见后端日志）" if len(diag_lines) > 3 else ""
                     raise Exception(f"{msg} — 疑似真凶（整字段命中保留字表）: {head}{more}") from exc
 
-                # 整字段没命中本地表 → token 级扫描：按 _ 切分 fieldCode 找含保留字 token 的字段
-                # 同时 flag 业务上常见的 apaas 平台疑似内置字段（approver_id / applicant_id / status / type 等
-                # 单 token 字段以及审批流相关字段名）— 这些是历史撞库高频项。
+                # 整字段没命中本地表 → 仅扫描已知 apaas 内置字段 / 保留前缀。
+                # 不做 token 级扫描：`customer_id`、`visit_time`、`plan_status` 这类业务字段
+                # 虽然包含 id/time/status 等短 token，但并不是平台保留字段。
                 # 这里融合 _doc_helpers.py:SYSTEM_FIELD_CODES（已知 apaas 系统列）+ 高频审批流字段。
                 APAAS_BUILTIN_SUSPECTS = {
                     # 来自 _doc_helpers.SYSTEM_FIELD_CODES 的已知系统列
@@ -557,7 +557,6 @@ class APaaSClient:
                 # apaas 流程模块保留前缀 — `approval_*` 整个命名空间归平台流程节点管理
                 # 注意：`application_*` **不是**保留前缀（实测确认 application_id 是用户自定义业务字段，没问题）
                 APAAS_RESERVED_PREFIXES = ("approval_",)
-                token_susp: list[str] = []
                 builtin_susp: list[str] = []
                 prefix_susp: list[str] = []
                 for dm in payload.get("dataModels", []):
@@ -579,14 +578,6 @@ class APaaSClient:
                                     f"模型「{model_name}」字段「{fn}」编码 `{fc}` 命中 apaas 保留前缀 `{p}`"
                                 )
                                 break
-                        else:
-                            # token 级保留字命中（仅当未命中保留前缀时检查，避免重复）
-                            tokens = fc_low.split("_")
-                            bad_tokens = [t for t in tokens if t in _RESERVED_FIELD_CODES]
-                            if bad_tokens:
-                                token_susp.append(
-                                    f"模型「{model_name}」字段「{fn}」编码 `{fc}` 含保留字 token: {','.join(bad_tokens)}"
-                                )
 
                 all_fields_dump = "; ".join(
                     f"{dm.get('modelName')}({dm.get('modelCode')}): "
@@ -594,12 +585,11 @@ class APaaSClient:
                     for dm in payload.get("dataModels", [])
                 )
                 logger.error(
-                    "create_models 失败 — 扫描结果: 内置嫌疑 %d 条, 保留前缀嫌疑 %d 条, token 嫌疑 %d 条\n"
-                    "内置嫌疑:\n%s\n保留前缀嫌疑:\n%s\ntoken 嫌疑:\n%s\n字段列表: [%s]",
-                    len(builtin_susp), len(prefix_susp), len(token_susp),
+                    "create_models 失败 — 扫描结果: 内置嫌疑 %d 条, 保留前缀嫌疑 %d 条\n"
+                    "内置嫌疑:\n%s\n保留前缀嫌疑:\n%s\n字段列表: [%s]",
+                    len(builtin_susp), len(prefix_susp),
                     "\n".join(f"  - {s}" for s in builtin_susp) or "  （无）",
                     "\n".join(f"  - {s}" for s in prefix_susp) or "  （无）",
-                    "\n".join(f"  - {s}" for s in token_susp) or "  （无）",
                     all_fields_dump,
                 )
 
@@ -628,21 +618,13 @@ class APaaSClient:
                         f"完整字段: [{all_fields_dump}]"
                     ) from exc
 
-                if token_susp:
-                    head = "; ".join(token_susp[:3])
-                    more = f"（共 {len(token_susp)} 个）" if len(token_susp) > 3 else ""
-                    raise Exception(
-                        f"{msg} — token 级扫描可疑（按 _ 切分含 SQL/平台保留字 token）: {head}{more} "
-                        f"— 请让 agent 改写 md，避免字段编码以 status/type/code/date/time/note/file/user/no/id 等"
-                        f"单字 token 结尾。完整字段: [{all_fields_dump}]"
-                    ) from exc
-
                 # 都没命中 → apaas 用了我们完全没收录的保留字
                 raise Exception(
-                    f"{msg} — 本地保留字表 + token 扫描 + apaas 内置嫌疑都未命中。"
+                    f"{msg} — 本地保留字表 + apaas 内置字段 / 保留前缀诊断都未命中。"
                     f"实际传给 apaas 的 fieldCode: [{all_fields_dump}] "
-                    f"— 这串字段全规避了本地已知规则，说明 apaas 平台用了我们完全没收录的保留字。"
-                    f"请把这串字段发回研发，配合 server log 反推平台规则补 _RESERVED_FIELD_CODES。"
+                    f"— 这串字段未命中已知规则，可能是 modelCode 冲突、字段显示名重复、"
+                    f"或 apaas 平台用了我们未收录的保留字；请配合 server log 精确反推，"
+                    f"不要仅因字段编码包含 customer/id/time/status/no 等业务 token 就改写。"
                 ) from exc
             raise
 
@@ -991,7 +973,7 @@ class APaaSClient:
         """给已有模型加一个字段（POST /xdap-app/modelField/add）。
 
         field_type: STRING / NUM / DATE / DATETIME / BOOLEAN / TEXT / BIG_TEXT 等
-        慎用 application_id / approver_id 等 apaas 保留字 — 平台会 422 拦。
+        慎用 approver_id / approval_* 等 apaas 流程保留字 — 平台会 422 拦。
         """
         url = f"{self.base_url}/xdap-app/modelField/add"
         payload = {

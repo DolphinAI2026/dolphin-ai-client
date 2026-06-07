@@ -27,6 +27,7 @@ def test_bind_uses_component_dictcode_when_dict_name_differs_from_label():
     assert ok is True, "组件带 dictCode 时必须绑上, 不该因 label!=字典名 而漏绑"
     assert comp["source"] == {"type": "DICTIONARY_TYPE", "id": "ID_CHEM"}
     assert comp["componentType"] == "FORM_SELECT_INPUT"
+    assert comp["chooseType"] == "SINGLE"
     assert len(comp["chooseOptions"]) == 1
     assert comp["dictionarySelectConfig"]["dictionaryCode"] == "dict_chemistry"
 
@@ -164,6 +165,29 @@ def test_build_form_components_preserves_dict_ref_for_create_payload():
     assert components[0]["modelField"] == "customer_platform.status"
     assert components[0]["dictCode"] == "customer_status"
     assert components[0]["dict"] == "customer_status"
+    assert components[0]["chooseType"] == "SINGLE"
+
+
+def test_build_form_components_sets_choose_type_for_multi_select_payload():
+    """下拉多选创建 payload 也必须带 chooseType, 否则右侧属性面板无法勾中多选。"""
+    form = {
+        "components": [{
+            "componentType": "FORM_SELECT_INPUT",
+            "label": "标签",
+            "modelField": "customer.tags",
+            "dictCode": "customer_tags",
+        }],
+    }
+
+    components, _, _ = g2._build_form_components_from_definition(
+        form,
+        default_model_code="customer_platform",
+        model_lookup={"customer": {"code": "customer_platform"}},
+    )
+
+    assert components[0]["modelField"] == "customer_platform.tags"
+    assert components[0]["dictCode"] == "customer_tags"
+    assert components[0]["chooseType"] == "MULTIPLE"
 
 
 def test_collect_label_dict_map_uses_platform_model_field_from_model_info():
@@ -203,4 +227,22 @@ def test_bind_component_tree_populates_complete_schema_before_create_form():
     assert bound == 1
     assert components[0]["source"] == {"type": "DICTIONARY_TYPE", "id": "DICT_ID"}
     assert components[0]["chooseOptions"][0]["label"] == "活跃"
+    assert components[0]["chooseType"] == "SINGLE"
     assert components[0]["dictionarySelectConfig"]["dictionaryCode"] == "customer_status"
+
+
+def test_bind_component_tree_sets_multi_select_choose_type():
+    components = [{
+        "componentType": "FORM_SELECT_INPUT",
+        "label": "客户标签",
+        "modelField": "customer_platform.tags",
+    }]
+    dict_lookup = {"customer_platform.tags": "customer_tags"}
+    dict_id_map = {"customer_tags": "DICT_ID"}
+    dict_options_map = {"customer_tags": [{"valueCode": "vip", "valueName": "VIP"}]}
+
+    bound = g2._bind_dicts_on_component_tree(components, dict_lookup, dict_id_map, dict_options_map, {})
+
+    assert bound == 1
+    assert components[0]["chooseType"] == "MULTIPLE"
+    assert components[0]["componentType"] == "FORM_SELECT_INPUT"

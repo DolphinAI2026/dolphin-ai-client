@@ -682,12 +682,13 @@ async def update_app_from_doc(
     tenant_id: int = 0,
     user_id: int = 0,
 ) -> dict:
-    """上传新版 markdown 设计文档作为应用 vN+1 版，自动 diff 出变更计划返回。
+    """上传新版 markdown 设计文档作为应用 vN+1 版，自动 diff 出待确认的变更计划。
 
     app_id 可省略（=0）：自动用 ai-builder 中用户当前编辑的应用。
     md_content 不严格符合模板时（章节/表格列差异），后端会自动 LLM 规范化重试一次。
 
-    返回 { version, change_plan_id, summary（变更摘要）}。
+    重要：本工具只生成待确认 change plan，不执行变更计划。返回后必须把 actions
+    逐条列给用户确认；用户明确同意后，才能调用 execute_change_plan。
     """
     tid, uid = _resolve_identity(tenant_id, user_id)
     app_id, _ = _resolve_app_id(app_id, uid)
@@ -719,12 +720,44 @@ async def update_app_from_doc(
     if sse["errors"]:
         raise RuntimeError(f"上传新版 md 失败：{sse['errors'][-1]}")
     done = sse.get("done") or {}
+    change_plan_id = done.get("change_plan_id")
+    change_plan = None
+    actions_preview = []
+    if change_plan_id:
+        try:
+            change_plan = await _api_call(
+                "GET",
+                f"/applications/{app_id}/change-plans/{change_plan_id}",
+                tenant_id=tid,
+                user_id=uid,
+            )
+            raw_actions = change_plan.get("actions") or []
+            if isinstance(raw_actions, list):
+                actions_preview = [
+                    {
+                        "id": action.get("id"),
+                        "selected": action.get("selected", True),
+                        "op": action.get("op"),
+                        "description": action.get("description") or action.get("op") or "",
+                    }
+                    for action in raw_actions
+                    if isinstance(action, dict)
+                ]
+        except Exception as exc:
+            logger.warning("读取 change plan 详情失败: %s", exc)
     return {
         "ok": True,
         "app_id": app_id,
         "version": done.get("version") or done.get("to_version"),
-        "change_plan_id": done.get("change_plan_id"),
+        "change_plan_id": change_plan_id,
         "summary": done.get("summary") or done.get("change_summary"),
+        "requires_user_confirmation": True,
+        "assistant_next_step": (
+            "请把 actions_preview 里的变更逐条列给用户确认。不要说已经完成更新；"
+            "不要调用 execute_change_plan，除非用户明确回复确认执行。"
+        ),
+        "actions_preview": actions_preview,
+        "change_plan": change_plan,
         "raw_done": done,
     }
 
@@ -3767,12 +3800,12 @@ async def add_apaas_model_field(env_id: int, apaas_app_id: str, model_id: str, m
     """给已有模型加一个字段。
 
     field_type 常用：STRING / NUM / DATE / DATETIME / BOOLEAN / TEXT / BIG_TEXT
-    ⚠️ 慎用 application_id / approver_id / approval_* 等 apaas 保留字。
+    ⚠️ 慎用 approver_id / approval_* 等 apaas 流程保留字。
     """
     if not (apaas_app_id.strip() and model_id.strip() and model_code.strip() and field_code.strip() and field_name.strip()):
         return {"ok": False, "error_code": "INVALID_PARAMS", "message": "必填全填"}
     # 简易保留字预检
-    reserved = {"application_id", "approver_id", "id", "tenant_id"}
+    reserved = {"approver_id", "id", "tenant_id"}
     if field_code.strip().lower() in reserved or field_code.strip().lower().startswith("approval_"):
         return {"ok": False, "error_code": "RESERVED_FIELD_CODE",
                 "message": f"field_code '{field_code}' 命中 apaas 保留字 — 建议改成 {model_code}_{field_code}"}
@@ -5548,8 +5581,11 @@ async def bind_apaas_form_field_to_dict(
 
     # 构建 updates: 关键是 source 切 DICTIONARY_TYPE
     updates = {
-        "componentType": "FORM_SELECT_INPUT_SINGLE",
+        "componentType": "FORM_SELECT_INPUT",
         "source": {"type": "DICTIONARY_TYPE", "id": dict_id},
+        "chooseType": "SINGLE",
+        "multicolor": True,
+        "dictionaryMulticolorStatus": "ENABLE",
         "chooseOptions": choose_options,
         "dictionaryChooseOptions": choose_options,
     }
@@ -6206,6 +6242,7 @@ def _build_basic_component_from_model_field(field: dict, model_code: str) -> dic
         component["lengthLimit"] = max_length
     dict_code = str(field.get("dictionary_code") or field.get("dictionaryCode") or "").strip()
     if dict_code and comp_type == "FORM_SELECT_INPUT_SINGLE":
+        component["chooseType"] = "SINGLE"
         component["dictionarySelectConfig"] = {
             "dictionaryCode": dict_code,
             "dictionarySelectOptions": [],

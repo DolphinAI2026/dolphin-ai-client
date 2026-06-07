@@ -22,6 +22,7 @@ import httpx
 
 from app.apaas_client import APaaSClient
 from app.config import settings
+from app.form_component_sanitizer import sync_form_components_with_model_fields
 from app.workflow_phase import create_workflows
 
 logger = logging.getLogger(__name__)
@@ -49,6 +50,13 @@ from app.field_types import get_field_type_map, get_comp_type_map
 
 FIELD_TYPE_MAP = get_field_type_map()
 COMP_TYPE_MAP = get_comp_type_map()
+
+_SELECT_COMPONENT_TYPES = {"FORM_SELECT_INPUT_SINGLE", "FORM_SELECT_INPUT"}
+_MULTI_SELECT_COMPONENT_TYPES = {"FORM_SELECT_INPUT"}
+
+
+def _choose_type_for_select_component(component_type: str) -> str:
+    return "MULTIPLE" if str(component_type or "").strip() in _MULTI_SELECT_COMPONENT_TYPES else "SINGLE"
 
 
 # ---------------------------------------------------------------------------
@@ -472,6 +480,8 @@ def _build_component(
     if ftype in ("下拉单选", "下拉多选") and field.get("dict"):
         dcode = dict_codes.get(field["dict"])
         if dcode:
+            if comp["componentType"] in _SELECT_COMPONENT_TYPES:
+                comp["chooseType"] = _choose_type_for_select_component(comp["componentType"])
             comp["dictionarySelectConfig"] = {
                 "dictionaryCode": dcode,
                 "dictionarySelectOptions": [],
@@ -1097,6 +1107,8 @@ def _build_form_components_from_definition(
         if dict_ref:
             built["dictCode"] = dict_ref
             built["dict"] = dict_ref
+        if built.get("componentType") in _SELECT_COMPONENT_TYPES:
+            built["chooseType"] = _choose_type_for_select_component(str(built.get("componentType") or ""))
         for key in ("hidden", "readonly", "required", "showInList", "searchable"):
             if key in comp:
                 built[key] = bool(comp.get(key))
@@ -1650,7 +1662,7 @@ def _bind_dict_on_component(
     comp["source"] = {"type": "DICTIONARY_TYPE", "id": did}
     comp["chooseOptions"] = choose
     comp["dictionaryChooseOptions"] = choose
-    comp["chooseType"] = "SINGLE" if ct == "FORM_SELECT_INPUT_SINGLE" else "MULTIPLE"
+    comp["chooseType"] = _choose_type_for_select_component(ct)
     comp["multicolor"] = True
     comp["dictionaryMulticolorStatus"] = "ENABLE"
     comp["dictionarySelectConfig"] = {
@@ -2098,6 +2110,13 @@ async def run_complete_generation(
         model_lookup = _build_model_lookup(models, model_info)
         existing_forms = await _load_existing_form_menus(client, app_id)
         forms_to_build = _resolve_forms_to_build(all_forms, models)
+        component_fixes = sync_form_components_with_model_fields({"models": models, "forms": forms_to_build})
+        if component_fixes:
+            yield {
+                "stage": 3,
+                "status": "running",
+                "step": f"已按最新模型字段类型同步 {len(component_fixes)} 个表单组件",
+            }
         forms_to_build, dependency_issues = _sort_forms_by_data_selector_dependencies(forms_to_build, existing_forms)
         if dependency_issues:
             message = (

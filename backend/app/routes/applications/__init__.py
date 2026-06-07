@@ -4,6 +4,7 @@ import logging
 import re
 import time
 from datetime import datetime
+from difflib import SequenceMatcher
 from typing import Annotated, List, Optional
 from fastapi import APIRouter, Depends, HTTPException, Query, UploadFile, File, Form
 from pydantic import BaseModel, Field
@@ -267,36 +268,128 @@ class MatchByNameItem(BaseModel):
     status: str
     apaas_app_id: Optional[str] = None
     updated_at: Optional[datetime] = None
+    match_reasons: List[str] = Field(default_factory=list)
+    name_will_change: bool = False
+
+
+_APP_NAME_MATCH_SUFFIXES = (
+    "应用设计文档",
+    "系统设计文档",
+    "平台设计文档",
+    "设计文档",
+    "需求文档",
+    "设计说明",
+    "需求说明",
+    "应用",
+    "系统",
+    "平台",
+)
+
+
+def _normalize_app_name_for_match(value: str) -> str:
+    text = re.sub(r"[\s_\-—–《》「」『』（）()【】\\[\\]:：,，.。]+", "", str(value or "").lower())
+    changed = True
+    while changed and len(text) > 2:
+        changed = False
+        for suffix in _APP_NAME_MATCH_SUFFIXES:
+            if text.endswith(suffix) and len(text) > len(suffix):
+                text = text[: -len(suffix)]
+                changed = True
+                break
+    return text
+
+
+def _app_name_match_score(keyword: str, app_name: str) -> float:
+    key = _normalize_app_name_for_match(keyword)
+    name = _normalize_app_name_for_match(app_name)
+    if not key or not name:
+        return 0.0
+    if key == name:
+        return 100.0
+    if key in name or name in key:
+        shorter = min(len(key), len(name))
+        longer = max(len(key), len(name))
+        return 88.0 + (shorter / longer) * 10.0
+    return SequenceMatcher(None, key, name).ratio() * 100.0
+
+
+def _match_application_target(
+    *,
+    app: Application,
+    app_name_like: str,
+    app_code_like: str,
+) -> tuple[float, list[str], bool]:
+    reasons: list[str] = []
+    score = 0.0
+
+    requested_code = _normalize_app_code(app_code_like)
+    existing_code = _normalize_app_code(app.app_code)
+    if requested_code and existing_code == requested_code:
+        reasons.append("code_exact")
+        score = max(score, 120.0)
+
+    name_score = _app_name_match_score(app_name_like, app.app_name) if app_name_like else 0.0
+    if name_score >= 60.0:
+        reasons.append("name_similar" if name_score < 100.0 else "name_exact")
+        score = max(score, name_score)
+
+    requested_name_raw = re.sub(r"\s+", "", str(app_name_like or "").strip().lower())
+    existing_name_raw = re.sub(r"\s+", "", str(app.app_name or "").strip().lower())
+    name_will_change = bool(
+        requested_code
+        and existing_code == requested_code
+        and requested_name_raw
+        and existing_name_raw
+        and requested_name_raw != existing_name_raw
+    )
+    return score, reasons, name_will_change
 
 
 @router.get("/match-by-name", response_model=List[MatchByNameItem])
 async def match_applications_by_name(
     ctx: Annotated[AuthContext, Depends(get_auth_context)],
     db: Annotated[AsyncSession, Depends(get_db)],
-    app_name_like: str = Query(..., min_length=1, max_length=120),
+    app_name_like: str = Query("", max_length=120),
+    app_code_like: str = Query("", max_length=80),
     limit: int = Query(5, ge=1, le=20),
 ):
-    """按 app_name 模糊匹配本租户内当前用户可见的应用，用于 AI-Chat → Builder
+    """按 app_name / app_code 匹配本租户内当前用户可见的应用，用于 AI-Chat → Builder
     的"新建/更新到现有"选择对话框的候选拉取。
 
     匹配规则：
     - tenant 隔离 + 用户 access clause（owner / project member / app member / tenant_admin）
-    - app_name 子串（ilike %X%），按 updated_at desc
+    - app_code 精确匹配优先；同编码但名称不同会标记 name_will_change
+    - app_name 相似匹配：去掉"应用/系统/平台/设计文档"等通用后缀后，支持双向包含和相似度
     - 不查远程平台（轻量），只返必要字段
     """
     keyword = (app_name_like or "").strip()
-    if not keyword:
+    code_keyword = (app_code_like or "").strip()
+    if not keyword and not code_keyword:
         return []
     stmt = (
         select(Application)
         .where(Application.tenant_id == ctx.tenant_id)
-        .where(Application.app_name.ilike(f"%{keyword}%"))
     )
     access_clause = _application_access_clause(ctx)
     if access_clause is not None:
         stmt = stmt.where(access_clause)
-    stmt = stmt.order_by(desc(Application.updated_at)).limit(limit)
+    # 先用租户/权限约束取轻量候选，再在 Python 里做归一化相似匹配。
+    # 只用 SQL ILIKE 会漏掉「客户拜访管理应用」→「客户拜访管理」这类反向包含。
+    stmt = stmt.order_by(desc(Application.updated_at)).limit(min(max(limit * 100, 500), 2000))
     rows = (await db.execute(stmt)).scalars().all()
+    scored = []
+    for app in rows:
+        score, reasons, name_will_change = _match_application_target(
+            app=app,
+            app_name_like=keyword,
+            app_code_like=code_keyword,
+        )
+        scored.append((score, reasons, name_will_change, app))
+    scored = [
+        item for item in scored
+        if item[0] >= 60.0 and item[1]
+    ]
+    scored.sort(key=lambda item: (item[0], item[3].updated_at or datetime.min), reverse=True)
     return [
         MatchByNameItem(
             id=app.id,
@@ -305,8 +398,10 @@ async def match_applications_by_name(
             status=app.status,
             apaas_app_id=app.apaas_app_id,
             updated_at=app.updated_at,
+            match_reasons=reasons,
+            name_will_change=name_will_change,
         )
-        for app in rows
+        for _, reasons, name_will_change, app in scored[:limit]
     ]
 
 
