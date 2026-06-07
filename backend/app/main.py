@@ -382,6 +382,9 @@ class _SpaStaticFiles(StaticFiles):
 _admin_spa_dir = Path(__file__).resolve().parents[2] / "admin-spa" / "dist"
 if _admin_spa_dir.is_dir():
     app.mount("/admin", _SpaStaticFiles(directory=str(_admin_spa_dir), html=True), name="admin-spa")
+    # 线上入口 /ai-builder/platform-admin 由主前端接管；若外层 nginx/Ingress
+    # 暂时把该路径转到后端，也返回管理台 SPA，避免直接暴露 FastAPI 404。
+    app.mount("/platform-admin", _SpaStaticFiles(directory=str(_admin_spa_dir), html=True), name="platform-admin-spa")
 
 
 # 静态文件（浏览器预览页面等）

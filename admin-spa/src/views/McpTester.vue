@@ -116,7 +116,7 @@ const route = useRoute()
 
 const services = ref<ServiceItem[]>([
   { name: '同进程工具服务', code: 'ai-builder-inprocess', url: '/api/admin/mcp/call', callUrl: '/admin/mcp/call', tools: 0, authMode: '平台管理登录态' },
-  { name: '问题分诊记录 MCP', code: 'support-triage', url: '/api/support-triage-mcp/mcp', callUrl: '/admin/mcp/call', tools: 0, authMode: '外部 MCP 使用 MCP_API_KEYS；本测试台使用平台管理登录态', toolNames: ['record_support_triage'] },
+  { name: '问题分诊记录 MCP', code: 'support-triage', url: '/api/support-triage-mcp/mcp', callUrl: '/admin/mcp/support-triage-call', tools: 0, authMode: '外部 MCP 使用 MCP_API_KEYS；本测试台使用平台管理登录态', toolNames: ['record_support_triage'] },
 ])
 
 const form = reactive({

@@ -94,6 +94,32 @@ data:
             proxy_send_timeout 600s;
         }
 
+        # 平台管理 admin-spa 由后端 StaticFiles 挂载在 /admin。
+        # 主前端 /platform-admin iframe 会访问同源 /admin/*。
+        location ^~ /ai-builder/admin/ {
+            rewrite ^/ai-builder/admin/(.*)$ /admin/$1 break;
+            proxy_pass http://127.0.0.1:8003;
+            proxy_http_version 1.1;
+            proxy_set_header Host $host;
+            proxy_set_header X-Real-IP $remote_addr;
+            proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+            proxy_set_header X-Forwarded-Proto $proxy_x_forwarded_proto;
+            proxy_set_header X-Forwarded-Prefix /ai-builder;
+        }
+
+        location ^~ /admin/ {
+            proxy_pass http://127.0.0.1:8003;
+            proxy_http_version 1.1;
+            proxy_set_header Host $host;
+            proxy_set_header X-Real-IP $remote_addr;
+            proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+            proxy_set_header X-Forwarded-Proto $proxy_x_forwarded_proto;
+        }
+
+        location = /admin {
+            return 302 /admin/;
+        }
+
         # 平台代理路由：与 backend/app/routes/platform_proxy.py 中声明的顶层路径保持一致。
         # 这些路径都是 aPaaS iframe 内部页面 / API / 运行态 / 插件资源，不能落到 SPA fallback。
         location ~ ^/ai-builder/(platform|backend|plugin|xdap-admin|xdap-plugin|xdap-app|xdap-open|common|smartbi|apaas|app|m)(/|$) {

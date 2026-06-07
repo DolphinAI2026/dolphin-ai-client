@@ -362,19 +362,18 @@ async def call_support_triage_tool(
         user_id=int(args.get("user_id") or 0),
     )
     is_error = _is_tool_error(result)
-    if is_error and isinstance(result, dict) and result.get("error_code") in {"INVALID_CATEGORY", "INVALID_PARAMS"}:
-        _append_admin_mcp_log(
-            service="support-triage",
-            path="/api/support-triage-mcp/mcp",
-            rpc_method="tools/call",
-            tool=body.tool_name,
-            request_arguments=args,
-            ctx=ctx,
-            success=False,
-            status_code=400,
-            error=result.get("message") or result.get("error_code"),
-            started=started,
-        )
+    _append_admin_mcp_log(
+        service="support-triage",
+        path="/api/support-triage-mcp/mcp",
+        rpc_method="tools/call",
+        tool=body.tool_name,
+        request_arguments=args,
+        ctx=ctx,
+        success=not is_error,
+        status_code=200 if not is_error else 400,
+        error=(result.get("message") or result.get("error_code")) if isinstance(result, dict) and is_error else None,
+        started=started,
+    )
     return {
         "ok": not is_error,
         "tool_name": body.tool_name,

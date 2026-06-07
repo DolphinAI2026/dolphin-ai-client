@@ -34,6 +34,27 @@ RUN node_modules/.bin/vite build
 
 
 # ------------------------------------------------------------
+# stage 1b: 构建平台管理前端（admin-spa）
+# ------------------------------------------------------------
+FROM node:20-bookworm-slim AS admin-builder
+
+ARG VITE_ADMIN_BASE=/admin/
+ARG VITE_API_BASE_URL=/api
+ARG VITE_MCP_PUBLIC_BASE=
+
+WORKDIR /build/admin-spa
+
+COPY admin-spa/package.json admin-spa/package-lock.json* ./
+RUN npm ci --prefer-offline --no-audit --progress=false
+
+COPY admin-spa/ ./
+ENV VITE_API_BASE_URL=${VITE_API_BASE_URL}
+ENV VITE_MCP_PUBLIC_BASE=${VITE_MCP_PUBLIC_BASE}
+# 与主前端一样跳过 vue-tsc：管理台当前类型债不应影响镜像发布。
+RUN node_modules/.bin/vite build --base="${VITE_ADMIN_BASE}"
+
+
+# ------------------------------------------------------------
 # stage 2: 构建 code-server 睿鲸扩展
 # ------------------------------------------------------------
 FROM node:20-bookworm-slim AS ruijing-extension-builder
@@ -198,6 +219,7 @@ RUN rm -rf /app/backend/.env /app/backend/.venv /app/backend/venv \
 
 # --- 拷前端构建产物（直接落在镜像内，不再 VOLUME 挂出）---------
 COPY --from=frontend-builder /build/frontend/dist /app/frontend/dist
+COPY --from=admin-builder /build/admin-spa/dist /app/admin-spa/dist
 
 # --- 挂载点 & 目录 ------------------------------------------
 # workspaces 卷由 compose 在运行时挂入（路径由 ${APAAS_WORKSPACE_ROOT} 决定，
