@@ -114,7 +114,7 @@ const route = useRoute()
 
 const services: ServiceItem[] = [
   { name: '同进程工具服务', code: 'ai-builder-inprocess', url: '/api/admin/mcp/call', tools: 111 },
-  { name: '问题分诊记录 MCP', code: 'support-triage', url: '/api/admin/mcp/call', tools: 1, toolNames: ['record_support_triage'] },
+  { name: '问题分诊记录 MCP', code: 'support-triage', url: '/api/support-triage-mcp/mcp', tools: 1, toolNames: ['record_support_triage'] },
 ]
 
 const form = reactive({

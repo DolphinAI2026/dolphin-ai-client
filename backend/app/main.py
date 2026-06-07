@@ -230,6 +230,12 @@ app.mount(
     _McpBearerAuthAsgiMiddleware(_main_mcp.streamable_http_app()),
     name="main-mcp",
 )
+from app.support_triage_mcp import mcp as _support_triage_mcp  # noqa: E402
+app.mount(
+    "/api/support-triage-mcp",
+    _McpBearerAuthAsgiMiddleware(_support_triage_mcp.streamable_http_app()),
+    name="support-triage-mcp",
+)
 # 2026-05-19 Chrome extension WebSocket bridge — image #50 follow-up POC
 from app.routes import browser_ext_ws  # noqa: E402
 app.include_router(browser_ext_ws.router)

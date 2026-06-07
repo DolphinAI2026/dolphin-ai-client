@@ -136,13 +136,13 @@ const router = useRouter()
 const origin = window.location.origin
 const copiedExample = ref(false)
 
-const authHeaderText = computed(() => 'Authorization: Bearer <平台管理登录态>')
+const authHeaderText = computed(() => '外部 MCP: Authorization: Bearer <MCP_API_KEYS>; 管理台测试: Bearer <平台管理登录态>')
 const requestExample = computed(() => [
-  `POST ${services.value[0].publicUrl}`,
+  `POST ${services.value[1].publicUrl}`,
   'Content-Type: application/json',
-  authHeaderText.value,
+  'Authorization: Bearer <MCP_API_KEYS 中的 key>',
   '',
-  JSON.stringify({ tool_name: services.value[0].exampleTool, args: {} }, null, 2),
+  'MCP 客户端会自动发送 initialize / tools/list / tools/call，不需要手写 tool_name。',
 ].join('\n'))
 
 function resolvePublicMcpUrl(apiPath: string) {
@@ -165,9 +165,9 @@ const services = ref<ServiceRow[]>([
   {
     name: '问题分诊记录 MCP',
     code: 'support-triage',
-    transport: 'FastMCP in-process',
-    url: '/api/admin/mcp/call',
-    publicUrl: resolvePublicMcpUrl('/api/admin/mcp/call'),
+    transport: 'Streamable HTTP',
+    url: '/api/support-triage-mcp/mcp',
+    publicUrl: resolvePublicMcpUrl('/api/support-triage-mcp/mcp'),
     tools: 1,
     status: 'online',
     exampleTool: 'record_support_triage',
@@ -192,11 +192,11 @@ async function copyText(value: string, message: string) {
 // v3 2026-05-21 UED 报告 P2: 复制按钮反馈 + 始终复制完整 key (不受脱敏影响)
 async function onCopyRequestExample() {
   const fullExample = [
-    `POST ${services.value[0].publicUrl}`,
+    `POST ${services.value[1].publicUrl}`,
     'Content-Type: application/json',
-    'Authorization: Bearer <平台管理登录态>',
+    'Authorization: Bearer <MCP_API_KEYS 中的 key>',
     '',
-    JSON.stringify({ tool_name: services.value[0].exampleTool, args: {} }, null, 2),
+    'MCP 客户端会自动发送 initialize / tools/list / tools/call，不需要手写 tool_name。',
   ].join('\n')
   await copyText(fullExample, '请求示例已复制')
   copiedExample.value = true
@@ -205,8 +205,8 @@ async function onCopyRequestExample() {
 
 function onResetKey() {
   ElMessageBox.alert(
-    '当前平台管理测试台调用同进程 MCP 工具，不再使用独立 MCP_API_KEY。外部客户端接入如需恢复，可再单独接回 HTTP MCP 服务。',
-    '同进程 MCP',
+    '外部 Agent 接标准 MCP 服务时使用 MCP_API_KEYS 鉴权；平台管理测试台为了方便本地调试，仍使用当前平台管理登录态。',
+    'MCP 鉴权',
     { confirmButtonText: '知道了' },
   )
 }
