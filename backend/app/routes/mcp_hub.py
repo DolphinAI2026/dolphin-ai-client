@@ -20,7 +20,6 @@ from pydantic import BaseModel
 
 from app.ai_chat import mcp_bridge
 from app.deps import get_auth_context, AuthContext
-from app.mcp_inprocess import list_inprocess_tools
 from app.routes.admin_mcp import _V2_TOOL_PATHS, _fetch_tools_from
 
 logger = logging.getLogger(__name__)
@@ -38,19 +37,6 @@ _LOCAL_SERVER_META: dict = {
     "tags": ["本地", "独立服务"],
     "desc": "独立 MCP 服务（apaas-builder-mcp-server 仓库 / k8s）的 FastMCP — ai_chat / cowork agent 默认调用的工具集。",
 }
-_SUPPORT_TRIAGE_SERVER_META: dict = {
-    "id": "support-triage-mcp",
-    "name": "问题分诊记录 MCP",
-    "code": "support-triage",
-    "transport": "http",
-    "endpoint": "/api/admin/mcp/call",
-    "version": "local-dev",
-    "official": False,
-    "tags": ["本地", "问题分诊", "记录"],
-    "desc": "给外挂问题助手使用的记录 MCP。智能体判断操作问题、Bug、需求或待确认后，调用 record_support_triage 留痕。",
-}
-
-
 async def _build_local_server() -> McpServer:
     """从 mcp_bridge.ensure_loaded() 拉真实工具数构建本地 server 条目。
 
@@ -80,37 +66,6 @@ async def _build_local_server() -> McpServer:
         name=meta["name"],
         code=meta["code"],
         status=status,
-        transport=meta["transport"],
-        endpoint=meta["endpoint"],
-        tools=tool_count,
-        last_used=None,
-        usage=0,
-        version=meta["version"],
-        tags=meta["tags"],
-        desc=meta["desc"],
-        official=meta["official"],
-        error=err,
-    )
-
-
-def _build_support_triage_server() -> McpServer:
-    """Expose the support triage recorder as a logical MCP entry in the Hub."""
-    meta = _SUPPORT_TRIAGE_SERVER_META
-    try:
-        tool_names = {str(t.get("name") or "") for t in list_inprocess_tools()}
-        connected = "record_support_triage" in tool_names
-        tool_count = 1 if connected else 0
-        err = None if connected else "record_support_triage 未注册"
-    except Exception as e:  # noqa: BLE001
-        connected = False
-        tool_count = 0
-        err = _clean_error_message(e)
-
-    return McpServer(
-        id=meta["id"],
-        name=meta["name"],
-        code=meta["code"],
-        status="connected" if connected else "error",
         transport=meta["transport"],
         endpoint=meta["endpoint"],
         tools=tool_count,
@@ -251,13 +206,6 @@ async def list_servers(
     if local_server.status == "connected":
         connected += 1
     elif local_server.status == "error":
-        errors += 1
-
-    support_triage_server = _build_support_triage_server()
-    servers.append(support_triage_server)
-    if support_triage_server.status == "connected":
-        connected += 1
-    elif support_triage_server.status == "error":
         errors += 1
 
     for path in _V2_TOOL_PATHS:

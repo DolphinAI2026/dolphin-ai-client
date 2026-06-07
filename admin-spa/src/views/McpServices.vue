@@ -135,11 +135,11 @@ const copiedExample = ref(false)
 
 const authHeaderText = computed(() => 'Authorization: Bearer <平台管理登录态>')
 const requestExample = computed(() => [
-  `POST ${services[0].publicUrl}`,
+  `POST ${services.value[0].publicUrl}`,
   'Content-Type: application/json',
   authHeaderText.value,
   '',
-  JSON.stringify({ tool_name: services[0].exampleTool, args: {} }, null, 2),
+  JSON.stringify({ tool_name: services.value[0].exampleTool, args: {} }, null, 2),
 ].join('\n'))
 
 function resolvePublicMcpUrl(apiPath: string) {
