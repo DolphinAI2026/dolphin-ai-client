@@ -73,14 +73,17 @@ def write_support_triage_record(
         "status": (status or "新建").strip()[:40],
     }
 
+    success = True
+    error = None
     try:
         SUPPORT_TRIAGE_RECORDS_PATH.parent.mkdir(parents=True, exist_ok=True)
         with SUPPORT_TRIAGE_RECORDS_PATH.open("a", encoding="utf-8") as fh:
             fh.write(json.dumps(row, ensure_ascii=False, sort_keys=True) + "\n")
     except Exception as exc:
-        return {"ok": False, "error_code": "WRITE_FAILED", "message": f"分诊记录失败: {exc}"}
+        success = False
+        error = f"分诊记录失败: {exc}"
 
-    return {
+    result = {
         "ok": True,
         "record_id": record_id,
         "category": category,
@@ -89,3 +92,36 @@ def write_support_triage_record(
         "path": str(SUPPORT_TRIAGE_RECORDS_PATH),
         "user_reply": row["user_reply"],
     }
+    if not success:
+        result = {"ok": False, "error_code": "WRITE_FAILED", "message": error}
+
+    try:
+        from app.routes.mcp_platform import append_mcp_call_log
+        append_mcp_call_log({
+            "service": "support-triage",
+            "path": "/api/support-triage-mcp/mcp",
+            "rpc_method": "tools/call",
+            "tool": "record_support_triage",
+            "request_arguments": {
+                "user_question": row["user_question"],
+                "category": row["category"],
+                "confidence": row["confidence"],
+                "summary": row["summary"],
+                "reason": row["reason"],
+                "user_reply": row["user_reply"],
+                "missing_info": row["missing_info"],
+                "priority": row["priority"],
+                "status": row["status"],
+                "source": row["source"],
+            },
+            "status_code": 200 if success else 500,
+            "success": success,
+            "error": error,
+            "auth_source": "mcp_api_key_or_admin_tester",
+            "local_user_id": row["user_id"] or None,
+            "local_tenant_id": row["tenant_id"] or None,
+        })
+    except Exception:
+        pass
+
+    return result

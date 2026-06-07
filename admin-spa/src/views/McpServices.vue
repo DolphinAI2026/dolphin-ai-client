@@ -216,11 +216,8 @@ onMounted(async () => {
     const data = await apiGet<any>('/admin/mcp/tools')
     const tools = Array.isArray(data?.tools) ? data.tools : []
     services.value[0].tools = tools.length || services.value[0].tools
-    const hasSupportTriage = tools.some((item: any) => item?.name === 'record_support_triage')
-    services.value[1].tools = hasSupportTriage ? 1 : 0
-    services.value[1].status = hasSupportTriage ? 'online' : 'missing'
   } catch {
-    services.value[1].status = 'pending'
+    services.value[0].status = 'pending'
   }
 })
 </script>

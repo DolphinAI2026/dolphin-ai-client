@@ -132,7 +132,7 @@ const filterRange = ref<[string, string] | null>(null)
 const filterKeyword = ref('')
 
 const serviceOptions = computed(() => {
-  const set = new Set<string>()
+  const set = new Set<string>(['ai-builder-inprocess', 'support-triage'])
   for (const row of logs.value) {
     if (row.service) set.add(row.service)
   }

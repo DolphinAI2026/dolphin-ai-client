@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import logging
 import os
+import time
 from pathlib import Path
 from typing import Annotated, Any
 
@@ -265,6 +266,7 @@ async def call_mcp_tool(
     ctx: Annotated[AuthContext, Depends(get_auth_context)],
 ):
     """调用当前 backend 进程内 FastMCP 工具，用于平台管理测试台。"""
+    started = time.perf_counter()
     args = dict(body.args or {})
     args["tenant_id"] = int(ctx.tenant_id or 0)
     args["user_id"] = int(ctx.user.id or 0)
@@ -275,6 +277,26 @@ async def call_mcp_tool(
         or result.get("error_code")
         or str(result.get("message") or "").startswith("错误")
     )
+    try:
+        from app.routes.mcp_platform import append_mcp_call_log
+        if body.tool_name != "record_support_triage":
+            append_mcp_call_log({
+                "service": "ai-builder-inprocess",
+                "path": "/api/admin/mcp/call",
+                "rpc_method": "tools/call",
+                "tool": body.tool_name,
+                "request_arguments": args,
+                "request_headers": {"authorization": "Bearer <平台管理登录态>"},
+                "status_code": 200 if not is_error else 500,
+                "success": not is_error,
+                "error": (result.get("message") or result.get("error_code")) if isinstance(result, dict) and is_error else None,
+                "auth_source": "platform_admin_session",
+                "local_user_id": int(ctx.user.id or 0),
+                "local_tenant_id": int(ctx.tenant_id or 0),
+                "elapsed_ms": int((time.perf_counter() - started) * 1000),
+            })
+    except Exception:
+        pass
     return {
         "ok": not is_error,
         "tool_name": body.tool_name,

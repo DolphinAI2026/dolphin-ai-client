@@ -27,7 +27,7 @@
           <el-input v-model="form.authMode" disabled />
         </el-form-item>
       </el-form>
-      <el-button type="primary" :loading="loadingTools" @click="() => loadTools()">获取同进程工具</el-button>
+      <el-button type="primary" :loading="loadingTools" @click="() => loadTools()">获取工具列表</el-button>
       <el-alert
         v-if="toolsMessage"
         :title="toolsMessage"
@@ -51,7 +51,7 @@
         <!-- v3 2026-05-20 UED 报告 P3: "No Data" 英文残留 → 中文引导 + 指示下一步 -->
         <template #empty>
           <div style="padding: 24px 16px; color: var(--text-3); font-size: 13px; line-height: 1.6">
-            暂无工具数据，请先点击「获取同进程工具」。
+            暂无工具数据，请先点击「获取工具列表」。
           </div>
         </template>
       </el-table>
@@ -107,15 +107,36 @@ interface ServiceItem {
   code: string
   url: string
   tools: number
+  authMode: string
   toolNames?: string[]
 }
 
 const route = useRoute()
 
 const services: ServiceItem[] = [
-  { name: '同进程工具服务', code: 'ai-builder-inprocess', url: '/api/admin/mcp/call', tools: 111 },
-  { name: '问题分诊记录 MCP', code: 'support-triage', url: '/api/support-triage-mcp/mcp', tools: 1, toolNames: ['record_support_triage'] },
+  { name: '同进程工具服务', code: 'ai-builder-inprocess', url: '/api/admin/mcp/call', tools: 111, authMode: '平台管理登录态' },
+  { name: '问题分诊记录 MCP', code: 'support-triage', url: '/api/support-triage-mcp/mcp', tools: 1, authMode: '外部 MCP 使用 MCP_API_KEYS；本测试台使用平台管理登录态', toolNames: ['record_support_triage'] },
 ]
+const SUPPORT_TRIAGE_TOOL: ToolItem = {
+  name: 'record_support_triage',
+  description: '记录用户问题分诊结果。category 取值：操作问题 / Bug / 需求 / 待确认。',
+  inputSchema: {
+    type: 'object',
+    required: ['user_question', 'category', 'summary', 'reason', 'user_reply'],
+    properties: {
+      user_question: { type: 'string', description: '用户原始问题' },
+      category: { type: 'string', enum: ['操作问题', 'Bug', '需求', '待确认'], description: '问题分类' },
+      confidence: { type: 'string', enum: ['高', '中', '低'], default: '中', description: '判断置信度' },
+      summary: { type: 'string', description: '一句话概括' },
+      reason: { type: 'string', description: '分类原因' },
+      user_reply: { type: 'string', description: '准备回复给用户的完整内容' },
+      missing_info: { type: 'string', default: '', description: '缺失信息，没有则为空' },
+      priority: { type: 'string', enum: ['P0', 'P1', 'P2', 'P3'], default: 'P2', description: '优先级' },
+      status: { type: 'string', default: '新建', description: '记录状态' },
+      source: { type: 'string', default: 'admin_tester', description: '来源' },
+    },
+  },
+}
 
 const form = reactive({
   serviceCode: 'ai-builder-inprocess',
@@ -151,13 +172,23 @@ async function loadTools(silent = false): Promise<boolean> {
   toolsMessage.value = silent ? '切换中…' : ''
   resultText.value = ''
   try {
+    const service = services.find((item) => item.code === form.serviceCode)
+    if (service?.code === 'support-triage') {
+      tools.value = [SUPPORT_TRIAGE_TOOL]
+      callForm.toolName = SUPPORT_TRIAGE_TOOL.name
+      callForm.argsJson = JSON.stringify(buildExampleFromSchema(SUPPORT_TRIAGE_TOOL.inputSchema), null, 2)
+      resultText.value = JSON.stringify({
+        ok: true,
+        service: service.name,
+        endpoint: service.url,
+        tools: tools.value,
+      }, null, 2)
+      toolsMessage.value = '获取成功，共 1 个工具'
+      return true
+    }
     const data = await apiGet<any>('/admin/mcp/tools')
     resultText.value = JSON.stringify(data, null, 2)
-    const service = services.find((item) => item.code === form.serviceCode)
-    const allowList = service?.toolNames?.length ? new Set(service.toolNames) : null
-    const list = allowList
-      ? (data?.tools || []).filter((item: any) => allowList.has(item?.name))
-      : (data?.tools || [])
+    const list = data?.tools || []
     tools.value = Array.isArray(list)
       ? list.map((item: any) => ({
           name: item.name,
@@ -211,6 +242,7 @@ async function onServiceChange(code: string) {
   const service = services.find((item) => item.code === code)
   if (!service) return
   form.url = service.url
+  form.authMode = service.authMode
   tools.value = []
   resultText.value = ''
   toolsMessage.value = '切换中…'
