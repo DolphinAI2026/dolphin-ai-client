@@ -85,20 +85,33 @@ console.log(`workbench.js: applied=${applied} skipped=${skipped} failed=${failed
 // --- product.json: 放行 proposed API + 删 defaultChatAgent ---
 if (fs.existsSync(productPath)) {
   const data = JSON.parse(fs.readFileSync(productPath, 'utf8'));
-  const allowed = data.extensionAllowedProposedApi || {};
-  // chatProvider → registerLanguageModelChatProvider；defaultChatParticipant → 扩展的 isDefault 聊天参与者
-  allowed['apaas-builder.ruijing-ai'] = ['chatProvider', 'defaultChatParticipant'];
-  data.extensionAllowedProposedApi = allowed;
-  let removedDefault = false;
-  if (data.defaultChatAgent) {
-    delete data.defaultChatAgent;
-    removedDefault = true;
-  }
+  // 放行 proposed API：数组形态（与本地实证一致）。否则扩展里的
+  // registerLanguageModelChatProvider 不可用。
+  data.extensionAllowedProposedApi = ['apaas-builder.ruijing-ai'];
+  // 关键：defaultChatAgent **不能删**。删了 VS Code 的 chat setup 会回退到硬编码的
+  // GitHub.copilot-chat → "cannot be installed because it was not found" → 聊天卡在
+  // "Getting chat ready"。照本地做法把它**重指向我们自己的扩展**（已安装）→ setup 秒过。
+  data.defaultChatAgent = {
+    extensionId: 'apaas-builder.ruijing-ai',
+    chatExtensionId: 'apaas-builder.ruijing-ai',
+    chatExtensionOutputId: '',
+    chatExtensionOutputExtensionStateCommand: '',
+    documentationUrl: '',
+    termsStatementUrl: '',
+    privacyStatementUrl: '',
+    skusDocumentationUrl: '',
+    publicCodeMatchesUrl: '',
+    entitlementSignupLimitedUrl: '',
+    provider: {
+      default: { id: 'ruijing', name: 'RuijingAI' },
+      enterprise: { id: '', name: '' },
+      apple: { id: '', name: '' },
+      google: { id: '', name: '' },
+    },
+    providerUriSetting: '',
+  };
   fs.writeFileSync(productPath, JSON.stringify(data, null, 2));
-  console.log(
-    `[OK]   product.json: allowed chatProvider for apaas-builder.ruijing-ai` +
-      (removedDefault ? ' + removed defaultChatAgent' : ''),
-  );
+  console.log('[OK]   product.json: allowed proposed API + repointed defaultChatAgent → apaas-builder.ruijing-ai');
 } else {
   console.warn(`[WARN] product.json not found at ${productPath}`);
 }
