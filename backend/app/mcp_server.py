@@ -13,6 +13,8 @@
 """
 from __future__ import annotations
 
+import contextlib
+import contextvars
 import json
 import logging
 import os
@@ -82,12 +84,49 @@ def _build_app_view_url(app_id: int | None) -> str | None:
     return f"{base}/ai-builder/chat?app_id={app_id}"
 
 
+# 进程内可信入口（mcp_bridge / admin 测试台）在调工具前用 trusted_identity() 把
+# JWT 派生的真实 (tenant_id, user_id) 塞进这个 contextvar，告诉 _resolve_identity
+# “这条调用的身份是服务端背书的、可信的，直接采信，别再用进程内 current_app slot 覆盖”。
+# 外部 /api/mcp/mcp（Dolphin）HTTP 路径不经过这些入口、不设此标记，保持原 slot 反查行为。
+_TRUSTED_IDENTITY: contextvars.ContextVar[tuple[int, int] | None] = contextvars.ContextVar(
+    "_mcp_trusted_identity", default=None
+)
+
+
+@contextlib.contextmanager
+def trusted_identity(tenant_id: int | None, user_id: int | None):
+    """标记当前（进程内）工具调用携带服务端背书的可信身份。
+
+    仅 mcp_bridge / admin 测试台等进程内入口使用——它们的 tenant_id/user_id 来自已
+    鉴权的 JWT 会话(ctx.tenant_id / ctx.user.id)，是“此刻”的真值，必须优先于进程内
+    current_app slot（slot 是“上次活跃/默认租户”，多租户切换后可能残留旧租户 → 串租户）。
+
+    外部 HTTP MCP 路径（共享 MCP_API_KEYS、调用方自带 args）**不要**用本上下文，
+    否则外部调用方就能凭传入 tenant_id 跨租户读数据（历史泄漏：宝洁经外部 agent 拿到
+    admin 租户的全部环境）。
+    """
+    token = _TRUSTED_IDENTITY.set((int(tenant_id or 0), int(user_id or 0)))
+    try:
+        yield
+    finally:
+        _TRUSTED_IDENTITY.reset(token)
+
+
 def _resolve_identity(tenant_id: int | None, user_id: int | None) -> tuple[int, int]:
     """MCP 客户端自定义 Body 字段硬编码 (tenant_id=1, user_id=1)，但 ai-builder
     用户多租户多账号，直接用这俩调内部 API 会跨租户错位（看不到当前用户的应用）。
 
     从 current_app 反查真实身份覆盖；找不到才用 外部 agent 传的兜底。
+
+    例外：可信进程内入口已用 trusted_identity() 标记（unified ai-chat / 配置助手 /
+    admin 测试台），其 tenant_id/user_id 直接来自当前登录 JWT，直接采信、不被 slot
+    覆盖——修复 unified 路径“session 带着正确租户却被进程内 slot 顶成别的租户”的串租户 bug。
     """
+    trusted = _TRUSTED_IDENTITY.get()
+    if trusted is not None:
+        t_tid, t_uid = trusted
+        if t_tid and t_uid:
+            return int(t_tid), int(t_uid)
     from app.routes.current_app import get_current_app_for_user
     rec = get_current_app_for_user(int(user_id) if user_id else 1)
     if rec:

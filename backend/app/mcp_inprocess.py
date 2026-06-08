@@ -50,8 +50,14 @@ async def call_inprocess_tool(tool_name: str, args: dict | None) -> Any:
             "message": f"同进程 MCP 未注册工具 {tool_name}",
         }
 
+    from app import mcp_server
+
+    args = args or {}
     try:
-        result = await tool.run(args or {}, convert_result=False)
+        # 进程内可信入口（admin 测试台传平台管理员 JWT 的 tenant_id/user_id）：标记可信，
+        # 让工具内 _resolve_identity 采信传入租户、不被 current_app slot 覆盖。
+        with mcp_server.trusted_identity(args.get("tenant_id"), args.get("user_id")):
+            result = await tool.run(args, convert_result=False)
     except Exception as exc:  # noqa: BLE001
         logger.exception("同进程 MCP 工具调用失败 tool=%s", tool_name)
         return {

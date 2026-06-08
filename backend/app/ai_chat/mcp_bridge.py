@@ -294,7 +294,12 @@ async def _call_inprocess_tool(tool_name: str, args: dict) -> str:
                 "error_code": "INPROCESS_TOOL_NOT_FOUND",
                 "message": f"同进程 MCP 未注册工具 {tool_name}",
             }, ensure_ascii=False)
-        result = await tool.run(args or {}, convert_result=False)
+        # 进程内调用 = 可信身份（args 里的 tenant_id/user_id 由 call_tool 从已鉴权
+        # 会话强制注入）。标记可信，让工具内 _resolve_identity 采信传入租户、不被进程内
+        # current_app slot 覆盖（修 unified ai-chat 串租户 bug）。
+        args = args or {}
+        with mcp_server.trusted_identity(args.get("tenant_id"), args.get("user_id")):
+            result = await tool.run(args, convert_result=False)
         if isinstance(result, str):
             return result
         return json.dumps(result, ensure_ascii=False)
