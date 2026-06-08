@@ -1722,24 +1722,16 @@ async function onDeleteSession(s: AIChatSession) {
 }
 
 async function onCreateSession(_mode?: SessionFilter | string) {
-  // chat / cowork mode 已合并 — 后端字段保留但不再区分行为，统一建一个会话即可
-  const s = await aiChatApi.createSession({
-    selected_llm_config_id: selectedLlmId.value,
-    mode: 'chat',
-  })
-  sessions.value.unshift(s)
-  await loadSession(s.id)
-}
-
-let bootstrappingBlankSession = false
-async function createBlankSessionForEntry() {
-  if (currentSession.value || bootstrappingBlankSession) return
-  bootstrappingBlankSession = true
-  try {
-    await onCreateSession()
-  } finally {
-    bootstrappingBlankSession = false
+  // 「+ 新会话」不立即建会话 —— 只重置成草稿态（hero + 输入框照常显示），
+  // 等用户发出第一条消息时由 onDraftSend 懒创建，避免侧栏堆一排没用过的"新会话"。
+  if (currentAbort.value) {
+    try { currentAbort.value.abort() } catch { /* ignore */ }
+    currentAbort.value = null
   }
+  resetChatTenantState()
+  isRestoringRouteSession.value = false
+  if (route.params.id) await router.replace('/ai-chat')
+  inputText.value = ''
 }
 
 // 空状态（首页 / AI Builder 融合页）就地新建：建会话 → 把首条需求/附件发出去。
@@ -2602,8 +2594,8 @@ watch(
     resetChatTenantState()
     await Promise.all([loadLlmOptions(), loadSessions()])
     if (route.path.startsWith('/ai-chat')) {
+      // 回到草稿态即可，不自动建空会话（resetChatTenantState 已清空 currentSession）
       await router.replace('/ai-chat')
-      await createBlankSessionForEntry()
     }
   },
 )
@@ -2672,14 +2664,8 @@ onMounted(async () => {
     return
   }
 
-  if (!currentSession.value) {
-    try {
-      await createBlankSessionForEntry()
-    } catch (e) {
-      console.error('创建入口新会话失败', e)
-      ElMessage.error('创建新会话失败')
-    }
-  }
+  // 不再在进入页面时自动建空会话 —— 留在草稿态（isDraftSessionView=true）显示 hero，
+  // 等用户发出第一条消息时由 onDraftSend 懒创建，避免侧栏堆一排没用过的"新会话"。
 })
 </script>
 
