@@ -25,6 +25,7 @@ from app.json_utils import loads_if_str
 from app.error_messages import APAAS_TOKEN_EXPIRED_GENERIC, is_apaas_token_error
 from app.services.config_converter import convert_analysis_to_app_config
 from app.crypto import decrypt_password
+from ._helpers import _resolve_platform_env_for_tenant
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
@@ -118,10 +119,21 @@ async def generate_application(
     # work，ai-chat/agent 切流后 admin 账户的 apaas_token 是过期 SQL workaround 塞的。
     # 新链路：应用绑 env_id (FK)，token 从 platform_envs 读，env 刷新 token 自动跟。
     if not app.platform_env_id:
-        raise HTTPException(
-            status_code=400,
-            detail="应用未关联平台环境（platform_env_id 空），请在 admin 给应用绑定 env"
-        )
+        resolved_env = await _resolve_platform_env_for_tenant(db, tenant_id)
+        if resolved_env:
+            app.platform_env_id = resolved_env.id
+            await db.commit()
+            logger.info(
+                "generate /apps/%s/generate: auto-bound platform_env_id=%s for tenant=%s",
+                app_id,
+                resolved_env.id,
+                tenant_id,
+            )
+        else:
+            raise HTTPException(
+                status_code=400,
+                detail="应用未关联平台环境（platform_env_id 空），请在 admin 给应用绑定 env"
+            )
     env_result = await db.execute(
         select(PlatformEnv).where(PlatformEnv.id == app.platform_env_id)
     )
@@ -308,7 +320,18 @@ async def _resolve_env_and_client(app_obj: Application, session: AsyncSession):
     """
     from app.apaas_client import APaaSClient
     if not app_obj.platform_env_id:
-        raise ValueError("应用未关联平台环境（platform_env_id 空），请先在 admin 给应用绑定环境")
+        resolved_env = await _resolve_platform_env_for_tenant(session, app_obj.tenant_id)
+        if resolved_env:
+            app_obj.platform_env_id = resolved_env.id
+            await session.commit()
+            logger.info(
+                "generate-run: app %s auto-bound platform_env_id=%s for tenant=%s",
+                app_obj.id,
+                resolved_env.id,
+                app_obj.tenant_id,
+            )
+        else:
+            raise ValueError("应用未关联平台环境（platform_env_id 空），请先在 admin 给应用绑定环境")
     env_obj = (await session.execute(
         select(PlatformEnv).where(PlatformEnv.id == app_obj.platform_env_id)
     )).scalar_one_or_none()

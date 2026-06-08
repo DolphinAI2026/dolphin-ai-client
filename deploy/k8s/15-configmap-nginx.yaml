@@ -96,6 +96,10 @@ data:
 
         # 平台管理 admin-spa 由后端 StaticFiles 挂载在 /admin。
         # 主前端 /platform-admin iframe 会访问同源 /admin/*。
+        location = /ai-builder/admin {
+            return 302 /ai-builder/admin/;
+        }
+
         location ^~ /ai-builder/admin/ {
             rewrite ^/ai-builder/admin/(.*)$ /admin/$1 break;
             proxy_pass http://127.0.0.1:8003;

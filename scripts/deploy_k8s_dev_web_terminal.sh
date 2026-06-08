@@ -36,13 +36,16 @@ IMAGE="${IMAGE:-}"
 SKIP_IMAGE_BUILD="${SKIP_IMAGE_BUILD:-0}"
 PLATFORM="${PLATFORM:-linux/amd64}"
 VITE_BASE_URL="${VITE_BASE_URL:-/ai-builder/}"
+VITE_ADMIN_BASE="${VITE_ADMIN_BASE:-/admin/}"
 
 DEV_HOST="${DEV_HOST:-agent.dfy.definesys.cn}"
 PROD_HOST="${PROD_HOST:-df-aigc.dfy.definesys.cn}"
+VITE_API_BASE_URL="${VITE_API_BASE_URL:-/ai-builder/api}"
 VITE_MCP_PUBLIC_BASE="${VITE_MCP_PUBLIC_BASE:-https://${DEV_HOST}}"
 PUBLIC_URL="${PUBLIC_URL:-https://${DEV_HOST}/ai-builder/login}"
 APAAS_BASE_URL="${APAAS_BASE_URL:-}"
 DEV_DATABASE_NAME="${DEV_DATABASE_NAME:-apaas_builder_dev}"
+DEV_MCP_API_KEYS="${DEV_MCP_API_KEYS:-dev-mcp-api-key-local}"
 
 SOURCE_NGINX_CM="${SOURCE_NGINX_CM:-${PROD_APP_NAME}-nginx}"
 NGINX_CM="${NGINX_CM:-${APP_NAME}-nginx}"
@@ -111,6 +114,8 @@ build_and_push_image() {
     docker buildx build \
       --platform "$PLATFORM" \
       --build-arg "VITE_BASE_URL=${VITE_BASE_URL}" \
+      --build-arg "VITE_ADMIN_BASE=${VITE_ADMIN_BASE}" \
+      --build-arg "VITE_API_BASE_URL=${VITE_API_BASE_URL}" \
       --build-arg "VITE_MCP_PUBLIC_BASE=${VITE_MCP_PUBLIC_BASE}" \
       -f "$REPO_ROOT/deploy/docker/Dockerfile" \
       -t "$IMAGE" \
@@ -119,6 +124,8 @@ build_and_push_image() {
   else
     docker build \
       --build-arg "VITE_BASE_URL=${VITE_BASE_URL}" \
+      --build-arg "VITE_ADMIN_BASE=${VITE_ADMIN_BASE}" \
+      --build-arg "VITE_API_BASE_URL=${VITE_API_BASE_URL}" \
       --build-arg "VITE_MCP_PUBLIC_BASE=${VITE_MCP_PUBLIC_BASE}" \
       -f "$REPO_ROOT/deploy/docker/Dockerfile" \
       -t "$IMAGE" \
@@ -146,6 +153,7 @@ PROD_HOST='${PROD_HOST}'
 PUBLIC_URL='${PUBLIC_URL}'
 APAAS_BASE_URL='${APAAS_BASE_URL}'
 DEV_DATABASE_NAME='${DEV_DATABASE_NAME}'
+DEV_MCP_API_KEYS='${DEV_MCP_API_KEYS:-dev-mcp-api-key-local}'
 SOURCE_NGINX_CM='${SOURCE_NGINX_CM}'
 NGINX_CM='${NGINX_CM}'
 SOURCE_BACKEND_SECRET='${SOURCE_BACKEND_SECRET}'
@@ -185,6 +193,11 @@ if grep -q '^DATABASE_URL=mysql' /tmp/apaas-builder-backend.env; then
 else
   echo "ERROR: DATABASE_URL is missing or not mysql; refusing to deploy dev against an unknown database" >&2
   exit 1
+fi
+if grep -q '^MCP_API_KEYS=' /tmp/apaas-builder-backend.env; then
+  sed -i "s#^MCP_API_KEYS=.*#MCP_API_KEYS=\${DEV_MCP_API_KEYS}#" /tmp/apaas-builder-backend.env
+else
+  printf 'MCP_API_KEYS=%s\\n' "\$DEV_MCP_API_KEYS" >> /tmp/apaas-builder-backend.env
 fi
 kubectl -n "\$NAMESPACE" create secret generic "\$BACKEND_SECRET" \\
   --from-file=backend.env=/tmp/apaas-builder-backend.env \\
@@ -442,7 +455,7 @@ if command -v curl >/dev/null 2>&1; then
     curl -k -sS -o /tmp/apaas-builder-dev-mcp-tools.json \\
       -w "MCP_TOOLS_HTTP %{http_code}\\n" \\
       -X POST "https://\${DEV_HOST}/api/mcp/mcp" \\
-      -H "Authorization: Bearer \$MCP_API_KEY" \\
+      -H "X-API-Key: \$MCP_API_KEY" \\
       -H "Content-Type: application/json" \\
       -H "Accept: application/json, text/event-stream" \\
       --data '{"jsonrpc":"2.0","id":1,"method":"tools/list"}' || true

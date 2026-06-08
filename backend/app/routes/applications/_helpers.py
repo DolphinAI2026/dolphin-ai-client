@@ -63,6 +63,7 @@ __all__ = [
     "_render_doc_content_from_config",
     "_resolve_builder_llm_cfg",
     "_resolve_current_apaas_tenant",
+    "_resolve_platform_env_for_tenant",
     "_resolve_display_status",
     "_sync_canonical_config_to_current_doc_version",
 ]
@@ -72,6 +73,64 @@ __all__ = [
 # LLM 解析结果里常见的"默认值"集合。遇到这些值时认为解析没有提取出真实应用名，
 # 此时改从文档标题/正文推断，推断不到才退回文件名。
 _DEFAULT_APP_NAMES = {"业务应用", "应用", "未命名应用", ""}
+
+
+async def _resolve_platform_env_for_tenant(
+    db: AsyncSession,
+    tenant_id: int | None,
+    requested_env_id: int | None = None,
+) -> PlatformEnv | None:
+    """Resolve the platform environment an app generation should bind to."""
+    if not tenant_id:
+        return None
+
+    if requested_env_id:
+        requested = (
+            await db.execute(
+                select(PlatformEnv).where(
+                    PlatformEnv.id == requested_env_id,
+                    PlatformEnv.tenant_id == tenant_id,
+                )
+            )
+        ).scalar_one_or_none()
+        if requested:
+            return requested
+        logger.warning(
+            "resolve platform env: requested platform_env_id=%s not found for tenant=%s, falling back",
+            requested_env_id,
+            tenant_id,
+        )
+
+    default_env = (
+        await db.execute(
+            select(PlatformEnv)
+            .where(PlatformEnv.tenant_id == tenant_id, PlatformEnv.is_default == True)  # noqa: E712
+            .order_by(PlatformEnv.updated_at.desc(), PlatformEnv.id.desc())
+            .limit(1)
+        )
+    ).scalar_one_or_none()
+    if default_env:
+        return default_env
+
+    connected_env = (
+        await db.execute(
+            select(PlatformEnv)
+            .where(PlatformEnv.tenant_id == tenant_id, PlatformEnv.status == "connected")
+            .order_by(PlatformEnv.updated_at.desc(), PlatformEnv.id.desc())
+            .limit(1)
+        )
+    ).scalar_one_or_none()
+    if connected_env:
+        return connected_env
+
+    return (
+        await db.execute(
+            select(PlatformEnv)
+            .where(PlatformEnv.tenant_id == tenant_id)
+            .order_by(PlatformEnv.updated_at.desc(), PlatformEnv.id.desc())
+            .limit(1)
+        )
+    ).scalar_one_or_none()
 
 
 def _infer_app_name_from_doc(text: str, filename: str = "") -> str:

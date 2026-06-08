@@ -127,6 +127,7 @@ interface ServiceRow {
   transport: string
   url: string
   publicUrl: string
+  adminUrl: string
   tools: number
   status: string
   exampleTool: string
@@ -142,14 +143,15 @@ interface ToolItem {
 const SUPPORT_TRIAGE_TOOL_NAME = 'record_support_triage'
 
 const router = useRouter()
-const origin = window.location.origin
+const origin = (import.meta.env.VITE_MCP_PUBLIC_BASE || window.location.origin).replace(/\/$/, '')
 const copiedExample = ref(false)
 
 const authHeaderText = computed(() => '外部 MCP: Authorization: Bearer <MCP_API_KEYS>; 管理台测试: Bearer <平台管理登录态>')
 const requestExample = computed(() => [
-  `POST ${services.value[1].publicUrl}`,
+  `POST ${services.value[0].publicUrl}`,
   'Content-Type: application/json',
   'Authorization: Bearer <MCP_API_KEYS 中的 key>',
+  '# 兼容 Dolphin 网关：也可使用 X-API-Key 或 X-AI-GW-KEY',
   '',
   'MCP 客户端会自动发送 initialize / tools/list / tools/call，不需要手写 tool_name。',
 ].join('\n'))
@@ -162,13 +164,14 @@ function resolvePublicMcpUrl(apiPath: string) {
 
 const services = ref<ServiceRow[]>([
   {
-    name: '同进程工具服务',
-    code: 'ai-builder-inprocess',
-    transport: 'FastMCP in-process',
-    url: '/api/admin/mcp/call',
-    publicUrl: resolvePublicMcpUrl('/api/admin/mcp/call'),
+    name: '主 MCP 工具服务',
+    code: 'apaas-builder-mcp',
+    transport: 'Streamable HTTP',
+    url: '/api/mcp/mcp',
+    publicUrl: resolvePublicMcpUrl('/api/mcp/mcp'),
+    adminUrl: '/api/admin/mcp/tools',
     tools: 0,
-    status: 'online',
+    status: 'checking',
     exampleTool: 'list_platform_envs',
   },
   {
@@ -177,8 +180,9 @@ const services = ref<ServiceRow[]>([
     transport: 'Streamable HTTP',
     url: '/api/support-triage-mcp/mcp',
     publicUrl: resolvePublicMcpUrl('/api/support-triage-mcp/mcp'),
+    adminUrl: '/api/admin/mcp/support-triage-tools',
     tools: 0,
-    status: 'online',
+    status: 'checking',
     exampleTool: 'record_support_triage',
   },
 ])
@@ -202,9 +206,10 @@ async function copyText(value: string, message: string) {
 // v3 2026-05-21 UED 报告 P2: 复制按钮反馈 + 始终复制完整 key (不受脱敏影响)
 async function onCopyRequestExample() {
   const fullExample = [
-    `POST ${services.value[1].publicUrl}`,
+    `POST ${services.value[0].publicUrl}`,
     'Content-Type: application/json',
     'Authorization: Bearer <MCP_API_KEYS 中的 key>',
+    '# 兼容 Dolphin 网关：也可使用 X-API-Key 或 X-AI-GW-KEY',
     '',
     'MCP 客户端会自动发送 initialize / tools/list / tools/call，不需要手写 tool_name。',
   ].join('\n')
@@ -232,15 +237,16 @@ onMounted(async () => {
     services.value[0].status = 'pending'
   }
 
-  const triageFromInprocess = inprocessTools.filter((tool) => tool?.name === SUPPORT_TRIAGE_TOOL_NAME)
-  if (triageFromInprocess.length) {
+  try {
+    const triage = await apiGet<any>('/admin/mcp/support-triage-tools')
+    const triageTools = Array.isArray(triage?.tools) ? triage.tools : []
+    services.value[1].tools = triageTools.length
+    services.value[1].status = triageTools.length ? 'online' : 'missing'
+  } catch {
+    const triageFromInprocess = inprocessTools.filter((tool) => tool?.name === SUPPORT_TRIAGE_TOOL_NAME)
     services.value[1].tools = triageFromInprocess.length
-    services.value[1].status = 'online'
-    return
+    services.value[1].status = triageFromInprocess.length ? 'online' : 'pending'
   }
-
-  services.value[1].tools = 0
-  services.value[1].status = 'missing'
 })
 </script>
 

@@ -11,12 +11,15 @@ set -euo pipefail
 NAMESPACE="${NAMESPACE:-apaas-builder}"
 APP_NAME="${APP_NAME:-apaas-builder-dev}"
 NGINX_CM="${NGINX_CM:-${APP_NAME}-nginx}"
-IMAGE="${IMAGE:-hub.dfy.definesys.cn/ai-builder/apaas-builder:dev-202606080055-admin-route-fix}"
+IMAGE="${IMAGE:-hub.dfy.definesys.cn/ai-builder/apaas-builder:dev-20260608-mcp-external-route-fix}"
 BACKEND_CONTAINER="${BACKEND_CONTAINER:-apaas-builder}"
 DIST_INIT_CONTAINER="${DIST_INIT_CONTAINER:-copy-frontend-dist}"
+BACKEND_SECRET="${BACKEND_SECRET:-apaas-backend-env-dev}"
+DEV_MCP_API_KEYS="${DEV_MCP_API_KEYS:-dev-mcp-api-key-local}"
 ROLL_TIMEOUT="${ROLL_TIMEOUT:-300s}"
 PUBLIC_URL="${PUBLIC_URL:-https://agent.dfy.definesys.cn/ai-builder/login}"
 ADMIN_URL="${ADMIN_URL:-https://agent.dfy.definesys.cn/ai-builder/platform-admin}"
+MCP_URL="${MCP_URL:-https://agent.dfy.definesys.cn/api/mcp/mcp}"
 
 log() { printf '[deploy-dev-image] %s\n' "$*"; }
 die() { printf '[deploy-dev-image][fail] %s\n' "$*" >&2; exit 1; }
@@ -30,6 +33,20 @@ apply_nginx_config() {
 map $http_upgrade $connection_upgrade {
     default upgrade;
     ''      close;
+}
+
+sync_dev_mcp_key() {
+  log "sync dev MCP_API_KEYS in Secret: ${BACKEND_SECRET}"
+  kubectl -n "${NAMESPACE}" get secret "${BACKEND_SECRET}" -o jsonpath='{.data.backend\.env}' \
+    | base64 -d > /tmp/apaas-builder-backend.env
+  if grep -q '^MCP_API_KEYS=' /tmp/apaas-builder-backend.env; then
+    sed -i.bak "s#^MCP_API_KEYS=.*#MCP_API_KEYS=${DEV_MCP_API_KEYS}#" /tmp/apaas-builder-backend.env
+  else
+    printf 'MCP_API_KEYS=%s\n' "${DEV_MCP_API_KEYS}" >> /tmp/apaas-builder-backend.env
+  fi
+  kubectl -n "${NAMESPACE}" create secret generic "${BACKEND_SECRET}" \
+    --from-file=backend.env=/tmp/apaas-builder-backend.env \
+    --dry-run=client -o yaml | kubectl apply -f -
 }
 
 map $http_x_forwarded_proto $proxy_x_forwarded_proto {
@@ -117,6 +134,10 @@ server {
 
     # 平台管理 admin-spa 由后端 StaticFiles 挂载在 /admin。
     # 主前端 /platform-admin iframe 会访问同源 /admin/*。
+    location = /ai-builder/admin {
+        return 302 /ai-builder/admin/;
+    }
+
     location ^~ /ai-builder/admin/ {
         rewrite ^/ai-builder/admin/(.*)$ /admin/$1 break;
         proxy_pass http://127.0.0.1:8003;
@@ -277,6 +298,7 @@ kubectl get namespace "${NAMESPACE}" >/dev/null
 kubectl -n "${NAMESPACE}" get "statefulset/${APP_NAME}" >/dev/null
 
 apply_nginx_config
+sync_dev_mcp_key
 
 log "update backend container image"
 kubectl -n "${NAMESPACE}" set image \
@@ -315,6 +337,20 @@ if command -v curl >/dev/null 2>&1; then
   curl -k -L -sS -o /tmp/apaas-builder-dev-platform-admin.html \
     -w 'ADMIN_HTTP %{http_code} SIZE %{size_download}\n' \
     "${ADMIN_URL}" || true
+
+  log "admin direct route check"
+  curl -k -L -sS -o /tmp/apaas-builder-dev-admin.html \
+    -w 'ADMIN_DIRECT_HTTP %{http_code} SIZE %{size_download}\n' \
+    "https://agent.dfy.definesys.cn/ai-builder/admin" || true
+
+  log "MCP tools/list check: ${MCP_URL}"
+  curl -k -sS -o /tmp/apaas-builder-dev-mcp-tools.json \
+    -w 'MCP_TOOLS_HTTP %{http_code} SIZE %{size_download}\n' \
+    -X POST "${MCP_URL}" \
+    -H "X-API-Key: ${DEV_MCP_API_KEYS%%,*}" \
+    -H "Content-Type: application/json" \
+    -H "Accept: application/json, text/event-stream" \
+    --data '{"jsonrpc":"2.0","id":1,"method":"tools/list"}' || true
 fi
 
 log "done"

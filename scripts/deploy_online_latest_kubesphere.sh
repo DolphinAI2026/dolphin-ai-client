@@ -1,93 +1,84 @@
 #!/usr/bin/env bash
-# Deploy the current checkout to the dev Kubernetes environment.
+# Build and deploy apaas-builder from the latest online Git repository code.
 #
-# Requirements:
-#   - docker logged in to hub.dfy.definesys.cn
-#   - kubectl can reach the cluster directly
-#   - KUBECONFIG is set, or ~/.kube/dfy-host.yaml exists, or kubectl has a current context
+# Designed for KubeSphere / Kubernetes node terminals:
+#   bash deploy_online_latest_kubesphere.sh
 #
-# Typical use:
-#   scripts/deploy_k8s_dev.sh
-#
-# Useful overrides:
-#   KUBECONFIG=~/.kube/dfy-host.yaml scripts/deploy_k8s_dev.sh
-#   PUSH_DEV=0 scripts/deploy_k8s_dev.sh
-#   IMAGE_TAG=dev-manual-001 scripts/deploy_k8s_dev.sh
+# Optional overrides:
+#   GIT_BRANCH=main DEPLOY_TARGET=main bash deploy_online_latest_kubesphere.sh
+#   IMAGE_TAG=dev-manual-001 bash deploy_online_latest_kubesphere.sh
+#   DOCKER_USERNAME=xxx DOCKER_PASSWORD=xxx bash deploy_online_latest_kubesphere.sh
 
 set -euo pipefail
 
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
-DEPLOY_ENV_FILE="${DEPLOY_ENV_FILE:-$REPO_ROOT/deploy/k8s/dev.env}"
-
-if [ -f "$DEPLOY_ENV_FILE" ]; then
-  set -a
-  # shellcheck disable=SC1090
-  . "$DEPLOY_ENV_FILE"
-  set +a
-fi
+GIT_REPO="${GIT_REPO:-https://github.com/Mars-hub404/apaas-builder-ai.git}"
+GIT_BRANCH="${GIT_BRANCH:-}"
+DEPLOY_TARGET="${DEPLOY_TARGET:-dev}"
 
 NAMESPACE="${NAMESPACE:-apaas-builder}"
-APP_NAME="${APP_NAME:-apaas-builder-dev}"
-PROD_APP_NAME="${PROD_APP_NAME:-apaas-builder}"
-
-DEV_BRANCH="${DEV_BRANCH:-dev}"
-PUSH_DEV="${PUSH_DEV:-1}"
-ALLOW_DIRTY="${ALLOW_DIRTY:-0}"
-
 IMAGE_REPO="${IMAGE_REPO:-hub.dfy.definesys.cn/ai-builder/apaas-builder}"
-IMAGE_TAG="${IMAGE_TAG:-}"
 PLATFORM="${PLATFORM:-linux/amd64}"
+IMAGE_TAG="${IMAGE_TAG:-}"
+IMAGE_PULL_SECRET="${IMAGE_PULL_SECRET:-regcred-hub-dfy}"
+ROLL_TIMEOUT="${ROLL_TIMEOUT:-300s}"
+
 VITE_BASE_URL="${VITE_BASE_URL:-/ai-builder/}"
 VITE_ADMIN_BASE="${VITE_ADMIN_BASE:-/admin/}"
+VITE_API_BASE_URL="${VITE_API_BASE_URL:-/ai-builder/api}"
+VITE_MCP_PUBLIC_BASE="${VITE_MCP_PUBLIC_BASE:-}"
+
+STORAGE_CLASS="${STORAGE_CLASS:-local-path}"
+WORKSPACES_SIZE="${WORKSPACES_SIZE:-50Gi}"
+NODE_AFFINITY_KEY="${NODE_AFFINITY_KEY:-apaas.definesys.com/app-tier}"
 
 DEV_HOST="${DEV_HOST:-agent.dfy.definesys.cn}"
 PROD_HOST="${PROD_HOST:-df-aigc.dfy.definesys.cn}"
-VITE_API_BASE_URL="${VITE_API_BASE_URL:-/ai-builder/api}"
-VITE_MCP_PUBLIC_BASE="${VITE_MCP_PUBLIC_BASE:-https://${DEV_HOST}}"
-PUBLIC_URL="${PUBLIC_URL:-https://${DEV_HOST}/ai-builder/login}"
-APAAS_BASE_URL="${APAAS_BASE_URL:-}"
 DEV_DATABASE_NAME="${DEV_DATABASE_NAME:-apaas_builder_dev}"
 DEV_MCP_API_KEYS="${DEV_MCP_API_KEYS:-dev-mcp-api-key-local}"
+APAAS_BASE_URL="${APAAS_BASE_URL:-https://apaas-trial.definesys.cn/backend}"
 
-SOURCE_NGINX_CM="${SOURCE_NGINX_CM:-${PROD_APP_NAME}-nginx}"
-NGINX_CM="${NGINX_CM:-${APP_NAME}-nginx}"
-SOURCE_BACKEND_SECRET="${SOURCE_BACKEND_SECRET:-apaas-backend-env}"
-BACKEND_SECRET="${BACKEND_SECRET:-apaas-backend-env-dev}"
-WORKSPACES_PVC="${WORKSPACES_PVC:-apaas-workspaces-dev}"
-STORAGE_CLASS="${STORAGE_CLASS:-local-path}"
-WORKSPACES_SIZE="${WORKSPACES_SIZE:-50Gi}"
-IMAGE_PULL_SECRET="${IMAGE_PULL_SECRET:-regcred-hub-dfy}"
-NODE_AFFINITY_KEY="${NODE_AFFINITY_KEY:-apaas.definesys.com/app-tier}"
+if [ "$DEPLOY_TARGET" = "main" ] || [ "$DEPLOY_TARGET" = "prod" ]; then
+  GIT_BRANCH="${GIT_BRANCH:-main}"
+  APP_NAME="${APP_NAME:-apaas-builder}"
+  HOST="${HOST:-$PROD_HOST}"
+  NGINX_CM="${NGINX_CM:-${APP_NAME}-nginx}"
+  BACKEND_SECRET="${BACKEND_SECRET:-apaas-backend-env}"
+  WORKSPACES_PVC="${WORKSPACES_PVC:-apaas-workspaces}"
+  PUBLIC_URL="${PUBLIC_URL:-https://${HOST}/ai-builder/login}"
+  IMAGE_TAG_PREFIX="${IMAGE_TAG_PREFIX:-main}"
+else
+  GIT_BRANCH="${GIT_BRANCH:-dev}"
+  APP_NAME="${APP_NAME:-apaas-builder-dev}"
+  HOST="${HOST:-$DEV_HOST}"
+  NGINX_CM="${NGINX_CM:-${APP_NAME}-nginx}"
+  BACKEND_SECRET="${BACKEND_SECRET:-apaas-backend-env-dev}"
+  SOURCE_BACKEND_SECRET="${SOURCE_BACKEND_SECRET:-apaas-backend-env}"
+  WORKSPACES_PVC="${WORKSPACES_PVC:-apaas-workspaces-dev}"
+  PUBLIC_URL="${PUBLIC_URL:-https://${HOST}/ai-builder/login}"
+  IMAGE_TAG_PREFIX="${IMAGE_TAG_PREFIX:-dev}"
+fi
 
-ROLL_TIMEOUT="${ROLL_TIMEOUT:-300s}"
+TMP_PARENT="${TMP_PARENT:-/tmp}"
+WORKDIR="${WORKDIR:-${TMP_PARENT}/apaas-builder-online-${DEPLOY_TARGET}-${GIT_BRANCH}}"
 
-c_red=$'\033[31m'
-c_grn=$'\033[32m'
-c_yel=$'\033[33m'
-c_blu=$'\033[36m'
-c_rst=$'\033[0m'
-
-log() { printf "%s[deploy-dev]%s %s\n" "$c_blu" "$c_rst" "$*"; }
-ok() { printf "%s[ ok ]%s %s\n" "$c_grn" "$c_rst" "$*"; }
-warn() { printf "%s[warn]%s %s\n" "$c_yel" "$c_rst" "$*" >&2; }
-die() { printf "%s[fail]%s %s\n" "$c_red" "$c_rst" "$*" >&2; exit 1; }
+log() { printf '[online-deploy] %s\n' "$*"; }
+ok() { printf '[online-deploy][ok] %s\n' "$*"; }
+warn() { printf '[online-deploy][warn] %s\n' "$*" >&2; }
+die() { printf '[online-deploy][fail] %s\n' "$*" >&2; exit 1; }
 
 need() {
   command -v "$1" >/dev/null 2>&1 || die "missing command: $1"
 }
 
-setup_kubeconfig() {
-  if [ -n "${KUBECONFIG:-}" ]; then
-    export KUBECONFIG
-  elif [ -f "$HOME/.kube/dfy-host.yaml" ]; then
-    export KUBECONFIG="$HOME/.kube/dfy-host.yaml"
-  elif kubectl config current-context >/dev/null 2>&1; then
-    :
+base64_decode() {
+  if base64 --help 2>&1 | grep -q -- '-d'; then
+    base64 -d
   else
-    die "kubectl has no context. Export KUBECONFIG or save the cluster kubeconfig to ~/.kube/dfy-host.yaml"
+    base64 -D
   fi
+}
 
+setup_kubeconfig() {
   if [ -n "${KUBE_CONTEXT:-}" ]; then
     kubectl config use-context "$KUBE_CONTEXT" >/dev/null
   fi
@@ -95,31 +86,31 @@ setup_kubeconfig() {
   ok "kubectl connected: $(kubectl config current-context 2>/dev/null || printf default)"
 }
 
-ensure_clean_git() {
-  if [ "$ALLOW_DIRTY" = "1" ]; then
-    warn "ALLOW_DIRTY=1, deploying with local uncommitted changes"
-    return
-  fi
-  if [ -n "$(git status --porcelain)" ]; then
-    git status --short
-    die "worktree is dirty. Commit first, or run with ALLOW_DIRTY=1"
-  fi
+clone_latest_code() {
+  log "clone latest online code: ${GIT_REPO} branch=${GIT_BRANCH}"
+  [ -n "$WORKDIR" ] && [ "$WORKDIR" != "/" ] || die "unsafe WORKDIR: ${WORKDIR}"
+  rm -rf "$WORKDIR"
+  git clone --depth 1 --branch "$GIT_BRANCH" "$GIT_REPO" "$WORKDIR"
+  cd "$WORKDIR"
+  GIT_SHA="$(git rev-parse --short HEAD)"
+  GIT_FULL_SHA="$(git rev-parse HEAD)"
+  ok "checked out ${GIT_BRANCH}@${GIT_FULL_SHA}"
 }
 
-push_dev_branch() {
-  if [ "$PUSH_DEV" != "1" ]; then
-    warn "PUSH_DEV=0, skip pushing HEAD to origin/${DEV_BRANCH}"
-    return
+docker_login_if_requested() {
+  if [ -n "${DOCKER_USERNAME:-}" ] && [ -n "${DOCKER_PASSWORD:-}" ]; then
+    local registry
+    registry="${IMAGE_REPO%%/*}"
+    log "docker login: ${registry}"
+    printf '%s' "$DOCKER_PASSWORD" | docker login "$registry" -u "$DOCKER_USERNAME" --password-stdin
+  else
+    warn "DOCKER_USERNAME/DOCKER_PASSWORD not set; assuming docker is already logged in"
   fi
-  log "push current HEAD to origin/${DEV_BRANCH}"
-  git push --force-with-lease origin HEAD:"$DEV_BRANCH"
 }
 
 build_and_push_image() {
-  local sha
-  sha="$(git rev-parse --short HEAD)"
   if [ -z "$IMAGE_TAG" ]; then
-    IMAGE_TAG="dev-$(date +%Y%m%d)-${sha}"
+    IMAGE_TAG="${IMAGE_TAG_PREFIX}-$(date +%Y%m%d-%H%M%S)-${GIT_SHA}"
   fi
   IMAGE="${IMAGE_REPO}:${IMAGE_TAG}"
 
@@ -130,88 +121,84 @@ build_and_push_image() {
       --build-arg "VITE_BASE_URL=${VITE_BASE_URL}" \
       --build-arg "VITE_ADMIN_BASE=${VITE_ADMIN_BASE}" \
       --build-arg "VITE_API_BASE_URL=${VITE_API_BASE_URL}" \
-      --build-arg "VITE_MCP_PUBLIC_BASE=${VITE_MCP_PUBLIC_BASE}" \
-      -f "$REPO_ROOT/deploy/docker/Dockerfile" \
+      --build-arg "VITE_MCP_PUBLIC_BASE=${VITE_MCP_PUBLIC_BASE:-https://${HOST}}" \
+      -f "$WORKDIR/deploy/docker/Dockerfile" \
       -t "$IMAGE" \
       --push \
-      "$REPO_ROOT"
+      "$WORKDIR"
   else
     docker build \
       --build-arg "VITE_BASE_URL=${VITE_BASE_URL}" \
       --build-arg "VITE_ADMIN_BASE=${VITE_ADMIN_BASE}" \
       --build-arg "VITE_API_BASE_URL=${VITE_API_BASE_URL}" \
-      --build-arg "VITE_MCP_PUBLIC_BASE=${VITE_MCP_PUBLIC_BASE}" \
-      -f "$REPO_ROOT/deploy/docker/Dockerfile" \
+      --build-arg "VITE_MCP_PUBLIC_BASE=${VITE_MCP_PUBLIC_BASE:-https://${HOST}}" \
+      -f "$WORKDIR/deploy/docker/Dockerfile" \
       -t "$IMAGE" \
-      "$REPO_ROOT"
+      "$WORKDIR"
     docker push "$IMAGE"
   fi
   ok "image pushed: ${IMAGE}"
 }
 
-clone_nginx_config() {
-  log "apply nginx ConfigMap from repo -> ${NGINX_CM}"
-  sed '1,/default.conf: |/d; s/^    //' "$REPO_ROOT/deploy/k8s/15-configmap-nginx.yaml" \
-    > /tmp/apaas-builder-nginx-default.conf
+apply_namespace() {
+  kubectl get namespace "$NAMESPACE" >/dev/null 2>&1 || kubectl create namespace "$NAMESPACE"
+}
+
+apply_nginx_config() {
+  log "apply nginx ConfigMap: ${NGINX_CM}"
+  awk '
+    /default\.conf: \|/ { capture = 1; next }
+    capture {
+      sub(/^    /, "")
+      print
+    }
+  ' "$WORKDIR/deploy/k8s/15-configmap-nginx.yaml" > /tmp/apaas-builder-nginx-default.conf
+
+  [ -s /tmp/apaas-builder-nginx-default.conf ] || die "failed to extract nginx default.conf"
+
   kubectl -n "$NAMESPACE" create configmap "$NGINX_CM" \
     --from-file=default.conf=/tmp/apaas-builder-nginx-default.conf \
     --dry-run=client -o yaml | kubectl apply -f -
 }
 
-clone_backend_secret() {
-  [ -n "$APAAS_BASE_URL" ] || die "APAAS_BASE_URL is empty. Set it in ${DEPLOY_ENV_FILE}"
-  [ -n "$DEV_DATABASE_NAME" ] || die "DEV_DATABASE_NAME is empty. Set it in ${DEPLOY_ENV_FILE}"
-  log "sync backend Secret ${SOURCE_BACKEND_SECRET} -> ${BACKEND_SECRET}"
-  kubectl -n "$NAMESPACE" get secret "$SOURCE_BACKEND_SECRET" -o jsonpath='{.data.backend\.env}' \
-    | python3 -c 'import base64,sys; sys.stdout.buffer.write(base64.b64decode(sys.stdin.read()))' \
-    > /tmp/apaas-builder-backend.env
-  python3 - "$APAAS_BASE_URL" "$DEV_DATABASE_NAME" /tmp/apaas-builder-backend.env <<'PY'
-from pathlib import Path
-import sys
-from urllib.parse import urlsplit, urlunsplit
+ensure_dev_secret() {
+  [ "$DEPLOY_TARGET" != "main" ] && [ "$DEPLOY_TARGET" != "prod" ] || return 0
 
-base_url, dev_db, path = sys.argv[1:4]
-env_path = Path(path)
-values = {
-    "APAAS_BASE_URL": base_url,
-}
-seen = set()
-lines = []
-for line in env_path.read_text().splitlines():
-    key = line.split("=", 1)[0] if "=" in line else ""
-    if key == "APAAS_TENANT_ID":
-        continue
-    if key in values:
-        lines.append(f"{key}={values[key]}")
-        seen.add(key)
-    elif key == "DATABASE_URL":
-        value = line.split("=", 1)[1]
-        parsed = urlsplit(value)
-        if parsed.scheme.startswith("mysql"):
-            lines.append(f"DATABASE_URL={urlunsplit((parsed.scheme, parsed.netloc, '/' + dev_db, parsed.query, parsed.fragment))}")
-        else:
-            raise SystemExit(f"unsupported DATABASE_URL for dev split: {parsed.scheme}")
-    else:
-        lines.append(line)
-for key, value in values.items():
-    if key not in seen:
-        lines.append(f"{key}={value}")
-env_path.write_text("\n".join(lines) + "\n")
-PY
+  if kubectl -n "$NAMESPACE" get secret "$BACKEND_SECRET" >/dev/null 2>&1; then
+    log "patch existing dev Secret: ${BACKEND_SECRET}"
+    kubectl -n "$NAMESPACE" get secret "$BACKEND_SECRET" -o jsonpath='{.data.backend\.env}' \
+      | base64_decode > /tmp/apaas-builder-backend.env
+  else
+    log "create dev Secret from ${SOURCE_BACKEND_SECRET}: ${BACKEND_SECRET}"
+    kubectl -n "$NAMESPACE" get secret "$SOURCE_BACKEND_SECRET" -o jsonpath='{.data.backend\.env}' \
+      | base64_decode > /tmp/apaas-builder-backend.env
+  fi
+
+  if grep -q '^APAAS_BASE_URL=' /tmp/apaas-builder-backend.env; then
+    sed -i.bak "s#^APAAS_BASE_URL=.*#APAAS_BASE_URL=${APAAS_BASE_URL}#" /tmp/apaas-builder-backend.env
+  else
+    printf 'APAAS_BASE_URL=%s\n' "$APAAS_BASE_URL" >> /tmp/apaas-builder-backend.env
+  fi
+
+  if grep -q '^DATABASE_URL=' /tmp/apaas-builder-backend.env; then
+    sed -i.bak -E "s#^(DATABASE_URL=[a-zA-Z0-9+.-]+://[^/]+/)[^?[:space:]]+#\\1${DEV_DATABASE_NAME}#" /tmp/apaas-builder-backend.env
+  fi
+
   sed -i.bak "s#${PROD_HOST}#${DEV_HOST}#g" /tmp/apaas-builder-backend.env
+
   if grep -q '^MCP_API_KEYS=' /tmp/apaas-builder-backend.env; then
     sed -i.bak "s#^MCP_API_KEYS=.*#MCP_API_KEYS=${DEV_MCP_API_KEYS}#" /tmp/apaas-builder-backend.env
   else
-    printf 'MCP_API_KEYS=%s\n' "${DEV_MCP_API_KEYS}" >> /tmp/apaas-builder-backend.env
+    printf 'MCP_API_KEYS=%s\n' "$DEV_MCP_API_KEYS" >> /tmp/apaas-builder-backend.env
   fi
+
   kubectl -n "$NAMESPACE" create secret generic "$BACKEND_SECRET" \
     --from-file=backend.env=/tmp/apaas-builder-backend.env \
-    --dry-run=client -o yaml \
-    | kubectl apply -f -
+    --dry-run=client -o yaml | kubectl apply -f -
 }
 
 apply_workloads() {
-  log "apply Kubernetes resources for ${APP_NAME}"
+  log "apply Kubernetes workloads: ${APP_NAME}"
   kubectl apply -f - <<YAML
 apiVersion: v1
 kind: PersistentVolumeClaim
@@ -308,6 +295,8 @@ spec:
               value: "/root/apaas-builder/workspaces"
             - name: APAAS_NPM_CACHE_DIR
               value: "/root/apaas-builder/workspaces/.npm-cache"
+            - name: APAAS_PRIVATE_NPM_REGISTRY
+              value: "https://registry.dfy.definesys.cn/repository/apaas-npm-group/"
           ports:
             - name: api
               containerPort: 8003
@@ -398,7 +387,7 @@ metadata:
 spec:
   ingressClassName: nginx
   rules:
-    - host: ${DEV_HOST}
+    - host: ${HOST}
       http:
         paths:
           - path: /ai-builder
@@ -418,65 +407,41 @@ spec:
 YAML
 }
 
-verify_no_host_conflict() {
-  local conflicts
-  conflicts="$(
-    kubectl get ingress -A \
-      -o custom-columns='NAMESPACE:.metadata.namespace,NAME:.metadata.name,HOSTS:.spec.rules[*].host' \
-      --no-headers \
-      | awk -v host="$DEV_HOST" -v ns="$NAMESPACE" -v app="$APP_NAME" '$0 ~ host && !($1 == ns && $2 == app) {print}'
-  )"
-  if [ -n "$conflicts" ]; then
-    warn "host ${DEV_HOST} is also used by another ingress:"
-    printf "%s\n" "$conflicts" >&2
-    warn "If this is the old prod ingress, patch it first so prod only uses ${PROD_HOST}."
+rollout_and_verify() {
+  log "wait for rollout: statefulset/${APP_NAME}"
+  kubectl -n "$NAMESPACE" rollout status "statefulset/${APP_NAME}" --timeout="$ROLL_TIMEOUT"
+  kubectl -n "$NAMESPACE" get pods,sts,svc,ingress,pvc | grep -E "NAME|${APP_NAME}|${WORKSPACES_PVC}" || true
+
+  if command -v curl >/dev/null 2>&1; then
+    log "verify public URL: ${PUBLIC_URL}"
+    curl -k -L -sS -o /tmp/apaas-builder-online-login.html \
+      -w "HTTP %{http_code}\nURL %{url_effective}\nTYPE %{content_type}\nSIZE %{size_download}\n" \
+      "$PUBLIC_URL" || warn "public URL check failed; inspect ingress and pod logs"
   fi
 }
 
-rollout_and_verify() {
-  log "wait for rollout"
-  kubectl -n "$NAMESPACE" rollout status "statefulset/${APP_NAME}" --timeout="$ROLL_TIMEOUT"
-  kubectl -n "$NAMESPACE" get pods,sts,svc,ingress,pvc | grep -E "NAME|${PROD_APP_NAME}|${APP_NAME}|mcp|ming" || true
-
-  log "verify public URL: ${PUBLIC_URL}"
-  curl -k -sS -o /tmp/apaas-builder-dev-login.html \
-    -w "HTTP %{http_code}\nURL %{url_effective}\nTYPE %{content_type}\nSIZE %{size_download}\n" \
-    "$PUBLIC_URL"
-  log "verify admin route"
-  curl -k -L -sS -o /tmp/apaas-builder-dev-admin.html \
-    -w "ADMIN_HTTP %{http_code}\n" \
-    "https://${DEV_HOST}/ai-builder/admin" || true
-  log "verify MCP tools/list with X-API-Key"
-  curl -k -sS -o /tmp/apaas-builder-dev-mcp-tools.json \
-    -w "MCP_TOOLS_HTTP %{http_code}\n" \
-    -X POST "https://${DEV_HOST}/api/mcp/mcp" \
-    -H "X-API-Key: ${DEV_MCP_API_KEYS%%,*}" \
-    -H "Content-Type: application/json" \
-    -H "Accept: application/json, text/event-stream" \
-    --data '{"jsonrpc":"2.0","id":1,"method":"tools/list"}'
-  head -c 200 /tmp/apaas-builder-dev-mcp-tools.json || true
-  echo
-}
-
 main() {
-  cd "$REPO_ROOT"
   need git
   need docker
   need kubectl
-  need python3
-  need curl
+  need awk
+  need sed
+  need base64
 
-  ensure_clean_git
   setup_kubeconfig
-  push_dev_branch
+  clone_latest_code
+  docker_login_if_requested
   build_and_push_image
-  kubectl get namespace "$NAMESPACE" >/dev/null
-  clone_nginx_config
-  clone_backend_secret
+  apply_namespace
+  apply_nginx_config
+  ensure_dev_secret
   apply_workloads
-  verify_no_host_conflict
   rollout_and_verify
-  ok "dev deployed: ${PUBLIC_URL}"
+
+  ok "deployed ${APP_NAME}"
+  ok "source ${GIT_BRANCH}@${GIT_FULL_SHA}"
+  ok "image ${IMAGE}"
+  ok "url ${PUBLIC_URL}"
 }
 
 main "$@"

@@ -109,14 +109,13 @@ interface ServiceItem {
   callUrl: string
   tools: number
   authMode: string
-  toolNames?: string[]
 }
 
 const route = useRoute()
 
 const services = ref<ServiceItem[]>([
-  { name: '同进程工具服务', code: 'ai-builder-inprocess', url: '/api/admin/mcp/call', callUrl: '/admin/mcp/call', tools: 0, authMode: '平台管理登录态' },
-  { name: '问题分诊记录 MCP', code: 'support-triage', url: '/api/support-triage-mcp/mcp', callUrl: '/admin/mcp/support-triage-call', tools: 0, authMode: '外部 MCP 使用 MCP_API_KEYS；本测试台使用平台管理登录态', toolNames: ['record_support_triage'] },
+  { name: '主 MCP 工具服务', code: 'ai-builder-inprocess', url: '/api/mcp/mcp', callUrl: '/admin/mcp/call', tools: 0, authMode: '外部 MCP 使用 MCP_API_KEYS；本测试台使用平台管理登录态' },
+  { name: '问题分诊记录 MCP', code: 'support-triage', url: '/api/support-triage-mcp/mcp', callUrl: '/admin/mcp/support-triage-call', tools: 0, authMode: '外部 MCP 使用 MCP_API_KEYS；本测试台使用平台管理登录态' },
 ])
 
 const form = reactive({
@@ -167,8 +166,8 @@ async function loadTools(silent = false): Promise<boolean> {
   try {
     const service = services.value.find((item) => item.code === form.serviceCode)
     if (service?.code === 'support-triage') {
-      const data = await apiGet<any>('/admin/mcp/tools')
-      const list = Array.isArray(data?.tools) ? data.tools.filter((item: any) => item?.name === 'record_support_triage') : []
+      const data = await apiGet<any>('/admin/mcp/support-triage-tools')
+      const list = Array.isArray(data?.tools) ? data.tools : []
       tools.value = normalizeTools(list)
       resultText.value = JSON.stringify({
         ok: !!tools.value.length,
@@ -177,7 +176,7 @@ async function loadTools(silent = false): Promise<boolean> {
         server_info: {
           name: service.name,
           endpoint: service.url,
-          source: '/api/admin/mcp/tools',
+          source: '/api/admin/mcp/support-triage-tools',
         },
       }, null, 2)
       service.tools = tools.value.length

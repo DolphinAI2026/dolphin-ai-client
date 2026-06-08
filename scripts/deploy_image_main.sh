@@ -11,12 +11,14 @@ set -euo pipefail
 NAMESPACE="${NAMESPACE:-apaas-builder}"
 APP_NAME="${APP_NAME:-apaas-builder}"
 NGINX_CM="${NGINX_CM:-${APP_NAME}-nginx}"
-IMAGE="${IMAGE:-hub.dfy.definesys.cn/ai-builder/apaas-builder:main-202606080055-admin-route-fix}"
+IMAGE="${IMAGE:-hub.dfy.definesys.cn/ai-builder/apaas-builder:main-20260608-mcp-external-route-fix}"
 BACKEND_CONTAINER="${BACKEND_CONTAINER:-apaas-builder}"
 DIST_INIT_CONTAINER="${DIST_INIT_CONTAINER:-copy-frontend-dist}"
 ROLL_TIMEOUT="${ROLL_TIMEOUT:-300s}"
 PUBLIC_URL="${PUBLIC_URL:-https://df-aigc.dfy.definesys.cn/ai-builder/login}"
 ADMIN_URL="${ADMIN_URL:-https://df-aigc.dfy.definesys.cn/ai-builder/platform-admin}"
+ADMIN_DIRECT_URL="${ADMIN_DIRECT_URL:-https://df-aigc.dfy.definesys.cn/ai-builder/admin}"
+MCP_URL="${MCP_URL:-https://df-aigc.dfy.definesys.cn/api/mcp/mcp}"
 
 log() { printf '[deploy-main-image] %s\n' "$*"; }
 die() { printf '[deploy-main-image][fail] %s\n' "$*" >&2; exit 1; }
@@ -117,6 +119,10 @@ server {
 
     # 平台管理 admin-spa 由后端 StaticFiles 挂载在 /admin。
     # 主前端 /platform-admin iframe 会访问同源 /admin/*。
+    location = /ai-builder/admin {
+        return 302 /ai-builder/admin/;
+    }
+
     location ^~ /ai-builder/admin/ {
         rewrite ^/ai-builder/admin/(.*)$ /admin/$1 break;
         proxy_pass http://127.0.0.1:8003;
@@ -315,6 +321,19 @@ if command -v curl >/dev/null 2>&1; then
   curl -k -L -sS -o /tmp/apaas-builder-main-platform-admin.html \
     -w 'ADMIN_HTTP %{http_code} SIZE %{size_download}\n' \
     "${ADMIN_URL}" || true
+
+  log "admin direct route check: ${ADMIN_DIRECT_URL}"
+  curl -k -L -sS -o /tmp/apaas-builder-main-admin.html \
+    -w 'ADMIN_DIRECT_HTTP %{http_code} SIZE %{size_download}\n' \
+    "${ADMIN_DIRECT_URL}" || true
+
+  log "MCP unauth route check: ${MCP_URL}"
+  curl -k -sS -o /tmp/apaas-builder-main-mcp-unauth.json \
+    -w 'MCP_UNAUTH_HTTP %{http_code} SIZE %{size_download}\n' \
+    -X POST "${MCP_URL}" \
+    -H "Content-Type: application/json" \
+    -H "Accept: application/json, text/event-stream" \
+    --data '{"jsonrpc":"2.0","id":1,"method":"tools/list"}' || true
 fi
 
 log "done"

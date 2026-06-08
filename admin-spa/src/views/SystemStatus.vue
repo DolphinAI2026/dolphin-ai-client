@@ -104,15 +104,16 @@ const health = ref('')
 function resolvePublicMcpUrl(apiPath: string) {
   const raw = (apiPath || '').trim()
   if (/^https?:\/\//i.test(raw)) return raw
-  return `${window.location.origin}${raw.startsWith('/') ? raw : `/${raw}`}`
+  const base = (import.meta.env.VITE_MCP_PUBLIC_BASE || window.location.origin).replace(/\/$/, '')
+  return `${base}${raw.startsWith('/') ? raw : `/${raw}`}`
 }
 
 const services = ref<ServiceRow[]>([
   {
-    name: '同进程 MCP 工具服务',
+    name: '主 MCP 工具服务',
     code: 'ai-builder-inprocess',
-    desc: '直接使用 ai-builder backend 进程内 FastMCP 工具注册表。',
-    publicUrl: resolvePublicMcpUrl('/api/admin/mcp/call'),
+    desc: '标准 Streamable HTTP MCP，外部系统使用 MCP_API_KEYS 接入。',
+    publicUrl: resolvePublicMcpUrl('/api/mcp/mcp'),
     tools: 0,
     status: 'connected',
     statusText: '已连接',
@@ -120,7 +121,7 @@ const services = ref<ServiceRow[]>([
   {
     name: '问题分诊记录 MCP',
     code: 'support-triage',
-    desc: '标准 Streamable HTTP MCP，只暴露 record_support_triage。',
+    desc: '标准 Streamable HTTP MCP，提供问题分诊和代码仓库辅助工具。',
     publicUrl: resolvePublicMcpUrl('/api/support-triage-mcp/mcp'),
     tools: 0,
     status: 'connected',
@@ -192,10 +193,11 @@ async function load() {
     services.value[0].tools = tools.length
     services.value[0].status = toolsResp ? 'connected' : 'warning'
     services.value[0].statusText = toolsResp ? '已连接' : '需检查'
-    const triageTools = tools.filter((tool: any) => tool?.name === 'record_support_triage')
+    const triageResp = await apiGet<any>('/admin/mcp/support-triage-tools').catch(() => null)
+    const triageTools = Array.isArray(triageResp?.tools) ? triageResp.tools : []
     services.value[1].tools = triageTools.length
-    services.value[1].status = triageTools.length ? 'connected' : 'warning'
-    services.value[1].statusText = triageTools.length ? '已连接' : '工具未加载'
+    services.value[1].status = triageResp ? 'connected' : 'warning'
+    services.value[1].statusText = triageResp ? '已连接' : '工具未加载'
   } finally {
     loading.value = false
   }

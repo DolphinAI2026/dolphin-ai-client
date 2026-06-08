@@ -5,6 +5,7 @@
 """
 from __future__ import annotations
 
+import json
 import logging
 import os
 import time
@@ -17,7 +18,6 @@ from pydantic import BaseModel, Field
 
 from app.deps import AuthContext, get_auth_context
 from app.mcp_inprocess import call_inprocess_tool, list_inprocess_tools
-from app.support_triage_records import write_support_triage_record
 
 # pydantic-settings 不 export 到 os.environ；显式 load .env 兜底，跟 mcp_server.py 一致
 try:
@@ -122,9 +122,19 @@ def _classify_tool(name: str) -> tuple[str, str]:
     if name == "query_apaas_business_data":
         return ("apaas_business_data", "aPaaS 业务数据")
 
-    # 外挂问题分诊助手
+    # 外挂问题分诊助手 / 代码仓库辅助
     if name == "record_support_triage":
         return ("support_triage", "问题分诊记录")
+    if name in (
+        "pull_repository",
+        "list_repository_tree",
+        "search_repository_files",
+        "get_file",
+        "create_or_update_file",
+        "commit",
+        "push",
+    ):
+        return ("code_repository", "代码仓库")
 
     # aPaaS 平台内省（元数据查询）
     if name.startswith("list_apaas_") or name.startswith("get_apaas_") or \
@@ -257,11 +267,18 @@ async def list_support_triage_tools(
         })
         for name, tool in sorted(registered.items())
     ]
+    by_category: dict[str, dict] = {}
+    for t in result:
+        key = t["category_key"]
+        if key not in by_category:
+            by_category[key] = {"key": key, "label": t["category_label"], "tools": []}
+        by_category[key]["tools"].append(t)
+
     payload = {
         "ok": True,
         "total": len(result),
         "tools": result,
-        "categories": [{"key": "support_triage", "label": "问题分诊记录", "tools": result}],
+        "categories": list(by_category.values()),
         "server_info": {
             "name": "问题分诊记录 MCP",
             "transport": "Streamable HTTP",
@@ -335,28 +352,34 @@ async def call_support_triage_tool(
 ):
     """调用问题分诊 MCP 工具，用于平台管理测试台。"""
     started = time.perf_counter()
-    if body.tool_name != "record_support_triage":
-        raise HTTPException(status_code=400, detail="问题分诊 MCP 只支持 record_support_triage")
+    from app.support_triage_mcp import mcp as support_mcp
+
+    registered = getattr(getattr(support_mcp, "_tool_manager", None), "_tools", None) or {}
+    tool = registered.get(body.tool_name)
+    if not tool:
+        raise HTTPException(status_code=404, detail=f"问题分诊 MCP 未注册工具 {body.tool_name}")
 
     args = dict(body.args or {})
     args["tenant_id"] = int(ctx.tenant_id or 0)
     args["user_id"] = int(ctx.user.id or 0)
-    args.setdefault("source", "admin_tester")
+    if body.tool_name == "record_support_triage":
+        args.setdefault("source", "admin_tester")
 
-    result = write_support_triage_record(
-        user_question=str(args.get("user_question") or ""),
-        category=str(args.get("category") or ""),
-        summary=str(args.get("summary") or ""),
-        reason=str(args.get("reason") or ""),
-        user_reply=str(args.get("user_reply") or ""),
-        confidence=str(args.get("confidence") or "中"),
-        missing_info=str(args.get("missing_info") or ""),
-        priority=str(args.get("priority") or "P2"),
-        status=str(args.get("status") or "新建"),
-        source=str(args.get("source") or "admin_tester"),
-        tenant_id=int(args.get("tenant_id") or 0),
-        user_id=int(args.get("user_id") or 0),
-    )
+    try:
+        result: Any = await tool.run(args, convert_result=False)
+        if isinstance(result, str):
+            try:
+                result = json.loads(result)
+            except Exception:
+                result = {"raw": result}
+    except Exception as exc:
+        logger.exception("support-triage MCP 工具调用失败 tool=%s", body.tool_name)
+        result = {
+            "ok": False,
+            "error_code": "SUPPORT_TRIAGE_TOOL_ERROR",
+            "message": str(exc),
+            "tool_name": body.tool_name,
+        }
     is_error = _is_tool_error(result)
     _append_admin_mcp_log(
         service="support-triage",

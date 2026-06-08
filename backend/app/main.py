@@ -1,5 +1,5 @@
 import subprocess
-from contextlib import asynccontextmanager
+from contextlib import AsyncExitStack, asynccontextmanager
 import json
 import os
 import time
@@ -91,10 +91,16 @@ async def lifespan(app: FastAPI):
     from app.coding.workspace import WorkspaceManager as _WM
     _asyncio.create_task(_WM().prewarm_template_deps())
 
-    yield
-    # 关闭时清理资源
-    from app.coding.browser_service import BrowserService
-    await BrowserService.get_instance().stop()
+    async with AsyncExitStack() as mcp_stack:
+        for mcp_obj in (globals().get("_main_mcp"), globals().get("_support_triage_mcp")):
+            if mcp_obj is not None:
+                await mcp_stack.enter_async_context(mcp_obj.session_manager.run())
+
+        yield
+
+        # 关闭时清理资源
+        from app.coding.browser_service import BrowserService
+        await BrowserService.get_instance().stop()
 
 
 app = FastAPI(
@@ -168,7 +174,13 @@ app.include_router(runtime_proxy.router)
 
 
 class _McpBearerAuthAsgiMiddleware:
-    """Protect the embedded Streamable HTTP MCP endpoint with MCP_API_KEYS."""
+    """Protect the embedded Streamable HTTP MCP endpoint with MCP_API_KEYS.
+
+    External MCP gateways are not consistent about auth header names. Standard
+    clients use `Authorization: Bearer <key>`, while the Dolphin gateway sends
+    `X-API-Key` / `X-AI-GW-KEY`. Accept all three against the same
+    MCP_API_KEYS list.
+    """
 
     def __init__(self, app, service: str | None = None):
         self.app = app
@@ -187,18 +199,16 @@ class _McpBearerAuthAsgiMiddleware:
             key.decode("latin1").lower(): value.decode("latin1")
             for key, value in scope.get("headers") or []
         }
-        auth = headers.get("authorization", "")
-        token = auth.removeprefix("Bearer ").strip() if auth.startswith("Bearer ") else ""
+        token = self._extract_token(headers)
         if token not in keys:
             await self._send_json(send, 401, b'{"detail":"Invalid MCP bearer token"}')
             return
 
-        if not self.service:
-            await self.app(scope, receive, send)
-            return
-
+        scope = self._scope_with_mcp_accept(scope)
         started = time.perf_counter()
         body = await self._read_body(receive)
+        if not body.strip() and scope.get("method") == "POST":
+            body = b'{"jsonrpc":"2.0","id":1,"method":"tools/list"}'
         method = self._mcp_method(body)
         status_code = 200
         body_sent = False
@@ -227,6 +237,29 @@ class _McpBearerAuthAsgiMiddleware:
                     success=200 <= status_code < 400,
                     elapsed_ms=int((time.perf_counter() - started) * 1000),
                 )
+
+    def _extract_token(self, headers: dict[str, str]) -> str:
+        auth = (headers.get("authorization") or "").strip()
+        if auth.lower().startswith("bearer "):
+            return auth[7:].strip()
+        if auth and " " not in auth:
+            return auth
+        for name in ("x-api-key", "x-ai-gw-key", "x-mcp-api-key"):
+            value = (headers.get(name) or "").strip()
+            if value:
+                return value[7:].strip() if value.lower().startswith("bearer ") else value
+        return ""
+
+    def _scope_with_mcp_accept(self, scope) -> dict:
+        headers = [
+            (key, value)
+            for key, value in (scope.get("headers") or [])
+            if key.lower() != b"accept"
+        ]
+        headers.append((b"accept", b"application/json, text/event-stream"))
+        updated = dict(scope)
+        updated["headers"] = headers
+        return updated
 
     async def _send_json(self, send, status: int, body: bytes):
         await send({
@@ -358,10 +391,19 @@ if _admin_spa_dir.is_dir():
     async def platform_admin_index():
         return FileResponse(_admin_spa_dir / "index.html")
 
+    @app.get("/ai-builder/admin", include_in_schema=False)
+    async def prefixed_admin_index():
+        return FileResponse(_admin_spa_dir / "index.html")
+
+    @app.get("/ai-builder/platform-admin", include_in_schema=False)
+    async def prefixed_platform_admin_index():
+        return FileResponse(_admin_spa_dir / "index.html")
+
     app.mount("/admin", _SpaStaticFiles(directory=str(_admin_spa_dir), html=True), name="admin-spa")
     # 线上入口 /ai-builder/platform-admin 由主前端接管；若外层 nginx/Ingress
     # 暂时把该路径转到后端，也返回管理台 SPA，避免直接暴露 FastAPI 404。
     app.mount("/platform-admin", _SpaStaticFiles(directory=str(_admin_spa_dir), html=True), name="platform-admin-spa")
+    app.mount("/ai-builder/admin", _SpaStaticFiles(directory=str(_admin_spa_dir), html=True), name="prefixed-admin-spa")
 
 
 # 静态文件（浏览器预览页面等）

@@ -46,6 +46,8 @@ IMAGE_TAG="${IMAGE_TAG:-}"
 IMAGE="${IMAGE:-}"
 PLATFORM="${PLATFORM:-linux/amd64}"
 VITE_BASE_URL="${VITE_BASE_URL:-/ai-builder/}"
+VITE_ADMIN_BASE="${VITE_ADMIN_BASE:-/admin/}"
+VITE_API_BASE_URL="${VITE_API_BASE_URL:-/ai-builder/api}"
 DEV_HOST="${DEV_HOST:-agent.dfy.definesys.cn}"
 VITE_MCP_PUBLIC_BASE="${VITE_MCP_PUBLIC_BASE:-https://${DEV_HOST}}"
 PUBLIC_URL="${PUBLIC_URL:-https://${DEV_HOST}/ai-builder/login}"
@@ -143,6 +145,8 @@ build_and_push_image() {
     docker buildx build \
       --platform "$PLATFORM" \
       --build-arg "VITE_BASE_URL=${VITE_BASE_URL}" \
+      --build-arg "VITE_ADMIN_BASE=${VITE_ADMIN_BASE}" \
+      --build-arg "VITE_API_BASE_URL=${VITE_API_BASE_URL}" \
       --build-arg "VITE_MCP_PUBLIC_BASE=${VITE_MCP_PUBLIC_BASE}" \
       -f "$REPO_ROOT/deploy/docker/Dockerfile" \
       -t "$IMAGE" \
@@ -151,6 +155,8 @@ build_and_push_image() {
   else
     docker build \
       --build-arg "VITE_BASE_URL=${VITE_BASE_URL}" \
+      --build-arg "VITE_ADMIN_BASE=${VITE_ADMIN_BASE}" \
+      --build-arg "VITE_API_BASE_URL=${VITE_API_BASE_URL}" \
       --build-arg "VITE_MCP_PUBLIC_BASE=${VITE_MCP_PUBLIC_BASE}" \
       -f "$REPO_ROOT/deploy/docker/Dockerfile" \
       -t "$IMAGE" \

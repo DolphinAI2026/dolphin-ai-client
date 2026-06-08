@@ -1133,9 +1133,24 @@ async def auto_create_application(
                 data.config_preview,
                 create_if_missing=not bool(existing.current_doc_version),
             )
+            resolved_existing_env = None
+            if data.platform_env_id or not existing.platform_env_id:
+                resolved_existing_env = await _resolve_platform_env_for_tenant(
+                    db,
+                    ctx.tenant_id,
+                    data.platform_env_id,
+                )
+                if resolved_existing_env and (
+                    not existing.platform_env_id
+                    or not data.platform_env_id
+                    or resolved_existing_env.id == data.platform_env_id
+                ):
+                    existing.platform_env_id = resolved_existing_env.id
             await db.commit()
             existing_env_name = None
-            if existing.platform_env_id:
+            if resolved_existing_env and resolved_existing_env.id == existing.platform_env_id:
+                existing_env_name = resolved_existing_env.env_name
+            elif existing.platform_env_id:
                 env_q = await db.execute(
                     select(PlatformEnv).where(PlatformEnv.id == existing.platform_env_id)
                 )
@@ -1183,32 +1198,11 @@ async def auto_create_application(
     config_str = _dump_preview_config(data.config_preview)
 
     # 2026-05-06: 决定 platform_env_id
-    # 优先级：1) 请求里显式传的 → 2) 租户默认 env → 3) 任一 connected env → None（不绑）
+    # 优先级：1) 请求里显式传的 → 2) 租户默认 env → 3) 任一 connected env → 4) 任一 env
     resolved_env_id: Optional[int] = None
-    if data.platform_env_id:
-        env_check = await db.execute(
-            select(PlatformEnv).where(
-                PlatformEnv.id == data.platform_env_id,
-                PlatformEnv.tenant_id == ctx.tenant_id,
-            )
-        )
-        if env_check.scalar_one_or_none():
-            resolved_env_id = data.platform_env_id
-        else:
-            logger.warning(
-                "auto-create: 请求 platform_env_id=%s 不存在或不属于 tenant=%s，降级 fallback",
-                data.platform_env_id, ctx.tenant_id,
-            )
-    if not resolved_env_id:
-        env_default = await db.execute(
-            select(PlatformEnv).where(
-                PlatformEnv.tenant_id == ctx.tenant_id,
-                PlatformEnv.is_default == True,
-            )
-        )
-        env_obj = env_default.scalar_one_or_none()
-        if env_obj:
-            resolved_env_id = env_obj.id
+    resolved_env = await _resolve_platform_env_for_tenant(db, ctx.tenant_id, data.platform_env_id)
+    if resolved_env:
+        resolved_env_id = resolved_env.id
 
     # 🔑 2026-05-28 appCode = 应用身份: 同租户同 app_code 已存在 → 复用同一应用 + 增量合并,
     # 绝不建重复应用。修"大文档拆批 → 第二批同 appCode 撞'编码重复' → agent 加 -v1 →
