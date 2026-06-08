@@ -456,7 +456,6 @@ async def get_mcp_access(ctx: Annotated[AuthContext, Depends(get_auth_context)])
             {"name": "主工具服务", "code": "apaas-builder-mcp", "url": "/api/mcp/mcp", "tools": 33},
             {"name": "Builder 场景服务", "code": "apaas-builder-config", "url": "/api/mcp-builder/mcp", "tools": 14},
             {"name": "Coding 工作区服务", "code": "apaas-builder-coding", "url": "/api/mcp-coding/mcp", "tools": 23},
-            {"name": "Vibe 开发服务", "code": "apaas-builder-vibe", "url": "/api/mcp-vibe/mcp", "tools": 9},
             {"name": "设计解析服务", "code": "apaas-builder-design", "url": "/api/mcp-design/mcp", "tools": 4},
         ],
     }

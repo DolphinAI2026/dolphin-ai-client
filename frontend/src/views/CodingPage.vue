@@ -1242,7 +1242,6 @@ const sceneCategoryToProjectType: Record<string, string> = {
   auto: '',
 }
 
-const AI_BUILDER_PENDING_CODING_KEY = 'ai_builder_pending_coding'
 // F3 (2026-06-02): 记住 Builder→Coding handoff 的来源应用，给「← 回 Builder」回跳用。
 const handoffSourceApp = ref<{ id: string; name: string } | null>(null)
 
@@ -1321,49 +1320,6 @@ function backToBuilder() {
   if (!app?.id) return
   router.push({ path: '/chat', query: { app_id: app.id, tab: 'spec' } }).catch(() => {})
 }
-async function maybeConsumeAiBuilderDispatch() {
-  if (route.query.from_ai_builder !== '1') return
-  if (route.query.workspace_id || route.query.ws) return
-  if (streamMessages.value.length > 0 || isCreating.value || isStreaming.value) return
-
-  const raw = sessionStorage.getItem(AI_BUILDER_PENDING_CODING_KEY)
-  if (!raw) return
-
-  let payload: { message?: string; projectId?: number | null; sceneCategory?: string; app_id?: number | string; app_name?: string } | null = null
-  try {
-    payload = JSON.parse(raw)
-  } catch {
-    sessionStorage.removeItem(AI_BUILDER_PENDING_CODING_KEY)
-    return
-  }
-
-  if (!payload?.message?.trim()) {
-    sessionStorage.removeItem(AI_BUILDER_PENDING_CODING_KEY)
-    return
-  }
-
-  sessionStorage.removeItem(AI_BUILDER_PENDING_CODING_KEY)
-
-  if (payload.projectId) {
-    localStorage.setItem('coding_last_project_id', String(payload.projectId))
-  }
-  if (payload.sceneCategory && sceneSuggestions[payload.sceneCategory]?.length) {
-    activeSceneCategory.value = payload.sceneCategory
-    pendingSceneCategory.value = payload.sceneCategory
-  }
-
-  // F3: 记住来源应用做「← 回 Builder」回跳。app_id 在 URL query（buildCodingRouteQuery 已带），
-  // app_name 在 sessionStorage payload（之前被丢弃，这里补上）。
-  const srcAppId = payload.app_id ?? route.query.app_id
-  if (srcAppId) {
-    handoffSourceApp.value = { id: String(srcAppId), name: payload.app_name || '应用' }
-  }
-
-  userInput.value = payload.message.trim()
-  await nextTick()
-  await sendMessage()
-}
-
 // ============ Lifecycle ============
 
 onMounted(async () => {
@@ -1415,7 +1371,6 @@ onMounted(async () => {
       }
     } else {
       selectedCodingModelValue.value = normalizeCodingModelValue(selectedCodingModelValue.value)
-      await maybeConsumeAiBuilderDispatch()
     }
   }
 })

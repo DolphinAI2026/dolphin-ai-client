@@ -72,10 +72,6 @@ def _v2_headers() -> dict:
 
 def _classify_tool(name: str) -> tuple[str, str]:
     """按名字前缀 / 关键词粗分类。返回 (category_key, category_label)。"""
-    # Vibe Coding K8s sandbox（v2 新版）
-    if name.startswith("vibe_"):
-        return ("vibe_coding", "Vibe Coding K8s 沙箱")
-
     # 自开发发布（aPaaS 平台侧 - 上传/关联/重发）
     if name in (
         "enable_apaas_self_dev_config", "list_apaas_app_dev_kits",

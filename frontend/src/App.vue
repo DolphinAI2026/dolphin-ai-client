@@ -1,19 +1,5 @@
 <script setup lang="ts">
-import { watch } from 'vue'
-import { RouterView, useRoute, type RouteLocationNormalized } from 'vue-router'
-import { useUserStore } from '@/stores/user'
-import { initDolphinAgent } from '@/utils/dolphinAgent'
-
-const route = useRoute()
-const userStore = useUserStore()
-
-watch(
-  () => [userStore.token, userStore.tenantId] as const,
-  ([token, tenantId]) => {
-    void initDolphinAgent(token, tenantId)
-  },
-  { immediate: true },
-)
+import { RouterView, type RouteLocationNormalized } from 'vue-router'
 
 /**
  * KeepAlive 只保留 /ai-chat 系列一个 singleton 实例，其余路由一律不缓存。

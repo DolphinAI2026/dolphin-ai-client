@@ -2882,7 +2882,7 @@ async def save_dev_spec(
         "next_steps": [
             "用 read_workspace_file 读 .dev-spec/<project>/spec.md 拿回内容（供下次迭代）",
             "在 chat 里给用户业务摘要 + 等用户确认",
-            "确认后 → write_workspace_files / vibe_write_file 开始写代码",
+            "确认后 → write_workspace_files 开始写代码",
         ],
     }
     if mockup_html.strip():
@@ -2909,7 +2909,7 @@ async def publish_dev_workspace(
     上传成功后再用 attach_dev_packages_to_apaas_app + republish_apaas_app 让组件生效。
 
     ⚠️ 仅支持 AI Coding workspace（'X_xxx' 格式）。Vibe Coding workspace ('oc_xxx') 不绑
-    aPaaS 平台，无需 publish；如需上传到 apaas 应自己用 vibe_run_command 打 zip
+    aPaaS 平台，无需 publish；如需上传到 apaas 应自己用 run_workspace_command 打 zip
     再用 upload_external_zip_to_apaas（实现中）。
 
     入参：
@@ -7136,7 +7136,7 @@ async def lint_apaas_backend_workspace(
     if ws_id.startswith("oc_"):
         return {"ok": False, "error_code": "WRONG_WS_TYPE",
                 "message": "lint_apaas_backend_workspace 只用于 AI Coding workspace；"
-                           "Vibe Coding workspace 走 vibe_run_command 自己跑 lint"}
+                           "oc_ 旧工作区走 run_workspace_command 自己跑 lint"}
 
     tid, uid = _resolve_identity(tenant_id, user_id)
     ws_path, err = _resolve_workspace_path(ws_id, tid, uid)

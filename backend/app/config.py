@@ -106,14 +106,6 @@ class Settings(BaseSettings):
     # 例：https://ai-builder.dfy.definesys.cn
     ai_builder_chat_deeplink_base: str = ""
 
-    # Vibe Coding 运行时
-    # - "auto"   : docker daemon + vibe-sandbox 镜像可用就走 docker；否则 fallback host
-    # - "docker" : 强制 docker，不可用直接报错（生产环境用）
-    # - "host"   : 强制 host shell，跳过 docker 检测（dev 环境快速迭代用）
-    vibe_coding_runtime: str = "auto"
-    # docker 容器空闲多久（秒）就 stop 回收（保留容器，下次 start 复用）
-    vibe_coding_idle_threshold_sec: int = 1800
-
 
 def _normalize_database_url(url: str) -> str:
     """将相对 SQLite 路径固定到 backend 目录下，避免随 cwd 漂移。"""

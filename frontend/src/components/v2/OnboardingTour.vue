@@ -41,22 +41,21 @@ const counts = ref({ apps: 0, specs: 0, industry: 0, marketplace: 0 })
 const FLOW_STEPS = [
   { n: '01', label: '描述需求',     tone: 'ai',     desc: '在首页输入业务需求或上传 .md 设计文档' },
   { n: '02', label: '生成 SPEC',    tone: 'brand',  desc: '睿鲸 AI Builder 边对话边产出结构化设计文档' },
-  { n: '03', label: '复用行业沉淀', tone: 'emerald',desc: '从行业知识库一键复用已沉淀的模型、流程、字典' },
+  { n: '03', label: '按需二次开发', tone: 'emerald',desc: '在内置 IDE 里对话生成自开发组件 / 页面 / 接口' },
   { n: '04', label: '部署上线',     tone: 'amber',  desc: '一键部署到得帆云 dev / test / prod 环境' },
 ]
 
 const CONCEPTS = computed(() => [
   { name: '应用',         desc: '一个完整的 aPaaS 应用，含模型 / 表单 / 流程 / 权限',  icon: 'apps',     count: counts.value.apps > 0 ? `${counts.value.apps} 个` : '—' },
   { name: 'SPEC',         desc: '设计文档，AI Builder 对话产生的中间产物，可版本管理', icon: 'doc',      count: counts.value.specs > 0 ? `${counts.value.specs} 版本` : '—' },
-  { name: '行业知识库',   desc: '行业最佳实践沉淀的可复用「行业包」，含业务对象图谱',  icon: 'industry', count: counts.value.industry > 0 ? `${counts.value.industry} 包` : '—' },
-  { name: '组件市场',     desc: '二次开发产出的低代码组件 / 页面 / 接口',             icon: 'store',    count: counts.value.marketplace > 0 ? `${counts.value.marketplace} 个` : '—' },
+  { name: '自开发资产库', desc: '二次开发产出的低代码组件 / 页面 / 接口，可跨应用复用', icon: 'store',    count: '—' },
 ])
 
 const ROLES = [
   { id: 'business', name: '业务顾问',     tone: 'ai',      desc: '描述需求 → SPEC → 部署',         positions: '实施顾问 / 产品经理',         path: '睿鲸 AI Builder',     recommended: false },
   { id: 'developer', name: '开发人员',    tone: 'brand',   desc: '业务搭建 ↔ 自研组件',           positions: '前端 / 全栈工程师',           path: '二次开发(IDE 工作区)', recommended: false },
   { id: 'hybrid',   name: '双栖',         tone: 'brand-strong', desc: '业务+开发 全链路',         positions: '产品技术负责人 / 资深实施',   path: '全部',                  recommended: true },
-  { id: 'admin',    name: '平台管理员',   tone: 'rose',    desc: '运行与发布 + 平台管理',         positions: '运维 / IT 负责人',           path: '运行与发布 · 平台管理', recommended: false },
+  { id: 'admin',    name: '平台管理员',   tone: 'rose',    desc: '平台环境 + 模型 + 成员管理',     positions: '运维 / IT 负责人',           path: '平台管理', recommended: false },
 ]
 
 onMounted(async () => {
@@ -67,14 +66,8 @@ onMounted(async () => {
   }
   // Fetch real counts for concept cards (silent fail — counts stay 0 / "—")
   try {
-    const [apps, specs, industry] = await Promise.all([
-      (await import('@/api/application')).applicationApi.list?.({ include_remote: false } as any).catch(() => []),
-      (await import('@/api/specsV2')).specsV2Api.list().catch(() => ({ specs: [], total: 0 })),
-      (await import('@/api/industry')).industryApi.listPacks().catch(() => ({ packs: [] })),
-    ])
+    const apps = await (await import('@/api/application')).applicationApi.list?.({ include_remote: false } as any).catch(() => [])
     counts.value.apps = Array.isArray(apps) ? apps.length : ((apps as any)?.items?.length || (apps as any)?.total || 0)
-    counts.value.specs = (specs as any)?.total || (specs as any)?.specs?.length || 0
-    counts.value.industry = ((industry as any)?.packs || []).length
     counts.value.marketplace = 0  // no marketplace count API yet
   } catch {
     // silent fail — counts stay 0

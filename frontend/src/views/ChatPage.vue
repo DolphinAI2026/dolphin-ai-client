@@ -844,7 +844,6 @@ import {
 import ApaasMenuSidebar from '@/components/ApaasMenuSidebar.vue'
 import SectionNav from '@/components/v2/SectionNav.vue'
 import AppIcon from '@/components/common/AppIcon.vue'
-import ExtensionSectionPanel from '@/components/v2/ExtensionSectionPanel.vue'
 import SectionContentList from '@/components/v2/SectionContentList.vue'
 import AppConfigSubNav from '@/components/v3/AppConfigSubNav.vue'
 import FormDesignerPanel from '@/components/v3/FormDesignerPanel.vue'
