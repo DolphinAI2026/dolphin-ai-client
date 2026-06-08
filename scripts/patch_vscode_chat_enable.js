@@ -4,13 +4,17 @@
  * 用我们扩展注册的语言模型（apaas-builder.ruijing-ai，vendor=copilot）正常工作。
  *
  * 做两件事：
- *   A. workbench.js 4 个 entitlement 补丁：绕过登录框 / 强制启用模型 / 跳过 entitlement Unknown
- *      检查 / entitlement 强制 Free。（否则即便注册了模型，聊天也卡在 "Sign in to use AI features"。）
+ *   A. workbench.js 补丁：
+ *      - 4 个 entitlement 补丁：绕过登录框 / 强制启用模型 / 跳过 entitlement Unknown
+ *        检查 / entitlement 强制 Free。（否则即便注册了模型，聊天也卡在 "Sign in"。）
+ *      - copilot-chat 安装引用替换：chat setup 的 forwarding 路径硬编码「装/等
+ *        GitHub.copilot-chat」，离线 code-server 没这个扩展 → "cannot be installed
+ *        because it was not found" → 卡 "Getting chat ready"。全部换成已安装的 ruijing-ai。
  *   B. product.json：
- *      - extensionAllowedProposedApi['apaas-builder.ruijing-ai'] = ['chatProvider']
+ *      - extensionAllowedProposedApi = ['apaas-builder.ruijing-ai']
  *        （放行 proposed API，否则扩展里的 registerLanguageModelChatProvider 不可用）
- *      - 删掉 defaultChatAgent（指向 GitHub.copilot；没模型时渲染它会崩
- *        "Cannot create property 'textContent' on string 'GitHub.copilot'"）
+ *      - defaultChatAgent **重指向** apaas-builder.ruijing-ai（不能删；删了会回退硬编码
+ *        GitHub.copilot-chat 装不到而卡死）
  *
  * 配方与字符串来自本地实证可用的 minimax-chat-provider 的 patch-workbench.sh，
  * 针对 code-server 4.112.0 / VS Code 1.112.0 的 minified workbench.js。换版本需重新对齐这些串。
@@ -78,6 +82,43 @@ apply(
   'TKe(this.N,this.G.entitlement,this.G)&&(this.G.sku="no_auth_limited_copilot")',
   '(this.G.entitlement=bs.Free,this.G.sku="no_auth_limited_copilot")/*patched:force-free*/',
 );
+
+// --- PATCH 5: 重指向 copilot 已安装检查（非 -chat）---
+// 让 p=l||f||g 这类「copilot 装了吗」判断对我们已安装的 ruijing-ai 成立。
+// 不同 minified 构建用单/双引号，按存在的形态替换（缺某形态不算失败）。
+let copilotCheckReplaced = 0;
+for (const [oldStr, newStr] of [
+  ['u("GitHub.copilot",this.s)', 'u("apaas-builder.ruijing-ai",this.s)'],
+  ["u('GitHub.copilot',this.s)", "u('apaas-builder.ruijing-ai',this.s)"],
+]) {
+  if (wb.includes(oldStr)) {
+    wb = wb.split(oldStr).join(newStr);
+    copilotCheckReplaced++;
+  }
+}
+if (copilotCheckReplaced > 0) {
+  console.log(`[OK]   Redirected ${copilotCheckReplaced} copilot installed-check(s) → ruijing-ai`);
+  applied++;
+} else {
+  console.log('[SKIP] copilot installed-check — no target form present');
+  skipped++;
+}
+
+// --- PATCH 6: 全局替换剩余所有 GitHub.copilot-chat 引用 ---
+// 关键修复：仅重指向 product.json 的 defaultChatAgent 不够。chat setup 的
+// forwarding 路径里还硬编码了「安装/等待 GitHub.copilot-chat 扩展」，离线
+// code-server 没这个扩展 → "cannot be installed because it was not found" →
+// 聊天卡 "Getting chat ready"。把全部引用换成我们已安装的 ruijing-ai。
+// （等价 chat_fallback 的 Patch 3/3b，但**不**带 D0→minimax delegate。）
+const copilotChatCount = wb.split('GitHub.copilot-chat').length - 1;
+if (copilotChatCount > 0) {
+  wb = wb.split('GitHub.copilot-chat').join('apaas-builder.ruijing-ai');
+  console.log(`[OK]   Replaced ${copilotChatCount} GitHub.copilot-chat refs globally`);
+  applied++;
+} else {
+  console.log('[SKIP] no GitHub.copilot-chat references (already replaced or absent)');
+  skipped++;
+}
 
 fs.writeFileSync(wbPath, wb);
 console.log(`workbench.js: applied=${applied} skipped=${skipped} failed=${failed}`);
