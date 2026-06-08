@@ -83,6 +83,18 @@ apply(
   '(this.G.entitlement=bs.Free,this.G.sku="no_auth_limited_copilot")/*patched:force-free*/',
 );
 
+// --- PATCH 4b: 绕过 DefaultSetup 里的 setup() 鉴权调用（关键修复）---
+// PATCH 1 强制走 DefaultSetup 分支，但分支内仍 `await this.e.value.setup(...)`，
+// 那个 setup() 内部做 GitHub 登录鉴权，在我们无 key 环境里永远不返回 →
+// "Chat took too long to get ready" → 消息进不去 participant。
+// 浏览器实证: 线上(chat_enable)此处未绕过、卡死; 本地(chat_fallback)已绕过、能用。
+// 与 chat_fallback Patch 5 等价: 让 setup() 立即 resolve {success:true}，不真调。
+apply(
+  'Bypass setup() auth call in DefaultSetup',
+  'case vp.DefaultSetup:o=await this.e.value.setup(',
+  'case vp.DefaultSetup:o=await Promise.resolve({success:true}),0&&this.e.value.setup(',
+);
+
 // --- PATCH 5: 重指向 copilot 已安装检查（非 -chat）---
 // 让 p=l||f||g 这类「copilot 装了吗」判断对我们已安装的 ruijing-ai 成立。
 // 不同 minified 构建用单/双引号，按存在的形态替换（缺某形态不算失败）。
