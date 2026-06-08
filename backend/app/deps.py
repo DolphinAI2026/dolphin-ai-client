@@ -74,6 +74,30 @@ async def resolve_effective_tenant_id(db: AsyncSession, ctx: AuthContext) -> int
     raise HTTPException(status_code=400, detail="未找到可用租户")
 
 
+async def _resolve_role_context(db: AsyncSession, role_id: int | None) -> tuple[str, dict]:
+    """role_id → (tenant_role, org_permissions)。
+
+    header 路径 (get_auth_context) 与 query-token 路径 (get_auth_context_from_token)
+    共用同一份角色解析，避免两边漂移 —— 旧实现 token 路径漏查 Role 直接硬编码
+    member/{} ，导致自开发整页预览 (custom-page-host) 对非平台管理员一律 403。
+    """
+    tenant_role = "member"
+    org_permissions: dict = {}
+    if role_id:
+        result = await db.execute(select(Role).where(Role.id == role_id))
+        role = result.scalar_one_or_none()
+        if role:
+            org_permissions = role.permissions or {}
+            # Tenant admin has special role
+            if role.role_code in ("R_tenant_admin", "admin"):
+                tenant_role = "tenant_admin"
+            elif role.role_code == "R_developer":
+                tenant_role = "developer"
+            elif role.role_code == "R_viewer":
+                tenant_role = "viewer"
+    return tenant_role, org_permissions
+
+
 async def get_auth_context(
     credentials: Annotated[any, Depends(security)],
     db: Annotated[AsyncSession, Depends(get_db)]
@@ -184,24 +208,8 @@ async def get_auth_context(
             detail="你不是该租户的成员",
         )
 
-    # Get role and permissions
-    tenant_role = "member"
-    org_permissions = {}
-
-    if user_tenant.role_id:
-        result = await db.execute(
-            select(Role).where(Role.id == user_tenant.role_id)
-        )
-        role = result.scalar_one_or_none()
-        if role:
-            org_permissions = role.permissions or {}
-            # Tenant admin has special role
-            if role.role_code in ("R_tenant_admin", "admin"):
-                tenant_role = "tenant_admin"
-            elif role.role_code == "R_developer":
-                tenant_role = "developer"
-            elif role.role_code == "R_viewer":
-                tenant_role = "viewer"
+    # Get role and permissions (shared resolver — keep header/token paths in sync)
+    tenant_role, org_permissions = await _resolve_role_context(db, user_tenant.role_id)
 
     return AuthContext(
         user=user,
@@ -269,11 +277,24 @@ async def get_auth_context_from_token(token: str) -> AuthContext:
                 apaas_user_id=eff_apaas_uid,
                 apaas_tenant_id=eff_apaas_tid,
             )
+        # 普通租户用户：查 UserTenant→Role 拿真实角色权限，与 header 路径一致。
+        # （旧实现硬编码 member/{} → 自开发整页预览/SSE 等 query-token 入口丢权限。）
+        result = await db.execute(
+            select(UserTenant).where(
+                UserTenant.user_id == user_id,
+                UserTenant.tenant_id == tenant_id,
+                UserTenant.status == 1,
+            )
+        )
+        user_tenant = result.scalar_one_or_none()
+        tenant_role, org_permissions = await _resolve_role_context(
+            db, user_tenant.role_id if user_tenant else None
+        )
         return AuthContext(
             user=user,
             tenant_id=tenant_id,
-            tenant_role="member",
-            org_permissions={},
+            tenant_role=tenant_role,
+            org_permissions=org_permissions,
             apaas_user_id=eff_apaas_uid,
             apaas_tenant_id=eff_apaas_tid,
         )

@@ -1,0 +1,98 @@
+"""get_auth_context_from_token 必须像 get_auth_context 一样加载角色权限。
+
+回归：自开发整页预览(custom-page-host)/SSE 走 ?_auth= / ?token= query 形态 token，
+经 get_auth_context_from_token 解析。旧实现对非平台管理员一律硬编码
+tenant_role="member" + org_permissions={}，从不查 UserTenant→Role，导致一个
+拥有 application:view 的普通租户用户在 iframe 预览里被降级成无权限 member →
+check_resource_permission Layer1 抛 403「你的角色没有 application:Action.VIEW 权限」，
+而同一用户走 Authorization header 的所有其它面板都正常。
+
+同一 user + 同一 token，AuthContext 不应因 token 来自 header 还是 query 而不同。
+"""
+import pytest
+import pytest_asyncio
+from sqlalchemy.ext.asyncio import create_async_engine, async_sessionmaker, AsyncSession
+from sqlalchemy.pool import StaticPool
+
+from app.database import Base
+from app import models  # noqa: F401  register ORM mappings
+from app.models import User
+from app.models.tenant import Tenant, UserTenant, Role
+from app.auth import create_access_token
+
+
+@pytest_asyncio.fixture
+async def shared_db(monkeypatch):
+    """StaticPool 内存库 + monkeypatch app.database.AsyncSessionLocal。
+
+    get_auth_context_from_token 内部自己 `from app.database import AsyncSessionLocal`
+    开 session，测试 seed 的行必须落在它连的同一个库里。
+    """
+    engine = create_async_engine(
+        "sqlite+aiosqlite:///:memory:",
+        connect_args={"check_same_thread": False},
+        poolclass=StaticPool,
+        future=True,
+    )
+    async with engine.begin() as conn:
+        await conn.run_sync(Base.metadata.create_all)
+    Session = async_sessionmaker(engine, expire_on_commit=False, class_=AsyncSession)
+    monkeypatch.setattr("app.database.AsyncSessionLocal", Session)
+    yield Session
+    await engine.dispose()
+
+
+async def _seed(Session, *, role_code: str, permissions: dict, is_platform_admin: bool = False):
+    async with Session() as db:
+        tenant = Tenant(tenant_name="t1", tenant_code="t1")
+        db.add(tenant)
+        await db.flush()
+        user = User(username="u1", hashed_password="x", is_platform_admin=is_platform_admin)
+        db.add(user)
+        await db.flush()
+        role = Role(
+            tenant_id=tenant.id,
+            role_name="r",
+            role_code=role_code,
+            permissions=permissions,
+        )
+        db.add(role)
+        await db.flush()
+        db.add(UserTenant(user_id=user.id, tenant_id=tenant.id, role_id=role.id, status=1))
+        await db.commit()
+        return user.id, tenant.id
+
+
+@pytest.mark.asyncio
+async def test_token_ctx_loads_tenant_admin_role(shared_db):
+    """R_tenant_admin 普通用户(非平台管理员)走 token 路径应解析成 tenant_admin。"""
+    from app.deps import get_auth_context_from_token
+
+    user_id, tenant_id = await _seed(
+        shared_db,
+        role_code="R_tenant_admin",
+        permissions={"application:view": True, "application:edit": True},
+    )
+    token = create_access_token(user_id, tenant_id=tenant_id)
+    ctx = await get_auth_context_from_token(token)
+
+    assert ctx.tenant_role == "tenant_admin"
+    assert ctx.org_permissions.get("application:view") is True
+
+
+@pytest.mark.asyncio
+async def test_token_ctx_loads_member_permissions(shared_db):
+    """普通成员角色但拥有 application:view —— token 路径必须带上该权限(不再被清空)。"""
+    from app.deps import get_auth_context_from_token
+    from app.permissions import has_org_permission, Action
+
+    user_id, tenant_id = await _seed(
+        shared_db,
+        role_code="R_member",
+        permissions={"application:view": True},
+    )
+    token = create_access_token(user_id, tenant_id=tenant_id)
+    ctx = await get_auth_context_from_token(token)
+
+    assert ctx.tenant_role == "member"
+    assert has_org_permission(ctx.org_permissions, "application", Action.VIEW) is True

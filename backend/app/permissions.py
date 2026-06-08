@@ -89,11 +89,14 @@ async def check_resource_permission(
     if ctx.tenant_role in ("platform_admin", "tenant_admin"):
         return
 
+    # 文案用权限码 (view)，不要 py3.13 str-enum 的 repr (Action.VIEW)
+    action_name = action.value if isinstance(action, Action) else action
+
     # Layer 1: Org role permission
     if not has_org_permission(ctx.org_permissions, resource_type, action):
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
-            detail=f"你的角色没有 {resource_type}:{action} 权限",
+            detail=f"你的角色没有 {resource_type}:{action_name} 权限",
         )
 
     # Layer 2: Resource scope
@@ -122,7 +125,7 @@ async def check_resource_permission(
         if action not in allowed:
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
-                detail=f"你在团队中的角色 ({team_role}) 没有 {action} 权限",
+                detail=f"你在团队中的角色 ({team_role}) 没有 {action_name} 权限",
             )
 
         # For team member (not admin): EDIT/DELETE only allowed on own resources
