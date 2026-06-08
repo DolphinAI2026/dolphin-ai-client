@@ -842,7 +842,16 @@ class APaaSClient:
             headers = self._get_headers(app_id)
             response = await client.post(url, headers=headers, json=payload)
             elapsed_ms = (time.time() - start) * 1000
-            response.raise_for_status()
+            # 不用 response.raise_for_status()：它在读响应体之前就抛，把 apaas 的 500
+            # 真错因（哪个字段 null / NPE 堆栈）丢掉，调用方只看到通用 "Server error 500"
+            # 根本没法定位（实测 /process/save/processConfig 500 长期不可调试）。
+            # 非 2xx 时显式捕获平台响应体并带进异常。
+            if response.status_code >= 400:
+                body = (response.text or "")[:2000]
+                _log_response(url, response.status_code, body, elapsed_ms, method="POST", request_body=_to_json(payload))
+                raise Exception(
+                    f"保存流程失败：apaas 返回 HTTP {response.status_code}。平台错误详情：{body}"
+                )
             data = response.json()
 
             _log_response(url, response.status_code, data, elapsed_ms, method="POST", request_body=_to_json(payload))

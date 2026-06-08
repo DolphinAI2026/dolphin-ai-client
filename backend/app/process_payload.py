@@ -253,6 +253,10 @@ def _build_process_payload_v2(
     stage_bpmn_meta = []  # [{bpmn_id, title, next_edge_bpmn_id}]
     edge_bpmn_meta = []   # [{bpmn_id, source, target}]
     prev_node_id = "START"
+    # BPMN 边的 sourceRef 必须引用 BPMN 元素 id（START / userTask 的 bpmn_id），
+    # 不能用图节点的 cell-N id —— 否则 apaas BPMN schema 校验 cvc-id.1 报
+    # "no ID/IDREF binding for IDREF 'cell-2'" → 存流程 500（多级链必崩）。
+    prev_bpmn_id = "START"
     cell_idx = 1
     edge_idx = len(stages_with_role) + 2
     y_pos = 160
@@ -293,11 +297,12 @@ def _build_process_payload_v2(
         edge_obj["data"]["id"] = in_edge_bpmn_id
         edges.append(edge_obj)
         edge_bpmn_meta.append({"bpmn_id": in_edge_bpmn_id,
-                                "source": prev_node_id if prev_node_id != "START" else "START",
+                                "source": prev_bpmn_id,
                                 "target": bpmn_id})
         stage_bpmn_meta.append({"bpmn_id": bpmn_id, "title": title,
                                 "next_edge_bpmn_id": ""})  # fill after we know next edge
         prev_node_id = cell_id
+        prev_bpmn_id = bpmn_id  # 下一条 BPMN 边的 source 用本节点的 bpmn_id（非图 cell id）
         # 记录指向当前 cell 的 edge id (给上一个 stage 用作 default)
         if len(stage_bpmn_meta) >= 2:
             # 之前那个 stage 后的 edge 就是当前 in_edge
