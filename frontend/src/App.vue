@@ -28,14 +28,21 @@ watch(
  *     session → router.replace('/ai-chat/N') → fullPath 变。若此时 remount，
  *     老 instance 里 in-flight 的 onSend() / SSE listener 全报废 → UI 永远不显示
  *     agent 工作状态（见 2026-05-21 修复）。
- *   - 修法：/ai-chat 与 /ai-chat/:id 走同一个 KeepAlive，key 恒为 singleton，
- *     fullPath 变也不 remount；session 切换由组件内部 watch route.params.id →
- *     loadSession(id) 处理。
- *   - 离开 /ai-chat 去别的路由会销毁这个 KeepAlive（实例释放），再回来是新鲜
+ *   - 修法：/（首页）、/ai-chat 与 /ai-chat/:id 走同一个 KeepAlive，key 恒为
+ *     singleton，fullPath 变也不 remount；session 切换由组件内部 watch
+ *     route.params.id → loadSession(id) 处理。
+ *   - 离开这些路由去别的路由会销毁这个 KeepAlive（实例释放），再回来是新鲜
  *     mount —— 这是期望行为，不影响上面的 session 创建流。
+ *
+ * 2026-06-08 修回归：首页 '/' 与 '/ai-chat' 是**同一个 AIChatPage 组件**（router
+ *   path '/' name Home → AIChatPage）。之前 isAiChatRoute 只认 /ai-chat*，漏了
+ *   '/'，于是「应用资产库 → AI Builder 菜单(='/') → 发消息」时：onDraftSend 建会话
+ *   后 router.replace('/ai-chat/N') 把路由从 '/'(v-else 分支) 跨到 '/ai-chat/N'
+ *   (KeepAlive 分支) → 组件**整个 remount**，in-flight 的 onSend()/SSE 全报废 →
+ *   currentSession 变 null、助手回复+工具卡片不显示。把 '/' 一并纳入即修。
  */
 function isAiChatRoute(r: RouteLocationNormalized): boolean {
-  return r.path === '/ai-chat' || r.path.startsWith('/ai-chat/')
+  return r.path === '/' || r.path === '/ai-chat' || r.path.startsWith('/ai-chat/')
 }
 </script>
 
