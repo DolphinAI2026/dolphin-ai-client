@@ -9,6 +9,7 @@
   },
   "categories": ["AI", "Chat"],
   "extensionKind": ["workspace"],
+  "enabledApiProposals": ["chatProvider", "defaultChatParticipant"],
   "activationEvents": [
     "onStartupFinished",
     "onChatParticipant:ruijing-ai.chat",
@@ -16,6 +17,12 @@
   ],
   "main": "./dist/extension.js",
   "contributes": {
+    "languageModelChatProviders": [
+      {
+        "vendor": "copilot",
+        "displayName": "睿鲸AI (via Copilot)"
+      }
+    ],
     "chatParticipants": [
       {
         "id": "ruijing-ai.chat",
