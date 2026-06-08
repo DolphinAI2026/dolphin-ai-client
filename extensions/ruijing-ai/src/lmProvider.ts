@@ -51,7 +51,10 @@ export function registerLMProvider(context: vscode.ExtensionContext, config: Con
           return { role, content };
         });
 
-        const url = `${apiBase}/chat/completions`;
+        // 必须带 /workspace/{wsId}/ide 前缀 —— 后端路由是
+        // POST /api/coding/workspace/{ws_id}/ide/chat/completions。
+        // 直接拼 `${apiBase}/chat/completions` 会 404（线上"发消息无响应"的根因）。
+        const url = config.getEndpoint('/chat/completions');
         const headers = config.getHeaders();
 
         const body = JSON.stringify({
