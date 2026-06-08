@@ -3,7 +3,7 @@
  *
  * 拦截器：
  *  - request: 注入 Authorization: Bearer <admin_token>
- *  - response: 401 自动跳 /login（admin token 过期或被踢）
+ *  - response: 401 清掉失效 token，但不再跳独立登录页
  */
 import axios from 'axios'
 import type { AxiosInstance, AxiosError } from 'axios'
@@ -30,10 +30,6 @@ api.interceptors.response.use(
     if (error.response?.status === 401) {
       localStorage.removeItem('admin_token')
       localStorage.removeItem('token')
-      // 当前不在 /login 才跳
-      if (!window.location.pathname.endsWith('/login')) {
-        window.location.href = `${import.meta.env.BASE_URL}login`
-      }
     }
     return Promise.reject(error)
   },

@@ -6,7 +6,6 @@ const router = createRouter({
   // （Dockerfile 里 npx vite build --base=/mcp-server/admin/ 注入 BASE_URL）
   history: createWebHistory(import.meta.env.BASE_URL),
   routes: [
-    { path: '/login', component: () => import('@/views/LoginPage.vue') },
     {
       path: '/design-preview/:draftId',
       component: () => import('@/views/DesignPreview.vue'),
@@ -31,6 +30,7 @@ const router = createRouter({
         { path: 'datasources', redirect: '/mcp' },
       ],
     },
+    { path: '/:pathMatch(.*)*', redirect: '/mcp' },
   ],
 })
 
@@ -49,26 +49,13 @@ router.beforeEach(async (to, _from, next) => {
   }
 
   const token = localStorage.getItem('admin_token')
-  if (!token) {
-    if (to.meta.requiresAdmin) return next('/login')
-    return next()
+  if (token) {
+    const auth = useAuthStore()
+    if (!auth.user) {
+      await auth.fetchMe().catch(() => {})
+    }
   }
 
-  const auth = useAuthStore()
-  if (!auth.user) {
-    await auth.fetchMe()
-  }
-  if (!auth.isAdmin) {
-    auth.logout()
-    if (to.path !== '/login') return next('/login')
-    return next()
-  }
-
-  if (to.path === '/login') {
-    return next('/')
-  }
-
-  if (!to.meta.requiresAdmin) return next()
   next()
 })
 

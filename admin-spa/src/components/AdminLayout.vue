@@ -274,7 +274,7 @@ function onLogout() {
       window.parent?.postMessage({ type: 'admin-logout' }, parentOrigin)
     }
   }
-  router.push('/login')
+  router.replace('/mcp')
 }
 
 function returnWorkspace() {

@@ -50,6 +50,11 @@ export default defineConfig({
         target: 'http://localhost:8000',
         changeOrigin: true
       },
+      '/ai-builder/api': {
+        target: 'http://localhost:8000',
+        changeOrigin: true,
+        rewrite: (path) => path.replace(/^\/ai-builder\/api/, '/api')
+      },
       '/ai-builder/ide': {
         target: 'http://127.0.0.1:8080',
         changeOrigin: true,

@@ -1,10 +1,9 @@
 /**
- * Auth store — admin SPA only, platform_admin / superuser 才能进。
- * 本 admin 后台不复用 ai-builder 的多角色多租户登录，纯 admin 维护。
+ * Auth store — admin SPA uses the Builder login token passed from the host app.
  */
 import { defineStore } from 'pinia'
 import { ref, computed } from 'vue'
-import { apiPost, apiGet } from '@/api/client'
+import { apiGet } from '@/api/client'
 
 interface AdminUser {
   id: number
@@ -30,19 +29,6 @@ export const useAuthStore = defineStore('auth', () => {
     return !!(u.is_superuser || u.platform_admin || u.tenant_role === 'platform_admin')
   })
 
-  async function login(username: string, password: string) {
-    const resp = await apiPost<{ access_token: string }>('/auth/login', { username, password })
-    if (!resp?.access_token) throw new Error('登录响应缺 access_token')
-    token.value = resp.access_token
-    localStorage.setItem('admin_token', resp.access_token)
-    await fetchMe()
-    if (!isAdmin.value) {
-      // 不是 admin —— 拒绝
-      logout()
-      throw new Error('当前账号无管理员权限')
-    }
-  }
-
   async function fetchMe() {
     try {
       const resp = await apiGet<AdminUser>('/auth/me')
@@ -59,5 +45,5 @@ export const useAuthStore = defineStore('auth', () => {
     localStorage.removeItem('token')
   }
 
-  return { token, user, isAuthenticated, isAdmin, login, fetchMe, logout }
+  return { token, user, isAuthenticated, isAdmin, fetchMe, logout }
 })
