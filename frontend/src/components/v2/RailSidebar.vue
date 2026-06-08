@@ -3,7 +3,6 @@ import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { useUserStore } from '@/stores/user'
 import { useThemeStore } from '@/stores/theme'
-import { useTabsStore } from '@/stores/tabs'
 
 interface NavItem { key: string; label: string; icon: string; path: string; badge?: number }
 
@@ -12,7 +11,6 @@ const route = useRoute()
 const router = useRouter()
 const user = useUserStore()
 const theme = useThemeStore()
-const tabsStore = useTabsStore()
 
 const RAIL_COLLAPSE_KEY = 'apaas-rail-collapsed-v1'
 const internalCollapsed = ref<boolean>(localStorage.getItem(RAIL_COLLAPSE_KEY) === '1')
@@ -115,31 +113,11 @@ async function selectTenant(value: number) {
 
 function go(path: string) {
   tenantMenuOpen.value = false
-  // 同时打开 tab — 一级菜单点了在顶部 tab 栏建一个对应 tab
-  const nav = NAV.value.find((n) => n.path === path)
-  if (nav) {
-    tabsStore.openTab({
-      id: nav.key,
-      path: nav.path,
-      label: nav.label,
-      icon: nav.icon,
-      closable: nav.key !== 'home',  // 首页不可关，其它 nav 可关
-      kind: 'nav',
-    })
-  }
   router.push(path)
 }
 
 function goPlatformAdmin() {
   tenantMenuOpen.value = false
-  tabsStore.openTab({
-    id: platformNavItem.key,
-    path: platformNavItem.path,
-    label: platformNavItem.label,
-    icon: platformNavItem.icon,
-    closable: true,
-    kind: 'nav',
-  })
   router.push(platformNavItem.path)
 }
 
@@ -253,7 +231,7 @@ function renderIcon(name: string): string {
 
     <nav class="rail-scroll" aria-label="主导航">
       <!-- 2026-05-23: button → <a href> 让 cmd+click / 中键 / 右键"在新标签中打开" 真开 chrome tab.
-           普通 click → 内部 openTab + router.push (走多 tab 体系). 跟 admin-spa AdminLayout 一致. -->
+           普通 click → router.push 直接导航 (2026-06-08 已删多 tab 体系). -->
       <a
         v-for="it in NAV"
         :key="it.key"

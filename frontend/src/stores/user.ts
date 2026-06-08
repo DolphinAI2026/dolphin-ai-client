@@ -1,7 +1,6 @@
 import { defineStore } from 'pinia'
 import { ref, computed } from 'vue'
 import { authApi } from '@/api/auth'
-import { useTabsStore } from '@/stores/tabs'
 import type { User, TenantOption } from '@/types'
 
 export const useUserStore = defineStore('user', () => {
@@ -96,7 +95,6 @@ export const useUserStore = defineStore('user', () => {
     // 整页 reload 避免漏 invalidate 某些 store 缓存. 切租户本来就是 disruptive
     // 重置工作环境的行为, 副作用 (in-flight SSE 断 / 填一半表单丢) 可接受.
     if (typeof window !== 'undefined') {
-      useTabsStore().resetTabs()
       try { localStorage.removeItem('ai-builder-tabs-v1') } catch { /* ignore */ }
       // 切到首页再 reload 防止用户停在 /chat?app_id=N 那种含其他租户 app id 的 url
       window.location.href = '/ai-builder/'

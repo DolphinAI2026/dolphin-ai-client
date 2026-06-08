@@ -277,7 +277,6 @@ import AppIcon from '@/components/common/AppIcon.vue'
 import { handleError } from '@/utils/errorHandler'
 import { applicationApi } from '@/api/application'
 import { conversationApi, type ConversationWithApp } from '@/api/conversation'
-import { useTabsStore } from '@/stores/tabs'
 import BuilderFrame from '@/components/BuilderFrame.vue'
 import ImportAppDialog from '@/components/ImportAppDialog.vue'
 import DeployHistoryDrawer from '@/components/v2/DeployHistoryDrawer.vue'
@@ -297,7 +296,6 @@ type AppStage = {
 }
 
 const router = useRouter()
-const tabsStore = useTabsStore()
 const apps = ref<MergedApplication[]>([])
 const appHistoryMap = ref<Record<number, ConversationWithApp[]>>({})
 const loading = ref(true)
@@ -440,18 +438,6 @@ function openApp(app: MergedApplication) {
   // WorkspaceShell is not a complete editing surface yet. Keep the primary
   // application entry on ChatPage, which owns app-scoped SPEC/edit/deploy flow.
   const query = appWorkspaceQuery(app)
-  // 同时打开 tab — 每个应用一个独立 tab（key 含 app_id 让 KeepAlive 缓存独立 vnode）
-  const appIdStr = String(query.app_id || app.id)
-  const qs = new URLSearchParams(query as Record<string, string>).toString()
-  const path = `/chat?${qs}`
-  tabsStore.openTab({
-    id: `app:${appIdStr}`,
-    path,
-    label: app.app_name || `应用 ${appIdStr}`,
-    icon: 'app',
-    closable: true,
-    kind: 'app',
-  })
   router.push({ path: '/chat', query })
 }
 
@@ -474,16 +460,6 @@ function openSpec(app: MergedApplication) {
   const appId = String(appNumericId(app) ?? app.id)
   const query: Record<string, string> = { app_id: appId, tab: 'spec' }
   if (isGeneratedApp(app)) query.workspace = 'update'
-  const qs = new URLSearchParams(query).toString()
-  const path = `/chat?${qs}`
-  tabsStore.openTab({
-    id: `app:${appId}`,
-    path,
-    label: app.app_name || `应用 ${appId}`,
-    icon: 'app',
-    closable: true,
-    kind: 'app',
-  })
   router.push({ path: '/chat', query })
 }
 

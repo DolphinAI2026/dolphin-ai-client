@@ -5,7 +5,6 @@
   <div class="workbench-shell" :data-theme="theme.mode">
     <RailSidebar v-if="showNav" />
     <div class="workbench-main">
-      <TabStrip v-if="showNav" />
       <slot />
     </div>
   </div>
@@ -15,7 +14,6 @@
 import { computed } from 'vue'
 import { useRoute } from 'vue-router'
 import RailSidebar from '@/components/v2/RailSidebar.vue'
-import TabStrip from '@/components/v2/TabStrip.vue'
 import { useThemeStore } from '@/stores/theme'
 
 const route = useRoute()
