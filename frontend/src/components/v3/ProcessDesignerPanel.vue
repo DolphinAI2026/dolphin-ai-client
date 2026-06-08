@@ -99,7 +99,7 @@
 
       <div class="pdp-body">
         <!-- 左 sidebar: 流程列表 (始终显) + 模式提示 -->
-        <aside class="pdp-sidebar" aria-label="流程列表">
+        <aside v-show="!assistantOpen" class="pdp-sidebar" aria-label="流程列表">
           <!-- ── 流程列表 panel ────────────────────────────────── -->
           <div class="pdp-section">
             <button
@@ -175,9 +175,16 @@ const props = defineProps<{
   /** 隐藏「打开低代码后台」按钮 — 该面板在设计 tab + 逻辑 tab 双处复用，
       外层 tab 条已统一承载该按钮时传 true 隐藏内部按钮，避免重复。默认显示。 */
   hideLowcodeBtn?: boolean
+  /** 右侧 AI 助手是否打开 — 打开时自动收起「流程列表」侧栏给画布腾空间，
+      否则助手 + 双侧栏会把画布挤窄、流程缩成一小条。 */
+  assistantOpen?: boolean
 }>()
 
 const containerRef = ref<HTMLElement | null>(null)
+// 画布尺寸变化(右侧助手开/关、窗口缩放)后自动重新适应 — 否则 zoomToFit 停在陈旧缩放,
+// 画布被挤窄时流程会缩成一小条、跟画布完全不成比例。
+let resizeObserver: ResizeObserver | null = null
+let refitTimer: ReturnType<typeof setTimeout> | null = null
 const graphRef = shallowRef<Graph | null>(null)
 
 /** 全部 node state (reactive). 每个 node = id + 各 type 配置. */
@@ -233,99 +240,98 @@ const statsLine = computed(() => {
 })
 
 
-/** 用 cat code 决定 shape, 用 type/cat 决定 color. */
-function buildNodeSpec(type: NodeType, label: string, icon: string): Record<string, unknown> {
+/** 用 cat code 决定 shape, 用 type/cat 决定 color.
+ *  2026-06-08 视觉重做: 实心起止端点 + 白底类别色描边卡片 + 柔和投影,
+ *  去掉空心环 / emoji / 浅色平涂的"剪贴画"观感。 */
+function buildNodeSpec(type: NodeType, label: string, _icon: string): Record<string, unknown> {
   const cat = getNodeCategoryCode(type)
   const color = getNodeColor(type)
-  const displayLabel = `${icon}  ${label}`
+  // x6 内置 dropShadow filter — 给所有节点统一一层柔和投影, 拉开层次感。
+  const shadow = { name: 'dropShadow', args: { dx: 0, dy: 3, blur: 8, color: 'rgba(15,23,42,0.12)' } }
 
   if (cat === 'entry') {
-    // 圆形 (start = 绿, end = 红, timer/webhook = entry 默认绿)
+    // 实心圆端点 (start = 绿, end = 红) — 白字白细边 + 阴影, 不再是空心环。
     return {
       shape: 'circle',
-      width: 64,
-      height: 64,
-      label: displayLabel,
+      width: 50,
+      height: 50,
+      label,
       attrs: {
         body: {
-          fill: '#ffffff',
-          stroke: color,
-          strokeWidth: 2.5,
+          fill: color,
+          stroke: '#ffffff',
+          strokeWidth: 2,
+          filter: shadow,
         },
         label: {
-          fill: color,
-          fontSize: 11,
-          fontWeight: 600,
+          fill: '#ffffff',
+          fontSize: 12,
+          fontWeight: 700,
         },
       },
     }
   }
 
   if (cat === 'logic') {
-    // 菱形 (条件分支 / 多分支 / 并行 / 汇聚 / 等待)
+    // 菱形 (条件分支 / 多分支 / 并行 / 汇聚 / 等待) — 白底类别色边 + 阴影。
     return {
       shape: 'polygon',
-      width: 110,
-      height: 70,
-      label: displayLabel,
+      width: 124,
+      height: 68,
+      label,
       attrs: {
         body: {
           refPoints: '0,10 10,0 20,10 10,20',
-          fill: '#fffbeb',
-          stroke: color,
-          strokeWidth: 2,
-        },
-        label: {
-          fill: '#92400e',
-          fontSize: 11.5,
-          fontWeight: 500,
-        },
-      },
-    }
-  }
-
-  if (cat === 'action') {
-    // 矩形 (动作类) — 紫色边
-    return {
-      shape: 'rect',
-      width: 140,
-      height: 50,
-      label: displayLabel,
-      attrs: {
-        body: {
-          fill: '#faf5ff',
+          fill: '#ffffff',
           stroke: color,
           strokeWidth: 1.5,
-          rx: 4,
-          ry: 4,
+          filter: shadow,
         },
         label: {
-          fill: '#5b21b6',
+          fill: '#0f172a',
           fontSize: 12,
-          fontWeight: 500,
+          fontWeight: 600,
         },
       },
     }
   }
 
-  // approval — 圆角矩形 (蓝色边)
+  // approval / action — 圆角白卡片 + 类别色描边 + 类别色左侧强调条 + 柔和投影。
   return {
-    shape: 'rect',
-    width: 140,
-    height: 56,
-    label: displayLabel,
+    markup: [
+      { tagName: 'rect', selector: 'body' },
+      { tagName: 'rect', selector: 'accent' },
+      { tagName: 'text', selector: 'label' },
+    ],
+    width: 172,
+    height: 54,
+    label,
     attrs: {
       body: {
-        fill: '#eff6ff',
+        refWidth: '100%',
+        refHeight: '100%',
+        fill: '#ffffff',
         stroke: color,
-        strokeWidth: 1.5,
-        rx: 10,
-        ry: 10,
+        strokeWidth: 1.25,
+        rx: 13,
+        ry: 13,
+        filter: shadow,
+      },
+      accent: {
+        x: 0,
+        y: 12,
+        width: 4,
+        height: 30,
+        rx: 2,
+        ry: 2,
+        fill: color,
       },
       label: {
-        fill: '#1e40af',
-        fontSize: 12.5,
-        fontWeight: 500,
+        refX: 0.5,
+        refY: 0.5,
+        fill: '#0f172a',
+        fontSize: 13,
+        fontWeight: 600,
       },
     },
   }
@@ -408,9 +414,9 @@ function initGraph() {
         return this.createEdge({
           attrs: {
             line: {
-              stroke: '#94a3b8',
-              strokeWidth: 1.5,
-              targetMarker: { name: 'classic', size: 7 },
+              stroke: '#cbd5e1',
+              strokeWidth: 2,
+              targetMarker: { name: 'block', size: 6 },
             },
           },
         })
@@ -444,6 +450,18 @@ function initGraph() {
 
   graphRef.value = graph
   refreshCounts(graph)
+
+  // 画布尺寸一变就重新适应(防抖) — 保证流程始终居中并填满当前可用空间。
+  if (containerRef.value && typeof ResizeObserver !== 'undefined') {
+    resizeObserver?.disconnect()
+    resizeObserver = new ResizeObserver(() => {
+      if (refitTimer) clearTimeout(refitTimer)
+      refitTimer = setTimeout(() => {
+        if (graphRef.value && graphRef.value.getNodes().length) onFitContent()
+      }, 160)
+    })
+    resizeObserver.observe(containerRef.value)
+  }
 }
 
 /** 空态 "用对话创建流程" CTA — P0 暂时弹示例提示, 后续可 emit 'request-config-chat'
@@ -545,7 +563,7 @@ function onFitContent() {
   const g = graphRef.value
   if (!g) return
   if (g.getNodes().length === 0) return
-  g.zoomToFit({ padding: 32, maxScale: 1.2 })
+  g.zoomToFit({ padding: 28, maxScale: 1.5 })
 }
 
 /** ProcessDefinition 序列化 — 应用层 JSON (不是 BPMN 2.0 XML).
@@ -572,7 +590,7 @@ function computeAutoLayout(
   nodes: { id: string }[],
   edges: { source: string; target: string }[],
 ): Map<string, { x: number; y: number }> {
-  const TOP = 40, VGAP = 110, HGAP = 200, CENTER = 320
+  const TOP = 40, VGAP = 96, HGAP = 200, CENTER = 320
   const ids = nodes.map(n => n.id)
   const idset = new Set(ids)
   const incoming = new Map<string, number>(ids.map(id => [id, 0]))
@@ -632,9 +650,13 @@ function renderDefinition(defNodes: ProcessDefinitionNodeOut[], defEdges: Proces
     }
     const spec = buildNodeSpec(type, n.label || def.label, def.icon)
     const p = layout.get(n.id) || n.position || { x: 100, y: 100 }
+    // 居中对齐: 布局给的是该层「中心 x」, 但 x6 按左上角定位、各节点宽度不同
+    // (开始/结束 50px 圆 vs 审批卡片 172px)。若都左对齐到同一 x, 节点中心就错开了,
+    // 连线只能斜着连 → 弯弯绕绕。减去半宽让各节点「中心」对齐, 连线即拉直。
+    const w = typeof spec.width === 'number' ? spec.width : 140
     g.addNode({
       id: n.id,
-      x: p.x,
+      x: p.x - w / 2,
       y: p.y,
       ...spec,
       data: { type, color: getNodeColor(type) },
@@ -661,11 +683,12 @@ function renderDefinition(defNodes: ProcessDefinitionNodeOut[], defEdges: Proces
         data: e.condition ? { condition: e.condition } : undefined,
         attrs: {
           line: {
-            stroke: '#94a3b8',
-            strokeWidth: 1.5,
-            targetMarker: { name: 'classic', size: 7 },
+            stroke: '#cbd5e1',
+            strokeWidth: 2,
+            targetMarker: { name: 'block', size: 6 },
           },
         },
+        connector: { name: 'rounded', args: { radius: 12 } },
       } as never)
     } catch {
       // ignore bad edge
@@ -746,6 +769,9 @@ onMounted(async () => {
 })
 
 onBeforeUnmount(() => {
+  resizeObserver?.disconnect()
+  resizeObserver = null
+  if (refitTimer) { clearTimeout(refitTimer); refitTimer = null }
   graphRef.value?.dispose()
   graphRef.value = null
 })

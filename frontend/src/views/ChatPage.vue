@@ -233,6 +233,7 @@
                 :menu-id="selectedApaasMenuId"
                 :form-id="selectedApaasMenuFormId"
                 :hide-lowcode-btn="true"
+                :assistant-open="assistantOpen"
               />
               <BusinessEventPanel
                 v-else-if="designerSub === 'event'"
@@ -277,6 +278,7 @@
             :app-id="existingAppId"
             :menu-id="selectedApaasMenuId || undefined"
             :form-id="selectedApaasMenuFormId"
+            :assistant-open="assistantOpen"
           />
           <!-- 数据 tab + 数据模型 sub: 选中模型显字段表格 -->
           <DataModelDetailPanel
