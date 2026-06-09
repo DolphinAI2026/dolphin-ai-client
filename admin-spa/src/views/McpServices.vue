@@ -17,10 +17,10 @@
           </button>
         </div>
       </article>
-      <article class="summary-card">
+      <article class="summary-card auth-summary-card">
         <div class="summary-label">认证方式</div>
         <div class="summary-value-row">
-          <strong>{{ authHeaderText }}</strong>
+          <strong class="auth-header-text">{{ authHeaderText }}</strong>
           <button type="button" class="icon-copy" aria-label="复制认证请求头" @click="copyText(authHeaderText, '认证请求头已复制')">
             <el-icon><CopyDocument /></el-icon>
           </button>
@@ -86,22 +86,42 @@
       <div class="panel-head">
         <div>
           <strong>接入凭证</strong>
-          <span>当前改为平台管理登录态访问</span>
+          <span>外部 MCP 使用页面配置的 key；管理台测试使用登录态</span>
         </div>
         <div class="panel-actions">
-          <button type="button" class="danger-button" @click="onResetKey">说明</button>
+          <button v-if="!editingKeys" type="button" class="secondary-button" @click="startEditKeys">编辑</button>
+          <button v-if="editingKeys" type="button" class="secondary-button" @click="cancelEditKeys">取消</button>
+          <button v-if="editingKeys" type="button" class="copy-button" :disabled="savingKeys" @click="saveKeys(false)">
+            {{ savingKeys ? '保存中...' : '保存' }}
+          </button>
+          <button type="button" class="copy-button" :disabled="savingKeys" @click="saveKeys(true)">生成 key</button>
         </div>
       </div>
       <div class="key-grid">
         <div>
           <span>当前模式</span>
-          <strong>同进程工具</strong>
+          <strong>标准 MCP 接入</strong>
+        </div>
+        <div>
+          <span>配置来源</span>
+          <strong :class="accessInfo?.source === 'database' ? 'success-text' : 'warn-text'">{{ keySourceLabel }}</strong>
         </div>
         <div>
           <span>状态</span>
-          <strong class="success-text">启用</strong>
+          <strong :class="primaryMcpKey ? 'success-text' : 'warn-text'">{{ primaryMcpKey ? '启用' : '未配置' }}</strong>
         </div>
-        <p>测试工具时由主后端注入当前平台管理用户的 Builder 租户身份，不再要求独立 8004 MCP 服务或 MCP_API_KEY。</p>
+        <div class="key-config-row">
+          <span>MCP Keys</span>
+          <textarea
+            v-if="editingKeys"
+            v-model="keyDraft"
+            class="key-editor"
+            rows="4"
+            placeholder="每行一个 key，也可以用英文逗号分隔"
+          />
+          <strong v-else class="key-value" :class="{ 'muted-text': !primaryMcpKey }">{{ primaryMcpKey || '未配置' }}</strong>
+        </div>
+        <p>外部 Agent 调标准 MCP 服务时使用这里配置的 key。测试工具时由主后端注入当前平台管理用户的 Builder 租户身份。</p>
       </div>
     </section>
   </div>
@@ -117,9 +137,9 @@ Authorization: Bearer &lt;平台管理登录态&gt;
 <script setup lang="ts">
 import { computed, onMounted, ref } from 'vue'
 import { useRouter } from 'vue-router'
-import { ElMessage, ElMessageBox } from 'element-plus'
+import { ElMessage } from 'element-plus'
 import { CopyDocument } from '@element-plus/icons-vue'
-import { apiGet } from '@/api/client'
+import { apiGet, apiPut } from '@/api/client'
 
 interface ServiceRow {
   name: string
@@ -140,17 +160,38 @@ interface ToolItem {
   input_schema?: any
 }
 
+interface McpAccessInfo {
+  has_key?: boolean
+  primary_key?: string
+  keys?: string[]
+  auth_header?: string
+  source?: string
+}
+
 const SUPPORT_TRIAGE_TOOL_NAME = 'record_support_triage'
 
 const router = useRouter()
 const origin = (import.meta.env.VITE_MCP_PUBLIC_BASE || window.location.origin).replace(/\/$/, '')
 const copiedExample = ref(false)
+const accessInfo = ref<McpAccessInfo | null>(null)
+const editingKeys = ref(false)
+const savingKeys = ref(false)
+const keyDraft = ref('')
 
-const authHeaderText = computed(() => '外部 MCP: Authorization: Bearer <MCP_API_KEYS>; 管理台测试: Bearer <平台管理登录态>')
+const primaryMcpKey = computed(() => (accessInfo.value?.primary_key || '').trim())
+const keySourceLabel = computed(() => {
+  if (accessInfo.value?.source === 'database') return '页面配置'
+  if (accessInfo.value?.source === 'env') return '环境变量兜底'
+  return '未配置'
+})
+const authHeaderText = computed(() => (
+  accessInfo.value?.auth_header
+  || (primaryMcpKey.value ? `Authorization: Bearer ${primaryMcpKey.value}` : 'MCP key 未配置')
+))
 const requestExample = computed(() => [
   `POST ${services.value[0].publicUrl}`,
   'Content-Type: application/json',
-  'Authorization: Bearer <MCP_API_KEYS 中的 key>',
+  primaryMcpKey.value ? `Authorization: Bearer ${primaryMcpKey.value}` : 'Authorization: Bearer <MCP key 未配置>',
   '# 兼容 Dolphin 网关：也可使用 X-API-Key 或 X-AI-GW-KEY',
   '',
   'MCP 客户端会自动发送 initialize / tools/list / tools/call，不需要手写 tool_name。',
@@ -205,28 +246,51 @@ async function copyText(value: string, message: string) {
 
 // v3 2026-05-21 UED 报告 P2: 复制按钮反馈 + 始终复制完整 key (不受脱敏影响)
 async function onCopyRequestExample() {
-  const fullExample = [
-    `POST ${services.value[0].publicUrl}`,
-    'Content-Type: application/json',
-    'Authorization: Bearer <MCP_API_KEYS 中的 key>',
-    '# 兼容 Dolphin 网关：也可使用 X-API-Key 或 X-AI-GW-KEY',
-    '',
-    'MCP 客户端会自动发送 initialize / tools/list / tools/call，不需要手写 tool_name。',
-  ].join('\n')
-  await copyText(fullExample, '请求示例已复制')
+  await copyText(requestExample.value, '请求示例已复制')
   copiedExample.value = true
   setTimeout(() => { copiedExample.value = false }, 1600)
 }
 
-function onResetKey() {
-  ElMessageBox.alert(
-    '外部 Agent 接标准 MCP 服务时使用 MCP_API_KEYS 鉴权；平台管理测试台为了方便本地调试，仍使用当前平台管理登录态。',
-    'MCP 鉴权',
-    { confirmButtonText: '知道了' },
-  )
+function syncDraftFromAccessInfo() {
+  keyDraft.value = (accessInfo.value?.keys || []).join('\n')
+}
+
+function startEditKeys() {
+  syncDraftFromAccessInfo()
+  editingKeys.value = true
+}
+
+function cancelEditKeys() {
+  syncDraftFromAccessInfo()
+  editingKeys.value = false
+}
+
+async function saveKeys(generate: boolean) {
+  savingKeys.value = true
+  try {
+    accessInfo.value = await apiPut<McpAccessInfo>('/admin/mcp/access-info', {
+      keys: keyDraft.value,
+      generate,
+    })
+    syncDraftFromAccessInfo()
+    editingKeys.value = false
+    ElMessage.success(generate ? '已生成并保存新 key' : 'MCP key 已保存')
+  } catch (err: any) {
+    ElMessage.error(err?.response?.data?.detail || 'MCP key 保存失败')
+  } finally {
+    savingKeys.value = false
+  }
 }
 
 onMounted(async () => {
+  try {
+    accessInfo.value = await apiGet<McpAccessInfo>('/admin/mcp/access-info')
+    syncDraftFromAccessInfo()
+  } catch {
+    accessInfo.value = { has_key: false, primary_key: '', keys: [], auth_header: '', source: 'none' }
+    syncDraftFromAccessInfo()
+  }
+
   let inprocessTools: ToolItem[] = []
   try {
     const data = await apiGet<any>('/admin/mcp/tools')
@@ -320,9 +384,19 @@ onMounted(async () => {
   letter-spacing: -0.005em;
 }
 
+.auth-header-text {
+  overflow: visible !important;
+  white-space: normal !important;
+  overflow-wrap: anywhere;
+  line-height: 1.45;
+  font-family: var(--font-mono, 'JetBrains Mono', ui-monospace, monospace);
+  font-size: 12px !important;
+}
+
 .icon-copy,
 .copy-button,
 .danger-button,
+.secondary-button,
 .test-button {
   border: 0;
   cursor: pointer;
@@ -512,6 +586,12 @@ code {
   background: var(--brand-hover);
 }
 
+.copy-button:disabled,
+.secondary-button:disabled {
+  cursor: not-allowed;
+  opacity: 0.65;
+}
+
 /* v3 2026-05-21 UED 报告 P2: 复制按钮点击后绿色短反馈 */
 .copy-button-success,
 .copy-button-success:hover {
@@ -545,7 +625,8 @@ code {
   border-color: var(--brand-ring);
 }
 
-.danger-button {
+.danger-button,
+.secondary-button {
   min-height: 30px;
   padding: 0 12px;
   border: 1px solid var(--line);
@@ -563,6 +644,12 @@ code {
   background: var(--err-soft);
   color: var(--err);
   border-color: var(--err);
+}
+
+.secondary-button:hover {
+  background: var(--brand-soft);
+  color: var(--brand);
+  border-color: var(--brand-ring);
 }
 
 .headers-panel pre {
@@ -599,6 +686,10 @@ code {
   background: var(--surface);
 }
 
+.key-config-row {
+  grid-column: 1 / -1;
+}
+
 .key-grid span {
   display: block;
   color: var(--text-3);
@@ -622,6 +713,44 @@ code {
 
 .success-text {
   color: var(--ok) !important;
+}
+
+.warn-text {
+  color: var(--warn) !important;
+}
+
+.muted-text {
+  color: var(--text-3) !important;
+}
+
+.key-value {
+  overflow: visible !important;
+  white-space: normal !important;
+  overflow-wrap: anywhere;
+  font-family: var(--font-mono, 'JetBrains Mono', ui-monospace, monospace);
+  font-size: 12px !important;
+  line-height: 1.45;
+}
+
+.key-editor {
+  width: 100%;
+  min-height: 92px;
+  margin-top: 8px;
+  resize: vertical;
+  border: 1px solid var(--line);
+  border-radius: var(--r-2, 6px);
+  background: var(--surface);
+  color: var(--text);
+  padding: 9px 10px;
+  font-family: var(--font-mono, 'JetBrains Mono', ui-monospace, monospace);
+  font-size: 12px;
+  line-height: 1.55;
+  outline: none;
+}
+
+.key-editor:focus {
+  border-color: var(--brand-ring);
+  box-shadow: 0 0 0 3px var(--brand-soft);
 }
 
 .key-grid p {
@@ -671,10 +800,14 @@ html[data-theme="dark"] .service-row:hover {
 }
 html[data-theme="dark"] .icon-copy,
 html[data-theme="dark"] .danger-button,
+html[data-theme="dark"] .secondary-button,
 html[data-theme="dark"] .ghost-button {
   background: var(--surface);
 }
 html[data-theme="dark"] .key-grid div {
+  background: var(--surface);
+}
+html[data-theme="dark"] .key-editor {
   background: var(--surface);
 }
 html[data-theme="dark"] .headers-panel pre {

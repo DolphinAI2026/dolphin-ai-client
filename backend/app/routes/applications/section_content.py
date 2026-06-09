@@ -800,7 +800,7 @@ async def get_editor_url(
     路径由 app.apaas_editor_url.build_editor_path 构建。直接深链到真 aPaaS（不走代理桥接）：
     生产挂在 aPaaS 下已登录态免登；测试浏览器没登过 aPaaS 时弹一次登录页、登一次后免登。
     """
-    from app.apaas_editor_url import build_editor_path
+    from app.apaas_editor_url import build_editor_entry_path, build_editor_path
     from app.models import PlatformEnv
 
     app = await _load_app_and_check_view(app_id, ctx, db)
@@ -821,7 +821,11 @@ async def get_editor_url(
         menu_type, apaas_app_id=str(app.apaas_app_id),
         menu_id=menu_id, form_id=form_id, tid=str(env.platform_tenant_id),
     )
-    return {"ok": True, "url": f"{host}{path}"}
+    entry_path = build_editor_entry_path(
+        apaas_app_id=str(app.apaas_app_id),
+        tid=str(env.platform_tenant_id),
+    ) if (menu_id or "").strip() else path
+    return {"ok": True, "url": f"{host}{path}", "entry_url": f"{host}{entry_path}"}
 
 
 def _custom_host_error_html(msg: str) -> str:

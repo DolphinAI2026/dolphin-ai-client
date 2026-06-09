@@ -45,6 +45,7 @@ async def test_editor_url_builds_host_absolute(db_session):
     assert out["ok"] is True
     # host 去掉 /backend；路径来自 build_editor_path
     assert out["url"] == "https://apaas.example.com/platform/TID9/default/data-model-fn-config?appId=AP123&menuId=M9&formId=F3&processVersion=false"
+    assert out["entry_url"] == "https://apaas.example.com/platform/TID9/admin/app-store/edit-app?appId=AP123&currentStepIndex=2"
 
 
 @pytest.mark.asyncio

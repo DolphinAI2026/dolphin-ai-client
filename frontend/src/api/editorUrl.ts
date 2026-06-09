@@ -1,6 +1,12 @@
 import request from '@/utils/request'
 
-export interface EditorUrlResp { ok: boolean; url?: string; message?: string; error_code?: string }
+export interface EditorUrlResp {
+  ok: boolean
+  url?: string
+  entry_url?: string
+  message?: string
+  error_code?: string
+}
 
 export function getEditorUrl(
   appId: number,

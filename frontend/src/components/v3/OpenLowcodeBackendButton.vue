@@ -21,6 +21,7 @@ const loading = ref(false)
 
 async function onClick() {
   loading.value = true
+  const targetWindow = window.open('', '_blank')
   try {
     const resp = await getEditorUrl(props.appId, {
       menu_type: props.menuType || '',
@@ -28,12 +29,19 @@ async function onClick() {
       form_id: props.formId || '',
     })
     if (resp?.ok && resp.url) {
-      // 直链深链到真 aPaaS host（不走代理桥接）— 生产挂在 aPaaS 下已登录态免登。
-      window.open(resp.url, '_blank')
+      // aPaaS 原生 fn-config 的「返回/关闭」都走 $router.go(-1)。
+      // 直接进子编辑器或过快自动跳转时没有可退历史，所以先打开完整应用编辑入口。
+      if (targetWindow) {
+        targetWindow.location.href = resp.entry_url || resp.url
+      } else {
+        window.open(resp.entry_url || resp.url, '_blank')
+      }
     } else {
+      try { targetWindow?.close() } catch { /* ignore */ }
       alert(resp?.message || '应用尚未部署到 aPaaS，无法打开后台')
     }
   } catch (e: any) {
+    try { targetWindow?.close() } catch { /* ignore */ }
     alert(`打开低代码后台失败：${e?.message || '网络错误'}`)
   } finally {
     loading.value = false

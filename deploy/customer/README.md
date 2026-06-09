@@ -27,7 +27,7 @@ IMAGE_TAR=/path/apaas-builder.tar ./deploy.sh
 
 ## ⚠️ 重要
 
-- 本脚本能做**配置层加固**（随机密钥、关 Web IDE、`VIBE_CODING_RUNTIME=host`），但**改不了代码/编排层的红线**。
+- 本脚本能做**配置层加固**（随机密钥、最小化 backend.env），但**改不了代码/编排层的红线**。
   上生产前务必完成 [`docs/deploy-readiness-2026-05-30/部署前置要求.md`](../../docs/deploy-readiness-2026-05-30/部署前置要求.md) §7 的人工加固
   （平台代理鉴权、轮换泄漏密钥、删 docker.sock、容器非 root、nginx 安全头）。
 - 完整前置与盘点见 `docs/deploy-readiness-2026-05-30/`（部署前置要求 / 05-部署盘点 / 04-安全报告）。

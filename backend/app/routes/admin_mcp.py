@@ -8,6 +8,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+import secrets
 import time
 from pathlib import Path
 from typing import Annotated, Any
@@ -15,8 +16,11 @@ from typing import Annotated, Any
 import httpx
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field
+from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.database import get_db
 from app.deps import AuthContext, get_auth_context
+from app.mcp_keys import get_mcp_key_config, parse_mcp_keys, save_mcp_api_keys
 from app.mcp_inprocess import call_inprocess_tool, list_inprocess_tools
 
 # pydantic-settings 不 export 到 os.environ；显式 load .env 兜底，跟 mcp_server.py 一致
@@ -47,26 +51,41 @@ _V2_TOOL_PATHS = [
 _V2_HOST = os.getenv("MCP_V2_HOST", "127.0.0.1:8004")
 
 
-def _v2_api_key() -> str:
-    """v2 MCP_API_KEYS 跟本机共享同一份 env，取第一个 key 用。"""
-    raw = (os.getenv("MCP_API_KEYS") or "").strip()
-    if not raw:
-        return ""
-    return raw.split(",")[0].strip()
-
-
-def _v2_headers() -> dict:
-    key = _v2_api_key()
+async def _v2_headers() -> dict:
+    config = await get_mcp_key_config()
+    key = config.keys[0] if config.keys else ""
     if not key:
         raise HTTPException(
             status_code=500,
-            detail="MCP_API_KEYS env 未配置，admin /mcp 无法调 v2 MCP",
+            detail="MCP key 未配置，admin /mcp 无法调 v2 MCP",
         )
     return {
         "Host": _V2_HOST,
         "Authorization": f"Bearer {key}",
         "Accept": "application/json, text/event-stream",
         "Content-Type": "application/json",
+    }
+
+
+class McpAccessUpdate(BaseModel):
+    keys: list[str] | str = Field(default_factory=list)
+    generate: bool = False
+
+
+def _serialize_access_info(keys: list[str], source: str) -> dict:
+    primary_key = keys[0] if keys else ""
+    return {
+        "ok": True,
+        "has_key": bool(primary_key),
+        "primary_key": primary_key,
+        "keys": keys,
+        "source": source,
+        "auth_header": f"Authorization: Bearer {primary_key}" if primary_key else "",
+        "compatible_headers": {
+            "Authorization": f"Bearer {primary_key}" if primary_key else "",
+            "X-API-Key": primary_key,
+            "X-AI-GW-KEY": primary_key,
+        },
     }
 
 
@@ -175,11 +194,35 @@ def _parse_mcp_response(body: str) -> dict:
     return _json.loads(raw)
 
 
+@router.get("/access-info")
+async def get_mcp_access_info(
+    ctx: Annotated[AuthContext, Depends(get_auth_context)],
+    db: Annotated[AsyncSession, Depends(get_db)],
+):
+    """返回当前 MCP 接入地址和 key，用于平台管理页展示/复制。"""
+    config = await get_mcp_key_config(db, use_cache=False)
+    return _serialize_access_info(config.keys, config.source)
+
+
+@router.put("/access-info")
+async def update_mcp_access_info(
+    body: McpAccessUpdate,
+    ctx: Annotated[AuthContext, Depends(get_auth_context)],
+    db: Annotated[AsyncSession, Depends(get_db)],
+):
+    raw_keys = parse_mcp_keys(body.keys) if isinstance(body.keys, str) else body.keys
+    keys = [item.strip() for item in raw_keys if item and item.strip()]
+    if body.generate:
+        keys.append(f"mcp_{secrets.token_urlsafe(32)}")
+    config = await save_mcp_api_keys(db, keys, user_id=getattr(ctx.user, "id", None))
+    return _serialize_access_info(config.keys, config.source)
+
+
 async def _fetch_tools_from(path: str) -> list[dict]:
     async with httpx.AsyncClient(timeout=30.0) as cli:
         resp = await cli.post(
             f"{_V2_BASE.rstrip('/')}{path}",
-            headers=_v2_headers(),
+            headers=await _v2_headers(),
             json={"jsonrpc": "2.0", "id": 1, "method": "tools/list"},
         )
     if resp.status_code != 200:

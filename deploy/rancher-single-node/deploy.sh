@@ -155,21 +155,13 @@ collect_inputs() {
 
   printf '\n%s\n' "Please enter aPaaS connection setting."
   prompt APAAS_BASE_URL "aPaaS backend URL, for example https://apaas.example.com/backend" "${APAAS_BASE_URL:-}"
-  CODE_SERVER_BASE_URL="${CODE_SERVER_BASE_URL:-$default_code_server_url}"
-  BUILDER_PUBLIC_URL="${BUILDER_PUBLIC_URL:-$default_public_url}"
   BUILDER_HOST_NAME="$(external_host_name)"
   export BUILDER_HOST_NAME
 
   APAAS_TENANT_ID="${APAAS_TENANT_ID:-}"
-  LLM_API_KEY="${LLM_API_KEY:-platform-configured-after-deploy}"
-  LLM_MODEL="${LLM_MODEL:-platform-configured-after-deploy}"
-  ANTHROPIC_BASE_URL="${ANTHROPIC_BASE_URL:-}"
-  ANTHROPIC_API_KEY="${ANTHROPIC_API_KEY:-}"
-  ANTHROPIC_MODEL="${ANTHROPIC_MODEL:-platform-configured-after-deploy}"
   JWT_SECRET_KEY="${JWT_SECRET_KEY:-$(rand_b64)}"
   ENCRYPTION_KEY="${ENCRYPTION_KEY:-$(rand_b64)}"
   BUILDER_FERNET_KEY="${BUILDER_FERNET_KEY:-$(rand_fernet)}"
-  MCP_API_KEYS="${MCP_API_KEYS:-$(rand_b64)}"
 }
 
 create_backend_secret() {
@@ -180,23 +172,13 @@ create_backend_secret() {
   append_env DATABASE_URL "$DATABASE_URL"
   append_env APAAS_BASE_URL "$APAAS_BASE_URL"
   append_env APAAS_TENANT_ID "$APAAS_TENANT_ID"
-  append_env LLM_API_KEY "$LLM_API_KEY"
-  append_env LLM_MODEL "$LLM_MODEL"
-  append_env ANTHROPIC_BASE_URL "$ANTHROPIC_BASE_URL"
-  append_env ANTHROPIC_API_KEY "$ANTHROPIC_API_KEY"
-  append_env ANTHROPIC_MODEL "$ANTHROPIC_MODEL"
   append_env JWT_SECRET_KEY "$JWT_SECRET_KEY"
   append_env JWT_ALGORITHM "HS256"
   append_env JWT_EXPIRE_MINUTES "1440"
   append_env ENCRYPTION_KEY "$ENCRYPTION_KEY"
   append_env BUILDER_FERNET_KEY "$BUILDER_FERNET_KEY"
-  append_env MCP_API_KEYS "$MCP_API_KEYS"
   append_env HOST "0.0.0.0"
   append_env PORT "8003"
-  append_env ENABLE_CODE_SUFFIX "false"
-  append_env VIBE_CODING_RUNTIME "host"
-  append_env CODE_SERVER_BASE_URL "$CODE_SERVER_BASE_URL"
-  append_env BUILDER_PUBLIC_URL "$BUILDER_PUBLIC_URL"
   append_env APAAS_WORKSPACE_ROOT "/root/apaas-builder/workspaces"
   append_env APAAS_NPM_CACHE_DIR "/root/apaas-builder/workspaces/.npm-cache"
 

@@ -34,7 +34,7 @@ class Settings(BaseSettings):
     # LLM Configuration
     # 兼容保留：运行时统一走 ANTHROPIC_BASE_URL，LLM_API_BASE 不再实际参与请求
     llm_api_base: str = "https://api.minimaxi.com/anthropic"
-    llm_api_key: str
+    llm_api_key: str = ""
     llm_model: str = "MiniMax-M2.7"
     llm_doc_model: str = "MiniMax-M2.7"
     llm_vision_model: str = "MiniMax-M2.7"

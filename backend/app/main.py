@@ -190,10 +190,11 @@ class _McpBearerAuthAsgiMiddleware:
         if scope["type"] != "http":
             await self.app(scope, receive, send)
             return
-        raw_keys = (os.getenv("MCP_API_KEYS") or os.getenv("MCP_API_KEY") or "").strip()
-        keys = {item.strip() for item in raw_keys.split(",") if item.strip()}
+        from app.mcp_keys import get_mcp_api_keys
+
+        keys = set(await get_mcp_api_keys())
         if not keys:
-            await self._send_json(send, 503, b'{"detail":"MCP_API_KEYS not configured"}')
+            await self._send_json(send, 503, b'{"detail":"MCP key not configured"}')
             return
         headers = {
             key.decode("latin1").lower(): value.decode("latin1")

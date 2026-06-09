@@ -50,6 +50,7 @@ async def init_db():
     import app.models.agent_models  # noqa: F401
     import app.models.collaboration  # noqa: F401
     import app.models.preference  # noqa: F401
+    import app.models.system_setting  # noqa: F401
     import app.models.spec  # noqa: F401
     # ConfigChat 会话持久化（2026-05-24）— config_chat_sessions / config_chat_messages
     import app.models.config_chat  # noqa: F401

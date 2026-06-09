@@ -39,3 +39,19 @@ def build_editor_path(
         qs_parts.append(f"formId={form_id}")
     qs_parts.append("processVersion=false")
     return f"/platform/{tid}/default/{sub_path}?{'&'.join(qs_parts)}"
+
+
+def build_editor_entry_path(
+    *,
+    apaas_app_id: str,
+    tid: str,
+    step_index: int = 2,
+) -> str:
+    """返回进入具体编辑器前的 aPaaS 应用编辑总览路径。
+
+    直接新开 `data-model-fn-config` 时，aPaaS 原生页的返回/关闭按钮没有
+    上一层编辑页历史可退。新标签页先落到 edit-app，再跳具体编辑器，可以给
+    原生按钮一条稳定的返回链。
+    """
+    idx = step_index if 0 <= step_index <= 9 else 2
+    return f"/platform/{tid}/admin/app-store/edit-app?appId={apaas_app_id}&currentStepIndex={idx}"

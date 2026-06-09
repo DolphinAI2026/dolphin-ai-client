@@ -56,7 +56,7 @@ _MULTI_SELECT_COMPONENT_TYPES = {"FORM_SELECT_INPUT"}
 
 
 def _choose_type_for_select_component(component_type: str) -> str:
-    return "MULTIPLE" if str(component_type or "").strip() in _MULTI_SELECT_COMPONENT_TYPES else "SINGLE"
+    return "MULTI" if str(component_type or "").strip() in _MULTI_SELECT_COMPONENT_TYPES else "SINGLE"
 
 
 # ---------------------------------------------------------------------------

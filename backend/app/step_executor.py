@@ -1209,7 +1209,7 @@ _SELECT_COMPONENT_TYPES = {"FORM_SELECT_INPUT_SINGLE", "FORM_SELECT_INPUT"}
 
 
 def _choose_type_for_dict_component(component_type: str) -> str:
-    return "MULTIPLE" if str(component_type or "").strip() in _DICT_MULTI_COMPONENT_TYPES else "SINGLE"
+    return "MULTI" if str(component_type or "").strip() in _DICT_MULTI_COMPONENT_TYPES else "SINGLE"
 
 
 def _normalize_dict_code(raw_code: Any, dict_codes: Dict[str, str]) -> str:

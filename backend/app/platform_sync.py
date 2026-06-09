@@ -73,7 +73,7 @@ def _guess_field_type(comp_type: str = "", data_type: str = "",
     """
     # FORM_SELECT_INPUT 在 detailPageConfigById 中用 chooseType 区分
     if comp_type == "FORM_SELECT_INPUT":
-        return "下拉多选" if choose_type == "MULTIPLE" else "下拉单选"
+        return "下拉多选" if choose_type in {"MULTI", "MULTIPLE"} else "下拉单选"
     if comp_type and comp_type in _REVERSE_COMP_MAP:
         return _REVERSE_COMP_MAP[comp_type]
     if data_type and data_type in _REVERSE_DATA_TYPE_MAP:

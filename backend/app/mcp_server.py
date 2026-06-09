@@ -5310,7 +5310,7 @@ async def get_apaas_form_detail(env_id: int, apaas_app_id: str, form_id: str) ->
         }
         # 选项类组件 (下拉单选/多选/单选框/复选框) 的选项透出 — 否则只读表单设计器下拉永远空,
         # 绑了字典也拉不到. apaas 组件平铺 dictionaryChooseOptions / chooseOptions ({value,label,code})
-        # + chooseType (SINGLE/MULTIPLE) + dictionaryCode. 归一成前端 FieldCard 期望的 {code,name}.
+        # + chooseType (SINGLE/MULTI) + dictionaryCode. 归一成前端 FieldCard 期望的 {code,name}.
         _raw_opts = c.get("dictionaryChooseOptions") or c.get("chooseOptions") or []
         _opts_out = []
         for _o in _raw_opts:
@@ -7127,6 +7127,7 @@ async def build_apaas_feature_from_spec(
                 "dictionaryCode": actual_dict_code,
                 "dictionarySelectOptions": dict_opts_for_field,
             }
+            comp["chooseType"] = "MULTI" if comp_type in {"FORM_SELECT_INPUT", "FORM_CHECKBOX_INPUT"} else "SINGLE"
 
         if comp_type in _REF_BOUND_COMPONENTS:
             target_model, target_field = _extract_ref_target(f)

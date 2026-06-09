@@ -9,7 +9,7 @@
 启动时拉 tools/list 是 lazy 的（第一次 get_tool_schemas_openai 时拉），之后用 cache。
 支持配置多个 MCP endpoint，把拆分后的工具在 AI Chat 里合并成一套工具池。
 
-注：MCP_API_KEYS 必须在 backend/.env 配，否则桥接不可用（cowork agent 只剩原 4 个工具）。
+注：MCP key 优先使用平台管理页配置；未配置时兼容读取 backend/.env 的 MCP_API_KEYS。
 """
 from __future__ import annotations
 
@@ -81,12 +81,22 @@ _CRITICAL_BUILDER_TOOLS = {
 _STUB_TOOLS: set[str] = set()
 
 
-def _get_api_key() -> Optional[str]:
+async def _get_api_key() -> Optional[str]:
     # MCP_BRIDGE_AUTH_KEY 单独配置 outbound 鉴权，跟 ming 自己 mcp_server 的入站
     # 鉴权 MCP_API_KEYS 解耦 — 切 v2 时 BASE 指 v2 svc，AUTH_KEY 必须配 v2 的 key
     # 而不能复用本机的 MCP_API_KEYS（否则两边 secret 体系串了）。
-    raw = (os.getenv("MCP_BRIDGE_AUTH_KEY", "").strip()
-           or os.getenv("MCP_API_KEYS", "").strip())
+    raw = os.getenv("MCP_BRIDGE_AUTH_KEY", "").strip()
+    if raw:
+        return raw.split(",")[0].strip()
+    try:
+        from app.mcp_keys import get_mcp_api_keys
+
+        keys = await get_mcp_api_keys()
+        if keys:
+            return keys[0]
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("MCP bridge 读取页面配置 key 失败，降级读取环境变量: %s", exc)
+    raw = os.getenv("MCP_API_KEYS", "").strip()
     if raw:
         return raw.split(",")[0].strip()
     return None
@@ -134,14 +144,14 @@ async def _fetch_inprocess_tools() -> tuple[list[dict], dict[str, str], Optional
 
 async def _fetch_mcp_tools() -> tuple[list[dict], dict[str, str], Optional[str]]:
     """HTTP 调 MCP server 拉 tools/list。返回 (tools, tool_url_map, error_message)。"""
-    key = _get_api_key()
+    key = await _get_api_key()
     if not key:
         tools, tool_url_map, fallback_error = await _fetch_inprocess_tools()
         if tools:
             logger.warning("MCP_API_KEYS 未配置，AIChat bridge 使用同进程 MCP 工具兜底")
             return tools, tool_url_map, None
         return [], {}, (
-            "MCP_API_KEYS 未配置 — 在 backend/.env 加一行 MCP_API_KEYS=<key>; "
+            "MCP key 未配置 — 请在平台管理页 MCP 接入里配置 key；"
             f"{fallback_error}"
         )
     headers = {
@@ -342,7 +352,7 @@ async def call_tool(tool_name: str, args: dict, tenant_id: int = 0, user_id: int
     if tool_url == _INPROCESS_TOOL_URL:
         return await _call_inprocess_tool(tool_name, enriched)
 
-    key = _get_api_key()
+    key = await _get_api_key()
     if not key:
         return json.dumps({
             "ok": False, "error_code": "NO_MCP_KEY",

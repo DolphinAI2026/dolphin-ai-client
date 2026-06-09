@@ -95,13 +95,12 @@ ensure_backend_env() {
     case "$line" in
       JWT_SECRET_KEY=__GENERATE__*)        echo "JWT_SECRET_KEY=$(gen)" ;;
       ENCRYPTION_KEY=__GENERATE__*)        echo "ENCRYPTION_KEY=$(gen)" ;;
-      MCP_API_KEYS=__GENERATE__*)          echo "MCP_API_KEYS=$(gen)" ;;
       BUILDER_FERNET_KEY=__GENERATE_FERNET__*) echo "BUILDER_FERNET_KEY=$(gen_fernet)" ;;
       *) echo "$line" ;;
     esac
   done < "$TEMPLATE" >> "$BACKEND_ENV_FILE"
   ok "已生成 $BACKEND_ENV_FILE（密钥随机，权限 600）"
-  warn "请编辑该文件，把所有 __SET_ME__ 填成客户真实值（DB / aPaaS / LLM），然后重新运行本脚本。"
+  warn "请编辑该文件，把所有 __SET_ME__ 填成客户真实值（DB / aPaaS），然后重新运行本脚本。"
   exit 0
 }
 
@@ -112,7 +111,7 @@ validate_backend_env() {
   fi
   grep -q '__GENERATE__' "$BACKEND_ENV_FILE" && die "backend.env 残留 __GENERATE__ 占位，疑似生成异常，请删除 $BACKEND_ENV_FILE 重跑。"
   local missing=()
-  for k in DATABASE_URL APAAS_BASE_URL LLM_API_KEY JWT_SECRET_KEY ENCRYPTION_KEY; do
+  for k in DATABASE_URL APAAS_BASE_URL JWT_SECRET_KEY ENCRYPTION_KEY; do
     local v; v="$(grep -E "^$k=" "$BACKEND_ENV_FILE" | head -1 | cut -d= -f2-)"
     [ -n "$v" ] || missing+=("$k")
   done
@@ -200,9 +199,8 @@ ${c_grn}========================================================${c_rst}
 
 ${c_yel}⚠ 上生产前仍需人工加固（脚本改不了的代码/编排层，详见安全报告 §6）：${c_rst}
   1. ${c_yel}平台代理鉴权${c_rst}（C-1，最高优先）：platform_proxy 路由加鉴权、废弃全局 _proxy_state 单例。
-  2. ${c_yel}容器降权${c_rst}（H-4）：当前 compose 用 host 网络 + 挂 docker.sock。本脚本已设
-     VIBE_CODING_RUNTIME=host（不用沙箱），${c_yel}可手动从 docker-compose.yml 删掉 docker.sock 挂载${c_yel}；
-     并给 Dockerfile 加非 root USER。${c_rst}
+  2. ${c_yel}容器降权${c_rst}（H-4）：当前 compose 用 host 网络 + 挂 docker.sock；
+     ${c_yel}生产需在编排层删掉 docker.sock 挂载并给 Dockerfile 加非 root USER${c_yel}。${c_rst}
   3. ${c_yel}前置 nginx${c_rst}：补 HSTS/X-Frame-Options/CSP/nosniff 安全头（M-5）；如启用 Web IDE 需给 /ide/ 加鉴权（H-5）。
   4. 确认 JWT_SECRET_KEY 不是 README 泄漏的那枚；轮换历史泄漏密钥（C-3）。
 EOF
