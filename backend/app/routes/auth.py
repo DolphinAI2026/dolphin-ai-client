@@ -2357,19 +2357,33 @@ async def list_my_tenants(
     ctx: Annotated[AuthContext, Depends(get_auth_context)],
     db: Annotated[AsyncSession, Depends(get_db)],
 ):
-    """返回当前用户可切换的租户列表（用于顶栏 dropdown）。"""
-    rows = (
-        await db.execute(
-            select(Tenant)
-            .join(UserTenant, UserTenant.tenant_id == Tenant.id)
-            .where(
-                UserTenant.user_id == ctx.user.id,
-                UserTenant.status == 1,
-                Tenant.status == 1,
+    """返回当前用户可切换的租户列表（用于顶栏 dropdown）。
+
+    平台管理员可切到任意 active 租户（与 /switch-tenant 的鉴权一致），故返回全部
+    active 租户；普通用户仅返回自己的 active membership。两个接口口径必须一致，
+    否则 admin 能切进的租户在下拉里看不到（2026-06-09 修）。
+    """
+    if ctx.user.is_platform_admin:
+        rows = (
+            await db.execute(
+                select(Tenant)
+                .where(Tenant.status == 1)
+                .order_by(Tenant.tenant_name.asc())
             )
-            .order_by(UserTenant.is_default.desc(), Tenant.tenant_name.asc())
-        )
-    ).scalars().all()
+        ).scalars().all()
+    else:
+        rows = (
+            await db.execute(
+                select(Tenant)
+                .join(UserTenant, UserTenant.tenant_id == Tenant.id)
+                .where(
+                    UserTenant.user_id == ctx.user.id,
+                    UserTenant.status == 1,
+                    Tenant.status == 1,
+                )
+                .order_by(UserTenant.is_default.desc(), Tenant.tenant_name.asc())
+            )
+        ).scalars().all()
     return [
         TenantOption(tenant_id=t.id, tenant_name=t.tenant_name, tenant_code=t.tenant_code)
         for t in rows

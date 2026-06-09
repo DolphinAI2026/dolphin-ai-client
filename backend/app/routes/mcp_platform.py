@@ -238,6 +238,10 @@ def _normalize_origin(base_url: str) -> str:
 
 
 def _api_base(base_url: str) -> str:
+    # 显式覆盖（prod 双端口拓扑：API 在独立端口、根路径无 /backend）。留空 = 单 origin 默认 +/backend。
+    override = (settings.apaas_api_base or "").strip().rstrip("/")
+    if override:
+        return override
     return f"{_normalize_origin(base_url)}/backend"
 
 
@@ -246,10 +250,11 @@ def _admin_base(row: dict[str, Any]) -> str:
 
 
 async def _get_apaas_rsa_public_key(base_url: str) -> str:
-    origin = _normalize_origin(base_url)
-    if origin in _RSA_PUBLIC_KEY_CACHE:
-        return _RSA_PUBLIC_KEY_CACHE[origin]
-    url = f"{origin}/platform/apaasRsa.pub"
+    # 覆盖优先（prod RSA 公钥在 UI 端口，与登录 API 端口不同）。留空 = origin/platform/apaasRsa.pub。
+    override = (settings.apaas_rsa_pub_url or "").strip()
+    url = override or f"{_normalize_origin(base_url)}/platform/apaasRsa.pub"
+    if url in _RSA_PUBLIC_KEY_CACHE:
+        return _RSA_PUBLIC_KEY_CACHE[url]
     try:
         async with httpx.AsyncClient(timeout=10, verify=False) as client:
             resp = await client.get(url)
@@ -259,7 +264,7 @@ async def _get_apaas_rsa_public_key(base_url: str) -> str:
         key = ""
     if not key:
         key = DEFAULT_APAAS_RSA_PUBLIC_KEY
-    _RSA_PUBLIC_KEY_CACHE[origin] = key
+    _RSA_PUBLIC_KEY_CACHE[url] = key
     return key
 
 

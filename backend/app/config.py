@@ -25,6 +25,11 @@ class Settings(BaseSettings):
     # aPaaS Platform
     apaas_base_url: str = ""
     apaas_tenant_id: str = ""
+    # 双端口 / 无 /backend 拓扑覆盖（如生产: 登录 API 在 :30607 根路径、RSA 公钥在 UI 端口 :30605）。
+    # 留空 = 沿用单 origin 默认推导（trial: origin+/backend、origin/platform/apaasRsa.pub）。
+    # 见 routes/mcp_platform._api_base / _get_apaas_rsa_public_key。
+    apaas_api_base: str = ""        # 登录+API 根 URL；设了就直接用，不再 origin+/backend
+    apaas_rsa_pub_url: str = ""     # RSA 公钥完整 URL；设了就用它取，不再 origin/platform/apaasRsa.pub
 
     # LLM Configuration
     # 兼容保留：运行时统一走 ANTHROPIC_BASE_URL，LLM_API_BASE 不再实际参与请求
