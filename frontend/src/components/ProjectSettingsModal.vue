@@ -19,6 +19,13 @@
         <template v-if="isEdit">
           <div
             class="settings-tab-item"
+            :class="{ active: activeTab === 'platform' }"
+            @click="activeTab = 'platform'"
+          >
+            平台环境
+          </div>
+          <div
+            class="settings-tab-item"
             :class="{ active: activeTab === 'team' }"
             @click="activeTab = 'team'"
           >
@@ -37,6 +44,79 @@
             </el-form-item>
             <el-form-item label="应用描述">
               <el-input v-model="form.description" :disabled="!canEditProject" type="textarea" :rows="3" placeholder="简要描述应用用途" />
+            </el-form-item>
+          </el-form>
+        </div>
+
+        <!-- 平台环境 -->
+        <div v-if="isEdit" v-show="activeTab === 'platform'" class="settings-pane">
+          <el-alert
+            v-if="!canManagePlatform"
+            type="info"
+            :closable="false"
+            show-icon
+            style="margin-bottom: 12px"
+          >
+            当前角色仅可查看项目平台配置，修改和连接平台需要项目管理员权限。
+          </el-alert>
+          <el-form :model="form" label-position="top" size="default">
+            <el-form-item label="平台地址">
+              <el-input v-model="form.platform_url" :disabled="!canManagePlatform" placeholder="https://your-apaas.com/backend/" />
+            </el-form-item>
+            <el-form-item label="租户ID">
+              <el-input v-model="form.platform_tenant_id" :disabled="!canManagePlatform" placeholder="平台租户ID" />
+            </el-form-item>
+
+            <el-tabs v-model="connectMode" class="connect-mode-tabs">
+              <el-tab-pane label="账号登录" name="login" />
+              <el-tab-pane label="Token直连" name="token" />
+            </el-tabs>
+
+            <template v-if="connectMode === 'login'">
+              <el-form-item label="用户名（手机号/邮箱）">
+                <el-input v-model="loginForm.username" :disabled="!canManagePlatform" placeholder="请输入登录账号" />
+              </el-form-item>
+              <el-form-item label="密码">
+                <el-input v-model="loginForm.password" :disabled="!canManagePlatform" type="password" show-password placeholder="请输入密码" />
+              </el-form-item>
+              <el-form-item>
+                <el-button type="primary" :loading="connecting" @click="handleConnect" :disabled="!canManagePlatform || !canConnect">
+                  登录并连接平台
+                </el-button>
+                <el-tag v-if="form.platform_connected" type="success" size="small" style="margin-left: 8px">已连接</el-tag>
+                <el-tag v-else type="info" size="small" style="margin-left: 8px">未连接</el-tag>
+              </el-form-item>
+            </template>
+
+            <template v-else>
+              <el-form-item label="Token">
+                <el-input v-model="tokenForm.token" :disabled="!canManagePlatform" type="textarea" :rows="3" placeholder="从浏览器F12复制xdaptoken值" />
+              </el-form-item>
+              <el-alert type="info" :closable="false" show-icon style="margin-bottom: 12px">
+                <template #title>
+                  <span style="font-size: 12px">登录aPaaS平台 -> F12 -> Network -> 复制请求头中的 xdaptoken 值</span>
+                </template>
+              </el-alert>
+            </template>
+
+            <!-- 应用选择 -->
+            <el-form-item label="关联应用">
+              <el-select
+                v-model="form.platform_app_id"
+                placeholder="请先连接平台后选择应用"
+                :disabled="!form.platform_connected || !canManagePlatform"
+                :loading="loadingApps"
+                filterable
+                style="width: 100%"
+                @change="handleAppSelect"
+              >
+                <el-option
+                  v-for="app in platformApps"
+                  :key="app.app_id"
+                  :label="`${app.app_name}（${app.app_code}）`"
+                  :value="app.app_id"
+                />
+              </el-select>
             </el-form-item>
           </el-form>
         </div>
@@ -147,7 +227,7 @@ import { ref, reactive, computed, watch } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { Loading, Close } from '@element-plus/icons-vue'
 import { projectsApi } from '@/api/projects'
-import type { Project, ProjectMember } from '@/api/projects'
+import type { Project, PlatformApp, ProjectMember } from '@/api/projects'
 
 const props = defineProps<{
   project?: Project | null
@@ -162,15 +242,28 @@ const visible = defineModel<boolean>({ default: false })
 const isEdit = computed(() => !!props.project?.id)
 const activeTab = ref('basic')
 const canEditProject = computed(() => !isEdit.value || !!props.project?.can_manage_project)
+const canManagePlatform = computed(() => !!props.project?.can_manage_platform)
 const canManageMembers = computed(() => !!props.project?.can_manage_members)
 const canManageMemberRoles = computed(() => !!props.project?.can_manage_member_roles)
 
 const form = reactive({
   name: '',
   description: '',
+  platform_url: '',
+  platform_tenant_id: '',
+  platform_app_id: '',
+  platform_app_name: '',
+  platform_app_code: '',
+  platform_connected: false,
 })
 
+const connectMode = ref('login')
+const loginForm = reactive({ username: '', password: '' })
+const tokenForm = reactive({ token: '' })
+const connecting = ref(false)
 const saving = ref(false)
+const loadingApps = ref(false)
+const platformApps = ref<PlatformApp[]>([])
 
 // 团队成员
 const members = ref<ProjectMember[]>([])
@@ -181,16 +274,43 @@ const newMemberRole = ref('member')
 const availableUsers = ref<{ id: number; username: string }[]>([])
 const loadingUsers = ref(false)
 
+const canConnect = computed(() => {
+  return form.platform_url && form.platform_tenant_id && loginForm.username && loginForm.password
+})
+
 // Watch for project changes to populate form
 watch(() => props.project, (p) => {
   if (p) {
     form.name = p.name || ''
     form.description = p.description || ''
+    form.platform_url = p.platform_url || ''
+    form.platform_tenant_id = p.platform_tenant_id || ''
+    form.platform_app_id = p.platform_app_id || ''
+    form.platform_app_name = p.platform_app_name || ''
+    form.platform_app_code = p.platform_app_code || ''
+    form.platform_connected = p.platform_connected || false
+    loginForm.username = p.platform_username || ''
+    loginForm.password = ''
+    tokenForm.token = ''
+    // 已连接平台时自动加载应用列表
+    if (p.platform_connected) {
+      fetchPlatformApps()
+    }
     // 加载成员列表
     fetchMembers()
   } else {
     form.name = ''
     form.description = ''
+    form.platform_url = ''
+    form.platform_tenant_id = ''
+    form.platform_app_id = ''
+    form.platform_app_name = ''
+    form.platform_app_code = ''
+    form.platform_connected = false
+    loginForm.username = ''
+    loginForm.password = ''
+    tokenForm.token = ''
+    platformApps.value = []
     members.value = []
     selectedUserId.value = null
     newMemberRole.value = 'member'
@@ -199,6 +319,19 @@ watch(() => props.project, (p) => {
   // Reset to basic tab when dialog opens
   activeTab.value = 'basic'
 }, { immediate: true })
+
+async function fetchPlatformApps() {
+  if (!props.project?.id || !form.platform_connected) return
+  loadingApps.value = true
+  try {
+    platformApps.value = await projectsApi.listPlatformApps(props.project.id)
+  } catch (e: any) {
+    console.error('获取应用列表失败:', e)
+    platformApps.value = []
+  } finally {
+    loadingApps.value = false
+  }
+}
 
 async function fetchMembers() {
   if (!props.project?.id) return
@@ -296,6 +429,40 @@ async function handleUpdateRole(member: ProjectMember, newRole: string) {
   }
 }
 
+function handleAppSelect(appId: string) {
+  const app = platformApps.value.find(a => a.app_id === appId)
+  if (app) {
+    form.platform_app_name = app.app_name
+    form.platform_app_code = app.app_code || ''
+  }
+}
+
+async function handleConnect() {
+  if (!canManagePlatform.value) {
+    ElMessage.warning('当前角色无权修改平台配置')
+    return
+  }
+  if (!props.project?.id) return
+  connecting.value = true
+  try {
+    const updated = await projectsApi.connect(props.project.id, {
+      username: loginForm.username,
+      password: loginForm.password,
+      base_url: form.platform_url,
+      tenant_id: form.platform_tenant_id,
+    })
+    form.platform_connected = true
+    ElMessage.success('平台连接成功')
+    emit('saved', updated)
+    // 连接成功后自动加载应用列表
+    await fetchPlatformApps()
+  } catch (e: any) {
+    ElMessage.error(e.message || '连接失败')
+  } finally {
+    connecting.value = false
+  }
+}
+
 async function handleSave() {
   if (!canEditProject.value) {
     ElMessage.warning('当前角色无权修改项目')
@@ -313,6 +480,18 @@ async function handleSave() {
       const updateData: Record<string, any> = {
         name: form.name,
         description: form.description,
+        platform_url: form.platform_url,
+        platform_tenant_id: form.platform_tenant_id,
+        platform_app_id: form.platform_app_id,
+        platform_app_name: form.platform_app_name,
+        platform_app_code: form.platform_app_code,
+      }
+      // If token mode, include token
+      if (connectMode.value === 'token' && tokenForm.token.trim()) {
+        updateData.platform_token = tokenForm.token.trim()
+      }
+      if (loginForm.username) {
+        updateData.platform_username = loginForm.username
       }
       result = await projectsApi.update(props.project.id, updateData)
     } else {

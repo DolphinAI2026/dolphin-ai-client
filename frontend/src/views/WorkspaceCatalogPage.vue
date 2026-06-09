@@ -143,6 +143,8 @@
     </div>
   </BuilderFrame>
 
+  <EnvSelectModal v-model="showEnvModal" @selected="onEnvSelected" />
+
   <!-- 全屏 IDE 抽屉：点击工作区直接进 code-server 看/改代码（不再跳 Coding 工作台） -->
   <WorkspaceIdeDrawer ref="ideDrawer" />
 </template>
@@ -153,6 +155,7 @@ import { useRoute } from 'vue-router'
 import { Grid, List } from '@element-plus/icons-vue'
 import { ElMessage } from 'element-plus'
 import BuilderFrame from '@/components/BuilderFrame.vue'
+import EnvSelectModal from '@/components/EnvSelectModal.vue'
 import { codingApi, type WorkspaceInfo } from '@/api/coding'
 import { applicationApi } from '@/api/application'
 import { platformEnvApi } from '@/api/platformEnv'
@@ -182,6 +185,8 @@ const statusOptions = [
 
 // 上传组件包相关状态
 const uploadingWsId = ref<string | null>(null)
+const showEnvModal = ref(false)
+const pendingUploadWs = ref<WorkspaceInfo | null>(null)
 
 const groupMap: Record<string, { key: string; label: string }> = {
   'form-component': { key: 'component', label: '组件' },
@@ -314,20 +319,26 @@ async function uploadWorkspace(ws: WorkspaceInfo) {
   try {
     envs = await platformEnvApi.list()
   } catch {
-    ElMessage.error('获取默认平台连接失败')
+    ElMessage.error('获取平台环境失败')
     uploadingWsId.value = null
     return
   }
   const connectedEnvs = envs.filter(e => e.status === 'connected')
 
   if (connectedEnvs.length === 0) {
-    ElMessage.warning('没有可用的默认平台连接，请联系管理员检查配置')
+    ElMessage.warning('没有可用的平台环境，请先在环境管理中配置并连接平台')
     uploadingWsId.value = null
     return
   }
 
-  const targetEnv = connectedEnvs.find(e => e.is_default) || connectedEnvs[0]
-  await doUpload(ws, targetEnv.id)
+  if (connectedEnvs.length === 1) {
+    await doUpload(ws, connectedEnvs[0].id)
+  } else {
+    // 弹窗选择时先清 loading，由 doUpload 重新接管
+    uploadingWsId.value = null
+    pendingUploadWs.value = ws
+    showEnvModal.value = true
+  }
 }
 
 async function doUpload(ws: WorkspaceInfo, envId: number) {
@@ -339,6 +350,13 @@ async function doUpload(ws: WorkspaceInfo, envId: number) {
     ElMessage.error(e?.message || '上传失败')
   } finally {
     uploadingWsId.value = null
+  }
+}
+
+function onEnvSelected(envId: number) {
+  if (pendingUploadWs.value) {
+    doUpload(pendingUploadWs.value, envId)
+    pendingUploadWs.value = null
   }
 }
 

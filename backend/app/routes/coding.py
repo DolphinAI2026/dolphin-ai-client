@@ -1,5 +1,5 @@
 """
-Coding API 路由 - aPaaS 自开发工作区接口
+Coding API 路由 - aPaaS Vibe Coding 接口
 """
 
 import asyncio

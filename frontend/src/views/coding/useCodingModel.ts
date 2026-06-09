@@ -46,7 +46,7 @@ export function useCodingModel() {
 
   const codingModelHint = computed(() => {
     if (codingModelLoading.value) return '正在加载可用模型...'
-    if (codingModelOptions.value.length === 0) return '未配置可用模型，请前往模型配置'
+    if (codingModelOptions.value.length === 0) return '未配置可用模型，请前往环境管理配置'
     if (codingStore.conversationId) return '切换后仅影响后续开发与打开 IDE 的默认模型'
     return '首条消息会使用当前选择的模型'
   })

@@ -1,16 +1,17 @@
-"""协作 ORM models 的 smoke 测试
+"""Phase A — 5 个协作 ORM models 的 smoke 测试
 
 跑在 in-memory sqlite 上，使用 conftest 的 db_session fixture（每个测试一份新 schema）。
 不依赖 dev DB 数据 —— 测试内自己 seed 必要的 User/Application/Project/Spec 行。
 """
 import pytest
-from sqlalchemy import inspect
+from sqlalchemy import select, inspect
 from sqlalchemy.exc import IntegrityError
 
 from app.models import User, Application, Project, Tenant
 from app.models.spec import Spec as SpecORM
 from app.models.collaboration import (
-    ApplicationMember, GitConnection, PlatformDriftLog,
+    ApplicationMember, ChangeProposal, ProposalReview,
+    GitConnection, PlatformDriftLog,
 )
 
 
@@ -55,11 +56,12 @@ async def _seed_basics(db_session):
 
 @pytest.mark.asyncio
 async def test_collaboration_tables_registered(db_session):
-    """协作表都应被 Base.metadata.create_all 创建出来"""
+    """5 张表都应被 Base.metadata.create_all 创建出来"""
     def _table_names(sync_session):
         return inspect(sync_session.connection()).get_table_names()
     names = await db_session.run_sync(_table_names)
-    for t in ("application_members", "git_connections", "platform_drift_logs"):
+    for t in ("application_members", "change_proposals", "proposal_reviews",
+              "git_connections", "platform_drift_logs"):
         assert t in names
 
 
@@ -80,6 +82,63 @@ async def test_application_member_crud(db_session):
     assert member.id is not None
     assert member.role == "contributor"
     assert member.created_at is not None
+
+
+@pytest.mark.asyncio
+async def test_change_proposal_minimal_create(db_session):
+    seed = await _seed_basics(db_session)
+
+    proposal = ChangeProposal(
+        id="cp_test_phase_a",
+        application_id=seed["app"].id,
+        title="测试提案",
+        description="phase a smoke",
+        draft_spec_id=seed["spec"].id,
+        status="draft",
+        created_by=seed["user"].id,
+    )
+    db_session.add(proposal)
+    await db_session.commit()
+    await db_session.refresh(proposal)
+
+    assert proposal.id == "cp_test_phase_a"
+    assert proposal.status == "draft"
+    assert proposal.created_at is not None
+
+
+@pytest.mark.asyncio
+async def test_proposal_review_create(db_session):
+    """ProposalReview 可正常创建并查询"""
+    seed = await _seed_basics(db_session)
+
+    proposal = ChangeProposal(
+        id="cp_test_review",
+        application_id=seed["app"].id,
+        title="cascade test",
+        draft_spec_id=seed["spec"].id,
+        status="draft",
+        created_by=seed["user"].id,
+    )
+    db_session.add(proposal)
+    await db_session.flush()
+
+    review = ProposalReview(
+        proposal_id=proposal.id,
+        reviewer_id=seed["user"].id,
+        action="comment",
+        body="lgtm",
+    )
+    db_session.add(review)
+    await db_session.commit()
+    await db_session.refresh(review)
+
+    assert review.id is not None
+    assert review.action == "comment"
+
+    found = await db_session.execute(
+        select(ProposalReview).where(ProposalReview.proposal_id == proposal.id)
+    )
+    assert found.scalar_one().body == "lgtm"
 
 
 @pytest.mark.asyncio

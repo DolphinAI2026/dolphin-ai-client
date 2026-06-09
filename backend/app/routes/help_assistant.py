@@ -71,8 +71,10 @@ _PATH_LABELS: list[tuple[str, str, str]] = [
     ("/ai-chat", "AI 对话", "用对话整理需求 / 整合材料，产出标准设计文档"),
     ("/chat", "AI 搭建", "把设计文档喂给 AI 生成 SPEC + 应用配置 → 部署到平台"),
     ("/coding", "AI 编码 (睿鲸 IDE)", "对话生成自开发组件 / 页面 / 接口"),
+    ("/devops", "DevOps", "提案 / 审批 / Apply / Git / 环境"),
+    ("/proposals/", "提案详情", "正在查看某个变更提案，可以评审 / 批准 / Apply"),
     ("/apps", "应用列表"),
-    ("/platform-envs", "模型配置"),
+    ("/platform-envs", "平台环境 / LLM 配置"),
     ("/tenant-users", "成员管理"),
     ("/", "首页"),
 ]
@@ -100,7 +102,7 @@ def _system_prompt() -> str:
 - 回答用户关于产品功能、使用方式、模块差异、典型流程的问题
 - 引导用户走通"需求 → 应用"的最短路径
 - 用简洁中文回答，必要时给出 步骤 1/2/3 或表格
-- 对模块路径用 `代码风格` 标注（如 `/coding` / `/apps`）
+- 对模块路径用 `代码风格` 标注（如 `/devops` / `+ 创建提案`）
 - 如果用户问的内容不在知识库里，明确说"我不确定"，建议去查 GitHub Issues 或联系管理员
 - 不要编造功能。只描述知识库里有的能力
 
@@ -110,6 +112,7 @@ def _system_prompt() -> str:
 
 格式：标准 markdown 链接，但 href 用 `#nav:/路径` 前缀：
 - `[去 AI 编码](#nav:/coding)`
+- `[打开 DevOps](#nav:/devops)`
 - `[去应用列表](#nav:/apps)`
 
 前端会把 `#nav:/xxx` 链接渲染成醒目的"跳转按钮"，用户点击会自动 router.push 跳转。
@@ -120,7 +123,9 @@ def _system_prompt() -> str:
 - `/ai-chat` AI 对话
 - `/chat` AI 搭建（不带 app_id 是新建态）
 - `/coding` AI 编码
+- `/devops` DevOps
 - `/platform-envs?tab=llm` LLM 配置
+- `/platform-envs?tab=envs` 平台环境
 - `/tenant-users` 成员管理
 
 **示例**

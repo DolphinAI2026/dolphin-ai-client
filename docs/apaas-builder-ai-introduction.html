@@ -8,31 +8,46 @@
     :root {
       color-scheme: light;
       --ink: #101828;
-      --text: #344054;
-      --muted: #667085;
+      --ink-2: #344054;
+      --ink-3: #667085;
+      --muted: #98a2b3;
+      --bg: #f6f8fb;
       --paper: #ffffff;
-      --wash: #f6f8fb;
+      --paper-2: #f9fafb;
       --line: #e4e7ec;
-      --blue: #155eef;
+      --line-2: #d0d5dd;
+      --blue: #175cd3;
+      --blue-2: #eff8ff;
       --teal: #0e9384;
-      --green: #16803c;
+      --teal-2: #f0fdfa;
       --amber: #b54708;
+      --amber-2: #fffaeb;
       --rose: #c01048;
-      --max: 1120px;
+      --rose-2: #fff1f3;
+      --violet: #6941c6;
+      --violet-2: #f4f3ff;
+      --green: #067647;
+      --green-2: #ecfdf3;
+      --shadow: 0 14px 36px rgba(16, 24, 40, 0.10);
+      --max: 1180px;
     }
 
     * { box-sizing: border-box; }
 
+    html { scroll-behavior: smooth; }
+
     body {
       margin: 0;
-      background: var(--wash);
       color: var(--ink);
+      background: var(--bg);
       font-family: -apple-system, BlinkMacSystemFont, "PingFang SC", "Microsoft YaHei", "Segoe UI", sans-serif;
-      line-height: 1.72;
+      font-size: 16px;
+      line-height: 1.65;
       -webkit-font-smoothing: antialiased;
     }
 
     a { color: inherit; text-decoration: none; }
+    img { display: block; max-width: 100%; }
 
     .wrap {
       width: min(var(--max), calc(100% - 48px));
@@ -42,8 +57,8 @@
     .topbar {
       position: sticky;
       top: 0;
-      z-index: 10;
-      background: rgba(255, 255, 255, 0.94);
+      z-index: 20;
+      background: rgba(255, 255, 255, 0.92);
       border-bottom: 1px solid var(--line);
       backdrop-filter: blur(14px);
     }
@@ -52,41 +67,41 @@
       height: 64px;
       display: flex;
       align-items: center;
-      gap: 14px;
+      gap: 18px;
     }
 
-    .logo {
-      width: 38px;
-      height: 38px;
+    .mark {
+      width: 36px;
+      height: 36px;
+      border-radius: 8px;
       display: grid;
       place-items: center;
-      border-radius: 8px;
-      background: var(--ink);
+      background: var(--blue);
       color: #fff;
-      font-weight: 900;
+      flex: none;
     }
 
     .brand {
-      line-height: 1.15;
-      font-size: 16px;
-      font-weight: 850;
+      font-weight: 700;
+      line-height: 1.25;
+      letter-spacing: 0;
     }
 
-    .brand span {
+    .brand small {
       display: block;
-      margin-top: 3px;
-      color: var(--muted);
+      color: var(--ink-3);
       font-size: 12px;
-      font-weight: 700;
+      font-weight: 500;
     }
 
     .nav {
       margin-left: auto;
       display: flex;
+      align-items: center;
       gap: 22px;
-      color: var(--text);
+      color: var(--ink-2);
       font-size: 14px;
-      font-weight: 750;
+      font-weight: 600;
     }
 
     .nav a {
@@ -95,280 +110,491 @@
       align-items: center;
     }
 
+    .nav a:hover { color: var(--blue); }
+
     .hero {
-      background: #101828;
+      min-height: 690px;
+      position: relative;
+      display: flex;
+      align-items: flex-end;
+      overflow: hidden;
+      background: #111827;
+      isolation: isolate;
+    }
+
+    .hero::before {
+      content: "";
+      position: absolute;
+      inset: 0;
+      background:
+        linear-gradient(90deg, rgba(16, 24, 40, 0.92) 0%, rgba(16, 24, 40, 0.72) 42%, rgba(16, 24, 40, 0.18) 100%),
+        linear-gradient(0deg, rgba(16, 24, 40, 0.72) 0%, rgba(16, 24, 40, 0.08) 58%);
+      z-index: -1;
+    }
+
+    .hero-img {
+      position: absolute;
+      inset: 0;
+      width: 100%;
+      height: 100%;
+      object-fit: cover;
+      object-position: center top;
+      z-index: -2;
+      filter: saturate(0.92);
+    }
+
+    .hero-content {
+      width: min(var(--max), calc(100% - 48px));
+      margin: 0 auto;
+      padding: 104px 0 86px;
       color: #fff;
-      padding: 96px 0 84px;
     }
 
     .kicker {
       width: fit-content;
-      min-height: 34px;
       display: inline-flex;
       align-items: center;
+      gap: 8px;
+      min-height: 32px;
       padding: 5px 12px;
       border-radius: 999px;
       border: 1px solid rgba(255, 255, 255, 0.24);
-      color: rgba(255, 255, 255, 0.88);
+      background: rgba(255, 255, 255, 0.12);
+      color: rgba(255, 255, 255, 0.9);
       font-size: 13px;
-      font-weight: 850;
+      font-weight: 700;
     }
 
-    h1 {
-      max-width: 820px;
-      margin: 22px 0 0;
-      font-size: 58px;
-      line-height: 1.08;
+    .hero h1 {
+      max-width: 900px;
+      margin: 20px 0 0;
+      font-size: 54px;
+      line-height: 1.12;
       letter-spacing: 0;
     }
 
-    .lead {
-      max-width: 780px;
-      margin: 22px 0 0;
-      color: rgba(255, 255, 255, 0.82);
+    .nowrap { white-space: nowrap; }
+
+    .hero .lead {
+      max-width: 760px;
+      margin: 20px 0 0;
+      color: rgba(255, 255, 255, 0.84);
       font-size: 18px;
+      line-height: 1.75;
     }
+
+    .hero-actions {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 12px;
+      margin-top: 32px;
+    }
+
+    .btn {
+      min-height: 46px;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      gap: 8px;
+      padding: 0 16px;
+      border-radius: 8px;
+      border: 1px solid transparent;
+      font-size: 14px;
+      font-weight: 700;
+    }
+
+    .btn.primary {
+      color: var(--blue);
+      background: #fff;
+    }
+
+    .btn.ghost {
+      color: #fff;
+      border-color: rgba(255, 255, 255, 0.32);
+      background: rgba(255, 255, 255, 0.10);
+    }
+
+    .hero-strip {
+      width: min(var(--max), calc(100% - 48px));
+      margin: -46px auto 0;
+      position: relative;
+      z-index: 5;
+      display: grid;
+      grid-template-columns: repeat(4, 1fr);
+      background: var(--paper);
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      box-shadow: var(--shadow);
+      overflow: hidden;
+    }
+
+    .metric {
+      min-height: 92px;
+      padding: 20px 22px;
+      border-right: 1px solid var(--line);
+    }
+
+    .metric:last-child { border-right: 0; }
+    .metric strong { display: block; font-size: 24px; line-height: 1.2; }
+    .metric span { display: block; margin-top: 6px; color: var(--ink-3); font-size: 13px; }
 
     section { padding: 76px 0; }
 
     .section-head {
-      display: grid;
-      grid-template-columns: 0.92fr 1.08fr;
-      gap: 48px;
+      display: flex;
       align-items: end;
-      margin-bottom: 28px;
+      justify-content: space-between;
+      gap: 28px;
+      margin-bottom: 30px;
     }
 
     .eyebrow {
       margin: 0 0 8px;
       color: var(--blue);
       font-size: 12px;
-      font-weight: 900;
+      font-weight: 800;
       letter-spacing: 0.08em;
       text-transform: uppercase;
     }
 
     h2 {
       margin: 0;
-      font-size: 34px;
-      line-height: 1.26;
+      font-size: 32px;
+      line-height: 1.25;
       letter-spacing: 0;
     }
 
-    h3 {
+    .section-head p {
+      max-width: 560px;
       margin: 0;
-      font-size: 18px;
+      color: var(--ink-3);
+      font-size: 15px;
+    }
+
+    .panel,
+    .card {
+      background: var(--paper);
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      box-shadow: 0 1px 2px rgba(16, 24, 40, 0.04);
+    }
+
+    .position {
+      display: grid;
+      grid-template-columns: 1.05fr 0.95fr;
+      gap: 22px;
+    }
+
+    .position-copy {
+      padding: 28px;
+    }
+
+    .position-copy p {
+      margin: 0 0 16px;
+      color: var(--ink-2);
+    }
+
+    .position-copy p:last-child { margin-bottom: 0; }
+
+    .stack {
+      padding: 22px;
+      background: #fff;
+    }
+
+    .layer {
+      display: grid;
+      grid-template-columns: 40px 1fr;
+      gap: 12px;
+      align-items: start;
+      padding: 16px;
+      border-radius: 8px;
+      border: 1px solid var(--line);
+      background: var(--paper-2);
+      margin-bottom: 10px;
+    }
+
+    .layer:last-child { margin-bottom: 0; }
+    .layer.ai { background: var(--blue-2); border-color: #b2ddff; }
+
+    .icon {
+      width: 40px;
+      height: 40px;
+      border-radius: 8px;
+      display: grid;
+      place-items: center;
+      color: currentColor;
+      flex: none;
+    }
+
+    .icon.blue { color: var(--blue); background: var(--blue-2); }
+    .icon.teal { color: var(--teal); background: var(--teal-2); }
+    .icon.amber { color: var(--amber); background: var(--amber-2); }
+    .icon.rose { color: var(--rose); background: var(--rose-2); }
+    .icon.violet { color: var(--violet); background: var(--violet-2); }
+    .icon.green { color: var(--green); background: var(--green-2); }
+
+    .layer b,
+    .card b { color: var(--ink); }
+
+    .layer-title {
+      display: block;
+      font-size: 15px;
+      font-weight: 800;
       line-height: 1.35;
     }
 
-    p { margin: 0; }
-
-    .muted,
-    .section-head > p {
-      color: var(--muted);
-    }
-
-    .summary {
-      margin: -38px auto 0;
-      display: grid;
-      grid-template-columns: repeat(4, 1fr);
-      border: 1px solid var(--line);
-      border-radius: 8px;
-      background: var(--paper);
-      overflow: hidden;
-      box-shadow: 0 18px 48px rgba(16, 24, 40, 0.12);
-    }
-
-    .summary-item {
-      min-height: 118px;
-      padding: 22px 24px;
-      border-right: 1px solid var(--line);
-    }
-
-    .summary-item:last-child { border-right: 0; }
-
-    .summary-item strong {
+    .layer-text {
       display: block;
-      font-size: 24px;
-      line-height: 1.18;
-    }
-
-    .summary-item span {
-      display: block;
-      margin-top: 8px;
-      color: var(--muted);
+      margin-top: 4px;
+      color: var(--ink-3);
       font-size: 13px;
       line-height: 1.55;
     }
 
-    .grid {
+    .feature-grid {
       display: grid;
       grid-template-columns: repeat(3, 1fr);
       gap: 18px;
     }
 
-    .card {
-      min-height: 230px;
+    .feature-card {
       padding: 24px;
-      border: 1px solid var(--line);
-      border-radius: 8px;
-      background: var(--paper);
-      box-shadow: 0 8px 24px rgba(16, 24, 40, 0.05);
+      min-height: 282px;
     }
 
-    .card p {
-      margin-top: 12px;
-      color: var(--muted);
+    .feature-card h3 {
+      margin: 16px 0 8px;
+      font-size: 18px;
+      line-height: 1.35;
+      letter-spacing: 0;
     }
 
-    .card ul {
-      margin: 16px 0 0;
+    .feature-card p {
+      margin: 0;
+      color: var(--ink-2);
+      font-size: 14px;
+    }
+
+    .feature-card ul {
+      margin: 14px 0 0;
       padding: 0;
       list-style: none;
-      display: grid;
-      gap: 8px;
-      color: var(--text);
-      font-size: 14px;
-    }
-
-    .card li {
-      position: relative;
-      padding-left: 16px;
-    }
-
-    .card li::before {
-      content: "";
-      position: absolute;
-      left: 0;
-      top: 10px;
-      width: 6px;
-      height: 6px;
-      border-radius: 50%;
-      background: currentColor;
-      opacity: 0.56;
-    }
-
-    .workflow {
-      display: grid;
-      grid-template-columns: repeat(4, 1fr);
-      border: 1px solid var(--line);
-      border-radius: 8px;
-      background: var(--paper);
-      overflow: hidden;
-    }
-
-    .step {
-      min-height: 210px;
-      padding: 24px;
-      border-right: 1px solid var(--line);
-    }
-
-    .step:last-child { border-right: 0; }
-
-    .step-number {
-      width: 32px;
-      height: 32px;
-      display: grid;
-      place-items: center;
-      border-radius: 8px;
-      background: var(--ink);
-      color: #fff;
+      color: var(--ink-3);
       font-size: 13px;
-      font-weight: 900;
     }
 
-    .step h3 { margin-top: 18px; }
-
-    .step p {
-      margin-top: 10px;
-      color: var(--muted);
-      font-size: 14px;
+    .feature-card li {
+      display: flex;
+      gap: 8px;
+      margin-top: 7px;
     }
 
-    .table {
+    .feature-card li::before {
+      content: "";
+      width: 5px;
+      height: 5px;
+      margin-top: 9px;
+      border-radius: 50%;
+      background: var(--blue);
+      flex: none;
+    }
+
+    .flow {
+      background: var(--paper);
       border: 1px solid var(--line);
       border-radius: 8px;
-      background: var(--paper);
       overflow: hidden;
     }
 
-    .row {
+    .flow-row {
       display: grid;
-      grid-template-columns: 0.9fr 1.35fr 1fr;
-      gap: 22px;
-      padding: 20px 24px;
+      grid-template-columns: 170px repeat(5, 1fr);
       border-bottom: 1px solid var(--line);
     }
 
-    .row:last-child { border-bottom: 0; }
+    .flow-row:last-child { border-bottom: 0; }
 
-    .row.header {
-      background: #f9fafb;
-      color: var(--muted);
-      font-size: 12px;
-      font-weight: 900;
-      letter-spacing: 0.06em;
-      text-transform: uppercase;
+    .flow-head,
+    .flow-cell {
+      min-height: 108px;
+      padding: 18px;
+      border-right: 1px solid var(--line);
     }
 
-    .row p,
-    .row span {
-      color: var(--muted);
+    .flow-cell:last-child,
+    .flow-head:last-child { border-right: 0; }
+
+    .flow-head {
+      background: var(--paper-2);
+      font-weight: 800;
+      color: var(--ink);
+      display: flex;
+      align-items: center;
+    }
+
+    .flow-cell strong {
+      display: block;
+      color: var(--ink);
       font-size: 14px;
+      line-height: 1.4;
     }
 
-    .module-name { font-weight: 900; }
-
-    .note {
-      background: #fff7ed;
-      border-top: 1px solid #fed7aa;
-      border-bottom: 1px solid #fed7aa;
+    .flow-cell span {
+      display: block;
+      margin-top: 7px;
+      color: var(--ink-3);
+      font-size: 12px;
+      line-height: 1.55;
     }
 
-    .note-grid {
+    .module-layout {
       display: grid;
       grid-template-columns: 0.88fr 1.12fr;
-      gap: 26px;
+      gap: 24px;
       align-items: start;
     }
 
-    .note-list { display: grid; gap: 12px; }
-
-    .note-item {
-      padding: 18px 20px;
+    .screenshot {
       border-radius: 8px;
-      border: 1px solid #fed7aa;
-      background: rgba(255, 255, 255, 0.78);
+      border: 1px solid var(--line);
+      background: var(--paper);
+      box-shadow: var(--shadow);
+      overflow: hidden;
     }
 
-    .note-item strong {
-      display: block;
-      color: #9a3412;
+    .screenshot figcaption {
+      padding: 12px 14px;
+      border-top: 1px solid var(--line);
+      color: var(--ink-3);
+      font-size: 13px;
+      background: #fff;
     }
 
-    .note-item span {
+    .module-list {
+      display: grid;
+      gap: 12px;
+    }
+
+    .module-item {
+      display: grid;
+      grid-template-columns: 42px 1fr;
+      gap: 14px;
+      padding: 18px;
+      background: var(--paper);
+      border: 1px solid var(--line);
+      border-radius: 8px;
+    }
+
+    .module-item h3 {
+      margin: 0 0 6px;
+      font-size: 16px;
+      line-height: 1.35;
+    }
+
+    .module-item p {
+      margin: 0;
+      color: var(--ink-2);
+      font-size: 14px;
+    }
+
+    .architecture {
+      display: grid;
+      grid-template-columns: repeat(4, 1fr);
+      gap: 16px;
+    }
+
+    .arch-card {
+      padding: 22px;
+      min-height: 240px;
+    }
+
+    .arch-card h3 {
+      margin: 14px 0 8px;
+      font-size: 17px;
+      line-height: 1.35;
+    }
+
+    .arch-card p {
+      margin: 0;
+      color: var(--ink-2);
+      font-size: 14px;
+    }
+
+    .tags {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+      margin-top: 16px;
+    }
+
+    .tag {
+      display: inline-flex;
+      align-items: center;
+      min-height: 28px;
+      padding: 3px 9px;
+      color: var(--ink-2);
+      background: var(--paper-2);
+      border: 1px solid var(--line);
+      border-radius: 7px;
+      font-size: 12px;
+      font-weight: 700;
+    }
+
+    .value {
+      background: #fff;
+      border-top: 1px solid var(--line);
+      border-bottom: 1px solid var(--line);
+    }
+
+    .value-grid {
+      display: grid;
+      grid-template-columns: repeat(3, 1fr);
+      gap: 18px;
+    }
+
+    .value-card {
+      padding: 24px;
+      background: var(--paper-2);
+      border: 1px solid var(--line);
+      border-radius: 8px;
+    }
+
+    .value-card strong {
       display: block;
-      margin-top: 6px;
-      color: #7c2d12;
+      font-size: 18px;
+      line-height: 1.35;
+    }
+
+    .value-card span {
+      display: block;
+      margin-top: 8px;
+      color: var(--ink-3);
       font-size: 14px;
     }
 
     .cta {
-      padding: 34px;
-      border-radius: 8px;
-      background: #101828;
+      padding: 44px;
+      display: grid;
+      grid-template-columns: 1fr auto;
+      gap: 28px;
+      align-items: center;
+      background: var(--ink);
       color: #fff;
+      border-radius: 8px;
     }
 
+    .cta h2 { font-size: 30px; }
+
     .cta p {
-      max-width: 760px;
-      margin-top: 10px;
+      max-width: 720px;
+      margin: 10px 0 0;
       color: rgba(255, 255, 255, 0.78);
+      font-size: 15px;
     }
 
     .footer {
-      padding: 28px 0 44px;
-      color: var(--muted);
+      padding: 34px 0 46px;
+      color: var(--ink-3);
       font-size: 13px;
     }
 
@@ -377,32 +603,64 @@
       justify-content: space-between;
       gap: 16px;
       border-top: 1px solid var(--line);
-      padding-top: 18px;
+      padding-top: 20px;
+    }
+
+    svg {
+      width: 22px;
+      height: 22px;
+      stroke: currentColor;
+      stroke-width: 1.8;
+      fill: none;
+      stroke-linecap: round;
+      stroke-linejoin: round;
     }
 
     @media (max-width: 980px) {
-      .summary,
-      .grid,
-      .workflow { grid-template-columns: repeat(2, 1fr); }
-      .section-head,
-      .note-grid { grid-template-columns: 1fr; }
-      .row { grid-template-columns: 1fr; gap: 8px; }
+      .hero { min-height: 640px; }
+      .hero h1 { font-size: 42px; }
+      .hero-strip,
+      .feature-grid,
+      .architecture,
+      .value-grid { grid-template-columns: repeat(2, 1fr); }
+      .metric:nth-child(2) { border-right: 0; }
+      .metric:nth-child(-n+2) { border-bottom: 1px solid var(--line); }
+      .position,
+      .module-layout,
+      .cta { grid-template-columns: 1fr; }
+      .flow { overflow-x: auto; }
+      .flow-row { min-width: 920px; }
     }
 
-    @media (max-width: 680px) {
+    @media (max-width: 720px) {
       .wrap,
-      .summary { width: min(100% - 32px, var(--max)); }
+      .hero-content,
+      .hero-strip { width: min(100% - 32px, var(--max)); }
       .nav { display: none; }
-      h1 { font-size: 36px; }
-      h2 { font-size: 27px; }
+      .hero { min-height: 620px; }
+      .hero::before {
+        background:
+          linear-gradient(90deg, rgba(16, 24, 40, 0.94) 0%, rgba(16, 24, 40, 0.82) 72%, rgba(16, 24, 40, 0.58) 100%),
+          linear-gradient(0deg, rgba(16, 24, 40, 0.78) 0%, rgba(16, 24, 40, 0.12) 60%);
+      }
+      .hero h1 { font-size: 34px; }
+      .hero .lead { font-size: 16px; }
+      .hero-strip,
+      .feature-grid,
+      .architecture,
+      .value-grid { grid-template-columns: 1fr; }
+      .metric {
+        border-right: 0;
+        border-bottom: 1px solid var(--line);
+      }
+      .metric:last-child { border-bottom: 0; }
       section { padding: 56px 0; }
-      .summary,
-      .grid,
-      .workflow { grid-template-columns: 1fr; }
-      .summary-item,
-      .step { border-right: 0; border-bottom: 1px solid var(--line); }
-      .summary-item:last-child,
-      .step:last-child { border-bottom: 0; }
+      .section-head {
+        display: block;
+      }
+      .section-head p { margin-top: 10px; }
+      h2 { font-size: 26px; }
+      .cta { padding: 28px; }
       .footer .wrap { display: block; }
     }
   </style>
@@ -410,32 +668,48 @@
 <body>
   <header class="topbar" aria-label="页面导航">
     <div class="topbar-inner wrap">
-      <div class="logo" aria-hidden="true">AI</div>
-      <div class="brand">睿鲸 AI<span>aPaaS Builder AI</span></div>
+      <div class="mark" aria-hidden="true">
+        <svg viewBox="0 0 24 24"><path d="M4 7h16"/><path d="M7 4v6"/><path d="M17 4v6"/><path d="M6 14h12"/><path d="M8 18h8"/></svg>
+      </div>
+      <div class="brand">睿鲸 AI<small>aPaaS Builder AI</small></div>
       <nav class="nav" aria-label="章节导航">
-        <a href="#position">定位</a>
-        <a href="#capabilities">能力</a>
-        <a href="#workflow">流程</a>
-        <a href="#modules">模块</a>
-        <a href="#boundary">口径</a>
+        <a href="#position">产品定位</a>
+        <a href="#features">核心能力</a>
+        <a href="#workflow">使用路径</a>
+        <a href="#modules">功能模块</a>
+        <a href="#architecture">技术架构</a>
       </nav>
     </div>
   </header>
 
   <main>
     <section class="hero">
-      <div class="wrap">
-        <div class="kicker">面向得帆云 aPaaS 的智能搭建助手</div>
-        <h1>睿鲸 AI</h1>
-        <p class="lead">用统一 AI 对话入口承接需求、资料和设计文档，再进入 AI Builder 与 AI 编码，把企业应用从需求梳理推进到配置生成、扩展开发、平台发布和持续维护。</p>
+      <img class="hero-img" src="./design-refs/ai-builder-entry-redesign-1600.png" alt="aPaaS Builder AI 的 AI 搭建入口界面截图">
+      <div class="hero-content">
+        <div class="kicker">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 2v6"/><path d="M12 16v6"/><path d="M4.93 4.93l4.24 4.24"/><path d="M14.83 14.83l4.24 4.24"/><path d="M2 12h6"/><path d="M16 12h6"/><path d="M4.93 19.07l4.24-4.24"/><path d="M14.83 9.17l4.24-4.24"/></svg>
+          企业应用智能交付平台
+        </div>
+        <h1>用对话生成应用，<br><span class="nowrap">用对话维护应用。</span></h1>
+        <p class="lead">睿鲸 AI 是面向得帆云 aPaaS 的智能搭建助手，把需求梳理、设计文档、低代码配置、自开发组件、全代码沙箱、DevOps 审批和平台部署串成一条可追踪的交付链路。</p>
+        <div class="hero-actions">
+          <a class="btn primary" href="#features">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12h14"/><path d="m12 5 7 7-7 7"/></svg>
+            查看功能
+          </a>
+          <a class="btn ghost" href="#workflow">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 6h18"/><path d="M3 12h18"/><path d="M3 18h18"/></svg>
+            了解流程
+          </a>
+        </div>
       </div>
     </section>
 
-    <div class="summary wrap" aria-label="产品摘要">
-      <div class="summary-item"><strong>统一入口</strong><span>需求梳理、附件整合和标准设计文档都从一个 AI 对话进入</span></div>
-      <div class="summary-item"><strong>应用搭建</strong><span>AI Builder 围绕具体应用生成 SPEC、改配置、执行发布</span></div>
-      <div class="summary-item"><strong>代码扩展</strong><span>AI 编码补齐组件、页面、接口等低代码扩展产物</span></div>
-      <div class="summary-item"><strong>默认连接</strong><span>客户 aPaaS 平台连接由部署配置统一绑定</span></div>
+    <div class="hero-strip" aria-label="产品关键指标">
+      <div class="metric"><strong>4 条</strong><span>专职 AI 流水线，覆盖需求、搭建、编码与全代码开发</span></div>
+      <div class="metric"><strong>8 个</strong><span>AI 搭建 MCP 工具，直接读取、更新、发布应用</span></div>
+      <div class="metric"><strong>5 类</strong><span>自开发工作区模板，支持组件、页面、接口与脚本</span></div>
+      <div class="metric"><strong>全链路</strong><span>提案、审批、Apply、Git、环境拓扑和发布治理</span></div>
     </div>
 
     <section id="position">
@@ -443,81 +717,97 @@
         <div class="section-head">
           <div>
             <p class="eyebrow">Positioning</p>
-            <h2>不是再做一个低代码平台，而是给低代码平台加上 AI 操作层。</h2>
+            <h2>不是替代低代码，而是给低代码加上 AI 操作层。</h2>
           </div>
-          <p>睿鲸 AI 的目标是降低企业应用交付里的重复劳动：让 AI 读资料、追问需求、生成标准文档、调用工具改配置，并在应用上线后继续支持可维护的迭代。</p>
+          <p>系统以自然语言和文档作为入口，以 aPaaS 平台能力作为落点，让业务人员、实施顾问和开发人员在同一条链路上协作。</p>
+        </div>
+        <div class="position">
+          <div class="position-copy panel">
+            <p><b>对业务人员</b>：可以从一句想法、一批附件或一份 PRD 开始，让 AI 追问、整理并产出标准设计文档。</p>
+            <p><b>对实施顾问</b>：可以把文档交给 AI 搭建模块，生成应用草稿，再通过对话调整模型、表单、流程、权限和字典。</p>
+            <p><b>对开发人员</b>：可以用 AI 编码补齐低代码覆盖不到的组件、页面、接口，也可以用 Vibe Coding 在隔离沙箱里开发完整 Web 应用。</p>
+            <p><b>对管理者</b>：可以通过 DevOps 把应用变更纳入提案、审批、Apply、Git 和环境发布流程，避免“谁改了什么”不可追踪。</p>
+          </div>
+          <div class="stack panel">
+            <div class="layer ai">
+              <div class="icon blue"><svg viewBox="0 0 24 24"><path d="M12 8V4H8"/><rect x="4" y="8" width="16" height="12" rx="2"/><path d="M2 14h2"/><path d="M20 14h2"/><path d="M9 14h.01"/><path d="M15 14h.01"/></svg></div>
+              <div><span class="layer-title">睿鲸 AI 智能层</span><span class="layer-text">AI 对话、AI 搭建、AI 编码、Vibe Coding、DevOps 变更治理</span></div>
+            </div>
+            <div class="layer">
+              <div class="icon teal"><svg viewBox="0 0 24 24"><path d="M4 4h16v16H4z"/><path d="M9 4v16"/><path d="M4 9h16"/></svg></div>
+              <div><span class="layer-title">aPaaS 低代码平台</span><span class="layer-text">模型、表单、流程、角色、权限、字典、部署运行时</span></div>
+            </div>
+            <div class="layer">
+              <div class="icon amber"><svg viewBox="0 0 24 24"><path d="M4 6h16"/><path d="M4 12h16"/><path d="M4 18h16"/><path d="M7 6v12"/></svg></div>
+              <div><span class="layer-title">企业业务资产</span><span class="layer-text">PRD、Excel、截图、历史系统说明、应用配置、Git 代码资产</span></div>
+            </div>
+          </div>
         </div>
       </div>
     </section>
 
-    <section id="capabilities">
+    <section id="features" class="value">
       <div class="wrap">
         <div class="section-head">
           <div>
             <p class="eyebrow">Capabilities</p>
             <h2>当前核心能力</h2>
           </div>
-          <p>所有能力都围绕应用生命周期组织：从需求进入，到配置生成，再到自开发扩展和平台发布。</p>
+          <p>每个能力都不是孤立页面，而是围绕“应用从需求到上线再到维护”的生命周期组织。</p>
         </div>
-
-        <div class="grid">
-          <article class="card">
-            <h3>统一 AI 对话</h3>
-            <p>一个入口处理需求梳理和材料整合，由系统根据附件和上下文组织下一步工作。</p>
+        <div class="feature-grid">
+          <article class="feature-card card">
+            <div class="icon blue"><svg viewBox="0 0 24 24"><path d="M21 15a4 4 0 0 1-4 4H8l-5 3V7a4 4 0 0 1 4-4h10a4 4 0 0 1 4 4z"/></svg></div>
+            <h3>AI 对话：把零散需求变成标准文档</h3>
+            <p>支持 Chat 和 Cowork 两种模式。可上传 PDF、Word、Excel、图片和 Markdown，AI 并行阅读资料、提出澄清问题，并生成可交给 Builder 的设计文档。</p>
             <ul>
-              <li>支持 PDF、Word、Excel、图片和 Markdown</li>
-              <li>自动产出标准设计文档</li>
-              <li>历史会话和文档版本可回溯</li>
+              <li>右侧设计文档面板支持版本切换、原文与渲染预览</li>
+              <li>inline 卡片可一键跳转到 AI 搭建</li>
             </ul>
           </article>
-
-          <article class="card">
-            <h3>AI Builder</h3>
-            <p>把标准设计文档交给应用搭建流程，生成 SPEC，并在应用上下文里修改真实配置。</p>
+          <article class="feature-card card">
+            <div class="icon teal"><svg viewBox="0 0 24 24"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><path d="M14 2v6h6"/><path d="M8 13h8"/><path d="M8 17h5"/></svg></div>
+            <h3>AI 搭建：在应用上下文里改真配置</h3>
+            <p>从应用列表进入编辑页，左侧嵌入 dolphin AI 助手，右侧实时展示 SPEC。助手可调用 8 个 MCP 工具读取应用、解析文档、生成应用、更新变更计划并发布上线。</p>
             <ul>
-              <li>生成应用草稿和结构化 SPEC</li>
-              <li>支持模型、表单、列表、流程、权限、字典等配置</li>
-              <li>通过工具执行变更和发布</li>
+              <li>新增字段、修改表单、调整流程等常规变更一气呵成</li>
+              <li>删除字段、删除模型等破坏性操作前停下确认</li>
             </ul>
           </article>
-
-          <article class="card">
-            <h3>AI 编码</h3>
-            <p>为低代码覆盖不到的场景生成自开发组件、页面、接口和脚本，并进入 IDE 继续调整。</p>
+          <article class="feature-card card">
+            <div class="icon violet"><svg viewBox="0 0 24 24"><path d="m16 18 6-6-6-6"/><path d="m8 6-6 6 6 6"/></svg></div>
+            <h3>AI 编码：补齐低代码外的扩展开发</h3>
+            <p>面向自开发组件、页面、接口和脚本。AI 在 df-apaas-cli 模板工作区里读规范、写代码、运行检查，最后打包上传到 aPaaS 平台。</p>
             <ul>
-              <li>支持自开发资产库和工作区</li>
-              <li>支持读写文件、执行命令、构建产物</li>
-              <li>组件包可上传到默认 aPaaS 平台连接</li>
+              <li>工作区默认进入对话视图，IDE 可按需切换</li>
+              <li>code-server 内嵌，支持直接查看和调整代码</li>
             </ul>
           </article>
-
-          <article class="card">
-            <h3>模型与成员配置</h3>
-            <p>设置页集中管理 LLM 供应商、API Key、默认模型和租户成员。</p>
+          <article class="feature-card card">
+            <div class="icon amber"><svg viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="14" rx="2"/><path d="M8 22h8"/><path d="M12 18v4"/><path d="m9 10 2 2-2 2"/><path d="M13 14h3"/></svg></div>
+            <h3>Vibe Coding：沙箱里的全代码应用开发</h3>
+            <p>适合完整 Vue + Express 应用。每个工作区一个 Docker 或 Podman 沙箱，AI 使用文件读写、命令运行、搜索和计划工具完成开发。</p>
             <ul>
-              <li>支持多模型供应商配置</li>
-              <li>默认模型供对话、搭建、编码消费</li>
-              <li>租户成员和应用协作角色可控</li>
+              <li>支持图片输入、Split Preview、多端口预览</li>
+              <li>沙箱容器隔离运行，可启动、停止和清理</li>
             </ul>
           </article>
-
-          <article class="card">
-            <h3>默认平台连接</h3>
-            <p>客户 aPaaS 平台连接由部署配置绑定，前端不再让应用或用户维护多个连接目标。</p>
+          <article class="feature-card card">
+            <div class="icon green"><svg viewBox="0 0 24 24"><path d="M9 11l3 3L22 4"/><path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11"/></svg></div>
+            <h3>DevOps：提案、审批、Apply、Git</h3>
+            <p>已上线应用的 SPEC 变更走 ChangeProposal 流程，支持校验报告、变更计划、可逆性标记、审批中心、Apply 历史、Git 分支和环境拓扑。</p>
             <ul>
-              <li>平台地址和凭证来自部署配置</li>
-              <li>导入、发布、上传优先使用默认连接</li>
-              <li>降低选择和绑定的操作复杂度</li>
+              <li>maintainer 及以上可评审，创建者不能自审</li>
+              <li>绑定 Git 后可自动推分支、开 PR、合并和打 tag</li>
             </ul>
           </article>
-
-          <article class="card">
-            <h3>应用资产管理</h3>
-            <p>应用列表承接本地应用、平台导入应用、成员管理和应用内 AI 调整入口。</p>
+          <article class="feature-card card">
+            <div class="icon rose"><svg viewBox="0 0 24 24"><path d="M12.22 2h-.44a2 2 0 0 0-2 2v.18a2 2 0 0 1-1 1.73l-.43.25a2 2 0 0 1-2 0l-.15-.08a2 2 0 0 0-2.73.73l-.22.38a2 2 0 0 0 .73 2.73l.15.1a2 2 0 0 1 1 1.72v.51a2 2 0 0 1-1 1.74l-.15.09a2 2 0 0 0-.73 2.73l.22.38a2 2 0 0 0 2.73.73l.15-.08a2 2 0 0 1 2 0l.43.25a2 2 0 0 1 1 1.73V20a2 2 0 0 0 2 2h.44a2 2 0 0 0 2-2v-.18a2 2 0 0 1 1-1.73l.43-.25a2 2 0 0 1 2 0l.15.08a2 2 0 0 0 2.73-.73l.22-.38a2 2 0 0 0-.73-2.73l-.15-.09a2 2 0 0 1-1-1.74v-.51a2 2 0 0 1 1-1.72l.15-.1a2 2 0 0 0 .73-2.73l-.22-.38a2 2 0 0 0-2.73-.73l-.15.08a2 2 0 0 1-2 0l-.43-.25a2 2 0 0 1-1-1.73V4a2 2 0 0 0-2-2Z"/><circle cx="12" cy="12" r="3"/></svg></div>
+            <h3>配置与权限：多环境、多角色可控</h3>
+            <p>设置页集中管理 LLM、得帆云平台环境、租户成员；应用级支持 owner、maintainer、contributor、viewer 四类协作角色。</p>
             <ul>
-              <li>查看本地和平台应用</li>
-              <li>导入平台已有应用</li>
-              <li>进入应用编辑页持续维护</li>
+              <li>LLM 支持 OpenAI、Anthropic、DeepSeek、自部署 vLLM 等</li>
+              <li>平台环境支持开发、测试、生产和默认环境设置</li>
             </ul>
           </article>
         </div>
@@ -529,103 +819,137 @@
         <div class="section-head">
           <div>
             <p class="eyebrow">Workflow</p>
-            <h2>从一句需求到一个可运行应用</h2>
+            <h2>按你的起点选择路径</h2>
           </div>
-          <p>睿鲸 AI 把需求、文档、应用配置和代码扩展串起来，减少人工重复配置。</p>
+          <p>产品把不同用户的入口分清楚：有想法、已有材料、已有应用、要写扩展、要做独立应用，都能进入合适的工作流。</p>
         </div>
-
-        <div class="workflow" aria-label="产品流程">
-          <div class="step">
-            <div class="step-number">01</div>
-            <h3>输入需求</h3>
-            <p>在统一 AI 对话里输入想法，或上传客户资料、表格、截图、历史系统说明。</p>
+        <div class="flow" role="table" aria-label="典型使用路径">
+          <div class="flow-row" role="row">
+            <div class="flow-head" role="rowheader">从零搭企业应用</div>
+            <div class="flow-cell"><strong>AI 对话</strong><span>Chat 或 Cowork 梳理需求</span></div>
+            <div class="flow-cell"><strong>设计文档</strong><span>生成标准 Markdown 文档</span></div>
+            <div class="flow-cell"><strong>AI 搭建</strong><span>解析文档并创建应用</span></div>
+            <div class="flow-cell"><strong>对话调整</strong><span>补字段、表单、流程、权限</span></div>
+            <div class="flow-cell"><strong>DevOps 发布</strong><span>审批、Apply、部署平台</span></div>
           </div>
-          <div class="step">
-            <div class="step-number">02</div>
-            <h3>生成文档</h3>
-            <p>AI 追问缺口，整理业务对象、字段、流程、权限和验收点，形成标准设计文档。</p>
+          <div class="flow-row" role="row">
+            <div class="flow-head" role="rowheader">已有应用持续迭代</div>
+            <div class="flow-cell"><strong>应用管理</strong><span>进入 local、linked 或 remote 应用</span></div>
+            <div class="flow-cell"><strong>AI 搭建页</strong><span>自动注入当前应用上下文</span></div>
+            <div class="flow-cell"><strong>变更计划</strong><span>update_app_from_doc 生成差异</span></div>
+            <div class="flow-cell"><strong>执行变更</strong><span>execute_change_plan 落地配置</span></div>
+            <div class="flow-cell"><strong>实时 SPEC</strong><span>右侧视图自动刷新</span></div>
           </div>
-          <div class="step">
-            <div class="step-number">03</div>
-            <h3>搭建应用</h3>
-            <p>AI Builder 把设计文档转成 SPEC 和应用配置，并通过工具执行增量变更。</p>
+          <div class="flow-row" role="row">
+            <div class="flow-head" role="rowheader">扩展低代码能力</div>
+            <div class="flow-cell"><strong>AI 编码</strong><span>描述组件、页面、接口需求</span></div>
+            <div class="flow-cell"><strong>选择模板</strong><span>PC 组件、页面、移动端等</span></div>
+            <div class="flow-cell"><strong>AI 写代码</strong><span>读规范、改文件、跑检查</span></div>
+            <div class="flow-cell"><strong>IDE 调试</strong><span>code-server 直接编辑</span></div>
+            <div class="flow-cell"><strong>上传平台</strong><span>选择环境并推送组件包</span></div>
           </div>
-          <div class="step">
-            <div class="step-number">04</div>
-            <h3>扩展与发布</h3>
-            <p>需要代码能力时进入 AI 编码；完成后通过默认平台连接发布或上传。</p>
+          <div class="flow-row" role="row">
+            <div class="flow-head" role="rowheader">开发完整 Web 应用</div>
+            <div class="flow-cell"><strong>Vibe Coding</strong><span>新建空工作区</span></div>
+            <div class="flow-cell"><strong>方案确认</strong><span>AI present_plan 给任务清单</span></div>
+            <div class="flow-cell"><strong>沙箱开发</strong><span>写 Vue、Express、数据库代码</span></div>
+            <div class="flow-cell"><strong>在线预览</strong><span>Split panel 查看运行效果</span></div>
+            <div class="flow-cell"><strong>沙箱监控</strong><span>按权限管理容器资源</span></div>
           </div>
         </div>
       </div>
     </section>
 
-    <section id="modules">
+    <section id="modules" class="value">
       <div class="wrap">
         <div class="section-head">
           <div>
             <p class="eyebrow">Modules</p>
-            <h2>功能模块说明</h2>
+            <h2>主要页面与入口</h2>
           </div>
-          <p>以下是当前对外介绍时建议使用的模块口径。</p>
+          <p>左侧导航和关键路由围绕实际工作场景组织，用户不用先理解底层平台概念，也能完成任务。</p>
         </div>
-
-        <div class="table" role="table" aria-label="功能模块">
-          <div class="row header" role="row">
-            <div>模块</div>
-            <div>说明</div>
-            <div>对外口径</div>
-          </div>
-          <div class="row" role="row">
-            <div class="module-name">首页 / AI 对话</div>
-            <p>统一承接新需求、附件整合、历史会话和标准设计文档。</p>
-            <span>统一 AI 对话入口，支持需求梳理和资料整合。</span>
-          </div>
-          <div class="row" role="row">
-            <div class="module-name">AI Builder</div>
-            <p>在应用上下文中生成 SPEC、查看设计文档、调用工具更新配置并发布。</p>
-            <span>AI 驱动的低代码应用搭建和持续维护工作台。</span>
-          </div>
-          <div class="row" role="row">
-            <div class="module-name">AI 编码 / 自开发资产库</div>
-            <p>生成并维护组件、页面、接口等自开发资产，支持 IDE、构建和上传。</p>
-            <span>补齐低代码之外的开发场景。</span>
-          </div>
-          <div class="row" role="row">
-            <div class="module-name">应用列表 / 导入平台应用</div>
-            <p>查看本地应用，导入默认平台连接下的已上线应用，并追加设计文档版本。</p>
-            <span>连接既有 aPaaS 应用资产，继续由 AI 维护。</span>
-          </div>
-          <div class="row" role="row">
-            <div class="module-name">设置</div>
-            <p>管理 LLM 模型配置、默认模型和租户成员。</p>
-            <span>集中管理 AI 能力和协作成员。</span>
+        <div class="module-layout">
+          <figure class="screenshot">
+            <img src="../frontend/ai-builder-composer-unified.png" alt="aPaaS Builder AI 首页和 AI Builder 输入区界面截图">
+            <figcaption>AI Builder 融合入口：从需求、附件或历史会话进入应用搭建。</figcaption>
+          </figure>
+          <div class="module-list">
+            <article class="module-item">
+              <div class="icon blue"><svg viewBox="0 0 24 24"><path d="M3 3h7v7H3z"/><path d="M14 3h7v7h-7z"/><path d="M14 14h7v7h-7z"/><path d="M3 14h7v7H3z"/></svg></div>
+              <div><h3>首页与 AI 对话</h3><p>首页复用 AIChatPage，承接新建需求、历史会话、Chat / Cowork 模式与文档产出。</p></div>
+            </article>
+            <article class="module-item">
+              <div class="icon teal"><svg viewBox="0 0 24 24"><path d="M8 6h13"/><path d="M8 12h13"/><path d="M8 18h13"/><path d="M3 6h.01"/><path d="M3 12h.01"/><path d="M3 18h.01"/></svg></div>
+              <div><h3>应用管理</h3><p>合并展示 local、linked、remote 应用，支持打开编辑、跳平台、部署、成员管理和删除草稿。</p></div>
+            </article>
+            <article class="module-item">
+              <div class="icon violet"><svg viewBox="0 0 24 24"><path d="M12 20h9"/><path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4z"/></svg></div>
+              <div><h3>AI 搭建编辑页</h3><p>左栏 dolphin 助手负责变更，右栏只读 SPEC 视图负责展示应用信息、角色、字典、模型、表单、流程和权限。</p></div>
+            </article>
+            <article class="module-item">
+              <div class="icon amber"><svg viewBox="0 0 24 24"><path d="M9 18h6"/><path d="M10 22h4"/><path d="M12 2a7 7 0 0 0-4 12.7c.6.5 1 1.2 1 2h6c0-.8.4-1.5 1-2A7 7 0 0 0 12 2z"/></svg></div>
+              <div><h3>AI 编码与 Vibe Coding</h3><p>一个面向 aPaaS 扩展包，一个面向完整 Web 应用；都提供对话、IDE 和运行/上传闭环。</p></div>
+            </article>
+            <article class="module-item">
+              <div class="icon green"><svg viewBox="0 0 24 24"><path d="M3 3v18h18"/><path d="M18 17V9"/><path d="M13 17V5"/><path d="M8 17v-3"/></svg></div>
+              <div><h3>DevOps 与设置</h3><p>DevOps 管提案审批、Apply、Git、环境拓扑；设置页管 LLM、平台环境、租户成员和命令面板入口。</p></div>
+            </article>
           </div>
         </div>
       </div>
     </section>
 
-    <section id="boundary" class="note">
+    <section id="architecture">
       <div class="wrap">
-        <div class="note-grid">
+        <div class="section-head">
           <div>
-            <p class="eyebrow">Current Boundary</p>
-            <h2>当前边界和对外表述</h2>
-            <p class="muted" style="margin-top: 14px;">以下表述建议作为当前对外介绍的统一口径，避免出现与现有产品不一致的承诺。</p>
+            <p class="eyebrow">Architecture</p>
+            <h2>可落地的技术与集成架构</h2>
           </div>
-          <div class="note-list">
-            <div class="note-item">
-              <strong>不再介绍独立变更治理模块</strong>
-              <span>当前对外材料只描述 AI 对话、AI Builder、AI 编码、应用管理、模型与成员配置。</span>
-            </div>
-            <div class="note-item">
-              <strong>AI 对话是统一入口</strong>
-              <span>需求梳理、附件整合、标准设计文档产出都从同一个对话入口进入。</span>
-            </div>
-            <div class="note-item">
-              <strong>平台连接采用默认配置</strong>
-              <span>客户 aPaaS 平台地址和凭证由部署配置统一绑定，设置页集中管理模型和成员。</span>
-            </div>
+          <p>当前项目不是静态 Demo，已经具备前端工作台、FastAPI 后端、结构化 SPEC、Dolphin / MCP 工具桥、Git 与容器沙箱等关键能力。</p>
+        </div>
+        <div class="architecture">
+          <article class="arch-card card">
+            <div class="icon blue"><svg viewBox="0 0 24 24"><path d="M4 5h16"/><path d="M4 12h16"/><path d="M4 19h16"/></svg></div>
+            <h3>前端工作台</h3>
+            <p>Vue 3、TypeScript、Vite、Element Plus、Pinia 和 Vue Router，覆盖首页、应用、对话、编码、DevOps、设置等页面。</p>
+            <div class="tags"><span class="tag">Vue 3</span><span class="tag">Vite</span><span class="tag">Pinia</span></div>
+          </article>
+          <article class="arch-card card">
+            <div class="icon teal"><svg viewBox="0 0 24 24"><path d="M20 7h-9"/><path d="M14 17H5"/><circle cx="17" cy="17" r="3"/><circle cx="7" cy="7" r="3"/></svg></div>
+            <h3>后端服务</h3>
+            <p>FastAPI、SQLAlchemy async、Pydantic v2、SSE 流式响应和 JWT 认证，承接 AI 对话、应用、SPEC、DevOps 与配置管理。</p>
+            <div class="tags"><span class="tag">FastAPI</span><span class="tag">SSE</span><span class="tag">JWT</span></div>
+          </article>
+          <article class="arch-card card">
+            <div class="icon violet"><svg viewBox="0 0 24 24"><path d="M12 3v18"/><path d="M3 12h18"/><path d="M5 5l14 14"/><path d="M19 5 5 19"/></svg></div>
+            <h3>AI 与工具调用</h3>
+            <p>支持多模型配置，AI 搭建通过 dolphin Agent 和 MCP 工具操作应用；Vibe Coding 通过 Agent loop 在沙箱内读写文件并执行命令。</p>
+            <div class="tags"><span class="tag">LLM</span><span class="tag">MCP</span><span class="tag">Agent loop</span></div>
+          </article>
+          <article class="arch-card card">
+            <div class="icon amber"><svg viewBox="0 0 24 24"><path d="M6 3v12"/><circle cx="18" cy="6" r="3"/><circle cx="6" cy="18" r="3"/><path d="M18 9a9 9 0 0 1-9 9"/></svg></div>
+            <h3>交付与运行</h3>
+            <p>支持 Docker / Podman 部署、Kubernetes 配置、code-server IDE、Vibe 沙箱预览、Git 仓库同步与得帆云平台环境连接。</p>
+            <div class="tags"><span class="tag">Docker</span><span class="tag">K8s</span><span class="tag">Git</span></div>
+          </article>
+        </div>
+      </div>
+    </section>
+
+    <section>
+      <div class="wrap">
+        <div class="section-head">
+          <div>
+            <p class="eyebrow">Value</p>
+            <h2>核心价值</h2>
           </div>
+        </div>
+        <div class="value-grid">
+          <div class="value-card"><strong>让业务需求更快变成可运行系统</strong><span>从自然语言、附件资料和标准设计文档出发，减少手工建模、配表单、配流程的重复劳动。</span></div>
+          <div class="value-card"><strong>让低代码平台具备持续演进能力</strong><span>上线后仍可通过对话调整配置，并把高风险变更纳入 DevOps 审批和 Git 沉淀。</span></div>
+          <div class="value-card"><strong>让 AI 开发受控地接入企业交付</strong><span>自开发组件有模板与平台上传闭环，全代码应用有沙箱隔离、在线预览和资源监控。</span></div>
         </div>
       </div>
     </section>
@@ -633,8 +957,14 @@
     <section>
       <div class="wrap">
         <div class="cta">
-          <h2>一句话总结</h2>
-          <p>睿鲸 AI 是得帆云 aPaaS 的 AI 应用交付工作台，用统一对话入口把需求、文档、配置和代码扩展串成闭环。</p>
+          <div>
+            <h2>一句话总结</h2>
+            <p>睿鲸 AI 把“需求文档、低代码配置、代码开发、审批发布”放到同一张工作台里，让企业应用可以被 AI 搭建，也可以被 AI 持续维护。</p>
+          </div>
+          <a class="btn primary" href="#position">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="m18 15-6-6-6 6"/></svg>
+            回到顶部
+          </a>
         </div>
       </div>
     </section>
@@ -643,7 +973,7 @@
   <footer class="footer">
     <div class="wrap">
       <span>睿鲸 AI · aPaaS Builder AI 产品介绍</span>
-      <span>当前版本口径：统一 AI 对话、AI Builder、AI 编码、应用管理、模型与成员配置、默认平台连接</span>
+      <span>依据当前代码与 docs/help 功能说明整理</span>
     </div>
   </footer>
 </body>

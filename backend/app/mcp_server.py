@@ -390,7 +390,7 @@ async def list_platform_envs(
 
     Agent 选择策略：
     - connected_count == 0 → 报错给用户："你还没配置可用的低代码平台环境，
-      请联系管理员检查部署配置或现有环境登录状态。"
+      请先去 BuilderDevOps 添加，或检查现有环境登录状态。"
     - connected_count == 1 且唯一 connected 环境 is_default → 后续工具直接用默认环境，不需要再让用户确认
     - connected_count > 1 → 列给用户让其选择，等用户回复后用对应 env_id
       调 generate_app_from_doc(env_id=X)
@@ -7127,7 +7127,7 @@ async def build_apaas_feature_from_spec(
                 "dictionaryCode": actual_dict_code,
                 "dictionarySelectOptions": dict_opts_for_field,
             }
-            comp["chooseType"] = "MULTIPLE" if comp_type in {"FORM_SELECT_INPUT", "FORM_CHECKBOX_INPUT"} else "SINGLE"
+            comp["chooseType"] = "MULTI" if comp_type in {"FORM_SELECT_INPUT", "FORM_CHECKBOX_INPUT"} else "SINGLE"
 
         if comp_type in _REF_BOUND_COMPONENTS:
             target_model, target_field = _extract_ref_target(f)

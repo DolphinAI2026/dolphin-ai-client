@@ -115,7 +115,7 @@ export default defineConfig({
           if (!id.includes('node_modules')) return
           if (id.includes('/element-plus/')) return 'vendor-element-plus'
           if (id.includes('/@antv/x6/')) return 'vendor-x6'
-          if (id.includes('/marked/')) return 'vendor-markdown'
+          if (id.includes('/marked/') || id.includes('/highlight.js/')) return 'vendor-markdown'
           if (
             id.includes('/vue/') ||
             id.includes('/vue-router/') ||

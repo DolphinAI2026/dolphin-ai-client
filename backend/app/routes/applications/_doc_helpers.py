@@ -1183,7 +1183,7 @@ def json_to_markdown(data: dict) -> str:
                 f"{scope_label(permission.get('data_scope'))} |"
             )
     lines.append("")
-    lines.append("> 自开发内容不在本次配置文档中生成；后续如需复杂组件、外部接口或 Hook，请从 AI 编码 / IDE 入口单独处理。")
+    lines.append("> 自开发内容不在本次配置文档中生成；后续如需复杂组件、外部接口或 Hook，请从 Vibe Coding/IDE 入口单独处理。")
     lines.append("")
 
     return "\n".join(lines)

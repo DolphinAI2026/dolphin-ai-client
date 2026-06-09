@@ -10,7 +10,7 @@ from typing import Optional
 class WebhookEvent:
     """规整化的 webhook 事件（跨 provider 抽象）"""
     provider: str       # 'github' | 'gitlab'
-    event_type: str     # 'push' | 'pr_opened' | 'pr_synchronized' | 'pr_merged' | 'unknown'
+    event_type: str     # 'push' | 'pr_opened' | 'pr_synchronized' | 'pr_review' | 'pr_merged' | 'unknown'
     repo_full_path: str
     branch: Optional[str] = None         # for push events
     pr_number: Optional[int] = None      # for pr events
@@ -18,6 +18,8 @@ class WebhookEvent:
     pr_description: Optional[str] = None
     pr_source_branch: Optional[str] = None
     pr_target_branch: Optional[str] = None
+    review_action: Optional[str] = None  # 'approve' | 'request_changes' | 'comment'
+    review_body: Optional[str] = None
     actor_username: Optional[str] = None
     raw_payload: Optional[dict] = None
 
@@ -69,6 +71,18 @@ def parse_github_event(headers: dict, payload: dict) -> WebhookEvent:
             actor_username=actor, raw_payload=payload,
         )
 
+    if event == "pull_request_review":
+        review = payload.get("review", {})
+        state = review.get("state", "").lower()
+        review_action = "approve" if state == "approved" else "request_changes" if state == "changes_requested" else "comment"
+        return WebhookEvent(
+            provider="github", event_type="pr_review", repo_full_path=repo,
+            pr_number=payload.get("pull_request", {}).get("number"),
+            review_action=review_action,
+            review_body=review.get("body"),
+            actor_username=actor, raw_payload=payload,
+        )
+
     return WebhookEvent(provider="github", event_type="unknown", repo_full_path=repo,
                         actor_username=actor, raw_payload=payload)
 
@@ -103,6 +117,17 @@ def parse_gitlab_event(headers: dict, payload: dict) -> WebhookEvent:
             pr_target_branch=attrs.get("target_branch"),
             actor_username=actor, raw_payload=payload,
         )
+
+    if event_kind == "note":  # GitLab review comments come as notes
+        attrs = payload.get("object_attributes", {})
+        if attrs.get("noteable_type") == "MergeRequest":
+            return WebhookEvent(
+                provider="gitlab", event_type="pr_review", repo_full_path=repo,
+                pr_number=(payload.get("merge_request") or {}).get("iid"),
+                review_action="comment",  # GitLab 区分 approval 走另一个 event，简化
+                review_body=attrs.get("note"),
+                actor_username=actor, raw_payload=payload,
+            )
 
     return WebhookEvent(provider="gitlab", event_type="unknown", repo_full_path=repo,
                         actor_username=actor, raw_payload=payload)

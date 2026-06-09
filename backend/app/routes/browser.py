@@ -33,7 +33,7 @@ def _verify_token(ws_id: str, token: str):
     if payload.get("type") != "ide_access" or payload.get("ws") != ws_id:
         raise HTTPException(status_code=403, detail="访问令牌与当前工作区不匹配")
 
-    # 旧 online-coding workspace 已下线（2026-05-29）；retained workspace 本就走 meta=None 跳过交叉校验
+    # Vibe online-coding workspaces 已下线（2026-05-29）；retained workspace 本就走 meta=None 跳过交叉校验
     meta = None
     if meta is not None:
         token_user = payload.get("sub")

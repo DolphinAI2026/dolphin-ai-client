@@ -36,11 +36,11 @@
       level="err"
       title="加载失败"
       :message="error"
-      :actions="[{ label: '重试', onClick: () => reload() }]"
+      :actions="[{ label: '重试', onClick: reload }]"
     />
     <div v-else-if="!currentModel" class="dse-state">
       <p>未找到与该表单关联的数据模型.</p>
-      <button class="dse-btn dse-btn-ghost" @click="() => reload()">重新加载</button>
+      <button class="dse-btn dse-btn-ghost" @click="reload">重新加载</button>
     </div>
 
     <template v-else>

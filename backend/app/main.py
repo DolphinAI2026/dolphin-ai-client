@@ -41,6 +41,7 @@ from app.routes import (
     platform_envs,
     preferences,
     projects,
+    proposals,
     requirements,
     runtime_proxy,
     spec,
@@ -152,6 +153,8 @@ app.include_router(harness.router, prefix="/api")
 app.include_router(spec.router, prefix="/api")
 app.include_router(sse.router, prefix="/api")
 app.include_router(application_members.router, prefix="/api")
+app.include_router(proposals.app_router, prefix="/api")
+app.include_router(proposals.prop_router, prefix="/api")
 app.include_router(git_connection.router, prefix="/api")
 app.include_router(git_connection.app_router, prefix="/api")
 app.include_router(git_webhook.router, prefix="/api")

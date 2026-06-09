@@ -4,10 +4,11 @@
 
 **取决于你有什么**：
 
-- 只有想法 → AI 对话和 AI 一起聊出来
-- 有一堆杂乱材料 → AI 对话上传附件，让 AI 整合
+- 只有想法 → AI 对话（Chat 模式）和 AI 一起聊出来
+- 有一堆杂乱材料 → AI 对话（Cowork 模式）整合
 - 已经有 PRD / 设计稿 → AI 搭建直接上传 .md
 - 要做组件 / 页面扩展 → AI 编码
+- 要做完整 Web 应用（带数据库） → Vibe Coding
 
 ## AI 对话和 AI 搭建有啥区别？
 
@@ -21,9 +22,22 @@
 - 在 AI 对话的设计文档 inline 卡片上点「→ Builder」按钮
 - 或者下载 .md 文件再到 AI 搭建上传
 
+## AI 编码和 Vibe Coding 有啥区别？
+
+| 维度 | AI 编码 | Vibe Coding |
+|---|---|---|
+| 产物 | 单个组件 / 页面 / 接口 | 完整 Web 应用 |
+| 模板 | 严格（5 种 df-apaas-cli 模板） | 自由（任意 Vue + Express 项目） |
+| 运行 | 上传到 aPaaS 平台 | Docker 沙箱内独立跑 |
+| 数据库 | 没有，依赖 aPaaS 平台 | SQLite / 任意 |
+| 谁写 | df-apaas-cli 模板 + AI | 完全 AI |
+
+简单说：Vibe Coding 是"做一个独立产品"，AI 编码是"给 aPaaS 平台加扩展"。
+
 ## 怎么把应用部署上线？
 
-在 AI 搭建编辑页对左栏 AI 助手说「发布上线」/「部署到平台」 → 助手自动调 `publish_application` 工具完成。
+1. 在 AI 搭建编辑页对左栏 AI 助手说「发布上线」/「部署到平台」 → 助手自动调 `publish_application` 工具完成
+2. 或走 DevOps 提案流程：DevOps 创建提案 → 评审 → Apply → 自动同步到平台
 
 注意：编辑页**没有**单独的「部署到预览」按钮，统一让 AI 助手调工具完成。
 
@@ -40,8 +54,19 @@
 
 ## AI 助手反复说"工具调用失败"？
 
-- 通常是工具调用临时失败或当前应用没有设计文档（draft 草稿）
+- 通常是 dolphin 后端临时问题或当前应用没有设计文档（draft 草稿）
 - AI-Builder 后端会自动 LLM 规范化 + 重试一次。如果还失败，刷新页面让助手重新拿 SPEC
+
+## DevOps 提案 promote 后 git 没有自动 push？
+
+- 检查应用是否已绑定 `git_repo_url`（DevOps Git 仓库 tab 看）
+- 如果没初始化，先点「初始化仓库」（前提：项目已绑定 Git PAT）
+
+## Vibe Coding 工作区跑不起来 dev server？
+
+- Docker 状态看后端日志
+- 工作区会自动跑 `npm install` + 启 dev server，如果失败会在对话流里提示
+- 可以让 AI"重启 dev server"或手动在 IDE 终端跑
 
 ## 模型怎么切换？
 

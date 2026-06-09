@@ -1,13 +1,13 @@
 <template>
   <BuilderFrame :breadcrumbs="[]" :class="{ 'is-embedded': embedMode }">
     <!-- Env Picker Dialog -->
-    <el-dialog v-model="showEnvPicker" title="打开平台预览" width="500px" :append-to-body="true">
+    <el-dialog v-model="showEnvPicker" title="选择调试平台环境" width="500px" :append-to-body="true">
       <div v-if="platformEnvs.length === 0" style="text-align:center;color:#999;padding:20px;">
         <template v-if="userStore.isTenantAdmin">
-          暂无可用平台连接，请联系管理员检查部署配置
+          暂无平台环境，请先到<el-link type="primary" @click="$router.push('/platform-envs')">环境管理</el-link>添加
         </template>
         <template v-else>
-          当前账号没有可用平台连接，请联系租户管理员检查配置。
+          当前账号没有环境管理权限，请联系租户管理员配置可用环境。
         </template>
       </div>
       <div v-else style="display:flex;flex-direction:column;gap:12px;">

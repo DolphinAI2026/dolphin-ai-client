@@ -1209,7 +1209,7 @@ _SELECT_COMPONENT_TYPES = {"FORM_SELECT_INPUT_SINGLE", "FORM_SELECT_INPUT"}
 
 
 def _choose_type_for_dict_component(component_type: str) -> str:
-    return "MULTIPLE" if str(component_type or "").strip() in _DICT_MULTI_COMPONENT_TYPES else "SINGLE"
+    return "MULTI" if str(component_type or "").strip() in _DICT_MULTI_COMPONENT_TYPES else "SINGLE"
 
 
 def _normalize_dict_code(raw_code: Any, dict_codes: Dict[str, str]) -> str:
@@ -2418,23 +2418,17 @@ async def execute_create_workflow(
 ) -> dict:
     """为单个表单创建审批流程。使用平台内部 save API（需要完整 nodes+edges+bpmn）。"""
     role_codes = role_codes or {}
-    form_name = str(workflow.get("form") or workflow.get("form_name") or workflow.get("formName") or "").strip()
-    form_code = str(workflow.get("form_code") or workflow.get("formCode") or "").strip()
+    form_name = workflow.get("form", "")
     config_nodes = workflow.get("nodes", [])
 
     if not config_nodes:
         return {"message": f"流程 {workflow.get('name', '')} 无节点，跳过"}
 
-    # 找对应表单的 menuId。新版 workflow 用 form_code，旧版用 formName/form。
-    fr = next((
-        f for f in form_results
-        if (form_code and (f.get("formCode") == form_code or f.get("code") == form_code))
-        or (form_name and f.get("formName") == form_name)
-    ), None)
+    # 找对应表单的 menuId
+    fr = next((f for f in form_results if f.get("formName") == form_name), None)
     if not fr:
-        raise ValueError(f"未找到表单 {form_code or form_name}，无法创建流程")
+        raise ValueError(f"未找到表单 {form_name}，无法创建流程")
 
-    form_name = form_name or str(fr.get("formName") or form_code or "")
     menu_id = fr.get("menuId", "")
     if not menu_id:
         raise ValueError(f"表单 {form_name} 没有 menuId，无法创建流程")
@@ -2487,9 +2481,8 @@ async def execute_create_workflow(
         if node.get("type") in ("start", "end"):
             continue
         approvers = []
-        node_role_code = node.get("role_code") or node.get("roleCode") or node.get("role")
-        if node_role_code:
-            role_code = node_role_code
+        if node.get("role"):
+            role_code = node["role"]
             role_info = role_codes.get(role_code, {})
             platform_code = role_info.get("roleCode", role_code)
             platform_name = role_info.get("roleName", node.get("name", role_code))
