@@ -522,11 +522,14 @@ function onBack() {
 }
 
 .empty-hint {
-  padding: 24px 12px;
-  font-size: 12px;
+  padding: 24px 6px;
+  font-size: 11.5px;
   color: var(--t-text-muted);
   text-align: center;
-  line-height: 1.5;
+  line-height: 1.35;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 .sidebar-foot {

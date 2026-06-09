@@ -26,7 +26,7 @@
     <div v-if="loading" class="dmd-state">加载中…</div>
     <div v-else-if="error" class="dmd-state dmd-state-err">
       {{ error }}
-      <button class="dmd-btn" @click="reload">重试</button>
+      <button class="dmd-btn" @click="() => reload()">重试</button>
     </div>
     <template v-else>
       <!-- 模型卡片 -->

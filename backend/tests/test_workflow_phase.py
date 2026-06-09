@@ -4,6 +4,8 @@ from __future__ import annotations
 import pytest
 
 from app import workflow_phase
+from app.step_executor import execute_create_workflow
+from app.routes.generation_steps import _critical_step_keys
 
 
 FORM_RESULTS = [
@@ -84,3 +86,45 @@ async def test_create_workflows_save_failure_does_not_raise():
     ):
         events.append(ev)
     assert any(e.get("stage") == 5 for e in events)
+
+
+@pytest.mark.asyncio
+async def test_step_executor_workflow_accepts_standard_form_and_role_codes():
+    saved = []
+
+    class _FakeClient:
+        async def save_process_config(self, app_id, payload):
+            saved.append((app_id, payload))
+            return {"code": "ok"}
+
+    result = await execute_create_workflow(
+        _FakeClient(),
+        "app1",
+        {
+            "name": "订单审批",
+            "form_code": "order_form",
+            "nodes": [{"name": "经理审批", "role_code": "manager"}],
+        },
+        [{"formId": "F1", "formCode": "order_form", "formName": "订单", "menuId": "M1"}],
+        {"manager": {"roleCode": "manager_x", "roleName": "经理"}},
+    )
+
+    assert result["message"].startswith("流程创建成功")
+    assert saved[0][1]["menuId"] == "M1"
+    approve_nodes = [node for node in saved[0][1]["nodes"] if node["id"].startswith("UserTask_")]
+    assert approve_nodes[0]["data"]["approvers"][0]["approverCode"] == "manager_x"
+
+
+def test_generation_step_keys_include_workflows():
+    keys = _critical_step_keys({
+        "data": {
+            "roles": [],
+            "dicts": [],
+            "models": [],
+            "forms": [{"code": "order_form"}],
+            "workflows": [{"name": "订单审批", "form_code": "order_form", "nodes": []}],
+        }
+    })
+
+    assert "create_form:0" in keys
+    assert "create_workflow:0" in keys

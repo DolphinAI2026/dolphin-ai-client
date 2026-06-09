@@ -3124,8 +3124,10 @@ onMounted(async () => {
 .ai-chat-app :deep(.session-sidebar.is-empty .empty-hint) {
   padding-top: 58px;
   color: #94a3b8;
-  font-size: 18px;
+  font-size: 12px;
+  line-height: 1.35;
   text-align: center;
+  white-space: nowrap;
 }
 .chat-header {
   padding: 12px 24px; border-bottom: 1px solid var(--ac-border);

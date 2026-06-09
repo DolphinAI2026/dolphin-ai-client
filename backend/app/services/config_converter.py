@@ -100,6 +100,8 @@ SKIP_FIELDS = {"id", "created_at", "updated_at", "deleted_at", "created_by", "up
 
 SELECT_FIELD_TYPES = {"下拉单选", "下拉多选", "单选框", "复选框"}
 REFERENCE_FIELD_TYPES = {"数据单选", "数据选择", "关联表单"}
+MULTI_SELECT_NAME_TOKENS = ("多选", "复选", "标签", "技能标签", "多个", "多值", "tags", "labels")
+MULTI_SELECT_TYPE_TOKENS = ("下拉多选", "多选", "复选", "multi", "multiple", "checkbox", "array")
 GENERIC_FORM_NAMES = {
     "", "表单", "测试表单", "新增表单", "编辑表单", "查看表单", "维护表单",
     "用户表", "用户信息表", "用户信息", "数据表", "业务表", "主表",
@@ -139,10 +141,17 @@ PLATFORM_TO_DB_TYPE_MAP: dict[str, str] = {
 
 def _normalize_type(raw_type: str, field_name: str = "", has_dict: bool = False) -> str:
     """Map a raw data_type string to a valid platform field type."""
-    if not raw_type:
-        return "单行输入"
+    raw_text = str(raw_type or "").strip()
 
-    t = raw_type.strip()
+    name_based_type = _semantic_type_from_field_name(field_name)
+    if name_based_type:
+        return name_based_type
+    if has_dict and raw_text and not _has_explicit_multi_select_signal(raw_text, field_name):
+        return "下拉单选"
+    if not raw_text:
+        return "下拉单选" if has_dict else "单行输入"
+
+    t = raw_text
 
     # Already a valid platform type
     if t in VALID_TYPES:
@@ -168,20 +177,35 @@ def _normalize_type(raw_type: str, field_name: str = "", has_dict: bool = False)
         return "下拉单选"
 
     # Heuristic: common field name patterns
-    name_lower = field_name.lower()
+    if name_based_type:
+        return name_based_type
+
+    # Fallback
+    return "单行输入"
+
+
+def _semantic_type_from_field_name(field_name: str) -> str:
+    name_lower = str(field_name or "").lower()
+    if any(k in name_lower for k in ("手机", "手机号", "联系电话", "电话", "phone", "mobile", "tel")):
+        return "手机号码"
+    if any(k in name_lower for k in ("邮箱", "邮件", "email", "mail")):
+        return "电子邮箱"
     if any(k in name_lower for k in ("日期", "时间", "date", "time")):
         return "日期时间"
     if any(k in name_lower for k in ("金额", "价格", "费用", "amount", "price", "cost")):
         return "金额"
-    if any(k in name_lower for k in ("手机", "电话", "phone")):
-        return "手机号码"
-    if any(k in name_lower for k in ("邮箱", "email")):
-        return "电子邮箱"
     if any(k in name_lower for k in ("备注", "描述", "说明", "remark", "desc", "note")):
         return "多行输入"
+    return ""
 
-    # Fallback
-    return "单行输入"
+
+def _has_explicit_multi_select_signal(raw_type: object, field_name: str = "") -> bool:
+    text = f"{raw_type or ''} {field_name or ''}".lower()
+    return any(token.lower() in text for token in (*MULTI_SELECT_TYPE_TOKENS, *MULTI_SELECT_NAME_TOKENS))
+
+
+def _select_type_for_options(raw_type: object, field_name: str = "") -> str:
+    return "下拉多选" if _has_explicit_multi_select_signal(raw_type, field_name) else "下拉单选"
 
 
 def _split_option_text(text: str) -> list[str]:
@@ -518,7 +542,7 @@ def convert_analysis_to_app_config(doc_result: dict[str, Any]) -> dict[str, Any]
     roles_raw = doc_result.get("roles", [])
     dicts_raw = doc_result.get("data_dictionary", [])
     tables_raw = doc_result.get("tables", [])
-    flows_raw = doc_result.get("flows", [])
+    flows_raw = doc_result.get("workflows") or doc_result.get("flows", [])
     mappings_raw = doc_result.get("role_table_mapping", [])
 
     # ── appName & appCode ──
@@ -632,14 +656,14 @@ def convert_analysis_to_app_config(doc_result: dict[str, Any]) -> dict[str, Any]
                         field_dict = dc
                         break
 
-            has_dict = field_dict is not None
+            has_dict = bool(field_dict)
             field_type = _normalize_type(raw_type, f_name, has_dict)
 
             if field_options and field_type not in REFERENCE_FIELD_TYPES:
-                field_type = "下拉单选"
+                field_type = _select_type_for_options(raw_type, f_name)
                 if not field_dict:
                     field_dict = ensure_field_dict(t_code, f_code, f_name, field_options)
-                    has_dict = field_dict is not None
+                    has_dict = bool(field_dict)
 
             # If type is select-like but no dict, try to find one
             if field_type in SELECT_FIELD_TYPES and not field_dict:
@@ -743,46 +767,86 @@ def convert_analysis_to_app_config(doc_result: dict[str, Any]) -> dict[str, Any]
     for m in models:
         m.pop("_subtables", None)
 
-    # ── workflows (from flows) ──
+    # ── workflows (from flows/workflows) ──
     workflows = []
     # Build role name → code map
     role_name_to_code = {}
     for r in roles_raw:
         role_name_to_code[r.get("role_name", "")] = _normalize_code(r.get("role_code", ""))
 
-    for flow in flows_raw:
-        flow_name = flow.get("flow_name", "")
-        steps = flow.get("steps", [])
-        if not flow_name or not steps:
-            continue
+    model_form_refs = []
+    for m in models:
+        model_form_refs.append({
+            "model_name": str(m.get("name") or "").strip(),
+            "model_code": str(m.get("code") or "").strip(),
+            "form_name": str(m.get("form_name") or m.get("name") or "").strip(),
+            "form_code": str(m.get("form_code") or m.get("code") or "").strip(),
+        })
 
-        # Try to match flow to a form/model
-        form_name = ""
-        for m in models:
-            if m["name"] in flow_name or flow_name in m["name"]:
-                form_name = m["name"]
-                break
-        if not form_name and models:
-            form_name = models[0]["name"]
+    def _resolve_flow_form_code(flow: dict[str, Any], flow_name: str) -> str:
+        explicit_raw = str(
+            flow.get("form_code")
+            or flow.get("formCode")
+            or flow.get("form")
+            or flow.get("form_name")
+            or flow.get("formName")
+            or ""
+        ).strip()
+        explicit = _normalize_code(explicit_raw)
+        if explicit_raw:
+            for ref in model_form_refs:
+                if explicit_raw in {ref["form_name"], ref["model_name"], ref["form_code"], ref["model_code"]}:
+                    return ref["form_code"]
+        if explicit:
+            for ref in model_form_refs:
+                if explicit in {ref["form_code"], _normalize_code(ref["form_name"]), ref["model_code"], _normalize_code(ref["model_name"])}:
+                    return ref["form_code"]
+            return explicit
+        for ref in model_form_refs:
+            labels = [ref["form_name"], ref["model_name"], ref["form_code"], ref["model_code"]]
+            if any(label and (label in flow_name or flow_name in label) for label in labels):
+                return ref["form_code"]
+        return model_form_refs[0]["form_code"] if model_form_refs else ""
 
-        nodes = [{"name": "发起申请", "role": "", "type": "start"}]
-        for step in steps:
-            role_name = step.get("role", "")
+    def _normalize_workflow_nodes(flow: dict[str, Any]) -> list[dict[str, str]]:
+        nodes: list[dict[str, str]] = []
+        raw_nodes = flow.get("nodes")
+        if isinstance(raw_nodes, list) and raw_nodes:
+            for node in raw_nodes:
+                if not isinstance(node, dict):
+                    continue
+                node_type = str(node.get("type") or "").strip().lower()
+                if node_type in {"start", "end"}:
+                    continue
+                node_name = str(node.get("name") or node.get("node_name") or node.get("action") or "审批").strip()
+                role_raw = str(node.get("role_code") or node.get("roleCode") or node.get("role") or "").strip()
+                role_code = role_name_to_code.get(role_raw, _normalize_code(role_raw))
+                if role_code:
+                    nodes.append({"name": node_name[:20], "role_code": role_code})
+            return nodes
+
+        for step in flow.get("steps", []) or []:
+            if not isinstance(step, dict):
+                continue
+            role_name = str(step.get("role") or step.get("role_name") or step.get("roleName") or "").strip()
             role_code = role_name_to_code.get(role_name, _normalize_code(role_name))
-            action = step.get("action", "")
-            if "审批" in action or "审核" in action:
-                nodes.append({
-                    "name": action[:20],
-                    "role": role_code,
-                    "type": "approve",
-                })
-        nodes.append({"name": "结束", "role": "", "type": "end"})
+            action = str(step.get("action") or step.get("name") or step.get("step_name") or "审批").strip()
+            if role_code and ("审批" in action or "审核" in action or "确认" in action):
+                nodes.append({"name": action[:20], "role_code": role_code})
+        return nodes
 
-        # Only add if there are actual approval nodes
-        if len(nodes) > 2:
+    for flow in flows_raw:
+        if not isinstance(flow, dict):
+            continue
+        flow_name = str(flow.get("name") or flow.get("flow_name") or flow.get("flowName") or "").strip()
+        if not flow_name:
+            continue
+        form_code = _resolve_flow_form_code(flow, flow_name)
+        nodes = _normalize_workflow_nodes(flow)
+        if form_code and nodes:
             workflows.append({
                 "name": flow_name,
-                "form": form_name,
+                "form_code": form_code,
                 "nodes": nodes,
             })
 

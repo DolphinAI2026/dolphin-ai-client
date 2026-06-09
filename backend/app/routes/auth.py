@@ -2024,8 +2024,7 @@ async def delete_tenant(
     安全规则：
     - 默认 force=false：租户内有应用/工作区/组件/成员任一时，返 409 列出残留资源数，
       要求平台管理员先清理或显式 force。
-    - force=true：级联删除应用 + 组件 + 成员关系（DB 层 ON DELETE CASCADE）；
-      Vibe Coding workspace 的文件系统目录不会自动删，需平台管理员后续手动清理。
+    - force=true：级联删除应用 + 组件 + 成员关系（DB 层 ON DELETE CASCADE）。
     """
     _require_platform_admin(ctx)
 

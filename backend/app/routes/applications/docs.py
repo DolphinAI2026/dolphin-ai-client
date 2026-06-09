@@ -1768,7 +1768,7 @@ async def draft_doc_update_stream(
     - 立刻推 `thinking: 正在理解你的诉求...` 让 UI 1s 内出反馈
     - 后台 task 跑原函数；定时推阶段性 thinking 文案，避免用户面对静止界面 30-60s
     - 完成后推 `result: <原 JSON>` + `done`；失败推 `error`
-    与其他模块（vibe-coding / ai-chat）的事件协议保持一致：thinking / result / done / error
+    与 AI 对话模块的事件协议保持一致：thinking / result / done / error
     """
     import asyncio
     import json as _json

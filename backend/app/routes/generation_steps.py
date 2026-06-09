@@ -41,8 +41,8 @@ logger = logging.getLogger(__name__)
 
 router = APIRouter(tags=["生成步骤"])
 
-# 临时关闭审批流程创建步骤，避免部署链路被当前流程配置问题阻塞。
-WORKFLOW_STEPS_ENABLED = False
+# 审批流程作为独立步骤执行。单步失败会停在该步骤，用户可修正后重试。
+WORKFLOW_STEPS_ENABLED = True
 
 # 平台 / 历史数据偶尔会返回非规范组件码（缺 _INPUT / _SELECT 之类后缀），
 # 这里列出这些别名到中文显示名的固定映射。
@@ -544,6 +544,8 @@ def _critical_step_keys(config: dict) -> set[str]:
     keys.update(f"create_dict:{i}" for i, _ in enumerate(data.get("dicts") or []))
     keys.update(f"create_model:{i}" for i, _ in enumerate(data.get("models") or []))
     keys.update(f"create_form:{i}" for i, _ in enumerate(data.get("forms") or []))
+    if WORKFLOW_STEPS_ENABLED:
+        keys.update(f"create_workflow:{i}" for i, _ in enumerate(data.get("workflows") or []))
     return keys
 
 
@@ -1140,8 +1142,23 @@ async def _execute_step_impl(
         except Exception as e:
             if "已存在" not in str(e) and "重复" not in str(e):
                 raise
-        state.setdefault("role_codes", {})[original_code] = {"roleCode": platform_code, "roleName": r["name"]}
-        return {"role": r["name"], "code": platform_code}
+        role_info = {"roleCode": platform_code, "roleName": r["name"]}
+        try:
+            remote_roles = await client.query_roles(apaas_app_id)
+            matched = next((
+                item for item in remote_roles
+                if item.get("roleCode") == platform_code or item.get("roleName") == r.get("name")
+            ), None)
+            if matched:
+                role_info.update({
+                    "id": matched.get("id", ""),
+                    "roleCode": matched.get("roleCode", platform_code),
+                    "roleName": matched.get("roleName", r["name"]),
+                })
+        except Exception as e:
+            logger.warning("创建角色后回查角色 id 失败: %s", e)
+        state.setdefault("role_codes", {})[original_code] = role_info
+        return {"role": r["name"], "code": role_info.get("roleCode", platform_code), "id": role_info.get("id", "")}
 
     elif step_key.startswith("create_dict:"):
         idx = int(step_key.split(":")[1])

@@ -1,7 +1,7 @@
 """SPEC → Application.config conversion.
 
 One-way transformation. Only confirmed items are emitted to keep the
-config a "source of truth for what the user actually approved".
+config a source of truth for what the user actually confirmed.
 """
 
 from __future__ import annotations

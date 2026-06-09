@@ -72,6 +72,71 @@ def test_converter_keeps_business_form_names_and_field_metadata():
     assert _find_component(config, "delisting_apply_form", "申请部门")["componentType"] == "FORM_DEPARTMENT_SELECT"
 
 
+def test_converter_uses_semantic_components_and_single_select_by_default():
+    config = convert_analysis_to_app_config({
+        "app_info": {"name": "工程师管理", "code": "engineer-mgr"},
+        "roles": [{"role_code": "dept_manager", "role_name": "部门经理"}],
+        "data_dictionary": [],
+        "tables": [{
+            "table_code": "engineer",
+            "table_name": "工程师主数据",
+            "fields": [
+                {"field_code": "engineer_status", "field_name": "在职状态", "data_type": "VARCHAR", "enum_values": ["在职", "离职"]},
+                {"field_code": "skill_tags", "field_name": "技能标签", "data_type": "下拉多选", "enum_values": ["Java", "Python"]},
+                {"field_code": "mobile", "field_name": "手机号", "data_type": "VARCHAR"},
+                {"field_code": "email", "field_name": "邮箱", "data_type": "VARCHAR"},
+            ],
+        }],
+        "workflows": [{
+            "name": "工程师入职审批",
+            "form_code": "engineer",
+            "nodes": [{"name": "部门经理审批", "role_code": "dept_manager"}],
+        }],
+    })
+
+    status = next(field for model in config["models"] for field in model["fields"] if field["code"] == "engineer_status")
+    tags = next(field for model in config["models"] for field in model["fields"] if field["code"] == "skill_tags")
+    phone = next(field for model in config["models"] for field in model["fields"] if field["code"] == "mobile")
+    email = next(field for model in config["models"] for field in model["fields"] if field["name"] == "邮箱")
+
+    assert status["type"] == "下拉单选"
+    assert tags["type"] == "下拉多选"
+    assert phone["type"] == "手机号码"
+    assert email["type"] == "电子邮箱"
+
+    assert _find_component(config, "engineer", "在职状态")["componentType"] == "FORM_SELECT_INPUT_SINGLE"
+    assert _find_component(config, "engineer", "技能标签")["componentType"] == "FORM_SELECT_INPUT"
+    assert _find_component(config, "engineer", "手机号")["componentType"] == "FORM_PHONE_INPUT"
+    assert _find_component(config, "engineer", "邮箱")["componentType"] == "FORM_EMAIL_INPUT"
+    assert config["workflows"] == [{
+        "name": "工程师入职审批",
+        "form_code": "engineer",
+        "nodes": [{"name": "部门经理审批", "role_code": "dept_manager"}],
+    }]
+
+
+def test_converter_normalizes_legacy_flows_to_creatable_workflows():
+    config = convert_analysis_to_app_config({
+        "app_info": {"name": "采购", "code": "purchase-app"},
+        "roles": [{"role_code": "buyer_manager", "role_name": "采购经理"}],
+        "tables": [{
+            "table_code": "purchase_order",
+            "table_name": "采购订单",
+            "fields": [{"field_code": "amount", "field_name": "金额", "data_type": "DECIMAL"}],
+        }],
+        "flows": [{
+            "flow_name": "采购订单审批",
+            "steps": [{"role": "采购经理", "action": "审批采购订单"}],
+        }],
+    })
+
+    assert config["workflows"] == [{
+        "name": "采购订单审批",
+        "form_code": "purchase_order",
+        "nodes": [{"name": "审批采购订单", "role_code": "buyer_manager"}],
+    }]
+
+
 @pytest.mark.asyncio
 async def test_execute_create_form_finalizes_detail_config_after_create():
     class FakeClient:

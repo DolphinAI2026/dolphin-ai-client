@@ -1564,7 +1564,6 @@ html[data-theme="dark"] .builder-btn-primary:hover {
   line-height: 1.6;
 }
 
-.devops-layout,
 .settings-layout {
   flex: 1;
   min-height: 0;
@@ -1573,7 +1572,6 @@ html[data-theme="dark"] .builder-btn-primary:hover {
   overflow: hidden;
 }
 
-.devops-side,
 .settings-side {
   background: var(--b-bg-sub);
   border-right: 1px solid var(--b-line);
@@ -1581,7 +1579,6 @@ html[data-theme="dark"] .builder-btn-primary:hover {
   overflow: auto;
 }
 
-.devops-main,
 .settings-main {
   overflow: auto;
   padding: 24px 32px 64px;
@@ -1717,14 +1714,12 @@ html[data-theme="dark"] .builder-btn-primary:hover {
 
   .builder-workbench,
   .ide-workspace,
-  .devops-layout,
   .settings-layout {
     grid-template-columns: 1fr;
   }
 
   .builder-chat-col,
   .ide-sidebar,
-  .devops-side,
   .settings-side {
     display: none;
   }

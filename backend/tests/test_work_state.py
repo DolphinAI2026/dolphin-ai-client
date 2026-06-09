@@ -1,13 +1,11 @@
 """work-state BFF 端点测试 — 函数级直调 handler"""
 import uuid
-from datetime import datetime
 
 import pytest
 from fastapi import HTTPException
 
 from app.deps import AuthContext
 from app.models import Application, Project, ProjectMember, User
-from app.models.collaboration import ChangeProposal
 from app.models.preference import UserPreference
 from app.models.spec import Spec as SpecORM
 from app.models.tenant import Tenant, UserTenant
@@ -78,7 +76,7 @@ async def _seed_app(db_session, *, with_canonical: bool = True):
 
 @pytest.mark.asyncio
 async def test_work_state_returns_aggregated_payload(db_session):
-    """canonical + 1 个 open + 1 个 applied → 字段齐全"""
+    """canonical + draft + git → 字段齐全"""
     s = await _seed_app(db_session, with_canonical=True)
     owner = s["owner"]
     app = s["application"]
@@ -93,24 +91,6 @@ async def test_work_state_returns_aggregated_payload(db_session):
     )
     db_session.add(draft)
     await db_session.flush()
-
-    # 1 open proposal
-    open_prop = ChangeProposal(
-        id=uuid.uuid4().hex, application_id=app.id,
-        title="Open one", draft_spec_id=draft.id,
-        base_canonical_spec_id=s["canonical"].id,
-        status="open", created_by=owner.id,
-    )
-    # 1 applied proposal
-    applied_prop = ChangeProposal(
-        id=uuid.uuid4().hex, application_id=app.id,
-        title="Applied one", draft_spec_id=draft.id,
-        base_canonical_spec_id=s["canonical"].id,
-        status="applied", created_by=owner.id,
-        applied_at=datetime.utcnow(),
-        git_pr_url="https://gitlab.example.com/proj/-/merge_requests/3",
-    )
-    db_session.add_all([open_prop, applied_prop])
 
     # set git on app
     app.git_repo_url = "https://gitlab.example.com/proj.git"
@@ -132,11 +112,6 @@ async def test_work_state_returns_aggregated_payload(db_session):
     assert result["current_draft"]["completeness_confirmed"] == 3
     assert result["current_draft"]["completeness_total"] == 10
 
-    assert len(result["open_proposals"]) == 1
-    assert result["open_proposals"][0]["title"] == "Open one"
-    assert len(result["applied_history"]) == 1
-    assert result["applied_history"][0]["git_pr_url"].endswith("/3")
-
     assert result["git"]["repo_url"].endswith(".git")
     assert result["git"]["provider"] == "gitlab"
     assert result["git"]["connected"] is False  # 没建 GitConnection
@@ -152,15 +127,13 @@ async def test_work_state_returns_aggregated_payload(db_session):
 
 @pytest.mark.asyncio
 async def test_work_state_no_canonical_returns_null(db_session):
-    """全新应用无 canonical → canonical=None, open_proposals=[]"""
+    """全新应用无 canonical → canonical=None"""
     s = await _seed_app(db_session, with_canonical=False)
     ctx = _ctx_for(s["owner"], s["tenant"].id)
     result = await get_work_state(s["application"].id, ctx, db_session)
 
     assert result["canonical"] is None
     assert result["current_draft"] is None
-    assert result["open_proposals"] == []
-    assert result["applied_history"] == []
     assert result["git"] is None
 
 

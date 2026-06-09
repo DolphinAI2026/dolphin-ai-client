@@ -1,8 +1,8 @@
 /**
  * AgentConversation 公共消息类型
  *
- * 4 个 AI 模块（AI Chat / AI 搭建 / 睿鲸 Coding / Vibe Coding）共用此契约渲染对话流。
- * 各模块在自己的 view 里把后端原始消息（StreamMessage / VibeChatMessage / AIChatMessage 等）
+ * AI Chat / AI 搭建 / 睿鲸 Coding 共用此契约渲染对话流。
+ * 各模块在自己的 view 里把后端原始消息（StreamMessage / AIChatMessage 等）
  * 映射成 AgentMessage[]，组件侧只认这一套接口。
  */
 

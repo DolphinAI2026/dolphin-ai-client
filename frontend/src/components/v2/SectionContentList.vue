@@ -11,7 +11,7 @@
     - appId (必传): ai-builder 本地应用 id
     - resourceKind: 7 种之一
     - apaasAppId?: 平台 app id, 空 = 应用未部署
-    - envId?: 平台环境 id
+    - envId?: 默认平台连接 id
 
     Emit:
     - select-item (item: any) — 点击列表项 (P0 由父组件 console.log; P1 接 iframe)

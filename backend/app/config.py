@@ -7,7 +7,7 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 # ⚠️ 不覆盖 CLI 命令名 "apaas-builder"，那是命令行工具的调用入口，不属于品牌文案。
 APP_TITLE = "aPaaS Builder AI"
 APP_BRAND = "aPaaS Builder"
-APP_DESCRIPTION = "得帆云低代码平台智能搭建 & Vibe Coding 助手"
+APP_DESCRIPTION = "得帆云低代码平台智能搭建助手"
 APP_VERSION = "1.0.0"
 
 # 上线 / 发布时写入平台的摘要（历史为 "aPaaS Builder 应用上线"）。

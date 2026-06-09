@@ -9,7 +9,7 @@ from app.database import get_db
 from app.deps import get_auth_context, AuthContext
 from app.models import Application, ProjectMember, User
 from app.models.collaboration import (
-    ChangeProposal, GitConnection, ApplicationMember,
+    GitConnection, ApplicationMember,
 )
 from app.models.spec import Spec as SpecORM
 from app.models.preference import UserPreference
@@ -72,30 +72,6 @@ async def get_work_state(
             "updated_at": drow.updated_at.isoformat() if drow.updated_at else None,
         }
 
-    # open / changes_requested / approved 提案
-    open_props = (await db.execute(
-        select(ChangeProposal).where(
-            ChangeProposal.application_id == app.id,
-            ChangeProposal.status.in_(["open", "changes_requested", "approved"]),
-        ).order_by(ChangeProposal.created_at.desc())
-    )).scalars().all()
-
-    # applied 历史（最近 5）
-    applied_props = (await db.execute(
-        select(ChangeProposal).where(
-            ChangeProposal.application_id == app.id,
-            ChangeProposal.status == "applied",
-        ).order_by(ChangeProposal.applied_at.desc()).limit(5)
-    )).scalars().all()
-
-    def _prop_dict(p: ChangeProposal) -> dict:
-        return {
-            "id": p.id, "title": p.title, "status": p.status,
-            "created_by": p.created_by, "created_at": p.created_at.isoformat() if p.created_at else None,
-            "applied_at": p.applied_at.isoformat() if p.applied_at else None,
-            "git_pr_url": p.git_pr_url,
-        }
-
     # git
     git_info = None
     if app.git_repo_url:
@@ -148,8 +124,6 @@ async def get_work_state(
         },
         "current_draft": current_draft,
         "canonical": canonical,
-        "open_proposals": [_prop_dict(p) for p in open_props],
-        "applied_history": [_prop_dict(p) for p in applied_props],
         "git": git_info,
         "members": list(members.values()),
         "effective_mode": effective,

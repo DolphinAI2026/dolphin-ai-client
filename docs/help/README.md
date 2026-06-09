@@ -5,13 +5,11 @@
 ## 文件清单
 
 - `00-overview.md` — 产品总览、模块关系
-- `01-ai-chat.md` — AI 对话（Chat / Cowork 模式 + 设计文档产出）
+- `01-ai-chat.md` — AI 对话（统一入口 + 设计文档产出）
 - `02-ai-builder.md` — AI 搭建（SPEC 4 阶段流水线）
 - `03-coding.md` — AI 编码 / 睿鲸 IDE（自开发组件 / 页面）
-- `04-vibe-coding.md` — Vibe Coding（全代码沙箱）
 - `05-apps.md` — 应用管理
-- `06-devops.md` — DevOps（提案 / 审批 / Apply / Git / 环境）
-- `07-settings.md` — LLM / 平台环境 / 成员
+- `07-settings.md` — LLM / 成员
 - `08-faq.md` — 常见问题
 
 ## 维护准则

@@ -7,7 +7,7 @@
          level="err"
          title="aPaaS Token 已过期"
          code="APAAS_TOKEN_EXPIRED_AND_REFRESH_FAILED"
-         message="当前环境的 admin token 已过期……在「平台环境」里重新登录这个环境就行。"
+         message="当前平台连接的 admin token 已过期，请联系管理员重新连接。"
          :actions="[
            { label: '去登录', primary: true, onClick: () => goLogin() },
            { label: '查看日志', onClick: () => showLog() },

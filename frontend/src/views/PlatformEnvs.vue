@@ -1,10 +1,6 @@
 <template>
   <BuilderFrame :breadcrumbs="[{ label: '设置' }, { label: activeTabLabel }]">
     <template #actions>
-      <button v-if="activeTab === 'envs'" class="new-btn" @click="openCreate">
-        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
-        添加环境
-      </button>
       <button v-if="activeTab === 'llm'" class="new-btn" @click="openLlmCreate">
         <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
         新增模型
@@ -13,7 +9,6 @@
     <div class="envs-main builder-page">
       <div class="tabs-bar">
         <div class="tabs-group">
-          <button :class="['tab-item', { active: activeTab === 'envs' }]" @click="setActiveTab('envs')">平台环境</button>
           <button :class="['tab-item', { active: activeTab === 'llm' }]" @click="setActiveTab('llm')">模型配置</button>
         </div>
         <div class="tabs-summary">
@@ -21,84 +16,6 @@
         </div>
       </div>
 
-      <!-- ==================== Tab 1: 平台环境 ==================== -->
-      <div v-show="activeTab === 'envs'" class="env-content">
-      <div v-if="loading" class="empty-state">
-        <SkeletonCard :lines="3" with-footer />
-      </div>
-      <div v-else-if="envs.length === 0" class="empty-state">
-        <EmptyState
-          title="暂无环境配置"
-          desc="添加一个 aPaaS 平台环境，登录后即可发布应用、同步元数据。"
-        >
-          <template #icon>
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>
-          </template>
-          <template #cta>
-            <button class="empty-add-btn" @click="openCreate">添加第一个环境</button>
-          </template>
-        </EmptyState>
-      </div>
-
-      <template v-else>
-        <div class="env-grid">
-          <div v-for="env in envs" :key="env.id" class="env-card">
-            <div class="env-card-header">
-              <div class="env-card-left">
-                <div class="env-status-dot" :class="env.status"></div>
-                <h3 class="env-name">
-                  {{ env.env_name }}
-                  <span v-if="env.is_default" class="default-star"><AppIcon name="star" :size="12" /></span>
-                </h3>
-              </div>
-              <span class="env-status-tag" :class="env.status">
-                {{ env.status === 'connected' ? '已连接' : '未连接' }}
-              </span>
-            </div>
-
-            <div class="env-card-body">
-              <div class="env-field">
-                <span class="env-label">平台地址</span>
-                <span class="env-value">{{ env.base_url }}</span>
-              </div>
-              <div class="env-field">
-                <span class="env-label">租户ID</span>
-                <span class="env-value mono">{{ env.platform_tenant_id }}</span>
-              </div>
-              <div class="env-field" v-if="env.username">
-                <span class="env-label">用户名</span>
-                <span class="env-value">{{ env.username }}</span>
-              </div>
-            </div>
-
-            <div class="env-card-actions">
-              <button class="env-action-btn" @click="handleTest(env)" :disabled="env._testing" title="测试连接">
-                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"/><polyline points="22 4 12 14.01 9 11.01"/></svg>
-                {{ env._testing ? '测试中...' : '测试' }}
-              </button>
-              <button class="env-action-btn" @click="handleLogin(env)" :disabled="env._logging" title="登录">
-                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M15 3h4a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2h-4"/><polyline points="10 17 15 12 10 7"/><line x1="15" y1="12" x2="3" y2="12"/></svg>
-                {{ env._logging ? '登录中...' : '登录' }}
-              </button>
-              <button v-if="!env.is_default" class="env-action-btn" @click="handleSetDefault(env)" title="设为默认">
-                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2"/></svg>
-                默认
-              </button>
-              <button class="env-action-btn" @click="openEdit(env)" title="编辑">
-                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/></svg>
-                编辑
-              </button>
-              <button class="env-action-btn danger" @click="handleDelete(env)" :disabled="env._deleting" title="删除">
-                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg>
-                {{ env._deleting ? '删除中...' : '删除' }}
-              </button>
-            </div>
-          </div>
-        </div>
-      </template>
-      </div>
-
-      <!-- ==================== Tab 2: 模型配置 ==================== -->
       <div v-show="activeTab === 'llm'" class="env-content">
       <div v-if="llmLoading" class="empty-state">
         <SkeletonCard :lines="3" with-footer />
@@ -186,65 +103,6 @@
       </template>
       </div>
 
-      <!-- ==================== 平台环境 Dialog ==================== -->
-      <el-dialog
-      v-model="dialogVisible"
-      :title="editingEnv ? '编辑环境' : '添加环境'"
-      width="520px"
-      :close-on-click-modal="false"
-      class="env-dialog"
-      :append-to-body="true"
-    >
-      <el-form :model="form" label-position="top" class="env-form">
-        <el-form-item label="环境名称" required>
-          <el-input v-model="form.env_name" placeholder="如：开发环境、测试环境" />
-        </el-form-item>
-        <el-form-item label="平台地址" required>
-          <el-input v-model="form.base_url" placeholder="https://apaas.example.com/backend" />
-        </el-form-item>
-        <el-form-item label="租户ID" required>
-          <el-input v-model="form.platform_tenant_id" placeholder="输入平台租户ID" />
-        </el-form-item>
-
-        <div class="auth-section">
-          <div class="auth-section-label">认证方式</div>
-          <div class="auth-tabs">
-            <button
-              :class="['auth-tab', { active: authMode === 'password' }]"
-              @click="authMode = 'password'"
-              type="button"
-            >账号密码</button>
-            <button
-              :class="['auth-tab', { active: authMode === 'token' }]"
-              @click="authMode = 'token'"
-              type="button"
-            >Token 直连</button>
-          </div>
-
-          <template v-if="authMode === 'password'">
-            <el-form-item label="用户名">
-              <el-input v-model="form.username" placeholder="平台登录用户名" />
-            </el-form-item>
-            <el-form-item label="密码">
-              <el-input v-model="form.password" type="password" show-password placeholder="平台登录密码" />
-            </el-form-item>
-          </template>
-          <template v-else>
-            <el-form-item label="Token">
-              <el-input v-model="form.token" type="textarea" :rows="3" placeholder="粘贴平台 Token" />
-            </el-form-item>
-          </template>
-        </div>
-      </el-form>
-
-      <template #footer>
-        <el-button @click="dialogVisible = false">取消</el-button>
-        <el-button type="primary" @click="handleSave" :loading="saving">
-          {{ editingEnv ? '保存' : '添加' }}
-        </el-button>
-      </template>
-      </el-dialog>
-
       <!-- ==================== 模型配置 Dialog ==================== -->
       <el-dialog
       v-model="llmDialogVisible"
@@ -330,7 +188,6 @@ import { ref, reactive, onMounted, computed, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { handleError } from '@/utils/errorHandler'
-import { platformEnvApi, type PlatformEnv } from '@/api/platformEnv'
 import { llmConfigApi, type LlmConfig, type ProviderPreset } from '@/api/llmConfig'
 import { providerOptions, providerLabel, purposeLabel } from '@/utils/llmConfig'
 import BuilderFrame from '@/components/BuilderFrame.vue'
@@ -341,190 +198,21 @@ import AppIcon from '@/components/common/AppIcon.vue'
 const route = useRoute()
 const router = useRouter()
 
-type SettingsTab = 'envs' | 'llm'
+type SettingsTab = 'llm'
 
-function normalizeTab(value: unknown): SettingsTab {
-  const raw = Array.isArray(value) ? value[0] : value
-  return raw === 'llm' ? 'llm' : 'envs'
+function normalizeTab(_value: unknown): SettingsTab {
+  return 'llm'
 }
 
 const activeTab = ref<SettingsTab>(normalizeTab(route.query.tab))
 const activeTabLabel = computed(() => {
-  if (activeTab.value === 'envs') return '平台环境'
   return '模型配置'
 })
 
 async function setActiveTab(tab: SettingsTab) {
   activeTab.value = tab
   router.replace({ path: '/platform-envs', query: { ...route.query, tab } })
-  if (tab === 'llm') await loadLlmConfigs()
-}
-
-// ==================== 平台环境相关 ====================
-
-interface EnvWithUI extends PlatformEnv {
-  _testing?: boolean
-  _logging?: boolean
-  _deleting?: boolean
-}
-
-const envs = ref<EnvWithUI[]>([])
-const loading = ref(true)
-const dialogVisible = ref(false)
-const editingEnv = ref<PlatformEnv | null>(null)
-const saving = ref(false)
-const authMode = ref<'password' | 'token'>('password')
-
-const form = reactive({
-  env_name: '',
-  base_url: '',
-  platform_tenant_id: '',
-  username: '',
-  password: '',
-  token: '',
-})
-
-function resetForm() {
-  form.env_name = ''
-  form.base_url = ''
-  form.platform_tenant_id = ''
-  form.username = ''
-  form.password = ''
-  form.token = ''
-  authMode.value = 'password'
-}
-
-function openCreate() {
-  editingEnv.value = null
-  resetForm()
-  dialogVisible.value = true
-}
-
-function openEdit(env: PlatformEnv) {
-  editingEnv.value = env
-  form.env_name = env.env_name
-  form.base_url = env.base_url
-  form.platform_tenant_id = env.platform_tenant_id
-  form.username = env.username || ''
-  form.password = ''
-  form.token = ''
-  authMode.value = env.username ? 'password' : 'token'
-  dialogVisible.value = true
-}
-
-async function loadEnvs() {
-  try {
-    const list = await platformEnvApi.list()
-    envs.value = Array.isArray(list) ? list : []
-  } catch {
-    envs.value = []
-  }
-  loading.value = false
-}
-
-async function handleSave() {
-  if (!form.env_name.trim() || !form.base_url.trim() || !form.platform_tenant_id.trim()) {
-    ElMessage.warning('请填写必填字段')
-    return
-  }
-  saving.value = true
-  try {
-    const data: any = {
-      env_name: form.env_name,
-      base_url: form.base_url,
-      platform_tenant_id: form.platform_tenant_id,
-    }
-    if (authMode.value === 'password') {
-      data.username = form.username
-      if (form.password) data.password = form.password
-    } else {
-      if (form.token) data.token = form.token
-    }
-
-    if (editingEnv.value) {
-      await platformEnvApi.update(editingEnv.value.id, data)
-      ElMessage.success('已更新')
-    } else {
-      await platformEnvApi.create(data)
-      ElMessage.success('已添加')
-    }
-    dialogVisible.value = false
-    await loadEnvs()
-  } catch (e: any) {
-    handleError(e, { fallback: '操作失败' })
-  }
-  saving.value = false
-}
-
-async function handleTest(env: EnvWithUI) {
-  env._testing = true
-  try {
-    const res = await platformEnvApi.test(env.id)
-    if (res.ok) {
-      ElMessage.success('连接成功')
-      env.status = res.status
-    } else {
-      ElMessage.error(res.error || '连接失败')
-    }
-  } catch (e: any) {
-    handleError(e, { fallback: '测试失败' })
-  }
-  env._testing = false
-}
-
-async function handleLogin(env: EnvWithUI) {
-  env._logging = true
-  try {
-    const res = await platformEnvApi.login(env.id)
-    if (res.ok) {
-      ElMessage.success('登录成功')
-      env.status = res.status
-    } else {
-      ElMessage.error('登录失败')
-    }
-  } catch (e: any) {
-    handleError(e, { fallback: '登录失败' })
-  }
-  env._logging = false
-}
-
-async function handleSetDefault(env: PlatformEnv) {
-  try {
-    await platformEnvApi.setDefault(env.id)
-    ElMessage.success(`已将「${env.env_name}」设为默认环境`)
-    await loadEnvs()
-  } catch (e: any) {
-    handleError(e, { fallback: '设置失败' })
-  }
-}
-
-async function handleDelete(env: PlatformEnv) {
-  try {
-    await ElMessageBox.confirm(`确定删除环境「${env.env_name}」？此操作不可恢复。`, '删除环境', {
-      confirmButtonText: '删除',
-      cancelButtonText: '取消',
-      type: 'warning',
-    })
-  } catch {
-    return
-  }
-
-  const target = env as EnvWithUI
-  target._deleting = true
-  try {
-    const res: any = await platformEnvApi.delete(env.id)
-    const unlinked = Number(res?.unlinked_applications || 0)
-    if (unlinked > 0) {
-      ElMessage.success(`已删除，并解绑 ${unlinked} 个关联应用`)
-    } else {
-      ElMessage.success('已删除')
-    }
-    await loadEnvs()
-  } catch (e: any) {
-    handleError(e, { fallback: '删除失败' })
-  } finally {
-    target._deleting = false
-  }
+  await loadLlmConfigs()
 }
 
 // ==================== LLM 模型配置相关 ====================
@@ -761,15 +449,13 @@ async function handleLlmDelete(cfg: LlmConfig) {
 }
 
 const tabSummary = computed(() => {
-  if (activeTab.value === 'envs') return `${envs.value.length} 个环境连接`
   return `${llmConfigs.value.length} 个模型配置`
 })
 
 // ==================== Lifecycle ====================
 
 onMounted(() => {
-  loadEnvs()
-  if (activeTab.value === 'llm') loadLlmConfigs()
+  loadLlmConfigs()
 })
 
 watch(
@@ -777,14 +463,14 @@ watch(
   value => {
     const next = normalizeTab(value)
     activeTab.value = next
-    if (next === 'llm') loadLlmConfigs()
+    loadLlmConfigs()
   }
 )
 </script>
 
 <style scoped>
 /* v3 redesign · 2026-05-20 — visual refresh only, template/script untouched.
-   Source: design-spec/07-admin.html §07.1 ENVIRONMENTS
+   Source: design-spec/07-admin.html §07.1 SETTINGS
    Preserved (don't change):
      - all class names referenced by template (.env-grid / .env-card /
        .env-card-header / .env-card-left / .env-status-dot / .env-name /
@@ -806,7 +492,7 @@ watch(
      - env-card border --line + r-4 + hover brand-ring + sh-2
      - card actions row gets top divider --line
      - action btn: neutral grey + hover brand-soft, .danger hover err-soft
-     - "+ 添加环境/新增模型" topbar primary buttons go brand solid
+     - "+ 新增模型" topbar primary button goes brand solid
      - tab switch underline 2px brand bottom (not pill)
      - default ★ marker forced text-rendered amber (#F59E0B) not emoji
      - auth-tab segmented: brand-soft active + transparent default
@@ -1286,7 +972,7 @@ watch(
 }
 
 /* ── Phase 6 · table density + filter UX tightening (append-only) ──
-   PlatformEnvs is a card grid (no el-table); only the tabs-bar is
+   Model settings is a card grid (no el-table); only the tabs-bar is
    a "filter-like" surface. The Phase 4 underline-style tabs already
    match v3 spec, so this block only tightens the rhythm + adds a
    subtle hover-line on inactive tabs so they read as interactive. */

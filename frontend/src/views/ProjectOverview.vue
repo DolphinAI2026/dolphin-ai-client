@@ -13,10 +13,6 @@
       </div>
       <div class="header-right">
         <ThemeToggle />
-        <span class="conn-status" :class="project?.platform_connected ? 'connected' : 'disconnected'">
-          <span class="conn-dot"></span>
-          {{ project?.platform_connected ? '已连接' : '未连接' }}
-        </span>
         <button class="settings-btn" @click="openSettings" title="应用设置">
           <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>
         </button>
@@ -247,7 +243,7 @@ const dispatchAppDev = (kind: 'component' | 'page') => {
   } else {
     message =
       `我要在项目「${p?.name || '当前项目'}」下做${kind === 'page' ? '页面' : '组件'}二次开发，`
-      + `但这个项目还没有连接 aPaaS 应用。请先引导我连接 / 选择一个应用，再开始开发。`
+      + `请先确认目标应用上下文，再问我具体要开发什么。`
   }
   sessionStorage.setItem(
     'ai_builder_pending_app_dev',

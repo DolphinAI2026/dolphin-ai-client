@@ -562,7 +562,6 @@
 
     <!-- Modals (在 chat-page 根元素下) -->
     <ConnectModal v-model="store.showConnectModal" />
-    <EnvSelectModal v-model="showEnvSelect" @selected="onEnvSelected" />
     <input ref="docVersionInputRef" type="file" accept=".md,.markdown" hidden @change="handleDocVersionInputChange" />
     <input ref="reparseInputRef" type="file" accept=".md,.pdf,.docx,.doc,.txt,.markdown" hidden @change="handleReparseInputChange" />
     <el-dialog v-model="docVersionPreviewVisible" :title="docVersionPreviewTitle" width="860px" class="doc-preview-dialog" destroy-on-close>
@@ -818,7 +817,6 @@ import { applicationApi } from '@/api/application'
 import { incrementalApi, type DiffResponse, type ExecuteResponse } from '@/api/incremental'
 import { conversationApi, type ConversationWithApp } from '@/api/conversation'
 import ConnectModal from '@/components/ConnectModal.vue'
-import EnvSelectModal from '@/components/EnvSelectModal.vue'
 import VoiceInputButton from '@/components/common/VoiceInputButton.vue'
 import { platformEnvApi } from '@/api/platformEnv'
 import request from '@/utils/request'
@@ -2074,7 +2072,7 @@ const defaultBuilderModelId = computed(() =>
 )
 const builderModelHint = computed(() => {
   if (builderModelLoading.value) return '正在加载可用模型...'
-  if (builderModelOptions.value.length === 0) return '未配置可用模型，请前往环境管理配置'
+  if (builderModelOptions.value.length === 0) return '未配置可用模型，请前往模型配置'
   if (conversationId.value) return '切换后仅影响后续对话与生成配置'
   return '首条消息会使用当前选择的模型'
 })
@@ -2533,7 +2531,7 @@ const publishCurrentApp = async () => {
   } catch (e: any) {
     const detail = e?.response?.data?.detail || e?.message || '上线失败'
     if (isApaasTokenError(String(detail))) {
-      ElMessage.warning('平台登录已失效，请先重新连接平台环境')
+      ElMessage.warning('平台登录已失效，请联系管理员重新连接默认平台')
       store.showConnectModal = true
     } else {
       ElMessage.error(detail)
@@ -3137,7 +3135,6 @@ watch(
 const docResultForCard = ref<any>(null)       // doc_result JSON for DesignDocCard
 const generatingDoc = ref(false)               // 正在生成设计文档
 const confirmingDoc = ref(false)               // 正在确认转换配置
-const showEnvSelect = ref(false)
 const selectedEnvId = ref<number | null>(null)
 const showApiLogs = ref(false)
 const apiLogs = ref<any[]>([])
@@ -3153,13 +3150,6 @@ watch(showApiLogs, async (val) => {
     } catch { apiLogs.value = [] }
   }
 })
-
-const onEnvSelected = (envId: number) => {
-  selectedEnvId.value = envId
-  showEnvSelect.value = false
-  // 继续生成流程
-  startGenerateWithEnv(envId)
-}
 
 // ── 对话历史 ──
 const conversationList = ref<ConversationWithApp[]>([])
@@ -4586,7 +4576,6 @@ function resetConversationWorkspace() {
   latestParseMeta.value = null
   parseReady.value = false
   generating.value = false
-  showEnvSelect.value = false
   selectedEnvId.value = null
   activeConflict.value = null
   isTyping.value = false
@@ -4761,7 +4750,7 @@ async function deployExec(key: string) {
   } catch (e: any) {
     const detail = e?.response?.data?.detail || e?.message || '失败'
     if (isApaasTokenError(String(detail))) {
-      ElMessage.warning('平台登录已失效，请先重新连接平台环境')
+      ElMessage.warning('平台登录已失效，请联系管理员重新连接默认平台')
       store.showConnectModal = true
     } else {
       persistDeployError(deploySteps.value.find(step => step.key === key)?.label || key, detail)
@@ -4836,7 +4825,7 @@ async function deployRunAll() {
   } catch (e: any) {
     const detail = e?.response?.data?.detail || e?.message || '失败'
     if (isApaasTokenError(String(detail))) {
-      ElMessage.warning('平台登录已失效，请先重新连接平台环境')
+      ElMessage.warning('平台登录已失效，请联系管理员重新连接默认平台')
       store.showConnectModal = true
     } else {
       persistDeployError(currentDeployStep.value?.label || '创建过程', detail)
@@ -5001,18 +4990,17 @@ const startDeployFlow = async () => {
   if (!selectedEnvId.value) {
     try {
       const envs = await platformEnvApi.list()
-      if (envs.some(e => e.status === 'connected')) {
-        // 未绑定环境时，始终弹出选择框
-        showEnvSelect.value = true
-        return
+      const connected = envs.filter(e => e.status === 'connected')
+      const targetEnv = connected.find(e => e.is_default) || connected[0]
+      if (targetEnv) {
+        selectedEnvId.value = targetEnv.id
       } else {
-        // 没有任何已连接环境
-        ElMessage.warning('请先连接平台环境')
+        ElMessage.warning('请联系管理员检查默认平台连接')
         store.showConnectModal = true
         return
       }
     } catch {
-      ElMessage.warning('请先连接平台环境')
+      ElMessage.warning('请联系管理员检查默认平台连接')
       store.showConnectModal = true
       return
     }
@@ -6412,7 +6400,7 @@ const ensureApplicationUpdateConversation = async () => {
  * - thinking 事件 → 调 onThinking 实时更新进度文案
  * - result 事件 → 拿到原 JSON（与同步版结构完全一致）
  * - error 事件 → 抛错让上层 catch
- * 体验对齐 ai-chat / vibe-coding：首字节 1s 内出，全程有 AI 在做什么的反馈
+ * 体验对齐 ai-chat：首字节 1s 内出，全程有 AI 在做什么的反馈
  */
 async function streamDraftDocUpdate(
   appId: number,

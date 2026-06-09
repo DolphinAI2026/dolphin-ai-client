@@ -18,8 +18,6 @@ from app.models.preference import UserPreference  # noqa: F401  — register ORM
 from app.models.system_setting import SystemSetting  # noqa: F401  — register ORM mapping
 from app.models.collaboration import (  # noqa: F401  — register ORM mapping
     ApplicationMember,
-    ChangeProposal,
-    ProposalReview,
     GitConnection,
     PlatformDriftLog,
 )
