@@ -53,14 +53,6 @@ const router = createRouter({
       meta: { requiresAuth: true }
     },
     {
-      // 存量 DB 快速接入 wizard：DB 连接 → 表多选 → 业务描述 → 进度。
-      // Landing 第 4 张卡 "DB 问数" 入口。
-      path: '/quick-db',
-      name: 'QuickDb',
-      component: () => import('@/views/QuickDbPage.vue'),
-      meta: { requiresAuth: true, navExpanded: true }
-    },
-    {
       // 数据接入 group 入口：数据库连接管理
       path: '/db-connections',
       name: 'DbConnections',
@@ -73,41 +65,8 @@ const router = createRouter({
       component: () => import('@/views/Apps.vue'),
       meta: { requiresAuth: true }
     },
-    // P0 stub routes — full pages land in P2; these exist so the v2 sidebar
-    // never 404s. See docs/superpowers/plans/2026-05-18-apaas-builder-redesign-p0-p1.md.
-    // /projects v2 was deleted — the underlying Project table had no real
-    // progress/stage fields, so the page surfaced fake 0% / 0 apps / 0 deploys
-    // rows. Real per-app project page still lives at /project/:id (singular).
-    {
-      path: '/agents',
-      name: 'Agents',
-      component: () => import('@/views/v2/AgentsPage.vue'),
-      meta: { requiresAuth: true }
-    },
-    {
-      path: '/specs',
-      name: 'Specs',
-      component: () => import('@/views/v2/SpecsPage.vue'),
-      meta: { requiresAuth: true }
-    },
-    {
-      path: '/industry',
-      name: 'Industry',
-      component: () => import('@/views/v2/IndustryPage.vue'),
-      meta: { requiresAuth: true }
-    },
-    {
-      path: '/runtime',
-      name: 'Runtime',
-      component: () => import('@/views/v2/RuntimePage.vue'),
-      meta: { requiresAuth: true }
-    },
-    {
-      path: '/mcp',
-      name: 'McpHub',
-      component: () => import('@/views/v2/McpHubPage.vue'),
-      meta: { requiresAuth: true }
-    },
+    // /projects (v2) 已删 — Project 表无真实进度字段, 真应用页在 /project/:id (单数).
+    // /agents /specs /industry /runtime /mcp(McpHub) 这几个 v2 stub 页已删 (2026-06-08 清理).
     {
       path: '/workspace-catalog',
       name: 'WorkspaceCatalog',
@@ -180,13 +139,6 @@ const router = createRouter({
       redirect: to => ({ path: '/chat', query: { app_id: String(to.params.appId) } }),
       meta: { requiresAuth: true }
     },
-    // PR6 — Extension Section 组件 demo / 验收用 (SPEC v2 §2 Section E0)
-    {
-      path: '/extension-demo',
-      name: 'ExtensionSectionDemo',
-      component: () => import('@/views/ExtensionSectionDemoPage.vue'),
-      meta: { requiresAuth: true }
-    },
     // M3 (2026-05-27): 删 /datasources stub — 用老 /db-connections 真页 (DbConnectionsPage)
     // 当 "数据源" nav 入口. 重定向兼容 G3 老路径.
     {
@@ -218,13 +170,6 @@ const router = createRouter({
       name: 'PlatformTenants',
       component: () => import('@/views/PlatformTenants.vue'),
       meta: { requiresAuth: true, requiresPlatformAdmin: true, navExpanded: true }
-    },
-    {
-      // PR2a 临时 demo 页 — SectionNav 组件验收 (PR2b 接入 ChatPage 后可删)
-      path: '/section-nav-demo',
-      name: 'SectionNavDemo',
-      component: () => import('@/views/SectionNavDemoPage.vue'),
-      meta: { requiresAuth: false }
     },
     {
       path: '/generate/:id?',

@@ -71,9 +71,6 @@ _PATH_LABELS: list[tuple[str, str, str]] = [
     ("/ai-chat", "AI 对话", "用对话整理需求 / 整合材料，产出标准设计文档"),
     ("/chat", "AI 搭建", "把设计文档喂给 AI 生成 SPEC + 应用配置 → 部署到平台"),
     ("/coding", "AI 编码 (睿鲸 IDE)", "对话生成自开发组件 / 页面 / 接口"),
-    ("/vibe-coding/new", "Vibe Coding 新建工作区", "在右侧填开发目标和可选 Git，点直接打开 IDE 进入对话开发"),
-    ("/vibe-coding/workspaces", "Vibe Coding 工作区", "Docker 沙箱 + 9 工具 agent，正在跑某个全代码项目"),
-    ("/vibe-coding", "Vibe Coding 工作台", "完整应用全代码沙箱开发台，左侧工作区列表 + 右侧新建表单"),
     ("/devops", "DevOps", "提案 / 审批 / Apply / Git / 环境"),
     ("/proposals/", "提案详情", "正在查看某个变更提案，可以评审 / 批准 / Apply"),
     ("/apps", "应用列表"),
@@ -116,7 +113,6 @@ def _system_prompt() -> str:
 格式：标准 markdown 链接，但 href 用 `#nav:/路径` 前缀：
 - `[去 AI 编码](#nav:/coding)`
 - `[打开 DevOps](#nav:/devops)`
-- `[新建 Vibe Coding 工作区](#nav:/vibe-coding/new)`
 - `[去应用列表](#nav:/apps)`
 
 前端会把 `#nav:/xxx` 链接渲染成醒目的"跳转按钮"，用户点击会自动 router.push 跳转。
@@ -127,8 +123,6 @@ def _system_prompt() -> str:
 - `/ai-chat` AI 对话
 - `/chat` AI 搭建（不带 app_id 是新建态）
 - `/coding` AI 编码
-- `/vibe-coding` Vibe Coding 工作台
-- `/vibe-coding/new` 新建 Vibe Coding 工作区
 - `/devops` DevOps
 - `/platform-envs?tab=llm` LLM 配置
 - `/platform-envs?tab=envs` 平台环境
@@ -141,7 +135,7 @@ def _system_prompt() -> str:
 ❌ 错误："可以。请打开左侧导航的 AI 编码，或访问 /coding。"（只说路径不给链接 = 没兑现）
 
 用户："想做个完整的 web 应用"
-✅ 正确："Vibe Coding 适合做完整应用（带前后端 + 数据库，Docker 沙箱跑）。[新建 Vibe Coding 工作区](#nav:/vibe-coding/new) 直接开干。"
+✅ 正确："完整应用的二次开发走 [AI 编码](#nav:/coding)（睿鲸 IDE 里对话生成自开发组件 / 页面 / 接口）。"
 
 【产品知识库】
 

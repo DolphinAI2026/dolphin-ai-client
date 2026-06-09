@@ -28,7 +28,7 @@ _YAML_PATH = Path(__file__).parent.parent / "tool_registry.yaml"
 VALID_SECTIONS: frozenset[str] = frozenset(
     {"data", "ui", "logic", "permission", "extension", "global"}
 )
-VALID_AGENTS: frozenset[str] = frozenset({"builder", "coding", "vibe", "config"})
+VALID_AGENTS: frozenset[str] = frozenset({"builder", "coding", "config"})
 
 
 def _freeze_registry(registry: dict[str, Any]) -> Mapping[str, Any]:

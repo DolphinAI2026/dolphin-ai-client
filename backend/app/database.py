@@ -50,7 +50,6 @@ async def init_db():
     import app.models.agent_models  # noqa: F401
     import app.models.collaboration  # noqa: F401
     import app.models.preference  # noqa: F401
-    import app.models.assistant_settings  # noqa: F401
     import app.models.spec  # noqa: F401
     # ConfigChat 会话持久化（2026-05-24）— config_chat_sessions / config_chat_messages
     import app.models.config_chat  # noqa: F401
@@ -150,12 +149,6 @@ async def init_db():
             "CREATE INDEX IF NOT EXISTS ix_ai_chat_sessions_app_id ON ai_chat_sessions(app_id)",
             # config_chat → ai_chat 一次性迁移幂等标记
             "ALTER TABLE config_chat_sessions ADD COLUMN migrated_session_id INTEGER",
-            # Tenant-scoped external assistant integration settings.
-            "ALTER TABLE assistant_settings ADD COLUMN enabled BOOLEAN NOT NULL DEFAULT FALSE",
-            "ALTER TABLE assistant_settings ADD COLUMN server_url VARCHAR(500) NOT NULL DEFAULT 'https://dolphin-trial.definesys.cn'",
-            "ALTER TABLE assistant_settings ADD COLUMN agent_code VARCHAR(200) NOT NULL DEFAULT ''",
-            "ALTER TABLE assistant_settings ADD COLUMN apaas_tenant_id VARCHAR(120) NOT NULL DEFAULT ''",
-            "ALTER TABLE assistant_settings ADD COLUMN button_text VARCHAR(80) NOT NULL DEFAULT '得小帆'",
         ]:
             try:
                 await conn.execute(text(stmt))

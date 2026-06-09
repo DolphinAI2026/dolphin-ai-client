@@ -16,10 +16,8 @@ from app.routes import (
     admin_mcp,
     agent_observability,
     agent_prompts,
-    agents_config,
     ai_chat,
     apaas,
-    assistant_settings,
     builder_mcp,
     application_members,
     applications,
@@ -37,21 +35,16 @@ from app.routes import (
     harness,
     help_assistant,
     incremental_update,
-    industry,
     llm_configs,
-    marketplace,
     mcp_platform,
     mcp_hub,
     platform_envs,
     preferences,
     projects,
-    quick_db,
     proposals,
     requirements,
     runtime_proxy,
-    runtime_v2,
     spec,
-    specs_v2,
     sse,
     templates,
     voice,
@@ -69,19 +62,6 @@ async def lifespan(app: FastAPI):
     from app.database import AsyncSessionLocal
     async with AsyncSessionLocal() as session:
         await seed_initial_data(session)
-
-    # /industry + /marketplace demo data — idempotent，已 seeded 即 no-op
-    try:
-        from app.services.industry_seed import seed_industry_packs
-        from app.services.marketplace_seed import seed_marketplace_components
-        async with AsyncSessionLocal() as session:
-            await seed_industry_packs(session)
-            await seed_marketplace_components(session)
-    except Exception as _exc:
-        import logging as _logging
-        _logging.getLogger(__name__).warning(
-            "industry/marketplace demo seed 启动失败 (非致命): %s", _exc,
-        )
 
     # 清理进程上次退出时悬挂的 coding session
     # （uvicorn --reload / 崩溃 / 部署重启留下的 status='running' 行）
@@ -151,7 +131,6 @@ app.include_router(auth.router, prefix="/api")
 app.include_router(conversations.router, prefix="/api")
 app.include_router(chat.router, prefix="/api")
 app.include_router(ai_chat.router, prefix="/api")
-app.include_router(assistant_settings.router, prefix="/api")
 app.include_router(agent_observability.router, prefix="/api")
 app.include_router(applications.router, prefix="/api")
 app.include_router(config_chat_sessions.router, prefix="/api")  # 配置助手会话持久化 (2026-05-24)
@@ -159,10 +138,8 @@ app.include_router(apaas.router, prefix="/api")
 app.include_router(generation_steps.router, prefix="/api")
 app.include_router(coding.router, prefix="/api")
 app.include_router(projects.router, prefix="/api")
-app.include_router(marketplace.router, prefix="/api")
 app.include_router(templates.router, prefix="/api")
 app.include_router(platform_envs.router, prefix="/api")
-app.include_router(quick_db.router, prefix="/api")
 app.include_router(db_connections.router, prefix="/api")
 app.include_router(llm_configs.router, prefix="/api")
 app.include_router(browser.router, prefix="/api")
@@ -324,11 +301,6 @@ app.mount(
 # 2026-05-19 Chrome extension WebSocket bridge — image #50 follow-up POC
 from app.routes import browser_ext_ws  # noqa: E402
 app.include_router(browser_ext_ws.router)
-# V2 redesign routes — agents config / industry packs / SPEC list / runtime pipelines+deployments
-app.include_router(agents_config.router, prefix="/api")
-app.include_router(industry.router, prefix="/api")
-app.include_router(specs_v2.router, prefix="/api")
-app.include_router(runtime_v2.router, prefix="/api")
 app.include_router(agent_prompts.router, prefix="/api")
 # SSE 防缓冲 middleware：text/event-stream 响应自动注入 X-Accel-Buffering: no
 #
