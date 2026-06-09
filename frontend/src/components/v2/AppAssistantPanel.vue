@@ -55,7 +55,15 @@ const emit = defineEmits<{
   (e: 'close'): void
   /** 上传新设计文档更新应用（保留兼容，由父 ChatPage 触发 diff/审核流程） */
   (e: 'upload-doc'): void
+  /** 全屏展开/收缩切换 */
+  (e: 'update:expanded', value: boolean): void
 }>()
+
+// ─── 展开/收缩 ───
+const expanded = defineModel<boolean>('expanded', { default: false })
+function toggleExpand() {
+  expanded.value = !expanded.value
+}
 
 // ─── 拖宽 —— 复用 config 的 usePanelResize；maxWidth 拉大到 1200 给 codegen diff 留空间 ───
 const { panelWidth, isResizing, onResizeStart } = usePanelResize({
@@ -89,6 +97,7 @@ const {
   currentSession,
   sessions,
   agentMessages,
+  artifacts,
   typing,
   typingSeconds,
   sending,
@@ -254,6 +263,22 @@ function openSessionTrace() {
 // ─── 产物（设计文档 md）查看抽屉 ───
 // AgentConversation 的 artifact 卡 emit('open-artifact', artifact)；AIChatPage 走自己的
 // 右栏面板，这里(嵌在 ChatPage 右栏)没有那套，自带一个抽屉渲染全文。否则点卡片无反应。
+// 头部「设计文档 N」按钮：点击打开最新版产物。
+const uniqueArtifactCount = computed(() => {
+  const names = new Set(artifacts.value.map(a => a.filename))
+  return names.size
+})
+function openLatestArtifact() {
+  if (!artifacts.value.length) return
+  // 取最新版(id 最大的那条)
+  const latest = [...artifacts.value].sort((a, b) => (b.id ?? 0) - (a.id ?? 0))[0]
+  onOpenArtifact({
+    filename: latest.filename,
+    version: latest.version,
+    preview: latest.preview || latest.content?.slice(0, 200) || '',
+  })
+}
+
 const artifactDrawerVisible = ref(false)
 const artifactName = ref('')
 const artifactContent = ref('')
@@ -288,6 +313,16 @@ function copyArtifact() {
     .writeText(artifactContent.value)
     .then(() => ElMessage.success('已复制'))
     .catch(() => {})
+}
+function downloadArtifact() {
+  if (!artifactContent.value) return
+  const blob = new Blob([artifactContent.value], { type: 'text/markdown;charset=utf-8' })
+  const url = URL.createObjectURL(blob)
+  const a = document.createElement('a')
+  a.href = url
+  a.download = artifactName.value || 'document.md'
+  a.click()
+  URL.revokeObjectURL(url)
 }
 
 // ─── C3：工具成功改配置 → emit refresh-iframe ───
@@ -362,11 +397,11 @@ onMounted(() => {
 <template>
   <aside
     class="app-assistant"
-    :class="{ 'is-resizing': isResizing }"
-    :style="{ width: panelWidth + 'px' }"
+    :class="{ 'is-resizing': isResizing, 'is-expanded': expanded }"
+    :style="expanded ? undefined : { width: panelWidth + 'px' }"
   >
-    <!-- 左边缘拖拽 handle -->
-    <div class="aa-resize-handle" @pointerdown="onResizeStart" title="拖拽调整宽度" />
+    <!-- 左边缘拖拽 handle（展开态隐藏） -->
+    <div v-if="!expanded" class="aa-resize-handle" @pointerdown="onResizeStart" title="拖拽调整宽度" />
 
     <!-- 顶部 actions: 会话列表 / 新对话 / Agent 活动 / 关闭 -->
     <header class="aa-header">
@@ -375,6 +410,18 @@ onMounted(() => {
         <div class="aa-header-sub" :title="contextTitle">{{ contextTitle }}</div>
       </div>
       <div class="aa-top-actions">
+        <button
+          v-if="artifacts.length > 0"
+          class="aa-top-btn aa-artifact-btn"
+          title="查看设计文档"
+          @click="openLatestArtifact"
+        >
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" />
+            <polyline points="14 2 14 8 20 8" />
+          </svg>
+          <span class="aa-artifact-badge">{{ uniqueArtifactCount }}</span>
+        </button>
         <button
           v-if="currentSession"
           class="aa-top-btn aa-trace-btn"
@@ -393,6 +440,20 @@ onMounted(() => {
         <button class="aa-top-btn" title="新对话" @click="onNewSession">
           <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
             <path d="M12 5v14M5 12h14" />
+          </svg>
+        </button>
+        <button
+          class="aa-top-btn"
+          :title="expanded ? '收缩为侧栏' : '展开全屏'"
+          @click="toggleExpand"
+        >
+          <svg v-if="!expanded" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <polyline points="15 3 21 3 21 9" /><polyline points="9 21 3 21 3 15" />
+            <line x1="21" y1="3" x2="14" y2="10" /><line x1="3" y1="21" x2="10" y2="14" />
+          </svg>
+          <svg v-else width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <polyline points="4 14 10 14 10 20" /><polyline points="20 10 14 10 14 4" />
+            <line x1="14" y1="10" x2="21" y2="3" /><line x1="3" y1="21" x2="10" y2="14" />
           </svg>
         </button>
         <button class="aa-top-btn" title="收起助手" @click="emit('close')">
@@ -500,6 +561,7 @@ onMounted(() => {
         <template v-else>
           <div class="aa-art-actions">
             <button class="aa-art-copy" type="button" @click="copyArtifact">复制全文</button>
+            <button class="aa-art-copy" type="button" @click="downloadArtifact">下载</button>
           </div>
           <div
             v-if="artifactContent"
@@ -528,6 +590,11 @@ onMounted(() => {
 .app-assistant.is-resizing {
   cursor: ew-resize;
   user-select: none;
+}
+/* 展开态：撑满父容器剩余宽度 */
+.app-assistant.is-expanded {
+  flex: 1;
+  min-width: 0;
 }
 
 /* ─── 拖拽 handle (左边缘 5px) ───────────────────────────── */
@@ -597,6 +664,24 @@ onMounted(() => {
 .aa-top-btn:hover {
   border-color: var(--brand);
   color: var(--brand);
+}
+/* 设计文档按钮：比普通 top-btn 宽一点以容纳 badge */
+.aa-artifact-btn {
+  width: auto;
+  padding: 0 8px;
+  gap: 4px;
+}
+.aa-artifact-badge {
+  font-size: 10px;
+  font-weight: 600;
+  min-width: 16px;
+  height: 16px;
+  line-height: 16px;
+  text-align: center;
+  border-radius: 8px;
+  background: var(--brand);
+  color: #fff;
+  display: inline-block;
 }
 
 /* ─── 对话区 ──────────────────────────────────────────── */

@@ -128,7 +128,7 @@
           </button>
         </div>
         <!-- tab content row -->
-        <div class="platform-shell-row">
+        <div class="platform-shell-row" :class="{ 'assistant-expanded': assistantExpanded }">
           <!-- 设计 tab: 左侧 ApaasMenuSidebar 长显 (不绑 sub-tab) -->
           <ApaasMenuSidebar
             v-if="existingAppId && topTab === 'design'"
@@ -325,6 +325,7 @@
         <AppAssistantPanel
           v-if="!embedMode && isPostDeploy && resolvedAppId && topTab !== 'spec' && assistantOpen"
           class="ca-embedded"
+          v-model:expanded="assistantExpanded"
           :application-id="resolvedAppId"
           :app-name="builderAppDisplayName || ''"
           :current-section="currentSection"
@@ -2247,8 +2248,10 @@ const loadUploadedDocumentSpec = async (specId?: string | null) => {
 // 默认收起为 FAB, 不再挤压 iframe. localStorage 持久化用户偏好.
 const ASSISTANT_OPEN_KEY = 'apaas-config-assistant-open-v1'
 const assistantOpen = ref(localStorage.getItem(ASSISTANT_OPEN_KEY) === 'true')
+const assistantExpanded = ref(false)
 function toggleAssistant() {
   assistantOpen.value = !assistantOpen.value
+  if (!assistantOpen.value) assistantExpanded.value = false
   try { localStorage.setItem(ASSISTANT_OPEN_KEY, String(assistantOpen.value)) } catch { /* private mode */ }
 }
 
@@ -11629,6 +11632,10 @@ html[data-theme="dark"] .config-assistant.ca-floating {
    在 .platform-shell-row(flex row) 内当最后一个并排子项, 不浮盖中间内容。
    宽度由 panel 自带 usePanelResize(:style width) 控制 — 这里不设 width, 只 flex-shrink:0;
    base .config-assistant 的 height:100% 在 row 里正好填满。左边缘有拖宽 handle。 */
+/* 助手展开态：隐藏中间内容，助手撑满 */
+.platform-shell-row.assistant-expanded > :not(.ca-embedded) {
+  display: none;
+}
 .config-assistant.ca-embedded {
   position: relative;
   flex-shrink: 0;

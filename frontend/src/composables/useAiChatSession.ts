@@ -39,6 +39,7 @@ export interface UseAiChatSessionReturn {
   currentSession: Ref<AIChatSession | null>
   sessions: Ref<AIChatSession[]>
   agentMessages: ComputedRef<AgentMessage[]>
+  artifacts: Ref<AIChatArtifact[]>
   typing: ComputedRef<boolean>
   typingSeconds: Ref<number>
   sending: Ref<boolean>
@@ -711,6 +712,7 @@ export function useAiChatSession(opts?: UseAiChatSessionOptions): UseAiChatSessi
     currentSession,
     sessions,
     agentMessages,
+    artifacts,
     typing,
     typingSeconds,
     sending,

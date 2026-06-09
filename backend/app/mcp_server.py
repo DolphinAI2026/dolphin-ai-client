@@ -1612,6 +1612,38 @@ async def deploy_application(
     }
 
 
+# ── 进程内短 TTL 缓存: list_processes 结果供 list/detail 两个工具共享 ──
+# agent 常先 list 再逐个 detail, 复用 list 的响应避免重复全量 API 调用。
+_process_list_cache: dict[str, tuple[float, list]] = {}   # key → (ts, raw_list)
+_PROCESS_CACHE_TTL = 30  # 秒
+
+
+async def _cached_list_processes(env_id: int, apaas_app_id: str) -> list:
+    """带 30s TTL 的 list_processes 封装，同一 app 短期内不重复调 apaas。"""
+    import time as _t
+    from app.coding.apaas_tools import call_apaas_with_relogin
+    from app.database import AsyncSessionLocal
+
+    cache_key = f"{env_id}:{apaas_app_id.strip()}"
+    cached = _process_list_cache.get(cache_key)
+    if cached:
+        ts, raw_list = cached
+        if _t.time() - ts < _PROCESS_CACHE_TTL:
+            return raw_list
+
+    async with AsyncSessionLocal() as db:
+        raw_list = await call_apaas_with_relogin(
+            env_id, db, lambda client: client.list_processes(apaas_app_id.strip())
+        )
+
+    _process_list_cache[cache_key] = (_t.time(), raw_list or [])
+    # 防止缓存无限增长：只保留最近 50 个 key
+    if len(_process_list_cache) > 50:
+        oldest = min(_process_list_cache, key=lambda k: _process_list_cache[k][0])
+        _process_list_cache.pop(oldest, None)
+    return raw_list or []
+
+
 # 2026-05-27: 列应用全部流程 — apaas GET /xdap-app/process/query/processList?appId=
 # 之前 section_content.py 调这个 tool 但 tool 不存在 → fallback 走 menus 过滤 PROCESS,
 # 但 trial app 流程不是 PROCESS 类型菜单 → SPEC 章节"业务流程"始终空. 用户实测 4 个
@@ -1625,24 +1657,17 @@ async def list_apaas_app_processes(env_id: int, apaas_app_id: str) -> dict:
       id, processName, processCode, formId, menuId, nodes_count, edges_count.
     nodes/edges 完整 schema 留给 get_apaas_process_detail 再拉, 这里 list 只给摘要.
     """
-    from app.coding.apaas_tools import call_apaas_with_relogin
-    from app.database import AsyncSessionLocal
-
     if not apaas_app_id.strip():
         return {"ok": False, "error_code": "INVALID_PARAMS", "message": "apaas_app_id 必填"}
 
-    async with AsyncSessionLocal() as db:
-        try:
-            # 2026-05-29: 套 call_apaas_with_relogin — token 过期(401)自动重登重试。
-            raw_list = await call_apaas_with_relogin(
-                env_id, db, lambda client: client.list_processes(apaas_app_id.strip())
-            )
-        except Exception as exc:
-            return {
-                "ok": False,
-                "error_code": "APAAS_CLIENT_ERROR",
-                "message": f"调 apaas list_processes 失败: {exc}",
-            }
+    try:
+        raw_list = await _cached_list_processes(env_id, apaas_app_id)
+    except Exception as exc:
+        return {
+            "ok": False,
+            "error_code": "APAAS_CLIENT_ERROR",
+            "message": f"调 apaas list_processes 失败: {exc}",
+        }
 
     processes = []
     for p in raw_list or []:
@@ -1685,24 +1710,15 @@ async def get_apaas_process_detail(env_id: int, apaas_app_id: str, process_id: s
     apaas → frontend type 反向映射 (跟 process_translator.py 正向对应):
       START → start, END → end, APPROVE → assignee_approval (默认), 其他 → action 兜底.
     """
-    from app.coding.apaas_tools import call_apaas_with_relogin
-    from app.database import AsyncSessionLocal
-
     if not (apaas_app_id.strip() and process_id.strip()):
         return {"ok": False, "error_code": "INVALID_PARAMS", "message": "apaas_app_id+process_id 都必填"}
 
-    async with AsyncSessionLocal() as db:
-        try:
-            # 2026-05-28 修流程渲染空: 原走 query_process_config (猜的 /processConfig /queryById
-            # 两个 URL 都不通 → PROCESS_QUERY_NOT_AVAILABLE → 前端画布空). 改用实测可用的
-            # list_processes —— 它返回的每个流程对象**本来就带完整 nodes/edges**, 按 process_id
-            # 挑出对应那条即可, 不再多打一个不存在的 apaas 接口.
-            # 2026-05-29: 套 call_apaas_with_relogin — token 过期(401)自动重登重试。
-            raw_list = await call_apaas_with_relogin(
-                env_id, db, lambda client: client.list_processes(apaas_app_id.strip())
-            )
-        except Exception as exc:
-            return {"ok": False, "error_code": "APAAS_CLIENT_ERROR", "message": f"调 apaas list_processes 失败: {exc}"}
+    try:
+        # 复用 _cached_list_processes: agent 同一轮 list→detail 不重复调 apaas。
+        # list_processes 每条流程本就带完整 nodes/edges, 按 process_id 挑即可。
+        raw_list = await _cached_list_processes(env_id, apaas_app_id)
+    except Exception as exc:
+        return {"ok": False, "error_code": "APAAS_CLIENT_ERROR", "message": f"调 apaas list_processes 失败: {exc}"}
 
     pid = process_id.strip()
     raw = None

@@ -707,7 +707,8 @@ async def _build_initial_messages(
     跨轮重建关键点（参考 Claude Code 的做法）：
       - assistant 的 tool_use turn 要带 tool_calls 字段重新拼回
       - 紧跟 role:tool 消息，每条 tool_call_id 必须跟 assistant.tool_calls[i].id 对齐
-      - tool_result 完整保留（已在执行时截断到 30K），让 LLM 跨轮看得到，避免重复 read
+      - tool_result 跨轮保留：read_attachment 截断到 30K、read_artifact 截断到 30K、
+        MCP 工具截断到 20K（截断逻辑在各自执行函数/mcp_bridge 里）
     """
     system_prompt = _select_system_prompt(getattr(session, "mode", None))
     app_id = getattr(session, "app_id", None)

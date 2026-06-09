@@ -411,4 +411,14 @@ async def call_tool(tool_name: str, args: dict, tenant_id: int = 0, user_id: int
     text = block.get("text") if isinstance(block, dict) else None
     if text is None:
         return json.dumps({"ok": True, "raw": result}, ensure_ascii=False)
+
+    # ── 截断超长工具返回，避免单条 tool_result 吃掉大量上下文窗口 ──
+    MCP_TOOL_RESULT_MAX_CHARS = 20_000
+    if len(text) > MCP_TOOL_RESULT_MAX_CHARS:
+        truncated = text[:MCP_TOOL_RESULT_MAX_CHARS]
+        text = (
+            f"{truncated}\n\n"
+            f"[工具返回已截断：原文 {len(text)} 字符，已保留前 {MCP_TOOL_RESULT_MAX_CHARS} 字符。"
+            f"如需更多细节请缩小查询范围或分多次调用。]"
+        )
     return text

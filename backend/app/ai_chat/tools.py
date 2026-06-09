@@ -110,9 +110,10 @@ TOOL_SCHEMAS: list[dict] = [
         "function": {
             "name": "read_artifact",
             "description": (
-                "读回某个已有产出物的当前完整内容。"
+                "读回某个已有产出物的内容（超过 30000 字符会自动截断）。"
                 "调 edit_artifact 之前**必须**先 read_artifact 拿到精确原文，再据此构造 old_string，"
                 "不要凭记忆/上一轮的内容拼 old_string（文档可能已被改过）。"
+                "大文档被截断时，可传 offset/limit 分页读取后续部分。"
             ),
             "parameters": {
                 "type": "object",
@@ -120,6 +121,14 @@ TOOL_SCHEMAS: list[dict] = [
                     "filename": {
                         "type": "string",
                         "description": "产出物文件名，例如 'seal-lab-mgmt-design.md'",
+                    },
+                    "offset": {
+                        "type": "integer",
+                        "description": "起始行号（0-based），用于分页读取大文档。省略则从头读。",
+                    },
+                    "limit": {
+                        "type": "integer",
+                        "description": "读取行数，用于分页读取大文档。省略则读全篇（受 30000 字符截断）。",
                     },
                 },
                 "required": ["filename"],
@@ -400,14 +409,48 @@ async def execute_write_artifact(
 async def execute_read_artifact(
     args: dict, session: AIChatSession, db: AsyncSession
 ) -> str:
-    """读回某个产出物的当前完整内容 —— 给 edit_artifact 构造精确 old_string 用。"""
+    """读回某个产出物的内容 —— 给 edit_artifact 构造精确 old_string 用。
+
+    超过 ARTIFACT_READ_MAX_CHARS 时截断并提示，避免单条 tool_result
+    吃掉大量上下文窗口（与 read_attachment 的 30K 上限对齐）。
+    支持可选 offset/limit 参数做分页读取大文档。
+    """
     filename = args.get("filename", "").strip()
     if not filename:
         return "错误：缺少 filename 参数"
     latest = await _latest_artifact(db, session.id, filename)
     if latest is None:
         return f"错误：产出物 '{filename}' 不存在（确认文件名，或先用 write_artifact 新建）。"
-    return f"产出物 '{filename}' (v{latest.version}) 当前内容：\n\n{latest.content or ''}"
+
+    full_content = latest.content or ""
+    total_chars = len(full_content)
+
+    # 分页参数（可选）：按行偏移 + 行数限制
+    offset = args.get("offset")  # 起始行号（0-based）
+    limit = args.get("limit")    # 读取行数
+
+    if offset is not None or limit is not None:
+        lines = full_content.splitlines(keepends=True)
+        start = max(0, int(offset or 0))
+        end = start + int(limit or 200)
+        chunk = "".join(lines[start:end])
+        return (
+            f"产出物 '{filename}' (v{latest.version}, 共 {len(lines)} 行 / {total_chars} 字符) "
+            f"第 {start+1}–{min(end, len(lines))} 行：\n\n{chunk}"
+        )
+
+    # 默认：整篇读取，超长截断
+    ARTIFACT_READ_MAX_CHARS = 30_000
+    if total_chars > ARTIFACT_READ_MAX_CHARS:
+        truncated = full_content[:ARTIFACT_READ_MAX_CHARS]
+        return (
+            f"产出物 '{filename}' (v{latest.version}, 共 {total_chars} 字符) 前 {ARTIFACT_READ_MAX_CHARS} 字符：\n\n"
+            f"{truncated}\n\n"
+            f"[已截断，原文共 {total_chars} 字符。"
+            f"需要后续部分请用 read_artifact(filename=\"{filename}\", offset=行号, limit=行数) 分页读取；"
+            f"做精确替换请用 edit_artifact 的 old_string 直接定位。]"
+        )
+    return f"产出物 '{filename}' (v{latest.version}) 当前内容：\n\n{full_content}"
 
 
 async def execute_edit_artifact(
