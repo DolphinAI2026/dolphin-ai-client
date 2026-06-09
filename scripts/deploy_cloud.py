@@ -62,9 +62,9 @@ EXTENSION_EXCLUDES = {
 }
 
 IDE_PATCH_FILES = {
+    "patch_all.js",
     "patch_vscode_branding.js",
-    "patch_vscode_chat_fallback.js",
-    "patch_vscode_chat_fallback.template.txt",
+    "patch_vscode_chat_enable.js",
     "lib/codeServerResolver.js",
 }
 
@@ -200,8 +200,9 @@ def upload_tar(sftp: paramiko.SFTPClient, remote_path: str, data: bytes) -> None
         handle.write(data)
 
 
-def remote_node_command(script_path: str) -> str:
+def remote_node_command(script_path: str, *args: str) -> str:
     quoted_script = shq(script_path)
+    quoted_args = " ".join(shq(arg) for arg in args)
     return (
         "set -e; "
         "NODE_BIN=$(command -v node || true); "
@@ -213,6 +214,7 @@ def remote_node_command(script_path: str) -> str:
         "if [ -z \"$NODE_BIN\" ]; then echo 'node not found for code-server patch'; exit 1; fi; "
         "\"$NODE_BIN\" "
         f"{quoted_script}"
+        f"{(' ' + quoted_args) if quoted_args else ''}"
     )
 
 
@@ -246,7 +248,7 @@ def deploy_ruijing_ide(
 
     log("=== Patch Web IDE default chat agent ===")
     remote_run(client, remote_node_command(f"{REMOTE_IDE_PATCH_DIR}/patch_vscode_branding.js"), timeout=120)
-    remote_run(client, remote_node_command(f"{REMOTE_IDE_PATCH_DIR}/patch_vscode_chat_fallback.js"), timeout=120)
+    remote_run(client, remote_node_command(f"{REMOTE_IDE_PATCH_DIR}/patch_all.js"), timeout=120)
 
     if restart:
         log("=== Restart Web IDE service ===")
@@ -267,19 +269,10 @@ def deploy_ruijing_ide(
         "WORKBENCH=\"$CODE_ROOT/lib/vscode/out/vs/code/browser/workbench/workbench.js\"; "
         "grep -q 'apaas-builder.ruijing-ai' \"$PRODUCT\"; "
         "grep -q 'ruijing-ai.chat' \"$PRODUCT\"; "
-        "grep -q 'apaas-builder.ruijing-ai' \"$WORKBENCH\"; "
-        "if ! grep -q 'patched:skip-signin' \"$WORKBENCH\" "
-        "&& ! grep -q 'patched:delegate-setup-to-minimax' \"$WORKBENCH\"; then "
-        "echo 'missing chat setup bypass patch'; exit 1; fi; "
-        "if ! grep -q 'patched:delegate-setup-to-minimax' \"$WORKBENCH\" "
-        "&& ! grep -q 'patched:delegate-to-minimax' \"$WORKBENCH\"; then "
-        "echo 'missing minimax delegate patch'; exit 1; fi; "
-        "if grep -q 'GitHub.copilot-chat' \"$WORKBENCH\"; then "
-        "echo 'GitHub.copilot-chat references remain'; exit 1; fi; "
-        "if ! grep -q 'patched:always-show-native-chat-view' \"$WORKBENCH\"; then "
-        "echo 'warning: native chat visibility marker not found; this is expected on older code-server builds'; fi; "
-        "if ! grep -q 'patched:apaas-open-native-chat-on-vibe' \"$WORKBENCH\"; then "
-        "echo 'warning: native chat auto-open marker not found; this is expected on older code-server builds'; fi; "
+        "grep -q 'defaultChatAgent' \"$PRODUCT\"; "
+        "grep -q 'patched:force-models' \"$WORKBENCH\"; "
+        "grep -q 'patched:skip-unknown-check' \"$WORKBENCH\"; "
+        "grep -q 'patched:force-free' \"$WORKBENCH\"; "
         f"MINIMAX_PKG=$(find {shq(remote_extensions_dir)} -maxdepth 2 -path '*/apaas-builder.minimax-chat-provider-*/package.json' 2>/dev/null | head -n 1); "
         "if [ -n \"$MINIMAX_PKG\" ]; then grep -q '__neutralizedByApaasBuilderAI' \"$MINIMAX_PKG\"; fi; "
         "echo \"ruijing extension: $EXT_DIR\"; "

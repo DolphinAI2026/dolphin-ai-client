@@ -486,7 +486,9 @@ onMounted(() => {
         :sending="sending"
         :send-disabled="!inputText.trim() && pendingFiles.length === 0"
         :multiple="true"
-        placeholder="描述你想改的配置或要开发的功能…（可直接粘贴截图）"
+        placeholder="描述配置或开发需求..."
+        hint=""
+        sending-hint=""
         @send="doSend"
         @stop="onStop"
         @files-picked="onComposerFilesPicked"
@@ -698,13 +700,48 @@ onMounted(() => {
 /* ─── 输入区 —— UnifiedChatComposer 容器 ─────────────────── */
 .aa-input-area {
   flex-shrink: 0;
-  padding: 10px 14px 14px;
+  padding: 10px 12px 12px;
   border-top: 1px solid var(--line);
   background: var(--surface);
 }
-/* 窄栏里输入/提示也缩一档（composer scoped 默认 14/12px） */
-.aa-input-area :deep(.ucc-input) { font-size: 13px; }
-.aa-input-area :deep(.ucc-hint) { font-size: 11px; }
+/* 窄栏里输入区优先保持一行工具栏，不显示快捷键说明。 */
+.aa-input-area :deep(.ucc) {
+  gap: 8px;
+}
+.aa-input-area :deep(.ucc-box) {
+  border-radius: 10px;
+}
+.aa-input-area :deep(.ucc-input) {
+  min-height: 34px;
+  padding: 10px 12px 3px;
+  font-size: 13px;
+  line-height: 1.4;
+}
+.aa-input-area :deep(.ucc-footer) {
+  flex-wrap: nowrap;
+  gap: 8px;
+  min-height: 32px;
+  padding: 0 10px 10px;
+}
+.aa-input-area :deep(.ucc-footer-left) {
+  flex: 1 1 auto;
+  width: auto;
+  overflow: visible;
+}
+.aa-input-area :deep(.ucc-footer-right) {
+  display: none;
+}
+.aa-input-area :deep(.ucc-attach) {
+  width: 32px;
+  min-height: 32px;
+  padding: 0;
+  justify-content: center;
+}
+.aa-input-area :deep(.ucc-send) {
+  width: 42px;
+  height: 42px;
+  min-height: 42px;
+}
 
 /* 底部模型选择器（用面板 token，不是 AIChatPage 的 --ac-*） */
 .aa-model-select {
@@ -717,7 +754,9 @@ onMounted(() => {
   font-size: 11.5px;
   cursor: pointer;
   outline: none;
-  max-width: 168px;
+  flex: 1 1 auto;
+  min-width: 0;
+  max-width: none;
 }
 .aa-model-select:hover {
   border-color: var(--brand);

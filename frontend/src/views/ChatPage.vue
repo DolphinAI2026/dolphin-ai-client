@@ -2498,8 +2498,8 @@ function onApaasMenuSelected(menu: {
   if (!existingAppId.value) return
   selectedApaasMenuId.value = menu.menu_id
   // design-v4 Phase A: FormDesignerPanel 用 menu_name / form_id 反查 model
-  if (menu.menu_name) selectedApaasMenuName.value = menu.menu_name
-  if (menu.form_id) selectedApaasMenuFormId.value = String(menu.form_id)
+  selectedApaasMenuName.value = menu.menu_name || ''
+  selectedApaasMenuFormId.value = menu.form_id ? String(menu.form_id) : ''
   // R (2026-05-27): 保存 menu_type 让 CUSTOM 菜单走 CustomPagePreviewPanel 分支
   selectedApaasMenuType.value = (menu.menu_type || menu.menu_display || '').toUpperCase()
   // 仅在切到 platform 视图后才允许切菜单
@@ -3251,7 +3251,8 @@ const appPublishStatus = computed<'published' | 'draft' | 'draft_on_published' |
 const appPublishTooltip = computed(() => {
   const d = appPublishDetail.value
   if (d.status === 'published') {
-    return `已发布 ${d.latest_deploy?.version || ''} · ${d.latest_deploy?.completed_at?.slice(0, 19) || ''}`
+    if (!d.latest_deploy) return '已发布到 aPaaS 平台'
+    return `已发布 ${d.latest_deploy.version || ''} · ${d.latest_deploy.completed_at?.slice(0, 19) || ''}`
   }
   if (d.status === 'draft_on_published') {
     return `已发布 ${d.latest_deploy?.version || ''}, 但有 ${d.pending_changes_count} 个未发布改动`

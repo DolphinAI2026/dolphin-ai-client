@@ -3,11 +3,11 @@
 把前端 ProcessDesignerPanel 序列化的应用层 JSON (24 节点类型) 转换为
 apaas 平台 /xdap-app/process/save/processConfig 接收的 payload.
 
-apaas 平台节点类型 (实测来自 step_executor.execute_create_workflow + K2 BPMN 推测):
+apaas 平台节点/边结构 (实测来自低代码平台流程设计器 + processConfigDetail):
 - START / END                     — 圆形入口出口 (apaas 实测支持)
 - APPROVE                         — 审批 (UserTask, apaas 实测支持)
 - TIMER_START / MESSAGE_START     — 定时 / Webhook 触发 (BPMN start event with timer/message)
-- EXCLUSIVE_GATEWAY               — 排他网关 (condition / multi_branch)
+- condition / multi_branch        — 不保存独立网关；折叠成条件连线 + processRule
 - PARALLEL_GATEWAY                — 并行网关 (parallel_gateway / merge — apaas 按入边方向区分 fork/join)
 - TIMER_BOUNDARY                  — 等待超时 (wait 节点)
 - SERVICE_TASK                    — 服务任务 (write_data / read_data / ai_* 兜底)
@@ -25,7 +25,7 @@ K2 之前 (I4 basic) 翻译策略:
 - timer/webhook/logic/action 全部 skip + P6 todo
 
 K2 之后:
-- logic 5 个全翻译 (EXCLUSIVE_GATEWAY / PARALLEL_GATEWAY / TIMER_BOUNDARY)
+- logic 5 个全翻译 (条件边 + processRule / PARALLEL_GATEWAY / TIMER_BOUNDARY)
 - action 4 个全翻译 (SERVICE_TASK / AI_TASK)
 - timer / webhook 真翻译 (TIMER_START / MESSAGE_START)
 - edges 按 frontend.edges 真拓扑还原 (fork / join / 分支 / 并行 全保真)
@@ -37,9 +37,17 @@ from __future__ import annotations
 
 import hashlib
 import logging
+import re
 import secrets
 import uuid
 from typing import Any, Optional
+
+from app.process_payload import (
+    _approve_node_data_template,
+    _end_node_data,
+    _process_edge_template,
+    _start_node_data,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -62,10 +70,13 @@ APPROVAL_TO_APAAS: dict[str, str] = {
     "cc": "APPROVE",  # apaas 不区分抄送, 用单 SUBMITTER 占位 (P6 加 CC 类型)
 }
 
-# logic: 5 个 → 3 种 apaas gateway/timer
+# logic: 5 个 → 平台流程结构
 LOGIC_TO_APAAS: dict[str, str] = {
-    "condition": "EXCLUSIVE_GATEWAY",        # 排他网关 (真值/假值 2 出边)
-    "multi_branch": "EXCLUSIVE_GATEWAY",     # 多分支 (N 条件 N 出边)
+    # aPaaS 流程设计器的条件分支不保存独立 gateway 节点。UI 会把分支条件
+    # 挂到 sequence edge 的 data.id 上, 再用 processRule[edge.data.id] 关联规则。
+    # translator 会在建图前把 condition/multi_branch 节点折叠为条件边。
+    "condition": "CONDITION_EDGE",
+    "multi_branch": "CONDITION_EDGE",
     "parallel_gateway": "PARALLEL_GATEWAY",  # 并行网关 (N 并行出边)
     "merge": "PARALLEL_GATEWAY",             # 汇聚 (反向, apaas 按入边方向区分 fork/join)
     "wait": "TIMER_BOUNDARY",                # 等待 (超时分支)
@@ -87,6 +98,37 @@ APAAS_NODE_TYPE_MAP: dict[str, str] = {
     **LOGIC_TO_APAAS,
     **ACTION_TO_APAAS,
 }
+
+NODE_TYPE_ALIASES: dict[str, str] = {
+    # Agent/tool callers often use BPMN/platform terms instead of the
+    # ProcessDesigner frontend type names. Normalize at the translator boundary
+    # so branch edges still see a known gateway id.
+    "branch": "condition",
+    "condition_branch": "condition",
+    "conditional_branch": "condition",
+    "decision": "condition",
+    "decision_gateway": "condition",
+    "gateway": "condition",
+    "exclusive_gateway": "condition",
+    "exclusivegateway": "condition",
+    "parallelgateway": "parallel_gateway",
+    "approve": "assignee_approval",
+    "approval": "assignee_approval",
+    "user_task": "assignee_approval",
+    "usertask": "assignee_approval",
+    "service": "write_data",
+    "service_task": "write_data",
+    "servicetask": "write_data",
+}
+
+
+def normalize_process_node_type(value: Any) -> str:
+    """Return the internal ProcessDesigner node type for frontend/BPMN/apaas aliases."""
+    raw = str(value or "").strip()
+    if not raw:
+        return ""
+    key = raw.replace("-", "_").lower()
+    return NODE_TYPE_ALIASES.get(key, key)
 
 # 旧 P6 todo 列表 (K2 都已实现, 留空 set 向后兼容)
 UNSUPPORTED_NODE_TYPES: set[str] = set()
@@ -117,13 +159,171 @@ _MINIMAL_BPMN = (
     '</definitions>'
 )
 
+_DEFAULT_CONDITION_VALUES = {"", "default", "else", "otherwise", "其他", "默认", "兜底"}
+
+
+def _escape_xml_text(value: Any) -> str:
+    text = str(value or "")
+    return (
+        text.replace("&", "&amp;")
+        .replace("<", "&lt;")
+        .replace(">", "&gt;")
+        .replace('"', "&quot;")
+    )
+
+
+def _is_default_condition(value: Any) -> bool:
+    return str(value or "").strip().lower() in _DEFAULT_CONDITION_VALUES
+
+
+def _edge_condition_value(edge: dict[str, Any]) -> str:
+    props = edge.get("props") if isinstance(edge.get("props"), dict) else {}
+    data = edge.get("data") if isinstance(edge.get("data"), dict) else {}
+    return str(
+        edge.get("condition")
+        or edge.get("conditionExpression")
+        or props.get("condition")
+        or props.get("conditionExpression")
+        or data.get("condition")
+        or data.get("conditionExpression")
+        or ""
+    ).strip()
+
+
+def _component_value(component: dict[str, Any], *keys: str) -> str:
+    for key in keys:
+        value = component.get(key)
+        if value is None:
+            continue
+        text = str(value).strip()
+        if text:
+            return text
+    return ""
+
+
+def _component_lookup(form_components: Optional[list[dict[str, Any]]]) -> dict[str, dict[str, Any]]:
+    lookup: dict[str, dict[str, Any]] = {}
+    for component in form_components or []:
+        if not isinstance(component, dict):
+            continue
+        bo_code = _component_value(component, "bo_code", "boCode", "bocode")
+        label = _component_value(component, "label", "componentName", "name", "widgetText")
+        uuid_value = _component_value(component, "uuid", "id", "componentId")
+        keys = [bo_code, label, uuid_value]
+        if "~" in bo_code:
+            keys.append(bo_code.split("~", 1)[1])
+        for key in keys:
+            if key:
+                lookup[key] = component
+    return lookup
+
+
+def _component_bo_code(field_ref: str, lookup: dict[str, dict[str, Any]]) -> str:
+    ref = str(field_ref or "").strip()
+    if not ref:
+        return ""
+    if "~" in ref and ref not in lookup:
+        return ref
+    component = lookup.get(ref)
+    if component:
+        return _component_value(component, "bo_code", "boCode", "bocode") or ref
+    return ref
+
+
+def _resolve_option_value(bo_code: str, raw_value: str, lookup: dict[str, dict[str, Any]]) -> str:
+    value = str(raw_value or "").strip()
+    component = lookup.get(bo_code) or lookup.get(bo_code.split("~", 1)[-1])
+    if not component:
+        return value
+    options = (
+        component.get("choose_options")
+        or component.get("chooseOptions")
+        or component.get("dictionary_choose_options")
+        or component.get("dictionaryChooseOptions")
+        or []
+    )
+    if not isinstance(options, list):
+        return value
+    for option in options:
+        if not isinstance(option, dict):
+            continue
+        option_id = _component_value(option, "id", "value", "code")
+        option_label = _component_value(option, "label", "name", "text")
+        if value and value in {option_id, option_label}:
+            return option_id or value
+    return value
+
+
+def _parse_simple_condition(
+    condition: str,
+    lookup: dict[str, dict[str, Any]],
+) -> tuple[str, str, str] | None:
+    text = str(condition or "").strip()
+    if not text or _is_default_condition(text):
+        return None
+
+    invoke_match = re.search(
+        r"componentvalue['\"]\s*,\s*['\"](?P<field>[^'\"]+)['\"][\s\S]*?(?:==|=)\s*\(?\s*['\"](?P<value>[^'\"]+)['\"]",
+        text,
+    )
+    if invoke_match:
+        field_ref = invoke_match.group("field")
+        raw_value = invoke_match.group("value")
+    else:
+        simple_match = re.match(
+            r"^\s*(?P<field>[\w~\u4e00-\u9fa5]+)\s*(?P<op>==|=|eq)\s*['\"]?(?P<value>[^'\"]+?)['\"]?\s*$",
+            text,
+        )
+        if not simple_match:
+            return None
+        field_ref = simple_match.group("field")
+        raw_value = simple_match.group("value")
+
+    bo_code = _component_bo_code(field_ref, lookup)
+    if not bo_code:
+        return None
+    value = _resolve_option_value(bo_code, raw_value, lookup)
+    return bo_code, "eq", value
+
+
+def _build_simple_process_rule(
+    condition: str,
+    menu_id: str,
+    lookup: dict[str, dict[str, Any]],
+) -> dict[str, Any] | None:
+    parsed = _parse_simple_condition(condition, lookup)
+    if not parsed:
+        return None
+    bo_code, op, value = parsed
+    simple_rule_config = {
+        "ruleType": "simple",
+        "menuId": menu_id,
+        "express": f"(((xdap.invoke('componentvalue','{bo_code}'))  == ('{value}')))",
+        "formFieldRuleList": [
+            {
+                "connectOperation": "or",
+                "fieldRuleList": [
+                    {
+                        "type": "string",
+                        "boCode": bo_code,
+                        "op": op,
+                        "values": [value],
+                        "transValues": [],
+                    }
+                ],
+            }
+        ],
+        "hasBoTrans": True,
+    }
+    return {"ruleType": "simple", "simpleRuleConfig": simple_rule_config}
+
 
 # --- 节点尺寸 (按 apaas type 区分) ---
 def _node_size(apaas_type: str) -> tuple[str, str]:
     """返 (width, height) — apaas 平台字符串数字."""
     if apaas_type in ("START", "END", "TIMER_START", "MESSAGE_START"):
         return ("64.0", "64.0")
-    if apaas_type in ("EXCLUSIVE_GATEWAY", "PARALLEL_GATEWAY", "TIMER_BOUNDARY"):
+    if apaas_type in ("PARALLEL_GATEWAY", "TIMER_BOUNDARY"):
         return ("64.0", "64.0")  # 网关菱形, 跟 START/END 一样小
     # APPROVE / SERVICE_TASK / AI_TASK — 矩形
     return ("122.0", "48.0")
@@ -140,6 +340,52 @@ def _resolve_approvers_from_props(node_type: str, props: dict[str, Any], role_co
     """
     role_codes = role_codes or {}
 
+    def _platform_approver(kind: str, value: str, label: str = "") -> dict[str, Any]:
+        kind = (kind or "USER").upper()
+        value = str(value or "").strip()
+        if kind == "ROLE":
+            hit = role_codes.get(value) or {}
+            value = str(hit.get("id") or hit.get("roleId") or hit.get("value") or value).strip()
+            label = label or str(hit.get("roleName") or hit.get("name") or hit.get("roleCode") or value)
+        elif kind == "SUBMITTER":
+            value = "SUBMITTER"
+            label = label or "申请人"
+        elif kind in ("LEADER", "MANAGER"):
+            value = value or "LEADER"
+            label = label or "上级"
+        else:
+            label = label or value
+        return {"type": kind, "value": value, "displayData": {"id": value, "label": label or value}}
+
+    def _from_item(item: Any, default_kind: str = "USER") -> dict[str, Any] | None:
+        if isinstance(item, dict):
+            display = item.get("displayData") if isinstance(item.get("displayData"), dict) else {}
+            kind = str(item.get("type") or item.get("approverType") or default_kind).upper()
+            value = str(
+                item.get("value")
+                or item.get("approverValue")
+                or item.get("approverCode")
+                or item.get("roleId")
+                or item.get("userId")
+                or item.get("id")
+                or ""
+            ).strip()
+            label = str(
+                item.get("label")
+                or item.get("name")
+                or item.get("roleName")
+                or item.get("userName")
+                or display.get("label")
+                or ""
+            ).strip()
+            if value or kind == "SUBMITTER":
+                return _platform_approver(kind, value, label)
+            return None
+        value = str(item or "").strip()
+        if value:
+            return _platform_approver(default_kind, value)
+        return None
+
     if node_type == "assignee_approval":
         # props.assignee / props.approvers — backend node JSON
         assignees = props.get("approvers") or ([props["assignee"]] if props.get("assignee") else [])
@@ -147,11 +393,11 @@ def _resolve_approvers_from_props(node_type: str, props: dict[str, Any], role_co
             assignees = [assignees]
         out = []
         for a in assignees:
-            code = str(a or "").strip()
-            if code:
-                out.append({"approverType": "USER", "approverName": code, "approverCode": code})
+            item = _from_item(a, default_kind="USER")
+            if item:
+                out.append(item)
         if not out:
-            out = [{"approverType": "SUBMITTER", "approverName": "表单提交人", "approverCode": "SUBMITTER"}]
+            out = [_platform_approver("SUBMITTER", "SUBMITTER", "表单提交人")]
         return out
 
     if node_type == "role_approval":
@@ -163,14 +409,11 @@ def _resolve_approvers_from_props(node_type: str, props: dict[str, Any], role_co
         else:
             role_code = str(props.get("role") or "")
         if role_code:
-            role_info = role_codes.get(role_code, {})
-            platform_code = role_info.get("roleCode", role_code)
-            platform_name = role_info.get("roleName", role_code)
-            return [{"approverType": "ROLE", "approverName": platform_name, "approverCode": platform_code}]
-        return [{"approverType": "SUBMITTER", "approverName": "表单提交人", "approverCode": "SUBMITTER"}]
+            return [_platform_approver("ROLE", role_code)]
+        return [_platform_approver("SUBMITTER", "SUBMITTER", "表单提交人")]
 
     if node_type == "manager_approval":
-        return [{"approverType": "LEADER", "approverName": "上级", "approverCode": "LEADER"}]
+        return [_platform_approver("LEADER", "LEADER", "上级")]
 
     if node_type == "parallel_approval":
         assignees = props.get("approvers") or []
@@ -178,17 +421,17 @@ def _resolve_approvers_from_props(node_type: str, props: dict[str, Any], role_co
             assignees = [assignees]
         out = []
         for a in assignees:
-            code = str(a or "").strip()
-            if code:
-                out.append({"approverType": "USER", "approverName": code, "approverCode": code})
+            item = _from_item(a, default_kind="USER")
+            if item:
+                out.append(item)
         if not out:
-            out = [{"approverType": "SUBMITTER", "approverName": "表单提交人", "approverCode": "SUBMITTER"}]
+            out = [_platform_approver("SUBMITTER", "SUBMITTER", "表单提交人")]
         return out
 
     if node_type in ("cc", "fill_form"):
-        return [{"approverType": "SUBMITTER", "approverName": "表单提交人", "approverCode": "SUBMITTER"}]
+        return [_platform_approver("SUBMITTER", "SUBMITTER", "表单提交人")]
 
-    return [{"approverType": "SUBMITTER", "approverName": "表单提交人", "approverCode": "SUBMITTER"}]
+    return [_platform_approver("SUBMITTER", "SUBMITTER", "表单提交人")]
 
 
 def _gen_webhook_secret() -> str:
@@ -210,7 +453,7 @@ def _make_apaas_node(
     """构造 apaas 平台 process 节点 dict (参考 step_executor._make_node).
 
     apaas_type ∈ {START, END, APPROVE, TIMER_START, MESSAGE_START,
-                  EXCLUSIVE_GATEWAY, PARALLEL_GATEWAY, TIMER_BOUNDARY,
+                  PARALLEL_GATEWAY, TIMER_BOUNDARY,
                   SERVICE_TASK, AI_TASK}.
     approve_type ∈ {SINGLE, ANY, ALL, MAJORITY} — 仅 APPROVE 用.
     extra_data: 节点类型特定的额外字段 (timerType/cron/webhookPath/condition/serviceType 等)
@@ -238,11 +481,12 @@ def _make_apaas_node(
         },
     }
     if apaas_type == "START":
-        n["data"]["formButtons"] = _START_BUTTONS
+        n["data"] = _start_node_data()
     elif apaas_type == "APPROVE":
+        n["data"] = _approve_node_data_template(title=title, bpmn_id=node_id, approvers=approvers or [])
         n["data"]["approveType"] = approve_type
-        n["data"]["approveButtons"] = _APPROVE_BUTTONS
-        n["data"]["approvers"] = approvers or []
+    elif apaas_type == "END":
+        n["data"] = _end_node_data()
     # 合并节点专属字段
     if extra_data:
         n["data"].update(extra_data)
@@ -250,9 +494,9 @@ def _make_apaas_node(
 
 
 def _build_logic_extra_data(node_type: str, props: dict[str, Any]) -> dict[str, Any]:
-    """K2: logic 节点 (EXCLUSIVE_GATEWAY/PARALLEL_GATEWAY/TIMER_BOUNDARY) 的 data 扩展.
+    """K2: logic 节点 (PARALLEL_GATEWAY/TIMER_BOUNDARY) 的 data 扩展.
 
-    - condition / multi_branch: conditionExpression (用户写的真分支条件) + defaultFlow (兜底分支)
+    - condition / multi_branch: 已在建图前折叠成条件边, 不会进入这里
     - parallel_gateway / merge: 不带 condition (并行无条件)
     - wait: timerType + duration / dateTime
     """
@@ -324,11 +568,87 @@ def _build_entry_extra_data(node_type: str, props: dict[str, Any], process_code:
     return extra
 
 
+def _flatten_condition_nodes(
+    raw_nodes: list[dict[str, Any]],
+    raw_edges: list[dict[str, Any]],
+    warnings: list[dict[str, str]],
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+    """把 ProcessDesigner 的 condition/multi_branch 节点折叠成 aPaaS 条件边.
+
+    aPaaS 平台 UI 的真实保存结构是:
+      upstream node --(default edge)--> default target
+      upstream node --(conditional edge + processRule)--> branch target
+
+    而不是保存独立 gateway 节点。因此本函数把 `A -> condition -> B/C`
+    转成 `A -> B` 和 `A -> C`, 保留 outgoing edge 的 label/condition。
+    """
+    condition_node_ids: set[str] = set()
+    for node in raw_nodes:
+        if not isinstance(node, dict):
+            continue
+        node_type = normalize_process_node_type(node.get("type"))
+        if node_type in {"condition", "multi_branch"}:
+            node_id = str(node.get("id") or "").strip()
+            if node_id:
+                condition_node_ids.add(node_id)
+
+    if not condition_node_ids:
+        return raw_nodes, raw_edges
+
+    passthrough_edges: list[dict[str, Any]] = [
+        edge for edge in raw_edges
+        if isinstance(edge, dict)
+        and str(edge.get("source") or "").strip() not in condition_node_ids
+        and str(edge.get("target") or "").strip() not in condition_node_ids
+    ]
+
+    for node_id in sorted(condition_node_ids):
+        incoming = [
+            edge for edge in raw_edges
+            if isinstance(edge, dict) and str(edge.get("target") or "").strip() == node_id
+        ]
+        outgoing = [
+            edge for edge in raw_edges
+            if isinstance(edge, dict) and str(edge.get("source") or "").strip() == node_id
+        ]
+        if not incoming or not outgoing:
+            warnings.append({
+                "id": node_id,
+                "type": "condition",
+                "reason": "condition 节点缺入边或出边 — 已跳过该分支节点",
+            })
+            continue
+        for in_edge in incoming:
+            in_source = str(in_edge.get("source") or "").strip()
+            if not in_source:
+                continue
+            for out_edge in outgoing:
+                out_target = str(out_edge.get("target") or "").strip()
+                if not out_target:
+                    continue
+                merged = dict(out_edge)
+                in_id = str(in_edge.get("id") or in_source).strip()
+                out_id = str(out_edge.get("id") or out_target).strip()
+                merged["id"] = f"{in_id}__{out_id}"
+                merged["source"] = in_source
+                merged["target"] = out_target
+                passthrough_edges.append(merged)
+
+    flattened_nodes = [
+        node for node in raw_nodes
+        if isinstance(node, dict) and str(node.get("id") or "").strip() not in condition_node_ids
+    ]
+    return flattened_nodes, passthrough_edges
+
+
 def _build_apaas_edges(
     raw_edges: list[dict[str, Any]],
     known_node_ids: set[str],
     warnings: list[dict[str, str]],
-) -> list[dict[str, Any]]:
+    *,
+    menu_id: str = "",
+    form_components: Optional[list[dict[str, Any]]] = None,
+) -> tuple[list[dict[str, Any]], dict[str, Any]]:
     """K2: 按 frontend definition.edges 真还原 apaas sequenceFlow / lineList.
 
     apaas line shape (从 step_executor 反推, 加 K2 真分支字段):
@@ -346,8 +666,10 @@ def _build_apaas_edges(
       - source == target (自环)
     """
     out: list[dict[str, Any]] = []
+    process_rules: dict[str, Any] = {}
+    lookup = _component_lookup(form_components)
     if not isinstance(raw_edges, list):
-        return out
+        return out, process_rules
 
     for e in raw_edges:
         if not isinstance(e, dict):
@@ -388,18 +710,182 @@ def _build_apaas_edges(
             edge_id = "line_" + hashlib.md5(f"{src}::{tgt}".encode("utf-8")).hexdigest()[:12]
         lbl = e.get("label") or ""
         cond = e.get("condition") or ""
-        out.append({
-            "id": edge_id,
-            "lineId": edge_id,
-            "source": src,
-            "target": tgt,
-            "sourceNodeKey": src,
-            "targetNodeKey": tgt,
-            "lineName": str(lbl),
-            "conditionExpression": str(cond),
-            "data": {"titleI18nAssociated": False},
-        })
-    return out
+        edge = _process_edge_template(edge_id, src, tgt)
+        edge["lineId"] = edge_id
+        edge["sourceNodeKey"] = src
+        edge["targetNodeKey"] = tgt
+        edge["lineName"] = str(lbl)
+        edge["conditionExpression"] = str(cond)
+        edge["label"] = str(lbl) or edge.get("label") or "\\\\"
+        edge["data"]["title"] = str(lbl) or edge["data"].get("title") or "\\\\"
+        edge["data"]["conditionExpression"] = str(cond)
+        if _is_default_condition(cond):
+            edge["data"]["defaultFlow"] = True
+        elif str(cond).strip():
+            edge["data"]["defaultFlow"] = False
+            rule = _build_simple_process_rule(str(cond), menu_id, lookup)
+            if rule:
+                process_rules[str(edge["data"]["id"])] = rule
+            else:
+                warnings.append({
+                    "id": edge_id,
+                    "type": "condition_rule",
+                    "reason": f"条件表达式 {cond!r} 暂不能翻译成 aPaaS simpleRule — 已只保留条件文本",
+                })
+        out.append(edge)
+    return out, process_rules
+
+
+def _node_bpmn_id_by_cell(nodes: list[dict[str, Any]]) -> dict[str, str]:
+    mapping: dict[str, str] = {}
+    for node in nodes or []:
+        data = node.get("data") if isinstance(node.get("data"), dict) else {}
+        cell_id = str(node.get("id") or "")
+        bpmn_id = str(data.get("nodeId") or node.get("nodeId") or cell_id)
+        if cell_id:
+            mapping[cell_id] = bpmn_id
+    return mapping
+
+
+def _default_edge_sequence_id(edges: list[dict[str, Any]], source: str) -> str:
+    source_edges = [edge for edge in edges or [] if str(edge.get("source") or "") == source]
+    if not source_edges:
+        return ""
+    default_edge = next(
+        (edge for edge in source_edges if (edge.get("data") or {}).get("defaultFlow") is True),
+        source_edges[0],
+    )
+    edge_data_id = ((default_edge.get("data") or {}).get("id") or default_edge.get("id") or "")
+    return f"SequenceFlow_{edge_data_id}" if edge_data_id else ""
+
+
+def build_apaas_bpmn_xml(
+    nodes: list[dict[str, Any]],
+    edges: list[dict[str, Any]],
+    process_rule: Optional[dict[str, Any]] = None,
+) -> str:
+    """生成 aPaaS VERSION_1.1 可执行 BPMN XML.
+
+    这里按平台流程设计器实测结构生成:
+    START event -> START_HIDDEN userTask -> 图上的审批节点/结束节点。
+    图中 source=START 的边在 BPMN 中 sourceRef=START_HIDDEN。
+    """
+    process_rule = process_rule or {}
+    id_by_cell = _node_bpmn_id_by_cell(nodes)
+    parts: list[str] = []
+    parts.append('<?xml version="1.0" encoding="UTF-8"?>')
+    parts.append(
+        '<definitions xmlns:bpmndi="http://www.omg.org/spec/BPMN/20100524/DI" '
+        'xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" '
+        'xmlns:di="http://www.omg.org/spec/DD/20100524/DI" '
+        'xmlns:dc="http://www.omg.org/spec/DD/20100524/DC" '
+        'xmlns="http://www.omg.org/spec/BPMN/20100524/MODEL" '
+        'xmlns:activiti="http://activiti.org/bpmn" '
+        'id="Definitions_Process" targetNamespace="http://bpmn.io/schema/bpmn" '
+        'exporter="ai-builder" exporterVersion="1.0">'
+    )
+    parts.append('<process id="Process_Process_" isExecutable="true">')
+    parts.append('<startEvent id="START" name="开始"/>')
+
+    start_default = _default_edge_sequence_id(edges, "START")
+    start_default_attr = f' default="{start_default}"' if start_default else ""
+    parts.append(
+        f'<userTask id="START_HIDDEN" name="开始" activiti:assignee="${{assignee}}"{start_default_attr}>'
+        '<extensionElements>'
+        '<activiti:executionListener xmlns:activiti="http://activiti.org/bpmn" event="start" delegateExpression="${executionListener}"/>'
+        '<activiti:executionListener xmlns:activiti="http://activiti.org/bpmn" event="end" delegateExpression="${executionListener}"/>'
+        '</extensionElements>'
+        '<multiInstanceLoopCharacteristics isSequential="false" xmlns:activiti="http://activiti.org/bpmn" '
+        'activiti:collection="${procPersonHandle.processUsers(processId,&apos;START&apos;,documentId,submitter)}" '
+        'activiti:elementVariable="assignee">'
+        '<completionCondition>${nrOfCompletedInstances &gt; 0 and multiIsComplete}</completionCondition>'
+        '</multiInstanceLoopCharacteristics>'
+        '</userTask>'
+    )
+
+    for node in nodes or []:
+        data = node.get("data") if isinstance(node.get("data"), dict) else {}
+        node_type = str(data.get("type") or "")
+        if node_type in {"START", "END"}:
+            continue
+        bpmn_id = str(data.get("nodeId") or node.get("nodeId") or node.get("id") or "")
+        if not bpmn_id:
+            continue
+        title = _escape_xml_text(data.get("title") or node.get("label") or "审批")
+        default_sequence = _default_edge_sequence_id(edges, str(node.get("id") or ""))
+        default_attr = f' default="{default_sequence}"' if default_sequence else ""
+        parts.append(
+            f'<userTask id="{_escape_xml_text(bpmn_id)}" name="{title}"{default_attr} activiti:assignee="${{assignee}}">'
+            '<extensionElements>'
+            '<activiti:executionListener xmlns:activiti="http://activiti.org/bpmn" event="start" delegateExpression="${executionListener}"/>'
+            '<activiti:executionListener xmlns:activiti="http://activiti.org/bpmn" event="end" delegateExpression="${executionListener}"/>'
+            '</extensionElements>'
+            '<multiInstanceLoopCharacteristics isSequential="false" xmlns:activiti="http://activiti.org/bpmn" '
+            f'activiti:collection="${{procPersonHandle.processUsers(processId,&apos;{_escape_xml_text(bpmn_id)}&apos;,documentId,submitter)}}" '
+            'activiti:elementVariable="assignee">'
+            '<completionCondition>${nrOfCompletedInstances &gt; 0 and multiIsComplete}</completionCondition>'
+            '</multiInstanceLoopCharacteristics>'
+            '</userTask>'
+        )
+
+    parts.append(
+        '<endEvent id="END" name="结束">'
+        '<extensionElements>'
+        '<activiti:executionListener xmlns:activiti="http://activiti.org/bpmn" event="start" delegateExpression="${executionListener}"/>'
+        '<activiti:executionListener xmlns:activiti="http://activiti.org/bpmn" event="end" delegateExpression="${executionListener}"/>'
+        '</extensionElements>'
+        '</endEvent>'
+    )
+
+    for edge in edges or []:
+        data = edge.get("data") if isinstance(edge.get("data"), dict) else {}
+        edge_data_id = str(data.get("id") or edge.get("id") or "")
+        if not edge_data_id:
+            continue
+        source_cell = str(edge.get("source") or "")
+        target_cell = str(edge.get("target") or "")
+        source_ref = "START_HIDDEN" if source_cell == "START" else id_by_cell.get(source_cell, source_cell)
+        target_ref = id_by_cell.get(target_cell, target_cell)
+        rule = process_rule.get(edge_data_id) if isinstance(process_rule, dict) else None
+        simple_rule_id = ""
+        if isinstance(rule, dict):
+            simple_rule_id = str(
+                rule.get("simpleRuleId")
+                or (rule.get("simpleRuleConfig") or {}).get("id")
+                or ""
+            )
+        if simple_rule_id and data.get("defaultFlow") is not True:
+            parts.append(
+                f'<sequenceFlow id="SequenceFlow_{_escape_xml_text(edge_data_id)}" '
+                f'sourceRef="{_escape_xml_text(source_ref)}" targetRef="{_escape_xml_text(target_ref)}">'
+                '<conditionExpression xsi:type="tFormalExpression">'
+                f"<![CDATA[${{procRuleHandle.executeSimpleProcRule(processId, documentId, '{simple_rule_id}', outcome)}}]]>"
+                '</conditionExpression>'
+                '</sequenceFlow>'
+            )
+        else:
+            parts.append(
+                f'<sequenceFlow id="SequenceFlow_{_escape_xml_text(edge_data_id)}" '
+                f'sourceRef="{_escape_xml_text(source_ref)}" targetRef="{_escape_xml_text(target_ref)}"/>'
+            )
+
+    parts.append('<sequenceFlow id="SequenceFlow_START_HIDDEN" sourceRef="START" targetRef="START_HIDDEN"/>')
+    parts.append('</process>')
+    parts.append('</definitions>')
+    return "\n".join(parts)
+
+
+
+def _process_global_config() -> dict[str, Any]:
+    return {
+        "titleConfigList": [
+            {"componentId": "submitter", "name": "发起人", "type": "COMPONENT"},
+            {"value": "创建的", "type": "TEXT"},
+            {"componentId": "formName", "name": "表单名称", "type": "COMPONENT"},
+            {"value": "流程\n\n", "type": "TEXT"},
+        ],
+        "processDisplayFieldList": [],
+    }
 
 
 def translate_definition_to_apaas_schema(
@@ -407,6 +893,11 @@ def translate_definition_to_apaas_schema(
     apaas_app_id: str,
     menu_id: str,
     role_codes: Optional[dict[str, dict]] = None,
+    *,
+    form_id: str = "",
+    process_name: str = "",
+    process_code: str = "",
+    form_components: Optional[list[dict[str, Any]]] = None,
 ) -> tuple[dict[str, Any], list[dict[str, str]]]:
     """把本地 ProcessDefinition JSON 翻译成 apaas /process/save/processConfig payload.
 
@@ -439,7 +930,9 @@ def translate_definition_to_apaas_schema(
         raise ValueError("definition 必须是 dict")
     raw_nodes = definition.get("nodes") or []
     raw_edges = definition.get("edges") or []
-    process_code = str(definition.get("process_name") or definition.get("process_code") or menu_id or "default")
+    resolved_process_name = str(process_name or definition.get("process_name") or "审批流程")
+    resolved_process_code = str(process_code or definition.get("process_code") or menu_id or "default")
+    resolved_form_id = str(form_id or definition.get("form_id") or definition.get("formId") or "")
 
     if not isinstance(raw_nodes, list):
         raise ValueError("definition.nodes 必须是 list")
@@ -457,12 +950,24 @@ def translate_definition_to_apaas_schema(
         })
         payload_empty = {
             "appId": apaas_app_id,
+            "formId": resolved_form_id,
             "menuId": menu_id,
+            "processName": resolved_process_name,
+            "processCode": resolved_process_code,
             "bpmn": _MINIMAL_BPMN,
             "nodes": [],
             "edges": [],
+            "status": "ENABLE",
+            "engine": "VERSION_1.1",
         }
+        if resolved_form_id:
+            payload_empty["processDataSource"] = {
+                "sourceType": "SOURCE_TYPE_BO",
+                "objectId": f"boc_code_{resolved_form_id}",
+            }
         return payload_empty, warnings
+
+    raw_nodes, raw_edges = _flatten_condition_nodes(raw_nodes, raw_edges, warnings)
 
     # 第一遍扫: 收集已知节点 id + 类型 + 检查 has_start/has_end
     has_start = False
@@ -473,9 +978,10 @@ def translate_definition_to_apaas_schema(
     for raw_node in raw_nodes:
         if not isinstance(raw_node, dict):
             continue
-        node_type = str(raw_node.get("type") or "")
+        raw_node_type = str(raw_node.get("type") or "")
+        node_type = normalize_process_node_type(raw_node_type)
         node_id = str(raw_node.get("id") or "") or uuid.uuid4().hex
-        node_label = str(raw_node.get("label") or node_type)
+        node_label = str(raw_node.get("label") or raw_node_type or node_type)
         node_props = raw_node.get("props") or {}
         if not isinstance(node_props, dict):
             node_props = {}
@@ -505,14 +1011,14 @@ def translate_definition_to_apaas_schema(
         if node_type == "timer":
             platform_nodes.append(_make_apaas_node(
                 node_id, node_label or "定时触发", "TIMER_START", x, y,
-                extra_data=_build_entry_extra_data("timer", node_props, process_code),
+                extra_data=_build_entry_extra_data("timer", node_props, resolved_process_code),
             ))
             known_node_ids.add(node_id)
             continue
         if node_type == "webhook":
             platform_nodes.append(_make_apaas_node(
                 node_id, node_label or "Webhook", "MESSAGE_START", x, y,
-                extra_data=_build_entry_extra_data("webhook", node_props, process_code),
+                extra_data=_build_entry_extra_data("webhook", node_props, resolved_process_code),
             ))
             known_node_ids.add(node_id)
             continue
@@ -552,6 +1058,9 @@ def translate_definition_to_apaas_schema(
         # === logic: condition / multi_branch / parallel_gateway / merge / wait ===
         if node_type in LOGIC_TO_APAAS:
             apaas_type = LOGIC_TO_APAAS[node_type]
+            if apaas_type == "CONDITION_EDGE":
+                # 已在 _flatten_condition_nodes 阶段折叠成条件边。
+                continue
             platform_nodes.append(_make_apaas_node(
                 node_id, node_label, apaas_type, x, y,
                 extra_data=_build_logic_extra_data(node_type, node_props),
@@ -562,9 +1071,9 @@ def translate_definition_to_apaas_schema(
         # === 未知节点类型 → 收 warning 跳过 ===
         warnings.append({
             "id": node_id,
-            "type": node_type,
+            "type": raw_node_type or node_type,
             "label": node_label,
-            "reason": f"未知节点类型 {node_type}",
+            "reason": f"未知节点类型 {raw_node_type or node_type}",
         })
 
     # 兜底: 找不到 entry 节点 → 自动加 1 个 START
@@ -593,14 +1102,38 @@ def translate_definition_to_apaas_schema(
         })
 
     # K2: 用 frontend definition.edges 真还原 apaas edges (替代固定串行链)
-    platform_edges = _build_apaas_edges(raw_edges, known_node_ids, warnings)
+    platform_edges, process_rules = _build_apaas_edges(
+        raw_edges,
+        known_node_ids,
+        warnings,
+        menu_id=menu_id,
+        form_components=form_components,
+    )
 
     payload = {
         "appId": apaas_app_id,
+        "formId": resolved_form_id,
         "menuId": menu_id,
-        "bpmn": _MINIMAL_BPMN,
+        "tenantId": "",
+        "processName": resolved_process_name,
+        "processCode": resolved_process_code,
+        "bpmn": build_apaas_bpmn_xml(platform_nodes, platform_edges, process_rules),
+        "status": "ENABLE",
+        "engine": "VERSION_1.1",
         "nodes": platform_nodes,
         "edges": platform_edges,
+        "processRule": process_rules,
+        "globalSettings": {},
+        "processGlobalConfig": _process_global_config(),
+        "openProcessVersion": False,
+        "boExist": True,
+        "boRemindExist": True,
+        "predictionFlag": False,
     }
+    if resolved_form_id:
+        payload["processDataSource"] = {
+            "sourceType": "SOURCE_TYPE_BO",
+            "objectId": f"boc_code_{resolved_form_id}",
+        }
 
     return payload, warnings

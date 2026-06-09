@@ -2012,8 +2012,12 @@ async def get_publish_status(
     if not latest:
         # 从未成功发布 → 别一律显示"草稿"。看 application.status 暴露真实态:
         #   failed → 生成失败 (apaas 已建了一部分则部分失败); generating/updating → 生成中。
+        #   completed + apaas_app_id → 兼容历史/外部工具创建的应用：平台应用已存在，
+        #   只是没有 deploy_records 本地流水，不能在顶部误显示为"草稿"。
         app_status = (app.status or "").lower()
-        if app_status == "failed":
+        if app_status == "completed" and app.apaas_app_id:
+            ui_status = "published"
+        elif app_status == "failed":
             ui_status = "failed"
         elif app_status in ("generating", "updating"):
             ui_status = "generating"
@@ -2023,7 +2027,7 @@ async def get_publish_status(
             ok=True,
             status=ui_status,
             latest_deploy=None,
-            pending_changes_count=1 if last_modified else 0,
+            pending_changes_count=0 if ui_status == "published" else (1 if last_modified else 0),
             last_modified_at=last_modified.isoformat() if last_modified else None,
             partial=(ui_status == "failed" and bool(app.apaas_app_id)),
             app_status=app.status,

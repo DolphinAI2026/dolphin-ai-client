@@ -64,19 +64,10 @@
               :key="f.id"
               class="fbp-form-row"
               :class="{ 'fbp-form-row-full': isFullWidthWidget(f.type) }"
-              @mouseenter="hoveredFieldId = f.id"
-              @mouseleave="hoveredFieldId = ''"
             >
               <label class="fbp-form-label">
                 {{ f.name || '未命名字段' }}
                 <span v-if="f.required" class="fbp-form-req">*</span>
-                <button
-                  v-if="hoveredFieldId === f.id"
-                  type="button"
-                  class="fbp-form-edit-hint"
-                  title="改字段请用配置助手对话"
-                  @click="onInlineEditHint(f)"
-                >改这个字段 →</button>
               </label>
               <FormPreviewInput :field="f" :model-value="formValues[f.code]" :app-id="props.appId" :form-id="props.formId || ''" @update:model-value="(v: any) => formValues[f.code] = v" />
               <p v-if="f.description" class="fbp-form-desc">{{ f.description }}</p>
@@ -218,6 +209,61 @@ function componentTypeToWidget(t: string | undefined): FieldType {
   const up = String(t).toUpperCase().trim()
   if (up.startsWith(CUSTOM_COMPONENT_PREFIX)) return 'custom_dev'
   return COMPONENT_TYPE_MAP[up] || 'text'
+}
+
+function componentTypeOf(c: any): string {
+  return String(c?.component_type || c?.componentType || '').trim()
+}
+
+function chooseTypeOf(c: any): string {
+  const raw = c?.choose_type ?? c?.chooseType ?? c?.select_type ?? c?.selectType ?? c?.multiple ?? c?.isMultiple ?? ''
+  if (typeof raw === 'boolean') return raw ? 'MULTIPLE' : 'SINGLE'
+  const normalized = String(raw).toUpperCase().trim()
+  if (['TRUE', '1', 'YES'].includes(normalized)) return 'MULTIPLE'
+  if (['FALSE', '0', 'NO'].includes(normalized)) return 'SINGLE'
+  return normalized
+}
+
+function isSingleSelectChoice(c: any): boolean {
+  return ['SINGLE', 'SINGLE_SELECT', 'SINGLE_CHOICE', 'ONE'].includes(chooseTypeOf(c))
+}
+
+function isMultiSelectChoice(c: any): boolean {
+  return ['MULTIPLE', 'MULTI', 'MULTI_SELECT', 'MULTIPLE_SELECT', 'CHECKBOX'].includes(chooseTypeOf(c))
+}
+
+function componentToPreviewWidget(c: any): FieldType {
+  const compType = componentTypeOf(c)
+  let widgetType = componentTypeToWidget(compType)
+  const compTypeUpper = compType.toUpperCase()
+
+  // apaas 的 FORM_SELECT_INPUT 会用 chooseType 区分单选/多选。部分链路会返回驼峰字段,
+  // 只读预览必须同时兼容 snake_case / camelCase, 否则单选下拉会被误渲染成 multiple 列表框。
+  if (compTypeUpper === 'FORM_SELECT_INPUT') {
+    if (isSingleSelectChoice(c)) widgetType = 'select'
+    if (isMultiSelectChoice(c)) widgetType = 'multi_select'
+  }
+  return widgetType
+}
+
+function componentOptionsOf(c: any): FieldOption[] {
+  const rawOptions = c?.choose_options ?? c?.chooseOptions ?? c?.dictionary_choose_options ?? c?.dictionaryChooseOptions ?? []
+  if (!Array.isArray(rawOptions)) return []
+  return rawOptions
+    .map((o: any): FieldOption | null => {
+      if (o && typeof o === 'object') {
+        const rawCode = o.code ?? o.value ?? o.id ?? o.key ?? o.option_code ?? o.optionCode ?? o.label ?? o.name
+        const rawName = o.name ?? o.label ?? o.text ?? o.title ?? o.value_name ?? o.valueName ?? rawCode
+        const code = String(rawCode ?? '').trim()
+        const name = String(rawName ?? '').trim()
+        if (!code && !name) return null
+        return { code: code || name, name: name || code }
+      }
+      if (o === undefined || o === null || o === '') return null
+      const value = String(o)
+      return { code: value, name: value }
+    })
+    .filter((o: FieldOption | null): o is FieldOption => !!o)
 }
 
 // 抽 widget kind (去前缀) — 给 preview 卡片显. 不是自开发组件返空.
@@ -466,6 +512,8 @@ const FormPreviewInput = {
   },
   emits: ['update:modelValue'],
   setup(props: { field: FormField; modelValue: any; appId: number; formId: string }, { emit }: { emit: (e: 'update:modelValue', v: any) => void }) {
+    const multiOpen = ref(false)
+
     return () => {
       const f = props.field
       const v = props.modelValue
@@ -501,14 +549,60 @@ const FormPreviewInput = {
         case 'select_multi':
         case 'multi_select':
         case 'tag':
-          return h('select', {
-            class: cls,
-            multiple: true,
-            size: Math.min(4, Math.max(2, opts.length || 2)),
-            onChange: (e: Event) => emit('update:modelValue', Array.from((e.target as HTMLSelectElement).selectedOptions).map(o => o.value)),
-          }, opts.length === 0
-            ? [h('option', { disabled: true }, '无选项 — 请用配置助手配置')]
-            : opts.map(o => h('option', { value: o.code }, o.name || o.code)))
+          {
+            const selectedCodes = Array.isArray(v)
+              ? v.map((item: any) => String(item))
+              : (v ? [String(v)] : [])
+            const selectedLabels = opts
+              .filter(o => selectedCodes.includes(String(o.code)))
+              .map(o => o.name || o.code)
+            const toggleOption = (code: string) => {
+              const value = String(code)
+              const next = selectedCodes.includes(value)
+                ? selectedCodes.filter(item => item !== value)
+                : [...selectedCodes, value]
+              emit('update:modelValue', next)
+            }
+            return h('div', {
+              class: 'fbp-fp-multi-select',
+              'data-open': multiOpen.value ? 'true' : 'false',
+              onFocusout: (e: FocusEvent) => {
+                const next = e.relatedTarget as Node | null
+                if (next && (e.currentTarget as HTMLElement).contains(next)) return
+                multiOpen.value = false
+              },
+            }, [
+              h('button', {
+                type: 'button',
+                class: 'fbp-fp-multi-trigger',
+                disabled: opts.length === 0,
+                'aria-haspopup': 'listbox',
+                'aria-expanded': multiOpen.value ? 'true' : 'false',
+                onClick: () => { multiOpen.value = !multiOpen.value },
+              }, [
+                h('span', {
+                  class: ['fbp-fp-multi-value', selectedLabels.length ? '' : 'is-placeholder'],
+                }, selectedLabels.length ? selectedLabels.join('、') : ph || '请选择'),
+                h('span', { class: 'fbp-fp-multi-arrow', 'aria-hidden': 'true' }, '⌄'),
+              ]),
+              opts.length === 0
+                ? h('span', { class: 'fbp-fp-empty-hint' }, '无选项 — 请用配置助手配置')
+                : (multiOpen.value
+                    ? h('div', { class: 'fbp-fp-multi-menu', role: 'listbox', 'aria-multiselectable': 'true' }, opts.map(o => {
+                        const code = String(o.code)
+                        const checked = selectedCodes.includes(code)
+                        return h('label', { class: 'fbp-fp-multi-option' }, [
+                          h('input', {
+                            type: 'checkbox',
+                            checked,
+                            onChange: () => toggleOption(code),
+                          }),
+                          h('span', null, o.name || o.code),
+                        ])
+                      }))
+                    : null),
+            ])
+          }
         case 'radio':
           return h('div', { class: 'fbp-fp-radio-group' }, opts.length === 0
             ? [h('span', { class: 'fbp-fp-empty-hint' }, '无选项 — 请用配置助手配置')]
@@ -696,7 +790,6 @@ const modelCode = ref('')
 const loading = ref(false)
 const error = ref('')
 
-const hoveredFieldId = ref<string>('')
 const formValues = ref<Record<string, any>>({})
 
 watch(() => props.formId, () => { formValues.value = {} })
@@ -706,9 +799,6 @@ function onPreviewSubmit() {
 }
 function onPreviewCancel() {
   formValues.value = {}
-}
-function onInlineEditHint(f: FormField) {
-  alert(`请用右下角"配置助手"浮窗对话, 如:\n\n"把字段 ${f.name || f.code} 改成 XXX"\n"把 ${f.code} 改成必填"`)
 }
 
 /* ────────────────────────────────────────────────────────────────
@@ -737,14 +827,8 @@ async function reload(opts: { silent?: boolean; force?: boolean } = {}) {
         error.value = ''  // silent 重试成功时清掉旧错误态, 让表单显出来
         const comps = respFD.components || []
         fields.value = comps.map((c: any): FormField => {
-          const compType = String(c.component_type || '')
-          let widgetType = componentTypeToWidget(compType)
-          // 0-1 生成把下拉单选 FORM_SELECT_INPUT_SINGLE 写成多选别名 FORM_SELECT_INPUT
-          // (平台用 chooseType 区分单/多)，但 choose_type 仍是 SINGLE → 按它纠回单选 select，
-          // 否则只读面板把单选下拉误渲成可多选。
-          if (compType === 'FORM_SELECT_INPUT' && String(c.choose_type || '').toUpperCase() === 'SINGLE') {
-            widgetType = 'select'
-          }
+          const compType = componentTypeOf(c)
+          const widgetType = componentToPreviewWidget(c)
           const boCode = String(c.bo_code || '')
           const [_modelCode, fieldCode] = boCode.includes('~') ? boCode.split('~') : ['', boCode]
           if (_modelCode) modelCode.value = _modelCode
@@ -787,9 +871,7 @@ async function reload(opts: { silent?: boolean; force?: boolean } = {}) {
             required: !!c.required,
             editable: true,
             options: needsOptions(widgetType)
-              ? (Array.isArray(c.choose_options)
-                  ? c.choose_options.map((o: any) => ({ code: String(o.code ?? ''), name: String(o.name ?? o.code ?? '') }))
-                  : [])
+              ? componentOptionsOf(c)
               : undefined,
             description: String(mf?.description || ''),
             max_length: mf?.max_length ? Number(mf.max_length) : undefined,
@@ -1057,21 +1139,6 @@ onUnmounted(_clearRefreshTimers)
   color: var(--err, #ef4444);
   font-weight: 500;
 }
-.fbp-form-edit-hint {
-  margin-left: auto;
-  background: transparent;
-  border: 0;
-  color: var(--brand);
-  font-size: 11.5px;
-  cursor: pointer;
-  font-family: inherit;
-  padding: 2px 4px;
-  border-radius: 4px;
-  transition: background 0.15s;
-}
-.fbp-form-edit-hint:hover {
-  background: var(--brand-soft, #eff6ff);
-}
 .fbp-form-desc {
   margin: 2px 0 0;
   font-size: 11.5px;
@@ -1110,6 +1177,88 @@ onUnmounted(_clearRefreshTimers)
 .fbp-fp-input[readonly] { background: var(--surface-2); color: var(--text-3); }
 textarea.fbp-fp-input { resize: vertical; min-height: 64px; font-family: inherit; }
 select.fbp-fp-input { cursor: pointer; }
+
+.fbp-fp-multi-select {
+  position: relative;
+  width: 100%;
+}
+.fbp-fp-multi-select :deep(.fbp-fp-multi-trigger) {
+  width: 100%;
+  min-height: 34px;
+  padding: 7px 10px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: var(--surface);
+  color: var(--text);
+  font: inherit;
+  font-size: 13px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  text-align: left;
+  cursor: pointer;
+  outline: none;
+  box-sizing: border-box;
+}
+.fbp-fp-multi-select :deep(.fbp-fp-multi-trigger:focus-visible),
+.fbp-fp-multi-select[data-open=true] :deep(.fbp-fp-multi-trigger) {
+  border-color: var(--brand);
+}
+.fbp-fp-multi-select :deep(.fbp-fp-multi-trigger:disabled) {
+  cursor: not-allowed;
+  background: var(--surface-2);
+  color: var(--text-4);
+}
+.fbp-fp-multi-select :deep(.fbp-fp-multi-value) {
+  min-width: 0;
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.fbp-fp-multi-select :deep(.fbp-fp-multi-value.is-placeholder) { color: var(--text-3); }
+.fbp-fp-multi-select :deep(.fbp-fp-multi-arrow) {
+  flex: 0 0 auto;
+  color: var(--text-3);
+  font-size: 14px;
+  line-height: 1;
+  transition: transform 0.12s;
+}
+.fbp-fp-multi-select[data-open=true] :deep(.fbp-fp-multi-arrow) {
+  transform: rotate(180deg);
+}
+.fbp-fp-multi-select :deep(.fbp-fp-multi-menu) {
+  position: absolute;
+  top: calc(100% + 4px);
+  left: 0;
+  right: 0;
+  z-index: 30;
+  max-height: 184px;
+  overflow: auto;
+  padding: 4px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: var(--surface);
+  box-shadow: 0 10px 24px rgba(15, 23, 42, 0.12);
+}
+.fbp-fp-multi-select :deep(.fbp-fp-multi-option) {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 30px;
+  padding: 5px 8px;
+  border-radius: 4px;
+  color: var(--text);
+  font-size: 13px;
+  cursor: pointer;
+}
+.fbp-fp-multi-select :deep(.fbp-fp-multi-option:hover) {
+  background: var(--surface-2);
+}
+.fbp-fp-multi-select :deep(.fbp-fp-multi-option input) {
+  margin: 0;
+}
 
 /* 子表 (FORM_WIDGET_SON_TABLE) 样式见下方非 scoped <style> 块 — FormPreviewInput
    由 h() 渲染, 子表内层元素 (工具栏/表头/分页) 拿不到 scoped data-v 作用域 ID. */

@@ -189,8 +189,8 @@ tools:
     sections: [logic]
     agents: [builder, config]
     category: lifecycle
-    description: "design-v4 I4: 把本地 ProcessDefinition 真同步到 apaas 平台 (24→17 节点翻译 + save_process_config)。"
-    search_hint: "流程 审批流 同步 提交流程 process workflow 部署流程"
+    description: "把本地 ProcessDefinition 真同步到 apaas 平台，支持条件分支/并行/审批节点和 edges 拓扑。"
+    search_hint: "流程 审批流 条件分支 并行 同步 提交流程 process workflow deploy branch"
   disable_apaas_app_dict:
     sections: [data]
     agents: [builder, config]
@@ -262,6 +262,12 @@ tools:
     agents: [builder, config]
     category: process
     description: "拉取 aPaaS 平台已有流程详情，并转换为前端 ProcessDesigner 可渲染的节点和连线。"
+  get_apaas_user_name:
+    sections: [permission, global]
+    agents: [builder, coding, config]
+    category: introspection
+    description: "按 aPaaS userId 查询用户名称（POST /xdap-admin/user/query/userList）。"
+    search_hint: "用户 用户名 userId user name permissionObjectValue USER 权限主体"
   get_dev_fix_policy:
     sections: [global]
     agents: [config]
@@ -517,7 +523,7 @@ tools:
     sections: [logic]
     agents: [builder, config]
     category: process
-    description: "给某个表单菜单设置审批流程 (用 /common/resource/processConfig 管理 API)."
+    description: "给某个表单菜单设置审批流程；简单顺序审批传 stages，条件分支/并行流程传 process_definition.nodes + process_definition.edges。"
   set_apaas_form_permissions:
     sections: [permission]
     agents: [builder, config]

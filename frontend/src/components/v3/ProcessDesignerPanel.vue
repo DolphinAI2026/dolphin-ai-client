@@ -54,10 +54,16 @@
     <!-- 应用无流程 — 友好空态 + 引导对话 CTA.
          注: 区别于 `pdp-canvas-hint` ("「X」尚无流程定义" 那个) — 那个是选中流程但定义空,
          这里是整个应用一个流程都没有 (例如 app_id=13 图书借阅管理系统). -->
-    <div v-else-if="processList.length === 0" class="pdp-empty pdp-empty-process">
+    <div v-else-if="visibleProcessList.length === 0" class="pdp-empty pdp-empty-process">
       <div class="pdp-empty-icon" aria-hidden="true"><AppIcon name="shuffle" :size="48" /></div>
-      <h3>暂无业务流程</h3>
-      <p>用配置助手对话生成首个审批流, 例如：「为借书申请加管理员审批流程」</p>
+      <h3>{{ props.formId && processList.length > 0 ? '当前表单暂无流程' : '暂无业务流程' }}</h3>
+      <p>
+        {{
+          props.formId && processList.length > 0
+            ? '这个菜单还没有绑定流程；需要时可用配置助手创建，或到低代码后台配置。'
+            : '用配置助手对话生成首个审批流, 例如：「为借书申请加管理员审批流程」'
+        }}
+      </p>
       <button
         type="button"
         class="pdp-btn pdp-btn-primary pdp-empty-cta"
@@ -155,7 +161,6 @@
 <script setup lang="ts">
 import { ref, computed, watch, onMounted, onBeforeUnmount, shallowRef, reactive, nextTick } from 'vue'
 import { Graph } from '@antv/x6'
-import { ElMessage } from 'element-plus'
 import AppIcon from '@/components/common/AppIcon.vue'
 import OpenLowcodeBackendButton from '@/components/v3/OpenLowcodeBackendButton.vue'
 import request from '@/utils/request'
@@ -186,6 +191,12 @@ const containerRef = ref<HTMLElement | null>(null)
 let resizeObserver: ResizeObserver | null = null
 let refitTimer: ReturnType<typeof setTimeout> | null = null
 const graphRef = shallowRef<Graph | null>(null)
+let themeObserver: MutationObserver | null = null
+let lastRenderedDefinition: {
+  nodes: ProcessDefinitionNodeOut[]
+  edges: ProcessDefinitionEdgeOut[]
+  preservePositions: boolean
+} | null = null
 
 /** 全部 node state (reactive). 每个 node = id + 各 type 配置. */
 const nodeStates = reactive<Record<string, ProcessNode>>({})
@@ -217,16 +228,17 @@ const lastSavedAt = ref<string | null>(null)
 
 const activeProcess = computed<ProcessItem | null>(() => {
   if (!activeProcessId.value) return null
-  return processList.value.find(p => p.id === activeProcessId.value) || null
+  const found = processList.value.find(p => p.id === activeProcessId.value) || null
+  if (props.formId && found?.form_id !== props.formId) return null
+  return found
 })
 
 // 2026-05-28: 流程列表只显示"当前表单/菜单"的流程 (用户反馈别把全应用流程都列出来)。
-// props.formId 在时按 form_id 过滤; 过滤后为空 (数据不一致) 则兜底显示全部, 避免一个都看不到。
+// props.formId 在时严格按 form_id 过滤; 当前表单没流程就显示空态, 不能兜底打开别的表单流程。
 const visibleProcessList = computed<ProcessItem[]>(() => {
   const fid = props.formId
   if (!fid) return processList.value
-  const matched = processList.value.filter(p => p.form_id === fid)
-  return matched.length ? matched : processList.value
+  return processList.value.filter(p => p.form_id === fid)
 })
 
 const statsLine = computed(() => {
@@ -240,14 +252,152 @@ const statsLine = computed(() => {
 })
 
 
+function pushDisplayLabel(target: string[], value: unknown, allowOpaque = false) {
+  if (value === null || value === undefined) return
+  const text = String(value).trim()
+  if (!text) return
+  if (!allowOpaque && /^\d{10,}$/.test(text)) return
+  if (!target.includes(text)) target.push(text)
+}
+
+function collectApproverLabels(value: unknown, target: string[]) {
+  if (!value) return
+  if (Array.isArray(value)) {
+    value.forEach(item => collectApproverLabels(item, target))
+    return
+  }
+  if (typeof value === 'object') {
+    const item = value as Record<string, unknown>
+    const type = String(item.type || item.approverType || '').trim().toUpperCase()
+    const before = target.length
+    for (const key of ['label', 'name', 'roleName', 'userName', 'displayName', 'subjectName', 'title']) {
+      pushDisplayLabel(target, item[key], true)
+    }
+    if (target.length === before && type === 'SUBMITTER') {
+      pushDisplayLabel(target, '申请人', true)
+    }
+    return
+  }
+  pushDisplayLabel(target, value)
+}
+
+function processApproverDisplay(props: Record<string, unknown> | undefined): string {
+  if (!props) return ''
+  const labels: string[] = []
+  for (const key of [
+    'approverLabels',
+    'approver_labels',
+    'approverNames',
+    'approver_names',
+    'roleLabels',
+    'role_names',
+  ]) {
+    collectApproverLabels(props[key], labels)
+  }
+  if (!labels.length) collectApproverLabels(props.approvers, labels)
+  if (!labels.length) return ''
+  const head = labels.slice(0, 2).join('、')
+  return labels.length > 2 ? `${head} 等${labels.length}个` : head
+}
+
+interface ProcessGraphPalette {
+  canvasBg: string
+  gridColor: string
+  nodeFill: string
+  nodeText: string
+  nodeSubText: string
+  endpointStroke: string
+  edgeStroke: string
+  edgeLabelFill: string
+  edgeLabelStroke: string
+  edgeLabelText: string
+  shadowColor: string
+}
+
+function cssVar(name: string, fallback: string): string {
+  if (typeof document === 'undefined') return fallback
+  const value = getComputedStyle(document.documentElement).getPropertyValue(name).trim()
+  return value || fallback
+}
+
+function isDarkTheme(): boolean {
+  if (typeof document === 'undefined') return false
+  const root = document.documentElement
+  return root.getAttribute('data-theme') === 'dark' || root.classList.contains('dark')
+}
+
+function processGraphPalette(): ProcessGraphPalette {
+  if (isDarkTheme()) {
+    return {
+      canvasBg: cssVar('--bg', '#0B1224'),
+      gridColor: 'rgba(168, 180, 208, 0.16)',
+      nodeFill: cssVar('--surface', '#131A2E'),
+      nodeText: cssVar('--text', '#E8EEFB'),
+      nodeSubText: cssVar('--text-2', '#A8B4D0'),
+      endpointStroke: cssVar('--bg', '#0B1224'),
+      edgeStroke: 'rgba(168, 180, 208, 0.42)',
+      edgeLabelFill: cssVar('--surface', '#131A2E'),
+      edgeLabelStroke: cssVar('--line-strong', 'rgba(255, 255, 255, 0.13)'),
+      edgeLabelText: cssVar('--text-2', '#A8B4D0'),
+      shadowColor: 'rgba(0, 0, 0, 0.42)',
+    }
+  }
+  return {
+    canvasBg: cssVar('--surface-2', '#F8FAFC'),
+    gridColor: '#e2e8f0',
+    nodeFill: '#ffffff',
+    nodeText: '#0f172a',
+    nodeSubText: '#64748b',
+    endpointStroke: '#ffffff',
+    edgeStroke: '#cbd5e1',
+    edgeLabelFill: '#ffffff',
+    edgeLabelStroke: '#e2e8f0',
+    edgeLabelText: '#475569',
+    shadowColor: 'rgba(15, 23, 42, 0.12)',
+  }
+}
+
+function buildEdgeAttrs(palette = processGraphPalette()): Record<string, unknown> {
+  return {
+    line: {
+      stroke: palette.edgeStroke,
+      strokeWidth: 2,
+      targetMarker: { name: 'block', size: 6 },
+    },
+  }
+}
+
+function buildEdgeLabels(text: string, palette = processGraphPalette()): Array<Record<string, unknown>> | undefined {
+  if (!text) return undefined
+  return [{
+    attrs: {
+      label: {
+        text,
+        fill: palette.edgeLabelText,
+        fontSize: 11,
+        fontWeight: 500,
+      },
+      body: {
+        fill: palette.edgeLabelFill,
+        stroke: palette.edgeLabelStroke,
+        strokeWidth: 1,
+        rx: 4,
+        ry: 4,
+      },
+    },
+  }]
+}
+
 /** 用 cat code 决定 shape, 用 type/cat 决定 color.
  *  2026-06-08 视觉重做: 实心起止端点 + 白底类别色描边卡片 + 柔和投影,
  *  去掉空心环 / emoji / 浅色平涂的"剪贴画"观感。 */
-function buildNodeSpec(type: NodeType, label: string, _icon: string): Record<string, unknown> {
+function buildNodeSpec(type: NodeType, label: string, _icon: string, roleLabel = ''): Record<string, unknown> {
   const cat = getNodeCategoryCode(type)
   const color = getNodeColor(type)
+  const meta = cat === 'approval' ? roleLabel.trim() : ''
+  const palette = processGraphPalette()
   // x6 内置 dropShadow filter — 给所有节点统一一层柔和投影, 拉开层次感。
-  const shadow = { name: 'dropShadow', args: { dx: 0, dy: 3, blur: 8, color: 'rgba(15,23,42,0.12)' } }
+  const shadow = { name: 'dropShadow', args: { dx: 0, dy: 3, blur: 8, color: palette.shadowColor } }
 
   if (cat === 'entry') {
     // 实心圆端点 (start = 绿, end = 红) — 白字白细边 + 阴影, 不再是空心环。
@@ -259,7 +409,7 @@ function buildNodeSpec(type: NodeType, label: string, _icon: string): Record<str
       attrs: {
         body: {
           fill: color,
-          stroke: '#ffffff',
+          stroke: palette.endpointStroke,
           strokeWidth: 2,
           filter: shadow,
         },
@@ -273,7 +423,7 @@ function buildNodeSpec(type: NodeType, label: string, _icon: string): Record<str
   }
 
   if (cat === 'logic') {
-    // 菱形 (条件分支 / 多分支 / 并行 / 汇聚 / 等待) — 白底类别色边 + 阴影。
+    // 菱形 (条件分支 / 多分支 / 并行 / 汇聚 / 等待) — 主题底类别色边 + 阴影。
     return {
       shape: 'polygon',
       width: 124,
@@ -282,13 +432,13 @@ function buildNodeSpec(type: NodeType, label: string, _icon: string): Record<str
       attrs: {
         body: {
           refPoints: '0,10 10,0 20,10 10,20',
-          fill: '#ffffff',
+          fill: palette.nodeFill,
           stroke: color,
           strokeWidth: 1.5,
           filter: shadow,
         },
         label: {
-          fill: '#0f172a',
+          fill: palette.nodeText,
           fontSize: 12,
           fontWeight: 600,
         },
@@ -296,21 +446,23 @@ function buildNodeSpec(type: NodeType, label: string, _icon: string): Record<str
     }
   }
 
-  // approval / action — 圆角白卡片 + 类别色描边 + 类别色左侧强调条 + 柔和投影。
+  // approval / action — 圆角卡片 + 类别色描边 + 类别色左侧强调条 + 柔和投影。
+  const height = meta ? 66 : 54
   return {
     markup: [
       { tagName: 'rect', selector: 'body' },
       { tagName: 'rect', selector: 'accent' },
       { tagName: 'text', selector: 'label' },
+      { tagName: 'text', selector: 'roleLabel' },
     ],
-    width: 172,
-    height: 54,
+    width: meta ? 184 : 172,
+    height,
     label,
     attrs: {
       body: {
         refWidth: '100%',
         refHeight: '100%',
-        fill: '#ffffff',
+        fill: palette.nodeFill,
         stroke: color,
         strokeWidth: 1.25,
         rx: 13,
@@ -319,19 +471,32 @@ function buildNodeSpec(type: NodeType, label: string, _icon: string): Record<str
       },
       accent: {
         x: 0,
-        y: 12,
+        y: meta ? 14 : 12,
         width: 4,
-        height: 30,
+        height: meta ? 38 : 30,
         rx: 2,
         ry: 2,
         fill: color,
       },
       label: {
         refX: 0.5,
-        refY: 0.5,
-        fill: '#0f172a',
+        refY: meta ? 0.38 : 0.5,
+        text: label,
+        fill: palette.nodeText,
         fontSize: 13,
         fontWeight: 600,
+        textAnchor: 'middle',
+        textVerticalAnchor: 'middle',
+      },
+      roleLabel: {
+        refX: 0.5,
+        refY: 0.67,
+        text: meta,
+        fill: palette.nodeSubText,
+        fontSize: 11,
+        fontWeight: 500,
+        textAnchor: 'middle',
+        textVerticalAnchor: 'middle',
       },
     },
   }
@@ -340,6 +505,55 @@ function buildNodeSpec(type: NodeType, label: string, _icon: string): Record<str
 function refreshCounts(graph: Graph) {
   nodeCount.value = graph.getNodes().length
   edgeCount.value = graph.getEdges().length
+}
+
+function clearActiveProcessCanvas() {
+  selectedNodeId.value = null
+  activeProcessId.value = null
+  lastSavedAt.value = null
+  lastRenderedDefinition = null
+  for (const k of Object.keys(nodeStates)) delete nodeStates[k]
+  const graph = graphRef.value
+  if (graph) graph.clearCells()
+  nodeCount.value = 0
+  edgeCount.value = 0
+}
+
+function disposeGraph() {
+  resizeObserver?.disconnect()
+  resizeObserver = null
+  graphRef.value?.dispose()
+  graphRef.value = null
+}
+
+function refreshGraphTheme() {
+  const graph = graphRef.value
+  if (!graph) return
+  const palette = processGraphPalette()
+  graph.drawBackground({ color: palette.canvasBg })
+  graph.drawGrid({ type: 'dot', args: { color: palette.gridColor, thickness: 1 } })
+  if (lastRenderedDefinition) {
+    renderDefinition(lastRenderedDefinition.nodes, lastRenderedDefinition.edges, {
+      preservePositions: lastRenderedDefinition.preservePositions,
+    })
+  }
+}
+
+function observeThemeChanges() {
+  if (typeof MutationObserver === 'undefined' || typeof document === 'undefined') return
+  themeObserver?.disconnect()
+  themeObserver = new MutationObserver(() => refreshGraphTheme())
+  themeObserver.observe(document.documentElement, {
+    attributes: true,
+    attributeFilter: ['data-theme', 'class'],
+  })
+}
+
+async function ensureGraphReady() {
+  await nextTick()
+  if (!graphRef.value && containerRef.value) {
+    initGraph()
+  }
 }
 
 /** 默认 ProcessNode 工厂 — 按 type 注入对应字段默认值. */
@@ -389,13 +603,14 @@ function makeDefaultNode(id: string, type: NodeType, label: string): ProcessNode
 
 function initGraph() {
   if (!containerRef.value) return
+  const palette = processGraphPalette()
   const graph = new Graph({
     container: containerRef.value,
-    background: { color: '#f8fafc' },
+    background: { color: palette.canvasBg },
     grid: {
       visible: true,
       type: 'dot',
-      args: { color: '#e2e8f0', thickness: 1 },
+      args: { color: palette.gridColor, thickness: 1 },
     },
     panning: { enabled: true, eventTypes: ['leftMouseDown'] },
     mousewheel: { enabled: true, zoomAtMousePosition: true, modifiers: 'ctrl' },
@@ -411,14 +626,9 @@ function initGraph() {
       allowPort: true,
       snap: { radius: 20 },
       createEdge() {
+        const edgePalette = processGraphPalette()
         return this.createEdge({
-          attrs: {
-            line: {
-              stroke: '#cbd5e1',
-              strokeWidth: 2,
-              targetMarker: { name: 'block', size: 6 },
-            },
-          },
+          attrs: buildEdgeAttrs(edgePalette),
         })
       },
     },
@@ -475,16 +685,9 @@ function onRequestConfigChat() {
 async function onSelectProcess(processId: string) {
   if (activeProcessId.value === processId) return
   // 切流程: 清当前 canvas state, 准备渲染新流程
-  selectedNodeId.value = null
-  for (const k of Object.keys(nodeStates)) delete nodeStates[k]
   const g = graphRef.value
-  if (g) {
-    g.clearCells()
-    nodeCount.value = 0
-    edgeCount.value = 0
-  }
+  clearActiveProcessCanvas()
   activeProcessId.value = processId
-  lastSavedAt.value = null
   // 默认进 read-only — 切到编辑才能改
   readOnly.value = true
   if (g) {
@@ -530,15 +733,17 @@ async function reloadProcessList() {
       })
       // 尝试按 form_id 自动选中匹配项 (来自 ChatPage 选菜单的 form_id)
       let autoSelected: string | null = null
-      if (props.formId && processList.value.length > 0) {
+      if (props.formId) {
         const match = processList.value.find(p => p.form_id === props.formId)
         if (match) {
           activeProcessId.value = match.id
           autoSelected = match.id
+        } else {
+          clearActiveProcessCanvas()
         }
       }
-      // 没匹配但只有 1 个流程 → 自动选中
-      if (!activeProcessId.value && processList.value.length === 1) {
+      // 没有表单上下文时, 只有 1 个流程才自动选中；有 formId 时不能跨表单兜底。
+      if (!props.formId && !activeProcessId.value && processList.value.length === 1) {
         activeProcessId.value = processList.value[0].id
         autoSelected = processList.value[0].id
       }
@@ -584,6 +789,10 @@ interface ProcessDefinitionEdgeOut {
   label?: string
   condition?: string
 }
+type RenderBox = { x: number; y: number; width: number; height: number; cx: number; cy: number }
+type AnchorName = 'top' | 'right' | 'bottom' | 'left' | 'center'
+type PositionTransform = { pivotX: number; scaleX: number }
+type EdgePoint = { x: number; y: number }
 
 /** 自动布局 — 按入度拓扑分层 (BFS) + 每层水平居中铺开, 返回 nodeId → {x,y}. */
 function computeAutoLayout(
@@ -632,14 +841,171 @@ function computeAutoLayout(
   return pos
 }
 
+function hasMeaningfulSourcePositions(nodes: ProcessDefinitionNodeOut[]): boolean {
+  return nodes.some(n => {
+    const x = Number(n.position?.x)
+    const y = Number(n.position?.y)
+    return Number.isFinite(x) && Number.isFinite(y) && (Math.abs(x) > 0.1 || Math.abs(y) > 0.1)
+  })
+}
+
+function estimateNodeWidth(node: ProcessDefinitionNodeOut): number {
+  const type = node.type as NodeType
+  const cat = getNodeCategoryCode(type)
+  if (cat === 'entry') return 50
+  if (cat === 'logic') return 124
+  return getNodeCategoryCode(type) === 'approval' && processApproverDisplay(node.props) ? 184 : 172
+}
+
+function computeSourcePositionTransform(nodes: ProcessDefinitionNodeOut[]): PositionTransform {
+  const roundedBuckets = new Map<number, number>()
+  for (const node of nodes) {
+    const x = Number(node.position?.x)
+    if (!Number.isFinite(x)) continue
+    const bucket = Math.round(x / 8) * 8
+    roundedBuckets.set(bucket, (roundedBuckets.get(bucket) || 0) + 1)
+  }
+  let pivotX = 320
+  let maxCount = 0
+  for (const [bucket, count] of roundedBuckets) {
+    if (count > maxCount) {
+      maxCount = count
+      pivotX = bucket
+    }
+  }
+
+  const ROW_TOLERANCE = 28
+  const MIN_GAP = 24
+  let scaleX = 1
+  const sortedByY = [...nodes]
+    .filter(n => Number.isFinite(Number(n.position?.x)) && Number.isFinite(Number(n.position?.y)))
+    .sort((a, b) => Number(a.position.y) - Number(b.position.y))
+  const rows: ProcessDefinitionNodeOut[][] = []
+  for (const node of sortedByY) {
+    const row = rows.find(items => Math.abs(Number(items[0].position.y) - Number(node.position.y)) <= ROW_TOLERANCE)
+    if (row) row.push(node)
+    else rows.push([node])
+  }
+  for (const row of rows) {
+    if (row.length < 2) continue
+    const items = [...row].sort((a, b) => Number(a.position.x) - Number(b.position.x))
+    for (let i = 1; i < items.length; i += 1) {
+      const prev = items[i - 1]
+      const curr = items[i]
+      const prevCenter = Number(prev.position.x) + estimateNodeWidth(prev) / 2
+      const currCenter = Number(curr.position.x) + estimateNodeWidth(curr) / 2
+      const distance = currCenter - prevCenter
+      const needed = (estimateNodeWidth(prev) + estimateNodeWidth(curr)) / 2 + MIN_GAP
+      if (distance > 0 && distance < needed) {
+        scaleX = Math.max(scaleX, needed / distance)
+      }
+    }
+  }
+
+  return { pivotX, scaleX: Math.min(scaleX, 1.8) }
+}
+
+function transformSourcePosition(position: { x: number; y: number }, transform: PositionTransform): { x: number; y: number } {
+  return {
+    x: transform.pivotX + (position.x - transform.pivotX) * transform.scaleX,
+    y: position.y,
+  }
+}
+
+function chooseEdgeAnchors(edge: ProcessDefinitionEdgeOut, boxes: Map<string, RenderBox>): {
+  source: { cell: string; anchor: { name: AnchorName } }
+  target: { cell: string; anchor: { name: AnchorName } }
+} {
+  const sourceBox = boxes.get(edge.source)
+  const targetBox = boxes.get(edge.target)
+  if (!sourceBox || !targetBox) {
+    return {
+      source: { cell: edge.source, anchor: { name: 'center' } },
+      target: { cell: edge.target, anchor: { name: 'center' } },
+    }
+  }
+
+  const dx = targetBox.cx - sourceBox.cx
+  const dy = targetBox.cy - sourceBox.cy
+  if (Math.abs(dy) <= Math.max(sourceBox.height, targetBox.height) * 0.45) {
+    return dx >= 0
+      ? {
+          source: { cell: edge.source, anchor: { name: 'right' } },
+          target: { cell: edge.target, anchor: { name: 'left' } },
+        }
+      : {
+          source: { cell: edge.source, anchor: { name: 'left' } },
+          target: { cell: edge.target, anchor: { name: 'right' } },
+        }
+  }
+
+  return dy >= 0
+    ? {
+        source: { cell: edge.source, anchor: { name: 'bottom' } },
+        target: { cell: edge.target, anchor: { name: 'top' } },
+      }
+    : {
+        source: { cell: edge.source, anchor: { name: 'top' } },
+        target: { cell: edge.target, anchor: { name: 'bottom' } },
+      }
+}
+
+function buildPointEdgeConnection(edge: ProcessDefinitionEdgeOut, boxes: Map<string, RenderBox>): {
+  source: EdgePoint
+  target: EdgePoint
+  vertices?: EdgePoint[]
+} | null {
+  const sourceBox = boxes.get(edge.source)
+  const targetBox = boxes.get(edge.target)
+  if (!sourceBox || !targetBox) return null
+
+  const dx = targetBox.cx - sourceBox.cx
+  const dy = targetBox.cy - sourceBox.cy
+  if (Math.abs(dy) <= Math.max(sourceBox.height, targetBox.height) * 0.45) {
+    return dx >= 0
+      ? {
+          source: { x: sourceBox.x + sourceBox.width, y: sourceBox.cy },
+          target: { x: targetBox.x, y: targetBox.cy },
+        }
+      : {
+          source: { x: sourceBox.x, y: sourceBox.cy },
+          target: { x: targetBox.x + targetBox.width, y: targetBox.cy },
+        }
+  }
+
+  const source = dy >= 0
+    ? { x: sourceBox.cx, y: sourceBox.y + sourceBox.height }
+    : { x: sourceBox.cx, y: sourceBox.y }
+  const target = dy >= 0
+    ? { x: targetBox.cx, y: targetBox.y }
+    : { x: targetBox.cx, y: targetBox.y + targetBox.height }
+  const vertices = Math.abs(dx) > 24
+    ? [
+        { x: source.x, y: source.y + (target.y - source.y) / 2 },
+        { x: target.x, y: source.y + (target.y - source.y) / 2 },
+      ]
+    : undefined
+  return { source, target, vertices }
+}
+
 /** H2: 渲染本地 ProcessDefinition (从 GET /definition 拿到的 nodes/edges) 到 x6. */
-function renderDefinition(defNodes: ProcessDefinitionNodeOut[], defEdges: ProcessDefinitionEdgeOut[]) {
+function renderDefinition(
+  defNodes: ProcessDefinitionNodeOut[],
+  defEdges: ProcessDefinitionEdgeOut[],
+  options: { preservePositions?: boolean } = {},
+) {
   const g = graphRef.value
   if (!g) return
+  const palette = processGraphPalette()
+  const preservePositions = options.preservePositions === true && hasMeaningfulSourcePositions(defNodes)
+  lastRenderedDefinition = { nodes: defNodes, edges: defEdges, preservePositions }
   g.clearCells()
   for (const k of Object.keys(nodeStates)) delete nodeStates[k]
-  // 用拓扑自动布局覆盖 apaas 原始坐标 (拉直连线)
-  const layout = computeAutoLayout(defNodes, defEdges)
+  // aPaaS 详情自带设计器坐标；分支流必须保留平台坐标，否则拓扑自动布局会把侧向分支排进主链。
+  // 本地旧 definition 没有可信坐标时，仍回退到拓扑自动布局。
+  const layout = preservePositions ? new Map<string, { x: number; y: number }>() : computeAutoLayout(defNodes, defEdges)
+  const sourceTransform = preservePositions ? computeSourcePositionTransform(defNodes) : null
+  const renderBoxes = new Map<string, RenderBox>()
   // 节点
   for (const n of defNodes) {
     const type = n.type as NodeType
@@ -648,19 +1014,33 @@ function renderDefinition(defNodes: ProcessDefinitionNodeOut[], defEdges: Proces
       // 未知 type — 跳过, 不挡其他节点渲染
       continue
     }
-    const spec = buildNodeSpec(type, n.label || def.label, def.icon)
-    const p = layout.get(n.id) || n.position || { x: 100, y: 100 }
+    const roleLabel = getNodeCategoryCode(type) === 'approval' ? processApproverDisplay(n.props) : ''
+    const spec = buildNodeSpec(type, n.label || def.label, def.icon, roleLabel)
+    const p = preservePositions
+      ? transformSourcePosition(n.position || { x: 100, y: 100 }, sourceTransform!)
+      : (layout.get(n.id) || n.position || { x: 100, y: 100 })
     // 居中对齐: 布局给的是该层「中心 x」, 但 x6 按左上角定位、各节点宽度不同
     // (开始/结束 50px 圆 vs 审批卡片 172px)。若都左对齐到同一 x, 节点中心就错开了,
     // 连线只能斜着连 → 弯弯绕绕。减去半宽让各节点「中心」对齐, 连线即拉直。
     const w = typeof spec.width === 'number' ? spec.width : 140
+    const h = typeof spec.height === 'number' ? spec.height : 54
+    const nodeX = preservePositions ? p.x : p.x - w / 2
+    const nodeY = p.y
     g.addNode({
       id: n.id,
-      x: p.x - w / 2,
-      y: p.y,
+      x: nodeX,
+      y: nodeY,
       ...spec,
       data: { type, color: getNodeColor(type) },
     } as never)
+    renderBoxes.set(n.id, {
+      x: nodeX,
+      y: nodeY,
+      width: w,
+      height: h,
+      cx: nodeX + w / 2,
+      cy: nodeY + h / 2,
+    })
     const st = makeDefaultNode(n.id, type, n.label || def.label)
     st.x = p.x
     st.y = p.y
@@ -675,20 +1055,19 @@ function renderDefinition(defNodes: ProcessDefinitionNodeOut[], defEdges: Proces
   // 边
   for (const e of defEdges) {
     try {
+      const edgeLabel = e.label || e.condition || ''
+      const pointConnection = preservePositions ? buildPointEdgeConnection(e, renderBoxes) : null
+      const terminals = pointConnection ? null : chooseEdgeAnchors(e, renderBoxes)
       g.addEdge({
         id: e.id,
-        source: e.source,
-        target: e.target,
-        labels: e.label ? [{ attrs: { label: { text: e.label } } }] : undefined,
+        source: pointConnection?.source || terminals!.source,
+        target: pointConnection?.target || terminals!.target,
+        vertices: pointConnection?.vertices,
+        labels: buildEdgeLabels(edgeLabel, palette),
         data: e.condition ? { condition: e.condition } : undefined,
-        attrs: {
-          line: {
-            stroke: '#cbd5e1',
-            strokeWidth: 2,
-            targetMarker: { name: 'block', size: 6 },
-          },
-        },
-        connector: { name: 'rounded', args: { radius: 12 } },
+        attrs: buildEdgeAttrs(palette),
+        router: { name: 'normal' },
+        connector: { name: 'normal' },
       } as never)
     } catch {
       // ignore bad edge
@@ -740,11 +1119,7 @@ async function tryLoadApaasDetail(processId: string): Promise<boolean> {
     }>(`/applications/${props.appId}/processes/${processId}/apaas-detail`)
     if (resp?.ok && (Array.isArray(resp.nodes) || Array.isArray(resp.edges)) && ((resp.nodes?.length || 0) + (resp.edges?.length || 0) > 0)) {
       await nextTick()
-      renderDefinition(resp.nodes || [], resp.edges || [])
-      ElMessage.info({
-        message: `已从 apaas 平台加载流程 — 编辑后点"保存"会覆盖本地副本, 点"部署"才同步回 apaas`,
-        duration: 4000,
-      })
+      renderDefinition(resp.nodes || [], resp.edges || [], { preservePositions: resp.source === 'apaas_process_detail' })
       return true
     }
     return false
@@ -759,21 +1134,19 @@ async function tryLoadApaasDetail(processId: string): Promise<boolean> {
 }
 
 onMounted(async () => {
+  observeThemeChanges()
   await reloadProcessList()
-  await nextTick()
-  // 流程 list 加载完, 不管有没有选中先 init graph 让 canvas 出现
-  // (canvas 区域始终显示, 是否有 node 由 activeProcess 决定)
-  if (processList.value.length > 0) {
-    initGraph()
+  // 当前表单有可见流程时才初始化画布；否则保持空态, 不渲染别的表单流程。
+  if (visibleProcessList.value.length > 0) {
+    await ensureGraphReady()
   }
 })
 
 onBeforeUnmount(() => {
-  resizeObserver?.disconnect()
-  resizeObserver = null
   if (refitTimer) { clearTimeout(refitTimer); refitTimer = null }
-  graphRef.value?.dispose()
-  graphRef.value = null
+  themeObserver?.disconnect()
+  themeObserver = null
+  disposeGraph()
 })
 
 watch(
@@ -781,8 +1154,7 @@ watch(
   async (next, prev) => {
     if (next === prev) return
     // 应用切了: 清 graph + state, 重新拉 list
-    graphRef.value?.dispose()
-    graphRef.value = null
+    disposeGraph()
     selectedNodeId.value = null
     activeProcessId.value = null
     for (const k of Object.keys(nodeStates)) delete nodeStates[k]
@@ -790,35 +1162,38 @@ watch(
     edgeCount.value = 0
     processList.value = []
     await reloadProcessList()
-    await nextTick()
-    if (processList.value.length > 0) {
-      initGraph()
+    if (visibleProcessList.value.length > 0) {
+      await ensureGraphReady()
     }
   },
 )
 
 watch(
   () => props.formId,
-  (next) => {
-    // ChatPage 切菜单 → 尝试匹配对应流程自动选中
-    if (next && processList.value.length > 0 && !activeProcessId.value) {
-      const match = processList.value.find(p => p.form_id === next)
-      if (match) {
-        onSelectProcess(match.id)
-      }
+  async (next, prev) => {
+    if (next === prev) return
+    if (!processList.value.length) return
+
+    const match = next
+      ? processList.value.find(p => p.form_id === next)
+      : null
+    if (!match) {
+      clearActiveProcessCanvas()
+      disposeGraph()
+      return
     }
+
+    await ensureGraphReady()
+    await onSelectProcess(match.id)
   },
 )
 
-// 一旦 list 拉到 (从 0 → N), 触发 initGraph (template 才有 containerRef)
+// 一旦当前表单可见流程从 0 → N, 触发 initGraph (template 才有 containerRef)
 watch(
-  () => processList.value.length,
+  () => visibleProcessList.value.length,
   async (next, prev) => {
     if (next > 0 && prev === 0 && !graphRef.value) {
-      await nextTick()
-      if (containerRef.value && !graphRef.value) {
-        initGraph()
-      }
+      await ensureGraphReady()
     }
   },
 )

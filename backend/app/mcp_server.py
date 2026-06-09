@@ -1696,13 +1696,158 @@ async def list_apaas_app_processes(env_id: int, apaas_app_id: str) -> dict:
     }
 
 
+def _as_nonempty_str(value: Any) -> str:
+    if value is None:
+        return ""
+    text = str(value).strip()
+    return text
+
+
+def _role_label_map(raw_roles: list | None) -> dict[str, str]:
+    labels: dict[str, str] = {}
+    for role in raw_roles or []:
+        if not isinstance(role, dict):
+            continue
+        role_id = _as_nonempty_str(role.get("id") or role.get("roleId"))
+        role_code = _as_nonempty_str(role.get("roleCode") or role.get("code"))
+        role_name = _as_nonempty_str(role.get("roleName") or role.get("name") or role_code or role_id)
+        if not role_name:
+            continue
+        for key in (role_id, role_code):
+            if key:
+                labels[key] = role_name
+    return labels
+
+
+async def _load_process_role_labels(env_id: int, apaas_app_id: str) -> dict[str, str]:
+    try:
+        from app.coding.apaas_tools import call_apaas_with_relogin
+        from app.database import AsyncSessionLocal
+
+        async with AsyncSessionLocal() as db:
+            raw_roles = await call_apaas_with_relogin(
+                env_id, db, lambda client: client.query_roles(apaas_app_id.strip())
+            )
+        return _role_label_map(raw_roles if isinstance(raw_roles, list) else [])
+    except Exception as exc:
+        logger.warning("load process role labels failed env=%s app=%s: %s", env_id, apaas_app_id, exc)
+        return {}
+
+
+def _append_unique_str(target: list[str], value: Any) -> None:
+    text = _as_nonempty_str(value)
+    if text and text not in target:
+        target.append(text)
+
+
+def _normalize_process_approver_labels(approvers: Any, role_labels: dict[str, str]) -> list[str]:
+    labels: list[str] = []
+    items = approvers if isinstance(approvers, list) else ([approvers] if approvers else [])
+    for item in items:
+        if isinstance(item, dict):
+            approver_type = _as_nonempty_str(item.get("type") or item.get("approverType")).upper()
+            raw_value = _as_nonempty_str(
+                item.get("value")
+                or item.get("roleId")
+                or item.get("roleCode")
+                or item.get("userId")
+                or item.get("id")
+            )
+            explicit_label = (
+                item.get("label")
+                or item.get("name")
+                or item.get("roleName")
+                or item.get("userName")
+                or item.get("displayName")
+                or item.get("subjectName")
+            )
+            if approver_type == "SUBMITTER":
+                _append_unique_str(labels, explicit_label or "申请人")
+                continue
+            mapped = role_labels.get(raw_value) if raw_value else ""
+            _append_unique_str(labels, explicit_label or mapped)
+        else:
+            raw_value = _as_nonempty_str(item)
+            _append_unique_str(labels, role_labels.get(raw_value) or raw_value)
+    return labels
+
+
+def _resolve_process_binding_from_raw(raw_list: list | None, process_ref: str) -> dict[str, str]:
+    ref = str(process_ref or "").strip()
+    for p in raw_list or []:
+        if not isinstance(p, dict):
+            continue
+        process_id = _as_nonempty_str(p.get("id"))
+        menu_id = _as_nonempty_str(p.get("menuId"))
+        form_id = _as_nonempty_str(p.get("formId"))
+        process_code = _as_nonempty_str(p.get("processCode"))
+        if ref and ref not in (process_id, menu_id, process_code):
+            continue
+        return {
+            "process_id": process_id or ref,
+            "menu_id": menu_id or ref,
+            "form_id": form_id,
+            "process_name": _as_nonempty_str(p.get("processName") or p.get("name")),
+            "process_code": process_code or ref,
+        }
+    return {
+        "process_id": ref,
+        "menu_id": ref,
+        "form_id": "",
+        "process_name": "",
+        "process_code": ref,
+    }
+
+
+def _normalize_apaas_process_edge(edge: dict[str, Any]) -> dict[str, Any]:
+    data = edge.get("data") if isinstance(edge.get("data"), dict) else {}
+    label = (
+        edge.get("name")
+        or edge.get("label")
+        or edge.get("lineName")
+        or data.get("title")
+        or ""
+    )
+    label_text = str(label or "").strip()
+    if label_text and all(ch == "\\" for ch in label_text):
+        label_text = ""
+    condition = (
+        edge.get("conditionExpression")
+        or edge.get("condition")
+        or data.get("conditionExpression")
+        or data.get("condition")
+        or ""
+    )
+    return {
+        "id": str(edge.get("id") or edge.get("flowId") or edge.get("lineId") or ""),
+        "source": str(
+            edge.get("sourceRef")
+            or edge.get("from")
+            or edge.get("source")
+            or edge.get("sourceNodeKey")
+            or edge.get("sourceNodeId")
+            or ""
+        ),
+        "target": str(
+            edge.get("targetRef")
+            or edge.get("to")
+            or edge.get("target")
+            or edge.get("targetNodeKey")
+            or edge.get("targetNodeId")
+            or ""
+        ),
+        "label": label_text,
+        "condition": str(condition or "") or None,
+    }
+
+
 # design-v4 J1: 拉 apaas 平台已有流程详情 (反向, 给 ProcessDesigner 渲染 canvas)
 @mcp.tool()
 async def get_apaas_process_detail(env_id: int, apaas_app_id: str, process_id: str) -> dict:
     """拉 apaas 平台某流程的详情 (nodes + edges + bpmn).
 
-    走 apaas_client.query_process_config (尝试 /xdap-app/process/query/processConfig).
-    apaas 平台没固定文档化, 尝试失败时返 error_code=PROCESS_QUERY_NOT_AVAILABLE.
+    先用 processList 定位流程绑定, 再走 apaas_client.query_process_config 拉完整
+    processConfigDetail。详情接口失败时回退到 processList 里的节点/边数据。
 
     成功时翻译 apaas raw → ProcessDefinition shape:
       {nodes: [{id, type, label, position, props}], edges: [{id, source, target, label, condition}]}
@@ -1714,8 +1859,7 @@ async def get_apaas_process_detail(env_id: int, apaas_app_id: str, process_id: s
         return {"ok": False, "error_code": "INVALID_PARAMS", "message": "apaas_app_id+process_id 都必填"}
 
     try:
-        # 复用 _cached_list_processes: agent 同一轮 list→detail 不重复调 apaas。
-        # list_processes 每条流程本就带完整 nodes/edges, 按 process_id 挑即可。
+        # 复用 _cached_list_processes: agent 同一轮 list→detail 不重复调 apaas 列表。
         raw_list = await _cached_list_processes(env_id, apaas_app_id)
     except Exception as exc:
         return {"ok": False, "error_code": "APAAS_CLIENT_ERROR", "message": f"调 apaas list_processes 失败: {exc}"}
@@ -1734,11 +1878,31 @@ async def get_apaas_process_detail(env_id: int, apaas_app_id: str, process_id: s
             "error_code": "PROCESS_NOT_FOUND",
             "message": f"apaas 应用 {apaas_app_id} 下找不到流程 {pid} (该应用共 {len(raw_list or [])} 个流程)",
         }
+    detail_process_id = _as_nonempty_str(raw.get("id")) or pid
+    ok_detail, detail_result = await _with_client(
+        env_id,
+        "查流程详情",
+        lambda c: c.query_process_config(apaas_app_id.strip(), detail_process_id),
+    )
+    if ok_detail and isinstance(detail_result, dict):
+        detail_raw = detail_result.get("data") if detail_result.get("ok") else detail_result
+        if isinstance(detail_raw, dict) and (detail_raw.get("nodes") or detail_raw.get("edges")):
+            raw = detail_raw
+    elif not ok_detail:
+        logger.warning(
+            "get_apaas_process_detail: query_process_config failed env=%s app=%s process=%s: %s",
+            env_id,
+            apaas_app_id,
+            detail_process_id,
+            detail_result,
+        )
+
     # apaas raw 结构推测: { nodes: [{nodeKey, nodeType, nodeName, x, y, approverType, ...}], edges: [...] }
     nodes_out = []
     edges_out = []
     apaas_nodes = raw.get("nodes") or raw.get("nodeList") or []
     apaas_edges = raw.get("edges") or raw.get("lineList") or raw.get("sequenceFlows") or []
+    role_labels = await _load_process_role_labels(env_id, apaas_app_id)
 
     APAAS_TO_FRONTEND = {
         "START": "start",
@@ -1760,6 +1924,7 @@ async def get_apaas_process_detail(env_id: int, apaas_app_id: str, process_id: s
         d = n.get("data") if isinstance(n.get("data"), dict) else {}
         apaas_type = str(d.get("type") or n.get("nodeType") or n.get("type") or "").upper()
         ft = APAAS_TO_FRONTEND.get(apaas_type, "fill_form")
+        approvers = d.get("approvers") or n.get("approvers") or []
         nodes_out.append({
             "id": str(n.get("id") or n.get("nodeId") or n.get("nodeKey") or n.get("key") or ""),
             "type": ft,
@@ -1768,20 +1933,17 @@ async def get_apaas_process_detail(env_id: int, apaas_app_id: str, process_id: s
             "props": {
                 "approverType": str(d.get("approverType") or n.get("approverType") or ""),
                 "approveType": str(d.get("approveType") or n.get("approveType") or ""),
-                "approvers": d.get("approvers") or n.get("approvers") or [],
+                "approvers": approvers,
+                "approverLabels": _normalize_process_approver_labels(approvers, role_labels),
                 "_apaas_raw_type": apaas_type,
             },
         })
     for e in apaas_edges:
         if not isinstance(e, dict):
             continue
-        edges_out.append({
-            "id": str(e.get("id") or e.get("flowId") or ""),
-            "source": str(e.get("sourceRef") or e.get("from") or e.get("source") or ""),
-            "target": str(e.get("targetRef") or e.get("to") or e.get("target") or ""),
-            "label": str(e.get("name") or e.get("label") or ""),
-            "condition": str(e.get("conditionExpression") or e.get("condition") or "") or None,
-        })
+        normalized_edge = _normalize_apaas_process_edge(e)
+        if normalized_edge["source"] and normalized_edge["target"]:
+            edges_out.append(normalized_edge)
 
     # 2026-05-28: apaas list_processes 不返显式连线 (edges 字段缺失). 对线性审批流,
     # 按 y 坐标 (再 x) 排序推断顺序连线 START→审批→…→END, 让业务视角画布能连起来.
@@ -1823,21 +1985,18 @@ async def deploy_process_to_apaas(
     流程:
       1) 加载 ai-builder Application 拿 platform_env_id + apaas_app_id
       2) 从 `process_definitions` 读 (application_id, process_id) 行
-      3) 调 process_translator.translate_definition_to_apaas_schema 翻译 24→17 节点
-      4) 调 apaas_client.save_process_config(apaas_app_id, payload) 真存平台
-      5) 成功 → 更新 process_definitions.last_deployed_version + last_deployed_at
+      3) 从 aPaaS processList 把 process_id 解析成 menuId/formId
+      4) 调 process_translator.translate_definition_to_apaas_schema 翻译 24→17 节点
+      5) 调 apaas_client.save_process_config(apaas_app_id, payload) 真存平台
+      6) 成功 → 更新 process_definitions.last_deployed_version + last_deployed_at
 
     入参:
       - app_id: ai-builder 应用 ID (Application.id, 不是 apaas_app_id)
-      - process_id: 流程 ID (来自前端 process list — 一般是 apaas menu_id)
+      - process_id: 流程 ID (来自前端 process list; 工具会反查对应 menuId/formId)
 
     返回:
       - {ok, deployed_version, apaas_app_id, menu_id, unsupported_nodes, message}
-      - unsupported_nodes: P6 todo 的节点列表 (timer/webhook/condition/AI 等)
-
-    限制 (P6):
-      - 翻译只覆盖审批主链路 — 网关/分支/AI 等节点会被跳过 + 记入 unsupported_nodes
-      - 串行链路 (start → approves → end) — 不真按 frontend edges 拓扑还原
+      - unsupported_nodes: 未知节点 / 孤儿边 / 自动补 start/end 等 warning
     """
     from app.database import AsyncSessionLocal
     from app.models.process_definition import ProcessDefinition
@@ -1893,14 +2052,45 @@ async def deploy_process_to_apaas(
                 "message": f"definition_json 解析失败: {exc}",
             }
 
-        # 3) 翻译 — 24 → apaas 17 schema
-        # menu_id 等于 process_id (apaas 流程是挂菜单上的)
+        try:
+            raw_processes = await _cached_list_processes(app.platform_env_id, str(app.apaas_app_id))
+        except Exception:
+            raw_processes = []
+        binding = _resolve_process_binding_from_raw(raw_processes, process_id)
+        menu_id = binding["menu_id"]
+        form_id = binding["form_id"]
+        process_name = row.process_name or definition.get("process_name") or binding["process_name"] or "审批流程"
+        process_code = definition.get("process_code") or binding["process_code"] or process_id
+
+        role_codes: dict[str, dict] = {}
+        try:
+            from app.coding.apaas_tools import call_apaas_with_relogin
+            roles = await call_apaas_with_relogin(
+                app.platform_env_id, db,
+                lambda client: client.query_roles(str(app.apaas_app_id)),
+            )
+            for role in roles or []:
+                if not isinstance(role, dict):
+                    continue
+                code = str(role.get("roleCode") or "").strip()
+                rid = str(role.get("id") or role.get("roleId") or "").strip()
+                if code:
+                    role_codes[code] = role
+                if rid:
+                    role_codes[rid] = role
+        except Exception as exc:
+            logger.warning("deploy_process_to_apaas: query roles failed app_id=%s: %s", app_id, exc)
+
+        # 3) 翻译 — 24 → apaas schema; edges 按本地 definition 保真, 支持条件/并行分支。
         try:
             payload, unsupported = translate_definition_to_apaas_schema(
                 definition,
                 apaas_app_id=str(app.apaas_app_id),
-                menu_id=process_id,
-                role_codes=None,  # P6: 反查 role_codes 真名 — 当前用 code 占位
+                menu_id=menu_id,
+                role_codes=role_codes,
+                form_id=form_id,
+                process_name=str(process_name),
+                process_code=str(process_code),
             )
         except Exception as exc:
             logger.exception("translate_definition_to_apaas_schema failed app_id=%s process_id=%s", app_id, process_id)
@@ -1941,7 +2131,8 @@ async def deploy_process_to_apaas(
             "deployed_version": deployed_version,
             "deployed_at": now.isoformat(),
             "apaas_app_id": str(app.apaas_app_id),
-            "menu_id": process_id,
+            "menu_id": menu_id,
+            "form_id": form_id,
             "node_count": len(payload.get("nodes") or []),
             "edge_count": len(payload.get("edges") or []),
             "unsupported_nodes": unsupported,
@@ -2168,6 +2359,87 @@ async def _with_client(env_id: int, op: str, fn):
                 "ok": False, "error_code": "APAAS_CALL_FAILED",
                 "message": f"{op}失败：{exc}", "env_id": env_id,
             }
+
+
+def _normalize_apaas_user_summary(user: dict[str, Any]) -> dict[str, str]:
+    """Pick stable user identity fields from several aPaaS response shapes."""
+    def _first(*keys: str) -> str:
+        for key in keys:
+            value = user.get(key)
+            if value is None:
+                continue
+            text = str(value).strip()
+            if text:
+                return text
+        return ""
+
+    user_id = _first("id", "userId", "user_id")
+    user_name = _first("username", "userName", "realName", "name", "nickName")
+    account = _first("account", "accountName", "loginName", "mobile")
+    return {
+        "id": user_id,
+        "user_name": user_name,
+        "display_name": user_name or account or user_id,
+        "account": account,
+        "status": _first("status", "accountStatus", "workStatus"),
+        "account_type": _first("accountType"),
+    }
+
+
+@mcp.tool()
+async def get_apaas_user_name(env_id: int, apaas_user_id: str, apaas_app_id: str = "") -> dict:
+    """根据 aPaaS userId 查询用户名称。
+
+    平台 API：
+      POST /xdap-admin/user/query/userList
+      body = ["<userId>"]
+
+    这个工具只做用户 ID → 名称反查，常用于表单/应用权限里
+    permissionObjectValue=USER 的可读化。
+    """
+    target_id = str(apaas_user_id or "").strip()
+    if not target_id:
+        return {
+            "ok": False,
+            "error_code": "INVALID_APAAS_USER_ID",
+            "message": "apaas_user_id 不能为空",
+        }
+
+    app_id = str(apaas_app_id or "").strip()
+    ok, users = await _with_client(
+        env_id,
+        "按用户ID查询用户名称",
+        lambda c: c.query_users_by_ids([target_id], app_id=app_id or None),
+    )
+    if not ok:
+        return users
+
+    summaries = [
+        _normalize_apaas_user_summary(item)
+        for item in (users or [])
+        if isinstance(item, dict)
+    ]
+    matched = next(
+        (item for item in summaries if item.get("id") == target_id),
+        summaries[0] if summaries else None,
+    )
+    if not matched:
+        return {
+            "ok": False,
+            "error_code": "APAAS_USER_NOT_FOUND",
+            "message": f"未查询到用户 {target_id}",
+            "env_id": env_id,
+            "apaas_user_id": target_id,
+        }
+
+    return {
+        "ok": True,
+        "env_id": env_id,
+        "apaas_app_id": app_id,
+        "apaas_user_id": target_id,
+        "user_name": matched["display_name"],
+        "user": matched,
+    }
 
 
 @mcp.tool()
@@ -5880,7 +6152,8 @@ async def set_apaas_app_process(
     menu_id: str,
     process_name: str,
     process_code: str,
-    stages: list,
+    stages: list | None = None,
+    process_definition: dict | None = None,
     append: bool = False,
     replace_existing: bool = False,
 ) -> dict:
@@ -5907,6 +6180,25 @@ async def set_apaas_app_process(
       - approver_code: 审批人 code (ROLE 时是 roleCode; USER 时是 userId)
       - approver_name: 显示名 (可选, 默认用 stage.name)
 
+    process_definition 可选：完整流程拓扑，shape 与 ProcessDesigner 保存结构一致：
+      {
+        "nodes": [
+          {"id":"START","type":"start","label":"开始","position":{"x":320,"y":40},"props":{}},
+          {"id":"gw1","type":"condition","label":"条件判断","position":{...},"props":{}},
+          {"id":"approve1","type":"assignee_approval","label":"上级审批","position":{...},
+           "props":{"approvers":[{"type":"ROLE","value":"<role_id>"}]}},
+          {"id":"END","type":"end","label":"结束","position":{...},"props":{}}
+        ],
+        "edges": [
+          {"id":"e1","source":"START","target":"gw1"},
+          {"id":"e2","source":"gw1","target":"approve1","label":"信息泄露",
+           "condition":"vuln_category == 'info_disclosure'"}
+        ]
+      }
+      传 process_definition 时支持 condition / multi_branch / parallel_gateway 等拓扑；
+      兼容 exclusive_gateway / EXCLUSIVE_GATEWAY 等 BPMN/平台别名，内部会归一为 condition。
+      stages 线性数组只用于简单顺序审批。
+
     工具自动加 "开始" + "结束" 2 个固定节点, stages 串成顺序审批节点.
 
     示例 — 请假 2 级审批:
@@ -5925,11 +6217,13 @@ async def set_apaas_app_process(
             "ok": False, "error_code": "INVALID_PARAMS",
             "message": "apaas_app_id+menu_id+process_name+process_code 都必填",
         }
-    if not isinstance(stages, list) or not stages:
+    has_definition = isinstance(process_definition, dict) and isinstance(process_definition.get("nodes"), list)
+    if not has_definition and (not isinstance(stages, list) or not stages):
         return {
             "ok": False, "error_code": "INVALID_STAGES",
-            "message": "stages 必须是非空数组(至少 1 个审批阶段)",
+            "message": "stages 必须是非空数组；如需条件/分支流程，请传 process_definition.nodes + process_definition.edges",
         }
+    stages = stages or []
 
     # 反查 form_code + form_name (管理 API 用 form_code 关联表单, 不是 menu_id)
     # ⚠️ query_menus 返的菜单只有 formId 没 formCode, 必须二级反查 form/query/formContext
@@ -5966,15 +6260,15 @@ async def set_apaas_app_process(
         lambda c: c.query_roles(apaas_app_id.strip()))
     if not ok_roles:
         return roles_list
-    role_by_code = {}
-    role_by_id = {}
+    role_by_code: dict[str, dict] = {}
+    role_by_id: dict[str, dict] = {}
     for r in (roles_list or []):
         if isinstance(r, dict):
             rcode = str(r.get("roleCode") or "").strip()
             rid = str(r.get("id") or "").strip()
             rname = str(r.get("roleName") or rcode).strip()
-            if rcode: role_by_code[rcode] = {"id": rid, "name": rname}
-            if rid: role_by_id[rid] = {"code": rcode, "name": rname}
+            if rcode: role_by_code[rcode] = {**r, "id": rid, "name": rname}
+            if rid: role_by_id[rid] = {**r, "code": rcode, "name": rname}
 
     # 转 stages → stages_with_role (含 role_id + label)
     stages_with_role = []
@@ -6070,6 +6364,97 @@ async def set_apaas_app_process(
                     for s in existing_swr
                 ],
             }
+
+    if has_definition:
+        try:
+            from app.process_translator import build_apaas_bpmn_xml, translate_definition_to_apaas_schema
+
+            role_lookup: dict[str, dict] = {}
+            role_lookup.update(role_by_code)
+            role_lookup.update(role_by_id)
+            form_components: list[dict[str, Any]] = []
+            ok_components, components_raw = await _with_client(
+                env_id, "查表单组件",
+                lambda c: c.query_form_components(apaas_app_id.strip(), form_id),
+            )
+            if ok_components and isinstance(components_raw, list):
+                form_components = components_raw
+            payload, warnings = translate_definition_to_apaas_schema(
+                process_definition or {},
+                apaas_app_id=apaas_app_id.strip(),
+                menu_id=menu_id.strip(),
+                role_codes=role_lookup,
+                form_id=form_id,
+                process_name=process_name.strip(),
+                process_code=process_code.strip(),
+                form_components=form_components,
+            )
+        except Exception as exc:
+            logger.exception("set_apaas_app_process: translate process_definition failed")
+            return {
+                "ok": False,
+                "error_code": "PROCESS_DEFINITION_TRANSLATE_FAILED",
+                "message": f"分支流程拓扑翻译失败: {exc}",
+            }
+
+        process_rule = payload.get("processRule") if isinstance(payload.get("processRule"), dict) else {}
+        for edge_rule_key, rule in list(process_rule.items()):
+            if not isinstance(rule, dict) or rule.get("ruleType") != "simple":
+                continue
+            if rule.get("simpleRuleId"):
+                continue
+            simple_rule_config = rule.get("simpleRuleConfig")
+            if not isinstance(simple_rule_config, dict):
+                continue
+            ok_rule, saved_rule = await _with_client(
+                env_id, "存流程条件规则",
+                lambda c, cfg=simple_rule_config: c.save_simple_rule(
+                    apaas_app_id.strip(),
+                    menu_id.strip(),
+                    cfg,
+                ),
+            )
+            if not ok_rule:
+                return saved_rule
+            if not isinstance(saved_rule, dict) or not str(saved_rule.get("id") or "").strip():
+                return {
+                    "ok": False,
+                    "error_code": "PROCESS_RULE_SAVE_FAILED",
+                    "message": f"条件规则保存后未返回 id，edge_rule_key={edge_rule_key}",
+                    "platform_response": saved_rule,
+                }
+            rule["simpleRuleId"] = str(saved_rule.get("id"))
+            rule["simpleRuleConfig"] = saved_rule
+        if process_rule:
+            payload["bpmn"] = build_apaas_bpmn_xml(
+                payload.get("nodes") or [],
+                payload.get("edges") or [],
+                process_rule,
+            )
+
+        ok, raw = await _with_client(
+            env_id, "存分支流程",
+            lambda c: c.save_process_config(apaas_app_id.strip(), payload),
+        )
+        if not ok:
+            return raw
+        return {
+            "ok": True,
+            "menu_id": menu_id,
+            "form_id": form_id,
+            "process_name": process_name,
+            "process_code": process_code,
+            "definition_mode": True,
+            "nodes_count": len(payload.get("nodes") or []),
+            "edges_count": len(payload.get("edges") or []),
+            "warnings": warnings,
+            "platform_response": raw if isinstance(raw, dict) else {"raw": raw},
+            "message": (
+                f"流程「{process_name}」已按拓扑定义保存到表单菜单 "
+                f"(menu_id={menu_id}, {len(payload.get('nodes') or [])} 节点, "
+                f"{len(payload.get('edges') or [])} 连线)"
+            ),
+        }
 
     # 用 capture 实证 schema 构建 payload (BPMN nodes/edges + 10 button + voteConfig 等)
     payload = _build_process_payload_v2(

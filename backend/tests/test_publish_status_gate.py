@@ -11,6 +11,7 @@ from app.deps import AuthContext
 from app.models import Application, Project, ProjectMember, User
 from app.models.tenant import Tenant, UserTenant
 from app.routes.applications import publish_application
+from app.routes.applications.section_content import get_publish_status
 
 
 async def _seed_app(db, status: str, apaas_app_id="apaas_test_1"):
@@ -62,6 +63,18 @@ async def test_publish_passes_status_gate_when_completed(db_session):
     with pytest.raises(HTTPException) as ei:
         await publish_application(app.id, _ctx(user, tenant.id), db_session)
     assert ei.value.status_code != 409
+
+
+@pytest.mark.asyncio
+async def test_publish_status_treats_completed_platform_app_without_record_as_published(db_session):
+    tenant, user, app = await _seed_app(db_session, status="completed", apaas_app_id="apaas_done_1")
+
+    result = await get_publish_status(app.id, _ctx(user, tenant.id), db_session)
+
+    assert result.status == "published"
+    assert result.latest_deploy is None
+    assert result.pending_changes_count == 0
+    assert result.app_status == "completed"
 
 
 # ── MCP 层: publish_application 把 409 转成干净的 STILL_GENERATING; get_application 带进度 ──

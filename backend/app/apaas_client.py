@@ -113,6 +113,35 @@ def _normalize_business_event_list(resp: Any) -> dict:
     return {"table": table, "total": total}
 
 
+def _normalize_apaas_user_records(resp: Any) -> list[dict[str, Any]]:
+    """Normalize aPaaS user query responses into a list of user dicts.
+
+    /xdap-admin/user/query/userList returns a top-level JSON array in current
+    trial docs, while some platform APIs wrap records in table/data/list.
+    """
+    if isinstance(resp, list):
+        return [item for item in resp if isinstance(item, dict)]
+    if not isinstance(resp, dict):
+        return []
+
+    for value in (
+        resp.get("table"),
+        resp.get("records"),
+        resp.get("list"),
+        resp.get("data"),
+    ):
+        if isinstance(value, list):
+            return [item for item in value if isinstance(item, dict)]
+        if isinstance(value, dict):
+            nested = _normalize_apaas_user_records(value)
+            if nested:
+                return nested
+
+    if resp.get("id") or resp.get("userId") or resp.get("username") or resp.get("userName"):
+        return [resp]
+    return []
+
+
 def _append_desktop_api_debug_log(event: str, payload: dict[str, Any]) -> None:
     """将关键 APaaS 调用单独落到桌面，方便手工联调时直接查看。"""
     record = {
@@ -194,7 +223,7 @@ def _log_response(
     """记录响应日志，同时追加到持久化缓冲区"""
     code = data.get("code") if isinstance(data, dict) else None
     message = data.get("message") if isinstance(data, dict) else None
-    success = code == "ok" or code == 200
+    success = code == "ok" or code == 200 or (isinstance(data, list) and 200 <= status < 400)
 
     if success:
         logger.info(f"<<< APaaS API 响应: {status} OK ({elapsed_ms:.0f}ms) - {url.split('/')[-1]}")
@@ -328,6 +357,47 @@ class APaaSClient:
                 return {"status": "ok", "message": "连接成功"}
             else:
                 raise Exception(data.get("message", "连接失败"))
+
+    async def query_users_by_ids(self, user_ids: list[str], app_id: Optional[str] = None) -> list[dict[str, Any]]:
+        """按 aPaaS userId 批量查询用户信息。
+
+        endpoint: POST /xdap-admin/user/query/userList
+        body: ["<userId>", ...]
+
+        注意：该接口在 xdap-admin 下，请求体是 JSON 数组，当前 trial 文档返回
+        顶层数组而不是 {code, data} 包装。
+        """
+        cleaned_ids = [str(uid).strip() for uid in user_ids if str(uid or "").strip()]
+        if not cleaned_ids:
+            return []
+
+        url = f"{self.base_url}/xdap-admin/user/query/userList"
+        payload = cleaned_ids
+        _log_request("POST", url, payload)
+        start = time.time()
+
+        async with httpx.AsyncClient(verify=False, timeout=APAAS_HTTP_TIMEOUT) as client:
+            response = await client.post(url, headers=self._get_headers(app_id), json=payload)
+            elapsed_ms = (time.time() - start) * 1000
+
+            if response.status_code == 401:
+                logger.error("401 Unauthorized - token可能已过期或无效")
+                raise Exception(APAAS_TOKEN_EXPIRED)
+
+            response.raise_for_status()
+            data = response.json()
+            _log_response(
+                url,
+                response.status_code,
+                data,
+                elapsed_ms,
+                method="POST",
+                request_body=_to_json(payload),
+            )
+
+            if isinstance(data, dict) and data.get("code") not in (None, "ok", 200):
+                raise Exception(data.get("message", "查询用户信息失败"))
+            return _normalize_apaas_user_records(data)
 
     async def create_app(self, app_name: str, app_code: str, description: str = "") -> dict:
         """创建应用"""
@@ -772,15 +842,24 @@ class APaaSClient:
             raise Exception(data.get("message", "list_table_fields 失败"))
 
     async def query_process_config(self, app_id: str, process_id: str) -> dict:
-        """拉单个流程详情 — 尝试 apaas 平台 query 路径反推 (跟 save/processConfig 对称).
+        """拉单个流程详情。
 
-        apaas 平台没固定文档化的 process query endpoint, 尝试 2 个常见路径:
+        当前 aPaaS 前端实际使用:
+        GET /xdap-app/process/query/processConfigDetail?processId=...&appId=...
+
+        老路径保留兜底:
         1. POST /xdap-app/process/query/processConfig  body {processId}
         2. POST /xdap-app/process/queryById            body {processId / id}
 
         都失败返 {ok: False, error_code, message}. 上游 (MCP / endpoint) 拿到失败
         返友好降级 ("apaas process detail API 未公开, 请用本地 definition + 部署").
         """
+        detail_url = f"{self.base_url}/xdap-app/process/query/processConfigDetail"
+        detail_params = {
+            "processId": process_id,
+            "appId": app_id,
+            "processVersion": "false",
+        }
         sec_info = base64.b64encode(json.dumps({"appId": app_id}).encode()).decode().rstrip("=")
         params = {"SECURITY_INFO": sec_info, "timestamp": self._get_timestamp()}
         urls_to_try = [
@@ -789,6 +868,23 @@ class APaaSClient:
         ]
         last_err = ""
         async with httpx.AsyncClient(verify=False, timeout=APAAS_HTTP_TIMEOUT) as client:
+            _log_request("GET", detail_url, params=detail_params)
+            start = time.time()
+            try:
+                response = await client.get(
+                    detail_url,
+                    headers=self._get_headers(app_id),
+                    params=detail_params,
+                )
+                elapsed_ms = (time.time() - start) * 1000
+                data = response.json() if response.headers.get("content-type", "").startswith("application/json") else {}
+                _log_response(detail_url, response.status_code, data, elapsed_ms, method="GET")
+                if response.status_code == 200 and isinstance(data, dict) and data.get("code") in ("ok", 200):
+                    return {"ok": True, "data": data.get("data") or {}}
+                last_err = f"{detail_url}: code={data.get('code')} msg={data.get('message')}"
+            except Exception as exc:
+                last_err = f"{detail_url}: {exc}"
+
             for url in urls_to_try:
                 payload = {"processId": process_id, "id": process_id, "appId": app_id}
                 _log_request("POST", url, payload, params=params)
@@ -859,6 +955,33 @@ class APaaSClient:
             if data.get("code") not in ("ok",):
                 raise Exception(data.get("message", "保存流程失败"))
             return data
+
+    async def save_simple_rule(self, app_id: str, menu_id: str, rule_config: dict) -> dict:
+        """保存流程条件边使用的 aPaaS simpleRule.
+
+        平台流程边的 processRule 必须引用已落库的 simpleRuleId；前端也是先调
+        /xdap-app/rule/save/simpleRule，再把返回 id 放进 processRule 后保存流程。
+        """
+        url = f"{self.base_url}/xdap-app/rule/save/simpleRule"
+        payload = dict(rule_config or {})
+        payload["menuId"] = menu_id
+        _log_request("POST", url, payload)
+        start = time.time()
+
+        async with httpx.AsyncClient(verify=False, timeout=APAAS_HTTP_TIMEOUT) as client:
+            response = await client.post(url, headers=self._get_headers(app_id), json=payload)
+            elapsed_ms = (time.time() - start) * 1000
+            if response.status_code >= 400:
+                body = (response.text or "")[:2000]
+                _log_response(url, response.status_code, body, elapsed_ms, method="POST", request_body=_to_json(payload))
+                raise Exception(
+                    f"保存流程条件规则失败：apaas 返回 HTTP {response.status_code}。平台错误详情：{body}"
+                )
+            data = response.json()
+            _log_response(url, response.status_code, data, elapsed_ms, method="POST", request_body=_to_json(payload))
+            if data.get("code") not in ("ok",):
+                raise Exception(data.get("message", "保存流程条件规则失败"))
+            return data.get("data") or {}
 
     async def create_form_permissions(self, app_id: str, payload: list) -> dict:
         _append_desktop_api_debug_log(

@@ -35,7 +35,7 @@ const props = withDefaults(defineProps<{
   nativeFilePicker: true,
   multiple: false,
   accept: '',
-  attachLabel: '附件',
+  attachLabel: '',
   sendLabel: '发送',
   stopLabel: '停止',
   hint: 'Enter 发送 · Shift+Enter 换行',
@@ -170,12 +170,13 @@ watch(() => props.modelValue, () => nextTick(resize))
             class="ucc-attach"
             :disabled="disabled"
             title="添加附件"
+            :aria-label="attachLabel || '添加附件'"
             @click="onAttachClick"
           >
             <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round">
               <path d="m21.4 11.1-9.2 9.2a6 6 0 0 1-8.5-8.5l9.2-9.2a4 4 0 0 1 5.7 5.7l-9.2 9.2a2 2 0 0 1-2.8-2.8l8.5-8.5" />
             </svg>
-            <span>{{ attachLabel }}</span>
+            <span v-if="attachLabel">{{ attachLabel }}</span>
           </button>
           <slot name="footer-left" />
         </div>
@@ -340,7 +341,8 @@ watch(() => props.modelValue, () => nextTick(resize))
 .ucc-footer {
   display: flex;
   align-items: center;
-  justify-content: space-between;
+  justify-content: flex-start;
+  flex-wrap: wrap;
   gap: 10px;
   min-height: 36px;
   padding: 0 12px 9px;
@@ -352,20 +354,27 @@ watch(() => props.modelValue, () => nextTick(resize))
   align-items: center;
   gap: 8px;
   min-width: 0;
+  max-width: 100%;
 }
 
 .ucc-footer-left {
-  flex: 1;
+  flex: 1 1 160px;
+  overflow: hidden;
 }
 
 .ucc-footer-right {
-  flex-shrink: 0;
+  flex: 1 1 170px;
+  justify-content: flex-end;
+  flex-wrap: wrap;
+  gap: 4px 6px;
 }
 
 .ucc-attach {
   display: inline-flex;
   align-items: center;
   gap: 5px;
+  flex: 0 0 auto;
+  white-space: nowrap;
   min-height: 30px;
   padding: 0 10px;
   border: 1px solid var(--line, var(--t-border-subtle, #dbe3ef));
@@ -393,6 +402,30 @@ watch(() => props.modelValue, () => nextTick(resize))
 .ucc-hint {
   color: var(--text-4, var(--t-text-muted, #94a3b8));
   font-size: 12px;
+  line-height: 1.35;
+  white-space: normal;
+  overflow-wrap: anywhere;
+}
+
+:slotted(select) {
+  flex: 1 1 120px;
+  min-width: 0;
+  max-width: min(220px, 100%);
+}
+
+:slotted(.hint) {
+  min-width: 0;
+  max-width: 100%;
+  color: var(--text-4, var(--t-text-muted, #94a3b8));
+  font-size: 12px;
+  line-height: 1.35;
+  white-space: normal;
+  overflow-wrap: anywhere;
+}
+
+:slotted(.timer) {
+  flex: 0 0 auto;
+  color: var(--brand, var(--t-brand, #2f6bff));
   white-space: nowrap;
 }
 
@@ -467,10 +500,18 @@ watch(() => props.modelValue, () => nextTick(resize))
   .ucc-footer {
     align-items: flex-start;
     flex-direction: column;
+    gap: 6px;
+  }
+
+  .ucc-footer-left,
+  .ucc-footer-right {
+    flex: 0 1 auto;
+    width: 100%;
   }
 
   .ucc-footer-right {
-    align-self: flex-end;
+    align-self: stretch;
+    justify-content: flex-start;
   }
 }
 </style>

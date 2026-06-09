@@ -1,0 +1,203 @@
+from __future__ import annotations
+
+import copy
+
+from app.process_translator import build_apaas_bpmn_xml, translate_definition_to_apaas_schema
+
+
+def _branch_definition() -> dict:
+    return {
+        "process_name": "漏洞整改闭环流程",
+        "process_code": "vuln_fix_flow",
+        "nodes": [
+            {"id": "START", "type": "start", "label": "开始", "position": {"x": 320, "y": 40}, "props": {}},
+            {
+                "id": "gw-risk",
+                "type": "condition",
+                "label": "漏洞分类判断",
+                "position": {"x": 320, "y": 140},
+                "props": {"conditionExpression": "vuln_category == 'info_disclosure'"},
+            },
+            {
+                "id": "manager",
+                "type": "assignee_approval",
+                "label": "上级领导审批",
+                "position": {"x": 120, "y": 240},
+                "props": {
+                    "approvers": [
+                        {"type": "ROLE", "value": "role-leader", "displayData": {"id": "role-leader", "label": "上级领导"}}
+                    ]
+                },
+            },
+            {
+                "id": "fix-owner",
+                "type": "assignee_approval",
+                "label": "整改负责人处理",
+                "position": {"x": 480, "y": 240},
+                "props": {
+                    "approvers": [
+                        {"type": "ROLE", "value": "role-owner", "displayData": {"id": "role-owner", "label": "整改负责人"}}
+                    ]
+                },
+            },
+            {"id": "END", "type": "end", "label": "结束", "position": {"x": 320, "y": 360}, "props": {}},
+        ],
+        "edges": [
+            {"id": "e-start-gw", "source": "START", "target": "gw-risk"},
+            {
+                "id": "e-gw-leader",
+                "source": "gw-risk",
+                "target": "manager",
+                "label": "信息泄露",
+                "condition": "vuln_category == 'info_disclosure'",
+            },
+            {"id": "e-gw-owner", "source": "gw-risk", "target": "fix-owner", "label": "其他", "condition": "default"},
+            {"id": "e-leader-owner", "source": "manager", "target": "fix-owner"},
+            {"id": "e-owner-end", "source": "fix-owner", "target": "END"},
+        ],
+    }
+
+
+def test_branch_definition_translates_to_full_save_payload_with_condition_edges():
+    payload, warnings = translate_definition_to_apaas_schema(
+        _branch_definition(),
+        apaas_app_id="app-1",
+        menu_id="menu-1",
+        form_id="form-1",
+        process_name="漏洞整改闭环流程",
+        process_code="vuln_fix_flow",
+        form_components=[
+            {
+                "label": "漏洞分类",
+                "bo_code": "sec_vuln~vuln_category",
+                "choose_options": [{"id": "info_disclosure", "label": "信息泄露"}],
+            }
+        ],
+    )
+
+    assert warnings == []
+    assert payload["appId"] == "app-1"
+    assert payload["formId"] == "form-1"
+    assert payload["menuId"] == "menu-1"
+    assert payload["processName"] == "漏洞整改闭环流程"
+    assert payload["processCode"] == "vuln_fix_flow"
+    assert payload["status"] == "ENABLE"
+    assert payload["engine"] == "VERSION_1.1"
+    assert payload["processDataSource"] == {"sourceType": "SOURCE_TYPE_BO", "objectId": "boc_code_form-1"}
+
+    assert not any(n["id"] == "gw-risk" for n in payload["nodes"])
+
+    condition_edges = {e["id"]: e for e in payload["edges"]}
+    assert condition_edges["e-start-gw__e-gw-leader"]["sourceNodeKey"] == "START"
+    assert condition_edges["e-start-gw__e-gw-leader"]["targetNodeKey"] == "manager"
+    assert condition_edges["e-start-gw__e-gw-leader"]["conditionExpression"] == "vuln_category == 'info_disclosure'"
+    assert condition_edges["e-start-gw__e-gw-leader"]["lineName"] == "信息泄露"
+    assert condition_edges["e-start-gw__e-gw-owner"]["sourceNodeKey"] == "START"
+    assert condition_edges["e-start-gw__e-gw-owner"]["targetNodeKey"] == "fix-owner"
+    assert condition_edges["e-start-gw__e-gw-owner"]["data"]["defaultFlow"] is True
+
+    rule_key = condition_edges["e-start-gw__e-gw-leader"]["data"]["id"]
+    assert payload["processRule"][rule_key]["ruleType"] == "simple"
+    simple_rule = payload["processRule"][rule_key]["simpleRuleConfig"]
+    assert simple_rule["express"] == "(((xdap.invoke('componentvalue','sec_vuln~vuln_category'))  == ('info_disclosure')))"
+    assert simple_rule["formFieldRuleList"] == [
+        {
+            "connectOperation": "or",
+            "fieldRuleList": [
+                {
+                    "type": "string",
+                    "boCode": "sec_vuln~vuln_category",
+                    "op": "eq",
+                    "values": ["info_disclosure"],
+                    "transValues": [],
+                }
+            ],
+        }
+    ]
+
+
+def test_branch_definition_accepts_exclusive_gateway_alias_from_tool_input():
+    definition = copy.deepcopy(_branch_definition())
+    gateway = next(n for n in definition["nodes"] if n["id"] == "gw-risk")
+    gateway["type"] = "exclusive_gateway"
+
+    payload, warnings = translate_definition_to_apaas_schema(
+        definition,
+        apaas_app_id="app-1",
+        menu_id="menu-1",
+        form_id="form-1",
+        process_name="漏洞整改闭环流程",
+        process_code="vuln_fix_flow",
+    )
+
+    assert warnings == []
+    assert not any(n["id"] == "gw-risk" for n in payload["nodes"])
+
+    condition_edges = {e["id"]: e for e in payload["edges"]}
+    assert condition_edges["e-start-gw__e-gw-leader"]["sourceNodeKey"] == "START"
+    assert condition_edges["e-start-gw__e-gw-leader"]["targetNodeKey"] == "manager"
+    assert condition_edges["e-start-gw__e-gw-leader"]["conditionExpression"] == "vuln_category == 'info_disclosure'"
+    assert condition_edges["e-start-gw__e-gw-owner"]["data"]["defaultFlow"] is True
+
+
+def test_branch_definition_accepts_branch_alias_from_tool_input():
+    definition = copy.deepcopy(_branch_definition())
+    gateway = next(n for n in definition["nodes"] if n["id"] == "gw-risk")
+    gateway["type"] = "branch"
+
+    payload, warnings = translate_definition_to_apaas_schema(
+        definition,
+        apaas_app_id="app-1",
+        menu_id="menu-1",
+        form_id="form-1",
+        process_name="漏洞整改闭环流程",
+        process_code="vuln_fix_flow",
+    )
+
+    assert warnings == []
+    assert not any(n["id"] == "gw-risk" for n in payload["nodes"])
+
+    condition_edges = {e["id"]: e for e in payload["edges"]}
+    assert condition_edges["e-start-gw__e-gw-leader"]["conditionExpression"] == "vuln_category == 'info_disclosure'"
+    assert condition_edges["e-start-gw__e-gw-owner"]["data"]["defaultFlow"] is True
+
+
+def test_apaas_role_approver_dicts_are_preserved_when_translating_definition():
+    payload, _warnings = translate_definition_to_apaas_schema(
+        _branch_definition(),
+        apaas_app_id="app-1",
+        menu_id="menu-1",
+        form_id="form-1",
+        process_name="漏洞整改闭环流程",
+        process_code="vuln_fix_flow",
+    )
+
+    leader = next(n for n in payload["nodes"] if n["id"] == "manager")
+    approver = leader["data"]["approvers"][0]
+    assert approver["type"] == "ROLE"
+    assert approver["value"] == "role-leader"
+    assert approver["displayData"]["label"] == "上级领导"
+
+
+def test_bpmn_uses_saved_simple_rule_id_for_condition_edges():
+    payload, _warnings = translate_definition_to_apaas_schema(
+        _branch_definition(),
+        apaas_app_id="app-1",
+        menu_id="menu-1",
+        form_id="form-1",
+        process_name="漏洞整改闭环流程",
+        process_code="vuln_fix_flow",
+        form_components=[{"label": "漏洞分类", "bo_code": "sec_vuln~vuln_category"}],
+    )
+    condition_edge = next(e for e in payload["edges"] if e["id"] == "e-start-gw__e-gw-leader")
+    rule_key = condition_edge["data"]["id"]
+    payload["processRule"][rule_key]["simpleRuleId"] = "rule-123"
+    payload["processRule"][rule_key]["simpleRuleConfig"]["id"] = "rule-123"
+
+    bpmn = build_apaas_bpmn_xml(payload["nodes"], payload["edges"], payload["processRule"])
+
+    assert "sourceRef=\"START_HIDDEN\"" in bpmn
+    assert f'id="SequenceFlow_{rule_key}"' in bpmn
+    assert "procRuleHandle.executeSimpleProcRule(processId, documentId, 'rule-123', outcome)" in bpmn
+    assert "<exclusiveGateway" not in bpmn
+    assert "<inclusiveGateway" not in bpmn

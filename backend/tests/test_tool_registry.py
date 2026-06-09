@@ -84,6 +84,7 @@ _EXPECTED_CONFIG_WHITELIST: frozenset[str] = frozenset({
     "get_apaas_business_event_detail",
     "get_apaas_form_detail",
     "get_apaas_process_detail",
+    "get_apaas_user_name",
     "get_config_skill",
     "get_dev_fix_policy",
     "get_role_resource_matrix",
@@ -320,8 +321,9 @@ def test_config_whitelist_matches_current_expected():
     # N2(2026-06-01): 82 → 67，摘掉 15 个 codegen/workspace 工具
     # 2026-06-03: +4 自开发工具(upload_external_zip / republish / list_dev_kits / attach)进 config → 71
     # 2026-06-04: +1 空表单修复工具 → 72
-    # 2026-06-05: +3 问题助手工具(record/list issue + dev fix policy) → 75
-    assert len(new) == 75, f"config 白名单总数应是 75, 实际 {len(new)}"
+    # 2026-06-05+: 问题助手 / 自开发等后续工具累计后现状 → 76
+    # 2026-06-09: +1 平台用户名称反查工具 → 77
+    assert len(new) == 77, f"config 白名单总数应是 77, 实际 {len(new)}"
 
 
 def test_builder_whitelist_count():
