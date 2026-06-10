@@ -43,15 +43,11 @@ spec:
               mountPath: /share/dist
 
       containers:
-        # 主容器：uvicorn + code-server（由 supervisord 管）
+        # 主容器：uvicorn（由 supervisord 管）
         - name: apaas-builder
           image: hub.dfy.definesys.cn/ai-builder/apaas-builder:20260428-ruijing
           imagePullPolicy: IfNotPresent
           env:
-            # K8s 同 Pod 内 container 共享 network namespace，nginx sidecar 用 localhost 连过来
-            # code-server 只绑 127.0.0.1 即可（同 Pod 内通）
-            - name: CODE_SERVER_BIND_HOST
-              value: "127.0.0.1"
             - name: WAIT_FOR_MYSQL
               value: "1"
             # backend/app/coding/workspace.py 直接读取进程环境变量；
@@ -67,7 +63,6 @@ spec:
               value: "https://registry.dfy.definesys.cn/repository/apaas-npm-group/"
           ports:
             - { name: api, containerPort: 8003 }
-            - { name: ide, containerPort: 8080 }
           volumeMounts:
             - name: workspaces
               mountPath: /root/apaas-builder/workspaces
@@ -99,7 +94,7 @@ spec:
               cpu: "2"
               memory: "4Gi"
 
-        # Sidecar：nginx serve 前端 dist + 反代 /api /ide 到本 Pod 主容器
+        # Sidecar：nginx serve 前端 dist + 反代 /api 到本 Pod 主容器
         - name: web
           image: nginx:alpine
           imagePullPolicy: IfNotPresent

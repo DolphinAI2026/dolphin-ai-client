@@ -1974,6 +1974,28 @@ async def list_workspace_files(
         raise HTTPException(status_code=404, detail="工作区不存在")
 
 
+async def _read_class_file_decompiled(ws_id: str, file_path: str) -> dict:
+    """.class 文件按字节没法预览,反编译成文本返回(CFR 优先, javap 兜底)。"""
+    from app.coding.class_decompiler import DecompileError, decompile_class_file
+
+    ws_path = workspace_mgr.get_workspace_path(ws_id)
+    target = (ws_path / file_path).resolve()
+    if not str(target).startswith(str(ws_path.resolve())):
+        raise HTTPException(status_code=400, detail="文件路径越界")
+    if not target.is_file():
+        raise HTTPException(status_code=404, detail=f"文件不存在: {file_path}")
+    try:
+        result = await asyncio.to_thread(decompile_class_file, target)
+    except DecompileError as e:
+        raise HTTPException(status_code=422, detail=str(e))
+    return {
+        "path": file_path,
+        "content": result.text,
+        "decompiled": True,
+        "decompiler": result.tool,
+    }
+
+
 @router.get("/workspace/{ws_id}/file")
 async def read_workspace_file(
     ws_id: str,
@@ -1981,8 +2003,10 @@ async def read_workspace_file(
     ctx: Annotated[AuthContext, Depends(get_auth_context)] = None,
     db: Annotated[AsyncSession, Depends(get_db)] = None,
 ):
-    """读取工作区文件内容"""
+    """读取工作区文件内容;.class 返回反编译文本(decompiled: true)"""
     await _ensure_workspace_access(ws_id, ctx, db, minimum_project_role="member")
+    if file_path.lower().endswith(".class"):
+        return await _read_class_file_decompiled(ws_id, file_path)
     try:
         content = workspace_mgr.read_file(ws_id, file_path)
         return {"path": file_path, "content": content}
@@ -1990,6 +2014,26 @@ async def read_workspace_file(
         raise HTTPException(status_code=404, detail=f"文件不存在: {file_path}")
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
+
+
+@router.get("/workspace/{ws_id}/raw")
+async def download_workspace_file_raw(
+    ws_id: str,
+    file_path: str = Query(..., description="文件相对路径"),
+    ctx: Annotated[AuthContext, Depends(get_auth_context)] = None,
+    db: Annotated[AsyncSession, Depends(get_db)] = None,
+):
+    """以原始字节返回工作区单文件，供二进制文件（zip/图片/字体等）下载。"""
+    from fastapi.responses import FileResponse
+
+    await _ensure_workspace_access(ws_id, ctx, db, minimum_project_role="member")
+    ws_path = workspace_mgr.get_workspace_path(ws_id)
+    target = (ws_path / file_path).resolve()
+    if not str(target).startswith(str(ws_path.resolve())):
+        raise HTTPException(status_code=400, detail="文件路径越界")
+    if not target.is_file():
+        raise HTTPException(status_code=404, detail=f"文件不存在: {file_path}")
+    return FileResponse(str(target), filename=target.name)
 
 
 @router.post("/workspace/{ws_id}/file")

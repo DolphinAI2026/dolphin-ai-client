@@ -79,17 +79,6 @@ export interface UploadResult {
   file_path: string
 }
 
-export function isIdeUnavailableError(error: any): boolean {
-  const status = error?.response?.status
-  const detail = String(
-    error?.response?.data?.detail ||
-    error?.response?.data?.message ||
-    error?.message ||
-    ''
-  )
-  return (status === 501 || status === 503) && detail.includes('Web IDE')
-}
-
 export const codingApi = {
   /** 获取所有开发场景 */
   getScenes(category?: string) {
@@ -176,16 +165,6 @@ export const codingApi = {
   /** 获取工作区信息 */
   getWorkspace(wsId: string) {
     return request.get<any, WorkspaceInfo>(`/coding/workspace/${wsId}`)
-  },
-
-  /** 获取工作区 Web IDE URL */
-  getIdeUrl(wsId: string, conversationId?: number | null, theme?: 'light' | 'dark') {
-    const params: Record<string, string | number> = {}
-    if (conversationId) params.conversation_id = conversationId
-    if (theme) params.theme = theme
-    return request.get<any, { ide_url: string }>(`/coding/workspace/${wsId}/ide-url`, {
-      params: Object.keys(params).length ? params : undefined,
-    })
   },
 
   /** 列出工作区文件 */
@@ -303,4 +282,25 @@ export const codingApi = {
     }
     return resp.json()
   },
+}
+
+/** 列出工作区文件(扁平相对路径,已排除 node_modules/隐藏文件) */
+export function listWorkspaceFiles(wsId: string): Promise<string[]> {
+  return request.get(`/coding/workspace/${wsId}/files`)
+}
+
+/** 读取工作区单文件内容;.class 返回反编译文本(decompiled: true) */
+export function readWorkspaceFile(
+  wsId: string,
+  filePath: string,
+): Promise<{ path: string; content: string; decompiled?: boolean; decompiler?: string }> {
+  return request.get(`/coding/workspace/${wsId}/file`, { params: { file_path: filePath } })
+}
+
+/** 以原始字节下载工作区单文件(二进制) */
+export function downloadWorkspaceFileRaw(wsId: string, filePath: string): Promise<Blob> {
+  return request.get(`/coding/workspace/${wsId}/raw`, {
+    params: { file_path: filePath },
+    responseType: 'blob',
+  })
 }

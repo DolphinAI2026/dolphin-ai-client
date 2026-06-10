@@ -31,7 +31,6 @@ COMPOSE_ENV="$DATA_DIR/compose.env"
 IMAGE_TAG="${IMAGE_TAG:-latest}"
 IMAGE_TAR="${IMAGE_TAR:-}"
 PORT="${PORT:-8003}"
-CODE_SERVER_PORT="${CODE_SERVER_PORT:-8080}"
 CONTAINER_NAME="${CONTAINER_NAME:-apaas-builder}"
 VITE_BASE_URL="${VITE_BASE_URL:-/ai-builder/}"
 SERVICE="apaas-builder"
@@ -154,7 +153,6 @@ compose_up() {
 IMAGE_TAG=$IMAGE_TAG
 CONTAINER_NAME=$CONTAINER_NAME
 PORT=$PORT
-CODE_SERVER_PORT=$CODE_SERVER_PORT
 WORKSPACES_DIR=$WORKSPACES_DIR
 APAAS_WORKSPACE_ROOT=$apaas_workspace_root
 BACKEND_ENV_FILE=$BACKEND_ENV_FILE
@@ -217,7 +215,7 @@ ${c_yel}⚠ 上生产前仍需人工加固（脚本改不了的代码/编排层�
   1. ${c_yel}平台代理鉴权${c_rst}（C-1，最高优先）：platform_proxy 路由加鉴权、废弃全局 _proxy_state 单例。
   2. ${c_yel}容器降权${c_rst}（H-4）：当前 compose 用 host 网络 + 挂 docker.sock；
      ${c_yel}生产需在编排层删掉 docker.sock 挂载并给 Dockerfile 加非 root USER${c_yel}。${c_rst}
-  3. ${c_yel}前置 nginx${c_rst}：补 HSTS/X-Frame-Options/CSP/nosniff 安全头（M-5）；如启用 Web IDE 需给 /ide/ 加鉴权（H-5）。
+  3. ${c_yel}前置 nginx${c_rst}：补 HSTS/X-Frame-Options/CSP/nosniff 安全头（M-5）。
   4. 确认 JWT_SECRET_KEY 不是 README 泄漏的那枚；轮换历史泄漏密钥（C-3）。
 EOF
 }

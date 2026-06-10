@@ -4,10 +4,10 @@
  * 职责：
  * - SSE 事件 dispatch map（step / content / agent_tool / done / ... 共 12 种）
  * - STEP_HANDLERS / TOOL_HANDLERS 子查表
- * - 附件上传 / pipeline 请求构造 / SSE 消费 / IDE URL 兜底
- * - sendMessage 编排：上传 → 构建请求 → fetch → 消费 SSE → 后置 IDE 加载
+ * - 附件上传 / pipeline 请求构造 / SSE 消费
+ * - sendMessage 编排：上传 → 构建请求 → fetch → 消费 SSE
  *
- * 依赖前面 4 个 composable 的返回值 + 几个组件级 ref，通过 deps 参数显式传入。
+ * 依赖前面 3 个 composable 的返回值 + 几个组件级 ref，通过 deps 参数显式传入。
  */
 
 import type { Ref } from 'vue'
@@ -16,26 +16,22 @@ import { useRoute } from 'vue-router'
 
 import { useCodingStore } from '@/stores/coding'
 import { useUserStore } from '@/stores/user'
-import { useThemeStore } from '@/stores/theme'
 import { consumeSseResponse } from '@/utils/sse'
-import { codingApi, isIdeUnavailableError } from '@/api/coding'
+import { codingApi } from '@/api/coding'
 import { harnessApi } from '@/api/harness'
 
 import { formatSceneType } from './useStreamMessages'
 import type { useCodingModel } from './useCodingModel'
 import type { useStreamMessages } from './useStreamMessages'
-import type { useIdeManager } from './useIdeManager'
 import type { useCodingWorkspace } from './useCodingWorkspace'
 
 type ModelDeps = ReturnType<typeof useCodingModel>
 type StreamDeps = ReturnType<typeof useStreamMessages>
-type IdeDeps = ReturnType<typeof useIdeManager>
 type WorkspaceDeps = ReturnType<typeof useCodingWorkspace>
 
 export interface PipelineDeps {
   model: ModelDeps
   stream: StreamDeps
-  ide: IdeDeps
   workspace: WorkspaceDeps
   /** 组件级场景选择 ref（首次消息用） */
   activeSceneCategory: Ref<string>
@@ -50,14 +46,11 @@ export interface PipelineDeps {
   /** 分场景入口「在应用上定制」选中的目标应用 id —— 绑定给 codegen（首条消息带 app_id）。
    *  不走 route.query.app_id：那个会触发 embeddedAppId 进嵌入式布局。 */
   boundAppId?: Ref<number | null>
-  onIdeUnavailable?: () => void
-  onIdeAvailable?: () => void
 }
 
 export function useCodingPipeline(deps: PipelineDeps) {
   const codingStore = useCodingStore()
   const userStore = useUserStore()
-  const themeStore = useThemeStore()
   const route = useRoute()
 
   const {
@@ -75,12 +68,6 @@ export function useCodingPipeline(deps: PipelineDeps) {
       completeStepMsg,
       addStepRunningMsg,
     },
-    ide: {
-      ideUrl,
-      pendingIdeUrl,
-      setIdeUrl,
-      activeView,
-    },
     workspace: { allWorkspaces },
     activeSceneCategory,
     pendingSceneCategory,
@@ -91,10 +78,7 @@ export function useCodingPipeline(deps: PipelineDeps) {
     isUploading,
     isCreating,
     boundAppId,
-    onIdeUnavailable,
-    onIdeAvailable,
   } = deps
-  let ideUnavailableNotified = false
 
   function resolveRouteProjectId(): number | null {
     const raw = route.query.project_id
@@ -164,9 +148,9 @@ export function useCodingPipeline(deps: PipelineDeps) {
       })
     },
     run_command: (args, preview) => addStreamMsg({ type: 'command', content: (args.command || preview || '') as string }),
-    read_file: (_args, preview) => addStreamMsg({ type: 'tool', content: `\uD83D\uDCC4 \u8BFB\u53D6 ${preview}` }),
-    glob_files: (_args, preview) => addStreamMsg({ type: 'tool', content: `\uD83D\uDCC2 \u626B\u63CF ${preview || '\u9879\u76EE\u6587\u4EF6'}` }),
-    grep_search: (_args, preview) => addStreamMsg({ type: 'tool', content: `\uD83D\uDD0D \u641C\u7D22 ${preview}` }),
+    read_file: (_args, preview) => addStreamMsg({ type: 'tool', content: `📄 读取 ${preview}` }),
+    glob_files: (_args, preview) => addStreamMsg({ type: 'tool', content: `📂 扫描 ${preview || '项目文件'}` }),
+    grep_search: (_args, preview) => addStreamMsg({ type: 'tool', content: `🔍 搜索 ${preview}` }),
   }
 
   /** 播放代码生成完成的提示音（E6 正弦波 350ms）。浏览器自动播放策略失败时静默跳过。 */
@@ -288,7 +272,7 @@ export function useCodingPipeline(deps: PipelineDeps) {
       addStreamMsg({ type: 'message', content: `调试服务已启动：${url}` })
     },
     agent_done: () => {
-      addStreamMsg({ type: 'status', content: '\u2705 \u4EE3\u7801\u751F\u6210\u5B8C\u6210' })
+      addStreamMsg({ type: 'status', content: '✅ 代码生成完成' })
     },
     scene_detected: (parsed) => {
       codingStore.conversationId = parsed.conversation_id
@@ -307,11 +291,6 @@ export function useCodingPipeline(deps: PipelineDeps) {
           localStorage.setItem('coding_last_workspace_id', ws.id)
         } catch { /* ignore */ }
       }
-      if (parsed.ide_url && !parsed.waiting_confirmation) {
-        onIdeAvailable?.()
-        pendingIdeUrl.value = parsed.ide_url
-        if (!ideUrl.value) setIdeUrl(parsed.ide_url)
-      }
       if ('Notification' in window && Notification.permission === 'granted') {
         const _notifyBody = parsed.waiting_clarification
           ? '有几个问题想先和你对齐一下，回答后继续'
@@ -321,12 +300,12 @@ export function useCodingPipeline(deps: PipelineDeps) {
       playDoneChime()
     },
     error: (parsed) => {
-      addStreamMsg({ type: 'error', content: parsed.message || '\u53D1\u751F\u9519\u8BEF' })
+      addStreamMsg({ type: 'error', content: parsed.message || '发生错误' })
       isStreaming.value = false
     },
   }
 
-  // ── 辅助函数（上传 / 构建请求 / 消费 SSE / 后置 IDE 加载）──
+  // ── 辅助函数（上传 / 构建请求 / 消费 SSE）──
 
   async function consumePipelineSse(response: Response): Promise<void> {
     let sseParseErrors = 0
@@ -349,30 +328,7 @@ export function useCodingPipeline(deps: PipelineDeps) {
     }, { yieldEvery: 6 })
   }
 
-  async function loadIdeUrlAfterPipeline(): Promise<void> {
-    if (!ideUrl.value && codingStore.workspace) {
-      try {
-        const { ide_url } = await codingApi.getIdeUrl(codingStore.workspace.id, codingStore.conversationId, themeStore.mode)
-        onIdeAvailable?.()
-        pendingIdeUrl.value = ide_url
-        await setIdeUrl(ide_url)
-        ideUnavailableNotified = false
-      } catch (err: any) {
-        if (isIdeUnavailableError(err)) {
-          onIdeUnavailable?.()
-          activeView.value = 'chat'
-          if (!ideUnavailableNotified) {
-            addStreamMsg({
-              type: 'status',
-              content: '当前环境未配置 Web IDE，已保持在对话模式继续完成智能开发。',
-            })
-            ideUnavailableNotified = true
-          }
-        } else {
-          ElMessage.warning(err?.message || 'IDE URL 获取失败')
-        }
-      }
-    }
+  async function refreshWorkspacesAfterPipeline(): Promise<void> {
     if (codingStore.workspace) {
       try { allWorkspaces.value = await codingApi.listWorkspaces() } catch {}
     }
@@ -404,7 +360,7 @@ export function useCodingPipeline(deps: PipelineDeps) {
       isUploading.value = true
       uploadResult = await codingApi.uploadFile(file, codingStore.workspace?.id)
     } catch (e: any) {
-      ElMessage.error(`\u9644\u4EF6\u4E0A\u4F20\u5931\u8D25: ${e.message}`)
+      ElMessage.error(`附件上传失败: ${e.message}`)
     } finally {
       isUploading.value = false
       if (previewUrl) URL.revokeObjectURL(previewUrl)
@@ -412,9 +368,9 @@ export function useCodingPipeline(deps: PipelineDeps) {
 
     if (!uploadResult) return message
     if (uploadResult.content) {
-      return `[\u9644\u4EF6\u6587\u6863: ${uploadResult.filename}]\n\`\`\`\n${uploadResult.content}\n\`\`\`\n\n${message}`
+      return `[附件文档: ${uploadResult.filename}]\n\`\`\`\n${uploadResult.content}\n\`\`\`\n\n${message}`
     }
-    return `${message}\n\n[\u9644\u4EF6\u56FE\u7247: ${uploadResult.filename}, \u5DF2\u4FDD\u5B58\u81F3: ${uploadResult.file_path}]`
+    return `${message}\n\n[附件图片: ${uploadResult.filename}, 已保存至: ${uploadResult.file_path}]`
   }
 
   // ── 主流程 ──
@@ -439,7 +395,6 @@ export function useCodingPipeline(deps: PipelineDeps) {
 
     isCreating.value = true
     isStreaming.value = true
-    activeView.value = 'chat'
     // 保留历史消息，多轮之间加分隔
     if (streamMessages.value.length > 0) {
       addStreamMsg({ type: 'status', content: '───' })
@@ -473,14 +428,14 @@ export function useCodingPipeline(deps: PipelineDeps) {
       }
 
       await consumePipelineSse(response)
-      await loadIdeUrlAfterPipeline()
+      await refreshWorkspacesAfterPipeline()
 
     } catch (error: any) {
-      // \u7528\u6237\u4E3B\u52A8\u300C\u505C\u6B62\u300D\u2192 AbortError:\u9759\u9ED8\u6536\u5C3E,\u4E0D\u5F39\u9519\u3001\u8865\u4E00\u6761\u63D0\u793A\u3002
+      // 用户主动「停止」→ AbortError:静默收尾,不弹错、补一条提示。
       if (error?.name === 'AbortError') {
-        addStreamMsg({ type: 'status', content: '\u5DF2\u505C\u6B62\u751F\u6210' })
+        addStreamMsg({ type: 'status', content: '已停止生成' })
       } else {
-        addStreamMsg({ type: 'error', content: error.message || '\u53D1\u751F\u9519\u8BEF' })
+        addStreamMsg({ type: 'error', content: error.message || '发生错误' })
       }
       isStreaming.value = false
     } finally {
@@ -501,6 +456,6 @@ export function useCodingPipeline(deps: PipelineDeps) {
     stopStream,
     // 暴露给 replay / 其他地方用（很少直接用）
     consumePipelineSse,
-    loadIdeUrlAfterPipeline,
+    refreshWorkspacesAfterPipeline,
   }
 }

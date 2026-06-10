@@ -28,9 +28,9 @@
       </div>
     </el-dialog>
 
-    <div class="coding-body">
+    <div class="coding-body" :class="{ 'code-first': codeFirst }">
       <SessionSidebar
-        v-if="!embedMode && !embeddedAppId"
+        v-if="!embedMode && !embeddedAppId && !codeFirst"
         module-name="IDE 工作区"
         brand-color="#6366f1"
         :sessions="sidebarCodingItems"
@@ -43,10 +43,15 @@
         @delete="onSidebarCodingDelete"
       />
       <!-- Main Content: 对话流 (B 重构 2026-05-17): 合并 Welcome / Chat / IDE -->
-      <div class="main-content">
-        <!-- 顶右工具抽屉按钮 (替代 view-toggle-bar): 文件 / IDE / 编辑 -->
+      <!-- 代码为主布局下,main-content 收成右侧聊天列(宽度可拖拽);否则维持原全宽 -->
+      <div
+        class="main-content"
+        :style="codeFirst ? { flex: `0 0 ${chatPaneWidth}px`, width: `${chatPaneWidth}px` } : null"
+      >
+        <div v-if="codeFirst" class="chat-resizer" @pointerdown="onChatResizeStart" title="拖拽调整聊天宽度" />
+        <!-- 顶右工具抽屉按钮 (替代 view-toggle-bar): 文件 / 设置 / 产物 -->
         <div
-          v-if="!embeddedAppId && (ideUrl || streamMessages.length > 0)"
+          v-if="!embeddedAppId && !codeFirst && streamMessages.length > 0"
           class="canvas-actions"
         >
           <button class="canvas-actions-back" @click="startNewWorkspace" title="返回首页">
@@ -57,16 +62,6 @@
             <button class="canvas-action-btn" @click="filesDrawerOpen = true" title="文件">
               <el-icon :size="14"><Document /></el-icon>
               <span class="canvas-action-label">文件</span>
-            </button>
-            <button
-              class="canvas-action-btn"
-              :class="{ disabled: !canOpenIdeView }"
-              :disabled="!canOpenIdeView"
-              :title="webIdeUnavailable ? '当前环境未配置 Web IDE' : 'IDE 编辑器'"
-              @click="openIdeDrawer"
-            >
-              <el-icon :size="13"><Monitor /></el-icon>
-              <span class="canvas-action-label">IDE</span>
             </button>
             <button class="canvas-action-btn" @click="editDrawerOpen = true" title="设置">
               <el-icon :size="14"><Setting /></el-icon>
@@ -117,7 +112,7 @@
           </header>
 
           <CodingSceneEntry
-            v-if="!isStreaming && streamMessages.length === 0"
+            v-if="!isStreaming && streamMessages.length === 0 && !codeFirst"
             :apps="sceneApps"
             :default-app-id="sceneDefaultAppId"
             @submit="onSceneSubmit"
@@ -184,26 +179,10 @@
             </div>
           </div>
 
-          <!-- 完成态卡片(对标 Builder「应用就绪」):codegen 完成且有产物时,给明确终态 + 行动入口 -->
-          <div
-            v-if="!isStreaming && streamMessages.length > 0 && codingArtifactsHasAny && !showCodingArtifactPanel"
-            class="coding-done-card"
-          >
-            <div class="cdc-main">
-              <el-icon class="cdc-check" :size="20"><CircleCheck /></el-icon>
-              <div class="cdc-text">
-                <strong>代码生成完成</strong>
-                <span>共 {{ codingArtifacts.new.length + codingArtifacts.modified.length }} 个文件已就绪</span>
-              </div>
-            </div>
-            <div class="cdc-actions">
-              <button class="cdc-btn-ghost" @click="codingArtifactTab = 'files'; toggleCodingArtifactPanel()">查看产物</button>
-              <button class="cdc-btn-primary" @click="openInstallModal">{{ isBoundDeploy ? '装回应用' : '发布到资产库' }}</button>
-            </div>
-          </div>
+          <!-- 完成态卡片已去掉；发布入口收进下方输入区 footer（codegen 完成且有产物时出现）-->
 
           <!-- Chat 底部输入框（始终可见:流式中也能输入,按 Enter 进队列;红色按钮可停止生成） -->
-          <div v-if="streamMessages.length > 0" class="chat-input-bar">
+          <div v-if="streamMessages.length > 0 || codeFirst" class="chat-input-bar">
             <!-- 排队提示卡:流式中再输入会进队列,当前回复结束后自动发送(对齐 AI Builder) -->
             <div v-if="pendingQueue.length > 0" class="coding-queue-banner">
               <span class="cqb-icon"><AppIcon name="clock" :size="13" /></span>
@@ -248,43 +227,28 @@
 
       </div>
 
-      <!-- 2026-05-17 B 重构：IDE iframe 全屏抽屉 (size=100% 用户拍板 — 80% 露左 NavRail 干扰)
-           Element Plus 2.x 砍掉 custom-class，用 body-class 直接打类到 .el-drawer__body —
-           append-to-body=true teleport 到 body 后 scoped CSS 失效，必须配合 <style>（非 scoped）规则。 -->
-      <el-drawer
-        v-model="ideDrawerOpen"
-        title="IDE 编辑器"
-        direction="rtl"
-        size="100%"
-        body-class="coding-ide-drawer-body"
-        :append-to-body="true"
-        :destroy-on-close="false"
+      <!-- Task 7: 原生文件树 + 代码查看器（常驻右栏，替换 IDE 抽屉视图） -->
+      <div
+        v-if="codingStore.workspace?.id && !embeddedAppId"
+        class="ws-pane"
       >
-        <div class="ide-pane">
-          <iframe
-            v-if="ideUrl"
-            :key="ideUrl"
-            :src="ideUrl"
-            class="ide-frame"
-            allow="clipboard-read; clipboard-write"
-            @load="onIdeFrameLoad"
-            @error="onIdeFrameError"
-          ></iframe>
-          <div v-if="!ideLoaded" class="ide-loading-overlay">
-            <div class="ide-loading-content">
-              <template v-if="ideLoadError">
-                <div class="ide-error-icon"><AppIcon name="warning" :size="32" /></div>
-                <span>{{ ideLoadError }}</span>
-                <button class="ide-retry-btn" @click="retryIdeLoad">重新加载</button>
-              </template>
-              <template v-else>
-                <div class="ide-loading-spinner"></div>
-                <span>{{ ideLoadingText }}</span>
-              </template>
-            </div>
-          </div>
-        </div>
-      </el-drawer>
+        <FileTree
+          class="ws-pane-tree"
+          :style="{ width: treePaneWidth + 'px' }"
+          :tree="wsFileTree"
+          :changed="changedPaths"
+          :selected="selectedFile"
+          @select="selectedFile = $event"
+        />
+        <div class="tree-resizer" title="拖拽调整文件树宽度" @pointerdown="onTreeResizeStart" />
+        <CodeViewer
+          class="ws-pane-viewer"
+          :ws-id="codingStore.workspace?.id || ''"
+          :file-path="selectedFile"
+          :diff="selectedDiff"
+          :dark="themeStore.isDark"
+        />
+      </div>
 
       <!-- 文件抽屉：显示 workspace 文件列表 (P0 留 stub，P1 接 ws files API) -->
       <el-drawer v-model="filesDrawerOpen" title="工作区文件" direction="rtl" size="40%" body-class="coding-files-drawer-body" :append-to-body="true">
@@ -336,25 +300,6 @@
         </button>
         <!-- 展开态：工具按钮 -->
         <template v-if="!embeddedPanelCollapsed">
-          <div v-if="ideUrl || streamMessages.length > 0" class="embedded-panel-group">
-            <button
-              class="embedded-panel-btn"
-              :class="{ active: activeView === 'chat' }"
-              @click="activeView = 'chat'"
-              title="对话记录"
-            >
-              <el-icon :size="16"><ChatDotRound /></el-icon>
-            </button>
-            <button
-              class="embedded-panel-btn"
-              :class="{ active: activeView === 'ide', disabled: !canOpenIdeView }"
-              :disabled="!canOpenIdeView"
-              @click="switchToIdeView"
-              :title="webIdeUnavailable ? '当前环境未配置 Web IDE' : '代码编辑器'"
-            >
-              <el-icon :size="16"><Monitor /></el-icon>
-            </button>
-          </div>
           <div v-if="codingStore.workspace" class="embedded-panel-group">
             <button class="embedded-panel-btn" :disabled="isDownloading" @click="downloadCode" title="下载代码">
               <el-icon :size="16"><Download /></el-icon>
@@ -536,16 +481,15 @@
 </template>
 
 <script setup lang="ts">
-import { API_PREFIX } from '@/utils/request'
 import { ref, computed, onMounted, onUnmounted, watch, nextTick } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
-import { ArrowLeft, ArrowDown, Download, Monitor, Delete, Fold, Expand, ChatDotRound, Document, Setting, Box, CircleCheck } from '@element-plus/icons-vue'
+import { ArrowLeft, ArrowDown, Download, Delete, Fold, Expand, ChatDotRound, Document, Setting, Box, CircleCheck } from '@element-plus/icons-vue'
 import { useCodingStore } from '@/stores/coding'
 import AppIcon from '@/components/common/AppIcon.vue'
 import type { PlatformEnv } from '@/api/platformEnv'
 import { useUserStore } from '@/stores/user'
-import { codingApi, isIdeUnavailableError } from '@/api/coding'
+import { codingApi } from '@/api/coding'
 import type { CodingConversation, WorkspaceInfo, ReplayStreamMessage } from '@/api/coding'
 import CodingSceneEntry from './coding/CodingSceneEntry.vue'
 import InstallModal from './coding/InstallModal.vue'
@@ -559,11 +503,16 @@ import AgentConversation from '@/components/common/AgentConversation.vue'
 import type { AgentMessage, AgentToolPayload } from '@/components/common/agent-conversation/types'
 import { useCodingModel } from './coding/useCodingModel'
 import { useStreamMessages, renderMarkdown } from './coding/useStreamMessages'
-import { useIdeManager } from './coding/useIdeManager'
 import { useCodingWorkspace } from './coding/useCodingWorkspace'
 import { useCodingPipeline } from './coding/useCodingPipeline'
 import UnifiedChatComposer from '@/components/common/UnifiedChatComposer.vue'
 import type { UnifiedChatAttachment } from '@/components/common/chatComposer'
+import FileTree from './coding/FileTree.vue'
+import CodeViewer from './coding/CodeViewer.vue'
+import { buildFileTree, type TreeNode } from './coding/fileTree'
+import { collectChangedFiles, type FileChangeMsg } from './coding/workspaceChanges'
+import { usePanelResize } from '@/components/v2/config-assistant/composables/usePanelResize'
+import { listWorkspaceFiles } from '@/api/coding'
 
 const route = useRoute()
 const router = useRouter()
@@ -579,102 +528,9 @@ const themeStore = useThemeStore()
 const userInput = ref('')
 const isCreating = ref(false)
 
-// ── IDE iframe 管理（已抽成 composable）──
-const {
-  ideUrl,
-  ideLoaded,
-  ideLoadError,
-  ideLoadingText,
-  pendingIdeUrl,
-  activeView,
-  setIdeUrl,
-  onIdeFrameLoad,
-  onIdeFrameError,
-  retryIdeLoad,
-  openPendingIde,
-} = useIdeManager()
-
-// 2026-05-17 B 重构：抽屉式 IDE / 文件 / 设置 (替代独立 view-toggle)
-const ideDrawerOpen = ref(false)
+// 2026-05-17 B 重构：抽屉式文件 / 设置 (IDE 抽屉已删)
 const filesDrawerOpen = ref(false)
 const editDrawerOpen = ref(false)
-
-async function openIdeDrawer() {
-  // 没 ideUrl 先 fetch (复用 switchToIdeView 老逻辑)，然后弹抽屉
-  if (!ideUrl.value && !pendingIdeUrl.value) {
-    await switchToIdeView()  // 内部会 set ideUrl
-  } else if (pendingIdeUrl.value) {
-    await openPendingIde()
-  }
-  if (ideUrl.value) {
-    ideDrawerOpen.value = true
-  }
-}
-
-const webIdeUnavailable = ref(false)
-const ideUnavailableNotified = ref(false)
-const canOpenIdeView = computed(() => (
-  !webIdeUnavailable.value &&
-  (!!ideUrl.value || !!pendingIdeUrl.value || !!codingStore.workspace)
-))
-
-function setWebIdeUnavailable() {
-  webIdeUnavailable.value = true
-  pendingIdeUrl.value = null
-  ideUrl.value = null
-  if (activeView.value === 'ide') activeView.value = 'chat'
-}
-
-function notifyWebIdeUnavailable(message = '当前环境未配置 Web IDE，已保持在对话模式继续开发') {
-  setWebIdeUnavailable()
-  if (!ideUnavailableNotified.value) {
-    ElMessage.info(message)
-    ideUnavailableNotified.value = true
-  }
-}
-
-function setWebIdeAvailable() {
-  webIdeUnavailable.value = false
-  ideUnavailableNotified.value = false
-}
-
-async function switchToIdeView() {
-  if (webIdeUnavailable.value) {
-    notifyWebIdeUnavailable()
-    return
-  }
-
-  if (ideUrl.value) {
-    setWebIdeAvailable()
-    activeView.value = 'ide'
-    return
-  }
-
-  if (pendingIdeUrl.value) {
-    setWebIdeAvailable()
-    await openPendingIde()
-    return
-  }
-
-  const workspace = codingStore.workspace
-  if (!workspace) {
-    ElMessage.info('当前还没有可打开的 IDE 工作区')
-    return
-  }
-
-  try {
-    const { ide_url } = await codingApi.getIdeUrl(workspace.id, codingStore.conversationId, themeStore.mode)
-    setWebIdeAvailable()
-    await setIdeUrl(ide_url)
-    activeView.value = 'ide'
-  } catch (error: any) {
-    if (isIdeUnavailableError(error)) {
-      notifyWebIdeUnavailable()
-      return
-    }
-    ElMessage.warning(error?.response?.data?.detail || error?.message || 'IDE URL 获取失败')
-  }
-}
 
 // ── Coding 模型选择（已抽成 composable）──
 const {
@@ -706,6 +562,48 @@ const {
   addStepRunningMsg,
   restoreReplayStreamMessages,
 } = useStreamMessages()
+
+// ── 原生文件树 + 代码查看器（Task 7: 替换 IDE 抽屉）──
+const wsFileTree = ref<TreeNode[]>([])
+const selectedFile = ref<string | null>(null)
+
+async function loadWsFileTree() {
+  const id = codingStore.workspace?.id
+  if (!id) { wsFileTree.value = []; return }
+  try { wsFileTree.value = buildFileTree(await listWorkspaceFiles(id)) }
+  catch (e) { console.warn('[coding] 加载工作区文件树失败', e); wsFileTree.value = [] }
+}
+
+const wsChanges = computed(() => collectChangedFiles(streamMessages.value as FileChangeMsg[]))
+const changedPaths = computed(() => new Set(wsChanges.value.changed.keys()))
+const selectedDiff = computed(() =>
+  selectedFile.value ? wsChanges.value.changed.get(selectedFile.value) || null : null,
+)
+
+// agent 改完最后一个文件 → 自动打开它（纯前端，不发请求）
+watch(() => wsChanges.value.lastChangedFile, (p) => { if (p) selectedFile.value = p })
+// 仅当改动文件“集合增长”（写了新文件）时才重载树，避免多文件 codegen 期间每写一个文件就重复拉一次
+watch(() => changedPaths.value.size, () => { void loadWsFileTree() })
+// 切换工作区 → 清空选中并重载树
+watch(() => codingStore.workspace?.id, () => { selectedFile.value = null; void loadWsFileTree() }, { immediate: true })
+
+// 工作区打开 → 代码为主三栏布局（文件树 | 大代码区 | 右聊天）；未进工作区时维持原引导/新建流程
+const codeFirst = computed(() => !!codingStore.workspace?.id && !embeddedAppId.value)
+// 右侧聊天列可拖宽（复用 config 的 usePanelResize，handle 在聊天列左边界）
+const { panelWidth: chatPaneWidth, onResizeStart: onChatResizeStart } = usePanelResize({
+  storageKey: 'coding:chat-pane-width',
+  defaultWidth: 420,
+  minWidth: 320,
+  maxWidth: 760,
+})
+// 文件树列也可拖宽(handle 在树右边界, 长 Java 类名放不下时拖开)
+const { panelWidth: treePaneWidth, onResizeStart: onTreeResizeStart } = usePanelResize({
+  storageKey: 'coding:tree-pane-width',
+  defaultWidth: 260,
+  minWidth: 180,
+  maxWidth: 480,
+  handleSide: 'right',
+})
 
 // ── 工作区列表和元信息展示（已抽成 composable）──
 const {
@@ -1034,11 +932,6 @@ async function loadCodingConversationOnly(conversationId: number) {
   const messages = await codingApi.getMessages(conversationId)
   codingStore.reset()
   codingStore.conversationId = conversationId
-  setWebIdeAvailable()
-  ideUrl.value = null
-  pendingIdeUrl.value = null
-  ideLoaded.value = false
-  activeView.value = 'chat'
   localStorage.removeItem('coding_last_workspace_id')
   loadConversationHistory(messages as any, [])
 }
@@ -1066,12 +959,7 @@ async function createCodingConversation() {
   codingStore.reset()
   codingStore.conversationId = created.id
   persistedCodingModelValue.value = normalizeCodingModelValue(selectedCodingModelValue.value)
-  setWebIdeAvailable()
-  ideUrl.value = null
-  pendingIdeUrl.value = null
-  ideLoaded.value = false
   streamMessages.value = []
-  activeView.value = 'chat'
   localStorage.removeItem('coding_last_workspace_id')
   router.replace({ path: '/coding', query: { conversation_id: String(created.id) } }).catch(() => {})
 }
@@ -1328,14 +1216,6 @@ onMounted(async () => {
     Notification.requestPermission()
   }
 
-  // preconnect to code-server，减少 iframe 首次连接延迟
-  try {
-    const link = document.createElement('link')
-    link.rel = 'preconnect'
-    link.href = 'http://localhost:8080'
-    document.head.appendChild(link)
-  } catch {}
-
   try {
     const [workspaces] = await Promise.all([
       codingApi.listWorkspaces(),
@@ -1381,7 +1261,6 @@ onUnmounted(() => {
 
 // ============ Workspace Operations ============
 
-// 设置 IDE URL — 先销毁旧 iframe 再创建新的，避免 code-server session 缓存
 async function openWorkspaceById(wsId: string) {
   try {
     // 并行加载 workspace 信息和会话（减少 1 个 RTT）
@@ -1399,20 +1278,6 @@ async function openWorkspaceById(wsId: string) {
       workspaceConversation.messages,
       workspaceConversation.stream_messages || [],
     )
-
-    try {
-      const { ide_url } = await codingApi.getIdeUrl(ws.id, workspaceConversation.conversation_id, themeStore.mode)
-      setWebIdeAvailable()
-      await setIdeUrl(ide_url)
-      // 打开工作区默认进 chat 视图，IDE 由用户自己切（避免一进来就被 IDE iframe 接管屏幕）
-      activeView.value = 'chat'
-    } catch (error: any) {
-      if (isIdeUnavailableError(error)) {
-        notifyWebIdeUnavailable('当前环境未配置 Web IDE，已进入对话开发模式')
-        return
-      }
-      throw error
-    }
   } catch (error: any) {
     ElMessage.error(`打开工作区失败: ${error.message}`)
   }
@@ -1554,12 +1419,7 @@ function startNewWorkspace() {
   codingStore.reset()
   persistedCodingModelValue.value = null
   selectedCodingModelValue.value = normalizeCodingModelValue(selectedCodingModelValue.value)
-  setWebIdeAvailable()
-  ideUrl.value = null
-  pendingIdeUrl.value = null
-  ideLoaded.value = false
   streamMessages.value = []
-  activeView.value = 'chat'
   localStorage.removeItem('coding_last_workspace_id')
   router.replace({ path: '/coding' }).catch(() => {})
 }
@@ -1590,9 +1450,6 @@ async function deleteWorkspace(ws: WorkspaceInfo) {
     allWorkspaces.value = allWorkspaces.value.filter(w => w.id !== ws.id)
     if (codingStore.workspace?.id === ws.id) {
       codingStore.reset()
-      ideUrl.value = null
-      pendingIdeUrl.value = null
-      setWebIdeAvailable()
       localStorage.removeItem('coding_last_workspace_id')
     }
     ElMessage.success('已删除')
@@ -1638,7 +1495,6 @@ function removeAttachment() {
 const { sendMessage, stopStream } = useCodingPipeline({
   model: { codingModelOptions, codingModelLoading, updatingCodingModel, selectedCodingModelValue, persistedCodingModelValue, selectedCodingModelOption, codingModelHint, toCodingModelValue, normalizeCodingModelValue, applyCodingModelSelection, loadCodingModelOptions, handleCodingModelChange } as any,
   stream: { streamMessages, isStreaming, streamContainerRef, scrollStreamToBottom, addStreamMsg, appendToLastThinking, appendToLastCommand, completeStepMsg, addStepRunningMsg, restoreReplayStreamMessages } as any,
-  ide: { ideUrl, ideLoaded, ideLoadError, ideLoadingText, pendingIdeUrl, activeView, setIdeUrl, onIdeFrameLoad, onIdeFrameError, retryIdeLoad, openPendingIde } as any,
   workspace: { allWorkspaces, isDownloading, embeddedAppId, existingWorkspaces, workspaceDisplayName } as any,
   activeSceneCategory,
   pendingSceneCategory,
@@ -1649,8 +1505,6 @@ const { sendMessage, stopStream } = useCodingPipeline({
   isUploading,
   isCreating,
   boundAppId: deployAppId,
-  onIdeUnavailable: setWebIdeUnavailable,
-  onIdeAvailable: setWebIdeAvailable,
 })
 
 
@@ -1659,18 +1513,8 @@ const { sendMessage, stopStream } = useCodingPipeline({
 async function openBrowserPreviewWithEnv(env: PlatformEnv) {
   if (!codingStore.workspace) return
   showEnvPicker.value = false
-  try {
-    const { ide_url } = await codingApi.getIdeUrl(codingStore.workspace.id, codingStore.conversationId, themeStore.mode)
-    const urlParams = new URLSearchParams(new URL(ide_url).search)
-    const token = urlParams.get('vibe_ide_token') || ''
-    const wsId = codingStore.workspace.id
-    const platformBase = env.base_url.replace(/\/backend\/?$/, '')
-    const loginUrl = platformBase
-    const previewUrl = `${API_PREFIX.replace('/api', '')}/api/static/browser-preview.html?ws_id=${wsId}&token=${token}&initial_url=${encodeURIComponent(loginUrl)}`
-    window.open(previewUrl, '_blank', 'noopener,noreferrer')
-  } catch (err: any) {
-    ElMessage.warning(err?.response?.data?.detail || err?.message || '\u6D4F\u89C8\u5668\u9884\u89C8\u6253\u5F00\u5931\u8D25')
-  }
+  const platformBase = env.base_url.replace(/\/backend\/?$/, '')
+  window.open(platformBase, '_blank', 'noopener,noreferrer')
 }
 
 async function downloadCode() {
@@ -1688,20 +1532,7 @@ async function downloadCode() {
 
 // ============ Watchers ============
 
-watch(() => themeStore.mode, async (mode) => {
-  const workspace = codingStore.workspace
-  if (!workspace || webIdeUnavailable.value) return
-  try {
-    const { ide_url } = await codingApi.getIdeUrl(workspace.id, codingStore.conversationId, mode)
-    if (activeView.value === 'ide' && ideUrl.value) {
-      await setIdeUrl(ide_url)
-    } else {
-      pendingIdeUrl.value = ide_url
-    }
-  } catch {
-    // 主题同步失败不影响当前开发会话。
-  }
-})
+// 主题变更不再需要同步 IDE URL（IDE 已删）
 
 watch(() => codingStore.conversationId, (id) => {
   if (!id) return
@@ -1720,9 +1551,6 @@ watch(() => codingStore.workspace?.id, (id) => {
 watch(() => route.path, () => {
   if (!route.path.startsWith('/coding')) {
     codingStore.reset()
-    ideUrl.value = null
-    pendingIdeUrl.value = null
-    setWebIdeAvailable()
   }
 })
 </script>
@@ -3872,40 +3700,6 @@ watch(() => route.path, () => {
 }
 .cqb-clear:hover { background: var(--t-bg-elevated); color: var(--t-text-primary); }
 
-/* 完成态卡片(对标 Builder「应用就绪」):明确终态 + 行动入口,居中同列 */
-.coding-done-card {
-  flex-shrink: 0;
-  width: calc(100% - 32px);
-  max-width: 880px;
-  margin: 0 auto 10px;
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 16px;
-  padding: 13px 16px;
-  border: 1px solid var(--t-border-subtle);
-  border-radius: 14px;
-  background: var(--t-bg-panel);
-}
-.cdc-main { display: flex; align-items: center; gap: 11px; min-width: 0; }
-.cdc-check { color: var(--t-success, #10b981); flex-shrink: 0; }
-.cdc-text { display: flex; flex-direction: column; gap: 1px; min-width: 0; }
-.cdc-text strong { font-size: 13.5px; font-weight: 650; color: var(--t-text-primary); }
-.cdc-text span { font-size: 12px; color: var(--t-text-muted); }
-.cdc-actions { display: flex; gap: 8px; flex-shrink: 0; }
-.cdc-btn-ghost {
-  height: 32px; padding: 0 14px; border: 1px solid var(--t-border-subtle);
-  border-radius: 8px; background: transparent; color: var(--t-text-secondary);
-  font-size: 13px; cursor: pointer; transition: all 0.15s ease;
-}
-.cdc-btn-ghost:hover { background: var(--t-bg-elevated); color: var(--t-text-primary); }
-.cdc-btn-primary {
-  height: 32px; padding: 0 16px; border: none; border-radius: 8px;
-  background: var(--t-brand); color: #fff; font-size: 13px; font-weight: 600;
-  cursor: pointer; transition: filter 0.15s ease;
-}
-.cdc-btn-primary:hover { filter: brightness(0.92); }
-
 /* SPEC 确认门 bar(出 SPEC 后等确认,brand 强调) */
 .coding-confirm-bar {
   flex-shrink: 0;
@@ -3974,72 +3768,6 @@ watch(() => route.path, () => {
   flex-shrink: 0;
   width: 28px;
   height: 28px;
-}
-
-/* ============ IDE Pane ============ */
-.ide-pane {
-  flex: 1;
-  overflow: hidden;
-  position: relative;
-  /* 2026-05-17: 抽屉化后 parent (el-drawer body) 不是 flex container，需绝对 100% 高 */
-  width: 100%;
-  height: 100%;
-  min-height: 0;
-}
-
-/* 2026-05-17 IDE 抽屉规则已迁到下方非 scoped <style>：
-   append-to-body=true 让 drawer teleport 到 body 外，scoped CSS 触不到。 */
-.ide-loading-overlay {
-  position: absolute;
-  inset: 0;
-  z-index: 10;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  background: var(--t-bg-base);
-  transition: opacity 0.3s ease;
-}
-.ide-loading-content {
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  gap: 16px;
-  color: var(--t-text-secondary);
-  font-size: 14px;
-}
-.ide-loading-spinner {
-  width: 36px;
-  height: 36px;
-  border: 3px solid var(--t-border-subtle);
-  border-top-color: var(--t-brand);
-  border-radius: 50%;
-  animation: spin 0.8s linear infinite;
-}
-@keyframes spin { to { transform: rotate(360deg); } }
-
-.ide-frame {
-  width: 100%;
-  height: 100%;
-  border: none;
-}
-.ide-error-icon {
-  font-size: 32px;
-  margin-bottom: 4px;
-}
-.ide-retry-btn {
-  margin-top: 12px;
-  padding: 8px 24px;
-  border: 1px solid var(--t-brand, #646cff);
-  border-radius: 8px;
-  background: transparent;
-  color: var(--t-brand, #646cff);
-  font-size: 14px;
-  cursor: pointer;
-  transition: all 0.2s;
-}
-.ide-retry-btn:hover {
-  background: var(--t-brand, #646cff);
-  color: #fff;
 }
 
 /* ============ Scrollbar ============ */
@@ -4395,10 +4123,9 @@ watch(() => route.path, () => {
 </style>
 
 <style>
-/* 2026-05-17 IDE / 文件 / 设置抽屉 body padding 0：
+/* 2026-05-17 文件 / 设置抽屉 body padding 0：
    append-to-body=true → 必须用全局（非 scoped）CSS。
    body-class prop 把这些类直接打到 .el-drawer__body 上。 */
-.coding-ide-drawer-body,
 .coding-files-drawer-body,
 .coding-edit-drawer-body {
   padding: 0 !important;
@@ -4406,21 +4133,12 @@ watch(() => route.path, () => {
   flex-direction: column;
   overflow: hidden;
 }
-.coding-ide-drawer-body > .ide-pane,
-.coding-ide-drawer-body > .ide-pane > iframe {
-  width: 100% !important;
-  height: 100% !important;
-  flex: 1 1 auto;
-  min-height: 0;
-  border: 0;
-}
 
 html[data-theme="dark"] .coding-page,
 html[data-theme="dark"] .coding-body,
 html[data-theme="dark"] .main-content,
 html[data-theme="dark"] .welcome-pane,
-html[data-theme="dark"] .coding-unselected-pane,
-html[data-theme="dark"] .ide-loading-overlay {
+html[data-theme="dark"] .coding-unselected-pane {
   background: #090b10 !important;
   color: rgba(248, 250, 252, 0.94) !important;
 }
@@ -4467,8 +4185,7 @@ html[data-theme="dark"] .welcome-title {
 html[data-theme="dark"] .welcome-desc,
 html[data-theme="dark"] .workspace-card-meta,
 html[data-theme="dark"] .creating-text,
-html[data-theme="dark"] .stream-actions-hint,
-html[data-theme="dark"] .ide-loading-content {
+html[data-theme="dark"] .stream-actions-hint {
   color: rgba(203, 213, 225, 0.68) !important;
 }
 
@@ -4629,4 +4346,61 @@ html[data-theme="dark"] .msg-error-row {
   border-color: rgba(248, 113, 113, 0.22) !important;
   color: #fca5a5 !important;
 }
+
+/* ============ Task 7: 原生文件树 + 代码查看器右栏 ============ */
+.ws-pane { display: flex; height: 100%; min-height: 0; min-width: 0; border-left: 1px solid var(--line, rgba(0,0,0,.08)); width: 420px; flex-shrink: 0; }
+.ws-pane-tree { flex: none; border-right: 1px solid var(--line, rgba(0,0,0,.08)); }
+.ws-pane-viewer { flex: 1; min-width: 0; overflow: hidden; }
+/* 树右边界拖宽 handle: 骑在边框上不占布局宽度 */
+.tree-resizer {
+  flex: none;
+  width: 7px;
+  margin: 0 -3px 0 -4px;
+  cursor: col-resize;
+  z-index: 5;
+  position: relative;
+  touch-action: none;
+  user-select: none;
+}
+.tree-resizer::after {
+  content: '';
+  position: absolute;
+  left: 3px; top: 0; bottom: 0;
+  width: 2px;
+  background: transparent;
+  transition: background 0.15s var(--ease, ease);
+}
+.tree-resizer:hover::after { background: var(--brand, #6366f1); }
+
+/* 代码为主三栏布局: SessionSidebar | 文件树+大代码区(主角) | 右聊天列(可拖宽) */
+.coding-body.code-first .ws-pane {
+  order: 1;
+  flex: 1 1 auto;
+  width: auto;
+  border-left: none;
+}
+.coding-body.code-first .main-content {
+  order: 2;
+  border-left: 1px solid var(--line, rgba(0,0,0,.08));
+  position: relative;
+}
+.chat-resizer {
+  position: absolute;
+  left: -6px; top: 0; bottom: 0;
+  width: 12px;
+  cursor: col-resize;
+  z-index: 30;
+  touch-action: none;
+  user-select: none;
+}
+/* 常驻一条细分隔线提示可拖,hover 加重 */
+.chat-resizer::after {
+  content: '';
+  position: absolute;
+  left: 5px; top: 0; bottom: 0;
+  width: 2px;
+  background: transparent;
+  transition: background 0.15s var(--ease, ease);
+}
+.chat-resizer:hover::after { background: var(--brand, #6366f1); }
 </style>
