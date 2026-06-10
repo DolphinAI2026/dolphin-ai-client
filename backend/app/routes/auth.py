@@ -4,7 +4,7 @@ from datetime import datetime
 from typing import Annotated, Optional
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy import select
-from sqlalchemy.exc import IntegrityError
+from sqlalchemy.exc import IntegrityError, SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 from jose import jwt, JWTError
 from app.database import get_db
@@ -430,6 +430,9 @@ def _is_placeholder_apaas_base_url() -> bool:
     return not base_url or "your-apaas.example.com" in base_url
 
 
+APAAS_LOGIN_TIMEOUT_SECONDS = 30
+
+
 def _extract_login_error_message(*payloads: object) -> str:
     keys = (
         "message",
@@ -471,7 +474,7 @@ async def _apaas_platform_login(username: str, password: str) -> tuple[Optional[
         "password": mcp_platform._encrypt_apaas_password(password, rsa_public_key),
         "securityCode": "",
     }
-    async with httpx.AsyncClient(timeout=20, verify=False) as client:
+    async with httpx.AsyncClient(timeout=APAAS_LOGIN_TIMEOUT_SECONDS, verify=False, trust_env=False) as client:
         resp = await client.post(url, headers=headers, json=body)
     try:
         payload = resp.json()
@@ -508,7 +511,7 @@ async def _apaas_backend_login(username: str, password: str, tenant_id: str = ""
     }
     if clean_tenant_id:
         body["tenantId"] = clean_tenant_id
-    async with httpx.AsyncClient(timeout=20, verify=False) as client:
+    async with httpx.AsyncClient(timeout=APAAS_LOGIN_TIMEOUT_SECONDS, verify=False, trust_env=False) as client:
         resp = await client.post(url, headers=headers, json=body)
     try:
         payload = resp.json()
@@ -529,7 +532,7 @@ async def _apaas_all_tenants(platform_token: str) -> list[dict]:
     ts = str(int(time.time() * 1000))
     url = f"{mcp_platform._api_base(base_url)}/xdap-admin/platform/query/tenantList?timestamp={ts}"
     headers = mcp_platform._headers(base_url, token=platform_token, rsa_public_key=rsa_public_key)
-    async with httpx.AsyncClient(timeout=20, verify=False) as client:
+    async with httpx.AsyncClient(timeout=APAAS_LOGIN_TIMEOUT_SECONDS, verify=False, trust_env=False) as client:
         resp = await client.post(url, headers=headers, json={"page": 1, "pageSize": 500, "keyword": ""})
     try:
         payload = resp.json()
@@ -558,7 +561,7 @@ async def _apaas_switchable_tenants(backend_token: str, default_tenant_id: str) 
         rsa_public_key=rsa_public_key,
     )
     headers["referer"] = f"{base_url}/platform/{default_tenant_id}/admin/data-dictionary"
-    async with httpx.AsyncClient(timeout=20, verify=False) as client:
+    async with httpx.AsyncClient(timeout=APAAS_LOGIN_TIMEOUT_SECONDS, verify=False, trust_env=False) as client:
         resp = await client.get(url, headers=headers)
     try:
         payload = resp.json()
@@ -877,7 +880,15 @@ async def _try_apaas_login_flow(user_data: UserLogin, db: AsyncSession) -> Optio
     if not username or not password or not settings.apaas_base_url:
         return None
 
-    platform_token, platform_payload = await _apaas_platform_login(username, password)
+    try:
+        platform_token, platform_payload = await _apaas_platform_login(username, password)
+    except Exception as exc:
+        logger.warning(
+            "aPaaS platform-admin login probe failed; continue backend login (%s): %s",
+            type(exc).__name__,
+            exc,
+        )
+        platform_token, platform_payload = None, {}
     is_platform_admin = bool(platform_token)
 
     backend_token, backend_payload = await _apaas_backend_login(username, password, "")
@@ -1024,11 +1035,36 @@ async def login(
     try:
         apaas_response = await _try_apaas_login_flow(user_data, db)
     except httpx.RequestError as exc:
-        # aPaaS 平台网络抖动（连接失败/超时等）不应让登录端点直接 500。
-        # 降级到本地登录路径（与 _try_apaas_login_flow 返回 None 的语义一致），
-        # 本地账号仍可登录；aPaaS 账号会收到凭证错误并可重试（连接通常瞬时恢复）。
-        logger.warning("aPaaS 登录链路网络异常 (%s)，降级本地登录: %s", type(exc).__name__, exc)
+        logger.warning("aPaaS 登录链路网络异常 (%s): %s", type(exc).__name__, exc)
+        if not _is_placeholder_apaas_base_url():
+            raise HTTPException(
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                detail="aPaaS 登录链路暂不可用，请稍后重试",
+            ) from exc
         apaas_response = None
+    except HTTPException:
+        raise
+    except IntegrityError as exc:
+        await db.rollback()
+        logger.exception("aPaaS 登录同步本地数据唯一约束冲突，已回滚")
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="aPaaS 登录成功，但同步本地账号/租户数据时发生唯一约束冲突，请联系管理员检查租户或账号绑定",
+        ) from exc
+    except SQLAlchemyError as exc:
+        await db.rollback()
+        logger.exception("aPaaS 登录同步本地数据库失败，已回滚")
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="aPaaS 登录成功，但本地数据库同步失败，请稍后重试或联系管理员",
+        ) from exc
+    except Exception as exc:
+        await db.rollback()
+        logger.exception("aPaaS 登录同步发生未预期异常，已回滚")
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail="aPaaS 登录链路返回异常数据或同步失败，请稍后重试",
+        ) from exc
     if apaas_response:
         return apaas_response
 
@@ -1435,9 +1471,9 @@ def _require_platform_admin(ctx: AuthContext) -> None:
 class TenantCreateRequest(BaseModel):
     tenant_name: str
     tenant_code: str
-    max_applications: int = 10
-    max_workspaces: int = 20
-    max_components: int = 50
+    max_applications: int = 0
+    max_workspaces: int = 0
+    max_components: int = 0
     contact_name: Optional[str] = None
     contact_email: Optional[str] = None
 
@@ -1465,7 +1501,7 @@ class TenantAdminItem(BaseModel):
     """租户管理列表项。
 
     plan_type 字段已废弃（ToB 私有化部署不需要 SaaS 风格的订阅档），DB 列保留默认 free
-    向后兼容，新接口不再返。资源限制全部走 max_applications/max_workspaces/max_components。
+    向后兼容。
     """
     id: int
     tenant_name: str
@@ -1599,13 +1635,6 @@ async def create_new_tenant(
         raise HTTPException(status_code=400, detail="租户名称不能为空")
     if not code or not all(ch.isalnum() or ch in "_-" for ch in code):
         raise HTTPException(status_code=400, detail="租户编码仅支持小写字母、数字、_、-")
-    if data.max_applications < 1 or data.max_applications > 10000:
-        raise HTTPException(status_code=400, detail="max_applications 范围 1-10000")
-    if data.max_workspaces < 0 or data.max_workspaces > 10000:
-        raise HTTPException(status_code=400, detail="max_workspaces 范围 0-10000")
-    if data.max_components < 0 or data.max_components > 10000:
-        raise HTTPException(status_code=400, detail="max_components 范围 0-10000")
-
     existing = (
         await db.execute(select(Tenant).where(Tenant.tenant_code == code))
     ).scalar_one_or_none()
@@ -1659,15 +1688,9 @@ async def update_tenant(
             raise HTTPException(status_code=400, detail="租户名称不能为空")
         t.tenant_name = name
 
-    for field, low, high in (
-        ("max_applications", 1, 10000),
-        ("max_workspaces", 0, 10000),
-        ("max_components", 0, 10000),
-    ):
+    for field in ("max_applications", "max_workspaces", "max_components"):
         val = getattr(data, field)
         if val is not None:
-            if val < low or val > high:
-                raise HTTPException(status_code=400, detail=f"{field} 范围 {low}-{high}")
             setattr(t, field, val)
 
     if data.contact_name is not None:
@@ -2165,7 +2188,7 @@ async def tenant_dashboard(
     ctx: Annotated[AuthContext, Depends(get_auth_context)],
     db: Annotated[AsyncSession, Depends(get_db)],
 ):
-    """平台总览（仅平台管理员）：所有租户的资源/配额聚合 + Top N 接近上限的租户。"""
+    """平台总览（仅平台管理员）：所有租户的资源使用量聚合。"""
     _require_platform_admin(ctx)
     from app.tenant_quota import get_tenant_usage as _usage
 
@@ -2178,8 +2201,6 @@ async def tenant_dashboard(
     ).scalars().all()
 
     total_apps = total_workspaces = total_components = total_members = 0
-    cap_apps = cap_workspaces = cap_components = 0
-    near_limit: list[dict] = []
 
     for t in rows:
         u = await _usage(db, t.id)
@@ -2191,38 +2212,16 @@ async def tenant_dashboard(
         total_workspaces += ws_used
         total_components += comps_used
         total_members += u["members"]
-        cap_apps += t.max_applications
-        cap_workspaces += t.max_workspaces
-        cap_components += t.max_components
 
-        # 任一资源 >= 80% 视为预警
-        for k, used, mx in (
-            ("applications", apps_used, t.max_applications),
-            ("workspaces", ws_used, t.max_workspaces),
-            ("components", comps_used, t.max_components),
-        ):
-            if mx > 0 and used / mx >= 0.8:
-                near_limit.append(
-                    {
-                        "tenant_id": t.id,
-                        "tenant_name": t.tenant_name,
-                        "resource": k,
-                        "used": used,
-                        "max": mx,
-                        "ratio": round(used / mx, 3),
-                    }
-                )
-
-    near_limit.sort(key=lambda x: -x["ratio"])
     return {
         "tenants_active": len(rows),
         "totals": {
-            "applications": {"used": total_apps, "max": cap_apps},
-            "workspaces": {"used": total_workspaces, "max": cap_workspaces},
-            "components": {"used": total_components, "max": cap_components},
+            "applications": {"used": total_apps, "max": 0},
+            "workspaces": {"used": total_workspaces, "max": 0},
+            "components": {"used": total_components, "max": 0},
             "members": total_members,
         },
-        "near_limit": near_limit[:10],
+        "near_limit": [],
     }
 
 

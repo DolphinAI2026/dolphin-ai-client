@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import copy
+import re
 
 from app.process_translator import build_apaas_bpmn_xml, translate_definition_to_apaas_schema
 
@@ -201,3 +202,46 @@ def test_bpmn_uses_saved_simple_rule_id_for_condition_edges():
     assert "procRuleHandle.executeSimpleProcRule(processId, documentId, 'rule-123', outcome)" in bpmn
     assert "<exclusiveGateway" not in bpmn
     assert "<inclusiveGateway" not in bpmn
+
+
+def test_start_and_end_node_ids_are_canonicalized_for_bpmn_refs():
+    payload, warnings = translate_definition_to_apaas_schema(
+        {
+            "process_name": "任意节点 ID 流程",
+            "process_code": "custom_ids",
+            "nodes": [
+                {"id": "node-start", "type": "start", "label": "开始", "position": {"x": 320, "y": 40}, "props": {}},
+                {
+                    "id": "approve-1",
+                    "type": "assignee_approval",
+                    "label": "审批",
+                    "position": {"x": 320, "y": 160},
+                    "props": {},
+                },
+                {"id": "node-end", "type": "end", "label": "结束", "position": {"x": 320, "y": 280}, "props": {}},
+            ],
+            "edges": [
+                {"id": "e-start-approve", "source": "node-start", "target": "approve-1"},
+                {"id": "e-approve-end", "source": "approve-1", "target": "node-end"},
+            ],
+        },
+        apaas_app_id="app-1",
+        menu_id="menu-1",
+        form_id="form-1",
+        process_name="任意节点 ID 流程",
+        process_code="custom_ids",
+    )
+
+    assert warnings == []
+    assert {node["id"] for node in payload["nodes"]} == {"START", "approve-1", "END"}
+    assert [(edge["source"], edge["target"]) for edge in payload["edges"]] == [
+        ("START", "approve-1"),
+        ("approve-1", "END"),
+    ]
+
+    defined = set(re.findall(r'<(?:startEvent|endEvent|userTask)\s+id="([^"]+)"', payload["bpmn"]))
+    refs = re.findall(r'<sequenceFlow[^>]*\ssourceRef="([^"]+)"[^>]*\stargetRef="([^"]+)"', payload["bpmn"])
+    assert ("START_HIDDEN", "approve-1") in refs
+    assert ("START", "approve-1") not in refs
+    assert ("approve-1", "END") in refs
+    assert all(src in defined and tgt in defined for src, tgt in refs)

@@ -46,7 +46,7 @@ from app.operations.identifiers import (  # noqa: F401
 # 类型映射（从集中注册表派生）
 # ---------------------------------------------------------------------------
 
-from app.field_types import get_field_type_map, get_comp_type_map
+from app.field_types import get_field_type_map, get_comp_type_map, select_choose_type_for_component
 
 FIELD_TYPE_MAP = get_field_type_map()
 COMP_TYPE_MAP = get_comp_type_map()
@@ -55,8 +55,8 @@ _SELECT_COMPONENT_TYPES = {"FORM_SELECT_INPUT_SINGLE", "FORM_SELECT_INPUT"}
 _MULTI_SELECT_COMPONENT_TYPES = {"FORM_SELECT_INPUT"}
 
 
-def _choose_type_for_select_component(component_type: str) -> str:
-    return "MULTI" if str(component_type or "").strip() in _MULTI_SELECT_COMPONENT_TYPES else "SINGLE"
+def _choose_type_for_select_component(component_type: str, component: Optional[dict] = None) -> str:
+    return select_choose_type_for_component(component_type, component, multi_value="MULTIPLE")
 
 
 # ---------------------------------------------------------------------------
@@ -80,7 +80,7 @@ def _permission_object_for_form_config(rule: dict, role_code_map: Dict[str, dict
         }
     return {
         "permissionObjectType": "ALL_USER",
-        "permissionObjectValue": "ALL_USER",
+        "permissionObjectValue": "",
         "permissionObjectDisplayName": "全部人员",
     }
 
@@ -130,8 +130,8 @@ def _build_permission_groups_for_form_config(
             "groupConditions": [],
             "selectorFilterConditionList": [],
             "dataPermissions": [{
-                "permissionType": "ALL_USER",
-                "permissionValue": "ALL_USER",
+                "permissionType": object_type,
+                "permissionValue": object_value,
                 "queryPermission": can_view,
                 "updatePermission": can_edit,
                 "deletePermission": can_delete,
@@ -481,7 +481,7 @@ def _build_component(
         dcode = dict_codes.get(field["dict"])
         if dcode:
             if comp["componentType"] in _SELECT_COMPONENT_TYPES:
-                comp["chooseType"] = _choose_type_for_select_component(comp["componentType"])
+                comp["chooseType"] = _choose_type_for_select_component(comp["componentType"], comp)
             comp["dictionarySelectConfig"] = {
                 "dictionaryCode": dcode,
                 "dictionarySelectOptions": [],
@@ -1108,7 +1108,7 @@ def _build_form_components_from_definition(
             built["dictCode"] = dict_ref
             built["dict"] = dict_ref
         if built.get("componentType") in _SELECT_COMPONENT_TYPES:
-            built["chooseType"] = _choose_type_for_select_component(str(built.get("componentType") or ""))
+            built["chooseType"] = _choose_type_for_select_component(str(built.get("componentType") or ""), built)
         for key in ("hidden", "readonly", "required", "showInList", "searchable"):
             if key in comp:
                 built[key] = bool(comp.get(key))
@@ -1662,7 +1662,7 @@ def _bind_dict_on_component(
     comp["source"] = {"type": "DICTIONARY_TYPE", "id": did}
     comp["chooseOptions"] = choose
     comp["dictionaryChooseOptions"] = choose
-    comp["chooseType"] = _choose_type_for_select_component(ct)
+    comp["chooseType"] = _choose_type_for_select_component(ct, comp)
     comp["multicolor"] = True
     comp["dictionaryMulticolorStatus"] = "ENABLE"
     comp["dictionarySelectConfig"] = {

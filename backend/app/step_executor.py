@@ -19,6 +19,7 @@ from app.generator_v2 import (
     _rand, _sanitize_code, _extract_fields,
     _build_component, FIELD_TYPE_MAP, COMP_TYPE_MAP, _apply_suffix,
 )
+from app.field_types import select_choose_type_for_component
 from app.lowcode_standards import normalize_component_type, normalize_database_field_type, safe_field_code
 
 logger = logging.getLogger(__name__)
@@ -197,15 +198,28 @@ async def execute_create_app(
     apaas_app_id = str(apaas_result) if isinstance(apaas_result, str) else str(
         apaas_result.get("id", apaas_result.get("appId", ""))
     )
+    app_access_configured = False
+    app_access_warning = ""
+    if apaas_app_id:
+        try:
+            await client.save_app_access(apaas_app_id, object_type="ALL", object_ids=[])
+            app_access_configured = True
+        except Exception as exc:  # noqa: BLE001
+            app_access_warning = str(exc)
+            logger.warning("应用访问授权配置失败 app_id=%s: %s", apaas_app_id, exc)
     platform_app_code = ""
     if isinstance(apaas_result, dict):
         platform_app_code = normalize_app_code(apaas_result.get("appCode") or apaas_result.get("code")) or app_code
     suffix = _rand()
-    return {
+    result = {
         "apaas_app_id": apaas_app_id,
         "platform_app_code": platform_app_code,
         "suffix": suffix,
+        "app_access_configured": app_access_configured,
     }
+    if app_access_warning:
+        result["app_access_warning"] = app_access_warning
+    return result
 
 
 # ------------------------------------------------------------------
@@ -1208,8 +1222,10 @@ _DICT_MULTI_COMPONENT_TYPES = {"FORM_SELECT_INPUT", "FORM_CHECKBOX_INPUT"}
 _SELECT_COMPONENT_TYPES = {"FORM_SELECT_INPUT_SINGLE", "FORM_SELECT_INPUT"}
 
 
-def _choose_type_for_dict_component(component_type: str) -> str:
-    return "MULTI" if str(component_type or "").strip() in _DICT_MULTI_COMPONENT_TYPES else "SINGLE"
+def _choose_type_for_dict_component(component_type: str, component: Optional[dict] = None) -> str:
+    if str(component_type or "").strip() == "FORM_CHECKBOX_INPUT":
+        return "MULTI"
+    return select_choose_type_for_component(component_type, component, multi_value="MULTI")
 
 
 def _normalize_dict_code(raw_code: Any, dict_codes: Dict[str, str]) -> str:
@@ -1439,7 +1455,7 @@ def _apply_dictionary_binding_to_component(
     component["source"] = {"type": "DICTIONARY_TYPE", "id": dict_id}
     component["chooseOptions"] = choose
     component["dictionaryChooseOptions"] = choose
-    component["chooseType"] = _choose_type_for_dict_component(component_type)
+    component["chooseType"] = _choose_type_for_dict_component(component_type, component)
     component["multicolor"] = True
     component["dictionaryMulticolorStatus"] = "ENABLE"
     component["dictionarySelectConfig"] = {
@@ -1687,7 +1703,7 @@ def _build_form_components(
         if dict_code and str(built.get("componentType") or "") in _DICT_BIND_COMPONENT_TYPES:
             built["dict"] = dict_code
             if str(built.get("componentType") or "") in _SELECT_COMPONENT_TYPES:
-                built["chooseType"] = _choose_type_for_dict_component(str(built.get("componentType") or ""))
+                built["chooseType"] = _choose_type_for_dict_component(str(built.get("componentType") or ""), built)
             built["dictionarySelectConfig"] = {
                 "dictionaryCode": dict_code,
                 "dictionarySelectOptions": [],

@@ -29,6 +29,7 @@ from mcp.server.transport_security import TransportSecuritySettings
 
 from app.config import settings
 from app.error_messages import is_apaas_token_error
+from app.field_types import select_choose_type_for_component
 from app.step_executor import _apply_dictionary_binding_to_component
 from app.tool_registry import load as _load_tool_registry
 
@@ -5179,8 +5180,17 @@ async def list_apaas_form_permissions(env_id: int, apaas_app_id: str, form_id: s
     """
     if not (apaas_app_id.strip() and form_id.strip()):
         return {"ok": False, "error_code": "INVALID_PARAMS", "message": "apaas_app_id+form_id 都必填"}
-    ok, raw = await _with_client(env_id, "查表单权限",
-        lambda c: c.query_detail_page_config(apaas_app_id.strip(), form_id.strip()))
+    async def _query(client):
+        try:
+            return await client.query_advanced_form_permission(apaas_app_id.strip(), form_id.strip())
+        except Exception as exc:
+            logger.warning(
+                "query_advanced_form_permission failed, fallback detailPageConfig app_id=%s form_id=%s: %s",
+                apaas_app_id.strip(), form_id.strip(), exc,
+            )
+            return await client.query_detail_page_config(apaas_app_id.strip(), form_id.strip())
+
+    ok, raw = await _with_client(env_id, "查表单权限", _query)
     if not ok:
         return raw
 
@@ -5680,8 +5690,10 @@ async def set_apaas_form_permissions(
         form_id=form_id.strip(),
         rules=rules,
     )
-    ok, raw = await _with_client(env_id, "设表单权限",
-        lambda c: c.create_form_permissions(apaas_app_id.strip(), [payload]))
+    async def _save(client):
+        return await client.create_form_permissions(apaas_app_id.strip(), [payload])
+
+    ok, raw = await _with_client(env_id, "设表单权限", _save)
     if not ok:
         return raw
     return {
@@ -7127,7 +7139,11 @@ async def build_apaas_feature_from_spec(
                 "dictionaryCode": actual_dict_code,
                 "dictionarySelectOptions": dict_opts_for_field,
             }
-            comp["chooseType"] = "MULTI" if comp_type in {"FORM_SELECT_INPUT", "FORM_CHECKBOX_INPUT"} else "SINGLE"
+            comp["chooseType"] = (
+                "MULTI"
+                if comp_type == "FORM_CHECKBOX_INPUT"
+                else select_choose_type_for_component(comp_type, comp, multi_value="MULTI")
+            )
 
         if comp_type in _REF_BOUND_COMPONENTS:
             target_model, target_field = _extract_ref_target(f)

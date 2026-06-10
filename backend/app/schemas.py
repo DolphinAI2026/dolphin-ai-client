@@ -41,6 +41,9 @@ class LoginResponse(BaseModel):
     requires_tenant_selection: bool = False
     selection_token: Optional[str] = None
     tenants: Optional[list[TenantOption]] = None
+    entry_path: Optional[str] = None
+    is_platform_admin: bool = False
+    has_tenant_context: bool = False
 
 
 class TenantSelectRequest(BaseModel):

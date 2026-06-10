@@ -974,6 +974,7 @@ def translate_definition_to_apaas_schema(
     has_end = False
     platform_nodes: list[dict[str, Any]] = []
     known_node_ids: set[str] = set()
+    node_id_aliases: dict[str, str] = {}
 
     for raw_node in raw_nodes:
         if not isinstance(raw_node, dict):
@@ -1000,13 +1001,15 @@ def translate_definition_to_apaas_schema(
         # === entry: start / end / timer / webhook ===
         if node_type == "start":
             has_start = True
-            platform_nodes.append(_make_apaas_node(node_id, node_label or "开始", "START", x, y))
-            known_node_ids.add(node_id)
+            node_id_aliases[node_id] = "START"
+            platform_nodes.append(_make_apaas_node("START", node_label or "开始", "START", x, y))
+            known_node_ids.add("START")
             continue
         if node_type == "end":
             has_end = True
-            platform_nodes.append(_make_apaas_node(node_id, node_label or "结束", "END", x, y))
-            known_node_ids.add(node_id)
+            node_id_aliases[node_id] = "END"
+            platform_nodes.append(_make_apaas_node("END", node_label or "结束", "END", x, y))
+            known_node_ids.add("END")
             continue
         if node_type == "timer":
             platform_nodes.append(_make_apaas_node(
@@ -1101,9 +1104,23 @@ def translate_definition_to_apaas_schema(
             "reason": "definition 没有 end 节点 — 自动加了一个 END",
         })
 
+    normalized_raw_edges: list[dict[str, Any]] = []
+    for edge in raw_edges:
+        if not isinstance(edge, dict):
+            normalized_raw_edges.append(edge)
+            continue
+        normalized_edge = dict(edge)
+        source = str(edge.get("source") or "").strip()
+        target = str(edge.get("target") or "").strip()
+        if source in node_id_aliases:
+            normalized_edge["source"] = node_id_aliases[source]
+        if target in node_id_aliases:
+            normalized_edge["target"] = node_id_aliases[target]
+        normalized_raw_edges.append(normalized_edge)
+
     # K2: 用 frontend definition.edges 真还原 apaas edges (替代固定串行链)
     platform_edges, process_rules = _build_apaas_edges(
-        raw_edges,
+        normalized_raw_edges,
         known_node_ids,
         warnings,
         menu_id=menu_id,

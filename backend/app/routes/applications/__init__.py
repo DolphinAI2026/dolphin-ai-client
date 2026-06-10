@@ -854,10 +854,6 @@ async def create_application(
             minimum_role="member",
         )
 
-    # 租户应用数配额
-    from app.tenant_quota import assert_tenant_quota
-    await assert_tenant_quota(db, ctx.tenant_id, "applications")
-
     if data.canonical_spec_id:
         from app.builder_spec.persistence import load_spec
         spec = await load_spec(db, data.canonical_spec_id, tenant_id=ctx.tenant_id)
@@ -1252,11 +1248,6 @@ async def auto_create_application(
                 platform_env_name=reuse_env_name,
             )
 
-    # 租户应用数配额: 仅真正新建时校验 (上面 appCode 复用/conversation 复用都已 return,
-    # 复用同一应用不应再撞配额 —— 否则"满配额租户改不了已有应用"反直觉)。
-    from app.tenant_quota import assert_tenant_quota
-    await assert_tenant_quota(db, ctx.tenant_id, "applications")
-
     app = Application(
         user_id=ctx.user.id,
         tenant_id=ctx.tenant_id,
@@ -1467,8 +1458,6 @@ async def import_from_platform(
         return _enrich(existing_app)
 
     # 7. 创建本地 Application 记录
-    from app.tenant_quota import assert_tenant_quota
-    await assert_tenant_quota(db, ctx.tenant_id, "applications")
     config_str = _dump_preview_config(config)
     new_app = Application(
         user_id=ctx.user.id,
@@ -1714,12 +1703,19 @@ async def publish_application(
               next_version = "1.0.1"
         else:
           next_version = "1.0.0"
+        access_event = {"type": "app_access", "object_type": "ALL", "status": "skipped"}
+        try:
+            await client.save_app_access(str(app.apaas_app_id), object_type="ALL", object_ids=[])
+            access_event["status"] = "success"
+        except Exception as access_error:
+            logger.warning("publish_application: app access save failed app_id=%s apaas_app_id=%s: %s", app_id, app.apaas_app_id, access_error)
+            access_event = {"type": "app_access", "object_type": "ALL", "status": "failed", "error": str(access_error)}
         await client.deploy_app(str(app.apaas_app_id), next_version, abstract=APP_DEPLOY_ABSTRACT)
         app.status = "completed"
         await db.commit()
         await complete_deploy_record(
             db, record, app, success=True, version_label=next_version,
-            event_log=[{"type": "publish", "version": next_version, "status": "success"}],
+            event_log=[access_event, {"type": "publish", "version": next_version, "status": "success"}],
         )
         return {"ok": True, "version": next_version, "remote_status": "ENABLE", "deploy_record_id": record.id}
     except Exception as e:
@@ -1747,6 +1743,13 @@ async def publish_application(
                             next_version = "1.0.1"
                     else:
                         next_version = "1.0.0"
+                    access_event = {"type": "app_access", "object_type": "ALL", "status": "skipped"}
+                    try:
+                        await client.save_app_access(str(app.apaas_app_id), object_type="ALL", object_ids=[])
+                        access_event["status"] = "success"
+                    except Exception as access_error:
+                        logger.warning("publish_application retry: app access save failed app_id=%s apaas_app_id=%s: %s", app_id, app.apaas_app_id, access_error)
+                        access_event = {"type": "app_access", "object_type": "ALL", "status": "failed", "error": str(access_error)}
                     await client.deploy_app(str(app.apaas_app_id), next_version, abstract=APP_DEPLOY_ABSTRACT)
                     app.status = "completed"
                     await db.commit()
@@ -1754,6 +1757,7 @@ async def publish_application(
                         db, record, app, success=True, version_label=next_version,
                         event_log=[
                             {"type": "publish", "status": "token_refresh"},
+                            access_event,
                             {"type": "publish", "version": next_version, "status": "success"},
                         ],
                     )
@@ -2525,10 +2529,6 @@ async def deploy_from_artifact(
             app.id, ascii_code,
         )
     else:
-        # 6. 租户应用配额 (仅真正新建时校验; 复用同一应用不撞配额)
-        from app.tenant_quota import assert_tenant_quota
-        await assert_tenant_quota(db, ctx.tenant_id, "applications")
-
         app = Application(
             user_id=ctx.user.id,
             tenant_id=ctx.tenant_id,

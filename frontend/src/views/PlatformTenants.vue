@@ -8,7 +8,7 @@
       <div class="platform-tenants-header">
         <div>
           <h1>租户管理</h1>
-          <p>面向 ToB 本地部署。每个租户对应一个客户/业务部门，在文件系统、应用、组件层都做配额隔离。</p>
+          <p>面向 ToB 本地部署。每个租户对应一个客户/业务部门，用于隔离成员、应用和平台环境。</p>
         </div>
       </div>
 
@@ -20,38 +20,20 @@
         </div>
         <div class="dashboard-card">
           <div class="dashboard-card-label">低代码应用</div>
-          <div class="dashboard-card-value">
-            {{ dashboard.totals.applications.used }}
-            <span class="dashboard-card-suffix">/ {{ dashboard.totals.applications.max }}</span>
-          </div>
+          <div class="dashboard-card-value">{{ dashboard.totals.applications.used }}</div>
         </div>
         <div class="dashboard-card">
           <div class="dashboard-card-label">IDE 工作区</div>
-          <div class="dashboard-card-value">
-            {{ dashboard.totals.workspaces.used }}
-            <span class="dashboard-card-suffix">/ {{ dashboard.totals.workspaces.max }}</span>
-          </div>
+          <div class="dashboard-card-value">{{ dashboard.totals.workspaces.used }}</div>
         </div>
         <div class="dashboard-card">
           <div class="dashboard-card-label">自开发组件</div>
-          <div class="dashboard-card-value">
-            {{ dashboard.totals.components.used }}
-            <span class="dashboard-card-suffix">/ {{ dashboard.totals.components.max }}</span>
-          </div>
+          <div class="dashboard-card-value">{{ dashboard.totals.components.used }}</div>
         </div>
         <div class="dashboard-card">
           <div class="dashboard-card-label">成员（活跃）</div>
           <div class="dashboard-card-value">{{ dashboard.totals.members }}</div>
         </div>
-      </div>
-
-      <div v-if="dashboard?.near_limit?.length" class="near-limit-banner">
-        <strong><AppIcon name="warning" :size="14" /> {{ dashboard.near_limit.length }} 个租户接近配额上限：</strong>
-        <span v-for="(item, idx) in dashboard.near_limit.slice(0, 5)" :key="`${item.tenant_id}-${item.resource}`">
-          {{ idx > 0 ? '、' : '' }}
-          <a class="near-limit-link" @click="jumpTenant(item.tenant_id)">{{ item.tenant_name }}</a>
-          ({{ resourceLabel(item.resource) }} {{ item.used }}/{{ item.max }})
-        </span>
       </div>
 
       <!-- 搜索栏 -->
@@ -84,7 +66,7 @@
             <EmptyState
               :variant="(filterQ || filterStatus !== null) ? 'filtered' : 'first'"
               :title="(filterQ || filterStatus !== null) ? '没有匹配的租户' : '还没有租户'"
-              :desc="(filterQ || filterStatus !== null) ? '换个关键词，或清空筛选条件查看全部。' : '新建第一个租户，开始为客户/业务部门做配额隔离。'"
+              :desc="(filterQ || filterStatus !== null) ? '换个关键词，或清空筛选条件查看全部。' : '新建第一个租户，开始为客户/业务部门管理应用。'"
             >
               <template #icon>
                 <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M3 21h18"/><path d="M5 21V7l8-4v18"/><path d="M19 21V11l-6-4"/><path d="M9 9v.01"/><path d="M9 12v.01"/><path d="M9 15v.01"/></svg>
@@ -104,15 +86,6 @@
             </template>
           </el-table-column>
           <el-table-column prop="member_count" label="成员数" width="80" align="right" />
-          <el-table-column label="配额（应用 / 工作区 / 组件）" min-width="200" align="center">
-            <template #default="{ row }">
-              <span class="quota-cell">
-                {{ row.max_applications }} <span class="quota-sep">/</span>
-                {{ row.max_workspaces }} <span class="quota-sep">/</span>
-                {{ row.max_components }}
-              </span>
-            </template>
-          </el-table-column>
           <el-table-column label="状态" width="100">
             <template #default="{ row }">
               <el-switch
@@ -161,15 +134,6 @@
           <el-form-item label="租户编码" required>
             <el-input v-model="createForm.tenant_code" placeholder="小写字母、数字、_、- ，唯一不可改" maxlength="64" />
           </el-form-item>
-          <el-form-item label="低代码应用数量上限">
-            <el-input-number v-model="createForm.max_applications" :min="1" :max="10000" :step="10" style="width: 100%" />
-          </el-form-item>
-          <el-form-item label="IDE 工作区数量上限">
-            <el-input-number v-model="createForm.max_workspaces" :min="0" :max="10000" :step="5" style="width: 100%" />
-          </el-form-item>
-          <el-form-item label="自开发组件数量上限">
-            <el-input-number v-model="createForm.max_components" :min="0" :max="10000" :step="10" style="width: 100%" />
-          </el-form-item>
           <el-form-item label="联系人姓名">
             <el-input v-model="createForm.contact_name" maxlength="64" />
           </el-form-item>
@@ -191,15 +155,6 @@
           </el-form-item>
           <el-form-item label="租户编码（不可改）">
             <el-input :model-value="editTarget?.tenant_code" disabled />
-          </el-form-item>
-          <el-form-item label="低代码应用数量上限">
-            <el-input-number v-model="editForm.max_applications" :min="1" :max="10000" :step="10" style="width: 100%" />
-          </el-form-item>
-          <el-form-item label="IDE 工作区数量上限">
-            <el-input-number v-model="editForm.max_workspaces" :min="0" :max="10000" :step="5" style="width: 100%" />
-          </el-form-item>
-          <el-form-item label="自开发组件数量上限">
-            <el-input-number v-model="editForm.max_components" :min="0" :max="10000" :step="10" style="width: 100%" />
           </el-form-item>
           <el-form-item label="联系人姓名">
             <el-input v-model="editForm.contact_name" maxlength="64" />
@@ -226,9 +181,18 @@
             <h4>资源使用</h4>
             <div v-if="detailLoading" class="detail-muted">加载中…</div>
             <div v-else-if="detailUsage" class="usage-grid">
-              <UsageBar label="低代码应用" :used="detailUsage.applications.used" :max="detailUsage.applications.max" />
-              <UsageBar label="IDE 工作区" :used="detailUsage.workspaces.used" :max="detailUsage.workspaces.max" />
-              <UsageBar label="自开发组件" :used="detailUsage.components.used" :max="detailUsage.components.max" />
+              <div class="usage-row">
+                <span class="usage-label">低代码应用</span>
+                <span class="usage-value">{{ detailUsage.applications.used }} 个</span>
+              </div>
+              <div class="usage-row">
+                <span class="usage-label">IDE 工作区</span>
+                <span class="usage-value">{{ detailUsage.workspaces.used }} 个</span>
+              </div>
+              <div class="usage-row">
+                <span class="usage-label">自开发组件</span>
+                <span class="usage-value">{{ detailUsage.components.used }} 个</span>
+              </div>
               <div class="usage-row">
                 <span class="usage-label">活跃成员</span>
                 <span class="usage-value">{{ detailUsage.members }} 人</span>
@@ -354,8 +318,6 @@ import {
   type TenantUpdatePayload,
   type TenantUsage,
 } from '@/api/auth'
-import UsageBar from '@/components/UsageBar.vue'
-import AppIcon from '@/components/common/AppIcon.vue'
 import { useUserStore } from '@/stores/user'
 
 const userStore = useUserStore()
@@ -374,9 +336,6 @@ const createVisible = ref(false)
 const createForm = ref<TenantCreatePayload>({
   tenant_name: '',
   tenant_code: '',
-  max_applications: 100,
-  max_workspaces: 50,
-  max_components: 100,
   contact_name: '',
   contact_email: '',
 })
@@ -451,22 +410,10 @@ async function setDefault(row: TenantAdminItem) {
   }
 }
 
-function jumpTenant(tenantId: number) {
-  const row = tenants.value.find((t) => t.id === tenantId)
-  if (row) openDetail(row)
-}
-
-function resourceLabel(r: string): string {
-  return ({ applications: '应用', workspaces: '工作区', components: '组件' } as Record<string, string>)[r] || r
-}
-
 function openCreate() {
   createForm.value = {
     tenant_name: '',
     tenant_code: '',
-    max_applications: 100,
-    max_workspaces: 50,
-    max_components: 100,
     contact_name: '',
     contact_email: '',
   }
@@ -497,9 +444,6 @@ function openEdit(row: TenantAdminItem) {
   editTarget.value = row
   editForm.value = {
     tenant_name: row.tenant_name,
-    max_applications: row.max_applications,
-    max_workspaces: row.max_workspaces,
-    max_components: row.max_components,
     contact_name: row.contact_name || '',
     contact_email: row.contact_email || '',
   }
@@ -891,17 +835,6 @@ onMounted(() => {
 }
 .tenant-email { color: var(--text-3); font-size: 12px; }
 .tenant-muted { color: var(--text-4); }
-
-.quota-cell {
-  font-family: var(--font-mono);
-  font-feature-settings: 'tnum';
-  font-size: 12px;
-  color: var(--text);
-}
-.quota-sep {
-  color: var(--text-4);
-  margin: 0 3px;
-}
 
 /* ── Detail drawer ──────────────────────────────────────────── */
 .tenant-detail {

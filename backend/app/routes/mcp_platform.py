@@ -256,7 +256,7 @@ async def _get_apaas_rsa_public_key(base_url: str) -> str:
     if url in _RSA_PUBLIC_KEY_CACHE:
         return _RSA_PUBLIC_KEY_CACHE[url]
     try:
-        async with httpx.AsyncClient(timeout=10, verify=False) as client:
+        async with httpx.AsyncClient(timeout=10, verify=False, trust_env=False) as client:
             resp = await client.get(url)
         resp.raise_for_status()
         key = resp.text.strip()

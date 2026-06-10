@@ -1,12 +1,7 @@
-"""租户资源配额校验。
+"""租户资源使用统计与创建保护。
 
-3 类资源：
-  - applications：低代码应用（applications 表，按 tenant_id 计数）
-  - workspaces：Vibe Coding 工作区（文件系统 _online_coding/<tenant>/oc_xxx）
-  - components：自开发组件（marketplace_components 表）
-
-配额字段位于 tenants 表（max_applications / max_workspaces / max_components）。
-平台管理员代客户操作时也按 ctx.tenant_id 当前租户的配额计；调整配额是显式工作流。
+历史上这里会按 tenants.max_* 字段拦截资源创建。当前部署形态不再限制
+低代码应用 / 工作区 / 组件数量，因此创建前只检查租户是否启用。
 """
 from __future__ import annotations
 
@@ -21,19 +16,6 @@ from app.models.tenant import Tenant, UserTenant
 
 
 ResourceKind = Literal["applications", "workspaces", "components"]
-
-_LIMIT_FIELD: dict[ResourceKind, str] = {
-    "applications": "max_applications",
-    "workspaces": "max_workspaces",
-    "components": "max_components",
-}
-
-_LABEL_CN: dict[ResourceKind, str] = {
-    "applications": "低代码应用",
-    "workspaces": "Vibe Coding 工作区",
-    "components": "自开发组件",
-}
-
 
 async def _count_applications(db: AsyncSession, tenant_id: int) -> int:
     res = await db.execute(
@@ -52,7 +34,7 @@ async def _count_components(db: AsyncSession, tenant_id: int) -> int:
 
 
 def _count_workspaces(tenant_id: int) -> int:
-    """Vibe Coding 已下线（2026-05-29），工作区配额维度恒为 0。"""
+    """Vibe Coding 已下线（2026-05-29），工作区统计恒为 0。"""
     return 0
 
 
@@ -95,28 +77,9 @@ async def get_tenant_usage(db: AsyncSession, tenant_id: int) -> dict:
 async def assert_tenant_quota(
     db: AsyncSession, tenant_id: int, resource: ResourceKind
 ) -> None:
-    """资源创建前调用：超额时 raise 409。"""
+    """资源创建前调用：只校验租户启用状态，不做数量上限拦截。"""
     tenant = await get_tenant_or_404(db, tenant_id)
     if tenant.status != 1:
         raise HTTPException(status_code=403, detail="租户已被禁用，无法创建新资源")
-
-    if resource == "applications":
-        used = await _count_applications(db, tenant_id)
-    elif resource == "components":
-        used = await _count_components(db, tenant_id)
-    elif resource == "workspaces":
-        used = _count_workspaces(tenant_id)
-    else:
+    if resource not in ("applications", "components", "workspaces"):
         raise ValueError(f"未知资源类型: {resource}")
-
-    limit = getattr(tenant, _LIMIT_FIELD[resource])
-    # 2026-05-28: limit <= 0 / None = 不限制 (off switch). 给某租户设 max_applications=0
-    # 即"该租户应用数量无上限" —— trial / 内部测试租户用, 不必再撞 10 上限。
-    if limit and limit > 0 and used >= limit:
-        raise HTTPException(
-            status_code=409,
-            detail=(
-                f"租户「{tenant.tenant_name}」已达{_LABEL_CN[resource]}数量上限"
-                f"（{used}/{limit}），请联系平台管理员调整配额"
-            ),
-        )

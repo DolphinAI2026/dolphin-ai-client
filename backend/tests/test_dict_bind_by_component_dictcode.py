@@ -190,6 +190,27 @@ def test_build_form_components_sets_choose_type_for_multi_select_payload():
     assert components[0]["chooseType"] == "MULTIPLE"
 
 
+def test_build_form_components_forces_status_select_to_single():
+    """状态字段即使平台组件用 FORM_SELECT_INPUT, chooseType 也必须是单选。"""
+    form = {
+        "components": [{
+            "componentType": "FORM_SELECT_INPUT",
+            "label": "调用状态",
+            "modelField": "api_log.call_status",
+            "dictCode": "dict_call_status",
+        }],
+    }
+
+    components, _, _ = g2._build_form_components_from_definition(
+        form,
+        default_model_code="api_log_platform",
+        model_lookup={"api_log": {"code": "api_log_platform"}},
+    )
+
+    assert components[0]["modelField"] == "api_log_platform.call_status"
+    assert components[0]["chooseType"] == "SINGLE"
+
+
 def test_collect_label_dict_map_uses_platform_model_field_from_model_info():
     """第 12 步直接绑定时, lookup 要能用平台实际 modelField 命中字典。"""
     models = [{
@@ -245,4 +266,21 @@ def test_bind_component_tree_sets_multi_select_choose_type():
 
     assert bound == 1
     assert components[0]["chooseType"] == "MULTIPLE"
+    assert components[0]["componentType"] == "FORM_SELECT_INPUT"
+
+
+def test_bind_component_tree_forces_status_select_to_single():
+    components = [{
+        "componentType": "FORM_SELECT_INPUT",
+        "label": "调用状态",
+        "modelField": "api_log_platform.call_status",
+    }]
+    dict_lookup = {"api_log_platform.call_status": "dict_call_status"}
+    dict_id_map = {"dict_call_status": "DICT_ID"}
+    dict_options_map = {"dict_call_status": [{"valueCode": "ok", "valueName": "成功"}]}
+
+    bound = g2._bind_dicts_on_component_tree(components, dict_lookup, dict_id_map, dict_options_map, {})
+
+    assert bound == 1
+    assert components[0]["chooseType"] == "SINGLE"
     assert components[0]["componentType"] == "FORM_SELECT_INPUT"

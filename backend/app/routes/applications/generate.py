@@ -73,6 +73,27 @@ def _generation_event_error_message(event: dict) -> str:
     return "未知错误"
 
 
+async def _ensure_default_app_access(client, apaas_app_id: str, *, app_id: int, event_log: Optional[list[dict]] = None) -> bool:
+    """Grant tenant-wide access to the generated aPaaS app.
+
+    aPaaS keeps app entry access separate from form/data permissions. Without
+    this save, users may have form permissions but still cannot see the app.
+    """
+    if not str(apaas_app_id or "").strip():
+        return False
+    try:
+        await client.save_app_access(str(apaas_app_id), object_type="ALL", object_ids=[])
+        if event_log is not None and len(event_log) < 200:
+            event_log.append({"type": "app_access", "status": "success", "object_type": "ALL"})
+        logger.info("app %s aPaaS 访问授权已配置为 ALL (apaas_app_id=%s)", app_id, apaas_app_id)
+        return True
+    except Exception as exc:  # noqa: BLE001
+        if event_log is not None and len(event_log) < 200:
+            event_log.append({"type": "app_access", "status": "failed", "error": str(exc)})
+        logger.warning("app %s aPaaS 访问授权配置失败 apaas_app_id=%s: %s", app_id, apaas_app_id, exc)
+        return False
+
+
 @router.get("/{app_id}/generate")
 async def generate_application(
     app_id: int,
@@ -224,6 +245,15 @@ async def generate_application(
                     app_obj.status = "generating"
                     await session.commit()
                     yield {"event": "progress", "data": json.dumps({"stage": -1, "status": "running", "step": f"复用已有平台应用: {apaas_app_id}"}, ensure_ascii=False)}
+                access_ok = await _ensure_default_app_access(client, apaas_app_id, app_id=app_id, event_log=event_log)
+                yield {
+                    "event": "progress",
+                    "data": json.dumps({
+                        "stage": -1,
+                        "status": "done" if access_ok else "warning",
+                        "step": "应用访问授权已开放给全员" if access_ok else "应用访问授权配置失败，请稍后重试",
+                    }, ensure_ascii=False),
+                }
                 completed_keys.add("create_app")
                 state["apaas_app_id"] = apaas_app_id
                 state["steps_completed"] = sorted(completed_keys)
@@ -398,6 +428,7 @@ async def _run_generation_detached(app_id: int, record_id: int) -> None:
                     else str(apaas_result.get("id", apaas_result.get("appId", "")))
                 )
                 logger.info("generate-run: app %s 平台壳创建成功 apaas_app_id=%s", app_id, app_obj.apaas_app_id)
+            await _ensure_default_app_access(client, str(app_obj.apaas_app_id or ""), app_id=app_id, event_log=event_log)
             completed_keys.add("create_app")
             state["apaas_app_id"] = app_obj.apaas_app_id
             app_obj.status = "generating"

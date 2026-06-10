@@ -28,6 +28,9 @@ export interface LoginResponse {
   requires_tenant_selection: boolean
   selection_token?: string
   tenants?: TenantOption[]
+  entry_path?: string
+  is_platform_admin?: boolean
+  has_tenant_context?: boolean
 }
 
 export interface Token {

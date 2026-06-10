@@ -6,7 +6,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Dict, List, Set
+from typing import Any, Dict, List, Set
 
 
 @dataclass(frozen=True)
@@ -243,6 +243,68 @@ def get_comp_type_map() -> Dict[str, str]:
     """preview 字段类型 → 表单组件类型（替代 generator_v2.COMP_TYPE_MAP）"""
     all_types = get_all_types()
     return {name: info.component_type for name, info in all_types.items()}
+
+
+def is_status_semantic_field(field: Any) -> bool:
+    """判断字段/组件是否是业务状态类字段。"""
+    if not isinstance(field, dict):
+        return False
+
+    values: List[str] = []
+    for key in (
+        "label",
+        "name",
+        "field_name",
+        "fieldName",
+        "code",
+        "field_code",
+        "fieldCode",
+        "modelField",
+        "model_field",
+        "dict",
+        "dictCode",
+        "dict_code",
+        "dictionaryCode",
+    ):
+        value = field.get(key)
+        if value in (None, ""):
+            continue
+        text = str(value).strip()
+        if not text:
+            continue
+        values.append(text)
+        if key in {"modelField", "model_field"} and "." in text:
+            values.append(text.rsplit(".", 1)[-1])
+
+    for text in values:
+        if "状态" in text:
+            return True
+        normalized = (
+            text.lower()
+            .replace("~", "_")
+            .replace(".", "_")
+            .replace("-", "_")
+        )
+        tokens = [part for part in normalized.split("_") if part]
+        if "status" in tokens or normalized.endswith("status"):
+            return True
+    return False
+
+
+def select_choose_type_for_component(
+    component_type: str,
+    component: Any = None,
+    *,
+    multi_value: str = "MULTI",
+) -> str:
+    """根据组件类型和字段语义返回下拉 chooseType。
+
+    aPaaS 有些链路统一用 FORM_SELECT_INPUT 表示下拉，再靠 chooseType
+    区分单选/多选。状态字段在业务上只能单选，不能仅因组件类型被误判成多选。
+    """
+    if is_status_semantic_field(component):
+        return "SINGLE"
+    return multi_value if str(component_type or "").strip() == "FORM_SELECT_INPUT" else "SINGLE"
 
 
 def get_icon_map() -> Dict[str, str]:

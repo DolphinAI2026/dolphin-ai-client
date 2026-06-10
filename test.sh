@@ -46,6 +46,17 @@ else
     exit 1
 fi
 
+echo "5. 登录护栏测试..."
+(
+    cd backend && ./venv/bin/python -m pytest tests/test_auth_login_error_boundary.py -q
+)
+if [ $? -eq 0 ]; then
+    echo "   ✓ 登录护栏测试通过"
+else
+    echo "   ✗ 登录护栏测试失败"
+    exit 1
+fi
+
 echo ""
 echo "✓ 所有检查通过！"
 echo ""

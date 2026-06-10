@@ -1,4 +1,4 @@
-"""租户资源配额测试 — 应用 / 工作区 / 组件创建时的配额拦截。"""
+"""租户资源使用统计测试 — 资源数量不再做上限拦截。"""
 import pytest
 from fastapi import HTTPException
 
@@ -43,9 +43,9 @@ async def test_assert_quota_passes_under_limit(db_session):
 
 
 @pytest.mark.asyncio
-async def test_assert_quota_blocks_at_limit_for_applications(db_session):
+async def test_assert_quota_does_not_block_at_limit_for_applications(db_session):
     t, user = await _seed_tenant(db_session, max_apps=2)
-    # seed 2 个 application，已达上限
+    # seed 2 个 application，历史上这里会触发数量限制；现在应允许继续创建。
     for i in range(2):
         db_session.add(
             Application(
@@ -59,14 +59,11 @@ async def test_assert_quota_blocks_at_limit_for_applications(db_session):
         )
     await db_session.flush()
 
-    with pytest.raises(HTTPException) as exc:
-        await assert_tenant_quota(db_session, t.id, "applications")
-    assert exc.value.status_code == 409
-    assert "上限" in exc.value.detail
+    await assert_tenant_quota(db_session, t.id, "applications")
 
 
 @pytest.mark.asyncio
-async def test_assert_quota_blocks_at_limit_for_components(db_session):
+async def test_assert_quota_does_not_block_at_limit_for_components(db_session):
     t, user = await _seed_tenant(db_session, max_comps=1)
     db_session.add(
         MarketplaceComponent(
@@ -82,9 +79,7 @@ async def test_assert_quota_blocks_at_limit_for_components(db_session):
     )
     await db_session.flush()
 
-    with pytest.raises(HTTPException) as exc:
-        await assert_tenant_quota(db_session, t.id, "components")
-    assert exc.value.status_code == 409
+    await assert_tenant_quota(db_session, t.id, "components")
 
 
 @pytest.mark.asyncio
