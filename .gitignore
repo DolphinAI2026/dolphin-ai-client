@@ -13,6 +13,7 @@ node_modules/
 dist/
 *.tsbuildinfo
 pnpm-lock.yaml
+.npm-cache/
 
 # Environment
 .env

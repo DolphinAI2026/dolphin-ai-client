@@ -433,10 +433,10 @@ def _build_command_env() -> dict[str, str]:
     return env
 
 
-def _is_plain_npm_install(command: str) -> bool:
+def _contains_npm_install(command: str) -> bool:
     tokens = _extract_primary_shell_tokens(command)
     if tokens and tokens[0] == "npm" and len(tokens) >= 2 and tokens[1] in {"install", "i"}:
-        return all(token.startswith("-") for token in tokens[2:])
+        return True
     # 复合命令中包含 npm install
     import re
     return bool(re.search(r'\bnpm\s+(?:install|i)\b', command))
@@ -465,10 +465,23 @@ def _extract_primary_shell_tokens(command: str) -> list[str]:
     return primary_tokens
 
 
-def _is_npm_install_and_build(command: str) -> bool:
-    """匹配 npm install && npm run build 复合命令（顺序必须是 install 在前，build 在后）"""
+def _contains_build_command(command: str) -> bool:
+    """匹配 aPaaS 自开发常见构建命令。
+
+    LLM 有时会传 `npm install && ./node_modules/.bin/vue-cli-service build ...`
+    这类长命令。这里统一拦截，避免绕过 WorkspaceManager 的依赖缓存和兼容构建流程。
+    """
     import re
-    return bool(re.search(r'\bnpm\s+(?:install|i)\b.*&&.*\bnpm\s+run\s+build\b', command))
+    return bool(
+        re.search(r'\bnpm\s+run\s+build\b', command)
+        or re.search(r'(?:^|[/\s])vue-cli-service\s+build\b', command)
+        or re.search(r'\bdf-apaas-cli\s+build\b', command)
+    )
+
+
+def _is_npm_install_and_build(command: str) -> bool:
+    """匹配 install + build 复合命令（顺序不强依赖具体 build 写法）。"""
+    return _contains_npm_install(command) and _contains_build_command(command)
 
 
 def _is_plain_npm_build(command: str) -> bool:
@@ -476,9 +489,9 @@ def _is_plain_npm_build(command: str) -> bool:
     tokens = _extract_primary_shell_tokens(command)
     if tokens == ["npm", "run", "build"]:
         return True
-    # 复合命令：只要最终执行的是 npm run build（不含其他 npm 子命令）
-    import re
-    return bool(re.search(r'\bnpm\s+run\s+build\b', command)) and "vue-cli-service" not in command
+    # 复合命令：只要包含标准 build / vue-cli-service build / df-apaas-cli build，
+    # 且没有 npm install，就交给 WorkspaceManager 的兼容构建流程。
+    return _contains_build_command(command) and not _contains_npm_install(command)
 
 
 async def _stream_process_output(
@@ -530,7 +543,7 @@ async def _run_command(
                 return build_result["message"]
             return f"Error: {build_result['message']}"
 
-        if _is_plain_npm_install(command):
+        if _contains_npm_install(command):
             from app.coding.workspace import WorkspaceManager
 
             result = await WorkspaceManager().install_deps(
