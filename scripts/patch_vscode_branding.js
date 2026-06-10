@@ -660,9 +660,30 @@ const brandingPatch = `
 
   const maxAttempts = 240;
   let attempts = 0;
-  const observer = new MutationObserver(() => {
-    decorateWelcome();
-  });
+  let decorated = false;
+  let scheduled = false;
+
+  function stopWatching() {
+    decorated = true;
+    clearInterval(timer);
+    observer.disconnect();
+  }
+
+  function runDecorate() {
+    scheduled = false;
+    if (decorated) return;
+    if (decorateWelcome()) {
+      stopWatching();
+    }
+  }
+
+  function scheduleDecorate() {
+    if (decorated || scheduled) return;
+    scheduled = true;
+    setTimeout(runDecorate, 100);
+  }
+
+  const observer = new MutationObserver(scheduleDecorate);
 
   if (document.documentElement) {
     observer.observe(document.documentElement, { childList: true, subtree: true });
@@ -670,16 +691,11 @@ const brandingPatch = `
 
   const timer = setInterval(() => {
     attempts += 1;
-    decorateWelcome();
-    if (attempts >= maxAttempts) {
-      clearInterval(timer);
-      observer.disconnect();
-    }
+    scheduleDecorate();
+    if (attempts >= maxAttempts) stopWatching();
   }, 500);
 
-  setTimeout(() => {
-    decorateWelcome();
-  }, 0);
+  scheduleDecorate();
 })();
 `;
 

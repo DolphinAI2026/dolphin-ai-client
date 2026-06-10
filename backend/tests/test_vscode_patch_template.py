@@ -67,6 +67,18 @@ def test_patch_all_runs_chat_fallback_after_chat_enable():
     assert enable_idx < fallback_idx
 
 
+def test_ide_patch_disables_workspace_trust_prompt():
+    patch_all = (repo_root() / "scripts" / "patch_all.js").read_text(encoding="utf-8")
+    entrypoint = (repo_root() / "deploy" / "docker" / "entrypoint.sh").read_text(
+        encoding="utf-8"
+    )
+
+    for source in (patch_all, entrypoint):
+        assert "security.workspace.trust.enabled" in source
+        assert "security.workspace.trust.startupPrompt" in source
+        assert "security.workspace.trust.untrustedFiles" in source
+
+
 def test_branding_patch_accepts_explicit_code_server_path():
     script = (repo_root() / "scripts" / "patch_vscode_branding.js").read_text(
         encoding="utf-8"
@@ -84,6 +96,9 @@ def test_branding_patch_waits_for_late_welcome_dom():
 
     assert "new MutationObserver" in script
     assert "maxAttempts = 240" in script
+    assert "function scheduleDecorate()" in script
+    assert "if (decorateWelcome())" in script
+    assert "observer.disconnect()" in script
     assert "attempts >= 20" not in script
 
 

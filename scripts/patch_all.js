@@ -9,12 +9,14 @@
  *   1. 自动检测 code-server 版本和路径
  *   2. 提取 workbench.js 属性名映射
  *   3. 逐个执行 patch（branding → chat_enable → chat_fallback）
- *   4. 语法验证（失败自动回滚）
- *   5. 更新 workbench.html 缓存参数
+ *   4. 关闭 Workspace Trust 首次弹窗
+ *   5. 语法验证（失败自动回滚）
+ *   6. 更新 workbench.html 缓存参数
  */
 
 const { execSync } = require('child_process');
 const fs = require('fs');
+const os = require('os');
 const path = require('path');
 const { resolve, extractPropertyNames } = require('./lib/codeServerResolver');
 
@@ -60,6 +62,33 @@ try {
 const backupPath = csInfo.workbenchPath + '.bak-' + Date.now();
 fs.copyFileSync(csInfo.workbenchPath, backupPath);
 console.log(`✓ Backup: ${path.basename(backupPath)}\n`);
+
+function ensureCodeServerUserSettings() {
+  const dataDir = process.env.CODE_SERVER_DATA_DIR
+    || path.join(os.homedir(), '.local', 'share', 'code-server');
+  const userDir = path.join(dataDir, 'User');
+  const settingsPath = path.join(userDir, 'settings.json');
+
+  fs.mkdirSync(userDir, { recursive: true });
+
+  let settings = {};
+  if (fs.existsSync(settingsPath)) {
+    try {
+      settings = JSON.parse(fs.readFileSync(settingsPath, 'utf8'));
+    } catch {
+      settings = {};
+    }
+  }
+
+  settings['security.workspace.trust.enabled'] = false;
+  settings['security.workspace.trust.startupPrompt'] = 'never';
+  settings['security.workspace.trust.untrustedFiles'] = 'open';
+
+  fs.writeFileSync(settingsPath, JSON.stringify(settings, null, 2) + '\n');
+  console.log(`✓ Workspace Trust disabled: ${settingsPath}\n`);
+}
+
+ensureCodeServerUserSettings();
 
 // Step 4: Run patches
 const scriptsDir = __dirname;

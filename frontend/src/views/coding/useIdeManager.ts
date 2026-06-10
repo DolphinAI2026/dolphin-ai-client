@@ -8,8 +8,12 @@
  * - `activeView` chat / ide 切换
  */
 
-import { ref, nextTick } from 'vue'
+import { ref, nextTick, onBeforeUnmount } from 'vue'
 import { useThemeStore } from '@/stores/theme'
+
+const IDE_LOAD_TIMEOUT_MS = 45_000
+const IDE_READY_POLL_MS = 500
+const CROSS_ORIGIN_READY_GRACE_MS = 1500
 
 export function useIdeManager() {
   const themeStore = useThemeStore()
@@ -18,9 +22,28 @@ export function useIdeManager() {
   const ideLoadError = ref('')
   const ideLoadingText = ref('正在连接 IDE...')
   let ideLoadTimer: ReturnType<typeof setTimeout> | null = null
+  let ideReadyProbeTimer: ReturnType<typeof setInterval> | null = null
+  let ideReadyProbeStartedAt = 0
 
   const pendingIdeUrl = ref<string | null>(null)
   const activeView = ref<'chat' | 'ide'>('chat')
+
+  function clearIdeLoadTimer() {
+    if (!ideLoadTimer) return
+    clearTimeout(ideLoadTimer)
+    ideLoadTimer = null
+  }
+
+  function clearIdeReadyProbe() {
+    if (!ideReadyProbeTimer) return
+    clearInterval(ideReadyProbeTimer)
+    ideReadyProbeTimer = null
+  }
+
+  function clearIdeTimers() {
+    clearIdeLoadTimer()
+    clearIdeReadyProbe()
+  }
 
   /** 剥除 URL 尾部的 _t=<ts> 缓存破坏参数，返回 "base URL" 用于比较。 */
   function stripCacheParam(url: string): string {
@@ -56,16 +79,17 @@ export function useIdeManager() {
     ideLoaded.value = false  // 显示 loading overlay
     ideLoadError.value = ''
     ideLoadingText.value = '正在连接 IDE...'
+    clearIdeTimers()
     ideUrl.value = null  // 销毁旧 iframe
     await nextTick()  // 等 DOM 更新（替代硬编码 100ms 延迟）
     ideUrl.value = appendCacheParam(baseUrl)
-    // 启动 30 秒加载超时
-    if (ideLoadTimer) clearTimeout(ideLoadTimer)
+    // 启动加载超时
     ideLoadTimer = setTimeout(() => {
       if (!ideLoaded.value) {
-        ideLoadError.value = 'IDE 加载超时，请检查 code-server 是否运行'
+        ideLoadError.value = 'IDE 加载超时，请检查 code-server 是否运行或重新打开 IDE'
+        clearIdeReadyProbe()
       }
-    }, 30_000)
+    }, IDE_LOAD_TIMEOUT_MS)
     // 2秒后更新提示文字
     setTimeout(() => {
       if (!ideLoaded.value && !ideLoadError.value) {
@@ -74,15 +98,72 @@ export function useIdeManager() {
     }, 2000)
   }
 
-  function onIdeFrameLoad() {
+  function isIdeFrameReady(frame: HTMLIFrameElement): 'ready' | 'waiting' | 'inaccessible' {
+    try {
+      const doc = frame.contentDocument
+      const text = doc?.body?.innerText || ''
+      if (!doc || !doc.body) return 'waiting'
+      if (text.includes('Do you trust the authors') || text.includes('Restricted Mode')) {
+        return 'waiting'
+      }
+      if (doc.querySelector('.monaco-workbench')) return 'ready'
+      if (doc.querySelector('.gettingStartedContainer')) return 'ready'
+      if (doc.querySelector('.part.activitybar')) return 'ready'
+      if (text.includes('睿鲸AI Coding') || text.includes('EXPLORER') || text.includes('CHAT')) {
+        return 'ready'
+      }
+      return 'waiting'
+    } catch {
+      return 'inaccessible'
+    }
+  }
+
+  function markIdeReady() {
     ideLoaded.value = true
     ideLoadError.value = ''
-    if (ideLoadTimer) { clearTimeout(ideLoadTimer); ideLoadTimer = null }
+    clearIdeTimers()
+  }
+
+  function startIdeReadyProbe(frame: HTMLIFrameElement) {
+    clearIdeReadyProbe()
+    ideLoadingText.value = '正在启动编辑器...'
+    ideReadyProbeStartedAt = Date.now()
+
+    const probe = () => {
+      if (ideLoaded.value || ideLoadError.value) {
+        clearIdeReadyProbe()
+        return
+      }
+
+      const state = isIdeFrameReady(frame)
+      if (state === 'ready') {
+        markIdeReady()
+        return
+      }
+
+      if (state === 'inaccessible' && Date.now() - ideReadyProbeStartedAt > CROSS_ORIGIN_READY_GRACE_MS) {
+        markIdeReady()
+      }
+    }
+
+    probe()
+    if (!ideLoaded.value && !ideLoadError.value) {
+      ideReadyProbeTimer = setInterval(probe, IDE_READY_POLL_MS)
+    }
+  }
+
+  function onIdeFrameLoad(event: Event) {
+    const frame = event.target instanceof HTMLIFrameElement ? event.target : null
+    if (!frame) {
+      markIdeReady()
+      return
+    }
+    startIdeReadyProbe(frame)
   }
 
   function onIdeFrameError() {
     ideLoadError.value = 'IDE 加载失败，code-server 可能未启动'
-    if (ideLoadTimer) { clearTimeout(ideLoadTimer); ideLoadTimer = null }
+    clearIdeTimers()
   }
 
   function retryIdeLoad() {
@@ -91,15 +172,16 @@ export function useIdeManager() {
     ideLoaded.value = false
     ideLoadError.value = ''
     ideLoadingText.value = '正在重新连接...'
+    clearIdeTimers()
     ideUrl.value = null
     nextTick(() => {
       ideUrl.value = appendCacheParam(base)
-      if (ideLoadTimer) clearTimeout(ideLoadTimer)
       ideLoadTimer = setTimeout(() => {
         if (!ideLoaded.value) {
-          ideLoadError.value = '重试超时，请检查 code-server 状态'
+          ideLoadError.value = '重试超时，请检查 code-server 状态或重新打开 IDE'
+          clearIdeReadyProbe()
         }
-      }, 30_000)
+      }, IDE_LOAD_TIMEOUT_MS)
     })
   }
 
@@ -109,6 +191,10 @@ export function useIdeManager() {
     pendingIdeUrl.value = null
     activeView.value = 'ide'
   }
+
+  onBeforeUnmount(() => {
+    clearIdeTimers()
+  })
 
   return {
     // state
