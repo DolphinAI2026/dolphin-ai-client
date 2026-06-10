@@ -189,23 +189,7 @@
             </div>
           </div>
 
-          <!-- 完成态卡片(对标 Builder「应用就绪」):codegen 完成且有产物时,给明确终态 + 行动入口 -->
-          <div
-            v-if="!isStreaming && streamMessages.length > 0 && codingArtifactsHasAny && !showCodingArtifactPanel"
-            class="coding-done-card"
-          >
-            <div class="cdc-main">
-              <el-icon class="cdc-check" :size="20"><CircleCheck /></el-icon>
-              <div class="cdc-text">
-                <strong>代码生成完成</strong>
-                <span>共 {{ codingArtifacts.new.length + codingArtifacts.modified.length }} 个文件已就绪</span>
-              </div>
-            </div>
-            <div class="cdc-actions">
-              <button class="cdc-btn-ghost" @click="codingArtifactTab = 'files'; toggleCodingArtifactPanel()">查看产物</button>
-              <button class="cdc-btn-primary" @click="openInstallModal">{{ isBoundDeploy ? '装回应用' : '发布到资产库' }}</button>
-            </div>
-          </div>
+          <!-- 完成态卡片已去掉；发布入口收进下方输入区 footer（codegen 完成且有产物时出现）-->
 
           <!-- Chat 底部输入框（始终可见:流式中也能输入,按 Enter 进队列;红色按钮可停止生成） -->
           <div v-if="streamMessages.length > 0 || codeFirst" class="chat-input-bar">
@@ -246,6 +230,16 @@
                     :value="toCodingModelValue(option.id) ?? ''"
                   >{{ option.config_name }}</option>
                 </select>
+                <!-- 发布入口(替代被删的完成卡):生成完成且有产物时出现 -->
+                <button
+                  v-if="!isStreaming && codingArtifactsHasAny"
+                  class="coding-publish-inline"
+                  :title="isBoundDeploy ? '把生成的代码装回应用' : '发布到自开发资产库'"
+                  @click="openInstallModal"
+                >
+                  <AppIcon name="package" :size="13" :stroke="1.9" />
+                  <span>{{ isBoundDeploy ? '装回应用' : '发布到资产库' }}</span>
+                </button>
               </template>
             </UnifiedChatComposer>
           </div>
@@ -4733,4 +4727,21 @@ html[data-theme="dark"] .msg-error-row {
   transition: background 0.15s var(--ease, ease);
 }
 .chat-resizer:hover::after { background: var(--brand, #6366f1); }
+
+/* 发布入口(收进输入区 footer,替代被删的完成卡) */
+.coding-publish-inline {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 4px 11px;
+  border: 1px solid var(--brand, #6366f1);
+  border-radius: var(--r-sm, 6px);
+  background: var(--brand-soft, rgba(99, 102, 241, 0.1));
+  color: var(--brand-ink, var(--brand, #4f46e5));
+  font-size: var(--fs-xs, 12px);
+  line-height: 1.4;
+  cursor: pointer;
+  transition: background 0.12s var(--ease, ease), color 0.12s var(--ease, ease);
+}
+.coding-publish-inline:hover { background: var(--brand, #6366f1); color: #fff; }
 </style>
