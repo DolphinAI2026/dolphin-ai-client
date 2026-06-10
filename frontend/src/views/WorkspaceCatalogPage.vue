@@ -75,7 +75,7 @@
                 <span>包名：{{ workspaceCodeName(ws) || ws.project_name }}</span>
               </div>
               <div class="grid-card-actions" @click.stop>
-                <button class="action-btn primary" @click.stop="openWorkspace(ws)" title="打开 IDE">
+                <button class="action-btn primary" @click.stop="openWorkspace(ws)" title="打开代码工作区">
                   <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polygon points="5 3 19 12 5 21 5 3"/></svg>
                 </button>
                 <button :class="['action-btn', { 'is-loading': uploadingWsId === ws.id }]" @click.stop="uploadWorkspace(ws)" :disabled="uploadingWsId === ws.id" :title="uploadingWsId === ws.id ? '上传中...' : '上传组件包'">
@@ -113,7 +113,7 @@
             <el-table-column label="操作" width="132" fixed="right">
               <template #default="{ row }">
                 <div class="ws-table-actions" @click.stop>
-                  <button class="action-btn primary" @click.stop="openWorkspace(row)" title="打开 IDE">
+                  <button class="action-btn primary" @click.stop="openWorkspace(row)" title="打开代码工作区">
                     <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polygon points="5 3 19 12 5 21 5 3"/></svg>
                   </button>
                   <button :class="['action-btn', { 'is-loading': uploadingWsId === row.id }]" @click.stop="uploadWorkspace(row)" :disabled="uploadingWsId === row.id" :title="uploadingWsId === row.id ? '上传中...' : '上传组件包'">
@@ -146,12 +146,11 @@
   <EnvSelectModal v-model="showEnvModal" @selected="onEnvSelected" />
 
   <!-- 全屏 IDE 抽屉：点击工作区直接进 code-server 看/改代码（不再跳 Coding 工作台） -->
-  <WorkspaceIdeDrawer ref="ideDrawer" />
 </template>
 
 <script setup lang="ts">
 import { computed, onMounted, ref, watch } from 'vue'
-import { useRoute } from 'vue-router'
+import { useRoute, useRouter } from 'vue-router'
 import { Grid, List } from '@element-plus/icons-vue'
 import { ElMessage } from 'element-plus'
 import BuilderFrame from '@/components/BuilderFrame.vue'
@@ -159,10 +158,9 @@ import EnvSelectModal from '@/components/EnvSelectModal.vue'
 import { codingApi, type WorkspaceInfo } from '@/api/coding'
 import { applicationApi } from '@/api/application'
 import { platformEnvApi } from '@/api/platformEnv'
-import WorkspaceIdeDrawer from '@/components/common/WorkspaceIdeDrawer.vue'
 
 const route = useRoute()
-const ideDrawer = ref<InstanceType<typeof WorkspaceIdeDrawer>>()
+const router = useRouter()
 const loading = ref(true)
 const workspaces = ref<WorkspaceInfo[]>([])
 const activeTab = ref('all')
@@ -300,8 +298,8 @@ function formatTime(iso?: string) {
 }
 
 function openWorkspace(ws: WorkspaceInfo) {
-  // 直接在资产库内全屏打开该工作区的 Web IDE（code-server），不再跳 Coding 工作台
-  ideDrawer.value?.openWorkspace(ws.id)
+  // 打开原生代码工作区(CodingPage:文件树 + 代码查看器 + 对话),替代 code-server IDE 抽屉
+  router.push({ path: '/coding', query: { workspace_id: ws.id } }).catch(() => {})
 }
 
 async function downloadWorkspace(ws: WorkspaceInfo, type: 'src' | 'dist') {
