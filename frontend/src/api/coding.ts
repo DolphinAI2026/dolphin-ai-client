@@ -289,11 +289,11 @@ export function listWorkspaceFiles(wsId: string): Promise<string[]> {
   return request.get(`/coding/workspace/${wsId}/files`)
 }
 
-/** 读取工作区单文件内容 */
+/** 读取工作区单文件内容;.class 返回反编译文本(decompiled: true) */
 export function readWorkspaceFile(
   wsId: string,
   filePath: string,
-): Promise<{ path: string; content: string }> {
+): Promise<{ path: string; content: string; decompiled?: boolean; decompiler?: string }> {
   return request.get(`/coding/workspace/${wsId}/file`, { params: { file_path: filePath } })
 }
 

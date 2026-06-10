@@ -19,7 +19,7 @@ const EXT_LANG: Record<string, string> = {
   html: 'html', htm: 'html', css: 'css', less: 'less', scss: 'scss',
   md: 'markdown', mdc: 'markdown', markdown: 'markdown',
   sh: 'bash', bash: 'bash', zsh: 'bash', py: 'python',
-  java: 'java', kt: 'kotlin', kts: 'kotlin',
+  java: 'java', kt: 'kotlin', kts: 'kotlin', class: 'java',
   sql: 'sql', xml: 'xml', svg: 'xml',
   yaml: 'yaml', yml: 'yaml', properties: 'properties', env: 'properties', ini: 'ini', toml: 'toml',
   go: 'go', rs: 'rust', c: 'c', h: 'c', cpp: 'cpp', cc: 'cpp', hpp: 'cpp',

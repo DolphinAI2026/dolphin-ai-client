@@ -6,6 +6,7 @@
         <span v-if="dir" class="cv-path-dir">{{ dir }}/</span><span class="cv-path-name">{{ baseName }}</span>
       </span>
       <span v-if="diff" class="cv-badge">改动</span>
+      <span v-if="decompiled" class="cv-badge" :title="`由 ${decompiler} 反编译,非原始源码`">反编译视图</span>
       <button v-if="!diff && rawContent" class="cv-copy" :class="{ done: copied }" @click="copy">
         <AppIcon :name="copied ? 'check' : 'clipboard'" :size="14" :stroke="1.9" />
         <span>{{ copied ? '已复制' : '复制' }}</span>
@@ -26,7 +27,7 @@
       <div v-else-if="binary" class="cv-state cv-binary">
         <AppIcon :name="fileIcon" :size="30" :stroke="1.5" />
         <span class="cv-binary-name">{{ baseName }}</span>
-        <span class="cv-binary-hint">二进制文件，不支持预览</span>
+        <span class="cv-binary-hint">{{ binaryHint }}</span>
         <button class="cv-download" :disabled="downloading" @click="downloadFile">
           <AppIcon name="download" :size="14" :stroke="1.9" />
           <span>{{ downloading ? '下载中…' : '下载文件' }}</span>
@@ -59,7 +60,7 @@ const BINARY_EXT = new Set([
   'png', 'jpg', 'jpeg', 'gif', 'webp', 'ico', 'bmp',
   'pdf', 'woff', 'woff2', 'ttf', 'eot', 'otf',
   'mp4', 'mp3', 'wav', 'mov', 'avi',
-  'exe', 'bin', 'so', 'dll', 'class', 'jar',
+  'exe', 'bin', 'so', 'dll', 'jar',
   'psd', 'sketch', 'xlsx', 'xls', 'docx', 'doc', 'ppt', 'pptx',
 ])
 
@@ -76,6 +77,9 @@ const loading = ref(false)
 const error = ref('')
 const copied = ref(false)
 const binary = ref(false)
+const binaryHint = ref('二进制文件，不支持预览')
+const decompiled = ref(false)
+const decompiler = ref('')
 const downloading = ref(false)
 const bodyRef = ref<HTMLElement>()
 
@@ -101,6 +105,9 @@ async function load() {
   error.value = ''
   copied.value = false
   binary.value = false
+  binaryHint.value = '二进制文件，不支持预览'
+  decompiled.value = false
+  decompiler.value = ''
   if (props.diff || !props.filePath || !props.wsId) return
   // 已知二进制扩展名直接走下载面板,不去拉文本(避免 utf-8 解码报错)
   if (isBinaryExt.value) { binary.value = true; return }
@@ -108,15 +115,20 @@ async function load() {
   try {
     const res = await readWorkspaceFile(props.wsId, props.filePath)
     rawContent.value = res.content
+    decompiled.value = !!res.decompiled
+    decompiler.value = res.decompiler || ''
     html.value = await highlightCode(res.content, props.filePath, !!props.dark)
     // 换文件时把滚动复位到左上角,避免沿用上一个文件的横/纵滚动位置
     await nextTick()
     if (bodyRef.value) { bodyRef.value.scrollTop = 0; bodyRef.value.scrollLeft = 0 }
   } catch (e: any) {
     const detail = String(e?.response?.data?.detail || e?.message || '')
+    const isClassFile = baseName.value.toLowerCase().endsWith('.class')
     // 后端读 utf-8 失败 = 其实是二进制文件 → 也走下载面板,不显示红色报错
-    if (/codec|decode byte|utf-8/i.test(detail)) {
+    // .class 反编译失败同理,落下载面板并带上后端的人话原因
+    if (isClassFile || /codec|decode byte|utf-8/i.test(detail)) {
       binary.value = true
+      if (isClassFile && detail) binaryHint.value = detail
     } else {
       error.value = detail || '读取文件失败'
     }
