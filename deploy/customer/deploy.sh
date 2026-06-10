@@ -11,13 +11,9 @@
 #   首次：  ./deploy.sh            # 生成 backend.env（含随机密钥），提示你填必填项
 #   填好后：./deploy.sh            # 校验通过后真正部署
 #
-# 常用环境变量（可选覆盖）：
-#   APAAS_BUILDER_DATA_DIR  数据目录（默认 /data/apaas）
-#   IMAGE_TAG               镜像 tag（默认 latest）
-#   IMAGE_TAR               若提供，先 docker load 这个 tar（离线交付场景）
-#   PORT                    后端端口（默认 8003）
-#   ADMIN_USERNAME          首个管理员账号（默认 admin）
-#   ADMIN_PASSWORD          首个管理员口令（默认随机生成并打印）
+# 客户只维护一份配置文件：
+#   /data/apaas/backend.env（首次运行由 backend.env.template 生成）
+# 脚本会从这份文件读取镜像、端口、workspace、JDK、DB、aPaaS、密钥等配置。
 # ------------------------------------------------------------
 set -euo pipefail
 
@@ -50,6 +46,22 @@ die()  { printf "%s[fail]%s %s\n" "$c_red" "$c_rst" "$*" >&2; exit 1; }
 
 gen()        { openssl rand -base64 32 | tr -d '\n'; }                 # 通用随机密钥
 gen_fernet() { openssl rand -base64 32 | tr '+/' '-_' | tr -d '\n'; }  # 合法 Fernet key（urlsafe b64，32B）
+env_get() {
+  local key="$1" file="${2:-$BACKEND_ENV_FILE}"
+  [ -f "$file" ] || return 0
+  grep -E "^${key}=" "$file" | tail -1 | cut -d= -f2-
+}
+
+load_customer_config() {
+  local v
+  v="$(env_get IMAGE_TAG)";          [ -n "$v" ] && IMAGE_TAG="$v"
+  v="$(env_get IMAGE_TAR)";          [ -n "$v" ] && IMAGE_TAR="$v"
+  v="$(env_get PORT)";               [ -n "$v" ] && PORT="$v"
+  v="$(env_get CODE_SERVER_PORT)";   [ -n "$v" ] && CODE_SERVER_PORT="$v"
+  v="$(env_get CONTAINER_NAME)";     [ -n "$v" ] && CONTAINER_NAME="$v"
+  v="$(env_get VITE_BASE_URL)";      [ -n "$v" ] && VITE_BASE_URL="$v"
+  v="$(env_get WORKSPACES_DIR)";     [ -n "$v" ] && WORKSPACES_DIR="$v"
+}
 
 # ── 1. 前置依赖 ──────────────────────────────────────────────
 preflight() {
@@ -112,7 +124,7 @@ validate_backend_env() {
   grep -q '__GENERATE__' "$BACKEND_ENV_FILE" && die "backend.env 残留 __GENERATE__ 占位，疑似生成异常，请删除 $BACKEND_ENV_FILE 重跑。"
   local missing=()
   for k in DATABASE_URL APAAS_BASE_URL JWT_SECRET_KEY ENCRYPTION_KEY; do
-    local v; v="$(grep -E "^$k=" "$BACKEND_ENV_FILE" | head -1 | cut -d= -f2-)"
+    local v; v="$(env_get "$k")"
     [ -n "$v" ] || missing+=("$k")
   done
   [ ${#missing[@]} -eq 0 ] || die "backend.env 缺必填项: ${missing[*]}"
@@ -122,7 +134,7 @@ validate_backend_env() {
 # ── 4. MySQL 可达性（仅告警，不阻断；entrypoint 也会等）──────────
 probe_mysql() {
   local url host port
-  url="$(grep -E '^DATABASE_URL=' "$BACKEND_ENV_FILE" | head -1 | cut -d= -f2-)"
+  url="$(env_get DATABASE_URL)"
   if [[ "$url" =~ @([^:/]+)(:([0-9]+))?/ ]]; then
     host="${BASH_REMATCH[1]}"; port="${BASH_REMATCH[3]:-3306}"
     if (exec 3<>"/dev/tcp/$host/$port") 2>/dev/null; then
@@ -135,12 +147,16 @@ probe_mysql() {
 
 # ── 5. 启动 ──────────────────────────────────────────────────
 compose_up() {
+  local apaas_workspace_root
+  apaas_workspace_root="$(env_get APAAS_WORKSPACE_ROOT)"
+  [ -n "$apaas_workspace_root" ] || apaas_workspace_root="$WORKSPACES_DIR"
   cat > "$COMPOSE_ENV" <<EOF
 IMAGE_TAG=$IMAGE_TAG
 CONTAINER_NAME=$CONTAINER_NAME
 PORT=$PORT
 CODE_SERVER_PORT=$CODE_SERVER_PORT
 WORKSPACES_DIR=$WORKSPACES_DIR
+APAAS_WORKSPACE_ROOT=$apaas_workspace_root
 BACKEND_ENV_FILE=$BACKEND_ENV_FILE
 VITE_BASE_URL=$VITE_BASE_URL
 EOF
@@ -209,9 +225,10 @@ EOF
 main() {
   log "apaas-builder 客户部署 — 数据目录 $DATA_DIR"
   preflight
-  ensure_image
   ensure_backend_env      # 首次会在此 exit 0，提示填必填项
+  load_customer_config
   validate_backend_env
+  ensure_image
   probe_mysql
   compose_up
   wait_health

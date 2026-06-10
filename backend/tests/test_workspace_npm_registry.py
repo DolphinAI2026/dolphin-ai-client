@@ -58,6 +58,23 @@ def test_ensure_workspace_npmrc_upgrades_legacy_single_line(tmp_path):
     assert f"@x-apaas:registry={ws_mod.APAAS_PRIVATE_NPM_REGISTRY}" in content
 
 
+# ── ②' npm 全局安装落到用户目录 ──────────────────────────────
+
+def test_build_npm_env_uses_user_global_prefix(monkeypatch, tmp_path):
+    mgr = _bare_manager()
+    prefix = tmp_path / "npm-global"
+    monkeypatch.setattr(ws_mod, "NPM_GLOBAL_PREFIX", prefix)
+    monkeypatch.setenv("PATH", "/usr/bin")
+    monkeypatch.delenv("npm_config_prefix", raising=False)
+    monkeypatch.delenv("NPM_CONFIG_PREFIX", raising=False)
+
+    env = mgr._build_npm_env()
+
+    assert env["npm_config_prefix"] == str(prefix)
+    assert env["NPM_CONFIG_PREFIX"] == str(prefix)
+    assert env["PATH"].split(":")[0] == str(prefix / "bin")
+
+
 # ── ③ _ensure_df_apaas_cli：私有源 + 失败大声报错 ────────────
 
 async def test_ensure_df_apaas_cli_skips_when_already_available(monkeypatch):

@@ -159,6 +159,7 @@ def _build_executable_bpmn_xml(
       <definitions ...>
         <process id="..." isExecutable="true">
           <startEvent id="START"/>
+          <userTask id="START_HIDDEN" .../>
           <endEvent id="END">
             <extensionElements>...activiti:executionListener...</extensionElements>
           </endEvent>
@@ -183,8 +184,30 @@ def _build_executable_bpmn_xml(
                  'targetNamespace="http://bpmn.io/schema/bpmn" '
                  'exporter="ai-builder" exporterVersion="1.0">')
     parts.append(f'<process id="Process_{process_def_id}" isExecutable="true">')
-    # startEvent
+    # startEvent + hidden start task.
+    #
+    # aPaaS VERSION_1.1 runtime expects an executable task after START. Without
+    # START_HIDDEN, saved flows pass schema validation but runtime
+    # processImageInfo can hit "currentFlowNode is null" when drawing the
+    # active instance.
     parts.append('<startEvent id="START" name="开始"/>')
+    first_edge = next((e for e in edges_data if e.get("source") == "START"), None)
+    first_edge_id = first_edge.get("bpmn_id") if isinstance(first_edge, dict) else ""
+    hidden_default_attr = f' default="SequenceFlow_{first_edge_id}"' if first_edge_id else ""
+    parts.append(
+        f'<userTask id="START_HIDDEN" name="开始"{hidden_default_attr} activiti:assignee="${{assignee}}">'
+        '<extensionElements>'
+        '<activiti:executionListener xmlns:activiti="http://activiti.org/bpmn" event="start" delegateExpression="${executionListener}"/>'
+        '<activiti:executionListener xmlns:activiti="http://activiti.org/bpmn" event="end" delegateExpression="${executionListener}"/>'
+        '</extensionElements>'
+        '<multiInstanceLoopCharacteristics isSequential="false" '
+        'xmlns:activiti="http://activiti.org/bpmn" '
+        'activiti:collection="${procPersonHandle.processUsers(processId,&apos;START_HIDDEN&apos;,documentId,submitter)}" '
+        'activiti:elementVariable="assignee">'
+        '<completionCondition>${nrOfCompletedInstances &gt; 0 and multiIsComplete}</completionCondition>'
+        '</multiInstanceLoopCharacteristics>'
+        '</userTask>'
+    )
     # endEvent
     parts.append('<endEvent id="END" name="结束">'
                  '<extensionElements>'
@@ -215,11 +238,12 @@ def _build_executable_bpmn_xml(
     # sequenceFlows
     for e in edges_data:
         bid = e["bpmn_id"]
-        src = e["source"]
+        src = "START_HIDDEN" if e["source"] == "START" else e["source"]
         tgt = e["target"]
         parts.append(
             f'<sequenceFlow id="SequenceFlow_{bid}" sourceRef="{src}" targetRef="{tgt}"/>'
         )
+    parts.append('<sequenceFlow id="SequenceFlow_START_HIDDEN" sourceRef="START" targetRef="START_HIDDEN"/>')
     parts.append('</process>')
     parts.append('</definitions>')
     return "\n".join(parts)
@@ -241,10 +265,12 @@ def _build_process_payload_v2(
     # START / END 节点 — 必须含完整 data 字段, 否则平台后端 deserialize 成
     # NodeStartConfig/NodeEndConfig 时为 null → 触发 NPE "newData is null".
     # 实证 docs/captures/process-*.json START/END 都有 type/formButtons/等完整 data.
+    start_cell_id = "START"
+    end_cell_id = "END"
     nodes = [
-        {"id": "START", "x": 372, "y": 32, "height": 64, "width": 64,
+        {"id": start_cell_id, "x": 372, "y": 32, "height": 64, "width": 64,
          "timeBoudries": [], "data": _start_node_data(), "nodeId": "START"},
-        {"id": "END", "x": 372, "y": 32 + 96 * (len(stages_with_role) + 1),
+        {"id": end_cell_id, "x": 372, "y": 160 + 160 * max(1, len(stages_with_role)),
          "height": 64, "width": 64,
          "timeBoudries": [], "data": _end_node_data(), "nodeId": "END"},
     ]
@@ -252,15 +278,13 @@ def _build_process_payload_v2(
     # 同时跟踪 stages 跟 edges 的 BPMN id, 给 BPMN XML 用
     stage_bpmn_meta = []  # [{bpmn_id, title, next_edge_bpmn_id}]
     edge_bpmn_meta = []   # [{bpmn_id, source, target}]
-    prev_node_id = "START"
-    # BPMN 边的 sourceRef 必须引用 BPMN 元素 id（START / userTask 的 bpmn_id），
-    # 不能用图节点的 cell-N id —— 否则 apaas BPMN schema 校验 cvc-id.1 报
-    # "no ID/IDREF binding for IDREF 'cell-2'" → 存流程 500（多级链必崩）。
+    prev_node_id = start_cell_id
+    # START/END 的画布 id 就用 START/END；审批节点画布 id 用 cell-*，
+    # 运行态/BPMN nodeId 用 BPMN_*。
     prev_bpmn_id = "START"
     cell_idx = 1
     edge_idx = len(stages_with_role) + 2
-    y_pos = 160
-    pending_edge_bpmn_ids = []  # 暂存每个 stage 之后的 edge bpmn id, 给 default 属性用
+    y_pos = 200
     for stage_idx, stage in enumerate(stages_with_role, start=1):
         cell_idx += 1
         cell_id = f"cell-{cell_idx}"
@@ -313,11 +337,11 @@ def _build_process_payload_v2(
     last_edge_bpmn_id = _bpmn_random_id()
     last_edge_obj = _process_edge_template(
         edge_cell_id=f"cell-{edge_idx}",
-        source=prev_node_id, target="END",
+        source=prev_node_id, target=end_cell_id,
     )
     last_edge_obj["data"]["id"] = last_edge_bpmn_id
     edges.append(last_edge_obj)
-    # 最后一条 edge: BPMN sourceRef 用最后 stage 的 bpmn_id (不是 cell-N)
+    # 最后一条 edge: BPMN sourceRef 用最后 stage 的 executable node id.
     last_stage_bpmn_id = stage_bpmn_meta[-1]["bpmn_id"] if stage_bpmn_meta else "START"
     edge_bpmn_meta.append({"bpmn_id": last_edge_bpmn_id,
                             "source": last_stage_bpmn_id, "target": "END"})

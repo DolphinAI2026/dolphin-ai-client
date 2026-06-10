@@ -19,7 +19,7 @@
       new-label="+ 新会话"
       back-route="/apps"
       back-label="返回应用"
-      empty-hint="还没有会话，点上面新建一个"
+      empty-hint="暂无会话，点上方新建"
       @select="(id) => loadSession(Number(id))"
       @create="() => onCreateSession()"
       @create-with-option="(cmd) => onCreateSession(cmd)"
@@ -125,7 +125,7 @@
               <span><i></i>整理需求</span>
               <span><i></i>生成 / 更新应用</span>
               <span><i></i>自开发页面和组件</span>
-              <span><i></i>联调接口与修错</span>
+              <span><i></i>接口联调与排错</span>
             </div>
           </div>
         </template>
@@ -563,8 +563,8 @@ const introExamples = [
     prompt: '我想调整现有应用：新增一个审批状态字段，列表里支持按状态筛选，并把详情页的关键字段重新分组。',
   },
   {
-    title: '从报错和联调接入',
-    short: '贴接口、截图或构建错误',
+    title: '从接口联调开始',
+    short: '贴接口、截图或报错定位问题',
     prompt: '我遇到一个接口联调问题，下面会贴报错和请求参数，请帮我定位原因并给出修改方案。',
   },
 ]
@@ -3124,8 +3124,9 @@ onMounted(async () => {
 .ai-chat-app :deep(.session-sidebar.is-empty .empty-hint) {
   padding-top: 58px;
   color: #94a3b8;
-  font-size: 18px;
+  font-size: 14px;
   text-align: center;
+  white-space: nowrap;
 }
 .chat-header {
   padding: 12px 24px; border-bottom: 1px solid var(--ac-border);

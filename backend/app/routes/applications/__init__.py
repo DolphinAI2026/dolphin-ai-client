@@ -43,6 +43,68 @@ router = APIRouter(prefix="/applications", tags=["应用"])
 logger = logging.getLogger(__name__)
 
 
+def _extract_apaas_app_version(app_detail: dict) -> str:
+    for key in ("currentVersion", "appVersion", "version"):
+        value = app_detail.get(key) if isinstance(app_detail, dict) else None
+        if value is not None and str(value).strip():
+            return str(value).strip()
+    return ""
+
+
+def _bump_patch_version(version: str, fallback: str = "1.0.1") -> str:
+    clean = str(version or "").strip().lstrip("vV")
+    if not clean:
+        return fallback
+    try:
+        parts = [int(part) for part in clean.split(".")]
+        if not parts:
+            return fallback
+        parts[-1] += 1
+        return ".".join(str(part) for part in parts)
+    except Exception:
+        return fallback
+
+
+def _is_apaas_version_error(error: Exception | str) -> bool:
+    text = str(error)
+    return "版本" in text or "version" in text.lower()
+
+
+async def _deploy_apaas_app_with_version_retry(
+    client: APaaSClient,
+    apaas_app_id: str,
+    first_version: str,
+    abstract: str,
+) -> tuple[str, list[dict]]:
+    events: list[dict] = []
+    try:
+        await client.deploy_app(apaas_app_id, first_version, abstract=abstract)
+        return first_version, events
+    except Exception as first_error:
+        if not _is_apaas_version_error(first_error):
+            raise
+
+        remote_detail = await client.query_app_detail(apaas_app_id)
+        remote_version = _extract_apaas_app_version(remote_detail)
+        retry_base = remote_version or first_version
+        retry_version = _bump_patch_version(retry_base)
+        if retry_version == first_version:
+            retry_version = _bump_patch_version(first_version)
+        if retry_version == first_version:
+            raise first_error
+
+        events.append({
+            "type": "publish",
+            "status": "version_retry",
+            "from": first_version,
+            "to": retry_version,
+            "remote_version": remote_version,
+            "error": str(first_error)[:300],
+        })
+        await client.deploy_app(apaas_app_id, retry_version, abstract=abstract)
+        return retry_version, events
+
+
 def _is_application_admin(ctx: AuthContext) -> bool:
     return ctx.tenant_role in ("platform_admin", "tenant_admin")
 
@@ -1692,17 +1754,8 @@ async def publish_application(
     try:
         client = APaaSClient(base_url=env.base_url, tenant_id=env.platform_tenant_id, token=token)
         app_detail = await client.query_app_detail(str(app.apaas_app_id))
-        current_version = app_detail.get("appVersion", app_detail.get("version", ""))
-        if current_version:
-          parts = current_version.split(".")
-          try:
-              nums = [int(p) for p in parts]
-              nums[-1] += 1
-              next_version = ".".join(str(p) for p in nums)
-          except Exception:
-              next_version = "1.0.1"
-        else:
-          next_version = "1.0.0"
+        current_version = _extract_apaas_app_version(app_detail)
+        next_version = _bump_patch_version(current_version) if current_version else "1.0.0"
         access_event = {"type": "app_access", "object_type": "ALL", "status": "skipped"}
         try:
             await client.save_app_access(str(app.apaas_app_id), object_type="ALL", object_ids=[])
@@ -1710,14 +1763,20 @@ async def publish_application(
         except Exception as access_error:
             logger.warning("publish_application: app access save failed app_id=%s apaas_app_id=%s: %s", app_id, app.apaas_app_id, access_error)
             access_event = {"type": "app_access", "object_type": "ALL", "status": "failed", "error": str(access_error)}
-        await client.deploy_app(str(app.apaas_app_id), next_version, abstract=APP_DEPLOY_ABSTRACT)
+        published_version, retry_events = await _deploy_apaas_app_with_version_retry(
+            client, str(app.apaas_app_id), next_version, APP_DEPLOY_ABSTRACT
+        )
         app.status = "completed"
         await db.commit()
         await complete_deploy_record(
-            db, record, app, success=True, version_label=next_version,
-            event_log=[access_event, {"type": "publish", "version": next_version, "status": "success"}],
+            db, record, app, success=True, version_label=published_version,
+            event_log=[
+                access_event,
+                *retry_events,
+                {"type": "publish", "version": published_version, "status": "success"},
+            ],
         )
-        return {"ok": True, "version": next_version, "remote_status": "ENABLE", "deploy_record_id": record.id}
+        return {"ok": True, "version": published_version, "remote_status": "ENABLE", "deploy_record_id": record.id}
     except Exception as e:
         detail = str(e)
         if (is_apaas_token_error(detail) or "401" in detail) and env.username and env.password_enc:
@@ -1732,17 +1791,8 @@ async def publish_application(
                     await db.commit()
                     client = APaaSClient(base_url=env.base_url, tenant_id=env.platform_tenant_id, token=token)
                     app_detail = await client.query_app_detail(str(app.apaas_app_id))
-                    current_version = app_detail.get("appVersion", app_detail.get("version", ""))
-                    if current_version:
-                        parts = current_version.split(".")
-                        try:
-                            nums = [int(p) for p in parts]
-                            nums[-1] += 1
-                            next_version = ".".join(str(p) for p in nums)
-                        except Exception:
-                            next_version = "1.0.1"
-                    else:
-                        next_version = "1.0.0"
+                    current_version = _extract_apaas_app_version(app_detail)
+                    next_version = _bump_patch_version(current_version) if current_version else "1.0.0"
                     access_event = {"type": "app_access", "object_type": "ALL", "status": "skipped"}
                     try:
                         await client.save_app_access(str(app.apaas_app_id), object_type="ALL", object_ids=[])
@@ -1750,18 +1800,21 @@ async def publish_application(
                     except Exception as access_error:
                         logger.warning("publish_application retry: app access save failed app_id=%s apaas_app_id=%s: %s", app_id, app.apaas_app_id, access_error)
                         access_event = {"type": "app_access", "object_type": "ALL", "status": "failed", "error": str(access_error)}
-                    await client.deploy_app(str(app.apaas_app_id), next_version, abstract=APP_DEPLOY_ABSTRACT)
+                    published_version, retry_events = await _deploy_apaas_app_with_version_retry(
+                        client, str(app.apaas_app_id), next_version, APP_DEPLOY_ABSTRACT
+                    )
                     app.status = "completed"
                     await db.commit()
                     await complete_deploy_record(
-                        db, record, app, success=True, version_label=next_version,
+                        db, record, app, success=True, version_label=published_version,
                         event_log=[
                             {"type": "publish", "status": "token_refresh"},
                             access_event,
-                            {"type": "publish", "version": next_version, "status": "success"},
+                            *retry_events,
+                            {"type": "publish", "version": published_version, "status": "success"},
                         ],
                     )
-                    return {"ok": True, "version": next_version, "remote_status": "ENABLE", "deploy_record_id": record.id}
+                    return {"ok": True, "version": published_version, "remote_status": "ENABLE", "deploy_record_id": record.id}
             except Exception as retry_error:
                 await complete_deploy_record(
                     db, record, app, success=False,

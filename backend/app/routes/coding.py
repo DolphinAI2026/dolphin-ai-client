@@ -288,6 +288,13 @@ def _infer_public_builder_prefix(request: Request) -> str:
     if forwarded_prefix:
         return forwarded_prefix.rstrip("/")
 
+    referer = (request.headers.get("referer") or "").strip()
+    if referer:
+        parsed = urlparse(referer)
+        parts = [p for p in (parsed.path or "").split("/") if p]
+        if parts and parts[0] not in {"api", "ide"}:
+            return f"/{parts[0]}"
+
     code_server_base = _align_local_code_server_base_url(request, settings.code_server_base_url)
     if not code_server_base:
         return ""
@@ -299,13 +306,21 @@ def _infer_public_builder_prefix(request: Request) -> str:
     return ""
 
 
+def _infer_code_server_base_url(request: Request) -> str:
+    configured = _align_local_code_server_base_url(request, settings.code_server_base_url)
+    if configured:
+        return configured
+
+    public_base = _build_public_api_base(request)
+    public_prefix = _infer_public_builder_prefix(request)
+    return f"{public_base}{public_prefix}/ide".rstrip("/")
+
+
 def _build_ide_proxy_api_base(request: Request, ws_id: str) -> str:
     """为 code-server 场景优先生成同源代理地址，避免浏览器被 CSP 拦截直连后端。"""
     public_base = _build_public_api_base(request)
     public_prefix = _infer_public_builder_prefix(request)
-    code_server_base = _align_local_code_server_base_url(request, settings.code_server_base_url)
-    if not code_server_base:
-        return f"{public_base}{public_prefix}/api/coding/workspace/{ws_id}/ide"
+    code_server_base = _infer_code_server_base_url(request)
 
     request_host = (request.url.hostname or "").strip().lower()
     code_server_host = (urlparse(code_server_base).hostname or "").strip().lower()
@@ -1343,9 +1358,7 @@ async def get_workspace_ide_url(
     db: Annotated[AsyncSession, Depends(get_db)] = None,
 ):
     """获取工作区的 Web IDE (code-server) URL"""
-    base_url = _align_local_code_server_base_url(request, settings.code_server_base_url)
-    if not base_url:
-        raise HTTPException(status_code=501, detail="Web IDE 未配置，请在 .env 中设置 CODE_SERVER_BASE_URL")
+    base_url = _infer_code_server_base_url(request)
     workspace_meta = await _ensure_workspace_access(ws_id, ctx, db, minimum_project_role="member")
     ws_path = workspace_mgr.get_workspace_path(ws_id)
     if not ws_path.exists():

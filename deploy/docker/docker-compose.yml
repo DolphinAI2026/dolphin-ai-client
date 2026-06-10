@@ -4,7 +4,8 @@
 # 两种典型场景：
 #   1) 主机独占（默认）：容器 8003/8080，VITE_BASE_URL=/ai-builder/
 #   2) 与主机裸跑并存（线上过渡期）：容器 8103/8090，VITE_BASE_URL=/ai-builder-docker/
-#      通过 env file 覆盖变量，或直接改下方 build.args 和 environment
+#      客户部署请只维护 /data/apaas/backend.env；deploy/customer/deploy.sh
+#      会派生 compose env 供本文件插值。
 #
 # 用法：
 #   cd deploy/docker
@@ -24,7 +25,7 @@
 # 前提：
 #   - 宿主机建好 ${WORKSPACES_DIR} 目录
 #   - 宿主机预先 build vibe-sandbox 镜像：docker build -t vibe-sandbox:latest <repo>/docker/vibe-sandbox/
-#   - ${BACKEND_ENV_FILE} 已写好（必须设 APAAS_WORKSPACE_ROOT=${WORKSPACES_DIR}）
+#   - ${BACKEND_ENV_FILE} 已写好（客户部署由 deploy/customer/deploy.sh 生成）
 #   - 外置 MySQL 可达（DATABASE_URL 在 .env 里）
 
 services:
@@ -48,7 +49,7 @@ services:
       CODE_SERVER_PORT: ${CODE_SERVER_PORT:-8080}
       # 后端代码读这个变量决定 workspace 根目录；必须等于 host 路径
       # （sandbox 容器是 host docker 启的，docker run -v 用的是 host 路径）
-      APAAS_WORKSPACE_ROOT: ${WORKSPACES_DIR:-/data/apaas/workspaces}
+      APAAS_WORKSPACE_ROOT: ${APAAS_WORKSPACE_ROOT:-${WORKSPACES_DIR:-/data/apaas/workspaces}}
 
     volumes:
       # workspaces 卷 — host 跟容器内**路径一致**，让后端 docker_runtime 计算的

@@ -32,6 +32,19 @@ if [ ! -f "$wrapperJarPath" ]; then
 fi
 
 # ── 检查 Java ─────────────────────────────────────────────
+case "${APAAS_BACKEND_JDK_VERSION:-}" in
+  8|1.8|jdk8|java8)
+    if [ -x "/opt/jdk8/bin/java" ]; then
+      JAVA_HOME="/opt/jdk8"
+    fi
+    ;;
+  17|jdk17|java17)
+    if [ -x "/opt/jdk17/bin/java" ]; then
+      JAVA_HOME="/opt/jdk17"
+    fi
+    ;;
+esac
+
 if [ -n "$JAVA_HOME" ]; then
   JAVACMD="$JAVA_HOME/bin/java"
 else

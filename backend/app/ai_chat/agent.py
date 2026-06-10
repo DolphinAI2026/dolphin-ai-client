@@ -126,6 +126,7 @@ def _is_retryable_llm_error(exc: Exception) -> bool:
         (
             httpx.ConnectError,
             httpx.ConnectTimeout,
+            httpx.ReadError,
             httpx.ReadTimeout,
             httpx.RemoteProtocolError,
             httpx.PoolTimeout,
@@ -142,8 +143,12 @@ def _format_llm_error(exc: Exception) -> str:
         return "连接模型网关失败，请稍后重试或检查模型服务网络。"
     if isinstance(exc, httpx.ConnectTimeout):
         return "连接模型网关超时，请稍后重试或检查模型服务网络。"
+    if isinstance(exc, httpx.ReadError):
+        return "模型网关读取响应失败，请稍后重试。"
     if isinstance(exc, httpx.ReadTimeout):
         return "模型网关响应超时，请稍后重试。"
+    if isinstance(exc, httpx.RemoteProtocolError):
+        return "模型网关连接中途断开，未返回完整响应，请稍后重试。"
     detail = str(exc).strip()
     return detail or exc.__class__.__name__
 
@@ -744,6 +749,11 @@ async def _build_initial_messages(
             messages.append({"role": "user", "content": m.content})
         elif m.role == "assistant":
             meta = m.extra_meta or {}
+            if (
+                (isinstance(meta, dict) and meta.get("notice_type") == "llm_error")
+                or (m.content or "").startswith("本轮执行中断：模型调用失败")
+            ):
+                continue
             persisted_tool_calls = meta.get("tool_calls") if isinstance(meta, dict) else None
             if persisted_tool_calls:
                 # tool_use turn：拼回带 tool_calls 的 assistant + 紧跟 role:tool 配对
@@ -818,7 +828,10 @@ async def _persist_assistant_notice(
             session_id=session.id,
             role="assistant",
             content=content,
-            extra_meta={"run_id": run_id} if run_id else None,
+            extra_meta={
+                "notice_type": "llm_error",
+                **({"run_id": run_id} if run_id else {}),
+            },
         )
         db.add(msg)
         await asyncio.shield(db.commit())

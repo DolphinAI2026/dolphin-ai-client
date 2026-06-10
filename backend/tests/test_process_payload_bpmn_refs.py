@@ -38,6 +38,42 @@ def test_bpmn_sequenceflow_refs_resolve_to_defined_ids():
     assert not dangling, (
         f"BPMN sequenceFlow 引用了未定义的 id（cvc-id.1 根因）: {dangling}; defined={sorted(defined)}"
     )
-    # 双保险：BPMN 里不该出现图节点的 cell-* id
-    assert not any(r.startswith("cell-") for pair in refs for r in pair), \
-        f"BPMN sourceRef/targetRef 不应引用图节点 cell-* id，得到 {refs}"
+    approve_bpmn_node_ids = [
+        node["data"]["nodeId"]
+        for node in p["nodes"]
+        if isinstance(node.get("data"), dict) and node["data"].get("type") == "APPROVE"
+    ]
+    assert approve_bpmn_node_ids
+    assert all(node_id in defined for node_id in approve_bpmn_node_ids)
+
+    approve_canvas_ids = [
+        node["id"]
+        for node in p["nodes"]
+        if isinstance(node.get("data"), dict) and node["data"].get("type") == "APPROVE"
+    ]
+    start_node = next(node for node in p["nodes"] if node["data"]["type"] == "START")
+    end_node = next(node for node in p["nodes"] if node["data"]["type"] == "END")
+    assert start_node["id"] == "START"
+    assert end_node["id"] == "END"
+    assert all(node_id.startswith("cell-") for node_id in approve_canvas_ids)
+    assert all(node_id.startswith("BPMN_") for node_id in approve_bpmn_node_ids)
+    assert not set(approve_canvas_ids) & set(approve_bpmn_node_ids)
+
+
+def test_bpmn_uses_hidden_start_task_for_runtime_flow_image():
+    p = build_process_payload(
+        app_id="app1", form_id="F123", menu_id="M9",
+        process_name="审批", process_code="approval",
+        stages_with_role=[
+            {"name": "一级", "approver_type": "ROLE", "approver_value": "r1", "approver_label": "一级"},
+        ],
+    )
+    bpmn = p["bpmn"]
+    defined = set(re.findall(r'<(?:startEvent|endEvent|userTask)\s+id="([^"]+)"', bpmn))
+    refs = re.findall(r'<sequenceFlow[^>]*\ssourceRef="([^"]+)"[^>]*\stargetRef="([^"]+)"', bpmn)
+
+    assert "START_HIDDEN" in defined
+    assert ("START", "START_HIDDEN") in refs
+    assert not any(src == "START" and tgt != "START_HIDDEN" for src, tgt in refs)
+    assert any(src == "START_HIDDEN" and tgt.startswith("BPMN_") for src, tgt in refs)
+    assert "processUsers(processId,&apos;START_HIDDEN&apos;,documentId,submitter)" in bpmn

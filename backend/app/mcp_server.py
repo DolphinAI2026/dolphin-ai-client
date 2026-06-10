@@ -3277,7 +3277,7 @@ def _classify_publish_failure(ws_id: str, env_id: int, detail: str) -> dict:
         hint = "-P lib profile 不存在 — 调 init_apaas_backend_workspace 重写 pom"
     elif "source release" in d and "requires target release" in d:
         error_code = "MVN_JDK_MISMATCH"
-        hint = "JDK 版本不匹配 — JAVA_HOME 切 JDK 8"
+        hint = "JDK 版本不匹配 — 检查 APAAS_BACKEND_JDK_VERSION / JAVA_HOME，并调 doctor_apaas_backend_workspace"
     elif ("COMPILATION ERROR" in d or "cannot find symbol" in d
             or "package does not exist" in d):
         error_code = "MVN_COMPILE_FAIL"
@@ -7636,13 +7636,21 @@ def _doctor_check_mvn() -> dict:
 
 
 def _doctor_check_java() -> dict:
-    """检查 java -version 拿 JDK 主版本。aPaaS 模版包推荐 Java 8。"""
+    """检查 java -version 拿 JDK 主版本，并按环境级配置校验。"""
+    expected_jdk = str(getattr(settings, "apaas_backend_jdk_version", "17") or "17").strip().lower()
+    if expected_jdk in ("1.8", "jdk8", "java8"):
+        expected_jdk = "8"
+    elif expected_jdk in ("jdk17", "java17"):
+        expected_jdk = "17"
+    elif expected_jdk not in ("8", "17", "auto"):
+        expected_jdk = "17"
+
     java = _shutil_doctor.which("java")
     if not java:
         return {
             "ok": False, "severity": "fatal", "check": "java",
             "message": "java 不在 PATH",
-            "hint": "装 JDK 8 (推荐) — Mac: brew install openjdk@8",
+            "hint": f"安装 JDK {expected_jdk if expected_jdk != 'auto' else '8/17'}，或配置 JAVA_HOME。",
         }
     try:
         result = _sp_doctor.run([java, "-version"], capture_output=True, text=True, timeout=10)
@@ -7660,19 +7668,27 @@ def _doctor_check_java() -> dict:
         if major == "1":
             major = v.split(".")[1]  # 1.8.0 → 8
         major_int = int(major)
-        if major_int == 8:
-            return {"ok": True, "severity": "info", "check": "java",
-                    "message": f"Java 8 ✓ ({v})"}
+        if expected_jdk == "auto":
+            return {
+                "ok": True, "severity": "info", "check": "java",
+                "message": f"Java {major_int} ({v})；APAAS_BACKEND_JDK_VERSION=auto，由 mvn wrapper 按 pom.xml 选择",
+            }
+        expected_int = int(expected_jdk)
+        if major_int == expected_int:
+            return {
+                "ok": True, "severity": "info", "check": "java",
+                "message": f"Java {major_int} ✓ ({v})；匹配 APAAS_BACKEND_JDK_VERSION={expected_jdk}",
+            }
         if major_int <= 17:
             return {
                 "ok": True, "severity": "warn", "check": "java",
-                "message": f"Java {major_int} ({v}) — 模版包推荐 Java 8，{major_int} 可能跑通但有兼容风险",
-                "hint": "建议 JAVA_HOME 切到 JDK 8 跑 mvn package",
+                "message": f"Java {major_int} ({v}) — 环境配置要求 JDK {expected_jdk}",
+                "hint": f"将 JAVA_HOME 切到 JDK {expected_jdk}，或调整 APAAS_BACKEND_JDK_VERSION。",
             }
         return {
             "ok": False, "severity": "fatal", "check": "java",
-            "message": f"Java {major_int} ({v}) — 不支持，aPaaS 模版包要求 Java 8",
-            "hint": "JAVA_HOME 切 JDK 8 (brew install openjdk@8)",
+            "message": f"Java {major_int} ({v}) — 当前只支持 JDK 8/17 打包配置",
+            "hint": f"将 JAVA_HOME 切到 JDK {expected_jdk}，或调整 APAAS_BACKEND_JDK_VERSION。",
         }
     except Exception as e:
         return {
@@ -7832,7 +7848,7 @@ async def doctor_apaas_backend_workspace(
 
     治"我同事打包不成功"系列问题。一次性检查 5 项：
       1. mvn 在不在 PATH（mvn）
-      2. java 版本是否兼容（推荐 Java 8）
+      2. java 版本是否匹配 APAAS_BACKEND_JDK_VERSION
       3. ~/.m2/settings.xml 是否配 dcloud-public Nexus 认证
       4. pom.xml 关键字段（repositories / lib profile / papaas 4.1.1-rc / motor）
       5. @SpringBootApplication 没误放 src/main（防坑 7 发布卡死）

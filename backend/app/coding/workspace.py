@@ -45,6 +45,31 @@ def _resolve_workspace_root() -> Path:
 
 WORKSPACE_ROOT = _resolve_workspace_root()
 
+
+def _normalize_apaas_backend_jdk_version(value: object) -> str:
+    text = str(value or "").strip().lower()
+    if text in {"8", "1.8", "jdk8", "java8"}:
+        return "8"
+    if text in {"17", "jdk17", "java17"}:
+        return "17"
+    if text == "auto":
+        return "auto"
+    return "17"
+
+
+def _apaas_backend_build_env(base_env: Optional[dict[str, str]] = None) -> dict[str, str]:
+    from app.config import settings
+
+    env = dict(base_env or os.environ)
+    requested = _normalize_apaas_backend_jdk_version(settings.apaas_backend_jdk_version)
+    env["APAAS_BACKEND_JDK_VERSION"] = requested
+
+    jdk_home = {"8": "/opt/jdk8", "17": "/opt/jdk17"}.get(requested)
+    if jdk_home and Path(jdk_home, "bin", "java").exists():
+        env["JAVA_HOME"] = jdk_home
+        env["PATH"] = f"{jdk_home}/bin:{env.get('PATH', '')}"
+    return env
+
 # vibe-serve.js — 包装 vue-cli-service serve，完成后打印公网 proxy 地址
 _VIBE_SERVE_JS = """\
 'use strict'
@@ -90,6 +115,7 @@ WORKSPACE_SEARCH_ROOTS = tuple(
 )
 DEPENDENCY_CACHE_ROOT = WORKSPACE_ROOT / ".dependency-cache"
 NPM_CACHE_ROOT = WORKSPACE_ROOT / ".npm-cache"
+NPM_GLOBAL_PREFIX = WORKSPACE_ROOT / ".npm-global"
 DEFAULT_RULES_ROOT = Path(__file__).parent / "default_rules"
 FALLBACK_NPM_REGISTRY = "https://registry.npmmirror.com"
 
@@ -764,11 +790,13 @@ class WorkspaceManager:
                 "标准 pom 最稳。"
             )
         elif "source release" in combined and "requires target release" in combined:
+            from app.config import settings
+            expected_jdk = _normalize_apaas_backend_jdk_version(settings.apaas_backend_jdk_version)
             code = "MVN_JDK_MISMATCH"
             hint = (
-                "JDK 版本和 pom <maven.compiler.source/target> 不匹配。aPaaS 模版包"
-                "要求 Java 8（<source>8</source>）。检查 `java -version`，必要时 "
-                "JAVA_HOME 切到 JDK 8。"
+                "JDK 版本和 pom <maven.compiler.source/target> 不匹配。"
+                f"当前环境配置 APAAS_BACKEND_JDK_VERSION={expected_jdk}，"
+                "检查 `java -version` / `mvn -v` 与 pom 编译版本是否一致。"
             )
         elif "COMPILATION ERROR" in combined or "cannot find symbol" in combined \
                 or "package does not exist" in combined:
@@ -817,6 +845,7 @@ class WorkspaceManager:
             cwd=str(cwd),
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
+            env=_apaas_backend_build_env(),
         )
         stdout, stderr = await proc.communicate()
         return proc.returncode, stdout, stderr
@@ -980,6 +1009,13 @@ class WorkspaceManager:
 
     def _build_npm_env(self) -> dict[str, str]:
         env = ensure_node_tool_env()
+        NPM_GLOBAL_PREFIX.mkdir(parents=True, exist_ok=True)
+        npm_global_bin = str(NPM_GLOBAL_PREFIX / "bin")
+        path_parts = [part for part in env.get("PATH", "").split(":") if part]
+        if npm_global_bin not in path_parts:
+            env["PATH"] = ":".join([npm_global_bin, *path_parts])
+        env.setdefault("npm_config_prefix", str(NPM_GLOBAL_PREFIX))
+        env.setdefault("NPM_CONFIG_PREFIX", str(NPM_GLOBAL_PREFIX))
         env.setdefault("npm_config_registry", DEFAULT_NPM_REGISTRY)
         env.setdefault("NPM_CONFIG_REGISTRY", DEFAULT_NPM_REGISTRY)
         env.setdefault("npm_config_cache", str(NPM_CACHE_ROOT))

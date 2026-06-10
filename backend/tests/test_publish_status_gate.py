@@ -8,7 +8,7 @@ import pytest
 from fastapi import HTTPException
 
 from app.deps import AuthContext
-from app.models import Application, Project, ProjectMember, User
+from app.models import Application, PlatformEnv, Project, ProjectMember, User
 from app.models.tenant import Tenant, UserTenant
 from app.routes.applications import publish_application
 from app.routes.applications.section_content import get_publish_status
@@ -75,6 +75,92 @@ async def test_publish_status_treats_completed_platform_app_without_record_as_pu
     assert result.latest_deploy is None
     assert result.pending_changes_count == 0
     assert result.app_status == "completed"
+
+
+@pytest.mark.asyncio
+async def test_publish_uses_remote_current_version(monkeypatch, db_session):
+    tenant, user, app = await _seed_app(db_session, status="completed", apaas_app_id="apaas_done_2")
+    db_session.add(PlatformEnv(
+        tenant_id=tenant.id,
+        env_name="default",
+        base_url="https://apaas.example.test",
+        platform_tenant_id="pt",
+        token="tok",
+        is_default=True,
+        status="connected",
+    ))
+    await db_session.commit()
+
+    class FakeAPaaSClient:
+        instances = []
+
+        def __init__(self, **kwargs):
+            self.deploy_versions = []
+            FakeAPaaSClient.instances.append(self)
+
+        async def query_app_detail(self, app_id):
+            return {"id": app_id, "currentVersion": "1.0.0", "appStatus": "ENABLE"}
+
+        async def save_app_access(self, app_id, object_type="ALL", object_ids=None):
+            return {"code": "ok"}
+
+        async def deploy_app(self, app_id, version, abstract=""):
+            self.deploy_versions.append(version)
+            return {"code": "ok"}
+
+    monkeypatch.setattr("app.routes.applications.APaaSClient", FakeAPaaSClient)
+
+    res = await publish_application(app.id, _ctx(user, tenant.id), db_session)
+
+    assert res["ok"] is True
+    assert res["version"] == "1.0.1"
+    assert FakeAPaaSClient.instances[-1].deploy_versions == ["1.0.1"]
+
+
+@pytest.mark.asyncio
+async def test_publish_rechecks_remote_version_on_version_error(monkeypatch, db_session):
+    tenant, user, app = await _seed_app(db_session, status="completed", apaas_app_id="apaas_done_3")
+    db_session.add(PlatformEnv(
+        tenant_id=tenant.id,
+        env_name="default",
+        base_url="https://apaas.example.test",
+        platform_tenant_id="pt",
+        token="tok",
+        is_default=True,
+        status="connected",
+    ))
+    await db_session.commit()
+
+    class FakeAPaaSClient:
+        instances = []
+
+        def __init__(self, **kwargs):
+            self.deploy_versions = []
+            self.query_count = 0
+            FakeAPaaSClient.instances.append(self)
+
+        async def query_app_detail(self, app_id):
+            self.query_count += 1
+            if self.query_count == 1:
+                return {"id": app_id, "currentVersion": "1.0.0", "appStatus": "ENABLE"}
+            return {"id": app_id, "currentVersion": "1.0.1", "appStatus": "ENABLE"}
+
+        async def save_app_access(self, app_id, object_type="ALL", object_ids=None):
+            return {"code": "ok"}
+
+        async def deploy_app(self, app_id, version, abstract=""):
+            self.deploy_versions.append(version)
+            if len(self.deploy_versions) == 1:
+                raise Exception("应用版本错误")
+            return {"code": "ok"}
+
+    monkeypatch.setattr("app.routes.applications.APaaSClient", FakeAPaaSClient)
+
+    res = await publish_application(app.id, _ctx(user, tenant.id), db_session)
+
+    assert res["ok"] is True
+    assert res["version"] == "1.0.2"
+    assert FakeAPaaSClient.instances[-1].deploy_versions == ["1.0.1", "1.0.2"]
 
 
 # ── MCP 层: publish_application 把 409 转成干净的 STILL_GENERATING; get_application 带进度 ──

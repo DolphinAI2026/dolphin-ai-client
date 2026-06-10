@@ -68,9 +68,15 @@ class Settings(BaseSettings):
     # 开发/测试环境建议开启，生产环境建议关闭
     enable_code_suffix: bool = False
 
+    # aPaaS 后端打包 JDK 版本。一个部署环境通常只服务一种 aPaaS 后端包，
+    # 因此优先用环境级配置锁定，而不是每次从 pom.xml 猜。
+    # 可选值：8 / 17 / auto；默认 17。
+    apaas_backend_jdk_version: str = "17"
+
     # Web IDE (code-server)
-    # code-server 的外部访问基础 URL，留空则禁用 Web IDE 功能
-    code_server_base_url: str = ""  # e.g. https://your-domain.com/ide/
+    # code-server 外部访问基础 URL。留空时按当前请求域名 + 部署前缀自动推导
+    # （如 https://your-domain.com/ai-builder/ide/）；仅单独 IDE 域名等特殊拓扑需要配置。
+    code_server_base_url: str = ""
 
     # IDE Coding 模型配置（多模型支持）
     # 格式：CODING_MODEL_{NAME}_BASE_URL / _API_KEY / _MODEL
