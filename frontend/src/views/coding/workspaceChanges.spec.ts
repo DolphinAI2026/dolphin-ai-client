@@ -32,4 +32,12 @@ describe('collectChangedFiles', () => {
     const { changed } = collectChangedFiles([{ type: 'file_write', fileContent: 'A' }])
     expect(changed.size).toBe(0)
   })
+
+  it('有 filePath 时优先作 key(嵌套文件 basename 对不上树)', () => {
+    const { changed, lastChangedFile } = collectChangedFiles([
+      { type: 'file_write', fileName: 'a.ts', filePath: 'src/api/a.ts', fileContent: 'A' },
+    ])
+    expect([...changed.keys()]).toEqual(['src/api/a.ts'])
+    expect(lastChangedFile).toBe('src/api/a.ts')
+  })
 })

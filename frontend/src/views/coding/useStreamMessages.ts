@@ -17,6 +17,8 @@ export interface StreamMessage {
   type: 'user' | 'thinking' | 'tool' | 'file_write' | 'file_edit' | 'command' | 'status' | 'error' | 'message' | 'clarify'
   content: string
   fileName?: string
+  /** 工作区相对全路径(嵌套文件 basename 对不上树), 点击文件卡直达查看器用 */
+  filePath?: string
   fileContent?: string
   /** type=file_edit 用:修改前内容,FileCard 据 old→new 渲染红绿 diff */
   oldContent?: string

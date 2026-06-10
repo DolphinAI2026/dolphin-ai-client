@@ -2,7 +2,12 @@
   <div class="msg-file-card">
     <div class="file-card-header" @click="$emit('toggle')">
       <span class="file-card-op" :class="opClass">{{ opSymbol }}</span>
-      <span class="file-card-name">{{ fileName }}</span>
+      <span
+        class="file-card-name"
+        :class="{ 'file-card-name--openable': openable }"
+        :title="openable ? '在工作区中打开' : undefined"
+        @click="onNameClick"
+      >{{ fileName }}</span>
       <!-- 编辑:显示 +增 -删 统计(对齐 Claude Code) -->
       <span v-if="isDiff && (addCount || delCount)" class="file-card-stat">
         <span v-if="addCount" class="fc-stat-add">+{{ addCount }}</span>
@@ -46,9 +51,17 @@ const props = defineProps<{
   /** 修改前内容(edit 用),有则渲染红绿 diff */
   oldContent?: string
   collapsed?: boolean
+  /** true = 文件名可点击(emit open, 宿主决定跳哪)，点击不触发折叠 */
+  openable?: boolean
 }>()
 
-defineEmits<{ toggle: [] }>()
+const emit = defineEmits<{ toggle: []; open: [] }>()
+
+function onNameClick(e: MouseEvent) {
+  if (!props.openable) return // 不可点时让事件冒泡给 header 折叠
+  e.stopPropagation()
+  emit('open')
+}
 
 const opSymbol = computed(() => props.action === 'write' ? '+' : '~')
 const opClass = computed(() => props.action === 'write' ? 'file-card-op--new' : 'file-card-op--edit')
@@ -127,6 +140,8 @@ const plainLines = computed(() => (props.fileContent || '').split('\n'))
   text-overflow: ellipsis;
   white-space: nowrap;
 }
+.file-card-name--openable { cursor: pointer; }
+.file-card-name--openable:hover { text-decoration: underline; text-underline-offset: 2px; }
 
 .file-card-stat {
   display: inline-flex;

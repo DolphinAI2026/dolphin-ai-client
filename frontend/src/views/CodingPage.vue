@@ -137,7 +137,9 @@
                     :file-content="streamCustom(message).sm.fileContent"
                     :old-content="streamCustom(message).sm.oldContent"
                     :collapsed="streamCustom(message).sm.collapsed"
+                    :openable="codeFirst"
                     @toggle="streamCustom(message).sm.collapsed = !streamCustom(message).sm.collapsed"
+                    @open="openFileFromChat(streamCustom(message).sm)"
                   />
                 </template>
                 <!-- command（native 无对应 kind,保留命令卡）-->
@@ -249,6 +251,7 @@
           :diff="selectedGitChange ? null : selectedDiff"
           :change="selectedGitChange"
           :dark="themeStore.isDark"
+          @quote="onViewerQuote"
         />
       </div>
 
@@ -605,6 +608,44 @@ const selectedGitChange = computed(() =>
     ? wsGitChanges.value.files.find(f => f.path === selectedFile.value) || null
     : null,
 )
+
+// ── 对话 ↔ 代码联动 ──
+function flattenTreeFiles(nodes: TreeNode[], out: string[] = []): string[] {
+  for (const n of nodes) {
+    if (n.isDir) flattenTreeFiles(n.children || [], out)
+    else out.push(n.path)
+  }
+  return out
+}
+
+// 文件卡只有 basename 或路径不在树上时反查：精确命中 > git 改动表 > 树内 basename 唯一/首个命中
+function resolveWorkspacePath(p: string): string | null {
+  if (!p) return null
+  const all = flattenTreeFiles(wsFileTree.value)
+  if (all.includes(p)) return p
+  const base = p.split('/').pop() || p
+  const inChanges = wsGitChanges.value?.files.find(f => f.path === p || f.path.endsWith('/' + base))
+  if (inChanges) return inChanges.path
+  return all.find(t => t === base || t.endsWith('/' + base)) || null
+}
+
+// 点击对话里的写/改文件卡 → 左侧打开该文件（有 git 改动 CodeViewer 自动进对比模式）
+function openFileFromChat(sm: { filePath?: string; fileName?: string }) {
+  const target = resolveWorkspacePath(sm.filePath || sm.fileName || '') || sm.filePath || null
+  if (target) selectedFile.value = target
+}
+
+// 查看器选中代码「引用到对话」→ 追加 `路径:行号` + 代码块进输入框
+function onViewerQuote(q: { path: string; startLine: number | null; endLine: number | null; text: string }) {
+  const loc = q.startLine
+    ? `:${q.startLine}${q.endLine && q.endLine !== q.startLine ? '-' + q.endLine : ''}`
+    : ''
+  const block = '引用 `' + q.path + loc + '`:\n```\n' + q.text + '\n```\n'
+  userInput.value = (userInput.value.trim() ? userInput.value.replace(/\s+$/, '') + '\n\n' : '') + block
+  void nextTick(() => {
+    (document.querySelector('.chat-input-bar textarea') as HTMLTextAreaElement | null)?.focus()
+  })
+}
 
 // agent 改完最后一个文件 → 自动打开它（纯前端，不发请求）
 watch(() => wsChanges.value.lastChangedFile, (p) => { if (p) selectedFile.value = p })

@@ -19,7 +19,15 @@
       <span v-else-if="diff" class="cv-badge">改动</span>
       <span v-if="decompiled" class="cv-badge" :title="`由 ${decompiler} 反编译,非原始源码`">反编译视图</span>
     </header>
-    <div class="cv-body" ref="bodyRef">
+    <!-- 选中代码浮动引用按钮(fixed 定位,跟选区) -->
+    <button
+      v-if="quoteBtn"
+      class="cv-quote-btn"
+      :style="{ left: quoteBtn.x + 'px', top: quoteBtn.y + 'px' }"
+      @mousedown.prevent
+      @click="emitQuote"
+    >引用到对话</button>
+    <div class="cv-body" ref="bodyRef" @mouseup="onBodyMouseUp" @scroll.passive="quoteBtn = null">
       <!-- git 基线对比模式 -->
       <template v-if="showGitDiff">
         <div v-if="gitLoading" class="cv-state">
@@ -71,7 +79,7 @@
 </template>
 
 <script setup lang="ts">
-import { computed, nextTick, ref, watch } from 'vue'
+import { computed, nextTick, onUnmounted, ref, watch } from 'vue'
 import FileCard from '@/components/FileCard.vue'
 import AppIcon from '@/components/common/AppIcon.vue'
 import { readWorkspaceFile, downloadWorkspaceFileRaw, getWorkspaceFileDiff, type WorkspaceChangeEntry } from '@/api/coding'
@@ -142,6 +150,74 @@ async function refresh() {
   if (showGitDiff.value) { await loadGitDiff(); return }
   await load()
 }
+
+// ── 选中代码 → 引用到对话 ──
+const emit = defineEmits<{
+  (e: 'quote', payload: { path: string; startLine: number | null; endLine: number | null; text: string }): void
+}>()
+
+const quoteBtn = ref<{ x: number; y: number } | null>(null)
+let pendingQuote: { startLine: number | null; endLine: number | null; text: string } | null = null
+
+function onBodyMouseUp() {
+  // 等浏览器把选区定下来再读
+  requestAnimationFrame(captureSelection)
+}
+
+function captureSelection() {
+  quoteBtn.value = null
+  if (!props.filePath || !bodyRef.value) return
+  const sel = window.getSelection()
+  if (!sel || sel.isCollapsed || sel.rangeCount === 0) return
+  const range = sel.getRangeAt(0)
+  if (!bodyRef.value.contains(range.commonAncestorContainer)) return
+  const text = sel.toString().replace(/\n+$/, '')
+  if (!text.trim()) return
+  pendingQuote = { ...lineRangeOf(range), text }
+  const rect = range.getBoundingClientRect()
+  quoteBtn.value = { x: rect.left + rect.width / 2, y: rect.bottom + 6 }
+}
+
+// 全文视图按 .line 序号；diff 视图读行号 gutter(优先新行号)
+function lineRangeOf(range: Range): { startLine: number | null; endLine: number | null } {
+  const lineOf = (node: Node): number | null => {
+    const el = node instanceof Element ? node : node.parentElement
+    if (!el || !bodyRef.value) return null
+    const full = el.closest('.shiki .line')
+    if (full) {
+      const all = Array.from(bodyRef.value.querySelectorAll('.shiki .line'))
+      const i = all.indexOf(full)
+      return i >= 0 ? i + 1 : null
+    }
+    const row = el.closest('.dv-row')
+    if (row) {
+      const no = row.querySelector('.dv-no-new')?.textContent?.trim()
+        || row.querySelector('.dv-no-old')?.textContent?.trim()
+      const n = parseInt(no || '', 10)
+      return Number.isFinite(n) ? n : null
+    }
+    return null
+  }
+  let a = lineOf(range.startContainer)
+  let b = lineOf(range.endContainer)
+  if (a != null && b != null && a > b) [a, b] = [b, a]
+  return { startLine: a, endLine: b }
+}
+
+function emitQuote() {
+  if (!pendingQuote || !props.filePath) return
+  emit('quote', { path: props.filePath, ...pendingQuote })
+  quoteBtn.value = null
+  pendingQuote = null
+  window.getSelection()?.removeAllRanges()
+}
+
+function onDocSelectionChange() {
+  const sel = window.getSelection()
+  if (!sel || sel.isCollapsed) quoteBtn.value = null
+}
+document.addEventListener('selectionchange', onDocSelectionChange)
+onUnmounted(() => document.removeEventListener('selectionchange', onDocSelectionChange))
 
 const isBinaryExt = computed(() => BINARY_EXT.has(baseName.value.split('.').pop()?.toLowerCase() || ''))
 
@@ -311,6 +387,22 @@ watch(
 }
 .cv-toggle-btn:hover:not(.active) { background: var(--bg-hover, rgba(0, 0, 0, 0.04)); }
 .cv-body { flex: 1; min-height: 0; min-width: 0; overflow: auto; }
+.cv-quote-btn {
+  position: fixed;
+  z-index: 30;
+  transform: translateX(-50%);
+  padding: 4px 12px;
+  border: 1px solid var(--line-strong, var(--line, rgba(0, 0, 0, 0.15)));
+  border-radius: 999px;
+  background: var(--bg, #fff);
+  color: var(--brand-ink, var(--brand, #4f46e5));
+  font-size: var(--fs-xs, 12px);
+  font-weight: 500;
+  cursor: pointer;
+  box-shadow: 0 4px 14px rgba(0, 0, 0, 0.14);
+  transition: background 0.12s var(--ease, ease);
+}
+.cv-quote-btn:hover { background: var(--brand-soft, rgba(99, 102, 241, 0.1)); }
 .cv-code { padding: 6px 0 14px; width: max-content; min-width: 100%; }
 .cv-code :deep(.shiki) { background: transparent !important; margin: 0; }
 .cv-code :deep(.shiki code) { counter-reset: ln; display: block; font-family: var(--font-mono, monospace); font-size: 12.5px; line-height: 1.45; }

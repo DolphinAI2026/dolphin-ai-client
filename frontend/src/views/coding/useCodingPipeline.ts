@@ -132,16 +132,26 @@ export function useCodingPipeline(deps: PipelineDeps) {
     generate: { running: 'AI 开始编写代码...', done: '代码生成完成' },
   }
 
+  /** 工具 args 里的 file_path 可能带工作区绝对前缀，归一成工作区相对路径（文件卡点击直达查看器用） */
+  function toWsRelativePath(p: string): string {
+    let s = (p || '').replace(/\\/g, '/').trim()
+    const ws = (codingStore.workspacePath || '').replace(/\\/g, '/').replace(/\/+$/, '')
+    if (ws && s.startsWith(ws + '/')) s = s.slice(ws.length + 1)
+    return s.replace(/^\.?\//, '')
+  }
+
   const TOOL_HANDLERS: Record<string, (args: any, preview: string) => void> = {
     write_file: (args, preview) => {
-      const fileName = ((args.file_path || '') as string).split('/').pop() || preview
-      addStreamMsg({ type: 'file_write', content: '', fileName, fileContent: args.content || undefined, collapsed: true })
+      const filePath = toWsRelativePath((args.file_path || '') as string)
+      const fileName = filePath.split('/').pop() || preview
+      addStreamMsg({ type: 'file_write', content: '', fileName, filePath: filePath || undefined, fileContent: args.content || undefined, collapsed: true })
     },
     edit_file: (args, preview) => {
-      const fileName = ((args.file_path || '') as string).split('/').pop() || preview
+      const filePath = toWsRelativePath((args.file_path || '') as string)
+      const fileName = filePath.split('/').pop() || preview
       // old + new 都带上,FileCard 渲染红绿 diff(对齐 Claude Code)
       addStreamMsg({
-        type: 'file_edit', content: '', fileName,
+        type: 'file_edit', content: '', fileName, filePath: filePath || undefined,
         fileContent: (args.new_string ?? args.content) || undefined,
         oldContent: args.old_string || undefined,
         collapsed: true,

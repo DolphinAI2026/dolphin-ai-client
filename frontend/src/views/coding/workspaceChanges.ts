@@ -1,6 +1,9 @@
 export interface FileChangeMsg {
   type: string
+  content?: string
   fileName?: string
+  /** 工作区相对全路径(优先作 key, 嵌套文件 basename 对不上树) */
+  filePath?: string
   fileContent?: string
   oldContent?: string
 }
@@ -21,9 +24,10 @@ export function collectChangedFiles(messages: FileChangeMsg[]): ChangedFiles {
   const changed = new Map<string, FileChange>()
   let lastChangedFile: string | null = null
   for (const m of messages) {
-    if (!FILE_TYPES.has(m.type) || !m.fileName) continue
-    changed.set(m.fileName, { oldContent: m.oldContent, fileContent: m.fileContent })
-    lastChangedFile = m.fileName
+    const key = m.filePath || m.fileName
+    if (!FILE_TYPES.has(m.type) || !key) continue
+    changed.set(key, { oldContent: m.oldContent, fileContent: m.fileContent })
+    lastChangedFile = key
   }
   return { changed, lastChangedFile }
 }
