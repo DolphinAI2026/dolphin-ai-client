@@ -51,7 +51,7 @@
         <div v-if="codeFirst" class="chat-resizer" @pointerdown="onChatResizeStart" title="拖拽调整聊天宽度" />
         <!-- 顶右工具抽屉按钮 (替代 view-toggle-bar): 文件 / IDE / 编辑 -->
         <div
-          v-if="!embeddedAppId && (ideUrl || streamMessages.length > 0)"
+          v-if="!embeddedAppId && !codeFirst && (ideUrl || streamMessages.length > 0)"
           class="canvas-actions"
         >
           <button class="canvas-actions-back" @click="startNewWorkspace" title="返回首页">
