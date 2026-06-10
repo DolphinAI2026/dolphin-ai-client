@@ -230,16 +230,6 @@
                     :value="toCodingModelValue(option.id) ?? ''"
                   >{{ option.config_name }}</option>
                 </select>
-                <!-- 发布入口(替代被删的完成卡):生成完成且有产物时出现 -->
-                <button
-                  v-if="!isStreaming && codingArtifactsHasAny"
-                  class="coding-publish-inline"
-                  :title="isBoundDeploy ? '把生成的代码装回应用' : '发布到自开发资产库'"
-                  @click="openInstallModal"
-                >
-                  <AppIcon name="package" :size="13" :stroke="1.9" />
-                  <span>{{ isBoundDeploy ? '装回应用' : '发布到资产库' }}</span>
-                </button>
               </template>
             </UnifiedChatComposer>
           </div>
@@ -4727,24 +4717,4 @@ html[data-theme="dark"] .msg-error-row {
   transition: background 0.15s var(--ease, ease);
 }
 .chat-resizer:hover::after { background: var(--brand, #6366f1); }
-
-/* 发布入口(收进输入区 footer,替代被删的完成卡) */
-.coding-publish-inline {
-  display: inline-flex;
-  align-items: center;
-  gap: 5px;
-  flex: none;
-  white-space: nowrap;
-  padding: 4px 11px;
-  border: 1px solid var(--brand, #6366f1);
-  border-radius: var(--r-sm, 6px);
-  background: var(--brand-soft, rgba(99, 102, 241, 0.1));
-  color: var(--brand-ink, var(--brand, #4f46e5));
-  font-size: var(--fs-xs, 12px);
-  line-height: 1.4;
-  cursor: pointer;
-  transition: background 0.12s var(--ease, ease), color 0.12s var(--ease, ease);
-}
-.coding-publish-inline span { white-space: nowrap; }
-.coding-publish-inline:hover { background: var(--brand, #6366f1); color: #fff; }
 </style>
