@@ -79,17 +79,6 @@ export interface UploadResult {
   file_path: string
 }
 
-export function isIdeUnavailableError(error: any): boolean {
-  const status = error?.response?.status
-  const detail = String(
-    error?.response?.data?.detail ||
-    error?.response?.data?.message ||
-    error?.message ||
-    ''
-  )
-  return (status === 501 || status === 503) && detail.includes('Web IDE')
-}
-
 export const codingApi = {
   /** 获取所有开发场景 */
   getScenes(category?: string) {
@@ -176,16 +165,6 @@ export const codingApi = {
   /** 获取工作区信息 */
   getWorkspace(wsId: string) {
     return request.get<any, WorkspaceInfo>(`/coding/workspace/${wsId}`)
-  },
-
-  /** 获取工作区 Web IDE URL */
-  getIdeUrl(wsId: string, conversationId?: number | null, theme?: 'light' | 'dark') {
-    const params: Record<string, string | number> = {}
-    if (conversationId) params.conversation_id = conversationId
-    if (theme) params.theme = theme
-    return request.get<any, { ide_url: string }>(`/coding/workspace/${wsId}/ide-url`, {
-      params: Object.keys(params).length ? params : undefined,
-    })
   },
 
   /** 列出工作区文件 */
