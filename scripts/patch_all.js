@@ -8,7 +8,7 @@
  * 执行顺序：
  *   1. 自动检测 code-server 版本和路径
  *   2. 提取 workbench.js 属性名映射
- *   3. 逐个执行 patch（chat_enable → chat_fallback）
+ *   3. 逐个执行 patch（branding → chat_enable → chat_fallback）
  *   4. 语法验证（失败自动回滚）
  *   5. 更新 workbench.html 缓存参数
  */
@@ -64,6 +64,8 @@ console.log(`✓ Backup: ${path.basename(backupPath)}\n`);
 // Step 4: Run patches
 const scriptsDir = __dirname;
 const patches = [
+  // 先注入睿鲸欢迎页/产品信息，避免线上 IDE 回退到 VS Code 原生 Getting Started。
+  { name: 'Branding (welcome page + product metadata)', script: 'patch_vscode_branding.js', args: ['--code-server-path', csInfo.basePath] },
   // 先做 entitlement 解锁 + product.json / workbench 内嵌 defaultChatAgent 重指向。
   { name: 'Chat Enable (entitlement + product.json proposed-api)', script: 'patch_vscode_chat_enable.js', args: [csInfo.workbenchPath, csInfo.productJsonPath] },
   // 再注册内置 Chat 的动态 agent fallback。线上 code-server 的 native Chat

@@ -2,7 +2,16 @@ const fs = require('fs');
 const path = require('path');
 const { resolve } = require('./lib/codeServerResolver');
 
-const codeServerInfo = resolve();
+const args = process.argv.slice(2);
+let explicitPath = null;
+for (let i = 0; i < args.length; i++) {
+  if (args[i] === '--code-server-path' && args[i + 1]) {
+    explicitPath = args[i + 1];
+    i++;
+  }
+}
+
+const codeServerInfo = resolve(explicitPath);
 const productJsonPath = codeServerInfo.productJsonPath;
 const workbenchPath = codeServerInfo.workbenchPath;
 const workspacesRootCandidates = [
@@ -649,11 +658,22 @@ const brandingPatch = `
     return true;
   }
 
+  const maxAttempts = 240;
   let attempts = 0;
+  const observer = new MutationObserver(() => {
+    decorateWelcome();
+  });
+
+  if (document.documentElement) {
+    observer.observe(document.documentElement, { childList: true, subtree: true });
+  }
+
   const timer = setInterval(() => {
     attempts += 1;
-    if (decorateWelcome() || attempts >= 20) {
+    decorateWelcome();
+    if (attempts >= maxAttempts) {
       clearInterval(timer);
+      observer.disconnect();
     }
   }, 500);
 

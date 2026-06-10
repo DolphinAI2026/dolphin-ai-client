@@ -60,6 +60,43 @@ def test_fallback_template_avoids_internal_extension_identifier_constructor():
 def test_patch_all_runs_chat_fallback_after_chat_enable():
     script = (repo_root() / "scripts" / "patch_all.js").read_text(encoding="utf-8")
 
+    branding_idx = script.index("patch_vscode_branding.js")
     enable_idx = script.index("patch_vscode_chat_enable.js")
     fallback_idx = script.index("patch_vscode_chat_fallback.js")
+    assert branding_idx < enable_idx
     assert enable_idx < fallback_idx
+
+
+def test_branding_patch_accepts_explicit_code_server_path():
+    script = (repo_root() / "scripts" / "patch_vscode_branding.js").read_text(
+        encoding="utf-8"
+    )
+
+    assert "process.argv.slice(2)" in script
+    assert "args[i] === '--code-server-path'" in script
+    assert "resolve(explicitPath)" in script
+
+
+def test_branding_patch_waits_for_late_welcome_dom():
+    script = (repo_root() / "scripts" / "patch_vscode_branding.js").read_text(
+        encoding="utf-8"
+    )
+
+    assert "new MutationObserver" in script
+    assert "maxAttempts = 240" in script
+    assert "attempts >= 20" not in script
+
+
+def test_code_server_resolver_discovers_container_opt_path():
+    script = (repo_root() / "scripts" / "lib" / "codeServerResolver.js").read_text(
+        encoding="utf-8"
+    )
+
+    assert "'/opt/code-server'" in script
+
+
+def test_deploy_cloud_uploads_all_patch_all_dependencies():
+    script = (repo_root() / "scripts" / "deploy_cloud.py").read_text(encoding="utf-8")
+
+    assert '"patch_vscode_chat_fallback.js"' in script
+    assert '"patch_vscode_chat_fallback.template.txt"' in script

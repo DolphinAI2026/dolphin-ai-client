@@ -39,8 +39,8 @@ function resolve(explicitPath) {
     }
   }
 
-  // 3. 也检查全局安装路径
-  for (const globalPath of ['/usr/local/lib/code-server', '/usr/lib/code-server']) {
+  // 3. 也检查全局/容器安装路径
+  for (const globalPath of ['/opt/code-server', '/usr/local/lib/code-server', '/usr/lib/code-server']) {
     if (fs.existsSync(globalPath)) {
       candidates.push(globalPath);
     }
@@ -48,7 +48,7 @@ function resolve(explicitPath) {
 
   if (candidates.length === 0) {
     throw new Error('Could not find any code-server installation. Searched:\n  ' +
-      `${libDir}/code-server-*\n  /usr/local/lib/code-server\n  /usr/lib/code-server`);
+      `${libDir}/code-server-*\n  /opt/code-server\n  /usr/local/lib/code-server\n  /usr/lib/code-server`);
   }
 
   // 4. 按版本号排序，优先使用最新版

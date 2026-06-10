@@ -65,6 +65,8 @@ IDE_PATCH_FILES = {
     "patch_all.js",
     "patch_vscode_branding.js",
     "patch_vscode_chat_enable.js",
+    "patch_vscode_chat_fallback.js",
+    "patch_vscode_chat_fallback.template.txt",
     "lib/codeServerResolver.js",
 }
 
@@ -207,7 +209,7 @@ def remote_node_command(script_path: str, *args: str) -> str:
         "set -e; "
         "NODE_BIN=$(command -v node || true); "
         "if [ -z \"$NODE_BIN\" ]; then "
-        "CODE_ROOT=$(find /root/.local/lib /usr/lib /usr/local/lib -maxdepth 2 "
+        "CODE_ROOT=$(find /root/.local/lib /opt /usr/lib /usr/local/lib -maxdepth 2 "
         "\\( -name 'code-server-*' -o -name 'code-server' \\) 2>/dev/null | sort -V | tail -n 1); "
         "if [ -n \"$CODE_ROOT\" ] && [ -x \"$CODE_ROOT/lib/node\" ]; then NODE_BIN=\"$CODE_ROOT/lib/node\"; fi; "
         "fi; "
@@ -247,7 +249,6 @@ def deploy_ruijing_ide(
     )
 
     log("=== Patch Web IDE default chat agent ===")
-    remote_run(client, remote_node_command(f"{REMOTE_IDE_PATCH_DIR}/patch_vscode_branding.js"), timeout=120)
     remote_run(client, remote_node_command(f"{REMOTE_IDE_PATCH_DIR}/patch_all.js"), timeout=120)
 
     if restart:
