@@ -2054,6 +2054,42 @@ async def write_workspace_file(
         raise HTTPException(status_code=400, detail=str(e))
 
 
+@router.get("/workspace/{ws_id}/changes")
+async def get_workspace_changes(
+    ws_id: str,
+    ctx: Annotated[AuthContext, Depends(get_auth_context)],
+    db: Annotated[AsyncSession, Depends(get_db)],
+):
+    """工作区相对 git 基线的改动清单（文件树徽标 / 改动分组用）。git 不可用时 enabled=False。"""
+    from app.coding.git_changes import collect_changes
+
+    await _ensure_workspace_access(ws_id, ctx, db, minimum_project_role="member")
+    ws_path = workspace_mgr.get_workspace_path(ws_id)
+    if not ws_path.exists():
+        raise HTTPException(status_code=404, detail="工作区不存在")
+    return await asyncio.to_thread(collect_changes, ws_path)
+
+
+@router.get("/workspace/{ws_id}/file-diff")
+async def get_workspace_file_diff(
+    ws_id: str,
+    file_path: str = Query(..., description="文件相对路径"),
+    ctx: Annotated[AuthContext, Depends(get_auth_context)] = None,
+    db: Annotated[AsyncSession, Depends(get_db)] = None,
+):
+    """单文件相对 git 基线的 unified diff（查看器红绿对比用）。"""
+    from app.coding.git_changes import file_diff
+
+    await _ensure_workspace_access(ws_id, ctx, db, minimum_project_role="member")
+    ws_path = workspace_mgr.get_workspace_path(ws_id)
+    if not ws_path.exists():
+        raise HTTPException(status_code=404, detail="工作区不存在")
+    target = (ws_path / file_path).resolve()
+    if not str(target).startswith(str(ws_path.resolve())):
+        raise HTTPException(status_code=400, detail="文件路径越界")
+    return await asyncio.to_thread(file_diff, ws_path, file_path)
+
+
 @router.get("/workspaces")
 async def list_workspaces(
     ctx: Annotated[AuthContext, Depends(get_auth_context)],

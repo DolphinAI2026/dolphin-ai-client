@@ -5,12 +5,39 @@
       <span class="cv-path" :title="filePath || ''">
         <span v-if="dir" class="cv-path-dir">&lrm;{{ dir }}/&lrm;</span><span class="cv-path-name">{{ baseName }}</span>
       </span>
-      <span v-if="diff" class="cv-badge">改动</span>
+      <template v-if="change">
+        <span class="cv-counts">
+          <span v-if="change.additions" class="cv-counts-add">+{{ change.additions }}</span>
+          <span v-if="change.deletions" class="cv-counts-del">−{{ change.deletions }}</span>
+        </span>
+        <div v-if="change.status !== 'D'" class="cv-toggle" role="tablist" aria-label="查看模式">
+          <button class="cv-toggle-btn" :class="{ active: viewMode === 'diff' }" @click="setMode('diff')">对比</button>
+          <button class="cv-toggle-btn" :class="{ active: viewMode === 'full' }" @click="setMode('full')">全文</button>
+        </div>
+        <span v-else class="cv-badge cv-badge-del">已删除</span>
+      </template>
+      <span v-else-if="diff" class="cv-badge">改动</span>
       <span v-if="decompiled" class="cv-badge" :title="`由 ${decompiler} 反编译,非原始源码`">反编译视图</span>
     </header>
     <div class="cv-body" ref="bodyRef">
+      <!-- git 基线对比模式 -->
+      <template v-if="showGitDiff">
+        <div v-if="gitLoading" class="cv-state">
+          <span class="cv-spinner" />
+          <span>加载对比中…</span>
+        </div>
+        <div v-else-if="gitBinary" class="cv-state">
+          <AppIcon :name="fileIcon" :size="26" :stroke="1.5" />
+          <span>二进制文件改动，不支持对比</span>
+        </div>
+        <DiffView v-else-if="gitDiff" :diff="gitDiff" />
+        <div v-else class="cv-state">
+          <AppIcon name="file" :size="26" :stroke="1.5" />
+          <span>相对基线无改动</span>
+        </div>
+      </template>
       <FileCard
-        v-if="diff"
+        v-else-if="diff"
         action="edit"
         :file-name="filePath || ''"
         :file-content="diff.fileContent"
@@ -47,8 +74,9 @@
 import { computed, nextTick, ref, watch } from 'vue'
 import FileCard from '@/components/FileCard.vue'
 import AppIcon from '@/components/common/AppIcon.vue'
-import { readWorkspaceFile, downloadWorkspaceFileRaw } from '@/api/coding'
+import { readWorkspaceFile, downloadWorkspaceFileRaw, getWorkspaceFileDiff, type WorkspaceChangeEntry } from '@/api/coding'
 import { highlightCode } from './shikiHighlight'
+import DiffView from './DiffView.vue'
 import type { FileChange } from './workspaceChanges'
 
 const BINARY_EXT = new Set([
@@ -64,6 +92,8 @@ const props = defineProps<{
   wsId: string
   filePath: string | null
   diff?: FileChange | null
+  /** git 基线改动(优先于 diff): 有则默认进对比模式,可切全文 */
+  change?: WorkspaceChangeEntry | null
   dark?: boolean
 }>()
 
@@ -76,6 +106,42 @@ const decompiled = ref(false)
 const decompiler = ref('')
 const downloading = ref(false)
 const bodyRef = ref<HTMLElement>()
+
+// ── git 基线对比模式 ──
+const viewMode = ref<'diff' | 'full'>('full')
+const gitDiff = ref('')
+const gitBinary = ref(false)
+const gitLoading = ref(false)
+const showGitDiff = computed(() => !!props.change && viewMode.value === 'diff')
+
+function setMode(m: 'diff' | 'full') {
+  if (viewMode.value === m) return
+  viewMode.value = m
+  void refresh()
+}
+
+async function loadGitDiff() {
+  if (!props.wsId || !props.filePath) return
+  gitLoading.value = true
+  gitDiff.value = ''
+  gitBinary.value = false
+  try {
+    const res = await getWorkspaceFileDiff(props.wsId, props.filePath)
+    gitBinary.value = !!res.binary
+    gitDiff.value = res.enabled ? res.diff : ''
+    await nextTick()
+    if (bodyRef.value) { bodyRef.value.scrollTop = 0; bodyRef.value.scrollLeft = 0 }
+  } catch {
+    gitDiff.value = ''
+  } finally {
+    gitLoading.value = false
+  }
+}
+
+async function refresh() {
+  if (showGitDiff.value) { await loadGitDiff(); return }
+  await load()
+}
 
 const isBinaryExt = computed(() => BINARY_EXT.has(baseName.value.split('.').pop()?.toLowerCase() || ''))
 
@@ -100,7 +166,7 @@ async function load() {
   binaryHint.value = '二进制文件，不支持预览'
   decompiled.value = false
   decompiler.value = ''
-  if (props.diff || !props.filePath || !props.wsId) return
+  if ((props.diff && !props.change) || !props.filePath || !props.wsId) return
   // 已知二进制扩展名直接走下载面板,不去拉文本(避免 utf-8 解码报错)
   if (isBinaryExt.value) { binary.value = true; return }
   loading.value = true
@@ -148,7 +214,15 @@ async function downloadFile() {
   }
 }
 
-watch(() => [props.wsId, props.filePath, props.diff, props.dark], load, { immediate: true })
+watch(
+  () => [props.wsId, props.filePath, props.diff, props.change?.path, props.change?.status, props.dark],
+  () => {
+    // 有 git 改动默认进对比；删除的文件只有对比可看
+    viewMode.value = props.change ? 'diff' : 'full'
+    void refresh()
+  },
+  { immediate: true },
+)
 </script>
 
 <style scoped>
@@ -198,6 +272,44 @@ watch(() => [props.wsId, props.filePath, props.diff, props.dark], load, { immedi
   color: var(--ai, var(--brand, #4f46e5));
   font-weight: 500;
 }
+.cv-badge-del {
+  background: color-mix(in srgb, var(--t-danger, #e5484d) 12%, transparent);
+  color: var(--t-danger, #e5484d);
+}
+.cv-counts {
+  flex: none;
+  display: inline-flex;
+  gap: 6px;
+  font-family: var(--font-mono, monospace);
+  font-size: var(--fs-xs, 11px);
+  font-weight: 600;
+}
+.cv-counts-add { color: var(--t-success, #16a34a); }
+.cv-counts-del { color: var(--t-danger, #e5484d); }
+.cv-toggle {
+  flex: none;
+  margin-left: auto;
+  display: inline-flex;
+  border: 1px solid var(--line, rgba(0, 0, 0, 0.1));
+  border-radius: var(--r-sm, 6px);
+  overflow: hidden;
+}
+.cv-toggle-btn {
+  padding: 2px 10px;
+  border: none;
+  background: transparent;
+  color: var(--fg-dim, #666);
+  font-size: var(--fs-xs, 11.5px);
+  cursor: pointer;
+  transition: background 0.12s var(--ease, ease), color 0.12s var(--ease, ease);
+}
+.cv-toggle-btn + .cv-toggle-btn { border-left: 1px solid var(--line, rgba(0, 0, 0, 0.1)); }
+.cv-toggle-btn.active {
+  background: var(--brand-soft, rgba(99, 102, 241, 0.1));
+  color: var(--brand-ink, var(--brand, #4f46e5));
+  font-weight: 500;
+}
+.cv-toggle-btn:hover:not(.active) { background: var(--bg-hover, rgba(0, 0, 0, 0.04)); }
 .cv-body { flex: 1; min-height: 0; min-width: 0; overflow: auto; }
 .cv-code { padding: 6px 0 14px; width: max-content; min-width: 100%; }
 .cv-code :deep(.shiki) { background: transparent !important; margin: 0; }

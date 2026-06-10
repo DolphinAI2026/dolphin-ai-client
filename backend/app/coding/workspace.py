@@ -983,6 +983,14 @@ class WorkspaceManager:
             json.dumps(meta, ensure_ascii=False, indent=2)
         )
 
+        # 脚手架就绪后立刻打 git 基线：首轮代码生成的「本轮改动」= agent 产出 vs 模板。
+        # best-effort，git 不可用不影响建工作区。
+        try:
+            from app.coding.git_changes import ensure_baseline
+            ensure_baseline(ws_path)
+        except Exception:
+            logger.warning("workspace git 基线初始化失败(忽略): %s", ws_path, exc_info=True)
+
         return meta
 
     @staticmethod

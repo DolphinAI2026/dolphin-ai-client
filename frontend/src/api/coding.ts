@@ -304,3 +304,36 @@ export function downloadWorkspaceFileRaw(wsId: string, filePath: string): Promis
     responseType: 'blob',
   })
 }
+
+/** 工作区相对 git 基线的单文件改动 */
+export interface WorkspaceChangeEntry {
+  path: string
+  status: 'A' | 'M' | 'D'
+  additions: number
+  deletions: number
+  binary?: boolean
+}
+
+/** 工作区改动清单(后端 git 不可用时 enabled=false, 前端回退旧的会话流追踪) */
+export interface WorkspaceChanges {
+  enabled: boolean
+  files: WorkspaceChangeEntry[]
+  total: { files: number; additions: number; deletions: number }
+}
+
+export function getWorkspaceChanges(wsId: string): Promise<WorkspaceChanges> {
+  return request.get(`/coding/workspace/${wsId}/changes`)
+}
+
+/** 单文件相对 git 基线的 unified diff 文本 */
+export interface WorkspaceFileDiff {
+  enabled: boolean
+  path: string
+  status: 'A' | 'M' | 'D' | null
+  diff: string
+  binary?: boolean
+}
+
+export function getWorkspaceFileDiff(wsId: string, filePath: string): Promise<WorkspaceFileDiff> {
+  return request.get(`/coding/workspace/${wsId}/file-diff`, { params: { file_path: filePath } })
+}

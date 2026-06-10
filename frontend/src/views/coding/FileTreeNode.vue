@@ -17,8 +17,10 @@
       </svg>
       <span v-else class="ftn-caret-spacer" />
       <AppIcon class="ftn-icon" :class="{ folder: node.isDir }" :name="iconName" :size="14" :stroke="1.9" />
-      <span class="ftn-name" :title="node.name">{{ node.name }}</span>
-      <span v-if="!node.isDir && changed.has(node.path)" class="ftn-dot" title="本轮有改动" />
+      <span class="ftn-name" :class="changeClass" :title="node.name">{{ node.name }}</span>
+      <span v-if="fileStatus" class="ftn-badge" :class="`st-${fileStatus.toLowerCase()}`" :title="fileStatus === 'A' ? '本轮新增' : '本轮修改'">{{ fileStatus }}</span>
+      <span v-else-if="dirHasChanges" class="ftn-dot" title="目录内有改动" />
+      <span v-else-if="!node.isDir && changed.has(node.path)" class="ftn-dot" title="本轮有改动" />
     </button>
     <template v-if="node.isDir && open">
       <FileTreeNode
@@ -26,6 +28,8 @@
         :key="child.path"
         :node="child"
         :changed="changed"
+        :change-map="changeMap"
+        :changed-dirs="changedDirs"
         :selected="selected"
         :depth="depth + 1"
         @select="$emit('select', $event)"
@@ -42,6 +46,10 @@ import type { TreeNode } from './fileTree'
 const props = withDefaults(defineProps<{
   node: TreeNode
   changed: Set<string>
+  /** path → A/M/D(git 基线), 提供时优先于 changed 圆点 */
+  changeMap?: Map<string, string>
+  /** 含改动的目录集合 */
+  changedDirs?: Set<string>
   selected: string | null
   depth?: number
 }>(), { depth: 0 })
@@ -52,6 +60,12 @@ function onClick() {
   if (props.node.isDir) open.value = !open.value
   else emit('select', props.node.path)
 }
+
+const fileStatus = computed(() =>
+  !props.node.isDir ? props.changeMap?.get(props.node.path) || null : null,
+)
+const dirHasChanges = computed(() => !!(props.node.isDir && props.changedDirs?.has(props.node.path)))
+const changeClass = computed(() => (fileStatus.value ? `changed-${fileStatus.value.toLowerCase()}` : ''))
 
 // 按扩展名挑图标，沿用 app 的 AppIcon 词表
 const iconName = computed(() => {
@@ -107,6 +121,21 @@ const iconName = computed(() => {
 .ftn-icon.folder { color: var(--brand, #6366f1); opacity: 0.75; }
 .ftn-row.selected .ftn-icon { color: inherit; }
 .ftn-name { overflow: hidden; text-overflow: ellipsis; }
+/* git 状态着色: 新增绿 / 修改琥珀(对齐 VS Code 心智) */
+.ftn-name.changed-a { color: var(--t-success, #16a34a); }
+.ftn-name.changed-m { color: var(--warn, #d97706); }
+.ftn-row.selected .ftn-name { color: inherit; }
+.ftn-badge {
+  margin-left: auto;
+  flex: none;
+  font-family: var(--font-mono, monospace);
+  font-size: 10.5px;
+  font-weight: 700;
+  line-height: 1;
+}
+.ftn-badge.st-a { color: var(--t-success, #16a34a); }
+.ftn-badge.st-m { color: var(--warn, #d97706); }
+.ftn-badge.st-d { color: var(--t-danger, #e5484d); }
 .ftn-dot {
   width: 7px; height: 7px;
   border-radius: 50%;

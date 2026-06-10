@@ -237,6 +237,7 @@
           :style="{ width: treePaneWidth + 'px' }"
           :tree="wsFileTree"
           :changed="changedPaths"
+          :changes="wsGitChanges"
           :selected="selectedFile"
           @select="selectedFile = $event"
         />
@@ -245,7 +246,8 @@
           class="ws-pane-viewer"
           :ws-id="codingStore.workspace?.id || ''"
           :file-path="selectedFile"
-          :diff="selectedDiff"
+          :diff="selectedGitChange ? null : selectedDiff"
+          :change="selectedGitChange"
           :dark="themeStore.isDark"
         />
       </div>
@@ -512,7 +514,7 @@ import CodeViewer from './coding/CodeViewer.vue'
 import { buildFileTree, type TreeNode } from './coding/fileTree'
 import { collectChangedFiles, type FileChangeMsg } from './coding/workspaceChanges'
 import { usePanelResize } from '@/components/v2/config-assistant/composables/usePanelResize'
-import { listWorkspaceFiles } from '@/api/coding'
+import { listWorkspaceFiles, getWorkspaceChanges, type WorkspaceChanges } from '@/api/coding'
 
 const route = useRoute()
 const router = useRouter()
@@ -580,12 +582,43 @@ const selectedDiff = computed(() =>
   selectedFile.value ? wsChanges.value.changed.get(selectedFile.value) || null : null,
 )
 
+// ── git 基线改动（后端 /changes）: 刷新后仍在、覆盖命令行写入，喂树徽标/改动分组/diff 查看 ──
+const wsGitChanges = ref<WorkspaceChanges | null>(null)
+let gitChangesTimer: ReturnType<typeof setTimeout> | null = null
+
+async function loadWsGitChanges() {
+  const id = codingStore.workspace?.id
+  if (!id) { wsGitChanges.value = null; return }
+  try { wsGitChanges.value = await getWorkspaceChanges(id) }
+  catch (e) { console.warn('[coding] 加载工作区改动失败', e); wsGitChanges.value = null }
+}
+
+// 流式期间 agent 连续写文件 → 去抖刷新，别每个文件打一次后端
+function scheduleGitChangesRefresh() {
+  if (gitChangesTimer) clearTimeout(gitChangesTimer)
+  gitChangesTimer = setTimeout(() => { void loadWsGitChanges() }, 800)
+}
+
+// 选中文件对应的 git 改动（有 → CodeViewer 默认对比模式）
+const selectedGitChange = computed(() =>
+  wsGitChanges.value?.enabled && selectedFile.value
+    ? wsGitChanges.value.files.find(f => f.path === selectedFile.value) || null
+    : null,
+)
+
 // agent 改完最后一个文件 → 自动打开它（纯前端，不发请求）
 watch(() => wsChanges.value.lastChangedFile, (p) => { if (p) selectedFile.value = p })
 // 仅当改动文件“集合增长”（写了新文件）时才重载树，避免多文件 codegen 期间每写一个文件就重复拉一次
-watch(() => changedPaths.value.size, () => { void loadWsFileTree() })
-// 切换工作区 → 清空选中并重载树
-watch(() => codingStore.workspace?.id, () => { selectedFile.value = null; void loadWsFileTree() }, { immediate: true })
+watch(() => changedPaths.value.size, () => { void loadWsFileTree(); scheduleGitChangesRefresh() })
+// 一轮跑完 → 改动清单收口刷新（含 run_command 等树/流事件看不到的写入）
+watch(isStreaming, (s) => { if (!s) { void loadWsGitChanges(); void loadWsFileTree() } })
+// 切换工作区 → 清空选中并重载树 + 改动
+watch(() => codingStore.workspace?.id, () => {
+  selectedFile.value = null
+  wsGitChanges.value = null
+  void loadWsFileTree()
+  void loadWsGitChanges()
+}, { immediate: true })
 
 // 工作区打开 → 代码为主三栏布局（文件树 | 大代码区 | 右聊天）；未进工作区时维持原引导/新建流程
 const codeFirst = computed(() => !!codingStore.workspace?.id && !embeddedAppId.value)

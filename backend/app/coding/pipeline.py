@@ -1661,6 +1661,17 @@ async def run_coding_pipeline(
     is_iteration = ws_id is not None
     replay_stream_messages: list[dict[str, Any]] = []
 
+    # 迭代轮开跑前把上一轮改动收进 git 基线 → 代码工作区「本轮改动」只显示这一轮的产出。
+    # best-effort：git 不可用 / 工作区缺失都不阻塞 pipeline。
+    if ws_id:
+        try:
+            ws_path_ckpt = ws_mgr.get_workspace_path(ws_id)
+            if ws_path_ckpt.exists():
+                from app.coding.git_changes import checkpoint as _git_checkpoint
+                await asyncio.to_thread(_git_checkpoint, ws_path_ckpt)
+        except Exception:
+            logger.warning("workspace git checkpoint 失败(忽略): %s", ws_id, exc_info=True)
+
     def _record_event(event: dict[str, Any]) -> dict[str, Any]:
         append_event_to_stream_replay(replay_stream_messages, event)
         return event
