@@ -55,21 +55,6 @@ RUN node_modules/.bin/vite build --base="${VITE_ADMIN_BASE}"
 
 
 # ------------------------------------------------------------
-# stage 2: 构建 code-server 睿鲸扩展
-# ------------------------------------------------------------
-FROM node:20-bookworm-slim AS ruijing-extension-builder
-
-WORKDIR /build/extensions/ruijing-ai
-
-COPY extensions/ruijing-ai/package.json extensions/ruijing-ai/package-lock.json ./
-RUN npm ci --prefer-offline --no-audit --progress=false
-
-COPY extensions/ruijing-ai/ ./
-RUN npm run build \
-    && npx @vscode/vsce package --no-dependencies
-
-
-# ------------------------------------------------------------
 # stage 3: JDK runtimes for backend packaging
 #   - aPaaS 4.x: JDK 8 / Java 1.8
 #   - aPaaS 5.x: JDK 17
@@ -84,7 +69,6 @@ FROM maven:3.9.9-eclipse-temurin-17 AS maven-bin
 #   - Python 3.11 + 后端依赖
 #   - Node 20（工作区 npm run serve 用）
 #   - Playwright Chromium
-#   - code-server
 #   - supervisord 作为 PID 1
 # ------------------------------------------------------------
 FROM python:3.12-slim-bookworm AS runtime
@@ -94,8 +78,7 @@ ENV DEBIAN_FRONTEND=noninteractive \
     PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
     PIP_NO_CACHE_DIR=1 \
-    NODE_MAJOR=20 \
-    CODE_SERVER_VERSION=4.112.0
+    NODE_MAJOR=20
 
 # --- 系统依赖 + Node 20 + Maven (XHH e7bcb00 cherry-pick) ----
 # 注：未安装 Chromium 运行时依赖。playwright Python 包会装（import 需要），
@@ -170,35 +153,6 @@ fi
 export PATH="$JAVA_HOME/bin:$PATH"
 exec /opt/maven/bin/mvn "$@"
 EOF
-
-# --- code-server --------------------------------------------
-# 用官方 release tarball 装，比 install.sh 可靠（install.sh 在最小化镜像里
-# 会静默失败，且 exit code 为 0 会骗过 Docker 缓存）
-RUN set -eux; \
-    arch=$(dpkg --print-architecture); \
-    case "$arch" in \
-      amd64) cs_arch=amd64 ;; \
-      arm64) cs_arch=arm64 ;; \
-      *) echo "unsupported arch: $arch" >&2; exit 1 ;; \
-    esac; \
-    url="https://github.com/coder/code-server/releases/download/v${CODE_SERVER_VERSION}/code-server-${CODE_SERVER_VERSION}-linux-${cs_arch}.tar.gz"; \
-    mkdir -p /opt/code-server; \
-    curl -fsSL "$url" -o /tmp/cs.tgz; \
-    tar -xzf /tmp/cs.tgz -C /opt/code-server --strip-components=1; \
-    ln -s /opt/code-server/bin/code-server /usr/local/bin/code-server; \
-    rm /tmp/cs.tgz; \
-    code-server --version
-
-# --- code-server 睿鲸扩展 + Chat fallback patch -------------
-# 主机部署依赖 workbench.js patch 将原生 Chat 的 GitHub Copilot 检查
-# 切到 apaas-builder.ruijing-ai；容器镜像必须内置同样处理，避免手动安装扩展
-# 后仍显示 VS Code 默认 Agent 界面。
-COPY --from=ruijing-extension-builder /build/extensions/ruijing-ai/ruijing-ai-*.vsix /tmp/ruijing-ai.vsix
-COPY scripts/ /app/scripts/
-RUN set -eux; \
-    code-server --install-extension /tmp/ruijing-ai.vsix --force; \
-    node /app/scripts/patch_all.js --code-server-path /opt/code-server; \
-    rm -f /tmp/ruijing-ai.vsix
 
 # --- 后端 Python 依赖 ---------------------------------------
 WORKDIR /app/backend

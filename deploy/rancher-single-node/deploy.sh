@@ -146,10 +146,8 @@ collect_inputs() {
   DATABASE_URL="${DATABASE_URL:-sqlite+aiosqlite:////root/apaas-builder/workspaces/apaas_builder.db}"
 
   if [ -n "$BUILDER_HOST" ]; then
-    default_code_server_url="$(external_base_url)/ai-builder/ide/"
     default_public_url="$(external_base_url)/ai-builder/login"
   else
-    default_code_server_url=""
     default_public_url=""
   fi
 
@@ -211,22 +209,6 @@ server {
     index index.html;
     client_max_body_size 100M;
     absolute_redirect off;
-
-    location ^~ /ai-builder/ide/ {
-        rewrite ^/ai-builder/ide/(.*)$ /$1 break;
-        proxy_pass http://127.0.0.1:8080;
-        proxy_http_version 1.1;
-        proxy_set_header Upgrade $http_upgrade;
-        proxy_set_header Connection $connection_upgrade;
-        proxy_set_header Host $host;
-        proxy_set_header X-Real-IP $remote_addr;
-        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
-        proxy_set_header X-Forwarded-Proto $proxy_x_forwarded_proto;
-        proxy_set_header X-Forwarded-Host $host;
-        proxy_set_header X-Forwarded-Prefix /ai-builder/ide;
-        proxy_read_timeout 86400s;
-        proxy_send_timeout 86400s;
-    }
 
     location /ai-builder/api/ {
         rewrite ^/ai-builder/api/(.*)$ /api/$1 break;
@@ -443,8 +425,6 @@ ${IMAGE_PULL_SECRETS_BLOCK}
           image: ${IMAGE}
           imagePullPolicy: ${IMAGE_PULL_POLICY}
           env:
-            - name: CODE_SERVER_BIND_HOST
-              value: "127.0.0.1"
             - name: WAIT_FOR_MYSQL
               value: "1"
             - name: APAAS_WORKSPACE_ROOT
@@ -454,8 +434,6 @@ ${IMAGE_PULL_SECRETS_BLOCK}
           ports:
             - name: api
               containerPort: 8003
-            - name: ide
-              containerPort: 8080
           volumeMounts:
             - name: workspaces
               mountPath: /root/apaas-builder/workspaces

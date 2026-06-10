@@ -7,9 +7,8 @@
 #    下方示例默认展示【并存场景】
 #
 # 前提：
-#   容器用的端口（与 docker-compose.yml 中 PORT / CODE_SERVER_PORT 对齐）：
+#   容器用的端口（与 docker-compose.yml 中 PORT 对齐）：
 #     127.0.0.1:8103  ← 容器后端 uvicorn
-#     127.0.0.1:8090  ← 容器 code-server
 #     127.0.0.1:8082+ ← 容器内工作区 dev-server（自动跳过主机已占端口）
 #   容器前端 dist 挂在宿主 /data/apaas-docker/frontend-dist/
 
@@ -49,23 +48,6 @@ server {
         rewrite ^/ai-builder-docker/(.*)$ /$1 break;
         access_log off;
         expires 7d;
-    }
-
-    # code-server (Web IDE + WebSocket)
-    location ^~ /ai-builder-docker/ide/ {
-        proxy_pass http://127.0.0.1:8090/;
-        proxy_http_version 1.1;
-
-        proxy_set_header Upgrade $http_upgrade;
-        proxy_set_header Connection $connection_upgrade;
-
-        proxy_set_header Host $host;
-        proxy_set_header X-Real-IP $remote_addr;
-        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
-        proxy_set_header X-Forwarded-Proto $scheme;
-
-        proxy_read_timeout 86400s;
-        proxy_send_timeout 86400s;
     }
 
     # 后端 API + SSE（剩余所有 /ai-builder-docker/*）
