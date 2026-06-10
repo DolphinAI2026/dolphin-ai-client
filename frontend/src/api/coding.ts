@@ -304,3 +304,16 @@ export const codingApi = {
     return resp.json()
   },
 }
+
+/** 列出工作区文件(扁平相对路径,已排除 node_modules/隐藏文件) */
+export function listWorkspaceFiles(wsId: string): Promise<string[]> {
+  return request.get(`/coding/workspace/${wsId}/files`)
+}
+
+/** 读取工作区单文件内容 */
+export function readWorkspaceFile(
+  wsId: string,
+  filePath: string,
+): Promise<{ path: string; content: string }> {
+  return request.get(`/coding/workspace/${wsId}/file`, { params: { file_path: filePath } })
+}
