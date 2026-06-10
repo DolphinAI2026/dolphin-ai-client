@@ -1979,6 +1979,26 @@ async def read_workspace_file(
         raise HTTPException(status_code=400, detail=str(e))
 
 
+@router.get("/workspace/{ws_id}/raw")
+async def download_workspace_file_raw(
+    ws_id: str,
+    file_path: str = Query(..., description="文件相对路径"),
+    ctx: Annotated[AuthContext, Depends(get_auth_context)] = None,
+    db: Annotated[AsyncSession, Depends(get_db)] = None,
+):
+    """以原始字节返回工作区单文件，供二进制文件（zip/图片/字体等）下载。"""
+    from fastapi.responses import FileResponse
+
+    await _ensure_workspace_access(ws_id, ctx, db, minimum_project_role="member")
+    ws_path = workspace_mgr.get_workspace_path(ws_id)
+    target = (ws_path / file_path).resolve()
+    if not str(target).startswith(str(ws_path.resolve())):
+        raise HTTPException(status_code=400, detail="文件路径越界")
+    if not target.is_file():
+        raise HTTPException(status_code=404, detail=f"文件不存在: {file_path}")
+    return FileResponse(str(target), filename=target.name)
+
+
 @router.post("/workspace/{ws_id}/file")
 async def write_workspace_file(
     ws_id: str,

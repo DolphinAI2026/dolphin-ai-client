@@ -317,3 +317,11 @@ export function readWorkspaceFile(
 ): Promise<{ path: string; content: string }> {
   return request.get(`/coding/workspace/${wsId}/file`, { params: { file_path: filePath } })
 }
+
+/** 以原始字节下载工作区单文件(二进制) */
+export function downloadWorkspaceFileRaw(wsId: string, filePath: string): Promise<Blob> {
+  return request.get(`/coding/workspace/${wsId}/raw`, {
+    params: { file_path: filePath },
+    responseType: 'blob',
+  })
+}

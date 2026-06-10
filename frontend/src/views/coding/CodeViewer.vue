@@ -23,6 +23,15 @@
         <span class="cv-spinner" />
         <span>加载中…</span>
       </div>
+      <div v-else-if="binary" class="cv-state cv-binary">
+        <AppIcon :name="fileIcon" :size="30" :stroke="1.5" />
+        <span class="cv-binary-name">{{ baseName }}</span>
+        <span class="cv-binary-hint">二进制文件，不支持预览</span>
+        <button class="cv-download" :disabled="downloading" @click="downloadFile">
+          <AppIcon name="download" :size="14" :stroke="1.9" />
+          <span>{{ downloading ? '下载中…' : '下载文件' }}</span>
+        </button>
+      </div>
       <div v-else-if="error" class="cv-state cv-state-error">
         <AppIcon name="warning" :size="18" />
         <span>{{ error }}</span>
@@ -41,9 +50,18 @@
 import { computed, ref, watch } from 'vue'
 import FileCard from '@/components/FileCard.vue'
 import AppIcon from '@/components/common/AppIcon.vue'
-import { readWorkspaceFile } from '@/api/coding'
+import { readWorkspaceFile, downloadWorkspaceFileRaw } from '@/api/coding'
 import { highlightCode } from './shikiHighlight'
 import type { FileChange } from './workspaceChanges'
+
+const BINARY_EXT = new Set([
+  'zip', 'tar', 'gz', 'tgz', 'rar', '7z',
+  'png', 'jpg', 'jpeg', 'gif', 'webp', 'ico', 'bmp',
+  'pdf', 'woff', 'woff2', 'ttf', 'eot', 'otf',
+  'mp4', 'mp3', 'wav', 'mov', 'avi',
+  'exe', 'bin', 'so', 'dll', 'class', 'jar',
+  'psd', 'sketch', 'xlsx', 'xls', 'docx', 'doc', 'ppt', 'pptx',
+])
 
 const props = defineProps<{
   wsId: string
@@ -57,6 +75,10 @@ const rawContent = ref('')
 const loading = ref(false)
 const error = ref('')
 const copied = ref(false)
+const binary = ref(false)
+const downloading = ref(false)
+
+const isBinaryExt = computed(() => BINARY_EXT.has(baseName.value.split('.').pop()?.toLowerCase() || ''))
 
 const baseName = computed(() => props.filePath?.split('/').pop() || '')
 const dir = computed(() => {
@@ -77,16 +99,45 @@ async function load() {
   rawContent.value = ''
   error.value = ''
   copied.value = false
+  binary.value = false
   if (props.diff || !props.filePath || !props.wsId) return
+  // 已知二进制扩展名直接走下载面板,不去拉文本(避免 utf-8 解码报错)
+  if (isBinaryExt.value) { binary.value = true; return }
   loading.value = true
   try {
     const res = await readWorkspaceFile(props.wsId, props.filePath)
     rawContent.value = res.content
     html.value = await highlightCode(res.content, props.filePath, !!props.dark)
   } catch (e: any) {
-    error.value = e?.response?.data?.detail || '读取文件失败'
+    const detail = String(e?.response?.data?.detail || e?.message || '')
+    // 后端读 utf-8 失败 = 其实是二进制文件 → 也走下载面板,不显示红色报错
+    if (/codec|decode byte|utf-8/i.test(detail)) {
+      binary.value = true
+    } else {
+      error.value = detail || '读取文件失败'
+    }
   } finally {
     loading.value = false
+  }
+}
+
+async function downloadFile() {
+  if (!props.filePath || !props.wsId || downloading.value) return
+  downloading.value = true
+  try {
+    const blob = await downloadWorkspaceFileRaw(props.wsId, props.filePath)
+    const url = URL.createObjectURL(blob)
+    const a = document.createElement('a')
+    a.href = url
+    a.download = baseName.value
+    document.body.appendChild(a)
+    a.click()
+    a.remove()
+    setTimeout(() => URL.revokeObjectURL(url), 1000)
+  } catch {
+    /* 下载失败，忽略 */
+  } finally {
+    downloading.value = false
   }
 }
 
@@ -160,15 +211,14 @@ watch(() => [props.wsId, props.filePath, props.diff, props.dark], load, { immedi
 .cv-copy:hover { background: var(--bg-hover, rgba(0, 0, 0, 0.04)); color: var(--fg, #222); }
 .cv-copy.done { color: var(--ok, #16a34a); border-color: var(--ok-soft, rgba(22, 163, 74, 0.3)); }
 .cv-body { flex: 1; min-height: 0; min-width: 0; overflow: auto; }
-.cv-code { padding: 10px 0 24px; }
+.cv-code { padding: 6px 0 14px; }
 .cv-code :deep(.shiki) { background: transparent !important; margin: 0; }
-.cv-code :deep(.shiki code) { counter-reset: ln; display: block; font-family: var(--font-mono, monospace); font-size: 12.5px; line-height: 1.65; }
+.cv-code :deep(.shiki code) { counter-reset: ln; display: block; font-family: var(--font-mono, monospace); font-size: 12.5px; line-height: 1.5; }
 .cv-code :deep(.shiki .line) {
   display: block;
   position: relative;
   padding-left: 3.4em;
   padding-right: 14px;
-  min-height: 1.65em;
 }
 .cv-code :deep(.shiki .line)::before {
   counter-increment: ln;
@@ -193,6 +243,25 @@ watch(() => [props.wsId, props.filePath, props.diff, props.dark], load, { immedi
   font-size: var(--fs-sm, 13px);
 }
 .cv-empty :deep(.app-icon) { opacity: 0.5; }
+.cv-binary :deep(.app-icon) { opacity: 0.6; }
+.cv-binary-name { color: var(--fg, #333); font-weight: 500; font-family: var(--font-mono, monospace); font-size: var(--fs-sm, 13px); }
+.cv-binary-hint { font-size: var(--fs-xs, 12px); }
+.cv-download {
+  margin-top: 4px;
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 6px 16px;
+  border: 1px solid var(--line-strong, var(--line, rgba(0, 0, 0, 0.15)));
+  border-radius: var(--r-sm, 6px);
+  background: var(--bg, #fff);
+  color: var(--brand-ink, var(--brand, #4f46e5));
+  font-size: var(--fs-sm, 13px);
+  cursor: pointer;
+  transition: background 0.12s var(--ease, ease);
+}
+.cv-download:hover:not(:disabled) { background: var(--brand-soft, rgba(99, 102, 241, 0.1)); }
+.cv-download:disabled { opacity: 0.6; cursor: default; }
 .cv-state-error { color: var(--err, #ef4444); }
 .cv-retry {
   padding: 4px 14px;
