@@ -8,7 +8,7 @@
  * 执行顺序：
  *   1. 自动检测 code-server 版本和路径
  *   2. 提取 workbench.js 属性名映射
- *   3. 逐个执行 patch（locale → branding → handshake → chat_fallback）
+ *   3. 逐个执行 patch（chat_enable → chat_fallback）
  *   4. 语法验证（失败自动回滚）
  *   5. 更新 workbench.html 缓存参数
  */
@@ -64,10 +64,12 @@ console.log(`✓ Backup: ${path.basename(backupPath)}\n`);
 // Step 4: Run patches
 const scriptsDir = __dirname;
 const patches = [
-  // 新方案：扩展用 registerLanguageModelChatProvider 注册模型（vendor=copilot），
-  // 这里只做 entitlement 解锁 + product.json 放行 proposed API / 重指向 defaultChatAgent。
-  // 取代旧的 patch_vscode_chat_fallback.js（activateDefaultAgent 替换法在 1.112 上会崩）。
+  // 先做 entitlement 解锁 + product.json / workbench 内嵌 defaultChatAgent 重指向。
   { name: 'Chat Enable (entitlement + product.json proposed-api)', script: 'patch_vscode_chat_enable.js', args: [csInfo.workbenchPath, csInfo.productJsonPath] },
+  // 再注册内置 Chat 的动态 agent fallback。线上 code-server 的 native Chat
+  // setup 仍会走 VS Code 默认 agent 初始化链，单靠 LM provider 会卡在
+  // "Getting chat ready"。
+  { name: 'Chat Fallback (native dynamic agent)', script: 'patch_vscode_chat_fallback.js', args: [csInfo.workbenchPath] },
 ];
 
 let allOk = true;
@@ -119,6 +121,14 @@ try {
     console.warn('⚠ activateDefaultAgent method not found (may need manual check)');
   } else {
     console.log('✓ activateDefaultAgent method present');
+  }
+
+  // Verify no GitHub.copilot references remain
+  const copilotCount = (src.match(/GitHub\.copilot/g) || []).length;
+  if (copilotCount > 0) {
+    console.warn(`⚠ ${copilotCount} GitHub.copilot references still present`);
+  } else {
+    console.log('✓ No GitHub.copilot references');
   }
 
   // Verify no GitHub.copilot-chat references remain

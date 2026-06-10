@@ -5,10 +5,9 @@ const __apaasChatAgentService=this.chatAgentService||this.L;
 const __apaasConfigService=this.configurationService||this.M;
 await __apaasExtService.whenInstalledExtensionsRegistered();
 const i=(()=>{
-const _id=qi.defaultChatAgent?.extensionId??"apaas-builder.ruijing-ai";
-if(_id&&typeof _id=="object"&&typeof _id.value=="string")return _id;
-if(typeof Ii!="undefined")return new Ii(String(_id));
-return{value:String(_id)};
+const _rawId=qi.defaultChatAgent?.extensionId??"apaas-builder.ruijing-ai";
+const _idValue=String(_rawId&&typeof _rawId=="object"&&typeof _rawId.value=="string"?_rawId.value:_rawId||"apaas-builder.ruijing-ai").replace(/^GitHub\.copilot(?:-chat)?$/,"apaas-builder.ruijing-ai");
+return{value:_idValue};/*patched:no-extension-id-constructor*/
 })();
 const __apaasDefaultAgentId=qi.defaultChatAgent?.provider?.default?.id??"ai-coding";
 const __apaasExtensionIdValue=typeof i=="string"?i:i?.value;

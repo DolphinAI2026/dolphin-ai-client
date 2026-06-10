@@ -163,6 +163,40 @@ if (copilotChatCount > 0) {
   changed = true;
 }
 
+// Patch 3c: code-server also inlines product.defaultChatAgent into
+// workbench.js. If this remains extensionId:"GitHub.copilot", the native Chat
+// session still initializes through the wrong default agent even when
+// product.json has been repointed.
+let embeddedProductReplaced = 0;
+for (const [from, to] of [
+  [
+    'extensionId:"GitHub.copilot"',
+    'extensionId:"apaas-builder.ruijing-ai"/*patched:embedded-default-agent*/',
+  ],
+  [
+    'provider:{default:{id:"github",name:"GitHub"},enterprise:{id:"github-enterprise",name:"GitHub Enterprise"}}',
+    'provider:{default:{id:"ruijing-ai.chat",name:"睿鲸AI"},enterprise:{id:"",name:""}}/*patched:embedded-provider*/',
+  ],
+  [
+    'chatExtensionOutputId:"apaas-builder.ruijing-ai.GitHub Copilot Chat.log"',
+    'chatExtensionOutputId:""/*patched:embedded-output*/',
+  ],
+  [
+    'chatExtensionOutputExtensionStateCommand:"github.copilot.debug.extensionState"',
+    'chatExtensionOutputExtensionStateCommand:""/*patched:embedded-state-command*/',
+  ],
+]) {
+  const count = updated.split(from).length - 1;
+  if (count > 0) {
+    updated = updated.split(from).join(to);
+    embeddedProductReplaced += count;
+  }
+}
+if (embeddedProductReplaced > 0) {
+  console.log(`  Patched ${embeddedProductReplaced} embedded defaultChatAgent field(s)`);
+  changed = true;
+}
+
 // Patch 4: Bypass sign-in dialog in chat setup flow.
 // The setup flow checks entitlement/auth before allowing chat. Since we use our
 // own backend (MiniMax), we skip the sign-in dialog entirely by forcing DefaultSetup.

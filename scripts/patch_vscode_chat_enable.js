@@ -15,6 +15,10 @@
  *        （放行 proposed API，否则扩展里的 registerLanguageModelChatProvider 不可用）
  *      - defaultChatAgent **重指向** apaas-builder.ruijing-ai（不能删；删了会回退硬编码
  *        GitHub.copilot-chat 装不到而卡死）
+ *   C. workbench.js 内嵌 product 对象：
+ *      - VS Code Web 启动时还会读取 bundle 里的 qi.defaultChatAgent；只改
+ *        product.json 不够，线上会继续拿 extensionId:"GitHub.copilot" 初始化
+ *        Chat session，导致 "Getting chat ready" 或 TypeError。
  *
  * 配方与字符串来自本地实证可用的 minimax-chat-provider 的 patch-workbench.sh，
  * 针对 code-server 4.112.0 / VS Code 1.112.0 的 minified workbench.js。换版本需重新对齐这些串。
@@ -129,6 +133,47 @@ if (copilotChatCount > 0) {
   applied++;
 } else {
   console.log('[SKIP] no GitHub.copilot-chat references (already replaced or absent)');
+  skipped++;
+}
+
+// --- PATCH 7: 修正 workbench.js 内嵌 defaultChatAgent ---
+// code-server 会把 product 配置内联进 workbench.js 的 qi 对象。线上实证：
+// 即便 product.json 已经改成 apaas-builder.ruijing-ai，workbench 仍从内嵌的
+// extensionId:"GitHub.copilot" 创建默认 Chat session，最终在当前版本里抛
+// `Cannot create property 'textContent' on string ...`。
+let embeddedProductReplaced = 0;
+for (const [oldStr, newStr] of [
+  [
+    'extensionId:"GitHub.copilot"',
+    'extensionId:"apaas-builder.ruijing-ai"/*patched:embedded-default-agent*/',
+  ],
+  [
+    'provider:{default:{id:"github",name:"GitHub"},enterprise:{id:"github-enterprise",name:"GitHub Enterprise"}}',
+    'provider:{default:{id:"ruijing-ai.chat",name:"睿鲸AI"},enterprise:{id:"",name:""}}/*patched:embedded-provider*/',
+  ],
+  [
+    'chatExtensionOutputId:"apaas-builder.ruijing-ai.GitHub Copilot Chat.log"',
+    'chatExtensionOutputId:""/*patched:embedded-output*/',
+  ],
+  [
+    'chatExtensionOutputExtensionStateCommand:"github.copilot.debug.extensionState"',
+    'chatExtensionOutputExtensionStateCommand:""/*patched:embedded-state-command*/',
+  ],
+]) {
+  const count = wb.split(oldStr).length - 1;
+  if (count > 0) {
+    wb = wb.split(oldStr).join(newStr);
+    embeddedProductReplaced += count;
+  }
+}
+if (embeddedProductReplaced > 0) {
+  console.log(`[OK]   Patched ${embeddedProductReplaced} embedded defaultChatAgent field(s)`);
+  applied++;
+} else if (wb.includes('patched:embedded-default-agent')) {
+  console.log('[SKIP] embedded defaultChatAgent — already patched');
+  skipped++;
+} else {
+  console.log('[SKIP] embedded defaultChatAgent — no target form present');
   skipped++;
 }
 
