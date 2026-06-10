@@ -4697,8 +4697,8 @@ html[data-theme="dark"] .msg-error-row {
 }
 
 /* ============ Task 7: 原生文件树 + 代码查看器右栏 ============ */
-.ws-pane { display: flex; height: 100%; min-height: 0; border-left: 0.5px solid var(--ac-border, rgba(0,0,0,.1)); width: 420px; flex-shrink: 0; }
-.ws-pane-tree { width: 200px; flex: none; border-right: 0.5px solid var(--ac-border, rgba(0,0,0,.1)); }
+.ws-pane { display: flex; height: 100%; min-height: 0; border-left: 1px solid var(--line, rgba(0,0,0,.08)); width: 420px; flex-shrink: 0; }
+.ws-pane-tree { width: 240px; flex: none; border-right: 1px solid var(--line, rgba(0,0,0,.08)); }
 .ws-pane-viewer { flex: 1; min-width: 0; }
 
 /* 代码为主三栏布局: SessionSidebar | 文件树+大代码区(主角) | 右聊天列(可拖宽) */
@@ -4708,10 +4708,10 @@ html[data-theme="dark"] .msg-error-row {
   width: auto;
   border-left: none;
 }
-.coding-body.code-first .ws-pane-tree { width: 220px; }
+.coding-body.code-first .ws-pane-tree { width: 240px; }
 .coding-body.code-first .main-content {
   order: 2;
-  border-left: 0.5px solid var(--ac-border, rgba(0,0,0,.1));
+  border-left: 1px solid var(--line, rgba(0,0,0,.08));
   position: relative;
 }
 .chat-resizer {
@@ -4729,8 +4729,8 @@ html[data-theme="dark"] .msg-error-row {
   position: absolute;
   left: 5px; top: 0; bottom: 0;
   width: 2px;
-  background: var(--ac-border, rgba(0,0,0,.1));
-  transition: background 0.15s;
+  background: transparent;
+  transition: background 0.15s var(--ease, ease);
 }
-.chat-resizer:hover::after { background: var(--ac-primary, #6366f1); }
+.chat-resizer:hover::after { background: var(--brand, #6366f1); }
 </style>

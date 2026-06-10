@@ -1,6 +1,16 @@
 <template>
   <div class="code-viewer">
-    <div class="cv-path">{{ filePath || '未选择文件' }}</div>
+    <header v-if="filePath" class="cv-head">
+      <AppIcon :name="fileIcon" :size="14" :stroke="1.9" class="cv-head-icon" />
+      <span class="cv-path">
+        <span v-if="dir" class="cv-path-dir">{{ dir }}/</span><span class="cv-path-name">{{ baseName }}</span>
+      </span>
+      <span v-if="diff" class="cv-badge">改动</span>
+      <button v-if="!diff && rawContent" class="cv-copy" :class="{ done: copied }" @click="copy">
+        <AppIcon :name="copied ? 'check' : 'clipboard'" :size="14" :stroke="1.9" />
+        <span>{{ copied ? '已复制' : '复制' }}</span>
+      </button>
+    </header>
     <div class="cv-body">
       <FileCard
         v-if="diff"
@@ -9,17 +19,28 @@
         :file-content="diff.fileContent"
         :old-content="diff.oldContent"
       />
-      <div v-else-if="loading" class="cv-hint">加载中…</div>
-      <div v-else-if="error" class="cv-hint cv-error">{{ error }} <button @click="load">重试</button></div>
+      <div v-else-if="loading" class="cv-state">
+        <span class="cv-spinner" />
+        <span>加载中…</span>
+      </div>
+      <div v-else-if="error" class="cv-state cv-state-error">
+        <AppIcon name="warning" :size="18" />
+        <span>{{ error }}</span>
+        <button class="cv-retry" @click="load">重试</button>
+      </div>
       <div v-else-if="filePath" class="cv-code" v-html="html" />
-      <div v-else class="cv-hint">从左侧选择文件查看</div>
+      <div v-else class="cv-state cv-empty">
+        <AppIcon name="file" :size="26" :stroke="1.5" />
+        <span>从左侧选择文件查看代码</span>
+      </div>
     </div>
   </div>
 </template>
 
 <script setup lang="ts">
-import { ref, watch } from 'vue'
+import { computed, ref, watch } from 'vue'
 import FileCard from '@/components/FileCard.vue'
+import AppIcon from '@/components/common/AppIcon.vue'
 import { readWorkspaceFile } from '@/api/coding'
 import { highlightCode } from './shikiHighlight'
 import type { FileChange } from './workspaceChanges'
@@ -32,16 +53,35 @@ const props = defineProps<{
 }>()
 
 const html = ref('')
+const rawContent = ref('')
 const loading = ref(false)
 const error = ref('')
+const copied = ref(false)
+
+const baseName = computed(() => props.filePath?.split('/').pop() || '')
+const dir = computed(() => {
+  const p = props.filePath || ''
+  const i = p.lastIndexOf('/')
+  return i >= 0 ? p.slice(0, i) : ''
+})
+const fileIcon = computed(() => {
+  const ext = baseName.value.split('.').pop()?.toLowerCase() || ''
+  if (['md', 'mdc', 'txt'].includes(ext)) return 'doc'
+  if (['png', 'jpg', 'jpeg', 'gif', 'svg', 'webp', 'ico'].includes(ext)) return 'image'
+  if (['json', 'yaml', 'yml', 'config'].includes(ext)) return 'settings'
+  return 'file'
+})
 
 async function load() {
   html.value = ''
+  rawContent.value = ''
   error.value = ''
+  copied.value = false
   if (props.diff || !props.filePath || !props.wsId) return
   loading.value = true
   try {
     const res = await readWorkspaceFile(props.wsId, props.filePath)
+    rawContent.value = res.content
     html.value = await highlightCode(res.content, props.filePath, !!props.dark)
   } catch (e: any) {
     error.value = e?.response?.data?.detail || '读取文件失败'
@@ -50,14 +90,125 @@ async function load() {
   }
 }
 
+async function copy() {
+  if (!rawContent.value) return
+  try {
+    await navigator.clipboard.writeText(rawContent.value)
+    copied.value = true
+    setTimeout(() => (copied.value = false), 1600)
+  } catch {
+    /* clipboard 不可用，忽略 */
+  }
+}
+
 watch(() => [props.wsId, props.filePath, props.diff, props.dark], load, { immediate: true })
 </script>
 
 <style scoped>
-.code-viewer { display: flex; flex-direction: column; height: 100%; min-width: 0; }
-.cv-path { padding: 6px 12px; border-bottom: 0.5px solid var(--ac-border, rgba(0,0,0,.1)); font-family: monospace; font-size: 12px; color: var(--ac-text-secondary, #888); }
-.cv-body { flex: 1; overflow: auto; padding: 8px 0; }
-.cv-code :deep(pre) { margin: 0; padding: 0 12px; font-size: 12px; line-height: 1.7; background: transparent !important; }
-.cv-hint { padding: 16px; color: var(--ac-text-secondary, #888); font-size: 13px; }
-.cv-error { color: var(--ac-danger, #f56c6c); }
+.code-viewer {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  min-width: 0;
+  background: var(--bg, #fff);
+}
+.cv-head {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  flex: none;
+  padding: 8px 14px;
+  border-bottom: 1px solid var(--line, rgba(0, 0, 0, 0.07));
+  background: var(--bg-sub, var(--bg, #fff));
+}
+.cv-head-icon { flex: none; color: var(--fg-faint, #999); }
+.cv-path {
+  font-family: var(--font-mono, monospace);
+  font-size: var(--fs-sm, 12.5px);
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.cv-path-dir { color: var(--fg-faint, #aaa); }
+.cv-path-name { color: var(--fg, #222); font-weight: 500; }
+.cv-badge {
+  flex: none;
+  font-size: var(--fs-xs, 11px);
+  padding: 1px 7px;
+  border-radius: 999px;
+  background: var(--ai-soft, var(--brand-soft, rgba(99, 102, 241, 0.12)));
+  color: var(--ai, var(--brand, #4f46e5));
+  font-weight: 500;
+}
+.cv-copy {
+  margin-left: auto;
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 4px 10px;
+  border: 1px solid var(--line, rgba(0, 0, 0, 0.1));
+  border-radius: var(--r-sm, 6px);
+  background: var(--bg, #fff);
+  color: var(--fg-dim, #666);
+  font-size: var(--fs-xs, 12px);
+  cursor: pointer;
+  transition: all 0.12s var(--ease, ease);
+}
+.cv-copy:hover { background: var(--bg-hover, rgba(0, 0, 0, 0.04)); color: var(--fg, #222); }
+.cv-copy.done { color: var(--ok, #16a34a); border-color: var(--ok-soft, rgba(22, 163, 74, 0.3)); }
+.cv-body { flex: 1; min-height: 0; overflow: auto; }
+.cv-code { padding: 10px 0 24px; }
+.cv-code :deep(.shiki) { background: transparent !important; margin: 0; }
+.cv-code :deep(.shiki code) { counter-reset: ln; display: block; font-family: var(--font-mono, monospace); font-size: 12.5px; line-height: 1.65; }
+.cv-code :deep(.shiki .line) {
+  display: block;
+  position: relative;
+  padding-left: 3.4em;
+  padding-right: 14px;
+  min-height: 1.65em;
+}
+.cv-code :deep(.shiki .line)::before {
+  counter-increment: ln;
+  content: counter(ln);
+  position: absolute;
+  left: 0;
+  width: 2.4em;
+  text-align: right;
+  color: var(--fg-faint, #bbb);
+  opacity: 0.65;
+  user-select: none;
+}
+.cv-code :deep(.shiki .line:hover)::before { opacity: 1; }
+.cv-state {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  height: 100%;
+  color: var(--fg-faint, #aaa);
+  font-size: var(--fs-sm, 13px);
+}
+.cv-empty :deep(.app-icon) { opacity: 0.5; }
+.cv-state-error { color: var(--err, #ef4444); }
+.cv-retry {
+  padding: 4px 14px;
+  border: 1px solid var(--line, rgba(0, 0, 0, 0.12));
+  border-radius: var(--r-sm, 6px);
+  background: var(--bg, #fff);
+  color: var(--fg, #333);
+  font-size: var(--fs-sm, 13px);
+  cursor: pointer;
+}
+.cv-retry:hover { background: var(--bg-hover, rgba(0, 0, 0, 0.04)); }
+.cv-spinner {
+  width: 18px; height: 18px;
+  border: 2px solid var(--line, rgba(0, 0, 0, 0.15));
+  border-top-color: var(--brand, #6366f1);
+  border-radius: 50%;
+  animation: cv-spin 0.7s linear infinite;
+}
+@keyframes cv-spin { to { transform: rotate(360deg); } }
 </style>
