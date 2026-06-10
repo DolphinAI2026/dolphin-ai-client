@@ -614,7 +614,13 @@ function initGraph() {
     },
     panning: { enabled: true, eventTypes: ['leftMouseDown'] },
     mousewheel: { enabled: true, zoomAtMousePosition: true, modifiers: 'ctrl' },
-    interacting: { nodeMovable: true },
+    interacting: {
+      nodeMovable: false,
+      edgeMovable: false,
+      edgeLabelMovable: false,
+      arrowheadMovable: false,
+      magnetConnectable: false,
+    },
     connecting: {
       router: 'manhattan',
       connector: { name: 'rounded', args: { radius: 8 } },
@@ -794,12 +800,17 @@ type AnchorName = 'top' | 'right' | 'bottom' | 'left' | 'center'
 type PositionTransform = { pivotX: number; scaleX: number }
 type EdgePoint = { x: number; y: number }
 
-/** 自动布局 — 按入度拓扑分层 (BFS) + 每层水平居中铺开, 返回 nodeId → {x,y}. */
+/** 自动布局 — 主干节点居中垂直排布，条件/旁路节点放在合流节点侧边。
+ *
+ * aPaaS 详情返回的原始坐标经常把主线节点和分支节点放在同一层，普通拓扑分层
+ * 会把主线也挤到侧边，导致后续主线连线绕弯。这里先推断一条主干，再把其它
+ * 分支节点挂到它们合流的主干节点旁边。
+ */
 function computeAutoLayout(
   nodes: { id: string }[],
   edges: { source: string; target: string }[],
 ): Map<string, { x: number; y: number }> {
-  const TOP = 40, VGAP = 96, HGAP = 200, CENTER = 320
+  const TOP = 40, VGAP = 118, SIDE_GAP = 280, CENTER = 360
   const ids = nodes.map(n => n.id)
   const idset = new Set(ids)
   const incoming = new Map<string, number>(ids.map(id => [id, 0]))
@@ -812,6 +823,59 @@ function computeAutoLayout(
   }
   let roots = ids.filter(id => (incoming.get(id) || 0) === 0)
   if (!roots.length && ids.length) roots = [ids[0]]
+
+  const root = roots[0]
+  const mainPath: string[] = []
+  const seenInPath = new Set<string>()
+  let cursor: string | undefined = root
+  while (cursor && !seenInPath.has(cursor)) {
+    mainPath.push(cursor)
+    seenInPath.add(cursor)
+    const nextCandidates = (adj.get(cursor) || []).filter(id => idset.has(id) && !seenInPath.has(id))
+    if (!nextCandidates.length) break
+    const joinTargets = nextCandidates.filter(id => (incoming.get(id) || 0) > 1)
+    cursor = (joinTargets[0] || nextCandidates[0])
+  }
+
+  const pos = new Map<string, { x: number; y: number }>()
+  mainPath.forEach((id, i) => {
+    pos.set(id, { x: CENTER, y: TOP + i * VGAP })
+  })
+
+  const mainIndex = new Map<string, number>()
+  mainPath.forEach((id, i) => mainIndex.set(id, i))
+  const branchesByLevel = new Map<number, string[]>()
+  for (const id of ids) {
+    if (pos.has(id)) continue
+    const outgoingToMain = (adj.get(id) || [])
+      .map(target => mainIndex.get(target))
+      .filter((idx): idx is number => typeof idx === 'number')
+    const incomingFromMain = edges
+      .filter(e => e.target === id)
+      .map(e => mainIndex.get(e.source))
+      .filter((idx): idx is number => typeof idx === 'number')
+    const level = outgoingToMain.length
+      ? Math.min(...outgoingToMain)
+      : incomingFromMain.length
+        ? Math.min(...incomingFromMain) + 1
+        : mainPath.length
+    if (!branchesByLevel.has(level)) branchesByLevel.set(level, [])
+    branchesByLevel.get(level)!.push(id)
+  }
+
+  for (const [level, group] of branchesByLevel) {
+    group.forEach((id, i) => {
+      const side = i % 2 === 0 ? -1 : 1
+      const lane = Math.floor(i / 2) + 1
+      pos.set(id, {
+        x: CENTER + side * SIDE_GAP * lane,
+        y: TOP + level * VGAP,
+      })
+    })
+  }
+
+  if (pos.size === ids.length) return pos
+
   const level = new Map<string, number>(roots.map(r => [r, 0]))
   const queue = [...roots]
   while (queue.length) {
@@ -831,11 +895,10 @@ function computeAutoLayout(
     if (!byLevel.has(l)) byLevel.set(l, [])
     byLevel.get(l)!.push(id)
   }
-  const pos = new Map<string, { x: number; y: number }>()
   for (const [l, group] of byLevel) {
     const n = group.length
     group.forEach((id, i) => {
-      pos.set(id, { x: CENTER + (i - (n - 1) / 2) * HGAP, y: TOP + l * VGAP })
+      if (!pos.has(id)) pos.set(id, { x: CENTER + (i - (n - 1) / 2) * SIDE_GAP, y: TOP + l * VGAP })
     })
   }
   return pos
@@ -1056,7 +1119,7 @@ function renderDefinition(
   for (const e of defEdges) {
     try {
       const edgeLabel = e.label || e.condition || ''
-      const pointConnection = preservePositions ? buildPointEdgeConnection(e, renderBoxes) : null
+      const pointConnection = buildPointEdgeConnection(e, renderBoxes)
       const terminals = pointConnection ? null : chooseEdgeAnchors(e, renderBoxes)
       g.addEdge({
         id: e.id,
@@ -1067,7 +1130,7 @@ function renderDefinition(
         data: e.condition ? { condition: e.condition } : undefined,
         attrs: buildEdgeAttrs(palette),
         router: { name: 'normal' },
-        connector: { name: 'normal' },
+        connector: { name: 'rounded', args: { radius: 6 } },
       } as never)
     } catch {
       // ignore bad edge
@@ -1119,7 +1182,7 @@ async function tryLoadApaasDetail(processId: string): Promise<boolean> {
     }>(`/applications/${props.appId}/processes/${processId}/apaas-detail`)
     if (resp?.ok && (Array.isArray(resp.nodes) || Array.isArray(resp.edges)) && ((resp.nodes?.length || 0) + (resp.edges?.length || 0) > 0)) {
       await nextTick()
-      renderDefinition(resp.nodes || [], resp.edges || [], { preservePositions: resp.source === 'apaas_process_detail' })
+      renderDefinition(resp.nodes || [], resp.edges || [], { preservePositions: false })
       return true
     }
     return false

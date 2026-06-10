@@ -164,37 +164,46 @@ apply_nginx_config() {
 ensure_dev_secret() {
   [ "$DEPLOY_TARGET" != "main" ] && [ "$DEPLOY_TARGET" != "prod" ] || return 0
 
+  # 临时文件里是解密后的 backend.env（含密钥），用 mktemp+600，结束/异常都清理（含 sed 的 .bak）。
+  local env_file
+  env_file="$(mktemp /tmp/apaas-builder-backend.env.XXXXXX)"
+  chmod 600 "${env_file}"
+  trap "rm -f '${env_file}' '${env_file}.bak'" EXIT
+
   if kubectl -n "$NAMESPACE" get secret "$BACKEND_SECRET" >/dev/null 2>&1; then
     log "patch existing dev Secret: ${BACKEND_SECRET}"
     kubectl -n "$NAMESPACE" get secret "$BACKEND_SECRET" -o jsonpath='{.data.backend\.env}' \
-      | base64_decode > /tmp/apaas-builder-backend.env
+      | base64_decode > "${env_file}"
   else
     log "create dev Secret from ${SOURCE_BACKEND_SECRET}: ${BACKEND_SECRET}"
     kubectl -n "$NAMESPACE" get secret "$SOURCE_BACKEND_SECRET" -o jsonpath='{.data.backend\.env}' \
-      | base64_decode > /tmp/apaas-builder-backend.env
+      | base64_decode > "${env_file}"
   fi
 
-  if grep -q '^APAAS_BASE_URL=' /tmp/apaas-builder-backend.env; then
-    sed -i.bak "s#^APAAS_BASE_URL=.*#APAAS_BASE_URL=${APAAS_BASE_URL}#" /tmp/apaas-builder-backend.env
+  if grep -q '^APAAS_BASE_URL=' "${env_file}"; then
+    sed -i.bak "s#^APAAS_BASE_URL=.*#APAAS_BASE_URL=${APAAS_BASE_URL}#" "${env_file}"
   else
-    printf 'APAAS_BASE_URL=%s\n' "$APAAS_BASE_URL" >> /tmp/apaas-builder-backend.env
+    printf 'APAAS_BASE_URL=%s\n' "$APAAS_BASE_URL" >> "${env_file}"
   fi
 
-  if grep -q '^DATABASE_URL=' /tmp/apaas-builder-backend.env; then
-    sed -i.bak -E "s#^(DATABASE_URL=[a-zA-Z0-9+.-]+://[^/]+/)[^?[:space:]]+#\\1${DEV_DATABASE_NAME}#" /tmp/apaas-builder-backend.env
+  if grep -q '^DATABASE_URL=' "${env_file}"; then
+    sed -i.bak -E "s#^(DATABASE_URL=[a-zA-Z0-9+.-]+://[^/]+/)[^?[:space:]]+#\\1${DEV_DATABASE_NAME}#" "${env_file}"
   fi
 
-  sed -i.bak "s#${PROD_HOST}#${DEV_HOST}#g" /tmp/apaas-builder-backend.env
+  sed -i.bak "s#${PROD_HOST}#${DEV_HOST}#g" "${env_file}"
 
-  if grep -q '^MCP_API_KEYS=' /tmp/apaas-builder-backend.env; then
-    sed -i.bak "s#^MCP_API_KEYS=.*#MCP_API_KEYS=${DEV_MCP_API_KEYS}#" /tmp/apaas-builder-backend.env
+  if grep -q '^MCP_API_KEYS=' "${env_file}"; then
+    sed -i.bak "s#^MCP_API_KEYS=.*#MCP_API_KEYS=${DEV_MCP_API_KEYS}#" "${env_file}"
   else
-    printf 'MCP_API_KEYS=%s\n' "$DEV_MCP_API_KEYS" >> /tmp/apaas-builder-backend.env
+    printf 'MCP_API_KEYS=%s\n' "$DEV_MCP_API_KEYS" >> "${env_file}"
   fi
 
   kubectl -n "$NAMESPACE" create secret generic "$BACKEND_SECRET" \
-    --from-file=backend.env=/tmp/apaas-builder-backend.env \
+    --from-file=backend.env="${env_file}" \
     --dry-run=client -o yaml | kubectl apply -f -
+
+  rm -f "${env_file}" "${env_file}.bak"
+  trap - EXIT
 }
 
 apply_workloads() {

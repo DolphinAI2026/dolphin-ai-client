@@ -26,6 +26,27 @@ die() { printf '[deploy-dev-image][fail] %s\n' "$*" >&2; exit 1; }
 
 command -v kubectl >/dev/null 2>&1 || die 'missing command: kubectl'
 
+sync_dev_mcp_key() {
+  log "sync dev MCP_API_KEYS in Secret: ${BACKEND_SECRET}"
+  # 临时文件里是解密后的 backend.env（含密钥），用 mktemp+600，结束/异常都清理（含 sed 的 .bak）。
+  local env_file
+  env_file="$(mktemp /tmp/apaas-builder-backend.env.XXXXXX)"
+  chmod 600 "${env_file}"
+  trap "rm -f '${env_file}' '${env_file}.bak'" EXIT
+  kubectl -n "${NAMESPACE}" get secret "${BACKEND_SECRET}" -o jsonpath='{.data.backend\.env}' \
+    | base64 -d > "${env_file}"
+  if grep -q '^MCP_API_KEYS=' "${env_file}"; then
+    sed -i.bak "s#^MCP_API_KEYS=.*#MCP_API_KEYS=${DEV_MCP_API_KEYS}#" "${env_file}"
+  else
+    printf 'MCP_API_KEYS=%s\n' "${DEV_MCP_API_KEYS}" >> "${env_file}"
+  fi
+  kubectl -n "${NAMESPACE}" create secret generic "${BACKEND_SECRET}" \
+    --from-file=backend.env="${env_file}" \
+    --dry-run=client -o yaml | kubectl apply -f -
+  rm -f "${env_file}" "${env_file}.bak"
+  trap - EXIT
+}
+
 apply_nginx_config() {
   log "apply nginx ConfigMap: ${NGINX_CM}"
   cat > /tmp/apaas-builder-nginx-default.conf <<'NGINX_CONF'
@@ -33,20 +54,6 @@ apply_nginx_config() {
 map $http_upgrade $connection_upgrade {
     default upgrade;
     ''      close;
-}
-
-sync_dev_mcp_key() {
-  log "sync dev MCP_API_KEYS in Secret: ${BACKEND_SECRET}"
-  kubectl -n "${NAMESPACE}" get secret "${BACKEND_SECRET}" -o jsonpath='{.data.backend\.env}' \
-    | base64 -d > /tmp/apaas-builder-backend.env
-  if grep -q '^MCP_API_KEYS=' /tmp/apaas-builder-backend.env; then
-    sed -i.bak "s#^MCP_API_KEYS=.*#MCP_API_KEYS=${DEV_MCP_API_KEYS}#" /tmp/apaas-builder-backend.env
-  else
-    printf 'MCP_API_KEYS=%s\n' "${DEV_MCP_API_KEYS}" >> /tmp/apaas-builder-backend.env
-  fi
-  kubectl -n "${NAMESPACE}" create secret generic "${BACKEND_SECRET}" \
-    --from-file=backend.env=/tmp/apaas-builder-backend.env \
-    --dry-run=client -o yaml | kubectl apply -f -
 }
 
 map $http_x_forwarded_proto $proxy_x_forwarded_proto {
