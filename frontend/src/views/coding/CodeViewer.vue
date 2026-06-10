@@ -7,10 +7,6 @@
       </span>
       <span v-if="diff" class="cv-badge">改动</span>
       <span v-if="decompiled" class="cv-badge" :title="`由 ${decompiler} 反编译,非原始源码`">反编译视图</span>
-      <button v-if="!diff && rawContent" class="cv-copy" :class="{ done: copied }" @click="copy">
-        <AppIcon :name="copied ? 'check' : 'clipboard'" :size="14" :stroke="1.9" />
-        <span>{{ copied ? '已复制' : '复制' }}</span>
-      </button>
     </header>
     <div class="cv-body" ref="bodyRef">
       <FileCard
@@ -72,10 +68,8 @@ const props = defineProps<{
 }>()
 
 const html = ref('')
-const rawContent = ref('')
 const loading = ref(false)
 const error = ref('')
-const copied = ref(false)
 const binary = ref(false)
 const binaryHint = ref('二进制文件，不支持预览')
 const decompiled = ref(false)
@@ -101,9 +95,7 @@ const fileIcon = computed(() => {
 
 async function load() {
   html.value = ''
-  rawContent.value = ''
   error.value = ''
-  copied.value = false
   binary.value = false
   binaryHint.value = '二进制文件，不支持预览'
   decompiled.value = false
@@ -114,7 +106,6 @@ async function load() {
   loading.value = true
   try {
     const res = await readWorkspaceFile(props.wsId, props.filePath)
-    rawContent.value = res.content
     decompiled.value = !!res.decompiled
     decompiler.value = res.decompiler || ''
     html.value = await highlightCode(res.content, props.filePath, !!props.dark)
@@ -154,17 +145,6 @@ async function downloadFile() {
     /* 下载失败，忽略 */
   } finally {
     downloading.value = false
-  }
-}
-
-async function copy() {
-  if (!rawContent.value) return
-  try {
-    await navigator.clipboard.writeText(rawContent.value)
-    copied.value = true
-    setTimeout(() => (copied.value = false), 1600)
-  } catch {
-    /* clipboard 不可用，忽略 */
   }
 }
 
@@ -218,23 +198,6 @@ watch(() => [props.wsId, props.filePath, props.diff, props.dark], load, { immedi
   color: var(--ai, var(--brand, #4f46e5));
   font-weight: 500;
 }
-.cv-copy {
-  margin-left: auto;
-  flex: none;
-  display: inline-flex;
-  align-items: center;
-  gap: 4px;
-  padding: 4px 10px;
-  border: 1px solid var(--line, rgba(0, 0, 0, 0.1));
-  border-radius: var(--r-sm, 6px);
-  background: var(--bg, #fff);
-  color: var(--fg-dim, #666);
-  font-size: var(--fs-xs, 12px);
-  cursor: pointer;
-  transition: all 0.12s var(--ease, ease);
-}
-.cv-copy:hover { background: var(--bg-hover, rgba(0, 0, 0, 0.04)); color: var(--fg, #222); }
-.cv-copy.done { color: var(--ok, #16a34a); border-color: var(--ok-soft, rgba(22, 163, 74, 0.3)); }
 .cv-body { flex: 1; min-height: 0; min-width: 0; overflow: auto; }
 .cv-code { padding: 6px 0 14px; width: max-content; min-width: 100%; }
 .cv-code :deep(.shiki) { background: transparent !important; margin: 0; }
