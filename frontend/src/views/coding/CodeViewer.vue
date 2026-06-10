@@ -2,8 +2,8 @@
   <div class="code-viewer">
     <header v-if="filePath" class="cv-head">
       <AppIcon :name="fileIcon" :size="14" :stroke="1.9" class="cv-head-icon" />
-      <span class="cv-path">
-        <span v-if="dir" class="cv-path-dir">{{ dir }}/</span><span class="cv-path-name">{{ baseName }}</span>
+      <span class="cv-path" :title="filePath || ''">
+        <span v-if="dir" class="cv-path-dir">&lrm;{{ dir }}/&lrm;</span><span class="cv-path-name">{{ baseName }}</span>
       </span>
       <span v-if="diff" class="cv-badge">改动</span>
       <span v-if="decompiled" class="cv-badge" :title="`由 ${decompiler} 反编译,非原始源码`">反编译视图</span>
@@ -191,15 +191,24 @@ watch(() => [props.wsId, props.filePath, props.diff, props.dark], load, { immedi
 }
 .cv-head-icon { flex: none; color: var(--fg-faint, #999); }
 .cv-path {
+  display: inline-flex;
+  align-items: baseline;
   font-family: var(--font-mono, monospace);
   font-size: var(--fs-sm, 12.5px);
   min-width: 0;
   overflow: hidden;
-  text-overflow: ellipsis;
   white-space: nowrap;
 }
-.cv-path-dir { color: var(--fg-faint, #aaa); }
-.cv-path-name { color: var(--fg, #222); font-weight: 500; }
+/* 目录段从左侧省略(direction:rtl 截断技巧, &lrm; 防斜杠跳位), 文件名永不截断 */
+.cv-path-dir {
+  color: var(--fg-faint, #aaa);
+  flex: 0 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  direction: rtl;
+}
+.cv-path-name { color: var(--fg, #222); font-weight: 500; flex: none; }
 .cv-badge {
   flex: none;
   font-size: var(--fs-xs, 11px);
@@ -229,7 +238,7 @@ watch(() => [props.wsId, props.filePath, props.diff, props.dark], load, { immedi
 .cv-body { flex: 1; min-height: 0; min-width: 0; overflow: auto; }
 .cv-code { padding: 6px 0 14px; width: max-content; min-width: 100%; }
 .cv-code :deep(.shiki) { background: transparent !important; margin: 0; }
-.cv-code :deep(.shiki code) { counter-reset: ln; display: block; font-family: var(--font-mono, monospace); font-size: 12.5px; line-height: 1.5; }
+.cv-code :deep(.shiki code) { counter-reset: ln; display: block; font-family: var(--font-mono, monospace); font-size: 12.5px; line-height: 1.45; }
 .cv-code :deep(.shiki .line) {
   display: block;
   white-space: pre;

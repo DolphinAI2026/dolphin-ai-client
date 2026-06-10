@@ -15,8 +15,10 @@ export function usePanelResize(opts: {
   defaultWidth?: number
   minWidth?: number
   maxWidth?: number
+  /** handle 在面板哪条边界: 'left'(默认, 右侧面板向左拖=加宽) | 'right'(左侧面板向右拖=加宽) */
+  handleSide?: 'left' | 'right'
 }) {
-  const { storageKey, defaultWidth = 420, minWidth = 320, maxWidth = 880 } = opts
+  const { storageKey, defaultWidth = 420, minWidth = 320, maxWidth = 880, handleSide = 'left' } = opts
 
   const panelWidth = ref<number>(
     parseInt(
@@ -53,9 +55,9 @@ export function usePanelResize(opts: {
 
     const onMove = (ev: PointerEvent) => {
       if (!isResizing.value) return
-      // 拖拽 handle 在左边界, 向左拖拽 (dx 为负) = 加宽
+      // handle 在左边界: 向左拖 (dx 负) = 加宽; 在右边界: 向右拖 (dx 正) = 加宽
       const dx = ev.clientX - startX
-      panelWidth.value = clamp(startWidth - dx)
+      panelWidth.value = clamp(handleSide === 'left' ? startWidth - dx : startWidth + dx)
     }
 
     const onUp = (ev: PointerEvent) => {

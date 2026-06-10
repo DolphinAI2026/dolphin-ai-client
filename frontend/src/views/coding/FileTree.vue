@@ -31,7 +31,7 @@
 
 <script setup lang="ts">
 import { computed, ref } from 'vue'
-import type { TreeNode } from './fileTree'
+import { compactTree, type TreeNode } from './fileTree'
 import AppIcon from '@/components/common/AppIcon.vue'
 import FileTreeNode from './FileTreeNode.vue'
 
@@ -62,7 +62,7 @@ function filterTree(nodes: TreeNode[], lower: string): TreeNode[] {
 
 const displayTree = computed(() => {
   const q = query.value.trim().toLowerCase()
-  return q ? filterTree(props.tree, q) : props.tree
+  return compactTree(q ? filterTree(props.tree, q) : props.tree)
 })
 </script>
 

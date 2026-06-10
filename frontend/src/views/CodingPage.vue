@@ -234,11 +234,13 @@
       >
         <FileTree
           class="ws-pane-tree"
+          :style="{ width: treePaneWidth + 'px' }"
           :tree="wsFileTree"
           :changed="changedPaths"
           :selected="selectedFile"
           @select="selectedFile = $event"
         />
+        <div class="tree-resizer" title="拖拽调整文件树宽度" @pointerdown="onTreeResizeStart" />
         <CodeViewer
           class="ws-pane-viewer"
           :ws-id="codingStore.workspace?.id || ''"
@@ -593,6 +595,14 @@ const { panelWidth: chatPaneWidth, onResizeStart: onChatResizeStart } = usePanel
   defaultWidth: 420,
   minWidth: 320,
   maxWidth: 760,
+})
+// 文件树列也可拖宽(handle 在树右边界, 长 Java 类名放不下时拖开)
+const { panelWidth: treePaneWidth, onResizeStart: onTreeResizeStart } = usePanelResize({
+  storageKey: 'coding:tree-pane-width',
+  defaultWidth: 260,
+  minWidth: 180,
+  maxWidth: 480,
+  handleSide: 'right',
 })
 
 // ── 工作区列表和元信息展示（已抽成 composable）──
@@ -4339,8 +4349,28 @@ html[data-theme="dark"] .msg-error-row {
 
 /* ============ Task 7: 原生文件树 + 代码查看器右栏 ============ */
 .ws-pane { display: flex; height: 100%; min-height: 0; min-width: 0; border-left: 1px solid var(--line, rgba(0,0,0,.08)); width: 420px; flex-shrink: 0; }
-.ws-pane-tree { width: 240px; flex: none; border-right: 1px solid var(--line, rgba(0,0,0,.08)); }
+.ws-pane-tree { flex: none; border-right: 1px solid var(--line, rgba(0,0,0,.08)); }
 .ws-pane-viewer { flex: 1; min-width: 0; overflow: hidden; }
+/* 树右边界拖宽 handle: 骑在边框上不占布局宽度 */
+.tree-resizer {
+  flex: none;
+  width: 7px;
+  margin: 0 -3px 0 -4px;
+  cursor: col-resize;
+  z-index: 5;
+  position: relative;
+  touch-action: none;
+  user-select: none;
+}
+.tree-resizer::after {
+  content: '';
+  position: absolute;
+  left: 3px; top: 0; bottom: 0;
+  width: 2px;
+  background: transparent;
+  transition: background 0.15s var(--ease, ease);
+}
+.tree-resizer:hover::after { background: var(--brand, #6366f1); }
 
 /* 代码为主三栏布局: SessionSidebar | 文件树+大代码区(主角) | 右聊天列(可拖宽) */
 .coding-body.code-first .ws-pane {
@@ -4349,7 +4379,6 @@ html[data-theme="dark"] .msg-error-row {
   width: auto;
   border-left: none;
 }
-.coding-body.code-first .ws-pane-tree { width: 240px; }
 .coding-body.code-first .main-content {
   order: 2;
   border-left: 1px solid var(--line, rgba(0,0,0,.08));

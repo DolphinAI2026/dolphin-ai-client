@@ -27,6 +27,23 @@ export function buildFileTree(paths: string[]): TreeNode[] {
   return root
 }
 
+/**
+ * VS Code 式 compact folders: 单子目录链(com→xdap→legacyquery)合并成一个
+ * "com/xdap/legacyquery" 节点,省掉深包名的逐层缩进。返回新树,不改原树。
+ */
+export function compactTree(nodes: TreeNode[]): TreeNode[] {
+  return nodes.map(n => {
+    if (!n.isDir) return n
+    let name = n.name
+    let node = n
+    while (node.children && node.children.length === 1 && node.children[0].isDir) {
+      node = node.children[0]
+      name = `${name}/${node.name}`
+    }
+    return { ...node, name, children: compactTree(node.children || []) }
+  })
+}
+
 function sortTree(nodes: TreeNode[]): void {
   nodes.sort((a, b) => {
     if (a.isDir !== b.isDir) return a.isDir ? -1 : 1

@@ -4,7 +4,7 @@
       type="button"
       class="ftn-row"
       :class="{ selected: !node.isDir && selected === node.path, dir: node.isDir }"
-      :style="{ paddingLeft: depth * 14 + 8 + 'px' }"
+      :style="{ paddingLeft: depth * 12 + 8 + 'px' }"
       @click="onClick"
     >
       <svg
@@ -17,7 +17,7 @@
       </svg>
       <span v-else class="ftn-caret-spacer" />
       <AppIcon class="ftn-icon" :class="{ folder: node.isDir }" :name="iconName" :size="14" :stroke="1.9" />
-      <span class="ftn-name">{{ node.name }}</span>
+      <span class="ftn-name" :title="node.name">{{ node.name }}</span>
       <span v-if="!node.isDir && changed.has(node.path)" class="ftn-dot" title="本轮有改动" />
     </button>
     <template v-if="node.isDir && open">
