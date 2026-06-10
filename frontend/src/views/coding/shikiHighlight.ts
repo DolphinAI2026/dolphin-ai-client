@@ -1,6 +1,10 @@
 import { createHighlighter, type Highlighter } from 'shiki'
 
-const LANGS = ['vue', 'typescript', 'javascript', 'json', 'html', 'css', 'less', 'markdown', 'bash', 'python']
+const LANGS = [
+  'vue', 'typescript', 'javascript', 'json', 'jsonc', 'html', 'css', 'less', 'scss',
+  'markdown', 'bash', 'shellscript', 'python', 'java', 'kotlin', 'sql', 'xml', 'yaml',
+  'properties', 'go', 'rust', 'c', 'cpp', 'csharp', 'php', 'ruby', 'dockerfile', 'ini', 'toml',
+]
 const THEMES = ['github-light', 'github-dark']
 
 let hlPromise: Promise<Highlighter> | null = null
@@ -10,9 +14,16 @@ function getHighlighter(): Promise<Highlighter> {
 }
 
 const EXT_LANG: Record<string, string> = {
-  vue: 'vue', ts: 'typescript', tsx: 'typescript', js: 'javascript', jsx: 'javascript',
-  json: 'json', html: 'html', css: 'css', less: 'less', md: 'markdown',
-  sh: 'bash', bash: 'bash', py: 'python',
+  vue: 'vue', ts: 'typescript', tsx: 'typescript', js: 'javascript', jsx: 'javascript', mjs: 'javascript', cjs: 'javascript',
+  json: 'json', json5: 'jsonc', jsonc: 'jsonc',
+  html: 'html', htm: 'html', css: 'css', less: 'less', scss: 'scss',
+  md: 'markdown', mdc: 'markdown', markdown: 'markdown',
+  sh: 'bash', bash: 'bash', zsh: 'bash', py: 'python',
+  java: 'java', kt: 'kotlin', kts: 'kotlin',
+  sql: 'sql', xml: 'xml', svg: 'xml',
+  yaml: 'yaml', yml: 'yaml', properties: 'properties', env: 'properties', ini: 'ini', toml: 'toml',
+  go: 'go', rs: 'rust', c: 'c', h: 'c', cpp: 'cpp', cc: 'cpp', hpp: 'cpp',
+  cs: 'csharp', php: 'php', rb: 'ruby', dockerfile: 'dockerfile',
 }
 
 export function langForPath(path: string): string {

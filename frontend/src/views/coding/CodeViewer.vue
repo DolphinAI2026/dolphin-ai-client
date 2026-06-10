@@ -11,7 +11,7 @@
         <span>{{ copied ? '已复制' : '复制' }}</span>
       </button>
     </header>
-    <div class="cv-body">
+    <div class="cv-body" ref="bodyRef">
       <FileCard
         v-if="diff"
         action="edit"
@@ -47,7 +47,7 @@
 </template>
 
 <script setup lang="ts">
-import { computed, ref, watch } from 'vue'
+import { computed, nextTick, ref, watch } from 'vue'
 import FileCard from '@/components/FileCard.vue'
 import AppIcon from '@/components/common/AppIcon.vue'
 import { readWorkspaceFile, downloadWorkspaceFileRaw } from '@/api/coding'
@@ -77,6 +77,7 @@ const error = ref('')
 const copied = ref(false)
 const binary = ref(false)
 const downloading = ref(false)
+const bodyRef = ref<HTMLElement>()
 
 const isBinaryExt = computed(() => BINARY_EXT.has(baseName.value.split('.').pop()?.toLowerCase() || ''))
 
@@ -108,6 +109,9 @@ async function load() {
     const res = await readWorkspaceFile(props.wsId, props.filePath)
     rawContent.value = res.content
     html.value = await highlightCode(res.content, props.filePath, !!props.dark)
+    // 换文件时把滚动复位到左上角,避免沿用上一个文件的横/纵滚动位置
+    await nextTick()
+    if (bodyRef.value) { bodyRef.value.scrollTop = 0; bodyRef.value.scrollLeft = 0 }
   } catch (e: any) {
     const detail = String(e?.response?.data?.detail || e?.message || '')
     // 后端读 utf-8 失败 = 其实是二进制文件 → 也走下载面板,不显示红色报错
@@ -211,27 +215,31 @@ watch(() => [props.wsId, props.filePath, props.diff, props.dark], load, { immedi
 .cv-copy:hover { background: var(--bg-hover, rgba(0, 0, 0, 0.04)); color: var(--fg, #222); }
 .cv-copy.done { color: var(--ok, #16a34a); border-color: var(--ok-soft, rgba(22, 163, 74, 0.3)); }
 .cv-body { flex: 1; min-height: 0; min-width: 0; overflow: auto; }
-.cv-code { padding: 6px 0 14px; }
+.cv-code { padding: 6px 0 14px; width: max-content; min-width: 100%; }
 .cv-code :deep(.shiki) { background: transparent !important; margin: 0; }
 .cv-code :deep(.shiki code) { counter-reset: ln; display: block; font-family: var(--font-mono, monospace); font-size: 12.5px; line-height: 1.5; }
 .cv-code :deep(.shiki .line) {
   display: block;
-  position: relative;
-  padding-left: 3.4em;
-  padding-right: 14px;
+  white-space: pre;
+  padding-right: 16px;
 }
+/* 行号 = 固定左侧 gutter(sticky),横向滚动时不跟着滚走(对标 Codex/VS Code) */
 .cv-code :deep(.shiki .line)::before {
   counter-increment: ln;
   content: counter(ln);
-  position: absolute;
+  position: sticky;
   left: 0;
-  width: 2.4em;
+  z-index: 1;
+  display: inline-block;
+  width: 2.6em;
+  margin-right: 1.1em;
+  padding-right: 0.7em;
   text-align: right;
   color: var(--fg-faint, #bbb);
-  opacity: 0.65;
+  background: var(--bg, #fff);
   user-select: none;
 }
-.cv-code :deep(.shiki .line:hover)::before { opacity: 1; }
+.cv-code :deep(.shiki .line:hover)::before { color: var(--fg-dim, #888); }
 .cv-state {
   display: flex;
   flex-direction: column;

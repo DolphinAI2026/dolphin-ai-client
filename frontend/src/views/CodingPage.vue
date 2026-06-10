@@ -4733,6 +4733,8 @@ html[data-theme="dark"] .msg-error-row {
   display: inline-flex;
   align-items: center;
   gap: 5px;
+  flex: none;
+  white-space: nowrap;
   padding: 4px 11px;
   border: 1px solid var(--brand, #6366f1);
   border-radius: var(--r-sm, 6px);
@@ -4743,5 +4745,6 @@ html[data-theme="dark"] .msg-error-row {
   cursor: pointer;
   transition: background 0.12s var(--ease, ease), color 0.12s var(--ease, ease);
 }
+.coding-publish-inline span { white-space: nowrap; }
 .coding-publish-inline:hover { background: var(--brand, #6366f1); color: #fff; }
 </style>
