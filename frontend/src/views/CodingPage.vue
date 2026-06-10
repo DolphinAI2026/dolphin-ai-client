@@ -30,7 +30,7 @@
 
     <div class="coding-body" :class="{ 'code-first': codeFirst }">
       <SessionSidebar
-        v-if="!embedMode && !embeddedAppId"
+        v-if="!embedMode && !embeddedAppId && !codeFirst"
         module-name="IDE 工作区"
         brand-color="#6366f1"
         :sessions="sidebarCodingItems"
