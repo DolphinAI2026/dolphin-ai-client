@@ -4697,9 +4697,9 @@ html[data-theme="dark"] .msg-error-row {
 }
 
 /* ============ Task 7: 原生文件树 + 代码查看器右栏 ============ */
-.ws-pane { display: flex; height: 100%; min-height: 0; border-left: 1px solid var(--line, rgba(0,0,0,.08)); width: 420px; flex-shrink: 0; }
+.ws-pane { display: flex; height: 100%; min-height: 0; min-width: 0; border-left: 1px solid var(--line, rgba(0,0,0,.08)); width: 420px; flex-shrink: 0; }
 .ws-pane-tree { width: 240px; flex: none; border-right: 1px solid var(--line, rgba(0,0,0,.08)); }
-.ws-pane-viewer { flex: 1; min-width: 0; }
+.ws-pane-viewer { flex: 1; min-width: 0; overflow: hidden; }
 
 /* 代码为主三栏布局: SessionSidebar | 文件树+大代码区(主角) | 右聊天列(可拖宽) */
 .coding-body.code-first .ws-pane {

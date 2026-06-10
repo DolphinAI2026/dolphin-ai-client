@@ -110,6 +110,7 @@ watch(() => [props.wsId, props.filePath, props.diff, props.dark], load, { immedi
   flex-direction: column;
   height: 100%;
   min-width: 0;
+  overflow: hidden;
   background: var(--bg, #fff);
 }
 .cv-head {
@@ -158,7 +159,7 @@ watch(() => [props.wsId, props.filePath, props.diff, props.dark], load, { immedi
 }
 .cv-copy:hover { background: var(--bg-hover, rgba(0, 0, 0, 0.04)); color: var(--fg, #222); }
 .cv-copy.done { color: var(--ok, #16a34a); border-color: var(--ok-soft, rgba(22, 163, 74, 0.3)); }
-.cv-body { flex: 1; min-height: 0; overflow: auto; }
+.cv-body { flex: 1; min-height: 0; min-width: 0; overflow: auto; }
 .cv-code { padding: 10px 0 24px; }
 .cv-code :deep(.shiki) { background: transparent !important; margin: 0; }
 .cv-code :deep(.shiki code) { counter-reset: ln; display: block; font-family: var(--font-mono, monospace); font-size: 12.5px; line-height: 1.65; }
