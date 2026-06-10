@@ -248,6 +248,27 @@
 
       </div>
 
+      <!-- Task 7: 原生文件树 + 代码查看器（常驻右栏，替换 IDE 抽屉视图） -->
+      <div
+        v-if="codingStore.workspace?.id && !embeddedAppId"
+        class="ws-pane"
+      >
+        <FileTree
+          class="ws-pane-tree"
+          :tree="wsFileTree"
+          :changed="changedPaths"
+          :selected="selectedFile"
+          @select="selectedFile = $event"
+        />
+        <CodeViewer
+          class="ws-pane-viewer"
+          :ws-id="codingStore.workspace?.id || ''"
+          :file-path="selectedFile"
+          :diff="selectedDiff"
+          :dark="false"
+        />
+      </div>
+
       <!-- 2026-05-17 B 重构：IDE iframe 全屏抽屉 (size=100% 用户拍板 — 80% 露左 NavRail 干扰)
            Element Plus 2.x 砍掉 custom-class，用 body-class 直接打类到 .el-drawer__body —
            append-to-body=true teleport 到 body 后 scoped CSS 失效，必须配合 <style>（非 scoped）规则。 -->
@@ -564,6 +585,11 @@ import { useCodingWorkspace } from './coding/useCodingWorkspace'
 import { useCodingPipeline } from './coding/useCodingPipeline'
 import UnifiedChatComposer from '@/components/common/UnifiedChatComposer.vue'
 import type { UnifiedChatAttachment } from '@/components/common/chatComposer'
+import FileTree from './coding/FileTree.vue'
+import CodeViewer from './coding/CodeViewer.vue'
+import { buildFileTree, type TreeNode } from './coding/fileTree'
+import { collectChangedFiles, type FileChangeMsg } from './coding/workspaceChanges'
+import { listWorkspaceFiles } from '@/api/coding'
 
 const route = useRoute()
 const router = useRouter()
@@ -706,6 +732,30 @@ const {
   addStepRunningMsg,
   restoreReplayStreamMessages,
 } = useStreamMessages()
+
+// ── 原生文件树 + 代码查看器（Task 7: 替换 IDE 抽屉）──
+const wsFileTree = ref<TreeNode[]>([])
+const selectedFile = ref<string | null>(null)
+
+async function loadWsFileTree() {
+  const id = codingStore.workspace?.id
+  if (!id) { wsFileTree.value = []; return }
+  try { wsFileTree.value = buildFileTree(await listWorkspaceFiles(id)) }
+  catch (e) { console.warn('[coding] 加载工作区文件树失败', e); wsFileTree.value = [] }
+}
+
+const wsChanges = computed(() => collectChangedFiles(streamMessages.value as FileChangeMsg[]))
+const changedPaths = computed(() => new Set(wsChanges.value.changed.keys()))
+const selectedDiff = computed(() =>
+  selectedFile.value ? wsChanges.value.changed.get(selectedFile.value) || null : null,
+)
+
+// agent 改完最后一个文件 → 自动打开它（纯前端，不发请求）
+watch(() => wsChanges.value.lastChangedFile, (p) => { if (p) selectedFile.value = p })
+// 仅当改动文件“集合增长”（写了新文件）时才重载树，避免多文件 codegen 期间每写一个文件就重复拉一次
+watch(() => changedPaths.value.size, () => { void loadWsFileTree() })
+// 切换工作区 → 清空选中并重载树
+watch(() => codingStore.workspace?.id, () => { selectedFile.value = null; void loadWsFileTree() }, { immediate: true })
 
 // ── 工作区列表和元信息展示（已抽成 composable）──
 const {
@@ -4629,4 +4679,9 @@ html[data-theme="dark"] .msg-error-row {
   border-color: rgba(248, 113, 113, 0.22) !important;
   color: #fca5a5 !important;
 }
+
+/* ============ Task 7: 原生文件树 + 代码查看器右栏 ============ */
+.ws-pane { display: flex; height: 100%; min-height: 0; border-left: 0.5px solid var(--ac-border, rgba(0,0,0,.1)); width: 420px; flex-shrink: 0; }
+.ws-pane-tree { width: 200px; flex: none; border-right: 0.5px solid var(--ac-border, rgba(0,0,0,.1)); }
+.ws-pane-viewer { flex: 1; min-width: 0; }
 </style>
