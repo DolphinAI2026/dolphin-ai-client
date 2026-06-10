@@ -28,7 +28,7 @@
       </div>
     </el-dialog>
 
-    <div class="coding-body">
+    <div class="coding-body" :class="{ 'code-first': codeFirst }">
       <SessionSidebar
         v-if="!embedMode && !embeddedAppId"
         module-name="IDE 工作区"
@@ -43,7 +43,12 @@
         @delete="onSidebarCodingDelete"
       />
       <!-- Main Content: 对话流 (B 重构 2026-05-17): 合并 Welcome / Chat / IDE -->
-      <div class="main-content">
+      <!-- 代码为主布局下,main-content 收成右侧聊天列(宽度可拖拽);否则维持原全宽 -->
+      <div
+        class="main-content"
+        :style="codeFirst ? { flex: `0 0 ${chatPaneWidth}px`, width: `${chatPaneWidth}px` } : null"
+      >
+        <div v-if="codeFirst" class="chat-resizer" @pointerdown="onChatResizeStart" title="拖拽调整聊天宽度" />
         <!-- 顶右工具抽屉按钮 (替代 view-toggle-bar): 文件 / IDE / 编辑 -->
         <div
           v-if="!embeddedAppId && (ideUrl || streamMessages.length > 0)"
@@ -117,7 +122,7 @@
           </header>
 
           <CodingSceneEntry
-            v-if="!isStreaming && streamMessages.length === 0"
+            v-if="!isStreaming && streamMessages.length === 0 && !codeFirst"
             :apps="sceneApps"
             :default-app-id="sceneDefaultAppId"
             @submit="onSceneSubmit"
@@ -203,7 +208,7 @@
           </div>
 
           <!-- Chat 底部输入框（始终可见:流式中也能输入,按 Enter 进队列;红色按钮可停止生成） -->
-          <div v-if="streamMessages.length > 0" class="chat-input-bar">
+          <div v-if="streamMessages.length > 0 || codeFirst" class="chat-input-bar">
             <!-- 排队提示卡:流式中再输入会进队列,当前回复结束后自动发送(对齐 AI Builder) -->
             <div v-if="pendingQueue.length > 0" class="coding-queue-banner">
               <span class="cqb-icon"><AppIcon name="clock" :size="13" /></span>
@@ -265,7 +270,7 @@
           :ws-id="codingStore.workspace?.id || ''"
           :file-path="selectedFile"
           :diff="selectedDiff"
-          :dark="false"
+          :dark="themeStore.isDark"
         />
       </div>
 
@@ -589,6 +594,7 @@ import FileTree from './coding/FileTree.vue'
 import CodeViewer from './coding/CodeViewer.vue'
 import { buildFileTree, type TreeNode } from './coding/fileTree'
 import { collectChangedFiles, type FileChangeMsg } from './coding/workspaceChanges'
+import { usePanelResize } from '@/components/v2/config-assistant/composables/usePanelResize'
 import { listWorkspaceFiles } from '@/api/coding'
 
 const route = useRoute()
@@ -756,6 +762,16 @@ watch(() => wsChanges.value.lastChangedFile, (p) => { if (p) selectedFile.value 
 watch(() => changedPaths.value.size, () => { void loadWsFileTree() })
 // 切换工作区 → 清空选中并重载树
 watch(() => codingStore.workspace?.id, () => { selectedFile.value = null; void loadWsFileTree() }, { immediate: true })
+
+// 工作区打开 → 代码为主三栏布局（文件树 | 大代码区 | 右聊天）；未进工作区时维持原引导/新建流程
+const codeFirst = computed(() => !!codingStore.workspace?.id && !embeddedAppId.value)
+// 右侧聊天列可拖宽（复用 config 的 usePanelResize，handle 在聊天列左边界）
+const { panelWidth: chatPaneWidth, onResizeStart: onChatResizeStart } = usePanelResize({
+  storageKey: 'coding:chat-pane-width',
+  defaultWidth: 420,
+  minWidth: 320,
+  maxWidth: 760,
+})
 
 // ── 工作区列表和元信息展示（已抽成 composable）──
 const {
@@ -4684,4 +4700,37 @@ html[data-theme="dark"] .msg-error-row {
 .ws-pane { display: flex; height: 100%; min-height: 0; border-left: 0.5px solid var(--ac-border, rgba(0,0,0,.1)); width: 420px; flex-shrink: 0; }
 .ws-pane-tree { width: 200px; flex: none; border-right: 0.5px solid var(--ac-border, rgba(0,0,0,.1)); }
 .ws-pane-viewer { flex: 1; min-width: 0; }
+
+/* 代码为主三栏布局: SessionSidebar | 文件树+大代码区(主角) | 右聊天列(可拖宽) */
+.coding-body.code-first .ws-pane {
+  order: 1;
+  flex: 1 1 auto;
+  width: auto;
+  border-left: none;
+}
+.coding-body.code-first .ws-pane-tree { width: 220px; }
+.coding-body.code-first .main-content {
+  order: 2;
+  border-left: 0.5px solid var(--ac-border, rgba(0,0,0,.1));
+  position: relative;
+}
+.chat-resizer {
+  position: absolute;
+  left: -6px; top: 0; bottom: 0;
+  width: 12px;
+  cursor: col-resize;
+  z-index: 30;
+  touch-action: none;
+  user-select: none;
+}
+/* 常驻一条细分隔线提示可拖,hover 加重 */
+.chat-resizer::after {
+  content: '';
+  position: absolute;
+  left: 5px; top: 0; bottom: 0;
+  width: 2px;
+  background: var(--ac-border, rgba(0,0,0,.1));
+  transition: background 0.15s;
+}
+.chat-resizer:hover::after { background: var(--ac-primary, #6366f1); }
 </style>
