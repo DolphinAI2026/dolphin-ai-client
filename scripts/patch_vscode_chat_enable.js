@@ -135,7 +135,7 @@ if (copilotChatCount > 0) {
 fs.writeFileSync(wbPath, wb);
 console.log(`workbench.js: applied=${applied} skipped=${skipped} failed=${failed}`);
 
-// --- product.json: 放行 proposed API + 删 defaultChatAgent ---
+// --- product.json: 放行 proposed API + 重指向 defaultChatAgent ---
 if (fs.existsSync(productPath)) {
   const data = JSON.parse(fs.readFileSync(productPath, 'utf8'));
   // 放行 proposed API：数组形态（与本地实证一致）。否则扩展里的
@@ -156,7 +156,7 @@ if (fs.existsSync(productPath)) {
     publicCodeMatchesUrl: '',
     entitlementSignupLimitedUrl: '',
     provider: {
-      default: { id: 'ruijing', name: 'RuijingAI' },
+      default: { id: 'ruijing-ai.chat', name: '睿鲸AI' },
       enterprise: { id: '', name: '' },
       apple: { id: '', name: '' },
       google: { id: '', name: '' },

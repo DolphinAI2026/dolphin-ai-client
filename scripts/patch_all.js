@@ -65,7 +65,7 @@ console.log(`✓ Backup: ${path.basename(backupPath)}\n`);
 const scriptsDir = __dirname;
 const patches = [
   // 新方案：扩展用 registerLanguageModelChatProvider 注册模型（vendor=copilot），
-  // 这里只做 entitlement 解锁 + product.json 放行 proposed API / 删 defaultChatAgent。
+  // 这里只做 entitlement 解锁 + product.json 放行 proposed API / 重指向 defaultChatAgent。
   // 取代旧的 patch_vscode_chat_fallback.js（activateDefaultAgent 替换法在 1.112 上会崩）。
   { name: 'Chat Enable (entitlement + product.json proposed-api)', script: 'patch_vscode_chat_enable.js', args: [csInfo.workbenchPath, csInfo.productJsonPath] },
 ];

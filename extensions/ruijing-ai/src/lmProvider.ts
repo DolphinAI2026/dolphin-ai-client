@@ -8,7 +8,7 @@ import { Config } from './config';
  * （不是更早的 `registerChatModelProvider`）。生效还需要两件构建期的事（见
  * scripts/patch_vscode_chat_enable.js）：
  *   1. product.json `extensionAllowedProposedApi['apaas-builder.ruijing-ai'] = ['chatProvider']` 放行 proposed API
- *   2. 删掉 product.json 的 `defaultChatAgent`（否则没模型时渲染 copilot 默认 agent 会崩 textContent）
+ *   2. product.json 的 `defaultChatAgent` 重指向 apaas-builder.ruijing-ai / ruijing-ai.chat
  * 以及 package.json 声明 `enabledApiProposals` + `contributes.languageModelChatProviders`。
  *
  * 与本地实证可用的 minimax-chat-provider 同构，区别：流式打**后端** getEndpoint('/chat/completions')
