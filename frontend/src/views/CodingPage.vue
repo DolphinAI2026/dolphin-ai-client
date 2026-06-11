@@ -109,6 +109,33 @@
               <el-icon :size="14"><ArrowLeft /></el-icon>
               <span>回 Builder 配置「{{ handoffSourceApp.name }}」</span>
             </button>
+            <!-- code-first 三栏布局没有会话侧栏 → 头部补 会话历史/新建/放大(对齐配置助手) -->
+            <div v-if="codeFirst" class="coding-chat-actions">
+              <el-popover placement="bottom-end" :width="300" trigger="click">
+                <template #reference>
+                  <button class="cca-btn" title="会话历史"><AppIcon name="menu" :size="15" /></button>
+                </template>
+                <div class="cca-conv-list">
+                  <button
+                    v-for="c in codingConversations"
+                    :key="c.id"
+                    class="cca-conv-item"
+                    :class="{ active: c.id === codingStore.conversationId }"
+                    @click="switchConversationFromHeader(c.id)"
+                  >
+                    <span class="cca-conv-title">{{ c.title || '未命名会话' }}</span>
+                    <span class="cca-conv-time">{{ formatConvTime(c.updated_at) }}</span>
+                  </button>
+                  <p v-if="!codingConversations.length" class="cca-conv-empty">暂无会话</p>
+                </div>
+              </el-popover>
+              <button class="cca-btn" title="新建会话(沿用当前工作区)" @click="createWorkspaceConversation">
+                <AppIcon name="plus" :size="15" />
+              </button>
+              <button class="cca-btn" :title="chatExpanded ? '还原对话宽度' : '放大对话'" @click="toggleChatExpand">
+                <AppIcon :name="chatExpanded ? 'shrink' : 'expand'" :size="14" />
+              </button>
+            </div>
           </header>
 
           <CodingSceneEntry
@@ -670,6 +697,53 @@ const { panelWidth: chatPaneWidth, onResizeStart: onChatResizeStart } = usePanel
   minWidth: 320,
   maxWidth: 760,
 })
+
+// ── code-first 聊天头部: 会话历史 / 新建会话 / 放大(对齐配置助手) ──
+const chatExpanded = ref(false)
+let chatWidthBeforeExpand = 420
+function toggleChatExpand() {
+  if (chatExpanded.value) {
+    chatPaneWidth.value = chatWidthBeforeExpand
+    chatExpanded.value = false
+  } else {
+    chatWidthBeforeExpand = chatPaneWidth.value
+    chatPaneWidth.value = Math.min(Math.floor(window.innerWidth * 0.55), 980)
+    chatExpanded.value = true
+  }
+}
+
+function switchConversationFromHeader(id: number) {
+  if (id === codingStore.conversationId) return
+  void onSidebarCodingSelect('conv:' + id)
+}
+
+function formatConvTime(iso?: string): string {
+  if (!iso) return ''
+  const d = new Date(iso)
+  if (Number.isNaN(d.getTime())) return ''
+  const p = (n: number) => String(n).padStart(2, '0')
+  const now = new Date()
+  const sameDay = d.toDateString() === now.toDateString()
+  return sameDay ? `${p(d.getHours())}:${p(d.getMinutes())}` : `${d.getMonth() + 1}/${d.getDate()}`
+}
+
+// 新建会话但保留当前工作区——首条消息发出后由后端把会话回填绑定到工作区
+async function createWorkspaceConversation() {
+  const created = normalizeCreatedCodingConversation(
+    await codingApi.createConversation(selectedCodingModelOption.value?.id ?? null),
+  )
+  codingConversations.value = [created, ...codingConversations.value.filter(c => c.id !== created.id)]
+  codingStore.conversationId = created.id
+  streamMessages.value = []
+  selectedFile.value = null
+  router.replace({
+    path: '/coding',
+    query: {
+      conversation_id: String(created.id),
+      ...(codingStore.workspace?.id ? { workspace_id: codingStore.workspace.id } : {}),
+    },
+  }).catch(() => {})
+}
 // 文件树列也可拖宽(handle 在树右边界, 长 Java 类名放不下时拖开)
 const { panelWidth: treePaneWidth, onResizeStart: onTreeResizeStart } = usePanelResize({
   storageKey: 'coding:tree-pane-width',
@@ -3244,6 +3318,49 @@ watch(() => route.path, () => {
   font-size: 13px;
   line-height: 1.7;
 }
+
+/* ── code-first 聊天头部动作: 会话历史 / 新建 / 放大 ── */
+.coding-chat-actions {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  flex: none;
+}
+.cca-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  padding: 0;
+  border: 1px solid var(--t-border-subtle, rgba(116, 128, 171, 0.16));
+  border-radius: 7px;
+  background: transparent;
+  color: var(--t-text-muted, #888);
+  cursor: pointer;
+  transition: background 0.12s ease, color 0.12s ease;
+}
+.cca-btn:hover { background: var(--t-bg-panel-hover, rgba(0, 0, 0, 0.05)); color: var(--t-text-primary, #222); }
+.cca-conv-list { max-height: 320px; overflow: auto; display: flex; flex-direction: column; gap: 2px; }
+.cca-conv-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  padding: 7px 10px;
+  border: none;
+  border-radius: 6px;
+  background: transparent;
+  cursor: pointer;
+  text-align: left;
+  font-size: 13px;
+  color: var(--t-text-primary, #333);
+}
+.cca-conv-item:hover { background: var(--t-bg-panel-hover, rgba(0, 0, 0, 0.05)); }
+.cca-conv-item.active { background: var(--brand-soft, rgba(99, 102, 241, 0.1)); color: var(--brand-ink, #4f46e5); }
+.cca-conv-title { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.cca-conv-time { flex: none; font-size: 11px; color: var(--t-text-muted, #999); }
+.cca-conv-empty { margin: 10px; font-size: 12.5px; color: var(--t-text-muted, #999); }
 
 .coding-session-header {
   flex-shrink: 0;

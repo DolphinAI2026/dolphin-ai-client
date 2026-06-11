@@ -128,6 +128,36 @@ class CodingProfile(HarnessProfile):
                         item_kind="tool_call",
                     )
 
+                elif event_type == "tool":
+                    # 只读应答路径(read_query)的工具 chip:
+                    # status=running → tool_call(开始), status=done → tool_result(结果)。
+                    # 不映射会被静默丢——前端只能看到 ping 到底然后一句兜底话(实际发生过)。
+                    if event.get("status") == "running":
+                        _args = event.get("args") or {}
+                        await event_bus.publish(
+                            ITEM_STARTED, turn_ctx.turn_id,
+                            {
+                                "kind": "tool_call",
+                                "tool": event.get("name", ""),
+                                "tool_display": event.get("display", "") or event.get("name", ""),
+                                "preview": ", ".join(f"{k}={str(v)[:60]}" for k, v in _args.items())[:120],
+                                "args": _args,
+                            },
+                            item_kind="tool_call",
+                        )
+                    else:
+                        _result = str(event.get("result") or "")
+                        await event_bus.publish(
+                            ITEM_COMPLETED, turn_ctx.turn_id,
+                            {
+                                "kind": "tool_result",
+                                "tool": event.get("name", ""),
+                                "output": _result[:2000],
+                                "is_error": _result.startswith("Error"),
+                            },
+                            item_kind="tool_result",
+                        )
+
                 elif event_type == "agent_result":
                     await event_bus.publish(
                         ITEM_COMPLETED, turn_ctx.turn_id,

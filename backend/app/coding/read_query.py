@@ -9,9 +9,11 @@
 """
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 import re
+from pathlib import Path
 from typing import Any, AsyncIterator, Optional
 
 import httpx
@@ -21,6 +23,12 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.coding.apaas_tools import (
     APAAS_TOOL_DEFINITIONS,
     APAAS_TOOL_EXECUTORS_PLATFORM,
+)
+from app.coding.workspace_read_tools import (
+    WORKSPACE_TOOL_DEFINITIONS,
+    WORKSPACE_TOOL_DISPLAY,
+    WORKSPACE_TOOL_NAMES,
+    execute_workspace_tool,
 )
 
 logger = logging.getLogger(__name__)
@@ -63,6 +71,7 @@ _TOOL_DISPLAY = {
     "get_apaas_app_overview": "读取应用概览",
     "list_apaas_models_in_env": "读取环境模型",
     "check_app_code_conflict": "检查应用编码",
+    **WORKSPACE_TOOL_DISPLAY,
 }
 
 # ─────────────────────────── 意图分类 ─────────────────────────────
@@ -150,6 +159,76 @@ async def classify_coding_intent(
     return "BUILD"
 
 
+async def classify_iteration_intent(
+    tenant_id: Optional[int],
+    model: str,
+    message: str,
+) -> str:
+    """迭代轮(已有工作区)的「读/问」vs「改代码」分类。
+
+    与首轮 classify_coding_intent 的差异：
+    - 不用关键词快捷路径——迭代轮聊的就是组件/页面/代码，
+      "讲讲这个页面" 含 "页面" 不能秒判 BUILD。
+    - 拿不准 → READ。误判成 READ 顶多多问一句；误判成 BUILD
+      会未经同意重写用户代码（实际发生过的事故），代价不对称。
+    - 基础设施异常(LLM 挂了) → BUILD 维持旧行为，反正 codegen
+      也会在下游用同一配置报错，错误能露出来。
+    """
+    system_prompt = """当前会话绑定了一个已有的代码工作区，用户在和一个能读写代码的 AI 开发助手对话。
+判断这条消息的意图，只输出以下之一：
+- READ：只想看/问/解释/分析/评审代码或项目，不要求改动任何文件
+- BUILD：要求修改/新增/修复/重构/优化/删除代码，或要求构建/打包/部署/上传
+
+**拿不准时输出 READ（宁可先回答，绝不未经同意改代码）。**
+只有消息明确要求动手改代码或执行构建动作时才输出 BUILD。
+
+示例：
+"读一下工作区的代码" → READ
+"讲讲这个页面的逻辑" → READ
+"src/page.vue 是干嘛的" → READ
+"现在的实现有什么问题" → READ
+"评审一下这次的改动" → READ
+"这个接口为什么这么写" → READ
+"把按钮改成红色" → BUILD
+"加一个导出功能" → BUILD
+"修复刚才那个报错" → BUILD
+"重构 page.vue" → BUILD
+"按你说的优化一下" → BUILD
+"重新打包上传" → BUILD"""
+
+    try:
+        from app.agents.coding.llm_config import load_coding_llm_config
+
+        base_url, api_key, llm_model = await load_coding_llm_config(tenant_id, model)
+        async with httpx.AsyncClient(
+            timeout=httpx.Timeout(connect=8, read=20, write=8, pool=8)
+        ) as client:
+            resp = await client.post(
+                f"{base_url}/chat/completions",
+                headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"},
+                json={
+                    "model": llm_model,
+                    "messages": [
+                        {"role": "system", "content": system_prompt},
+                        {"role": "user", "content": f"用户消息：{message[:300]}"},
+                    ],
+                    "max_tokens": 10,
+                    "temperature": 0,
+                    "stream": False,
+                },
+            )
+            resp.raise_for_status()
+            data = resp.json()
+        raw = data.get("choices", [{}])[0].get("message", {}).get("content", "").strip()
+        cleaned = re.sub(r"<think>[\s\S]*?</think>", "", raw, flags=re.IGNORECASE).strip()
+        label = cleaned.upper().split()[0] if cleaned else "BUILD"
+        logger.info("[intent] 迭代轮分类=%s, message=%r", label, message[:100])
+        return "READ" if label == "READ" else "BUILD"
+    except Exception as exc:
+        logger.warning("[intent] 迭代轮分类失败，兜底 BUILD: %s", exc)
+        return "BUILD"
+
+
 # ─────────────────────────── platform_env_id 解析 ──────────────────────────
 
 
@@ -192,6 +271,17 @@ _READ_SYSTEM_PROMPT = """你是 aPaaS 平台的 AI 助手，帮用户查询和�
 - 回答简洁、结构清晰
 """
 
+_READ_WS_SYSTEM_PROMPT = """你是代码工作区的 AI 助手，帮用户阅读、解释、分析当前工作区的代码。
+
+工作指引：
+- **本轮只读：只调用只读工具，绝不修改任何文件**（你也没有写工具）
+- 先 list_workspace_files 了解项目结构，再用 read_workspace_file / search_workspace_code 深入
+- 回答里引用代码位置用 `相对路径:行号` 格式，方便用户点击查看
+- 用清晰的中文回答，必要时用代码块/列表整理
+- 如果用户的问题其实是要改代码，直接说明"本轮是只读分析，如需修改请明确说出要改什么"，不要试图绕过
+- 回答简洁、结构清晰
+"""
+
 
 async def run_read_query(
     params: "PipelineParams",
@@ -218,19 +308,39 @@ async def run_read_query(
         yield {"type": "done", "workspace_id": None, "ide_url": None, "conversation_id": None}
         return
 
+    # ── 解析工作区(迭代轮带 workspace_id → 加工作区只读文件工具) ──────────
+    ws_path: Optional[Path] = None
+    if getattr(params, "workspace_id", None):
+        try:
+            from app.coding.workspace import WorkspaceManager
+
+            _p = WorkspaceManager().get_workspace_path(params.workspace_id)
+            if _p.exists():
+                ws_path = _p
+        except Exception as exc:
+            logger.warning("[read_query] 解析工作区路径失败: %s", exc)
+
     # ── 解析 platform_env_id ───────────────────────────────────────────────
     platform_env_id = await _resolve_read_platform_env_id(params.tenant_id, db)
 
-    if not platform_env_id:
-        # 没有环境时，LLM 也能回答一些通用问题，但 aPaaS 工具都没法用
-        # 直接 LLM 回答（不带工具）
+    if not platform_env_id and not ws_path:
+        # 既没环境也没工作区 → 没有任何工具可用
         yield {"type": "content", "content": "当前租户未配置可用的 aPaaS 平台环境，无法查询应用数据。\n请先在「平台管理 → aPaaS 租户」中配置并连接平台环境。"}
         yield {"type": "done", "workspace_id": None, "ide_url": None, "conversation_id": None}
         return
 
+    # ── 工具集按上下文拼装: 平台只读工具(有环境) + 工作区文件工具(有工作区) ──
+    tool_definitions: list[dict] = []
+    if platform_env_id:
+        tool_definitions += READ_ONLY_TOOL_DEFINITIONS
+    if ws_path:
+        tool_definitions += WORKSPACE_TOOL_DEFINITIONS
+
+    system_prompt = _READ_WS_SYSTEM_PROMPT if ws_path else _READ_SYSTEM_PROMPT
+
     # ── tool-loop ──────────────────────────────────────────────────────────
     messages: list[dict] = [
-        {"role": "system", "content": _READ_SYSTEM_PROMPT},
+        {"role": "system", "content": system_prompt},
         {"role": "user", "content": params.message},
     ]
 
@@ -243,7 +353,7 @@ async def run_read_query(
                 payload: dict = {
                     "model": llm_model,
                     "messages": messages,
-                    "tools": READ_ONLY_TOOL_DEFINITIONS,
+                    "tools": tool_definitions,
                     "tool_choice": "auto",
                     "temperature": 0.2,
                     "max_tokens": 1200,
@@ -289,8 +399,9 @@ async def run_read_query(
             fn_name = tc.get("function", {}).get("name", "")
             tc_id = tc.get("id") or fn_name
 
-            # 只允许只读工具
-            if fn_name not in _READ_ONLY_EXECUTORS:
+            # 只允许只读工具（aPaaS 只读子集 + 工作区文件只读工具）
+            _is_ws_tool = fn_name in WORKSPACE_TOOL_NAMES and ws_path is not None
+            if not _is_ws_tool and fn_name not in _READ_ONLY_EXECUTORS:
                 tool_result_messages.append({
                     "role": "tool",
                     "tool_call_id": tc_id,
@@ -314,13 +425,17 @@ async def run_read_query(
                 "args": args,
             }
 
-            # 执行工具 —— 走 _call_apaas_platform_tool 复用 token 自愈
-            # (首次空 token→用 env 账号密码登录 + 撞 401→刷 token 重试一次)。
-            # 已在上面 line ~277 校验过 fn_name 在只读子集内，故只会调到只读工具。
+            # 执行工具:
+            # - 工作区文件工具 → 本地只读执行(线程池, 不碰平台)
+            # - aPaaS 只读工具 → _call_apaas_platform_tool 复用 token 自愈
+            #   (首次空 token→用 env 账号密码登录 + 撞 401→刷 token 重试一次)。
             try:
-                from app.mcp_server import _call_apaas_platform_tool
-                _result_dict = await _call_apaas_platform_tool(fn_name, args, platform_env_id)
-                result_str = json.dumps(_result_dict, ensure_ascii=False)
+                if _is_ws_tool:
+                    result_str = await asyncio.to_thread(execute_workspace_tool, ws_path, fn_name, args)
+                else:
+                    from app.mcp_server import _call_apaas_platform_tool
+                    _result_dict = await _call_apaas_platform_tool(fn_name, args, platform_env_id)
+                    result_str = json.dumps(_result_dict, ensure_ascii=False)
             except Exception as exc:
                 result_str = f"Error: {exc}"
 
@@ -340,9 +455,34 @@ async def run_read_query(
 
         messages.extend(tool_result_messages)
 
-    # 兜底：如果 loop 因 MAX_TURNS 耗尽退出、且最后消息是 tool result，给一条提示
+    # 兜底：loop 因 MAX_TURNS 耗尽退出(最后还是 tool result, 模型一直在读没收口)
+    # → 强制一次无工具收尾, 把已读到的信息总结成真实回答, 而不是一句套话。
     if messages and messages[-1].get("role") == "tool":
-        yield {"type": "content", "content": "查询完成，如需了解更多请继续提问。"}
+        messages.append({
+            "role": "user",
+            "content": "(系统提示) 工具调用轮数已用完。请基于以上已获取的信息，直接回答用户最初的问题；信息不全就说明哪些没来得及看。不要再调用工具。",
+        })
+        try:
+            async with httpx.AsyncClient(
+                timeout=httpx.Timeout(connect=10, read=60, write=10, pool=10)
+            ) as client:
+                resp = await client.post(
+                    f"{base_url}/chat/completions",
+                    headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"},
+                    json={
+                        "model": llm_model,
+                        "messages": messages,
+                        "temperature": 0.2,
+                        "max_tokens": 1200,
+                        "stream": False,
+                    },
+                )
+                resp.raise_for_status()
+                _final = (resp.json().get("choices", [{}])[0].get("message", {}).get("content") or "").strip()
+            yield {"type": "content", "content": _final or "查询完成，如需了解更多请继续提问。"}
+        except Exception as exc:
+            logger.warning("[read_query] 收尾回答失败: %s", exc)
+            yield {"type": "content", "content": "查询完成，如需了解更多请继续提问。"}
 
     yield {
         "type": "done",

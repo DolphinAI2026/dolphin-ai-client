@@ -116,6 +116,15 @@ def checkpoint(ws_path: Path, message: str = "checkpoint: before agent run") -> 
         return False
 
 
+def _is_noise_path(rel: str) -> bool:
+    """工具链自写的配置文件不算「本轮改动」(pipeline 每轮会刷 IDE/serve 配置)。
+
+    顶层 dot 路径(.vibe-ide.code-workspace / .cursor/ / .workspace.json …)
+    与文件树展示规则一致(树本来就不显示), 外加 vibe-serve 配套文件。
+    """
+    return rel.startswith(".") or rel in {"vibe-serve-config", "vibe-serve.js"}
+
+
 def _normalize_status(xy: str) -> str:
     if xy == "??":
         return "A"
@@ -159,6 +168,8 @@ def collect_changes(ws_path: Path) -> dict:
             if len(item) < 4:
                 continue
             xy, rel = item[:2], item[3:]
+            if _is_noise_path(rel):
+                continue
             entries[rel] = _normalize_status(xy)
 
         # 已跟踪文件的增删行数（含被删文件）；二进制 numstat 给 "-"

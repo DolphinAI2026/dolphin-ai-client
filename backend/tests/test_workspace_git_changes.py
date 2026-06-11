@@ -109,6 +109,17 @@ def test_legacy_workspace_with_bare_init_gets_baseline(ws):
     assert collect_changes(ws)["files"] == []
 
 
+def test_tooling_config_noise_filtered_from_changes(ws):
+    """pipeline 每轮自写的 IDE/serve 配置不算「本轮改动」。"""
+    ensure_baseline(ws)
+    (ws / ".vibe-ide.code-workspace").write_text("{}", encoding="utf-8")
+    (ws / "vibe-serve-config").write_text("PROXY_BASE=\n", encoding="utf-8")
+    (ws / "src" / "real.js").write_text("a\n", encoding="utf-8")
+    out = collect_changes(ws)
+    paths = [f["path"] for f in out["files"]]
+    assert paths == ["src/real.js"], f"工具配置应被过滤;得到 {paths}"
+
+
 def test_non_ascii_filename_roundtrip(ws):
     ensure_baseline(ws)
     (ws / "说明文档.md").write_text("中文\n", encoding="utf-8")

@@ -31,7 +31,7 @@ from app.coding.scenes import SceneType, get_scene
 from app.coding.generator import CodingGenerator
 from app.coding.workspace import WorkspaceManager, ProjectType
 from app.coding.prompts import AGENT_SYSTEM_PROMPT
-from app.coding.read_query import classify_coding_intent, run_read_query
+from app.coding.read_query import classify_coding_intent, classify_iteration_intent, run_read_query
 
 logger = logging.getLogger(__name__)
 
@@ -401,18 +401,46 @@ def extract_display_name(message: str, project_type: str, fallback_name: str) ->
     return (display_name or fallback_name)[:48]
 
 
-async def is_new_component_intent(generator: CodingGenerator, message: str, ws_id: str, ws_mgr: WorkspaceManager) -> bool:
-    """判断用户消息是要修改当前组件还是做一个全新的组件。"""
+async def is_new_component_intent(
+    tenant_id: Optional[int],
+    model: str,
+    message: str,
+    ws_id: str,
+    ws_mgr: WorkspaceManager,
+) -> bool:
+    """判断用户消息是要修改当前组件还是做一个全新的组件。
+
+    走租户配置模型(load_coding_llm_config), 不再用内置 LLMClient
+    ——那条路在没配内置 key 的环境每轮必打一发 401。失败兜底 MODIFY。
+    """
     try:
-        from app.llm_client import LLMClient
+        import httpx as _httpx
+
+        from app.agents.coding.llm_config import load_coding_llm_config
+
         info = ws_mgr.get_workspace_info(ws_id)
         project_name = info.get("project_name", "")
-        llm = LLMClient()
-        resp = await llm.chat_completion([
-            {"role": "system", "content": f"当前工作区的组件是 '{project_name}'。判断用户的消息是想【修改当前组件】还是想【做一个全新的、不同的组件】。回答中必须包含 MODIFY 或 NEW 这个词。"},
-            {"role": "user", "content": message}
-        ], max_tokens=50)
-        answer = resp.get("choices", [{}])[0].get("message", {}).get("content", "").upper()
+        base_url, api_key, llm_model = await load_coding_llm_config(tenant_id, model)
+        async with _httpx.AsyncClient(
+            timeout=_httpx.Timeout(connect=8, read=20, write=8, pool=8)
+        ) as client:
+            resp = await client.post(
+                f"{base_url}/chat/completions",
+                headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"},
+                json={
+                    "model": llm_model,
+                    "messages": [
+                        {"role": "system", "content": f"当前工作区的组件是 '{project_name}'。判断用户的消息是想【修改当前组件】还是想【做一个全新的、不同的组件】。回答中必须包含 MODIFY 或 NEW 这个词。"},
+                        {"role": "user", "content": message},
+                    ],
+                    "max_tokens": 50,
+                    "temperature": 0,
+                    "stream": False,
+                },
+            )
+            resp.raise_for_status()
+            data = resp.json()
+        answer = data.get("choices", [{}])[0].get("message", {}).get("content", "").upper()
         return "NEW" in answer
     except Exception as e:
         logger.warning(f"意图判断失败: {e}")
@@ -1661,17 +1689,6 @@ async def run_coding_pipeline(
     is_iteration = ws_id is not None
     replay_stream_messages: list[dict[str, Any]] = []
 
-    # 迭代轮开跑前把上一轮改动收进 git 基线 → 代码工作区「本轮改动」只显示这一轮的产出。
-    # best-effort：git 不可用 / 工作区缺失都不阻塞 pipeline。
-    if ws_id:
-        try:
-            ws_path_ckpt = ws_mgr.get_workspace_path(ws_id)
-            if ws_path_ckpt.exists():
-                from app.coding.git_changes import checkpoint as _git_checkpoint
-                await asyncio.to_thread(_git_checkpoint, ws_path_ckpt)
-        except Exception:
-            logger.warning("workspace git checkpoint 失败(忽略): %s", ws_id, exc_info=True)
-
     def _record_event(event: dict[str, Any]) -> dict[str, Any]:
         append_event_to_stream_replay(replay_stream_messages, event)
         return event
@@ -1711,6 +1728,11 @@ async def run_coding_pipeline(
                     db, params.tenant_id,
                     selected_llm_config_id=coding_conversation.selected_llm_config_id,
                 )
+            # 「新建会话」在已打开的工作区里发首条消息时, 会话还没绑工作区 → 回填,
+            # 刷新/侧栏回看才能恢复出工作区上下文。
+            if ws_id and not coding_conversation.workspace_id:
+                coding_conversation.workspace_id = ws_id
+                await db.commit()
         else:
             conversation_id = None
 
@@ -1736,9 +1758,39 @@ async def run_coding_pipeline(
             pass
 
     try:
-        # ---- 迭代意图判断 ----
+        # ---- 迭代轮意图门: READ → 只读应答(带工作区文件工具), 零写盘 ----
+        # 背景: 以前迭代轮任何消息都直通 codegen(契约=写代码+构建打包),
+        # 用户说「读一下工作区的代码」也会被整页重写+构建。
+        # 续轮状态(待确认 SPEC/待回答澄清)单独算, 不复用首轮 prior_* 状态机。
+        if is_iteration and conversation_id:
+            try:
+                _iter_hist = await get_conversation_history(db, conversation_id)
+            except Exception:
+                _iter_hist = []
+            _iter_bs, _, _ = _get_brainstorm_state(_iter_hist)
+            _iter_clarify, _ = _get_pending_clarification(_iter_hist)
+            if not (_iter_bs or _iter_clarify):
+                # 引用代码块剥掉再分类(「引用 `path:行号`: ```…``` 这段是干嘛的」的问题在块外)
+                _clean_msg = re.sub(r"```[\s\S]*?```", " ", params.message).strip()[:300]
+                if await classify_iteration_intent(params.tenant_id, effective_model, _clean_msg) == "READ":
+                    logger.info("[intent_gate] 迭代轮 READ 路径, 跳过 codegen, ws=%s", ws_id)
+                    await save_coding_message(db, conversation_id, "user", params.message)
+                    _answer_parts: list[str] = []
+                    async for _ev in run_read_query(params, db):
+                        if _ev.get("type") == "content":
+                            _answer_parts.append(str(_ev.get("content") or ""))
+                        if _ev.get("type") == "done":
+                            _ev["conversation_id"] = conversation_id
+                            _ev["workspace_id"] = ws_id  # 前端保持工作区上下文
+                        yield _record_event(_ev)
+                    _read_answer = "\n\n".join(p for p in _answer_parts if p.strip()).strip()
+                    if _read_answer:
+                        await save_coding_message(db, conversation_id, "assistant", _read_answer)
+                    return
+
+        # ---- 迭代意图判断(修改当前组件 vs 全新组件) ----
         if is_iteration:
-            if await is_new_component_intent(generator, params.message, ws_id, ws_mgr):
+            if await is_new_component_intent(params.tenant_id, effective_model, params.message, ws_id, ws_mgr):
                 is_iteration = False
                 ws_id = None
                 yield _record_event({"type": "content", "content": "💡 检测到你想做一个新组件，正在为你创建新的工作区...\n\n"})
@@ -1793,6 +1845,18 @@ async def run_coding_pipeline(
         # （对话历史 prior_history + brainstorm/澄清 续轮状态已在「意图门」之前加载，见上方。
         #   续轮判断的意义:用户回的"确认/改稿/澄清回答"不能拿来做场景识别，
         #   否则"确认"两个字会被识别成业务事件弹窗。）
+
+        # ---- BUILD 路径已定 → 把上一轮改动收进 git 基线 ----
+        # 「本轮改动」语义 = 最近一轮会写代码的 run 的产出; READ 轮不收基线,
+        # 用户问完问题回来还能继续看上一轮的 diff。best-effort 不阻塞。
+        if ws_id:
+            try:
+                ws_path_ckpt = ws_mgr.get_workspace_path(ws_id)
+                if ws_path_ckpt.exists():
+                    from app.coding.git_changes import checkpoint as _git_checkpoint
+                    await asyncio.to_thread(_git_checkpoint, ws_path_ckpt)
+            except Exception:
+                logger.warning("workspace git checkpoint 失败(忽略): %s", ws_id, exc_info=True)
 
         # ---- Step 1: 场景检测 ----
         if not replay_stream_messages:

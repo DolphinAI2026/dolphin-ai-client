@@ -230,7 +230,13 @@ export function useCodingPipeline(deps: PipelineDeps) {
     agent_tool: (parsed) => {
       const handler = TOOL_HANDLERS[parsed.tool as string]
       // 后端 write_file/edit_file 把内容放在 parsed.input(不是 args);兼容旧字段。
-      if (handler) handler(parsed.input || parsed.args || {}, (parsed.input_preview || '') as string)
+      if (handler) {
+        handler(parsed.input || parsed.args || {}, (parsed.input_preview || '') as string)
+      } else if (parsed.tool && parsed.tool !== 'ask_clarifying_question') {
+        // 未注册的工具(只读路径的 读取文件/搜索代码、agent 的 aPaaS 读工具等)
+        // 渲染通用 chip,别静默丢——agent_result 会把结果挂上来变成可折叠卡片。
+        addStreamMsg({ type: 'tool', content: `🔧 ${parsed.tool_display || parsed.tool}`, resultCollapsed: true })
+      }
     },
     agent_command_output: (parsed) => {
       const chunk = (parsed.chunk || '') as string
