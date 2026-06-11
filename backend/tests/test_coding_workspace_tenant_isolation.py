@@ -126,3 +126,32 @@ def test_stamp_project_id_backfills_only_when_missing(tmp_path):
         # 已有值不覆盖
         assert mgr.stamp_project_id("ws1", 9) is False
         assert _json.loads((ws_dir / ".workspace.json").read_text())["project_id"] == 7
+
+
+@pytest.mark.asyncio
+async def test_ensure_workspace_access_app_bound_does_not_404():
+    """回归: 绑定应用(project_id=Application.id)后打开工作区不能 404
+    (原代码拿应用 id 查 Project 表, 所有工作区端点直接打不开)。"""
+    from fastapi import HTTPException
+    from app.routes import coding as coding_routes
+
+    ctx = MagicMock()
+    ctx.user = MagicMock(id=1)
+    ctx.tenant_id = 64
+
+    db = MagicMock()
+    db.execute = AsyncMock(return_value=MagicMock(scalar_one_or_none=MagicMock(return_value=4)))
+
+    meta = {"id": "ws-x", "project_id": 4, "user_id": 1, "tenant_id": 64}
+    with patch.object(coding_routes.workspace_mgr, "get_workspace_info", return_value=meta), \
+         patch.object(coding_routes, "_decorate_workspace_access", side_effect=lambda m, role: {**m, "access_role": role}):
+        out = await coding_routes._ensure_workspace_access("ws-x", ctx, db, minimum_project_role="member")
+        assert out["access_role"] == "owner"
+
+        # 同租户非创建者: member 可访问, admin 级操作拒绝
+        ctx2 = MagicMock(); ctx2.user = MagicMock(id=2); ctx2.tenant_id = 64
+        out2 = await coding_routes._ensure_workspace_access("ws-x", ctx2, db, minimum_project_role="member")
+        assert out2["access_role"] == "member"
+        with pytest.raises(HTTPException) as exc:
+            await coding_routes._ensure_workspace_access("ws-x", ctx2, db, minimum_project_role="admin")
+        assert exc.value.status_code == 403

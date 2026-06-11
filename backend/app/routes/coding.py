@@ -1125,6 +1125,20 @@ async def _ensure_workspace_access(
 
     project_id = meta.get("project_id")
     if project_id:
+        # project_id 字段被复用为「所属应用」(Application.id)。应用绑定不是协作项目,
+        # 不能拿它查 Project 表(会 404 把工作区打不开)。归属=应用属本租户:
+        # 创建者按 owner, 同租户其他成员按 member(admin 级操作仍只限创建者)。
+        app_row = await db.execute(
+            select(Application.id).where(
+                Application.id == int(project_id),
+                Application.tenant_id == ctx.tenant_id,
+            )
+        )
+        if app_row.scalar_one_or_none() is not None:
+            role = "owner" if meta.get("user_id") == ctx.user.id else "member"
+            if minimum_project_role in ("admin", "owner") and role != "owner":
+                raise HTTPException(status_code=403, detail="无权执行该操作")
+            return _decorate_workspace_access(meta, role)
         access = await require_project_access(
             db,
             project_id=int(project_id),
