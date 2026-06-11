@@ -263,7 +263,6 @@ async function load() {
     // 换文件时把滚动复位到左上角,避免沿用上一个文件的横/纵滚动位置
     await nextTick()
     if (bodyRef.value) { bodyRef.value.scrollTop = 0; bodyRef.value.scrollLeft = 0 }
-    scrollToFocusLine()
   } catch (e: any) {
     const detail = String(e?.response?.data?.detail || e?.message || '')
     const isClassFile = baseName.value.toLowerCase().endsWith('.class')
@@ -278,6 +277,9 @@ async function load() {
   } finally {
     loading.value = false
   }
+  // 必须等 loading=false 后 .cv-code 才进 DOM(此前是 spinner 分支), 再做搜索跳行
+  await nextTick()
+  scrollToFocusLine()
 }
 
 async function downloadFile() {
