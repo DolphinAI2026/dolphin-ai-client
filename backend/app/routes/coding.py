@@ -2170,6 +2170,9 @@ async def search_workspace_content(
         raise HTTPException(status_code=404, detail="工作区不存在")
     regex = _re.compile(_re.escape(q), _re.IGNORECASE)
     hits, truncated = await asyncio.to_thread(search_workspace_hits, ws_path, regex)
+    # 人用的搜索跳过构建产物(umd/zip 等) —— bundle 里的命中是噪音, 会把源码命中淹掉
+    from app.coding.git_changes import _is_build_artifact
+    hits = [h for h in hits if not _is_build_artifact(h["path"])]
     return {"hits": hits, "truncated": truncated}
 
 

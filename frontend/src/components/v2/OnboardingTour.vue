@@ -53,7 +53,7 @@ const CONCEPTS = computed(() => [
 
 const ROLES = [
   { id: 'business', name: '业务顾问',     tone: 'ai',      desc: '描述需求 → SPEC → 部署',         positions: '实施顾问 / 产品经理',         path: '睿鲸 AI Builder',     recommended: false },
-  { id: 'developer', name: '开发人员',    tone: 'brand',   desc: '业务搭建 ↔ 自研组件',           positions: '前端 / 全栈工程师',           path: '二次开发(IDE 工作区)', recommended: false },
+  { id: 'developer', name: '开发人员',    tone: 'brand',   desc: '业务搭建 ↔ 自研组件',           positions: '前端 / 全栈工程师',           path: '二次开发(代码工作区)', recommended: false },
   { id: 'hybrid',   name: '双栖',         tone: 'brand-strong', desc: '业务+开发 全链路',         positions: '产品技术负责人 / 资深实施',   path: '全部',                  recommended: true },
   { id: 'admin',    name: '平台管理员',   tone: 'rose',    desc: '平台环境 + 模型 + 成员管理',     positions: '运维 / IT 负责人',           path: '平台管理', recommended: false },
 ]

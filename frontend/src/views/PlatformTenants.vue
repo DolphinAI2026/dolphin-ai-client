@@ -23,7 +23,7 @@
           <div class="dashboard-card-value">{{ dashboard.totals.applications.used }}</div>
         </div>
         <div class="dashboard-card">
-          <div class="dashboard-card-label">IDE 工作区</div>
+          <div class="dashboard-card-label">代码工作区</div>
           <div class="dashboard-card-value">{{ dashboard.totals.workspaces.used }}</div>
         </div>
         <div class="dashboard-card">
@@ -186,7 +186,7 @@
                 <span class="usage-value">{{ detailUsage.applications.used }} 个</span>
               </div>
               <div class="usage-row">
-                <span class="usage-label">IDE 工作区</span>
+                <span class="usage-label">代码工作区</span>
                 <span class="usage-value">{{ detailUsage.workspaces.used }} 个</span>
               </div>
               <div class="usage-row">

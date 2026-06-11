@@ -31,7 +31,7 @@
     <div class="coding-body" :class="{ 'code-first': codeFirst }">
       <SessionSidebar
         v-if="!embedMode && !embeddedAppId && !codeFirst"
-        module-name="IDE 工作区"
+        module-name="代码工作区"
         brand-color="#6366f1"
         :sessions="sidebarCodingItems"
         :active-id="sidebarCodingActiveId"
@@ -87,7 +87,7 @@
             </div>
           </header>
           <div class="coding-unselected-welcome">
-            <h2>IDE 工作区</h2>
+            <h2>代码工作区</h2>
             <p>从左侧选择一个开发会话继续，或点击上方「+ 新会话」开始新的自开发任务。AI 会在会话里整理任务、创建工作区，并持续生成页面、接口、脚本或扩展代码。</p>
           </div>
         </div>
@@ -96,7 +96,7 @@
         <div v-else class="stream-pane">
           <header class="coding-session-header">
             <div class="coding-session-title-block">
-              <span class="coding-session-kicker">IDE 工作区</span>
+              <span class="coding-session-kicker">代码工作区</span>
               <strong class="coding-session-title">{{ activeCodingSessionTitle }}</strong>
             </div>
             <!-- F3: Builder→Coding handoff 来源应用的「← 回 Builder」回跳链 -->
@@ -164,6 +164,21 @@
             empty-hint=""
             @answer-ask="onAnswerAsk"
           >
+            <!-- codeFirst 空态: 按工作区生成建议提问, 点击直接发送(解决冷启动) -->
+            <template v-if="codeFirst" #empty>
+              <div class="ac-empty-default coding-empty">
+                <h2><AppIcon name="wave" :size="18" /> 开始对话</h2>
+                <p>问代码、查改动，或直接说要改什么。</p>
+                <div v-if="emptySuggestions.length" class="coding-empty-suggestions">
+                  <button
+                    v-for="s in emptySuggestions"
+                    :key="s"
+                    class="ces-chip"
+                    @click="sendSuggestion(s)"
+                  >{{ s }}</button>
+                </div>
+              </div>
+            </template>
             <template #custom="{ message }">
               <template v-if="streamCustom(message)?.sm">
                 <!-- file_write / file_edit（native 无对应 kind,保留 FileCard）-->
@@ -721,6 +736,24 @@ function onViewerQuote(q: { path: string; startLine: number | null; endLine: num
   void nextTick(() => {
     (document.querySelector('.chat-input-bar textarea') as HTMLTextAreaElement | null)?.focus()
   })
+}
+
+// codeFirst 空态建议提问: 按工作区元信息生成(冷启动引导)
+const emptySuggestions = computed<string[]>(() => {
+  if (!codeFirst.value) return []
+  const kindLabel = ({
+    'form-page': '页面', 'menu-page': '页面', 'mobile-page': '页面',
+    'form-component-dual': '组件', 'form-list': '列表', 'backend-api': '接口',
+  } as Record<string, string>)[codingStore.workspace?.project_type || ''] || '项目'
+  const out = ['讲讲这个项目的结构和入口文件']
+  if ((wsGitChanges.value?.files || []).some(f => !f.artifact)) out.push('评审一下本轮改动，有什么问题？')
+  out.push(`这个${kindLabel}的主要逻辑在哪？`)
+  return out
+})
+
+function sendSuggestion(text: string) {
+  userInput.value = text
+  void sendOrQueue()
 }
 
 // 内容搜索跳行: 选中文件 + 目标行(查看器全文视图滚动+闪烁); 普通选择时清掉
@@ -3489,6 +3522,31 @@ watch(() => route.path, () => {
 .cca-conv-title { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .cca-conv-time { flex: none; font-size: 11px; color: var(--t-text-muted, #999); }
 .cca-conv-empty { margin: 10px; font-size: 12.5px; color: var(--t-text-muted, #999); }
+
+/* ── codeFirst 空态建议提问 ── */
+.coding-empty-suggestions {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+  margin-top: 18px;
+}
+.ces-chip {
+  max-width: 320px;
+  padding: 7px 16px;
+  border: 1px solid var(--t-border-subtle, rgba(116, 128, 171, 0.2));
+  border-radius: 999px;
+  background: var(--t-bg-panel, #fff);
+  color: var(--t-text-secondary, #555);
+  font-size: 13px;
+  cursor: pointer;
+  transition: border-color 0.12s ease, color 0.12s ease, background 0.12s ease;
+}
+.ces-chip:hover {
+  border-color: color-mix(in srgb, var(--brand, #4f6ef7) 40%, transparent);
+  color: var(--brand-ink, var(--brand, #4f46e5));
+  background: var(--brand-soft, rgba(79, 110, 247, 0.06));
+}
 
 .coding-session-header {
   flex-shrink: 0;
