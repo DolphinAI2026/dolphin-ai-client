@@ -2720,6 +2720,38 @@ const resultPath = '{str(result_json_path)}'
         except Exception:
             return False
 
+    def stamp_project_id(self, ws_id: str, project_id: int) -> bool:
+        """给缺所属应用的 workspace 回填 project_id(由调用方从会话的 coding_app_id 推断)。
+
+        幂等: 已有 project_id 则不动、返回 False。best-effort, 失败静默。
+        回填后自开发资产库「所属应用」列/筛选与应用详情的自开发资产分组才有数据。
+        """
+        try:
+            ws_path = self.get_workspace_path(ws_id)
+            if not (ws_path / ".workspace.json").exists():
+                return False
+            meta = self._read_meta(ws_path)
+            if meta.get("project_id"):
+                return False
+            meta["project_id"] = int(project_id)
+            self._write_meta(ws_path, meta)
+            return True
+        except Exception:
+            return False
+
+    def bind_project_id(self, ws_id: str, project_id: int | None) -> bool:
+        """显式绑定/解绑所属应用(覆盖写, 与 stamp_project_id 的只补缺不同)。"""
+        try:
+            ws_path = self.get_workspace_path(ws_id)
+            if not (ws_path / ".workspace.json").exists():
+                return False
+            meta = self._read_meta(ws_path)
+            meta["project_id"] = int(project_id) if project_id is not None else None
+            self._write_meta(ws_path, meta)
+            return True
+        except Exception:
+            return False
+
     def _read_meta(self, ws_path: Path) -> dict:
         meta_file = ws_path / ".workspace.json"
         return json.loads(meta_file.read_text())

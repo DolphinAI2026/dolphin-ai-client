@@ -172,6 +172,12 @@ def _empty_sections() -> dict[str, dict]:
             "description": "实际落地的模型、表单、角色、字典和发布状态。",
             "items": [],
         },
+        "dev_workspaces": {
+            "key": "dev_workspaces",
+            "label": "自开发资产",
+            "description": "绑定到本应用的代码工作区（组件 / 页面 / 后端接口）。",
+            "items": [],
+        },
         "acceptance_cases": {
             "key": "acceptance_cases",
             "label": "验收用例",
@@ -2268,6 +2274,31 @@ async def list_delivery_assets(
     await check_resource_permission(ctx, db, app, "application", Action.VIEW)
 
     sections = _empty_sections()
+
+    # 0) 自开发资产: meta.project_id 绑定本应用的代码工作区(只读聚合, best-effort)。
+    try:
+        from app.coding.workspace import WorkspaceManager
+
+        _ws_rows = WorkspaceManager().list_accessible_workspaces(
+            ctx.user.id, [int(app_id)], tenant_id=ctx.tenant_id,
+        )
+        for _ws in _ws_rows:
+            if str(_ws.get("project_id") or "") != str(app_id):
+                continue  # list_accessible 也会带回个人工作区, 只留绑定本应用的
+            sections["dev_workspaces"]["items"].append(_make_asset_item(
+                key=f"workspace:{_ws.get('id')}",
+                title=str(_ws.get("display_name") or _ws.get("project_name") or _ws.get("id")),
+                kind="dev_workspace",
+                source="coding",
+                preview=str(_ws.get("project_name") or ""),
+                meta={
+                    "workspace_id": _ws.get("id"),
+                    "project_type": _ws.get("project_type"),
+                    "status": _ws.get("status"),
+                },
+            ))
+    except Exception:
+        logger.warning("聚合自开发资产失败(忽略)", exc_info=True)
 
     # 1) 旧 builder conversation: 原始用户诉求。
     if app.conversation_id:

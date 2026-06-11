@@ -125,7 +125,10 @@
             <div class="catalog-row-status">
               <BaseBadge :variant="workspaceStatusVariant(ws.status)" size="sm">{{ workspaceStatusLabel(ws.status) }}</BaseBadge>
             </div>
-            <div class="catalog-row-app">{{ workspaceAppName(ws) || '-' }}</div>
+            <div class="catalog-row-app" @click.stop>
+              <span v-if="workspaceAppName(ws)">{{ workspaceAppName(ws) }}</span>
+              <button v-else class="catalog-bind-app" type="button" @click="openBindDialog(ws)">绑定应用</button>
+            </div>
             <div class="catalog-row-updated">{{ workspaceUpdatedLabel(ws) }}</div>
             <div class="catalog-row-actions" @click.stop>
               <button class="catalog-mini-action primary" type="button" @click="openWorkspace(ws)">
@@ -161,7 +164,7 @@
             </div>
             <div class="catalog-card-meta">
               <span v-if="workspaceAppName(ws)">所属应用：{{ workspaceAppName(ws) }}</span>
-              <span v-else>未绑定应用</span>
+              <button v-else class="catalog-bind-app" type="button" @click.stop="openBindDialog(ws)">绑定应用</button>
             </div>
             <div class="catalog-card-actions" @click.stop>
               <button class="catalog-mini-action primary" type="button" @click="openWorkspace(ws)">
@@ -191,6 +194,17 @@
   </BuilderFrame>
 
   <!-- 点击工作区进入原生代码工作区。 -->
+
+  <el-dialog v-model="bindDialogOpen" title="绑定所属应用" width="380px" :append-to-body="true">
+    <p class="bind-dialog-hint">把「{{ bindTarget ? workspaceDisplayName(bindTarget) : '' }}」归属到一个应用，应用详情的交付资产里就能看到它。</p>
+    <el-select v-model="bindAppId" placeholder="选择应用" style="width: 100%">
+      <el-option v-for="(name, id) in appNameMap" :key="id" :label="name" :value="Number(id)" />
+    </el-select>
+    <template #footer>
+      <el-button @click="bindDialogOpen = false">取消</el-button>
+      <el-button type="primary" :disabled="!bindAppId" :loading="binding" @click="confirmBindApp">绑定</el-button>
+    </template>
+  </el-dialog>
 </template>
 
 <script setup lang="ts">
@@ -204,7 +218,7 @@ import EmptyState from '@/components/states/EmptyState.vue'
 import SkeletonCard from '@/components/states/SkeletonCard.vue'
 import BaseBadge from '@/components/BaseBadge.vue'
 import BaseTag from '@/components/BaseTag.vue'
-import { codingApi, type WorkspaceInfo } from '@/api/coding'
+import { codingApi, bindWorkspaceApp, type WorkspaceInfo } from '@/api/coding'
 import { applicationApi } from '@/api/application'
 
 const route = useRoute()
@@ -320,6 +334,33 @@ const headerStats = computed(() => [
   },
   { label: '最近更新', value: latestWorkspaceUpdatedLabel.value },
 ])
+
+// 手动绑定所属应用(存量迁移工作区没有会话绑定, 自动回填覆盖不到)
+const bindDialogOpen = ref(false)
+const bindTarget = ref<WorkspaceInfo | null>(null)
+const bindAppId = ref<number | null>(null)
+const binding = ref(false)
+
+function openBindDialog(ws: WorkspaceInfo) {
+  bindTarget.value = ws
+  bindAppId.value = null
+  bindDialogOpen.value = true
+}
+
+async function confirmBindApp() {
+  if (!bindTarget.value || !bindAppId.value) return
+  binding.value = true
+  try {
+    await bindWorkspaceApp(bindTarget.value.id, bindAppId.value)
+    ;(bindTarget.value as any).project_id = bindAppId.value
+    ElMessage.success('已绑定所属应用')
+    bindDialogOpen.value = false
+  } catch (e: any) {
+    ElMessage.error(e?.response?.data?.detail || e?.message || '绑定失败')
+  } finally {
+    binding.value = false
+  }
+}
 
 function workspaceAppName(ws: WorkspaceInfo): string {
   if (!ws.project_id) return ''
@@ -1120,4 +1161,19 @@ onMounted(async () => {
   }
 }
 
+
+.catalog-bind-app {
+  padding: 2px 8px;
+  border: 1px dashed var(--line-strong, rgba(0, 0, 0, 0.18));
+  border-radius: 6px;
+  background: transparent;
+  color: var(--fg-dim, #888);
+  font-size: 12px;
+  cursor: pointer;
+}
+.catalog-bind-app:hover {
+  color: var(--brand-ink, var(--brand, #4f46e5));
+  border-color: color-mix(in srgb, var(--brand, #4f6ef7) 45%, transparent);
+}
+.bind-dialog-hint { margin: 0 0 12px; font-size: 13px; color: var(--fg-dim, #666); }
 </style>

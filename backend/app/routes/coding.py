@@ -25,7 +25,7 @@ from sqlalchemy import select, delete
 
 from app.crypto import decrypt_password
 from app.database import get_db
-from app.models import User, Conversation, Message, Project, ProjectMember, LLMConfig
+from app.models import User, Conversation, Message, Project, ProjectMember, LLMConfig, Application
 from app.deps import get_auth_context, AuthContext
 from app.coding.scenes import SceneType, get_scene, get_all_scenes, get_scenes_by_category
 from app.coding.generator import CodingGenerator
@@ -2207,6 +2207,32 @@ async def get_workspace_file_diff(
     return await asyncio.to_thread(file_diff, ws_path, file_path)
 
 
+class BindWorkspaceAppRequest(BaseModel):
+    app_id: Optional[int] = None  # None = 解绑
+
+
+@router.post("/workspace/{ws_id}/bind-app")
+async def bind_workspace_app(
+    ws_id: str,
+    req: BindWorkspaceAppRequest,
+    ctx: Annotated[AuthContext, Depends(get_auth_context)],
+    db: Annotated[AsyncSession, Depends(get_db)],
+):
+    """绑定/解绑工作区所属应用(写 meta.project_id)。存量迁移工作区无会话绑定, 靠这里手动归属。"""
+    await _ensure_workspace_access(ws_id, ctx, db, minimum_project_role="member")
+    if req.app_id is not None:
+        app_row = await db.execute(
+            select(Application).where(
+                Application.id == req.app_id, Application.tenant_id == ctx.tenant_id,
+            )
+        )
+        if not app_row.scalar_one_or_none():
+            raise HTTPException(status_code=404, detail="应用不存在或不属于当前租户")
+    if not workspace_mgr.bind_project_id(ws_id, req.app_id):
+        raise HTTPException(status_code=404, detail="工作区不存在")
+    return {"status": "ok", "project_id": req.app_id}
+
+
 @router.get("/workspace/{ws_id}/search")
 async def search_workspace_content(
     ws_id: str,
@@ -2249,6 +2275,14 @@ async def list_workspaces(
     project_ids = {row[0] for row in owned_result.all()}
     project_ids.update(row[0] for row in member_result.all())
 
+    # ws meta 的 project_id 字段被复用为「所属应用」(Application.id, 应用锁定建工作区时注入)。
+    # 可见性允许集合必须把本租户应用也算进去, 否则应用绑定的工作区在资产库直接消失。
+    app_result = await db.execute(
+        select(Application.id).where(Application.tenant_id == ctx.tenant_id)
+    )
+    application_ids = {row[0] for row in app_result.all()}
+    project_ids.update(application_ids)
+
     workspaces = workspace_mgr.list_accessible_workspaces(
         ctx.user.id, list(project_ids), tenant_id=ctx.tenant_id
     )
@@ -2281,10 +2315,35 @@ async def list_workspaces(
             kept.append(ws)
         workspaces = kept
 
+    # 所属应用自愈回填: project_id 缺失的 workspace 从其会话的 coding_app_id(在应用上定制)推断,
+    # 写回 .workspace.json → 资产库「所属应用」列/筛选与应用详情自开发分组有数据。
+    unbound_ids = [str(ws.get("id")) for ws in workspaces if not ws.get("project_id")]
+    if unbound_ids:
+        bind_rows = await db.execute(
+            select(Conversation.workspace_id, Conversation.coding_app_id).where(
+                Conversation.workspace_id.in_(unbound_ids),
+                Conversation.coding_app_id.isnot(None),
+            )
+        )
+        ws_bound_app: dict[str, int] = {}
+        for ws_id_val, app_val in bind_rows.all():
+            if ws_id_val and app_val is not None:
+                ws_bound_app.setdefault(str(ws_id_val), int(app_val))
+        for ws in workspaces:
+            if not ws.get("project_id"):
+                bound = ws_bound_app.get(str(ws.get("id")))
+                if bound and bound in application_ids:
+                    if workspace_mgr.stamp_project_id(str(ws.get("id")), bound):
+                        ws["project_id"] = bound
+
     decorated: list[dict[str, Any]] = []
     for ws in workspaces:
         project_id = ws.get("project_id")
-        if project_id:
+        if project_id and int(project_id) in application_ids:
+            # 应用绑定(Application.id 复用 project_id 字段) → 不是协作项目, 可见性已由
+            # allowed 集合控制, 不走 require_project_access(那是查 Project 表, 会 404)
+            decorated.append(_decorate_workspace_access(ws, "owner"))
+        elif project_id:
             access = await require_project_access(
                 db,
                 project_id=int(project_id),

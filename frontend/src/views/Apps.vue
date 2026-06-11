@@ -305,6 +305,12 @@
                 <p>{{ section.description }}</p>
               </div>
               <BaseBadge :variant="section.count ? 'info' : 'neutral'" size="sm">{{ section.count }}</BaseBadge>
+              <button
+                v-if="section.key === 'dev_workspaces'"
+                class="apps-assets-section-link"
+                type="button"
+                @click="openWorkspaceCatalogForApp"
+              >在资产库中查看</button>
             </header>
 
             <div v-if="section.items.length === 0" class="apps-assets-empty">暂无</div>
@@ -610,6 +616,7 @@ async function openDeliveryAssets(app: MergedApplication) {
 }
 
 function assetSectionIcon(key: string) {
+  if (key === 'dev_workspaces') return 'coding'
   if (key === 'requirements') return 'clipboard'
   if (key === 'design_docs') return 'file'
   if (key === 'ui_designs') return 'palette'
@@ -627,20 +634,32 @@ function assetItemMetaLabel(item: ApplicationDeliveryAssetItem) {
 }
 
 function canOpenDeliveryAssetItem(item: ApplicationDeliveryAssetItem) {
+  if (item.kind === 'dev_workspace') return Boolean(item.meta?.workspace_id)
   return Boolean(item.kind === 'document_version' || item.meta?.session_id || item.meta?.conversation_id)
 }
 
 function deliveryAssetActionLabel(item: ApplicationDeliveryAssetItem) {
+  if (item.kind === 'dev_workspace') return '打开工作区'
   if (item.kind === 'document_version') return '查看'
   if (item.meta?.session_id) return '对话'
   if (item.meta?.conversation_id) return '查看'
   return '打开'
 }
 
+function openWorkspaceCatalogForApp() {
+  const app = deliveryAssetsApp.value
+  if (!app) return
+  router.push({ path: '/workspace-catalog', query: { app_id: String(appNumericId(app) ?? app.id) } })
+}
+
 function openDeliveryAssetItem(item: ApplicationDeliveryAssetItem) {
   const app = deliveryAssetsApp.value
   if (!app) return
   const appId = String(appNumericId(app) ?? app.id)
+  if (item.kind === 'dev_workspace' && item.meta?.workspace_id) {
+    router.push({ path: '/coding', query: { workspace_id: String(item.meta.workspace_id) } })
+    return
+  }
   if (item.kind === 'document_version' || item.meta?.conversation_id) {
     router.push({ path: '/chat', query: { app_id: appId, tab: 'spec' } })
     return
@@ -1728,6 +1747,19 @@ onMounted(() => { refreshApps() })
   font-size: 12px;
   line-height: 1.5;
 }
+
+.apps-assets-section-link {
+  flex: none;
+  margin-left: 8px;
+  padding: 2px 8px;
+  border: none;
+  background: transparent;
+  color: var(--brand-ink, var(--brand, #4f46e5));
+  font-size: 12px;
+  cursor: pointer;
+  border-radius: 6px;
+}
+.apps-assets-section-link:hover { background: var(--brand-soft, rgba(79, 110, 247, 0.08)); }
 
 .apps-assets-item-action {
   min-height: 28px;

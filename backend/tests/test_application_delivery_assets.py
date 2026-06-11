@@ -148,6 +148,45 @@ async def test_delivery_assets_returns_empty_sections_for_plain_app(db_session):
         "requirements": 0,
         "design_docs": 0,
         "ui_designs": 0,
+        "dev_workspaces": 0,
         "build_inventory": 0,
         "acceptance_cases": 0,
     }
+
+
+@pytest.mark.asyncio
+async def test_delivery_assets_includes_bound_dev_workspaces(db_session):
+    """绑定本应用(project_id=app.id)的代码工作区进「自开发资产」分组; 个人工作区不混入。"""
+    from unittest.mock import patch
+
+    tenant = Tenant(tenant_name="tenant-ws", tenant_code="tenant-ws")
+    owner = User(username="ws_owner", hashed_password="x")
+    db_session.add_all([tenant, owner])
+    await db_session.flush()
+    db_session.add(UserTenant(user_id=owner.id, tenant_id=tenant.id, status=1))
+    app = Application(
+        user_id=owner.id,
+        tenant_id=tenant.id,
+        created_by=owner.id,
+        app_name="资产应用",
+        app_code="wsapp",
+    )
+    db_session.add(app)
+    await db_session.commit()
+
+    fake_rows = [
+        {"id": "ws-app", "project_id": app.id, "display_name": "老库查询页面",
+         "project_name": "form-page-legacy", "project_type": "form-page", "status": "ready"},
+        {"id": "ws-personal", "project_id": None, "display_name": "个人工作区",
+         "project_name": "p", "project_type": "form-page", "status": "ready"},
+    ]
+    with patch("app.coding.workspace.WorkspaceManager.list_accessible_workspaces", return_value=fake_rows):
+        result = await list_delivery_assets(app.id, _ctx(owner, tenant.id), db_session)
+
+    items = result["sections"]["dev_workspaces"]["items"] if isinstance(result.get("sections"), dict) else None
+    if items is None:  # sections 可能是 list 形态
+        items = next(s for s in result["sections"] if s["key"] == "dev_workspaces")["items"]
+    assert len(items) == 1
+    assert items[0]["title"] == "老库查询页面"
+    assert items[0]["meta"]["workspace_id"] == "ws-app"
+    assert result["summary"]["dev_workspaces"] == 1

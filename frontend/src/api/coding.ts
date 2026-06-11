@@ -322,6 +322,11 @@ export interface WorkspaceChanges {
   total: { files: number; additions: number; deletions: number }
 }
 
+/** 绑定/解绑工作区所属应用(null=解绑) */
+export function bindWorkspaceApp(wsId: string, appId: number | null): Promise<{ status: string; project_id: number | null }> {
+  return request.post(`/coding/workspace/${wsId}/bind-app`, { app_id: appId })
+}
+
 export function getWorkspaceChanges(wsId: string): Promise<WorkspaceChanges> {
   return request.get(`/coding/workspace/${wsId}/changes`)
 }

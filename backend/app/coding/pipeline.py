@@ -1987,6 +1987,13 @@ async def run_coding_pipeline(
                 params.app_id = str(coding_conversation.coding_app_id)
                 logger.info("[bound-app] 从会话回读绑定应用 app_id=%s(本轮请求未带)", params.app_id)
 
+        # 迭代轮: 把绑定应用回填进工作区 meta(幂等, 只补缺) → 存量工作区跑一轮就有「所属应用」
+        _bound_app_for_ws = _param_app_id_int if _param_app_id_int is not None else (
+            coding_conversation.coding_app_id if coding_conversation is not None else None
+        )
+        if ws_id and _bound_app_for_ws:
+            ws_mgr.stamp_project_id(ws_id, int(_bound_app_for_ws))
+
         await save_coding_message(db, conversation_id, "user", params.message)
 
         # 对话历史：复用 step 1 之前预加载的 prior_history（不含本轮 user message，
@@ -2038,9 +2045,14 @@ async def run_coding_pipeline(
             if not display_name_value:
                 display_name_value = extract_display_name(params.message, project_type_str, project_name)
 
+            # 「在应用上定制」: 绑定应用即所属应用 → 落 meta.project_id
+            # (自开发资产库「所属应用」列/应用详情自开发分组读它)
+            _ws_project_id = project_id or _param_app_id_int or (
+                coding_conversation.coding_app_id if coding_conversation is not None else None
+            )
             meta_local = ws_mgr.create_workspace(
                 project_type_enum_local, project_name, params.user_id,
-                project_id=project_id, display_name=display_name_value,
+                project_id=_ws_project_id, display_name=display_name_value,
             )
             new_ws_id = meta_local["id"]
             if coding_conversation is not None:
