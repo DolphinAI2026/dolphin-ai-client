@@ -832,22 +832,12 @@ async function switchConversationFromHeader(id: number) {
   deployAppId.value = _boundAppId
   deployMode.value = 'bound'
   try {
-    // 切回工作区主会话时优先富回放(结构化工具卡/diff), 其他会话纯消息回放
-    if (codingStore.workspace?.id) {
-      try {
-        const wc = await codingApi.getWorkspaceConversation(codingStore.workspace.id)
-        if (wc.conversation_id === id) {
-          codingStore.conversationId = id
-          applyCodingModelSelection(wc.selected_llm_config_id)
-          loadConversationHistory(wc.messages, wc.stream_messages || [])
-          syncCodingUrl(id)
-          return
-        }
-      } catch { /* 降级走纯消息回放 */ }
-    }
-    const messages = await codingApi.getMessages(id)
+    // 富回放按会话存 DB(conversation_replays), 任何会话切换都拿得到结构化工具卡;
+    // 没有回放行(老会话/纯 READ 首轮)时 stream 为空, loadConversationHistory 回退纯消息重建。
+    const replay = await codingApi.getConversationReplay(id)
     codingStore.conversationId = id
-    loadConversationHistory(messages as any, [])
+    applyCodingModelSelection(replay.selected_llm_config_id)
+    loadConversationHistory(replay.messages as any, replay.stream_messages || [])
     syncCodingUrl(id)
   } catch (e: any) {
     ElMessage.error(`切换会话失败: ${e?.message || e}`)
@@ -1209,11 +1199,12 @@ async function loadCodingConversationOnly(conversationId: number) {
   // 没有才清空,避免把上个会话选的应用串过来。后端也会从会话回读做兜底,这里主要保证 UI 一致。
   const _boundAppId = codingConversations.value.find(c => c.id === conversationId)?.coding_app_id ?? null
   deployAppId.value = _boundAppId; deployMode.value = 'bound'
-  const messages = await codingApi.getMessages(conversationId)
+  // 富回放按会话存 DB — 无工作区的会话(READ 问答等)也能恢复结构化工具卡
+  const replay = await codingApi.getConversationReplay(conversationId)
   codingStore.reset()
   codingStore.conversationId = conversationId
   localStorage.removeItem('coding_last_workspace_id')
-  loadConversationHistory(messages as any, [])
+  loadConversationHistory(replay.messages as any, replay.stream_messages || [])
 }
 
 function normalizeCreatedCodingConversation(conv: CodingConversation): CodingConversation {

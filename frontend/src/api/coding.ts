@@ -203,6 +203,18 @@ export const codingApi = {
     return request.delete<any, { status: string }>(`/coding/conversations/${conversationId}`)
   },
 
+  /** 会话富回放(消息+回放流, DB 按会话存) — 切会话/侧栏选择恢复结构化工具卡 */
+  getConversationReplay(conversationId: number) {
+    return request.get<any, {
+      conversation_id: number
+      selected_llm_config_id: number | null
+      coding_app_id: number | null
+      workspace_id: string | null
+      messages: CodingMessage[]
+      stream_messages: ReplayStreamMessage[]
+    }>(`/coding/conversations/${conversationId}/replay`)
+  },
+
   /** 启动开发服务器 */
   startServe(wsId: string) {
     return request.post<any, { status: string; url?: string; message?: string }>(`/coding/workspace/${wsId}/serve`, {}, { params: { action: 'start' }, timeout: 120000 })

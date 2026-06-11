@@ -430,3 +430,4 @@ class DbConnection(Base):
     __table_args__ = (
         UniqueConstraint("tenant_id", "name", name="uq_db_conn_tenant_name"),
     )
+from app.models.conversation_replay import ConversationReplay  # noqa: F401  — 会话富回放落库

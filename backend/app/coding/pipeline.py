@@ -2379,9 +2379,17 @@ async def _write_history_for_ide(
     rich_assistant_output: str = "",
     stream_messages: Optional[list[dict[str, Any]]] = None,
 ):
-    """在 pipeline 完成时写入 IDE 精简历史和 Web Chat 富回放历史。"""
+    """在 pipeline 完成时写入 IDE 精简历史和 Web Chat 富回放历史。
+
+    富回放双写: DB(conversation_replays, 按会话 merge, 多会话不互踩, Web 端读这份)
+    + 工作区 .vscode/chat-replay.json(沿用旧 merge 语义, 仅 IDE 扩展读)。
+    """
     if not conversation_id or not ws_id:
         return
+    # DB 回放(旁路, 自吞异常)
+    if stream_messages:
+        from app.coding.replay_store import append_conversation_replay
+        await append_conversation_replay(db, conversation_id, stream_messages)
     try:
         ws_path = ws_mgr.get_workspace_path(ws_id)
         history = await get_conversation_history(db, conversation_id)

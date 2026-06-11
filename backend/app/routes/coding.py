@@ -178,14 +178,21 @@ def _load_workspace_chat_payload(
             continue
         normalized.append({"role": role, "content": content})
 
+    return {"messages": normalized, "stream_messages": _normalize_stream_payload(stream_messages)}
+
+
+def _normalize_stream_payload(stream_messages: list) -> list[dict[str, Any]]:
+    """回放流类型白名单 + 字段裁剪(文件与 DB 两个来源共用)。
+
+    "message" = 普通 Markdown 回复(READ 只读问答的答案就是这个类型), 漏掉会让
+    回放只剩 user+工具 chip、答案消失。
+    """
     normalized_stream_messages: list[dict[str, Any]] = []
-    for message in stream_messages:
+    for message in stream_messages or []:
         if not isinstance(message, dict):
             continue
         msg_type = str(message.get("type") or "").strip()
         content = message.get("content")
-        # "message" = 普通 Markdown 回复(READ 只读问答的答案就是这个类型), 漏掉会让
-        # 回放只剩 user+工具 chip、答案消失。
         if msg_type not in {"user", "thinking", "tool", "file_write", "file_edit", "command", "status", "error", "message"}:
             continue
         if not isinstance(content, str):
@@ -198,8 +205,7 @@ def _load_workspace_chat_payload(
             if field in message:
                 normalized_item[field] = message[field]
         normalized_stream_messages.append(normalized_item)
-
-    return {"messages": normalized, "stream_messages": normalized_stream_messages}
+    return normalized_stream_messages
 
 
 def _write_ruijing_extension_config(
@@ -1008,6 +1014,55 @@ async def get_coding_messages(
         }
         for m in messages
     ]
+
+
+@router.get("/conversations/{conversation_id}/replay")
+async def get_coding_conversation_replay(
+    conversation_id: int,
+    ctx: Annotated[AuthContext, Depends(get_auth_context)],
+    db: Annotated[AsyncSession, Depends(get_db)],
+):
+    """会话富回放(消息 + 回放流) — 头部切会话/侧栏选择恢复结构化工具卡用。
+
+    回放流来自 conversation_replays(按会话存, 多会话不互踩); 没有则 stream 为空,
+    前端回退纯消息重建。
+    """
+    stmt = select(Conversation).where(
+        Conversation.id == conversation_id,
+        Conversation.user_id == ctx.user.id,
+    )
+    result = await db.execute(stmt)
+    conv = result.scalar_one_or_none()
+    if not conv:
+        raise HTTPException(status_code=404, detail="对话不存在")
+
+    msg_stmt = (
+        select(Message)
+        .where(Message.conversation_id == conversation_id)
+        .order_by(Message.created_at.asc())
+    )
+    msg_result = await db.execute(msg_stmt)
+    messages = msg_result.scalars().all()
+
+    from app.coding.replay_store import load_conversation_replay
+
+    stream = _normalize_stream_payload(await load_conversation_replay(db, conversation_id))
+    return {
+        "conversation_id": conversation_id,
+        "selected_llm_config_id": conv.selected_llm_config_id,
+        "coding_app_id": conv.coding_app_id,
+        "workspace_id": conv.workspace_id,
+        "messages": [
+            {
+                "id": m.id,
+                "role": m.role,
+                "content": m.content,
+                "created_at": m.created_at.isoformat() if m.created_at else None,
+            }
+            for m in messages
+        ],
+        "stream_messages": stream,
+    }
 
 
 @router.get("/v2/conversations/{conversation_id}/workspace")
@@ -2289,17 +2344,24 @@ async def get_workspace_conversation(
             selected_messages = messages
             break
 
-    replay_payload = _load_workspace_chat_payload(
-        ws_id,
-        filename="chat-replay.json",
-        conversation_id=selected_conv.id,
-    )
-    if not replay_payload["messages"] and not replay_payload["stream_messages"]:
+    # 富回放: DB(按会话, 多会话不互踩)优先, 老数据回退工作区文件
+    from app.coding.replay_store import load_conversation_replay
+
+    _db_stream = _normalize_stream_payload(await load_conversation_replay(db, selected_conv.id))
+    if _db_stream:
+        replay_payload = {"messages": [], "stream_messages": _db_stream}
+    else:
         replay_payload = _load_workspace_chat_payload(
             ws_id,
-            filename="chat-history.json",
+            filename="chat-replay.json",
             conversation_id=selected_conv.id,
         )
+        if not replay_payload["messages"] and not replay_payload["stream_messages"]:
+            replay_payload = _load_workspace_chat_payload(
+                ws_id,
+                filename="chat-history.json",
+                conversation_id=selected_conv.id,
+            )
 
     response_messages = replay_payload["messages"] or [
         {
