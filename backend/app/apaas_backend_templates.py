@@ -286,7 +286,7 @@ import org.springframework.stereotype.Component;
  *   - INSERT 用 doInsert(pojo)，不接受原生 SQL（坑 15 SW-180228）
  *   - UPDATE/DELETE 用 doUpdate()/doDelete()，SQL 必须带 WHERE（坑 14 SW-180227）
  */
-@Component
+@Component("{ProjectClass}BaseDao")
 public class BaseDao {{
 
     @Autowired
