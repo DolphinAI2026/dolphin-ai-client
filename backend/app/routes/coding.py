@@ -952,7 +952,21 @@ async def delete_coding_conversation(
         raise HTTPException(status_code=404, detail="会话不存在")
 
     ws_id = conv.workspace_id
+    should_delete_workspace = False
     if ws_id:
+        sibling_count = (
+            await db.execute(
+                select(Conversation.id).where(
+                    Conversation.workspace_id == ws_id,
+                    Conversation.id != conversation_id,
+                    Conversation.tenant_id == ctx.tenant_id,
+                    Conversation.agent_type == "coding",
+                ).limit(1)
+            )
+        ).first()
+        should_delete_workspace = sibling_count is None
+
+    if ws_id and should_delete_workspace:
         try:
             await workspace_mgr.delete_workspace(ws_id)
         except Exception as exc:  # noqa: BLE001
@@ -975,6 +989,8 @@ async def get_coding_messages(
     stmt = select(Conversation).where(
         Conversation.id == conversation_id,
         Conversation.user_id == ctx.user.id,
+        Conversation.tenant_id == ctx.tenant_id,
+        Conversation.agent_type == "coding",
     )
     result = await db.execute(stmt)
     conv = result.scalar_one_or_none()
@@ -997,6 +1013,28 @@ async def get_coding_messages(
         }
         for m in messages
     ]
+
+
+@router.get("/v2/conversations/{conversation_id}/workspace")
+async def get_coding_conversation_workspace(
+    conversation_id: int,
+    ctx: Annotated[AuthContext, Depends(get_auth_context)],
+    db: Annotated[AsyncSession, Depends(get_db)],
+):
+    """返回 coding 会话关联的工作区 ID，供前端直接恢复原生代码工作区。"""
+    conv = (
+        await db.execute(
+            select(Conversation).where(
+                Conversation.id == conversation_id,
+                Conversation.user_id == ctx.user.id,
+                Conversation.tenant_id == ctx.tenant_id,
+                Conversation.agent_type == "coding",
+            )
+        )
+    ).scalar_one_or_none()
+    if not conv:
+        raise HTTPException(status_code=404, detail="会话不存在")
+    return {"conversation_id": conversation_id, "workspace_id": conv.workspace_id}
 
 
 # ============================================================
@@ -2230,6 +2268,7 @@ async def get_workspace_conversation(
     return {
         "conversation_id": selected_conv.id,
         "selected_llm_config_id": selected_conv.selected_llm_config_id,
+        "coding_app_id": selected_conv.coding_app_id,
         "messages": response_messages,
         "stream_messages": replay_payload["stream_messages"],
     }

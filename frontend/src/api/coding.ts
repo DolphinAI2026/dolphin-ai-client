@@ -47,6 +47,7 @@ export interface ReplayStreamMessage {
 export interface WorkspaceConversation {
   conversation_id: number | null
   selected_llm_config_id: number | null
+  coding_app_id?: number | null
   messages: CodingMessage[]
   stream_messages?: ReplayStreamMessage[]
 }

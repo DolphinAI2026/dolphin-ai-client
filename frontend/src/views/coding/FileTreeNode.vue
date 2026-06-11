@@ -84,41 +84,53 @@ const iconName = computed(() => {
   align-items: center;
   gap: 6px;
   width: 100%;
-  padding: 4px 8px 4px 0;
+  min-height: 28px;
+  padding: 5px 8px 5px 0;
   border: none;
   background: transparent;
-  border-radius: var(--r-sm, 6px);
+  border-radius: var(--r-md, 8px);
   cursor: pointer;
   white-space: nowrap;
   color: var(--fg-dim, #555);
-  font-size: var(--fs-sm, 13px);
+  font-size: 12.5px;
   line-height: 1.4;
   position: relative;
   transition: background 0.12s var(--ease, ease), color 0.12s var(--ease, ease);
 }
 .ftn-row:hover { background: var(--bg-hover, rgba(0, 0, 0, 0.04)); color: var(--fg, #222); }
-.ftn-row.dir { color: var(--fg, #222); font-weight: 500; }
+.ftn-row:focus { outline: none; }
+.ftn-row:focus-visible {
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--brand, #4f6ef7) 22%, transparent);
+}
+.ftn-row.dir { color: var(--fg, #334155); font-weight: 590; }
 .ftn-row.selected {
-  background: var(--brand-soft, rgba(99, 102, 241, 0.1));
+  background: linear-gradient(
+    90deg,
+    color-mix(in srgb, var(--brand, #4f6ef7) 13%, transparent),
+    color-mix(in srgb, var(--brand, #4f6ef7) 7%, transparent)
+  );
   color: var(--brand-ink, var(--brand, #4f46e5));
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--brand, #4f6ef7) 8%, transparent);
 }
 .ftn-row.selected::before {
   content: '';
   position: absolute;
-  left: 0; top: 3px; bottom: 3px;
-  width: 2.5px;
+  left: 0; top: 5px; bottom: 5px;
+  width: 3px;
   border-radius: 2px;
-  background: var(--brand, #6366f1);
+  background: var(--brand, #4f6ef7);
 }
 .ftn-caret {
   flex: none;
-  color: var(--fg-faint, #aaa);
+  color: var(--fg-faint, #94a3b8);
   transition: transform 0.16s var(--ease, ease);
 }
 .ftn-caret.open { transform: rotate(90deg); }
 .ftn-caret-spacer { width: 12px; flex: none; }
-.ftn-icon { flex: none; color: var(--fg-faint, #999); }
-.ftn-icon.folder { color: var(--brand, #6366f1); opacity: 0.75; }
+.ftn-icon { flex: none; color: var(--fg-faint, #94a3b8); }
+.ftn-icon.folder { color: var(--fg-dim, #64748b); opacity: 0.92; }
+.ftn-row:hover .ftn-icon.folder,
+.ftn-row.dir:hover .ftn-icon.folder { color: var(--brand, #4f6ef7); }
 .ftn-row.selected .ftn-icon { color: inherit; }
 .ftn-name { overflow: hidden; text-overflow: ellipsis; }
 /* git 状态着色: 新增绿 / 修改琥珀(对齐 VS Code 心智) */
@@ -142,6 +154,6 @@ const iconName = computed(() => {
   background: var(--ai, var(--brand, #6366f1));
   margin-left: auto;
   flex: none;
-  box-shadow: 0 0 0 2px var(--bg, #fff);
+  box-shadow: 0 0 0 2px var(--bg-sub, #f8fafc);
 }
 </style>

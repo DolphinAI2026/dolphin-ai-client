@@ -66,6 +66,12 @@ export const applicationApi = {
   updatePlatformConfig(appId: number, data: { platform_url?: string; platform_tenant_id?: string; platform_username?: string; platform_password_enc?: string }) {
     return request.patch<any, { success: boolean }>(`/applications/${appId}/platform-config`, data)
   },
+  /** 老应用补建 Project，用于接入 Project 级 Git/GitHub。 */
+  ensureGitProject(appId: number) {
+    return request.post<any, { application_id: number; project_id: number; created: boolean }>(
+      `/applications/${appId}/git-project/ensure`,
+    )
+  },
   delete(id: number) {
     return request.delete(`/applications/${id}`)
   },

@@ -46,6 +46,8 @@ export interface PipelineDeps {
   /** 分场景入口「在应用上定制」选中的目标应用 id —— 绑定给 codegen（首条消息带 app_id）。
    *  不走 route.query.app_id：那个会触发 embeddedAppId 进嵌入式布局。 */
   boundAppId?: Ref<number | null>
+  /** pipeline 结束后刷新会话元信息（workspace_id / updated_at / title 等）。 */
+  onAfterPipeline?: () => void | Promise<void>
 }
 
 export function useCodingPipeline(deps: PipelineDeps) {
@@ -78,6 +80,7 @@ export function useCodingPipeline(deps: PipelineDeps) {
     isUploading,
     isCreating,
     boundAppId,
+    onAfterPipeline,
   } = deps
 
   function resolveRouteProjectId(): number | null {
@@ -445,6 +448,7 @@ export function useCodingPipeline(deps: PipelineDeps) {
 
       await consumePipelineSse(response)
       await refreshWorkspacesAfterPipeline()
+      await onAfterPipeline?.()
 
     } catch (error: any) {
       // 用户主动「停止」→ AbortError:静默收尾,不弹错、补一条提示。

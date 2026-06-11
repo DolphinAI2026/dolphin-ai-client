@@ -148,6 +148,16 @@
 
             <div class="apps-row-actions" @click.stop>
               <button class="apps-mini-action" type="button" @click="openDialog(app)">对话</button>
+              <button
+                v-if="canManageGit(app)"
+                class="apps-mini-action"
+                type="button"
+                :disabled="isPreparingGit(app)"
+                @click="openGitForApp(app)"
+              >
+                <AppIcon name="link" :size="13" />
+                <span>{{ gitButtonLabel(app) }}</span>
+              </button>
               <button v-if="canBuildApp(app)" class="apps-mini-action primary" type="button" @click="buildApp(app)">构建</button>
               <button
                 v-if="canPublishApp(app)"
@@ -207,6 +217,16 @@
                  - "⋯" 更多菜单: 查看 SPEC / 进入应用 / 删除 (ghost) -->
             <div class="apps-card-actions" @click.stop>
               <button class="apps-mini-action primary" type="button" @click="openDialog(app)">对话</button>
+              <button
+                v-if="canManageGit(app)"
+                class="apps-mini-action"
+                type="button"
+                :disabled="isPreparingGit(app)"
+                @click="openGitForApp(app)"
+              >
+                <AppIcon name="link" :size="13" />
+                <span>{{ gitButtonLabel(app) }}</span>
+              </button>
               <button v-if="canBuildApp(app)" class="apps-mini-action" type="button" @click="buildApp(app)">构建</button>
               <button
                 v-if="canPublishApp(app)"
@@ -304,6 +324,7 @@ const viewMode = ref<ViewMode>('list')
 const searchQ = ref('')
 const importDialogOpen = ref(false)
 const publishingIds = ref<Set<number>>(new Set())
+const gitPreparingIds = ref<Set<number>>(new Set())
 
 const tabDefinitions: Array<{ label: string; value: AppTab }> = [
   { label: '全部', value: 'all' },
@@ -473,6 +494,52 @@ function openInPlatform(app: MergedApplication) {
     return
   }
   window.open(app.apaas_url, '_blank', 'noopener,noreferrer')
+}
+
+function canManageGit(app: MergedApplication) {
+  return app.source !== 'remote' && Boolean(appNumericId(app))
+}
+
+function gitButtonLabel(app: MergedApplication) {
+  if (isPreparingGit(app)) return '准备中'
+  return app.git_repo_url ? '仓库' : '接 Git'
+}
+
+function gitActionTitle(app: MergedApplication) {
+  if (isPreparingGit(app)) return '正在准备 Git 项目'
+  if (app.git_repo_url) return '打开 Git 仓库'
+  if (app.project_id) return '配置 Git/GitHub 并初始化仓库'
+  return '创建应用项目并配置 Git/GitHub'
+}
+
+function isPreparingGit(app: MergedApplication) {
+  const appId = appNumericId(app)
+  return appId != null && gitPreparingIds.value.has(appId)
+}
+
+async function openGitForApp(app: MergedApplication) {
+  if (app.git_repo_url) {
+    window.open(app.git_repo_url, '_blank', 'noopener,noreferrer')
+    return
+  }
+  if (app.project_id) {
+    router.push({ path: `/project/${app.project_id}/git` })
+    return
+  }
+  const appId = appNumericId(app)
+  if (appId == null || isPreparingGit(app)) return
+  gitPreparingIds.value = new Set([...gitPreparingIds.value, appId])
+  try {
+    const res = await applicationApi.ensureGitProject(appId)
+    app.project_id = res.project_id
+    router.push({ path: `/project/${res.project_id}/git` })
+  } catch (error) {
+    handleError(error, { fallback: '准备 Git 项目失败' })
+  } finally {
+    const next = new Set(gitPreparingIds.value)
+    next.delete(appId)
+    gitPreparingIds.value = next
+  }
 }
 
 function hasCardMoreActions(app: MergedApplication) {

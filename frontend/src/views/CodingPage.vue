@@ -132,6 +132,16 @@
               <button class="cca-btn" title="新建会话(沿用当前工作区)" @click="createWorkspaceConversation">
                 <AppIcon name="plus" :size="15" />
               </button>
+              <button
+                v-if="currentGitAppId"
+                class="cca-btn"
+                :class="{ active: !!currentAppGitRepoUrl }"
+                :disabled="syncingToRepo"
+                :title="currentGitActionTitle"
+                @click="currentAppGitRepoUrl ? onSyncToRepo() : openGitSetupForCurrentApp()"
+              >
+                <AppIcon :name="syncingToRepo ? 'refresh' : 'link'" :size="14" />
+              </button>
               <button class="cca-btn" :title="chatExpanded ? '还原对话宽度' : '放大对话'" @click="toggleChatExpand">
                 <AppIcon :name="chatExpanded ? 'shrink' : 'expand'" :size="14" />
               </button>
@@ -226,6 +236,8 @@
               :allow-send-while-sending="true"
               :send-disabled="!userInput.trim()"
               accept=".md,.pdf,.docx,.txt,.png,.jpg,.jpeg"
+              hint=""
+              sending-hint=""
               placeholder="输入需求，粘贴图片或点附件..."
               @send="sendOrQueue"
               @stop="stopStream"
@@ -542,7 +554,7 @@ import type { UnifiedChatAttachment } from '@/components/common/chatComposer'
 import FileTree from './coding/FileTree.vue'
 import CodeViewer from './coding/CodeViewer.vue'
 import { buildFileTree, type TreeNode } from './coding/fileTree'
-import { collectChangedFiles, type FileChangeMsg } from './coding/workspaceChanges'
+import { collectChangedFiles, normalizeWorkspacePathLabel, type FileChangeMsg } from './coding/workspaceChanges'
 import { usePanelResize } from '@/components/v2/config-assistant/composables/usePanelResize'
 import { listWorkspaceFiles, getWorkspaceChanges, type WorkspaceChanges } from '@/api/coding'
 
@@ -647,6 +659,7 @@ function flattenTreeFiles(nodes: TreeNode[], out: string[] = []): string[] {
 
 // 文件卡只有 basename 或路径不在树上时反查：精确命中 > git 改动表 > 树内 basename 唯一/首个命中
 function resolveWorkspacePath(p: string): string | null {
+  p = normalizeWorkspacePathLabel(p)
   if (!p) return null
   const all = flattenTreeFiles(wsFileTree.value)
   if (all.includes(p)) return p
@@ -658,7 +671,8 @@ function resolveWorkspacePath(p: string): string | null {
 
 // 点击对话里的写/改文件卡 → 左侧打开该文件（有 git 改动 CodeViewer 自动进对比模式）
 function openFileFromChat(sm: { filePath?: string; fileName?: string }) {
-  const target = resolveWorkspacePath(sm.filePath || sm.fileName || '') || sm.filePath || null
+  const rawPath = normalizeWorkspacePathLabel(sm.filePath || sm.fileName)
+  const target = resolveWorkspacePath(rawPath) || rawPath || null
   if (target) selectedFile.value = target
 }
 
@@ -786,7 +800,7 @@ async function createWorkspaceConversation() {
 // 文件树列也可拖宽(handle 在树右边界, 长 Java 类名放不下时拖开)
 const { panelWidth: treePaneWidth, onResizeStart: onTreeResizeStart } = usePanelResize({
   storageKey: 'coding:tree-pane-width',
-  defaultWidth: 260,
+  defaultWidth: 236,
   minWidth: 180,
   maxWidth: 480,
   handleSide: 'right',
@@ -973,7 +987,7 @@ const codingArtifacts = computed<{ new: CodingArtifactItem[]; modified: CodingAr
   for (let i = 0; i < list.length; i++) {
     const m = list[i] as any
     if (!m || (m.type !== 'file_write' && m.type !== 'file_edit')) continue
-    const path = (m.fileName || '').trim()
+    const path = normalizeWorkspacePathLabel(m.filePath || m.fileName)
     if (!path) continue
     const content = m.fileContent || ''
     // 粗略 diff：write = 全新增，edit = 行数估算
@@ -1230,31 +1244,37 @@ const embeddedPanelCollapsed = ref(false)
 // ── Phase D Task 6：Sync workspace → repo ──
 const syncingToRepo = ref(false)
 const currentAppGitRepoUrl = ref<string | null>(null)
+const currentAppProjectId = ref<number | null>(null)
 
 async function loadCurrentAppGitRepo() {
-  const appIdRaw = embeddedAppId.value
-  if (!appIdRaw) {
+  const appId = currentGitAppId.value
+  if (!appId) {
     currentAppGitRepoUrl.value = null
-    return
-  }
-  const appId = Number(appIdRaw)
-  if (!Number.isFinite(appId)) {
-    currentAppGitRepoUrl.value = null
+    currentAppProjectId.value = null
     return
   }
   try {
     const app = await applicationApi.get(appId)
     currentAppGitRepoUrl.value = app?.git_repo_url || null
+    currentAppProjectId.value = app?.project_id ?? null
   } catch {
     currentAppGitRepoUrl.value = null
+    currentAppProjectId.value = null
   }
+}
+
+function openGitSetupForCurrentApp() {
+  if (currentAppProjectId.value) {
+    router.push({ path: `/project/${currentAppProjectId.value}/git` }).catch(() => {})
+    return
+  }
+  ElMessage.warning('当前应用未关联项目，暂不能配置 Git/GitHub')
 }
 
 async function onSyncToRepo() {
   const ws = codingStore.workspace
-  const appIdRaw = embeddedAppId.value
-  if (!ws || !appIdRaw) return
-  const appId = Number(appIdRaw)
+  const appId = currentGitAppId.value
+  if (!ws || !appId) return
   if (!Number.isFinite(appId)) {
     ElMessage.error('应用 ID 不合法')
     return
@@ -1271,10 +1291,6 @@ async function onSyncToRepo() {
     syncingToRepo.value = false
   }
 }
-
-watch(() => embeddedAppId.value, () => {
-  loadCurrentAppGitRepo()
-}, { immediate: true })
 
 // ============ Attachment State ============
 const attachedFile = ref<File | null>(null)
@@ -1335,6 +1351,19 @@ const sceneDefaultAppId = computed<number | null>(() => {
 })
 const effectiveDeployAppId = computed<number | null>(() => deployAppId.value ?? sceneDefaultAppId.value)
 const isBoundDeploy = computed(() => deployMode.value === 'bound' && effectiveDeployAppId.value != null)
+const currentGitAppId = computed<number | null>(() => {
+  const raw = effectiveDeployAppId.value
+  if (raw == null) return null
+  const id = Number(raw)
+  return Number.isFinite(id) ? id : null
+})
+const currentGitActionTitle = computed(() => {
+  if (syncingToRepo.value) return '正在同步到 Git 仓库'
+  return currentAppGitRepoUrl.value ? '同步当前工作区到 Git 仓库' : '配置 Git/GitHub 仓库'
+})
+watch(() => currentGitAppId.value, () => {
+  void loadCurrentAppGitRepo()
+}, { immediate: true })
 const installRows = computed(() => isBoundDeploy.value ? [
   { icon: 'doc', title: '应用页面 / 组件', desc: '页面类挂到应用菜单下;组件类在表单设计器中引用' },
   { icon: 'flow', title: '路由 / 菜单', desc: '页面类自动注册自开发菜单' },
@@ -1464,6 +1493,14 @@ async function openWorkspaceById(wsId: string) {
     localStorage.setItem('coding_last_workspace_id', wsId)
     codingStore.conversationId = workspaceConversation.conversation_id
     applyCodingModelSelection(workspaceConversation.selected_llm_config_id)
+    deployAppId.value = workspaceConversation.coding_app_id ?? null
+    deployMode.value = 'bound'
+    if (deployAppId.value) {
+      const appName = sceneApps.value.find(a => a.id === deployAppId.value)?.name || '应用'
+      handoffSourceApp.value = { id: String(deployAppId.value), name: appName }
+    } else {
+      handoffSourceApp.value = null
+    }
 
     // 从后端加载历史消息填充到 streamMessages
     loadConversationHistory(
@@ -1697,6 +1734,7 @@ const { sendMessage, stopStream } = useCodingPipeline({
   isUploading,
   isCreating,
   boundAppId: deployAppId,
+  onAfterPipeline: refreshCodingConversations,
 })
 
 
@@ -3909,6 +3947,27 @@ watch(() => route.path, () => {
   margin-inline: auto;
 }
 
+html:not([data-theme="dark"]) .chat-input-bar :deep(.ucc-box) {
+  background: var(--t-bg-panel, #ffffff);
+  border-color: var(--t-border-subtle, rgba(15, 23, 42, 0.08));
+  box-shadow: 0 10px 28px rgba(15, 23, 42, 0.06);
+}
+
+html:not([data-theme="dark"]) .chat-input-bar :deep(.ucc-box:focus-within) {
+  border-color: rgba(79, 110, 247, 0.34);
+  box-shadow:
+    0 12px 32px rgba(15, 23, 42, 0.08),
+    0 0 0 3px rgba(79, 110, 247, 0.10);
+}
+
+html:not([data-theme="dark"]) .chat-input-bar :deep(.ucc-input) {
+  color: var(--t-text-primary, #1e293b);
+}
+
+html:not([data-theme="dark"]) .chat-input-bar :deep(.ucc-input::placeholder) {
+  color: rgba(100, 116, 139, 0.62);
+}
+
 /* 排队消息提示卡:流式中再输入会进队列,居中同列(880) */
 .coding-queue-banner {
   display: flex;
@@ -4367,6 +4426,135 @@ watch(() => route.path, () => {
   display: flex !important;
   flex-direction: column;
   overflow: hidden;
+}
+
+html:not([data-theme="dark"]) .coding-body.code-first {
+  background: #f3f6fb !important;
+  color: #172033;
+}
+
+html:not([data-theme="dark"]) .coding-body.code-first .ws-pane {
+  --bg: #ffffff;
+  --bg-sub: #f8fafc;
+  --bg-hover: #eef3fb;
+  --fg: #172033;
+  --fg-muted: #475569;
+  --fg-dim: #64748b;
+  --fg-faint: #94a3b8;
+  --line: rgba(15, 23, 42, 0.08);
+  --line-strong: rgba(15, 23, 42, 0.14);
+  background: #ffffff;
+}
+
+html:not([data-theme="dark"]) .coding-body.code-first .ws-pane-tree {
+  border-right-color: rgba(15, 23, 42, 0.09);
+}
+
+html:not([data-theme="dark"]) .coding-body.code-first .ws-pane-viewer {
+  background: #ffffff;
+}
+
+html:not([data-theme="dark"]) .coding-body.code-first .main-content {
+  background: #f7f9fd;
+  border-left-color: rgba(15, 23, 42, 0.09);
+  box-shadow: -12px 0 30px rgba(15, 23, 42, 0.035);
+}
+
+html:not([data-theme="dark"]) .coding-body.code-first .stream-pane {
+  background: linear-gradient(180deg, #f8faff 0%, #f4f7fc 100%);
+}
+
+html:not([data-theme="dark"]) .coding-body.code-first .coding-session-header {
+  background: rgba(255, 255, 255, 0.92);
+  border-bottom-color: rgba(15, 23, 42, 0.08);
+  box-shadow: 0 1px 0 rgba(255, 255, 255, 0.72);
+}
+
+html:not([data-theme="dark"]) .coding-body.code-first .coding-session-kicker {
+  color: #4f6ef7;
+  letter-spacing: 0.02em;
+}
+
+html:not([data-theme="dark"]) .coding-body.code-first .coding-session-title {
+  color: #0f172a;
+  font-weight: 720;
+}
+
+html:not([data-theme="dark"]) .coding-body.code-first .cca-btn {
+  background: #ffffff;
+  border-color: rgba(15, 23, 42, 0.14);
+  color: #334155;
+  box-shadow:
+    0 1px 2px rgba(15, 23, 42, 0.05),
+    inset 0 0 0 1px rgba(255, 255, 255, 0.70);
+}
+
+html:not([data-theme="dark"]) .coding-body.code-first .cca-btn .app-icon {
+  color: inherit !important;
+  opacity: 1;
+}
+
+html:not([data-theme="dark"]) .coding-body.code-first .cca-btn .app-icon svg {
+  color: inherit !important;
+}
+
+html:not([data-theme="dark"]) .coding-body.code-first .cca-btn:hover {
+  background: #eef3ff;
+  border-color: rgba(79, 110, 247, 0.36);
+  color: #2445d8;
+  box-shadow:
+    0 4px 10px rgba(79, 110, 247, 0.10),
+    inset 0 0 0 1px rgba(255, 255, 255, 0.72);
+}
+
+html:not([data-theme="dark"]) .coding-body.code-first .cca-btn:focus {
+  outline: none;
+}
+
+html:not([data-theme="dark"]) .coding-body.code-first .cca-btn:focus-visible {
+  border-color: rgba(79, 110, 247, 0.42);
+  box-shadow: 0 0 0 3px rgba(79, 110, 247, 0.14);
+}
+
+html:not([data-theme="dark"]) .coding-body.code-first .stream-pane .agent-conversation {
+  background: transparent;
+}
+
+html:not([data-theme="dark"]) .coding-body.code-first .stream-pane .ac-list {
+  padding: 18px 18px 20px;
+  gap: 14px;
+}
+
+html:not([data-theme="dark"]) .coding-body.code-first .stream-pane .ac-avatar.brand {
+  background: #4f6ef7 !important;
+  box-shadow: 0 5px 14px rgba(79, 110, 247, 0.18);
+}
+
+html:not([data-theme="dark"]) .coding-body.code-first .stream-pane .ac-bubble.assistant-naked {
+  padding: 10px 12px;
+  background: rgba(255, 255, 255, 0.88);
+  border: 1px solid rgba(15, 23, 42, 0.07);
+  border-radius: 10px;
+  color: #1e293b;
+  box-shadow: 0 8px 22px rgba(15, 23, 42, 0.035);
+}
+
+html:not([data-theme="dark"]) .coding-body.code-first .stream-pane .ac-bubble.user-bubble {
+  background: #eaf0ff;
+  border: 1px solid rgba(79, 110, 247, 0.16);
+  color: #1e293b;
+}
+
+html:not([data-theme="dark"]) .coding-body.code-first .chat-input-bar {
+  padding: 12px 16px 15px;
+  border-top-color: rgba(15, 23, 42, 0.08);
+  background: linear-gradient(180deg, rgba(247, 249, 253, 0), #f8fafc 24%);
+}
+
+html:not([data-theme="dark"]) .coding-body.code-first .coding-model-select {
+  background: #f8fafc;
+  border-color: rgba(15, 23, 42, 0.08);
+  color: #64748b;
 }
 
 html[data-theme="dark"] .coding-page,

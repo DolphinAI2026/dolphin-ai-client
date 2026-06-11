@@ -2237,6 +2237,50 @@ async def patch_application_default_mode(
     return {"application_id": app.id, "default_mode": app.default_mode}
 
 
+@router.post("/{application_id}/git-project/ensure")
+async def ensure_application_git_project(
+    application_id: int,
+    ctx: Annotated[AuthContext, Depends(get_auth_context)],
+    db: Annotated[AsyncSession, Depends(get_db)],
+):
+    """确保老应用也有 Project，供 Project 级 Git/GitHub 连接复用。"""
+    app = (await db.execute(
+        select(Application).where(
+            Application.id == application_id,
+            Application.tenant_id == ctx.tenant_id,
+        )
+    )).scalar_one_or_none()
+    if not app:
+        raise HTTPException(404, "应用不存在")
+
+    if app.project_id:
+        await require_project_access(
+            db,
+            project_id=app.project_id,
+            user_id=ctx.user.id,
+            tenant_id=ctx.tenant_id,
+            minimum_role="member",
+        )
+        return {"application_id": app.id, "project_id": app.project_id, "created": False}
+
+    if app.user_id != ctx.user.id and app.created_by != ctx.user.id:
+        raise HTTPException(403, "无权为该应用创建 Git 项目")
+
+    project = Project(
+        name=app.app_name or app.app_code or f"应用 {app.id}",
+        description=f"应用「{app.app_name or app.app_code or app.id}」的 Git/GitHub 集成项目",
+        user_id=ctx.user.id,
+        tenant_id=ctx.tenant_id,
+    )
+    db.add(project)
+    await db.flush()
+    db.add(ProjectMember(project_id=project.id, user_id=ctx.user.id, role="owner"))
+    app.project_id = project.id
+    await db.commit()
+    await db.refresh(app)
+    return {"application_id": app.id, "project_id": app.project_id, "created": True}
+
+
 # ─────────────────────── App ↔ AI Chat session 绑定 ───────────────────────
 
 

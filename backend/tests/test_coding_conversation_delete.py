@@ -24,7 +24,12 @@ from sqlalchemy import select
 from app.deps import AuthContext
 from app.models import Conversation, Message, User
 from app.models.tenant import Tenant
-from app.routes.coding import delete_coding_conversation
+from app.routes.coding import (
+    delete_coding_conversation,
+    get_coding_conversation_workspace,
+    get_coding_messages,
+    router,
+)
 
 
 # ---------------------------------------------------------------------------
@@ -91,6 +96,33 @@ async def test_delete_conv_with_workspace_removes_conv_and_calls_delete_ws(db_se
         await db_session.execute(select(Conversation).where(Conversation.id == conv.id))
     ).scalar_one_or_none()
     assert remaining is None
+
+
+@pytest.mark.asyncio
+async def test_delete_one_of_shared_workspace_conversations_keeps_workspace(db_session):
+    """一个工作区存在多个 coding 会话时,删除其中一个不应删除工作区目录。"""
+    ctx, conv = await _seed(db_session, username="del_shared_ws_user", workspace_id="ws-shared")
+    sibling = Conversation(
+        user_id=conv.user_id,
+        tenant_id=conv.tenant_id,
+        title="同工作区的另一个会话",
+        agent_type="coding",
+        workspace_id="ws-shared",
+    )
+    db_session.add(sibling)
+    await db_session.commit()
+
+    mock_delete_ws = AsyncMock()
+    with patch("app.routes.coding.workspace_mgr.delete_workspace", mock_delete_ws):
+        result = await delete_coding_conversation(conv.id, ctx, db_session)
+
+    assert result == {"status": "ok"}
+    mock_delete_ws.assert_not_awaited()
+
+    remaining_sibling = (
+        await db_session.execute(select(Conversation).where(Conversation.id == sibling.id))
+    ).scalar_one_or_none()
+    assert remaining_sibling is not None
 
 
 # ---------------------------------------------------------------------------
@@ -219,3 +251,64 @@ async def test_delete_conv_also_deletes_messages(db_session):
         await db_session.execute(select(Message).where(Message.conversation_id == conv.id))
     ).scalar_one_or_none()
     assert remaining_msg is None
+
+
+@pytest.mark.asyncio
+async def test_get_coding_messages_requires_current_tenant(db_session):
+    """同一用户切租户后不能读取另一个租户的 coding 会话消息。"""
+    ctx, conv = await _seed(db_session, username="msg_tenant_user", workspace_id=None)
+    msg = Message(conversation_id=conv.id, role="user", content="tenant scoped")
+    db_session.add(msg)
+    await db_session.commit()
+
+    other_tenant = Tenant(tenant_name="t_msg_other", tenant_code="t_msg_other")
+    db_session.add(other_tenant)
+    await db_session.flush()
+    wrong_ctx = _ctx_for(ctx.user, other_tenant.id)
+
+    with pytest.raises(HTTPException) as exc_info:
+        await get_coding_messages(conv.id, wrong_ctx, db_session)
+    assert exc_info.value.status_code == 404
+
+
+@pytest.mark.asyncio
+async def test_get_coding_messages_rejects_non_coding_conversation(db_session):
+    """消息回放接口只服务 coding 会话，不能读取 builder 等其它 agent_type。"""
+    tenant = Tenant(tenant_name="t_msg_agent", tenant_code="t_msg_agent")
+    db_session.add(tenant)
+    await db_session.flush()
+    user = await _make_user(db_session, "msg_agent_user")
+    conv = Conversation(
+        user_id=user.id,
+        tenant_id=tenant.id,
+        title="Builder",
+        agent_type="builder",
+    )
+    db_session.add(conv)
+    await db_session.commit()
+    await db_session.refresh(conv)
+
+    with pytest.raises(HTTPException) as exc_info:
+        await get_coding_messages(conv.id, _ctx_for(user, tenant.id), db_session)
+    assert exc_info.value.status_code == 404
+
+
+def test_conversation_workspace_lookup_route_is_registered():
+    """前端依赖 /coding/v2/conversations/{id}/workspace 恢复工作区上下文。"""
+    paths = {route.path for route in router.routes}
+    assert "/coding/v2/conversations/{conversation_id}/workspace" in paths
+
+
+@pytest.mark.asyncio
+async def test_get_coding_conversation_workspace_returns_scoped_workspace(db_session):
+    ctx, conv = await _seed(db_session, username="conv_ws_user", workspace_id="ws-current")
+
+    out = await get_coding_conversation_workspace(conv.id, ctx, db_session)
+    assert out == {"conversation_id": conv.id, "workspace_id": "ws-current"}
+
+    other_tenant = Tenant(tenant_name="t_conv_ws_other", tenant_code="t_conv_ws_other")
+    db_session.add(other_tenant)
+    await db_session.flush()
+    with pytest.raises(HTTPException) as exc_info:
+        await get_coding_conversation_workspace(conv.id, _ctx_for(ctx.user, other_tenant.id), db_session)
+    assert exc_info.value.status_code == 404

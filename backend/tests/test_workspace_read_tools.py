@@ -35,6 +35,15 @@ def test_read_file_ok_binary_missing_and_escape(ws):
     assert execute_workspace_tool(ws, "read_workspace_file", {"file_path": "../../etc/passwd"}).startswith("Error:")
 
 
+def test_read_file_rejects_sibling_prefix_escape(ws):
+    """`ws` 与 `ws-other` 这种同名前缀目录不能靠字符串 startswith 放行。"""
+    sibling = ws.parent / f"{ws.name}-other"
+    sibling.mkdir()
+    (sibling / "secret.txt").write_text("secret", encoding="utf-8")
+    out = execute_workspace_tool(ws, "read_workspace_file", {"file_path": f"../{sibling.name}/secret.txt"})
+    assert out.startswith("Error: 文件路径越界")
+
+
 def test_read_file_truncates_long_content(ws):
     (ws / "big.txt").write_text("x" * 9000, encoding="utf-8")
     out = read_workspace_file(ws, "big.txt")

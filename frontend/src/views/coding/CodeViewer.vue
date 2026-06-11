@@ -45,7 +45,7 @@
         </div>
       </template>
       <FileCard
-        v-else-if="diff"
+        v-else-if="diff && hasInlineDiff"
         action="edit"
         :file-name="filePath || ''"
         :file-content="diff.fileContent"
@@ -234,6 +234,7 @@ const fileIcon = computed(() => {
   if (['json', 'yaml', 'yml', 'config'].includes(ext)) return 'settings'
   return 'file'
 })
+const hasInlineDiff = computed(() => !!(props.diff?.fileContent || props.diff?.oldContent))
 
 async function load() {
   html.value = ''
@@ -242,7 +243,7 @@ async function load() {
   binaryHint.value = '二进制文件，不支持预览'
   decompiled.value = false
   decompiler.value = ''
-  if ((props.diff && !props.change) || !props.filePath || !props.wsId) return
+  if ((hasInlineDiff.value && !props.change) || !props.filePath || !props.wsId) return
   // 已知二进制扩展名直接走下载面板,不去拉文本(避免 utf-8 解码报错)
   if (isBinaryExt.value) { binary.value = true; return }
   loading.value = true
@@ -308,18 +309,19 @@ watch(
   height: 100%;
   min-width: 0;
   overflow: hidden;
-  background: var(--bg, #fff);
+  background: var(--bg, #ffffff);
 }
 .cv-head {
   display: flex;
   align-items: center;
   gap: 7px;
   flex: none;
-  padding: 8px 14px;
+  min-height: 44px;
+  padding: 9px 16px;
   border-bottom: 1px solid var(--line, rgba(0, 0, 0, 0.07));
-  background: var(--bg-sub, var(--bg, #fff));
+  background: linear-gradient(180deg, var(--bg, #ffffff) 0%, var(--bg-sub, #f8fafc) 100%);
 }
-.cv-head-icon { flex: none; color: var(--fg-faint, #999); }
+.cv-head-icon { flex: none; color: var(--fg-dim, #64748b); }
 .cv-path {
   display: inline-flex;
   align-items: baseline;
@@ -331,14 +333,14 @@ watch(
 }
 /* 目录段从左侧省略(direction:rtl 截断技巧, &lrm; 防斜杠跳位), 文件名永不截断 */
 .cv-path-dir {
-  color: var(--fg-faint, #aaa);
+  color: var(--fg-faint, #94a3b8);
   flex: 0 1 auto;
   min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
   direction: rtl;
 }
-.cv-path-name { color: var(--fg, #222); font-weight: 500; flex: none; }
+.cv-path-name { color: var(--fg, #172033); font-weight: 650; flex: none; }
 .cv-badge {
   flex: none;
   font-size: var(--fs-xs, 11px);
@@ -367,8 +369,9 @@ watch(
   margin-left: auto;
   display: inline-flex;
   border: 1px solid var(--line, rgba(0, 0, 0, 0.1));
-  border-radius: var(--r-sm, 6px);
+  border-radius: var(--r-md, 8px);
   overflow: hidden;
+  background: var(--bg, #ffffff);
 }
 .cv-toggle-btn {
   padding: 2px 10px;
@@ -381,12 +384,18 @@ watch(
 }
 .cv-toggle-btn + .cv-toggle-btn { border-left: 1px solid var(--line, rgba(0, 0, 0, 0.1)); }
 .cv-toggle-btn.active {
-  background: var(--brand-soft, rgba(99, 102, 241, 0.1));
+  background: var(--brand-soft, rgba(79, 110, 247, 0.10));
   color: var(--brand-ink, var(--brand, #4f46e5));
-  font-weight: 500;
+  font-weight: 650;
 }
 .cv-toggle-btn:hover:not(.active) { background: var(--bg-hover, rgba(0, 0, 0, 0.04)); }
-.cv-body { flex: 1; min-height: 0; min-width: 0; overflow: auto; }
+.cv-body {
+  flex: 1;
+  min-height: 0;
+  min-width: 0;
+  overflow: auto;
+  background: var(--bg, #ffffff);
+}
 .cv-quote-btn {
   position: fixed;
   z-index: 30;
@@ -403,13 +412,21 @@ watch(
   transition: background 0.12s var(--ease, ease);
 }
 .cv-quote-btn:hover { background: var(--brand-soft, rgba(99, 102, 241, 0.1)); }
-.cv-code { padding: 6px 0 14px; width: max-content; min-width: 100%; }
+.cv-body :deep(.msg-file-card) {
+  margin: 12px;
+  border-color: var(--line, rgba(15, 23, 42, 0.08));
+  box-shadow: 0 8px 22px rgba(15, 23, 42, 0.04);
+}
+.cv-code { padding: 10px 0 18px; width: max-content; min-width: 100%; }
 .cv-code :deep(.shiki) { background: transparent !important; margin: 0; }
-.cv-code :deep(.shiki code) { counter-reset: ln; display: block; font-family: var(--font-mono, monospace); font-size: 12.5px; line-height: 1.45; }
+.cv-code :deep(.shiki code) { counter-reset: ln; display: block; font-family: var(--font-mono, monospace); font-size: 12.5px; line-height: 1.52; }
 .cv-code :deep(.shiki .line) {
   display: block;
   white-space: pre;
   padding-right: 16px;
+}
+.cv-code :deep(.shiki .line:hover) {
+  background: var(--bg-hover, rgba(79, 110, 247, 0.045));
 }
 /* 行号 = 固定左侧 gutter(sticky),横向滚动时不跟着滚走(对标 Codex/VS Code) */
 .cv-code :deep(.shiki .line)::before {
@@ -423,23 +440,35 @@ watch(
   margin-right: 1.1em;
   padding-right: 0.7em;
   text-align: right;
-  color: var(--fg-faint, #bbb);
-  background: var(--bg, #fff);
+  color: var(--fg-faint, #c0cad8);
+  background: var(--bg, #ffffff);
   user-select: none;
 }
-.cv-code :deep(.shiki .line:hover)::before { color: var(--fg-dim, #888); }
+.cv-code :deep(.shiki .line:hover)::before {
+  color: var(--fg-dim, #718096);
+  background: var(--bg-hover, #f5f8fd);
+}
 .cv-state {
   display: flex;
   flex-direction: column;
   align-items: center;
   justify-content: center;
-  gap: 10px;
+  gap: 12px;
   height: 100%;
-  color: var(--fg-faint, #aaa);
+  color: var(--fg-dim, #64748b);
   font-size: var(--fs-sm, 13px);
 }
-.cv-empty :deep(.app-icon) { opacity: 0.5; }
-.cv-binary :deep(.app-icon) { opacity: 0.6; }
+.cv-empty :deep(.app-icon),
+.cv-binary :deep(.app-icon) {
+  width: 46px;
+  height: 46px;
+  padding: 11px;
+  box-sizing: border-box;
+  border-radius: 12px;
+  background: var(--bg-sub, #f1f5fb);
+  color: var(--fg-dim, #64748b);
+  opacity: 1;
+}
 .cv-binary-name { color: var(--fg, #333); font-weight: 500; font-family: var(--font-mono, monospace); font-size: var(--fs-sm, 13px); }
 .cv-binary-hint { font-size: var(--fs-xs, 12px); }
 .cv-download {

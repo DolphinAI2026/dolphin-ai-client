@@ -40,4 +40,24 @@ describe('collectChangedFiles', () => {
     expect([...changed.keys()]).toEqual(['src/api/a.ts'])
     expect(lastChangedFile).toBe('src/api/a.ts')
   })
+
+  it('清理文件名里的行数展示后缀', () => {
+    const { changed, lastChangedFile } = collectChangedFiles([
+      {
+        type: 'file_edit',
+        fileName: 'src/service/LegacyQueryService.java (249 lines)',
+        fileContent: 'A',
+      },
+      {
+        type: 'file_edit',
+        fileName: 'src/service/LegacyQueryController.java (12 行)',
+        fileContent: 'B',
+      },
+    ])
+    expect([...changed.keys()]).toEqual([
+      'src/service/LegacyQueryService.java',
+      'src/service/LegacyQueryController.java',
+    ])
+    expect(lastChangedFile).toBe('src/service/LegacyQueryController.java')
+  })
 })

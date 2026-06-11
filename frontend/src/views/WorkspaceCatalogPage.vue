@@ -1,134 +1,181 @@
 <template>
   <BuilderFrame :breadcrumbs="[{ label: '自开发资产库' }]">
-    <div class="catalog-main">
-      <section class="catalog-header" aria-label="自开发资产库">
-        <div>
-          <h1>自开发资产库</h1>
-          <p>组件、页面、后端接口</p>
+    <main class="catalog-page builder-page">
+      <section class="catalog-header page-head" aria-label="自开发资产库">
+        <div class="catalog-title-block">
+          <h1 class="page-title">自开发资产库</h1>
+          <p class="page-subtitle">统一查看代码工作区、组件包和后端接口资产。</p>
+        </div>
+
+        <div v-if="!loading && visibleWorkspaces.length" class="catalog-summary" aria-label="资产概览">
+          <div v-for="item in headerStats" :key="item.label" class="catalog-summary-item">
+            <span>{{ item.label }}</span>
+            <strong>{{ item.value }}</strong>
+          </div>
         </div>
       </section>
 
       <section class="catalog-toolbar" aria-label="资产筛选">
-        <div class="catalog-filter-bar">
-          <div class="filter-tabs">
+        <div class="catalog-tabs" role="tablist" aria-label="资产类型">
+          <button
+            v-for="tab in tabs"
+            :key="tab.value"
+            class="catalog-tab"
+            :class="{ active: activeTab === tab.value }"
+            type="button"
+            role="tab"
+            :aria-selected="activeTab === tab.value"
+            @click="activeTab = tab.value"
+          >
+            <span>{{ tab.label }}</span>
+            <span v-if="tabCounts[tab.value]" class="catalog-tab-count">{{ tabCounts[tab.value] }}</span>
+          </button>
+        </div>
+
+        <div class="catalog-toolbar-right">
+          <el-input v-model="searchQ" placeholder="搜资产名 / 包名 / 应用" clearable size="small" class="catalog-search" />
+          <el-select v-model="statusFilter" size="small" class="catalog-select">
+            <el-option v-for="o in statusOptions" :key="o.value" :label="o.label" :value="o.value" />
+          </el-select>
+          <el-select
+            v-if="!appId && appOptions.length"
+            v-model="appFilter"
+            size="small"
+            class="catalog-select"
+            clearable
+            placeholder="全部应用"
+          >
+            <el-option v-for="o in appOptions" :key="o.value" :label="o.label" :value="o.value" />
+          </el-select>
+
+          <div class="catalog-view-toggle" aria-label="视图切换">
             <button
-              v-for="tab in tabs"
-              :key="tab.value"
-              :class="['filter-tab', { active: activeTab === tab.value }]"
-              @click="activeTab = tab.value"
+              class="catalog-view-btn"
+              :class="{ active: viewMode === 'list' }"
+              type="button"
+              title="列表视图"
+              @click="viewMode = 'list'"
             >
-              {{ tab.label }}
-              <span class="tab-count" v-if="tabCounts[tab.value]">{{ tabCounts[tab.value] }}</span>
-            </button>
-          </div>
-          <div class="catalog-query">
-            <el-input v-model="searchQ" placeholder="搜名称 / 包名 / 应用" clearable size="small" class="query-search" />
-            <el-select v-model="statusFilter" size="small" class="query-select">
-              <el-option v-for="o in statusOptions" :key="o.value" :label="o.label" :value="o.value" />
-            </el-select>
-            <el-select v-if="!appId && appOptions.length" v-model="appFilter" size="small" class="query-select" clearable placeholder="全部应用">
-              <el-option v-for="o in appOptions" :key="o.value" :label="o.label" :value="o.value" />
-            </el-select>
-          </div>
-          <div class="view-toggle">
-            <button :class="['toggle-btn', { active: viewMode === 'list' }]" @click="viewMode = 'list'" title="行视图">
               <el-icon><List /></el-icon>
             </button>
-            <button :class="['toggle-btn', { active: viewMode === 'grid' }]" @click="viewMode = 'grid'" title="卡片视图">
+            <button
+              class="catalog-view-btn"
+              :class="{ active: viewMode === 'grid' }"
+              type="button"
+              title="卡片视图"
+              @click="viewMode = 'grid'"
+            >
               <el-icon><Grid /></el-icon>
             </button>
           </div>
         </div>
       </section>
 
-      <div class="catalog-content" :class="viewMode">
-        <div v-if="loading" class="empty-state">加载中...</div>
-        <div v-else-if="filteredWorkspaces.length === 0" class="empty-state">
-          还没有自开发资产
+      <section class="catalog-content" :class="`is-${viewMode}`">
+        <div v-if="loading" class="catalog-state">
+          <SkeletonCard :lines="3" with-avatar with-footer />
+        </div>
+        <div v-else-if="filteredWorkspaces.length === 0" class="catalog-state">
+          <EmptyState
+            :title="searchQ || statusFilter !== 'all' || appFilter ? '没有匹配的自开发资产' : '暂无自开发资产'"
+            :desc="searchQ || statusFilter !== 'all' || appFilter ? '调整筛选条件后再试。' : '从 AI Coding 生成组件、页面或后端接口后，会在这里统一管理。'"
+            :variant="searchQ || statusFilter !== 'all' || appFilter ? 'filtered' : 'first'"
+          >
+            <template #icon>
+              <AppIcon name="coding" :size="22" />
+            </template>
+          </EmptyState>
         </div>
 
-        <template v-else-if="viewMode === 'grid'">
+        <div v-else-if="viewMode === 'list'" class="catalog-table">
+          <div class="catalog-table-head">
+            <span>资产</span>
+            <span>类型</span>
+            <span>状态</span>
+            <span>所属应用</span>
+            <span>更新</span>
+            <span aria-hidden="true"></span>
+          </div>
+
+          <div
+            v-for="ws in pagedWorkspaces"
+            :key="ws.id"
+            class="catalog-row"
+            role="button"
+            tabindex="0"
+            @click="openWorkspace(ws)"
+            @keyup.enter="openWorkspace(ws)"
+          >
+            <div class="catalog-row-asset">
+              <span class="asset-avatar" :style="workspaceAccentStyle(ws)">{{ workspaceInitial(ws) }}</span>
+              <span class="catalog-row-main">
+                <strong>{{ workspaceDisplayName(ws) }}</strong>
+                <span class="catalog-row-meta">
+                  <code>{{ workspaceCodeName(ws) || ws.project_name }}</code>
+                </span>
+              </span>
+            </div>
+
+            <div class="catalog-row-type">
+              <span class="catalog-type-pill" :data-kind="workspaceGroupKey(ws.project_type)">
+                <span class="catalog-type-dot" aria-hidden="true"></span>
+                {{ workspaceGroupLabel(ws.project_type) }}
+              </span>
+            </div>
+            <div class="catalog-row-status">
+              <BaseBadge :variant="workspaceStatusVariant(ws.status)" size="sm">{{ workspaceStatusLabel(ws.status) }}</BaseBadge>
+            </div>
+            <div class="catalog-row-app">{{ workspaceAppName(ws) || '-' }}</div>
+            <div class="catalog-row-updated">{{ workspaceUpdatedLabel(ws) }}</div>
+            <div class="catalog-row-actions" @click.stop>
+              <button class="catalog-mini-action primary" type="button" @click="openWorkspace(ws)">
+                <AppIcon name="coding" :size="13" />
+                <span>打开</span>
+              </button>
+              <button class="catalog-mini-action" type="button" @click="downloadWorkspace(ws, 'src')">
+                <AppIcon name="download" :size="13" />
+                <span>源码</span>
+              </button>
+            </div>
+          </div>
+        </div>
+
+        <div v-else class="catalog-card-grid">
           <article
             v-for="ws in pagedWorkspaces"
             :key="ws.id"
-            class="grid-card"
+            class="catalog-card"
             @click="openWorkspace(ws)"
           >
-            <div class="grid-card-top">
-              <div class="grid-card-main">
-                <div class="grid-card-copy">
-                  <h3 class="grid-card-name">{{ workspaceDisplayName(ws) }}</h3>
-                  <div class="grid-card-meta">
-                    <span v-if="workspaceCodeName(ws)" class="card-code">{{ workspaceCodeName(ws) }}</span>
-                  </div>
-                </div>
-              </div>
-              <div class="grid-card-badges">
-                <span v-if="workspaceAppName(ws)" class="app-badge">应用：{{ workspaceAppName(ws) }}</span>
-                <span class="source-badge">{{ workspaceGroupLabel(ws.project_type) }}</span>
-                <span class="card-status">{{ workspaceStatusLabel(ws.status) }}</span>
-              </div>
+            <div class="catalog-card-top">
+              <span class="asset-avatar large" :style="workspaceAccentStyle(ws)">{{ workspaceInitial(ws) }}</span>
+              <BaseBadge :variant="workspaceStatusVariant(ws.status)" size="sm">{{ workspaceStatusLabel(ws.status) }}</BaseBadge>
             </div>
-            <div class="grid-card-footer">
-              <div class="grid-card-stats">
-                <span>文件类型：{{ workspaceGroupLabel(ws.project_type) }}</span>
-                <span>包名：{{ workspaceCodeName(ws) || ws.project_name }}</span>
-              </div>
-              <div class="grid-card-actions" @click.stop>
-                <button class="action-btn primary" @click.stop="openWorkspace(ws)" title="打开代码工作区">
-                  <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polygon points="5 3 19 12 5 21 5 3"/></svg>
-                </button>
-                <button :class="['action-btn', { 'is-loading': uploadingWsId === ws.id }]" @click.stop="uploadWorkspace(ws)" :disabled="uploadingWsId === ws.id" :title="uploadingWsId === ws.id ? '上传中...' : '上传组件包'">
-                  <svg v-if="uploadingWsId !== ws.id" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg>
-                  <svg v-else width="13" height="13" class="spin" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="12" cy="12" r="9" stroke-dasharray="42 15"/></svg>
-                </button>
-                <button class="action-btn" @click.stop="downloadWorkspace(ws, 'src')" title="下载源码">
-                  <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
-                </button>
-              </div>
+            <h2>{{ workspaceDisplayName(ws) }}</h2>
+            <div class="catalog-card-code">
+              <code>{{ workspaceCodeName(ws) || ws.project_name }}</code>
+              <BaseTag :tone="workspaceGroupKey(ws.project_type) === 'backend' ? 'brand' : 'neutral'">
+                {{ workspaceGroupLabel(ws.project_type) }}
+              </BaseTag>
+              <span>{{ workspaceUpdatedLabel(ws) }}</span>
+            </div>
+            <div class="catalog-card-meta">
+              <span v-if="workspaceAppName(ws)">所属应用：{{ workspaceAppName(ws) }}</span>
+              <span v-else>未绑定应用</span>
+            </div>
+            <div class="catalog-card-actions" @click.stop>
+              <button class="catalog-mini-action primary" type="button" @click="openWorkspace(ws)">
+                <AppIcon name="coding" :size="13" />
+                <span>打开</span>
+              </button>
+              <button class="catalog-mini-action" type="button" @click="downloadWorkspace(ws, 'src')">
+                <AppIcon name="download" :size="13" />
+                <span>源码</span>
+              </button>
             </div>
           </article>
-        </template>
-
-        <template v-else>
-          <el-table :data="pagedWorkspaces" stripe class="ws-table" @row-click="(row) => openWorkspace(row)">
-            <el-table-column label="名称" min-width="170">
-              <template #default="{ row }"><span class="ws-table-name">{{ workspaceDisplayName(row) }}</span></template>
-            </el-table-column>
-            <el-table-column label="包名" min-width="150">
-              <template #default="{ row }">{{ workspaceCodeName(row) || row.project_name }}</template>
-            </el-table-column>
-            <el-table-column label="类型" width="110">
-              <template #default="{ row }">{{ workspaceGroupLabel(row.project_type) }}</template>
-            </el-table-column>
-            <el-table-column label="所属应用" min-width="130">
-              <template #default="{ row }">{{ workspaceAppName(row) || '—' }}</template>
-            </el-table-column>
-            <el-table-column label="状态" width="92">
-              <template #default="{ row }">{{ workspaceStatusLabel(row.status) }}</template>
-            </el-table-column>
-            <el-table-column label="更新时间" width="150">
-              <template #default="{ row }">{{ formatTime(row.updated_at) }}</template>
-            </el-table-column>
-            <el-table-column label="操作" width="132" fixed="right">
-              <template #default="{ row }">
-                <div class="ws-table-actions" @click.stop>
-                  <button class="action-btn primary" @click.stop="openWorkspace(row)" title="打开代码工作区">
-                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polygon points="5 3 19 12 5 21 5 3"/></svg>
-                  </button>
-                  <button :class="['action-btn', { 'is-loading': uploadingWsId === row.id }]" @click.stop="uploadWorkspace(row)" :disabled="uploadingWsId === row.id" :title="uploadingWsId === row.id ? '上传中...' : '上传组件包'">
-                    <svg v-if="uploadingWsId !== row.id" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg>
-                    <svg v-else width="14" height="14" class="spin" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="12" cy="12" r="9" stroke-dasharray="42 15"/></svg>
-                  </button>
-                  <button class="action-btn" @click.stop="downloadWorkspace(row, 'src')" title="下载源码">
-                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
-                  </button>
-                </div>
-              </template>
-            </el-table-column>
-          </el-table>
-        </template>
-      </div>
+        </div>
+      </section>
 
       <div v-if="!loading && filteredWorkspaces.length > pageSize" class="catalog-pagination">
         <el-pagination
@@ -140,12 +187,10 @@
           background
         />
       </div>
-    </div>
+    </main>
   </BuilderFrame>
 
-  <EnvSelectModal v-model="showEnvModal" @selected="onEnvSelected" />
-
-  <!-- 全屏 IDE 抽屉：点击工作区直接进 code-server 看/改代码（不再跳 Coding 工作台） -->
+  <!-- 点击工作区进入原生代码工作区。 -->
 </template>
 
 <script setup lang="ts">
@@ -153,18 +198,21 @@ import { computed, onMounted, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { Grid, List } from '@element-plus/icons-vue'
 import { ElMessage } from 'element-plus'
+import AppIcon from '@/components/common/AppIcon.vue'
 import BuilderFrame from '@/components/BuilderFrame.vue'
-import EnvSelectModal from '@/components/EnvSelectModal.vue'
+import EmptyState from '@/components/states/EmptyState.vue'
+import SkeletonCard from '@/components/states/SkeletonCard.vue'
+import BaseBadge from '@/components/BaseBadge.vue'
+import BaseTag from '@/components/BaseTag.vue'
 import { codingApi, type WorkspaceInfo } from '@/api/coding'
 import { applicationApi } from '@/api/application'
-import { platformEnvApi } from '@/api/platformEnv'
 
 const route = useRoute()
 const router = useRouter()
 const loading = ref(true)
 const workspaces = ref<WorkspaceInfo[]>([])
 const activeTab = ref('all')
-const viewMode = ref<'grid' | 'list'>('grid')
+const viewMode = ref<'grid' | 'list'>('list')
 const appId = computed(() => String(route.query.app_id || ''))
 const appNameMap = ref<Record<number, string>>({})
 
@@ -180,11 +228,6 @@ const statusOptions = [
   { label: '生成中', value: 'building' },
   { label: '本地', value: 'local' },
 ]
-
-// 上传组件包相关状态
-const uploadingWsId = ref<string | null>(null)
-const showEnvModal = ref(false)
-const pendingUploadWs = ref<WorkspaceInfo | null>(null)
 
 const groupMap: Record<string, { key: string; label: string }> = {
   'form-component': { key: 'component', label: '组件' },
@@ -204,6 +247,8 @@ const tabs = [
   { label: '页面', value: 'page' },
   { label: '后端接口', value: 'backend' },
 ]
+
+const ASSET_ACCENTS = ['#1D4ED8', '#047857', '#B45309', '#0E7490', '#C2410C', '#7C3AED']
 
 // URL ?app_id=N 限定到具体应用 (从应用上下文跳过来的)；否则全部
 const visibleWorkspaces = computed(() => {
@@ -259,6 +304,23 @@ const tabCounts = computed(() => {
   return counts
 })
 
+const latestWorkspaceUpdatedLabel = computed(() => {
+  const latest = visibleWorkspaces.value
+    .map(ws => new Date(ws.updated_at || '').getTime())
+    .filter(Number.isFinite)
+    .sort((a, b) => b - a)[0]
+  return latest ? relativeTime(new Date(latest).toISOString()) : '-'
+})
+
+const headerStats = computed(() => [
+  { label: '资产', value: String(visibleWorkspaces.value.length) },
+  {
+    label: '已生成',
+    value: String(visibleWorkspaces.value.filter(ws => workspaceStatusKey(ws.status) === 'ready').length),
+  },
+  { label: '最近更新', value: latestWorkspaceUpdatedLabel.value },
+])
+
 function workspaceAppName(ws: WorkspaceInfo): string {
   if (!ws.project_id) return ''
   return appNameMap.value[ws.project_id] || `应用 #${ws.project_id}`
@@ -277,10 +339,20 @@ function workspaceGroupLabel(projectType: string) {
   return groupMap[projectType]?.label || '其他'
 }
 
+function workspaceGroupKey(projectType: string) {
+  return groupMap[projectType]?.key || 'other'
+}
+
 function workspaceStatusLabel(status: string) {
   if (status === 'ready') return '已生成'
   if (status === 'building') return '生成中'
   return '本地'
+}
+
+function workspaceStatusVariant(status: string): 'success' | 'warn' | 'error' | 'info' | 'neutral' {
+  if (status === 'ready') return 'success'
+  if (status === 'building') return 'warn'
+  return 'neutral'
 }
 
 function workspaceStatusKey(status: string) {
@@ -297,6 +369,43 @@ function formatTime(iso?: string) {
   return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())} ${p(d.getHours())}:${p(d.getMinutes())}`
 }
 
+function workspaceUpdatedLabel(ws: WorkspaceInfo) {
+  return relativeTime(ws.updated_at)
+}
+
+function relativeTime(value?: string | null) {
+  if (!value) return '-'
+  const time = new Date(value).getTime()
+  if (!Number.isFinite(time)) return formatTime(value)
+  const diffMs = Date.now() - time
+  if (diffMs < 60_000) return '刚刚'
+  const minutes = Math.floor(diffMs / 60_000)
+  if (minutes < 60) return `${minutes} 分钟前`
+  const hours = Math.floor(minutes / 60)
+  if (hours < 24) return `${hours} 小时前`
+  if (hours < 48) return '昨天'
+  const days = Math.floor(hours / 24)
+  if (days < 7) return `${days} 天前`
+  return String(value).slice(0, 10)
+}
+
+function nameHash(name: string): number {
+  let h = 0
+  for (let i = 0; i < name.length; i++) h = (h * 31 + name.charCodeAt(i)) >>> 0
+  return h
+}
+
+function workspaceInitial(ws: WorkspaceInfo) {
+  const source = workspaceDisplayName(ws) || workspaceCodeName(ws) || ws.project_name || 'C'
+  const first = Array.from(source).find(char => char.trim()) || 'C'
+  return /[a-z]/.test(first) ? first.toUpperCase() : first
+}
+
+function workspaceAccentStyle(ws: WorkspaceInfo) {
+  const seed = `${workspaceDisplayName(ws)}|${workspaceCodeName(ws)}|${ws.id}`
+  return { background: ASSET_ACCENTS[nameHash(seed) % ASSET_ACCENTS.length] }
+}
+
 function openWorkspace(ws: WorkspaceInfo) {
   // 打开原生代码工作区(CodingPage:文件树 + 代码查看器 + 对话),替代 code-server IDE 抽屉
   router.push({ path: '/coding', query: { workspace_id: ws.id } }).catch(() => {})
@@ -307,54 +416,6 @@ async function downloadWorkspace(ws: WorkspaceInfo, type: 'src' | 'dist') {
     await codingApi.downloadZip(ws.id, type)
   } catch (e: any) {
     ElMessage.error(e?.message || '下载失败')
-  }
-}
-
-async function uploadWorkspace(ws: WorkspaceInfo) {
-  uploadingWsId.value = ws.id
-
-  let envs: Awaited<ReturnType<typeof platformEnvApi.list>>
-  try {
-    envs = await platformEnvApi.list()
-  } catch {
-    ElMessage.error('获取平台环境失败')
-    uploadingWsId.value = null
-    return
-  }
-  const connectedEnvs = envs.filter(e => e.status === 'connected')
-
-  if (connectedEnvs.length === 0) {
-    ElMessage.warning('没有可用的平台环境，请先在环境管理中配置并连接平台')
-    uploadingWsId.value = null
-    return
-  }
-
-  if (connectedEnvs.length === 1) {
-    await doUpload(ws, connectedEnvs[0].id)
-  } else {
-    // 弹窗选择时先清 loading，由 doUpload 重新接管
-    uploadingWsId.value = null
-    pendingUploadWs.value = ws
-    showEnvModal.value = true
-  }
-}
-
-async function doUpload(ws: WorkspaceInfo, envId: number) {
-  uploadingWsId.value = ws.id
-  try {
-    await codingApi.uploadToPlatform(ws.id, envId)
-    ElMessage.success('上传成功')
-  } catch (e: any) {
-    ElMessage.error(e?.message || '上传失败')
-  } finally {
-    uploadingWsId.value = null
-  }
-}
-
-function onEnvSelected(envId: number) {
-  if (pendingUploadWs.value) {
-    doUpload(pendingUploadWs.value, envId)
-    pendingUploadWs.value = null
   }
 }
 
@@ -381,27 +442,18 @@ onMounted(async () => {
 </script>
 
 <style scoped>
-/* v3 redesign · 2026-05-20 — visual refresh only, template/script untouched.
-   v2 indigo-violet hex → v3 brand-blue token. 4-tier weights, 5-tier sizes,
-   r-/sh-/ease tokens, a11y rings. Status pill uses --ok-soft / --ok semantics. */
-
-.catalog-main {
-  flex: 1;
-  min-width: 0;
-  min-height: 0;
+.catalog-page {
   display: flex;
   flex-direction: column;
   gap: 14px;
   padding: 20px 28px 32px;
-  overflow-y: auto;
-  background: var(--bg-app);
 }
 
 .catalog-header {
-  min-height: 92px;
   display: flex;
   align-items: center;
   justify-content: space-between;
+  min-height: 92px;
   max-width: 1240px;
   width: 100%;
   box-sizing: border-box;
@@ -410,6 +462,10 @@ onMounted(async () => {
   border: 1px solid var(--line);
   border-radius: var(--r-3, 8px);
   background: var(--surface);
+}
+
+.catalog-title-block {
+  min-width: 0;
 }
 
 .catalog-header h1 {
@@ -425,435 +481,522 @@ onMounted(async () => {
   margin: 8px 0 0;
   color: var(--text-3);
   font-size: 13px;
+  line-height: 1.45;
+}
+
+.catalog-summary {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(86px, auto));
+  gap: 8px;
+  margin-left: auto;
+  flex-shrink: 0;
+}
+
+.catalog-summary-item {
+  min-width: 86px;
+  padding: 8px 10px;
+  border: 1px solid var(--line);
+  border-radius: var(--r-3, 8px);
+  background: color-mix(in srgb, var(--surface-2) 74%, var(--surface));
+  box-sizing: border-box;
+}
+
+.catalog-summary-item span,
+.catalog-summary-item strong {
+  display: block;
+  white-space: nowrap;
+}
+
+.catalog-summary-item span {
+  color: var(--text-3);
+  font-size: 11.5px;
+  line-height: 1.3;
+}
+
+.catalog-summary-item strong {
+  margin-top: 3px;
+  color: var(--text);
+  font-family: var(--font-mono);
+  font-size: 16px;
+  line-height: 1.2;
+  font-weight: var(--fw-semibold, 600);
 }
 
 .catalog-toolbar {
   max-width: 1240px;
   width: 100%;
-  box-sizing: border-box;
   margin: 0 auto 10px;
   display: flex;
   align-items: center;
+  justify-content: space-between;
+  gap: 14px;
+  padding: 8px 10px 8px 14px;
   border: 1px solid var(--line);
   border-radius: var(--r-3, 8px);
   background: var(--surface);
-  overflow: hidden;
+  box-sizing: border-box;
 }
 
-.catalog-filter-bar {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: var(--s-4);
-  padding: 8px 10px 8px 14px;
-  max-width: none;
-  margin: 0;
-  width: 100%;
-}
-
-.filter-tabs {
-  display: flex;
-  gap: var(--s-1);
-  flex-wrap: wrap;
-}
-
-.filter-tab {
-  background: transparent;
-  border: none;
-  min-height: 34px;
-  padding: 0 14px;
-  font-size: var(--t-body);
-  color: var(--text-3);
+.catalog-tabs {
   display: inline-flex;
   align-items: center;
-  gap: var(--s-2);
-  cursor: pointer;
-  border-radius: var(--r-3);
-  font-family: inherit;
-  transition: background 0.14s var(--ease), color 0.14s var(--ease);
-}
-
-.filter-tab:hover {
-  background: var(--surface-2);
-  color: var(--text);
-}
-
-.filter-tab.active {
-  background: var(--brand-soft);
-  color: var(--brand-text);
-  font-weight: var(--fw-semibold);
-}
-
-.filter-tab:focus-visible {
-  outline: 2px solid var(--line-focus);
-  outline-offset: 2px;
-}
-
-.tab-count {
-  font-size: var(--t-micro);
-  min-width: 20px;
-  padding: 0 7px;
-  border-radius: var(--r-full);
-  background: var(--brand-soft);
-  color: var(--text-3);
-  line-height: 20px;
-  text-align: center;
-}
-
-.filter-tab.active .tab-count {
-  background: var(--brand);
-  color: #fff;
-}
-
-.view-toggle {
-  display: flex;
   gap: 2px;
-  background: var(--surface-2);
-  border: 1px solid var(--line);
-  border-radius: var(--r-3);
-  padding: 2px;
+  border-bottom: 1px solid var(--line);
+  padding: 0;
+  background: transparent;
 }
 
-.toggle-btn {
-  width: 32px;
-  height: 28px;
-  border: none;
-  border-radius: var(--r-2);
-  background: none;
+.catalog-tab {
+  position: relative;
+  flex: 0 0 auto;
+  min-width: 58px;
+  height: 36px;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
   color: var(--text-3);
+  font: inherit;
+  font-size: 13px;
+  font-weight: var(--fw-medium, 500);
+  white-space: nowrap;
   cursor: pointer;
-  display: flex;
+  display: inline-flex;
   align-items: center;
   justify-content: center;
-  transition: background 0.14s var(--ease), color 0.14s var(--ease);
+  gap: 6px;
+  padding: 0 14px;
+  transition: color 0.14s var(--ease, cubic-bezier(0.2, 0.8, 0.2, 1));
 }
 
-.toggle-btn:hover {
+.catalog-tab:hover:not(.active) {
   color: var(--text);
 }
 
-.toggle-btn.active {
+.catalog-tab.active {
+  color: var(--brand);
+  font-weight: var(--fw-semibold, 600);
+}
+
+.catalog-tab.active::after {
+  content: '';
+  position: absolute;
+  left: 6px;
+  right: 6px;
+  bottom: -1px;
+  height: 2px;
+  background: var(--brand);
+  border-radius: 1px;
+}
+
+.catalog-tab-count {
+  min-width: 18px;
+  padding: 1px 6px;
+  border-radius: var(--r-full, 999px);
+  background: var(--surface-2);
+  color: var(--text-3);
+  font-family: var(--font-mono);
+  font-size: 11px;
+  line-height: 15px;
+}
+
+.catalog-tab.active .catalog-tab-count {
+  background: var(--brand-soft);
+  color: var(--brand);
+}
+
+.catalog-toolbar-right {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 10px;
+  flex-shrink: 0;
+}
+
+.catalog-search {
+  width: 220px;
+}
+
+.catalog-select {
+  width: 132px;
+}
+
+.catalog-view-toggle {
+  display: inline-flex;
+  align-items: center;
+  border: 1px solid var(--line);
+  border-radius: var(--r-3, 8px);
+  background: var(--surface-2);
+  padding: 2px;
+  flex-shrink: 0;
+}
+
+.catalog-view-btn {
+  width: 32px;
+  height: 28px;
+  border: 0;
+  border-radius: var(--r-2, 6px);
+  background: transparent;
+  color: var(--text-3);
+  display: grid;
+  place-items: center;
+  cursor: pointer;
+  transition: background 0.14s var(--ease, cubic-bezier(0.2, 0.8, 0.2, 1)),
+              color 0.14s var(--ease, cubic-bezier(0.2, 0.8, 0.2, 1));
+}
+
+.catalog-view-btn:hover:not(.active) {
+  color: var(--text);
+}
+
+.catalog-view-btn.active {
   background: var(--surface);
   color: var(--brand);
   box-shadow: var(--sh-1);
-}
-
-.toggle-btn:focus-visible {
-  outline: 2px solid var(--line-focus);
-  outline-offset: 2px;
 }
 
 .catalog-content {
-  flex: 0 0 auto;
-  overflow: visible;
   max-width: 1240px;
-  margin: 0 auto;
   width: 100%;
-  padding: 0;
+  margin: 0 auto;
 }
 
-.catalog-content.grid {
-  display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(286px, 1fr));
-  gap: 14px;
-  align-content: start;
-}
-
-.grid-card,
-.list-card {
-  border-radius: var(--r-5);
-  background: var(--surface);
-  border: 1px solid var(--line);
-  box-shadow: var(--sh-1);
-  cursor: pointer;
-  transition: background 0.18s var(--ease), border-color 0.18s var(--ease), box-shadow 0.18s var(--ease), transform 0.18s var(--ease);
-}
-
-.grid-card:hover,
-.list-card:hover {
-  background: var(--surface);
-  border-color: var(--brand-ring);
-  box-shadow: var(--sh-3);
-  transform: translateY(-2px);
-}
-
-.grid-card:focus-visible,
-.list-card:focus-visible {
-  outline: 2px solid var(--line-focus);
-  outline-offset: 2px;
-}
-
-.grid-card {
-  padding: 18px;
-  min-height: 0;
-  display: flex;
-  flex-direction: column;
-  gap: var(--s-2);
-}
-
-.grid-card-top,
-.card-header {
-  display: flex;
-  justify-content: space-between;
-  align-items: flex-start;
-  gap: 14px;
-}
-
-.grid-card-main {
-  min-width: 0;
-  flex: 1;
-}
-
-.grid-card-copy {
-  display: flex;
-  flex-direction: column;
-  gap: var(--s-1);
-  min-width: 0;
-}
-
-.grid-card-badges,
-.card-name-row {
-  display: flex;
-  align-items: center;
-  gap: var(--s-1);
-  flex-wrap: wrap;
-}
-
-.grid-card-badges {
-  justify-content: flex-end;
-  max-width: 120px;
-}
-
-.app-badge {
-  display: inline-flex;
-  align-items: center;
-  gap: 4px;
-  padding: 2px 8px;
-  font-size: var(--t-micro);
-  font-weight: var(--fw-medium);
-  background: var(--brand-soft);
-  color: var(--brand-text);
-  border: 1px solid var(--brand-ring);
-  border-radius: var(--r-full);
-  white-space: nowrap;
-  max-width: 200px;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-
-.source-badge,
-.card-status {
-  display: inline-flex;
-  align-items: center;
-  height: 22px;
-  padding: 0 var(--s-2);
-  border-radius: var(--r-full);
-  font-size: var(--t-micro);
-  font-weight: var(--fw-semibold);
-}
-
-.source-badge {
-  background: var(--surface-3);
-  color: var(--text-3);
-}
-
-.card-status {
-  background: var(--ok-soft);
-  color: var(--ok);
-}
-
-.grid-card-name,
-.card-name-row h3 {
-  margin: 0;
-  font-size: 15px;
-  line-height: 1.3;
-  color: var(--text);
-  font-weight: var(--fw-semibold);
-  word-break: break-word;
-}
-
-.grid-card-meta,
-.card-meta {
-  display: flex;
-  align-items: center;
-  gap: var(--s-2);
-  flex-wrap: wrap;
-  color: var(--text-3);
-  font-size: var(--t-micro);
-}
-
-.grid-card-footer {
-  margin-top: 2px;
-  padding-top: var(--s-2);
-  border-top: 1px solid var(--line);
-  display: flex;
-  align-items: flex-end;
-  justify-content: space-between;
-  gap: var(--s-3);
-}
-
-.card-code {
-  padding: 0 7px;
-  border-radius: var(--r-3);
-  background: var(--surface-2);
-  font-family: var(--font-mono);
-}
-
-.grid-card-stats,
-.card-stats {
-  display: flex;
-  flex-direction: column;
-  align-items: flex-start;
-  gap: var(--s-2);
-  color: var(--text-3);
-  font-size: var(--t-micro);
-}
-
-.grid-card-actions,
-.card-actions {
-  display: flex;
-  gap: var(--s-1);
-}
-
-.action-btn {
-  width: 32px;
-  height: 32px;
-  border-radius: var(--r-3);
-  border: 1px solid var(--line);
-  background: var(--surface);
-  color: var(--text-3);
-  cursor: pointer;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  transition: background 0.14s var(--ease), border-color 0.14s var(--ease), color 0.14s var(--ease);
-}
-
-.action-btn:hover {
-  background: var(--brand-soft);
-  border-color: var(--brand-ring);
-  color: var(--brand);
-}
-
-.action-btn.primary {
-  color: var(--brand);
-  border-color: var(--brand-ring);
-}
-
-.action-btn:focus-visible {
-  outline: 2px solid var(--line-focus);
-  outline-offset: 2px;
-}
-
-.action-btn:disabled,
-.action-btn.is-loading {
-  opacity: 0.6;
-  cursor: not-allowed;
-  pointer-events: none;
-}
-
-.spin {
-  animation: spin 1s linear infinite;
-}
-
-@keyframes spin {
-  from { transform: rotate(0deg); }
-  to { transform: rotate(360deg); }
-}
-
-.catalog-content.list {
-  display: flex;
-  flex-direction: column;
-  gap: 10px;
-}
-
-.list-card {
-  padding: 18px 20px;
-}
-
-.card-left,
-.card-info {
-  display: flex;
-  gap: 14px;
-  min-width: 0;
-}
-
-.card-info {
-  flex-direction: column;
-  gap: var(--s-2);
-}
-
-.empty-state {
-  grid-column: 1 / -1;
+.catalog-state {
   min-height: 340px;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  padding: 32px;
   border: 1px solid var(--line);
   border-radius: var(--r-4, 12px);
   background: var(--surface);
+  display: flex;
+  align-items: center;
+  justify-content: center;
   color: var(--text-3);
-  font-size: var(--t-body);
   text-align: center;
 }
 
-@media (max-width: 1200px) {
-  .catalog-content.grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+.catalog-table {
+  overflow: hidden;
+  border: 1px solid var(--line);
+  border-radius: var(--r-3, 8px);
+  background: var(--surface);
 }
 
-@media (max-width: 900px) {
-  .catalog-main {
-    padding: 18px 16px 28px;
-  }
-
-  .catalog-header {
-    min-height: 0;
-    padding: 18px;
-  }
-
-  .catalog-filter-bar {
-    align-items: flex-start;
-    flex-direction: column;
-    padding: 14px;
-  }
-
-  .catalog-content {
-    padding: 0 0 var(--s-4);
-  }
-
-  .catalog-content.grid {
-    grid-template-columns: 1fr;
-    gap: 14px;
-  }
-
-  .grid-card {
-    padding: 18px;
-    min-height: 0;
-  }
-
-  .grid-card-footer {
-    align-items: flex-start;
-    flex-direction: column;
-  }
-
-  .grid-card-name,
-  .card-name-row h3 {
-    font-size: 14px;
-  }
+.catalog-table-head,
+.catalog-row {
+  display: grid;
+  grid-template-columns:
+    minmax(250px, 1.45fr)
+    minmax(76px, 0.28fr)
+    minmax(74px, 0.26fr)
+    minmax(90px, 0.38fr)
+    minmax(82px, 0.3fr)
+    minmax(152px, 0.4fr);
+  align-items: center;
+  column-gap: 12px;
 }
 
-/* —— #4 资产库优化：查询栏 + 分页 + 表格视图 —— */
-.catalog-query {
+.catalog-table-head {
+  min-height: 36px;
+  padding: 0 16px;
+  border-bottom: 1px solid var(--line);
+  color: var(--text-3);
+  font-size: 12px;
+  font-weight: var(--fw-medium, 500);
+  background: var(--surface-2);
+}
+
+.catalog-row {
+  position: relative;
+  min-height: 58px;
+  padding: 8px 16px;
+  border-bottom: 1px solid var(--line);
+  color: var(--text);
+  cursor: pointer;
+  outline: none;
+  transition: background 0.14s var(--ease, cubic-bezier(0.2, 0.8, 0.2, 1));
+}
+
+.catalog-row:last-child {
+  border-bottom: 0;
+}
+
+.catalog-row:hover,
+.catalog-row:focus-visible {
+  background: color-mix(in srgb, var(--brand-soft) 28%, var(--surface));
+}
+
+.catalog-row::before {
+  content: '';
+  position: absolute;
+  left: 0;
+  top: 10px;
+  bottom: 10px;
+  width: 3px;
+  border-radius: 0 var(--r-full, 999px) var(--r-full, 999px) 0;
+  background: var(--brand);
+  opacity: 0;
+  transition: opacity 0.14s var(--ease, cubic-bezier(0.2, 0.8, 0.2, 1));
+}
+
+.catalog-row:hover::before,
+.catalog-row:focus-visible::before {
+  opacity: 1;
+}
+
+.catalog-row:focus-visible {
+  outline: 2px solid var(--line-focus, var(--brand-ring));
+  outline-offset: -2px;
+}
+
+.catalog-row-asset {
+  min-width: 0;
   display: flex;
   align-items: center;
-  gap: 8px;
-  flex: 1;
-  justify-content: flex-end;
-  min-width: 0;
+  gap: 10px;
 }
-.catalog-query .query-search { width: 220px; max-width: 40vw; }
-.catalog-query .query-select { width: 132px; }
+
+.asset-avatar {
+  width: 34px;
+  height: 34px;
+  flex: 0 0 auto;
+  border-radius: var(--r-3, 8px);
+  display: grid;
+  place-items: center;
+  background: var(--brand);
+  color: var(--text-inverse, #fff);
+  font-size: 12px;
+  font-weight: var(--fw-bold, 700);
+  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.18);
+}
+
+.asset-avatar.large {
+  width: 44px;
+  height: 44px;
+  border-radius: var(--r-3, 8px);
+  font-size: 18px;
+}
+
+.catalog-row-main {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.catalog-row-main strong,
+.catalog-card h2 {
+  min-width: 0;
+  color: var(--text);
+  font-weight: var(--fw-semibold, 600);
+  letter-spacing: 0;
+}
+
+.catalog-row-main strong {
+  font-size: 14px;
+  line-height: 1.2;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.catalog-row-meta,
+.catalog-card-code {
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  color: var(--text-3);
+  font-size: 11.5px;
+}
+
+.catalog-row-meta code,
+.catalog-card-code code {
+  display: inline-block;
+  max-width: min(100%, 220px);
+  border-radius: var(--r-1, 4px);
+  background: var(--surface-2);
+  color: var(--text-3);
+  padding: 2px 6px;
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+  line-height: 1.2;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  vertical-align: bottom;
+}
+
+.catalog-row-type,
+.catalog-row-app,
+.catalog-row-updated {
+  min-width: 0;
+  color: var(--text-3);
+  font-size: 12px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.catalog-type-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  height: 22px;
+  max-width: 100%;
+  padding: 0 8px;
+  border: 1px solid var(--line);
+  border-radius: var(--r-2, 6px);
+  background: var(--surface-2);
+  color: var(--text-2);
+  font-size: 11.5px;
+  font-weight: var(--fw-semibold, 600);
+  white-space: nowrap;
+}
+
+.catalog-type-pill[data-kind='backend'] {
+  border-color: var(--brand-ring);
+  background: var(--brand-soft);
+  color: var(--brand);
+}
+
+.catalog-type-dot {
+  width: 5px;
+  height: 5px;
+  border-radius: var(--r-full, 999px);
+  background: currentColor;
+  opacity: 0.72;
+  flex: 0 0 auto;
+}
+
+.catalog-row-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 7px;
+  flex-wrap: nowrap;
+}
+
+.catalog-card-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(286px, 1fr));
+  gap: 14px;
+}
+
+.catalog-card {
+  min-height: 194px;
+  border: 1px solid var(--line);
+  border-radius: var(--r-4, 12px);
+  background: var(--surface);
+  padding: 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  cursor: pointer;
+  box-shadow: var(--sh-1);
+  transition: border-color 0.14s var(--ease, cubic-bezier(0.2, 0.8, 0.2, 1)),
+              box-shadow 0.14s var(--ease, cubic-bezier(0.2, 0.8, 0.2, 1)),
+              transform 0.14s var(--ease, cubic-bezier(0.2, 0.8, 0.2, 1));
+}
+
+.catalog-card:hover {
+  border-color: var(--brand-ring);
+  box-shadow: var(--sh-2);
+  transform: translateY(-1px);
+}
+
+.catalog-card-top,
+.catalog-card-actions {
+  display: flex;
+  align-items: center;
+}
+
+.catalog-card-top {
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.catalog-card h2 {
+  margin: 2px 0 0;
+  font-size: 16px;
+  line-height: 1.35;
+}
+
+.catalog-card-code {
+  flex-wrap: wrap;
+}
+
+.catalog-card-code > span {
+  font-size: 12px;
+}
+
+.catalog-card-meta {
+  padding-top: 10px;
+  border-top: 1px solid var(--line);
+  color: var(--text-3);
+  font-size: 12px;
+}
+
+.catalog-card-actions {
+  margin-top: auto;
+  justify-content: flex-end;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.catalog-mini-action {
+  min-width: 62px;
+  height: 30px;
+  min-height: 30px;
+  border: 1px solid var(--line);
+  border-radius: var(--r-2, 6px);
+  background: var(--surface);
+  color: var(--text-2);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 5px;
+  padding: 0 10px;
+  box-sizing: border-box;
+  font-family: inherit;
+  font-size: 12px;
+  line-height: 1;
+  font-weight: var(--fw-medium, 500);
+  cursor: pointer;
+  white-space: nowrap;
+  transition: background 0.14s var(--ease, cubic-bezier(0.2, 0.8, 0.2, 1)),
+              border-color 0.14s var(--ease, cubic-bezier(0.2, 0.8, 0.2, 1)),
+              color 0.14s var(--ease, cubic-bezier(0.2, 0.8, 0.2, 1));
+}
+
+.catalog-mini-action:hover {
+  border-color: var(--brand-ring);
+  color: var(--brand);
+  background: var(--brand-soft);
+}
+
+.catalog-mini-action.primary {
+  min-width: 72px;
+  background: var(--brand);
+  border-color: var(--brand);
+  color: var(--text-inverse, #fff);
+}
+
+.catalog-mini-action.primary:hover {
+  background: var(--brand-hover);
+  border-color: var(--brand-hover);
+  color: var(--text-inverse, #fff);
+}
+
+.catalog-mini-action:disabled {
+  cursor: not-allowed;
+  opacity: 0.55;
+}
+
+.catalog-mini-action:disabled :deep(.app-icon) {
+  animation: catalog-spin 1s linear infinite;
+}
+
+@keyframes catalog-spin {
+  from { transform: rotate(0deg); }
+  to { transform: rotate(360deg); }
+}
 
 .catalog-pagination {
   display: flex;
@@ -862,113 +1005,119 @@ onMounted(async () => {
   width: 100%;
   box-sizing: border-box;
   margin: 0 auto;
-  padding: 6px 4px 4px;
+  padding: 16px 4px 4px;
 }
 
-.ws-table { width: 100%; cursor: pointer; }
-.ws-table-name { font-weight: var(--fw-semibold, 600); color: var(--text); }
-.ws-table-actions { display: flex; gap: 6px; }
+@media (max-width: 860px) {
+  .catalog-page {
+    padding: 18px 16px 28px;
+  }
 
-</style>
+  .catalog-header {
+    align-items: stretch;
+    flex-direction: column;
+    gap: 16px;
+    min-height: 176px;
+    padding: 18px;
+  }
 
-<style>
+  .catalog-header h1 {
+    font-size: 24px;
+    line-height: 1.18;
+  }
 
-/* v3 dark theme — all explicit colors swapped to v3 dark tokens.
-   The :root[data-theme="dark"] block in design-v3-tokens.css already remaps
-   --surface / --text / --brand etc, so most rules can use the same vars. */
+  .catalog-header p {
+    font-size: 12.5px;
+    line-height: 1.45;
+  }
 
-html[data-theme="dark"] .catalog-main {
-  background: var(--bg) !important;
-  color: var(--text) !important;
+  .catalog-summary {
+    width: 100%;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    margin-left: 0;
+  }
+
+  .catalog-summary-item {
+    min-width: 0;
+    padding: 8px;
+  }
+
+  .catalog-summary-item strong {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    font-size: 13px;
+  }
+
+  .catalog-toolbar {
+    align-items: stretch;
+    flex-direction: column;
+    padding: 10px;
+  }
+
+  .catalog-toolbar-right {
+    flex-wrap: wrap;
+    justify-content: flex-start;
+  }
+
+  .catalog-search,
+  .catalog-select {
+    width: min(100%, 220px);
+  }
+
+  .catalog-tabs {
+    width: 100%;
+    overflow-x: auto;
+  }
+
+  .catalog-table-head {
+    display: none;
+  }
+
+  .catalog-table {
+    border: 0;
+    background: transparent;
+    box-shadow: none;
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+  }
+
+  .catalog-row {
+    min-height: 0;
+    border: 1px solid var(--line);
+    border-radius: var(--r-4, 12px);
+    background: var(--surface);
+    grid-template-columns: 1fr;
+    row-gap: 10px;
+    padding: 12px;
+  }
+
+  .catalog-row-type,
+  .catalog-row-status,
+  .catalog-row-app,
+  .catalog-row-updated,
+  .catalog-row-actions {
+    margin-left: 51px;
+  }
+
+  .catalog-row-meta {
+    flex-wrap: wrap;
+  }
+
+  .catalog-row-meta code {
+    max-width: 170px;
+  }
+
+  .catalog-row-actions {
+    justify-content: flex-start;
+    flex-wrap: wrap;
+    width: calc(100% - 51px);
+    box-sizing: border-box;
+  }
+
+  .catalog-row-actions .catalog-mini-action {
+    flex: 1 1 96px;
+  }
 }
 
-html[data-theme="dark"] .catalog-main .filter-tab {
-  color: var(--text-3) !important;
-}
-
-html[data-theme="dark"] .catalog-main .filter-tab:hover {
-  background: var(--surface-2) !important;
-  color: var(--text) !important;
-}
-
-html[data-theme="dark"] .catalog-main .filter-tab.active {
-  background: var(--brand-soft) !important;
-  color: var(--brand-text) !important;
-}
-
-html[data-theme="dark"] .catalog-main .tab-count,
-html[data-theme="dark"] .catalog-main .source-badge,
-html[data-theme="dark"] .catalog-main .card-code {
-  background: var(--surface-3) !important;
-  border-color: var(--line) !important;
-  color: var(--text-3) !important;
-}
-
-html[data-theme="dark"] .catalog-main .view-toggle {
-  background: var(--surface-2) !important;
-  border: 1px solid var(--line) !important;
-}
-
-html[data-theme="dark"] .catalog-main .toggle-btn {
-  color: var(--text-3) !important;
-}
-
-html[data-theme="dark"] .catalog-main .toggle-btn.active {
-  background: var(--brand-soft) !important;
-  color: var(--brand-text) !important;
-}
-
-html[data-theme="dark"] .catalog-main .grid-card,
-html[data-theme="dark"] .catalog-main .list-card {
-  background: var(--surface) !important;
-  border-color: var(--line) !important;
-  box-shadow: var(--sh-1) !important;
-}
-
-html[data-theme="dark"] .catalog-main .grid-card:hover,
-html[data-theme="dark"] .catalog-main .list-card:hover {
-  background: var(--surface-2) !important;
-  border-color: var(--brand-ring) !important;
-  box-shadow: var(--sh-3) !important;
-}
-
-html[data-theme="dark"] .catalog-main .grid-card-name,
-html[data-theme="dark"] .catalog-main .card-name-row h3 {
-  color: var(--text) !important;
-}
-
-html[data-theme="dark"] .catalog-main .grid-card-meta,
-html[data-theme="dark"] .catalog-main .card-meta,
-html[data-theme="dark"] .catalog-main .grid-card-stats,
-html[data-theme="dark"] .catalog-main .card-stats,
-html[data-theme="dark"] .catalog-main .empty-state {
-  color: var(--text-3) !important;
-}
-
-html[data-theme="dark"] .catalog-main .grid-card-footer {
-  border-top-color: var(--line) !important;
-}
-
-html[data-theme="dark"] .catalog-main .card-status {
-  background: var(--ok-soft) !important;
-  color: var(--ok) !important;
-}
-
-html[data-theme="dark"] .catalog-main .action-btn {
-  background: var(--surface-2) !important;
-  border-color: var(--line) !important;
-  color: var(--text-3) !important;
-}
-
-html[data-theme="dark"] .catalog-main .action-btn.primary {
-  background: var(--brand-soft) !important;
-  border-color: var(--brand-ring) !important;
-  color: var(--brand-text) !important;
-}
-
-html[data-theme="dark"] .catalog-main .action-btn:hover {
-  background: var(--brand-soft) !important;
-  border-color: var(--brand-ring) !important;
-  color: var(--brand-text) !important;
-}
 </style>

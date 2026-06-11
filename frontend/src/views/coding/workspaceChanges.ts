@@ -20,11 +20,18 @@ export interface ChangedFiles {
 
 const FILE_TYPES = new Set(['file_write', 'file_edit'])
 
+export function normalizeWorkspacePathLabel(value?: string | null): string {
+  return String(value || '')
+    .trim()
+    .replace(/\s+\(\d+\s+lines?\)$/i, '')
+    .replace(/\s+\(\d+\s*行\)$/i, '')
+}
+
 export function collectChangedFiles(messages: FileChangeMsg[]): ChangedFiles {
   const changed = new Map<string, FileChange>()
   let lastChangedFile: string | null = null
   for (const m of messages) {
-    const key = m.filePath || m.fileName
+    const key = normalizeWorkspacePathLabel(m.filePath || m.fileName)
     if (!FILE_TYPES.has(m.type) || !key) continue
     changed.set(key, { oldContent: m.oldContent, fileContent: m.fileContent })
     lastChangedFile = key

@@ -14,6 +14,8 @@ from sse_starlette.sse import EventSourceResponse
 from app.database import get_db
 from app.routes.auth import get_auth_context, AuthContext
 from app.harness import HarnessManager, list_profiles
+from app.project_access import require_project_access
+from app.routes.coding import _ensure_workspace_access
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/harness", tags=["harness"])
@@ -192,6 +194,16 @@ async def coding_pipeline(
         "project_id": req.project_id,
         "app_id": req.app_id,
     }
+    if req.workspace_id:
+        await _ensure_workspace_access(req.workspace_id, ctx, db, minimum_project_role="member")
+    if req.project_id:
+        await require_project_access(
+            db,
+            project_id=req.project_id,
+            user_id=ctx.user.id,
+            tenant_id=ctx.tenant_id,
+            minimum_role="member",
+        )
     _inject_coding_metadata(metadata, ctx, request)
 
     return await _start_coding_turn_sse(

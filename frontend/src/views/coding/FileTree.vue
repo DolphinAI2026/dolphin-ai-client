@@ -136,22 +136,27 @@ const displayTree = computed(() => {
   flex-direction: column;
   height: 100%;
   min-height: 0;
-  background: var(--bg-sub, var(--bg, #fff));
+  background: linear-gradient(180deg, var(--bg-sub, #f8fafc) 0%, var(--bg-inset, var(--bg-sub, #f8fafc)) 100%);
 }
 .ws-file-tree-search {
   display: flex;
   align-items: center;
   gap: 6px;
   flex: none;
-  margin: 8px;
-  padding: 5px 9px;
+  min-height: 36px;
+  margin: 10px 10px 8px;
+  padding: 6px 10px;
   border: 1px solid var(--line, rgba(0, 0, 0, 0.1));
-  border-radius: var(--r-sm, 6px);
+  border-radius: var(--r-md, 8px);
   background: var(--bg, #fff);
-  transition: border-color 0.12s var(--ease, ease);
+  box-shadow: 0 1px 2px rgba(15, 23, 42, 0.03);
+  transition: border-color 0.12s var(--ease, ease), box-shadow 0.12s var(--ease, ease);
 }
-.ws-file-tree-search:focus-within { border-color: var(--brand, #6366f1); }
-.wfs-icon { flex: none; color: var(--fg-faint, #aaa); }
+.ws-file-tree-search:focus-within {
+  border-color: color-mix(in srgb, var(--brand, #4f6ef7) 36%, var(--line, rgba(0, 0, 0, 0.1)));
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--brand, #4f6ef7) 10%, transparent);
+}
+.wfs-icon { flex: none; color: var(--fg-dim, #64748b); }
 .wfs-input {
   flex: 1;
   min-width: 0;
@@ -159,9 +164,9 @@ const displayTree = computed(() => {
   outline: none;
   background: transparent;
   color: var(--fg, #222);
-  font-size: var(--fs-sm, 13px);
+  font-size: 12.5px;
 }
-.wfs-input::placeholder { color: var(--fg-faint, #aaa); }
+.wfs-input::placeholder { color: var(--fg-faint, #94a3b8); }
 .wfs-clear {
   flex: none;
   display: inline-flex;
@@ -176,8 +181,8 @@ const displayTree = computed(() => {
 /* ── 本轮改动分组 ── */
 .wft-changes {
   flex: none;
-  margin: 0 6px 6px;
-  padding-bottom: 6px;
+  margin: 0 8px 8px;
+  padding: 3px 0 8px;
   border-bottom: 1px solid var(--line, rgba(0, 0, 0, 0.07));
   max-height: 40%;
   overflow: auto;
@@ -187,17 +192,22 @@ const displayTree = computed(() => {
   align-items: center;
   gap: 5px;
   width: 100%;
-  padding: 4px 8px 4px 4px;
+  min-height: 28px;
+  padding: 5px 8px 5px 6px;
   border: none;
   background: transparent;
-  border-radius: var(--r-sm, 6px);
+  border-radius: var(--r-md, 8px);
   cursor: pointer;
   color: var(--fg, #222);
   font-size: var(--fs-sm, 13px);
   font-weight: 600;
 }
-.wftc-head:hover { background: var(--bg-hover, rgba(0, 0, 0, 0.04)); }
-.wftc-caret { flex: none; color: var(--fg-faint, #aaa); transition: transform 0.16s var(--ease, ease); }
+.wftc-head:hover { background: rgba(79, 110, 247, 0.06); }
+.wftc-head:focus { outline: none; }
+.wftc-head:focus-visible {
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--brand, #4f6ef7) 22%, transparent);
+}
+.wftc-caret { flex: none; color: var(--fg-dim, #64748b); transition: transform 0.16s var(--ease, ease); }
 .wftc-caret.open { transform: rotate(90deg); }
 .wftc-title { flex: none; }
 .wftc-count {
@@ -205,7 +215,7 @@ const displayTree = computed(() => {
   min-width: 17px;
   padding: 0 5px;
   border-radius: 999px;
-  background: var(--brand-soft, rgba(99, 102, 241, 0.12));
+  background: var(--brand-soft, rgba(79, 110, 247, 0.10));
   color: var(--brand-ink, var(--brand, #4f46e5));
   font-size: var(--fs-xs, 11px);
   font-weight: 600;
@@ -219,7 +229,8 @@ const displayTree = computed(() => {
   align-items: center;
   gap: 6px;
   width: 100%;
-  padding: 3.5px 8px 3.5px 20px;
+  min-height: 27px;
+  padding: 4px 8px 4px 20px;
   border: none;
   background: transparent;
   border-radius: var(--r-sm, 6px);
@@ -230,8 +241,16 @@ const displayTree = computed(() => {
   position: relative;
 }
 .wftc-row:hover { background: var(--bg-hover, rgba(0, 0, 0, 0.04)); color: var(--fg, #222); }
+.wftc-row:focus { outline: none; }
+.wftc-row:focus-visible {
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--brand, #4f6ef7) 22%, transparent);
+}
 .wftc-row.selected {
-  background: var(--brand-soft, rgba(99, 102, 241, 0.1));
+  background: linear-gradient(
+    90deg,
+    color-mix(in srgb, var(--brand, #4f6ef7) 12%, transparent),
+    color-mix(in srgb, var(--brand, #4f6ef7) 6%, transparent)
+  );
   color: var(--brand-ink, var(--brand, #4f46e5));
 }
 .wftc-status {
@@ -262,7 +281,7 @@ const displayTree = computed(() => {
   flex: 1;
   min-height: 0;
   overflow: auto;
-  padding: 2px 6px 6px;
+  padding: 2px 8px 10px;
 }
 .ws-file-tree-empty {
   margin: 16px 8px;

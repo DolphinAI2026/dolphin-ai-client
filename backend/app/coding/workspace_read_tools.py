@@ -79,8 +79,11 @@ def _iter_text_files(ws_path: Path) -> list[str]:
 
 
 def _safe_target(ws_path: Path, rel: str) -> Path:
-    target = (ws_path / rel).resolve()
-    if not str(target).startswith(str(ws_path.resolve())):
+    root = ws_path.resolve()
+    target = (root / rel).resolve()
+    try:
+        target.relative_to(root)
+    except ValueError:
         raise ValueError(f"文件路径越界: {rel}")
     return target
 
