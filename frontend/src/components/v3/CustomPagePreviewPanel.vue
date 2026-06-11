@@ -16,7 +16,7 @@
     <header class="cpp-head">
       <div class="cpp-head-meta">
         <h1 class="cpp-title">{{ menuName || '自开发页面' }}</h1>
-        <span class="cpp-chip"><AppIcon name="palette" :size="14" /> 自开发</span>
+        <span class="cpp-chip"><AppIcon name="palette" :size="12" /> 自开发</span>
       </div>
     </header>
 
@@ -108,14 +108,17 @@ function onGoToCoding() {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  padding: 12px 20px;
+  min-height: 38px;
+  padding: 5px 14px;
   border-bottom: 1px solid var(--line);
+  box-sizing: border-box;
   flex-shrink: 0;
 }
 .cpp-head-meta {
   display: flex;
   align-items: center;
-  gap: 12px;
+  gap: 8px;
+  min-width: 0;
 }
 .cpp-head-actions {
   display: flex;
@@ -150,21 +153,29 @@ function onGoToCoding() {
   background: #fff;
 }
 .cpp-title {
-  font-size: 18px;
+  font-size: 15px;
+  line-height: 1.25;
   font-weight: 600;
   color: var(--text-1);
   margin: 0;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 .cpp-chip {
   display: inline-flex;
   align-items: center;
-  gap: 4px;
-  padding: 4px 10px;
-  background: var(--brand-soft);
+  gap: 3px;
+  min-height: 20px;
+  padding: 1px 6px;
+  background: color-mix(in srgb, var(--brand) 8%, var(--surface) 92%);
   color: var(--brand);
-  border-radius: 12px;
-  font-size: 12px;
+  border: 1px solid color-mix(in srgb, var(--brand) 18%, transparent);
+  border-radius: 6px;
+  font-size: 11.5px;
   font-weight: 500;
+  line-height: 1;
+  flex-shrink: 0;
 }
 
 .cpp-body {

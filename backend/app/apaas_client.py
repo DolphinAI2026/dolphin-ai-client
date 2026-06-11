@@ -2203,6 +2203,125 @@ class APaaSClient:
         logger.info(f"菜单 {menu_id} 改名 → 「{new_name}」 (verified)")
         return {"menu_id": menu_id, "menu_name": new_name.strip(), "verified": True}
 
+    async def update_self_dev_menu_link_url(
+        self,
+        app_id: str,
+        menu_id: str,
+        link_url: str,
+        menu_type: str = "",
+        confirmed: bool = False,
+    ) -> dict:
+        """更新自开发菜单 linkUrl — POST /xdap-app/menu/save/menu.
+
+        平台的 save/menu 带 id 时是更新。这里先 query_menus 拿完整原始字段，
+        再只覆盖 linkUrl，避免丢 menuName/menuIcon/menuOrder/owner 等平台字段。
+        如果现有 linkUrl 与目标 linkUrl 不一致，默认只返回确认请求；调用方确认
+        这是同一菜单切换到新包后，再传 confirmed=True 真正更新。
+        menu_type 默认保留原值；确需强制时可传 CUSTOM/MENU。
+        """
+        menus = await self.query_menus(app_id)
+        target = None
+
+        def _walk(nodes):
+            nonlocal target
+            for n in nodes or []:
+                if not isinstance(n, dict):
+                    continue
+                if str(n.get("id") or n.get("menuId") or "") == str(menu_id):
+                    target = n
+                    return
+                kids = n.get("submenus") or n.get("children") or []
+                if kids:
+                    _walk(kids)
+
+        _walk(menus or [])
+        if not target:
+            raise Exception(f"找不到 menu_id={menu_id} 的菜单")
+
+        old_link_url = str(target.get("linkUrl") or target.get("link_url") or "")
+        if old_link_url and old_link_url != link_url.strip() and not confirmed:
+            return {
+                "needs_confirmation": True,
+                "menu_id": menu_id,
+                "menu_name": str(target.get("menuName") or target.get("menu_name") or ""),
+                "old_link_url": old_link_url,
+                "link_url": link_url.strip(),
+                "message": "该菜单当前指向另一个自开发包，需用户确认后再更新 linkUrl。",
+            }
+
+        payload = {
+            k: v for k, v in target.items()
+            if k not in ("submenus", "children", "subMenus", "menuList")
+        }
+        payload["appId"] = app_id
+        payload["id"] = str(target.get("id") or target.get("menuId") or menu_id)
+        payload["linkUrl"] = link_url.strip()
+        if menu_type.strip():
+            payload["menuType"] = menu_type.strip()
+
+        payload.setdefault("menuNameI18nResourceCode", "")
+        payload.setdefault("menuNameI18nAssociated", False)
+        payload.setdefault("menuNameI18n", {})
+        payload.setdefault("menuIcon", "dashboard")
+        payload.setdefault("datasourceId", "")
+        payload.setdefault("datasourceName", "")
+        payload.setdefault("linkContent", "")
+        payload.setdefault("linkMobileUrl", "")
+        payload.setdefault("linkMobileContent", "")
+        payload.setdefault("custom", "")
+        payload.setdefault("menuModelType", "DATABASE")
+        payload.setdefault("cusIconStatus", "DISABLE")
+        payload.setdefault("cusModelPageStatus", "DISABLE")
+        payload.setdefault("menuCustomIcon", "")
+        payload.setdefault("newWindowStatus", "DISABLE")
+        payload.setdefault("menuDisplay", "PC")
+        payload.setdefault("iconColor", "#027AFF")
+
+        url = f"{self.base_url}/xdap-app/menu/save/menu"
+        _log_request("POST", url, {
+            "_summary": "self-dev menu linkUrl update",
+            "menu_id": menu_id,
+            "old_link_url": old_link_url,
+            "new_link_url": link_url.strip(),
+            "menu_type": payload.get("menuType"),
+        })
+        start = time.time()
+        async with httpx.AsyncClient(verify=False, timeout=APAAS_HTTP_TIMEOUT) as client:
+            response = await client.post(url, headers=self._get_headers(app_id), json=payload)
+            elapsed_ms = (time.time() - start) * 1000
+            response.raise_for_status()
+            data = response.json()
+            _log_response(url, response.status_code, data, elapsed_ms)
+            if data.get("code") != "ok":
+                raise Exception(data.get("message", "更新自开发菜单 linkUrl 失败"))
+
+        verify_menus = await self.query_menus(app_id)
+
+        def _verify(nodes):
+            for n in nodes or []:
+                if str(n.get("id") or n.get("menuId") or "") == str(menu_id):
+                    return str(n.get("linkUrl") or n.get("link_url") or "")
+                kids = n.get("submenus") or n.get("children") or []
+                if kids:
+                    found = _verify(kids)
+                    if found is not None:
+                        return found
+            return None
+
+        actual = _verify(verify_menus or [])
+        if actual != link_url.strip():
+            raise Exception(
+                f"save 返 ok 但 linkUrl 未持久化: expected={link_url!r} actual={actual!r}"
+            )
+        logger.info(f"菜单 {menu_id} linkUrl: {old_link_url} → {link_url.strip()} (verified)")
+        return {
+            "menu_id": menu_id,
+            "old_link_url": old_link_url,
+            "link_url": link_url.strip(),
+            "menu_type": payload.get("menuType"),
+            "verified": True,
+        }
+
     async def update_menu_parent(
         self,
         app_id: str,

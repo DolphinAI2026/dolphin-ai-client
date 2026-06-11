@@ -2542,7 +2542,52 @@ async def attach_dev_packages_to_apaas_app(env_id: int, apaas_app_id: str, kit_i
         lambda c: c.attach_apaas_source_relation(apaas_app_id.strip(), object_ids=kit_ids),
     )
     if not ok:
-        return payload
+        message = str((payload or {}).get("message") or payload or "")
+        if not any(marker in message for marker in ("重复", "已存在", "duplicate", "exist")):
+            return payload
+
+        attached: list[str] = []
+        skipped_duplicates: list[str] = []
+        failed: list[dict] = []
+        for kit_id in kit_ids:
+            item_ok, item_payload = await _with_client(
+                env_id, f"关联自开发包 {kit_id}",
+                lambda c, kid=kit_id: c.attach_apaas_source_relation(
+                    apaas_app_id.strip(), object_ids=[kid]
+                ),
+            )
+            if item_ok:
+                attached.append(str(kit_id))
+                continue
+            item_message = str((item_payload or {}).get("message") or item_payload or "")
+            if any(marker in item_message for marker in ("重复", "已存在", "duplicate", "exist")):
+                skipped_duplicates.append(str(kit_id))
+                continue
+            failed.append({"kit_id": str(kit_id), "error": item_payload})
+        if failed:
+            return {
+                "ok": False,
+                "error_code": "PARTIAL_ATTACH_FAILED",
+                "env_id": env_id,
+                "apaas_app_id": apaas_app_id.strip(),
+                "attached_kit_ids": attached,
+                "skipped_duplicate_kit_ids": skipped_duplicates,
+                "failed": failed,
+                "message": "部分自开发包关联失败",
+            }
+        return {
+            "ok": True,
+            "env_id": env_id,
+            "apaas_app_id": apaas_app_id.strip(),
+            "attached_count": len(attached),
+            "skipped_duplicate_count": len(skipped_duplicates),
+            "attached_kit_ids": attached,
+            "skipped_duplicate_kit_ids": skipped_duplicates,
+            "message": (
+                f"已关联 {len(attached)} 个自开发包，"
+                f"跳过 {len(skipped_duplicates)} 个已关联包。下一步：republish_apaas_app 重发版本让组件生效。"
+            ),
+        }
     return {
         "ok": True, "env_id": env_id, "apaas_app_id": apaas_app_id.strip(),
         "attached_count": len(kit_ids),
@@ -2642,6 +2687,43 @@ async def create_apaas_self_dev_menu(
         ),
     )
     if not ok:
+        message = str((payload or {}).get("message") or "")
+        if any(marker in message for marker in ("已存在", "重复", "exist", "duplicate")):
+            async def _query_existing(client):
+                def _walk(nodes):
+                    for node in nodes or []:
+                        if not isinstance(node, dict):
+                            continue
+                        name = str(node.get("menuName") or node.get("menu_name") or node.get("name") or "")
+                        if name == menu_name.strip():
+                            return node
+                        found = _walk(node.get("submenus") or node.get("children") or [])
+                        if found:
+                            return found
+                    return None
+
+                menus = await client.query_menus(apaas_app_id.strip())
+                return _walk(menus)
+
+            ok_existing, existing = await _with_client(env_id, "查询已存在自开发菜单", _query_existing)
+            if ok_existing and isinstance(existing, dict):
+                existing_link_url = str(existing.get("linkUrl") or existing.get("link_url") or "")
+                payload = {
+                    **payload,
+                    "error_code": "SELF_DEV_MENU_EXISTS",
+                    "existing_menu": {
+                        "menu_id": str(existing.get("id") or existing.get("menuId") or existing.get("menu_id") or ""),
+                        "menu_name": menu_name.strip(),
+                        "link_url": existing_link_url,
+                    },
+                    "expected_link_url": link_url.strip(),
+                    "link_url_matches": existing_link_url == link_url.strip(),
+                    "hint": (
+                        "菜单已存在但 linkUrl 与 expected_link_url 不一致时，"
+                        "请调用 update_apaas_self_dev_menu_link_url(menu_id=existing_menu.menu_id, "
+                        "link_url=expected_link_url, confirmed=true) 更新同一个菜单；不要删除旧菜单或新建同名菜单。"
+                    ),
+                }
         return payload
     return {
         "ok": True, "env_id": env_id, "apaas_app_id": apaas_app_id.strip(),
@@ -3066,9 +3148,11 @@ async def create_dev_workspace(
     project_name: str,
     display_name: str = "",
     initial_requirement: str = "",
+    env_id: int = 0,
     apaas_app_id: str = "",
     apaas_app_name: str = "",
     project_id: int = 0,
+    confirmed: bool = False,
     tenant_id: int = 0,
     user_id: int = 0,
 ) -> dict:
@@ -3083,10 +3167,13 @@ async def create_dev_workspace(
         display_name         中文名（用户看得到的标题）
         initial_requirement  跟用户对齐好的需求 brief（200-2000 字），自动喂给 vibe_agent
         project_id           可选：AI Builder 本地 applications.id，用于把 workspace 绑定回应用资产
+        env_id               可选；传了会先查 aPaaS 自开发资源池是否已有同名包
+        confirmed            命中重复包/菜单后，用户确认继续时传 true
 
     返回：{ok, ws_id, scene_type, project_name, display_name}
     """
     from app.dev_scene_spec import all_scene_types
+    from app.coding.workspace import ProjectType, WorkspaceManager
     if scene_type not in all_scene_types():
         return {
             "ok": False, "error_code": "SCENE_NOT_FOUND",
@@ -3097,13 +3184,239 @@ async def create_dev_workspace(
         return {"ok": False, "error_code": "INVALID_PROJECT_NAME", "message": "project_name 不能为空"}
 
     tid, uid = _resolve_identity(tenant_id, user_id)
+    final_display_name = (display_name or "").strip() or project_name.strip()
+
+    def _expected_self_dev_names() -> dict[str, Any]:
+        try:
+            project_type = ProjectType(scene_type)
+            safe_name = WorkspaceManager()._normalize_project_name(project_type, project_name.strip())
+        except Exception:
+            safe_name = project_name.strip()
+        short_name = safe_name
+        for prefix in ("form-page-", "form-component-", "form-view-", "form-layout-", "frontend-plugin-"):
+            if short_name.startswith(prefix):
+                short_name = short_name[len(prefix):]
+                break
+        file_names = [f"{safe_name}.zip"]
+        if scene_type == "form-component-dual":
+            file_names.append(f"{safe_name}-m.zip")
+        register_name = f"apaas-custom-{short_name}" if scene_type in ("form-page", "menu-page", "mobile-page") else ""
+        return {
+            "project_name": safe_name,
+            "short_name": short_name,
+            "file_names": file_names,
+            "register_name": register_name,
+        }
+
+    def _english_terms(text: str) -> set[str]:
+        import re as _re
+        normalized = (text or "").lower()
+        normalized = normalized.replace(".zip", " ")
+        for prefix in ("apaas-custom-", "form-page-", "form-component-", "form-view-", "form-layout-", "frontend-plugin-"):
+            normalized = normalized.replace(prefix, " ")
+        tokens = set(_re.findall(r"[a-z0-9]{2,}", normalized))
+        stop = {
+            "apaas", "custom", "form", "page", "component", "view", "layout",
+            "frontend", "plugin", "mobile", "web", "self", "dev", "zip",
+        }
+        return {token for token in tokens if token not in stop}
+
+    def _compact_text(text: str) -> str:
+        import re as _re
+        return _re.sub(r"\s+", "", (text or "").lower())
+
+    def _similarity(a: str, b: str) -> float:
+        from difflib import SequenceMatcher
+        left = _compact_text(a)
+        right = _compact_text(b)
+        if not left or not right:
+            return 0.0
+        return SequenceMatcher(None, left, right).ratio()
+
+    def _requirement_aliases(expected: dict[str, Any]) -> dict[str, Any]:
+        requirement_text = initial_requirement or ""
+        english_source = " ".join([
+            expected["project_name"], expected["short_name"], final_display_name, requirement_text,
+        ])
+        return {
+            "english_terms": _english_terms(english_source),
+            "display_name": final_display_name,
+            "requirement": requirement_text,
+        }
+
+    def _package_conflict(kit: dict[str, Any], expected: dict[str, Any], aliases: dict[str, Any]) -> dict[str, Any] | None:
+        file_name = str(kit.get("fileName") or "")
+        description = " ".join(
+            str(kit.get(key) or "")
+            for key in ("description", "desc", "remark", "name", "resourceName", "componentLabel")
+        )
+        candidate_text = f"{file_name} {description}"
+        reasons: list[str] = []
+        matched_terms: list[str] = []
+        score = 0.0
+
+        if file_name in set(expected["file_names"]):
+            reasons.append("exact_file_name")
+            score = max(score, 1.0)
+        elif expected["project_name"] and expected["project_name"] in file_name:
+            reasons.append("project_name_contains")
+            score = max(score, 0.9)
+
+        display_name_value = aliases["display_name"]
+        requirement_text = aliases["requirement"]
+        compact_candidate = _compact_text(candidate_text)
+        if display_name_value and _compact_text(display_name_value) in compact_candidate:
+            reasons.append("display_name_in_package_metadata")
+            score = max(score, 0.85)
+        if requirement_text and description and (
+            _compact_text(display_name_value) in _compact_text(requirement_text)
+            and _compact_text(display_name_value) in _compact_text(description)
+        ):
+            reasons.append("requirement_display_name_matches_package_metadata")
+            score = max(score, 0.85)
+
+        candidate_terms = _english_terms(candidate_text)
+        shared_terms = sorted(aliases["english_terms"] & candidate_terms)
+        if len(shared_terms) >= 2:
+            matched_terms.extend(shared_terms)
+            overlap_score = min(0.84, 0.45 + 0.13 * len(shared_terms))
+            reasons.append("english_requirement_terms_overlap")
+            score = max(score, overlap_score)
+
+        if not reasons:
+            return None
+        return {
+            "id": str(kit.get("id") or ""),
+            "fileName": file_name,
+            "fileType": str(kit.get("fileType") or ""),
+            "createTime": kit.get("createTime"),
+            "score": round(score, 2),
+            "reasons": reasons,
+            "matched_terms": matched_terms[:8],
+        }
+
+    def _menu_conflict(node: dict[str, Any], expected: dict[str, Any], aliases: dict[str, Any]) -> dict[str, Any] | None:
+        menu_name = str(node.get("menuName") or node.get("menu_name") or node.get("name") or "")
+        link_url = str(node.get("linkUrl") or node.get("link_url") or "")
+        reasons: list[str] = []
+        matched_terms: list[str] = []
+        score = 0.0
+        display_name_value = aliases["display_name"]
+        requirement_text = aliases["requirement"]
+
+        if display_name_value and menu_name == display_name_value:
+            reasons.append("exact_menu_name")
+            score = max(score, 1.0)
+        elif display_name_value and (
+            _compact_text(display_name_value) in _compact_text(menu_name)
+            or _compact_text(menu_name) in _compact_text(display_name_value)
+        ):
+            reasons.append("menu_name_contains_display_name")
+            score = max(score, 0.9)
+        elif display_name_value and _similarity(display_name_value, menu_name) >= 0.72:
+            reasons.append("menu_name_similar_to_display_name")
+            score = max(score, 0.78)
+
+        if expected["register_name"] and link_url == expected["register_name"]:
+            reasons.append("exact_register_name")
+            score = max(score, 1.0)
+
+        if requirement_text and menu_name and len(_compact_text(menu_name)) >= 4:
+            compact_req = _compact_text(requirement_text)
+            compact_menu = _compact_text(menu_name)
+            if compact_menu in compact_req:
+                reasons.append("menu_name_in_requirement")
+                score = max(score, 0.9)
+            elif display_name_value and _compact_text(display_name_value) in compact_req and _similarity(display_name_value, menu_name) >= 0.72:
+                reasons.append("requirement_display_name_similar_to_menu")
+                score = max(score, 0.78)
+
+        candidate_terms = _english_terms(f"{menu_name} {link_url}")
+        shared_terms = sorted(aliases["english_terms"] & candidate_terms)
+        if len(shared_terms) >= 2:
+            matched_terms.extend(shared_terms)
+            reasons.append("english_requirement_terms_overlap")
+            score = max(score, min(0.82, 0.45 + 0.13 * len(shared_terms)))
+
+        if not reasons:
+            return None
+        return {
+            "menu_id": str(node.get("id") or node.get("menuId") or node.get("menu_id") or ""),
+            "menu_name": menu_name,
+            "link_url": link_url,
+            "menu_type": str(node.get("menuType") or node.get("menu_type") or ""),
+            "score": round(score, 2),
+            "reasons": reasons,
+            "matched_terms": matched_terms[:8],
+        }
+
+    if env_id and not confirmed:
+        expected = _expected_self_dev_names()
+        aliases = _requirement_aliases(expected)
+
+        async def _find_conflicts(client):
+            package_hits: list[dict[str, Any]] = []
+            try:
+                kits = await client.query_app_dev_kits("", file_name="", page_size=200)
+            except TypeError:
+                kits = await client.query_app_dev_kits("", file_name="")
+            for kit in kits or []:
+                if not isinstance(kit, dict):
+                    continue
+                conflict = _package_conflict(kit, expected, aliases)
+                if conflict:
+                    package_hits.append(conflict)
+            package_hits.sort(key=lambda item: item.get("score", 0), reverse=True)
+            package_hits = package_hits[:10]
+
+            menu_hits: list[dict[str, Any]] = []
+            if apaas_app_id.strip():
+                menus = await client.query_menus(apaas_app_id.strip())
+
+                def _walk(nodes):
+                    for node in nodes or []:
+                        if not isinstance(node, dict):
+                            continue
+                        conflict = _menu_conflict(node, expected, aliases)
+                        if conflict:
+                            menu_hits.append(conflict)
+                        _walk(node.get("submenus") or node.get("children") or [])
+
+                _walk(menus or [])
+            menu_hits.sort(key=lambda item: item.get("score", 0), reverse=True)
+            menu_hits = menu_hits[:10]
+            return {"packages": package_hits, "menus": menu_hits}
+
+        ok_conflicts, conflicts = await _with_client(env_id, "检查自开发包重复", _find_conflicts)
+        if not ok_conflicts:
+            return conflicts
+        package_hits = (conflicts or {}).get("packages") or []
+        menu_hits = (conflicts or {}).get("menus") or []
+        if package_hits or menu_hits:
+            return {
+                "ok": False,
+                "error_code": "NEEDS_CONFIRMATION",
+                "requires_user_confirmation": True,
+                "message": (
+                    "检测到可能重复的自开发包或菜单。请先向用户确认：是更新这些已有资源，"
+                    "还是换一个新的项目名/菜单名后再创建。确认更新已有资源后，可重新调用并传 confirmed=true。"
+                ),
+                "candidate": expected,
+                "duplicate_packages": package_hits,
+                "duplicate_menus": menu_hits,
+                "next_options": [
+                    "用户确认更新已有资源：沿用 candidate.project_name / candidate.file_names / candidate.register_name，重新调用 create_dev_workspace(..., confirmed=true)，后续上传会按同名 fileName 走 update/developmentKit",
+                    "用户要新建独立包：换一个新的 project_name/display_name，确保生成新的 fileName / register_name 后再调用",
+                ],
+            }
+
     # /coding/workspace/create 实际签名 (CreateWorkspaceRequest):
     #   project_type / project_name / display_name (可选) / project_id (可选)
     # 不接 initial_requirement / apaas_app_id / apaas_app_name —— 这些是工具层语义参数。
     payload = {
         "project_type": scene_type,  # scene_type 跟 ProjectType 枚举值一致
         "project_name": project_name.strip(),
-        "display_name": (display_name or "").strip() or project_name.strip(),
+        "display_name": final_display_name,
     }
     if project_id:
         payload["project_id"] = int(project_id)
@@ -4351,6 +4664,65 @@ async def rename_apaas_menu(
         "menu_id": menu_id,
         "menu_name": new_name.strip(),
         "message": f"菜单 {menu_id} 已改名为「{new_name}」",
+    }
+
+
+@mcp.tool()
+async def update_apaas_self_dev_menu_link_url(
+    env_id: int,
+    apaas_app_id: str,
+    menu_id: str,
+    link_url: str,
+    menu_type: str = "",
+    confirmed: bool = False,
+) -> dict:
+    """更新自开发页面菜单的 linkUrl。
+
+    场景：页面包已更新，但菜单已存在且仍指向旧组件注册名，例如
+    apaas-custom-form-page-xxx。工具会读取现有菜单完整字段，只覆盖 linkUrl，
+    默认保留平台当前 menuType；如确需强制可传 menu_type=CUSTOM 或 MENU。
+    若当前 linkUrl 与目标 linkUrl 不一致，默认返回 NEEDS_CONFIRMATION；
+    用户确认这是同一个菜单切换到新包后，再传 confirmed=true 执行更新。
+    """
+    if not (apaas_app_id.strip() and menu_id.strip() and link_url.strip()):
+        return {"ok": False, "error_code": "INVALID_PARAMS",
+                "message": "apaas_app_id + menu_id + link_url 都必填"}
+    normalized_menu_type = menu_type.strip().upper()
+    if normalized_menu_type and normalized_menu_type not in {"CUSTOM", "MENU"}:
+        return {"ok": False, "error_code": "INVALID_MENU_TYPE",
+                "message": "menu_type 只能留空或传 CUSTOM / MENU"}
+    ok, raw = await _with_client(
+        env_id, "更新自开发菜单 linkUrl",
+        lambda c: c.update_self_dev_menu_link_url(
+            apaas_app_id.strip(),
+            menu_id.strip(),
+            link_url.strip(),
+            menu_type=normalized_menu_type,
+            confirmed=confirmed,
+        ),
+    )
+    if not ok:
+        return raw
+    if (raw or {}).get("needs_confirmation"):
+        return {
+            "ok": False,
+            "error_code": "NEEDS_CONFIRMATION",
+            "menu_id": menu_id.strip(),
+            "menu_name": (raw or {}).get("menu_name"),
+            "current_link_url": (raw or {}).get("old_link_url"),
+            "requested_link_url": (raw or {}).get("link_url"),
+            "message": (
+                "该菜单当前指向另一个自开发包。请向用户确认是否要把这个菜单切换到"
+                f" {(raw or {}).get('link_url')}；确认后重新调用并传 confirmed=true。"
+            ),
+        }
+    return {
+        "ok": True,
+        "menu_id": menu_id.strip(),
+        "old_link_url": (raw or {}).get("old_link_url"),
+        "link_url": (raw or {}).get("link_url"),
+        "menu_type": (raw or {}).get("menu_type"),
+        "message": f"菜单 {menu_id.strip()} linkUrl 已更新为 {link_url.strip()}",
     }
 
 
