@@ -144,7 +144,7 @@ tools:
     sections: [extension]
     agents: [coding]
     category: dev_workspace
-    description: "在 ai-builder /coding 下创建一个自开发 workspace（脚手架已就位、可以开始写代码）。"
+    description: "创建自开发 workspace；传 env_id 时会先查同名自开发包/菜单，命中则要求用户确认。"
   create_form_event_with_python_code:
     sections: [logic]
     agents: [config]
@@ -609,6 +609,11 @@ tools:
     agents: [builder, config]
     category: update
     description: "更新字段属性（改名 / 改类型 / 改最大长度）。"
+  update_apaas_self_dev_menu_link_url:
+    sections: [extension]
+    agents: [coding]
+    category: update
+    description: "更新自开发页面菜单的 linkUrl；若当前指向不同包，会要求用户确认后再改。"
   update_app_from_doc:
     sections: [global]
     agents: [builder]

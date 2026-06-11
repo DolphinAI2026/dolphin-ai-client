@@ -2650,6 +2650,24 @@ def _build_upload_form_data(
     return form
 
 
+def _resolve_page_register_name(apaas_config: dict | None, fallback: str) -> str:
+    """Resolve the Vue component tag used by PAGE/MENU custom menus.
+
+    For form-page workspaces, apaas.json.outputName is the bundle/package name
+    (for example form-page-demo), while the menu linkUrl must be the router key
+    registered in src/index.js (for example apaas-custom-demo).
+    """
+    config = apaas_config or {}
+    router = config.get("router")
+    if isinstance(router, dict):
+        for key in router.keys():
+            candidate = str(key or "").strip()
+            if candidate:
+                return candidate
+
+    return str(fallback or "").strip()
+
+
 async def _build_and_upload_kits(*, ws_mgr, ws_id: str, env, db) -> dict:
     """构建 workspace → 上传 developmentKit(组件库)→ 用 fileName 反查 kit_id。
 
@@ -2716,10 +2734,11 @@ async def _build_and_upload_kits(*, ws_mgr, ws_id: str, env, db) -> dict:
     kits = await client.query_app_dev_kits("", file_name=key_word)
     kit_ids = [str(k["id"]) for fn in file_names for k in kits if k.get("fileName") == fn and k.get("id")]
 
-    # 页面类建菜单的 link_url = 自开发组件注册名(取 workspace apaas.json 的 outputName)
+    # 页面类建菜单的 link_url = 自开发组件注册名(取 workspace apaas.json 的 router key)
+    # 注意 outputName 是 bundle/package 名(form-page-xxx), 不能当作菜单 linkUrl。
     try:
         _cfg = ws_mgr._read_apaas_config(ws_path)
-        register_name = ws_mgr._resolve_output_name(_cfg, display_name) if isinstance(_cfg, dict) else display_name
+        register_name = _resolve_page_register_name(_cfg if isinstance(_cfg, dict) else None, display_name)
     except Exception:
         register_name = display_name
 
