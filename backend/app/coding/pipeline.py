@@ -541,6 +541,13 @@ def append_event_to_stream_replay(stream_messages: list[dict[str, Any]], event: 
             _push_replay_message(stream_messages, "status", "✅ 调试环境已启动")
         return
 
+    if event_type == "tool":
+        # 只读应答路径(read_query)的工具 chip —— running 时记一条, done 的结果不进回放(体积)
+        if str(event.get("status") or "") == "running":
+            display = str(event.get("display") or event.get("name") or "查询")
+            _push_replay_message(stream_messages, "tool", f"🔧 {display}")
+        return
+
     if event_type == "content":
         content = str(event.get("content") or "").strip()
         if content:
@@ -1775,17 +1782,33 @@ async def run_coding_pipeline(
                 if await classify_iteration_intent(params.tenant_id, effective_model, _clean_msg) == "READ":
                     logger.info("[intent_gate] 迭代轮 READ 路径, 跳过 codegen, ws=%s", ws_id)
                     await save_coding_message(db, conversation_id, "user", params.message)
+                    # READ 轮也要进富回放: 工作区主会话重开走 chat-replay.json,
+                    # 不记这轮问答在刷新/切换后就消失。回放结构手工构建
+                    # (user + 工具 chip + 答案 message), 不走 _record_event 的
+                    # codegen 映射(那套会把答案记成 thinking 斜体)。
+                    _push_replay_message(replay_stream_messages, "user", params.message)
                     _answer_parts: list[str] = []
                     async for _ev in run_read_query(params, db):
                         if _ev.get("type") == "content":
                             _answer_parts.append(str(_ev.get("content") or ""))
+                        elif _ev.get("type") == "tool":
+                            append_event_to_stream_replay(replay_stream_messages, _ev)
                         if _ev.get("type") == "done":
                             _ev["conversation_id"] = conversation_id
                             _ev["workspace_id"] = ws_id  # 前端保持工作区上下文
-                        yield _record_event(_ev)
+                        yield _ev
                     _read_answer = "\n\n".join(p for p in _answer_parts if p.strip()).strip()
                     if _read_answer:
                         await save_coding_message(db, conversation_id, "assistant", _read_answer)
+                        _push_replay_message(replay_stream_messages, "message", _read_answer)
+                    try:
+                        await _write_history_for_ide(
+                            ws_mgr, ws_id, conversation_id, db,
+                            rich_assistant_output=_read_answer,
+                            stream_messages=replay_stream_messages,
+                        )
+                    except Exception:
+                        logger.warning("READ 轮写富回放失败(忽略): %s", ws_id, exc_info=True)
                     return
 
         # ---- 迭代意图判断(修改当前组件 vs 全新组件) ----

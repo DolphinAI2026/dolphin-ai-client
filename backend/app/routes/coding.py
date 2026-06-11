@@ -184,7 +184,9 @@ def _load_workspace_chat_payload(
             continue
         msg_type = str(message.get("type") or "").strip()
         content = message.get("content")
-        if msg_type not in {"user", "thinking", "tool", "file_write", "file_edit", "command", "status", "error"}:
+        # "message" = 普通 Markdown 回复(READ 只读问答的答案就是这个类型), 漏掉会让
+        # 回放只剩 user+工具 chip、答案消失。
+        if msg_type not in {"user", "thinking", "tool", "file_write", "file_edit", "command", "status", "error", "message"}:
             continue
         if not isinstance(content, str):
             content = ""
@@ -192,7 +194,7 @@ def _load_workspace_chat_payload(
             "type": msg_type,
             "content": content,
         }
-        for field in ("fileName", "fileContent", "collapsed", "timestamp"):
+        for field in ("fileName", "filePath", "fileContent", "oldContent", "collapsed", "timestamp"):
             if field in message:
                 normalized_item[field] = message[field]
         normalized_stream_messages.append(normalized_item)

@@ -39,6 +39,10 @@ _EXCLUDE_RULES = [
     "__pycache__/",
     "*.log",
     ".DS_Store",
+    # 工具状态文件: 进了基线会被 checkpoint 提交/还原回滚(chat-replay 被回滚=会话富回放丢失)
+    ".vscode/",
+    ".vibe-ide.code-workspace",
+    "vibe-serve-config",
 ]
 
 _COMMIT_IDENTITY = [

@@ -117,7 +117,7 @@
                 </template>
                 <div class="cca-conv-list">
                   <button
-                    v-for="c in codingConversations"
+                    v-for="c in headerConversations"
                     :key="c.id"
                     class="cca-conv-item"
                     :class="{ active: c.id === codingStore.conversationId }"
@@ -126,7 +126,7 @@
                     <span class="cca-conv-title">{{ c.title || '未命名会话' }}</span>
                     <span class="cca-conv-time">{{ formatConvTime(c.updated_at) }}</span>
                   </button>
-                  <p v-if="!codingConversations.length" class="cca-conv-empty">暂无会话</p>
+                  <p v-if="!headerConversations.length" class="cca-conv-empty">当前工作区还没有其他会话</p>
                 </div>
               </el-popover>
               <button class="cca-btn" title="新建会话(沿用当前工作区)" @click="createWorkspaceConversation">
@@ -712,9 +712,53 @@ function toggleChatExpand() {
   }
 }
 
-function switchConversationFromHeader(id: number) {
+// 头部 ≡ 只列当前工作区的会话(含还没绑定的当前新会话)——它是"本工作区的聊天历史",
+// 不是跨工作区切换器(那是侧栏/资产库的事)。
+const headerConversations = computed(() => {
+  const wsId = codingStore.workspace?.id
+  if (!wsId) return codingConversations.value
+  return codingConversations.value.filter(
+    c => c.workspace_id === wsId || c.id === codingStore.conversationId,
+  )
+})
+
+// 同步地址栏但不动路由 —— App.vue 的 <component :key="$route.fullPath"> 会让任何
+// query 变化整页重挂载, onMounted 再按 workspace_id 灌主会话回放, 把刚切的会话覆盖掉。
+function syncCodingUrl(conversationId: number) {
+  const q = new URLSearchParams()
+  q.set('conversation_id', String(conversationId))
+  if (codingStore.workspace?.id) q.set('workspace_id', codingStore.workspace.id)
+  window.history.replaceState(window.history.state, '', `${window.location.pathname}?${q.toString()}`)
+}
+
+// 头部切换 = 只换聊天上下文, 工作区(文件树/查看器)保持不动
+async function switchConversationFromHeader(id: number) {
   if (id === codingStore.conversationId) return
-  void onSidebarCodingSelect('conv:' + id)
+  handoffSourceApp.value = null
+  const _boundAppId = codingConversations.value.find(c => c.id === id)?.coding_app_id ?? null
+  deployAppId.value = _boundAppId
+  deployMode.value = 'bound'
+  try {
+    // 切回工作区主会话时优先富回放(结构化工具卡/diff), 其他会话纯消息回放
+    if (codingStore.workspace?.id) {
+      try {
+        const wc = await codingApi.getWorkspaceConversation(codingStore.workspace.id)
+        if (wc.conversation_id === id) {
+          codingStore.conversationId = id
+          applyCodingModelSelection(wc.selected_llm_config_id)
+          loadConversationHistory(wc.messages, wc.stream_messages || [])
+          syncCodingUrl(id)
+          return
+        }
+      } catch { /* 降级走纯消息回放 */ }
+    }
+    const messages = await codingApi.getMessages(id)
+    codingStore.conversationId = id
+    loadConversationHistory(messages as any, [])
+    syncCodingUrl(id)
+  } catch (e: any) {
+    ElMessage.error(`切换会话失败: ${e?.message || e}`)
+  }
 }
 
 function formatConvTime(iso?: string): string {
@@ -736,13 +780,8 @@ async function createWorkspaceConversation() {
   codingStore.conversationId = created.id
   streamMessages.value = []
   selectedFile.value = null
-  router.replace({
-    path: '/coding',
-    query: {
-      conversation_id: String(created.id),
-      ...(codingStore.workspace?.id ? { workspace_id: codingStore.workspace.id } : {}),
-    },
-  }).catch(() => {})
+  // history.replaceState 而非 router.replace: 避免 fullPath key 重挂载把新会话覆盖回主会话
+  syncCodingUrl(created.id)
 }
 // 文件树列也可拖宽(handle 在树右边界, 长 Java 类名放不下时拖开)
 const { panelWidth: treePaneWidth, onResizeStart: onTreeResizeStart } = usePanelResize({
@@ -1378,6 +1417,11 @@ onMounted(async () => {
   const wsId = (route.query.workspace_id || route.query.ws) as string
   if (wsId) {
     await openWorkspaceById(wsId)
+    // URL 还带 conversation_id 且不是工作区主会话(头部切过会话后刷新) → 保工作区, 切回该会话
+    const _qConvId = Number(route.query.conversation_id)
+    if (Number.isFinite(_qConvId) && _qConvId > 0 && _qConvId !== codingStore.conversationId) {
+      await switchConversationFromHeader(_qConvId)
+    }
   } else {
     const conversationId = Number(route.query.conversation_id)
     if (Number.isFinite(conversationId) && conversationId > 0) {
