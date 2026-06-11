@@ -1787,17 +1787,19 @@ async def run_coding_pipeline(
                     # (user + 工具 chip + 答案 message), 不走 _record_event 的
                     # codegen 映射(那套会把答案记成 thinking 斜体)。
                     _push_replay_message(replay_stream_messages, "user", params.message)
-                    _answer_parts: list[str] = []
+                    _read_answer = ""
                     async for _ev in run_read_query(params, db):
-                        if _ev.get("type") == "content":
-                            _answer_parts.append(str(_ev.get("content") or ""))
-                        elif _ev.get("type") == "tool":
+                        _et = _ev.get("type")
+                        if _et == "read_answer":
+                            # 完整答案(流式增量的收口), 内部事件只用于持久化, 不下发
+                            _read_answer = str(_ev.get("content") or "").strip()
+                            continue
+                        if _et == "tool":
                             append_event_to_stream_replay(replay_stream_messages, _ev)
-                        if _ev.get("type") == "done":
+                        if _et == "done":
                             _ev["conversation_id"] = conversation_id
                             _ev["workspace_id"] = ws_id  # 前端保持工作区上下文
                         yield _ev
-                    _read_answer = "\n\n".join(p for p in _answer_parts if p.strip()).strip()
                     if _read_answer:
                         await save_coding_message(db, conversation_id, "assistant", _read_answer)
                         _push_replay_message(replay_stream_messages, "message", _read_answer)
@@ -1853,14 +1855,16 @@ async def run_coding_pipeline(
                     await db.refresh(_read_conv)
                     conversation_id = _read_conv.id
                 await save_coding_message(db, conversation_id, "user", params.message)
-                _answer_parts: list[str] = []
+                _read_answer = ""
                 async for _ev in run_read_query(params, db):
-                    if _ev.get("type") == "content":
-                        _answer_parts.append(str(_ev.get("content") or ""))
-                    if _ev.get("type") == "done":
+                    _et = _ev.get("type")
+                    if _et == "read_answer":
+                        _read_answer = str(_ev.get("content") or "").strip()
+                        continue
+                    if _et == "done":
                         _ev["conversation_id"] = conversation_id
-                    yield _record_event(_ev)
-                _read_answer = "\n\n".join(p for p in _answer_parts if p.strip()).strip()
+                    # 直接 yield 不走 _record_event: content 流式增量逐 token 进 replay 会爆炸
+                    yield _ev
                 if _read_answer:
                     await save_coding_message(db, conversation_id, "assistant", _read_answer)
                 return

@@ -68,7 +68,10 @@ class CodingSSEAdapter:
             if kind == "thinking":
                 return {"type": "agent_thinking_delta", "content": data.get("text", "")}
             elif kind == "content":
-                return {"type": "content", "content": data.get("text", "")}
+                out = {"type": "content", "content": data.get("text", "")}
+                if data.get("delta"):
+                    out["delta"] = True  # read 路径流式增量, 前端追加到最后一条 message
+                return out
             elif kind == "system":
                 # Pipeline step/scene_detected 等系统事件 — 透传给前端
                 # data 内已包含完整的 pipeline 事件（type/step/status/data 等）

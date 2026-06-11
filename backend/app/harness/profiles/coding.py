@@ -189,10 +189,12 @@ class CodingProfile(HarnessProfile):
                     )
 
                 elif event_type == "content":
+                    # delta=read 路径逐 token 增量, 不持久化(否则一个回答几百行事件)
                     await event_bus.publish(
                         ITEM_DELTA, turn_ctx.turn_id,
-                        {"kind": "content", "text": event.get("content", "")},
+                        {"kind": "content", "text": event.get("content", ""), "delta": bool(event.get("delta"))},
                         item_kind="content",
+                        persist=not bool(event.get("delta")),
                     )
 
                 elif event_type == "scene_detected":

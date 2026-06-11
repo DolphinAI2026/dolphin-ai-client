@@ -200,6 +200,17 @@ export function useCodingPipeline(deps: PipelineDeps) {
     },
     content: (parsed) => {
       const text = (parsed.content || '') as string
+      // READ 路径流式增量: 追加到最后一条增量 message(打字机), 中间隔了工具卡就开新气泡
+      if (parsed.delta) {
+        if (!text) return
+        const last = streamMessages.value[streamMessages.value.length - 1]
+        if (last?.type === 'message' && last.deltaStream) {
+          last.content += text
+        } else {
+          addStreamMsg({ type: 'message', content: text, deltaStream: true })
+        }
+        return
+      }
       if (text.trim()) addStreamMsg({ type: 'message', content: text })
     },
     // 澄清门:结构化问题 + 可点选项(对齐 Builder),渲染成 ask 卡片
@@ -238,7 +249,7 @@ export function useCodingPipeline(deps: PipelineDeps) {
       } else if (parsed.tool && parsed.tool !== 'ask_clarifying_question') {
         // 未注册的工具(只读路径的 读取文件/搜索代码、agent 的 aPaaS 读工具等)
         // 渲染通用 chip,别静默丢——agent_result 会把结果挂上来变成可折叠卡片。
-        addStreamMsg({ type: 'tool', content: `🔧 ${parsed.tool_display || parsed.tool}`, resultCollapsed: true })
+        addStreamMsg({ type: 'tool', content: `🔧 ${parsed.tool_display || parsed.tool}`, toolName: parsed.tool, resultCollapsed: true })
       }
     },
     agent_command_output: (parsed) => {
@@ -250,11 +261,20 @@ export function useCodingPipeline(deps: PipelineDeps) {
       if (parsed.is_error) {
         addStreamMsg({ type: 'error', content: preview || '执行失败' })
       } else if (preview) {
-        // 将结果挂到上一条 tool 消息，使其变为可折叠卡片
-        const last = streamMessages.value[streamMessages.value.length - 1]
-        if (last?.type === 'tool') {
-          last.result = preview
-          last.resultCollapsed = true
+        // 结果回填: 同轮工具并行执行后 done 批量到达, "挂到最后一条"会全堆在末尾
+        // chip 上 → 先按工具名正向找第一个未回填的 chip, 找不到再退回旧的"最后一条"。
+        const list = streamMessages.value
+        let target = null as (typeof list)[number] | null
+        if (parsed.tool) {
+          target = list.find(m => m.type === 'tool' && m.toolName === parsed.tool && !m.result) || null
+        }
+        if (!target) {
+          const last = list[list.length - 1]
+          if (last?.type === 'tool' && !last.result) target = last
+        }
+        if (target) {
+          target.result = preview
+          target.resultCollapsed = true
         }
       }
     },

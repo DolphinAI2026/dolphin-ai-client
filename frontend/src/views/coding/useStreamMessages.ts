@@ -25,6 +25,10 @@ export interface StreamMessage {
   collapsed?: boolean
   result?: string
   resultCollapsed?: boolean
+  /** type=message 用: READ 路径流式增量正在追加中 */
+  deltaStream?: boolean
+  /** type=tool 用: 工具名(并行执行时结果按名回填, 不再"挂到最后一条") */
+  toolName?: string
   /** type=clarify 用:澄清问题 + 可点选项(对齐 Builder 的 ask_clarifying_question) */
   question?: string
   options?: string[]

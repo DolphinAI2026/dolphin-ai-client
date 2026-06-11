@@ -256,6 +256,69 @@ async def _resolve_read_platform_env_id(
     return None
 
 
+# ─────────────────────────── 流式 LLM 调用 ─────────────────────────────────
+
+
+def merge_stream_tool_call_delta(acc: list[dict], delta_tool_calls: list[dict]) -> None:
+    """OpenAI 流式 tool_calls 增量合并: 按 index 聚合 id / name / arguments 片段。"""
+    for d in delta_tool_calls or []:
+        try:
+            idx = int(d.get("index") or 0)
+        except (TypeError, ValueError):
+            idx = 0
+        while len(acc) <= idx:
+            acc.append({"id": "", "type": "function", "function": {"name": "", "arguments": ""}})
+        slot = acc[idx]
+        if d.get("id"):
+            slot["id"] = d["id"]
+        fn = d.get("function") or {}
+        if fn.get("name"):
+            slot["function"]["name"] += fn["name"]
+        if fn.get("arguments"):
+            slot["function"]["arguments"] += fn["arguments"]
+
+
+async def _stream_llm(
+    base_url: str, api_key: str, payload: dict, sink: dict,
+) -> AsyncIterator[str]:
+    """流式 chat/completions: 逐段 yield content 增量, 完整 content/tool_calls 落 sink。
+
+    READ 路径以前整轮非流式, 一个回答 1-2 分钟前端只有工具 chip 没有文字;
+    流式后最终回答打字机直出。
+    """
+    sink.setdefault("content", "")
+    sink.setdefault("tool_calls", [])
+    async with httpx.AsyncClient(
+        timeout=httpx.Timeout(connect=10, read=120, write=10, pool=10)
+    ) as client:
+        async with client.stream(
+            "POST",
+            f"{base_url}/chat/completions",
+            headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"},
+            json={**payload, "stream": True},
+        ) as resp:
+            resp.raise_for_status()
+            async for raw_line in resp.aiter_lines():
+                line = (raw_line or "").strip()
+                if not line.startswith("data:"):
+                    continue
+                data_str = line[5:].strip()
+                if not data_str or data_str == "[DONE]":
+                    continue
+                try:
+                    chunk = json.loads(data_str)
+                except json.JSONDecodeError:
+                    continue
+                choices = chunk.get("choices") or []
+                delta = (choices[0] or {}).get("delta") or {} if choices else {}
+                piece = delta.get("content")
+                if piece:
+                    sink["content"] += piece
+                    yield piece
+                if delta.get("tool_calls"):
+                    merge_stream_tool_call_delta(sink["tool_calls"], delta["tool_calls"])
+
+
 # ─────────────────────────── 只读 tool-loop ────────────────────────────────
 
 _READ_SYSTEM_PROMPT = """你是 aPaaS 平台的 AI 助手，帮用户查询和了解平台现有应用、模型、菜单、字典等信息。
@@ -344,41 +407,49 @@ async def run_read_query(
         {"role": "user", "content": params.message},
     ]
 
-    for _turn in range(_READ_MAX_TURNS):
-        # LLM call（非流式，读路径不需要 streaming）
+    async def _exec_tool(fn_name: str, args: dict, is_ws_tool: bool) -> str:
+        """执行单个只读工具:
+        - 工作区文件工具 → 本地只读执行(线程池, 不碰平台)
+        - aPaaS 只读工具 → _call_apaas_platform_tool 复用 token 自愈
+          (首次空 token→用 env 账号密码登录 + 撞 401→刷 token 重试一次)。
+        """
         try:
-            async with httpx.AsyncClient(
-                timeout=httpx.Timeout(connect=10, read=60, write=10, pool=10)
-            ) as client:
-                payload: dict = {
-                    "model": llm_model,
-                    "messages": messages,
-                    "tools": tool_definitions,
-                    "tool_choice": "auto",
-                    "temperature": 0.2,
-                    "max_tokens": 1200,
-                }
-                # 兼容 qwen3 / dashscope — disable thinking
-                if "qwen3" in llm_model.lower() or "dashscope.aliyuncs.com" in base_url.lower():
-                    payload["enable_thinking"] = False
-                resp = await client.post(
-                    f"{base_url}/chat/completions",
-                    headers={
-                        "Authorization": f"Bearer {api_key}",
-                        "Content-Type": "application/json",
-                    },
-                    json=payload,
-                )
-                resp.raise_for_status()
-                data = resp.json()
+            if is_ws_tool:
+                return await asyncio.to_thread(execute_workspace_tool, ws_path, fn_name, args)
+            from app.mcp_server import _call_apaas_platform_tool
+            _result_dict = await _call_apaas_platform_tool(fn_name, args, platform_env_id)
+            return json.dumps(_result_dict, ensure_ascii=False)
+        except Exception as exc:
+            return f"Error: {exc}"
+
+    turn_texts: list[str] = []  # 各轮 content, 收口成完整答案给持久化
+
+    for _turn in range(_READ_MAX_TURNS):
+        payload: dict = {
+            "model": llm_model,
+            "messages": messages,
+            "tools": tool_definitions,
+            "tool_choice": "auto",
+            "temperature": 0.2,
+            "max_tokens": 1200,
+        }
+        # 兼容 qwen3 / dashscope — disable thinking
+        if "qwen3" in llm_model.lower() or "dashscope.aliyuncs.com" in base_url.lower():
+            payload["enable_thinking"] = False
+
+        sink: dict = {"content": "", "tool_calls": []}
+        try:
+            async for piece in _stream_llm(base_url, api_key, payload, sink):
+                yield {"type": "content", "content": piece, "delta": True}
         except Exception as exc:
             logger.warning("[read_query] LLM 调用失败 turn=%d: %s", _turn, exc)
             yield {"type": "content", "content": f"查询时出现错误：{exc}"}
             break
 
-        msg = data.get("choices", [{}])[0].get("message", {})
-        tool_calls: list[dict] = msg.get("tool_calls") or []
-        content: str = (msg.get("content") or "").strip()
+        content: str = str(sink["content"]).strip()
+        tool_calls: list[dict] = [tc for tc in sink["tool_calls"] if tc.get("function", {}).get("name")]
+        if content:
+            turn_texts.append(content)
 
         # 把 assistant 消息加进历史（不管有没有 tool_calls）
         messages.append({
@@ -387,14 +458,13 @@ async def run_read_query(
             "tool_calls": tool_calls if tool_calls else None,
         })
 
-        # 没有工具调用 → 输出最终答案
+        # 没有工具调用 → 最终答案(增量已流式发完, 这里不再重发)
         if not tool_calls:
-            if content:
-                yield {"type": "content", "content": content}
             break
 
-        # 有工具调用 → 逐个执行
+        # 有工具调用 → 同轮并行执行(全是只读, 无相互依赖; 先齐发 running chip 再 gather)
         tool_result_messages: list[dict] = []
+        runnable: list[tuple[str, str, dict, bool]] = []  # (tc_id, fn_name, args, is_ws_tool)
         for tc in tool_calls:
             fn_name = tc.get("function", {}).get("name", "")
             tc_id = tc.get("id") or fn_name
@@ -409,14 +479,12 @@ async def run_read_query(
                 })
                 continue
 
-            # 解析参数
             try:
                 args_raw = tc.get("function", {}).get("arguments") or "{}"
                 args = json.loads(args_raw) if isinstance(args_raw, str) else (args_raw or {})
             except json.JSONDecodeError:
                 args = {}
 
-            # emit tool running chip
             yield {
                 "type": "tool",
                 "name": fn_name,
@@ -424,29 +492,19 @@ async def run_read_query(
                 "status": "running",
                 "args": args,
             }
+            runnable.append((tc_id, fn_name, args, _is_ws_tool))
 
-            # 执行工具:
-            # - 工作区文件工具 → 本地只读执行(线程池, 不碰平台)
-            # - aPaaS 只读工具 → _call_apaas_platform_tool 复用 token 自愈
-            #   (首次空 token→用 env 账号密码登录 + 撞 401→刷 token 重试一次)。
-            try:
-                if _is_ws_tool:
-                    result_str = await asyncio.to_thread(execute_workspace_tool, ws_path, fn_name, args)
-                else:
-                    from app.mcp_server import _call_apaas_platform_tool
-                    _result_dict = await _call_apaas_platform_tool(fn_name, args, platform_env_id)
-                    result_str = json.dumps(_result_dict, ensure_ascii=False)
-            except Exception as exc:
-                result_str = f"Error: {exc}"
-
-            # emit tool done chip
+        results = (
+            await asyncio.gather(*[_exec_tool(f, a, w) for (_t, f, a, w) in runnable])
+            if runnable else []
+        )
+        for (tc_id, fn_name, _args, _w), result_str in zip(runnable, results):
             yield {
                 "type": "tool",
                 "name": fn_name,
                 "status": "done",
                 "result": result_str[:2000],  # 截断避免过长
             }
-
             tool_result_messages.append({
                 "role": "tool",
                 "tool_call_id": tc_id,
@@ -462,27 +520,28 @@ async def run_read_query(
             "role": "user",
             "content": "(系统提示) 工具调用轮数已用完。请基于以上已获取的信息，直接回答用户最初的问题；信息不全就说明哪些没来得及看。不要再调用工具。",
         })
+        _final_sink: dict = {"content": "", "tool_calls": []}
         try:
-            async with httpx.AsyncClient(
-                timeout=httpx.Timeout(connect=10, read=60, write=10, pool=10)
-            ) as client:
-                resp = await client.post(
-                    f"{base_url}/chat/completions",
-                    headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"},
-                    json={
-                        "model": llm_model,
-                        "messages": messages,
-                        "temperature": 0.2,
-                        "max_tokens": 1200,
-                        "stream": False,
-                    },
-                )
-                resp.raise_for_status()
-                _final = (resp.json().get("choices", [{}])[0].get("message", {}).get("content") or "").strip()
-            yield {"type": "content", "content": _final or "查询完成，如需了解更多请继续提问。"}
+            async for piece in _stream_llm(base_url, api_key, {
+                "model": llm_model,
+                "messages": messages,
+                "temperature": 0.2,
+                "max_tokens": 1200,
+            }, _final_sink):
+                yield {"type": "content", "content": piece, "delta": True}
+            _final = str(_final_sink["content"]).strip()
+            if _final:
+                turn_texts.append(_final)
+            else:
+                yield {"type": "content", "content": "查询完成，如需了解更多请继续提问。"}
+                turn_texts.append("查询完成，如需了解更多请继续提问。")
         except Exception as exc:
             logger.warning("[read_query] 收尾回答失败: %s", exc)
             yield {"type": "content", "content": "查询完成，如需了解更多请继续提问。"}
+            turn_texts.append("查询完成，如需了解更多请继续提问。")
+
+    # 完整答案(各轮 content 拼接)给调用方持久化用 —— 内部事件, pipeline 消费后不下发前端
+    yield {"type": "read_answer", "content": "\n\n".join(t for t in turn_texts if t.strip()).strip()}
 
     yield {
         "type": "done",

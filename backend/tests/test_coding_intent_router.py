@@ -153,6 +153,23 @@ def _make_llm_resp(content: str = "", tool_calls: list | None = None) -> dict:
     return {"choices": [{"message": msg}]}
 
 
+def _fake_stream_llm(turns):
+    """按轮消费的 _stream_llm 假实现: 每次调用取一个 turn, 填 sink 并流式 yield content。"""
+    it = iter(turns)
+
+    async def fake(base_url, api_key, payload, sink):
+        t = next(it, {})
+        sink.setdefault("content", "")
+        sink.setdefault("tool_calls", [])
+        c = t.get("content") or ""
+        if c:
+            sink["content"] += c
+            yield c
+        sink["tool_calls"].extend(t.get("tool_calls") or [])
+
+    return fake
+
+
 class TestRunReadQuery:
     """run_read_query 功能测试（mock LLM + apaas 工具）"""
 
@@ -163,34 +180,20 @@ class TestRunReadQuery:
             "id": "tc1",
             "function": {"name": "list_apaas_apps", "arguments": "{}"},
         }
-        # 第一轮：LLM 返回 tool_call；第二轮：LLM 返回 content
-        llm_responses = [
-            _make_llm_resp(tool_calls=[tool_call]),
-            _make_llm_resp(content="共有 3 个应用：图书借阅、采购管理、客户管理"),
-        ]
-        resp_iter = iter(llm_responses)
-
-        def _mock_post(*args, **kwargs):
-            resp = MagicMock()
-            resp.json.return_value = next(resp_iter)
-            resp.raise_for_status = MagicMock()
-            return resp
-
+        # 第一轮：LLM 返回 tool_call；第二轮：LLM 返回 content(流式 _stream_llm 直接替换)
         mock_tool_result = json.dumps({"ok": True, "apps": [{"app_name": "图书借阅"}]})
 
         with patch("app.agents.coding.llm_config.load_coding_llm_config",
                    new=AsyncMock(return_value=("http://api", "key", "model"))), \
-             patch("httpx.AsyncClient") as mock_cls, \
+             patch("app.coding.read_query._stream_llm",
+                   new=_fake_stream_llm([
+                       {"tool_calls": [tool_call]},
+                       {"content": "共有 3 个应用：图书借阅、采购管理、客户管理"},
+                   ])), \
              patch.dict(
                  "app.coding.read_query._READ_ONLY_EXECUTORS",
                  {"list_apaas_apps": AsyncMock(return_value=mock_tool_result)},
              ):
-            mock_ctx = AsyncMock()
-            mock_ctx.__aenter__ = AsyncMock(return_value=mock_ctx)
-            mock_ctx.__aexit__ = AsyncMock(return_value=False)
-            mock_ctx.post = AsyncMock(side_effect=_mock_post)
-            mock_cls.return_value = mock_ctx
-
             db = _make_mock_db()
             events = []
             async for ev in run_read_query(_FakeParams(), db):
@@ -228,27 +231,13 @@ class TestRunReadQuery:
             "id": "tc_bad",
             "function": {"name": "write_artifact", "arguments": '{"content": "bad"}'},
         }
-        llm_responses = [
-            _make_llm_resp(tool_calls=[tool_call]),
-            _make_llm_resp(content="好的，已处理"),
-        ]
-        resp_iter = iter(llm_responses)
-
-        def _mock_post(*args, **kwargs):
-            r = MagicMock()
-            r.json.return_value = next(resp_iter)
-            r.raise_for_status = MagicMock()
-            return r
-
         with patch("app.agents.coding.llm_config.load_coding_llm_config",
                    new=AsyncMock(return_value=("http://api", "key", "model"))), \
-             patch("httpx.AsyncClient") as mock_cls:
-            mock_ctx = AsyncMock()
-            mock_ctx.__aenter__ = AsyncMock(return_value=mock_ctx)
-            mock_ctx.__aexit__ = AsyncMock(return_value=False)
-            mock_ctx.post = AsyncMock(side_effect=_mock_post)
-            mock_cls.return_value = mock_ctx
-
+             patch("app.coding.read_query._stream_llm",
+                   new=_fake_stream_llm([
+                       {"tool_calls": [tool_call]},
+                       {"content": "好的，已处理"},
+                   ])):
             db = _make_mock_db()
             events = []
             async for ev in run_read_query(_FakeParams(), db):
