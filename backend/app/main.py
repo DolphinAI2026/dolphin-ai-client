@@ -54,6 +54,17 @@ from app.routes import (
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    # 安全门(deploy-readiness 阻断项): ENCRYPTION_KEY 不许用仓库里的默认值跑——
+    # 否则所有 aPaaS 密码都用一把公开的 key 加密。本地开发/历史数据要继续用默认 key,
+    # 必须显式 ALLOW_DEFAULT_ENCRYPTION_KEY=1 表态。
+    _insecure_keys = {"", "default-key-change-in-production-32b", "__GENERATE__"}
+    if settings.encryption_key in _insecure_keys and not settings.allow_default_encryption_key:
+        raise RuntimeError(
+            "ENCRYPTION_KEY 未配置或仍是仓库默认值, 拒绝启动。"
+            "生产环境请设置随机密钥(如 openssl rand -base64 32);"
+            "本地开发要沿用默认 key(历史数据已用它加密)请设 ALLOW_DEFAULT_ENCRYPTION_KEY=1。"
+        )
+
     # 启动时初始化数据库
     await init_db()
 

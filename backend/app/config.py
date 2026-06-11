@@ -56,6 +56,8 @@ class Settings(BaseSettings):
 
     # Encryption
     encryption_key: str = "default-key-change-in-production-32b"  # Fernet key for password encryption
+    # 显式允许用上面的默认 key 跑(仅本地开发/历史数据兼容); 生产必须配真实 ENCRYPTION_KEY
+    allow_default_encryption_key: bool = False
 
     # Agent Turn Limits（可通过 .env 覆盖）
     coding_max_turns: int = 30

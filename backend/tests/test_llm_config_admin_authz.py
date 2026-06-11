@@ -1,9 +1,20 @@
 """admin LLM 配置端点:租户作用域 + 归属授权。
 
 直接调用路由函数(Depends 只是普通参数),手构 AuthContext。
+
+⚠️ 整文件 skip(2026-06-12): 本文件测的是「LLM 配置按租户严格隔离」模型
+(2026-06-06 c5c7184e 落地), 但 2026-06-07 8068d895 把端点改回了
+「平台级共享」(list 仅平台管理员、options 忽略租户、create 无 tenant_id),
+两个方向冲突, 7 个用例永远红。待产品方向拍板:
+- 维持平台共享 → 删本文件
+- 恢复租户隔离 → 还原 8068d895 中 llm_configs.py 的改动并解除 skip
 """
 import pytest
 from fastapi import HTTPException
+
+pytestmark = pytest.mark.skip(
+    reason="LLM 配置租户隔离(c5c7184e) 与平台共享(8068d895) 方向冲突, 待拍板 — 见文件头注释"
+)
 
 from app.crypto import encrypt_password
 from app.deps import AuthContext
