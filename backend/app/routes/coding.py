@@ -2605,6 +2605,62 @@ def _find_kit_by_filename(kits: list[dict], file_name: str) -> Optional[dict]:
     return None
 
 
+def _normalize_backend_jdk(value: object) -> str:
+    text = str(value or "").strip().lower()
+    if text in {"8", "1.8", "jdk8", "java8"}:
+        return "8"
+    if text in {"17", "jdk17", "java17"}:
+        return "17"
+    if text == "auto":
+        return "auto"
+    return "17"
+
+
+def _resolve_backend_runtime_version(ws_path: Path) -> str:
+    """Resolve the runtime jar version that must accompany backend self-dev jars."""
+    override = (os.environ.get("APAAS_BACKEND_RUNTIME_VERSION") or "").strip()
+    if override:
+        return override
+
+    jdk = _normalize_backend_jdk(settings.apaas_backend_jdk_version)
+    if jdk == "17":
+        return "5.0.0"
+    if jdk == "8":
+        return "4.1.1-rc"
+
+    pom = ws_path / "pom.xml"
+    if pom.exists():
+        text = pom.read_text(encoding="utf-8", errors="ignore")
+        java_match = re.search(r"<java\.version>\s*([^<]+?)\s*</java\.version>", text)
+        source_match = re.search(r"<maven\.compiler\.source>\s*([^<]+?)\s*</maven\.compiler\.source>", text)
+        java_version = (java_match or source_match).group(1).strip() if (java_match or source_match) else ""
+        if java_version.startswith("17"):
+            return "5.0.0"
+        papaas_match = re.search(r"<papaas\.version>\s*([^<]+?)\s*</papaas\.version>", text)
+        if papaas_match:
+            return papaas_match.group(1).strip()
+
+    return "5.0.0"
+
+
+def _resolve_backend_runtime_jar(ws_path: Path) -> Path:
+    override = (os.environ.get("APAAS_BACKEND_RUNTIME_JAR") or "").strip()
+    if override:
+        path = Path(override).expanduser()
+        if path.exists():
+            return path
+        raise FileNotFoundError(f"APAAS_BACKEND_RUNTIME_JAR 指向的文件不存在: {path}")
+
+    version = _resolve_backend_runtime_version(ws_path)
+    repo = Path(os.environ.get("MAVEN_REPO_LOCAL") or Path.home() / ".m2" / "repository").expanduser()
+    jar = repo / "com" / "xdap" / "runtime" / version / f"runtime-{version}.jar"
+    if jar.exists():
+        return jar
+    raise FileNotFoundError(
+        f"后端自开发需要 runtime-{version}.jar,但本机 Maven 缓存未找到: {jar}"
+    )
+
+
 def _build_upload_form_data(
     *,
     file_type: str,
@@ -2662,6 +2718,10 @@ def _resolve_page_register_name(apaas_config: dict | None, fallback: str) -> str
     if isinstance(router, dict):
         for key in router.keys():
             candidate = str(key or "").strip()
+            if candidate.startswith("apaas-custom-"):
+                return candidate
+        for key in router.keys():
+            candidate = str(key or "").strip()
             if candidate:
                 return candidate
 
@@ -2683,36 +2743,71 @@ async def _build_and_upload_kits(*, ws_mgr, ws_id: str, env, db) -> dict:
     project_type = meta.get("project_type", "")
     display_name = meta.get("display_name") or meta.get("project_name", ws_id)
 
-    # 1. 构建 + 打包(双端两包 / 后端 jar / 其余单 zip)
+    backend_project_types = {"backend-api", "backend-feign", "backend-scheduled"}
+
+    # 1. 构建 + 打包(双端两包 / 后端 jar + runtime jar / 其余单 zip)
     if project_type == ProjectType.FORM_COMPONENT_DUAL.value:
-        packages = await ws_mgr.build_and_package_dual(ws_id)  # [(path, fileType), ...]
+        packages = [
+            {
+                "path": path,
+                "file_type": ft,
+                "description": f"{display_name} - 由 apaas-builder 装回",
+                "upload_policy": "update_if_exists",
+            }
+            for path, ft in await ws_mgr.build_and_package_dual(ws_id)
+        ]
     else:
         ft = _PROJECT_TYPE_TO_FILE_TYPE.get(project_type)
         if not ft:
             raise HTTPException(status_code=400, detail=f"不支持上传的项目类型: {project_type}")
-        if project_type in {"backend-api", "backend-feign", "backend-scheduled"}:
+        if project_type in backend_project_types:
+            await ws_mgr.build_and_package(ws_id)
             out_dir = ws_mgr._get_build_output_dir(ws_path)
             jars = [j for j in out_dir.glob("*.jar") if not j.name.endswith(".original")]
             if not jars:
                 raise HTTPException(status_code=500, detail="未找到编译产物 JAR,请先在 IDE 构建项目")
-            packages = [(str(jars[0]), ft)]
+            runtime_jar = _resolve_backend_runtime_jar(ws_path)
+            packages = [
+                {
+                    "path": str(jars[0]),
+                    "file_type": ft,
+                    "description": f"{display_name} - 由 apaas-builder 装回",
+                    "upload_policy": "update_if_exists",
+                },
+                {
+                    "path": str(runtime_jar),
+                    "file_type": ft,
+                    "description": f"{runtime_jar.stem} - aPaaS 后端运行时依赖",
+                    "upload_policy": "missing_only",
+                },
+            ]
         else:
-            packages = [(await ws_mgr.build_and_package(ws_id), ft)]
+            packages = [{
+                "path": await ws_mgr.build_and_package(ws_id),
+                "file_type": ft,
+                "description": f"{display_name} - 由 apaas-builder 装回",
+                "upload_policy": "update_if_exists",
+            }]
 
     add_url = f"{env.base_url.rstrip('/')}/xdap-app/selfdevelopment/add/developmentKit"
     update_url = f"{env.base_url.rstrip('/')}/xdap-app/selfdevelopment/update/developmentKit"
-    file_names = [Path(p).name for p, _ in packages]
-    key_word = file_names[0][:-4] if file_names[0].endswith(".zip") else file_names[0]
-    existing = await _query_existing_development_kits(
-        env.base_url, env.platform_tenant_id, env.token, key_word,
-    )
+    file_names = [Path(pkg["path"]).name for pkg in packages]
+    skipped_existing: list[str] = []
 
     # 2. 逐包上传(update-if-exists)
-    for zip_str, ft in packages:
-        fp = Path(zip_str)
+    for pkg in packages:
+        fp = Path(pkg["path"])
+        ft = str(pkg["file_type"])
+        existing = await _query_existing_development_kits(
+            env.base_url, env.platform_tenant_id, env.token, fp.name,
+        )
         kit = _find_kit_by_filename(existing, fp.name)
+        if kit and pkg.get("upload_policy") == "missing_only":
+            skipped_existing.append(fp.name)
+            logger.info("[deploy-to-app] 运行时依赖已存在,跳过上传: %s", fp.name)
+            continue
         form_data = _build_upload_form_data(
-            file_type=ft, description=f"{display_name} - 由 apaas-builder 装回",
+            file_type=ft, description=str(pkg["description"]),
             version_code=_u.uuid4().hex, upload_id=str(int(_t.time() * 1000)), existing_kit=kit,
         )
         target = update_url if kit else add_url
@@ -2731,8 +2826,13 @@ async def _build_and_upload_kits(*, ws_mgr, ws_id: str, env, db) -> dict:
 
     # 3. 反查 kit_id(add/update 响应不一定带 id)
     client = APaaSClient(base_url=env.base_url, tenant_id=env.platform_tenant_id, token=env.token)
-    kits = await client.query_app_dev_kits("", file_name=key_word)
-    kit_ids = [str(k["id"]) for fn in file_names for k in kits if k.get("fileName") == fn and k.get("id")]
+    kit_ids: list[str] = []
+    for fn in file_names:
+        kits = await client.query_app_dev_kits("", file_name=fn)
+        for kit in kits:
+            kit_id = kit.get("id")
+            if kit.get("fileName") == fn and kit_id and str(kit_id) not in kit_ids:
+                kit_ids.append(str(kit_id))
 
     # 页面类建菜单的 link_url = 自开发组件注册名(取 workspace apaas.json 的 router key)
     # 注意 outputName 是 bundle/package 名(form-page-xxx), 不能当作菜单 linkUrl。
@@ -2744,11 +2844,12 @@ async def _build_and_upload_kits(*, ws_mgr, ws_id: str, env, db) -> dict:
 
     return {
         "kit_ids": kit_ids,
-        "file_type": packages[0][1],
+        "file_type": packages[0]["file_type"],
         "project_type": project_type,
         "display_name": display_name,
         "file_names": file_names,
         "register_name": register_name,
+        "skipped_existing_files": skipped_existing,
     }
 
 
@@ -3025,6 +3126,33 @@ class DeployToAppRequest(BaseModel):
 _PAGE_TYPES = {"menu-page", "form-page", "mobile-page"}
 
 
+def _find_self_dev_menu(nodes: list[dict] | None, *, menu_name: str, link_url: str) -> dict | None:
+    """Find an existing custom page menu by display name first, then linkUrl."""
+    target_name = str(menu_name or "").strip()
+    target_link = str(link_url or "").strip()
+
+    name_match = None
+    link_match = None
+
+    def _walk(items):
+        nonlocal name_match, link_match
+        for item in items or []:
+            if not isinstance(item, dict):
+                continue
+            current_name = str(item.get("menuName") or item.get("menu_name") or item.get("name") or "").strip()
+            current_link = str(item.get("linkUrl") or item.get("link_url") or "").strip()
+            current_type = str(item.get("menuType") or item.get("menu_type") or "").strip().upper()
+            is_custom = current_type in {"", "CUSTOM"} or bool(current_link.startswith("apaas-custom-"))
+            if is_custom and target_name and current_name == target_name and name_match is None:
+                name_match = item
+            if is_custom and target_link and current_link == target_link and link_match is None:
+                link_match = item
+            _walk(item.get("submenus") or item.get("children") or [])
+
+    _walk(nodes)
+    return name_match or link_match
+
+
 async def _deploy_to_app_impl(ws_id: str, local_app_id, ctx, db) -> dict:
     """装回应用编排:upload → (bound) enable→attach→页面建菜单→republish。
 
@@ -3073,8 +3201,30 @@ async def _deploy_to_app_impl(ws_id: str, local_app_id, ctx, db) -> dict:
     menu = None
     if up["project_type"] in _PAGE_TYPES:
         register = up.get("register_name") or up["display_name"]
-        await call_apaas_with_relogin(env_id, db, lambda c: c.create_self_dev_menu(apaas_app_id, menu_name=up["display_name"], link_url=register))
-        menu = up["display_name"]
+        menu_name = up["display_name"]
+        menus = await call_apaas_with_relogin(env_id, db, lambda c: c.query_menus(apaas_app_id))
+        existing_menu = _find_self_dev_menu(menus, menu_name=menu_name, link_url=register)
+        if existing_menu:
+            menu_id = str(existing_menu.get("id") or existing_menu.get("menuId") or existing_menu.get("menu_id") or "")
+            current_link = str(existing_menu.get("linkUrl") or existing_menu.get("link_url") or "").strip()
+            if menu_id and current_link != register:
+                await call_apaas_with_relogin(
+                    env_id,
+                    db,
+                    lambda c: c.update_self_dev_menu_link_url(
+                        apaas_app_id,
+                        menu_id,
+                        register,
+                        menu_type="CUSTOM",
+                        confirmed=True,
+                    ),
+                )
+                menu = {"name": menu_name, "action": "updated", "menu_id": menu_id, "link_url": register}
+            else:
+                menu = {"name": menu_name, "action": "reused", "menu_id": menu_id, "link_url": register}
+        else:
+            await call_apaas_with_relogin(env_id, db, lambda c: c.create_self_dev_menu(apaas_app_id, menu_name=menu_name, link_url=register))
+            menu = {"name": menu_name, "action": "created", "link_url": register}
 
     # republish:取当前版本 → deploy_app;版本冲突则 patch+1 重试
     detail = await call_apaas_with_relogin(env_id, db, lambda c: c.query_app_detail(apaas_app_id))

@@ -1005,7 +1005,7 @@ const modelMenus = computed(() => loadedMenus.value.filter(m => {
 }))
 const customMenus = computed(() => loadedMenus.value.filter(m => {
   const t = String(m.extra?.menu_type || '').toUpperCase()
-  return t === 'CUSTOM' || t === 'MENU_TYPE_CUSTOM'
+  return t === 'CUSTOM' || t === 'MENU_TYPE_CUSTOM' || t === 'PAGE_CUSTOM_DEV'
 }))
 const loadedDatasources = ref<DatasourceItem[]>([])
 const datasourceNote = ref('')

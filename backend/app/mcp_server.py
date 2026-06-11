@@ -2675,7 +2675,8 @@ async def create_apaas_self_dev_menu(
                     "link_url_matches": existing_link_url == link_url.strip(),
                     "hint": (
                         "菜单已存在但 linkUrl 与 expected_link_url 不一致时，"
-                        "请删除旧菜单后用 expected_link_url 重建，或在平台侧改菜单 linkUrl 后重新发布应用。"
+                        "请调用 update_apaas_self_dev_menu_link_url(menu_id=existing_menu.menu_id, "
+                        "link_url=expected_link_url, confirmed=true) 更新同一个菜单；不要删除旧菜单或新建同名菜单。"
                     ),
                 }
         return payload
@@ -3359,8 +3360,8 @@ async def create_dev_workspace(
                 "duplicate_packages": package_hits,
                 "duplicate_menus": menu_hits,
                 "next_options": [
-                    "用户确认更新已有资源：重新调用 create_dev_workspace(..., confirmed=true)",
-                    "用户要新建独立包：换一个新的 project_name/display_name 后再调用",
+                    "用户确认更新已有资源：沿用 candidate.project_name / candidate.file_names / candidate.register_name，重新调用 create_dev_workspace(..., confirmed=true)，后续上传会按同名 fileName 走 update/developmentKit",
+                    "用户要新建独立包：换一个新的 project_name/display_name，确保生成新的 fileName / register_name 后再调用",
                 ],
             }
 

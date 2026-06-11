@@ -11396,9 +11396,11 @@ html[data-theme="light"] .msg-attachment-chip {
   align-items: center;
   justify-content: flex-start;
   gap: 10px;
-  padding: 10px 20px;
+  min-height: 40px;
+  padding: 5px 14px;
   background: var(--surface);
   border-bottom: 1px solid var(--line);
+  box-sizing: border-box;
   flex-shrink: 0;
 }
 .mdsh-subnav-info {
@@ -11408,7 +11410,8 @@ html[data-theme="light"] .msg-attachment-chip {
   min-width: 0;
 }
 .mdsh-menu-name {
-  font-size: 15px;
+  font-size: 14px;
+  line-height: 1.25;
   font-weight: 600;
   color: var(--text);
   white-space: nowrap;
@@ -11428,7 +11431,7 @@ html[data-theme="light"] .msg-attachment-chip {
   align-items: center;
   gap: 2px;
   background: var(--surface-2);
-  padding: 3px;
+  padding: 2px;
   border-radius: 8px;
   flex-shrink: 0;
   /* 2026-06-05: subnav 现有 3 个子项(info / tabs / 共享低代码按钮)。
@@ -11441,12 +11444,12 @@ html[data-theme="light"] .msg-attachment-chip {
   margin-left: 2px;
 }
 .mdsh-subnav-tab {
-  height: 28px;
-  padding: 0 14px;
+  height: 24px;
+  padding: 0 10px;
   background: transparent;
   border: none;
   border-radius: 6px;
-  font-size: 13px;
+  font-size: 12px;
   font-family: inherit;
   color: var(--text-3);
   cursor: pointer;

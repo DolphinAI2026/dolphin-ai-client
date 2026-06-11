@@ -925,10 +925,21 @@ def _build_custom_page_host_html(
         "    Vue.config.errorHandler = function(err, vm, info){ console.error('[host] vue error', info, err); };\n"
         "    Vue.prototype.$request = apaasRequest; Vue.prototype.$df = window.df;\n"
         "    if (window.ELEMENT && window.ELEMENT.Message) { Vue.prototype.$message = window.ELEMENT.Message; }\n"
+        "    var prevExports = window.exports, prevModule = window.module, prevDefine = window.define;\n"
+        "    function restoreModuleGlobals(){\n"
+        "      try { window.exports = prevExports; window.module = prevModule; window.define = prevDefine; } catch(e) {}\n"
+        "    }\n"
+        "    // Force UMD bundles to take the browser-global branch. Some host pages expose\n"
+        "    // CommonJS/AMD globals, causing webpack UMD to skip window[outputName].\n"
+        "    try { window.exports = undefined; window.module = undefined; window.define = undefined; } catch(e) {}\n"
         "    var s = document.createElement('script');\n"
         "    s.src = C.appBase + C.bundleDir + '/' + C.bundleDir + '.umd.js';\n"
         "    s.onload = function(){\n"
-        "      var raw = window[C.bundleDir];\n"
+        "      restoreModuleGlobals();\n"
+        "      var raw = window[C.bundleDir]\n"
+        "        || (window.Symbol && window.Symbol.for && window[window.Symbol.for(C.bundleDir)])\n"
+        "        || window[C.componentTag]\n"
+        "        || (window.Symbol && window.Symbol.for && window[window.Symbol.for(C.componentTag)]);\n"
         "      if (!raw) { setStatus('组件包已加载但找不到导出: ' + C.bundleDir, true); return; }\n"
         "      // UMD 用 esModuleInterop 导出 { default: plugin, _Ctor } — 真插件在 .default\n"
         "      var plugin = (raw && raw.default) ? raw.default : raw;\n"
@@ -944,7 +955,7 @@ def _build_custom_page_host_html(
         "        hideLoading();\n"
         "      } catch(e){ setStatus('挂载组件失败: ' + (e&&e.message||e), true); console.error(e); }\n"
         "    };\n"
-        "    s.onerror = function(){ setStatus('组件包加载失败 (404?): ' + s.src, true); };\n"
+        "    s.onerror = function(){ restoreModuleGlobals(); setStatus('组件包加载失败 (404?): ' + s.src, true); };\n"
         "    document.body.appendChild(s);\n"
         "  }\n"
         "  var tries = 0;\n"
@@ -1378,7 +1389,7 @@ async def _menus_filtered_by_type(
 ) -> SectionContentResponse:
     """共享: 调 list_apaas_app_menus 然后按 menu_type 过滤.
 
-    允许的 menu_type 集合大小写比较 — apaas 平台返大写 (FORM/LIST/PAGE_CUSTOM_DEV).
+    允许的 menu_type 集合大小写比较 — apaas 平台返大写 (FORM/LIST/PAGE_CUSTOM_DEV/CUSTOM).
     """
     ok, raw_or_err = await _safe_call_mcp_tool(
         "list_apaas_app_menus",
@@ -1591,7 +1602,7 @@ async def get_section_content_menu_visibility(
         return _app_not_deployed(app, source)
     # 列出所有 menu_type (不过滤) — 菜单可见性 cover 全部菜单
     return await _menus_filtered_by_type(
-        app, {"MODEL", "GROUP", "TASK_CENTER", "PAGE_CUSTOM_DEV", "QUOTE"}, source,
+        app, {"MODEL", "GROUP", "TASK_CENTER", "PAGE_CUSTOM_DEV", "CUSTOM", "MENU_TYPE_CUSTOM", "QUOTE"}, source,
     )
 
 
