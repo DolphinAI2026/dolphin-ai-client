@@ -31,6 +31,44 @@ export interface BusinessEventsResponse {
   message?: string | null
 }
 
+export interface ApplicationDeliveryAssetItem {
+  key: string
+  title: string
+  kind: string
+  source: 'builder' | 'ai_chat' | 'application' | 'generated' | string
+  format?: string | null
+  version?: number | null
+  preview?: string | null
+  created_at?: string | null
+  updated_at?: string | null
+  meta?: Record<string, any>
+}
+
+export interface ApplicationDeliveryAssetSection {
+  key: 'requirements' | 'design_docs' | 'ui_designs' | 'build_inventory' | 'acceptance_cases' | string
+  label: string
+  description: string
+  count: number
+  status: 'available' | 'empty' | string
+  items: ApplicationDeliveryAssetItem[]
+}
+
+export interface ApplicationDeliveryAssetsResponse {
+  app: {
+    id: number
+    app_name: string
+    app_code: string
+    status: string
+    conversation_id?: number | null
+    ai_chat_session_id?: number | null
+    current_doc_version?: number | null
+    apaas_app_id?: string | null
+    updated_at?: string | null
+  }
+  summary: Record<string, number>
+  sections: ApplicationDeliveryAssetSection[]
+}
+
 export const applicationApi = {
   list(params?: { include_remote?: boolean; source_filter?: string; include_config?: boolean }) {
     return request.get<any, MergedApplication[]>('/applications', { params })
@@ -175,6 +213,9 @@ export const applicationApi = {
   /** 获取文档版本列表（通过 appId） */
   getDocVersions(appId: number) {
     return request.get<any, any>(`/applications/${appId}/doc-versions`)
+  },
+  getDeliveryAssets(appId: number) {
+    return request.get<any, ApplicationDeliveryAssetsResponse>(`/applications/${appId}/delivery-assets`)
   },
   deleteDocVersion(appId: number, versionId: number) {
     return request.delete<any, any>(`/applications/${appId}/doc-versions/${versionId}`)

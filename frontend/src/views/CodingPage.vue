@@ -281,6 +281,7 @@
           :changes="wsGitChanges"
           :selected="selectedFile"
           @select="selectedFile = $event"
+          @accept-all="acceptAllWorkspaceChanges"
         />
         <div class="tree-resizer" title="拖拽调整文件树宽度" @pointerdown="onTreeResizeStart" />
         <CodeViewer
@@ -291,6 +292,7 @@
           :change="selectedGitChange"
           :dark="themeStore.isDark"
           @quote="onViewerQuote"
+          @accept-change="acceptWorkspaceChange"
         />
       </div>
 
@@ -556,7 +558,7 @@ import CodeViewer from './coding/CodeViewer.vue'
 import { buildFileTree, type TreeNode } from './coding/fileTree'
 import { collectChangedFiles, normalizeWorkspacePathLabel, type FileChangeMsg } from './coding/workspaceChanges'
 import { usePanelResize } from '@/components/v2/config-assistant/composables/usePanelResize'
-import { listWorkspaceFiles, getWorkspaceChanges, type WorkspaceChanges } from '@/api/coding'
+import { listWorkspaceFiles, getWorkspaceChanges, acceptWorkspaceChanges, type WorkspaceChanges } from '@/api/coding'
 
 const route = useRoute()
 const router = useRouter()
@@ -627,6 +629,7 @@ const selectedDiff = computed(() =>
 // ── git 基线改动（后端 /changes）: 刷新后仍在、覆盖命令行写入，喂树徽标/改动分组/diff 查看 ──
 const wsGitChanges = ref<WorkspaceChanges | null>(null)
 let gitChangesTimer: ReturnType<typeof setTimeout> | null = null
+const acceptingWorkspaceChanges = ref(false)
 
 async function loadWsGitChanges() {
   const id = codingStore.workspace?.id
@@ -647,6 +650,35 @@ const selectedGitChange = computed(() =>
     ? wsGitChanges.value.files.find(f => f.path === selectedFile.value) || null
     : null,
 )
+
+async function acceptWorkspaceChange(path?: string | null) {
+  const id = codingStore.workspace?.id
+  if (!id || acceptingWorkspaceChanges.value) return
+  acceptingWorkspaceChanges.value = true
+  try {
+    wsGitChanges.value = await acceptWorkspaceChanges(id, path || null)
+    await loadWsFileTree()
+    ElMessage.success(path ? '已接受此文件变更' : '已接受全部变更')
+  } catch (e: any) {
+    ElMessage.error(e?.response?.data?.detail || e?.message || '接受变更失败')
+  } finally {
+    acceptingWorkspaceChanges.value = false
+  }
+}
+
+async function acceptAllWorkspaceChanges() {
+  if (!wsGitChanges.value?.files.length) return
+  try {
+    await ElMessageBox.confirm(
+      '接受后会把当前所有改动设为新的对比基线，本轮改动列表将清空。',
+      '接受全部变更',
+      { confirmButtonText: '接受全部', cancelButtonText: '取消', type: 'warning' },
+    )
+  } catch {
+    return
+  }
+  await acceptWorkspaceChange(null)
+}
 
 // ── 对话 ↔ 代码联动 ──
 function flattenTreeFiles(nodes: TreeNode[], out: string[] = []): string[] {

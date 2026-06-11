@@ -529,6 +529,36 @@ tools:
     agents: [builder, config]
     category: configure
     description: "覆盖式设置某个表单的权限矩阵（一次调用替换该表单的所有权限）。"
+  set_apaas_form_component_behavior:
+    sections: [ui]
+    agents: [builder, config]
+    category: update
+    description: "调整表单组件行为：必填、隐藏、只读、宽度、占位提示、标题说明等。支持 uuid / boCode / label 定位并返回 diff。"
+  set_apaas_form_component_default:
+    sections: [ui]
+    agents: [builder, config]
+    category: update
+    description: "设置表单组件默认值。下拉/单选类会校验默认值必须存在于当前选项里，返回 before/after diff。"
+  set_apaas_form_component_document_number_rules:
+    sections: [ui]
+    agents: [builder, config]
+    category: update
+    description: "设置单据号组件 documentNumRules，适用于 FORM_DOCUMENT_NUMBER。"
+  set_apaas_form_component_options:
+    sections: [ui]
+    agents: [builder, config]
+    category: update
+    description: "设置选项类组件的 chooseOptions / dictionaryChooseOptions / chooseType，可同时设置默认值。"
+  set_apaas_form_component_style:
+    sections: [ui]
+    agents: [builder, config]
+    category: update
+    description: "保守设置组件个性化样式：写 customComponentConfig 或显式 style_payload，并返回 schema warning。"
+  set_apaas_form_component_validation:
+    sections: [ui]
+    agents: [builder, config]
+    category: update
+    description: "设置表单组件校验：唯一性、validatorStatus、validatorList。"
   set_apaas_menu_parent:
     sections: [ui]
     agents: [config]

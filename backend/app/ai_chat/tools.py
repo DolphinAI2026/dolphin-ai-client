@@ -1641,6 +1641,103 @@ async def _inject_locked_app_ctx(tool_name: str, args: dict, session: "AIChatSes
     return out
 
 
+def _normalize_workspace_match_key(value: Any) -> str:
+    return re.sub(r"\s+", "", str(value or "").strip().lower())
+
+
+async def _find_existing_app_workspace_for_create(args: dict, session: "AIChatSession", db) -> dict | None:
+    """Find a same-name app/self workspace before allowing create_dev_workspace.
+
+    App-locked AIChat is a modification surface by default. If the model tries
+    to create a workspace with the same project/display name as an accessible
+    workspace for this tenant/user, return that workspace so the model can
+    switch to read/edit tools instead of creating a duplicate asset.
+    """
+    app_id = getattr(session, "app_id", None)
+    user_id = getattr(session, "user_id", None)
+    if not app_id or not user_id:
+        return None
+
+    target_names = {
+        _normalize_workspace_match_key(args.get("project_name")),
+        _normalize_workspace_match_key(args.get("display_name")),
+    }
+    target_names.discard("")
+    if not target_names:
+        return None
+
+    try:
+        from app.coding.workspace import WorkspaceManager
+
+        manager = WorkspaceManager()
+        rows = manager.list_accessible_workspaces(
+            int(user_id),
+            [int(app_id)],
+            tenant_id=int(getattr(session, "tenant_id", 0) or 0) or None,
+        )
+    except Exception:
+        return None
+
+    scene_type = str(args.get("scene_type") or "").strip()
+    for ws in rows:
+        ws_project_id = ws.get("project_id")
+        if ws_project_id not in (None, "") and str(ws_project_id) != str(app_id):
+            continue
+        ws_type = str(ws.get("project_type") or "").strip()
+        if scene_type and ws_type and ws_type != scene_type:
+            continue
+        candidate_names = {
+            _normalize_workspace_match_key(ws.get("project_name")),
+            _normalize_workspace_match_key(ws.get("display_name")),
+        }
+        candidate_names.discard("")
+        if target_names & candidate_names:
+            return ws
+    return None
+
+
+def _existing_workspace_reuse_result(existing: dict) -> str:
+    ws_id = existing.get("id") or existing.get("ws_id")
+    project_name = existing.get("project_name") or ""
+    display_name = existing.get("display_name") or project_name or ""
+    return json.dumps(
+        {
+            "ok": False,
+            "error_code": "WORKSPACE_ALREADY_EXISTS",
+            "message": (
+                "当前应用/租户下已经有同名自开发 workspace，不能再新建。"
+                f"请复用 ws_id={ws_id} 修改原代码。"
+            ),
+            "existing_workspace": {
+                "ws_id": ws_id,
+                "project_name": project_name,
+                "display_name": display_name,
+                "project_type": existing.get("project_type"),
+                "project_id": existing.get("project_id"),
+                "status": existing.get("status"),
+            },
+            "next_steps": [
+                f"get_dev_workspace_status(ws_id='{ws_id}')",
+                f"glob_workspace / grep_workspace / read_workspace_file 读取 ws_id='{ws_id}' 的现有源码",
+                f"edit_workspace_files 或 write_workspace_files 修改 ws_id='{ws_id}'，不要再 create_dev_workspace",
+            ],
+        },
+        ensure_ascii=False,
+    )
+
+
+def _inject_locked_workspace_project_id(tool_name: str, args: dict, session: "AIChatSession") -> dict:
+    if tool_name != "create_dev_workspace":
+        return args
+    app_id = getattr(session, "app_id", None)
+    if not app_id or args.get("project_id"):
+        return args
+    try:
+        return {**args, "project_id": int(app_id)}
+    except Exception:
+        return args
+
+
 async def get_all_tool_schemas() -> list[dict]:
     """合并 base 工具 + MCP bridge 工具 (按 agent 白名单过滤)。
 
@@ -1744,6 +1841,11 @@ async def execute_tool(
     # 兜底：尝试通过 MCP bridge 调本机 MCP server
     from app.ai_chat.mcp_bridge import list_mcp_tool_names_cached, call_tool as _mcp_call
     if tool_name in list_mcp_tool_names_cached():
+        if tool_name == "create_dev_workspace":
+            existing = await _find_existing_app_workspace_for_create(args, session, db)
+            if existing:
+                return _existing_workspace_reuse_result(existing)
+            args = _inject_locked_workspace_project_id(tool_name, args, session)
         # artifact_id 自愈：用会话最新设计文档覆盖 LLM 给的 id (防张冠李戴)
         if tool_name in _ARTIFACT_DOC_TOOLS:
             real_id = await _resolve_session_doc_artifact_id(session, db)

@@ -49,7 +49,7 @@ def _load_generation_state(raw: object) -> dict:
     return {"steps_completed": [], "step_errors": {}}
 
 
-def _mark_stage_completed_keys(config: dict, stage: int) -> set[str]:
+def _mark_stage_completed_keys(config: dict, stage: int, event: Optional[dict] = None) -> set[str]:
     data = config.get("data", config)
     keys: set[str] = set()
     if stage == 1:
@@ -61,6 +61,15 @@ def _mark_stage_completed_keys(config: dict, stage: int) -> set[str]:
         keys.update(f"create_form:{i}" for i, _ in enumerate(data.get("forms") or []))
     elif stage == 4:
         keys.add("configure_permissions")
+    elif stage == 5:
+        workflows = data.get("workflows") or []
+        created_indices = (event or {}).get("created_indices")
+        if isinstance(created_indices, list):
+            for idx in created_indices:
+                if isinstance(idx, int) and 0 <= idx < len(workflows):
+                    keys.add(f"create_workflow:{idx}")
+        elif (event or {}).get("created") == len(workflows) and workflows:
+            keys.update(f"create_workflow:{i}" for i, _ in enumerate(workflows))
     return keys
 
 
@@ -266,7 +275,7 @@ async def generate_application(
                         event_log.append(event)
                     yield {"event": "progress", "data": json.dumps(event, ensure_ascii=False)}
                     if event.get("status") == "done":
-                        completed_keys.update(_mark_stage_completed_keys(config, int(event.get("stage", -1))))
+                        completed_keys.update(_mark_stage_completed_keys(config, int(event.get("stage", -1)), event))
                         state["steps_completed"] = sorted(completed_keys)
                         app_obj.generation_state = json.dumps(state, ensure_ascii=False)
                         await session.commit()
@@ -440,7 +449,7 @@ async def _run_generation_detached(app_id: int, record_id: int) -> None:
                 if len(event_log) < 200:
                     event_log.append(event)
                 if event.get("status") == "done":
-                    completed_keys.update(_mark_stage_completed_keys(config, int(event.get("stage", -1))))
+                    completed_keys.update(_mark_stage_completed_keys(config, int(event.get("stage", -1)), event))
                     state["steps_completed"] = sorted(completed_keys)
                     app_obj.generation_state = json.dumps(state, ensure_ascii=False)
                     await session.commit()

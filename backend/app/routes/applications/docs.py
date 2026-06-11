@@ -30,12 +30,13 @@ from typing import Annotated, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query, UploadFile, File, Form
 from pydantic import BaseModel
-from sqlalchemy import select, desc, delete, func as sa_func
+from sqlalchemy import select, desc, delete, func as sa_func, or_
 from sqlalchemy.ext.asyncio import AsyncSession
 from sse_starlette.sse import EventSourceResponse
 
 from app.database import get_db
 from app.models import User, Application, DocumentVersion, Conversation, ChangePlan, Message
+from app.models.ai_chat import AIChatArtifact, AIChatAttachment, AIChatMessage, AIChatSession
 from app.auth import get_current_user
 from app.deps import get_auth_context, AuthContext
 from app.permissions import check_resource_permission, Action
@@ -43,6 +44,141 @@ from app.json_utils import loads_if_str
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
+
+
+def _asset_preview(value: object, limit: int = 180) -> str:
+    text = str(value or "").strip()
+    text = re.sub(r"\s+", " ", text)
+    if len(text) <= limit:
+        return text
+    return text[:limit].rstrip() + "..."
+
+
+def _asset_time(value: object) -> Optional[str]:
+    return str(value) if value else None
+
+
+def _make_asset_item(
+    *,
+    key: str,
+    title: str,
+    kind: str,
+    source: str,
+    preview: str = "",
+    format: Optional[str] = None,
+    version: Optional[int] = None,
+    created_at: object = None,
+    updated_at: object = None,
+    meta: Optional[dict] = None,
+) -> dict:
+    return {
+        "key": key,
+        "title": title,
+        "kind": kind,
+        "source": source,
+        "format": format,
+        "version": version,
+        "preview": preview,
+        "created_at": _asset_time(created_at),
+        "updated_at": _asset_time(updated_at),
+        "meta": meta or {},
+    }
+
+
+def _config_counts(config_preview: object) -> dict:
+    try:
+        config = loads_if_str(config_preview) if config_preview else {}
+    except Exception:
+        config = {}
+    if not isinstance(config, dict):
+        config = {}
+    if isinstance(config.get("data"), dict):
+        config = config["data"]
+    models = len(config.get("models") or [])
+    explicit_forms = len(config.get("forms") or [])
+    return {
+        "models": models,
+        "forms": models or explicit_forms,
+        "roles": len(config.get("roles") or []),
+        "dicts": len(config.get("dicts") or []),
+        "workflows": len(config.get("workflows") or config.get("flows") or config.get("processes") or []),
+        "permissions": len(config.get("permissions") or []),
+    }
+
+
+def _acceptance_cases_for_app(app: Application, counts: dict) -> list[dict]:
+    cases: list[dict] = [
+        {
+            "title": "应用入口与权限可访问",
+            "expected": "目标角色能进入应用，非授权角色不能访问受限菜单或数据。",
+        },
+    ]
+    if counts.get("forms"):
+        cases.append({
+            "title": "核心表单新增、编辑、查看",
+            "expected": "表单字段、必填、字典、关联数据和详情展示符合设计文档。",
+        })
+    if counts.get("forms") or counts.get("models"):
+        cases.append({
+            "title": "列表展示与查询条件",
+            "expected": "列表字段、筛选条件、排序和空态符合业务验收口径。",
+        })
+    if counts.get("workflows"):
+        cases.append({
+            "title": "流程提交、审批与驳回",
+            "expected": "主干审批路径、异常驳回和状态回填能在真实前台闭环。",
+        })
+    if app.apaas_app_id:
+        cases.append({
+            "title": "发布后前台验证",
+            "expected": "已发布应用可在 aPaaS 前台打开，并完成一条端到端业务数据验证。",
+        })
+    return cases
+
+
+def _artifact_section_key(artifact: AIChatArtifact) -> str:
+    name = (artifact.filename or "").lower()
+    fmt = (artifact.format or "").lower()
+    if fmt in {"html", "htm"} or name.endswith((".html", ".htm")):
+        return "ui_designs"
+    if any(word in name for word in ("测试", "验收", "用例", "test", "case")):
+        return "acceptance_cases"
+    return "design_docs"
+
+
+def _empty_sections() -> dict[str, dict]:
+    return {
+        "requirements": {
+            "key": "requirements",
+            "label": "原始需求",
+            "description": "对话、首轮需求和用户附件。",
+            "items": [],
+        },
+        "design_docs": {
+            "key": "design_docs",
+            "label": "设计文档",
+            "description": "配置设计、自开发设计和接口契约。",
+            "items": [],
+        },
+        "ui_designs": {
+            "key": "ui_designs",
+            "label": "UI 设计稿",
+            "description": "HTML 原型和可视化设计稿。",
+            "items": [],
+        },
+        "build_inventory": {
+            "key": "build_inventory",
+            "label": "构建清单",
+            "description": "实际落地的模型、表单、角色、字典和发布状态。",
+            "items": [],
+        },
+        "acceptance_cases": {
+            "key": "acceptance_cases",
+            "label": "验收用例",
+            "description": "基于当前应用结构生成的最小验收清单。",
+            "items": [],
+        },
+    }
 
 
 class DraftDocUpdateRequest(BaseModel):
@@ -2110,6 +2246,237 @@ async def upload_doc_version(
             }
 
     return EventSourceResponse(event_generator())
+
+
+@router.get("/{app_id}/delivery-assets")
+async def list_delivery_assets(
+    app_id: int,
+    ctx: Annotated[AuthContext, Depends(get_auth_context)],
+    db: Annotated[AsyncSession, Depends(get_db)],
+):
+    """聚合应用级交付资产。
+
+    这是只读视图：复用现有 DocumentVersion / AIChat artifact / 附件 / 对话消息，
+    构建清单和验收用例按当前应用结构确定性生成，不写入新表。
+    """
+    result = await db.execute(
+        select(Application).where(Application.id == app_id, Application.tenant_id == ctx.tenant_id)
+    )
+    app = result.scalar_one_or_none()
+    if not app:
+        raise HTTPException(status_code=404, detail="应用不存在")
+    await check_resource_permission(ctx, db, app, "application", Action.VIEW)
+
+    sections = _empty_sections()
+
+    # 1) 旧 builder conversation: 原始用户诉求。
+    if app.conversation_id:
+        conv_result = await db.execute(
+            select(Conversation).where(
+                Conversation.id == app.conversation_id,
+                Conversation.tenant_id == ctx.tenant_id,
+            )
+        )
+        conversation = conv_result.scalar_one_or_none()
+        if conversation:
+            sections["requirements"]["items"].append(_make_asset_item(
+                key=f"conversation-{conversation.id}",
+                title=conversation.title or "原始需求会话",
+                kind="conversation",
+                source="builder",
+                preview=_asset_preview(getattr(conversation, "context_summary", "") or conversation.title),
+                created_at=conversation.created_at,
+                updated_at=conversation.updated_at,
+                meta={"conversation_id": conversation.id},
+            ))
+            msg_result = await db.execute(
+                select(Message)
+                .where(Message.conversation_id == conversation.id, Message.role == "user")
+                .order_by(Message.created_at.asc())
+                .limit(4)
+            )
+            for msg in msg_result.scalars().all():
+                sections["requirements"]["items"].append(_make_asset_item(
+                    key=f"message-{msg.id}",
+                    title="用户需求",
+                    kind="message",
+                    source="builder",
+                    preview=_asset_preview(msg.content),
+                    created_at=msg.created_at,
+                    meta={"conversation_id": conversation.id, "message_id": msg.id},
+                ))
+
+    # 2) 应用绑定的 AI Chat session 与 app_id 关联 session。
+    session_filters = [AIChatSession.app_id == app.id]
+    if app.ai_chat_session_id:
+        session_filters.append(AIChatSession.id == app.ai_chat_session_id)
+    chat_result = await db.execute(
+        select(AIChatSession)
+        .where(AIChatSession.tenant_id == ctx.tenant_id)
+        .where(or_(*session_filters))
+        .order_by(desc(AIChatSession.updated_at))
+    )
+    chat_sessions = chat_result.scalars().all()
+    session_ids = [s.id for s in chat_sessions]
+
+    if chat_sessions:
+        for session in chat_sessions[:3]:
+            sections["requirements"]["items"].append(_make_asset_item(
+                key=f"ai-chat-session-{session.id}",
+                title=session.title or "AI 对话",
+                kind="conversation",
+                source="ai_chat",
+                preview=_asset_preview(session.title),
+                created_at=session.created_at,
+                updated_at=session.updated_at,
+                meta={"session_id": session.id},
+            ))
+
+    if session_ids:
+        msg_result = await db.execute(
+            select(AIChatMessage)
+            .where(AIChatMessage.session_id.in_(session_ids), AIChatMessage.role == "user")
+            .order_by(AIChatMessage.created_at.asc())
+            .limit(6)
+        )
+        for msg in msg_result.scalars().all():
+            sections["requirements"]["items"].append(_make_asset_item(
+                key=f"ai-message-{msg.id}",
+                title="用户需求",
+                kind="message",
+                source="ai_chat",
+                preview=_asset_preview(msg.content),
+                created_at=msg.created_at,
+                meta={"session_id": msg.session_id, "message_id": msg.id},
+            ))
+
+        attachment_result = await db.execute(
+            select(AIChatAttachment)
+            .where(AIChatAttachment.session_id.in_(session_ids))
+            .order_by(desc(AIChatAttachment.uploaded_at))
+        )
+        for attachment in attachment_result.scalars().all():
+            sections["requirements"]["items"].append(_make_asset_item(
+                key=f"attachment-{attachment.id}",
+                title=attachment.filename,
+                kind="attachment",
+                source="ai_chat",
+                format=attachment.kind,
+                preview=_asset_preview(attachment.content_text or attachment.mime or ""),
+                created_at=attachment.uploaded_at,
+                meta={
+                    "session_id": attachment.session_id,
+                    "attachment_id": attachment.id,
+                    "size_bytes": attachment.size_bytes,
+                    "mime": attachment.mime,
+                },
+            ))
+
+    # 3) 应用正式文档版本。
+    doc_result = await db.execute(
+        select(DocumentVersion)
+        .where(DocumentVersion.application_id == app.id)
+        .order_by(desc(DocumentVersion.version))
+    )
+    doc_versions = doc_result.scalars().all()
+    for doc in doc_versions:
+        sections["design_docs"]["items"].append(_make_asset_item(
+            key=f"doc-version-{doc.id}",
+            title=doc.filename,
+            kind="document_version",
+            source="application",
+            format="md",
+            version=doc.version,
+            preview=_asset_preview(doc.summary or doc.raw_content),
+            created_at=doc.created_at,
+            meta={
+                "doc_version_id": doc.id,
+                "application_id": app.id,
+                "is_current": doc.version == app.current_doc_version,
+            },
+        ))
+
+    # 4) AI Chat artifacts：md 归设计文档，html 归 UI 设计稿，测试/验收命名归验收。
+    if session_ids:
+        artifact_result = await db.execute(
+            select(AIChatArtifact)
+            .where(AIChatArtifact.session_id.in_(session_ids))
+            .order_by(desc(AIChatArtifact.updated_at), desc(AIChatArtifact.version))
+        )
+        for artifact in artifact_result.scalars().all():
+            section_key = _artifact_section_key(artifact)
+            sections[section_key]["items"].append(_make_asset_item(
+                key=f"artifact-{artifact.id}",
+                title=artifact.filename,
+                kind="artifact",
+                source="ai_chat",
+                format=artifact.format,
+                version=artifact.version,
+                preview=_asset_preview(artifact.content),
+                created_at=artifact.created_at,
+                updated_at=artifact.updated_at,
+                meta={"session_id": artifact.session_id, "artifact_id": artifact.id},
+            ))
+
+    # 5) 构建清单：不假装成文档，明确标记为 generated。
+    counts = _config_counts(app.config_preview)
+    if app.config_preview or any(counts.values()) or app.apaas_app_id:
+        sections["build_inventory"]["items"].append(_make_asset_item(
+            key=f"build-inventory-{app.id}",
+            title="当前构建清单",
+            kind="generated_summary",
+            source="generated",
+            preview=(
+                f"{counts['models']} 模型 / {counts['forms']} 表单 / "
+                f"{counts['roles']} 角色 / {counts['dicts']} 字典"
+            ),
+            updated_at=app.updated_at,
+            meta={
+                **counts,
+                "status": app.status,
+                "apaas_app_id": app.apaas_app_id,
+                "apaas_url": getattr(app, "apaas_url", None),
+                "current_doc_version": app.current_doc_version,
+            },
+        ))
+
+    # 6) 验收用例：有结构化产物后给出最小验收清单。
+    cases = _acceptance_cases_for_app(app, counts) if (doc_versions or app.config_preview or app.apaas_app_id) else []
+    if cases:
+        sections["acceptance_cases"]["items"].append(_make_asset_item(
+            key=f"acceptance-{app.id}",
+            title="最小验收用例",
+            kind="generated_cases",
+            source="generated",
+            preview=f"{len(cases)} 条基础验收项",
+            updated_at=app.updated_at,
+            meta={"cases": cases},
+        ))
+
+    ordered_sections = []
+    for section in sections.values():
+        items = section["items"]
+        ordered_sections.append({
+            **section,
+            "count": len(items),
+            "status": "available" if items else "empty",
+        })
+
+    return {
+        "app": {
+            "id": app.id,
+            "app_name": app.app_name,
+            "app_code": app.app_code,
+            "status": app.status,
+            "conversation_id": app.conversation_id,
+            "ai_chat_session_id": app.ai_chat_session_id,
+            "current_doc_version": app.current_doc_version,
+            "apaas_app_id": app.apaas_app_id,
+            "updated_at": _asset_time(app.updated_at),
+        },
+        "summary": {section["key"]: section["count"] for section in ordered_sections},
+        "sections": ordered_sections,
+    }
 
 
 @router.get("/{app_id}/doc-versions")

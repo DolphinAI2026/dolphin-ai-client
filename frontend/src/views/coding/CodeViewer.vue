@@ -10,6 +10,7 @@
           <span v-if="change.additions" class="cv-counts-add">+{{ change.additions }}</span>
           <span v-if="change.deletions" class="cv-counts-del">−{{ change.deletions }}</span>
         </span>
+        <button type="button" class="cv-accept" title="接受此文件变更" @click="emitAcceptChange">接受此文件</button>
         <div v-if="change.status !== 'D'" class="cv-toggle" role="tablist" aria-label="查看模式">
           <button class="cv-toggle-btn" :class="{ active: viewMode === 'diff' }" @click="setMode('diff')">对比</button>
           <button class="cv-toggle-btn" :class="{ active: viewMode === 'full' }" @click="setMode('full')">全文</button>
@@ -154,6 +155,7 @@ async function refresh() {
 // ── 选中代码 → 引用到对话 ──
 const emit = defineEmits<{
   (e: 'quote', payload: { path: string; startLine: number | null; endLine: number | null; text: string }): void
+  (e: 'accept-change', path: string): void
 }>()
 
 const quoteBtn = ref<{ x: number; y: number } | null>(null)
@@ -210,6 +212,10 @@ function emitQuote() {
   quoteBtn.value = null
   pendingQuote = null
   window.getSelection()?.removeAllRanges()
+}
+
+function emitAcceptChange() {
+  if (props.filePath) emit('accept-change', props.filePath)
 }
 
 function onDocSelectionChange() {
@@ -366,7 +372,6 @@ watch(
 .cv-counts-del { color: var(--t-danger, #e5484d); }
 .cv-toggle {
   flex: none;
-  margin-left: auto;
   display: inline-flex;
   border: 1px solid var(--line, rgba(0, 0, 0, 0.1));
   border-radius: var(--r-md, 8px);
@@ -389,6 +394,24 @@ watch(
   font-weight: 650;
 }
 .cv-toggle-btn:hover:not(.active) { background: var(--bg-hover, rgba(0, 0, 0, 0.04)); }
+.cv-accept {
+  flex: none;
+  margin-left: auto;
+  padding: 2px 9px;
+  min-height: 24px;
+  border: 1px solid var(--line, rgba(0, 0, 0, 0.1));
+  border-radius: var(--r-md, 8px);
+  background: var(--bg, #ffffff);
+  color: var(--brand-ink, var(--brand, #4f46e5));
+  font-size: var(--fs-xs, 11.5px);
+  font-weight: 650;
+  cursor: pointer;
+  transition: background 0.12s var(--ease, ease), border-color 0.12s var(--ease, ease);
+}
+.cv-accept:hover {
+  border-color: color-mix(in srgb, var(--brand, #4f6ef7) 34%, var(--line, rgba(0, 0, 0, 0.1)));
+  background: var(--brand-soft, rgba(79, 110, 247, 0.10));
+}
 .cv-body {
   flex: 1;
   min-height: 0;

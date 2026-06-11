@@ -17,17 +17,20 @@
 
     <!-- 本轮改动分组(git 基线): 置顶汇总 + 逐文件直达 diff -->
     <section v-if="changeEntries.length" class="wft-changes" aria-label="本轮改动">
-      <button class="wftc-head" @click="changesOpen = !changesOpen">
-        <svg class="wftc-caret" :class="{ open: changesOpen }" viewBox="0 0 24 24" width="11" height="11" aria-hidden="true">
-          <path d="M9 6l6 6-6 6" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" />
-        </svg>
-        <span class="wftc-title">本轮改动</span>
-        <span class="wftc-count">{{ changeEntries.length }}</span>
-        <span class="wftc-stats">
-          <span v-if="changes!.total.additions" class="wftc-add">+{{ changes!.total.additions }}</span>
-          <span v-if="changes!.total.deletions" class="wftc-del">−{{ changes!.total.deletions }}</span>
-        </span>
-      </button>
+      <div class="wftc-head">
+        <button type="button" class="wftc-toggle" @click="changesOpen = !changesOpen">
+          <svg class="wftc-caret" :class="{ open: changesOpen }" viewBox="0 0 24 24" width="11" height="11" aria-hidden="true">
+            <path d="M9 6l6 6-6 6" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" />
+          </svg>
+          <span class="wftc-title">本轮改动</span>
+          <span class="wftc-count">{{ changeEntries.length }}</span>
+          <span class="wftc-stats">
+            <span v-if="changes!.total.additions" class="wftc-add">+{{ changes!.total.additions }}</span>
+            <span v-if="changes!.total.deletions" class="wftc-del">−{{ changes!.total.deletions }}</span>
+          </span>
+        </button>
+        <button type="button" class="wftc-accept" title="接受全部变更" @click="$emit('accept-all')">接受全部</button>
+      </div>
       <template v-if="changesOpen">
         <button
           v-for="f in changeEntries"
@@ -78,7 +81,10 @@ const props = defineProps<{
   changes?: WorkspaceChanges | null
   selected: string | null
 }>()
-defineEmits<{ (e: 'select', path: string): void }>()
+defineEmits<{
+  (e: 'select', path: string): void
+  (e: 'accept-all'): void
+}>()
 
 const query = ref('')
 const changesOpen = ref(true)
@@ -190,10 +196,19 @@ const displayTree = computed(() => {
 .wftc-head {
   display: flex;
   align-items: center;
-  gap: 5px;
+  gap: 6px;
   width: 100%;
   min-height: 28px;
-  padding: 5px 8px 5px 6px;
+  padding: 0;
+}
+.wftc-toggle {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  flex: 1;
+  min-width: 0;
+  min-height: 28px;
+  padding: 5px 6px;
   border: none;
   background: transparent;
   border-radius: var(--r-md, 8px);
@@ -202,9 +217,9 @@ const displayTree = computed(() => {
   font-size: var(--fs-sm, 13px);
   font-weight: 600;
 }
-.wftc-head:hover { background: rgba(79, 110, 247, 0.06); }
-.wftc-head:focus { outline: none; }
-.wftc-head:focus-visible {
+.wftc-toggle:hover { background: rgba(79, 110, 247, 0.06); }
+.wftc-toggle:focus { outline: none; }
+.wftc-toggle:focus-visible {
   box-shadow: 0 0 0 2px color-mix(in srgb, var(--brand, #4f6ef7) 22%, transparent);
 }
 .wftc-caret { flex: none; color: var(--fg-dim, #64748b); transition: transform 0.16s var(--ease, ease); }
@@ -222,6 +237,22 @@ const displayTree = computed(() => {
   text-align: center;
 }
 .wftc-stats { margin-left: auto; display: inline-flex; gap: 6px; font-size: var(--fs-xs, 11px); font-weight: 500; }
+.wftc-accept {
+  flex: none;
+  min-height: 24px;
+  padding: 2px 7px;
+  border: 1px solid var(--line, rgba(0, 0, 0, 0.1));
+  border-radius: var(--r-sm, 6px);
+  background: var(--bg, #fff);
+  color: var(--brand-ink, var(--brand, #4f46e5));
+  font-size: var(--fs-xs, 11px);
+  font-weight: 600;
+  cursor: pointer;
+}
+.wftc-accept:hover {
+  border-color: color-mix(in srgb, var(--brand, #4f6ef7) 32%, var(--line, rgba(0, 0, 0, 0.1)));
+  background: var(--brand-soft, rgba(79, 110, 247, 0.10));
+}
 .wftc-add { color: var(--t-success, #16a34a); }
 .wftc-del { color: var(--t-danger, #e5484d); }
 .wftc-row {

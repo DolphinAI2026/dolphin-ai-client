@@ -114,6 +114,12 @@ _EXPECTED_CONFIG_WHITELIST: frozenset[str] = frozenset({
     "save_apaas_business_event",
     "save_config_skill",
     "set_apaas_app_process",
+    "set_apaas_form_component_behavior",
+    "set_apaas_form_component_default",
+    "set_apaas_form_component_document_number_rules",
+    "set_apaas_form_component_options",
+    "set_apaas_form_component_style",
+    "set_apaas_form_component_validation",
     "set_apaas_form_permissions",
     "set_apaas_menu_parent",
     "set_role_resource_permission",
@@ -323,7 +329,8 @@ def test_config_whitelist_matches_current_expected():
     # 2026-06-04: +1 空表单修复工具 → 72
     # 2026-06-05+: 问题助手 / 自开发等后续工具累计后现状 → 76
     # 2026-06-09: +1 平台用户名称反查工具 → 77
-    assert len(new) == 77, f"config 白名单总数应是 77, 实际 {len(new)}"
+    # 2026-06-11: +6 表单组件结构化调整工具 → 83
+    assert len(new) == 83, f"config 白名单总数应是 83, 实际 {len(new)}"
 
 
 def test_builder_whitelist_count():

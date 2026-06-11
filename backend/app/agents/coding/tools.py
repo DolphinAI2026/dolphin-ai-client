@@ -10,12 +10,15 @@ aPaaS 工具集（apaas_tools.py）一起注册进来：
   签名 (args, platform_env_id, db)，platform_env_id 从 ctx.conversation_id
   反查 Conversation.application_id → Application.platform_env_id
 - 2 个 workspace 产物 / 附件类（read_attachment / write_artifact）
-  签名 (args, workspace_path) 同 6 个 base coding tools
+- 2 个自开发发布类（上传资产库 / 装回应用并重发）
+  签名复用 AgentContext，内部走 routes.coding 既有编排
 """
 from __future__ import annotations
 
+import json
 import logging
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any
 
 from app.agents.types import AgentContext, Tool, ToolResult
@@ -112,6 +115,177 @@ def _wrap_result(text: str) -> ToolResult:
     )
 
 
+def _coerce_int(value: Any) -> int | None:
+    if value is None or value == "":
+        return None
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def _agent_auth_context(ctx: AgentContext):
+    """把 AgentContext 降级成 routes.coding 现有 helper 需要的 AuthContext。
+
+    AgentContext 当前没有完整 tenant_role/org_permissions；这里保留用户、租户两个
+    强约束，并给 application:view 一个最小权限兜底，真实发布权限仍由 workspace
+    admin 校验控制。
+    """
+    from app.deps import AuthContext
+
+    extra = ctx.extra if isinstance(ctx.extra, dict) else {}
+    org_permissions = extra.get("org_permissions")
+    if not isinstance(org_permissions, dict):
+        org_permissions = {"application:view": True}
+
+    return AuthContext(
+        user=SimpleNamespace(id=ctx.user_id, is_platform_admin=False),
+        tenant_id=ctx.tenant_id,
+        tenant_role=str(extra.get("tenant_role") or "member"),
+        org_permissions=org_permissions,
+        apaas_user_id=extra.get("apaas_user_id"),
+        apaas_tenant_id=extra.get("apaas_tenant_id"),
+    )
+
+
+async def _resolve_local_app_id(args: dict[str, Any], ctx: AgentContext, db) -> int | None:
+    """解析“装回应用”的本地 Application.id。
+
+    优先级:
+    1. tool 参数 local_app_id/app_id
+    2. ctx.extra / ctx.input 中未来可能注入的 local app id
+    3. 当前 Conversation.coding_app_id（刷新/续聊后的持久绑定）
+    4. bound_apaas_app_id 反查本地 Application
+    """
+    for value in (
+        args.get("local_app_id"),
+        args.get("app_id"),
+        (ctx.extra or {}).get("local_app_id") if isinstance(ctx.extra, dict) else None,
+        (ctx.extra or {}).get("bound_local_app_id") if isinstance(ctx.extra, dict) else None,
+        (ctx.extra or {}).get("coding_app_id") if isinstance(ctx.extra, dict) else None,
+        (ctx.input or {}).get("local_app_id") if isinstance(ctx.input, dict) else None,
+        ((ctx.input or {}).get("app_context") or {}).get("local_app_id")
+        if isinstance((ctx.input or {}).get("app_context"), dict) else None,
+    ):
+        local_app_id = _coerce_int(value)
+        if local_app_id is not None:
+            return local_app_id
+
+    from sqlalchemy import select
+    from app.models import Application, Conversation
+
+    if ctx.conversation_id:
+        result = await db.execute(
+            select(Conversation).where(
+                Conversation.id == ctx.conversation_id,
+                Conversation.tenant_id == ctx.tenant_id,
+            )
+        )
+        conv = result.scalar_one_or_none()
+        local_app_id = _coerce_int(getattr(conv, "coding_app_id", None))
+        if local_app_id is not None:
+            return local_app_id
+
+    bound_apaas_app_id = None
+    if isinstance(ctx.extra, dict):
+        bound_apaas_app_id = ctx.extra.get("bound_apaas_app_id")
+    if not bound_apaas_app_id and isinstance(ctx.input, dict):
+        app_context = ctx.input.get("app_context")
+        if isinstance(app_context, dict):
+            bound_apaas_app_id = app_context.get("apaas_app_id")
+    if bound_apaas_app_id:
+        result = await db.execute(
+            select(Application).where(
+                Application.tenant_id == ctx.tenant_id,
+                Application.apaas_app_id == str(bound_apaas_app_id),
+            )
+        )
+        app = result.scalar_one_or_none()
+        return _coerce_int(getattr(app, "id", None))
+
+    return None
+
+
+async def _with_db(ctx: AgentContext, fn):
+    if ctx.db is not None:
+        return await fn(ctx.db)
+
+    from app.database import AsyncSessionLocal
+
+    async with AsyncSessionLocal() as db:
+        return await fn(db)
+
+
+def _format_dev_deploy_result(result: dict[str, Any]) -> str:
+    status = result.get("status")
+    kits = result.get("kits") or []
+    kit_text = "、".join(str(k) for k in kits) if kits else "无"
+    if status == "installed":
+        app = result.get("app") or {}
+        app_name = app.get("name") or "目标应用"
+        version = result.get("version")
+        menu = result.get("menu")
+        parts = [f"已装回应用「{app_name}」并重新发布"]
+        if version:
+            parts.append(f"版本: {version}")
+        if menu:
+            parts.append(f"菜单: {menu}")
+        parts.append(f"自开发包: {kit_text}")
+        return "；".join(parts)
+    if status == "uploaded_only":
+        hint = result.get("hint") or "已上传到自开发资产库"
+        return f"{hint}；自开发包: {kit_text}"
+    return json.dumps(result, ensure_ascii=False)
+
+
+async def _run_dev_workspace_deploy(args: dict[str, Any], ctx: AgentContext, *, to_app: bool) -> ToolResult:
+    ws_id = ctx.workspace_id
+    if not ws_id:
+        return ToolResult(
+            success=False,
+            content="Error: 当前 Coding 会话没有 workspace_id，无法上传或装回应用。",
+            error="NO_WORKSPACE_ID",
+        )
+
+    async def _run(db):
+        from fastapi import HTTPException
+        from app.routes import coding as coding_routes
+
+        auth_ctx = _agent_auth_context(ctx)
+        try:
+            await coding_routes._ensure_workspace_access(
+                ws_id,
+                auth_ctx,
+                db,
+                minimum_project_role="admin",
+            )
+            local_app_id = await _resolve_local_app_id(args or {}, ctx, db) if to_app else None
+            if to_app and local_app_id is None:
+                return ToolResult(
+                    success=False,
+                    content=(
+                        "Error: 当前会话没有绑定目标应用。请提供 local_app_id，"
+                        "或先从应用资产库进入「在应用上定制」。"
+                    ),
+                    error="NO_TARGET_APP",
+                )
+            result = await coding_routes._deploy_to_app_impl(ws_id, local_app_id, auth_ctx, db)
+        except HTTPException as exc:
+            detail = exc.detail if isinstance(exc.detail, str) else json.dumps(exc.detail, ensure_ascii=False)
+            return ToolResult(success=False, content=f"Error: {detail}", error=detail)
+        except Exception as exc:
+            logger.exception("dev workspace deploy tool failed")
+            return ToolResult(success=False, content=f"Error: {exc}", error=str(exc))
+
+        return ToolResult(
+            success=True,
+            content=_format_dev_deploy_result(result),
+            data=result if isinstance(result, dict) else {"result": result},
+        )
+
+    return await _with_db(ctx, _run)
+
+
 def _apply_bound_app_scope(args: dict[str, Any], ctx: AgentContext, accepts_app_id: bool) -> dict[str, Any]:
     """「在应用上定制」bound 模式 → 把 apaas_app_id 锁死成绑定应用。
 
@@ -129,13 +303,14 @@ def _apply_bound_app_scope(args: dict[str, Any], ctx: AgentContext, accepts_app_
 def build_coding_tools(registry: ToolRegistry | None = None) -> list[Tool]:
     """从 tool_registry 构造 BaseAgent 的 Tool 列表 + 注入 aPaaS 工具集。
 
-    工具来源（共 19 个 = 6 base + 13 apaas）：
-      - 6 个 base coding tools（read_file / write_file / edit_file /
+    工具来源（共 22 个 = 7 base + 13 apaas + 2 deploy）：
+      - 7 个 base coding tools（read_file / write_file / edit_file /
         run_command / glob_files / grep_search / start_serve）— 走 ToolRegistry
       - 11 个 aPaaS 平台查询工具 — 走 APAAS_TOOL_EXECUTORS_PLATFORM
         executor 内部反查 conversation→application→platform_env_id
       - 2 个 workspace 产物/附件工具 — 走 APAAS_TOOL_EXECUTORS_WORKSPACE
         executor 拿 workspace_path（跟 base tools 同源）
+      - 2 个自开发发布工具 — 复用 routes.coding._deploy_to_app_impl
     """
     reg = registry or ToolRegistry(profile="coding")
     tools: list[Tool] = []
@@ -176,7 +351,7 @@ def build_coding_tools(registry: ToolRegistry | None = None) -> list[Tool]:
             execute=_make_base_executor(name),
         ))
 
-    # ── 13 个 aPaaS 工具 ──────────────────────────────────────
+    # ── 13 个 aPaaS / workspace 产物工具 ───────────────────────
     for defn in APAAS_TOOL_DEFINITIONS:
         fn = defn.get("function") or {}
         name = fn.get("name")
@@ -279,5 +454,45 @@ def build_coding_tools(registry: ToolRegistry | None = None) -> list[Tool]:
                 parameters_schema=parameters,
                 execute=_make_workspace_executor(name, executor_fn),
             ))
+
+    tools.extend([
+        Tool(
+            name="deploy_dev_workspace_to_app",
+            description=(
+                "Build the current Coding workspace, upload/update its self-development package, "
+                "attach it to the bound aPaaS application, create a self-dev menu for page projects, "
+                "and republish the application. Use this only when the user explicitly asks to "
+                "重新上传/装回应用/重新发布应用. If local_app_id is omitted, the tool falls back to "
+                "the current conversation's bound application."
+            ),
+            parameters_schema={
+                "type": "object",
+                "properties": {
+                    "local_app_id": {
+                        "type": "integer",
+                        "description": "Optional local ai-builder Application.id. Omit when the current coding conversation is already bound to an application.",
+                    }
+                },
+                "required": [],
+            },
+            execute=lambda args, ctx: _run_dev_workspace_deploy(args, ctx, to_app=True),
+            idempotent=False,
+        ),
+        Tool(
+            name="upload_dev_workspace_to_asset_library",
+            description=(
+                "Build the current Coding workspace and upload/update its package in the aPaaS "
+                "self-development asset library, without attaching it to any application and without "
+                "republishing an application. Use this when the user only asks to 上传到自开发资产库/组件库."
+            ),
+            parameters_schema={
+                "type": "object",
+                "properties": {},
+                "required": [],
+            },
+            execute=lambda args, ctx: _run_dev_workspace_deploy(args, ctx, to_app=False),
+            idempotent=False,
+        ),
+    ])
 
     return tools

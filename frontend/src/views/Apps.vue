@@ -4,7 +4,7 @@
       <section class="apps-header page-head" aria-label="应用概览">
         <div class="apps-title-block">
           <h1 class="page-title">应用资产库</h1>
-          <p class="page-subtitle">统一查看应用状态、构建进度和最近更新。</p>
+          <p class="page-subtitle">统一查看应用状态、资产组成和最近更新。</p>
         </div>
       </section>
 
@@ -88,11 +88,9 @@
         <div v-else-if="viewMode === 'list'" class="apps-table">
           <div class="apps-table-head">
             <span>应用</span>
-            <span>阶段</span>
-            <span>进度</span>
             <span>组成</span>
             <span>更新</span>
-            <span aria-hidden="true"></span>
+            <span class="apps-table-actions-head">操作</span>
           </div>
 
           <div
@@ -121,17 +119,6 @@
               </span>
             </div>
 
-            <div class="apps-row-stage">
-              <BaseBadge :variant="stageBadgeVariant(app)">{{ appStage(app).label }}</BaseBadge>
-            </div>
-
-            <div class="apps-row-progress">
-              <span class="apps-progress-track">
-                <span class="apps-progress-bar" :class="appStage(app).tone" :style="{ width: `${appProgress(app)}%` }"></span>
-              </span>
-              <span>{{ appProgress(app) }}%</span>
-            </div>
-
             <!-- Fix 14 (2026-05-21): 列表视图加 "组成" 一列展示模型/表单/角色/字典 4 项核心元数据，
                  解决"列表 vs 卡片信息密度落差"问题。无数据应用占位 - 不打扰阅读节奏。 -->
             <div class="apps-row-metrics">
@@ -147,16 +134,13 @@
             <div class="apps-row-updated">{{ appUpdatedLabel(app) }}</div>
 
             <div class="apps-row-actions" @click.stop>
-              <button class="apps-mini-action" type="button" @click="openDialog(app)">对话</button>
-              <button
-                v-if="canManageGit(app)"
-                class="apps-mini-action"
-                type="button"
-                :disabled="isPreparingGit(app)"
-                @click="openGitForApp(app)"
-              >
-                <AppIcon name="link" :size="13" />
-                <span>{{ gitButtonLabel(app) }}</span>
+              <button class="apps-mini-action" type="button" @click="openDialog(app)">
+                <AppIcon name="message" :size="13" />
+                <span>对话</span>
+              </button>
+              <button class="apps-mini-action" type="button" @click="openDeliveryAssets(app)">
+                <AppIcon name="files" :size="13" />
+                <span>资产</span>
               </button>
               <button v-if="canBuildApp(app)" class="apps-mini-action primary" type="button" @click="buildApp(app)">构建</button>
               <button
@@ -190,12 +174,6 @@
               <BaseTag :tone="app.app_type === 'ai-code' ? 'brand' : 'neutral'">{{ app.app_type === 'ai-code' ? 'AI 代码' : '低代码' }}</BaseTag>
               <span>{{ appUpdatedLabel(app) }}</span>
             </div>
-            <div class="apps-card-progress">
-              <span class="apps-progress-track">
-                <span class="apps-progress-bar" :class="appStage(app).tone" :style="{ width: `${appProgress(app)}%` }"></span>
-              </span>
-              <span>{{ appProgress(app) }}%</span>
-            </div>
             <div v-if="hasAppStats(app)" class="apps-card-stats">
               <span>{{ app.models || 0 }} 模型</span>
               <span>{{ app.forms || 0 }} 表单</span>
@@ -216,16 +194,13 @@
                  - 阶段性次要动作: 构建/发布 (primary, 跟阶段挂钩)
                  - "⋯" 更多菜单: 查看 SPEC / 进入应用 / 删除 (ghost) -->
             <div class="apps-card-actions" @click.stop>
-              <button class="apps-mini-action primary" type="button" @click="openDialog(app)">对话</button>
-              <button
-                v-if="canManageGit(app)"
-                class="apps-mini-action"
-                type="button"
-                :disabled="isPreparingGit(app)"
-                @click="openGitForApp(app)"
-              >
-                <AppIcon name="link" :size="13" />
-                <span>{{ gitButtonLabel(app) }}</span>
+              <button class="apps-mini-action primary" type="button" @click="openDialog(app)">
+                <AppIcon name="message" :size="13" />
+                <span>对话</span>
+              </button>
+              <button class="apps-mini-action" type="button" @click="openDeliveryAssets(app)">
+                <AppIcon name="files" :size="13" />
+                <span>资产</span>
               </button>
               <button v-if="canBuildApp(app)" class="apps-mini-action" type="button" @click="buildApp(app)">构建</button>
               <button
@@ -285,6 +260,98 @@
       @rolled-back="refreshApps"
     />
 
+    <el-drawer
+      v-model="deliveryAssetsOpen"
+      direction="rtl"
+      size="min(520px, 100vw)"
+      :with-header="false"
+      :append-to-body="true"
+    >
+      <div class="apps-assets-drawer">
+        <header class="apps-assets-head">
+          <div>
+            <span class="apps-assets-kicker">交付资产</span>
+            <h2>{{ deliveryAssetsData?.app.app_name || deliveryAssetsApp?.app_name || '应用资产' }}</h2>
+            <p>{{ deliveryAssetsSubtitle }}</p>
+          </div>
+          <button class="apps-assets-close" type="button" title="关闭" @click="deliveryAssetsOpen = false">
+            ×
+          </button>
+        </header>
+
+        <div v-if="deliveryAssetsLoading" class="apps-assets-loading">
+          <SkeletonCard :lines="4" with-footer />
+        </div>
+
+        <template v-else-if="deliveryAssetsData">
+          <div class="apps-assets-summary" aria-label="交付资产概览">
+            <div v-for="section in deliveryAssetSections" :key="section.key" class="apps-assets-summary-item">
+              <span>{{ section.label }}</span>
+              <strong>{{ section.count }}</strong>
+            </div>
+          </div>
+
+          <section
+            v-for="section in deliveryAssetSections"
+            :key="section.key"
+            class="apps-assets-section"
+          >
+            <header>
+              <span class="apps-assets-section-icon">
+                <AppIcon :name="assetSectionIcon(section.key)" :size="15" />
+              </span>
+              <div>
+                <h3>{{ section.label }}</h3>
+                <p>{{ section.description }}</p>
+              </div>
+              <BaseBadge :variant="section.count ? 'info' : 'neutral'" size="sm">{{ section.count }}</BaseBadge>
+            </header>
+
+            <div v-if="section.items.length === 0" class="apps-assets-empty">暂无</div>
+
+            <article
+              v-for="item in section.items"
+              :key="item.key"
+              class="apps-assets-item"
+            >
+              <div class="apps-assets-item-main">
+                <div class="apps-assets-item-title">
+                  <strong>{{ item.title }}</strong>
+                  <span v-if="assetItemMetaLabel(item)">{{ assetItemMetaLabel(item) }}</span>
+                </div>
+                <p v-if="item.preview">{{ item.preview }}</p>
+
+                <dl v-if="item.kind === 'generated_summary'" class="apps-assets-kv">
+                  <div><dt>模型</dt><dd>{{ item.meta?.models ?? 0 }}</dd></div>
+                  <div><dt>表单</dt><dd>{{ item.meta?.forms ?? 0 }}</dd></div>
+                  <div><dt>角色</dt><dd>{{ item.meta?.roles ?? 0 }}</dd></div>
+                  <div><dt>字典</dt><dd>{{ item.meta?.dicts ?? 0 }}</dd></div>
+                </dl>
+
+                <ul v-if="Array.isArray(item.meta?.cases)" class="apps-assets-cases">
+                  <li v-for="testCase in item.meta.cases" :key="testCase.title">
+                    <strong>{{ testCase.title }}</strong>
+                    <span>{{ testCase.expected }}</span>
+                  </li>
+                </ul>
+              </div>
+
+              <button
+                v-if="canOpenDeliveryAssetItem(item)"
+                class="apps-assets-item-action"
+                type="button"
+                @click="openDeliveryAssetItem(item)"
+              >
+                {{ deliveryAssetActionLabel(item) }}
+              </button>
+            </article>
+          </section>
+        </template>
+
+        <div v-else class="apps-assets-empty state">暂无交付资产</div>
+      </div>
+    </el-drawer>
+
   </BuilderFrame>
 </template>
 
@@ -295,7 +362,7 @@ import { Download, Grid, List, MoreFilled, Plus } from '@element-plus/icons-vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import AppIcon from '@/components/common/AppIcon.vue'
 import { handleError } from '@/utils/errorHandler'
-import { applicationApi } from '@/api/application'
+import { applicationApi, type ApplicationDeliveryAssetItem, type ApplicationDeliveryAssetsResponse } from '@/api/application'
 import { conversationApi, type ConversationWithApp } from '@/api/conversation'
 import BuilderFrame from '@/components/BuilderFrame.vue'
 import ImportAppDialog from '@/components/ImportAppDialog.vue'
@@ -312,7 +379,6 @@ type AppStage = {
   group: Exclude<AppTab, 'all'>
   label: string
   tone: 'active' | 'success' | 'draft' | 'danger'
-  progress: number
 }
 
 const router = useRouter()
@@ -324,7 +390,6 @@ const viewMode = ref<ViewMode>('list')
 const searchQ = ref('')
 const importDialogOpen = ref(false)
 const publishingIds = ref<Set<number>>(new Set())
-const gitPreparingIds = ref<Set<number>>(new Set())
 
 const tabDefinitions: Array<{ label: string; value: AppTab }> = [
   { label: '全部', value: 'all' },
@@ -383,23 +448,23 @@ function matchesTab(app: MergedApplication, tab: AppTab) {
 
 function appStage(app: MergedApplication): AppStage {
   if (app.local_status === 'completed' || app.apaas_app_id) {
-    return { group: 'deployed', label: '部署', tone: 'success', progress: 100 }
+    return { group: 'deployed', label: '部署', tone: 'success' }
   }
   if (app.local_status === 'generating') {
-    return { group: 'active', label: '配置生成', tone: 'active', progress: 76 }
+    return { group: 'active', label: '配置生成', tone: 'active' }
   }
   if (app.local_status === 'updating') {
-    return { group: 'active', label: '更新中', tone: 'active', progress: 62 }
+    return { group: 'active', label: '更新中', tone: 'active' }
   }
   if (app.local_status === 'failed') {
-    return { group: 'draft', label: '需求理解', tone: 'danger', progress: 18 }
+    return { group: 'draft', label: '需求理解', tone: 'danger' }
   }
   // 有结构化数据 (config_preview 解析出 model/form/role/dict) = SPEC 已就绪，等部署
   // 之前误用"SPEC 设计"让用户以为还在设计，改成"待部署"更准确反映状态
   if (hasAppStats(app)) {
-    return { group: 'active', label: '待部署', tone: 'active', progress: 70 }
+    return { group: 'active', label: '待部署', tone: 'active' }
   }
-  return { group: 'draft', label: '需求理解', tone: 'draft', progress: 12 }
+  return { group: 'draft', label: '需求理解', tone: 'draft' }
 }
 
 // stage tone → BaseBadge variant（纯展示映射，供模板用，保留 union 类型）
@@ -409,10 +474,6 @@ function stageBadgeVariant(app: MergedApplication): 'success' | 'warn' | 'error'
     : tone === 'active' ? 'warn'
     : tone === 'danger' ? 'error'
     : 'neutral'
-}
-
-function appProgress(app: MergedApplication) {
-  return appStage(app).progress
 }
 
 function normalizeTimestamp(value?: string | null) {
@@ -496,52 +557,6 @@ function openInPlatform(app: MergedApplication) {
   window.open(app.apaas_url, '_blank', 'noopener,noreferrer')
 }
 
-function canManageGit(app: MergedApplication) {
-  return app.source !== 'remote' && Boolean(appNumericId(app))
-}
-
-function gitButtonLabel(app: MergedApplication) {
-  if (isPreparingGit(app)) return '准备中'
-  return app.git_repo_url ? '仓库' : '接 Git'
-}
-
-function gitActionTitle(app: MergedApplication) {
-  if (isPreparingGit(app)) return '正在准备 Git 项目'
-  if (app.git_repo_url) return '打开 Git 仓库'
-  if (app.project_id) return '配置 Git/GitHub 并初始化仓库'
-  return '创建应用项目并配置 Git/GitHub'
-}
-
-function isPreparingGit(app: MergedApplication) {
-  const appId = appNumericId(app)
-  return appId != null && gitPreparingIds.value.has(appId)
-}
-
-async function openGitForApp(app: MergedApplication) {
-  if (app.git_repo_url) {
-    window.open(app.git_repo_url, '_blank', 'noopener,noreferrer')
-    return
-  }
-  if (app.project_id) {
-    router.push({ path: `/project/${app.project_id}/git` })
-    return
-  }
-  const appId = appNumericId(app)
-  if (appId == null || isPreparingGit(app)) return
-  gitPreparingIds.value = new Set([...gitPreparingIds.value, appId])
-  try {
-    const res = await applicationApi.ensureGitProject(appId)
-    app.project_id = res.project_id
-    router.push({ path: `/project/${res.project_id}/git` })
-  } catch (error) {
-    handleError(error, { fallback: '准备 Git 项目失败' })
-  } finally {
-    const next = new Set(gitPreparingIds.value)
-    next.delete(appId)
-    gitPreparingIds.value = next
-  }
-}
-
 function hasCardMoreActions(app: MergedApplication) {
   return canViewSpec(app) || canOpenInPlatform(app) || canViewDeployHistory(app) || canDeleteApp(app)
 }
@@ -553,6 +568,18 @@ function canViewDeployHistory(app: MergedApplication) {
 
 const deployHistoryOpen = ref(false)
 const deployHistoryApp = ref<MergedApplication | null>(null)
+const deliveryAssetsOpen = ref(false)
+const deliveryAssetsLoading = ref(false)
+const deliveryAssetsApp = ref<MergedApplication | null>(null)
+const deliveryAssetsData = ref<ApplicationDeliveryAssetsResponse | null>(null)
+
+const deliveryAssetSections = computed(() => deliveryAssetsData.value?.sections || [])
+const deliveryAssetsSubtitle = computed(() => {
+  const data = deliveryAssetsData.value
+  if (!data) return '需求、设计、构建与验收资产'
+  const total = Object.values(data.summary || {}).reduce((sum, count) => sum + Number(count || 0), 0)
+  return `${total} 项资产 · ${data.app.app_code || '未命名编码'}`
+})
 
 function openDeployHistory(app: MergedApplication) {
   deployHistoryApp.value = app
@@ -564,6 +591,63 @@ function onCardMoreCommand(app: MergedApplication, cmd: 'spec' | 'platform' | 'h
   else if (cmd === 'platform') openInPlatform(app)
   else if (cmd === 'history') openDeployHistory(app)
   else if (cmd === 'delete') confirmDelete(app)
+}
+
+async function openDeliveryAssets(app: MergedApplication) {
+  const appId = appNumericId(app)
+  if (appId == null) return
+  deliveryAssetsApp.value = app
+  deliveryAssetsOpen.value = true
+  deliveryAssetsLoading.value = true
+  deliveryAssetsData.value = null
+  try {
+    deliveryAssetsData.value = await applicationApi.getDeliveryAssets(appId)
+  } catch (error) {
+    handleError(error, { fallback: '交付资产加载失败' })
+  } finally {
+    deliveryAssetsLoading.value = false
+  }
+}
+
+function assetSectionIcon(key: string) {
+  if (key === 'requirements') return 'clipboard'
+  if (key === 'design_docs') return 'file'
+  if (key === 'ui_designs') return 'palette'
+  if (key === 'build_inventory') return 'box'
+  if (key === 'acceptance_cases') return 'check-circle'
+  return 'files'
+}
+
+function assetItemMetaLabel(item: ApplicationDeliveryAssetItem) {
+  const parts: string[] = []
+  if (item.version) parts.push(`v${item.version}`)
+  if (item.format) parts.push(String(item.format).toUpperCase())
+  if (item.source === 'generated') parts.push('生成')
+  return parts.join(' · ')
+}
+
+function canOpenDeliveryAssetItem(item: ApplicationDeliveryAssetItem) {
+  return Boolean(item.kind === 'document_version' || item.meta?.session_id || item.meta?.conversation_id)
+}
+
+function deliveryAssetActionLabel(item: ApplicationDeliveryAssetItem) {
+  if (item.kind === 'document_version') return '查看'
+  if (item.meta?.session_id) return '对话'
+  if (item.meta?.conversation_id) return '查看'
+  return '打开'
+}
+
+function openDeliveryAssetItem(item: ApplicationDeliveryAssetItem) {
+  const app = deliveryAssetsApp.value
+  if (!app) return
+  const appId = String(appNumericId(app) ?? app.id)
+  if (item.kind === 'document_version' || item.meta?.conversation_id) {
+    router.push({ path: '/chat', query: { app_id: appId, tab: 'spec' } })
+    return
+  }
+  if (item.meta?.session_id) {
+    router.push({ path: `/ai-chat/${item.meta.session_id}`, query: { app_id: appId } })
+  }
 }
 
 function hasDesignOutput(app: MergedApplication) {
@@ -1020,21 +1104,19 @@ onMounted(() => { refreshApps() })
 .apps-table-head,
 .apps-row {
   display: grid;
-  /* Fix 14 (2026-05-21): 加 "组成" 列展示 M/F/R/D 元数据，actions 区适度收窄给元数据腾位 */
+  /* 列表视图优先保证应用名、组成数据和右侧操作在分屏宽度下稳定单行。 */
   grid-template-columns:
-    minmax(280px, 1.35fr)  /* 应用 */
-    minmax(96px, 0.42fr)   /* 阶段 */
-    minmax(140px, 0.5fr)   /* 进度 */
-    minmax(220px, 0.82fr)  /* 组成 (M/F/R/D) */
-    minmax(104px, 0.38fr)  /* 更新 */
-    minmax(220px, 0.62fr); /* actions */
+    minmax(260px, 1.55fr)  /* 应用 */
+    minmax(180px, 0.9fr)   /* 组成 */
+    76px                   /* 更新 */
+    max-content;           /* 操作 */
   align-items: center;
-  column-gap: 14px;
+  column-gap: 10px;
 }
 
 .apps-table-head {
   min-height: 40px;
-  padding: 0 18px;
+  padding: 0 14px;
   border-bottom: 1px solid var(--line);
   color: var(--text-3);
   font-size: 12px;
@@ -1043,8 +1125,8 @@ onMounted(() => { refreshApps() })
 }
 
 .apps-row {
-  min-height: 70px;
-  padding: 10px 18px;
+  min-height: 64px;
+  padding: 10px 14px;
   border-bottom: 1px solid var(--line);
   color: var(--text);
   cursor: pointer;
@@ -1156,55 +1238,15 @@ onMounted(() => { refreshApps() })
   text-decoration: underline;
 }
 
-/* ── Progress bar — track + fill mirrors stage tone ───────── */
-.apps-row-progress,
-.apps-card-progress {
-  min-width: 0;
-  display: flex;
-  align-items: center;
-  gap: 9px;
-  color: var(--text-3);
-  font-family: var(--font-mono);
-  font-size: 11.5px;
-}
-
-.apps-progress-track {
-  /* Fix 13 (2026-05-21): track 4px→6px 厚度更可读；--surface-2 浅灰提供柔和对比 */
-  width: 92px;
-  height: 6px;
-  border-radius: var(--r-full, 999px);
-  background: var(--surface-2);
-  overflow: hidden;
-}
-
-.apps-progress-bar {
-  display: block;
-  height: 100%;
-  border-radius: var(--r-full, 999px);
-  background: var(--brand);
-  transition: width 0.2s var(--ease, cubic-bezier(0.2, 0.8, 0.2, 1));
-}
-
-/* Fix 13 (2026-05-21): 100% 完成态从 --ok (#047857 深绿，跟浅 surface 对比过强) 改成
-   --brand (蓝) — 跟 brand 主色调一致，视觉更柔和，跟 stage-pill 的绿色独立分工：
-   pill 给出语义色，progress 给出进度色不抢戏。其它 tone 维持原色：
-   - active (进行中 / 待部署) = warn 琥珀（清晰区分"还在进行"）
-   - draft (需求理解) = text-4 中性灰
-   - danger (失败) = err 红 */
-.apps-progress-bar.active { background: var(--warn); }
-.apps-progress-bar.success { background: var(--brand); }
-.apps-progress-bar.draft { background: var(--text-4); }
-.apps-progress-bar.danger { background: var(--err); }
-
 /* ── Fix 14 (2026-05-21): 列表视图 "组成" 列 — 紧凑展示 M/F/R/D 4 项 ───── */
 .apps-row-metrics {
   min-width: 0;
   display: flex;
   align-items: center;
-  flex-wrap: wrap;
-  gap: 4px;
+  flex-wrap: nowrap;
+  gap: 3px;
   color: var(--text-3);
-  font-size: 11.5px;
+  font-size: 11px;
   line-height: 1.4;
 }
 
@@ -1212,11 +1254,11 @@ onMounted(() => { refreshApps() })
   display: inline-flex;
   align-items: baseline;
   gap: 3px;
-  padding: 2px 6px;
+  padding: 2px 5px;
   border-radius: var(--r-1, 4px);
   background: var(--surface-2);
   color: var(--text-3);
-  font-size: 11px;
+  font-size: 10.5px;
   white-space: nowrap;
   transition: background 0.14s var(--ease, cubic-bezier(0.2, 0.8, 0.2, 1));
 }
@@ -1229,7 +1271,7 @@ onMounted(() => { refreshApps() })
   color: var(--text);
   font-family: var(--font-mono);
   font-weight: var(--fw-semibold, 600);
-  font-size: 11px;
+  font-size: 10.5px;
   line-height: 1;
 }
 
@@ -1247,8 +1289,19 @@ onMounted(() => { refreshApps() })
 .apps-row-actions {
   display: flex;
   justify-content: flex-end;
-  gap: 8px;
-  flex-wrap: wrap;
+  align-items: center;
+  gap: 0;
+  flex-wrap: nowrap;
+  min-width: 0;
+  justify-self: end;
+  overflow: hidden;
+  border: 1px solid var(--line);
+  border-radius: var(--r-2, 6px);
+  background: var(--surface);
+}
+
+.apps-table-actions-head {
+  text-align: right;
 }
 
 /* ── Card view ────────────────────────────────────────────── */
@@ -1362,7 +1415,7 @@ onMounted(() => { refreshApps() })
 
 /* ── Mini action buttons (对话 / 构建 / 发布 / 删除) ───────── */
 .apps-mini-action {
-  min-height: 32px;
+  min-height: 30px;
   border: 1px solid var(--line);
   border-radius: var(--r-2, 6px);
   background: var(--surface);
@@ -1371,15 +1424,35 @@ onMounted(() => { refreshApps() })
   align-items: center;
   justify-content: center;
   gap: 6px;
-  padding: 0 12px;
+  padding: 0 10px;
   font-family: inherit;
-  font-size: 12.5px;
+  font-size: 12px;
   font-weight: var(--fw-medium, 500);
   cursor: pointer;
   white-space: nowrap;
   transition: background 0.14s var(--ease, cubic-bezier(0.2, 0.8, 0.2, 1)),
               border-color 0.14s var(--ease, cubic-bezier(0.2, 0.8, 0.2, 1)),
               color 0.14s var(--ease, cubic-bezier(0.2, 0.8, 0.2, 1));
+}
+
+.apps-row-actions .apps-mini-action {
+  min-width: 0;
+  height: 28px;
+  min-height: 28px;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  padding: 0 8px;
+  gap: 4px;
+  font-size: 11.5px;
+}
+
+.apps-row-actions .apps-mini-action + .apps-mini-action {
+  border-left: 1px solid var(--line);
+}
+
+.apps-row-actions .apps-mini-action.primary {
+  border-radius: 0;
 }
 
 .apps-mini-action:hover {
@@ -1454,7 +1527,323 @@ onMounted(() => { refreshApps() })
   padding: 16px 4px 4px;
 }
 
+/* ── Delivery assets drawer ───────────────────────────────── */
+.apps-assets-drawer {
+  min-height: 100%;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  padding: 20px;
+  background: var(--bg);
+  color: var(--text);
+}
+
+.apps-assets-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+  padding-bottom: 14px;
+  border-bottom: 1px solid var(--line);
+}
+
+.apps-assets-kicker {
+  color: var(--brand);
+  font-size: 12px;
+  font-weight: var(--fw-semibold, 600);
+}
+
+.apps-assets-head h2 {
+  margin: 4px 0 0;
+  color: var(--text);
+  font-size: 20px;
+  line-height: 1.25;
+  font-weight: var(--fw-bold, 700);
+  letter-spacing: 0;
+}
+
+.apps-assets-head p {
+  margin: 6px 0 0;
+  color: var(--text-3);
+  font-size: 12.5px;
+}
+
+.apps-assets-close {
+  width: 30px;
+  height: 30px;
+  border: 1px solid var(--line);
+  border-radius: var(--r-2, 6px);
+  background: var(--surface);
+  color: var(--text-3);
+  display: grid;
+  place-items: center;
+  cursor: pointer;
+  font-size: 20px;
+  line-height: 1;
+}
+
+.apps-assets-close:hover {
+  border-color: var(--brand-ring);
+  color: var(--brand);
+  background: var(--brand-soft);
+}
+
+.apps-assets-loading {
+  padding: 8px 0;
+}
+
+.apps-assets-summary {
+  display: grid;
+  grid-template-columns: repeat(5, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.apps-assets-summary-item {
+  min-width: 0;
+  border: 1px solid var(--line);
+  border-radius: var(--r-3, 8px);
+  background: var(--surface);
+  padding: 9px 8px;
+}
+
+.apps-assets-summary-item span {
+  display: block;
+  color: var(--text-3);
+  font-size: 11px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.apps-assets-summary-item strong {
+  display: block;
+  margin-top: 4px;
+  color: var(--text);
+  font-family: var(--font-mono);
+  font-size: 16px;
+  line-height: 1;
+}
+
+.apps-assets-section {
+  border: 1px solid var(--line);
+  border-radius: var(--r-3, 8px);
+  background: var(--surface);
+  overflow: hidden;
+}
+
+.apps-assets-section > header {
+  display: grid;
+  grid-template-columns: auto 1fr auto;
+  align-items: center;
+  gap: 10px;
+  padding: 12px;
+  border-bottom: 1px solid var(--line);
+  background: var(--surface-2);
+}
+
+.apps-assets-section-icon {
+  width: 28px;
+  height: 28px;
+  border-radius: var(--r-2, 6px);
+  display: grid;
+  place-items: center;
+  background: var(--surface);
+  color: var(--brand);
+  border: 1px solid var(--line);
+}
+
+.apps-assets-section h3 {
+  margin: 0;
+  color: var(--text);
+  font-size: 13.5px;
+  line-height: 1.2;
+  font-weight: var(--fw-semibold, 600);
+}
+
+.apps-assets-section p {
+  margin: 3px 0 0;
+  color: var(--text-3);
+  font-size: 11.5px;
+  line-height: 1.35;
+}
+
+.apps-assets-empty {
+  padding: 16px;
+  color: var(--text-4);
+  font-size: 12px;
+  text-align: center;
+}
+
+.apps-assets-empty.state {
+  border: 1px solid var(--line);
+  border-radius: var(--r-3, 8px);
+  background: var(--surface);
+}
+
+.apps-assets-item {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  align-items: start;
+  gap: 12px;
+  padding: 12px;
+  border-bottom: 1px solid var(--line);
+}
+
+.apps-assets-item:last-child {
+  border-bottom: 0;
+}
+
+.apps-assets-item-main {
+  min-width: 0;
+}
+
+.apps-assets-item-title {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+
+.apps-assets-item-title strong {
+  min-width: 0;
+  color: var(--text);
+  font-size: 13px;
+  font-weight: var(--fw-semibold, 600);
+  line-height: 1.25;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.apps-assets-item-title span {
+  flex: 0 0 auto;
+  color: var(--text-4);
+  font-size: 11px;
+  font-family: var(--font-mono);
+}
+
+.apps-assets-item p {
+  margin: 6px 0 0;
+  color: var(--text-3);
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.apps-assets-item-action {
+  min-height: 28px;
+  border: 1px solid var(--line);
+  border-radius: var(--r-2, 6px);
+  background: var(--surface);
+  color: var(--text-2);
+  padding: 0 10px;
+  font-family: inherit;
+  font-size: 12px;
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.apps-assets-item-action:hover {
+  border-color: var(--brand-ring);
+  color: var(--brand);
+  background: var(--brand-soft);
+}
+
+.apps-assets-kv {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 8px;
+  margin: 10px 0 0;
+}
+
+.apps-assets-kv div {
+  border-radius: var(--r-2, 6px);
+  background: var(--surface-2);
+  padding: 7px 8px;
+}
+
+.apps-assets-kv dt {
+  color: var(--text-3);
+  font-size: 11px;
+}
+
+.apps-assets-kv dd {
+  margin: 3px 0 0;
+  color: var(--text);
+  font-family: var(--font-mono);
+  font-size: 14px;
+  font-weight: var(--fw-semibold, 600);
+}
+
+.apps-assets-cases {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin: 10px 0 0;
+  padding: 0;
+  list-style: none;
+}
+
+.apps-assets-cases li {
+  border-left: 2px solid var(--brand-ring);
+  padding-left: 9px;
+}
+
+.apps-assets-cases strong {
+  display: block;
+  color: var(--text);
+  font-size: 12.5px;
+  font-weight: var(--fw-semibold, 600);
+}
+
+.apps-assets-cases span {
+  display: block;
+  margin-top: 2px;
+  color: var(--text-3);
+  font-size: 12px;
+  line-height: 1.45;
+}
+
 /* ── Responsive ───────────────────────────────────────────── */
+@media (max-width: 1120px) {
+  .apps-table-head {
+    display: none;
+  }
+
+  .apps-table {
+    border: 0;
+    background: transparent;
+    box-shadow: none;
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+  }
+
+  .apps-row {
+    min-height: 0;
+    border: 1px solid var(--line);
+    border-radius: var(--r-4, 12px);
+    background: var(--surface);
+    grid-template-columns: 1fr;
+    row-gap: 10px;
+    padding: 12px;
+  }
+
+  .apps-row-metrics,
+  .apps-row-updated,
+  .apps-row-actions {
+    margin-left: 43px;
+  }
+
+  .apps-row-metrics {
+    flex-wrap: wrap;
+  }
+
+  .apps-row-actions {
+    justify-content: flex-start;
+    flex-wrap: wrap;
+  }
+}
+
 @media (max-width: 860px) {
   .apps-page {
     padding: 18px 16px 28px;
@@ -1488,45 +1877,6 @@ onMounted(() => { refreshApps() })
     align-self: auto;
   }
 
-  .apps-table-head {
-    display: none;
-  }
-
-  .apps-table {
-    border: 0;
-    background: transparent;
-    box-shadow: none;
-    display: flex;
-    flex-direction: column;
-    gap: 10px;
-  }
-
-  .apps-row {
-    min-height: 0;
-    border: 1px solid var(--line);
-    border-radius: var(--r-4, 12px);
-    background: var(--surface);
-    grid-template-columns: 1fr;
-    row-gap: 10px;
-    padding: 12px;
-  }
-
-  .apps-row-stage,
-  .apps-row-progress,
-  .apps-row-metrics,
-  .apps-row-updated,
-  .apps-row-actions {
-    margin-left: 43px;
-  }
-
-  /* Fix 14: 窄屏堆叠时元数据 chip 单独成行也别撑爆，让它换行收窄 */
-  .apps-row-metrics {
-    flex-wrap: wrap;
-  }
-
-  .apps-row-actions {
-    justify-content: flex-start;
-  }
 }
 
 /* ── Legacy modal (kept for any inline dialogs still using these classes) ── */

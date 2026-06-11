@@ -70,6 +70,9 @@ async def test_create_workflows_calls_save_and_is_non_fatal():
     assert saved[0][1]["processName"] == "检测报告审批流"
     assert any(e.get("stage") == 5 for e in events)
     assert any("坏的" in (e.get("step") or "") for e in events)
+    assert events[-1]["created"] == 1
+    assert events[-1]["total"] == 2
+    assert events[-1]["created_indices"] == [0]
 
 
 @pytest.mark.asyncio
@@ -84,3 +87,6 @@ async def test_create_workflows_save_failure_does_not_raise():
     ):
         events.append(ev)
     assert any(e.get("stage") == 5 for e in events)
+    assert events[-1]["created"] == 0
+    assert events[-1]["total"] == 1
+    assert events[-1]["created_indices"] == []

@@ -120,6 +120,31 @@ def checkpoint(ws_path: Path, message: str = "checkpoint: before agent run") -> 
         return False
 
 
+def accept_changes(ws_path: Path, rel_path: str | None = None) -> dict:
+    """把当前改动收进基线，并返回接受后的改动清单。
+
+    rel_path 为空时接受整个工作区；传入文件路径时只接受该文件，其他文件仍保留在
+    「本轮改动」里。这里不触碰外部 Git 远端，只更新工作区内部透明基线仓库。
+    """
+    if not ensure_baseline(ws_path):
+        return dict(_DISABLED)
+    if not rel_path:
+        checkpoint(ws_path, "checkpoint: accept workspace changes")
+        return collect_changes(ws_path)
+    try:
+        status = _git(ws_path, "status", "--porcelain", "-uall", "--no-renames", "--", rel_path)
+        if status.returncode != 0 or not status.stdout.strip():
+            return collect_changes(ws_path)
+        _git(ws_path, "add", "-A", "--", rel_path)
+        r = _git(ws_path, "commit", "-q", "--no-verify", "-m", f"checkpoint: accept {rel_path}", identity=True)
+        if r.returncode != 0:
+            logger.warning("workspace git accept 文件失败: %s", r.stderr.strip()[:300])
+        return collect_changes(ws_path)
+    except Exception:
+        logger.warning("workspace git accept 失败(忽略): %s %s", ws_path, rel_path, exc_info=True)
+        return collect_changes(ws_path)
+
+
 def _is_noise_path(rel: str) -> bool:
     """工具链自写的配置文件不算「本轮改动」(pipeline 每轮会刷 IDE/serve 配置)。
 

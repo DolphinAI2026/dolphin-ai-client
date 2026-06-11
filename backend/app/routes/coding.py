@@ -847,6 +847,11 @@ class WriteFileRequest(BaseModel):
     content: str
 
 
+class AcceptWorkspaceChangesRequest(BaseModel):
+    """接受工作区改动请求。file_path 为空表示接受全部。"""
+    file_path: Optional[str] = None
+
+
 class IDEFileEdit(BaseModel):
     """Web IDE 内 Chat 应用文件修改。"""
     path: str
@@ -2108,6 +2113,33 @@ async def get_workspace_changes(
     if not ws_path.exists():
         raise HTTPException(status_code=404, detail="工作区不存在")
     return await asyncio.to_thread(collect_changes, ws_path)
+
+
+@router.post("/workspace/{ws_id}/changes/accept")
+async def accept_workspace_changes(
+    ws_id: str,
+    req: AcceptWorkspaceChangesRequest,
+    ctx: Annotated[AuthContext, Depends(get_auth_context)],
+    db: Annotated[AsyncSession, Depends(get_db)],
+):
+    """把当前工作区改动收进内部 git 基线。file_path 为空表示接受全部。"""
+    from app.coding.git_changes import accept_changes
+
+    await _ensure_workspace_access(ws_id, ctx, db, minimum_project_role="member")
+    ws_path = workspace_mgr.get_workspace_path(ws_id)
+    if not ws_path.exists():
+        raise HTTPException(status_code=404, detail="工作区不存在")
+
+    file_path = (req.file_path or "").strip()
+    if file_path:
+        ws_root = ws_path.resolve()
+        target = (ws_root / file_path).resolve()
+        try:
+            file_path = target.relative_to(ws_root).as_posix()
+        except ValueError:
+            raise HTTPException(status_code=400, detail="文件路径越界")
+
+    return await asyncio.to_thread(accept_changes, ws_path, file_path or None)
 
 
 @router.get("/workspace/{ws_id}/file-diff")

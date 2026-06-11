@@ -720,7 +720,7 @@ async def _build_initial_messages(
         from app.ai_chat.app_context import build_app_context_block
         system_prompt = system_prompt + await build_app_context_block(
             db, app_id, section=section, tenant_id=getattr(session, "tenant_id", None),
-            view_context=view_context,
+            view_context=view_context, user_id=getattr(session, "user_id", None),
         )
     messages: list[dict] = [{"role": "system", "content": system_prompt}]
 

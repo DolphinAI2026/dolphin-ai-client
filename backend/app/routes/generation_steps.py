@@ -41,8 +41,9 @@ logger = logging.getLogger(__name__)
 
 router = APIRouter(tags=["生成步骤"])
 
-# 临时关闭审批流程创建步骤，避免部署链路被当前流程配置问题阻塞。
-WORKFLOW_STEPS_ENABLED = False
+# 审批流程属于设计文档的可交付配置；若文档里声明了 workflows，
+# 进度和完成判定必须显式展示并按平台真实流程核对。
+WORKFLOW_STEPS_ENABLED = True
 
 # 平台 / 历史数据偶尔会返回非规范组件码（缺 _INPUT / _SELECT 之类后缀），
 # 这里列出这些别名到中文显示名的固定映射。
@@ -407,6 +408,45 @@ def _render_design_doc_markdown(app_name: str, app_code: str, data: dict) -> str
         data_scope_label=_data_scope_label,
     )
 
+
+def _workflow_name(workflow: dict, idx: int) -> str:
+    return str(
+        workflow.get("name")
+        or workflow.get("flow_name")
+        or workflow.get("workflowName")
+        or workflow.get("form")
+        or workflow.get("form_code")
+        or f"流程{idx}"
+    )
+
+
+def _workflow_process_code(workflow: dict) -> str:
+    form_code = str(
+        workflow.get("form_code")
+        or workflow.get("formCode")
+        or workflow.get("form")
+        or ""
+    ).strip()
+    explicit = str(
+        workflow.get("process_code")
+        or workflow.get("processCode")
+        or workflow.get("code")
+        or ""
+    ).strip()
+    return explicit or (f"proc_{form_code}" if form_code else "")
+
+
+def _process_matches_workflow(process: dict, workflow: dict, idx: int) -> bool:
+    process_name = _lc(process.get("processName") or process.get("process_name") or process.get("name"))
+    process_code = _lc(process.get("processCode") or process.get("process_code") or process.get("code"))
+    expected_name = _lc(_workflow_name(workflow, idx))
+    expected_code = _lc(_workflow_process_code(workflow))
+    return bool(
+        (expected_name and process_name == expected_name)
+        or (expected_code and process_code == expected_code)
+    )
+
+
 def _build_steps(config: dict, state: dict, apaas_app_id: str = None) -> list[StepStatus]:
     """根据 config 和 state 构建完整步骤列表。"""
     data = config.get("data", config)
@@ -517,7 +557,7 @@ def _build_steps(config: dict, state: dict, apaas_app_id: str = None) -> list[St
         for idx, wf in enumerate(workflows):
             key = f"create_workflow:{idx}"
             steps.append(StepStatus(
-                key=key, label=f"创建流程: {wf.get('name', wf.get('form', f'流程{idx}'))}",
+                key=key, label=f"创建流程: {_workflow_name(wf, idx)}",
                 status="completed" if key in completed else ("error" if key in errors else "pending"),
                 deps_met=all_forms_done,
                 error=errors.get(key),
@@ -544,6 +584,8 @@ def _critical_step_keys(config: dict) -> set[str]:
     keys.update(f"create_dict:{i}" for i, _ in enumerate(data.get("dicts") or []))
     keys.update(f"create_model:{i}" for i, _ in enumerate(data.get("models") or []))
     keys.update(f"create_form:{i}" for i, _ in enumerate(data.get("forms") or []))
+    if WORKFLOW_STEPS_ENABLED:
+        keys.update(f"create_workflow:{i}" for i, _ in enumerate(data.get("workflows") or []))
     return keys
 
 
@@ -800,6 +842,17 @@ async def _reality_completed_step_keys(app: Application, config: dict, db: Async
                 keys.add(f"create_form:{idx}")
     except Exception as exc:  # noqa: BLE001
         logger.warning("steps reality reconcile forms 失败 app=%s: %s", app.id, exc)
+
+    workflows = data.get("workflows") or []
+    if WORKFLOW_STEPS_ENABLED and workflows:
+        try:
+            processes = await client.list_processes(aid)
+            process_items = [p for p in (processes or []) if isinstance(p, dict)]
+            for idx, wf in enumerate(workflows):
+                if any(_process_matches_workflow(p, wf, idx) for p in process_items):
+                    keys.add(f"create_workflow:{idx}")
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("steps reality reconcile workflows 失败 app=%s: %s", app.id, exc)
 
     _REALITY_CACHE[app.id] = (now, keys)
     return keys

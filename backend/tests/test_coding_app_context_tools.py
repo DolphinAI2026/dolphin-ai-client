@@ -16,7 +16,7 @@ from __future__ import annotations
 import json
 from contextlib import asynccontextmanager
 from pathlib import Path
-from unittest.mock import MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
@@ -126,6 +126,119 @@ def test_codegen_overlays_non_bound_is_noop():
     _input, _extra = _codegen_app_context_overlays(None, "SYS")
     assert _input == {"system_prompt": "SYS"}   # 无 app_context
     assert _extra == {}                          # 无锁定 → codegen 行为不变
+
+
+# ---------- 发布工具:codegen Agent 可直接装回 / 上传 ----------
+
+def test_coding_tools_register_dev_deploy_tools():
+    names = {t.name for t in build_coding_tools()}
+    assert "deploy_dev_workspace_to_app" in names
+    assert "upload_dev_workspace_to_asset_library" in names
+
+
+@pytest.mark.asyncio
+async def test_deploy_dev_workspace_tool_checks_access_and_calls_existing_orchestrator():
+    """对话工具只做 agent adapter,真正编排复用 routes.coding._deploy_to_app_impl。"""
+    calls: dict = {}
+    fake_db = MagicMock()
+
+    @asynccontextmanager
+    async def _fake_session():
+        yield fake_db
+
+    async def _fake_ensure(ws_id, auth_ctx, db, *, minimum_project_role):
+        calls["access"] = (ws_id, auth_ctx.user.id, auth_ctx.tenant_id, minimum_project_role, db)
+        return {"id": ws_id}
+
+    async def _fake_deploy(ws_id, local_app_id, auth_ctx, db):
+        calls["deploy"] = (ws_id, local_app_id, auth_ctx.user.id, auth_ctx.tenant_id, db)
+        return {
+            "status": "installed",
+            "app": {"local_app_id": local_app_id, "name": "项目管理"},
+            "version": "1.0.1",
+            "kits": ["form-page-project-dashboard.zip"],
+        }
+
+    with (
+        patch("app.database.AsyncSessionLocal", _fake_session),
+        patch("app.routes.coding._ensure_workspace_access", _fake_ensure),
+        patch("app.routes.coding._deploy_to_app_impl", _fake_deploy),
+    ):
+        tool = next(t for t in build_coding_tools() if t.name == "deploy_dev_workspace_to_app")
+        ctx = AgentContext(
+            session_id="s", conversation_id=99, user_id=12, tenant_id=57,
+            model="gpt-5.5", workspace_id="ws-dev",
+        )
+        res = await tool.execute({"local_app_id": 10}, ctx)
+
+    assert res.success, res.content
+    assert calls["access"] == ("ws-dev", 12, 57, "admin", fake_db)
+    assert calls["deploy"] == ("ws-dev", 10, 12, 57, fake_db)
+    assert res.data["status"] == "installed"
+    assert res.data["kits"] == ["form-page-project-dashboard.zip"]
+    assert "已装回应用「项目管理」" in res.content
+
+
+@pytest.mark.asyncio
+async def test_deploy_dev_workspace_tool_falls_back_to_conversation_bound_app():
+    fake_db = MagicMock()
+    query_result = MagicMock()
+    query_result.scalar_one_or_none.return_value = MagicMock(coding_app_id=22)
+    fake_db.execute = AsyncMock(return_value=query_result)
+    calls: dict = {}
+
+    @asynccontextmanager
+    async def _fake_session():
+        yield fake_db
+
+    async def _fake_ensure(*args, **kwargs):
+        return {"id": "ws-dev"}
+
+    async def _fake_deploy(ws_id, local_app_id, auth_ctx, db):
+        calls["local_app_id"] = local_app_id
+        return {"status": "installed", "app": {"name": "PMS"}, "version": "1.0.2", "kits": ["p.zip"]}
+
+    with (
+        patch("app.database.AsyncSessionLocal", _fake_session),
+        patch("app.routes.coding._ensure_workspace_access", _fake_ensure),
+        patch("app.routes.coding._deploy_to_app_impl", _fake_deploy),
+    ):
+        tool = next(t for t in build_coding_tools() if t.name == "deploy_dev_workspace_to_app")
+        res = await tool.execute({}, _ctx())
+
+    assert res.success, res.content
+    assert calls["local_app_id"] == 22
+
+
+@pytest.mark.asyncio
+async def test_upload_dev_workspace_tool_calls_deploy_orchestrator_without_app():
+    calls: dict = {}
+    fake_db = MagicMock()
+
+    @asynccontextmanager
+    async def _fake_session():
+        yield fake_db
+
+    async def _fake_ensure(ws_id, auth_ctx, db, *, minimum_project_role):
+        calls["access"] = minimum_project_role
+        return {"id": ws_id}
+
+    async def _fake_deploy(ws_id, local_app_id, auth_ctx, db):
+        calls["local_app_id"] = local_app_id
+        return {"status": "uploaded_only", "kits": ["component.zip"], "hint": "已传到自开发资产库"}
+
+    with (
+        patch("app.database.AsyncSessionLocal", _fake_session),
+        patch("app.routes.coding._ensure_workspace_access", _fake_ensure),
+        patch("app.routes.coding._deploy_to_app_impl", _fake_deploy),
+    ):
+        tool = next(t for t in build_coding_tools() if t.name == "upload_dev_workspace_to_asset_library")
+        res = await tool.execute({}, _ctx())
+
+    assert res.success, res.content
+    assert calls["access"] == "admin"
+    assert calls["local_app_id"] is None
+    assert res.data["status"] == "uploaded_only"
 
 
 # ---------- agent 层:ctx.input["app_context"] → build_initial_user_message ----------

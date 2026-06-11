@@ -16,7 +16,7 @@
      没有前端单测 runner，验证只能靠 `npm run build:nocheck` 编译；reactivity / binding bug 只会
      在 live 测试时暴露。 -->
 <script setup lang="ts">
-import { computed, onMounted, ref, toRef, watch, type Ref } from 'vue'
+import { computed, onBeforeUnmount, onMounted, ref, toRef, watch, type Ref } from 'vue'
 import { ElMessage } from 'element-plus'
 
 import AgentConversation from '@/components/common/AgentConversation.vue'
@@ -92,6 +92,12 @@ const viewContext = computed<string | null>(() => {
 // （ensureSession 建会话带上、切换时 updateSession 落库）。
 const selectedLlmId = ref<number | null>(null)
 const llmOptions = ref<BuilderModelOption[]>([])
+const modelMenuOpen = ref(false)
+const modelPickerRef = ref<HTMLElement | null>(null)
+const selectedLlmName = computed(() => {
+  const selected = llmOptions.value.find(option => option.id === selectedLlmId.value)
+  return selected?.config_name || '默认模型'
+})
 
 const {
   currentSession,
@@ -186,6 +192,24 @@ async function onChangeLlm() {
   } catch (e: any) {
     ElMessage.error(e?.message || '切换模型失败')
   }
+}
+
+function toggleModelMenu() {
+  if (!llmOptions.value.length) return
+  modelMenuOpen.value = !modelMenuOpen.value
+}
+
+async function chooseModel(id: number | null) {
+  selectedLlmId.value = id
+  modelMenuOpen.value = false
+  await onChangeLlm()
+}
+
+function closeModelMenuOnOutside(event: MouseEvent) {
+  const root = modelPickerRef.value
+  if (!root || !modelMenuOpen.value) return
+  if (event.target instanceof Node && root.contains(event.target)) return
+  modelMenuOpen.value = false
 }
 
 // ─── 会话抽屉（历史 / 新对话） ───
@@ -391,6 +415,11 @@ const contextTitle = computed(() => {
 onMounted(() => {
   void loadLlmOptions()
   void loadSessions().catch(() => { /* ignore */ })
+  document.addEventListener('click', closeModelMenuOnOutside)
+})
+
+onBeforeUnmount(() => {
+  document.removeEventListener('click', closeModelMenuOnOutside)
 })
 </script>
 
@@ -495,16 +524,47 @@ onMounted(() => {
         @remove-attachment="removePendingFileByIndex"
       >
         <template #footer-left>
-          <select
-            v-if="llmOptions.length"
-            v-model="selectedLlmId"
-            class="aa-model-select"
-            title="切换模型"
-            @change="onChangeLlm"
-          >
-            <option :value="null">默认模型</option>
-            <option v-for="m in llmOptions" :key="m.id" :value="m.id">{{ m.config_name }}</option>
-          </select>
+          <div v-if="llmOptions.length" ref="modelPickerRef" class="aa-model-picker">
+            <button
+              type="button"
+              class="aa-model-trigger"
+              :class="{ 'is-open': modelMenuOpen }"
+              title="切换模型"
+              aria-haspopup="listbox"
+              :aria-expanded="modelMenuOpen"
+              @click.stop="toggleModelMenu"
+              @keydown.esc.stop="modelMenuOpen = false"
+            >
+              <span class="aa-model-trigger-text">{{ selectedLlmName }}</span>
+              <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.1" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                <path d="m6 9 6 6 6-6" />
+              </svg>
+            </button>
+            <div v-if="modelMenuOpen" class="aa-model-menu" role="listbox">
+              <button
+                type="button"
+                class="aa-model-option"
+                :class="{ 'is-selected': selectedLlmId === null }"
+                role="option"
+                :aria-selected="selectedLlmId === null"
+                @click.stop="chooseModel(null)"
+              >
+                <span>默认模型</span>
+              </button>
+              <button
+                v-for="m in llmOptions"
+                :key="m.id"
+                type="button"
+                class="aa-model-option"
+                :class="{ 'is-selected': selectedLlmId === m.id }"
+                role="option"
+                :aria-selected="selectedLlmId === m.id"
+                @click.stop="chooseModel(m.id)"
+              >
+                <span>{{ m.config_name }}</span>
+              </button>
+            </div>
+          </div>
         </template>
       </UnifiedChatComposer>
     </div>
@@ -724,8 +784,9 @@ onMounted(() => {
   padding: 0 10px 10px;
 }
 .aa-input-area :deep(.ucc-footer-left) {
-  flex: 1 1 auto;
+  flex: 0 1 auto;
   width: auto;
+  max-width: min(220px, 58%);
   overflow: visible;
 }
 .aa-input-area :deep(.ucc-footer-right) {
@@ -743,24 +804,96 @@ onMounted(() => {
   min-height: 42px;
 }
 
-/* 底部模型选择器（用面板 token，不是 AIChatPage 的 --ac-*） */
-.aa-model-select {
+/* 底部模型选择器（自定义菜单，避免原生 select 白底/系统高亮割裂） */
+.aa-model-picker {
+  position: relative;
+  flex: 0 0 auto;
+  width: clamp(118px, 14vw, 156px);
+  min-width: 118px;
+  max-width: 156px;
+  z-index: 4;
+}
+.aa-model-trigger {
+  display: inline-flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 6px;
+  width: 100%;
   background: transparent;
   border: 1px solid var(--line);
   color: var(--text-3);
-  padding: 3px 8px;
+  height: 28px;
+  padding: 0 8px 0 9px;
   border-radius: 6px;
   font-family: inherit;
   font-size: 11.5px;
+  line-height: 1;
   cursor: pointer;
   outline: none;
-  flex: 1 1 auto;
-  min-width: 0;
-  max-width: none;
+  transition: border-color 0.16s ease, color 0.16s ease, background 0.16s ease;
 }
-.aa-model-select:hover {
+.aa-model-trigger-text {
+  min-width: 0;
+  flex: 1 1 auto;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  text-align: left;
+}
+.aa-model-trigger:hover,
+.aa-model-trigger.is-open {
   border-color: var(--brand);
   color: var(--text);
+  background: color-mix(in srgb, var(--brand) 8%, transparent);
+}
+.aa-model-trigger svg {
+  flex: 0 0 auto;
+  opacity: 0.82;
+  transition: transform 0.16s ease;
+}
+.aa-model-trigger.is-open svg {
+  transform: rotate(180deg);
+}
+.aa-model-menu {
+  position: absolute;
+  left: 0;
+  bottom: calc(100% + 6px);
+  width: 100%;
+  min-width: 156px;
+  padding: 4px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--surface) 94%, #050b18);
+  box-shadow: 0 16px 36px rgba(0, 0, 0, 0.32);
+}
+.aa-model-option {
+  display: flex;
+  align-items: center;
+  width: 100%;
+  min-height: 28px;
+  padding: 0 8px;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--text-3);
+  font: inherit;
+  font-size: 12px;
+  text-align: left;
+  cursor: pointer;
+}
+.aa-model-option span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.aa-model-option:hover {
+  background: color-mix(in srgb, var(--brand) 13%, transparent);
+  color: var(--text);
+}
+.aa-model-option.is-selected {
+  background: color-mix(in srgb, var(--brand) 18%, transparent);
+  color: var(--brand-2);
 }
 
 /* ─── 会话抽屉 ────────────────────────────────────────── */

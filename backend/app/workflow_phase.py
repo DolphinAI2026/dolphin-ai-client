@@ -62,17 +62,24 @@ async def create_workflows(
     if not workflows:
         return
     yield {"stage": 5, "status": "running", "step": f"创建审批流程（{len(workflows)} 条）..."}
-    created = 0
-    for wf in workflows:
+    created_indices: list[int] = []
+    for idx, wf in enumerate(workflows):
         payload, reason = build_workflow_payload(wf, form_results, role_code_map, app_id=app_id)
         if reason:
-            yield {"stage": 5, "status": "running", "step": f"⚠️ {reason}"}
+            yield {"stage": 5, "status": "running", "step": f"⚠️ {reason}", "workflow_index": idx}
             continue
         try:
             await client.save_process_config(app_id, payload)
-            created += 1
-            yield {"stage": 5, "status": "running", "step": f"流程: {wf.get('name')}"}
+            created_indices.append(idx)
+            yield {"stage": 5, "status": "running", "step": f"流程: {wf.get('name')}", "workflow_index": idx}
         except Exception as e:
             logger.warning("create workflow failed: %s", e, exc_info=True)
-            yield {"stage": 5, "status": "running", "step": f"⚠️ 流程 '{wf.get('name')}' 创建失败（{e}），跳过"}
-    yield {"stage": 5, "status": "done", "step": f"审批流程完成（{created}/{len(workflows)} 条）"}
+            yield {"stage": 5, "status": "running", "step": f"⚠️ 流程 '{wf.get('name')}' 创建失败（{e}），跳过", "workflow_index": idx}
+    yield {
+        "stage": 5,
+        "status": "done",
+        "step": f"审批流程完成（{len(created_indices)}/{len(workflows)} 条）",
+        "created": len(created_indices),
+        "total": len(workflows),
+        "created_indices": created_indices,
+    }

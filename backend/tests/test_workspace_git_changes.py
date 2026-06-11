@@ -8,6 +8,7 @@ import subprocess
 import pytest
 
 from app.coding.git_changes import (
+    accept_changes,
     checkpoint,
     collect_changes,
     ensure_baseline,
@@ -78,6 +79,39 @@ def test_checkpoint_folds_changes_into_baseline(ws):
     assert collect_changes(ws)["files"] == []
     # 没有改动时 checkpoint 不空提交
     assert checkpoint(ws) is False
+
+
+def test_accept_changes_folds_all_changes_into_baseline(ws):
+    ensure_baseline(ws)
+    (ws / "src" / "app.js").write_text("line1\nCHANGED\n", encoding="utf-8")
+    (ws / "src" / "new.js").write_text("a\n", encoding="utf-8")
+
+    out = accept_changes(ws)
+
+    assert out["enabled"] is True
+    assert out["files"] == []
+
+
+def test_accept_changes_can_fold_one_file_only(ws):
+    ensure_baseline(ws)
+    (ws / "src" / "app.js").write_text("line1\nCHANGED\n", encoding="utf-8")
+    (ws / "src" / "new.js").write_text("a\n", encoding="utf-8")
+
+    out = accept_changes(ws, "src/app.js")
+
+    assert out["enabled"] is True
+    assert [f["path"] for f in out["files"]] == ["src/new.js"]
+
+
+def test_accept_changes_can_fold_deleted_file(ws):
+    ensure_baseline(ws)
+    (ws / "README.md").unlink()
+    (ws / "src" / "new.js").write_text("a\n", encoding="utf-8")
+
+    out = accept_changes(ws, "README.md")
+
+    assert out["enabled"] is True
+    assert [f["path"] for f in out["files"]] == ["src/new.js"]
 
 
 def test_file_diff_modified_added_deleted(ws):

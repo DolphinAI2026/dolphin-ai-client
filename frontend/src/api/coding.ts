@@ -326,6 +326,12 @@ export function getWorkspaceChanges(wsId: string): Promise<WorkspaceChanges> {
   return request.get(`/coding/workspace/${wsId}/changes`)
 }
 
+export function acceptWorkspaceChanges(wsId: string, filePath?: string | null): Promise<WorkspaceChanges> {
+  return request.post(`/coding/workspace/${wsId}/changes/accept`, {
+    file_path: filePath || null,
+  })
+}
+
 /** 单文件相对 git 基线的 unified diff 文本 */
 export interface WorkspaceFileDiff {
   enabled: boolean

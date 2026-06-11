@@ -89,9 +89,55 @@ async def _load_skills(db: AsyncSession, app_id: int, tenant_id: Optional[int]) 
         return []
 
 
+async def _load_app_workspaces(
+    db: AsyncSession,
+    app_id: int,
+    tenant_id: Optional[int],
+    user_id: Optional[int],
+) -> list[dict]:
+    """Load self-dev workspaces explicitly bound to the current application."""
+    if not user_id:
+        return []
+    try:
+        from app.coding.workspace import WorkspaceManager
+
+        manager = WorkspaceManager()
+        rows = manager.list_accessible_workspaces(
+            int(user_id),
+            [int(app_id)],
+            tenant_id=int(tenant_id) if tenant_id is not None else None,
+        )
+    except Exception as exc:
+        log.warning("app_context: load app workspaces failed: %r", exc)
+        return []
+
+    out: list[dict] = []
+    for ws in rows:
+        try:
+            if str(ws.get("project_id") or "") != str(app_id):
+                continue
+            out.append(ws)
+        except Exception:
+            continue
+    return out[:8]
+
+
+def _workspace_line(ws: dict) -> str:
+    ws_id = ws.get("id") or ws.get("ws_id") or ""
+    project_type = ws.get("project_type") or ""
+    project_name = ws.get("project_name") or ""
+    display_name = ws.get("display_name") or project_name
+    status = ws.get("status") or ""
+    return (
+        f"- ws_id={ws_id} | type={project_type} | name={display_name} "
+        f"| project_name={project_name} | status={status}"
+    )
+
+
 async def build_app_context_block(
     db: AsyncSession, app_id: Optional[int], section: Optional[str] = None,
     tenant_id: Optional[int] = None, view_context: Optional[str] = None,
+    user_id: Optional[int] = None,
 ) -> str:
     """组装应用上下文块。无 app_id / db 时返回空串。
 
@@ -115,6 +161,17 @@ async def build_app_context_block(
         parts.append(f"- 用户此刻正在看：{view_context}（用户说「当前/这个」表单/页面/字段时，默认指这个）")
     if section and section in _SECTION_HINTS:
         parts.append(f"- {_SECTION_HINTS[section]}")
+    workspaces = await _load_app_workspaces(db, app_id, tenant_id, user_id)
+    if workspaces:
+        parts.append(
+            "\n### 已有自开发 workspace（优先复用）\n"
+            "修改已有自开发代码 / 页面 / 组件时，先根据 ws_id 调 "
+            "get_dev_workspace_status / glob_workspace / grep_workspace / read_workspace_file，"
+            "再用 edit_workspace_files 或 write_workspace_files 修改。"
+            "不要为同一个页面/组件调用 create_dev_workspace；只有用户明确要求新增一个自开发资产，"
+            "且没有同名 workspace 时才允许新建。\n"
+            + "\n".join(_workspace_line(ws) for ws in workspaces)
+        )
     spec = await _load_spec_text(db, app_id)
     if spec:
         parts.append(f"\n### 应用 SPEC 摘要\n{spec}")
