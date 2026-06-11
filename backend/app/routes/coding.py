@@ -3024,25 +3024,43 @@ async def upload_workspace_to_platform(
     add_url = f"{env.base_url.rstrip('/')}/xdap-app/selfdevelopment/add/developmentKit"
     update_url = f"{env.base_url.rstrip('/')}/xdap-app/selfdevelopment/update/developmentKit"
 
-    # 后端项目：直接上传 JAR 文件（平台要求 application/java-archive）
+    # 后端项目：直接上传业务 JAR，并确保 runtime JAR 在资源池里可用。
     _backend_project_types = {"backend-api", "backend-feign", "backend-scheduled"}
     if project_type in _backend_project_types:
         output_dir = ws_mgr._get_build_output_dir(ws_path)
         jar_files = [j for j in output_dir.glob("*.jar") if not j.name.endswith(".original")]
         if not jar_files:
             raise HTTPException(status_code=500, detail="未找到编译产物 JAR，请先在 IDE 中构建项目")
-        upload_file_path = jar_files[0]
-        upload_content_type = "application/java-archive"
+        runtime_jar = _resolve_backend_runtime_jar(ws_path)
+        upload_packages = [
+            {
+                "path": jar_files[0],
+                "content_type": "application/java-archive",
+                "description": f"{display_name} - 由 apaas-builder 上传",
+                "upload_policy": "update_if_exists",
+            },
+            {
+                "path": runtime_jar,
+                "content_type": "application/java-archive",
+                "description": f"{runtime_jar.stem} - aPaaS 后端运行时依赖",
+                "upload_policy": "missing_only",
+            },
+        ]
     else:
-        upload_file_path = Path(zip_path)
-        upload_content_type = "application/zip"
+        upload_packages = [{
+            "path": Path(zip_path),
+            "content_type": "application/zip",
+            "description": f"{display_name} - 由 apaas-builder 上传",
+            "upload_policy": "update_if_exists",
+        }]
 
-    async def _do_upload(token: str, existing_kit: Optional[dict]):
-        with open(upload_file_path, "rb") as f:
+    async def _do_upload(token: str, package: dict, existing_kit: Optional[dict]):
+        file_path = Path(package["path"])
+        with open(file_path, "rb") as f:
             file_bytes = f.read()
         form_data = _build_upload_form_data(
             file_type=file_type,
-            description=f"{display_name} - 由 apaas-builder 上传",
+            description=str(package["description"]),
             version_code=uuid.uuid4().hex,
             upload_id=str(int(time.time() * 1000)),
             existing_kit=existing_kit,
@@ -3054,69 +3072,110 @@ async def upload_workspace_to_platform(
                 headers={
                     "xdaptenantid": env.platform_tenant_id,
                     "xdaptoken": token,
-                    "xdaptimestamp": str(int(time.time() * 1000)),
-                },
-                files={"file": (upload_file_path.name, file_bytes, upload_content_type)},
-                data=form_data,
-            )
+                        "xdaptimestamp": str(int(time.time() * 1000)),
+                    },
+                    files={"file": (file_path.name, file_bytes, str(package["content_type"]))},
+                    data=form_data,
+                )
 
-    # 先查询平台是否已有同名组件（keyWord 去掉 .zip 后缀，平台模糊匹配）
-    single_file_name = upload_file_path.name
-    single_query_keyword = single_file_name[:-4] if single_file_name.endswith(".zip") else single_file_name
-    existing_kits = await _query_existing_development_kits(
-        env.base_url, env.platform_tenant_id, env.token, single_query_keyword,
-    )
-    existing_kit = _find_kit_by_filename(existing_kits, single_file_name)
-    action = "update" if existing_kit else "create"
-
-    try:
-        response = await _do_upload(env.token, existing_kit)
-    except httpx.RequestError as e:
-        logger.exception(f"[upload-to-platform] 单端上传失败 base_url={env.base_url}")
-        err_detail = str(e) or repr(e)
-        raise HTTPException(
-            status_code=502,
-            detail=f"上传请求失败: {type(e).__name__}: {err_detail}（目标平台 base_url: {env.base_url}）",
-        )
-
-    # 5. 解析响应；若 token 过期则刷新后重试一次
-    try:
-        resp_data = response.json()
-    except Exception:
-        raise HTTPException(status_code=502, detail=f"平台响应非JSON，状态码: {response.status_code}")
-
-    def _is_unauthorized(data: dict) -> bool:
+    def _is_unauthorized(data: dict, response_status: int) -> bool:
         msg = (data.get("message") or data.get("msg") or "").lower()
         code = data.get("code")
-        return response.status_code == 401 or code == 401 or "unauthorized" in msg
+        return response_status == 401 or code == 401 or "unauthorized" in msg
 
-    if _is_unauthorized(resp_data):
-        new_token = await _refresh_env_token(env, db)
-        # token 刷新后重新查询
+    upload_results = []
+    for package in upload_packages:
+        upload_file_path = Path(package["path"])
+        # 按完整文件名查，runtime-*.jar 已存在时复用，不重复上传。
         existing_kits = await _query_existing_development_kits(
-            env.base_url, env.platform_tenant_id, new_token, single_query_keyword,
+            env.base_url, env.platform_tenant_id, env.token, upload_file_path.name,
         )
         existing_kit = _find_kit_by_filename(existing_kits, upload_file_path.name)
+        action = "update" if existing_kit else "create"
+        if existing_kit and package.get("upload_policy") == "missing_only":
+            upload_results.append({
+                "file": upload_file_path.name,
+                "fileType": file_type,
+                "action": "reuse",
+                "kitId": str(existing_kit.get("id") or ""),
+                "response": {"code": "ok", "message": "already exists"},
+            })
+            continue
+
         try:
-            response = await _do_upload(new_token, existing_kit)
-            resp_data = response.json()
+            response = await _do_upload(env.token, package, existing_kit)
         except httpx.RequestError as e:
-            logger.exception(f"[upload-to-platform] 单端 token 刷新后重试上传失败 base_url={env.base_url}")
+            logger.exception(f"[upload-to-platform] 单端上传失败 base_url={env.base_url}")
             err_detail = str(e) or repr(e)
             raise HTTPException(
                 status_code=502,
                 detail=f"上传请求失败: {type(e).__name__}: {err_detail}（目标平台 base_url: {env.base_url}）",
             )
+
+        # 5. 解析响应；若 token 过期则刷新后重试一次
+        try:
+            resp_data = response.json()
         except Exception:
             raise HTTPException(status_code=502, detail=f"平台响应非JSON，状态码: {response.status_code}")
 
-    code = resp_data.get("code")
-    if code == "ok" or code == 200:
-        action_label = "更新" if action == "update" else "新增"
-        return {"status": "ok", "message": f"上传成功（{action_label}）", "action": action}
-    else:
-        msg = resp_data.get("message") or resp_data.get("msg") or "上传失败"
-        raise HTTPException(status_code=500, detail=msg)
+        if _is_unauthorized(resp_data, response.status_code):
+            new_token = await _refresh_env_token(env, db)
+            existing_kits = await _query_existing_development_kits(
+                env.base_url, env.platform_tenant_id, new_token, upload_file_path.name,
+            )
+            existing_kit = _find_kit_by_filename(existing_kits, upload_file_path.name)
+            action = "update" if existing_kit else "create"
+            try:
+                response = await _do_upload(new_token, package, existing_kit)
+                resp_data = response.json()
+            except httpx.RequestError as e:
+                logger.exception(f"[upload-to-platform] 单端 token 刷新后重试上传失败 base_url={env.base_url}")
+                err_detail = str(e) or repr(e)
+                raise HTTPException(
+                    status_code=502,
+                    detail=f"上传请求失败: {type(e).__name__}: {err_detail}（目标平台 base_url: {env.base_url}）",
+                )
+            except Exception:
+                raise HTTPException(status_code=502, detail=f"平台响应非JSON，状态码: {response.status_code}")
+
+        code = resp_data.get("code")
+        if code not in ("ok", 200):
+            msg = resp_data.get("message") or resp_data.get("msg") or "上传失败"
+            raise HTTPException(status_code=500, detail=msg)
+
+        upload_results.append({
+            "file": upload_file_path.name,
+            "fileType": file_type,
+            "action": action,
+            "response": resp_data,
+        })
+
+    client = APaaSClient(base_url=env.base_url, tenant_id=env.platform_tenant_id, token=env.token)
+    uploaded_kits = []
+    for package in upload_packages:
+        file_name = Path(package["path"]).name
+        kits = await client.query_app_dev_kits("", file_name=file_name)
+        for kit in kits:
+            if kit.get("fileName") == file_name and kit.get("id"):
+                uploaded_kits.append({
+                    "id": str(kit["id"]),
+                    "fileName": file_name,
+                    "fileType": str(kit.get("fileType") or file_type),
+                })
+                break
+
+    action_summary = ", ".join(
+        f"{r['file']}({'复用' if r['action'] == 'reuse' else '更新' if r['action'] == 'update' else '新增'})"
+        for r in upload_results
+    )
+    return {
+        "status": "ok",
+        "message": f"上传完成：{action_summary}",
+        "action": upload_results[0]["action"] if len(upload_results) == 1 else "multi",
+        "results": upload_results,
+        "uploaded_kits": uploaded_kits,
+        "kit_ids": [kit["id"] for kit in uploaded_kits],
+    }
 
 
 class DeployToAppRequest(BaseModel):

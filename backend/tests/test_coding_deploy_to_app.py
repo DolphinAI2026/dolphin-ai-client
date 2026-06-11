@@ -137,6 +137,72 @@ async def test_build_and_upload_backend_skips_existing_runtime_upload(tmp_path):
     assert post.await_count == 1
 
 
+@pytest.mark.asyncio
+async def test_upload_to_platform_backend_returns_business_and_runtime_kits(tmp_path):
+    from app.routes import coding as coding_routes
+
+    target = tmp_path / "target"
+    target.mkdir()
+    app_jar = target / "formula_api-1.0.jar"
+    runtime_jar = tmp_path / "runtime-5.0.0.jar"
+    app_jar.write_bytes(b"app")
+    runtime_jar.write_bytes(b"runtime")
+
+    ws_mgr = MagicMock()
+    ws_mgr.get_workspace_path.return_value = tmp_path
+    ws_mgr._read_meta.return_value = {"project_type": "backend-api", "display_name": "Formula API"}
+    ws_mgr.build_and_package = AsyncMock(return_value=str(tmp_path / "backend.zip"))
+    ws_mgr._get_build_output_dir.return_value = target
+
+    env = MagicMock(
+        id=1,
+        tenant_id=11,
+        base_url="https://x",
+        platform_tenant_id="t1",
+        token="tok",
+        username="u",
+        password_enc=None,
+    )
+    db_result = MagicMock()
+    db_result.scalar_one_or_none.return_value = env
+    db = AsyncMock()
+    db.execute = AsyncMock(return_value=db_result)
+
+    resp = MagicMock(status_code=200)
+    resp.json.return_value = {"code": "ok"}
+
+    async def _query(_app_id, file_name="", **_kwargs):
+        return [
+            {"id": "biz-1", "fileName": "formula_api-1.0.jar", "fileType": "BACKENDENGINE"},
+            {"id": "runtime-1", "fileName": "runtime-5.0.0.jar", "fileType": "BACKENDENGINE"},
+        ]
+
+    with patch.object(coding_routes, "_ensure_workspace_access", AsyncMock(return_value=None)), \
+         patch.object(coding_routes, "WorkspaceManager", return_value=ws_mgr), \
+         patch.object(coding_routes, "_resolve_backend_runtime_jar", return_value=runtime_jar), \
+         patch.object(coding_routes, "_query_existing_development_kits", AsyncMock(return_value=[])), \
+         patch.object(coding_routes.httpx, "AsyncClient") as MockHttp, \
+         patch.object(coding_routes, "APaaSClient") as MockClient:
+        post = AsyncMock(return_value=resp)
+        MockHttp.return_value.__aenter__.return_value.post = post
+        MockClient.return_value.query_app_dev_kits = AsyncMock(side_effect=_query)
+
+        result = await coding_routes.upload_workspace_to_platform(
+            "ws1",
+            coding_routes.UploadToPlatformRequest(env_id=1),
+            MagicMock(tenant_id=11),
+            db,
+        )
+
+    assert result["status"] == "ok"
+    assert result["kit_ids"] == ["biz-1", "runtime-1"]
+    assert [kit["fileName"] for kit in result["uploaded_kits"]] == [
+        "formula_api-1.0.jar",
+        "runtime-5.0.0.jar",
+    ]
+    assert post.await_count == 2
+
+
 def test_resolve_page_register_name_prefers_apaas_custom_key():
     from app.routes.coding import _resolve_page_register_name
 
