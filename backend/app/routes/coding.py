@@ -2152,6 +2152,27 @@ async def get_workspace_file_diff(
     return await asyncio.to_thread(file_diff, ws_path, file_path)
 
 
+@router.get("/workspace/{ws_id}/search")
+async def search_workspace_content(
+    ws_id: str,
+    q: str = Query(..., min_length=1, max_length=200, description="搜索文本(字面量, 大小写不敏感)"),
+    ctx: Annotated[AuthContext, Depends(get_auth_context)] = None,
+    db: Annotated[AsyncSession, Depends(get_db)] = None,
+):
+    """工作区全文内容搜索(文件树搜索框用)。逐行返回 path/line/text。"""
+    import re as _re
+
+    from app.coding.workspace_read_tools import search_workspace_hits
+
+    await _ensure_workspace_access(ws_id, ctx, db, minimum_project_role="member")
+    ws_path = workspace_mgr.get_workspace_path(ws_id)
+    if not ws_path.exists():
+        raise HTTPException(status_code=404, detail="工作区不存在")
+    regex = _re.compile(_re.escape(q), _re.IGNORECASE)
+    hits, truncated = await asyncio.to_thread(search_workspace_hits, ws_path, regex)
+    return {"hits": hits, "truncated": truncated}
+
+
 @router.get("/workspaces")
 async def list_workspaces(
     ctx: Annotated[AuthContext, Depends(get_auth_context)],

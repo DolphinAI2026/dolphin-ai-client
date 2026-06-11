@@ -108,12 +108,11 @@ def read_workspace_file(ws_path: Path, rel: str) -> str:
     return text
 
 
-def search_workspace_code(ws_path: Path, pattern: str) -> str:
-    try:
-        regex = re.compile(pattern)
-    except re.error as exc:
-        return f"Error: 正则不合法: {exc}"
-    hits: list[str] = []
+def search_workspace_hits(
+    ws_path: Path, regex: "re.Pattern[str]", max_results: int = _MAX_SEARCH_RESULTS,
+) -> tuple[list[dict], bool]:
+    """结构化逐行搜索。返回 (hits, truncated)；hit = {path, line, text}。"""
+    hits: list[dict] = []
     for rel in _iter_text_files(ws_path):
         p = ws_path / rel
         try:
@@ -124,10 +123,22 @@ def search_workspace_code(ws_path: Path, pattern: str) -> str:
             continue
         for i, line in enumerate(text.splitlines(), 1):
             if regex.search(line):
-                hits.append(f"{rel}:{i}: {line.strip()[:200]}")
-                if len(hits) >= _MAX_SEARCH_RESULTS:
-                    return "\n".join(hits) + f"\n…(已达 {_MAX_SEARCH_RESULTS} 条上限)"
-    return "\n".join(hits) if hits else "(无匹配)"
+                hits.append({"path": rel, "line": i, "text": line.strip()[:200]})
+                if len(hits) >= max_results:
+                    return hits, True
+    return hits, False
+
+
+def search_workspace_code(ws_path: Path, pattern: str) -> str:
+    try:
+        regex = re.compile(pattern)
+    except re.error as exc:
+        return f"Error: 正则不合法: {exc}"
+    hits, truncated = search_workspace_hits(ws_path, regex)
+    if not hits:
+        return "(无匹配)"
+    lines = [f"{h['path']}:{h['line']}: {h['text']}" for h in hits]
+    return "\n".join(lines) + (f"\n…(已达 {_MAX_SEARCH_RESULTS} 条上限)" if truncated else "")
 
 
 def execute_workspace_tool(ws_path: Path, fn_name: str, args: dict) -> str:

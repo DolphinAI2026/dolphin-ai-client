@@ -145,6 +145,15 @@ def accept_changes(ws_path: Path, rel_path: str | None = None) -> dict:
         return collect_changes(ws_path)
 
 
+# 构建产物后缀: 改动面板里这些是机器生成的噪音(一次 build 就 ±几千行), 标记出来给前端折叠
+_ARTIFACT_SUFFIXES = (".umd.js", ".umd.min.js", ".common.js", ".min.js", ".zip", ".map", ".jar")
+
+
+def _is_build_artifact(rel: str) -> bool:
+    low = rel.lower()
+    return low.endswith(_ARTIFACT_SUFFIXES) or low.startswith("dist/") or "/dist/" in low
+
+
 def _is_noise_path(rel: str) -> bool:
     """工具链自写的配置文件不算「本轮改动」(pipeline 每轮会刷 IDE/serve 配置)。
 
@@ -227,6 +236,7 @@ def collect_changes(ws_path: Path) -> dict:
             files.append({
                 "path": rel, "status": st,
                 "additions": additions, "deletions": deletions, "binary": binary,
+                "artifact": _is_build_artifact(rel),
             })
 
         return {

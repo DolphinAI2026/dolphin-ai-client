@@ -280,7 +280,9 @@
           :changed="changedPaths"
           :changes="wsGitChanges"
           :selected="selectedFile"
-          @select="selectedFile = $event"
+          :ws-id="codingStore.workspace?.id || ''"
+          @select="onTreeSelect"
+          @select-line="onTreeSelectLine"
           @accept-all="acceptAllWorkspaceChanges"
         />
         <div class="tree-resizer" title="拖拽调整文件树宽度" @pointerdown="onTreeResizeStart" />
@@ -290,6 +292,7 @@
           :file-path="selectedFile"
           :diff="selectedGitChange ? null : selectedDiff"
           :change="selectedGitChange"
+          :focus-line="viewerFocusLine"
           :dark="themeStore.isDark"
           @quote="onViewerQuote"
           @accept-change="acceptWorkspaceChange"
@@ -718,6 +721,17 @@ function onViewerQuote(q: { path: string; startLine: number | null; endLine: num
   void nextTick(() => {
     (document.querySelector('.chat-input-bar textarea') as HTMLTextAreaElement | null)?.focus()
   })
+}
+
+// 内容搜索跳行: 选中文件 + 目标行(查看器全文视图滚动+闪烁); 普通选择时清掉
+const viewerFocusLine = ref<number | null>(null)
+function onTreeSelect(path: string) {
+  viewerFocusLine.value = null
+  selectedFile.value = path
+}
+function onTreeSelectLine(payload: { path: string; line: number }) {
+  selectedFile.value = payload.path
+  viewerFocusLine.value = payload.line
 }
 
 // agent 改完最后一个文件 → 自动打开它（纯前端，不发请求）

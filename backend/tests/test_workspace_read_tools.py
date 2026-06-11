@@ -59,3 +59,13 @@ def test_search_code_hits_with_line_numbers(ws):
 
 def test_execute_dispatch_unknown_tool(ws):
     assert execute_workspace_tool(ws, "rm_rf", {}).startswith("Error: 未知")
+
+
+def test_search_workspace_hits_structured(ws):
+    import re
+
+    from app.coding.workspace_read_tools import search_workspace_hits
+
+    hits, truncated = search_workspace_hits(ws, re.compile(re.escape("GETLIST"), re.IGNORECASE))
+    assert truncated is False
+    assert hits == [{"path": "src/api.js", "line": 1, "text": "export function getList() {}"}]

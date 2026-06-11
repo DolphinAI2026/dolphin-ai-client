@@ -51,3 +51,11 @@ function sortTree(nodes: TreeNode[]): void {
   })
   for (const n of nodes) if (n.children) sortTree(n.children)
 }
+
+// 构建产物判定(与后端 git_changes._ARTIFACT_SUFFIXES 对齐): 树节点置灰/改动面板折叠用
+const ARTIFACT_SUFFIXES = ['.umd.js', '.umd.min.js', '.common.js', '.min.js', '.zip', '.map', '.jar']
+
+export function isBuildArtifact(path: string): boolean {
+  const low = path.toLowerCase()
+  return ARTIFACT_SUFFIXES.some(s => low.endsWith(s)) || low.startsWith('dist/') || low.includes('/dist/')
+}

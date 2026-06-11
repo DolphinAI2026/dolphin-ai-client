@@ -162,3 +162,14 @@ def test_non_ascii_filename_roundtrip(ws):
     assert "说明文档.md" in paths
     d = file_diff(ws, "说明文档.md")
     assert d["status"] == "A" and "+中文" in d["diff"]
+
+
+def test_build_artifacts_flagged_in_changes(ws):
+    """构建产物(umd/zip 等)标 artifact=True, 前端据此折叠。"""
+    ensure_baseline(ws)
+    (ws / "page.umd.min.js").write_text("x\n", encoding="utf-8")
+    (ws / "src" / "real.js").write_text("a\n", encoding="utf-8")
+    out = collect_changes(ws)
+    by_path = {f["path"]: f for f in out["files"]}
+    assert by_path["page.umd.min.js"]["artifact"] is True
+    assert by_path["src/real.js"]["artifact"] is False

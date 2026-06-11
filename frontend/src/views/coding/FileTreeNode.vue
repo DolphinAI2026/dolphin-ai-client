@@ -3,7 +3,7 @@
     <button
       type="button"
       class="ftn-row"
-      :class="{ selected: !node.isDir && selected === node.path, dir: node.isDir }"
+      :class="{ selected: !node.isDir && selected === node.path, dir: node.isDir, artifact: isArtifact }"
       :style="{ paddingLeft: depth * 12 + 8 + 'px' }"
       @click="onClick"
     >
@@ -41,7 +41,7 @@
 <script setup lang="ts">
 import { computed, ref } from 'vue'
 import AppIcon from '@/components/common/AppIcon.vue'
-import type { TreeNode } from './fileTree'
+import { isBuildArtifact, type TreeNode } from './fileTree'
 
 const props = withDefaults(defineProps<{
   node: TreeNode
@@ -66,6 +66,8 @@ const fileStatus = computed(() =>
 )
 const dirHasChanges = computed(() => !!(props.node.isDir && props.changedDirs?.has(props.node.path)))
 const changeClass = computed(() => (fileStatus.value ? `changed-${fileStatus.value.toLowerCase()}` : ''))
+// 构建产物(umd/zip 等)置灰: 引导用户看源码而不是停在没人该读的 bundle 上
+const isArtifact = computed(() => !props.node.isDir && isBuildArtifact(props.node.path))
 
 // 按扩展名挑图标，沿用 app 的 AppIcon 词表
 const iconName = computed(() => {
@@ -103,6 +105,7 @@ const iconName = computed(() => {
   box-shadow: 0 0 0 2px color-mix(in srgb, var(--brand, #4f6ef7) 22%, transparent);
 }
 .ftn-row.dir { color: var(--fg, #334155); font-weight: 590; }
+.ftn-row.artifact { opacity: 0.55; }
 .ftn-row.selected {
   background: linear-gradient(
     90deg,

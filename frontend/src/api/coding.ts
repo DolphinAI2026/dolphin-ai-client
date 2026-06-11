@@ -299,6 +299,8 @@ export interface WorkspaceChangeEntry {
   additions: number
   deletions: number
   binary?: boolean
+  /** 构建产物(umd/zip 等机器生成文件), 改动面板折叠展示 */
+  artifact?: boolean
 }
 
 /** 工作区改动清单(后端 git 不可用时 enabled=false, 前端回退旧的会话流追踪) */
@@ -329,4 +331,18 @@ export interface WorkspaceFileDiff {
 
 export function getWorkspaceFileDiff(wsId: string, filePath: string): Promise<WorkspaceFileDiff> {
   return request.get(`/coding/workspace/${wsId}/file-diff`, { params: { file_path: filePath } })
+}
+
+/** 工作区全文内容搜索的单条命中 */
+export interface WorkspaceSearchHit {
+  path: string
+  line: number
+  text: string
+}
+
+export function searchWorkspaceContent(
+  wsId: string,
+  q: string,
+): Promise<{ hits: WorkspaceSearchHit[]; truncated: boolean }> {
+  return request.get(`/coding/workspace/${wsId}/search`, { params: { q } })
 }

@@ -103,6 +103,8 @@ const props = defineProps<{
   diff?: FileChange | null
   /** git 基线改动(优先于 diff): 有则默认进对比模式,可切全文 */
   change?: WorkspaceChangeEntry | null
+  /** 内容搜索跳行: 强制全文视图并滚动到该行(闪烁提示) */
+  focusLine?: number | null
   dark?: boolean
 }>()
 
@@ -261,6 +263,7 @@ async function load() {
     // 换文件时把滚动复位到左上角,避免沿用上一个文件的横/纵滚动位置
     await nextTick()
     if (bodyRef.value) { bodyRef.value.scrollTop = 0; bodyRef.value.scrollLeft = 0 }
+    scrollToFocusLine()
   } catch (e: any) {
     const detail = String(e?.response?.data?.detail || e?.message || '')
     const isClassFile = baseName.value.toLowerCase().endsWith('.class')
@@ -297,11 +300,23 @@ async function downloadFile() {
   }
 }
 
+// 内容搜索跳行: 全文渲染完后滚到目标行并闪烁
+function scrollToFocusLine() {
+  const n = props.focusLine
+  if (!n || n < 1 || !bodyRef.value) return
+  const lines = bodyRef.value.querySelectorAll('.shiki .line')
+  const target = lines[n - 1] as HTMLElement | undefined
+  if (!target) return
+  target.scrollIntoView({ block: 'center' })
+  target.classList.add('cv-line-focus')
+  window.setTimeout(() => target.classList.remove('cv-line-focus'), 1600)
+}
+
 watch(
-  () => [props.wsId, props.filePath, props.diff, props.change?.path, props.change?.status, props.dark],
+  () => [props.wsId, props.filePath, props.diff, props.change?.path, props.change?.status, props.dark, props.focusLine],
   () => {
-    // 有 git 改动默认进对比；删除的文件只有对比可看
-    viewMode.value = props.change ? 'diff' : 'full'
+    // 有 git 改动默认进对比；删除的文件只有对比可看; 搜索跳行强制全文
+    viewMode.value = props.change && !props.focusLine ? 'diff' : 'full'
     void refresh()
   },
   { immediate: true },
@@ -466,6 +481,11 @@ watch(
   color: var(--fg-faint, #c0cad8);
   background: var(--bg, #ffffff);
   user-select: none;
+}
+/* 内容搜索跳行的闪烁提示 */
+.cv-code :deep(.shiki .line.cv-line-focus) {
+  background: color-mix(in srgb, var(--warn, #d97706) 18%, transparent);
+  transition: background 0.8s ease;
 }
 .cv-code :deep(.shiki .line:hover)::before {
   color: var(--fg-dim, #718096);
