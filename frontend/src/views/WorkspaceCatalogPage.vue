@@ -407,7 +407,7 @@ function workspaceAccentStyle(ws: WorkspaceInfo) {
 }
 
 function openWorkspace(ws: WorkspaceInfo) {
-  // 打开原生代码工作区(CodingPage:文件树 + 代码查看器 + 对话),替代 code-server IDE 抽屉
+  // 打开原生代码工作区(CodingPage: 文件树 + 代码查看器 + 对话)
   router.push({ path: '/coding', query: { workspace_id: ws.id } }).catch(() => {})
 }
 

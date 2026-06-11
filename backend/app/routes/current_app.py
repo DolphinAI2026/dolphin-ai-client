@@ -101,21 +101,6 @@ def set_apaas_user_alias(apaas_uid: int | str, local_uid: int, local_tid: int) -
         _APAAS_USER_CACHE[au] = (int(local_uid), int(local_tid or 0), time.time())
 
 
-def resolve_apaas_user_alias(apaas_uid: int) -> Optional[tuple[int, int]]:
-    """apaas_uid → (local_uid, local_tid) 或 None（未缓存 / 已过期）。"""
-    if not apaas_uid or apaas_uid <= 0:
-        return None
-    with _LOCK:
-        rec = _APAAS_USER_CACHE.get(int(apaas_uid))
-        if not rec:
-            return None
-        local_uid, local_tid, ts = rec
-        if time.time() - ts > _TTL_SECONDS:
-            _APAAS_USER_CACHE.pop(int(apaas_uid), None)
-            return None
-        return (int(local_uid), int(local_tid))
-
-
 class SetCurrentAppRequest(BaseModel):
     app_id: int
     app_name: str = ""

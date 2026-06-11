@@ -863,16 +863,6 @@ class IDEApplyEditsRequest(BaseModel):
     edits: list[IDEFileEdit]
 
 
-class AutoPipelineRequest(BaseModel):
-    """自动化 Pipeline 请求（对话式开发）"""
-    message: str                           # 用户需求描述
-    workspace_id: Optional[str] = None     # 已有工作区（迭代修改）
-    conversation_id: Optional[int] = None  # 已有对话
-    selected_model: Optional[str] = None   # 当前会话选中的 coding 模型（llmcfg:<id>）
-    app_id: Optional[str] = None           # aPaaS 应用ID (deprecated, use project_id)
-    project_id: Optional[int] = None       # 关联项目ID（优先使用项目的平台配置）
-
-
 # ============================================================
 # 场景相关接口
 # ============================================================
@@ -2463,55 +2453,6 @@ async def upload_file(
 # ============================================================
 
 workspace_mgr = WorkspaceManager()
-
-
-@router.post("/auto-pipeline")
-async def auto_pipeline(
-    req: AutoPipelineRequest,
-    request: Request,
-    ctx: Annotated[AuthContext, Depends(get_auth_context)],
-    db: Annotated[AsyncSession, Depends(get_db)],
-):
-    """
-    自动化 Pipeline（对话式组件开发）— 兼容入口。
-
-    内部委托给 app.coding.pipeline.run_coding_pipeline，
-    新前端应直接调用 /api/harness/coding/pipeline。
-    """
-    from app.coding.pipeline import PipelineParams, run_coding_pipeline
-
-    if req.workspace_id:
-        await _ensure_workspace_access(req.workspace_id, ctx, db, minimum_project_role="member")
-    if req.project_id:
-        await require_project_access(
-            db,
-            project_id=req.project_id,
-            user_id=ctx.user.id,
-            tenant_id=ctx.tenant_id,
-            minimum_role="member",
-        )
-
-    # 预计算 request-scoped 值
-    api_base = _build_ide_proxy_api_base(request, req.workspace_id or "__placeholder__")
-    api_base_pattern = api_base.replace(req.workspace_id or "__placeholder__", "{ws_id}")
-
-    params = PipelineParams(
-        message=req.message,
-        user_id=ctx.user.id,
-        tenant_id=ctx.tenant_id,
-        workspace_id=req.workspace_id,
-        conversation_id=req.conversation_id,
-        selected_model=req.selected_model,
-        project_id=req.project_id,
-        code_server_base_url=settings.code_server_base_url or "",
-        api_base_builder=api_base_pattern,
-    )
-
-    async def pipeline_events():
-        async for event in run_coding_pipeline(params, db):
-            yield _sse(event)
-
-    return _event_stream_response(pipeline_events(), ping=15)
 
 
 @router.post("/workspace/{ws_id}/serve")

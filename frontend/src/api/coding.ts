@@ -203,20 +203,6 @@ export const codingApi = {
     return request.delete<any, { status: string }>(`/coding/conversations/${conversationId}`)
   },
 
-  // ========== Auto Pipeline API ==========
-
-  /** 自动流水线 SSE URL（detect-scene → create-workspace → generate → install → serve） */
-  autoPipelineUrl(params: { message: string; workspace_id?: string; conversation_id?: number; app_id?: string }): string {
-    const query = new URLSearchParams()
-    query.set('message', params.message)
-    if (params.workspace_id) query.set('workspace_id', params.workspace_id)
-    if (params.conversation_id) query.set('conversation_id', String(params.conversation_id))
-    if (params.app_id) query.set('app_id', params.app_id)
-    const token = localStorage.getItem('token') || ''
-    query.set('token', token)
-    return `${API_PREFIX}/coding/auto-pipeline?${query.toString()}`
-  },
-
   /** 启动开发服务器 */
   startServe(wsId: string) {
     return request.post<any, { status: string; url?: string; message?: string }>(`/coding/workspace/${wsId}/serve`, {}, { params: { action: 'start' }, timeout: 120000 })
