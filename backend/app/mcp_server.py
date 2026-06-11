@@ -2542,7 +2542,52 @@ async def attach_dev_packages_to_apaas_app(env_id: int, apaas_app_id: str, kit_i
         lambda c: c.attach_apaas_source_relation(apaas_app_id.strip(), object_ids=kit_ids),
     )
     if not ok:
-        return payload
+        message = str((payload or {}).get("message") or payload or "")
+        if not any(marker in message for marker in ("重复", "已存在", "duplicate", "exist")):
+            return payload
+
+        attached: list[str] = []
+        skipped_duplicates: list[str] = []
+        failed: list[dict] = []
+        for kit_id in kit_ids:
+            item_ok, item_payload = await _with_client(
+                env_id, f"关联自开发包 {kit_id}",
+                lambda c, kid=kit_id: c.attach_apaas_source_relation(
+                    apaas_app_id.strip(), object_ids=[kid]
+                ),
+            )
+            if item_ok:
+                attached.append(str(kit_id))
+                continue
+            item_message = str((item_payload or {}).get("message") or item_payload or "")
+            if any(marker in item_message for marker in ("重复", "已存在", "duplicate", "exist")):
+                skipped_duplicates.append(str(kit_id))
+                continue
+            failed.append({"kit_id": str(kit_id), "error": item_payload})
+        if failed:
+            return {
+                "ok": False,
+                "error_code": "PARTIAL_ATTACH_FAILED",
+                "env_id": env_id,
+                "apaas_app_id": apaas_app_id.strip(),
+                "attached_kit_ids": attached,
+                "skipped_duplicate_kit_ids": skipped_duplicates,
+                "failed": failed,
+                "message": "部分自开发包关联失败",
+            }
+        return {
+            "ok": True,
+            "env_id": env_id,
+            "apaas_app_id": apaas_app_id.strip(),
+            "attached_count": len(attached),
+            "skipped_duplicate_count": len(skipped_duplicates),
+            "attached_kit_ids": attached,
+            "skipped_duplicate_kit_ids": skipped_duplicates,
+            "message": (
+                f"已关联 {len(attached)} 个自开发包，"
+                f"跳过 {len(skipped_duplicates)} 个已关联包。下一步：republish_apaas_app 重发版本让组件生效。"
+            ),
+        }
     return {
         "ok": True, "env_id": env_id, "apaas_app_id": apaas_app_id.strip(),
         "attached_count": len(kit_ids),

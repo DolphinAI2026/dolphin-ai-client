@@ -3212,6 +3212,41 @@ def _find_self_dev_menu(nodes: list[dict] | None, *, menu_name: str, link_url: s
     return name_match or link_match
 
 
+def _is_duplicate_attach_error(exc: Exception) -> bool:
+    message = str(exc)
+    return any(marker in message for marker in ("重复", "已存在", "duplicate", "exist"))
+
+
+async def _attach_dev_kits_tolerant(env_id, db, apaas_app_id: str, kit_ids: list[str]) -> dict:
+    try:
+        await call_apaas_with_relogin(
+            env_id,
+            db,
+            lambda c: c.attach_apaas_source_relation(apaas_app_id, object_ids=kit_ids),
+        )
+        return {"attached": [str(i) for i in kit_ids], "skipped_duplicates": []}
+    except Exception as exc:
+        if not _is_duplicate_attach_error(exc):
+            raise
+
+    attached: list[str] = []
+    skipped: list[str] = []
+    for kit_id in kit_ids:
+        try:
+            await call_apaas_with_relogin(
+                env_id,
+                db,
+                lambda c, kid=kit_id: c.attach_apaas_source_relation(apaas_app_id, object_ids=[kid]),
+            )
+            attached.append(str(kit_id))
+        except Exception as exc:
+            if _is_duplicate_attach_error(exc):
+                skipped.append(str(kit_id))
+                continue
+            raise
+    return {"attached": attached, "skipped_duplicates": skipped}
+
+
 async def _deploy_to_app_impl(ws_id: str, local_app_id, ctx, db) -> dict:
     """装回应用编排:upload → (bound) enable→attach→页面建菜单→republish。
 
@@ -3255,7 +3290,7 @@ async def _deploy_to_app_impl(ws_id: str, local_app_id, ctx, db) -> dict:
     # 不再把 401「Unauthorized」抛给用户(铁律:apaas 调用别裸调)。
     env_id = env.id
     await call_apaas_with_relogin(env_id, db, lambda c: c.enable_self_dev_config(apaas_app_id, "ENABLE"))
-    await call_apaas_with_relogin(env_id, db, lambda c: c.attach_apaas_source_relation(apaas_app_id, object_ids=up["kit_ids"]))
+    attach_result = await _attach_dev_kits_tolerant(env_id, db, apaas_app_id, up["kit_ids"])
 
     menu = None
     if up["project_type"] in _PAGE_TYPES:
@@ -3309,6 +3344,8 @@ async def _deploy_to_app_impl(ws_id: str, local_app_id, ctx, db) -> dict:
         "menu": menu,
         "version": version,
         "kits": up["file_names"],
+        "attached_kit_ids": attach_result["attached"],
+        "skipped_duplicate_kit_ids": attach_result["skipped_duplicates"],
     }
 
 
