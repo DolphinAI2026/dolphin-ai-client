@@ -1024,6 +1024,12 @@ const datasourceNote = ref('')
 //   - 其他章节 (roles/dict/menus/process/event/form/list/integration/datasource) 显占位
 //   - update-level diff (字段 attr 改了, e.g., required) MVP 不算
 //   - 删除字段也算 — 草稿里没该 code 但生产里有 → 'del'
+// 后端 spec_sections 路由未注册(routes/applications/__init__.py 没 include_router),
+// 该接口必返 404 → SPEC tab 休眠中。恢复时需先在 __init__.py include_router 注册路由,
+// 再把此开关打开。关闭时 compare 视图优雅降级为空态(无草稿 → diff=0,且 SPEC tab 本身
+// 已被 SPEC_TAB_ENABLED=false 关死,compare 入口不可达,此处仅消静默 404)。
+const SPEC_SECTIONS_API_ENABLED = false
+
 const viewMode = ref<'read' | 'compare'>('read')
 const compareLoading = ref(false)
 const compareDraftFetchedAt = ref<Date | null>(null)
@@ -1280,6 +1286,12 @@ const compareDraftMeta = computed(() => {
 // 加载 data_model 草稿 — 为每个生产模型 GET 一次 spec_section.
 // 失败 (404 / exists:false) 静默 — 等同于无草稿 (无差异).
 async function fetchDraftSections(): Promise<void> {
+  // 后端 spec_sections 路由未注册 → 休眠中,跳过网络调用,compare 视图优雅降级为空态。
+  if (!SPEC_SECTIONS_API_ENABLED) {
+    draftSections.value = {}
+    compareDraftFetchedAt.value = new Date()
+    return
+  }
   if (!props.appId || loadedModels.value.length === 0) {
     draftSections.value = {}
     return
