@@ -467,6 +467,7 @@ async def get_form_components(
     form_id: str,
     ctx: Annotated[AuthContext, Depends(get_auth_context)],
     db: Annotated[AsyncSession, Depends(get_db)],
+    force: bool = Query(False, description="True 时绕过 180s 缓存重打 aPaaS (写后刷新用)"),
 ) -> SectionContentResponse:
     """design-v4 Phase A: 拿表单的字段组件 (FormBuilder 用 form_id 直查, 替代 model 反查).
 
@@ -476,6 +477,8 @@ async def get_form_components(
 
     items[].id = uuid, .name = label, .code = bo_code, .extra = 整 component dict
     含 component_type / required / choose_options / dictionary_choose_options.
+
+    force=true 绕过 180s 缓存 — ListDesignerPanel 等刷新时拿最新字段配置.
     """
     source = "list_apaas_form_components"
     app = await _load_app_and_check_view(app_id, ctx, db)
@@ -490,6 +493,7 @@ async def get_form_components(
         env_id=app.platform_env_id,
         apaas_app_id=str(app.apaas_app_id),
         extra_args={"form_id": form_id},
+        use_cache=not force,
     )
     if not ok:
         return _tool_error(app, source, raw_or_err["error_code"], raw_or_err["message"])
@@ -1439,11 +1443,14 @@ async def get_section_content_dicts(
     ctx: Annotated[AuthContext, Depends(get_auth_context)],
     db: Annotated[AsyncSession, Depends(get_db)],
     with_options: bool = Query(False, description="是否回填字典 options[] (省 token 默认 False)"),
+    force: bool = Query(False, description="True 时绕过 180s 缓存重打 aPaaS (写后刷新用)"),
 ) -> SectionContentResponse:
     """data section: 列应用的字典.
 
     走 list_apaas_app_dicts. with_options=True 时 MCP 会真拉每个 dict 的 options 数组
     (跟 query_dict_options 同源), 适合 SPEC 设计 tab 一次展示全字典内容.
+
+    force=true 绕过 180s 缓存 — 字典在低代码后台改完回看必须能拿最新.
     """
     source = "list_apaas_app_dicts"
     app = await _load_app_and_check_view(app_id, ctx, db)
@@ -1455,6 +1462,7 @@ async def get_section_content_dicts(
         env_id=app.platform_env_id,
         apaas_app_id=str(app.apaas_app_id),
         extra_args={"with_options": bool(with_options)},
+        use_cache=not force,
     )
     if not ok:
         return _tool_error(app, source, raw_or_err["error_code"], raw_or_err["message"])
@@ -1478,15 +1486,19 @@ async def get_section_content_dicts(
 
 async def _menus_filtered_by_type(
     app: Application, allowed_types: set[str], source: str,
+    *, force: bool = False,
 ) -> SectionContentResponse:
     """共享: 调 list_apaas_app_menus 然后按 menu_type 过滤.
 
     允许的 menu_type 集合大小写比较 — apaas 平台返大写 (FORM/LIST/PAGE_CUSTOM_DEV/CUSTOM).
+
+    force=True 时绕过 180s 缓存重打 aPaaS (面板刷新用).
     """
     ok, raw_or_err = await _safe_call_mcp_tool(
         "list_apaas_app_menus",
         env_id=app.platform_env_id,  # type: ignore[arg-type] — caller 保证非空
         apaas_app_id=str(app.apaas_app_id),
+        use_cache=not force,
     )
     if not ok:
         return _tool_error(app, source, raw_or_err["error_code"], raw_or_err["message"])
@@ -1525,6 +1537,7 @@ async def get_section_content_forms(
     app_id: int,
     ctx: Annotated[AuthContext, Depends(get_auth_context)],
     db: Annotated[AsyncSession, Depends(get_db)],
+    force: bool = Query(False, description="True 时绕过 180s 缓存重打 aPaaS (写后刷新用)"),
 ) -> SectionContentResponse:
     """ui section: 列应用的表单 — 平台 menu_type=MODEL 即表单视图 (一个 MODEL 菜单
     同时绑定表单 + 列表 + 详情, 不是分开管理).
@@ -1536,7 +1549,7 @@ async def get_section_content_forms(
     app = await _load_app_and_check_view(app_id, ctx, db)
     if not app.platform_env_id or not app.apaas_app_id:
         return _app_not_deployed(app, source)
-    return await _menus_filtered_by_type(app, {"MODEL"}, source)
+    return await _menus_filtered_by_type(app, {"MODEL"}, source, force=force)
 
 
 @router.get("/{app_id}/section-content/lists", response_model=SectionContentResponse)
@@ -1544,6 +1557,7 @@ async def get_section_content_lists(
     app_id: int,
     ctx: Annotated[AuthContext, Depends(get_auth_context)],
     db: Annotated[AsyncSession, Depends(get_db)],
+    force: bool = Query(False, description="True 时绕过 180s 缓存重打 aPaaS (写后刷新用)"),
 ) -> SectionContentResponse:
     """ui section: 列应用的列表视图 — 同 forms, 走 MODEL menu_type.
 
@@ -1554,7 +1568,7 @@ async def get_section_content_lists(
     app = await _load_app_and_check_view(app_id, ctx, db)
     if not app.platform_env_id or not app.apaas_app_id:
         return _app_not_deployed(app, source)
-    return await _menus_filtered_by_type(app, {"MODEL"}, source)
+    return await _menus_filtered_by_type(app, {"MODEL"}, source, force=force)
 
 
 @router.get("/{app_id}/section-content/processes", response_model=SectionContentResponse)
@@ -1562,11 +1576,14 @@ async def get_section_content_processes(
     app_id: int,
     ctx: Annotated[AuthContext, Depends(get_auth_context)],
     db: Annotated[AsyncSession, Depends(get_db)],
+    force: bool = Query(False, description="True 时绕过 180s 缓存重打 aPaaS (写后刷新用)"),
 ) -> SectionContentResponse:
     """logic section: 列应用的流程.
 
     note: list_apaas_app_processes MCP 工具不存在 — 用 list_apaas_app_menus 过滤
     menu_type=PROCESS 兜底. 真有独立流程工具时切过去.
+
+    force=true 绕过 180s 缓存 — ProcessDesignerPanel 刷新按钮用.
     """
     source = "list_apaas_app_menus[menu_type=PROCESS]"
     app = await _load_app_and_check_view(app_id, ctx, db)
@@ -1578,6 +1595,7 @@ async def get_section_content_processes(
         "list_apaas_app_processes",
         env_id=app.platform_env_id,
         apaas_app_id=str(app.apaas_app_id),
+        use_cache=not force,
     )
     if independent_ok:
         items = _extract_items_from_mcp_result(
@@ -1604,7 +1622,7 @@ async def get_section_content_processes(
             f"list_apaas_app_processes failed ({raw_or_err.get('error_code')}), "
             "降级走 list_apaas_app_menus[menu_type=PROCESS]"
         )
-    return await _menus_filtered_by_type(app, {"PROCESS"}, source)
+    return await _menus_filtered_by_type(app, {"PROCESS"}, source, force=force)
 
 
 @router.get(
@@ -1615,10 +1633,13 @@ async def get_section_content_business_events(
     app_id: int,
     ctx: Annotated[AuthContext, Depends(get_auth_context)],
     db: Annotated[AsyncSession, Depends(get_db)],
+    force: bool = Query(False, description="True 时绕过 180s 缓存重打 aPaaS (写后刷新用)"),
 ) -> SectionContentResponse:
     """logic section: 列应用的业务事件 (走 list_apaas_business_events).
 
     note: 工具返 `{ok, apaas_app_id, data: {records/table: [...], total}}` 平台分页对象.
+
+    force=true 绕过 180s 缓存 — 业务事件改完回看刷新用.
     """
     source = "list_apaas_business_events"
     app = await _load_app_and_check_view(app_id, ctx, db)
@@ -1630,6 +1651,7 @@ async def get_section_content_business_events(
         env_id=app.platform_env_id,
         apaas_app_id=str(app.apaas_app_id),
         # 用平台默认分页 (page=1, page_size=20) — 前端要更多自己再扩.
+        use_cache=not force,
     )
     if not ok:
         return _tool_error(app, source, raw_or_err["error_code"], raw_or_err["message"])
@@ -1663,6 +1685,7 @@ async def get_section_content_field_permissions(
     app_id: int,
     ctx: Annotated[AuthContext, Depends(get_auth_context)],
     db: Annotated[AsyncSession, Depends(get_db)],
+    force: bool = Query(False, description="True 时绕过 180s 缓存重打 aPaaS (写后刷新用)"),
 ) -> SectionContentResponse:
     """permission section / 字段权限 sub-tab: 列应用所有表单 (按表单管理字段权限).
 
@@ -1674,7 +1697,7 @@ async def get_section_content_field_permissions(
     if not app.platform_env_id or not app.apaas_app_id:
         return _app_not_deployed(app, source)
     # 复用 MODEL 菜单列表 — 用户点哪个表单就跳到该表单字段权限编辑页
-    return await _menus_filtered_by_type(app, {"MODEL"}, source)
+    return await _menus_filtered_by_type(app, {"MODEL"}, source, force=force)
 
 
 @router.get("/{app_id}/section-content/menu-visibility", response_model=SectionContentResponse)
@@ -1682,6 +1705,7 @@ async def get_section_content_menu_visibility(
     app_id: int,
     ctx: Annotated[AuthContext, Depends(get_auth_context)],
     db: Annotated[AsyncSession, Depends(get_db)],
+    force: bool = Query(False, description="True 时绕过 180s 缓存重打 aPaaS (写后刷新用)"),
 ) -> SectionContentResponse:
     """permission section / 菜单可见性 sub-tab: 列应用所有菜单 (按菜单管理可见角色).
 
@@ -1695,6 +1719,7 @@ async def get_section_content_menu_visibility(
     # 列出所有 menu_type (不过滤) — 菜单可见性 cover 全部菜单
     return await _menus_filtered_by_type(
         app, {"MODEL", "GROUP", "TASK_CENTER", "PAGE_CUSTOM_DEV", "CUSTOM", "MENU_TYPE_CUSTOM", "QUOTE"}, source,
+        force=force,
     )
 
 
@@ -1703,8 +1728,12 @@ async def get_section_content_roles(
     app_id: int,
     ctx: Annotated[AuthContext, Depends(get_auth_context)],
     db: Annotated[AsyncSession, Depends(get_db)],
+    force: bool = Query(False, description="True 时绕过 180s 缓存重打 aPaaS (写后刷新用)"),
 ) -> SectionContentResponse:
-    """permission section: 列应用的角色 (走 list_apaas_app_roles)."""
+    """permission section: 列应用的角色 (走 list_apaas_app_roles).
+
+    force=true 绕过 180s 缓存 — RoleManagePanel 新增/删除角色后刷新用.
+    """
     source = "list_apaas_app_roles"
     app = await _load_app_and_check_view(app_id, ctx, db)
     if not app.platform_env_id or not app.apaas_app_id:
@@ -1714,6 +1743,7 @@ async def get_section_content_roles(
         source,
         env_id=app.platform_env_id,
         apaas_app_id=str(app.apaas_app_id),
+        use_cache=not force,
     )
     if not ok:
         return _tool_error(app, source, raw_or_err["error_code"], raw_or_err["message"])
@@ -1781,12 +1811,15 @@ async def get_role_resource_matrix_endpoint(
     app_id: int,
     ctx: Annotated[AuthContext, Depends(get_auth_context)],
     db: Annotated[AsyncSession, Depends(get_db)],
+    force: bool = Query(False, description="True 时绕过 180s 缓存重打 aPaaS (写后刷新用)"),
 ) -> RoleResourceMatrixResponse:
     """聚合应用所有角色 × 资源 (页面/数据/流程/应用设置) 的权限矩阵.
 
     给 design-v4 RoleManagePanel 矩阵 view 用 — 一次拉全, 前端不用串 4 个 list endpoint.
     数据源走 get_role_resource_matrix MCP 工具 (内部聚合 roles + menus + models).
     matrix 字段当前 mock — P2 真接 apaas list_apaas_form_permissions 取代.
+
+    force=true 绕过 180s 缓存 — RoleManagePanel 重试/角色改完刷新用.
     """
     source = "get_role_resource_matrix"
     app = await _load_app_and_check_view(app_id, ctx, db)
@@ -1804,6 +1837,7 @@ async def get_role_resource_matrix_endpoint(
         source,
         env_id=app.platform_env_id,
         apaas_app_id=str(app.apaas_app_id),
+        use_cache=not force,
     )
     if not ok:
         return RoleResourceMatrixResponse(
