@@ -69,7 +69,7 @@
         level="err"
         title="加载失败"
         :message="matrixError"
-        :actions="[{ label: '重试', onClick: loadMatrix }]"
+        :actions="[{ label: '重试', onClick: reload }]"
       />
       <EmptyState
         v-else-if="!hasMatrixData"
@@ -451,14 +451,14 @@ function setView(mode: 'matrix' | 'list') {
 }
 
 // ─── Matrix loading ───────────────────────────────────────────────────────
-async function loadMatrix() {
+async function loadMatrix(opts: { force?: boolean } = {}) {
   if (!props.appId) return
   matrixLoading.value = true
   matrixError.value = ''
   try {
-    const resp = await request.get<any, any>(
-      `/applications/${props.appId}/role-resource-matrix`,
-    )
+    // force=true 跳过后端 180s 缓存 — 重试/写后刷新必须绕过, 否则命中缓存返改前 stale。
+    const url = `/applications/${props.appId}/role-resource-matrix${opts.force ? '?force=true' : ''}`
+    const resp = await request.get<any, any>(url)
     if (!resp?.ok) {
       matrixError.value = resp?.message || resp?.error_code || '加载矩阵失败'
       return
@@ -505,14 +505,13 @@ function normResource(r: any): ResourceRow {
 }
 
 // ─── List view loading (fallback when matrix endpoint 失败时也用) ─────────
-async function loadRolesOnly() {
+async function loadRolesOnly(opts: { force?: boolean } = {}) {
   if (!props.appId) return
   loading.value = true
   error.value = ''
   try {
-    const resp = await request.get<any, any>(
-      `/applications/${props.appId}/section-content/roles`,
-    )
+    const url = `/applications/${props.appId}/section-content/roles${opts.force ? '?force=true' : ''}`
+    const resp = await request.get<any, any>(url)
     if (resp?.ok) {
       const items = (resp.items || []) as any[]
       // 老 endpoint 字段: id / name / code. 转 RoleRow.
@@ -542,18 +541,24 @@ function selectRole(roleId: string) {
 }
 
 // ─── Lifecycle ────────────────────────────────────────────────────────────
-async function load() {
+async function load(opts: { force?: boolean } = {}) {
   if (!props.appId) return
-  await loadMatrix()
+  await loadMatrix(opts)
   // 矩阵 endpoint 失败时降级拉单独 roles list 让 list view 仍可用.
   if (matrixError.value && roles.value.length === 0) {
-    await loadRolesOnly()
+    await loadRolesOnly(opts)
   } else {
     loading.value = false
   }
 }
 
+// 初始加载 / 切应用走缓存(性能); 重试/写后刷新走 force(见 reload)。
 watch(() => props.appId, () => load(), { immediate: true })
+
+/** 用户主动刷新 — 绕过 180s 缓存重打 aPaaS。模板 "重试" 按钮 + 写后刷新都走这。 */
+function reload() {
+  void load({ force: true })
+}
 </script>
 
 <style scoped>

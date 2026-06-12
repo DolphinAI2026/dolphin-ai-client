@@ -17,6 +17,18 @@
       <header class="dep-master-head">
         <span class="dep-master-title">数据字典</span>
         <span v-if="dicts.length" class="dep-master-count">{{ dicts.length }}</span>
+        <button
+          class="dep-icon-btn dep-master-refresh"
+          :disabled="loadingMaster"
+          title="刷新"
+          @click="reload"
+        >
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
+               :class="{ 'dep-spin': loadingMaster }">
+            <path d="M21 12a9 9 0 1 1-3-6.7L21 8"/>
+            <path d="M21 3v5h-5"/>
+          </svg>
+        </button>
       </header>
 
       <div class="dep-master-search">
@@ -27,7 +39,10 @@
       </div>
 
       <div v-if="loadingMaster" class="dep-state">加载字典…</div>
-      <div v-else-if="masterErr" class="dep-state dep-state-err">{{ masterErr }}</div>
+      <div v-else-if="masterErr" class="dep-state dep-state-err">
+        {{ masterErr }}
+        <button class="dep-btn dep-btn-ghost dep-master-retry" @click="reload">重试</button>
+      </div>
       <ul v-else-if="filteredDicts.length" class="dep-master-list" role="list">
         <li
           v-for="d in filteredDicts"
@@ -175,14 +190,14 @@ function onAddOption() {
   alert('添加选项 — 当前请用右侧配置助手对话:\n"借阅状态字典加一个待审批选项"')
 }
 
-async function loadMaster() {
+async function loadMaster(opts: { force?: boolean } = {}) {
   if (!props.appId) return
   loadingMaster.value = true
   masterErr.value = ''
   try {
-    const resp = await request.get<any, any>(
-      `/applications/${props.appId}/section-content/dicts`,
-    )
+    // force=true 跳过后端 180s 缓存 — 刷新/写后必须绕过, 否则命中缓存返改前 stale。
+    const url = `/applications/${props.appId}/section-content/dicts${opts.force ? '?force=true' : ''}`
+    const resp = await request.get<any, any>(url)
     if (resp?.ok) {
       dicts.value = (resp.items || []) as DictRow[]
       // auto-select first
@@ -218,6 +233,12 @@ async function selectDict(dictId: string) {
   optionsErr.value = ''
 }
 
+/** 用户主动刷新 — 绕过 180s 缓存重打 aPaaS。刷新按钮 / 写后刷新都走这。 */
+function reload() {
+  void loadMaster({ force: true })
+}
+
+// 初始加载 / 切应用走缓存(性能); 刷新按钮走 force(见 reload)。
 watch(() => props.appId, () => loadMaster(), { immediate: true })
 </script>
 
@@ -398,6 +419,20 @@ watch(() => props.appId, () => loadMaster(), { immediate: true })
   color: var(--text-inverse);
 }
 .dep-btn-primary:hover { background: var(--brand-hover); }
+.dep-btn-ghost {
+  background: transparent;
+  color: var(--text-2);
+  border-color: var(--line);
+  height: 28px;
+  padding: 0 var(--s-3);
+}
+.dep-btn-ghost:hover { background: var(--surface-2); color: var(--text); }
+
+/* 刷新按钮靠右对齐到 master-head 末尾 */
+.dep-master-refresh { margin-left: auto; }
+.dep-master-retry { display: inline-block; margin-top: var(--s-2); }
+.dep-spin { animation: dep-spin 0.8s linear infinite; transform-origin: center; }
+@keyframes dep-spin { to { transform: rotate(360deg); } }
 
 .dep-table-wrap {
   background: var(--surface);

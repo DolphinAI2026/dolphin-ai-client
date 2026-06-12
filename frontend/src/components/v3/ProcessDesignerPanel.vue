@@ -48,7 +48,7 @@
       <div class="pdp-empty-icon"><AppIcon name="warning" :size="48" /></div>
       <h3>加载失败</h3>
       <p>{{ listError }}</p>
-      <button class="pdp-btn pdp-btn-ghost" @click="reloadProcessList">重试</button>
+      <button class="pdp-btn pdp-btn-ghost" @click="reloadProcessList({ force: true })">重试</button>
     </div>
 
     <!-- 应用无流程 — 友好空态 + 引导对话 CTA.
@@ -710,17 +710,19 @@ async function onSelectProcess(processId: string) {
   await tryLoadLocalDefinition(processId)
 }
 
-async function reloadProcessList() {
+async function reloadProcessList(opts: { force?: boolean } = {}) {
   if (!props.appId) return
   loadingList.value = true
   listError.value = null
   try {
+    // force=true 跳过后端 180s 缓存 — 重试/刷新必须绕过, 否则命中缓存返改前 stale。
+    const url = `/applications/${props.appId}/section-content/processes${opts.force ? '?force=true' : ''}`
     const resp = await request.get<unknown, {
       ok: boolean
       items?: Array<{ id: string; name: string; code?: string; extra?: Record<string, unknown> }>
       message?: string
       error_code?: string
-    }>(`/applications/${props.appId}/section-content/processes`)
+    }>(url)
     if (resp?.ok) {
       const items = resp.items || []
       processList.value = items.map(it => {
