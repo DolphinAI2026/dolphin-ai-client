@@ -716,14 +716,6 @@ onMounted(() => {
   border-radius: var(--r-1);
 }
 
-/* ── Topbar action button — reset ─────────────────────────── */
-:deep(.builder-topbar .el-button) {
-  height: 30px;
-  border-radius: var(--r-2);
-  font-size: 12.5px;
-  font-weight: var(--fw-medium);
-}
-
 /* ── Form hint inside dialogs ────────────────────────────── */
 .form-hint {
   margin-top: 4px;

@@ -421,7 +421,7 @@ function itemAbsoluteIdx(group: ChangeGroup, localIdx: number): number {
   color: var(--text);
 }
 .sam-group-ct {
-  font-family: 'SF Mono', 'JetBrains Mono', Menlo, monospace;
+  font-family: var(--font-mono, 'SF Mono', Menlo, monospace);
   font-size: 11px;
   color: var(--text-4);
   font-weight: 400;
@@ -484,7 +484,7 @@ function itemAbsoluteIdx(group: ChangeGroup, localIdx: number): number {
 
 .sam-mcp {
   margin-left: auto;
-  font-family: 'SF Mono', 'JetBrains Mono', Menlo, monospace;
+  font-family: var(--font-mono, 'SF Mono', Menlo, monospace);
   font-size: 10px;
   color: var(--text-4);
   flex-shrink: 0;
