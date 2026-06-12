@@ -54,6 +54,87 @@ def _asset_preview(value: object, limit: int = 180) -> str:
     return text[:limit].rstrip() + "..."
 
 
+_REQUIREMENT_CONTROL_PHRASES = {
+    "ok",
+    "okay",
+    "yes",
+    "y",
+    "可以",
+    "可以的",
+    "可以了",
+    "继续",
+    "继续吧",
+    "好的",
+    "好",
+    "好啊",
+    "行",
+    "行的",
+    "嗯",
+    "嗯嗯",
+    "收到",
+    "明白",
+    "明白了",
+    "了解",
+    "了解了",
+    "没问题",
+    "确认",
+    "确认了",
+    "同意",
+    "开始",
+    "开始吧",
+    "下一步",
+    "下一步吧",
+}
+
+_REQUIREMENT_NAVIGATION_PHRASES = {
+    "当前应用",
+    "读取当前应用",
+    "读取应用",
+    "查看应用",
+    "查看当前应用",
+    "打开应用",
+    "打开当前应用",
+    "看一下这个应用",
+    "看下这个应用",
+    "看看这个应用",
+}
+
+_REQUIREMENT_DISCUSSION_PHRASES = {
+    "有啥优化建议不",
+    "有啥优化建议吗",
+    "有什么优化建议",
+    "有优化建议不",
+    "有优化建议吗",
+    "有啥建议",
+    "有什么建议",
+    "给点建议",
+}
+
+
+def _normalise_requirement_message(value: object) -> str:
+    text = str(value or "").strip().lower()
+    text = re.sub(r"\s+", "", text)
+    return text.strip("。！？!?，,；;：:\"'“”‘’（）()[]【】")
+
+
+def _is_requirement_message(value: object) -> bool:
+    text = str(value or "").strip()
+    if not text:
+        return False
+    normalised = _normalise_requirement_message(text)
+    if len(normalised) <= 1:
+        return False
+    if normalised in _REQUIREMENT_CONTROL_PHRASES:
+        return False
+    if normalised in _REQUIREMENT_NAVIGATION_PHRASES:
+        return False
+    if normalised in _REQUIREMENT_DISCUSSION_PHRASES:
+        return False
+    if normalised.startswith(("上传设计文档", "📄上传设计文档")):
+        return False
+    return True
+
+
 def _asset_time(value: object) -> Optional[str]:
     return str(value) if value else None
 
@@ -2324,9 +2405,12 @@ async def list_delivery_assets(
                 select(Message)
                 .where(Message.conversation_id == conversation.id, Message.role == "user")
                 .order_by(Message.created_at.asc())
-                .limit(4)
+                .limit(20)
             )
+            message_count = 0
             for msg in msg_result.scalars().all():
+                if not _is_requirement_message(msg.content):
+                    continue
                 sections["requirements"]["items"].append(_make_asset_item(
                     key=f"message-{msg.id}",
                     title="用户需求",
@@ -2336,6 +2420,9 @@ async def list_delivery_assets(
                     created_at=msg.created_at,
                     meta={"conversation_id": conversation.id, "message_id": msg.id},
                 ))
+                message_count += 1
+                if message_count >= 4:
+                    break
 
     # 2) 应用绑定的 AI Chat session 与 app_id 关联 session。
     session_filters = [AIChatSession.app_id == app.id]
@@ -2368,9 +2455,12 @@ async def list_delivery_assets(
             select(AIChatMessage)
             .where(AIChatMessage.session_id.in_(session_ids), AIChatMessage.role == "user")
             .order_by(AIChatMessage.created_at.asc())
-            .limit(6)
+            .limit(30)
         )
+        message_count = 0
         for msg in msg_result.scalars().all():
+            if not _is_requirement_message(msg.content):
+                continue
             sections["requirements"]["items"].append(_make_asset_item(
                 key=f"ai-message-{msg.id}",
                 title="用户需求",
@@ -2380,6 +2470,9 @@ async def list_delivery_assets(
                 created_at=msg.created_at,
                 meta={"session_id": msg.session_id, "message_id": msg.id},
             ))
+            message_count += 1
+            if message_count >= 6:
+                break
 
         attachment_result = await db.execute(
             select(AIChatAttachment)
