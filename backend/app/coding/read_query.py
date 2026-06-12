@@ -180,32 +180,27 @@ async def classify_coding_intent(
 
     try:
         from app.agents.coding.llm_config import load_coding_llm_config
+        from app import llm_transport
 
         base_url, api_key, llm_model = await load_coding_llm_config(tenant_id, model)
 
-        async with httpx.AsyncClient(
-            timeout=httpx.Timeout(connect=8, read=20, write=8, pool=8)
-        ) as client:
-            resp = await client.post(
-                f"{base_url}/chat/completions",
-                headers={
-                    "Authorization": f"Bearer {api_key}",
-                    "Content-Type": "application/json",
-                },
-                json={
-                    "model": llm_model,
-                    "messages": [
-                        {"role": "system", "content": system_prompt},
-                        {"role": "user", "content": f"用户消息：{message[:300]}"},
-                    ],
-                    "max_tokens": 10,
-                    "temperature": 0,
-                    "stream": False,
-                },
-            )
-            resp.raise_for_status()
-            data = resp.json()
-        raw = data.get("choices", [{}])[0].get("message", {}).get("content", "").strip()
+        payload = llm_transport.build_chat_payload(
+            model=llm_model,
+            messages=[
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": f"用户消息：{message[:300]}"},
+            ],
+            temperature=0,
+            max_tokens=10,
+            base_url=base_url,  # qwen3/dashscope → enable_thinking=False(此前分类器漏了)
+        )
+        msg = await llm_transport.complete(
+            base_url=base_url,
+            api_key=api_key,
+            payload=payload,
+            timeout=httpx.Timeout(connect=8, read=20, write=8, pool=8),
+        )
+        raw = (msg.get("content") or "").strip()
         # 清理 reasoning tag
         cleaned = re.sub(r"<think>[\s\S]*?</think>", "", raw, flags=re.IGNORECASE).strip()
         label = cleaned.upper().split()[0] if cleaned else "BUILD"
@@ -257,28 +252,26 @@ async def classify_iteration_intent(
 
     try:
         from app.agents.coding.llm_config import load_coding_llm_config
+        from app import llm_transport
 
         base_url, api_key, llm_model = await load_coding_llm_config(tenant_id, model)
-        async with httpx.AsyncClient(
-            timeout=httpx.Timeout(connect=8, read=20, write=8, pool=8)
-        ) as client:
-            resp = await client.post(
-                f"{base_url}/chat/completions",
-                headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"},
-                json={
-                    "model": llm_model,
-                    "messages": [
-                        {"role": "system", "content": system_prompt},
-                        {"role": "user", "content": f"用户消息：{message[:300]}"},
-                    ],
-                    "max_tokens": 10,
-                    "temperature": 0,
-                    "stream": False,
-                },
-            )
-            resp.raise_for_status()
-            data = resp.json()
-        raw = data.get("choices", [{}])[0].get("message", {}).get("content", "").strip()
+        payload = llm_transport.build_chat_payload(
+            model=llm_model,
+            messages=[
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": f"用户消息：{message[:300]}"},
+            ],
+            temperature=0,
+            max_tokens=10,
+            base_url=base_url,  # qwen3/dashscope → enable_thinking=False(此前分类器漏了)
+        )
+        msg = await llm_transport.complete(
+            base_url=base_url,
+            api_key=api_key,
+            payload=payload,
+            timeout=httpx.Timeout(connect=8, read=20, write=8, pool=8),
+        )
+        raw = (msg.get("content") or "").strip()
         cleaned = re.sub(r"<think>[\s\S]*?</think>", "", raw, flags=re.IGNORECASE).strip()
         label = cleaned.upper().split()[0] if cleaned else "BUILD"
         logger.info("[intent] 迭代轮分类=%s, message=%r", label, message[:100])
@@ -596,24 +589,10 @@ def _search_read_tools(query: str, ws_path: Optional[Path]) -> str:
 
 # ─────────────────────────── 流式 LLM 调用 ─────────────────────────────────
 
-
-def merge_stream_tool_call_delta(acc: list[dict], delta_tool_calls: list[dict]) -> None:
-    """OpenAI 流式 tool_calls 增量合并: 按 index 聚合 id / name / arguments 片段。"""
-    for d in delta_tool_calls or []:
-        try:
-            idx = int(d.get("index") or 0)
-        except (TypeError, ValueError):
-            idx = 0
-        while len(acc) <= idx:
-            acc.append({"id": "", "type": "function", "function": {"name": "", "arguments": ""}})
-        slot = acc[idx]
-        if d.get("id"):
-            slot["id"] = d["id"]
-        fn = d.get("function") or {}
-        if fn.get("name"):
-            slot["function"]["name"] += fn["name"]
-        if fn.get("arguments"):
-            slot["function"]["arguments"] += fn["arguments"]
+# OpenAI 流式 tool_calls 增量合并收口到 app.llm_transport.merge_tool_call_delta
+# (单一来源)。read_query 这个名字仍对外暴露(test_read_query_streaming 直接 import),
+# 故保留为别名,逻辑不分叉。
+from app.llm_transport import merge_tool_call_delta as merge_stream_tool_call_delta  # noqa: E402
 
 
 async def _stream_llm(
@@ -623,38 +602,39 @@ async def _stream_llm(
 
     READ 路径以前整轮非流式, 一个回答 1-2 分钟前端只有工具 chip 没有文字;
     流式后最终回答打字机直出。
+
+    SSE 传输收口到 app.llm_transport.stream_raw_sse_lines(与 ai_chat / builder_spec
+    同一 httpx 栈); 这里只保留 content/tool_calls 落 sink 的累积语义(逐字不变)。
+    enable_thinking 兼容由调用方在 payload 里设(run_read_query 已对 qwen3/dashscope 设)。
     """
+    from app import llm_transport
+
     sink.setdefault("content", "")
     sink.setdefault("tool_calls", [])
-    async with httpx.AsyncClient(
-        timeout=httpx.Timeout(connect=10, read=120, write=10, pool=10)
-    ) as client:
-        async with client.stream(
-            "POST",
-            f"{base_url}/chat/completions",
-            headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"},
-            json={**payload, "stream": True},
-        ) as resp:
-            resp.raise_for_status()
-            async for raw_line in resp.aiter_lines():
-                line = (raw_line or "").strip()
-                if not line.startswith("data:"):
-                    continue
-                data_str = line[5:].strip()
-                if not data_str or data_str == "[DONE]":
-                    continue
-                try:
-                    chunk = json.loads(data_str)
-                except json.JSONDecodeError:
-                    continue
-                choices = chunk.get("choices") or []
-                delta = (choices[0] or {}).get("delta") or {} if choices else {}
-                piece = delta.get("content")
-                if piece:
-                    sink["content"] += piece
-                    yield piece
-                if delta.get("tool_calls"):
-                    merge_stream_tool_call_delta(sink["tool_calls"], delta["tool_calls"])
+    async for raw_line in llm_transport.stream_raw_sse_lines(
+        base_url=base_url,
+        api_key=api_key,
+        payload={**payload, "stream": True},
+        timeout=httpx.Timeout(connect=10, read=120, write=10, pool=10),
+    ):
+        line = (raw_line or "").strip()
+        if not line.startswith("data:"):
+            continue
+        data_str = line[5:].strip()
+        if not data_str or data_str == "[DONE]":
+            continue
+        try:
+            chunk = json.loads(data_str)
+        except json.JSONDecodeError:
+            continue
+        choices = chunk.get("choices") or []
+        delta = (choices[0] or {}).get("delta") or {} if choices else {}
+        piece = delta.get("content")
+        if piece:
+            sink["content"] += piece
+            yield piece
+        if delta.get("tool_calls"):
+            merge_stream_tool_call_delta(sink["tool_calls"], delta["tool_calls"])
 
 
 # ─────────────────────────── 只读 tool-loop ────────────────────────────────

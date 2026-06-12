@@ -420,30 +420,28 @@ async def is_new_component_intent(
         import httpx as _httpx
 
         from app.agents.coding.llm_config import load_coding_llm_config
+        from app import llm_transport
 
         info = ws_mgr.get_workspace_info(ws_id)
         project_name = info.get("project_name", "")
         base_url, api_key, llm_model = await load_coding_llm_config(tenant_id, model)
-        async with _httpx.AsyncClient(
-            timeout=_httpx.Timeout(connect=8, read=20, write=8, pool=8)
-        ) as client:
-            resp = await client.post(
-                f"{base_url}/chat/completions",
-                headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"},
-                json={
-                    "model": llm_model,
-                    "messages": [
-                        {"role": "system", "content": f"当前工作区的组件是 '{project_name}'。判断用户的消息是想【修改当前组件】还是想【做一个全新的、不同的组件】。回答中必须包含 MODIFY 或 NEW 这个词。"},
-                        {"role": "user", "content": message},
-                    ],
-                    "max_tokens": 50,
-                    "temperature": 0,
-                    "stream": False,
-                },
-            )
-            resp.raise_for_status()
-            data = resp.json()
-        answer = data.get("choices", [{}])[0].get("message", {}).get("content", "").upper()
+        payload = llm_transport.build_chat_payload(
+            model=llm_model,
+            messages=[
+                {"role": "system", "content": f"当前工作区的组件是 '{project_name}'。判断用户的消息是想【修改当前组件】还是想【做一个全新的、不同的组件】。回答中必须包含 MODIFY 或 NEW 这个词。"},
+                {"role": "user", "content": message},
+            ],
+            temperature=0,
+            max_tokens=50,
+            base_url=base_url,  # qwen3/dashscope → enable_thinking=False(此前漏了)
+        )
+        msg = await llm_transport.complete(
+            base_url=base_url,
+            api_key=api_key,
+            payload=payload,
+            timeout=_httpx.Timeout(connect=8, read=20, write=8, pool=8),
+        )
+        answer = (msg.get("content") or "").upper()
         return "NEW" in answer
     except Exception as e:
         logger.warning(f"意图判断失败: {e}")
@@ -1099,25 +1097,25 @@ async def _brainstorm_llm_call(
     使用租户的 coding LLM 配置发起调用（走 Dashscope/MiniMax 等，非通用 settings LLM）。
     """
     from app.agents.coding.llm_config import load_coding_llm_config
+    from app import llm_transport
     import httpx
 
     base_url, api_key, llm_model = await load_coding_llm_config(tenant_id, model)
 
-    async with httpx.AsyncClient(timeout=httpx.Timeout(connect=10, read=120, write=10, pool=10)) as client:
-        resp = await client.post(
-            f"{base_url}/chat/completions",
-            headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"},
-            json={
-                "model": llm_model,
-                "messages": messages,
-                "max_tokens": max_tokens,
-                "temperature": temperature,
-                "stream": False,
-            },
-        )
-        resp.raise_for_status()
-        data = resp.json()
-        return data.get("choices", [{}])[0].get("message", {}).get("content", "").strip()
+    payload = llm_transport.build_chat_payload(
+        model=llm_model,
+        messages=messages,
+        temperature=temperature,
+        max_tokens=max_tokens,
+        base_url=base_url,  # qwen3/dashscope → enable_thinking=False(此前 brainstorm 漏了)
+    )
+    msg = await llm_transport.complete(
+        base_url=base_url,
+        api_key=api_key,
+        payload=payload,
+        timeout=httpx.Timeout(connect=10, read=120, write=10, pool=10),
+    )
+    return (msg.get("content") or "").strip()
 
 
 async def _detect_scene_llm_call(
@@ -1581,27 +1579,26 @@ async def _grounded_brainstorm(params, scene_type, apaas_app_id, platform_env_id
             },
         })
 
+    from app import llm_transport
+
     for _turn in range(_GROUNDING_MAX_TURNS):
         try:
-            async with httpx.AsyncClient(
-                timeout=httpx.Timeout(connect=10, read=60, write=10, pool=10)
-            ) as client:
-                resp = await client.post(
-                    f"{base_url}/chat/completions",
-                    headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"},
-                    json={
-                        "model": llm_model, "messages": messages, "tools": tool_defs,
-                        "tool_choice": "auto", "temperature": 0.3, "max_tokens": 1500,
-                    },
-                )
-                resp.raise_for_status()
-                data = resp.json()
+            payload = llm_transport.build_chat_payload(
+                model=llm_model, messages=messages, tools=tool_defs,
+                tool_choice="auto", temperature=0.3, max_tokens=1500,
+                base_url=base_url,  # qwen3/dashscope → enable_thinking=False(此前 grounding 漏了)
+            )
+            msg = await llm_transport.complete(
+                base_url=base_url,
+                api_key=api_key,
+                payload=payload,
+                timeout=httpx.Timeout(connect=10, read=60, write=10, pool=10),
+            )
         except Exception as exc:
             logger.warning("[grounding] LLM 调用失败 turn=%d,回退: %s", _turn, exc)
             yield {"__spec__": None}
             return
 
-        msg = data.get("choices", [{}])[0].get("message", {})
         tool_calls = msg.get("tool_calls") or []
         content = (msg.get("content") or "").strip()
         messages.append({"role": "assistant", "content": content, "tool_calls": tool_calls or None})
