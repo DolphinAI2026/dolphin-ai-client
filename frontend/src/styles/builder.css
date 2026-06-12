@@ -30,7 +30,7 @@
   --b-shadow-xs: 0 0 0 0.5px rgba(24, 31, 45, 0.08);
   --b-shadow-sm: 0 1px 2px rgba(24, 31, 45, 0.05), 0 0 0 0.5px rgba(24, 31, 45, 0.08);
   --b-shadow-md: 0 8px 24px rgba(24, 31, 45, 0.08), 0 0 0 0.5px rgba(24, 31, 45, 0.08);
-  --b-mono: "SF Mono", "JetBrains Mono", ui-monospace, Menlo, Consolas, monospace;
+  --b-mono: var(--font-mono, ui-monospace, "SF Mono", Menlo, Consolas, monospace);
 }
 
 html[data-theme="dark"] {

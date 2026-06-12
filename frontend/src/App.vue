@@ -53,7 +53,7 @@ function isAiChatRoute(r: RouteLocationNormalized): boolean {
 
 html, body, #app {
   height: 100%;
-  /* v3: use --font-sans token (Inter + Noto Sans SC), with system fallback */
-  font-family: var(--font-sans, 'Inter', 'Noto Sans SC', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif);
+  /* v3: use --font-sans token (self-host Geist Sans + 系统 CJK), with system fallback */
+  font-family: var(--font-sans, -apple-system, BlinkMacSystemFont, 'PingFang SC', 'Segoe UI', 'Microsoft YaHei', sans-serif);
 }
 </style>

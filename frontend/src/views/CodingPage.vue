@@ -1869,13 +1869,6 @@ watch(() => route.path, () => {
    CodingPage — Project Launcher + Embedded IDE
    ============================================================ */
 
-/* Embed mode (?embed=true): hide topbar so this view can be cleanly
- * iframed by WorkspaceShell (Phase F Task 9). NavRail is hidden via
- * the existing ?embed_nav=0 mechanism passed by the iframe URL. */
-.is-embedded :deep(.builder-topbar) {
-  display: none !important;
-}
-
 .coding-page {
   height: 100vh;
   display: flex;
@@ -1883,7 +1876,7 @@ watch(() => route.path, () => {
   position: relative;
   background: var(--t-bg-base);
   color: var(--t-text-primary);
-  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', sans-serif;
+  font-family: var(--font-sans, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', sans-serif);
 }
 
 /* ============ Header ============ */
@@ -2450,7 +2443,7 @@ watch(() => route.path, () => {
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
-  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  font-family: var(--font-mono, ui-monospace, SFMono-Regular, Menlo, monospace);
 }
 
 .sidebar-ws-del {
@@ -2967,7 +2960,7 @@ watch(() => route.path, () => {
 .qc-kbd-hint {
   color: var(--t-text-muted);
   font-size: 12px;
-  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  font-family: var(--font-mono, ui-monospace, SFMono-Regular, Menlo, monospace);
 }
 
 .qc-type-panel {
@@ -3308,7 +3301,7 @@ watch(() => route.path, () => {
   background: #f3f6fb;
   color: var(--t-text-muted);
   font-size: 10px;
-  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  font-family: var(--font-mono, ui-monospace, SFMono-Regular, Menlo, monospace);
 }
 
 .workspace-card-type {
@@ -3780,7 +3773,7 @@ watch(() => route.path, () => {
   background: var(--t-bg-code);
   border-radius: 4px;
   padding: 1px 5px;
-  font-family: 'SF Mono', 'Monaco', 'Menlo', monospace;
+  font-family: var(--font-mono, 'SF Mono', 'Menlo', monospace);
   font-size: 12px;
   color: var(--t-brand);
 }
@@ -3830,7 +3823,7 @@ watch(() => route.path, () => {
   padding: 7px 12px;
   cursor: pointer;
   font-size: 12px;
-  font-family: 'SF Mono', 'Monaco', 'Menlo', monospace;
+  font-family: var(--font-mono, 'SF Mono', 'Menlo', monospace);
   transition: background 0.15s;
   background: var(--t-bg-panel);
 }
@@ -3894,7 +3887,7 @@ watch(() => route.path, () => {
   padding: 12px;
   font-size: 12px;
   line-height: 1.5;
-  font-family: 'SF Mono', 'Monaco', 'Menlo', monospace;
+  font-family: var(--font-mono, 'SF Mono', 'Menlo', monospace);
   color: var(--t-text-primary);
   white-space: pre;
   overflow-x: auto;
@@ -3914,7 +3907,7 @@ watch(() => route.path, () => {
   gap: 8px;
   padding: 5px 12px;
   font-size: 12px;
-  font-family: 'SF Mono', 'Monaco', 'Menlo', monospace;
+  font-family: var(--font-mono, 'SF Mono', 'Menlo', monospace);
 }
 .command-prompt {
   color: var(--t-success);
@@ -3930,7 +3923,7 @@ watch(() => route.path, () => {
   padding: 6px 12px 8px 28px;
   font-size: 11px;
   line-height: 1.5;
-  font-family: 'SF Mono', 'Monaco', 'Menlo', monospace;
+  font-family: var(--font-mono, 'SF Mono', 'Menlo', monospace);
   color: var(--t-text-muted);
   border-top: 1px solid var(--t-border-subtle);
   white-space: pre-wrap;
@@ -4421,7 +4414,7 @@ html:not([data-theme="dark"]) .chat-input-bar :deep(.ucc-input::placeholder) {
 }
 .cap-file-path {
   flex: 1;
-  font-family: var(--d-font-mono, "JetBrains Mono", "SF Mono", "Menlo", "Consolas", monospace);
+  font-family: var(--font-mono, "SF Mono", "Menlo", monospace);
   font-size: 11.5px;
   color: var(--text, #1a1525);
   min-width: 0;
@@ -4432,12 +4425,12 @@ html:not([data-theme="dark"]) .chat-input-bar :deep(.ucc-input::placeholder) {
 .cap-file-size {
   font-size: 10.5px;
   color: var(--text-3, #837ea0);
-  font-family: var(--d-font-mono, monospace);
+  font-family: var(--font-mono, monospace);
   flex-shrink: 0;
 }
 .cap-file-diff {
   font-size: 10.5px;
-  font-family: var(--d-font-mono, monospace);
+  font-family: var(--font-mono, monospace);
   flex-shrink: 0;
 }
 .cap-file-diff .add {
@@ -4511,7 +4504,7 @@ html:not([data-theme="dark"]) .chat-input-bar :deep(.ucc-input::placeholder) {
   line-height: 1.55;
 }
 .cap-guide-desc code {
-  font-family: var(--d-font-mono, monospace);
+  font-family: var(--font-mono, monospace);
   background: var(--code-bg, #F6F4FB);
   color: var(--code-text, #4F4A6E);
   padding: 1px 5px;
