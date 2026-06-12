@@ -183,7 +183,7 @@
             <!-- designer 内顶部 4 sub-tab -->
             <div class="mdsh-subnav">
               <div class="mdsh-subnav-info">
-                <span class="mdsh-menu-name">{{ selectedApaasMenuName || '选中菜单' }}</span>
+                <span class="mdsh-menu-name">{{ designerSub === 'dev' ? '自开发资产' : (selectedApaasMenuName || '选中菜单') }}</span>
               </div>
               <div class="mdsh-subnav-tabs" role="tablist">
                 <button

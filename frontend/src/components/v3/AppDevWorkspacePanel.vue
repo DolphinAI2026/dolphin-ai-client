@@ -384,15 +384,15 @@ watch(() => props.appId, loadWorkspaces)
   white-space: nowrap;
 }
 .adw-action.primary {
-  border-color: #3743e6;
-  background: #3743e6;
-  color: #ffffff;
+  border-color: var(--brand);
+  background: var(--brand);
+  color: var(--text-inverse, #fff);
   font-weight: 600;
 }
 .adw-action.primary:hover {
-  border-color: #2f39d0;
-  background: #2f39d0;
-  color: #ffffff;
+  border-color: var(--brand-hover);
+  background: var(--brand-hover);
+  color: var(--text-inverse, #fff);
 }
 .adw-action:not(.primary) {
   border-color: color-mix(in srgb, var(--brand) 42%, var(--line));
