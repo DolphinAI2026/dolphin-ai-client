@@ -23,6 +23,10 @@ from app.generator_v2 import (
 from app.operations.form_config import (  # noqa: F401 (部分经 re-export 被外部 import)
     _iter_form_components,
     _component_field_code,
+    _first_non_empty,
+    _form_identity_map,
+    _find_component_by_field,
+    _build_display_component_refs,
     _clone_for_form_config_permissions,
     _normalize_permission_range,
     _query_saveable_form_config,
@@ -31,6 +35,11 @@ from app.operations.form_config import (  # noqa: F401 (部分经 re-export 被�
 from app.operations.dict_binding import (  # noqa: F401
     _component_lookup_keys,
     resolve_component_dict_code,
+)
+# 表单引用解析（数据选择/关联表单）收敛到 operations 层，两侧并集消除漂移。
+from app.operations.form_references import (  # noqa: F401
+    _resolve_component_reference,
+    _resolve_target_form_result,
 )
 from app.field_types import select_choose_type_for_component
 from app.lowcode_standards import normalize_component_type, normalize_database_field_type, safe_field_code
@@ -42,19 +51,6 @@ def _field_value(field: dict, *keys: str, default=None):
     for key in keys:
         if key in field and field.get(key) not in (None, ""):
             return field.get(key)
-    return default
-
-
-def _first_non_empty(*values, default=""):
-    for value in values:
-        if value in (None, ""):
-            continue
-        if isinstance(value, str):
-            stripped = value.strip()
-            if stripped:
-                return stripped
-            continue
-        return value
     return default
 
 
@@ -1895,21 +1891,6 @@ async def execute_create_form(
     return form_result
 
 
-def _form_identity_map(forms: List[dict]) -> Dict[str, dict]:
-    mapping: Dict[str, dict] = {}
-    for form in forms:
-        for key in (
-            form.get("formCode"), form.get("form_code"), form.get("code"),
-            form.get("formName"), form.get("form_name"), form.get("name"),
-            form.get("modelCode"), form.get("model_code"),
-            form.get("mainModelCode"), form.get("main_model_code"), form.get("main_model"),
-        ):
-            value = str(key or "").strip()
-            if value:
-                mapping.setdefault(value, form)
-    return mapping
-
-
 def _component_definition_map(components: List[dict]) -> Dict[str, dict]:
     mapping: Dict[str, dict] = {}
     for comp in components or []:
@@ -1923,123 +1904,6 @@ def _component_definition_map(components: List[dict]) -> Dict[str, dict]:
         if label and label not in mapping:
             mapping[label] = comp
     return mapping
-
-
-def _resolve_component_reference(comp_def: dict, form_map: Dict[str, dict]) -> tuple[str, str, str]:
-    association = comp_def.get("formAssociationConfig") or comp_def.get("form_association_config") or {}
-    ref = comp_def.get("ref") or {}
-    target = (
-        str(association.get("targetModelCode") or "").strip()
-        or str(comp_def.get("selector_form_code") or "").strip()
-        or str(comp_def.get("association_form_code") or "").strip()
-        or str(comp_def.get("ref_model_code") or "").strip()
-        or (str(ref.get("model") or "").strip() if isinstance(ref, dict) else str(ref or "").strip())
-    )
-    target_field = (
-        str(association.get("targetFieldCode") or "").strip()
-        or str(comp_def.get("selector_field_code") or "").strip()
-        or str(comp_def.get("association_target_field_code") or "").strip()
-        or str(comp_def.get("ref_display_field_code") or "").strip()
-        or (str(ref.get("target_field") or ref.get("display_field") or ref.get("field") or "").strip() if isinstance(ref, dict) else "")
-    )
-    origin_field = str(association.get("originFieldCode") or comp_def.get("association_origin_field_code") or "").strip()
-
-    resolved_form = form_map.get(target)
-    if resolved_form:
-        target_model_code = str(_first_non_empty(
-            resolved_form.get("modelCode"),
-            resolved_form.get("model_code"),
-            resolved_form.get("mainModelCode"),
-            resolved_form.get("main_model_code"),
-            resolved_form.get("main_model"),
-            default=target,
-        )).strip() or target
-        return target_model_code, target_field, origin_field
-    return target, target_field, origin_field
-
-
-def _resolve_target_form_result(
-    comp_def: dict,
-    form_map: Dict[str, dict],
-    form_results: List[dict],
-    target_model_code: str,
-) -> Optional[dict]:
-    ref = comp_def.get("ref") or {}
-    for value in (
-        comp_def.get("selector_form_code"),
-        comp_def.get("association_form_code"),
-        comp_def.get("formCode"),
-        comp_def.get("form_code"),
-        comp_def.get("code"),
-        comp_def.get("formName"),
-        comp_def.get("form_name"),
-        comp_def.get("name"),
-        ref.get("formCode") if isinstance(ref, dict) else "",
-        ref.get("form_code") if isinstance(ref, dict) else "",
-    ):
-        candidate = str(value or "").strip()
-        if not candidate:
-            continue
-        form_def = form_map.get(candidate)
-        if not form_def:
-            continue
-        for form_result in form_results:
-            if (
-                form_result.get("formCode") == form_def.get("formCode")
-                or form_result.get("formCode") == form_def.get("code")
-                or form_result.get("formCode") == form_def.get("form_code")
-                or form_result.get("formName") == form_def.get("formName")
-                or form_result.get("formName") == form_def.get("name")
-                or form_result.get("formName") == form_def.get("form_name")
-                or form_result.get("modelCode") == form_def.get("modelCode")
-                or form_result.get("modelCode") == form_def.get("model_code")
-                or form_result.get("modelCode") == form_def.get("mainModelCode")
-                or form_result.get("modelCode") == form_def.get("main_model_code")
-            ):
-                return form_result
-
-    for form_result in form_results:
-        if str(form_result.get("modelCode", "")).strip() == target_model_code:
-            return form_result
-    return None
-
-
-def _find_component_by_field(
-    form_components: List[dict],
-    field_code: str,
-    *,
-    label: str = "",
-) -> Optional[dict]:
-    normalized_field = str(field_code or "").strip()
-    normalized_label = str(label or "").strip()
-    for component in _iter_form_components(form_components):
-        if normalized_field and _component_field_code(component) == normalized_field:
-            return component
-        if normalized_label and str(component.get("label", "")).strip() == normalized_label:
-            return component
-    return None
-
-
-def _build_display_component_refs(form_components: List[dict], field_codes: List[str]) -> List[dict]:
-    refs: List[dict] = []
-    seen: set[str] = set()
-    for field_code in field_codes:
-        component = _find_component_by_field(form_components, field_code)
-        component_uuid = str(component.get("uuid", "")).strip() if component else ""
-        if not component_uuid or component_uuid in seen:
-            continue
-        seen.add(component_uuid)
-        item = {
-            "id": component_uuid,
-            "componentType": component.get("componentType", "FORM_TEXT_INPUT"),
-            "name": component.get("label", "") or component.get("modelFieldName", "") or field_code,
-        }
-        if component.get("chooseOptions"):
-            item["chooseOptions"] = component.get("chooseOptions")
-        if "multicolor" in component:
-            item["multicolor"] = bool(component.get("multicolor"))
-        refs.append(item)
-    return refs
 
 
 def _build_permission_groups_for_form_config(

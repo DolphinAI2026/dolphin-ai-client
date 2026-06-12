@@ -14,7 +14,7 @@
 from __future__ import annotations
 
 import logging
-from typing import List
+from typing import Dict, List, Optional
 
 from app.apaas_client import APaaSClient
 
@@ -35,6 +35,72 @@ def _component_field_code(component: dict) -> str:
     if "." in model_field:
         return model_field.split(".", 1)[1]
     return str(component.get("code", "")).strip()
+
+
+def _first_non_empty(*values, default=""):
+    for value in values:
+        if value in (None, ""):
+            continue
+        if isinstance(value, str):
+            stripped = value.strip()
+            if stripped:
+                return stripped
+            continue
+        return value
+    return default
+
+
+def _find_component_by_field(form_components: List[dict], field_code: str, *, label: str = "") -> Optional[dict]:
+    normalized_field = str(field_code or "").strip()
+    normalized_label = str(label or "").strip()
+    for component in _iter_form_components(form_components):
+        if normalized_field and _component_field_code(component) == normalized_field:
+            return component
+        if normalized_label and str(component.get("label", "")).strip() == normalized_label:
+            return component
+    return None
+
+
+def _form_identity_map(forms: List[dict]) -> Dict[str, dict]:
+    """按表单的各种身份键（code/name/modelCode 等）建 {身份值: form} 映射。
+
+    两侧此前实现仅差一处空值保护（generator_v2 用 ``forms or []`` 防 None，step_executor
+    直接 ``forms`` 在 None 时会抛）。收敛取空安全版本，行为对非 None 入参完全一致。
+    """
+    mapping: Dict[str, dict] = {}
+    for form in forms or []:
+        for key in (
+            form.get("formCode"), form.get("form_code"), form.get("code"),
+            form.get("formName"), form.get("form_name"), form.get("name"),
+            form.get("modelCode"), form.get("model_code"),
+            form.get("mainModelCode"), form.get("main_model_code"), form.get("main_model"),
+        ):
+            value = str(key or "").strip()
+            if value:
+                mapping.setdefault(value, form)
+    return mapping
+
+
+def _build_display_component_refs(form_components: List[dict], field_codes: List[str]) -> List[dict]:
+    refs: List[dict] = []
+    seen: set[str] = set()
+    for field_code in field_codes:
+        component = _find_component_by_field(form_components, field_code)
+        component_uuid = str(component.get("uuid", "")).strip() if component else ""
+        if not component_uuid or component_uuid in seen:
+            continue
+        seen.add(component_uuid)
+        item = {
+            "id": component_uuid,
+            "componentType": component.get("componentType", "FORM_TEXT_INPUT"),
+            "name": component.get("label", "") or component.get("modelFieldName", "") or field_code,
+        }
+        if component.get("chooseOptions"):
+            item["chooseOptions"] = component.get("chooseOptions")
+        if "multicolor" in component:
+            item["multicolor"] = bool(component.get("multicolor"))
+        refs.append(item)
+    return refs
 
 
 def _clone_for_form_config_permissions(value):
@@ -79,6 +145,10 @@ async def _query_saveable_form_config(client: APaaSClient, app_id: str, form_id:
 __all__ = [
     "_iter_form_components",
     "_component_field_code",
+    "_first_non_empty",
+    "_form_identity_map",
+    "_find_component_by_field",
+    "_build_display_component_refs",
     "_clone_for_form_config_permissions",
     "_normalize_permission_range",
     "_query_saveable_form_config",
