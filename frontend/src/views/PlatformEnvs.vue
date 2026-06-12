@@ -1339,19 +1339,6 @@ watch(
    document.body and the .env-dialog class is the only handle we have.
    Token swap: --b-* (v2) → v3 tokens (--surface / --line / --text /
    --brand / --r-* / --font-mono). Logic untouched. */
-html[data-theme="dark"] .builder-topbar .new-btn {
-  background: var(--brand) !important;
-  border-color: var(--brand) !important;
-  color: var(--text-inverse) !important;
-  box-shadow: none !important;
-}
-
-html[data-theme="dark"] .builder-topbar .new-btn:hover {
-  background: var(--brand-hover) !important;
-  border-color: var(--brand-hover) !important;
-  color: var(--text-inverse) !important;
-}
-
 /* ── Dialog theme (non-scoped for teleported el-dialog) ── */
 .el-dialog.env-dialog {
   background: var(--surface) !important;
