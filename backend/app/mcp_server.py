@@ -3155,6 +3155,7 @@ async def create_apaas_self_dev_menu(
                     ),
                 }
         return payload
+    _invalidate_section_cache_after_write(apaas_app_id)
     return {
         "ok": True, "env_id": env_id, "apaas_app_id": apaas_app_id.strip(),
         "menu_name": menu_name.strip(), "link_url": link_url.strip(),
@@ -4787,6 +4788,30 @@ async def set_role_resource_permission(
     }
 
 
+def _invalidate_section_cache_after_write(apaas_app_id: str) -> None:
+    """写类工具改完配置后失效该 app 的 section_content 缓存 (best-effort, 不抛).
+
+    section_content 路由对读结果有 180s TTL 缓存; 写完不失效会让前端面板刷新
+    在缓存窗口内拿到 stale 旧数据 (用户痛点: 字典/角色/菜单改完 3 分钟刷不出).
+
+    覆盖面 (chokepoint 不干净, 故只给已知用户痛点工具显式调): 字典 / 角色 / 菜单
+    的 create/update/delete. 别的散落写工具 (表单/流程/业务事件等) 仍靠 spec_apply
+    apply 后的失效 + 前端 ?force=true 重试兜底。
+
+    lazy import 避免 module-load 期循环 (section_content 也 lazy import mcp_server)。
+    """
+    aid = str(apaas_app_id or "").strip()
+    if not aid:
+        return
+    try:
+        from app.routes.applications.section_content import invalidate_section_cache_for_app
+        cleared = invalidate_section_cache_for_app(aid)
+        if cleared:
+            logger.info("section_content cache invalidated after write: app=%s cleared=%d", aid, cleared)
+    except Exception as exc:  # noqa: BLE001 — 失效失败不能拖垮写操作
+        logger.debug("section_content cache invalidate skipped (%s): %s", aid, exc)
+
+
 @mcp.tool()
 async def create_apaas_app_roles(env_id: int, apaas_app_id: str, roles: list) -> dict:
     """批量创建 aPaaS 应用角色（不走 SPEC 文档流程，直接调 apaas 平台）。
@@ -4840,6 +4865,7 @@ async def create_apaas_app_roles(env_id: int, apaas_app_id: str, roles: list) ->
     )
     if not ok:
         return raw
+    _invalidate_section_cache_after_write(apaas_app_id)
     return {
         "ok": True, "env_id": env_id, "apaas_app_id": apaas_app_id.strip(),
         "created_count": len(payload_roles),
@@ -4880,6 +4906,7 @@ async def update_apaas_app_role(
     )
     if not ok:
         return raw
+    _invalidate_section_cache_after_write(apaas_app_id)
     return {
         "ok": True, "env_id": env_id, "apaas_app_id": apaas_app_id.strip(),
         "role_id": role_id.strip(), "role_code": role_code, "role_name": role_name,
@@ -4904,6 +4931,7 @@ async def delete_apaas_app_role(env_id: int, apaas_app_id: str, role_id: str) ->
     )
     if not ok:
         return raw
+    _invalidate_section_cache_after_write(apaas_app_id)
     return {
         "ok": True, "env_id": env_id, "apaas_app_id": apaas_app_id.strip(),
         "role_id": role_id.strip(),
@@ -4936,6 +4964,7 @@ async def create_apaas_app_dict(env_id: int, apaas_app_id: str, dict_code: str, 
     ok, raw = await _with_client(env_id, "建字典", lambda c: c.create_dicts(apaas_app_id_clean, payload))
     if not ok:
         return raw
+    _invalidate_section_cache_after_write(apaas_app_id)
     return {"ok": True, "env_id": env_id, "apaas_app_id": apaas_app_id.strip(),
             "dict_code": dict_code.strip(), "dict_name": dict_name.strip(),
             "next_step": "用 list_apaas_app_dicts 拿回 dict_id 再调 add_apaas_dict_option 加选项"}
@@ -4953,6 +4982,7 @@ async def update_apaas_app_dict(env_id: int, apaas_app_id: str, dict_id: str, di
         lambda c: c.update_dict(apaas_app_id.strip(), dict_id.strip(), dict_code.strip(), dict_name.strip(), describe=describe))
     if not ok:
         return raw
+    _invalidate_section_cache_after_write(apaas_app_id)
     return {"ok": True, "env_id": env_id, "apaas_app_id": apaas_app_id.strip(),
             "dict_id": dict_id.strip(), "message": f"字典「{dict_name}」({dict_code}) 已更新",
             "next_step": "调 republish_apaas_app 让变更生效"}
@@ -4971,6 +5001,7 @@ async def add_apaas_dict_option(env_id: int, apaas_app_id: str, dict_id: str,
         lambda c: c.add_dict_option(apaas_app_id.strip(), dict_id.strip(), value_code.strip(), value_name.strip(), display_order))
     if not ok:
         return raw
+    _invalidate_section_cache_after_write(apaas_app_id)
     return {"ok": True, "env_id": env_id, "apaas_app_id": apaas_app_id.strip(),
             "dict_id": dict_id.strip(),
             "value_code": value_code.strip(), "value_name": value_name.strip(),
@@ -4990,6 +5021,7 @@ async def update_apaas_dict_option(env_id: int, apaas_app_id: str, dict_id: str,
                                        display_order=display_order, describe=describe, multicolor=multicolor))
     if not ok:
         return raw
+    _invalidate_section_cache_after_write(apaas_app_id)
     return {"ok": True, "message": f"字典选项「{value_name}」({value_code}) 已更新"}
 
 
@@ -5010,6 +5042,7 @@ async def update_apaas_app_model(env_id: int, apaas_app_id: str, model_id: str,
                                  app_name=app_name, model_data_source=model_data_source))
     if not ok:
         return raw
+    _invalidate_section_cache_after_write(apaas_app_id)
     return {"ok": True, "message": f"模型「{model_name}」({model_code}) 已更新",
             "next_step": "调 republish_apaas_app 让变更生效"}
 
@@ -5037,6 +5070,7 @@ async def add_apaas_model_field(env_id: int, apaas_app_id: str, model_id: str, m
                                     field_type=field_type, max_length=max_length, comment=comment))
     if not ok:
         return raw
+    _invalidate_section_cache_after_write(apaas_app_id)
     return {"ok": True, "message": f"模型 {model_code} 已加字段「{field_name}」({field_code} / {field_type})"}
 
 
@@ -5062,6 +5096,7 @@ async def update_apaas_model_field(env_id: int, apaas_app_id: str, model_id: str
                                        comment=comment or None))
     if not ok:
         return raw
+    _invalidate_section_cache_after_write(apaas_app_id)
     return {"ok": True, "message": f"字段「{field_name}」({field_code}) 已更新"}
 
 
@@ -5080,6 +5115,7 @@ async def disable_apaas_model_field(env_id: int, apaas_app_id: str, model_id: st
                                        field_status="DISABLE"))
     if not ok:
         return raw
+    _invalidate_section_cache_after_write(apaas_app_id)
     return {"ok": True, "message": f"字段「{field_name}」({field_code}) 已禁用",
             "note": "apaas 字段不能真删只能 DISABLE。重新启用调 update_apaas_model_field(field_status='ENABLE')"}
 
@@ -5105,6 +5141,7 @@ async def create_apaas_form_menu(env_id: int, apaas_app_id: str, menu_name: str,
                                 menu_order=menu_order, datasource_id="", datasource_code=""))
     if not ok:
         return raw
+    _invalidate_section_cache_after_write(apaas_app_id)
     new_menu = raw if isinstance(raw, dict) else {}
     new_menu_id = str(new_menu.get("id") or new_menu.get("menuId") or "")
     if pid and new_menu_id:
@@ -5147,6 +5184,7 @@ async def create_apaas_menu_group(
         ))
     if not ok:
         return raw
+    _invalidate_section_cache_after_write(apaas_app_id)
     new_group = raw if isinstance(raw, dict) else {}
     return {
         "ok": True,
@@ -5183,6 +5221,7 @@ async def set_apaas_menu_parent(
         ))
     if not ok:
         return raw
+    _invalidate_section_cache_after_write(apaas_app_id)
     return {
         "ok": True,
         "menu_id": menu_id,
@@ -5215,6 +5254,7 @@ async def rename_apaas_menu(
         lambda c: c.rename_menu(apaas_app_id.strip(), menu_id.strip(), new_name.strip()))
     if not ok:
         return raw
+    _invalidate_section_cache_after_write(apaas_app_id)
     return {
         "ok": True,
         "menu_id": menu_id,
@@ -5272,6 +5312,7 @@ async def update_apaas_self_dev_menu_link_url(
                 f" {(raw or {}).get('link_url')}；确认后重新调用并传 confirmed=true。"
             ),
         }
+    _invalidate_section_cache_after_write(apaas_app_id)
     return {
         "ok": True,
         "menu_id": menu_id.strip(),
@@ -5294,6 +5335,7 @@ async def delete_apaas_app_menu(env_id: int, apaas_app_id: str, menu_id: str, me
         lambda c: c.delete_menu(apaas_app_id.strip(), menu_id.strip(), menu_name=menu_name))
     if not ok:
         return raw
+    _invalidate_section_cache_after_write(apaas_app_id)
     return {"ok": True, "message": f"菜单 {menu_id} 已删除（如果是表单菜单，关联表单也被删了）"}
 
 
