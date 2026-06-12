@@ -97,18 +97,6 @@ const router = createRouter({
       redirect: '/coding'
     },
     {
-      path: '/devops',
-      name: 'DevOps',
-      component: () => import('@/views/BuilderDevOpsPage.vue'),
-      meta: { navExpanded: true }
-    },
-    {
-      path: '/proposals/:id',
-      name: 'ProposalDetail',
-      component: () => import('@/views/ProposalDetailPage.vue'),
-      meta: { requiresAuth: true }
-    },
-    {
       path: '/settings',
       name: 'Settings',
       redirect: to => {

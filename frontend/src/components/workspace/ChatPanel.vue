@@ -1,11 +1,5 @@
 <template>
   <div class="chat-panel">
-    <PromoteApproveApplyCard
-      v-if="store.effectiveMode === 'simple' && store.state?.current_draft && store.state?.application"
-      :draft-spec-id="store.state.current_draft.id"
-      :application-id="store.state.application.id"
-      @done="onProposalDone"
-    />
     <div class="cta">
       <p class="muted">完整 AI-Builder 体验</p>
       <button class="builder-btn builder-btn-primary big" type="button" @click="openChat">
@@ -30,14 +24,9 @@
 <script setup lang="ts">
 import { useWorkspaceStore } from '@/stores/workspace'
 import { useRouter } from 'vue-router'
-import PromoteApproveApplyCard from './PromoteApproveApplyCard.vue'
 
 const store = useWorkspaceStore()
 const router = useRouter()
-
-function onProposalDone(_id: string) {
-  // store.refresh() 已在 PromoteApproveApplyCard 内部调用
-}
 
 function openChat() {
   const appId = store.application?.id
