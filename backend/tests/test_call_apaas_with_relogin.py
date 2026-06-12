@@ -3,13 +3,17 @@
 锁住核心行为: fn 撞 token 失效(401) → 自动重登 → fn 用新 client 重试一次。
 401 发生在认证层(请求没到业务), 故重试对读写接口都安全(无重复副作用)。
 
-这是把全仓 15 处 apaas 裸调统一接到此自愈机制前的基线保护:
+这是把全仓 apaas 裸调统一接到此自愈机制前的基线保护:
 确认机制本身在 (a)401重登成功重试 (b)401但无凭据重登失败 (c)非401直接抛 (d)首次就成功
 四种情形下行为正确。
+
+2026-06-12: 自愈三件套已从 app.coding.apaas_tools 抽到共享设施 app.apaas_session。
+wrapper 在自己模块里查全局符号, 故 monkeypatch 必须打在 apaas_session 上
+(apaas_tools 仅 re-export, 打那里不会影响 wrapper 内部解析)。
 """
 import pytest
 
-from app.coding import apaas_tools
+from app import apaas_session as apaas_tools
 
 
 @pytest.mark.asyncio
