@@ -134,6 +134,12 @@ const router = createRouter({
       meta: { requiresAuth: true, navExpanded: true }
     },
     {
+      path: '/admin/agent-prompts',
+      name: 'AgentPrompts',
+      component: () => import('@/views/AgentPromptsPage.vue'),
+      meta: { requiresAuth: true, requiresTenantAdmin: true, navExpanded: true }
+    },
+    {
       path: '/work/:appId',
       name: 'WorkspaceShell',
       redirect: to => ({ path: '/chat', query: { app_id: String(to.params.appId) } }),
