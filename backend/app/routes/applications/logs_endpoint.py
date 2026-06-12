@@ -5,8 +5,7 @@ GET /{app_id}/logs/{kind}
 kind:
   - deploy:    DeployRecord 表 (部署 / 回滚 / 发布)
   - operation: ChangePlan 表 (配置变更) + ApiCallLog (用户触发的 admin API)
-  - ai:        AIChatToolCall (joined to AIChatSession by tenant_id, app context heuristic)
-              + ConfigChatMessage.tool_trace_json (app-bound 配置助手对话)
+  - ai:        (旧 config-chat 链路已删, 当前无 app-bound AI 工具日志来源 → 空)
   - error:     filter status='failed' / success=false 的全部以上类别
 
 返回统一 schema:
@@ -46,8 +45,6 @@ from app.models import (
     ApiCallLog,
     User,
 )
-from app.models.ai_chat import AIChatToolCall, AIChatSession
-from app.models.config_chat import ConfigChatSession, ConfigChatMessage
 from app.permissions import check_resource_permission, Action
 
 logger = logging.getLogger(__name__)
@@ -309,76 +306,13 @@ async def _fetch_ai_logs(
     page: int,
     page_size: int,
 ) -> tuple[List[dict], int]:
-    """AI 行为 = ConfigChat.tool_trace_json（绑定 app_id 的配置助手对话）"""
-    cc_conds = [ConfigChatSession.app_id == app_id]
-    cc_join = select(ConfigChatMessage, ConfigChatSession.title.label("session_title"), ConfigChatSession.user_id.label("session_user_id")).join(
-        ConfigChatSession, ConfigChatSession.id == ConfigChatMessage.session_id
-    ).where(and_(*cc_conds))
-    if cutoff is not None:
-        cc_join = cc_join.where(ConfigChatMessage.created_at >= cutoff)
-    # 只看 assistant 消息（用户消息没工具痕迹）
-    cc_join = cc_join.where(ConfigChatMessage.role == "assistant")
-    cc_join = cc_join.order_by(desc(ConfigChatMessage.created_at)).limit(500)
+    """AI 行为日志。
 
-    cc_result = await db.execute(cc_join)
-    rows = list(cc_result.all())
-
-    user_ids = [r.session_user_id for r in rows if r.session_user_id]
-    user_map = await _load_user_name_map(db, user_ids)
-
-    items: List[dict] = []
-    for row in rows:
-        msg = row[0]
-        session_title = row.session_title
-        session_user_id = row.session_user_id
-        # 一条 assistant 消息可能调多次工具 → 每次工具调用拆一条 log entry
-        traces = msg.tool_trace_json or []
-        if isinstance(traces, dict):
-            traces = [traces]
-        if not isinstance(traces, list):
-            traces = []
-        if not traces:
-            # 没工具调用 — 跳过, AI 行为 tab 只关心工具调用
-            continue
-        for idx, t in enumerate(traces):
-            if not isinstance(t, dict):
-                continue
-            tool_name = t.get("tool_name") or t.get("tool") or "unknown"
-            tool_ok = t.get("ok")
-            if tool_ok is None:
-                # 没 ok 字段时默认 success
-                tool_ok = True
-            t_status = "success" if tool_ok else "failed"
-            if status_filter and status_filter != "all" and t_status != status_filter:
-                continue
-            tool_summary = t.get("summary") or t.get("brief") or json.dumps(t.get("args") or {}, ensure_ascii=False)[:80]
-            items.append({
-                "id": f"aitool-{msg.id}-{idx}",
-                "timestamp": msg.created_at.isoformat() if msg.created_at else None,
-                "type": "AI 工具",
-                "user": user_map.get(session_user_id, "AI"),
-                "summary": f"{tool_name}: {tool_summary}",
-                "status": t_status,
-                "details": {
-                    "session_title": session_title,
-                    "message_id": msg.id,
-                    "tool_name": tool_name,
-                    "args": t.get("args"),
-                    "ok": tool_ok,
-                    "summary": tool_summary,
-                    "image_data_url": t.get("image_data_url"),
-                    "raw": t,
-                },
-                "_ts": msg.created_at or datetime.min,
-            })
-
-    items.sort(key=lambda x: x["_ts"], reverse=True)
-    total = len(items)
-    start = (page - 1) * page_size
-    page_items = items[start:start + page_size]
-    for it in page_items:
-        it.pop("_ts", None)
-    return page_items, total
+    旧数据源 = config-chat 助手的 ConfigChatMessage.tool_trace_json，该链路已整删
+    (配置助手单一事实 = unified run_agent)。当前无 app-bound AI 工具日志来源，
+    返空。后续若要恢复，应改接 unified 的 AIChatToolCall (按 AIChatSession.app_id 过滤)。
+    """
+    return [], 0
 
 
 # ── kind: error ──────────────────────────────────────────────────────────────
@@ -452,19 +386,9 @@ async def _compute_stats(db: AsyncSession, app_id: int) -> Dict[str, int]:
         )
     ).scalar() or 0
 
-    # AI 工具调用数 - 走 ConfigChatMessage assistant 行有 tool_trace_json
-    ai_msg_result = await db.execute(
-        select(ConfigChatMessage)
-        .join(ConfigChatSession, ConfigChatSession.id == ConfigChatMessage.session_id)
-        .where(ConfigChatSession.app_id == app_id, ConfigChatMessage.role == "assistant")
-    )
+    # AI 工具调用数 — 旧 config-chat 链路 (ConfigChatMessage.tool_trace_json) 已整删,
+    # 暂无 app-bound AI 工具日志来源 → 0。恢复时改接 unified AIChatToolCall。
     ai_calls = 0
-    for m in ai_msg_result.scalars().all():
-        traces = m.tool_trace_json or []
-        if isinstance(traces, dict):
-            traces = [traces]
-        if isinstance(traces, list):
-            ai_calls += len(traces)
 
     return {
         "total": int(deploy_total) + int(cp_total) + int(ac_total) + int(ai_calls),
@@ -492,7 +416,7 @@ async def get_application_logs(
     kind:
       - deploy:    DeployRecord 表
       - operation: ChangePlan + ApiCallLog (按 application_id 过滤)
-      - ai:        ConfigChatMessage.tool_trace_json (按 ConfigChatSession.app_id 过滤)
+      - ai:        (旧 config-chat 链路已删, 当前无来源 → 空)
       - error:     上面三类合并 + status=failed
 
     返回 {ok, items, total, has_more, stats}
