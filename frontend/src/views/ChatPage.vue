@@ -843,7 +843,6 @@ import {
   extractAppNameFromText,
 } from '@/utils/app'
 import ApaasMenuSidebar from '@/components/ApaasMenuSidebar.vue'
-import SectionNav from '@/components/v2/SectionNav.vue'
 import AppIcon from '@/components/common/AppIcon.vue'
 import SectionContentList from '@/components/v2/SectionContentList.vue'
 import AppConfigSubNav from '@/components/v3/AppConfigSubNav.vue'
