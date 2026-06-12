@@ -1371,16 +1371,9 @@ html[data-theme="dark"] .builder-btn-primary:hover {
   gap: 10px;
 }
 
-.app-icon {
-  width: 36px;
-  height: 36px;
-  border-radius: 8px;
-  display: grid;
-  place-items: center;
-  color: #fff;
-  font-family: var(--b-mono);
-  font-weight: 700;
-}
+/* 2026-06-12: 删死规则 .app-icon(36px 头像方块, 全家族 .app-card* 已无模板使用) —
+   类名与共享组件 AppIcon.vue 的 .app-icon 相撞, color:#fff 泄漏进全站 SVG 图标,
+   浅色主题下白描边压白底=图标隐形(应用库行内「对话/资产」等处)。 */
 
 .app-name {
   color: var(--b-text);
