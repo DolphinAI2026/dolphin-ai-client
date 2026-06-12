@@ -624,12 +624,15 @@ async def execute_export_apaas_app_design_doc(
             "permissions": perm_res,
         })
 
+    models = models_res.get("models") or []
+    dicts = dicts_res.get("dicts") or []
+    roles = roles_res.get("roles") or []
     markdown = _render_apaas_design_doc(
         app=app,
         menus=menus,
-        models=models_res.get("models") or [],
-        dicts=dicts_res.get("dicts") or [],
-        roles=roles_res.get("roles") or [],
+        models=models,
+        dicts=dicts,
+        roles=roles,
         forms=forms,
     )
     filename = str(args.get("filename") or "").strip() or f"{_safe_filename(app_code or app_name)}-design.md"
@@ -638,7 +641,8 @@ async def execute_export_apaas_app_design_doc(
     art = await _latest_artifact(db, session.id, filename)
     validation = _validate_builder_doc_silent(markdown) or {}
     doc_stats = _design_doc_stats(markdown)
-    return json.dumps({
+    metadata_sparse = _metadata_is_sparse(models, dicts, roles, forms)
+    result: dict[str, Any] = {
         "ok": True,
         "env_id": env_id,
         "apaas_app_id": apaas_app_id,
@@ -653,14 +657,20 @@ async def execute_export_apaas_app_design_doc(
         "models": doc_stats["models"],
         "roles": doc_stats["roles"],
         "dicts": doc_stats["dicts"],
-        "business_enriched": doc_stats["business_enriched"],
+        "metadata_sparse": metadata_sparse,
         "validation": {
             "score": validation.get("score"),
             "passes_strict": validation.get("passes_strict"),
             "missing_sections": validation.get("missing_sections") or [],
             "weak_sections": validation.get("weak_sections") or [],
         },
-    }, ensure_ascii=False)
+    }
+    if metadata_sparse:
+        result["warning"] = (
+            "该应用元数据不完整（缺少角色/数据字典，且字段多为内部编码或通用标签），"
+            "导出文档可能较简略，建议先在平台完善配置后再导出。"
+        )
+    return json.dumps(result, ensure_ascii=False)
 
 
 async def _mcp_json(tool_name: str, args: dict, session: AIChatSession) -> dict:
@@ -697,9 +707,6 @@ def _render_apaas_design_doc(
     roles: list[dict],
     forms: list[dict],
 ) -> str:
-    if _needs_business_enrichment(app, models, dicts, roles, forms):
-        return _render_business_enriched_design_doc(app, menus, forms)
-
     app_name = str(app.get("app_name") or app.get("app_code") or "未命名应用")
     app_code = str(app.get("app_code") or "app")
     app_id = str(app.get("apaas_app_id") or "")
@@ -855,13 +862,16 @@ def _render_apaas_design_doc(
     return "\n".join(lines).rstrip() + "\n"
 
 
-def _needs_business_enrichment(
-    app: dict,
+def _metadata_is_sparse(
     models: list[dict],
     dicts: list[dict],
     roles: list[dict],
     forms: list[dict],
 ) -> bool:
+    """元数据是否过于稀疏（无角色/字典 + 字段多为内部编码或通用标签）。
+
+    仅用于在导出结果里给出告警提示，不再据此凭空补全业务字段。
+    """
     if roles or dicts:
         return False
     components = [comp for form in forms for comp in (form.get("components") or [])]
@@ -881,24 +891,13 @@ def _needs_business_enrichment(
                 internal_fields += 1
             if str(field.get("field_name") or "").strip() in {"单行输入", "输入框", ""}:
                 internal_fields += 1
-    app_text = f"{app.get('app_name') or ''} {app.get('app_code') or ''} " + " ".join(
-        str((form.get("menu") or {}).get("menu_name") or "") for form in forms
-    )
-    is_known_business = any(key in app_text.lower() for key in (
-        "hr",
-        "人力",
-        "成本",
-        "employee",
-        "timesheet",
-        "project",
-    ))
-    return is_known_business and (
+    return (
         generic_labels >= max(3, len(components) // 2)
         or internal_fields >= max(3, total_fields // 2)
     )
 
 
-def _render_menu_section(lines: list[str], menus: list[dict], fallback_rows: list[list[Any]] | None = None) -> None:
+def _render_menu_section(lines: list[str], menus: list[dict]) -> None:
     lines.append("### 1.1 菜单清单")
     lines.append("")
     rows: list[list[Any]] = []
@@ -916,282 +915,7 @@ def _render_menu_section(lines: list[str], menus: list[dict], fallback_rows: lis
             menu.get("path") or menu.get("menu_name") or "",
             f"menu_id={menu.get('menu_id') or ''}；parent_id={menu.get('parent_id') or ''}；depth={menu.get('depth') or 0}。",
         ])
-    if fallback_rows and len(fallback_rows) > len(rows):
-        rows = fallback_rows
     _table(lines, ["菜单编码", "菜单名称", "菜单类型", "关联表单/模型", "菜单路径", "说明"], rows)
-
-
-def _render_business_enriched_design_doc(app: dict, menus: list[dict], forms: list[dict]) -> str:
-    app_name = str(app.get("app_name") or "HR人力成本管理")
-    app_code = str(app.get("app_code") or "hr-cost-mgmt")
-    app_id = str(app.get("apaas_app_id") or "")
-
-    roles = [
-        ["hr_admin", "HR管理员"],
-        ["finance_manager", "财务经理"],
-        ["dept_manager", "部门经理"],
-        ["employee", "员工"],
-    ]
-    dicts = [
-        ("employment_status", "在职状态", [("active", "在职"), ("probation", "试用"), ("leave", "离职")]),
-        ("cost_type", "成本类型", [("regular", "正常工时"), ("overtime", "加班"), ("project", "项目投入"), ("absence", "缺勤")]),
-        ("department_status", "部门状态", [("enabled", "启用"), ("disabled", "停用")]),
-        ("project_status", "项目状态", [("planning", "规划中"), ("running", "进行中"), ("paused", "暂停"), ("closed", "已结项")]),
-        ("timesheet_status", "工时状态", [("draft", "草稿"), ("submitted", "已提交"), ("approved", "已审批"), ("rejected", "已驳回")]),
-        ("payroll_status", "薪酬状态", [("draft", "草稿"), ("confirmed", "已确认"), ("locked", "已锁定")]),
-        ("allocation_status", "分摊状态", [("draft", "草稿"), ("calculated", "已计算"), ("confirmed", "已确认"), ("posted", "已入账")]),
-    ]
-    model_specs = _hr_cost_model_specs()
-    form_specs = [
-        ("employee_profile", "员工档案", "employee_profile", "维护员工基础信息、组织归属、成本中心和薪酬成本口径。"),
-        ("department_cost_center", "部门成本中心", "department_cost_center", "维护部门、成本中心、预算负责人和月度预算口径。"),
-        ("project_management", "项目管理", "project_management", "维护项目基础信息、预算、成本中心和项目状态。"),
-        ("timesheet_record", "工时记录", "timesheet_record", "登记员工按日期、项目、成本类型归集的工时数据。"),
-        ("payroll_cost", "薪酬成本", "payroll_cost", "按月份汇总员工薪酬、社保、公积金、奖金和扣款。"),
-        ("cost_allocation", "成本分摊", "cost_allocation", "将薪酬与工时成本按项目、部门、成本中心进行分摊。"),
-    ]
-    menu_specs = [
-        ["hr_cost_dashboard", "人力成本看板", "CUSTOM", "", "HR人力成本管理/人力成本看板", "总览人力成本、预算占用、项目成本趋势。"],
-        ["employee_profile", "员工档案", "MENU", "employee_profile", "HR人力成本管理/员工档案", "进入员工档案表单。"],
-        ["department_cost_center", "部门成本中心", "MENU", "department_cost_center", "HR人力成本管理/部门成本中心", "进入部门成本中心表单。"],
-        ["project_management", "项目管理", "MENU", "project_management", "HR人力成本管理/项目管理", "进入项目管理表单。"],
-        ["timesheet_record", "工时记录", "MENU", "timesheet_record", "HR人力成本管理/工时记录", "进入工时记录表单。"],
-        ["payroll_cost", "薪酬成本", "MENU", "payroll_cost", "HR人力成本管理/薪酬成本", "进入薪酬成本表单。"],
-        ["cost_allocation", "成本分摊", "MENU", "cost_allocation", "HR人力成本管理/成本分摊", "进入成本分摊表单。"],
-    ]
-
-    lines: list[str] = []
-    add = lines.append
-    add("## 一、应用信息")
-    add("")
-    _table(lines, ["项目", "内容"], [
-        ["应用名称", app_name],
-        ["应用编码", app_code],
-        [
-            "说明",
-            (
-                "用于 HR 人力成本管理，覆盖员工档案、项目管理、工时记录、成本归集和权限控制。"
-                f"本稿基于现有 aPaaS 应用反向导出并做业务语义补全；原应用ID={app_id}，"
-                f"检测到平台字段多为内部编码/通用标签，因此保留业务化字段供 Builder 重新生成。"
-            ),
-        ],
-    ])
-    _render_menu_section(lines, menus, menu_specs)
-
-    add("## 二、角色列表")
-    add("")
-    _table(lines, ["角色编码", "角色名称"], roles)
-
-    add("## 三、数据字典")
-    add("")
-    for idx, (code, name, options) in enumerate(dicts, start=1):
-        add(f"### 3.{idx} {name}")
-        add("")
-        _table(lines, ["字典编码", "字典名称"], [[code, name]])
-        _table(lines, ["选项编码", "选项名称"], options)
-
-    add("## 四、数据模型")
-    add("")
-    add("### 4.1 模型定义")
-    add("")
-    _table(lines, ["模型编码", "模型名称"], [[code, spec["name"]] for code, spec in model_specs.items()])
-
-    add("### 4.2 模型字段（全部模型字段平铺到一张大表）")
-    add("")
-    model_field_rows = []
-    for model_code, spec in model_specs.items():
-        for field in spec["fields"]:
-            model_field_rows.append([
-                model_code,
-                field["code"],
-                field["name"],
-                field["db_type"],
-                field["length"],
-            ])
-    _table(lines, ["模型编码", "字段编码", "字段名称", "数据库字段类型", "长度/精度"], model_field_rows)
-
-    add("## 五、表单定义")
-    add("")
-    add("### 5.1 表单清单")
-    add("")
-    _table(lines, ["表单编码", "表单名称", "绑定主表模型", "说明"], form_specs)
-
-    add("### 5.2 主表字段定义")
-    add("")
-    form_field_rows = []
-    for _form_code, form_name, model_code, _desc in form_specs:
-        for field in model_specs[model_code]["fields"]:
-            form_field_rows.append([
-                form_name,
-                field["code"],
-                field["name"],
-                field["component"],
-                "是" if field.get("required") else "否",
-                "否",
-                "否",
-                "是" if field.get("list") else "否",
-                "是" if field.get("query") else "否",
-                field.get("dict") or "",
-                field.get("target_model") or "",
-                field.get("target_field") or "",
-                "",
-                field.get("desc") or "",
-            ])
-    _table(lines, [
-        "表单名称", "字段编码", "字段名称", "组件类型", "必填", "隐藏", "只读", "列表展示", "查询条件",
-        "字典编码", "目标模型编码", "目标字段编码", "本表关联字段编码", "说明",
-    ], form_field_rows)
-
-    add("### 5.3 子表区域定义（无子表可省略本小节）")
-    add("")
-    _table(lines, ["表单名称", "子表区域名称", "绑定模型", "说明"], [])
-
-    add("### 5.4 子表字段定义（无子表可省略本小节）")
-    add("")
-    _table(lines, [
-        "表单名称", "子表区域名称", "字段编码", "字段名称", "组件类型", "必填", "隐藏", "只读",
-        "列表展示", "查询条件", "字典编码", "目标模型编码", "目标字段编码", "本表关联字段编码", "说明",
-    ], [])
-
-    add("## 六、权限定义")
-    add("")
-    perm_rows = []
-    for _form_code, form_name, _model_code, _desc in form_specs:
-        perm_rows.extend([
-            [form_name, "hr_admin", "是", "是", "是", "是", "是", "是", "是", "全部数据"],
-            [form_name, "finance_manager", "否", "否", "否", "是", "否", "否", "是", "全部数据"],
-            [form_name, "dept_manager", "否", "是", "否", "是", "是", "否", "否", "本部门及下属部门"],
-            [form_name, "employee", "是", "是", "否", "是", "是", "否", "否", "本人数据"],
-        ])
-    _table(lines, ["表单名称", "角色编码", "可暂存", "可新增", "可导入", "可查看", "可编辑", "可删除", "可导出", "数据范围"], perm_rows)
-
-    return "\n".join(lines).rstrip() + "\n"
-
-
-def _hr_cost_model_specs() -> dict[str, dict[str, Any]]:
-    return {
-        "employee_profile": {
-            "name": "员工档案",
-            "fields": [
-                _field("employee_no", "员工编号", "varchar", "64", "单行输入", True, True, True),
-                _field("employee_name", "员工姓名", "varchar", "128", "单行输入", True, True, True),
-                _field("department_code", "所属部门", "varchar", "64", "数据单选", True, True, True, target_model="department_cost_center", target_field="department_name"),
-                _field("position_name", "岗位名称", "varchar", "128", "单行输入", False, True, False),
-                _field("employment_status", "在职状态", "varchar", "32", "下拉单选", True, True, True, "employment_status"),
-                _field("cost_center", "成本中心", "varchar", "128", "单行输入", True, True, True),
-                _field("base_salary", "基本工资", "decimal", "18,2", "金额", False, False, False),
-                _field("social_security_amount", "社保金额", "decimal", "18,2", "金额", False, False, False),
-                _field("housing_fund_amount", "公积金金额", "decimal", "18,2", "金额", False, False, False),
-                _field("onboard_date", "入职日期", "date", "", "日期时间", False, True, False),
-                _field("leave_date", "离职日期", "date", "", "日期时间", False, False, False),
-                _field("employee_remark", "员工备注", "text", "", "多行输入", False, False, False),
-            ],
-        },
-        "department_cost_center": {
-            "name": "部门成本中心",
-            "fields": [
-                _field("department_code", "部门编码", "varchar", "64", "单行输入", True, True, True),
-                _field("department_name", "部门名称", "varchar", "128", "单行输入", True, True, True),
-                _field("parent_department_code", "上级部门", "varchar", "64", "数据单选", False, True, False, target_model="department_cost_center", target_field="department_name"),
-                _field("cost_center", "成本中心", "varchar", "128", "单行输入", True, True, True),
-                _field("budget_owner", "预算负责人", "varchar", "64", "人员选择", False, True, False),
-                _field("monthly_budget", "月度预算", "decimal", "18,2", "金额", False, True, False),
-                _field("department_status", "部门状态", "varchar", "32", "下拉单选", True, True, True, "department_status"),
-                _field("department_remark", "部门备注", "text", "", "多行输入", False, False, False),
-            ],
-        },
-        "project_management": {
-            "name": "项目管理",
-            "fields": [
-                _field("project_code", "项目编码", "varchar", "64", "单行输入", True, True, True),
-                _field("project_name", "项目名称", "varchar", "128", "单行输入", True, True, True),
-                _field("project_manager", "项目负责人", "varchar", "64", "人员选择", True, True, False),
-                _field("cost_center", "成本中心", "varchar", "128", "数据单选", True, True, True, target_model="department_cost_center", target_field="cost_center"),
-                _field("start_date", "开始日期", "date", "", "日期时间", False, True, False),
-                _field("end_date", "结束日期", "date", "", "日期时间", False, True, False),
-                _field("project_status", "项目状态", "varchar", "32", "下拉单选", True, True, True, "project_status"),
-                _field("budget_amount", "预算金额", "decimal", "18,2", "金额", False, True, False),
-                _field("accumulated_cost", "累计人力成本", "decimal", "18,2", "金额", False, True, True),
-                _field("project_remark", "项目备注", "text", "", "多行输入", False, False, False),
-            ],
-        },
-        "timesheet_record": {
-            "name": "工时记录",
-            "fields": [
-                _field("timesheet_no", "工时单号", "varchar", "64", "单据号", True, True, True),
-                _field("employee_no", "员工编号", "varchar", "64", "数据单选", True, True, True, target_model="employee_profile", target_field="employee_name"),
-                _field("project_code", "项目编码", "varchar", "64", "数据单选", True, True, True, target_model="project_management", target_field="project_name"),
-                _field("work_date", "工作日期", "date", "", "日期时间", True, True, True),
-                _field("work_hours", "正常工时", "decimal", "10,2", "数字", True, True, False),
-                _field("overtime_hours", "加班工时", "decimal", "10,2", "数字", False, True, False),
-                _field("cost_type", "成本类型", "varchar", "32", "下拉单选", True, True, True, "cost_type"),
-                _field("timesheet_status", "工时状态", "varchar", "32", "下拉单选", True, True, True, "timesheet_status"),
-                _field("approved_by", "审批人", "varchar", "64", "人员选择", False, False, False),
-                _field("approved_time", "审批时间", "datetime", "", "日期时间", False, False, False),
-                _field("timesheet_remark", "工时备注", "text", "", "多行输入", False, False, False),
-            ],
-        },
-        "payroll_cost": {
-            "name": "薪酬成本",
-            "fields": [
-                _field("payroll_month", "薪酬月份", "varchar", "16", "月份", True, True, True),
-                _field("employee_no", "员工编号", "varchar", "64", "数据单选", True, True, True, target_model="employee_profile", target_field="employee_name"),
-                _field("cost_center", "成本中心", "varchar", "128", "单行输入", True, True, True),
-                _field("base_salary", "基本工资", "decimal", "18,2", "金额", True, True, False),
-                _field("bonus_amount", "奖金金额", "decimal", "18,2", "金额", False, True, False),
-                _field("social_security_amount", "社保金额", "decimal", "18,2", "金额", False, True, False),
-                _field("housing_fund_amount", "公积金金额", "decimal", "18,2", "金额", False, True, False),
-                _field("deduction_amount", "扣款金额", "decimal", "18,2", "金额", False, True, False),
-                _field("total_cost", "总人力成本", "decimal", "18,2", "金额", True, True, True),
-                _field("payroll_status", "薪酬状态", "varchar", "32", "下拉单选", True, True, True, "payroll_status"),
-                _field("payroll_remark", "薪酬备注", "text", "", "多行输入", False, False, False),
-            ],
-        },
-        "cost_allocation": {
-            "name": "成本分摊",
-            "fields": [
-                _field("allocation_no", "分摊单号", "varchar", "64", "单据号", True, True, True),
-                _field("payroll_month", "薪酬月份", "varchar", "16", "月份", True, True, True),
-                _field("employee_no", "员工编号", "varchar", "64", "数据单选", True, True, True, target_model="employee_profile", target_field="employee_name"),
-                _field("project_code", "项目编码", "varchar", "64", "数据单选", True, True, True, target_model="project_management", target_field="project_name"),
-                _field("cost_center", "成本中心", "varchar", "128", "数据单选", True, True, True, target_model="department_cost_center", target_field="cost_center"),
-                _field("allocation_ratio", "分摊比例", "decimal", "8,4", "数字", True, True, False),
-                _field("allocated_amount", "分摊金额", "decimal", "18,2", "金额", True, True, True),
-                _field("allocation_status", "分摊状态", "varchar", "32", "下拉单选", True, True, True, "allocation_status"),
-                _field("allocation_remark", "分摊备注", "text", "", "多行输入", False, False, False),
-            ],
-        },
-    }
-
-
-def _field(
-    code: str,
-    name: str,
-    db_type: str,
-    length: str,
-    component: str,
-    required: bool,
-    list_display: bool,
-    query: bool,
-    dict_code: str = "",
-    target_model: str = "",
-    target_field: str = "",
-    desc: str = "",
-) -> dict[str, Any]:
-    return {
-        "code": code,
-        "name": name,
-        "db_type": db_type,
-        "length": length,
-        "component": component,
-        "required": required,
-        "list": list_display,
-        "query": query,
-        "dict": dict_code,
-        "target_model": target_model,
-        "target_field": target_field,
-        "desc": desc,
-    }
 
 
 def _table(lines: list[str], headers: list[str], rows: list[list[Any]]) -> None:
@@ -1420,7 +1144,6 @@ def _design_doc_stats(markdown: str) -> dict[str, Any]:
         "dicts": len(re.findall(r"^###\s+3\.", markdown, flags=re.MULTILINE)),
         "models": count_table_rows(models_body),
         "forms": count_table_rows(forms_body),
-        "business_enriched": "业务语义补全" in markdown,
     }
 
 
