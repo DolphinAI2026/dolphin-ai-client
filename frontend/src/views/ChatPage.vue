@@ -257,6 +257,11 @@
                 :form-id="selectedApaasMenuFormId"
                 :menu-name="selectedApaasMenuName"
               />
+              <AppDevWorkspacePanel
+                v-else-if="designerSub === 'dev'"
+                :key="`dev-${existingAppId}-${designerRefreshKey}`"
+                :app-id="existingAppId"
+              />
               <!-- 2026-05-29: 删「页面设置」sub-tab — 纯占位(⚙️ placeholder "P1 接入"),
                    点了无功能。改设置走配置助手对话。同步从 DESIGNER_SUBS 移除该 tab。 -->
             </div>
@@ -859,6 +864,7 @@ import RoleManagePanel from '@/components/v3/RoleManagePanel.vue'
 import LogsPanel from '@/components/v3/LogsPanel.vue'
 import AppDatasourcePanel from '@/components/v3/AppDatasourcePanel.vue'
 import CustomPagePreviewPanel from '@/components/v3/CustomPagePreviewPanel.vue'
+import AppDevWorkspacePanel from '@/components/v3/AppDevWorkspacePanel.vue'
 // U3 (2026-05-27): SPEC 设计层 panel — 跟"功能" tab 平行的 SPEC 编辑层 (MVP read-only).
 // SPEC tab 休眠中(SPEC_TAB_ENABLED=false)，异步冷藏使其退出主 bundle；恢复时打开 flag 即可。
 // SpecChatPanel/SpecApplyModal 仅被 SpecDesignPanel 引用，会自动跟进同一异步 chunk。
@@ -2354,9 +2360,10 @@ const DESIGNER_SUBS = [
   // { code: 'event', label: '业务事件' },
   { code: 'data', label: '数据模型' },
   { code: 'perm', label: '权限' },
+  { code: 'dev', label: '自开发' },
   // 2026-05-29: 删「页面设置」(page) — 纯占位无功能, 改设置走配置助手对话。
 ] as const
-const designerSub = ref<'form' | 'list' | 'process' | 'event' | 'data' | 'perm'>('form')
+const designerSub = ref<'form' | 'list' | 'process' | 'event' | 'data' | 'perm' | 'dev'>('form')
 
 // P1-N6: 这些 sub-tab 走 native master-detail panel — 不需要再显 SectionContentList.
 const isNativeMasterDetailSubTab = computed(() => {

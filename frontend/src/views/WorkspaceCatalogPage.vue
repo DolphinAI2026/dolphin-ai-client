@@ -988,7 +988,7 @@ onMounted(async () => {
   border: 1px solid var(--line);
   border-radius: var(--r-2, 6px);
   background: var(--surface);
-  color: var(--text-2);
+  color: var(--text);
   display: inline-flex;
   align-items: center;
   justify-content: center;
@@ -998,12 +998,18 @@ onMounted(async () => {
   font-family: inherit;
   font-size: 12px;
   line-height: 1;
-  font-weight: var(--fw-medium, 500);
+  font-weight: var(--fw-semibold, 600);
   cursor: pointer;
   white-space: nowrap;
   transition: background 0.14s var(--ease, cubic-bezier(0.2, 0.8, 0.2, 1)),
               border-color 0.14s var(--ease, cubic-bezier(0.2, 0.8, 0.2, 1)),
               color 0.14s var(--ease, cubic-bezier(0.2, 0.8, 0.2, 1));
+}
+.catalog-mini-action:not(.primary) {
+  border-color: color-mix(in srgb, var(--brand) 34%, var(--line));
+}
+.catalog-mini-action:not(.primary) :deep(svg) {
+  color: var(--brand);
 }
 
 .catalog-mini-action:hover {
