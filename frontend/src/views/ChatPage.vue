@@ -808,7 +808,7 @@
 
 <script setup lang="ts">
 import { API_PREFIX } from '@/utils/request'
-import { ref, reactive, computed, nextTick, onMounted, onBeforeUnmount, watch } from 'vue'
+import { ref, reactive, computed, nextTick, onMounted, onBeforeUnmount, watch, defineAsyncComponent } from 'vue'
 import { useRouter, useRoute } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { usePreviewStore } from '@/stores/preview'
@@ -860,7 +860,9 @@ import LogsPanel from '@/components/v3/LogsPanel.vue'
 import AppDatasourcePanel from '@/components/v3/AppDatasourcePanel.vue'
 import CustomPagePreviewPanel from '@/components/v3/CustomPagePreviewPanel.vue'
 // U3 (2026-05-27): SPEC 设计层 panel — 跟"功能" tab 平行的 SPEC 编辑层 (MVP read-only).
-import SpecDesignPanel from '@/components/v3/SpecDesignPanel.vue'
+// SPEC tab 休眠中(SPEC_TAB_ENABLED=false)，异步冷藏使其退出主 bundle；恢复时打开 flag 即可。
+// SpecChatPanel/SpecApplyModal 仅被 SpecDesignPanel 引用，会自动跟进同一异步 chunk。
+const SpecDesignPanel = defineAsyncComponent(() => import('@/components/v3/SpecDesignPanel.vue'))
 import type { ConversationCreate, Message } from '@/types'
 import TopBar from '@/components/TopBar.vue'
 import WorkbenchShell from '@/components/WorkbenchShell.vue'

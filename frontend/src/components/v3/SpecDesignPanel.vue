@@ -1,5 +1,9 @@
 <!-- SpecDesignPanel.vue — design-v4 U3: SPEC 设计层 (跟"功能" tab 平行).
 
+  ⏸ 休眠中: SPEC tab 当前隐藏 (ChatPage SPEC_TAB_ENABLED=false), 用户不可达。
+  ChatPage 已把本组件改为 defineAsyncComponent 异步冷藏, 退出主 bundle (独立 chunk)。
+  恢复入口: 打开 SPEC_TAB_ENABLED 即可, 本体勿删 (low-code 核心线)。
+
   设计 tab = 改 SPEC 文档 (长链: 改 1 处 → AI 把 SPEC 翻译成 apaas 配置改多处).
   跟"功能" tab (直接 iframe apaas 原生, 短链: 改 1 处 = 1 处) 平行.
 
