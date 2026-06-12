@@ -24,14 +24,12 @@ from app.routes import (
     auth,
     browser,
     chat,
-    config_chat_sessions,
     coding,
     conversations,
     current_app,
     db_connections,
     generation_steps,
     git_connection,
-    git_webhook,
     harness,
     help_assistant,
     incremental_update,
@@ -41,7 +39,6 @@ from app.routes import (
     platform_envs,
     preferences,
     projects,
-    proposals,
     requirements,
     runtime_proxy,
     spec,
@@ -150,7 +147,6 @@ app.include_router(chat.router, prefix="/api")
 app.include_router(ai_chat.router, prefix="/api")
 app.include_router(agent_observability.router, prefix="/api")
 app.include_router(applications.router, prefix="/api")
-app.include_router(config_chat_sessions.router, prefix="/api")  # 配置助手会话持久化 (2026-05-24)
 app.include_router(apaas.router, prefix="/api")
 app.include_router(generation_steps.router, prefix="/api")
 app.include_router(coding.router, prefix="/api")
@@ -164,11 +160,8 @@ app.include_router(harness.router, prefix="/api")
 app.include_router(spec.router, prefix="/api")
 app.include_router(sse.router, prefix="/api")
 app.include_router(application_members.router, prefix="/api")
-app.include_router(proposals.app_router, prefix="/api")
-app.include_router(proposals.prop_router, prefix="/api")
 app.include_router(git_connection.router, prefix="/api")
 app.include_router(git_connection.app_router, prefix="/api")
-app.include_router(git_webhook.router, prefix="/api")
 app.include_router(preferences.router, prefix="/api")
 app.include_router(work_state.router, prefix="/api")
 app.include_router(help_assistant.router, prefix="/api")
@@ -343,9 +336,6 @@ app.mount(
     _McpBearerAuthAsgiMiddleware(_support_triage_mcp.streamable_http_app(), service="support-triage"),
     name="support-triage-mcp",
 )
-# 2026-05-19 Chrome extension WebSocket bridge — image #50 follow-up POC
-from app.routes import browser_ext_ws  # noqa: E402
-app.include_router(browser_ext_ws.router)
 app.include_router(agent_prompts.router, prefix="/api")
 # SSE 防缓冲 middleware：text/event-stream 响应自动注入 X-Accel-Buffering: no
 #

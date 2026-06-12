@@ -49,6 +49,13 @@ NUDGE_MESSAGE = (
     "Use multiple parallel write_file calls."
 )
 
+ITERATION_NUDGE_MESSAGE = (
+    "You have been reading files in an existing workspace. This is an iteration, not first generation. "
+    "Use edit_file to patch only the necessary snippets from the current files. "
+    "不要 write_file 整份重写已有文件；只修改必要片段。 "
+    "Use write_file only for brand-new files or when the user explicitly requested a full rewrite."
+)
+
 
 def _truncate(s: str, maxlen: int = 300) -> str:
     if not s or len(s) <= maxlen:
@@ -174,6 +181,9 @@ class CodingAgent(BaseAgent[dict]):
     def get_max_turns(self) -> int:
         return int(self.ctx.input.get("max_turns", 30))
 
+    def _is_iteration_mode(self) -> bool:
+        return bool((self.ctx.input or {}).get("is_iteration"))
+
     def build_initial_user_message(self) -> str:
         """构造首条 user message。
 
@@ -224,6 +234,7 @@ class CodingAgent(BaseAgent[dict]):
             fix_hint=fix_hint,
             round_index=round_index,
             app_context=app_context,
+            is_iteration=self._is_iteration_mode(),
         )
 
     def should_terminate(self) -> tuple[bool, str]:
@@ -270,7 +281,10 @@ class CodingAgent(BaseAgent[dict]):
     async def on_each_turn(self, turn: int) -> None:
         """每轮循环检测：连续 N 轮只读不写 → 注入 nudge 消息。"""
         if self._consecutive_reads >= NUDGE_CONSECUTIVE_READS_THRESHOLD:
-            nudge_msg = {"role": "user", "content": NUDGE_MESSAGE}
+            nudge_msg = {
+                "role": "user",
+                "content": ITERATION_NUDGE_MESSAGE if self._is_iteration_mode() else NUDGE_MESSAGE,
+            }
             self._messages.append(nudge_msg)
             self._consecutive_reads = 0
             await self._trace(TraceEventType.NUDGE, {
@@ -441,6 +455,8 @@ class CodingAgent(BaseAgent[dict]):
         full_content: str = ""
         reasoning_content: str = ""
         finish_reason: str | None = None
+        # usage chunk（include_usage 开启后，网关在 [DONE] 前回的那条 choices 为空、带 usage 的 chunk）
+        usage_data: dict | None = None
         # 按 OpenAI 流式 tool_calls 格式累积：index → {id, name, arguments}
         tool_calls_map: dict[int, dict[str, str]] = {}
 
@@ -454,6 +470,11 @@ class CodingAgent(BaseAgent[dict]):
                     chunk = json.loads(chunk_raw) if isinstance(chunk_raw, str) else chunk_raw
                 except Exception:
                     continue
+
+                # usage chunk：choices 为空、带 usage（include_usage 开启后 [DONE] 前到达）。
+                # 必须在 `if not choices: continue` 之前捕获，否则会被空 choices 短路掉。
+                if chunk.get("usage"):
+                    usage_data = chunk["usage"]
 
                 choices = chunk.get("choices") or []
                 if not choices:
@@ -516,15 +537,24 @@ class CodingAgent(BaseAgent[dict]):
                 arguments_json=args_json,
             ))
 
+        # 从 usage chunk 抠 token（网关透传 OpenAI 风格 prompt/completion_tokens）
+        usage_data = usage_data or {}
+        tokens_input = int(usage_data.get("prompt_tokens") or 0)
+        tokens_output = int(usage_data.get("completion_tokens") or 0)
+
         response = LLMResponse(
             content=full_content,
             tool_calls=assembled_tool_calls,
             finish_reason=finish_reason,
-            # 流式没有 usage 字段，留 0（未来可从 chunk 里抠或再补一次 count）
-            tokens_input=0,
-            tokens_output=0,
-            raw={"streamed": True},
+            tokens_input=tokens_input,
+            tokens_output=tokens_output,
+            raw={"streamed": True, "usage": usage_data or None},
         )
+
+        # 与 BaseAgent 非流式 _call_llm 一致：在调用点内累计本 agent 的总 token
+        # （loop 的 _call_llm_with_retry 调用点不另行累计，故此处累计不会重复计数）
+        self._tokens_input += tokens_input
+        self._tokens_output += tokens_output
 
         await self._trace(TraceEventType.LLM_RESPONSE, {
             "content_preview": full_content[:200],
@@ -534,7 +564,7 @@ class CodingAgent(BaseAgent[dict]):
                 for tc in assembled_tool_calls
             ],
             "finish_reason": finish_reason,
-        }, duration_ms=duration_ms)
+        }, tokens_input=tokens_input, tokens_output=tokens_output, duration_ms=duration_ms)
 
         # 流式结束后，发一条 aggregated thinking 事件（会落 DB）
         # 用途：

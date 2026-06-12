@@ -463,9 +463,9 @@ watch(() => props.modelValue, () => nextTick(resize))
 }
 
 .ucc-send.is-stop {
-  background: #fff1f2;
-  color: #b4232a;
-  border: 1px solid #ffe1e5;
+  background: var(--err-soft);
+  color: var(--err);
+  border: 1px solid var(--err-soft);
 }
 
 .ucc-stop-icon {

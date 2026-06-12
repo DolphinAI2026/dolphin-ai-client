@@ -157,7 +157,7 @@ Controller `@RequestMapping` 只写 `/custom/{pkg}/xxx`，平台前缀自加。
 在 vibe / coding agent prompt 里加：
 
 ```
-做 aPaaS 后端自开发（papaas 4.1.1-rc 模版包）时，按 docs/skills/apaas-backend-dev.md：
+做 aPaaS 后端自开发（papaas 4.1.1-rc 模版包）时，按本文：
 1. 先 init_apaas_backend_workspace 拿标准骨架（绕过 5 大死亡坑）
 2. 改代码时严格遵守 16 坑速查（启动类必须 src/test、INSERT 必须 POJO、Entity
    必须继承 BasePojo + initInsertIdentity、setOriginVar 不是 setVar、子表关联用

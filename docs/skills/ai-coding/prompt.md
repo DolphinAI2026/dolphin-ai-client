@@ -82,7 +82,7 @@
 
 ### 5.1 后端开发的 16 坑必须绕
 
-所有写 Java 代码的会话必须遵守（详见 `apaas-backend-dev.md` skill）：
+所有写 Java 代码的会话必须遵守（详见 `docs/skills/ai-coding/backend-dev.md`）：
 
 **死亡坑（lint fatal）**：
 - 启动类必须放 `src/test/java`，不在 `src/main/java`（否则 aPaaS 发布卡死「上线中」无报错）

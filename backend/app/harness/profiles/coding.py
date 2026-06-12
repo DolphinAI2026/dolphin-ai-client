@@ -84,6 +84,7 @@ class CodingProfile(HarnessProfile):
             selected_model=meta.get("selected_model"),
             project_id=meta.get("project_id"),
             app_id=meta.get("app_id"),
+            attachments=meta.get("attachments") or [],
             code_server_base_url=meta.get("code_server_base_url", ""),
             api_base_builder=meta.get("api_base_builder"),
             ide_token=meta.get("ide_token"),

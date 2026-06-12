@@ -20,7 +20,6 @@ from pydantic import BaseModel, Field
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.apaas_client import APaaSClient
 from app.crypto import decrypt_password
 from app.database import get_db
 from app.deps import AuthContext, get_auth_context
@@ -29,7 +28,6 @@ from app.models import Application, PlatformEnv
 from app.permissions import Action, check_resource_permission
 from app.platform_conflict_checker import (
     apply_model_code_rename,
-    collect_tenant_model_codes,
     find_model_conflicts,
 )
 
@@ -123,10 +121,23 @@ async def preflight_conflicts(
         logger.warning(f"preflight: 解析 config_preview 失败：{e}")
         return PreflightConflictsResponse(has_conflicts=False, skipped="bad_config")
 
-    # 扫租户
-    client = APaaSClient(base_url=env.base_url, tenant_id=env.platform_tenant_id)
-    client.token = env.token
-    existing_codes = await collect_tenant_model_codes(client)
+    # 扫租户 — 走共享 call_apaas_with_relogin: token 过期(401)自动重登重试一次。
+    # 注意 collect_tenant_model_codes 内部 try/except 把 401 静默吞掉返空集，
+    # 自愈包必须套在 query_all_model_codes 这一层(让 401 抛出来才能触发重登),
+    # 再复用同样的解析 + 静默退化语义。
+    from app.apaas_session import call_apaas_with_relogin
+    try:
+        rows = await call_apaas_with_relogin(
+            env.id, db, lambda c: c.query_all_model_codes()
+        )
+        existing_codes = {
+            str(r.get("code") or "").strip()
+            for r in (rows or []) if isinstance(r, dict)
+        }
+        existing_codes.discard("")
+    except Exception as e:  # noqa: BLE001
+        logger.warning(f"preflight: 扫描租户模型 code 失败(自愈后仍失败)，预检跳过：{e}")
+        existing_codes = set()
     if not existing_codes:
         # 查询失败或真的空——查询失败 collect_* 已记 warning
         return PreflightConflictsResponse(

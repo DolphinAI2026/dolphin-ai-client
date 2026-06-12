@@ -17,7 +17,10 @@
           <button :class="['tab-item', { active: activeTab === 'llm' }]" @click="setActiveTab('llm')">模型配置</button>
         </div>
         <div class="tabs-summary">
-          {{ tabSummary }}
+          <button class="prompts-link" @click="router.push('/admin/agent-prompts')" title="编辑各 Agent 的系统提示词，改完不发版即生效">
+            Agent 提示词 →
+          </button>
+          <span>{{ tabSummary }}</span>
         </div>
       </div>
 
@@ -877,9 +880,28 @@ watch(
 }
 
 .tabs-summary {
+  display: inline-flex;
+  align-items: center;
+  gap: 14px;
   color: var(--text-3);
   font-size: 12px;
   font-family: var(--font-mono);
+}
+.prompts-link {
+  background: transparent;
+  border: 1px solid var(--line);
+  border-radius: var(--r-full, 999px);
+  padding: 4px 12px;
+  font-size: 12px;
+  font-family: inherit;
+  color: var(--text-2);
+  cursor: pointer;
+  transition: border-color 0.14s var(--ease), background 0.14s var(--ease), color 0.14s var(--ease);
+}
+.prompts-link:hover {
+  border-color: var(--brand-ring);
+  background: var(--brand-soft);
+  color: var(--brand);
 }
 
 .tab-item {

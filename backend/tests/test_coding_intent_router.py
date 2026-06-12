@@ -22,6 +22,7 @@
 from __future__ import annotations
 
 import json
+from datetime import datetime
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -146,6 +147,12 @@ def _make_mock_db(env: _FakePlatformEnv | None = _FakePlatformEnv()):
     return db
 
 
+def _scalar_result(value):
+    result = MagicMock()
+    result.scalar_one_or_none.return_value = value
+    return result
+
+
 def _make_llm_resp(content: str = "", tool_calls: list | None = None) -> dict:
     msg: dict = {"content": content}
     if tool_calls:
@@ -250,23 +257,13 @@ class TestRunReadQuery:
     @pytest.mark.asyncio
     async def test_does_not_call_create_workspace(self):
         """READ 路径不调 _create_workspace_now 或任何 workspace 创建逻辑"""
-        llm_resp = _make_llm_resp(content="查询完成")
-
         # WorkspaceManager.create_workspace 是非 closure 的，可以 patch
         with patch("app.agents.coding.llm_config.load_coding_llm_config",
                    new=AsyncMock(return_value=("http://api", "key", "model"))), \
-             patch("httpx.AsyncClient") as mock_cls, \
+             patch("app.coding.read_query._stream_llm",
+                   new=_fake_stream_llm([{"content": "查询完成"}])), \
              patch("app.coding.workspace.WorkspaceManager.create_workspace",
                    side_effect=AssertionError("不应调 create_workspace")) as mock_ws:
-            mock_ctx = AsyncMock()
-            mock_ctx.__aenter__ = AsyncMock(return_value=mock_ctx)
-            mock_ctx.__aexit__ = AsyncMock(return_value=False)
-            mock_resp_obj = MagicMock()
-            mock_resp_obj.json.return_value = llm_resp
-            mock_resp_obj.raise_for_status = MagicMock()
-            mock_ctx.post = AsyncMock(return_value=mock_resp_obj)
-            mock_cls.return_value = mock_ctx
-
             db = _make_mock_db()
             events = []
             async for ev in run_read_query(_FakeParams(), db):
@@ -274,6 +271,150 @@ class TestRunReadQuery:
 
             # run_read_query 正常完成说明 create_workspace 没被调
             mock_ws.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_workspace_read_exposes_app_status_and_search_tools(self, tmp_path):
+        """有工作区时，READ 路径仍应暴露应用状态工具和 search_tools。"""
+        (tmp_path / ".workspace.json").write_text(
+            json.dumps({"id": "1_ws", "project_id": 5}, ensure_ascii=False),
+            encoding="utf-8",
+        )
+
+        class _WorkspaceParams(_FakeParams):
+            workspace_id = "1_ws"
+            conversation_id = None
+            app_id = None
+            message = "应用重新发布了吗？"
+
+        payloads: list[dict] = []
+
+        async def _capture_payload(base_url, api_key, payload, sink):
+            payloads.append(payload)
+            sink.setdefault("content", "")
+            sink.setdefault("tool_calls", [])
+            sink["content"] += "先查应用状态。"
+            yield "先查应用状态。"
+
+        with patch("app.agents.coding.llm_config.load_coding_llm_config",
+                   new=AsyncMock(return_value=("http://api", "key", "model"))), \
+             patch("app.coding.workspace.WorkspaceManager.get_workspace_path",
+                   return_value=tmp_path), \
+             patch("app.coding.read_query._stream_llm", new=_capture_payload):
+            db = _make_mock_db()
+            events = []
+            async for ev in run_read_query(_WorkspaceParams(), db):
+                events.append(ev)
+
+        assert payloads, "应发起 LLM 调用"
+        tool_names = {
+            tool.get("function", {}).get("name")
+            for tool in payloads[0].get("tools", [])
+        }
+        assert "get_current_workspace_app_status" in tool_names
+        assert "search_tools" in tool_names
+
+    @pytest.mark.asyncio
+    async def test_search_tools_only_returns_readonly_tools(self):
+        """READ 路径 search_tools 只能发现只读工具，不能激活 republish 等写工具。"""
+        tool_call = {
+            "id": "tc_search",
+            "function": {
+                "name": "search_tools",
+                "arguments": json.dumps({"query": "发布 重新发布"}, ensure_ascii=False),
+            },
+        }
+        with patch("app.agents.coding.llm_config.load_coding_llm_config",
+                   new=AsyncMock(return_value=("http://api", "key", "model"))), \
+             patch("app.coding.read_query._stream_llm",
+                   new=_fake_stream_llm([
+                       {"tool_calls": [tool_call]},
+                       {"content": "可以先看当前应用发布状态。"},
+                   ])):
+            db = _make_mock_db()
+            events = []
+            async for ev in run_read_query(_FakeParams(), db):
+                events.append(ev)
+
+        search_done = next(
+            e for e in events
+            if e.get("type") == "tool"
+            and e.get("name") == "search_tools"
+            and e.get("status") == "done"
+        )
+        result = json.loads(search_done["result"])
+        assert "get_current_workspace_app_status" in result["activated"]
+        assert "republish_apaas_app" not in result["activated"]
+        assert "deploy_dev_workspace_to_app" not in result["activated"]
+
+    @pytest.mark.asyncio
+    async def test_current_workspace_app_status_resolves_bound_app_publish_state(self, tmp_path):
+        """状态工具从工作区 project_id 反查 Application，并返回本地发布状态。"""
+        (tmp_path / ".workspace.json").write_text(
+            json.dumps({"id": "1_ws", "project_id": 5}, ensure_ascii=False),
+            encoding="utf-8",
+        )
+
+        class _WorkspaceParams(_FakeParams):
+            workspace_id = "1_ws"
+            conversation_id = None
+            app_id = None
+            message = "应用重新发布了吗？"
+
+        app = MagicMock()
+        app.id = 5
+        app.app_name = "企业级研发项目管理PMS"
+        app.app_code = "rd-pms"
+        app.status = "completed"
+        app.apaas_app_id = "852927940168515584"
+        app.platform_env_id = 63
+        app.created_at = datetime(2026, 6, 12, 9, 0, 0)
+        app.updated_at = datetime(2026, 6, 12, 10, 0, 0)
+
+        deploy = MagicMock()
+        deploy.id = 9
+        deploy.version_label = "v3"
+        deploy.completed_at = datetime(2026, 6, 12, 10, 30, 0)
+        deploy.user_id = 1
+        deploy.deploy_type = "publish"
+
+        tool_call = {
+            "id": "tc_status",
+            "function": {
+                "name": "get_current_workspace_app_status",
+                "arguments": "{}",
+            },
+        }
+        with patch("app.agents.coding.llm_config.load_coding_llm_config",
+                   new=AsyncMock(return_value=("http://api", "key", "model"))), \
+             patch("app.coding.workspace.WorkspaceManager.get_workspace_path",
+                   return_value=tmp_path), \
+             patch("app.coding.read_query._stream_llm",
+                   new=_fake_stream_llm([
+                       {"tool_calls": [tool_call]},
+                       {"content": "应用已有成功发布记录。"},
+                   ])):
+            db = _make_mock_db()
+            db.execute = AsyncMock(side_effect=[
+                _scalar_result(_FakePlatformEnv()),
+                _scalar_result(app),
+                _scalar_result(deploy),
+            ])
+            events = []
+            async for ev in run_read_query(_WorkspaceParams(), db):
+                events.append(ev)
+
+        status_done = next(
+            e for e in events
+            if e.get("type") == "tool"
+            and e.get("name") == "get_current_workspace_app_status"
+            and e.get("status") == "done"
+        )
+        result = json.loads(status_done["result"])
+        assert result["ok"] is True
+        assert result["app"]["local_app_id"] == 5
+        assert result["app"]["apaas_app_id"] == "852927940168515584"
+        assert result["publish_status"]["status"] == "published"
+        assert result["publish_status"]["latest_deploy"]["version"] == "v3"
 
 
 # ───────────────────────────────────────────────────────────────────────────
@@ -380,6 +521,7 @@ class TestPipelineIntegration:
             mock_result.scalar_one_or_none.return_value = None
             db.execute = AsyncMock(return_value=mock_result)
             db.get = AsyncMock(return_value=None)
+            db.add = MagicMock()
 
             events = []
             async for ev in pl.run_coding_pipeline(fake_params, db):

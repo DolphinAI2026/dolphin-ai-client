@@ -172,7 +172,7 @@ async function onSend() {
     session_id: currentSession.value.id,
     role: 'user',
     content: text,
-    extra_meta: null,
+    extra_meta: undefined,
     created_at: new Date().toISOString(),
   }
   messages.value.push(userMsg)
@@ -223,7 +223,7 @@ function handleSseEvent(eventName: string, data: any) {
           session_id: currentSession.value?.id || 0,
           role: 'assistant',
           content: delta,
-          extra_meta: null,
+          extra_meta: undefined,
           created_at: new Date().toISOString(),
         }
         messages.value.push(streamingMsg)
@@ -557,6 +557,6 @@ onUnmounted(() => {
   cursor: not-allowed;
 }
 .abort-btn {
-  background: #d33;
+  background: var(--err);
 }
 </style>

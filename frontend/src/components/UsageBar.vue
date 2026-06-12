@@ -51,8 +51,8 @@ const barWidth = computed(() => `${Math.round(ratio.value * 100)}%`)
   font-weight: 500;
   color: var(--t-text-primary);
 }
-.usage-bar-numbers.is-warn { color: #f0a020; }
-.usage-bar-numbers.is-full { color: #d33; }
+.usage-bar-numbers.is-warn { color: var(--warn); }
+.usage-bar-numbers.is-full { color: var(--err); }
 
 .usage-bar-track {
   height: 6px;
@@ -65,6 +65,6 @@ const barWidth = computed(() => `${Math.round(ratio.value * 100)}%`)
   background: var(--t-brand-color, #4f46e5);
   transition: width 0.25s ease;
 }
-.usage-bar-fill.is-warn { background: #f0a020; }
-.usage-bar-fill.is-full { background: #d33; }
+.usage-bar-fill.is-warn { background: var(--warn); }
+.usage-bar-fill.is-full { background: var(--err); }
 </style>

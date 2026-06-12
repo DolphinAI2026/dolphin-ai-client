@@ -97,18 +97,6 @@ const router = createRouter({
       redirect: '/coding'
     },
     {
-      path: '/devops',
-      name: 'DevOps',
-      component: () => import('@/views/BuilderDevOpsPage.vue'),
-      meta: { navExpanded: true }
-    },
-    {
-      path: '/proposals/:id',
-      name: 'ProposalDetail',
-      component: () => import('@/views/ProposalDetailPage.vue'),
-      meta: { requiresAuth: true }
-    },
-    {
       path: '/settings',
       name: 'Settings',
       redirect: to => {
@@ -132,6 +120,12 @@ const router = createRouter({
       name: 'McpTools',
       component: () => import('@/views/McpToolsPage.vue'),
       meta: { requiresAuth: true, navExpanded: true }
+    },
+    {
+      path: '/admin/agent-prompts',
+      name: 'AgentPrompts',
+      component: () => import('@/views/AgentPromptsPage.vue'),
+      meta: { requiresAuth: true, requiresTenantAdmin: true, navExpanded: true }
     },
     {
       path: '/work/:appId',

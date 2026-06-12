@@ -16,8 +16,6 @@
     "record_product_issue",
     "list_product_issues",
     "get_dev_fix_policy",
-    "browser_screenshot",
-    "browser_snapshot",
     "list_deploy_records"
   ],
   "notes": [

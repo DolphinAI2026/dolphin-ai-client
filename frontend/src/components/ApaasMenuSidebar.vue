@@ -78,7 +78,7 @@
 </template>
 
 <script setup lang="ts">
-import { ref, computed, watch, onMounted, h, defineComponent, type PropType } from 'vue'
+import { ref, computed, watch, onMounted, h, defineComponent, type PropType, type VNode } from 'vue'
 import { ElIcon, ElInput, ElButton, ElMessage, ElMessageBox, ElDropdown, ElDropdownMenu, ElDropdownItem } from 'element-plus'
 import {
   Search, Refresh, Loading, Warning, Files, Expand, Fold,
@@ -352,7 +352,8 @@ const MenuNode = defineComponent({
       }
     }
 
-    return () => {
+    // 显式返回类型 — MenuNode 递归渲染自身 (line ~451), 不标注会触发 TS7022/7024 自引用推断.
+    return (): (VNode | null)[] => {
       const iconComp = iconForMenu(p.menu, isExpanded.value)
       const padLeft = `${(p.depth || 0) * 12 + 10}px`
 
@@ -611,8 +612,8 @@ const MenuNode = defineComponent({
 }
 .ams-state .el-icon { font-size: 22px; opacity: 0.7; }
 .ams-state p { margin: 0; max-width: 200px; line-height: 1.5; }
-.ams-state-err { color: #ef4444; }
-.ams-state-err .el-icon { color: #ef4444; }
+.ams-state-err { color: var(--err); }
+.ams-state-err .el-icon { color: var(--err); }
 .ams-spin { animation: ams-spin 1s linear infinite; }
 
 /* ───────── 树 ───────── */
@@ -746,8 +747,8 @@ const MenuNode = defineComponent({
 .amsn-actions .el-icon { font-size: 14px; }
 
 /* 删除分组项 — 红色危险态 (作用于 el-dropdown-menu 内, 不能 scoped) */
-.amsn-dd-danger { color: #ef4444 !important; }
-.amsn-dd-danger:hover { background: rgba(239, 68, 68, 0.1) !important; color: #dc2626 !important; }
+.amsn-dd-danger { color: var(--err) !important; }
+.amsn-dd-danger:hover { background: var(--err-soft) !important; color: var(--err) !important; }
 
 /* ── 收起态 ── */
 .ams.collapsed .amsn {

@@ -39,61 +39,6 @@ tools:
     agents: [config]
     category: other
     description: "把表单字段的\"数据来源\"绑定到指定数据字典 (切组件 + source.type + 选项三件套)."
-  browser_click:
-    sections: [ui]
-    agents: [config]
-    category: browser_control
-    description: "点击 a11y tree 里的某个元素（uid 由 browser_snapshot 返回）。"
-  browser_list_pages:
-    sections: [ui]
-    agents: [config]
-    category: browser_control
-    description: "列出浏览器里所有打开的 tabs。优先 Chrome extension (chrome.tabs.query 拿全 tab,"
-  browser_navigate:
-    sections: [ui]
-    agents: [config]
-    category: browser_control
-    description: "让当前活动 tab 跳到指定 URL。等页面加载完返回。"
-  browser_press_key:
-    sections: [ui]
-    agents: [config]
-    category: browser_control
-    description: "在指定 frame 内按一个键 (Enter/Tab/Escape/ArrowDown/...)."
-  browser_screenshot:
-    sections: [ui]
-    agents: [config]
-    category: browser_control
-    description: "截当前 tab 视口（PNG），返 base64 data URL，前端 <img> 可直显示。"
-  browser_select_page:
-    sections: [ui]
-    agents: [config]
-    category: browser_control
-    description: "切换到指定 tab 当作\"活动 page\" — 后续 snapshot/click/type 都作用在它上。"
-  browser_snapshot:
-    sections: [ui]
-    agents: [config]
-    category: browser_control
-    description: "拿当前浏览器活动 tab 的 accessibility tree 快照, 按 frame 聚合返回。"
-  browser_start_recording:
-    sections: [ui]
-    agents: [config]
-    category: browser_control
-    description: "开始录制用户在浏览器里的操作。"
-  browser_stop_recording:
-    sections: [ui]
-    agents: [config]
-    category: browser_control
-    description: "停止录制 + 返回所有录到的事件。AI 拿到后总结成 steps_md。"
-  browser_type:
-    sections: [ui]
-    agents: [config]
-    category: browser_control
-    description: "往 a11y tree 里某个 input 元素填文本。先 browser_snapshot 拿 uid。"
-  browser_wait_for_text:
-    sections: [ui]
-    agents: [config]
-    category: browser_control
-    description: "在指定 frame 内等某段文字出现, 命中即返。常用来确认平台 iframe 已渲染完上一步操作的结果。"
   build_apaas_feature_from_spec:
     sections: [ui]
     agents: [config]
@@ -145,6 +90,11 @@ tools:
     agents: [coding]
     category: dev_workspace
     description: "创建自开发 workspace；传 env_id 时会先查同名自开发包/菜单，命中则要求用户确认。"
+  list_dev_workspaces:
+    sections: [extension]
+    agents: [coding, config]
+    category: dev_workspace
+    description: "按应用/页面名/zip 包名列出自开发 workspace，帮助在不知道 workspace_id 时反查源码工作区。"
   create_form_event_with_python_code:
     sections: [logic]
     agents: [config]
@@ -524,6 +474,11 @@ tools:
     agents: [builder, config]
     category: process
     description: "给某个表单菜单设置审批流程；简单顺序审批传 stages，条件分支/并行流程传 process_definition.nodes + process_definition.edges。"
+  set_apaas_process_transition_rules:
+    sections: [logic]
+    agents: [builder, config]
+    category: process
+    description: "给已有审批流程的指定连线设置流转规则；只改 processRule/simpleRule，不重建整条流程。"
   set_apaas_form_permissions:
     sections: [permission]
     agents: [builder, config]

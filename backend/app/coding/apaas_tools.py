@@ -53,96 +53,15 @@ def _err(message: str) -> str:
     return f"Error: {message}"
 
 
-async def _get_apaas_client(platform_env_id: int, db: AsyncSession):
-    """按 platform_env_id 拿登录态的 APaaSClient。
-
-    依赖 platform_envs 表已配齐 base_url + platform_tenant_id + token。
-    """
-    from app.models import PlatformEnv
-    from app.apaas_client import APaaSClient
-    from sqlalchemy import select
-
-    row = await db.execute(select(PlatformEnv).where(PlatformEnv.id == platform_env_id))
-    env = row.scalar_one_or_none()
-    if env is None:
-        raise ValueError(
-            f"应用绑定的平台环境(platform_env_id={platform_env_id})不存在或已被删除，"
-            f"请在「平台环境」中重新连接该环境后重试"
-        )
-    if not env.token:
-        raise ValueError(
-            f"platform_env_id={platform_env_id} 未登录 aPaaS（token 为空），"
-            f"请先在「平台管理 → aPaaS 租户」点『刷新租户』，或在「平台环境」为该环境配置账号密码"
-        )
-    return APaaSClient(
-        base_url=env.base_url,
-        tenant_id=env.platform_tenant_id or "default",
-        token=env.token,
-    )
-
-
-async def _relogin_apaas_env(platform_env_id: int, db: AsyncSession) -> bool:
-    """用 env 账号密码重新登录 aPaaS，刷新并持久化 token。成功返 True。
-
-    aPaaS token 会过期 → 读接口撞 401。有 username/password_enc 的 env 自动重登，
-    用户无感。无凭据则返 False（调用方按原 401 处理）。
-    """
-    from app.models import PlatformEnv
-    from app.apaas_client import APaaSClient
-    from app.crypto import decrypt_password
-    from sqlalchemy import select
-
-    env = (
-        await db.execute(select(PlatformEnv).where(PlatformEnv.id == platform_env_id))
-    ).scalar_one_or_none()
-    if env is None or not env.username or not env.password_enc:
-        return False
-    try:
-        password = decrypt_password(env.password_enc)
-        tmp = APaaSClient(base_url=env.base_url, tenant_id=env.platform_tenant_id or "default")
-        res = await tmp.login(env.username, password)
-        new_token = ((res or {}).get("token") or "").strip()
-    except Exception as exc:  # noqa: BLE001
-        logger.warning("apaas relogin env=%s 失败: %s", platform_env_id, exc)
-        return False
-    if not new_token:
-        return False
-    env.token = new_token
-    env.status = "connected"
-    await db.commit()
-    logger.info("apaas relogin env=%s 成功，token 已刷新", platform_env_id)
-    return True
-
-
-async def call_apaas_with_relogin(platform_env_id: int, db: AsyncSession, fn):
-    """跑一次 aPaaS 读调用；撞 token 失效(401) → 自动重登 + 重试一次。
-
-    fn: async callable(client) -> result。让 token 过期对用户无感（复用 env 账号密码）。
-    """
-    from app.error_messages import is_apaas_token_error
-
-    async def _get_client_with_empty_token_relogin():
-        try:
-            return await _get_apaas_client(platform_env_id, db)
-        except Exception as exc:  # noqa: BLE001
-            if not is_apaas_token_error(str(exc)):
-                raise
-            logger.info("apaas env=%s token 不可用，尝试重登刷新", platform_env_id)
-            if not await _relogin_apaas_env(platform_env_id, db):
-                raise
-            return await _get_apaas_client(platform_env_id, db)
-
-    client = await _get_client_with_empty_token_relogin()
-    try:
-        return await fn(client)
-    except Exception as exc:  # noqa: BLE001
-        if not is_apaas_token_error(str(exc)):
-            raise
-        logger.info("apaas 调用撞 token 失效，尝试重登重试 env=%s", platform_env_id)
-        if not await _relogin_apaas_env(platform_env_id, db):
-            raise
-        client2 = await _get_client_with_empty_token_relogin()
-        return await fn(client2)
+# token 自愈三件套已抽到共享设施 app/apaas_session.py（2026-06-12）。
+# 这里 re-export 保既有调用零改动（本文件内 11 个工具 + tools.py / mcp_server.py /
+# read_query.py / section_content.py / coding.py 等处的 `from app.coding.apaas_tools
+# import ...`）。新代码请直接从 app.apaas_session 引入。
+from app.apaas_session import (  # noqa: E402,F401
+    _get_apaas_client,
+    _relogin_apaas_env,
+    call_apaas_with_relogin,
+)
 
 
 # ═══════════════════════════════════════════════════════════════════════════

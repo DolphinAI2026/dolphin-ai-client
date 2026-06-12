@@ -84,7 +84,4 @@ Authorization: Bearer ${MCP_API_KEY}
 
 可按需使用：
 
-- `browser_screenshot`：页面证据截图。
-- `browser_snapshot`：读取页面结构，确认按钮、表单、空态。
 - `list_deploy_records`：用户问某个应用部署历史时使用，需要 `app_id`。
-

@@ -32,6 +32,7 @@ from app.coding.generator import CodingGenerator
 from app.coding.workspace import WorkspaceManager, ProjectType
 from app.coding.prompts import AGENT_SYSTEM_PROMPT
 from app.coding.read_query import classify_coding_intent, classify_iteration_intent, run_read_query
+from app.coding.attachments import normalize_coding_attachments
 
 logger = logging.getLogger(__name__)
 
@@ -68,6 +69,7 @@ class PipelineParams:
         selected_model: Optional[str] = None,
         project_id: Optional[int] = None,
         app_id: Optional[str] = None,  # 分场景「在应用上定制」绑定的本地 Application.id
+        attachments: Optional[list[dict[str, Any]]] = None,
         # 预计算的 request-scoped 值
         code_server_base_url: str = "",
         api_base_builder: Optional[str] = None,  # 用于构建 IDE proxy URL 的函数
@@ -82,6 +84,7 @@ class PipelineParams:
         self.selected_model = selected_model
         self.project_id = project_id
         self.app_id = app_id
+        self.attachments = normalize_coding_attachments(attachments or [])
         self.code_server_base_url = code_server_base_url or settings.code_server_base_url or ""
         self.api_base_builder = api_base_builder
         self.ide_token = ide_token
@@ -417,30 +420,28 @@ async def is_new_component_intent(
         import httpx as _httpx
 
         from app.agents.coding.llm_config import load_coding_llm_config
+        from app import llm_transport
 
         info = ws_mgr.get_workspace_info(ws_id)
         project_name = info.get("project_name", "")
         base_url, api_key, llm_model = await load_coding_llm_config(tenant_id, model)
-        async with _httpx.AsyncClient(
-            timeout=_httpx.Timeout(connect=8, read=20, write=8, pool=8)
-        ) as client:
-            resp = await client.post(
-                f"{base_url}/chat/completions",
-                headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"},
-                json={
-                    "model": llm_model,
-                    "messages": [
-                        {"role": "system", "content": f"当前工作区的组件是 '{project_name}'。判断用户的消息是想【修改当前组件】还是想【做一个全新的、不同的组件】。回答中必须包含 MODIFY 或 NEW 这个词。"},
-                        {"role": "user", "content": message},
-                    ],
-                    "max_tokens": 50,
-                    "temperature": 0,
-                    "stream": False,
-                },
-            )
-            resp.raise_for_status()
-            data = resp.json()
-        answer = data.get("choices", [{}])[0].get("message", {}).get("content", "").upper()
+        payload = llm_transport.build_chat_payload(
+            model=llm_model,
+            messages=[
+                {"role": "system", "content": f"当前工作区的组件是 '{project_name}'。判断用户的消息是想【修改当前组件】还是想【做一个全新的、不同的组件】。回答中必须包含 MODIFY 或 NEW 这个词。"},
+                {"role": "user", "content": message},
+            ],
+            temperature=0,
+            max_tokens=50,
+            base_url=base_url,  # qwen3/dashscope → enable_thinking=False(此前漏了)
+        )
+        msg = await llm_transport.complete(
+            base_url=base_url,
+            api_key=api_key,
+            payload=payload,
+            timeout=_httpx.Timeout(connect=8, read=20, write=8, pool=8),
+        )
+        answer = (msg.get("content") or "").upper()
         return "NEW" in answer
     except Exception as e:
         logger.warning(f"意图判断失败: {e}")
@@ -488,6 +489,18 @@ def _push_replay_message(
     }
     payload.update({k: v for k, v in extra.items() if v is not None})
     stream_messages.append(payload)
+
+
+def _push_user_replay_message(
+    stream_messages: list[dict[str, Any]],
+    content: str,
+    attachments: Optional[list[dict[str, Any]]] = None,
+):
+    normalized_attachments = normalize_coding_attachments(attachments or [])
+    if normalized_attachments:
+        _push_replay_message(stream_messages, "user", content, attachments=normalized_attachments)
+    else:
+        _push_replay_message(stream_messages, "user", content)
 
 
 def _append_replay_thinking_delta(stream_messages: list[dict[str, Any]], delta: str):
@@ -1084,25 +1097,25 @@ async def _brainstorm_llm_call(
     使用租户的 coding LLM 配置发起调用（走 Dashscope/MiniMax 等，非通用 settings LLM）。
     """
     from app.agents.coding.llm_config import load_coding_llm_config
+    from app import llm_transport
     import httpx
 
     base_url, api_key, llm_model = await load_coding_llm_config(tenant_id, model)
 
-    async with httpx.AsyncClient(timeout=httpx.Timeout(connect=10, read=120, write=10, pool=10)) as client:
-        resp = await client.post(
-            f"{base_url}/chat/completions",
-            headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"},
-            json={
-                "model": llm_model,
-                "messages": messages,
-                "max_tokens": max_tokens,
-                "temperature": temperature,
-                "stream": False,
-            },
-        )
-        resp.raise_for_status()
-        data = resp.json()
-        return data.get("choices", [{}])[0].get("message", {}).get("content", "").strip()
+    payload = llm_transport.build_chat_payload(
+        model=llm_model,
+        messages=messages,
+        temperature=temperature,
+        max_tokens=max_tokens,
+        base_url=base_url,  # qwen3/dashscope → enable_thinking=False(此前 brainstorm 漏了)
+    )
+    msg = await llm_transport.complete(
+        base_url=base_url,
+        api_key=api_key,
+        payload=payload,
+        timeout=httpx.Timeout(connect=10, read=120, write=10, pool=10),
+    )
+    return (msg.get("content") or "").strip()
 
 
 async def _detect_scene_llm_call(
@@ -1566,27 +1579,26 @@ async def _grounded_brainstorm(params, scene_type, apaas_app_id, platform_env_id
             },
         })
 
+    from app import llm_transport
+
     for _turn in range(_GROUNDING_MAX_TURNS):
         try:
-            async with httpx.AsyncClient(
-                timeout=httpx.Timeout(connect=10, read=60, write=10, pool=10)
-            ) as client:
-                resp = await client.post(
-                    f"{base_url}/chat/completions",
-                    headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"},
-                    json={
-                        "model": llm_model, "messages": messages, "tools": tool_defs,
-                        "tool_choice": "auto", "temperature": 0.3, "max_tokens": 1500,
-                    },
-                )
-                resp.raise_for_status()
-                data = resp.json()
+            payload = llm_transport.build_chat_payload(
+                model=llm_model, messages=messages, tools=tool_defs,
+                tool_choice="auto", temperature=0.3, max_tokens=1500,
+                base_url=base_url,  # qwen3/dashscope → enable_thinking=False(此前 grounding 漏了)
+            )
+            msg = await llm_transport.complete(
+                base_url=base_url,
+                api_key=api_key,
+                payload=payload,
+                timeout=httpx.Timeout(connect=10, read=60, write=10, pool=10),
+            )
         except Exception as exc:
             logger.warning("[grounding] LLM 调用失败 turn=%d,回退: %s", _turn, exc)
             yield {"__spec__": None}
             return
 
-        msg = data.get("choices", [{}])[0].get("message", {})
         tool_calls = msg.get("tool_calls") or []
         content = (msg.get("content") or "").strip()
         messages.append({"role": "assistant", "content": content, "tool_calls": tool_calls or None})
@@ -1786,7 +1798,7 @@ async def run_coding_pipeline(
                     # 不记这轮问答在刷新/切换后就消失。回放结构手工构建
                     # (user + 工具 chip + 答案 message), 不走 _record_event 的
                     # codegen 映射(那套会把答案记成 thinking 斜体)。
-                    _push_replay_message(replay_stream_messages, "user", params.message)
+                    _push_user_replay_message(replay_stream_messages, params.message, params.attachments)
                     _read_answer = ""
                     async for _ev in run_read_query(params, db):
                         _et = _ev.get("type")
@@ -1887,7 +1899,7 @@ async def run_coding_pipeline(
 
         # ---- Step 1: 场景检测 ----
         if not replay_stream_messages:
-            _push_replay_message(replay_stream_messages, "user", params.message)
+            _push_user_replay_message(replay_stream_messages, params.message, params.attachments)
 
         if not is_iteration:
             # brainstorm 续轮（用户回复"确认/再改一下"）：场景已在首轮识别并通知过前端，
@@ -2243,6 +2255,7 @@ async def run_coding_pipeline(
         except Exception:
             _bound_handle = None
         _coding_input, _coding_extra = _codegen_app_context_overlays(_bound_handle, _coding_system_prompt)
+        _coding_input["is_iteration"] = bool(is_iteration)
         if _bound_handle:
             logger.info("[codegen] bound app 上下文已注入: app=%s apaas_app_id=%s env=%s",
                         _bound_handle[2], _bound_handle[0], _bound_handle[1])

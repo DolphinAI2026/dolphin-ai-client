@@ -223,6 +223,7 @@ def _normalize_config(config: Optional[Dict[str, Any]]) -> Dict[str, Any]:
 def _inherit_codes_from_old(
     old_config: Optional[Dict[str, Any]],
     new_config: Dict[str, Any],
+    warnings: Optional[List[str]] = None,
 ) -> Dict[str, Any]:
     """
     将 V2（new_config）中与 V1（old_config）**同名**实体的 code 替换为 V1 的 code。
@@ -246,6 +247,8 @@ def _inherit_codes_from_old(
         name_fallback="name",
         code_key="roleCode",
         code_fallback="code",
+        entity_label="角色",
+        warnings=warnings,
     )
 
     # --- 字典 ---
@@ -256,6 +259,8 @@ def _inherit_codes_from_old(
         name_fallback="name",
         code_key="dictionaryCode",
         code_fallback="code",
+        entity_label="字典",
+        warnings=warnings,
     )
     # 字典选项
     for new_d in new["dicts"]:
@@ -271,6 +276,8 @@ def _inherit_codes_from_old(
                 name_fallback="name",
                 code_key="valueCode",
                 code_fallback="code",
+                entity_label=f"字典「{d_name}」选项",
+                warnings=warnings,
             )
 
     # --- 模型 & 字段 ---
@@ -281,6 +288,8 @@ def _inherit_codes_from_old(
         name_fallback="name",
         code_key="modelCode",
         code_fallback="code",
+        entity_label="模型",
+        warnings=warnings,
     )
     for new_m in new["models"]:
         m_name = new_m.get("modelName", new_m.get("name", ""))
@@ -295,6 +304,8 @@ def _inherit_codes_from_old(
                 name_fallback="name",
                 code_key="fieldCode",
                 code_fallback="code",
+                entity_label=f"模型「{m_name}」字段",
+                warnings=warnings,
             )
 
     # --- 表单 ---
@@ -305,6 +316,8 @@ def _inherit_codes_from_old(
         name_fallback="name",
         code_key="formCode",
         code_fallback="code",
+        entity_label="表单",
+        warnings=warnings,
     )
 
     # --- 流程 ---
@@ -315,6 +328,8 @@ def _inherit_codes_from_old(
         name_fallback="name",
         code_key="processCode",
         code_fallback="code",
+        entity_label="流程",
+        warnings=warnings,
     )
 
     # 将修改后的列表写回 new_config
@@ -338,6 +353,9 @@ def _inherit_list_codes(
     name_fallback: str,
     code_key: str,
     code_fallback: str,
+    *,
+    entity_label: str = "实体",
+    warnings: Optional[List[str]] = None,
 ) -> Dict[str, Dict]:
     """
     对 new_list 中的每一项，按 **名称** 在 old_list 中查找同名实体。
@@ -360,12 +378,23 @@ def _inherit_list_codes(
     for new_item in new_list:
         n = _get_name(new_item)
         if not n:
+            if warnings is not None:
+                code_hint = _get_code(new_item) or "(无编码)"
+                warnings.append(
+                    f"{entity_label}「{code_hint}」名称为空，无法按名称继承旧编码，"
+                    f"若新旧编码不同将被误判为「删旧+增新」"
+                )
             continue
         old_item = old_by_name.get(n)
         if old_item is None:
             continue
         old_code = _get_code(old_item)
         if not old_code:
+            if warnings is not None:
+                warnings.append(
+                    f"{entity_label}「{n}」匹配到的旧配置编码为空，无法继承编码，"
+                    f"若新编码不同将被误判为「删旧+增新」"
+                )
             continue
         # 将 V2 的 code 替换为 V1 的 code
         if code_key in new_item:
@@ -379,7 +408,8 @@ def _inherit_list_codes(
 def _compare_roles(
     old_roles: List[Dict],
     new_roles: List[Dict],
-    remote_roles: Optional[List[Dict]] = None
+    remote_roles: Optional[List[Dict]] = None,
+    warnings: Optional[List[str]] = None,
 ) -> List[RoleChange]:
     """对比角色变更 - 使用 roleName 作为唯一标识"""
     changes = []
@@ -398,6 +428,15 @@ def _compare_roles(
     remote_map = {}
     if remote_roles:
         remote_map = {get_role_name(r): r for r in remote_roles if get_role_name(r)}
+
+    # 名称为空的角色在建映射时已被过滤；这里把丢弃数量汇成一条可见 warning
+    dropped_unnamed_roles = sum(
+        1 for r in (old_roles or []) + (new_roles or []) if not get_role_name(r)
+    )
+    if dropped_unnamed_roles and warnings is not None:
+        warnings.append(
+            f"有 {dropped_unnamed_roles} 个角色名称为空，已从增量对比中忽略"
+        )
 
     all_names = set(old_map.keys()) | set(new_map.keys())
 
@@ -443,7 +482,9 @@ def _compare_dict_options(
     old_options: List[Dict],
     new_options: List[Dict],
     dict_code: str,
-    remote_options: Optional[List[Dict]] = None
+    remote_options: Optional[List[Dict]] = None,
+    warnings: Optional[List[str]] = None,
+    dict_name: str = "",
 ) -> List[DictOptionChange]:
     """
     对比字典选项变更 — 按**名称优先**匹配。
@@ -453,12 +494,24 @@ def _compare_dict_options(
     """
     changes = []
 
+    def _opt_code(o: Dict) -> str:
+        return o.get("valueCode", o.get("code", ""))
+
     # 编码继承已完成，按 code 建立映射
-    old_map = {o.get("valueCode", o.get("code", "")): o for o in old_options}
-    new_map = {o.get("valueCode", o.get("code", "")): o for o in new_options}
+    old_map = {_opt_code(o): o for o in old_options}
+    new_map = {_opt_code(o): o for o in new_options}
     remote_map = {}
     if remote_options:
         remote_map = {o.get("valueCode", ""): o for o in remote_options}
+
+    dropped_unkeyed = sum(
+        1 for o in (old_options or []) + (new_options or []) if not _opt_code(o)
+    )
+    if dropped_unkeyed and warnings is not None:
+        dict_hint = f"字典「{dict_name}」" if dict_name else f"字典「{dict_code}」"
+        warnings.append(
+            f"{dict_hint} 有 {dropped_unkeyed} 个选项编码为空，已从增量对比中忽略"
+        )
 
     all_codes = set(old_map.keys()) | set(new_map.keys())
 
@@ -514,16 +567,29 @@ def _compare_dicts(
     old_dicts: List[Dict],
     new_dicts: List[Dict],
     remote_dicts: Optional[List[Dict]] = None,
-    remote_dict_options: Optional[Dict[str, List[Dict]]] = None
+    remote_dict_options: Optional[Dict[str, List[Dict]]] = None,
+    warnings: Optional[List[str]] = None,
 ) -> List[DictChange]:
     """对比字典变更"""
     changes = []
 
-    old_map = {d.get("dictionaryCode", d.get("code", "")): d for d in old_dicts}
-    new_map = {d.get("dictionaryCode", d.get("code", "")): d for d in new_dicts}
+    def _dict_code(d: Dict) -> str:
+        return d.get("dictionaryCode", d.get("code", ""))
+
+    def _dict_name(d: Dict) -> str:
+        return d.get("dictionaryName", d.get("name", ""))
+
+    old_map = {_dict_code(d): d for d in old_dicts}
+    new_map = {_dict_code(d): d for d in new_dicts}
     remote_map = {}
     if remote_dicts:
         remote_map = {d.get("dictionaryCode", ""): d for d in remote_dicts}
+
+    for d in (old_dicts or []) + (new_dicts or []):
+        if not _dict_code(d) and warnings is not None:
+            warnings.append(
+                f"字典「{_dict_name(d) or '(未命名)'}」编码为空，已从增量对比中忽略"
+            )
 
     all_codes = set(old_map.keys()) | set(new_map.keys())
 
@@ -550,7 +616,10 @@ def _compare_dicts(
         if remote_dict_options and code in remote_dict_options:
             remote_options = remote_dict_options[code]
 
-        option_changes = _compare_dict_options(old_options, new_options, code, remote_options)
+        option_changes = _compare_dict_options(
+            old_options, new_options, code, remote_options,
+            warnings=warnings, dict_name=name,
+        )
 
         if code not in old_map and code in new_map:
             changes.append(DictChange(
@@ -611,16 +680,31 @@ def _compare_fields(
     old_fields: List[Dict],
     new_fields: List[Dict],
     model_code: str,
-    remote_fields: Optional[List[Dict]] = None
+    remote_fields: Optional[List[Dict]] = None,
+    warnings: Optional[List[str]] = None,
+    model_name: str = "",
 ) -> List[FieldChange]:
     """对比模型字段变更"""
     changes = []
 
-    old_map = {f.get("fieldCode", f.get("code", "")): f for f in old_fields}
-    new_map = {f.get("fieldCode", f.get("code", "")): f for f in new_fields}
+    def _field_code(f: Dict) -> str:
+        return f.get("fieldCode", f.get("code", ""))
+
+    def _field_name(f: Dict) -> str:
+        return f.get("fieldName", f.get("name", ""))
+
+    old_map = {_field_code(f): f for f in old_fields}
+    new_map = {_field_code(f): f for f in new_fields}
     remote_map = {}
     if remote_fields:
         remote_map = {f.get("fieldCode", ""): f for f in remote_fields}
+
+    for f in (old_fields or []) + (new_fields or []):
+        if not _field_code(f) and warnings is not None:
+            model_hint = f"模型「{model_name or model_code}」"
+            warnings.append(
+                f"{model_hint} 字段「{_field_name(f) or '(未命名)'}」编码为空，已从增量对比中忽略"
+            )
 
     all_codes = set(old_map.keys()) | set(new_map.keys())
 
@@ -707,16 +791,29 @@ def _compare_fields(
 def _compare_models(
     old_models: List[Dict],
     new_models: List[Dict],
-    remote_models: Optional[List[Dict]] = None
+    remote_models: Optional[List[Dict]] = None,
+    warnings: Optional[List[str]] = None,
 ) -> List[ModelChange]:
     """对比模型变更"""
     changes = []
 
-    old_map = {m.get("modelCode", m.get("code", "")): m for m in old_models}
-    new_map = {m.get("modelCode", m.get("code", "")): m for m in new_models}
+    def _model_code(m: Dict) -> str:
+        return m.get("modelCode", m.get("code", ""))
+
+    def _model_name(m: Dict) -> str:
+        return m.get("modelName", m.get("name", ""))
+
+    old_map = {_model_code(m): m for m in old_models}
+    new_map = {_model_code(m): m for m in new_models}
     remote_map = {}
     if remote_models:
         remote_map = {m.get("modelCode", ""): m for m in remote_models}
+
+    for m in (old_models or []) + (new_models or []):
+        if not _model_code(m) and warnings is not None:
+            warnings.append(
+                f"模型「{_model_name(m) or '(未命名)'}」编码为空，已从增量对比中忽略"
+            )
 
     all_codes = set(old_map.keys()) | set(new_map.keys())
 
@@ -743,7 +840,10 @@ def _compare_models(
         if remote_model:
             remote_fields = remote_model.get("fields", remote_model.get("dataModelFields", []))
 
-        field_changes = _compare_fields(old_fields, new_fields, code, remote_fields)
+        field_changes = _compare_fields(
+            old_fields, new_fields, code, remote_fields,
+            warnings=warnings, model_name=name,
+        )
 
         if code not in old_map and code in new_map:
             changes.append(ModelChange(
@@ -843,7 +943,9 @@ def _compare_component_properties(old: Dict, new: Dict) -> List[str]:
 def _compare_form_components(
     old_components: List[Dict],
     new_components: List[Dict],
-    form_code: str
+    form_code: str,
+    warnings: Optional[List[str]] = None,
+    form_name: str = "",
 ) -> List[FormComponentChange]:
     """
     对比表单组件变更
@@ -860,6 +962,17 @@ def _compare_form_components(
 
     old_map = _build_component_map(old_components)
     new_map = _build_component_map(new_components)
+
+    dropped_unkeyed = sum(
+        1 for c in (old_components or []) + (new_components or []) if not _get_component_key(c)
+    )
+    if dropped_unkeyed and warnings is not None:
+        form_hint = f"表单「{form_name or form_code}」"
+        warnings.append(
+            f"{form_hint} 有 {dropped_unkeyed} 个组件缺少 modelField/tableModelCode 标识，"
+            f"已从增量对比中忽略"
+        )
+
     all_keys = set(old_map.keys()) | set(new_map.keys())
 
     for key in all_keys:
@@ -922,16 +1035,29 @@ def _compare_form_components(
 def _compare_forms(
     old_forms: List[Dict],
     new_forms: List[Dict],
-    remote_forms: Optional[List[Dict]] = None
+    remote_forms: Optional[List[Dict]] = None,
+    warnings: Optional[List[str]] = None,
 ) -> List[FormChange]:
     """对比表单变更"""
     changes = []
 
-    old_map = {f.get("formCode", f.get("code", "")): f for f in old_forms}
-    new_map = {f.get("formCode", f.get("code", "")): f for f in new_forms}
+    def _form_code(f: Dict) -> str:
+        return f.get("formCode", f.get("code", ""))
+
+    def _form_name(f: Dict) -> str:
+        return f.get("formName", f.get("name", ""))
+
+    old_map = {_form_code(f): f for f in old_forms}
+    new_map = {_form_code(f): f for f in new_forms}
     remote_map = {}
     if remote_forms:
         remote_map = {f.get("formCode", ""): f for f in remote_forms}
+
+    for f in (old_forms or []) + (new_forms or []):
+        if not _form_code(f) and warnings is not None:
+            warnings.append(
+                f"表单「{_form_name(f) or '(未命名)'}」编码为空，已从增量对比中忽略"
+            )
 
     all_codes = set(old_map.keys()) | set(new_map.keys())
 
@@ -956,7 +1082,10 @@ def _compare_forms(
             new_components = new_form.get("components", [])
 
         # 对比组件变更
-        component_changes = _compare_form_components(old_components, new_components, code)
+        component_changes = _compare_form_components(
+            old_components, new_components, code,
+            warnings=warnings, form_name=name,
+        )
 
         if code not in old_map and code in new_map:
             changes.append(FormChange(
@@ -1007,16 +1136,29 @@ def _compare_forms(
 def _compare_processes(
     old_processes: List[Dict],
     new_processes: List[Dict],
-    remote_processes: Optional[List[Dict]] = None
+    remote_processes: Optional[List[Dict]] = None,
+    warnings: Optional[List[str]] = None,
 ) -> List[ProcessChange]:
     """对比流程变更"""
     changes = []
 
-    old_map = {p.get("processCode", p.get("code", "")): p for p in old_processes}
-    new_map = {p.get("processCode", p.get("code", "")): p for p in new_processes}
+    def _proc_code(p: Dict) -> str:
+        return p.get("processCode", p.get("code", ""))
+
+    def _proc_name(p: Dict) -> str:
+        return p.get("processName", p.get("name", ""))
+
+    old_map = {_proc_code(p): p for p in old_processes}
+    new_map = {_proc_code(p): p for p in new_processes}
     remote_map = {}
     if remote_processes:
         remote_map = {p.get("processCode", ""): p for p in remote_processes}
+
+    for p in (old_processes or []) + (new_processes or []):
+        if not _proc_code(p) and warnings is not None:
+            warnings.append(
+                f"流程「{_proc_name(p) or '(未命名)'}」编码为空，已从增量对比中忽略"
+            )
 
     all_codes = set(old_map.keys()) | set(new_map.keys())
 
@@ -1230,9 +1372,13 @@ def compute_config_diff(
     Returns:
         ConfigDiff: 差异报告
     """
+    # 收集"实体编码为空 → 从增量对比中被丢弃"这类真丢数据点的告警。
+    # 这些 warning 经 diff.warnings 透到 to_dict() → DiffResponse.warnings → 前端预览。
+    data_loss_warnings: List[str] = []
+
     # ★ 关键步骤：按名称匹配，将 V2 的编码继承为 V1 的编码
     # 这样后续按 code 做 diff 时，同名实体不会因 AI 编码差异被误判
-    new_config = _inherit_codes_from_old(old_config, new_config)
+    new_config = _inherit_codes_from_old(old_config, new_config, warnings=data_loss_warnings)
 
     old = _normalize_config(old_config)
     new = _normalize_config(new_config)
@@ -1248,11 +1394,11 @@ def compute_config_diff(
     diff.normalized_new_config = new_config  # 保存编码继承后的配置
 
     # 对比各资源
-    diff.role_changes = _compare_roles(old["roles"], new["roles"], remote_roles)
-    diff.dict_changes = _compare_dicts(old["dicts"], new["dicts"], remote_dicts, remote_dict_options)
-    diff.model_changes = _compare_models(old["models"], new["models"], remote_models)
-    diff.form_changes = _compare_forms(old["forms"], new["forms"], remote_forms)
-    diff.process_changes = _compare_processes(old["processes"], new["processes"], remote_processes)
+    diff.role_changes = _compare_roles(old["roles"], new["roles"], remote_roles, warnings=data_loss_warnings)
+    diff.dict_changes = _compare_dicts(old["dicts"], new["dicts"], remote_dicts, remote_dict_options, warnings=data_loss_warnings)
+    diff.model_changes = _compare_models(old["models"], new["models"], remote_models, warnings=data_loss_warnings)
+    diff.form_changes = _compare_forms(old["forms"], new["forms"], remote_forms, warnings=data_loss_warnings)
+    diff.process_changes = _compare_processes(old["processes"], new["processes"], remote_processes, warnings=data_loss_warnings)
 
     # 判断是否有变更
     diff.has_changes = bool(
@@ -1263,9 +1409,23 @@ def compute_config_diff(
         diff.process_changes
     )
 
-    # 生成摘要和警告
+    # 生成摘要和警告。注意：_generate_warnings 返回的是一份新列表，会覆盖
+    # diff.warnings，所以这里把"真丢数据点"告警先并进来再去重（保序），
+    # 否则上面各 _compare_* 收集到的空 key 告警会被丢掉。
     diff.summary = _generate_summary(diff)
-    diff.warnings = _generate_warnings(diff)
+    behavior_warnings = _generate_warnings(diff)
+    diff.warnings = _dedupe_preserve_order(data_loss_warnings + behavior_warnings)
     diff.unsupported_changes = _generate_unsupported(diff)
 
     return diff
+
+
+def _dedupe_preserve_order(items: List[str]) -> List[str]:
+    """去重但保持出现顺序。"""
+    seen: set = set()
+    result: List[str] = []
+    for item in items:
+        if item not in seen:
+            seen.add(item)
+            result.append(item)
+    return result

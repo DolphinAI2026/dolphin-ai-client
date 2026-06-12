@@ -43,6 +43,7 @@ from app.models import (
 from app.ai_chat.tools import TOOL_SCHEMAS, execute_tool, get_all_tool_schemas, split_core_deferred, build_deferred_manifest
 from app.observability import recorder
 from app.routes.llm_configs import build_llm_chat_completions_url
+from app import llm_transport
 
 logger = logging.getLogger(__name__)
 
@@ -120,37 +121,18 @@ def _compact_tool_call_for_storage(tool_call: dict) -> dict:
     return compacted
 
 
+# 错误分类 / 文案 / 退避已收口到 app.llm_transport;这里保留同名薄封装,
+# 既不改对外行为,也让既有引用(本文件内多处)不动。
 def _is_retryable_llm_error(exc: Exception) -> bool:
-    return isinstance(
-        exc,
-        (
-            httpx.ConnectError,
-            httpx.ConnectTimeout,
-            httpx.ReadError,
-            httpx.ReadTimeout,
-            httpx.RemoteProtocolError,
-            httpx.PoolTimeout,
-        ),
-    )
+    return llm_transport.is_retryable_llm_error(exc)
 
 
 async def _sleep_before_llm_retry(attempt: int) -> None:
-    await asyncio.sleep(0.8 * (attempt + 1))
+    await llm_transport.sleep_before_retry(attempt)
 
 
 def _format_llm_error(exc: Exception) -> str:
-    if isinstance(exc, httpx.ConnectError):
-        return "连接模型网关失败，请稍后重试或检查模型服务网络。"
-    if isinstance(exc, httpx.ConnectTimeout):
-        return "连接模型网关超时，请稍后重试或检查模型服务网络。"
-    if isinstance(exc, httpx.ReadError):
-        return "模型网关读取响应失败，请稍后重试。"
-    if isinstance(exc, httpx.ReadTimeout):
-        return "模型网关响应超时，请稍后重试。"
-    if isinstance(exc, httpx.RemoteProtocolError):
-        return "模型网关连接中途断开，未返回完整响应，请稍后重试。"
-    detail = str(exc).strip()
-    return detail or exc.__class__.__name__
+    return llm_transport.format_llm_error(exc)
 
 
 # ─────────────────────── Deferred-tool helpers ───────────────────────
@@ -312,7 +294,7 @@ SYSTEM_PROMPT_UNIFIED = f"""你是 aPaaS 平台的 AI 全栈助手 — 既能产
 (c) 工具撞 token expired / 权限不足 等需要用户介入的错
 (d) 当前租户没有绑定可用默认环境，或绑定了多个 connected 环境且用户明确要求选择目标环境
 
-## 工具速查（55 个，按场景挑用）
+## 工具速查（按场景挑用，下面只列常用，完整清单以实际可用工具为准）
 
 文档处理：parse_design_doc / validate_builder_doc / write_artifact / read_attachment / export_apaas_app_design_doc
 aPaaS 内省：list_apaas_apps_in_env / list_apaas_app_menus / list_apaas_form_views / list_apaas_form_components / list_apaas_app_models / list_apaas_app_dicts
@@ -324,62 +306,40 @@ AI Coding workspace：create_dev_workspace / read_workspace_file / write_workspa
 {_FORMAT_CONSTRAINTS}"""
 
 
-# 旧的 chat / cowork prompt 保留（routes/applications/__init__.py 的 chat-session/ensure
-# 还可能传 mode 进来），但 _select_system_prompt 永远返回统一版
-SYSTEM_PROMPT_CHAT = f"""你是 aPaaS 平台的 AI 需求分析师，帮用户把**模糊的搭建需求**梳理成可被 Builder 流水线直接解析的标准设计文档。
-
-工作模式（chat 从零理需求）：
-1. 用户没有现成材料，靠对话挖需求；如有附件，调 read_attachment 辅助理解
-2. 跟着用户节奏问，每轮最多 1-2 个关键问题（用 ask_clarifying_question）
-3. 数据类材料（xlsx/csv）可用 run_python 编程分析（pandas / openpyxl 都能用）
-4. 当需求清晰后，调 write_artifact 输出 markdown 设计文档；filename 建议 `{{应用名}}-设计文档.md`
-
-{_FORMAT_CONSTRAINTS}"""
-
-
-SYSTEM_PROMPT_COWORK = f"""你是 aPaaS 平台的 AI 协作分析师，帮用户把**一堆杂乱材料**（PDF / Word / Excel / 截图 / 现有文档）整合成可被 Builder 流水线直接解析的标准设计文档。
-
-工作模式（cowork 批量材料整合）—— **跟 chat 模式不一样**：
-
-## 第一步：并行消化所有材料（不等用户引导）
-用户进来时往往已经把所有材料一起上传完了。你的第一个动作不是问"你要做什么"，而是：
-- 立刻**并行**调 read_attachment 把每一份附件都读一遍（一次回复里可以调多个工具）
-- 数据类材料（xlsx/csv）配合 run_python 抽要点：表头、行数、枚举值分布、关键字段
-- 图片类材料（架构图 / 截图 / 流程图）已直接附在消息里、你能直接看图，**不要对图片调 read_attachment**（会被拒），直接描述图里内容即可
-
-## 第二步：综合摘要 + 批量提问
-读完所有材料后，给用户一个**结构化的"我看到了什么"汇总**：
-- 我从你的 N 份材料里识别出：**A 张数据表**（列出名字）/ **B 个角色**（列出）/ **C 个流程**（列出）/ **D 个枚举值字段**（列出）
-- 我推断的应用类型 = ...
-- **同时**列出 3-5 个澄清问题（**批量**问，不是一句一句挤），每个问题写明"如果选 X / 如果选 Y 会影响什么"
-
-## 第三步：用户回答后产出第一版 md
-- 立刻 write_artifact 写出第一版完整 6 章设计文档（应用信息 / 角色 / 字典 / 模型 / 表单 / 权限，有审批需求再加可选的「七、审批流程」）
-- 不要分章节交付，一次写完整篇
-
-## 第四步：迭代修订
-- 用户提小修订（改字段/编码/某段）时，read_artifact 拿当前 artifact 原文，再 edit_artifact 精确替换那一处，别整篇 write_artifact 重发；整篇推倒重来才 write_artifact 同名覆盖
-- 涉及到字段命名、模型关联、权限矩阵这种细节，主动用 run_python 验证一致性
-
-{_FORMAT_CONSTRAINTS}
-
-## cowork 模式特别强调
-- **不要先问"你要做什么"**——用户已经用文件告诉你了，直接读
-- **不要分多轮试探**——用户期望"一站式整合"，不是漫长对话
-- **批量并行**：read_attachment / run_python 一次回复里能调几个就调几个
-- 反问尽量集中在一两轮，避免拉长流程"""
-
-
-def _select_system_prompt(mode: Optional[str]) -> str:
-    """统一 prompt — chat / cowork mode 已合并，统一用 UNIFIED 版（agent 看附件自己切流程）。
-
-    mode 参数保留只是因为旧 session 表里还有这字段，不再实际影响行为。
-    """
-    return SYSTEM_PROMPT_UNIFIED
-
-
-# 向后兼容：SYSTEM_PROMPT 指向统一版本
+# 向后兼容：SYSTEM_PROMPT 指向统一版本（旧 chat/cowork 双 prompt 已删，统一走 UNIFIED）
 SYSTEM_PROMPT = SYSTEM_PROMPT_UNIFIED
+
+# agent_prompts 表里 unified 系统提示用的 (agent_id, phase)。改提示词不发版靠这两个键。
+UNIFIED_AGENT_ID = "unified"
+UNIFIED_PHASE = "system"
+
+
+async def _resolve_unified_system_prompt(
+    db: AsyncSession, tenant_id: Optional[int]
+) -> str:
+    """解析 unified 系统提示的**静态模板**部分（DB-first，查不到回退代码常量）。
+
+    只负责静态模板；STANDARD_DOC_FORMAT 已在 SYSTEM_PROMPT_UNIFIED 编译期烘进去，
+    app 上下文等运行时动态拼接仍在 _build_initial_messages 里完成，不进 DB。
+
+    tenant_id 缺失或 DB 异常 → 直接回退 SYSTEM_PROMPT_UNIFIED，绝不让 prompt
+    解析挂掉主链路。
+    """
+    if tenant_id is None:
+        return SYSTEM_PROMPT_UNIFIED
+    try:
+        from app.services.prompt_resolver import resolve_prompt
+        return await resolve_prompt(
+            db, tenant_id,
+            agent_id=UNIFIED_AGENT_ID, phase=UNIFIED_PHASE,
+            fallback=SYSTEM_PROMPT_UNIFIED,
+        )
+    except Exception as e:  # 兜底：任何异常都回退代码常量
+        logger.warning(
+            "resolve unified system prompt failed for tenant=%s: %s — 回退代码常量",
+            tenant_id, e,
+        )
+        return SYSTEM_PROMPT_UNIFIED
 
 
 # ─────────────────────────── LLM 调用辅助 ───────────────────────────
@@ -411,44 +371,32 @@ def _llm_chat_completions_url(cfg: LLMConfigSnapshot) -> str:
 async def _resolve_llm_config(
     db: AsyncSession, session: AIChatSession
 ) -> LLMConfigSnapshot:
-    """优先用 session.selected_llm_config_id；没指定则取平台默认模型。"""
-    cfg: Optional[LLMConfig] = None
-    if session.selected_llm_config_id:
-        res = await db.execute(
-            select(LLMConfig).where(
-                LLMConfig.id == session.selected_llm_config_id,
-                LLMConfig.status == "active",
-                LLMConfig.purpose.in_(("builder", "all")),
-            )
-        )
-        cfg = res.scalar_one_or_none()
-    if not cfg:
-        # fallback：平台默认，优先 builder，其次 all。
-        res = await db.execute(
-            select(LLMConfig)
-            .where(
-                LLMConfig.is_default == True,  # noqa: E712
-                LLMConfig.status == "active",
-                LLMConfig.purpose.in_(("builder", "all")),
-            )
-        )
-        defaults = res.scalars().all()
-        cfg = next((item for item in defaults if item.purpose == "builder"), None)
-        if not cfg:
-            cfg = next((item for item in defaults if item.purpose == "all"), None)
-    if not cfg:
-        res = await db.execute(
-            select(LLMConfig)
-            .where(
-                LLMConfig.status == "active",
-                LLMConfig.purpose.in_(("builder", "all")),
-            )
-            .order_by(LLMConfig.created_at.desc(), LLMConfig.id.desc())
-        )
-        rows = res.scalars().all()
-        cfg = next((item for item in rows if item.purpose == "builder"), None)
-        if not cfg:
-            cfg = next((item for item in rows if item.purpose == "all"), None)
+    """优先用 session.selected_llm_config_id；没指定则取平台默认模型。
+
+    解析逻辑收口到 routes.llm_configs.resolve_llm_config_for_purpose(purpose="builder")，
+    与 harness/llm_resolver 同源——消除「改 LLM scope 要同时 patch ai_chat 和
+    llm_resolver 两处」的漂移(commit 8068d895 实证过的坑)。
+
+    兜底链逐行核对与旧 ai_chat 等价:
+      ① selected_llm_config_id → get_active_llm_config_by_id_for_purpose
+         (id+active, 且 purpose ∈ {builder, all});
+      ② 平台默认 builder → 平台默认 all;
+      ③ 兜底任意 active(优先 builder 再 all)。
+    唯一适配:resolve_* 找不到返回 None,这里转抛与旧版**逐字一致**的 RuntimeError;
+    并把 ORM 行包成 LLMConfigSnapshot(解密 + max_tokens/temperature 透传)。
+
+    注:purpose="builder" 等价于旧版 purpose IN ('builder','all')——resolve_* 内部
+    精确用途优先、其次 'all'。租户隔离规则维持当前平台全局语义(resolve_* 忽略
+    tenant_id),与本轮重构无关,不在此处改动。
+    """
+    from app.routes.llm_configs import resolve_llm_config_for_purpose
+
+    cfg: Optional[LLMConfig] = await resolve_llm_config_for_purpose(
+        db,
+        getattr(session, "tenant_id", None) or 0,
+        "builder",
+        session.selected_llm_config_id,
+    )
     if not cfg:
         raise RuntimeError(
             "平台还没有配置可用的大模型,请到「平台管理 → 模型配置」添加一个模型后再使用。"
@@ -521,28 +469,14 @@ async def _call_llm(
         "max_tokens": cfg.max_tokens,
     }
     _apply_provider_payload_compat(cfg, payload)
-    last_error: Exception | None = None
-    for attempt in range(LLM_RETRY_ATTEMPTS):
-        try:
-            async with httpx.AsyncClient(timeout=httpx.Timeout(connect=10, read=timeout, write=10, pool=10)) as client:
-                resp = await client.post(
-                    _llm_chat_completions_url(cfg),
-                    headers={
-                        "Authorization": f"Bearer {cfg.api_key}",
-                        "Content-Type": "application/json",
-                    },
-                    json=payload,
-                )
-                resp.raise_for_status()
-                data = resp.json()
-            return data["choices"][0]["message"]
-        except Exception as exc:
-            last_error = exc
-            if attempt >= LLM_RETRY_ATTEMPTS - 1 or not _is_retryable_llm_error(exc):
-                raise
-            logger.warning("LLM non-stream request failed, retrying: %s", _format_llm_error(exc))
-            await _sleep_before_llm_retry(attempt)
-    raise last_error or RuntimeError("LLM 调用失败")
+    return await llm_transport.complete(
+        base_url=cfg.base_url,
+        api_key=cfg.api_key,
+        payload=payload,
+        timeout=httpx.Timeout(connect=10, read=timeout, write=10, pool=10),
+        retry_attempts=LLM_RETRY_ATTEMPTS,
+        url=_llm_chat_completions_url(cfg),
+    )
 
 
 async def _call_llm_stream(
@@ -560,6 +494,9 @@ async def _call_llm_stream(
 
     usage 来自 OpenAI 兼容网关的 include_usage chunk（prompt_tokens/completion_tokens/…），
     网关不支持时为 None。上层 run_agent 拼装好 final message 之后再走持久化。
+
+    SSE 解析 / 累积 / 重试逻辑已收口到 app.llm_transport.stream_chunks;这里只负责
+    构造 payload(含 ai_chat 的 _apply_provider_payload_compat + include_usage)与 URL/timeout。
     """
     payload = {
         "model": cfg.model,
@@ -573,93 +510,16 @@ async def _call_llm_stream(
         "stream_options": {"include_usage": True},
     }
     _apply_provider_payload_compat(cfg, payload)
-    last_error: Exception | None = None
-    for attempt in range(LLM_RETRY_ATTEMPTS):
-        accumulated_content = ""
-        usage_data: Optional[dict] = None
-        tool_buf: dict[int, dict] = {}
-        emitted_anything = False
-        try:
-            async with httpx.AsyncClient(timeout=httpx.Timeout(connect=10, read=timeout, write=10, pool=10)) as client:
-                async with client.stream(
-                    "POST",
-                    _llm_chat_completions_url(cfg),
-                    headers={
-                        "Authorization": f"Bearer {cfg.api_key}",
-                        "Content-Type": "application/json",
-                        "Accept": "text/event-stream",
-                    },
-                    json=payload,
-                ) as resp:
-                    if resp.status_code >= 400:
-                        await resp.aread()
-                        resp.raise_for_status()
-                    async for raw_line in resp.aiter_lines():
-                        if abort_event.is_set():
-                            break
-                        if not raw_line:
-                            continue
-                        line = raw_line.strip()
-                        if not line.startswith("data:"):
-                            continue
-                        data = line[len("data:"):].strip()
-                        if data == "[DONE]":
-                            break
-                        try:
-                            chunk = json.loads(data)
-                        except Exception:
-                            continue
-                        # usage chunk：choices 为空、带 usage（include_usage 开启后 [DONE] 前到达）
-                        if chunk.get("usage"):
-                            usage_data = chunk["usage"]
-                        choices = chunk.get("choices") or []
-                        if not choices:
-                            continue
-                        delta = choices[0].get("delta") or {}
-                        if delta.get("content"):
-                            text = delta["content"]
-                            accumulated_content += text
-                            emitted_anything = True
-                            yield {"type": "content_delta", "text": text}
-                        for tc in (delta.get("tool_calls") or []):
-                            idx = tc.get("index", 0)
-                            buf = tool_buf.setdefault(
-                                idx,
-                                {"id": "", "type": "function", "function": {"name": "", "arguments": ""}},
-                            )
-                            if tc.get("id"):
-                                buf["id"] = tc["id"]
-                            fn = tc.get("function") or {}
-                            if fn.get("name"):
-                                buf["function"]["name"] = fn["name"]
-                            if fn.get("arguments"):
-                                buf["function"]["arguments"] += fn["arguments"]
-                            emitted_anything = True
-                            yield {
-                                "type": "tool_call_delta",
-                                "index": idx,
-                                "id": buf["id"],
-                                "name": buf["function"]["name"],
-                                "arguments_so_far": buf["function"]["arguments"],
-                            }
-
-            final_tool_calls = [tool_buf[k] for k in sorted(tool_buf.keys())]
-            yield {
-                "type": "done",
-                "message": {
-                    "content": accumulated_content,
-                    "tool_calls": final_tool_calls if final_tool_calls else None,
-                },
-                "usage": usage_data,
-            }
-            return
-        except Exception as exc:
-            last_error = exc
-            if emitted_anything or attempt >= LLM_RETRY_ATTEMPTS - 1 or not _is_retryable_llm_error(exc):
-                raise
-            logger.warning("LLM stream request failed before output, retrying: %s", _format_llm_error(exc))
-            await _sleep_before_llm_retry(attempt)
-    raise last_error or RuntimeError("LLM 调用失败")
+    async for chunk in llm_transport.stream_chunks(
+        base_url=cfg.base_url,
+        api_key=cfg.api_key,
+        payload=payload,
+        timeout=httpx.Timeout(connect=10, read=timeout, write=10, pool=10),
+        abort_event=abort_event,
+        retry_attempts=LLM_RETRY_ATTEMPTS,
+        url=_llm_chat_completions_url(cfg),
+    ):
+        yield chunk
 
 
 async def _call_llm_stream_with_fallback(
@@ -714,7 +574,10 @@ async def _build_initial_messages(
       - tool_result 跨轮保留：read_attachment 截断到 30K、read_artifact 截断到 30K、
         MCP 工具截断到 20K（截断逻辑在各自执行函数/mcp_bridge 里）
     """
-    system_prompt = _select_system_prompt(getattr(session, "mode", None))
+    # 静态模板走 DB-first（agent_prompts: unified/system），动态拼接在下面照旧。
+    system_prompt = await _resolve_unified_system_prompt(
+        db, getattr(session, "tenant_id", None),
+    )
     app_id = getattr(session, "app_id", None)
     if app_id:
         from app.ai_chat.app_context import build_app_context_block
@@ -932,12 +795,6 @@ async def _run_agent_inner(
     # 每个 session 的第一轮拉一次合并 schemas（base 4 + MCP bridge 注入的 N 个）
     # 这是 lazy 设计 — backend 启动时 MCP 可能还没 ready，所以放在 turn loop 外的第一次调用
     all_schemas = await get_all_tool_schemas()
-    if getattr(session, "app_id", None):
-        # 嵌入式应用面板里浏览器工具没有可用 tab，必失败 —— 锁定 app 时直接不暴露。
-        all_schemas = [
-            t for t in all_schemas
-            if not str(t.get("function", {}).get("name", "")).startswith("browser_")
-        ]
     # 延迟工具:核心集恒在；长尾只在 system prompt 列清单，按需 search_tools 激活。
     core_schemas, deferred_by_name = split_core_deferred(all_schemas)
     _manifest = build_deferred_manifest(deferred_by_name)

@@ -101,8 +101,6 @@ description: Use this skill for the right-side "问题助手" in aPaaS Builder A
 
 可选上下文工具：
 
-- `browser_screenshot`：需要页面证据时截图。
-- `browser_snapshot`：需要定位页面元素时读取当前页面结构。
 - `list_deploy_records`：用户问某个应用部署历史时使用。
 
 ## 禁止事项
@@ -112,4 +110,3 @@ description: Use this skill for the right-side "问题助手" in aPaaS Builder A
 - 不要让用户以为记录 Bug 等于已经修复。
 - 不要在没有证据时把所有问题都归类为 Bug。
 - 不要自动触发生产部署。
-

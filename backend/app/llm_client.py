@@ -410,6 +410,9 @@ class LLMClient:
                 "messages": messages,
                 "max_tokens": max_tokens,
                 "stream": True,
+                # 让 OpenAI 兼容网关在 [DONE] 前回一个带 usage 的 chunk（token 必采）。
+                # 该 chunk 的 choices 为空、带 usage，原样透传给上层流式消费者累计。
+                "stream_options": {"include_usage": True},
             }
             if tools:
                 payload["tools"] = tools

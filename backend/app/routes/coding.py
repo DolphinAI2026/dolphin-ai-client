@@ -28,14 +28,11 @@ from app.database import get_db
 from app.models import User, Conversation, Message, Project, ProjectMember, LLMConfig, Application
 from app.deps import get_auth_context, AuthContext
 from app.coding.scenes import SceneType, get_scene, get_all_scenes, get_scenes_by_category
-from app.coding.generator import CodingGenerator
-from app.coding.prompts import AGENT_SYSTEM_PROMPT
 from app.coding.workspace import WorkspaceManager, ProjectType
 from app.coding.apaas_tools import call_apaas_with_relogin
 from app.llm_client import LLMClient
 from app.apaas_client import APaaSClient
 from app.config import settings
-from app.coding.verifier import ComponentVerifier
 from app.routes.llm_configs import list_llm_configs_for_purpose
 from app.project_access import project_role_at_least, require_project_access
 from app.routes.applications.extension import (
@@ -204,6 +201,12 @@ def _normalize_stream_payload(stream_messages: list) -> list[dict[str, Any]]:
         for field in ("fileName", "filePath", "fileContent", "oldContent", "collapsed", "timestamp"):
             if field in message:
                 normalized_item[field] = message[field]
+        if "attachments" in message:
+            from app.coding.attachments import normalize_coding_attachments
+
+            attachments = normalize_coding_attachments(message.get("attachments"))
+            if attachments:
+                normalized_item["attachments"] = attachments
         normalized_stream_messages.append(normalized_item)
     return normalized_stream_messages
 
@@ -2574,6 +2577,19 @@ async def upload_file(
         "content_type": content_type,
         "file_path": file_path,
     }
+    if workspace_id:
+        from urllib.parse import quote
+
+        try:
+            rel_path = Path(file_path).resolve().relative_to(Path(workspace_meta["disk_path"]).resolve())
+            rel_posix = rel_path.as_posix()
+            result["relative_path"] = rel_posix
+            if content_type.startswith("image/"):
+                result["preview_url"] = (
+                    f"/api/coding/workspace/{workspace_id}/raw?file_path={quote(rel_posix, safe='')}"
+                )
+        except Exception:
+            logger.debug("Failed to derive workspace-relative upload path: %s", file_path, exc_info=True)
 
     # For text-based documents, extract content
     if ext in (".md", ".txt"):
@@ -3647,170 +3663,3 @@ def _get_user_platform_url(user) -> str:
 def _sse(data: dict) -> str:
     """SSE 事件格式化"""
     return json.dumps(data, ensure_ascii=False)
-
-
-async def _extract_project_name(generator: CodingGenerator, message: str) -> str:
-    """从用户需求中提取项目名称，优先使用 LLM 翻译，关键字表仅作快速缓存"""
-    import re
-    import uuid
-
-    # 快速缓存：高频词直接命中，避免不必要的 LLM 调用
-    _KEYWORD_CACHE = {
-        "甘特图": "gantt-chart", "审批流程": "approval-flow", "审批": "approval",
-        "进度条": "progress-bar", "评分": "star-rating", "颜色选择器": "color-picker",
-        "颜色选择": "color-picker", "标签输入": "tag-input", "图表分析": "chart-analysis",
-        "图表": "chart", "日期范围": "date-range", "日期选择": "date-picker",
-        "文件上传": "file-upload", "上传": "file-upload", "头像": "avatar",
-        "签名": "signature", "二维码": "qrcode", "富文本": "rich-text",
-        "组织架构树": "org-tree", "组织架构": "org-tree", "组织树": "org-tree",
-        "部门树": "dept-tree", "树形选择": "tree-select", "级联": "cascader",
-        "数据表格": "data-table", "看板": "kanban", "弹窗选择": "popup-select",
-        "人员选择": "person-select", "水印": "watermark", "倒计时": "countdown",
-        "步骤条": "steps", "时间轴": "timeline", "轮播": "carousel",
-        "地图选点": "map-picker", "地图": "map-view",
-        "供应商管理": "supplier-mgmt", "采购管理": "purchase-mgmt",
-        "客户管理": "customer-mgmt", "工单管理": "work-order-mgmt",
-        "派工管理": "dispatch-mgmt", "智能派工": "smart-dispatch",
-        "订单管理": "order-mgmt", "库存管理": "inventory-mgmt",
-        "考勤管理": "attendance-mgmt", "设备管理": "device-mgmt",
-        "项目管理": "project-mgmt", "任务管理": "task-mgmt",
-        "合同管理": "contract-mgmt", "费用管理": "expense-mgmt",
-        "预算管理": "budget-mgmt", "报表": "report", "仪表盘": "dashboard",
-        "布局": "app-layout", "登录页": "login-page",
-    }
-
-    def _slugify(text: str) -> str:
-        s = (text or "").strip().lower()
-        s = s.replace("&", "and")
-        s = re.sub(r"[^a-z0-9\s-]", "-", s)
-        s = re.sub(r"[\s_]+", "-", s)
-        s = re.sub(r"-+", "-", s).strip("-")
-        s = re.sub(r"^[^a-z]+", "", s)
-        return s[:48].strip("-")
-
-    _INVALID = {"custom", "custom-dev", "component", "page", "module", "widget", ""}
-
-    async def _llm_to_slug(text: str) -> str:
-        if not text or not text.strip():
-            return ""
-        try:
-            llm = LLMClient()
-            resp = await llm.chat_completion([
-                {
-                    "role": "system",
-                    "content": (
-                        "根据用户描述，提取核心功能名称并转换为简短的英文 kebab-case 项目名（2-4段）。"
-                        "例如：'国际手机号输入' → 'intl-phone-input'，'评分组件' → 'star-rating'，'供应商管理页面' → 'supplier-mgmt'。"
-                        "只返回 kebab-case 名称本身，不要任何解释或标点。"
-                    ),
-                },
-                {"role": "user", "content": text.strip()},
-            ], max_tokens=40)
-            content = resp.get("choices", [{}])[0].get("message", {}).get("content", "").strip()
-            match = re.search(r"\b([a-z][a-z0-9]*(?:-[a-z0-9]+)*)\b", content.lower())
-            slug = _slugify(match.group(1)) if match else ""
-            return slug if slug not in _INVALID else ""
-        except Exception as e:
-            logger.warning(f"LLM 提取项目名失败: {e}")
-            return ""
-
-    msg = (message or "").strip()
-    msg_lower = msg.lower()
-
-    # 1. 消息中已经包含英文 kebab-case（用户直接写了名字）
-    explicit = re.search(r"\b([a-z][a-z0-9]*(?:-[a-z0-9]+)+)\b", msg_lower)
-    if explicit and explicit.group(1) not in _INVALID:
-        return explicit.group(1)
-
-    # 2. 关键字缓存快速命中（按长度降序，优先匹配更长的词）
-    for kw, slug in sorted(_KEYWORD_CACHE.items(), key=lambda x: len(x[0]), reverse=True):
-        if kw in msg:
-            return slug
-
-    # 3. LLM 直接从完整消息提取（主要路径）
-    slug = await _llm_to_slug(msg)
-    if slug:
-        return slug
-
-    # 4. 兜底：随机短码，保证唯一性，不使用有误导性的固定名称
-    return f"component-{uuid.uuid4().hex[:6]}"
-
-
-def _extract_display_name(message: str, project_type: str, fallback_name: str) -> str:
-    """提取适合在工作区列表中展示的名称"""
-    import re
-
-    cleaned = re.sub(r"\s+", " ", (message or "").strip())
-    if not cleaned:
-        return fallback_name
-
-    patterns = [
-        r'(?:做|开发|创建|实现|搭建|写|生成|补一个|新增|增加|搞一个|搞个)\s*(?:一|1)?个?\s*(.+?)(?:组件|页面|模块|系统|功能|弹窗|选择器|面板)',
-        r'(.+?)(?:组件|页面|模块|系统|功能|弹窗|选择器|面板)',
-    ]
-    display_name = ""
-    for pattern in patterns:
-        match = re.search(pattern, cleaned)
-        if match:
-            display_name = match.group(1).strip("，。,.!！?？：: ")
-            break
-
-    if not display_name:
-        display_name = cleaned.split("，", 1)[0].split("。", 1)[0].strip()
-
-    display_name = re.sub(
-        r'^(请|帮我|帮忙|我想|我要|想要|需要|帮我做|帮我开发|做一个|做个|开发一个|开发个|实现一个|实现个|创建一个|创建个|生成一个|生成个)\s*',
-        '',
-        display_name,
-    ).strip("，。,.!！?？：: ")
-
-    suffix_map = {
-        "form-component-dual": "组件",
-        "form-page": "页面",
-        "menu-page": "页面",
-        "mobile-page": "页面",
-        "form-list": "列表",
-        "layout": "布局",
-        "plugin": "插件",
-        "backend-api": "接口",
-    }
-    suffix = suffix_map.get(project_type, "")
-    if suffix and not any(token in display_name for token in ("组件", "页面", "选择器", "弹窗", "布局", "插件", "接口", "模块", "登录页")):
-        display_name = f"{display_name}{suffix}"
-
-    return (display_name or fallback_name)[:48]
-
-
-async def _is_new_component_intent(generator: CodingGenerator, message: str, ws_id: str, ws_mgr: WorkspaceManager) -> bool:
-    """判断用户消息是要修改当前组件还是做一个全新的组件"""
-    import re
-
-    # 快速关键词判断（不调 LLM）
-    msg_lower = message.lower()
-    new_keywords = ["做一个新", "创建一个新", "新建一个", "开发一个新", "新组件", "新工作区", "另一个组件"]
-    modify_keywords = ["修改", "改一下", "调整", "优化", "加个", "删掉", "改成", "换个", "bug", "fix",
-                       "空白", "渲染", "不对", "报错", "完善", "补充", "实现", "请用", "改为", "更新"]
-
-    has_new = any(kw in msg_lower for kw in new_keywords)
-    has_modify = any(kw in msg_lower for kw in modify_keywords)
-
-    if has_new and not has_modify:
-        return True
-    if has_modify and not has_new:
-        return False
-
-    # 都有或都没有，用 LLM 判断
-    try:
-        info = ws_mgr.get_workspace_info(ws_id)
-        project_name = info.get("project_name", "")
-
-        llm = LLMClient()
-        resp = await llm.chat_completion([
-            {"role": "system", "content": f"当前工作区的组件是 '{project_name}'。判断用户的消息是想【修改当前组件】还是想【做一个全新的、不同的组件】。回答中必须包含 MODIFY 或 NEW 这个词。"},
-            {"role": "user", "content": message}
-        ], max_tokens=50)
-        answer = resp.get("choices", [{}])[0].get("message", {}).get("content", "").upper()
-        return "NEW" in answer
-    except Exception as e:
-        logger.warning(f"意图判断失败: {e}")
-        return False

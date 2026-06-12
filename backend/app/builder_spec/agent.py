@@ -287,25 +287,27 @@ class SpecAgentEvent:
 
 
 async def _open_stream(client: httpx.AsyncClient, base_url: str, api_key: str, payload: dict):
-    """Indirection for testing — async generator yielding SSE lines.
+    """Indirection for testing — async generator yielding raw SSE lines.
 
     Tests patch this with a sync function returning an async iterable
     (e.g. FakeLLMStream). Since this is `async def ... yield`, calling
     `_open_stream(...)` returns an async generator without needing await.
+
+    SSE-line transport is shared via app.llm_transport.stream_raw_sse_lines
+    (same OpenAI-compatible httpx stack as ai_chat). The `client` arg is kept
+    for the call-site signature / test stub boundary; the transport manages its
+    own client, so we just forward the same timeout to stay byte-equivalent
+    (URL `{base_url}/chat/completions`, non-200 → `RuntimeError(LLM API <code>: …)`).
     """
-    async with client.stream(
-        "POST",
-        f"{base_url}/chat/completions",
-        headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"},
-        json=payload,
-    ) as stream:
-        if stream.status_code != 200:
-            body = await stream.aread()
-            raise RuntimeError(
-                f"LLM API {stream.status_code}: {body[:300].decode(errors='replace')}"
-            )
-        async for line in stream.aiter_lines():
-            yield line
+    from app import llm_transport
+
+    async for line in llm_transport.stream_raw_sse_lines(
+        base_url=base_url,
+        api_key=api_key,
+        payload=payload,
+        timeout=getattr(client, "timeout", httpx.Timeout(connect=10, read=300, write=10, pool=10)),
+    ):
+        yield line
 
 
 @dataclass

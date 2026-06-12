@@ -635,12 +635,12 @@ function titleStatusClass(status: DiffStatus) {
   display: flex;
   flex-direction: column;
   gap: 12px;
-  color: #24324a;
+  color: var(--text);
 }
 
 .doc-section {
   padding-bottom: 10px;
-  border-bottom: 1px solid rgba(161, 179, 226, 0.22);
+  border-bottom: 1px solid var(--line);
 }
 
 .doc-section:last-child {
@@ -657,7 +657,7 @@ function titleStatusClass(status: DiffStatus) {
   font-size: 20px;
   line-height: 1.2;
   font-weight: 800;
-  color: #1d2940;
+  color: var(--text);
 }
 
 .doc-section-title {
@@ -665,7 +665,7 @@ function titleStatusClass(status: DiffStatus) {
   font-size: 17px;
   line-height: 1.25;
   font-weight: 800;
-  color: #1e2a43;
+  color: var(--text);
 }
 
 .doc-subsection {
@@ -680,14 +680,14 @@ function titleStatusClass(status: DiffStatus) {
   margin: 0 0 6px;
   font-size: 14px;
   font-weight: 700;
-  color: #1f2b44;
+  color: var(--text);
 }
 
 .doc-sub-meta,
 .doc-form-group-title,
 .doc-form-group-code,
 .doc-app-desc {
-  color: #5f6f90;
+  color: var(--text-3);
 }
 
 .doc-form-group {
@@ -706,24 +706,24 @@ function titleStatusClass(status: DiffStatus) {
 }
 
 .doc-table th {
-  background: rgba(99, 102, 241, 0.1);
-  color: #4f46e5;
+  background: var(--brand-soft);
+  color: var(--brand-text);
   text-align: left;
   padding: 8px 12px;
-  border: 1px solid rgba(161, 179, 226, 0.24);
+  border: 1px solid var(--line);
   font-weight: 600;
   white-space: nowrap;
 }
 
 .doc-table td {
   padding: 6px 12px;
-  border: 1px solid rgba(161, 179, 226, 0.2);
+  border: 1px solid var(--line);
   white-space: nowrap;
 }
 
 .empty-cell,
 .doc-empty-block {
-  color: #8ea0bf;
+  color: var(--text-4);
 }
 
 .diff-doc .doc-table tbody tr {
@@ -731,20 +731,20 @@ function titleStatusClass(status: DiffStatus) {
 }
 
 .diff-cell-added {
-  background: rgba(34, 197, 94, 0.14);
-  color: #14532d;
+  background: var(--ok-soft);
+  color: var(--ok);
   font-weight: 600;
 }
 
 .diff-cell-removed {
-  background: rgba(239, 68, 68, 0.14);
-  color: #7f1d1d;
+  background: var(--err-soft);
+  color: var(--err);
   font-weight: 600;
 }
 
 .diff-cell-modified {
-  background: rgba(245, 158, 11, 0.14);
-  color: #78350f;
+  background: var(--warn-soft);
+  color: var(--warn);
   font-weight: 600;
 }
 
@@ -761,14 +761,14 @@ function titleStatusClass(status: DiffStatus) {
 }
 
 .diff-title-added {
-  color: #15803d;
+  color: var(--ok);
 }
 
 .diff-title-removed {
-  color: #b91c1c;
+  color: var(--err);
 }
 
 .diff-title-modified {
-  color: #b45309;
+  color: var(--warn);
 }
 </style>

@@ -165,9 +165,9 @@ function formatArgs(args: any): string {
   font-size: 12px;
   font-weight: 600;
 }
-.tc-status-label.success { color: #16a34a; }
-.tc-status-label.error { color: #dc2626; }
-.tc-status-label.running { color: #3b82f6; }
+.tc-status-label.success { color: var(--ok); }
+.tc-status-label.error { color: var(--err); }
+.tc-status-label.running { color: var(--info); }
 .tc-status-label.pending { color: rgba(116, 128, 171, 0.85); }
 
 .tc-sep {
@@ -176,7 +176,7 @@ function formatArgs(args: any): string {
   margin: 0 2px;
 }
 .tc-verb {
-  color: rgba(31, 41, 55, 0.7);
+  color: var(--text-2);
   font-size: 12px;
 }
 .tc-name {
@@ -201,7 +201,7 @@ function formatArgs(args: any): string {
 }
 /* 结果摘要 chip — 比 .tc-meta 更醒目（深色字 + 浅底）让用户一眼扫到 */
 .tc-result-summary {
-  color: rgba(31, 41, 55, 0.92);
+  color: var(--text);
   font-size: 11.5px;
   font-weight: 500;
   max-width: 360px;
@@ -209,8 +209,8 @@ function formatArgs(args: any): string {
   text-overflow: ellipsis;
   white-space: nowrap;
 }
-.tool-card.status-success .tc-result-summary { color: #15803d; }
-.tool-card.status-error .tc-result-summary { color: #b91c1c; }
+.tool-card.status-success .tc-result-summary { color: var(--ok); }
+.tool-card.status-error .tc-result-summary { color: var(--err); }
 .tc-duration {
   font-size: 11.5px;
   color: rgba(116, 128, 171, 0.85);

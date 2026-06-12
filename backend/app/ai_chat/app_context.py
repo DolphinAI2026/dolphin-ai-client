@@ -114,8 +114,11 @@ async def _load_app_workspaces(
     out: list[dict] = []
     for ws in rows:
         try:
-            if str(ws.get("project_id") or "") != str(app_id):
+            project_id = ws.get("project_id")
+            if project_id not in (None, "") and str(project_id) != str(app_id):
                 continue
+            ws = dict(ws)
+            ws["binding_status"] = "bound" if str(project_id or "") == str(app_id) else "unbound_candidate"
             out.append(ws)
         except Exception:
             continue
@@ -128,9 +131,11 @@ def _workspace_line(ws: dict) -> str:
     project_name = ws.get("project_name") or ""
     display_name = ws.get("display_name") or project_name
     status = ws.get("status") or ""
+    binding = ws.get("binding_status") or ("bound" if ws.get("project_id") else "unbound_candidate")
+    binding_label = "已绑定" if binding == "bound" else "未绑定候选"
     return (
         f"- ws_id={ws_id} | type={project_type} | name={display_name} "
-        f"| project_name={project_name} | status={status}"
+        f"| project_name={project_name} | status={status} | binding={binding_label}"
     )
 
 
@@ -154,8 +159,7 @@ async def build_app_context_block(
         f"- 应用：{app['name']}（内部 id={app['id']}，apaas_app_id={app.get('apaas_app_id')}，env={app.get('platform_env_id')}）",
         "- 你正在这个应用内工作。配置改动立即生效；二次开发 / codegen 你现在就能干（相关工具已具备）。",
         "- 不要新建其它应用、不要跨应用操作；apaas 工具的 env_id / apaas_app_id 由后端按锁定应用填死。",
-        "- 要了解应用结构（模型/表单/字段/菜单/流程）就用 list_apaas_* 等 MCP 工具直接查；"
-        "不要用 browser_* / 浏览器快照类工具读页面 —— 嵌入式面板里没有可用浏览器 tab，必失败。",
+        "- 要了解应用结构（模型/表单/字段/菜单/流程）就用 list_apaas_* 等 MCP 工具直接查。",
     ]
     if view_context:
         parts.append(f"- 用户此刻正在看：{view_context}（用户说「当前/这个」表单/页面/字段时，默认指这个）")
@@ -164,7 +168,7 @@ async def build_app_context_block(
     workspaces = await _load_app_workspaces(db, app_id, tenant_id, user_id)
     if workspaces:
         parts.append(
-            "\n### 已有自开发 workspace（优先复用）\n"
+            "\n### 已有/候选自开发 workspace（优先复用）\n"
             "修改已有自开发代码 / 页面 / 组件时，先根据 ws_id 调 "
             "get_dev_workspace_status / glob_workspace / grep_workspace / read_workspace_file，"
             "再用 edit_workspace_files 或 write_workspace_files 修改。"

@@ -1,10 +1,9 @@
 from types import SimpleNamespace
 
 import pytest
-from jose import jwt
 from sqlalchemy import select
 
-from app.auth import create_access_token, get_password_hash
+from app.auth import create_access_token, decode_token, get_password_hash
 from app.config import settings
 from app.deps import AuthContext, get_auth_context, resolve_effective_tenant_id
 from app.models import APaaSPlatformCredential, APaaSUserCredential, LLMConfig, PlatformEnv, User
@@ -43,16 +42,17 @@ async def _seed_platform_admin(db_session):
 
 
 @pytest.mark.asyncio
-async def test_platform_admin_login_token_uses_default_tenant(db_session):
+async def test_platform_admin_login_token_uses_default_tenant(db_session, monkeypatch):
     _user, tenant = await _seed_platform_admin(db_session)
+
+    async def no_apaas_login(_user_data, _db):
+        return None
+
+    monkeypatch.setattr(auth_routes, "_try_apaas_login_flow", no_apaas_login)
 
     response = await login(UserLogin(username="admin", password="secret"), db_session)
 
-    payload = jwt.decode(
-        response.access_token,
-        settings.jwt_secret_key,
-        algorithms=[settings.jwt_algorithm],
-    )
+    payload = decode_token(response.access_token)
     assert payload["tid"] == tenant.id
 
 

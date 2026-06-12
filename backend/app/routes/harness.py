@@ -164,6 +164,7 @@ class CodingPipelineRequest(BaseModel):
     selected_model: str | None = None
     project_id: int | None = None
     app_id: str | None = None  # 分场景「在应用上定制」选中的本地 Application.id
+    attachments: list[dict[str, Any]] | None = None
 
 
 class IDECodingPipelineRequest(BaseModel):
@@ -193,6 +194,7 @@ async def coding_pipeline(
         "selected_model": req.selected_model,
         "project_id": req.project_id,
         "app_id": req.app_id,
+        "attachments": req.attachments or [],
     }
     if req.workspace_id:
         await _ensure_workspace_access(req.workspace_id, ctx, db, minimum_project_role="member")

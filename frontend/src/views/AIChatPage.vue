@@ -112,15 +112,37 @@
             <div class="welcome-examples" aria-label="开场示例">
               <button
                 v-for="example in introExamples"
-                :key="example.title"
+                :key="example.key"
                 type="button"
                 class="welcome-example"
-                @click="startFromIntroExample(example.prompt)"
+                :class="{ active: selectedIntroExample?.key === example.key }"
+                @click="startFromIntroExample(example)"
               >
                 <span class="welcome-example-title">{{ example.title }}</span>
                 <span class="welcome-example-text">{{ example.short }}</span>
               </button>
             </div>
+            <section
+              v-if="selectedIntroExample"
+              class="welcome-guide"
+              aria-live="polite"
+            >
+              <div class="welcome-guide-main">
+                <span class="welcome-guide-kicker">场景引导</span>
+                <h2>{{ selectedIntroExample.guideTitle }}</h2>
+                <p>{{ selectedIntroExample.guideText }}</p>
+              </div>
+              <ol class="welcome-guide-steps">
+                <li v-for="step in selectedIntroExample.steps" :key="step">{{ step }}</li>
+              </ol>
+              <button
+                type="button"
+                class="welcome-guide-action"
+                @click="fillIntroExamplePrompt(selectedIntroExample)"
+              >
+                {{ selectedIntroExample.cta }}
+              </button>
+            </section>
             <div class="welcome-capabilities" aria-label="AI Builder 能力范围">
               <span><i></i>整理需求</span>
               <span><i></i>生成 / 更新应用</span>
@@ -553,21 +575,38 @@ const welcomeTitle = '说出目标，AI 帮你搭应用，也能继续开发。'
 const welcomeIntro = '这里不分“需求入口”和“开发入口”。你可以描述业务流程、上传材料、指定要改的页面或贴出运行报错，AI 会先理清上下文，再生成应用、修改代码、联调验证。'
 const introExamples = [
   {
+    key: 'business-goal',
     title: '从业务目标开始',
     short: '搭一个整改闭环或审批系统',
     prompt: '给质量部搭一个 QMS 整改闭环，包含问题登记、责任人派发、整改验证、超期提醒和月度统计。',
+    guideTitle: '适合 0-1 搭一个低代码应用',
+    guideText: '你只需要先讲清业务目标和参与角色，AI Builder 会把需求拆成数据模型、表单、流程、权限和需要自开发的部分。',
+    steps: ['描述业务对象和闭环状态', '说明角色、审批或流转规则', '补充统计、提醒、权限等边界'],
+    cta: '填入示例需求',
   },
   {
+    key: 'existing-app',
     title: '从现有应用继续改',
     short: '改页面、补字段、接流程',
     prompt: '我想调整现有应用：新增一个审批状态字段，列表里支持按状态筛选，并把详情页的关键字段重新分组。',
+    guideTitle: '适合在已有应用上做调整',
+    guideText: '先告诉 AI Builder 要改哪个应用或页面，再说明期望变化。它会读取当前应用配置，判断是平台配置、设计文档更新，还是自开发代码调整。',
+    steps: ['指定应用、页面、表单或字段', '说明新增、删除、移动或规则变化', '确认是否要同步发布或只保存配置'],
+    cta: '填入调整模板',
   },
   {
+    key: 'integration',
     title: '从接口联调开始',
     short: '贴接口、截图或报错定位问题',
     prompt: '我遇到一个接口联调问题，下面会贴报错和请求参数，请帮我定位原因并给出修改方案。',
+    guideTitle: '适合定位接口、页面运行或发布问题',
+    guideText: '把报错、截图、接口地址、请求参数或相关日志贴进来。AI Builder 会先判断问题位置，再决定查配置、读代码、改自开发包或补工具能力。',
+    steps: ['贴出报错截图或接口返回', '补充复现步骤和目标页面', '说明期望结果和是否允许直接修改代码'],
+    cta: '填入排错模板',
   },
 ]
+type IntroExample = typeof introExamples[number]
+const selectedIntroExample = ref<IntroExample | null>(null)
 
 const llmOptions = ref<BuilderModelOption[]>([])
 const selectedLlmId = ref<number | null>(null)
@@ -604,6 +643,7 @@ function resetChatTenantState() {
   stopDrain()
   stopGenPoll()
   genProgress.value = null
+  selectedIntroExample.value = null
 }
 
 const inputText = ref('')
@@ -1755,13 +1795,17 @@ async function onStartNew(payload: { prompt: string; files: File[] }) {
   }
 }
 
-async function startFromIntroExample(prompt: string) {
+async function startFromIntroExample(example: IntroExample) {
+  selectedIntroExample.value = example
   if (currentSession.value) {
-    inputText.value = prompt
-    await nextTick()
-    return
+    inputText.value = example.prompt
   }
-  await onStartNew({ prompt, files: [] })
+  await nextTick()
+}
+
+async function fillIntroExamplePrompt(example: IntroExample) {
+  inputText.value = example.prompt
+  await nextTick()
 }
 
 async function onChangeLlm() {
@@ -3182,6 +3226,13 @@ onMounted(async () => {
   background: color-mix(in srgb, var(--ac-brand) 5%, var(--ac-panel));
   transform: translateY(-1px);
 }
+.welcome-example.active {
+  border-color: color-mix(in srgb, var(--ac-brand) 56%, var(--ac-border));
+  background:
+    linear-gradient(180deg, color-mix(in srgb, var(--ac-brand) 11%, transparent), transparent),
+    color-mix(in srgb, var(--ac-panel) 92%, transparent);
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--ac-brand) 18%, transparent);
+}
 .welcome-example:focus-visible {
   outline: 2px solid color-mix(in srgb, var(--ac-brand) 45%, transparent);
   outline-offset: 2px;
@@ -3199,6 +3250,84 @@ onMounted(async () => {
   color: var(--ac-text-faint);
   font-size: 12px;
   line-height: 1.45;
+}
+.welcome-guide {
+  width: min(100%, 880px);
+  margin: 12px auto 0;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(210px, 280px) auto;
+  align-items: center;
+  gap: 18px;
+  padding: 18px 20px;
+  border-radius: 10px;
+  border: 1px solid color-mix(in srgb, var(--ac-brand) 24%, var(--ac-border));
+  background:
+    linear-gradient(180deg, color-mix(in srgb, var(--ac-brand) 8%, transparent), transparent),
+    color-mix(in srgb, var(--ac-panel) 88%, transparent);
+}
+.welcome-guide-kicker {
+  display: inline-flex;
+  align-items: center;
+  min-height: 22px;
+  padding: 0 8px;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--ac-brand) 13%, transparent);
+  color: var(--ai-text);
+  font-size: 11px;
+  font-weight: 760;
+}
+.welcome-guide h2 {
+  margin: 9px 0 7px;
+  color: var(--ac-text);
+  font-size: 16px;
+  line-height: 1.35;
+  font-weight: 780;
+}
+.welcome-guide p {
+  margin: 0;
+  color: var(--ac-text-mute);
+  font-size: 12.5px;
+  line-height: 1.65;
+}
+.welcome-guide-steps {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  display: grid;
+  gap: 7px;
+}
+.welcome-guide-steps li {
+  position: relative;
+  padding-left: 16px;
+  color: var(--ac-text-mute);
+  font-size: 12px;
+  line-height: 1.45;
+}
+.welcome-guide-steps li::before {
+  content: '';
+  position: absolute;
+  left: 0;
+  top: 0.56em;
+  width: 6px;
+  height: 6px;
+  border-radius: 999px;
+  background: #0f9f8f;
+}
+.welcome-guide-action {
+  min-height: 36px;
+  padding: 0 14px;
+  border-radius: 8px;
+  border: 1px solid color-mix(in srgb, var(--ac-brand) 34%, var(--ac-border));
+  background: color-mix(in srgb, var(--ac-brand) 12%, var(--ac-panel));
+  color: var(--ai-text);
+  font: inherit;
+  font-size: 12.5px;
+  font-weight: 760;
+  cursor: pointer;
+  white-space: nowrap;
+}
+.welcome-guide-action:hover {
+  background: color-mix(in srgb, var(--ac-brand) 18%, var(--ac-panel));
 }
 .welcome-capabilities {
   display: flex;
@@ -3259,6 +3388,14 @@ onMounted(async () => {
   .welcome-sub { max-width: 600px; }
   .welcome-examples { grid-template-columns: 1fr; width: min(100%, 680px); }
   .welcome-example { min-height: 64px; }
+  .welcome-guide {
+    width: min(100%, 680px);
+    grid-template-columns: 1fr;
+    align-items: stretch;
+  }
+  .welcome-guide-action {
+    justify-self: start;
+  }
 }
 
 @media (max-width: 720px) {

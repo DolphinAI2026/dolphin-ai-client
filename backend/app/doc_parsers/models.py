@@ -137,6 +137,10 @@ def _parse_aggregate_tables(section_text: str) -> Tuple[List[dict], List[str]]:
         for row in field_rows:
             model_code = (row.get("模型编码") or "").strip().lower()
             if not model_code:
+                field_name = (row.get("字段名称") or row.get("字段编码") or "(未命名)").strip()
+                errors.append(
+                    f"数据模型：字段 '{field_name}' 所属模型编码为空，该字段已跳过（无法归属到任何模型）"
+                )
                 continue
             # 跟模型行用同一个确定性规范化，保证字段挂到规范化后的模型 code 上、不被孤立
             if not _MODEL_CODE_RE.match(model_code):
@@ -156,12 +160,19 @@ def _parse_aggregate_tables(section_text: str) -> Tuple[List[dict], List[str]]:
                 r"模型编码[：:]\s*`?([a-zA-Z][a-zA-Z0-9_]*)`?",
                 block,
             )
+            block_title = (m.group(0) or "").lstrip("# ").strip() or "(未命名)"
             if not code_match:
+                errors.append(
+                    f"数据模型：字段块 '{block_title}' 缺少 '模型编码：xxx' 声明，该块字段已整块跳过"
+                )
                 continue
             block_code = code_match.group(1).strip().lower()
 
             block_field_rows = parse_table(block)
             if not block_field_rows:
+                errors.append(
+                    f"数据模型：字段块 '{block_title}'（模型编码 '{block_code}'）未解析出字段表格，该块已跳过"
+                )
                 continue
             field_rows_by_model.setdefault(block_code, []).extend(block_field_rows)
 
@@ -171,6 +182,9 @@ def _parse_aggregate_tables(section_text: str) -> Tuple[List[dict], List[str]]:
         code = (row.get("模型编码") or "").strip().lower()
         name = (row.get("模型名称") or code).strip()
         if not code:
+            errors.append(
+                f"数据模型：模型 '{name or '(未命名)'}' 的模型编码为空，该模型已跳过"
+            )
             continue
         if not _MODEL_CODE_RE.match(code):
             fixed = _sanitize_model_code(code)

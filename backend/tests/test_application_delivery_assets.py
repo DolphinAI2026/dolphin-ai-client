@@ -125,6 +125,55 @@ async def test_delivery_assets_aggregates_application_artifacts(db_session):
 
 
 @pytest.mark.asyncio
+async def test_delivery_assets_filters_chat_control_messages_from_requirements(db_session):
+    tenant, owner, app = await _seed_app_with_assets(db_session)
+    db_session.add_all([
+        Message(
+            conversation_id=app.conversation_id,
+            role="user",
+            content="可以",
+        ),
+        Message(
+            conversation_id=app.conversation_id,
+            role="user",
+            content="继续",
+        ),
+        Message(
+            conversation_id=app.conversation_id,
+            role="user",
+            content="查看应用",
+        ),
+        AIChatMessage(
+            session_id=app.ai_chat_session_id,
+            role="user",
+            content="可以的",
+        ),
+        AIChatMessage(
+            session_id=app.ai_chat_session_id,
+            role="user",
+            content="读取当前应用",
+        ),
+    ])
+    await db_session.commit()
+
+    result = await list_delivery_assets(app.id, _ctx(owner, tenant.id), db_session)
+
+    sections = {section["key"]: section for section in result["sections"]}
+    message_previews = {
+        item["preview"]
+        for item in sections["requirements"]["items"]
+        if item["kind"] == "message"
+    }
+    assert "需要一个巡检管理系统，包含计划、执行、整改和验收。" in message_previews
+    assert "补充移动端巡检拍照上传能力。" in message_previews
+    assert "可以" not in message_previews
+    assert "可以的" not in message_previews
+    assert "继续" not in message_previews
+    assert "查看应用" not in message_previews
+    assert "读取当前应用" not in message_previews
+
+
+@pytest.mark.asyncio
 async def test_delivery_assets_returns_empty_sections_for_plain_app(db_session):
     tenant = Tenant(tenant_name="tenant", tenant_code="tenant")
     owner = User(username="plain_owner", hashed_password="x")

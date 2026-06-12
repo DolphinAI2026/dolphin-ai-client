@@ -19,6 +19,28 @@ from app.generator_v2 import (
     _rand, _sanitize_code, _extract_fields,
     _build_component, FIELD_TYPE_MAP, COMP_TYPE_MAP, _apply_suffix,
 )
+# 表单配置原子工具收敛到 operations 层（5 个此前两份逐字相同的实现）
+from app.operations.form_config import (  # noqa: F401 (部分经 re-export 被外部 import)
+    _iter_form_components,
+    _component_field_code,
+    _first_non_empty,
+    _form_identity_map,
+    _find_component_by_field,
+    _build_display_component_refs,
+    _clone_for_form_config_permissions,
+    _normalize_permission_range,
+    _query_saveable_form_config,
+)
+# 组件↔字典绑定解析收敛到 operations 层（治分步路径漏带 dict_codes 翻译的漏绑 bug）
+from app.operations.dict_binding import (  # noqa: F401
+    _component_lookup_keys,
+    resolve_component_dict_code,
+)
+# 表单引用解析（数据选择/关联表单）收敛到 operations 层，两侧并集消除漂移。
+from app.operations.form_references import (  # noqa: F401
+    _resolve_component_reference,
+    _resolve_target_form_result,
+)
 from app.field_types import select_choose_type_for_component
 from app.lowcode_standards import normalize_component_type, normalize_database_field_type, safe_field_code
 
@@ -29,19 +51,6 @@ def _field_value(field: dict, *keys: str, default=None):
     for key in keys:
         if key in field and field.get(key) not in (None, ""):
             return field.get(key)
-    return default
-
-
-def _first_non_empty(*values, default=""):
-    for value in values:
-        if value in (None, ""):
-            continue
-        if isinstance(value, str):
-            stripped = value.strip()
-            if stripped:
-                return stripped
-            continue
-        return value
     return default
 
 
@@ -1083,16 +1092,6 @@ def _is_form_save_conflict(exc: Exception) -> bool:
     return any(token in text for token in ("当前页面状态已改变", "页面状态已改变", "乐观锁", "版本", "version", "stale"))
 
 
-async def _query_saveable_form_config(client: APaaSClient, app_id: str, form_id: str) -> dict:
-    query_context = getattr(client, "query_form_context_config", None)
-    if callable(query_context):
-        try:
-            return await query_context(app_id, form_id)
-        except Exception as exc:
-            logger.warning("query_form_context_config 失败，回退 detailPageConfigById (formId=%s): %s", form_id, exc)
-    return await client.query_detail_page_config(app_id, form_id)
-
-
 async def _save_form_config_with_retry(
     client: APaaSClient,
     app_id: str,
@@ -1251,22 +1250,6 @@ def _component_dict_code(component: dict) -> str:
     return ""
 
 
-def _component_lookup_keys(component: dict) -> List[str]:
-    keys: List[str] = []
-    for value in (
-        component.get("modelField"),
-        component.get("model_field"),
-        component.get("code"),
-        component.get("field_code"),
-        component.get("label"),
-        component.get("name"),
-    ):
-        text = str(value or "").strip()
-        if text and text not in keys:
-            keys.append(text)
-    return keys
-
-
 def _field_dict_code(field: dict) -> str:
     return str(_first_non_empty(
         field.get("dict"),
@@ -1389,15 +1372,25 @@ def _collect_component_dict_lookup(
     return lookup
 
 
-def _lookup_component_dict_code(component: dict, lookup: Dict[str, str]) -> str:
-    direct_code = _component_dict_code(component)
-    direct = lookup.get(direct_code, direct_code)
-    if direct:
-        return direct
-    for key in _component_lookup_keys(component):
-        if key in lookup:
-            return lookup[key]
-    return ""
+def _lookup_component_dict_code(
+    component: dict,
+    lookup: Dict[str, str],
+    dict_codes: Optional[Dict[str, str]] = None,
+    dict_id_map: Optional[Dict[str, str]] = None,
+) -> str:
+    """解析组件应绑定的平台字典 code。委托共享 operations.dict_binding 实现。
+
+    历史本地实现读到组件自带 dict code 后直接返回，**漏了 dict_codes 翻译**：组件携带
+    逻辑 dict code（需翻译成平台 code）时返回未翻译值 → 落不进 dict_id_map → 漏绑。
+    这是 b14a434d 只修了 generator_v2 一侧的同一个 bug，现经共享实现补到分步路径。
+    传入 dict_codes/dict_id_map 让翻译与有效性闸门生效；不传时退化为「非空即可」的旧宽松行为。
+    """
+    return resolve_component_dict_code(
+        component,
+        lookup,
+        dict_codes=dict_codes,
+        dict_id_map=dict_id_map,
+    )
 
 
 def _make_dictionary_choose_options(options: list) -> list:
@@ -1510,7 +1503,7 @@ async def _bind_dicts_to_form(
         # 串行循环 N 个字典×~1s/次 是经典浪费。
         used_dict_codes: set[str] = set()
         for fc in (form_components or []):
-            dc = _lookup_component_dict_code(fc, dict_lookup)
+            dc = _lookup_component_dict_code(fc, dict_lookup, dict_codes, dict_id_map)
             if dc and dc in dict_id_map and dict_id_map.get(dc):
                 used_dict_codes.add(dc)
         ordered_codes = [dc for dc in used_dict_codes]
@@ -1542,7 +1535,7 @@ async def _bind_dicts_to_form(
 
         def _bind_dict_to_comp(comp: dict) -> bool:
             """给单个组件绑定字典，返回是否有更新。"""
-            dc = _lookup_component_dict_code(comp, dict_lookup)
+            dc = _lookup_component_dict_code(comp, dict_lookup, dict_codes, dict_id_map)
             if not dc or dc not in dict_id_map:
                 return False
             did = dict_id_map[dc]
@@ -1699,7 +1692,7 @@ def _build_form_components(
                 )
                 built["componentType"] = "FORM_TEXT_INPUT"
                 desired_component_type = "FORM_TEXT_INPUT"
-        dict_code = _lookup_component_dict_code({**comp, **built}, dict_lookup)
+        dict_code = _lookup_component_dict_code({**comp, **built}, dict_lookup, dict_codes)
         if dict_code and str(built.get("componentType") or "") in _DICT_BIND_COMPONENT_TYPES:
             built["dict"] = dict_code
             if str(built.get("componentType") or "") in _SELECT_COMPONENT_TYPES:
@@ -1898,21 +1891,6 @@ async def execute_create_form(
     return form_result
 
 
-def _form_identity_map(forms: List[dict]) -> Dict[str, dict]:
-    mapping: Dict[str, dict] = {}
-    for form in forms:
-        for key in (
-            form.get("formCode"), form.get("form_code"), form.get("code"),
-            form.get("formName"), form.get("form_name"), form.get("name"),
-            form.get("modelCode"), form.get("model_code"),
-            form.get("mainModelCode"), form.get("main_model_code"), form.get("main_model"),
-        ):
-            value = str(key or "").strip()
-            if value:
-                mapping.setdefault(value, form)
-    return mapping
-
-
 def _component_definition_map(components: List[dict]) -> Dict[str, dict]:
     mapping: Dict[str, dict] = {}
     for comp in components or []:
@@ -1926,139 +1904,6 @@ def _component_definition_map(components: List[dict]) -> Dict[str, dict]:
         if label and label not in mapping:
             mapping[label] = comp
     return mapping
-
-
-def _resolve_component_reference(comp_def: dict, form_map: Dict[str, dict]) -> tuple[str, str, str]:
-    association = comp_def.get("formAssociationConfig") or comp_def.get("form_association_config") or {}
-    ref = comp_def.get("ref") or {}
-    target = (
-        str(association.get("targetModelCode") or "").strip()
-        or str(comp_def.get("selector_form_code") or "").strip()
-        or str(comp_def.get("association_form_code") or "").strip()
-        or str(comp_def.get("ref_model_code") or "").strip()
-        or (str(ref.get("model") or "").strip() if isinstance(ref, dict) else str(ref or "").strip())
-    )
-    target_field = (
-        str(association.get("targetFieldCode") or "").strip()
-        or str(comp_def.get("selector_field_code") or "").strip()
-        or str(comp_def.get("association_target_field_code") or "").strip()
-        or str(comp_def.get("ref_display_field_code") or "").strip()
-        or (str(ref.get("target_field") or ref.get("display_field") or ref.get("field") or "").strip() if isinstance(ref, dict) else "")
-    )
-    origin_field = str(association.get("originFieldCode") or comp_def.get("association_origin_field_code") or "").strip()
-
-    resolved_form = form_map.get(target)
-    if resolved_form:
-        target_model_code = str(_first_non_empty(
-            resolved_form.get("modelCode"),
-            resolved_form.get("model_code"),
-            resolved_form.get("mainModelCode"),
-            resolved_form.get("main_model_code"),
-            resolved_form.get("main_model"),
-            default=target,
-        )).strip() or target
-        return target_model_code, target_field, origin_field
-    return target, target_field, origin_field
-
-
-def _resolve_target_form_result(
-    comp_def: dict,
-    form_map: Dict[str, dict],
-    form_results: List[dict],
-    target_model_code: str,
-) -> Optional[dict]:
-    ref = comp_def.get("ref") or {}
-    for value in (
-        comp_def.get("selector_form_code"),
-        comp_def.get("association_form_code"),
-        comp_def.get("formCode"),
-        comp_def.get("form_code"),
-        comp_def.get("code"),
-        comp_def.get("formName"),
-        comp_def.get("form_name"),
-        comp_def.get("name"),
-        ref.get("formCode") if isinstance(ref, dict) else "",
-        ref.get("form_code") if isinstance(ref, dict) else "",
-    ):
-        candidate = str(value or "").strip()
-        if not candidate:
-            continue
-        form_def = form_map.get(candidate)
-        if not form_def:
-            continue
-        for form_result in form_results:
-            if (
-                form_result.get("formCode") == form_def.get("formCode")
-                or form_result.get("formCode") == form_def.get("code")
-                or form_result.get("formCode") == form_def.get("form_code")
-                or form_result.get("formName") == form_def.get("formName")
-                or form_result.get("formName") == form_def.get("name")
-                or form_result.get("formName") == form_def.get("form_name")
-                or form_result.get("modelCode") == form_def.get("modelCode")
-                or form_result.get("modelCode") == form_def.get("model_code")
-                or form_result.get("modelCode") == form_def.get("mainModelCode")
-                or form_result.get("modelCode") == form_def.get("main_model_code")
-            ):
-                return form_result
-
-    for form_result in form_results:
-        if str(form_result.get("modelCode", "")).strip() == target_model_code:
-            return form_result
-    return None
-
-
-def _iter_form_components(form_components: List[dict]) -> List[dict]:
-    items: List[dict] = []
-    for component in form_components or []:
-        items.append(component)
-        if component.get("componentType") == "FORM_WIDGET_SON_TABLE":
-            items.extend(component.get("tableColumn", []) or [])
-    return items
-
-
-def _component_field_code(component: dict) -> str:
-    model_field = str(component.get("modelField", "")).strip()
-    if "." in model_field:
-        return model_field.split(".", 1)[1]
-    return str(component.get("code", "")).strip()
-
-
-def _find_component_by_field(
-    form_components: List[dict],
-    field_code: str,
-    *,
-    label: str = "",
-) -> Optional[dict]:
-    normalized_field = str(field_code or "").strip()
-    normalized_label = str(label or "").strip()
-    for component in _iter_form_components(form_components):
-        if normalized_field and _component_field_code(component) == normalized_field:
-            return component
-        if normalized_label and str(component.get("label", "")).strip() == normalized_label:
-            return component
-    return None
-
-
-def _build_display_component_refs(form_components: List[dict], field_codes: List[str]) -> List[dict]:
-    refs: List[dict] = []
-    seen: set[str] = set()
-    for field_code in field_codes:
-        component = _find_component_by_field(form_components, field_code)
-        component_uuid = str(component.get("uuid", "")).strip() if component else ""
-        if not component_uuid or component_uuid in seen:
-            continue
-        seen.add(component_uuid)
-        item = {
-            "id": component_uuid,
-            "componentType": component.get("componentType", "FORM_TEXT_INPUT"),
-            "name": component.get("label", "") or component.get("modelFieldName", "") or field_code,
-        }
-        if component.get("chooseOptions"):
-            item["chooseOptions"] = component.get("chooseOptions")
-        if "multicolor" in component:
-            item["multicolor"] = bool(component.get("multicolor"))
-        refs.append(item)
-    return refs
 
 
 def _build_permission_groups_for_form_config(
@@ -2573,18 +2418,6 @@ def _resolve_permission_object(rule: dict, role_codes: Dict[str, dict]) -> dict:
     }
 
 
-def _normalize_permission_range(data_range: object) -> str:
-    range_map = {
-        "all": "ALL",
-        "self": "SELF",
-        "dept": "CURRENT_USER_DEPT",
-        "dept_sub": "CURRENT_USER_DEPT_LOW_LEVEL",
-    }
-    if isinstance(data_range, str):
-        return range_map.get(data_range, data_range.upper())
-    return "ALL"
-
-
 def _build_form_permission_payload(
     app_id: str,
     form_code: str,
@@ -2594,7 +2427,7 @@ def _build_form_permission_payload(
 ) -> dict:
     """构造 create_form_permissions API 的 payload。
 
-    按标准 API 规范（skills/apaas-create-permission.md）只发 2 个顶层组：
+    按当前 aPaaS 权限 API 规范只发 2 个顶层组：
     - operationPermissionGroups — 功能权限（新增/导入/暂存/批量/复制/分享等）
     - dataPermissionGroups      — 数据权限（查看/编辑/删除/导出/评论/日志/打印等）
 
@@ -2621,23 +2454,6 @@ def _build_form_permission_payload(
         "operationPermissionGroups": cleaned_ops,
         "dataPermissionGroups": cleaned_data,
     }
-
-
-def _clone_for_form_config_permissions(value):
-    if isinstance(value, list):
-        return [_clone_for_form_config_permissions(item) for item in value]
-    if isinstance(value, dict):
-        cloned = {k: _clone_for_form_config_permissions(v) for k, v in value.items()}
-        for type_key, value_key in (
-            ("permissionObjectType", "permissionObjectValue"),
-            ("permissionType", "permissionValue"),
-        ):
-            if cloned.get(type_key) == "ROLE":
-                cloned[type_key] = "ROLE_USER"
-            if cloned.get(type_key) == "ALL_USER":
-                cloned[value_key] = ""
-        return cloned
-    return value
 
 
 async def _sync_form_permissions_to_form_config(

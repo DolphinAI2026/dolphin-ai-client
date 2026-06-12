@@ -26,7 +26,7 @@ from __future__ import annotations
 
 import hashlib
 from datetime import datetime, timedelta
-from typing import Annotated, Any, Optional
+from typing import Annotated, Any, Mapping, Optional
 
 from fastapi import Depends, HTTPException, status
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
@@ -79,7 +79,7 @@ def decode_token(token: str) -> dict:
 
 
 def create_access_token(
-    user: "User | int",
+    user: "User | int | Mapping[str, Any]",
     tenant_id: Optional[int] = None,
     *,
     expire_minutes: Optional[int] = None,
@@ -89,14 +89,19 @@ def create_access_token(
 ) -> str:
     """主登录 JWT。优先从 user 对象取 apaas claims；调用方覆盖参数优先级最高。
 
-    兼容签法：传 int user_id（旧 routes/auth.py 老路径）也接受，仅不嵌入 apaas
-    claims（双 ID 字段需要 user 对象才能拿）。
+    兼容签法：传 int user_id 或 {"sub": user_id}（旧测试/老路径）也接受，仅不嵌入
+    apaas claims（双 ID 字段需要 user 对象才能拿）。
     """
     if isinstance(user, int):
         sub = user
         u_apaas_uid = apaas_user_id
         u_apaas_tid = apaas_tenant_id
         u_username = username
+    elif isinstance(user, Mapping):
+        sub = int(user.get("sub") or user.get("user_id") or user.get("id"))
+        u_apaas_uid = apaas_user_id or user.get("apaas_sub") or user.get("apaas_user_id")
+        u_apaas_tid = apaas_tenant_id or user.get("apaas_tid") or user.get("apaas_tenant_id")
+        u_username = username or user.get("username")
     else:
         sub = int(user.id)
         u_apaas_uid = apaas_user_id or (user.apaas_user_id or None)

@@ -426,6 +426,10 @@ def _parse_aggregate_tables(section_text: str, models: List[dict]) -> Tuple[List
                 continue
             sub_model_code = (sub_row.get("绑定模型") or sub_row.get("子表模型编码") or "").strip().lower()
             if not sub_model_code:
+                sub_display = (sub_row.get("子表区域名称") or sub_row.get("子表显示名称") or "(未命名)").strip()
+                errors.append(
+                    f"表单 '{form_name}' 子表 '{sub_display}'：绑定模型为空，该子表已跳过"
+                )
                 continue
             current_sub_defs.append({
                 "model_code": sub_model_code,
@@ -437,6 +441,10 @@ def _parse_aggregate_tables(section_text: str, models: List[dict]) -> Tuple[List
             sub_code = sub["model_code"]
             fields_map = model_field_index.get(sub_code, {})
             if not fields_map:
+                errors.append(
+                    f"表单 '{form_name}' 子表 '{sub['display_name']}'：绑定模型 '{sub_code}' "
+                    f"在数据模型中查不到字段表，该子表字段已全部跳过"
+                )
                 continue
             current_sub_rows = [
                 r for r in subfield_rows
@@ -446,7 +454,18 @@ def _parse_aggregate_tables(section_text: str, models: List[dict]) -> Tuple[List
             for sub_row in current_sub_rows:
                 field_code = (sub_row.get("字段编码") or sub_row.get("子表字段编码") or "").strip()
                 model_field = fields_map.get(field_code)
-                if not field_code or model_field is None:
+                if not field_code:
+                    field_label = (sub_row.get("字段名称") or sub_row.get("子表字段名称") or "(未命名)").strip()
+                    errors.append(
+                        f"表单 '{form_name}' 子表 '{sub['display_name']}' 字段 '{field_label}'："
+                        f"字段编码为空，该字段已跳过"
+                    )
+                    continue
+                if model_field is None:
+                    errors.append(
+                        f"表单 '{form_name}' 子表 '{sub['display_name']}' 字段编码 '{field_code}'："
+                        f"在子表模型 '{sub_code}' 中找不到对应字段，该字段已跳过"
+                    )
                     continue
                 label = (sub_row.get("字段名称") or sub_row.get("子表字段名称") or model_field.get("name", field_code)).strip()
                 comp_type_raw = (sub_row.get("组件类型") or "").strip()
@@ -630,9 +649,16 @@ def _build_subtable_components(
         for row in rows:
             field_code = row.get("子表字段编码", "").strip()
             if not field_code:
+                field_label = (row.get("子表字段名称") or "(未命名)").strip()
+                errors.append(
+                    f"子表 '{sub_name}' 字段 '{field_label}'：子表字段编码为空，该字段已跳过"
+                )
                 continue
             model_field = fields_map.get(field_code)
             if model_field is None:
+                errors.append(
+                    f"子表 '{sub_name}' 字段编码 '{field_code}'：在子表模型 '{sub_code}' 中找不到对应字段，该字段已跳过"
+                )
                 continue
             label = row.get("子表字段名称", "").strip() or model_field.get("name", field_code)
             comp_type_raw = row.get("组件类型", "").strip()
@@ -681,7 +707,13 @@ def _build_components(rows: List[dict], form_name: str, model_code: str,
         # 兼容"组件类型"列（直接写了 aPaaS 类型）
         comp_type_raw = row.get("组件类型", "").strip()
 
-        if not field_code or field_code in seen:
+        if not field_code:
+            if field_label:
+                errors.append(
+                    f"表单 '{form_name}' 字段 '{field_label}'：字段编码为空，该字段已跳过"
+                )
+            continue
+        if field_code in seen:
             continue
 
         model_field = model_fields.get(field_code)

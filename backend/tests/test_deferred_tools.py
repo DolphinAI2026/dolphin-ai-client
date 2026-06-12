@@ -128,19 +128,3 @@ def test_per_turn_tools_rebuild_only_includes_active_deferred():
     assert "read_attachment" in names and "search_tools" in names and "list_apaas_app_models" in names
     assert "update_apaas_model_field" in names          # activated deferred → included
     assert "add_apaas_dict_option" not in names         # not activated → excluded
-
-
-@pytest.mark.asyncio
-async def test_search_tools_excludes_browser_when_app_locked():
-    import app.ai_chat.tools as t
-    import json as _j
-    class _S:  # minimal fake session
-        app_id = 42
-    t._LAST_TOOL_SCHEMAS = [
-        {"type":"function","function":{"name":"browser_snapshot","description":"读页面快照","parameters":{}}},
-        {"type":"function","function":{"name":"update_apaas_model_field","description":"改模型字段","parameters":{}}},
-    ]
-    res = await t._handle_search_tools({"query":"select:browser_snapshot"}, session=_S(), db=None)
-    assert "browser_snapshot" not in _j.loads(res)["activated"]   # app-locked → not activated
-    res2 = await t._handle_search_tools({"query":"select:browser_snapshot"}, session=None, db=None)
-    assert "browser_snapshot" in _j.loads(res2)["activated"]      # free session → activated

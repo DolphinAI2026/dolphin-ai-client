@@ -183,7 +183,7 @@
             <!-- designer 内顶部 4 sub-tab -->
             <div class="mdsh-subnav">
               <div class="mdsh-subnav-info">
-                <span class="mdsh-menu-name">{{ selectedApaasMenuName || '选中菜单' }}</span>
+                <span class="mdsh-menu-name">{{ designerSub === 'dev' ? '自开发资产' : (selectedApaasMenuName || '选中菜单') }}</span>
               </div>
               <div class="mdsh-subnav-tabs" role="tablist">
                 <button
@@ -256,6 +256,11 @@
                 :app-id="existingAppId"
                 :form-id="selectedApaasMenuFormId"
                 :menu-name="selectedApaasMenuName"
+              />
+              <AppDevWorkspacePanel
+                v-else-if="designerSub === 'dev'"
+                :key="`dev-${existingAppId}-${designerRefreshKey}`"
+                :app-id="existingAppId"
               />
               <!-- 2026-05-29: 删「页面设置」sub-tab — 纯占位(⚙️ placeholder "P1 接入"),
                    点了无功能。改设置走配置助手对话。同步从 DESIGNER_SUBS 移除该 tab。 -->
@@ -808,7 +813,7 @@
 
 <script setup lang="ts">
 import { API_PREFIX } from '@/utils/request'
-import { ref, reactive, computed, nextTick, onMounted, onBeforeUnmount, watch } from 'vue'
+import { ref, reactive, computed, nextTick, onMounted, onBeforeUnmount, watch, defineAsyncComponent } from 'vue'
 import { useRouter, useRoute } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { usePreviewStore } from '@/stores/preview'
@@ -843,7 +848,6 @@ import {
   extractAppNameFromText,
 } from '@/utils/app'
 import ApaasMenuSidebar from '@/components/ApaasMenuSidebar.vue'
-import SectionNav from '@/components/v2/SectionNav.vue'
 import AppIcon from '@/components/common/AppIcon.vue'
 import SectionContentList from '@/components/v2/SectionContentList.vue'
 import AppConfigSubNav from '@/components/v3/AppConfigSubNav.vue'
@@ -860,8 +864,11 @@ import RoleManagePanel from '@/components/v3/RoleManagePanel.vue'
 import LogsPanel from '@/components/v3/LogsPanel.vue'
 import AppDatasourcePanel from '@/components/v3/AppDatasourcePanel.vue'
 import CustomPagePreviewPanel from '@/components/v3/CustomPagePreviewPanel.vue'
+import AppDevWorkspacePanel from '@/components/v3/AppDevWorkspacePanel.vue'
 // U3 (2026-05-27): SPEC 设计层 panel — 跟"功能" tab 平行的 SPEC 编辑层 (MVP read-only).
-import SpecDesignPanel from '@/components/v3/SpecDesignPanel.vue'
+// SPEC tab 休眠中(SPEC_TAB_ENABLED=false)，异步冷藏使其退出主 bundle；恢复时打开 flag 即可。
+// SpecChatPanel/SpecApplyModal 仅被 SpecDesignPanel 引用，会自动跟进同一异步 chunk。
+const SpecDesignPanel = defineAsyncComponent(() => import('@/components/v3/SpecDesignPanel.vue'))
 import type { ConversationCreate, Message } from '@/types'
 import TopBar from '@/components/TopBar.vue'
 import WorkbenchShell from '@/components/WorkbenchShell.vue'
@@ -1739,7 +1746,7 @@ const normalizeDictOptions = (dict: any) =>
 const summarizeDictOptions = (dict: any) => {
   const options = normalizeDictOptions(dict)
   if (!options.length) return '暂无选项'
-  return options.slice(0, 6).map(option => option.name).join('、') + (options.length > 6 ? ` 等 ${options.length} 项` : '')
+  return options.slice(0, 6).map((option: { name: string; code: string }) => option.name).join('、') + (options.length > 6 ? ` 等 ${options.length} 项` : '')
 }
 
 const getChangeBadgeMeta = (
@@ -2375,9 +2382,10 @@ const DESIGNER_SUBS = [
   // { code: 'event', label: '业务事件' },
   { code: 'data', label: '数据模型' },
   { code: 'perm', label: '权限' },
+  { code: 'dev', label: '自开发' },
   // 2026-05-29: 删「页面设置」(page) — 纯占位无功能, 改设置走配置助手对话。
 ] as const
-const designerSub = ref<'form' | 'list' | 'process' | 'event' | 'data' | 'perm'>('form')
+const designerSub = ref<'form' | 'list' | 'process' | 'event' | 'data' | 'perm' | 'dev'>('form')
 
 // P1-N6: 这些 sub-tab 走 native master-detail panel — 不需要再显 SectionContentList.
 const isNativeMasterDetailSubTab = computed(() => {
@@ -4957,7 +4965,7 @@ async function resolveConflictAndRetry() {
         }
         parseReady.value = store.preview.models.length > 0 || store.preview.forms.length > 0
       }
-      if (resolveResp?.doc_version) {
+      if (resolveResp?.doc_version && deployAppId.value != null) {
         await loadLatestDocForApp(deployAppId.value)
       }
     }
@@ -5929,7 +5937,7 @@ const handleDocVersionUpload = async (file: File, appId: number, options: DocVer
                   config_validator: '配置结构校验',
                 }
                 const modulesText = modules.length
-                  ? modules.map(m => moduleLabels[m] || m).join('、')
+                  ? modules.map((m: string) => moduleLabels[m] || m).join('、')
                   : '未知模块'
                 const errorLines = Array.isArray(data.errors) ? data.errors.slice(0, 6) : []
                 const err = new Error(
@@ -6032,7 +6040,7 @@ const executeChangePlan = async () => {
 
   // 构建 selections
   const selections: Record<string, boolean> = {}
-  store.changePlan.actions.forEach(a => {
+  store.changePlan.actions.forEach((a: { id: string; selected: boolean }) => {
     selections[a.id] = a.selected
   })
 

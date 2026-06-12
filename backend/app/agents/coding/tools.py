@@ -32,6 +32,65 @@ from app.coding.apaas_tools import (
 logger = logging.getLogger(__name__)
 
 
+_EXPLICIT_REWRITE_TERMS = (
+    "重写",
+    "重做",
+    "重新生成",
+    "重新设计",
+    "整页改版",
+    "整体改版",
+    "从零",
+    "推倒重来",
+    "全部重做",
+    "全量重构",
+)
+
+
+def _explicit_rewrite_requested(ctx: AgentContext) -> bool:
+    text = str((ctx.input or {}).get("requirement") or "")
+    return any(term in text for term in _EXPLICIT_REWRITE_TERMS)
+
+
+def _reject_existing_file_overwrite_in_iteration(
+    tool_name: str,
+    args: dict[str, Any],
+    ctx: AgentContext,
+    ws_path: Path,
+) -> ToolResult | None:
+    if tool_name != "write_file":
+        return None
+    if not bool((ctx.input or {}).get("is_iteration")):
+        return None
+    if _explicit_rewrite_requested(ctx):
+        return None
+
+    rel_path = str((args or {}).get("file_path") or "").strip()
+    if not rel_path:
+        return None
+    try:
+        target = (ws_path / rel_path).resolve()
+        ws_resolved = ws_path.resolve()
+        try:
+            target.relative_to(ws_resolved)
+        except ValueError:
+            return None
+        if not target.exists():
+            return None
+    except Exception:
+        return None
+
+    return ToolResult(
+        success=False,
+        content=(
+            "Error: 当前是已有工作区的迭代修改，目标文件已存在。"
+            "为避免把自开发包整份重写，请先 read_file 获取当前内容，"
+            "再用 edit_file 只修改必要片段。不要 write_file 整份重写已有文件。"
+            "只有新增文件或用户明确要求重写/重做/整页改版时，才允许 write_file。"
+        ),
+        error="ITERATION_OVERWRITE_BLOCKED",
+    )
+
+
 async def _resolve_platform_env_id(ctx: AgentContext) -> int | None:
     """3 级 fallback 拿 platform_env_id：
       1. ctx.extra['platform_env_id']（pipeline 显式注入，最高优先）
@@ -52,8 +111,9 @@ async def _resolve_platform_env_id(ctx: AgentContext) -> int | None:
         if ctx.conversation_id:
             try:
                 conv = await db.get(Conversation, ctx.conversation_id)
-                if conv and getattr(conv, "application_id", None):
-                    app = await db.get(Application, conv.application_id)
+                conv_app_id = getattr(conv, "coding_app_id", None) if conv else None
+                if conv_app_id:
+                    app = await db.get(Application, conv_app_id)
                     if app and app.platform_env_id:
                         return int(app.platform_env_id)
             except Exception:
@@ -332,6 +392,9 @@ def build_coding_tools(registry: ToolRegistry | None = None) -> list[Tool]:
                     return ToolResult(success=False, content=f"Error resolving workspace: {e}", error=str(e))
                 progress_cb = _make_progress_callback(ctx, tool_name)
                 try:
+                    blocked = _reject_existing_file_overwrite_in_iteration(tool_name, args or {}, ctx, ws_path)
+                    if blocked is not None:
+                        return blocked
                     result_text = await reg.execute(
                         tool_name=tool_name,
                         arguments=args or {},

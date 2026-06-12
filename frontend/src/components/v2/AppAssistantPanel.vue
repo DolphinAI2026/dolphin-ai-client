@@ -7,11 +7,8 @@
      （建会话带 app_id、loadSessions 按 app_id 过滤），一套引擎覆盖 配置 + codegen + 会话 +
      产出物 + trace。
 
-     ⚠️ ADDITIVE：本组件不替换 ConfigAssistantPanel 的引用 —— 由 controller 单独做一行 tag swap
-     （<ConfigAssistantPanel> → <AppAssistantPanel>）。为了让 swap 是真·一行，本组件的 props /
-     events 跟 ChatPage 当前传给 ConfigAssistantPanel 的**完全同名**：
-       props: applicationId / appName / currentSection / currentSectionTab / designerSub
-       emits: refresh-iframe / close / upload-doc
+     props: applicationId / appName / currentSection / currentSectionTab / designerSub
+     emits: refresh-iframe / close / upload-doc
 
      没有前端单测 runner，验证只能靠 `npm run build:nocheck` 编译；reactivity / binding bug 只会
      在 live 测试时暴露。 -->
@@ -975,8 +972,8 @@ onBeforeUnmount(() => {
   border-radius: 6px;
 }
 .aa-drawer-del:hover {
-  color: var(--err, #dc2626);
-  background: rgba(220, 38, 38, 0.08);
+  color: var(--err);
+  background: var(--err-soft);
 }
 
 /* ─── 设计文档（artifact md）查看抽屉 ─── */

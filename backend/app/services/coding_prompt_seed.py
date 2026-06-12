@@ -55,14 +55,30 @@ def _load_coding_prompts() -> dict[str, str]:
     return out
 
 
-async def seed_coding_prompts_for_tenant(db: AsyncSession, tenant_id: int) -> int:
-    """Insert default Coding + Vibe prompts for a tenant if rows don't exist.
+def _load_unified_prompts() -> dict[str, str]:
+    """Returns { phase: template } for the unified AIChat agent.
 
-    Returns total count inserted across both agents.
+    The unified system prompt is the highest-traffic chat link. Its static
+    template lives in `app.ai_chat.agent.SYSTEM_PROMPT_UNIFIED` (STANDARD_DOC_FORMAT
+    is already baked in at import time; the app-context block is appended at
+    runtime and intentionally NOT stored in DB).
+
+    Imported lazily here to avoid a heavy `app.ai_chat.agent` import at startup
+    and any circular import via prompt_resolver.
+    """
+    from app.ai_chat import agent as ai_chat_agent
+    return {"system": ai_chat_agent.SYSTEM_PROMPT_UNIFIED}
+
+
+async def seed_coding_prompts_for_tenant(db: AsyncSession, tenant_id: int) -> int:
+    """Insert default Coding + Vibe + Unified prompts for a tenant if missing.
+
+    Returns total count inserted across all agents.
     """
     inserted = 0
     loaders: list[tuple[str, callable, str]] = [
         ("whale", _load_coding_prompts, "app.coding.prompts.AGENT_SYSTEM_PROMPT"),
+        ("unified", _load_unified_prompts, "app.ai_chat.agent.SYSTEM_PROMPT_UNIFIED"),
     ]
     for agent_id, loader, src in loaders:
         try:

@@ -32,7 +32,7 @@
       <!-- 顶部 toolbar — 刷新 + 打开低代码后台 (只读, 编辑去后台) -->
       <header class="ldp-toolbar">
         <div class="ldp-toolbar-right">
-          <button class="ldp-tb-btn" @click="reload" :disabled="loading" title="刷新">
+          <button class="ldp-tb-btn" @click="reloadForced" :disabled="loading" title="刷新">
             <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
                  :class="{ 'ldp-spin': loading }">
               <path d="M21 12a9 9 0 1 1-3-6.7L21 8"/>
@@ -49,7 +49,7 @@
         level="err"
         title="加载失败"
         :message="error"
-        :actions="[{ label: '重试', onClick: reload }]"
+        :actions="[{ label: '重试', onClick: reloadForced }]"
       />
 
       <!-- =========================================================== -->
@@ -440,14 +440,16 @@ function onRowEdit(_row: Record<string, any>) {
 // ----------------------------------------------------------
 // 数据加载
 // ----------------------------------------------------------
-async function loadComponentsAndFields(): Promise<void> {
+async function loadComponentsAndFields(opts: { force?: boolean } = {}): Promise<void> {
+  // force=true 跳过后端 180s 缓存 — 刷新/写后必须绕过, 否则命中缓存返改前 stale。
+  const fq = opts.force ? '?force=true' : ''
   // 优先用 form_id 直查 components (跟 FormDesigner 同源)
   if (props.formId) {
     try {
       // 2026-05-27 T: 并行拉 components (字段池) + detail (含 list_page_view 真配置)
       const [compResp, detailResp] = await Promise.all([
-        request.get<any, any>(`/applications/${props.appId}/forms/${props.formId}/components`),
-        request.get<any, any>(`/applications/${props.appId}/forms/${props.formId}/detail`).catch(() => null),
+        request.get<any, any>(`/applications/${props.appId}/forms/${props.formId}/components${fq}`),
+        request.get<any, any>(`/applications/${props.appId}/forms/${props.formId}/detail${fq}`).catch(() => null),
       ])
       if (compResp?.ok && Array.isArray(compResp.items)) {
         const items: any[] = compResp.items
@@ -525,7 +527,7 @@ async function loadComponentsAndFields(): Promise<void> {
   }
   // fallback: 走 models 拿 (复用原逻辑)
   const resp = await request.get<any, any>(
-    `/applications/${props.appId}/section-content/models?with_fields=true`,
+    `/applications/${props.appId}/section-content/models?with_fields=true${opts.force ? '&force=true' : ''}`,
   )
   if (!resp?.ok) {
     throw new Error(resp?.message || resp?.error_code || '加载列配置失败')
@@ -608,7 +610,7 @@ async function loadBusinessData(): Promise<void> {
   }
 }
 
-async function reload() {
+async function reload(opts: { force?: boolean } = {}) {
   if (!props.appId || !props.menuId) {
     previewColumns.value = []
     allRows.value = []
@@ -618,7 +620,7 @@ async function reload() {
   loading.value = true
   error.value = ''
   try {
-    await loadComponentsAndFields()
+    await loadComponentsAndFields(opts)
     await loadBusinessData()
     currentPage.value = 1
   } catch (e: any) {
@@ -628,6 +630,12 @@ async function reload() {
   }
 }
 
+/** 用户主动刷新 — 绕过 180s 缓存重打 aPaaS。toolbar 刷新按钮 + 错误重试都走这。 */
+function reloadForced() {
+  void reload({ force: true })
+}
+
+// 初始加载 / 切应用/表单走缓存(性能); 刷新按钮走 force(见 reloadForced)。
 watch(() => [props.appId, props.menuId, props.formId], () => reload(), { immediate: true })
 </script>
 

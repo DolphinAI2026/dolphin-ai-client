@@ -104,7 +104,7 @@ def _classify_tool(name: str) -> tuple[str, str]:
     if name.startswith("read_workspace") or name.startswith("write_workspace") or \
        name.startswith("edit_workspace") or name.startswith("glob_workspace") or \
        name.startswith("grep_workspace") or name.startswith("run_workspace") or \
-       name in ("create_dev_workspace", "get_dev_workspace_status",
+       name in ("create_dev_workspace", "list_dev_workspaces", "get_dev_workspace_status",
                 "save_dev_spec", "publish_dev_workspace",
                 "init_apaas_backend_workspace", "lint_apaas_backend_workspace",
                 "doctor_apaas_backend_workspace", "build_dev_workspace"):
@@ -131,7 +131,7 @@ def _classify_tool(name: str) -> tuple[str, str]:
 
     # aPaaS 配置精细操作（CRUD）
     if name in (
-        "set_apaas_app_access", "set_apaas_app_process",
+        "set_apaas_app_access", "set_apaas_app_process", "set_apaas_process_transition_rules",
         "set_apaas_form_permissions", "update_apaas_form_component",
         "disable_apaas_app_dict", "disable_apaas_dict_option",
     ):

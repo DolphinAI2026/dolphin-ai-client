@@ -689,14 +689,20 @@ async def _get_platform_client_for_app(
             tenant_id=env.platform_tenant_id,
             token=env.token,
         )
-        # 验证 token 有效性，过期则自动刷新
+        # 验证 token 有效性，过期则自动刷新。
+        # 2026-06-12: 改走共享 _relogin_apaas_env（app.apaas_session）。
+        # 删掉的本地 _try_refresh_env_token 用 base64.b64decode 解密 password_enc，
+        # 而 env 凭据实际是 Fernet 加密(crypto.encrypt_password) → 解密必失败、刷新永远不成功。
+        # 共享版用 decrypt_password 正确解密，顺带 status='connected'。
         try:
             await client.query_app_list()
             return client
         except Exception:
             logger.info(f"平台环境 {env.id} 的 token 已过期，尝试自动刷新")
-            refreshed = await _try_refresh_env_token(env, db)
+            from app.apaas_session import _relogin_apaas_env
+            refreshed = await _relogin_apaas_env(env.id, db)
             if refreshed:
+                # _relogin_apaas_env 在同一 session 内回填了 env.token（identity map 同实例）
                 return APaaSClient(
                     base_url=env.base_url,
                     tenant_id=env.platform_tenant_id,
@@ -733,28 +739,6 @@ async def _get_platform_client_for_app(
 
     raise HTTPException(status_code=400, detail="未配置平台环境，请在环境管理中添加并连接")
 
-
-async def _try_refresh_env_token(env: PlatformEnv, db: AsyncSession) -> bool:
-    """尝试用平台环境存储的凭证刷新 token"""
-    import base64
-
-    if not getattr(env, 'username', None) or not getattr(env, 'password_enc', None):
-        return False
-
-    try:
-        password = base64.b64decode(env.password_enc).decode()
-        client = APaaSClient(base_url=env.base_url, tenant_id=env.platform_tenant_id)
-        result = await client.login(env.username, password)
-        new_token = result.get("token", "")
-        if new_token:
-            env.token = new_token
-            await db.commit()
-            logger.info(f"平台环境 {env.id} token 刷新成功")
-            return True
-    except Exception as e:
-        logger.warning(f"平台环境 {env.id} token 刷新失败: {e}")
-
-    return False
 
 async def _try_build_spec_agent_stream_response(
     *,

@@ -7,22 +7,14 @@
       :proposal="p"
       :mode="mode"
       :role="role"
-      @click="$router.push(`/proposals/${p.id}`)"
     />
     <DeployedCard v-if="canonical" :canonical="canonical" :history="appliedHistory" />
     <GitStatusCard v-if="git && mode === 'pro'" :git="git" />
-
-    <div v-if="mode === 'simple'" class="advanced-link">
-      <a href="#" @click.prevent="$router.push('/devops?application_id=' + applicationId)">
-        <AppIcon name="wrench" :size="13" /> 高级 (DevOps) ↗
-      </a>
-    </div>
   </div>
 </template>
 
 <script setup lang="ts">
 import { computed } from 'vue'
-import AppIcon from '@/components/common/AppIcon.vue'
 import DraftCard from './activity/DraftCard.vue'
 import ProposalCard from './activity/ProposalCard.vue'
 import DeployedCard from './activity/DeployedCard.vue'
@@ -49,7 +41,4 @@ const visibleProposals = computed(() => {
 
 <style scoped>
 .activity-panel { display: flex; flex-direction: column; gap: 12px; }
-.advanced-link { margin-top: 16px; padding: 8px; text-align: center; }
-.advanced-link a { color: var(--brand); font-size: 13px; text-decoration: none; }
-.advanced-link a:hover { text-decoration: underline; }
 </style>

@@ -1,6 +1,6 @@
 <template>
   <button class="open-lowcode-btn" :disabled="loading" :title="title" @click="onClick">
-    <AppIcon name="wrench" :size="14" /> {{ loading ? '打开中…' : '打开低代码后台' }}
+    <AppIcon name="wrench" :size="14" /> {{ loading ? '打开中…' : '低代码后台' }}
   </button>
 </template>
 
