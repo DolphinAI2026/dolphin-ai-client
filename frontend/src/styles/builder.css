@@ -1749,20 +1749,29 @@ html[data-theme="dark"] .builder-btn-primary:hover {
  * Default outline: 2px brand-ring + 2px offset, rounded inherit.
  * Mouse click doesn't trigger (uses :focus-visible not :focus). */
 
-button:focus-visible,
-[role="button"]:focus-visible,
-a:focus-visible,
-input:focus-visible,
-textarea:focus-visible,
-select:focus-visible,
-[tabindex]:not([tabindex="-1"]):focus-visible {
+/* :where() 把整组选择器特异性压到 (0,1,0) — 否则 [tabindex]:not(...) 高达 (0,3,0),
+   任何组件级焦点样式(含下面的 EP 豁免)都盖不过它。EP 的 el-input 内层 input 带
+   tabindex="0", 曾因此出现「EP wrapper 边框 + 全局 outline」双层框。 */
+:where(button,
+[role="button"],
+a,
+input,
+textarea,
+select,
+[tabindex]:not([tabindex="-1"])):focus-visible {
   outline: 2px solid var(--line-focus, var(--brand-ring));
   outline-offset: 2px;
   border-radius: inherit;
 }
 
-/* Skip outline on Element Plus internal elements that have their own focus ring */
+/* Skip outline on Element Plus internal elements that have their own focus ring.
+   注意: el-input/el-textarea 拿焦点的是内部原生 input/textarea(非 wrapper),
+   且文本输入框鼠标点击也触发 :focus-visible — 不豁免内层控件会出现
+   「EP wrapper 边框 + 全局 outline」双层框(2026-06-12 应用库搜索框实证)。 */
 .el-input__wrapper:focus-visible,
+.el-input__inner:focus-visible,
+.el-textarea__inner:focus-visible,
+.el-select__input:focus-visible,
 .el-button:focus-visible,
 .el-select__wrapper:focus-visible {
   outline: none;
