@@ -1058,7 +1058,7 @@ async function submitCreateProposal() {
       description: description || undefined,
     })
     proposalDialogVisible.value = false
-    ElMessage.success(`提案已创建（${STATUS_DISPLAY_NAMES[res.status] || res.status}）`)
+    ElMessage.success(`提案已创建（${STATUS_DISPLAY_NAMES[res.status as ProposalStatus] || res.status}）`)
     selectTab('proposals')
     await loadProposals()
     if (res.id) {

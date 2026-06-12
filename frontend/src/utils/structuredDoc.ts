@@ -752,7 +752,7 @@ export function standardDocMdToStructuredDoc(markdown: string) {
     const target = permissionMap.get(formName) || {
       table_code: forms.find(form => form.form_name === formName)?.form_code || `table_${idx + 1}`,
       table_name: formName,
-      permissions: [],
+      permissions: [] as Array<any>,
     }
     const roleCode = row['角色编码'] || `role_${idx + 1}`
     target.permissions.push({

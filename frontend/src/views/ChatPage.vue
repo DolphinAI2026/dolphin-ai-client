@@ -1738,7 +1738,7 @@ const normalizeDictOptions = (dict: any) =>
 const summarizeDictOptions = (dict: any) => {
   const options = normalizeDictOptions(dict)
   if (!options.length) return '暂无选项'
-  return options.slice(0, 6).map(option => option.name).join('、') + (options.length > 6 ? ` 等 ${options.length} 项` : '')
+  return options.slice(0, 6).map((option: { name: string; code: string }) => option.name).join('、') + (options.length > 6 ? ` 等 ${options.length} 项` : '')
 }
 
 const getChangeBadgeMeta = (
@@ -4922,7 +4922,7 @@ async function resolveConflictAndRetry() {
         }
         parseReady.value = store.preview.models.length > 0 || store.preview.forms.length > 0
       }
-      if (resolveResp?.doc_version) {
+      if (resolveResp?.doc_version && deployAppId.value != null) {
         await loadLatestDocForApp(deployAppId.value)
       }
     }
@@ -5888,7 +5888,7 @@ const handleDocVersionUpload = async (file: File, appId: number, options: DocVer
                   config_validator: '配置结构校验',
                 }
                 const modulesText = modules.length
-                  ? modules.map(m => moduleLabels[m] || m).join('、')
+                  ? modules.map((m: string) => moduleLabels[m] || m).join('、')
                   : '未知模块'
                 const errorLines = Array.isArray(data.errors) ? data.errors.slice(0, 6) : []
                 const err = new Error(
@@ -5991,7 +5991,7 @@ const executeChangePlan = async () => {
 
   // 构建 selections
   const selections: Record<string, boolean> = {}
-  store.changePlan.actions.forEach(a => {
+  store.changePlan.actions.forEach((a: { id: string; selected: boolean }) => {
     selections[a.id] = a.selected
   })
 

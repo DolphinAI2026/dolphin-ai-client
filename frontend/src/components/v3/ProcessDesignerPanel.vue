@@ -831,9 +831,9 @@ function computeAutoLayout(
   while (cursor && !seenInPath.has(cursor)) {
     mainPath.push(cursor)
     seenInPath.add(cursor)
-    const nextCandidates = (adj.get(cursor) || []).filter(id => idset.has(id) && !seenInPath.has(id))
+    const nextCandidates: string[] = (adj.get(cursor) || []).filter((id: string) => idset.has(id) && !seenInPath.has(id))
     if (!nextCandidates.length) break
-    const joinTargets = nextCandidates.filter(id => (incoming.get(id) || 0) > 1)
+    const joinTargets: string[] = nextCandidates.filter((id: string) => (incoming.get(id) || 0) > 1)
     cursor = (joinTargets[0] || nextCandidates[0])
   }
 

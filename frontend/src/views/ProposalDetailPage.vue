@@ -165,7 +165,7 @@ import { proposalsApi } from '@/api/proposals'
 import { gitConnectionApi, type DriftStatus } from '@/api/gitConnection'
 import {
   type ProposalDetail, type ApplyOp, type Reversibility,
-  type ApplyLogV2, type ExecutorResult,
+  type ApplyLogV2, type ExecutorResult, type ValidationCheckResult,
   STATUS_DISPLAY_NAMES,
 } from '@/types/proposal'
 import { useUserStore } from '@/stores/user'
@@ -213,8 +213,8 @@ function goToProposal(proposalId: string) {
   router.push(`/proposals/${proposalId}`)
 }
 
-const validationChecks = computed(() => {
-  if (!detail.value?.validation_report) return {}
+const validationChecks = computed<Record<string, ValidationCheckResult>>(() => {
+  if (!detail.value?.validation_report) return {} as Record<string, ValidationCheckResult>
   const r = detail.value.validation_report
   return {
     completeness: r.completeness,

@@ -78,7 +78,7 @@
 </template>
 
 <script setup lang="ts">
-import { ref, computed, watch, onMounted, h, defineComponent, type PropType } from 'vue'
+import { ref, computed, watch, onMounted, h, defineComponent, type PropType, type VNode } from 'vue'
 import { ElIcon, ElInput, ElButton, ElMessage, ElMessageBox, ElDropdown, ElDropdownMenu, ElDropdownItem } from 'element-plus'
 import {
   Search, Refresh, Loading, Warning, Files, Expand, Fold,
@@ -352,7 +352,8 @@ const MenuNode = defineComponent({
       }
     }
 
-    return () => {
+    // 显式返回类型 — MenuNode 递归渲染自身 (line ~451), 不标注会触发 TS7022/7024 自引用推断.
+    return (): (VNode | null)[] => {
       const iconComp = iconForMenu(p.menu, isExpanded.value)
       const padLeft = `${(p.depth || 0) * 12 + 10}px`
 
