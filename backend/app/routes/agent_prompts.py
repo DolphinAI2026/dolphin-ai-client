@@ -50,15 +50,21 @@ async def list_prompts(
     ctx: Annotated[AuthContext, Depends(get_auth_context)],
     db: Annotated[AsyncSession, Depends(get_db)],
 ):
-    # Lazy seed for builder agent so admin always sees defaults
+    # Lazy seed so admin always sees defaults on first load:
+    #   builder            → seed_agent_prompts_for_tenant (builder_spec module constants)
+    #   whale / unified    → seed_coding_prompts_for_tenant (coding + unified constants)
     has_any = (await db.execute(
         select(AgentPrompt).where(
             AgentPrompt.tenant_id == ctx.tenant_id,
             AgentPrompt.agent_id == agent_id,
         ).limit(1)
     )).scalar_one_or_none()
-    if not has_any and agent_id == "builder":
-        await seed_agent_prompts_for_tenant(db, ctx.tenant_id)
+    if not has_any:
+        if agent_id == "builder":
+            await seed_agent_prompts_for_tenant(db, ctx.tenant_id)
+        elif agent_id in ("whale", "unified"):
+            from app.services.coding_prompt_seed import seed_coding_prompts_for_tenant
+            await seed_coding_prompts_for_tenant(db, ctx.tenant_id)
 
     rows = (await db.execute(
         select(AgentPrompt)
