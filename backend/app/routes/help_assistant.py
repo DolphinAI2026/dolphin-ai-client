@@ -71,8 +71,6 @@ _PATH_LABELS: list[tuple[str, str, str]] = [
     ("/ai-chat", "AI 对话", "用对话整理需求 / 整合材料，产出标准设计文档"),
     ("/chat", "AI 搭建", "把设计文档喂给 AI 生成 SPEC + 应用配置 → 部署到平台"),
     ("/coding", "AI 编码 (睿鲸 IDE)", "对话生成自开发组件 / 页面 / 接口"),
-    ("/devops", "DevOps", "提案 / 审批 / Apply / Git / 环境"),
-    ("/proposals/", "提案详情", "正在查看某个变更提案，可以评审 / 批准 / Apply"),
     ("/apps", "应用列表"),
     ("/platform-envs", "平台环境 / LLM 配置"),
     ("/tenant-users", "成员管理"),
