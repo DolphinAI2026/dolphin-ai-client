@@ -371,44 +371,32 @@ def _llm_chat_completions_url(cfg: LLMConfigSnapshot) -> str:
 async def _resolve_llm_config(
     db: AsyncSession, session: AIChatSession
 ) -> LLMConfigSnapshot:
-    """优先用 session.selected_llm_config_id；没指定则取平台默认模型。"""
-    cfg: Optional[LLMConfig] = None
-    if session.selected_llm_config_id:
-        res = await db.execute(
-            select(LLMConfig).where(
-                LLMConfig.id == session.selected_llm_config_id,
-                LLMConfig.status == "active",
-                LLMConfig.purpose.in_(("builder", "all")),
-            )
-        )
-        cfg = res.scalar_one_or_none()
-    if not cfg:
-        # fallback：平台默认，优先 builder，其次 all。
-        res = await db.execute(
-            select(LLMConfig)
-            .where(
-                LLMConfig.is_default == True,  # noqa: E712
-                LLMConfig.status == "active",
-                LLMConfig.purpose.in_(("builder", "all")),
-            )
-        )
-        defaults = res.scalars().all()
-        cfg = next((item for item in defaults if item.purpose == "builder"), None)
-        if not cfg:
-            cfg = next((item for item in defaults if item.purpose == "all"), None)
-    if not cfg:
-        res = await db.execute(
-            select(LLMConfig)
-            .where(
-                LLMConfig.status == "active",
-                LLMConfig.purpose.in_(("builder", "all")),
-            )
-            .order_by(LLMConfig.created_at.desc(), LLMConfig.id.desc())
-        )
-        rows = res.scalars().all()
-        cfg = next((item for item in rows if item.purpose == "builder"), None)
-        if not cfg:
-            cfg = next((item for item in rows if item.purpose == "all"), None)
+    """优先用 session.selected_llm_config_id；没指定则取平台默认模型。
+
+    解析逻辑收口到 routes.llm_configs.resolve_llm_config_for_purpose(purpose="builder")，
+    与 harness/llm_resolver 同源——消除「改 LLM scope 要同时 patch ai_chat 和
+    llm_resolver 两处」的漂移(commit 8068d895 实证过的坑)。
+
+    兜底链逐行核对与旧 ai_chat 等价:
+      ① selected_llm_config_id → get_active_llm_config_by_id_for_purpose
+         (id+active, 且 purpose ∈ {builder, all});
+      ② 平台默认 builder → 平台默认 all;
+      ③ 兜底任意 active(优先 builder 再 all)。
+    唯一适配:resolve_* 找不到返回 None,这里转抛与旧版**逐字一致**的 RuntimeError;
+    并把 ORM 行包成 LLMConfigSnapshot(解密 + max_tokens/temperature 透传)。
+
+    注:purpose="builder" 等价于旧版 purpose IN ('builder','all')——resolve_* 内部
+    精确用途优先、其次 'all'。租户隔离规则维持当前平台全局语义(resolve_* 忽略
+    tenant_id),与本轮重构无关,不在此处改动。
+    """
+    from app.routes.llm_configs import resolve_llm_config_for_purpose
+
+    cfg: Optional[LLMConfig] = await resolve_llm_config_for_purpose(
+        db,
+        getattr(session, "tenant_id", None) or 0,
+        "builder",
+        session.selected_llm_config_id,
+    )
     if not cfg:
         raise RuntimeError(
             "平台还没有配置可用的大模型,请到「平台管理 → 模型配置」添加一个模型后再使用。"
