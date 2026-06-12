@@ -1917,6 +1917,7 @@ const streamingAssistantMessageId = ref<number | null>(null)
 type PendingChatAttachment = { file: File; kind: 'image' | 'file'; previewUrl: string }
 const pendingChatAttachments = ref<PendingChatAttachment[]>([])
 const canSendMessage = computed(() => (!!inputText.value.trim() || pendingChatAttachments.value.length > 0) && !sendingMessage.value)
+const STANDARD_DESIGN_DOC_RE = /\.(md|markdown)$/i
 
 // AI 工作中状态 + 中断 — 让用户随时知道 AI 在干活、且能停下来
 const currentAbortController = ref<AbortController | null>(null)
@@ -2017,6 +2018,27 @@ const attachPendingAttachmentFile = (file: File, kind: 'image' | 'file') => {
   return true
 }
 
+const queueMaterialFileForChat = (file: File, options: { autoSend?: boolean; message?: string } = {}) => {
+  const kind = file.type.startsWith('image/') ? 'image' : 'file'
+  const attached = attachPendingAttachmentFile(file, kind)
+  if (!attached) return false
+
+  const fallbackMessage = options.message || (
+    existingAppId.value
+      ? '请基于这个附件理解我的修改需求，整理成新版设计文档并生成变更建议。'
+      : '请基于这个附件理解需求，先整理成标准设计文档，再继续生成应用。'
+  )
+  if (!inputText.value.trim()) {
+    inputText.value = fallbackMessage
+  }
+  if (options.autoSend) {
+    nextTick(() => {
+      if (!sendingMessage.value) sendMessage()
+    })
+  }
+  return true
+}
+
 const handleChatImageChange = (event: Event) => {
   const target = event.target as HTMLInputElement
   const fileList = Array.from(target.files || [])
@@ -2026,7 +2048,7 @@ const handleChatImageChange = (event: Event) => {
   if (fileList.length === 1) {
     const onlyFile = fileList[0]
     const lowerName = onlyFile.name.toLowerCase()
-    if (lowerName.endsWith('.md') || lowerName.endsWith('.markdown')) {
+    if (STANDARD_DESIGN_DOC_RE.test(lowerName)) {
       handleDocUpload(event)
       return
     }
@@ -4221,6 +4243,15 @@ const handleReparseInputChange = async (e: Event) => {
   const file = target.files?.[0]
   if (!file) return
   target.value = ''
+  if (!STANDARD_DESIGN_DOC_RE.test(file.name.toLowerCase())) {
+    queueMaterialFileForChat(file, {
+      autoSend: true,
+      message: existingAppId.value
+        ? '请基于这个附件重新理解需求，整理成新版设计文档并生成变更建议。'
+        : '请基于这个附件理解需求，整理成标准设计文档并继续生成应用。',
+    })
+    return
+  }
   reparsing.value = true
   // 重置解析和部署状态，回到初始解析页面
   parseReady.value = false
@@ -4239,8 +4270,11 @@ const handleDocVersionInputChange = async (e: Event) => {
   const file = target.files?.[0]
   target.value = ''
   if (!file || !existingAppId.value) return
-  if (!/\.md$/i.test(file.name)) {
-    ElMessage.warning('当前仅支持上传 .md 格式的功能设计文档')
+  if (!STANDARD_DESIGN_DOC_RE.test(file.name.toLowerCase())) {
+    queueMaterialFileForChat(file, {
+      autoSend: true,
+      message: '请基于这个附件理解我的更新需求，整理成新版设计文档并生成变更计划。',
+    })
     return
   }
   // 清空旧对话，进入版本更新的独立对话
@@ -5150,13 +5184,14 @@ const startGenerateWithEnv = async (envId: number) => {
 }
 
 const uploadDocFile = async (file: File) => {
-  // A 严格模式：Builder 只接受 .md/.markdown 标准设计文档。
-  // 其它格式直接拦下，引导用户回 AI-Chat 把文档整理成标准格式。
+  // Markdown 走标准设计文档解析；Word/PDF/TXT 等材料走聊天附件，由 AI 先整理成标准设计文档。
   const lowerName = file.name.toLowerCase()
-  if (!/\.(md|markdown)$/.test(lowerName)) {
-    ElMessage.error({
-      message: 'Builder 只接受 .md / .markdown 标准设计文档。请回 AI-Chat 把文档整理成标准格式。',
-      duration: 5000,
+  if (!STANDARD_DESIGN_DOC_RE.test(lowerName)) {
+    queueMaterialFileForChat(file, {
+      autoSend: true,
+      message: existingAppId.value
+        ? '请基于这个附件理解我的修改需求，整理成新版设计文档并生成变更建议。'
+        : '请基于这个附件理解需求，先整理成标准设计文档，再继续生成应用。',
     })
     return
   }
@@ -5616,9 +5651,14 @@ const handleDocUpload = async (e: Event) => {
   if (!file) return
   target.value = '' // reset for re-upload
 
-  // 图片文件 → 作为附件附加到输入框
-  if (file.type.startsWith('image/')) {
-    attachPendingAttachmentFile(file, 'image')
+  // 非 Markdown 文件统一作为需求材料交给 AI 理解；Markdown 才走标准设计文档解析/增量对比。
+  if (!STANDARD_DESIGN_DOC_RE.test(file.name.toLowerCase())) {
+    queueMaterialFileForChat(file, {
+      autoSend: true,
+      message: existingAppId.value
+        ? '请基于这个附件理解我的修改需求，整理成新版设计文档并生成变更建议。'
+        : '请基于这个附件理解需求，先整理成标准设计文档，再继续生成应用。',
+    })
     return
   }
 
@@ -6479,7 +6519,7 @@ const submitApplicationUpdateMessage = async (
   currentAgent.value = 'builder'
 
   if (attachmentPayload) {
-    if (attachmentPayload.kind === 'file' && /\.(md|markdown)$/i.test(attachmentPayload.file.name)) {
+    if (attachmentPayload.kind === 'file' && STANDARD_DESIGN_DOC_RE.test(attachmentPayload.file.name.toLowerCase())) {
       updatingDocVersion.value = true
       try {
         await handleDocVersionUpload(attachmentPayload.file, existingAppId.value, {
@@ -6656,7 +6696,17 @@ const sendMessage = async () => {
     return
   }
 
-  if (isApplicationUpdateMessage) {
+  const shouldUseApplicationUpdateShortcut = isApplicationUpdateMessage
+    && (
+      attachmentPayloads.length === 0
+      || (
+        attachmentPayloads.length === 1
+        && attachmentPayloads[0].kind === 'file'
+        && STANDARD_DESIGN_DOC_RE.test(attachmentPayloads[0].file.name.toLowerCase())
+      )
+    )
+
+  if (shouldUseApplicationUpdateShortcut) {
     // 应用更新流程暂只支持单个附件（保留旧 API 签名），多文件场景取第一个
     await submitApplicationUpdateMessage(text, attachmentPayloads[0] || null)
     sendingMessage.value = false

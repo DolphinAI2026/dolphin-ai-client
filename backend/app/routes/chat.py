@@ -1,8 +1,11 @@
 import base64
+from io import BytesIO
 import json
+import mimetypes
 import os
 import re
 import tempfile
+import zipfile
 from typing import Annotated, List, Optional
 from fastapi import APIRouter, Depends, HTTPException, File, Form, UploadFile
 from sqlalchemy import select
@@ -193,6 +196,29 @@ async def _parse_uploaded_document(file: UploadFile) -> str:
         return ""
     finally:
         os.unlink(tmp_path)
+
+
+def _extract_docx_image_data_urls(content: bytes, max_images: int = 4) -> list[str]:
+    """Extract embedded DOCX images as data URLs for vision-capable LLMs."""
+    urls: list[str] = []
+    try:
+        with zipfile.ZipFile(BytesIO(content)) as zf:
+            media_names = [
+                name for name in zf.namelist()
+                if name.startswith("word/media/") and not name.endswith("/")
+            ]
+            media_names.sort()
+            for name in media_names:
+                data = zf.read(name)
+                mime = mimetypes.guess_type(name)[0] or "image/png"
+                if not mime.startswith("image/"):
+                    continue
+                urls.append(f"data:{mime};base64,{base64.b64encode(data).decode()}")
+                if len(urls) >= max_images:
+                    break
+    except Exception:
+        return []
+    return urls
 
 
 def _extract_text_from_zip(content: bytes) -> str:
@@ -899,7 +925,8 @@ async def send_message_with_file(
     if file and file.filename and not any(f.filename == file.filename for f in all_files):
         all_files.append(file)
 
-    image_data_url = ""        # 兼容下游：保留首张图（多图场景暂时取第一张）
+    image_data_url = ""        # 兼容下游：保留首张图
+    image_data_urls: list[str] = []  # 视觉模型输入，最多保留前几张
     file_content = ""          # 多文档合并后的文本
     file_name = ""             # 单文件 → 文件名；多文件 → "文件A、文件B 等 N 个文件"
     file_names: list[str] = []  # 所有上传的文件名列表
@@ -921,8 +948,24 @@ async def send_message_with_file(
                 mime = _MIME_MAP.get(ext, "image/png")
                 b64 = base64.b64encode(raw).decode()
                 image_data_url = f"data:{mime};base64,{b64}"
+                image_data_urls.append(image_data_url)
+            else:
+                raw = await upload.read()
+                if len(image_data_urls) < 4:
+                    mime = _MIME_MAP.get(ext, "image/png")
+                    b64 = base64.b64encode(raw).decode()
+                    image_data_urls.append(f"data:{mime};base64,{b64}")
         else:
-            parsed = await _parse_uploaded_document(upload)
+            raw = await upload.read()
+            if ext == ".docx" and len(image_data_urls) < 4:
+                for url in _extract_docx_image_data_urls(raw, max_images=4 - len(image_data_urls)):
+                    if not image_data_url:
+                        image_data_url = url
+                    image_data_urls.append(url)
+            from starlette.datastructures import UploadFile as StarletteUpload
+            parsed = await _parse_uploaded_document(
+                StarletteUpload(filename=upload_name, file=BytesIO(raw))
+            )
             if parsed:
                 doc_segments.append(f"## 文件：{upload_name}\n\n{parsed}")
 
@@ -1284,13 +1327,14 @@ async def send_message_with_file(
             pass
     llm_messages.extend(compacted)
 
-    if image_data_url:
+    if image_data_urls or image_data_url:
         last_content: list[dict] = []
         if message.strip():
             last_content.append({"type": "text", "text": message.strip()})
         if file_name:
-            last_content.append({"type": "text", "text": f"请结合这张截图一起分析，截图文件名：{file_name}"})
-        last_content.append({"type": "image_url", "image_url": {"url": image_data_url}})
+            last_content.append({"type": "text", "text": f"请结合附件中的图片一起分析，文件名：{file_name}"})
+        for url in (image_data_urls or [image_data_url]):
+            last_content.append({"type": "image_url", "image_url": {"url": url}})
     else:
         last_content = db_content
     llm_messages.append({"role": "user", "content": last_content})
