@@ -43,6 +43,7 @@ from app.models import (
 from app.ai_chat.tools import TOOL_SCHEMAS, execute_tool, get_all_tool_schemas, split_core_deferred, build_deferred_manifest
 from app.observability import recorder
 from app.routes.llm_configs import build_llm_chat_completions_url
+from app import llm_transport
 
 logger = logging.getLogger(__name__)
 
@@ -120,37 +121,18 @@ def _compact_tool_call_for_storage(tool_call: dict) -> dict:
     return compacted
 
 
+# 错误分类 / 文案 / 退避已收口到 app.llm_transport;这里保留同名薄封装,
+# 既不改对外行为,也让既有引用(本文件内多处)不动。
 def _is_retryable_llm_error(exc: Exception) -> bool:
-    return isinstance(
-        exc,
-        (
-            httpx.ConnectError,
-            httpx.ConnectTimeout,
-            httpx.ReadError,
-            httpx.ReadTimeout,
-            httpx.RemoteProtocolError,
-            httpx.PoolTimeout,
-        ),
-    )
+    return llm_transport.is_retryable_llm_error(exc)
 
 
 async def _sleep_before_llm_retry(attempt: int) -> None:
-    await asyncio.sleep(0.8 * (attempt + 1))
+    await llm_transport.sleep_before_retry(attempt)
 
 
 def _format_llm_error(exc: Exception) -> str:
-    if isinstance(exc, httpx.ConnectError):
-        return "连接模型网关失败，请稍后重试或检查模型服务网络。"
-    if isinstance(exc, httpx.ConnectTimeout):
-        return "连接模型网关超时，请稍后重试或检查模型服务网络。"
-    if isinstance(exc, httpx.ReadError):
-        return "模型网关读取响应失败，请稍后重试。"
-    if isinstance(exc, httpx.ReadTimeout):
-        return "模型网关响应超时，请稍后重试。"
-    if isinstance(exc, httpx.RemoteProtocolError):
-        return "模型网关连接中途断开，未返回完整响应，请稍后重试。"
-    detail = str(exc).strip()
-    return detail or exc.__class__.__name__
+    return llm_transport.format_llm_error(exc)
 
 
 # ─────────────────────── Deferred-tool helpers ───────────────────────
@@ -499,28 +481,14 @@ async def _call_llm(
         "max_tokens": cfg.max_tokens,
     }
     _apply_provider_payload_compat(cfg, payload)
-    last_error: Exception | None = None
-    for attempt in range(LLM_RETRY_ATTEMPTS):
-        try:
-            async with httpx.AsyncClient(timeout=httpx.Timeout(connect=10, read=timeout, write=10, pool=10)) as client:
-                resp = await client.post(
-                    _llm_chat_completions_url(cfg),
-                    headers={
-                        "Authorization": f"Bearer {cfg.api_key}",
-                        "Content-Type": "application/json",
-                    },
-                    json=payload,
-                )
-                resp.raise_for_status()
-                data = resp.json()
-            return data["choices"][0]["message"]
-        except Exception as exc:
-            last_error = exc
-            if attempt >= LLM_RETRY_ATTEMPTS - 1 or not _is_retryable_llm_error(exc):
-                raise
-            logger.warning("LLM non-stream request failed, retrying: %s", _format_llm_error(exc))
-            await _sleep_before_llm_retry(attempt)
-    raise last_error or RuntimeError("LLM 调用失败")
+    return await llm_transport.complete(
+        base_url=cfg.base_url,
+        api_key=cfg.api_key,
+        payload=payload,
+        timeout=httpx.Timeout(connect=10, read=timeout, write=10, pool=10),
+        retry_attempts=LLM_RETRY_ATTEMPTS,
+        url=_llm_chat_completions_url(cfg),
+    )
 
 
 async def _call_llm_stream(
@@ -538,6 +506,9 @@ async def _call_llm_stream(
 
     usage 来自 OpenAI 兼容网关的 include_usage chunk（prompt_tokens/completion_tokens/…），
     网关不支持时为 None。上层 run_agent 拼装好 final message 之后再走持久化。
+
+    SSE 解析 / 累积 / 重试逻辑已收口到 app.llm_transport.stream_chunks;这里只负责
+    构造 payload(含 ai_chat 的 _apply_provider_payload_compat + include_usage)与 URL/timeout。
     """
     payload = {
         "model": cfg.model,
@@ -551,93 +522,16 @@ async def _call_llm_stream(
         "stream_options": {"include_usage": True},
     }
     _apply_provider_payload_compat(cfg, payload)
-    last_error: Exception | None = None
-    for attempt in range(LLM_RETRY_ATTEMPTS):
-        accumulated_content = ""
-        usage_data: Optional[dict] = None
-        tool_buf: dict[int, dict] = {}
-        emitted_anything = False
-        try:
-            async with httpx.AsyncClient(timeout=httpx.Timeout(connect=10, read=timeout, write=10, pool=10)) as client:
-                async with client.stream(
-                    "POST",
-                    _llm_chat_completions_url(cfg),
-                    headers={
-                        "Authorization": f"Bearer {cfg.api_key}",
-                        "Content-Type": "application/json",
-                        "Accept": "text/event-stream",
-                    },
-                    json=payload,
-                ) as resp:
-                    if resp.status_code >= 400:
-                        await resp.aread()
-                        resp.raise_for_status()
-                    async for raw_line in resp.aiter_lines():
-                        if abort_event.is_set():
-                            break
-                        if not raw_line:
-                            continue
-                        line = raw_line.strip()
-                        if not line.startswith("data:"):
-                            continue
-                        data = line[len("data:"):].strip()
-                        if data == "[DONE]":
-                            break
-                        try:
-                            chunk = json.loads(data)
-                        except Exception:
-                            continue
-                        # usage chunk：choices 为空、带 usage（include_usage 开启后 [DONE] 前到达）
-                        if chunk.get("usage"):
-                            usage_data = chunk["usage"]
-                        choices = chunk.get("choices") or []
-                        if not choices:
-                            continue
-                        delta = choices[0].get("delta") or {}
-                        if delta.get("content"):
-                            text = delta["content"]
-                            accumulated_content += text
-                            emitted_anything = True
-                            yield {"type": "content_delta", "text": text}
-                        for tc in (delta.get("tool_calls") or []):
-                            idx = tc.get("index", 0)
-                            buf = tool_buf.setdefault(
-                                idx,
-                                {"id": "", "type": "function", "function": {"name": "", "arguments": ""}},
-                            )
-                            if tc.get("id"):
-                                buf["id"] = tc["id"]
-                            fn = tc.get("function") or {}
-                            if fn.get("name"):
-                                buf["function"]["name"] = fn["name"]
-                            if fn.get("arguments"):
-                                buf["function"]["arguments"] += fn["arguments"]
-                            emitted_anything = True
-                            yield {
-                                "type": "tool_call_delta",
-                                "index": idx,
-                                "id": buf["id"],
-                                "name": buf["function"]["name"],
-                                "arguments_so_far": buf["function"]["arguments"],
-                            }
-
-            final_tool_calls = [tool_buf[k] for k in sorted(tool_buf.keys())]
-            yield {
-                "type": "done",
-                "message": {
-                    "content": accumulated_content,
-                    "tool_calls": final_tool_calls if final_tool_calls else None,
-                },
-                "usage": usage_data,
-            }
-            return
-        except Exception as exc:
-            last_error = exc
-            if emitted_anything or attempt >= LLM_RETRY_ATTEMPTS - 1 or not _is_retryable_llm_error(exc):
-                raise
-            logger.warning("LLM stream request failed before output, retrying: %s", _format_llm_error(exc))
-            await _sleep_before_llm_retry(attempt)
-    raise last_error or RuntimeError("LLM 调用失败")
+    async for chunk in llm_transport.stream_chunks(
+        base_url=cfg.base_url,
+        api_key=cfg.api_key,
+        payload=payload,
+        timeout=httpx.Timeout(connect=10, read=timeout, write=10, pool=10),
+        abort_event=abort_event,
+        retry_attempts=LLM_RETRY_ATTEMPTS,
+        url=_llm_chat_completions_url(cfg),
+    ):
+        yield chunk
 
 
 async def _call_llm_stream_with_fallback(
