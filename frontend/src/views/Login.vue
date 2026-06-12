@@ -41,7 +41,7 @@
           @submit.prevent="handleLogin"
         >
           <label class="login-label">aPaaS 账号</label>
-          <el-form-item prop="username">
+          <el-form-item prop="username" class="login-field-item">
             <el-input
               v-model="loginForm.username"
               placeholder="请输入 aPaaS 账号"
@@ -53,7 +53,7 @@
           </el-form-item>
 
           <label class="login-label">aPaaS 密码</label>
-          <el-form-item prop="password">
+          <el-form-item prop="password" class="login-field-item">
             <el-input
               v-model="loginForm.password"
               type="password"
@@ -112,8 +112,8 @@ const loginForm = reactive({
 })
 
 const loginRules: FormRules = {
-  username: [{ required: true, message: '请输入用户名', trigger: 'blur' }],
-  password: [{ required: true, message: '请输入密码', trigger: 'blur' }]
+  username: [{ required: true, message: '请输入 aPaaS 账号', trigger: ['blur', 'change'] }],
+  password: [{ required: true, message: '请输入 aPaaS 密码', trigger: ['blur', 'change'] }]
 }
 
 function safeRedirectPath(raw: unknown): string {
@@ -298,6 +298,20 @@ const handleLogin = async () => {
 
 :deep(.el-form-item) {
   margin-bottom: 0;
+}
+
+:deep(.login-field-item .el-form-item__content) {
+  align-items: flex-start;
+  min-height: 70px;
+}
+
+:deep(.login-field-item .el-form-item__error) {
+  position: static;
+  flex-basis: 100%;
+  min-height: 16px;
+  margin-top: 5px;
+  padding-top: 0;
+  line-height: 16px;
 }
 
 :deep(.el-input__wrapper) {
