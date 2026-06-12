@@ -27,6 +27,11 @@ from app.operations.form_config import (  # noqa: F401 (部分经 re-export 被�
     _normalize_permission_range,
     _query_saveable_form_config,
 )
+# 组件↔字典绑定解析收敛到 operations 层（治分步路径漏带 dict_codes 翻译的漏绑 bug）
+from app.operations.dict_binding import (  # noqa: F401
+    _component_lookup_keys,
+    resolve_component_dict_code,
+)
 from app.field_types import select_choose_type_for_component
 from app.lowcode_standards import normalize_component_type, normalize_database_field_type, safe_field_code
 
@@ -1249,22 +1254,6 @@ def _component_dict_code(component: dict) -> str:
     return ""
 
 
-def _component_lookup_keys(component: dict) -> List[str]:
-    keys: List[str] = []
-    for value in (
-        component.get("modelField"),
-        component.get("model_field"),
-        component.get("code"),
-        component.get("field_code"),
-        component.get("label"),
-        component.get("name"),
-    ):
-        text = str(value or "").strip()
-        if text and text not in keys:
-            keys.append(text)
-    return keys
-
-
 def _field_dict_code(field: dict) -> str:
     return str(_first_non_empty(
         field.get("dict"),
@@ -1387,15 +1376,25 @@ def _collect_component_dict_lookup(
     return lookup
 
 
-def _lookup_component_dict_code(component: dict, lookup: Dict[str, str]) -> str:
-    direct_code = _component_dict_code(component)
-    direct = lookup.get(direct_code, direct_code)
-    if direct:
-        return direct
-    for key in _component_lookup_keys(component):
-        if key in lookup:
-            return lookup[key]
-    return ""
+def _lookup_component_dict_code(
+    component: dict,
+    lookup: Dict[str, str],
+    dict_codes: Optional[Dict[str, str]] = None,
+    dict_id_map: Optional[Dict[str, str]] = None,
+) -> str:
+    """解析组件应绑定的平台字典 code。委托共享 operations.dict_binding 实现。
+
+    历史本地实现读到组件自带 dict code 后直接返回，**漏了 dict_codes 翻译**：组件携带
+    逻辑 dict code（需翻译成平台 code）时返回未翻译值 → 落不进 dict_id_map → 漏绑。
+    这是 b14a434d 只修了 generator_v2 一侧的同一个 bug，现经共享实现补到分步路径。
+    传入 dict_codes/dict_id_map 让翻译与有效性闸门生效；不传时退化为「非空即可」的旧宽松行为。
+    """
+    return resolve_component_dict_code(
+        component,
+        lookup,
+        dict_codes=dict_codes,
+        dict_id_map=dict_id_map,
+    )
 
 
 def _make_dictionary_choose_options(options: list) -> list:
@@ -1508,7 +1507,7 @@ async def _bind_dicts_to_form(
         # 串行循环 N 个字典×~1s/次 是经典浪费。
         used_dict_codes: set[str] = set()
         for fc in (form_components or []):
-            dc = _lookup_component_dict_code(fc, dict_lookup)
+            dc = _lookup_component_dict_code(fc, dict_lookup, dict_codes, dict_id_map)
             if dc and dc in dict_id_map and dict_id_map.get(dc):
                 used_dict_codes.add(dc)
         ordered_codes = [dc for dc in used_dict_codes]
@@ -1540,7 +1539,7 @@ async def _bind_dicts_to_form(
 
         def _bind_dict_to_comp(comp: dict) -> bool:
             """给单个组件绑定字典，返回是否有更新。"""
-            dc = _lookup_component_dict_code(comp, dict_lookup)
+            dc = _lookup_component_dict_code(comp, dict_lookup, dict_codes, dict_id_map)
             if not dc or dc not in dict_id_map:
                 return False
             did = dict_id_map[dc]
@@ -1697,7 +1696,7 @@ def _build_form_components(
                 )
                 built["componentType"] = "FORM_TEXT_INPUT"
                 desired_component_type = "FORM_TEXT_INPUT"
-        dict_code = _lookup_component_dict_code({**comp, **built}, dict_lookup)
+        dict_code = _lookup_component_dict_code({**comp, **built}, dict_lookup, dict_codes)
         if dict_code and str(built.get("componentType") or "") in _DICT_BIND_COMPONENT_TYPES:
             built["dict"] = dict_code
             if str(built.get("componentType") or "") in _SELECT_COMPONENT_TYPES:

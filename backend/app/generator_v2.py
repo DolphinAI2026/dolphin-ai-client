@@ -50,6 +50,8 @@ from app.operations.form_config import (  # noqa: F401
     _normalize_permission_range,
     _query_saveable_form_config,
 )
+# 组件↔字典绑定解析收敛到 operations 层，两条路径共用（保证 dict_codes 翻译语义一致）。
+from app.operations.dict_binding import resolve_component_dict_code  # noqa: F401
 
 
 # ---------------------------------------------------------------------------
@@ -1554,22 +1556,6 @@ def _collect_spec_component_dict_map(
     return out
 
 
-def _component_dict_lookup_keys(comp: dict) -> List[str]:
-    keys: List[str] = []
-    for value in (
-        comp.get("modelField"),
-        comp.get("model_field"),
-        comp.get("code"),
-        comp.get("field_code"),
-        comp.get("label"),
-        comp.get("name"),
-    ):
-        text = str(value or "").strip()
-        if text and text not in keys:
-            keys.append(text)
-    return keys
-
-
 def _bind_dict_on_component(
     comp: dict,
     dict_lookup: Dict[str, str],
@@ -1589,15 +1575,7 @@ def _bind_dict_on_component(
     ct = comp.get("componentType")
     if ct not in ("FORM_SELECT_INPUT_SINGLE", "FORM_SELECT_INPUT"):
         return False
-    dc = ""
-    comp_dict_ref = comp.get("dictCode") or comp.get("dict")
-    if comp_dict_ref:
-        dc = (dict_codes or {}).get(comp_dict_ref, comp_dict_ref)
-    if not dc or dc not in dict_id_map:
-        for key in _component_dict_lookup_keys(comp):
-            dc = dict_lookup.get(key, "")
-            if dc:
-                break
+    dc = resolve_component_dict_code(comp, dict_lookup, dict_codes, dict_id_map)
     if not dc or dc not in dict_id_map:
         return False
     did = dict_id_map[dc]
