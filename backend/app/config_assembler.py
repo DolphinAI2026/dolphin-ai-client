@@ -554,7 +554,7 @@ async def assemble_config_streaming(
 
     # 后处理（加保护，不让后处理错误导致整体失败）
     try:
-        from app.ai_doc_parser import _sanitize_codes, _fill_icons, _dedup_dicts
+        from app.config_postprocess import _sanitize_codes, _fill_icons, _dedup_dicts
         _fix_field_types(complete_config)
         _sanitize_codes(complete_config)
         _fill_icons(complete_config)

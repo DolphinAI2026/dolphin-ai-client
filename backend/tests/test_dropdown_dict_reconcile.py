@@ -8,7 +8,7 @@ reconcile_dropdown_dicts: ①确定性 label==字典名 直连; ②剩下的交�
 可注入/测试用 stub); ③仍连不上的列进 unlinked 让上层标记。详见
 docs/research-0to1-dropdown-dict-rootcause-2026-06-05.md。
 """
-import app.ai_doc_parser as p
+import app.config_postprocess as p
 
 
 def _app5_like():

@@ -1,7 +1,10 @@
 """文档解析主管道
 
-完整链路：
-  标准度检测 → 纯代码解析 → 失败模块 LLM 修复 → 再解析 → 汇总
+完整链路（strict 模式）：
+  标准度检测 → 纯代码解析 →（失败即抛 DocNotStandardError）→ 校验/规范化 →
+  下拉↔字典确定性调和 → 汇总
+
+不再做 LLM 兜底解析（旧的 AI 全量兜底已删，见 config_postprocess 迁移说明）。
 
 对外只暴露一个函数：parse_document()
 """
@@ -14,8 +17,8 @@ from typing import Any, Callable, Coroutine, Dict, List, Optional
 from app.doc_standard_detector import detect
 from app.doc_standard_parser import parse, ParseResult
 from app.doc_section_splitter import split_sections
-from app.module_standardizer import standardize_module
 from app.config_validator import validate_full_config
+from app.config_postprocess import reconcile_dropdown_dicts, downgrade_unbindable_dropdowns
 from app.form_component_sanitizer import sync_form_components_with_model_fields
 
 logger = logging.getLogger(__name__)
@@ -23,8 +26,6 @@ logger = logging.getLogger(__name__)
 # 进度回调：msg=进度消息, batch=可选的批量数据(用于实时推送已解析模块)
 ProgressCallback = Optional[Callable[..., Coroutine]]
 
-# 当模型解析彻底失败时，降级使用旧的 AI 全量解析
-_FALLBACK_TO_AI = True
 _LARGE_DOC_CHAR_LIMIT = 40000
 
 
@@ -122,8 +123,7 @@ def _detect_incomplete_modules(text: str, result: ParseResult) -> set[str]:
     # forms 只检测"整段有内容但一个都没解析出"这种真失败场景。
     # 不再用 len(forms) < main_model_count 判定不完整——该判据基于"每个 model 都有 form"
     # 的业务假设，对"主表+子表/明细"的典型文档会产生误判：parser 其实已经正确解析，
-    # 但会被误拖进 _fallback_ai_parse（3-5 分钟），反而被 AI 搞乱（例如把 5.1 表单清单
-    # 也塞进 models）。保留 AI 兜底只用于 parser 真正失败的情况。
+    # 却会被误标为失败模块、最终触发 DocNotStandardError（strict 模式下任何失败模块都阻断）。
     if _section_len("forms") > 200 and len(forms) == 0:
         incomplete.add("forms")
 
@@ -265,6 +265,28 @@ async def parse_document(
                 f"'{fix['field_type']}' 从 '{fix['from']}' 自动同步为 '{fix['to']}'"
             )
 
+    # ── 下拉↔字典 确定性调和 ───────────────────────────────────
+    # 治大文档分块解析丢字典引用(详见
+    # docs/research-0to1-dropdown-dict-rootcause-2026-06-05.md)。strict 管线要求确定性,
+    # 所以这里只做「label==字典名」直连(不传 relink_fn / 不调 LLM), 仍连不上的一律降级
+    # 单行输入(消除空的 选项1/2/3)。修复消息带「已映射」/「已降级」前缀, 经
+    # _split_parse_messages 分流进 auto_fixes 透前端, 不阻塞。失败不阻断解析。
+    await progress("[complete] 调和下拉↔字典绑定...")
+    try:
+        recon = reconcile_dropdown_dicts(result.config)  # relink_fn=None → 纯确定性
+        if recon.get("linked_by_name"):
+            result.errors.append(
+                f"{recon['linked_by_name']} 个下拉组件按字典名匹配已映射回数据字典"
+            )
+        downgraded = downgrade_unbindable_dropdowns(result.config)
+        for d in downgraded:
+            label = d.get("label") or d.get("model_field") or "(未命名)"
+            result.errors.append(
+                f"下拉组件 '{label}' 无字典可绑，已降级为单行输入"
+            )
+    except Exception as e:
+        logger.warning(f"[dropdown-dict] 确定性调和异常(不阻断): {e}")
+
     blocking_errors, auto_fixes = _split_parse_messages(result.errors)
 
     await progress("解析完成")
@@ -282,129 +304,3 @@ async def parse_document(
             "auto_fixes": auto_fixes[:50],
         },
     }
-
-
-async def _fix_failed_modules(
-    original_text: str,
-    result: ParseResult,
-    llm_cfg: Optional[Dict[str, Any]],
-    progress_cb=None,
-) -> ParseResult:
-    """对失败模块并行调用 LLM 标准化，然后重新解析"""
-    import asyncio
-    from app.doc_parsers import roles as roles_parser
-    from app.doc_parsers import dicts as dicts_parser
-    from app.doc_parsers import models as models_parser
-    from app.doc_parsers import forms as forms_parser
-    from app.doc_parsers import permissions as permissions_parser
-
-    sections = split_sections(original_text)
-    # 找不到具体章节时，把整篇文档作为该模块的输入
-    modules_to_fix = list(result.failed_modules)
-
-    async def fix_one(module: str, models_context: str = None) -> tuple:
-        section_text = sections.get(module) or original_text
-        logger.info(f"LLM 修复模块: {module} (section={'found' if sections.get(module) else 'full_doc'})")
-        if progress_cb:
-            await progress_cb(f"[{module}] 正在智能解析...")
-        standardized = await standardize_module(module, section_text, llm_cfg, models_context=models_context)
-        if progress_cb:
-            await progress_cb(f"[{module}] 智能解析完成")
-        return module, standardized
-
-    standardized_map: Dict[str, Any] = {}
-
-    # Step 1: models + 非 forms 模块全部并行跑（roles/dicts/permissions 不依赖 models）
-    independent_modules = [m for m in modules_to_fix if m not in ("models", "forms")]
-    parallel_tasks = [fix_one(m) for m in independent_modules]
-    if "models" in modules_to_fix:
-        parallel_tasks.append(fix_one("models"))
-
-    if parallel_tasks:
-        parallel_results = await asyncio.gather(*parallel_tasks, return_exceptions=True)
-        for item in parallel_results:
-            if isinstance(item, Exception):
-                logger.error(f"LLM 并行修复异常: {item}")
-                continue
-            module, standardized = item
-            standardized_map[module] = standardized
-
-    # models 修复后立即解析，供 forms 使用
-    if "models" in standardized_map:
-        try:
-            parsed_models, errs = models_parser.parse(standardized_map["models"])
-            if parsed_models:
-                result.config["models"] = parsed_models
-                result.failed_modules.discard("models")
-                result.errors.extend(errs)
-        except Exception as e:
-            logger.error(f"LLM 修复后重新解析 models 失败: {e}")
-
-    # Step 2: forms 单独跑（依赖 models 上下文）
-    if "forms" in modules_to_fix:
-        models_ctx = standardized_map.get("models", "")
-        item = await fix_one("forms", models_context=models_ctx)
-        _, standardized = item
-        standardized_map["forms"] = standardized
-
-    for module in ["roles", "dicts", "forms", "permissions"]:  # models 已在 Step 1 处理
-        standardized = standardized_map.get(module)
-        if standardized is None:
-            continue
-        try:
-            if module == "roles":
-                roles, errs = roles_parser.parse(standardized)
-                if roles:
-                    result.config["roles"] = roles
-                    result.failed_modules.discard(module)
-                    result.errors.extend(errs)
-
-            elif module == "dicts":
-                dicts, errs = dicts_parser.parse(standardized)
-                if dicts:
-                    result.config["dicts"] = dicts
-                    result.failed_modules.discard(module)
-                    result.errors.extend(errs)
-
-            elif module == "forms":
-                forms, errs = forms_parser.parse(standardized, result.config.get("models", []))
-                if forms:
-                    result.config["forms"] = forms
-                    result.failed_modules.discard(module)
-                    result.errors.extend(errs)
-
-            elif module == "permissions":
-                role_codes = {r["code"] for r in result.config.get("roles", [])}
-                permissions, errs = permissions_parser.parse(standardized, role_codes)
-                if permissions:
-                    result.config["permissions"] = permissions
-                    result.failed_modules.discard(module)
-                    result.errors.extend(errs)
-
-        except Exception as e:
-            logger.error(f"LLM 修复后重新解析 {module} 失败: {e}")
-
-    return result
-
-
-async def _fallback_ai_parse(
-    text: str,
-    llm_cfg: Optional[Dict[str, Any]],
-    on_progress: ProgressCallback,
-    parse_meta: Optional[Dict[str, Any]] = None,
-) -> Dict[str, Any]:
-    """降级：使用旧的 AI 全量解析器"""
-    from app.ai_doc_parser import parse_doc_with_ai
-    logger.warning("降级使用 AI 全量解析器")
-    result = await parse_doc_with_ai(
-        text,
-        llm_cfg=llm_cfg,
-        on_progress=on_progress,
-    )
-    if isinstance(result, dict):
-        merged_meta = dict(parse_meta or {})
-        if isinstance(result.get("parse_meta"), dict):
-            merged_meta.update(result["parse_meta"])
-        if merged_meta:
-            result["parse_meta"] = merged_meta
-    return result
