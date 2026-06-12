@@ -487,7 +487,7 @@ defineExpose({
 }
 /* 对话界面风格：assistant 蓝色实底白字方形头像 'A' */
 .ac-avatar.brand {
-  background: #3b82f6 !important;
+  background: var(--brand) !important;
   color: #fff !important;
   font-size: 13px;
   font-weight: 700;
@@ -533,20 +533,20 @@ defineExpose({
 }
 .ac-fb-btn:hover {
   background: rgba(116, 128, 171, 0.08);
-  color: rgba(31, 41, 55, 0.9);
+  color: var(--text);
   border-color: rgba(116, 128, 171, 0.18);
 }
 .ac-avatar.tool {
   background: rgba(245, 158, 11, 0.16);
-  color: #b45309;
+  color: var(--warn);
 }
 .ac-avatar.thinking {
   background: rgba(156, 163, 175, 0.18);
-  color: #6b7280;
+  color: var(--text-3);
 }
 .ac-avatar.error {
   background: rgba(239, 68, 68, 0.16);
-  color: #b91c1c;
+  color: var(--err);
 }
 
 .ac-bubble {
@@ -709,7 +709,7 @@ defineExpose({
   padding: 6px 12px;
   border-left: 3px solid rgba(59, 130, 246, 0.5);
   background: rgba(59, 130, 246, 0.04);
-  color: rgba(75, 85, 99, 0.95);
+  color: var(--text-2);
 }
 .ac-text :deep(blockquote p) { margin: 0; }
 /* markdown headings — h2/h3 之间留点呼吸 */
@@ -868,7 +868,7 @@ defineExpose({
 .ac-tool-group.expanded .ac-tool-toggle { transform: rotate(90deg); }
 .ac-group-count {
   background: rgba(99, 102, 241, 0.12);
-  color: #4f5fe0;
+  color: var(--brand-text);
   padding: 1px 7px;
   border-radius: 999px;
   font-size: 10px;

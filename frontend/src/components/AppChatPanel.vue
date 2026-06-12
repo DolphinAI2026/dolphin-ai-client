@@ -557,6 +557,6 @@ onUnmounted(() => {
   cursor: not-allowed;
 }
 .abort-btn {
-  background: #d33;
+  background: var(--err);
 }
 </style>

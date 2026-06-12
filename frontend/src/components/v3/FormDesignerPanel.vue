@@ -1483,7 +1483,7 @@ select.fbp-fp-input { cursor: pointer; }
   vertical-align: middle;
   background: var(--surface);
 }
-.fbp-fp-st-req { color: #e5484d; }
+.fbp-fp-st-req { color: var(--err); }
 .fbp-fp-st-emptycell { padding: 0; }
 .fbp-fp-st-empty {
   display: flex;

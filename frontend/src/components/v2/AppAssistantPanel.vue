@@ -972,8 +972,8 @@ onBeforeUnmount(() => {
   border-radius: 6px;
 }
 .aa-drawer-del:hover {
-  color: var(--err, #dc2626);
-  background: rgba(220, 38, 38, 0.08);
+  color: var(--err);
+  background: var(--err-soft);
 }
 
 /* ─── 设计文档（artifact md）查看抽屉 ─── */

@@ -522,8 +522,8 @@ defineExpose({ reload })
 }
 .scl-state .el-icon { font-size: 22px; opacity: 0.7; }
 .scl-state p { margin: 0; max-width: 200px; line-height: 1.5; }
-.scl-state-err { color: #ef4444; }
-.scl-state-err .el-icon { color: #ef4444; }
+.scl-state-err { color: var(--err); }
+.scl-state-err .el-icon { color: var(--err); }
 .scl-state-undeployed { color: var(--t-text-secondary, #64748b); }
 .scl-state-undeployed .el-icon {
   color: var(--t-brand, #4f6ef7);

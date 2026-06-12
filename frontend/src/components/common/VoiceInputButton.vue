@@ -272,8 +272,8 @@ defineExpose({ toggle, recording, transcribing, supported })
   opacity: 0.7;
 }
 .voice-input-btn.recording {
-  color: #ef4444;
-  background: rgba(239, 68, 68, 0.1);
+  color: var(--err);
+  background: var(--err-soft);
 }
 .voice-input-btn.loading {
   color: var(--t-brand, #6366f1);
@@ -282,7 +282,7 @@ defineExpose({ toggle, recording, transcribing, supported })
   position: absolute;
   inset: 2px;
   border-radius: 8px;
-  border: 1.5px solid #ef4444;
+  border: 1.5px solid var(--err);
   animation: voice-pulse 1.2s ease-out infinite;
   pointer-events: none;
 }

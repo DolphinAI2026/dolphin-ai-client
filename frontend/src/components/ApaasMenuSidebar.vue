@@ -612,8 +612,8 @@ const MenuNode = defineComponent({
 }
 .ams-state .el-icon { font-size: 22px; opacity: 0.7; }
 .ams-state p { margin: 0; max-width: 200px; line-height: 1.5; }
-.ams-state-err { color: #ef4444; }
-.ams-state-err .el-icon { color: #ef4444; }
+.ams-state-err { color: var(--err); }
+.ams-state-err .el-icon { color: var(--err); }
 .ams-spin { animation: ams-spin 1s linear infinite; }
 
 /* ───────── 树 ───────── */
@@ -747,8 +747,8 @@ const MenuNode = defineComponent({
 .amsn-actions .el-icon { font-size: 14px; }
 
 /* 删除分组项 — 红色危险态 (作用于 el-dropdown-menu 内, 不能 scoped) */
-.amsn-dd-danger { color: #ef4444 !important; }
-.amsn-dd-danger:hover { background: rgba(239, 68, 68, 0.1) !important; color: #dc2626 !important; }
+.amsn-dd-danger { color: var(--err) !important; }
+.amsn-dd-danger:hover { background: var(--err-soft) !important; color: var(--err) !important; }
 
 /* ── 收起态 ── */
 .ams.collapsed .amsn {

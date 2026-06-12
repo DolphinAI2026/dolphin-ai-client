@@ -2,7 +2,7 @@
   <BuilderFrame :breadcrumbs="[]" :class="{ 'is-embedded': embedMode }">
     <!-- Env Picker Dialog -->
     <el-dialog v-model="showEnvPicker" title="选择调试平台环境" width="500px" :append-to-body="true">
-      <div v-if="platformEnvs.length === 0" style="text-align:center;color:#999;padding:20px;">
+      <div v-if="platformEnvs.length === 0" style="text-align:center;color:var(--text-3);padding:20px;">
         <template v-if="userStore.isTenantAdmin">
           暂无平台环境，请先到<el-link type="primary" @click="$router.push('/platform-envs')">环境管理</el-link>添加
         </template>
@@ -14,8 +14,8 @@
         <div
           v-for="env in platformEnvs"
           :key="env.id"
-          style="border:1px solid #dcdfe6;border-radius:8px;padding:16px;cursor:pointer;transition:all 0.2s;"
-          :style="{ borderColor: env.status === 'connected' ? '#67c23a' : '#dcdfe6' }"
+          style="border:1px solid var(--line);border-radius:8px;padding:16px;cursor:pointer;transition:all 0.2s;"
+          :style="{ borderColor: env.status === 'connected' ? 'var(--ok)' : 'var(--line)' }"
           @click="openBrowserPreviewWithEnv(env)"
         >
           <div style="display:flex;justify-content:space-between;align-items:center;">
@@ -23,7 +23,7 @@
             <el-tag v-if="env.status === 'connected'" type="success" size="small">已连接</el-tag>
             <el-tag v-else type="info" size="small">未连接</el-tag>
           </div>
-          <div style="color:#999;font-size:12px;margin-top:6px;">{{ env.base_url }}</div>
+          <div style="color:var(--text-3);font-size:12px;margin-top:6px;">{{ env.base_url }}</div>
         </div>
       </div>
     </el-dialog>
@@ -317,14 +317,14 @@
       <!-- 文件抽屉：显示 workspace 文件列表 (P0 留 stub，P1 接 ws files API) -->
       <el-drawer v-model="filesDrawerOpen" title="工作区文件" direction="rtl" size="40%" body-class="coding-files-drawer-body" :append-to-body="true">
         <div class="files-drawer-body">
-          <p style="color:#999;font-size:13px;padding:16px;">
+          <p style="color:var(--text-3);font-size:13px;padding:16px;">
             <AppIcon name="clipboard" :size="13" /> 文件浏览 MVP — 当前展示 workspace 元信息，详细文件树后续接入。
           </p>
           <div v-if="codingStore.workspace" style="padding:0 16px;">
             <div style="margin-bottom:12px;"><strong>名称：</strong>{{ codingStore.workspace.display_name || codingStore.workspace.project_name }}</div>
             <div style="margin-bottom:12px;"><strong>类型：</strong>{{ codingStore.workspace.project_type }}</div>
           </div>
-          <div v-else style="padding:16px;color:#999;">还没有打开工作区</div>
+          <div v-else style="padding:16px;color:var(--text-3);">还没有打开工作区</div>
         </div>
       </el-drawer>
 
@@ -346,13 +346,13 @@
           <button
             v-if="codingStore.workspace && canDeleteWorkspace(codingStore.workspace)"
             class="canvas-action-btn"
-            style="color:#ef4444;"
+            style="color:var(--err);"
             @click="deleteCurrentWorkspace"
           >
             <el-icon :size="14"><Delete /></el-icon>
             <span>删除工作区</span>
           </button>
-          <div v-if="!codingStore.workspace" style="color:#999;">还没有打开工作区</div>
+          <div v-if="!codingStore.workspace" style="color:var(--text-3);">还没有打开工作区</div>
         </div>
       </el-drawer>
 
