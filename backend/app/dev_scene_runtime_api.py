@@ -230,8 +230,7 @@ mounted()
        → asyncThen 拿 res.data + res.total → 表格渲染
 ```
 
-完整文档见 ai-builder repo `docs/skills/apaas-form-data-api.md`（17 个 API：流程
-审批 P0-P3 / 待办 / 用户搜索 / 高级筛选条件等）—— 复杂场景按需查。
+完整运行时 API 文档当前未内置到仓库；复杂场景先按本摘要实现，缺口再补专用工具或知识文档。
 """
 
 
@@ -241,18 +240,15 @@ mounted()
 def get_full_runtime_api_doc() -> str:
     """返回完整 17 个 API 的 markdown（57KB）。
 
-    数据源：docs/skills/apaas-form-data-api.md
-    复杂场景（流程审批 / 待办 / 高级筛选）才需要——预留接口给 V2.6 把它写到
-    workspace 的 .cursor/rules/apaas-form-data-api.mdc，让 外部 V2 agent
-    用 read_workspace_file 按需查。
+    完整文档未随仓库发布时返回精简版，避免运行时引用不存在的文件。
     """
     from pathlib import Path
     import logging
     logger = logging.getLogger(__name__)
     candidates = [
         # 仓库相对路径（开发 + 容器内同时容错）
-        Path(__file__).resolve().parent.parent.parent / "docs" / "skills" / "apaas-form-data-api.md",
-        Path("/root/apaas-builder/docs/skills/apaas-form-data-api.md"),
+        Path(__file__).resolve().parent.parent.parent / "docs" / "skills" / "ai-coding" / "apaas-form-data-api.md",
+        Path("/root/apaas-builder/docs/skills/ai-coding/apaas-form-data-api.md"),
     ]
     for p in candidates:
         if p.exists():

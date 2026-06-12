@@ -4,7 +4,7 @@
 
 ```
 apaas-builder-ai/
-├── backend/           # Python Flask 后端
+├── backend/           # Python FastAPI 后端
 │   ├── app/
 │   │   ├── routes/    # API 路由
 │   │   ├── coding/    # AI Coding 核心（workspace、agent）
@@ -13,7 +13,8 @@ apaas-builder-ai/
 │   │   └── ...
 │   ├── venv/          # Python 虚拟环境（gitignored）
 │   ├── run.py         # 启动入口
-│   └── requirements.txt
+│   ├── requirements.txt
+│   └── tests/         # 后端测试用例
 ├── frontend/          # Vue 3 + TypeScript 前端
 │   ├── src/
 │   │   ├── api/       # API 客户端
@@ -23,9 +24,8 @@ apaas-builder-ai/
 │   │   └── utils/     # 工具函数
 │   ├── vite.config.ts
 │   └── package.json
-├── scripts/           # 部署脚本（code-server patch 等）
-├── tests/             # 测试用例
-├── examples/          # 示例配置（YAML）
+├── scripts/           # 部署脚本
+├── tests/             # 历史离线测试/迁移基线资产；新增后端测试优先放 backend/tests/
 ├── docs/              # 文档
 │   ├── deploy/        # 部署指南
 │   ├── reference/     # 业务参考、开发指南、skill 文档
@@ -43,17 +43,17 @@ apaas-builder-ai/
 
 | 类型 | 允许的文件/目录 |
 |------|---------------|
-| 核心代码 | `backend/`, `frontend/`, `scripts/`, `tests/` |
+| 核心代码 | `backend/`, `frontend/`, `admin-spa/`, `extensions/`, `scripts/` |
 | 配置 | `.env`, `.gitignore`, `start.sh`, `test.sh` |
 | 核心文档 | `README.md`, `CHANGELOG.md`, `DEVELOPMENT.md`, `QUICKSTART.md`, `TOOLCHAIN.md` |
-| 数据/示例 | `examples/` |
+| 测试/基线 | `backend/tests/`, `tests/` |
 | 文档归档 | `docs/` |
 | 运行时产物 | `workspaces/`（gitignored） |
 
 **禁止**在根目录放置：
 - 业务需求文档、数据模型设计 → 放 `docs/reference/`
 - 规划文档、改进计划、TODO → 放 `docs/internal/`
-- 临时测试文件、截图、payload → 不入库，或放 `tests/fixtures/`
+- 临时测试文件、截图、payload → 不入库，或放对应模块的 `tests/fixtures/`
 - 独立的组件/页面开发项目 → 放 `docs/reference/` 或独立仓库
 
 ### 各目录职责
@@ -63,8 +63,8 @@ apaas-builder-ai/
 | `backend/` | Python 后端代码 | `venv/`, `*.db` 已 gitignore |
 | `frontend/` | Vue 前端代码 | `node_modules/`, `dist/` 已 gitignore |
 | `scripts/` | 部署和运维脚本 | 仅放 **实际运行的** 脚本，一次性脚本执行后删除 |
-| `tests/` | 所有测试代码 | 包括 unit、e2e、集成测试 |
-| `examples/` | 示例配置和数据 | 用于文档演示或测试 |
+| `backend/tests/` | 后端测试代码 | 当前 pytest 入口在 `backend/pytest.ini` 中声明 |
+| `tests/` | 历史离线测试/迁移基线资产 | 新增后端测试优先放 `backend/tests/` |
 | `docs/deploy/` | 部署指南 | 面向运维 |
 | `docs/reference/` | 参考文档 | 业务文档、开发指南、skill 定义等 |
 | `docs/internal/` | 内部文档 | 规划、改进计划、架构笔记 |
@@ -76,7 +76,7 @@ apaas-builder-ai/
 我写了一份需求文档          → docs/reference/
 我写了一份架构改进计划      → docs/internal/
 我写了一个部署脚本          → scripts/
-我写了一个测试脚本          → tests/
+我写了一个后端测试          → backend/tests/
 我写了一个一次性数据迁移脚本 → 执行后删除，不入库
 我开发了一个示例组件        → docs/reference/ 或独立仓库
 我截了一些调试截图          → 不入库（加到 .gitignore）

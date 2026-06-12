@@ -51,17 +51,6 @@ _EXPECTED_CONFIG_WHITELIST: frozenset[str] = frozenset({
     "add_apaas_model_field",
     "attach_dev_packages_to_apaas_app",
     "bind_apaas_form_field_to_dict",
-    "browser_click",
-    "browser_list_pages",
-    "browser_navigate",
-    "browser_press_key",
-    "browser_screenshot",
-    "browser_select_page",
-    "browser_snapshot",
-    "browser_start_recording",
-    "browser_stop_recording",
-    "browser_type",
-    "browser_wait_for_text",
     "build_apaas_feature_from_spec",
     "check_app_code_conflict",
     "create_apaas_app_dict",
@@ -187,7 +176,7 @@ tools:
   fake_tool_b:
     sections: [ui]
     agents: [config]
-    category: browser_control
+    category: ui
     description: test fixture
 """
     fake_yaml.write_text(base_yaml, encoding="utf-8")
@@ -334,7 +323,8 @@ def test_config_whitelist_matches_current_expected():
     # 2026-06-11: +6 表单组件结构化调整工具 → 83
     # 2026-06-12: +1 已有流程连线规则调整工具 → 84
     # 2026-06-12: +1 自开发 workspace 反查工具 → 85
-    assert len(new) == 85, f"config 白名单总数应是 85, 实际 {len(new)}"
+    # 2026-06-12: -11 退役 browser_* / Chrome extension POC → 74
+    assert len(new) == 74, f"config 白名单总数应是 74, 实际 {len(new)}"
 
 
 def test_builder_whitelist_count():
@@ -357,13 +347,6 @@ def test_section_filter_ui_includes_build_feature():
     """ui section 软引导应含 build_apaas_feature_from_spec."""
     ui_tools = set(tools_for_section("ui"))
     assert "build_apaas_feature_from_spec" in ui_tools
-
-
-def test_section_filter_ui_includes_browser_tools():
-    """ui section 软引导应含 browser_* 工具."""
-    ui_tools = set(tools_for_section("ui"))
-    assert "browser_snapshot" in ui_tools
-    assert "browser_click" in ui_tools
 
 
 def test_section_filter_data_includes_model_field():

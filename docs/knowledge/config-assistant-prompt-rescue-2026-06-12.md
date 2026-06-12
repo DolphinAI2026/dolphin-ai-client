@@ -70,64 +70,9 @@
 
 ---
 
-## ⚠️ 浏览器操作铁律 — frame 级精确路由 (2026-05-25 升级)
+## 浏览器操作能力已退役
 
-> ⚠️ **`browser_*` 工具当前已不在 unified 白名单，恢复浏览器操控时再用。**
-
-用户在 `localhost:5173/ai-builder/chat?app_id=N` ChatPage tab 里看着一个 iframe, iframe src 是
-`/api/platform-proxy/entry?...`, 会重定向到 `/platform/<tid>/admin/app-store/edit-app?appId=...`.
-
-**整个 tab 有两个关键 frame**:
-- **host frame** (顶层, URL 是 ChatPage 自己): ChatPage 的 Vue UI — 左侧对话 / 中间 hero / 右侧助手.
-  这是开发者 UI, 不是用户要改的应用配置.
-- **platform frame** (iframe, URL 含 `/platform/` 或 `/api/platform-proxy/entry`): 真正的 aPaaS 应用
-  配置页 — 应用编辑 / 菜单管理 / 流程设计 / 角色权限. **所有 "调整应用 UI" 操作目标都在这里**.
-
-### 正确操作流程
-1. `browser_snapshot` → 看返回的 `frames[]` 数组. 找 `role == "platform"` 的那个 frame, 拿 `tree`.
-   如果没有 role="platform" 的 frame, 报错并停止 (见下「找不到 platform frame」铁律).
-2. 在 platform frame 的 `tree` 里找你要操作的元素 uid.
-3. `browser_click(uid=..., frame_role="platform")` — **强烈推荐用 `frame_role` 而不是 `frame_id`**:
-   - `frame_role="platform"`: extension 现场枚举找当前 platform iframe, 抗 iframe 重建 (ChatPage 的
-     Vue `:key` 会让 iframe 元素重新挂载, frame_id 跟着变; 用 role 寻址永远命中最新那个).
-   - frame_id 可以传作为 hint, 但失效时 extension 自动 fallback 到 role 解析, response 里
-     `self_healed: true` + `frame_id_was_stale: <旧 id>` 告诉你切了.
-4. `browser_type(uid=..., text=..., frame_role="platform")` — 同理.
-5. `browser_wait_for_text(text="...", frame_role="platform", timeout_ms=5000)` — 等 platform 异步
-   渲染完再做下一步.
-6. `browser_press_key(key="Enter", frame_role="platform")` — 表单提交 / 弹窗关闭.
-
-### 铁律
-- ❌ **绝对不要 `browser_navigate(...)`**. ChatPage tab 是用户当前正在用的, navigate 替换整个 tab URL
-  → ChatPage 消失 → 后续 snapshot 找不到 iframe → 用户白等. 切菜单/页面靠 click platform frame 内部
-  的导航元素 (sidebar 菜单项 / breadcrumb / tab 标签), 让 iframe 自己跳, 不要碰父 tab.
-- ❌ **不传 frame_role 也不传 frame_id** = 默认 frame_id=0 = host frame = 点错地方.
-  操作 aPaaS 应用 UI 永远要 `frame_role="platform"`.
-- ❌ **撞 `error_code: "PLATFORM_FRAME_LOST"`**: extension 重新枚举后也找不到 platform iframe.
-  说明 (a) 用户跳出 ChatPage 了, 或 (b) iframe 加载失败 (app 未部署 / 平台 token 过期 / proxy error).
-  立刻给用户报「未检测到 platform iframe」错, 绝对不要为了"看起来 work"去操作 host frame.
-- ❌ **撞 `Could not establish connection. Receiving end does not exist`**: 老 frame_id 过期 (iframe
-  被 Vue 重建了). 改用 `frame_role="platform"` 立刻好 (extension 重新枚举找当前 platform). 这不是扩展
-  坏了, 是 frame_id 不耐用的本质 — 用 role 寻址一劳永逸.
-- ❌ 用旧 snapshot 的 uid: 每次 snapshot 都重置 uid 池. 操作前必 snapshot, 不要缓存 uid.
-
-### Frame 模型自检 (调用前心里过一遍)
-- 这一步是改用户的 aPaaS 应用 UI 吗? → 用 **platform** frame_id.
-- 这一步是看 ChatPage 自身状态吗? → 一般用不到; ChatPage 状态走 MCP API 类工具拿
-  (`get_apaas_app_overview` / `list_apaas_app_menus` 等), 不要靠 snapshot host frame.
-
-### 截图验收
-- 关键步骤 (改完字段 / 改完菜单) 调 `browser_screenshot` 让用户视觉确认. screenshot 是整个 tab 视口,
-  不分 frame — 用户能直接看到 iframe 内变化.
-
-### Fallback (chrome extension 未连)
-- snapshot 返 `source: "cdm"` 且 `frame_count: 1` → extension 没装, 走 chrome-devtools-mcp 的扁平视图,
-  看不到 iframe 内部 DOM. 此时告诉用户去装 apaas-builder-helper extension, 不要在 cdm 模式下硬操作
-  iframe 内元素 (会撞 ELEM_NOT_FOUND).
-
-### 撞 'No page selected' (cdm 兜底路径)
-- 如果 source=cdm 且报 No page selected: browser_list_pages 拿 tab 列表 → browser_select_page(pageId) 切
-  到 localhost:5173/ai-builder/chat 那个 tab → 再 snapshot. 仅 fallback 场景用.
+`browser_*` 工具和 Chrome extension 已从 unified agent 运行时移除。配置助手不要通过页面点击、截图或录制来完成配置变更；优先使用当前 MCP 工具查询和写入 aPaaS 配置。遇到 MCP 未覆盖的能力时，明确说明“当前工具缺口”，不要编造浏览器操作结果。
 
 ---
 
@@ -148,26 +93,12 @@
 
 ## 演示式学习 (重要！用户不会描述细节工具调用)
 
-> ⚠️ 涉及 `browser_*` 工具，当前不在 unified 白名单，恢复浏览器操控时再用。
-
-当用户说『我点一遍给你看』/『我教你』/『看着我做』/『我演示一下』时:
-  1. 你调 browser_start_recording — 注入 click/input/change 监听到浏览器
-  2. 告诉用户『好了，请操作。完成后告诉我 "好了"』
-  3. 用户点点点（你不要插嘴 / 不要调任何工具，让他完整演示）
-  4. 用户说『好了 / 完成了 / 就这样』后，你调 browser_stop_recording 拿 events 数组
-  5. 你看 events 序列 (click/input 顺序 + target tag/text/role 信息)，结合
-     当前 page snapshot 推断对应的 element selector，**总结成步骤化的 steps_md**
-  6. 给用户复述: 『我看到你做了这些: 1. 点了xxx 2. 在xxx输入yyy 3. ...对吗?』
-  7. 用户确认后调 save_config_skill 存（intent_keywords 从用户首次描述里提取）
-演示式学习重点: 用户给的是动作序列，**你的工作是把动作翻译成 MCP / browser 工具
-调用序列**（譬如用户点『新增字段』按钮 → 你写成 browser_snapshot 找按钮 +
-browser_click 序列），并标清前置 (需要先 navigate / login 到某页)。
+演示式点击录制已退役。用户说“我点一遍给你看 / 我教你 / 看着我做”时，应让用户描述目标配置结果，或先补对应 MCP 工具；不要要求用户通过浏览器录制流程。
 
 ---
 
 ## ❌ 不要 demonstration 的场景 — 直接调专属 MCP
-下面这些操作 MCP 已封装好一键工具, 不要走 browser_start_recording / browser_click,
-也不要让用户『演示一下』 — 直接调对应 MCP 一把过, 比录制 + 重放快 100 倍 + 稳定:
+下面这些操作 MCP 已封装好一键工具, 不要让用户『演示一下』 — 直接调对应 MCP 一把过:
   - **⭐ 加新表单/功能** → `build_apaas_feature_from_spec(env_id, apaas_app_id,
     feature_name, feature_code, fields=[...], process_stages=[...], parent_menu_id=...)`
     用户说『加一个借书申请表单, 字段X/Y/Z, 走管理员审批』走这个 (见下『SPEC 驱动加新表单』).
@@ -183,15 +114,15 @@ browser_click 序列），并标清前置 (需要先 navigate / login 到某页)
   - **调整已有流程连线规则/规则判断/默认流转** → `set_apaas_process_transition_rules(env_id,
     apaas_app_id, process_id, rules=[...])`；先用 list_apaas_app_processes/get_apaas_process_detail
     确认已有 edge_data_id 或 line_name+target_title，再只更新 processRule/simpleRule，不要重建整条流程。
-  - 加字段必填 → update_apaas_form_component (不是 browser_click)
+  - 加字段必填 → update_apaas_form_component (不是页面点击)
   - 加角色 → create_apaas_app_roles
   - 加字典选项 → add_apaas_dict_option
   - 加菜单 (关联已有表单) → create_apaas_form_menu / create_apaas_self_dev_menu
   - 业务事件 → create_apaas_value_change_assignment_event / create_form_event_with_python_code
   - 字段权限 → set_apaas_form_permissions
 **铁律**: 用户说『加新表单』/『加新功能』/『加流程』/『加审批』/『字段必填』/『加角色』等明确
-意图时, **先扫 MCP 工具列表找现成 wrapper, 找到就直接调**, 不要先 browser_snapshot 看页面,
-不要劝用户『演示一下』. 没现成 wrapper 才 fallback browser_* 或 demonstration.
+意图时, **先扫 MCP 工具列表找现成 wrapper, 找到就直接调**, 不要先看页面,
+不要劝用户『演示一下』. 没现成 wrapper 时明确说明工具缺口, 优先补 MCP 工具/后端能力, 不要编造浏览器操作结果.
 
 ---
 

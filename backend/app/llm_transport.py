@@ -48,6 +48,7 @@ def is_retryable_llm_error(exc: Exception) -> bool:
             httpx.ConnectTimeout,
             httpx.ReadError,
             httpx.ReadTimeout,
+            httpx.WriteTimeout,
             httpx.RemoteProtocolError,
             httpx.PoolTimeout,
         ),
@@ -67,6 +68,8 @@ def format_llm_error(exc: Exception) -> str:
         return "模型网关读取响应失败，请稍后重试。"
     if isinstance(exc, httpx.ReadTimeout):
         return "模型网关响应超时，请稍后重试。"
+    if isinstance(exc, httpx.WriteTimeout):
+        return "向模型网关发送请求超时，请稍后重试。"
     if isinstance(exc, httpx.RemoteProtocolError):
         return "模型网关连接中途断开，未返回完整响应，请稍后重试。"
     detail = str(exc).strip()

@@ -795,12 +795,6 @@ async def _run_agent_inner(
     # 每个 session 的第一轮拉一次合并 schemas（base 4 + MCP bridge 注入的 N 个）
     # 这是 lazy 设计 — backend 启动时 MCP 可能还没 ready，所以放在 turn loop 外的第一次调用
     all_schemas = await get_all_tool_schemas()
-    if getattr(session, "app_id", None):
-        # 嵌入式应用面板里浏览器工具没有可用 tab，必失败 —— 锁定 app 时直接不暴露。
-        all_schemas = [
-            t for t in all_schemas
-            if not str(t.get("function", {}).get("name", "")).startswith("browser_")
-        ]
     # 延迟工具:核心集恒在；长尾只在 system prompt 列清单，按需 search_tools 激活。
     core_schemas, deferred_by_name = split_core_deferred(all_schemas)
     _manifest = build_deferred_manifest(deferred_by_name)

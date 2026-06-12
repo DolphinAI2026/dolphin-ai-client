@@ -159,8 +159,7 @@ async def build_app_context_block(
         f"- 应用：{app['name']}（内部 id={app['id']}，apaas_app_id={app.get('apaas_app_id')}，env={app.get('platform_env_id')}）",
         "- 你正在这个应用内工作。配置改动立即生效；二次开发 / codegen 你现在就能干（相关工具已具备）。",
         "- 不要新建其它应用、不要跨应用操作；apaas 工具的 env_id / apaas_app_id 由后端按锁定应用填死。",
-        "- 要了解应用结构（模型/表单/字段/菜单/流程）就用 list_apaas_* 等 MCP 工具直接查；"
-        "不要用 browser_* / 浏览器快照类工具读页面 —— 嵌入式面板里没有可用浏览器 tab，必失败。",
+        "- 要了解应用结构（模型/表单/字段/菜单/流程）就用 list_apaas_* 等 MCP 工具直接查。",
     ]
     if view_context:
         parts.append(f"- 用户此刻正在看：{view_context}（用户说「当前/这个」表单/页面/字段时，默认指这个）")

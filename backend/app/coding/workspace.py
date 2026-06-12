@@ -772,7 +772,7 @@ class WorkspaceManager:
             hint = (
                 "Maven Nexus 仓库认证失败。配置 ~/.m2/settings.xml，加上 dcloud-public "
                 "server 认证（username/password 都是 dcloud-public）和 mirror 把所有请求"
-                "劫持到 maven-public。详见 docs/skills/apaas-backend-dev.md。"
+                "劫持到 maven-public。详见 docs/skills/ai-coding/backend-dev.md。"
             )
         elif "Could not resolve dependencies" in combined or "Could not find artifact" in combined:
             code = "MVN_DEPS_RESOLVE_FAIL"

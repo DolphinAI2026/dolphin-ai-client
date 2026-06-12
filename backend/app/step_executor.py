@@ -2427,7 +2427,7 @@ def _build_form_permission_payload(
 ) -> dict:
     """构造 create_form_permissions API 的 payload。
 
-    按标准 API 规范（skills/apaas-create-permission.md）只发 2 个顶层组：
+    按当前 aPaaS 权限 API 规范只发 2 个顶层组：
     - operationPermissionGroups — 功能权限（新增/导入/暂存/批量/复制/分享等）
     - dataPermissionGroups      — 数据权限（查看/编辑/删除/导出/评论/日志/打印等）
 

@@ -39,12 +39,13 @@ async def test_list_dev_workspaces_finds_unbound_candidate_by_query(monkeypatch)
 
     monkeypatch.setattr("app.coding.workspace.WorkspaceManager", FakeWorkspaceManager)
 
-    result = await mcp_server.list_dev_workspaces(
-        app_id=6,
-        query="form-page-portal-showcase-page.zip",
-        tenant_id=64,
-        user_id=1,
-    )
+    with mcp_server.trusted_identity(64, 1):
+        result = await mcp_server.list_dev_workspaces(
+            app_id=6,
+            query="form-page-portal-showcase-page.zip",
+            tenant_id=64,
+            user_id=1,
+        )
 
     assert result["ok"] is True
     assert result["count"] == 1
