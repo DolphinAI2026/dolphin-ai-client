@@ -41,6 +41,16 @@ from app.operations.identifiers import (  # noqa: F401
     _safe_field_code,
 )
 
+# 表单配置原子工具同样迁移到 operations 层（5 个此前两份逐字相同的实现），
+# 这里 re-export 保持 `from app.generator_v2 import _iter_form_components` 等历史引用可用。
+from app.operations.form_config import (  # noqa: F401
+    _iter_form_components,
+    _component_field_code,
+    _clone_for_form_config_permissions,
+    _normalize_permission_range,
+    _query_saveable_form_config,
+)
+
 
 # ---------------------------------------------------------------------------
 # 类型映射（从集中注册表派生）
@@ -83,18 +93,6 @@ def _permission_object_for_form_config(rule: dict, role_code_map: Dict[str, dict
         "permissionObjectValue": "",
         "permissionObjectDisplayName": "全部人员",
     }
-
-
-def _normalize_permission_range(data_range: object) -> str:
-    range_map = {
-        "all": "ALL",
-        "self": "SELF",
-        "dept": "CURRENT_USER_DEPT",
-        "dept_sub": "CURRENT_USER_DEPT_LOW_LEVEL",
-    }
-    if isinstance(data_range, str):
-        return range_map.get(data_range, data_range.upper())
-    return "ALL"
 
 
 def _parse_permission_ops(op_value: object) -> set[str]:
@@ -191,16 +189,6 @@ def _build_permission_groups_for_form_config(
 _STATE_CHANGED_MARKERS = ("页面状态已改变", "无法保存")
 
 
-async def _query_saveable_form_config(client: APaaSClient, app_id: str, form_id: str) -> dict:
-    query_context = getattr(client, "query_form_context_config", None)
-    if callable(query_context):
-        try:
-            return await query_context(app_id, form_id)
-        except Exception as exc:
-            logger.warning("query_form_context_config 失败，回退 detailPageConfigById (formId=%s): %s", form_id, exc)
-    return await client.query_detail_page_config(app_id, form_id)
-
-
 def _force_form_identity(
     form_config: dict,
     *,
@@ -290,23 +278,6 @@ def _ensure_canvas_form_components(
 
     for index, component in enumerate(components, start=1):
         _prepare_component(component, str(index))
-
-
-def _clone_for_form_config_permissions(value):
-    if isinstance(value, list):
-        return [_clone_for_form_config_permissions(item) for item in value]
-    if isinstance(value, dict):
-        cloned = {k: _clone_for_form_config_permissions(v) for k, v in value.items()}
-        for type_key, value_key in (
-            ("permissionObjectType", "permissionObjectValue"),
-            ("permissionType", "permissionValue"),
-        ):
-            if cloned.get(type_key) == "ROLE":
-                cloned[type_key] = "ROLE_USER"
-            if cloned.get(type_key) == "ALL_USER":
-                cloned[value_key] = ""
-        return cloned
-    return value
 
 
 async def _save_form_config_with_retry(
@@ -711,22 +682,6 @@ def _resolve_target_form_result(
         if str(form_result.get("modelCode", "")).strip() == target_model_code:
             return form_result
     return None
-
-
-def _iter_form_components(form_components: List[dict]) -> List[dict]:
-    items: List[dict] = []
-    for component in form_components or []:
-        items.append(component)
-        if component.get("componentType") == "FORM_WIDGET_SON_TABLE":
-            items.extend(component.get("tableColumn", []) or [])
-    return items
-
-
-def _component_field_code(component: dict) -> str:
-    model_field = str(component.get("modelField", "")).strip()
-    if "." in model_field:
-        return model_field.split(".", 1)[1]
-    return str(component.get("code", "")).strip()
 
 
 def _find_component_by_field(form_components: List[dict], field_code: str, *, label: str = "") -> Optional[dict]:

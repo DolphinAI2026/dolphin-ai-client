@@ -19,6 +19,14 @@ from app.generator_v2 import (
     _rand, _sanitize_code, _extract_fields,
     _build_component, FIELD_TYPE_MAP, COMP_TYPE_MAP, _apply_suffix,
 )
+# 表单配置原子工具收敛到 operations 层（5 个此前两份逐字相同的实现）
+from app.operations.form_config import (  # noqa: F401 (部分经 re-export 被外部 import)
+    _iter_form_components,
+    _component_field_code,
+    _clone_for_form_config_permissions,
+    _normalize_permission_range,
+    _query_saveable_form_config,
+)
 from app.field_types import select_choose_type_for_component
 from app.lowcode_standards import normalize_component_type, normalize_database_field_type, safe_field_code
 
@@ -1083,16 +1091,6 @@ def _is_form_save_conflict(exc: Exception) -> bool:
     return any(token in text for token in ("当前页面状态已改变", "页面状态已改变", "乐观锁", "版本", "version", "stale"))
 
 
-async def _query_saveable_form_config(client: APaaSClient, app_id: str, form_id: str) -> dict:
-    query_context = getattr(client, "query_form_context_config", None)
-    if callable(query_context):
-        try:
-            return await query_context(app_id, form_id)
-        except Exception as exc:
-            logger.warning("query_form_context_config 失败，回退 detailPageConfigById (formId=%s): %s", form_id, exc)
-    return await client.query_detail_page_config(app_id, form_id)
-
-
 async def _save_form_config_with_retry(
     client: APaaSClient,
     app_id: str,
@@ -2007,22 +2005,6 @@ def _resolve_target_form_result(
     return None
 
 
-def _iter_form_components(form_components: List[dict]) -> List[dict]:
-    items: List[dict] = []
-    for component in form_components or []:
-        items.append(component)
-        if component.get("componentType") == "FORM_WIDGET_SON_TABLE":
-            items.extend(component.get("tableColumn", []) or [])
-    return items
-
-
-def _component_field_code(component: dict) -> str:
-    model_field = str(component.get("modelField", "")).strip()
-    if "." in model_field:
-        return model_field.split(".", 1)[1]
-    return str(component.get("code", "")).strip()
-
-
 def _find_component_by_field(
     form_components: List[dict],
     field_code: str,
@@ -2573,18 +2555,6 @@ def _resolve_permission_object(rule: dict, role_codes: Dict[str, dict]) -> dict:
     }
 
 
-def _normalize_permission_range(data_range: object) -> str:
-    range_map = {
-        "all": "ALL",
-        "self": "SELF",
-        "dept": "CURRENT_USER_DEPT",
-        "dept_sub": "CURRENT_USER_DEPT_LOW_LEVEL",
-    }
-    if isinstance(data_range, str):
-        return range_map.get(data_range, data_range.upper())
-    return "ALL"
-
-
 def _build_form_permission_payload(
     app_id: str,
     form_code: str,
@@ -2621,23 +2591,6 @@ def _build_form_permission_payload(
         "operationPermissionGroups": cleaned_ops,
         "dataPermissionGroups": cleaned_data,
     }
-
-
-def _clone_for_form_config_permissions(value):
-    if isinstance(value, list):
-        return [_clone_for_form_config_permissions(item) for item in value]
-    if isinstance(value, dict):
-        cloned = {k: _clone_for_form_config_permissions(v) for k, v in value.items()}
-        for type_key, value_key in (
-            ("permissionObjectType", "permissionObjectValue"),
-            ("permissionType", "permissionValue"),
-        ):
-            if cloned.get(type_key) == "ROLE":
-                cloned[type_key] = "ROLE_USER"
-            if cloned.get(type_key) == "ALL_USER":
-                cloned[value_key] = ""
-        return cloned
-    return value
 
 
 async def _sync_form_permissions_to_form_config(
