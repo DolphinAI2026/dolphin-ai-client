@@ -145,6 +145,11 @@ tools:
     agents: [coding]
     category: dev_workspace
     description: "创建自开发 workspace；传 env_id 时会先查同名自开发包/菜单，命中则要求用户确认。"
+  list_dev_workspaces:
+    sections: [extension]
+    agents: [coding, config]
+    category: dev_workspace
+    description: "按应用/页面名/zip 包名列出自开发 workspace，帮助在不知道 workspace_id 时反查源码工作区。"
   create_form_event_with_python_code:
     sections: [logic]
     agents: [config]
@@ -524,6 +529,11 @@ tools:
     agents: [builder, config]
     category: process
     description: "给某个表单菜单设置审批流程；简单顺序审批传 stages，条件分支/并行流程传 process_definition.nodes + process_definition.edges。"
+  set_apaas_process_transition_rules:
+    sections: [logic]
+    agents: [builder, config]
+    category: process
+    description: "给已有审批流程的指定连线设置流转规则；只改 processRule/simpleRule，不重建整条流程。"
   set_apaas_form_permissions:
     sections: [permission]
     agents: [builder, config]

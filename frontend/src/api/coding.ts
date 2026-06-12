@@ -32,8 +32,16 @@ export interface CodingMessage {
   created_at: string
 }
 
+export interface CodingAttachment {
+  kind: 'image' | 'file'
+  filename: string
+  url?: string
+  relative_path?: string
+  content_type?: string
+}
+
 export interface ReplayStreamMessage {
-  type: 'user' | 'thinking' | 'tool' | 'file_write' | 'file_edit' | 'command' | 'status' | 'error'
+  type: 'user' | 'thinking' | 'tool' | 'file_write' | 'file_edit' | 'command' | 'status' | 'error' | 'message'
   content: string
   fileName?: string
   fileContent?: string
@@ -42,6 +50,7 @@ export interface ReplayStreamMessage {
   stepDone?: boolean
   hidden?: boolean
   timestamp?: number
+  attachments?: CodingAttachment[]
 }
 
 export interface WorkspaceConversation {
@@ -78,6 +87,8 @@ export interface UploadResult {
   content_type: string
   content?: string
   file_path: string
+  relative_path?: string
+  preview_url?: string
 }
 
 export const codingApi = {

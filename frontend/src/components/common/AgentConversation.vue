@@ -48,7 +48,8 @@
                 <div class="ac-text">{{ item.content }}</div>
                 <div v-if="item.attachments && item.attachments.length" class="ac-attach-chips">
                   <span v-for="a in item.attachments" :key="a.id ?? a.filename" class="ac-attach-chip">
-                    <span class="icon"><AppIcon :name="a.kind === 'image' ? 'image' : 'file'" :size="13" /></span>
+                    <img v-if="a.kind === 'image' && a.url" class="thumb" :src="a.url" :alt="a.filename" />
+                    <span v-else class="icon"><AppIcon :name="a.kind === 'image' ? 'image' : 'file'" :size="13" /></span>
                     <span class="name">{{ a.filename }}</span>
                   </span>
                 </div>
@@ -761,6 +762,14 @@ defineExpose({
   background: var(--t-bg-soft, rgba(15, 23, 42, 0.06));
   border-radius: 6px;
   color: var(--t-text-secondary);
+}
+.ac-attach-chip .thumb {
+  width: 28px;
+  height: 20px;
+  object-fit: cover;
+  border-radius: 4px;
+  border: 1px solid var(--t-border-soft, rgba(116, 128, 171, 0.22));
+  background: var(--t-bg-base, #fff);
 }
 
 .ac-ask-card {

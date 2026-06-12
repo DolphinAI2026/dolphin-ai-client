@@ -19,6 +19,7 @@ import { useUserStore } from '@/stores/user'
 import { consumeSseResponse } from '@/utils/sse'
 import { codingApi } from '@/api/coding'
 import { harnessApi } from '@/api/harness'
+import type { CodingAttachment } from '@/api/coding'
 
 import { formatSceneType } from './useStreamMessages'
 import type { useCodingModel } from './useCodingModel'
@@ -373,8 +374,12 @@ export function useCodingPipeline(deps: PipelineDeps) {
     }
   }
 
-  function buildPipelineRequest(finalMessage: string, sceneKey: string): Record<string, any> {
-    return {
+  function buildPipelineRequest(
+    finalMessage: string,
+    sceneKey: string,
+    attachments: CodingAttachment[] = [],
+  ): Record<string, any> {
+    const body: Record<string, any> = {
       message: finalMessage,
       workspace_id: codingStore.workspace?.id || null,
       conversation_id: codingStore.conversationId || null,
@@ -385,14 +390,16 @@ export function useCodingPipeline(deps: PipelineDeps) {
       project_id: resolveRouteProjectId(),
       project_type: sceneCategoryToProjectType[sceneKey] || (route.query.type as string) || null,
     }
+    if (attachments.length) body.attachments = attachments
+    return body
   }
 
   async function uploadAttachmentIfPresent(
     message: string,
     file: File | null,
     previewUrl: string | null,
-  ): Promise<string> {
-    if (!file) return message
+  ): Promise<{ message: string; attachments: CodingAttachment[] }> {
+    if (!file) return { message, attachments: [] }
 
     let uploadResult: any = null
     try {
@@ -405,11 +412,26 @@ export function useCodingPipeline(deps: PipelineDeps) {
       if (previewUrl) URL.revokeObjectURL(previewUrl)
     }
 
-    if (!uploadResult) return message
-    if (uploadResult.content) {
-      return `[附件文档: ${uploadResult.filename}]\n\`\`\`\n${uploadResult.content}\n\`\`\`\n\n${message}`
+    if (!uploadResult) return { message, attachments: [] }
+    const kind: 'image' | 'file' = String(uploadResult.content_type || file.type || '').startsWith('image/') ? 'image' : 'file'
+    const attachment: CodingAttachment = {
+      kind,
+      filename: uploadResult.filename || file.name,
+      url: uploadResult.preview_url,
+      relative_path: uploadResult.relative_path,
+      content_type: uploadResult.content_type || file.type,
     }
-    return `${message}\n\n[附件图片: ${uploadResult.filename}, 已保存至: ${uploadResult.file_path}]`
+    if (uploadResult.content) {
+      return {
+        message: `[附件文档: ${uploadResult.filename}]\n\`\`\`\n${uploadResult.content}\n\`\`\`\n\n${message}`,
+        attachments: [attachment],
+      }
+    }
+    const savedPath = uploadResult.relative_path || uploadResult.file_path
+    return {
+      message: `${message}\n\n[附件图片: ${uploadResult.filename}, 已保存至: ${savedPath}]`,
+      attachments: [attachment],
+    }
   }
 
   // ── 主流程 ──
@@ -434,21 +456,25 @@ export function useCodingPipeline(deps: PipelineDeps) {
 
     isCreating.value = true
     isStreaming.value = true
-    // 保留历史消息，多轮之间加分隔
-    if (streamMessages.value.length > 0) {
-      addStreamMsg({ type: 'status', content: '───' })
-    }
-    addStreamMsg({ type: 'user', content: message })
-    // 首条占位用中性文案：此时还没分类 read/build,不能预设"识别开发场景"(那是 codegen 话术,
-    // READ 问答会显得不对)。READ → tool 事件把它换成"已理解为查询请求";BUILD → detect_scene 完成换成"识别为 X"。
-    addStreamMsg({ type: 'status', content: codingStore.workspace ? '正在处理...' : '正在理解你的需求...', stepKey: codingStore.workspace ? undefined : 'detect_scene' })
-
     try {
-      const finalMessage = await uploadAttachmentIfPresent(message, currentAttachment, currentPreviewUrl)
+      const uploadPayload = await uploadAttachmentIfPresent(message, currentAttachment, currentPreviewUrl)
+      const displayAttachments = uploadPayload.attachments.map(a => ({
+        kind: a.kind,
+        filename: a.filename,
+        url: a.url,
+      }))
+      // 保留历史消息，多轮之间加分隔
+      if (streamMessages.value.length > 0) {
+        addStreamMsg({ type: 'status', content: '───' })
+      }
+      addStreamMsg({ type: 'user', content: message, attachments: displayAttachments })
+      // 首条占位用中性文案：此时还没分类 read/build,不能预设"识别开发场景"(那是 codegen 话术,
+      // READ 问答会显得不对)。READ → tool 事件把它换成"已理解为查询请求";BUILD → detect_scene 完成换成"识别为 X"。
+      addStreamMsg({ type: 'status', content: codingStore.workspace ? '正在处理...' : '正在理解你的需求...', stepKey: codingStore.workspace ? undefined : 'detect_scene' })
 
       const sceneKey = pendingSceneCategory.value || activeSceneCategory.value
       pendingSceneCategory.value = null
-      const body = buildPipelineRequest(finalMessage, sceneKey)
+      const body = buildPipelineRequest(uploadPayload.message, sceneKey, uploadPayload.attachments)
 
       currentAbort = new AbortController()
       const response = await fetch(harnessApi.codingPipelineUrl, {

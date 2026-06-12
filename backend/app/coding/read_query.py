@@ -46,10 +46,67 @@ _READ_ONLY_TOOL_NAMES = {
     "check_app_code_conflict",
 }
 
+_CURRENT_WORKSPACE_APP_STATUS_TOOL = {
+    "type": "function",
+    "function": {
+        "name": "get_current_workspace_app_status",
+        "description": (
+            "查询当前 Coding 工作区绑定的应用状态、aPaaS 绑定信息、以及本地最近成功发布记录。"
+            "当用户问“应用是否重新发布/是否上传到应用/是否已接入平台/发布状态”时，"
+            "优先调用本工具，不要只从源码或构建产物推断。"
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "app_id": {
+                    "type": "integer",
+                    "description": "可选，本地 ai-builder Application.id。不传时从当前会话或工作区元数据解析。",
+                }
+            },
+            "required": [],
+        },
+    },
+}
+
+_SEARCH_TOOLS_TOOL = {
+    "type": "function",
+    "function": {
+        "name": "search_tools",
+        "description": (
+            "搜索当前 Coding 只读问答可用的工具。仅返回只读工具；不会激活部署、发布、写文件等写操作工具。"
+            "当你不确定该用哪个工具时，先用关键词搜索，或用 select:工具名 精确选择。"
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "query": {
+                    "type": "string",
+                    "description": "关键词，或 select:工具名1,工具名2 精确选择。",
+                }
+            },
+            "required": ["query"],
+        },
+    },
+}
+
+_LOCAL_READ_TOOL_DEFINITIONS = [
+    _CURRENT_WORKSPACE_APP_STATUS_TOOL,
+    _SEARCH_TOOLS_TOOL,
+]
+_LOCAL_READ_TOOL_NAMES = {
+    t["function"]["name"] for t in _LOCAL_READ_TOOL_DEFINITIONS
+}
+
 READ_ONLY_TOOL_DEFINITIONS: list[dict] = [
     t for t in APAAS_TOOL_DEFINITIONS
     if t.get("function", {}).get("name") in _READ_ONLY_TOOL_NAMES
 ]
+
+_READ_TOOL_DEFINITIONS_BY_NAME: dict[str, dict] = {
+    t.get("function", {}).get("name"): t
+    for t in [*READ_ONLY_TOOL_DEFINITIONS, *_LOCAL_READ_TOOL_DEFINITIONS]
+    if t.get("function", {}).get("name")
+}
 
 # tool executors 也只暴露只读子集，防止工具名冲突时意外执行写操作
 _READ_ONLY_EXECUTORS: dict[str, Any] = {
@@ -71,6 +128,8 @@ _TOOL_DISPLAY = {
     "get_apaas_app_overview": "读取应用概览",
     "list_apaas_models_in_env": "读取环境模型",
     "check_app_code_conflict": "检查应用编码",
+    "get_current_workspace_app_status": "查询应用状态",
+    "search_tools": "搜索工具",
     **WORKSPACE_TOOL_DISPLAY,
 }
 
@@ -256,6 +315,285 @@ async def _resolve_read_platform_env_id(
     return None
 
 
+def _safe_int(value: Any) -> Optional[int]:
+    if value is None or value == "":
+        return None
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def _iso(value: Any) -> Optional[str]:
+    if value is None:
+        return None
+    try:
+        return value.isoformat()
+    except AttributeError:
+        return str(value)
+
+
+def _read_workspace_meta(ws_path: Optional[Path]) -> dict:
+    if not ws_path:
+        return {}
+    meta_path = ws_path / ".workspace.json"
+    if not meta_path.exists():
+        return {}
+    try:
+        data = json.loads(meta_path.read_text(encoding="utf-8"))
+        return data if isinstance(data, dict) else {}
+    except Exception as exc:
+        logger.warning("[read_query] 读取 workspace meta 失败: %s", exc)
+        return {}
+
+
+async def _load_bound_application(
+    *,
+    params: "PipelineParams",
+    args: dict,
+    db: AsyncSession,
+    ws_path: Optional[Path],
+) -> tuple[Any | None, dict[str, Any]]:
+    """从 tool 参数、会话绑定和 workspace meta 中解析当前工作区所属 Application。"""
+    from app.models import Application, Conversation
+
+    evidence: dict[str, Any] = {
+        "requested_app_id": args.get("app_id"),
+        "params_app_id": getattr(params, "app_id", None),
+        "conversation_id": getattr(params, "conversation_id", None),
+        "workspace_id": getattr(params, "workspace_id", None),
+        "workspace_project_id": None,
+        "resolution": None,
+    }
+
+    candidates: list[tuple[str, int]] = []
+    for source, value in (
+        ("args.app_id", args.get("app_id")),
+        ("params.app_id", getattr(params, "app_id", None)),
+    ):
+        app_id = _safe_int(value)
+        if app_id is not None:
+            candidates.append((source, app_id))
+
+    conv_id = _safe_int(getattr(params, "conversation_id", None))
+    if conv_id is not None:
+        result = await db.execute(
+            select(Conversation).where(
+                Conversation.id == conv_id,
+                Conversation.tenant_id == params.tenant_id,
+            )
+        )
+        conv = result.scalar_one_or_none()
+        conv_app_id = _safe_int(getattr(conv, "coding_app_id", None))
+        if conv_app_id is not None:
+            candidates.append(("conversation.coding_app_id", conv_app_id))
+
+    workspace_meta = _read_workspace_meta(ws_path)
+    workspace_project_id = _safe_int(workspace_meta.get("project_id"))
+    evidence["workspace_project_id"] = workspace_project_id
+    if workspace_project_id is not None:
+        # 这里的 project_id 在自开发资产上下文中被复用为 Application.id。
+        candidates.append(("workspace.project_id", workspace_project_id))
+
+    seen: set[int] = set()
+    for source, app_id in candidates:
+        if app_id in seen:
+            continue
+        seen.add(app_id)
+        result = await db.execute(
+            select(Application).where(
+                Application.id == app_id,
+                Application.tenant_id == params.tenant_id,
+            )
+        )
+        app = result.scalar_one_or_none()
+        if app is not None:
+            evidence["resolution"] = source
+            return app, evidence
+
+    ws_id = str(getattr(params, "workspace_id", "") or "")
+    if ws_id:
+        result = await db.execute(
+            select(Application).where(
+                Application.tenant_id == params.tenant_id,
+                Application.source_workspace_id == ws_id,
+            )
+        )
+        app = result.scalar_one_or_none()
+        if app is not None:
+            evidence["resolution"] = "application.source_workspace_id"
+            return app, evidence
+
+    return None, evidence
+
+
+def _build_publish_status(app: Any, latest: Any | None) -> dict[str, Any]:
+    last_modified = getattr(app, "updated_at", None) or getattr(app, "created_at", None)
+    app_status = str(getattr(app, "status", "") or "").lower()
+
+    if latest is None:
+        if app_status == "completed" and getattr(app, "apaas_app_id", None):
+            status = "published"
+        elif app_status == "failed":
+            status = "failed"
+        elif app_status in ("generating", "updating"):
+            status = "generating"
+        else:
+            status = "draft"
+        return {
+            "status": status,
+            "latest_deploy": None,
+            "pending_changes_count": 0 if status == "published" else (1 if last_modified else 0),
+            "last_modified_at": _iso(last_modified),
+            "app_status": getattr(app, "status", None),
+            "local_deploy_record_found": False,
+            "can_confirm_republish_from_local_record": False,
+        }
+
+    completed_at = getattr(latest, "completed_at", None)
+    has_pending = bool(last_modified and completed_at and last_modified > completed_at)
+    return {
+        "status": "draft_on_published" if has_pending else "published",
+        "latest_deploy": {
+            "deploy_id": getattr(latest, "id", None),
+            "version": getattr(latest, "version_label", None) or f"v{getattr(latest, 'id', '')}",
+            "completed_at": _iso(completed_at),
+            "user_id": getattr(latest, "user_id", None),
+            "deploy_type": getattr(latest, "deploy_type", None),
+        },
+        "pending_changes_count": 1 if has_pending else 0,
+        "last_modified_at": _iso(last_modified),
+        "app_status": getattr(app, "status", None),
+        "local_deploy_record_found": True,
+        "can_confirm_republish_from_local_record": True,
+    }
+
+
+async def _get_current_workspace_app_status(
+    params: "PipelineParams",
+    db: AsyncSession,
+    ws_path: Optional[Path],
+    platform_env_id: Optional[int],
+    args: dict,
+) -> str:
+    """只读查询当前 Coding 工作区绑定应用与发布状态。"""
+    app, evidence = await _load_bound_application(
+        params=params,
+        args=args or {},
+        db=db,
+        ws_path=ws_path,
+    )
+    if app is None:
+        return json.dumps({
+            "ok": False,
+            "error_code": "NO_BOUND_APPLICATION",
+            "message": "当前 Coding 工作区未解析到绑定应用，无法判断是否已重新发布到 aPaaS。",
+            "evidence": evidence,
+        }, ensure_ascii=False)
+
+    from app.models.deploy_history import DeployRecord
+
+    result = await db.execute(
+        select(DeployRecord)
+        .where(DeployRecord.app_id == int(app.id), DeployRecord.status == "success")
+        .order_by(DeployRecord.completed_at.desc())
+        .limit(1)
+    )
+    latest = result.scalar_one_or_none()
+
+    remote_detail: dict[str, Any] | None = None
+    remote_error: str | None = None
+    env_id = _safe_int(getattr(app, "platform_env_id", None)) or platform_env_id
+    apaas_app_id = str(getattr(app, "apaas_app_id", "") or "")
+    if env_id and apaas_app_id:
+        try:
+            from app.coding.apaas_tools import call_apaas_with_relogin
+
+            detail = await call_apaas_with_relogin(
+                int(env_id),
+                db,
+                lambda client: client.query_app_detail(apaas_app_id),
+            )
+            if isinstance(detail, dict):
+                remote_detail = {
+                    "currentVersion": detail.get("currentVersion"),
+                    "appVersion": detail.get("appVersion"),
+                    "version": detail.get("version"),
+                    "status": detail.get("status"),
+                    "isSelfDev": detail.get("isSelfDev"),
+                }
+        except Exception as exc:
+            remote_error = str(exc)
+
+    return json.dumps({
+        "ok": True,
+        "app": {
+            "local_app_id": int(app.id),
+            "app_name": getattr(app, "app_name", None),
+            "app_code": getattr(app, "app_code", None),
+            "app_status": getattr(app, "status", None),
+            "platform_env_id": env_id,
+            "apaas_app_id": apaas_app_id or None,
+            "updated_at": _iso(getattr(app, "updated_at", None)),
+        },
+        "publish_status": _build_publish_status(app, latest),
+        "remote_app_detail": remote_detail,
+        "remote_error": remote_error,
+        "evidence": evidence,
+        "note": (
+            "local_deploy_record_found=false 时，只能确认本地应用已绑定/平台应用存在，"
+            "不能仅凭工作区源码证明刚刚执行过重新发布。"
+        ),
+    }, ensure_ascii=False)
+
+
+def _tokenize_tool_text(text: str) -> list[str]:
+    return [p for p in re.split(r"[\s,_\-:;/，。！？、]+", text.lower()) if p]
+
+
+def _search_read_tools(query: str, ws_path: Optional[Path]) -> str:
+    q = (query or "").strip()
+    candidates = dict(_READ_TOOL_DEFINITIONS_BY_NAME)
+    if ws_path is not None:
+        for schema in WORKSPACE_TOOL_DEFINITIONS:
+            name = schema.get("function", {}).get("name")
+            if name:
+                candidates[name] = schema
+    candidates.pop("search_tools", None)
+
+    if q.lower().startswith("select:"):
+        want = [x.strip() for x in q[len("select:"):].split(",") if x.strip()]
+        activated = [name for name in want if name in candidates]
+    else:
+        terms = _tokenize_tool_text(q)
+        scored: list[tuple[int, str]] = []
+        for name, schema in candidates.items():
+            fn = schema.get("function", {}) or {}
+            desc = str(fn.get("description") or "")
+            text = f"{name} {desc}".lower()
+            name_tokens = set(_tokenize_tool_text(name))
+            score = 0
+            for term in terms:
+                if term in name_tokens:
+                    score += 3
+                elif term and term in text:
+                    score += 1
+            if score:
+                scored.append((score, name))
+        scored.sort(key=lambda item: (-item[0], item[1]))
+        activated = [name for _, name in scored[:8]]
+
+    return json.dumps({
+        "ok": True,
+        "activated": activated,
+        "message": (
+            f"已匹配 {len(activated)} 个只读工具: {', '.join(activated)}"
+            if activated else "无匹配只读工具；换个关键词或用 select:工具名"
+        ),
+        "read_only": True,
+    }, ensure_ascii=False)
+
+
 # ─────────────────────────── 流式 LLM 调用 ─────────────────────────────────
 
 
@@ -325,6 +663,8 @@ _READ_SYSTEM_PROMPT = """你是 aPaaS 平台的 AI 助手，帮用户查询和�
 
 工作指引：
 - 只调用只读工具查询信息，不创建、不修改任何内容
+- 如果用户问当前应用是否已发布/重新发布/接入平台，优先调用 get_current_workspace_app_status
+- 如果不确定该用哪个工具，先调用 search_tools 搜索只读工具；search_tools 不会提供任何写入/部署工具
 - 调用 list_apaas_apps 先了解有哪些应用，再根据用户需求深入查询
 - 用清晰的中文回答用户问题，用 markdown 表格/列表整理信息
 - **列出应用时固定用 4 列 markdown 表：序号 | 应用名称 | 应用编码 | 状态**
@@ -338,6 +678,8 @@ _READ_WS_SYSTEM_PROMPT = """你是代码工作区的 AI 助手，帮用户阅读
 
 工作指引：
 - **本轮只读：只调用只读工具，绝不修改任何文件**（你也没有写工具）
+- 如果用户问应用是否已上传/接入/发布/重新发布，先调用 get_current_workspace_app_status；不要只看源码或 zip 产物后下结论
+- 如果不确定该用哪个工具，先调用 search_tools 搜索只读工具；search_tools 不会提供任何写入/部署工具
 - 先 list_workspace_files 了解项目结构，再用 read_workspace_file / search_workspace_code 深入
 - 回答里引用代码位置用 `相对路径:行号` 格式，方便用户点击查看
 - 用清晰的中文回答，必要时用代码块/列表整理
@@ -398,6 +740,7 @@ async def run_read_query(
         tool_definitions += READ_ONLY_TOOL_DEFINITIONS
     if ws_path:
         tool_definitions += WORKSPACE_TOOL_DEFINITIONS
+    tool_definitions += _LOCAL_READ_TOOL_DEFINITIONS
 
     system_prompt = _READ_WS_SYSTEM_PROMPT if ws_path else _READ_SYSTEM_PROMPT
 
@@ -407,13 +750,20 @@ async def run_read_query(
         {"role": "user", "content": params.message},
     ]
 
-    async def _exec_tool(fn_name: str, args: dict, is_ws_tool: bool) -> str:
+    async def _exec_tool(fn_name: str, args: dict, is_ws_tool: bool, is_local_tool: bool) -> str:
         """执行单个只读工具:
         - 工作区文件工具 → 本地只读执行(线程池, 不碰平台)
+        - 本地状态/搜索工具 → 只读查询本地 DB 或工具白名单
         - aPaaS 只读工具 → _call_apaas_platform_tool 复用 token 自愈
           (首次空 token→用 env 账号密码登录 + 撞 401→刷 token 重试一次)。
         """
         try:
+            if is_local_tool:
+                if fn_name == "search_tools":
+                    return _search_read_tools(str((args or {}).get("query") or ""), ws_path)
+                if fn_name == "get_current_workspace_app_status":
+                    return await _get_current_workspace_app_status(params, db, ws_path, platform_env_id, args or {})
+                return f"Error: 未知本地只读工具 {fn_name!r}"
             if is_ws_tool:
                 return await asyncio.to_thread(execute_workspace_tool, ws_path, fn_name, args)
             from app.mcp_server import _call_apaas_platform_tool
@@ -464,14 +814,15 @@ async def run_read_query(
 
         # 有工具调用 → 同轮并行执行(全是只读, 无相互依赖; 先齐发 running chip 再 gather)
         tool_result_messages: list[dict] = []
-        runnable: list[tuple[str, str, dict, bool]] = []  # (tc_id, fn_name, args, is_ws_tool)
+        runnable: list[tuple[str, str, dict, bool, bool]] = []  # (tc_id, fn_name, args, is_ws_tool, is_local_tool)
         for tc in tool_calls:
             fn_name = tc.get("function", {}).get("name", "")
             tc_id = tc.get("id") or fn_name
 
             # 只允许只读工具（aPaaS 只读子集 + 工作区文件只读工具）
             _is_ws_tool = fn_name in WORKSPACE_TOOL_NAMES and ws_path is not None
-            if not _is_ws_tool and fn_name not in _READ_ONLY_EXECUTORS:
+            _is_local_tool = fn_name in _LOCAL_READ_TOOL_NAMES
+            if not _is_ws_tool and fn_name not in _READ_ONLY_EXECUTORS and not _is_local_tool:
                 tool_result_messages.append({
                     "role": "tool",
                     "tool_call_id": tc_id,
@@ -492,13 +843,13 @@ async def run_read_query(
                 "status": "running",
                 "args": args,
             }
-            runnable.append((tc_id, fn_name, args, _is_ws_tool))
+            runnable.append((tc_id, fn_name, args, _is_ws_tool, _is_local_tool))
 
         results = (
-            await asyncio.gather(*[_exec_tool(f, a, w) for (_t, f, a, w) in runnable])
+            await asyncio.gather(*[_exec_tool(f, a, w, l) for (_t, f, a, w, l) in runnable])
             if runnable else []
         )
-        for (tc_id, fn_name, _args, _w), result_str in zip(runnable, results):
+        for (tc_id, fn_name, _args, _w, _l), result_str in zip(runnable, results):
             yield {
                 "type": "tool",
                 "name": fn_name,

@@ -114,8 +114,11 @@ async def _load_app_workspaces(
     out: list[dict] = []
     for ws in rows:
         try:
-            if str(ws.get("project_id") or "") != str(app_id):
+            project_id = ws.get("project_id")
+            if project_id not in (None, "") and str(project_id) != str(app_id):
                 continue
+            ws = dict(ws)
+            ws["binding_status"] = "bound" if str(project_id or "") == str(app_id) else "unbound_candidate"
             out.append(ws)
         except Exception:
             continue
@@ -128,9 +131,11 @@ def _workspace_line(ws: dict) -> str:
     project_name = ws.get("project_name") or ""
     display_name = ws.get("display_name") or project_name
     status = ws.get("status") or ""
+    binding = ws.get("binding_status") or ("bound" if ws.get("project_id") else "unbound_candidate")
+    binding_label = "已绑定" if binding == "bound" else "未绑定候选"
     return (
         f"- ws_id={ws_id} | type={project_type} | name={display_name} "
-        f"| project_name={project_name} | status={status}"
+        f"| project_name={project_name} | status={status} | binding={binding_label}"
     )
 
 
@@ -164,7 +169,7 @@ async def build_app_context_block(
     workspaces = await _load_app_workspaces(db, app_id, tenant_id, user_id)
     if workspaces:
         parts.append(
-            "\n### 已有自开发 workspace（优先复用）\n"
+            "\n### 已有/候选自开发 workspace（优先复用）\n"
             "修改已有自开发代码 / 页面 / 组件时，先根据 ws_id 调 "
             "get_dev_workspace_status / glob_workspace / grep_workspace / read_workspace_file，"
             "再用 edit_workspace_files 或 write_workspace_files 修改。"

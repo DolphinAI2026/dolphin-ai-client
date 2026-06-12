@@ -21,6 +21,7 @@ from __future__ import annotations
 import json
 import logging
 from datetime import datetime
+from pathlib import Path
 from typing import Annotated, Any, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
@@ -31,12 +32,91 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.database import get_db
 from app.deps import AuthContext, get_auth_context
-from app.models import Application
+from app.models import Application, Conversation
 from app.models.process_definition import ProcessDefinition
 from app.permissions import Action, check_resource_permission
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
+
+
+async def _auto_bind_custom_page_workspace(
+    db: AsyncSession,
+    *,
+    app_id: int,
+    tenant_id: int,
+    user_id: int,
+    bundle_dir: str,
+    component_tag: str,
+) -> str | None:
+    """Best-effort backfill from a running custom page bundle to its local workspace.
+
+    The platform menu tells us which custom component tag is mounted. For generated
+    form-page assets the local workspace project_name matches the bundle dir
+    (`apaas-custom-x` -> `form-page-x`). When a migrated/imported workspace missed
+    `project_id`, this closes the loop without requiring a manual "绑定应用" click.
+    """
+    from app.coding.workspace import WorkspaceManager
+
+    bundle_dir = (bundle_dir or "").strip()
+    component_tag = (component_tag or "").strip()
+    if not bundle_dir and not component_tag:
+        return None
+
+    ws_mgr = WorkspaceManager()
+    try:
+        rows = ws_mgr.list_accessible_workspaces(user_id, [app_id], tenant_id=tenant_id)
+    except Exception:
+        logger.debug("custom page workspace auto-bind list failed", exc_info=True)
+        return None
+
+    target_names = {name for name in (bundle_dir, component_tag) if name}
+    if component_tag.startswith("apaas-custom-"):
+        target_names.add("form-page-" + component_tag[len("apaas-custom-"):])
+
+    for ws in rows or []:
+        if not isinstance(ws, dict):
+            continue
+        if ws.get("tenant_id") not in (None, tenant_id):
+            continue
+        project_id = ws.get("project_id")
+        if project_id:
+            try:
+                if int(project_id) != int(app_id):
+                    continue
+            except (TypeError, ValueError):
+                continue
+        names = {
+            str(ws.get("project_name") or "").strip(),
+            str(ws.get("display_name") or "").strip(),
+            Path(str(ws.get("disk_path") or "")).name.split("__")[0],
+        }
+        if not target_names.intersection(name for name in names if name):
+            continue
+
+        ws_id = str(ws.get("id") or "").strip()
+        if not ws_id:
+            continue
+        if not project_id:
+            ws_mgr.stamp_project_id(ws_id, app_id)
+
+        conv_res = await db.execute(
+            select(Conversation).where(
+                Conversation.tenant_id == tenant_id,
+                Conversation.workspace_id == ws_id,
+                Conversation.agent_type == "coding",
+            )
+        )
+        changed = False
+        for conv in conv_res.scalars().all():
+            if conv.coding_app_id != app_id:
+                conv.coding_app_id = app_id
+                changed = True
+        if changed:
+            await db.commit()
+        return ws_id
+
+    return None
 
 
 # ---------------------------------------------------------------------------
@@ -1065,6 +1145,18 @@ async def get_custom_page_host(
         bundle_dir = "form-page-" + link_url[len("apaas-custom-"):]
     else:
         bundle_dir = link_url
+
+    try:
+        await _auto_bind_custom_page_workspace(
+            db,
+            app_id=app.id,
+            tenant_id=ctx.tenant_id,
+            user_id=ctx.user.id,
+            bundle_dir=bundle_dir,
+            component_tag=component_tag,
+        )
+    except Exception:
+        logger.warning("custom page workspace auto-bind failed: app_id=%s bundle=%s", app.id, bundle_dir, exc_info=True)
 
     app_base = f"/app/{tenant_code}/{app_code}/"
     api_base = f"/apaas/backend/{tenant_code}/{app_code}"

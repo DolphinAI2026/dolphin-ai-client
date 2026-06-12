@@ -11,7 +11,7 @@
 import { ref, nextTick } from 'vue'
 import { marked } from 'marked'
 
-import type { ReplayStreamMessage } from '@/api/coding'
+import type { CodingAttachment, ReplayStreamMessage } from '@/api/coding'
 
 export interface StreamMessage {
   type: 'user' | 'thinking' | 'tool' | 'file_write' | 'file_edit' | 'command' | 'status' | 'error' | 'message' | 'clarify'
@@ -40,6 +40,8 @@ export interface StreamMessage {
   stepDone?: boolean
   /** true = 隐藏（被后续完成消息替代） */
   hidden?: boolean
+  /** 用户消息附件，用于保留截图/文件可见性 */
+  attachments?: CodingAttachment[]
   timestamp: number
 }
 
@@ -263,6 +265,7 @@ export function useStreamMessages() {
         fileContent: msg.fileContent,
         collapsed: msg.collapsed,
         hidden: msg.hidden,
+        attachments: msg.attachments,
         timestamp: msg.timestamp || Date.now() + i,
       })
     }

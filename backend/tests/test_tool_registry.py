@@ -104,6 +104,7 @@ _EXPECTED_CONFIG_WHITELIST: frozenset[str] = frozenset({
     "list_apaas_form_views",
     "list_apaas_models_in_env",
     "list_config_skills",
+    "list_dev_workspaces",
     "list_product_issues",
     "query_apaas_business_event_trees",
     "repair_empty_apaas_form_from_model",
@@ -114,6 +115,7 @@ _EXPECTED_CONFIG_WHITELIST: frozenset[str] = frozenset({
     "save_apaas_business_event",
     "save_config_skill",
     "set_apaas_app_process",
+    "set_apaas_process_transition_rules",
     "set_apaas_form_component_behavior",
     "set_apaas_form_component_default",
     "set_apaas_form_component_document_number_rules",
@@ -330,7 +332,9 @@ def test_config_whitelist_matches_current_expected():
     # 2026-06-05+: 问题助手 / 自开发等后续工具累计后现状 → 76
     # 2026-06-09: +1 平台用户名称反查工具 → 77
     # 2026-06-11: +6 表单组件结构化调整工具 → 83
-    assert len(new) == 83, f"config 白名单总数应是 83, 实际 {len(new)}"
+    # 2026-06-12: +1 已有流程连线规则调整工具 → 84
+    # 2026-06-12: +1 自开发 workspace 反查工具 → 85
+    assert len(new) == 85, f"config 白名单总数应是 85, 实际 {len(new)}"
 
 
 def test_builder_whitelist_count():
@@ -376,6 +380,7 @@ def test_section_filter_logic_includes_business_event():
     assert "create_apaas_business_event" in logic_tools
     assert "save_apaas_business_event" in logic_tools
     assert "set_apaas_app_process" in logic_tools
+    assert "set_apaas_process_transition_rules" in logic_tools
 
 
 def test_section_filter_permission_includes_role():
@@ -389,6 +394,7 @@ def test_section_filter_extension_includes_workspace():
     """extension section 软引导应含 workspace / dev_scene 工具."""
     ext_tools = set(tools_for_section("extension"))
     assert "create_dev_workspace" in ext_tools
+    assert "list_dev_workspaces" in ext_tools
     assert "list_dev_scenes" in ext_tools
 
 

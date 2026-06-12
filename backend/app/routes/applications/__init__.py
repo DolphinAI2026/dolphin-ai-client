@@ -1925,53 +1925,6 @@ async def delete_application(
         raise HTTPException(status_code=500, detail=f"删除失败: {exc}")
 
 
-@router.get("/{app_id}")
-async def get_application(
-    app_id: int,
-    ctx: Annotated[AuthContext, Depends(get_auth_context)],
-    db: Annotated[AsyncSession, Depends(get_db)],
-):
-    """获取单个应用详情（包含平台链接）"""
-    result = await db.execute(
-        select(Application).where(Application.id == app_id, Application.tenant_id == ctx.tenant_id)
-    )
-    app = result.scalar_one_or_none()
-    if not app:
-        raise HTTPException(status_code=404, detail="应用不存在")
-    permissions = await _require_application_permission(ctx, db, app, Action.VIEW)
-
-    # 获取关联的平台环境
-    env_base_url = None
-    env_tenant_id = None
-    if app.platform_env_id:
-        env_result = await db.execute(select(PlatformEnv).where(PlatformEnv.id == app.platform_env_id))
-        env = env_result.scalar_one_or_none()
-        if env:
-            env_base_url = env.base_url
-            env_tenant_id = env.platform_tenant_id
-
-    apaas_url = None
-    if app.apaas_app_id:
-        apaas_url = _build_apaas_url(str(app.apaas_app_id), env_base_url, env_tenant_id)
-
-    return {
-        "id": app.id,
-        "app_name": app.app_name,
-        "app_code": app.app_code,
-        "status": app.status,
-        "apaas_app_id": app.apaas_app_id,
-        "apaas_url": apaas_url,
-        "platform_env_id": app.platform_env_id,
-        "permissions": {
-            Action.EDIT: permissions.get(Action.EDIT, False),
-            Action.DELETE: permissions.get(Action.DELETE, False),
-            Action.CLONE: permissions.get(Action.CLONE, False),
-            "publish": permissions.get("publish", False),
-        },
-        "created_at": str(app.created_at) if app.created_at else None,
-    }
-
-
 # ── 2026-05-26 design-v4 I3: 应用 env 切换 ──
 #
 # 应用栏 "开发 / 生产" toggle 需要知道当前 tenant 有哪些 env, 哪个是
@@ -2758,7 +2711,7 @@ _CONFIG_CHAT_SECTION_HINTS: dict[str, str] = {
     "logic": (
         "## 用户当前焦点：⚙️ 逻辑 section\n"
         "用户当前在「逻辑」section 看流程 / 业务事件 / 触发器. 优先围绕审批流 / 流程节点 / 业务事件钩子展开.\n"
-        "工具优先级提示 (不锁): list_apaas_app_processes / set_apaas_app_process / list_apaas_business_events / create_business_event.\n"
+        "工具优先级提示 (不锁): list_apaas_app_processes / set_apaas_process_transition_rules / set_apaas_app_process / list_apaas_business_events / create_business_event.\n"
         "若用户问跨 section 的事 (改字段 / 改菜单 / 改权限), 直接调对应工具 — 不要拦, 不要建议\"先切到 X section\". 仅在歧义时反问.\n\n"
     ),
     "permission": (
@@ -3479,6 +3432,9 @@ async def _config_chat_event_stream(
             "    条件分支/并行流程不要说工具不支持；传完整 process_definition：节点 type 可用 start/end/\n"
             "    assignee_approval/role_approval/condition(兼容 exclusive_gateway)/multi_branch/parallel_gateway/merge，edges 上用\n"
             "    condition 表达字段条件，例如 `vuln_category == 'info_disclosure'`。\n"
+            "  - **调整已有流程连线规则/规则判断/默认流转** → `set_apaas_process_transition_rules(env_id,\n"
+            "    apaas_app_id, process_id, rules=[...])`；先用 list_apaas_app_processes/get_apaas_process_detail\n"
+            "    确认已有 edge_data_id 或 line_name+target_title，再只更新 processRule/simpleRule，不要重建整条流程。\n"
             "  - 加字段必填 → update_apaas_form_component (不是 browser_click)\n"
             "  - 加角色 → create_apaas_app_roles\n"
             "  - 加字典选项 → add_apaas_dict_option\n"

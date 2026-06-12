@@ -117,6 +117,148 @@ def test_branch_definition_translates_to_full_save_payload_with_condition_edges(
     ]
 
 
+def test_branch_condition_translates_chinese_is_operator_and_option_label_to_rule():
+    definition = copy.deepcopy(_branch_definition())
+    branch_edge = next(edge for edge in definition["edges"] if edge["id"] == "e-gw-leader")
+    branch_edge["label"] = "项目类型=客户交付"
+    branch_edge["condition"] = "项目类型 是 客户交付"
+
+    payload, warnings = translate_definition_to_apaas_schema(
+        definition,
+        apaas_app_id="app-1",
+        menu_id="menu-1",
+        form_id="form-1",
+        process_name="项目立项审批流",
+        process_code="project_init_flow",
+        form_components=[
+            {
+                "label": "项目类型",
+                "bo_code": "project_main~project_type",
+                "choose_options": [{"id": "custom_delivery", "label": "客户交付"}],
+            }
+        ],
+    )
+
+    assert warnings == []
+    condition_edge = next(edge for edge in payload["edges"] if edge["id"] == "e-start-gw__e-gw-leader")
+    rule_key = condition_edge["data"]["id"]
+    simple_rule = payload["processRule"][rule_key]["simpleRuleConfig"]
+    assert simple_rule["express"] == "(((xdap.invoke('componentvalue','project_main~project_type'))  == ('custom_delivery')))"
+    assert simple_rule["formFieldRuleList"][0]["fieldRuleList"][0] == {
+        "type": "string",
+        "boCode": "project_main~project_type",
+        "op": "eq",
+        "values": ["custom_delivery"],
+        "transValues": [],
+    }
+
+
+def test_branch_label_condition_translates_to_process_rule_when_condition_field_missing():
+    definition = copy.deepcopy(_branch_definition())
+    branch_edge = next(edge for edge in definition["edges"] if edge["id"] == "e-gw-leader")
+    branch_edge["label"] = "项目类型=产品研发"
+    branch_edge.pop("condition", None)
+
+    payload, warnings = translate_definition_to_apaas_schema(
+        definition,
+        apaas_app_id="app-1",
+        menu_id="menu-1",
+        form_id="form-1",
+        process_name="项目立项审批流",
+        process_code="project_init_flow",
+        form_components=[
+            {
+                "label": "项目类型",
+                "bo_code": "project_main~project_type",
+                "choose_options": [{"id": "product_rd", "label": "产品研发"}],
+            }
+        ],
+    )
+
+    assert warnings == []
+    condition_edge = next(edge for edge in payload["edges"] if edge["id"] == "e-start-gw__e-gw-leader")
+    assert condition_edge["lineName"] == "项目类型=产品研发"
+    assert condition_edge["conditionExpression"] == "项目类型=产品研发"
+    rule_key = condition_edge["data"]["id"]
+    simple_rule = payload["processRule"][rule_key]["simpleRuleConfig"]
+    assert simple_rule["express"] == "(((xdap.invoke('componentvalue','project_main~project_type'))  == ('product_rd')))"
+    assert simple_rule["formFieldRuleList"][0]["fieldRuleList"][0]["boCode"] == "project_main~project_type"
+    assert simple_rule["formFieldRuleList"][0]["fieldRuleList"][0]["values"] == ["product_rd"]
+
+
+def test_branch_structured_condition_string_translates_to_process_rule():
+    definition = copy.deepcopy(_branch_definition())
+    branch_edge = next(edge for edge in definition["edges"] if edge["id"] == "e-gw-leader")
+    branch_edge["label"] = "项目类型=客户交付"
+    branch_edge["condition"] = (
+        "{'field': 'project_type', 'fieldCode': 'project_type', 'operator': 'eq', "
+        "'value': 'custom_delivery', 'valueLabel': '客户交付', 'dictCode': 'project_type_dict'}"
+    )
+
+    payload, warnings = translate_definition_to_apaas_schema(
+        definition,
+        apaas_app_id="app-1",
+        menu_id="menu-1",
+        form_id="form-1",
+        process_name="项目立项审批流",
+        process_code="project_init_flow",
+        form_components=[
+            {
+                "label": "项目类型",
+                "bo_code": "project_main~project_type",
+                "choose_options": [{"id": "custom_delivery", "label": "客户交付"}],
+            }
+        ],
+    )
+
+    assert warnings == []
+    condition_edge = next(edge for edge in payload["edges"] if edge["id"] == "e-start-gw__e-gw-leader")
+    rule_key = condition_edge["data"]["id"]
+    simple_rule = payload["processRule"][rule_key]["simpleRuleConfig"]
+    assert simple_rule["express"] == "(((xdap.invoke('componentvalue','project_main~project_type'))  == ('custom_delivery')))"
+    assert simple_rule["formFieldRuleList"][0]["fieldRuleList"][0]["boCode"] == "project_main~project_type"
+    assert simple_rule["formFieldRuleList"][0]["fieldRuleList"][0]["op"] == "eq"
+    assert simple_rule["formFieldRuleList"][0]["fieldRuleList"][0]["values"] == ["custom_delivery"]
+
+
+def test_branch_structured_not_equal_condition_translates_to_process_rule():
+    definition = copy.deepcopy(_branch_definition())
+    branch_edge = next(edge for edge in definition["edges"] if edge["id"] == "e-gw-leader")
+    branch_edge["label"] = "其他项目类型"
+    branch_edge["condition"] = {
+        "field": "project_type",
+        "fieldCode": "project_type",
+        "operator": "neq",
+        "value": "custom_delivery",
+        "valueLabel": "非客户交付",
+        "dictCode": "project_type_dict",
+    }
+
+    payload, warnings = translate_definition_to_apaas_schema(
+        definition,
+        apaas_app_id="app-1",
+        menu_id="menu-1",
+        form_id="form-1",
+        process_name="项目立项审批流",
+        process_code="project_init_flow",
+        form_components=[
+            {
+                "label": "项目类型",
+                "bo_code": "project_main~project_type",
+                "choose_options": [{"id": "custom_delivery", "label": "客户交付"}],
+            }
+        ],
+    )
+
+    assert warnings == []
+    condition_edge = next(edge for edge in payload["edges"] if edge["id"] == "e-start-gw__e-gw-leader")
+    rule_key = condition_edge["data"]["id"]
+    simple_rule = payload["processRule"][rule_key]["simpleRuleConfig"]
+    assert simple_rule["express"] == "(((xdap.invoke('componentvalue','project_main~project_type'))  != ('custom_delivery')))"
+    assert simple_rule["formFieldRuleList"][0]["fieldRuleList"][0]["op"] == "neq"
+    assert simple_rule["formFieldRuleList"][0]["fieldRuleList"][0]["values"] == ["custom_delivery"]
+
+
 def test_branch_definition_accepts_exclusive_gateway_alias_from_tool_input():
     definition = copy.deepcopy(_branch_definition())
     gateway = next(n for n in definition["nodes"] if n["id"] == "gw-risk")

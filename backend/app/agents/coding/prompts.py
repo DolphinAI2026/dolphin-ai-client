@@ -699,12 +699,13 @@ def build_user_prompt(
     fix_hint: str | None = None,
     round_index: int = 0,
     app_context: dict[str, Any] | None = None,
+    is_iteration: bool = False,
 ) -> str:
     """构造 CodingAgent 的首条 user message（替代 VibeCodingAgent._build_prompt）。
 
     输出结构：
         (AutoFix Retry Banner)?  # 仅当 round_index>0 && fix_hint 非空
-        → Task → (Structured Spec) → Workspace Info → Workspace Rules
+        → Task → (Iteration Guard)? → (Structured Spec) → Workspace Info → Workspace Rules
         → Previous Summary → Workflow
 
     Args:
@@ -748,6 +749,19 @@ def build_user_prompt(
         )
 
     parts.append(f"## Task\n{requirement}")
+
+    if is_iteration:
+        parts.append(
+            "\n## 迭代修改模式（最高优先级）\n"
+            "这是一个已有代码工作区的二次修改，不是首次生成。\n"
+            "- **保留现有页面/组件的视觉设计、布局结构、导航、文案和数据呈现**，只改用户本轮明确要求的问题。\n"
+            "- 修改已有文件时必须先 `read_file` 获取当前内容，再用 `edit_file` 做局部替换；"
+            "**不要 write_file 整份重写**已有 `.vue` / `.js` / `.json` 文件。\n"
+            "- **只有新增文件或用户明确要求重写/重做/整页改版/从零生成时**，才允许对文件使用 `write_file`。\n"
+            "- 如果本轮只是修接口调用、字段映射、请求参数、错误处理或少量样式，只修改必要片段，"
+            "不要重排 template/script/style，不要把 mock 布局替换成另一套 UI。\n"
+            "- 完成后说明本轮实际改了哪些局部点；不要声称重新生成了整个自开发包。"
+        )
 
     # Spec 驱动路径：把结构化规格紧跟 Task 展示
     if spec_brief:

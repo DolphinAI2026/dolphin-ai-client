@@ -60,8 +60,56 @@ async def test_app_context_lists_existing_self_dev_workspaces(monkeypatch):
 
     block = await build_app_context_block(db=object(), app_id=5, tenant_id=7, user_id=3)
 
-    assert "已有自开发 workspace" in block
+    assert "已有/候选自开发 workspace" in block
     assert "1_existing" in block
     assert "form-page-project-dashboard" in block
     assert "修改已有自开发代码" in block
     assert "create_dev_workspace" in block
+
+
+@pytest.mark.asyncio
+async def test_load_app_workspaces_includes_unbound_same_tenant_candidates(monkeypatch):
+    import app.ai_chat.app_context as ac
+
+    class FakeWorkspaceManager:
+        def list_accessible_workspaces(self, user_id, project_ids, tenant_id=None):
+            assert user_id == 3
+            assert project_ids == [6]
+            assert tenant_id == 64
+            return [
+                {
+                    "id": "1_bound",
+                    "project_id": 6,
+                    "project_type": "form-page",
+                    "project_name": "form-page-bound",
+                    "display_name": "已绑定页面",
+                    "tenant_id": 64,
+                    "user_id": 3,
+                },
+                {
+                    "id": "1_unbound",
+                    "project_id": None,
+                    "project_type": "form-page",
+                    "project_name": "form-page-portal-showcase-page",
+                    "display_name": "门户展示页",
+                    "tenant_id": 64,
+                    "user_id": 3,
+                },
+                {
+                    "id": "1_other",
+                    "project_id": 99,
+                    "project_type": "form-page",
+                    "project_name": "form-page-other",
+                    "display_name": "其他应用页面",
+                    "tenant_id": 64,
+                    "user_id": 3,
+                },
+            ]
+
+    monkeypatch.setattr("app.coding.workspace.WorkspaceManager", FakeWorkspaceManager)
+
+    rows = await ac._load_app_workspaces(db=object(), app_id=6, tenant_id=64, user_id=3)
+
+    assert [row["id"] for row in rows] == ["1_bound", "1_unbound"]
+    assert rows[0]["binding_status"] == "bound"
+    assert rows[1]["binding_status"] == "unbound_candidate"

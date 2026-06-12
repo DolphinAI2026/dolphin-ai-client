@@ -35,6 +35,7 @@ K2 之后:
 """
 from __future__ import annotations
 
+import ast
 import hashlib
 import logging
 import re
@@ -160,6 +161,8 @@ _MINIMAL_BPMN = (
 )
 
 _DEFAULT_CONDITION_VALUES = {"", "default", "else", "otherwise", "其他", "默认", "兜底"}
+_EQUAL_OPERATORS = {"==", "=", "eq", "equals", "equal", "是", "为", "等于"}
+_NOT_EQUAL_OPERATORS = {"!=", "<>", "ne", "neq", "not_eq", "not_equal", "not_equals", "不是", "不等于"}
 
 
 def _escape_xml_text(value: Any) -> str:
@@ -176,10 +179,36 @@ def _is_default_condition(value: Any) -> bool:
     return str(value or "").strip().lower() in _DEFAULT_CONDITION_VALUES
 
 
-def _edge_condition_value(edge: dict[str, Any]) -> str:
+def _looks_like_condition_text(value: Any) -> bool:
+    text = str(value or "").strip()
+    if not text or _is_default_condition(text):
+        return False
+    if text.startswith("{") and ("field" in text or "fieldCode" in text or "operator" in text):
+        return True
+    return bool(re.search(r"(==|=|\beq\b|是|为|等于)", text, flags=re.IGNORECASE))
+
+
+def _edge_label_value(edge: dict[str, Any]) -> str:
     props = edge.get("props") if isinstance(edge.get("props"), dict) else {}
     data = edge.get("data") if isinstance(edge.get("data"), dict) else {}
     return str(
+        edge.get("label")
+        or edge.get("lineName")
+        or edge.get("title")
+        or props.get("label")
+        or props.get("lineName")
+        or props.get("title")
+        or data.get("label")
+        or data.get("lineName")
+        or data.get("title")
+        or ""
+    ).strip()
+
+
+def _edge_condition_value(edge: dict[str, Any]) -> str:
+    props = edge.get("props") if isinstance(edge.get("props"), dict) else {}
+    data = edge.get("data") if isinstance(edge.get("data"), dict) else {}
+    explicit = str(
         edge.get("condition")
         or edge.get("conditionExpression")
         or props.get("condition")
@@ -188,6 +217,12 @@ def _edge_condition_value(edge: dict[str, Any]) -> str:
         or data.get("conditionExpression")
         or ""
     ).strip()
+    if explicit:
+        return explicit
+    label = _edge_label_value(edge)
+    if _looks_like_condition_text(label):
+        return label
+    return ""
 
 
 def _component_value(component: dict[str, Any], *keys: str) -> str:
@@ -207,11 +242,16 @@ def _component_lookup(form_components: Optional[list[dict[str, Any]]]) -> dict[s
         if not isinstance(component, dict):
             continue
         bo_code = _component_value(component, "bo_code", "boCode", "bocode")
+        model_field = _component_value(component, "modelField", "model_field")
+        field_code = _component_value(component, "fieldCode", "field_code", "code")
         label = _component_value(component, "label", "componentName", "name", "widgetText")
         uuid_value = _component_value(component, "uuid", "id", "componentId")
-        keys = [bo_code, label, uuid_value]
-        if "~" in bo_code:
-            keys.append(bo_code.split("~", 1)[1])
+        keys = [bo_code, model_field, field_code, label, uuid_value]
+        for compound in (bo_code, model_field):
+            if "~" in compound:
+                keys.append(compound.split("~", 1)[1])
+            if "." in compound:
+                keys.append(compound.rsplit(".", 1)[1])
         for key in keys:
             if key:
                 lookup[key] = component
@@ -226,7 +266,7 @@ def _component_bo_code(field_ref: str, lookup: dict[str, dict[str, Any]]) -> str
         return ref
     component = lookup.get(ref)
     if component:
-        return _component_value(component, "bo_code", "boCode", "bocode") or ref
+        return _component_value(component, "bo_code", "boCode", "bocode", "modelField", "model_field") or ref
     return ref
 
 
@@ -255,9 +295,35 @@ def _resolve_option_value(bo_code: str, raw_value: str, lookup: dict[str, dict[s
 
 
 def _parse_simple_condition(
-    condition: str,
+    condition: Any,
     lookup: dict[str, dict[str, Any]],
-) -> tuple[str, str, str] | None:
+) -> tuple[str, str, str, str] | None:
+    mapping = _condition_mapping(condition)
+    if mapping:
+        field_ref = _first_text(
+            mapping,
+            "boCode",
+            "bo_code",
+            "fieldBoCode",
+            "field_bo_code",
+            "modelField",
+            "model_field",
+            "fieldCode",
+            "field_code",
+            "field",
+        )
+        raw_value = _first_condition_value(mapping, "value", "valueCode", "value_code", "optionId", "option_id")
+        if raw_value == "":
+            raw_value = _first_condition_value(mapping, "valueLabel", "value_label", "label")
+        op = _normalize_rule_operator(mapping.get("operator") or mapping.get("op") or "eq")
+        if not field_ref or not raw_value or not op:
+            return None
+        bo_code = _component_bo_code(field_ref, lookup)
+        if not bo_code:
+            return None
+        value = _resolve_option_value(bo_code, raw_value, lookup)
+        return bo_code, op, value, _rule_expression_operator(op)
+
     text = str(condition or "").strip()
     if not text or _is_default_condition(text):
         return None
@@ -269,21 +335,77 @@ def _parse_simple_condition(
     if invoke_match:
         field_ref = invoke_match.group("field")
         raw_value = invoke_match.group("value")
+        op = "eq"
     else:
         simple_match = re.match(
-            r"^\s*(?P<field>[\w~\u4e00-\u9fa5]+)\s*(?P<op>==|=|eq)\s*['\"]?(?P<value>[^'\"]+?)['\"]?\s*$",
+            r"^\s*(?P<field>[\w.~\u4e00-\u9fa5]+)\s*(?P<op>==|=|!=|<>|eq|ne|neq|是|为|等于|不是|不等于)\s*['\"]?(?P<value>[^'\"]+?)['\"]?\s*$",
             text,
+            flags=re.IGNORECASE,
         )
         if not simple_match:
             return None
         field_ref = simple_match.group("field")
         raw_value = simple_match.group("value")
+        op = _normalize_rule_operator(simple_match.group("op"))
+        if not op:
+            return None
 
     bo_code = _component_bo_code(field_ref, lookup)
     if not bo_code:
         return None
     value = _resolve_option_value(bo_code, raw_value, lookup)
-    return bo_code, "eq", value
+    return bo_code, op, value, _rule_expression_operator(op)
+
+
+def _condition_mapping(condition: Any) -> dict[str, Any] | None:
+    if isinstance(condition, dict):
+        return condition
+    text = str(condition or "").strip()
+    if not text.startswith("{") or "}" not in text:
+        return None
+    try:
+        parsed = ast.literal_eval(text)
+    except (SyntaxError, ValueError):
+        return None
+    return parsed if isinstance(parsed, dict) else None
+
+
+def _first_text(mapping: dict[str, Any], *keys: str) -> str:
+    for key in keys:
+        value = mapping.get(key)
+        if isinstance(value, str) and value.strip():
+            return value.strip()
+        if value is not None and not isinstance(value, (dict, list, tuple, set)):
+            text = str(value).strip()
+            if text:
+                return text
+    return ""
+
+
+def _first_condition_value(mapping: dict[str, Any], *keys: str) -> str:
+    for key in keys:
+        value = mapping.get(key)
+        if isinstance(value, list) and value:
+            value = value[0]
+        if isinstance(value, dict):
+            value = value.get("id") or value.get("value") or value.get("code") or value.get("label")
+        text = str(value or "").strip()
+        if text:
+            return text
+    return ""
+
+
+def _normalize_rule_operator(value: Any) -> str:
+    op = str(value or "").strip().lower()
+    if op in _EQUAL_OPERATORS:
+        return "eq"
+    if op in _NOT_EQUAL_OPERATORS:
+        return "neq"
+    return ""
+
+
+def _rule_expression_operator(op: str) -> str:
+    return "!=" if op == "neq" else "=="
 
 
 def _build_simple_process_rule(
@@ -294,11 +416,11 @@ def _build_simple_process_rule(
     parsed = _parse_simple_condition(condition, lookup)
     if not parsed:
         return None
-    bo_code, op, value = parsed
+    bo_code, op, value, expr_op = parsed
     simple_rule_config = {
         "ruleType": "simple",
         "menuId": menu_id,
-        "express": f"(((xdap.invoke('componentvalue','{bo_code}'))  == ('{value}')))",
+        "express": f"(((xdap.invoke('componentvalue','{bo_code}'))  {expr_op} ('{value}')))",
         "formFieldRuleList": [
             {
                 "connectOperation": "or",
@@ -708,8 +830,8 @@ def _build_apaas_edges(
         if not edge_id:
             # 用 hash 给个稳定 id
             edge_id = "line_" + hashlib.md5(f"{src}::{tgt}".encode("utf-8")).hexdigest()[:12]
-        lbl = e.get("label") or ""
-        cond = e.get("condition") or ""
+        lbl = _edge_label_value(e)
+        cond = _edge_condition_value(e)
         edge = _process_edge_template(edge_id, src, tgt)
         edge["lineId"] = edge_id
         edge["sourceNodeKey"] = src

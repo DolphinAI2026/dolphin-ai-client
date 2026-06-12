@@ -898,7 +898,16 @@ const agentMessages = computed<AgentMessage[]>(() => {
     const msg = list[i]!
     if (msg.type === 'status' && msg.hidden) continue
     if (msg.type === 'user') {
-      out.push({ id: 'sm' + i, kind: 'user', content: msg.content })
+      out.push({
+        id: 'sm' + i,
+        kind: 'user',
+        content: msg.content,
+        attachments: (msg.attachments || []).map(a => ({
+          kind: a.kind,
+          filename: a.filename,
+          url: a.url,
+        })),
+      })
     } else if (msg.type === 'message') {
       // 开发 SPEC 不在对话里大段铺(和右侧「开发文档」重复)——收成一行里程碑提示,完整 SPEC 去产物看。
       if (/开发\s*SPEC\s*确认|📋\s*开发\s*SPEC/.test(msg.content || '')) {

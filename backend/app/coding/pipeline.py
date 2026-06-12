@@ -32,6 +32,7 @@ from app.coding.generator import CodingGenerator
 from app.coding.workspace import WorkspaceManager, ProjectType
 from app.coding.prompts import AGENT_SYSTEM_PROMPT
 from app.coding.read_query import classify_coding_intent, classify_iteration_intent, run_read_query
+from app.coding.attachments import normalize_coding_attachments
 
 logger = logging.getLogger(__name__)
 
@@ -68,6 +69,7 @@ class PipelineParams:
         selected_model: Optional[str] = None,
         project_id: Optional[int] = None,
         app_id: Optional[str] = None,  # 分场景「在应用上定制」绑定的本地 Application.id
+        attachments: Optional[list[dict[str, Any]]] = None,
         # 预计算的 request-scoped 值
         code_server_base_url: str = "",
         api_base_builder: Optional[str] = None,  # 用于构建 IDE proxy URL 的函数
@@ -82,6 +84,7 @@ class PipelineParams:
         self.selected_model = selected_model
         self.project_id = project_id
         self.app_id = app_id
+        self.attachments = normalize_coding_attachments(attachments or [])
         self.code_server_base_url = code_server_base_url or settings.code_server_base_url or ""
         self.api_base_builder = api_base_builder
         self.ide_token = ide_token
@@ -488,6 +491,18 @@ def _push_replay_message(
     }
     payload.update({k: v for k, v in extra.items() if v is not None})
     stream_messages.append(payload)
+
+
+def _push_user_replay_message(
+    stream_messages: list[dict[str, Any]],
+    content: str,
+    attachments: Optional[list[dict[str, Any]]] = None,
+):
+    normalized_attachments = normalize_coding_attachments(attachments or [])
+    if normalized_attachments:
+        _push_replay_message(stream_messages, "user", content, attachments=normalized_attachments)
+    else:
+        _push_replay_message(stream_messages, "user", content)
 
 
 def _append_replay_thinking_delta(stream_messages: list[dict[str, Any]], delta: str):
@@ -1786,7 +1801,7 @@ async def run_coding_pipeline(
                     # 不记这轮问答在刷新/切换后就消失。回放结构手工构建
                     # (user + 工具 chip + 答案 message), 不走 _record_event 的
                     # codegen 映射(那套会把答案记成 thinking 斜体)。
-                    _push_replay_message(replay_stream_messages, "user", params.message)
+                    _push_user_replay_message(replay_stream_messages, params.message, params.attachments)
                     _read_answer = ""
                     async for _ev in run_read_query(params, db):
                         _et = _ev.get("type")
@@ -1887,7 +1902,7 @@ async def run_coding_pipeline(
 
         # ---- Step 1: 场景检测 ----
         if not replay_stream_messages:
-            _push_replay_message(replay_stream_messages, "user", params.message)
+            _push_user_replay_message(replay_stream_messages, params.message, params.attachments)
 
         if not is_iteration:
             # brainstorm 续轮（用户回复"确认/再改一下"）：场景已在首轮识别并通知过前端，
@@ -2243,6 +2258,7 @@ async def run_coding_pipeline(
         except Exception:
             _bound_handle = None
         _coding_input, _coding_extra = _codegen_app_context_overlays(_bound_handle, _coding_system_prompt)
+        _coding_input["is_iteration"] = bool(is_iteration)
         if _bound_handle:
             logger.info("[codegen] bound app 上下文已注入: app=%s apaas_app_id=%s env=%s",
                         _bound_handle[2], _bound_handle[0], _bound_handle[1])
