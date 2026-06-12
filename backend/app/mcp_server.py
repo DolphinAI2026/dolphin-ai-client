@@ -10,6 +10,34 @@
 
 环境变量：
 - MCP_INTERNAL_BASE: 内部回环 base URL，默认跟随后端 settings.port
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+新工具规范（写新 @mcp.tool 必读 — 为后续按域拆包铺路）
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+公共样板设施在 app/mcp_envelope.py（_ok / _err / ErrorCode / apaas_tool / validate_required）。
+**新工具一律走这套**，别再逐工具复制信封 / 校验 / 身份样板：
+
+1) 返回信封：成功用 `return _ok(**fields)`，失败用 `return _err(ErrorCode.XXX, "文案", **fields)`。
+   - 不要再手写 `{"ok": True/False, ...}` 字面量。
+   - error_code 必须用 ErrorCode 常量，不要裸字符串 — 下游 agent 在按 error_code 分支，
+     新码也先在 mcp_envelope.ErrorCode 里建常量（值就是字符串本身）。
+
+2) 必填校验：用 `@apaas_tool(required=[...], message="...")` 装饰（放在 @mcp.tool() 下方），
+   缺必填自动返 _err(INVALID_PARAMS) 不进函数体。装饰器经 functools.wraps 完整保留签名 /
+   注解 / docstring，FastMCP schema 不变（tests/test_mcp_envelope.py 验证）。
+   - 嫌装饰器隐式，可改手动调 `validate_required(locals(), [...], message="...")` 同效。
+
+3) 身份解析仍走 `tid, uid = _resolve_identity(tenant_id, user_id)` helper（已是一行，
+   装饰器注入反而让函数体依赖魔法局部变量、不收口，刻意不做）。
+
+4) 改任何工具的**返回 dict 字段名 / 错误文案 / error_code 值都属破坏性变更** —
+   下游 agent 在解析，CI 有 test_tool_registry.py 锁工具名 + runtime drift check 兜底，
+   但字段 / 文案没自动门，靠本规范 + review 守。
+
+试点迁移域：字典 + 模型字段 CRUD（本文件内 create/update/add/disable_apaas_*_dict /
+*_dict_option / *_model_field / *_app_model / bind_apaas_form_field_to_dict）已按上述迁移，
+可作样板照抄。
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 """
 from __future__ import annotations
 
@@ -31,6 +59,7 @@ from mcp.server.transport_security import TransportSecuritySettings
 from app.config import settings
 from app.error_messages import is_apaas_token_error
 from app.field_types import select_choose_type_for_component
+from app.mcp_envelope import ErrorCode, _err, _ok, apaas_tool
 from app.step_executor import _apply_dictionary_binding_to_component
 from app.tool_registry import load as _load_tool_registry
 
@@ -4943,13 +4972,13 @@ async def delete_apaas_app_role(env_id: int, apaas_app_id: str, role_id: str) ->
 # ───── 字典 CRUD（精细操作） ─────
 
 @mcp.tool()
+@apaas_tool(required=["apaas_app_id", "dict_code", "dict_name"],
+            message="apaas_app_id + dict_code + dict_name 都必填")
 async def create_apaas_app_dict(env_id: int, apaas_app_id: str, dict_code: str, dict_name: str, describe: str = "") -> dict:
     """新建一个字典到 aPaaS 应用（不走 SPEC 文档流，直接对话场景）。
 
     后续添加选项用 add_apaas_dict_option（先调本工具拿 dict_id）。
     """
-    if not (apaas_app_id.strip() and dict_code.strip() and dict_name.strip()):
-        return {"ok": False, "error_code": "INVALID_PARAMS", "message": "apaas_app_id + dict_code + dict_name 都必填"}
     # 2026-05-24 同 create_apaas_app_roles fix: 每项必须含 appId, 漏了 apaas silent ignore
     apaas_app_id_clean = apaas_app_id.strip()
     payload = [{
@@ -4965,56 +4994,56 @@ async def create_apaas_app_dict(env_id: int, apaas_app_id: str, dict_code: str, 
     if not ok:
         return raw
     _invalidate_section_cache_after_write(apaas_app_id)
-    return {"ok": True, "env_id": env_id, "apaas_app_id": apaas_app_id.strip(),
-            "dict_code": dict_code.strip(), "dict_name": dict_name.strip(),
-            "next_step": "用 list_apaas_app_dicts 拿回 dict_id 再调 add_apaas_dict_option 加选项"}
+    return _ok(env_id=env_id, apaas_app_id=apaas_app_id.strip(),
+               dict_code=dict_code.strip(), dict_name=dict_name.strip(),
+               next_step="用 list_apaas_app_dicts 拿回 dict_id 再调 add_apaas_dict_option 加选项")
 
 
 @mcp.tool()
+@apaas_tool(required=["apaas_app_id", "dict_id", "dict_code", "dict_name"],
+            message="apaas_app_id+dict_id+dict_code+dict_name 都必填")
 async def update_apaas_app_dict(env_id: int, apaas_app_id: str, dict_id: str, dict_code: str, dict_name: str, describe: str = "") -> dict:
     """更新字典基本信息（不改选项，选项走 update_apaas_dict_option）。
 
     先 list_apaas_app_dicts 拿 dict_id；dict_code/dict_name 必填（apaas edit 接口要全字段）。
     """
-    if not (apaas_app_id.strip() and dict_id.strip() and dict_code.strip() and dict_name.strip()):
-        return {"ok": False, "error_code": "INVALID_PARAMS", "message": "apaas_app_id+dict_id+dict_code+dict_name 都必填"}
     ok, raw = await _with_client(env_id, "改字典",
         lambda c: c.update_dict(apaas_app_id.strip(), dict_id.strip(), dict_code.strip(), dict_name.strip(), describe=describe))
     if not ok:
         return raw
     _invalidate_section_cache_after_write(apaas_app_id)
-    return {"ok": True, "env_id": env_id, "apaas_app_id": apaas_app_id.strip(),
-            "dict_id": dict_id.strip(), "message": f"字典「{dict_name}」({dict_code}) 已更新",
-            "next_step": "调 republish_apaas_app 让变更生效"}
+    return _ok(env_id=env_id, apaas_app_id=apaas_app_id.strip(),
+               dict_id=dict_id.strip(), message=f"字典「{dict_name}」({dict_code}) 已更新",
+               next_step="调 republish_apaas_app 让变更生效")
 
 
 @mcp.tool()
+@apaas_tool(required=["apaas_app_id", "dict_id", "value_code", "value_name"],
+            message="apaas_app_id+dict_id+value_code+value_name 都必填")
 async def add_apaas_dict_option(env_id: int, apaas_app_id: str, dict_id: str,
                                 value_code: str, value_name: str, display_order: int = 0) -> dict:
     """给字典加一个选项。
 
     例：给"业务状态"字典加"已驳回" → add_apaas_dict_option(env_id, app_id, dict_id, "rejected", "已驳回")
     """
-    if not (apaas_app_id.strip() and dict_id.strip() and value_code.strip() and value_name.strip()):
-        return {"ok": False, "error_code": "INVALID_PARAMS", "message": "apaas_app_id+dict_id+value_code+value_name 都必填"}
     ok, raw = await _with_client(env_id, "加字典选项",
         lambda c: c.add_dict_option(apaas_app_id.strip(), dict_id.strip(), value_code.strip(), value_name.strip(), display_order))
     if not ok:
         return raw
     _invalidate_section_cache_after_write(apaas_app_id)
-    return {"ok": True, "env_id": env_id, "apaas_app_id": apaas_app_id.strip(),
-            "dict_id": dict_id.strip(),
-            "value_code": value_code.strip(), "value_name": value_name.strip(),
-            "message": f"已给字典 {dict_id} 加选项「{value_name}」({value_code})"}
+    return _ok(env_id=env_id, apaas_app_id=apaas_app_id.strip(),
+               dict_id=dict_id.strip(),
+               value_code=value_code.strip(), value_name=value_name.strip(),
+               message=f"已给字典 {dict_id} 加选项「{value_name}」({value_code})")
 
 
 @mcp.tool()
+@apaas_tool(required=["apaas_app_id", "dict_id", "option_id", "value_code", "value_name"],
+            message="apaas_app_id+dict_id+option_id+value_code+value_name 都必填")
 async def update_apaas_dict_option(env_id: int, apaas_app_id: str, dict_id: str, option_id: str,
                                    value_code: str, value_name: str,
                                    display_order: int = 0, describe: str = "", multicolor: str = "#027AFF") -> dict:
     """更新字典选项（改 code / name / 排序 / 颜色）。先 list_apaas_app_dicts(with_options=true) 拿 option_id。"""
-    if not (apaas_app_id.strip() and dict_id.strip() and option_id.strip() and value_code.strip() and value_name.strip()):
-        return {"ok": False, "error_code": "INVALID_PARAMS", "message": "apaas_app_id+dict_id+option_id+value_code+value_name 都必填"}
     ok, raw = await _with_client(env_id, "改字典选项",
         lambda c: c.update_dict_option(apaas_app_id.strip(), dict_id.strip(), option_id.strip(),
                                        value_code.strip(), value_name.strip(),
@@ -5022,12 +5051,14 @@ async def update_apaas_dict_option(env_id: int, apaas_app_id: str, dict_id: str,
     if not ok:
         return raw
     _invalidate_section_cache_after_write(apaas_app_id)
-    return {"ok": True, "message": f"字典选项「{value_name}」({value_code}) 已更新"}
+    return _ok(message=f"字典选项「{value_name}」({value_code}) 已更新")
 
 
 # ───── 模型 + 字段 CRUD（精细操作） ─────
 
 @mcp.tool()
+@apaas_tool(required=["apaas_app_id", "model_id", "model_code", "model_name"],
+            message="必填全填")
 async def update_apaas_app_model(env_id: int, apaas_app_id: str, model_id: str,
                                  model_code: str, model_name: str,
                                  app_name: str = "", model_data_source: str = "") -> dict:
@@ -5035,19 +5066,19 @@ async def update_apaas_app_model(env_id: int, apaas_app_id: str, model_id: str,
 
     先 list_apaas_app_models 拿 model_id。
     """
-    if not (apaas_app_id.strip() and model_id.strip() and model_code.strip() and model_name.strip()):
-        return {"ok": False, "error_code": "INVALID_PARAMS", "message": "必填全填"}
     ok, raw = await _with_client(env_id, "改模型",
         lambda c: c.update_model(apaas_app_id.strip(), model_id.strip(), model_code.strip(), model_name.strip(),
                                  app_name=app_name, model_data_source=model_data_source))
     if not ok:
         return raw
     _invalidate_section_cache_after_write(apaas_app_id)
-    return {"ok": True, "message": f"模型「{model_name}」({model_code}) 已更新",
-            "next_step": "调 republish_apaas_app 让变更生效"}
+    return _ok(message=f"模型「{model_name}」({model_code}) 已更新",
+               next_step="调 republish_apaas_app 让变更生效")
 
 
 @mcp.tool()
+@apaas_tool(required=["apaas_app_id", "model_id", "model_code", "field_code", "field_name"],
+            message="必填全填")
 async def add_apaas_model_field(env_id: int, apaas_app_id: str, model_id: str, model_code: str,
                                 field_code: str, field_name: str,
                                 field_type: str = "STRING", max_length: int = 255,
@@ -5057,13 +5088,11 @@ async def add_apaas_model_field(env_id: int, apaas_app_id: str, model_id: str, m
     field_type 常用：STRING / NUM / DATE / DATETIME / BOOLEAN / TEXT / BIG_TEXT
     ⚠️ 慎用 approver_id / approval_* 等 apaas 流程保留字。
     """
-    if not (apaas_app_id.strip() and model_id.strip() and model_code.strip() and field_code.strip() and field_name.strip()):
-        return {"ok": False, "error_code": "INVALID_PARAMS", "message": "必填全填"}
     # 简易保留字预检
     reserved = {"approver_id", "id", "tenant_id"}
     if field_code.strip().lower() in reserved or field_code.strip().lower().startswith("approval_"):
-        return {"ok": False, "error_code": "RESERVED_FIELD_CODE",
-                "message": f"field_code '{field_code}' 命中 apaas 保留字 — 建议改成 {model_code}_{field_code}"}
+        return _err(ErrorCode.RESERVED_FIELD_CODE,
+                    f"field_code '{field_code}' 命中 apaas 保留字 — 建议改成 {model_code}_{field_code}")
     ok, raw = await _with_client(env_id, "加字段",
         lambda c: c.add_model_field(apaas_app_id.strip(), model_id.strip(), model_code.strip(),
                                     field_code.strip(), field_name.strip(),
@@ -5071,10 +5100,12 @@ async def add_apaas_model_field(env_id: int, apaas_app_id: str, model_id: str, m
     if not ok:
         return raw
     _invalidate_section_cache_after_write(apaas_app_id)
-    return {"ok": True, "message": f"模型 {model_code} 已加字段「{field_name}」({field_code} / {field_type})"}
+    return _ok(message=f"模型 {model_code} 已加字段「{field_name}」({field_code} / {field_type})")
 
 
 @mcp.tool()
+@apaas_tool(required=["apaas_app_id", "model_id", "field_id", "field_code", "field_name"],
+            message="必填全填")
 async def update_apaas_model_field(env_id: int, apaas_app_id: str, model_id: str, field_id: str,
                                    field_code: str, field_name: str,
                                    field_type: str = "", max_length: int = 0, comment: str = "") -> dict:
@@ -5085,8 +5116,6 @@ async def update_apaas_model_field(env_id: int, apaas_app_id: str, model_id: str
 
     先 list_apaas_app_models(with_fields=true) 拿 field_id。
     """
-    if not (apaas_app_id.strip() and model_id.strip() and field_id.strip() and field_code.strip() and field_name.strip()):
-        return {"ok": False, "error_code": "INVALID_PARAMS", "message": "必填全填"}
     ok, raw = await _with_client(env_id, "改字段",
         lambda c: c.update_model_field(apaas_app_id.strip(), model_id.strip(), field_id.strip(),
                                        field_code.strip(), field_name.strip(),
@@ -5097,18 +5126,18 @@ async def update_apaas_model_field(env_id: int, apaas_app_id: str, model_id: str
     if not ok:
         return raw
     _invalidate_section_cache_after_write(apaas_app_id)
-    return {"ok": True, "message": f"字段「{field_name}」({field_code}) 已更新"}
+    return _ok(message=f"字段「{field_name}」({field_code}) 已更新")
 
 
 @mcp.tool()
+@apaas_tool(required=["apaas_app_id", "model_id", "field_id", "field_code", "field_name"],
+            message="必填全填")
 async def disable_apaas_model_field(env_id: int, apaas_app_id: str, model_id: str, field_id: str,
                                     field_code: str, field_name: str) -> dict:
     """禁用模型字段（apaas 不能真删字段，只能 status=DISABLE）。
 
     禁用后字段在表单/列表里不可见，但底层数据保留。重新启用调 update_apaas_model_field(field_status=ENABLE)。
     """
-    if not (apaas_app_id.strip() and model_id.strip() and field_id.strip() and field_code.strip() and field_name.strip()):
-        return {"ok": False, "error_code": "INVALID_PARAMS", "message": "必填全填"}
     ok, raw = await _with_client(env_id, "禁用字段",
         lambda c: c.update_model_field(apaas_app_id.strip(), model_id.strip(), field_id.strip(),
                                        field_code.strip(), field_name.strip(),
@@ -5116,8 +5145,8 @@ async def disable_apaas_model_field(env_id: int, apaas_app_id: str, model_id: st
     if not ok:
         return raw
     _invalidate_section_cache_after_write(apaas_app_id)
-    return {"ok": True, "message": f"字段「{field_name}」({field_code}) 已禁用",
-            "note": "apaas 字段不能真删只能 DISABLE。重新启用调 update_apaas_model_field(field_status='ENABLE')"}
+    return _ok(message=f"字段「{field_name}」({field_code}) 已禁用",
+               note="apaas 字段不能真删只能 DISABLE。重新启用调 update_apaas_model_field(field_status='ENABLE')")
 
 
 # ───── 菜单 / 表单（精细操作） ─────
@@ -7540,6 +7569,8 @@ async def set_apaas_form_component_style(
 
 
 @mcp.tool()
+@apaas_tool(required=["apaas_app_id", "form_id", "field_label", "dict_code"],
+            message="apaas_app_id+form_id+field_label+dict_code 都必填")
 async def bind_apaas_form_field_to_dict(
     env_id: int,
     apaas_app_id: str,
@@ -7565,11 +7596,6 @@ async def bind_apaas_form_field_to_dict(
 
     返回: {ok, dictionary_id, options_count, message}
     """
-    if not (apaas_app_id.strip() and form_id.strip()
-            and field_label.strip() and dict_code.strip()):
-        return {"ok": False, "error_code": "INVALID_PARAMS",
-                "message": "apaas_app_id+form_id+field_label+dict_code 都必填"}
-
     # 反查字典 — 拿 id + options
     ok_dicts, dicts = await _with_client(env_id, "查字典",
         lambda c: c.query_dicts(apaas_app_id.strip()))
@@ -7581,8 +7607,8 @@ async def bind_apaas_form_field_to_dict(
             target_dict = d
             break
     if not target_dict:
-        return {"ok": False, "error_code": "DICT_NOT_FOUND",
-                "message": f"字典 code={dict_code} 在应用里不存在. 先 create_apaas_app_dict 建好"}
+        return _err(ErrorCode.DICT_NOT_FOUND,
+                    f"字典 code={dict_code} 在应用里不存在. 先 create_apaas_app_dict 建好")
     dict_id = str(target_dict.get("id") or "")
     options_raw = target_dict.get("dictionaryOptions") or []
     # 构建 chooseOptions / dictionaryChooseOptions (平台 chooseOptions 跟 dictionaryChooseOptions
@@ -7616,16 +7642,15 @@ async def bind_apaas_form_field_to_dict(
     if not ok:
         return raw
 
-    return {
-        "ok": True,
-        "form_id": form_id,
-        "field_label": field_label,
-        "dictionary_id": dict_id,
-        "dictionary_code": dict_code,
-        "options_count": len(choose_options),
-        "message": (f"字段「{field_label}」已绑定字典「{dict_code}」"
-                    f"({len(choose_options)} 选项), 数据来源切为数据字典"),
-    }
+    return _ok(
+        form_id=form_id,
+        field_label=field_label,
+        dictionary_id=dict_id,
+        dictionary_code=dict_code,
+        options_count=len(choose_options),
+        message=(f"字段「{field_label}」已绑定字典「{dict_code}」"
+                 f"({len(choose_options)} 选项), 数据来源切为数据字典"),
+    )
 
 
 # ─── 字典 disable（补 CRUD 的 D）─────────────────────────────────────────
@@ -7633,6 +7658,7 @@ async def bind_apaas_form_field_to_dict(
 # 配套 incremental_executor._disable_dict / _disable_dict_option 用的 GET 接口。
 
 @mcp.tool()
+@apaas_tool(required=["apaas_app_id", "dict_id"], message="apaas_app_id+dict_id 都必填")
 async def disable_apaas_app_dict(env_id: int, apaas_app_id: str, dict_id: str, dict_name: str = "") -> dict:
     """禁用应用字典（apaas 没真 delete，禁用是终态）。
 
@@ -7643,20 +7669,18 @@ async def disable_apaas_app_dict(env_id: int, apaas_app_id: str, dict_id: str, d
 
     dict_id 怎么拿：先调 list_apaas_app_dicts 看现有字典 + id。
     """
-    if not (apaas_app_id.strip() and dict_id.strip()):
-        return {"ok": False, "error_code": "INVALID_PARAMS", "message": "apaas_app_id+dict_id 都必填"}
     ok, raw = await _with_client(env_id, "禁用字典",
         lambda c: c.disable_dict(apaas_app_id.strip(), dict_id.strip()))
     if not ok:
         return raw
-    return {
-        "ok": True,
-        "dict_id": dict_id,
-        "message": f"字典「{dict_name or dict_id}」已禁用（运行时不可选，历史数据保留）",
-    }
+    return _ok(
+        dict_id=dict_id,
+        message=f"字典「{dict_name or dict_id}」已禁用（运行时不可选，历史数据保留）",
+    )
 
 
 @mcp.tool()
+@apaas_tool(required=["apaas_app_id", "option_id"], message="apaas_app_id+option_id 都必填")
 async def disable_apaas_dict_option(
     env_id: int,
     apaas_app_id: str,
@@ -7670,17 +7694,14 @@ async def disable_apaas_dict_option(
 
     禁用后选项不再出现在新建表单下拉里，已选过此值的历史数据保留。
     """
-    if not (apaas_app_id.strip() and option_id.strip()):
-        return {"ok": False, "error_code": "INVALID_PARAMS", "message": "apaas_app_id+option_id 都必填"}
     ok, raw = await _with_client(env_id, "禁用字典选项",
         lambda c: c.disable_dict_option(apaas_app_id.strip(), option_id.strip()))
     if not ok:
         return raw
-    return {
-        "ok": True,
-        "option_id": option_id,
-        "message": f"字典选项「{option_name or option_id}」已禁用",
-    }
+    return _ok(
+        option_id=option_id,
+        message=f"字典选项「{option_name or option_id}」已禁用",
+    )
 
 
 # ─── 业务数据查询（运行时 data，外部 agent 看数据）──────────────────────
