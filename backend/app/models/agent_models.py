@@ -1,17 +1,11 @@
-"""Agent 架构相关数据模型（P1.2）。
+"""Agent 架构相关数据模型。
 
-6 张表（2026-06-03: 删 agent_messages + verification_reports 孤儿表 —— 随 v2
-orchestrator 死栈一起退役、无活跃引用；brainstorm_sessions/specs/coding_sessions
-虽也不再写入，但被活跃的 agent_error_events FK 链锁住，暂留）：
-- brainstorm_sessions     BrainstormAgent 会话状态（FK 链保留）
-- specs                   Spec 契约版本链（FK 链保留）
-- coding_sessions         CodingAgent 执行记录（FK 链保留）
-- agent_traces            Agent 内部调试 trace
-- conversation_events     SSE 事件缓存（支持断线重连，活跃）
-- agent_error_events      CodingAgent 错误记录（活跃，提示词优化用）
+仅剩 1 张活跃表（2026-06-14: 删 brainstorm_sessions/specs/coding_sessions/
+agent_traces/agent_error_events 五张死表 —— 随 v2 orchestrator 死栈退役、全仓零
+读写、FK 链已无活跃引用）：
+- conversation_events  SSE 事件缓存（支持断线重连，活跃，db_publisher 写入）
 
-所有 id 字段使用 String(64)，存 ULID/UUID hex。
-JSON 字段同时兼容 SQLite 和 MySQL。
+id 字段使用 String(64)，存 ULID/UUID hex。JSON 字段同时兼容 SQLite 和 MySQL。
 """
 from __future__ import annotations
 
@@ -20,14 +14,11 @@ from typing import Any, Optional
 
 from sqlalchemy import (
     JSON,
-    Boolean,
     DateTime,
-    Float,
     ForeignKey,
     Index,
     Integer,
     String,
-    Text,
 )
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -35,207 +26,13 @@ from app.database import Base
 
 
 # ══════════════════════════════════════════════════════════════
-# 2. brainstorm_sessions
-# ══════════════════════════════════════════════════════════════
-
-class BrainstormSession(Base):
-    """BrainstormAgent 的会话状态。
-
-    对应一次"需求澄清到 Spec 产出"的完整会话。迭代模式下可能有多个 session。
-    """
-    __tablename__ = "brainstorm_sessions"
-
-    id: Mapped[str] = mapped_column(String(64), primary_key=True)
-    conversation_id: Mapped[int] = mapped_column(
-        Integer, ForeignKey("conversations.id"), nullable=False, index=True,
-    )
-    user_id: Mapped[int] = mapped_column(Integer, nullable=False, index=True)
-    tenant_id: Mapped[int] = mapped_column(Integer, nullable=False, index=True)
-
-    status: Mapped[str] = mapped_column(
-        String(16), nullable=False, default="active",
-        comment="active / paused / completed / aborted / suspended",
-    )
-
-    scene_type: Mapped[Optional[str]] = mapped_column(
-        String(50), nullable=True,
-        comment="当前识别的场景（反问过程中可能变化）",
-    )
-
-    final_spec_id: Mapped[Optional[str]] = mapped_column(
-        String(64), nullable=True,
-        comment="completed 时指向最终 Spec",
-    )
-
-    trigger_type: Mapped[str] = mapped_column(
-        String(16), nullable=False, default="initial",
-        comment="initial / iterate_minor / iterate_major",
-    )
-    parent_spec_id: Mapped[Optional[str]] = mapped_column(
-        String(64), nullable=True,
-        comment="iterate 时指向被迭代的 Spec",
-    )
-
-    model_used: Mapped[Optional[str]] = mapped_column(String(100), nullable=True)
-
-    # Agent snapshot（用于 suspend / resume）
-    agent_snapshot: Mapped[Optional[dict[str, Any]]] = mapped_column(JSON, nullable=True)
-
-    last_activity_at: Mapped[datetime] = mapped_column(
-        DateTime, default=datetime.utcnow, nullable=False, index=True,
-    )
-    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, nullable=False)
-    ended_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
-    error_message: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
-
-
-# ══════════════════════════════════════════════════════════════
-# 3. specs — Spec 契约版本链
-# ══════════════════════════════════════════════════════════════
-
-class Spec(Base):
-    """Brainstorm 产出、Coding 消费的结构化契约。
-
-    内容完整存 JSON content，常用字段抽出来做索引。
-    支持版本链（version / parent_version）。
-    """
-    __tablename__ = "specs"
-
-    id: Mapped[str] = mapped_column(String(64), primary_key=True)
-    brainstorm_session_id: Mapped[str] = mapped_column(
-        String(64), ForeignKey("brainstorm_sessions.id"), nullable=False, index=True,
-    )
-
-    # —— 索引/查询用字段（抽列） —— #
-    schema_version: Mapped[str] = mapped_column(String(10), default="1.0", nullable=False)
-    scene_type: Mapped[str] = mapped_column(String(50), nullable=False, index=True)
-    code_name: Mapped[str] = mapped_column(String(100), nullable=False, index=True)
-    widget_code: Mapped[Optional[str]] = mapped_column(String(100), nullable=True, index=True)
-
-    version: Mapped[int] = mapped_column(Integer, default=1, nullable=False)
-    parent_version: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
-
-    created_by: Mapped[str] = mapped_column(
-        String(16), nullable=False,
-        comment="agent / user / mixed",
-    )
-    confidence: Mapped[float] = mapped_column(Float, default=0.0, nullable=False)
-
-    # —— 完整 Spec JSON —— #
-    content: Mapped[dict[str, Any]] = mapped_column(JSON, nullable=False)
-
-    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, nullable=False)
-
-    __table_args__ = (
-        Index("ix_specs_session_version", "brainstorm_session_id", "version"),
-        Index("ix_specs_code_version", "code_name", "version"),
-    )
-
-
-# ══════════════════════════════════════════════════════════════
-# 4. coding_sessions
-# ══════════════════════════════════════════════════════════════
-
-class CodingSession(Base):
-    """CodingAgent 的执行记录。消费某版 Spec 产出代码。"""
-    __tablename__ = "coding_sessions"
-
-    id: Mapped[str] = mapped_column(String(64), primary_key=True)
-    conversation_id: Mapped[int] = mapped_column(
-        Integer, ForeignKey("conversations.id"), nullable=False, index=True,
-    )
-    spec_id: Mapped[str] = mapped_column(
-        String(64), ForeignKey("specs.id"), nullable=False, index=True,
-    )
-    workspace_id: Mapped[str] = mapped_column(String(100), nullable=False, index=True)
-
-    status: Mapped[str] = mapped_column(
-        String(16), nullable=False, default="pending",
-        comment="pending / running / completed / failed / aborted",
-    )
-
-    trigger_type: Mapped[str] = mapped_column(
-        String(16), nullable=False, default="initial",
-        comment="initial / patch / retry",
-    )
-    trigger_report_id: Mapped[Optional[str]] = mapped_column(
-        String(64), nullable=True,
-        comment="retry 时指向触发的 verification report",
-    )
-
-    turns_used: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
-    max_turns: Mapped[int] = mapped_column(Integer, default=30, nullable=False)
-    files_written: Mapped[list[str]] = mapped_column(JSON, default=list, nullable=False)
-
-    model_used: Mapped[Optional[str]] = mapped_column(String(100), nullable=True)
-
-    agent_snapshot: Mapped[Optional[dict[str, Any]]] = mapped_column(JSON, nullable=True)
-
-    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, nullable=False)
-    started_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
-    ended_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
-    error_message: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
-
-
-# ══════════════════════════════════════════════════════════════
-# 6. agent_traces — 内部调试 trace
-# ══════════════════════════════════════════════════════════════
-
-class AgentTrace(Base):
-    """Agent 内部的 LLM 调用 / tool call / thinking / error trace。
-
-    不推送给前端，用于调试、审计、token 成本核算。
-    TTL 建议 90 天后 archive 或删除。
-    """
-    __tablename__ = "agent_traces"
-
-    id: Mapped[str] = mapped_column(String(64), primary_key=True)
-
-    # 多态关联（不做 FK，用 session_type + session_id 组合查询）
-    session_type: Mapped[str] = mapped_column(
-        String(16), nullable=False, index=True,
-        comment="brainstorm / coding / verification",
-    )
-    session_id: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
-
-    seq: Mapped[int] = mapped_column(
-        Integer, nullable=False,
-        comment="session 内单调递增",
-    )
-    turn: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
-
-    event_type: Mapped[str] = mapped_column(
-        String(32), nullable=False,
-        comment="llm_request / llm_response / tool_call / tool_result / thinking / nudge / error / retry / state_change",
-    )
-
-    payload: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict, nullable=False)
-
-    tokens_input: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
-    tokens_output: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
-    duration_ms: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
-    model: Mapped[Optional[str]] = mapped_column(String(100), nullable=True)
-
-    created_at: Mapped[datetime] = mapped_column(
-        DateTime, default=datetime.utcnow, nullable=False, index=True,
-    )
-
-    __table_args__ = (
-        Index("ix_agent_traces_session", "session_type", "session_id", "seq"),
-    )
-
-
-# ══════════════════════════════════════════════════════════════
-# 7. conversation_events — SSE 事件缓存
+# conversation_events — SSE 事件缓存
 # ══════════════════════════════════════════════════════════════
 
 class ConversationEvent(Base):
     """发送给前端的 SSE 事件缓存，支持断线重连补发。
 
-    与 agent_traces 区别：
-    - agent_traces 是内部调试，不推前端
-    - conversation_events 是面向用户的事件
-    - 保留 7 天（超过删除）
+    保留 7 天（超过删除）。
     """
     __tablename__ = "conversation_events"
 
@@ -259,65 +56,4 @@ class ConversationEvent(Base):
 
     __table_args__ = (
         Index("ix_conv_events_conv_seq", "conversation_id", "seq"),
-    )
-
-
-# ══════════════════════════════════════════════════════════════
-# 8. agent_error_events — CodingAgent 错误记录（提示词优化用）
-# ══════════════════════════════════════════════════════════════
-
-class AgentErrorEvent(Base):
-    """CodingAgent 执行中的错误事件，供提示词优化分析使用。
-
-    记录三类事件：
-    - tool_fail      : tool 调用返回 success=False（含参数错误、执行失败）
-    - tool_not_found : LLM 调用了不存在的 tool
-    - verify_fail    : 验收轮失败（overall_status=failed）
-
-    resolved=True 表示该轮错误在后续轮次中被修复（验收通过时更新）。
-    """
-    __tablename__ = "agent_error_events"
-
-    id: Mapped[str] = mapped_column(String(64), primary_key=True)
-    coding_session_id: Mapped[str] = mapped_column(
-        String(64), ForeignKey("coding_sessions.id"), nullable=False, index=True,
-    )
-    spec_id: Mapped[Optional[str]] = mapped_column(String(64), nullable=True, index=True)
-    workspace_id: Mapped[Optional[str]] = mapped_column(String(100), nullable=True, index=True)
-    project_type: Mapped[Optional[str]] = mapped_column(
-        String(50), nullable=True,
-        comment="form-component-dual / page / backend-api 等",
-    )
-    scene_type: Mapped[Optional[str]] = mapped_column(
-        String(50), nullable=True,
-        comment="component / page / backend_api",
-    )
-    round_index: Mapped[int] = mapped_column(
-        Integer, default=0, nullable=False,
-        comment="autofix 第几轮，0-based（第 0 轮为首次生成）",
-    )
-    turn: Mapped[int] = mapped_column(
-        Integer, default=0, nullable=False,
-        comment="agent 内第几轮对话（tool_fail 时有效）",
-    )
-    error_type: Mapped[str] = mapped_column(
-        String(32), nullable=False,
-        comment="tool_fail / tool_not_found / verify_fail",
-    )
-    tool_name: Mapped[Optional[str]] = mapped_column(
-        String(100), nullable=True,
-        comment="tool_fail / tool_not_found 时填写",
-    )
-    error_message: Mapped[str] = mapped_column(Text, nullable=False)
-    resolved: Mapped[bool] = mapped_column(
-        Boolean, default=False, nullable=False,
-        comment="True=后续轮次已修复（验收通过后批量更新）",
-    )
-    created_at: Mapped[datetime] = mapped_column(
-        DateTime, default=datetime.utcnow, nullable=False, index=True,
-    )
-
-    __table_args__ = (
-        Index("ix_agent_error_events_session_round", "coding_session_id", "round_index"),
-        Index("ix_agent_error_events_project_type", "project_type", "error_type"),
     )

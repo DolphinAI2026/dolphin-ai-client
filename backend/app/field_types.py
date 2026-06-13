@@ -343,19 +343,6 @@ def get_ref_field_types() -> Set[str]:
     return set(_REF_FIELD_TYPES)
 
 
-def build_prompt_field_types_table() -> str:
-    """生成 LLM prompt 中的字段类型表格（替代 ai_doc_parser._FIELD_TYPES）"""
-    lines = [
-        "## 字段类型及图标（只能使用以下类型）",
-        "",
-        "| type | icon | 使用场景 |",
-        "|------|------|----------|",
-    ]
-    for name, info in FIELD_TYPES.items():
-        lines.append(f"| {name} | {info.prompt_icon} | {info.description} |")
-    return "\n".join(lines)
-
-
 def build_prompt_field_types_compact() -> str:
     """生成 chat prompt 中的紧凑字段类型列表（替代 chat.py 中的硬编码行）"""
     parts = []

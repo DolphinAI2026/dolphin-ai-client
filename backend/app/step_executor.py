@@ -612,61 +612,6 @@ async def execute_create_model(
     }
 
 
-async def _update_existing_form(
-    client: APaaSClient, app_id: str, form_id: str,
-    model: dict, model_index: int, mi: dict,
-    dict_codes: Dict[str, str], all_models: List[dict],
-    model_info: Dict[str, dict],
-):
-    """已有表单：查询当前配置，补齐缺失的字段组件。"""
-    form_config = await client.query_form_config(app_id, form_id)
-    if not form_config:
-        return
-
-    # 收集已有组件的 modelField（形如 "model_code.field_code"）
-    existing_mfs = set()
-    def _collect_mfs(comps: list):
-        for c in comps:
-            mf = c.get("modelField", "")
-            if mf:
-                existing_mfs.add(mf)
-            # 子表列
-            for col in c.get("tableColumn", []):
-                cmf = col.get("modelField", "")
-                if cmf:
-                    existing_mfs.add(cmf)
-    _collect_mfs(form_config.get("components", []))
-
-    model_code = mi["code"]
-    model_fields = mi["fields"]
-    new_components = []
-
-    for f in model.get("fields", []):
-        ftype = f.get("type", "单行输入")
-        if ftype == "子表":
-            continue
-        fc = model_fields.get(f["name"])
-        if not fc:
-            continue
-        mf = f"{model_code}.{fc}"
-        if mf not in existing_mfs:
-            new_components.append(_build_component(f, model_code, fc, dict_codes, all_models, model_info))
-
-    if not new_components:
-        return  # 没有需要补齐的组件
-
-    # 追加到已有配置
-    form_config.setdefault("components", []).extend(new_components)
-    logger.info(
-        "save_form_config reason: 补齐已有表单缺失组件 (form=%s, added=%s)",
-        model["name"],
-        len(new_components),
-    )
-    _apply_form_identity_to_form_config(form_config, form_name=model["name"])
-    await client.save_form_config(app_id, form_config)
-    logger.info(f"表单 {model['name']} 补齐 {len(new_components)} 个组件")
-
-
 async def _merge_existing_form_components(
     client: APaaSClient,
     app_id: str,
