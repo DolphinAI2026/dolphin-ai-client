@@ -820,7 +820,6 @@ import { usePreviewStore } from '@/stores/preview'
 import { useUserStore } from '@/stores/user'
 import { applicationApi } from '@/api/application'
 // codingApi / consumeSseResponse no longer needed — coding tab uses iframe
-import { incrementalApi, type DiffResponse, type ExecuteResponse } from '@/api/incremental'
 import { conversationApi, type ConversationWithApp } from '@/api/conversation'
 import ConnectModal from '@/components/ConnectModal.vue'
 import EnvSelectModal from '@/components/EnvSelectModal.vue'
@@ -11832,69 +11831,6 @@ html[data-theme="dark"] .config-assistant.ca-embedded {
 .change-plan-body::-webkit-scrollbar-track { background: transparent; }
 .change-plan-body::-webkit-scrollbar-thumb { background: var(--t-border-subtle); border-radius: 2px; }
 .change-plan-body::-webkit-scrollbar-thumb:hover { background: var(--t-border-strong); }
-
-/* 增量更新弹窗 */
-.incremental-modal-overlay {
-  position: fixed;
-  top: 0;
-  left: 0;
-  right: 0;
-  bottom: 0;
-  background: rgba(0, 0, 0, 0.5);
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  z-index: 1000;
-}
-
-.incremental-modal {
-  background: var(--t-bg-panel);
-  border-radius: 16px;
-  width: 90%;
-  max-width: 600px;
-  max-height: 80vh;
-  overflow-y: auto;
-  box-shadow: 0 20px 60px rgba(0, 0, 0, 0.4);
-}
-
-.incremental-header {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  padding: 16px 20px;
-  border-bottom: 1px solid var(--t-border-subtle);
-}
-
-.incremental-header h3 {
-  margin: 0;
-  font-size: 18px;
-  font-weight: 600;
-  color: #fff;
-}
-
-.incremental-close {
-  background: none;
-  border: none;
-  color: #888;
-  font-size: 20px;
-  cursor: pointer;
-  padding: 4px;
-  line-height: 1;
-  transition: color 0.2s;
-}
-
-.incremental-close:hover {
-  color: #fff;
-}
-
-.incremental-diff {
-  padding: 16px 20px;
-  border-bottom: 1px solid var(--t-border-subtle);
-}
-
-.incremental-steps {
-  padding: 16px 20px;
-}
 
 /* ── 滚动条 ── */
 .messages::-webkit-scrollbar,
