@@ -383,21 +383,6 @@ from app.models.ai_chat import (  # noqa: E402, F401
 )
 
 
-# V2 redesign — agent configs / industry packs / runtime pipelines + deployments
-from app.models.agent_config import (  # noqa: E402, F401
-    AgentConfig,
-    AgentSkill,
-    AgentMcpBinding,
-    AgentKnowledgeBinding,
-)
-from app.models.industry import (  # noqa: E402, F401
-    IndustryPack,
-    IndustryPackInstall,
-)
-from app.models.runtime_v2 import (  # noqa: E402, F401
-    PipelineRun,
-    DeploymentHistory,
-)
 from app.models.agent_prompt import AgentPrompt  # noqa: E402, F401  — agent prompt templates per-tenant per-phase
 from app.models.config_assistant_skill import ConfigAssistantSkill  # noqa: E402, F401  — 配置助手自学习 skills
 
