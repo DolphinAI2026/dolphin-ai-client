@@ -1,0 +1,373 @@
+html[data-theme="dark"] .chat-page,
+html[data-theme="dark"] .content-area,
+html[data-theme="dark"] .builder-content,
+html[data-theme="dark"] .builder-result-side.preview-side,
+html[data-theme="dark"] .preview-body {
+  background: #090b10 !important;
+  color: rgba(248, 250, 252, 0.94) !important;
+}
+
+html[data-theme="dark"] .chat-page .top-bar,
+html[data-theme="dark"] .builder-chat-phase-strip,
+html[data-theme="dark"] .builder-canvas-tabs,
+html[data-theme="dark"] .preview-side-header {
+  background: #0d1117 !important;
+  border-color: rgba(148, 163, 184, 0.14) !important;
+}
+
+html[data-theme="dark"] .builder-chat-crumbs,
+html[data-theme="dark"] .builder-chat-crumbs button,
+html[data-theme="dark"] .builder-chat-save-state,
+html[data-theme="dark"] .builder-chat-agent,
+html[data-theme="dark"] .preview-side-status {
+  color: rgba(203, 213, 225, 0.68) !important;
+}
+
+html[data-theme="dark"] .builder-chat-crumbs strong,
+html[data-theme="dark"] .builder-chat-agent span,
+html[data-theme="dark"] .preview-side-title,
+html[data-theme="dark"] .builder-spec-brief-main strong,
+html[data-theme="dark"] .spec-overview-head h3,
+html[data-theme="dark"] .spec-score strong,
+html[data-theme="dark"] .spec-overview-stat span,
+html[data-theme="dark"] .spec-overview-stat strong,
+html[data-theme="dark"] .spec-readiness-item strong,
+html[data-theme="dark"] .canvas-panel-head h3,
+html[data-theme="dark"] .canvas-basic-section-head strong,
+html[data-theme="dark"] .canvas-role-card strong,
+html[data-theme="dark"] .canvas-dict-title strong,
+html[data-theme="dark"] .canvas-model-title strong,
+html[data-theme="dark"] .canvas-form-head strong,
+html[data-theme="dark"] .canvas-flow-title strong,
+html[data-theme="dark"] .custom-dev-card-head h4,
+html[data-theme="dark"] .custom-dev-empty strong {
+  color: rgba(248, 250, 252, 0.94) !important;
+}
+
+html[data-theme="dark"] .builder-chat-agent code,
+html[data-theme="dark"] .builder-canvas-tab em,
+html[data-theme="dark"] .canvas-role-card code,
+html[data-theme="dark"] .canvas-dict-title code,
+html[data-theme="dark"] .canvas-model-title code,
+html[data-theme="dark"] .canvas-form-head code,
+html[data-theme="dark"] .canvas-flow-title code,
+html[data-theme="dark"] .preview-app-code-chip {
+  background: rgba(148, 163, 184, 0.10) !important;
+  border-color: rgba(148, 163, 184, 0.14) !important;
+  color: rgba(203, 213, 225, 0.70) !important;
+}
+
+html[data-theme="dark"] .mode-switcher,
+html[data-theme="dark"] .builder-chat-phase,
+html[data-theme="dark"] .builder-spec-brief-stats button,
+html[data-theme="dark"] .spec-score,
+html[data-theme="dark"] .spec-overview-stat,
+html[data-theme="dark"] .spec-readiness-item,
+html[data-theme="dark"] .canvas-basic-section,
+html[data-theme="dark"] .canvas-role-card,
+html[data-theme="dark"] .canvas-dict-card,
+html[data-theme="dark"] .canvas-model-card,
+html[data-theme="dark"] .canvas-form-card,
+html[data-theme="dark"] .canvas-flow-group,
+html[data-theme="dark"] .custom-dev-card,
+html[data-theme="dark"] .custom-dev-empty,
+html[data-theme="dark"] .doc-version-content.expanded.doc-preview-body {
+  background: #111318 !important;
+  border-color: rgba(148, 163, 184, 0.14) !important;
+  box-shadow: none !important;
+}
+
+html[data-theme="dark"] .builder-spec-brief-stats button {
+  color: rgba(203, 213, 225, 0.66) !important;
+}
+
+html[data-theme="dark"] .builder-spec-brief-stats span {
+  color: #b6c2ff !important;
+  opacity: 0.92 !important;
+}
+
+html[data-theme="dark"] .builder-spec-brief-stats button:hover {
+  background: #151922 !important;
+  border-color: rgba(124, 140, 255, 0.28) !important;
+  color: rgba(248, 250, 252, 0.90) !important;
+}
+
+html[data-theme="dark"] .builder-canvas-tab {
+  color: rgba(148, 163, 184, 0.72) !important;
+}
+
+html[data-theme="dark"] .builder-canvas-tab.active {
+  background: rgba(124, 140, 255, 0.08) !important;
+  border-bottom-color: #8b9aff !important;
+  color: rgba(248, 250, 252, 0.94) !important;
+}
+
+html[data-theme="dark"] .builder-canvas-tab.active em {
+  background: #8b9aff !important;
+  border-color: #8b9aff !important;
+  color: #090b10 !important;
+}
+
+html[data-theme="dark"] .mode-btn.active,
+html[data-theme="dark"] .builder-chat-phase.active {
+  background: #151922 !important;
+  border-color: rgba(124, 140, 255, 0.26) !important;
+  color: rgba(248, 250, 252, 0.88) !important;
+  box-shadow: none !important;
+}
+
+html[data-theme="dark"] .builder-chat-phase.active span {
+  background: #8b9aff !important;
+  color: #090b10 !important;
+}
+
+html[data-theme="dark"] .spec-score.complete,
+html[data-theme="dark"] .spec-readiness-item.ready {
+  background: rgba(52, 211, 153, 0.08) !important;
+  border-color: rgba(52, 211, 153, 0.18) !important;
+}
+
+html[data-theme="dark"] .builder-chat-phase.done {
+  background: #111318 !important;
+  border-color: rgba(148, 163, 184, 0.14) !important;
+  color: rgba(203, 213, 225, 0.70) !important;
+}
+
+html[data-theme="dark"] .builder-chat-phase.done span {
+  background: rgba(52, 211, 153, 0.12) !important;
+  color: #7dd3a7 !important;
+}
+
+html[data-theme="dark"] .builder-top-action.artifact {
+  background: transparent !important;
+  border-color: rgba(148, 163, 184, 0.16) !important;
+  color: rgba(203, 213, 225, 0.80) !important;
+}
+
+html[data-theme="dark"] .builder-top-action.artifact[aria-pressed="true"] {
+  background: #202636 !important;
+  border-color: rgba(148, 163, 184, 0.22) !important;
+  color: rgba(248, 250, 252, 0.92) !important;
+}
+
+html[data-theme="dark"] .builder-content.artifacts-hidden .chat-side {
+  background: transparent !important;
+  border-color: transparent !important;
+}
+
+html[data-theme="dark"] .builder-content.artifacts-hidden .messages {
+  background: transparent !important;
+}
+
+html[data-theme="dark"] .chat-side,
+html[data-theme="dark"] .builder-spec-brief,
+html[data-theme="dark"] .builder-workbench,
+html[data-theme="dark"] .builder-composer-shell,
+html[data-theme="dark"] .input-card,
+html[data-theme="dark"] .deploy-side {
+  background: #111318 !important;
+  border-color: rgba(148, 163, 184, 0.14) !important;
+  box-shadow: none !important;
+}
+
+html[data-theme="dark"] .builder-inline-model-select .el-select__wrapper {
+  min-height: 28px !important;
+  background: #151922 !important;
+  border: 1px solid rgba(148, 163, 184, 0.16) !important;
+  box-shadow: none !important;
+}
+
+html[data-theme="dark"] .builder-inline-model-select .el-select__wrapper.is-focused {
+  border-color: rgba(124, 140, 255, 0.34) !important;
+  box-shadow: 0 0 0 1px rgba(124, 140, 255, 0.16) inset !important;
+}
+
+html[data-theme="dark"] .builder-inline-model-select .el-select__selected-item,
+html[data-theme="dark"] .builder-inline-model-select .el-select__placeholder,
+html[data-theme="dark"] .builder-inline-model-select .el-select__caret,
+html[data-theme="dark"] .builder-inline-model-select .el-icon {
+  color: rgba(203, 213, 225, 0.78) !important;
+  font-size: 12px !important;
+}
+
+html[data-theme="dark"] .doc-version-current-strip {
+  background: linear-gradient(135deg, rgba(124, 140, 255, 0.12), #151922) !important;
+  border-color: rgba(124, 140, 255, 0.30) !important;
+  box-shadow: none !important;
+}
+
+html[data-theme="dark"] .doc-version-current-text strong,
+html[data-theme="dark"] .doc-history-copy strong {
+  color: rgba(248, 250, 252, 0.92) !important;
+}
+
+html[data-theme="dark"] .doc-version-current-text small,
+html[data-theme="dark"] .doc-history-copy small,
+html[data-theme="dark"] .doc-version-history-toggle span {
+  color: rgba(148, 163, 184, 0.72) !important;
+}
+
+html[data-theme="dark"] .doc-version-current-badge,
+html[data-theme="dark"] .doc-history-version {
+  background: rgba(124, 140, 255, 0.18) !important;
+  color: #b6c2ff !important;
+}
+
+html[data-theme="dark"] .doc-version-history-panel {
+  background: #111318 !important;
+  border-color: rgba(148, 163, 184, 0.14) !important;
+  box-shadow: none !important;
+}
+
+html[data-theme="dark"] .doc-version-history-row + .doc-version-history-row {
+  border-top-color: rgba(148, 163, 184, 0.12) !important;
+}
+
+html[data-theme="dark"] .doc-version-history-row:hover,
+html[data-theme="dark"] .doc-version-history-row.active {
+  background: rgba(124, 140, 255, 0.10) !important;
+}
+
+html[data-theme="dark"] .doc-version-action,
+html[data-theme="dark"] .doc-version-history-toggle,
+html[data-theme="dark"] .doc-version-mini-action {
+  background: #151922 !important;
+  border-color: rgba(148, 163, 184, 0.18) !important;
+  color: rgba(248, 250, 252, 0.88) !important;
+}
+
+html[data-theme="dark"] .doc-version-action:hover,
+html[data-theme="dark"] .doc-version-history-toggle:hover,
+html[data-theme="dark"] .doc-version-mini-action:hover {
+  border-color: rgba(124, 140, 255, 0.32) !important;
+  background: rgba(124, 140, 255, 0.12) !important;
+  color: #b6c2ff !important;
+}
+
+html[data-theme="dark"] .builder-control-hint.inside-card {
+  color: rgba(148, 163, 184, 0.58) !important;
+}
+
+html[data-theme="dark"] .builder-workbench {
+  background: linear-gradient(180deg, rgba(9, 11, 16, 0.20), #090b10) !important;
+}
+
+html[data-theme="dark"] .messages {
+  background: #111318 !important;
+}
+
+html[data-theme="dark"] .bubble-content.assistant {
+  background: #151922 !important;
+  border-color: rgba(148, 163, 184, 0.16) !important;
+  color: rgba(248, 250, 252, 0.92) !important;
+}
+
+html[data-theme="dark"] .chat-bubble.streaming-message .bubble-content.assistant {
+  background:
+    linear-gradient(90deg, rgba(124, 140, 255, 0.16), rgba(45, 212, 191, 0.08)),
+    #151922 !important;
+  border-color: rgba(124, 140, 255, 0.36) !important;
+}
+
+html[data-theme="dark"] .builder-top-action.primary,
+html[data-theme="dark"] .preview-side-cta,
+html[data-theme="dark"] .code-panel-button {
+  background: #9aa8ff !important;
+  border-color: #9aa8ff !important;
+  color: #090b10 !important;
+  box-shadow: none !important;
+}
+
+html[data-theme="dark"] .bubble-content.user {
+  background: rgba(124, 140, 255, 0.16) !important;
+  border: 1px solid rgba(124, 140, 255, 0.26) !important;
+  color: rgba(248, 250, 252, 0.94) !important;
+  box-shadow: none !important;
+}
+
+html[data-theme="dark"] .assistant-avatar {
+  background: #202636 !important;
+  border: 1px solid rgba(148, 163, 184, 0.16) !important;
+  color: #b6c2ff !important;
+  box-shadow: none !important;
+}
+
+html[data-theme="dark"] .builder-top-action.ghost,
+html[data-theme="dark"] .preview-side-cta.secondary,
+html[data-theme="dark"] .preview-panel-collapse,
+html[data-theme="dark"] .code-panel-button.secondary,
+html[data-theme="dark"] .doc-upload-btn.subtle,
+html[data-theme="dark"] .doc-action-btn {
+  background: #151922 !important;
+  border-color: rgba(148, 163, 184, 0.18) !important;
+  color: rgba(248, 250, 252, 0.88) !important;
+}
+
+html[data-theme="dark"] .input-card-top textarea,
+html[data-theme="dark"] .conflict-input {
+  color: rgba(248, 250, 252, 0.92) !important;
+}
+
+html[data-theme="dark"] .input-card:focus-within {
+  border-color: rgba(124, 140, 255, 0.32) !important;
+  box-shadow: 0 0 0 1px rgba(124, 140, 255, 0.18) inset !important;
+}
+
+html[data-theme="dark"] .input-card-top textarea::placeholder,
+html[data-theme="dark"] .conflict-input::placeholder {
+  color: rgba(148, 163, 184, 0.54) !important;
+}
+
+html[data-theme="dark"] .conflict-input,
+html[data-theme="dark"] .deploy-inline-card,
+html[data-theme="dark"] .doc-preview-card,
+html[data-theme="dark"] .doc-preview-content,
+html[data-theme="dark"] .doc-version-panel,
+html[data-theme="dark"] .doc-version-empty,
+html[data-theme="dark"] .doc-version-row,
+html[data-theme="dark"] .doc-version-row.current,
+html[data-theme="dark"] .doc-version-row.expanded,
+html[data-theme="dark"] .structured-doc-panel,
+html[data-theme="dark"] .deploy-log-card,
+html[data-theme="dark"] .deploy-log-item,
+html[data-theme="dark"] .deploy-log-item.info,
+html[data-theme="dark"] .deploy-log-item.success,
+html[data-theme="dark"] .deploy-log-item.error {
+  background: #151922 !important;
+  border-color: rgba(148, 163, 184, 0.14) !important;
+  color: rgba(203, 213, 225, 0.72) !important;
+  box-shadow: none !important;
+}
+
+html[data-theme="dark"] .preview-empty-title {
+  color: rgba(248, 250, 252, 0.94) !important;
+}
+
+html[data-theme="dark"] .preview-empty-stage,
+html[data-theme="dark"] .preview-empty-copy,
+html[data-theme="dark"] .spec-overview-head p,
+html[data-theme="dark"] .spec-readiness-item em,
+html[data-theme="dark"] .builder-spec-brief-main p,
+html[data-theme="dark"] .canvas-panel-head p,
+html[data-theme="dark"] .canvas-basic-section-head span,
+html[data-theme="dark"] .canvas-role-card > span,
+html[data-theme="dark"] .canvas-model-meta,
+html[data-theme="dark"] .canvas-flow-desc,
+html[data-theme="dark"] .canvas-flow-step,
+html[data-theme="dark"] .custom-dev-meta dt,
+html[data-theme="dark"] .custom-dev-meta dd,
+html[data-theme="dark"] .custom-dev-empty span {
+  color: rgba(203, 213, 225, 0.66) !important;
+}
+
+html[data-theme="dark"] .preview-empty-features,
+html[data-theme="dark"] .preview-empty-icon,
+html[data-theme="dark"] .canvas-dict-options span,
+html[data-theme="dark"] .canvas-dict-options em,
+html[data-theme="dark"] .canvas-field-list span,
+html[data-theme="dark"] .custom-dev-type,
+html[data-theme="dark"] .custom-dev-state {
+  background: rgba(148, 163, 184, 0.10) !important;
+  border-color: rgba(148, 163, 184, 0.14) !important;
+  color: rgba(203, 213, 225, 0.76) !important;
+}
