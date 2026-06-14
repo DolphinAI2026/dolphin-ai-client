@@ -31,24 +31,18 @@ kubectl -n "${NAMESPACE}" set image \
   "${BACKEND_CONTAINER}=${IMAGE}"
 
 log "update dist initContainer image and restart"
-PATCH_FILE="$(mktemp /tmp/apaas-builder-main-upgrade.XXXXXX.yaml)"
-trap 'rm -f "${PATCH_FILE}"' EXIT
-cat > "${PATCH_FILE}" <<EOF
+kubectl -n "${NAMESPACE}" patch "statefulset/${APP_NAME}" --type=strategic -p "
 spec:
   template:
     metadata:
       annotations:
-        upgrade-main/restartedAt: "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
-        upgrade-main/image: "${IMAGE}"
+        upgrade-main/restartedAt: \"$(date -u +%Y-%m-%dT%H:%M:%SZ)\"
+        upgrade-main/image: \"${IMAGE}\"
     spec:
       initContainers:
         - name: ${DIST_INIT_CONTAINER}
           image: ${IMAGE}
-EOF
-
-kubectl -n "${NAMESPACE}" patch "statefulset/${APP_NAME}" \
-  --type=strategic \
-  --patch-file "${PATCH_FILE}"
+"
 
 log "wait rollout"
 kubectl -n "${NAMESPACE}" rollout status "statefulset/${APP_NAME}" --timeout="${ROLL_TIMEOUT}"
