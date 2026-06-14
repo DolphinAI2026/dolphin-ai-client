@@ -1,4 +1,13 @@
-# 大文件拆分工单(给 Codex 执行)— 2026-06-13
+# ⚠️ 已作废 — 见 `docs/superpowers/plans/2026-06-14-ai-builder-architecture-hardening-plan.md`
+
+> **本文已于 2026-06-14 并入统一主计划,不再单独执行。**
+> Wave 1B(deploy_service)、Wave 2(mcp_server 拆包)已由 Codex 完成(在途未提交);
+> Wave 1A(workspace 模板)→ 主计划 Phase 4A;Wave 3/4(applications/auth)→ Phase 4B/4C;
+> Wave 5(ChatPage/CodingPage)→ Phase 7。以下内容仅作历史参考。
+
+---
+
+# 大文件拆分工单(给 Codex 执行)— 2026-06-13(历史)
 
 > 基于 `docs/analysis-2026-06-12-modules-agents-knowledge.md` §1.3 骨架,所有行号/事实已按 2026-06-13 当前代码(dev `60187437`)重新核验。
 > 执行者:Codex。每个 Wave 一个或多个独立 PR,严格按本文顺序。
@@ -26,7 +35,7 @@
 7. **禁区(不要动)**:
    - SPEC 设计三件套(SpecDesignPanel 等 ~4.1K 行,`SPEC_TAB_ENABLED=false` 关死):用户决策"别删",绕开。
    - 业务事件域(mcp_server 12 个工具 + business_events.py):功能暂停但保留,只搬不删。
-   - routes/coding.py 的 code-server IDE 面(~1.4K 行,`/ide/*` 类端点):唯一消费者是线上 code-server 扩展,契约未对齐前**只许原地不动**(连搬都不搬)。
+   - routes/coding.py 的旧浏览器 IDE 面已由原生代码工作区替代；后续重构不要恢复旧兼容端点或扩展代理。
    - `step_executor.py` / `generator_v2.py` / `incremental_executor.py` / agent 各循环:属"0-1 引擎二合一"和"agent 引擎收敛"专项,不在本工单。
    - `spec_sections.py` 路由器未注册(前端 SpecDesignPanel 调用必 404):这是待裁决 bug,不在本工单内修。
 
