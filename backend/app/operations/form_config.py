@@ -142,6 +142,87 @@ async def _query_saveable_form_config(client: APaaSClient, app_id: str, form_id:
     return await client.query_detail_page_config(app_id, form_id)
 
 
+def _apply_form_identity_to_form_config(
+    form_config: dict,
+    *,
+    form_name: str,
+    form_code: str = "",
+    all_model_codes: Optional[List[str]] = None,
+    app_id: str = "",
+    form_id: str = "",
+    menu_id: str = "",
+) -> bool:
+    """save_form_config 前强制覆盖表单标识字段(canonical, 收口自 step_executor)。
+
+    平台 query_detail_page_config 某些时机返回 formName="我的待办"(默认占位)。直接存回
+    会把建表时的真实表单名抹掉,所有表单都变"我的待办"。本函数在保存前固化标识字段。
+    返回 bool 标识是否有改动(供分步/增量路径做变更追踪;一把梭路径忽略返回即可)。
+
+    收口前 generator_v2._force_form_identity(无条件设、返 None)与本实现(带 != 守卫、
+    返 bool)对 form_config 的最终 mutation 逐字段等价;两侧均不注入 webFormSettings/
+    mobileFormSettings(见下)。
+    """
+    if not isinstance(form_config, dict):
+        return False
+
+    changed = False
+    desired_name = str(form_name or "").strip()
+    desired_code = str(form_code or "").strip()
+    desired_app_id = str(app_id or "").strip()
+    desired_form_id = str(form_id or "").strip()
+    desired_menu_id = str(menu_id or "").strip()
+    desired_models = [
+        str(code).strip()
+        for code in (all_model_codes or [])
+        if str(code).strip()
+    ]
+
+    def _apply(target: dict) -> None:
+        nonlocal changed
+        if not isinstance(target, dict):
+            return
+        if desired_name and target.get("formName") != desired_name:
+            target["formName"] = desired_name
+            changed = True
+        if desired_code and target.get("formCode") != desired_code:
+            target["formCode"] = desired_code
+            changed = True
+        if desired_models and target.get("allModelCodes") != desired_models:
+            target["allModelCodes"] = desired_models
+            changed = True
+        if desired_app_id and target.get("appId") != desired_app_id:
+            target["appId"] = desired_app_id
+            changed = True
+        if desired_form_id and not target.get("id"):
+            target["id"] = desired_form_id
+            changed = True
+        if desired_menu_id and target.get("menuId") != desired_menu_id:
+            target["menuId"] = desired_menu_id
+            changed = True
+
+    _apply(form_config)
+    _apply(form_config.get("simpleFormConfig", {}))
+    if not isinstance(form_config.get("detailPage"), dict):
+        form_config["detailPage"] = {}
+        changed = True
+    detail_page = form_config["detailPage"]
+    _apply(detail_page)
+    for required_key, default_value in (
+        # ⚠️ 不要注入 webFormSettings / mobileFormSettings —— apaas 把空 {} 展开成指向不存在
+        # "formName" 标题组件的 formTitleConfigList, 表单设计器画布渲染崩(暂无数据)。
+        # 原生/对话建的表单都不带这俩, 交给 apaas 自处理。
+        ("previewLanguage", "zh-CN"),
+        ("formVersionConfig", {}),
+    ):
+        if required_key not in detail_page:
+            detail_page[required_key] = default_value
+            changed = True
+    if "formModelType" not in form_config:
+        form_config["formModelType"] = "DATABASE"
+        changed = True
+    return changed
+
+
 __all__ = [
     "_iter_form_components",
     "_component_field_code",
@@ -152,4 +233,5 @@ __all__ = [
     "_clone_for_form_config_permissions",
     "_normalize_permission_range",
     "_query_saveable_form_config",
+    "_apply_form_identity_to_form_config",
 ]

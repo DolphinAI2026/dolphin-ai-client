@@ -196,58 +196,7 @@ def _build_permission_groups_for_form_config(
 _STATE_CHANGED_MARKERS = ("页面状态已改变", "无法保存")
 
 
-def _force_form_identity(
-    form_config: dict,
-    *,
-    form_name: str,
-    form_code: str,
-    all_model_codes: List[str],
-    app_id: str = "",
-    form_id: str = "",
-    menu_id: str = "",
-) -> None:
-    """save_form_config 前强制覆盖表单标识字段。
-
-    平台 query_detail_page_config 在某些时机会返回 formName="我的待办"（默认占位值）。
-    如果直接把这份配置存回去，会把建表时设置的真实表单名抹掉，所有表单都变成"我的待办"。
-    """
-    if not isinstance(form_config, dict):
-        return
-    desired_name = str(form_name or "").strip()
-    desired_code = str(form_code or "").strip()
-    desired_app_id = str(app_id or "").strip()
-    desired_form_id = str(form_id or "").strip()
-    desired_menu_id = str(menu_id or "").strip()
-    desired_models = [str(c).strip() for c in (all_model_codes or []) if str(c).strip()]
-
-    def _apply(target: dict) -> None:
-        if not isinstance(target, dict):
-            return
-        if desired_name:
-            target["formName"] = desired_name
-        if desired_code:
-            target["formCode"] = desired_code
-        if desired_models:
-            target["allModelCodes"] = desired_models
-        if desired_app_id:
-            target["appId"] = desired_app_id
-        if desired_form_id and not target.get("id"):
-            target["id"] = desired_form_id
-        if desired_menu_id:
-            target["menuId"] = desired_menu_id
-
-    _apply(form_config)
-    _apply(form_config.get("simpleFormConfig", {}))
-    detail_page = form_config.setdefault("detailPage", {})
-    if isinstance(detail_page, dict):
-        _apply(detail_page)
-        # ⚠️ 不要注入 webFormSettings / mobileFormSettings —— apaas 会把空 {} 展开成
-        # formTitleConfigList 指向不存在的 "formName" 标题组件, 表单设计器加载时崩
-        # (控制台报 renderLogic / engineContext null, 画布显"暂无数据"=字段渲染不出来)。
-        # 原生 + 对话(build_apaas_feature_from_spec)建的表单都不带这俩, 交给 apaas 自处理。
-        detail_page.setdefault("previewLanguage", "zh-CN")
-        detail_page.setdefault("formVersionConfig", {})
-    form_config.setdefault("formModelType", "DATABASE")
+from app.operations.form_config import _apply_form_identity_to_form_config as _force_form_identity  # noqa: F401,E402 (收口; 保留 gen_v2 调用名)
 
 
 def _ensure_canvas_form_components(
