@@ -347,6 +347,7 @@ async def _apaas_platform_login(username: str, password: str) -> tuple[Optional[
     url = f"{mcp_platform._api_base(base_url)}/xdap-admin/platform/apaasSystemAdmin/login?timestamp={ts}"
     headers = mcp_platform._headers(base_url, tenant_id="", rsa_public_key=rsa_public_key)
     headers["referer"] = f"{base_url}/platform/account/login"
+    headers.pop("xdaptenantid", None)
     body = {
         "type": "account",
         "account": username,
@@ -381,6 +382,8 @@ async def _apaas_backend_login(username: str, password: str, tenant_id: str = ""
         rsa_public_key=rsa_public_key,
     )
     headers["referer"] = f"{base_url}/platform/account/login"
+    if not clean_tenant_id:
+        headers.pop("xdaptenantid", None)
     body = {
         "type": "account",
         "account": username,
@@ -449,38 +452,6 @@ async def _apaas_switchable_tenants(backend_token: str, default_tenant_id: str) 
     if not resp.is_success:
         return []
     return _extract_tenant_items(payload)
-
-
-async def _apaas_backend_login_tenant_candidates(db: AsyncSession, username: str) -> list[str]:
-    candidates: list[str] = []
-
-    def add(value: object) -> None:
-        text = str(value or "").strip()
-        if text and text not in candidates:
-            candidates.append(text)
-
-    add(settings.apaas_tenant_id)
-
-    rows = await db.execute(
-        select(APaaSUserCredential.apaas_tenant_id)
-        .where(APaaSUserCredential.account == username)
-        .where(APaaSUserCredential.apaas_tenant_id.isnot(None))
-        .order_by(APaaSUserCredential.last_login_at.desc(), APaaSUserCredential.id.asc())
-        .limit(5)
-    )
-    for tenant_id in rows.scalars().all():
-        add(tenant_id)
-
-    env_rows = await db.execute(
-        select(PlatformEnv.platform_tenant_id)
-        .where(PlatformEnv.platform_tenant_id.isnot(None))
-        .order_by(PlatformEnv.is_default.desc(), PlatformEnv.id.asc())
-        .limit(5)
-    )
-    for tenant_id in env_rows.scalars().all():
-        add(tenant_id)
-
-    return candidates[:8]
 
 
 def _merge_tenant_items(primary: list[dict], secondary: list[dict]) -> list[dict]:
@@ -772,28 +743,6 @@ async def _try_apaas_login_flow(user_data: UserLogin, db: AsyncSession) -> Optio
 
     backend_token, backend_payload = await _apaas_backend_login(username, password, "")
     default_tenant_item = _extract_default_tenant_item(backend_payload) if backend_token else None
-    if not (backend_token and default_tenant_item):
-        last_backend_payload = backend_payload
-        for candidate_tenant_id in await _apaas_backend_login_tenant_candidates(db, username):
-            candidate_token, candidate_payload = await _apaas_backend_login(username, password, candidate_tenant_id)
-            last_backend_payload = candidate_payload
-            if not candidate_token:
-                continue
-            candidate_item = _extract_default_tenant_item(candidate_payload) or {
-                "tenantId": candidate_tenant_id,
-                "tenantName": candidate_tenant_id,
-                "tenantCode": candidate_tenant_id,
-            }
-            backend_token = candidate_token
-            backend_payload = candidate_payload
-            default_tenant_item = candidate_item
-            logger.info(
-                "aPaaS backend login succeeded after tenantId fallback: tenant_id=%s",
-                candidate_tenant_id,
-            )
-            break
-        else:
-            backend_payload = last_backend_payload
     default_tenant_id = _tenant_item_id(default_tenant_item) if default_tenant_item else ""
     has_backend_identity = bool(backend_token and default_tenant_id)
 
