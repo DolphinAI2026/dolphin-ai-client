@@ -5,7 +5,9 @@ import httpx
 from fastapi import HTTPException
 from sqlalchemy.exc import IntegrityError
 
-from app.routes import auth as auth_routes
+import sys
+import app.routes.auth  # 确保包（含子模块）已加载
+auth_routes = sys.modules["app.routes.auth.login"]  # login 子模块，monkeypatch 在此生效
 from app.deps import get_auth_context
 from app.routes.auth import get_me, login
 from app.schemas import UserLogin

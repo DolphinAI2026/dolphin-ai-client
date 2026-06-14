@@ -8,7 +8,9 @@ from app.config import settings
 from app.deps import AuthContext, get_auth_context, resolve_effective_tenant_id
 from app.models import APaaSPlatformCredential, APaaSUserCredential, LLMConfig, PlatformEnv, User
 from app.models.tenant import Tenant, UserTenant
-from app.routes import auth as auth_routes
+import sys
+import app.routes.auth  # 确保包（含子模块）已加载
+auth_routes = sys.modules["app.routes.auth.login"]  # login 子模块，monkeypatch 在此生效
 from app.routes.auth import _ensure_apaas_tenant, _try_apaas_login_flow, login
 from app.routes.llm_configs import list_llm_config_options, list_llm_configs
 from app.routes.platform_envs import list_envs
