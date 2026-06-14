@@ -4,7 +4,7 @@
 
 set -euo pipefail
 
-IMAGE="${IMAGE:-hub.dfy.definesys.cn/ai-builder/apaas-builder:main-20260614-58e0603f}"
+IMAGE="${IMAGE:-hub.dfy.definesys.cn/ai-builder/apaas-builder:main-20260614-3a30447e}"
 NAMESPACE="${NAMESPACE:-apaas-builder}"
 APP_NAME="${APP_NAME:-apaas-builder}"
 BACKEND_CONTAINER="${BACKEND_CONTAINER:-apaas-builder}"
@@ -12,6 +12,8 @@ DIST_INIT_CONTAINER="${DIST_INIT_CONTAINER:-copy-frontend-dist}"
 ROLL_TIMEOUT="${ROLL_TIMEOUT:-300s}"
 PUBLIC_URL="${PUBLIC_URL:-https://df-aigc.dfy.definesys.cn/ai-builder/login}"
 ADMIN_URL="${ADMIN_URL:-https://df-aigc.dfy.definesys.cn/ai-builder/platform-admin}"
+ADMIN_DIRECT_URL="${ADMIN_DIRECT_URL:-https://df-aigc.dfy.definesys.cn/ai-builder/admin/mcp}"
+ADMIN_API_URL="${ADMIN_API_URL:-https://df-aigc.dfy.definesys.cn/ai-builder/api/admin/mcp/tools}"
 
 log() { printf '[upgrade-main] %s\n' "$*"; }
 die() { printf '[upgrade-main][fail] %s\n' "$*" >&2; exit 1; }
@@ -60,6 +62,16 @@ if command -v curl >/dev/null 2>&1; then
   curl -k -L -sS -o /tmp/apaas-builder-main-platform-admin.html \
     -w 'ADMIN_HTTP %{http_code} SIZE %{size_download}\n' \
     "${ADMIN_URL}" || true
+
+  log "admin direct route check: ${ADMIN_DIRECT_URL}"
+  curl -k -L -sS -o /tmp/apaas-builder-main-admin.html \
+    -w 'ADMIN_DIRECT_HTTP %{http_code} SIZE %{size_download}\n' \
+    "${ADMIN_DIRECT_URL}" || true
+
+  log "admin api route check without token, expect 401/403 not 404: ${ADMIN_API_URL}"
+  curl -k -sS -o /tmp/apaas-builder-main-admin-api.json \
+    -w 'ADMIN_API_HTTP %{http_code} SIZE %{size_download}\n' \
+    "${ADMIN_API_URL}" || true
 fi
 
 log "done"
