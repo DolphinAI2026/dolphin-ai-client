@@ -55,12 +55,6 @@ export default defineConfig({
         changeOrigin: true,
         rewrite: (path) => path.replace(/^\/ai-builder\/api/, '/api')
       },
-      '/ai-builder/ide': {
-        target: 'http://127.0.0.1:8080',
-        changeOrigin: true,
-        ws: true,
-        rewrite: (path) => path.replace(/^\/ai-builder\/ide/, '')
-      },
       '^/admin(/|$)': {
         target: 'http://localhost:8000',
         changeOrigin: true

@@ -128,7 +128,7 @@ async def test_first_turn_clarification_gates_without_codegen():
         patch("app.coding.pipeline.save_coding_message", new=_save),
         patch("app.coding.pipeline.get_conversation_history", new=AsyncMock(return_value=[])),
         patch("app.coding.pipeline.WorkspaceManager.create_workspace",
-              return_value={"id": "ws-x", "project_name": "p", "display_name": "d", "ide_url": "u"}),
+              return_value={"id": "ws-x", "project_name": "p", "display_name": "d"}),
         patch("app.coding.pipeline.WorkspaceManager.get_workspace_info", return_value={}),
         patch("app.coding.pipeline.append_event_to_stream_replay"),
         patch("app.agents.coding.llm_config.load_coding_llm_config", new=AsyncMock(return_value=("http://fake/v1", "k", "gpt-x"))),
@@ -184,7 +184,7 @@ async def test_first_turn_structured_clarify_emits_chips():
         patch("app.coding.pipeline.save_coding_message", new=_save),
         patch("app.coding.pipeline.get_conversation_history", new=AsyncMock(return_value=[])),
         patch("app.coding.pipeline.WorkspaceManager.create_workspace",
-              return_value={"id": "w", "project_name": "p", "display_name": "d", "ide_url": "u"}),
+              return_value={"id": "w", "project_name": "p", "display_name": "d"}),
         patch("app.coding.pipeline.WorkspaceManager.get_workspace_info", return_value={}),
         patch("app.coding.pipeline.append_event_to_stream_replay"),
     ):

@@ -6,7 +6,7 @@ import json
 import logging
 from typing import Annotated, Optional, Any
 
-from fastapi import APIRouter, Depends, HTTPException, Query, Request, Header
+from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel
 from sqlalchemy.ext.asyncio import AsyncSession
 from sse_starlette.sse import EventSourceResponse
@@ -38,17 +38,13 @@ class StartTurnRequest(BaseModel):
 @router.post("/threads")
 async def create_thread(
     req: CreateThreadRequest,
-    request: Request,
     ctx: Annotated[AuthContext, Depends(get_auth_context)],
     db: Annotated[AsyncSession, Depends(get_db)],
 ):
     """创建新的 harness thread。"""
     mgr = HarnessManager(db)
 
-    # 为 coding profile 预计算 request-scoped 值注入 metadata
     metadata = dict(req.metadata)
-    if req.profile_name == "coding":
-        _inject_coding_metadata(metadata, ctx, request)
 
     try:
         thread_ctx = await mgr.create_thread(
@@ -167,18 +163,9 @@ class CodingPipelineRequest(BaseModel):
     attachments: list[dict[str, Any]] | None = None
 
 
-class IDECodingPipelineRequest(BaseModel):
-    message: str
-    conversation_id: int | None = None
-    selected_model: str | None = None
-    project_id: int | None = None
-    app_id: str | None = None
-
-
 @router.post("/coding/pipeline")
 async def coding_pipeline(
     req: CodingPipelineRequest,
-    request: Request,
     ctx: Annotated[AuthContext, Depends(get_auth_context)],
     db: Annotated[AsyncSession, Depends(get_db)],
 ):
@@ -206,8 +193,6 @@ async def coding_pipeline(
             tenant_id=ctx.tenant_id,
             minimum_role="member",
         )
-    _inject_coding_metadata(metadata, ctx, request)
-
     return await _start_coding_turn_sse(
         db,
         tenant_id=ctx.tenant_id,
@@ -216,73 +201,6 @@ async def coding_pipeline(
         message=req.message,
         metadata=metadata,
     )
-
-
-@router.post("/coding/workspace/{ws_id}/ide/pipeline")
-async def ide_coding_pipeline(
-    ws_id: str,
-    req: IDECodingPipelineRequest,
-    request: Request,
-    x_vibe_ide_token: Annotated[Optional[str], Header(alias="X-Vibe-IDE-Token")] = None,
-    token: Optional[str] = Query(default=None),
-    db: Annotated[AsyncSession, Depends(get_db)] = None,
-):
-    """IDE 使用短期 token 直接接入统一 harness coding runtime。"""
-    from app.routes.coding import _verify_ide_access_token
-
-    ide_token = x_vibe_ide_token or token
-    if not ide_token:
-        raise HTTPException(status_code=401, detail="缺少 IDE 访问令牌，请重新从 Builder 打开 Web IDE")
-
-    token_payload = _verify_ide_access_token(ide_token, ws_id)
-    try:
-        user_id = int(token_payload.get("sub"))
-        tenant_id = int(token_payload.get("tid"))
-    except (TypeError, ValueError):
-        raise HTTPException(status_code=401, detail="无效的 IDE 访问令牌")
-
-    metadata = {
-        "workspace_id": ws_id,
-        "conversation_id": req.conversation_id,
-        "selected_model": req.selected_model,
-        "project_id": req.project_id,
-        "ide_token": ide_token,
-    }
-    _inject_coding_metadata(metadata, None, request)
-
-    return await _start_coding_turn_sse(
-        db,
-        tenant_id=tenant_id,
-        user_id=user_id,
-        conversation_id=req.conversation_id,
-        message=req.message,
-        metadata=metadata,
-    )
-
-
-# ── Coding 辅助函数 ──────────────────────────────
-
-def _inject_coding_metadata(metadata: dict, ctx: AuthContext | None, request: Request):
-    """为 coding profile 预计算 request-scoped 值，注入到 thread metadata。"""
-    from app.config import settings
-
-    # code-server base URL
-    if "code_server_base_url" not in metadata:
-        metadata["code_server_base_url"] = settings.code_server_base_url or ""
-
-    # API base — 用于 code-server 内的 IDE proxy
-    if "api_base_builder" not in metadata:
-        try:
-            from app.routes.coding import _build_ide_proxy_api_base, _derive_harness_api_base
-            # 需要一个 ws_id，但创建 thread 时可能还没有
-            # 使用占位符，pipeline 内部会在有 ws_id 后重新计算
-            ws_id = metadata.get("workspace_id") or "__placeholder__"
-            api_base = _build_ide_proxy_api_base(request, ws_id)
-            # 存储 base pattern（去掉 ws_id 部分），pipeline 内部替换
-            metadata["api_base_builder"] = api_base.replace(ws_id, "{ws_id}")
-            metadata["harness_api_base_builder"] = _derive_harness_api_base(api_base).replace(ws_id, "{ws_id}")
-        except Exception:
-            pass
 
 
 async def _start_coding_turn_sse(

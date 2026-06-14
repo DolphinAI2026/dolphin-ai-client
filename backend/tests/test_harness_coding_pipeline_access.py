@@ -20,14 +20,6 @@ def _ctx() -> AuthContext:
     )
 
 
-def _request():
-    req = MagicMock()
-    req.headers = {}
-    req.url.scheme = "http"
-    req.url.netloc = "testserver"
-    return req
-
-
 @pytest.mark.asyncio
 async def test_harness_coding_pipeline_rejects_inaccessible_workspace_before_starting():
     req = CodingPipelineRequest(message="读一下代码", workspace_id="ws-other", conversation_id=123)
@@ -38,7 +30,7 @@ async def test_harness_coding_pipeline_rejects_inaccessible_workspace_before_sta
         patch("app.routes.harness._start_coding_turn_sse", new=AsyncMock()) as start_turn,
     ):
         with pytest.raises(HTTPException) as exc_info:
-            await coding_pipeline(req, _request(), _ctx(), db)
+            await coding_pipeline(req, _ctx(), db)
 
     assert exc_info.value.status_code == 403
     start_turn.assert_not_awaited()
@@ -55,7 +47,7 @@ async def test_harness_coding_pipeline_checks_project_access_before_starting():
         patch("app.routes.harness._start_coding_turn_sse", new=AsyncMock()) as start_turn,
     ):
         with pytest.raises(HTTPException) as exc_info:
-            await coding_pipeline(req, _request(), _ctx(), db)
+            await coding_pipeline(req, _ctx(), db)
 
     assert exc_info.value.status_code == 403
     ensure_ws.assert_not_awaited()

@@ -10,8 +10,7 @@
  * 与「设计文档面板 / 生成应用 CTA」强耦合的额外项（app-ready 的 #custom CTA、inline 卡片的
  * 跨段版本计数）。这些不属于通用对话渲染，面板任务用不到。
  *
- * 没有前端单测 runner，验证只能靠 `npm run build:nocheck` 编译。改动 reactivity / AgentMessage
- * 形状时务必小心 —— bug 只会在 live 测试时暴露。
+ * 改动 reactivity / AgentMessage 形状时务必小心；SSE reducer 的关键漂移点由同目录 spec 锁住。
  */
 import { computed, onScopeDispose, ref, type ComputedRef, type Ref } from 'vue'
 import {
@@ -54,6 +53,145 @@ export interface UseAiChatSessionReturn {
   dispose: () => void
 }
 
+type AiChatTransientItem =
+  | { kind: 'ask'; ask: { question: string; options: string[]; tc_id: number } }
+  | { kind: 'thinking'; text: string; ts: number }
+  | { kind: 'artifact_card'; artifact: AIChatArtifact; ts: number }
+
+type AiChatStreamingTool = { index: number; name: string; argumentsSoFar: string }
+
+export interface AiChatSseReducerState {
+  currentSession: Ref<AIChatSession | null>
+  sessions: Ref<AIChatSession[]>
+  messages: Ref<AIChatMessage[]>
+  toolCalls: Ref<AIChatToolCall[]>
+  artifacts: Ref<AIChatArtifact[]>
+  transientItems: Ref<AiChatTransientItem[]>
+  streamingText: Ref<string>
+  streamingTools: Ref<Record<number, AiChatStreamingTool>>
+  pendingChars: Ref<string[]>
+  pendingFinalMessage: Ref<AIChatMessage | null>
+  currentRunId: Ref<string | null>
+  currentTurnAssistantMessageReceived: Ref<boolean>
+  currentTurnFallbackErrorShown: Ref<boolean>
+  ensureDrain: () => void
+  flushPending: () => void
+  onErrorMessage?: (message: string) => void
+  onAfterEvent?: () => void
+}
+
+export function createAiChatSseReducer(state: AiChatSseReducerState) {
+  return function handleSseEvent(eventName: string, data: any) {
+    switch (eventName) {
+      case 'user_message':
+        state.messages.value.push(data)
+        break
+      case 'run_started':
+        state.currentRunId.value = data.run_id || null
+        break
+      case 'thinking':
+        state.transientItems.value.push({ kind: 'thinking', text: data.text || '', ts: Date.now() })
+        break
+      case 'assistant_delta':
+        for (const ch of (data.text || '')) state.pendingChars.value.push(ch)
+        state.ensureDrain()
+        break
+      case 'assistant_thinking_lock':
+        state.flushPending()
+        if (state.streamingText.value) {
+          state.transientItems.value.push({ kind: 'thinking', text: state.streamingText.value, ts: Date.now() })
+          state.streamingText.value = ''
+        }
+        break
+      case 'tool_call_start': {
+        state.flushPending()
+        if (state.streamingText.value) {
+          state.transientItems.value.push({ kind: 'thinking', text: state.streamingText.value, ts: Date.now() })
+          state.streamingText.value = ''
+        }
+        state.streamingTools.value = {}
+        const tc: AIChatToolCall = {
+          id: data.id,
+          session_id: state.currentSession.value?.id || 0,
+          message_id: null,
+          tool_name: data.tool_name,
+          args_json: data.args || {},
+          result_text: null,
+          status: 'running',
+          error_message: null,
+          duration_ms: null,
+          started_at: data.started_at || null,
+          ended_at: null,
+        }
+        state.toolCalls.value.push(tc)
+        break
+      }
+      case 'tool_call_delta': {
+        const idx = data.index ?? 0
+        const cur = state.streamingTools.value[idx] || { index: idx, name: '', argumentsSoFar: '' }
+        if (data.name) cur.name = data.name
+        if (typeof data.arguments_so_far === 'string') cur.argumentsSoFar = data.arguments_so_far
+        state.streamingTools.value = { ...state.streamingTools.value, [idx]: cur }
+        break
+      }
+      case 'tool_call_end': {
+        const found = state.toolCalls.value.find(t => t.id === data.id)
+        if (found) {
+          found.status = data.status
+          found.result_text = data.result_text
+          found.duration_ms = data.duration_ms
+        }
+        break
+      }
+      case 'ask_user':
+        // 信号事件：ask 卡由 collapseTools 从持久化 toolCalls.result_text 渲染（刷新后不丢）
+        break
+      case 'assistant_message':
+        // 等 drain 把 pendingChars 排空后再展示持久化消息（让打字效果走完）
+        state.currentTurnAssistantMessageReceived.value = true
+        if (state.pendingChars.value.length === 0) {
+          state.streamingText.value = ''
+          state.messages.value.push(data)
+        } else {
+          state.pendingFinalMessage.value = data
+        }
+        break
+      case 'artifact_created': {
+        if (state.currentSession.value) {
+          aiChatApi.listArtifacts(state.currentSession.value.id).then(d => { state.artifacts.value = d.artifacts })
+        }
+        break
+      }
+      case 'session_updated':
+        if (state.currentSession.value && data.id === state.currentSession.value.id) {
+          state.currentSession.value.title = data.title
+          const found = state.sessions.value.find(s => s.id === data.id)
+          if (found) found.title = data.title
+        }
+        break
+      case 'error':
+        {
+          const message = data.error || data.message || '出错了'
+          if (!state.currentTurnAssistantMessageReceived.value && !state.currentTurnFallbackErrorShown.value && state.currentSession.value) {
+            state.currentTurnFallbackErrorShown.value = true
+            state.messages.value.push({
+              id: -Date.now(),
+              session_id: state.currentSession.value.id,
+              role: 'assistant',
+              content: message,
+              extra_meta: { local_error: true },
+              created_at: new Date().toISOString(),
+            })
+          }
+          state.transientItems.value.push({ kind: 'thinking', text: `错误：${message}`, ts: Date.now() })
+          state.onErrorMessage?.(message)
+        }
+        break
+    }
+    state.onAfterEvent?.()
+  }
+}
+
 export function useAiChatSession(opts?: UseAiChatSessionOptions): UseAiChatSessionReturn {
   // ── 持久化 / 服务端来源 state ──
   const currentSession = ref<AIChatSession | null>(null)
@@ -68,23 +206,21 @@ export function useAiChatSession(opts?: UseAiChatSessionOptions): UseAiChatSessi
   const currentAbort = ref<AbortController | null>(null)
 
   // 流式过程中产生但未持久化的项（ask / thinking）
-  type TransientItem =
-    | { kind: 'ask'; ask: { question: string; options: string[]; tc_id: number } }
-    | { kind: 'thinking'; text: string; ts: number }
-  const transientItems = ref<TransientItem[]>([])
+  const transientItems = ref<AiChatTransientItem[]>([])
 
   // 当前正在流式输出的助手内容（assistant_delta 累积，经 drain 平滑释放）
   const streamingText = ref('')
 
   // LLM 正在流式生成 tool_calls 参数时的累积（按 index 分组）；tool_call_start 后清空
-  type StreamingTool = { index: number; name: string; argumentsSoFar: string }
-  const streamingTools = ref<Record<number, StreamingTool>>({})
+  const streamingTools = ref<Record<number, AiChatStreamingTool>>({})
 
   // pending 队列 + 节流：兼容「假流式」LLM（一次性吐全部）→ 按 ~80 chars/s 平滑打字
   const pendingChars = ref<string[]>([])
   let drainTimer: ReturnType<typeof setInterval> | null = null
   // 等流式 buffer 排空后才推持久化消息（避免 streaming bubble 还在打字时被抢走）
   const pendingFinalMessage = ref<AIChatMessage | null>(null)
+  const currentTurnAssistantMessageReceived = ref(false)
+  const currentTurnFallbackErrorShown = ref(false)
 
   // 「AI 思考中 Ns」计时
   const typingSeconds = ref(0)
@@ -447,101 +583,23 @@ export function useAiChatSession(opts?: UseAiChatSessionOptions): UseAiChatSessi
   // typing 指示器门控（对齐 AIChatPage 模板：isSending && !lastEventIsAsk && !streamingText）
   const typing = computed(() => sending.value && !lastEventIsAsk.value && !streamingText.value)
 
-  // ─────────────────────────────────────────────────────────────────────
-  // SSE 事件 → state reducer（忠实复制 AIChatPage.handleSseEvent 的核心；
-  // 省略 artifact 自动弹右栏面板 / session_updated 同步全局 sidebar 标题等纯 UI 副作用）
-  // ─────────────────────────────────────────────────────────────────────
-  function handleSseEvent(eventName: string, data: any) {
-    switch (eventName) {
-      case 'user_message':
-        messages.value.push(data)
-        break
-      case 'run_started':
-        currentRunId.value = data.run_id || null
-        break
-      case 'thinking':
-        transientItems.value.push({ kind: 'thinking', text: data.text || '', ts: Date.now() })
-        break
-      case 'assistant_delta':
-        for (const ch of (data.text || '')) pendingChars.value.push(ch)
-        ensureDrain()
-        break
-      case 'assistant_thinking_lock':
-        flushPending()
-        if (streamingText.value) {
-          transientItems.value.push({ kind: 'thinking', text: streamingText.value, ts: Date.now() })
-          streamingText.value = ''
-        }
-        break
-      case 'tool_call_start': {
-        flushPending()
-        if (streamingText.value) {
-          transientItems.value.push({ kind: 'thinking', text: streamingText.value, ts: Date.now() })
-          streamingText.value = ''
-        }
-        streamingTools.value = {}
-        const tc: AIChatToolCall = {
-          id: data.id,
-          session_id: currentSession.value?.id || 0,
-          message_id: null,
-          tool_name: data.tool_name,
-          args_json: data.args || {},
-          result_text: null,
-          status: 'running',
-          error_message: null,
-          duration_ms: null,
-          started_at: data.started_at || null,
-          ended_at: null,
-        }
-        toolCalls.value.push(tc)
-        break
-      }
-      case 'tool_call_delta': {
-        const idx = data.index ?? 0
-        const cur = streamingTools.value[idx] || { index: idx, name: '', argumentsSoFar: '' }
-        if (data.name) cur.name = data.name
-        if (typeof data.arguments_so_far === 'string') cur.argumentsSoFar = data.arguments_so_far
-        streamingTools.value = { ...streamingTools.value, [idx]: cur }
-        break
-      }
-      case 'tool_call_end': {
-        const found = toolCalls.value.find(t => t.id === data.id)
-        if (found) {
-          found.status = data.status
-          found.result_text = data.result_text
-          found.duration_ms = data.duration_ms
-        }
-        break
-      }
-      case 'ask_user':
-        // 信号事件：ask 卡由 collapseTools 从持久化 toolCalls.result_text 渲染（刷新后不丢）
-        break
-      case 'assistant_message':
-        if (pendingChars.value.length === 0) {
-          streamingText.value = ''
-          messages.value.push(data)
-        } else {
-          pendingFinalMessage.value = data
-        }
-        break
-      case 'artifact_created': {
-        if (currentSession.value) {
-          aiChatApi.listArtifacts(currentSession.value.id).then(d => { artifacts.value = d.artifacts })
-        }
-        break
-      }
-      case 'session_updated':
-        if (currentSession.value && data.id === currentSession.value.id) {
-          currentSession.value.title = data.title
-          const found = sessions.value.find(s => s.id === data.id)
-          if (found) found.title = data.title
-        }
-        break
-      case 'error':
-        // 不弹全局 ElMessage（让宿主面板自行决定如何提示）；交由 send 的 catch 兜底
-        break
-    }
-  }
+  const handleSseEvent = createAiChatSseReducer({
+    currentSession,
+    sessions,
+    messages,
+    toolCalls,
+    artifacts,
+    transientItems,
+    streamingText,
+    streamingTools,
+    pendingChars,
+    pendingFinalMessage,
+    currentRunId,
+    currentTurnAssistantMessageReceived,
+    currentTurnFallbackErrorShown,
+    ensureDrain,
+    flushPending,
+  })
 
   // ─────────────────────────────────────────────────────────────────────
   // public methods
@@ -649,6 +707,8 @@ export function useAiChatSession(opts?: UseAiChatSessionOptions): UseAiChatSessi
     streamingTools.value = {}
     pendingChars.value = []
     pendingFinalMessage.value = null
+    currentTurnAssistantMessageReceived.value = false
+    currentTurnFallbackErrorShown.value = false
     stopDrain()
     startSecondsTimer()
     currentAbort.value = new AbortController()
@@ -680,6 +740,8 @@ export function useAiChatSession(opts?: UseAiChatSessionOptions): UseAiChatSessi
       currentAbort.value = null
       transientItems.value = []
       streamingText.value = ''
+      currentTurnAssistantMessageReceived.value = false
+      currentTurnFallbackErrorShown.value = false
       // 重新拉一次 session 拿完整持久化数据（messages + tool_calls + artifacts）
       if (currentSession.value) {
         try { await loadSession(currentSession.value.id) } catch { /* ignore */ }

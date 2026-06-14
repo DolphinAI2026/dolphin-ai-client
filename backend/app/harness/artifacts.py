@@ -1,6 +1,6 @@
 """Harness Core — Artifact 持久化
 
-记录 turn 产出的关键结果（workspace、IDE URL、构建结果、Agent 摘要等），
+记录 turn 产出的关键结果（workspace、构建结果、Agent 摘要等），
 供后续查询、审计、评估使用。
 """
 import json

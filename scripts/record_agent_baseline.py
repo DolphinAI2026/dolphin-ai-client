@@ -146,8 +146,6 @@ async def _run_one_turn(
         conversation_id=conversation_id,
         selected_model=None,
         project_id=None,
-        code_server_base_url="",
-        api_base_builder=None,
     )
 
     events: list[dict] = []
@@ -271,7 +269,6 @@ async def record_case(
         "tool_call_count": len(tool_calls),
         "tool_names_called": [e.get("tool") or e.get("name") for e in tool_calls],
         "workspace_id": ws_id,
-        "ide_url": (final_data or {}).get("ide_url"),
         "final_status": "success" if (ws_id and not error_message) else "failed",
         "error_message": error_message,
     }

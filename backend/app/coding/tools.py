@@ -654,7 +654,6 @@ async def _start_serve(
     import json as _json
 
     from app.coding.workspace import WorkspaceManager
-    from app.config import settings
 
     ws_id = workspace_path.name
     ws_mgr = WorkspaceManager()
@@ -670,7 +669,7 @@ async def _start_serve(
             pass
 
     # ── 读取 PROXY_BASE ──────────────────────────────────────────
-    proxy_base = (settings.code_server_base_url or "").rstrip("/")
+    proxy_base = ""
     # 双端：从 web/ 子目录读取；单端：从工作区根目录读取
     _cfg_dir = workspace_path / "web" if _is_dual else workspace_path
     vibe_cfg = _cfg_dir / "vibe-serve-config"

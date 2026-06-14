@@ -4,7 +4,7 @@
 # 设计原则：
 # - 不预装具体框架（next/vite/express），让 agent 按需 npm install
 # - 容器以 PID 1 长驻（tail -f /dev/null），通过 docker exec 跑命令
-# - workspace 通过 -v 挂载到 /workspace，跟 host code-server 共享
+# - workspace 通过 -v 挂载到 /workspace，跟主后端工作区路径共享
 # - 监听端口段 6100-6999，host 端用 -p 动态映射
 #
 # Build: docker build -t vibe-sandbox:latest docker/vibe-sandbox/

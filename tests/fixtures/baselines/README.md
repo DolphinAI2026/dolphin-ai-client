@@ -146,7 +146,6 @@ tests/fixtures/baselines/case_a_rating_star_run1/
   "tool_call_count": 22,
   "tool_names_called": ["glob_files", "read_file", "write_file", ...],
   "workspace_id": "1_a1b2c3d4",
-  "ide_url": "http://code-server/?folder=...",
   "final_status": "success",
   "error_message": null
 }

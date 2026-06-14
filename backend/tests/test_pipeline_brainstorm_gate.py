@@ -108,7 +108,6 @@ async def test_first_message_brainstorm_scene_gates_on_confirmation():
                 "id": "ws-test-001",
                 "project_name": "leave-request",
                 "display_name": "请假申请",
-                "ide_url": "http://localhost:8080",
             },
         ),
         patch(

@@ -84,7 +84,6 @@ print("APAAS_BASE_URL=" + (settings.apaas_base_url or "[empty]"))
 print("APAAS_TENANT_ID=" + (settings.apaas_tenant_id or "[empty]"))
 print("DATABASE_HOST=" + (db.hostname or "[empty]"))
 print("DATABASE_NAME=" + ((db.path or "").lstrip("/") or "[empty]"))
-print("CODE_SERVER_BASE_URL=" + (settings.code_server_base_url or "[empty]"))
 PY'
 
 log "deployed auth.py behavior check"

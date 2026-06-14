@@ -10,17 +10,14 @@ import json
 import logging
 import re
 import traceback
-from datetime import datetime, timedelta
+from datetime import datetime
 from pathlib import Path
 from typing import Optional, Any, AsyncIterator
-from urllib.parse import urlencode, urlparse
 
 import httpx
-from jose import jwt
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.config import settings
 from app.models import User, Conversation, Message, Project
 from app.coding.form_component_editor import (
     normalize_form_component_editor_artifacts,
@@ -35,22 +32,6 @@ from app.coding.read_query import classify_coding_intent, classify_iteration_int
 from app.coding.attachments import normalize_coding_attachments
 
 logger = logging.getLogger(__name__)
-
-
-# ── 常量 ──────────────────────────────────────────
-
-IDE_EXCLUDED_GLOBS = [
-    "node_modules", ".git", "dist", "build", ".cache",
-    ".vscode/.vibe-ide.code-workspace",
-]
-
-
-def normalize_ide_theme(theme: Optional[str]) -> str:
-    return "light" if theme == "light" else "dark"
-
-
-def ide_color_theme(theme: Optional[str]) -> str:
-    return "Default Light Modern" if normalize_ide_theme(theme) == "light" else "Default Dark Modern"
 
 
 # ── Pipeline 参数 ──────────────────────────────────
@@ -70,11 +51,6 @@ class PipelineParams:
         project_id: Optional[int] = None,
         app_id: Optional[str] = None,  # 分场景「在应用上定制」绑定的本地 Application.id
         attachments: Optional[list[dict[str, Any]]] = None,
-        # 预计算的 request-scoped 值
-        code_server_base_url: str = "",
-        api_base_builder: Optional[str] = None,  # 用于构建 IDE proxy URL 的函数
-        ide_token: Optional[str] = None,  # 预生成的 IDE token（或延迟生成）
-        ide_token_payload: Optional[dict] = None,  # 用于生成 token 的数据
     ):
         self.message = message
         self.user_id = user_id
@@ -85,179 +61,6 @@ class PipelineParams:
         self.project_id = project_id
         self.app_id = app_id
         self.attachments = normalize_coding_attachments(attachments or [])
-        self.code_server_base_url = code_server_base_url or settings.code_server_base_url or ""
-        self.api_base_builder = api_base_builder
-        self.ide_token = ide_token
-        self.ide_token_payload = ide_token_payload
-
-
-# ── IDE 工具函数（从 routes/coding.py 搬过来） ──────
-
-def ensure_vibe_workspace_file(ws_path: Path, ide_theme: Optional[str] = None) -> Path:
-    """为 Web IDE 生成轻量 workspace 文件。"""
-    workspace_file = ws_path / ".vibe-ide.code-workspace"
-    workspace_payload = {
-        "folders": [{"path": str(ws_path.resolve())}],
-        "settings": {
-            "files.exclude": {p: True for p in IDE_EXCLUDED_GLOBS},
-            "search.exclude": {p: True for p in IDE_EXCLUDED_GLOBS},
-            "files.watcherExclude": {p: True for p in IDE_EXCLUDED_GLOBS},
-            "explorer.autoReveal": False,
-            "git.autoRepositoryDetection": "openEditors",
-            "workbench.colorTheme": ide_color_theme(ide_theme),
-        },
-    }
-    serialized = json.dumps(workspace_payload, ensure_ascii=False, indent=2)
-    if not workspace_file.exists() or workspace_file.read_text(encoding="utf-8") != serialized:
-        workspace_file.write_text(serialized, encoding="utf-8")
-    return workspace_file
-
-
-def ensure_cursor_rules(ws_path: Path):
-    """确保工作区包含 cursor rules。"""
-    rules_dir = ws_path / ".cursor" / "rules"
-    rules_dir.mkdir(parents=True, exist_ok=True)
-    template_dir = Path(__file__).parent.parent / "templates" / "cursor-rules"
-    if template_dir.exists():
-        import shutil
-        for rule_file in template_dir.glob("*.mdc"):
-            target = rules_dir / rule_file.name
-            if not target.exists() or target.stat().st_size < rule_file.stat().st_size:
-                shutil.copy2(rule_file, target)
-
-
-def write_ruijing_extension_config(
-    ws_path: Path,
-    ws_id: str,
-    ide_token: str,
-    api_base: str,
-    model: str,
-    conversation_id: Optional[int] = None,
-):
-    """为睿鲸AI VS Code 扩展生成配置文件。"""
-    vscode_dir = ws_path / ".vscode"
-    vscode_dir.mkdir(exist_ok=True)
-    config_file = vscode_dir / "ruijing-ai.json"
-    harness_api_base = derive_harness_api_base(api_base)
-    config_payload = {
-        "workspaceId": ws_id,
-        "ideToken": ide_token,
-        "apiBase": api_base.split(f"/workspace/{ws_id}")[0] if f"/workspace/{ws_id}" in api_base else api_base,
-        "harnessApiBase": harness_api_base.split(f"/workspace/{ws_id}")[0] if f"/workspace/{ws_id}" in harness_api_base else harness_api_base,
-        "model": model or "MiniMax-M2.7",
-    }
-    if conversation_id:
-        config_payload["conversationId"] = conversation_id
-    config_file.write_text(json.dumps(config_payload, ensure_ascii=False, indent=2), encoding="utf-8")
-
-
-def _write_workspace_chat_payload(
-    ws_path: Path,
-    filename: str,
-    messages: list[dict],
-    *,
-    conversation_id: Optional[int] = None,
-    max_content_len: int = 3000,
-    stream_messages: Optional[list[dict[str, Any]]] = None,
-):
-    vscode_dir = ws_path / ".vscode"
-    vscode_dir.mkdir(exist_ok=True)
-    history_file = vscode_dir / filename
-    recent = messages[-20:] if len(messages) > 20 else messages
-    payload = {
-        "version": 2 if stream_messages else 1,
-        "conversation_id": conversation_id,
-        "messages": [
-            {"role": m.get("role", "user"), "content": (m.get("content", "") or "")[:max_content_len]}
-            for m in recent
-        ],
-    }
-    if stream_messages:
-        payload["stream_messages"] = stream_messages[-200:]
-    history_file.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
-
-
-def write_chat_history_to_workspace(ws_path: Path, messages: list[dict], *, conversation_id: Optional[int] = None):
-    """把精简对话历史写入工作区 .vscode/chat-history.json，供 IDE 扩展作为上下文读取。"""
-    _write_workspace_chat_payload(
-        ws_path,
-        "chat-history.json",
-        messages,
-        conversation_id=conversation_id,
-        max_content_len=3000,
-    )
-
-
-def write_chat_replay_to_workspace(
-    ws_path: Path,
-    messages: list[dict],
-    *,
-    conversation_id: Optional[int] = None,
-    stream_messages: Optional[list[dict[str, Any]]] = None,
-):
-    """把富回放历史写入工作区 .vscode/chat-replay.json，供 Web Chat 重开时还原近似实时流。"""
-    _write_workspace_chat_payload(
-        ws_path,
-        "chat-replay.json",
-        messages,
-        conversation_id=conversation_id,
-        max_content_len=20000,
-        stream_messages=stream_messages,
-    )
-
-
-def create_ide_access_token(user_id: int, tenant_id: int, ws_id: str) -> str:
-    """创建 IDE 访问令牌。"""
-    payload = {
-        "sub": str(user_id),
-        "tid": tenant_id,
-        "type": "ide_access",
-        "ws": ws_id,
-        "exp": datetime.utcnow() + timedelta(hours=8),
-    }
-    return jwt.encode(payload, settings.jwt_secret_key, algorithm=settings.jwt_algorithm)
-
-
-def derive_harness_api_base(api_base: str) -> str:
-    """把 coding IDE API base 映射成 harness IDE API base。"""
-    return (api_base or "").replace("/api/coding/", "/api/harness/coding/")
-
-
-def build_ide_url(
-    ws_path: Path,
-    ws_id: str,
-    ide_token: str,
-    api_base: str,
-    model: str,
-    code_server_base_url: str,
-    conversation_id: Optional[int] = None,
-    vibe_context: Optional[str] = None,
-) -> Optional[str]:
-    """生成完整的 IDE URL。"""
-    base_url = code_server_base_url.rstrip("/") if code_server_base_url else ""
-    if not base_url:
-        return None
-
-    ide_theme = "dark"
-    ensure_vibe_workspace_file(ws_path, ide_theme)
-    ensure_cursor_rules(ws_path)
-    write_ruijing_extension_config(ws_path, ws_id, ide_token, api_base, model, conversation_id=conversation_id)
-
-    query_params: dict[str, str] = {
-        "folder": str(ws_path.resolve()),
-        "vibe_workspace_id": ws_id,
-        "vibe_api_base": api_base,
-        "vibe_harness_api_base": derive_harness_api_base(api_base),
-        "vibe_ide_token": ide_token,
-        "vibe_model": model,
-        "vibe_ui_theme": ide_theme,
-    }
-    if conversation_id:
-        query_params["vibe_conversation_id"] = str(conversation_id)
-    if vibe_context:
-        query_params["vibe_context"] = vibe_context
-
-    return f"{base_url}/?{urlencode(query_params)}"
 
 
 # ── 场景/项目辅助函数 ──────────────────────────────
@@ -1726,7 +1529,7 @@ async def run_coding_pipeline(
         # 前端 error handler 读的是 message 字段(useCodingPipeline.ts),用 message 才能把提示显出来。
         yield _record_event({"type": "error", "message": str(_exc), "content": str(_exc)})
         yield _record_event({"type": "done", "workspace_id": None,
-                             "conversation_id": conversation_id, "ide_url": None})
+                             "conversation_id": conversation_id})
         return
 
     # 如果有已有对话，恢复模型配置
@@ -1794,7 +1597,7 @@ async def run_coding_pipeline(
                 if await classify_iteration_intent(params.tenant_id, effective_model, _clean_msg) == "READ":
                     logger.info("[intent_gate] 迭代轮 READ 路径, 跳过 codegen, ws=%s", ws_id)
                     await save_coding_message(db, conversation_id, "user", params.message)
-                    # READ 轮也要进富回放: 工作区主会话重开走 chat-replay.json,
+                    # READ 轮也要进富回放: 工作区主会话重开走 DB replay,
                     # 不记这轮问答在刷新/切换后就消失。回放结构手工构建
                     # (user + 工具 chip + 答案 message), 不走 _record_event 的
                     # codegen 映射(那套会把答案记成 thinking 斜体)。
@@ -1815,14 +1618,7 @@ async def run_coding_pipeline(
                     if _read_answer:
                         await save_coding_message(db, conversation_id, "assistant", _read_answer)
                         _push_replay_message(replay_stream_messages, "message", _read_answer)
-                    try:
-                        await _write_history_for_ide(
-                            ws_mgr, ws_id, conversation_id, db,
-                            rich_assistant_output=_read_answer,
-                            stream_messages=replay_stream_messages,
-                        )
-                    except Exception:
-                        logger.warning("READ 轮写富回放失败(忽略): %s", ws_id, exc_info=True)
+                    await _append_replay_history(conversation_id, db, replay_stream_messages)
                     return
 
         # ---- 迭代意图判断(修改当前组件 vs 全新组件) ----
@@ -1936,7 +1732,7 @@ async def run_coding_pipeline(
                         "data": {"scene_type": "unsupported_script"},
                     })
                     yield _record_event({"type": "message", "content": str(exc)})
-                    yield _record_event({"type": "done", "ws_id": None, "ide_url": None, "conversation_id": conversation_id})
+                    yield _record_event({"type": "done", "ws_id": None, "conversation_id": conversation_id})
                     return
             except Exception:
                 logger.warning(f"场景识别失败，使用兜底场景 {fallback}: {traceback.format_exc()}")
@@ -2092,10 +1888,9 @@ async def run_coding_pipeline(
 
             if intent == "abort":
                 yield _record_event({"type": "content", "content": "已取消。如需重新开始请描述新需求。"})
-                # brainstorm 阶段工作区还未创建 → ws_id=None, ide_url=None；
-                # 前端依据 ide_url 决定 IDE 标签是否可点（None 时禁用）。
+                # brainstorm 阶段工作区还未创建 → workspace_id=None。
                 yield _record_event({"type": "done", "workspace_id": None,
-                                     "conversation_id": conversation_id, "ide_url": None})
+                                     "conversation_id": conversation_id})
                 return
 
             elif intent == "revise":
@@ -2111,7 +1906,7 @@ async def run_coding_pipeline(
                     yield _record_event({"type": "content", "content": new_proposal})
                 yield _record_event({
                     "type": "done", "workspace_id": None,
-                    "conversation_id": conversation_id, "ide_url": None,
+                    "conversation_id": conversation_id,
                     "waiting_confirmation": True,
                 })
                 return
@@ -2165,7 +1960,7 @@ async def run_coding_pipeline(
                 })
                 yield _record_event({
                     "type": "done", "workspace_id": None,
-                    "conversation_id": conversation_id, "ide_url": None,
+                    "conversation_id": conversation_id,
                     "waiting_clarification": True,
                 })
                 return
@@ -2181,7 +1976,7 @@ async def run_coding_pipeline(
                 yield _record_event({"type": "content", "content": proposal})
                 yield _record_event({
                     "type": "done", "workspace_id": None,
-                    "conversation_id": conversation_id, "ide_url": None,
+                    "conversation_id": conversation_id,
                     "waiting_clarification": True,
                 })
                 return
@@ -2198,7 +1993,7 @@ async def run_coding_pipeline(
                 #   (SPEC 已存为带 BRAINSTORM marker 的 assistant 消息,_get_brainstorm_state 据此识别等待态。)
                 yield _record_event({
                     "type": "done", "workspace_id": None,
-                    "conversation_id": conversation_id, "ide_url": None,
+                    "conversation_id": conversation_id,
                     "waiting_confirmation": True,
                 })
                 return
@@ -2348,8 +2143,7 @@ async def run_coding_pipeline(
         if finalize_changed:
             normalized_files.extend(finalize_changed)
             logger.info("Finalized form-component-dual scene dirs for %s: %s", ws_id, finalize_changed)
-        # 工作区 folder name 一旦创建即永久不变（避免 .vibe-ide.code-workspace 绝对路径
-        # 失效、IDE URL 缓存失效、agent 持有的 ws_path 失效等连锁问题）。
+        # 工作区 folder name 一旦创建即永久不变，避免 agent 持有的 ws_path 失效。
         # 包名走 apaas.json 的 outputName，与 folder name 解耦。
         # form-component-dual 的命名定型在创建工作区时一次性完成（见 _create_workspace_now，
         # 调用时机是用户确认 brainstorm 后；首次 brainstorm 提案阶段工作区还未创建）。
@@ -2362,30 +2156,17 @@ async def run_coding_pipeline(
         yield _record_event({"type": "step", "step": "generate", "status": "done",
                "data": {"files": normalized_files, "file_count": len(normalized_files), "agent_mode": True}})
 
-        # 写对话历史到工作区供 IDE 扩展读取
-        await _write_history_for_ide(
-            ws_mgr,
-            ws_id,
-            conversation_id,
-            db,
-            rich_assistant_output="".join(persisted_agent_output).strip(),
-            stream_messages=replay_stream_messages,
-        )
+        await _append_replay_history(conversation_id, db, replay_stream_messages)
 
         # 迭代模式完成
         if is_iteration:
             serve_status = ws_mgr.is_serve_running(ws_id)
             yield _record_event({"type": "step", "step": "hot_reload", "status": "done",
                    "data": {"serve_running": serve_status["running"], "port": serve_status.get("port")}})
-            # 迭代时也带上 ide_url，防止 outputName 变化导致文件夹改名后前端路径失效
-            iter_ide_url = _build_ide_url_for_pipeline(params, ws_id, conversation_id, effective_model)
-            yield _record_event({"type": "done", "workspace_id": ws_id, "conversation_id": conversation_id,
-                                  "ide_url": iter_ide_url})
+            yield _record_event({"type": "done", "workspace_id": ws_id, "conversation_id": conversation_id})
             return
 
-        # 新建模式：生成 IDE URL
-        ide_url = _build_ide_url_for_pipeline(params, ws_id, conversation_id, effective_model)
-        yield _record_event({"type": "done", "workspace_id": ws_id, "conversation_id": conversation_id, "ide_url": ide_url})
+        yield _record_event({"type": "done", "workspace_id": ws_id, "conversation_id": conversation_id})
 
     except Exception as e:
         logger.exception("coding pipeline 错误")
@@ -2395,98 +2176,17 @@ async def run_coding_pipeline(
 # ── 内部辅助 ──────────────────────────────────────
 
 
-async def _write_history_for_ide(
-    ws_mgr: WorkspaceManager,
-    ws_id: str,
+async def _append_replay_history(
     conversation_id: Optional[int],
     db: AsyncSession,
-    *,
-    rich_assistant_output: str = "",
     stream_messages: Optional[list[dict[str, Any]]] = None,
 ):
-    """在 pipeline 完成时写入 IDE 精简历史和 Web Chat 富回放历史。
-
-    富回放双写: DB(conversation_replays, 按会话 merge, 多会话不互踩, Web 端读这份)
-    + 工作区 .vscode/chat-replay.json(沿用旧 merge 语义, 仅 IDE 扩展读)。
-    """
-    if not conversation_id or not ws_id:
+    """写入会话富回放。工作区文件回放已废弃，Web 端只读 DB。"""
+    if not conversation_id or not stream_messages:
         return
-    # DB 回放(旁路, 自吞异常)
-    if stream_messages:
+    try:
         from app.coding.replay_store import append_conversation_replay
+
         await append_conversation_replay(db, conversation_id, stream_messages)
-    try:
-        ws_path = ws_mgr.get_workspace_path(ws_id)
-        history = await get_conversation_history(db, conversation_id)
-        if history:
-            write_chat_history_to_workspace(ws_path, history, conversation_id=conversation_id)
-
-            replay_history = [dict(item) for item in history]
-            rich_output = rich_assistant_output.strip()
-            if rich_output:
-                for idx in range(len(replay_history) - 1, -1, -1):
-                    if replay_history[idx].get("role") == "assistant":
-                        replay_history[idx]["content"] = rich_output
-                        break
-                else:
-                    replay_history.append({"role": "assistant", "content": rich_output})
-            merged_stream_messages: list[dict[str, Any]] = []
-            if stream_messages:
-                replay_file = ws_path / ".vscode" / "chat-replay.json"
-                if replay_file.exists():
-                    try:
-                        existing = json.loads(replay_file.read_text(encoding="utf-8"))
-                        if existing.get("conversation_id") in (None, conversation_id):
-                            existing_stream_messages = existing.get("stream_messages") or []
-                            if isinstance(existing_stream_messages, list):
-                                merged_stream_messages.extend(
-                                    item for item in existing_stream_messages if isinstance(item, dict)
-                                )
-                    except Exception:
-                        logger.debug("读取历史 chat-replay.json 失败，改为覆盖写入", exc_info=True)
-
-                if merged_stream_messages:
-                    merged_stream_messages.append({
-                        "type": "status",
-                        "content": "───",
-                        "timestamp": int(datetime.now().timestamp() * 1000),
-                    })
-                merged_stream_messages.extend(stream_messages)
-
-            write_chat_replay_to_workspace(
-                ws_path,
-                replay_history,
-                conversation_id=conversation_id,
-                stream_messages=merged_stream_messages or None,
-            )
     except Exception:
-        logger.warning("写入 IDE 对话历史失败", exc_info=True)
-
-
-def _build_ide_url_for_pipeline(
-    params: PipelineParams, ws_id: str, conversation_id: Optional[int], model: str
-) -> Optional[str]:
-    """Pipeline 内部生成 IDE URL。"""
-    ws_mgr = WorkspaceManager()
-    try:
-        ws_path = ws_mgr.get_workspace_path(ws_id)
-        ide_token = params.ide_token or create_ide_access_token(params.user_id, params.tenant_id, ws_id)
-        # api_base_builder 可能包含 {ws_id} 占位符
-        api_base = params.api_base_builder or ""
-        if api_base and "{ws_id}" in api_base:
-            api_base = api_base.replace("{ws_id}", ws_id)
-        elif not api_base:
-            api_base = f"/api/coding/workspace/{ws_id}/ide"
-        return build_ide_url(
-            ws_path=ws_path,
-            ws_id=ws_id,
-            ide_token=ide_token,
-            api_base=api_base,
-            model=model,
-            code_server_base_url=params.code_server_base_url,
-            conversation_id=conversation_id,
-            vibe_context=f"用户: {params.message[:500]}",
-        )
-    except Exception as e:
-        logger.warning(f"生成 IDE URL 失败: {e}")
-        return None
+        logger.warning("写入会话富回放失败", exc_info=True)

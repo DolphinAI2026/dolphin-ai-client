@@ -339,103 +339,47 @@ mysql -u apaas -p apaas_builder -e "SELECT 1"
 
 进入环境管理页面，添加平台连接信息并点击"登录"。确保环境状态为"已连接"。
 
-## 9. Web IDE（code-server）集成（可选）
+## 9. 代码工作区配置
 
-集成 code-server 后，用户可以直接在浏览器中打开 VS Code 编辑工作区代码，无需安装本地 VS Code 或配置 Remote SSH。
+代码工作区已经内置在 AI Builder 前端和后端工具链中，不需要单独安装浏览器 IDE 服务。用户在 `/ai-builder/coding` 中查看文件树、源码、diff、命令输出和对话记录，后端负责读写工作区文件并执行受控命令。
 
-### 9.1 安装 code-server
+### 9.1 配置工作区根目录
 
-```bash
-# 一键安装（推荐）
-curl -fsSL https://code-server.dev/install.sh | sh
-
-# 验证
-code-server --version
-```
-
-### 9.2 配置 code-server
-
-```bash
-mkdir -p ~/.config/code-server
-cat > ~/.config/code-server/config.yaml << 'EOF'
-bind-addr: 127.0.0.1:8080
-auth: password
-password: your_ide_password
-cert: false
-EOF
-```
-
-> **说明**：code-server 监听 127.0.0.1，通过 Nginx 反向代理对外暴露，不直接暴露端口。
-
-### 9.3 预装 AI Chat 扩展（Continue）
-
-code-server 内置的 Chat 功能依赖 GitHub Copilot 登录。为避免强制登录，使用 **Continue** 扩展接入 MiniMax LLM，无需任何账号登录。
-
-```bash
-# 安装 Continue 扩展
-code-server --install-extension Continue.continue
-
-# （可选）禁用 GitHub Copilot Chat 面板，避免显示"需要登录"提示
-# code-server --uninstall-extension GitHub.copilot-chat 2>/dev/null || true
-```
-
-> **说明**：每个 workspace 创建时会自动生成 `.continue/config.json`，配置 MiniMax 模型和 API Key（从后端 `.env` 中读取），用户打开 workspace 即可直接使用 AI Chat，无需额外配置。
-
-### 9.4 启动 code-server（systemd）
-
-```bash
-# 启用并启动
-systemctl enable --now code-server@root
-
-# 查看状态
-systemctl status code-server@root
-```
-
-### 9.5 Nginx 代理 code-server
-
-在 `/etc/nginx/apaas-builder.conf` 中追加：
-
-```nginx
-# Web IDE (code-server)
-location /ide/ {
-    proxy_pass http://127.0.0.1:8080/;
-    proxy_http_version 1.1;
-    proxy_set_header Upgrade $http_upgrade;
-    proxy_set_header Connection "upgrade";
-    proxy_set_header Host $host;
-    proxy_set_header X-Real-IP $remote_addr;
-    proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
-    proxy_set_header X-Forwarded-Proto $scheme;
-    proxy_read_timeout 300s;
-}
-```
-
-重载 Nginx：
-
-```bash
-nginx -t && nginx -s reload
-```
-
-### 9.6 配置后端环境变量
-
-在 `/root/apaas-builder/backend/.env` 中添加：
+在 `/root/apaas-builder/backend/.env` 中确认：
 
 ```env
-# Web IDE
-CODE_SERVER_BASE_URL=https://your-domain.com/ide
+APAAS_WORKSPACE_ROOT=/root/apaas-builder/workspaces
+APAAS_NPM_CACHE_DIR=/root/apaas-builder/workspaces/.npm-cache
 ```
 
-重启后端：
+创建目录并确保后端进程可读写：
 
 ```bash
-systemctl restart apaas-builder
+mkdir -p /root/apaas-builder/workspaces/.npm-cache
+chown -R root:root /root/apaas-builder/workspaces
 ```
 
-### 9.7 验证
+### 9.2 配置命令执行前置
 
-1. 访问 `https://your-domain.com/ide/` 确认 code-server 登录页正常
-2. 进入 AI Coding 页面，点击「在 IDE 中打开」→「Web IDE（浏览器）」
-3. 浏览器新标签页应打开 code-server 并自动跳转到对应工作区目录
+代码工作区会按场景运行 `npm`、`mvn`、打包和上传命令。确认宿主机具备：
+
+```bash
+node -v
+npm -v
+java -version
+mvn -version
+git --version
+```
+
+如果使用容器化 sandbox，请参考根目录 [DEPLOY_CONTAINER.md](../DEPLOY_CONTAINER.md) 构建 `vibe-sandbox:latest` 并挂载 Docker socket。
+
+### 9.3 验证
+
+1. 进入 AI Builder 自开发资产库。
+2. 打开一个自开发资产或新建代码工作区。
+3. 确认左侧文件树可加载，主区域能打开源码和 diff。
+4. 让 AI 执行一次只读命令，例如读取 `src/apaas.json` 或运行构建检查。
+5. 需要发布时，通过代码工作区工具链重新打包、上传并发布应用。
 
 ## 目录结构
 
@@ -451,6 +395,6 @@ systemctl restart apaas-builder
 │   ├── dist/             # 构建产物（Nginx 指向此目录）
 │   ├── src/              # 前端源码
 │   └── package.json
-├── workspaces/           # AI Coding 工作区（code-server 编辑此目录）
+├── workspaces/           # 代码工作区文件、构建产物和 npm 缓存
 └── backend.log           # 后端日志（nohup 模式）
 ```

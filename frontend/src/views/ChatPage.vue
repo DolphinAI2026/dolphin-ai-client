@@ -415,147 +415,40 @@
         </div>
       </div>
 
-      <aside v-if="!useSpecMode && showDeploySidebar" class="deploy-side" :class="{ open: deployOpen || isUpdateReviewMode || isUpdateExecutionMode }">
-        <div class="deploy-header">
-          <div>
-            <div class="deploy-title-row">
-              <div class="deploy-title">{{ isUpdateExecutionMode ? '更新进度' : isUpdateReviewMode ? '更新概览' : '创建过程' }}</div>
-              <span v-if="isUpdateExecutionMode || currentDeployStep" class="deploy-live-badge">执行中</span>
-            </div>
-            <div class="deploy-desc">
-              {{ isUpdateExecutionMode
-                ? (updateExecutionAllDone ? '本次更新已执行完成' : '仅展示本次增量更新涉及的步骤')
-                : isUpdateReviewMode
-                ? (store.changePlan?.diffSummary || '本次仅展示与上一版设计文档对比出的更新项')
-                : (deployAllDone ? '已完成全部创建步骤' : deployRunningAll || deployExecuting ? '正在执行创建步骤' : deployOpen ? '可手动执行未完成步骤，失败项可点击重试' : '创建过程会保留在这里，可手动执行或重试步骤')
-              }}
-            </div>
-            <div v-if="isUpdateExecutionMode && currentUpdateExecutionLabel" class="deploy-current-step">{{ currentUpdateExecutionLabel }}</div>
-            <div v-else-if="currentDeployStep" class="deploy-current-step">{{ currentDeployStep.label }}</div>
-          </div>
-          <div class="deploy-header-actions">
-            <button
-              v-if="canRetryAllDeploy"
-              class="deploy-retry-all-btn"
-              type="button"
-              :disabled="deployRunningAll || deployExecuting !== null"
-              @click="deployRetryAll"
-              title="重置失败步骤并继续执行所有未完成步骤"
-            >
-              <span class="deploy-retry-all-icon" aria-hidden="true">↻</span>
-              一键重跑
-            </button>
-            <button v-if="!isUpdateReviewMode && !isUpdateExecutionMode" class="deploy-close" @click="deployOpen = false" aria-label="关闭部署面板">×</button>
-          </div>
-        </div>
-        <div v-if="isUpdateExecutionMode" class="deploy-progress">
-          <div class="dp-track"><div class="dp-fill" :style="{ width: `${updateExecutionPercent}%` }"></div></div>
-          <span class="dp-meta">{{ updateExecutionDoneCount }}/{{ updateExecutionTotalCount || 0 }}</span>
-        </div>
-        <div v-if="deployOpen && !isUpdateReviewMode && !isUpdateExecutionMode" class="deploy-progress">
-          <div class="dp-track"><div class="dp-fill" :style="{ width: `${deployPercent}%` }"></div></div>
-          <span class="dp-meta">{{ deployDoneCount }}/{{ deploySteps.length || 0 }}</span>
-        </div>
-        <div v-if="deployOpen && activeConflict && !isUpdateReviewMode && !isUpdateExecutionMode" class="deploy-conflict-card">
-          <div class="deploy-conflict-title">检测到编码冲突</div>
-          <div class="deploy-conflict-copy">{{ activeConflict.model_name }} 的编码 <code>{{ activeConflict.current_code }}</code> 已存在，已切回左侧对话区等待你确认最新编码。</div>
-        </div>
-        <div v-if="deployOpen && deployLastError && !isUpdateReviewMode && !isUpdateExecutionMode" class="deploy-conflict-card error-card">
-          <div class="deploy-conflict-title">执行失败</div>
-          <div class="deploy-conflict-copy">{{ deployLastError }}</div>
-        </div>
-        <div v-if="isUpdateExecutionMode" class="deploy-groups">
-          <div v-for="group in updateExecutionGroups" :key="group.key" class="dg" :class="{ done: group.allDone, current: group.hasCurrent, err: group.hasError }">
-            <div class="dg-hd">
-              <span class="dg-icon"><AppIcon :name="group.icon" :size="14" /></span>
-              <span class="dg-name">{{ group.title }}</span>
-              <span class="dg-badge" :class="group.allDone ? 'done' : group.hasError ? 'err' : ''">{{ group.doneCount }}/{{ group.items.length }}</span>
-            </div>
-            <div v-for="item in group.items" :key="item.id" class="ds" :class="{ [item.status]: true, current: item.status === 'current' }">
-              <div class="ds-dot" :class="item.status === 'current' ? 'pulse' : item.status">
-                <span v-if="item.status === 'completed'"><AppIcon name="check" :size="12" /></span>
-                <span v-else-if="item.status === 'error'">!</span>
-              </div>
-              <div class="ds-body">
-                <div class="ds-name">{{ item.label }}</div>
-                <div v-if="item.detail" class="ds-err">{{ item.detail }}</div>
-              </div>
-            </div>
-          </div>
-        </div>
-        <div v-else-if="isUpdateReviewMode" class="deploy-groups update-review-groups">
-          <div v-for="group in updateReviewGroups" :key="group.title" class="dg update">
-            <div class="dg-hd">
-              <span class="dg-icon"><AppIcon :name="group.icon" :size="14" /></span>
-              <span class="dg-name">{{ group.title }}</span>
-              <span class="dg-badge">{{ group.items.length }}</span>
-            </div>
-            <div v-for="item in group.items" :key="item.key" class="update-change-row">
-              <div class="update-change-copy">
-                <div class="update-change-title">{{ item.name }}</div>
-                <div class="update-change-meta">{{ item.code }}</div>
-              </div>
-              <span class="change-badge mini" :class="item.badge.tone">{{ item.badge.label }}</span>
-            </div>
-          </div>
-          <div v-if="updateReviewGroups.length === 0" class="doc-version-empty">本次更新未检测到可执行变更</div>
-        </div>
-        <div v-else-if="deployOpen && !isUpdateExecutionMode" class="deploy-groups">
-          <div v-for="group in deployGroups" :key="group.title" class="dg" :class="{ done: group.allDone, err: group.hasError, current: group.steps.some(step => step.key === deployExecuting) }">
-            <div class="dg-hd">
-              <span class="dg-icon"><AppIcon :name="group.icon" :size="14" /></span>
-              <span class="dg-name">{{ group.title }}</span>
-              <span class="dg-badge" :class="group.allDone ? 'done' : group.hasError ? 'err' : ''">{{ group.doneCount }}/{{ group.steps.length }}</span>
-            </div>
-            <div v-for="step in group.steps" :key="step.key" class="ds" :class="{ [step.status]: true, current: deployExecuting === step.key }">
-              <div class="ds-dot" :class="deployExecuting === step.key ? 'pulse' : step.status">
-                <span v-if="step.status === 'completed'"><AppIcon name="check" :size="12" /></span>
-                <span v-else-if="step.status === 'error'">!</span>
-              </div>
-              <div class="ds-body">
-                <div class="ds-name">{{ step.label }}</div>
-                <div v-if="step.error" class="ds-err">{{ step.error }}</div>
-              </div>
-              <div class="ds-act">
-                <span v-if="deployExecuting === step.key" class="ds-spin"></span>
-                <button v-else-if="step.status === 'error'" class="ds-btn retry" @click="deployRedo(step.key)">重试</button>
-                <button v-else-if="step.status !== 'completed' && step.deps_met" class="ds-btn run" @click="deployExec(step.key)">执行</button>
-                <span v-else-if="!step.deps_met && step.status !== 'completed'" class="ds-lock"><AppIcon name="lock" :size="12" /></span>
-              </div>
-            </div>
-          </div>
-          <div v-if="deployAllDone" class="deploy-done">
-            部署已完成
-            <button class="deploy-done-btn" @click="openInPlatform">查看应用</button>
-          </div>
-        </div>
-        <div v-if="executionLogs.length" class="deploy-log-card compact" :class="{ expanded: deployLogExpanded }">
-          <button class="deploy-log-header toggle" type="button" @click="deployLogExpanded = !deployLogExpanded">
-            <div class="deploy-log-title-wrap">
-              <span>执行日志</span>
-              <span class="deploy-log-count">{{ executionLogs.length }} 条</span>
-            </div>
-            <div class="deploy-log-summary">
-              <span class="deploy-log-summary-text">{{ latestExecutionLog?.message || '暂无日志' }}</span>
-              <span class="deploy-log-toggle">{{ deployLogExpanded ? '收起' : '展开' }}</span>
-            </div>
-          </button>
-          <div v-if="deployLogExpanded" class="deploy-log-list">
-            <div
-              v-for="log in executionLogs"
-              :key="log.id"
-              class="deploy-log-item"
-              :class="log.level"
-            >
-              <div class="deploy-log-meta">
-                <span class="deploy-log-level">{{ log.levelLabel }}</span>
-                <span class="deploy-log-time">{{ log.time }}</span>
-              </div>
-              <div class="deploy-log-text">{{ log.message }}</div>
-            </div>
-          </div>
-        </div>
-      </aside>
+      <DeployProgressPanel
+        :visible="!useSpecMode && showDeploySidebar"
+        :deploy-open="deployOpen"
+        :is-update-review-mode="isUpdateReviewMode"
+        :is-update-execution-mode="isUpdateExecutionMode"
+        :update-execution-all-done="updateExecutionAllDone"
+        :current-update-execution-label="currentUpdateExecutionLabel"
+        :current-deploy-step="currentDeployStep"
+        :deploy-all-done="deployAllDone"
+        :deploy-running-all="deployRunningAll"
+        :deploy-executing="deployExecuting"
+        :deploy-last-error="deployLastError"
+        :active-conflict="activeConflict"
+        :can-retry-all="canRetryAllDeploy"
+        :update-execution-percent="updateExecutionPercent"
+        :update-execution-done-count="updateExecutionDoneCount"
+        :update-execution-total-count="updateExecutionTotalCount"
+        :deploy-percent="deployPercent"
+        :deploy-done-count="deployDoneCount"
+        :deploy-steps="deploySteps"
+        :update-execution-groups="updateExecutionGroups"
+        :update-review-groups="updateReviewGroups"
+        :deploy-groups="deployGroups"
+        :execution-logs="executionLogs"
+        :latest-execution-log="latestExecutionLog"
+        :log-expanded="deployLogExpanded"
+        :diff-summary="store.changePlan?.diffSummary || ''"
+        @close="deployOpen = false"
+        @retry-all="deployRetryAll"
+        @redo="deployRedo"
+        @exec="deployExec"
+        @open-platform="openInPlatform"
+        @update:log-expanded="deployLogExpanded = $event"
+      />
 
       <!-- SPEC three-pane (Phase β): replaces preview-side + deploy-aside when in spec mode -->
       <div v-if="showSpecArtifactPanel" class="spec-canvas-pane">
@@ -570,83 +463,25 @@
     <EnvSelectModal v-model="showEnvSelect" @selected="onEnvSelected" />
     <input ref="docVersionInputRef" type="file" accept=".md,.markdown" hidden @change="handleDocVersionInputChange" />
     <input ref="reparseInputRef" type="file" accept=".md,.pdf,.docx,.doc,.txt,.markdown" hidden @change="handleReparseInputChange" />
-    <el-dialog v-model="docVersionPreviewVisible" :title="docVersionPreviewTitle" width="860px" class="doc-preview-dialog" destroy-on-close>
-      <div v-if="docVersionPreviewStructuredResult" class="doc-preview-body structured-doc-host">
-        <StructuredDocRenderer :doc-result="docVersionPreviewStructuredResult" />
-      </div>
-      <pre v-else class="doc-preview-body plain-doc-fallback">{{ docVersionPreviewContent }}</pre>
-    </el-dialog>
-    <el-dialog
-      v-model="docFullscreenVisible"
-      :title="docFullscreenTitle"
-      width="96vw"
-      top="2vh"
-      class="doc-preview-dialog doc-preview-dialog-fullscreen"
-      destroy-on-close
-    >
-      <div v-if="docFullscreenStructuredResult" class="doc-preview-body fullscreen structured-doc-host">
-        <StructuredDocRenderer :doc-result="docFullscreenStructuredResult" />
-      </div>
-      <pre v-else class="doc-preview-body fullscreen plain-doc-fallback">{{ docFullscreenContent }}</pre>
-    </el-dialog>
-    <el-dialog v-model="docVersionDiffVisible" title="文档版本对比" width="1220px" class="doc-diff-dialog" destroy-on-close>
-      <div class="diff-summary-bar">
-        <span class="diff-stat added">新增 {{ docDiffStats.added }}</span>
-        <span class="diff-stat removed">删除 {{ docDiffStats.removed }}</span>
-        <span class="diff-stat modified">修改 {{ docDiffStats.modified }}</span>
-        <span class="diff-stat unchanged">未变更 {{ docDiffStats.same }}</span>
-      </div>
-      <div class="doc-diff-container">
-        <div class="diff-changes-panel">
-          <div class="dcp-title">变更摘要</div>
-          <div class="dcp-list">
-            <div v-if="diffChangeSummary.length === 0" class="dcp-empty">暂无结构化摘要</div>
-            <div v-for="(item, idx) in diffChangeSummary" :key="`${item.type}-${idx}`" class="dcp-item" :class="item.type">
-              <span class="dcp-icon">{{ item.type === 'added' ? '+' : item.type === 'removed' ? '-' : '~' }}</span>
-              <span class="dcp-text">{{ item.text }}</span>
-            </div>
-          </div>
-        </div>
-        <div class="doc-diff-pane">
-          <div class="doc-diff-pane-title">{{ docVersionDiffLeftTitle }}</div>
-          <div class="doc-diff-content">
-            <div v-if="docVersionDiffLeftStructuredResult" class="doc-diff-structured structured-doc-host">
-              <StructuredDocDiffRenderer :doc-result="docVersionDiffLeftStructuredResult" :diff-meta="structuredDocDiffMeta.left" />
-            </div>
-            <template v-else>
-              <div
-                v-for="(line, idx) in docDiffResult.left"
-                :key="`left-${idx}`"
-                class="doc-diff-line"
-                :class="line.type"
-              >
-                <span class="doc-diff-lineno">{{ idx + 1 }}</span>
-                <span class="doc-diff-text">{{ line.text || ' ' }}</span>
-              </div>
-            </template>
-          </div>
-        </div>
-        <div class="doc-diff-pane">
-          <div class="doc-diff-pane-title">{{ docVersionDiffRightTitle }}</div>
-          <div class="doc-diff-content">
-            <div v-if="docVersionDiffRightStructuredResult" class="doc-diff-structured structured-doc-host">
-              <StructuredDocDiffRenderer :doc-result="docVersionDiffRightStructuredResult" :diff-meta="structuredDocDiffMeta.right" />
-            </div>
-            <template v-else>
-              <div
-                v-for="(line, idx) in docDiffResult.right"
-                :key="`right-${idx}`"
-                class="doc-diff-line"
-                :class="line.type"
-              >
-                <span class="doc-diff-lineno">{{ idx + 1 }}</span>
-                <span class="doc-diff-text">{{ line.text || ' ' }}</span>
-              </div>
-            </template>
-          </div>
-        </div>
-      </div>
-    </el-dialog>
+    <DocVersionDialogs
+      v-model:preview-visible="docVersionPreviewVisible"
+      v-model:fullscreen-visible="docFullscreenVisible"
+      v-model:diff-visible="docVersionDiffVisible"
+      :preview-title="docVersionPreviewTitle"
+      :preview-structured-result="docVersionPreviewStructuredResult"
+      :preview-content="docVersionPreviewContent"
+      :fullscreen-title="docFullscreenTitle"
+      :fullscreen-structured-result="docFullscreenStructuredResult"
+      :fullscreen-content="docFullscreenContent"
+      :diff-stats="docDiffStats"
+      :diff-change-summary="diffChangeSummary"
+      :diff-left-title="docVersionDiffLeftTitle"
+      :diff-right-title="docVersionDiffRightTitle"
+      :diff-left-structured-result="docVersionDiffLeftStructuredResult"
+      :diff-right-structured-result="docVersionDiffRightStructuredResult"
+      :structured-doc-diff-meta="structuredDocDiffMeta"
+      :doc-diff-result="docDiffResult"
+    />
     <el-dialog v-model="showApiLogs" title="API 调用日志" width="80%" :append-to-body="true">
       <div class="api-logs-header">
         <el-select v-model="apiLogFilter" placeholder="筛选步骤" clearable size="small" style="width:200px">
@@ -874,13 +709,27 @@ import WorkbenchShell from '@/components/WorkbenchShell.vue'
 import AppChatPanel from '@/components/AppChatPanel.vue'
 import ChooseAppTargetDialog from '@/components/ChooseAppTargetDialog.vue'
 import SessionSidebar, { type SessionItem as SidebarSessionItem } from '@/components/common/SessionSidebar.vue'
-import StructuredDocRenderer from '@/components/StructuredDocRenderer.vue'
-import StructuredDocDiffRenderer from '@/components/StructuredDocDiffRenderer.vue'
+import DeployProgressPanel from '@/components/chat/DeployProgressPanel.vue'
+import DocVersionDialogs from '@/components/chat/DocVersionDialogs.vue'
 import DeployHistoryDrawer from '@/components/v2/DeployHistoryDrawer.vue'
 import { llmConfigApi, type BuilderModelOption } from '@/api/llmConfig'
 import { convertConfig } from '@/api/conversation'
 import { buildStructuredDocFromPreviewConfig } from '@/utils/structuredDoc'
 import { computeStructuredDocDiff } from '@/utils/structuredDocDiff'
+import {
+  APP_CONFIG_TOP_TABS_ENABLED,
+  SECTION_DEFAULT_TAB,
+  SECTION_STORAGE_KEY,
+  SECTION_TAB_STORAGE_KEY,
+  SECTION_TO_TOP_TAB,
+  SPEC_TAB_ENABLED,
+  TOP_TAB_SUBS,
+  DESIGNER_SUBS,
+  getInitialSection,
+  getInitialSectionTab,
+  normalizeTopTab,
+  type DesignerSubCode,
+} from '@/composables/useAppConfigTabs'
 import { useSpecStore } from '@/stores/spec'
 import PhaseBar from '@/components/spec/PhaseBar.vue'
 import SpecCanvas from '@/components/spec/SpecCanvas.vue'
@@ -2271,98 +2120,28 @@ const designerRefreshKey = ref(0)
 // PR2b (SPEC v2 §1.1) — SectionNav 状态
 // 5 section: data/ui/logic/permission/extension, 默认 ui (跟以前 ApaasMenuSidebar 行为对齐)
 // 2026-05-31: 顶部「功能 / 数据源 / 权限 / 日志」入口移除, 进入应用直接展示功能页。
-const APP_CONFIG_TOP_TABS_ENABLED = false
-const SECTION_STORAGE_KEY = 'apaas-section-v1'
-const SECTION_TAB_STORAGE_KEY = 'apaas-section-tab-v1'
-// 各 section 默认 sub-tab — initial load + onSwitchSection 不传 tab 时用
-const SECTION_DEFAULT_TAB: Record<string, string> = {
-  data: 'models',
-  ui: 'menus',
-  logic: 'processes',
-  permission: 'roles',
-  extension: 'dev_kit',
-}
-const _initSection = (() => {
-  if (!APP_CONFIG_TOP_TABS_ENABLED) return 'ui'
-  try { return localStorage.getItem(SECTION_STORAGE_KEY) || 'ui' } catch { return 'ui' }
-})()
-const _initSectionTab = (() => {
-  if (!APP_CONFIG_TOP_TABS_ENABLED) return 'menus'
-  try {
-    const saved = localStorage.getItem(SECTION_TAB_STORAGE_KEY)
-    if (saved) return saved
-  } catch { /* private mode */ }
-  return SECTION_DEFAULT_TAB[_initSection] || 'menus'
-})()
+const _initSection = getInitialSection()
+const _initSectionTab = getInitialSectionTab(_initSection)
 const currentSection = ref<string>(_initSection)
 const currentSectionTab = ref<string>(_initSectionTab)
 
 // 2026-05-26 design-v3: 顶部 5 tab (设计/数据/流程/权限/日志). 跟旧 currentSection 双向同步.
 // 旧 SECTION (data/ui/logic/permission/extension) 映射到新 TopTab:
 //   data → data, ui → design, logic → logic, permission → perm, extension → 日志 (extension 退场)
-const SECTION_TO_TOP_TAB: Record<string, string> = {
-  data: 'data',
-  ui: 'design',
-  logic: 'logic',
-  permission: 'perm',
-  extension: 'log',
-}
 // 2026-05-29: 暂时隐藏「设计」(spec) tab — 用户反馈那一大坨 read-only SPEC 文档平铺太重,
 // 进应用直接用「功能」tab + 配置助手对话调整即可。改开关为 true 即整体恢复(组件/逻辑都保留,
 // 仅不显示 + 把落到 spec 的入口归一到 design)。⚠️ 别删 SpecDesignPanel 本体(low-code 核心线)。
-const SPEC_TAB_ENABLED = false
-function normalizeTopTab(tab: string): string {
-  if (!APP_CONFIG_TOP_TABS_ENABLED) return 'design'
-  return (!SPEC_TAB_ENABLED && tab === 'spec') ? 'design' : tab
-}
 const topTab = ref<string>(normalizeTopTab(SECTION_TO_TOP_TAB[_initSection] || 'design'))
 function onSubNavSwitch(sub: string) {
   currentSectionTab.value = sub
   try { localStorage.setItem(SECTION_TAB_STORAGE_KEY, sub) } catch {}
 }
 // sub-tab chips for current top tab (5 个 top tab 各有自己的 sub-tab 集合)
-const TOP_TAB_SUBS: Record<string, Array<{ code: string; label: string }>> = {
-  design: [
-    { code: 'menus', label: '菜单' },
-    { code: 'forms', label: '表单' },
-    { code: 'lists', label: '列表' },
-  ],
-  data: [
-    { code: 'models', label: '数据模型' },
-    { code: 'dicts', label: '字典' },
-  ],
-  logic: [
-    { code: 'processes', label: '流程' },
-    { code: 'events', label: '业务事件' },
-  ],
-  perm: [
-    { code: 'roles', label: '角色' },
-    { code: 'field_perm', label: '字段权限' },
-    { code: 'menu_vis', label: '菜单可见性' },
-  ],
-  log: [
-    { code: 'op_log', label: '操作日志' },
-    { code: 'deploy_history', label: '部署历史' },
-  ],
-}
 const currentSubTabsForTop = computed(() => TOP_TAB_SUBS[topTab.value] || [])
 
 // 2026-05-26 设计 tab 内部 designer sub-nav (跟 apaas form designer 顶部 4 tab 对齐).
 // 用户在左侧 ApaasMenuSidebar 选中菜单后, designer 主区域顶部 4 tab 切对应 panel.
-const DESIGNER_SUBS = [
-  { code: 'form', label: '表单设计' },
-  { code: 'list', label: '列表设计' },
-  { code: 'process', label: '流程设计' },
-  // 2026-06-05: 业务事件 tab 暂时隐藏 —— 生成的自定义节点 Python 不符合平台 definesys 规范
-  // (agent 瞎猜 API/拿不到字段 uuid → 事件建出来不可执行)。读侧/写侧 spec 见
-  // docs/research-apaas-event-python-spec-2026-06-05.md。修好生成后把下面这行取消注释即恢复。
-  // { code: 'event', label: '业务事件' },
-  { code: 'data', label: '数据模型' },
-  { code: 'perm', label: '权限' },
-  { code: 'dev', label: '自开发' },
-  // 2026-05-29: 删「页面设置」(page) — 纯占位无功能, 改设置走配置助手对话。
-] as const
-const designerSub = ref<'form' | 'list' | 'process' | 'event' | 'data' | 'perm' | 'dev'>('form')
+const designerSub = ref<DesignerSubCode>('form')
 
 // P1-N6: 这些 sub-tab 走 native master-detail panel — 不需要再显 SectionContentList.
 const isNativeMasterDetailSubTab = computed(() => {

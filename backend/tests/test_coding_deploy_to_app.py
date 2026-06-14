@@ -12,7 +12,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 @pytest.mark.asyncio
 async def test_build_and_upload_kits_returns_kit_ids(tmp_path):
-    from app.routes import coding as coding_routes
+    from app.coding import deploy_service
 
     zip_path = tmp_path / "form-page-demo.zip"
     zip_path.write_bytes(b"PK\x03\x04demo")
@@ -28,13 +28,13 @@ async def test_build_and_upload_kits_returns_kit_ids(tmp_path):
     resp = MagicMock(status_code=200)
     resp.json.return_value = {"code": "ok"}
 
-    with patch.object(coding_routes.httpx, "AsyncClient") as MockHttp, \
-         patch.object(coding_routes, "APaaSClient") as MockClient:
+    with patch.object(deploy_service.httpx, "AsyncClient") as MockHttp, \
+         patch.object(deploy_service, "APaaSClient") as MockClient:
         MockHttp.return_value.__aenter__.return_value.post = AsyncMock(return_value=resp)
         MockClient.return_value.query_app_dev_kits = AsyncMock(
             return_value=[{"id": "999", "fileName": "form-page-demo.zip", "fileType": "FRONTENGINE"}]
         )
-        result = await coding_routes._build_and_upload_kits(
+        result = await deploy_service._build_and_upload_kits(
             ws_mgr=ws_mgr, ws_id="ws1", env=env, db=AsyncMock(),
         )
 
@@ -46,7 +46,7 @@ async def test_build_and_upload_kits_returns_kit_ids(tmp_path):
 
 @pytest.mark.asyncio
 async def test_build_and_upload_backend_adds_runtime_when_missing(tmp_path):
-    from app.routes import coding as coding_routes
+    from app.coding import deploy_service
 
     target = tmp_path / "target"
     target.mkdir()
@@ -71,14 +71,14 @@ async def test_build_and_upload_backend_adds_runtime_when_missing(tmp_path):
             {"id": "runtime-1", "fileName": "runtime-5.0.0.jar", "fileType": "BACKENDENGINE"},
         ]
 
-    with patch.object(coding_routes, "_resolve_backend_runtime_jar", return_value=runtime_jar), \
-         patch.object(coding_routes.httpx, "AsyncClient") as MockHttp, \
-         patch.object(coding_routes, "APaaSClient") as MockClient:
+    with patch.object(deploy_service, "_resolve_backend_runtime_jar", return_value=runtime_jar), \
+         patch.object(deploy_service.httpx, "AsyncClient") as MockHttp, \
+         patch.object(deploy_service, "APaaSClient") as MockClient:
         post = AsyncMock(return_value=resp)
         MockHttp.return_value.__aenter__.return_value.post = post
         MockClient.return_value.query_app_dev_kits = AsyncMock(side_effect=_query)
 
-        result = await coding_routes._build_and_upload_kits(
+        result = await deploy_service._build_and_upload_kits(
             ws_mgr=ws_mgr, ws_id="ws1", env=env, db=AsyncMock(),
         )
 
@@ -90,7 +90,7 @@ async def test_build_and_upload_backend_adds_runtime_when_missing(tmp_path):
 
 @pytest.mark.asyncio
 async def test_build_and_upload_backend_skips_existing_runtime_upload(tmp_path):
-    from app.routes import coding as coding_routes
+    from app.coding import deploy_service
 
     target = tmp_path / "target"
     target.mkdir()
@@ -120,15 +120,15 @@ async def test_build_and_upload_backend_skips_existing_runtime_upload(tmp_path):
             {"id": "runtime-1", "fileName": "runtime-5.0.0.jar", "fileType": "BACKENDENGINE"},
         ]
 
-    with patch.object(coding_routes, "_resolve_backend_runtime_jar", return_value=runtime_jar), \
-         patch.object(coding_routes, "_query_existing_development_kits", AsyncMock(side_effect=_existing)), \
-         patch.object(coding_routes.httpx, "AsyncClient") as MockHttp, \
-         patch.object(coding_routes, "APaaSClient") as MockClient:
+    with patch.object(deploy_service, "_resolve_backend_runtime_jar", return_value=runtime_jar), \
+         patch.object(deploy_service, "_query_existing_development_kits", AsyncMock(side_effect=_existing)), \
+         patch.object(deploy_service.httpx, "AsyncClient") as MockHttp, \
+         patch.object(deploy_service, "APaaSClient") as MockClient:
         post = AsyncMock(return_value=resp)
         MockHttp.return_value.__aenter__.return_value.post = post
         MockClient.return_value.query_app_dev_kits = AsyncMock(side_effect=_query)
 
-        result = await coding_routes._build_and_upload_kits(
+        result = await deploy_service._build_and_upload_kits(
             ws_mgr=ws_mgr, ws_id="ws1", env=env, db=AsyncMock(),
         )
 
@@ -204,7 +204,7 @@ async def test_upload_to_platform_backend_returns_business_and_runtime_kits(tmp_
 
 
 def test_resolve_page_register_name_prefers_apaas_custom_key():
-    from app.routes.coding import _resolve_page_register_name
+    from app.coding.deploy_service import _resolve_page_register_name
 
     assert _resolve_page_register_name({
         "outputName": "form-page-sec-risk-dashboard",
@@ -217,7 +217,7 @@ def test_resolve_page_register_name_prefers_apaas_custom_key():
 
 @pytest.mark.asyncio
 async def test_deploy_to_app_bound_page_runs_full_chain():
-    from app.routes import coding as coding_routes
+    from app.coding import deploy_service
 
     app_rec = MagicMock(id=10, apaas_app_id="84799", name="销售CRM")
     env = MagicMock(base_url="https://x", platform_tenant_id="t1", token="tok")
@@ -236,13 +236,13 @@ async def test_deploy_to_app_bound_page_runs_full_chain():
     async def _selfheal(env_id, db, fn):
         return await fn(client)
 
-    with patch.object(coding_routes, "WorkspaceManager"), \
-         patch.object(coding_routes, "_build_and_upload_kits", AsyncMock(return_value=up)), \
-         patch.object(coding_routes, "_load_app_and_env", AsyncMock(return_value=(app_rec, env))), \
-         patch.object(coding_routes, "_ensure_env_token", AsyncMock(return_value="tok")), \
-         patch.object(coding_routes, "call_apaas_with_relogin", _selfheal), \
-         patch.object(coding_routes, "publish_extension_update", AsyncMock(return_value=1)):
-        result = await coding_routes._deploy_to_app_impl(
+    with patch.object(deploy_service, "WorkspaceManager"), \
+         patch.object(deploy_service, "_build_and_upload_kits", AsyncMock(return_value=up)), \
+         patch.object(deploy_service, "_load_app_and_env", AsyncMock(return_value=(app_rec, env))), \
+         patch.object(deploy_service, "_ensure_env_token", AsyncMock(return_value="tok")), \
+         patch.object(deploy_service, "call_apaas_with_relogin", _selfheal), \
+         patch.object(deploy_service, "publish_extension_update", AsyncMock(return_value=1)):
+        result = await deploy_service._deploy_to_app_impl(
             ws_id="ws1", local_app_id=10, ctx=MagicMock(tenant_id=1), db=AsyncMock())
 
     assert result["status"] == "installed"
@@ -256,7 +256,7 @@ async def test_deploy_to_app_bound_page_runs_full_chain():
 
 @pytest.mark.asyncio
 async def test_deploy_to_app_bound_page_updates_existing_menu_link():
-    from app.routes import coding as coding_routes
+    from app.coding import deploy_service
 
     app_rec = MagicMock(id=10, apaas_app_id="84799", name="销售CRM")
     env = MagicMock(base_url="https://x", platform_tenant_id="t1", token="tok", id=7)
@@ -279,13 +279,13 @@ async def test_deploy_to_app_bound_page_updates_existing_menu_link():
     async def _selfheal(env_id, db, fn):
         return await fn(client)
 
-    with patch.object(coding_routes, "WorkspaceManager"), \
-         patch.object(coding_routes, "_build_and_upload_kits", AsyncMock(return_value=up)), \
-         patch.object(coding_routes, "_load_app_and_env", AsyncMock(return_value=(app_rec, env))), \
-         patch.object(coding_routes, "_ensure_env_token", AsyncMock(return_value="tok")), \
-         patch.object(coding_routes, "call_apaas_with_relogin", _selfheal), \
-         patch.object(coding_routes, "publish_extension_update", AsyncMock(return_value=1)):
-        result = await coding_routes._deploy_to_app_impl(
+    with patch.object(deploy_service, "WorkspaceManager"), \
+         patch.object(deploy_service, "_build_and_upload_kits", AsyncMock(return_value=up)), \
+         patch.object(deploy_service, "_load_app_and_env", AsyncMock(return_value=(app_rec, env))), \
+         patch.object(deploy_service, "_ensure_env_token", AsyncMock(return_value="tok")), \
+         patch.object(deploy_service, "call_apaas_with_relogin", _selfheal), \
+         patch.object(deploy_service, "publish_extension_update", AsyncMock(return_value=1)):
+        result = await deploy_service._deploy_to_app_impl(
             ws_id="ws1", local_app_id=10, ctx=MagicMock(tenant_id=1), db=AsyncMock())
 
     assert result["status"] == "installed"
@@ -308,7 +308,7 @@ async def test_deploy_to_app_apaas_writes_go_through_self_heal():
     实测踩到:session 开久了 apaas token 过期,点「确认装回」→ enable/attach/menu/deploy
     裸调撞 401 → 「Unauthorized」直接抛给用户。包上自愈后 401 自动重登重试。
     """
-    from app.routes import coding as coding_routes
+    from app.coding import deploy_service
 
     app_rec = MagicMock(id=10, apaas_app_id="84799", name="销售CRM")
     env = MagicMock(base_url="https://x", platform_tenant_id="t1", token="tok", id=7)
@@ -328,14 +328,14 @@ async def test_deploy_to_app_apaas_writes_go_through_self_heal():
         seen_env_ids.append(env_id)
         return await fn(client)
 
-    with patch.object(coding_routes, "WorkspaceManager"), \
-         patch.object(coding_routes, "_build_and_upload_kits", AsyncMock(return_value=up)), \
-         patch.object(coding_routes, "_load_app_and_env", AsyncMock(return_value=(app_rec, env))), \
-         patch.object(coding_routes, "_ensure_env_token", AsyncMock(return_value="tok")), \
-         patch.object(coding_routes, "APaaSClient", return_value=client), \
-         patch.object(coding_routes, "call_apaas_with_relogin", _selfheal), \
-         patch.object(coding_routes, "publish_extension_update", AsyncMock(return_value=1)):
-        result = await coding_routes._deploy_to_app_impl(
+    with patch.object(deploy_service, "WorkspaceManager"), \
+         patch.object(deploy_service, "_build_and_upload_kits", AsyncMock(return_value=up)), \
+         patch.object(deploy_service, "_load_app_and_env", AsyncMock(return_value=(app_rec, env))), \
+         patch.object(deploy_service, "_ensure_env_token", AsyncMock(return_value="tok")), \
+         patch.object(deploy_service, "APaaSClient", return_value=client), \
+         patch.object(deploy_service, "call_apaas_with_relogin", _selfheal), \
+         patch.object(deploy_service, "publish_extension_update", AsyncMock(return_value=1)):
+        result = await deploy_service._deploy_to_app_impl(
             ws_id="ws1", local_app_id=10, ctx=MagicMock(tenant_id=1), db=AsyncMock())
 
     assert result["status"] == "installed"
@@ -348,7 +348,7 @@ async def test_deploy_to_app_apaas_writes_go_through_self_heal():
 
 @pytest.mark.asyncio
 async def test_deploy_to_app_lib_uploads_only():
-    from app.routes import coding as coding_routes
+    from app.coding import deploy_service
 
     env = MagicMock(token="tok")
     up = {"kit_ids": ["1"], "file_type": "FRONTCOMPONENT", "project_type": "form-component",
@@ -358,10 +358,10 @@ async def test_deploy_to_app_lib_uploads_only():
     db = AsyncMock()
     db.execute = AsyncMock(return_value=result_obj)
 
-    with patch.object(coding_routes, "WorkspaceManager"), \
-         patch.object(coding_routes, "_ensure_env_token", AsyncMock(return_value="tok")), \
-         patch.object(coding_routes, "_build_and_upload_kits", AsyncMock(return_value=up)):
-        result = await coding_routes._deploy_to_app_impl(
+    with patch.object(deploy_service, "WorkspaceManager"), \
+         patch.object(deploy_service, "_ensure_env_token", AsyncMock(return_value="tok")), \
+         patch.object(deploy_service, "_build_and_upload_kits", AsyncMock(return_value=up)):
+        result = await deploy_service._deploy_to_app_impl(
             ws_id="ws1", local_app_id=None, ctx=MagicMock(tenant_id=1), db=db)
 
     assert result["status"] == "uploaded_only"

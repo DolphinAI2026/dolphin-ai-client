@@ -297,8 +297,6 @@ spec:
           image: \${IMAGE}
           imagePullPolicy: Always
           env:
-            - name: CODE_SERVER_BIND_HOST
-              value: "127.0.0.1"
             - name: WAIT_FOR_MYSQL
               value: "1"
             - name: APAAS_WORKSPACE_ROOT
@@ -308,8 +306,6 @@ spec:
           ports:
             - name: api
               containerPort: 8003
-            - name: ide
-              containerPort: 8080
           volumeMounts:
             - name: workspaces
               mountPath: /root/apaas-builder/workspaces

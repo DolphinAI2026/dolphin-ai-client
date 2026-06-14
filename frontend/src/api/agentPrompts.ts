@@ -23,7 +23,7 @@ export interface AgentDescriptor {
 export const AGENT_DESCRIPTORS: AgentDescriptor[] = [
   { id: 'unified', label: '全栈助手 (Unified)', desc: 'AIChat 主链路系统提示，最大流量入口' },
   { id: 'builder', label: 'Builder', desc: '应用搭建 SpecAgent，多 phase（gathering / drafting / …）' },
-  { id: 'whale', label: '二次开发 (Whale)', desc: 'Coding / IDE 工作区 codegen agent' },
+  { id: 'whale', label: '二次开发 (Whale)', desc: 'Coding / 代码工作区 codegen agent' },
 ]
 
 export const agentPromptsApi = {

@@ -1,8 +1,8 @@
 # K8s 部署清单
 
 单节点 StatefulSet 方案：一个 Pod 里跑
-- **主容器**：supervisord → uvicorn (8003) + code-server (8080)
-- **sidecar nginx**：serve 前端 dist（由 initContainer 从镜像内拷到共享卷），并反代 /ai-builder/api → 主容器 8003、/ai-builder/ide → 8080
+- **主容器**：supervisord → uvicorn (8003)
+- **sidecar nginx**：serve 前端 dist（由 initContainer 从镜像内拷到共享卷），并反代 /ai-builder/api → 主容器 8003
 
 集群入口：Ingress（nginx class）→ Service:80 → Pod 里 nginx sidecar。
 
@@ -47,8 +47,8 @@ Service apaas-builder:80
     ▼
 StatefulSet apaas-builder (replicas=1, nodeAffinity app-tier=true)
     ├─ initContainer  copy-frontend-dist: cp /app/frontend/dist → emptyDir
-    ├─ container      apaas-builder:   uvicorn:8003 + code-server:8080
-    └─ container      web (nginx):     serve emptyDir dist, proxy /api:8003 /ide:8080
+    ├─ container      apaas-builder:   uvicorn:8003
+    └─ container      web (nginx):     serve emptyDir dist, proxy /api:8003
 
   volumes:
    - workspaces  ← PVC (local-path, 50Gi, RWO, 固定节点)
@@ -87,15 +87,12 @@ HOST=0.0.0.0
 PORT=8003
 ENABLE_CODE_SUFFIX=false
 
-# Web IDE 外部 URL（用户浏览器访问的入口，ingress host + /ai-builder/ide/）
-CODE_SERVER_BASE_URL=https://df-aigc.dfy.definesys.cn/ai-builder/ide/
-
 # npm-cache 跟 workspaces 在同一 PVC 下
 APAAS_WORKSPACE_ROOT=/root/apaas-builder/workspaces
 APAAS_NPM_CACHE_DIR=/root/apaas-builder/workspaces/.npm-cache
 ```
 
-> 注意：`backend.env` 里的 `APAAS_WORKSPACE_ROOT` 只作为配置留档；后端工作区代码直接读取进程环境变量。`30-statefulset.yaml` 必须同步显式注入 `APAAS_WORKSPACE_ROOT=/root/apaas-builder/workspaces` 和 `APAAS_NPM_CACHE_DIR=/root/apaas-builder/workspaces/.npm-cache`，否则后端会回退到镜像内 `/app/workspaces`，与 code-server/PVC 路径不一致。
+> 注意：`backend.env` 里的 `APAAS_WORKSPACE_ROOT` 只作为配置留档；后端工作区代码直接读取进程环境变量。`30-statefulset.yaml` 必须同步显式注入 `APAAS_WORKSPACE_ROOT=/root/apaas-builder/workspaces` 和 `APAAS_NPM_CACHE_DIR=/root/apaas-builder/workspaces/.npm-cache`，否则后端会回退到镜像内 `/app/workspaces`，导致 workspace 与 sandbox 挂载路径不一致。
 
 先建 namespace，再建 secret：
 
@@ -215,25 +212,6 @@ docker build --platform linux/amd64 --build-arg VITE_BASE_URL=<prefix> ...
 
 并同步修改 Ingress 的 path、nginx sidecar ConfigMap 里的 location 规则。
 
-## code-server / 睿鲸 AI 扩展
-
-容器镜像会在构建时完成两件事：
-
-1. 从 `extensions/ruijing-ai` 构建并安装 `apaas-builder.ruijing-ai` VSIX。
-2. 执行 `scripts/patch_all.js --code-server-path /opt/code-server`，把 code-server 原生 Chat 对 `GitHub.copilot-chat` 的检查切到 `apaas-builder.ruijing-ai`。
-
-部署后可用以下命令确认：
-
-```bash
-kubectl -n apaas-builder exec apaas-builder-0 -c apaas-builder -- \
-  sh -lc 'code-server --list-extensions --show-versions | grep ruijing'
-
-kubectl -n apaas-builder exec apaas-builder-0 -c apaas-builder -- \
-  sh -lc 'WB=/opt/code-server/lib/vscode/out/vs/code/browser/workbench/workbench.js; grep -q GitHub.copilot-chat "$WB" && echo "patch missing" || echo "patch ok"'
-```
-
-期望输出包含 `apaas-builder.ruijing-ai@0.1.0`，并显示 `patch ok`。
-
 ## 回滚
 
 ```bash
@@ -260,5 +238,4 @@ kubectl delete ns apaas-builder
 | Pod Pending（调度不上）| 没有 `app-tier=true` 标签节点，或 PVC 绑定失败 | `kubectl describe pod` 看 events；标签通过 `kubectl label node <x> apaas.definesys.com/app-tier=true` 加 |
 | readinessProbe 失败 | 首次启动 init_db 慢（远程 MySQL 连慢） | 看 apaas-builder 容器日志里有没有 `Application startup complete`；改 probe initialDelay |
 | nginx sidecar 404 / 无 index.html | initContainer cp 失败 | `kubectl logs apaas-builder-0 -c copy-frontend-dist`；检查镜像里是否真有 `/app/frontend/dist` |
-| IDE 白屏 | CODE_SERVER_BASE_URL 和 ingress host 不一致 | backend.env 里 `CODE_SERVER_BASE_URL=https://<ingress host>/ide/` |
 | SSE 请求被断 | ingress 漏配 proxy-buffering off | 已在 50-ingress.yaml annotations 里配，检查 nginx-ingress-controller 是否尊重 |

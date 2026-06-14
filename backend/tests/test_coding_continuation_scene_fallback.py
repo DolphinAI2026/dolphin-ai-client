@@ -84,7 +84,7 @@ async def test_confirm_continuation_survives_unsupported_scene():
         patch("app.coding.pipeline.save_coding_message", new=AsyncMock()),
         patch("app.coding.pipeline.extract_project_name", new=AsyncMock(return_value="home")),
         patch("app.coding.pipeline.WorkspaceManager.create_workspace",
-              return_value={"id": "ws-1", "project_name": "home", "display_name": "首页", "ide_url": "u"}),
+              return_value={"id": "ws-1", "project_name": "home", "display_name": "首页"}),
         patch("app.coding.pipeline.WorkspaceManager.get_workspace_info", return_value={}),
         patch("app.coding.pipeline.append_event_to_stream_replay"),
         patch("app.agents.coding.CodingAgent", return_value=MagicMock()),

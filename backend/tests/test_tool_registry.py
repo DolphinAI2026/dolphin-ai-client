@@ -6,7 +6,7 @@ test_tool_registry.py — SPEC v2 PR1.
   2) 每个工具有 sections / agents 字段, 取值合法
   3) tools_for_agent("config") 跟 PR1 之前的硬编码白名单 byte-equal (行为不变)
   4) tools_for_section() 软引导正确返回 affinity 工具
-  5) tool_registry.yaml 全量工具 == mcp_server.py @mcp.tool() 真实注册 (无 drift)
+  5) tool_registry.yaml 全量工具 == MCP source files @mcp.tool() 真实注册 (无 drift)
 """
 from __future__ import annotations
 
@@ -420,32 +420,43 @@ def test_agent_filter_rejects_invalid():
         tools_for_agent("hacker")
 
 
-# ─────────────────────── 5. Drift detection — yaml vs mcp_server.py ───────────────────────
+# ─────────────────────── 5. Drift detection — yaml vs MCP source files ───────────────────────
+
+
+def _mcp_source_paths() -> list[Path]:
+    app_dir = Path(__file__).parent.parent / "app"
+    tool_dir = app_dir / "mcp_tools"
+    paths = [app_dir / "mcp_server.py"]
+    if tool_dir.exists():
+        paths.extend(sorted(p for p in tool_dir.glob("*.py") if p.name != "__init__.py"))
+    return paths
+
+
+def _is_mcp_tool_decorator(deco: ast.expr) -> bool:
+    # @mcp.tool() 或 @mcp.tool(description="...")
+    return (
+        isinstance(deco, ast.Call)
+        and isinstance(deco.func, ast.Attribute)
+        and deco.func.attr == "tool"
+    )
 
 
 def _extract_mcp_tool_names_from_source() -> set[str]:
-    """从 backend/app/mcp_server.py AST 提取所有 @mcp.tool() 装饰的 async def 名."""
-    mcp_path = Path(__file__).parent.parent / "app" / "mcp_server.py"
-    src = mcp_path.read_text(encoding="utf-8")
-    tree = ast.parse(src)
+    """从 backend/app/mcp_server.py 与 app/mcp_tools/*.py AST 提取 @mcp.tool() 函数名."""
     names: set[str] = set()
-    for node in tree.body:
-        if not isinstance(node, ast.AsyncFunctionDef):
-            continue
-        for deco in node.decorator_list:
-            # @mcp.tool() 或 @mcp.tool(description="...")
-            if (
-                isinstance(deco, ast.Call)
-                and isinstance(deco.func, ast.Attribute)
-                and deco.func.attr == "tool"
-            ):
+    for mcp_path in _mcp_source_paths():
+        src = mcp_path.read_text(encoding="utf-8")
+        tree = ast.parse(src)
+        for node in ast.walk(tree):
+            if not isinstance(node, (ast.AsyncFunctionDef, ast.FunctionDef)):
+                continue
+            if any(_is_mcp_tool_decorator(deco) for deco in node.decorator_list):
                 names.add(node.name)
-                break
     return names
 
 
 def test_yaml_matches_mcp_server_source():
-    """tool_registry.yaml 全量工具 == mcp_server.py 真实注册.
+    """tool_registry.yaml 全量工具 == MCP source files 真实注册.
 
     SPEC v2 §5.3: 加新工具忘了在 yaml 里加 entry, 或反过来 yaml 列了源码没注册的
     工具, CI 都拦. 这是 single source of truth 的硬契约.
@@ -459,12 +470,12 @@ def test_yaml_matches_mcp_server_source():
     msg_parts = []
     if only_yaml:
         msg_parts.append(
-            f"yaml 列了但 mcp_server.py 没注册的工具: {sorted(only_yaml)} "
+            f"yaml 列了但 MCP source files 没注册的工具: {sorted(only_yaml)} "
             f"(yaml 删 entry 或源码补 @mcp.tool() async def)"
         )
     if only_src:
         msg_parts.append(
-            f"mcp_server.py 注册了但 yaml 缺 entry 的工具: {sorted(only_src)} "
+            f"MCP source files 注册了但 yaml 缺 entry 的工具: {sorted(only_src)} "
             f"(请在 backend/tool_registry.yaml 加 entry)"
         )
     if msg_parts:

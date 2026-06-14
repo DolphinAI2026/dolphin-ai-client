@@ -589,7 +589,6 @@
     "run_command"
   ],
   "workspace_id": "1_bb5ab390",
-  "ide_url": "http://127.0.0.1:8080/?folder=%2FUsers%2Fmars%2FDesktop%2Fapaas-build%2Fapaas-builder-ai%2F.claude%2Fworktrees%2Fcompetent-chatterjee-6d4c33%2Ftests%2Ffixtures%2Fbaselines%2F_record_workspaces%2Fform-component-star-rating__1_bb5ab390&vibe_workspace_id=1_bb5ab390&vibe_api_base=%2Fapi%2Fcoding%2Fworkspace%2F1_bb5ab390%2Fide&vibe_harness_api_base=%2Fapi%2Fharness%2Fcoding%2Fworkspace%2F1_bb5ab390%2Fide&vibe_ide_token=eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiIxIiwidGlkIjoxLCJ0eXBlIjoiaWRlX2FjY2VzcyIsIndzIjoiMV9iYjVhYjM5MCIsImV4cCI6MTc3NjYyNjE3MH0.zcA9MdCdhjZ9up2mPCQVMBZh1P2QmkuHPQKUkJw9x9w&vibe_model=MiniMax-M2.7&vibe_conversation_id=1&vibe_context=%E7%94%A8%E6%88%B7%3A+%E7%A1%AE%E8%AE%A4",
   "final_status": "success",
   "error_message": null
 }

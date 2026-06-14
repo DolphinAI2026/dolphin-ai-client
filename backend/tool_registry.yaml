@@ -3,7 +3,7 @@
 # 派生视图: backend/app/tool_registry.py — tools_for_section(s) / tools_for_agent(a) / all_tool_names()
 #
 # 加新工具流程:
-#   1) backend/app/mcp_server.py 加 @mcp.tool() 装饰的 async def
+#   1) backend/app/mcp_server.py 或 backend/app/mcp_tools/*.py 加 @mcp.tool() 装饰的 async def
 #   2) 本文件加 entry (sections + agents + category + description)
 #   3) 跑 backend/tests/test_tool_registry.py 确认 CI 过
 #

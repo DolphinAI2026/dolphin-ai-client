@@ -205,7 +205,7 @@ RUN chmod +x /usr/local/bin/entrypoint.sh
 # 老 ENV JAVA_HOME=/opt/java/openjdk 会覆盖 wrapper 的 JAVA_HOME=/opt/jdk17，删干净
 
 # host 网络下无需 EXPOSE，但保留作为文档说明
-# 实际监听端口由 PORT / CODE_SERVER_PORT 环境变量控制，默认 8003/8080
-EXPOSE 8003 8080
+# 实际监听端口由 PORT 环境变量控制，默认 8003
+EXPOSE 8003
 
 ENTRYPOINT ["/usr/local/bin/entrypoint.sh"]

@@ -107,17 +107,10 @@ npm run dev
 # 默认端口 5173（代理到后端 8000）
 ```
 
-**code-server（本地 IDE）：**
-```bash
-~/code-server/bin/code-server
-# 配置文件：~/.config/code-server/config.yaml（bind-addr: 127.0.0.1:8080, auth: none）
-```
-
 ### 访问地址
 
 - 前端：http://localhost:5173
 - 后端 API：http://localhost:8000
-- code-server：http://localhost:8080
 - 线上环境：https://agent.dfy.definesys.cn/ai-builder/
 
 ## 技术栈
@@ -133,10 +126,10 @@ npm run dev
 - Element Plus — UI 组件库
 - Pinia — 状态管理
 
-### 远程 IDE
-- code-server 4.112.0（VS Code Web）
-- MiniMax Chat Provider 扩展（替代 GitHub Copilot Chat）
-- 部署在阿里云 ECS
+### 代码工作区
+- AI Builder 原生文件树 / 代码查看 / diff
+- 后端工作区命令与构建工具
+- 自开发资产上传和应用重新发布工具
 
 ## Git 规范
 
@@ -166,12 +159,8 @@ __pycache__/        # Python 缓存
 
 关键步骤：
 1. 后端部署到阿里云 ECS
-2. code-server 部署 + workbench.js patch（用 `scripts/patch_vscode_*.js`）
-3. 前端 `npm run build` → 静态文件部署
-
-### code-server patch 策略
-
-> 在本地 code-server 验证 patch 有效后，直接 `scp` 整个 workbench.js 到远程服务器覆盖。不要在远程逐个增量 patch。
+2. 前端 `npm run build` → 静态文件部署
+3. 确认 `/coding` 原生代码工作区和自开发上传链路可用
 
 ## 调试
 

@@ -11,7 +11,7 @@
    - 不调用 _create_workspace_now（无 workspace 创建）
    - 不调用 detect_scene / codegen
    - emit 了 tool + content + done 事件
-   - done 事件 workspace_id=None, ide_url=None
+   - done 事件 workspace_id=None
 
 3. BUILD 路径回归
    - classify_coding_intent("建个图书首页双端组件") → BUILD
@@ -213,7 +213,6 @@ class TestRunReadQuery:
 
         done_ev = next(e for e in events if e["type"] == "done")
         assert done_ev["workspace_id"] is None
-        assert done_ev["ide_url"] is None
 
     @pytest.mark.asyncio
     async def test_no_platform_env_emits_graceful_message(self):
@@ -500,7 +499,7 @@ class TestPipelineIntegration:
 
         read_events = [
             {"type": "content", "content": "共 3 个应用"},
-            {"type": "done", "workspace_id": None, "ide_url": None, "conversation_id": None},
+            {"type": "done", "workspace_id": None, "conversation_id": None},
         ]
 
         async def _fake_read_query(params, db):

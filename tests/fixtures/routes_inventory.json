@@ -1,5 +1,19 @@
 [
   {
+    "path": "/ai-builder/admin",
+    "methods": [
+      "GET"
+    ],
+    "name": "prefixed_admin_index"
+  },
+  {
+    "path": "/ai-builder/platform-admin",
+    "methods": [
+      "GET"
+    ],
+    "name": "prefixed_platform_admin_index"
+  },
+  {
     "path": "/apaas/{path:path}",
     "methods": [
       "DELETE",
@@ -9,6 +23,153 @@
       "PUT"
     ],
     "name": "proxy_apaas"
+  },
+  {
+    "path": "/api/admin/mcp/access-info",
+    "methods": [
+      "GET"
+    ],
+    "name": "get_mcp_access_info"
+  },
+  {
+    "path": "/api/admin/mcp/access-info",
+    "methods": [
+      "PUT"
+    ],
+    "name": "update_mcp_access_info"
+  },
+  {
+    "path": "/api/admin/mcp/call",
+    "methods": [
+      "POST"
+    ],
+    "name": "call_mcp_tool"
+  },
+  {
+    "path": "/api/admin/mcp/support-triage-call",
+    "methods": [
+      "POST"
+    ],
+    "name": "call_support_triage_tool"
+  },
+  {
+    "path": "/api/admin/mcp/support-triage-tools",
+    "methods": [
+      "GET"
+    ],
+    "name": "list_support_triage_tools"
+  },
+  {
+    "path": "/api/admin/mcp/tools",
+    "methods": [
+      "GET"
+    ],
+    "name": "list_mcp_tools"
+  },
+  {
+    "path": "/api/agent-prompts/{agent_id}",
+    "methods": [
+      "GET"
+    ],
+    "name": "list_prompts"
+  },
+  {
+    "path": "/api/agent-prompts/{agent_id}/{phase}",
+    "methods": [
+      "PUT"
+    ],
+    "name": "update_prompt"
+  },
+  {
+    "path": "/api/agent-runs",
+    "methods": [
+      "GET"
+    ],
+    "name": "list_agent_runs"
+  },
+  {
+    "path": "/api/agent-runs/{run_id}",
+    "methods": [
+      "GET"
+    ],
+    "name": "get_agent_run_detail"
+  },
+  {
+    "path": "/api/ai-chat/sessions",
+    "methods": [
+      "GET"
+    ],
+    "name": "list_sessions"
+  },
+  {
+    "path": "/api/ai-chat/sessions",
+    "methods": [
+      "POST"
+    ],
+    "name": "create_session"
+  },
+  {
+    "path": "/api/ai-chat/sessions/{session_id}",
+    "methods": [
+      "DELETE"
+    ],
+    "name": "delete_session"
+  },
+  {
+    "path": "/api/ai-chat/sessions/{session_id}",
+    "methods": [
+      "GET"
+    ],
+    "name": "get_session"
+  },
+  {
+    "path": "/api/ai-chat/sessions/{session_id}",
+    "methods": [
+      "PATCH"
+    ],
+    "name": "update_session"
+  },
+  {
+    "path": "/api/ai-chat/sessions/{session_id}/abort",
+    "methods": [
+      "POST"
+    ],
+    "name": "abort_session"
+  },
+  {
+    "path": "/api/ai-chat/sessions/{session_id}/artifacts",
+    "methods": [
+      "GET"
+    ],
+    "name": "list_artifacts"
+  },
+  {
+    "path": "/api/ai-chat/sessions/{session_id}/artifacts/{filename}",
+    "methods": [
+      "GET"
+    ],
+    "name": "get_artifact"
+  },
+  {
+    "path": "/api/ai-chat/sessions/{session_id}/artifacts/{filename}/versions",
+    "methods": [
+      "GET"
+    ],
+    "name": "list_artifact_versions"
+  },
+  {
+    "path": "/api/ai-chat/sessions/{session_id}/send",
+    "methods": [
+      "POST"
+    ],
+    "name": "send_message"
+  },
+  {
+    "path": "/api/ai-chat/sessions/{session_id}/upload",
+    "methods": [
+      "POST"
+    ],
+    "name": "upload_attachments"
   },
   {
     "path": "/api/apaas/connect",
@@ -60,6 +221,20 @@
     "name": "convert_config"
   },
   {
+    "path": "/api/applications/deploy-from-artifact",
+    "methods": [
+      "POST"
+    ],
+    "name": "deploy_from_artifact"
+  },
+  {
+    "path": "/api/applications/deploy-status/{task_id}",
+    "methods": [
+      "GET"
+    ],
+    "name": "deploy_status"
+  },
+  {
     "path": "/api/applications/doc-versions-by-conversation/{conversation_id}",
     "methods": [
       "GET"
@@ -72,6 +247,20 @@
       "POST"
     ],
     "name": "import_from_platform"
+  },
+  {
+    "path": "/api/applications/match-by-name",
+    "methods": [
+      "GET"
+    ],
+    "name": "match_applications_by_name"
+  },
+  {
+    "path": "/api/applications/page",
+    "methods": [
+      "GET"
+    ],
+    "name": "list_applications_page"
   },
   {
     "path": "/api/applications/upload-doc",
@@ -104,16 +293,44 @@
   {
     "path": "/api/applications/{app_id}",
     "methods": [
-      "GET"
-    ],
-    "name": "get_application"
-  },
-  {
-    "path": "/api/applications/{app_id}",
-    "methods": [
       "PUT"
     ],
     "name": "update_application"
+  },
+  {
+    "path": "/api/applications/{app_id}/apaas-access-url",
+    "methods": [
+      "GET"
+    ],
+    "name": "get_apaas_access_url"
+  },
+  {
+    "path": "/api/applications/{app_id}/apaas-menu-delete",
+    "methods": [
+      "POST"
+    ],
+    "name": "delete_apaas_menu"
+  },
+  {
+    "path": "/api/applications/{app_id}/apaas-menu-group",
+    "methods": [
+      "POST"
+    ],
+    "name": "create_apaas_menu_group"
+  },
+  {
+    "path": "/api/applications/{app_id}/apaas-menu-set-parent",
+    "methods": [
+      "POST"
+    ],
+    "name": "set_apaas_menu_parent"
+  },
+  {
+    "path": "/api/applications/{app_id}/apaas-menus",
+    "methods": [
+      "GET"
+    ],
+    "name": "get_application_apaas_menus"
   },
   {
     "path": "/api/applications/{app_id}/api-logs",
@@ -123,11 +340,32 @@
     "name": "list_api_logs"
   },
   {
+    "path": "/api/applications/{app_id}/apply-code-rename",
+    "methods": [
+      "POST"
+    ],
+    "name": "apply_code_rename"
+  },
+  {
+    "path": "/api/applications/{app_id}/business-events",
+    "methods": [
+      "GET"
+    ],
+    "name": "list_business_events"
+  },
+  {
     "path": "/api/applications/{app_id}/change-plans/{plan_id}",
     "methods": [
       "GET"
     ],
     "name": "get_change_plan"
+  },
+  {
+    "path": "/api/applications/{app_id}/change-plans/{plan_id}/cancel",
+    "methods": [
+      "POST"
+    ],
+    "name": "cancel_change_plan"
   },
   {
     "path": "/api/applications/{app_id}/change-plans/{plan_id}/execute",
@@ -144,11 +382,60 @@
     "name": "update_change_plan_selections"
   },
   {
+    "path": "/api/applications/{app_id}/chat-session/ensure",
+    "methods": [
+      "POST"
+    ],
+    "name": "ensure_app_chat_session"
+  },
+  {
     "path": "/api/applications/{app_id}/code",
     "methods": [
       "PATCH"
     ],
     "name": "update_app_code"
+  },
+  {
+    "path": "/api/applications/{app_id}/custom-page-host",
+    "methods": [
+      "GET"
+    ],
+    "name": "get_custom_page_host"
+  },
+  {
+    "path": "/api/applications/{app_id}/datasources",
+    "methods": [
+      "GET"
+    ],
+    "name": "get_app_datasources"
+  },
+  {
+    "path": "/api/applications/{app_id}/delivery-assets",
+    "methods": [
+      "GET"
+    ],
+    "name": "list_delivery_assets"
+  },
+  {
+    "path": "/api/applications/{app_id}/deploy-records",
+    "methods": [
+      "GET"
+    ],
+    "name": "list_deploy_records"
+  },
+  {
+    "path": "/api/applications/{app_id}/deploy-records/{record_id}",
+    "methods": [
+      "GET"
+    ],
+    "name": "get_deploy_record"
+  },
+  {
+    "path": "/api/applications/{app_id}/dev-kits",
+    "methods": [
+      "GET"
+    ],
+    "name": "list_dev_kits"
   },
   {
     "path": "/api/applications/{app_id}/doc-versions",
@@ -165,6 +452,90 @@
     "name": "delete_doc_version"
   },
   {
+    "path": "/api/applications/{app_id}/draft-doc-update",
+    "methods": [
+      "POST"
+    ],
+    "name": "draft_doc_update"
+  },
+  {
+    "path": "/api/applications/{app_id}/draft-doc-update-stream",
+    "methods": [
+      "POST"
+    ],
+    "name": "draft_doc_update_stream"
+  },
+  {
+    "path": "/api/applications/{app_id}/editor-url",
+    "methods": [
+      "GET"
+    ],
+    "name": "get_editor_url"
+  },
+  {
+    "path": "/api/applications/{app_id}/envs",
+    "methods": [
+      "GET"
+    ],
+    "name": "list_app_envs"
+  },
+  {
+    "path": "/api/applications/{app_id}/extension-update-events",
+    "methods": [
+      "GET"
+    ],
+    "name": "extension_update_events"
+  },
+  {
+    "path": "/api/applications/{app_id}/extension-update-notify",
+    "methods": [
+      "POST"
+    ],
+    "name": "notify_extension_update"
+  },
+  {
+    "path": "/api/applications/{app_id}/forms/{form_id}/business-data",
+    "methods": [
+      "GET"
+    ],
+    "name": "get_form_business_data"
+  },
+  {
+    "path": "/api/applications/{app_id}/forms/{form_id}/components",
+    "methods": [
+      "GET"
+    ],
+    "name": "get_form_components"
+  },
+  {
+    "path": "/api/applications/{app_id}/forms/{form_id}/custom-widget/chat",
+    "methods": [
+      "POST"
+    ],
+    "name": "custom_widget_chat_proxy"
+  },
+  {
+    "path": "/api/applications/{app_id}/forms/{form_id}/detail",
+    "methods": [
+      "GET"
+    ],
+    "name": "get_form_detail"
+  },
+  {
+    "path": "/api/applications/{app_id}/forms/{form_id}/permissions",
+    "methods": [
+      "GET"
+    ],
+    "name": "get_form_permissions"
+  },
+  {
+    "path": "/api/applications/{app_id}/forms/{form_id}/permissions",
+    "methods": [
+      "POST"
+    ],
+    "name": "set_form_permissions"
+  },
+  {
     "path": "/api/applications/{app_id}/generate",
     "methods": [
       "GET"
@@ -179,11 +550,60 @@
     "name": "generate_application_icon"
   },
   {
+    "path": "/api/applications/{app_id}/generate-run",
+    "methods": [
+      "POST"
+    ],
+    "name": "generate_application_async"
+  },
+  {
+    "path": "/api/applications/{app_id}/logs/{kind}",
+    "methods": [
+      "GET"
+    ],
+    "name": "get_application_logs"
+  },
+  {
     "path": "/api/applications/{app_id}/platform-config",
     "methods": [
       "PATCH"
     ],
     "name": "update_platform_config"
+  },
+  {
+    "path": "/api/applications/{app_id}/preflight-conflicts",
+    "methods": [
+      "POST"
+    ],
+    "name": "preflight_conflicts"
+  },
+  {
+    "path": "/api/applications/{app_id}/processes/{process_id}/apaas-detail",
+    "methods": [
+      "GET"
+    ],
+    "name": "get_process_apaas_detail"
+  },
+  {
+    "path": "/api/applications/{app_id}/processes/{process_id}/definition",
+    "methods": [
+      "GET"
+    ],
+    "name": "get_process_definition"
+  },
+  {
+    "path": "/api/applications/{app_id}/processes/{process_id}/deploy",
+    "methods": [
+      "POST"
+    ],
+    "name": "deploy_process_endpoint"
+  },
+  {
+    "path": "/api/applications/{app_id}/processes/{process_id}/save-definition",
+    "methods": [
+      "POST"
+    ],
+    "name": "save_process_definition"
   },
   {
     "path": "/api/applications/{app_id}/publish",
@@ -193,11 +613,165 @@
     "name": "publish_application"
   },
   {
+    "path": "/api/applications/{app_id}/publish-status",
+    "methods": [
+      "GET"
+    ],
+    "name": "get_publish_status"
+  },
+  {
+    "path": "/api/applications/{app_id}/republish",
+    "methods": [
+      "POST"
+    ],
+    "name": "republish_application"
+  },
+  {
     "path": "/api/applications/{app_id}/resolve-conflict",
     "methods": [
       "POST"
     ],
     "name": "resolve_conflict"
+  },
+  {
+    "path": "/api/applications/{app_id}/role-resource-matrix",
+    "methods": [
+      "GET"
+    ],
+    "name": "get_role_resource_matrix_endpoint"
+  },
+  {
+    "path": "/api/applications/{app_id}/rollback",
+    "methods": [
+      "POST"
+    ],
+    "name": "rollback_application"
+  },
+  {
+    "path": "/api/applications/{app_id}/section-content/business-events",
+    "methods": [
+      "GET"
+    ],
+    "name": "get_section_content_business_events"
+  },
+  {
+    "path": "/api/applications/{app_id}/section-content/dicts",
+    "methods": [
+      "GET"
+    ],
+    "name": "get_section_content_dicts"
+  },
+  {
+    "path": "/api/applications/{app_id}/section-content/field-permissions",
+    "methods": [
+      "GET"
+    ],
+    "name": "get_section_content_field_permissions"
+  },
+  {
+    "path": "/api/applications/{app_id}/section-content/forms",
+    "methods": [
+      "GET"
+    ],
+    "name": "get_section_content_forms"
+  },
+  {
+    "path": "/api/applications/{app_id}/section-content/lists",
+    "methods": [
+      "GET"
+    ],
+    "name": "get_section_content_lists"
+  },
+  {
+    "path": "/api/applications/{app_id}/section-content/menu-visibility",
+    "methods": [
+      "GET"
+    ],
+    "name": "get_section_content_menu_visibility"
+  },
+  {
+    "path": "/api/applications/{app_id}/section-content/models",
+    "methods": [
+      "GET"
+    ],
+    "name": "get_section_content_models"
+  },
+  {
+    "path": "/api/applications/{app_id}/section-content/processes",
+    "methods": [
+      "GET"
+    ],
+    "name": "get_section_content_processes"
+  },
+  {
+    "path": "/api/applications/{app_id}/section-content/roles",
+    "methods": [
+      "GET"
+    ],
+    "name": "get_section_content_roles"
+  },
+  {
+    "path": "/api/applications/{app_id}/spec-chat-stream",
+    "methods": [
+      "POST"
+    ],
+    "name": "spec_chat_stream"
+  },
+  {
+    "path": "/api/applications/{app_id}/spec-markdown",
+    "methods": [
+      "GET"
+    ],
+    "name": "get_application_spec_as_markdown"
+  },
+  {
+    "path": "/api/applications/{app_id}/spec/apply",
+    "methods": [
+      "POST"
+    ],
+    "name": "apply_spec"
+  },
+  {
+    "path": "/api/applications/{app_id}/spec/apply-plan",
+    "methods": [
+      "GET"
+    ],
+    "name": "get_apply_plan"
+  },
+  {
+    "path": "/api/applications/{app_id}/spec/export.md",
+    "methods": [
+      "GET"
+    ],
+    "name": "export_spec_md"
+  },
+  {
+    "path": "/api/applications/{app_id}/spec/markdown",
+    "methods": [
+      "GET"
+    ],
+    "name": "get_spec_markdown"
+  },
+  {
+    "path": "/api/applications/{app_id}/spec/parsed",
+    "methods": [
+      "GET"
+    ],
+    "name": "get_spec_parsed"
+  },
+  {
+    "path": "/api/applications/{app_id}/spec/versions",
+    "methods": [
+      "GET"
+    ],
+    "name": "list_spec_versions"
+  },
+  {
+    "path": "/api/applications/{app_id}/spec/versions/{version_id}",
+    "methods": [
+      "GET"
+    ],
+    "name": "get_spec_version"
   },
   {
     "path": "/api/applications/{app_id}/steps/execute",
@@ -221,11 +795,116 @@
     "name": "get_step_status"
   },
   {
+    "path": "/api/applications/{app_id}/sync-from-chat-md",
+    "methods": [
+      "POST"
+    ],
+    "name": "sync_app_from_chat_md"
+  },
+  {
+    "path": "/api/applications/{app_id}/update-apaas-info",
+    "methods": [
+      "POST"
+    ],
+    "name": "update_apaas_app_info_route"
+  },
+  {
     "path": "/api/applications/{app_id}/upload-doc-version",
     "methods": [
       "POST"
     ],
     "name": "upload_doc_version"
+  },
+  {
+    "path": "/api/applications/{application_id}/default-mode",
+    "methods": [
+      "GET"
+    ],
+    "name": "get_application_default_mode"
+  },
+  {
+    "path": "/api/applications/{application_id}/default-mode",
+    "methods": [
+      "PATCH"
+    ],
+    "name": "patch_application_default_mode"
+  },
+  {
+    "path": "/api/applications/{application_id}/drift-status",
+    "methods": [
+      "GET"
+    ],
+    "name": "drift_status_endpoint"
+  },
+  {
+    "path": "/api/applications/{application_id}/git-init",
+    "methods": [
+      "POST"
+    ],
+    "name": "init_repo_endpoint"
+  },
+  {
+    "path": "/api/applications/{application_id}/git-project/ensure",
+    "methods": [
+      "POST"
+    ],
+    "name": "ensure_application_git_project"
+  },
+  {
+    "path": "/api/applications/{application_id}/members",
+    "methods": [
+      "GET"
+    ],
+    "name": "list_application_members"
+  },
+  {
+    "path": "/api/applications/{application_id}/members",
+    "methods": [
+      "POST"
+    ],
+    "name": "invite_application_member"
+  },
+  {
+    "path": "/api/applications/{application_id}/members/{user_id}",
+    "methods": [
+      "DELETE"
+    ],
+    "name": "remove_application_member"
+  },
+  {
+    "path": "/api/applications/{application_id}/members/{user_id}",
+    "methods": [
+      "PATCH"
+    ],
+    "name": "update_application_member_role"
+  },
+  {
+    "path": "/api/applications/{application_id}/resolve-drift",
+    "methods": [
+      "POST"
+    ],
+    "name": "resolve_drift_endpoint"
+  },
+  {
+    "path": "/api/applications/{application_id}/work-state",
+    "methods": [
+      "GET"
+    ],
+    "name": "get_work_state"
+  },
+  {
+    "path": "/api/applications/{application_id}/workspaces/{workspace_id}/sync-to-repo",
+    "methods": [
+      "POST"
+    ],
+    "name": "sync_workspace_to_repo_endpoint"
+  },
+  {
+    "path": "/api/auth/exchange-apaas-token",
+    "methods": [
+      "POST"
+    ],
+    "name": "exchange_apaas_token"
   },
   {
     "path": "/api/auth/login",
@@ -242,11 +921,25 @@
     "name": "get_me"
   },
   {
-    "path": "/api/auth/register",
+    "path": "/api/auth/me/default-tenant",
     "methods": [
-      "POST"
+      "PUT"
     ],
-    "name": "register"
+    "name": "set_my_default_tenant"
+  },
+  {
+    "path": "/api/auth/me/tenants",
+    "methods": [
+      "GET"
+    ],
+    "name": "list_my_tenants"
+  },
+  {
+    "path": "/api/auth/platform-users",
+    "methods": [
+      "GET"
+    ],
+    "name": "list_platform_users"
   },
   {
     "path": "/api/auth/select-tenant",
@@ -256,11 +949,179 @@
     "name": "select_tenant"
   },
   {
+    "path": "/api/auth/switch-tenant",
+    "methods": [
+      "POST"
+    ],
+    "name": "switch_tenant"
+  },
+  {
+    "path": "/api/auth/tenant-roles",
+    "methods": [
+      "GET"
+    ],
+    "name": "list_tenant_roles"
+  },
+  {
+    "path": "/api/auth/tenant-users",
+    "methods": [
+      "GET"
+    ],
+    "name": "list_tenant_users"
+  },
+  {
+    "path": "/api/auth/tenant-users/invite",
+    "methods": [
+      "POST"
+    ],
+    "name": "invite_tenant_user"
+  },
+  {
+    "path": "/api/auth/tenant-users/{user_id}/role",
+    "methods": [
+      "PUT"
+    ],
+    "name": "update_tenant_user_role"
+  },
+  {
+    "path": "/api/auth/tenant-users/{user_id}/status",
+    "methods": [
+      "PUT"
+    ],
+    "name": "update_tenant_user_status"
+  },
+  {
+    "path": "/api/auth/tenants",
+    "methods": [
+      "GET"
+    ],
+    "name": "list_all_tenants"
+  },
+  {
+    "path": "/api/auth/tenants",
+    "methods": [
+      "POST"
+    ],
+    "name": "create_new_tenant"
+  },
+  {
+    "path": "/api/auth/tenants/dashboard",
+    "methods": [
+      "GET"
+    ],
+    "name": "tenant_dashboard"
+  },
+  {
+    "path": "/api/auth/tenants/{tenant_id}",
+    "methods": [
+      "DELETE"
+    ],
+    "name": "delete_tenant"
+  },
+  {
+    "path": "/api/auth/tenants/{tenant_id}",
+    "methods": [
+      "PUT"
+    ],
+    "name": "update_tenant"
+  },
+  {
+    "path": "/api/auth/tenants/{tenant_id}/members",
+    "methods": [
+      "GET"
+    ],
+    "name": "list_tenant_members"
+  },
+  {
+    "path": "/api/auth/tenants/{tenant_id}/members",
+    "methods": [
+      "POST"
+    ],
+    "name": "add_tenant_member"
+  },
+  {
+    "path": "/api/auth/tenants/{tenant_id}/members/{user_id}",
+    "methods": [
+      "DELETE"
+    ],
+    "name": "remove_tenant_member"
+  },
+  {
+    "path": "/api/auth/tenants/{tenant_id}/members/{user_id}/role",
+    "methods": [
+      "PUT"
+    ],
+    "name": "update_tenant_member_role"
+  },
+  {
+    "path": "/api/auth/tenants/{tenant_id}/roles",
+    "methods": [
+      "GET"
+    ],
+    "name": "list_roles_for_tenant"
+  },
+  {
+    "path": "/api/auth/tenants/{tenant_id}/status",
+    "methods": [
+      "PUT"
+    ],
+    "name": "update_tenant_status"
+  },
+  {
+    "path": "/api/auth/tenants/{tenant_id}/usage",
+    "methods": [
+      "GET"
+    ],
+    "name": "get_tenant_usage_endpoint"
+  },
+  {
     "path": "/api/auth/users",
     "methods": [
       "GET"
     ],
     "name": "list_users"
+  },
+  {
+    "path": "/api/auth/users/{user_id}/reset-password",
+    "methods": [
+      "POST"
+    ],
+    "name": "admin_reset_user_password"
+  },
+  {
+    "path": "/api/builder/current-app",
+    "methods": [
+      "DELETE"
+    ],
+    "name": "clear_current_app_endpoint"
+  },
+  {
+    "path": "/api/builder/current-app",
+    "methods": [
+      "GET"
+    ],
+    "name": "get_current_app_endpoint"
+  },
+  {
+    "path": "/api/builder/current-app",
+    "methods": [
+      "POST"
+    ],
+    "name": "set_current_app_endpoint"
+  },
+  {
+    "path": "/api/builder/invoke-mcp",
+    "methods": [
+      "POST"
+    ],
+    "name": "invoke_mcp"
+  },
+  {
+    "path": "/api/builder/mcp-tools",
+    "methods": [
+      "GET"
+    ],
+    "name": "list_available_tools"
   },
   {
     "path": "/api/chat/generate-config",
@@ -284,18 +1145,18 @@
     "name": "send_message_with_file"
   },
   {
-    "path": "/api/coding/auto-pipeline",
-    "methods": [
-      "POST"
-    ],
-    "name": "auto_pipeline"
-  },
-  {
     "path": "/api/coding/conversations",
     "methods": [
       "GET"
     ],
     "name": "list_coding_conversations"
+  },
+  {
+    "path": "/api/coding/conversations/{conversation_id}",
+    "methods": [
+      "DELETE"
+    ],
+    "name": "delete_coding_conversation"
   },
   {
     "path": "/api/coding/conversations/{conversation_id}/messages",
@@ -305,25 +1166,11 @@
     "name": "get_coding_messages"
   },
   {
-    "path": "/api/coding/detect-scene",
+    "path": "/api/coding/conversations/{conversation_id}/replay",
     "methods": [
-      "POST"
+      "GET"
     ],
-    "name": "detect_scene"
-  },
-  {
-    "path": "/api/coding/generate",
-    "methods": [
-      "POST"
-    ],
-    "name": "generate_code"
-  },
-  {
-    "path": "/api/coding/generate-stream",
-    "methods": [
-      "POST"
-    ],
-    "name": "generate_code_stream"
+    "name": "get_coding_conversation_replay"
   },
   {
     "path": "/api/coding/models",
@@ -340,27 +1187,6 @@
     "name": "list_scenes"
   },
   {
-    "path": "/api/coding/skills",
-    "methods": [
-      "GET"
-    ],
-    "name": "list_skills"
-  },
-  {
-    "path": "/api/coding/skills/{skill_name}/execute",
-    "methods": [
-      "POST"
-    ],
-    "name": "execute_skill"
-  },
-  {
-    "path": "/api/coding/template",
-    "methods": [
-      "POST"
-    ],
-    "name": "generate_template"
-  },
-  {
     "path": "/api/coding/upload",
     "methods": [
       "POST"
@@ -368,11 +1194,25 @@
     "name": "upload_file"
   },
   {
+    "path": "/api/coding/v2/conversations/{conversation_id}/workspace",
+    "methods": [
+      "GET"
+    ],
+    "name": "get_coding_conversation_workspace"
+  },
+  {
     "path": "/api/coding/workspace/create",
     "methods": [
       "POST"
     ],
     "name": "create_workspace"
+  },
+  {
+    "path": "/api/coding/workspace/import-zip",
+    "methods": [
+      "POST"
+    ],
+    "name": "import_zip_to_workspace_endpoint"
   },
   {
     "path": "/api/coding/workspace/{ws_id}",
@@ -387,6 +1227,13 @@
       "GET"
     ],
     "name": "get_workspace_info"
+  },
+  {
+    "path": "/api/coding/workspace/{ws_id}/bind-app",
+    "methods": [
+      "POST"
+    ],
+    "name": "bind_workspace_app"
   },
   {
     "path": "/api/coding/workspace/{ws_id}/browser/auto-inject",
@@ -508,11 +1355,18 @@
     "name": "build_workspace"
   },
   {
-    "path": "/api/coding/workspace/{ws_id}/build",
+    "path": "/api/coding/workspace/{ws_id}/changes",
+    "methods": [
+      "GET"
+    ],
+    "name": "get_workspace_changes"
+  },
+  {
+    "path": "/api/coding/workspace/{ws_id}/changes/accept",
     "methods": [
       "POST"
     ],
-    "name": "build_workspace"
+    "name": "accept_workspace_changes"
   },
   {
     "path": "/api/coding/workspace/{ws_id}/conversation",
@@ -536,11 +1390,11 @@
     "name": "get_debug_screenshot"
   },
   {
-    "path": "/api/coding/workspace/{ws_id}/download",
+    "path": "/api/coding/workspace/{ws_id}/deploy-to-app",
     "methods": [
-      "GET"
+      "POST"
     ],
-    "name": "download_artifact"
+    "name": "deploy_to_app"
   },
   {
     "path": "/api/coding/workspace/{ws_id}/download",
@@ -564,60 +1418,18 @@
     "name": "write_workspace_file"
   },
   {
+    "path": "/api/coding/workspace/{ws_id}/file-diff",
+    "methods": [
+      "GET"
+    ],
+    "name": "get_workspace_file_diff"
+  },
+  {
     "path": "/api/coding/workspace/{ws_id}/files",
     "methods": [
       "GET"
     ],
     "name": "list_workspace_files"
-  },
-  {
-    "path": "/api/coding/workspace/{ws_id}/ide-url",
-    "methods": [
-      "GET"
-    ],
-    "name": "get_workspace_ide_url"
-  },
-  {
-    "path": "/api/coding/workspace/{ws_id}/ide/chat/completions",
-    "methods": [
-      "POST"
-    ],
-    "name": "ide_chat_completions_proxy"
-  },
-  {
-    "path": "/api/coding/workspace/{ws_id}/ide/completions",
-    "methods": [
-      "POST"
-    ],
-    "name": "ide_inline_completions"
-  },
-  {
-    "path": "/api/coding/workspace/{ws_id}/ide/image-context",
-    "methods": [
-      "POST"
-    ],
-    "name": "ide_image_context_proxy"
-  },
-  {
-    "path": "/api/coding/workspace/{ws_id}/ide/models",
-    "methods": [
-      "GET"
-    ],
-    "name": "ide_available_models"
-  },
-  {
-    "path": "/api/coding/workspace/{ws_id}/ide/pipeline",
-    "methods": [
-      "POST"
-    ],
-    "name": "ide_coding_pipeline"
-  },
-  {
-    "path": "/api/coding/workspace/{ws_id}/ide/symbols",
-    "methods": [
-      "GET"
-    ],
-    "name": "ide_symbol_search"
   },
   {
     "path": "/api/coding/workspace/{ws_id}/install",
@@ -627,32 +1439,25 @@
     "name": "install_workspace_deps"
   },
   {
-    "path": "/api/coding/workspace/{ws_id}/preview",
-    "methods": [
-      "POST"
-    ],
-    "name": "preview_workspace"
-  },
-  {
-    "path": "/api/coding/workspace/{ws_id}/preview/dist/{filename:path}",
-    "methods": [
-      "GET"
-    ],
-    "name": "preview_dist_file"
-  },
-  {
-    "path": "/api/coding/workspace/{ws_id}/preview/sandbox",
-    "methods": [
-      "GET"
-    ],
-    "name": "preview_sandbox"
-  },
-  {
     "path": "/api/coding/workspace/{ws_id}/publish",
     "methods": [
       "POST"
     ],
     "name": "publish_workspace"
+  },
+  {
+    "path": "/api/coding/workspace/{ws_id}/raw",
+    "methods": [
+      "GET"
+    ],
+    "name": "download_workspace_file_raw"
+  },
+  {
+    "path": "/api/coding/workspace/{ws_id}/search",
+    "methods": [
+      "GET"
+    ],
+    "name": "search_workspace_content"
   },
   {
     "path": "/api/coding/workspace/{ws_id}/serve",
@@ -732,18 +1537,60 @@
     "name": "update_conversation_model"
   },
   {
+    "path": "/api/db-connections",
+    "methods": [
+      "GET"
+    ],
+    "name": "list_db_connections"
+  },
+  {
+    "path": "/api/db-connections",
+    "methods": [
+      "POST"
+    ],
+    "name": "create_db_connection"
+  },
+  {
+    "path": "/api/db-connections/{conn_id}",
+    "methods": [
+      "DELETE"
+    ],
+    "name": "delete_db_connection"
+  },
+  {
+    "path": "/api/db-connections/{conn_id}",
+    "methods": [
+      "GET"
+    ],
+    "name": "get_db_connection"
+  },
+  {
+    "path": "/api/db-connections/{conn_id}",
+    "methods": [
+      "PUT"
+    ],
+    "name": "update_db_connection"
+  },
+  {
+    "path": "/api/db-connections/{conn_id}/tables",
+    "methods": [
+      "GET"
+    ],
+    "name": "list_db_tables"
+  },
+  {
+    "path": "/api/db-connections/{conn_id}/test",
+    "methods": [
+      "POST"
+    ],
+    "name": "test_db_connection"
+  },
+  {
     "path": "/api/harness/coding/pipeline",
     "methods": [
       "POST"
     ],
     "name": "coding_pipeline"
-  },
-  {
-    "path": "/api/harness/coding/workspace/{ws_id}/ide/pipeline",
-    "methods": [
-      "POST"
-    ],
-    "name": "ide_coding_pipeline"
   },
   {
     "path": "/api/harness/profiles",
@@ -795,6 +1642,20 @@
     "name": "health_check"
   },
   {
+    "path": "/api/help/chat",
+    "methods": [
+      "POST"
+    ],
+    "name": "help_chat"
+  },
+  {
+    "path": "/api/help/meta",
+    "methods": [
+      "GET"
+    ],
+    "name": "help_meta"
+  },
+  {
     "path": "/api/llm-configs",
     "methods": [
       "GET"
@@ -807,6 +1668,13 @@
       "POST"
     ],
     "name": "create_llm_config"
+  },
+  {
+    "path": "/api/llm-configs/models",
+    "methods": [
+      "POST"
+    ],
+    "name": "fetch_llm_models"
   },
   {
     "path": "/api/llm-configs/options",
@@ -858,46 +1726,102 @@
     "name": "test_llm_config"
   },
   {
-    "path": "/api/marketplace",
+    "path": "/api/mcp-hub/servers",
     "methods": [
       "GET"
     ],
-    "name": "list_components"
+    "name": "list_servers"
   },
   {
-    "path": "/api/marketplace/my",
+    "path": "/api/mcp-platform/apaas-admins",
     "methods": [
       "GET"
     ],
-    "name": "list_my_components"
+    "name": "list_apaas_admins"
   },
   {
-    "path": "/api/marketplace/publish",
+    "path": "/api/mcp-platform/apaas-admins",
     "methods": [
       "POST"
     ],
-    "name": "publish_component"
+    "name": "create_apaas_admin"
   },
   {
-    "path": "/api/marketplace/{component_id}",
+    "path": "/api/mcp-platform/apaas-admins/{admin_id}",
     "methods": [
       "DELETE"
     ],
-    "name": "unpublish_component"
+    "name": "delete_apaas_admin"
   },
   {
-    "path": "/api/marketplace/{component_id}",
+    "path": "/api/mcp-platform/apaas-admins/{admin_id}",
+    "methods": [
+      "PUT"
+    ],
+    "name": "update_apaas_admin"
+  },
+  {
+    "path": "/api/mcp-platform/apaas-admins/{admin_id}/login",
+    "methods": [
+      "POST"
+    ],
+    "name": "login_apaas_admin"
+  },
+  {
+    "path": "/api/mcp-platform/apaas-admins/{admin_id}/token",
+    "methods": [
+      "POST"
+    ],
+    "name": "get_apaas_admin_token"
+  },
+  {
+    "path": "/api/mcp-platform/apaas-tenants",
     "methods": [
       "GET"
     ],
-    "name": "get_component"
+    "name": "list_apaas_tenants"
   },
   {
-    "path": "/api/marketplace/{component_id}/download",
+    "path": "/api/mcp-platform/apaas-user-token",
+    "methods": [
+      "POST"
+    ],
+    "name": "get_apaas_user_token"
+  },
+  {
+    "path": "/api/mcp-platform/call-logs",
     "methods": [
       "GET"
     ],
-    "name": "download_component"
+    "name": "list_mcp_call_logs"
+  },
+  {
+    "path": "/api/mcp-platform/login",
+    "methods": [
+      "POST"
+    ],
+    "name": "login_admin_spa_compat"
+  },
+  {
+    "path": "/api/mcp-platform/mcp-access",
+    "methods": [
+      "GET"
+    ],
+    "name": "get_mcp_access"
+  },
+  {
+    "path": "/api/me/preferences",
+    "methods": [
+      "GET"
+    ],
+    "name": "get_my_preferences"
+  },
+  {
+    "path": "/api/me/preferences",
+    "methods": [
+      "PUT"
+    ],
+    "name": "put_my_preferences"
   },
   {
     "path": "/api/platform-envs",
@@ -963,20 +1887,6 @@
     "name": "test_env"
   },
   {
-    "path": "/api/platform-proxy/entry",
-    "methods": [
-      "GET"
-    ],
-    "name": "proxy_entry"
-  },
-  {
-    "path": "/api/platform-proxy/init",
-    "methods": [
-      "POST"
-    ],
-    "name": "proxy_init"
-  },
-  {
     "path": "/api/projects",
     "methods": [
       "GET"
@@ -1017,6 +1927,41 @@
       "POST"
     ],
     "name": "connect_project_platform"
+  },
+  {
+    "path": "/api/projects/{project_id}/git-connection",
+    "methods": [
+      "DELETE"
+    ],
+    "name": "delete_git_connection"
+  },
+  {
+    "path": "/api/projects/{project_id}/git-connection",
+    "methods": [
+      "GET"
+    ],
+    "name": "get_git_connection"
+  },
+  {
+    "path": "/api/projects/{project_id}/git-connection",
+    "methods": [
+      "POST"
+    ],
+    "name": "connect_git_pat"
+  },
+  {
+    "path": "/api/projects/{project_id}/git-oauth/callback",
+    "methods": [
+      "POST"
+    ],
+    "name": "git_oauth_callback"
+  },
+  {
+    "path": "/api/projects/{project_id}/git-oauth/start",
+    "methods": [
+      "GET"
+    ],
+    "name": "git_oauth_start"
   },
   {
     "path": "/api/projects/{project_id}/members",
@@ -1061,67 +2006,74 @@
     "name": "list_project_workspaces"
   },
   {
-    "path": "/api/requirements/export-md",
+    "path": "/api/requirements/consume-doc/{pending_id}",
     "methods": [
       "POST"
     ],
-    "name": "export_md"
+    "name": "consume_requirements_doc"
   },
   {
-    "path": "/api/requirements/sessions",
+    "path": "/api/requirements/latest-doc",
     "methods": [
       "GET"
     ],
-    "name": "list_sessions"
+    "name": "get_latest_requirements_doc"
   },
   {
-    "path": "/api/requirements/sessions",
+    "path": "/api/spec",
     "methods": [
       "POST"
     ],
-    "name": "create_session"
+    "name": "create_spec"
   },
   {
-    "path": "/api/requirements/sessions/{session_id}",
+    "path": "/api/spec/upgrade-from-legacy",
     "methods": [
-      "DELETE"
+      "POST"
     ],
-    "name": "delete_session"
+    "name": "upgrade_from_legacy_config"
   },
   {
-    "path": "/api/requirements/sessions/{session_id}",
+    "path": "/api/spec/{spec_id}",
     "methods": [
       "GET"
     ],
-    "name": "get_session"
+    "name": "get_spec"
   },
   {
-    "path": "/api/requirements/sessions/{session_id}/chat",
+    "path": "/api/spec/{spec_id}/confirm-all",
+    "methods": [
+      "PUT"
+    ],
+    "name": "confirm_all_items"
+  },
+  {
+    "path": "/api/spec/{spec_id}/generate-config",
     "methods": [
       "POST"
     ],
-    "name": "chat"
+    "name": "generate_config_from_spec"
   },
   {
-    "path": "/api/requirements/sessions/{session_id}/chat-with-file",
+    "path": "/api/spec/{spec_id}/items/{item_type}/{item_code}",
     "methods": [
-      "POST"
+      "PUT"
     ],
-    "name": "chat_with_file"
+    "name": "update_item"
   },
   {
-    "path": "/api/requirements/sessions/{session_id}/generate-doc",
+    "path": "/api/spec/{spec_id}/phase",
     "methods": [
-      "POST"
+      "PUT"
     ],
-    "name": "generate_doc"
+    "name": "transition_phase"
   },
   {
-    "path": "/api/requirements/sessions/{session_id}/generate-doc-chat",
+    "path": "/api/sse/conversation/{conversation_id}",
     "methods": [
-      "POST"
+      "GET"
     ],
-    "name": "generate_doc_chat"
+    "name": "sse_subscribe_conversation"
   },
   {
     "path": "/api/templates",
@@ -1166,16 +2118,22 @@
     "name": "update_template"
   },
   {
-    "path": "/backend/{path:path}",
+    "path": "/api/voice/transcribe",
+    "methods": [
+      "POST"
+    ],
+    "name": "transcribe"
+  },
+  {
+    "path": "/app/{path:path}",
     "methods": [
       "DELETE",
       "GET",
       "OPTIONS",
-      "PATCH",
       "POST",
       "PUT"
     ],
-    "name": "proxy_backend"
+    "name": "proxy_app_runtime"
   },
   {
     "path": "/docs",
@@ -1202,26 +2160,11 @@
     "name": "openapi"
   },
   {
-    "path": "/platform/{path:path}",
+    "path": "/platform-admin",
     "methods": [
-      "DELETE",
-      "GET",
-      "OPTIONS",
-      "POST",
-      "PUT"
+      "GET"
     ],
-    "name": "proxy_platform"
-  },
-  {
-    "path": "/plugin/{path:path}",
-    "methods": [
-      "DELETE",
-      "GET",
-      "OPTIONS",
-      "POST",
-      "PUT"
-    ],
-    "name": "proxy_plugin"
+    "name": "platform_admin_index"
   },
   {
     "path": "/redoc",
@@ -1230,51 +2173,5 @@
       "HEAD"
     ],
     "name": "redoc_html"
-  },
-  {
-    "path": "/smartbi/{path:path}",
-    "methods": [
-      "DELETE",
-      "GET",
-      "OPTIONS",
-      "POST",
-      "PUT"
-    ],
-    "name": "proxy_smartbi"
-  },
-  {
-    "path": "/xdap-admin/{path:path}",
-    "methods": [
-      "DELETE",
-      "GET",
-      "OPTIONS",
-      "PATCH",
-      "POST",
-      "PUT"
-    ],
-    "name": "proxy_xdap_admin"
-  },
-  {
-    "path": "/xdap-open/{path:path}",
-    "methods": [
-      "DELETE",
-      "GET",
-      "OPTIONS",
-      "POST",
-      "PUT"
-    ],
-    "name": "proxy_xdap_open"
-  },
-  {
-    "path": "/xdap-plugin/{path:path}",
-    "methods": [
-      "DELETE",
-      "GET",
-      "OPTIONS",
-      "PATCH",
-      "POST",
-      "PUT"
-    ],
-    "name": "proxy_xdap_plugin"
   }
 ]

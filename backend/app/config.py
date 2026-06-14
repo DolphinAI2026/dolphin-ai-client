@@ -75,12 +75,7 @@ class Settings(BaseSettings):
     # 可选值：8 / 17 / auto；默认 17。
     apaas_backend_jdk_version: str = "17"
 
-    # Web IDE (code-server)
-    # code-server 外部访问基础 URL。留空时按当前请求域名 + 部署前缀自动推导
-    # （如 https://your-domain.com/ai-builder/ide/）；仅单独 IDE 域名等特殊拓扑需要配置。
-    code_server_base_url: str = ""
-
-    # IDE Coding 模型配置（多模型支持）
+    # Coding 模型配置（多模型支持）
     # 格式：CODING_MODEL_{NAME}_BASE_URL / _API_KEY / _MODEL
     # 前端通过 model 字段选择，后端路由到对应上游
     coding_model_deepseek_base_url: str = ""

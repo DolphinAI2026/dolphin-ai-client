@@ -51,7 +51,7 @@ class GenericSSEAdapter:
 class CodingSSEAdapter:
     """编码模式适配器 — 翻译为 CodingPage 能识别的事件格式。
 
-    CodingProfile 现在运行完整 pipeline（scene detect → workspace → agent → IDE URL），
+    CodingProfile 现在运行完整 pipeline（scene detect → workspace → agent），
     pipeline 事件通过 EventBus 发出时带有 kind=system/content/thinking/tool_call/tool_result。
     此适配器将 harness 事件翻译回前端 CodingPage 已有的事件格式。
     """
@@ -99,7 +99,7 @@ class CodingSSEAdapter:
                     "is_error": data.get("is_error", False),
                 }
             elif kind == "system":
-                # Pipeline done 事件 — 透传（包含 workspace_id, conversation_id, ide_url）
+                # Pipeline done 事件 — 透传 workspace_id / conversation_id 等状态字段
                 passthrough = {k: v for k, v in data.items() if k != "kind"}
                 return passthrough if passthrough.get("type") else {}
             return {}

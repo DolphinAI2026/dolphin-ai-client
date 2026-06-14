@@ -4,7 +4,6 @@ import json
 import os
 import time
 from pathlib import Path
-from urllib.parse import urlparse
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
@@ -122,15 +121,7 @@ app = FastAPI(
 cors_origins = [
     "http://localhost:5173",
     "http://localhost:3000",
-    "http://localhost:8080",
-    "http://127.0.0.1:8080",
 ]
-if settings.code_server_base_url:
-    parsed = urlparse(settings.code_server_base_url)
-    if parsed.scheme and parsed.netloc:
-        ide_origin = f"{parsed.scheme}://{parsed.netloc}"
-        if ide_origin not in cors_origins:
-            cors_origins.append(ide_origin)
 
 app.add_middleware(
     CORSMiddleware,

@@ -56,7 +56,6 @@ load_customer_config() {
   v="$(env_get IMAGE_TAG)";          [ -n "$v" ] && IMAGE_TAG="$v"
   v="$(env_get IMAGE_TAR)";          [ -n "$v" ] && IMAGE_TAR="$v"
   v="$(env_get PORT)";               [ -n "$v" ] && PORT="$v"
-  v="$(env_get CODE_SERVER_PORT)";   [ -n "$v" ] && CODE_SERVER_PORT="$v"
   v="$(env_get CONTAINER_NAME)";     [ -n "$v" ] && CONTAINER_NAME="$v"
   v="$(env_get VITE_BASE_URL)";      [ -n "$v" ] && VITE_BASE_URL="$v"
   v="$(env_get WORKSPACES_DIR)";     [ -n "$v" ] && WORKSPACES_DIR="$v"

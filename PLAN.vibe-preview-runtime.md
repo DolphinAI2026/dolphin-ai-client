@@ -38,8 +38,8 @@
 [ ] `backend/app/coding/browser_service.py`
 补 console/page error/network 摘要采集接口，为 AI 观察页面提供结构化证据。
 
-[ ] `extensions/ruijing-ai/src/*`
-让在线工作区也能走后端工具链，新增 `start_preview/read_preview_logs/open_preview/inspect_browser` 能力入口。
+[ ] `backend/app/agents/coding/tools.py`
+让代码工作区继续走后端工具链，补齐 `start_preview/read_preview_logs/open_preview/inspect_browser` 能力入口。
 
 [x] `frontend/src/api/onlineCoding.ts`, `frontend/src/views/OnlineCodingWorkspacePage.vue`
 在 Vibe Coding 页面展示运行状态、预览 URL、日志和启动/停止操作。

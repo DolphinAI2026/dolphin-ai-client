@@ -1798,7 +1798,7 @@ function removeAttachment() {
 }
 
 // ============ Send Message / Create Workspace ============
-// SSE handlers + upload + build request + consume SSE + load IDE URL + sendMessage
+// SSE handlers + upload + build request + consume SSE + sendMessage
 // 全部抽到 useCodingPipeline composable
 const { sendMessage, stopStream } = useCodingPipeline({
   model: { codingModelOptions, codingModelLoading, updatingCodingModel, selectedCodingModelValue, persistedCodingModelValue, selectedCodingModelOption, codingModelHint, toCodingModelValue, normalizeCodingModelValue, applyCodingModelSelection, loadCodingModelOptions, handleCodingModelChange } as any,
@@ -1841,7 +1841,7 @@ async function downloadCode() {
 
 // ============ Watchers ============
 
-// 主题变更不再需要同步 IDE URL（IDE 已删）
+// 主题变更只影响 Web 工作区自身，不再同步外部 IDE。
 
 watch(() => codingStore.conversationId, (id) => {
   if (!id) return

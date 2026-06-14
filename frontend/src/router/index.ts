@@ -92,11 +92,6 @@ const router = createRouter({
       meta: { requiresAuth: true }
     },
     {
-      path: '/ide',
-      name: 'Ide',
-      redirect: '/coding'
-    },
-    {
       path: '/settings',
       name: 'Settings',
       redirect: to => {

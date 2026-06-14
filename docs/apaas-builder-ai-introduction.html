@@ -709,7 +709,7 @@
         <div class="hero-map" aria-label="当前产品能力摘要">
           <div class="hero-map-item"><strong>AI Builder</strong><span>从需求、附件、历史会话开始生成或维护应用</span></div>
           <div class="hero-map-item"><strong>应用搭建</strong><span>查看应用配置，并通过右侧配置助手做增量调整</span></div>
-          <div class="hero-map-item"><strong>IDE 工作区</strong><span>补齐自开发页面、组件、接口和脚本</span></div>
+          <div class="hero-map-item"><strong>代码工作区</strong><span>补齐自开发页面、组件、接口和脚本</span></div>
           <div class="hero-map-item"><strong>平台配置</strong><span>管理模型、平台环境、成员和后台入口</span></div>
         </div>
       </div>
@@ -718,7 +718,7 @@
     <div class="hero-strip" aria-label="产品关键指标">
       <div class="metric"><strong>AI Builder</strong><span>首页与 AI 对话统一入口，承接需求、附件和历史会话</span></div>
       <div class="metric"><strong>应用搭建</strong><span>围绕当前应用配置，用对话调整模型、表单、流程和权限</span></div>
-      <div class="metric"><strong>IDE 工作区</strong><span>面向自开发页面、组件、接口和脚本的对话式编码</span></div>
+      <div class="metric"><strong>代码工作区</strong><span>面向自开发页面、组件、接口和脚本的对话式编码</span></div>
       <div class="metric"><strong>平台配置</strong><span>集中管理模型、平台环境、租户成员和管理入口</span></div>
     </div>
 
@@ -735,13 +735,13 @@
           <div class="position-copy panel">
             <p><b>对业务人员</b>：可以从一句想法、一批附件或一份 PRD 开始，让 AI 追问、整理并产出标准设计文档。</p>
             <p><b>对实施顾问</b>：可以把文档交给 AI 搭建模块，生成应用草稿，再通过对话调整模型、表单、流程、权限和字典。</p>
-            <p><b>对开发人员</b>：可以用 IDE 工作区补齐低代码覆盖不到的组件、页面、接口和脚本，过程里能查看文件、打开 Web IDE、沉淀开发产物。</p>
+            <p><b>对开发人员</b>：可以用代码工作区补齐低代码覆盖不到的组件、页面、接口和脚本，过程里能查看源码、对比变更、执行命令并沉淀开发产物。</p>
             <p><b>对管理员</b>：可以集中配置 LLM 模型、得帆云平台环境、租户成员和平台管理入口，保证应用搭建前置条件可控。</p>
           </div>
           <div class="stack panel">
             <div class="layer ai">
               <div class="icon blue"><svg viewBox="0 0 24 24"><path d="M12 8V4H8"/><rect x="4" y="8" width="16" height="12" rx="2"/><path d="M2 14h2"/><path d="M20 14h2"/><path d="M9 14h.01"/><path d="M15 14h.01"/></svg></div>
-              <div><span class="layer-title">睿鲸 AI 智能层</span><span class="layer-text">AI Builder、AI 对话、应用搭建、IDE 工作区与配置助手</span></div>
+              <div><span class="layer-title">睿鲸 AI 智能层</span><span class="layer-text">AI Builder、AI 对话、应用搭建、代码工作区与配置助手</span></div>
             </div>
             <div class="layer">
               <div class="icon teal"><svg viewBox="0 0 24 24"><path d="M4 4h16v16H4z"/><path d="M9 4v16"/><path d="M4 9h16"/></svg></div>
@@ -786,10 +786,10 @@
           </article>
           <article class="feature-card card">
             <div class="icon violet"><svg viewBox="0 0 24 24"><path d="m16 18 6-6-6-6"/><path d="m8 6-6 6 6 6"/></svg></div>
-            <h3>IDE 工作区：补齐低代码外的扩展开发</h3>
-            <p>当前 /coding 页面面向自开发组件、页面、接口和脚本。AI 会整理任务、创建工作区、读写文件，并在需要时打开 code-server。</p>
+            <h3>代码工作区：补齐低代码外的扩展开发</h3>
+            <p>当前 /coding 页面面向自开发组件、页面、接口和脚本。AI 会整理任务、创建工作区、读写文件、运行命令，并在同一页面查看源码和差异。</p>
             <ul>
-              <li>对话流默认可见，文件、IDE、设置和产物以抽屉进入</li>
+              <li>对话流默认可见，文件树、源码、差异、设置和产物在工作区内协同展示</li>
               <li>支持从 Builder 回跳到对应应用继续配置</li>
             </ul>
           </article>
@@ -855,7 +855,7 @@
             <div class="flow-cell"><strong>AI 编码</strong><span>描述组件、页面、接口需求</span></div>
             <div class="flow-cell"><strong>选择模板</strong><span>PC 组件、页面、移动端等</span></div>
             <div class="flow-cell"><strong>AI 写代码</strong><span>读规范、改文件、跑检查</span></div>
-            <div class="flow-cell"><strong>IDE 调试</strong><span>code-server 直接编辑</span></div>
+            <div class="flow-cell"><strong>代码校验</strong><span>查看 diff、运行命令和修复问题</span></div>
             <div class="flow-cell"><strong>上传平台</strong><span>选择环境并推送组件包</span></div>
           </div>
           <div class="flow-row" role="row">
@@ -895,7 +895,7 @@
             </article>
             <article class="module-item">
               <div class="icon amber"><svg viewBox="0 0 24 24"><path d="M9 18h6"/><path d="M10 22h4"/><path d="M12 2a7 7 0 0 0-4 12.7c.6.5 1 1.2 1 2h6c0-.8.4-1.5 1-2A7 7 0 0 0 12 2z"/></svg></div>
-              <div><h3>IDE 工作区</h3><p>面向 aPaaS 自开发页面、组件、接口和脚本，提供对话流、文件抽屉、Web IDE 和产物说明。</p></div>
+              <div><h3>代码工作区</h3><p>面向 aPaaS 自开发页面、组件、接口和脚本，提供对话流、文件树、源码视图、差异对比和产物说明。</p></div>
             </article>
             <article class="module-item">
               <div class="icon green"><svg viewBox="0 0 24 24"><path d="M3 3v18h18"/><path d="M18 17V9"/><path d="M13 17V5"/><path d="M8 17v-3"/></svg></div>
@@ -913,7 +913,7 @@
             <p class="eyebrow">Architecture</p>
             <h2>可落地的技术与集成架构</h2>
           </div>
-          <p>当前项目不是静态 Demo，已经具备前端工作台、FastAPI 后端、结构化 SPEC、配置助手工具链、IDE 工作区和平台配置管理等关键能力。</p>
+          <p>当前项目不是静态 Demo，已经具备前端工作台、FastAPI 后端、结构化 SPEC、配置助手工具链、代码工作区和平台配置管理等关键能力。</p>
         </div>
         <div class="architecture">
           <article class="arch-card card">
@@ -931,14 +931,14 @@
           <article class="arch-card card">
             <div class="icon violet"><svg viewBox="0 0 24 24"><path d="M12 3v18"/><path d="M3 12h18"/><path d="M5 5l14 14"/><path d="M19 5 5 19"/></svg></div>
             <h3>AI 与工具调用</h3>
-            <p>支持多模型配置，AI 搭建通过配置助手和后端工具操作应用；IDE 工作区通过对话流、文件读写和命令执行辅助生成扩展代码。</p>
+            <p>支持多模型配置，AI 搭建通过配置助手和后端工具操作应用；代码工作区通过对话流、文件读写、差异查看和命令执行辅助生成扩展代码。</p>
             <div class="tags"><span class="tag">LLM</span><span class="tag">MCP</span><span class="tag">Coding</span></div>
           </article>
           <article class="arch-card card">
             <div class="icon amber"><svg viewBox="0 0 24 24"><path d="M6 3v12"/><circle cx="18" cy="6" r="3"/><circle cx="6" cy="18" r="3"/><path d="M18 9a9 9 0 0 1-9 9"/></svg></div>
             <h3>集成与运行</h3>
-            <p>支持 code-server IDE、df-apaas-cli 自开发模板、得帆云平台环境连接、租户成员管理和平台管理后台嵌入。</p>
-            <div class="tags"><span class="tag">code-server</span><span class="tag">df-apaas-cli</span><span class="tag">Platform Env</span></div>
+            <p>支持 df-apaas-cli 自开发模板、原生代码工作区、得帆云平台环境连接、租户成员管理和平台管理后台嵌入。</p>
+            <div class="tags"><span class="tag">df-apaas-cli</span><span class="tag">Code Workspace</span><span class="tag">Platform Env</span></div>
           </article>
         </div>
       </div>
@@ -955,7 +955,7 @@
         <div class="value-grid">
           <div class="value-card"><strong>让业务需求更快变成可运行系统</strong><span>从自然语言、附件资料和标准设计文档出发，减少手工建模、配表单、配流程的重复劳动。</span></div>
           <div class="value-card"><strong>让低代码平台具备持续演进能力</strong><span>已有应用可从资产库继续对话、构建、发布和查看核心组成，降低后续维护成本。</span></div>
-          <div class="value-card"><strong>让自开发能力接入平台工作台</strong><span>IDE 工作区围绕 aPaaS 扩展开发，沉淀页面、组件、接口和脚本产物，开发完成后回到平台场景使用。</span></div>
+          <div class="value-card"><strong>让自开发能力接入平台工作台</strong><span>代码工作区围绕 aPaaS 扩展开发，沉淀页面、组件、接口和脚本产物，开发完成后回到平台场景使用。</span></div>
         </div>
       </div>
     </section>

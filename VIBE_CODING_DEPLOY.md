@@ -142,5 +142,5 @@ docker build -t vibe-sandbox:latest ../../docker/vibe-sandbox/
 **文件清单**（这次改动）：
 - `deploy/docker/Dockerfile` — 装 docker CLI 二进制
 - `deploy/docker/docker-compose.yml` — 挂 docker.sock + workspace 路径双向一致 + APAAS_WORKSPACE_ROOT
-- `deploy/docker/supervisord.conf` — code-server 路径用 ${APAAS_WORKSPACE_ROOT}
+- `deploy/docker/supervisord.conf` — 后端 uvicorn 进程由 supervisor 托管
 - `deploy/docker/compose.env.example` — 注释提示 Vibe Coding 前置项

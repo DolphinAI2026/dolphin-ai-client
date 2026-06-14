@@ -25,7 +25,7 @@ vi /data/apaas/backend.env          # 只改这一份配置文件，填好所有
 IMAGE_TAR=/path/apaas-builder.tar ./deploy.sh
 ```
 
-常用配置项都写在 `/data/apaas/backend.env`：`IMAGE_TAG`、`IMAGE_TAR`、`PORT`、`CODE_SERVER_PORT`、`VITE_BASE_URL`、`WORKSPACES_DIR`、`APAAS_BACKEND_JDK_VERSION` 等。
+常用配置项都写在 `/data/apaas/backend.env`：`IMAGE_TAG`、`IMAGE_TAR`、`PORT`、`VITE_BASE_URL`、`WORKSPACES_DIR`、`APAAS_BACKEND_JDK_VERSION` 等。
 
 少数脚本级覆盖仍可用：`APAAS_BUILDER_DATA_DIR`（决定首次生成配置的位置，默认 `/data/apaas`）、`ADMIN_USERNAME`、`ADMIN_PASSWORD`。
 

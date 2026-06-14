@@ -138,7 +138,7 @@ def test_coding_tools_register_dev_deploy_tools():
 
 @pytest.mark.asyncio
 async def test_deploy_dev_workspace_tool_checks_access_and_calls_existing_orchestrator():
-    """对话工具只做 agent adapter,真正编排复用 routes.coding._deploy_to_app_impl。"""
+    """对话工具只做 agent adapter,真正编排复用 app.coding.deploy_service._deploy_to_app_impl。"""
     calls: dict = {}
     fake_db = MagicMock()
 
@@ -161,8 +161,8 @@ async def test_deploy_dev_workspace_tool_checks_access_and_calls_existing_orches
 
     with (
         patch("app.database.AsyncSessionLocal", _fake_session),
-        patch("app.routes.coding._ensure_workspace_access", _fake_ensure),
-        patch("app.routes.coding._deploy_to_app_impl", _fake_deploy),
+        patch("app.agents.coding.tools._ensure_workspace_access", _fake_ensure),
+        patch("app.agents.coding.tools._deploy_to_app_impl", _fake_deploy),
     ):
         tool = next(t for t in build_coding_tools() if t.name == "deploy_dev_workspace_to_app")
         ctx = AgentContext(
@@ -200,8 +200,8 @@ async def test_deploy_dev_workspace_tool_falls_back_to_conversation_bound_app():
 
     with (
         patch("app.database.AsyncSessionLocal", _fake_session),
-        patch("app.routes.coding._ensure_workspace_access", _fake_ensure),
-        patch("app.routes.coding._deploy_to_app_impl", _fake_deploy),
+        patch("app.agents.coding.tools._ensure_workspace_access", _fake_ensure),
+        patch("app.agents.coding.tools._deploy_to_app_impl", _fake_deploy),
     ):
         tool = next(t for t in build_coding_tools() if t.name == "deploy_dev_workspace_to_app")
         res = await tool.execute({}, _ctx())
@@ -229,8 +229,8 @@ async def test_upload_dev_workspace_tool_calls_deploy_orchestrator_without_app()
 
     with (
         patch("app.database.AsyncSessionLocal", _fake_session),
-        patch("app.routes.coding._ensure_workspace_access", _fake_ensure),
-        patch("app.routes.coding._deploy_to_app_impl", _fake_deploy),
+        patch("app.agents.coding.tools._ensure_workspace_access", _fake_ensure),
+        patch("app.agents.coding.tools._deploy_to_app_impl", _fake_deploy),
     ):
         tool = next(t for t in build_coding_tools() if t.name == "upload_dev_workspace_to_asset_library")
         res = await tool.execute({}, _ctx())

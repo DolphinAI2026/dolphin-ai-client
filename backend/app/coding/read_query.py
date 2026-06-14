@@ -677,7 +677,7 @@ async def run_read_query(
     emit 事件类型：
       {"type": "tool", "name": ..., "status": "running"|"done", "result": ...}
       {"type": "content", "content": "..."}
-      {"type": "done", "workspace_id": None, "ide_url": None, "conversation_id": None}
+      {"type": "done", "workspace_id": None, "conversation_id": None}
 
     不创建 workspace，不调 codegen。
     """
@@ -690,7 +690,7 @@ async def run_read_query(
         )
     except Exception as exc:
         yield {"type": "content", "content": f"LLM 配置加载失败：{exc}"}
-        yield {"type": "done", "workspace_id": None, "ide_url": None, "conversation_id": None}
+        yield {"type": "done", "workspace_id": None, "conversation_id": None}
         return
 
     # ── 解析工作区(迭代轮带 workspace_id → 加工作区只读文件工具) ──────────
@@ -711,7 +711,7 @@ async def run_read_query(
     if not platform_env_id and not ws_path:
         # 既没环境也没工作区 → 没有任何工具可用
         yield {"type": "content", "content": "当前租户未配置可用的 aPaaS 平台环境，无法查询应用数据。\n请先在「平台管理 → aPaaS 租户」中配置并连接平台环境。"}
-        yield {"type": "done", "workspace_id": None, "ide_url": None, "conversation_id": None}
+        yield {"type": "done", "workspace_id": None, "conversation_id": None}
         return
 
     # ── 工具集按上下文拼装: 平台只读工具(有环境) + 工作区文件工具(有工作区) ──
@@ -877,7 +877,6 @@ async def run_read_query(
     yield {
         "type": "done",
         "workspace_id": None,
-        "ide_url": None,
         "conversation_id": None,
     }
 

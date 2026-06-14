@@ -46,8 +46,8 @@ _EXCLUDE_RULES = [
 ]
 
 _COMMIT_IDENTITY = [
-    "-c", "user.name=ruijing-ai",
-    "-c", "user.email=ai@ruijing.local",
+    "-c", "user.name=ai-builder",
+    "-c", "user.email=ai-builder@local",
 ]
 
 
@@ -155,9 +155,9 @@ def _is_build_artifact(rel: str) -> bool:
 
 
 def _is_noise_path(rel: str) -> bool:
-    """工具链自写的配置文件不算「本轮改动」(pipeline 每轮会刷 IDE/serve 配置)。
+    """工具链自写的配置文件不算「本轮改动」(pipeline 每轮会刷运行时配置)。
 
-    顶层 dot 路径(.vibe-ide.code-workspace / .cursor/ / .workspace.json …)
+    顶层 dot 路径(.cursor/ / .workspace.json / 历史 .vibe-ide.code-workspace …)
     与文件树展示规则一致(树本来就不显示), 外加 vibe-serve 配套文件。
     """
     return rel.startswith(".") or rel in {"vibe-serve-config", "vibe-serve.js"}

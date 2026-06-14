@@ -36,7 +36,7 @@ def _resolve_workspace_root() -> Path:
         return Path(explicit_root).expanduser()
 
     # df-apaas-cli build 会把 entry 直接拼进 shell 命令里，路径里如果包含空格，
-    # vue-cli-service 会把 entry 拆坏，最终在 code-server 内触发 EISDIR。
+    # vue-cli-service 会把 entry 拆坏，最终在本地预览构建中触发 EISDIR。
     if " " in str(LEGACY_WORKSPACE_ROOT):
         return Path.home() / ".apaas-builder-ai" / "workspaces"
 
@@ -388,9 +388,6 @@ class WorkspaceManager:
         candidates = [
             ws_path,
             ws_path / ".workspace.json",
-            ws_path / ".vscode" / "chat-history.json",
-            ws_path / ".vscode" / "chat-replay.json",
-            ws_path / ".vscode" / "ruijing-ai.json",
         ]
         latest = 0.0
         for candidate in candidates:
@@ -970,12 +967,6 @@ class WorkspaceManager:
 
         self._seed_default_workspace_rules(ws_path, project_type)
         self._ensure_copy_asset_placeholders(ws_path)
-
-        # 生成 VS Code AI Chat 配置（接入 LLM）
-        try:
-            self._setup_vscode_ai_config(ws_path)
-        except Exception as e:
-            logger.warning(f"Failed to setup VS Code AI config: {e}")
 
         # 更新状态
         meta["status"] = WorkspaceStatus.READY.value
@@ -2307,8 +2298,8 @@ const INJECT_CODE = `(function(params) {{
 
     # 注：原 try_rename_workspace_to_output_name 已移除。
     # 工作区 folder name 一旦创建即永久不变，不再随 outputName 改名——
-    # 改名会让 .vibe-ide.code-workspace 里的绝对路径、IDE URL、agent 持有的
-    # ws_path、build cwd FD 等多个缓存同时失效，引发"workspace does not exist"
+    # 改名会让 agent 持有的 ws_path、build cwd FD、内部 git 基线等多个缓存
+    # 同时失效，引发"workspace does not exist"
     # 之类的连锁问题。包名走 apaas.json 的 outputName，与 folder name 解耦。
 
     # ========== 内部方法 ==========
@@ -2418,32 +2409,6 @@ dist/
 
         # HTTPS 自签名证书（debug 模式必需）
         self._generate_https_cert(ws_path)
-
-        # .vscode/tasks.json（IDE 便捷命令）
-        self._write(ws_path, ".vscode/tasks.json", json.dumps({
-            "version": "2.0.0",
-            "tasks": [
-                {
-                    "label": "npm install",
-                    "type": "shell",
-                    "command": "npm install",
-                    "problemMatcher": []
-                },
-                {
-                    "label": "npm run serve",
-                    "type": "shell",
-                    "command": "npm run serve",
-                    "isBackground": True,
-                    "problemMatcher": []
-                },
-                {
-                    "label": "npm run build",
-                    "type": "shell",
-                    "command": "npm run build",
-                    "problemMatcher": []
-                }
-            ]
-        }, indent=2, ensure_ascii=False))
 
     def _run_workspace_compat_handlers(self, ws_path: Path) -> None:
         """按 project_type 分派到对应的兼容修复函数。
@@ -2578,8 +2543,7 @@ dist/
         package_json["browserslist"] = ["> 1%", "last 2 versions", "not dead", "Chrome 40.0", "ie >= 11"]
         package_json_path.write_text(json.dumps(package_json, ensure_ascii=False, indent=2), encoding="utf-8")
         (ws_path / "vibe-serve.js").write_text(_VIBE_SERVE_JS, encoding="utf-8")
-        from app.config import settings
-        (ws_path / "vibe-serve-config").write_text(f"PROXY_BASE={(settings.code_server_base_url or '').rstrip('/')}\n", encoding="utf-8")
+        (ws_path / "vibe-serve-config").write_text("PROXY_BASE=\n", encoding="utf-8")
 
         if apaas_json_path.exists():
             try:
@@ -2689,7 +2653,7 @@ dist/
         package_json_path.write_text(json.dumps(package_json, ensure_ascii=False, indent=2), encoding="utf-8")
         (ws_path / "vibe-serve.js").write_text(_VIBE_SERVE_JS, encoding="utf-8")
         from app.config import settings
-        (ws_path / "vibe-serve-config").write_text(f"PROXY_BASE={(settings.code_server_base_url or '').rstrip('/')}\n", encoding="utf-8")
+        (ws_path / "vibe-serve-config").write_text("PROXY_BASE=\n", encoding="utf-8")
 
         if apaas_json_path.exists():
             try:
@@ -2826,7 +2790,7 @@ export default {{ install }};
         package_json_path.write_text(json.dumps(package_json, ensure_ascii=False, indent=2), encoding="utf-8")
         (ws_path / "vibe-serve.js").write_text(_VIBE_SERVE_JS, encoding="utf-8")
         from app.config import settings
-        (ws_path / "vibe-serve-config").write_text(f"PROXY_BASE={(settings.code_server_base_url or '').rstrip('/')}\n", encoding="utf-8")
+        (ws_path / "vibe-serve-config").write_text("PROXY_BASE=\n", encoding="utf-8")
 
         if apaas_json_path.exists():
             try:
@@ -2995,30 +2959,6 @@ export default { install, activate, staticComponents }
             )
         pom_path.write_text(pom_text, encoding="utf-8")
 
-    # ========== VS Code AI 配置 ==========
-
-    def _setup_vscode_ai_config(self, ws_path: Path):
-        """为 workspace 生成安全的 IDE 配置，不在工作区落盘任何 LLM 密钥。"""
-        from app.config import settings
-
-        model = settings.llm_model
-
-        # ---- .vscode/settings.json ----
-        vscode_dir = ws_path / ".vscode"
-        vscode_dir.mkdir(exist_ok=True)
-
-        vscode_settings = {
-            "continue.enableTabAutocomplete": True,
-            "minimax.model": model,
-        }
-
-        settings_file = vscode_dir / "settings.json"
-        settings_file.write_text(
-            json.dumps(vscode_settings, ensure_ascii=False, indent=2)
-        )
-
-        # Continue / 内置 Chat 统一改走后端代理，避免在工作区明文写入 API key。
-
     # ========== 脚手架模板 ==========
 
     # ── CLI 预生成模板脚手架 ─────────────────────────────────────
@@ -3048,8 +2988,7 @@ export default { install, activate, staticComponents }
                 p.unlink()
 
         # 4. 写入 vibe-serve.js 和 vibe-serve-config
-        from app.config import settings
-        _proxy_base = (settings.code_server_base_url or "").rstrip("/")
+        _proxy_base = ""
         if project_type == ProjectType.FORM_COMPONENT_DUAL:
             # 双端工程：web/ 和 mobile/ 各是独立的 Vue CLI 项目，
             # vibe-serve.js 需分别写入各子目录（根目录无 package.json，无法执行）
@@ -3271,7 +3210,7 @@ export default { install, activate, staticComponents }
         }, indent=2, ensure_ascii=False))
         self._write(ws_path, "vibe-serve.js", _VIBE_SERVE_JS)
         from app.config import settings
-        self._write(ws_path, "vibe-serve-config", f"PROXY_BASE={(settings.code_server_base_url or '').rstrip('/')}\n")
+        self._write(ws_path, "vibe-serve-config", "PROXY_BASE=\n")
 
         # ======== vue.config.js ========
         self._write(ws_path, "vue.config.js", """const { defineConfig } = require('@vue/cli-service')
@@ -4533,7 +4472,7 @@ scheduled:
         }}, indent=2))
         self._write(ws_path, "vibe-serve.js", _VIBE_SERVE_JS)
         from app.config import settings
-        self._write(ws_path, "vibe-serve-config", f"PROXY_BASE={(settings.code_server_base_url or '').rstrip('/')}\n")
+        self._write(ws_path, "vibe-serve-config", "PROXY_BASE=\n")
 
         # vue.config.js
         self._write(ws_path, "vue.config.js", f"""const path = require('path')

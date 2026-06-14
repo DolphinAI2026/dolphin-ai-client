@@ -11,7 +11,7 @@ aPaaS 工具集（apaas_tools.py）一起注册进来：
   反查 Conversation.application_id → Application.platform_env_id
 - 2 个 workspace 产物 / 附件类（read_attachment / write_artifact）
 - 2 个自开发发布类（上传资产库 / 装回应用并重发）
-  签名复用 AgentContext，内部走 routes.coding 既有编排
+  签名复用 AgentContext，内部走 app.coding.deploy_service 编排
 """
 from __future__ import annotations
 
@@ -28,6 +28,8 @@ from app.coding.apaas_tools import (
     APAAS_TOOL_EXECUTORS_PLATFORM,
     APAAS_TOOL_EXECUTORS_WORKSPACE,
 )
+from app.coding.deploy_service import _deploy_to_app_impl
+from app.coding.workspace_access import _ensure_workspace_access
 
 logger = logging.getLogger(__name__)
 
@@ -185,7 +187,7 @@ def _coerce_int(value: Any) -> int | None:
 
 
 def _agent_auth_context(ctx: AgentContext):
-    """把 AgentContext 降级成 routes.coding 现有 helper 需要的 AuthContext。
+    """把 AgentContext 降级成共享 workspace/deploy helper 需要的 AuthContext。
 
     AgentContext 当前没有完整 tenant_role/org_permissions；这里保留用户、租户两个
     强约束，并给 application:view 一个最小权限兜底，真实发布权限仍由 workspace
@@ -309,11 +311,10 @@ async def _run_dev_workspace_deploy(args: dict[str, Any], ctx: AgentContext, *, 
 
     async def _run(db):
         from fastapi import HTTPException
-        from app.routes import coding as coding_routes
 
         auth_ctx = _agent_auth_context(ctx)
         try:
-            await coding_routes._ensure_workspace_access(
+            await _ensure_workspace_access(
                 ws_id,
                 auth_ctx,
                 db,
@@ -329,7 +330,7 @@ async def _run_dev_workspace_deploy(args: dict[str, Any], ctx: AgentContext, *, 
                     ),
                     error="NO_TARGET_APP",
                 )
-            result = await coding_routes._deploy_to_app_impl(ws_id, local_app_id, auth_ctx, db)
+            result = await _deploy_to_app_impl(ws_id, local_app_id, auth_ctx, db)
         except HTTPException as exc:
             detail = exc.detail if isinstance(exc.detail, str) else json.dumps(exc.detail, ensure_ascii=False)
             return ToolResult(success=False, content=f"Error: {detail}", error=detail)
@@ -370,7 +371,7 @@ def build_coding_tools(registry: ToolRegistry | None = None) -> list[Tool]:
         executor 内部反查 conversation→application→platform_env_id
       - 2 个 workspace 产物/附件工具 — 走 APAAS_TOOL_EXECUTORS_WORKSPACE
         executor 拿 workspace_path（跟 base tools 同源）
-      - 2 个自开发发布工具 — 复用 routes.coding._deploy_to_app_impl
+      - 2 个自开发发布工具 — 复用 app.coding.deploy_service._deploy_to_app_impl
     """
     reg = registry or ToolRegistry(profile="coding")
     tools: list[Tool] = []

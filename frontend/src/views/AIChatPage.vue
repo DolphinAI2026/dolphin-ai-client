@@ -479,6 +479,7 @@ import type { UnifiedChatAttachment } from '@/components/common/chatComposer'
 import { ChatDotRound } from '@element-plus/icons-vue'
 import { applicationApi } from '@/api/application'
 import { extractAppCodeFromText, extractAppNameFromText } from '@/utils/app'
+import { createAiChatSseReducer } from '@/composables/useAiChatSession'
 
 const previewStore = usePreviewStore()
 const themeStore = useThemeStore()
@@ -770,6 +771,31 @@ function flushPending() {
   }
   stopDrain()
 }
+
+const handleSseEvent = createAiChatSseReducer({
+  currentSession,
+  sessions,
+  messages,
+  toolCalls,
+  artifacts,
+  transientItems,
+  streamingText,
+  streamingTools,
+  pendingChars,
+  pendingFinalMessage,
+  currentRunId,
+  currentTurnAssistantMessageReceived,
+  currentTurnFallbackErrorShown,
+  ensureDrain,
+  flushPending,
+  onErrorMessage: (message) => {
+    if (automationRunning.value) addAutomationLog('error', message)
+    ElMessage.error(message)
+  },
+  onAfterEvent: () => {
+    nextTick(scrollBottom)
+  },
+})
 
 const editingTitle = ref(false)
 const editingTitleText = ref('')
@@ -1946,130 +1972,6 @@ async function onAbort() {
     await aiChatApi.abort(currentSession.value.id)
   } catch (e) { /* ignore */ }
   currentAbort.value?.abort()
-}
-
-function handleSseEvent(eventName: string, data: any) {
-  switch (eventName) {
-    case 'user_message':
-      messages.value.push(data)
-      break
-    case 'run_started':
-      // agent loop 起跑：记下本次实时 run_id（会话级 trace 入口默认选中它）
-      currentRunId.value = data.run_id || null
-      break
-    case 'thinking':
-      // "使用模型 xxx" 之类元事件
-      transientItems.value.push({ kind: 'thinking', text: data.text || '', ts: Date.now() })
-      break
-    case 'assistant_delta':
-      // 流式 token：放入 pending 队列，平滑节流释放（即使 LLM 假流式也看着像真在打字）
-      for (const ch of (data.text || '')) pendingChars.value.push(ch)
-      ensureDrain()
-      break
-    case 'assistant_thinking_lock':
-      // 后端通知：streamed content 是工具前的思考，锁定为 thinking transient
-      flushPending()
-      if (streamingText.value) {
-        transientItems.value.push({ kind: 'thinking', text: streamingText.value, ts: Date.now() })
-        streamingText.value = ''
-      }
-      break
-    case 'tool_call_start': {
-      // 收到第一个工具：streaming 缓冲若有内容则锁为 thinking
-      flushPending()
-      if (streamingText.value) {
-        transientItems.value.push({ kind: 'thinking', text: streamingText.value, ts: Date.now() })
-        streamingText.value = ''
-      }
-      // 该 tool 开始执行 → 从 streamingTools 移除（参数已生成完）
-      streamingTools.value = {}
-      const tc: AIChatToolCall = {
-        id: data.id,
-        session_id: currentSession.value?.id || 0,
-        message_id: null,
-        tool_name: data.tool_name,
-        args_json: data.args || {},
-        result_text: null,
-        status: 'running',
-        error_message: null,
-        duration_ms: null,
-        started_at: data.started_at || null,
-        ended_at: null,
-      }
-      toolCalls.value.push(tc)
-      break
-    }
-    case 'tool_call_delta': {
-      // LLM 正在流式生成 tool_calls 的参数。把 arguments_so_far 累积到 streamingTools，
-      // 让 thinkingLabel 能展示进度（"AI 正在生成 write_artifact《xxx-设计文档.md》参数（已 2543 字）"）
-      const idx = data.index ?? 0
-      const cur = streamingTools.value[idx] || { index: idx, name: '', argumentsSoFar: '' }
-      if (data.name) cur.name = data.name
-      // arguments_so_far 是后端累计的完整字符串，直接覆盖即可
-      if (typeof data.arguments_so_far === 'string') cur.argumentsSoFar = data.arguments_so_far
-      streamingTools.value = { ...streamingTools.value, [idx]: cur }
-      break
-    }
-    case 'tool_call_end': {
-      const found = toolCalls.value.find(t => t.id === data.id)
-      if (found) {
-        found.status = data.status
-        found.result_text = data.result_text
-        found.duration_ms = data.duration_ms
-      }
-      break
-    }
-    case 'ask_user':
-      // ask 卡片改由 collapseTools 从持久化 toolCalls.result_text 渲染，避免刷新后丢失。
-      // 这里只用作信号：ask_user 事件到达 = 已经在等用户回答（lastEventIsAsk 通过 toolCalls 末尾感知）
-      break
-    case 'assistant_message':
-      // 等 drain 把 pendingChars 排空后再展示持久化消息（让打字效果走完）
-      currentTurnAssistantMessageReceived.value = true
-      if (pendingChars.value.length === 0) {
-        streamingText.value = ''
-        messages.value.push(data)
-      } else {
-        pendingFinalMessage.value = data
-        // ensureDrain 已经在 assistant_delta 时启动；当它发现 pending 排空且有暂存消息时会自动接管
-      }
-      break
-    case 'artifact_created': {
-      // 刷新右栏 list；inline 卡片由 renderTimeline 基于 tool_calls + artifacts 自动渲染
-      if (currentSession.value) {
-        aiChatApi.listArtifacts(currentSession.value.id).then(d => { artifacts.value = d.artifacts })
-      }
-      // 不再自动弹开右栏 — 用户点 inline 卡片再看
-      break
-    }
-    case 'session_updated':
-      if (currentSession.value && data.id === currentSession.value.id) {
-        currentSession.value.title = data.title
-        const found = sessions.value.find(s => s.id === data.id)
-        if (found) found.title = data.title
-      }
-      break
-    case 'error':
-      {
-        const message = data.error || data.message || '出错了'
-        if (!currentTurnAssistantMessageReceived.value && !currentTurnFallbackErrorShown.value && currentSession.value) {
-          currentTurnFallbackErrorShown.value = true
-          messages.value.push({
-            id: -Date.now(),
-            session_id: currentSession.value.id,
-            role: 'assistant',
-            content: message,
-            extra_meta: { local_error: true },
-            created_at: new Date().toISOString(),
-          })
-        }
-        transientItems.value.push({ kind: 'thinking', text: `错误：${message}`, ts: Date.now() })
-        if (automationRunning.value) addAutomationLog('error', message)
-        ElMessage.error(message)
-      }
-      break
-  }
-  nextTick(scrollBottom)
 }
 
 function onAnswerAsk(option: string) {

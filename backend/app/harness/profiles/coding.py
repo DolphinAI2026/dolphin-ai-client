@@ -1,6 +1,6 @@
 """CodingProfile — 智能开发模式
 
-将完整的 Coding Pipeline（场景检测 → 工作区 → Agent → IDE URL）
+将完整的 Coding Pipeline（场景检测 → 工作区 → Agent）
 桥接到 Harness EventBus，提供统一的 thread/turn/event 运行时。
 """
 import logging
@@ -68,8 +68,7 @@ class CodingProfile(HarnessProfile):
         执行一轮编码。调用完整的 Coding Pipeline，桥接事件到 EventBus。
 
         thread_ctx.metadata 中应包含 pipeline 所需参数：
-        - workspace_id, conversation_id, selected_model, project_id
-        - code_server_base_url, api_base_builder, ide_token
+        - workspace_id, conversation_id, selected_model, project_id, app_id
         """
         from app.coding.pipeline import PipelineParams, run_coding_pipeline
 
@@ -85,9 +84,6 @@ class CodingProfile(HarnessProfile):
             project_id=meta.get("project_id"),
             app_id=meta.get("app_id"),
             attachments=meta.get("attachments") or [],
-            code_server_base_url=meta.get("code_server_base_url", ""),
-            api_base_builder=meta.get("api_base_builder"),
-            ide_token=meta.get("ide_token"),
         )
 
         result_text = ""
@@ -228,9 +224,6 @@ class CodingProfile(HarnessProfile):
                     if event.get("conversation_id"):
                         thread_ctx.conversation_id = event["conversation_id"]
                         thread_ctx.metadata["conversation_id"] = event["conversation_id"]
-                    if event.get("ide_url"):
-                        thread_ctx.metadata["ide_url"] = event["ide_url"]
-
                     await event_bus.publish(
                         ITEM_COMPLETED, turn_ctx.turn_id,
                         {"kind": "system", **event},
@@ -272,14 +265,6 @@ class CodingProfile(HarnessProfile):
                     "project_name": thread_ctx.metadata.get("project_name", ""),
                     "project_type": thread_ctx.metadata.get("project_type", ""),
                 },
-            })
-
-        ide_url = done_data.get("ide_url") or thread_ctx.metadata.get("ide_url")
-        if ide_url:
-            artifacts.append({
-                "artifact_type": "ide_url",
-                "artifact_key": f"ide_{turn_ctx.turn_id}",
-                "content": {"url": ide_url},
             })
 
         if result_text:
