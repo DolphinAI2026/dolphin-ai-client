@@ -46,12 +46,28 @@
             <div class="ac-user-wrap">
               <div class="ac-bubble user-bubble">
                 <div class="ac-text">{{ item.content }}</div>
-                <div v-if="item.attachments && item.attachments.length" class="ac-attach-chips">
-                  <span v-for="a in item.attachments" :key="a.id ?? a.filename" class="ac-attach-chip">
-                    <img v-if="a.kind === 'image' && a.url" class="thumb" :src="a.url" :alt="a.filename" />
-                    <span v-else class="icon"><AppIcon :name="a.kind === 'image' ? 'image' : 'file'" :size="13" /></span>
-                    <span class="name">{{ a.filename }}</span>
-                  </span>
+                <div v-if="item.attachments && item.attachments.length" class="ac-attach-block">
+                  <!-- 图片:大图预览,点击全屏放大(el-image 自带缩放/翻页) -->
+                  <div v-if="imageAttachments(item).length" class="ac-attach-images">
+                    <el-image
+                      v-for="(a, idx) in imageAttachments(item)"
+                      :key="a.id ?? a.filename"
+                      class="ac-attach-img"
+                      :src="a.url"
+                      :preview-src-list="imageAttachmentUrls(item)"
+                      :initial-index="idx"
+                      preview-teleported
+                      hide-on-click-modal
+                      :alt="a.filename"
+                    />
+                  </div>
+                  <!-- 非图片文件:chip -->
+                  <div v-if="fileAttachments(item).length" class="ac-attach-chips">
+                    <span v-for="a in fileAttachments(item)" :key="a.id ?? a.filename" class="ac-attach-chip">
+                      <span class="icon"><AppIcon name="file" :size="13" /></span>
+                      <span class="name">{{ a.filename }}</span>
+                    </span>
+                  </div>
                 </div>
                 <slot name="user-extra" :message="item" />
               </div>
@@ -343,6 +359,16 @@ function renderMd(text: string): string {
   } catch {
     return text
   }
+}
+
+function imageAttachments(m: AgentMessage) {
+  return (m.attachments || []).filter(a => a.kind === 'image' && a.url)
+}
+function fileAttachments(m: AgentMessage) {
+  return (m.attachments || []).filter(a => !(a.kind === 'image' && a.url))
+}
+function imageAttachmentUrls(m: AgentMessage): string[] {
+  return imageAttachments(m).map(a => a.url as string)
 }
 
 function formatTime(ts: number | string | undefined): string {
@@ -747,8 +773,33 @@ defineExpose({
   font-style: italic;
 }
 
-.ac-attach-chips {
+.ac-attach-block {
   margin-top: 8px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.ac-attach-images {
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+/* 图片附件:自然比例的大图预览,点击 el-image 全屏放大(zoom-in 光标提示) */
+.ac-attach-img {
+  border-radius: 8px;
+  overflow: hidden;
+  border: 1px solid var(--t-border-soft, rgba(116, 128, 171, 0.22));
+  cursor: zoom-in;
+  background: var(--t-bg-base, #fff);
+}
+.ac-attach-img :deep(img) {
+  display: block;
+  max-width: 240px;
+  max-height: 220px;
+  width: auto;
+  height: auto;
+}
+.ac-attach-chips {
   display: flex;
   gap: 6px;
   flex-wrap: wrap;
@@ -762,14 +813,6 @@ defineExpose({
   background: var(--t-bg-soft, rgba(15, 23, 42, 0.06));
   border-radius: 6px;
   color: var(--t-text-secondary);
-}
-.ac-attach-chip .thumb {
-  width: 28px;
-  height: 20px;
-  object-fit: cover;
-  border-radius: 4px;
-  border: 1px solid var(--t-border-soft, rgba(116, 128, 171, 0.22));
-  background: var(--t-bg-base, #fff);
 }
 
 .ac-ask-card {
