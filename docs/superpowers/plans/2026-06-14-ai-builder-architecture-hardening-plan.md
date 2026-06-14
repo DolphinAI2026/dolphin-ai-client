@@ -155,6 +155,18 @@ build/package/upload/publish/republish 真相分离;给 UI 和 agent 一个状�
 **验收:** 同份文档从 ChatPage(分步)和 AIChatPage(一把梭)生成,aPaaS 写序列一致;单边修 bug 不再可能(改 operations 一处即全覆盖)。
 **验证:** `pytest tests/test_generation_workflow_status.py tests/test_dropdown_dict_reconcile.py tests/test_form_detail_dropdown_options.py -q`(+ 新建的执行器等价对比测试)
 
+**执行进度(2026-06-14,逐函数亲核 canonical,每刀独立 commit,全程 781 passed/0 failed):**
+- ✅ 3-1 `_parse_permission_ops` → operations/permissions.py(canonical=step_exec 超集,修 gen_v2 对 list 丢 ops)
+- ✅ 3-2 表单标识固化(`_force_form_identity`/`_apply_form_identity_to_form_config`)→ form_config.py(AST diff 证两侧 mutation 等价,canonical=step_exec bool 版)
+- ✅ 3-3 `_ensure_canvas_form_components` → form_config.py(canonical=step_exec bool 版,顺带修 gen_v2 `updated=...` 恒 None 潜在 bug)
+- ✅ 3-4 `_save_form_config_with_retry` + 冲突检测 → form_config.py(**冲突标记取两侧并集**:gen_v2 多"无法保存"/step_exec 多乐观锁·版本·stale,各自漏对方→并集双向增强覆盖)
+- ✅ 3-5 `_finalize_created_form_config` → form_config.py(依赖收口后两侧仅日志差,form_id 位置参兼容两侧调用)
+- ⏸️ **3-6 `_build_permission_groups_for_form_config` / 3-7 `_sync_form_permissions_to_form_config`:不盲合,需平台确认。**
+  - **澄清:分析 agent 称"gen_v2 权限 payload 错(ALL_USER 写成值)"= 误报。** gen_v2 `_permission_object_for_form_config` 对 ALL_USER 也返回 `permissionObjectValue=""`,与 step_exec 等价,无此 bug。
+  - 真实差异仅:① advanced_groups 字段集 gen_v2 发 9 个(多 comment/export/print/log/share/queryApprovalInfo)vs step_exec 发 3 个(query/update/delete,注释称平台只保留 3 个);② step_exec 给 operation permissionObjects 多 `permissionRange`;③ role_name 回退(cosmetic)。
+  - **#① 取决于 apaas 平台是否 honor 那 6 个额外字段——代码层无法验证。** 若平台其实 honor export/print,收口成 step_exec 3 字段版会悄删生产路径的导出/打印权限控制。触及 Stop Condition「写序列不一致先确认哪侧对,别盲合」。
+  - **待办**:有 apaas API 访问 / xhh 确认平台对 advanced 权限字段的实际处理后再收口(若平台确实只保留 3 个→收口成 step_exec 版;若 honor→收口成 gen_v2 superset + step_exec 的 permissionRange)。无紧急性(无 bug)。
+
 ## Phase 4 — 拆后端大文件(并入原拆分工单 Wave 1A/3/4)
 
 ### 4A workspace.py 模板落盘(4624 → ~2900)
