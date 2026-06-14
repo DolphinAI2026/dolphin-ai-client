@@ -909,30 +909,9 @@ from app.operations.form_config import _apply_form_identity_to_form_config  # no
 from app.operations.form_config import _ensure_canvas_form_components  # noqa: F401,E402 (Phase3 收口)
 
 
-def _is_form_save_conflict(exc: Exception) -> bool:
-    text = str(exc)
-    return any(token in text for token in ("当前页面状态已改变", "页面状态已改变", "乐观锁", "版本", "version", "stale"))
 
 
-async def _save_form_config_with_retry(
-    client: APaaSClient,
-    app_id: str,
-    form_config: dict,
-    *,
-    form_id: str,
-    apply_latest=None,
-    reason: str = "",
-) -> dict:
-    try:
-        return await client.save_form_config(app_id, form_config)
-    except Exception as exc:
-        if not _is_form_save_conflict(exc) or not form_id:
-            raise
-        logger.warning("save_form_config 冲突，重新查询后重试 (formId=%s, reason=%s): %s", form_id, reason, exc)
-        latest = await _query_saveable_form_config(client, app_id, form_id)
-        if apply_latest:
-            apply_latest(latest)
-        return await client.save_form_config(app_id, latest)
+from app.operations.form_config import _save_form_config_with_retry  # noqa: F401,E402 (Phase3 收口)
 
 
 async def _finalize_created_form_config(

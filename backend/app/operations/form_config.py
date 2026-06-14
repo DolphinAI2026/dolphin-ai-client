@@ -283,6 +283,47 @@ def _ensure_canvas_form_components(
     return changed
 
 
+# save_form_config 冲突标记 —— 两条路径并集(收口前各自漏对方的):
+#   generator_v2 旧: ("页面状态已改变", "无法保存")
+#   step_executor 旧: ("当前页面状态已改变", "页面状态已改变", "乐观锁", "版本", "version", "stale")
+# 并集保证收口后两条路径都不丢失任何冲突重试覆盖。"页面状态已改变" 已是 "当前页面状态已改变" 子串。
+_FORM_SAVE_CONFLICT_MARKERS = (
+    "页面状态已改变", "无法保存", "乐观锁", "版本", "version", "stale",
+)
+
+
+def _is_form_save_conflict(exc: Exception) -> bool:
+    text = str(exc)
+    return any(token in text for token in _FORM_SAVE_CONFLICT_MARKERS)
+
+
+async def _save_form_config_with_retry(
+    client: APaaSClient,
+    app_id: str,
+    form_config: dict,
+    *,
+    form_id: str,
+    apply_latest=None,
+    reason: str = "",
+) -> dict:
+    """save_form_config + 冲突重试一次(canonical, 收口 generator_v2/step_executor)。
+
+    冲突(页面状态已改变/乐观锁/版本 等)时重查可保存配置、重新 apply_latest 再存一次。
+    返回 save_form_config 结果(收口前 generator_v2 版返 None=丢结果;本 dict 版为超集,
+    忽略返回的调用方不受影响)。冲突判定用两侧并集 _is_form_save_conflict。
+    """
+    try:
+        return await client.save_form_config(app_id, form_config)
+    except Exception as exc:
+        if not _is_form_save_conflict(exc) or not form_id:
+            raise
+        logger.warning("save_form_config 冲突，重新查询后重试 (formId=%s, reason=%s): %s", form_id, reason, exc)
+        latest = await _query_saveable_form_config(client, app_id, form_id)
+        if apply_latest:
+            apply_latest(latest)
+        return await client.save_form_config(app_id, latest)
+
+
 __all__ = [
     "_iter_form_components",
     "_component_field_code",
@@ -295,4 +336,6 @@ __all__ = [
     "_query_saveable_form_config",
     "_apply_form_identity_to_form_config",
     "_ensure_canvas_form_components",
+    "_is_form_save_conflict",
+    "_save_form_config_with_retry",
 ]

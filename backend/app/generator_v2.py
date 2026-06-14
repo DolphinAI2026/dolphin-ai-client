@@ -193,8 +193,6 @@ def _build_permission_groups_for_form_config(
     return permission_groups, advanced_groups, operation_groups
 
 
-_STATE_CHANGED_MARKERS = ("页面状态已改变", "无法保存")
-
 
 from app.operations.form_config import _apply_form_identity_to_form_config as _force_form_identity  # noqa: F401,E402 (收口; 保留 gen_v2 调用名)
 
@@ -202,32 +200,7 @@ from app.operations.form_config import _apply_form_identity_to_form_config as _f
 from app.operations.form_config import _ensure_canvas_form_components  # noqa: F401,E402 (Phase3 收口)
 
 
-async def _save_form_config_with_retry(
-    client: APaaSClient,
-    app_id: str,
-    form_config: dict,
-    *,
-    form_id: str,
-    apply_latest=None,
-    reason: str = "",
-) -> None:
-    last_exc: Exception | None = None
-    for attempt in range(2):
-        try:
-            await client.save_form_config(app_id, form_config)
-            return
-        except Exception as exc:
-            msg = str(exc)
-            if any(marker in msg for marker in _STATE_CHANGED_MARKERS) and attempt == 0 and form_id:
-                logger.warning("save_form_config 冲突，重查后重试 (formId=%s, reason=%s): %s", form_id, reason, msg)
-                form_config = await _query_saveable_form_config(client, app_id, form_id)
-                if apply_latest:
-                    apply_latest(form_config)
-                last_exc = exc
-                continue
-            raise
-    if last_exc is not None:
-        raise last_exc
+from app.operations.form_config import _save_form_config_with_retry  # noqa: F401,E402 (Phase3 收口)
 
 
 async def _finalize_created_form_config(
