@@ -689,6 +689,21 @@ _WORKFLOW_BACKEND_API = """
 # build_user_prompt — 从 VibeCodingAgent._build_prompt 迁移
 # ══════════════════════════════════════════════════════════════
 
+_PATCH_FIRST_SECTION = """
+## 补丁优先原则（Patch-First，所有场景强制适用）
+
+修改已有文件时，**默认使用 `edit_file` 做局部补丁，而非 `write_file` 整份重写**。
+
+- **`edit_file`（补丁，默认）**：先 `read_file` 获取当前内容，再用 `edit_file` 只替换需要改动的片段。
+- **`write_file`（整份重写）**：仅限以下三种合法场景：
+  1. 新建文件（目标路径不存在）
+  2. 用户明确要求"重写/重做/整页改版/从零生成/全部重做/推倒重来"
+  3. 首次生成空白脚手架（scaffold 初始化，工作区刚建立，文件尚不存在）
+- **重写已有文件前必须征得用户确认**：如果上述三条均不满足，但你认为需要整份重写，必须先向用户说明原因并等待确认，不可直接 `write_file` 覆盖。
+- 违反此原则会破坏用户已有的自定义逻辑，属于不可恢复的破坏性操作。
+"""
+
+
 def build_user_prompt(
     *,
     requirement: str,
@@ -833,5 +848,6 @@ def build_user_prompt(
             "请在上方 if/elif 链里为该类型添加 workflow，不要依赖兜底。"
         )
 
+    parts.append(_PATCH_FIRST_SECTION)
     parts.append(workflow)
     return "\n".join(parts)

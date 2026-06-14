@@ -1,5 +1,10 @@
 """把 harness/tool_registry 定义的 coding tools 包装成 BaseAgent 的 Tool 列表。
 
+补丁守卫（Phase 5）：
+- _compute_changed_line_ratio   — difflib 行级差异占比
+- _check_big_rewrite_warning    — write_file 已有文件且行数≥10且差异>50% → 软警告文本
+  write_file executor 在写入成功后追加警告到 ToolResult.content（不阻断）
+
 设计原则：
 - 不重写 tool 逻辑，只做 schema + execute 的 adapter
 - tool_registry 的 execute 接 workspace_path，ctx 里有 workspace_id 可解析
@@ -15,6 +20,7 @@ aPaaS 工具集（apaas_tools.py）一起注册进来：
 """
 from __future__ import annotations
 
+import difflib
 import json
 import logging
 from pathlib import Path
@@ -32,6 +38,79 @@ from app.coding.deploy_service import _deploy_to_app_impl
 from app.coding.workspace_access import _ensure_workspace_access, resolve_conversation_app_id
 
 logger = logging.getLogger(__name__)
+
+# ── Phase 5 补丁守卫常量 ──────────────────────────────────────
+_PATCH_GUARD_MIN_LINES = 10      # 目标文件行数低于此值不触发警告
+_PATCH_GUARD_RATIO_THRESHOLD = 0.50  # 行级差异占比超过此值触发警告
+
+
+def _compute_changed_line_ratio(existing: str, new: str) -> float:
+    """计算 existing → new 的行级差异占比（[0, 1]）。
+
+    用 difflib.SequenceMatcher 的 ratio() 计算相似度，差异占比 = 1 - ratio。
+    ratio() 返回 2M/(T) 其中 M=匹配块行数，T=两段总行数；差异越大 ratio 越小。
+    """
+    try:
+        existing_lines = existing.splitlines(keepends=True)
+        new_lines = new.splitlines(keepends=True)
+        if not existing_lines and not new_lines:
+            return 0.0
+        sm = difflib.SequenceMatcher(None, existing_lines, new_lines, autojunk=False)
+        return 1.0 - sm.ratio()
+    except Exception:
+        return 0.0
+
+
+def _check_big_rewrite_warning(
+    tool_name: str,
+    args: dict[str, Any],
+    ws_path: Path,
+) -> str | None:
+    """检查是否触发大幅重写软警告。
+
+    触发条件（全部满足）：
+      1. tool_name == "write_file"
+      2. 目标文件已存在
+      3. 现有文件行数 >= _PATCH_GUARD_MIN_LINES
+      4. 行级差异占比 > _PATCH_GUARD_RATIO_THRESHOLD
+
+    返回：中文警告文本字符串；不触发则返回 None。
+    任何异常都静默返回 None（不干扰写入）。
+    """
+    try:
+        if tool_name != "write_file":
+            return None
+        rel_path = str((args or {}).get("file_path") or "").strip()
+        if not rel_path:
+            return None
+        new_content = str((args or {}).get("content") or "")
+
+        target = (ws_path / rel_path).resolve()
+        ws_resolved = ws_path.resolve()
+        try:
+            target.relative_to(ws_resolved)
+        except ValueError:
+            return None  # 路径逃逸，跳过
+        if not target.exists():
+            return None  # 新建文件，不警告
+
+        existing_content = target.read_text(encoding="utf-8", errors="replace")
+        existing_lines = existing_content.splitlines()
+        if len(existing_lines) < _PATCH_GUARD_MIN_LINES:
+            return None  # 文件太短，不警告
+
+        ratio = _compute_changed_line_ratio(existing_content, new_content)
+        if ratio <= _PATCH_GUARD_RATIO_THRESHOLD:
+            return None  # 改动幅度小，不警告
+
+        pct = int(ratio * 100)
+        return (
+            f"\n\n⚠️ [补丁守卫] write_file 对已有文件 `{rel_path}` 做了 {pct}% 行级变更（超过 50% 阈值）。"
+            "若这不是用户明确要求的整份重写，建议改用 edit_file 做局部补丁，"
+            "以避免覆盖用户已有的自定义逻辑。（本次写入已完成，此为软警告。）"
+        )
+    except Exception:
+        return None
 
 
 _EXPLICIT_REWRITE_TERMS = (
@@ -405,7 +484,21 @@ def build_coding_tools(registry: ToolRegistry | None = None) -> list[Tool]:
                 except Exception as e:
                     logger.exception("tool %s execution failed", tool_name)
                     return ToolResult(success=False, content=f"Tool '{tool_name}' execution error: {e}", error=str(e))
-                return _wrap_result(result_text)
+                tool_result = _wrap_result(result_text)
+                # Phase 5 补丁守卫：write_file 成功后追加软警告（不阻断、不改 success）
+                if tool_result.success and tool_name == "write_file":
+                    try:
+                        warning = _check_big_rewrite_warning(tool_name, args or {}, ws_path)
+                        if warning:
+                            tool_result = ToolResult(
+                                success=tool_result.success,
+                                content=(tool_result.content or "") + warning,
+                                data=tool_result.data,
+                                error=tool_result.error,
+                            )
+                    except Exception:
+                        pass  # 守卫异常绝不干扰写入结果
+                return tool_result
             return executor
 
         tools.append(Tool(
