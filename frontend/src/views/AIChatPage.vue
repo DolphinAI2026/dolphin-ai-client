@@ -480,6 +480,10 @@ import { ChatDotRound } from '@element-plus/icons-vue'
 import { applicationApi } from '@/api/application'
 import { extractAppCodeFromText, extractAppNameFromText } from '@/utils/app'
 import { createAiChatSseReducer } from '@/composables/useAiChatSession'
+import {
+  shouldLoadAiChatAuthenticatedResource,
+  shouldReloadAiChatForTenantChange,
+} from './aiChatTenantReload'
 
 const previewStore = usePreviewStore()
 const themeStore = useThemeStore()
@@ -1639,16 +1643,26 @@ const thinkingLabel = computed(() => {
 // ── API actions ──
 
 async function loadSessions() {
+  if (!shouldLoadAiChatAuthenticatedResource(userStore.token)) {
+    sessions.value = []
+    return
+  }
   try {
     const data = await aiChatApi.listSessions()
     sessions.value = data.sessions
   } catch (e: any) {
+    if (!shouldLoadAiChatAuthenticatedResource(userStore.token)) return
     console.error(e)
     ElMessage.error('拉会话列表失败')
   }
 }
 
 async function loadLlmOptions() {
+  if (!shouldLoadAiChatAuthenticatedResource(userStore.token)) {
+    llmOptions.value = []
+    selectedLlmId.value = null
+    return
+  }
   try {
     // 拉所有 purpose=builder 的可用模型；'all' 不是合法 purpose
     const opts = await llmConfigApi.listOptions('builder')
@@ -1664,6 +1678,7 @@ async function loadLlmOptions() {
       currentSession.value.selected_llm_config_id = updated.selected_llm_config_id
     }
   } catch (e: any) {
+    if (!shouldLoadAiChatAuthenticatedResource(userStore.token)) return
     console.error('拉模型列表失败', e)
     llmOptions.value = []
     selectedLlmId.value = null
@@ -2532,7 +2547,7 @@ watch(
 watch(
   () => userStore.tenantId,
   async (newTenantId, oldTenantId) => {
-    if (!oldTenantId || newTenantId === oldTenantId) return
+    if (!shouldReloadAiChatForTenantChange(newTenantId, oldTenantId, userStore.token)) return
     if (currentAbort.value) {
       try { currentAbort.value.abort() } catch { /* ignore */ }
       currentAbort.value = null
