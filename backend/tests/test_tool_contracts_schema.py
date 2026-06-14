@@ -103,6 +103,19 @@ def test_get_application_is_read_only():
     assert c["read_only"] is True
 
 
+def test_process_read_tools_are_read_only():
+    """process 类里的纯 GET 读工具应 read_only(不能被 process 类'写'默认误标)。
+
+    回归测试: get_apaas_process_detail / list_apaas_app_processes 只调 aPaaS GET,
+    曾因 process category 默认 writes_apaas=True 被误标(读标成写)。
+    """
+    for name in ("get_apaas_process_detail", "list_apaas_app_processes"):
+        c = tool_contract(name)
+        assert c["read_only"] is True, f"{name} 应 read_only, 实际 {c}"
+        assert c["writes_apaas"] is False, f"{name} 不应 writes_apaas"
+        assert c["requires_confirmation"] is False
+
+
 def test_list_apaas_apps_is_read_only():
     """list_apaas_apps_in_env(introspection) 应 read_only=True."""
     c = tool_contract("list_apaas_apps_in_env")

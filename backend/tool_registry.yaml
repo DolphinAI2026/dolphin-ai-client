@@ -229,6 +229,7 @@ tools:
     sections: [logic]
     agents: [builder, config]
     category: process
+    read_only: true
     description: "拉取 aPaaS 平台已有流程详情，并转换为前端 ProcessDesigner 可渲染的节点和连线。"
   get_apaas_user_name:
     sections: [permission, global]
@@ -240,6 +241,7 @@ tools:
     sections: [global]
     agents: [config]
     category: issue_assistant
+    read_only: true
     description: "返回右侧问题助手的 dev 自动修复与 19:00 自动部署策略；明确 main 分支禁止修改。"
   get_application:
     sections: [global]
@@ -255,6 +257,7 @@ tools:
     sections: [global]
     agents: [config]
     category: skill_learning
+    read_only: true
     description: "读完整 skill 的 steps_md（list 只返摘要，要细节得调它）。"
   get_dev_scene_full_workflow:
     sections: [extension]
@@ -325,6 +328,7 @@ tools:
     sections: [logic]
     agents: [builder, config]
     category: process
+    read_only: true
     description: "列指定 aPaaS 应用的全部流程摘要，含流程、表单、菜单绑定和节点/连线数量。"
   list_apaas_app_roles:
     sections: [permission]
@@ -388,6 +392,7 @@ tools:
     sections: [global]
     agents: [config]
     category: skill_learning
+    read_only: true
     description: "列出当前 tenant 的可用 skills（app_id=0 时列全局+所有 app 的；指定 app_id 列全局+该 app 的）。"
   list_deploy_records:
     sections: [global]
@@ -414,6 +419,7 @@ tools:
     sections: [global]
     agents: [config]
     category: issue_assistant
+    read_only: true
     description: "列出右侧问题助手记录的问题，支持按 classification/status 过滤。"
   parse_design_doc:
     sections: [global]
@@ -431,6 +437,7 @@ tools:
     sections: [extension]
     agents: [coding]
     category: dev_workspace
+    writes_apaas: true
     description: "把 AI Coding workspace build 产物部署到 aPaaS 平台。"
     writes_workspace: true
     deploys_or_publishes: true
