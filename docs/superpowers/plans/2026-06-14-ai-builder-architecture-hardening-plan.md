@@ -129,9 +129,9 @@ cd ../frontend && npx vue-tsc -b && npx vite build
 **吸收** `workspace_access.py`,不平地新建。解析全部绑定路径 + 集中 app 绑定访问检查 + 返回 typed 结果。验收:无 route 手猜 `project_id` 是 project 还是 application;现有 open/list/source/download 不破。
 **验证:** `pytest tests/test_coding_app_binding_persistence.py tests/test_custom_page_workspace_binding.py tests/test_dev_workspace_listing.py tests/test_workspace_sync.py -q`
 
-### 2B application_context_service(原 Task 4,H3 修正)
-**把 [ai_chat/app_context.py](backend/app/ai_chat/app_context.py) 提升为该服务并扩展**,不新建第二份。解析 AI chat / 配置生成 / 自开发更新 的当前 app 上下文;防 stale context 跨会话/租户泄漏。验收:AI Chat 能说出在改哪个 app_id/apaas_app_id;跨租户泄漏测试仍过;文档生成应用不变。
-**验证:** `pytest tests/test_app_context_prompt.py tests/test_session_app_lock.py tests/test_aichat_no_cross_tenant_model.py tests/test_ai_chat_workspace_reuse_guard.py -q`
+### 2B application_context_service(原 Task 4)— ✅ 已被现有架构满足,跳过
+**执行时核验结论(2026-06-14):** 不做。`app_context.py`(185行)+ `AIChatSession.app_id`(session→app 锁,agent.py:581 读)已集中"当前 app 上下文"解析与 prompt 注入(`build_app_context_block`),app_id/apaas_app_id 已进 prompt。无散落逻辑可收口;跨会话/租户隔离靠 per-session `app_id` 天然成立(test_session_app_lock/test_app_context_prompt 已覆盖)。新建 service = 纯 rename-churn(计划自身 Reviewer Q 警告项),不做。
+> coding 侧的 `coding_app_id` 解析已在 2A 收口;ai_chat 的 session.app_id 与 coding 的 conversation.coding_app_id 是两个域,强行统一会触发 Stop Condition「一个 Task 改多个域」,留 Phase X。
 
 ### 2C tool_contract_service(原 Task 6,M2 修正)
 **副作用字段(read_only/writes_workspace/writes_apaas/requires_confirmation/idempotency)加进 tool_registry.yaml**(现有 `category` 14 值是域分类,无副作用语义);service 只读 yaml 派生;**drift check 扩展覆盖新字段**。验收:`deploy_dev_workspace_to_app`/`upload_dev_workspace_to_asset_library`/`get_current_workspace_app_status`/`republish_apaas_app` 要么有正确契约、要么明确不可用且给原因;CodingAgent 能查能力而非幻觉。
