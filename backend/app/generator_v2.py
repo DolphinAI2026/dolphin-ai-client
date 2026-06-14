@@ -61,6 +61,8 @@ from app.operations.form_references import (  # noqa: F401
     _resolve_component_reference,
     _resolve_target_form_result,
 )
+# 权限原子操作收敛到 operations 层（canonical = step_executor 超集版，见 operations/permissions.py）。
+from app.operations.permissions import _parse_permission_ops  # noqa: F401
 
 
 # ---------------------------------------------------------------------------
@@ -104,12 +106,6 @@ def _permission_object_for_form_config(rule: dict, role_code_map: Dict[str, dict
         "permissionObjectValue": "",
         "permissionObjectDisplayName": "全部人员",
     }
-
-
-def _parse_permission_ops(op_value: object) -> set[str]:
-    if isinstance(op_value, str):
-        return {part.strip() for part in op_value.split(",") if part.strip()}
-    return {"all"}
 
 
 def _build_permission_groups_for_form_config(

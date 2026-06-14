@@ -2335,14 +2335,8 @@ async def execute_create_workflow(
 # Step 6: 配置权限
 # ------------------------------------------------------------------
 
-def _parse_permission_ops(op: object) -> set[str]:
-    if isinstance(op, str):
-        raw_ops = op.replace(" ", "").split(",") if "," in op else [op]
-    elif isinstance(op, (list, tuple, set)):
-        raw_ops = list(op)
-    else:
-        raw_ops = ["all"]
-    return {str(item).strip() for item in raw_ops if str(item).strip()}
+# _parse_permission_ops 已收口到 app.operations.permissions(canonical 即本 step_executor 旧实现)。
+from app.operations.permissions import _parse_permission_ops  # noqa: F401,E402
 
 
 def _resolve_permission_object(rule: dict, role_codes: Dict[str, dict]) -> dict:
