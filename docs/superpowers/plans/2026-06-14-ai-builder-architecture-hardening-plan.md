@@ -187,6 +187,13 @@ build/package/upload/publish/republish 真相分离;给 UI 和 agent 一个状�
 
 ## Phase 6 — 事件协议 + 观测(原 Task 9,M1 修正)
 
+> **执行结论(2026-06-14,M1 盘点完成 → 合并部分延后):** 只读盘点三套回放层后判定**不强行合并**。
+> 三者服务**三个不同消费者/子系统**,各自封装在独立模块、独立工作:
+> - `ConversationReplay`(replay_store.py)= coding 会话回放,coding/pipeline 写 + routes/coding.py:398/1111 读(IDE 重放对话)
+> - `ConversationEvent`(db_publisher.py)= SSE 断线重连缓存,routes/sse.py:129 消费
+> - `HarnessItem`(harness/events.py EventBus)= harness 事件总线,整个 harness 子系统消费
+> "合并"= 统一 coding 回放 + SSE 重连 + harness 总线三个子系统的消费者 = 巨型跨子系统重构、高危,而三者各自工作正常,冗余本质是可接受的关注点分离(非清晰 bug)。typed-protocol(agent-events.ts)在无单一事件契约前提下价值低。**与 3-6/3-7 同性质:延后,需产品决策 + 跨子系统 careful work,不做 make-work。** 若出现具体的"刷新后某事件丢失"可复现 bug,作为独立的针对性修复处理(非大改)。
+
 - [ ] **M1 先盘点三套回放层**:`ConversationReplay` / `ConversationEvent` / `HarnessItem` 职责与去留,决定收敛到几套,**再**定义统一事件名。不要在不承认三套现状的情况下加"第四套规范"。
 - [ ] 新建 `services/agent_event_service.py` + `frontend/src/types/agent-events.ts`:事件名/payload 字段定义一次;replay 含足够字段重建 message/tool/diff/attachment;前端不再猜缺字段。
 - [ ] 观测补齐(力所能及范围):把 recorder 接到 deployment/生成链路(coding/builder 链路的完整 recorder 接入与 token 采集,因与 run 语义耦合,主体留 Phase X)。
