@@ -16,11 +16,12 @@ import { computed, onScopeDispose, ref, type ComputedRef, type Ref } from 'vue'
 import {
   aiChatApi,
   type AIChatArtifact,
+  type AIChatAttachment,
   type AIChatMessage,
   type AIChatSession,
   type AIChatToolCall,
 } from '@/api/aiChat'
-import type { AgentMessage } from '@/components/common/agent-conversation/types'
+import type { AgentAttachment, AgentMessage } from '@/components/common/agent-conversation/types'
 
 export interface UseAiChatSessionOptions {
   /** 锁定的应用 id（建会话时带上；listSessions 也按它过滤） */
@@ -199,6 +200,8 @@ export function useAiChatSession(opts?: UseAiChatSessionOptions): UseAiChatSessi
   const messages = ref<AIChatMessage[]>([])
   const toolCalls = ref<AIChatToolCall[]>([])
   const artifacts = ref<AIChatArtifact[]>([])
+  // 会话级附件(图片含 image_data_url),按 message.extra_meta.attachment_ids 映射到消息气泡。
+  const attachments = ref<AIChatAttachment[]>([])
 
   // ── 流式 / 临时 state ──
   const sending = ref(false)
@@ -519,10 +522,22 @@ export function useAiChatSession(opts?: UseAiChatSessionOptions): UseAiChatSessi
     })
     for (const item of renderTimeline.value) {
       if (item.kind === 'msg' && item.msg.role === 'user') {
+        // 把 message.extra_meta.attachment_ids 映射成气泡里的附件(图片用 image_data_url 渲缩略图)。
+        const attIds = (((item.msg as any).extra_meta?.attachment_ids) as number[] | undefined) || []
+        const msgAtts: AgentAttachment[] = attIds
+          .map(aid => attachments.value.find(a => a.id === aid))
+          .filter((a): a is AIChatAttachment => !!a)
+          .map(a => ({
+            id: a.id,
+            kind: a.kind === 'image' ? 'image' : 'file',
+            filename: a.filename,
+            url: a.image_data_url || undefined,
+          }))
         out.push({
           id: 'm' + item.msg.id,
           kind: 'user',
           content: item.msg.content,
+          ...(msgAtts.length ? { attachments: msgAtts } : {}),
         })
       } else if (item.kind === 'msg' && item.msg.role === 'assistant') {
         if (item.msg.content) {
@@ -639,6 +654,7 @@ export function useAiChatSession(opts?: UseAiChatSessionOptions): UseAiChatSessi
     messages.value = Array.isArray(data.messages) ? data.messages : []
     toolCalls.value = Array.isArray(data.tool_calls) ? data.tool_calls : []
     artifacts.value = Array.isArray(data.artifacts) ? data.artifacts : []
+    attachments.value = Array.isArray(data.attachments) ? data.attachments : []
     transientItems.value = []
     streamingText.value = ''
   }
@@ -698,6 +714,11 @@ export function useAiChatSession(opts?: UseAiChatSessionOptions): UseAiChatSessi
     if (files && files.length > 0) {
       const result = await aiChatApi.uploadAttachments(session.id, files)
       uploadedAttIds = result.attachments.map(a => a.id)
+      // 把上传的附件(图片含 image_data_url)并入会话级附件 → live 发送时用户消息气泡立刻渲染缩略图,
+      // 不必等 send 后 reload。
+      for (const a of result.attachments) {
+        if (!attachments.value.some(x => x.id === a.id)) attachments.value.push(a)
+      }
     }
 
     // 发送：重置流式态

@@ -361,6 +361,9 @@ def _attachment_to_dict(a: AIChatAttachment) -> dict:
         "size_bytes": a.size_bytes,
         "has_content_text": bool(a.content_text),
         "has_image": bool(a.image_data_url),
+        # 图片附件回带 base64 data URL, 让历史消息气泡能渲染缩略图(粘贴的截图刷新后仍可见)。
+        # 非图片不带, 避免响应膨胀。
+        "image_data_url": a.image_data_url if a.kind == "image" else None,
         "uploaded_at": a.uploaded_at.isoformat() if a.uploaded_at else None,
     }
 

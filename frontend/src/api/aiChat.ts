@@ -67,6 +67,8 @@ export interface AIChatAttachment {
   size_bytes: number
   has_content_text: boolean
   has_image: boolean
+  // 图片附件:base64 data URL(后端仅对 kind=image 回带), 用于历史消息气泡渲染缩略图。
+  image_data_url?: string | null
   uploaded_at: string | null
 }
 
