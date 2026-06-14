@@ -203,43 +203,7 @@ from app.operations.form_config import _ensure_canvas_form_components  # noqa: F
 from app.operations.form_config import _save_form_config_with_retry  # noqa: F401,E402 (Phase3 收口)
 
 
-async def _finalize_created_form_config(
-    client: APaaSClient,
-    app_id: str,
-    *,
-    form_id: str,
-    form_name: str,
-    form_code: str,
-    all_model_codes: List[str],
-    menu_id: str = "",
-    form_components: Optional[List[dict]] = None,
-) -> None:
-    if not form_id:
-        return
-
-    def _apply_latest(config: dict) -> None:
-        _force_form_identity(
-            config,
-            form_name=form_name,
-            form_code=form_code,
-            all_model_codes=all_model_codes,
-            app_id=app_id,
-            form_id=form_id,
-            menu_id=menu_id,
-        )
-        _ensure_canvas_form_components(config, form_components)
-
-    form_config = await _query_saveable_form_config(client, app_id, form_id)
-    _apply_latest(form_config)
-    logger.info("save_form_config reason: 创建后固化表单详情 (formId=%s, formName=%s)", form_id, form_name)
-    await _save_form_config_with_retry(
-        client,
-        app_id,
-        form_config,
-        form_id=form_id,
-        apply_latest=_apply_latest,
-        reason="创建后固化表单详情",
-    )
+from app.operations.form_config import _finalize_created_form_config  # noqa: F401,E402 (Phase3 收口)
 
 
 async def _sync_form_permissions_to_form_config(

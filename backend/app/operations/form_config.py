@@ -324,6 +324,51 @@ async def _save_form_config_with_retry(
         return await client.save_form_config(app_id, latest)
 
 
+async def _finalize_created_form_config(
+    client: APaaSClient,
+    app_id: str,
+    form_id: str,
+    *,
+    form_name: str,
+    form_code: str,
+    all_model_codes: List[str],
+    menu_id: str = "",
+    form_components: Optional[List[dict]] = None,
+) -> None:
+    """建表后固化表单详情(canonical, 收口 generator_v2/step_executor)。
+
+    查可保存配置 → apply 标识固化 + 画布组件补全 → 带冲突重试保存。form_id 为普通位置参,
+    两侧旧调用(gen_v2 传 form_id=kw / step_exec 传位置参)均兼容。收口前两侧 body 仅日志措辞差,
+    且依赖的 identity/canvas/save_retry 已先行收口,故此处等价。
+    """
+    if not form_id:
+        return
+
+    def _apply_latest(config: dict) -> None:
+        _apply_form_identity_to_form_config(
+            config,
+            form_name=form_name,
+            form_code=form_code,
+            all_model_codes=all_model_codes,
+            app_id=app_id,
+            form_id=form_id,
+            menu_id=menu_id,
+        )
+        _ensure_canvas_form_components(config, form_components)
+
+    form_config = await _query_saveable_form_config(client, app_id, form_id)
+    _apply_latest(form_config)
+    logger.info("save_form_config reason: 创建后固化表单详情 (form=%s, formId=%s)", form_name, form_id)
+    await _save_form_config_with_retry(
+        client,
+        app_id,
+        form_config,
+        form_id=form_id,
+        apply_latest=_apply_latest,
+        reason="创建后固化表单详情",
+    )
+
+
 __all__ = [
     "_iter_form_components",
     "_component_field_code",
@@ -338,4 +383,5 @@ __all__ = [
     "_ensure_canvas_form_components",
     "_is_form_save_conflict",
     "_save_form_config_with_retry",
+    "_finalize_created_form_config",
 ]
