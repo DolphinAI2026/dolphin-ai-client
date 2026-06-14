@@ -906,56 +906,7 @@ def _build_create_form_payload(
 from app.operations.form_config import _apply_form_identity_to_form_config  # noqa: F401,E402 (收口; incremental_executor 经 step re-export 取用)
 
 
-def _ensure_canvas_form_components(
-    form_config: dict,
-    fallback_components: Optional[List[dict]] = None,
-) -> bool:
-    """Keep the real designer canvas components in detailPage.formComponents."""
-    if not isinstance(form_config, dict):
-        return False
-
-    changed = False
-    if not isinstance(form_config.get("detailPage"), dict):
-        form_config["detailPage"] = {}
-        changed = True
-
-    detail_page = form_config["detailPage"]
-    raw_components = detail_page.get("formComponents")
-    components = raw_components if isinstance(raw_components, list) else None
-
-    if not components and fallback_components:
-        components = copy.deepcopy(fallback_components)
-        detail_page["formComponents"] = components
-        changed = True
-    elif components is None:
-        return changed
-    elif raw_components is not components:
-        detail_page["formComponents"] = components
-        changed = True
-
-    def _prepare_component(component: dict, index_path: str) -> None:
-        nonlocal changed
-        if not isinstance(component, dict):
-            return
-        if not str(component.get("uuid") or "").strip():
-            field_code = str(component.get("modelField") or component.get("tableModelCode") or "").split(".")[-1]
-            label = str(component.get("label") or component.get("name") or field_code or "component")
-            base = _sanitize_code(label) or "component"
-            component["uuid"] = f"{base}-{index_path}-{_rand(6)}"
-            changed = True
-        if not component.get("componentType"):
-            component["componentType"] = "FORM_TEXT_INPUT"
-            changed = True
-        if "width" not in component:
-            component["width"] = 6
-            changed = True
-        for column_index, column in enumerate(component.get("tableColumn", []) or [], start=1):
-            _prepare_component(column, f"{index_path}-{column_index}")
-
-    for index, component in enumerate(components, start=1):
-        _prepare_component(component, str(index))
-
-    return changed
+from app.operations.form_config import _ensure_canvas_form_components  # noqa: F401,E402 (Phase3 收口)
 
 
 def _is_form_save_conflict(exc: Exception) -> bool:

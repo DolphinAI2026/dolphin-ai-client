@@ -13,10 +13,12 @@
 """
 from __future__ import annotations
 
+import copy
 import logging
 from typing import Dict, List, Optional
 
 from app.apaas_client import APaaSClient
+from app.operations.identifiers import _rand, _sanitize_code
 
 logger = logging.getLogger(__name__)
 
@@ -223,6 +225,64 @@ def _apply_form_identity_to_form_config(
     return changed
 
 
+def _ensure_canvas_form_components(
+    form_config: dict,
+    fallback_components: Optional[List[dict]] = None,
+) -> bool:
+    """保证 detailPage.formComponents 是真实设计器画布组件(canonical, 收口自 step_executor)。
+
+    无组件时用 fallback 回填,并给每个组件补 uuid/componentType/width。返回 bool 标识
+    是否有改动。收口前 generator_v2 版返 None(其调用方 `updated = _ensure_canvas...` 因此恒
+    拿到 None=潜在 bug),本 bool 版修正之;另用 `if not component.get("componentType")` 取代
+    gen_v2 的 setdefault,能把空串 componentType 纠正为默认(更正确)。
+    """
+    if not isinstance(form_config, dict):
+        return False
+
+    changed = False
+    if not isinstance(form_config.get("detailPage"), dict):
+        form_config["detailPage"] = {}
+        changed = True
+
+    detail_page = form_config["detailPage"]
+    raw_components = detail_page.get("formComponents")
+    components = raw_components if isinstance(raw_components, list) else None
+
+    if not components and fallback_components:
+        components = copy.deepcopy(fallback_components)
+        detail_page["formComponents"] = components
+        changed = True
+    elif components is None:
+        return changed
+    elif raw_components is not components:
+        detail_page["formComponents"] = components
+        changed = True
+
+    def _prepare_component(component: dict, index_path: str) -> None:
+        nonlocal changed
+        if not isinstance(component, dict):
+            return
+        if not str(component.get("uuid") or "").strip():
+            field_code = str(component.get("modelField") or component.get("tableModelCode") or "").split(".")[-1]
+            label = str(component.get("label") or component.get("name") or field_code or "component")
+            base = _sanitize_code(label) or "component"
+            component["uuid"] = f"{base}-{index_path}-{_rand(6)}"
+            changed = True
+        if not component.get("componentType"):
+            component["componentType"] = "FORM_TEXT_INPUT"
+            changed = True
+        if "width" not in component:
+            component["width"] = 6
+            changed = True
+        for column_index, column in enumerate(component.get("tableColumn", []) or [], start=1):
+            _prepare_component(column, f"{index_path}-{column_index}")
+
+    for index, component in enumerate(components, start=1):
+        _prepare_component(component, str(index))
+
+    return changed
+
+
 __all__ = [
     "_iter_form_components",
     "_component_field_code",
@@ -234,4 +294,5 @@ __all__ = [
     "_normalize_permission_range",
     "_query_saveable_form_config",
     "_apply_form_identity_to_form_config",
+    "_ensure_canvas_form_components",
 ]

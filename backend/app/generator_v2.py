@@ -199,41 +199,7 @@ _STATE_CHANGED_MARKERS = ("页面状态已改变", "无法保存")
 from app.operations.form_config import _apply_form_identity_to_form_config as _force_form_identity  # noqa: F401,E402 (收口; 保留 gen_v2 调用名)
 
 
-def _ensure_canvas_form_components(
-    form_config: dict,
-    fallback_components: Optional[List[dict]] = None,
-) -> None:
-    if not isinstance(form_config, dict):
-        return
-    detail_page = form_config.setdefault("detailPage", {})
-    if not isinstance(detail_page, dict):
-        form_config["detailPage"] = {}
-        detail_page = form_config["detailPage"]
-
-    components = detail_page.get("formComponents")
-    if not isinstance(components, list):
-        components = None
-    if not components and fallback_components:
-        components = copy.deepcopy(fallback_components)
-    if components is None:
-        return
-    detail_page["formComponents"] = components
-
-    def _prepare_component(component: dict, index_path: str) -> None:
-        if not isinstance(component, dict):
-            return
-        if not str(component.get("uuid") or "").strip():
-            field_code = str(component.get("modelField") or component.get("tableModelCode") or "").split(".")[-1]
-            label = str(component.get("label") or component.get("name") or field_code or "component")
-            base = _sanitize_code(label) or "component"
-            component["uuid"] = f"{base}-{index_path}-{_rand(6)}"
-        component.setdefault("componentType", "FORM_TEXT_INPUT")
-        component.setdefault("width", 6)
-        for column_index, column in enumerate(component.get("tableColumn", []) or [], start=1):
-            _prepare_component(column, f"{index_path}-{column_index}")
-
-    for index, component in enumerate(components, start=1):
-        _prepare_component(component, str(index))
+from app.operations.form_config import _ensure_canvas_form_components  # noqa: F401,E402 (Phase3 收口)
 
 
 async def _save_form_config_with_retry(
