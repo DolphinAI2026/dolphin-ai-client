@@ -251,14 +251,12 @@
           @remove-attachment="removePendingFileByIndex"
         >
           <template #footer-left>
-            <select
+            <BuilderModelPicker
               v-model="selectedLlmId"
-              class="model-select-inline"
+              :options="llmOptions"
+              title="切换模型"
               @change="onChangeLlm"
-            >
-              <option :value="null">默认模型</option>
-              <option v-for="m in llmOptions" :key="m.id" :value="m.id">{{ m.config_name }}</option>
-            </select>
+            />
           </template>
           <template #footer-right>
             <span class="hint">{{ isSending ? 'Enter 排队发送 · Shift+Enter 换行' : 'Enter 发送 · Shift+Enter 换行' }}</span>
@@ -473,6 +471,7 @@ import type { AgentMessage } from '@/components/common/agent-conversation/types'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { isImageFile } from '@/utils/pasteImages'
 import UnifiedChatComposer from '@/components/common/UnifiedChatComposer.vue'
+import BuilderModelPicker from '@/components/common/BuilderModelPicker.vue'
 import AppIcon from '@/components/common/AppIcon.vue'
 import type { UnifiedChatAttachment } from '@/components/common/chatComposer'
 // chat / cowork mode 已合并 — ChatDotRound 用作 session 列表前导 icon（对话界面风格）
@@ -2982,17 +2981,6 @@ onMounted(async () => {
   border-top: 1px solid rgba(255, 255, 255, 0.04);
   margin-top: 4px;
 }
-.model-select-inline {
-  background: transparent;
-  border: 1px solid var(--ac-border);
-  color: var(--ac-text-mute);
-  padding: 3px 8px;
-  border-radius: 5px;
-  font-size: 12px;
-  cursor: pointer;
-  outline: none;
-}
-.model-select-inline:hover { border-color: var(--ac-border-strong); color: var(--ac-text); }
 .input-foot .hint { color: var(--ac-text-faint); font-size: 11.5px; }
 /* 2026-05-21 UI audit Fix 12: 模型说明字号 11.5 → 12.5px / faint → mute / 加 ⓘ icon */
 .input-foot .hint-info {
@@ -3781,6 +3769,12 @@ onMounted(async () => {
   border-top: 1px solid var(--ac-border);
   padding: 10px 16px calc(14px + env(safe-area-inset-bottom, 0px));
   flex-shrink: 0;
+}
+
+.input-area :deep(.ucc-box),
+.input-area :deep(.ucc-footer),
+.input-area :deep(.ucc-footer-left) {
+  overflow: visible;
 }
 
 /* 对话界面风格队列提示卡 */
