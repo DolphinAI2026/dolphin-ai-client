@@ -68,6 +68,7 @@ from app.operations.permissions import (  # noqa: F401
     _parse_permission_ops,
     _permission_object_for_form_config,
     _build_permission_groups_for_form_config,
+    _sync_form_permissions_to_form_config,
 )
 
 
@@ -112,80 +113,8 @@ from app.operations.form_config import _save_form_config_with_retry  # noqa: F40
 from app.operations.form_config import _finalize_created_form_config  # noqa: F401,E402 (Phase3 收口)
 
 
-async def _sync_form_permissions_to_form_config(
-    client: APaaSClient,
-    app_id: str,
-    form_id: str,
-    rules: List[dict],
-    role_code_map: Dict[str, dict],
-    form_name: str = "",
-    form_code: str = "",
-    all_model_codes: Optional[List[str]] = None,
-    fallback_components: Optional[List[dict]] = None,
-    menu_id: str = "",
-) -> None:
-    """回写表单权限到 formConfig。
-
-    平台在并发场景下可能返回"当前页面状态已改变，无法保存"——此时重查再存一次，
-    单次重试足以覆盖常见瞬时冲突；仍失败则把最新异常抛出（由调用方的 except 兜底）。
-
-    重要：query_detail_page_config 返回的 formName 可能被平台覆盖成默认占位"我的待办"，
-    save 前必须把建表时确定的 form_name/form_code/all_model_codes 强制写回去，
-    否则所有表单的名字都会变成"我的待办"（参见 step_executor.py 同名函数注释）。
-    """
-    permission_groups, advanced_groups, operation_groups = _build_permission_groups_for_form_config(
-        rules,
-        role_code_map,
-    )
-    permission_groups = _clone_for_form_config_permissions(permission_groups)
-    advanced_groups = _clone_for_form_config_permissions(advanced_groups)
-    operation_groups = _clone_for_form_config_permissions(operation_groups)
-
-    def _apply_latest(form_config: dict) -> None:
-        permission_groups, advanced_groups, operation_groups = _build_permission_groups_for_form_config(
-            rules,
-            role_code_map,
-        )
-        permission_groups = _clone_for_form_config_permissions(permission_groups)
-        advanced_groups = _clone_for_form_config_permissions(advanced_groups)
-        operation_groups = _clone_for_form_config_permissions(operation_groups)
-        form_config["permissionGroups"] = permission_groups
-        form_config["advancedPermissionGroups"] = advanced_groups
-        form_config["operationPermissionGroups"] = operation_groups
-        detail_page = form_config.setdefault("detailPage", {})
-        if isinstance(detail_page, dict):
-            detail_page["permissionGroups"] = permission_groups
-            detail_page["advancedPermissionGroups"] = advanced_groups
-            detail_page["operationPermissionGroups"] = operation_groups
-        _force_form_identity(
-            form_config,
-            form_name=form_name,
-            form_code=form_code,
-            all_model_codes=all_model_codes or [],
-            app_id=app_id,
-            form_id=form_id,
-            menu_id=menu_id,
-        )
-        _ensure_canvas_form_components(form_config, fallback_components)
-
-    form_config = await _query_saveable_form_config(client, app_id, form_id)
-    _apply_latest(form_config)
-    logger.info(
-        "save_form_config reason: 回写表单权限 (formId=%s, formName=%s, permissionGroups=%s, advanced=%s, operation=%s)",
-        form_id,
-        form_name or "<unknown>",
-        len(permission_groups),
-        len(advanced_groups),
-        len(operation_groups),
-    )
-    await _save_form_config_with_retry(
-        client,
-        app_id,
-        form_config,
-        form_id=form_id,
-        apply_latest=_apply_latest,
-        reason="回写表单权限",
-    )
+# _sync_form_permissions_to_form_config 已收口到 app.operations.permissions(3-7,见上方 import)。
+# canonical = gen_v2 编排(超集 fetch + all_model_codes)+ step 的 form_id 早返守卫。
 
 
 # ---------------------------------------------------------------------------

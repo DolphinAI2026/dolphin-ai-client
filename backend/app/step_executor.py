@@ -2058,6 +2058,7 @@ async def execute_create_workflow(
 from app.operations.permissions import (  # noqa: F401,E402
     _parse_permission_ops,
     _build_permission_groups_for_form_config,
+    _sync_form_permissions_to_form_config,
 )
 
 
@@ -2099,55 +2100,10 @@ def _build_form_permission_payload(
     }
 
 
-async def _sync_form_permissions_to_form_config(
-    client: APaaSClient,
-    app_id: str,
-    *,
-    form_id: str,
-    form_name: str,
-    form_code: str,
-    rules: List[dict],
-    role_codes: Dict[str, dict],
-    fallback_components: Optional[List[dict]] = None,
-    menu_id: str = "",
-) -> None:
-    if not form_id:
-        return
-    permission_groups, advanced_groups, operation_groups = _build_permission_groups_for_form_config(rules, role_codes)
-    permission_groups = _clone_for_form_config_permissions(permission_groups)
-    advanced_groups = _clone_for_form_config_permissions(advanced_groups)
-    operation_groups = _clone_for_form_config_permissions(operation_groups)
-
-    def _apply_latest(config: dict) -> None:
-        _apply_form_identity_to_form_config(
-            config,
-            form_name=form_name,
-            form_code=form_code,
-            app_id=app_id,
-            form_id=form_id,
-            menu_id=menu_id,
-        )
-        _ensure_canvas_form_components(config, fallback_components)
-        config["permissionGroups"] = permission_groups
-        config["advancedPermissionGroups"] = advanced_groups
-        config["operationPermissionGroups"] = operation_groups
-        detail_page = config.setdefault("detailPage", {})
-        if isinstance(detail_page, dict):
-            detail_page["permissionGroups"] = permission_groups
-            detail_page["advancedPermissionGroups"] = advanced_groups
-            detail_page["operationPermissionGroups"] = operation_groups
-
-    form_config = await client.query_detail_page_config(app_id, form_id)
-    _apply_latest(form_config)
-    logger.info("save_form_config reason: 权限页面配置回写 (form=%s, formId=%s)", form_name or form_code, form_id)
-    await _save_form_config_with_retry(
-        client,
-        app_id,
-        form_config,
-        form_id=form_id,
-        apply_latest=_apply_latest,
-        reason="权限页面配置回写",
-    )
+# _sync_form_permissions_to_form_config 已收口到 app.operations.permissions(3-7,见上方 import)。
+# canonical = gen_v2 编排(超集 fetch _query_saveable_form_config + all_model_codes 修 allModelCodes)
+# + 本 step 的 form_id 早返守卫。旧 step 直用 raw query_detail_page_config、未传 all_model_codes,
+# canonical 严格更全。
 
 
 async def execute_configure_permissions(
@@ -2211,6 +2167,7 @@ async def execute_configure_permissions(
                 "form_name": form_name,
                 "form_code": form_code,
                 "rules": rules,
+                "all_model_codes": fr.get("allModelCodes") or [],
                 "form_components": fr.get("formComponents") or fr.get("components"),
                 "menu_id": fr.get("menuId") or "",
             })
@@ -2227,7 +2184,8 @@ async def execute_configure_permissions(
                     form_name=str(job.get("form_name") or ""),
                     form_code=str(job.get("form_code") or ""),
                     rules=job.get("rules") or [],
-                    role_codes=role_codes,
+                    role_code_map=role_codes,
+                    all_model_codes=job.get("all_model_codes") or [],
                     fallback_components=job.get("form_components") or [],
                     menu_id=str(job.get("menu_id") or ""),
                 )

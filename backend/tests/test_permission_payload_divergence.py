@@ -16,6 +16,8 @@ generator_v2 与 step_executor 的 `_build_permission_groups_for_form_config` �
 """
 from __future__ import annotations
 
+import pytest
+
 from app.generator_v2 import _build_permission_groups_for_form_config as build_g2
 from app.step_executor import _build_permission_groups_for_form_config as build_step
 
@@ -115,3 +117,77 @@ def test_canonical_operation_object_has_permission_range():
         op_obj = operation_groups[0]["permissionObjects"][0]
         assert "permissionRange" in op_obj, "operation 对象应带 permissionRange"
         assert op_obj["permissionRange"] == {"rangeType": "ALL"}
+
+
+# ─────────────────── 3-7 _sync 编排收口(canonical orchestration)───────────────────
+
+class _FakeClient:
+    """最小 fake aPaaS client,记录 fetch/save 调用。"""
+
+    def __init__(self, fetched_config: dict):
+        self._fetched = fetched_config
+        self.saved: dict | None = None
+        self.context_calls = 0
+
+    async def query_form_context_config(self, app_id, form_id):
+        self.context_calls += 1
+        return self._fetched
+
+    async def query_detail_page_config(self, app_id, form_id):
+        return self._fetched
+
+    async def save_form_config(self, app_id, form_config):
+        self.saved = form_config
+        return {"ok": True}
+
+
+def test_sync_is_single_shared_object():
+    """两条路径的 _sync_form_permissions_to_form_config 是同一 canonical 对象(3-7 收口)。"""
+    from app.generator_v2 import _sync_form_permissions_to_form_config as sync_g2
+    from app.operations.permissions import _sync_form_permissions_to_form_config as sync_op
+    from app.step_executor import _sync_form_permissions_to_form_config as sync_step
+
+    assert sync_g2 is sync_op is sync_step
+
+
+@pytest.mark.asyncio
+async def test_sync_uses_superset_fetch_fixes_identity_and_writes_perms():
+    """canonical _sync:超集 fetch(query_form_context_config)+ 修 formName 占位 +
+    写 9 字段权限组 + all_model_codes 回写 + detailPage 镜像 + 保存。"""
+    from app.operations.permissions import _sync_form_permissions_to_form_config
+
+    fetched = {"formName": "我的待办", "detailPage": {}}  # 平台返回占位名
+    client = _FakeClient(fetched)
+    await _sync_form_permissions_to_form_config(
+        client, "app1",
+        form_id="form1",
+        rules=_RULES,
+        role_code_map=_ROLE_MAP,
+        form_name="客户表单",
+        form_code="customer",
+        all_model_codes=["customer"],
+        menu_id="menu1",
+    )
+    saved = client.saved
+    assert saved is not None, "应调用 save_form_config"
+    assert client.context_calls == 1, "应走超集 fetch query_form_context_config"
+    assert saved["formName"] == "客户表单", "占位 formName 应被修正"
+    assert saved["allModelCodes"] == ["customer"], "all_model_codes 应写回"
+    assert len(saved["advancedPermissionGroups"]) == 2
+    adv_keys = set(saved["advancedPermissionGroups"][0]["permissionOperationType"].keys())
+    assert {"exportPermission", "printPermission"} <= adv_keys, "应含 9 字段"
+    # detailPage 镜像权限组
+    assert saved["detailPage"]["advancedPermissionGroups"] == saved["advancedPermissionGroups"]
+
+
+@pytest.mark.asyncio
+async def test_sync_early_return_when_no_form_id():
+    """form_id 为空 → 早返,不 fetch/不保存。"""
+    from app.operations.permissions import _sync_form_permissions_to_form_config
+
+    client = _FakeClient({"formName": "x"})
+    await _sync_form_permissions_to_form_config(
+        client, "app1", form_id="", rules=_RULES, role_code_map=_ROLE_MAP,
+    )
+    assert client.saved is None
+    assert client.context_calls == 0
