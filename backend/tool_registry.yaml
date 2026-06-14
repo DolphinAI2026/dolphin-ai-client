@@ -34,22 +34,26 @@ tools:
     category: other
     description: "把已上传到 apaas 平台的自开发包（zip）关联到应用的「自开发资源」列表。"
     search_hint: "绑定 关联 挂载 自开发包 二次开发 zip 应用资源"
+    writes_apaas: true
   bind_apaas_form_field_to_dict:
     sections: [data, ui]
     agents: [config]
     category: other
     description: "把表单字段的\"数据来源\"绑定到指定数据字典 (切组件 + source.type + 选项三件套)."
+    writes_apaas: true
   build_apaas_feature_from_spec:
     sections: [ui]
     agents: [config]
     category: other
     description: "⭐ 一键建新表单+流程 (走 SPEC 驱动). 用户最高频\"加新功能\"场景."
     search_hint: "新功能 新增功能 搭建 建表单 建流程 从零 SPEC scaffold"
+    writes_apaas: true
   check_app_code_conflict:
     sections: [global]
     agents: [builder, config]
     category: other
     description: "查 app_code 是否被占用（部署前预检）。"
+    read_only: true
   create_apaas_app_dict:
     sections: [data]
     agents: [builder, config]
@@ -90,11 +94,13 @@ tools:
     agents: [coding]
     category: dev_workspace
     description: "创建自开发 workspace；传 env_id 时会先查同名自开发包/菜单，命中则要求用户确认。"
+    writes_workspace: true
   list_dev_workspaces:
     sections: [extension]
     agents: [coding, config]
     category: dev_workspace
     description: "按应用/页面名/zip 包名列出自开发 workspace，帮助在不知道 workspace_id 时反查源码工作区。"
+    read_only: true
   create_form_event_with_python_code:
     sections: [logic]
     agents: [config]
@@ -135,12 +141,16 @@ tools:
     agents: [builder]
     category: lifecycle
     description: "把 ai-builder 内 draft 应用首次部署到 aPaaS 平台（写入 apaas_app_id）。"
+    deploys_or_publishes: true
+    requires_confirmation: true
   deploy_process_to_apaas:
     sections: [logic]
     agents: [builder, config]
     category: lifecycle
     description: "把本地 ProcessDefinition 真同步到 apaas 平台，支持条件分支/并行/审批节点和 edges 拓扑。"
     search_hint: "流程 审批流 条件分支 并行 同步 提交流程 process workflow deploy branch"
+    deploys_or_publishes: true
+    requires_confirmation: true
   disable_apaas_app_dict:
     sections: [data]
     agents: [builder, config]
@@ -161,26 +171,33 @@ tools:
     agents: [coding]
     category: dev_workspace
     description: "打包前置体检 — 不实际跑 mvn，3 秒内出结果。"
+    read_only: true
   edit_workspace_files:
     sections: [extension]
     agents: [coding]
     category: dev_workspace
     description: "批量对多个文件做精确字符串替换（vibe_agent.edit_file 的 batch MCP 等价）。"
+    writes_workspace: true
   enable_apaas_self_dev_config:
     sections: [extension]
     agents: [coding]
     category: other
     description: "开启 / 关闭 aPaaS 应用的「自开发配置」开关（apaas 平台 → 应用 → 高级设置）。"
+    writes_apaas: true
   execute_change_plan:
     sections: [global]
     agents: [builder]
     category: doc_pipeline
     description: "执行变更计划：把 plan 里所有 actions 落到底层（创建/修改/删除模型、表单、权限等）。"
+    writes_apaas: true
   generate_app_from_doc:
     sections: [global]
     agents: [builder]
     category: doc_pipeline
     description: "根据标准 markdown 设计文档创建一个新的 aPaaS 低代码应用（一步到位）。"
+    writes_apaas: true
+    deploys_or_publishes: true
+    requires_confirmation: true
   get_apaas_app_overview:
     sections: [global]
     agents: [builder, coding, config]
@@ -191,6 +208,7 @@ tools:
     agents: [config]
     category: business_event
     description: "查业务事件完整详情 — 含 triggerNodeNd + eventNodeNdList + endNode + 完整 boCodeBORelationProperties."
+    read_only: true
   get_apaas_doc_template_spec:
     sections: [global]
     agents: [builder]
@@ -253,6 +271,7 @@ tools:
     agents: [coding]
     category: dev_workspace
     description: "查询自开发 workspace 的当前状态（文件列表 / build 状态 / 关联对话 / 后台命令）。"
+    read_only: true
   get_role_resource_matrix:
     sections: [permission]
     agents: [config]
@@ -263,21 +282,25 @@ tools:
     agents: [coding]
     category: dev_workspace
     description: "按 glob pattern 列工作区文件（vibe_agent.glob_files 等价）。"
+    read_only: true
   grep_workspace:
     sections: [extension]
     agents: [coding]
     category: dev_workspace
     description: "在工作区内 grep 正则搜索（vibe_agent.grep_search 等价）。"
+    read_only: true
   init_apaas_backend_workspace:
     sections: [extension]
     agents: [coding]
     category: dev_workspace
     description: "给 AI Coding workspace 写入 aPaaS 后端自开发模版包标准骨架（10 个文件）。"
+    writes_workspace: true
   lint_apaas_backend_workspace:
     sections: [extension]
     agents: [coding]
     category: dev_workspace
     description: "静态扫描 workspace 里的 Java 代码，找 16 坑里能 grep 出来的写法。"
+    read_only: true
   list_apaas_app_dev_kits:
     sections: [extension]
     agents: [coding, config]
@@ -318,16 +341,19 @@ tools:
     agents: [config]
     category: business_event
     description: "查业务事件执行历史 — POST /xdap-app/event/query/exeHistory/list."
+    read_only: true
   list_apaas_business_events:
     sections: [logic]
     agents: [config]
     category: business_event
     description: "列指定应用的所有业务事件（字段值改变 / 表单提交触发 / 定时 / 审批节点等）。"
+    read_only: true
   list_apaas_business_events_in_tenant:
     sections: [logic]
     agents: [config]
     category: business_event
     description: "列租户业务事件中心（跨应用聚合，只读运维视图）— POST /xdap-app/event/query/allEventList."
+    read_only: true
   list_apaas_form_components:
     sections: [ui]
     agents: [builder, coding, config]
@@ -368,6 +394,7 @@ tools:
     agents: []  # mcp_server 已实现, dolphin agent prompt 文档未列入 — 维持现状
     category: lifecycle
     description: "列指定 ai-builder 应用的部署历史 (含 deploy / publish / rollback 全周期记录)."
+    read_only: true
   list_dev_scenes:
     sections: [extension]
     agents: [coding]
@@ -398,37 +425,48 @@ tools:
     agents: [builder]
     category: lifecycle
     description: "把应用上线：同步当前配置到底层 aPaaS 平台，让真实用户可访问。"
+    deploys_or_publishes: true
+    requires_confirmation: true
   publish_dev_workspace:
     sections: [extension]
     agents: [coding]
     category: dev_workspace
     description: "把 AI Coding workspace build 产物部署到 aPaaS 平台。"
+    writes_workspace: true
+    deploys_or_publishes: true
+    requires_confirmation: true
   query_apaas_business_data:
     sections: [global]
     agents: [builder, coding]
     category: other
     description: "查询某表单的运行时业务数据（用户提交的数据行，分页）。"
+    read_only: true
   query_apaas_business_event_trees:
     sections: [logic]
     agents: [config]
     category: business_event
     description: "查应用业务事件分类树 — GET /xdap-app/event/queryTrees."
+    read_only: true
   read_workspace_file:
     sections: [extension]
     agents: [coding]
     category: dev_workspace
     description: "读取 workspace 内某个文件（vibe_agent.read_file 的 MCP 等价物）。"
+    read_only: true
   rename_apaas_menu:
     sections: [ui]
     agents: [config]
     category: other
     description: "改菜单名 — 普通菜单 / 分组 / 自开发菜单 都用这个."
+    writes_apaas: true
   republish_apaas_app:
     sections: [global]
     agents: [coding, config]
     category: lifecycle
     description: "重新发布 aPaaS 应用版本（自开发变更必须 redeploy 才生效）。"
     search_hint: "发布 上线 release 重新发布 redeploy 生效"
+    deploys_or_publishes: true
+    requires_confirmation: true
   record_product_issue:
     sections: [global]
     agents: [config]
@@ -444,11 +482,14 @@ tools:
     agents: []  # mcp_server 已实现, dolphin agent prompt 文档未列入 — 维持现状
     category: lifecycle
     description: "回滚 ai-builder 应用到指定历史部署记录的 SPEC 快照."
+    deploys_or_publishes: true
+    requires_confirmation: true
   run_workspace_command:
     sections: [extension]
     agents: [coding]
     category: dev_workspace
     description: "在 workspace 根目录跑 shell 命令（vibe_agent.run_command 等价）。"
+    writes_workspace: true
   save_apaas_business_event:
     sections: [logic]
     agents: [config]
@@ -464,6 +505,7 @@ tools:
     agents: [coding]
     category: dev_workspace
     description: "Phase 1 必调：落盘双产物（技术 SPEC + 业务可视 HTML mockup）到 workspace。"
+    writes_workspace: true
   set_apaas_app_access:
     sections: [permission]
     agents: [builder]
@@ -529,6 +571,7 @@ tools:
     agents: [builder]
     category: doc_pipeline
     description: "把当前 md 设计文档推送到 ai-builder cache，并返回一条 deeplink — agent 必须把这条"
+    writes_apaas: true
   update_apaas_app_dict:
     sections: [data]
     agents: [builder, config]
@@ -574,12 +617,15 @@ tools:
     agents: [builder]
     category: doc_pipeline
     description: "上传新版 markdown 设计文档作为应用 vN+1 版，自动 diff 出变更计划返回。"
+    writes_apaas: true
   upload_external_zip_to_apaas:
     sections: [extension]
     agents: [coding, config]
     category: other
     description: "直接上传一个外部 zip 到 apaas 平台 — 内部走 multipart upload + 智能查重 update/create。"
     search_hint: "自开发包 zip 上传 外部 import 安装 打包 二次开发"
+    deploys_or_publishes: true
+    requires_confirmation: true
   validate_apaas_builder_doc:
     sections: [global]
     agents: [builder]
@@ -595,3 +641,4 @@ tools:
     agents: [coding]
     category: dev_workspace
     description: "批量写入多个文件到 workspace（一次 RPC 解决 30+ 文件场景）。"
+    writes_workspace: true
