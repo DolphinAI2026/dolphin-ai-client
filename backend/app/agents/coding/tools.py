@@ -29,7 +29,7 @@ from app.coding.apaas_tools import (
     APAAS_TOOL_EXECUTORS_WORKSPACE,
 )
 from app.coding.deploy_service import _deploy_to_app_impl
-from app.coding.workspace_access import _ensure_workspace_access
+from app.coding.workspace_access import _ensure_workspace_access, resolve_conversation_app_id
 
 logger = logging.getLogger(__name__)
 
@@ -113,7 +113,7 @@ async def _resolve_platform_env_id(ctx: AgentContext) -> int | None:
         if ctx.conversation_id:
             try:
                 conv = await db.get(Conversation, ctx.conversation_id)
-                conv_app_id = getattr(conv, "coding_app_id", None) if conv else None
+                conv_app_id = resolve_conversation_app_id(conv)
                 if conv_app_id:
                     app = await db.get(Application, conv_app_id)
                     if app and app.platform_env_id:
@@ -244,7 +244,7 @@ async def _resolve_local_app_id(args: dict[str, Any], ctx: AgentContext, db) -> 
             )
         )
         conv = result.scalar_one_or_none()
-        local_app_id = _coerce_int(getattr(conv, "coding_app_id", None))
+        local_app_id = resolve_conversation_app_id(conv)
         if local_app_id is not None:
             return local_app_id
 

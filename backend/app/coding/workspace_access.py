@@ -1,4 +1,29 @@
-"""Shared workspace access checks for coding routes and agent tools."""
+"""Shared workspace access checks and binding resolution for coding routes and agent tools.
+
+本模块是 workspace 绑定服务的正式归属地:
+- 访问控制: _ensure_workspace_access / _decorate_workspace_access / _workspace_permissions
+- 绑定解析: resolve_conversation_app_id — 从 Conversation 对象安全读取 coding_app_id
+
+【各调用场景保留原地的原因(附注于此,供下次维护者参考)】
+
+Point A (tools.py _resolve_local_app_id):
+  多源优先级链 args→ctx.extra→ctx.input→Conversation.coding_app_id→apaas反查。
+  语义是「装回应用」目标 app;含 DB 查询;优先级链太长且与其他点不等价,保留原地。
+
+Point B (read_query.py _load_bound_application):
+  候选链 args→params→Conversation.coding_app_id→workspace.project_id,
+  语义是读应用上下文时确定哪个 Application;返回 Application 对象+证据字典;保留原地。
+
+Point C (pipeline.py 绑定持久化状态机):
+  写入 + 回读;带 DB commit;不是纯解析;保留原地。
+
+Point D (pipeline.py _create_workspace_now):
+  `project_id or _param_app_id_int or conv.coding_app_id`
+  workspace 创建时的 project_id;强耦合局部变量;保留原地。
+
+Point E (routes/coding.py 批量自愈回填):
+  批量 DB 查 Conversation.coding_app_id 补 workspace.project_id;批量操作语义;保留原地。
+"""
 
 from __future__ import annotations
 
@@ -15,6 +40,34 @@ from app.project_access import project_role_at_least, require_project_access
 
 
 workspace_mgr = WorkspaceManager()
+
+
+def resolve_conversation_app_id(conv: Any) -> int | None:
+    """从 Conversation-like 对象安全读取 coding_app_id,返回正整数或 None。
+
+    这是绑定解析的最小共享原语:统一处理各调用点中散落的
+    `_coerce_int(getattr(conv, "coding_app_id", None))` / `_safe_int(...)` 变体。
+
+    规则:
+    - conv=None 或没有 coding_app_id 属性 → None
+    - coding_app_id=None 或 "" → None
+    - coding_app_id=0 → None (0 不是合法 Application.id,视同未绑定)
+    - coding_app_id=正整数 or 可转为正整数的字符串 → int
+    - 其他无法转 int → None
+
+    注意:本函数是纯函数(无 I/O、无副作用),调用方负责 DB 查询。
+    """
+    if conv is None:
+        return None
+    value = getattr(conv, "coding_app_id", None)
+    if value is None or value == "":
+        return None
+    try:
+        result = int(value)
+    except (TypeError, ValueError):
+        return None
+    # 0 视同未绑定(Application.id 从 1 开始)
+    return result if result != 0 else None
 
 
 def _workspace_permissions(access_role: str) -> dict[str, bool]:

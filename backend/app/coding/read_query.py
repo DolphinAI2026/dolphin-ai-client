@@ -24,6 +24,7 @@ from app.coding.apaas_tools import (
     APAAS_TOOL_DEFINITIONS,
     APAAS_TOOL_EXECUTORS_PLATFORM,
 )
+from app.coding.workspace_access import resolve_conversation_app_id
 from app.coding.workspace_read_tools import (
     WORKSPACE_TOOL_DEFINITIONS,
     WORKSPACE_TOOL_DISPLAY,
@@ -377,7 +378,7 @@ async def _load_bound_application(
             )
         )
         conv = result.scalar_one_or_none()
-        conv_app_id = _safe_int(getattr(conv, "coding_app_id", None))
+        conv_app_id = resolve_conversation_app_id(conv)
         if conv_app_id is not None:
             candidates.append(("conversation.coding_app_id", conv_app_id))
 
