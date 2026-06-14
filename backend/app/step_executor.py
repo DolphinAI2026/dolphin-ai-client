@@ -1671,111 +1671,9 @@ def _component_definition_map(components: List[dict]) -> Dict[str, dict]:
     return mapping
 
 
-def _build_permission_groups_for_form_config(
-    rules: List[dict],
-    role_codes: Dict[str, dict],
-) -> tuple[List[dict], List[dict], List[dict]]:
-    permission_groups: List[dict] = []
-    advanced_groups: List[dict] = []
-    operation_groups: List[dict] = []
-
-    for index, rule in enumerate(rules, start=1):
-        role_code = str(rule.get("roleCode") or rule.get("role") or "").strip()
-        role_info = role_codes.get(role_code, {}) if role_code else {}
-        perm_obj = _resolve_permission_object(rule, role_codes)
-        resolved_role_name = str(role_info.get("roleName") or "").strip()
-        raw_role_name = str(rule.get("roleName") or "").strip()
-        role_name = (
-            resolved_role_name
-            or (raw_role_name if raw_role_name and raw_role_name != role_code else "")
-            or str(perm_obj["permissionObjectDisplayName"] or role_code).strip()
-        )
-        range_type = _normalize_permission_range(rule.get("data", "ALL"))
-        ops = _parse_permission_ops(rule.get("op", "all"))
-        can_view = "all" in ops or "view" in ops
-        can_add = "all" in ops or "add" in ops
-        can_edit = "all" in ops or "edit" in ops
-        can_delete = "all" in ops or "delete" in ops
-        can_import = bool(rule.get("canImport"))
-        can_draft = bool(rule.get("canDraft"))
-        can_export = bool(rule.get("canExport"))
-
-        if perm_obj["permissionObjectType"] == "ROLE":
-            role_id = str(role_info.get("id") or "").strip()
-            role_code_value = (
-                str(role_info.get("roleCode") or "").strip()
-                or role_code
-                or perm_obj["permissionObjectValue"]
-            )
-            object_type = "ROLE"
-            object_value = role_id or role_code_value
-            object_name = role_name
-        else:
-            object_type = "ALL_USER"
-            # 与 formPermission API payload 对齐：ALL_USER 时 permissionObjectValue
-            # 必须是空字符串，不能写成 "ALL_USER"（平台会当成具体用户 ID 去查，
-            # 查不到就降级成"本人"）
-            object_value = ""
-            object_name = "全部人员"
-
-        permission_groups.append({
-            "groupConditions": [],
-            "selectorFilterConditionList": [],
-            "dataPermissions": [{
-                "permissionType": object_type,
-                "permissionValue": object_value,
-                "queryPermission": can_view,
-                "updatePermission": can_edit,
-                "deletePermission": can_delete,
-                "addPermission": can_add,
-            }],
-        })
-
-        # dataPermissionGroups 按标准 API：permissionOperationType 只含 3 个字段
-        # （query/update/delete）。平台 response 也印证只保留这 3 个。
-        advanced_groups.append({
-            "permissionName": f"{object_name}权限",
-            "permissionDescribe": "",
-            "permissionOperationType": {
-                "queryPermission": can_view,
-                "updatePermission": can_edit,
-                "deletePermission": can_delete,
-            },
-            "filterConditionGroups": [],
-            "permissionObjects": [{
-                "permissionObjectType": object_type,
-                "permissionObjectValue": object_value,
-                "permissionObjectDisplayName": object_name,
-                "permissionRange": {"rangeType": range_type},
-            }],
-        })
-
-        if any((can_add, can_import, can_draft)):
-            # operationPermissionGroups 按标准 API：去掉 processAnalysisPermission
-            # （不在标准字段里），保留 8 项
-            operation_groups.append({
-                "uuid": f"perm-op-{index}",
-                "permissionName": f"{object_name}操作权限",
-                "permissionDescribe": "",
-                "permissionOperationType": {
-                    "temporaryStoragePermission": can_draft,
-                    "addPermission": can_add,
-                    "importPermission": can_import,
-                    "copyAddPermission": False,
-                    "batchDeletePermission": False,
-                    "batchRejectPermission": False,
-                    "batchAgreePermission": False,
-                    "shareFormPermission": False,
-                },
-                "permissionObjects": [{
-                    "permissionObjectType": object_type,
-                    "permissionObjectValue": object_value,
-                    "permissionObjectDisplayName": object_name,
-                    "permissionRange": {"rangeType": range_type},
-                }],
-            })
-
-    return permission_groups, advanced_groups, operation_groups
+# _build_permission_groups_for_form_config 已收口到 app.operations.permissions(3-6)。
+# canonical = gen_v2 9字段 advanced superset + 本 step 的 operation permissionRange。
+# 收口顺带修了旧 step 漏发 6 个 advanced 字段(导出/打印/评论/日志等)的 bug。
 
 
 async def _sync_form_component_references(
@@ -2155,26 +2053,12 @@ async def execute_create_workflow(
 # Step 6: 配置权限
 # ------------------------------------------------------------------
 
-# _parse_permission_ops 已收口到 app.operations.permissions(canonical 即本 step_executor 旧实现)。
-from app.operations.permissions import _parse_permission_ops  # noqa: F401,E402
-
-
-def _resolve_permission_object(rule: dict, role_codes: Dict[str, dict]) -> dict:
-    role_code = rule.get("role", "")
-    if role_code and role_code != "all":
-        role_info = role_codes.get(role_code, {})
-        role_name = role_info.get("roleName") or rule.get("roleName") or role_code
-        role_value = role_info.get("id") or role_info.get("roleCode", role_code)
-        return {
-            "permissionObjectType": "ROLE",
-            "permissionObjectValue": role_value,
-            "permissionObjectDisplayName": role_name,
-        }
-    return {
-        "permissionObjectType": "ALL_USER",
-        "permissionObjectValue": "",
-        "permissionObjectDisplayName": "全部人员",
-    }
+# _parse_permission_ops / _build_permission_groups_for_form_config 已收口到
+# app.operations.permissions(3-6 canonical = gen_v2 9字段superset + 本 step operation permissionRange)。
+from app.operations.permissions import (  # noqa: F401,E402
+    _parse_permission_ops,
+    _build_permission_groups_for_form_config,
+)
 
 
 def _build_form_permission_payload(
