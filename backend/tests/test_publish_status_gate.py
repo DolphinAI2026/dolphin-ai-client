@@ -108,7 +108,7 @@ async def test_publish_uses_remote_current_version(monkeypatch, db_session):
             self.deploy_versions.append(version)
             return {"code": "ok"}
 
-    monkeypatch.setattr("app.routes.applications.APaaSClient", FakeAPaaSClient)
+    monkeypatch.setattr("app.routes.applications.lifecycle.APaaSClient", FakeAPaaSClient)
 
     res = await publish_application(app.id, _ctx(user, tenant.id), db_session)
 
@@ -154,7 +154,7 @@ async def test_publish_rechecks_remote_version_on_version_error(monkeypatch, db_
                 raise Exception("应用版本错误")
             return {"code": "ok"}
 
-    monkeypatch.setattr("app.routes.applications.APaaSClient", FakeAPaaSClient)
+    monkeypatch.setattr("app.routes.applications.lifecycle.APaaSClient", FakeAPaaSClient)
 
     res = await publish_application(app.id, _ctx(user, tenant.id), db_session)
 
