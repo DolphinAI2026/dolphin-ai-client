@@ -23,7 +23,7 @@ IMAGE_PULL_SECRET="${IMAGE_PULL_SECRET:-regcred-hub-dfy}"
 ROLL_TIMEOUT="${ROLL_TIMEOUT:-300s}"
 
 VITE_BASE_URL="${VITE_BASE_URL:-/ai-builder/}"
-VITE_ADMIN_BASE="${VITE_ADMIN_BASE:-/admin/}"
+VITE_ADMIN_BASE="${VITE_ADMIN_BASE:-/ai-builder/admin/}"
 VITE_API_BASE_URL="${VITE_API_BASE_URL:-/ai-builder/api}"
 VITE_MCP_PUBLIC_BASE="${VITE_MCP_PUBLIC_BASE:-}"
 
@@ -121,7 +121,7 @@ build_and_push_image() {
       --build-arg "VITE_BASE_URL=${VITE_BASE_URL}" \
       --build-arg "VITE_ADMIN_BASE=${VITE_ADMIN_BASE}" \
       --build-arg "VITE_API_BASE_URL=${VITE_API_BASE_URL}" \
-      --build-arg "VITE_MCP_PUBLIC_BASE=${VITE_MCP_PUBLIC_BASE:-https://${HOST}}" \
+      --build-arg "VITE_MCP_PUBLIC_BASE=${VITE_MCP_PUBLIC_BASE:-https://${HOST}/ai-builder}" \
       -f "$WORKDIR/deploy/docker/Dockerfile" \
       -t "$IMAGE" \
       --push \
@@ -131,7 +131,7 @@ build_and_push_image() {
       --build-arg "VITE_BASE_URL=${VITE_BASE_URL}" \
       --build-arg "VITE_ADMIN_BASE=${VITE_ADMIN_BASE}" \
       --build-arg "VITE_API_BASE_URL=${VITE_API_BASE_URL}" \
-      --build-arg "VITE_MCP_PUBLIC_BASE=${VITE_MCP_PUBLIC_BASE:-https://${HOST}}" \
+      --build-arg "VITE_MCP_PUBLIC_BASE=${VITE_MCP_PUBLIC_BASE:-https://${HOST}/ai-builder}" \
       -f "$WORKDIR/deploy/docker/Dockerfile" \
       -t "$IMAGE" \
       "$WORKDIR"
