@@ -64,6 +64,7 @@
               :key="f.id"
               class="fbp-form-row"
               :class="{ 'fbp-form-row-full': isFullWidthWidget(f.type) }"
+              :style="formPreviewRowStyle(f)"
             >
               <label class="fbp-form-label">
                 {{ f.name || '未命名字段' }}
@@ -91,6 +92,11 @@ import request, { API_PREFIX } from '@/utils/request'
 import EmptyState from '@/components/states/EmptyState.vue'
 import SkeletonCard from '@/components/states/SkeletonCard.vue'
 import AppIcon from '@/components/common/AppIcon.vue'
+import {
+  formPreviewRowStyle,
+  isFullWidthWidget,
+  normalizeFormPreviewField,
+} from './formPreviewLayout'
 
 /* ────────────────────────────────────────────────────────────────
    类型 — preview 渲染用 (FormPreviewInput)
@@ -108,6 +114,8 @@ interface FormField {
   code: string
   name: string
   type: FieldType
+  width: number
+  mobileWidth: number
   placeholder?: string
   required: boolean
   editable: boolean
@@ -301,17 +309,6 @@ function backendTypeToWidget(t: string | undefined): FieldType {
 
 function needsOptions(t: FieldType): boolean {
   return ['select', 'select_multi', 'radio', 'multi_select', 'tag', 'select_single'].includes(t)
-}
-
-const FULL_WIDTH_WIDGETS = new Set<string>([
-  'textarea', 'richtext',
-  'static_text', 'static_image', 'divider', 'placeholder',
-  'collapse_layout', 'tab_layout', 'frame_layout', 'template_file',
-  'subtable', 'data_select', 'data_stat',
-  'custom_dev',  // 2026-05-28: 自开发组件卡片占整行
-])
-function isFullWidthWidget(t: string): boolean {
-  return FULL_WIDTH_WIDGETS.has(t)
 }
 
 let _uidCounter = 0
@@ -829,6 +826,7 @@ async function reload(opts: { silent?: boolean; force?: boolean } = {}) {
         fields.value = comps.map((c: any): FormField => {
           const compType = componentTypeOf(c)
           const widgetType = componentToPreviewWidget(c)
+          const layout = normalizeFormPreviewField({ ...c, type: widgetType })
           const boCode = String(c.bo_code || '')
           const [_modelCode, fieldCode] = boCode.includes('~') ? boCode.split('~') : ['', boCode]
           if (_modelCode) modelCode.value = _modelCode
@@ -867,6 +865,8 @@ async function reload(opts: { silent?: boolean; force?: boolean } = {}) {
             code: fieldCode || subModelCode || `field_${Math.random().toString(36).slice(2, 6)}`,
             name: String(c.label || fieldCode || '未命名'),
             type: widgetType,
+            width: layout.width,
+            mobileWidth: layout.mobileWidth,
             placeholder: '',
             required: !!c.required,
             editable: true,
@@ -906,11 +906,18 @@ async function reload(opts: { silent?: boolean; force?: boolean } = {}) {
         const rawFields = Array.isArray(raw.fields) ? raw.fields : []
         fields.value = rawFields.map((rf: any): FormField => {
           const wt = backendTypeToWidget(rf.data_type || rf.field_type)
+          const layout = normalizeFormPreviewField({
+            type: wt,
+            width: rf.width ?? rf.display?.width,
+            mobile_width: rf.mobile_width ?? rf.mobileWidth ?? rf.display?.mobileWidth,
+          })
           return {
             id: nextId(),
             code: rf.field_code || `field_${Math.random().toString(36).slice(2, 6)}`,
             name: rf.field_name || rf.field_code || '未命名',
             type: wt,
+            width: layout.width,
+            mobileWidth: layout.mobileWidth,
             placeholder: rf.placeholder || '',
             required: !!rf.required,
             editable: rf.editable !== false,
@@ -1079,7 +1086,7 @@ onUnmounted(_clearRefreshTimers)
 
 /* ─── 真业务表单 (preview mode) ─────────────────────────────── */
 .fbp-form-preview {
-  max-width: 720px;
+  max-width: 1080px;
   margin: 24px auto;
   padding: 0 24px 48px;
 }
@@ -1115,14 +1122,16 @@ onUnmounted(_clearRefreshTimers)
 }
 .fbp-form-preview-grid {
   display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
+  grid-template-columns: repeat(12, minmax(0, 1fr));
   gap: 16px 20px;
 }
 .fbp-form-row {
+  grid-column: var(--fbp-field-span, span 3);
   display: flex;
   flex-direction: column;
   gap: 6px;
   position: relative;
+  min-width: 0;
 }
 .fbp-form-row-full { grid-column: 1 / -1; }
 
@@ -1156,7 +1165,12 @@ onUnmounted(_clearRefreshTimers)
 
 /* responsive — narrow viewport preview 单列 */
 @media (max-width: 640px) {
-  .fbp-form-preview-grid { grid-template-columns: 1fr; }
+  .fbp-form-preview {
+    padding: 0 16px 40px;
+  }
+  .fbp-form-row {
+    grid-column: var(--fbp-field-mobile-span, span 12);
+  }
 }
 
 /* ─── FormPreviewInput 真 widget 视觉 ─────────────────────── */
