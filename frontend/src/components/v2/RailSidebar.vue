@@ -151,9 +151,8 @@ function onPlatformClick(e: MouseEvent) {
 function onLogout() {
   tenantMenuOpen.value = false
   user.logout()
-  // 顺手清掉所有 localStorage（包含 外部 agent cache / theme / 折叠态 等历史 key），
-  // 避免换 aPaaS 实例 / 切账号时旧状态污染。
-  try { localStorage.clear() } catch { /* private mode */ }
+  // 退出只清认证态。主题、布局偏好等本地设置保留，避免登录页颜色模式被重置或半切换。
+  try { localStorage.removeItem('ai-builder-tabs-v1') } catch { /* private mode */ }
   router.push({ path: '/login' })
 }
 
