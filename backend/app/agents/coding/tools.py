@@ -471,6 +471,14 @@ def build_coding_tools(registry: ToolRegistry | None = None) -> list[Tool]:
                 except Exception as e:
                     return ToolResult(success=False, content=f"Error resolving workspace: {e}", error=str(e))
                 progress_cb = _make_progress_callback(ctx, tool_name)
+                # Phase 5 补丁守卫：必须在写入【前】算警告（此刻磁盘仍是旧内容；
+                # 写入后再读会拿到新内容,diff 恒 0 → 警告永不触发）。写成功后再追加。
+                rewrite_warning: str | None = None
+                if tool_name == "write_file":
+                    try:
+                        rewrite_warning = _check_big_rewrite_warning(tool_name, args or {}, ws_path)
+                    except Exception:
+                        rewrite_warning = None
                 try:
                     blocked = _reject_existing_file_overwrite_in_iteration(tool_name, args or {}, ctx, ws_path)
                     if blocked is not None:
@@ -485,19 +493,14 @@ def build_coding_tools(registry: ToolRegistry | None = None) -> list[Tool]:
                     logger.exception("tool %s execution failed", tool_name)
                     return ToolResult(success=False, content=f"Tool '{tool_name}' execution error: {e}", error=str(e))
                 tool_result = _wrap_result(result_text)
-                # Phase 5 补丁守卫：write_file 成功后追加软警告（不阻断、不改 success）
-                if tool_result.success and tool_name == "write_file":
-                    try:
-                        warning = _check_big_rewrite_warning(tool_name, args or {}, ws_path)
-                        if warning:
-                            tool_result = ToolResult(
-                                success=tool_result.success,
-                                content=(tool_result.content or "") + warning,
-                                data=tool_result.data,
-                                error=tool_result.error,
-                            )
-                    except Exception:
-                        pass  # 守卫异常绝不干扰写入结果
+                # 写入成功后追加预先算好的软警告（不阻断、不改 success）
+                if tool_result.success and rewrite_warning:
+                    tool_result = ToolResult(
+                        success=tool_result.success,
+                        content=(tool_result.content or "") + rewrite_warning,
+                        data=tool_result.data,
+                        error=tool_result.error,
+                    )
                 return tool_result
             return executor
 

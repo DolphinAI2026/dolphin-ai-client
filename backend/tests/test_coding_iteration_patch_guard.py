@@ -265,3 +265,36 @@ def test_big_rewrite_warning_robustness_empty_args():
         ws = Path(tmpdir)
         assert _check_big_rewrite_warning("write_file", {}, ws) is None
         assert _check_big_rewrite_warning("write_file", {"file_path": None}, ws) is None
+
+
+@pytest.mark.asyncio
+async def test_big_rewrite_warning_appears_through_executor(tmp_path, monkeypatch):
+    """集成回归：软警告必须真的经 executor 出现在结果里。
+
+    锁住一个 bug：警告若在写入【后】才算（从磁盘读到的是新内容,diff 恒 0）则永不触发。
+    必须在写入前对旧内容算警告。非迭代态(is_iteration 缺省)让写入真发生 + 追加软警告。
+    """
+    existing = tmp_path / "src" / "page.vue"
+    existing.parent.mkdir(parents=True)
+    # ≥10 行旧内容
+    existing.write_text("\n".join(f"line-old-{i}" for i in range(20)) + "\n", encoding="utf-8")
+
+    monkeypatch.setattr("app.agents.coding.tools._resolve_workspace_path", lambda ctx: tmp_path)
+
+    ctx = AgentContext(
+        session_id="s", conversation_id=1, user_id=1, tenant_id=1,
+        model="gpt-5.5", workspace_id="ws-1",
+        input={"requirement": "整页重做"},  # 非迭代态(无 is_iteration=True), 写入会真发生
+    )
+    write_tool = next(t for t in build_coding_tools() if t.name == "write_file")
+
+    # 完全不同的新内容 → >50% 行级差异
+    result = await write_tool.execute({
+        "file_path": "src/page.vue",
+        "content": "\n".join(f"brand-new-{i}" for i in range(20)) + "\n",
+    }, ctx)
+
+    assert result.success, f"写入应成功, 实际: {result.content}"
+    assert "补丁守卫" in result.content, f"大幅重写软警告应出现在结果里, 实际: {result.content}"
+    # 写入确实发生了(文件已是新内容)
+    assert "brand-new-0" in existing.read_text(encoding="utf-8")
