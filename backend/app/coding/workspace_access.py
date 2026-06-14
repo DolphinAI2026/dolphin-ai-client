@@ -43,19 +43,21 @@ workspace_mgr = WorkspaceManager()
 
 
 def resolve_conversation_app_id(conv: Any) -> int | None:
-    """从 Conversation-like 对象安全读取 coding_app_id,返回正整数或 None。
+    """从 Conversation-like 对象安全读取 coding_app_id。
 
     这是绑定解析的最小共享原语:统一处理各调用点中散落的
     `_coerce_int(getattr(conv, "coding_app_id", None))` / `_safe_int(...)` 变体。
 
-    规则:
+    规则(与被收口的旧 `_coerce_int`/`_safe_int(getattr(...))` 严格等价):
     - conv=None 或没有 coding_app_id 属性 → None
     - coding_app_id=None 或 "" → None
-    - coding_app_id=0 → None (0 不是合法 Application.id,视同未绑定)
-    - coding_app_id=正整数 or 可转为正整数的字符串 → int
+    - 可转 int → int(原样,含 0/负数)
     - 其他无法转 int → None
 
     注意:本函数是纯函数(无 I/O、无副作用),调用方负责 DB 查询。
+    TODO(单独任务): coding_app_id=0 逻辑上等同未绑定(Application.id 从 1 起),
+    可考虑统一降级为 None;但那是行为变化,不在本次纯 refactor 范围,故此处保持
+    与旧实现逐字等价(返回 0)。
     """
     if conv is None:
         return None
@@ -63,11 +65,9 @@ def resolve_conversation_app_id(conv: Any) -> int | None:
     if value is None or value == "":
         return None
     try:
-        result = int(value)
+        return int(value)
     except (TypeError, ValueError):
         return None
-    # 0 视同未绑定(Application.id 从 1 开始)
-    return result if result != 0 else None
 
 
 def _workspace_permissions(access_role: str) -> dict[str, bool]:

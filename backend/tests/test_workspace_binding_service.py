@@ -74,16 +74,15 @@ def test_resolve_conv_app_id_none_object():
     assert resolve_conversation_app_id(None) is None
 
 
-def test_resolve_conv_app_id_zero_is_none():
-    """coding_app_id=0 — 0 不是合法 Application.id,视同未绑定 → 返回 None。
+def test_resolve_conv_app_id_zero_passthrough():
+    """coding_app_id=0 → 返回 0(与旧 _coerce_int/_safe_int 逐字等价的特征行为)。
 
-    【现状行为】:Python int 0 是 falsy,int(0) == 0 但逻辑上等同未绑定;
-    此测试文档化当前行为:0 视为 None(和 pipeline.py 中 `or` 链一致)。
-    如未来需要支持 id=0,需同时更新本测试 + 所有调用点。
+    【现状行为】旧 `int(getattr(...))` 对 0 返回 0,本函数保持等价。
+    下游各调用点自己用真值检查(`if conv_app_id:`)消化 0,不在本原语里特判。
+    0 视同未绑定的降级是行为变化,留作单独任务(见函数 docstring TODO)。
     """
     conv = _FakeConv(coding_app_id=0)
-    # 0 转换后是 int(0),但语义上等同未绑定;collect_conversation_app_id 应返回 None
-    assert resolve_conversation_app_id(conv) is None
+    assert resolve_conversation_app_id(conv) == 0
 
 
 def test_resolve_conv_app_id_positive_non_zero():
