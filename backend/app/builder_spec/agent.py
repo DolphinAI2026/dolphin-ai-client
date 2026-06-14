@@ -14,6 +14,7 @@ from typing import TYPE_CHECKING, AsyncIterator, Optional
 
 from app.builder_spec.schema import Spec, Phase
 from app.builder_spec.tools import TOOL_DEFINITIONS, dispatch_tool, ToolError
+from app.llm_reasoning import ReasoningSplitter
 
 if TYPE_CHECKING:  # avoid hard dep at import time / in tests
     from sqlalchemy.ext.asyncio import AsyncSession
@@ -336,6 +337,8 @@ async def _stream_llm_turn(
     }
     full_content = ""
     tool_calls_map: dict = {}
+    # MiniMax 等把 reasoning 内联进 content 用 <think>...</think> → 增量剥离, content 干净。
+    reasoning_splitter = ReasoningSplitter()
 
     stream = _open_stream(client, base_url, api_key, payload)
     async for line in stream:
@@ -353,10 +356,13 @@ async def _stream_llm_turn(
             continue
         delta = choices[0].get("delta", {})
         if delta.get("content"):
-            full_content += delta["content"]
-            yield SpecAgentEvent(
-                kind="assistant_delta", spec=spec, text=delta["content"]
-            )
+            visible, _reasoning = reasoning_splitter.feed(delta["content"])
+            # reasoning(<think> 内文)对 SpecAgent 不展示, 仅保证 content 干净。
+            if visible:
+                full_content += visible
+                yield SpecAgentEvent(
+                    kind="assistant_delta", spec=spec, text=visible
+                )
         if delta.get("tool_calls"):
             for tc in delta["tool_calls"]:
                 idx = tc.get("index", 0)
@@ -370,6 +376,12 @@ async def _stream_llm_turn(
                     entry["name"] = func["name"]
                 if func.get("arguments"):
                     entry["arguments"] += func["arguments"]
+
+    # 流结束:吐出 splitter 残留可见文本(未闭合 <think> 残文丢弃)。
+    tail_visible, _tail_reasoning = reasoning_splitter.flush()
+    if tail_visible:
+        full_content += tail_visible
+        yield SpecAgentEvent(kind="assistant_delta", spec=spec, text=tail_visible)
 
     assistant_msg: dict = {"role": "assistant", "content": full_content or None}
     assembled: list[dict] = []

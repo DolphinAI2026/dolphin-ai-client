@@ -32,6 +32,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.crypto import decrypt_password
 from app.doc_spec_standard import STANDARD_DOC_FORMAT
+from app.llm_reasoning import strip_think_blocks
 from app.models import (
     AIChatSession,
     AIChatMessage,
@@ -437,12 +438,17 @@ async def generate_title(
                     "model": cfg.model,
                     "messages": [{"role": "user", "content": prompt}],
                     "temperature": 0.3,
-                    "max_tokens": 60,
+                    # MiniMax 等 reasoning 模型会先吐 <think>… 思考再给标题, 60 token 会被思考吃光
+                    # → 标题变成截断的思考文本。给足额度让思考闭合后还能产出真标题, 再剥离 <think>。
+                    "max_tokens": 512,
                 }),
             )
             resp.raise_for_status()
             data = resp.json()
-        title = (data["choices"][0]["message"].get("content") or "").strip()
+        raw_title = (data["choices"][0]["message"].get("content") or "")
+        # 剥离内联 <think>…</think>(MiniMax), 只取可见标题文本。
+        title, _reasoning = strip_think_blocks(raw_title)
+        title = title.strip()
         # 清理引号 / 多余前缀
         title = title.strip(' "\'`「」')
         if len(title) > 30:

@@ -28,6 +28,8 @@ import json
 import logging
 from typing import Any, AsyncIterator, Optional
 
+from app.llm_reasoning import ReasoningSplitter, strip_think_blocks
+
 import httpx
 
 logger = logging.getLogger(__name__)
@@ -241,6 +243,9 @@ async def _stream_chunks_once(
     accumulated_content = ""
     usage_data: Optional[dict] = None
     tool_buf: dict[int, dict] = {}
+    # MiniMax 等把 reasoning 内联进 content 用 <think>...</think> 包裹 → 增量分离,
+    # 让 content_delta / 累积 content 干净(不泄漏 <think> 进消息/标题)。
+    reasoning_splitter = ReasoningSplitter()
 
     async with httpx.AsyncClient(timeout=timeout) as client:
         async with client.stream(
@@ -274,10 +279,17 @@ async def _stream_chunks_once(
                 if not choices:
                     continue
                 delta = choices[0].get("delta") or {}
+                # DeepSeek 等用独立 reasoning_content 字段 → 单独走,不进 content。
+                rc = delta.get("reasoning_content")
+                if rc:
+                    yield {"type": "reasoning_delta", "text": rc}
                 if delta.get("content"):
-                    text = delta["content"]
-                    accumulated_content += text
-                    yield {"type": "content_delta", "text": text}
+                    visible, reasoning = reasoning_splitter.feed(delta["content"])
+                    if reasoning:
+                        yield {"type": "reasoning_delta", "text": reasoning}
+                    if visible:
+                        accumulated_content += visible
+                        yield {"type": "content_delta", "text": visible}
                 for tc in (delta.get("tool_calls") or []):
                     idx = tc.get("index", 0)
                     buf = tool_buf.setdefault(
@@ -298,6 +310,14 @@ async def _stream_chunks_once(
                         "name": buf["function"]["name"],
                         "arguments_so_far": buf["function"]["arguments"],
                     }
+
+    # 流结束:吐出 splitter 残留(未闭合 <think> 残文不丢,作 reasoning)。
+    tail_visible, tail_reasoning = reasoning_splitter.flush()
+    if tail_reasoning:
+        yield {"type": "reasoning_delta", "text": tail_reasoning}
+    if tail_visible:
+        accumulated_content += tail_visible
+        yield {"type": "content_delta", "text": tail_visible}
 
     final_tool_calls = [tool_buf[k] for k in sorted(tool_buf.keys())]
     yield {
@@ -382,7 +402,14 @@ async def complete(
                 )
                 resp.raise_for_status()
                 data = resp.json()
-            return data["choices"][0]["message"]
+            message = data["choices"][0]["message"]
+            # MiniMax 等把 reasoning 内联进 content 用 <think>...</think> → 剥离, content 干净。
+            # 无 <think> 的 provider 此处是 no-op(不含标签直接返回原文)。
+            content = message.get("content")
+            if isinstance(content, str) and "<think" in content:
+                visible, _reasoning = strip_think_blocks(content)
+                message["content"] = visible
+            return message
         except Exception as exc:
             last_error = exc
             if attempt >= retry_attempts - 1 or not is_retryable_llm_error(exc):
