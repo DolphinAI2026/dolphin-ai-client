@@ -16,9 +16,6 @@
 from __future__ import annotations
 
 from types import SimpleNamespace
-from typing import Optional
-
-import pytest
 
 from app.coding.workspace_access import resolve_conversation_app_id
 
@@ -78,8 +75,9 @@ def test_resolve_conv_app_id_zero_passthrough():
     """coding_app_id=0 → 返回 0(与旧 _coerce_int/_safe_int 逐字等价的特征行为)。
 
     【现状行为】旧 `int(getattr(...))` 对 0 返回 0,本函数保持等价。
-    下游各调用点自己用真值检查(`if conv_app_id:`)消化 0,不在本原语里特判。
-    0 视同未绑定的降级是行为变化,留作单独任务(见函数 docstring TODO)。
+    本原语不对 0 特判;下游(_resolve_local_app_id / _load_bound_application)用
+    `is not None` 判断,故 0 会被当作 app_id 去查 DB(通常查不到)。0 视同未绑定的
+    降级是行为变化,留作单独任务(见函数 docstring TODO)。
     """
     conv = _FakeConv(coding_app_id=0)
     assert resolve_conversation_app_id(conv) == 0
