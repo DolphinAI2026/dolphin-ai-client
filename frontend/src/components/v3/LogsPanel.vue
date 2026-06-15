@@ -1,8 +1,7 @@
 <!-- LogsPanel.vue — 应用日志 (design-v4 K4).
 
   替 ChatPage.vue 顶部 5 tab 中 "日志" tab 的 placeholder.
-  4 sub-tab: 部署历史 / 操作日志 / AI 行为 / 错误日志.
-  数据源: GET /api/applications/{id}/logs/{kind} (kind: deploy / operation / ai / error).
+  5 sub-tab: 部署历史 / 操作日志 / 低代码日志 / AI 行为 / 错误日志.
 -->
 <template>
   <section class="lp" aria-label="应用日志">
@@ -41,6 +40,17 @@
       </button>
     </div>
 
+    <div v-if="kind === 'lowcode' && lowcodeAnalysis" class="lp-analysis">
+      <div class="lp-analysis-main">
+        <span class="lp-analysis-kicker">低代码变更洞察</span>
+        <strong>{{ lowcodeAnalysis.summary || '暂无低代码变更' }}</strong>
+      </div>
+      <div class="lp-analysis-metrics">
+        <span>风险 {{ lowcodeAnalysis.risk_total || 0 }}</span>
+        <span>高风险 {{ lowcodeAnalysis.high_risk_total || 0 }}</span>
+      </div>
+    </div>
+
     <div v-if="loading" class="lp-state">
       <div class="lp-spinner" /> 加载中…
     </div>
@@ -51,7 +61,7 @@
     <div v-else-if="items.length === 0" class="lp-state">
       <div class="lp-state-icon"><AppIcon name="clipboard" :size="36" /></div>
       <p>暂无{{ currentSubLabel }}记录</p>
-      <p class="hint">用配置助手或部署应用触发动作后会有日志</p>
+      <p class="hint">{{ kind === 'lowcode' ? '平台租户日志中没有匹配到当前应用的变更' : '用配置助手或部署应用触发动作后会有日志' }}</p>
     </div>
     <template v-else>
       <div class="lp-table-wrap">
@@ -119,30 +129,23 @@
 </template>
 
 <script setup lang="ts">
-import { ref, computed, watch, onMounted, onBeforeUnmount } from 'vue'
+import { ref, computed, watch, onBeforeUnmount } from 'vue'
 import AppIcon from '@/components/common/AppIcon.vue'
 import request from '@/utils/request'
-
-interface LogItem {
-  id?: string
-  timestamp: string
-  type: string
-  user?: string
-  summary: string
-  status: string
-  details?: any
-}
+import {
+  LOG_SUB_TABS,
+  buildLogsRequestUrl,
+  normalizeLogStatus,
+  readLogsResponse,
+  statusLabel as resolveStatusLabel,
+  type LogItem,
+} from './logsPanelData'
 
 const props = defineProps<{
   appId: number
 }>()
 
-const SUB_TABS = [
-  { code: 'deploy', label: '部署历史' },
-  { code: 'operation', label: '操作日志' },
-  { code: 'ai', label: 'AI 行为' },
-  { code: 'error', label: '错误日志' },
-]
+const SUB_TABS = LOG_SUB_TABS
 
 const kind = ref<string>('deploy')
 const items = ref<LogItem[]>([])
@@ -154,6 +157,7 @@ const loading = ref(false)
 const error = ref('')
 const autoRefresh = ref(false)
 const detailItem = ref<LogItem | null>(null)
+const lowcodeAnalysis = ref<any | null>(null)
 let refreshTimer: number | null = null
 
 const currentSubLabel = computed(() => SUB_TABS.find(s => s.code === kind.value)?.label || '')
@@ -162,18 +166,21 @@ async function reload(append = false) {
   if (!props.appId) return
   loading.value = true
   error.value = ''
+  if (!append) {
+    lowcodeAnalysis.value = null
+  }
   try {
-    const resp = await request.get<any, any>(
-      `/applications/${props.appId}/logs/${kind.value}?page=${page.value}&page_size=50`,
-    )
-    if (resp?.ok) {
-      const newItems = (resp.items || []) as LogItem[]
+    const resp = await request.get<any, any>(buildLogsRequestUrl(props.appId, kind.value, page.value, 50))
+    const parsed = readLogsResponse(resp)
+    if (parsed.ok) {
+      const newItems = parsed.items
       items.value = append ? [...items.value, ...newItems] : newItems
-      totalCount.value = resp.total || newItems.length
-      errorCount.value = resp.error_count || 0
-      hasMore.value = !!resp.has_more
+      totalCount.value = parsed.total
+      errorCount.value = parsed.errorCount
+      hasMore.value = parsed.hasMore
+      lowcodeAnalysis.value = parsed.analysis || null
     } else {
-      error.value = resp?.message || resp?.error_code || '加载失败'
+      error.value = parsed.message || '加载失败'
     }
   } catch (e: any) {
     error.value = e?.response?.data?.detail || e?.message || '网络错误'
@@ -199,19 +206,11 @@ function openDetails(it: LogItem) {
 }
 
 function normalizeStatus(s?: string): string {
-  const lo = (s || '').toLowerCase()
-  if (lo.includes('success') || lo === 'completed' || lo === 'ok') return 'ok'
-  if (lo.includes('fail') || lo === 'error' || lo === 'failed') return 'err'
-  if (lo.includes('progress') || lo === 'pending' || lo === 'running') return 'pending'
-  return 'neutral'
+  return normalizeLogStatus(s)
 }
 
 function statusLabel(s?: string): string {
-  const n = normalizeStatus(s)
-  if (n === 'ok') return '成功'
-  if (n === 'err') return '失败'
-  if (n === 'pending') return '进行中'
-  return s || '—'
+  return resolveStatusLabel(s)
 }
 
 function formatRelative(ts: string): string {
@@ -323,6 +322,49 @@ onBeforeUnmount(() => {
   background: var(--err);
   color: #fff;
   border-radius: 999px;
+}
+
+.lp-analysis {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  margin: 14px 32px 0;
+  padding: 12px 14px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--surface);
+}
+.lp-analysis-main {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.lp-analysis-kicker {
+  font-size: 11.5px;
+  color: var(--text-3);
+}
+.lp-analysis-main strong {
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--text);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.lp-analysis-metrics {
+  flex-shrink: 0;
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 12px;
+  color: var(--text-2);
+}
+.lp-analysis-metrics span {
+  padding: 2px 8px;
+  border-radius: 999px;
+  background: var(--surface-2);
 }
 
 .lp-state {
