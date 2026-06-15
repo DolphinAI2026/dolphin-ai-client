@@ -68,7 +68,15 @@ def normalize_lowcode_log_record(raw: dict[str, Any]) -> dict[str, Any]:
         raw, "operationDescription", "operateDescription", "description", "operateDesc", "content", "remark"
     )
     operation_type = _first_non_empty(raw, "operationType", "operateType", "type", "action")
-    operator = _first_non_empty(raw, "operationUserName", "operatorName", "operator", "userName", "createUserName")
+    operator = _first_non_empty(
+        raw,
+        "operationUserName",
+        "operationUser",
+        "operatorName",
+        "operator",
+        "userName",
+        "createUserName",
+    )
 
     summary_parts = [part for part in (function_menu, operation_object, description) if part]
     risk = _classify_risk(operation_type, function_menu, operation_object, description)
@@ -190,5 +198,5 @@ def build_operate_log_filters(
     if function_menu and function_menu != "all":
         filters["functionMenu"] = function_menu
     if keyword:
-        filters["keyword"] = keyword
+        filters["operationObject"] = keyword
     return filters

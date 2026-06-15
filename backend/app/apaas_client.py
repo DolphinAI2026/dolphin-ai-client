@@ -1562,16 +1562,23 @@ class APaaSClient:
     ) -> dict:
         """查询低代码租户操作日志。"""
         url = f"{self.base_url}/xdap-app/operateLog/query/operateLogs"
-        params = {"page": page, "pageSize": page_size}
-        payload = {k: v for k, v in (filters or {}).items() if v not in (None, "")}
-        _log_request("POST", url, payload, params=params)
+        payload = {
+            "page": page,
+            "pageSize": page_size,
+            "order": "DESC",
+            "operationUsers": [],
+            "functionMenu": "",
+            "operationType": "",
+            "operationObject": "",
+        }
+        payload.update({k: v for k, v in (filters or {}).items() if v not in (None, "")})
+        _log_request("POST", url, payload)
         start = time.time()
 
         async with httpx.AsyncClient(verify=False, timeout=APAAS_HTTP_TIMEOUT) as client:
             response = await client.post(
                 url,
                 headers=self._get_headers(),
-                params=params,
                 json=payload,
             )
             elapsed_ms = (time.time() - start) * 1000

@@ -56,14 +56,17 @@ async def test_get_tenant_lowcode_logs_uses_current_tenant_env(monkeypatch):
         object(),
         page=1,
         page_size=20,
-        operation_type="编辑",
-        function_menu="高级设置",
-        keyword=None,
+        operation_type="EDIT",
+        function_menu="SELF_DEVELOPMENT_MANAGEMENT",
+        keyword="自开发配置",
     )
 
     assert captured["env_id"] == 88
-    assert captured["filters"] == {"operationType": "编辑", "functionMenu": "高级设置"}
+    assert captured["filters"] == {
+        "operationType": "EDIT",
+        "functionMenu": "SELF_DEVELOPMENT_MANAGEMENT",
+        "operationObject": "自开发配置",
+    }
     assert resp["ok"] is True
     assert resp["items"][0]["summary"] == "高级设置 · 智能体WMS系统.自开发配置 · 启用了【自开发配置】"
     assert resp["analysis"]["risk_total"] == 1
-

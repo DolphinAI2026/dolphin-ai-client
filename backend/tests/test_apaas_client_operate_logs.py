@@ -45,13 +45,20 @@ async def test_query_operate_logs_calls_tenant_operate_log_endpoint():
         resp = await client.query_operate_logs(
             page=2,
             page_size=20,
-            filters={"operationType": "发布", "functionMenu": "应用信息"},
+            filters={"operationType": "EDIT", "functionMenu": "SELF_DEVELOPMENT_MANAGEMENT"},
         )
 
     assert resp["total"] == 1
     assert fake.calls[0]["url"] == "https://apaas.example/backend/xdap-app/operateLog/query/operateLogs"
     assert fake.calls[0]["headers"]["xdaptenantid"] == "tenant-1"
     assert fake.calls[0]["headers"]["xdaptoken"] == "tok-1"
-    assert fake.calls[0]["params"] == {"page": 2, "pageSize": 20}
-    assert fake.calls[0]["json"] == {"operationType": "发布", "functionMenu": "应用信息"}
-
+    assert fake.calls[0]["params"] is None
+    assert fake.calls[0]["json"] == {
+        "page": 2,
+        "pageSize": 20,
+        "order": "DESC",
+        "operationUsers": [],
+        "functionMenu": "SELF_DEVELOPMENT_MANAGEMENT",
+        "operationType": "EDIT",
+        "operationObject": "",
+    }

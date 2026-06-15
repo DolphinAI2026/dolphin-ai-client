@@ -6,6 +6,7 @@ import pytest
 
 from app.services.lowcode_logs import (
     build_lowcode_log_analysis,
+    build_operate_log_filters,
     extract_lowcode_log_records,
     filter_lowcode_logs_for_application,
     normalize_lowcode_log_record,
@@ -21,7 +22,7 @@ def test_normalize_lowcode_record_maps_platform_fields_and_risk():
             "operationObject": "智能体WMS系统.自开发配置",
             "operationDescription": "启用了【自开发配置】",
             "operationType": "编辑",
-            "operationUserName": "管理",
+            "operationUser": "管理",
         }
     )
 
@@ -40,6 +41,18 @@ def test_extract_lowcode_log_records_accepts_common_platform_shapes():
     assert extract_lowcode_log_records({"data": {"records": [{"id": 2}]}}) == [{"id": 2}]
     assert extract_lowcode_log_records({"data": {"list": [{"id": 3}]}}) == [{"id": 3}]
     assert extract_lowcode_log_records([{"id": 4}]) == [{"id": 4}]
+
+
+def test_build_operate_log_filters_uses_platform_filter_keys():
+    assert build_operate_log_filters(
+        operation_type="EDIT",
+        function_menu="SELF_DEVELOPMENT_MANAGEMENT",
+        keyword="自开发配置",
+    ) == {
+        "operationType": "EDIT",
+        "functionMenu": "SELF_DEVELOPMENT_MANAGEMENT",
+        "operationObject": "自开发配置",
+    }
 
 
 def test_filter_lowcode_logs_for_application_matches_name_code_and_apaas_id():
@@ -98,4 +111,3 @@ def test_build_lowcode_log_analysis_counts_risks_and_dimensions():
     assert analysis["top_operation_types"][0] == {"name": "发布", "count": 1}
     assert analysis["top_menus"][0]["name"] == "应用信息"
     assert "最近 3 条低代码变更" in analysis["summary"]
-

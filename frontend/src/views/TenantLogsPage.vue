@@ -18,16 +18,16 @@
           class="tenant-log-search"
           clearable
           size="small"
-          placeholder="搜索操作对象 / 描述 / 操作人"
+          placeholder="搜索操作对象"
           @keyup.enter="reload"
         />
         <el-select v-model="operationType" class="tenant-log-select" size="small" placeholder="操作类型">
           <el-option label="全部操作" value="all" />
-          <el-option v-for="type in operationTypes" :key="type" :label="type" :value="type" />
+          <el-option v-for="type in operationTypes" :key="type.value" :label="type.label" :value="type.value" />
         </el-select>
         <el-select v-model="functionMenu" class="tenant-log-select" size="small" placeholder="功能菜单">
           <el-option label="全部菜单" value="all" />
-          <el-option v-for="menu in functionMenus" :key="menu" :label="menu" :value="menu" />
+          <el-option v-for="menu in functionMenus" :key="menu.value" :label="menu.label" :value="menu.value" />
         </el-select>
         <button class="tenant-log-query" type="button" :disabled="loading" @click="reload">查询</button>
       </section>
@@ -99,8 +99,29 @@ import AppIcon from '@/components/common/AppIcon.vue'
 import request from '@/utils/request'
 import type { LogItem } from '@/components/v3/logsPanelData'
 
-const operationTypes = ['登录', '登出', '新增', '编辑', '删除', '启用', '禁用', '导入', '下载', '开启', '关闭', '导出', '发布', '下线']
-const functionMenus = ['应用管理', '应用发布', '高级设置', '菜单功能', '自开发管理', '自开发权限', '权限管理', '数据源管理', '服务集成', '员工与部门', '角色管理', '数据模型', '业务对象']
+const operationTypes = [
+  { label: '登录', value: 'LOGIN' },
+  { label: '登出', value: 'LOGIN_OUT' },
+  { label: '新增', value: 'ADD' },
+  { label: '编辑', value: 'EDIT' },
+  { label: '删除', value: 'DELETE' },
+  { label: '启用', value: 'ENABLE' },
+  { label: '禁用', value: 'DISABLE' },
+  { label: '导入', value: 'IMPORT' },
+  { label: '下载', value: 'DOWNLOAD' },
+  { label: '开启', value: 'OPEN' },
+  { label: '关闭', value: 'CLOSE' }
+]
+const functionMenus = [
+  { label: '登录模块', value: 'LOGIN_MODULE' },
+  { label: '自开发管理', value: 'SELF_DEVELOPMENT_MANAGEMENT' },
+  { label: '应用管理', value: 'APPLICATION_MANAGEMENT' },
+  { label: '角色管理', value: 'ROLE_MANAGEMENT' },
+  { label: '菜单功能', value: 'APP_MENU' },
+  { label: '访问权限', value: 'APP_ACCESS' },
+  { label: '自开发配置', value: 'SELF_DEVELOPMENT_CONFIGURATION' },
+  { label: '业务事件', value: 'BUSINESS_EVENT' }
+]
 
 const keyword = ref('')
 const operationType = ref('all')
