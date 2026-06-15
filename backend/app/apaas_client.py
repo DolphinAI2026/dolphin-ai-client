@@ -1553,6 +1553,39 @@ class APaaSClient:
                 return result if isinstance(result, list) else []
             return []
 
+    async def query_operate_logs(
+        self,
+        *,
+        page: int = 1,
+        page_size: int = 50,
+        filters: Optional[dict[str, Any]] = None,
+    ) -> dict:
+        """查询低代码租户操作日志。"""
+        url = f"{self.base_url}/xdap-app/operateLog/query/operateLogs"
+        params = {"page": page, "pageSize": page_size}
+        payload = {k: v for k, v in (filters or {}).items() if v not in (None, "")}
+        _log_request("POST", url, payload, params=params)
+        start = time.time()
+
+        async with httpx.AsyncClient(verify=False, timeout=APAAS_HTTP_TIMEOUT) as client:
+            response = await client.post(
+                url,
+                headers=self._get_headers(),
+                params=params,
+                json=payload,
+            )
+            elapsed_ms = (time.time() - start) * 1000
+            if response.status_code == 401:
+                logger.error("401 Unauthorized - token可能已过期或无效")
+                raise Exception(APAAS_TOKEN_EXPIRED)
+            response.raise_for_status()
+            data = response.json()
+
+            _log_response(url, response.status_code, data, elapsed_ms, method="POST", request_body=_to_json(payload))
+            if isinstance(data, dict) and data.get("code") not in (None, "ok", 200):
+                raise Exception(data.get("message", "查询操作日志失败"))
+            return data if isinstance(data, dict) else {"data": data}
+
     async def query_models(self, app_id: str, with_fields: bool = True) -> list:
         """查询应用下的所有数据模型.
 

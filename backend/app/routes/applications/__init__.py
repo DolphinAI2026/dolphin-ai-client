@@ -57,6 +57,8 @@ router.include_router(_section_content.router)
 # K4 (2026-05-27): 应用日志 — 4 kind aggregator (deploy / operation / ai / error)
 from . import logs_endpoint as _logs_endpoint  # noqa: E402
 router.include_router(_logs_endpoint.router)
+from . import lowcode_logs as _lowcode_logs  # noqa: E402
+router.include_router(_lowcode_logs.router)
 
 # U8 (2026-05-27): 设计 tab 内嵌 SPEC chat — 改 spec_sections 草稿 (跟 config-chat
 # 区分: 草稿层, 不立即生效, 等用户"确认并生成"). MVP 用 rule-based mock LLM.
