@@ -43,6 +43,7 @@ from app.routes import (
     spec,
     sse,
     templates,
+    tenant_logs,
     voice,
     work_state,
 )
@@ -158,6 +159,7 @@ app.include_router(work_state.router, prefix="/api")
 app.include_router(help_assistant.router, prefix="/api")
 app.include_router(voice.router, prefix="/api")
 app.include_router(requirements.router, prefix="/api")
+app.include_router(tenant_logs.router, prefix="/api")
 app.include_router(current_app.router, prefix="/api")
 app.include_router(admin_mcp.router, prefix="/api")
 app.include_router(mcp_platform.router, prefix="/api")

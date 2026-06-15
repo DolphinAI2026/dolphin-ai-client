@@ -25,6 +25,7 @@ const NAV = computed<NavItem[]>(() => [
   { key: 'home', label: 'AI Builder', icon: 'chat', path: '/' },
   { key: 'apps', label: '应用资产库', icon: 'apps', path: '/apps', badge: appCount.value || undefined },
   { key: 'catalog', label: '自开发资产库', icon: 'store', path: '/workspace-catalog' },
+  { key: 'tenantLogs', label: '租户日志分析', icon: 'activity', path: '/tenant-logs' },
   // AI Builder（/）= 首页融合页，与 /ai-chat 同组件：新建对话 + 历史会话一体。
   // 改已有应用从「应用资产库」点进工作室 (/chat)，/chat 不挂菜单。
   // 数据连接 / 运行发布先隐藏；平台级配置统一从平台管理工作台进入。
@@ -165,6 +166,7 @@ const ICONS: Record<string, string> = {
   code: '<path d="m9 17-5-5 5-5"/><path d="m15 7 5 5-5 5"/><path d="m13 5-2 14"/>',
   store: '<path d="M3 9 5 4h14l2 5"/><path d="M4 9v10a1 1 0 0 0 1 1h14a1 1 0 0 0 1-1V9"/><path d="M3 9h18"/>',
   database: '<ellipse cx="12" cy="5" rx="9" ry="3"/><path d="M3 5v14a9 3 0 0 0 18 0V5"/><path d="M3 12a9 3 0 0 0 18 0"/>',
+  activity: '<polyline points="22 12 18 12 15 21 9 3 6 12 2 12"/><path d="M4 19h16"/>',
   spark: '<path d="M12 3 14 9l6 2-6 2-2 6-2-6-6-2 6-2z"/>',
   sparkles: '<path d="M9 4 10 7 13 8 10 9 9 12 8 9 5 8 8 7z"/><path d="M17 3l.7 2.3L20 6l-2.3.7L17 9l-.7-2.3L14 6l2.3-.7z"/><path d="M16 15l1 2.5 2.5 1-2.5 1-1 2.5-1-2.5-2.5-1 2.5-1z"/>',
   bldg: '<path d="M4 21V5l8-3 8 3v16"/><path d="M9 9h.01M9 13h.01M9 17h.01M15 9h.01M15 13h.01M15 17h.01"/><path d="M4 21h16"/>',
