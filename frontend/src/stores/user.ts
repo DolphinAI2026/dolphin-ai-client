@@ -68,6 +68,14 @@ export const useUserStore = defineStore('user', () => {
     return { requiresSelection: false }
   }
 
+  const desktopLogin = async (username: string, password: string) => {
+    const { desktopLogin: api } = await import('@/api/desktopAuth')
+    const res: any = await api({ username, password })
+    setToken(res.access_token)
+    await fetchUser()
+    return { ok: true }
+  }
+
   const selectTenant = async (selectionToken: string, tenantId: number) => {
     const res = await authApi.selectTenant({ selection_token: selectionToken, tenant_id: tenantId })
     setToken(res.access_token)
@@ -120,6 +128,7 @@ export const useUserStore = defineStore('user', () => {
     clearToken,
     fetchUser,
     login,
+    desktopLogin,
     selectTenant,
     switchTenant,
     fetchAvailableTenants,

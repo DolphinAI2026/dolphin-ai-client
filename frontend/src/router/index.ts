@@ -6,11 +6,8 @@ import request from '@/utils/request'
 const router = createRouter({
   history: createWebHistory(import.meta.env.BASE_URL),
   routes: [
-    {
-      path: '/login',
-      name: 'Login',
-      component: () => import('@/views/Login.vue')
-    },
+    { path: '/login', name: 'Login',
+      component: () => (__DESKTOP__ ? import('@/views/DesktopLogin.vue') : import('@/views/Login.vue')) },
     {
       path: '/tenant-select',
       name: 'TenantSelect',
