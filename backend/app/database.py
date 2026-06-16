@@ -147,6 +147,10 @@ async def init_db():
             "CREATE INDEX IF NOT EXISTS ix_ai_chat_sessions_app_id ON ai_chat_sessions(app_id)",
             # 桌面产品账号来源标记(2026-06-16): 'apaas'=aPaaS同步账号 | 'desktop'=桌面账号
             "ALTER TABLE users ADD COLUMN account_source VARCHAR(20) NOT NULL DEFAULT 'apaas'",
+            # account-service: username 全局唯一 → 复合 (username, account_source)
+            "CREATE UNIQUE INDEX IF NOT EXISTS uq_user_username_source ON users(username, account_source)",
+            "DROP INDEX IF EXISTS ix_users_username",
+            "CREATE INDEX IF NOT EXISTS ix_users_username ON users(username)",
         ]:
             try:
                 await conn.execute(text(stmt))

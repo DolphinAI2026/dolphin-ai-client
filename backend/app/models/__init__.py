@@ -36,9 +36,12 @@ from app.models.agent_observability import AgentRun, AgentStep  # noqa: F401  â€
 
 class User(Base):
     __tablename__ = "users"
+    __table_args__ = (
+        UniqueConstraint("username", "account_source", name="uq_user_username_source"),
+    )
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
-    username: Mapped[str] = mapped_column(String(50), unique=True, nullable=False, index=True)
+    username: Mapped[str] = mapped_column(String(50), nullable=False, index=True)
     display_name: Mapped[Optional[str]] = mapped_column(String(100), nullable=True)
     hashed_password: Mapped[str] = mapped_column(String(255), nullable=False)
     apaas_token: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
