@@ -7,6 +7,7 @@ from sqlalchemy.pool import StaticPool
 from app.database import Base
 from app.models import User
 from app.auth import get_password_hash, verify_password
+from httpx import AsyncClient, ASGITransport
 
 
 @pytest_asyncio.fixture
@@ -57,3 +58,36 @@ async def test_apaas_login_does_not_clobber_desktop_user(account_db):
     desk = [r for r in rows if r.account_source == "desktop"][0]
     assert desk.hashed_password == "desk"  # 没被覆盖
     assert desk.is_platform_admin is True
+
+
+@pytest_asyncio.fixture
+async def account_client(monkeypatch):
+    # 共享内存库 + monkeypatch AsyncSessionLocal, 让路由(get_db)和测试看同一个库
+    engine = create_async_engine("sqlite+aiosqlite://", poolclass=StaticPool,
+                                 connect_args={"check_same_thread": False})
+    async with engine.begin() as conn:
+        await conn.run_sync(Base.metadata.create_all)
+    Session = async_sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
+    monkeypatch.setattr("app.database.AsyncSessionLocal", Session)
+    monkeypatch.setattr("app.config.settings.public_account_base_url", "")  # authority
+    from services.account_service.main import create_app
+    app = create_app()
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://t") as c:
+        yield c, Session
+
+
+@pytest.mark.asyncio
+async def test_account_service_login_authority(account_client):
+    c, Session = account_client
+    from app import desktop_accounts as da
+    async with Session() as db:
+        await da.provision_desktop_account(db, "mars", "ruijing2026", is_platform_admin=True)
+        await db.commit()
+    # authority 登录
+    r = await c.post("/api/desktop-auth/login", json={"username": "mars", "password": "ruijing2026"})
+    assert r.status_code == 200
+    assert r.json()["username"] == "mars"
+    # 错密码
+    r2 = await c.post("/api/desktop-auth/login", json={"username": "mars", "password": "x"})
+    assert r2.status_code == 401
