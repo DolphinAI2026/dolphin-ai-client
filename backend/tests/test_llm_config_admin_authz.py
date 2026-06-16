@@ -2,19 +2,12 @@
 
 直接调用路由函数(Depends 只是普通参数),手构 AuthContext。
 
-⚠️ 整文件 skip(2026-06-12): 本文件测的是「LLM 配置按租户严格隔离」模型
-(2026-06-06 c5c7184e 落地), 但 2026-06-07 8068d895 把端点改回了
-「平台级共享」(list 仅平台管理员、options 忽略租户、create 无 tenant_id),
-两个方向冲突, 7 个用例永远红。待产品方向拍板:
-- 维持平台共享 → 删本文件
-- 恢复租户隔离 → 还原 8068d895 中 llm_configs.py 的改动并解除 skip
+2026-06-16 拍板:LLM 配置「按租户优先 + 读取回落共享兜底」。本文件测的是**写侧**的
+租户作用域 + 归属授权(list 只列本租户、create 落调用者租户、跨租户 update 404)。
+读侧的回落兜底语义在 test_llm_config_tenant_scope.py。
 """
 import pytest
 from fastapi import HTTPException
-
-pytestmark = pytest.mark.skip(
-    reason="LLM 配置租户隔离(c5c7184e) 与平台共享(8068d895) 方向冲突, 待拍板 — 见文件头注释"
-)
 
 from app.crypto import encrypt_password
 from app.deps import AuthContext
@@ -25,6 +18,7 @@ from app.routes.llm_configs import (
     list_llm_configs,
     create_llm_config,
     update_llm_config,
+    delete_llm_config,
     LLMConfigUpdate,
 )
 
@@ -82,6 +76,25 @@ async def test_tenant_admin_cannot_edit_other_tenant(db_session):
     with pytest.raises(HTTPException) as exc:
         await update_llm_config(b_cfg.id, LLMConfigUpdate(model="x"), ctx, db_session)
     assert exc.value.status_code == 404
+
+
+@pytest.mark.asyncio
+async def test_tenant_admin_cannot_delete_other_tenant(db_session):
+    t_a, t_b, a_cfg, b_cfg = await _setup(db_session)
+    ctx = _ctx(db_session, t_a.id)
+    with pytest.raises(HTTPException) as exc:
+        await delete_llm_config(b_cfg.id, ctx, db_session)
+    assert exc.value.status_code == 404
+    # 别租户配置仍在
+    assert (await db_session.get(LLMConfig, b_cfg.id)) is not None
+
+
+@pytest.mark.asyncio
+async def test_tenant_admin_can_edit_own(db_session):
+    t_a, t_b, a_cfg, b_cfg = await _setup(db_session)
+    ctx = _ctx(db_session, t_a.id)
+    updated = await update_llm_config(a_cfg.id, LLMConfigUpdate(model="x"), ctx, db_session)
+    assert updated.model == "x"
 
 
 @pytest.mark.asyncio

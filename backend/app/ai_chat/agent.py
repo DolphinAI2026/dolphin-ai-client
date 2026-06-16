@@ -388,8 +388,8 @@ async def _resolve_llm_config(
     并把 ORM 行包成 LLMConfigSnapshot(解密 + max_tokens/temperature 透传)。
 
     注:purpose="builder" 等价于旧版 purpose IN ('builder','all')——resolve_* 内部
-    精确用途优先、其次 'all'。租户隔离规则维持当前平台全局语义(resolve_* 忽略
-    tenant_id),与本轮重构无关,不在此处改动。
+    精确用途优先、其次 'all'。租户作用域:resolve_* 现按 session.tenant_id **本租户优先**,
+    本租户没配则回落全平台共享兜底(2026-06-16),桌面独立租户用自己的、在线版零影响。
     """
     from app.routes.llm_configs import resolve_llm_config_for_purpose
 
