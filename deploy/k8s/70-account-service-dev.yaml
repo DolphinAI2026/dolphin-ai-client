@@ -1,0 +1,133 @@
+# account-service-dev: 桌面账号权威(独立服务)
+# - 复用 apaas-builder 镜像, 不同 entry: python -m services.account_service
+# - 独立 SQLite 库挂 PVC(account-service-data) + 独立 JWT 密钥
+#   secret account-service-env-dev key=jwt_secret (database_url key 不用, SQLite 走 env)
+# - 挂 agent.dfy.definesys.cn/account-api/  (ingress rewrite → account-service /api/...)
+#   桌面 sidecar PUBLIC_ACCOUNT_BASE_URL = https://agent.dfy.definesys.cn/account-api
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: account-service-data
+  namespace: apaas-builder
+spec:
+  accessModes: [ReadWriteOnce]
+  resources:
+    requests:
+      storage: 1Gi
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: account-service-dev
+  namespace: apaas-builder
+  labels:
+    app: account-service-dev
+spec:
+  replicas: 1
+  strategy:
+    type: Recreate   # SQLite 单写, 滚动时避免两 pod 同时挂 PVC
+  selector:
+    matchLabels:
+      app: account-service-dev
+  template:
+    metadata:
+      labels:
+        app: account-service-dev
+    spec:
+      imagePullSecrets:
+      - name: regcred-hub-dfy
+      affinity:
+        nodeAffinity:
+          requiredDuringSchedulingIgnoredDuringExecution:
+            nodeSelectorTerms:
+            - matchExpressions:
+              - key: apaas.definesys.com/app-tier
+                operator: Exists
+      containers:
+      - name: account-service
+        image: hub.dfy.definesys.cn/ai-builder/apaas-builder:dev-20260616-acctsvc3
+        imagePullPolicy: IfNotPresent
+        workingDir: /app/backend
+        command: ["python", "-m", "services.account_service"]
+        env:
+        - name: ACCOUNT_SERVICE_PORT
+          value: "8100"
+        - name: ALLOW_DEFAULT_ENCRYPTION_KEY
+          value: "1"
+        - name: ACCOUNT_SERVICE_DATABASE_URL
+          valueFrom:
+            secretKeyRef:
+              name: account-service-env-dev
+              key: database_url
+        - name: ACCOUNT_SERVICE_JWT_SECRET
+          valueFrom:
+            secretKeyRef:
+              name: account-service-env-dev
+              key: jwt_secret
+        ports:
+        - containerPort: 8100
+          name: api
+        readinessProbe:
+          httpGet:
+            path: /api/health
+            port: api
+          initialDelaySeconds: 20
+          periodSeconds: 10
+          failureThreshold: 6
+        livenessProbe:
+          httpGet:
+            path: /api/health
+            port: api
+          initialDelaySeconds: 60
+          periodSeconds: 30
+          failureThreshold: 3
+        resources:
+          requests:
+            cpu: 100m
+            memory: 256Mi
+          limits:
+            cpu: "1"
+            memory: 1Gi
+        volumeMounts:
+        - name: data
+          mountPath: /data
+      volumes:
+      - name: data
+        persistentVolumeClaim:
+          claimName: account-service-data
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: account-service-dev
+  namespace: apaas-builder
+spec:
+  selector:
+    app: account-service-dev
+  ports:
+  - port: 8100
+    targetPort: api
+    name: api
+---
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: account-service-dev
+  namespace: apaas-builder
+  annotations:
+    nginx.ingress.kubernetes.io/rewrite-target: /$2
+    # 桌面更新包上传(POST /desktop-updates/admin/publish)multipart ~100MB, 默认 1m 会 413
+    nginx.ingress.kubernetes.io/proxy-body-size: 200m
+spec:
+  ingressClassName: nginx
+  rules:
+  - host: agent.dfy.definesys.cn
+    http:
+      paths:
+      - path: /account-api(/|$)(.*)
+        pathType: ImplementationSpecific
+        backend:
+          service:
+            name: account-service-dev
+            port:
+              number: 8100
