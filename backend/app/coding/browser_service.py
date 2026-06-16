@@ -8,9 +8,12 @@ import json
 import logging
 import time
 from pathlib import Path
-from typing import Optional
+from typing import TYPE_CHECKING, Optional
 
-from playwright.async_api import async_playwright, Browser, BrowserContext, Page, Playwright
+# playwright 是可选依赖 (桌面打包时可通过 PyInstaller --exclude-module playwright 排除)。
+# 运行期 import 在 BrowserService.start() 中按需执行 (唯一会真正启动 playwright 的入口)。
+if TYPE_CHECKING:  # 仅类型检查阶段, 不影响运行/打包
+    from playwright.async_api import Browser, BrowserContext, Page, Playwright
 
 logger = logging.getLogger(__name__)
 
@@ -25,7 +28,7 @@ JPEG_QUALITY = 60
 class BrowserSession:
     """单个 workspace 的浏览器会话"""
 
-    def __init__(self, ws_id: str, context: BrowserContext, page: Page):
+    def __init__(self, ws_id: str, context: "BrowserContext", page: "Page"):
         self.ws_id = ws_id
         self.context = context
         self.page = page
@@ -164,8 +167,8 @@ class BrowserService:
     _instance: Optional["BrowserService"] = None
 
     def __init__(self):
-        self._playwright: Optional[Playwright] = None
-        self._browser: Optional[Browser] = None
+        self._playwright: "Optional[Playwright]" = None
+        self._browser: "Optional[Browser]" = None
         self._sessions: dict[str, BrowserSession] = {}
         self._cleanup_task: Optional[asyncio.Task] = None
 
@@ -179,6 +182,7 @@ class BrowserService:
         """启动 Playwright 和 Chromium"""
         if self._browser:
             return
+        from playwright.async_api import async_playwright  # 惰性 import: 仅调用时加载
         self._playwright = await async_playwright().start()
         self._browser = await self._playwright.chromium.launch(
             headless=True,
