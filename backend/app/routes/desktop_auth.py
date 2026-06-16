@@ -11,7 +11,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.auth import create_access_token
 from app.database import get_db
-from app.deps import resolve_default_tenant_id_for_user
+from app.deps import get_auth_context, AuthContext, resolve_default_tenant_id_for_user
 from app import desktop_accounts as da
 
 logger = logging.getLogger(__name__)
@@ -44,3 +44,36 @@ async def _authority_login(db: AsyncSession, data: DesktopLoginIn) -> DesktopLog
 @router.post("/login", response_model=DesktopLoginOut)
 async def desktop_login(data: DesktopLoginIn, db: AsyncSession = Depends(get_db)):
     return await _authority_login(db, data)
+
+
+class CreateAccountIn(BaseModel):
+    username: str
+    password: str
+
+
+class CreateAccountOut(BaseModel):
+    username: str
+    tenant_id: int
+
+
+@router.post("/admin/accounts", response_model=CreateAccountOut)
+async def admin_create_account(
+    data: CreateAccountIn,
+    db: AsyncSession = Depends(get_db),
+    ctx: AuthContext = Depends(get_auth_context),
+):
+    """平台管理员开桌面账号。仅 is_platform_admin=True 的用户可调用。"""
+    if not ctx.user.is_platform_admin:
+        raise HTTPException(status_code=403, detail="仅平台管理员可开桌面账号")
+    if len(data.password) < 8:
+        raise HTTPException(status_code=400, detail="密码至少 8 位")
+    try:
+        user = await da.provision_desktop_account(db, data.username, data.password)
+    except da.AccountExistsError:
+        raise HTTPException(status_code=409, detail="账号已存在")
+    await db.commit()
+    tid = await resolve_default_tenant_id_for_user(db, user.id)
+    if tid is None:
+        # provision 总会建租户+membership; 走到 None 即数据异常, 别用 0 掩盖。
+        raise HTTPException(status_code=500, detail="新账号租户创建异常")
+    return CreateAccountOut(username=user.username, tenant_id=tid)
