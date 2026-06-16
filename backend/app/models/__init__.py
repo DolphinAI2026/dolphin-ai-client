@@ -415,3 +415,23 @@ class DbConnection(Base):
         UniqueConstraint("tenant_id", "name", name="uq_db_conn_tenant_name"),
     )
 from app.models.conversation_replay import ConversationReplay  # noqa: F401  — 会话富回放落库
+
+
+class AppHealthSnapshot(Base):
+    """应用体检快照 — 确定性体检引擎每次结果落库，支撑趋势/横比/diff。"""
+
+    __tablename__ = "app_health_snapshots"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    tenant_id: Mapped[int] = mapped_column(Integer, index=True, nullable=False)
+    app_id: Mapped[int] = mapped_column(Integer, ForeignKey("applications.id"), index=True, nullable=False)
+    apaas_app_id: Mapped[Optional[str]] = mapped_column(String(50), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, index=True)
+    as_of: Mapped[datetime] = mapped_column(DateTime, nullable=False)
+    total_score: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    grade: Mapped[str] = mapped_column(String(20), nullable=False)
+    has_critical: Mapped[bool] = mapped_column(Boolean, default=False)
+    dimensions: Mapped[dict] = mapped_column(JSON, default=dict)
+    findings: Mapped[list] = mapped_column(JSON, default=list)
+    data_coverage: Mapped[dict] = mapped_column(JSON, default=dict)
+    engine_version: Mapped[str] = mapped_column(String(20), nullable=False)

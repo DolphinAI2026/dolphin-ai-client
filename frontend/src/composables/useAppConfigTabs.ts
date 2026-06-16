@@ -57,6 +57,7 @@ export const DESIGNER_SUBS = [
   { code: 'data', label: '数据模型' },
   { code: 'perm', label: '权限' },
   { code: 'dev', label: '自开发' },
+  { code: 'health', label: '体检' },
 ] as const
 
 export type DesignerSubCode = typeof DESIGNER_SUBS[number]['code'] | 'event'

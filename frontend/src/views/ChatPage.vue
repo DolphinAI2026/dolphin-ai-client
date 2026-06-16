@@ -183,7 +183,7 @@
             <!-- designer 内顶部 4 sub-tab -->
             <div class="mdsh-subnav">
               <div class="mdsh-subnav-info">
-                <span class="mdsh-menu-name">{{ designerSub === 'dev' ? '自开发资产' : (selectedApaasMenuName || '选中菜单') }}</span>
+                <span class="mdsh-menu-name">{{ designerSub === 'dev' ? '自开发资产' : designerSub === 'health' ? '应用体检' : (selectedApaasMenuName || '选中菜单') }}</span>
               </div>
               <div class="mdsh-subnav-tabs" role="tablist">
                 <button
@@ -260,6 +260,11 @@
               <AppDevWorkspacePanel
                 v-else-if="designerSub === 'dev'"
                 :key="`dev-${existingAppId}-${designerRefreshKey}`"
+                :app-id="existingAppId"
+              />
+              <AppHealthPanel
+                v-else-if="designerSub === 'health'"
+                :key="`health-${existingAppId}-${designerRefreshKey}`"
                 :app-id="existingAppId"
               />
               <!-- 2026-05-29: 删「页面设置」sub-tab — 纯占位(⚙️ placeholder "P1 接入"),
@@ -696,6 +701,7 @@ import DataModelDetailPanel from '@/components/v3/DataModelDetailPanel.vue'
 import DictEditorPanel from '@/components/v3/DictEditorPanel.vue'
 import RoleManagePanel from '@/components/v3/RoleManagePanel.vue'
 import LogsPanel from '@/components/v3/LogsPanel.vue'
+import AppHealthPanel from '@/views/coding/AppHealthPanel.vue'
 import AppDatasourcePanel from '@/components/v3/AppDatasourcePanel.vue'
 import CustomPagePreviewPanel from '@/components/v3/CustomPagePreviewPanel.vue'
 import AppDevWorkspacePanel from '@/components/v3/AppDevWorkspacePanel.vue'

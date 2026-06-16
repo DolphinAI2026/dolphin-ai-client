@@ -314,6 +314,12 @@ tools:
     agents: [builder, coding, config]
     category: introspection
     description: "列指定应用下所有数据字典（下拉/单选选项的来源）。"
+  compute_app_health:
+    sections: [logic]
+    agents: [config]
+    category: introspection
+    description: "对指定应用做确定性健康体检，返回结构化记分卡（总分/各维度分/findings）。分数由规则引擎产出，叙述时勿编造。"
+    read_only: true
   list_apaas_app_menus:
     sections: [ui]
     agents: [builder, coding, config]

@@ -541,6 +541,7 @@ from app.mcp_tools.app_deployment import (
 )
 from app.mcp_tools.backend_workspace import register as _register_backend_workspace_tools
 from app.mcp_tools.business_events import register as _register_business_event_tools
+from app.mcp_tools.app_health_tool import register as _register_app_health_tools
 from app.mcp_tools.form_components import (
     _apply_form_component_updates,
     _build_component_behavior_updates,
@@ -697,6 +698,8 @@ republish_apaas_app = _self_dev_asset_tools["republish_apaas_app"]
 create_apaas_self_dev_menu = _self_dev_asset_tools["create_apaas_self_dev_menu"]
 list_apaas_resource_pool_kits = _self_dev_asset_tools["list_apaas_resource_pool_kits"]
 upload_external_zip_to_apaas = _self_dev_asset_tools["upload_external_zip_to_apaas"]
+_app_health_tools = _register_app_health_tools(mcp)
+compute_app_health = _app_health_tools["compute_app_health"]
 _apaas_config_crud_tools = _register_apaas_config_crud_tools(
     mcp,
     lambda env_id, op, fn: _with_client(env_id, op, fn),
