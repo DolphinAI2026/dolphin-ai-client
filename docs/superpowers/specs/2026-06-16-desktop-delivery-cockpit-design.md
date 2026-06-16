@@ -51,7 +51,7 @@ ai-builder（睿鲸 AI）当前是**在线版**的低代码平台，核心能力
 | D5 | **本机工作区 + 原生执行**，替掉在线版的 pod-per-workspace / code-server | 桌面上工作区落用户本机，sidecar 直接做文件/命令操作，用已有的原生文件树/viewer/diff UI。兑现「本地代码+命令能力」。 |
 | D6 | **标准交付阶段 = 7 个**：调研 → 设计 → 配置 → 开发 → 测试 → 验收 → 上线 | 作为内置「睿鲸标准交付」，可裁剪。 |
 | D7 | **阶段闸口默认软门**，关键检查项可在模板里标成硬门 | 硬门一刀切会逼工程师绕开工具，毁掉「全员用它」的目标；标准化价值先靠可见性拿，关键节点再上硬门。 |
-| D8 | **bring-your-own aPaaS + LLM**：按「交付 profile」本地加密存配置 | 卖出去的副本连客户自己的 aPaaS 与 LLM；数据/环境隔离。 |
+| D8 | **bring-your-own aPaaS + LLM，全部在应用内 UI 配置(存本地 DB，不写 env 文件)** | 复用在线版已有的 `platform_envs`(`PlatformEnv` 表，含加密 `password_enc`/`token`)与 `llm_configs`(`LLMConfig` 表，含加密 `api_key_enc`)。已核实低代码流程运行时 100% 从 DB 取连接(`apaas_session._get_apaas_client` / `agent._resolve_llm_config`)，不读 env。桌面 boot 不带任何 aPaaS/LLM env → local-only 登录 → 应用内配 aPaaS 环境(账密换 token) + LLM。卖出去的副本天然连客户自己的 aPaaS/LLM；数据/环境隔离。 |
 | D9 | **桌面应用品牌 = 「睿鲸 Builder」** | 与在线版同源、便于品牌延续。 |
 | D10 | **Phase 0 验证环境 = trial 环境 + mars 租户** | 用户指定；连通性/登录/一次低代码配置都在此验证（连接细节 Phase 0 落地时确认）。 |
 
@@ -154,7 +154,7 @@ ai-builder（睿鲸 AI）当前是**在线版**的低代码平台，核心能力
 ## 8. 留待子项目 spec 解决的开放问题
 
 - 交付项目实体与现有 `projects` / `applications` 模型如何对齐（SP2）。
-- 「交付 profile」配置的本地加密方案与多 profile 切换 UX（SP1/Phase 1）。
+- aPaaS/LLM 配置复用现有 `PlatformEnv`/`LLMConfig`(已加密、已有 UI)；待补的是桌面「交付 profile」多环境切换 UX 与首屏引导（SP1/Phase 1）。
 - 交付物模板的结构化定义格式（章节 + 生成指令 + 数据来源 schema）（SP3）。
 - 交付技能的定义/版本化/共享格式，与现有 skills/MCP 的复用边界（SP4）。
 - 产品化阶段的授权模型（licensing）与客户隔离粒度（SP6）。

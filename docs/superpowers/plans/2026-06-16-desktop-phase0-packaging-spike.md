@@ -4,7 +4,7 @@
 
 **Goal:** 证明「Tauri(macOS) 壳 + PyInstaller 打包的 FastAPI sidecar + WKWebView 同源加载现有 Vue 前端 + 连真实 aPaaS/LLM」这条地基跑得通——产出一个能双击运行、登录 trial 环境(mars 租户)并完成一次低代码配置动作的 `.app`。不碰交付层。
 
-**Architecture:** sidecar 一体化同源方案。Python 后端用 `VITE_BASE_URL=/` 重新构建的前端 dist 由 FastAPI 自己用 `_SpaStaticFiles` 托管在 `/`，API 仍在 `/api`，二者同源 → 前端零改、无需 CORS/反代/端口注入。PyInstaller 把后端(含前端 dist)打成 onefile 单体二进制；Tauri 作为外壳用 `externalBin` 捆绑它、启动时按动态端口拉起、轮询 `/api/health` 就绪后用 `WebviewUrl::External` 让 WKWebView 加载 `http://127.0.0.1:<port>/`，退出时杀掉 sidecar。aPaaS/LLM 凭据通过 app-data 目录下的 `profile.env` 注入(不进仓库、不进 bundle)。
+**Architecture:** sidecar 一体化同源方案。Python 后端用 `VITE_BASE_URL=/` 重新构建的前端 dist 由 FastAPI 自己用 `_SpaStaticFiles` 托管在 `/`，API 仍在 `/api`，二者同源 → 前端零改、无需 CORS/反代/端口注入。PyInstaller 把后端(含前端 dist)打成 onefile 单体二进制；Tauri 作为外壳用 `externalBin` 捆绑它、启动时按动态端口拉起、轮询 `/api/health` 就绪后用 `WebviewUrl::External` 让 WKWebView 加载 `http://127.0.0.1:<port>/`，退出时杀掉 sidecar。aPaaS/LLM 凭据不走文件——用户在应用内 UI 配置(复用现有 `platform_envs`/`llm_configs`，存本地 SQLite，已加密)；桌面 boot 不带这些 env，走 local-only 登录后在前台配。
 
 **Tech Stack:** Tauri 2.x (Rust, `tauri-plugin-shell`)、Python 3.13 + FastAPI/uvicorn + PyInstaller 6.x (onefile)、Vue 3 + Vite (桌面 base=`/` 构建)、SQLite (aiosqlite)。
 
@@ -28,7 +28,7 @@
 ## File Structure
 
 新增文件：
-- `backend/desktop_sidecar.py` — 桌面 sidecar 入口：解析 `--port`/`--data-dir`，注入环境变量(SQLite 路径、JWT 密钥持久化、`ALLOW_DEFAULT_ENCRYPTION_KEY`、`DESKTOP_MODE`)，加载可选 `profile.env`，再 `from app.main import app` 并 `uvicorn.run(app, ...)`。一个职责：把"裸进程"变成"自带本地配置的可冻结进程"。
+- `backend/desktop_sidecar.py` — 桌面 sidecar 入口：解析 `--port`/`--data-dir`，注入**本地基础设施**环境变量(SQLite 路径、JWT 密钥持久化、`ALLOW_DEFAULT_ENCRYPTION_KEY`、`DESKTOP_MODE`)，再 `from app.main import app` 并 `uvicorn.run(app, ...)`。一个职责：把"裸进程"变成"自带本地运行管道的可冻结进程"。aPaaS/LLM 等用户配置**不在这里**——走应用内 UI 存 DB。
 - `backend/ruijing-sidecar.spec` — PyInstaller 打包描述：collect/hidden-import/exclude/数据文件，产 onefile。
 - `backend/tests/test_desktop_sidecar.py` — Task 3 的测试。
 - `backend/tests/test_desktop_static_mount.py` — Task 2 的测试。
@@ -261,24 +261,6 @@ from pathlib import Path
 import desktop_sidecar as ds
 
 
-def test_load_profile_env_merges_into_environ(tmp_path, monkeypatch):
-    p = tmp_path / "profile.env"
-    p.write_text(
-        "# comment\nAPAAS_BASE_URL=https://trial.example\n"
-        'ANTHROPIC_API_KEY="sk-abc"\n\nEMPTYLINE_IGNORED\n',
-        encoding="utf-8",
-    )
-    monkeypatch.delenv("APAAS_BASE_URL", raising=False)
-    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
-    ds.load_profile_env(p)
-    assert os.environ["APAAS_BASE_URL"] == "https://trial.example"
-    assert os.environ["ANTHROPIC_API_KEY"] == "sk-abc"  # 引号被剥掉
-
-
-def test_load_profile_env_missing_file_is_noop(tmp_path):
-    ds.load_profile_env(tmp_path / "nope.env")  # 不存在不报错
-
-
 def test_ensure_jwt_secret_persists(tmp_path):
     s1 = ds.ensure_jwt_secret(tmp_path)
     s2 = ds.ensure_jwt_secret(tmp_path)
@@ -316,23 +298,6 @@ import multiprocessing
 import os
 import secrets
 from pathlib import Path
-
-
-def load_profile_env(path: Path) -> None:
-    """把 app-data 目录下的 profile.env (dotenv 风格) 合并进 os.environ。
-    用于注入 trial aPaaS / LLM 凭据, 不进仓库也不进 bundle。文件不存在则 no-op。
-    """
-    if not path or not Path(path).is_file():
-        return
-    for raw in Path(path).read_text(encoding="utf-8").splitlines():
-        line = raw.strip()
-        if not line or line.startswith("#") or "=" not in line:
-            continue
-        key, _, val = line.partition("=")
-        key = key.strip()
-        val = val.strip().strip('"').strip("'")
-        if key:
-            os.environ[key] = val
 
 
 def ensure_jwt_secret(data_dir: Path) -> str:
@@ -377,12 +342,12 @@ def main() -> None:
 
     data_dir = Path(args.data_dir) if args.data_dir else (Path.home() / ".ruijing-builder")
 
-    # 1) 先注入基础 env (必须早于任何 app.* import)
+    # 注入本地基础设施 env (必须早于任何 app.* import)。
+    # 注意: aPaaS/LLM 等"用户配置"不走这里 — 它们由用户在应用内 UI 配置,
+    # 存进本地 SQLite 的 PlatformEnv / LLMConfig 表。这里只设本地运行管道。
     build_env(data_dir=data_dir, port=args.port)
-    # 2) 再叠加用户的 profile.env (aPaaS/LLM 凭据), 允许覆盖默认
-    load_profile_env(data_dir / "profile.env")
 
-    # 3) 现在才 import app (此时 Settings() 能读到上面注入的 env)
+    # 现在才 import app (此时 Settings() 能读到上面注入的 env)
     import uvicorn
     from app.main import app  # noqa: E402  传 app 对象, 不用 "app.main:app" 字符串
 
@@ -909,45 +874,34 @@ Co-Authored-By: Claude Opus 4.8 (1M context) <noreply@anthropic.com>"
 ## Task 9: 端到端验收 — 连 trial+mars 租户做一次低代码配置
 
 **Files:**
-- Create: `~/Library/Application Support/com.ruijing.builder/profile.env`(本机，不进仓库)
 - Create: `docs/handoff-2026-06-16-desktop-phase0-spike-result.md`(验收记录)
 
-目标：spike 的真正验收——桌面 app 连真实 aPaaS(trial 环境 + mars 租户)+ LLM，完成一次低代码配置动作，证明地基端到端成立。
+目标：spike 的真正验收——桌面 app 连真实 aPaaS(trial 环境 + mars 租户)+ LLM，完成一次低代码配置动作，证明地基端到端成立。**aPaaS/LLM 全部在应用内 UI 配置(存本地 SQLite)，不写任何 env 文件。**
 
-- [ ] **Step 1: 写 profile.env(填入 trial 环境 + mars 租户的真实值)**
+> 已核实(调研结论)：低代码流程运行时从 DB 的 `PlatformEnv` 取 aPaaS 连接(`backend/app/apaas_session.py:34-59` `_get_apaas_client`)、从 DB 的 `LLMConfig` 取模型(`backend/app/ai_chat/agent.py:373-419` `_resolve_llm_config`)，均不读 env。唯一硬读 `settings.apaas_base_url` 的是"初始用 aPaaS 账号登录"那一步——桌面走 local-only 登录绕开它，aPaaS 认证改由 `platform_envs` 配置里的账密换 token 完成。零代码改动即可。
 
-把团队现有可用的 trial aPaaS / LLM 配置(可从 `backend/.env` 历史或运维处取)写入该文件：
+- [ ] **Step 1: 找到本地种子管理员账号(local-only 登录用)**
 
-```bash
-mkdir -p "$HOME/Library/Application Support/com.ruijing.builder"
-cat > "$HOME/Library/Application Support/com.ruijing.builder/profile.env" <<'EOF'
-# trial 环境 + mars 租户 (按实际值填; 双端口拓扑则用 APAAS_API_BASE + APAAS_RSA_PUB_URL)
-APAAS_BASE_URL=<trial 的 aPaaS base url>
-APAAS_API_BASE=<若双端口拓扑: API 根, 否则删本行>
-APAAS_RSA_PUB_URL=<若双端口拓扑: RSA 公钥 url, 否则删本行>
-APAAS_TENANT_ID=<mars 租户 id>
-# LLM (二选一: Anthropic 兼容代理 / OpenAI 兼容网关)
-ANTHROPIC_BASE_URL=<llm base url>
-ANTHROPIC_API_KEY=<llm key>
-ANTHROPIC_MODEL=<model 名>
-EOF
-```
-> 这些值不知道时，向用户/运维确认 trial 环境的 `APAAS_*` 与可用 LLM 凭据。`profile.env` 在 app-data 目录，既不进仓库也不进 bundle。
+Run: `grep -niE "admin|password|username|seed.*user|default.*user" backend/app/seed_data.py | head -30`
+记下种子创建的本地管理员用户名/密码(用于 local-only 登录)。若是 hash 而无明文，按 seed 逻辑确认默认凭据，或用本机 mint-token 方式(参照团队既有本地登录约定)。
 
-- [ ] **Step 2: 重启 app 加载 profile**
+- [ ] **Step 2: 启动 app(无需任何 env 配置)**
 
 ```bash
 pkill -f "睿鲸 Builder" 2>/dev/null; pkill -f ruijing-sidecar 2>/dev/null
 open "src-tauri/target/release/bundle/macos/睿鲸 Builder.app"
 ```
+Expected: 弹出登录页(local-only，因为没配 APAAS_* env)。
 
-- [ ] **Step 3: 在窗口内走一遍真实流程(人工)**
+- [ ] **Step 3: 应用内配置 + 跑通(全部在 UI 里完成)**
 
-1. 用 mars 租户的 aPaaS 账号登录(应走 aPaaS 认证而非 local-only)。
-2. 进入低代码配置主路径，针对 trial 上的一个应用做一次最小配置动作(例如让配置助手读取某表单/或做一次字段级配置变更)。
-3. 观察：能列出 trial 上的真实应用/表单(证明 aPaaS 连通)；配置助手能调用 LLM(证明 LLM 连通)；动作落到 trial 环境。
+1. 用 Step 1 的本地管理员账号 local-only 登录。
+2. 进「平台管理 → 模型配置」(llm_configs UI)，新增一个 LLM 配置：填 trial 可用的 base_url / api_key / model，设为默认(builder/all 用途)。**必须先配 LLM**，否则 agent 报"没配置模型"。
+3. 进「平台管理 → aPaaS 环境」(platform_envs UI)，新增一个平台环境：env_name 任意、base_url = trial 的 aPaaS 地址、platform_tenant_id = mars 租户、username/password = mars 租户的 aPaaS 账密；保存后点「登录/测试」确认 status 变 connected(拿到 token)。
+4. 进入低代码配置主路径，把某应用绑定到刚配的 aPaaS 环境，做一次最小配置动作(例如让配置助手读取 trial 上某表单 / 做一次字段级配置变更)。
+5. 观察：能列出 trial 上的真实应用/表单(aPaaS 连通)；配置助手能调用 LLM(LLM 连通)；动作落到 trial 环境。
 
-Expected: 登录成功 + 能看到 trial 真实应用数据 + 完成一次配置动作且无致命报错。
+Expected: local 登录成功 + 前台配好 LLM 与 aPaaS 环境(test connected) + 能看到 trial 真实应用数据 + 完成一次配置动作且无致命报错。trial 的 aPaaS 地址/租户/账密这些值若不清楚，向用户/运维确认后填进 UI(不写文件)。
 
 - [ ] **Step 4: 抓证据**
 
@@ -986,7 +940,7 @@ Co-Authored-By: Claude Opus 4.8 (1M context) <noreply@anthropic.com>"
 - 裁依赖(playwright/k8s)→ Task 1 + Task 5 excludes。
 - 覆盖完整，无遗漏标准。
 
-**2. Placeholder scan：** 计划中的尖括号 `<...>` 仅出现在 Task 9 的 `profile.env`(真实凭据本就是 per-install 机密，不能硬编码进计划)与 lib.rs 的"以生成物为准"备注——均为运行者必须按本机实际填的值，非偷懒占位。其余步骤均给了可直接跑的完整代码/命令。
+**2. Placeholder scan：** 计划中的尖括号 `<...>` 仅出现在 Task 9 的"trial aPaaS 地址/租户/账密在 UI 里填"(真实凭据是 per-install 机密，由用户在应用内输入)与 lib.rs 的"以生成物为准"备注——均为运行者必须按本机实际填的值，非偷懒占位。其余步骤均给了可直接跑的完整代码/命令。
 
 **3. Type/命名一致性：**
 - sidecar 名 `ruijing-sidecar` 全程一致(spec EXE name / externalBin / capabilities / sidecar() 调用 / cp 重命名)。
