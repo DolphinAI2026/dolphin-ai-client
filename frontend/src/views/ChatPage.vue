@@ -740,6 +740,7 @@ import { useSpecStore } from '@/stores/spec'
 import PhaseBar from '@/components/spec/PhaseBar.vue'
 import SpecCanvas from '@/components/spec/SpecCanvas.vue'
 import SpecInspector from '@/components/spec/SpecInspector.vue'
+import { resolveInitialAppId, shouldUseRequirementsSpecMode } from './chatPageRouteState'
 // v2 redesign (Session 5): 3-column shell — left conversation rail + right SPEC blueprint.
 // Existing center content unchanged; new components are pure presentation, no logic.
 import AppAssistantPanel from '@/components/v2/AppAssistantPanel.vue'
@@ -747,6 +748,7 @@ import DeployConfirmModal from '@/components/v2/DeployConfirmModal.vue'
 
 const router = useRouter()
 const route = useRoute()
+const initialRouteAppId = resolveInitialAppId(route.query.app_id)
 const embedMode = computed(() => route.query.embed === 'true')
 const activeProjectId = computed(() => {
   const raw = Array.isArray(route.query.project_id) ? route.query.project_id[0] : route.query.project_id
@@ -1935,7 +1937,7 @@ function autoResizeTextarea() {
   el.style.height = 'auto'
   el.style.height = Math.min(el.scrollHeight, 160) + 'px'
 }
-const currentAgent = ref('requirements')
+const currentAgent = ref(initialRouteAppId ? 'builder' : 'requirements')
 const SHOW_PLATFORM_CONFIG = true
 const getAppViewStorageKey = (appId?: number | null) => appId ? `builder:last-active-view:${appId}` : ''
 const persistAppActiveView = (view: 'builder' | 'platform' | 'coding') => {
@@ -2873,7 +2875,7 @@ const removeDict = (idx: number) => {
 }
 
 const conversationId = ref<number | null>(null)
-const existingAppId = ref<number | null>(null)  // 从"继续完善"进来时，关联的已有应用ID
+const existingAppId = ref<number | null>(initialRouteAppId)  // 从"继续完善"进来时，关联的已有应用ID
 const generating = ref(false)
 
 // AI-Builder 模块定位：基于文档生成/更新应用
@@ -2920,7 +2922,7 @@ function recordMdToBuilderCache(appId: number | null | undefined) {
 // ── Requirements mode ──
 const isRequirementsMode = computed(() => currentAgent.value === 'requirements')
 // 独立需求会话进入 SPEC 画布；已有应用详情固定使用构建预览，避免异步历史会话把页面切走。
-const useSpecMode = computed(() => currentAgent.value === 'requirements' && !existingAppId.value)
+const useSpecMode = computed(() => shouldUseRequirementsSpecMode(currentAgent.value, existingAppId.value))
 // SPEC 三栏布局是否已展开（默认 false：先 Claude 风格纯对话）
 // 与 useSpecMode 解耦：useSpecMode=true 时后端依然走 SPEC 状态机，只是前端默认收起 panel
 // AI 自主判定信号（任一满足即展开）：

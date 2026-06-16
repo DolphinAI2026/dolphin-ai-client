@@ -4,7 +4,7 @@
   跟 design 截图对齐:
     - 表头: 表名 (mono big) + MySQL badge + 主表/子表 badge + 统计行
     - 右上 actions: 「打开低代码后台」深链按钮 (OpenLowcodeBackendButton)
-    - sub-tabs: 结构 (默认) / 数据预览 / SQL / 关系
+    - sub-tabs: 结构 (默认) / SQL
     - 字段 table: # / 字段 / 类型 / NULL / 键 (PK/FK/IDX/UNIQ badge) / 默认值 / 注释 (全只读)
 
   数据源: GET /api/applications/{app_id}/section-content/models?with_fields=true
@@ -17,10 +17,7 @@
     或用配置助手对话. 删 viewMode 切换 / inline 编辑 / 新增·编辑·删除字段 / 字段 CRUD
     写请求 (POST /crud/model-field/add|update|disable). Schema 字段 table 恒只读渲染.
 
-  O2 (2026-05-27): 业务视角 banner + 数据预览真实现 (纯预览无写).
-    - 顶部业务视角 banner (蓝 brand-soft + brand)
-    - "数据预览" sub-tab: mock 5 行真业务数据 (#列 + 前 6 个字段), 顶部 [刷新] + [对话加数据]
-    - SUB_TABS: 结构 / 数据预览 / SQL / 关系
+  2026-06-16: 去掉 mock 数据预览和关系 tab, 保留结构与 SQL 两个真实可解释视图.
 -->
 <template>
   <section class="dse" aria-label="数据 schema 编辑器">
@@ -70,7 +67,7 @@
         </div>
       </header>
 
-      <!-- 4 sub-tab: 结构 / 数据预览 / SQL / 关系. 字段表恒只读渲染,
+      <!-- sub-tab: 结构 / SQL. 字段表恒只读渲染,
            加 / 改 / 删字段走「打开低代码后台」深链或配置助手对话. -->
       <div class="dse-subnav" role="tablist">
         <button
@@ -141,69 +138,6 @@
         </table>
       </div>
 
-      <!-- 数据预览 tab — mock 5 行真业务数据 (O2) -->
-      <div v-else-if="subTab === 'data'" class="dse-data-wrap">
-        <div class="dse-data-head">
-          <div class="dse-data-head-meta">
-            <span class="dse-data-head-title">
-              <code class="mono">{{ currentModel.model_code || '该模型' }}</code>
-              <span class="dse-data-head-sub">· 数据预览</span>
-            </span>
-            <span class="dse-data-head-stat">{{ mockDataRows.length }} 行 · 示例数据</span>
-          </div>
-          <div class="dse-data-head-actions">
-            <button class="dse-btn dse-btn-ghost" @click="onRefreshMockData" title="重新生成示例数据">
-              <span class="dse-btn-icon"><AppIcon name="refresh" :size="13" /></span>
-              刷新
-            </button>
-            <button class="dse-btn dse-btn-primary" @click="onPromptChatAddData">
-              <span class="dse-btn-icon"><AppIcon name="sparkles" :size="13" /></span>
-              新增数据 — 用对话
-            </button>
-          </div>
-        </div>
-
-        <div v-if="dataPreviewColumns.length === 0" class="dse-data-empty">
-          <div class="dse-data-empty-icon"><AppIcon name="bar-chart" :size="36" /></div>
-          <h3>该模型暂无字段</h3>
-          <p>先在 "结构" tab 加字段, 再查看数据预览.</p>
-        </div>
-        <div v-else class="dse-data-table-wrap">
-          <table class="dse-data-table">
-            <thead>
-              <tr>
-                <th class="num">#</th>
-                <th
-                  v-for="col in dataPreviewColumns"
-                  :key="col.code"
-                  :title="col.name + (col.code ? ' (' + col.code + ')' : '')"
-                >
-                  <span class="dse-data-col-name">{{ col.name || col.code }}</span>
-                  <span class="dse-data-col-code mono">{{ col.code }}</span>
-                </th>
-              </tr>
-            </thead>
-            <tbody>
-              <tr v-for="(row, i) in mockDataRows" :key="i">
-                <td class="num">{{ row._row_num }}</td>
-                <td
-                  v-for="col in dataPreviewColumns"
-                  :key="col.code"
-                  :class="{ mono: col.isMono }"
-                >
-                  {{ row[col.code] }}
-                </td>
-              </tr>
-            </tbody>
-          </table>
-        </div>
-
-        <p class="dse-data-foot-hint">
-          共 {{ mockDataRows.length }} 行 · mock 示例数据 ·
-          真业务数据请进 apaas 应用直接查看 / 用配置助手对话查询.
-        </p>
-      </div>
-
       <!-- SQL tab — 只读 SQL 片段示例 -->
       <div v-else-if="subTab === 'sql'" class="dse-sql-wrap">
         <div class="dse-sql-head">
@@ -216,34 +150,12 @@
         </p>
       </div>
 
-      <!-- 关系 tab — 显当前模型的 FK list -->
-      <div v-else-if="subTab === 'relations'" class="dse-rel-wrap">
-        <div v-if="foreignKeyFields.length === 0" class="dse-placeholder">
-          <div class="dse-placeholder-icon"><AppIcon name="link" :size="40" /></div>
-          <h3>无外键关联</h3>
-          <p>该模型未定义引用其他模型的字段.</p>
-          <p class="hint">若需关联, 用配置助手对话新加引用字段 (类型 = 引用).</p>
-        </div>
-        <ul v-else class="dse-rel-list">
-          <li v-for="(f, i) in foreignKeyFields" :key="getFieldKey(f, i)" class="dse-rel-item">
-            <div class="dse-rel-from">
-              <span class="mono">{{ currentModel.model_code }}</span>.<span class="mono dse-rel-col">{{ getFieldCode(f) }}</span>
-            </div>
-            <span class="dse-rel-arrow">→</span>
-            <div class="dse-rel-to">
-              <span class="mono dse-rel-ref">{{ getRefModelCode(f) }}</span>
-              <span class="dse-rel-target">{{ getComment(f) || getFieldName(f) }}</span>
-            </div>
-          </li>
-        </ul>
-      </div>
     </template>
   </section>
 </template>
 
 <script setup lang="ts">
 import { ref, computed, watch } from 'vue'
-import { ElMessage } from 'element-plus'
 import request from '@/utils/request'
 import SkeletonCard from '@/components/states/SkeletonCard.vue'
 import ErrorCard from '@/components/states/ErrorCard.vue'
@@ -298,9 +210,7 @@ const props = defineProps<{
 
 const SUB_TABS = [
   { code: 'schema', label: '结构' },
-  { code: 'data', label: '数据预览' },
   { code: 'sql', label: 'SQL' },
-  { code: 'relations', label: '关系' },
 ] as const
 type SubTabCode = (typeof SUB_TABS)[number]['code']
 
@@ -360,8 +270,6 @@ const primaryKeyName = computed(() => {
 const foreignKeyCount = computed(
   () => fields.value.filter(f => isForeignKey(f)).length,
 )
-
-const foreignKeyFields = computed(() => fields.value.filter(f => isForeignKey(f)))
 
 // ─── SQL 片段 (只读, cosmetic) ──────────────────────────────────────────────
 const sqlSnippet = computed(() => {
@@ -564,200 +472,6 @@ watch(() => props.refreshNonce, (n, o) => {
   if (n === o || n == null) return
   void reload({ force: true })
 })
-
-// ─── O2: 数据预览 mock 生成器 ──────────────────────────────────────────────────
-//
-// 显前 6 个字段 + # 列, 5 行示例 (纯只读预览, 无写).
-// "刷新" 按钮 bump mockDataSeed 触发重生成.
-// "新增数据 — 用对话" alert 提示走配置助手.
-
-interface DataPreviewColumn {
-  code: string
-  name: string
-  isMono: boolean
-}
-
-interface DataPreviewRow {
-  _row_num: number
-  [k: string]: any
-}
-
-// 决策: 取前 6 个 "业务字段" — 排掉 id (主键) + 系统字段, 拿原顺序前 6 个.
-// 实际显: # + 6 个字段 = 7 列.
-const PREVIEW_FIELD_LIMIT = 6
-const PREVIEW_ROW_COUNT = 5
-
-const dataPreviewColumns = computed<DataPreviewColumn[]>(() => {
-  return fields.value
-    .filter(f => {
-      // 排掉主键 (id) — 主键大家都猜得到, 让位给业务字段.
-      if (isPrimaryKey(f)) return false
-      return true
-    })
-    .slice(0, PREVIEW_FIELD_LIMIT)
-    .map(f => {
-      const code = getFieldCode(f)
-      const t = String(f.data_type || f.field_type || f.type || '').toUpperCase()
-      return {
-        code,
-        name: getFieldName(f) || code,
-        // mono for short codes (no, id) or BIG_TEXT
-        isMono: code.endsWith('_no') || code === 'no' || code.includes('id') || t === 'BIGINT' || t === 'DECIMAL',
-      }
-    })
-})
-
-// bump 触发刷新
-const mockDataSeed = ref(0)
-
-const mockDataRows = computed<DataPreviewRow[]>(() => {
-  // 引用 mockDataSeed 让 bump 能触发重算
-  void mockDataSeed.value
-  const cols = dataPreviewColumns.value
-  if (cols.length === 0) return []
-  const rows: DataPreviewRow[] = []
-  for (let i = 0; i < PREVIEW_ROW_COUNT; i++) {
-    rows.push(genMockRow(i, cols))
-  }
-  return rows
-})
-
-function genMockRow(i: number, cols: DataPreviewColumn[]): DataPreviewRow {
-  // 找原 field row 来读 data_type
-  const fieldByCode = new Map<string, FieldRow>(
-    fields.value.map(f => [getFieldCode(f), f]),
-  )
-  const row: DataPreviewRow = { _row_num: i + 1 }
-
-  for (const col of cols) {
-    const f = fieldByCode.get(col.code)
-    row[col.code] = mockValueFor(col.code, f, i)
-  }
-  return row
-}
-
-// 中文示例库 — 5 行刚好.
-const SAMPLE_NAMES = ['张三', '李四', '王五', '赵六', '孙七']
-const SAMPLE_BOOK_TITLES = ['设计模式', '算法导论', '重构', '设计的心理学', '黑客与画家']
-const SAMPLE_DEPTS = ['研发部', '市场部', '销售部', '运营部', '人力资源']
-const SAMPLE_TITLES = ['工程师', '产品经理', '设计师', '运营专员', '销售代表']
-const SAMPLE_STATUS = ['待审批', '审批中', '已通过', '已驳回', '已完成']
-const SAMPLE_DESCRIPTIONS = [
-  '工作需要, 申请借阅参考',
-  '项目调研使用, 1 周后归还',
-  '团队培训资料, 集中学习',
-  '深入研究该领域, 计划阅读 2 周',
-  '与同行交流必读, 申请加急',
-]
-
-function mockValueFor(code: string, f: FieldRow | undefined, i: number): string {
-  const lc = code.toLowerCase()
-  const t = String(f?.data_type || f?.field_type || f?.type || '').toUpperCase()
-
-  // 申请编号 / 单号 — 优先匹配
-  if (lc === 'apply_no' || lc === 'order_no' || lc.endsWith('_no') || lc === 'no' || lc.includes('serial')) {
-    const prefix = lc === 'apply_no' ? 'SQDH'
-      : lc === 'order_no' ? 'DDH'
-      : lc.startsWith('return') ? 'GHDH'
-      : 'DH'
-    return `${prefix}-2026-${String(i + 1).padStart(3, '0')}`
-  }
-
-  // 日期类
-  if (t === 'DATE' || lc.endsWith('_date') || lc === 'date') {
-    const day = String(20 + i).padStart(2, '0')
-    return `2026-05-${day}`
-  }
-  if (t === 'DATETIME' || t === 'TIMESTAMP' || lc.endsWith('_time') || lc === 'time') {
-    const day = String(20 + i).padStart(2, '0')
-    const hour = String(9 + i).padStart(2, '0')
-    return `2026-05-${day} ${hour}:00:00`
-  }
-
-  // 长文本
-  if (t === 'BIG_TEXT' || t === 'TEXT' || lc.includes('desc') || lc.includes('remark') || lc.includes('note') || lc.includes('reason')) {
-    return SAMPLE_DESCRIPTIONS[i % SAMPLE_DESCRIPTIONS.length]
-  }
-
-  // 数字类
-  if (t === 'BIGINT' || t === 'INTEGER' || t === 'INT' || t === 'NUMBER') {
-    if (lc.includes('amount') || lc.includes('price') || lc.includes('money')) {
-      return String([100, 280, 350, 580, 1200][i % 5])
-    }
-    if (lc.includes('count') || lc.includes('qty') || lc.includes('num')) {
-      return String([1, 3, 5, 2, 4][i % 5])
-    }
-    if (lc.includes('age')) return String(22 + i * 3)
-    return String(100 + i * 10)
-  }
-  if (t === 'DECIMAL') {
-    if (lc.includes('amount') || lc.includes('price') || lc.includes('money')) {
-      return ['100.00', '280.50', '350.00', '580.00', '1200.00'][i % 5]
-    }
-    return ['1.00', '2.50', '3.00', '4.50', '5.00'][i % 5]
-  }
-
-  // 布尔
-  if (t === 'BOOLEAN' || t === 'BOOL') {
-    return ['是', '否', '是', '是', '否'][i % 5]
-  }
-
-  // 字典 / 状态
-  if (t === 'DICT' || t === 'DICT_SINGLE' || lc.includes('status') || lc.includes('state')) {
-    return SAMPLE_STATUS[i % SAMPLE_STATUS.length]
-  }
-
-  // 人 / 申请人
-  if (lc.includes('applicant') || lc.includes('borrower') || lc.includes('creator') || lc.includes('owner') || lc.includes('user') && !lc.includes('user_id')) {
-    return SAMPLE_NAMES[i % SAMPLE_NAMES.length]
-  }
-  if (lc.includes('name') && !lc.includes('book') && !lc.includes('dept') && !lc.includes('app')) {
-    return SAMPLE_NAMES[i % SAMPLE_NAMES.length]
-  }
-
-  // 书名 (借书业务)
-  if (lc.includes('book')) {
-    return SAMPLE_BOOK_TITLES[i % SAMPLE_BOOK_TITLES.length]
-  }
-
-  // 部门 / 岗位
-  if (lc.includes('dept') || lc.includes('department')) {
-    return SAMPLE_DEPTS[i % SAMPLE_DEPTS.length]
-  }
-  if (lc.includes('title') || lc.includes('position')) {
-    return SAMPLE_TITLES[i % SAMPLE_TITLES.length]
-  }
-
-  // 引用 (REF) — 编号样式
-  if (t === 'REF' || lc.endsWith('_id')) {
-    return String(8000000000000000 + i * 17)
-  }
-
-  // 邮箱
-  if (lc.includes('email') || lc.includes('mail')) {
-    return `user${i + 1}@example.com`
-  }
-
-  // 手机
-  if (lc.includes('phone') || lc.includes('mobile') || lc.includes('tel')) {
-    return `138-0000-000${i + 1}`
-  }
-
-  // 兜底: 示例文本
-  return `示例 ${i + 1}`
-}
-
-function onRefreshMockData() {
-  mockDataSeed.value++
-  ElMessage.success('已刷新示例数据')
-}
-
-function onPromptChatAddData() {
-  const modelName = currentModel.value?.model_name || currentModel.value?.model_code || '该模型'
-  alert(
-    `新增数据 — 用右侧配置助手对话:\n\n例: "给 ${modelName} 加一条测试数据, 申请编号 SQDH-2026-100, 申请人张三"\n\n配置助手会自动调 apaas 真存数据.`,
-  )
-}
 
 </script>
 
@@ -1083,195 +797,12 @@ function onPromptChatAddData() {
   font-size: 12.5px;
 }
 
-/* ─── O2: 数据预览 tab ───────────────────────────────────────────────────── */
-.dse-data-wrap {
-  display: flex;
-  flex-direction: column;
-  gap: 12px;
-}
-
-.dse-data-head {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 16px;
-  padding: 0 4px;
-}
-.dse-data-head-meta {
-  display: flex;
-  flex-direction: column;
-  gap: 2px;
-  min-width: 0;
-}
-.dse-data-head-title {
-  display: inline-flex;
-  align-items: baseline;
-  gap: 8px;
-  font-size: 15px;
-  font-weight: 600;
-  color: var(--text);
-}
-.dse-data-head-title code {
-  padding: 2px 8px;
-  background: var(--surface-2);
-  border-radius: 4px;
-  font-size: 13px;
-  color: var(--brand);
-  font-family: var(--font-mono);
-}
-.dse-data-head-sub {
-  font-size: 13px;
-  font-weight: 500;
-  color: var(--text-3);
-}
-.dse-data-head-stat {
-  font-size: 12px;
-  color: var(--text-4);
-}
-.dse-data-head-actions {
-  display: flex;
-  gap: 8px;
-  flex-shrink: 0;
-}
-
-.dse-data-empty {
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  justify-content: center;
-  text-align: center;
-  padding: 60px 24px;
-  background: var(--surface);
-  border: 1px solid var(--line);
-  border-radius: 10px;
-  color: var(--text-3);
-  gap: 8px;
-}
-.dse-data-empty-icon {
-  font-size: 36px;
-  line-height: 1;
-}
-.dse-data-empty h3 {
-  margin: 0;
-  font-size: 15px;
-  font-weight: 600;
-  color: var(--text);
-}
-.dse-data-empty p {
-  margin: 0;
-  font-size: 13px;
-}
-
-.dse-data-table-wrap {
-  background: var(--surface);
-  border: 1px solid var(--line);
-  border-radius: 10px;
-  overflow: auto;
-  box-shadow: var(--sh-1);
-}
-.dse-data-table {
-  width: 100%;
-  border-collapse: collapse;
-  font-size: 13px;
-}
-.dse-data-table th {
-  text-align: left;
-  padding: 11px 14px;
-  background: var(--surface-2);
-  font-weight: 500;
-  color: var(--text-3);
-  font-size: 12.5px;
-  border-bottom: 1px solid var(--line);
-  white-space: nowrap;
-  vertical-align: top;
-}
-.dse-data-table th.num {
-  width: 50px;
-  text-align: center;
-}
-.dse-data-table td {
-  padding: 11px 14px;
-  border-bottom: 1px solid var(--line);
-  color: var(--text);
-  vertical-align: middle;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  max-width: 200px;
-}
-.dse-data-table tr:last-child td { border-bottom: none; }
-.dse-data-table tr:hover td { background: var(--surface-2); }
-.dse-data-table .num {
-  color: var(--text-4);
-  text-align: center;
-  font-family: var(--font-mono);
-  font-size: 12px;
-}
-.dse-data-table .mono {
-  font-family: var(--font-mono);
-  font-size: 12.5px;
-  color: var(--text-2);
-}
-
-.dse-data-col-name {
-  display: block;
-  color: var(--text);
-  font-weight: 600;
-}
-.dse-data-col-code {
-  display: block;
-  margin-top: 2px;
-  color: var(--text-4);
-  font-size: 11px;
-  font-family: var(--font-mono);
-  font-weight: 400;
-}
-
-.dse-data-foot-hint {
-  margin: 0;
-  padding: 4px 4px;
-  font-size: 12px;
-  color: var(--text-4);
-  line-height: 1.5;
-}
-
 /* preview 模式 — 字段 table 边框柔和, 行 hover 不显操作 */
 .dse-table-wrap-preview .dse-table tr:hover td:not(.empty) {
   background: var(--surface);
 }
 .dse-table-wrap-preview .dse-cell-text {
   cursor: default;
-}
-
-/* ─── 数据 tab placeholder ─────────────────────────────────────────────── */
-.dse-placeholder {
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  justify-content: center;
-  text-align: center;
-  padding: 64px 24px;
-  color: var(--text-3);
-  gap: 10px;
-  background: var(--surface);
-  border: 1px solid var(--line);
-  border-radius: 10px;
-}
-.dse-placeholder-icon { font-size: 40px; line-height: 1; }
-.dse-placeholder h3 {
-  margin: 0;
-  font-size: 16px;
-  font-weight: 600;
-  color: var(--text);
-}
-.dse-placeholder p {
-  margin: 0;
-  font-size: 13px;
-}
-.dse-placeholder .hint {
-  font-size: 12px;
-  color: var(--text-4);
-  font-family: var(--font-mono);
 }
 
 /* ─── SQL tab ──────────────────────────────────────────────────────────── */
@@ -1313,52 +844,6 @@ function onPromptChatAddData() {
   color: var(--text-4);
   background: var(--surface-2);
   border-top: 1px solid var(--line);
-}
-
-/* ─── 关系 tab ─────────────────────────────────────────────────────────── */
-.dse-rel-wrap {
-  background: var(--surface);
-  border: 1px solid var(--line);
-  border-radius: 10px;
-  overflow: hidden;
-  box-shadow: var(--sh-1);
-}
-.dse-rel-list {
-  list-style: none;
-  margin: 0;
-  padding: 0;
-}
-.dse-rel-item {
-  display: flex;
-  align-items: center;
-  gap: 16px;
-  padding: 14px 18px;
-  border-bottom: 1px solid var(--line);
-}
-.dse-rel-item:last-child { border-bottom: none; }
-.dse-rel-from, .dse-rel-to {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-}
-.dse-rel-col {
-  color: var(--brand);
-}
-.dse-rel-arrow {
-  color: var(--text-4);
-  font-size: 18px;
-  font-weight: 300;
-}
-.dse-rel-ref {
-  color: var(--brand-hover);
-  background: var(--brand-soft);
-  padding: 2px 8px;
-  border-radius: 4px;
-  font-size: 12.5px;
-}
-.dse-rel-target {
-  color: var(--text-3);
-  font-size: 12.5px;
 }
 
 /* ─── state (未找到模型 — loading/error 走共享 SkeletonCard / ErrorCard) ──── */
