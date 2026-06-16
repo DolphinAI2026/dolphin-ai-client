@@ -39,10 +39,11 @@ def build_env(data_dir: Path, port: int) -> dict:
         # Phase 0 spike: 允许默认加密 key。Phase 1 改为每实例生成持久化 ENCRYPTION_KEY。
         "ALLOW_DEFAULT_ENCRYPTION_KEY": "1",
         "JWT_SECRET_KEY": ensure_jwt_secret(data_dir),
-        # 默认本地 authority 模式: 桌面账号在本地 SQLite 校验, /api/desktop-auth/login 走本地。
-        # 指向 account-service 公网地址即切 federation(见 docs/account-service-deploy.md)。
-        # (旧默认硬编码 agent.dfy, 但它尚未部署 → 默认 federation 必登不上, 故改默认空。)
-        "PUBLIC_ACCOUNT_BASE_URL": os.environ.get("PUBLIC_ACCOUNT_BASE_URL", ""),
+        # 默认 federation 模式: 转发到公网 account-service 认证(已部署 agent.dfy/account-api)。
+        # 新机器用公网账号即可登, 不用复制 app.db。设 PUBLIC_ACCOUNT_BASE_URL="" 可切回本地 authority(离线兜底)。
+        "PUBLIC_ACCOUNT_BASE_URL": os.environ.get(
+            "PUBLIC_ACCOUNT_BASE_URL", "https://agent.dfy.definesys.cn/account-api"
+        ),
     }
     for k, v in written.items():
         os.environ[k] = v
