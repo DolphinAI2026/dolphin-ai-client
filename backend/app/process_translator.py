@@ -162,7 +162,15 @@ _MINIMAL_BPMN = (
 
 _DEFAULT_CONDITION_VALUES = {"", "default", "else", "otherwise", "其他", "默认", "兜底"}
 _EQUAL_OPERATORS = {"==", "=", "eq", "equals", "equal", "是", "为", "等于"}
-_NOT_EQUAL_OPERATORS = {"!=", "<>", "ne", "neq", "not_eq", "not_equal", "not_equals", "不是", "不等于"}
+_NOT_EQUAL_OPERATORS = {"!=", "<>", "≠", "ne", "neq", "not_eq", "not_equal", "not_equals", "不是", "不等于"}
+# aPaaS simpleRule numeric comparison op codes — 抓包实证 (docs: /xdap-app/rule/save/simpleRule):
+# ≥ → "ge", > → "gt", ≤ → "le", < → "lt" (与 eq/neq 同为 2 字母编码).
+_GREATER_EQUAL_OPERATORS = {">=", "≥", "≧", "ge", "gte", "大于等于", "不小于", "不少于", "至少"}
+_GREATER_OPERATORS = {">", "gt", "大于", "超过", "高于", "多于"}
+_LESS_EQUAL_OPERATORS = {"<=", "≤", "≦", "le", "lte", "小于等于", "不大于", "不超过", "最多"}
+_LESS_OPERATORS = {"<", "lt", "小于", "低于", "少于"}
+# 数值比较 op → 平台 fieldRule.type 必须是 "number" (抓包实证), eq/neq 维持 "string".
+_NUMERIC_OPERATORS = {"gt", "ge", "lt", "le"}
 
 
 def _escape_xml_text(value: Any) -> str:
@@ -185,7 +193,14 @@ def _looks_like_condition_text(value: Any) -> bool:
         return False
     if text.startswith("{") and ("field" in text or "fieldCode" in text or "operator" in text):
         return True
-    return bool(re.search(r"(==|=|\beq\b|是|为|等于)", text, flags=re.IGNORECASE))
+    return bool(
+        re.search(
+            r"(==|!=|<>|>=|<=|≥|≤|≧|≦|>|<|=|\beq\b|\bne\b|\bneq\b|\bgt\b|\bge\b|\blt\b|\ble\b"
+            r"|是|为|等于|不等于|大于等于|小于等于|不小于|不大于|大于|小于|超过|低于|高于|至少|不超过|最多)",
+            text,
+            flags=re.IGNORECASE,
+        )
+    )
 
 
 def _edge_label_value(edge: dict[str, Any]) -> str:
@@ -294,10 +309,48 @@ def _resolve_option_value(bo_code: str, raw_value: str, lookup: dict[str, dict[s
     return value
 
 
+# 人类可读连线名/标签里的操作符（符号 + 中文词）。长操作符在前，避免 ">=" 被 ">" 抢匹配。
+_TEXT_OP_PATTERN = (
+    r">=|<=|≥|≤|≧|≦|==|!=|<>|≠|>|<|="
+    r"|大于等于|小于等于|不小于|不大于|不等于|不超过|大于|小于|超过|低于|高于|至少|最多|等于|不是|是|为"
+)
+
+
+def _search_condition_in_text(
+    text: str,
+    lookup: dict[str, dict[str, Any]],
+) -> tuple[str, str, str] | None:
+    """从带前缀的描述性连线名里抽 (field_ref, op, value)。
+
+    例: "高预算：项目预算≥100000" → ("项目预算", "≥", "100000")。
+    做法: 在文本里定位某个已知表单组件引用(字段名/编码, 长的优先), 再取其后的操作符+值。
+    """
+    keys = sorted(
+        {k for k in lookup if k and len(str(k)) >= 2},
+        key=lambda s: len(str(s)),
+        reverse=True,
+    )
+    for key in keys:
+        idx = text.find(key)
+        if idx < 0:
+            continue
+        rest = text[idx + len(key):]
+        match = re.match(
+            r"\s*(?P<op>" + _TEXT_OP_PATTERN + r")\s*['\"]?(?P<value>[^'\"\s]+)",
+            rest,
+        )
+        if match:
+            value = match.group("value").strip().rstrip("。.,，、)）")
+            if value:
+                return key, match.group("op"), value
+    return None
+
+
 def _parse_simple_condition(
     condition: Any,
     lookup: dict[str, dict[str, Any]],
-) -> tuple[str, str, str, str] | None:
+) -> tuple[str, str, str] | None:
+    """把条件解析成 (bo_code, op, value)。op ∈ {eq, neq, gt, ge, lt, le}。"""
     mapping = _condition_mapping(condition)
     if mapping:
         field_ref = _first_text(
@@ -321,12 +374,17 @@ def _parse_simple_condition(
         bo_code = _component_bo_code(field_ref, lookup)
         if not bo_code:
             return None
-        value = _resolve_option_value(bo_code, raw_value, lookup)
-        return bo_code, op, value, _rule_expression_operator(op)
+        # 数值比较 (gt/ge/lt/le) 的值是数字, 不走字典选项反查。
+        value = raw_value if op in _NUMERIC_OPERATORS else _resolve_option_value(bo_code, raw_value, lookup)
+        return bo_code, op, value
 
     text = str(condition or "").strip()
     if not text or _is_default_condition(text):
         return None
+
+    field_ref = ""
+    raw_value = ""
+    op = ""
 
     invoke_match = re.search(
         r"componentvalue['\"]\s*,\s*['\"](?P<field>[^'\"]+)['\"][\s\S]*?(?:==|=)\s*\(?\s*['\"](?P<value>[^'\"]+)['\"]",
@@ -338,23 +396,29 @@ def _parse_simple_condition(
         op = "eq"
     else:
         simple_match = re.match(
-            r"^\s*(?P<field>[\w.~\u4e00-\u9fa5]+)\s*(?P<op>==|=|!=|<>|eq|ne|neq|是|为|等于|不是|不等于)\s*['\"]?(?P<value>[^'\"]+?)['\"]?\s*$",
+            r"^\s*(?P<field>[\w.~一-龥]+?)\s*(?P<op>" + _TEXT_OP_PATTERN + r")\s*['\"]?(?P<value>[^'\"]+?)['\"]?\s*$",
             text,
             flags=re.IGNORECASE,
         )
-        if not simple_match:
-            return None
-        field_ref = simple_match.group("field")
-        raw_value = simple_match.group("value")
-        op = _normalize_rule_operator(simple_match.group("op"))
-        if not op:
-            return None
+        if simple_match:
+            field_ref = simple_match.group("field")
+            raw_value = simple_match.group("value")
+            op = _normalize_rule_operator(simple_match.group("op"))
+        else:
+            # 描述性连线名(带前缀, 如 "高预算：项目预算≥100000")按已知组件引用搜索。
+            searched = _search_condition_in_text(text, lookup)
+            if searched:
+                field_ref, raw_op, raw_value = searched
+                op = _normalize_rule_operator(raw_op)
+
+    if not field_ref or raw_value == "" or not op:
+        return None
 
     bo_code = _component_bo_code(field_ref, lookup)
     if not bo_code:
         return None
-    value = _resolve_option_value(bo_code, raw_value, lookup)
-    return bo_code, op, value, _rule_expression_operator(op)
+    value = str(raw_value).strip() if op in _NUMERIC_OPERATORS else _resolve_option_value(bo_code, raw_value, lookup)
+    return bo_code, op, value
 
 
 def _condition_mapping(condition: Any) -> dict[str, Any] | None:
@@ -401,11 +465,15 @@ def _normalize_rule_operator(value: Any) -> str:
         return "eq"
     if op in _NOT_EQUAL_OPERATORS:
         return "neq"
+    if op in _GREATER_EQUAL_OPERATORS:
+        return "ge"
+    if op in _GREATER_OPERATORS:
+        return "gt"
+    if op in _LESS_EQUAL_OPERATORS:
+        return "le"
+    if op in _LESS_OPERATORS:
+        return "lt"
     return ""
-
-
-def _rule_expression_operator(op: str) -> str:
-    return "!=" if op == "neq" else "=="
 
 
 def _build_simple_process_rule(
@@ -416,26 +484,28 @@ def _build_simple_process_rule(
     parsed = _parse_simple_condition(condition, lookup)
     if not parsed:
         return None
-    bo_code, op, value, expr_op = parsed
+    bo_code, op, value = parsed
+    # 抓包实证 (aPaaS /xdap-app/rule/save/simpleRule): 数值比较用 type="number",
+    # eq/neq 用 type="string"; 平台前端不发 express/hasBoTrans, 但带 queryFieldType。
+    field_type = "number" if op in _NUMERIC_OPERATORS else "string"
     simple_rule_config = {
         "ruleType": "simple",
         "menuId": menu_id,
-        "express": f"(((xdap.invoke('componentvalue','{bo_code}'))  {expr_op} ('{value}')))",
+        "queryFieldType": "businessObj",
         "formFieldRuleList": [
             {
                 "connectOperation": "or",
                 "fieldRuleList": [
                     {
-                        "type": "string",
-                        "boCode": bo_code,
                         "op": op,
+                        "type": field_type,
+                        "boCode": bo_code,
                         "values": [value],
                         "transValues": [],
                     }
                 ],
             }
         ],
-        "hasBoTrans": True,
     }
     return {"ruleType": "simple", "simpleRuleConfig": simple_rule_config}
 
@@ -998,6 +1068,73 @@ def build_apaas_bpmn_xml(
 
 
 
+def _auto_layout_if_degenerate(
+    nodes: list[dict[str, Any]],
+    edges: list[dict[str, Any]],
+) -> None:
+    """节点坐标退化(缺省全挤在同一点/重叠)时按流程层级重排成 上→下 布局, 原地改 x/y。
+
+    AI 生成流程常常不带坐标 → translator 默认把每个节点都放到同一点 → 平台正交连线
+    交叉成一团(用户反馈"线画得好乱")。这里按最长路径分层(START 在上、END 在下,
+    分支同层左右铺开)减少交叉。人工在 ProcessDesigner 摆好的(坐标各不相同)不动。
+    """
+    if len(nodes) < 2:
+        return
+    positions = [(n.get("x"), n.get("y")) for n in nodes]
+    if len(set(positions)) == len(positions):
+        return  # 坐标各不相同 → 视为人工布局, 尊重之
+
+    from collections import deque
+
+    ids = [str(n.get("id")) for n in nodes]
+    id_set = set(ids)
+    succ: dict[str, list[str]] = {i: [] for i in ids}
+    indeg: dict[str, int] = {i: 0 for i in ids}
+    for e in edges or []:
+        src = str(e.get("source") or "")
+        tgt = str(e.get("target") or "")
+        if src in id_set and tgt in id_set and src != tgt:
+            succ[src].append(tgt)
+            indeg[tgt] += 1
+
+    # 最长路径分层 (Kahn 拓扑 + 取 max 层)。
+    layer: dict[str, int] = {i: 0 for i in ids}
+    indeg_work = dict(indeg)
+    queue = deque([i for i in ids if indeg_work[i] == 0])
+    ordered: set[str] = set()
+    while queue:
+        cur = queue.popleft()
+        ordered.add(cur)
+        for nxt in succ[cur]:
+            if layer[nxt] < layer[cur] + 1:
+                layer[nxt] = layer[cur] + 1
+            indeg_work[nxt] -= 1
+            if indeg_work[nxt] == 0:
+                queue.append(nxt)
+    # 有环 → 没拓扑到的节点按顺序追加到末层之后, 至少不重叠。
+    leftover = [i for i in ids if i not in ordered]
+    if leftover:
+        base = max(layer.values(), default=0) + 1
+        for offset, nid in enumerate(leftover):
+            layer[nid] = base + offset
+
+    by_layer: dict[int, list[str]] = {}
+    for nid in ids:
+        by_layer.setdefault(layer[nid], []).append(nid)
+
+    node_by_id = {str(n.get("id")): n for n in nodes}
+    center_x, h_spacing, v_spacing, base_y = 400.0, 240.0, 140.0, 40.0
+    for lyr in sorted(by_layer):
+        members = by_layer[lyr]
+        count = len(members)
+        for idx, nid in enumerate(members):
+            node = node_by_id.get(nid)
+            if node is None:
+                continue
+            node["x"] = round(center_x + (idx - (count - 1) / 2.0) * h_spacing, 1)
+            node["y"] = round(base_y + lyr * v_spacing, 1)
+
+
 def _process_global_config() -> dict[str, Any]:
     return {
         "titleConfigList": [
@@ -1248,6 +1385,9 @@ def translate_definition_to_apaas_schema(
         menu_id=menu_id,
         form_components=form_components,
     )
+
+    # 坐标退化(AI 没给位置 → 全挤一点)时按层级重排, 避免连线交叉成一团。
+    _auto_layout_if_degenerate(platform_nodes, platform_edges)
 
     payload = {
         "appId": apaas_app_id,
