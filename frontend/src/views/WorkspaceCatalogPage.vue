@@ -7,10 +7,17 @@
           <p class="page-subtitle">统一查看代码工作区、组件包和后端接口资产。</p>
         </div>
 
-        <div v-if="!loading && visibleWorkspaces.length" class="catalog-summary" aria-label="资产概览">
-          <div v-for="item in headerStats" :key="item.label" class="catalog-summary-item">
-            <span>{{ item.label }}</span>
-            <strong>{{ item.value }}</strong>
+        <div class="catalog-header-side">
+          <button class="catalog-import-action" type="button" @click="openImportDialog">
+            <AppIcon name="inbox" :size="14" />
+            <span>导入源码</span>
+          </button>
+
+          <div v-if="!loading && visibleWorkspaces.length" class="catalog-summary" aria-label="资产概览">
+            <div v-for="item in headerStats" :key="item.label" class="catalog-summary-item">
+              <span>{{ item.label }}</span>
+              <strong>{{ item.value }}</strong>
+            </div>
           </div>
         </div>
       </section>
@@ -205,6 +212,37 @@
       <el-button type="primary" :disabled="!bindAppId" :loading="binding" @click="confirmBindApp">绑定</el-button>
     </template>
   </el-dialog>
+
+  <el-dialog v-model="importDialogOpen" title="导入自开发源码" width="460px" :append-to-body="true">
+    <div class="import-dialog-body">
+      <button class="import-file-picker" type="button" @click="triggerImportFileInput">
+        <AppIcon name="archive" :size="20" />
+        <span class="import-file-text">
+          <strong>{{ importFile ? importFile.name : '选择源码 zip' }}</strong>
+          <span>仅支持从自开发资产下载或同规范打包的 .zip</span>
+        </span>
+      </button>
+      <input
+        ref="importFileInputRef"
+        class="import-file-input"
+        type="file"
+        accept=".zip"
+        @change="onImportFileChange"
+      >
+
+      <el-input v-model="importDisplayName" placeholder="展示名，可选" clearable />
+      <el-select v-model="importProjectType" placeholder="自动识别资产类型" clearable style="width: 100%">
+        <el-option v-for="option in importProjectTypeOptions" :key="option.value" :label="option.label" :value="option.value" />
+      </el-select>
+      <el-select v-model="importAppId" placeholder="可选：绑定应用" clearable filterable style="width: 100%">
+        <el-option v-for="option in allAppOptions" :key="option.value" :label="option.label" :value="option.value" />
+      </el-select>
+    </div>
+    <template #footer>
+      <el-button @click="importDialogOpen = false">取消</el-button>
+      <el-button type="primary" :disabled="!importFile" :loading="importing" @click="confirmImportSource">导入</el-button>
+    </template>
+  </el-dialog>
 </template>
 
 <script setup lang="ts">
@@ -261,6 +299,12 @@ const tabs = [
   { label: '页面', value: 'page' },
   { label: '后端接口', value: 'backend' },
 ]
+const importProjectTypeOptions = [
+  { label: '自开发页面', value: 'form-page' },
+  { label: '自开发组件', value: 'form-component-dual' },
+  { label: '自定义列表', value: 'form-list' },
+  { label: '后端接口', value: 'backend-api' },
+]
 
 const ASSET_ACCENTS = ['#1D4ED8', '#047857', '#B45309', '#0E7490', '#C2410C', '#7C3AED']
 
@@ -304,6 +348,9 @@ const appOptions = computed(() => {
   }
   return Array.from(seen, ([value, label]) => ({ value, label }))
 })
+const allAppOptions = computed(() =>
+  Object.entries(appNameMap.value).map(([value, label]) => ({ value: Number(value), label })),
+)
 
 watch([searchQ, statusFilter, appFilter, activeTab, appId], () => { currentPage.value = 1 })
 
@@ -340,6 +387,13 @@ const bindDialogOpen = ref(false)
 const bindTarget = ref<WorkspaceInfo | null>(null)
 const bindAppId = ref<number | null>(null)
 const binding = ref(false)
+const importDialogOpen = ref(false)
+const importFileInputRef = ref<HTMLInputElement | null>(null)
+const importFile = ref<File | null>(null)
+const importDisplayName = ref('')
+const importProjectType = ref('')
+const importAppId = ref<number | null>(null)
+const importing = ref(false)
 
 function openBindDialog(ws: WorkspaceInfo) {
   bindTarget.value = ws
@@ -359,6 +413,67 @@ async function confirmBindApp() {
     ElMessage.error(e?.response?.data?.detail || e?.message || '绑定失败')
   } finally {
     binding.value = false
+  }
+}
+
+function routeAppId(): number | null {
+  const id = Number(appId.value)
+  return Number.isFinite(id) && id > 0 ? id : null
+}
+
+function openImportDialog() {
+  importFile.value = null
+  importDisplayName.value = ''
+  importProjectType.value = ''
+  importAppId.value = routeAppId()
+  if (importFileInputRef.value) importFileInputRef.value.value = ''
+  importDialogOpen.value = true
+}
+
+function triggerImportFileInput() {
+  importFileInputRef.value?.click()
+}
+
+function onImportFileChange(event: Event) {
+  const input = event.target as HTMLInputElement
+  const file = input.files?.[0] ?? null
+  if (file && !file.name.toLowerCase().endsWith('.zip')) {
+    ElMessage.error('只支持 .zip 源码包')
+    input.value = ''
+    importFile.value = null
+    return
+  }
+  importFile.value = file
+  if (file && !importDisplayName.value.trim()) {
+    importDisplayName.value = file.name.replace(/\.zip$/i, '')
+  }
+}
+
+async function confirmImportSource() {
+  if (!importFile.value) {
+    ElMessage.warning('请先选择源码 zip')
+    return
+  }
+  importing.value = true
+  try {
+    const imported = await codingApi.importZipToWorkspace(importFile.value, {
+      project_type: importProjectType.value || undefined,
+      project_id: importAppId.value || undefined,
+      display_name: importDisplayName.value.trim() || undefined,
+    })
+    if (importAppId.value) imported.project_id = importAppId.value
+    workspaces.value = [imported, ...workspaces.value.filter(ws => ws.id !== imported.id)]
+    activeTab.value = 'all'
+    searchQ.value = ''
+    statusFilter.value = 'all'
+    appFilter.value = ''
+    currentPage.value = 1
+    importDialogOpen.value = false
+    ElMessage.success('源码已导入自开发资产库')
+  } catch (e: any) {
+    ElMessage.error(e?.response?.data?.detail || e?.message || '导入失败')
+  } finally {
+    importing.value = false
   }
 }
 
@@ -509,6 +624,41 @@ onMounted(async () => {
   min-width: 0;
 }
 
+.catalog-header-side {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 12px;
+  margin-left: auto;
+  flex-shrink: 0;
+}
+
+.catalog-import-action {
+  height: 36px;
+  min-width: 104px;
+  padding: 0 14px;
+  border: 1px solid var(--brand);
+  border-radius: var(--r-3, 8px);
+  background: var(--brand);
+  color: var(--text-inverse, #fff);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 7px;
+  font-family: inherit;
+  font-size: 13px;
+  font-weight: var(--fw-semibold, 600);
+  white-space: nowrap;
+  cursor: pointer;
+  transition: background 0.14s var(--ease, cubic-bezier(0.2, 0.8, 0.2, 1)),
+              border-color 0.14s var(--ease, cubic-bezier(0.2, 0.8, 0.2, 1));
+}
+
+.catalog-import-action:hover {
+  background: var(--brand-hover);
+  border-color: var(--brand-hover);
+}
+
 .catalog-header h1 {
   margin: 0;
   color: var(--text);
@@ -529,7 +679,6 @@ onMounted(async () => {
   display: grid;
   grid-template-columns: repeat(3, minmax(86px, auto));
   gap: 8px;
-  margin-left: auto;
   flex-shrink: 0;
 }
 
@@ -1078,6 +1227,16 @@ onMounted(async () => {
     line-height: 1.45;
   }
 
+  .catalog-header-side {
+    align-items: stretch;
+    flex-direction: column;
+    margin-left: 0;
+  }
+
+  .catalog-import-action {
+    width: 100%;
+  }
+
   .catalog-summary {
     width: 100%;
     grid-template-columns: repeat(3, minmax(0, 1fr));
@@ -1182,4 +1341,58 @@ onMounted(async () => {
   border-color: color-mix(in srgb, var(--brand, #4f6ef7) 45%, transparent);
 }
 .bind-dialog-hint { margin: 0 0 12px; font-size: 13px; color: var(--fg-dim, #666); }
+
+.import-dialog-body {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.import-file-picker {
+  width: 100%;
+  min-height: 72px;
+  padding: 14px;
+  border: 1px dashed var(--line-strong, rgba(116, 128, 171, 0.34));
+  border-radius: var(--r-3, 8px);
+  background: color-mix(in srgb, var(--surface-2) 70%, transparent);
+  color: var(--text);
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  text-align: left;
+  cursor: pointer;
+}
+
+.import-file-picker:hover {
+  border-color: var(--brand);
+  background: color-mix(in srgb, var(--brand-soft) 30%, var(--surface));
+}
+
+.import-file-text {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.import-file-text strong,
+.import-file-text span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.import-file-text strong {
+  font-size: 13px;
+  font-weight: var(--fw-semibold, 600);
+}
+
+.import-file-text span {
+  color: var(--text-3);
+  font-size: 12px;
+}
+
+.import-file-input {
+  display: none;
+}
 </style>

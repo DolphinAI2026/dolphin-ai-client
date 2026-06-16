@@ -1,0 +1,1553 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>低代码智能化工作台 - AI Builder UI Prototype</title>
+  <style>
+    :root {
+      --bg: #f5f7fb;
+      --surface: #ffffff;
+      --surface-soft: #f8fafc;
+      --surface-strong: #eef3ff;
+      --line: #e2e8f0;
+      --line-strong: #cbd5e1;
+      --text: #172033;
+      --muted: #64748b;
+      --faint: #94a3b8;
+      --brand: #4f6ef7;
+      --brand-ink: #3152d4;
+      --brand-soft: rgba(79, 110, 247, 0.09);
+      --ok: #0f9f6e;
+      --ok-soft: rgba(16, 185, 129, 0.1);
+      --warn: #c87904;
+      --warn-soft: rgba(245, 158, 11, 0.12);
+      --err: #dc2626;
+      --err-soft: rgba(239, 68, 68, 0.1);
+      --cyan: #0891b2;
+      --cyan-soft: rgba(8, 145, 178, 0.1);
+      --radius: 8px;
+      --shadow: 0 14px 40px rgba(15, 23, 42, 0.08);
+      --font: "Geist Sans", -apple-system, BlinkMacSystemFont, "PingFang SC", "Microsoft YaHei", "Segoe UI", sans-serif;
+      --mono: "Geist Mono", ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+    }
+
+    * { box-sizing: border-box; }
+
+    body {
+      margin: 0;
+      min-height: 100vh;
+      color: var(--text);
+      background: var(--bg);
+      font-family: var(--font);
+      font-size: 13px;
+      letter-spacing: 0;
+    }
+
+    button, input, select {
+      font: inherit;
+    }
+
+    button {
+      border: 0;
+      cursor: pointer;
+    }
+
+    .app-shell {
+      min-height: 100vh;
+      display: grid;
+      grid-template-columns: 224px minmax(0, 1fr);
+      background: var(--bg);
+    }
+
+    .sidebar {
+      border-right: 1px solid var(--line);
+      background: #fbfcff;
+      display: flex;
+      flex-direction: column;
+      min-height: 100vh;
+    }
+
+    .brand {
+      height: 72px;
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      padding: 0 18px;
+      border-bottom: 1px solid var(--line);
+    }
+
+    .brand-mark {
+      width: 32px;
+      height: 32px;
+      border-radius: 8px;
+      background: var(--brand);
+      color: #fff;
+      display: grid;
+      place-items: center;
+      font-weight: 800;
+      box-shadow: 0 10px 20px rgba(79, 110, 247, 0.22);
+    }
+
+    .brand strong {
+      display: block;
+      font-size: 16px;
+      line-height: 1.2;
+    }
+
+    .brand span {
+      display: block;
+      color: var(--muted);
+      font-size: 12px;
+      margin-top: 2px;
+    }
+
+    .nav {
+      padding: 12px;
+      display: grid;
+      gap: 5px;
+    }
+
+    .nav button {
+      width: 100%;
+      height: 38px;
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      padding: 0 12px;
+      color: #40516a;
+      background: transparent;
+      border-radius: var(--radius);
+      text-align: left;
+      font-weight: 650;
+    }
+
+    .nav button.active {
+      color: var(--brand-ink);
+      background: var(--brand-soft);
+      box-shadow: inset 3px 0 0 var(--brand);
+    }
+
+    .nav-icon {
+      width: 16px;
+      height: 16px;
+      border: 1.6px solid currentColor;
+      border-radius: 4px;
+      flex: 0 0 auto;
+      position: relative;
+    }
+
+    .nav-icon.grid::before,
+    .nav-icon.grid::after {
+      content: "";
+      position: absolute;
+      background: currentColor;
+      opacity: 0.7;
+    }
+
+    .nav-icon.grid::before { width: 1.6px; top: 2px; bottom: 2px; left: 6px; }
+    .nav-icon.grid::after { height: 1.6px; left: 2px; right: 2px; top: 6px; }
+
+    .tenant-box {
+      margin-top: auto;
+      padding: 14px;
+      border-top: 1px solid var(--line);
+    }
+
+    .tenant-label {
+      color: var(--faint);
+      font-size: 12px;
+      margin-bottom: 8px;
+    }
+
+    .tenant-current {
+      padding: 10px 12px;
+      border: 1px solid var(--line);
+      background: #fff;
+      border-radius: var(--radius);
+    }
+
+    .tenant-current strong {
+      display: block;
+      font-size: 13px;
+      margin-bottom: 4px;
+    }
+
+    .tenant-current code {
+      color: var(--muted);
+      font-family: var(--mono);
+      font-size: 11px;
+    }
+
+    .main {
+      min-width: 0;
+      display: flex;
+      flex-direction: column;
+    }
+
+    .topbar {
+      height: 56px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 0 22px;
+      background: rgba(255, 255, 255, 0.88);
+      border-bottom: 1px solid var(--line);
+      backdrop-filter: blur(12px);
+      gap: 16px;
+    }
+
+    .breadcrumbs {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      color: var(--muted);
+      min-width: 0;
+      white-space: nowrap;
+    }
+
+    .breadcrumbs strong {
+      color: var(--text);
+    }
+
+    .top-actions {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      flex-wrap: wrap;
+      justify-content: flex-end;
+    }
+
+    .btn {
+      height: 32px;
+      display: inline-flex;
+      align-items: center;
+      gap: 7px;
+      padding: 0 12px;
+      border-radius: 7px;
+      border: 1px solid var(--line);
+      background: #fff;
+      color: #334155;
+      font-weight: 650;
+      white-space: nowrap;
+    }
+
+    .btn.primary {
+      background: var(--brand);
+      color: #fff;
+      border-color: var(--brand);
+      box-shadow: 0 8px 18px rgba(79, 110, 247, 0.2);
+    }
+
+    .btn.danger {
+      color: var(--err);
+      border-color: rgba(220, 38, 38, 0.2);
+      background: #fff;
+    }
+
+    .content {
+      min-height: 0;
+      padding: 18px;
+      display: grid;
+      grid-template-columns: minmax(280px, 330px) minmax(620px, 1fr) minmax(360px, 430px);
+      gap: 14px;
+      flex: 1;
+    }
+
+    .panel {
+      background: var(--surface);
+      border: 1px solid var(--line);
+      border-radius: var(--radius);
+      box-shadow: 0 1px 2px rgba(15, 23, 42, 0.03);
+      min-width: 0;
+    }
+
+    .left-panel,
+    .right-panel {
+      min-height: calc(100vh - 92px);
+      display: flex;
+      flex-direction: column;
+      overflow: hidden;
+    }
+
+    .center-panel {
+      min-height: calc(100vh - 92px);
+      overflow: hidden;
+      display: flex;
+      flex-direction: column;
+    }
+
+    .panel-head {
+      padding: 14px 15px;
+      border-bottom: 1px solid var(--line);
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 10px;
+    }
+
+    .panel-head h2,
+    .panel-head h3 {
+      margin: 0;
+      font-size: 14px;
+      line-height: 1.2;
+    }
+
+    .panel-head span {
+      color: var(--muted);
+      font-size: 12px;
+    }
+
+    .tabs {
+      display: flex;
+      gap: 4px;
+      padding: 10px;
+      border-bottom: 1px solid var(--line);
+      background: #fbfcff;
+      overflow-x: auto;
+    }
+
+    .tabs button {
+      height: 30px;
+      padding: 0 11px;
+      border-radius: 7px;
+      background: transparent;
+      color: var(--muted);
+      font-weight: 650;
+      white-space: nowrap;
+    }
+
+    .tabs button.active {
+      color: var(--brand-ink);
+      background: var(--brand-soft);
+    }
+
+    .search {
+      padding: 12px;
+      border-bottom: 1px solid var(--line);
+    }
+
+    .search input {
+      width: 100%;
+      height: 34px;
+      border: 1px solid var(--line);
+      border-radius: 7px;
+      padding: 0 10px;
+      color: var(--text);
+      background: var(--surface-soft);
+      outline: 0;
+    }
+
+    .search input:focus {
+      border-color: var(--brand);
+      box-shadow: 0 0 0 3px var(--brand-soft);
+      background: #fff;
+    }
+
+    .app-list {
+      padding: 10px;
+      display: grid;
+      gap: 8px;
+      overflow: auto;
+    }
+
+    .app-item {
+      border: 1px solid var(--line);
+      border-radius: var(--radius);
+      background: #fff;
+      padding: 11px;
+      display: grid;
+      gap: 8px;
+      text-align: left;
+      color: var(--text);
+      width: 100%;
+    }
+
+    .app-item.active {
+      border-color: rgba(79, 110, 247, 0.38);
+      background: #f8faff;
+      box-shadow: inset 3px 0 0 var(--brand);
+    }
+
+    .app-title {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 8px;
+    }
+
+    .app-title strong {
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+      font-size: 13px;
+    }
+
+    .meta-line {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      color: var(--muted);
+      font-size: 12px;
+      min-width: 0;
+      flex-wrap: wrap;
+    }
+
+    .meta-line code {
+      font-family: var(--mono);
+      font-size: 11px;
+      color: var(--muted);
+    }
+
+    .metric-row {
+      display: grid;
+      grid-template-columns: repeat(4, minmax(0, 1fr));
+      gap: 6px;
+    }
+
+    .mini-metric {
+      min-width: 0;
+      border-radius: 6px;
+      background: var(--surface-soft);
+      padding: 6px 4px;
+      text-align: center;
+      color: var(--muted);
+      font-size: 11px;
+    }
+
+    .mini-metric strong {
+      display: block;
+      color: var(--text);
+      font-size: 13px;
+      margin-bottom: 1px;
+    }
+
+    .badge {
+      display: inline-flex;
+      align-items: center;
+      height: 22px;
+      padding: 0 7px;
+      border-radius: 999px;
+      font-size: 11px;
+      font-weight: 700;
+      white-space: nowrap;
+      color: var(--muted);
+      background: var(--surface-soft);
+      border: 1px solid var(--line);
+    }
+
+    .badge.ok { color: var(--ok); background: var(--ok-soft); border-color: rgba(16, 185, 129, 0.18); }
+    .badge.warn { color: var(--warn); background: var(--warn-soft); border-color: rgba(245, 158, 11, 0.22); }
+    .badge.err { color: var(--err); background: var(--err-soft); border-color: rgba(239, 68, 68, 0.2); }
+    .badge.brand { color: var(--brand-ink); background: var(--brand-soft); border-color: rgba(79, 110, 247, 0.22); }
+    .badge.cyan { color: var(--cyan); background: var(--cyan-soft); border-color: rgba(8, 145, 178, 0.2); }
+
+    .view {
+      display: none;
+      min-height: 0;
+      overflow: auto;
+      padding: 16px;
+    }
+
+    .view.active {
+      display: block;
+    }
+
+    .page-head {
+      display: flex;
+      align-items: flex-start;
+      justify-content: space-between;
+      gap: 16px;
+      margin-bottom: 14px;
+    }
+
+    .page-head h1 {
+      margin: 0 0 6px;
+      font-size: 22px;
+      line-height: 1.2;
+    }
+
+    .page-head p {
+      margin: 0;
+      color: var(--muted);
+      line-height: 1.5;
+      max-width: 680px;
+    }
+
+    .scan-meta {
+      text-align: right;
+      color: var(--muted);
+      font-size: 12px;
+      line-height: 1.6;
+      white-space: nowrap;
+    }
+
+    .kpi-grid {
+      display: grid;
+      grid-template-columns: repeat(4, minmax(0, 1fr));
+      gap: 10px;
+      margin-bottom: 14px;
+    }
+
+    .kpi {
+      border: 1px solid var(--line);
+      border-radius: var(--radius);
+      background: #fff;
+      padding: 14px;
+      min-height: 88px;
+    }
+
+    .kpi span {
+      display: block;
+      color: var(--muted);
+      font-size: 12px;
+      margin-bottom: 9px;
+    }
+
+    .kpi strong {
+      display: block;
+      font-size: 26px;
+      line-height: 1;
+      margin-bottom: 8px;
+    }
+
+    .kpi em {
+      font-style: normal;
+      color: var(--muted);
+      font-size: 12px;
+    }
+
+    .two-col {
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) minmax(260px, 0.74fr);
+      gap: 12px;
+      margin-bottom: 12px;
+    }
+
+    .section {
+      border: 1px solid var(--line);
+      border-radius: var(--radius);
+      background: #fff;
+      overflow: hidden;
+    }
+
+    .section-head {
+      height: 44px;
+      padding: 0 13px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      border-bottom: 1px solid var(--line);
+      gap: 10px;
+    }
+
+    .section-head h2,
+    .section-head h3 {
+      margin: 0;
+      font-size: 14px;
+    }
+
+    .section-body {
+      padding: 13px;
+    }
+
+    .domain-grid {
+      display: grid;
+      grid-template-columns: repeat(4, minmax(0, 1fr));
+      gap: 10px;
+    }
+
+    .domain {
+      border: 1px solid var(--line);
+      border-radius: var(--radius);
+      padding: 12px;
+      min-height: 116px;
+      background: #fff;
+    }
+
+    .domain-head {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      margin-bottom: 10px;
+      gap: 8px;
+    }
+
+    .domain h3 {
+      margin: 0;
+      font-size: 13px;
+    }
+
+    .domain p {
+      margin: 0;
+      color: var(--muted);
+      line-height: 1.5;
+      font-size: 12px;
+    }
+
+    .bars {
+      display: grid;
+      gap: 10px;
+    }
+
+    .bar-row {
+      display: grid;
+      grid-template-columns: 72px minmax(0, 1fr) 44px;
+      align-items: center;
+      gap: 9px;
+      color: var(--muted);
+      font-size: 12px;
+    }
+
+    .bar {
+      height: 8px;
+      border-radius: 999px;
+      background: var(--surface-soft);
+      overflow: hidden;
+    }
+
+    .bar i {
+      display: block;
+      height: 100%;
+      border-radius: inherit;
+      background: var(--brand);
+    }
+
+    .bar.ok i { background: var(--ok); }
+    .bar.warn i { background: var(--warn); }
+    .bar.err i { background: var(--err); }
+    .bar.cyan i { background: var(--cyan); }
+
+    .timeline {
+      display: grid;
+      gap: 10px;
+    }
+
+    .timeline-item {
+      display: grid;
+      grid-template-columns: 74px minmax(0, 1fr);
+      gap: 10px;
+      padding-bottom: 10px;
+      border-bottom: 1px solid var(--line);
+    }
+
+    .timeline-item:last-child {
+      border-bottom: 0;
+      padding-bottom: 0;
+    }
+
+    .timeline-time {
+      color: var(--muted);
+      font-family: var(--mono);
+      font-size: 11px;
+    }
+
+    .timeline-item strong {
+      display: block;
+      margin-bottom: 4px;
+    }
+
+    .timeline-item span {
+      color: var(--muted);
+      font-size: 12px;
+      line-height: 1.45;
+    }
+
+    .graph-layout {
+      display: grid;
+      grid-template-columns: minmax(480px, 1.18fr) minmax(340px, 0.82fr);
+      gap: 12px;
+    }
+
+    .resource-map {
+      border: 1px solid var(--line);
+      border-radius: var(--radius);
+      background: #fff;
+      padding: 14px;
+      min-height: 456px;
+    }
+
+    .map-grid {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 10px;
+    }
+
+    .node {
+      border: 1px solid var(--line);
+      border-radius: var(--radius);
+      background: var(--surface-soft);
+      padding: 11px;
+      min-height: 118px;
+    }
+
+    .node h3 {
+      margin: 0 0 8px;
+      font-size: 13px;
+      display: flex;
+      justify-content: space-between;
+      gap: 8px;
+    }
+
+    .node ul {
+      margin: 0;
+      padding: 0;
+      list-style: none;
+      display: grid;
+      gap: 5px;
+      color: var(--muted);
+      font-size: 12px;
+    }
+
+    .node li {
+      overflow: hidden;
+      text-overflow: ellipsis;
+      display: -webkit-box;
+      -webkit-line-clamp: 2;
+      -webkit-box-orient: vertical;
+      line-height: 1.35;
+    }
+
+    .finding-list,
+    .action-list,
+    .coverage-list {
+      display: grid;
+      gap: 9px;
+    }
+
+    .finding,
+    .action-card {
+      border: 1px solid var(--line);
+      border-radius: var(--radius);
+      padding: 11px;
+      background: #fff;
+    }
+
+    .finding-head,
+    .action-head {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 8px;
+      margin-bottom: 7px;
+    }
+
+    .finding strong,
+    .action-card strong {
+      font-size: 13px;
+    }
+
+    .finding p,
+    .action-card p {
+      margin: 0;
+      color: var(--muted);
+      line-height: 1.5;
+      font-size: 12px;
+    }
+
+    .coverage-table {
+      width: 100%;
+      border-collapse: collapse;
+      background: #fff;
+      border: 1px solid var(--line);
+      border-radius: var(--radius);
+      overflow: hidden;
+    }
+
+    .coverage-table th,
+    .coverage-table td {
+      padding: 11px 12px;
+      border-bottom: 1px solid var(--line);
+      text-align: left;
+      vertical-align: top;
+    }
+
+    .coverage-table th {
+      color: #475569;
+      font-size: 12px;
+      background: #f8fafc;
+      font-weight: 750;
+      white-space: nowrap;
+    }
+
+    .coverage-table tr:last-child td {
+      border-bottom: 0;
+    }
+
+    .coverage-table td {
+      color: var(--muted);
+      line-height: 1.45;
+    }
+
+    .coverage-table td:first-child {
+      color: var(--text);
+      font-weight: 700;
+      white-space: nowrap;
+    }
+
+    .code {
+      font-family: var(--mono);
+      font-size: 11px;
+      color: #475569;
+      background: #f1f5f9;
+      border: 1px solid var(--line);
+      border-radius: 5px;
+      padding: 2px 5px;
+      display: inline-block;
+      margin: 1px 2px 1px 0;
+    }
+
+    .right-body {
+      padding: 12px 18px 16px 12px;
+      display: grid;
+      gap: 10px;
+      overflow: auto;
+    }
+
+    .assistant-status {
+      border: 1px solid var(--line);
+      border-radius: var(--radius);
+      background: #fff;
+      padding: 12px;
+      box-shadow: inset 3px 0 0 rgba(8, 145, 178, 0.18);
+    }
+
+    .assistant-status strong {
+      display: block;
+      margin-bottom: 6px;
+    }
+
+    .assistant-status p {
+      margin: 0;
+      color: var(--muted);
+      line-height: 1.5;
+      font-size: 12px;
+    }
+
+    .prompt-box {
+      border: 1px solid var(--line);
+      border-radius: var(--radius);
+      background: #fff;
+      padding: 10px;
+      margin-bottom: 88px;
+    }
+
+    .prompt-box textarea {
+      width: 100%;
+      min-height: 82px;
+      resize: vertical;
+      border: 0;
+      outline: 0;
+      color: var(--text);
+      line-height: 1.5;
+      background: transparent;
+    }
+
+    .prompt-actions {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      gap: 8px;
+      border-top: 1px solid var(--line);
+      padding-top: 9px;
+      margin-top: 7px;
+    }
+
+    .prompt-actions .btn.primary {
+      margin-right: 72px;
+    }
+
+    .tiny {
+      color: var(--faint);
+      font-size: 11px;
+    }
+
+    .confirm-queue {
+      border: 1px solid rgba(245, 158, 11, 0.25);
+      border-radius: var(--radius);
+      background: #fffaf0;
+      padding: 11px;
+    }
+
+    .confirm-queue h3 {
+      margin: 0 0 8px;
+      font-size: 13px;
+    }
+
+    .confirm-queue p {
+      margin: 0 0 9px;
+      color: #8a5b06;
+      line-height: 1.45;
+      font-size: 12px;
+    }
+
+    .split-actions {
+      display: flex;
+      gap: 8px;
+      flex-wrap: wrap;
+    }
+
+    .split-actions .btn {
+      height: 30px;
+      font-size: 12px;
+    }
+
+    @media (max-width: 1180px) {
+      .app-shell {
+        grid-template-columns: 72px minmax(0, 1fr);
+      }
+
+      .brand div,
+      .nav button span,
+      .tenant-box {
+        display: none;
+      }
+
+      .brand {
+        justify-content: center;
+        padding: 0;
+      }
+
+      .nav button {
+        justify-content: center;
+        padding: 0;
+      }
+
+      .tenant-label {
+        display: none;
+      }
+
+      .content {
+        grid-template-columns: 240px minmax(0, 1fr);
+      }
+
+      .right-panel {
+        grid-column: 1 / -1;
+        min-height: auto;
+      }
+
+      .right-body {
+        grid-template-columns: repeat(3, minmax(0, 1fr));
+      }
+
+      .prompt-box {
+        margin-bottom: 0;
+      }
+
+      .prompt-actions .btn.primary {
+        margin-right: 0;
+      }
+    }
+
+    @media (max-width: 820px) {
+      .app-shell {
+        display: block;
+      }
+
+      .sidebar {
+        min-height: auto;
+        border-right: 0;
+        border-bottom: 1px solid var(--line);
+      }
+
+      .brand,
+      .tenant-box {
+        display: none;
+      }
+
+      .nav {
+        grid-auto-flow: column;
+        overflow-x: auto;
+      }
+
+      .nav button {
+        width: auto;
+        min-width: 42px;
+      }
+
+      .topbar {
+        height: auto;
+        min-height: 56px;
+        align-items: flex-start;
+        padding: 12px;
+        flex-direction: column;
+      }
+
+      .content {
+        display: grid;
+        grid-template-columns: 1fr;
+        padding: 12px;
+      }
+
+      .left-panel,
+      .center-panel,
+      .right-panel {
+        min-height: auto;
+      }
+
+      .kpi-grid,
+      .domain-grid,
+      .graph-layout,
+      .two-col,
+      .map-grid,
+      .right-body {
+        grid-template-columns: 1fr;
+      }
+
+      .page-head {
+        display: block;
+      }
+
+      .scan-meta {
+        text-align: left;
+        margin-top: 8px;
+      }
+
+      .coverage-table {
+        min-width: 720px;
+      }
+
+      .view {
+        overflow-x: auto;
+      }
+
+      .prompt-actions {
+        align-items: flex-start;
+        flex-direction: column;
+      }
+    }
+  </style>
+</head>
+<body>
+  <div class="app-shell">
+    <aside class="sidebar">
+      <div class="brand">
+        <div class="brand-mark">AI</div>
+        <div>
+          <strong>AI Builder</strong>
+          <span>低代码智能工作台</span>
+        </div>
+      </div>
+      <nav class="nav" aria-label="主导航">
+        <button class="active" type="button"><i class="nav-icon grid"></i><span>智能化工作台</span></button>
+        <button type="button"><i class="nav-icon"></i><span>应用资产库</span></button>
+        <button type="button"><i class="nav-icon"></i><span>自开发资产</span></button>
+        <button type="button"><i class="nav-icon"></i><span>租户日志</span></button>
+        <button type="button"><i class="nav-icon"></i><span>工具覆盖</span></button>
+      </nav>
+      <div class="tenant-box">
+        <div class="tenant-label">当前租户</div>
+        <div class="tenant-current">
+          <strong>得帆云试用租户</strong>
+          <code>828940713101099009</code>
+        </div>
+      </div>
+    </aside>
+
+    <main class="main">
+      <header class="topbar">
+        <div class="breadcrumbs">
+          <span>平台</span><span>/</span><span>租户智能化</span><span>/</span><strong>低代码智能工作台</strong>
+        </div>
+        <div class="top-actions">
+          <button class="btn" type="button">刷新扫描</button>
+          <button class="btn" type="button">导出体检报告</button>
+          <button class="btn primary" type="button">生成改造计划</button>
+        </div>
+      </header>
+
+      <section class="content">
+        <aside class="panel left-panel">
+          <div class="panel-head">
+            <div>
+              <h2>应用范围</h2>
+              <span>38 个应用 · 7 个需关注</span>
+            </div>
+            <span class="badge brand">P0 只读</span>
+          </div>
+          <div class="search">
+            <input id="appSearch" type="search" placeholder="搜索应用名 / 编码" />
+          </div>
+          <div class="app-list" id="appList"></div>
+        </aside>
+
+        <section class="panel center-panel">
+          <div class="tabs" role="tablist" aria-label="工作台视图">
+            <button class="active" data-view-tab="overview" type="button">租户总览</button>
+            <button data-view-tab="app" type="button">单应用图谱</button>
+            <button data-view-tab="coverage" type="button">API / MCP 覆盖</button>
+          </div>
+
+          <section class="view active" id="view-overview">
+            <div class="page-head">
+              <div>
+                <h1>低代码租户智能化体检</h1>
+                <p>按配置、二次开发、运维、运营四个维度聚合租户下应用资产，AI Builder 负责分析和行动建议，aPaaS 后台仍是事实源。</p>
+              </div>
+              <div class="scan-meta">
+                <div>最近扫描 2026-06-15 20:36</div>
+                <div>API 只读 42 · MCP 工具 68</div>
+              </div>
+            </div>
+
+            <div class="kpi-grid">
+              <div class="kpi">
+                <span>应用总数</span>
+                <strong>38</strong>
+                <em>上线中 21 · 已下线 17</em>
+              </div>
+              <div class="kpi">
+                <span>配置风险</span>
+                <strong style="color: var(--warn)">14</strong>
+                <em>权限、列表页、事件依赖</em>
+              </div>
+              <div class="kpi">
+                <span>二开资产</span>
+                <strong>31</strong>
+                <em>5 个缺少应用绑定</em>
+              </div>
+              <div class="kpi">
+                <span>运维信号</span>
+                <strong style="color: var(--err)">6</strong>
+                <em>异常流程、失败任务</em>
+              </div>
+            </div>
+
+            <div class="domain-grid">
+              <article class="domain">
+                <div class="domain-head">
+                  <h3>配置</h3>
+                  <span class="badge warn">需治理</span>
+                </div>
+                <p>模型、表单、列表页、菜单、流程、事件和权限进入资源图谱。写入必须先生成 diff。</p>
+              </article>
+              <article class="domain">
+                <div class="domain-head">
+                  <h3>二次开发</h3>
+                  <span class="badge brand">优先</span>
+                </div>
+                <p>自开发包、菜单、权限和工作区统一串起来。资产点击后直接进入 IDE 修改。</p>
+              </article>
+              <article class="domain">
+                <div class="domain-head">
+                  <h3>运维</h3>
+                  <span class="badge err">缺口</span>
+                </div>
+                <p>租户日志已接入页面；任务中心、健康指标、流程实例仍需 API 聚合。</p>
+              </article>
+              <article class="domain">
+                <div class="domain-head">
+                  <h3>运营</h3>
+                  <span class="badge cyan">报告</span>
+                </div>
+                <p>基于应用组合、复杂度和风险生成客户成功报告，不直接写回后台。</p>
+              </article>
+            </div>
+
+            <div class="two-col" style="margin-top: 12px;">
+              <section class="section">
+                <div class="section-head">
+                  <h2>租户健康分布</h2>
+                  <span>按应用数聚合</span>
+                </div>
+                <div class="section-body">
+                  <div class="bars">
+                    <div class="bar-row"><span>配置完整</span><span class="bar ok"><i style="width: 76%"></i></span><strong>76%</strong></div>
+                    <div class="bar-row"><span>二开绑定</span><span class="bar warn"><i style="width: 61%"></i></span><strong>61%</strong></div>
+                    <div class="bar-row"><span>运维稳定</span><span class="bar err"><i style="width: 48%"></i></span><strong>48%</strong></div>
+                    <div class="bar-row"><span>AI 就绪</span><span class="bar cyan"><i style="width: 42%"></i></span><strong>42%</strong></div>
+                  </div>
+                </div>
+              </section>
+
+              <section class="section">
+                <div class="section-head">
+                  <h2>最近关键变更</h2>
+                  <span>来自租户日志</span>
+                </div>
+                <div class="section-body">
+                  <div class="timeline">
+                    <div class="timeline-item">
+                      <div class="timeline-time">20:22</div>
+                      <div><strong>CRM 销售全流程发布下线</strong><span>应用发布状态变化，需要核对访问权限和菜单入口。</span></div>
+                    </div>
+                    <div class="timeline-item">
+                      <div class="timeline-time">19:58</div>
+                      <div><strong>数字孪生看板自开发包上传</strong><span>检测到新 ZIP 包，建议绑定工作区和菜单权限。</span></div>
+                    </div>
+                    <div class="timeline-item">
+                      <div class="timeline-time">18:41</div>
+                      <div><strong>WMS 流程节点重试失败</strong><span>异常流程实例需要进入运维诊断。</span></div>
+                    </div>
+                  </div>
+                </div>
+              </section>
+            </div>
+          </section>
+
+          <section class="view" id="view-app">
+            <div class="page-head">
+              <div>
+                <h1 id="appViewTitle">CRM 销售全流程</h1>
+                <p id="appViewDesc">资源图谱聚合当前应用的菜单、模型、表单、权限、流程、事件、自开发和运维信号。</p>
+              </div>
+              <div class="scan-meta">
+                <div id="appViewCode">crm-sales · 854383613410541568</div>
+                <div id="appViewHealth">健康度 72 · 3 个建议动作</div>
+              </div>
+            </div>
+
+            <div class="graph-layout">
+              <section class="resource-map">
+                <div class="section-head" style="padding: 0 0 12px; height: auto; border-bottom: 0;">
+                  <h2>资源图谱</h2>
+                  <span class="badge brand">来源可追溯</span>
+                </div>
+                <div class="map-grid" id="resourceMap"></div>
+              </section>
+
+              <section class="section">
+                <div class="section-head">
+                  <h2>体检结果</h2>
+                  <span id="findingCount">3 条</span>
+                </div>
+                <div class="section-body">
+                  <div class="finding-list" id="findingList"></div>
+                </div>
+              </section>
+            </div>
+          </section>
+
+          <section class="view" id="view-coverage">
+            <div class="page-head">
+              <div>
+                <h1>API / MCP 接入覆盖</h1>
+                <p>普通页面数据走 REST API，AI 需要调用的语义动作才 MCP 化。高风险写入统一进入确认门。</p>
+              </div>
+              <div class="scan-meta">
+                <div>MCP 注册 114 · Agent 可见约 85</div>
+                <div>业务事件工具当前暂停暴露</div>
+              </div>
+            </div>
+
+            <table class="coverage-table">
+              <thead>
+                <tr>
+                  <th>领域</th>
+                  <th>API 接入</th>
+                  <th>MCP 化</th>
+                  <th>下一步</th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr>
+                  <td>应用清单</td>
+                  <td><span class="code">queryAppList</span><span class="code">listApp</span></td>
+                  <td><span class="badge ok">已有</span> `list_apaas_apps_in_env`</td>
+                  <td>新增租户快照 API，支持全量应用分析。</td>
+                </tr>
+                <tr>
+                  <td>配置资源</td>
+                  <td><span class="code">dataModel</span><span class="code">formConfig</span><span class="code">menu</span></td>
+                  <td><span class="badge ok">已有</span> 模型、字典、表单、菜单、权限工具</td>
+                  <td>补业务对象、列表页完整 diff、权限中心三类权限。</td>
+                </tr>
+                <tr>
+                  <td>二次开发</td>
+                  <td><span class="code">selfdevelopment</span><span class="code">selfDevPermission</span></td>
+                  <td><span class="badge ok">已有</span> 工作区、上传、绑定、重发布</td>
+                  <td>补自开发权限图谱和孤立资产治理。</td>
+                </tr>
+                <tr>
+                  <td>运维</td>
+                  <td><span class="code">operateLog</span></td>
+                  <td><span class="badge warn">部分</span> 日志未工具化</td>
+                  <td>任务中心、流程实例、健康指标先走 REST 聚合，再暴露诊断工具。</td>
+                </tr>
+                <tr>
+                  <td>运营报告</td>
+                  <td>依赖快照聚合</td>
+                  <td><span class="badge warn">待做</span></td>
+                  <td>新增 `generate_lowcode_tenant_report`，产出 artifact。</td>
+                </tr>
+                <tr>
+                  <td>AI 管理</td>
+                  <td><span class="code">agent/ai/integration/config</span></td>
+                  <td><span class="badge err">未做</span></td>
+                  <td>继续抓提示词、Provider、模型管理 CRUD，P0 只读。</td>
+                </tr>
+              </tbody>
+            </table>
+          </section>
+        </section>
+
+        <aside class="panel right-panel">
+          <div class="panel-head">
+            <div>
+              <h3>AI 行动面板</h3>
+              <span>当前范围: <span id="assistantScope">租户总览</span></span>
+            </div>
+            <span class="badge cyan">只读分析</span>
+          </div>
+          <div class="right-body">
+            <section class="assistant-status">
+              <strong>下一步建议</strong>
+              <p id="assistantSummary">先扫描全租户应用并生成资源快照，再选择高风险应用进入单应用体检。</p>
+            </section>
+
+            <div class="action-list" id="actionList"></div>
+
+            <section class="confirm-queue">
+              <h3>待确认写入</h3>
+              <p>当前没有执行中的写入。配置、权限、发布、自开发包更新都会先生成 diff。</p>
+              <div class="split-actions">
+                <button class="btn" type="button">查看确认规则</button>
+                <button class="btn danger" type="button">高风险动作清单</button>
+              </div>
+            </section>
+
+            <section class="prompt-box">
+              <textarea aria-label="AI 指令" placeholder="让 AI 分析当前应用的配置风险，或生成租户体检报告。">分析当前租户下哪些应用最适合先接 AI 功能，并说明原因。</textarea>
+              <div class="prompt-actions">
+                <span class="tiny">工具范围: API 只读 + MCP 确认写入</span>
+                <button class="btn primary" type="button">发送</button>
+              </div>
+            </section>
+          </div>
+        </aside>
+      </section>
+    </main>
+  </div>
+
+  <script>
+    const apps = [
+      {
+        name: "CRM 销售全流程",
+        code: "crm-sales",
+        id: "854383613410541568",
+        status: "已下线",
+        risk: "warn",
+        score: 72,
+        metrics: [8, 8, 4, 3],
+        resources: {
+          "菜单": ["线索管理", "客户管理", "商机管理", "合同管理"],
+          "模型": ["crm_customer", "crm_opportunity", "crm_contract", "crm_payment"],
+          "表单": ["客户管理表单", "商机管理表单", "合同管理表单"],
+          "流程": ["合同审批流", "回款确认流"],
+          "事件": ["客户状态变更", "合同提交后校验"],
+          "权限": ["销售经理", "销售专员", "财务"],
+          "二开": ["portal-showcase-page.zip"],
+          "运维": ["最近 24h 无失败任务"]
+        },
+        findings: [
+          ["warn", "列表页查询条件不完整", "客户管理和合同管理缺少常用状态筛选，建议补查询条件并回写 listPageConfig。"],
+          ["warn", "自开发资产缺少明确工作区绑定", "portal-showcase-page.zip 已上传，但未看到可追溯源码工作区。"],
+          ["ok", "核心模型字段完整", "客户、商机、合同、回款模型可用于生成运营分析报告。"]
+        ]
+      },
+      {
+        name: "智能体 WMS 系统",
+        code: "factory-wms",
+        id: "852604338471948288",
+        status: "已上线",
+        risk: "err",
+        score: 64,
+        metrics: [12, 16, 7, 5],
+        resources: {
+          "菜单": ["库存管理", "入库作业", "出库作业", "盘点任务"],
+          "模型": ["wms_inventory", "wms_inbound", "wms_outbound", "wms_zone"],
+          "表单": ["库存台账", "入库单", "盘点差异单"],
+          "流程": ["库存调整审批", "盘点差异审批", "移库审批"],
+          "事件": ["库存低水位告警", "盘点完成后生成差异"],
+          "权限": ["仓库主管", "库管员", "运营管理员"],
+          "二开": ["factory-twin-dashboard.zip", "yard-ops-dashboard.zip"],
+          "运维": ["1 个流程异常", "2 个任务失败"]
+        },
+        findings: [
+          ["err", "流程实例异常需要处理", "库存调整审批存在失败节点，建议优先接 processCenter 异常实例 API。"],
+          ["warn", "自开发包与菜单权限需要复核", "数字孪生看板已绑定菜单，但自开发权限对象缺少完整覆盖。"],
+          ["warn", "服务集成尚未纳入图谱", "外部仓储接口应接入 serviceIntegration 域做可观测分析。"]
+        ]
+      },
+      {
+        name: "任务督办系统",
+        code: "task-supervise",
+        id: "850413907178991616",
+        status: "上线中",
+        risk: "ok",
+        score: 86,
+        metrics: [6, 9, 5, 2],
+        resources: {
+          "菜单": ["任务台账", "督办看板", "逾期统计"],
+          "模型": ["task_item", "task_followup", "task_notice"],
+          "表单": ["任务登记", "跟进记录"],
+          "流程": ["任务完成确认流"],
+          "事件": ["逾期提醒", "完成后通知"],
+          "权限": ["督办管理员", "执行人", "查看者"],
+          "二开": ["无"],
+          "运维": ["稳定"]
+        },
+        findings: [
+          ["ok", "配置闭环较完整", "模型、表单、流程和权限关系清晰，可作为智能化标杆样本。"],
+          ["warn", "运营报告可补充趋势", "建议接入任务完成率和逾期趋势，生成客户运营报告。"],
+          ["ok", "暂无高风险运维信号", "最近日志未命中删除、下线、权限扩大类操作。"]
+        ]
+      },
+      {
+        name: "三甲医院综合运营管理系统",
+        code: "hospital-mgmt",
+        id: "849613340778147840",
+        status: "已上线",
+        risk: "warn",
+        score: 69,
+        metrics: [18, 21, 9, 4],
+        resources: {
+          "菜单": ["科室运营", "资产维修", "耗材管理", "绩效看板"],
+          "模型": ["dept_operation", "repair_order", "medical_consumable"],
+          "表单": ["维修工单", "耗材领用", "绩效填报"],
+          "流程": ["维修审批", "耗材申领审批"],
+          "事件": ["工单超时提醒", "耗材低库存告警"],
+          "权限": ["院办", "科室主任", "维修人员"],
+          "二开": ["sec-risk-dashboard.zip"],
+          "运维": ["日志风险 2 条"]
+        },
+        findings: [
+          ["warn", "权限域需要展开检查", "科室数据权限复杂，建议接 permissionCenter 三类权限只读 API。"],
+          ["warn", "运营看板适合 AI 报告", "可按科室和工单闭环生成周报，优先走只读分析。"],
+          ["ok", "核心配置可读取", "模型、表单和流程可生成资源图谱。"]
+        ]
+      }
+    ];
+
+    const defaultActions = [
+      ["brand", "生成租户应用分层", "按应用状态、风险和复杂度输出优先级。"],
+      ["warn", "补运维 API 聚合", "taskcenter、processCenter、health 先走 REST API。"],
+      ["cyan", "输出客户成功报告", "基于快照生成可交付的月度体检报告。"]
+    ];
+
+    const appActions = [
+      ["warn", "生成配置 diff", "先补列表页查询条件，再进入确认门。"],
+      ["brand", "打开二开资产工作区", "校验 ZIP、菜单、权限和 workspace 绑定。"],
+      ["cyan", "导出单应用体检", "保存为 AI Builder artifact，供客户复盘。"]
+    ];
+
+    let selectedIndex = 0;
+
+    const appList = document.getElementById("appList");
+    const search = document.getElementById("appSearch");
+    const actionList = document.getElementById("actionList");
+    const assistantScope = document.getElementById("assistantScope");
+    const assistantSummary = document.getElementById("assistantSummary");
+
+    function renderApps(filter = "") {
+      const q = filter.trim().toLowerCase();
+      appList.innerHTML = "";
+      apps.forEach((app, index) => {
+        if (q && !(`${app.name} ${app.code}`).toLowerCase().includes(q)) return;
+        const button = document.createElement("button");
+        button.className = `app-item ${index === selectedIndex ? "active" : ""}`;
+        button.type = "button";
+        button.innerHTML = `
+          <div class="app-title">
+            <strong>${app.name}</strong>
+            <span class="badge ${app.risk}">${app.status}</span>
+          </div>
+          <div class="meta-line"><code>${app.code}</code><span>健康度 ${app.score}</span></div>
+          <div class="metric-row">
+            <span class="mini-metric"><strong>${app.metrics[0]}</strong>模型</span>
+            <span class="mini-metric"><strong>${app.metrics[1]}</strong>表单</span>
+            <span class="mini-metric"><strong>${app.metrics[2]}</strong>权限</span>
+            <span class="mini-metric"><strong>${app.metrics[3]}</strong>二开</span>
+          </div>
+        `;
+        button.addEventListener("click", () => {
+          selectedIndex = index;
+          renderApps(search.value);
+          renderAppView();
+          switchView("app");
+        });
+        appList.appendChild(button);
+      });
+    }
+
+    function renderAppView() {
+      const app = apps[selectedIndex];
+      document.getElementById("appViewTitle").textContent = app.name;
+      document.getElementById("appViewCode").textContent = `${app.code} · ${app.id}`;
+      document.getElementById("appViewHealth").textContent = `健康度 ${app.score} · ${app.findings.length} 个建议动作`;
+      document.getElementById("findingCount").textContent = `${app.findings.length} 条`;
+
+      const map = document.getElementById("resourceMap");
+      map.innerHTML = "";
+      Object.entries(app.resources).forEach(([name, items]) => {
+        const node = document.createElement("article");
+        node.className = "node";
+        node.innerHTML = `
+          <h3><span>${name}</span><span class="badge brand">${items.length}</span></h3>
+          <ul>${items.map(item => `<li>${item}</li>`).join("")}</ul>
+        `;
+        map.appendChild(node);
+      });
+
+      const list = document.getElementById("findingList");
+      list.innerHTML = "";
+      app.findings.forEach(([tone, title, desc]) => {
+        const item = document.createElement("article");
+        item.className = "finding";
+        item.innerHTML = `
+          <div class="finding-head"><strong>${title}</strong><span class="badge ${tone}">${tone === "err" ? "高" : tone === "warn" ? "中" : "低"}</span></div>
+          <p>${desc}</p>
+        `;
+        list.appendChild(item);
+      });
+    }
+
+    function renderActions(mode) {
+      const source = mode === "app" ? appActions : defaultActions;
+      actionList.innerHTML = "";
+      source.forEach(([tone, title, desc]) => {
+        const card = document.createElement("article");
+        card.className = "action-card";
+        card.innerHTML = `
+          <div class="action-head"><strong>${title}</strong><span class="badge ${tone}">${tone === "warn" ? "确认" : "建议"}</span></div>
+          <p>${desc}</p>
+        `;
+        actionList.appendChild(card);
+      });
+    }
+
+    function switchView(name) {
+      document.querySelectorAll("[data-view-tab]").forEach(tab => {
+        tab.classList.toggle("active", tab.dataset.viewTab === name);
+      });
+      document.querySelectorAll(".view").forEach(view => {
+        view.classList.toggle("active", view.id === `view-${name}`);
+      });
+      if (name === "app") {
+        const app = apps[selectedIndex];
+        assistantScope.textContent = app.name;
+        assistantSummary.textContent = `正在分析 ${app.name} 的资源图谱，优先处理 ${app.findings[0][1]}。`;
+        renderActions("app");
+      } else if (name === "coverage") {
+        assistantScope.textContent = "API / MCP 覆盖";
+        assistantSummary.textContent = "普通查询走 REST API，语义动作和确认写入走 MCP 工具。";
+        renderActions("coverage");
+      } else {
+        assistantScope.textContent = "租户总览";
+        assistantSummary.textContent = "先扫描全租户应用并生成资源快照，再选择高风险应用进入单应用体检。";
+        renderActions("overview");
+      }
+    }
+
+    document.querySelectorAll("[data-view-tab]").forEach(tab => {
+      tab.addEventListener("click", () => switchView(tab.dataset.viewTab));
+    });
+
+    search.addEventListener("input", () => renderApps(search.value));
+
+    renderApps();
+    renderAppView();
+    renderActions("overview");
+  </script>
+</body>
+</html>

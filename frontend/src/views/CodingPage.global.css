@@ -193,7 +193,7 @@ html:not([data-theme="dark"]) .coding-body.code-first .chat-input-bar {
   background: linear-gradient(180deg, rgba(247, 249, 253, 0), #f8fafc 24%);
 }
 
-html:not([data-theme="dark"]) .coding-body.code-first .coding-model-select {
+html:not([data-theme="dark"]) .coding-body.code-first .coding-model-trigger {
   background: #f8fafc;
   border-color: rgba(15, 23, 42, 0.08);
   color: #64748b;
@@ -448,6 +448,12 @@ html[data-theme="dark"] .msg-error-row {
   order: 2;
   border-left: 1px solid var(--line, rgba(0,0,0,.08));
   position: relative;
+}
+.coding-body.code-first.chat-expanded .main-content {
+  order: 1;
+  flex: 1 1 auto;
+  width: auto;
+  border-left: none;
 }
 .chat-resizer {
   position: absolute;

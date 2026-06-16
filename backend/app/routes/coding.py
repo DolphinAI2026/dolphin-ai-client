@@ -106,6 +106,67 @@ def _normalize_stream_payload(stream_messages: list) -> list[dict[str, Any]]:
     return normalized_stream_messages
 
 
+def _normalize_workspace_conversation_key(value: Any) -> str:
+    return re.sub(r"[\s_\-:/（）()【】\[\]·.]+", "", str(value or "").strip().lower())
+
+
+def _workspace_conversation_keys(workspace_meta: dict[str, Any]) -> set[str]:
+    keys: set[str] = set()
+    for raw_value in (workspace_meta.get("display_name"), workspace_meta.get("project_name")):
+        raw = str(raw_value or "").strip()
+        normalized = _normalize_workspace_conversation_key(raw)
+        if len(normalized) >= 3:
+            keys.add(normalized)
+        for prefix in ("form-page-", "apaas-custom-", "form-component-", "backend-api-", "frontend-plugin-"):
+            if raw.startswith(prefix):
+                stripped = _normalize_workspace_conversation_key(raw[len(prefix):])
+                if len(stripped) >= 3:
+                    keys.add(stripped)
+    return keys
+
+
+def _conversation_title_matches_workspace(conv: Conversation, workspace_meta: dict[str, Any]) -> bool:
+    title = _normalize_workspace_conversation_key(getattr(conv, "title", ""))
+    if not title:
+        return False
+    return any(key in title or title in key for key in _workspace_conversation_keys(workspace_meta))
+
+
+def _pick_workspace_conversation(
+    conversations: list[Conversation],
+    messages_by_id: dict[int, list[Message]],
+    workspace_meta: dict[str, Any],
+) -> tuple[Conversation, list[Message]]:
+    """Choose the active conversation for a workspace.
+
+    Migrated/generated workspaces can be repurposed under the same workspace_id.
+    Prefer a conversation whose title matches the current asset identity even if
+    it has no messages yet, then fall back to the legacy "first useful history"
+    behavior for normal workspaces.
+    """
+    for conv in conversations:
+        if _conversation_title_matches_workspace(conv, workspace_meta):
+            return conv, messages_by_id.get(conv.id, [])
+
+    selected_conv = conversations[0]
+    selected_messages = messages_by_id.get(selected_conv.id, [])
+    for conv in conversations:
+        messages = messages_by_id.get(conv.id, [])
+        if not selected_messages:
+            selected_conv = conv
+            selected_messages = messages
+
+        has_assistant_reply = any(
+            m.role == "assistant" and isinstance(m.content, str) and m.content.strip()
+            for m in messages
+        )
+        has_multi_message_history = len(messages) >= 2
+        if has_assistant_reply or has_multi_message_history:
+            return conv, messages
+
+    return selected_conv, selected_messages
+
+
 def _build_openai_chat_completions_url() -> str:
     base = settings.llm_api_base.rstrip("/")
     if not base.endswith("/v1"):
@@ -206,7 +267,7 @@ class CreateWorkspaceRequest(BaseModel):
     project_type: str   # form-component, form-page, form-list, backend-api
     project_name: str   # 项目名称
     display_name: Optional[str] = None  # 展示名称
-    project_id: Optional[int] = None  # 关联项目ID
+    project_id: Optional[int] = None  # 关联项目ID；应用上下文中复用为 Application.id
 
 
 class WriteFileRequest(BaseModel):
@@ -459,14 +520,22 @@ async def create_workspace(
 
     access_role = "owner"
     if req.project_id:
-        project_access = await require_project_access(
-            db,
-            project_id=req.project_id,
-            user_id=ctx.user.id,
-            tenant_id=ctx.tenant_id,
-            minimum_role="member",
+        app_result = await db.execute(
+            select(Application.id).where(
+                Application.id == req.project_id,
+                Application.tenant_id == ctx.tenant_id,
+            )
         )
-        access_role = project_access.role
+        is_application_binding = app_result.scalar_one_or_none() is not None
+        if not is_application_binding:
+            project_access = await require_project_access(
+                db,
+                project_id=req.project_id,
+                user_id=ctx.user.id,
+                tenant_id=ctx.tenant_id,
+                minimum_role="member",
+            )
+            access_role = project_access.role
 
     meta = workspace_mgr.create_workspace(
         project_type=project_type,
@@ -1082,9 +1151,7 @@ async def get_workspace_conversation(
     if not conversations:
         return {"conversation_id": None, "selected_llm_config_id": None, "messages": []}
 
-    selected_conv = conversations[0]
-    selected_messages: list[Message] = []
-
+    messages_by_id: dict[int, list[Message]] = {}
     for conv in conversations:
         msg_stmt = (
             select(Message)
@@ -1092,20 +1159,12 @@ async def get_workspace_conversation(
             .order_by(Message.created_at.asc())
         )
         msg_result = await db.execute(msg_stmt)
-        messages = msg_result.scalars().all()
-        if not selected_messages:
-            selected_conv = conv
-            selected_messages = messages
-
-        has_assistant_reply = any(
-            m.role == "assistant" and isinstance(m.content, str) and m.content.strip()
-            for m in messages
-        )
-        has_multi_message_history = len(messages) >= 2
-        if has_assistant_reply or has_multi_message_history:
-            selected_conv = conv
-            selected_messages = messages
-            break
+        messages_by_id[conv.id] = msg_result.scalars().all()
+    selected_conv, selected_messages = _pick_workspace_conversation(
+        conversations,
+        messages_by_id,
+        workspace_meta,
+    )
 
     # 富回放只读 DB(按会话, 多会话不互踩); 没有则回退 messages 表。
     from app.coding.replay_store import load_conversation_replay

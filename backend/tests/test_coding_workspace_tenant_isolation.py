@@ -17,6 +17,77 @@ def _result(rows):
     return r
 
 
+def test_pick_workspace_conversation_prefers_matching_empty_asset_session():
+    """打开重命名后的资产工作区时, 空的新资产会话也应优先于旧资产的有消息会话。"""
+    from app.routes import coding as coding_routes
+
+    fresh = MagicMock(id=41, title="[迁移] 数字孪生总览")
+    old = MagicMock(id=30, title="读一下当前的代码，页面接入的数据是走的mock数据？还是真实的API？")
+    old_messages = [MagicMock(role="user", content="读一下当前的代码"), MagicMock(role="assistant", content="项目驾驶舱 mock 数据说明")]
+
+    selected, messages = coding_routes._pick_workspace_conversation(
+        [fresh, old],
+        {fresh.id: [], old.id: old_messages},
+        {"project_name": "form-page-factory-twin-dashboard", "display_name": "数字孪生总览"},
+    )
+
+    assert selected is fresh
+    assert messages == []
+
+
+@pytest.mark.asyncio
+async def test_create_workspace_accepts_application_id_binding():
+    """应用上下文创建自开发工作区时 project_id 传的是 Application.id, 不能按 Project 查 404。"""
+    from fastapi import HTTPException
+    from app.routes import coding as coding_routes
+
+    ctx = MagicMock()
+    ctx.user = MagicMock(id=1)
+    ctx.tenant_id = 64
+
+    app_lookup = MagicMock()
+    app_lookup.scalar_one_or_none.return_value = 10
+    db = MagicMock()
+    db.execute = AsyncMock(return_value=app_lookup)
+
+    created = {
+        "id": "ws-app",
+        "project_id": 10,
+        "project_type": "form-page",
+        "project_name": "form-page-factory-twin-dashboard",
+        "display_name": "数字孪生总览",
+        "user_id": 1,
+        "tenant_id": 64,
+        "status": "ready",
+    }
+
+    with (
+        patch.object(
+            coding_routes,
+            "require_project_access",
+            AsyncMock(side_effect=HTTPException(status_code=404, detail="项目不存在")),
+        ) as mock_require_project_access,
+        patch.object(coding_routes.workspace_mgr, "create_workspace", return_value=created) as mock_create,
+        patch.object(coding_routes.workspace_mgr, "list_files", return_value=[]),
+        patch.object(coding_routes, "_decorate_workspace_access", side_effect=lambda ws, role: {**ws, "access_role": role}),
+    ):
+        out = await coding_routes.create_workspace(
+            coding_routes.CreateWorkspaceRequest(
+                project_type="form-page",
+                project_name="factory-twin-dashboard",
+                display_name="数字孪生总览",
+                project_id=10,
+            ),
+            ctx,
+            db,
+        )
+
+    mock_require_project_access.assert_not_awaited()
+    mock_create.assert_called_once()
+    assert out["project_id"] == 10
+    assert out["access_role"] == "owner"
+
+
 @pytest.mark.asyncio
 async def test_list_workspaces_drops_other_tenant_legacy_assets():
     from app.routes import coding as coding_routes

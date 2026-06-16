@@ -540,8 +540,22 @@ async def resolve_effective_coding_model(
     selected_llm_config_id: int | None = None,
 ) -> tuple[str, Optional[int]]:
     """解析实际使用的 coding 模型。优先级：请求指定 > 会话已选 > 租户默认 > 环境变量。"""
-    from app.routes.coding import _resolve_effective_coding_model as _resolve
-    return await _resolve(db, tenant_id, requested_model=requested_model, selected_llm_config_id=selected_llm_config_id)
+    from app.config import settings
+    from app.harness.llm_resolver import resolve_llm_config
+
+    requested_config_id = _parse_coding_llm_config_id(requested_model)
+    selected_config_id = requested_config_id if requested_config_id is not None else selected_llm_config_id
+    resolved = await resolve_llm_config(
+        db,
+        tenant_id or 0,
+        purpose="coding",
+        selected_config_id=selected_config_id,
+    )
+    if resolved:
+        return resolved.model, resolved.config_id
+    if requested_model and requested_config_id is None:
+        return requested_model, None
+    return settings.llm_model, None
 
 
 # ── 对话历史工具 ──────────────────────────────────

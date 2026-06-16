@@ -645,22 +645,125 @@
   margin-bottom: 12px;
 }
 
-/* 紧凑原生模型选择(对齐 AI Chat 的 model-select-inline,克制不抢眼) */
-.coding-model-select {
-  background: transparent;
+/* 底部模型选择器:自绘菜单,避免原生 select 白底/系统高亮割裂。 */
+.coding-model-picker {
+  position: relative;
+  flex: 0 0 auto;
+  width: clamp(132px, 15vw, 178px);
+  min-width: 132px;
+  max-width: 178px;
+  z-index: 8;
+}
+
+.coding-model-trigger {
+  display: inline-flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 7px;
+  width: 100%;
+  height: 32px;
+  padding: 0 9px 0 10px;
   border: 1px solid var(--t-border-subtle);
-  color: var(--t-text-muted);
-  padding: 3px 8px;
-  border-radius: 5px;
-  font-size: 12px;
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--t-bg-panel) 82%, transparent);
+  color: var(--t-text-secondary);
   font-family: inherit;
+  font-size: 12px;
+  line-height: 1;
   cursor: pointer;
   outline: none;
-  max-width: 220px;
-  transition: border-color 0.14s ease, color 0.14s ease;
+  transition: border-color 0.15s ease, color 0.15s ease, background 0.15s ease;
 }
-.coding-model-select:hover:not(:disabled) { border-color: var(--t-border-strong); color: var(--t-text-primary); }
-.coding-model-select:disabled { opacity: 0.55; cursor: not-allowed; }
+
+.coding-model-trigger-text {
+  min-width: 0;
+  flex: 1 1 auto;
+  overflow: hidden;
+  text-align: left;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.coding-model-trigger:hover,
+.coding-model-trigger.is-open {
+  border-color: color-mix(in srgb, var(--t-brand) 70%, var(--t-border-subtle));
+  background: color-mix(in srgb, var(--t-brand) 10%, var(--t-bg-panel));
+  color: var(--t-text-primary);
+}
+
+.coding-model-trigger .el-icon {
+  flex: 0 0 auto;
+  opacity: 0.84;
+  transition: transform 0.15s ease;
+}
+
+.coding-model-trigger.is-open .el-icon {
+  transform: rotate(180deg);
+}
+
+.coding-model-trigger:disabled {
+  opacity: 0.56;
+  cursor: not-allowed;
+}
+
+.coding-model-menu {
+  position: absolute;
+  left: 0;
+  bottom: calc(100% + 7px);
+  width: max(100%, 220px);
+  max-width: min(300px, calc(100vw - 32px));
+  padding: 5px;
+  border: 1px solid var(--t-border-subtle);
+  border-radius: 10px;
+  background: color-mix(in srgb, var(--t-bg-panel) 94%, #050b18);
+  box-shadow: 0 18px 44px rgba(0, 0, 0, 0.36);
+}
+
+.coding-model-option {
+  display: flex;
+  width: 100%;
+  min-height: 42px;
+  flex-direction: column;
+  align-items: flex-start;
+  justify-content: center;
+  gap: 3px;
+  padding: 7px 9px;
+  border: 0;
+  border-radius: 8px;
+  background: transparent;
+  color: var(--t-text-secondary);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.coding-model-option:hover {
+  background: color-mix(in srgb, var(--t-brand) 13%, transparent);
+  color: var(--t-text-primary);
+}
+
+.coding-model-option.is-selected {
+  background: color-mix(in srgb, var(--t-brand) 18%, transparent);
+  color: var(--t-brand);
+}
+
+.coding-model-option-name,
+.coding-model-option-meta {
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.coding-model-option-name {
+  font-size: 12.5px;
+  font-weight: 650;
+}
+
+.coding-model-option-meta {
+  color: var(--t-text-muted);
+  font-size: 11px;
+}
 
 .input-wrapper {
   display: flex;
@@ -1628,6 +1731,11 @@
   transition: background 0.12s ease, color 0.12s ease;
 }
 .cca-btn:hover { background: var(--t-bg-panel-hover, rgba(0, 0, 0, 0.05)); color: var(--t-text-primary, #222); }
+.cca-btn.active {
+  border-color: color-mix(in srgb, var(--brand, #4f6ef7) 52%, var(--t-border-subtle, rgba(116, 128, 171, 0.16)));
+  background: color-mix(in srgb, var(--brand, #4f6ef7) 12%, transparent);
+  color: var(--brand, #6b82ff);
+}
 .cca-conv-list { max-height: 320px; overflow: auto; display: flex; flex-direction: column; gap: 2px; }
 .cca-conv-item {
   display: flex;
@@ -2175,6 +2283,12 @@
 .chat-input-bar :deep(.ucc) {
   max-width: 880px;
   margin-inline: auto;
+}
+
+.chat-input-bar :deep(.ucc-box),
+.chat-input-bar :deep(.ucc-footer),
+.chat-input-bar :deep(.ucc-footer-left) {
+  overflow: visible;
 }
 
 html:not([data-theme="dark"]) .chat-input-bar :deep(.ucc-box) {

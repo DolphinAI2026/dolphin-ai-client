@@ -111,3 +111,58 @@ def test_build_lowcode_log_analysis_counts_risks_and_dimensions():
     assert analysis["top_operation_types"][0] == {"name": "发布", "count": 1}
     assert analysis["top_menus"][0]["name"] == "应用信息"
     assert "最近 3 条低代码变更" in analysis["summary"]
+
+
+def test_build_lowcode_log_analysis_provides_report_ready_insights():
+    items = [
+        normalize_lowcode_log_record(
+            {
+                "operationTime": "2026-06-15 10:12:00",
+                "functionMenu": "ROLE_MANAGEMENT",
+                "operationObject": "智能体WMS系统.仓库主管",
+                "operationDescription": "删除了角色权限【仓库主管】",
+                "operationType": "DELETE",
+                "operationUserName": "admin",
+            }
+        ),
+        normalize_lowcode_log_record(
+            {
+                "operationTime": "2026-06-15 10:10:00",
+                "functionMenu": "SELF_DEVELOPMENT_CONFIGURATION",
+                "operationObject": "数字孪生总览",
+                "operationDescription": "绑定自开发页面 form-page-factory-twin-dashboard",
+                "operationType": "EDIT",
+                "operationUserName": "管理",
+            }
+        ),
+        normalize_lowcode_log_record(
+            {
+                "operationTime": "2026-06-15 10:08:00",
+                "functionMenu": "APPLICATION_MANAGEMENT",
+                "operationObject": "智能体WMS系统",
+                "operationDescription": "发布了应用【智能体WMS系统】",
+                "operationType": "PUBLISH",
+                "operationUserName": "管理",
+            }
+        ),
+    ]
+
+    analysis = build_lowcode_log_analysis(items)
+
+    assert items[0]["details"]["risk_level"] == "high"
+    assert items[0]["details"]["risk_reason"] == "删除/下线/禁用类操作"
+    assert analysis["change_domains"][0] == {
+        "key": "permission",
+        "label": "权限与角色",
+        "count": 1,
+    }
+    assert analysis["timeline"][0]["title"] == "智能体WMS系统.仓库主管"
+    assert analysis["timeline"][0]["risk_level"] == "high"
+    assert analysis["preset_reports"][0]["key"] == "risk_board"
+    assert analysis["preset_reports"][0]["title"] == "风险看板"
+    assert analysis["preset_reports"][2]["key"] == "action_recommendations"
+    assert analysis["preset_reports"][2]["title"] == "处置建议"
+    assert analysis["recommendations"][0]["key"] == "review_high_risk"
+    assert analysis["recommendations"][0]["title"] == "先复核高风险操作"
+    assert analysis["recommendations"][0]["target"] == "智能体WMS系统.仓库主管"
+    assert analysis["recommendations"][0]["severity"] == "high"

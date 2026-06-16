@@ -56,6 +56,18 @@
         <span class="cv-spinner" />
         <span>加载中…</span>
       </div>
+      <div v-else-if="imagePreviewUrl" class="cv-image-preview">
+        <div class="cv-image-stage">
+          <img :src="imagePreviewUrl" :alt="baseName" />
+        </div>
+        <div class="cv-image-footer">
+          <span class="cv-image-name">{{ baseName }}</span>
+          <button class="cv-download" :disabled="downloading" @click="downloadFile">
+            <AppIcon name="download" :size="14" :stroke="1.9" />
+            <span>{{ downloading ? '下载中…' : '下载原图' }}</span>
+          </button>
+        </div>
+      </div>
       <div v-else-if="binary" class="cv-state cv-binary">
         <AppIcon :name="fileIcon" :size="30" :stroke="1.5" />
         <span class="cv-binary-name">{{ baseName }}</span>
@@ -87,15 +99,7 @@ import { readWorkspaceFile, downloadWorkspaceFileRaw, getWorkspaceFileDiff, type
 import { highlightCode } from './shikiHighlight'
 import DiffView from './DiffView.vue'
 import type { FileChange } from './workspaceChanges'
-
-const BINARY_EXT = new Set([
-  'zip', 'tar', 'gz', 'tgz', 'rar', '7z',
-  'png', 'jpg', 'jpeg', 'gif', 'webp', 'ico', 'bmp',
-  'pdf', 'woff', 'woff2', 'ttf', 'eot', 'otf',
-  'mp4', 'mp3', 'wav', 'mov', 'avi',
-  'exe', 'bin', 'so', 'dll', 'jar',
-  'psd', 'sketch', 'xlsx', 'xls', 'docx', 'doc', 'ppt', 'pptx',
-])
+import { getWorkspaceFilePreviewKind } from './filePreview'
 
 const props = defineProps<{
   wsId: string
@@ -113,6 +117,7 @@ const loading = ref(false)
 const error = ref('')
 const binary = ref(false)
 const binaryHint = ref('二进制文件，不支持预览')
+const imagePreviewUrl = ref('')
 const decompiled = ref(false)
 const decompiler = ref('')
 const downloading = ref(false)
@@ -225,9 +230,12 @@ function onDocSelectionChange() {
   if (!sel || sel.isCollapsed) quoteBtn.value = null
 }
 document.addEventListener('selectionchange', onDocSelectionChange)
-onUnmounted(() => document.removeEventListener('selectionchange', onDocSelectionChange))
+onUnmounted(() => {
+  document.removeEventListener('selectionchange', onDocSelectionChange)
+  revokeImagePreviewUrl()
+})
 
-const isBinaryExt = computed(() => BINARY_EXT.has(baseName.value.split('.').pop()?.toLowerCase() || ''))
+const previewKind = computed(() => getWorkspaceFilePreviewKind(props.filePath))
 
 const baseName = computed(() => props.filePath?.split('/').pop() || '')
 const dir = computed(() => {
@@ -248,12 +256,14 @@ async function load() {
   html.value = ''
   error.value = ''
   binary.value = false
+  revokeImagePreviewUrl()
   binaryHint.value = '二进制文件，不支持预览'
   decompiled.value = false
   decompiler.value = ''
   if ((hasInlineDiff.value && !props.change) || !props.filePath || !props.wsId) return
-  // 已知二进制扩展名直接走下载面板,不去拉文本(避免 utf-8 解码报错)
-  if (isBinaryExt.value) { binary.value = true; return }
+  if (previewKind.value === 'image') { await loadImagePreview(); return }
+  // 已知不可内联预览的二进制扩展名直接走下载面板,不去拉文本(避免 utf-8 解码报错)
+  if (previewKind.value === 'download') { binary.value = true; return }
   loading.value = true
   try {
     const res = await readWorkspaceFile(props.wsId, props.filePath)
@@ -280,6 +290,27 @@ async function load() {
   // 必须等 loading=false 后 .cv-code 才进 DOM(此前是 spinner 分支), 再做搜索跳行
   await nextTick()
   scrollToFocusLine()
+}
+
+function revokeImagePreviewUrl() {
+  if (!imagePreviewUrl.value) return
+  URL.revokeObjectURL(imagePreviewUrl.value)
+  imagePreviewUrl.value = ''
+}
+
+async function loadImagePreview() {
+  if (!props.filePath || !props.wsId) return
+  loading.value = true
+  try {
+    const blob = await downloadWorkspaceFileRaw(props.wsId, props.filePath)
+    imagePreviewUrl.value = URL.createObjectURL(blob)
+    await nextTick()
+    if (bodyRef.value) { bodyRef.value.scrollTop = 0; bodyRef.value.scrollLeft = 0 }
+  } catch (e: any) {
+    error.value = String(e?.response?.data?.detail || e?.message || '图片预览失败')
+  } finally {
+    loading.value = false
+  }
 }
 
 async function downloadFile() {
@@ -318,7 +349,7 @@ watch(
   () => [props.wsId, props.filePath, props.diff, props.change?.path, props.change?.status, props.dark, props.focusLine],
   () => {
     // 有 git 改动默认进对比；删除的文件只有对比可看; 搜索跳行强制全文
-    viewMode.value = props.change && !props.focusLine ? 'diff' : 'full'
+    viewMode.value = props.change && !props.focusLine && previewKind.value !== 'image' ? 'diff' : 'full'
     void refresh()
   },
   { immediate: true },
@@ -492,6 +523,57 @@ watch(
 .cv-code :deep(.shiki .line:hover)::before {
   color: var(--fg-dim, #718096);
   background: var(--bg-hover, #f5f8fd);
+}
+.cv-image-preview {
+  display: flex;
+  flex-direction: column;
+  min-height: 100%;
+  padding: 18px;
+  box-sizing: border-box;
+  gap: 12px;
+}
+.cv-image-stage {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  overflow: auto;
+  border: 1px solid var(--line, rgba(15, 23, 42, 0.08));
+  border-radius: 10px;
+  background:
+    linear-gradient(45deg, color-mix(in srgb, var(--fg-faint, #94a3b8) 10%, transparent) 25%, transparent 25%),
+    linear-gradient(-45deg, color-mix(in srgb, var(--fg-faint, #94a3b8) 10%, transparent) 25%, transparent 25%),
+    linear-gradient(45deg, transparent 75%, color-mix(in srgb, var(--fg-faint, #94a3b8) 10%, transparent) 75%),
+    linear-gradient(-45deg, transparent 75%, color-mix(in srgb, var(--fg-faint, #94a3b8) 10%, transparent) 75%),
+    var(--bg-sub, #f8fafc);
+  background-position: 0 0, 0 8px, 8px -8px, -8px 0;
+  background-size: 16px 16px;
+}
+.cv-image-stage img {
+  display: block;
+  max-width: 100%;
+  max-height: 100%;
+  object-fit: contain;
+  border-radius: 6px;
+  box-shadow: 0 10px 32px rgba(0, 0, 0, 0.24);
+}
+.cv-image-footer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  min-height: 34px;
+}
+.cv-image-name {
+  min-width: 0;
+  overflow: hidden;
+  color: var(--fg, #333);
+  font-family: var(--font-mono, monospace);
+  font-size: var(--fs-sm, 12.5px);
+  font-weight: 650;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 .cv-state {
   display: flex;

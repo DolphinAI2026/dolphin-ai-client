@@ -408,12 +408,79 @@ class WorkspaceManager:
 
     def _decorate_workspace_meta(self, ws_path: Path, meta: dict) -> dict:
         hydrated = self._ensure_display_name(ws_path, meta)
+        hydrated = self._apply_source_identity(ws_path, hydrated)
         hydrated["folder_name"] = ws_path.name
         hydrated["disk_path"] = str(ws_path.resolve())
         activity_ts = self._workspace_activity_ts(ws_path)
         hydrated["activity_ts"] = activity_ts
         if activity_ts:
             hydrated["updated_at"] = datetime.fromtimestamp(activity_ts).isoformat()
+        return hydrated
+
+    def _read_package_name(self, ws_path: Path, meta: dict) -> str:
+        package_paths = [ws_path / "package.json"]
+        if meta.get("project_type") == "form-component-dual":
+            package_paths.insert(0, ws_path / "web" / "package.json")
+        for package_path in package_paths:
+            package_json = _safe_read_json(package_path)
+            name = str(package_json.get("name") or "").strip()
+            if name:
+                return name
+        return ""
+
+    def _read_source_display_name(self, ws_path: Path) -> str:
+        locale_paths = (
+            ws_path / "src" / "form-page-local" / "zh-CN" / "index.js",
+            ws_path / "src" / "form-component-local" / "zh-CN" / "index.js",
+            ws_path / "src" / "form-view-local" / "zh-CN" / "index.js",
+            ws_path / "src" / "form-layout-local" / "zh-CN" / "index.js",
+            ws_path / "web" / "src" / "form-component-local" / "zh-CN" / "index.js",
+            ws_path / "mobile" / "src" / "form-component-local" / "zh-CN" / "index.js",
+        )
+        for locale_path in locale_paths:
+            try:
+                text = locale_path.read_text(encoding="utf-8")
+            except Exception:
+                continue
+            for key in ("title", "displayName", "label"):
+                match = re.search(rf"\b{key}\s*:\s*['\"]([^'\"]{{2,80}})['\"]", text)
+                if match:
+                    return match.group(1).strip()
+        return ""
+
+    def _apply_source_identity(self, ws_path: Path, meta: dict) -> dict:
+        apaas_config = self._read_apaas_config(ws_path)
+        source_project_name = self._resolve_output_name(apaas_config, "")
+        if not source_project_name:
+            source_project_name = self._read_package_name(ws_path, meta)
+        source_project_name = source_project_name.strip()
+        if not source_project_name or source_project_name == "demo":
+            return meta
+
+        current_project_name = str(meta.get("project_name") or "").strip()
+        current_display_name = str(meta.get("display_name") or "").strip()
+        source_display_name = self._read_source_display_name(ws_path)
+        project_mismatch = bool(current_project_name and source_project_name != current_project_name)
+
+        if not project_mismatch and not source_display_name:
+            return meta
+
+        hydrated = dict(meta)
+        if project_mismatch:
+            hydrated["metadata_project_name"] = current_project_name
+            hydrated["project_name"] = source_project_name
+            hydrated["source_identity_mismatch"] = True
+            if current_display_name:
+                hydrated["metadata_display_name"] = current_display_name
+
+        if project_mismatch:
+            hydrated["display_name"] = source_display_name or self._humanize_project_name(
+                str(hydrated.get("project_type") or ""),
+                source_project_name,
+            )
+        elif source_display_name and not current_display_name:
+            hydrated["display_name"] = source_display_name
+
         return hydrated
 
     def _read_apaas_config(self, ws_path: Path) -> dict:

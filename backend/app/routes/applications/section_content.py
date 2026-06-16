@@ -23,9 +23,10 @@ import logging
 from datetime import datetime
 from pathlib import Path
 from typing import Annotated, Any, Optional
+from urllib.parse import quote
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
-from fastapi.responses import HTMLResponse
+from fastapi.responses import FileResponse, HTMLResponse
 from pydantic import BaseModel, Field
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -115,6 +116,86 @@ async def _auto_bind_custom_page_workspace(
         if changed:
             await db.commit()
         return ws_id
+
+    return None
+
+
+async def _auth_context_from_custom_page_request(request: Request, _auth: str = "") -> AuthContext:
+    """Iframe/script/css preview requests authenticate via query token or Bearer header."""
+    from app.deps import get_auth_context_from_token
+
+    return await get_auth_context_from_token(_extract_custom_page_auth_token(request, _auth))
+
+
+def _extract_custom_page_auth_token(request: Request, _auth: str = "") -> str:
+    token = _auth or ""
+    if not token:
+        ah = request.headers.get("authorization", "")
+        if ah.startswith("Bearer "):
+            token = ah[7:]
+    return token
+
+
+def _custom_page_workspace_targets(bundle_dir: str, component_tag: str = "") -> set[str]:
+    bundle_dir = (bundle_dir or "").strip()
+    component_tag = (component_tag or "").strip()
+    target_names = {name for name in (bundle_dir, component_tag) if name}
+    if component_tag.startswith("apaas-custom-"):
+        target_names.add("form-page-" + component_tag[len("apaas-custom-"):])
+    if bundle_dir.startswith("form-page-"):
+        target_names.add("apaas-custom-" + bundle_dir[len("form-page-"):])
+    return target_names
+
+
+def _resolve_local_custom_page_asset_dir(
+    *,
+    app_id: int,
+    tenant_id: int,
+    user_id: int,
+    bundle_dir: str,
+    component_tag: str = "",
+) -> tuple[str, Path] | None:
+    """Find a built local bundle for an app-bound generated custom page."""
+    from app.coding.workspace import WorkspaceManager
+
+    bundle_dir = (bundle_dir or "").strip()
+    if not bundle_dir:
+        return None
+
+    ws_mgr = WorkspaceManager()
+    try:
+        rows = ws_mgr.list_accessible_workspaces(user_id, [app_id], tenant_id=tenant_id)
+    except Exception:
+        logger.debug("custom page local asset workspace list failed", exc_info=True)
+        return None
+
+    target_names = _custom_page_workspace_targets(bundle_dir, component_tag)
+    for ws in rows or []:
+        if not isinstance(ws, dict):
+            continue
+        if ws.get("tenant_id") not in (None, tenant_id):
+            continue
+        project_id = ws.get("project_id")
+        if project_id:
+            try:
+                if int(project_id) != int(app_id):
+                    continue
+            except (TypeError, ValueError):
+                continue
+
+        disk_path = Path(str(ws.get("disk_path") or ""))
+        names = {
+            str(ws.get("project_name") or "").strip(),
+            str(ws.get("display_name") or "").strip(),
+            disk_path.name.split("__")[0] if disk_path.name else "",
+        }
+        if not target_names.intersection(name for name in names if name):
+            continue
+
+        build_dir = (disk_path / bundle_dir).resolve()
+        if (build_dir / f"{bundle_dir}.umd.js").is_file():
+            ws_id = str(ws.get("id") or "").strip()
+            return (ws_id or disk_path.name, build_dir)
 
     return None
 
@@ -927,6 +1008,7 @@ def _custom_host_error_html(msg: str) -> str:
 def _build_custom_page_host_html(
     app_base: str, bundle_dir: str, component_tag: str,
     api_base: str, apaas_app_id: str, tenant_id: str,
+    asset_query: str = "",
 ) -> str:
     """构建自开发整页组件的独立运行 host HTML.
 
@@ -940,9 +1022,11 @@ def _build_custom_page_host_html(
     无 echarts / 无 apaas base 组件.
     """
     import json as _json
+    asset_query = asset_query or ""
     cfg = _json.dumps({
         "appBase": app_base, "bundleDir": bundle_dir, "componentTag": component_tag,
         "apiBase": api_base, "apaasAppId": apaas_app_id, "tenantId": tenant_id,
+        "assetQuery": asset_query,
     })
     # Vue2 + ElementUI 走 CDN (jsdelivr). 注: 这是预览宿主, 生产可换内网 CDN / vendored.
     return (
@@ -950,7 +1034,7 @@ def _build_custom_page_host_html(
         "<meta name='viewport' content='width=device-width,initial-scale=1'>"
         "<title>自开发页面预览</title>"
         "<link rel='stylesheet' href='https://cdn.jsdelivr.net/npm/element-ui@2.15.14/lib/theme-chalk/index.css'>"
-        f"<link rel='stylesheet' href='{app_base}{bundle_dir}/{bundle_dir}.css'>"
+        f"<link rel='stylesheet' href='{app_base}{bundle_dir}/{bundle_dir}.css{asset_query}'>"
         "<style>"
         "html,body{margin:0;height:100%;background:#f5f6fa;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif}"
         "#app{min-height:100vh}"
@@ -1017,7 +1101,7 @@ def _build_custom_page_host_html(
         "    // CommonJS/AMD globals, causing webpack UMD to skip window[outputName].\n"
         "    try { window.exports = undefined; window.module = undefined; window.define = undefined; } catch(e) {}\n"
         "    var s = document.createElement('script');\n"
-        "    s.src = C.appBase + C.bundleDir + '/' + C.bundleDir + '.umd.js';\n"
+        "    s.src = C.appBase + C.bundleDir + '/' + C.bundleDir + '.umd.js' + (C.assetQuery || '');\n"
         "    s.onload = function(){\n"
         "      restoreModuleGlobals();\n"
         "      var raw = window[C.bundleDir]\n"
@@ -1053,6 +1137,90 @@ def _build_custom_page_host_html(
     )
 
 
+@router.get("/{app_id}/custom-page-assets/{bundle_dir}/{asset_path:path}")
+async def get_custom_page_asset(
+    app_id: int,
+    bundle_dir: str,
+    asset_path: str,
+    request: Request,
+    db: Annotated[AsyncSession, Depends(get_db)],
+    _auth: str = "",
+):
+    return await _serve_custom_page_asset(
+        app_id=app_id,
+        bundle_dir=bundle_dir,
+        asset_path=asset_path,
+        request=request,
+        db=db,
+        token=_auth,
+    )
+
+
+@router.get("/{app_id}/custom-page-assets-auth/{asset_token}/{bundle_dir}/{asset_path:path}")
+async def get_custom_page_asset_with_auth_path(
+    app_id: int,
+    asset_token: str,
+    bundle_dir: str,
+    asset_path: str,
+    request: Request,
+    db: Annotated[AsyncSession, Depends(get_db)],
+):
+    return await _serve_custom_page_asset(
+        app_id=app_id,
+        bundle_dir=bundle_dir,
+        asset_path=asset_path,
+        request=request,
+        db=db,
+        token=asset_token,
+    )
+
+
+async def _serve_custom_page_asset(
+    *,
+    app_id: int,
+    bundle_dir: str,
+    asset_path: str,
+    request: Request,
+    db: AsyncSession,
+    token: str,
+):
+    """Serve built local custom-page assets for the preview host.
+
+    The normal aPaaS runtime path can lag or return the app shell HTML for just-built
+    local bundles. For preview, use the app-bound workspace build output when present.
+    """
+    try:
+        ctx = await _auth_context_from_custom_page_request(request, token)
+    except Exception:  # noqa: BLE001
+        raise HTTPException(status_code=401, detail="未认证 — 请重新登录后重试")
+
+    app = await _load_app_and_check_view(app_id, ctx, db)
+    resolved = _resolve_local_custom_page_asset_dir(
+        app_id=app.id,
+        tenant_id=ctx.tenant_id,
+        user_id=ctx.user.id,
+        bundle_dir=bundle_dir,
+    )
+    if not resolved:
+        raise HTTPException(status_code=404, detail="本地自开发组件包不存在或尚未构建")
+
+    _, build_dir = resolved
+    root = build_dir.resolve()
+    rel = Path(asset_path)
+    if rel.is_absolute() or any(part == ".." for part in rel.parts):
+        raise HTTPException(status_code=400, detail="文件路径越界")
+
+    target = (root / rel).resolve()
+    try:
+        target.relative_to(root)
+    except ValueError:
+        raise HTTPException(status_code=400, detail="文件路径越界")
+    if not target.is_file():
+        raise HTTPException(status_code=404, detail=f"文件不存在: {asset_path}")
+
+    return FileResponse(str(target))
+
+
 @router.get("/{app_id}/custom-page-host")
 async def get_custom_page_host(
     app_id: int,
@@ -1073,17 +1241,11 @@ async def get_custom_page_host(
     认证: iframe src GET 带不了 Authorization header → 走 ?_auth=<token> query param
     (跟 platform-proxy/entry 一致), fallback header.
     """
-    from fastapi.responses import HTMLResponse
     from app.coding.apaas_tools import call_apaas_with_relogin
-    from app.deps import get_auth_context_from_token
 
-    token = _auth or ""
-    if not token:
-        ah = request.headers.get("authorization", "")
-        if ah.startswith("Bearer "):
-            token = ah[7:]
+    token = _extract_custom_page_auth_token(request, _auth)
     try:
-        ctx = await get_auth_context_from_token(token)
+        ctx = await _auth_context_from_custom_page_request(request, token)
     except Exception:  # noqa: BLE001
         return HTMLResponse(_custom_host_error_html("未认证 — 请重新登录后重试"))
 
@@ -1102,19 +1264,6 @@ async def get_custom_page_host(
     app_code = str(detail.get("appCode") or "")
     if not tenant_code or not app_code:
         return HTMLResponse(_custom_host_error_html("应用详情缺 tenantCode / appCode — 可能尚未发布"))
-
-    # 运行态状态门：自开发整页 bundle 挂在 apaas **运行态** /app/{tenant}/{app}/ 下,
-    # 应用「已下线」(status=SHUTDOWN) 时整个运行态路径被 apaas 404 → bundle 拉不到 →
-    # 之前只弹「组件包加载失败 (404?)」这种天书。这里提前判 status, 给一句人话。
-    # (RUNNING=已上线 才真在跑; 其余 SHUTDOWN/启动中 等都没法预览。)
-    app_status = str(detail.get("status") or "").upper()
-    if app_status and app_status != "RUNNING":
-        status_name = str(detail.get("statusName") or "未运行")
-        app_label = str(detail.get("appName") or app_code)
-        return HTMLResponse(_custom_host_error_html(
-            f"应用「{app_label}」在 aPaaS 当前为「{status_name}」,未处于运行态 — "
-            f"自开发页面要应用上线运行后才能预览。请先到 aPaaS 启动/上线该应用,再回来刷新预览。"
-        ))
 
     # 解析 menu_id → link_url (= 注册的组件 tag, 如 apaas-custom-library-home-dashboard).
     # 用 client.query_menus (manageAppMenu 管理视图, 含 linkUrl) — MCP list_apaas_app_menus
@@ -1163,10 +1312,32 @@ async def get_custom_page_host(
         logger.warning("custom page workspace auto-bind failed: app_id=%s bundle=%s", app.id, bundle_dir, exc_info=True)
 
     app_base = f"/app/{tenant_code}/{app_code}/"
+    asset_query = ""
+    local_asset = _resolve_local_custom_page_asset_dir(
+        app_id=app.id,
+        tenant_id=ctx.tenant_id,
+        user_id=ctx.user.id,
+        bundle_dir=bundle_dir,
+        component_tag=component_tag,
+    )
+    if local_asset:
+        app_base = f"/api/applications/{app.id}/custom-page-assets-auth/{quote(token, safe='')}/"
+    else:
+        # 运行态状态门：自开发整页 bundle 挂在 apaas **运行态** /app/{tenant}/{app}/ 下。
+        # 当没有本地构建产物可兜底时, 非 RUNNING 状态才会导致远端 bundle 拉不到。
+        app_status = str(detail.get("status") or "").upper()
+        if app_status and app_status != "RUNNING":
+            status_name = str(detail.get("statusName") or "未运行")
+            app_label = str(detail.get("appName") or app_code)
+            return HTMLResponse(_custom_host_error_html(
+                f"应用「{app_label}」在 aPaaS 当前为「{status_name}」,未处于运行态 — "
+                f"自开发页面要应用上线运行后才能预览。请先到 aPaaS 启动/上线该应用,再回来刷新预览。"
+            ))
+
     api_base = f"/apaas/backend/{tenant_code}/{app_code}"
     html = _build_custom_page_host_html(
         app_base, bundle_dir, component_tag, api_base,
-        str(app.apaas_app_id), str(detail.get("tenantId") or ""),
+        str(app.apaas_app_id), str(detail.get("tenantId") or ""), asset_query,
     )
     return HTMLResponse(html)
 

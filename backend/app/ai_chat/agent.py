@@ -27,6 +27,7 @@ from datetime import datetime
 from typing import Any, AsyncIterator, Optional
 
 import httpx
+from cryptography.fernet import InvalidToken
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -402,9 +403,16 @@ async def _resolve_llm_config(
         raise RuntimeError(
             "平台还没有配置可用的大模型,请到「平台管理 → 模型配置」添加一个模型后再使用。"
         )
+    try:
+        api_key = decrypt_password(cfg.api_key_enc)
+    except InvalidToken as exc:
+        raise RuntimeError(
+            f"模型配置「{cfg.config_name}」的 API Key 无法解密，"
+            "通常是环境加密密钥变更或配置密文已失效。请到「平台管理 → 模型配置」重新保存该模型配置后再试。"
+        ) from exc
     return LLMConfigSnapshot(
         base_url=cfg.base_url,
-        api_key=decrypt_password(cfg.api_key_enc),
+        api_key=api_key,
         model=cfg.model,
         max_tokens=cfg.max_tokens,
         temperature=cfg.temperature,

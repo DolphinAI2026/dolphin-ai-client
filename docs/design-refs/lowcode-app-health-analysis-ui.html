@@ -1,0 +1,1548 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>低代码应用健康度分析 - UI Design</title>
+  <style>
+    :root {
+      --bg: #070d1b;
+      --bg-2: #0a1224;
+      --surface: #10172d;
+      --surface-2: #151d38;
+      --surface-3: #1b2546;
+      --rail: #1b254b;
+      --menu: #0d1219;
+      --line: rgba(148, 163, 184, 0.14);
+      --line-strong: rgba(148, 163, 184, 0.24);
+      --text: #e8eefb;
+      --text-2: #aeb9d3;
+      --text-3: #6f7da0;
+      --brand: #6d8dff;
+      --brand-2: #55a6ff;
+      --brand-soft: rgba(109, 141, 255, 0.14);
+      --ok: #34d399;
+      --ok-soft: rgba(52, 211, 153, 0.12);
+      --warn: #fbbf24;
+      --warn-soft: rgba(251, 191, 36, 0.12);
+      --err: #fb7185;
+      --err-soft: rgba(251, 113, 133, 0.12);
+      --cyan: #38bdf8;
+      --cyan-soft: rgba(56, 189, 248, 0.12);
+      --radius: 8px;
+      --shadow: 0 20px 70px rgba(0, 0, 0, 0.38);
+      --font: "Geist Sans", -apple-system, BlinkMacSystemFont, "PingFang SC", "Microsoft YaHei", "Segoe UI", sans-serif;
+      --mono: "Geist Mono", ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+    }
+
+    * { box-sizing: border-box; }
+
+    body {
+      margin: 0;
+      min-height: 100vh;
+      overflow: hidden;
+      color: var(--text);
+      background: var(--bg);
+      font-family: var(--font);
+      font-size: 14px;
+      letter-spacing: 0;
+    }
+
+    button,
+    input {
+      font: inherit;
+    }
+
+    button {
+      cursor: pointer;
+      border: 0;
+    }
+
+    .browser-bar {
+      height: 64px;
+      display: flex;
+      align-items: center;
+      gap: 22px;
+      padding: 0 24px;
+      color: rgba(226, 232, 240, 0.55);
+      background: #080d15;
+      border-bottom: 1px solid rgba(148, 163, 184, 0.1);
+    }
+
+    .browser-dot {
+      width: 18px;
+      height: 18px;
+      border: 2px solid rgba(148, 163, 184, 0.42);
+      border-radius: 5px;
+    }
+
+    .browser-url {
+      min-width: 0;
+      flex: 1;
+      font-size: 15px;
+      color: rgba(148, 163, 184, 0.42);
+    }
+
+    .browser-chat {
+      height: 36px;
+      padding: 0 14px;
+      border-radius: 9px;
+      background: rgba(148, 163, 184, 0.12);
+      color: rgba(226, 232, 240, 0.8);
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+    }
+
+    .app-shell {
+      height: calc(100vh - 64px);
+      display: grid;
+      grid-template-columns: 312px minmax(0, 1fr);
+      background: var(--bg);
+    }
+
+    .tenant-rail {
+      min-width: 0;
+      background: var(--rail);
+      border-right: 1px solid rgba(148, 163, 184, 0.12);
+      display: flex;
+      flex-direction: column;
+      overflow: hidden;
+    }
+
+    .brand {
+      height: 86px;
+      display: flex;
+      align-items: center;
+      gap: 14px;
+      padding: 0 28px;
+    }
+
+    .brand-mark {
+      width: 40px;
+      height: 40px;
+      border-radius: 10px;
+      background: linear-gradient(135deg, #55a6ff, #6f7cff);
+      display: grid;
+      place-items: center;
+      font-weight: 800;
+      box-shadow: 0 10px 26px rgba(85, 166, 255, 0.25);
+    }
+
+    .brand strong {
+      display: block;
+      font-size: 19px;
+      line-height: 1.1;
+    }
+
+    .brand span {
+      display: block;
+      color: rgba(203, 213, 225, 0.58);
+      margin-top: 5px;
+      font-size: 13px;
+    }
+
+    .rail-nav {
+      padding: 22px;
+      display: grid;
+      gap: 10px;
+    }
+
+    .rail-item {
+      height: 46px;
+      border-radius: 9px;
+      display: flex;
+      align-items: center;
+      gap: 14px;
+      padding: 0 12px;
+      color: rgba(226, 232, 240, 0.72);
+      background: transparent;
+      font-weight: 650;
+      text-align: left;
+    }
+
+    .rail-item.active {
+      color: #fff;
+      background: rgba(109, 141, 255, 0.16);
+    }
+
+    .rail-icon {
+      width: 17px;
+      height: 17px;
+      border: 2px solid currentColor;
+      border-radius: 4px;
+      opacity: 0.82;
+      flex: 0 0 auto;
+    }
+
+    .rail-badge {
+      margin-left: auto;
+      min-width: 24px;
+      height: 24px;
+      padding: 0 7px;
+      border-radius: 999px;
+      display: grid;
+      place-items: center;
+      background: rgba(85, 166, 255, 0.2);
+      color: #78b7ff;
+      font-size: 12px;
+      font-weight: 800;
+    }
+
+    .tenant-footer {
+      margin-top: auto;
+      border-top: 1px solid rgba(148, 163, 184, 0.12);
+      padding: 20px 22px 24px;
+    }
+
+    .tenant-footer span {
+      color: rgba(148, 163, 184, 0.56);
+      font-size: 12px;
+    }
+
+    .tenant-select {
+      margin-top: 10px;
+      height: 44px;
+      border-radius: 9px;
+      background: rgba(7, 13, 27, 0.48);
+      border: 1px solid rgba(148, 163, 184, 0.12);
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 0 13px;
+      font-weight: 700;
+    }
+
+    .main-shell {
+      min-width: 0;
+      display: grid;
+      grid-template-rows: 62px minmax(0, 1fr);
+      background: var(--bg);
+    }
+
+    .app-topbar {
+      display: flex;
+      align-items: center;
+      gap: 18px;
+      padding: 0 28px;
+      background: #090f19;
+      border-bottom: 1px solid rgba(148, 163, 184, 0.12);
+      min-width: 0;
+    }
+
+    .back {
+      width: 30px;
+      height: 30px;
+      border-radius: 8px;
+      background: transparent;
+      color: rgba(203, 213, 225, 0.82);
+      font-size: 24px;
+      line-height: 1;
+    }
+
+    .crumbs {
+      min-width: 0;
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      color: rgba(203, 213, 225, 0.68);
+      font-weight: 650;
+      white-space: nowrap;
+    }
+
+    .crumbs strong { color: var(--text); }
+
+    .version-pill {
+      height: 28px;
+      padding: 0 12px;
+      border-radius: 999px;
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      color: #81c7ff;
+      border: 1px solid rgba(85, 166, 255, 0.35);
+      background: rgba(85, 166, 255, 0.12);
+      font-size: 13px;
+    }
+
+    .workspace {
+      min-height: 0;
+      min-width: 0;
+      display: grid;
+      grid-template-columns: 336px minmax(0, 1fr);
+      overflow: hidden;
+    }
+
+    .menu-panel {
+      min-height: 0;
+      background: var(--menu);
+      border-right: 1px solid var(--line);
+      display: flex;
+      flex-direction: column;
+    }
+
+    .menu-head {
+      height: 58px;
+      padding: 0 18px;
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      border-bottom: 1px solid var(--line);
+      background: rgba(109, 141, 255, 0.1);
+      font-weight: 800;
+    }
+
+    .menu-count {
+      height: 22px;
+      min-width: 30px;
+      padding: 0 8px;
+      border-radius: 999px;
+      display: inline-grid;
+      place-items: center;
+      background: rgba(109, 141, 255, 0.2);
+      color: #9fb2ff;
+      font-size: 12px;
+    }
+
+    .menu-search {
+      padding: 12px;
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      border-bottom: 1px solid var(--line);
+    }
+
+    .menu-search input {
+      width: 100%;
+      height: 36px;
+      border-radius: 6px;
+      border: 1px solid rgba(148, 163, 184, 0.26);
+      background: rgba(2, 6, 23, 0.5);
+      color: var(--text);
+      outline: 0;
+      padding: 0 12px;
+    }
+
+    .tree {
+      min-height: 0;
+      overflow: auto;
+      padding: 16px 12px 80px;
+    }
+
+    .tree-group {
+      margin-bottom: 14px;
+    }
+
+    .tree-title {
+      height: 34px;
+      display: flex;
+      align-items: center;
+      gap: 9px;
+      color: rgba(203, 213, 225, 0.72);
+      font-weight: 700;
+      padding: 0 10px;
+    }
+
+    .tree-title::before {
+      content: "";
+      width: 14px;
+      height: 10px;
+      border: 2px solid #6d8dff;
+      border-top-width: 1px;
+      border-radius: 3px;
+      opacity: 0.85;
+    }
+
+    .tree-item {
+      height: 44px;
+      margin-left: 22px;
+      padding: 0 12px 0 38px;
+      border-left: 1px solid rgba(148, 163, 184, 0.18);
+      border-radius: 8px;
+      color: rgba(226, 232, 240, 0.78);
+      display: flex;
+      align-items: center;
+      position: relative;
+    }
+
+    .tree-item::before {
+      content: "";
+      position: absolute;
+      left: 20px;
+      width: 12px;
+      height: 15px;
+      border: 2px solid currentColor;
+      border-radius: 2px;
+      opacity: 0.48;
+    }
+
+    .tree-item.active {
+      background: rgba(109, 141, 255, 0.2);
+      color: #b9c5ff;
+      border-left-color: var(--brand);
+      box-shadow: inset 3px 0 0 var(--brand);
+      font-weight: 800;
+    }
+
+    .design-area {
+      min-width: 0;
+      min-height: 0;
+      display: grid;
+      grid-template-rows: 58px minmax(0, 1fr);
+      background: var(--bg);
+      overflow: hidden;
+    }
+
+    .design-head {
+      min-width: 0;
+      height: 58px;
+      border-bottom: 1px solid var(--line);
+      background: var(--surface);
+      display: flex;
+      align-items: center;
+      gap: 18px;
+      padding: 0 18px;
+    }
+
+    .resource-title {
+      min-width: 144px;
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      font-size: 16px;
+      font-weight: 800;
+      white-space: nowrap;
+    }
+
+    .health-entry {
+      height: 34px;
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      padding: 0 12px;
+      border-radius: 8px;
+      color: #d7e0ff;
+      background: rgba(109, 141, 255, 0.12);
+      border: 1px solid rgba(109, 141, 255, 0.32);
+      box-shadow: 0 0 0 3px rgba(109, 141, 255, 0.04);
+      white-space: nowrap;
+      font-weight: 800;
+    }
+
+    .health-entry:hover,
+    .health-entry.active {
+      border-color: rgba(85, 166, 255, 0.68);
+      background: rgba(85, 166, 255, 0.18);
+    }
+
+    .health-dot {
+      width: 8px;
+      height: 8px;
+      border-radius: 999px;
+      background: var(--warn);
+      box-shadow: 0 0 16px rgba(251, 191, 36, 0.8);
+    }
+
+    .health-entry strong {
+      color: #fff;
+    }
+
+    .risk-chip {
+      height: 22px;
+      padding: 0 7px;
+      border-radius: 999px;
+      display: inline-flex;
+      align-items: center;
+      color: var(--warn);
+      background: var(--warn-soft);
+      font-size: 12px;
+      font-weight: 800;
+    }
+
+    .design-tabs {
+      margin-left: auto;
+      min-width: 0;
+      height: 40px;
+      padding: 4px;
+      border-radius: 10px;
+      display: flex;
+      align-items: center;
+      gap: 2px;
+      background: rgba(2, 6, 23, 0.22);
+      border: 1px solid rgba(109, 141, 255, 0.12);
+      overflow-x: auto;
+    }
+
+    .design-tab {
+      height: 30px;
+      min-width: max-content;
+      padding: 0 13px;
+      border-radius: 8px;
+      background: transparent;
+      color: var(--text-3);
+      font-weight: 700;
+    }
+
+    .design-tab.active {
+      color: #9ec5ff;
+      background: rgba(85, 166, 255, 0.14);
+    }
+
+    .backend-btn {
+      height: 40px;
+      padding: 0 14px;
+      border-radius: 9px;
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      color: #dbeafe;
+      background: rgba(15, 23, 42, 0.5);
+      border: 1px solid rgba(148, 163, 184, 0.18);
+      font-weight: 800;
+      white-space: nowrap;
+    }
+
+    .design-body {
+      min-width: 0;
+      min-height: 0;
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) 440px;
+      overflow: hidden;
+    }
+
+    body.drawer-closed .design-body {
+      grid-template-columns: minmax(0, 1fr) 0;
+    }
+
+    .form-canvas {
+      min-width: 0;
+      overflow: auto;
+      padding: 40px 56px 120px;
+      background: #081123;
+    }
+
+    .form-card {
+      width: min(720px, 100%);
+      margin: 0 auto;
+      padding: 28px 0 0;
+    }
+
+    .form-grid {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 22px 28px;
+    }
+
+    .field {
+      display: grid;
+      gap: 9px;
+    }
+
+    .field label {
+      color: rgba(226, 232, 240, 0.72);
+      font-weight: 750;
+    }
+
+    .field label span {
+      color: var(--err);
+      margin-left: 2px;
+    }
+
+    .fake-input {
+      height: 44px;
+      border-radius: 8px;
+      border: 1px solid rgba(148, 163, 184, 0.18);
+      background: rgba(21, 29, 56, 0.82);
+      display: flex;
+      align-items: center;
+      padding: 0 14px;
+      color: rgba(148, 163, 184, 0.76);
+    }
+
+    .fake-input.select::after {
+      content: "";
+      margin-left: auto;
+      width: 8px;
+      height: 8px;
+      border-right: 1.5px solid rgba(203, 213, 225, 0.6);
+      border-bottom: 1.5px solid rgba(203, 213, 225, 0.6);
+      transform: rotate(45deg) translateY(-3px);
+    }
+
+    .field-full {
+      grid-column: span 2;
+    }
+
+    .check-row {
+      margin-top: 2px;
+      display: flex;
+      align-items: center;
+      gap: 9px;
+      color: rgba(226, 232, 240, 0.72);
+      font-weight: 700;
+    }
+
+    .box-check {
+      width: 18px;
+      height: 18px;
+      border-radius: 4px;
+      border: 1px solid rgba(148, 163, 184, 0.42);
+      background: rgba(2, 6, 23, 0.18);
+    }
+
+    .form-actions {
+      margin-top: 38px;
+      padding-top: 22px;
+      border-top: 1px solid var(--line);
+      display: flex;
+      justify-content: flex-end;
+      gap: 12px;
+    }
+
+    .btn {
+      height: 40px;
+      border-radius: 8px;
+      padding: 0 16px;
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      color: var(--text-2);
+      background: rgba(15, 23, 42, 0.5);
+      border: 1px solid rgba(148, 163, 184, 0.16);
+      font-weight: 800;
+    }
+
+    .btn.primary {
+      color: #fff;
+      background: linear-gradient(135deg, #4f8df7, #6f8cff);
+      border-color: transparent;
+      box-shadow: 0 14px 30px rgba(79, 141, 247, 0.22);
+    }
+
+    .health-drawer {
+      min-width: 0;
+      border-left: 1px solid var(--line);
+      background: rgba(13, 19, 36, 0.98);
+      box-shadow: var(--shadow);
+      overflow: hidden;
+      display: flex;
+      flex-direction: column;
+      transition: width 0.18s ease, opacity 0.18s ease;
+    }
+
+    body.drawer-closed .health-drawer {
+      width: 0;
+      opacity: 0;
+      border-left: 0;
+      pointer-events: none;
+    }
+
+    .drawer-head {
+      padding: 18px 18px 14px;
+      border-bottom: 1px solid var(--line);
+      display: flex;
+      align-items: flex-start;
+      justify-content: space-between;
+      gap: 12px;
+    }
+
+    .drawer-title h2 {
+      margin: 0;
+      font-size: 18px;
+      line-height: 1.2;
+    }
+
+    .drawer-title p {
+      margin: 6px 0 0;
+      color: var(--text-3);
+      font-size: 12px;
+      line-height: 1.5;
+    }
+
+    .close-drawer {
+      width: 30px;
+      height: 30px;
+      border-radius: 8px;
+      background: rgba(148, 163, 184, 0.08);
+      color: rgba(226, 232, 240, 0.7);
+      font-size: 18px;
+    }
+
+    .drawer-tabs {
+      display: grid;
+      grid-template-columns: repeat(4, 1fr);
+      padding: 8px;
+      gap: 4px;
+      border-bottom: 1px solid var(--line);
+    }
+
+    .drawer-tab {
+      height: 32px;
+      border-radius: 7px;
+      background: transparent;
+      color: var(--text-3);
+      font-size: 12px;
+      font-weight: 800;
+    }
+
+    .drawer-tab.active {
+      color: #dbeafe;
+      background: rgba(109, 141, 255, 0.14);
+    }
+
+    .drawer-body {
+      min-height: 0;
+      overflow: auto;
+      padding: 14px;
+      display: grid;
+      gap: 12px;
+    }
+
+    .panel {
+      border: 1px solid var(--line);
+      border-radius: var(--radius);
+      background: rgba(21, 29, 56, 0.72);
+      overflow: hidden;
+    }
+
+    .panel-pad {
+      padding: 14px;
+    }
+
+    .score-row {
+      display: grid;
+      grid-template-columns: 112px minmax(0, 1fr);
+      gap: 14px;
+      align-items: center;
+    }
+
+    .score-ring {
+      width: 104px;
+      height: 104px;
+      border-radius: 50%;
+      background: conic-gradient(var(--warn) 0 230deg, rgba(148, 163, 184, 0.14) 230deg 360deg);
+      display: grid;
+      place-items: center;
+      position: relative;
+    }
+
+    .score-ring::after {
+      content: "";
+      position: absolute;
+      inset: 10px;
+      border-radius: 50%;
+      background: #10172d;
+      border: 1px solid rgba(148, 163, 184, 0.12);
+    }
+
+    .score-ring span {
+      position: relative;
+      z-index: 1;
+      display: grid;
+      text-align: center;
+      color: var(--text-2);
+      font-size: 11px;
+    }
+
+    .score-ring strong {
+      color: #fff;
+      font-size: 28px;
+      line-height: 1;
+    }
+
+    .score-summary {
+      display: grid;
+      gap: 9px;
+    }
+
+    .summary-line {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      color: var(--text-2);
+      font-size: 12px;
+    }
+
+    .summary-line strong {
+      color: var(--text);
+      font-size: 13px;
+    }
+
+    .mini-bars {
+      display: grid;
+      gap: 8px;
+    }
+
+    .bar-row {
+      display: grid;
+      grid-template-columns: 58px minmax(0, 1fr) 32px;
+      align-items: center;
+      gap: 8px;
+      color: var(--text-3);
+      font-size: 12px;
+    }
+
+    .bar {
+      height: 5px;
+      border-radius: 999px;
+      background: rgba(148, 163, 184, 0.13);
+      overflow: hidden;
+    }
+
+    .bar i {
+      display: block;
+      height: 100%;
+      width: var(--w);
+      background: var(--brand-2);
+      border-radius: inherit;
+    }
+
+    .bar.warn i { background: var(--warn); }
+    .bar.err i { background: var(--err); }
+    .bar.ok i { background: var(--ok); }
+
+    .panel-head {
+      height: 42px;
+      padding: 0 13px;
+      border-bottom: 1px solid var(--line);
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 10px;
+    }
+
+    .panel-head h3 {
+      margin: 0;
+      font-size: 13px;
+    }
+
+    .panel-head span {
+      color: var(--text-3);
+      font-size: 12px;
+    }
+
+    .issue-list {
+      display: grid;
+      gap: 8px;
+      padding: 10px;
+    }
+
+    .issue {
+      border-radius: 8px;
+      padding: 10px;
+      background: rgba(2, 6, 23, 0.24);
+      border: 1px solid rgba(148, 163, 184, 0.1);
+    }
+
+    .issue-top {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 10px;
+      margin-bottom: 6px;
+    }
+
+    .issue strong {
+      font-size: 13px;
+    }
+
+    .issue p {
+      margin: 0;
+      color: var(--text-3);
+      line-height: 1.5;
+      font-size: 12px;
+    }
+
+    .badge {
+      height: 22px;
+      padding: 0 7px;
+      border-radius: 999px;
+      display: inline-flex;
+      align-items: center;
+      font-size: 11px;
+      font-weight: 850;
+      white-space: nowrap;
+      color: var(--text-3);
+      background: rgba(148, 163, 184, 0.1);
+      border: 1px solid rgba(148, 163, 184, 0.12);
+    }
+
+    .badge.err { color: var(--err); background: var(--err-soft); border-color: rgba(251, 113, 133, 0.2); }
+    .badge.warn { color: var(--warn); background: var(--warn-soft); border-color: rgba(251, 191, 36, 0.2); }
+    .badge.ok { color: var(--ok); background: var(--ok-soft); border-color: rgba(52, 211, 153, 0.2); }
+    .badge.brand { color: #b9c5ff; background: var(--brand-soft); border-color: rgba(109, 141, 255, 0.2); }
+    .badge.cyan { color: var(--cyan); background: var(--cyan-soft); border-color: rgba(56, 189, 248, 0.2); }
+
+    .relation {
+      padding: 12px;
+      display: grid;
+      gap: 8px;
+    }
+
+    .relation-step {
+      display: flex;
+      align-items: center;
+      gap: 9px;
+      color: var(--text-2);
+      font-size: 12px;
+    }
+
+    .relation-step i {
+      width: 7px;
+      height: 7px;
+      border-radius: 999px;
+      background: var(--brand-2);
+      box-shadow: 0 0 0 4px rgba(85, 166, 255, 0.12);
+      flex: 0 0 auto;
+    }
+
+    .relation-step span {
+      color: var(--text-3);
+    }
+
+    .actions {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 8px;
+      padding: 12px;
+    }
+
+    .action-btn {
+      min-height: 36px;
+      border-radius: 8px;
+      padding: 8px 10px;
+      color: var(--text-2);
+      background: rgba(2, 6, 23, 0.24);
+      border: 1px solid rgba(148, 163, 184, 0.12);
+      font-weight: 800;
+      text-align: left;
+    }
+
+    .action-btn.primary {
+      color: #fff;
+      background: rgba(85, 166, 255, 0.18);
+      border-color: rgba(85, 166, 255, 0.3);
+    }
+
+    .evidence-list {
+      padding: 12px;
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+    }
+
+    .assistant-fab {
+      position: fixed;
+      right: 28px;
+      bottom: 28px;
+      height: 58px;
+      padding: 0 22px;
+      border-radius: 999px;
+      color: #fff;
+      background: linear-gradient(135deg, #6478ff, #7ca7ff);
+      box-shadow: 0 18px 38px rgba(100, 120, 255, 0.32);
+      display: inline-flex;
+      align-items: center;
+      gap: 10px;
+      font-size: 16px;
+      font-weight: 800;
+    }
+
+    body.drawer-open .assistant-fab {
+      right: 468px;
+    }
+
+    .mobile-health-summary {
+      display: none;
+    }
+
+    @media (max-width: 1280px) {
+      .app-shell {
+        grid-template-columns: 72px minmax(0, 1fr);
+      }
+
+      .tenant-rail {
+        width: 72px;
+      }
+
+      .brand {
+        justify-content: center;
+        padding: 0;
+      }
+
+      .brand div:not(.brand-mark),
+      .rail-item span,
+      .tenant-footer {
+        display: none;
+      }
+
+      .rail-nav {
+        padding: 12px;
+      }
+
+      .rail-item {
+        justify-content: center;
+        padding: 0;
+      }
+
+      .workspace {
+        grid-template-columns: 286px minmax(0, 1fr);
+      }
+
+      .design-body {
+        grid-template-columns: minmax(0, 1fr);
+      }
+
+      .health-drawer {
+        position: absolute;
+        top: 184px;
+        right: 0;
+        bottom: 0;
+        width: min(440px, calc(100vw - 72px));
+        z-index: 20;
+      }
+
+      body.drawer-closed .health-drawer {
+        width: 0;
+      }
+    }
+
+    @media (max-width: 820px) {
+      body {
+        overflow: auto;
+      }
+
+      .browser-bar {
+        display: none;
+      }
+
+      .app-shell {
+        height: auto;
+        min-height: 100vh;
+        display: block;
+      }
+
+      .tenant-rail {
+        width: 100%;
+        min-height: auto;
+        display: block;
+      }
+
+      .brand {
+        height: 60px;
+        justify-content: flex-start;
+        padding: 0 14px;
+      }
+
+      .brand div:not(.brand-mark) {
+        display: block;
+      }
+
+      .rail-nav {
+        display: flex;
+        overflow-x: auto;
+        padding: 8px 12px 12px;
+      }
+
+      .rail-item {
+        min-width: max-content;
+        padding: 0 12px;
+      }
+
+      .rail-item span {
+        display: inline;
+      }
+
+      .main-shell {
+        display: block;
+      }
+
+      .app-topbar {
+        height: auto;
+        min-height: 60px;
+        padding: 12px;
+        flex-wrap: wrap;
+      }
+
+      .workspace {
+        display: block;
+        overflow: visible;
+      }
+
+      .menu-panel {
+        max-height: 320px;
+      }
+
+      .design-area {
+        display: block;
+      }
+
+      .design-head {
+        height: auto;
+        min-height: 58px;
+        padding: 10px 12px;
+        flex-wrap: wrap;
+      }
+
+      .health-entry {
+        order: 2;
+      }
+
+      .design-tabs {
+        order: 4;
+        width: 100%;
+        margin-left: 0;
+      }
+
+      .backend-btn {
+        margin-left: auto;
+      }
+
+      .design-body {
+        display: block;
+      }
+
+      .form-canvas {
+        overflow: visible;
+        padding: 18px 14px 36px;
+      }
+
+      .form-grid {
+        grid-template-columns: 1fr;
+      }
+
+      .field-full {
+        grid-column: span 1;
+      }
+
+      .health-drawer {
+        position: static;
+        width: auto;
+        min-height: auto;
+        border-left: 0;
+        border-top: 1px solid var(--line);
+      }
+
+      body.drawer-closed .health-drawer {
+        display: none;
+      }
+
+      .score-row {
+        grid-template-columns: 1fr;
+      }
+
+      .actions {
+        grid-template-columns: 1fr;
+      }
+
+      .assistant-fab {
+        display: none;
+      }
+    }
+  </style>
+</head>
+<body class="drawer-open">
+  <div class="browser-bar" aria-hidden="true">
+    <span class="browser-dot"></span>
+    <span>‹</span>
+    <span>›</span>
+    <span>↻</span>
+    <div class="browser-url">http://localhost / aPaaS Builder AI</div>
+    <button class="browser-chat" type="button">Chat</button>
+  </div>
+
+  <div class="app-shell">
+    <aside class="tenant-rail">
+      <div class="brand">
+        <div class="brand-mark">AI</div>
+        <div>
+          <strong>睿鲸AI</strong>
+          <span>AI · 低代码</span>
+        </div>
+      </div>
+      <nav class="rail-nav" aria-label="主导航">
+        <button class="rail-item active" type="button"><i class="rail-icon"></i><span>AI Builder</span></button>
+        <button class="rail-item" type="button"><i class="rail-icon"></i><span>应用资产库</span><b class="rail-badge">8</b></button>
+        <button class="rail-item" type="button"><i class="rail-icon"></i><span>自开发资产库</span></button>
+        <button class="rail-item" type="button"><i class="rail-icon"></i><span>租户日志分析</span></button>
+      </nav>
+      <div class="tenant-footer">
+        <span>当前租户</span>
+        <div class="tenant-select">mars <span>⌄</span></div>
+      </div>
+    </aside>
+
+    <main class="main-shell">
+      <header class="app-topbar">
+        <button class="back" type="button">‹</button>
+        <div class="crumbs">
+          <span>应用</span><span>/</span><strong>智能体WMS系统</strong><span>/</span><strong>AI-Builder</strong>
+        </div>
+        <span class="version-pill">已发布 v11</span>
+      </header>
+
+      <section class="workspace">
+        <aside class="menu-panel">
+          <div class="menu-head">
+            <span>应用菜单</span>
+            <span class="menu-count">23</span>
+          </div>
+          <div class="menu-search">
+            <input type="search" placeholder="搜索菜单" />
+          </div>
+          <div class="tree">
+            <div class="tree-group">
+              <div class="tree-title">基础资料</div>
+              <div class="tree-item active">仓库区域</div>
+              <div class="tree-item">仓库库位</div>
+              <div class="tree-item">物料主数据</div>
+            </div>
+            <div class="tree-group">
+              <div class="tree-title">库存业务</div>
+              <div class="tree-item">库存台账</div>
+              <div class="tree-item">库存流水</div>
+              <div class="tree-item">入库单</div>
+              <div class="tree-item">出库单</div>
+              <div class="tree-item">移库单</div>
+              <div class="tree-item">盘点单</div>
+              <div class="tree-item">库存调整单</div>
+            </div>
+            <div class="tree-group">
+              <div class="tree-title">智能调度</div>
+              <div class="tree-item">AGV车辆</div>
+              <div class="tree-item">AGV调度任务</div>
+            </div>
+            <div class="tree-group">
+              <div class="tree-title">设备与告警</div>
+              <div class="tree-item">工厂设备</div>
+              <div class="tree-item">工厂告警</div>
+            </div>
+          </div>
+        </aside>
+
+        <section class="design-area">
+          <header class="design-head">
+            <div class="resource-title">仓库区域</div>
+            <button id="healthEntry" class="health-entry active" type="button" aria-expanded="true">
+              <i class="health-dot"></i>
+              <span id="healthLabel">表单健康</span>
+              <strong id="healthScore">64</strong>
+              <span class="risk-chip" id="healthRisk">中风险</span>
+              <span id="healthCount">建议 3</span>
+            </button>
+            <nav class="design-tabs" aria-label="设计器标签">
+              <button class="design-tab active" data-module="form" type="button">表单设计</button>
+              <button class="design-tab" data-module="list" type="button">列表设计</button>
+              <button class="design-tab" data-module="process" type="button">流程设计</button>
+              <button class="design-tab" data-module="model" type="button">数据模型</button>
+              <button class="design-tab" data-module="perm" type="button">权限</button>
+              <button class="design-tab" data-module="dev" type="button">自开发</button>
+            </nav>
+            <button class="backend-btn" type="button">低代码后台</button>
+          </header>
+
+          <div class="design-body">
+            <section class="form-canvas">
+              <div class="form-card">
+                <form class="form-grid">
+                  <div class="field">
+                    <label>区域编码 <span>*</span></label>
+                    <div class="fake-input">请输入区域编码</div>
+                  </div>
+                  <div class="field">
+                    <label>区域名称 <span>*</span></label>
+                    <div class="fake-input">请输入区域名称</div>
+                  </div>
+                  <div class="field">
+                    <label>区域类型 <span>*</span></label>
+                    <div class="fake-input select">请输入区域类型</div>
+                  </div>
+                  <div class="field">
+                    <label>区域容量</label>
+                    <div class="fake-input">请输入区域容量</div>
+                  </div>
+                  <div class="field">
+                    <label>平面X坐标</label>
+                    <div class="fake-input">请输入平面X坐标</div>
+                  </div>
+                  <div class="field">
+                    <label>平面Y坐标</label>
+                    <div class="fake-input">请输入平面Y坐标</div>
+                  </div>
+                  <div class="field field-full">
+                    <label>是否启用</label>
+                    <div class="check-row"><span class="box-check"></span>启用当前仓库区域</div>
+                  </div>
+                  <div class="field">
+                    <label>排序号</label>
+                    <div class="fake-input">请输入排序号</div>
+                  </div>
+                  <div class="form-actions field-full">
+                    <button class="btn" type="button">取消</button>
+                    <button class="btn primary" type="button">提交申请</button>
+                  </div>
+                </form>
+              </div>
+            </section>
+
+            <aside class="health-drawer" aria-label="应用健康度分析">
+              <div class="drawer-head">
+                <div class="drawer-title">
+                  <h2>应用健康体检</h2>
+                  <p id="drawerScope">智能体 WMS 系统 · 仓库区域 · 表单设计</p>
+                </div>
+                <button id="closeDrawer" class="close-drawer" type="button" aria-label="关闭">×</button>
+              </div>
+
+              <div class="drawer-tabs">
+                <button class="drawer-tab active" type="button" data-drawer-tab="resource">当前资源</button>
+                <button class="drawer-tab" type="button" data-drawer-tab="app">应用全局</button>
+                <button class="drawer-tab" type="button" data-drawer-tab="evidence">证据</button>
+                <button class="drawer-tab" type="button" data-drawer-tab="actions">行动</button>
+              </div>
+
+              <div class="drawer-body">
+                <section class="panel panel-pad">
+                  <div class="score-row">
+                    <div class="score-ring" id="scoreRing"><span><strong id="scoreValue">64</strong>/100</span></div>
+                    <div class="score-summary">
+                      <div class="summary-line"><span>当前结论</span><strong id="scoreConclusion">中风险，可先修复</strong></div>
+                      <div class="summary-line"><span>最近扫描</span><strong>20:36</strong></div>
+                      <div class="summary-line"><span>工具范围</span><strong>API 只读 + MCP 确认写入</strong></div>
+                      <div class="mini-bars">
+                        <div class="bar-row"><span>配置</span><b class="bar warn"><i style="--w:72%"></i></b><strong>72</strong></div>
+                        <div class="bar-row"><span>二开</span><b class="bar err"><i style="--w:58%"></i></b><strong>58</strong></div>
+                        <div class="bar-row"><span>运维</span><b class="bar err"><i style="--w:45%"></i></b><strong>45</strong></div>
+                        <div class="bar-row"><span>运营</span><b class="bar ok"><i style="--w:69%"></i></b><strong>69</strong></div>
+                      </div>
+                    </div>
+                  </div>
+                </section>
+
+                <section class="panel">
+                  <div class="panel-head">
+                    <h3>当前资源问题</h3>
+                    <span id="issueCount">3 条</span>
+                  </div>
+                  <div class="issue-list" id="issueList"></div>
+                </section>
+
+                <section class="panel">
+                  <div class="panel-head">
+                    <h3>影响关系</h3>
+                    <span>来源可追溯</span>
+                  </div>
+                  <div class="relation">
+                    <div class="relation-step"><i></i><strong>模型</strong><span>wms_warehouse_area</span></div>
+                    <div class="relation-step"><i></i><strong>表单</strong><span>仓库区域</span></div>
+                    <div class="relation-step"><i></i><strong>列表</strong><span>仓库区域列表 · 查询条件缺失</span></div>
+                    <div class="relation-step"><i></i><strong>流程</strong><span>库存调整审批 · 异常实例 1</span></div>
+                    <div class="relation-step"><i></i><strong>权限</strong><span>仓库主管 / 库管员 / 运营管理员</span></div>
+                  </div>
+                </section>
+
+                <section class="panel">
+                  <div class="panel-head">
+                    <h3>AI 建议动作</h3>
+                    <span>写入前确认</span>
+                  </div>
+                  <div class="actions">
+                    <button class="action-btn primary" type="button">生成配置 diff</button>
+                    <button class="action-btn" type="button">查看异常实例</button>
+                    <button class="action-btn" type="button">打开二开工作区</button>
+                    <button class="action-btn" type="button">导出体检报告</button>
+                  </div>
+                </section>
+
+                <section class="panel">
+                  <div class="panel-head">
+                    <h3>证据来源</h3>
+                    <span>只读快照</span>
+                  </div>
+                  <div class="evidence-list">
+                    <span class="badge brand">form/detail</span>
+                    <span class="badge brand">data-model</span>
+                    <span class="badge brand">menu-tree</span>
+                    <span class="badge brand">permission</span>
+                    <span class="badge cyan">tenant-log</span>
+                    <span class="badge cyan">process-instance</span>
+                  </div>
+                </section>
+              </div>
+            </aside>
+          </div>
+        </section>
+      </section>
+    </main>
+  </div>
+
+  <button class="assistant-fab" type="button">AI 助手</button>
+
+  <script>
+    const moduleData = {
+      form: {
+        label: "表单健康",
+        score: 64,
+        risk: "中风险",
+        count: "建议 3",
+        conclusion: "中风险，可先修复",
+        scope: "智能体 WMS 系统 · 仓库区域 · 表单设计",
+        issues: [
+          ["warn", "字段与模型存在 2 处未对齐", "区域类型、区域容量在模型层缺少一致的校验规则，建议先生成配置 diff。"],
+          ["warn", "列表页查询条件缺失", "当前表单对应列表缺少区域类型、启用状态两个高频筛选项。"],
+          ["err", "权限覆盖不完整", "库管员角色可访问菜单，但缺少仓库区域表单的编辑授权证据。"]
+        ]
+      },
+      list: {
+        label: "列表健康",
+        score: 71,
+        risk: "中风险",
+        count: "建议 2",
+        conclusion: "查询体验需补齐",
+        scope: "智能体 WMS 系统 · 仓库区域 · 列表设计",
+        issues: [
+          ["warn", "高频查询条件不足", "缺少区域类型、启用状态、区域编码模糊查询，影响运营人员快速定位。"],
+          ["ok", "核心显示列完整", "区域编码、区域名称、容量、状态字段已可支撑基础列表视图。"]
+        ]
+      },
+      process: {
+        label: "流程健康",
+        score: 52,
+        risk: "高风险",
+        count: "建议 4",
+        conclusion: "优先处理异常流程",
+        scope: "智能体 WMS 系统 · 仓库区域 · 流程设计",
+        issues: [
+          ["err", "库存调整审批存在失败实例", "最近 24 小时出现 1 个审批节点重试失败，建议接入流程实例诊断。"],
+          ["warn", "异常通知未覆盖运营管理员", "流程失败后只有仓库主管收到提醒，运营管理员不在通知范围。"],
+          ["warn", "审批条件表达式需复核", "容量变更超过阈值的分支条件缺少测试证据。"],
+          ["ok", "主流程节点完整", "提交、主管审批、库存更新、通知节点均存在。"]
+        ]
+      },
+      model: {
+        label: "模型健康",
+        score: 78,
+        risk: "低风险",
+        count: "建议 1",
+        conclusion: "模型基础较完整",
+        scope: "智能体 WMS 系统 · 仓库区域 · 数据模型",
+        issues: [
+          ["ok", "字段结构完整", "区域编码、名称、类型、容量、坐标和状态字段均已存在。"],
+          ["warn", "字典约束可补强", "区域类型字段建议绑定统一字典，避免表单侧自由输入。"]
+        ]
+      },
+      perm: {
+        label: "权限健康",
+        score: 60,
+        risk: "中风险",
+        count: "建议 3",
+        conclusion: "角色授权需复核",
+        scope: "智能体 WMS 系统 · 仓库区域 · 权限",
+        issues: [
+          ["warn", "库管员编辑权限不明确", "菜单可见与表单编辑权限没有形成完整证据链。"],
+          ["warn", "运营管理员缺少流程异常处理权", "异常流程建议增加运营管理员处理或转派权限。"],
+          ["ok", "仓库主管权限覆盖核心操作", "仓库主管具备查看、编辑、审批相关权限。"]
+        ]
+      },
+      dev: {
+        label: "二开健康",
+        score: 58,
+        risk: "中风险",
+        count: "建议 3",
+        conclusion: "二开资产需绑定源码",
+        scope: "智能体 WMS 系统 · 自开发资产",
+        issues: [
+          ["warn", "数字孪生看板缺少源码工作区证据", "factory-twin-dashboard.zip 已绑定菜单，但未追溯到 workspace。"],
+          ["warn", "自开发权限对象未完整覆盖", "yard-ops-dashboard.zip 可访问角色与低代码菜单权限存在差异。"],
+          ["ok", "发布包可识别", "当前应用下识别到 2 个自开发包。"]
+        ]
+      }
+    };
+
+    const body = document.body;
+    const healthEntry = document.getElementById("healthEntry");
+    const closeDrawer = document.getElementById("closeDrawer");
+    const issueList = document.getElementById("issueList");
+    const scoreValue = document.getElementById("scoreValue");
+    const scoreRing = document.getElementById("scoreRing");
+    const healthLabel = document.getElementById("healthLabel");
+    const healthScore = document.getElementById("healthScore");
+    const healthRisk = document.getElementById("healthRisk");
+    const healthCount = document.getElementById("healthCount");
+    const scoreConclusion = document.getElementById("scoreConclusion");
+    const drawerScope = document.getElementById("drawerScope");
+    const issueCount = document.getElementById("issueCount");
+
+    function riskClass(tone) {
+      if (tone === "err") return "高";
+      if (tone === "warn") return "中";
+      return "低";
+    }
+
+    function renderModule(name) {
+      const data = moduleData[name] || moduleData.form;
+      const deg = Math.round(data.score / 100 * 360);
+      healthLabel.textContent = data.label;
+      healthScore.textContent = data.score;
+      healthRisk.textContent = data.risk;
+      healthCount.textContent = data.count;
+      scoreValue.textContent = data.score;
+      scoreConclusion.textContent = data.conclusion;
+      drawerScope.textContent = data.scope;
+      issueCount.textContent = `${data.issues.length} 条`;
+      scoreRing.style.background = `conic-gradient(${data.score < 60 ? "var(--err)" : data.score < 75 ? "var(--warn)" : "var(--ok)"} 0 ${deg}deg, rgba(148, 163, 184, 0.14) ${deg}deg 360deg)`;
+
+      issueList.innerHTML = "";
+      data.issues.forEach(([tone, title, desc]) => {
+        const article = document.createElement("article");
+        article.className = "issue";
+        article.innerHTML = `
+          <div class="issue-top">
+            <strong>${title}</strong>
+            <span class="badge ${tone}">${riskClass(tone)}</span>
+          </div>
+          <p>${desc}</p>
+        `;
+        issueList.appendChild(article);
+      });
+    }
+
+    function openDrawer() {
+      body.classList.remove("drawer-closed");
+      body.classList.add("drawer-open");
+      healthEntry.classList.add("active");
+      healthEntry.setAttribute("aria-expanded", "true");
+    }
+
+    function closeHealthDrawer() {
+      body.classList.add("drawer-closed");
+      body.classList.remove("drawer-open");
+      healthEntry.classList.remove("active");
+      healthEntry.setAttribute("aria-expanded", "false");
+    }
+
+    healthEntry.addEventListener("click", () => {
+      if (body.classList.contains("drawer-closed")) openDrawer();
+      else closeHealthDrawer();
+    });
+
+    closeDrawer.addEventListener("click", closeHealthDrawer);
+
+    document.querySelectorAll(".design-tab").forEach(tab => {
+      tab.addEventListener("click", () => {
+        document.querySelectorAll(".design-tab").forEach(t => t.classList.toggle("active", t === tab));
+        renderModule(tab.dataset.module);
+        openDrawer();
+      });
+    });
+
+    document.querySelectorAll(".drawer-tab").forEach(tab => {
+      tab.addEventListener("click", () => {
+        document.querySelectorAll(".drawer-tab").forEach(t => t.classList.toggle("active", t === tab));
+      });
+    });
+
+    renderModule("form");
+  </script>
+</body>
+</html>

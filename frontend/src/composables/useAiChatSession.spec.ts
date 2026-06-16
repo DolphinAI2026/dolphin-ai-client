@@ -1,7 +1,29 @@
 import { describe, expect, it, vi } from 'vitest'
 import { ref } from 'vue'
-import { createAiChatSseReducer } from './useAiChatSession'
+import { createAiChatSseReducer, useAiChatSession } from './useAiChatSession'
 import type { AIChatArtifact, AIChatMessage, AIChatSession, AIChatToolCall } from '@/api/aiChat'
+
+vi.mock('@/api/aiChat', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('@/api/aiChat')>()
+  return {
+    ...actual,
+    aiChatApi: {
+      getSession: vi.fn(),
+      listSessions: vi.fn(),
+      createSession: vi.fn(),
+      updateSession: vi.fn(),
+      deleteSession: vi.fn(),
+      uploadAttachments: vi.fn(),
+      abort: vi.fn(),
+      listArtifacts: vi.fn(),
+      getArtifact: vi.fn(),
+      listArtifactVersions: vi.fn(),
+      sendMessage: vi.fn(),
+    },
+  }
+})
+
+const { aiChatApi } = await import('@/api/aiChat')
 
 function makeSession(): AIChatSession {
   return {
@@ -76,5 +98,51 @@ describe('createAiChatSseReducer', () => {
     expect(state.currentTurnFallbackErrorShown.value).toBe(true)
     expect(state.transientItems.value).toHaveLength(2)
     expect(errors).toEqual(['模型调用失败', '模型调用失败'])
+  })
+})
+
+describe('useAiChatSession', () => {
+  it('renders persisted compacted tool arguments without throwing', async () => {
+    vi.mocked(aiChatApi.getSession).mockResolvedValueOnce({
+      session: makeSession(),
+      messages: [],
+      attachments: [],
+      artifacts: [],
+      tool_calls: [
+        {
+          id: 783,
+          session_id: 42,
+          message_id: null,
+          tool_name: 'run_python',
+          args_json: {
+            code: {
+              _omitted_large_text: true,
+              chars: 132,
+              preview: "import os\nprint('ok')",
+            },
+          },
+          result_text: '[stdout]\nok',
+          status: 'success',
+          error_message: null,
+          duration_ms: 12,
+          started_at: '2026-06-14 09:58:46',
+          ended_at: '2026-06-14 09:58:47',
+        },
+      ],
+    })
+
+    const session = useAiChatSession()
+    await session.loadSession(42)
+
+    expect(() => session.agentMessages.value).not.toThrow()
+    expect(session.agentMessages.value).toMatchObject([
+      {
+        kind: 'tool',
+        tool: {
+          name: 'run_python',
+          argsBrief: "import os print('ok')…",
+        },
+      },
+    ])
   })
 })

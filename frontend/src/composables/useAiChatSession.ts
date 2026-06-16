@@ -289,10 +289,17 @@ export function useAiChatSession(opts?: UseAiChatSessionOptions): UseAiChatSessi
   // ─────────────────────────────────────────────────────────────────────
   function toolArgsBrief(tc: AIChatToolCall): string {
     const a = tc.args_json || {}
-    if (tc.tool_name === 'read_attachment') return a.filename || ''
-    if (tc.tool_name === 'write_artifact') return `${a.filename} (${a.format || 'md'})`
-    if (tc.tool_name === 'run_python') return (a.code || '').slice(0, 60).replace(/\n/g, ' ') + '…'
-    if (tc.tool_name === 'ask_clarifying_question') return a.question?.slice(0, 80) || ''
+    const textOf = (value: any): string => {
+      if (value == null) return ''
+      if (typeof value === 'string') return value
+      if (typeof value === 'number' || typeof value === 'boolean') return String(value)
+      if (typeof value === 'object' && typeof value.preview === 'string') return value.preview
+      try { return JSON.stringify(value) } catch { return String(value) }
+    }
+    if (tc.tool_name === 'read_attachment') return textOf(a.filename)
+    if (tc.tool_name === 'write_artifact') return `${textOf(a.filename)} (${textOf(a.format) || 'md'})`
+    if (tc.tool_name === 'run_python') return textOf(a.code).slice(0, 60).replace(/\n/g, ' ') + '…'
+    if (tc.tool_name === 'ask_clarifying_question') return textOf(a.question).slice(0, 80)
     return ''
   }
 

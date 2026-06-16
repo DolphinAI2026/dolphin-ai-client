@@ -28,7 +28,7 @@
       </div>
     </el-dialog>
 
-    <div class="coding-body" :class="{ 'code-first': codeFirst }">
+    <div class="coding-body" :class="{ 'code-first': codeFirst, 'chat-expanded': chatExpanded }">
       <SessionSidebar
         v-if="!embedMode && !embeddedAppId && !codeFirst"
         module-name="代码工作区"
@@ -46,9 +46,9 @@
       <!-- 代码为主布局下,main-content 收成右侧聊天列(宽度可拖拽);否则维持原全宽 -->
       <div
         class="main-content"
-        :style="codeFirst ? { flex: `0 0 ${chatPaneWidth}px`, width: `${chatPaneWidth}px` } : null"
+        :style="mainPaneStyle"
       >
-        <div v-if="codeFirst" class="chat-resizer" @pointerdown="onChatResizeStart" title="拖拽调整聊天宽度" />
+        <div v-if="codeFirst && !chatExpanded" class="chat-resizer" @pointerdown="onChatResizeStart" title="拖拽调整聊天宽度" />
         <!-- 顶右工具抽屉按钮 (替代 view-toggle-bar): 文件 / 设置 / 产物 -->
         <div
           v-if="!embeddedAppId && !codeFirst && streamMessages.length > 0"
@@ -142,7 +142,7 @@
               >
                 <AppIcon :name="syncingToRepo ? 'refresh' : 'link'" :size="14" />
               </button>
-              <button class="cca-btn" :title="chatExpanded ? '还原对话宽度' : '放大对话'" @click="toggleChatExpand">
+              <button class="cca-btn" :class="{ active: chatExpanded }" :title="chatExpanded ? '还原对话宽度' : '放大对话'" @click="toggleChatExpand">
                 <AppIcon :name="chatExpanded ? 'shrink' : 'expand'" :size="14" />
               </button>
             </div>
@@ -260,22 +260,47 @@
               @remove-attachment="removeAttachment"
             >
               <template #footer-left>
-                <!-- 紧凑原生模型选择(对齐 AI Chat 的 model-select-inline,克制不抢眼) -->
-                <select
-                  class="coding-model-select"
-                  :value="selectedCodingModelValue ?? ''"
-                  :disabled="codingModelLoading || updatingCodingModel || codingModelOptions.length === 0"
-                  :title="codingModelHint"
-                  aria-label="选择模型"
-                  @change="handleCodingModelChange((($event.target as HTMLSelectElement).value) || null)"
+                <div
+                  ref="codingModelPickerRef"
+                  class="coding-model-picker"
+                  :class="{ 'is-disabled': codingModelPickerDisabled }"
                 >
-                  <option v-if="codingModelOptions.length === 0" value="">默认模型</option>
-                  <option
-                    v-for="option in codingModelOptions"
-                    :key="option.id"
-                    :value="toCodingModelValue(option.id) ?? ''"
-                  >{{ option.config_name }}</option>
-                </select>
+                  <button
+                    type="button"
+                    class="coding-model-trigger"
+                    :class="{ 'is-open': codingModelMenuOpen }"
+                    :disabled="codingModelPickerDisabled"
+                    :title="codingModelHint"
+                    aria-haspopup="listbox"
+                    :aria-expanded="codingModelMenuOpen"
+                    aria-label="选择模型"
+                    @click.stop="toggleCodingModelMenu"
+                    @keydown.esc.stop="codingModelMenuOpen = false"
+                  >
+                    <span class="coding-model-trigger-text">{{ selectedCodingModelLabel }}</span>
+                    <el-icon :size="13"><ArrowDown /></el-icon>
+                  </button>
+                  <div
+                    v-if="codingModelMenuOpen"
+                    class="coding-model-menu"
+                    role="listbox"
+                    aria-label="选择模型"
+                  >
+                    <button
+                      v-for="option in codingModelOptions"
+                      :key="option.id"
+                      type="button"
+                      class="coding-model-option"
+                      :class="{ 'is-selected': selectedCodingModelValue === toCodingModelValue(option.id) }"
+                      role="option"
+                      :aria-selected="selectedCodingModelValue === toCodingModelValue(option.id)"
+                      @click.stop="chooseCodingModel(toCodingModelValue(option.id))"
+                    >
+                      <span class="coding-model-option-name">{{ option.config_name }}</span>
+                      <span class="coding-model-option-meta">{{ option.provider }} / {{ option.model }}</span>
+                    </button>
+                  </div>
+                </div>
               </template>
             </UnifiedChatComposer>
           </div>
@@ -285,7 +310,7 @@
 
       <!-- Task 7: 原生文件树 + 代码查看器（常驻右栏，替换 IDE 抽屉视图） -->
       <div
-        v-if="codingStore.workspace?.id && !embeddedAppId"
+        v-if="showWorkspacePane"
         class="ws-pane"
       >
         <FileTree
@@ -574,6 +599,7 @@ import type { UnifiedChatAttachment } from '@/components/common/chatComposer'
 import FileTree from './coding/FileTree.vue'
 import CodeViewer from './coding/CodeViewer.vue'
 import { buildFileTree, type TreeNode } from './coding/fileTree'
+import { getCodingMainPaneStyle, shouldShowWorkspacePane } from './coding/codingLayout'
 import { collectChangedFiles, normalizeWorkspacePathLabel, type FileChangeMsg } from './coding/workspaceChanges'
 import { usePanelResize } from '@/components/v2/config-assistant/composables/usePanelResize'
 import { listWorkspaceFiles, getWorkspaceChanges, acceptWorkspaceChanges, type WorkspaceChanges } from '@/api/coding'
@@ -611,6 +637,34 @@ const {
   loadCodingModelOptions,
   handleCodingModelChange,
 } = useCodingModel()
+const codingModelMenuOpen = ref(false)
+const codingModelPickerRef = ref<HTMLElement | null>(null)
+const codingModelPickerDisabled = computed(() =>
+  codingModelLoading.value || updatingCodingModel.value || codingModelOptions.value.length === 0,
+)
+const selectedCodingModelLabel = computed(() => {
+  if (codingModelLoading.value) return '加载中'
+  if (codingModelOptions.value.length === 0) return '未配置模型'
+  return selectedCodingModelOption.value?.config_name || '选择模型'
+})
+
+function toggleCodingModelMenu() {
+  if (codingModelPickerDisabled.value) return
+  codingModelMenuOpen.value = !codingModelMenuOpen.value
+}
+
+async function chooseCodingModel(nextValue: string | null) {
+  codingModelMenuOpen.value = false
+  if (nextValue === selectedCodingModelValue.value) return
+  await handleCodingModelChange(nextValue)
+}
+
+function closeCodingModelMenuOnOutside(event: MouseEvent) {
+  const root = codingModelPickerRef.value
+  if (!root || !codingModelMenuOpen.value) return
+  if (event.target instanceof Node && root.contains(event.target)) return
+  codingModelMenuOpen.value = false
+}
 
 // ============ Stream Messages (对话流) ============
 // ── 对话流消息（已抽成 composable）──
@@ -793,17 +847,15 @@ const { panelWidth: chatPaneWidth, onResizeStart: onChatResizeStart } = usePanel
 
 // ── code-first 聊天头部: 会话历史 / 新建会话 / 放大(对齐配置助手) ──
 const chatExpanded = ref(false)
-let chatWidthBeforeExpand = 420
 function toggleChatExpand() {
-  if (chatExpanded.value) {
-    chatPaneWidth.value = chatWidthBeforeExpand
-    chatExpanded.value = false
-  } else {
-    chatWidthBeforeExpand = chatPaneWidth.value
-    chatPaneWidth.value = Math.min(Math.floor(window.innerWidth * 0.55), 980)
-    chatExpanded.value = true
-  }
+  chatExpanded.value = !chatExpanded.value
 }
+const mainPaneStyle = computed(() =>
+  getCodingMainPaneStyle(codeFirst.value, chatExpanded.value, chatPaneWidth.value),
+)
+const showWorkspacePane = computed(() =>
+  shouldShowWorkspacePane(codingStore.workspace?.id, embeddedAppId.value, chatExpanded.value),
+)
 
 // 头部 ≡ 只列当前工作区的会话(含还没绑定的当前新会话)——它是"本工作区的聊天历史",
 // 不是跨工作区切换器(那是侧栏/资产库的事)。
@@ -1498,6 +1550,9 @@ onMounted(async () => {
     }))
   } catch { /* 列表加载失败不阻断入口 */ }
 })
+onMounted(() => {
+  document.addEventListener('click', closeCodingModelMenuOnOutside)
+})
 function backToBuilder() {
   const app = handoffSourceApp.value
   if (!app?.id) return
@@ -1556,7 +1611,7 @@ onMounted(async () => {
 })
 
 onUnmounted(() => {
-  // cleanup if needed
+  document.removeEventListener('click', closeCodingModelMenuOnOutside)
 })
 
 // ============ Workspace Operations ============

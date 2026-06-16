@@ -43,3 +43,32 @@ async def test_builder_uses_platform_shared_model(db_session):
     await db_session.flush()
     snap = await _resolve_llm_config(db_session, sess_a)
     assert "tenant-a" in snap.base_url, f"应解析最新平台默认模型,得到 {snap.base_url}"
+
+
+@pytest.mark.asyncio
+async def test_builder_reports_friendly_error_when_model_key_cannot_decrypt(db_session):
+    tenant = Tenant(tenant_name="A", tenant_code="ta-invalid-key")
+    db_session.add(tenant)
+    await db_session.flush()
+
+    db_session.add(
+        LLMConfig(
+            tenant_id=tenant.id,
+            config_name="dolphin.ai",
+            provider="dolphin",
+            base_url="https://dolphin.example/v1",
+            api_key_enc="invalid-fernet-token",
+            model="gpt-5.5",
+            purpose="all",
+            is_default=True,
+            status="active",
+        )
+    )
+    await db_session.flush()
+
+    session = AIChatSession(tenant_id=tenant.id, user_id=1, title="x")
+    db_session.add(session)
+    await db_session.flush()
+
+    with pytest.raises(RuntimeError, match="模型配置.*API Key.*重新保存"):
+        await _resolve_llm_config(db_session, session)
