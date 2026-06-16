@@ -26,6 +26,8 @@ from __future__ import annotations
 
 import hashlib
 from datetime import datetime, timedelta
+
+import bcrypt as _bcrypt
 from typing import Annotated, Any, Mapping, Optional
 
 from fastapi import Depends, HTTPException, status
@@ -45,13 +47,19 @@ _ISSUER = "ai-builder"
 _AUDIENCE = "ai-builder-web"
 
 
-# ─── 密码（sha256，跟 verify_password 对齐，不是 bcrypt） ─────────────────
+# ─── 密码（bcrypt 为主，旧 sha256 hexdigest 回落兼容） ─────────────────────
+# 新账号用 bcrypt；旧账号是裸 sha256 hexdigest（非 bcrypt 格式），verify 时手动回落。
+
+
 def verify_password(plain_password: str, hashed_password: str) -> bool:
+    if hashed_password.startswith("$2"):
+        return _bcrypt.checkpw(plain_password.encode(), hashed_password.encode())
+    # 旧裸 sha256 回落（迁移期）
     return hashlib.sha256(plain_password.encode()).hexdigest() == hashed_password
 
 
 def get_password_hash(password: str) -> str:
-    return hashlib.sha256(password.encode()).hexdigest()
+    return _bcrypt.hashpw(password.encode(), _bcrypt.gensalt()).decode()
 
 
 # ─── JWT 工厂 ────────────────────────────────────────────────────────────
