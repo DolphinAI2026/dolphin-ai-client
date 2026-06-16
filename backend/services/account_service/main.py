@@ -20,6 +20,9 @@ async def lifespan(app: FastAPI):
 def create_app() -> FastAPI:
     app = FastAPI(title="account-service", lifespan=lifespan)
     app.include_router(desktop_auth.router, prefix="/api")
+    # 桌面自动更新托管(无 /api 前缀 → 公网 /account-api/desktop-updates/...)
+    from app.routes import desktop_updates
+    app.include_router(desktop_updates.router)
 
     @app.get("/api/health")
     async def health():
