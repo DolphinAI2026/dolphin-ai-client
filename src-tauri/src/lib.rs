@@ -5,6 +5,43 @@ use tauri_plugin_shell::ShellExt;
 
 struct SidecarChild(Mutex<Option<CommandChild>>);
 
+/// Kill a sidecar process and all its descendants.
+///
+/// PyInstaller onefile extracts and forks a child process; `child.kill()` only
+/// kills the bootloader (direct child). This function:
+/// 1. Collects all children of the bootloader BEFORE killing the bootloader
+///    (after kill the children get reparented to init and pgrep -P won't find them)
+/// 2. Kills the bootloader
+/// 3. Kills the collected children
+fn kill_sidecar_deep(bootloader_pid: u32) {
+    #[cfg(unix)]
+    {
+        // Step 1: Collect children BEFORE killing the bootloader
+        let mut child_pids: Vec<u32> = Vec::new();
+        if let Ok(out) = std::process::Command::new("pgrep")
+            .args(["-P", &format!("{}", bootloader_pid)])
+            .output()
+        {
+            let output = String::from_utf8_lossy(&out.stdout);
+            for line in output.lines() {
+                if let Ok(child_pid) = line.trim().parse::<u32>() {
+                    child_pids.push(child_pid);
+                }
+            }
+        }
+        // Step 2: Kill the bootloader itself
+        let _ = std::process::Command::new("kill")
+            .args(["-KILL", &format!("{}", bootloader_pid)])
+            .status();
+        // Step 3: Kill the children (e.g. uvicorn process spawned by PyInstaller)
+        for child_pid in child_pids {
+            let _ = std::process::Command::new("kill")
+                .args(["-KILL", &format!("{}", child_pid)])
+                .status();
+        }
+    }
+}
+
 fn pick_free_port() -> u16 {
     std::net::TcpListener::bind("127.0.0.1:0")
         .and_then(|l| l.local_addr())
@@ -83,10 +120,17 @@ pub fn run() {
         .build(tauri::generate_context!())
         .expect("error while running tauri application")
         .run(|app, event| {
-            if let RunEvent::ExitRequested { .. } = event {
-                if let Some(child) = app.state::<SidecarChild>().0.lock().unwrap().take() {
-                    let _ = child.kill();
+            match event {
+                RunEvent::ExitRequested { .. } | RunEvent::Exit => {
+                    if let Some(child) = app.state::<SidecarChild>().0.lock().unwrap().take() {
+                        let pid = child.pid();
+                        // Collect and kill children BEFORE killing the bootloader,
+                        // because child.kill() causes reparenting to init.
+                        kill_sidecar_deep(pid);
+                        let _ = child.kill();
+                    }
                 }
+                _ => {}
             }
         });
 }
