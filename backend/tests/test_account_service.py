@@ -91,3 +91,34 @@ async def test_account_service_login_authority(account_client):
     # 错密码
     r2 = await c.post("/api/desktop-auth/login", json={"username": "mars", "password": "x"})
     assert r2.status_code == 401
+
+
+# ─── M2: bcrypt 72 字节截断 ──────────────────────────────────────────────────
+
+def test_long_cjk_password_does_not_crash():
+    """25 个中文字符 = 75 字节 > bcrypt 72 字节上限, 不应抛 ValueError。"""
+    pw = "密" * 25
+    h = get_password_hash(pw)          # 不该抛 ValueError
+    assert h.startswith("$2")
+    assert verify_password(pw, h) is True
+
+
+# ─── M1: federation 撞名 (apaas 同名行共存) 不 MultipleResultsFound ────────────
+
+@pytest.mark.asyncio
+async def test_federation_mirror_with_apaas_namesake_no_crash(account_client):
+    """federation 模式: 先有 apaas 同名行, 再 provision_desktop_account → 不应抛 AccountExistsError。
+    login authority 模式下 verify_desktop_account 只认 desktop 行 → 正常登录。"""
+    c, Session = account_client
+    from app import desktop_accounts as da
+    async with Session() as db:
+        # 先放一个 apaas 同名账号 (模拟 aPaaS 登录同步过来的)
+        db.add(User(username="dup", hashed_password="apaas-hash", account_source="apaas", is_active=True))
+        await db.flush()
+        # provision_desktop_account 应只检查 desktop 行, apaas 同名不应阻止
+        await da.provision_desktop_account(db, "dup", "ruijing2026", is_platform_admin=False)
+        await db.commit()
+    # authority 模式登录 → verify_desktop_account 只认 desktop 行 → 成功
+    r = await c.post("/api/desktop-auth/login", json={"username": "dup", "password": "ruijing2026"})
+    assert r.status_code == 200
+    assert r.json()["username"] == "dup"

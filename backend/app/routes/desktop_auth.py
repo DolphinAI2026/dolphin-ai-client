@@ -58,7 +58,10 @@ async def _federation_login(db: AsyncSession, data: DesktopLoginIn, base_url: st
     if not remote:
         raise HTTPException(status_code=401, detail="账号或密码错误")
     # 本地镜像该用户(+独立租户); 已存在则复用。本地密码随机(从不本地校验, 认证由公网做)。
-    user = (await db.execute(select(User).where(User.username == remote["username"]))).scalar_one_or_none()
+    # 必须加 account_source 过滤: aPaaS 登录可能同步同名 apaas 行, 不过滤会 MultipleResultsFound。
+    user = (await db.execute(
+        select(User).where(User.username == remote["username"], User.account_source == "desktop")
+    )).scalar_one_or_none()
     if user is None:
         user = await da.provision_desktop_account(db, remote["username"], secrets.token_urlsafe(32))
         await db.commit()

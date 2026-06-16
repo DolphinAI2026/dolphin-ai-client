@@ -51,15 +51,20 @@ _AUDIENCE = "ai-builder-web"
 # 新账号用 bcrypt；旧账号是裸 sha256 hexdigest（非 bcrypt 格式），verify 时手动回落。
 
 
+def _bcrypt_bytes(password: str) -> bytes:
+    """bcrypt 只处理前 72 字节；超出会抛 ValueError（bcrypt>=4.1）。手动截断。"""
+    return password.encode()[:72]
+
+
 def verify_password(plain_password: str, hashed_password: str) -> bool:
     if hashed_password.startswith("$2"):
-        return _bcrypt.checkpw(plain_password.encode(), hashed_password.encode())
+        return _bcrypt.checkpw(_bcrypt_bytes(plain_password), hashed_password.encode())
     # 旧裸 sha256 回落（迁移期）
     return hashlib.sha256(plain_password.encode()).hexdigest() == hashed_password
 
 
 def get_password_hash(password: str) -> str:
-    return _bcrypt.hashpw(password.encode(), _bcrypt.gensalt()).decode()
+    return _bcrypt.hashpw(_bcrypt_bytes(password), _bcrypt.gensalt()).decode()
 
 
 # ─── JWT 工厂 ────────────────────────────────────────────────────────────

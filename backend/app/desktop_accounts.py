@@ -23,12 +23,20 @@ async def _unique_tenant_code(db: AsyncSession, base: str) -> str:
     return code
 
 
-async def provision_desktop_account(db: AsyncSession, username: str, password: str) -> User:
+async def provision_desktop_account(
+    db: AsyncSession, username: str, password: str, *, is_platform_admin: bool = False
+) -> User:
     """建一个桌面账号 + 它专属的独立租户(该用户是该租户管理员)。
 
     只 flush 不 commit —— 事务边界由调用方负责(便于组合进更大事务)。
+
+    is_platform_admin: 本地 authority 开号传 True(单机自洽 = 本机管理员, 能进平台管理
+    配自己的 LLM/aPaaS)。federation 镜像 + 公网 admin 开号必须保持 False —— 否则会给
+    每个公网账号全局超管权限(权限泄漏)。
     """
-    existing = (await db.execute(select(User).where(User.username == username))).scalar_one_or_none()
+    existing = (await db.execute(
+        select(User).where(User.username == username, User.account_source == "desktop")
+    )).scalar_one_or_none()
     if existing:
         raise AccountExistsError(username)
     code = await _unique_tenant_code(db, f"desktop-{username}")
@@ -39,7 +47,7 @@ async def provision_desktop_account(db: AsyncSession, username: str, password: s
     user = User(
         username=username, display_name=username,
         hashed_password=get_password_hash(password),
-        is_active=True, is_platform_admin=False, account_source="desktop",
+        is_active=True, is_platform_admin=is_platform_admin, account_source="desktop",
     )
     db.add(user)
     await db.flush()

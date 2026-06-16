@@ -899,8 +899,10 @@ async def login(
     if apaas_response:
         return apaas_response
 
-    # 验证用户
-    result = await db.execute(select(User).where(User.username == user_data.username))
+    # 验证用户 (本地密码回落 = aPaaS 账号, 必须过滤 account_source 避免撞名 desktop 行 MultipleResultsFound)
+    result = await db.execute(
+        select(User).where(User.username == user_data.username, User.account_source == "apaas")
+    )
     user = result.scalar_one_or_none()
 
     if not user or not verify_password(user_data.password, user.hashed_password):
