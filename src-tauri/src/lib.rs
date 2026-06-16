@@ -66,6 +66,8 @@ fn wait_healthy(port: u16) -> bool {
 pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_shell::init())
+        .plugin(tauri_plugin_updater::Builder::new().build())
+        .plugin(tauri_plugin_process::init())
         .manage(SidecarChild(Mutex::new(None)))
         .setup(|app| {
             let handle = app.handle().clone();
