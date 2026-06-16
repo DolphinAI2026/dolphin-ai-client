@@ -27,6 +27,7 @@ from app.routes import (
     conversations,
     current_app,
     db_connections,
+    desktop_auth,
     generation_steps,
     git_connection,
     harness,
@@ -134,6 +135,7 @@ app.add_middleware(
 
 # 注册路由
 app.include_router(auth.router, prefix="/api")
+app.include_router(desktop_auth.router, prefix="/api")
 app.include_router(conversations.router, prefix="/api")
 app.include_router(chat.router, prefix="/api")
 app.include_router(ai_chat.router, prefix="/api")
