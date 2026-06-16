@@ -145,6 +145,8 @@ async def init_db():
             # 配置助手统一到 unified：会话级应用上下文常驻锁
             "ALTER TABLE ai_chat_sessions ADD COLUMN app_id INTEGER",
             "CREATE INDEX IF NOT EXISTS ix_ai_chat_sessions_app_id ON ai_chat_sessions(app_id)",
+            # 桌面产品账号来源标记(2026-06-16): 'apaas'=aPaaS同步账号 | 'desktop'=桌面账号
+            "ALTER TABLE users ADD COLUMN account_source VARCHAR(20) NOT NULL DEFAULT 'apaas'",
         ]:
             try:
                 await conn.execute(text(stmt))

@@ -45,6 +45,9 @@ class User(Base):
     apaas_user_id: Mapped[Optional[str]] = mapped_column(String(50), nullable=True)
     apaas_base_url: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
     apaas_tenant_id: Mapped[Optional[str]] = mapped_column(String(50), nullable=True)
+    # 账号来源: 'apaas'(aPaaS 同步/默认) | 'desktop'(桌面产品账号)。
+    # 用于把桌面登录与 aPaaS 登录链路隔离, 避免 username 撞名被 aPaaS 抢先认证。
+    account_source: Mapped[str] = mapped_column(String(20), default="apaas", nullable=False, server_default="apaas")
     is_platform_admin: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
     is_active: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, nullable=False)
