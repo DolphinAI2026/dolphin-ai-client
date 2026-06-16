@@ -41,3 +41,19 @@ async def test_same_username_different_source_coexist(account_db):
     await account_db.flush()  # 复合唯一下不该抛 IntegrityError
     rows = (await account_db.execute(select(User).where(User.username == "zhangsan"))).scalars().all()
     assert len(rows) == 2
+
+
+@pytest.mark.asyncio
+async def test_apaas_login_does_not_clobber_desktop_user(account_db):
+    from app.routes.auth.login import _ensure_apaas_user
+    desktop = User(username="li", hashed_password="desk", account_source="desktop", is_platform_admin=True)
+    account_db.add(desktop)
+    await account_db.flush()
+    # aPaaS 登录同名 li → 应新建一行 apaas, 不动 desktop 行
+    await _ensure_apaas_user(account_db, "li", "apaaspw", {"id": "999"}, is_platform_admin=False)
+    await account_db.flush()
+    rows = (await account_db.execute(select(User).where(User.username == "li"))).scalars().all()
+    assert len(rows) == 2
+    desk = [r for r in rows if r.account_source == "desktop"][0]
+    assert desk.hashed_password == "desk"  # 没被覆盖
+    assert desk.is_platform_admin is True

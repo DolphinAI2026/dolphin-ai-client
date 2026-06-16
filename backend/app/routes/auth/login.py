@@ -586,13 +586,16 @@ async def _ensure_apaas_user(db: AsyncSession, username: str, password: str, use
     if apaas_uid:
         user = (await db.execute(select(User).where(User.apaas_user_id == apaas_uid))).scalar_one_or_none()
     if not user:
-        user = (await db.execute(select(User).where(User.username == username))).scalar_one_or_none()
+        user = (await db.execute(
+            select(User).where(User.username == username, User.account_source == "apaas")
+        )).scalar_one_or_none()
     if not user:
         user = User(
             username=username,
             display_name=display_name or None,
             hashed_password=get_password_hash(password),
             apaas_user_id=apaas_uid,
+            account_source="apaas",
             is_platform_admin=is_platform_admin,
             is_active=True,
         )
