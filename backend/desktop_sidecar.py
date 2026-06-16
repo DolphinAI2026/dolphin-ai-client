@@ -39,6 +39,7 @@ def build_env(data_dir: Path, port: int) -> dict:
         # Phase 0 spike: 允许默认加密 key。Phase 1 改为每实例生成持久化 ENCRYPTION_KEY。
         "ALLOW_DEFAULT_ENCRYPTION_KEY": "1",
         "JWT_SECRET_KEY": ensure_jwt_secret(data_dir),
+        "PUBLIC_ACCOUNT_BASE_URL": os.environ.get("PUBLIC_ACCOUNT_BASE_URL", "https://agent.dfy.definesys.cn"),
     }
     for k, v in written.items():
         os.environ[k] = v

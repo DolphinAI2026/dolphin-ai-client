@@ -1,17 +1,22 @@
 """桌面产品登录路由。与 /api/auth/login 的 aPaaS 链路完全分开。
 
 - authority 模式(公网, 未配 public_account_base_url): 校验本地桌面账号密码, 签本地 JWT。
-- federation 模式(桌面 sidecar): 见后续任务。
+- federation 模式(桌面 sidecar, 配了 public_account_base_url): 转发公网认证 + 本地镜像 user/tenant + 签本地 JWT。
 """
 import logging
+import secrets
 
+import httpx
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.auth import create_access_token
+from app.config import settings
 from app.database import get_db
 from app.deps import get_auth_context, AuthContext, resolve_default_tenant_id_for_user
+from app.models import User
 from app import desktop_accounts as da
 
 logger = logging.getLogger(__name__)
@@ -29,6 +34,41 @@ class DesktopLoginOut(BaseModel):
     username: str
 
 
+async def _remote_authenticate(base_url: str, username: str, password: str):
+    """转发到公网 authority 校验; 通过返回 {username,...}, 失败 None, 不可达抛 503。"""
+    url = base_url.rstrip("/") + "/api/desktop-auth/login"
+    try:
+        async with httpx.AsyncClient(timeout=20.0) as c:
+            resp = await c.post(url, json={"username": username, "password": password})
+    except httpx.RequestError:
+        raise HTTPException(status_code=503, detail="公网账号服务不可达")
+    if resp.status_code == 401:
+        return None
+    try:
+        resp.raise_for_status()
+        body = resp.json()
+    except (httpx.HTTPStatusError, ValueError):
+        # 公网返回非 401 的错误状态 / 非 JSON 体 → 转 502, 别把裸 500 甩给客户端。
+        raise HTTPException(status_code=502, detail="公网账号服务响应异常")
+    return {"username": body.get("username", username)}
+
+
+async def _federation_login(db: AsyncSession, data: DesktopLoginIn, base_url: str) -> DesktopLoginOut:
+    remote = await _remote_authenticate(base_url, data.username, data.password)
+    if not remote:
+        raise HTTPException(status_code=401, detail="账号或密码错误")
+    # 本地镜像该用户(+独立租户); 已存在则复用。本地密码随机(从不本地校验, 认证由公网做)。
+    user = (await db.execute(select(User).where(User.username == remote["username"]))).scalar_one_or_none()
+    if user is None:
+        user = await da.provision_desktop_account(db, remote["username"], secrets.token_urlsafe(32))
+        await db.commit()
+    tenant_id = await resolve_default_tenant_id_for_user(db, user.id)
+    if tenant_id is None:
+        raise HTTPException(status_code=500, detail="账号租户配置异常")
+    token = create_access_token(user, tenant_id=tenant_id)
+    return DesktopLoginOut(access_token=token, username=user.username)
+
+
 async def _authority_login(db: AsyncSession, data: DesktopLoginIn) -> DesktopLoginOut:
     user = await da.verify_desktop_account(db, data.username, data.password)
     if not user:
@@ -43,6 +83,9 @@ async def _authority_login(db: AsyncSession, data: DesktopLoginIn) -> DesktopLog
 
 @router.post("/login", response_model=DesktopLoginOut)
 async def desktop_login(data: DesktopLoginIn, db: AsyncSession = Depends(get_db)):
+    base_url = settings.public_account_base_url
+    if base_url:
+        return await _federation_login(db, data, base_url)
     return await _authority_login(db, data)
 
 
