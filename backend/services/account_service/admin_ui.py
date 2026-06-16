@@ -155,7 +155,7 @@ ADMIN_UI_HTML = r"""<!DOCTYPE html>
 <script>
 const { createApp, ref, reactive } = Vue
 const { ElMessage, ElMessageBox } = ElementPlus
-const API = '/account-api'
+const API = location.pathname.includes('/account-api') ? '/account-api' : ''
 
 const app = createApp({
   setup(){
