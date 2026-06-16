@@ -52,6 +52,8 @@ ai-builder（睿鲸 AI）当前是**在线版**的低代码平台，核心能力
 | D6 | **标准交付阶段 = 7 个**：调研 → 设计 → 配置 → 开发 → 测试 → 验收 → 上线 | 作为内置「睿鲸标准交付」，可裁剪。 |
 | D7 | **阶段闸口默认软门**，关键检查项可在模板里标成硬门 | 硬门一刀切会逼工程师绕开工具，毁掉「全员用它」的目标；标准化价值先靠可见性拿，关键节点再上硬门。 |
 | D8 | **bring-your-own aPaaS + LLM**：按「交付 profile」本地加密存配置 | 卖出去的副本连客户自己的 aPaaS 与 LLM；数据/环境隔离。 |
+| D9 | **桌面应用品牌 = 「睿鲸 Builder」** | 与在线版同源、便于品牌延续。 |
+| D10 | **Phase 0 验证环境 = trial 环境 + mars 租户** | 用户指定；连通性/登录/一次低代码配置都在此验证（连接细节 Phase 0 落地时确认）。 |
 
 ## 4. 架构
 
@@ -130,7 +132,7 @@ ai-builder（睿鲸 AI）当前是**在线版**的低代码平台，核心能力
 
 ## 6. 分期（dogfood 优先，再产品化）
 
-- **Phase 0 ｜打包 spike**（先打最大风险那根桩）：最小验证 Tauri(macOS) + PyInstaller 打 FastAPI sidecar + WKWebView 加载 Vue，连真实 aPaaS/LLM 跑通登录 + 一次低代码配置。不碰交付层。**产出：一个能双击跑的 `.app`，证明地基成立。**
+- **Phase 0 ｜打包 spike**（先打最大风险那根桩）：最小验证 Tauri(macOS) + PyInstaller 打 FastAPI sidecar + WKWebView 加载 Vue，连真实 aPaaS/LLM（**trial 环境 + mars 租户**）跑通登录 + 一次低代码配置。不碰交付层。**本地自签即可，无需 Apple 开发者账号。产出：一个能双击跑的 `.app`，证明地基成立。**
 - **Phase 1 ｜桌面底座成型**（= 在线版的桌面化，团队可内部用）：补本地 SQLite、本机工作区、profile 配置、sidecar 生命周期、裁依赖、基础打包/签名。**产出：团队能用桌面版做现有低代码配置 + 二次开发。**
 - **Phase 2 ｜脊柱 + 最小交付闭环**（交付层首次落地）：交付项目 + 阶段 + 检查项（软门）+ 2–3 个最高价值交付物模板（接已有 doc-gen）。**产出：真实客户项目能建项目、走阶段、一键生成需求规格/验收报告。**
 - **Phase 3 ｜技能库**：把最常用的 5–8 个 codex/cc 动作收敛成内置交付技能，按阶段挂。
@@ -145,7 +147,7 @@ ai-builder（睿鲸 AI）当前是**在线版**的低代码平台，核心能力
 |---|---|---|
 | **PyInstaller 打包长板** | 把 FastAPI 全家桶（含 cryptography / aiosqlite / python-docx/pptx 原生扩展）打成 macOS sidecar 是整个地基最大工程长板 | Phase 0 spike 第一刀就验证；先裁依赖（playwright 可选、删 k8s、去 code-server） |
 | **WebView 兼容** | Element Plus / X6 / shiki / marked 在 WKWebView 下的表现 | Phase 0 早冒烟测；macOS-only 已大幅收窄变量 |
-| **签名/公证** | 要卖就绕不开 Apple Developer ID 签名 + 公证 | Phase 1 纳入；需 Apple 开发者账号 |
+| **签名/公证** | macOS Gatekeeper 要求联网下载的 app 经 **Developer ID 签名 + 公证** 才能顺滑双击打开（与 App Store 上架是两条线，不上架也需 **Apple Developer Program 99 美元/年** 会员）；否则撞「已损坏/身份不明的开发者」告警 | **可延后，不挡 Phase 0**：Phase 0 本地自签/ad-hoc，无需 Apple 账号；Phase 1 内部 dogfood 可右键→打开或 `xattr -dr com.apple.quarantine` 绕过；**Phase 5 对外卖前再办付费会员做签名+公证**（对要卖的产品是硬伤，必须做） |
 | **sidecar 生命周期** | 启停随应用、端口冲突、崩溃恢复 | Phase 1 设计；随机端口 + 健康检查 + 看门狗 |
 | **硬门误伤** | 闸口过严逼用户绕开工具 | D7：默认软门，关键项才硬门 |
 
