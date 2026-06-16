@@ -14,7 +14,10 @@ cd "$ROOT/frontend" && npm run build:desktop
 
 echo ""
 echo "==> 2/4 PyInstaller 打 sidecar (onefile, 内嵌前端)"
-cd "$ROOT/backend" && .venv/bin/python -m PyInstaller ruijing-sidecar.spec --noconfirm
+cd "$ROOT/backend"
+# 全新 checkout 可能没装 pyinstaller — 缺则补装 (构建期依赖, 不入 requirements.txt 避免污染部署)
+.venv/bin/python -m PyInstaller --version >/dev/null 2>&1 || .venv/bin/pip install "pyinstaller>=6.6"
+.venv/bin/python -m PyInstaller ruijing-sidecar.spec --noconfirm
 
 echo ""
 echo "==> 3/4 放置 sidecar 二进制 (triple=$TRIPLE)"
