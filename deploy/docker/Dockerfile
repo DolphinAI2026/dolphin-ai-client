@@ -38,7 +38,7 @@ RUN node_modules/.bin/vite build
 # ------------------------------------------------------------
 FROM node:20-bookworm-slim AS admin-builder
 
-ARG VITE_ADMIN_BASE=/admin/
+ARG VITE_ADMIN_BASE=/ai-builder/admin/
 ARG VITE_API_BASE_URL=/ai-builder/api
 ARG VITE_MCP_PUBLIC_BASE=
 
