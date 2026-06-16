@@ -229,6 +229,7 @@
 <script setup lang="ts">
 import { ref, computed, watch, reactive } from 'vue'
 import request from '@/utils/request'
+import { openExternal } from '@/utils/openExternal'
 import EmptyState from '@/components/states/EmptyState.vue'
 import ErrorCard from '@/components/states/ErrorCard.vue'
 import SkeletonCard from '@/components/states/SkeletonCard.vue'
@@ -414,7 +415,7 @@ async function openApaasApp() {
       `/applications/${props.appId}/apaas-access-url`,
     )
     if (resp?.ok && resp.access_url) {
-      window.open(resp.access_url, '_blank')
+      await openExternal(resp.access_url)
     } else {
       alert(resp?.message || '应用尚未部署到 aPaaS, 无法打开')
     }

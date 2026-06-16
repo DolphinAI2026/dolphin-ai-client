@@ -24,6 +24,11 @@ class Settings(BaseSettings):
 
     # aPaaS Platform
     apaas_base_url: str = ""
+    # 桌面 sidecar: 公网账号权威地址(authority)。空=本实例自身就是 authority。
+    public_account_base_url: str = ""
+    # 桌面更新产物目录(account-service 挂 PVC /data)。GET manifest/包 + 平台管理员上传都读写这里。
+    # 环境变量 DESKTOP_UPDATES_DIR 覆盖。
+    desktop_updates_dir: str = "/data/desktop-updates"
     apaas_tenant_id: str = ""
     # 双端口 / 无 /backend 拓扑覆盖（如生产: 登录 API 在 :30607 根路径、RSA 公钥在 UI 端口 :30605）。
     # 留空 = 沿用单 origin 默认推导（trial: origin+/backend、origin/platform/apaasRsa.pub）。

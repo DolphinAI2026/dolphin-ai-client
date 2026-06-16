@@ -579,6 +579,7 @@ import AppIcon from '@/components/common/AppIcon.vue'
 import type { PlatformEnv } from '@/api/platformEnv'
 import { useUserStore } from '@/stores/user'
 import { codingApi } from '@/api/coding'
+import { openExternal } from '@/utils/openExternal'
 import type { CodingConversation, WorkspaceInfo, ReplayStreamMessage } from '@/api/coding'
 import CodingSceneEntry from './coding/CodingSceneEntry.vue'
 import InstallModal from './coding/InstallModal.vue'
@@ -1878,7 +1879,7 @@ async function openBrowserPreviewWithEnv(env: PlatformEnv) {
   if (!codingStore.workspace) return
   showEnvPicker.value = false
   const platformBase = env.base_url.replace(/\/backend\/?$/, '')
-  window.open(platformBase, '_blank', 'noopener,noreferrer')
+  void openExternal(platformBase)
 }
 
 async function downloadCode() {

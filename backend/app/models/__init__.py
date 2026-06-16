@@ -36,15 +36,21 @@ from app.models.agent_observability import AgentRun, AgentStep  # noqa: F401  �
 
 class User(Base):
     __tablename__ = "users"
+    __table_args__ = (
+        UniqueConstraint("username", "account_source", name="uq_user_username_source"),
+    )
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
-    username: Mapped[str] = mapped_column(String(50), unique=True, nullable=False, index=True)
+    username: Mapped[str] = mapped_column(String(50), nullable=False, index=True)
     display_name: Mapped[Optional[str]] = mapped_column(String(100), nullable=True)
     hashed_password: Mapped[str] = mapped_column(String(255), nullable=False)
     apaas_token: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     apaas_user_id: Mapped[Optional[str]] = mapped_column(String(50), nullable=True)
     apaas_base_url: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
     apaas_tenant_id: Mapped[Optional[str]] = mapped_column(String(50), nullable=True)
+    # 账号来源: 'apaas'(aPaaS 同步/默认) | 'desktop'(桌面产品账号)。
+    # 用于把桌面登录与 aPaaS 登录链路隔离, 避免 username 撞名被 aPaaS 抢先认证。
+    account_source: Mapped[str] = mapped_column(String(20), default="apaas", nullable=False, server_default="apaas")
     is_platform_admin: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
     is_active: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, nullable=False)

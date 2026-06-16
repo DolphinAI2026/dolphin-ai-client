@@ -9,6 +9,7 @@
     "dev:root": "vite",
     "build": "VITE_BASE_URL=/ai-builder/ vue-tsc -b && VITE_BASE_URL=/ai-builder/ vite build",
     "build:nocheck": "VITE_BASE_URL=/ai-builder/ vite build",
+    "build:desktop": "VITE_DESKTOP=1 VITE_BASE_URL=/ vite build --outDir dist-desktop --emptyOutDir",
     "preview": "vite preview",
     "test": "vitest run --passWithNoTests"
   },
@@ -17,6 +18,8 @@
     "@element-plus/icons-vue": "^2.3.2",
     "@fontsource/geist-mono": "^5.2.8",
     "@fontsource/geist-sans": "^5.2.5",
+    "@tauri-apps/api": "^2.11.0",
+    "@tauri-apps/plugin-shell": "^2.3.5",
     "axios": "^1.13.6",
     "element-plus": "^2.13.5",
     "highlight.js": "^11.11.1",

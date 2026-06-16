@@ -6,6 +6,9 @@ import http from 'http'
 // https://vite.dev/config/
 export default defineConfig({
   base: process.env.VITE_BASE_URL || '/',
+  define: {
+    __DESKTOP__: JSON.stringify(process.env.VITE_DESKTOP === '1'),
+  },
   plugins: [
     vue(),
     {
@@ -54,6 +57,11 @@ export default defineConfig({
         target: 'http://localhost:8000',
         changeOrigin: true,
         rewrite: (path) => path.replace(/^\/ai-builder\/api/, '/api')
+      },
+      '/ai-builder/admin': {
+        target: 'http://localhost:8000',
+        changeOrigin: true,
+        rewrite: (path) => path.replace(/^\/ai-builder\/admin/, '/admin')
       },
       '^/admin(/|$)': {
         target: 'http://localhost:8000',

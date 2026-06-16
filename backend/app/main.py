@@ -27,6 +27,7 @@ from app.routes import (
     conversations,
     current_app,
     db_connections,
+    desktop_auth,
     generation_steps,
     git_connection,
     harness,
@@ -134,6 +135,7 @@ app.add_middleware(
 
 # 注册路由
 app.include_router(auth.router, prefix="/api")
+app.include_router(desktop_auth.router, prefix="/api")
 app.include_router(conversations.router, prefix="/api")
 app.include_router(chat.router, prefix="/api")
 app.include_router(ai_chat.router, prefix="/api")
@@ -410,3 +412,28 @@ if _static_dir.is_dir():
 @app.get("/api/health")
 async def health_check():
     return {"status": "ok"}
+
+
+# ── 桌面 sidecar: DESKTOP_MODE 下同源托管桌面前端构建产物 ──────────────
+# 在线版不受影响(默认 DESKTOP_MODE 未设)。必须放在所有 include_router /
+# app.mount / runtime_proxy 之后, 让显式 API/admin/反代路由优先匹配,
+# 这个 "/" 挂载只作为前端 SPA 的兜底。
+if os.environ.get("DESKTOP_MODE") == "1":
+    import logging as _logging
+    import sys as _sys
+
+    _desktop_logger = _logging.getLogger(__name__)
+
+    _explicit = os.environ.get("DESKTOP_FRONTEND_DIR")
+    if _explicit:
+        _desktop_fe = Path(_explicit)
+    elif getattr(_sys, "_MEIPASS", None):  # PyInstaller 冻结态
+        _desktop_fe = Path(_sys._MEIPASS) / "frontend_dist"
+    else:  # 本机 dev
+        _desktop_fe = Path(__file__).resolve().parents[2] / "frontend" / "dist-desktop"
+
+    if _desktop_fe.is_dir():
+        app.mount("/", _SpaStaticFiles(directory=str(_desktop_fe), html=True), name="desktop-frontend")
+        _desktop_logger.info("[desktop] mounted frontend SPA at / from %s", _desktop_fe)
+    else:
+        _desktop_logger.warning("[desktop] DESKTOP_MODE=1 but frontend dir not found: %s", _desktop_fe)

@@ -72,3 +72,10 @@ extensions/ruijing-ai/*.vsix
 # Stale dirs (cleaned up 2026-05-25)
 marketplace_store/
 examples/
+
+# Desktop build artifacts
+frontend/dist-desktop/
+src-tauri/binaries/
+
+# Tauri updater 签名私钥(绝不入库, 本机+离线备份)
+/keys/

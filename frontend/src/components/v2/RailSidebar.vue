@@ -30,7 +30,10 @@ const NAV = computed<NavItem[]>(() => [
   // 改已有应用从「应用资产库」点进工作室 (/chat)，/chat 不挂菜单。
   // 数据连接 / 运行发布先隐藏；平台级配置统一从平台管理工作台进入。
 ])
-const platformNavItem: NavItem = { key: 'platform', label: '平台管理', icon: 'shield', path: '/platform-admin' }
+// 桌面包不含 admin-spa, /platform-admin 内嵌 iframe 会白屏; 桌面下直接进自渲染的配置页 /platform-envs。
+const platformNavItem: NavItem = __DESKTOP__
+  ? { key: 'platform', label: '平台配置', icon: 'shield', path: '/platform-envs' }
+  : { key: 'platform', label: '平台管理', icon: 'shield', path: '/platform-admin' }
 
 const userAccount = computed(() => user.user?.username || '')
 const userName = computed(() => user.user?.display_name || userAccount.value || '未登录')
@@ -58,8 +61,11 @@ const currentTenantLabel = computed(() => {
   })
 })
 const isDark = computed(() => theme.mode === 'dark')
-const platformActive = computed(() => route.path.startsWith('/platform-admin'))
+const platformActive = computed(() => route.path.startsWith(platformNavItem.path))
 const platformHref = computed(() => resolveHref(platformNavItem.path))
+// 桌面: 租户管理员就能进 /platform-envs 配自己的 LLM/aPaaS(每人独立租户)。
+// 在线版: 那条入口指向 admin-spa(仅平台管理员), 保持 isPlatformAdmin 避免租户管理员点进去被弹。
+const platformEntryVisible = computed(() => __DESKTOP__ ? user.isTenantAdmin : user.isPlatformAdmin)
 
 function closeTenantMenu() {
   tenantMenuOpen.value = false
@@ -285,7 +291,7 @@ function renderIcon(name: string): string {
         </div>
 
         <a
-          v-if="user.isPlatformAdmin"
+          v-if="platformEntryVisible"
           class="console-row platform-row"
           :class="{ active: platformActive }"
           :href="platformHref"
