@@ -72,3 +72,7 @@ extensions/ruijing-ai/*.vsix
 # Stale dirs (cleaned up 2026-05-25)
 marketplace_store/
 examples/
+
+# Desktop build artifacts
+frontend/dist-desktop/
+src-tauri/binaries/

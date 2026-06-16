@@ -9,6 +9,7 @@
     "dev:root": "vite",
     "build": "VITE_BASE_URL=/ai-builder/ vue-tsc -b && VITE_BASE_URL=/ai-builder/ vite build",
     "build:nocheck": "VITE_BASE_URL=/ai-builder/ vite build",
+    "build:desktop": "VITE_BASE_URL=/ vite build --outDir dist-desktop --emptyOutDir",
     "preview": "vite preview",
     "test": "vitest run --passWithNoTests"
   },
