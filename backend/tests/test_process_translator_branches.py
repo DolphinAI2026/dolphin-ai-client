@@ -100,7 +100,8 @@ def test_branch_definition_translates_to_full_save_payload_with_condition_edges(
     rule_key = condition_edges["e-start-gw__e-gw-leader"]["data"]["id"]
     assert payload["processRule"][rule_key]["ruleType"] == "simple"
     simple_rule = payload["processRule"][rule_key]["simpleRuleConfig"]
-    assert simple_rule["express"] == "(((xdap.invoke('componentvalue','sec_vuln~vuln_category'))  == ('info_disclosure')))"
+    assert "express" not in simple_rule
+    assert simple_rule["queryFieldType"] == "businessObj"
     assert simple_rule["formFieldRuleList"] == [
         {
             "connectOperation": "or",
@@ -143,7 +144,8 @@ def test_branch_condition_translates_chinese_is_operator_and_option_label_to_rul
     condition_edge = next(edge for edge in payload["edges"] if edge["id"] == "e-start-gw__e-gw-leader")
     rule_key = condition_edge["data"]["id"]
     simple_rule = payload["processRule"][rule_key]["simpleRuleConfig"]
-    assert simple_rule["express"] == "(((xdap.invoke('componentvalue','project_main~project_type'))  == ('custom_delivery')))"
+    assert "express" not in simple_rule
+    assert simple_rule["queryFieldType"] == "businessObj"
     assert simple_rule["formFieldRuleList"][0]["fieldRuleList"][0] == {
         "type": "string",
         "boCode": "project_main~project_type",
@@ -181,7 +183,7 @@ def test_branch_label_condition_translates_to_process_rule_when_condition_field_
     assert condition_edge["conditionExpression"] == "项目类型=产品研发"
     rule_key = condition_edge["data"]["id"]
     simple_rule = payload["processRule"][rule_key]["simpleRuleConfig"]
-    assert simple_rule["express"] == "(((xdap.invoke('componentvalue','project_main~project_type'))  == ('product_rd')))"
+    assert "express" not in simple_rule
     assert simple_rule["formFieldRuleList"][0]["fieldRuleList"][0]["boCode"] == "project_main~project_type"
     assert simple_rule["formFieldRuleList"][0]["fieldRuleList"][0]["values"] == ["product_rd"]
 
@@ -215,7 +217,7 @@ def test_branch_structured_condition_string_translates_to_process_rule():
     condition_edge = next(edge for edge in payload["edges"] if edge["id"] == "e-start-gw__e-gw-leader")
     rule_key = condition_edge["data"]["id"]
     simple_rule = payload["processRule"][rule_key]["simpleRuleConfig"]
-    assert simple_rule["express"] == "(((xdap.invoke('componentvalue','project_main~project_type'))  == ('custom_delivery')))"
+    assert "express" not in simple_rule
     assert simple_rule["formFieldRuleList"][0]["fieldRuleList"][0]["boCode"] == "project_main~project_type"
     assert simple_rule["formFieldRuleList"][0]["fieldRuleList"][0]["op"] == "eq"
     assert simple_rule["formFieldRuleList"][0]["fieldRuleList"][0]["values"] == ["custom_delivery"]
@@ -254,9 +256,154 @@ def test_branch_structured_not_equal_condition_translates_to_process_rule():
     condition_edge = next(edge for edge in payload["edges"] if edge["id"] == "e-start-gw__e-gw-leader")
     rule_key = condition_edge["data"]["id"]
     simple_rule = payload["processRule"][rule_key]["simpleRuleConfig"]
-    assert simple_rule["express"] == "(((xdap.invoke('componentvalue','project_main~project_type'))  != ('custom_delivery')))"
+    assert "express" not in simple_rule
     assert simple_rule["formFieldRuleList"][0]["fieldRuleList"][0]["op"] == "neq"
     assert simple_rule["formFieldRuleList"][0]["fieldRuleList"][0]["values"] == ["custom_delivery"]
+
+
+_BUDGET_COMPONENTS = [
+    {"label": "项目预算", "bo_code": "project_info~project_budget"},
+]
+
+
+def _numeric_branch_payload(condition, *, label="高预算"):
+    """Translate a single budget-condition branch and return its fieldRule + simpleRuleConfig."""
+    definition = copy.deepcopy(_branch_definition())
+    branch_edge = next(edge for edge in definition["edges"] if edge["id"] == "e-gw-leader")
+    branch_edge["label"] = label
+    if condition is None:
+        branch_edge.pop("condition", None)
+    else:
+        branch_edge["condition"] = condition
+
+    payload, warnings = translate_definition_to_apaas_schema(
+        definition,
+        apaas_app_id="app-1",
+        menu_id="menu-1",
+        form_id="form-1",
+        process_name="项目立项审批流",
+        process_code="project_init_flow",
+        form_components=_BUDGET_COMPONENTS,
+    )
+    condition_edge = next(edge for edge in payload["edges"] if edge["id"] == "e-start-gw__e-gw-leader")
+    rule_key = condition_edge["data"]["id"]
+    simple_rule = payload["processRule"][rule_key]["simpleRuleConfig"]
+    field_rule = simple_rule["formFieldRuleList"][0]["fieldRuleList"][0]
+    return field_rule, simple_rule, warnings
+
+
+def test_numeric_ge_structured_condition_builds_platform_number_rule():
+    field_rule, simple_rule, warnings = _numeric_branch_payload(
+        {"fieldCode": "project_budget", "operator": "ge", "value": "100000"},
+    )
+    assert warnings == []
+    # Matches the exact body captured from aPaaS /rule/save/simpleRule for ≥.
+    assert field_rule == {
+        "op": "ge",
+        "type": "number",
+        "boCode": "project_info~project_budget",
+        "values": ["100000"],
+        "transValues": [],
+    }
+    assert simple_rule["ruleType"] == "simple"
+    assert simple_rule["queryFieldType"] == "businessObj"
+    assert simple_rule["formFieldRuleList"][0]["connectOperation"] == "or"
+    # aPaaS frontend does NOT send these; emitting them was the never-verified guess.
+    assert "express" not in simple_rule
+    assert "hasBoTrans" not in simple_rule
+
+
+def test_numeric_symbol_operators_map_to_platform_codes():
+    cases = {
+        ">=": "ge",
+        "≥": "ge",
+        ">": "gt",
+        "<": "lt",
+        "<=": "le",
+        "≤": "le",
+    }
+    for symbol, expected_op in cases.items():
+        field_rule, _simple_rule, warnings = _numeric_branch_payload(
+            {"fieldCode": "project_budget", "operator": symbol, "value": "100000"},
+        )
+        assert warnings == [], f"{symbol} produced warnings"
+        assert field_rule["op"] == expected_op, f"{symbol} -> {field_rule['op']}"
+        assert field_rule["type"] == "number", f"{symbol} should be numeric"
+        assert field_rule["values"] == ["100000"]
+
+
+def test_numeric_lt_condition_detected_from_clean_label_text():
+    field_rule, _simple_rule, warnings = _numeric_branch_payload(
+        None, label="项目预算 < 100000",
+    )
+    assert warnings == []
+    assert field_rule["op"] == "lt"
+    assert field_rule["type"] == "number"
+    assert field_rule["boCode"] == "project_info~project_budget"
+    assert field_rule["values"] == ["100000"]
+
+
+def test_numeric_ge_condition_detected_from_descriptive_label_with_prefix():
+    # This is the exact shape the user's flow used: "高预算：项目预算≥100000"
+    field_rule, _simple_rule, warnings = _numeric_branch_payload(
+        None, label="高预算：项目预算≥100000",
+    )
+    assert warnings == []
+    assert field_rule["op"] == "ge"
+    assert field_rule["type"] == "number"
+    assert field_rule["boCode"] == "project_info~project_budget"
+    assert field_rule["values"] == ["100000"]
+
+
+def test_degenerate_positions_get_layered_auto_layout():
+    # AI 生成的流程常常不给坐标 → 所有节点落到同一默认点 → 平台连线交叉成一团。
+    definition = {
+        "process_name": "预算审批",
+        "process_code": "budget_flow",
+        "nodes": [
+            {"id": "START", "type": "start", "label": "开始"},
+            {"id": "pm", "type": "assignee_approval", "label": "项目经理审批", "props": {"approvers": [{"type": "SUBMITTER"}]}},
+            {"id": "admin", "type": "assignee_approval", "label": "系统管理员终审", "props": {"approvers": [{"type": "SUBMITTER"}]}},
+            {"id": "END", "type": "end", "label": "结束"},
+        ],
+        "edges": [
+            {"id": "e1", "source": "START", "target": "pm"},
+            {"id": "e2", "source": "pm", "target": "admin", "label": "高预算",
+             "condition": {"fieldCode": "project_budget", "operator": "ge", "value": "100000"}},
+            {"id": "e3", "source": "pm", "target": "END", "label": "低预算", "condition": "default"},
+            {"id": "e4", "source": "admin", "target": "END"},
+        ],
+    }
+    payload, warnings = translate_definition_to_apaas_schema(
+        definition,
+        apaas_app_id="a",
+        menu_id="m",
+        form_id="f",
+        form_components=[{"label": "项目预算", "bo_code": "project_info~project_budget"}],
+    )
+    assert warnings == []
+    positions = [(n["x"], n["y"]) for n in payload["nodes"]]
+    # No two nodes share the same coordinate after layout.
+    assert len(set(positions)) == len(positions), f"nodes overlap: {positions}"
+    # Layered top-to-bottom by flow depth: START → pm → admin → END.
+    ymap = {n["id"]: n["y"] for n in payload["nodes"]}
+    assert ymap["START"] < ymap["pm"] < ymap["admin"] < ymap["END"]
+
+
+def test_explicit_distinct_positions_are_respected_not_relaid_out():
+    # 人工在 ProcessDesigner 摆好的坐标(各不相同)不应被自动排版覆盖。
+    payload, _warnings = translate_definition_to_apaas_schema(
+        _branch_definition(),
+        apaas_app_id="app-1",
+        menu_id="menu-1",
+        form_id="form-1",
+        process_name="漏洞整改闭环流程",
+        process_code="vuln_fix_flow",
+    )
+    by_id = {n["id"]: n for n in payload["nodes"]}
+    # _branch_definition placed manager at x=120, fix-owner at x=480 — keep that spread.
+    assert by_id["manager"]["x"] == 120.0
+    assert by_id["fix-owner"]["x"] == 480.0
 
 
 def test_branch_definition_accepts_exclusive_gateway_alias_from_tool_input():
