@@ -368,6 +368,7 @@ import { Download, Grid, List, MoreFilled, Plus } from '@element-plus/icons-vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import AppIcon from '@/components/common/AppIcon.vue'
 import { handleError } from '@/utils/errorHandler'
+import { openExternal } from '@/utils/openExternal'
 import { applicationApi, type ApplicationDeliveryAssetItem, type ApplicationDeliveryAssetsResponse } from '@/api/application'
 import { conversationApi, type ConversationWithApp } from '@/api/conversation'
 import BuilderFrame from '@/components/BuilderFrame.vue'
@@ -560,7 +561,7 @@ function openInPlatform(app: MergedApplication) {
     ElMessage.info('该应用尚未部署到 aPaaS 平台')
     return
   }
-  window.open(app.apaas_url, '_blank', 'noopener,noreferrer')
+  void openExternal(app.apaas_url)
 }
 
 function hasCardMoreActions(app: MergedApplication) {

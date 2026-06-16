@@ -10,6 +10,7 @@
     {
       "identifier": "shell:allow-spawn",
       "allow": [{ "name": "binaries/ruijing-sidecar", "sidecar": true, "args": true }]
-    }
+    },
+    "shell:allow-open"
   ]
 }

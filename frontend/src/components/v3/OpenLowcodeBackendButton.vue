@@ -7,6 +7,7 @@
 <script setup lang="ts">
 import { ref } from 'vue'
 import { getEditorUrl } from '@/api/editorUrl'
+import { openExternal } from '@/utils/openExternal'
 import AppIcon from '@/components/common/AppIcon.vue'
 
 const props = defineProps<{
@@ -21,7 +22,9 @@ const loading = ref(false)
 
 async function onClick() {
   loading.value = true
-  const targetWindow = window.open('', '_blank')
+  // 在线版: 同步预开空白页避免浏览器弹窗拦截 (await 后再 window.open 会被拦)。
+  // 桌面版: window.open 在 Tauri webview 里无效, 不预开, 拿到 URL 后经系统浏览器打开。
+  const targetWindow = __DESKTOP__ ? null : window.open('', '_blank')
   try {
     const resp = await getEditorUrl(props.appId, {
       menu_type: props.menuType || '',
@@ -31,10 +34,13 @@ async function onClick() {
     if (resp?.ok && resp.url) {
       // aPaaS 原生 fn-config 的「返回/关闭」都走 $router.go(-1)。
       // 直接进子编辑器或过快自动跳转时没有可退历史，所以先打开完整应用编辑入口。
-      if (targetWindow) {
-        targetWindow.location.href = resp.entry_url || resp.url
+      const dest = resp.entry_url || resp.url
+      if (__DESKTOP__) {
+        await openExternal(dest)
+      } else if (targetWindow) {
+        targetWindow.location.href = dest
       } else {
-        window.open(resp.entry_url || resp.url, '_blank')
+        window.open(dest, '_blank')
       }
     } else {
       try { targetWindow?.close() } catch { /* ignore */ }
