@@ -4,9 +4,11 @@ public_account_base_url 必须为空 → desktop_auth 走 authority 分支(本�
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
+from fastapi.responses import HTMLResponse
 
 from app.database import init_db
 from app.routes import desktop_auth
+from services.account_service.admin_ui import ADMIN_UI_HTML
 
 
 @asynccontextmanager
@@ -22,6 +24,10 @@ def create_app() -> FastAPI:
     @app.get("/api/health")
     async def health():
         return {"status": "ok", "service": "account-service"}
+
+    @app.get("/admin-ui", response_class=HTMLResponse)
+    async def admin_ui():
+        return HTMLResponse(content=ADMIN_UI_HTML)
 
     return app
 

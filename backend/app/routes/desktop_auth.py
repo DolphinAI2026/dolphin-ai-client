@@ -12,7 +12,7 @@ from pydantic import BaseModel
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.auth import create_access_token
+from app.auth import create_access_token, get_password_hash
 from app.config import settings
 from app.database import get_db
 from app.deps import get_auth_context, AuthContext, resolve_default_tenant_id_for_user
@@ -123,3 +123,74 @@ async def admin_create_account(
         # provision 总会建租户+membership; 走到 None 即数据异常, 别用 0 掩盖。
         raise HTTPException(status_code=500, detail="新账号租户创建异常")
     return CreateAccountOut(username=user.username, tenant_id=tid)
+
+
+class AccountItem(BaseModel):
+    id: int
+    username: str
+    is_active: bool
+    is_platform_admin: bool
+    tenant_id: int | None
+
+
+@router.get("/admin/accounts", response_model=list[AccountItem])
+async def admin_list_accounts(
+    db: AsyncSession = Depends(get_db),
+    ctx: AuthContext = Depends(get_auth_context),
+):
+    """平台管理员列出所有桌面账号。仅 is_platform_admin=True 可调用。"""
+    if not ctx.user.is_platform_admin:
+        raise HTTPException(status_code=403, detail="仅平台管理员可管理桌面账号")
+    users = (await db.execute(
+        select(User).where(User.account_source == "desktop").order_by(User.id.asc())
+    )).scalars().all()
+    items = []
+    for u in users:
+        tid = await resolve_default_tenant_id_for_user(db, u.id)
+        items.append(AccountItem(
+            id=u.id,
+            username=u.username,
+            is_active=u.is_active,
+            is_platform_admin=u.is_platform_admin,
+            tenant_id=tid,
+        ))
+    return items
+
+
+class AccountPatchIn(BaseModel):
+    action: str  # "disable" | "enable" | "reset_password"
+    password: str | None = None  # action=reset_password 时必填, 至少 8 位
+
+
+class AccountPatchOut(BaseModel):
+    username: str
+    is_active: bool
+
+
+@router.patch("/admin/accounts/{username}", response_model=AccountPatchOut)
+async def admin_patch_account(
+    username: str,
+    data: AccountPatchIn,
+    db: AsyncSession = Depends(get_db),
+    ctx: AuthContext = Depends(get_auth_context),
+):
+    """平台管理员改密 / 停用 / 启用桌面账号。仅 is_platform_admin=True 可调用。"""
+    if not ctx.user.is_platform_admin:
+        raise HTTPException(status_code=403, detail="仅平台管理员可管理桌面账号")
+    user = (await db.execute(
+        select(User).where(User.username == username, User.account_source == "desktop")
+    )).scalar_one_or_none()
+    if user is None:
+        raise HTTPException(status_code=404, detail="账号不存在")
+    if data.action == "disable":
+        user.is_active = False
+    elif data.action == "enable":
+        user.is_active = True
+    elif data.action == "reset_password":
+        if not data.password or len(data.password) < 8:
+            raise HTTPException(status_code=400, detail="密码至少 8 位")
+        user.hashed_password = get_password_hash(data.password)
+    else:
+        raise HTTPException(status_code=400, detail="不支持的操作")
+    await db.commit()
+    return AccountPatchOut(username=user.username, is_active=user.is_active)

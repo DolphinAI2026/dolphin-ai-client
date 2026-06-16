@@ -122,3 +122,175 @@ async def test_federation_mirror_with_apaas_namesake_no_crash(account_client):
     r = await c.post("/api/desktop-auth/login", json={"username": "dup", "password": "ruijing2026"})
     assert r.status_code == 200
     assert r.json()["username"] == "dup"
+
+
+# ─── Admin 后台: 列账号 / 改密 / 停用 ─────────────────────────────────────────
+
+
+async def _provision_admin_and_token(c, Session, username="mars", password="ruijing2026"):
+    """provision 一个平台管理员 + authority 登录拿 token。"""
+    from app import desktop_accounts as da
+    async with Session() as db:
+        await da.provision_desktop_account(db, username, password, is_platform_admin=True)
+        await db.commit()
+    r = await c.post("/api/desktop-auth/login", json={"username": username, "password": password})
+    assert r.status_code == 200, r.text
+    return r.json()["access_token"]
+
+
+@pytest.mark.asyncio
+async def test_admin_list_accounts(account_client):
+    c, Session = account_client
+    token = await _provision_admin_and_token(c, Session)
+    hdr = {"Authorization": f"Bearer {token}"}
+    # 开 2 个普通账号
+    for u in ("alice", "bob"):
+        r = await c.post("/api/desktop-auth/admin/accounts",
+                         json={"username": u, "password": "ruijing2026"}, headers=hdr)
+        assert r.status_code == 200, r.text
+    # 列账号: mars + alice + bob = 3 项
+    r = await c.get("/api/desktop-auth/admin/accounts", headers=hdr)
+    assert r.status_code == 200, r.text
+    items = r.json()
+    assert isinstance(items, list)
+    by_name = {it["username"]: it for it in items}
+    assert {"mars", "alice", "bob"} <= set(by_name)
+    # 按 id 排序
+    ids = [it["id"] for it in items]
+    assert ids == sorted(ids)
+    # 字段齐全 + 类型
+    mars_item = by_name["mars"]
+    assert mars_item["is_platform_admin"] is True
+    assert mars_item["is_active"] is True
+    assert isinstance(mars_item["tenant_id"], int)
+    assert by_name["alice"]["is_platform_admin"] is False
+
+
+@pytest.mark.asyncio
+async def test_admin_list_only_desktop_accounts(account_client):
+    """apaas 同名/非 desktop 行不应出现在列表里。"""
+    c, Session = account_client
+    token = await _provision_admin_and_token(c, Session)
+    hdr = {"Authorization": f"Bearer {token}"}
+    async with Session() as db:
+        db.add(User(username="apaasonly", hashed_password="x", account_source="apaas", is_active=True))
+        await db.commit()
+    r = await c.get("/api/desktop-auth/admin/accounts", headers=hdr)
+    assert r.status_code == 200
+    names = {it["username"] for it in r.json()}
+    assert "apaasonly" not in names
+
+
+@pytest.mark.asyncio
+async def test_admin_list_requires_platform_admin(account_client):
+    c, Session = account_client
+    token = await _provision_admin_and_token(c, Session)
+    hdr = {"Authorization": f"Bearer {token}"}
+    # 开一个普通(非管理员)账号
+    r = await c.post("/api/desktop-auth/admin/accounts",
+                     json={"username": "plain", "password": "ruijing2026"}, headers=hdr)
+    assert r.status_code == 200, r.text
+    plain_token = (await c.post("/api/desktop-auth/login",
+                                json={"username": "plain", "password": "ruijing2026"})).json()["access_token"]
+    # 非管理员 → 403
+    r = await c.get("/api/desktop-auth/admin/accounts",
+                    headers={"Authorization": f"Bearer {plain_token}"})
+    assert r.status_code == 403
+    # 无 token → 401/403
+    r = await c.get("/api/desktop-auth/admin/accounts")
+    assert r.status_code in (401, 403)
+
+
+@pytest.mark.asyncio
+async def test_admin_disable_account_blocks_login(account_client):
+    c, Session = account_client
+    token = await _provision_admin_and_token(c, Session)
+    hdr = {"Authorization": f"Bearer {token}"}
+    await c.post("/api/desktop-auth/admin/accounts",
+                 json={"username": "carol", "password": "ruijing2026"}, headers=hdr)
+    # 停用前能登录
+    assert (await c.post("/api/desktop-auth/login",
+                         json={"username": "carol", "password": "ruijing2026"})).status_code == 200
+    # PATCH disable
+    r = await c.patch("/api/desktop-auth/admin/accounts/carol",
+                      json={"action": "disable"}, headers=hdr)
+    assert r.status_code == 200, r.text
+    assert r.json()["is_active"] is False
+    assert r.json()["username"] == "carol"
+    # 停用后 login 401
+    assert (await c.post("/api/desktop-auth/login",
+                         json={"username": "carol", "password": "ruijing2026"})).status_code == 401
+    # enable 回来
+    r = await c.patch("/api/desktop-auth/admin/accounts/carol",
+                      json={"action": "enable"}, headers=hdr)
+    assert r.status_code == 200
+    assert r.json()["is_active"] is True
+    assert (await c.post("/api/desktop-auth/login",
+                         json={"username": "carol", "password": "ruijing2026"})).status_code == 200
+
+
+@pytest.mark.asyncio
+async def test_admin_reset_password(account_client):
+    c, Session = account_client
+    token = await _provision_admin_and_token(c, Session)
+    hdr = {"Authorization": f"Bearer {token}"}
+    await c.post("/api/desktop-auth/admin/accounts",
+                 json={"username": "dave", "password": "oldpassw"}, headers=hdr)
+    # 改密
+    r = await c.patch("/api/desktop-auth/admin/accounts/dave",
+                      json={"action": "reset_password", "password": "newpassw1"}, headers=hdr)
+    assert r.status_code == 200, r.text
+    # 新密码能登录
+    assert (await c.post("/api/desktop-auth/login",
+                         json={"username": "dave", "password": "newpassw1"})).status_code == 200
+    # 旧密码 401
+    assert (await c.post("/api/desktop-auth/login",
+                         json={"username": "dave", "password": "oldpassw"})).status_code == 401
+
+
+@pytest.mark.asyncio
+async def test_admin_reset_password_too_short(account_client):
+    c, Session = account_client
+    token = await _provision_admin_and_token(c, Session)
+    hdr = {"Authorization": f"Bearer {token}"}
+    await c.post("/api/desktop-auth/admin/accounts",
+                 json={"username": "erin", "password": "ruijing2026"}, headers=hdr)
+    r = await c.patch("/api/desktop-auth/admin/accounts/erin",
+                      json={"action": "reset_password", "password": "short"}, headers=hdr)
+    assert r.status_code == 400
+
+
+@pytest.mark.asyncio
+async def test_admin_patch_unknown_user_404(account_client):
+    c, Session = account_client
+    token = await _provision_admin_and_token(c, Session)
+    hdr = {"Authorization": f"Bearer {token}"}
+    r = await c.patch("/api/desktop-auth/admin/accounts/nobody",
+                      json={"action": "disable"}, headers=hdr)
+    assert r.status_code == 404
+
+
+@pytest.mark.asyncio
+async def test_admin_ui_served(account_client):
+    """/admin-ui 返回 self-contained HTML 页面。"""
+    c, _ = account_client
+    r = await c.get("/admin-ui")
+    assert r.status_code == 200
+    assert "text/html" in r.headers["content-type"]
+    assert "桌面账号管理" in r.text
+    assert "/account-api" in r.text  # API 前缀变量在页内
+
+
+@pytest.mark.asyncio
+async def test_admin_patch_requires_platform_admin(account_client):
+    c, Session = account_client
+    token = await _provision_admin_and_token(c, Session)
+    hdr = {"Authorization": f"Bearer {token}"}
+    await c.post("/api/desktop-auth/admin/accounts",
+                 json={"username": "frank", "password": "ruijing2026"}, headers=hdr)
+    plain_token = (await c.post("/api/desktop-auth/login",
+                                json={"username": "frank", "password": "ruijing2026"})).json()["access_token"]
+    r = await c.patch("/api/desktop-auth/admin/accounts/frank",
+                      json={"action": "disable"},
+                      headers={"Authorization": f"Bearer {plain_token}"})
+    assert r.status_code == 403
