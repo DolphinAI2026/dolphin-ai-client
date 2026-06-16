@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
+import { checkAndPromptUpdate } from '@/utils/desktopUpdate'
 import { useUserStore } from '@/stores/user'
 import { useThemeStore } from '@/stores/theme'
 
@@ -155,6 +156,11 @@ function onPlatformClick(e: MouseEvent) {
   goPlatformAdmin()
 }
 
+// 桌面端手动检查更新(在线版不渲染按钮)。silentIfNone=false → 已是最新也提示。
+function onCheckUpdate() {
+  void checkAndPromptUpdate({ silentIfNone: false })
+}
+
 function onLogout() {
   tenantMenuOpen.value = false
   user.logout()
@@ -183,6 +189,7 @@ const ICONS: Record<string, string> = {
   chevronRight: '<polyline points="9 18 15 12 9 6"/>',
   chevronDown: '<polyline points="6 9 12 15 18 9"/>',
   logout: '<path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/><polyline points="16 17 21 12 16 7"/><line x1="21" y1="12" x2="9" y2="12"/>',
+  refresh: '<path d="M21 12a9 9 0 1 1-2.6-6.4"/><polyline points="21 3 21 9 15 9"/>',
 }
 
 function renderIcon(name: string): string {
@@ -318,6 +325,18 @@ function renderIcon(name: string): string {
         >
           <span class="theme-row-icon" v-html="renderIcon(isDark ? 'moon' : 'sun')" />
           <span class="theme-row-label">{{ isDark ? '深色模式 · 切到浅色' : '浅色模式 · 切到深色' }}</span>
+        </button>
+
+        <!-- 桌面端: 手动检查更新(在线版编译期不渲染) -->
+        <button
+          v-if="__DESKTOP__"
+          type="button"
+          class="theme-row"
+          title="检查更新"
+          @click="onCheckUpdate"
+        >
+          <span class="theme-row-icon" v-html="renderIcon('refresh')" />
+          <span class="theme-row-label">检查更新</span>
         </button>
 
         <div class="account-row">
