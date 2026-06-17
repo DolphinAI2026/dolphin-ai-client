@@ -63,6 +63,8 @@ def build_env(data_dir: Path, port: int) -> dict:
         "PUBLIC_ACCOUNT_BASE_URL": os.environ.get(
             "PUBLIC_ACCOUNT_BASE_URL", "https://agent.dfy.definesys.cn/account-api"
         ),
+        # 桌面 sidecar 接受 ai-builder(内部短票)+ desktop-sidecar(联邦会话票)。
+        "ACCEPTED_TOKEN_ISSUERS": "ai-builder,desktop-sidecar",
     }
     for k, v in written.items():
         os.environ[k] = v

@@ -12,7 +12,7 @@ from pydantic import BaseModel
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.auth import create_access_token, get_password_hash
+from app.auth import create_access_token, get_password_hash, _DESKTOP_ISSUER
 from app.config import settings
 from app.database import get_db
 from app.deps import get_auth_context, AuthContext, resolve_default_tenant_id_for_user
@@ -68,7 +68,7 @@ async def _federation_login(db: AsyncSession, data: DesktopLoginIn, base_url: st
     tenant_id = await resolve_default_tenant_id_for_user(db, user.id)
     if tenant_id is None:
         raise HTTPException(status_code=500, detail="账号租户配置异常")
-    token = create_access_token(user, tenant_id=tenant_id)
+    token = create_access_token(user, tenant_id=tenant_id, issuer=_DESKTOP_ISSUER)
     return DesktopLoginOut(access_token=token, username=user.username)
 
 

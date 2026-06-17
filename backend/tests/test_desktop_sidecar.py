@@ -44,3 +44,8 @@ def test_build_env_sets_real_key_and_no_bypass(tmp_path):
     env = desktop_sidecar.build_env(data_dir=tmp_path, port=9999)
     assert "ALLOW_DEFAULT_ENCRYPTION_KEY" not in env
     assert env["ENCRYPTION_KEY"] and env["ENCRYPTION_KEY"] != "default-key-change-in-production-32b"
+
+
+def test_build_env_sets_accepted_issuers(tmp_path):
+    env = desktop_sidecar.build_env(data_dir=tmp_path, port=9999)
+    assert env["ACCEPTED_TOKEN_ISSUERS"] == "ai-builder,desktop-sidecar"

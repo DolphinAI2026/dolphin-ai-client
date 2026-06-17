@@ -60,3 +60,19 @@ async def test_federation_second_login_reuses_mirror(client, monkeypatch):
     async with database.AsyncSessionLocal() as s:
         n = (await s.execute(select(func.count()).select_from(User).where(User.username == "grace"))).scalar()
     assert n == 1  # 只镜像一份
+
+
+@pytest.mark.asyncio
+async def test_federation_token_has_desktop_issuer(client, monkeypatch):
+    """联邦本地签的票 issuer=desktop-sidecar, 不与 authority 共用 ai-builder。"""
+    from app.auth import decode_token
+
+    async def fake_remote(base_url, username, password):
+        return {"username": username}
+    monkeypatch.setattr("app.routes.desktop_auth._remote_authenticate", fake_remote)
+    monkeypatch.setattr("app.config.settings.accepted_token_issuers", "ai-builder,desktop-sidecar")
+
+    r = await client.post("/api/desktop-auth/login", json={"username": "iris", "password": "x"})
+    assert r.status_code == 200
+    payload = decode_token(r.json()["access_token"])
+    assert payload["iss"] == "desktop-sidecar"
