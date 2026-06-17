@@ -2506,11 +2506,28 @@ async function sendArtifactToBuilderByName(filename: string) {
 }
 
 function downloadArtifact() {
+  const fname = activeArtifactName.value
+  if (!fname || !currentSession.value) return
+  // 二进制产物（storage=='file'，如 .pptx/.docx/.xlsx）走后端 download 端点，
+  // 否则本地 Blob 会下出一个空文本文件。
+  const latest = artifacts.value
+    .filter(a => a.filename === fname)
+    .sort((x, y) => y.version - x.version)[0]
+  if (latest && latest.storage === 'file') {
+    const url = aiChatApi.artifactDownloadUrl(currentSession.value.id, fname, latest.version)
+    const a = document.createElement('a')
+    a.href = url
+    a.download = fname
+    document.body.appendChild(a)
+    a.click()
+    a.remove()
+    return
+  }
   const blob = new Blob([activeArtifactContent.value], { type: 'text/plain;charset=utf-8' })
   const url = URL.createObjectURL(blob)
   const a = document.createElement('a')
   a.href = url
-  a.download = activeArtifactName.value
+  a.download = fname
   a.click()
   URL.revokeObjectURL(url)
 }

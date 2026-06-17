@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 import os
 import re
 import tempfile
@@ -23,14 +24,15 @@ from datetime import datetime
 from pathlib import Path
 from typing import Annotated, List, Optional
 
-from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
+from fastapi import APIRouter, Depends, File, Form, HTTPException, Request, UploadFile
+from fastapi.responses import FileResponse
 from pydantic import BaseModel
 from sqlalchemy import select, desc
 from sqlalchemy.ext.asyncio import AsyncSession
 from sse_starlette.sse import EventSourceResponse
 
 from app.database import get_db, AsyncSessionLocal
-from app.deps import get_auth_context, AuthContext
+from app.deps import get_auth_context, get_auth_context_from_token, AuthContext
 from app.models import (
     AIChatSession,
     AIChatMessage,
@@ -40,8 +42,10 @@ from app.models import (
     DeployRecord,
     Application,
 )
-from app.routes.chat import _parse_uploaded_document  # 复用现有文档解析
+from app.routes.chat import _parse_uploaded_document, DOC_PARSE_ERROR_PREFIX  # 复用现有文档解析
 from app.ai_chat.agent import run_agent, generate_title
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/ai-chat", tags=["ai-chat"])
 
@@ -352,6 +356,11 @@ def _tool_call_to_dict(t: AIChatToolCall, generation: Optional[dict] = None) -> 
 
 
 def _attachment_to_dict(a: AIChatAttachment) -> dict:
+    # 解析失败时 content_text 存的是 DOC_PARSE_ERROR_PREFIX 错误标记(非正文)。
+    # 不能让 has_content_text 因此翻 True, 否则前端无法区分"解析成功"与"解析失败";
+    # 同时单独透出 parse_failed + parse_error 让 UI/下游能展示失败原因。
+    _ct = a.content_text or ""
+    _parse_failed = _ct.startswith(DOC_PARSE_ERROR_PREFIX)
     return {
         "id": a.id,
         "session_id": a.session_id,
@@ -359,7 +368,9 @@ def _attachment_to_dict(a: AIChatAttachment) -> dict:
         "kind": a.kind,
         "mime": a.mime,
         "size_bytes": a.size_bytes,
-        "has_content_text": bool(a.content_text),
+        "has_content_text": bool(_ct) and not _parse_failed,
+        "parse_failed": _parse_failed,
+        "parse_error": _ct[len(DOC_PARSE_ERROR_PREFIX):].strip() if _parse_failed else None,
         "has_image": bool(a.image_data_url),
         # 图片附件回带 base64 data URL, 让历史消息气泡能渲染缩略图(粘贴的截图刷新后仍可见)。
         # 非图片不带, 避免响应膨胀。
@@ -369,14 +380,24 @@ def _attachment_to_dict(a: AIChatAttachment) -> dict:
 
 
 def _artifact_to_dict(a: AIChatArtifact) -> dict:
+    storage = getattr(a, "storage", None) or "text"
+    is_file = storage == "file"
+    # file 产物 content 为空，真实大小落在 size_bytes 列；text 产物按内容字节数算
+    if is_file:
+        size_bytes = a.size_bytes or 0
+        preview = a.filename  # file 产物无文本内容，预览给文件名让前端渲染下载卡片
+    else:
+        size_bytes = len(a.content.encode("utf-8")) if a.content else 0
+        preview = (a.content[:200] + "...") if len(a.content) > 200 else a.content
     return {
         "id": a.id,
         "session_id": a.session_id,
         "filename": a.filename,
         "format": a.format,
         "version": a.version,
-        "preview": (a.content[:200] + "...") if len(a.content) > 200 else a.content,
-        "size_bytes": len(a.content.encode("utf-8")) if a.content else 0,
+        "storage": storage,
+        "preview": preview,
+        "size_bytes": size_bytes,
         "created_at": a.created_at.isoformat() if a.created_at else None,
         "updated_at": a.updated_at.isoformat() if a.updated_at else None,
     }
@@ -402,6 +423,25 @@ def _classify_kind(filename: str, mime: Optional[str]) -> str:
 
 
 # ─────────────────────────── 鉴权辅助 ───────────────────────────
+
+async def _auth_from_header_or_query(request: Request) -> AuthContext:
+    """header 优先、`?token=` 兜底解析 AuthContext —— 供浏览器原生 GET（无法带 header）的
+    下载入口使用，与 SSE 入口同套路。"""
+    auth_header = request.headers.get("authorization") or request.headers.get("Authorization")
+    token: Optional[str] = None
+    if auth_header and auth_header.lower().startswith("bearer "):
+        token = auth_header.split(None, 1)[1].strip()
+    if not token:
+        token = request.query_params.get("token")
+    if not token:
+        raise HTTPException(status_code=401, detail="缺少认证 token（header 或 ?token= 均可）")
+    try:
+        return await get_auth_context_from_token(token)
+    except HTTPException:
+        raise
+    except Exception:
+        raise HTTPException(status_code=401, detail="无效的 token")
+
 
 async def _load_session_or_404(
     db: AsyncSession, session_id: int, ctx: AuthContext
@@ -638,8 +678,11 @@ async def upload_attachments(
             stub = StarletteUpload(filename=f.filename, file=BytesIO(raw))
             try:
                 content_text = await _parse_uploaded_document(stub)
-            except Exception:
-                content_text = ""
+            except Exception as exc:
+                # 不再静默吞错: 记真实异常 + 把可读原因落到 content_text,
+                # 让 read_attachment 能返回"解析失败: <原因>"(桌面端缺解析库时尤为关键)。
+                logger.exception("附件解析失败 filename=%s session=%s", f.filename, session_id)
+                content_text = DOC_PARSE_ERROR_PREFIX + f"解析时发生异常: {exc}"
 
         att = AIChatAttachment(
             session_id=session_id,
@@ -804,6 +847,51 @@ async def get_artifact(
         **_artifact_to_dict(a),
         "content": a.content,
     }
+
+
+@router.get("/sessions/{session_id}/artifacts/{filename}/download")
+async def download_artifact(
+    session_id: int,
+    filename: str,
+    request: Request,
+    db: Annotated[AsyncSession, Depends(get_db)],
+    version: Optional[int] = None,
+):
+    """下载二进制产物（storage=='file'）。校验 file_path 落在会话工作区内后用 FileResponse 返回。
+
+    浏览器用 <a href>/window.open 直接 GET 拿文件，原生不能带 Authorization header，
+    所以这里 header 优先、`?token=` 兜底（与 SSE 入口同套路）。
+    """
+    ctx = await _auth_from_header_or_query(request)
+    session = await _load_session_or_404(db, session_id, ctx)
+    query = select(AIChatArtifact).where(
+        AIChatArtifact.session_id == session_id,
+        AIChatArtifact.filename == filename,
+    )
+    if version is not None:
+        query = query.where(AIChatArtifact.version == version)
+    else:
+        query = query.order_by(desc(AIChatArtifact.version))
+    res = await db.execute(query.limit(1))
+    a = res.scalar_one_or_none()
+    if not a:
+        raise HTTPException(status_code=404, detail="产出物不存在")
+    if (getattr(a, "storage", None) or "text") != "file" or not a.file_path:
+        raise HTTPException(status_code=400, detail="该产出物不是可下载文件")
+    if not session.workspace_dir:
+        raise HTTPException(status_code=404, detail="会话工作区未初始化")
+    # 防越界 + TOCTOU：必须落在 workspace 内且文件仍存在
+    ws = Path(session.workspace_dir).resolve()
+    target = Path(a.file_path).resolve()
+    if ws != target and ws not in target.parents:
+        raise HTTPException(status_code=400, detail="文件路径越界")
+    if not target.is_file():
+        raise HTTPException(status_code=404, detail="文件已不存在")
+    return FileResponse(
+        path=str(target),
+        filename=a.filename,
+        media_type="application/octet-stream",
+    )
 
 
 @router.get("/sessions/{session_id}/artifacts/{filename}/versions")

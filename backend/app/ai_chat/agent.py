@@ -1112,7 +1112,8 @@ async def _run_agent_inner(
             # 2026-05-24: generate_app_from_doc 改强制 artifact_id 后, 不再产新 artifact
             # (用户 write_artifact 已经落表), 从列表去掉.
             _emits_artifact = (
-                (tool_name in ("write_artifact", "edit_artifact") and tc_db.status == "success")
+                (tool_name in ("write_artifact", "edit_artifact", "save_binary_artifact")
+                 and tc_db.status == "success")
                 or (tool_name in (
                     "update_app_from_doc",
                     "export_apaas_app_design_doc",
@@ -1120,34 +1121,45 @@ async def _run_agent_inner(
             )
             if _emits_artifact:
                 from sqlalchemy import desc as _desc
-                # write_artifact: filename 在 args；generate/update_app_from_doc:
-                # 不知道 dispatcher 落 artifact 用了什么 filename，直接拉本 session
-                # 最近落的那条
-                if tool_name in ("write_artifact", "edit_artifact"):
+                # write_artifact / save_binary_artifact: filename 在 args（save_binary_artifact
+                # 默认用源文件名，但可被 filename 覆盖）→ 优先按 filename 拉；拉不到再退回最近一条。
+                # generate/update_app_from_doc: 不知道 dispatcher 落 artifact 用了什么 filename，
+                # 直接拉本 session 最近落的那条。
+                wanted_name = args.get("filename")
+                if tool_name == "save_binary_artifact" and not wanted_name:
+                    wanted_name = (args.get("source_path") or "").split("/")[-1] or None
+                art = None
+                if tool_name in ("write_artifact", "edit_artifact", "save_binary_artifact") and wanted_name:
                     res = await db.execute(
                         select(AIChatArtifact)
                         .where(
                             AIChatArtifact.session_id == session.id,
-                            AIChatArtifact.filename == args.get("filename"),
+                            AIChatArtifact.filename == wanted_name,
                         )
                         .order_by(_desc(AIChatArtifact.version))
                         .limit(1)
                     )
-                else:
+                    art = res.scalar_one_or_none()
+                if art is None:
                     res = await db.execute(
                         select(AIChatArtifact)
                         .where(AIChatArtifact.session_id == session.id)
                         .order_by(_desc(AIChatArtifact.id))
                         .limit(1)
                     )
-                art = res.scalar_one_or_none()
+                    art = res.scalar_one_or_none()
                 if art:
+                    _is_file = (getattr(art, "storage", None) or "text") == "file"
                     yield _sse("artifact_created", {
                         "id": art.id,
                         "filename": art.filename,
                         "format": art.format,
                         "version": art.version,
-                        "preview": art.content[:200],
+                        "storage": getattr(art, "storage", None) or "text",
+                        # file 产物 content 为空 → preview 给文件名，size_bytes 给真实大小，
+                        # 让前端能渲染下载卡片而非空白
+                        "preview": art.filename if _is_file else (art.content or "")[:200],
+                        "size_bytes": (art.size_bytes or 0) if _is_file else len((art.content or "").encode("utf-8")),
                     })
 
             # 特殊：ask_clarifying_question → loop 暂停等用户
