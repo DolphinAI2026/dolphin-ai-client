@@ -1,6 +1,10 @@
 <template>
   <BuilderFrame :breadcrumbs="[{ label: '技能库' }]">
     <template #actions>
+      <button class="new-btn new-btn--ghost" @click="onNewBlank">
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
+        新建空白
+      </button>
       <el-upload
         :show-file-list="false"
         :before-upload="onUpload"
@@ -57,15 +61,16 @@
               <span class="skill-files">{{ filesSummary(row.files) }}</span>
             </template>
           </el-table-column>
-          <el-table-column label="操作" width="100" align="right">
+          <el-table-column label="操作" width="240" align="right">
             <template #default="{ row }">
+              <el-button link type="primary" @click="edit(row)">编辑</el-button>
+              <el-button v-if="row.source === 'platform'" link @click="onClone(row)">复制为我的技能</el-button>
               <el-button
                 v-if="row.source === 'user'"
                 link
                 type="danger"
                 @click="onDelete(row.name)"
               >删除</el-button>
-              <span v-else class="skill-locked">—</span>
             </template>
           </el-table-column>
         </el-table>
@@ -76,12 +81,14 @@
 
 <script setup lang="ts">
 import { ref, onMounted } from 'vue'
+import { useRouter } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import BuilderFrame from '@/components/BuilderFrame.vue'
 import EmptyState from '@/components/states/EmptyState.vue'
 import SkeletonCard from '@/components/states/SkeletonCard.vue'
-import { listSkills, uploadSkill, deleteSkill, type SkillItem } from '@/api/skills'
+import { listSkills, uploadSkill, deleteSkill, createSkill, cloneSkill, type SkillItem } from '@/api/skills'
 
+const router = useRouter()
 const skills = ref<SkillItem[]>([])
 const loading = ref(false)
 const uploading = ref(false)
@@ -139,6 +146,46 @@ async function onDelete(name: string) {
   }
 }
 
+function edit(row: SkillItem) {
+  router.push(`/skills/${encodeURIComponent(row.name)}/workspace`)
+}
+
+async function onNewBlank() {
+  let value: string
+  try {
+    const r = await ElMessageBox.prompt('技能名（英文/数字/连字符）', '新建空白 skill')
+    value = r.value
+  } catch {
+    return // 用户取消
+  }
+  if (!value) return
+  try {
+    await createSkill(value)
+    router.push(`/skills/${encodeURIComponent(value)}/workspace`)
+  } catch (e: any) {
+    ElMessage.error(e?.response?.data?.detail || '新建失败')
+  }
+}
+
+async function onClone(row: SkillItem) {
+  let value: string
+  try {
+    const r = await ElMessageBox.prompt(`复制「${row.name}」为新技能，输入新名`, '复制为我的技能')
+    value = r.value
+  } catch {
+    return // 用户取消
+  }
+  if (!value) return
+  try {
+    await cloneSkill(row.name, value)
+    ElMessage.success('已复制')
+    await refresh()
+    router.push(`/skills/${encodeURIComponent(value)}/workspace`)
+  } catch (e: any) {
+    ElMessage.error(e?.response?.data?.detail || '复制失败')
+  }
+}
+
 onMounted(refresh)
 </script>
 
@@ -192,10 +239,6 @@ onMounted(refresh)
   white-space: nowrap;
 }
 
-.skill-locked {
-  color: var(--text-4, #bbb);
-}
-
 .new-btn {
   display: inline-flex;
   align-items: center;
@@ -216,5 +259,14 @@ onMounted(refresh)
 .new-btn:disabled {
   opacity: 0.6;
   cursor: not-allowed;
+}
+
+.new-btn--ghost {
+  color: var(--text, #111);
+  background: transparent;
+  border: 1px solid var(--b-border, #d9d9d9);
+}
+.new-btn--ghost:hover:not(:disabled) {
+  background: var(--b-bg-sub, #f5f5f5);
 }
 </style>
