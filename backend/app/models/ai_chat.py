@@ -133,6 +133,11 @@ class AIChatArtifact(Base):
     content: Mapped[str] = mapped_column(BigText, nullable=False, default="")
     # 当 AI 多次写同名 artifact 时，version+1，前端 UI 可以选择看历史
     version: Mapped[int] = mapped_column(Integer, default=1, nullable=False)
+    # 产物存储方式：text=用 content（默认，老产物不变）；file=二进制落盘
+    storage: Mapped[str] = mapped_column(String(10), default="text", nullable=False)
+    # storage=file 时指向 session.workspace_dir 下的文件
+    file_path: Mapped[Optional[str]] = mapped_column(String(1000), nullable=True)
+    size_bytes: Mapped[int] = mapped_column(BigInteger, default=0, nullable=False)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, nullable=False)
     updated_at: Mapped[datetime] = mapped_column(
         DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False
