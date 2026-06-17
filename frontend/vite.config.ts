@@ -1,13 +1,24 @@
 import { defineConfig } from 'vite'
 import vue from '@vitejs/plugin-vue'
 import { resolve } from 'path'
+import { readFileSync } from 'fs'
 import http from 'http'
+
+// 应用版本号取自 src-tauri/tauri.conf.json(发版脚本会 bump 它), 编译期注入。
+const __APP_VERSION__ = (() => {
+  try {
+    return JSON.parse(readFileSync(resolve(__dirname, '../src-tauri/tauri.conf.json'), 'utf-8')).version || ''
+  } catch {
+    return ''
+  }
+})()
 
 // https://vite.dev/config/
 export default defineConfig({
   base: process.env.VITE_BASE_URL || '/',
   define: {
     __DESKTOP__: JSON.stringify(process.env.VITE_DESKTOP === '1'),
+    __APP_VERSION__: JSON.stringify(__APP_VERSION__),
   },
   plugins: [
     vue(),

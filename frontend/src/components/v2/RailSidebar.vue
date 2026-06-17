@@ -156,6 +156,12 @@ function onPlatformClick(e: MouseEvent) {
   goPlatformAdmin()
 }
 
+// __DESKTOP__/__APP_VERSION__ 是编译期常量, 但直接写进 <template> 会被 Vue 当成
+// 组件实例属性(_ctx.__DESKTOP__)而 Vite define 不替换点号后属性 → 永远 undefined。
+// 必须经脚本 const 暴露给模板。
+const isDesktop = __DESKTOP__
+const appVersion = __APP_VERSION__
+
 // 桌面端手动检查更新(在线版不渲染按钮)。silentIfNone=false → 已是最新也提示。
 function onCheckUpdate() {
   void checkAndPromptUpdate({ silentIfNone: false })
@@ -327,16 +333,16 @@ function renderIcon(name: string): string {
           <span class="theme-row-label">{{ isDark ? '深色模式 · 切到浅色' : '浅色模式 · 切到深色' }}</span>
         </button>
 
-        <!-- 桌面端: 手动检查更新(在线版编译期不渲染) -->
+        <!-- 桌面端: 版本号 + 手动检查更新(在线版不渲染) -->
         <button
-          v-if="__DESKTOP__"
+          v-if="isDesktop"
           type="button"
           class="theme-row"
-          title="检查更新"
+          :title="`当前版本 v${appVersion} · 点击检查更新`"
           @click="onCheckUpdate"
         >
           <span class="theme-row-icon" v-html="renderIcon('refresh')" />
-          <span class="theme-row-label">检查更新</span>
+          <span class="theme-row-label">检查更新<span v-if="appVersion" class="rail-version">v{{ appVersion }}</span></span>
         </button>
 
         <div class="account-row">
@@ -895,6 +901,16 @@ function renderIcon(name: string): string {
   flex: 1;
   white-space: nowrap;
   color: inherit;
+  display: flex;
+  align-items: center;
+}
+/* 版本号徽标: 推到行尾, 弱化 */
+.rail-version {
+  margin-left: auto;
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+  opacity: 0.55;
+  padding-left: 8px;
 }
 
 /* v3 2026-05-20 fix (code review #P2-5): 删 .accent-picker / .accent-swatch /
