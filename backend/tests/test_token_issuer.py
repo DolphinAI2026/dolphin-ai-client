@@ -48,5 +48,6 @@ def test_assert_rejects_desktop_issuer_on_shared_backend(monkeypatch):
 
 
 def test_assert_passes_when_shared_backend_excludes_desktop(monkeypatch):
-    monkeypatch.setattr("app.config.settings.accepted_token_issuers", "ai-builder")
+    # 非默认值且不含 desktop-sidecar: 断言应放行 (证明放行不是因为撞上默认值)。
+    monkeypatch.setattr("app.config.settings.accepted_token_issuers", "ai-builder,other-backend")
     auth.assert_shared_backend_issuer_safety()  # 不抛
