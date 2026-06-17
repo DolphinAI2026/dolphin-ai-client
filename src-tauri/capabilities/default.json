@@ -5,6 +5,10 @@
   "windows": [
     "main"
   ],
+  "comment": "前端由 sidecar 经 http://127.0.0.1:<port>/ 提供 = 远程内容; 不配 remote 则 capability 默认只覆盖本地 app://, 所有 JS→Tauri 命令(updater/shell open/process)会被 ACL 拦。",
+  "remote": {
+    "urls": ["http://127.0.0.1:*", "http://localhost:*"]
+  },
   "permissions": [
     "core:default",
     {
