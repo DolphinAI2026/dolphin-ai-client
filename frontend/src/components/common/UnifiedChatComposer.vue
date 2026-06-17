@@ -57,6 +57,10 @@ const emit = defineEmits<{
 const textareaRef = ref<HTMLTextAreaElement | null>(null)
 const fileInputRef = ref<HTMLInputElement | null>(null)
 
+// 拖拽上传：dragenter/dragleave 会在子元素间反复冒泡触发，用计数器去抖避免高亮闪烁。
+const isDragOver = ref(false)
+let dragDepth = 0
+
 function resize() {
   const el = textareaRef.value
   if (!el) return
@@ -79,6 +83,48 @@ function onFilesPicked(e: Event) {
   const files = Array.from(input.files || [])
   if (files.length) emit('files-picked', files)
   input.value = ''
+}
+
+function onDragEnter(e: DragEvent) {
+  if (props.disabled) return
+  // 只在拖拽包含文件时响应（拖文本/拖选区不算）。
+  if (!e.dataTransfer || !Array.from(e.dataTransfer.types || []).includes('Files')) return
+  e.preventDefault()
+  e.stopPropagation()
+  dragDepth += 1
+  isDragOver.value = true
+}
+
+function onDragOver(e: DragEvent) {
+  if (props.disabled) return
+  if (!e.dataTransfer || !Array.from(e.dataTransfer.types || []).includes('Files')) return
+  // dragover 必须 preventDefault 才能让随后的 drop 生效。
+  e.preventDefault()
+  e.stopPropagation()
+  e.dataTransfer.dropEffect = 'copy'
+  isDragOver.value = true
+}
+
+function onDragLeave(e: DragEvent) {
+  if (props.disabled) return
+  e.preventDefault()
+  e.stopPropagation()
+  dragDepth -= 1
+  if (dragDepth <= 0) {
+    dragDepth = 0
+    isDragOver.value = false
+  }
+}
+
+function onDrop(e: DragEvent) {
+  dragDepth = 0
+  isDragOver.value = false
+  if (props.disabled) return
+  e.preventDefault()
+  e.stopPropagation()
+  const files = Array.from(e.dataTransfer?.files || [])
+  // 复用与点选/粘贴相同的出口；不在此处加 accept 校验，与原生文件选择保持一致。
+  if (files.length) emit('files-picked', files)
 }
 
 function onPaste(e: ClipboardEvent) {
@@ -112,7 +158,14 @@ watch(() => props.modelValue, () => nextTick(resize))
 
 <template>
   <div class="ucc">
-    <div class="ucc-box" :class="{ 'is-disabled': disabled }">
+    <div
+      class="ucc-box"
+      :class="{ 'is-disabled': disabled, 'is-drag-over': isDragOver }"
+      @dragenter="onDragEnter"
+      @dragover="onDragOver"
+      @dragleave="onDragLeave"
+      @drop="onDrop"
+    >
       <div v-if="attachments.length" class="ucc-attachments" aria-label="已添加附件">
         <div
           v-for="(attachment, index) in attachments"
@@ -241,6 +294,13 @@ watch(() => props.modelValue, () => nextTick(resize))
 .ucc-box:focus-within {
   border-color: var(--brand-ring, var(--brand, #2f6bff));
   box-shadow: 0 0 0 3px color-mix(in srgb, var(--brand, #2f6bff) 10%, transparent);
+}
+
+.ucc-box.is-drag-over {
+  border-color: var(--brand-ring, var(--brand, #2f6bff));
+  border-style: dashed;
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--brand, #2f6bff) 14%, transparent);
+  background: color-mix(in srgb, var(--brand, #2f6bff) 5%, var(--surface, var(--t-bg-input, #fff)));
 }
 
 .ucc-box.is-disabled {
