@@ -269,4 +269,26 @@ onMounted(refresh)
 .new-btn--ghost:hover:not(:disabled) {
   background: var(--b-bg-sub, #f5f5f5);
 }
+
+/* 表格操作列的 el-button link: 全局 builder.css 把 --primary/--danger 渲染成填充块,
+   这里强制还原成无底色的文字链接(否则「编辑/删除」糊成纯色块、看不清字)。 */
+.skill-main :deep(.el-button.is-link) {
+  background: transparent !important;
+  border: none !important;
+  padding: 2px 6px !important;
+  height: auto;
+  color: var(--brand, #1d4ed8);
+  font-weight: 600;
+}
+.skill-main :deep(.el-button.is-link:hover) {
+  background: transparent !important;
+  color: var(--brand-hover, #1e40af);
+}
+.skill-main :deep(.el-button--danger.is-link) {
+  color: var(--err, #dc2626);
+}
+.skill-main :deep(.el-button--danger.is-link:hover) {
+  color: var(--err, #dc2626);
+  opacity: 0.85;
+}
 </style>
