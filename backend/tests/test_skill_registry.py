@@ -70,3 +70,59 @@ def test_manifest_lists_name_and_desc(skills_dir):
     manifest = skmod.build_skill_manifest(skmod.SkillRegistry().scan())
     assert "use_skill" in manifest and "a: 甲" in manifest
     assert skmod.build_skill_manifest([]) == ""
+
+
+def _clear_desktop_env(monkeypatch):
+    """清掉所有影响 skills_root() 桌面分支解析的 env，逐项隔离。"""
+    monkeypatch.delenv("RUIJING_SKILLS_DIR", raising=False)
+    monkeypatch.delenv("SIDECAR_DATA_DIR", raising=False)
+    monkeypatch.delenv("APAAS_WORKSPACE_ROOT", raising=False)
+    monkeypatch.delenv("DESKTOP_MODE", raising=False)
+
+
+def test_desktop_skills_root_matches_sidecar_data_dir(tmp_path, monkeypatch):
+    """生产路径契约：桌面模式下 skills_root() 必须落在 sidecar 真正使用的 data_dir 下。
+
+    用 desktop_sidecar.build_env 注入 env（与 Tauri 传 --data-dir 后的实际状态一致），
+    再断言 skills_root() == <data_dir>/skills。盯住 high 级路径解析 bug 回归。
+    """
+    from desktop_sidecar import build_env
+
+    _clear_desktop_env(monkeypatch)
+    # 模拟 macOS 上 Tauri app_data_dir(bundle id 目录)，绝非 ~/.ruijing-builder。
+    data_dir = tmp_path / "Library" / "Application Support" / "com.ruijing.builder"
+    # build_env 会写真实环境变量；monkeypatch 不拦 os.environ[...]=...，用 setenv 兜底清理。
+    written = build_env(data_dir=data_dir, port=8799)
+    for k, v in written.items():
+        monkeypatch.setenv(k, v)
+
+    assert skmod.skills_root() == data_dir / "skills"
+
+
+def test_desktop_skills_root_from_workspace_root_only(tmp_path, monkeypatch):
+    """SIDECAR_DATA_DIR 缺失时仍能从 APAAS_WORKSPACE_ROOT 反推（更稳的真相源）。"""
+    _clear_desktop_env(monkeypatch)
+    data_dir = tmp_path / "appdata"
+    monkeypatch.setenv("DESKTOP_MODE", "1")
+    monkeypatch.setenv("APAAS_WORKSPACE_ROOT", str(data_dir / "workspaces"))
+
+    assert skmod.skills_root() == data_dir / "skills"
+
+
+def test_desktop_skills_root_does_not_use_home_fallback_when_workspace_known(tmp_path, monkeypatch):
+    """回归：桌面模式有真实 data_dir 信号时，绝不退回 ~/.ruijing-builder。"""
+    _clear_desktop_env(monkeypatch)
+    data_dir = tmp_path / "real"
+    monkeypatch.setenv("DESKTOP_MODE", "1")
+    monkeypatch.setenv("SIDECAR_DATA_DIR", str(data_dir))
+
+    root = skmod.skills_root()
+    assert root == data_dir / "skills"
+    assert ".ruijing-builder" not in str(root)
+
+
+def test_not_desktop_mode_returns_none(monkeypatch):
+    """非桌面、无显式 env → None（云端 no-op）。"""
+    _clear_desktop_env(monkeypatch)
+    monkeypatch.setattr(skmod.sys, "frozen", False, raising=False)
+    assert skmod.skills_root() is None

@@ -16,14 +16,30 @@ log = logging.getLogger(__name__)
 
 
 def skills_root() -> Path | None:
-    """解析 skill 根目录。优先级：显式 env > 桌面 data_dir > 无。"""
+    """解析 skill 根目录。优先级：显式 env > 桌面 data_dir > 无。
+
+    data_dir 的真相源是 desktop_sidecar.build_env：Tauri 用 bundle identifier 推出
+    的 app_data_dir(macOS = ~/Library/Application Support/com.ruijing.builder)经
+    `--data-dir` 传给 sidecar，build_env 据此 **无条件** 写 os.environ
+    ['APAAS_WORKSPACE_ROOT'] = <data_dir>/workspaces。所以这里从
+    APAAS_WORKSPACE_ROOT 反推 data_dir（取 .parent），与 sidecar 真正使用的目录
+    严格一致；绝不能猜 ~/.ruijing-builder —— 那是 main() 里仅当没传 --data-dir 时
+    的 CLI 兜底默认，生产桌面包从不命中，会让 scan() 永远扫空目录。
+    """
     env = os.environ.get("RUIJING_SKILLS_DIR")
     if env:
         return Path(env)
-    # 桌面 sidecar：data_dir 由 desktop_sidecar.build_env 决定（默认 ~/.ruijing-builder）。
-    # 这里复用同一约定：DESKTOP_MODE 时取 SIDECAR_DATA_DIR 或默认。
+    # 桌面 sidecar：从 build_env 实际导出的信号反推 data_dir。
     if os.environ.get("DESKTOP_MODE") == "1" or getattr(sys, "frozen", False):
-        data_dir = os.environ.get("SIDECAR_DATA_DIR") or str(Path.home() / ".ruijing-builder")
+        # 首选 build_env 显式导出的 data_dir。
+        data_dir = os.environ.get("SIDECAR_DATA_DIR")
+        if not data_dir:
+            # 退而从 workspaces 根反推（build_env 无条件设置，是更稳的真相源）。
+            ws = os.environ.get("APAAS_WORKSPACE_ROOT")
+            if ws:
+                return Path(ws).parent / "skills"
+            # 都没有时仅作为最后兜底（开发/裸跑），与 main() 的默认对齐。
+            data_dir = str(Path.home() / ".ruijing-builder")
         return Path(data_dir) / "skills"
     return None
 

@@ -53,6 +53,9 @@ def build_env(data_dir: Path, port: int) -> dict:
         "DESKTOP_MODE": "1",
         "HOST": "127.0.0.1",
         "PORT": str(port),
+        # data_dir 的真相源：Tauri 经 --data-dir 传入(app_data_dir, 各平台不同)。
+        # 显式导出, 让 skills_root() 等下游不必各自猜路径(避免误用 ~/.ruijing-builder 兜底)。
+        "SIDECAR_DATA_DIR": str(data_dir),
         # 绝对路径(四斜杠), 避免被 config._normalize_database_url 锚定到 backend/
         "DATABASE_URL": f"sqlite+aiosqlite:///{db_path}",
         # 每实例持久化的加密主密钥 (crypto.py 对它 sha256 派生 Fernet key)。
