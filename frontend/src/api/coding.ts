@@ -274,7 +274,7 @@ export const codingApi = {
   },
 
   /** 注册本地文件夹为工作区（桌面端原生选择器选中的绝对路径） */
-  openLocalFolder(abs_path: string, apaas_app_id?: number) {
+  openLocalFolder(abs_path: string, apaas_app_id?: string) {
     return request.post<any, { ws_id: string; disk_path: string; display_name: string; workspace_type: string; apaas_app_id: string | null }>(
       '/coding/workspace/open-local', { abs_path, apaas_app_id })
   },

@@ -587,7 +587,6 @@ async function openLocalFolder() {
   } catch { return }  // 用户取消确认
   try {
     const ws = await codingApi.openLocalFolder(picked)
-    // 复用现有 openWorkspace 导航: router.push({ path: '/coding', query: { workspace_id: ws.ws_id } })
     router.push({ path: '/coding', query: { workspace_id: ws.ws_id } }).catch(() => {})
   } catch (e: any) {
     ElMessage.error(`打开失败: ${e?.response?.data?.detail || e?.message || e}`)
