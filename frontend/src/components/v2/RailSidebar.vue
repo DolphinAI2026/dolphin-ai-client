@@ -22,15 +22,25 @@ const effectiveCollapsed = computed(() =>
   props.collapsed === true ? true : internalCollapsed.value
 )
 
-const NAV = computed<NavItem[]>(() => [
-  { key: 'home', label: 'AI Builder', icon: 'chat', path: '/' },
-  { key: 'apps', label: '应用资产库', icon: 'apps', path: '/apps', badge: appCount.value || undefined },
-  { key: 'catalog', label: '自开发资产库', icon: 'store', path: '/workspace-catalog' },
-  { key: 'tenantLogs', label: '租户日志分析', icon: 'activity', path: '/tenant-logs' },
-  // AI Builder（/）= 首页融合页，与 /ai-chat 同组件：新建对话 + 历史会话一体。
-  // 改已有应用从「应用资产库」点进工作室 (/chat)，/chat 不挂菜单。
-  // 数据连接 / 运行发布先隐藏；平台级配置统一从平台管理工作台进入。
-])
+// 桌面包剔除指向 admin-spa 的路由（meta.desktop === 'hidden'）；
+// 在线版此函数恒返回 false，tree-shake 后零开销。
+function desktopHidden(path: string): boolean {
+  if (!__DESKTOP__) return false
+  try { return (router.resolve(path).meta as any)?.desktop === 'hidden' } catch { return false }
+}
+
+const NAV = computed<NavItem[]>(() => {
+  const all: NavItem[] = [
+    { key: 'home', label: 'AI Builder', icon: 'chat', path: '/' },
+    { key: 'apps', label: '应用资产库', icon: 'apps', path: '/apps', badge: appCount.value || undefined },
+    { key: 'catalog', label: '自开发资产库', icon: 'store', path: '/workspace-catalog' },
+    { key: 'tenantLogs', label: '租户日志分析', icon: 'activity', path: '/tenant-logs' },
+    // AI Builder（/）= 首页融合页，与 /ai-chat 同组件：新建对话 + 历史会话一体。
+    // 改已有应用从「应用资产库」点进工作室 (/chat)，/chat 不挂菜单。
+    // 数据连接 / 运行发布先隐藏；平台级配置统一从平台管理工作台进入。
+  ]
+  return all.filter(item => !desktopHidden(item.path))
+})
 // 桌面包不含 admin-spa, /platform-admin 内嵌 iframe 会白屏; 桌面下直接进自渲染的配置页 /platform-envs。
 const platformNavItem: NavItem = __DESKTOP__
   ? { key: 'platform', label: '平台配置', icon: 'shield', path: '/platform-envs' }
@@ -304,7 +314,7 @@ function renderIcon(name: string): string {
         </div>
 
         <a
-          v-if="platformEntryVisible"
+          v-if="platformEntryVisible && !desktopHidden(platformNavItem.path)"
           class="console-row platform-row"
           :class="{ active: platformActive }"
           :href="platformHref"
