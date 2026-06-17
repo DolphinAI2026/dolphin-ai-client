@@ -39,6 +39,7 @@
 - 在线版「打开本地文件夹」（无本地文件夹概念）。
 - 工作区文件夹移动/重命名后的自动重连（断了重新打开）。
 - 把现有 app 托管创建流程改造成「用户可见文件夹」（那是「本地文件夹为主」模型，本轮选了双模并存）。
+- **约束 run_command / 运行时沙箱 / 敏感路径隔离**（P2，对齐竞品分析 WorkBuddy 沙箱缺口）——本轮 run_command 维持开口 shell，安全靠路径牢笼+软删除+打开时确认。
 
 ---
 
@@ -74,9 +75,13 @@
 
 ## Part D — 安全边界
 
-1. **路径牢笼**：复用 `_resolve_safe`（已 raise on escape）。external root = abs_path。所有 read/write/list/delete 工具经它解析，禁 `..`/绝对路径越界。
-2. **写前确认高危**：删除文件/目录、批量覆盖、移动/重命名 → 走确认门（复用 coding 现有变更预览/确认交互）。普通单文件编辑在牢笼内自动应用（保持 agent 流畅）。实现点：在 coding 写工具层按操作类型分流（destructive → 需确认 flag；edit → 自动）。
-3. **选目录敏感校验**：注册端点拒绝/警告高风险根（`/`、用户家目录根 `~`、`/System`、`/Library`、卷根等）——避免用户误把整个家目录当工作区交给 agent。给可读错误，不静默放行。
+> ⚠️ 规划期核实修正：coding agent **没有交互式确认门**（配置侧 SpecApplyModal 是另一条 batch plan→apply 链；coding 侧 run_agent 自主跑工具、写/删自动应用，只有 `tools.py` 的「补丁守卫」软警告 write_file >50% 重写）。且 `run_command` 是开口 shell——路径牢笼 `_resolve_safe` 只管文件工具，管不了 shell（agent 可经绝对路径 `rm -rf ~` 绕过）。故原「写前确认门」不可复用。本轮采用**能落地的安全姿态**（用户已拍板：本轮不约束 run_command）：
+
+1. **路径牢笼（文件工具）**：复用 `_resolve_safe`（`tools.py:201`，已 raise on escape）。external root = abs_path。read/write/edit/glob/grep 等文件工具经它解析，禁 `..`/绝对路径越界。external 与 app 托管共用同一牢笼，零新增。
+2. **软删除回收站**：external 工作区里文件删除（`_edit_file` 的 `resolved.unlink()` 路径，`tools.py:358`）改为**移到可恢复回收站**（app_data_dir 下 `.trash/<ws_id>/<时间戳>/`），不硬删。给「误删可恢复」的安全网，无需不存在的交互确认门。app 托管工作区维持现状（爆炸半径本就在 app 目录内）。
+3. **打开文件夹一次性风险确认**：前端打开本地文件夹流程里，选目录后弹一次确认——「AI 可在此文件夹内读写并运行命令（run_command 不受沙箱限制），建议选用 git 管理或已备份的目录」。用户确认后才注册。设定预期，是本轮对 run_command 开口的主要缓解。
+4. **选目录敏感校验**：注册端点拒绝高风险根（`/`、用户家目录根 `~`、`/System`、`/Library`、卷根 `/Volumes/*` 顶层等）——避免误把整个家目录交给 agent。给可读错误，不静默放行。
+5. **run_command 不约束（本轮）+ 真沙箱后置 P2**：run_command 仍是开口 shell（已知限制，文档明示）。真正约束 run_command / 运行时沙箱 / 敏感路径隔离 = 独立 P2（对齐竞品分析里 WorkBuddy 三维安全那个缺口），本轮不做。
 
 ## Part E — app 关联
 
@@ -94,13 +99,13 @@
 - Part A：`registered_workspace` 迁移幂等；唯一约束 `(tenant_id, abs_path)` 去重。
 - Part B：`get_workspace_path` external 优先；目录不存在抛可读错误；列表合并（app 托管 ∪ external）按 tenant 过滤。
 - Part C：注册端点 upsert（重复打开复用行 + 更新 last_opened_at）；租户作用域 403。
-- Part D：`_resolve_safe` 对 external root 拒 `..`/越界（已有逻辑回归 + external root 用例）；destructive 操作触发确认 flag、edit 不触发；敏感目录注册被拒。
+- Part D：`_resolve_safe` 对 external root 拒 `..`/越界（已有逻辑回归 + external root 用例）；external 工作区删除走软删除回收站（文件移到 `.trash` 可恢复、源消失）、app 托管维持硬删；敏感目录（`/`、家目录根、`/System` 等）注册被拒；打开流程含一次性风险确认（前端）。
 - Part E：绑 app 的 workspace agent 上下文含该 app 模型；不绑不含。
 - Part F：`build_env` 设 `APAAS_WORKSPACE_ROOT` 指向 data_dir/workspaces。
 
 ## 风险
 
 - DB 注册表与现有「扫 .workspace.json」两套发现机制并存：`get_workspace_path` 与列表必须两边都查，漏一处会出现「列表有但打不开」或反之。按 grep 校验所有 `get_workspace_path`/列表入口都走合并逻辑。
-- 写前确认门接入点要找准 coding 写工具的分流位置（destructive vs edit），避免漏判把删除当普通编辑自动执行。
+- run_command 开口 shell 是已知未闭合风险（本轮不约束）：用户的真实文件夹下 agent 经 run_command 仍能触达机器任意路径。软删除只覆盖文件工具删除路径，不覆盖 `rm` via run_command。主要缓解是打开时风险确认 + 用户选 git/备份目录。真闭合需 P2 沙箱。
 - Tauri dialog 插件 + capability：桌面包 JS 调 dialog 命令同样要 capability 覆盖（参考 [[desktop_auto_update_2026_06_16]] 的 remote.urls ACL 坑——sidecar 远程源下 Tauri 命令要 capability 放行）。
 - 敏感目录黑名单是兜底非万能；用户仍可能选含敏感数据的项目目录——牢笼限制爆炸半径是主要防线，黑名单只挡最离谱的根目录。
