@@ -331,6 +331,11 @@ async def execute_read_attachment(
         return f"错误：'{filename}' 是图片附件，不能用 read_attachment 读取"
     if not att.content_text:
         return f"错误：'{filename}' 解析失败或为空"
+    # 解析失败时 content_text 会带可读错误标记 → 直接把原因回给 agent, 不当正文喂。
+    from app.routes.chat import DOC_PARSE_ERROR_PREFIX
+    if att.content_text.startswith(DOC_PARSE_ERROR_PREFIX):
+        reason = att.content_text[len(DOC_PARSE_ERROR_PREFIX):].strip()
+        return f"错误：'{filename}' 解析失败: {reason}"
 
     # 截断超长内容（避免一次喂给 LLM 太多 token）
     MAX_CHARS = 30000
@@ -574,6 +579,11 @@ async def execute_create_artifact_from_attachment(
     content = att.content_text or ""
     if not content.strip():
         return f"错误：'{filename}' 解析为空，无法转 artifact"
+    # 解析失败的附件 content_text 是错误标记, 别把它当正文复制进 artifact。
+    from app.routes.chat import DOC_PARSE_ERROR_PREFIX
+    if content.startswith(DOC_PARSE_ERROR_PREFIX):
+        reason = content[len(DOC_PARSE_ERROR_PREFIX):].strip()
+        return f"错误：'{filename}' 解析失败: {reason}，无法转 artifact"
 
     # 产出物文件名：优先参数，否则把附件名改成 .md
     art_name = (args.get("artifact_filename") or "").strip()
