@@ -16,8 +16,8 @@ from app.deps import AuthContext, get_auth_context
 router = APIRouter(prefix="/skills", tags=["skills"])
 
 # 上传体积上限（解压前/后都设防，兜 zip bomb）。桌面单机用，给得宽松。
-MAX_UPLOAD_BYTES = 20 * 1024 * 1024  # 整包压缩字节上限
-MAX_TOTAL_UNCOMPRESSED_BYTES = 100 * 1024 * 1024  # 解压累计字节上限
+MAX_UPLOAD_BYTES = 200 * 1024 * 1024  # 整包压缩字节上限（桌面单机本地, 放宽以容纳带 jar/模板/资源的 skill）
+MAX_TOTAL_UNCOMPRESSED_BYTES = 1024 * 1024 * 1024  # 解压累计字节上限
 
 
 def _is_junk_entry(name: str) -> bool:

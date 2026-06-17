@@ -245,9 +245,11 @@
           :multiple="true"
           accept=".md,.markdown,.txt,.doc,.docx,.pdf,.xls,.xlsx,.csv,.json,.png,.jpg,.jpeg,.gif,.webp,.svg,.html,.htm,.yaml,.yml,.xml,.zip"
           placeholder="输入需求，粘贴图片或点附件..."
+          :skills="availableSkills"
           @send="currentSession ? onSend() : onDraftSend()"
           @stop="onAbort"
           @files-picked="onComposerFilesPicked"
+          @skill-picked="onSkillPicked"
           @remove-attachment="removePendingFileByIndex"
         >
           <template #footer-left>
@@ -480,6 +482,7 @@ import type { AgentMessage } from '@/components/common/agent-conversation/types'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { isImageFile } from '@/utils/pasteImages'
 import UnifiedChatComposer from '@/components/common/UnifiedChatComposer.vue'
+import { listSkills } from '@/api/skills'
 import BuilderModelPicker from '@/components/common/BuilderModelPicker.vue'
 import AppIcon from '@/components/common/AppIcon.vue'
 import type { UnifiedChatAttachment } from '@/components/common/chatComposer'
@@ -660,6 +663,15 @@ function resetChatTenantState() {
 }
 
 const inputText = ref('')
+// 技能库（输入框 @ 引用）—— onMounted 拉一次；无 skill 库则空、@ 不弹。
+const availableSkills = ref<{ name: string; description: string }[]>([])
+onMounted(() => {
+  listSkills().then((s) => { availableSkills.value = s }).catch(() => { /* 无 skill 库则空 */ })
+})
+function onSkillPicked(name: string) {
+  const prefix = `请使用技能 ${name}：`
+  inputText.value = inputText.value ? `${prefix}${inputText.value}` : prefix
+}
 const pendingFiles = ref<File[]>([])
 const messagesRef = ref<HTMLElement>()
 const composerAttachments = computed<UnifiedChatAttachment[]>(() =>
