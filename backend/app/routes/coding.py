@@ -8,6 +8,8 @@ import logging
 import os
 import re
 import shutil
+import uuid
+from datetime import datetime
 from pathlib import Path
 from typing import Optional, Annotated, AsyncIterator, Any
 import httpx
@@ -20,7 +22,7 @@ from sqlalchemy import select, delete
 
 from app.crypto import decrypt_password
 from app.database import get_db
-from app.models import User, Conversation, Message, Project, ProjectMember, Application
+from app.models import User, Conversation, Message, Project, ProjectMember, Application, RegisteredWorkspace
 from app.deps import get_auth_context, AuthContext
 from app.coding.scenes import SceneType, get_scene, get_all_scenes, get_scenes_by_category
 from app.coding.workspace import WorkspaceManager, ProjectType
@@ -60,6 +62,26 @@ SSE_HEADERS = {
     "Connection": "keep-alive",
     "X-Accel-Buffering": "no",
 }
+
+def _is_sensitive_dir(p: Path) -> bool:
+    """拒绝把系统/家目录根当工作区交给 agent。"""
+    try:
+        rp = p.resolve()
+    except Exception:
+        return True
+    if not rp.exists() or not rp.is_dir():
+        return True
+    if rp == Path(rp.anchor):           # 文件系统根 /
+        return True
+    if rp == Path.home().resolve():     # 家目录根
+        return True
+    blacklist = {Path("/System"), Path("/Library"), Path("/Applications"), Path("/private"), Path("/usr"), Path("/bin"), Path("/etc"), Path("/var")}
+    if rp in blacklist:
+        return True
+    if rp.parent == Path("/Volumes"):   # 卷根 /Volumes/<x>
+        return True
+    return False
+
 
 def _event_stream_response(
     generator: AsyncIterator[str] | AsyncIterator[dict[str, Any]],
@@ -547,6 +569,52 @@ async def create_workspace(
     )
     meta["files"] = workspace_mgr.list_files(meta["id"])
     return _decorate_workspace_access(meta, access_role)
+
+
+@router.post("/workspace/open-local")
+async def open_local_workspace(
+    body: dict,
+    ctx: Annotated[AuthContext, Depends(get_auth_context)],
+    db: Annotated[AsyncSession, Depends(get_db)],
+):
+    """桌面: 打开用户本地文件夹当 external 工作区。指针进 DB, 不写用户文件夹。"""
+    abs_path = (body.get("abs_path") or "").strip()
+    apaas_app_id = body.get("apaas_app_id")
+    if not abs_path:
+        raise HTTPException(status_code=400, detail="abs_path 必填")
+    p = Path(abs_path)
+    if not p.exists() or not p.is_dir():
+        raise HTTPException(status_code=400, detail="文件夹不存在或不是目录")
+    if _is_sensitive_dir(p):
+        raise HTTPException(status_code=400, detail="该目录是系统/家目录根，过于宽泛，请选具体项目文件夹")
+    resolved_abs = str(p.resolve())
+    existing = (await db.execute(
+        select(RegisteredWorkspace).where(
+            RegisteredWorkspace.tenant_id == ctx.tenant_id,
+            RegisteredWorkspace.abs_path == resolved_abs,
+        )
+    )).scalar_one_or_none()
+    if existing:
+        existing.last_opened_at = datetime.utcnow()
+        if apaas_app_id is not None:
+            existing.apaas_app_id = str(apaas_app_id)
+        await db.commit()
+        ws_id = existing.ws_id
+        display_name = existing.display_name
+    else:
+        ws_id = f"{ctx.user.id}_{uuid.uuid4().hex[:8]}"
+        display_name = p.name
+        db.add(RegisteredWorkspace(
+            ws_id=ws_id, abs_path=resolved_abs, user_id=ctx.user.id, tenant_id=ctx.tenant_id,
+            workspace_type="external", apaas_app_id=(str(apaas_app_id) if apaas_app_id is not None else None),
+            display_name=display_name,
+        ))
+        await db.commit()
+    workspace_mgr.register_external(ws_id, resolved_abs)
+    return {
+        "ws_id": ws_id, "disk_path": resolved_abs, "display_name": display_name,
+        "workspace_type": "external", "apaas_app_id": (str(apaas_app_id) if apaas_app_id is not None else None),
+    }
 
 
 # 2026-05-19 image #25: 允许上传已有的自开发包 zip 进行二次调整。
