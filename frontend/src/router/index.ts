@@ -85,6 +85,12 @@ const router = createRouter({
       meta: { requiresAuth: true, navExpanded: true }
     },
     {
+      path: '/skills/:name/workspace',
+      name: 'SkillWorkspace',
+      component: () => import('@/views/SkillWorkspacePage.vue'),
+      meta: { requiresAuth: true }
+    },
+    {
       path: '/project/:id',
       name: 'ProjectOverview',
       component: () => import('@/views/ProjectOverview.vue'),
