@@ -3,17 +3,35 @@
 // 动态 import tauri 插件 → 在线 build 里这分支被 tree-shake 掉, 不进在线包。
 import { ElMessageBox, ElMessage } from 'element-plus'
 
+function errText(e: any): string {
+  if (!e) return '未知错误'
+  if (typeof e === 'string') return e
+  return e.message || e.toString?.() || JSON.stringify(e)
+}
+
 export async function checkAndPromptUpdate(opts: { silentIfNone: boolean }): Promise<void> {
   if (!__DESKTOP__) return
+
+  // check() 失败自动重试一次(扛瞬时网络抖动);仍失败则报真实错误。
   let update: any = null
-  try {
-    const updater = await import('@tauri-apps/plugin-updater')
-    update = await updater.check()
-  } catch (e) {
-    if (!opts.silentIfNone) ElMessage.error('检查更新失败:无法连接更新服务')
-    console.error('[update] check 失败', e)
+  let lastErr: any = null
+  for (let attempt = 1; attempt <= 2; attempt++) {
+    try {
+      const updater = await import('@tauri-apps/plugin-updater')
+      update = await updater.check()
+      lastErr = null
+      break
+    } catch (e) {
+      lastErr = e
+      console.error(`[update] check 第 ${attempt} 次失败`, e)
+    }
+  }
+  if (lastErr) {
+    // 真实错误透出(之前写死"无法连接"会误导诊断)。
+    if (!opts.silentIfNone) ElMessage.error(`检查更新失败:${errText(lastErr)}`)
     return
   }
+
   if (!update) {
     if (!opts.silentIfNone) ElMessage.success('已是最新版本')
     return
@@ -35,7 +53,7 @@ export async function checkAndPromptUpdate(opts: { silentIfNone: boolean }): Pro
     await proc.relaunch()
   } catch (e) {
     loading.close()
-    ElMessage.error('更新失败,请稍后重试或手动下载')
+    ElMessage.error(`更新失败:${errText(e)}`)
     console.error('[update] downloadAndInstall 失败', e)
   }
 }
