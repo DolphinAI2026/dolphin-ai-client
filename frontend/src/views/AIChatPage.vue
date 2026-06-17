@@ -87,6 +87,14 @@
             @click="artifactsPanelOpen = !artifactsPanelOpen"
             :title="artifactsPanelOpen ? '收起设计文档' : '展开设计文档'"
           ><AppIcon name="file" :size="14" /> 设计文档 <span class="badge">{{ artifacts.length }}</span></button>
+          <button
+            v-if="currentSession"
+            class="save-skill-btn"
+            title="把本次会话产出整理成一个可复用技能"
+            @click="onSaveAsSkill"
+          >
+            <AppIcon name="sparkles" :size="14" /> 存成技能
+          </button>
         </div>
       </header>
 
@@ -1910,6 +1918,22 @@ async function onDraftSend() {
   }
 }
 
+const SKILL_AUTHORING_PROMPT =
+  '回顾我们这次对话里完成的可复用做法，把它沉淀成一个技能（skill）。请：'
+  + '1) 想清楚这个技能解决什么问题、什么时候该用（写进 description，用第三人称「Use when …」触发式）；'
+  + '2) 把步骤写成具体编号指令（instructions）；'
+  + '3) 有确定性逻辑就写成 helper 脚本而非长说明；'
+  + '4) 技能名用英文 kebab-case。'
+  + '然后用 search_tools 找到并激活 create_skill 工具，调它把技能存进我的技能库。'
+  + '存好后告诉我技能名，并提示我可以在技能库 / Skill IDE 里继续编辑。'
+
+async function onSaveAsSkill() {
+  if (!currentSession.value) return
+  inputText.value = SKILL_AUTHORING_PROMPT
+  await nextTick()
+  onSend()
+}
+
 async function onSend() {
   if (!currentSession.value) return
   // 流式中按发送 → 进队列（仅文字，不带附件 — 附件场景太复杂留待后续）
@@ -2653,6 +2677,29 @@ onMounted(async () => {
     } catch (e) {
       console.error('AI Builder 二次开发交接失败', e)
       ElMessage.error('进入二次开发失败')
+    }
+    return
+  }
+
+  // 从技能库页「AI 生成技能」入口结构化交接：读 sessionStorage，建会话发起技能创作对话。
+  const skillRaw = route.query.skill_authoring === '1'
+    ? sessionStorage.getItem('ai_builder_pending_skill_authoring')
+    : null
+  if (!currentSession.value && skillRaw) {
+    sessionStorage.removeItem('ai_builder_pending_skill_authoring')
+    try {
+      const payload = JSON.parse(skillRaw) as { message?: string }
+      const created = await aiChatApi.createSession({ selected_llm_config_id: selectedLlmId.value })
+      sessions.value.unshift(created)
+      await loadSession(created.id)
+      inputText.value = (payload.message || '').trim()
+        || '我要做一个新技能（skill）。请先问我它要解决什么场景、什么时候触发，再帮我写 SKILL.md 和必要的 helper 脚本，然后用 search_tools 激活 create_skill 存进我的技能库。'
+      router.replace({ path: `/ai-chat/${created.id}` })
+      await nextTick()
+      onSend()
+    } catch (e) {
+      console.error('AI 生成技能交接失败', e)
+      ElMessage.error('进入技能生成失败')
     }
     return
   }
