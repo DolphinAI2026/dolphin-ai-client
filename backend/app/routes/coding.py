@@ -64,32 +64,40 @@ SSE_HEADERS = {
     "X-Accel-Buffering": "no",
 }
 
-_SENSITIVE_ROOTS = {
-    Path("/"), Path("/System"), Path("/Library"), Path("/Applications"),
+# 祖先判断: 这些系统根本身或其任意子目录都拒绝(无合法用户项目落在下面)。
+# /etc /var 等 resolve 后是 /private/etc /private/var, 由 /private 这条祖先兜住。
+_SENSITIVE_ANCESTRY_ROOTS = {
+    Path("/System"), Path("/Library"), Path("/Applications"),
     Path("/private"), Path("/usr"), Path("/bin"), Path("/sbin"),
-    Path("/etc"), Path("/var"), Path("/dev"), Path("/opt"), Path("/Users"),
+    Path("/etc"), Path("/var"), Path("/dev"), Path("/opt"),
 }
 
 
+def _is_sensitive_path(rp: Path) -> bool:
+    """纯路径策略判断(传入已 resolve 的路径), 不查 fs。便于单测。"""
+    if rp == Path(rp.anchor):           # 文件系统根 /
+        return True
+    if rp == Path.home().resolve():     # 家目录根
+        return True
+    if rp == Path("/Users"):            # 家目录们的父 — 仅精确拦; 祖先拦会误杀 /Users/<x>/proj
+        return True
+    if rp.parent == Path("/Volumes"):   # 卷根 /Volumes/<x>
+        return True
+    for root in _SENSITIVE_ANCESTRY_ROOTS:
+        if rp == root or root in rp.parents:
+            return True
+    return False
+
+
 def _is_sensitive_dir(p: Path) -> bool:
-    """拒绝把系统/家目录根当工作区交给 agent。用祖先判断, 兼容 macOS 符号链接
-    (/etc -> /private/etc 等 resolve 后仍被 /private 这条祖先命中)。"""
+    """拒绝把系统/家目录根当工作区交给 agent。"""
     try:
         rp = p.resolve()
     except Exception:
         return True
     if not rp.exists() or not rp.is_dir():
         return True
-    if rp == Path(rp.anchor):           # 文件系统根 /
-        return True
-    if rp == Path.home().resolve():     # 家目录根
-        return True
-    if rp.parent == Path("/Volumes"):   # 卷根 /Volumes/<x>
-        return True
-    for root in _SENSITIVE_ROOTS:       # 命中敏感根本身或其子目录
-        if rp == root or root in rp.parents:
-            return True
-    return False
+    return _is_sensitive_path(rp)
 
 
 def _event_stream_response(

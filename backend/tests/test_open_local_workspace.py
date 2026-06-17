@@ -77,3 +77,18 @@ async def test_open_local_rejects_symlinked_system_dir(client):
 async def test_open_local_rejects_users_root(client):
     r = await client.post("/api/coding/workspace/open-local", json={"abs_path": "/Users"})
     assert r.status_code == 400
+
+
+def test_sensitive_path_policy():
+    from pathlib import Path
+    from app.routes.coding import _is_sensitive_path
+    # 合法: 家目录下的真实项目路径 — 绝不能被拦(这是 /Users 祖先误拦回归点)
+    assert _is_sensitive_path(Path("/Users/alice/projects/myapp")) is False
+    assert _is_sensitive_path(Path("/Users/alice/dev/x")) is False
+    # 拦: 裸 /Users / 文件系统根 / 系统目录(含 macOS 符号链接 resolve 后形态)
+    assert _is_sensitive_path(Path("/Users")) is True
+    assert _is_sensitive_path(Path("/")) is True
+    assert _is_sensitive_path(Path("/private/etc")) is True
+    assert _is_sensitive_path(Path("/private/var/folders/xx/T")) is True
+    assert _is_sensitive_path(Path("/System/Library")) is True
+    assert _is_sensitive_path(Path("/usr/local")) is True
