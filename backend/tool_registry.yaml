@@ -655,3 +655,33 @@ tools:
     category: dev_workspace
     description: "批量写入多个文件到 workspace（一次 RPC 解决 30+ 文件场景）。"
     writes_workspace: true
+  create_skill:
+    sections: [global]
+    agents: [builder, coding]
+    category: skill_learning
+    description: "把一段可复用做法沉淀成一个新技能(SKILL.md+可选helper)，存进本地技能库。"
+    search_hint: "创建技能 沉淀 存成技能 AI创建 skill author create"
+  list_skills:
+    sections: [global]
+    agents: [builder, coding]
+    category: skill_learning
+    description: "列出本地技能库的全部技能，创建前查重名。"
+    search_hint: "技能列表 skill list"
+  read_skill_file:
+    sections: [global]
+    agents: [builder, coding]
+    category: skill_learning
+    description: "读某个技能内的文件(SKILL.md/helper)，用于迭代。"
+    search_hint: "读技能文件 skill read"
+  write_skill_file:
+    sections: [global]
+    agents: [builder, coding]
+    category: skill_learning
+    description: "往一个user技能写/覆盖一个文件。"
+    search_hint: "写技能文件 skill write"
+  update_skill_metadata:
+    sections: [global]
+    agents: [builder, coding]
+    category: skill_learning
+    description: "改写一个user技能SKILL.md的frontmatter(描述/标签)。"
+    search_hint: "改技能元数据 skill metadata"

@@ -567,6 +567,7 @@ from app.mcp_tools.self_dev_assets import (
     register as _register_self_dev_asset_tools,
 )
 from app.mcp_tools.workspace_core import register as _register_workspace_core_tools
+from app.mcp_tools.skill_authoring import register as _register_skill_authoring_tools
 
 _app_lifecycle_tools = _register_app_lifecycle_tools(
     mcp,
@@ -760,6 +761,7 @@ set_apaas_form_component_document_number_rules = _form_component_tools[
 ]
 set_apaas_form_component_validation = _form_component_tools["set_apaas_form_component_validation"]
 set_apaas_form_component_style = _form_component_tools["set_apaas_form_component_style"]
+_register_skill_authoring_tools(mcp)
 
 
 # ─────────────────────── Runtime drift detection (SPEC v2 PR1 round2-p2 #4) ───────────────────────

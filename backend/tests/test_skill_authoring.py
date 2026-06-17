@@ -1,5 +1,8 @@
 import pytest
+from mcp.server.fastmcp import FastMCP
+
 from app.ai_chat import skills as sk
+from app.mcp_envelope import ErrorCode
 from app.mcp_tools import skill_authoring as sa
 
 
@@ -74,3 +77,75 @@ def test_validate_skill_frontmatter_missing():
         sk.validate_skill_frontmatter({"name": "x"})
     with pytest.raises(ValueError):
         sk.validate_skill_frontmatter({"description": "y"})
+
+
+# ─────────────── MCP 包装层（register 注册的 5 个工具）───────────────
+
+def _mk_tools(tmp_path, monkeypatch, *, with_root=True):
+    if with_root:
+        monkeypatch.setenv("RUIJING_SKILLS_DIR", str(tmp_path / "skills"))
+        d = tmp_path / "skills" / "platform" / "p1"
+        d.mkdir(parents=True)
+        (d / "SKILL.md").write_text("---\nname: p1\ndescription: d\n---\n正文", encoding="utf-8")
+        (d / "helper.py").write_text("print(1)", encoding="utf-8")
+    else:
+        monkeypatch.delenv("RUIJING_SKILLS_DIR", raising=False)
+        monkeypatch.delenv("DESKTOP_MODE", raising=False)
+        monkeypatch.delenv("APAAS_WORKSPACE_ROOT", raising=False)
+    sa._registered_mcp_ids.clear()
+    m = FastMCP("test")
+    return sa.register(m), m
+
+
+@pytest.mark.asyncio
+async def test_create_skill_ok(tmp_path, monkeypatch):
+    tools, _ = _mk_tools(tmp_path, monkeypatch)
+    res = await tools["create_skill"](
+        name="weekly-report", description="Use when 生成周报",
+        instructions="## 步骤\n1. x", helpers=[{"path": "helper.py", "content": "print(1)"}],
+    )
+    assert res["ok"] is True and res["name"] == "weekly-report"
+    assert "SKILL.md" in res["files"] and "helper.py" in res["files"]
+
+
+@pytest.mark.asyncio
+async def test_create_skill_dup_returns_skill_exists(tmp_path, monkeypatch):
+    tools, _ = _mk_tools(tmp_path, monkeypatch)
+    await tools["create_skill"](name="dupe", description="d", instructions="x")
+    res = await tools["create_skill"](name="dupe", description="d", instructions="x")
+    assert res["ok"] is False and res["error_code"] == ErrorCode.SKILL_EXISTS
+
+
+@pytest.mark.asyncio
+async def test_create_skill_non_ascii_returns_name_invalid(tmp_path, monkeypatch):
+    tools, _ = _mk_tools(tmp_path, monkeypatch)
+    res = await tools["create_skill"](name="中文技能", description="d", instructions="x")
+    assert res["ok"] is False and res["error_code"] == ErrorCode.SKILL_NAME_INVALID
+
+
+@pytest.mark.asyncio
+async def test_create_skill_unsupported_when_no_root(tmp_path, monkeypatch):
+    tools, _ = _mk_tools(tmp_path, monkeypatch, with_root=False)
+    res = await tools["create_skill"](name="x", description="d", instructions="y")
+    assert res["ok"] is False and res["error_code"] == ErrorCode.SKILLS_UNSUPPORTED
+
+
+@pytest.mark.asyncio
+async def test_write_platform_skill_returns_readonly(tmp_path, monkeypatch):
+    tools, _ = _mk_tools(tmp_path, monkeypatch)
+    res = await tools["write_skill_file"](name="p1", path="helper.py", content="evil")
+    assert res["ok"] is False and res["error_code"] == ErrorCode.SKILL_READONLY
+
+
+@pytest.mark.asyncio
+async def test_read_missing_skill_returns_not_found(tmp_path, monkeypatch):
+    tools, _ = _mk_tools(tmp_path, monkeypatch)
+    res = await tools["read_skill_file"](name="nope", path="SKILL.md")
+    assert res["ok"] is False and res["error_code"] == ErrorCode.NOT_FOUND
+
+
+def test_create_skill_description_non_empty(tmp_path, monkeypatch):
+    """防 docstring 拼接坑：FastMCP 工具 description 必须非空且含触发词。"""
+    _, m = _mk_tools(tmp_path, monkeypatch)
+    tool = next(t for t in m._tool_manager.list_tools() if t.name == "create_skill")
+    assert tool.description and "Use when" in tool.description
