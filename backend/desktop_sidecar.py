@@ -6,7 +6,10 @@
 import argparse
 import multiprocessing
 import os
+import runpy
 import secrets
+import sys
+import traceback
 from pathlib import Path
 
 
@@ -76,11 +79,32 @@ def build_env(data_dir: Path, port: int) -> dict:
     return written
 
 
+def run_script(path: str) -> int:
+    """用本进程(冻结二进制即自带解释器+已打包依赖)执行一个 .py 文件。
+
+    供 run_python 在桌面态调用: ruijing-sidecar --run-script <file>。
+    不起 uvicorn、不建 DB。stdout/stderr 继承父进程(由调用方 subprocess 捕获)。
+    """
+    try:
+        runpy.run_path(path, run_name="__main__")
+        return 0
+    except SystemExit as exc:
+        code = exc.code
+        return code if isinstance(code, int) else (0 if code is None else 1)
+    except BaseException:
+        traceback.print_exc()
+        return 1
+
+
 def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--port", type=int, default=int(os.environ.get("SIDECAR_PORT", "8799")))
     parser.add_argument("--data-dir", type=str, default=os.environ.get("SIDECAR_DATA_DIR", ""))
+    parser.add_argument("--run-script", type=str, default="")
     args = parser.parse_args()
+
+    if args.run_script:
+        sys.exit(run_script(args.run_script))
 
     data_dir = Path(args.data_dir) if args.data_dir else (Path.home() / ".ruijing-builder")
 
