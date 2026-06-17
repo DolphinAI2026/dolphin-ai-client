@@ -19,6 +19,7 @@ from pydantic import BaseModel
 from sse_starlette.sse import EventSourceResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, delete
+from sqlalchemy.exc import IntegrityError
 
 from app.crypto import decrypt_password
 from app.database import get_db
@@ -63,8 +64,16 @@ SSE_HEADERS = {
     "X-Accel-Buffering": "no",
 }
 
+_SENSITIVE_ROOTS = {
+    Path("/"), Path("/System"), Path("/Library"), Path("/Applications"),
+    Path("/private"), Path("/usr"), Path("/bin"), Path("/sbin"),
+    Path("/etc"), Path("/var"), Path("/dev"), Path("/opt"), Path("/Users"),
+}
+
+
 def _is_sensitive_dir(p: Path) -> bool:
-    """拒绝把系统/家目录根当工作区交给 agent。"""
+    """拒绝把系统/家目录根当工作区交给 agent。用祖先判断, 兼容 macOS 符号链接
+    (/etc -> /private/etc 等 resolve 后仍被 /private 这条祖先命中)。"""
     try:
         rp = p.resolve()
     except Exception:
@@ -75,11 +84,11 @@ def _is_sensitive_dir(p: Path) -> bool:
         return True
     if rp == Path.home().resolve():     # 家目录根
         return True
-    blacklist = {Path("/System"), Path("/Library"), Path("/Applications"), Path("/private"), Path("/usr"), Path("/bin"), Path("/etc"), Path("/var")}
-    if rp in blacklist:
-        return True
     if rp.parent == Path("/Volumes"):   # 卷根 /Volumes/<x>
         return True
+    for root in _SENSITIVE_ROOTS:       # 命中敏感根本身或其子目录
+        if rp == root or root in rp.parents:
+            return True
     return False
 
 
@@ -571,15 +580,20 @@ async def create_workspace(
     return _decorate_workspace_access(meta, access_role)
 
 
+class OpenLocalWorkspaceRequest(BaseModel):
+    abs_path: str
+    apaas_app_id: Optional[str] = None
+
+
 @router.post("/workspace/open-local")
 async def open_local_workspace(
-    body: dict,
+    req: OpenLocalWorkspaceRequest,
     ctx: Annotated[AuthContext, Depends(get_auth_context)],
     db: Annotated[AsyncSession, Depends(get_db)],
 ):
     """桌面: 打开用户本地文件夹当 external 工作区。指针进 DB, 不写用户文件夹。"""
-    abs_path = (body.get("abs_path") or "").strip()
-    apaas_app_id = body.get("apaas_app_id")
+    abs_path = (req.abs_path or "").strip()
+    apaas_app_id = req.apaas_app_id
     if not abs_path:
         raise HTTPException(status_code=400, detail="abs_path 必填")
     p = Path(abs_path)
@@ -597,23 +611,36 @@ async def open_local_workspace(
     if existing:
         existing.last_opened_at = datetime.utcnow()
         if apaas_app_id is not None:
-            existing.apaas_app_id = str(apaas_app_id)
+            existing.apaas_app_id = apaas_app_id
         await db.commit()
         ws_id = existing.ws_id
         display_name = existing.display_name
+        apaas_app_id = existing.apaas_app_id
     else:
         ws_id = f"{ctx.user.id}_{uuid.uuid4().hex[:8]}"
         display_name = p.name
         db.add(RegisteredWorkspace(
             ws_id=ws_id, abs_path=resolved_abs, user_id=ctx.user.id, tenant_id=ctx.tenant_id,
-            workspace_type="external", apaas_app_id=(str(apaas_app_id) if apaas_app_id is not None else None),
+            workspace_type="external", apaas_app_id=apaas_app_id,
             display_name=display_name,
         ))
-        await db.commit()
+        try:
+            await db.commit()
+        except IntegrityError:
+            await db.rollback()
+            existing = (await db.execute(
+                select(RegisteredWorkspace).where(
+                    RegisteredWorkspace.tenant_id == ctx.tenant_id,
+                    RegisteredWorkspace.abs_path == resolved_abs,
+                )
+            )).scalar_one()
+            ws_id = existing.ws_id
+            display_name = existing.display_name
+            apaas_app_id = existing.apaas_app_id
     workspace_mgr.register_external(ws_id, resolved_abs)
     return {
         "ws_id": ws_id, "disk_path": resolved_abs, "display_name": display_name,
-        "workspace_type": "external", "apaas_app_id": (str(apaas_app_id) if apaas_app_id is not None else None),
+        "workspace_type": "external", "apaas_app_id": apaas_app_id,
     }
 
 

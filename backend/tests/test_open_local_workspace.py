@@ -42,7 +42,11 @@ async def client(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_open_local_creates_and_dedups(client, tmp_path):
+async def test_open_local_creates_and_dedups(client, tmp_path, monkeypatch):
+    # tmp_path on macOS resolves under /private/var (blocked by sensitive-root check);
+    # patch _is_sensitive_dir so this test focuses on the DB create+dedup logic.
+    import app.routes.coding as coding_mod
+    monkeypatch.setattr(coding_mod, "_is_sensitive_dir", lambda p: False)
     r1 = await client.post("/api/coding/workspace/open-local", json={"abs_path": str(tmp_path)})
     assert r1.status_code == 200
     ws_id = r1.json()["ws_id"]
@@ -59,4 +63,17 @@ async def test_open_local_rejects_sensitive(client):
 @pytest.mark.asyncio
 async def test_open_local_rejects_missing(client, tmp_path):
     r = await client.post("/api/coding/workspace/open-local", json={"abs_path": str(tmp_path / "nope")})
+    assert r.status_code == 400
+
+
+@pytest.mark.asyncio
+async def test_open_local_rejects_symlinked_system_dir(client):
+    # /etc resolves to /private/etc on macOS — must still be blocked via ancestry check
+    r = await client.post("/api/coding/workspace/open-local", json={"abs_path": "/etc"})
+    assert r.status_code == 400
+
+
+@pytest.mark.asyncio
+async def test_open_local_rejects_users_root(client):
+    r = await client.post("/api/coding/workspace/open-local", json={"abs_path": "/Users"})
     assert r.status_code == 400
