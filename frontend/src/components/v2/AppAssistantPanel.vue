@@ -23,6 +23,7 @@ import BuilderModelPicker from '@/components/common/BuilderModelPicker.vue'
 import { usePanelResize } from './config-assistant/composables/usePanelResize'
 import { useAiChatSession } from '@/composables/useAiChatSession'
 import { aiChatApi, type AIChatSession } from '@/api/aiChat'
+import { listSkills } from '@/api/skills'
 import { llmConfigApi, type BuilderModelOption } from '@/api/llmConfig'
 import { renderMd } from '@/utils/markdown'
 import { isImageFile } from '@/utils/pasteImages'
@@ -127,6 +128,17 @@ const composerAttachments = computed<UnifiedChatAttachment[]>(() =>
 // composer 的附件按钮 / 粘贴截图都 emit files-picked → 累积到 pendingFiles。
 function onComposerFilesPicked(files: File[]) {
   if (files.length) pendingFiles.value = [...pendingFiles.value, ...files]
+}
+
+// 可用技能（输入框 @ 引用用）—— onMounted 拉一次；无 skill 库（云端）则保持空、不弹下拉。
+const availableSkills = ref<{ name: string; description: string }[]>([])
+onMounted(() => {
+  listSkills().then((s) => { availableSkills.value = s }).catch(() => { /* 无 skill 库则空 */ })
+})
+// @ 选中技能 → 把可见的「请使用技能 X：」指令前缀写进输入框，用户可继续编辑/补充意图。
+function onSkillPicked(name: string) {
+  const prefix = `请使用技能 ${name}：`
+  inputText.value = inputText.value ? `${prefix}${inputText.value}` : prefix
 }
 function removePendingFileByIndex(_: UnifiedChatAttachment, index: number) {
   pendingFiles.value = pendingFiles.value.filter((_, i) => i !== index)
@@ -281,11 +293,21 @@ const artifactDrawerVisible = ref(false)
 const artifactName = ref('')
 const artifactContent = ref('')
 const artifactLoading = ref(false)
+const artifactStorage = ref<string>('text')
+const artifactVersion = ref<number | undefined>(undefined)
 async function onOpenArtifact(artifact: any) {
   if (!artifact) return
   artifactName.value = artifact.filename || '设计文档'
   artifactContent.value = ''
+  artifactStorage.value = artifact.storage || 'text'
+  artifactVersion.value =
+    artifact.version != null && !Number.isNaN(Number(artifact.version)) ? Number(artifact.version) : undefined
   artifactDrawerVisible.value = true
+  // 二进制产物（pptx/docx 等）无文本正文，提示点「下载」获取文件。
+  if (artifactStorage.value === 'file') {
+    artifactContent.value = `**${artifactName.value}** 是二进制产物，点上方「下载」获取文件。`
+    return
+  }
   if (!currentSession.value) {
     artifactContent.value = artifact.preview || ''
     return
@@ -313,6 +335,14 @@ function copyArtifact() {
     .catch(() => {})
 }
 function downloadArtifact() {
+  // 二进制产物（storage='file'）：走后端下载端点（带 token query），浏览器直接 GET 拿文件。
+  if (artifactStorage.value === 'file' && currentSession.value) {
+    const a = document.createElement('a')
+    a.href = aiChatApi.artifactDownloadUrl(currentSession.value.id, artifactName.value, artifactVersion.value)
+    a.download = artifactName.value || 'download'
+    a.click()
+    return
+  }
   if (!artifactContent.value) return
   const blob = new Blob([artifactContent.value], { type: 'text/markdown;charset=utf-8' })
   const url = URL.createObjectURL(blob)
@@ -487,9 +517,11 @@ onMounted(() => {
         placeholder="描述配置或开发需求..."
         hint=""
         sending-hint=""
+        :skills="availableSkills"
         @send="doSend"
         @stop="onStop"
         @files-picked="onComposerFilesPicked"
+        @skill-picked="onSkillPicked"
         @remove-attachment="removePendingFileByIndex"
       >
         <template #footer-left>

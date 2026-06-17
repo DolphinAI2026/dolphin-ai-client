@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { nextTick, ref, watch } from 'vue'
+import { computed, nextTick, ref, watch } from 'vue'
 import { getPastedImageFiles } from '@/utils/pasteImages'
 import type { UnifiedChatAttachment } from './chatComposer'
 
@@ -23,6 +23,8 @@ const props = withDefaults(defineProps<{
   sendingHint?: string
   minRows?: number
   maxHeight?: number
+  /** 可用技能(skill)列表 —— 输入 `@` 时弹轻量下拉供强指引用，空数组则不触发。 */
+  skills?: { name: string; description: string }[]
 }>(), {
   attachments: () => [],
   placeholder: '输入需求，粘贴图片或点附件...',
@@ -42,6 +44,7 @@ const props = withDefaults(defineProps<{
   sendingHint: 'Enter 排队发送 · Shift+Enter 换行',
   minRows: 1,
   maxHeight: 128,
+  skills: () => [],
 })
 
 const emit = defineEmits<{
@@ -52,6 +55,7 @@ const emit = defineEmits<{
   (e: 'files-picked', files: File[]): void
   (e: 'paste-images', files: File[]): void
   (e: 'remove-attachment', attachment: UnifiedChatAttachment, index: number): void
+  (e: 'skill-picked', name: string): void
 }>()
 
 const textareaRef = ref<HTMLTextAreaElement | null>(null)
@@ -61,6 +65,46 @@ const fileInputRef = ref<HTMLInputElement | null>(null)
 const isDragOver = ref(false)
 let dragDepth = 0
 
+// @ 技能下拉：输入末尾出现 `@filter` 时弹出，原生过滤，不引第三方 mention 库。
+const showSkillMenu = ref(false)
+const skillFilter = ref('')
+const filteredSkills = computed(() => {
+  const f = skillFilter.value.toLowerCase()
+  const list = props.skills || []
+  if (!f) return list
+  return list.filter(s =>
+    s.name.toLowerCase().includes(f) || (s.description || '').toLowerCase().includes(f),
+  )
+})
+
+function syncSkillMenu(v: string) {
+  if (!(props.skills && props.skills.length)) {
+    showSkillMenu.value = false
+    return
+  }
+  // 仅匹配光标处(输入末尾)的 `@` token；遇空格/换行/第二个 @ 终止。
+  const m = v.match(/@([^\s@]*)$/)
+  if (m) {
+    showSkillMenu.value = true
+    skillFilter.value = m[1]
+  } else {
+    showSkillMenu.value = false
+  }
+}
+
+function pickSkill(name: string) {
+  // 去掉尾部 `@filter`（光标处那段），把选择权交给使用方拼接发送前缀。
+  const v = props.modelValue.replace(/@([^\s@]*)$/, '')
+  emit('update:modelValue', v)
+  showSkillMenu.value = false
+  skillFilter.value = ''
+  emit('skill-picked', name)
+  nextTick(() => {
+    textareaRef.value?.focus()
+    resize()
+  })
+}
+
 function resize() {
   const el = textareaRef.value
   if (!el) return
@@ -69,7 +113,9 @@ function resize() {
 }
 
 function onInput(e: Event) {
-  emit('update:modelValue', (e.target as HTMLTextAreaElement).value)
+  const v = (e.target as HTMLTextAreaElement).value
+  emit('update:modelValue', v)
+  syncSkillMenu(v)
   nextTick(resize)
 }
 
@@ -250,6 +296,19 @@ watch(() => props.modelValue, () => nextTick(resize))
       />
     </div>
 
+    <div v-if="showSkillMenu && filteredSkills.length" class="ucc-skill-menu" role="listbox">
+      <button
+        v-for="s in filteredSkills"
+        :key="s.name"
+        type="button"
+        class="ucc-skill-item"
+        @mousedown.prevent="pickSkill(s.name)"
+      >
+        <span class="ucc-skill-name">@{{ s.name }}</span>
+        <span class="ucc-skill-desc">{{ s.description }}</span>
+      </button>
+    </div>
+
     <button
       type="button"
       class="ucc-send"
@@ -279,6 +338,53 @@ watch(() => props.modelValue, () => nextTick(resize))
   align-items: flex-end;
   gap: 8px;
   width: 100%;
+  position: relative;
+}
+
+.ucc-skill-menu {
+  position: absolute;
+  left: 0;
+  right: 44px;
+  bottom: calc(100% + 6px);
+  z-index: 20;
+  max-height: 220px;
+  overflow-y: auto;
+  background: var(--surface, var(--t-bg-input, #fff));
+  border: 1px solid var(--line, var(--t-border-subtle, #dbe3ef));
+  border-radius: var(--r-3, 8px);
+  box-shadow: 0 6px 24px rgba(0, 0, 0, 0.12);
+  padding: 4px;
+}
+
+.ucc-skill-item {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  width: 100%;
+  text-align: left;
+  padding: 6px 10px;
+  border: 0;
+  background: transparent;
+  border-radius: 6px;
+  cursor: pointer;
+}
+
+.ucc-skill-item:hover {
+  background: var(--surface-2, var(--t-bg-panel, #f1f5fb));
+}
+
+.ucc-skill-name {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text, #1f2937);
+}
+
+.ucc-skill-desc {
+  font-size: 12px;
+  color: var(--text-muted, #6b7280);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .ucc-box {
