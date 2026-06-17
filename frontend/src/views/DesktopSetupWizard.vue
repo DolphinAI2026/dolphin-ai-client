@@ -42,14 +42,14 @@
 
     <div v-else class="wiz-step wiz-done">
       <h3>配置完成</h3>
-      <p>已连接 aPaaS 环境并配好模型，可以开始智能配置 / 二次开发了。</p>
+      <p>{{ doneMsg }}</p>
       <el-button type="primary" @click="$router.replace('/')">进入工作台</el-button>
     </div>
   </div>
 </template>
 
 <script setup lang="ts">
-import { reactive, ref } from 'vue'
+import { reactive, ref, computed } from 'vue'
 import { ElMessage } from 'element-plus'
 import { platformEnvApi } from '@/api/platformEnv'
 import { llmConfigApi } from '@/api/llmConfig'
@@ -59,6 +59,13 @@ const step = ref(0)
 const busy = ref(false)
 const msg = ref('')
 const msgErr = ref(false)
+const envId = ref<number | null>(null)
+const envDone = ref(false)
+const llmDone = ref(false)
+
+const doneMsg = computed(() => (envDone.value && llmDone.value)
+  ? '已连接 aPaaS 环境并配好模型，可以开始智能配置 / 二次开发了。'
+  : '部分配置已跳过。你可以稍后在「平台配置」里补全 aPaaS 环境与 LLM 模型，否则智能配置 / 二次开发可能无法使用。')
 
 const env = reactive({
   env_name: '',
@@ -93,20 +100,27 @@ async function saveEnv() {
   msg.value = ''
   msgErr.value = false
   try {
-    const { id } = await platformEnvApi.create({
+    const payload = {
       env_name: env.env_name,
       base_url: env.base_url,
       platform_tenant_id: env.platform_tenant_id,
       username: env.username,
       password: env.password,
-    })
-    const r = await platformEnvApi.test(id)
+    }
+    if (envId.value == null) {
+      const { id } = await platformEnvApi.create(payload)
+      envId.value = id
+    } else {
+      await platformEnvApi.update(envId.value, payload)
+    }
+    const r = await platformEnvApi.test(envId.value)
     if (!r.ok) {
       msg.value = `连通测试失败: ${r.error || r.status}`
       msgErr.value = true
       return
     }
-    await platformEnvApi.setDefault(id)
+    await platformEnvApi.setDefault(envId.value)
+    envDone.value = true
     msg.value = '环境已连接'
     step.value = 1
   } catch (e: any) {
@@ -121,8 +135,15 @@ async function saveLlm() {
   busy.value = true
   msg.value = ''
   msgErr.value = false
+  if (!llm.api_key.trim()) {
+    msg.value = '请填写 API Key (omnigate 令牌)'
+    msgErr.value = true
+    busy.value = false
+    return
+  }
   try {
     await llmConfigApi.create(llm)
+    llmDone.value = true
     step.value = 2
   } catch (e: any) {
     msg.value = `保存失败: ${e?.message || e}`
