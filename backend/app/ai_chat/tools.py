@@ -10,6 +10,7 @@ import asyncio
 import json
 import os
 import re
+import shutil
 import sys
 from datetime import datetime
 from pathlib import Path
@@ -286,6 +287,22 @@ TOOL_SCHEMAS: list[dict] = [
                     "filename": {"type": "string", "description": "可选；产物展示名，默认用源文件名"},
                 },
                 "required": ["source_path"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "use_skill",
+            "description": (
+                "读取某个技能(Skill)的完整说明并把它的脚本/模板准备到会话工作目录，"
+                "之后按说明用 run_python 执行、用 save_binary_artifact 登记产出。"
+                "技能清单见系统提示「可用技能」。"
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {"name": {"type": "string", "description": "技能名(与清单一致)"}},
+                "required": ["name"],
             },
         },
     },
@@ -1219,6 +1236,36 @@ async def execute_save_binary_artifact(args: dict, session: AIChatSession, db: A
     return f"已登记可下载产物 '{art_name}' (v{new_version}, {size} 字节)。用户已能在右侧面板下载。"
 
 
+async def execute_use_skill(args: dict, session: AIChatSession, db: AsyncSession) -> str:
+    from app.ai_chat.skills import SkillRegistry
+    name = (args.get("name") or "").strip()
+    if not name:
+        return "错误：缺少 name 参数"
+    reg = SkillRegistry()
+    skill = reg.get(name)
+    if skill is None:
+        avail = "、".join(s.name for s in reg.scan()) or "（暂无）"
+        return f"错误：没有名为 '{name}' 的技能。可用技能：{avail}"
+    if not session.workspace_dir:
+        return "错误：会话工作区未初始化"
+    dest = Path(session.workspace_dir) / f"skill_{name}"
+    dest.mkdir(parents=True, exist_ok=True)
+    copied = []
+    for fn in skill.files:
+        src = skill.dir / fn
+        if src.is_file():
+            shutil.copy2(src, dest / fn)
+            copied.append(f"skill_{name}/{fn}")
+    body = reg.read_skill_md(name)
+    files_note = ("已就绪文件(在工作目录):\n" + "\n".join(f"- {p}" for p in copied)) if copied else "(无附带文件)"
+    src_tag = "平台预置(已审)" if skill.source == "platform" else "本地上传"
+    return (
+        f"# 技能 {name}（来源：{src_tag}；脚本将由 run_python 在本机执行）\n\n"
+        f"{body}\n\n---\n{files_note}\n\n"
+        f"按上面说明执行：用 run_python 跑脚本(可直接打开这些文件)，产出文件后用 save_binary_artifact 登记。"
+    )
+
+
 # ─────────────────────────── Dispatcher ───────────────────────────
 
 TOOL_HANDLERS = {
@@ -1231,6 +1278,7 @@ TOOL_HANDLERS = {
     "ask_clarifying_question": execute_ask_clarifying_question,
     "export_apaas_app_design_doc": execute_export_apaas_app_design_doc,
     "save_binary_artifact": execute_save_binary_artifact,
+    "use_skill": execute_use_skill,
 }
 
 
