@@ -15,7 +15,7 @@ export async function fetchOnboardingState(
 ): Promise<OnboardingState> {
   let hasEnv = false
   let hasLlm = false
-  try { hasEnv = (await listEnvs()).length > 0 } catch { hasEnv = false }
-  try { hasLlm = (await listLlms()).length > 0 } catch { hasLlm = false }
+  try { hasEnv = (await listEnvs()).length > 0 } catch (e) { console.warn('[onboarding] 读取 aPaaS 环境失败, 视为未配置', e) }
+  try { hasLlm = (await listLlms()).length > 0 } catch (e) { console.warn('[onboarding] 读取 LLM 配置失败, 视为未配置', e) }
   return { hasEnv, hasLlm, configured: hasEnv && hasLlm }
 }
