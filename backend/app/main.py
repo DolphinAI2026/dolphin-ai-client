@@ -41,6 +41,7 @@ from app.routes import (
     projects,
     requirements,
     runtime_proxy,
+    skills as skills_routes,
     spec,
     sse,
     templates,
@@ -154,6 +155,7 @@ app.include_router(desktop_auth.router, prefix="/api")
 app.include_router(conversations.router, prefix="/api")
 app.include_router(chat.router, prefix="/api")
 app.include_router(ai_chat.router, prefix="/api")
+app.include_router(skills_routes.router, prefix="/api")
 app.include_router(agent_observability.router, prefix="/api")
 app.include_router(applications.router, prefix="/api")
 app.include_router(apaas.router, prefix="/api")
