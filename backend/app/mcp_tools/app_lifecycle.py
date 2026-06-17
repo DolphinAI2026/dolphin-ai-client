@@ -302,25 +302,36 @@ async def get_application(
     - 'doc_version': 用户上传过设计文档，直接用最新版
     - 'config_preview_rendered': 应用没设计文档但有 SPEC 配置，从 config 反向渲染
     - 'empty': 真空白草稿，需要从零写文档
+    - 'omitted_during_generation': **应用正在生成中**，整篇文档不完整且会被反复轮询，
+      故此期间不返回（待 status='completed' 后再 get_application 读取）
+
+    ⚠️ 应用生成中（status=generating/in_progress）时**不返回** spec_markdown，
+    轮询期间只看 status / generation_progress 即可。其它状态照常返回完整文档。
     """
     tid, uid = _resolve_identity(tenant_id, user_id)
     app_id, _ = _resolve_app_id(app_id, uid)
     # 拉应用 meta
     meta = await _api_call("GET", f"/applications/{app_id}", tenant_id=tid, user_id=uid)
-    # 拉 spec markdown（容错）
+    status_val = (meta or {}).get("status")
+    # 拉 spec markdown（容错）。
+    # 上下文爆炸根因修复：应用生成中（generating/in_progress）时这份文档是
+    # 不完整/瞬态的，且 agent 会按 hint 反复轮询 get_application，每次都把整篇 6 章节
+    # 文档（截到 2 万字符）堆进上下文，6+ 次几乎一模一样 → 最终 400 context_too_large。
+    # 故生成中**不拉取也不返回** spec_markdown，只看 status/generation_progress。
+    _is_generating = status_val in ("generating", "in_progress")
     spec_md = ""
-    spec_source = "unknown"
+    spec_source = "omitted_during_generation" if _is_generating else "unknown"
     spec_version = None
-    try:
-        spec = await _api_call("GET", f"/applications/{app_id}/spec-markdown", tenant_id=tid, user_id=uid)
-        spec_md = (spec or {}).get("markdown") or ""
-        spec_source = (spec or {}).get("source") or "unknown"
-        spec_version = (spec or {}).get("version")
-    except Exception as exc:
-        logger.warning("get_application spec-markdown 拉取失败: %s", exc)
+    if not _is_generating:
+        try:
+            spec = await _api_call("GET", f"/applications/{app_id}/spec-markdown", tenant_id=tid, user_id=uid)
+            spec_md = (spec or {}).get("markdown") or ""
+            spec_source = (spec or {}).get("source") or "unknown"
+            spec_version = (spec or {}).get("version")
+        except Exception as exc:
+            logger.warning("get_application spec-markdown 拉取失败: %s", exc)
     # 生成进度。若 SPEC 声明了 workflows，即便 status=completed 也拉一次步骤状态，
     # 让 agent 能看到审批流程 2/2，而不是只汇报角色/字典/模型/表单。
-    status_val = (meta or {}).get("status")
     gen_progress = None
 
     def _has_workflows() -> bool:
@@ -358,6 +369,8 @@ async def get_application(
                 "complete": bool(steps) and done_all == len(steps),
                 "hint": (
                     "status 还是 generating/in_progress → 后台还在生成, 别 publish、别说已完成, 继续轮询直到 status='completed'。"
+                    "应用生成中完整设计文档(spec_markdown)不返回, 待 status='completed' 后再 get_application 读取; "
+                    "轮询期间只看 status / generation_progress 即可。"
                     if app_status in ("generating", "in_progress", "draft")
                     else "status 已完成；steps 为平台真实资源核对结果。"
                 ),

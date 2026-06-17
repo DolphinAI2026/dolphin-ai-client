@@ -847,6 +847,17 @@ async def _run_agent_inner(
             yield _sse("done", {"ok": False, "aborted": True, "run_id": holder["run_id"]})
             return
 
+        # 上下文压缩：每轮 LLM 调用前压缩累积的老 tool 结果（保留最近 4 条完整，
+        # 更老的压到 200 字）。只缩 role=="tool" 的 content，不动 system/user/assistant，
+        # 保留消息结构与 tool_call_id 配对，故不破坏 OpenAI 的 assistant.tool_calls↔tool 配对。
+        # 根因：get_application 等工具被反复轮询，整段原样堆进 messages → 400 context_too_large。
+        # 对齐 coding 路径 agents/coding/agent.py 的用法。
+        try:
+            from app.context_compact import ContextCompactor
+            messages = ContextCompactor.clean_tool_results(messages, keep_recent=4)
+        except Exception as _compact_exc:  # noqa: BLE001
+            logger.warning("clean_tool_results 压缩失败，跳过本轮压缩: %s", _compact_exc)
+
         # 流式调用 LLM，逐 token 把 content_delta 推给前端
         # 2026-05-16：合并细碎 chunk —— LLM 每个汉字一个 content_delta，前端每收一个
         # 就 Vue reactive + markdown re-render，累积起来卡顿。这里 buffer 到 ≥20 字符
