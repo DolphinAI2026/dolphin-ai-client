@@ -2,6 +2,11 @@ import { createRouter, createWebHistory } from 'vue-router'
 import { useUserStore } from '@/stores/user'
 import { usePreviewStore } from '@/stores/preview'
 import request from '@/utils/request'
+import { resolveDesktopRedirect } from './desktopGuard'
+import { fetchOnboardingState } from '@/composables/useOnboardingState'
+
+// 桌面首启: 一旦确认已配齐(或本会话内已进过向导), 不再每次导航重复拉取 onboarding 状态。
+let desktopOnboardingConfirmed = false
 
 const router = createRouter({
   history: createWebHistory(import.meta.env.BASE_URL),
@@ -149,7 +154,7 @@ const router = createRouter({
       path: '/platform-admin/:pathMatch(.*)*',
       name: 'PlatformAdmin',
       component: () => import('@/views/PlatformAdminEmbed.vue'),
-      meta: { requiresAuth: true, requiresPlatformAdmin: true, navExpanded: true }
+      meta: { requiresAuth: true, requiresPlatformAdmin: true, navExpanded: true, desktop: 'hidden' }
     },
     {
       path: '/tenant-users',
@@ -161,7 +166,19 @@ const router = createRouter({
       path: '/admin/tenants',
       name: 'PlatformTenants',
       component: () => import('@/views/PlatformTenants.vue'),
-      meta: { requiresAuth: true, requiresPlatformAdmin: true, navExpanded: true }
+      meta: { requiresAuth: true, requiresPlatformAdmin: true, navExpanded: true, desktop: 'hidden' }
+    },
+    {
+      path: '/desktop-setup',
+      name: 'DesktopSetup',
+      component: () => import('@/views/DesktopSetupWizard.vue'),
+      meta: { requiresAuth: true }
+    },
+    {
+      path: '/desktop-unavailable',
+      name: 'DesktopUnavailable',
+      component: () => import('@/views/DesktopUnavailable.vue'),
+      meta: { requiresAuth: true }
     },
     {
       path: '/generate/:id?',
@@ -229,6 +246,22 @@ router.beforeEach(async (to, _from, next) => {
   ) {
     next('/platform-admin')
     return
+  }
+
+  if (__DESKTOP__ && userStore.token) {
+    // 功能边界: hidden 路由落降级页
+    const red = resolveDesktopRedirect(true, (to.meta as any), to.path)
+    if (red) { next({ path: red, replace: true }); return }
+    // 首启分流: 未配齐 aPaaS+LLM → 向导 (排除向导/登录/降级页自身防环; 已确认配齐则跳过拉取)
+    const exempt = ['/desktop-setup', '/desktop-unavailable', '/login'].some(p => to.path.startsWith(p))
+    if (!exempt && !desktopOnboardingConfirmed) {
+      const st = await fetchOnboardingState()
+      if (st.configured) {
+        desktopOnboardingConfirmed = true
+      } else {
+        next({ path: '/desktop-setup', replace: true }); return
+      }
+    }
   }
 
   if (to.path === '/login' && userStore.token) {
