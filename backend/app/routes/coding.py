@@ -1212,6 +1212,25 @@ async def list_workspaces(
                     if workspace_mgr.stamp_project_id(str(ws.get("id")), bound):
                         ws["project_id"] = bound
 
+    # external (打开本地文件夹) 工作区: 从 DB 注册表按租户合并进列表
+    ext_rows = (await db.execute(
+        select(RegisteredWorkspace).where(RegisteredWorkspace.tenant_id == ctx.tenant_id)
+    )).scalars().all()
+    for rw in ext_rows:
+        workspaces.append({
+            "id": rw.ws_id,
+            "display_name": rw.display_name or Path(rw.abs_path).name,
+            "folder_name": Path(rw.abs_path).name,
+            "disk_path": rw.abs_path,
+            "project_type": "external",
+            "workspace_type": "external",
+            "project_id": rw.apaas_app_id,
+            "apaas_app_id": rw.apaas_app_id,
+            "tenant_id": rw.tenant_id,
+            "user_id": rw.user_id,
+            "updated_at": rw.last_opened_at.isoformat() if rw.last_opened_at else None,
+        })
+
     decorated: list[dict[str, Any]] = []
     for ws in workspaces:
         project_id = ws.get("project_id")

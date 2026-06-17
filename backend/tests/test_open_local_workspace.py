@@ -92,3 +92,16 @@ def test_sensitive_path_policy():
     assert _is_sensitive_path(Path("/private/var/folders/xx/T")) is True
     assert _is_sensitive_path(Path("/System/Library")) is True
     assert _is_sensitive_path(Path("/usr/local")) is True
+
+
+@pytest.mark.asyncio
+async def test_list_includes_external(client, tmp_path, monkeypatch):
+    # tmp_path 在 macOS 上 resolve 到 /private/var/... 会被敏感目录拦; 注册时放行以测列表合并
+    import app.routes.coding as coding_mod
+    monkeypatch.setattr(coding_mod, "_is_sensitive_dir", lambda p: False)
+    await client.post("/api/coding/workspace/open-local", json={"abs_path": str(tmp_path)})
+    r = await client.get("/api/coding/workspaces")
+    assert r.status_code == 200
+    items = r.json()
+    ext = [w for w in items if w.get("workspace_type") == "external"]
+    assert len(ext) == 1 and ext[0]["disk_path"] == str(tmp_path.resolve())

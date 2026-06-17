@@ -17,6 +17,15 @@ def _result(rows):
     return r
 
 
+def _ext_result(rows):
+    """外部注册工作区查询: (await db.execute(...)).scalars().all() 链"""
+    scalars_mock = MagicMock()
+    scalars_mock.all.return_value = rows
+    r = MagicMock()
+    r.scalars.return_value = scalars_mock
+    return r
+
+
 def test_pick_workspace_conversation_prefers_matching_empty_asset_session():
     """打开重命名后的资产工作区时, 空的新资产会话也应优先于旧资产的有消息会话。"""
     from app.routes import coding as coding_routes
@@ -97,7 +106,7 @@ async def test_list_workspaces_drops_other_tenant_legacy_assets():
     ctx.tenant_id = 1
 
     # db.execute 调用顺序:① owned projects ② member projects ③ 本租户 applications
-    # ④ 会话归属租户 ⑤ 会话绑定应用(所属应用回填)
+    # ④ 会话归属租户 ⑤ 会话绑定应用(所属应用回填) ⑥ external 注册工作区
     db = MagicMock()
     db.execute = AsyncMock(side_effect=[
         _result([]),                       # owned projects
@@ -105,6 +114,7 @@ async def test_list_workspaces_drops_other_tenant_legacy_assets():
         _result([]),                       # 本租户 applications
         _result([("ws-t2", 2), ("ws-t1", 1)]),  # 会话归属:ws-t2→租户2, ws-t1→租户1
         _result([]),                       # 会话绑定应用(无)
+        _ext_result([]),                   # external 注册工作区(无)
     ])
 
     ws_list = [
@@ -163,6 +173,7 @@ async def test_app_bound_workspace_visible_and_backfilled():
         _result([]),                # member projects
         _result([(7,), (8,)]),      # 本租户 applications: 7/8
         _result([("ws-unbound", 7)]),  # 会话绑定应用: ws-unbound → app 7
+        _ext_result([]),            # external 注册工作区(无)
     ])
 
     ws_list = [
