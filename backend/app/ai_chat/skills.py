@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import logging
 import os
+import shutil
 import sys
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -123,6 +124,110 @@ class SkillRegistry:
             if s.name == name:
                 return s
         return None
+
+    def _resolve_file(self, name: str, rel: str, *, require_user: bool = False) -> "Path":
+        """解析 skill 内文件的绝对路径，强制落在 skill 目录内（防越界）。"""
+        s = self.get(name)
+        if s is None:
+            raise FileNotFoundError(f"技能不存在: {name}")
+        if require_user and s.source != "user":
+            raise PermissionError("平台预置技能只读，不能修改")
+        base = s.dir.resolve()
+        target = (base / rel).resolve()
+        if target != base and base not in target.parents:
+            raise ValueError(f"路径越界: {rel}")
+        return target
+
+    def list_skill_files(self, name: str) -> list[str]:
+        """skill 目录内全部文件的相对 posix 路径（含 SKILL.md 与嵌套）。"""
+        s = self.get(name)
+        if s is None:
+            raise FileNotFoundError(f"技能不存在: {name}")
+        base = s.dir
+        return sorted(
+            p.relative_to(base).as_posix()
+            for p in base.rglob("*")
+            if p.is_file()
+        )
+
+    def read_skill_file(self, name: str, rel: str) -> str:
+        target = self._resolve_file(name, rel)
+        if not target.is_file():
+            raise FileNotFoundError(f"文件不存在: {rel}")
+        return target.read_text(encoding="utf-8", errors="replace")
+
+    def write_skill_file(self, name: str, rel: str, content: str) -> None:
+        target = self._resolve_file(name, rel, require_user=True)
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text(content, encoding="utf-8")
+
+    def delete_skill_file(self, name: str, rel: str) -> None:
+        target = self._resolve_file(name, rel, require_user=True)
+        if rel.strip("/") == "SKILL.md":
+            raise ValueError("不能删除 SKILL.md")
+        if target.is_file():
+            target.unlink()
+
+    def update_skill_metadata(self, name: str, *, description: str | None = None,
+                              tags: list[str] | None = None, display_name: str | None = None) -> None:
+        """改写 SKILL.md frontmatter（保留正文）。name(标识) 不在此改，避免目录改名。"""
+        s = self.get(name)
+        if s is None:
+            raise FileNotFoundError(f"技能不存在: {name}")
+        if s.source != "user":
+            raise PermissionError("平台预置技能只读")
+        md_path = s.dir / "SKILL.md"
+        meta, body = _parse_frontmatter(md_path.read_text(encoding="utf-8"))
+        if description is not None:
+            meta["description"] = description
+        if display_name is not None:
+            meta["display_name"] = display_name
+        if tags is not None:
+            meta["tags"] = ", ".join(tags)
+        meta.setdefault("name", name)
+        fm = "\n".join(f"{k}: {v}" for k, v in meta.items())
+        md_path.write_text(f"---\n{fm}\n---\n{body}", encoding="utf-8")
+
+    def create_user_skill(self, name: str) -> str:
+        """新建空白 user skill（骨架 SKILL.md）。"""
+        if "/" in name or "\\" in name or name in (".", ".."):
+            raise ValueError(f"非法技能名: {name}")
+        if self.get(name) is not None:
+            raise ValueError(f"技能已存在: {name}")
+        root = self._root if self._root is not None else skills_root()
+        if root is None:
+            raise ValueError("当前环境不支持新建 skill")
+        d = (root / "user" / name)
+        d.mkdir(parents=True, exist_ok=True)
+        (d / "SKILL.md").write_text(
+            f"---\nname: {name}\ndescription: 在这里写技能的一句话说明\n---\n"
+            f"## 怎么做\n1. 描述这个技能的步骤。\n2. 需要脚本就新建 helper.py，用 run_python 执行。\n",
+            encoding="utf-8",
+        )
+        return name
+
+    def clone_skill(self, src_name: str, new_name: str) -> str:
+        """复制任意 skill（含 platform 预置）为一个 user skill。"""
+        src = self.get(src_name)
+        if src is None:
+            raise FileNotFoundError(f"技能不存在: {src_name}")
+        if "/" in new_name or "\\" in new_name or new_name in (".", ".."):
+            raise ValueError(f"非法技能名: {new_name}")
+        if self.get(new_name) is not None:
+            raise ValueError(f"技能已存在: {new_name}")
+        root = self._root if self._root is not None else skills_root()
+        if root is None:
+            raise ValueError("当前环境不支持新建 skill")
+        dest = (root / "user" / new_name)
+        shutil.copytree(src.dir, dest)
+        # 改 frontmatter name 对齐新目录名
+        md_path = dest / "SKILL.md"
+        if md_path.is_file():
+            meta, body = _parse_frontmatter(md_path.read_text(encoding="utf-8"))
+            meta["name"] = new_name
+            fm = "\n".join(f"{k}: {v}" for k, v in meta.items())
+            md_path.write_text(f"---\n{fm}\n---\n{body}", encoding="utf-8")
+        return new_name
 
     def read_skill_md(self, name: str) -> str:
         s = self.get(name)
