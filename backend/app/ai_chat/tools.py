@@ -1248,14 +1248,20 @@ async def execute_use_skill(args: dict, session: AIChatSession, db: AsyncSession
         return f"错误：没有名为 '{name}' 的技能。可用技能：{avail}"
     if not session.workspace_dir:
         return "错误：会话工作区未初始化"
-    dest = Path(session.workspace_dir) / f"skill_{name}"
+    # name 来自上传 skill 包的 frontmatter，不可信：清洗成安全 slug 再拼路径，
+    # 否则 'x/../../../tmp/evil' 之类会把文件写到 workspace 之外（与 save_binary_artifact 同源越界）。
+    slug = re.sub(r"[^A-Za-z0-9_-]", "_", name)
+    ws = Path(session.workspace_dir).resolve()
+    dest = (ws / f"skill_{slug}").resolve()
+    if ws not in dest.parents:
+        return "错误：技能名非法，无法写入工作目录"
     dest.mkdir(parents=True, exist_ok=True)
     copied = []
     for fn in skill.files:
         src = skill.dir / fn
         if src.is_file():
             shutil.copy2(src, dest / fn)
-            copied.append(f"skill_{name}/{fn}")
+            copied.append(f"skill_{slug}/{fn}")
     body = reg.read_skill_md(name)
     files_note = ("已就绪文件(在工作目录):\n" + "\n".join(f"- {p}" for p in copied)) if copied else "(无附带文件)"
     src_tag = "平台预置(已审)" if skill.source == "platform" else "本地上传"
