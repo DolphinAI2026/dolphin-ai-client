@@ -7,6 +7,7 @@
 文件落 settings.desktop_updates_dir(account-service 挂 PVC /data)。
 GET 不鉴权:更新产物是公开物,靠 minisign 签名防篡改。
 """
+import datetime
 import json
 import os
 import re
@@ -27,6 +28,44 @@ _SAFE_NAME = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*\.(app\.tar\.gz|app\.tar\.g
 
 def _updates_dir() -> Path:
     return Path(settings.desktop_updates_dir)
+
+
+_PKG_RE = re.compile(r"^ruijing-(.+)-(aarch64|x86_64)\.app\.tar\.gz$")
+
+
+def _ver_key(v: str) -> list:
+    """语义化版本排序键: '0.2.10' > '0.2.9'。"""
+    out = []
+    for p in str(v).split("."):
+        try:
+            out.append(int(p))
+        except ValueError:
+            out.append(0)
+    return out
+
+
+def _iso_from_mtime(mtime: float) -> str:
+    if not mtime:
+        return ""
+    return datetime.datetime.fromtimestamp(mtime, datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+def _record_history(d: Path, parsed: dict) -> None:
+    """发版时把本版的 version/notes/pub_date 记入 history.json(按版本留存说明)。"""
+    hf = d / "history.json"
+    hist = {}
+    if hf.is_file():
+        try:
+            hist = json.loads(hf.read_text(encoding="utf-8"))
+        except ValueError:
+            hist = {}
+    hist[str(parsed["version"])] = {
+        "notes": parsed.get("notes", ""),
+        "pub_date": parsed.get("pub_date", ""),
+    }
+    tmp = d / "history.json.part"
+    tmp.write_text(json.dumps(hist, ensure_ascii=False), encoding="utf-8")
+    tmp.replace(hf)
 
 
 @router.get("/latest.json")
@@ -85,4 +124,63 @@ async def publish_update(
     tmp = d / "latest.json.part"
     tmp.write_text(json.dumps(parsed, ensure_ascii=False), encoding="utf-8")
     tmp.replace(d / "latest.json")
+
+    _record_history(d, parsed)  # 记发版历史
     return {"ok": True, "manifest_version": parsed["version"], "packages": written}
+
+
+@router.get("/admin/history")
+async def list_history(ctx: Annotated[AuthContext, Depends(get_auth_context)]):
+    """平台管理员查看发版历史。合并 history.json(留存的说明)+ 磁盘上的包文件
+    (补全过去未记说明的版本), 按版本号降序。仅 is_platform_admin。"""
+    if not ctx.user.is_platform_admin:
+        raise HTTPException(status_code=403, detail="仅平台管理员可查看")
+    d = _updates_dir()
+
+    hist = {}
+    hf = d / "history.json"
+    if hf.is_file():
+        try:
+            hist = json.loads(hf.read_text(encoding="utf-8"))
+        except ValueError:
+            hist = {}
+
+    # 从包文件聚合每个版本有哪些架构 + 最新 mtime(给没记 history 的旧版本兜底日期)
+    from_files: dict[str, dict] = {}
+    if d.is_dir():
+        for f in d.glob("ruijing-*.app.tar.gz"):
+            m = _PKG_RE.match(f.name)
+            if not m:
+                continue
+            ver, arch = m.group(1), m.group(2)
+            e = from_files.setdefault(ver, {"archs": set(), "mtime": 0.0})
+            e["archs"].add(arch)
+            try:
+                e["mtime"] = max(e["mtime"], f.stat().st_mtime)
+            except OSError:
+                pass
+
+    latest_ver = None
+    lf = d / "latest.json"
+    if lf.is_file():
+        try:
+            latest_ver = str(json.loads(lf.read_text(encoding="utf-8")).get("version") or "") or None
+        except ValueError:
+            latest_ver = None
+
+    out = []
+    for ver in set(from_files) | set(hist):
+        h = hist.get(ver, {})
+        archs = from_files.get(ver, {}).get("archs", set())
+        out.append({
+            "version": ver,
+            "notes": h.get("notes", ""),
+            "published_at": h.get("pub_date") or _iso_from_mtime(from_files.get(ver, {}).get("mtime", 0.0)),
+            "is_latest": ver == latest_ver,
+            "packages": {
+                "aarch64": f"ruijing-{ver}-aarch64.app.tar.gz" if "aarch64" in archs else None,
+                "x86_64": f"ruijing-{ver}-x86_64.app.tar.gz" if "x86_64" in archs else None,
+            },
+        })
+    out.sort(key=lambda x: _ver_key(x["version"]), reverse=True)
+    return out
