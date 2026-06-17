@@ -43,17 +43,21 @@
     <div v-else class="wiz-step wiz-done">
       <h3>配置完成</h3>
       <p>{{ doneMsg }}</p>
-      <el-button type="primary" @click="$router.replace('/')">进入工作台</el-button>
+      <el-button type="primary" @click="enterWorkbench">进入工作台</el-button>
     </div>
   </div>
 </template>
 
 <script setup lang="ts">
 import { reactive, ref, computed } from 'vue'
+import { useRouter } from 'vue-router'
 import { ElMessage } from 'element-plus'
 import { platformEnvApi } from '@/api/platformEnv'
 import { llmConfigApi } from '@/api/llmConfig'
 import type { LlmConfigForm } from '@/api/llmConfig'
+import { markOnboardingConfirmed } from '@/composables/useOnboardingState'
+
+const router = useRouter()
 
 const step = ref(0)
 const busy = ref(false)
@@ -157,6 +161,11 @@ function skip() {
   ElMessage.info('已跳过，稍后可在「平台配置」继续设置')
   if (step.value === 0) step.value = 1
   else step.value = 2
+}
+
+function enterWorkbench() {
+  markOnboardingConfirmed()
+  router.replace('/')
 }
 </script>
 
