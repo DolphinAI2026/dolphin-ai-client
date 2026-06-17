@@ -107,3 +107,18 @@ async def test_list_includes_external(client, tmp_path, monkeypatch):
     assert len(ext) == 1 and ext[0]["disk_path"] == str(tmp_path.resolve())
     assert ext[0]["status"] == "local"
     assert ext[0]["project_name"] == tmp_path.name
+
+
+@pytest.mark.asyncio
+async def test_open_local_then_get_info_and_files(client, tmp_path, monkeypatch):
+    """端到端: 打开本地文件夹后, 真正打开工作区(info/files)必须 200(回归: 曾因无 .workspace.json 404)。"""
+    import app.routes.coding as coding_mod
+    monkeypatch.setattr(coding_mod, "_is_sensitive_dir", lambda p: False)
+    (tmp_path / "hello.txt").write_text("hi")
+    r = await client.post("/api/coding/workspace/open-local", json={"abs_path": str(tmp_path)})
+    assert r.status_code == 200
+    ws_id = r.json()["ws_id"]
+    info = await client.get(f"/api/coding/workspace/{ws_id}")
+    assert info.status_code == 200, info.text
+    files = await client.get(f"/api/coding/workspace/{ws_id}/files")
+    assert files.status_code == 200, files.text

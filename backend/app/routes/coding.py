@@ -645,7 +645,11 @@ async def open_local_workspace(
             ws_id = existing.ws_id
             display_name = existing.display_name
             apaas_app_id = existing.apaas_app_id
-    workspace_mgr.register_external(ws_id, resolved_abs)
+    workspace_mgr.register_external(
+        ws_id, resolved_abs,
+        user_id=ctx.user.id, tenant_id=ctx.tenant_id,
+        apaas_app_id=apaas_app_id, display_name=display_name,
+    )
     return {
         "ws_id": ws_id, "disk_path": resolved_abs, "display_name": display_name,
         "workspace_type": "external", "apaas_app_id": apaas_app_id,
@@ -1224,7 +1228,7 @@ async def list_workspaces(
             "disk_path": rw.abs_path,
             "project_type": "external",
             "workspace_type": "external",
-            "project_id": rw.apaas_app_id,
+            "project_id": None,
             "apaas_app_id": rw.apaas_app_id,
             "tenant_id": rw.tenant_id,
             "user_id": rw.user_id,

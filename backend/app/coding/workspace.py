@@ -313,15 +313,23 @@ class WorkspaceManager:
     _install_locks: dict[str, asyncio.Lock] = {}
     _workspace_path_cache: dict[str, Path] = {}
     _external_paths: dict[str, str] = {}   # ws_id -> 用户选的本地文件夹绝对路径 (external 工作区)
+    _external_meta: dict[str, dict] = {}   # ws_id -> {user_id, tenant_id, apaas_app_id, display_name}
 
     def __init__(self):
         WORKSPACE_ROOT.mkdir(parents=True, exist_ok=True)
         DEPENDENCY_CACHE_ROOT.mkdir(parents=True, exist_ok=True)
         NPM_CACHE_ROOT.mkdir(parents=True, exist_ok=True)
 
-    def register_external(self, ws_id: str, abs_path: str) -> None:
-        """注册一个 external (打开本地文件夹) 工作区路径, 供 get_workspace_path 同步解析。"""
+    def register_external(self, ws_id: str, abs_path: str, *,
+                          user_id: int | None = None, tenant_id: int | None = None,
+                          apaas_app_id: str | None = None, display_name: str | None = None) -> None:
+        """注册一个 external (打开本地文件夹) 工作区路径 + 元数据(供 get_workspace_info 合成)。"""
         WorkspaceManager._external_paths[ws_id] = abs_path
+        if user_id is not None:
+            WorkspaceManager._external_meta[ws_id] = {
+                "user_id": user_id, "tenant_id": tenant_id,
+                "apaas_app_id": apaas_app_id, "display_name": display_name,
+            }
 
     @classmethod
     def load_external(cls, items: list[tuple[str, str]]) -> None:
@@ -2233,7 +2241,23 @@ const INJECT_CODE = `(function(params) {{
     def get_workspace_info(self, ws_id: str) -> dict:
         """获取工作区信息"""
         ws_path = self.get_workspace_path(ws_id)
-        meta = self._decorate_workspace_meta(ws_path, self._read_meta(ws_path))
+        if ws_id in self._external_paths:
+            ext = self._external_meta.get(ws_id, {})
+            base = {
+                "id": ws_id,
+                "user_id": ext.get("user_id"),
+                "tenant_id": ext.get("tenant_id"),
+                "project_id": None,            # 不复用 project_id → 走 owner 检查, 避开 int() 崩溃
+                "apaas_app_id": ext.get("apaas_app_id"),
+                "display_name": ext.get("display_name") or ws_path.name,
+                "project_name": ext.get("display_name") or ws_path.name,
+                "project_type": "external",
+                "workspace_type": "external",
+                "status": "local",
+            }
+            meta = self._decorate_workspace_meta(ws_path, base)
+        else:
+            meta = self._decorate_workspace_meta(ws_path, self._read_meta(ws_path))
         meta["files"] = self.list_files(ws_id)
         return meta
 
@@ -4678,8 +4702,11 @@ export default {{
 
 
 async def restore_external_workspaces(session) -> None:
-    """启动时从 DB registered_workspaces 恢复 external 工作区路径到 WorkspaceManager 内存缓存。"""
+    """启动时从 DB registered_workspaces 恢复 external 工作区路径+元数据到 WorkspaceManager 内存。"""
     from sqlalchemy import select as _select
     from app.models import RegisteredWorkspace
     rows = (await session.execute(_select(RegisteredWorkspace))).scalars().all()
-    WorkspaceManager.load_external([(r.ws_id, r.abs_path) for r in rows])
+    wm = WorkspaceManager()
+    for r in rows:
+        wm.register_external(r.ws_id, r.abs_path, user_id=r.user_id, tenant_id=r.tenant_id,
+                             apaas_app_id=r.apaas_app_id, display_name=r.display_name)
