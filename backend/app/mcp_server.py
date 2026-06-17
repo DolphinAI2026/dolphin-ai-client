@@ -53,6 +53,7 @@ from typing import Any
 
 import httpx
 from jose import jwt
+from app.auth import _ISSUER  # 内部服务 token 必须带 iss，否则被 decode_token 的 issuer 白名单拒(401)
 from mcp.server.fastmcp import FastMCP
 from mcp.server.transport_security import TransportSecuritySettings
 
@@ -98,6 +99,7 @@ def _sign_service_token(user_id: int, tenant_id: int, ttl_minutes: int = 15) -> 
         "sub": str(user_id),
         "tid": tenant_id,
         "type": "mcp_service",
+        "iss": _ISSUER,  # 必须带 iss(ai-builder)→ 过 decode_token 的 issuer 白名单, 否则内部调用 401
         "exp": datetime.utcnow() + timedelta(minutes=ttl_minutes),
     }
     return jwt.encode(payload, settings.jwt_secret_key, algorithm=settings.jwt_algorithm)

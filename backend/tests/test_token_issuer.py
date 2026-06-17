@@ -51,3 +51,15 @@ def test_assert_passes_when_shared_backend_excludes_desktop(monkeypatch):
     # 非默认值且不含 desktop-sidecar: 断言应放行 (证明放行不是因为撞上默认值)。
     monkeypatch.setattr("app.config.settings.accepted_token_issuers", "ai-builder,other-backend")
     auth.assert_shared_backend_issuer_safety()  # 不抛
+
+
+def test_mcp_server_service_token_has_issuer_and_decodes(monkeypatch):
+    """回归: mcp_server._sign_service_token 的内部服务 token 必须带 iss, 否则被
+    decode_token 的 issuer 白名单拒(401) → 桌面 agent 所有内部调用(generate_app_from_doc 等)挂。
+    """
+    monkeypatch.setattr("app.config.settings.jwt_secret_key", "test-secret-svc")
+    monkeypatch.setattr("app.config.settings.accepted_token_issuers", "ai-builder")
+    from app.mcp_server import _sign_service_token
+    tok = _sign_service_token(1, 2)
+    payload = auth.decode_token(tok)  # 不抛 = 过白名单
+    assert payload["iss"] == "ai-builder" and payload["type"] == "mcp_service"
