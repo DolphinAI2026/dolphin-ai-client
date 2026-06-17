@@ -63,6 +63,11 @@ async def lifespan(app: FastAPI):
             "本地开发要沿用默认 key(历史数据已用它加密)请设 ALLOW_DEFAULT_ENCRYPTION_KEY=1。"
         )
 
+    # 信任边界铁律: 非桌面 sidecar 的部署 = 共享后端, 绝不接受本地签票。
+    if os.environ.get("DESKTOP_MODE") != "1":
+        from app.auth import assert_shared_backend_issuer_safety
+        assert_shared_backend_issuer_safety()
+
     # 启动时初始化数据库
     await init_db()
 

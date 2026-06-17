@@ -39,3 +39,14 @@ def test_decode_rejects_token_without_issuer(monkeypatch):
     raw = _jwt.encode({"sub": "1", "type": "access"}, "test-secret-xyz", algorithm="HS256")
     with pytest.raises(JWTError):
         auth.decode_token(raw)
+
+
+def test_assert_rejects_desktop_issuer_on_shared_backend(monkeypatch):
+    monkeypatch.setattr("app.config.settings.accepted_token_issuers", "ai-builder,desktop-sidecar")
+    with pytest.raises(RuntimeError):
+        auth.assert_shared_backend_issuer_safety()
+
+
+def test_assert_passes_when_shared_backend_excludes_desktop(monkeypatch):
+    monkeypatch.setattr("app.config.settings.accepted_token_issuers", "ai-builder")
+    auth.assert_shared_backend_issuer_safety()  # 不抛

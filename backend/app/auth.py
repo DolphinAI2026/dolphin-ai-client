@@ -216,3 +216,16 @@ async def get_current_user(
     if user is None or not user.is_active:
         raise credentials_exception
     return user
+
+
+def assert_shared_backend_issuer_safety() -> None:
+    """共享后端(在线主后端 / account-service)绝不可接受本地 sidecar 签的票。
+
+    本地 sidecar 是单机信任域, 谁控进程谁能签票自提权。一旦共享后端接受
+    desktop-sidecar issuer = 本地票可跨实例提权 = 毁掉整个信任边界。启动 fail-fast。
+    """
+    if _DESKTOP_ISSUER in settings.accepted_issuers_set:
+        raise RuntimeError(
+            f"共享后端拒绝启动: accepted_token_issuers 含 {_DESKTOP_ISSUER!r}, "
+            "本地 sidecar 签的票绝不可被共享后端接受 (信任边界铁律)。"
+        )
