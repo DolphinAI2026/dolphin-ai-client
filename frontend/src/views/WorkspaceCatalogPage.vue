@@ -12,6 +12,10 @@
             <AppIcon name="inbox" :size="14" />
             <span>导入源码</span>
           </button>
+          <button v-if="isDesktop" class="catalog-import-action catalog-import-action--secondary" type="button" @click="openLocalFolder">
+            <AppIcon name="folder" :size="14" />
+            <span>打开本地文件夹</span>
+          </button>
 
           <div v-if="!loading && visibleWorkspaces.length" class="catalog-summary" aria-label="资产概览">
             <div v-for="item in headerStats" :key="item.label" class="catalog-summary-item">
@@ -249,7 +253,7 @@
 import { computed, onMounted, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { Grid, List } from '@element-plus/icons-vue'
-import { ElMessage } from 'element-plus'
+import { ElMessage, ElMessageBox } from 'element-plus'
 import AppIcon from '@/components/common/AppIcon.vue'
 import BuilderFrame from '@/components/BuilderFrame.vue'
 import EmptyState from '@/components/states/EmptyState.vue'
@@ -258,6 +262,8 @@ import BaseBadge from '@/components/BaseBadge.vue'
 import BaseTag from '@/components/BaseTag.vue'
 import { codingApi, bindWorkspaceApp, type WorkspaceInfo } from '@/api/coding'
 import { applicationApi } from '@/api/application'
+
+const isDesktop = __DESKTOP__
 
 const route = useRoute()
 const router = useRouter()
@@ -567,6 +573,27 @@ function openWorkspace(ws: WorkspaceInfo) {
   router.push({ path: '/coding', query: { workspace_id: ws.id } }).catch(() => {})
 }
 
+async function openLocalFolder() {
+  if (!__DESKTOP__) return
+  const { open } = await import('@tauri-apps/plugin-dialog')
+  const picked = await open({ directory: true, multiple: false, title: '选择要打开的项目文件夹' })
+  if (!picked || typeof picked !== 'string') return
+  try {
+    await ElMessageBox.confirm(
+      'AI 可在此文件夹内读写并运行命令（运行命令不受沙箱限制）。建议选用 git 管理或已备份的目录，以便误改可恢复。',
+      '打开本地文件夹',
+      { confirmButtonText: '我知道了，打开', cancelButtonText: '取消', type: 'warning' },
+    )
+  } catch { return }  // 用户取消确认
+  try {
+    const ws = await codingApi.openLocalFolder(picked)
+    // 复用现有 openWorkspace 导航: router.push({ path: '/coding', query: { workspace_id: ws.ws_id } })
+    router.push({ path: '/coding', query: { workspace_id: ws.ws_id } }).catch(() => {})
+  } catch (e: any) {
+    ElMessage.error(`打开失败: ${e?.response?.data?.detail || e?.message || e}`)
+  }
+}
+
 async function downloadWorkspace(ws: WorkspaceInfo, type: 'src' | 'dist') {
   try {
     await codingApi.downloadZip(ws.id, type)
@@ -657,6 +684,18 @@ onMounted(async () => {
 .catalog-import-action:hover {
   background: var(--brand-hover);
   border-color: var(--brand-hover);
+}
+
+.catalog-import-action--secondary {
+  background: var(--surface);
+  border-color: var(--line);
+  color: var(--text);
+}
+
+.catalog-import-action--secondary:hover {
+  background: var(--brand-soft);
+  border-color: var(--brand-ring);
+  color: var(--brand);
 }
 
 .catalog-header h1 {
