@@ -12,6 +12,15 @@ ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 VERSION="${VERSION:?需要 VERSION (如 VERSION=0.2.0)}"
 NOTES="${NOTES:-}"
 BASE="https://agent.dfy.definesys.cn/account-api"
+# 凭据兜底: 若环境没传 ADMIN_USER/ADMIN_PASS, 自动从 keys/release.env 读。
+# 用 set -a 让 source 进来的变量自动导出 —— 否则 release.env 里 `ADMIN_USER=...`
+# (无 export) 经 `source` 只是非导出 shell 变量, 子进程/后续命令继承不到,
+# 走到登录步的 `${ADMIN_USER:?}` 会中断 (2026-06-18 踩过: 白构建一整轮)。
+if [ -z "${ADMIN_USER:-}" ] || [ -z "${ADMIN_PASS:-}" ]; then
+  if [ -f "$ROOT/keys/release.env" ]; then
+    set -a; . "$ROOT/keys/release.env"; set +a
+  fi
+fi
 KEY="$ROOT/keys/ruijing-updater.key"
 [ -f "$KEY" ] || { echo "缺签名私钥 $KEY"; exit 1; }
 export TAURI_SIGNING_PRIVATE_KEY="$(cat "$KEY")"
