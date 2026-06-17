@@ -3,10 +3,7 @@ import { useUserStore } from '@/stores/user'
 import { usePreviewStore } from '@/stores/preview'
 import request from '@/utils/request'
 import { resolveDesktopRedirect } from './desktopGuard'
-import { fetchOnboardingState } from '@/composables/useOnboardingState'
-
-// 桌面首启: 一旦确认已配齐(或本会话内已进过向导), 不再每次导航重复拉取 onboarding 状态。
-let desktopOnboardingConfirmed = false
+import { fetchOnboardingState, isOnboardingConfirmed, markOnboardingConfirmed } from '@/composables/useOnboardingState'
 
 const router = createRouter({
   history: createWebHistory(import.meta.env.BASE_URL),
@@ -254,10 +251,10 @@ router.beforeEach(async (to, _from, next) => {
     if (red) { next({ path: red, replace: true }); return }
     // 首启分流: 未配齐 aPaaS+LLM → 向导 (排除向导/登录/降级页自身防环; 已确认配齐则跳过拉取)
     const exempt = ['/desktop-setup', '/desktop-unavailable', '/login'].some(p => to.path.startsWith(p))
-    if (!exempt && !desktopOnboardingConfirmed) {
+    if (!exempt && !isOnboardingConfirmed()) {
       const st = await fetchOnboardingState()
       if (st.configured) {
-        desktopOnboardingConfirmed = true
+        markOnboardingConfirmed()
       } else {
         next({ path: '/desktop-setup', replace: true }); return
       }

@@ -19,3 +19,9 @@ export async function fetchOnboardingState(
   try { hasLlm = (await listLlms()).length > 0 } catch (e) { console.warn('[onboarding] 读取 LLM 配置失败, 视为未配置', e) }
   return { hasEnv, hasLlm, configured: hasEnv && hasLlm }
 }
+
+// 桌面首启缓存: 一旦确认已配齐(本会话内), 路由守卫不再每次导航重复拉取。登出时 reset。
+let _onboardingConfirmed = false
+export function isOnboardingConfirmed(): boolean { return _onboardingConfirmed }
+export function markOnboardingConfirmed(): void { _onboardingConfirmed = true }
+export function resetOnboardingCache(): void { _onboardingConfirmed = false }

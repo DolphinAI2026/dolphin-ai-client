@@ -2,6 +2,7 @@ import { defineStore } from 'pinia'
 import { ref, computed } from 'vue'
 import { authApi } from '@/api/auth'
 import type { User, TenantOption } from '@/types'
+import { resetOnboardingCache } from '@/composables/useOnboardingState'
 
 export const useUserStore = defineStore('user', () => {
   const user = ref<User | null>(null)
@@ -38,6 +39,7 @@ export const useUserStore = defineStore('user', () => {
     user.value = null
     localStorage.removeItem('token')
     localStorage.removeItem('admin_token')
+    resetOnboardingCache()
   }
 
   const fetchUser = async () => {
