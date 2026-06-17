@@ -65,6 +65,8 @@ def build_env(data_dir: Path, port: int) -> dict:
         ),
         # 桌面 sidecar 接受 ai-builder(内部短票)+ desktop-sidecar(联邦会话票)。
         "ACCEPTED_TOKEN_ISSUERS": "ai-builder,desktop-sidecar",
+        # app 托管工作区落 app_data_dir 下(稳定持久), 修冻结包相对二进制诡异路径
+        "APAAS_WORKSPACE_ROOT": os.path.join(str(data_dir), "workspaces"),
     }
     for k, v in written.items():
         os.environ[k] = v

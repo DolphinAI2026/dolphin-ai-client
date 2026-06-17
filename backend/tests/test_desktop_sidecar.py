@@ -49,3 +49,9 @@ def test_build_env_sets_real_key_and_no_bypass(tmp_path):
 def test_build_env_sets_accepted_issuers(tmp_path):
     env = desktop_sidecar.build_env(data_dir=tmp_path, port=9999)
     assert env["ACCEPTED_TOKEN_ISSUERS"] == "ai-builder,desktop-sidecar"
+
+
+def test_build_env_sets_workspace_root(tmp_path):
+    env = desktop_sidecar.build_env(data_dir=tmp_path, port=9999)
+    import os
+    assert env["APAAS_WORKSPACE_ROOT"] == os.path.join(str(tmp_path), "workspaces")
