@@ -5,6 +5,10 @@
         <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
         新建空白
       </button>
+      <button class="new-btn" @click="onAiGenerate">
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3 14 9l6 2-6 2-2 6-2-6-6-2 6-2z"/></svg>
+        AI 生成技能
+      </button>
       <el-upload
         :show-file-list="false"
         :before-upload="onUpload"
@@ -165,6 +169,28 @@ async function onNewBlank() {
   } catch (e: any) {
     ElMessage.error(e?.response?.data?.detail || '新建失败')
   }
+}
+
+async function onAiGenerate() {
+  let intent = ''
+  try {
+    const { value } = await ElMessageBox.prompt(
+      '一句话描述你想要的技能（可留空，进去再聊）',
+      'AI 生成技能',
+      { confirmButtonText: '开始', cancelButtonText: '取消', inputPlaceholder: '例如：把一段会议纪要整理成结构化待办' },
+    )
+    intent = (value || '').trim()
+  } catch {
+    return // 用户取消
+  }
+  const message = intent
+    ? `我想要一个新技能（skill）：${intent}。请先想清楚它解决什么场景、什么时候触发，再按 skill 规范写出 SKILL.md（frontmatter name+description + 编号步骤正文）和必要的 helper 脚本，然后用 search_tools 激活 create_skill 存进我的技能库。技能名用英文 kebab-case。`
+    : ''
+  sessionStorage.setItem(
+    'ai_builder_pending_skill_authoring',
+    JSON.stringify({ message, intent, from: 'skill-library' }),
+  )
+  router.push({ path: '/ai-chat', query: { skill_authoring: '1' } })
 }
 
 async function onClone(row: SkillItem) {
