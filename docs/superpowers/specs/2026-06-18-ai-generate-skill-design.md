@@ -41,7 +41,7 @@
   3. 拼出完整 `SKILL.md` 内容（frontmatter `name` + `description`，正文 = `instructions`），用 `write_skill_file(name, "SKILL.md", 完整内容)` 覆盖骨架（单次写定，不走 update_skill_metadata 再补正文）。
   4. 逐个写 `helpers`（`write_skill_file(name, h.path, h.content)`，路径越界由 `_resolve_file` 拦）。
   5. 返回 `{ok: true, name, files, dir}`。
-  - 失败一律业务错 dict：`{ok: false, error_code, message}`（重名 `SKILL_EXISTS` / 非法名 `INVALID_NAME` / 缺字段 `MISSING_FIELD` / 云端无技能库 `SKILLS_UNSUPPORTED`（`skills_root()` 为 None）/ 写失败 `WRITE_FAILED`），沿用仓库 `_business_error` 规约。
+  - 失败一律业务错 dict：`{ok: false, error_code, message}`，用 `app.mcp_envelope` 的 `_ok`/`_err`/`ErrorCode`（**非** `_business_error`，该设施不存在）。错误码：重名 `SKILL_EXISTS` / 非法名 `SKILL_NAME_INVALID` / 缺字段经 `@apaas_tool` 自动 `INVALID_PARAMS` / 云端无技能库 `SKILLS_UNSUPPORTED`（`skills_root()` 为 None）/ 平台只读 `SKILL_READONLY` / 写失败 `SKILL_WRITE_FAILED`（新码加进 `ErrorCode` 类）。详见实施计划 `docs/superpowers/plans/2026-06-18-ai-generate-skill.md`。
 - **`list_skills()`** — 列已有 skill（name/source/description），供 agent 创建前查重名、外部客户端枚举。
 - **`read_skill_file(name, path)`** — 读某 skill 的文件，供 agent/外部客户端回看迭代。
 - **`write_skill_file(name, path, content)`** — 写/覆盖文件（仅 user skill，越界拦）。给外部客户端补齐创作面。
