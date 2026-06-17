@@ -105,3 +105,5 @@ async def test_list_includes_external(client, tmp_path, monkeypatch):
     items = r.json()
     ext = [w for w in items if w.get("workspace_type") == "external"]
     assert len(ext) == 1 and ext[0]["disk_path"] == str(tmp_path.resolve())
+    assert ext[0]["status"] == "local"
+    assert ext[0]["project_name"] == tmp_path.name

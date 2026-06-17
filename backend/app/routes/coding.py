@@ -1229,6 +1229,8 @@ async def list_workspaces(
             "tenant_id": rw.tenant_id,
             "user_id": rw.user_id,
             "updated_at": rw.last_opened_at.isoformat() if rw.last_opened_at else None,
+            "status": "local",
+            "project_name": rw.display_name or Path(rw.abs_path).name,
         })
 
     decorated: list[dict[str, Any]] = []
