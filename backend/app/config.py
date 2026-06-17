@@ -54,6 +54,13 @@ class Settings(BaseSettings):
     jwt_secret_key: str
     jwt_algorithm: str = "HS256"
     jwt_expire_minutes: int = 1440
+    # 接受的 JWT issuer 白名单 (CSV)。共享后端默认只认 ai-builder; 桌面 sidecar
+    # 经 env ACCEPTED_TOKEN_ISSUERS 设为 "ai-builder,desktop-sidecar"。
+    accepted_token_issuers: str = "ai-builder"
+
+    @property
+    def accepted_issuers_set(self) -> set[str]:
+        return {s.strip() for s in self.accepted_token_issuers.split(",") if s.strip()}
 
     # Server
     host: str = "0.0.0.0"
