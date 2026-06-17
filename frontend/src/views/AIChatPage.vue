@@ -302,15 +302,17 @@
           <span class="art-card-vbadge">v{{ latestVersionFor(fname) }}</span>
         </div>
       </div>
-      <div class="art-preview" v-if="activeArtifactContent">
+      <div class="art-preview" v-if="activeArtifactContent || activeArtifactIsFile">
         <div class="art-preview-head">
-          <!-- 2 tabs — 渲染 / 原文 -->
+          <!-- 2 tabs — 渲染 / 原文（二进制产物无正文，仅展示下载卡，隐藏文本 tab）-->
           <button
+            v-if="!activeArtifactIsFile"
             class="small-btn"
             :class="{ active: panelTab === 'rendered' }"
             @click="panelTab = 'rendered'"
           >渲染</button>
           <button
+            v-if="!activeArtifactIsFile"
             class="small-btn"
             :class="{ active: panelTab === 'raw' }"
             @click="panelTab = 'raw'"
@@ -328,8 +330,8 @@
             </option>
           </select>
           <span class="art-preview-spacer"></span>
-          <span class="art-meta-text">{{ artifactStats }}</span>
-          <button class="small-btn" @click="copyArtifact" title="复制">⧉</button>
+          <span class="art-meta-text">{{ activeArtifactIsFile ? artifactFileStats : artifactStats }}</span>
+          <button v-if="!activeArtifactIsFile" class="small-btn" @click="copyArtifact" title="复制">⧉</button>
           <button class="small-btn" @click="downloadArtifact" title="下载">⤓</button>
           <!-- 设计文档完成 → 一键让 agent 调 generate_app_from_doc 工具创建应用。
                之前 agent 文案让用户切到「AI 需求分析」菜单 — 那个菜单已删；
@@ -349,7 +351,14 @@
           >在 Builder 中调整</button>
         </div>
         <!-- Tab body -->
-        <pre v-if="panelTab === 'raw'" class="art-preview-body">{{ activeArtifactContent }}</pre>
+        <!-- 二进制产物（.pptx/.docx/.xlsx 等）：无正文可渲染，给一张明确的下载卡 -->
+        <div v-if="activeArtifactIsFile" class="art-file-card">
+          <span class="art-file-icon"><AppIcon name="file" :size="40" /></span>
+          <div class="art-file-name">{{ activeArtifactName }}</div>
+          <div class="art-file-meta">{{ artifactFileStats }}</div>
+          <button class="small-btn primary art-file-download" @click="downloadArtifact">下载文件</button>
+        </div>
+        <pre v-else-if="panelTab === 'raw'" class="art-preview-body">{{ activeArtifactContent }}</pre>
         <!-- HTML 产物: 用沙箱 iframe 原样渲染(等同本地打开), 不要走 markdown 渲染器
              (markdown 会把缩进的 HTML 当代码块, 且不应用文件自带 <style>)。 -->
         <!-- sandbox 不给 allow-scripts: AI 产出的 HTML 可能含恶意/越权脚本, 而 allow-same-origin
@@ -2060,11 +2069,13 @@ async function onSelectArtifactVersion(versionStr: string) {
   }
 }
 
-// 自动选首个 artifact 作为右栏默认显示
+// 自动选首个 artifact 作为右栏默认显示。
+// 注意：二进制产物 content 恒为空，不能只看 activeArtifactContent —— 否则它每次
+// watch 都会被当成"还没选"反复重新加载。改用 activeArtifactName 判断是否已有选中。
 watch(
   [() => artifactsPanelOpen.value, () => artifacts.value.length],
   ([open, n]) => {
-    if (open && n > 0 && !activeArtifactContent.value && uniqueFilenames.value[0]) {
+    if (open && n > 0 && !activeArtifactName.value && uniqueFilenames.value[0]) {
       loadArtifactByName(uniqueFilenames.value[0])
     }
   },
@@ -2082,6 +2093,17 @@ const artifactStats = computed(() => {
   const lines = c ? c.split('\n').length : 0
   const chars = c.length
   return `${lines} 行 · ${chars} 字符`
+})
+
+// 二进制产物的体积展示（B / KB / MB）
+const artifactFileStats = computed(() => {
+  const fmt = (activeArtifactRow.value?.format || '').toUpperCase()
+  const bytes = activeArtifactRow.value?.size_bytes ?? 0
+  let sizeText: string
+  if (bytes >= 1024 * 1024) sizeText = `${(bytes / (1024 * 1024)).toFixed(1)} MB`
+  else if (bytes >= 1024) sizeText = `${(bytes / 1024).toFixed(1)} KB`
+  else sizeText = `${bytes} 字节`
+  return fmt ? `${fmt} · ${sizeText}` : sizeText
 })
 
 async function loadArtifact(a: AIChatArtifact) {
@@ -2113,6 +2135,22 @@ const isHtmlArtifact = computed<boolean>(() => {
   const head = (activeArtifactContent.value || '').trimStart().slice(0, 200).toLowerCase()
   return head.startsWith('<!doctype html') || head.startsWith('<html')
 })
+
+// 当前打开 filename 的最新行（含 storage/size_bytes 等元数据）
+const activeArtifactRow = computed<AIChatArtifact | null>(() => {
+  const fname = activeArtifactName.value
+  if (!fname) return null
+  return artifacts.value
+    .filter(a => a.filename === fname)
+    .sort((x, y) => y.version - x.version)[0] || null
+})
+
+// 二进制产物（storage=='file'，如 .pptx/.docx/.xlsx）—— content 为空，
+// 预览面板要单独渲染一张下载卡，否则面板被 v-if="activeArtifactContent" 整块吞掉、
+// 下载按钮永远不可达（兑现工具返回语"用户已能在右侧面板下载"的关键）。
+const activeArtifactIsFile = computed<boolean>(() =>
+  (activeArtifactRow.value?.storage || '') === 'file'
+)
 
 const canSendArtifactToBuilder = computed(() =>
   !!activeArtifactName.value
@@ -3966,6 +4004,21 @@ onMounted(async () => {
   font-family: ui-monospace, Menlo, monospace; font-size: 11.5px;
   color: var(--ac-text-mute); white-space: pre-wrap; word-break: break-word;
 }
+/* 二进制产物下载卡: content 为空时给一张明确的下载入口 */
+.art-file-card {
+  flex: 1 1 auto;
+  display: flex; flex-direction: column; align-items: center; justify-content: center;
+  gap: 10px; padding: 48px 24px; text-align: center;
+}
+.art-file-icon { color: var(--ac-text-faint); opacity: 0.8; }
+.art-file-name {
+  font-size: 14px; font-weight: 600; color: var(--ac-text);
+  word-break: break-all; max-width: 100%;
+}
+.art-file-meta {
+  font-family: ui-monospace, Menlo, monospace; font-size: 11.5px; color: var(--ac-text-faint);
+}
+.art-file-download { margin-top: 8px; padding: 6px 18px; font-size: 12.5px; }
 /* HTML 产物预览: 沙箱 iframe 铺满预览区, 白底(等同本地打开浏览器) */
 .art-preview-frame {
   flex: 1 1 auto;

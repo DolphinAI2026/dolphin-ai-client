@@ -17,13 +17,13 @@ import json
 import logging
 from typing import Annotated, AsyncIterator
 
-from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
+from fastapi import APIRouter, Depends, HTTPException, Query, status
 from fastapi.responses import StreamingResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.agents.db_publisher import get_db_publisher
 from app.database import AsyncSessionLocal, get_db
-from app.deps import AuthContext, get_auth_context, get_auth_context_from_token
+from app.deps import AuthContext, auth_from_header_or_query, get_auth_context
 from app.models import Conversation
 
 logger = logging.getLogger(__name__)
@@ -65,29 +65,8 @@ async def _assert_conversation_access(
     return conv
 
 
-async def _sse_auth(request: Request) -> AuthContext:
-    """SSE 专用鉴权：优先从 Authorization header 读 Bearer token，
-    否则从 query 参数 `?token=...` 读。
-
-    EventSource API 原生不支持自定义 header，所以 query 是 SSE 必需的后备通道。
-    """
-    # header 优先
-    auth_header = request.headers.get("authorization") or request.headers.get("Authorization")
-    token: str | None = None
-    if auth_header and auth_header.lower().startswith("bearer "):
-        token = auth_header.split(None, 1)[1].strip()
-    # query fallback
-    if not token:
-        token = request.query_params.get("token")
-    if not token:
-        raise HTTPException(
-            status.HTTP_401_UNAUTHORIZED,
-            "缺少认证 token（header 或 ?token= 均可）",
-        )
-    try:
-        return await get_auth_context_from_token(token)
-    except Exception:
-        raise HTTPException(status.HTTP_401_UNAUTHORIZED, "无效的 token")
+# SSE 专用鉴权 = 共享的 header/query 解析器（EventSource 无法带 header，必须走 ?token=）。
+# 实现统一在 app.deps.auth_from_header_or_query，避免与下载入口等其他 query-token 路径漂移。
 
 
 # ══════════════════════════════════════════════════════════════
@@ -97,7 +76,7 @@ async def _sse_auth(request: Request) -> AuthContext:
 @router.get("/conversation/{conversation_id}")
 async def sse_subscribe_conversation(
     conversation_id: int,
-    ctx: Annotated[AuthContext, Depends(_sse_auth)],
+    ctx: Annotated[AuthContext, Depends(auth_from_header_or_query)],
     last_seen_seq: int = Query(0, ge=0, description="上次收到的 seq；用于断线重连补发"),
     heartbeat_seconds: int = Query(
         HEARTBEAT_INTERVAL_SECONDS, ge=5, le=120,

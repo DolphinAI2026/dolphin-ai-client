@@ -32,7 +32,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sse_starlette.sse import EventSourceResponse
 
 from app.database import get_db, AsyncSessionLocal
-from app.deps import get_auth_context, get_auth_context_from_token, AuthContext
+from app.deps import get_auth_context, auth_from_header_or_query, AuthContext
 from app.models import (
     AIChatSession,
     AIChatMessage,
@@ -423,25 +423,6 @@ def _classify_kind(filename: str, mime: Optional[str]) -> str:
 
 
 # ─────────────────────────── 鉴权辅助 ───────────────────────────
-
-async def _auth_from_header_or_query(request: Request) -> AuthContext:
-    """header 优先、`?token=` 兜底解析 AuthContext —— 供浏览器原生 GET（无法带 header）的
-    下载入口使用，与 SSE 入口同套路。"""
-    auth_header = request.headers.get("authorization") or request.headers.get("Authorization")
-    token: Optional[str] = None
-    if auth_header and auth_header.lower().startswith("bearer "):
-        token = auth_header.split(None, 1)[1].strip()
-    if not token:
-        token = request.query_params.get("token")
-    if not token:
-        raise HTTPException(status_code=401, detail="缺少认证 token（header 或 ?token= 均可）")
-    try:
-        return await get_auth_context_from_token(token)
-    except HTTPException:
-        raise
-    except Exception:
-        raise HTTPException(status_code=401, detail="无效的 token")
-
 
 async def _load_session_or_404(
     db: AsyncSession, session_id: int, ctx: AuthContext
@@ -862,7 +843,7 @@ async def download_artifact(
     浏览器用 <a href>/window.open 直接 GET 拿文件，原生不能带 Authorization header，
     所以这里 header 优先、`?token=` 兜底（与 SSE 入口同套路）。
     """
-    ctx = await _auth_from_header_or_query(request)
+    ctx = await auth_from_header_or_query(request)
     session = await _load_session_or_404(db, session_id, ctx)
     query = select(AIChatArtifact).where(
         AIChatArtifact.session_id == session_id,

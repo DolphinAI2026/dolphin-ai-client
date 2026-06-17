@@ -1,4 +1,5 @@
 import pytest
+import pytest_asyncio
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine, async_sessionmaker
 from sqlalchemy.pool import StaticPool
@@ -8,7 +9,9 @@ from app.models import AIChatSession, AIChatArtifact
 from app.ai_chat.tools import execute_tool
 
 
-async def _mk(tmp_path):
+@pytest_asyncio.fixture
+async def ctx(tmp_path):
+    """每个用例一套独立内存库 + 会话 + 工作区，用完关连接、释放引擎。"""
     engine = create_async_engine("sqlite+aiosqlite://", connect_args={"check_same_thread": False}, poolclass=StaticPool)
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
@@ -17,12 +20,16 @@ async def _mk(tmp_path):
     ws = tmp_path / "ws"; ws.mkdir()
     s = AIChatSession(tenant_id=1, user_id=1, workspace_dir=str(ws))
     db.add(s); await db.commit(); await db.refresh(s)
-    return db, s, ws
+    try:
+        yield db, s, ws
+    finally:
+        await db.close()
+        await engine.dispose()
 
 
 @pytest.mark.asyncio
-async def test_register_file_artifact(tmp_path):
-    db, s, ws = await _mk(tmp_path)
+async def test_register_file_artifact(ctx):
+    db, s, ws = ctx
     (ws / "out.pptx").write_bytes(b"PK\x03\x04demo")
     res = await execute_tool("save_binary_artifact", {"source_path": "out.pptx"}, s, db)
     assert "out.pptx" in res
@@ -33,9 +40,9 @@ async def test_register_file_artifact(tmp_path):
 
 
 @pytest.mark.asyncio
-async def test_filename_overrides_display_name(tmp_path):
+async def test_filename_overrides_display_name(ctx):
     """args 传 filename 时，产物展示名走自定义名而非源文件名。"""
-    db, s, ws = await _mk(tmp_path)
+    db, s, ws = ctx
     (ws / "raw_output.pptx").write_bytes(b"PK\x03\x04demo")
     res = await execute_tool(
         "save_binary_artifact",
@@ -49,9 +56,9 @@ async def test_filename_overrides_display_name(tmp_path):
 
 
 @pytest.mark.asyncio
-async def test_versioning_increments_on_same_name(tmp_path):
+async def test_versioning_increments_on_same_name(ctx):
     """同名再次登记 → version 递增到 2（versioning 核心逻辑锁住）。"""
-    db, s, ws = await _mk(tmp_path)
+    db, s, ws = ctx
     (ws / "out.pptx").write_bytes(b"PK\x03\x04demo")
     await execute_tool("save_binary_artifact", {"source_path": "out.pptx"}, s, db)
     res2 = await execute_tool("save_binary_artifact", {"source_path": "out.pptx"}, s, db)
@@ -65,8 +72,8 @@ async def test_versioning_increments_on_same_name(tmp_path):
 
 
 @pytest.mark.asyncio
-async def test_reject_outside_workspace(tmp_path):
-    db, s, ws = await _mk(tmp_path)
+async def test_reject_outside_workspace(ctx):
+    db, s, ws = ctx
     res = await execute_tool("save_binary_artifact", {"source_path": "../escape.pptx"}, s, db)
     assert "错误" in res
     # 越界必须没有落库
@@ -74,8 +81,8 @@ async def test_reject_outside_workspace(tmp_path):
 
 
 @pytest.mark.asyncio
-async def test_reject_missing_file(tmp_path):
-    db, s, ws = await _mk(tmp_path)
+async def test_reject_missing_file(ctx):
+    db, s, ws = ctx
     res = await execute_tool("save_binary_artifact", {"source_path": "ghost.pptx"}, s, db)
     assert "错误" in res
     # 缺文件必须没有落库

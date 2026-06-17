@@ -3,7 +3,7 @@ from __future__ import annotations
 import logging
 from dataclasses import dataclass
 from typing import Annotated, Optional
-from fastapi import Depends, HTTPException, status
+from fastapi import Depends, HTTPException, Request, status
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 from jose import JWTError
@@ -298,6 +298,29 @@ async def get_auth_context_from_token(token: str) -> AuthContext:
             apaas_user_id=eff_apaas_uid,
             apaas_tenant_id=eff_apaas_tid,
         )
+
+
+async def auth_from_header_or_query(request: Request) -> AuthContext:
+    """从 `Authorization: Bearer` header（优先）或 `?token=` query 解析 AuthContext。
+
+    浏览器原生 GET（SSE EventSource、`<a download>` 直链等）无法带自定义 header，
+    所以需要 `?token=` 作后备通道。SSE 与二进制产物下载入口共用此实现，避免漂移。
+    """
+    auth_header = request.headers.get("authorization") or request.headers.get("Authorization")
+    token: Optional[str] = None
+    if auth_header and auth_header.lower().startswith("bearer "):
+        token = auth_header.split(None, 1)[1].strip()
+    if not token:
+        token = request.query_params.get("token")
+    if not token:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="缺少认证 token（header 或 ?token= 均可）",
+        )
+    try:
+        return await get_auth_context_from_token(token)
+    except Exception:
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="无效的 token")
 
 
 async def require_tenant_admin(
