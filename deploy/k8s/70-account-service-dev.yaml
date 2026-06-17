@@ -45,7 +45,7 @@ spec:
                 operator: Exists
       containers:
       - name: account-service
-        image: hub.dfy.definesys.cn/ai-builder/apaas-builder:dev-20260616-acctsvc3
+        image: hub.dfy.definesys.cn/ai-builder/apaas-builder:dev-20260617-verhist
         imagePullPolicy: IfNotPresent
         workingDir: /app/backend
         command: ["python", "-m", "services.account_service"]
