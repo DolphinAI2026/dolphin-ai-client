@@ -76,7 +76,22 @@ def build_env(data_dir: Path, port: int) -> dict:
     }
     for k, v in written.items():
         os.environ[k] = v
+    _sync_preset_skills(data_dir)
     return written
+
+
+def _sync_preset_skills(data_dir: Path) -> None:
+    """把随包的 preset-skills 同步进 data_dir/skills/platform/（覆盖式，平台只读）。"""
+    import shutil
+    # 冻结态资源在 sys._MEIPASS 下；dev 态在仓库 backend/desktop/preset-skills
+    base = Path(getattr(sys, "_MEIPASS", Path(__file__).parent)) / "desktop" / "preset-skills"
+    if not base.is_dir():
+        return
+    dest = Path(data_dir) / "skills" / "platform"
+    dest.mkdir(parents=True, exist_ok=True)
+    for d in base.iterdir():
+        if d.is_dir():
+            shutil.copytree(d, dest / d.name, dirs_exist_ok=True)
 
 
 def run_script(path: str) -> int:

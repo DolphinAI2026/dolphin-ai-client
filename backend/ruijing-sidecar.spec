@@ -13,6 +13,16 @@ for pkg in ["pydantic", "pydantic_core", "mcp", "passlib", "cryptography", "sse_
     d, b, h = collect_all(pkg)
     datas += d; binaries += b; hiddenimports += h
 
+# 文档/PDF/表格解析依赖 (上传附件 _parse_uploaded_document 需要):
+#   docx=python-docx, pptx=python-pptx, openpyxl=xlsx, pdfplumber+pdfminer+pypdfium2=pdf, PIL=Pillow
+# collect_all 收齐 datas(如 pdfminer 的 cmap / PIL 字体) + binaries(pypdfium2 .so/.dll) + hiddenimports。
+# pypdfium2_raw 必须走 collect_all: 它的原生 libpdfium.dylib/.so/.dll 是 binary,
+# 只放 hiddenimports 不会被打进包 (verified: collect_all 才抓 libpdfium.dylib + version.json)。
+for pkg in ["docx", "pptx", "openpyxl", "pdfplumber", "pdfminer", "PIL",
+            "pypdfium2", "pypdfium2_raw"]:
+    d, b, h = collect_all(pkg)
+    datas += d; binaries += b; hiddenimports += h
+
 # 动态 import 的子模块
 hiddenimports += collect_submodules("uvicorn")
 hiddenimports += collect_submodules("jose")
@@ -50,6 +60,13 @@ hiddenimports += [
     "yaml",
     # other common dynamic
     "sniffio", "exceptiongroup",
+    # 文档解析二级隐藏依赖 (collect_all 主包不一定带全):
+    #   PIL=Pillow 的导入名; XlsxWriter/et_xmlfile 是 openpyxl 的可选写/读依赖;
+    #   typing_extensions 被多个解析库动态引用。
+    # pypdfium2/pypdfium2_raw 已上移到 collect_all 循环 (需收原生 dylib), 不再在此重复。
+    "PIL", "PIL._imaging",
+    "et_xmlfile", "xlsxwriter",
+    "typing_extensions",
 ]
 
 # TLS 证书 (httpx)
@@ -60,21 +77,23 @@ if os.path.isdir(FRONTEND_DIST):
     datas += [(FRONTEND_DIST, "frontend_dist")]
 
 # 后端运行期数据文件 (存在才加)
+#   desktop/preset-skills: 随包预置 skill, 首启由 build_env._sync_preset_skills
+#   覆盖式同步进 data_dir/skills/platform/ (冻结态资源在 _MEIPASS/desktop/preset-skills)
 for src, dst in [("app/templates", "app/templates"),
                  ("templates", "templates"),
                  ("tool_registry.yaml", "."),
-                 ("app/static", "app/static")]:
+                 ("app/static", "app/static"),
+                 ("desktop/preset-skills", "desktop/preset-skills")]:
     if os.path.exists(os.path.join(BACKEND, src)):
         datas += [(os.path.join(BACKEND, src), dst)]
 
-# Phase 0 不需要的重依赖: 排除以缩小体积、避开无法冻结的 playwright
+# 不需要的重依赖: 排除以缩小体积、避开无法冻结的 playwright
 # 注意: aiomysql/pymysql 不能排除 — quick_db.py 在模块顶层 import aiomysql
+# 注意: 文档/PDF/表格解析依赖 (pdfplumber/pdfminer/pypdfium2/docx/pptx/openpyxl/PIL) 已不再排除 —
+#       上传附件 _parse_uploaded_document 现在就会调用, 排除会导致桌面端 ImportError 静默吞错。
 excludes = [
     "playwright", "kubernetes_asyncio", "kubernetes",
     "pytest", "pytest_asyncio", "watchfiles",
-    # Phase 0 不触发文档/PDF/表格解析, 先排除 (Phase 1 按需放回):
-    "pdfplumber", "pdfminer", "pypdfium2", "pypdfium2_raw",
-    "docx", "pptx", "openpyxl", "PIL",
 ]
 
 a = Analysis(
