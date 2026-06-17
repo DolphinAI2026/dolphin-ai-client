@@ -37,3 +37,24 @@ async def test_unique_tenant_path(session):
     session.add(RegisteredWorkspace(ws_id="1_b", abs_path="/p", user_id=1, tenant_id=1, display_name="p"))
     with pytest.raises(IntegrityError):
         await session.commit()
+
+
+def test_workspace_manager_external(tmp_path):
+    from app.coding.workspace import WorkspaceManager
+    WorkspaceManager._external_paths.clear()
+    wm = WorkspaceManager()
+    wm.register_external("ext_1", str(tmp_path))
+    assert wm.get_workspace_path("ext_1") == tmp_path.resolve() or wm.get_workspace_path("ext_1") == tmp_path
+    WorkspaceManager._external_paths.clear()
+
+
+def test_workspace_manager_external_missing_folder(tmp_path):
+    import pytest
+    from app.coding.workspace import WorkspaceManager
+    WorkspaceManager._external_paths.clear()
+    missing = tmp_path / "gone"
+    WorkspaceManager.load_external([("ext_2", str(missing))])
+    wm = WorkspaceManager()
+    with pytest.raises(FileNotFoundError):
+        wm.get_workspace_path("ext_2")
+    WorkspaceManager._external_paths.clear()

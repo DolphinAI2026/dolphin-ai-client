@@ -312,11 +312,22 @@ class WorkspaceManager:
     """工作区管理器"""
     _install_locks: dict[str, asyncio.Lock] = {}
     _workspace_path_cache: dict[str, Path] = {}
+    _external_paths: dict[str, str] = {}   # ws_id -> 用户选的本地文件夹绝对路径 (external 工作区)
 
     def __init__(self):
         WORKSPACE_ROOT.mkdir(parents=True, exist_ok=True)
         DEPENDENCY_CACHE_ROOT.mkdir(parents=True, exist_ok=True)
         NPM_CACHE_ROOT.mkdir(parents=True, exist_ok=True)
+
+    def register_external(self, ws_id: str, abs_path: str) -> None:
+        """注册一个 external (打开本地文件夹) 工作区路径, 供 get_workspace_path 同步解析。"""
+        WorkspaceManager._external_paths[ws_id] = abs_path
+
+    @classmethod
+    def load_external(cls, items: list[tuple[str, str]]) -> None:
+        """启动时批量恢复 external 工作区路径 (从 DB registered_workspaces)。"""
+        for ws_id, abs_path in items:
+            cls._external_paths[ws_id] = abs_path
 
     def _build_workspace_folder_name(self, ws_id: str, project_name: str) -> str:
         readable_name = self._slugify_project_token(project_name) or "custom-dev"
@@ -386,6 +397,16 @@ class WorkspaceManager:
         cached = self._workspace_path_cache.get(ws_id)
         if cached and cached.exists():
             return cached
+
+        ext = self._external_paths.get(ws_id)
+        if ext:
+            ext_path = Path(ext)
+            if ext_path.exists():
+                self._workspace_path_cache[ws_id] = ext_path
+                return ext_path
+            raise FileNotFoundError(
+                f"Workspace {ws_id} 关联的本地文件夹不存在(可能已移动/删除): {ext}"
+            )
 
         for root in WORKSPACE_SEARCH_ROOTS:
             direct = root / ws_id
