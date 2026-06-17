@@ -441,3 +441,20 @@ class AppHealthSnapshot(Base):
     findings: Mapped[list] = mapped_column(JSON, default=list)
     data_coverage: Mapped[dict] = mapped_column(JSON, default=dict)
     engine_version: Mapped[str] = mapped_column(String(20), nullable=False)
+
+
+class RegisteredWorkspace(Base):
+    """桌面「打开本地文件夹」external 工作区注册表 (指针进 DB, 不写用户文件夹)。"""
+    __tablename__ = "registered_workspaces"
+    __table_args__ = (UniqueConstraint("tenant_id", "abs_path", name="uq_regws_tenant_path"),)
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    ws_id: Mapped[str] = mapped_column(String(60), unique=True, index=True, nullable=False)
+    abs_path: Mapped[str] = mapped_column(String(1000), nullable=False)
+    user_id: Mapped[int] = mapped_column(Integer, nullable=False, index=True)
+    tenant_id: Mapped[int] = mapped_column(Integer, nullable=False, index=True)
+    workspace_type: Mapped[str] = mapped_column(String(40), nullable=False, default="external")
+    apaas_app_id: Mapped[Optional[str]] = mapped_column(String(60), nullable=True)
+    display_name: Mapped[str] = mapped_column(String(200), nullable=False, default="")
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    last_opened_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
