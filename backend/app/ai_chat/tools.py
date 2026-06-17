@@ -1270,7 +1270,9 @@ async def execute_use_skill(args: dict, session: AIChatSession, db: AsyncSession
     for fn in skill.files:
         src = skill.dir / fn
         if src.is_file():
-            shutil.copy2(src, dest / fn)
+            out = dest / fn
+            out.parent.mkdir(parents=True, exist_ok=True)  # 保留 references/ scripts/ 等子目录
+            shutil.copy2(src, out)
             copied.append(f"skill_{slug}/{fn}")
     body = reg.read_skill_md(name)
     files_note = ("已就绪文件(在工作目录):\n" + "\n".join(f"- {p}" for p in copied)) if copied else "(无附带文件)"

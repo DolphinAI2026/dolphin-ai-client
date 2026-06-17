@@ -84,16 +84,22 @@ def test_zip_slip_leaves_nothing_on_disk(tmp_path, monkeypatch):
     assert not (tmp_path / "skills" / "user" / ".e.tmp").exists()
 
 
-def test_reject_nested_subdirectories(tmp_path, monkeypatch):
-    """嵌套子目录被拒（scan/use_skill 非递归，避免静默失配）。"""
+def test_accept_nested_subdirectories(tmp_path, monkeypatch):
+    """嵌套子目录被接受并保结构（references/ scripts/ 是 Claude skill 常见结构），注册表递归列出。"""
     monkeypatch.setenv("RUIJING_SKILLS_DIR", str(tmp_path / "skills"))
     data = _zip_bytes({
         "SKILL.md": "---\nname: n\ndescription: d\n---\n",
         "sub/helper.py": "print(1)",
+        "references/schema.md": "schema",
     })
-    with pytest.raises(ValueError):
-        sk._extract_user_skill_zip(data)
-    assert not (tmp_path / "skills" / "user" / "n").exists()
+    name = sk._extract_user_skill_zip(data)
+    assert name == "n"
+    root = tmp_path / "skills" / "user" / "n"
+    assert (root / "sub" / "helper.py").is_file()
+    assert (root / "references" / "schema.md").is_file()
+    from app.ai_chat.skills import SkillRegistry
+    files = SkillRegistry().get("n").files
+    assert "sub/helper.py" in files and "references/schema.md" in files
 
 
 def test_user_cannot_shadow_platform_skill(tmp_path, monkeypatch):

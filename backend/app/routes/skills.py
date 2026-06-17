@@ -71,14 +71,8 @@ def _extract_user_skill_zip(data: bytes) -> str:
         if existing is not None and existing.source == "platform":
             raise ValueError(f"技能名与平台预置技能冲突: {name}")
         prefix = skill_md[: -len("SKILL.md")]  # zip 内 skill 根前缀
-        # scan()/use_skill 只看顶层文件（非递归），所以这里拒绝嵌套子目录，
-        # 避免「解压出来但 agent 看不到/拷不进 workspace」的静默失配。
-        for n in names:
-            if n.endswith("/") or not n.startswith(prefix):
-                continue
-            rel = n[len(prefix):]
-            if rel and ("/" in rel.strip("/")):
-                raise ValueError(f"不支持嵌套子目录: {n}")
+        # 允许嵌套子目录(references/ scripts/ assets/ 是 Claude skill 常见结构);
+        # zip-slip 由下面解压循环的 resolve+parents 守卫拦(.. / 绝对路径)。
         dest = (root / "user" / name).resolve()
         # 原子落盘：解到同级临时目录，成功后再替换。
         tmp = (root / "user" / f".{name}.tmp").resolve()

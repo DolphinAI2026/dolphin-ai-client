@@ -108,7 +108,11 @@ class SkillRegistry:
                 if not name or not desc:
                     log.warning("skill 缺 name/description, 跳过: %s", d)
                     continue
-                files = [p.name for p in d.iterdir() if p.is_file() and p.name != "SKILL.md"]
+                files = [
+                    p.relative_to(d).as_posix()
+                    for p in sorted(d.rglob("*"))
+                    if p.is_file() and p.relative_to(d).as_posix() != "SKILL.md"
+                ]
                 by_name[name] = Skill(name=name, description=desc, dir=d, source=source, files=files)
         return list(by_name.values())
 
