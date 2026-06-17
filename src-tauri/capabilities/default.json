@@ -16,6 +16,7 @@
       "allow": [{ "name": "binaries/ruijing-sidecar", "sidecar": true, "args": true }]
     },
     "shell:allow-open",
+    "dialog:allow-open",
     "updater:default",
     "process:allow-restart",
     "core:window:allow-create",
