@@ -82,7 +82,7 @@ async def test_account_service_login_authority(account_client):
     c, Session = account_client
     from app import desktop_accounts as da
     async with Session() as db:
-        await da.provision_desktop_account(db, "mars", "ruijing2026", is_platform_admin=True)
+        await da.provision_local_admin_account(db, "mars", "ruijing2026")
         await db.commit()
     # authority 登录
     r = await c.post("/api/desktop-auth/login", json={"username": "mars", "password": "ruijing2026"})
@@ -116,7 +116,7 @@ async def test_federation_mirror_with_apaas_namesake_no_crash(account_client):
         db.add(User(username="dup", hashed_password="apaas-hash", account_source="apaas", is_active=True))
         await db.flush()
         # provision_desktop_account 应只检查 desktop 行, apaas 同名不应阻止
-        await da.provision_desktop_account(db, "dup", "ruijing2026", is_platform_admin=False)
+        await da.provision_desktop_account(db, "dup", "ruijing2026")
         await db.commit()
     # authority 模式登录 → verify_desktop_account 只认 desktop 行 → 成功
     r = await c.post("/api/desktop-auth/login", json={"username": "dup", "password": "ruijing2026"})
@@ -131,7 +131,7 @@ async def _provision_admin_and_token(c, Session, username="mars", password="ruij
     """provision 一个平台管理员 + authority 登录拿 token。"""
     from app import desktop_accounts as da
     async with Session() as db:
-        await da.provision_desktop_account(db, username, password, is_platform_admin=True)
+        await da.provision_local_admin_account(db, username, password)
         await db.commit()
     r = await c.post("/api/desktop-auth/login", json={"username": username, "password": password})
     assert r.status_code == 200, r.text

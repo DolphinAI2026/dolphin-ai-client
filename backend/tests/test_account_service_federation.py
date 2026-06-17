@@ -152,7 +152,7 @@ async def test_federation_correct_password_returns_sidecar_token(two_instance_se
     # 在 authority 上预置账号
     from app import desktop_accounts as da
     async with authority_sf() as db:
-        await da.provision_desktop_account(db, "alice", "password123", is_platform_admin=False)
+        await da.provision_desktop_account(db, "alice", "password123")
         await db.commit()
 
     # sidecar federation 登录
@@ -173,7 +173,7 @@ async def test_federation_wrong_password_returns_401(two_instance_setup):
 
     from app import desktop_accounts as da
     async with authority_sf() as db:
-        await da.provision_desktop_account(db, "bob", "correct_pw", is_platform_admin=False)
+        await da.provision_desktop_account(db, "bob", "correct_pw")
         await db.commit()
 
     resp = await sc_c.post(
@@ -193,7 +193,7 @@ async def test_federation_mirrors_user_locally(two_instance_setup):
 
     from app import desktop_accounts as da
     async with authority_sf() as db:
-        await da.provision_desktop_account(db, "carol", "pw_carol_99", is_platform_admin=False)
+        await da.provision_desktop_account(db, "carol", "pw_carol_99")
         await db.commit()
 
     resp = await sc_c.post(
@@ -222,7 +222,7 @@ async def test_federation_second_login_reuses_mirror(two_instance_setup):
 
     from app import desktop_accounts as da
     async with authority_sf() as db:
-        await da.provision_desktop_account(db, "dave", "pw_dave_99", is_platform_admin=False)
+        await da.provision_desktop_account(db, "dave", "pw_dave_99")
         await db.commit()
 
     r1 = await sc_c.post(
@@ -254,7 +254,7 @@ async def test_authority_login_directly(two_instance_setup):
 
     from app import desktop_accounts as da
     async with authority_sf() as db:
-        await da.provision_desktop_account(db, "eve", "eve_password", is_platform_admin=True)
+        await da.provision_local_admin_account(db, "eve", "eve_password")
         await db.commit()
 
     # 直接打 authority 的 /api/desktop-auth/login
