@@ -34,6 +34,7 @@ const NAV = computed<NavItem[]>(() => {
     { key: 'home', label: 'AI Builder', icon: 'chat', path: '/' },
     { key: 'apps', label: '应用资产库', icon: 'apps', path: '/apps', badge: appCount.value || undefined },
     { key: 'catalog', label: '自开发资产库', icon: 'store', path: '/workspace-catalog' },
+    { key: 'skills', label: '技能库', icon: 'sparkles', path: '/skills' },
     { key: 'tenantLogs', label: '租户日志分析', icon: 'activity', path: '/tenant-logs' },
     // AI Builder（/）= 首页融合页，与 /ai-chat 同组件：新建对话 + 历史会话一体。
     // 改已有应用从「应用资产库」点进工作室 (/chat)，/chat 不挂菜单。

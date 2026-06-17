@@ -79,6 +79,12 @@ const router = createRouter({
       meta: { requiresAuth: true }
     },
     {
+      path: '/skills',
+      name: 'Skills',
+      component: () => import('@/views/SkillLibraryPage.vue'),
+      meta: { requiresAuth: true, navExpanded: true }
+    },
+    {
       path: '/project/:id',
       name: 'ProjectOverview',
       component: () => import('@/views/ProjectOverview.vue'),
