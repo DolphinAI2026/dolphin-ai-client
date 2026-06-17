@@ -271,6 +271,24 @@ TOOL_SCHEMAS: list[dict] = [
             },
         },
     },
+    {
+        "type": "function",
+        "function": {
+            "name": "save_binary_artifact",
+            "description": (
+                "把 skill 脚本(run_python)刚写进会话工作目录的二进制文件(如 .pptx/.docx/.xlsx)"
+                "登记为可下载产物，用户能在右侧面板下载。source_path 必须是工作目录内的相对路径。"
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "source_path": {"type": "string", "description": "工作目录内的相对路径，例如 'output.pptx'"},
+                    "filename": {"type": "string", "description": "可选；产物展示名，默认用源文件名"},
+                },
+                "required": ["source_path"],
+            },
+        },
+    },
 ]
 
 
@@ -1165,6 +1183,42 @@ def _design_doc_stats(markdown: str) -> dict[str, Any]:
     }
 
 
+async def execute_save_binary_artifact(args: dict, session: AIChatSession, db: AsyncSession) -> str:
+    source_path = (args.get("source_path") or "").strip()
+    if not source_path:
+        return "错误：缺少 source_path 参数"
+    if not session.workspace_dir:
+        return "错误：会话工作区未初始化"
+    ws = Path(session.workspace_dir).resolve()
+    target = (ws / source_path).resolve()
+    # 防越界：必须落在 workspace 内
+    if ws != target and ws not in target.parents:
+        return f"错误：source_path 必须在工作目录内（{source_path} 越界）"
+    if not target.is_file():
+        return f"错误：文件不存在 '{source_path}'（先用 run_python 生成它）"
+
+    art_name = (args.get("filename") or target.name).strip()
+    fmt = target.suffix.lstrip(".").lower() or "bin"
+    size = target.stat().st_size
+
+    last = (await db.execute(
+        select(AIChatArtifact)
+        .where(AIChatArtifact.session_id == session.id, AIChatArtifact.filename == art_name)
+        .order_by(desc(AIChatArtifact.version)).limit(1)
+    )).scalar_one_or_none()
+    new_version = (last.version + 1) if last else 1
+
+    art = AIChatArtifact(
+        session_id=session.id, filename=art_name, format=fmt,
+        content="", storage="file", file_path=str(target), size_bytes=size,
+        version=new_version,
+    )
+    db.add(art)
+    await db.commit()
+    await db.refresh(art)
+    return f"已登记可下载产物 '{art_name}' (v{new_version}, {size} 字节)。用户已能在右侧面板下载。"
+
+
 # ─────────────────────────── Dispatcher ───────────────────────────
 
 TOOL_HANDLERS = {
@@ -1176,6 +1230,7 @@ TOOL_HANDLERS = {
     "create_artifact_from_attachment": execute_create_artifact_from_attachment,
     "ask_clarifying_question": execute_ask_clarifying_question,
     "export_apaas_app_design_doc": execute_export_apaas_app_design_doc,
+    "save_binary_artifact": execute_save_binary_artifact,
 }
 
 
