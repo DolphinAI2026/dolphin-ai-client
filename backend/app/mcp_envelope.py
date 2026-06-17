@@ -189,6 +189,13 @@ class ErrorCode:
     UNKNOWN_TOOL = "UNKNOWN_TOOL"
     SPEC_TOO_SHORT = "SPEC_TOO_SHORT"
 
+    # ── skill 创作（AI 生成 Skill）──────────────────────────
+    SKILL_EXISTS = "SKILL_EXISTS"
+    SKILL_NAME_INVALID = "SKILL_NAME_INVALID"
+    SKILL_WRITE_FAILED = "SKILL_WRITE_FAILED"
+    SKILL_READONLY = "SKILL_READONLY"
+    SKILLS_UNSUPPORTED = "SKILLS_UNSUPPORTED"
+
 
 # ─────────────────────── ok / error 信封构造器 ───────────────────────
 
