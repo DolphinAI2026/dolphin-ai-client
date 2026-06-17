@@ -1,6 +1,7 @@
 import os
 
 import desktop_sidecar as ds
+import desktop_sidecar
 
 
 def test_ensure_jwt_secret_persists(tmp_path):
@@ -20,9 +21,26 @@ def test_build_env_sets_required_keys(tmp_path, monkeypatch):
     assert env["HOST"] == "127.0.0.1"
     assert env["PORT"] == "8799"
     assert env["DATABASE_URL"] == f"sqlite+aiosqlite:///{tmp_path / 'app.db'}"
-    assert env["ALLOW_DEFAULT_ENCRYPTION_KEY"] == "1"
+    assert "ALLOW_DEFAULT_ENCRYPTION_KEY" not in env
+    assert env["ENCRYPTION_KEY"] and env["ENCRYPTION_KEY"] != "default-key-change-in-production-32b"
     assert len(env["JWT_SECRET_KEY"]) >= 32
     # build_env 的契约是"写进 os.environ 并返回所写"; 验证确实写进了 environ
     assert os.environ.get("DESKTOP_MODE") == "1"
     assert os.environ.get("DATABASE_URL") == env["DATABASE_URL"]
     assert os.environ.get("JWT_SECRET_KEY") == env["JWT_SECRET_KEY"]
+
+
+def test_ensure_encryption_key_persists_and_reuses(tmp_path):
+    k1 = desktop_sidecar.ensure_encryption_key(tmp_path)
+    assert k1 and k1 not in {"", "default-key-change-in-production-32b", "__GENERATE__"}
+    # 0o600 权限
+    mode = (tmp_path / "encryption_key").stat().st_mode & 0o777
+    assert mode == 0o600
+    # 二次调用复用同值
+    assert desktop_sidecar.ensure_encryption_key(tmp_path) == k1
+
+
+def test_build_env_sets_real_key_and_no_bypass(tmp_path):
+    env = desktop_sidecar.build_env(data_dir=tmp_path, port=9999)
+    assert "ALLOW_DEFAULT_ENCRYPTION_KEY" not in env
+    assert env["ENCRYPTION_KEY"] and env["ENCRYPTION_KEY"] != "default-key-change-in-production-32b"

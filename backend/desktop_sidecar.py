@@ -25,6 +25,25 @@ def ensure_jwt_secret(data_dir: Path) -> str:
     return val
 
 
+def ensure_encryption_key(data_dir: Path) -> str:
+    """每安装实例持久化一个加密主密钥 (Fernet key 由 crypto.py 对它 sha256 派生)。
+
+    替掉 Phase 0 的 ALLOW_DEFAULT_ENCRYPTION_KEY 旁路: 用真实高熵 key, 让 main.py
+    的加密安全门合法放行, 而非被绕过。
+    """
+    data_dir = Path(data_dir)
+    data_dir.mkdir(parents=True, exist_ok=True)
+    f = data_dir / "encryption_key"
+    if f.is_file():
+        existing = f.read_text(encoding="utf-8").strip()
+        if existing:
+            return existing
+    val = secrets.token_urlsafe(48)
+    f.write_text(val, encoding="utf-8")
+    f.chmod(0o600)
+    return val
+
+
 def build_env(data_dir: Path, port: int) -> dict:
     """构造并写入本地运行所需的环境变量, 返回写入的子集 (便于测试)。"""
     data_dir = Path(data_dir)
@@ -36,8 +55,8 @@ def build_env(data_dir: Path, port: int) -> dict:
         "PORT": str(port),
         # 绝对路径(四斜杠), 避免被 config._normalize_database_url 锚定到 backend/
         "DATABASE_URL": f"sqlite+aiosqlite:///{db_path}",
-        # Phase 0 spike: 允许默认加密 key。Phase 1 改为每实例生成持久化 ENCRYPTION_KEY。
-        "ALLOW_DEFAULT_ENCRYPTION_KEY": "1",
+        # 每实例持久化的加密主密钥 (crypto.py 对它 sha256 派生 Fernet key)。
+        "ENCRYPTION_KEY": ensure_encryption_key(data_dir),
         "JWT_SECRET_KEY": ensure_jwt_secret(data_dir),
         # 默认 federation 模式: 转发到公网 account-service 认证(已部署 agent.dfy/account-api)。
         # 新机器用公网账号即可登, 不用复制 app.db。设 PUBLIC_ACCOUNT_BASE_URL="" 可切回本地 authority(离线兜底)。
