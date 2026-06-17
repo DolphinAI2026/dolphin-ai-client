@@ -7,7 +7,7 @@
 <script setup lang="ts">
 import { ref } from 'vue'
 import { getEditorUrl } from '@/api/editorUrl'
-import { openExternal } from '@/utils/openExternal'
+import { openExternal, openInAppBrowser } from '@/utils/openExternal'
 import AppIcon from '@/components/common/AppIcon.vue'
 
 const props = defineProps<{
@@ -36,7 +36,8 @@ async function onClick() {
       // 直接进子编辑器或过快自动跳转时没有可退历史，所以先打开完整应用编辑入口。
       const dest = resp.entry_url || resp.url
       if (__DESKTOP__) {
-        await openExternal(dest)
+        // 桌面端: 开 app 内 Tauri 子窗口(内置浏览器), 不跳系统浏览器。
+        await openInAppBrowser(dest, '低代码后台')
       } else if (targetWindow) {
         targetWindow.location.href = dest
       } else {

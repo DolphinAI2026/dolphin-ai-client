@@ -20,3 +20,26 @@ export async function openExternal(url: string): Promise<void> {
   }
   window.open(url, '_blank', 'noopener,noreferrer')
 }
+
+// 在 app 内开一个 Tauri 子窗口当"内置浏览器"(顶层 WKWebView, 非 iframe 嵌套)。
+// 给「低代码后台」用 — 留在 app 内, 不跳系统浏览器。创建失败(权限等)退回系统浏览器。
+// 在线版仍走 window.open。
+export async function openInAppBrowser(url: string, title = '内置浏览器'): Promise<void> {
+  if (!url) return
+  if (!__DESKTOP__) {
+    window.open(url, '_blank', 'noopener,noreferrer')
+    return
+  }
+  try {
+    const { WebviewWindow } = await import('@tauri-apps/api/webviewWindow')
+    const label = 'inapp-' + Date.now()
+    const w = new WebviewWindow(label, { url, title, width: 1280, height: 860, center: true })
+    w.once('tauri://error', (e) => {
+      console.error('[inapp-browser] 创建失败, 退回系统浏览器', e)
+      window.open(url, '_blank', 'noopener,noreferrer')
+    })
+  } catch (e) {
+    console.error('[inapp-browser] 异常, 退回系统浏览器', e)
+    window.open(url, '_blank', 'noopener,noreferrer')
+  }
+}
