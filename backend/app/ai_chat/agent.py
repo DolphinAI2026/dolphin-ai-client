@@ -49,6 +49,25 @@ from app import llm_transport
 
 logger = logging.getLogger(__name__)
 
+
+def _append_skill_manifest(messages: list[dict]) -> None:
+    """把可用 skill 清单追加到 system message（渐进披露）。空集 no-op、异常不致命。
+
+    技能清单（桌面上传/平台预置）注入 system prompt，否则 use_skill 的描述指向不存在的
+    「可用技能」段、模型无从得知技能名 → use_skill 实际不可达。空集（云端/无 skill）返回空串。
+    """
+    try:
+        from app.ai_chat.skills import SkillRegistry, build_skill_manifest
+        manifest = build_skill_manifest(SkillRegistry().scan())
+    except Exception as exc:  # noqa: BLE001 — 技能扫描失败不应中断对话
+        logger.warning("skill manifest 注入失败: %r", exc)
+        return
+    if manifest and messages and isinstance(messages[0], dict) and messages[0].get("role") == "system":
+        messages[0]["content"] = (messages[0].get("content") or "") + manifest
+    elif manifest:
+        logger.warning("skill manifest skipped: messages[0] is not a system message")
+
+
 LLM_RETRY_ATTEMPTS = 2
 PERSISTED_TOOL_ARG_PREVIEW_CHARS = 240
 PERSISTED_TOOL_ARG_MAX_CHARS = 20_000
@@ -817,17 +836,8 @@ async def _run_agent_inner(
     elif _manifest:
         logger.warning("deferred manifest skipped: messages[0] is not a system message")
     # 技能清单（桌面上传/平台预置）注入 system prompt，否则 use_skill 的描述指向不存在的「可用技能」段、
-    # 模型无从得知技能名 → use_skill 实际不可达。空集（云端/无 skill）返回空串，no-op。
-    try:
-        from app.ai_chat.skills import SkillRegistry, build_skill_manifest
-        _skill_manifest = build_skill_manifest(SkillRegistry().scan())
-    except Exception as _skill_exc:  # 技能扫描失败不应中断对话
-        logger.warning("skill manifest 注入失败: %r", _skill_exc)
-        _skill_manifest = ""
-    if _skill_manifest and messages and isinstance(messages[0], dict) and messages[0].get("role") == "system":
-        messages[0]["content"] = (messages[0].get("content") or "") + _skill_manifest
-    elif _skill_manifest:
-        logger.warning("skill manifest skipped: messages[0] is not a system message")
+    # 模型无从得知技能名 → use_skill 实际不可达。空集（云端/无 skill）no-op。
+    _append_skill_manifest(messages)
     active_tool_names: set[str] = await _reconstruct_active_tools(db, session)
 
     for turn in range(MAX_TURNS):
