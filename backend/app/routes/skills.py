@@ -11,7 +11,13 @@ from typing import Annotated
 from fastapi import APIRouter, Depends, File, HTTPException, UploadFile
 from pydantic import BaseModel
 
-from app.ai_chat.skills import SkillRegistry, _parse_frontmatter, skills_root
+from app.ai_chat.skills import (
+    SkillRegistry,
+    _parse_frontmatter,
+    skills_root,
+    validate_skill_frontmatter,
+    validate_skill_name,
+)
 from app.deps import AuthContext, get_auth_context
 
 router = APIRouter(prefix="/skills", tags=["skills"])
@@ -59,13 +65,8 @@ def _extract_user_skill_zip(data: bytes) -> str:
         if not skill_md:
             raise ValueError("zip 内未找到 SKILL.md")
         meta, _ = _parse_frontmatter(z.read(skill_md).decode("utf-8", errors="replace"))
-        name = (meta.get("name") or "").strip()
-        desc = (meta.get("description") or "").strip()
-        if not name or not desc:
-            raise ValueError("SKILL.md frontmatter 必须含 name 和 description")
-        # name 自身不能含路径分隔（防 frontmatter 注入越界）。
-        if "/" in name or "\\" in name or name in (".", ".."):
-            raise ValueError(f"非法技能名: {name}")
+        name, _desc = validate_skill_frontmatter(meta)
+        validate_skill_name(name)
         # 不允许覆盖平台预置技能：skill 脚本在本机执行，同名 shadow = 用任意内容
         # 替换可信平台技能的信任边界问题。
         existing = SkillRegistry(root).get(name)

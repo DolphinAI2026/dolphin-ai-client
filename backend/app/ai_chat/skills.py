@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import logging
 import os
+import re
 import shutil
 import sys
 from dataclasses import dataclass, field
@@ -77,6 +78,33 @@ def _parse_frontmatter(md_text: str) -> tuple[dict, str]:
             meta[k.strip()] = v.strip()
     body = "\n".join(lines[end + 1:]).lstrip("\n")
     return meta, body
+
+
+_ASCII_SKILL_NAME_RE = re.compile(r"^[A-Za-z0-9._-]+$")
+
+
+def validate_skill_name(name: str, *, require_ascii: bool = False) -> None:
+    """校验 skill 名合法性，非法抛 ValueError（路由/工具层映射成 4xx / error_code）。
+
+    默认沿用历史行为（仅拦空串 + 路径分隔 + ./..）；require_ascii=True 额外要求
+    纯 ASCII 字母/数字/连字符/下划线/点 —— AI 生成路径用，防 LLM 造非 ASCII 名引发并发覆盖/路径问题。
+    """
+    n = (name or "").strip()
+    if not n:
+        raise ValueError("技能名不能为空")
+    if "/" in n or "\\" in n or n in (".", ".."):
+        raise ValueError(f"非法技能名: {name}")
+    if require_ascii and not _ASCII_SKILL_NAME_RE.match(n):
+        raise ValueError(f"技能名必须为 ASCII（字母/数字/连字符/下划线）: {name}")
+
+
+def validate_skill_frontmatter(meta: dict) -> tuple[str, str]:
+    """校验 SKILL.md frontmatter 必含 name + description，返回 (name, description)（已 strip）。"""
+    name = (meta.get("name") or "").strip()
+    desc = (meta.get("description") or "").strip()
+    if not name or not desc:
+        raise ValueError("SKILL.md frontmatter 必须含 name 和 description")
+    return name, desc
 
 
 class SkillRegistry:
@@ -190,8 +218,7 @@ class SkillRegistry:
 
     def create_user_skill(self, name: str) -> str:
         """新建空白 user skill（骨架 SKILL.md）。"""
-        if "/" in name or "\\" in name or name in (".", ".."):
-            raise ValueError(f"非法技能名: {name}")
+        validate_skill_name(name)
         if self.get(name) is not None:
             raise ValueError(f"技能已存在: {name}")
         root = self._root if self._root is not None else skills_root()
@@ -211,8 +238,7 @@ class SkillRegistry:
         src = self.get(src_name)
         if src is None:
             raise FileNotFoundError(f"技能不存在: {src_name}")
-        if "/" in new_name or "\\" in new_name or new_name in (".", ".."):
-            raise ValueError(f"非法技能名: {new_name}")
+        validate_skill_name(new_name)
         if self.get(new_name) is not None:
             raise ValueError(f"技能已存在: {new_name}")
         root = self._root if self._root is not None else skills_root()
