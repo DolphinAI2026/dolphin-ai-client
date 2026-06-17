@@ -29,3 +29,13 @@ def test_decode_accepts_desktop_issuer_when_whitelisted(monkeypatch):
     tok = _token(monkeypatch, "desktop-sidecar")
     payload = auth.decode_token(tok)
     assert payload["iss"] == "desktop-sidecar"
+
+
+def test_decode_rejects_token_without_issuer(monkeypatch):
+    """无 iss claim 的票 (老票/伪造票) 在默认白名单下被拒。"""
+    from jose import jwt as _jwt
+    monkeypatch.setattr("app.config.settings.jwt_secret_key", "test-secret-xyz")
+    monkeypatch.setattr("app.config.settings.accepted_token_issuers", "ai-builder")
+    raw = _jwt.encode({"sub": "1", "type": "access"}, "test-secret-xyz", algorithm="HS256")
+    with pytest.raises(JWTError):
+        auth.decode_token(raw)

@@ -44,6 +44,8 @@ security = HTTPBearer()
 
 # 常量
 _ISSUER = "ai-builder"
+# 桌面 sidecar 联邦本地签票的 issuer (与共享后端的 ai-builder 区分)。
+# 由 _federation_login 在签发时使用、共享后端经 accepted_issuers_set 拒收 (见 desktop 信任边界加固计划 Task 3)。
 _DESKTOP_ISSUER = "desktop-sidecar"
 _AUDIENCE = "ai-builder-web"
 
