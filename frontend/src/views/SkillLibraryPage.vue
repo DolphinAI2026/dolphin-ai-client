@@ -52,9 +52,9 @@
               </el-tag>
             </template>
           </el-table-column>
-          <el-table-column label="脚本/文件" min-width="220">
+          <el-table-column label="脚本/文件" min-width="220" show-overflow-tooltip>
             <template #default="{ row }">
-              <span class="skill-files">{{ (row.files || []).join(', ') || '—' }}</span>
+              <span class="skill-files">{{ filesSummary(row.files) }}</span>
             </template>
           </el-table-column>
           <el-table-column label="操作" width="100" align="right">
@@ -95,6 +95,14 @@ async function refresh() {
   } finally {
     loading.value = false
   }
+}
+
+// 文件列只展示顶层摘要的前几项，避免带 JRE/大量文件的 skill 把单元格撑爆。
+function filesSummary(files?: string[]): string {
+  if (!files || !files.length) return '—'
+  const MAX = 6
+  if (files.length <= MAX) return files.join(', ')
+  return files.slice(0, MAX).join(', ') + ` 等 ${files.length} 项`
 }
 
 // el-upload :before-upload —— 返回 false 阻止其默认上传，自己走 API。
@@ -175,9 +183,13 @@ onMounted(refresh)
 }
 
 .skill-files {
+  display: block;
+  max-width: 100%;
   font-size: 12px;
   color: var(--text-2, #555);
-  word-break: break-all;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .skill-locked {

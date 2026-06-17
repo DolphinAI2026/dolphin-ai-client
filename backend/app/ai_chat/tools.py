@@ -1267,13 +1267,16 @@ async def execute_use_skill(args: dict, session: AIChatSession, db: AsyncSession
         return "错误：技能名非法，无法写入工作目录"
     dest.mkdir(parents=True, exist_ok=True)
     copied = []
-    for fn in skill.files:
-        src = skill.dir / fn
-        if src.is_file():
-            out = dest / fn
-            out.parent.mkdir(parents=True, exist_ok=True)  # 保留 references/ scripts/ 等子目录
-            shutil.copy2(src, out)
-            copied.append(f"skill_{slug}/{fn}")
+    for item in sorted(skill.dir.iterdir()):
+        if item.name == "SKILL.md":
+            continue
+        target = dest / item.name
+        if item.is_dir():
+            shutil.copytree(item, target, dirs_exist_ok=True)  # 递归保子目录(references/ scripts/ 等)
+            copied.append(f"skill_{slug}/{item.name}/")
+        else:
+            shutil.copy2(item, target)
+            copied.append(f"skill_{slug}/{item.name}")
     body = reg.read_skill_md(name)
     files_note = ("已就绪文件(在工作目录):\n" + "\n".join(f"- {p}" for p in copied)) if copied else "(无附带文件)"
     src_tag = "平台预置(已审)" if skill.source == "platform" else "本地上传"

@@ -108,10 +108,12 @@ class SkillRegistry:
                 if not name or not desc:
                     log.warning("skill 缺 name/description, 跳过: %s", d)
                     continue
+                # 顶层摘要（文件名 + 子目录名带 /），供列表展示用——避免带 JRE/大量
+                # 嵌套文件的 skill 把整棵树平铺成上千项撑爆 UI。完整树由 use_skill 递归拷。
                 files = [
-                    p.relative_to(d).as_posix()
-                    for p in sorted(d.rglob("*"))
-                    if p.is_file() and p.relative_to(d).as_posix() != "SKILL.md"
+                    (p.name + "/" if p.is_dir() else p.name)
+                    for p in sorted(d.iterdir())
+                    if p.name != "SKILL.md"
                 ]
                 by_name[name] = Skill(name=name, description=desc, dir=d, source=source, files=files)
         return list(by_name.values())

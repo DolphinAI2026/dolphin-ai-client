@@ -99,7 +99,8 @@ def test_accept_nested_subdirectories(tmp_path, monkeypatch):
     assert (root / "references" / "schema.md").is_file()
     from app.ai_chat.skills import SkillRegistry
     files = SkillRegistry().get("n").files
-    assert "sub/helper.py" in files and "references/schema.md" in files
+    # files 是顶层摘要（子目录带 /）；完整嵌套文件已在上面断言落盘。
+    assert "sub/" in files and "references/" in files
 
 
 def test_user_cannot_shadow_platform_skill(tmp_path, monkeypatch):
