@@ -4675,3 +4675,11 @@ export default {{
                 target = ws_path / rel
                 target.parent.mkdir(parents=True, exist_ok=True)
                 shutil.copy2(src_file, target)
+
+
+async def restore_external_workspaces(session) -> None:
+    """启动时从 DB registered_workspaces 恢复 external 工作区路径到 WorkspaceManager 内存缓存。"""
+    from sqlalchemy import select as _select
+    from app.models import RegisteredWorkspace
+    rows = (await session.execute(_select(RegisteredWorkspace))).scalars().all()
+    WorkspaceManager.load_external([(r.ws_id, r.abs_path) for r in rows])

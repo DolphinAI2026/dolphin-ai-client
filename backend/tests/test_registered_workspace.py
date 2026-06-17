@@ -58,3 +58,15 @@ def test_workspace_manager_external_missing_folder(tmp_path):
     with pytest.raises(FileNotFoundError):
         wm.get_workspace_path("ext_2")
     WorkspaceManager._external_paths.clear()
+
+
+@pytest.mark.asyncio
+async def test_restore_external_from_db(session):
+    from app.coding.workspace import WorkspaceManager, restore_external_workspaces
+    from app.models import RegisteredWorkspace
+    WorkspaceManager._external_paths.clear()
+    session.add(RegisteredWorkspace(ws_id="r_1", abs_path="/some/p", user_id=1, tenant_id=1, display_name="p"))
+    await session.commit()
+    await restore_external_workspaces(session)
+    assert WorkspaceManager._external_paths.get("r_1") == "/some/p"
+    WorkspaceManager._external_paths.clear()

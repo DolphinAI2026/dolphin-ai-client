@@ -100,6 +100,16 @@ async def lifespan(app: FastAPI):
             "migrate_orphan_workspaces failed (非致命): %s", e,
         )
 
+    # 桌面 external 工作区: 启动从 DB 注册表恢复路径缓存
+    try:
+        from app.database import AsyncSessionLocal
+        from app.coding.workspace import restore_external_workspaces
+        async with AsyncSessionLocal() as _ws_sess:
+            await restore_external_workspaces(_ws_sess)
+    except Exception as _e:
+        import logging as _lg
+        _lg.getLogger(__name__).warning("restore_external_workspaces 失败(非致命): %s", _e)
+
     # 后台预热模板依赖缓存（不阻塞启动）
     import asyncio as _asyncio
     from app.coding.workspace import WorkspaceManager as _WM
