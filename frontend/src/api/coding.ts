@@ -255,31 +255,6 @@ export const codingApi = {
     return buildServeLogsUrl(API_PREFIX, wsId, lastSeenSeq, localStorage.getItem('token') || '')
   },
 
-  /** 启动 CDP 抓取实例，加载同一 dev server URL */
-  captureStart(wsId: string, url: string) {
-    return request.post<any, { session_id: string }>(`/coding/workspace/${wsId}/browser/capture/start`, { url }, { timeout: 120000 })
-  },
-
-  /** 拉控制台日志（after_seq 之后的增量） */
-  captureConsole(wsId: string, afterSeq: number) {
-    return request.get<any, { seq: number; level: string; text: string; location: string }[]>(`/coding/workspace/${wsId}/browser/capture/console`, { params: { after_seq: afterSeq } })
-  },
-
-  /** 拉网络请求（只含 status>=400 与失败） */
-  captureNetwork(wsId: string, afterSeq: number) {
-    return request.get<any, { seq: number; url: string; status: number; method: string; failed: boolean }[]>(`/coding/workspace/${wsId}/browser/capture/network`, { params: { after_seq: afterSeq } })
-  },
-
-  /** 在独立 Chromium 窗口打开 DevTools（同一抓取会话非 headless 重开） */
-  captureDevtools(wsId: string) {
-    return request.post<any, { status: string }>(`/coding/workspace/${wsId}/browser/capture/devtools`, {})
-  },
-
-  /** 停止并清理 CDP 抓取实例 */
-  captureStop(wsId: string) {
-    return request.post<any, { status: string }>(`/coding/workspace/${wsId}/browser/capture/stop`, {})
-  },
-
   /** 构建 + 上传到平台环境 */
   uploadToPlatform(wsId: string, envId: number): Promise<{ status: string; message: string }> {
     return request.post(`/coding/workspace/${wsId}/upload-to-platform`, { env_id: envId }, { timeout: 300000 })
