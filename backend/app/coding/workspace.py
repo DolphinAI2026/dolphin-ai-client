@@ -1790,6 +1790,25 @@ class WorkspaceManager:
         asyncio.ensure_future(_read(getattr(proc, "stdout", None), "stdout"))
         asyncio.ensure_future(_read(getattr(proc, "stderr", None), "stderr"))
 
+    @staticmethod
+    def _resolve_serve_command(ws_path: str, port: int) -> list[str]:
+        """决定 dev server 启动命令。
+
+        优先用工程自带的 `preview` 脚本（带可运行预览 harness：preview/main.js 真正 mount
+        组件 + preview/index.html 模板）——直接服务 src/index.js 是 UMD 组件库入口（只 export
+        {install}，不 mount）→ 页面空白。无 preview 脚本则回退原行为。
+        """
+        import json as _json
+        scripts: dict = {}
+        try:
+            pkg = _json.loads((Path(ws_path) / "package.json").read_text("utf-8"))
+            scripts = pkg.get("scripts") or {}
+        except Exception:
+            scripts = {}
+        if "preview" in scripts:
+            return ["npm", "run", "preview", "--", "--port", str(port)]
+        return ["npx", "vue-cli-service", "serve", "src/index.js", "--port", str(port)]
+
     async def start_serve(self, ws_id: str, kind: str = "web") -> dict:
         """启动 npm run serve 后台进程，返回端口号"""
         if ws_id in self._serve_processes:
@@ -1819,7 +1838,7 @@ class WorkspaceManager:
         env = self._build_npm_env()
         env["PORT"] = str(port)
         proc = await asyncio.create_subprocess_exec(
-            "npx", "vue-cli-service", "serve", "src/index.js", "--port", str(port),
+            *self._resolve_serve_command(str(ws_path), port),
             cwd=str(ws_path),
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
