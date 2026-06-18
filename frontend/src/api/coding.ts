@@ -241,6 +241,14 @@ export const codingApi = {
     return request.get<any, { running: boolean; url?: string }>(`/coding/workspace/${wsId}/serve-status`)
   },
 
+  /** 查询自开发页面绑定工作区是否在 npm run serve(预览面板 dev⇄UMD 切换) */
+  customPageDevTarget(appId: number, menuId: string, authToken: string) {
+    return request.get<any, { dev_running: boolean; port: number | null; ws_id: string | null }>(
+      `/applications/${appId}/custom-page-dev-target`,
+      { params: { menu_id: menuId, _auth: authToken } },
+    )
+  },
+
   /** 构建 + 上传到平台环境 */
   uploadToPlatform(wsId: string, envId: number): Promise<{ status: string; message: string }> {
     return request.post(`/coding/workspace/${wsId}/upload-to-platform`, { env_id: envId }, { timeout: 300000 })
