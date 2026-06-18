@@ -229,7 +229,7 @@ export const codingApi = {
 
   /** 启动开发服务器 */
   startServe(wsId: string) {
-    return request.post<any, { status: string; url?: string; message?: string }>(`/coding/workspace/${wsId}/serve`, {}, { params: { action: 'start' }, timeout: 120000 })
+    return request.post<any, { status: string; url?: string; port?: number; message?: string }>(`/coding/workspace/${wsId}/serve`, {}, { params: { action: 'start' }, timeout: 120000 })
   },
 
   /** 停止开发服务器 */

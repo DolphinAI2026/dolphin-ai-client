@@ -124,7 +124,8 @@ async function start() {
   busy.value = true
   try {
     const res = await codingApi.startServe(props.wsId)
-    devUrl.value = res.url || ''
+    // 后端 start_serve 返回 {status, port, message}（无 url）→ 用 port 拼 dev server URL。
+    devUrl.value = res.url || (res.port ? `http://127.0.0.1:${res.port}/` : '')
     running.value = true
     lastSeq = 0
     openLogStream()
