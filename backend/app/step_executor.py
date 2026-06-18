@@ -2204,21 +2204,27 @@ async def execute_configure_permissions(
             except Exception as exc:
                 logger.warning("权限页面配置回写失败（%s）: %s", job.get("form_name") or job.get("form_id"), exc)
 
-    # 兜底 sweep:把表单菜单名从平台默认占位「我的待办」纠正回 spec 真实名。
-    # execute_create_form 里建表后的改名可能静默失败,这里在所有表单建完之后
-    # 统一回读菜单树并按 formCode 回写,根治「整批表单名变我的待办」复发 bug。
+    # 兜底 sweep:把「表单管理」列表里停在平台默认占位「我的待办」的表单实体名同步回真实名。
+    # 「表单名称」列展示的是表单实体名(非菜单名),建表时由 formConfigDetail 保存从 formContext
+    # 同步;execute_create_form 里那步 _finalize_created_form_config 可能静默失败 → 实体名停在
+    # 占位。这里在所有表单建完后统一重跑该固化保存,根治「整批表单名变我的待办」复发 bug。
     name_sweep = {"fixed": [], "failed": [], "skipped": []}
     try:
-        from app.operations.form_name_repair import repair_form_menu_names
+        from app.operations.form_name_repair import (
+            repair_form_entity_names,
+            _name_by_code_from_spec,
+        )
 
-        name_sweep = await repair_form_menu_names(client, app_id, all_forms or [])
+        name_sweep = await repair_form_entity_names(
+            client, app_id, name_by_code=_name_by_code_from_spec(all_forms or [])
+        )
         if name_sweep.get("fixed"):
-            logger.info("表单菜单名 sweep 修复 %d 个: %s", len(name_sweep["fixed"]), name_sweep["fixed"])
+            logger.info("表单实体名 sweep 修复 %d 个: %s", len(name_sweep["fixed"]), name_sweep["fixed"])
         if name_sweep.get("failed"):
             # 失败不静默——升到 error 级别,并随 result 返回让前端可见
-            logger.error("表单菜单名 sweep 有 %d 个改名失败: %s", len(name_sweep["failed"]), name_sweep["failed"])
+            logger.error("表单实体名 sweep 有 %d 个修复失败: %s", len(name_sweep["failed"]), name_sweep["failed"])
     except Exception as exc:
-        logger.error("表单菜单名 sweep 整体失败: %s", exc)
+        logger.error("表单实体名 sweep 整体失败: %s", exc)
         name_sweep = {"fixed": [], "failed": [{"code": "", "error": str(exc)}], "skipped": []}
 
     return {"permissions_count": len(perm_payloads), "form_name_sweep": name_sweep}

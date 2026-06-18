@@ -53,6 +53,7 @@ _EXPECTED_CONFIG_WHITELIST: frozenset[str] = frozenset({
     "bind_apaas_form_field_to_dict",
     "build_apaas_feature_from_spec",
     "check_app_code_conflict",
+    "compute_app_health",
     "create_apaas_app_dict",
     "create_apaas_app_roles",
     "create_apaas_business_event",
@@ -324,7 +325,8 @@ def test_config_whitelist_matches_current_expected():
     # 2026-06-12: +1 已有流程连线规则调整工具 → 84
     # 2026-06-12: +1 自开发 workspace 反查工具 → 85
     # 2026-06-12: -11 退役 browser_* / Chrome extension POC → 74
-    assert len(new) == 74, f"config 白名单总数应是 74, 实际 {len(new)}"
+    # 2026-06-16: +1 应用健康体检引擎 compute_app_health (46a53beb 注册漏同步快照) → 75
+    assert len(new) == 75, f"config 白名单总数应是 75, 实际 {len(new)}"
 
 
 def test_builder_whitelist_count():

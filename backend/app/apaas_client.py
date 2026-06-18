@@ -2519,6 +2519,39 @@ class APaaSClient:
                 return menus
             raise Exception(f"manageAppMenu 返回失败: code={data.get('code')}, message={data.get('message') or data.get('msg') or data}")
 
+    async def query_all_form_configs(self, app_id: str, *, page_size: int = 500) -> list:
+        """列应用所有表单配置 — GET /xdap-app/formConfig/query/allFormConfigList。
+
+        这是「表单管理」列表页的数据源:每条含 id(=formId) / formName(表单实体名) /
+        formCode。**formName 是「表单名称」列展示的实体名**(2026-06-18 浏览器实证),
+        老应用建表时 formConfigDetail 同步失败会停在平台默认占位「我的待办」。
+        repair_form_entity_names 用它检测哪些表单实体名是占位、需修。
+
+        响应结构防御:data 可能直接是 list,或 {list/rows/records/data: [...]}。
+        """
+        ts = self._get_timestamp()
+        url = f"{self.base_url}/xdap-app/formConfig/query/allFormConfigList"
+        params = {"appId": app_id, "page": 1, "pageSize": page_size, "timestamp": ts}
+        _log_request("GET", url, params=params)
+        start = time.time()
+        async with httpx.AsyncClient(verify=False, timeout=APAAS_HTTP_TIMEOUT) as client:
+            response = await client.get(url, headers=self._get_headers(app_id), params=params)
+            elapsed_ms = (time.time() - start) * 1000
+            response.raise_for_status()
+            data = response.json()
+            _log_response(url, response.status_code, data, elapsed_ms, method="GET")
+            if data.get("code") not in ("ok", None) and data.get("status") not in (200, "200", None):
+                return []
+            body = data.get("data")
+            if isinstance(body, list):
+                return body
+            if isinstance(body, dict):
+                for key in ("list", "rows", "records", "data", "table"):
+                    rows = body.get(key)
+                    if isinstance(rows, list):
+                        return rows
+            return []
+
     async def query_form_views(self, app_id: str, form_id: str) -> list:
         """查询表单的列表视图清单（拿 tabId）。
 

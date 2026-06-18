@@ -225,6 +225,12 @@ tools:
     category: update
     description: "修复已创建但组件为空的表单：从绑定主模型字段补回基础表单组件；已有组件时跳过。"
     search_hint: "修复 空表单 表单为空 补字段 重建 fix empty form"
+  repair_apaas_form_names:
+    sections: [ui, data]
+    agents: [builder, coding]
+    category: update
+    description: "修复「表单管理」列表里「表单名称」显示成占位「我的待办」的存量表单：对实体名为占位的模型页面表单重存 formConfigDetail，把列表名同步成真实名（菜单名）；已正确的跳过，幂等。dry_run 可预览。"
+    search_hint: "修复 表单名称 我的待办 占位 表单管理 列表 改名 fix form name placeholder"
   get_apaas_process_detail:
     sections: [logic]
     agents: [builder, config]
