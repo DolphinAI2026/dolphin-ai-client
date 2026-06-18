@@ -14,8 +14,9 @@ export function bindingBadge(b: Binding): { tone: string; label: string } {
 
 // 统一会话列表混多来源, 用「类型前缀:原始id」防数字 id 撞车。
 // 约定前缀: chat(=none 绑定) / app / workspace。
-export function prefixedId(kind: 'chat' | 'app' | 'workspace', raw: string | number): string {
-  return `${kind}:${raw}`
+export function prefixedId(kind: BindingKind | 'chat', raw: string | number): string {
+  const prefix = kind === 'none' ? 'chat' : kind
+  return `${prefix}:${raw}`
 }
 
 export function bindingKindFromId(id: string): BindingKind {

@@ -10,6 +10,7 @@ describe('binding', () => {
   it('uses type-prefixed ids to avoid cross-source collision', () => {
     expect(prefixedId('app', 7)).toBe('app:7')
     expect(prefixedId('workspace', 'ws1')).toBe('workspace:ws1')
+    expect(prefixedId('none', 7)).toBe('chat:7')
     expect(bindingKindFromId('app:7')).toBe('app')
     expect(bindingKindFromId('chat:12')).toBe('none')   // chat 前缀 = none 绑定
     expect(rawId('app:7')).toBe('7')
