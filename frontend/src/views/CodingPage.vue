@@ -204,6 +204,24 @@
                     <pre v-if="streamCustom(message).sm.content.includes('\n')" class="command-output">{{ streamCustom(message).sm.content.split('\n').slice(1).join('\n') }}</pre>
                   </div>
                 </template>
+                <!-- run_result（对话驱动运行/调试结果卡）-->
+                <template v-else-if="streamCustom(message).sm.type === 'run_result' && streamCustom(message).sm.run">
+                  <div class="coding-run-card">
+                    <div class="rc-head">
+                      <span class="rc-dot" :class="streamCustom(message).sm.run.status" />
+                      <span class="rc-title">
+                        {{ streamCustom(message).sm.run.source === 'autofix' ? `自愈第 ${streamCustom(message).sm.run.round + 1} 轮` : '运行预览' }}
+                        · {{ rcStatusText(streamCustom(message).sm.run) }}
+                      </span>
+                      <button v-if="streamCustom(message).sm.run.dev_url" class="rc-link" @click="focusPreview(streamCustom(message).sm.run)">查看预览</button>
+                    </div>
+                    <div v-if="streamCustom(message).sm.run.dev_url" class="rc-url">{{ streamCustom(message).sm.run.dev_url }}</div>
+                    <ul v-if="streamCustom(message).sm.run.errors.length" class="rc-errs">
+                      <li v-for="(e, ei) in streamCustom(message).sm.run.errors.slice(0, 5)" :key="ei">{{ e }}</li>
+                    </ul>
+                    <div v-if="!streamCustom(message).sm.run.capture_available" class="rc-degrade">运行时抓取不可用（需 dev 模式）</div>
+                  </div>
+                </template>
                 <!-- thinking / status / tool 已迁移到 AgentConversation 原生 kind（见 agentMessages 映射）-->
               </template>
             </template>
@@ -1013,6 +1031,20 @@ const agentMessages = computed<AgentMessage[]>(() => {
 function streamCustom(message: AgentMessage): { sm: any; isLast: boolean } {
   const meta = (message.meta || {}) as { streamMsg?: any; isLast?: boolean }
   return { sm: meta.streamMsg || {}, isLast: !!meta.isLast }
+}
+
+// 运行结果卡（type=run_result）的状态文案 + 「查看预览」聚焦到预览位
+function rcStatusText(r: any): string {
+  if (!r) return ''
+  if (r.status === 'running') return '运行中…'
+  if (r.status === 'ok') return r.capture_available ? '通过，无报错' : '已启动'
+  return `${(r.errors || []).length} 个报错`
+}
+function focusPreview(r: any) {
+  if (r?.dev_url) {
+    codingStore.activePreview = { dev_url: r.dev_url, status: r.status, errors: r.errors, capture_available: r.capture_available, round: r.round }
+  }
+  wsPaneTab.value = 'run'
 }
 
 /** Coding 的 tool StreamMessage(展示字符串模型,content='📖 读取 X' / '🔧 <display>',
