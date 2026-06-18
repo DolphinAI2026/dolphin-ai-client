@@ -333,7 +333,7 @@
       >
         <div class="ws-pane-tabs">
           <button :class="{ active: wsPaneTab === 'files' }" @click="wsPaneTab = 'files'">文件 / 代码</button>
-          <button :class="{ active: wsPaneTab === 'run' }" @click="wsPaneTab = 'run'">运行/调试</button>
+          <button :class="{ active: wsPaneTab === 'run' }" @click="wsPaneTab = 'run'">预览</button>
         </div>
         <div v-show="wsPaneTab === 'files'" class="ws-pane-files">
           <FileTree
