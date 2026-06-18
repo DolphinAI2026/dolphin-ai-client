@@ -229,7 +229,7 @@
 <script setup lang="ts">
 import { ref, computed, watch, reactive } from 'vue'
 import request from '@/utils/request'
-import { openExternal } from '@/utils/openExternal'
+import { openExternal } from '@/utils/desktop'
 import EmptyState from '@/components/states/EmptyState.vue'
 import ErrorCard from '@/components/states/ErrorCard.vue'
 import SkeletonCard from '@/components/states/SkeletonCard.vue'

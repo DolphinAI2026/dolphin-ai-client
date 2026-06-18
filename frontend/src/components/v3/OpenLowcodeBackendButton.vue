@@ -7,7 +7,7 @@
 <script setup lang="ts">
 import { ref } from 'vue'
 import { getEditorUrl } from '@/api/editorUrl'
-import { openExternal, openInAppBrowser } from '@/utils/openExternal'
+import { openExternal, openInAppBrowser } from '@/utils/desktop'
 import AppIcon from '@/components/common/AppIcon.vue'
 
 const props = defineProps<{

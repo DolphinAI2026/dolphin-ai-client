@@ -262,8 +262,7 @@ import BaseBadge from '@/components/BaseBadge.vue'
 import BaseTag from '@/components/BaseTag.vue'
 import { codingApi, bindWorkspaceApp, type WorkspaceInfo } from '@/api/coding'
 import { applicationApi } from '@/api/application'
-
-const isDesktop = __DESKTOP__
+import { isDesktop, pickDirectory } from '@/utils/desktop'
 
 const route = useRoute()
 const router = useRouter()
@@ -574,10 +573,8 @@ function openWorkspace(ws: WorkspaceInfo) {
 }
 
 async function openLocalFolder() {
-  if (!__DESKTOP__) return
-  const { open } = await import('@tauri-apps/plugin-dialog')
-  const picked = await open({ directory: true, multiple: false, title: '选择要打开的项目文件夹' })
-  if (!picked || typeof picked !== 'string') return
+  const picked = await pickDirectory('选择要打开的项目文件夹')
+  if (!picked) return
   try {
     await ElMessageBox.confirm(
       'AI 可在此文件夹内读写并运行命令（运行命令不受沙箱限制）。建议选用 git 管理或已备份的目录，以便误改可恢复。',

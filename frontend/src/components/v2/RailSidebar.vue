@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
-import { checkAndPromptUpdate } from '@/utils/desktopUpdate'
+import { checkAndPromptUpdate } from '@/utils/desktop'
 import { useUserStore } from '@/stores/user'
 import { useThemeStore } from '@/stores/theme'
 import ruijingWhaleMarkUrl from '@/assets/brand/ruijing-whale-mark.svg'
