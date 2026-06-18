@@ -184,7 +184,6 @@ async function onSelectSession(s: AIChatSession) {
   try {
     await loadSession(s.id)
     syncSelectedLlmFromSession()
-    emit('session-changed', s.id)
   } catch (e: any) {
     ElMessage.error(e?.message || '加载历史失败')
   }
