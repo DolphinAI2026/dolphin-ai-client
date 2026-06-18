@@ -1,4 +1,5 @@
 import os
+import sys
 import textwrap
 from pathlib import Path
 
@@ -80,6 +81,8 @@ def _clear_desktop_env(monkeypatch):
     monkeypatch.delenv("DESKTOP_MODE", raising=False)
     monkeypatch.delenv("RUIJING_SERVER_DATA_DIR", raising=False)
     monkeypatch.delenv("RUIJING_SKILLS_DISABLED", raising=False)
+    # 桌面判定的 frozen 信号现由 app.runtime 读真实 sys.frozen；确保非冻结态。
+    monkeypatch.delattr(sys, "frozen", raising=False)
 
 
 def test_desktop_skills_root_matches_sidecar_data_dir(tmp_path, monkeypatch):
@@ -126,7 +129,6 @@ def test_desktop_skills_root_does_not_use_home_fallback_when_workspace_known(tmp
 def test_web_skills_root_defaults_to_backend_data(monkeypatch):
     """非桌面、无显式 skills env → Web 服务端 data/skills。"""
     _clear_desktop_env(monkeypatch)
-    monkeypatch.setattr(skmod.sys, "frozen", False, raising=False)
     assert skmod.skills_root() == Path(skmod.__file__).resolve().parents[2] / "data" / "skills"
 
 
@@ -134,7 +136,6 @@ def test_web_skills_root_from_server_data_dir(tmp_path, monkeypatch):
     """Web 端服务数据根目录可显式覆盖，skills 落到其下的 skills/。"""
     _clear_desktop_env(monkeypatch)
     monkeypatch.setenv("RUIJING_SERVER_DATA_DIR", str(tmp_path / "server-data"))
-    monkeypatch.setattr(skmod.sys, "frozen", False, raising=False)
     assert skmod.skills_root() == tmp_path / "server-data" / "skills"
 
 

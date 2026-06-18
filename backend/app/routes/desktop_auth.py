@@ -18,6 +18,7 @@ from app.database import get_db
 from app.deps import get_auth_context, AuthContext, resolve_default_tenant_id_for_user
 from app.models import User
 from app import desktop_accounts as da
+from app import runtime
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/desktop-auth", tags=["desktop-auth"])
@@ -86,9 +87,8 @@ async def _authority_login(db: AsyncSession, data: DesktopLoginIn) -> DesktopLog
 
 @router.post("/login", response_model=DesktopLoginOut)
 async def desktop_login(data: DesktopLoginIn, db: AsyncSession = Depends(get_db)):
-    base_url = settings.public_account_base_url
-    if base_url:
-        return await _federation_login(db, data, base_url)
+    if runtime.is_federation():
+        return await _federation_login(db, data, settings.public_account_base_url)
     return await _authority_login(db, data)
 
 

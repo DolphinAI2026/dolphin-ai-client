@@ -11,6 +11,7 @@ from starlette.exceptions import HTTPException as StarletteHTTPException
 from starlette.responses import FileResponse
 from app.config import settings, APP_TITLE, APP_DESCRIPTION, APP_VERSION
 from app.database import init_db
+from app import runtime
 from app.routes import (
     admin_mcp,
     agent_observability,
@@ -65,7 +66,7 @@ async def lifespan(app: FastAPI):
         )
 
     # 信任边界铁律: 非桌面 sidecar 的部署 = 共享后端, 绝不接受本地签票。
-    if os.environ.get("DESKTOP_MODE") != "1":
+    if not runtime.is_desktop():
         from app.auth import assert_shared_backend_issuer_safety
         assert_shared_backend_issuer_safety()
 
@@ -435,22 +436,14 @@ async def health_check():
 # 在线版不受影响(默认 DESKTOP_MODE 未设)。必须放在所有 include_router /
 # app.mount / runtime_proxy 之后, 让显式 API/admin/反代路由优先匹配,
 # 这个 "/" 挂载只作为前端 SPA 的兜底。
-if os.environ.get("DESKTOP_MODE") == "1":
+if runtime.is_desktop():
     import logging as _logging
-    import sys as _sys
 
     _desktop_logger = _logging.getLogger(__name__)
-
-    _explicit = os.environ.get("DESKTOP_FRONTEND_DIR")
-    if _explicit:
-        _desktop_fe = Path(_explicit)
-    elif getattr(_sys, "_MEIPASS", None):  # PyInstaller 冻结态
-        _desktop_fe = Path(_sys._MEIPASS) / "frontend_dist"
-    else:  # 本机 dev
-        _desktop_fe = Path(__file__).resolve().parents[2] / "frontend" / "dist-desktop"
+    _desktop_fe = runtime.desktop_frontend_dir()
 
     if _desktop_fe.is_dir():
         app.mount("/", _SpaStaticFiles(directory=str(_desktop_fe), html=True), name="desktop-frontend")
         _desktop_logger.info("[desktop] mounted frontend SPA at / from %s", _desktop_fe)
     else:
-        _desktop_logger.warning("[desktop] DESKTOP_MODE=1 but frontend dir not found: %s", _desktop_fe)
+        _desktop_logger.warning("[desktop] desktop runtime but frontend dir not found: %s", _desktop_fe)

@@ -10,9 +10,10 @@ import logging
 import os
 import re
 import shutil
-import sys
 from dataclasses import dataclass, field
 from pathlib import Path
+
+from app import runtime
 
 log = logging.getLogger(__name__)
 
@@ -20,36 +21,22 @@ log = logging.getLogger(__name__)
 def skills_root() -> Path | None:
     """解析 skill 根目录。
 
-    优先级：显式禁用 > 显式 skills 目录 > 桌面 data_dir > Web 服务端 data 目录。
+    优先级：显式禁用 > 显式 skills 目录 > 桌面 data_dir > Web 服务端 data 目录 > 仓库兜底。
 
-    data_dir 的真相源是 desktop_sidecar.build_env：Tauri 用 bundle identifier 推出
-    的 app_data_dir(macOS = ~/Library/Application Support/com.ruijing.builder)经
-    `--data-dir` 传给 sidecar，build_env 据此 **无条件** 写 os.environ
-    ['APAAS_WORKSPACE_ROOT'] = <data_dir>/workspaces。所以这里从
-    APAAS_WORKSPACE_ROOT 反推 data_dir（取 .parent），与 sidecar 真正使用的目录
-    严格一致；绝不能猜 ~/.ruijing-builder —— 那是 main() 里仅当没传 --data-dir 时
-    的 CLI 兜底默认，生产桌面包从不命中，会让 scan() 永远扫空目录。
+    桌面判定与 data_dir 反推统一走 app.runtime 门面（is_desktop / desktop_data_dir /
+    server_data_dir），不再在此自行判断桌面态/冻结态/data 目录 env。
+    桌面 data_dir 真相源仍是 desktop_sidecar.build_env 经 --data-dir 注入，见 runtime.py。
     """
     if os.environ.get("RUIJING_SKILLS_DISABLED") == "1":
         return None
     env = os.environ.get("RUIJING_SKILLS_DIR")
     if env:
         return Path(env)
-    # 桌面 sidecar：从 build_env 实际导出的信号反推 data_dir。
-    if os.environ.get("DESKTOP_MODE") == "1" or getattr(sys, "frozen", False):
-        # 首选 build_env 显式导出的 data_dir。
-        data_dir = os.environ.get("SIDECAR_DATA_DIR")
-        if not data_dir:
-            # 退而从 workspaces 根反推（build_env 无条件设置，是更稳的真相源）。
-            ws = os.environ.get("APAAS_WORKSPACE_ROOT")
-            if ws:
-                return Path(ws).parent / "skills"
-            # 都没有时仅作为最后兜底（开发/裸跑），与 main() 的默认对齐。
-            data_dir = str(Path.home() / ".ruijing-builder")
-        return Path(data_dir) / "skills"
-    server_data_dir = os.environ.get("RUIJING_SERVER_DATA_DIR")
-    if server_data_dir:
-        return Path(server_data_dir) / "skills"
+    if runtime.is_desktop():
+        return runtime.desktop_data_dir() / "skills"
+    server = runtime.server_data_dir()
+    if server:
+        return server / "skills"
     return Path(__file__).resolve().parents[2] / "data" / "skills"
 
 
