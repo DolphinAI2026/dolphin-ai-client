@@ -78,3 +78,45 @@ async def test_ring_buffer_caps_at_max_keeping_latest():
     # 末尾是最新的几行（seq 单调，最后一行 seq 最大）
     assert ring[-1]["line"].startswith("line-")
     assert ring[-1]["seq"] > ring[0]["seq"]
+
+
+async def test_iter_serve_logs_backfills_after_seq_then_streams_new():
+    mgr = _bare_manager()
+    ws_id = "w-iter"
+    mgr._serve_processes = {}
+
+    class _DoneProc:
+        returncode = None  # 先存活，便于流式；测试中手动停
+
+    proc = _DoneProc()
+    mgr._serve_processes[ws_id] = {
+        "process": proc, "port": 1, "kind": "web", "log_ring": [], "log_seq": 0,
+    }
+    # 预置 3 行历史
+    for s, ln in (("stdout", "a"), ("stdout", "b"), ("stderr", "c")):
+        mgr._append_serve_log(ws_id, s, ln)
+
+    collected: list[dict] = []
+
+    async def _consume():
+        async for ev in mgr.iter_serve_logs(ws_id, after_seq=1):
+            collected.append(ev)
+            if len(collected) >= 3:
+                break
+
+    task = asyncio.create_task(_consume())
+    await asyncio.sleep(0.05)
+    # 再追加一行新的
+    mgr._append_serve_log(ws_id, "stdout", "d")
+    await asyncio.wait_for(task, timeout=2)
+
+    # after_seq=1 → 跳过 seq 1，补发 seq 2,3，再实时收到 seq 4
+    assert [e["seq"] for e in collected] == [2, 3, 4]
+    assert collected[-1] == {"seq": 4, "stream": "stdout", "line": "d"}
+
+
+async def test_iter_serve_logs_unknown_ws_yields_nothing():
+    mgr = _bare_manager()
+    mgr._serve_processes = {}
+    got = [ev async for ev in mgr.iter_serve_logs("nope", after_seq=0)]
+    assert got == []

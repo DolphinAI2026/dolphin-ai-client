@@ -1840,9 +1840,9 @@ class WorkspaceManager:
                 if s.connect_ex(("localhost", port)) == 0:
                     return {"status": "ok", "port": port, "message": f"serve 已启动在端口 {port}"}
             if proc.returncode is not None:
-                stdout, stderr = await proc.communicate()
+                tail = [r["line"] for r in self._serve_processes.get(ws_id, {}).get("log_ring", [])][-10:]
                 return {"status": "error", "port": port,
-                        "message": f"serve 启动失败: {stderr.decode('utf-8', errors='replace')[:300]}"}
+                        "message": "serve 启动失败: " + ("\n".join(tail) or "进程已退出")[:300]}
 
         return {"status": "ok", "port": port, "message": f"serve 正在启动（端口 {port}）"}
 
@@ -1904,6 +1904,36 @@ class WorkspaceManager:
         if not running:
             self._serve_processes.pop(ws_id, None)
         return {"running": running, "port": info["port"] if running else None}
+
+    async def iter_serve_logs(self, ws_id: str, after_seq: int):
+        """逐条产出该 ws 的 serve 日志行：先补发 seq > after_seq 的历史，再实时跟随。
+
+        每条：{"seq": int, "stream": "stdout"|"stderr", "line": str}
+        进程退出且 ring 全部发完后结束迭代。
+        """
+        if ws_id not in self._serve_processes:
+            return
+        cursor = int(after_seq or 0)
+        idle_after_exit = 0
+        while True:
+            info = self._serve_processes.get(ws_id)
+            if info is None:
+                return
+            ring = info.get("log_ring", [])
+            new_rows = [r for r in ring if r["seq"] > cursor]
+            if new_rows:
+                for row in new_rows:
+                    cursor = row["seq"]
+                    yield {"seq": row["seq"], "stream": row["stream"], "line": row["line"]}
+                idle_after_exit = 0
+                continue
+            proc = info.get("process")
+            exited = proc is None or getattr(proc, "returncode", None) is not None
+            if exited:
+                idle_after_exit += 1
+                if idle_after_exit >= 2:  # 退出后再确认一轮无新行
+                    return
+            await asyncio.sleep(0.5)
 
     async def build_and_package(self, ws_id: str) -> str:
         """构建 + 打包 zip，返回 zip 文件路径。
