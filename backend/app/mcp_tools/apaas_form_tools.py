@@ -1374,6 +1374,121 @@ def _pick_main_model(models: list[dict], preferred_model_code: str = "") -> dict
     return models[0] if models else None
 
 
+def _is_dup_field_error(exc: Exception) -> bool:
+    """字段已存在类业务错误 — 用于合并工具容忍 re-run / 「字段已在模型」场景。
+
+    token 错误(401/登录失效)不含这些 marker → 不会被误判为 dup → 由调用方先行 raise 走 relogin。
+    """
+    raw = str(exc)
+    if any(m in raw for m in ("已存在", "重复", "已被使用")):
+        return True
+    low = raw.lower()
+    return "duplicate" in low or "already exist" in low
+
+
+async def _add_field_to_form_core(
+    client,
+    *,
+    apaas_app_id: str,
+    model_id: str,
+    model_code: str,
+    field_code: str,
+    field_name: str,
+    field_type: str = "STRING",
+    max_length: int = 255,
+    comment: str = "",
+    form_id: str = "",
+    show_in_list: bool = False,
+) -> dict:
+    """给模型加字段(若不存在)并把字段铺到表单详情页(可选上列表页)。
+
+    接收 client 作首参 → 可直接喂 fake client 单测(镜像 repair_form_menu_names 范式)。
+    token 错误一律 raise 交上层 call_apaas_with_relogin 重试;整段操作幂等可重跑。
+    """
+    from app.error_messages import is_apaas_token_error
+
+    # ── 入参 + 保留字校验(不碰 client)──
+    if not (apaas_app_id.strip() and model_id.strip() and model_code.strip()
+            and field_code.strip() and field_name.strip() and form_id.strip()):
+        return {"ok": False, "error_code": "INVALID_PARAMS",
+                "message": "apaas_app_id/model_id/model_code/field_code/field_name/form_id 都必填"}
+    fc = field_code.strip().lower()
+    if fc in {"approver_id", "id", "tenant_id"} or fc.startswith("approval_"):
+        return {"ok": False, "error_code": "RESERVED_FIELD_CODE",
+                "message": f"field_code '{field_code}' 命中 apaas 保留字 — 建议改成 {model_code}_{field_code}"}
+
+    aid = apaas_app_id.strip()
+    mcode = model_code.strip()
+    fcode = field_code.strip()
+    target = f"{mcode}.{fcode}"
+
+    # ── 1. 加模型字段(容忍已存在;token 错 / 真失败照常处理)──
+    try:
+        await client.add_model_field(aid, model_id.strip(), mcode, fcode, field_name.strip(),
+                                     field_type=field_type, max_length=max_length, comment=comment)
+    except Exception as exc:
+        if is_apaas_token_error(str(exc)):
+            raise
+        if not _is_dup_field_error(exc):
+            return {"ok": False, "error_code": "ADD_FIELD_FAILED",
+                    "message": f"给模型 {mcode} 加字段「{field_name}」失败：{exc}"}
+        logger.info("add_apaas_field_to_form: 字段 %s 已在模型上, 跳过建字段直接铺表单", target)
+
+    # ── 2. 构造组件(类型自动推导, 复用现成构造器)──
+    field = {
+        "field_code": fcode,
+        "field_name": field_name.strip(),
+        "data_type": field_type,
+        "max_length": max_length,
+        "dictionary_code": "",
+        "required": False,
+    }
+    component = _build_basic_component_from_model_field(field, mcode)
+
+    def _apply_append(cfg: dict) -> None:
+        detail = cfg.setdefault("detailPage", {})
+        comps = detail.setdefault("formComponents", [])
+        if not any(isinstance(c, dict) and str(c.get("modelField") or "") == target for c in comps):
+            comps.append(component)
+        amc = cfg.get("allModelCodes")
+        if not isinstance(amc, list):
+            amc = []
+            cfg["allModelCodes"] = amc
+        if mcode not in amc:
+            amc.append(mcode)
+        if show_in_list:
+            ql = detail.setdefault("listPageView", {}).setdefault("queryList", [])
+            if target not in ql:
+                ql.append(target)
+
+    # ── 3. 读表单 → 幂等短路 → 追加 → 存回(乐观锁重试)──
+    form_config = await client.query_form_config(aid, form_id.strip())
+    existing = (form_config.get("detailPage") or {}).get("formComponents") or []
+    if any(isinstance(c, dict) and str(c.get("modelField") or "") == target for c in existing):
+        return {"ok": True, "skipped": True, "reason": "FIELD_ALREADY_ON_FORM",
+                "form_id": form_id, "model_field": target,
+                "message": f"字段「{field_name}」已在表单上, 未重复添加。"}
+
+    _apply_append(form_config)
+
+    from app.operations.form_config import _save_form_config_with_retry
+    try:
+        await _save_form_config_with_retry(client, aid, form_config,
+                                           form_id=form_id.strip(), apply_latest=_apply_append,
+                                           reason="对话加字段铺表单")
+    except Exception as exc:
+        if is_apaas_token_error(str(exc)):
+            raise
+        return {"ok": False, "error_code": "FORM_SAVE_FAILED",
+                "message": f"字段「{field_name}」已加到模型 {mcode}, 但铺到表单失败：{exc}",
+                "field_on_model": True, "field_on_form": False}
+
+    return {"ok": True, "form_id": form_id, "model_code": mcode, "field_code": fcode,
+            "model_field": target, "component_type": component["componentType"],
+            "show_in_list": show_in_list,
+            "message": f"字段「{field_name}」({fcode}) 已加到模型「{mcode}」并铺到表单。",
+            "next_step": "调 republish_apaas_app 让模型变更生效; 刷新表单设计器查看新字段。"}
+
 
 def register(
     mcp,
