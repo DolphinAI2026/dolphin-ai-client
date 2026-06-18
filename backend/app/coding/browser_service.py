@@ -23,6 +23,7 @@ IDLE_TIMEOUT_SECONDS = 30 * 60  # 30 分钟无操作自动关闭
 VIEWPORT_WIDTH = 1280
 VIEWPORT_HEIGHT = 800
 JPEG_QUALITY = 60
+RING_LIMIT = 2000  # console/network 环形缓冲上限（每会话每类）
 
 
 class BrowserSession:
@@ -34,6 +35,13 @@ class BrowserSession:
         self.page = page
         self.last_active = time.time()
         self.created_at = time.time()
+        # C2 抓取状态（capture 会话才用；普通截图会话不调 attach_capture）
+        self.capture_url: str = ""
+        self.capture_headless: bool = True
+        self._console: list[dict] = []
+        self._network: list[dict] = []
+        self._console_seq: int = 0
+        self._network_seq: int = 0
 
     def touch(self):
         self.last_active = time.time()
@@ -152,6 +160,76 @@ class BrowserSession:
         await self.page.evaluate(js)
         await self.page.wait_for_timeout(2000)
         return await self.screenshot()
+
+    def attach_capture(self) -> None:
+        """挂载 console/network/pageerror 监听，写入环形缓冲。"""
+        self.page.on("console", self._on_console)
+        self.page.on("pageerror", self._on_pageerror)
+        self.page.on("response", self._on_response)
+        self.page.on("requestfailed", self._on_requestfailed)
+
+    def _push_console(self, level: str, text: str, location: str) -> None:
+        self._console_seq += 1
+        self._console.append({
+            "seq": self._console_seq, "level": level,
+            "text": text, "location": location,
+        })
+        if len(self._console) > RING_LIMIT:
+            del self._console[: len(self._console) - RING_LIMIT]
+
+    def _push_network(self, url: str, status: int, method: str, failed: bool) -> None:
+        # 只记 status>=400 或失败，避免噪音
+        if not failed and status < 400:
+            return
+        self._network_seq += 1
+        self._network.append({
+            "seq": self._network_seq, "url": url,
+            "status": status, "method": method, "failed": failed,
+        })
+        if len(self._network) > RING_LIMIT:
+            del self._network[: len(self._network) - RING_LIMIT]
+
+    def _fmt_location(self, loc) -> str:
+        if not loc:
+            return ""
+        if isinstance(loc, dict):
+            url = loc.get("url", "")
+            line = loc.get("lineNumber")
+            col = loc.get("columnNumber")
+            if line is not None:
+                return f"{url}:{line}:{col}" if col is not None else f"{url}:{line}"
+            return url
+        return str(loc)
+
+    def _on_console(self, msg) -> None:
+        try:
+            self._push_console(msg.type, msg.text, self._fmt_location(msg.location))
+        except Exception as e:
+            logger.warning(f"console capture error: {e}")
+
+    def _on_pageerror(self, err) -> None:
+        try:
+            self._push_console("error", getattr(err, "message", str(err)), "pageerror")
+        except Exception as e:
+            logger.warning(f"pageerror capture error: {e}")
+
+    def _on_response(self, resp) -> None:
+        try:
+            self._push_network(resp.url, resp.status, resp.request.method, False)
+        except Exception as e:
+            logger.warning(f"response capture error: {e}")
+
+    def _on_requestfailed(self, req) -> None:
+        try:
+            self._push_network(req.url, 0, req.method, True)
+        except Exception as e:
+            logger.warning(f"requestfailed capture error: {e}")
+
+    def read_console(self, after_seq: int) -> list[dict]:
+        return [r for r in self._console if r["seq"] > after_seq]
+
+    def read_network(self, after_seq: int) -> list[dict]:
+        return [r for r in self._network if r["seq"] > after_seq]
 
     async def close(self):
         """关闭会话"""
@@ -297,3 +375,80 @@ class BrowserService:
             {"ws_id": ws_id, **self.get_status(ws_id)}
             for ws_id in self._sessions
         ]
+
+    async def launch_capture(self, url: str, headless: bool = True) -> str:
+        """启动一个 CDP 抓取会话，加载 url 并挂监听，返回 session_id。"""
+        import uuid
+        if not self._browser:
+            await self.start()
+        if len(self._sessions) >= MAX_SESSIONS:
+            oldest = min(self._sessions.values(), key=lambda s: s.last_active)
+            logger.info(f"Max sessions reached, closing oldest: {oldest.ws_id}")
+            await self.close_session(oldest.ws_id)
+
+        session_id = f"cap-{uuid.uuid4().hex[:12]}"
+        context = await self._browser.new_context(
+            viewport={"width": VIEWPORT_WIDTH, "height": VIEWPORT_HEIGHT},
+            ignore_https_errors=True,
+            locale="zh-CN",
+            timezone_id="Asia/Shanghai",
+        )
+        page = await context.new_page()
+        session = BrowserSession(session_id, context, page)
+        session.capture_url = url
+        session.capture_headless = headless
+        session.attach_capture()
+        self._sessions[session_id] = session
+        try:
+            await page.goto(url, wait_until="domcontentloaded", timeout=30000)
+        except Exception as e:
+            logger.warning(f"capture goto error ({url}): {e}")
+        return session_id
+
+    def get_console_logs(self, session_id: str, after_seq: int) -> list[dict]:
+        session = self._sessions.get(session_id)
+        if not session:
+            return []
+        session.touch()
+        return session.read_console(after_seq)
+
+    def get_network_requests(self, session_id: str, after_seq: int) -> list[dict]:
+        session = self._sessions.get(session_id)
+        if not session:
+            return []
+        session.touch()
+        return session.read_network(after_seq)
+
+    async def open_devtools(self, session_id: str) -> None:
+        """以非 headless + 自动开 DevTools 重启该 capture 会话（同 URL，独立窗口）。"""
+        session = self._sessions.get(session_id)
+        if not session:
+            return
+        url = session.capture_url
+        await self.close_session(session_id)
+        from playwright.async_api import async_playwright  # 惰性 import
+        if self._playwright is None:
+            self._playwright = await async_playwright().start()
+        browser = await self._playwright.chromium.launch(
+            headless=False,
+            args=[
+                "--no-sandbox",
+                "--disable-setuid-sandbox",
+                "--ignore-certificate-errors",
+                "--auto-open-devtools-for-tabs",
+            ],
+        )
+        context = await browser.new_context(ignore_https_errors=True, locale="zh-CN")
+        page = await context.new_page()
+        devtools_session = BrowserSession(session_id, context, page)
+        devtools_session.capture_url = url
+        devtools_session.capture_headless = False
+        devtools_session.attach_capture()
+        self._sessions[session_id] = devtools_session
+        try:
+            await page.goto(url, wait_until="domcontentloaded", timeout=30000)
+        except Exception as e:
+            logger.warning(f"devtools goto error ({url}): {e}")
+
+    async def close_capture(self, session_id: str) -> None:
+        await self.close_session(session_id)
