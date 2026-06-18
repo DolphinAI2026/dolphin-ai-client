@@ -73,6 +73,12 @@ const router = createRouter({
       meta: { requiresAuth: true }
     },
     {
+      path: '/workspace/:id?',
+      name: 'Workspace',
+      component: () => import('@/views/workspace/WorkspaceShell.vue'),
+      meta: { requiresAuth: true, navExpanded: true }
+    },
+    {
       path: '/tenant-logs',
       name: 'TenantLogs',
       component: () => import('@/views/TenantLogsPage.vue'),

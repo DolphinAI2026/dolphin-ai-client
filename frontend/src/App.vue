@@ -37,6 +37,10 @@ onMounted(() => {
 function isAiChatRoute(r: RouteLocationNormalized): boolean {
   return r.path === '/' || r.path === '/ai-chat' || r.path.startsWith('/ai-chat/')
 }
+
+function isWorkspaceRoute(r: RouteLocationNormalized): boolean {
+  return r.path === '/workspace' || r.path.startsWith('/workspace/')
+}
 </script>
 
 <template>
@@ -46,6 +50,9 @@ function isAiChatRoute(r: RouteLocationNormalized): boolean {
   <RouterView v-slot="{ Component }">
     <KeepAlive v-if="isAiChatRoute($route)">
       <component :is="Component" key="ai-chat-singleton" />
+    </KeepAlive>
+    <KeepAlive v-else-if="isWorkspaceRoute($route)">
+      <component :is="Component" key="workspace-singleton" />
     </KeepAlive>
     <component v-else :is="Component" :key="$route.fullPath" />
   </RouterView>
