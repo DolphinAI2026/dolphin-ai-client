@@ -5,8 +5,9 @@
       :sessions="sessionItems" :active-id="activeSidebarId"
       collapse-key="workspace:aside-collapsed" new-label="+ 新会话"
       empty-hint="暂无会话,点上方新建"
+      :enable-rename="false" :enable-delete="false"
       @select="onSelect" @create="onCreate"
-      @rename="onRename" @delete="onDelete" @collapse-change="(v) => (asideCollapsed = v)" />
+      @collapse-change="(v) => (asideCollapsed = v)" />
     <main class="ws-main">
       <header class="ws-top">
         <ToolMenu :binding="currentBinding" @open="onOpenPanel" />
@@ -34,7 +35,7 @@ import type { Binding } from './binding'
 import { useAiChatSession } from '@/composables/useAiChatSession'
 
 registerPhase1Panels()
-const { sessions, loadSessions, currentSession } = useAiChatSession({ appId: ref(null) })
+const { sessions, loadSessions } = useAiChatSession({ appId: ref(null) })
 
 const currentSessionId = ref<number | null>(null)
 const activePanelId = ref<string | null>(null)
@@ -54,7 +55,5 @@ function onOpenArtifact(a: any) { openArtifact.value = a; activePanelId.value = 
 function onSelect(id: string | number) { currentSessionId.value = Number(rawId(String(id))) }
 function onSessionChanged(id: number) { currentSessionId.value = id; loadSessions() }
 function onCreate() { currentSessionId.value = null }   // ChatPane 首条消息触发 ensureSession
-function onRename() { /* Phase 1 复用 aiChatApi.updateSession, 接 SessionSidebar rename */ }
-function onDelete() { /* Phase 1 复用 aiChatApi.deleteSession */ }
 onMounted(loadSessions)
 </script>
