@@ -67,10 +67,25 @@ print(json.dumps(m, ensure_ascii=False, indent=2))
 PY
 
 echo "==> 平台管理员登录"
-TOKEN="$(curl -s -X POST "$BASE/api/desktop-auth/login" -H 'Content-Type: application/json' \
-  -d "{\"username\":\"${ADMIN_USER:?需要 ADMIN_USER}\",\"password\":\"${ADMIN_PASS:?需要 ADMIN_PASS}\"}" \
-  | python3 -c 'import json,sys;print(json.load(sys.stdin)["access_token"])')"
-[ -n "$TOKEN" ] || { echo "登录失败, 拿不到 token"; exit 1; }
+: "${ADMIN_USER:?需要 ADMIN_USER}"; : "${ADMIN_PASS:?需要 ADMIN_PASS}"
+# 登录带重试: 整包已构建完(产物在 /tmp), 一次瞬时网络抖动/curl 返空不该让整轮白费。
+# curl 返空/非 JSON 时 python 安全返空串而非抛栈, 重试几次再放弃。
+TOKEN=""
+for _attempt in 1 2 3 4 5; do
+  _resp="$(curl -s --max-time 30 -X POST "$BASE/api/desktop-auth/login" \
+    -H 'Content-Type: application/json' \
+    -d "{\"username\":\"$ADMIN_USER\",\"password\":\"$ADMIN_PASS\"}" || true)"
+  TOKEN="$(printf '%s' "$_resp" | python3 -c 'import json,sys
+s = sys.stdin.read().strip()
+try:
+    print(json.loads(s).get("access_token", "") if s else "")
+except Exception:
+    print("")')"
+  [ -n "$TOKEN" ] && break
+  echo "   登录第 $_attempt 次没拿到 token(瞬时?), 3s 后重试..."
+  sleep 3
+done
+[ -n "$TOKEN" ] || { echo "登录重试后仍失败。产物已在 /tmp(latest.json + *.app.tar.gz), 可稍后手动补传, 无需重新构建。"; exit 1; }
 
 echo "==> 上传 manifest + 包"
 curl -s -X POST "$BASE/desktop-updates/admin/publish" \
