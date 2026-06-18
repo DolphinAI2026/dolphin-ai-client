@@ -1507,6 +1507,29 @@ async def _first_turn_brainstorm(params, scene_type, db, effective_model,
 
 # ── Pipeline 核心 ──────────────────────────────────
 
+def _autofix_enabled() -> bool:
+    """C5 自愈循环默认关闭（gated rollout）。设 CODING_AUTOFIX_ENABLED=1 开启。"""
+    import os
+    return os.getenv("CODING_AUTOFIX_ENABLED", "").strip() in ("1", "true", "True")
+
+
+def _autofix_preview_url(serve_status: dict) -> str | None:
+    """从 is_serve_running 返回值推导 dev server 预览 URL（C1/C3）。
+
+    双端取 web port；单端取 port；未运行返回 None（driver 跳过运行时抓取）。
+    """
+    if not serve_status or not serve_status.get("running"):
+        return None
+    if serve_status.get("dual"):
+        web = serve_status.get("web") or {}
+        port = web.get("port")
+    else:
+        port = serve_status.get("port")
+    if not port:
+        return None
+    return f"http://127.0.0.1:{port}/"
+
+
 async def run_coding_pipeline(
     params: PipelineParams,
     db: AsyncSession,
@@ -2108,13 +2131,34 @@ async def run_coding_pipeline(
             except Exception:
                 logger.exception("保存 Agent 历史失败")
 
-        try:
-            async for event in agent.run(
+        # C5: 自愈循环（flag 开启 + 有 workspace 时）包一层 driver；
+        # 否则走原单跑路径（行为字节级不变）。driver yield 的 autofix_round
+        # marker 走与普通事件相同的处理（append replay + yield），前端不识别也无害。
+        if _autofix_enabled() and ws_id:
+            from app.agents.coding.autofix_driver import drive_coding_with_autofix
+            _serve_status = ws_mgr.is_serve_running(ws_id)
+            _preview_url = _autofix_preview_url(_serve_status)
+            _agent_event_source = drive_coding_with_autofix(
+                agent=_coding_agent,
+                adapter=agent,
                 requirement=effective_requirement,
                 conversation_summary=conversation_summary,
                 model=effective_model,
                 max_turns=30,
-            ):
+                ws_mgr=ws_mgr,
+                preview_url=_preview_url,
+                max_autofix_rounds=3,
+            )
+        else:
+            _agent_event_source = agent.run(
+                requirement=effective_requirement,
+                conversation_summary=conversation_summary,
+                model=effective_model,
+                max_turns=30,
+            )
+
+        try:
+            async for event in _agent_event_source:
                 append_event_to_stream_replay(replay_stream_messages, event)
                 yield event
                 append_agent_event_to_history(persisted_agent_output, event)
