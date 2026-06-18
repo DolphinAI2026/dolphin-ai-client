@@ -1,0 +1,67 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta http-equiv="X-UA-Compatible" content="IE=edge" />
+    <meta name="viewport" content="width=device-width,initial-scale=1.0" />
+    <title><%= htmlWebpackPlugin.options.title %></title>
+    <!-- SP1 C3: dev-server preview shim — 数据调用经 /apaas/backend 运行态代理 (后端注入平台 token).
+         apiBase 默认 /apaas/backend; 宿主 iframe 可在 mount 前 set window.__APAAS_API_BASE__ 指向带 tenant/app 的前缀. -->
+    <script>
+      (function () {
+        var apiBase = (window.__APAAS_API_BASE__ || '/apaas/backend');
+        function apaasRequest(cfg) {
+          if (typeof cfg === 'string') cfg = { url: cfg };
+          cfg = cfg || {};
+          var url = cfg.url || '';
+          if (url.indexOf('http') !== 0) {
+            if (url.charAt(0) !== '/') url = apiBase + '/' + url;
+            else if (url.indexOf('/apaas') !== 0) url = apiBase + url;
+          }
+          var method = (cfg.method || 'get').toUpperCase();
+          var params = cfg.params || cfg.data;
+          var opts = { method: method, headers: { 'Content-Type': 'application/json' } };
+          if (params && method === 'GET') {
+            var qs = Object.keys(params)
+              .map(function (k) { return encodeURIComponent(k) + '=' + encodeURIComponent(params[k]); })
+              .join('&');
+            if (qs) url += (url.indexOf('?') < 0 ? '?' : '&') + qs;
+          } else if (params) {
+            opts.body = typeof params === 'string' ? params : JSON.stringify(params);
+          }
+          return fetch(url, opts)
+            .then(function (r) { return r.json().catch(function () { return null; }); })
+            .then(function (j) { return (j && typeof j === 'object' && 'data' in j) ? j : { data: j, success: true }; })
+            .catch(function (e) { console.warn('[dev-shim] $request fail', url, e); return { data: null, success: false }; });
+        }
+        window.$request = apaasRequest;
+        var dfBase = {
+          request: apaasRequest, http: apaasRequest,
+          get: function (u, p) { return apaasRequest({ url: u, method: 'get', params: p }); },
+          post: function (u, p) { return apaasRequest({ url: u, method: 'post', params: p }); },
+          getToken: function () { return ''; }, t: function (k) { return k; }, i18n: { t: function (k) { return k; } },
+          user: {}, store: {}, env: (window.GLOBAL_ENV || {}),
+        };
+        window.df = new Proxy(dfBase, {
+          get: function (t, k) { if (k in t) return t[k]; return function () { return Promise.resolve(null); }; },
+        });
+        // Make $request available on Vue 2 prototype as soon as Vue global appears.
+        function bindVue() {
+          if (window.Vue && window.Vue.prototype && !window.Vue.prototype.$request) {
+            window.Vue.prototype.$request = apaasRequest;
+            window.Vue.prototype.$df = window.df;
+          }
+        }
+        bindVue();
+        document.addEventListener('DOMContentLoaded', bindVue);
+      })();
+    </script>
+  </head>
+  <body>
+    <noscript>
+      <strong>需要启用 JavaScript 才能运行此自开发页面预览。</strong>
+    </noscript>
+    <div id="app"></div>
+    <!-- vue-cli serve 自动注入 chunk 脚本 -->
+  </body>
+</html>
