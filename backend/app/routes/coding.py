@@ -22,9 +22,9 @@ from sqlalchemy import select, delete
 from sqlalchemy.exc import IntegrityError
 
 from app.crypto import decrypt_password
-from app.database import get_db
+from app.database import get_db, AsyncSessionLocal
 from app.models import User, Conversation, Message, Project, ProjectMember, Application, RegisteredWorkspace
-from app.deps import get_auth_context, AuthContext
+from app.deps import get_auth_context, AuthContext, auth_from_header_or_query
 from app.coding.scenes import SceneType, get_scene, get_all_scenes, get_scenes_by_category
 from app.coding.workspace import WorkspaceManager, ProjectType
 from app.llm_client import LLMClient
@@ -1437,12 +1437,13 @@ async def manage_serve(
     ctx: Annotated[AuthContext, Depends(get_auth_context)],
     db: Annotated[AsyncSession, Depends(get_db)],
     action: str = Query(default="start", description="start 或 stop"),
+    kind: str = Query(default="web", description="serve 类型：web/mobile/h5"),
 ):
     """启动或停止工作区的 serve 进程"""
     await _ensure_workspace_access(ws_id, ctx, db, minimum_project_role="member")
     ws_mgr = WorkspaceManager()
     if action == "start":
-        result = await ws_mgr.start_serve(ws_id)
+        result = await ws_mgr.start_serve(ws_id, kind=kind)
     elif action == "stop":
         result = await ws_mgr.stop_serve(ws_id)
     else:
@@ -1460,6 +1461,65 @@ async def get_serve_status(
     await _ensure_workspace_access(ws_id, ctx, db, minimum_project_role="member")
     ws_mgr = WorkspaceManager()
     return ws_mgr.is_serve_running(ws_id)
+
+
+@router.get("/workspace/{ws_id}/serve-logs")
+async def serve_logs_stream(
+    ws_id: str,
+    ctx: Annotated[AuthContext, Depends(auth_from_header_or_query)],
+    last_seen_seq: int = Query(0, ge=0, description="上次收到的 seq；断线重连补发 > N 的历史"),
+    heartbeat_seconds: int = Query(15, ge=5, le=120, description="心跳间隔（秒）"),
+):
+    """订阅 serve 进程的实时日志（SSE）。
+
+    event 名 "log"，data = {seq, stream, line}；先补发 seq > last_seen_seq 的历史再实时跟随。
+    EventSource 无法带 header → 走 ?token= 鉴权（auth_from_header_or_query）。
+    """
+    async with AsyncSessionLocal() as check_db:
+        await _ensure_workspace_access(ws_id, ctx, check_db, minimum_project_role="member")
+
+    ws_mgr = WorkspaceManager()
+
+    async def event_stream() -> AsyncIterator[dict[str, Any]]:
+        queue: asyncio.Queue = asyncio.Queue(maxsize=512)
+
+        async def _pump_logs():
+            try:
+                async for ev in ws_mgr.iter_serve_logs(ws_id, last_seen_seq):
+                    await queue.put(("log", ev))
+            except Exception as e:
+                logger.warning("serve-logs pump err: %s", e)
+            finally:
+                await queue.put(None)
+
+        async def _pump_heartbeat():
+            while True:
+                await asyncio.sleep(heartbeat_seconds)
+                await queue.put(("heartbeat", {"seq": 0}))
+
+        pump_task = asyncio.create_task(_pump_logs())
+        hb_task = asyncio.create_task(_pump_heartbeat())
+        try:
+            while True:
+                item = await queue.get()
+                if item is None:
+                    break
+                event_name, payload = item
+                yield {
+                    "event": event_name,
+                    "id": str(payload.get("seq", 0)),
+                    "data": json.dumps(payload, ensure_ascii=False),
+                }
+        finally:
+            pump_task.cancel()
+            hb_task.cancel()
+            for t in (pump_task, hb_task):
+                try:
+                    await t
+                except (asyncio.CancelledError, Exception):
+                    pass
+
+    return _event_stream_response(event_stream(), ping=heartbeat_seconds)
 
 
 @router.post("/workspace/{ws_id}/publish")
