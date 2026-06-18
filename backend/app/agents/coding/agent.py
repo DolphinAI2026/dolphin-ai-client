@@ -32,6 +32,7 @@ TOOL_ICONS: dict[str, str] = {
     "glob_files": "\U0001f50d Glob",
     "grep_search": "\U0001f50e Grep",
     "start_serve": "\U0001f680 Serve",
+    "run_workspace_preview": "\U0001f41e 运行/调试",
 }
 
 
