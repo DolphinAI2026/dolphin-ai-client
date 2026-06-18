@@ -20,11 +20,11 @@ def test_resolve_preview_url_none_when_not_running():
     assert pipeline_mod._autofix_preview_url({"running": False}) is None
 
 
-def test_autofix_enabled_flag_default_off(monkeypatch):
+def test_autofix_enabled_flag_default_on(monkeypatch):
     monkeypatch.delenv("CODING_AUTOFIX_ENABLED", raising=False)
-    assert pipeline_mod._autofix_enabled() is False
-
-
-def test_autofix_enabled_flag_on(monkeypatch):
-    monkeypatch.setenv("CODING_AUTOFIX_ENABLED", "1")
     assert pipeline_mod._autofix_enabled() is True
+
+
+def test_autofix_enabled_flag_off_when_explicitly_disabled(monkeypatch):
+    monkeypatch.setenv("CODING_AUTOFIX_ENABLED", "0")
+    assert pipeline_mod._autofix_enabled() is False

@@ -92,7 +92,7 @@ async def drive_coding_with_autofix(
 
         yield {
             "type": "autofix_round", "round": round_index, "status": "verifying",
-            "errors": [], "tokens_input": tokens_in, "tokens_output": tokens_out,
+            "errors": [], "tokens_input": tokens_in, "tokens_output": tokens_out, "dev_url": preview_url or "",
         }
 
         # 1. build 校验
@@ -115,7 +115,7 @@ async def drive_coding_with_autofix(
         if not all_errors:
             yield {
                 "type": "autofix_round", "round": round_index, "status": "clean",
-                "errors": [], "tokens_input": tokens_in, "tokens_output": tokens_out,
+                "errors": [], "tokens_input": tokens_in, "tokens_output": tokens_out, "dev_url": preview_url or "",
             }
             agent.ctx.input.pop("fix_hint", None)
             return
@@ -125,7 +125,7 @@ async def drive_coding_with_autofix(
         if signature == prev_signature:
             yield {
                 "type": "autofix_round", "round": round_index, "status": "repeated",
-                "errors": all_errors, "tokens_input": tokens_in, "tokens_output": tokens_out,
+                "errors": all_errors, "tokens_input": tokens_in, "tokens_output": tokens_out, "dev_url": preview_url or "",
             }
             agent.ctx.input.pop("fix_hint", None)
             return
@@ -137,12 +137,12 @@ async def drive_coding_with_autofix(
             agent.ctx.input["fix_hint"] = build_fix_hint(build_errors, runtime_errors)
             yield {
                 "type": "autofix_round", "round": round_index, "status": "fixing",
-                "errors": all_errors, "tokens_input": tokens_in, "tokens_output": tokens_out,
+                "errors": all_errors, "tokens_input": tokens_in, "tokens_output": tokens_out, "dev_url": preview_url or "",
             }
         else:
             yield {
                 "type": "autofix_round", "round": round_index, "status": "exhausted",
-                "errors": all_errors, "tokens_input": tokens_in, "tokens_output": tokens_out,
+                "errors": all_errors, "tokens_input": tokens_in, "tokens_output": tokens_out, "dev_url": preview_url or "",
             }
             agent.ctx.input.pop("fix_hint", None)
             return

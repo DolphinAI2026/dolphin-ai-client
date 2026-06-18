@@ -1508,9 +1508,9 @@ async def _first_turn_brainstorm(params, scene_type, db, effective_model,
 # ── Pipeline 核心 ──────────────────────────────────
 
 def _autofix_enabled() -> bool:
-    """C5 自愈循环默认关闭（gated rollout）。设 CODING_AUTOFIX_ENABLED=1 开启。"""
+    """C5 自愈循环默认开启;设 CODING_AUTOFIX_ENABLED=0/false 关闭。"""
     import os
-    return os.getenv("CODING_AUTOFIX_ENABLED", "").strip() in ("1", "true", "True")
+    return os.getenv("CODING_AUTOFIX_ENABLED", "1").strip() not in ("0", "false", "False", "")
 
 
 def _autofix_preview_url(serve_status: dict) -> str | None:

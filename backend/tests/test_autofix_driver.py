@@ -101,6 +101,10 @@ async def test_clean_first_round_no_retry(monkeypatch):
     clean = [e for e in events if e.get("type") == "autofix_round" and e.get("status") == "clean"]
     assert len(clean) == 1
     assert browser.closed == ["sess_0"]
+    assert all(
+        e.get("dev_url") == "http://127.0.0.1:8080/"
+        for e in events if e.get("type") == "autofix_round"
+    )
 
 
 @pytest.mark.asyncio
