@@ -67,6 +67,11 @@ export const useCodingStore = defineStore('coding', () => {
   const serveUrl = ref<string | null>(null)
   const serveRunning = ref(false)
 
+  // 对话驱动的当前运行预览（run_result/autofix_round 写入，预览位读）
+  const activePreview = ref<{
+    dev_url: string; status: string; errors: string[]; capture_available: boolean; round: number | null
+  } | null>(null)
+
   // 当前选中文件的内容
   const activeFileContent = computed(() => {
     const file = generatedFiles.value.find(f => f.path === activeFilePath.value)
@@ -170,7 +175,7 @@ export const useCodingStore = defineStore('coding', () => {
     conversationId, conversations, messages,
     generatedFiles, activeFilePath, activeFileContent, activeFileLanguage,
     validationErrors, isGenerating, isProcessing, streamContent,
-    currentPipelineSteps, serveUrl, serveRunning,
+    currentPipelineSteps, serveUrl, serveRunning, activePreview,
     setScene, setWorkspace, setFiles, updateFileContent, addMessage, setMessages,
     initPipelineSteps, updatePipelineStep, reset,
   }

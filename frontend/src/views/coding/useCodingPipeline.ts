@@ -16,6 +16,7 @@ import { useRoute } from 'vue-router'
 
 import { useCodingStore } from '@/stores/coding'
 import { useUserStore } from '@/stores/user'
+import { normalizeRunResult } from './runResult'
 import { consumeSseResponse } from '@/utils/sse'
 import { codingApi } from '@/api/coding'
 import { harnessApi } from '@/api/harness'
@@ -189,6 +190,21 @@ export function useCodingPipeline(deps: PipelineDeps) {
   // ── SSE 事件 dispatch map ──
 
   const sseHandlers: Record<string, (parsed: any) => void | Promise<void>> = {
+    // 对话驱动运行/调试：on-request 工具的 run_result 与 C5 的 autofix_round 归一成一张卡 + 写 activePreview
+    run_result: (parsed: any) => {
+      const r = normalizeRunResult(parsed)
+      addStreamMsg({ type: 'run_result', content: '', run: r })
+      codingStore.activePreview = { dev_url: r.dev_url, status: r.status, errors: r.errors, capture_available: r.capture_available, round: r.round }
+    },
+    autofix_round: (parsed: any) => {
+      const r = normalizeRunResult(parsed)
+      addStreamMsg({ type: 'run_result', content: '', run: r })
+      if (r.dev_url) {
+        codingStore.activePreview = { dev_url: r.dev_url, status: r.status, errors: r.errors, capture_available: r.capture_available, round: r.round }
+      } else if (codingStore.activePreview) {
+        codingStore.activePreview = { ...codingStore.activePreview, status: r.status, errors: r.errors, round: r.round }
+      }
+    },
     step: async (parsed) => {
       const cfg = STEP_HANDLERS[parsed.step as string]
       if (!cfg) return
