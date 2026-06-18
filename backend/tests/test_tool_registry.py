@@ -48,6 +48,7 @@ from app.tool_registry import (
 #        republish_apaas_app / run_workspace_command / save_dev_spec / write_workspace_files
 _EXPECTED_CONFIG_WHITELIST: frozenset[str] = frozenset({
     "add_apaas_dict_option",
+    "add_apaas_field_to_form",
     "add_apaas_model_field",
     "attach_dev_packages_to_apaas_app",
     "bind_apaas_form_field_to_dict",
@@ -326,7 +327,8 @@ def test_config_whitelist_matches_current_expected():
     # 2026-06-12: +1 自开发 workspace 反查工具 → 85
     # 2026-06-12: -11 退役 browser_* / Chrome extension POC → 74
     # 2026-06-16: +1 应用健康体检引擎 compute_app_health (46a53beb 注册漏同步快照) → 75
-    assert len(new) == 75, f"config 白名单总数应是 75, 实际 {len(new)}"
+    # 2026-06-18: +1 add_apaas_field_to_form (加字段并铺到表单一步到位) → 76
+    assert len(new) == 76, f"config 白名单总数应是 76, 实际 {len(new)}"
 
 
 def test_builder_whitelist_count():

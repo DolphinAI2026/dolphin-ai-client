@@ -23,6 +23,13 @@ tools:
     agents: [builder, config]
     category: update
     description: "给字典加一个选项。"
+  add_apaas_field_to_form:
+    sections: [data, ui]
+    agents: [builder, config]
+    category: update
+    description: "给模型加字段并直接铺到表单(详情页, 可选上列表页) — 一步到位, 避免只建模型没上表单。"
+    search_hint: "加字段 表单加字段 字段不显示 字段没上表单 新增字段 加列"
+    writes_apaas: true
   add_apaas_model_field:
     sections: [data]
     agents: [builder, config]
