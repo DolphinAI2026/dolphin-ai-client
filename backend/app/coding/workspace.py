@@ -1751,11 +1751,46 @@ class WorkspaceManager:
         }
 
     # ======== Serve & Debug 进程管理 ========
-    _serve_processes: dict = {}   # {ws_id: {"process": Process, "port": int}}
+    _serve_processes: dict = {}   # {ws_id: {"process": Process, "port": int, "kind": str, "log_ring": list, "log_seq": int}}
     _debug_processes: dict = {}   # {ws_id: {"process": Process}}
     _next_port: int = 8080
+    _SERVE_LOG_RING_MAX: int = 2000   # 环形缓冲上限（行）
 
-    async def start_serve(self, ws_id: str) -> dict:
+    @staticmethod
+    def _strip_serve_ansi(text: str) -> str:
+        return re.sub(r"\x1b\[[0-9;]*[A-Za-z]", "", text)
+
+    def _append_serve_log(self, ws_id: str, stream: str, line: str) -> None:
+        info = self._serve_processes.get(ws_id)
+        if not info:
+            return
+        info["log_seq"] = int(info.get("log_seq", 0)) + 1
+        ring = info.setdefault("log_ring", [])
+        ring.append({"seq": info["log_seq"], "stream": stream, "line": line})
+        if len(ring) > self._SERVE_LOG_RING_MAX:
+            del ring[: len(ring) - self._SERVE_LOG_RING_MAX]
+
+    def _spawn_serve_log_reader(self, ws_id: str, proc) -> None:
+        """异步逐行读 proc 的 stdout/stderr，写入该 ws 的 log_ring。"""
+        async def _read(stream_reader, stream_name: str) -> None:
+            if stream_reader is None:
+                return
+            while True:
+                try:
+                    raw = await stream_reader.readline()
+                except Exception:
+                    break
+                if not raw:
+                    break
+                line = self._strip_serve_ansi(
+                    raw.decode("utf-8", errors="replace")
+                ).rstrip("\n")
+                self._append_serve_log(ws_id, stream_name, line)
+
+        asyncio.ensure_future(_read(getattr(proc, "stdout", None), "stdout"))
+        asyncio.ensure_future(_read(getattr(proc, "stderr", None), "stderr"))
+
+    async def start_serve(self, ws_id: str, kind: str = "web") -> dict:
         """启动 npm run serve 后台进程，返回端口号"""
         if ws_id in self._serve_processes:
             info = self._serve_processes[ws_id]
@@ -1790,7 +1825,11 @@ class WorkspaceManager:
             stderr=asyncio.subprocess.PIPE,
             env=env,
         )
-        self._serve_processes[ws_id] = {"process": proc, "port": port}
+        self._serve_processes[ws_id] = {
+            "process": proc, "port": port, "kind": kind,
+            "log_ring": [], "log_seq": 0,
+        }
+        self._spawn_serve_log_reader(ws_id, proc)
 
         # 等待 serve 启动（最多 30 秒）
         import time
