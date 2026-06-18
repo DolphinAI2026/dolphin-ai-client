@@ -1044,6 +1044,66 @@ async def repair_empty_apaas_form_from_model(
     return raw if ok else raw
 
 
+@mcp.tool()
+async def repair_apaas_form_names(env_id: int, apaas_app_id: str, dry_run: bool = False) -> dict:
+    """修复「表单管理」列表里「表单名称」显示成占位「我的待办」的存量表单。
+
+    适用:老版本生成的应用,在 aPaaS「资源管理 → 表单管理」列表里所有表单的「表单名称」
+    都显示「我的待办」,但表单编码、菜单名、设计器里的标题都是对的。
+
+    根因(实证):「表单名称」列展示的是表单实体名,建表那一刻由 formConfigDetail 保存从
+    formContext 同步;老版本生成时该保存偶发失败 → 实体名停在平台默认占位。本工具对每个
+    实体名为占位的模型页面表单重跑「查 formContext → 固化真实名 → 存 formConfigDetail」
+    (等价在表单设计器点一次保存),把列表里的「表单名称」同步成真实名。
+
+    幂等:已正确的表单自动跳过、不重存;真实名取菜单名(navigation 里的名,一定是对的)。
+    dry_run=True 只返回将要修复的清单、不实际写入,可先预览。
+
+    返回 {ok, fixed_count, failed_count, scanned, fixed[], failed[], skipped[], message}。
+    """
+    if not apaas_app_id.strip():
+        return {"ok": False, "error_code": "INVALID_APAAS_APP_ID", "message": "apaas_app_id 必填"}
+
+    from app.operations.form_name_repair import repair_form_entity_names
+
+    ok, raw = await _with_client(
+        env_id, "修复表单实体名(表单名称占位)",
+        lambda c: repair_form_entity_names(c, apaas_app_id.strip(), dry_run=dry_run),
+    )
+    if not ok:
+        return raw
+
+    fixed = raw.get("fixed") or []
+    failed = raw.get("failed") or []
+    # 改完失效 section_content 缓存, 让前端「表单管理」面板刷新出新名 (best-effort)。
+    if not dry_run and fixed:
+        _invalidate_section_cache_after_write(apaas_app_id.strip())
+
+    if dry_run:
+        message = f"预览:{len(fixed)} 个表单的「表单名称」是占位待修(未写入)。"
+    elif fixed and not failed:
+        message = f"已修复 {len(fixed)} 个表单的「表单名称」;刷新「表单管理」列表即可看到真实名。"
+    elif fixed and failed:
+        message = f"修复 {len(fixed)} 个,失败 {len(failed)} 个;失败项见 failed。"
+    elif not fixed and not failed:
+        message = "没有需要修复的表单(「表单名称」都已是真实名)。"
+    else:
+        message = f"全部 {len(failed)} 个修复失败,见 failed。"
+
+    return {
+        "ok": True,
+        "apaas_app_id": apaas_app_id.strip(),
+        "dry_run": dry_run,
+        "fixed_count": len(fixed),
+        "failed_count": len(failed),
+        "scanned": raw.get("scanned", 0),
+        "fixed": fixed,
+        "failed": failed,
+        "skipped": raw.get("skipped") or [],
+        "message": message,
+    }
+
+
 def _build_perm_payload_from_simple_rules(
     app_id: str,
     form_code: str,
@@ -1541,6 +1601,7 @@ def register(
         list_apaas_form_permissions,
         get_apaas_form_detail,
         repair_empty_apaas_form_from_model,
+        repair_apaas_form_names,
         set_apaas_form_permissions,
         set_apaas_app_access,
         add_apaas_field_to_form,
