@@ -1,8 +1,8 @@
-"""桌面 Skill 包文件系统层 — 扫描/解析/读取，路线1，不进 DB。
+"""Skill 包文件系统层 — 扫描/解析/读取，路线1，不进 DB。
 
-skill = data_dir/skills/{platform,user}/<name>/SKILL.md(+helper/模板/资源)。
+skill = skills_root/{platform,user}/<name>/SKILL.md(+helper/模板/资源)。
 SKILL.md frontmatter 需含 name + description（与 Claude Code skill 一致）。
-目录不存在 → 空集，云端/无 skill 时整链路 no-op。
+目录不存在 → 空集；显式禁用时整链路 no-op。
 """
 from __future__ import annotations
 
@@ -18,7 +18,9 @@ log = logging.getLogger(__name__)
 
 
 def skills_root() -> Path | None:
-    """解析 skill 根目录。优先级：显式 env > 桌面 data_dir > 无。
+    """解析 skill 根目录。
+
+    优先级：显式禁用 > 显式 skills 目录 > 桌面 data_dir > Web 服务端 data 目录。
 
     data_dir 的真相源是 desktop_sidecar.build_env：Tauri 用 bundle identifier 推出
     的 app_data_dir(macOS = ~/Library/Application Support/com.ruijing.builder)经
@@ -28,6 +30,8 @@ def skills_root() -> Path | None:
     严格一致；绝不能猜 ~/.ruijing-builder —— 那是 main() 里仅当没传 --data-dir 时
     的 CLI 兜底默认，生产桌面包从不命中，会让 scan() 永远扫空目录。
     """
+    if os.environ.get("RUIJING_SKILLS_DISABLED") == "1":
+        return None
     env = os.environ.get("RUIJING_SKILLS_DIR")
     if env:
         return Path(env)
@@ -43,7 +47,10 @@ def skills_root() -> Path | None:
             # 都没有时仅作为最后兜底（开发/裸跑），与 main() 的默认对齐。
             data_dir = str(Path.home() / ".ruijing-builder")
         return Path(data_dir) / "skills"
-    return None
+    server_data_dir = os.environ.get("RUIJING_SERVER_DATA_DIR")
+    if server_data_dir:
+        return Path(server_data_dir) / "skills"
+    return Path(__file__).resolve().parents[2] / "data" / "skills"
 
 
 @dataclass
@@ -223,7 +230,7 @@ class SkillRegistry:
             raise ValueError(f"技能已存在: {name}")
         root = self._root if self._root is not None else skills_root()
         if root is None:
-            raise ValueError("当前环境不支持新建 skill")
+            raise ValueError("当前环境未启用技能库")
         d = (root / "user" / name)
         d.mkdir(parents=True, exist_ok=True)
         (d / "SKILL.md").write_text(
@@ -243,7 +250,7 @@ class SkillRegistry:
             raise ValueError(f"技能已存在: {new_name}")
         root = self._root if self._root is not None else skills_root()
         if root is None:
-            raise ValueError("当前环境不支持新建 skill")
+            raise ValueError("当前环境未启用技能库")
         dest = (root / "user" / new_name)
         shutil.copytree(src.dir, dest)
         # 改 frontmatter name 对齐新目录名
@@ -269,9 +276,9 @@ def build_skill_manifest(skills: list[Skill]) -> str:
         return ""
     lines = [
         "\n\n## 可用技能(Skill)",
-        "需要某个技能时, 先调 `use_skill(name)` 读它的完整说明再按其执行(脚本会在本机运行):",
+        "需要某个技能时, 先调 `use_skill(name)` 读它的完整说明再按其执行(脚本会在当前运行环境执行):",
     ]
     for s in skills:
-        tag = "平台预置" if s.source == "platform" else "本地上传"
+        tag = "平台预置" if s.source == "platform" else "用户上传"
         lines.append(f"- {s.name}: {s.description}  [{tag}]")
     return "\n".join(lines)

@@ -11,7 +11,7 @@ export interface SkillItem {
   files: string[]
 }
 
-/** 列出全部技能（平台预置 + 本地上传）。 */
+/** 列出全部技能（平台预置 + 用户上传）。 */
 export async function listSkills(): Promise<SkillItem[]> {
   const data = await request.get<any, { skills?: SkillItem[] }>('/skills')
   return data?.skills || []
@@ -27,7 +27,7 @@ export async function uploadSkill(file: File): Promise<{ ok: boolean; name: stri
   })
 }
 
-/** 删除一个本地上传的技能（平台预置不可删，后端会拒绝）。 */
+/** 删除一个用户上传的技能（平台预置不可删，后端会拒绝）。 */
 export async function deleteSkill(name: string): Promise<void> {
   await request.delete<any, { ok: boolean }>(`/skills/${encodeURIComponent(name)}`)
 }

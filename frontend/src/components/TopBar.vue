@@ -11,7 +11,7 @@
       </button>
       <!-- Logo + 标题 -->
       <button v-if="showHome" class="top-bar-home" @click="router.push('/')" title="返回首页">
-        <div class="top-bar-logo">A</div>
+        <img class="top-bar-logo" :src="ruijingWhaleMarkUrl" alt="" />
       </button>
       <span v-if="title" class="top-bar-title">{{ title }}</span>
       <!-- 中间 slot -->
@@ -25,6 +25,7 @@
 
 <script setup lang="ts">
 import { useRouter } from 'vue-router'
+import ruijingWhaleMarkUrl from '@/assets/brand/ruijing-whale-mark.svg'
 
 const props = withDefaults(defineProps<{
   title?: string
@@ -105,14 +106,9 @@ function handleBack() {
 .top-bar-logo {
   width: 28px;
   height: 28px;
-  background: var(--t-brand-gradient);
   border-radius: 7px;
-  color: #fff;
-  font-weight: 700;
-  font-size: 13px;
-  display: flex;
-  align-items: center;
-  justify-content: center;
+  display: block;
+  box-shadow: 0 1px 2px rgba(11, 27, 63, 0.12);
 }
 
 /* Title */

@@ -66,7 +66,7 @@ def register(mcp):
         tenant_id: int = 0,
         user_id: int = 0,
     ) -> dict:
-        """Use when 用户想把一段可复用做法沉淀成新技能（存成技能 / AI 创建 skill / 沉淀做法）。在本地技能库创建一个 user skill（SKILL.md + 可选 helper 文件）。仅桌面端可用。
+        """Use when 用户想把一段可复用做法沉淀成新技能（存成技能 / AI 创建 skill / 沉淀做法）。在技能库创建一个 user skill（SKILL.md + 可选 helper 文件）。
 
         写好一个 skill 的要点：
         - name：英文 kebab-case（如 weekly-report），ASCII、唯一。
@@ -75,7 +75,7 @@ def register(mcp):
         - helpers：确定性逻辑（解析/转换/调用）优先写成 helper 脚本（如 helper.py，用 run_python 跑），而非让模型每次重做。每项 {path, content}。
         """
         if skills_root() is None:
-            return _err(ErrorCode.SKILLS_UNSUPPORTED, "当前环境不支持创建技能（仅桌面端）")
+            return _err(ErrorCode.SKILLS_UNSUPPORTED, "当前环境未启用技能库")
         reg = SkillRegistry()
         if reg.get(name) is not None:
             return _err(ErrorCode.SKILL_EXISTS, f"技能已存在: {name}")
@@ -89,9 +89,9 @@ def register(mcp):
 
     @mcp.tool()
     async def list_skills(tenant_id: int = 0, user_id: int = 0) -> dict:
-        """列出本地技能库里的全部技能（name/description/source）。创建前可用它查重名。"""
+        """列出技能库里的全部技能（name/description/source）。创建前可用它查重名。"""
         if skills_root() is None:
-            return _err(ErrorCode.SKILLS_UNSUPPORTED, "当前环境无技能库（仅桌面端）")
+            return _err(ErrorCode.SKILLS_UNSUPPORTED, "当前环境未启用技能库")
         items = [
             {"name": s.name, "description": s.description, "source": s.source}
             for s in SkillRegistry().scan()

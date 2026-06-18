@@ -92,6 +92,9 @@ def _mk_tools(tmp_path, monkeypatch, *, with_root=True):
         monkeypatch.delenv("RUIJING_SKILLS_DIR", raising=False)
         monkeypatch.delenv("DESKTOP_MODE", raising=False)
         monkeypatch.delenv("APAAS_WORKSPACE_ROOT", raising=False)
+        monkeypatch.delenv("SIDECAR_DATA_DIR", raising=False)
+        monkeypatch.delenv("RUIJING_SERVER_DATA_DIR", raising=False)
+        monkeypatch.setenv("RUIJING_SKILLS_DISABLED", "1")
     sa._registered_mcp_ids.clear()
     m = FastMCP("test")
     return sa.register(m), m
@@ -124,7 +127,7 @@ async def test_create_skill_non_ascii_returns_name_invalid(tmp_path, monkeypatch
 
 
 @pytest.mark.asyncio
-async def test_create_skill_unsupported_when_no_root(tmp_path, monkeypatch):
+async def test_create_skill_unsupported_when_disabled(tmp_path, monkeypatch):
     tools, _ = _mk_tools(tmp_path, monkeypatch, with_root=False)
     res = await tools["create_skill"](name="x", description="d", instructions="y")
     assert res["ok"] is False and res["error_code"] == ErrorCode.SKILLS_UNSUPPORTED

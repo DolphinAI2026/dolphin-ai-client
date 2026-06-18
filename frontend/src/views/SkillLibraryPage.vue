@@ -25,7 +25,7 @@
     <div class="skill-main builder-page">
       <div class="page-header">
         <div class="page-title">技能库</div>
-        <div class="page-summary">{{ skills.length }} 个技能（平台预置 + 本地上传）</div>
+        <div class="page-summary">{{ skills.length }} 个技能（平台预置 + 用户上传）</div>
       </div>
 
       <div class="content-wrap">
@@ -56,7 +56,7 @@
           <el-table-column label="来源" width="120">
             <template #default="{ row }">
               <el-tag :type="row.source === 'platform' ? 'info' : 'success'" size="small">
-                {{ row.source === 'platform' ? '平台预置' : '本地上传' }}
+                {{ row.source === 'platform' ? '平台预置' : '用户上传' }}
               </el-tag>
             </template>
           </el-table-column>

@@ -15,9 +15,9 @@ const router = createRouter({
       path: '/',
       component: () => import('@/components/AdminLayout.vue'),
       meta: { requiresAdmin: true },
-      redirect: '/mcp',
+      redirect: '/status',
       children: [
-        { path: 'status',     redirect: '/mcp' },
+        { path: 'status',     component: () => import('@/views/SystemStatus.vue') },
         { path: 'mcp',        component: () => import('@/views/McpServices.vue') },
         { path: 'tester',     component: () => import('@/views/McpTester.vue') },
         { path: 'tenants',    component: () => import('@/views/PlatformTenants.vue') },
@@ -30,7 +30,7 @@ const router = createRouter({
         { path: 'datasources', redirect: '/mcp' },
       ],
     },
-    { path: '/:pathMatch(.*)*', redirect: '/mcp' },
+    { path: '/:pathMatch(.*)*', redirect: '/status' },
   ],
 })
 

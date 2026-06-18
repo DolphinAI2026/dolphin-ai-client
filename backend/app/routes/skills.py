@@ -1,4 +1,4 @@
-"""桌面 Skill 库管理 — /skills list/upload/delete。文件系统层在 ai_chat.skills。"""
+"""Skill 库管理 — /skills list/upload/delete。文件系统层在 ai_chat.skills。"""
 from __future__ import annotations
 
 import io
@@ -22,8 +22,8 @@ from app.deps import AuthContext, get_auth_context
 
 router = APIRouter(prefix="/skills", tags=["skills"])
 
-# 上传体积上限（解压前/后都设防，兜 zip bomb）。桌面单机用，给得宽松。
-MAX_UPLOAD_BYTES = 200 * 1024 * 1024  # 整包压缩字节上限（桌面单机本地, 放宽以容纳带 jar/模板/资源的 skill）
+# 上传体积上限（解压前/后都设防，兜 zip bomb）。给得宽松以容纳带 jar/模板/资源的 skill。
+MAX_UPLOAD_BYTES = 200 * 1024 * 1024  # 整包压缩字节上限
 MAX_TOTAL_UNCOMPRESSED_BYTES = 1024 * 1024 * 1024  # 解压累计字节上限
 
 
@@ -48,7 +48,7 @@ def _extract_user_skill_zip(data: bytes) -> str:
     """
     root = skills_root()
     if root is None:
-        raise ValueError("当前环境不支持 skill 上传（非桌面端）")
+        raise ValueError("当前环境未启用 skill 上传")
     if len(data) > MAX_UPLOAD_BYTES:
         raise ValueError("上传文件过大")
     try:
@@ -67,7 +67,7 @@ def _extract_user_skill_zip(data: bytes) -> str:
         meta, _ = _parse_frontmatter(z.read(skill_md).decode("utf-8", errors="replace"))
         name, _desc = validate_skill_frontmatter(meta)
         validate_skill_name(name)
-        # 不允许覆盖平台预置技能：skill 脚本在本机执行，同名 shadow = 用任意内容
+        # 不允许覆盖平台预置技能：skill 脚本在当前运行环境执行，同名 shadow = 用任意内容
         # 替换可信平台技能的信任边界问题。
         existing = SkillRegistry(root).get(name)
         if existing is not None and existing.source == "platform":

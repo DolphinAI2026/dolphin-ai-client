@@ -14,6 +14,7 @@ ENV/
 *.sqlite3
 :memory:
 file::memory:*
+data/
 
 # Environment variables
 .env
@@ -30,3 +31,9 @@ Thumbs.db
 
 # Logs
 *.log
+
+# Desktop build artifacts (PyInstaller x86 cross-build)
+build-x86/
+dist-x86/
+build/
+dist/

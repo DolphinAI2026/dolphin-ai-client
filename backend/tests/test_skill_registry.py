@@ -78,6 +78,8 @@ def _clear_desktop_env(monkeypatch):
     monkeypatch.delenv("SIDECAR_DATA_DIR", raising=False)
     monkeypatch.delenv("APAAS_WORKSPACE_ROOT", raising=False)
     monkeypatch.delenv("DESKTOP_MODE", raising=False)
+    monkeypatch.delenv("RUIJING_SERVER_DATA_DIR", raising=False)
+    monkeypatch.delenv("RUIJING_SKILLS_DISABLED", raising=False)
 
 
 def test_desktop_skills_root_matches_sidecar_data_dir(tmp_path, monkeypatch):
@@ -121,8 +123,23 @@ def test_desktop_skills_root_does_not_use_home_fallback_when_workspace_known(tmp
     assert ".ruijing-builder" not in str(root)
 
 
-def test_not_desktop_mode_returns_none(monkeypatch):
-    """非桌面、无显式 env → None（云端 no-op）。"""
+def test_web_skills_root_defaults_to_backend_data(monkeypatch):
+    """非桌面、无显式 skills env → Web 服务端 data/skills。"""
     _clear_desktop_env(monkeypatch)
     monkeypatch.setattr(skmod.sys, "frozen", False, raising=False)
+    assert skmod.skills_root() == Path(skmod.__file__).resolve().parents[2] / "data" / "skills"
+
+
+def test_web_skills_root_from_server_data_dir(tmp_path, monkeypatch):
+    """Web 端服务数据根目录可显式覆盖，skills 落到其下的 skills/。"""
+    _clear_desktop_env(monkeypatch)
+    monkeypatch.setenv("RUIJING_SERVER_DATA_DIR", str(tmp_path / "server-data"))
+    monkeypatch.setattr(skmod.sys, "frozen", False, raising=False)
+    assert skmod.skills_root() == tmp_path / "server-data" / "skills"
+
+
+def test_skills_root_can_be_disabled(monkeypatch):
+    """显式关闭时返回 None，供共享部署禁用服务端 skill 上传/执行。"""
+    _clear_desktop_env(monkeypatch)
+    monkeypatch.setenv("RUIJING_SKILLS_DISABLED", "1")
     assert skmod.skills_root() is None

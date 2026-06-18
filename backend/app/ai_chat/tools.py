@@ -1279,9 +1279,9 @@ async def execute_use_skill(args: dict, session: AIChatSession, db: AsyncSession
             copied.append(f"skill_{slug}/{item.name}")
     body = reg.read_skill_md(name)
     files_note = ("已就绪文件(在工作目录):\n" + "\n".join(f"- {p}" for p in copied)) if copied else "(无附带文件)"
-    src_tag = "平台预置(已审)" if skill.source == "platform" else "本地上传"
+    src_tag = "平台预置(已审)" if skill.source == "platform" else "用户上传"
     return (
-        f"# 技能 {name}（来源：{src_tag}；脚本将由 run_python 在本机执行）\n\n"
+        f"# 技能 {name}（来源：{src_tag}；脚本将由 run_python 在当前运行环境执行）\n\n"
         f"{body}\n\n---\n{files_note}\n\n"
         f"按上面说明执行：用 run_python 跑脚本(可直接打开这些文件)，产出文件后用 save_binary_artifact 登记。"
     )

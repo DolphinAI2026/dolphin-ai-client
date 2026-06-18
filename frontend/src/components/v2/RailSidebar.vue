@@ -4,6 +4,7 @@ import { useRoute, useRouter } from 'vue-router'
 import { checkAndPromptUpdate } from '@/utils/desktopUpdate'
 import { useUserStore } from '@/stores/user'
 import { useThemeStore } from '@/stores/theme'
+import ruijingWhaleMarkUrl from '@/assets/brand/ruijing-whale-mark.svg'
 
 interface NavItem { key: string; label: string; icon: string; path: string; badge?: number }
 
@@ -224,16 +225,10 @@ function renderIcon(name: string): string {
         :aria-label="effectiveCollapsed ? '展开导航' : '睿鲸AI 首页'"
         @click="effectiveCollapsed ? toggleCollapsed() : go('/')"
       >
-        <svg width="17" height="17" viewBox="0 0 24 24" fill="none">
-          <rect x="3" y="3" width="8" height="8" rx="2.2" fill="white" />
-          <rect x="13" y="3" width="8" height="8" rx="2.2" fill="rgba(255,255,255,0.68)" />
-          <rect x="3" y="13" width="8" height="8" rx="2.2" fill="rgba(255,255,255,0.68)" />
-          <rect x="13" y="13" width="8" height="8" rx="2.2" fill="white" />
-        </svg>
+        <img class="rail-logo-mark" :src="ruijingWhaleMarkUrl" alt="" aria-hidden="true" />
       </button>
       <div v-if="!effectiveCollapsed" class="rail-brand-copy">
         <div class="rail-title">睿鲸AI</div>
-        <div class="rail-title-sub">AI · 低代码</div>
       </div>
       <!-- 收起按钮放在 brand 区右侧 — 跟 SessionSidebar 的 « 按钮位置一致，
            比放底部更顺手。展开 / 收起两个状态用同一个 button，方向不一样。 -->
@@ -426,18 +421,26 @@ function renderIcon(name: string): string {
   display: grid;
   place-items: center;
   flex-shrink: 0;
+  padding: 0;
   color: var(--text-inverse);
-  background: var(--brand);
+  background: transparent;
   border: none;
   border-radius: var(--r-2, 6px);
-  box-shadow: var(--sh-2);
+  box-shadow: 0 10px 22px rgba(7, 61, 139, 0.22);
   cursor: pointer;
-  transition: background 0.14s var(--ease, cubic-bezier(0.2, 0.8, 0.2, 1)),
-              box-shadow 0.14s var(--ease, cubic-bezier(0.2, 0.8, 0.2, 1));
+  overflow: hidden;
+  transition: box-shadow 0.14s var(--ease, cubic-bezier(0.2, 0.8, 0.2, 1)),
+              transform 0.14s var(--ease, cubic-bezier(0.2, 0.8, 0.2, 1));
+}
+.rail-logo-mark {
+  width: 100%;
+  height: 100%;
+  display: block;
+  object-fit: cover;
 }
 .rail-logo:hover {
-  background: var(--brand-hover);
   box-shadow: var(--sh-brand);
+  transform: translateY(-1px);
 }
 .rail-logo:focus-visible {
   outline: 2px solid var(--line-focus, var(--brand-ring));
