@@ -413,7 +413,12 @@ html[data-theme="dark"] .msg-error-row {
 }
 
 /* ============ Task 7: 原生文件树 + 代码查看器右栏 ============ */
-.ws-pane { display: flex; height: 100%; min-height: 0; min-width: 0; border-left: 1px solid var(--line, rgba(0,0,0,.08)); width: 420px; flex-shrink: 0; }
+.ws-pane { display: flex; flex-direction: column; height: 100%; min-height: 0; min-width: 0; border-left: 1px solid var(--line, rgba(0,0,0,.08)); width: 420px; flex-shrink: 0; }
+/* SP1 C4: 文件/代码 ⇄ 运行/调试 双 tab */
+.ws-pane-tabs { display: flex; gap: 4px; padding: 6px 10px; border-bottom: 1px solid var(--line, rgba(0,0,0,.08)); flex: 0 0 auto; }
+.ws-pane-tabs button { font-size: 12px; border: none; background: none; cursor: pointer; color: var(--text-3, #888); padding: 2px 8px; border-radius: 6px; }
+.ws-pane-tabs button.active { color: var(--text-1, #222); font-weight: 600; background: var(--bg-2, #f3f4f6); }
+.ws-pane-files { display: flex; flex: 1; min-height: 0; }
 .ws-pane-tree { flex: none; border-right: 1px solid var(--line, rgba(0,0,0,.08)); }
 .ws-pane-viewer { flex: 1; min-width: 0; overflow: hidden; }
 /* 树右边界拖宽 handle: 骑在边框上不占布局宽度 */
@@ -474,3 +479,17 @@ html[data-theme="dark"] .msg-error-row {
   transition: background 0.15s var(--ease, ease);
 }
 .chat-resizer:hover::after { background: var(--brand, #6366f1); }
+
+/* ============ 对话驱动运行/调试结果卡 ============ */
+.coding-run-card { border: 1px solid var(--line, rgba(0,0,0,.1)); border-radius: 10px; padding: 8px 12px; margin: 4px 0; background: var(--surface-2, #f7f7f8); font-size: 13px; }
+.coding-run-card .rc-head { display: flex; align-items: center; gap: 8px; }
+.coding-run-card .rc-dot { width: 8px; height: 8px; border-radius: 50%; flex: none; background: var(--text-3, #999); }
+.coding-run-card .rc-dot.running { background: var(--text-3, #999); }
+.coding-run-card .rc-dot.ok { background: var(--ok, #3ba55d); }
+.coding-run-card .rc-dot.error { background: var(--err, #e54d42); }
+.coding-run-card .rc-title { font-weight: 600; color: var(--text-1, #222); }
+.coding-run-card .rc-link { margin-left: auto; font-size: 12px; border: none; background: none; color: var(--brand, #6366f1); cursor: pointer; }
+.coding-run-card .rc-url { font-family: ui-monospace, monospace; font-size: 12px; color: var(--text-2, #666); margin-top: 4px; word-break: break-all; }
+.coding-run-card .rc-errs { margin: 6px 0 0; padding-left: 18px; color: var(--err, #e54d42); font-family: ui-monospace, monospace; font-size: 12px; }
+.coding-run-card .rc-errs li { word-break: break-all; }
+.coding-run-card .rc-degrade { margin-top: 6px; font-size: 12px; color: var(--text-3, #999); }

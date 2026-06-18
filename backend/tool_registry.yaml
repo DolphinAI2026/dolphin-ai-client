@@ -23,6 +23,13 @@ tools:
     agents: [builder, config]
     category: update
     description: "给字典加一个选项。"
+  add_apaas_field_to_form:
+    sections: [data, ui]
+    agents: [builder, config]
+    category: update
+    description: "给模型加字段并直接铺到表单(详情页, 可选上列表页) — 一步到位, 避免只建模型没上表单。"
+    search_hint: "加字段 表单加字段 字段不显示 字段没上表单 新增字段 加列"
+    writes_apaas: true
   add_apaas_model_field:
     sections: [data]
     agents: [builder, config]
@@ -225,6 +232,12 @@ tools:
     category: update
     description: "修复已创建但组件为空的表单：从绑定主模型字段补回基础表单组件；已有组件时跳过。"
     search_hint: "修复 空表单 表单为空 补字段 重建 fix empty form"
+  repair_apaas_form_names:
+    sections: [ui, data]
+    agents: [builder, coding]
+    category: update
+    description: "修复「表单管理」列表里「表单名称」显示成占位「我的待办」的存量表单：对实体名为占位的模型页面表单重存 formConfigDetail，把列表名同步成真实名（菜单名）；已正确的跳过，幂等。dry_run 可预览。"
+    search_hint: "修复 表单名称 我的待办 占位 表单管理 列表 改名 fix form name placeholder"
   get_apaas_process_detail:
     sections: [logic]
     agents: [builder, config]
@@ -655,3 +668,33 @@ tools:
     category: dev_workspace
     description: "批量写入多个文件到 workspace（一次 RPC 解决 30+ 文件场景）。"
     writes_workspace: true
+  create_skill:
+    sections: [global]
+    agents: [builder, coding]
+    category: skill_learning
+    description: "把一段可复用做法沉淀成一个新技能(SKILL.md+可选helper)，存进本地技能库。"
+    search_hint: "创建技能 沉淀 存成技能 AI创建 skill author create"
+  list_skills:
+    sections: [global]
+    agents: [builder, coding]
+    category: skill_learning
+    description: "列出本地技能库的全部技能，创建前查重名。"
+    search_hint: "技能列表 skill list"
+  read_skill_file:
+    sections: [global]
+    agents: [builder, coding]
+    category: skill_learning
+    description: "读某个技能内的文件(SKILL.md/helper)，用于迭代。"
+    search_hint: "读技能文件 skill read"
+  write_skill_file:
+    sections: [global]
+    agents: [builder, coding]
+    category: skill_learning
+    description: "往一个user技能写/覆盖一个文件。"
+    search_hint: "写技能文件 skill write"
+  update_skill_metadata:
+    sections: [global]
+    agents: [builder, coding]
+    category: skill_learning
+    description: "改写一个user技能SKILL.md的frontmatter(描述/标签)。"
+    search_hint: "改技能元数据 skill metadata"

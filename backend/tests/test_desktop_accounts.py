@@ -63,3 +63,21 @@ async def test_apaas_same_username_not_verified_as_desktop(session):
     ))
     await session.commit()
     assert await da.verify_desktop_account(session, "dave", "pw123456") is None
+
+
+@pytest.mark.asyncio
+async def test_provision_desktop_account_cannot_elevate(session):
+    """federation/公网开号路径用的函数结构上不接受 is_platform_admin。"""
+    import inspect
+    sig = inspect.signature(da.provision_desktop_account)
+    assert "is_platform_admin" not in sig.parameters
+    user = await da.provision_desktop_account(session, "zoe", "pw123456")
+    await session.commit()
+    assert user.is_platform_admin is False
+
+
+@pytest.mark.asyncio
+async def test_provision_local_admin_sets_platform_admin(session):
+    user = await da.provision_local_admin_account(session, "root", "pw123456")
+    await session.commit()
+    assert user.is_platform_admin is True

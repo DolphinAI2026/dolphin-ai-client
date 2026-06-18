@@ -26,6 +26,7 @@
 import { computed, onMounted, onBeforeUnmount, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { useUserStore } from '@/stores/user'
+import { buildPlatformAdminIframeSrc, resolvePlatformAdminPath } from './platformAdminEmbedState'
 
 const route = useRoute()
 const router = useRouter()
@@ -34,19 +35,16 @@ const loading = ref(true)
 
 const adminPath = computed(() => {
   const raw = route.params.pathMatch
-  const parts = Array.isArray(raw) ? raw : raw ? [String(raw)] : []
-  const path = `/${parts.filter(Boolean).join('/')}`.replace(/\/+/g, '/')
-  return path === '/' || path === '/status' ? '/mcp' : path
+  return resolvePlatformAdminPath(Array.isArray(raw) ? raw.map(String) : raw ? String(raw) : undefined)
 })
 
 const iframeSrc = computed(() => {
-  const token = localStorage.getItem('token') || ''
-  const params = new URLSearchParams({ embed: '1' })
-  if (token) params.set('handoff_token', token)
-
-  const base = (import.meta.env.BASE_URL || '/').replace(/\/$/, '')
-  const adminBase = `${window.location.origin}${base}/admin`.replace(/([^:]\/)\/+/g, '$1')
-  return `${adminBase}${adminPath.value}?${params.toString()}`
+  return buildPlatformAdminIframeSrc({
+    origin: window.location.origin,
+    baseUrl: import.meta.env.BASE_URL || '/',
+    adminPath: adminPath.value,
+    token: localStorage.getItem('token') || '',
+  })
 })
 
 watch(iframeSrc, () => {

@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { onMounted } from 'vue'
 import { RouterView, type RouteLocationNormalized } from 'vue-router'
-import { checkAndPromptUpdate } from '@/utils/desktopUpdate'
+import { checkAndPromptUpdate } from '@/utils/desktop'
 
 onMounted(() => {
   // 仅桌面端;启动静默检查,有新版才弹窗(在线版 checkAndPromptUpdate 是 no-op)。

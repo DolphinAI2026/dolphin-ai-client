@@ -312,11 +312,30 @@ class WorkspaceManager:
     """工作区管理器"""
     _install_locks: dict[str, asyncio.Lock] = {}
     _workspace_path_cache: dict[str, Path] = {}
+    _external_paths: dict[str, str] = {}   # ws_id -> 用户选的本地文件夹绝对路径 (external 工作区)
+    _external_meta: dict[str, dict] = {}   # ws_id -> {user_id, tenant_id, apaas_app_id, display_name}
 
     def __init__(self):
         WORKSPACE_ROOT.mkdir(parents=True, exist_ok=True)
         DEPENDENCY_CACHE_ROOT.mkdir(parents=True, exist_ok=True)
         NPM_CACHE_ROOT.mkdir(parents=True, exist_ok=True)
+
+    def register_external(self, ws_id: str, abs_path: str, *,
+                          user_id: int | None = None, tenant_id: int | None = None,
+                          apaas_app_id: str | None = None, display_name: str | None = None) -> None:
+        """注册一个 external (打开本地文件夹) 工作区路径 + 元数据(供 get_workspace_info 合成)。"""
+        WorkspaceManager._external_paths[ws_id] = abs_path
+        if user_id is not None:
+            WorkspaceManager._external_meta[ws_id] = {
+                "user_id": user_id, "tenant_id": tenant_id,
+                "apaas_app_id": apaas_app_id, "display_name": display_name,
+            }
+
+    @classmethod
+    def load_external(cls, items: list[tuple[str, str]]) -> None:
+        """启动时批量恢复 external 工作区路径 (从 DB registered_workspaces)。"""
+        for ws_id, abs_path in items:
+            cls._external_paths[ws_id] = abs_path
 
     def _build_workspace_folder_name(self, ws_id: str, project_name: str) -> str:
         readable_name = self._slugify_project_token(project_name) or "custom-dev"
@@ -386,6 +405,16 @@ class WorkspaceManager:
         cached = self._workspace_path_cache.get(ws_id)
         if cached and cached.exists():
             return cached
+
+        ext = self._external_paths.get(ws_id)
+        if ext:
+            ext_path = Path(ext)
+            if ext_path.exists():
+                self._workspace_path_cache[ws_id] = ext_path
+                return ext_path
+            raise FileNotFoundError(
+                f"Workspace {ws_id} 关联的本地文件夹不存在(可能已移动/删除): {ext}"
+            )
 
         for root in WORKSPACE_SEARCH_ROOTS:
             direct = root / ws_id
@@ -1722,11 +1751,65 @@ class WorkspaceManager:
         }
 
     # ======== Serve & Debug 进程管理 ========
-    _serve_processes: dict = {}   # {ws_id: {"process": Process, "port": int}}
+    _serve_processes: dict = {}   # {ws_id: {"process": Process, "port": int, "kind": str, "log_ring": list, "log_seq": int}}
     _debug_processes: dict = {}   # {ws_id: {"process": Process}}
     _next_port: int = 8080
+    _SERVE_LOG_RING_MAX: int = 2000   # 环形缓冲上限（行）
 
-    async def start_serve(self, ws_id: str) -> dict:
+    @staticmethod
+    def _strip_serve_ansi(text: str) -> str:
+        return re.sub(r"\x1b\[[0-9;]*[A-Za-z]", "", text)
+
+    def _append_serve_log(self, ws_id: str, stream: str, line: str) -> None:
+        info = self._serve_processes.get(ws_id)
+        if not info:
+            return
+        info["log_seq"] = int(info.get("log_seq", 0)) + 1
+        ring = info.setdefault("log_ring", [])
+        ring.append({"seq": info["log_seq"], "stream": stream, "line": line})
+        if len(ring) > self._SERVE_LOG_RING_MAX:
+            del ring[: len(ring) - self._SERVE_LOG_RING_MAX]
+
+    def _spawn_serve_log_reader(self, ws_id: str, proc) -> None:
+        """异步逐行读 proc 的 stdout/stderr，写入该 ws 的 log_ring。"""
+        async def _read(stream_reader, stream_name: str) -> None:
+            if stream_reader is None:
+                return
+            while True:
+                try:
+                    raw = await stream_reader.readline()
+                except Exception:
+                    break
+                if not raw:
+                    break
+                line = self._strip_serve_ansi(
+                    raw.decode("utf-8", errors="replace")
+                ).rstrip("\n")
+                self._append_serve_log(ws_id, stream_name, line)
+
+        asyncio.ensure_future(_read(getattr(proc, "stdout", None), "stdout"))
+        asyncio.ensure_future(_read(getattr(proc, "stderr", None), "stderr"))
+
+    @staticmethod
+    def _resolve_serve_command(ws_path: str, port: int) -> list[str]:
+        """决定 dev server 启动命令。
+
+        优先用工程自带的 `preview` 脚本（带可运行预览 harness：preview/main.js 真正 mount
+        组件 + preview/index.html 模板）——直接服务 src/index.js 是 UMD 组件库入口（只 export
+        {install}，不 mount）→ 页面空白。无 preview 脚本则回退原行为。
+        """
+        import json as _json
+        scripts: dict = {}
+        try:
+            pkg = _json.loads((Path(ws_path) / "package.json").read_text("utf-8"))
+            scripts = pkg.get("scripts") or {}
+        except Exception:
+            scripts = {}
+        if "preview" in scripts:
+            return ["npm", "run", "preview", "--", "--port", str(port)]
+        return ["npx", "vue-cli-service", "serve", "src/index.js", "--port", str(port)]
+
+    async def start_serve(self, ws_id: str, kind: str = "web") -> dict:
         """启动 npm run serve 后台进程，返回端口号"""
         if ws_id in self._serve_processes:
             info = self._serve_processes[ws_id]
@@ -1755,13 +1838,17 @@ class WorkspaceManager:
         env = self._build_npm_env()
         env["PORT"] = str(port)
         proc = await asyncio.create_subprocess_exec(
-            "npx", "vue-cli-service", "serve", "src/index.js", "--port", str(port),
+            *self._resolve_serve_command(str(ws_path), port),
             cwd=str(ws_path),
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
             env=env,
         )
-        self._serve_processes[ws_id] = {"process": proc, "port": port}
+        self._serve_processes[ws_id] = {
+            "process": proc, "port": port, "kind": kind,
+            "log_ring": [], "log_seq": 0,
+        }
+        self._spawn_serve_log_reader(ws_id, proc)
 
         # 等待 serve 启动（最多 30 秒）
         import time
@@ -1772,9 +1859,9 @@ class WorkspaceManager:
                 if s.connect_ex(("localhost", port)) == 0:
                     return {"status": "ok", "port": port, "message": f"serve 已启动在端口 {port}"}
             if proc.returncode is not None:
-                stdout, stderr = await proc.communicate()
+                tail = [r["line"] for r in self._serve_processes.get(ws_id, {}).get("log_ring", [])][-10:]
                 return {"status": "error", "port": port,
-                        "message": f"serve 启动失败: {stderr.decode('utf-8', errors='replace')[:300]}"}
+                        "message": "serve 启动失败: " + ("\n".join(tail) or "进程已退出")[:300]}
 
         return {"status": "ok", "port": port, "message": f"serve 正在启动（端口 {port}）"}
 
@@ -1836,6 +1923,36 @@ class WorkspaceManager:
         if not running:
             self._serve_processes.pop(ws_id, None)
         return {"running": running, "port": info["port"] if running else None}
+
+    async def iter_serve_logs(self, ws_id: str, after_seq: int):
+        """逐条产出该 ws 的 serve 日志行：先补发 seq > after_seq 的历史，再实时跟随。
+
+        每条：{"seq": int, "stream": "stdout"|"stderr", "line": str}
+        进程退出且 ring 全部发完后结束迭代。
+        """
+        if ws_id not in self._serve_processes:
+            return
+        cursor = int(after_seq or 0)
+        idle_after_exit = 0
+        while True:
+            info = self._serve_processes.get(ws_id)
+            if info is None:
+                return
+            ring = info.get("log_ring", [])
+            new_rows = [r for r in ring if r["seq"] > cursor]
+            if new_rows:
+                for row in new_rows:
+                    cursor = row["seq"]
+                    yield {"seq": row["seq"], "stream": row["stream"], "line": row["line"]}
+                idle_after_exit = 0
+                continue
+            proc = info.get("process")
+            exited = proc is None or getattr(proc, "returncode", None) is not None
+            if exited:
+                idle_after_exit += 1
+                if idle_after_exit >= 2:  # 退出后再确认一轮无新行
+                    return
+            await asyncio.sleep(0.5)
 
     async def build_and_package(self, ws_id: str) -> str:
         """构建 + 打包 zip，返回 zip 文件路径。
@@ -2212,7 +2329,23 @@ const INJECT_CODE = `(function(params) {{
     def get_workspace_info(self, ws_id: str) -> dict:
         """获取工作区信息"""
         ws_path = self.get_workspace_path(ws_id)
-        meta = self._decorate_workspace_meta(ws_path, self._read_meta(ws_path))
+        if ws_id in self._external_paths:
+            ext = self._external_meta.get(ws_id, {})
+            base = {
+                "id": ws_id,
+                "user_id": ext.get("user_id"),
+                "tenant_id": ext.get("tenant_id"),
+                "project_id": None,            # 不复用 project_id → 走 owner 检查, 避开 int() 崩溃
+                "apaas_app_id": ext.get("apaas_app_id"),
+                "display_name": ext.get("display_name") or ws_path.name,
+                "project_name": ext.get("display_name") or ws_path.name,
+                "project_type": "external",
+                "workspace_type": "external",
+                "status": "local",
+            }
+            meta = self._decorate_workspace_meta(ws_path, base)
+        else:
+            meta = self._decorate_workspace_meta(ws_path, self._read_meta(ws_path))
         meta["files"] = self.list_files(ws_id)
         return meta
 
@@ -4654,3 +4787,14 @@ export default {{
                 target = ws_path / rel
                 target.parent.mkdir(parents=True, exist_ok=True)
                 shutil.copy2(src_file, target)
+
+
+async def restore_external_workspaces(session) -> None:
+    """启动时从 DB registered_workspaces 恢复 external 工作区路径+元数据到 WorkspaceManager 内存。"""
+    from sqlalchemy import select as _select
+    from app.models import RegisteredWorkspace
+    rows = (await session.execute(_select(RegisteredWorkspace))).scalars().all()
+    wm = WorkspaceManager()
+    for r in rows:
+        wm.register_external(r.ws_id, r.abs_path, user_id=r.user_id, tenant_id=r.tenant_id,
+                             apaas_app_id=r.apaas_app_id, display_name=r.display_name)

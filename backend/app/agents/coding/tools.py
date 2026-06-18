@@ -440,6 +440,71 @@ def _apply_bound_app_scope(args: dict[str, Any], ctx: AgentContext, accepts_app_
     return args or {}
 
 
+def _get_workspace_manager():
+    """间接取 WorkspaceManager（局部 import 避免循环依赖；便于测试 monkeypatch）。"""
+    from app.coding.workspace import WorkspaceManager
+    return WorkspaceManager()
+
+
+def _get_browser_service_for_preview():
+    """间接取 BrowserService，CDP 不可用时由调用方 try/except 降级。"""
+    from app.coding.browser_service import BrowserService
+    return BrowserService.get_instance()
+
+
+async def _run_workspace_preview(args, ctx) -> ToolResult:
+    """起 dev server +（有 CDP 时）抓运行时报错，发 coding.run_result 事件供对话卡/预览位用。"""
+    import asyncio
+    from app.agents.coding.autofix_signals import collect_runtime_errors
+
+    ws_id = getattr(ctx, "workspace_id", None)
+    if not ws_id:
+        return ToolResult(success=False, content="Error: 当前没有工作区，无法运行预览", error="NO_WORKSPACE_ID")
+
+    kind = (args or {}).get("kind", "web")
+    ws_mgr = _get_workspace_manager()
+    serve = await ws_mgr.start_serve(ws_id, kind=kind)
+    if serve.get("status") == "error":
+        msg = serve.get("message", "启动失败")
+        return ToolResult(
+            success=False, content=f"Error: dev server 启动失败: {msg}", error="SERVE_FAILED",
+            emit_event={"type": "coding.run_result", "data": {
+                "source": "manual", "dev_url": "", "status": "error",
+                "log_tail": [], "errors": [msg], "capture_available": False}},
+        )
+
+    port = serve.get("port")
+    dev_url = f"http://127.0.0.1:{port}/" if port else ""
+    info = ws_mgr._serve_processes.get(ws_id, {}) or {}
+    log_tail = [r["line"] for r in (info.get("log_ring") or [])][-30:]
+
+    errors: list[str] = []
+    capture_available = False
+    if dev_url:
+        try:
+            svc = _get_browser_service_for_preview()
+            session_id = await svc.launch_capture(dev_url)
+            capture_available = True
+            await asyncio.sleep(1.5)  # 让首屏 console/network 报错冒出来
+            console = svc.get_console_logs(session_id, 0) or []
+            network = svc.get_network_requests(session_id, 0) or []
+            errors = collect_runtime_errors(console, network)
+            await svc.close_capture(session_id)
+        except Exception:
+            capture_available = False  # 包内 playwright 排除 → 降级为仅预览
+
+    status = "error" if errors else "ok"
+    note = f"{len(errors)} 个运行时报错" if errors else ("无报错" if capture_available else "运行时抓取不可用(需 dev 模式)")
+    return ToolResult(
+        success=True,
+        content=f"dev server 运行在 {dev_url}；{note}。",
+        data={"dev_url": dev_url, "errors": errors},
+        emit_event={"type": "coding.run_result", "data": {
+            "source": "manual", "dev_url": dev_url, "status": status,
+            "log_tail": log_tail, "errors": errors, "capture_available": capture_available}},
+    )
+
+
 def build_coding_tools(registry: ToolRegistry | None = None) -> list[Tool]:
     """从 tool_registry 构造 BaseAgent 的 Tool 列表 + 注入 aPaaS 工具集。
 
@@ -654,5 +719,21 @@ def build_coding_tools(registry: ToolRegistry | None = None) -> list[Tool]:
             idempotent=False,
         ),
     ])
+
+    tools.append(Tool(
+        name="run_workspace_preview",
+        description=(
+            "起当前工作区的 dev server 并（可用时）抓运行时 console/network 报错；"
+            "用于在对话里『跑一下 / 调一下』看效果。返回 dev 预览地址与报错。"
+        ),
+        parameters_schema={
+            "type": "object",
+            "properties": {
+                "kind": {"type": "string", "enum": ["web", "mobile", "h5"], "description": "serve 类型，默认 web"},
+            },
+        },
+        execute=_run_workspace_preview,
+        idempotent=False,
+    ))
 
     return tools

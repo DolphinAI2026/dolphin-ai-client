@@ -950,16 +950,28 @@ async def _create_form_and_menu(
                 # 平台 formConfig API 会自动创建菜单，但菜单名可能是默认值（如"我的待办"）
                 # 需要用返回的 menuId 更新菜单名为实际的模型名称
                 menu_id = fr.get("menuId", "")
-                try:
-                    if menu_id:
-                        # 有 menuId：更新已有菜单名称
-                        await client.create_menu(app_id, form_name, fr["id"], menu_order=form_index, menu_id=menu_id)
-                        logger.info(f"更新菜单名称: {form_name} (menuId={menu_id})")
-                    else:
-                        # 没有 menuId：创建新菜单
-                        await client.create_menu(app_id, form_name, fr["id"], menu_order=form_index)
-                except Exception as menu_err:
-                    logger.warning(f"创建/更新菜单失败（{form_name}）: {menu_err}")
+                # 改名容易静默失败 → 整批表单名留默认占位「我的待办」。
+                # 这里重试 1 次;仍失败则收集进 form_result,交由 configure_permissions
+                # 末尾的 repair_form_menu_names sweep 兜底纠正(不再只 warning 一句)。
+                menu_err = None
+                for _attempt in range(2):
+                    try:
+                        if menu_id:
+                            # 有 menuId：更新已有菜单名称
+                            await client.create_menu(app_id, form_name, fr["id"], menu_order=form_index, menu_id=menu_id)
+                            logger.info(f"更新菜单名称: {form_name} (menuId={menu_id})")
+                        else:
+                            # 没有 menuId：创建新菜单
+                            await client.create_menu(app_id, form_name, fr["id"], menu_order=form_index)
+                        menu_err = None
+                        break
+                    except Exception as exc:
+                        menu_err = exc
+                        logger.warning(
+                            f"创建/更新菜单失败（{form_name}, 第 {_attempt + 1} 次）: {exc}"
+                        )
+                if menu_err is not None:
+                    form_result["menuNameError"] = str(menu_err)
                 try:
                     await _finalize_created_form_config(
                         client,
@@ -2191,4 +2203,28 @@ async def execute_configure_permissions(
                 )
             except Exception as exc:
                 logger.warning("权限页面配置回写失败（%s）: %s", job.get("form_name") or job.get("form_id"), exc)
-    return {"permissions_count": len(perm_payloads)}
+
+    # 兜底 sweep:把「表单管理」列表里停在平台默认占位「我的待办」的表单实体名同步回真实名。
+    # 「表单名称」列展示的是表单实体名(非菜单名),建表时由 formConfigDetail 保存从 formContext
+    # 同步;execute_create_form 里那步 _finalize_created_form_config 可能静默失败 → 实体名停在
+    # 占位。这里在所有表单建完后统一重跑该固化保存,根治「整批表单名变我的待办」复发 bug。
+    name_sweep = {"fixed": [], "failed": [], "skipped": []}
+    try:
+        from app.operations.form_name_repair import (
+            repair_form_entity_names,
+            _name_by_code_from_spec,
+        )
+
+        name_sweep = await repair_form_entity_names(
+            client, app_id, name_by_code=_name_by_code_from_spec(all_forms or [])
+        )
+        if name_sweep.get("fixed"):
+            logger.info("表单实体名 sweep 修复 %d 个: %s", len(name_sweep["fixed"]), name_sweep["fixed"])
+        if name_sweep.get("failed"):
+            # 失败不静默——升到 error 级别,并随 result 返回让前端可见
+            logger.error("表单实体名 sweep 有 %d 个修复失败: %s", len(name_sweep["failed"]), name_sweep["failed"])
+    except Exception as exc:
+        logger.error("表单实体名 sweep 整体失败: %s", exc)
+        name_sweep = {"fixed": [], "failed": [{"code": "", "error": str(exc)}], "skipped": []}
+
+    return {"permissions_count": len(perm_payloads), "form_name_sweep": name_sweep}

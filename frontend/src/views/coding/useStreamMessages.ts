@@ -14,7 +14,7 @@ import { marked } from 'marked'
 import type { CodingAttachment, ReplayStreamMessage } from '@/api/coding'
 
 export interface StreamMessage {
-  type: 'user' | 'thinking' | 'tool' | 'file_write' | 'file_edit' | 'command' | 'status' | 'error' | 'message' | 'clarify'
+  type: 'user' | 'thinking' | 'tool' | 'file_write' | 'file_edit' | 'command' | 'status' | 'error' | 'message' | 'clarify' | 'run_result'
   content: string
   fileName?: string
   /** 工作区相对全路径(嵌套文件 basename 对不上树), 点击文件卡直达查看器用 */
@@ -42,6 +42,8 @@ export interface StreamMessage {
   hidden?: boolean
   /** 用户消息附件，用于保留截图/文件可见性 */
   attachments?: CodingAttachment[]
+  /** type=run_result 用：归一后的运行/调试结果 */
+  run?: import('./runResult').RunResult
   timestamp: number
 }
 

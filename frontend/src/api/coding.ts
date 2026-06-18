@@ -1,5 +1,6 @@
 import request from '@/utils/request'
 import { API_PREFIX } from '@/utils/request'
+import { buildServeLogsUrl } from '@/views/coding/serveLogsUrl'
 
 export interface CodingScene {
   type: string
@@ -228,7 +229,7 @@ export const codingApi = {
 
   /** 启动开发服务器 */
   startServe(wsId: string) {
-    return request.post<any, { status: string; url?: string; message?: string }>(`/coding/workspace/${wsId}/serve`, {}, { params: { action: 'start' }, timeout: 120000 })
+    return request.post<any, { status: string; url?: string; port?: number; message?: string }>(`/coding/workspace/${wsId}/serve`, {}, { params: { action: 'start' }, timeout: 120000 })
   },
 
   /** 停止开发服务器 */
@@ -239,6 +240,19 @@ export const codingApi = {
   /** 获取开发服务器状态 */
   getServeStatus(wsId: string) {
     return request.get<any, { running: boolean; url?: string }>(`/coding/workspace/${wsId}/serve-status`)
+  },
+
+  /** 查询自开发页面绑定工作区是否在 npm run serve(预览面板 dev⇄UMD 切换) */
+  customPageDevTarget(appId: number, menuId: string, authToken: string) {
+    return request.get<any, { dev_running: boolean; port: number | null; ws_id: string | null }>(
+      `/applications/${appId}/custom-page-dev-target`,
+      { params: { menu_id: menuId, _auth: authToken } },
+    )
+  },
+
+  /** serve-logs SSE 的完整 URL（给 EventSource 用，token 走 query） */
+  serveLogsUrl(wsId: string, lastSeenSeq: number): string {
+    return buildServeLogsUrl(API_PREFIX, wsId, lastSeenSeq, localStorage.getItem('token') || '')
   },
 
   /** 构建 + 上传到平台环境 */
@@ -271,6 +285,12 @@ export const codingApi = {
       throw new Error(err.detail || '发布失败')
     }
     return resp.blob()
+  },
+
+  /** 注册本地文件夹为工作区（桌面端原生选择器选中的绝对路径） */
+  openLocalFolder(abs_path: string, apaas_app_id?: string) {
+    return request.post<any, { ws_id: string; disk_path: string; display_name: string; workspace_type: string; apaas_app_id: string | null }>(
+      '/coding/workspace/open-local', { abs_path, apaas_app_id })
   },
 
   /** 上传文件（图片/文档附件） */

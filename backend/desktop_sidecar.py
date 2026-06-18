@@ -6,7 +6,10 @@
 import argparse
 import multiprocessing
 import os
+import runpy
 import secrets
+import sys
+import traceback
 from pathlib import Path
 
 
@@ -25,6 +28,25 @@ def ensure_jwt_secret(data_dir: Path) -> str:
     return val
 
 
+def ensure_encryption_key(data_dir: Path) -> str:
+    """每安装实例持久化一个加密主密钥 (Fernet key 由 crypto.py 对它 sha256 派生)。
+
+    替掉 Phase 0 的 ALLOW_DEFAULT_ENCRYPTION_KEY 旁路: 用真实高熵 key, 让 main.py
+    的加密安全门合法放行, 而非被绕过。
+    """
+    data_dir = Path(data_dir)
+    data_dir.mkdir(parents=True, exist_ok=True)
+    f = data_dir / "encryption_key"
+    if f.is_file():
+        existing = f.read_text(encoding="utf-8").strip()
+        if existing:
+            return existing
+    val = secrets.token_urlsafe(48)
+    f.write_text(val, encoding="utf-8")
+    f.chmod(0o600)
+    return val
+
+
 def build_env(data_dir: Path, port: int) -> dict:
     """构造并写入本地运行所需的环境变量, 返回写入的子集 (便于测试)。"""
     data_dir = Path(data_dir)
@@ -34,27 +56,70 @@ def build_env(data_dir: Path, port: int) -> dict:
         "DESKTOP_MODE": "1",
         "HOST": "127.0.0.1",
         "PORT": str(port),
+        # data_dir 的真相源：Tauri 经 --data-dir 传入(app_data_dir, 各平台不同)。
+        # 显式导出, 让 skills_root() 等下游不必各自猜路径(避免误用 ~/.ruijing-builder 兜底)。
+        "SIDECAR_DATA_DIR": str(data_dir),
         # 绝对路径(四斜杠), 避免被 config._normalize_database_url 锚定到 backend/
         "DATABASE_URL": f"sqlite+aiosqlite:///{db_path}",
-        # Phase 0 spike: 允许默认加密 key。Phase 1 改为每实例生成持久化 ENCRYPTION_KEY。
-        "ALLOW_DEFAULT_ENCRYPTION_KEY": "1",
+        # 每实例持久化的加密主密钥 (crypto.py 对它 sha256 派生 Fernet key)。
+        "ENCRYPTION_KEY": ensure_encryption_key(data_dir),
         "JWT_SECRET_KEY": ensure_jwt_secret(data_dir),
         # 默认 federation 模式: 转发到公网 account-service 认证(已部署 agent.dfy/account-api)。
         # 新机器用公网账号即可登, 不用复制 app.db。设 PUBLIC_ACCOUNT_BASE_URL="" 可切回本地 authority(离线兜底)。
         "PUBLIC_ACCOUNT_BASE_URL": os.environ.get(
             "PUBLIC_ACCOUNT_BASE_URL", "https://agent.dfy.definesys.cn/account-api"
         ),
+        # 桌面 sidecar 接受 ai-builder(内部短票)+ desktop-sidecar(联邦会话票)。
+        "ACCEPTED_TOKEN_ISSUERS": "ai-builder,desktop-sidecar",
+        # app 托管工作区落 app_data_dir 下(稳定持久), 修冻结包相对二进制诡异路径
+        "APAAS_WORKSPACE_ROOT": os.path.join(str(data_dir), "workspaces"),
     }
     for k, v in written.items():
         os.environ[k] = v
+    _sync_preset_skills(data_dir)
     return written
+
+
+def _sync_preset_skills(data_dir: Path) -> None:
+    """把随包的 preset-skills 同步进 data_dir/skills/platform/（覆盖式，平台只读）。"""
+    import shutil
+    # 冻结态资源在 sys._MEIPASS 下；dev 态在仓库 backend/desktop/preset-skills
+    base = Path(getattr(sys, "_MEIPASS", Path(__file__).parent)) / "desktop" / "preset-skills"
+    if not base.is_dir():
+        return
+    dest = Path(data_dir) / "skills" / "platform"
+    dest.mkdir(parents=True, exist_ok=True)
+    for d in base.iterdir():
+        if d.is_dir():
+            shutil.copytree(d, dest / d.name, dirs_exist_ok=True)
+
+
+def run_script(path: str) -> int:
+    """用本进程(冻结二进制即自带解释器+已打包依赖)执行一个 .py 文件。
+
+    供 run_python 在桌面态调用: ruijing-sidecar --run-script <file>。
+    不起 uvicorn、不建 DB。stdout/stderr 继承父进程(由调用方 subprocess 捕获)。
+    """
+    try:
+        runpy.run_path(path, run_name="__main__")
+        return 0
+    except SystemExit as exc:
+        code = exc.code
+        return code if isinstance(code, int) else (0 if code is None else 1)
+    except BaseException:
+        traceback.print_exc()
+        return 1
 
 
 def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--port", type=int, default=int(os.environ.get("SIDECAR_PORT", "8799")))
     parser.add_argument("--data-dir", type=str, default=os.environ.get("SIDECAR_DATA_DIR", ""))
+    parser.add_argument("--run-script", type=str, default="")
     args = parser.parse_args()
+
+    if args.run_script:
+        sys.exit(run_script(args.run_script))
 
     data_dir = Path(args.data_dir) if args.data_dir else (Path.home() / ".ruijing-builder")
 

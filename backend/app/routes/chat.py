@@ -1,4 +1,5 @@
 import base64
+import logging
 from io import BytesIO
 import json
 import mimetypes
@@ -22,6 +23,12 @@ from app.context_compact import ContextCompactor
 from app.json_utils import loads_if_str
 from app.builder_spec.agent import SpecAgent
 from app.builder_spec.persistence import load_spec, save_spec_rebased
+
+logger = logging.getLogger(__name__)
+
+# 文档解析失败时写进 content_text 的可读标记。
+# read_attachment 工具识别此前缀 → 返回"解析失败: <原因>"而非永远"解析失败或为空"。
+DOC_PARSE_ERROR_PREFIX = "[文档解析失败] "
 
 
 async def _get_tenant_llm_config(db: AsyncSession, tenant_id: int) -> dict | None:
@@ -133,6 +140,10 @@ async def _parse_uploaded_document(file: UploadFile) -> str:
         if ext == ".pdf":
             try:
                 import pdfplumber
+            except ImportError:
+                logger.exception("PDF 解析库缺失 (pdfplumber/pdfminer/pypdfium2), 无法解析 %s", filename)
+                return DOC_PARSE_ERROR_PREFIX + "桌面端缺少 PDF 解析库 (pdfplumber)"
+            try:
                 parts: list[str] = []
                 with pdfplumber.open(tmp_path) as pdf:
                     for page in pdf.pages:
@@ -140,12 +151,17 @@ async def _parse_uploaded_document(file: UploadFile) -> str:
                         if text:
                             parts.append(text)
                 return "\n".join(parts)
-            except Exception:
-                return ""
+            except Exception as exc:
+                logger.exception("PDF 解析失败 %s", filename)
+                return DOC_PARSE_ERROR_PREFIX + f"PDF 解析出错: {exc}"
 
         if ext in {".docx", ".doc"}:
             try:
                 from docx import Document
+            except ImportError:
+                logger.exception("DOCX 解析库缺失 (python-docx), 无法解析 %s", filename)
+                return DOC_PARSE_ERROR_PREFIX + "桌面端缺少 docx 解析库 (python-docx)"
+            try:
                 doc = Document(tmp_path)
                 parts: list[str] = []
                 for para in doc.paragraphs:
@@ -157,12 +173,17 @@ async def _parse_uploaded_document(file: UploadFile) -> str:
                         if row_text:
                             parts.append(row_text)
                 return "\n".join(parts)
-            except Exception:
-                return ""
+            except Exception as exc:
+                logger.exception("DOCX 解析失败 %s", filename)
+                return DOC_PARSE_ERROR_PREFIX + f"docx 解析出错: {exc}"
 
         if ext in {".xlsx", ".xls"}:
             try:
                 from openpyxl import load_workbook
+            except ImportError:
+                logger.exception("XLSX 解析库缺失 (openpyxl), 无法解析 %s", filename)
+                return DOC_PARSE_ERROR_PREFIX + "桌面端缺少 xlsx 解析库 (openpyxl)"
+            try:
                 wb = load_workbook(tmp_path, data_only=True)
                 parts: list[str] = []
                 for ws in wb.worksheets:
@@ -172,12 +193,17 @@ async def _parse_uploaded_document(file: UploadFile) -> str:
                         if values:
                             parts.append(" | ".join(values))
                 return "\n".join(parts)
-            except Exception:
-                return ""
+            except Exception as exc:
+                logger.exception("XLSX 解析失败 %s", filename)
+                return DOC_PARSE_ERROR_PREFIX + f"xlsx 解析出错: {exc}"
 
         if ext in {".pptx", ".ppt"}:
             try:
                 from pptx import Presentation
+            except ImportError:
+                logger.exception("PPTX 解析库缺失 (python-pptx), 无法解析 %s", filename)
+                return DOC_PARSE_ERROR_PREFIX + "桌面端缺少 pptx 解析库 (python-pptx)"
+            try:
                 prs = Presentation(tmp_path)
                 parts: list[str] = []
                 for idx, slide in enumerate(prs.slides, start=1):
@@ -190,8 +216,9 @@ async def _parse_uploaded_document(file: UploadFile) -> str:
                         parts.append(f"## Slide {idx}")
                         parts.extend(slide_texts)
                 return "\n".join(parts)
-            except Exception:
-                return ""
+            except Exception as exc:
+                logger.exception("PPTX 解析失败 %s", filename)
+                return DOC_PARSE_ERROR_PREFIX + f"pptx 解析出错: {exc}"
 
         return ""
     finally:
@@ -966,7 +993,11 @@ async def send_message_with_file(
             parsed = await _parse_uploaded_document(
                 StarletteUpload(filename=upload_name, file=BytesIO(raw))
             )
-            if parsed:
+            # 解析失败时 _parse_uploaded_document 返回带 DOC_PARSE_ERROR_PREFIX 的可读原因
+            # (而非空串, 以便桌面端 read_attachment 能回原因)。web 端这里不能把它当正文:
+            # 否则会把"[文档解析失败] ..."注入会话内容并误导 _detect_doc 评分/doc_pipeline 路由。
+            # 与失败等价 —— 跳过该段(沿用旧的空串=静默跳过语义)。
+            if parsed and not parsed.startswith(DOC_PARSE_ERROR_PREFIX):
                 doc_segments.append(f"## 文件：{upload_name}\n\n{parsed}")
 
     # 合并多文档为单一 file_content（保留 doc_pipeline / SpecAgent.bootstrap_from_doc 接口不变）

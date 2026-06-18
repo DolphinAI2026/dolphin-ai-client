@@ -16,13 +16,13 @@ export interface TabItem {
 }
 
 const STORAGE_KEY = 'admin-tabs-v1'
-const RETIRED_PATHS = new Set(['/status', '/datasources'])
+const RETIRED_PATHS = new Set(['/datasources'])
 
 const HOME_TAB: TabItem = {
-  id: '/mcp',
-  path: '/mcp',
-  label: 'MCP 接入',
-  icon: 'connection',
+  id: '/status',
+  path: '/status',
+  label: '平台总览',
+  icon: 'dashboard',
   closable: false,
   kind: 'nav',
 }

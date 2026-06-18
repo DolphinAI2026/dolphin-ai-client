@@ -10,6 +10,7 @@ import asyncio
 import json
 import os
 import re
+import shutil
 import sys
 from datetime import datetime
 from pathlib import Path
@@ -18,6 +19,7 @@ from typing import Any
 from sqlalchemy import select, desc
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app import runtime
 from app.models import (
     AIChatSession,
     AIChatAttachment,
@@ -271,6 +273,40 @@ TOOL_SCHEMAS: list[dict] = [
             },
         },
     },
+    {
+        "type": "function",
+        "function": {
+            "name": "save_binary_artifact",
+            "description": (
+                "把 skill 脚本(run_python)刚写进会话工作目录的二进制文件(如 .pptx/.docx/.xlsx)"
+                "登记为可下载产物，用户能在右侧面板下载。source_path 必须是工作目录内的相对路径。"
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "source_path": {"type": "string", "description": "工作目录内的相对路径，例如 'output.pptx'"},
+                    "filename": {"type": "string", "description": "可选；产物展示名，默认用源文件名"},
+                },
+                "required": ["source_path"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "use_skill",
+            "description": (
+                "读取某个技能(Skill)的完整说明并把它的脚本/模板准备到会话工作目录，"
+                "之后按说明用 run_python 执行、用 save_binary_artifact 登记产出。"
+                "技能清单见系统提示「可用技能」。"
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {"name": {"type": "string", "description": "技能名(与清单一致)"}},
+                "required": ["name"],
+            },
+        },
+    },
 ]
 
 
@@ -296,12 +332,25 @@ async def execute_read_attachment(
         return f"错误：'{filename}' 是图片附件，不能用 read_attachment 读取"
     if not att.content_text:
         return f"错误：'{filename}' 解析失败或为空"
+    # 解析失败时 content_text 会带可读错误标记 → 直接把原因回给 agent, 不当正文喂。
+    from app.routes.chat import DOC_PARSE_ERROR_PREFIX
+    if att.content_text.startswith(DOC_PARSE_ERROR_PREFIX):
+        reason = att.content_text[len(DOC_PARSE_ERROR_PREFIX):].strip()
+        return f"错误：'{filename}' 解析失败: {reason}"
 
     # 截断超长内容（避免一次喂给 LLM 太多 token）
     MAX_CHARS = 30000
     if len(att.content_text) > MAX_CHARS:
         return att.content_text[:MAX_CHARS] + f"\n\n[内容已截断，原长度 {len(att.content_text)} 字符]"
     return att.content_text
+
+
+def _build_python_argv(code: str, tmp_path: str, exe: str | None = None) -> list[str]:
+    """桌面冻结态用 sidecar 二进制 --run-script <file>; 否则用解释器 -c code。"""
+    exe = exe or sys.executable
+    if runtime.is_frozen():
+        return [exe, "--run-script", tmp_path]
+    return [exe, "-c", code]
 
 
 async def execute_run_python(
@@ -316,14 +365,18 @@ async def execute_run_python(
     workspace = session.workspace_dir
     Path(workspace).mkdir(parents=True, exist_ok=True)
 
-    # 用主 venv 的 python 跑（已装好 pandas/openpyxl/pdfplumber 等）
-    python_exe = sys.executable
+    # 桌面冻结态: 把 code 落临时文件, 用 sidecar 二进制自带解释器 --run-script 跑;
+    # 非冻结(开发/云端)态: 直接用 venv 的 python -c（已装好 pandas/openpyxl/pdfplumber 等）。
+    import uuid as _uuid
+    tmp_path = ""
+    if runtime.is_frozen():
+        tmp_path = str(Path(workspace) / f".run_{_uuid.uuid4().hex}.py")
+        Path(tmp_path).write_text(code, encoding="utf-8")
+    argv = _build_python_argv(code, tmp_path)
 
     try:
         proc = await asyncio.create_subprocess_exec(
-            python_exe,
-            "-c",
-            code,
+            *argv,
             cwd=workspace,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
@@ -356,6 +409,12 @@ async def execute_run_python(
         return result
     except Exception as e:
         return f"错误：执行失败 - {e}"
+    finally:
+        if tmp_path:
+            try:
+                os.remove(tmp_path)
+            except OSError:
+                pass
 
 
 async def execute_write_artifact(
@@ -521,6 +580,11 @@ async def execute_create_artifact_from_attachment(
     content = att.content_text or ""
     if not content.strip():
         return f"错误：'{filename}' 解析为空，无法转 artifact"
+    # 解析失败的附件 content_text 是错误标记, 别把它当正文复制进 artifact。
+    from app.routes.chat import DOC_PARSE_ERROR_PREFIX
+    if content.startswith(DOC_PARSE_ERROR_PREFIX):
+        reason = content[len(DOC_PARSE_ERROR_PREFIX):].strip()
+        return f"错误：'{filename}' 解析失败: {reason}，无法转 artifact"
 
     # 产出物文件名：优先参数，否则把附件名改成 .md
     art_name = (args.get("artifact_filename") or "").strip()
@@ -1147,6 +1211,83 @@ def _design_doc_stats(markdown: str) -> dict[str, Any]:
     }
 
 
+async def execute_save_binary_artifact(args: dict, session: AIChatSession, db: AsyncSession) -> str:
+    source_path = (args.get("source_path") or "").strip()
+    if not source_path:
+        return "错误：缺少 source_path 参数"
+    if not session.workspace_dir:
+        return "错误：会话工作区未初始化"
+    ws = Path(session.workspace_dir).resolve()
+    target = (ws / source_path).resolve()
+    # 防越界：必须落在 workspace 内
+    if ws != target and ws not in target.parents:
+        return f"错误：source_path 必须在工作目录内（{source_path} 越界）"
+    if not target.is_file():
+        return f"错误：文件不存在 '{source_path}'（先用 run_python 生成它）"
+
+    art_name = (args.get("filename") or target.name).strip()
+    fmt = target.suffix.lstrip(".").lower() or "bin"
+    size = target.stat().st_size
+
+    last = (await db.execute(
+        select(AIChatArtifact)
+        .where(AIChatArtifact.session_id == session.id, AIChatArtifact.filename == art_name)
+        .order_by(desc(AIChatArtifact.version)).limit(1)
+    )).scalar_one_or_none()
+    new_version = (last.version + 1) if last else 1
+
+    art = AIChatArtifact(
+        session_id=session.id, filename=art_name, format=fmt,
+        content="", storage="file", file_path=str(target), size_bytes=size,
+        version=new_version,
+    )
+    db.add(art)
+    await db.commit()
+    await db.refresh(art)
+    return f"已登记可下载产物 '{art_name}' (v{new_version}, {size} 字节)。用户已能在右侧面板下载。"
+
+
+async def execute_use_skill(args: dict, session: AIChatSession, db: AsyncSession) -> str:
+    from app.ai_chat.skills import SkillRegistry
+    name = (args.get("name") or "").strip()
+    if not name:
+        return "错误：缺少 name 参数"
+    reg = SkillRegistry()
+    skill = reg.get(name)
+    if skill is None:
+        avail = "、".join(s.name for s in reg.scan()) or "（暂无）"
+        return f"错误：没有名为 '{name}' 的技能。可用技能：{avail}"
+    if not session.workspace_dir:
+        return "错误：会话工作区未初始化"
+    # name 来自上传 skill 包的 frontmatter，不可信：清洗成安全 slug 再拼路径，
+    # 否则 'x/../../../tmp/evil' 之类会把文件写到 workspace 之外（与 save_binary_artifact 同源越界）。
+    slug = re.sub(r"[^A-Za-z0-9_-]", "_", name)
+    ws = Path(session.workspace_dir).resolve()
+    dest = (ws / f"skill_{slug}").resolve()
+    if ws not in dest.parents:
+        return "错误：技能名非法，无法写入工作目录"
+    dest.mkdir(parents=True, exist_ok=True)
+    copied = []
+    for item in sorted(skill.dir.iterdir()):
+        if item.name == "SKILL.md":
+            continue
+        target = dest / item.name
+        if item.is_dir():
+            shutil.copytree(item, target, dirs_exist_ok=True)  # 递归保子目录(references/ scripts/ 等)
+            copied.append(f"skill_{slug}/{item.name}/")
+        else:
+            shutil.copy2(item, target)
+            copied.append(f"skill_{slug}/{item.name}")
+    body = reg.read_skill_md(name)
+    files_note = ("已就绪文件(在工作目录):\n" + "\n".join(f"- {p}" for p in copied)) if copied else "(无附带文件)"
+    src_tag = "平台预置(已审)" if skill.source == "platform" else "用户上传"
+    return (
+        f"# 技能 {name}（来源：{src_tag}；脚本将由 run_python 在当前运行环境执行）\n\n"
+        f"{body}\n\n---\n{files_note}\n\n"
+        f"按上面说明执行：用 run_python 跑脚本(可直接打开这些文件)，产出文件后用 save_binary_artifact 登记。"
+    )
+
+
 # ─────────────────────────── Dispatcher ───────────────────────────
 
 TOOL_HANDLERS = {
@@ -1158,6 +1299,8 @@ TOOL_HANDLERS = {
     "create_artifact_from_attachment": execute_create_artifact_from_attachment,
     "ask_clarifying_question": execute_ask_clarifying_question,
     "export_apaas_app_design_doc": execute_export_apaas_app_design_doc,
+    "save_binary_artifact": execute_save_binary_artifact,
+    "use_skill": execute_use_skill,
 }
 
 

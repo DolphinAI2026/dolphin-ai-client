@@ -78,3 +78,13 @@ Thumbs.db
 
 # 日志
 *.log
+
+# 桌面端构建产物(PyInstaller / x86 交叉构建), 绝不进服务镜像
+backend/.venv-x86/
+backend/build/
+backend/build-x86/
+backend/dist/
+backend/dist-x86/
+# Tauri 签名私钥, 纵深防御(Dockerfile 本就不 COPY 根目录)
+keys/
+src-tauri/

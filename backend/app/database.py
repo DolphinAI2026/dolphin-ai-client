@@ -151,6 +151,10 @@ async def init_db():
             "CREATE UNIQUE INDEX IF NOT EXISTS uq_user_username_source ON users(username, account_source)",
             "DROP INDEX IF EXISTS ix_users_username",
             "CREATE INDEX IF NOT EXISTS ix_users_username ON users(username)",
+            # 桌面 skill 二进制产物(2026-06-17): pptx/docx 落盘 + 可下载
+            "ALTER TABLE ai_chat_artifacts ADD COLUMN storage VARCHAR(10) NOT NULL DEFAULT 'text'",
+            "ALTER TABLE ai_chat_artifacts ADD COLUMN file_path VARCHAR(1000)",
+            "ALTER TABLE ai_chat_artifacts ADD COLUMN size_bytes BIGINT NOT NULL DEFAULT 0",
         ]:
             try:
                 await conn.execute(text(stmt))

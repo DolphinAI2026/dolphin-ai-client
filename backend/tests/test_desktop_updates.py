@@ -148,3 +148,48 @@ async def test_publish_rejects_bad_package_name(admin_client):
     files = [("packages", ("evil.sh", b"x", "text/plain"))]
     resp = await c.post("/desktop-updates/admin/publish", data={"manifest": manifest}, files=files)
     assert resp.status_code == 400
+
+
+@pytest.mark.asyncio
+async def test_history_requires_platform_admin(client):
+    c, _ = client
+    resp = await c.get("/desktop-updates/admin/history")
+    assert resp.status_code in (401, 403)
+
+
+@pytest.mark.asyncio
+async def test_history_records_published_version_with_notes(admin_client):
+    c, _ = admin_client
+    manifest = json.dumps({"version": "0.3.0", "notes": "新功能", "pub_date": "2026-06-17T00:00:00Z",
+                           "platforms": {"darwin-aarch64": {"signature": "s", "url": "u"}}})
+    files = [("packages", ("ruijing-0.3.0-aarch64.app.tar.gz", b"PKG", "application/gzip"))]
+    await c.post("/desktop-updates/admin/publish", data={"manifest": manifest}, files=files)
+    resp = await c.get("/desktop-updates/admin/history")
+    assert resp.status_code == 200
+    rows = resp.json()
+    row = next(r for r in rows if r["version"] == "0.3.0")
+    assert row["notes"] == "新功能"
+    assert row["is_latest"] is True
+    assert row["packages"]["aarch64"] == "ruijing-0.3.0-aarch64.app.tar.gz"
+
+
+@pytest.mark.asyncio
+async def test_history_backfills_versions_from_package_files(admin_client):
+    c, tmp = admin_client
+    # 直接放一个没有 history 记录的旧版本包文件
+    (tmp / "ruijing-0.1.9-x86_64.app.tar.gz").write_bytes(b"OLD")
+    resp = await c.get("/desktop-updates/admin/history")
+    rows = resp.json()
+    vers = [r["version"] for r in rows]
+    assert "0.1.9" in vers
+
+
+@pytest.mark.asyncio
+async def test_history_sorted_newest_first(admin_client):
+    c, tmp = admin_client
+    for v in ["0.2.9", "0.2.10", "0.2.1"]:
+        (tmp / f"ruijing-{v}-aarch64.app.tar.gz").write_bytes(b"X")
+    rows = (await c.get("/desktop-updates/admin/history")).json()
+    vers = [r["version"] for r in rows]
+    # 0.2.10 应排在 0.2.9 之前(语义化, 非字符串排序)
+    assert vers.index("0.2.10") < vers.index("0.2.9")

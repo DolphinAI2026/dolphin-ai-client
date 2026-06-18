@@ -23,17 +23,9 @@ async def _unique_tenant_code(db: AsyncSession, base: str) -> str:
     return code
 
 
-async def provision_desktop_account(
-    db: AsyncSession, username: str, password: str, *, is_platform_admin: bool = False
+async def _provision(
+    db: AsyncSession, username: str, password: str, *, is_platform_admin: bool
 ) -> User:
-    """建一个桌面账号 + 它专属的独立租户(该用户是该租户管理员)。
-
-    只 flush 不 commit —— 事务边界由调用方负责(便于组合进更大事务)。
-
-    is_platform_admin: 本地 authority 开号传 True(单机自洽 = 本机管理员, 能进平台管理
-    配自己的 LLM/aPaaS)。federation 镜像 + 公网 admin 开号必须保持 False —— 否则会给
-    每个公网账号全局超管权限(权限泄漏)。
-    """
     existing = (await db.execute(
         select(User).where(User.username == username, User.account_source == "desktop")
     )).scalar_one_or_none()
@@ -64,6 +56,24 @@ async def provision_desktop_account(
     ))
     await db.flush()
     return user
+
+
+async def provision_desktop_account(db: AsyncSession, username: str, password: str) -> User:
+    """federation 镜像 + 公网 admin 开号。**永远 is_platform_admin=False** —— 结构上
+    不接受该参, 杜绝跨 federation 提权 (信任边界铁律)。
+
+    只 flush 不 commit —— 事务边界由调用方负责(便于组合进更大事务)。
+    """
+    return await _provision(db, username, password, is_platform_admin=False)
+
+
+async def provision_local_admin_account(db: AsyncSession, username: str, password: str) -> User:
+    """仅本机 authority 单机自洽开号 (seed_desktop_account.py): 本机管理员。
+    绝不可经任何公网/federation 路径调用。
+
+    只 flush 不 commit —— 事务边界由调用方负责(便于组合进更大事务)。
+    """
+    return await _provision(db, username, password, is_platform_admin=True)
 
 
 async def verify_desktop_account(db: AsyncSession, username: str, password: str) -> Optional[User]:

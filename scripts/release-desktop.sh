@@ -12,6 +12,15 @@ ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 VERSION="${VERSION:?需要 VERSION (如 VERSION=0.2.0)}"
 NOTES="${NOTES:-}"
 BASE="https://agent.dfy.definesys.cn/account-api"
+# 凭据兜底: 若环境没传 ADMIN_USER/ADMIN_PASS, 自动从 keys/release.env 读。
+# 用 set -a 让 source 进来的变量自动导出 —— 否则 release.env 里 `ADMIN_USER=...`
+# (无 export) 经 `source` 只是非导出 shell 变量, 子进程/后续命令继承不到,
+# 走到登录步的 `${ADMIN_USER:?}` 会中断 (2026-06-18 踩过: 白构建一整轮)。
+if [ -z "${ADMIN_USER:-}" ] || [ -z "${ADMIN_PASS:-}" ]; then
+  if [ -f "$ROOT/keys/release.env" ]; then
+    set -a; . "$ROOT/keys/release.env"; set +a
+  fi
+fi
 KEY="$ROOT/keys/ruijing-updater.key"
 [ -f "$KEY" ] || { echo "缺签名私钥 $KEY"; exit 1; }
 export TAURI_SIGNING_PRIVATE_KEY="$(cat "$KEY")"
@@ -58,10 +67,25 @@ print(json.dumps(m, ensure_ascii=False, indent=2))
 PY
 
 echo "==> 平台管理员登录"
-TOKEN="$(curl -s -X POST "$BASE/api/desktop-auth/login" -H 'Content-Type: application/json' \
-  -d "{\"username\":\"${ADMIN_USER:?需要 ADMIN_USER}\",\"password\":\"${ADMIN_PASS:?需要 ADMIN_PASS}\"}" \
-  | python3 -c 'import json,sys;print(json.load(sys.stdin)["access_token"])')"
-[ -n "$TOKEN" ] || { echo "登录失败, 拿不到 token"; exit 1; }
+: "${ADMIN_USER:?需要 ADMIN_USER}"; : "${ADMIN_PASS:?需要 ADMIN_PASS}"
+# 登录带重试: 整包已构建完(产物在 /tmp), 一次瞬时网络抖动/curl 返空不该让整轮白费。
+# curl 返空/非 JSON 时 python 安全返空串而非抛栈, 重试几次再放弃。
+TOKEN=""
+for _attempt in 1 2 3 4 5; do
+  _resp="$(curl -s --max-time 30 -X POST "$BASE/api/desktop-auth/login" \
+    -H 'Content-Type: application/json' \
+    -d "{\"username\":\"$ADMIN_USER\",\"password\":\"$ADMIN_PASS\"}" || true)"
+  TOKEN="$(printf '%s' "$_resp" | python3 -c 'import json,sys
+s = sys.stdin.read().strip()
+try:
+    print(json.loads(s).get("access_token", "") if s else "")
+except Exception:
+    print("")')"
+  [ -n "$TOKEN" ] && break
+  echo "   登录第 $_attempt 次没拿到 token(瞬时?), 3s 后重试..."
+  sleep 3
+done
+[ -n "$TOKEN" ] || { echo "登录重试后仍失败。产物已在 /tmp(latest.json + *.app.tar.gz), 可稍后手动补传, 无需重新构建。"; exit 1; }
 
 echo "==> 上传 manifest + 包"
 curl -s -X POST "$BASE/desktop-updates/admin/publish" \

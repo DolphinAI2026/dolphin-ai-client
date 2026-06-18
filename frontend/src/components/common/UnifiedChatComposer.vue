@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { nextTick, ref, watch } from 'vue'
+import { computed, nextTick, ref, watch } from 'vue'
 import { getPastedImageFiles } from '@/utils/pasteImages'
 import type { UnifiedChatAttachment } from './chatComposer'
 
@@ -23,6 +23,8 @@ const props = withDefaults(defineProps<{
   sendingHint?: string
   minRows?: number
   maxHeight?: number
+  /** 可用技能(skill)列表 —— 输入 `@` 时弹轻量下拉供强指引用，空数组则不触发。 */
+  skills?: { name: string; description: string }[]
 }>(), {
   attachments: () => [],
   placeholder: '输入需求，粘贴图片或点附件...',
@@ -42,6 +44,7 @@ const props = withDefaults(defineProps<{
   sendingHint: 'Enter 排队发送 · Shift+Enter 换行',
   minRows: 1,
   maxHeight: 128,
+  skills: () => [],
 })
 
 const emit = defineEmits<{
@@ -52,10 +55,55 @@ const emit = defineEmits<{
   (e: 'files-picked', files: File[]): void
   (e: 'paste-images', files: File[]): void
   (e: 'remove-attachment', attachment: UnifiedChatAttachment, index: number): void
+  (e: 'skill-picked', name: string): void
 }>()
 
 const textareaRef = ref<HTMLTextAreaElement | null>(null)
 const fileInputRef = ref<HTMLInputElement | null>(null)
+
+// 拖拽上传：dragenter/dragleave 会在子元素间反复冒泡触发，用计数器去抖避免高亮闪烁。
+const isDragOver = ref(false)
+let dragDepth = 0
+
+// @ 技能下拉：输入末尾出现 `@filter` 时弹出，原生过滤，不引第三方 mention 库。
+const showSkillMenu = ref(false)
+const skillFilter = ref('')
+const filteredSkills = computed(() => {
+  const f = skillFilter.value.toLowerCase()
+  const list = props.skills || []
+  if (!f) return list
+  return list.filter(s =>
+    s.name.toLowerCase().includes(f) || (s.description || '').toLowerCase().includes(f),
+  )
+})
+
+function syncSkillMenu(v: string) {
+  if (!(props.skills && props.skills.length)) {
+    showSkillMenu.value = false
+    return
+  }
+  // 仅匹配光标处(输入末尾)的 `@` token；遇空格/换行/第二个 @ 终止。
+  const m = v.match(/@([^\s@]*)$/)
+  if (m) {
+    showSkillMenu.value = true
+    skillFilter.value = m[1]
+  } else {
+    showSkillMenu.value = false
+  }
+}
+
+function pickSkill(name: string) {
+  // 去掉尾部 `@filter`（光标处那段），把选择权交给使用方拼接发送前缀。
+  const v = props.modelValue.replace(/@([^\s@]*)$/, '')
+  emit('update:modelValue', v)
+  showSkillMenu.value = false
+  skillFilter.value = ''
+  emit('skill-picked', name)
+  nextTick(() => {
+    textareaRef.value?.focus()
+    resize()
+  })
+}
 
 function resize() {
   const el = textareaRef.value
@@ -65,7 +113,9 @@ function resize() {
 }
 
 function onInput(e: Event) {
-  emit('update:modelValue', (e.target as HTMLTextAreaElement).value)
+  const v = (e.target as HTMLTextAreaElement).value
+  emit('update:modelValue', v)
+  syncSkillMenu(v)
   nextTick(resize)
 }
 
@@ -79,6 +129,48 @@ function onFilesPicked(e: Event) {
   const files = Array.from(input.files || [])
   if (files.length) emit('files-picked', files)
   input.value = ''
+}
+
+function onDragEnter(e: DragEvent) {
+  if (props.disabled) return
+  // 只在拖拽包含文件时响应（拖文本/拖选区不算）。
+  if (!e.dataTransfer || !Array.from(e.dataTransfer.types || []).includes('Files')) return
+  e.preventDefault()
+  e.stopPropagation()
+  dragDepth += 1
+  isDragOver.value = true
+}
+
+function onDragOver(e: DragEvent) {
+  if (props.disabled) return
+  if (!e.dataTransfer || !Array.from(e.dataTransfer.types || []).includes('Files')) return
+  // dragover 必须 preventDefault 才能让随后的 drop 生效。
+  e.preventDefault()
+  e.stopPropagation()
+  e.dataTransfer.dropEffect = 'copy'
+  isDragOver.value = true
+}
+
+function onDragLeave(e: DragEvent) {
+  if (props.disabled) return
+  e.preventDefault()
+  e.stopPropagation()
+  dragDepth -= 1
+  if (dragDepth <= 0) {
+    dragDepth = 0
+    isDragOver.value = false
+  }
+}
+
+function onDrop(e: DragEvent) {
+  dragDepth = 0
+  isDragOver.value = false
+  if (props.disabled) return
+  e.preventDefault()
+  e.stopPropagation()
+  const files = Array.from(e.dataTransfer?.files || [])
+  // 复用与点选/粘贴相同的出口；不在此处加 accept 校验，与原生文件选择保持一致。
+  if (files.length) emit('files-picked', files)
 }
 
 function onPaste(e: ClipboardEvent) {
@@ -112,7 +204,14 @@ watch(() => props.modelValue, () => nextTick(resize))
 
 <template>
   <div class="ucc">
-    <div class="ucc-box" :class="{ 'is-disabled': disabled }">
+    <div
+      class="ucc-box"
+      :class="{ 'is-disabled': disabled, 'is-drag-over': isDragOver }"
+      @dragenter="onDragEnter"
+      @dragover="onDragOver"
+      @dragleave="onDragLeave"
+      @drop="onDrop"
+    >
       <div v-if="attachments.length" class="ucc-attachments" aria-label="已添加附件">
         <div
           v-for="(attachment, index) in attachments"
@@ -197,6 +296,19 @@ watch(() => props.modelValue, () => nextTick(resize))
       />
     </div>
 
+    <div v-if="showSkillMenu && filteredSkills.length" class="ucc-skill-menu" role="listbox">
+      <button
+        v-for="s in filteredSkills"
+        :key="s.name"
+        type="button"
+        class="ucc-skill-item"
+        @mousedown.prevent="pickSkill(s.name)"
+      >
+        <span class="ucc-skill-name">@{{ s.name }}</span>
+        <span class="ucc-skill-desc">{{ s.description }}</span>
+      </button>
+    </div>
+
     <button
       type="button"
       class="ucc-send"
@@ -226,6 +338,53 @@ watch(() => props.modelValue, () => nextTick(resize))
   align-items: flex-end;
   gap: 8px;
   width: 100%;
+  position: relative;
+}
+
+.ucc-skill-menu {
+  position: absolute;
+  left: 0;
+  right: 44px;
+  bottom: calc(100% + 6px);
+  z-index: 20;
+  max-height: 220px;
+  overflow-y: auto;
+  background: var(--surface, var(--t-bg-input, #fff));
+  border: 1px solid var(--line, var(--t-border-subtle, #dbe3ef));
+  border-radius: var(--r-3, 8px);
+  box-shadow: 0 6px 24px rgba(0, 0, 0, 0.12);
+  padding: 4px;
+}
+
+.ucc-skill-item {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  width: 100%;
+  text-align: left;
+  padding: 6px 10px;
+  border: 0;
+  background: transparent;
+  border-radius: 6px;
+  cursor: pointer;
+}
+
+.ucc-skill-item:hover {
+  background: var(--surface-2, var(--t-bg-panel, #f1f5fb));
+}
+
+.ucc-skill-name {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text, #1f2937);
+}
+
+.ucc-skill-desc {
+  font-size: 12px;
+  color: var(--text-muted, #6b7280);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .ucc-box {
@@ -241,6 +400,13 @@ watch(() => props.modelValue, () => nextTick(resize))
 .ucc-box:focus-within {
   border-color: var(--brand-ring, var(--brand, #2f6bff));
   box-shadow: 0 0 0 3px color-mix(in srgb, var(--brand, #2f6bff) 10%, transparent);
+}
+
+.ucc-box.is-drag-over {
+  border-color: var(--brand-ring, var(--brand, #2f6bff));
+  border-style: dashed;
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--brand, #2f6bff) 14%, transparent);
+  background: color-mix(in srgb, var(--brand, #2f6bff) 5%, var(--surface, var(--t-bg-input, #fff)));
 }
 
 .ucc-box.is-disabled {

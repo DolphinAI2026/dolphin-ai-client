@@ -8,6 +8,8 @@ import logging
 import os
 import re
 import shutil
+import uuid
+from datetime import datetime
 from pathlib import Path
 from typing import Optional, Annotated, AsyncIterator, Any
 import httpx
@@ -17,11 +19,12 @@ from pydantic import BaseModel
 from sse_starlette.sse import EventSourceResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, delete
+from sqlalchemy.exc import IntegrityError
 
 from app.crypto import decrypt_password
-from app.database import get_db
-from app.models import User, Conversation, Message, Project, ProjectMember, Application
-from app.deps import get_auth_context, AuthContext
+from app.database import get_db, AsyncSessionLocal
+from app.models import User, Conversation, Message, Project, ProjectMember, Application, RegisteredWorkspace
+from app.deps import get_auth_context, AuthContext, auth_from_header_or_query
 from app.coding.scenes import SceneType, get_scene, get_all_scenes, get_scenes_by_category
 from app.coding.workspace import WorkspaceManager, ProjectType
 from app.llm_client import LLMClient
@@ -60,6 +63,42 @@ SSE_HEADERS = {
     "Connection": "keep-alive",
     "X-Accel-Buffering": "no",
 }
+
+# 祖先判断: 这些系统根本身或其任意子目录都拒绝(无合法用户项目落在下面)。
+# /etc /var 等 resolve 后是 /private/etc /private/var, 由 /private 这条祖先兜住。
+_SENSITIVE_ANCESTRY_ROOTS = {
+    Path("/System"), Path("/Library"), Path("/Applications"),
+    Path("/private"), Path("/usr"), Path("/bin"), Path("/sbin"),
+    Path("/etc"), Path("/var"), Path("/dev"), Path("/opt"),
+}
+
+
+def _is_sensitive_path(rp: Path) -> bool:
+    """纯路径策略判断(传入已 resolve 的路径), 不查 fs。便于单测。"""
+    if rp == Path(rp.anchor):           # 文件系统根 /
+        return True
+    if rp == Path.home().resolve():     # 家目录根
+        return True
+    if rp == Path("/Users"):            # 家目录们的父 — 仅精确拦; 祖先拦会误杀 /Users/<x>/proj
+        return True
+    if rp.parent == Path("/Volumes"):   # 卷根 /Volumes/<x>
+        return True
+    for root in _SENSITIVE_ANCESTRY_ROOTS:
+        if rp == root or root in rp.parents:
+            return True
+    return False
+
+
+def _is_sensitive_dir(p: Path) -> bool:
+    """拒绝把系统/家目录根当工作区交给 agent。"""
+    try:
+        rp = p.resolve()
+    except Exception:
+        return True
+    if not rp.exists() or not rp.is_dir():
+        return True
+    return _is_sensitive_path(rp)
+
 
 def _event_stream_response(
     generator: AsyncIterator[str] | AsyncIterator[dict[str, Any]],
@@ -547,6 +586,74 @@ async def create_workspace(
     )
     meta["files"] = workspace_mgr.list_files(meta["id"])
     return _decorate_workspace_access(meta, access_role)
+
+
+class OpenLocalWorkspaceRequest(BaseModel):
+    abs_path: str
+    apaas_app_id: Optional[str] = None
+
+
+@router.post("/workspace/open-local")
+async def open_local_workspace(
+    req: OpenLocalWorkspaceRequest,
+    ctx: Annotated[AuthContext, Depends(get_auth_context)],
+    db: Annotated[AsyncSession, Depends(get_db)],
+):
+    """桌面: 打开用户本地文件夹当 external 工作区。指针进 DB, 不写用户文件夹。"""
+    abs_path = (req.abs_path or "").strip()
+    apaas_app_id = req.apaas_app_id
+    if not abs_path:
+        raise HTTPException(status_code=400, detail="abs_path 必填")
+    p = Path(abs_path)
+    if not p.exists() or not p.is_dir():
+        raise HTTPException(status_code=400, detail="文件夹不存在或不是目录")
+    if _is_sensitive_dir(p):
+        raise HTTPException(status_code=400, detail="该目录是系统/家目录根，过于宽泛，请选具体项目文件夹")
+    resolved_abs = str(p.resolve())
+    existing = (await db.execute(
+        select(RegisteredWorkspace).where(
+            RegisteredWorkspace.tenant_id == ctx.tenant_id,
+            RegisteredWorkspace.abs_path == resolved_abs,
+        )
+    )).scalar_one_or_none()
+    if existing:
+        existing.last_opened_at = datetime.utcnow()
+        if apaas_app_id is not None:
+            existing.apaas_app_id = apaas_app_id
+        await db.commit()
+        ws_id = existing.ws_id
+        display_name = existing.display_name
+        apaas_app_id = existing.apaas_app_id
+    else:
+        ws_id = f"{ctx.user.id}_{uuid.uuid4().hex[:8]}"
+        display_name = p.name
+        db.add(RegisteredWorkspace(
+            ws_id=ws_id, abs_path=resolved_abs, user_id=ctx.user.id, tenant_id=ctx.tenant_id,
+            workspace_type="external", apaas_app_id=apaas_app_id,
+            display_name=display_name,
+        ))
+        try:
+            await db.commit()
+        except IntegrityError:
+            await db.rollback()
+            existing = (await db.execute(
+                select(RegisteredWorkspace).where(
+                    RegisteredWorkspace.tenant_id == ctx.tenant_id,
+                    RegisteredWorkspace.abs_path == resolved_abs,
+                )
+            )).scalar_one()
+            ws_id = existing.ws_id
+            display_name = existing.display_name
+            apaas_app_id = existing.apaas_app_id
+    workspace_mgr.register_external(
+        ws_id, resolved_abs,
+        user_id=ctx.user.id, tenant_id=ctx.tenant_id,
+        apaas_app_id=apaas_app_id, display_name=display_name,
+    )
+    return {
+        "ws_id": ws_id, "disk_path": resolved_abs, "display_name": display_name,
+        "workspace_type": "external", "apaas_app_id": apaas_app_id,
+    }
 
 
 # 2026-05-19 image #25: 允许上传已有的自开发包 zip 进行二次调整。
@@ -1109,6 +1216,27 @@ async def list_workspaces(
                     if workspace_mgr.stamp_project_id(str(ws.get("id")), bound):
                         ws["project_id"] = bound
 
+    # external (打开本地文件夹) 工作区: 从 DB 注册表按租户合并进列表
+    ext_rows = (await db.execute(
+        select(RegisteredWorkspace).where(RegisteredWorkspace.tenant_id == ctx.tenant_id)
+    )).scalars().all()
+    for rw in ext_rows:
+        workspaces.append({
+            "id": rw.ws_id,
+            "display_name": rw.display_name or Path(rw.abs_path).name,
+            "folder_name": Path(rw.abs_path).name,
+            "disk_path": rw.abs_path,
+            "project_type": "external",
+            "workspace_type": "external",
+            "project_id": None,
+            "apaas_app_id": rw.apaas_app_id,
+            "tenant_id": rw.tenant_id,
+            "user_id": rw.user_id,
+            "updated_at": rw.last_opened_at.isoformat() if rw.last_opened_at else None,
+            "status": "local",
+            "project_name": rw.display_name or Path(rw.abs_path).name,
+        })
+
     decorated: list[dict[str, Any]] = []
     for ws in workspaces:
         project_id = ws.get("project_id")
@@ -1309,12 +1437,13 @@ async def manage_serve(
     ctx: Annotated[AuthContext, Depends(get_auth_context)],
     db: Annotated[AsyncSession, Depends(get_db)],
     action: str = Query(default="start", description="start 或 stop"),
+    kind: str = Query(default="web", description="serve 类型：web/mobile/h5"),
 ):
     """启动或停止工作区的 serve 进程"""
     await _ensure_workspace_access(ws_id, ctx, db, minimum_project_role="member")
     ws_mgr = WorkspaceManager()
     if action == "start":
-        result = await ws_mgr.start_serve(ws_id)
+        result = await ws_mgr.start_serve(ws_id, kind=kind)
     elif action == "stop":
         result = await ws_mgr.stop_serve(ws_id)
     else:
@@ -1332,6 +1461,65 @@ async def get_serve_status(
     await _ensure_workspace_access(ws_id, ctx, db, minimum_project_role="member")
     ws_mgr = WorkspaceManager()
     return ws_mgr.is_serve_running(ws_id)
+
+
+@router.get("/workspace/{ws_id}/serve-logs")
+async def serve_logs_stream(
+    ws_id: str,
+    ctx: Annotated[AuthContext, Depends(auth_from_header_or_query)],
+    last_seen_seq: int = Query(0, ge=0, description="上次收到的 seq；断线重连补发 > N 的历史"),
+    heartbeat_seconds: int = Query(15, ge=5, le=120, description="心跳间隔（秒）"),
+):
+    """订阅 serve 进程的实时日志（SSE）。
+
+    event 名 "log"，data = {seq, stream, line}；先补发 seq > last_seen_seq 的历史再实时跟随。
+    EventSource 无法带 header → 走 ?token= 鉴权（auth_from_header_or_query）。
+    """
+    async with AsyncSessionLocal() as check_db:
+        await _ensure_workspace_access(ws_id, ctx, check_db, minimum_project_role="member")
+
+    ws_mgr = WorkspaceManager()
+
+    async def event_stream() -> AsyncIterator[dict[str, Any]]:
+        queue: asyncio.Queue = asyncio.Queue(maxsize=512)
+
+        async def _pump_logs():
+            try:
+                async for ev in ws_mgr.iter_serve_logs(ws_id, last_seen_seq):
+                    await queue.put(("log", ev))
+            except Exception as e:
+                logger.warning("serve-logs pump err: %s", e)
+            finally:
+                await queue.put(None)
+
+        async def _pump_heartbeat():
+            while True:
+                await asyncio.sleep(heartbeat_seconds)
+                await queue.put(("heartbeat", {"seq": 0}))
+
+        pump_task = asyncio.create_task(_pump_logs())
+        hb_task = asyncio.create_task(_pump_heartbeat())
+        try:
+            while True:
+                item = await queue.get()
+                if item is None:
+                    break
+                event_name, payload = item
+                yield {
+                    "event": event_name,
+                    "id": str(payload.get("seq", 0)),
+                    "data": json.dumps(payload, ensure_ascii=False),
+                }
+        finally:
+            pump_task.cancel()
+            hb_task.cancel()
+            for t in (pump_task, hb_task):
+                try:
+                    await t
+                except (asyncio.CancelledError, Exception):
+                    pass
+
+    return _event_stream_response(event_stream(), ping=heartbeat_seconds)
 
 
 @router.post("/workspace/{ws_id}/publish")

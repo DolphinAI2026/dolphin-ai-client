@@ -13,6 +13,8 @@ from services.account_service.admin_ui import ADMIN_UI_HTML
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    from app.auth import assert_shared_backend_issuer_safety
+    assert_shared_backend_issuer_safety()
     await init_db()  # 建表 + 幂等迁移(含复合唯一)
     yield
 

@@ -11,6 +11,7 @@ from starlette.exceptions import HTTPException as StarletteHTTPException
 from starlette.responses import FileResponse
 from app.config import settings, APP_TITLE, APP_DESCRIPTION, APP_VERSION
 from app.database import init_db
+from app import runtime
 from app.routes import (
     admin_mcp,
     agent_observability,
@@ -41,6 +42,7 @@ from app.routes import (
     projects,
     requirements,
     runtime_proxy,
+    skills as skills_routes,
     spec,
     sse,
     templates,
@@ -62,6 +64,11 @@ async def lifespan(app: FastAPI):
             "生产环境请设置随机密钥(如 openssl rand -base64 32);"
             "本地开发要沿用默认 key(历史数据已用它加密)请设 ALLOW_DEFAULT_ENCRYPTION_KEY=1。"
         )
+
+    # 信任边界铁律: 非桌面 sidecar 的部署 = 共享后端, 绝不接受本地签票。
+    if not runtime.is_desktop():
+        from app.auth import assert_shared_backend_issuer_safety
+        assert_shared_backend_issuer_safety()
 
     # 启动时初始化数据库
     await init_db()
@@ -94,6 +101,16 @@ async def lifespan(app: FastAPI):
         _logging.getLogger(__name__).warning(
             "migrate_orphan_workspaces failed (非致命): %s", e,
         )
+
+    # 桌面 external 工作区: 启动从 DB 注册表恢复路径缓存
+    try:
+        from app.database import AsyncSessionLocal
+        from app.coding.workspace import restore_external_workspaces
+        async with AsyncSessionLocal() as _ws_sess:
+            await restore_external_workspaces(_ws_sess)
+    except Exception as _e:
+        import logging as _lg
+        _lg.getLogger(__name__).warning("restore_external_workspaces 失败(非致命): %s", _e)
 
     # 后台预热模板依赖缓存（不阻塞启动）
     import asyncio as _asyncio
@@ -139,6 +156,7 @@ app.include_router(desktop_auth.router, prefix="/api")
 app.include_router(conversations.router, prefix="/api")
 app.include_router(chat.router, prefix="/api")
 app.include_router(ai_chat.router, prefix="/api")
+app.include_router(skills_routes.router, prefix="/api")
 app.include_router(agent_observability.router, prefix="/api")
 app.include_router(applications.router, prefix="/api")
 app.include_router(apaas.router, prefix="/api")
@@ -418,22 +436,14 @@ async def health_check():
 # 在线版不受影响(默认 DESKTOP_MODE 未设)。必须放在所有 include_router /
 # app.mount / runtime_proxy 之后, 让显式 API/admin/反代路由优先匹配,
 # 这个 "/" 挂载只作为前端 SPA 的兜底。
-if os.environ.get("DESKTOP_MODE") == "1":
+if runtime.is_desktop():
     import logging as _logging
-    import sys as _sys
 
     _desktop_logger = _logging.getLogger(__name__)
-
-    _explicit = os.environ.get("DESKTOP_FRONTEND_DIR")
-    if _explicit:
-        _desktop_fe = Path(_explicit)
-    elif getattr(_sys, "_MEIPASS", None):  # PyInstaller 冻结态
-        _desktop_fe = Path(_sys._MEIPASS) / "frontend_dist"
-    else:  # 本机 dev
-        _desktop_fe = Path(__file__).resolve().parents[2] / "frontend" / "dist-desktop"
+    _desktop_fe = runtime.desktop_frontend_dir()
 
     if _desktop_fe.is_dir():
         app.mount("/", _SpaStaticFiles(directory=str(_desktop_fe), html=True), name="desktop-frontend")
         _desktop_logger.info("[desktop] mounted frontend SPA at / from %s", _desktop_fe)
     else:
-        _desktop_logger.warning("[desktop] DESKTOP_MODE=1 but frontend dir not found: %s", _desktop_fe)
+        _desktop_logger.warning("[desktop] desktop runtime but frontend dir not found: %s", _desktop_fe)

@@ -49,6 +49,25 @@ from app import llm_transport
 
 logger = logging.getLogger(__name__)
 
+
+def _append_skill_manifest(messages: list[dict]) -> None:
+    """把可用 skill 清单追加到 system message（渐进披露）。空集 no-op、异常不致命。
+
+    技能清单（桌面上传/平台预置）注入 system prompt，否则 use_skill 的描述指向不存在的
+    「可用技能」段、模型无从得知技能名 → use_skill 实际不可达。空集（云端/无 skill）返回空串。
+    """
+    try:
+        from app.ai_chat.skills import SkillRegistry, build_skill_manifest
+        manifest = build_skill_manifest(SkillRegistry().scan())
+    except Exception as exc:  # noqa: BLE001 — 技能扫描失败不应中断对话
+        logger.warning("skill manifest 注入失败: %r", exc)
+        return
+    if manifest and messages and isinstance(messages[0], dict) and messages[0].get("role") == "system":
+        messages[0]["content"] = (messages[0].get("content") or "") + manifest
+    elif manifest:
+        logger.warning("skill manifest skipped: messages[0] is not a system message")
+
+
 LLM_RETRY_ATTEMPTS = 2
 PERSISTED_TOOL_ARG_PREVIEW_CHARS = 240
 PERSISTED_TOOL_ARG_MAX_CHARS = 20_000
@@ -816,6 +835,9 @@ async def _run_agent_inner(
         messages[0]["content"] = (messages[0].get("content") or "") + _manifest
     elif _manifest:
         logger.warning("deferred manifest skipped: messages[0] is not a system message")
+    # 技能清单（桌面上传/平台预置）注入 system prompt，否则 use_skill 的描述指向不存在的「可用技能」段、
+    # 模型无从得知技能名 → use_skill 实际不可达。空集（云端/无 skill）no-op。
+    _append_skill_manifest(messages)
     active_tool_names: set[str] = await _reconstruct_active_tools(db, session)
 
     for turn in range(MAX_TURNS):
@@ -824,6 +846,17 @@ async def _run_agent_inner(
             yield _sse("aborted", {"turn": turn})
             yield _sse("done", {"ok": False, "aborted": True, "run_id": holder["run_id"]})
             return
+
+        # 上下文压缩：每轮 LLM 调用前压缩累积的老 tool 结果（保留最近 4 条完整，
+        # 更老的压到 200 字）。只缩 role=="tool" 的 content，不动 system/user/assistant，
+        # 保留消息结构与 tool_call_id 配对，故不破坏 OpenAI 的 assistant.tool_calls↔tool 配对。
+        # 根因：get_application 等工具被反复轮询，整段原样堆进 messages → 400 context_too_large。
+        # 对齐 coding 路径 agents/coding/agent.py 的用法。
+        try:
+            from app.context_compact import ContextCompactor
+            messages = ContextCompactor.clean_tool_results(messages, keep_recent=4)
+        except Exception as _compact_exc:  # noqa: BLE001
+            logger.warning("clean_tool_results 压缩失败，跳过本轮压缩: %s", _compact_exc)
 
         # 流式调用 LLM，逐 token 把 content_delta 推给前端
         # 2026-05-16：合并细碎 chunk —— LLM 每个汉字一个 content_delta，前端每收一个
@@ -1112,7 +1145,8 @@ async def _run_agent_inner(
             # 2026-05-24: generate_app_from_doc 改强制 artifact_id 后, 不再产新 artifact
             # (用户 write_artifact 已经落表), 从列表去掉.
             _emits_artifact = (
-                (tool_name in ("write_artifact", "edit_artifact") and tc_db.status == "success")
+                (tool_name in ("write_artifact", "edit_artifact", "save_binary_artifact")
+                 and tc_db.status == "success")
                 or (tool_name in (
                     "update_app_from_doc",
                     "export_apaas_app_design_doc",
@@ -1120,34 +1154,45 @@ async def _run_agent_inner(
             )
             if _emits_artifact:
                 from sqlalchemy import desc as _desc
-                # write_artifact: filename 在 args；generate/update_app_from_doc:
-                # 不知道 dispatcher 落 artifact 用了什么 filename，直接拉本 session
-                # 最近落的那条
-                if tool_name in ("write_artifact", "edit_artifact"):
+                # write_artifact / save_binary_artifact: filename 在 args（save_binary_artifact
+                # 默认用源文件名，但可被 filename 覆盖）→ 优先按 filename 拉；拉不到再退回最近一条。
+                # generate/update_app_from_doc: 不知道 dispatcher 落 artifact 用了什么 filename，
+                # 直接拉本 session 最近落的那条。
+                wanted_name = args.get("filename")
+                if tool_name == "save_binary_artifact" and not wanted_name:
+                    wanted_name = (args.get("source_path") or "").split("/")[-1] or None
+                art = None
+                if tool_name in ("write_artifact", "edit_artifact", "save_binary_artifact") and wanted_name:
                     res = await db.execute(
                         select(AIChatArtifact)
                         .where(
                             AIChatArtifact.session_id == session.id,
-                            AIChatArtifact.filename == args.get("filename"),
+                            AIChatArtifact.filename == wanted_name,
                         )
                         .order_by(_desc(AIChatArtifact.version))
                         .limit(1)
                     )
-                else:
+                    art = res.scalar_one_or_none()
+                if art is None:
                     res = await db.execute(
                         select(AIChatArtifact)
                         .where(AIChatArtifact.session_id == session.id)
                         .order_by(_desc(AIChatArtifact.id))
                         .limit(1)
                     )
-                art = res.scalar_one_or_none()
+                    art = res.scalar_one_or_none()
                 if art:
+                    _is_file = (getattr(art, "storage", None) or "text") == "file"
                     yield _sse("artifact_created", {
                         "id": art.id,
                         "filename": art.filename,
                         "format": art.format,
                         "version": art.version,
-                        "preview": art.content[:200],
+                        "storage": getattr(art, "storage", None) or "text",
+                        # file 产物 content 为空 → preview 给文件名，size_bytes 给真实大小，
+                        # 让前端能渲染下载卡片而非空白
+                        "preview": art.filename if _is_file else (art.content or "")[:200],
+                        "size_bytes": (art.size_bytes or 0) if _is_file else len((art.content or "").encode("utf-8")),
                     })
 
             # 特殊：ask_clarifying_question → loop 暂停等用户

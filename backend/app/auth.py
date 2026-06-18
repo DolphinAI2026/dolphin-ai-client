@@ -44,6 +44,9 @@ security = HTTPBearer()
 
 # 常量
 _ISSUER = "ai-builder"
+# 桌面 sidecar 联邦本地签票的 issuer (与共享后端的 ai-builder 区分)。
+# 由 _federation_login 在签发时使用、共享后端经 accepted_issuers_set 拒收 (见 desktop 信任边界加固计划 Task 3)。
+_DESKTOP_ISSUER = "desktop-sidecar"
 _AUDIENCE = "ai-builder-web"
 
 
@@ -79,16 +82,21 @@ def _encode(payload: dict) -> str:
 
 
 def decode_token(token: str) -> dict:
-    """解 ai-builder JWT。验签 + exp，但不验 aud（旧 JWT 没 aud）。
+    """解 ai-builder JWT。验签 + exp + issuer 白名单，但不验 aud（旧 JWT 没 aud）。
 
+    issuer 不在 settings.accepted_issuers_set 内 → 抛 JWTError (共享后端拒收本地签票)。
     抛 JWTError 由调用方接住转 401。
     """
-    return jwt.decode(
+    payload = jwt.decode(
         token,
         settings.jwt_secret_key,
         algorithms=[settings.jwt_algorithm],
         options={"verify_aud": False},
     )
+    iss = payload.get("iss")
+    if iss not in settings.accepted_issuers_set:
+        raise JWTError(f"issuer not accepted: {iss}")
+    return payload
 
 
 def create_access_token(
@@ -99,6 +107,7 @@ def create_access_token(
     apaas_user_id: Optional[str] = None,
     apaas_tenant_id: Optional[str] = None,
     username: Optional[str] = None,
+    issuer: str = _ISSUER,
 ) -> str:
     """主登录 JWT。优先从 user 对象取 apaas claims；调用方覆盖参数优先级最高。
 
@@ -128,7 +137,7 @@ def create_access_token(
         "type": "access",
         "iat": now,
         "exp": now + timedelta(minutes=minutes),
-        "iss": _ISSUER,
+        "iss": issuer,
         "aud": _AUDIENCE,
     }
     if tenant_id is not None:
@@ -207,3 +216,16 @@ async def get_current_user(
     if user is None or not user.is_active:
         raise credentials_exception
     return user
+
+
+def assert_shared_backend_issuer_safety() -> None:
+    """共享后端(在线主后端 / account-service)绝不可接受本地 sidecar 签的票。
+
+    本地 sidecar 是单机信任域, 谁控进程谁能签票自提权。一旦共享后端接受
+    desktop-sidecar issuer = 本地票可跨实例提权 = 毁掉整个信任边界。启动 fail-fast。
+    """
+    if _DESKTOP_ISSUER in settings.accepted_issuers_set:
+        raise RuntimeError(
+            f"共享后端拒绝启动: accepted_token_issuers 含 {_DESKTOP_ISSUER!r}, "
+            "本地 sidecar 签的票绝不可被共享后端接受 (信任边界铁律)。"
+        )

@@ -669,6 +669,22 @@ _WORKFLOW_PLUGIN = """
 """
 
 
+_WORKFLOW_EXTERNAL = """
+## Workflow — 在用户**已有的本地项目**里工作（不是脚手架新建）
+0. **Before tool calls**: First write a short, user-facing progress note in Chinese (1-3 sentences) explaining what you understood and what you will do next.
+1. **先读懂再动手**：用 glob_files 看整体结构，grep_search 找关键符号，read_file 读入口文件与相关模块。不要脑补结构。
+2. **读项目自带规范**：若存在 `.cursor/rules/*`、`README*`、`AGENTS.md`、`apaas.json` 等，先读，按项目自己的技术栈和约定来。
+3. **精准修改**：在现有结构内做最小改动，不要重写整份文件、不要套用某种固定脚手架模板（如 apaas form-component 七场景），跟随该项目实际写法。
+4. **构建/验证按项目实际来**：有 package.json 且任务需要时才 `npm run build` / 对应命令；没有就不要假设构建方式。
+5. 改完简要说明改了什么、为什么。
+
+## CRITICAL Rules
+- 这是**用户自己的项目**，谨慎对待已有文件：不删不相关内容、不引入与项目约定不符的依赖或风格。
+- 不假设固定 templateType / 目录结构；一切以读到的真实代码为准。
+- 进度提示对用户可见，简短具体友好，不要倾倒长篇推理。
+"""
+
+
 _WORKFLOW_BACKEND_API = """
 ## Workflow — IMPORTANT: Be efficient! Minimize tool calls.
 0. **Before tool calls**: First write a short, user-facing progress note in Chinese (1-3 sentences) explaining what you understood and what you will do next.
@@ -835,6 +851,9 @@ def build_user_prompt(
         workflow = _WORKFLOW_PLUGIN
     elif project_type == "backend-api":
         workflow = _WORKFLOW_BACKEND_API
+    elif project_type == "external":
+        # 打开本地文件夹 = 用户已有项目, 走通用「读懂再精准改」流程, 不套 apaas 脚手架模板
+        workflow = _WORKFLOW_EXTERNAL
     elif not project_type:
         # 空 project_type → 没挂 workspace 的裸调用（单元测试 / 调试）
         # 默认走 form-component-dual（当前产品主力类型），保持能跑。

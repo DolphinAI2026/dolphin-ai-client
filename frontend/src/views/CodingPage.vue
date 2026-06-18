@@ -204,6 +204,24 @@
                     <pre v-if="streamCustom(message).sm.content.includes('\n')" class="command-output">{{ streamCustom(message).sm.content.split('\n').slice(1).join('\n') }}</pre>
                   </div>
                 </template>
+                <!-- run_result（对话驱动运行/调试结果卡）-->
+                <template v-else-if="streamCustom(message).sm.type === 'run_result' && streamCustom(message).sm.run">
+                  <div class="coding-run-card">
+                    <div class="rc-head">
+                      <span class="rc-dot" :class="streamCustom(message).sm.run.status" />
+                      <span class="rc-title">
+                        {{ streamCustom(message).sm.run.source === 'autofix' ? `自愈第 ${streamCustom(message).sm.run.round + 1} 轮` : '运行预览' }}
+                        · {{ rcStatusText(streamCustom(message).sm.run) }}
+                      </span>
+                      <button v-if="streamCustom(message).sm.run.dev_url" class="rc-link" @click="focusPreview(streamCustom(message).sm.run)">查看预览</button>
+                    </div>
+                    <div v-if="streamCustom(message).sm.run.dev_url" class="rc-url">{{ streamCustom(message).sm.run.dev_url }}</div>
+                    <ul v-if="streamCustom(message).sm.run.errors.length" class="rc-errs">
+                      <li v-for="(e, ei) in streamCustom(message).sm.run.errors.slice(0, 5)" :key="ei">{{ e }}</li>
+                    </ul>
+                    <div v-if="!streamCustom(message).sm.run.capture_available" class="rc-degrade">运行时抓取不可用（需 dev 模式）</div>
+                  </div>
+                </template>
                 <!-- thinking / status / tool 已迁移到 AgentConversation 原生 kind（见 agentMessages 映射）-->
               </template>
             </template>
@@ -308,34 +326,45 @@
 
       </div>
 
-      <!-- Task 7: 原生文件树 + 代码查看器（常驻右栏，替换 IDE 抽屉视图） -->
+      <!-- Task 7 + SP1 C4: 文件/代码 ⇄ 运行/调试 双 tab 右栏 -->
       <div
         v-if="showWorkspacePane"
         class="ws-pane"
       >
-        <FileTree
-          class="ws-pane-tree"
-          :style="{ width: treePaneWidth + 'px' }"
-          :tree="wsFileTree"
-          :changed="changedPaths"
-          :changes="wsGitChanges"
-          :selected="selectedFile"
+        <div class="ws-pane-tabs">
+          <button :class="{ active: wsPaneTab === 'files' }" @click="wsPaneTab = 'files'">文件 / 代码</button>
+          <button :class="{ active: wsPaneTab === 'run' }" @click="wsPaneTab = 'run'">预览</button>
+        </div>
+        <div v-show="wsPaneTab === 'files'" class="ws-pane-files">
+          <FileTree
+            class="ws-pane-tree"
+            :style="{ width: treePaneWidth + 'px' }"
+            :tree="wsFileTree"
+            :changed="changedPaths"
+            :changes="wsGitChanges"
+            :selected="selectedFile"
+            :ws-id="codingStore.workspace?.id || ''"
+            @select="onTreeSelect"
+            @select-line="onTreeSelectLine"
+            @accept-all="acceptAllWorkspaceChanges"
+          />
+          <div class="tree-resizer" title="拖拽调整文件树宽度" @pointerdown="onTreeResizeStart" />
+          <CodeViewer
+            class="ws-pane-viewer"
+            :ws-id="codingStore.workspace?.id || ''"
+            :file-path="selectedFile"
+            :diff="selectedGitChange ? null : selectedDiff"
+            :change="selectedGitChange"
+            :focus-line="viewerFocusLine"
+            :dark="themeStore.isDark"
+            @quote="onViewerQuote"
+            @accept-change="acceptWorkspaceChange"
+          />
+        </div>
+        <RunDebugPanel
+          v-show="wsPaneTab === 'run'"
           :ws-id="codingStore.workspace?.id || ''"
-          @select="onTreeSelect"
-          @select-line="onTreeSelectLine"
-          @accept-all="acceptAllWorkspaceChanges"
-        />
-        <div class="tree-resizer" title="拖拽调整文件树宽度" @pointerdown="onTreeResizeStart" />
-        <CodeViewer
-          class="ws-pane-viewer"
-          :ws-id="codingStore.workspace?.id || ''"
-          :file-path="selectedFile"
-          :diff="selectedGitChange ? null : selectedDiff"
-          :change="selectedGitChange"
-          :focus-line="viewerFocusLine"
           :dark="themeStore.isDark"
-          @quote="onViewerQuote"
-          @accept-change="acceptWorkspaceChange"
         />
       </div>
 
@@ -579,7 +608,7 @@ import AppIcon from '@/components/common/AppIcon.vue'
 import type { PlatformEnv } from '@/api/platformEnv'
 import { useUserStore } from '@/stores/user'
 import { codingApi } from '@/api/coding'
-import { openExternal } from '@/utils/openExternal'
+import { openExternal } from '@/utils/desktop'
 import type { CodingConversation, WorkspaceInfo, ReplayStreamMessage } from '@/api/coding'
 import CodingSceneEntry from './coding/CodingSceneEntry.vue'
 import InstallModal from './coding/InstallModal.vue'
@@ -599,6 +628,7 @@ import UnifiedChatComposer from '@/components/common/UnifiedChatComposer.vue'
 import type { UnifiedChatAttachment } from '@/components/common/chatComposer'
 import FileTree from './coding/FileTree.vue'
 import CodeViewer from './coding/CodeViewer.vue'
+import RunDebugPanel from './coding/RunDebugPanel.vue'
 import { buildFileTree, type TreeNode } from './coding/fileTree'
 import { getCodingMainPaneStyle, shouldShowWorkspacePane } from './coding/codingLayout'
 import { collectChangedFiles, normalizeWorkspacePathLabel, type FileChangeMsg } from './coding/workspaceChanges'
@@ -838,6 +868,7 @@ watch(() => codingStore.workspace?.id, () => {
 
 // 工作区打开 → 代码为主三栏布局（文件树 | 大代码区 | 右聊天）；未进工作区时维持原引导/新建流程
 const codeFirst = computed(() => !!codingStore.workspace?.id && !embeddedAppId.value)
+const wsPaneTab = ref<'files' | 'run'>('files')
 // 右侧聊天列可拖宽（复用 config 的 usePanelResize，handle 在聊天列左边界）
 const { panelWidth: chatPaneWidth, onResizeStart: onChatResizeStart } = usePanelResize({
   storageKey: 'coding:chat-pane-width',
@@ -1000,6 +1031,20 @@ const agentMessages = computed<AgentMessage[]>(() => {
 function streamCustom(message: AgentMessage): { sm: any; isLast: boolean } {
   const meta = (message.meta || {}) as { streamMsg?: any; isLast?: boolean }
   return { sm: meta.streamMsg || {}, isLast: !!meta.isLast }
+}
+
+// 运行结果卡（type=run_result）的状态文案 + 「查看预览」聚焦到预览位
+function rcStatusText(r: any): string {
+  if (!r) return ''
+  if (r.status === 'running') return '运行中…'
+  if (r.status === 'ok') return r.capture_available ? '通过，无报错' : '已启动'
+  return `${(r.errors || []).length} 个报错`
+}
+function focusPreview(r: any) {
+  if (r?.dev_url) {
+    codingStore.activePreview = { dev_url: r.dev_url, status: r.status, errors: r.errors, capture_available: r.capture_available, round: r.round }
+  }
+  wsPaneTab.value = 'run'
 }
 
 /** Coding 的 tool StreamMessage(展示字符串模型,content='📖 读取 X' / '🔧 <display>',

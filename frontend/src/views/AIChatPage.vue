@@ -87,6 +87,14 @@
             @click="artifactsPanelOpen = !artifactsPanelOpen"
             :title="artifactsPanelOpen ? '收起设计文档' : '展开设计文档'"
           ><AppIcon name="file" :size="14" /> 设计文档 <span class="badge">{{ artifacts.length }}</span></button>
+          <button
+            v-if="currentSession"
+            class="save-skill-btn"
+            title="把本次会话产出整理成一个可复用技能"
+            @click="onSaveAsSkill"
+          >
+            <AppIcon name="sparkles" :size="14" /> 存成技能
+          </button>
         </div>
       </header>
 
@@ -245,9 +253,11 @@
           :multiple="true"
           accept=".md,.markdown,.txt,.doc,.docx,.pdf,.xls,.xlsx,.csv,.json,.png,.jpg,.jpeg,.gif,.webp,.svg,.html,.htm,.yaml,.yml,.xml,.zip"
           placeholder="输入需求，粘贴图片或点附件..."
+          :skills="availableSkills"
           @send="currentSession ? onSend() : onDraftSend()"
           @stop="onAbort"
           @files-picked="onComposerFilesPicked"
+          @skill-picked="onSkillPicked"
           @remove-attachment="removePendingFileByIndex"
         >
           <template #footer-left>
@@ -302,15 +312,17 @@
           <span class="art-card-vbadge">v{{ latestVersionFor(fname) }}</span>
         </div>
       </div>
-      <div class="art-preview" v-if="activeArtifactContent">
+      <div class="art-preview" v-if="activeArtifactContent || activeArtifactIsFile">
         <div class="art-preview-head">
-          <!-- 2 tabs — 渲染 / 原文 -->
+          <!-- 2 tabs — 渲染 / 原文（二进制产物无正文，仅展示下载卡，隐藏文本 tab）-->
           <button
+            v-if="!activeArtifactIsFile"
             class="small-btn"
             :class="{ active: panelTab === 'rendered' }"
             @click="panelTab = 'rendered'"
           >渲染</button>
           <button
+            v-if="!activeArtifactIsFile"
             class="small-btn"
             :class="{ active: panelTab === 'raw' }"
             @click="panelTab = 'raw'"
@@ -328,8 +340,8 @@
             </option>
           </select>
           <span class="art-preview-spacer"></span>
-          <span class="art-meta-text">{{ artifactStats }}</span>
-          <button class="small-btn" @click="copyArtifact" title="复制">⧉</button>
+          <span class="art-meta-text">{{ activeArtifactIsFile ? artifactFileStats : artifactStats }}</span>
+          <button v-if="!activeArtifactIsFile" class="small-btn" @click="copyArtifact" title="复制">⧉</button>
           <button class="small-btn" @click="downloadArtifact" title="下载">⤓</button>
           <!-- 设计文档完成 → 一键让 agent 调 generate_app_from_doc 工具创建应用。
                之前 agent 文案让用户切到「AI 需求分析」菜单 — 那个菜单已删；
@@ -349,7 +361,14 @@
           >在 Builder 中调整</button>
         </div>
         <!-- Tab body -->
-        <pre v-if="panelTab === 'raw'" class="art-preview-body">{{ activeArtifactContent }}</pre>
+        <!-- 二进制产物（.pptx/.docx/.xlsx 等）：无正文可渲染，给一张明确的下载卡 -->
+        <div v-if="activeArtifactIsFile" class="art-file-card">
+          <span class="art-file-icon"><AppIcon name="file" :size="40" /></span>
+          <div class="art-file-name">{{ activeArtifactName }}</div>
+          <div class="art-file-meta">{{ artifactFileStats }}</div>
+          <button class="small-btn primary art-file-download" @click="downloadArtifact">下载文件</button>
+        </div>
+        <pre v-else-if="panelTab === 'raw'" class="art-preview-body">{{ activeArtifactContent }}</pre>
         <!-- HTML 产物: 用沙箱 iframe 原样渲染(等同本地打开), 不要走 markdown 渲染器
              (markdown 会把缩进的 HTML 当代码块, 且不应用文件自带 <style>)。 -->
         <!-- sandbox 不给 allow-scripts: AI 产出的 HTML 可能含恶意/越权脚本, 而 allow-same-origin
@@ -471,6 +490,7 @@ import type { AgentMessage } from '@/components/common/agent-conversation/types'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { isImageFile } from '@/utils/pasteImages'
 import UnifiedChatComposer from '@/components/common/UnifiedChatComposer.vue'
+import { listSkills } from '@/api/skills'
 import BuilderModelPicker from '@/components/common/BuilderModelPicker.vue'
 import AppIcon from '@/components/common/AppIcon.vue'
 import type { UnifiedChatAttachment } from '@/components/common/chatComposer'
@@ -651,6 +671,15 @@ function resetChatTenantState() {
 }
 
 const inputText = ref('')
+// 技能库（输入框 @ 引用）—— onMounted 拉一次；无 skill 库则空、@ 不弹。
+const availableSkills = ref<{ name: string; description: string }[]>([])
+onMounted(() => {
+  listSkills().then((s) => { availableSkills.value = s }).catch(() => { /* 无 skill 库则空 */ })
+})
+function onSkillPicked(name: string) {
+  const prefix = `请使用技能 ${name}：`
+  inputText.value = inputText.value ? `${prefix}${inputText.value}` : prefix
+}
 const pendingFiles = ref<File[]>([])
 const messagesRef = ref<HTMLElement>()
 const composerAttachments = computed<UnifiedChatAttachment[]>(() =>
@@ -1889,6 +1918,22 @@ async function onDraftSend() {
   }
 }
 
+const SKILL_AUTHORING_PROMPT =
+  '回顾我们这次对话里完成的可复用做法，把它沉淀成一个技能（skill）。请：'
+  + '1) 想清楚这个技能解决什么问题、什么时候该用（写进 description，用第三人称「Use when …」触发式）；'
+  + '2) 把步骤写成具体编号指令（instructions）；'
+  + '3) 有确定性逻辑就写成 helper 脚本而非长说明；'
+  + '4) 技能名用英文 kebab-case。'
+  + '然后用 search_tools 找到并激活 create_skill 工具，调它把技能存进我的技能库。'
+  + '存好后告诉我技能名，并提示我可以在技能库 / Skill IDE 里继续编辑。'
+
+async function onSaveAsSkill() {
+  if (!currentSession.value) return
+  inputText.value = SKILL_AUTHORING_PROMPT
+  await nextTick()
+  onSend()
+}
+
 async function onSend() {
   if (!currentSession.value) return
   // 流式中按发送 → 进队列（仅文字，不带附件 — 附件场景太复杂留待后续）
@@ -2060,11 +2105,13 @@ async function onSelectArtifactVersion(versionStr: string) {
   }
 }
 
-// 自动选首个 artifact 作为右栏默认显示
+// 自动选首个 artifact 作为右栏默认显示。
+// 注意：二进制产物 content 恒为空，不能只看 activeArtifactContent —— 否则它每次
+// watch 都会被当成"还没选"反复重新加载。改用 activeArtifactName 判断是否已有选中。
 watch(
   [() => artifactsPanelOpen.value, () => artifacts.value.length],
   ([open, n]) => {
-    if (open && n > 0 && !activeArtifactContent.value && uniqueFilenames.value[0]) {
+    if (open && n > 0 && !activeArtifactName.value && uniqueFilenames.value[0]) {
       loadArtifactByName(uniqueFilenames.value[0])
     }
   },
@@ -2082,6 +2129,17 @@ const artifactStats = computed(() => {
   const lines = c ? c.split('\n').length : 0
   const chars = c.length
   return `${lines} 行 · ${chars} 字符`
+})
+
+// 二进制产物的体积展示（B / KB / MB）
+const artifactFileStats = computed(() => {
+  const fmt = (activeArtifactRow.value?.format || '').toUpperCase()
+  const bytes = activeArtifactRow.value?.size_bytes ?? 0
+  let sizeText: string
+  if (bytes >= 1024 * 1024) sizeText = `${(bytes / (1024 * 1024)).toFixed(1)} MB`
+  else if (bytes >= 1024) sizeText = `${(bytes / 1024).toFixed(1)} KB`
+  else sizeText = `${bytes} 字节`
+  return fmt ? `${fmt} · ${sizeText}` : sizeText
 })
 
 async function loadArtifact(a: AIChatArtifact) {
@@ -2113,6 +2171,22 @@ const isHtmlArtifact = computed<boolean>(() => {
   const head = (activeArtifactContent.value || '').trimStart().slice(0, 200).toLowerCase()
   return head.startsWith('<!doctype html') || head.startsWith('<html')
 })
+
+// 当前打开 filename 的最新行（含 storage/size_bytes 等元数据）
+const activeArtifactRow = computed<AIChatArtifact | null>(() => {
+  const fname = activeArtifactName.value
+  if (!fname) return null
+  return artifacts.value
+    .filter(a => a.filename === fname)
+    .sort((x, y) => y.version - x.version)[0] || null
+})
+
+// 二进制产物（storage=='file'，如 .pptx/.docx/.xlsx）—— content 为空，
+// 预览面板要单独渲染一张下载卡，否则面板被 v-if="activeArtifactContent" 整块吞掉、
+// 下载按钮永远不可达（兑现工具返回语"用户已能在右侧面板下载"的关键）。
+const activeArtifactIsFile = computed<boolean>(() =>
+  (activeArtifactRow.value?.storage || '') === 'file'
+)
 
 const canSendArtifactToBuilder = computed(() =>
   !!activeArtifactName.value
@@ -2506,11 +2580,28 @@ async function sendArtifactToBuilderByName(filename: string) {
 }
 
 function downloadArtifact() {
+  const fname = activeArtifactName.value
+  if (!fname || !currentSession.value) return
+  // 二进制产物（storage=='file'，如 .pptx/.docx/.xlsx）走后端 download 端点，
+  // 否则本地 Blob 会下出一个空文本文件。
+  const latest = artifacts.value
+    .filter(a => a.filename === fname)
+    .sort((x, y) => y.version - x.version)[0]
+  if (latest && latest.storage === 'file') {
+    const url = aiChatApi.artifactDownloadUrl(currentSession.value.id, fname, latest.version)
+    const a = document.createElement('a')
+    a.href = url
+    a.download = fname
+    document.body.appendChild(a)
+    a.click()
+    a.remove()
+    return
+  }
   const blob = new Blob([activeArtifactContent.value], { type: 'text/plain;charset=utf-8' })
   const url = URL.createObjectURL(blob)
   const a = document.createElement('a')
   a.href = url
-  a.download = activeArtifactName.value
+  a.download = fname
   a.click()
   URL.revokeObjectURL(url)
 }
@@ -2586,6 +2677,29 @@ onMounted(async () => {
     } catch (e) {
       console.error('AI Builder 二次开发交接失败', e)
       ElMessage.error('进入二次开发失败')
+    }
+    return
+  }
+
+  // 从技能库页「AI 生成技能」入口结构化交接：读 sessionStorage，建会话发起技能创作对话。
+  const skillRaw = route.query.skill_authoring === '1'
+    ? sessionStorage.getItem('ai_builder_pending_skill_authoring')
+    : null
+  if (!currentSession.value && skillRaw) {
+    sessionStorage.removeItem('ai_builder_pending_skill_authoring')
+    try {
+      const payload = JSON.parse(skillRaw) as { message?: string }
+      const created = await aiChatApi.createSession({ selected_llm_config_id: selectedLlmId.value })
+      sessions.value.unshift(created)
+      await loadSession(created.id)
+      inputText.value = (payload.message || '').trim()
+        || '我要做一个新技能（skill）。请先问我它要解决什么场景、什么时候触发，再帮我写 SKILL.md 和必要的 helper 脚本，然后用 search_tools 激活 create_skill 存进我的技能库。'
+      router.replace({ path: `/ai-chat/${created.id}` })
+      await nextTick()
+      onSend()
+    } catch (e) {
+      console.error('AI 生成技能交接失败', e)
+      ElMessage.error('进入技能生成失败')
     }
     return
   }
@@ -3949,6 +4063,21 @@ onMounted(async () => {
   font-family: ui-monospace, Menlo, monospace; font-size: 11.5px;
   color: var(--ac-text-mute); white-space: pre-wrap; word-break: break-word;
 }
+/* 二进制产物下载卡: content 为空时给一张明确的下载入口 */
+.art-file-card {
+  flex: 1 1 auto;
+  display: flex; flex-direction: column; align-items: center; justify-content: center;
+  gap: 10px; padding: 48px 24px; text-align: center;
+}
+.art-file-icon { color: var(--ac-text-faint); opacity: 0.8; }
+.art-file-name {
+  font-size: 14px; font-weight: 600; color: var(--ac-text);
+  word-break: break-all; max-width: 100%;
+}
+.art-file-meta {
+  font-family: ui-monospace, Menlo, monospace; font-size: 11.5px; color: var(--ac-text-faint);
+}
+.art-file-download { margin-top: 8px; padding: 6px 18px; font-size: 12.5px; }
 /* HTML 产物预览: 沙箱 iframe 铺满预览区, 白底(等同本地打开浏览器) */
 .art-preview-frame {
   flex: 1 1 auto;

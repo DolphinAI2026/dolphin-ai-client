@@ -615,6 +615,41 @@ a{color:var(--text-link);text-decoration:none}
           </div>
         </div>
 
+        <!-- ---------- 版本历史 ---------- -->
+        <div v-else-if="page==='versions'" class="page">
+          <div class="page-head">
+            <div class="ph-main">
+              <div class="page-title">版本历史</div>
+              <div class="page-desc">桌面端发布的所有版本。用户启动或点「检查更新」会自动升级到最新版。</div>
+            </div>
+            <div class="ph-actions">
+              <el-button :loading="loadingVer" @click="loadVersions"><ico name="refresh" :size="15"></ico>&nbsp;刷新</el-button>
+            </div>
+          </div>
+          <div class="card">
+            <el-table :data="versions" v-loading="loadingVer" style="width:100%" empty-text="暂无发布记录">
+              <el-table-column label="版本" width="170">
+                <template #default="{ row }">
+                  <span class="num" style="font-weight:600">v{{ row.version }}</span>
+                  <sbadge v-if="row.is_latest" tone="green" dot style="margin-left:8px">当前最新</sbadge>
+                </template>
+              </el-table-column>
+              <el-table-column label="发布时间" width="190">
+                <template #default="{ row }"><span class="tabular" style="color:var(--text-secondary)">{{ fmtTime(row.published_at) }}</span></template>
+              </el-table-column>
+              <el-table-column label="更新说明" min-width="300">
+                <template #default="{ row }"><span style="color:var(--text-secondary)">{{ row.notes || '—' }}</span></template>
+              </el-table-column>
+              <el-table-column label="下载" width="180">
+                <template #default="{ row }">
+                  <a v-if="row.packages.aarch64" :href="API+'/desktop-updates/'+row.packages.aarch64" download style="color:var(--accent);text-decoration:none;margin-right:14px;font-size:13px">Apple 芯片</a>
+                  <a v-if="row.packages.x86_64" :href="API+'/desktop-updates/'+row.packages.x86_64" download style="color:var(--accent);text-decoration:none;font-size:13px">Intel</a>
+                </template>
+              </el-table-column>
+            </el-table>
+          </div>
+        </div>
+
         <!-- ---------- P3 placeholders ---------- -->
         <div v-else-if="page==='tenants'" class="page">
           <div class="page-head"><div class="ph-main"><div class="page-title">租户管理</div><div class="page-desc">列租户 / 租户详情(成员 · 配额 · 绑定 aPaaS 环境)</div></div></div>
@@ -702,6 +737,7 @@ const app = createApp({
     const NAV = [
       { key:'dashboard', label:'概览', icon:'grid' },
       { key:'accounts', label:'账号管理', icon:'users' },
+      { key:'versions', label:'版本历史', icon:'download' },
       { key:'tenants', label:'租户管理', icon:'building' },
       { key:'logs', label:'登录日志', icon:'file' },
       { key:'audit', label:'操作审计', icon:'shield' },
@@ -712,6 +748,7 @@ const app = createApp({
     const loginForm = reactive({ username:'', password:'' })
     const page = ref('dashboard')
     const accounts = ref([])
+    const versions = ref([]), loadingVer = ref(false)
     const loading = ref(false), loggingIn = ref(false), creating = ref(false)
     const q = ref(''), fStatus = ref(''), fRole = ref(''), fTenant = ref('')
     const selected = ref([])
@@ -772,7 +809,19 @@ const app = createApp({
     }))
 
     /* ---- nav ---- */
-    const go = (key) => { detail.value=null; page.value=key }
+    const go = (key) => { detail.value=null; page.value=key; if(key==='versions' && token.value) loadVersions() }
+    const fmtTime = (iso) => {
+      if(!iso) return '—'
+      const d = new Date(iso); if(isNaN(d.getTime())) return iso
+      const p = n => String(n).padStart(2,'0')
+      return d.getFullYear()+'-'+p(d.getMonth()+1)+'-'+p(d.getDate())+' '+p(d.getHours())+':'+p(d.getMinutes())
+    }
+    async function loadVersions(){
+      loadingVer.value = true
+      try{ const { data } = await axios.get(API+'/desktop-updates/admin/history', auth()); versions.value = data }
+      catch(e){ err(e,'加载版本历史失败') }
+      finally{ loadingVer.value = false }
+    }
     const resetFilters = () => { q.value=''; fStatus.value=''; fRole.value=''; fTenant.value='' }
     const onSel = (rows) => { selected.value = rows.map(r=>r.username) }
     const clearSel = () => { selected.value = [] }
@@ -877,6 +926,7 @@ const app = createApp({
       fmt, initials, tint, pct,
       go, resetFilters, onSel, clearSel, openDetail, closeDetail, comingSoon,
       login, logout, loadAccounts, openCreate, createAccount, setActive, resetPwd, bulkSet,
+      versions, loadingVer, loadVersions, fmtTime,
     }
   }
 })

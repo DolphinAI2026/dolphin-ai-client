@@ -7,7 +7,7 @@
     <!-- ═══════════ 左 RAIL ═══════════ -->
     <aside class="rail" :class="{ 'rail-collapsed': railCollapsed }">
       <div class="rail-brand">
-        <button class="rail-logo" type="button" :aria-label="railCollapsed ? '展开导航' : '平台管理首页'" @click="railCollapsed ? toggleRailCollapsed() : router.push('/mcp')">
+        <button class="rail-logo" type="button" :aria-label="railCollapsed ? '展开导航' : '平台管理首页'" @click="railCollapsed ? toggleRailCollapsed() : router.push('/status')">
           <svg width="17" height="17" viewBox="0 0 24 24" fill="none">
             <rect x="3" y="3" width="8" height="8" rx="2.2" fill="white" />
             <rect x="13" y="3" width="8" height="8" rx="2.2" fill="rgba(255,255,255,0.68)" />
@@ -128,6 +128,7 @@ interface MenuItem {
 }
 
 const menus: MenuItem[] = [
+  { path: '/status',      label: '平台总览',  icon: 'dashboard', closable: false },
   { path: '/mcp',         label: 'MCP 接入',  icon: 'connection' },
   { path: '/tester',      label: 'MCP 测试',  icon: 'flask' },
   { path: '/logs',        label: '调用日志',  icon: 'logs' },
@@ -274,7 +275,7 @@ function onLogout() {
       window.parent?.postMessage({ type: 'admin-logout' }, parentOrigin)
     }
   }
-  router.replace('/mcp')
+  router.replace('/status')
 }
 
 function returnWorkspace() {
@@ -313,6 +314,7 @@ function returnWorkspace() {
 }
 
 const ICONS: Record<string, string> = {
+  dashboard: '<rect x="3" y="3" width="7" height="7" rx="1.5"/><rect x="14" y="3" width="7" height="7" rx="1.5"/><rect x="3" y="14" width="7" height="7" rx="1.5"/><rect x="14" y="14" width="7" height="7" rx="1.5"/>',
   connection: '<path d="M9 12L11 14L15 10"/><path d="M21 12A9 9 0 1 1 12 3"/>',
   flask: '<path d="M9 3h6"/><path d="M10 3v6.5L6 17a2 2 0 0 0 1.7 3h8.6A2 2 0 0 0 18 17l-4-7.5V3"/><path d="M9 13h6"/>',
   logs: '<path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 10 12 15 7 10"/><line x1="12" y1="15" x2="12" y2="3"/>',

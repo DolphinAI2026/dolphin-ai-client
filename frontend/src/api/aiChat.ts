@@ -78,6 +78,8 @@ export interface AIChatArtifact {
   filename: string
   format: string
   version: number
+  /** 'text'（默认，content 即正文）/ 'file'（二进制产物，走 download 端点） */
+  storage?: string
   preview: string
   size_bytes: number
   content?: string
@@ -128,6 +130,15 @@ export const aiChatApi = {
   },
   listArtifactVersions(id: number, filename: string): Promise<{ versions: AIChatArtifact[] }> {
     return request.get<any, { versions: AIChatArtifact[] }>(`/ai-chat/sessions/${id}/artifacts/${encodeURIComponent(filename)}/versions`)
+  },
+  /** 二进制产物（storage=='file'）的下载地址 —— 带 token query 让浏览器直接 GET 拿文件 */
+  artifactDownloadUrl(id: number, filename: string, version?: number): string {
+    const token = localStorage.getItem('token') || ''
+    const params = new URLSearchParams()
+    if (version != null) params.set('version', String(version))
+    if (token) params.set('token', token)
+    const qs = params.toString()
+    return `${API_PREFIX}/ai-chat/sessions/${id}/artifacts/${encodeURIComponent(filename)}/download${qs ? `?${qs}` : ''}`
   },
   /**
    * SSE 发送消息 — 直接 fetch + 流式读 ReadableStream，支持 abort

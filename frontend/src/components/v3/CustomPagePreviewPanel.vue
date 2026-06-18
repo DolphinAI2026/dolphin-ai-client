@@ -21,11 +21,11 @@
     </header>
 
     <!-- 自开发组件独立运行 host (backend 提供 Vue2+ElementUI 宿主 + 拉 bundle + mount) -->
-    <div v-if="hostUrl" class="cpp-frame-wrap">
+    <div v-if="previewSrc" class="cpp-frame-wrap">
       <iframe
         :key="iframeKey"
         class="cpp-frame"
-        :src="hostUrl"
+        :src="previewSrc"
         sandbox="allow-same-origin allow-scripts allow-forms allow-popups allow-modals allow-downloads"
         title="自开发整页组件预览"
       />
@@ -48,10 +48,11 @@
 </template>
 
 <script setup lang="ts">
-import { ref, computed } from 'vue'
+import { ref, computed, onMounted, watch } from 'vue'
 import { useRouter } from 'vue-router'
 import { useUserStore } from '@/stores/user'
 import AppIcon from '@/components/common/AppIcon.vue'
+import { codingApi } from '@/api/coding'
 
 const props = defineProps<{
   appId: number
@@ -66,6 +67,25 @@ const userStore = useUserStore()
 
 const iframeKey = ref(0)
 
+// SP1 C3: 若该应用绑定的工作区正在 npm run serve, 预览直吃 dev server(带 HMR);
+// 否则回退到既有 UMD custom-page-host(已部署/只读态)。
+const devServerPort = ref<number | null>(null)
+
+async function refreshDevTarget() {
+  devServerPort.value = null
+  if (!props.appId || !props.menuId) return
+  const tok = userStore.token || localStorage.getItem('token') || ''
+  try {
+    const r = await codingApi.customPageDevTarget(props.appId, props.menuId, tok)
+    if (r.dev_running && r.port) devServerPort.value = r.port
+  } catch {
+    devServerPort.value = null
+  }
+}
+
+onMounted(refreshDevTarget)
+watch(() => [props.appId, props.menuId], refreshDevTarget)
+
 // 自开发组件独立运行 host — backend 解析 menu_id → bundle, 返 Vue2+ElementUI 宿主页.
 // _k 用于 ↻ 刷新强制 reload; _auth 走 query 传 token (iframe src GET 带不了 header).
 const hostUrl = computed(() => {
@@ -74,6 +94,12 @@ const hostUrl = computed(() => {
   return `/api/applications/${props.appId}/custom-page-host`
     + `?menu_id=${encodeURIComponent(props.menuId)}`
     + `&_auth=${encodeURIComponent(tok)}&_k=${iframeKey.value}`
+})
+
+// dev server 运行中 → 直连 dev URL(HMR);否则 → UMD host(保留作部署/只读回退)。
+const previewSrc = computed(() => {
+  if (devServerPort.value) return `http://127.0.0.1:${devServerPort.value}/`
+  return hostUrl.value
 })
 
 function onGoToCoding() {

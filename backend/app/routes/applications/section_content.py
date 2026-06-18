@@ -120,6 +120,41 @@ async def _auto_bind_custom_page_workspace(
     return None
 
 
+async def resolve_custom_page_dev_target(
+    db: AsyncSession,
+    *,
+    app_id: int,
+    tenant_id: int,
+    user_id: int,
+    bundle_dir: str,
+    component_tag: str,
+) -> dict:
+    """Resolve whether a dev server (npm run serve) is live for the workspace bound
+    to this custom page, so the preview panel can switch src dev-URL ⇄ UMD host.
+
+    Returns {"dev_running": bool, "port": int | None, "ws_id": str | None}.
+    Reuses _auto_bind_custom_page_workspace for the same app→workspace resolution
+    the UMD host uses, then queries WorkspaceManager.is_serve_running.
+    """
+    from app.coding.workspace import WorkspaceManager
+
+    ws_id = await _auto_bind_custom_page_workspace(
+        db,
+        app_id=app_id,
+        tenant_id=tenant_id,
+        user_id=user_id,
+        bundle_dir=bundle_dir,
+        component_tag=component_tag,
+    )
+    if not ws_id:
+        return {"dev_running": False, "port": None, "ws_id": None}
+
+    status = WorkspaceManager().is_serve_running(ws_id)
+    if status.get("running") and status.get("port"):
+        return {"dev_running": True, "port": int(status["port"]), "ws_id": ws_id}
+    return {"dev_running": False, "port": None, "ws_id": ws_id}
+
+
 async def _auth_context_from_custom_page_request(request: Request, _auth: str = "") -> AuthContext:
     """Iframe/script/css preview requests authenticate via query token or Bearer header."""
     from app.deps import get_auth_context_from_token
@@ -1340,6 +1375,71 @@ async def get_custom_page_host(
         str(app.apaas_app_id), str(detail.get("tenantId") or ""), asset_query,
     )
     return HTMLResponse(html)
+
+
+@router.get("/{app_id}/custom-page-dev-target")
+async def get_custom_page_dev_target(
+    app_id: int,
+    menu_id: str,
+    request: Request,
+    db: Annotated[AsyncSession, Depends(get_db)],
+    _auth: str = "",
+) -> dict:
+    """前端预览面板查询: 该自开发页面绑定的工作区是否正在 npm run serve.
+
+    dev_running=True → 预览 src 切 dev server http://127.0.0.1:{port}/ (HMR);
+    否则 → 走既有 custom-page-host UMD 宿主 (已部署/只读回退)。
+    """
+    from app.coding.apaas_tools import call_apaas_with_relogin
+
+    token = _extract_custom_page_auth_token(request, _auth)
+    try:
+        ctx = await _auth_context_from_custom_page_request(request, token)
+    except Exception:  # noqa: BLE001
+        raise HTTPException(status_code=401, detail="未认证 — 请重新登录后重试")
+
+    app = await _load_app_and_check_view(app_id, ctx, db)
+    if not app.platform_env_id or not app.apaas_app_id:
+        return {"dev_running": False, "port": None, "ws_id": None}
+
+    try:
+        raw_menus_nested = await call_apaas_with_relogin(
+            app.platform_env_id, db,
+            lambda c: c.query_menus(str(app.apaas_app_id)),
+        )
+    except Exception:  # noqa: BLE001
+        return {"dev_running": False, "port": None, "ws_id": None}
+
+    def _find_link_url(nodes: Any, target: str) -> str:
+        for n in nodes or []:
+            if not isinstance(n, dict):
+                continue
+            nid = str(n.get("id") or n.get("menuId") or n.get("menu_id") or "")
+            if nid == str(target):
+                return str(n.get("linkUrl") or n.get("link_url") or "")
+            found = _find_link_url(n.get("submenus") or n.get("children") or [], target)
+            if found:
+                return found
+        return ""
+
+    link_url = _find_link_url(raw_menus_nested or [], str(menu_id))
+    if not link_url:
+        return {"dev_running": False, "port": None, "ws_id": None}
+
+    component_tag = link_url
+    if link_url.startswith("apaas-custom-"):
+        bundle_dir = "form-page-" + link_url[len("apaas-custom-"):]
+    else:
+        bundle_dir = link_url
+
+    return await resolve_custom_page_dev_target(
+        db,
+        app_id=app.id,
+        tenant_id=ctx.tenant_id,
+        user_id=ctx.user.id,
+        bundle_dir=bundle_dir,
+        component_tag=component_tag,
+    )
 
 
 @router.get("/{app_id}/forms/{form_id}/detail")

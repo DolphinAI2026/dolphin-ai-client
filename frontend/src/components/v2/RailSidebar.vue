@@ -1,9 +1,10 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
-import { checkAndPromptUpdate } from '@/utils/desktopUpdate'
+import { checkAndPromptUpdate } from '@/utils/desktop'
 import { useUserStore } from '@/stores/user'
 import { useThemeStore } from '@/stores/theme'
+import ruijingWhaleMarkUrl from '@/assets/brand/ruijing-whale-mark.svg'
 
 interface NavItem { key: string; label: string; icon: string; path: string; badge?: number }
 
@@ -22,15 +23,26 @@ const effectiveCollapsed = computed(() =>
   props.collapsed === true ? true : internalCollapsed.value
 )
 
-const NAV = computed<NavItem[]>(() => [
-  { key: 'home', label: 'AI Builder', icon: 'chat', path: '/' },
-  { key: 'apps', label: '应用资产库', icon: 'apps', path: '/apps', badge: appCount.value || undefined },
-  { key: 'catalog', label: '自开发资产库', icon: 'store', path: '/workspace-catalog' },
-  { key: 'tenantLogs', label: '租户日志分析', icon: 'activity', path: '/tenant-logs' },
-  // AI Builder（/）= 首页融合页，与 /ai-chat 同组件：新建对话 + 历史会话一体。
-  // 改已有应用从「应用资产库」点进工作室 (/chat)，/chat 不挂菜单。
-  // 数据连接 / 运行发布先隐藏；平台级配置统一从平台管理工作台进入。
-])
+// 桌面包剔除指向 admin-spa 的路由（meta.desktop === 'hidden'）；
+// 在线版此函数恒返回 false，tree-shake 后零开销。
+function desktopHidden(path: string): boolean {
+  if (!__DESKTOP__) return false
+  try { return (router.resolve(path).meta as any)?.desktop === 'hidden' } catch { return false }
+}
+
+const NAV = computed<NavItem[]>(() => {
+  const all: NavItem[] = [
+    { key: 'home', label: 'AI Builder', icon: 'chat', path: '/' },
+    { key: 'apps', label: '应用资产库', icon: 'apps', path: '/apps', badge: appCount.value || undefined },
+    { key: 'catalog', label: '自开发资产库', icon: 'store', path: '/workspace-catalog' },
+    { key: 'skills', label: '技能库', icon: 'sparkles', path: '/skills' },
+    { key: 'tenantLogs', label: '租户日志分析', icon: 'activity', path: '/tenant-logs' },
+    // AI Builder（/）= 首页融合页，与 /ai-chat 同组件：新建对话 + 历史会话一体。
+    // 改已有应用从「应用资产库」点进工作室 (/chat)，/chat 不挂菜单。
+    // 数据连接 / 运行发布先隐藏；平台级配置统一从平台管理工作台进入。
+  ]
+  return all.filter(item => !desktopHidden(item.path))
+})
 // 桌面包不含 admin-spa, /platform-admin 内嵌 iframe 会白屏; 桌面下直接进自渲染的配置页 /platform-envs。
 const platformNavItem: NavItem = __DESKTOP__
   ? { key: 'platform', label: '平台配置', icon: 'shield', path: '/platform-envs' }
@@ -156,6 +168,12 @@ function onPlatformClick(e: MouseEvent) {
   goPlatformAdmin()
 }
 
+// __DESKTOP__/__APP_VERSION__ 是编译期常量, 但直接写进 <template> 会被 Vue 当成
+// 组件实例属性(_ctx.__DESKTOP__)而 Vite define 不替换点号后属性 → 永远 undefined。
+// 必须经脚本 const 暴露给模板。
+const isDesktop = __DESKTOP__
+const appVersion = __APP_VERSION__
+
 // 桌面端手动检查更新(在线版不渲染按钮)。silentIfNone=false → 已是最新也提示。
 function onCheckUpdate() {
   void checkAndPromptUpdate({ silentIfNone: false })
@@ -207,16 +225,10 @@ function renderIcon(name: string): string {
         :aria-label="effectiveCollapsed ? '展开导航' : '睿鲸AI 首页'"
         @click="effectiveCollapsed ? toggleCollapsed() : go('/')"
       >
-        <svg width="17" height="17" viewBox="0 0 24 24" fill="none">
-          <rect x="3" y="3" width="8" height="8" rx="2.2" fill="white" />
-          <rect x="13" y="3" width="8" height="8" rx="2.2" fill="rgba(255,255,255,0.68)" />
-          <rect x="3" y="13" width="8" height="8" rx="2.2" fill="rgba(255,255,255,0.68)" />
-          <rect x="13" y="13" width="8" height="8" rx="2.2" fill="white" />
-        </svg>
+        <img class="rail-logo-mark" :src="ruijingWhaleMarkUrl" alt="" aria-hidden="true" />
       </button>
       <div v-if="!effectiveCollapsed" class="rail-brand-copy">
         <div class="rail-title">睿鲸AI</div>
-        <div class="rail-title-sub">AI · 低代码</div>
       </div>
       <!-- 收起按钮放在 brand 区右侧 — 跟 SessionSidebar 的 « 按钮位置一致，
            比放底部更顺手。展开 / 收起两个状态用同一个 button，方向不一样。 -->
@@ -298,7 +310,7 @@ function renderIcon(name: string): string {
         </div>
 
         <a
-          v-if="platformEntryVisible"
+          v-if="platformEntryVisible && !desktopHidden(platformNavItem.path)"
           class="console-row platform-row"
           :class="{ active: platformActive }"
           :href="platformHref"
@@ -327,16 +339,16 @@ function renderIcon(name: string): string {
           <span class="theme-row-label">{{ isDark ? '深色模式 · 切到浅色' : '浅色模式 · 切到深色' }}</span>
         </button>
 
-        <!-- 桌面端: 手动检查更新(在线版编译期不渲染) -->
+        <!-- 桌面端: 版本号 + 手动检查更新(在线版不渲染) -->
         <button
-          v-if="__DESKTOP__"
+          v-if="isDesktop"
           type="button"
           class="theme-row"
-          title="检查更新"
+          :title="`当前版本 v${appVersion} · 点击检查更新`"
           @click="onCheckUpdate"
         >
           <span class="theme-row-icon" v-html="renderIcon('refresh')" />
-          <span class="theme-row-label">检查更新</span>
+          <span class="theme-row-label">检查更新<span v-if="appVersion" class="rail-version">v{{ appVersion }}</span></span>
         </button>
 
         <div class="account-row">
@@ -409,18 +421,26 @@ function renderIcon(name: string): string {
   display: grid;
   place-items: center;
   flex-shrink: 0;
+  padding: 0;
   color: var(--text-inverse);
-  background: var(--brand);
+  background: transparent;
   border: none;
   border-radius: var(--r-2, 6px);
-  box-shadow: var(--sh-2);
+  box-shadow: 0 10px 22px rgba(7, 61, 139, 0.22);
   cursor: pointer;
-  transition: background 0.14s var(--ease, cubic-bezier(0.2, 0.8, 0.2, 1)),
-              box-shadow 0.14s var(--ease, cubic-bezier(0.2, 0.8, 0.2, 1));
+  overflow: hidden;
+  transition: box-shadow 0.14s var(--ease, cubic-bezier(0.2, 0.8, 0.2, 1)),
+              transform 0.14s var(--ease, cubic-bezier(0.2, 0.8, 0.2, 1));
+}
+.rail-logo-mark {
+  width: 100%;
+  height: 100%;
+  display: block;
+  object-fit: cover;
 }
 .rail-logo:hover {
-  background: var(--brand-hover);
   box-shadow: var(--sh-brand);
+  transform: translateY(-1px);
 }
 .rail-logo:focus-visible {
   outline: 2px solid var(--line-focus, var(--brand-ring));
@@ -895,6 +915,16 @@ function renderIcon(name: string): string {
   flex: 1;
   white-space: nowrap;
   color: inherit;
+  display: flex;
+  align-items: center;
+}
+/* 版本号徽标: 推到行尾, 弱化 */
+.rail-version {
+  margin-left: auto;
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+  opacity: 0.55;
+  padding-left: 8px;
 }
 
 /* v3 2026-05-20 fix (code review #P2-5): 删 .accent-picker / .accent-swatch /
