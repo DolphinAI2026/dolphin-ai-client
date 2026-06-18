@@ -100,6 +100,14 @@ class InjectRequest(BaseModel):
     css_url: Optional[str] = None
 
 
+class CaptureStartRequest(BaseModel):
+    url: str
+
+
+class CaptureSessionRequest(BaseModel):
+    session_id: str
+
+
 # ---------- Endpoints ----------
 
 @router.post("/launch")
@@ -403,3 +411,79 @@ async def session_status(
     _verify_token(ws_id, _get_token(authorization, token))
     service = BrowserService.get_instance()
     return service.get_status(ws_id)
+
+
+# ---------- C2 CDP 抓取 (capture) ----------
+
+@router.post("/capture/start")
+async def capture_start(
+    ws_id: str,
+    req: CaptureStartRequest,
+    authorization: Optional[str] = Header(None),
+    token: Optional[str] = Query(None),
+):
+    """启动一个 CDP 抓取会话（headless），加载 url 并挂 console/network 监听。"""
+    _verify_token(ws_id, _get_token(authorization, token))
+    service = BrowserService.get_instance()
+    try:
+        session_id = await service.launch_capture(req.url)
+        return {"session_id": session_id}
+    except Exception as e:
+        logger.error(f"Failed to launch capture for {ws_id}: {e}")
+        raise HTTPException(status_code=500, detail=f"启动抓取会话失败: {str(e)}")
+
+
+@router.get("/capture/console")
+async def capture_console(
+    ws_id: str,
+    session_id: str = Query(...),
+    after_seq: int = Query(0),
+    authorization: Optional[str] = Header(None),
+    token: Optional[str] = Query(None),
+):
+    """拉取 console 日志（after_seq 增量）。"""
+    _verify_token(ws_id, _get_token(authorization, token))
+    service = BrowserService.get_instance()
+    return {"logs": service.get_console_logs(session_id, after_seq)}
+
+
+@router.get("/capture/network")
+async def capture_network(
+    ws_id: str,
+    session_id: str = Query(...),
+    after_seq: int = Query(0),
+    authorization: Optional[str] = Header(None),
+    token: Optional[str] = Query(None),
+):
+    """拉取 network 失败/≥400 请求（after_seq 增量）。"""
+    _verify_token(ws_id, _get_token(authorization, token))
+    service = BrowserService.get_instance()
+    return {"requests": service.get_network_requests(session_id, after_seq)}
+
+
+@router.post("/capture/devtools")
+async def capture_devtools(
+    ws_id: str,
+    req: CaptureSessionRequest,
+    authorization: Optional[str] = Header(None),
+    token: Optional[str] = Query(None),
+):
+    """以非 headless + DevTools 重开该抓取会话（独立 Chromium 窗口）。"""
+    _verify_token(ws_id, _get_token(authorization, token))
+    service = BrowserService.get_instance()
+    await service.open_devtools(req.session_id)
+    return {"status": "ok"}
+
+
+@router.post("/capture/stop")
+async def capture_stop(
+    ws_id: str,
+    req: CaptureSessionRequest,
+    authorization: Optional[str] = Header(None),
+    token: Optional[str] = Query(None),
+):
+    """关闭该抓取会话。"""
+    _verify_token(ws_id, _get_token(authorization, token))
+    service = BrowserService.get_instance()
+    await service.close_capture(req.session_id)
+    return {"status": "closed"}
