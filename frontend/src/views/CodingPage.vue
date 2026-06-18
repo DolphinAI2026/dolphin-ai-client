@@ -308,34 +308,45 @@
 
       </div>
 
-      <!-- Task 7: 原生文件树 + 代码查看器（常驻右栏，替换 IDE 抽屉视图） -->
+      <!-- Task 7 + SP1 C4: 文件/代码 ⇄ 运行/调试 双 tab 右栏 -->
       <div
         v-if="showWorkspacePane"
         class="ws-pane"
       >
-        <FileTree
-          class="ws-pane-tree"
-          :style="{ width: treePaneWidth + 'px' }"
-          :tree="wsFileTree"
-          :changed="changedPaths"
-          :changes="wsGitChanges"
-          :selected="selectedFile"
+        <div class="ws-pane-tabs">
+          <button :class="{ active: wsPaneTab === 'files' }" @click="wsPaneTab = 'files'">文件 / 代码</button>
+          <button :class="{ active: wsPaneTab === 'run' }" @click="wsPaneTab = 'run'">运行/调试</button>
+        </div>
+        <div v-show="wsPaneTab === 'files'" class="ws-pane-files">
+          <FileTree
+            class="ws-pane-tree"
+            :style="{ width: treePaneWidth + 'px' }"
+            :tree="wsFileTree"
+            :changed="changedPaths"
+            :changes="wsGitChanges"
+            :selected="selectedFile"
+            :ws-id="codingStore.workspace?.id || ''"
+            @select="onTreeSelect"
+            @select-line="onTreeSelectLine"
+            @accept-all="acceptAllWorkspaceChanges"
+          />
+          <div class="tree-resizer" title="拖拽调整文件树宽度" @pointerdown="onTreeResizeStart" />
+          <CodeViewer
+            class="ws-pane-viewer"
+            :ws-id="codingStore.workspace?.id || ''"
+            :file-path="selectedFile"
+            :diff="selectedGitChange ? null : selectedDiff"
+            :change="selectedGitChange"
+            :focus-line="viewerFocusLine"
+            :dark="themeStore.isDark"
+            @quote="onViewerQuote"
+            @accept-change="acceptWorkspaceChange"
+          />
+        </div>
+        <RunDebugPanel
+          v-show="wsPaneTab === 'run'"
           :ws-id="codingStore.workspace?.id || ''"
-          @select="onTreeSelect"
-          @select-line="onTreeSelectLine"
-          @accept-all="acceptAllWorkspaceChanges"
-        />
-        <div class="tree-resizer" title="拖拽调整文件树宽度" @pointerdown="onTreeResizeStart" />
-        <CodeViewer
-          class="ws-pane-viewer"
-          :ws-id="codingStore.workspace?.id || ''"
-          :file-path="selectedFile"
-          :diff="selectedGitChange ? null : selectedDiff"
-          :change="selectedGitChange"
-          :focus-line="viewerFocusLine"
           :dark="themeStore.isDark"
-          @quote="onViewerQuote"
-          @accept-change="acceptWorkspaceChange"
         />
       </div>
 
@@ -599,6 +610,7 @@ import UnifiedChatComposer from '@/components/common/UnifiedChatComposer.vue'
 import type { UnifiedChatAttachment } from '@/components/common/chatComposer'
 import FileTree from './coding/FileTree.vue'
 import CodeViewer from './coding/CodeViewer.vue'
+import RunDebugPanel from './coding/RunDebugPanel.vue'
 import { buildFileTree, type TreeNode } from './coding/fileTree'
 import { getCodingMainPaneStyle, shouldShowWorkspacePane } from './coding/codingLayout'
 import { collectChangedFiles, normalizeWorkspacePathLabel, type FileChangeMsg } from './coding/workspaceChanges'
@@ -838,6 +850,7 @@ watch(() => codingStore.workspace?.id, () => {
 
 // 工作区打开 → 代码为主三栏布局（文件树 | 大代码区 | 右聊天）；未进工作区时维持原引导/新建流程
 const codeFirst = computed(() => !!codingStore.workspace?.id && !embeddedAppId.value)
+const wsPaneTab = ref<'files' | 'run'>('files')
 // 右侧聊天列可拖宽（复用 config 的 usePanelResize，handle 在聊天列左边界）
 const { panelWidth: chatPaneWidth, onResizeStart: onChatResizeStart } = usePanelResize({
   storageKey: 'coding:chat-pane-width',
