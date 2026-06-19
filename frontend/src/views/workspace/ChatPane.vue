@@ -23,6 +23,7 @@ import { llmConfigApi, type BuilderModelOption } from '@/api/llmConfig'
 import type { AgentMessage } from '@/components/common/agent-conversation/types'
 import type { UnifiedChatAttachment } from '@/components/common/chatComposer'
 import { isImageFile } from '@/utils/pasteImages'
+import { detectWorkspaceId } from './detectWorkspace'
 
 const props = defineProps<{
   /** 外壳传入的会话 id（null = 新建对话） */
@@ -38,6 +39,8 @@ const emit = defineEmits<{
   (e: 'open-artifact', artifact: any): void
   /** 会话 id 变化 → 通知外壳（切会话 / 新建） */
   (e: 'session-changed', id: number | null): void
+  /** 检测到对话在某代码 workspace 干活 → 通知外壳自动绑定（代码面板点亮 + 显示文件） */
+  (e: 'workspace-detected', wsId: string): void
 }>()
 
 // ─── unified 会话引擎（appId 从 prop 取；null = 通用对话不锁应用） ───
@@ -78,6 +81,12 @@ watch(
     void loadSessions()
   },
 )
+
+// ─── 检测对话里 agent 操作的 workspace → 通知外壳自动绑定（含加载历史, 刷新自愈） ───
+const detectedWsId = computed(() => detectWorkspaceId(agentMessages.value as AgentMessage[]))
+watch(detectedWsId, (ws) => {
+  if (ws) emit('workspace-detected', ws)
+})
 
 // ─── watch sessionId prop → composable loadSession ───
 watch(

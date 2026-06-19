@@ -16,7 +16,8 @@
       <div class="ws-body" :class="{ 'has-panel': activePanelId }">
         <div class="ws-chat">
           <ChatPane :session-id="currentSessionId" :workspace-id="wsId" :app-id="appId"
-            @open-artifact="onOpenArtifact" @session-changed="onSessionChanged" />
+            @open-artifact="onOpenArtifact" @session-changed="onSessionChanged"
+            @workspace-detected="onWorkspaceDetected" />
         </div>
         <div v-if="activePanelId" class="ws-panel">
           <PanelHost :active-panel-id="activePanelId"
@@ -86,6 +87,13 @@ function onSelect(prefixedId: string | number) {
   }
 }
 function onSessionChanged(id: number) { currentSessionId.value = id; loadSessions() }
+// 对话里 agent 在某 workspace 干活 → 自动升级绑定(代码面板点亮)。不覆盖显式 app 绑定;
+// 同 workspace 不动。重载后靠 ChatPane 重新检测自愈(无需改 URL)。
+function onWorkspaceDetected(ws: string) {
+  if (currentBinding.value.kind === 'app') return
+  if (currentBinding.value.kind === 'workspace' && currentBinding.value.workspaceId === ws) return
+  currentBinding.value = { kind: 'workspace', workspaceId: ws }
+}
 function onCreate() { currentSessionId.value = null }   // ChatPane 首条消息触发 ensureSession
 onMounted(loadSessions)
 </script>
