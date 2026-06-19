@@ -11,6 +11,20 @@ describe('routeToBinding', () => {
   })
 })
 
+describe('routeToBinding app', () => {
+  it('maps query app_id to an app binding when no wsId', () => {
+    expect(routeToBinding(undefined, '7')).toEqual({ kind: 'app', appId: 7 })
+    expect(routeToBinding('', '7')).toEqual({ kind: 'app', appId: 7 })
+  })
+  it('wsId takes precedence over app_id', () => {
+    expect(routeToBinding('1_abc', '7')).toEqual({ kind: 'workspace', workspaceId: '1_abc' })
+  })
+  it('neither → none', () => {
+    expect(routeToBinding(undefined, undefined)).toEqual({ kind: 'none' })
+    expect(routeToBinding('', '0')).toEqual({ kind: 'none' })
+  })
+})
+
 describe('parseSidebarSelect', () => {
   it('parses chat: prefix to a numeric session id', () => {
     expect(parseSidebarSelect('chat:123')).toEqual({ kind: 'none', sessionId: 123, workspaceId: null })

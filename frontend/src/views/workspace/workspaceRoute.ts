@@ -1,9 +1,12 @@
 import type { Binding, BindingKind } from './binding'
 import { bindingKindFromId, rawId } from './binding'
+import { resolveInitialAppId } from '@/views/chatPageRouteState'
 
-export function routeToBinding(id: string | undefined | null): Binding {
-  if (!id) return { kind: 'none' }
-  return { kind: 'workspace', workspaceId: id }
+export function routeToBinding(wsId: string | undefined | null, appIdRaw?: any): Binding {
+  if (wsId) return { kind: 'workspace', workspaceId: wsId }
+  const appId = resolveInitialAppId(appIdRaw)
+  if (appId) return { kind: 'app', appId }
+  return { kind: 'none' }
 }
 
 export function parseSidebarSelect(prefixedId: string): {
