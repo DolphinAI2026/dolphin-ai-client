@@ -170,10 +170,30 @@ class ContextCompactor:
                         summary = re.sub(r'```[\s\S]*?```', '[代码已省略]', content)
                         if len(summary) > MAX_ASSISTANT_CHARS:
                             summary = summary[:MAX_ASSISTANT_CHARS] + "...[截断]"
-                        result.append({"role": "assistant", "content": summary})
+                        compacted = {"role": "assistant", "content": summary}
+                        # 保留 tool_calls 字段（若丢失则 tool 消息成为孤儿 → OpenAI 400）
+                        if "tool_calls" in msg:
+                            compacted["tool_calls"] = msg["tool_calls"]
+                        result.append(compacted)
                     else:
                         result.append(msg)
-            return result
+            # _pair_rounds 把 tool 消息归入下一轮头部，可能导致首条是孤儿 tool。
+            # 删掉 result 头部所有没有前置 assistant 配对的 tool 消息。
+            declared_ids: set[str] = set()
+            cleaned: list[dict] = []
+            for msg in result:
+                role = msg.get("role")
+                if role == "assistant":
+                    for tc in msg.get("tool_calls") or []:
+                        declared_ids.add(tc["id"])
+                    cleaned.append(msg)
+                elif role == "tool":
+                    if msg.get("tool_call_id") in declared_ids:
+                        cleaned.append(msg)
+                    # else: orphan → drop silently
+                else:
+                    cleaned.append(msg)
+            return cleaned
         else:
             return messages[-(max_rounds * 2):]
 

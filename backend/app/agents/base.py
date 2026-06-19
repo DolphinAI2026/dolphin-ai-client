@@ -218,6 +218,11 @@ class BaseAgent(ABC, Generic[ProductT]):
                     {"role": "user", "content": self.build_initial_user_message()},
                 ]
                 await self._on_message_appended_safe(self._messages[-1])
+            else:
+                # resume 场景：历史已由 from_snapshot 恢复，追加当前 turn 的用户消息
+                new_user_msg = {"role": "user", "content": self.build_initial_user_message()}
+                self._messages.append(new_user_msg)
+                await self._on_message_appended_safe(self._messages[-1])
 
             max_turns = self.get_max_turns()
 
