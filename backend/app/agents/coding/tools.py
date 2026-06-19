@@ -23,6 +23,8 @@ from __future__ import annotations
 import difflib
 import json
 import logging
+import re
+import shutil
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
@@ -505,6 +507,53 @@ async def _run_workspace_preview(args, ctx) -> ToolResult:
     )
 
 
+async def _use_skill(args: dict[str, Any], ctx) -> ToolResult:
+    """coding 版 use_skill:把技能正文喂回上下文 + 把脚本/模板拷进当前 workspace。
+
+    逻辑照搬 app.ai_chat.tools.execute_use_skill,但 workspace 走 _resolve_workspace_path(ctx),
+    错误用 ToolResult 直接返回(不依赖 _wrap_result 的英文 'Error:' 前缀)。
+    """
+    from app.ai_chat.skills import SkillRegistry
+
+    name = (args.get("name") or "").strip()
+    if not name:
+        return ToolResult(success=False, content="缺少 name 参数", error="MISSING_NAME")
+    reg = SkillRegistry()
+    skill = reg.get(name)
+    if skill is None:
+        avail = "、".join(s.name for s in reg.scan()) or "(暂无)"
+        return ToolResult(success=False, content=f"没有名为 '{name}' 的技能。可用技能:{avail}", error="SKILL_NOT_FOUND")
+    try:
+        ws = _resolve_workspace_path(ctx).resolve()
+    except Exception as e:
+        return ToolResult(success=False, content=f"Error resolving workspace: {e}", error=str(e))
+    slug = re.sub(r"[^A-Za-z0-9_-]", "_", name)
+    dest = (ws / f"skill_{slug}").resolve()
+    if ws not in dest.parents:
+        return ToolResult(success=False, content="技能名非法,无法写入工作目录", error="BAD_SKILL_NAME")
+    dest.mkdir(parents=True, exist_ok=True)
+    copied: list[str] = []
+    for item in sorted(skill.dir.iterdir()):
+        if item.name == "SKILL.md":
+            continue
+        target = dest / item.name
+        if item.is_dir():
+            shutil.copytree(item, target, dirs_exist_ok=True)
+            copied.append(f"skill_{slug}/{item.name}/")
+        else:
+            shutil.copy2(item, target)
+            copied.append(f"skill_{slug}/{item.name}")
+    body = reg.read_skill_md(name)
+    files_note = ("已就绪文件(在工作目录):\n" + "\n".join(f"- {p}" for p in copied)) if copied else "(无附带文件)"
+    src_tag = "平台预置(已审)" if skill.source == "platform" else "用户上传"
+    content = (
+        f"# 技能 {name}(来源:{src_tag};脚本可用 run_python 在当前工作区执行)\n\n"
+        f"{body}\n\n---\n{files_note}\n\n"
+        f"按上面说明执行:用 run_python 跑脚本(可直接打开这些文件)。"
+    )
+    return ToolResult(success=True, content=content)
+
+
 # run_workspace_preview 的 description 是模型决定「该不该一键起预览」的唯一认知来源，
 # 必须把触发条件 + 优先级写死(不要让模型改成口头解释 npm run preview)。见 prompts 的「运行/预览」段。
 RUN_PREVIEW_TOOL_DESC = (
@@ -740,6 +789,20 @@ def build_coding_tools(registry: ToolRegistry | None = None) -> list[Tool]:
         },
         execute=_run_workspace_preview,
         idempotent=False,
+    ))
+
+    tools.append(Tool(
+        name="use_skill",
+        description=(
+            "读取某个技能(Skill)的完整说明并把它的脚本/模板准备到当前工作区,"
+            "之后按说明用 run_python 执行。技能清单见系统提示「可用技能」。"
+        ),
+        parameters_schema={
+            "type": "object",
+            "properties": {"name": {"type": "string", "description": "技能名(与清单一致)"}},
+            "required": ["name"],
+        },
+        execute=_use_skill,
     ))
 
     return tools
