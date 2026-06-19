@@ -2,7 +2,7 @@
      统一工作区 Phase 1 — 中央对话面板
 
      镜像 AppAssistantPanel.vue 的结构，差异：
-     1. 通用对话：appId: ref(null)（不锁应用）
+     1. 应用上下文：appId 从 prop 取(null = 不锁应用；锁了则 run_agent 注入 app 上下文)
      2. 产物事件抛给外壳：@open-artifact="(a) => emit('open-artifact', a)"（不在本组件开抽屉）
      3. props { sessionId }：watch sessionId → loadSession(id)（切会话不重挂）
      4. props { workspaceId }：构造 viewContext 注入代码工作区上下文

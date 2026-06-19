@@ -524,8 +524,7 @@ function appWorkspaceQuery(app: MergedApplication) {
 }
 
 function openApp(app: MergedApplication) {
-  // WorkspaceShell is not a complete editing surface yet. Keep the primary
-  // application entry on ChatPage, which owns app-scoped SPEC/edit/deploy flow.
+  // 打开应用进统一工作区(/workspace?app_id)，工具菜单出配置面板(表单/数据/流程/权限) + 深链低代码后台
   const query = appWorkspaceQuery(app)
   router.push({ path: '/workspace', query })
 }
