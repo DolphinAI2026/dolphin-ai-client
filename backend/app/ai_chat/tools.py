@@ -11,7 +11,6 @@ import json
 import os
 import re
 import shutil
-import sys
 from datetime import datetime
 from pathlib import Path
 from typing import Any
@@ -19,7 +18,6 @@ from typing import Any
 from sqlalchemy import select, desc
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app import runtime
 from app.agents.python_runner import build_python_argv as _build_python_argv, run_python_in_dir
 from app.models import (
     AIChatSession,
