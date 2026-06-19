@@ -15,4 +15,12 @@ describe('ChatPane', () => {
     expect(src).toContain("emit('open-artifact'")
     expect(src).toContain('@open-artifact')
   })
+  it('passes a workspace viewContext into useAiChatSession when bound', () => {
+    expect(src).toContain('workspaceId')
+    expect(src).toContain('viewContext')
+  })
+  it('drops shell-owned header buttons (history / new / artifact list)', () => {
+    expect(src).not.toContain('openDrawer')
+    expect(src).not.toContain('el-drawer')
+  })
 })
