@@ -13,47 +13,42 @@
 - **绝不改 `AGENT_SYSTEM_PROMPT` 常量、绝不改 DB seed** —— skill manifest 必须运行时拼到 `resolve_prompt` 返回值之后(`pipeline.py:2110` 后)。改常量对跑过 codegen 的老租户不生效(DB-first)。
 - use_skill / run_python executor 的错误一律**直接返回 `ToolResult(success=False, ...)`**,不要依赖 `_wrap_result` 的英文 `"Error:"` 前缀嗅探(本功能错误文案是中文「错误/缺少」,会被误判成 success)。
 - use_skill 拷文件**必须**:`slug = re.sub(r"[^A-Za-z0-9_-]", "_", name)` 清洗 + `dest.resolve()` 后校验 `ws in dest.parents`(路径穿越防护)。
-- run_python **复用** `from app.ai_chat.tools import _build_python_argv`,不重复实现冻结态分支。
+- run_python 的子进程逻辑抽成**共享 `app/agents/python_runner.py`(`run_python_in_dir`)**,coding 与 ai_chat 同源委托,不重复实现(DRY);`ai_chat` 行为字节级不变(`test_run_python_frozen` / `test_skill_e2e_pptx` 不回归)。
 - 不给 `run_coding_pipeline` 加新参数;skill 选择经前端拼进 `userInput` → message 文本传递。
 - 多租户 skill 隔离不做(`skills_root()` 全局,桌面单租户,已知现状)。
 - 后端测试命令:`cd backend && ./.venv/bin/python -m pytest <path> -v`。前端:`cd frontend && npx vitest run <path>`。
 
 ---
 
-## Task 0: 模块级 import 兜底(被 Task 1/2 依赖)
+## Task 0: 模块级 import 兜底(被 Task 1 依赖)
 
 **Files:**
 - Modify: `backend/app/agents/coding/tools.py`(文件顶部 import 区)
 
 **Interfaces:**
-- Produces: 模块级可用名 `re`、`shutil`、`os`、`asyncio`、`runtime`、`Path`、`Any`、`ToolResult`、`Tool`、`_resolve_workspace_path` —— 供 Task 1/2 的 executor + 测试 monkeypatch(`coding_tools.runtime` / `coding_tools.asyncio`)用。
+- Produces: 模块级可用名 `re`、`shutil`(供 Task 1 的 `_use_skill` 用)。`Path`/`Any`/`ToolResult`/`Tool`/`_resolve_workspace_path` 已在本文件存在。
 
-- [ ] **Step 1: 确认/补齐顶部 import**
+- [ ] **Step 1: 补齐顶部 import**
 
-打开 `backend/app/agents/coding/tools.py`,确认文件顶部(import 区)含以下名;缺哪个补哪个(已有则跳过,Python 重复 import 无害但保持整洁):
+`backend/app/agents/coding/tools.py` 顶部已有 `import difflib / json / logging` 等。在该 import 区补两行(已有则跳过):
 
 ```python
-import asyncio
-import os
 import re
 import shutil
-from pathlib import Path
-from typing import Any
-from app import runtime
 ```
 
-`ToolResult` / `Tool` / `AgentContext` / `_resolve_workspace_path` 已在本文件定义或导入(无需新增)。
+(run_python 走 Task 2 的共享 `python_runner`,本文件不需要 `asyncio`/`os`/`runtime`。)
 
 - [ ] **Step 2: 验证 import 不破**
 
-Run: `cd backend && ./.venv/bin/python -c "import app.agents.coding.tools as t; print(t.runtime.is_frozen(), bool(t.asyncio))"`
-Expected: 打印 `False <True 的真值>`(本地非冻结),无 ImportError。
+Run: `cd backend && ./.venv/bin/python -c "import app.agents.coding.tools as t; print(bool(t.re), bool(t.shutil))"`
+Expected: 打印 `True True`,无 ImportError。
 
 - [ ] **Step 3: Commit**
 
 ```bash
 git add backend/app/agents/coding/tools.py
-git commit -m "chore(coding): 顶部补齐 use_skill/run_python 所需 import"
+git commit -m "chore(coding): 顶部补 re/shutil(use_skill 用)"
 ```
 
 ---
@@ -228,17 +223,197 @@ git commit -m "feat(coding): use_skill 工具(拷技能进 workspace + 喂正文
 
 ---
 
-## Task 2: run_python 工具 + 工具数回归(后端)
+## Task 2: 共享 python_runner + run_python 工具 + 工具数回归(后端)
+
+> DRY:把 ai_chat `execute_run_python` 的子进程逻辑抽成单一真相源 `python_runner.run_python_in_dir`,coding 与 ai_chat 都走它(两边变薄壳)。`build_python_argv` 一并迁入(`test_run_python_frozen.py` 经 `ai_chat.tools._build_python_argv` 别名仍可访问)。行为字节级保持 → `test_run_python_frozen` / `test_skill_e2e_pptx` 不回归。
 
 **Files:**
-- Modify: `backend/app/agents/coding/tools.py`(新增 `_run_python` executor + 注册 Tool)
-- Test: `backend/tests/test_coding_run_python.py`
+- Create: `backend/app/agents/python_runner.py`
+- Modify: `backend/app/ai_chat/tools.py`(`_build_python_argv` + `execute_run_python` 改为委托共享 runner)
+- Modify: `backend/app/agents/coding/tools.py`(新增 `_run_python` 薄壳 executor + 注册 Tool)
+- Test: `backend/tests/test_python_runner.py`、`backend/tests/test_coding_run_python.py`
 
 **Interfaces:**
-- Consumes: `_resolve_workspace_path(ctx)`;`from app.ai_chat.tools import _build_python_argv`;`coding_tools.runtime`(冻结态判断,可 monkeypatch);`coding_tools.asyncio`(可 monkeypatch)。
+- Produces: `app/agents/python_runner.py`:`def build_python_argv(code, tmp_path, exe=None) -> list[str]`;`async def run_python_in_dir(code: str, workspace: str | Path, *, timeout: int = 30, max_chars: int = 8000) -> tuple[bool, str]`(返回 `(成功?, 格式化输出)`,格式与原 execute_run_python 一致)。
 - Produces: 模块级 `async def _run_python(args, ctx) -> ToolResult`;`build_coding_tools()` 含 `name == "run_python"` 的 Tool。
+- Consumes(coding 测试):`coding_tools.run_python_in_dir`(module-level import,可 monkeypatch);`coding_tools._resolve_workspace_path`。
+- 无循环 import:`python_runner` 不依赖 ai_chat;`ai_chat.tools` 与 `coding.tools` 单向 import `python_runner`。
 
-- [ ] **Step 1: 写失败测试**
+- [ ] **Step 1: 写 python_runner 失败测试**
+
+创建 `backend/tests/test_python_runner.py`:
+
+```python
+import sys
+from pathlib import Path
+
+from app.agents import python_runner
+
+
+def test_build_python_argv_non_frozen(monkeypatch):
+    monkeypatch.setattr(python_runner.runtime, "is_frozen", lambda: False)
+    argv = python_runner.build_python_argv("print(1)", "/tmp/x.py", exe="/usr/bin/python3")
+    assert argv == ["/usr/bin/python3", "-c", "print(1)"]
+
+
+def test_build_python_argv_frozen(monkeypatch):
+    monkeypatch.setattr(python_runner.runtime, "is_frozen", lambda: True)
+    argv = python_runner.build_python_argv("print(1)", "/tmp/x.py", exe="/opt/ruijing-sidecar")
+    assert argv == ["/opt/ruijing-sidecar", "--run-script", "/tmp/x.py"]
+
+
+async def test_run_python_in_dir_captures_stdout(tmp_path):
+    ws = tmp_path / "ws"
+    ws.mkdir()
+    ok, out = await python_runner.run_python_in_dir("print('hello-runner')", ws)
+    assert ok
+    assert "hello-runner" in out
+
+
+async def test_run_python_in_dir_runs_in_workspace_cwd(tmp_path):
+    ws = tmp_path / "ws"
+    ws.mkdir()
+    (ws / "marker.txt").write_text("x", encoding="utf-8")
+    ok, out = await python_runner.run_python_in_dir(
+        "import os; print('marker.txt' in os.listdir('.'))", ws
+    )
+    assert ok
+    assert "True" in out
+
+
+async def test_run_python_in_dir_reports_failure(tmp_path):
+    ws = tmp_path / "ws"
+    ws.mkdir()
+    ok, out = await python_runner.run_python_in_dir("raise SystemExit(3)", ws)
+    assert not ok
+    assert "exit code: 3" in out
+```
+
+- [ ] **Step 2: 跑测试确认失败**
+
+Run: `cd backend && ./.venv/bin/python -m pytest tests/test_python_runner.py -v`
+Expected: FAIL(`No module named 'app.agents.python_runner'`)。
+
+- [ ] **Step 3: 写 python_runner 模块**
+
+创建 `backend/app/agents/python_runner.py`:
+
+```python
+"""共享 Python 执行器 —— ai_chat 与 coding 两条链路的单一真相源。
+
+冻结态(桌面打包)用 sidecar 二进制 `--run-script <file>` 跑;非冻结(开发/云端)用解释器 `-c code`。
+不依赖 ai_chat / coding,避免循环 import。
+"""
+from __future__ import annotations
+
+import asyncio
+import os
+import sys
+import uuid
+from pathlib import Path
+
+from app import runtime
+
+
+def build_python_argv(code: str, tmp_path: str, exe: str | None = None) -> list[str]:
+    """桌面冻结态用 sidecar 二进制 --run-script <file>;否则用解释器 -c code。"""
+    exe = exe or sys.executable
+    if runtime.is_frozen():
+        return [exe, "--run-script", tmp_path]
+    return [exe, "-c", code]
+
+
+async def run_python_in_dir(
+    code: str,
+    workspace: str | Path,
+    *,
+    timeout: int = 30,
+    max_chars: int = 8000,
+) -> tuple[bool, str]:
+    """在 workspace 目录(cwd)执行 Python 代码,返回 (是否成功, 格式化的 stdout/stderr 文本)。
+
+    冻结态把 code 落临时文件经 sidecar --run-script 跑,完后删除;超时 kill;超长截断。
+    """
+    ws = Path(workspace)
+    ws.mkdir(parents=True, exist_ok=True)
+    tmp_path = ""
+    if runtime.is_frozen():
+        tmp_path = str(ws / f".run_{uuid.uuid4().hex}.py")
+        Path(tmp_path).write_text(code, encoding="utf-8")
+    argv = build_python_argv(code, tmp_path)
+    try:
+        proc = await asyncio.create_subprocess_exec(
+            *argv,
+            cwd=str(ws),
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+            env={**os.environ, "PYTHONUNBUFFERED": "1"},
+        )
+        try:
+            stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=timeout)
+        except asyncio.TimeoutError:
+            try:
+                proc.kill()
+            except ProcessLookupError:
+                pass
+            return False, f"错误：执行超时（{timeout} 秒）"
+        out = stdout.decode("utf-8", errors="replace")
+        err = stderr.decode("utf-8", errors="replace")
+        parts = []
+        if out:
+            parts.append(f"[stdout]\n{out.rstrip()}")
+        if err:
+            parts.append(f"[stderr]\n{err.rstrip()}")
+        if proc.returncode != 0:
+            parts.append(f"[exit code: {proc.returncode}]")
+        result = "\n\n".join(parts) if parts else "[无输出]"
+        if len(result) > max_chars:
+            result = result[:max_chars] + f"\n\n[输出已截断，原始 {len(result)} 字符]"
+        return proc.returncode == 0, result
+    except Exception as e:  # noqa: BLE001
+        return False, f"错误：执行失败 - {e}"
+    finally:
+        if tmp_path:
+            try:
+                os.remove(tmp_path)
+            except OSError:
+                pass
+```
+
+- [ ] **Step 4: 跑 python_runner 测试确认通过**
+
+Run: `cd backend && ./.venv/bin/python -m pytest tests/test_python_runner.py -v`
+Expected: 5 passed。
+
+- [ ] **Step 5: ai_chat 委托共享 runner(行为不变)**
+
+在 `backend/app/ai_chat/tools.py` 中:
+
+(a) 把原来的 `def _build_python_argv(...)`(约 `:348`)整段**删除**,改成从共享模块导入别名(放到文件顶部 import 区):
+```python
+from app.agents.python_runner import build_python_argv as _build_python_argv, run_python_in_dir
+```
+
+(b) 把 `execute_run_python`(约 `:356`)函数体改为委托(保留它对 `session.workspace_dir` 的校验与中文错误文案):
+```python
+async def execute_run_python(
+    args: dict, session: AIChatSession, db: AsyncSession
+) -> str:
+    code = args.get("code", "")
+    if not code.strip():
+        return "错误：缺少 code 参数"
+    if not session.workspace_dir:
+        return "错误：会话工作区未初始化"
+    _ok, out = await run_python_in_dir(code, session.workspace_dir)
+    return out
+```
+
+- [ ] **Step 6: 跑 ai_chat 现存 run_python 测试确认不回归**
+
+Run: `cd backend && ./.venv/bin/python -m pytest tests/test_run_python_frozen.py tests/test_skill_e2e_pptx.py -v`
+Expected: 全 passed(`_build_python_argv` 别名仍在;execute_run_python 行为字节级一致)。
+
+- [ ] **Step 7: 写 coding run_python 失败测试**
 
 创建 `backend/tests/test_coding_run_python.py`:
 
@@ -255,7 +430,7 @@ def _get_tool(name: str):
     raise AssertionError(f"tool {name} not found")
 
 
-async def test_run_python_executes_and_captures_stdout(tmp_path, monkeypatch):
+async def test_run_python_tool_executes_and_captures_stdout(tmp_path, monkeypatch):
     ws = tmp_path / "ws"
     ws.mkdir()
     monkeypatch.setattr(coding_tools, "_resolve_workspace_path", lambda ctx: ws)
@@ -268,34 +443,10 @@ async def test_run_python_executes_and_captures_stdout(tmp_path, monkeypatch):
     assert "hello-skill" in res.content
 
 
-async def test_run_python_frozen_uses_run_script(tmp_path, monkeypatch):
-    ws = tmp_path / "ws"
-    ws.mkdir()
-    monkeypatch.setattr(coding_tools, "_resolve_workspace_path", lambda ctx: ws)
-    monkeypatch.setattr(coding_tools.runtime, "is_frozen", lambda: True)
-
-    captured = {}
-
-    class _FakeProc:
-        returncode = 0
-
-        async def communicate(self):
-            return (b"ok", b"")
-
-    async def _fake_exec(*argv, **kw):
-        captured["argv"] = argv
-        captured["cwd"] = kw.get("cwd")
-        return _FakeProc()
-
-    monkeypatch.setattr(coding_tools.asyncio, "create_subprocess_exec", _fake_exec)
-
-    res = await _get_tool("run_python").execute(
-        {"code": "print(1)"}, SimpleNamespace(workspace_id="w1")
-    )
-
-    assert "--run-script" in captured["argv"]
-    assert str(ws) == str(captured["cwd"])
-    assert res.success
+async def test_run_python_tool_missing_code(tmp_path, monkeypatch):
+    monkeypatch.setattr(coding_tools, "_resolve_workspace_path", lambda ctx: tmp_path)
+    res = await _get_tool("run_python").execute({"code": "  "}, SimpleNamespace(workspace_id="w1"))
+    assert not res.success
 
 
 def test_build_coding_tools_has_skill_tools_and_no_dupes():
@@ -305,24 +456,18 @@ def test_build_coding_tools_has_skill_tools_and_no_dupes():
     assert len(names) == len(set(names))  # 无重名
 ```
 
-- [ ] **Step 2: 跑测试确认失败**
+- [ ] **Step 8: 跑测试确认失败**
 
 Run: `cd backend && ./.venv/bin/python -m pytest tests/test_coding_run_python.py -v`
 Expected: FAIL(`tool run_python not found`)。
 
-- [ ] **Step 3: 写 executor**
+- [ ] **Step 9: 写 coding 薄壳 executor**
 
-在 `backend/app/agents/coding/tools.py` 中(`_use_skill` 之后)新增:
+在 `backend/app/agents/coding/tools.py`(`_use_skill` 之后)新增:
 
 ```python
 async def _run_python(args: dict[str, Any], ctx) -> ToolResult:
-    """coding 版 run_python:在当前 workspace 跑 Python(cwd=workspace)。
-
-    冻结态用 sidecar --run-script,非冻结用解释器 -c,照搬 app.ai_chat.tools.execute_run_python。
-    """
-    import uuid as _uuid
-    from app.ai_chat.tools import _build_python_argv
-
+    """coding 版 run_python:在当前 workspace 跑 Python(cwd=workspace),委托共享 runner。"""
     code = args.get("code", "")
     if not code.strip():
         return ToolResult(success=False, content="缺少 code 参数", error="MISSING_CODE")
@@ -330,53 +475,16 @@ async def _run_python(args: dict[str, Any], ctx) -> ToolResult:
         ws = _resolve_workspace_path(ctx)
     except Exception as e:
         return ToolResult(success=False, content=f"Error resolving workspace: {e}", error=str(e))
-    Path(ws).mkdir(parents=True, exist_ok=True)
-    tmp_path = ""
-    if runtime.is_frozen():
-        tmp_path = str(Path(ws) / f".run_{_uuid.uuid4().hex}.py")
-        Path(tmp_path).write_text(code, encoding="utf-8")
-    argv = _build_python_argv(code, tmp_path)
-    try:
-        proc = await asyncio.create_subprocess_exec(
-            *argv,
-            cwd=str(ws),
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.PIPE,
-            env={**os.environ, "PYTHONUNBUFFERED": "1"},
-        )
-        try:
-            stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=30)
-        except asyncio.TimeoutError:
-            try:
-                proc.kill()
-            except ProcessLookupError:
-                pass
-            return ToolResult(success=False, content="执行超时(30 秒)", error="TIMEOUT")
-        out = stdout.decode("utf-8", errors="replace")
-        err = stderr.decode("utf-8", errors="replace")
-        parts = []
-        if out:
-            parts.append(f"[stdout]\n{out.rstrip()}")
-        if err:
-            parts.append(f"[stderr]\n{err.rstrip()}")
-        if proc.returncode != 0:
-            parts.append(f"[exit code: {proc.returncode}]")
-        result = "\n\n".join(parts) if parts else "[无输出]"
-        if len(result) > 8000:
-            result = result[:8000] + f"\n\n[输出已截断,原长度 {len(result)} 字符]"
-        ok = proc.returncode == 0
-        return ToolResult(success=ok, content=result, error=None if ok else f"exit {proc.returncode}")
-    except Exception as e:
-        return ToolResult(success=False, content=f"执行失败 - {e}", error=str(e))
-    finally:
-        if tmp_path:
-            try:
-                os.remove(tmp_path)
-            except OSError:
-                pass
+    ok, out = await run_python_in_dir(code, ws)
+    return ToolResult(success=ok, content=out, error=None if ok else "run_python failed")
 ```
 
-- [ ] **Step 4: 注册 Tool**
+并在文件顶部 import 区加:
+```python
+from app.agents.python_runner import run_python_in_dir
+```
+
+- [ ] **Step 10: 注册 Tool**
 
 在 `build_coding_tools` 的 `return tools` 之前(`use_skill` 注册之后)插入:
 
@@ -397,16 +505,16 @@ async def _run_python(args: dict[str, Any], ctx) -> ToolResult:
     ))
 ```
 
-- [ ] **Step 5: 跑测试确认通过**
+- [ ] **Step 11: 跑 coding 测试确认通过**
 
 Run: `cd backend && ./.venv/bin/python -m pytest tests/test_coding_run_python.py -v`
-Expected: 4 passed。
+Expected: 3 passed。
 
-- [ ] **Step 6: Commit**
+- [ ] **Step 12: Commit**
 
 ```bash
-git add backend/app/agents/coding/tools.py backend/tests/test_coding_run_python.py
-git commit -m "feat(coding): run_python 工具(复用 ai_chat 冻结态 argv)+ 工具数回归"
+git add backend/app/agents/python_runner.py backend/app/ai_chat/tools.py backend/app/agents/coding/tools.py backend/tests/test_python_runner.py backend/tests/test_coding_run_python.py
+git commit -m "feat(coding): 抽共享 python_runner + coding run_python 工具(ai_chat 同源委托)"
 ```
 
 ---

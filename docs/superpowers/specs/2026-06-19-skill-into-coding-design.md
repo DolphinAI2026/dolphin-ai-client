@@ -29,7 +29,7 @@ coding(/coding 代码工作区)对 skill **全链路零接入**(4 路只读调�
 | `SkillRegistry().scan()/get()/read_skill_md()` | `app/ai_chat/skills.py:104+` | 直接调,全局共享 |
 | `build_skill_manifest(skills)` | `app/ai_chat/skills.py:260` | 直接调(空集返空串) |
 | `execute_use_skill` 拷贝+读正文+路径穿越防护 | `app/ai_chat/tools.py:1250` | **逻辑照搬**,签名 `(args, session, db)` → `(args, ctx)`,workspace 改走 `_resolve_workspace_path(ctx)` |
-| `execute_run_python` + `_build_python_argv` 冻结态处理 | `app/ai_chat/tools.py:356,348` | **逻辑照搬**,同上;`_build_python_argv` 直接 import 复用 |
+| `execute_run_python` + `_build_python_argv` 冻结态处理 | `app/ai_chat/tools.py:356,348` | **抽成共享 `app/agents/python_runner.py`(`run_python_in_dir`+`build_python_argv`),coding 与 ai_chat 同源委托**(DRY,避免逻辑块重复;ai_chat 行为字节级不变) |
 | `_append_skill_manifest` 注入模式(空集/异常 no-op) | `app/ai_chat/agent.py:53` | coding 在 pipeline 层**等价实现**(注入点不同) |
 | 前端 skill 接线 | `AIChatPage.vue:256/260/675-682` + `api/skills.ts:listSkills` | **镜像**到 CodingPage |
 
