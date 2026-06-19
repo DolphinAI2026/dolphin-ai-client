@@ -568,8 +568,8 @@ function workspaceAccentStyle(ws: WorkspaceInfo) {
 }
 
 function openWorkspace(ws: WorkspaceInfo) {
-  // 打开原生代码工作区(CodingPage: 文件树 + 代码查看器 + 对话)
-  router.push('/workspace/' + encodeURIComponent(ws.id)).catch(() => {})
+  // 打开代码工作区(CodingPage: 文件树 + 代码查看器 + 对话) —— 全代码开发场景。
+  router.push({ path: '/coding', query: { workspace_id: ws.id } }).catch(() => {})
 }
 
 async function openLocalFolder() {
@@ -584,7 +584,7 @@ async function openLocalFolder() {
   } catch { return }  // 用户取消确认
   try {
     const ws = await codingApi.openLocalFolder(picked)
-    router.push('/workspace/' + encodeURIComponent(ws.ws_id)).catch(() => {})
+    router.push({ path: '/coding', query: { workspace_id: ws.ws_id } }).catch(() => {})
   } catch (e: any) {
     ElMessage.error(`打开失败: ${e?.response?.data?.detail || e?.message || e}`)
   }

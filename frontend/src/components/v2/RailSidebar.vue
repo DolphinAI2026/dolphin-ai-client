@@ -33,9 +33,10 @@ function desktopHidden(path: string): boolean {
 const NAV = computed<NavItem[]>(() => {
   const all: NavItem[] = [
     { key: 'home', label: 'AI Builder', icon: 'chat', path: '/' },
-    // 统一工作区(Claude Code 式): 对话 + 工具面板(代码/配置/产物/后台任务/Plan)。
-    // 与旧页(应用工作室 /chat、代码工作区 /coding)并存; 退役旧页待其完全覆盖后再做。
-    { key: 'workspace', label: '统一工作区', icon: 'flow', path: '/workspace' },
+    // 三场景分开(2026-06-19): 低代码配置 → 应用资产库点应用进应用工作室 /chat;
+    //   全代码开发 → 自开发资产库点工作区进代码工作区 /coding;
+    //   低代码二次开发 → 应用内上下文动作(带 app 绑定进代码开发)。
+    // 统一工作区 /workspace 不再挂导航(代码留存、可直达 URL),太混了用户分不清场景。
     { key: 'apps', label: '应用资产库', icon: 'apps', path: '/apps', badge: appCount.value || undefined },
     { key: 'catalog', label: '自开发资产库', icon: 'store', path: '/workspace-catalog' },
     { key: 'skills', label: '技能库', icon: 'sparkles', path: '/skills' },

@@ -524,9 +524,10 @@ function appWorkspaceQuery(app: MergedApplication) {
 }
 
 function openApp(app: MergedApplication) {
-  // 打开应用进统一工作区(/workspace?app_id)，工具菜单出配置面板(表单/数据/流程/权限) + 深链低代码后台
+  // 打开应用进「应用工作室」(/chat?app_id) —— 低代码配置场景(表单/数据/流程/权限 + SPEC/部署)。
+  // 二次开发(给该应用写代码)是应用内的上下文动作，不在这里入口。
   const query = appWorkspaceQuery(app)
-  router.push({ path: '/workspace', query })
+  router.push({ path: '/chat', query })
 }
 
 function openDialog(app: MergedApplication) {
