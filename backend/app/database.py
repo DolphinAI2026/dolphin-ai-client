@@ -131,6 +131,8 @@ async def init_db():
             "ALTER TABLE conversations ADD COLUMN coding_active_coding_session_id VARCHAR(64)",
             # AI Coding「在应用上定制」绑定应用持久化(刷新/侧栏点开仍记得是哪个应用)
             "ALTER TABLE conversations ADD COLUMN coding_app_id INTEGER",
+            # 滑动窗口压缩态(messages+summary 的 JSON), coding agent 跨轮 from_snapshot 恢复用
+            "ALTER TABLE conversations ADD COLUMN coding_agent_state TEXT",
             # AIChat 工作模式：chat（从零理需求）/ cowork（批量材料整合）
             "ALTER TABLE ai_chat_sessions ADD COLUMN mode VARCHAR(20) NOT NULL DEFAULT 'chat'",
             # AIChat 工具调用：存 LLM 返回的原始 call id，跨轮 history 重建用
