@@ -1342,6 +1342,19 @@ def build_resume_snapshot(state_json: str | None) -> dict | None:
     return {"messages": msgs, "status": "idle", "turn": 0}
 
 
+def serialize_coding_state(messages: list | None, summary: str | None) -> str:
+    """把压缩后的 messages + summary 序列化成存库 JSON(供 Conversation.coding_agent_state)。
+
+    round-trips through build_resume_snapshot:
+        snap = build_resume_snapshot(serialize_coding_state(msgs, s))
+        snap["messages"] == msgs  # True
+    """
+    return json.dumps(
+        {"messages": messages or [], "summary": summary, "version": 1},
+        ensure_ascii=False,
+    )
+
+
 async def _grounded_brainstorm(params, scene_type, apaas_app_id, platform_env_id, app_name, db,
                                history_summary: str = "", force_spec: bool = False):
     """bound 首轮:先调读工具了解应用,再输出开发 SPEC(或先抛澄清问题)。
@@ -2234,6 +2247,30 @@ async def run_coding_pipeline(
             raise RuntimeError("；".join(contract_errors))
 
         await _persist_output()
+
+        # 出轮: 把跑完的真实消息压成有界态(旧轮 LLM 摘要 + 最近 N 轮原样)落库, 供下一轮 from_snapshot 恢复。
+        # 落库失败非致命 — 下一轮当首轮处理, 本轮结果不受影响。
+        if conversation_id:
+            try:
+                from app.context_compact import ContextCompactor
+                _llm_cfg = {"api_key": _api_key, "base_url": _base_url, "model": _cfg_model}
+                _prev_summary: str | None = None
+                _conv2 = await db.get(Conversation, conversation_id)
+                if _conv2 and _conv2.coding_agent_state:
+                    try:
+                        _prev_summary = json.loads(_conv2.coding_agent_state).get("summary")
+                    except Exception:
+                        _prev_summary = None
+                _bounded, _new_summary = await ContextCompactor(_llm_cfg).compact_with_summary(
+                    list(_coding_agent._messages),
+                    mode="coding_with_workspace",
+                    existing_summary=_prev_summary,
+                )
+                if _conv2:
+                    _conv2.coding_agent_state = serialize_coding_state(_bounded, _new_summary)
+                    await db.commit()
+            except Exception as _e:
+                logger.warning("persist coding_agent_state failed (非致命): %s", _e)
 
         yield _record_event({"type": "step", "step": "generate", "status": "done",
                "data": {"files": normalized_files, "file_count": len(normalized_files), "agent_mode": True}})
