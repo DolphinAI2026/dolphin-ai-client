@@ -16,7 +16,7 @@ export function useWorkspaceFiles(wsId: Ref<string | null>) {
 
   async function load() {
     const id = wsId.value
-    if (!id) { tree.value = []; changes.value = null; return }
+    if (!id) { tree.value = []; changes.value = null; error.value = ''; return }
     loading.value = true; error.value = ''
     try {
       const [files, ch] = await Promise.all([

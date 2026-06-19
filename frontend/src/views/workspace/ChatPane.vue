@@ -53,7 +53,6 @@ const viewContext = computed<string | null>(() =>
 const {
   currentSession,
   agentMessages,
-  artifacts,
   typing,
   typingSeconds,
   sending,

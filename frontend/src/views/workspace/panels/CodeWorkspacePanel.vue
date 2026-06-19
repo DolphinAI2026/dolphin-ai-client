@@ -7,8 +7,8 @@
         :changes="changes"
         :selected="selected"
         :ws-id="wsId || ''"
-        @select="select"
-        @select-line="(p) => select(p.path)"
+        @select="(p) => { select(p); focusLine = null }"
+        @select-line="(p) => { select(p.path); focusLine = p.line }"
       />
     </div>
     <div class="cwp-view">
@@ -17,6 +17,7 @@
         :ws-id="wsId"
         :file-path="selected"
         :change="selectedChange"
+        :focus-line="focusLine"
       />
       <div v-else class="cwp-empty">选择左侧文件查看代码 / 改动</div>
     </div>
@@ -24,7 +25,7 @@
 </template>
 
 <script setup lang="ts">
-import { computed, watch, onMounted } from 'vue'
+import { computed, ref, watch, onMounted } from 'vue'
 import FileTree from '@/views/coding/FileTree.vue'
 import CodeViewer from '@/views/coding/CodeViewer.vue'
 import { useWorkspaceFiles } from '../useWorkspaceFiles'
@@ -36,6 +37,7 @@ const props = defineProps<{ binding: Binding; sessionId?: number | null; artifac
 const wsId = computed(() => (props.binding.kind === 'workspace' ? props.binding.workspaceId : null))
 
 const { tree, changes, changed, selected, select, load } = useWorkspaceFiles(wsId)
+const focusLine = ref<number | null>(null)
 
 const selectedChange = computed<WorkspaceChangeEntry | null>(() => {
   const files: WorkspaceChangeEntry[] = changes.value?.files || []
