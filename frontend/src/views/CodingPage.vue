@@ -272,6 +272,8 @@
               hint=""
               sending-hint=""
               placeholder="输入需求，粘贴图片或点附件..."
+              :skills="availableSkills"
+              @skill-picked="onSkillPicked"
               @send="sendOrQueue"
               @stop="stopStream"
               @files-picked="handleComposerFiles"
@@ -634,6 +636,7 @@ import { getCodingMainPaneStyle, shouldShowWorkspacePane } from './coding/coding
 import { collectChangedFiles, normalizeWorkspacePathLabel, type FileChangeMsg } from './coding/workspaceChanges'
 import { usePanelResize } from '@/components/v2/config-assistant/composables/usePanelResize'
 import { listWorkspaceFiles, getWorkspaceChanges, acceptWorkspaceChanges, type WorkspaceChanges } from '@/api/coding'
+import { listSkills } from '@/api/skills'
 
 const route = useRoute()
 const router = useRouter()
@@ -648,6 +651,16 @@ const themeStore = useThemeStore()
 // ============ Core State ============
 const userInput = ref('')
 const isCreating = ref(false)
+
+// skill @-pick 接线 (镜像 AIChatPage)
+const availableSkills = ref<{ name: string; description: string }[]>([])
+onMounted(() => {
+  listSkills().then((s) => { availableSkills.value = s }).catch(() => { /* 无 skill 库则空 */ })
+})
+function onSkillPicked(name: string) {
+  const prefix = `请使用技能 ${name}：`
+  userInput.value = userInput.value ? `${prefix}${userInput.value}` : prefix
+}
 
 // 2026-05-17 B 重构：抽屉式文件 / 设置 (IDE 抽屉已删)
 const filesDrawerOpen = ref(false)
