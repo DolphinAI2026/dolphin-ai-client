@@ -1560,6 +1560,21 @@ def _autofix_preview_url(serve_status: dict) -> str | None:
     return f"http://127.0.0.1:{port}/"
 
 
+def _coding_skill_manifest_suffix() -> str:
+    """扫描技能库生成 manifest 文本,追加到 coding 系统提示末尾(渐进披露)。
+
+    空集 / 扫描异常 → 返回空串(no-op),不中断 codegen。等价 ai_chat._append_skill_manifest,
+    但作纯函数返回 suffix,便于在 resolve_prompt 之后运行时拼接(绕开 DB-first 陈旧)。
+    """
+    try:
+        from app.ai_chat.skills import SkillRegistry, build_skill_manifest
+
+        return build_skill_manifest(SkillRegistry().scan())
+    except Exception as exc:  # noqa: BLE001 — 技能扫描失败不应中断 codegen
+        logger.warning("coding skill manifest 注入失败: %r", exc)
+        return ""
+
+
 async def run_coding_pipeline(
     params: PipelineParams,
     db: AsyncSession,
@@ -2108,6 +2123,7 @@ async def run_coding_pipeline(
             agent_id="whale", phase="default",
             fallback=AGENT_SYSTEM_PROMPT,
         )
+        _coding_system_prompt = _coding_system_prompt + _coding_skill_manifest_suffix()
 
         # 「在应用上定制」bound 模式:解析绑定应用 → 把 apaas_app_id/env 注入 ctx,
         # 让 codegen 的 aPaaS 读工具锁定本应用(防跨应用读)+ prompt 提示 agent 先读真实模型/菜单。
