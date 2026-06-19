@@ -11,4 +11,6 @@ export function registerPhase1Panels(): void {
   // 代码面板(文件树 + 查看器): 仅 workspace 绑定可用
   registerPanel({ id: 'code', label: '代码', icon: 'coding', group: 'context',
     availableWhen: (b) => b.kind === 'workspace', component: defineAsyncComponent(() => import('./panels/CodeWorkspacePanel.vue')) })
+  registerPanel({ id: 'config', label: '配置', icon: 'settings', group: 'context',
+    availableWhen: (b) => b.kind === 'app', component: defineAsyncComponent(() => import('./panels/ConfigWorkspacePanel.vue')) })
 }

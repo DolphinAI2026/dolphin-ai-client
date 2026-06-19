@@ -14,6 +14,15 @@ describe('registerPhase1Panels', () => {
     const ws = buildToolMenuItems({ kind: 'workspace', workspaceId: 'w' })
     expect(ws.find(i => i.id === 'code')!.enabled).toBe(true)  // workspace → 亮
   })
+  it('registers the config panel for app binding', () => {
+    registerPhase1Panels()
+    const none = buildToolMenuItems({ kind: 'none' })
+    expect(none.find(i => i.id === 'config')!.enabled).toBe(false)
+    const app = buildToolMenuItems({ kind: 'app', appId: 7 })
+    expect(app.find(i => i.id === 'config')!.enabled).toBe(true)
+    const ws = buildToolMenuItems({ kind: 'workspace', workspaceId: 'w' })
+    expect(ws.find(i => i.id === 'config')!.enabled).toBe(false)   // workspace 态配置面板灰
+  })
   it('is idempotent (safe to call twice / HMR)', () => {
     registerPhase1Panels(); registerPhase1Panels()
     const ids = buildToolMenuItems({ kind: 'none' }).map(i => i.id)
