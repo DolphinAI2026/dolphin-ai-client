@@ -527,7 +527,7 @@ function openApp(app: MergedApplication) {
   // WorkspaceShell is not a complete editing surface yet. Keep the primary
   // application entry on ChatPage, which owns app-scoped SPEC/edit/deploy flow.
   const query = appWorkspaceQuery(app)
-  router.push({ path: '/chat', query })
+  router.push({ path: '/workspace', query })
 }
 
 function openDialog(app: MergedApplication) {
