@@ -29,6 +29,7 @@ from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
 
+from app.agents.python_runner import run_python_in_dir
 from app.agents.types import AgentContext, Tool, ToolResult
 from app.harness.tool_registry import ToolRegistry
 from app.coding.apaas_tools import (
@@ -554,6 +555,19 @@ async def _use_skill(args: dict[str, Any], ctx) -> ToolResult:
     return ToolResult(success=True, content=content)
 
 
+async def _run_python(args: dict[str, Any], ctx) -> ToolResult:
+    """coding 版 run_python:在当前 workspace 跑 Python(cwd=workspace),委托共享 runner。"""
+    code = args.get("code", "")
+    if not code.strip():
+        return ToolResult(success=False, content="缺少 code 参数", error="MISSING_CODE")
+    try:
+        ws = _resolve_workspace_path(ctx)
+    except Exception as e:
+        return ToolResult(success=False, content=f"Error resolving workspace: {e}", error=str(e))
+    ok, out = await run_python_in_dir(code, ws)
+    return ToolResult(success=ok, content=out, error=None if ok else "run_python failed")
+
+
 # run_workspace_preview 的 description 是模型决定「该不该一键起预览」的唯一认知来源，
 # 必须把触发条件 + 优先级写死(不要让模型改成口头解释 npm run preview)。见 prompts 的「运行/预览」段。
 RUN_PREVIEW_TOOL_DESC = (
@@ -803,6 +817,21 @@ def build_coding_tools(registry: ToolRegistry | None = None) -> list[Tool]:
             "required": ["name"],
         },
         execute=_use_skill,
+    ))
+
+    tools.append(Tool(
+        name="run_python",
+        description=(
+            "在当前 coding 工作区执行 Python 代码(cwd 已 cd 到 workspace)。"
+            "stdout/stderr 作为结果返回,执行超时 30 秒。配合 use_skill 跑技能脚本。"
+        ),
+        parameters_schema={
+            "type": "object",
+            "properties": {"code": {"type": "string", "description": "完整可执行的 Python 代码"}},
+            "required": ["code"],
+        },
+        execute=_run_python,
+        idempotent=False,
     ))
 
     return tools

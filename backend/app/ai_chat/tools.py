@@ -20,6 +20,7 @@ from sqlalchemy import select, desc
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app import runtime
+from app.agents.python_runner import build_python_argv as _build_python_argv, run_python_in_dir
 from app.models import (
     AIChatSession,
     AIChatAttachment,
@@ -345,14 +346,6 @@ async def execute_read_attachment(
     return att.content_text
 
 
-def _build_python_argv(code: str, tmp_path: str, exe: str | None = None) -> list[str]:
-    """桌面冻结态用 sidecar 二进制 --run-script <file>; 否则用解释器 -c code。"""
-    exe = exe or sys.executable
-    if runtime.is_frozen():
-        return [exe, "--run-script", tmp_path]
-    return [exe, "-c", code]
-
-
 async def execute_run_python(
     args: dict, session: AIChatSession, db: AsyncSession
 ) -> str:
@@ -361,60 +354,8 @@ async def execute_run_python(
         return "错误：缺少 code 参数"
     if not session.workspace_dir:
         return "错误：会话工作区未初始化"
-
-    workspace = session.workspace_dir
-    Path(workspace).mkdir(parents=True, exist_ok=True)
-
-    # 桌面冻结态: 把 code 落临时文件, 用 sidecar 二进制自带解释器 --run-script 跑;
-    # 非冻结(开发/云端)态: 直接用 venv 的 python -c（已装好 pandas/openpyxl/pdfplumber 等）。
-    import uuid as _uuid
-    tmp_path = ""
-    if runtime.is_frozen():
-        tmp_path = str(Path(workspace) / f".run_{_uuid.uuid4().hex}.py")
-        Path(tmp_path).write_text(code, encoding="utf-8")
-    argv = _build_python_argv(code, tmp_path)
-
-    try:
-        proc = await asyncio.create_subprocess_exec(
-            *argv,
-            cwd=workspace,
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.PIPE,
-            env={**os.environ, "PYTHONUNBUFFERED": "1"},
-        )
-        try:
-            stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=30)
-        except asyncio.TimeoutError:
-            try:
-                proc.kill()
-            except ProcessLookupError:
-                pass
-            return "错误：执行超时（30 秒）"
-
-        out = stdout.decode("utf-8", errors="replace")
-        err = stderr.decode("utf-8", errors="replace")
-        parts = []
-        if out:
-            parts.append(f"[stdout]\n{out.rstrip()}")
-        if err:
-            parts.append(f"[stderr]\n{err.rstrip()}")
-        if proc.returncode != 0:
-            parts.append(f"[exit code: {proc.returncode}]")
-        result = "\n\n".join(parts) if parts else "[无输出]"
-
-        # 截断太长
-        MAX = 8000
-        if len(result) > MAX:
-            result = result[:MAX] + f"\n\n[输出已截断，原长度 {len(result)} 字符]"
-        return result
-    except Exception as e:
-        return f"错误：执行失败 - {e}"
-    finally:
-        if tmp_path:
-            try:
-                os.remove(tmp_path)
-            except OSError:
-                pass
+    _ok, out = await run_python_in_dir(code, session.workspace_dir)
+    return out
 
 
 async def execute_write_artifact(
