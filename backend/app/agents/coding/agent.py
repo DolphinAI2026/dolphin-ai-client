@@ -39,6 +39,9 @@ TOOL_ICONS: dict[str, str] = {
 # Context 预算（与 VibeCodingAgent 一致）
 MAX_CONTEXT_CHARS = 60000
 
+# 轮内上下文软预算(token); 超过则本地压缩。约取模型上下文窗口的 ~70% 折算的保守值。
+CODING_CONTEXT_TOKEN_BUDGET = 90_000
+
 # Nudge 触发阈值（连续 N 轮只读不写）
 NUDGE_CONSECUTIVE_READS_THRESHOLD = 2
 
@@ -156,6 +159,9 @@ class CodingAgent(BaseAgent[dict]):
 
         # Context 预算跟踪
         self._total_tool_result_chars: int = 0
+
+        # Token 预算（可被测试覆盖）
+        self._context_token_budget: int = CODING_CONTEXT_TOKEN_BUDGET
 
         # 去重上一轮 progress note（避免多轮同 tool_calls 重复刷屏）
         self._last_progress_note: str = ""
@@ -295,32 +301,33 @@ class CodingAgent(BaseAgent[dict]):
             await self._on_message_appended_safe(nudge_msg)
 
     async def on_context_overflow(self, messages: list[dict[str, Any]]) -> list[dict[str, Any]]:
-        """Context 压缩：len(messages) > 10 时压缩旧 tool results + 长 assistant content。
+        """Context 压缩 — 按 token 预算两步本地压缩，轮内不调 LLM。
 
-        从 VibeCodingAgent._compress_context 迁移（原地修改改为返回副本，BaseAgent 约定）。
+        第一道（便宜）: clean_tool_results，清理旧工具结果，最近 4 条保留完整。
+        若仍超过 _context_token_budget，第二道: ContextCompactor.compact 本地压缩
+        （去代码块 + 保留最近几轮），不发 LLM 请求。
+
+        跨轮的 LLM 摘要由 pipeline 出轮做（Task 4+）。
         """
-        if len(messages) <= 10:
-            return messages
+        from app.context_compact import ContextCompactor
+        from app.agents.token_estimate import estimate_tokens
 
+        # 第一道（便宜）: 清旧工具结果
         try:
-            from app.context_compact import ContextCompactor
-            compressed = ContextCompactor.clean_tool_results(messages, keep_recent=4)
+            cleaned = ContextCompactor.clean_tool_results(messages, keep_recent=4)
         except Exception as e:
-            logger.warning("ContextCompactor unavailable, skip: %s", e)
-            compressed = list(messages)
+            logger.warning("ContextCompactor.clean_tool_results unavailable, skip: %s", e)
+            cleaned = list(messages)
 
-        # 进一步压缩旧 assistant 长 content（保留最近 8 条完整）
-        cutoff = max(0, len(compressed) - 8)
-        result = list(compressed)
-        for i in range(cutoff):
-            msg = result[i]
-            if msg.get("role") == "assistant" and msg.get("content"):
-                content = msg["content"]
-                if isinstance(content, str) and len(content) > 500:
-                    msg = dict(msg)
-                    msg["content"] = content[:300] + "..."
-                    result[i] = msg
-        return result
+        if estimate_tokens(cleaned) <= self._context_token_budget:
+            return cleaned
+
+        # 第二道: 仍超预算 → 本地 compact（不传 llm_cfg → 纯本地，去代码块 + 保留最近 max_rounds 轮）
+        try:
+            return ContextCompactor().compact(cleaned, mode="coding_with_workspace")
+        except Exception as e:
+            logger.warning("ContextCompactor.compact failed, returning cleaned: %s", e)
+            return cleaned
 
     async def before_tool_call(self, tool: Tool, args: dict[str, Any]) -> dict[str, Any]:
         """tool 执行前：发前端 agent_tool 事件（带 tool_display 预览）。"""

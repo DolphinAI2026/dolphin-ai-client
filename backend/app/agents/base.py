@@ -218,6 +218,11 @@ class BaseAgent(ABC, Generic[ProductT]):
                     {"role": "user", "content": self.build_initial_user_message()},
                 ]
                 await self._on_message_appended_safe(self._messages[-1])
+            else:
+                # resume 场景：历史已由 from_snapshot 恢复，追加当前 turn 的用户消息
+                new_user_msg = {"role": "user", "content": self.build_initial_user_message()}
+                self._messages.append(new_user_msg)
+                await self._on_message_appended_safe(self._messages[-1])
 
             max_turns = self.get_max_turns()
 
@@ -454,11 +459,26 @@ class BaseAgent(ABC, Generic[ProductT]):
 
     async def _call_llm_with_retry(self, max_retries: int = 3) -> LLMResponse:
         last_error: Optional[Exception] = None
+        compacted_once = False
         for attempt in range(max_retries):
             try:
                 return await self._call_llm()
             except Exception as e:
                 last_error = e
+                # 上下文超限: 压缩一次再重试（不消耗通用重试预算），仅压一次防死循环
+                if self._is_context_length_error(e) and not compacted_once:
+                    compacted_once = True
+                    try:
+                        self._messages = await self.on_context_overflow(self._messages)
+                        await self._trace(TraceEventType.RETRY, {
+                            "attempt": attempt + 1,
+                            "error": "context_length → compacted",
+                            "wait_seconds": 0,
+                        })
+                        continue
+                    except Exception as ce:
+                        logger.warning("context-length compact failed: %s", ce)
+                        raise
                 # 判断是否可重试（429 / timeout / 5xx）
                 if not self._is_retryable(e) or attempt == max_retries - 1:
                     raise
@@ -471,6 +491,18 @@ class BaseAgent(ABC, Generic[ProductT]):
                 })
                 await asyncio.sleep(wait)
         raise last_error or RuntimeError("LLM retry exhausted")
+
+    @staticmethod
+    def _is_context_length_error(error: Exception) -> bool:
+        """识别上下文超限类错误（需压缩后重试，而非原样重发）。"""
+        import httpx
+        msg = str(error).lower()
+        if any(k in msg for k in ("context length", "context_length_exceeded",
+                                  "maximum context", "too many tokens", "reduce the length")):
+            return True
+        if isinstance(error, httpx.HTTPStatusError):
+            return error.response.status_code in {413}
+        return False
 
     @staticmethod
     def _is_retryable(error: Exception) -> bool:
