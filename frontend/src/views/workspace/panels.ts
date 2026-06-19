@@ -8,7 +8,7 @@ export function registerPhase1Panels(): void {
     availableWhen: () => true, component: defineAsyncComponent(() => import('./panels/BackgroundTasksPanel.vue')) })
   registerPanel({ id: 'plan', label: 'Plan', icon: 'clipboard', group: 'common',
     availableWhen: () => true, component: defineAsyncComponent(() => import('./panels/PlanPanel.vue')) })
-  // stub: 仅验证 registry 按绑定点亮/置灰; Phase 2 用真 Files/Diff/... 替换。
-  registerPanel({ id: 'stub-code', label: '代码(P2)', icon: 'coding', group: 'context',
-    availableWhen: (b) => b.kind === 'workspace', component: defineAsyncComponent(() => import('./panels/PlanPanel.vue')) })
+  // 代码面板(文件树 + 查看器): 仅 workspace 绑定可用
+  registerPanel({ id: 'code', label: '代码', icon: 'coding', group: 'context',
+    availableWhen: (b) => b.kind === 'workspace', component: defineAsyncComponent(() => import('./panels/CodeWorkspacePanel.vue')) })
 }

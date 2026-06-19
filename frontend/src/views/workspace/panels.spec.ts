@@ -5,16 +5,14 @@ import { registerPhase1Panels } from './panels'
 beforeEach(() => resetRegistryForTest())
 
 describe('registerPhase1Panels', () => {
-  it('registers common panels always-on and the stub code panel only for workspace binding', () => {
+  it('registers the code panel for workspace binding (replaces stub)', () => {
     registerPhase1Panels()
     const none = buildToolMenuItems({ kind: 'none' })
     const byId = Object.fromEntries(none.map(i => [i.id, i.enabled]))
-    expect(byId['artifacts']).toBe(true)
-    expect(byId['background-tasks']).toBe(true)
-    expect(byId['plan']).toBe(true)
-    expect(byId['stub-code']).toBe(false)               // none 绑定 → 代码面板灰
+    expect('stub-code' in byId).toBe(false)
+    expect(byId['code']).toBe(false)                 // none 绑定 → 代码面板灰
     const ws = buildToolMenuItems({ kind: 'workspace', workspaceId: 'w' })
-    expect(ws.find(i => i.id === 'stub-code')!.enabled).toBe(true)  // workspace → 亮
+    expect(ws.find(i => i.id === 'code')!.enabled).toBe(true)  // workspace → 亮
   })
   it('is idempotent (safe to call twice / HMR)', () => {
     registerPhase1Panels(); registerPhase1Panels()
