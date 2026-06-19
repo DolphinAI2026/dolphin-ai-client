@@ -23,6 +23,12 @@ describe('registerPhase1Panels', () => {
     const ws = buildToolMenuItems({ kind: 'workspace', workspaceId: 'w' })
     expect(ws.find(i => i.id === 'config')!.enabled).toBe(false)   // workspace 态配置面板灰
   })
+  it('registers the preview panel for workspace binding', () => {
+    registerPhase1Panels()
+    expect(buildToolMenuItems({ kind: 'none' }).find(i => i.id === 'preview')!.enabled).toBe(false)
+    expect(buildToolMenuItems({ kind: 'app', appId: 7 }).find(i => i.id === 'preview')!.enabled).toBe(false)
+    expect(buildToolMenuItems({ kind: 'workspace', workspaceId: 'w' }).find(i => i.id === 'preview')!.enabled).toBe(true)
+  })
   it('is idempotent (safe to call twice / HMR)', () => {
     registerPhase1Panels(); registerPhase1Panels()
     const ids = buildToolMenuItems({ kind: 'none' }).map(i => i.id)
