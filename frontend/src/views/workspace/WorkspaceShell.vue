@@ -15,7 +15,7 @@
       </header>
       <div class="ws-body" :class="{ 'has-panel': activePanelId }">
         <div class="ws-chat">
-          <ChatPane :session-id="currentSessionId" :workspace-id="wsId"
+          <ChatPane :session-id="currentSessionId" :workspace-id="wsId" :app-id="appId"
             @open-artifact="onOpenArtifact" @session-changed="onSessionChanged" />
         </div>
         <div v-if="activePanelId" class="ws-panel">
@@ -49,17 +49,21 @@ const currentSessionId = ref<number | null>(null)
 const activePanelId = ref<string | null>(null)
 const openArtifact = ref<any>(null)
 const asideCollapsed = ref(false)
-// Phase 2: 由 route.params.id 驱动; KeepAlive 单例切 :id 不 remount, 必须 watch
+// Phase 2/3: 由 route.params.id + route.query.app_id 驱动; KeepAlive 单例切路由不 remount, 必须 watch
 const currentBinding = ref<Binding>({ kind: 'none' })
 
-watch(() => route.params.id, (id) => {
+watch([() => route.params.id, () => route.query.app_id], ([id, appIdRaw]) => {
   const s = typeof id === 'string' ? id : Array.isArray(id) ? (id[0] || '') : ''
-  currentBinding.value = routeToBinding(s)
+  currentBinding.value = routeToBinding(s, appIdRaw)
 }, { immediate: true })
 
 // workspace 绑定时的 workspaceId, 传给 ChatPane 作 viewContext
 const wsId = computed(() =>
   currentBinding.value.kind === 'workspace' ? currentBinding.value.workspaceId : null)
+
+// app 绑定时的 appId, 传给 ChatPane
+const appId = computed(() =>
+  currentBinding.value.kind === 'app' ? currentBinding.value.appId : null)
 
 const wsSessions = computed<WorkspaceSession[]>(() =>
   // wsSessions binding 暂仍 {kind:'none'}; 会话列表 binding 持久化非本期
@@ -74,6 +78,8 @@ function onSelect(prefixedId: string | number) {
   const { kind, sessionId, workspaceId } = parseSidebarSelect(String(prefixedId))
   if (kind === 'workspace' && workspaceId) {
     router.push('/workspace/' + encodeURIComponent(workspaceId))
+  } else if (kind === 'app' && sessionId !== null) {
+    router.push({ path: '/workspace', query: { app_id: String(sessionId) } })
   } else {
     // none / chat: 保留原行为, sessionId 已确保是 number 不被 Number 化 workspace id
     currentSessionId.value = sessionId

@@ -27,4 +27,11 @@ describe('WorkspaceShell', () => {
   it('parses sidebar select via parseSidebarSelect (workspace id 不被 Number 化)', () => {
     expect(src).toContain('parseSidebarSelect')
   })
+  it('watches route.query.app_id for app binding', () => {
+    expect(src).toMatch(/route\.query\.app_id/)
+  })
+  it('feeds appId to ChatPane', () => { expect(src).toContain(':app-id') })
+  it('onSelect pushes /workspace?app_id for app sessions', () => {
+    expect(src).toMatch(/app_id:/)
+  })
 })
