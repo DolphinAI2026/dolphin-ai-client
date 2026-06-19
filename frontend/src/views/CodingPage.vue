@@ -220,7 +220,6 @@
                     <ul v-if="streamCustom(message).sm.run.errors.length" class="rc-errs">
                       <li v-for="(e, ei) in streamCustom(message).sm.run.errors.slice(0, 5)" :key="ei">{{ e }}</li>
                     </ul>
-                    <div v-if="!streamCustom(message).sm.run.capture_available" class="rc-degrade">运行时抓取不可用（需 dev 模式）</div>
                   </div>
                 </template>
                 <!-- thinking / status / tool 已迁移到 AgentConversation 原生 kind（见 agentMessages 映射）-->
@@ -677,7 +676,10 @@ const codingModelPickerDisabled = computed(() =>
 const selectedCodingModelLabel = computed(() => {
   if (codingModelLoading.value) return '加载中'
   if (codingModelOptions.value.length === 0) return '未配置模型'
-  return selectedCodingModelOption.value?.config_name || '选择模型'
+  // 触发按钮显真实模型(如 gpt-5.5), 而非陈旧/含网关名的 config_name(如「Dolphin-默认」);
+  // 完整配置名 + 厂商在下拉菜单里(option.config_name / provider / model)。
+  const opt = selectedCodingModelOption.value
+  return opt?.model || opt?.config_name || '选择模型'
 })
 
 function toggleCodingModelMenu() {
@@ -805,10 +807,16 @@ function resolveWorkspacePath(p: string): string | null {
   return all.find(t => t === base || t.endsWith('/' + base)) || null
 }
 
+// 真实工作区路径不含空格/代码括号; 过滤混入代码文本的坏 fileName(避免打开不存在的文件 → 红错)。
+function looksLikeFilePath(p: string): boolean {
+  return !!p && p.length < 200 && !/\s/.test(p) && !/[(){}<>]/.test(p)
+}
+
 // 点击对话里的写/改文件卡 → 左侧打开该文件（有 git 改动 CodeViewer 自动进对比模式）
 function openFileFromChat(sm: { filePath?: string; fileName?: string }) {
   const rawPath = normalizeWorkspacePathLabel(sm.filePath || sm.fileName)
-  const target = resolveWorkspacePath(rawPath) || rawPath || null
+  // 解析到真实文件才打开; 解析不到只接受"看着像路径"的(刚写、树未刷新), 坏路径(含代码)忽略。
+  const target = resolveWorkspacePath(rawPath) || (looksLikeFilePath(rawPath) ? rawPath : null)
   if (target) selectedFile.value = target
 }
 
@@ -854,7 +862,12 @@ function onTreeSelectLine(payload: { path: string; line: number }) {
 }
 
 // agent 改完最后一个文件 → 自动打开它（纯前端，不发请求）
-watch(() => wsChanges.value.lastChangedFile, (p) => { if (p) selectedFile.value = p })
+watch(() => wsChanges.value.lastChangedFile, (p) => {
+  // 打开/改动时自动跳到该文件 —— 但坏路径(混入代码的 fileName)会害打开态落到文件红错, 守卫掉。
+  if (!p) return
+  const t = resolveWorkspacePath(p) || (looksLikeFilePath(p) ? p : null)
+  if (t) selectedFile.value = t
+})
 // 仅当改动文件“集合增长”（写了新文件）时才重载树，避免多文件 codegen 期间每写一个文件就重复拉一次
 watch(() => changedPaths.value.size, () => { void loadWsFileTree(); scheduleGitChangesRefresh() })
 // 一轮跑完 → 改动清单收口刷新（含 run_command 等树/流事件看不到的写入）

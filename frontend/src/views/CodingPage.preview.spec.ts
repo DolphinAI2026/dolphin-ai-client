@@ -42,3 +42,21 @@ describe('CodingPage 预览呈现', () => {
     expect(src).toMatch(/watch\(\s*\(\)\s*=>\s*codingStore\.activePreview\?\.dev_url/)
   })
 })
+
+// 2026-06-19 UX 打磨
+describe('CodingPage UX 打磨', () => {
+  it('模型触发按钮显真实 model(gpt-5.5), 不显陈旧 config_name(Dolphin-默认)', () => {
+    expect(src).toMatch(/selectedCodingModelLabel\s*=\s*computed/)
+    expect(src).toMatch(/opt\?\.model\s*\|\|\s*opt\?\.config_name/)
+  })
+
+  it('文件选择守卫: 坏路径(含空格/代码括号)不打开 → 打开态不落文件红错', () => {
+    expect(src).toContain('function looksLikeFilePath')
+    // openFileFromChat 解析不到时只接受 looksLikeFilePath, 不再无条件回退 rawPath
+    expect(src).toMatch(/resolveWorkspacePath\(rawPath\)\s*\|\|\s*\(looksLikeFilePath/)
+  })
+
+  it('run_result 卡不再恒显「运行时抓取不可用」噪音', () => {
+    expect(src).not.toContain('class="rc-degrade"')
+  })
+})
