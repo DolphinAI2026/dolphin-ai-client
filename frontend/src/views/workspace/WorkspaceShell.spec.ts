@@ -16,4 +16,15 @@ describe('WorkspaceShell', () => {
   it('passes current binding to ToolMenu (none in Phase 1)', () => {
     expect(src).toContain(':binding')
   })
+  it('drives currentBinding from route.params.id (KeepAlive → watch)', () => {
+    expect(src).toContain('useRoute')
+    expect(src).toContain('routeToBinding')
+    expect(src).toMatch(/watch\([\s\S]*route\.params\.id/)
+  })
+  it('feeds workspace context to ChatPane', () => {
+    expect(src).toContain(':workspace-id')
+  })
+  it('parses sidebar select via parseSidebarSelect (workspace id 不被 Number 化)', () => {
+    expect(src).toContain('parseSidebarSelect')
+  })
 })

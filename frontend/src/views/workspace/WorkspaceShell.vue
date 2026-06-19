@@ -15,7 +15,7 @@
       </header>
       <div class="ws-body" :class="{ 'has-panel': activePanelId }">
         <div class="ws-chat">
-          <ChatPane :session-id="currentSessionId"
+          <ChatPane :session-id="currentSessionId" :workspace-id="wsId"
             @open-artifact="onOpenArtifact" @session-changed="onSessionChanged" />
         </div>
         <div v-if="activePanelId" class="ws-panel">
@@ -28,28 +28,41 @@
   </div>
 </template>
 <script setup lang="ts">
-import { ref, computed, onMounted } from 'vue'
+import { ref, computed, onMounted, watch } from 'vue'
+import { useRoute, useRouter } from 'vue-router'
 import SessionSidebar from '@/components/common/SessionSidebar.vue'
 import ToolMenu from './ToolMenu.vue'
 import PanelHost from './PanelHost.vue'
 import ChatPane from './ChatPane.vue'
 import { registerPhase1Panels } from './panels'
 import { toSessionItems, type WorkspaceSession } from './sessionList'
-import { rawId } from './binding'
 import type { Binding } from './binding'
 import { useAiChatSession } from '@/composables/useAiChatSession'
+import { routeToBinding, parseSidebarSelect } from './workspaceRoute'
 
 registerPhase1Panels()
+const route = useRoute()
+const router = useRouter()
 const { sessions, loadSessions } = useAiChatSession({ appId: ref(null) })
 
 const currentSessionId = ref<number | null>(null)
 const activePanelId = ref<string | null>(null)
 const openArtifact = ref<any>(null)
 const asideCollapsed = ref(false)
-// Phase 1 仅通用对话; Phase 2/3 由会话真实 binding 驱动
+// Phase 2: 由 route.params.id 驱动; KeepAlive 单例切 :id 不 remount, 必须 watch
 const currentBinding = ref<Binding>({ kind: 'none' })
 
+watch(() => route.params.id, (id) => {
+  const s = typeof id === 'string' ? id : Array.isArray(id) ? (id[0] || '') : ''
+  currentBinding.value = routeToBinding(s)
+}, { immediate: true })
+
+// workspace 绑定时的 workspaceId, 传给 ChatPane 作 viewContext
+const wsId = computed(() =>
+  currentBinding.value.kind === 'workspace' ? currentBinding.value.workspaceId : null)
+
 const wsSessions = computed<WorkspaceSession[]>(() =>
+  // wsSessions binding 暂仍 {kind:'none'}; 会话列表 binding 持久化非本期
   sessions.value.map(s => ({ id: s.id, title: s.title, binding: { kind: 'none' },
     updated_at: s.updated_at, created_at: s.created_at })))
 const sessionItems = computed(() => toSessionItems(wsSessions.value, Date.now()))
@@ -57,7 +70,15 @@ const activeSidebarId = computed(() => (currentSessionId.value ? `chat:${current
 
 function onOpenPanel(id: string) { activePanelId.value = id }
 function onOpenArtifact(a: any) { openArtifact.value = a; activePanelId.value = 'artifacts' }
-function onSelect(id: string | number) { currentSessionId.value = Number(rawId(String(id))) }
+function onSelect(prefixedId: string | number) {
+  const { kind, sessionId, workspaceId } = parseSidebarSelect(String(prefixedId))
+  if (kind === 'workspace' && workspaceId) {
+    router.push('/workspace/' + encodeURIComponent(workspaceId))
+  } else {
+    // none / chat: 保留原行为, sessionId 已确保是 number 不被 Number 化 workspace id
+    currentSessionId.value = sessionId
+  }
+}
 function onSessionChanged(id: number) { currentSessionId.value = id; loadSessions() }
 function onCreate() { currentSessionId.value = null }   // ChatPane 首条消息触发 ensureSession
 onMounted(loadSessions)
