@@ -125,12 +125,13 @@ onMounted(loadSessions)
   flex: 1;
   min-width: 0;
 }
-/* 工具面板停靠右侧,仅打开时存在 */
+/* 工具面板停靠右侧,仅打开时存在。配置面板(菜单栏+设计器)/代码面板(树+查看器)
+   都比单列内容更需空间,故放宽到 ~48%。 */
 .ws-panel {
   flex-shrink: 0;
-  width: 40%;
-  min-width: 320px;
-  max-width: 560px;
+  width: 48%;
+  min-width: 360px;
+  max-width: 720px;
   border-left: 1px solid var(--line);
   overflow: auto;
   background: var(--surface);
