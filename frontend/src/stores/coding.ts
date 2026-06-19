@@ -69,8 +69,11 @@ export const useCodingStore = defineStore('coding', () => {
 
   // 对话驱动的当前运行预览（run_result/autofix_round 写入，预览位读）
   const activePreview = ref<{
-    dev_url: string; status: string; errors: string[]; capture_available: boolean; round: number | null
+    dev_url: string; status: string; errors: string[]; capture_available: boolean; round: number | null; source?: string
   } | null>(null)
+  // 预览每跑一次就 +1(agent run_workspace_preview 的 run_result 写入时递增)。
+  // CodingPage 监听它强制切到「预览」位 —— 即使 dev_url 没变也切(自愈轮不递增, 不打扰)。
+  const previewEpoch = ref(0)
 
   // 当前选中文件的内容
   const activeFileContent = computed(() => {
@@ -175,7 +178,7 @@ export const useCodingStore = defineStore('coding', () => {
     conversationId, conversations, messages,
     generatedFiles, activeFilePath, activeFileContent, activeFileLanguage,
     validationErrors, isGenerating, isProcessing, streamContent,
-    currentPipelineSteps, serveUrl, serveRunning, activePreview,
+    currentPipelineSteps, serveUrl, serveRunning, activePreview, previewEpoch,
     setScene, setWorkspace, setFiles, updateFileContent, addMessage, setMessages,
     initPipelineSteps, updatePipelineStep, reset,
   }

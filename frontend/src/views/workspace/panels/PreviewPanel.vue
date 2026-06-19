@@ -49,8 +49,18 @@ async function start() {
   error.value = ''
   try {
     const r = await codingApi.startServe(wsId.value)
-    if (r.url) devUrl.value = r.url
-    else error.value = r.message || '启动失败:未拿到 dev url'
+    if (r.status === 'error') {
+      error.value = r.message || '启动失败'
+      return
+    }
+    const url = r.url || (r.port ? `http://127.0.0.1:${r.port}/` : '')
+    if (!url) {
+      error.value = r.message || '启动失败:未拿到 dev url'
+      return
+    }
+    devUrl.value = url
+    // starting=首屏还在编译: 3 秒后自动重载一次, 避免指向没就绪的地址白屏。
+    if (r.status !== 'ok') setTimeout(reload, 3000)
   } catch (e: any) {
     error.value = e?.response?.data?.detail || e?.message || '启动失败'
   } finally {

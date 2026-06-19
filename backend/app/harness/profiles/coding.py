@@ -26,6 +26,8 @@ _PIPELINE_EVENT_TO_KIND = {
     "agent_error": "system",
     "done": "system",
     "error": "system",
+    "run_result": "system",       # 对话驱动运行/预览结果(透传, 前端自动亮预览位)
+    "autofix_round": "system",    # C5 自愈轮结果
 }
 
 
@@ -205,6 +207,17 @@ class CodingProfile(HarnessProfile):
                     )
 
                 elif event_type == "serve_started":
+                    await event_bus.publish(
+                        ITEM_DELTA, turn_ctx.turn_id,
+                        {"kind": "system", **event},
+                        item_kind="system", persist=False,
+                    )
+
+                elif event_type in ("run_result", "autofix_round"):
+                    # 对话驱动运行/预览结果(run_workspace_preview 工具 / C5 自愈)。
+                    # 以 system kind 透传 → CodingSSEAdapter passthrough 原样带上 type,
+                    # 前端 sseHandlers[run_result/autofix_round] 才能收到 → 自动亮预览位。
+                    # 不加这条会在 profile 层(无 else 兜底)被静默丢 —— 预览不自动开的根因(2026-06-19)。
                     await event_bus.publish(
                         ITEM_DELTA, turn_ctx.turn_id,
                         {"kind": "system", **event},

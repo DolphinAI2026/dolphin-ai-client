@@ -195,6 +195,8 @@ export function useCodingPipeline(deps: PipelineDeps) {
       const r = normalizeRunResult(parsed)
       addStreamMsg({ type: 'run_result', content: '', run: r })
       codingStore.activePreview = { dev_url: r.dev_url, status: r.status, errors: r.errors, capture_available: r.capture_available, round: r.round }
+      // agent 跑了预览 → 让预览位自动亮出来(epoch 每次都变, 即使 dev_url 没变也能触发切换)。
+      if (r.dev_url) codingStore.previewEpoch++
     },
     autofix_round: (parsed: any) => {
       const r = normalizeRunResult(parsed)

@@ -1752,6 +1752,7 @@ class WorkspaceManager:
 
     # ======== Serve & Debug 进程管理 ========
     _serve_processes: dict = {}   # {ws_id: {"process": Process, "port": int, "kind": str, "log_ring": list, "log_seq": int}}
+    _SERVE_READY_WAIT_SEC = 30    # 等端口就绪的上限; 超时返回 status="starting"(而非误报 ok), 前端据此提示+重试
     _debug_processes: dict = {}   # {ws_id: {"process": Process}}
     _next_port: int = 8080
     _SERVE_LOG_RING_MAX: int = 2000   # 环形缓冲上限（行）
@@ -1814,7 +1815,8 @@ class WorkspaceManager:
         if ws_id in self._serve_processes:
             info = self._serve_processes[ws_id]
             if info["process"].returncode is None:  # 还在运行
-                return {"status": "ok", "port": info["port"], "message": "serve 已在运行"}
+                return {"status": "ok", "port": info["port"],
+                        "url": f"http://127.0.0.1:{info['port']}/", "message": "serve 已在运行"}
 
         ws_path = self.get_workspace_path(ws_id)
 
@@ -1850,20 +1852,24 @@ class WorkspaceManager:
         }
         self._spawn_serve_log_reader(ws_id, proc)
 
-        # 等待 serve 启动（最多 30 秒）
+        # 等待 serve 启动（最多 _SERVE_READY_WAIT_SEC 秒）
         import time
         start = time.time()
-        while time.time() - start < 30:
+        while time.time() - start < self._SERVE_READY_WAIT_SEC:
             await asyncio.sleep(1)
             with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
                 if s.connect_ex(("localhost", port)) == 0:
-                    return {"status": "ok", "port": port, "message": f"serve 已启动在端口 {port}"}
+                    return {"status": "ok", "port": port,
+                            "url": f"http://127.0.0.1:{port}/", "message": f"serve 已启动在端口 {port}"}
             if proc.returncode is not None:
                 tail = [r["line"] for r in self._serve_processes.get(ws_id, {}).get("log_ring", [])][-10:]
                 return {"status": "error", "port": port,
                         "message": "serve 启动失败: " + ("\n".join(tail) or "进程已退出")[:300]}
 
-        return {"status": "ok", "port": port, "message": f"serve 正在启动（端口 {port}）"}
+        # 端口在上限内仍没通：进程还活着但首屏可能在编译。返回 starting(非 ok)，
+        # 让前端别立刻把没就绪的地址当成功 → 改成「正在启动」提示 + 自动重试加载。
+        return {"status": "starting", "port": port, "url": f"http://127.0.0.1:{port}/",
+                "message": f"serve 正在启动（端口 {port}），首屏编译完成后会自动出现"}
 
     async def stop_serve(self, ws_id: str) -> dict:
         """停止 serve 进程（单端 or 双端均支持）"""
@@ -1922,7 +1928,8 @@ class WorkspaceManager:
         running = info["process"].returncode is None
         if not running:
             self._serve_processes.pop(ws_id, None)
-        return {"running": running, "port": info["port"] if running else None}
+        return {"running": running, "port": info["port"] if running else None,
+                "url": f"http://127.0.0.1:{info['port']}/" if running else None}
 
     async def iter_serve_logs(self, ws_id: str, after_seq: int):
         """逐条产出该 ws 的 serve 日志行：先补发 seq > after_seq 的历史，再实时跟随。

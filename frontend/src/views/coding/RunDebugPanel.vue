@@ -1,57 +1,129 @@
 <!-- frontend/src/views/coding/RunDebugPanel.vue
-     对话驱动的「预览位」：运行/调试由对话里的 agent 触发（run_workspace_preview / C5 自愈），
-     本面板只读 codingStore.activePreview 渲染预览 + 报错，不再有手动运行按钮/capture 轮询。 -->
+     代码工作区「预览位」：
+     - 一键「启动预览」：直接走 codingApi.startServe(props.wsId)，不依赖 agent 是否调 run_workspace_preview。
+     - agent 调 run_workspace_preview / C5 自愈也会经 SSE 写 codingStore.activePreview，这里同样渲染。
+     - serve 仍在编译(后端返回 status=starting) → 标「启动中」+ 3 秒后自动重试加载，避免白屏。 -->
 <template>
   <div class="run-debug-panel" :class="{ dark }">
     <div class="rd-toolbar">
       <span class="rd-title">预览</span>
       <span v-if="devUrl" class="rd-url">{{ devUrl }}</span>
       <span class="rd-spacer" />
-      <button v-if="devUrl" class="rd-btn" @click="stop">停止</button>
+      <template v-if="devUrl">
+        <button class="rd-btn" :disabled="loading" @click="reload">刷新</button>
+        <button class="rd-btn" @click="stop">停止</button>
+      </template>
+      <button v-else class="rd-btn rd-primary" :disabled="loading || !wsId" @click="start">
+        {{ loading ? '启动中…' : '启动预览' }}
+      </button>
     </div>
 
     <div class="rd-body">
-      <iframe v-if="devUrl" :src="devUrl" class="rd-iframe" />
-      <div v-else class="rd-empty">在对话里说「跑一下 / 调一下」，结果会在这里预览</div>
+      <iframe v-if="devUrl" :key="reloadKey" :src="devUrl" class="rd-iframe" />
+      <div v-else-if="loading" class="rd-empty">正在启动开发服务器（首次需编译，可能要等一会）…</div>
+      <div v-else-if="errorMsg" class="rd-err-box">{{ errorMsg }}</div>
+      <div v-else class="rd-empty">点「启动预览」运行此工作区，或在对话里说「跑一下 / 调一下」</div>
 
+      <div v-if="booting" class="rd-degrade">正在启动，编译完成后会自动刷新；若仍空白，点「刷新」重试</div>
       <div v-if="errors.length" class="rd-errs">
         <div class="rd-errs-title">运行时报错（{{ errors.length }}）</div>
         <div v-for="(e, i) in errors" :key="i" class="rd-err">{{ e }}</div>
       </div>
-      <div v-if="devUrl && !captureAvailable" class="rd-degrade">运行时抓取不可用（需 dev 模式）</div>
+      <div v-if="showCaptureDegrade" class="rd-degrade">运行时抓取不可用（需 dev 模式）</div>
     </div>
   </div>
 </template>
 
 <script setup lang="ts">
-import { computed } from 'vue'
+import { computed, ref, onUnmounted } from 'vue'
 import { useCodingStore } from '@/stores/coding'
 import { codingApi } from '@/api/coding'
 
 const props = defineProps<{ wsId: string; dark?: boolean }>()
 const codingStore = useCodingStore()
 
+const loading = ref(false)
+const errorMsg = ref('')
+const reloadKey = ref(0)
+const booting = ref(false)
+let bootTimer: ReturnType<typeof setTimeout> | null = null
+
 const preview = computed(() => codingStore.activePreview)
 const devUrl = computed(() => preview.value?.dev_url || '')
 const errors = computed<string[]>(() => preview.value?.errors || [])
 const captureAvailable = computed(() => preview.value?.capture_available ?? false)
+// 手动一键起的预览(source=panel)没尝试 CDP 抓取，不显示「抓取不可用」这条噪音；agent 驱动的才显示。
+const showCaptureDegrade = computed(
+  () => !!devUrl.value && !captureAvailable.value && preview.value?.source !== 'panel',
+)
+
+// 一键启动预览：不依赖对话里的 agent 调 run_workspace_preview。
+async function start() {
+  if (!props.wsId || loading.value) return
+  loading.value = true
+  errorMsg.value = ''
+  try {
+    const r = await codingApi.startServe(props.wsId)
+    if (r.status === 'error') {
+      // 真失败：把后端日志尾(message)显给用户，绝不拼假地址当成功(否则白屏吞错)。
+      errorMsg.value = r.message || '启动失败'
+      return
+    }
+    const url = r.url || (r.port ? `http://127.0.0.1:${r.port}/` : '')
+    if (!url) {
+      errorMsg.value = r.message || '启动失败：未拿到 dev 地址'
+      return
+    }
+    const ready = r.status === 'ok'  // ok=端口已通 / starting=首屏还在编译
+    codingStore.activePreview = {
+      source: 'panel',
+      dev_url: url,
+      status: ready ? 'ok' : 'running',
+      errors: [],
+      capture_available: false,
+      round: null,
+    }
+    if (!ready) {
+      booting.value = true
+      if (bootTimer) clearTimeout(bootTimer)
+      bootTimer = setTimeout(() => { reload(); booting.value = false }, 3000)
+    }
+  } catch (e: any) {
+    errorMsg.value = e?.response?.data?.detail || e?.message || '启动失败'
+  } finally {
+    loading.value = false
+  }
+}
+
+function reload() {
+  reloadKey.value++
+}
 
 async function stop() {
+  if (bootTimer) { clearTimeout(bootTimer); bootTimer = null }
+  booting.value = false
   if (props.wsId) await codingApi.stopServe(props.wsId).catch(() => {})
   codingStore.activePreview = null
+  errorMsg.value = ''
 }
+
+onUnmounted(() => { if (bootTimer) clearTimeout(bootTimer) })
 </script>
 
 <style scoped>
 .run-debug-panel { display: flex; flex-direction: column; height: 100%; min-width: 0; }
 .rd-toolbar { display: flex; align-items: center; gap: 10px; padding: 8px 12px; border-bottom: 1px solid var(--line, #e5e7eb); flex: 0 0 auto; }
 .rd-title { font-size: 13px; font-weight: 600; color: var(--text-1, #222); }
-.rd-url { font-size: 12px; color: var(--text-3, #888); font-family: ui-monospace, monospace; }
+.rd-url { font-size: 12px; color: var(--text-3, #888); font-family: ui-monospace, monospace; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 50%; }
 .rd-spacer { flex: 1; }
 .rd-btn { font-size: 13px; padding: 4px 12px; border: 1px solid var(--line, #e5e7eb); border-radius: 6px; background: var(--surface, #fff); cursor: pointer; }
+.rd-btn:hover:not(:disabled) { border-color: var(--brand, #2f6bff); color: var(--brand, #2f6bff); }
+.rd-btn:disabled { opacity: 0.5; cursor: not-allowed; }
+.rd-primary { color: var(--brand, #2f6bff); border-color: var(--brand, #2f6bff); }
 .rd-body { flex: 1; display: flex; flex-direction: column; min-height: 0; }
 .rd-iframe { flex: 1; width: 100%; border: 0; display: block; background: #fff; }
 .rd-empty { flex: 1; display: flex; align-items: center; justify-content: center; color: var(--text-3, #888); font-size: 13px; padding: 20px; text-align: center; }
+.rd-err-box { flex: 1; display: flex; align-items: center; justify-content: center; color: var(--err, #e54d42); font-size: 13px; padding: 20px; text-align: center; }
 .rd-errs { flex: 0 0 auto; max-height: 30%; overflow: auto; border-top: 1px solid var(--line, #e5e7eb); padding: 8px 12px; font-family: ui-monospace, monospace; font-size: 12px; }
 .rd-errs-title { color: var(--text-2, #666); margin-bottom: 4px; }
 .rd-err { color: var(--err, #e54d42); word-break: break-all; padding: 1px 0; }

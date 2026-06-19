@@ -1934,7 +1934,8 @@ async def debug_workspace(
     serve_info = ws_mgr.is_serve_running(ws_id)
     if not serve_info["running"]:
         serve_result = await ws_mgr.start_serve(ws_id)
-        if serve_result["status"] != "ok":
+        # 只对真失败拦截; "starting"(仍在编译)同样带 port，可继续注入。
+        if serve_result["status"] == "error":
             raise HTTPException(status_code=500, detail=f"启动 serve 失败: {serve_result.get('message', '')}")
         serve_port = serve_result["port"]
     else:

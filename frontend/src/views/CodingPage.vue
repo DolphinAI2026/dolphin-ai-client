@@ -163,6 +163,7 @@
             empty-title=""
             empty-hint=""
             @answer-ask="onAnswerAsk"
+            @click.capture="onChatClick"
           >
             <!-- codeFirst 空态: 按工作区生成建议提问, 点击直接发送(解决冷启动) -->
             <template v-if="codeFirst" #empty>
@@ -1046,6 +1047,34 @@ function focusPreview(r: any) {
   }
   wsPaneTab.value = 'run'
 }
+
+// 对话里点链接: localhost 预览地址 → 聚焦预览位(不导航主界面, 根除「回不去」); 外链 → 系统浏览器。
+// 裸 marked 链接是 <a href> 无处理, 在 Tauri webview 里点了会把主界面导航走 → 死胡同。
+function onChatClick(e: MouseEvent) {
+  const a = (e.target as HTMLElement | null)?.closest?.('a') as HTMLAnchorElement | null
+  if (!a) return
+  const href = a.getAttribute('href') || ''
+  if (!/^https?:\/\//i.test(href)) return  // 站内相对链接(router)不拦
+  e.preventDefault()
+  e.stopPropagation()
+  if (/^https?:\/\/(127\.0\.0\.1|localhost)(:\d+)?/i.test(href)) {
+    // marked 自动链接常把后面的中文标点也吞进 href(如 8083/;本轮…), 本地预览只取干净 origin。
+    let dev = href
+    try { dev = new URL(href).origin + '/' } catch { /* 解析失败用原始 href 兜底 */ }
+    codingStore.activePreview = { dev_url: dev, status: 'ok', errors: [], capture_available: false, round: null, source: 'panel' }
+    wsPaneTab.value = 'run'
+  } else {
+    void openExternal(href)
+  }
+}
+
+// 预览结果一到达就自动切到「预览」位, 不用再点链接:
+// - previewEpoch: agent 每跑一次预览(run_result)+1, 即使 dev_url 不变也切(主路径; 自愈轮不递增, 不打扰)。
+// - activePreview.dev_url 变化: 覆盖按钮/链接等其它写入路径。
+watch(() => codingStore.previewEpoch, () => { wsPaneTab.value = 'run' })
+watch(() => codingStore.activePreview?.dev_url, (url, old) => {
+  if (url && url !== old) wsPaneTab.value = 'run'
+})
 
 /** Coding 的 tool StreamMessage(展示字符串模型,content='📖 读取 X' / '🔧 <display>',
  *  live 时可选 toolName=真实工具名)→ AgentConversation 原生 ToolCard payload。

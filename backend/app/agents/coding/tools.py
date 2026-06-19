@@ -505,6 +505,15 @@ async def _run_workspace_preview(args, ctx) -> ToolResult:
     )
 
 
+# run_workspace_preview 的 description 是模型决定「该不该一键起预览」的唯一认知来源，
+# 必须把触发条件 + 优先级写死(不要让模型改成口头解释 npm run preview)。见 prompts 的「运行/预览」段。
+RUN_PREVIEW_TOOL_DESC = (
+    "起当前工作区的 dev server、返回预览地址，并（可用时）抓运行时 console/network 报错。"
+    "当用户想预览 / 运行 / 看效果 / 调试，或你写完一轮代码需要自检运行态时，"
+    "必须优先直接调用本工具把预览真正跑起来，不要改成输出 `npm run preview` 让用户自己跑。"
+)
+
+
 def build_coding_tools(registry: ToolRegistry | None = None) -> list[Tool]:
     """从 tool_registry 构造 BaseAgent 的 Tool 列表 + 注入 aPaaS 工具集。
 
@@ -722,10 +731,7 @@ def build_coding_tools(registry: ToolRegistry | None = None) -> list[Tool]:
 
     tools.append(Tool(
         name="run_workspace_preview",
-        description=(
-            "起当前工作区的 dev server 并（可用时）抓运行时 console/network 报错；"
-            "用于在对话里『跑一下 / 调一下』看效果。返回 dev 预览地址与报错。"
-        ),
+        description=RUN_PREVIEW_TOOL_DESC,
         parameters_schema={
             "type": "object",
             "properties": {
