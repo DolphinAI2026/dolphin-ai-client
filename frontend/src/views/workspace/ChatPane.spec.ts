@@ -8,8 +8,12 @@ describe('ChatPane', () => {
     expect(src).toContain('UnifiedChatComposer')
     expect(src).toContain('BuilderModelPicker')
   })
-  it('runs as a general (unbound) chat — appId is null', () => {
-    expect(src).toMatch(/appId:\s*ref\(null\)|appId:\s*computed/)
+  it('takes appId from prop (not hardcoded null) to lock the app', () => {
+    expect(src).toContain('appId')
+    expect(src).not.toMatch(/const appId = ref<number \| null>\(null\)/)   // 不再写死 null
+  })
+  it('resets session when app binding changes', () => {
+    expect(src).toMatch(/watch[\s\S]*newSession/)
   })
   it('surfaces artifacts to the shell via open-artifact (panel lives in PanelHost)', () => {
     expect(src).toContain("emit('open-artifact'")

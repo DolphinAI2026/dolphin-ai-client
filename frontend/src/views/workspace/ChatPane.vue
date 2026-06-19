@@ -29,6 +29,8 @@ const props = defineProps<{
   sessionId: number | null
   /** 外壳传入的工作区 id（workspace 态注入代码工作区上下文） */
   workspaceId?: string | null
+  /** 外壳传入的应用 id（锁应用；null = 通用对话不锁） */
+  appId?: number | null
 }>()
 
 const emit = defineEmits<{
@@ -38,8 +40,8 @@ const emit = defineEmits<{
   (e: 'session-changed', id: number | null): void
 }>()
 
-// ─── unified 会话引擎（通用对话：appId = null，不锁应用） ───
-const appId = ref<number | null>(null)
+// ─── unified 会话引擎（appId 从 prop 取；null = 通用对话不锁应用） ───
+const lockedAppId = computed<number | null>(() => props.appId ?? null)
 const selectedLlmId = ref<number | null>(null)
 const llmOptions = ref<BuilderModelOption[]>([])
 
@@ -63,10 +65,19 @@ const {
   send,
   stop,
 } = useAiChatSession({
-  appId,
+  appId: lockedAppId,
   selectedLlmId,
   viewContext,
 })
+
+// ─── 切 app 时重置会话（对齐 AppAssistantPanel） ───
+watch(
+  () => props.appId,
+  () => {
+    newSession()
+    void loadSessions()
+  },
+)
 
 // ─── watch sessionId prop → composable loadSession ───
 watch(
