@@ -19,7 +19,8 @@
             @open-artifact="onOpenArtifact" @session-changed="onSessionChanged"
             @workspace-detected="onWorkspaceDetected" />
         </div>
-        <div v-if="activePanelId" class="ws-panel">
+        <div v-if="activePanelId" class="ws-resizer" title="拖拽调整面板宽度" @pointerdown="onPanelResizeStart" />
+        <div v-if="activePanelId" class="ws-panel" :style="{ width: wsPanelWidth + 'px' }">
           <PanelHost :active-panel-id="activePanelId"
             :binding="currentBinding" :session-id="currentSessionId" :artifact="openArtifact"
             @close="activePanelId = null" />
@@ -40,10 +41,15 @@ import { toSessionItems, type WorkspaceSession } from './sessionList'
 import type { Binding } from './binding'
 import { useAiChatSession } from '@/composables/useAiChatSession'
 import { routeToBinding, parseSidebarSelect } from './workspaceRoute'
+import { usePanelResize } from '@/components/v2/config-assistant/composables/usePanelResize'
 
 registerPhase1Panels()
 const route = useRoute()
 const router = useRouter()
+// 工具面板可拖拽调宽(handle 在面板左边界, 向左拖加宽) + localStorage 持久化
+const { panelWidth: wsPanelWidth, onResizeStart: onPanelResizeStart } = usePanelResize({
+  storageKey: 'workspace:panel-width', defaultWidth: 560, minWidth: 360, maxWidth: 1100, handleSide: 'left',
+})
 const { sessions, loadSessions } = useAiChatSession({ appId: ref(null) })
 
 const currentSessionId = ref<number | null>(null)
@@ -133,13 +139,21 @@ onMounted(loadSessions)
   flex: 1;
   min-width: 0;
 }
-/* 工具面板停靠右侧,仅打开时存在。配置面板(菜单栏+设计器)/代码面板(树+查看器)
-   都比单列内容更需空间,故放宽到 ~48%。 */
+/* 对话↔面板 拖拽分隔条 */
+.ws-resizer {
+  flex-shrink: 0;
+  width: 6px;
+  cursor: col-resize;
+  background: transparent;
+  transition: background 0.15s;
+}
+.ws-resizer:hover,
+.ws-resizer:active {
+  background: var(--brand-soft, rgba(99, 102, 241, 0.3));
+}
+/* 工具面板停靠右侧,仅打开时存在。宽度由 usePanelResize 经 :style 控制(px, 可拖+持久化)。 */
 .ws-panel {
   flex-shrink: 0;
-  width: 48%;
-  min-width: 360px;
-  max-width: 720px;
   border-left: 1px solid var(--line);
   overflow: auto;
   background: var(--surface);
