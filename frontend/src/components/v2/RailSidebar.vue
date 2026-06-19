@@ -33,6 +33,8 @@ function desktopHidden(path: string): boolean {
 const NAV = computed<NavItem[]>(() => {
   const all: NavItem[] = [
     { key: 'home', label: 'AI Builder', icon: 'chat', path: '/' },
+    // 临时入口: Phase 1 统一工作区预览; Phase 4 导航收口时再正式编排/移除。
+    { key: 'workspace', label: '统一工作区(预览)', icon: 'flow', path: '/workspace' },
     { key: 'apps', label: '应用资产库', icon: 'apps', path: '/apps', badge: appCount.value || undefined },
     { key: 'catalog', label: '自开发资产库', icon: 'store', path: '/workspace-catalog' },
     { key: 'skills', label: '技能库', icon: 'sparkles', path: '/skills' },

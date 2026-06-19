@@ -1,6 +1,6 @@
 <template>
   <el-dropdown trigger="click" @command="onCommand">
-    <button class="tool-menu-trigger" title="工具面板"><AppIcon name="layout" :size="16" /></button>
+    <button class="tool-menu-trigger" title="工具面板"><AppIcon name="menu" :size="16" /></button>
     <template #dropdown>
       <el-dropdown-menu>
         <el-dropdown-item
