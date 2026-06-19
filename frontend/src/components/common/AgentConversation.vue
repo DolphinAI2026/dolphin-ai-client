@@ -53,7 +53,7 @@
                       v-for="(a, idx) in imageAttachments(item)"
                       :key="a.id ?? a.filename"
                       class="ac-attach-img"
-                      :src="a.url"
+                      :src="withAuthToken(a.url)"
                       :preview-src-list="imageAttachmentUrls(item)"
                       :initial-index="idx"
                       preview-teleported
@@ -367,8 +367,18 @@ function imageAttachments(m: AgentMessage) {
 function fileAttachments(m: AgentMessage) {
   return (m.attachments || []).filter(a => !(a.kind === 'image' && a.url))
 }
+// 站内 /api 相对附件地址(如 /coding/workspace/{ws}/raw)需要鉴权, 但原生 <img> GET 带不了
+// Authorization header → 401 → el-image 显示「加载失败」。给这类地址拼 ?token=(后端 /raw 用
+// auth_from_header_or_query 接住 query token)。token 只在内存渲染期拼, 不落消息历史/DB。
+// 外链 / blob: / data: 不动。
+function withAuthToken(url?: string): string {
+  if (!url || !url.startsWith('/')) return url || ''
+  const token = localStorage.getItem('token') || ''
+  if (!token) return url
+  return url + (url.includes('?') ? '&' : '?') + 'token=' + encodeURIComponent(token)
+}
 function imageAttachmentUrls(m: AgentMessage): string[] {
-  return imageAttachments(m).map(a => a.url as string)
+  return imageAttachments(m).map(a => withAuthToken(a.url as string))
 }
 
 function formatTime(ts: number | string | undefined): string {

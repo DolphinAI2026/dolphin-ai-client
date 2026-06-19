@@ -990,10 +990,14 @@ async def read_workspace_file(
 async def download_workspace_file_raw(
     ws_id: str,
     file_path: str = Query(..., description="文件相对路径"),
-    ctx: Annotated[AuthContext, Depends(get_auth_context)] = None,
+    ctx: Annotated[AuthContext, Depends(auth_from_header_or_query)] = None,
     db: Annotated[AsyncSession, Depends(get_db)] = None,
 ):
-    """以原始字节返回工作区单文件，供二进制文件（zip/图片/字体等）下载。"""
+    """以原始字节返回工作区单文件，供二进制文件（zip/图片/字体等）下载。
+
+    用 auth_from_header_or_query：浏览器原生 <img>/<a download> 带不了 Authorization header，
+    走 ?token= 后备(与 serve-logs SSE 同款)。否则对话里上传的图片 <img> GET 必 401 → 显示「加载失败」。
+    目录越界防护 + _ensure_workspace_access 仍在，鉴权放开到 query token 不放松这些约束。"""
     from fastapi.responses import FileResponse
 
     await _ensure_workspace_access(ws_id, ctx, db, minimum_project_role="member")
