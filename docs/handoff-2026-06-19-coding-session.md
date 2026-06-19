@@ -31,17 +31,23 @@
 - 图片「加载失败」:`/raw` 端点改 `auth_from_header_or_query`(原生 `<img>` 带不了 header→401)+ 前端 `withAuthToken` 拼 `?token=`;
 - agent 误报「真实数据已接通」:`_WORKFLOW_PAGE` 加铁律(build/预览成功 ≠ 真数据接通,真数据只在 aPaaS 平台运行态验)。
 
-**D. #1 上下文滑动窗口压缩(feat: 728c4063..bd8c5ebe)** — DONE,opus 终审通过(逮到并修了 2 个 critical),后端 1165 passed。
+**D. #1 上下文滑动窗口压缩(已并入 dev:728c4063..bd8c5ebe)** — DONE,opus 终审通过(逮到并修了 2 个 critical),后端 1165 passed。
 - spec `docs/superpowers/specs/2026-06-19-coding-context-compaction-design.md`,plan `docs/superpowers/plans/2026-06-19-coding-context-compaction.md`。
 - 机制:Claude Code 式 compaction 适配无状态请求——跨轮 `from_snapshot` 恢复真实消息(含读过的文件结果)+ `ContextCompactor` 滑动窗口 + token 预算触发 + 413 重压重试,压缩态落 `Conversation.coding_agent_state`。
 - **⚠️ 未真机 live 验**(收尾验证待做:重打桌面包 → 多轮迭代「改一处→基于上一轮继续→看是否记得+不重读」)。
 
+**E. #3 @skill 接入 coding(dev:af7a8d07..03c6856d,5 commit)** — DONE,opus 全分支终审 READY TO MERGE,后端 1189 passed/前端 3/3。
+- spec `docs/superpowers/specs/2026-06-19-skill-into-coding-design.md`,plan `docs/superpowers/plans/2026-06-19-skill-into-coding.md`。
+- 四处接线:① 前端 `CodingPage.vue` 镜像 AIChatPage(`listSkills`+`:skills`+`onSkillPicked`);② 后端 `build_coding_tools` 加 `use_skill`(拷 skill 进 workspace + 喂 `SKILL.md` 正文,路径穿越防护);③ 抽共享 `app/agents/python_runner.py`(`run_python_in_dir`+`build_python_argv`),coding 与 ai_chat **同源委托** + coding 加 `run_python` 工具;④ pipeline **运行时**把 skill manifest 拼到 `resolve_prompt` 之后的系统提示(不碰常量/DB,绕 DB-first 陈旧)。skill 选择走 message 文本(无新 pipeline 字段)。
+- **⚠️ 未真机 live 验**(与 #1 一并:重打桌面包 → /coding 输入框 @ 选上传的 superpowers skill → 看 agent 是否调 use_skill / 跑 run_python)。
+- DEFER(cosmetic 未修):`python_runner` 截断后缀 `原长度→原始` / `use_skill` resolve 错误 content 英文 / 前端源码串测试可再 co-locate。
+
 ## §2 待做(各自 spec→plan→build,#1 是模板)
 
 - **#2** token 用量显示 + 「上下文过长/换 session」提醒(复用 #1 的 token 计数;`estimate_tokens` 已在 `app/agents/token_estimate.py`,`_tokens_input/output` 已累加)。
-- **#3** @skill 接入 coding(现状:CodingPage 没给 UnifiedChatComposer 传 `:skills`/`@skill-picked`;coding agent `build_coding_tools` 无 `use_skill`、提示词无技能清单。最小=前端照抄 AIChatPage;中=加 use_skill 工具+注入 manifest 让 coding 真能用上传的 superpowers skill。SkillRegistry/use_skill 现只接 AIChat agent)。
+- ~~**#3** @skill 接入 coding~~ **— DONE(见 §1 E)**。
 - **#4** handoff 结构化上下文包(现状:app→/coding 的 dispatch 只带一条首消息字符串,丢 Builder 历史/确认的 SPEC)。
-- **#1 live 验**(见上 D)。
+- **#1 + #3 live 验**(见上 D/E,一并真机验)。
 
 ## §3 durable 踩坑(本会话调研挖出,见记忆 [[miniprogram_preview_onehit_2026_06_19]] 全文)
 
@@ -61,7 +67,7 @@
 
 ## §5 推荐下一步顺序
 
-1. **合分支**(零冲突):`git checkout dev && git merge feat/desktop-login-mvp` → 全部工作归一到 dev。合后重跑全量后端测试。
-2. **live 验 #1**:重打桌面包 → 多轮迭代验证 agent 跨轮记忆/不重读。
-3. 按需推 origin(用户拍板)。
-4. 续做 #2/#3/#4(各自 spec→plan→build,以 #1 为模板)。
+1. ~~合分支~~ **已完成**:feat→dev 零冲突合(merge `90392021`),#1 + #3 全在 dev,1189 passed。
+2. **live 验 #1 + #3**:重打桌面包 → ① 多轮迭代验证 agent 跨轮记忆/不重读(#1);② /coding @ 选上传的 superpowers skill,看 agent 调 use_skill / 跑 run_python(#3)。
+3. 按需推 origin(用户拍板;dev 现领先 origin 很多 commit,均本地)。
+4. 续做 #2(token 显示+换 session 提醒)/ #4(handoff 结构化),各自 spec→plan→build,以 #1/#3 为模板。
