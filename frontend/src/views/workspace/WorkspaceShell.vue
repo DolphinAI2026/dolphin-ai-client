@@ -5,6 +5,7 @@
       :sessions="sessionItems" :active-id="activeSidebarId"
       collapse-key="workspace:aside-collapsed" new-label="+ 新会话"
       empty-hint="暂无会话,点上方新建"
+      back-route="/" back-label="返回 AI Builder"
       :enable-rename="false" :enable-delete="false"
       @select="onSelect" @create="onCreate"
       @collapse-change="(v) => (asideCollapsed = v)" />
@@ -13,11 +14,15 @@
         <ToolMenu :binding="currentBinding" @open="onOpenPanel" />
       </header>
       <div class="ws-body" :class="{ 'has-panel': activePanelId }">
-        <ChatPane :session-id="currentSessionId"
-          @open-artifact="onOpenArtifact" @session-changed="onSessionChanged" />
-        <PanelHost v-if="activePanelId" :active-panel-id="activePanelId"
-          :binding="currentBinding" :session-id="currentSessionId" :artifact="openArtifact"
-          @close="activePanelId = null" />
+        <div class="ws-chat">
+          <ChatPane :session-id="currentSessionId"
+            @open-artifact="onOpenArtifact" @session-changed="onSessionChanged" />
+        </div>
+        <div v-if="activePanelId" class="ws-panel">
+          <PanelHost :active-panel-id="activePanelId"
+            :binding="currentBinding" :session-id="currentSessionId" :artifact="openArtifact"
+            @close="activePanelId = null" />
+        </div>
       </div>
     </main>
   </div>
@@ -57,3 +62,50 @@ function onSessionChanged(id: number) { currentSessionId.value = id; loadSession
 function onCreate() { currentSessionId.value = null }   // ChatPane 首条消息触发 ensureSession
 onMounted(loadSessions)
 </script>
+
+<style scoped>
+/* 五区布局: [会话栏 | 主区(顶部工具菜单 + 主体(对话 | 面板))] */
+.workspace-shell {
+  display: flex;
+  height: 100vh;
+  overflow: hidden;
+  background: var(--surface);
+}
+.ws-main {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+}
+.ws-top {
+  flex-shrink: 0;
+  height: 48px;
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  padding: 0 12px;
+  border-bottom: 1px solid var(--line);
+  background: var(--surface);
+}
+.ws-body {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+}
+/* 对话占主，撑满高度(ChatPane 自身 height:100%) */
+.ws-chat {
+  flex: 1;
+  min-width: 0;
+}
+/* 工具面板停靠右侧,仅打开时存在 */
+.ws-panel {
+  flex-shrink: 0;
+  width: 40%;
+  min-width: 320px;
+  max-width: 560px;
+  border-left: 1px solid var(--line);
+  overflow: auto;
+  background: var(--surface);
+}
+</style>
