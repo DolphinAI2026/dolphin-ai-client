@@ -1325,6 +1325,23 @@ def _grounding_tool_defs():
     return out
 
 
+def build_resume_snapshot(state_json: str | None) -> dict | None:
+    """把 Conversation.coding_agent_state(JSON)解析成 CodingAgent.from_snapshot 可用的 snapshot。
+
+    脏数据 / 无 messages → None(调用方按首轮新建 agent 处理)。
+    """
+    if not state_json:
+        return None
+    try:
+        data = json.loads(state_json)
+    except Exception:
+        return None
+    msgs = data.get("messages")
+    if not isinstance(msgs, list) or not msgs:
+        return None
+    return {"messages": msgs, "status": "idle", "turn": 0}
+
+
 async def _grounded_brainstorm(params, scene_type, apaas_app_id, platform_env_id, app_name, db,
                                history_summary: str = "", force_spec: bool = False):
     """bound 首轮:先调读工具了解应用,再输出开发 SPEC(或先抛澄清问题)。
@@ -2105,7 +2122,14 @@ async def run_coding_pipeline(
             trace_writer=InMemoryTraceWriter(),   # Stage 4 后接 DB
             llm_client=_coding_llm,
         )
-        _coding_agent = CodingAgent(_coding_ctx)
+        _resume_state = None
+        if conversation_id:
+            _conv = await db.get(Conversation, conversation_id)
+            _resume_state = build_resume_snapshot(getattr(_conv, "coding_agent_state", None)) if _conv else None
+        if _resume_state:
+            _coding_agent = CodingAgent.from_snapshot(_coding_ctx, _resume_state)
+        else:
+            _coding_agent = CodingAgent(_coding_ctx)
         agent = CodingAgentStreamAdapter(_coding_agent)
         agent_result_text = ""
         persisted_agent_output: list[str] = []
@@ -2142,7 +2166,7 @@ async def run_coding_pipeline(
                 agent=_coding_agent,
                 adapter=agent,
                 requirement=effective_requirement,
-                conversation_summary=conversation_summary,
+                conversation_summary="",  # 历史已由 from_snapshot 恢复到 _messages，不再注入摘要
                 model=effective_model,
                 max_turns=30,
                 ws_mgr=ws_mgr,
@@ -2152,7 +2176,7 @@ async def run_coding_pipeline(
         else:
             _agent_event_source = agent.run(
                 requirement=effective_requirement,
-                conversation_summary=conversation_summary,
+                conversation_summary="",  # 历史已由 from_snapshot 恢复到 _messages，不再注入摘要
                 model=effective_model,
                 max_turns=30,
             )
