@@ -1,4 +1,9 @@
-from app.coding.pipeline import should_decompose
+from app.coding.pipeline import should_decompose, PipelineParams
+
+
+def test_pipeline_params_force_codegen_flag():
+    assert PipelineParams(message="x", user_id=1, tenant_id=1).force_codegen is False
+    assert PipelineParams(message="x", user_id=1, tenant_id=1, force_codegen=True).force_codegen is True
 
 
 def test_decompose_only_first_turn_strong_signal():

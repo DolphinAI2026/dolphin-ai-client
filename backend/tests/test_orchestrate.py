@@ -15,6 +15,17 @@ class _Params:
     attachments = None
 
 
+def test_sub_params_forces_codegen():
+    from app.coding.orchestrate import _sub_params
+
+    class B:
+        user_id = 1
+        tenant_id = 1
+        selected_model = None
+    p = _sub_params(B(), "做个职位列表页", 7)
+    assert p.force_codegen is True and p.project_id == 7 and p.message == "做个职位列表页"
+
+
 async def _fake_decomposer(req, cfg, scenes):
     return [Artifact(name="后台", side="admin", scene="form-list", sub_request="做招聘管理列表页"),
             Artifact(name="求职端", side="user", scene="mobile-page", sub_request="做求职移动端")]

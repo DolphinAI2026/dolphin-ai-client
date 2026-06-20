@@ -51,6 +51,7 @@ class PipelineParams:
         project_id: Optional[int] = None,
         app_id: Optional[str] = None,  # 分场景「在应用上定制」绑定的本地 Application.id
         attachments: Optional[list[dict[str, Any]]] = None,
+        force_codegen: bool = False,  # 多产物编排的子跑: 跳过 READ 意图门 + brainstorm 门直接 codegen
     ):
         self.message = message
         self.user_id = user_id
@@ -61,6 +62,7 @@ class PipelineParams:
         self.project_id = project_id
         self.app_id = app_id
         self.attachments = normalize_coding_attachments(attachments or [])
+        self.force_codegen = force_codegen
 
 
 # ── 场景/项目辅助函数 ──────────────────────────────
@@ -1802,7 +1804,7 @@ async def run_coding_pipeline(
         # ---- 意图门：仅对首轮(not is_iteration)、且非 brainstorm/澄清续轮生效 ----
         # BUILD(保守兜底): 走原 codegen 流程，完全不变。
         # READ: 用只读 aPaaS 工具直接答问题，不建 workspace、不 codegen。
-        if not is_iteration and not _awaiting_followup:
+        if not is_iteration and not _awaiting_followup and not params.force_codegen:
             _intent = await classify_coding_intent(
                 params.tenant_id, effective_model,
                 params.message.split("\n")[0][:300],  # 只取首行，与 detect_scene 对齐
@@ -2081,7 +2083,7 @@ async def run_coding_pipeline(
                 ws_id, _data = await _create_workspace_now(brainstorm_for_naming=brainstorm_proposal)
                 yield _record_event({"type": "step", "step": "create_workspace", "status": "done", "data": _data})
 
-        elif not is_iteration and scene_type in BRAINSTORM_SCENES:
+        elif not is_iteration and not params.force_codegen and scene_type in BRAINSTORM_SCENES:
             # 首轮发起(或澄清回答后的续轮)。两道门,本轮都不 codegen:
             #   · 澄清门:需求不清晰 → 先抛澄清问题(选项/自由输入),等用户回答。
             #   · 确认门:需求清晰 → 出开发 SPEC 后停住等确认。

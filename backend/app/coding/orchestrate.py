@@ -39,6 +39,7 @@ def _sub_params(base, sub_request: str, project_id: Optional[int]):
         message=sub_request, user_id=base.user_id, tenant_id=base.tenant_id,
         workspace_id=None, conversation_id=None, project_id=project_id,
         selected_model=getattr(base, "selected_model", None),
+        force_codegen=True,  # 已分解的聚焦子任务: 直接 codegen, 不再各自 brainstorm/READ 门
     )
 
 
