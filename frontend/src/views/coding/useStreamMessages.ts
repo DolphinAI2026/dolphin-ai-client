@@ -190,8 +190,12 @@ export function useStreamMessages() {
 
   function appendToLastReasoning(delta: string) {
     const msgs = streamMessages.value
-    if (msgs.length > 0 && msgs[msgs.length - 1].type === 'reasoning') {
-      msgs[msgs.length - 1].content += delta
+    // 反向找最后一张 reasoning 卡（而非只看数组尾），
+    // 防止 gpt-5.5 interleave（reasoning→content→reasoning）时尾部不是 reasoning
+    // 导致创建碎片重复卡。appendToLastThinking 不变（它只管尾部 thinking 卡）。
+    const last = [...msgs].reverse().find((m) => m.type === 'reasoning')
+    if (last) {
+      last.content = (last.content || '') + delta
     } else {
       addStreamMsg({ type: 'reasoning', content: delta, collapsed: true })
     }

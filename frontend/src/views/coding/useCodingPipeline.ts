@@ -309,9 +309,11 @@ export function useCodingPipeline(deps: PipelineDeps) {
       const text = (parsed.content || '') as string
       if (!text.trim()) return
       if (parsed.reasoning) {
-        const last = streamMessages.value[streamMessages.value.length - 1]
-        if (last?.type === 'reasoning') {
-          if (last.content.length < text.length) last.content = text
+        // 反向找最后一张 reasoning 卡（与 appendToLastReasoning 保持一致），
+        // 防止 interleave 时尾部不是 reasoning 而误建第二张卡。
+        const lastReasoning = [...streamMessages.value].reverse().find((m) => m.type === 'reasoning')
+        if (lastReasoning) {
+          if ((lastReasoning.content || '').length < text.length) lastReasoning.content = text
           return
         }
         addStreamMsg({ type: 'reasoning', content: text, collapsed: true })
