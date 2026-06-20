@@ -72,7 +72,7 @@ class CodingProfile(HarnessProfile):
         thread_ctx.metadata 中应包含 pipeline 所需参数：
         - workspace_id, conversation_id, selected_model, project_id, app_id
         """
-        from app.coding.pipeline import PipelineParams, run_coding_pipeline
+        from app.coding.pipeline import PipelineParams, run_coding_entry
 
         meta = thread_ctx.metadata
 
@@ -92,7 +92,7 @@ class CodingProfile(HarnessProfile):
         done_data = {}
 
         async with AsyncSessionLocal() as db:
-            async for event in run_coding_pipeline(params, db):
+            async for event in run_coding_entry(params, db):
                 event_type = event.get("type", "")
 
                 # 桥接不同事件类型到 harness EventBus

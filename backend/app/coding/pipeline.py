@@ -1617,6 +1617,40 @@ def _coding_project_memory_suffix(ws_path: Path) -> str:
         return ""
 
 
+def should_decompose(message: str, is_iteration: bool) -> bool:
+    """首轮 + 多端强信号 → 走多产物分解。迭代/弱信号 → 否(行为不变)。"""
+    if is_iteration:
+        return False
+    try:
+        from app.coding.delivery_honesty import _has_multi_end_signal
+        return _has_multi_end_signal(message or "")
+    except Exception:  # noqa: BLE001
+        return False
+
+
+async def run_coding_entry(params, db):
+    """coding 统一入口: 多端强信号首轮 → 多产物编排;否则原单产物流水线。"""
+    is_iteration = params.workspace_id is not None
+    if should_decompose(params.message, is_iteration):
+        from app.coding.orchestrate import run_multi_artifact
+        from app.coding.decompose import decompose
+        scenes = {"form-list", "menu-page", "mobile-page", "form-page"}
+        try:
+            from app.agents.coding.llm_config import load_coding_llm_config
+            b, k, m = await load_coding_llm_config(params.tenant_id, params.selected_model)
+            llm_cfg = {"base_url": b, "api_key": k, "model": m}
+        except Exception:  # noqa: BLE001 — 解析失败 decompose 内部会回落
+            llm_cfg = {}
+        async for ev in run_multi_artifact(
+            params, db, available_scenes=scenes, decomposer=decompose,
+            runner=run_coding_pipeline, llm_cfg=llm_cfg,
+        ):
+            yield ev
+        return
+    async for ev in run_coding_pipeline(params, db):
+        yield ev
+
+
 async def run_coding_pipeline(
     params: PipelineParams,
     db: AsyncSession,
