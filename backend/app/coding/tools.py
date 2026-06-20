@@ -25,6 +25,7 @@ from app.coding.form_component_editor import (
     validate_form_component_editor_workspace,
 )
 from app.coding.runtime_env import ensure_node_tool_env, resolve_executable
+from app.coding.command_sandbox import should_sandbox, wrap_command
 
 FALLBACK_NPM_REGISTRY = "https://registry.npmmirror.com"
 DEFAULT_NPM_CACHE_DIR = os.environ.get(
@@ -567,13 +568,23 @@ async def _run_command(
                 return result["message"]
             return f"Error: {result['message']}"
 
-        proc = await asyncio.create_subprocess_shell(
-            command,
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.STDOUT,
-            cwd=str(workspace_path),
-            env=_build_command_env(),
-        )
+        if should_sandbox():
+            # 桌面态(客户机)把通用命令写入限制在工作区,挡住写出工作区/rm 别的项目。
+            proc = await asyncio.create_subprocess_exec(
+                *wrap_command(command, workspace_path),
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.STDOUT,
+                cwd=str(workspace_path),
+                env=_build_command_env(),
+            )
+        else:
+            proc = await asyncio.create_subprocess_shell(
+                command,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.STDOUT,
+                cwd=str(workspace_path),
+                env=_build_command_env(),
+            )
         try:
             output = await asyncio.wait_for(
                 _stream_process_output(proc, progress_callback=progress_callback),
