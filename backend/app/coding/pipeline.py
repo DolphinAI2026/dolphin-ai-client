@@ -1602,6 +1602,21 @@ def _coding_skill_manifest_suffix() -> str:
         return ""
 
 
+def _coding_project_memory_suffix(ws_path: Path) -> str:
+    """读工作区 .ruijing/PROJECT.md 注入系统提示末尾(沉淀跨会话项目约定)。
+
+    无记忆/读失败 → 空串(no-op),不中断 codegen。与 _coding_skill_manifest_suffix 同一
+    运行时拼接模式,绕开 DB-first 陈旧。agent 用现成 write_file 写该文件即可更新。
+    """
+    try:
+        from app.coding.project_memory import project_memory_suffix
+
+        return project_memory_suffix(ws_path)
+    except Exception as exc:  # noqa: BLE001 — 项目记忆读失败不应中断 codegen
+        logger.warning("coding 项目记忆注入失败: %r", exc)
+        return ""
+
+
 async def run_coding_pipeline(
     params: PipelineParams,
     db: AsyncSession,
@@ -2151,6 +2166,9 @@ async def run_coding_pipeline(
             fallback=AGENT_SYSTEM_PROMPT,
         )
         _coding_system_prompt = _coding_system_prompt + _coding_skill_manifest_suffix()
+        _coding_system_prompt = _coding_system_prompt + _coding_project_memory_suffix(
+            ws_mgr.get_workspace_path(ws_id)
+        )
 
         # 「在应用上定制」bound 模式:解析绑定应用 → 把 apaas_app_id/env 注入 ctx,
         # 让 codegen 的 aPaaS 读工具锁定本应用(防跨应用读)+ prompt 提示 agent 先读真实模型/菜单。
