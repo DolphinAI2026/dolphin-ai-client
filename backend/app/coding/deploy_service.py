@@ -13,8 +13,9 @@ from fastapi import HTTPException
 from sqlalchemy import select
 
 from app.apaas_client import APaaSClient
-from app.coding.apaas_tools import call_apaas_with_relogin
+from app.coding.apaas_tools import call_apaas_with_relogin, _relogin_apaas_env
 from app.coding.workspace import ProjectType, WorkspaceManager
+from app.error_messages import is_apaas_token_error
 from app.config import settings
 from app.routes.applications.extension import (
     _ensure_env_token,
@@ -200,6 +201,61 @@ def _resolve_page_register_name(apaas_config: dict | None, fallback: str) -> str
     return str(fallback or "").strip()
 
 
+def _upload_resp_is_token_error(r: httpx.Response) -> bool:
+    """上传响应是否为 apaas token 失效(HTTP 401 / 响应体 message 含 token 错标记)。
+
+    上传是裸 httpx(不抛异常、靠查 body code), 平台 token 过期可能回 HTTP 401, 也可能 HTTP 200
+    但 body `{code != ok, message: "...Unauthorized..."}`。两种都要认出来走重登重试。
+    """
+    if r.status_code == 401:
+        return True
+    try:
+        body = r.json()
+    except Exception:
+        return False
+    if body.get("code") in ("ok", 200):
+        return False
+    msg = str(body.get("message") or body.get("msg") or "")
+    return is_apaas_token_error(msg)
+
+
+async def _post_kit_upload(target: str, env, fp: Path, ct: str, form_data: dict) -> httpx.Response:
+    """裸上传单个 kit 文件 POST(每次重读 env.token, 便于重登后重试用新 token)。"""
+    import time as _t
+
+    async with httpx.AsyncClient(verify=False, timeout=120.0) as http:
+        return await http.post(
+            target,
+            headers={
+                "xdaptenantid": env.platform_tenant_id,
+                "xdaptoken": env.token,
+                "xdaptimestamp": str(int(_t.time() * 1000)),
+            },
+            files={"file": (fp.name, fp.read_bytes(), ct)},
+            data=form_data,
+        )
+
+
+async def _upload_one_kit(target: str, env, fp: Path, ct: str, form_data: dict, db) -> dict:
+    """上传单个 kit; 撞 token 失效(401) → `_relogin_apaas_env` 刷新 + 重试一次, 返回解析后的响应 json。
+
+    修复: 上传是 deploy 第一个平台调用, 用的 env.token 可能已过期(`_ensure_env_token` 只在 token
+    为空时重登、不验证过期), 且这处裸 httpx 漏了 `call_apaas_with_relogin` 自愈 → 旧 token 直接撞
+    Unauthorized。这里镜像 `call_apaas_with_relogin`: 撞 token 错就重登(原地刷新 env.token)再重试一次。
+    """
+    r = await _post_kit_upload(target, env, fp, ct, form_data)
+    if _upload_resp_is_token_error(r) and await _relogin_apaas_env(getattr(env, "id", None), db):
+        logger.info("[deploy-to-app] 上传撞 token 失效, 已重登, 重试上传: %s", fp.name)
+        r = await _post_kit_upload(target, env, fp, ct, form_data)  # env.token 已被重登原地刷新
+    try:
+        rj = r.json()
+    except Exception:
+        raise HTTPException(status_code=502, detail=f"平台上传响应非 JSON (status={r.status_code})")
+    if rj.get("code") not in ("ok", 200):
+        raise HTTPException(status_code=500, detail=rj.get("message") or rj.get("msg") or "上传失败")
+    return rj
+
+
 async def _build_and_upload_kits(*, ws_mgr, ws_id: str, env, db) -> dict:
     """构建 workspace -> 上传 developmentKit(组件库) -> 用 fileName 反查 kit_id。"""
     import time as _t
@@ -280,23 +336,8 @@ async def _build_and_upload_kits(*, ws_mgr, ws_id: str, env, db) -> dict:
         )
         target = update_url if kit else add_url
         ct = "application/java-archive" if fp.suffix == ".jar" else "application/zip"
-        async with httpx.AsyncClient(verify=False, timeout=120.0) as http:
-            r = await http.post(
-                target,
-                headers={
-                    "xdaptenantid": env.platform_tenant_id,
-                    "xdaptoken": env.token,
-                    "xdaptimestamp": str(int(_t.time() * 1000)),
-                },
-                files={"file": (fp.name, fp.read_bytes(), ct)},
-                data=form_data,
-            )
-        try:
-            rj = r.json()
-        except Exception:
-            raise HTTPException(status_code=502, detail=f"平台上传响应非 JSON (status={r.status_code})")
-        if rj.get("code") not in ("ok", 200):
-            raise HTTPException(status_code=500, detail=rj.get("message") or rj.get("msg") or "上传失败")
+        # 撞 token 失效 → 重登刷新 + 重试一次(裸上传此前漏了自愈, 见 _upload_one_kit)
+        await _upload_one_kit(target, env, fp, ct, form_data, db)
 
     client = APaaSClient(base_url=env.base_url, tenant_id=env.platform_tenant_id, token=env.token)
     kit_ids: list[str] = []
