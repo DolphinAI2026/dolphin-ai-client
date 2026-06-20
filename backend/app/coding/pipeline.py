@@ -2338,11 +2338,23 @@ async def run_coding_pipeline(
 
         await _append_replay_history(conversation_id, db, replay_stream_messages)
 
+        # G4 交付诚实声明: 对照原始请求显式说明收窄/未起预览, 避免静默把多端系统压成单页还报完成。
+        # 挂在 done 之前(_build_agent_completion_summary 调用点之后), 用完整 params.message
+        # (非截断首行), 与早返/streamed 逻辑无关 → 常见路径也不会被跳过。
+        _serve_status = ws_mgr.is_serve_running(ws_id)
+        try:
+            from app.coding.delivery_honesty import build_delivery_honesty_note
+            _honesty = build_delivery_honesty_note(params.message, bool(_serve_status.get("running")))
+        except Exception as _e:  # noqa: BLE001 — 声明生成失败不应中断收尾
+            logger.warning("交付诚实声明生成失败(非致命): %s", _e)
+            _honesty = ""
+        if _honesty:
+            yield _record_event({"type": "content", "content": _honesty})
+
         # 迭代模式完成
         if is_iteration:
-            serve_status = ws_mgr.is_serve_running(ws_id)
             yield _record_event({"type": "step", "step": "hot_reload", "status": "done",
-                   "data": {"serve_running": serve_status["running"], "port": serve_status.get("port")}})
+                   "data": {"serve_running": _serve_status["running"], "port": _serve_status.get("port")}})
             yield _record_event({"type": "done", "workspace_id": ws_id, "conversation_id": conversation_id,
                                  **_coding_agent.token_usage_snapshot()})
             return
