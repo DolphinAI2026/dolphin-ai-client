@@ -117,6 +117,7 @@ _READ_ONLY_EXECUTORS: dict[str, Any] = {
 
 # 读路径 tool-loop 最大轮数（避免 LLM 死循环）
 _READ_MAX_TURNS = 8
+_READ_HISTORY_MAX_MSGS = 12  # 读路径注入的最近会话历史条数(≈6 轮 user/assistant), 控 token
 
 # 只读工具 → 人话标签（给前端工具卡显示，避免暴露技术工具名）
 _TOOL_DISPLAY = {
@@ -669,6 +670,25 @@ _READ_WS_SYSTEM_PROMPT = """你是代码工作区的 AI 助手，帮用户阅读
 """
 
 
+def _read_history_messages(
+    history: list[dict], current_message: str, max_msgs: int = _READ_HISTORY_MAX_MSGS
+) -> list[dict]:
+    """取注入读路径上下文的最近会话历史(修复读/分析路径跨轮失忆)。
+
+    history = get_conversation_history 返回的 [{role, content}](user/assistant, 时间升序)。
+    当前轮 user 消息在调用前已 save_coding_message → 它是 history 末尾, 去掉一条避免与下面
+    单独追加的当前 message 重复(只去末尾这一条, 历史里更早的同内容不动)。再截到最近 max_msgs 条控 token。
+    """
+    hist = [m for m in (history or []) if m.get("role") in ("user", "assistant")]
+    if (
+        hist
+        and hist[-1].get("role") == "user"
+        and (hist[-1].get("content") or "").strip() == (current_message or "").strip()
+    ):
+        hist = hist[:-1]
+    return hist[-max_msgs:] if max_msgs and max_msgs > 0 else hist
+
+
 async def run_read_query(
     params: "PipelineParams",
     db: AsyncSession,
@@ -725,9 +745,25 @@ async def run_read_query(
 
     system_prompt = _READ_WS_SYSTEM_PROMPT if ws_path else _READ_SYSTEM_PROMPT
 
+    # ── 读路径跨轮记忆: 注入最近会话历史(修复读/分析路径失忆) ──────────────
+    # 之前 messages 从空起 → 读/分析路径每轮完全无状态(「分析一下」后说「可以的」不知所指)。
+    # save_coding_message 早已存每轮 user/assistant, 这里回头加载即可。首轮新会话 conversation_id
+    # 为 None → 无历史(正确)。延迟 import get_conversation_history 避免与 pipeline 循环依赖。
+    _history_msgs: list[dict] = []
+    _cid = getattr(params, "conversation_id", None)
+    if _cid:
+        try:
+            from app.coding.pipeline import get_conversation_history
+            _hist = await get_conversation_history(db, _cid)
+            _history_msgs = _read_history_messages(_hist, params.message)
+        except Exception as exc:
+            logger.warning("[read_query] 加载会话历史失败(降级无历史): %s", exc)
+            _history_msgs = []
+
     # ── tool-loop ──────────────────────────────────────────────────────────
     messages: list[dict] = [
         {"role": "system", "content": system_prompt},
+        *_history_msgs,
         {"role": "user", "content": params.message},
     ]
 
