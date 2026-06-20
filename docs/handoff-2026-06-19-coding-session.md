@@ -34,7 +34,8 @@
 **D. #1 上下文滑动窗口压缩(已并入 dev:728c4063..bd8c5ebe)** — DONE,opus 终审通过(逮到并修了 2 个 critical),后端 1165 passed。
 - spec `docs/superpowers/specs/2026-06-19-coding-context-compaction-design.md`,plan `docs/superpowers/plans/2026-06-19-coding-context-compaction.md`。
 - 机制:Claude Code 式 compaction 适配无状态请求——跨轮 `from_snapshot` 恢复真实消息(含读过的文件结果)+ `ContextCompactor` 滑动窗口 + token 预算触发 + 413 重压重试,压缩态落 `Conversation.coding_agent_state`。
-- **⚠️ 未真机 live 验**(收尾验证待做:重打桌面包 → 多轮迭代「改一处→基于上一轮继续→看是否记得+不重读」)。
+- **🔴 2026-06-20 真机 live 验暴露大坑 + 已修(commit `e1ee0932`)**:#1 的跨轮记忆**只接了 codegen(写)路径**;**读/分析路径 `run_read_query` 每轮 messages 从空起 = 完全无状态**(不是旧摘要,是零历史)。用户一上来点的全是 @skill「分析一下」→「可以的」= 读路径 → 报「没有记忆」。DB 实证所有会话 `coding_agent_state` 全 NULL(读路径不写)。修:抽 `_read_history_messages`(去末尾当前轮+截最近 12 条)+ `run_read_query` 加载 `get_conversation_history` 注入(read_query.py)。7 新测试 + 1198 passed + sonnet 评审 Approved。**残留(已知):写路径 `coding_agent_state` 为 NULL 时仍不吃读轮历史=读写未完全统一记忆(用户选了「读路径记忆」档,「读写统一」留后续)。**
+- **⚠️ codegen 路径本身仍未真机 live 验**(重打桌面包 → 纯代码生成多轮迭代「改一处→基于上一轮继续→看是否记得+不重读」)。
 
 **E. #3 @skill 接入 coding(dev:af7a8d07..03c6856d,5 commit)** — DONE,opus 全分支终审 READY TO MERGE,后端 1189 passed/前端 3/3。
 - spec `docs/superpowers/specs/2026-06-19-skill-into-coding-design.md`,plan `docs/superpowers/plans/2026-06-19-skill-into-coding.md`。
