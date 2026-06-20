@@ -1,0 +1,82 @@
+from app.coding.orchestrate import run_multi_artifact
+from app.coding.decompose import Artifact
+
+
+class _Params:
+    def __init__(self):
+        self.message = "招聘系统 管理端+用户端"
+        self.user_id = 1
+        self.tenant_id = 1
+    workspace_id = None
+    conversation_id = None
+    project_id = None
+    selected_model = None
+    app_id = None
+    attachments = None
+
+
+async def _fake_decomposer(req, cfg, scenes):
+    return [Artifact(name="后台", side="admin", scene="form-list", sub_request="做招聘管理列表页"),
+            Artifact(name="求职端", side="user", scene="mobile-page", sub_request="做求职移动端")]
+
+
+def _make_runner(record):
+    async def runner(params, db):
+        record.append(params.message)
+        yield {"type": "step", "step": "generate", "status": "done", "data": {}}
+        yield {"type": "done", "workspace_id": f"ws_{len(record)}", "conversation_id": None}
+    return runner
+
+
+async def test_decomposes_runs_n_subpipelines_and_groups():
+    record = []
+    events = []
+
+    async def proj_factory(params, db):
+        return 77
+
+    async for ev in run_multi_artifact(_Params(), db=None,
+            available_scenes={"form-list", "mobile-page"},
+            decomposer=_fake_decomposer, runner=_make_runner(record),
+            project_factory=proj_factory):
+        events.append(ev)
+
+    assert len(record) == 2
+    assert any("职位" in m or "招聘" in m or "管理" in m or "求职" in m for m in record)
+    assert any(e.get("type") == "multi_artifact_plan" for e in events)
+    summ = [e for e in events if e.get("type") == "multi_artifact_summary"][0]
+    assert summ["project_id"] == 77 and len(summ["artifacts"]) == 2
+
+
+async def test_falls_back_to_single_when_no_plan():
+    record = []
+
+    async def none_decomposer(req, cfg, scenes):
+        return None
+
+    events = [ev async for ev in run_multi_artifact(_Params(), db=None,
+            available_scenes={"form-list"}, decomposer=none_decomposer,
+            runner=_make_runner(record), project_factory=None)]
+    assert len(record) == 1
+    assert record[0] == "招聘系统 管理端+用户端"
+    assert not any(e.get("type") == "multi_artifact_plan" for e in events)
+
+
+async def test_isolates_failing_artifact():
+    record = []
+
+    async def runner(params, db):
+        record.append(params.message)
+        if "求职" in params.message:
+            raise RuntimeError("boom")
+        yield {"type": "done", "workspace_id": "ws", "conversation_id": None}
+
+    async def proj_factory(params, db):
+        return 5
+
+    events = [ev async for ev in run_multi_artifact(_Params(), db=None,
+            available_scenes={"form-list", "mobile-page"}, decomposer=_fake_decomposer,
+            runner=runner, project_factory=proj_factory)]
+    summ = [e for e in events if e.get("type") == "multi_artifact_summary"][0]
+    fails = [a for a in summ["artifacts"] if a.get("status") == "failed"]
+    assert len(fails) == 1 and len(record) == 2
