@@ -2775,3 +2775,10 @@ html:not([data-theme="dark"]) .chat-input-bar :deep(.ucc-input::placeholder) {
 
 html[data-theme="dark"] .ctx-warn-banner { background: rgba(212,136,6,0.12); border-color: rgba(212,136,6,0.4); color: #e8b339; }
 html[data-theme="dark"] .ctx-warn-banner.lvl-danger { background: rgba(207,19,34,0.14); border-color: rgba(207,19,34,0.45); color: #f08a87; }
+
+/* 思维链折叠卡 */
+.msg-reasoning-card { margin: 4px 0; font-size: 12px; }
+.mrc-head { display: inline-flex; align-items: center; gap: 6px; border: 0; background: transparent; cursor: pointer; color: var(--text-3, #888); padding: 2px 0; font-size: 12px; }
+.mrc-caret { font-size: 10px; }
+.mrc-body { margin-top: 4px; padding: 8px 10px; border-left: 2px solid var(--line, #e5e7eb); color: var(--text-3, #888); font-style: italic; white-space: pre-wrap; }
+html[data-theme="dark"] .mrc-body { border-left-color: #3a3a3a; color: #9aa0a6; }

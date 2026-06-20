@@ -205,6 +205,16 @@
                     <pre v-if="streamCustom(message).sm.content.includes('\n')" class="command-output">{{ streamCustom(message).sm.content.split('\n').slice(1).join('\n') }}</pre>
                   </div>
                 </template>
+                <!-- reasoning 思维链折叠卡（默认收起）-->
+                <template v-else-if="streamCustom(message).sm.type === 'reasoning'">
+                  <div class="msg-reasoning-card">
+                    <button type="button" class="mrc-head" @click="streamCustom(message).sm.collapsed = !streamCustom(message).sm.collapsed">
+                      <span class="mrc-caret">{{ streamCustom(message).sm.collapsed ? '▶' : '▼' }}</span>
+                      <span>💭 思考过程</span>
+                    </button>
+                    <div v-if="!streamCustom(message).sm.collapsed" class="mrc-body" v-html="renderMarkdown(streamCustom(message).sm.content)"></div>
+                  </div>
+                </template>
                 <!-- run_result（对话驱动运行/调试结果卡）-->
                 <template v-else-if="streamCustom(message).sm.type === 'run_result' && streamCustom(message).sm.run">
                   <div class="coding-run-card">
@@ -1046,6 +1056,9 @@ const agentMessages = computed<AgentMessage[]>(() => {
       out.push({ id: 'sm' + i, kind: 'ask', ask: { question: msg.question || msg.content, options: msg.options || [], answered: msg.answered } })
     } else if (msg.type === 'error') {
       out.push({ id: 'sm' + i, kind: 'error', content: msg.content })
+    } else if (msg.type === 'reasoning') {
+      // 思维链 → custom kind, 走 #custom slot 的折叠卡
+      out.push({ id: 'sm' + i, kind: 'custom', meta: { streamMsg: msg, isLast: i === list.length - 1 } })
     } else if (msg.type === 'thinking') {
       // 全面 native:thinking → AgentConversation 原生 thinking(斜体),对齐 Builder / AIChat
       out.push({ id: 'sm' + i, kind: 'thinking', thinking: { text: msg.content } })
