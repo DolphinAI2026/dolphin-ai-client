@@ -14,7 +14,7 @@ import { marked } from 'marked'
 import type { CodingAttachment, ReplayStreamMessage } from '@/api/coding'
 
 export interface StreamMessage {
-  type: 'user' | 'thinking' | 'tool' | 'file_write' | 'file_edit' | 'command' | 'status' | 'error' | 'message' | 'clarify' | 'run_result'
+  type: 'user' | 'thinking' | 'reasoning' | 'tool' | 'file_write' | 'file_edit' | 'command' | 'status' | 'error' | 'message' | 'clarify' | 'run_result'
   content: string
   fileName?: string
   /** 工作区相对全路径(嵌套文件 basename 对不上树), 点击文件卡直达查看器用 */
@@ -188,6 +188,16 @@ export function useStreamMessages() {
     scrollStreamToBottom()
   }
 
+  function appendToLastReasoning(delta: string) {
+    const msgs = streamMessages.value
+    if (msgs.length > 0 && msgs[msgs.length - 1].type === 'reasoning') {
+      msgs[msgs.length - 1].content += delta
+    } else {
+      addStreamMsg({ type: 'reasoning', content: delta, collapsed: true })
+    }
+    scrollStreamToBottom()
+  }
+
   function appendToLastCommand(text: string) {
     const msgs = streamMessages.value
     if (msgs.length > 0 && msgs[msgs.length - 1].type === 'command') {
@@ -286,6 +296,7 @@ export function useStreamMessages() {
     scrollStreamToBottom,
     addStreamMsg,
     appendToLastThinking,
+    appendToLastReasoning,
     appendToLastCommand,
     completeStepMsg,
     addStepRunningMsg,
