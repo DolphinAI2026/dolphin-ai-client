@@ -584,18 +584,17 @@ class CodingAgent(BaseAgent[dict]):
             "finish_reason": finish_reason,
         }, tokens_input=tokens_input, tokens_output=tokens_output, duration_ms=duration_ms)
 
-        # 流式结束后，发一条 aggregated thinking 事件（会落 DB）
+        # 流式结束后，发 aggregated thinking 事件（会落 DB）
         # 用途：
         # 1. 刷新后回放能重建完整思考文本（delta 事件是 ephemeral 不存 DB）
         # 2. 前端收到 aggregate 会把对应 thinking 条目置 sealed=true，
         #    阻止下一轮的 delta 继续往这条上拼（否则会出现"条目文本跨轮累积"的 bug）
-        # 必须合并 reasoning_content + full_content：两者在流式阶段都是
-        # 通过 agent_thinking_delta 发给前端、被累积到**同一个**条目里，
-        # aggregate 如果只发 full_content，前端覆盖时就会把 reasoning 部分丢掉，
-        # 造成"卡片文字突然缩短/改变"的视觉跳变。
-        combined_thinking = (reasoning_content or "") + (full_content or "")
-        if combined_thinking:
-            await self._publish("agent_thinking", {"content": combined_thinking})
+        # 拆分: content(答案/narration)与 reasoning(思维链)各发一个 aggregate, 不再拼接。
+        # 前端按 reasoning 标志分流: content → thinking 卡, reasoning → 折叠「思考过程」卡。
+        if full_content:
+            await self._publish("agent_thinking", {"content": full_content})
+        if reasoning_content:
+            await self._publish("agent_thinking", {"content": reasoning_content, "reasoning": True})
 
         return response
 
