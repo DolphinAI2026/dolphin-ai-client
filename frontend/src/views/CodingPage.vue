@@ -2032,11 +2032,14 @@ async function downloadCode() {
 
 // 主题变更只影响 Web 工作区自身，不再同步外部 IDE。
 
-watch(() => codingStore.conversationId, (id) => {
+watch(() => codingStore.conversationId, (id, oldId) => {
+  // 仅在切换离开非空会话时清 token 用量态，避免旧会话的告警/百分比泄漏到新会话
+  // 首轮新会话(oldId==null)不清，防止 done handler 设置的 tokenUsage 被误抹
+  if (oldId != null) {
+    codingStore.tokenUsage = null
+    codingStore.contextWarnDismissed = false
+  }
   if (!id) return
-  // 切换/新建会话时清 token 用量态，避免旧会话的告警/百分比泄漏到新会话
-  codingStore.tokenUsage = null
-  codingStore.contextWarnDismissed = false
   window.setTimeout(() => {
     refreshCodingConversations()
   }, 300)
