@@ -66,7 +66,7 @@ class CodingSSEAdapter:
         elif et == ITEM_DELTA:
             kind = data.get("kind", "")
             if kind == "thinking":
-                return {"type": "agent_thinking_delta", "content": data.get("text", "")}
+                return {"type": "agent_thinking_delta", "content": data.get("text", ""), "reasoning": bool(data.get("reasoning"))}
             elif kind == "content":
                 out = {"type": "content", "content": data.get("text", "")}
                 if data.get("delta"):

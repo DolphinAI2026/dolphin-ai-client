@@ -99,14 +99,14 @@ class CodingProfile(HarnessProfile):
                 if event_type == "agent_thinking_delta":
                     await event_bus.publish(
                         ITEM_DELTA, turn_ctx.turn_id,
-                        {"kind": "thinking", "text": event.get("content", "")},
+                        {"kind": "thinking", "text": event.get("content", ""), "reasoning": bool(event.get("reasoning"))},
                         item_kind="thinking", persist=False,
                     )
 
                 elif event_type == "agent_thinking":
                     await event_bus.publish(
                         ITEM_DELTA, turn_ctx.turn_id,
-                        {"kind": "thinking", "text": event.get("content", "")},
+                        {"kind": "thinking", "text": event.get("content", ""), "reasoning": bool(event.get("reasoning"))},
                         item_kind="thinking",
                     )
 
