@@ -2772,3 +2772,6 @@ html:not([data-theme="dark"]) .chat-input-bar :deep(.ucc-input::placeholder) {
   border: 1px solid currentColor; background: transparent; color: inherit; }
 .ctx-warn-close { display: inline-flex; padding: 2px; border: 0; background: transparent; cursor: pointer; color: inherit; opacity: .7; }
 .ctx-warn-close:hover { opacity: 1; }
+
+html[data-theme="dark"] .ctx-warn-banner { background: rgba(212,136,6,0.12); border-color: rgba(212,136,6,0.4); color: #e8b339; }
+html[data-theme="dark"] .ctx-warn-banner.lvl-danger { background: rgba(207,19,34,0.14); border-color: rgba(207,19,34,0.45); color: #f08a87; }

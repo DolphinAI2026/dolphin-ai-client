@@ -2034,6 +2034,9 @@ async function downloadCode() {
 
 watch(() => codingStore.conversationId, (id) => {
   if (!id) return
+  // 切换/新建会话时清 token 用量态，避免旧会话的告警/百分比泄漏到新会话
+  codingStore.tokenUsage = null
+  codingStore.contextWarnDismissed = false
   window.setTimeout(() => {
     refreshCodingConversations()
   }, 300)
