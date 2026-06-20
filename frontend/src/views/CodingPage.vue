@@ -255,6 +255,14 @@
 
           <!-- Chat 底部输入框（始终可见:流式中也能输入,按 Enter 进队列;红色按钮可停止生成） -->
           <div v-if="streamMessages.length > 0 || codeFirst" class="chat-input-bar">
+            <!-- 上下文过长告警 banner(建议新建会话) -->
+            <div v-if="showContextWarning" class="ctx-warn-banner" :class="`lvl-${ctxLevel}`">
+              <span class="ctx-warn-text">上下文较长({{ ctxPct }}%),建议新建会话以保持流畅</span>
+              <button class="ctx-warn-new" @click="createWorkspaceConversation">一键新建会话</button>
+              <button class="ctx-warn-close" title="本会话不再提醒" @click="dismissContextWarn">
+                <AppIcon name="x" :size="14" />
+              </button>
+            </div>
             <!-- 排队提示卡:流式中再输入会进队列,当前回复结束后自动发送(对齐 AI Builder) -->
             <div v-if="pendingQueue.length > 0" class="coding-queue-banner">
               <span class="cqb-icon"><AppIcon name="clock" :size="13" /></span>
@@ -1369,6 +1377,12 @@ const ctxRatio = computed(() => {
 })
 const ctxPct = computed(() => Math.round(ctxRatio.value * 100))
 const ctxLevel = computed(() => contextLevel(ctxRatio.value))
+const showContextWarning = computed(
+  () => !!codingStore.tokenUsage && ctxLevel.value !== 'ok' && !codingStore.contextWarnDismissed,
+)
+function dismissContextWarn() {
+  codingStore.contextWarnDismissed = true
+}
 const cumTokenText = computed(() => {
   const u = codingStore.tokenUsage
   return u ? formatTokenCount(u.input + u.output) : ''
