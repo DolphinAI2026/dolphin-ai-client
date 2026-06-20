@@ -78,3 +78,18 @@
 2. **live 验 #1 + #2 + #3**:重打桌面包 → ① 多轮迭代验证 agent 跨轮记忆/不重读(#1);② /coding 跑一轮看 footer token、堆到 ≥80% 弹 banner、点一键换 session 看告警消+清零(#2);③ @ 选上传的 superpowers skill,看 agent 调 use_skill / 跑 run_python(#3)。
 3. 按需推 origin(用户拍板;dev 现领先 origin 很多 commit,均本地)。
 4. 续做 #4(handoff 结构化),spec→plan→build,以 #1/#2/#3 为模板。
+
+## §6 2026-06-20 续:真机 live 验发现 + 修 + B(思维链可折叠)
+
+dev 顶 `d8891f67`。本日全部本地未推 origin。
+
+**live 验(桌面 v0.2.17 包)逮到并修的 3 个真问题**:
+1. **读路径失忆**(`e1ee0932`):#1 跨轮记忆只接了 codegen 路径;读/分析路径 `run_read_query` 每轮 messages 从空起=完全无状态。修=注入 `get_conversation_history` 最近历史。7 测试。
+2. **deploy 发布 Unauthorized**(`09f7f3fb`):非用户没权限,是 token 陈旧+上传裸调没自愈(`_ensure_env_token` token 非空不验证过期 + `_build_and_upload_kits` 上传裸 httpx 漏 `call_apaas_with_relogin`)。修=`_upload_one_kit` 撞 token 错重登重试。8 测试。
+3. **对话重复 + 英文推理泄漏 = B**(`7e665c89..d8891f67`,6 commit):根因 `agent.py:596` reasoning+content 拼接。修=全栈拆分 reasoning↔content + 折叠「思考过程」卡。**opus 终审逮到 CRITICAL:回放路径 `append_event_to_stream_replay` 没同步改 → 刷新后复现,已修**。后端 1222/前端 81。
+
+**🔑 两条 durable 教训**:
+- **coding 流式 UI 特性 = 改两条路径**:live SSE + 回放 `append_event_to_stream_replay`。漏后者→刷新复现。全分支终审才抓得到(逐 task 看不见)。
+- **preview 对 coding 不忠实**:大模型配置 + 登录是 desktop/web 两套逻辑,hybrid 搅一起全是杂音。纯 UI/逻辑能用 preview 省包;coding 真实行为(真 LLM)只认 desktop 打包。
+
+**待**:① **B 真 gpt-5.5 端到端只剩 desktop 打包验**(答案出一次/reasoning 收进折叠卡/英文不混入);② 读路径记忆 + deploy 已在 11:12 桌面包,可直接桌面验;③ #4 handoff 结构化上下文包仍未做。
