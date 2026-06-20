@@ -80,3 +80,40 @@ async def test_isolates_failing_artifact():
     summ = [e for e in events if e.get("type") == "multi_artifact_summary"][0]
     fails = [a for a in summ["artifacts"] if a.get("status") == "failed"]
     assert len(fails) == 1 and len(record) == 2
+
+
+async def test_auto_serves_each_artifact_and_records_port():
+    record = []
+    served = []
+
+    async def serve_fn(ws_id):
+        served.append(ws_id)
+        return 8100 + len(served)
+
+    async def proj_factory(params, db):
+        return 9
+
+    events = [ev async for ev in run_multi_artifact(_Params(), db=None,
+            available_scenes={"form-list", "mobile-page"}, decomposer=_fake_decomposer,
+            runner=_make_runner(record), project_factory=proj_factory, serve_fn=serve_fn)]
+    summ = [e for e in events if e.get("type") == "multi_artifact_summary"][0]
+    assert served == ["ws_1", "ws_2"]                 # 每个产物都起了 serve
+    ports = [a.get("port") for a in summ["artifacts"]]
+    assert ports == [8101, 8102]
+
+
+async def test_serve_failure_is_non_fatal():
+    record = []
+
+    async def serve_fn(ws_id):
+        raise RuntimeError("serve boom")
+
+    async def proj_factory(params, db):
+        return 1
+
+    events = [ev async for ev in run_multi_artifact(_Params(), db=None,
+            available_scenes={"form-list", "mobile-page"}, decomposer=_fake_decomposer,
+            runner=_make_runner(record), project_factory=proj_factory, serve_fn=serve_fn)]
+    summ = [e for e in events if e.get("type") == "multi_artifact_summary"][0]
+    assert len(summ["artifacts"]) == 2                # serve 失败不影响产物
+    assert all(a.get("port") is None for a in summ["artifacts"])

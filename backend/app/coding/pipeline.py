@@ -1632,7 +1632,7 @@ async def run_coding_entry(params, db):
     """coding 统一入口: 多端强信号首轮 → 多产物编排;否则原单产物流水线。"""
     is_iteration = params.workspace_id is not None
     if should_decompose(params.message, is_iteration):
-        from app.coding.orchestrate import run_multi_artifact
+        from app.coding.orchestrate import run_multi_artifact, _default_serve
         from app.coding.decompose import decompose
         scenes = {"form-list", "menu-page", "mobile-page", "form-page"}
         try:
@@ -1643,7 +1643,7 @@ async def run_coding_entry(params, db):
             llm_cfg = {}
         async for ev in run_multi_artifact(
             params, db, available_scenes=scenes, decomposer=decompose,
-            runner=run_coding_pipeline, llm_cfg=llm_cfg,
+            runner=run_coding_pipeline, serve_fn=_default_serve, llm_cfg=llm_cfg,
         ):
             yield ev
         return

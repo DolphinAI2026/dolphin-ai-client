@@ -26,6 +26,13 @@ async def _default_project_factory(params, db) -> Optional[int]:
         return None
 
 
+async def _default_serve(ws_id: str) -> Optional[int]:
+    """best-effort 起本地预览, 返回 port 或 None(失败/非 ok)。"""
+    from app.coding.workspace import WorkspaceManager
+    info = await WorkspaceManager().start_serve(ws_id)
+    return info.get("port") if info.get("status") == "ok" else None
+
+
 def _sub_params(base, sub_request: str, project_id: Optional[int]):
     from app.coding.pipeline import PipelineParams
     return PipelineParams(
@@ -40,6 +47,7 @@ async def run_multi_artifact(
     decomposer: Callable[..., Awaitable],
     runner: Callable[..., AsyncIterator[dict]],
     project_factory: Optional[Callable[..., Awaitable]] = None,
+    serve_fn: Optional[Callable[..., Awaitable]] = None,
     llm_cfg: Optional[dict] = None,
 ) -> AsyncIterator[dict]:
     """多端请求 → N 个产物;无计划/异常 → 回落整请求单产物一次。"""
@@ -75,7 +83,15 @@ async def run_multi_artifact(
             logger.warning("产物 %s 生成失败: %r", art["name"], exc)
             yield {"type": "multi_artifact_error", "artifact_index": idx,
                    "artifact_name": art["name"], "message": str(exc)}
+        # G3: best-effort 给该产物起本地预览(仅注入了 serve_fn 时, 单测默认不跑真 serve)
+        port = None
+        if ws_id and status == "done" and serve_fn is not None:
+            try:
+                port = await serve_fn(ws_id)
+            except Exception as exc:  # noqa: BLE001 — 起预览失败非致命
+                logger.warning("产物 %s 起预览失败(非致命): %r", art["name"], exc)
+                port = None
         results.append({"name": art["name"], "side": art["side"], "scene": art["scene"],
-                        "workspace_id": ws_id, "status": status})
+                        "workspace_id": ws_id, "status": status, "port": port})
 
     yield {"type": "multi_artifact_summary", "project_id": project_id, "artifacts": results}
