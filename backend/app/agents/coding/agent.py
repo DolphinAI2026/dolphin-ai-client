@@ -329,6 +329,16 @@ class CodingAgent(BaseAgent[dict]):
             logger.warning("ContextCompactor.compact failed, returning cleaned: %s", e)
             return cleaned
 
+    def token_usage_snapshot(self) -> dict:
+        """当前 token 用量快照:累计 LLM 消耗 + 当前上下文占用 + 预算。供 done 事件透前端(#2)。"""
+        from app.agents.token_estimate import estimate_tokens
+        return {
+            "tokens_input": self._tokens_input,
+            "tokens_output": self._tokens_output,
+            "context_tokens": estimate_tokens(self._messages),
+            "context_budget": self._context_token_budget,
+        }
+
     async def before_tool_call(self, tool: Tool, args: dict[str, Any]) -> dict[str, Any]:
         """tool 执行前：发前端 agent_tool 事件（带 tool_display 预览）。"""
         preview = _format_tool_input(tool.name, args)

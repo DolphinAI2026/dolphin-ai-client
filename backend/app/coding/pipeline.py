@@ -2298,10 +2298,12 @@ async def run_coding_pipeline(
             serve_status = ws_mgr.is_serve_running(ws_id)
             yield _record_event({"type": "step", "step": "hot_reload", "status": "done",
                    "data": {"serve_running": serve_status["running"], "port": serve_status.get("port")}})
-            yield _record_event({"type": "done", "workspace_id": ws_id, "conversation_id": conversation_id})
+            yield _record_event({"type": "done", "workspace_id": ws_id, "conversation_id": conversation_id,
+                                 **_coding_agent.token_usage_snapshot()})
             return
 
-        yield _record_event({"type": "done", "workspace_id": ws_id, "conversation_id": conversation_id})
+        yield _record_event({"type": "done", "workspace_id": ws_id, "conversation_id": conversation_id,
+                             **_coding_agent.token_usage_snapshot()})
 
     except Exception as e:
         logger.exception("coding pipeline 错误")
