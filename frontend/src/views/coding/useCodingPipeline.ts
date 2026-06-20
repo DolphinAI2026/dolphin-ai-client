@@ -339,6 +339,14 @@ export function useCodingPipeline(deps: PipelineDeps) {
       isStreaming.value = false
       isCreating.value = false  // 立即解除输入框禁用，后续 API 在后台继续
       codingStore.conversationId = parsed.conversation_id
+      if (parsed.context_budget != null) {
+        codingStore.tokenUsage = {
+          input: parsed.tokens_input ?? 0,
+          output: parsed.tokens_output ?? 0,
+          contextTokens: parsed.context_tokens ?? 0,
+          contextBudget: parsed.context_budget,
+        }
+      }
       if (parsed.conversation_id) {
         persistedCodingModelValue.value = normalizeCodingModelValue(selectedCodingModelValue.value)
       }

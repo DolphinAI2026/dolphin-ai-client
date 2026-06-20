@@ -321,6 +321,12 @@
                     </button>
                   </div>
                 </div>
+                <span
+                  v-if="codingStore.tokenUsage"
+                  class="coding-token-usage"
+                  :class="`lvl-${ctxLevel}`"
+                  :title="`当前上下文占用 ${ctxPct}%(预算 ${codingStore.tokenUsage.contextBudget} tok)· 本会话累计 ${cumTokenText} tok`"
+                >上下文 {{ ctxPct }}% · 累计 {{ cumTokenText }} tok</span>
               </template>
             </UnifiedChatComposer>
           </div>
@@ -624,6 +630,7 @@ import AgentConversation from '@/components/common/AgentConversation.vue'
 import type { AgentMessage, AgentToolPayload } from '@/components/common/agent-conversation/types'
 import { useCodingModel } from './coding/useCodingModel'
 import { useStreamMessages, renderMarkdown } from './coding/useStreamMessages'
+import { formatTokenCount, contextRatio, contextLevel } from './coding/contextUsage'
 import { useCodingWorkspace } from './coding/useCodingWorkspace'
 import { useCodingPipeline } from './coding/useCodingPipeline'
 import UnifiedChatComposer from '@/components/common/UnifiedChatComposer.vue'
@@ -1354,6 +1361,18 @@ const showCodingUnselected = computed(() =>
   !codingStore.workspace &&
   !codingStore.conversationId,
 )
+
+// Token 用量显示（footer）
+const ctxRatio = computed(() => {
+  const u = codingStore.tokenUsage
+  return u ? contextRatio(u.contextTokens, u.contextBudget) : 0
+})
+const ctxPct = computed(() => Math.round(ctxRatio.value * 100))
+const ctxLevel = computed(() => contextLevel(ctxRatio.value))
+const cumTokenText = computed(() => {
+  const u = codingStore.tokenUsage
+  return u ? formatTokenCount(u.input + u.output) : ''
+})
 
 async function loadCodingConversationOnly(conversationId: number) {
   handoffSourceApp.value = null  // F3: 切到已有会话时清掉 handoff 回跳链，避免串到别的会话

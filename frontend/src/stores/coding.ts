@@ -75,6 +75,10 @@ export const useCodingStore = defineStore('coding', () => {
   // CodingPage 监听它强制切到「预览」位 —— 即使 dev_url 没变也切(自愈轮不递增, 不打扰)。
   const previewEpoch = ref(0)
 
+  // Token 用量（done 事件写入, 新会话/reset 清空）
+  const tokenUsage = ref<{ input: number; output: number; contextTokens: number; contextBudget: number } | null>(null)
+  const contextWarnDismissed = ref(false)
+
   // 当前选中文件的内容
   const activeFileContent = computed(() => {
     const file = generatedFiles.value.find(f => f.path === activeFilePath.value)
@@ -170,6 +174,8 @@ export const useCodingStore = defineStore('coding', () => {
     currentPipelineSteps.value = []
     serveUrl.value = null
     serveRunning.value = false
+    tokenUsage.value = null
+    contextWarnDismissed.value = false
   }
 
   return {
@@ -179,6 +185,7 @@ export const useCodingStore = defineStore('coding', () => {
     generatedFiles, activeFilePath, activeFileContent, activeFileLanguage,
     validationErrors, isGenerating, isProcessing, streamContent,
     currentPipelineSteps, serveUrl, serveRunning, activePreview, previewEpoch,
+    tokenUsage, contextWarnDismissed,
     setScene, setWorkspace, setFiles, updateFileContent, addMessage, setMessages,
     initPipelineSteps, updatePipelineStep, reset,
   }

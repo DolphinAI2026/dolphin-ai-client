@@ -2758,3 +2758,7 @@ html:not([data-theme="dark"]) .chat-input-bar :deep(.ucc-input::placeholder) {
   border-radius: 4px;
   font-size: 11px;
 }
+
+.coding-token-usage { margin-left: 10px; font-size: 12px; color: var(--text-3, #888); white-space: nowrap; }
+.coding-token-usage.lvl-warn { color: #d48806; }
+.coding-token-usage.lvl-danger { color: #cf1322; }
