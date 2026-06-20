@@ -315,6 +315,20 @@ def _append_replay_thinking_delta(stream_messages: list[dict[str, Any]], delta: 
     _push_replay_message(stream_messages, "thinking", delta)
 
 
+def _append_replay_reasoning_delta(stream_messages: list[dict[str, Any]], delta: str):
+    if not delta:
+        return
+    if stream_messages and stream_messages[-1].get("type") == "reasoning":
+        stream_messages[-1]["content"] = f"{stream_messages[-1].get('content', '')}{delta}"
+        return
+    stream_messages.append({
+        "type": "reasoning",
+        "content": delta,
+        "collapsed": True,
+        "timestamp": int(datetime.now().timestamp() * 1000),
+    })
+
+
 def _append_replay_command_output(stream_messages: list[dict[str, Any]], chunk: str):
     if not chunk:
         return
@@ -377,19 +391,32 @@ def append_event_to_stream_replay(stream_messages: list[dict[str, Any]], event: 
 
     if event_type == "agent_thinking":
         # agent_thinking 是完整思考块，但 agent_thinking_delta 已经流式追加了同样内容
-        # 只在没有活跃的 thinking 消息时才新增（避免重复）
+        # 只在没有活跃的相同类型消息时才新增（避免重复）
         content = str(event.get("content") or "")
+        is_reasoning = bool(event.get("reasoning"))
         if content.strip():
-            if stream_messages and stream_messages[-1].get("type") == "thinking":
+            card_type = "reasoning" if is_reasoning else "thinking"
+            if stream_messages and stream_messages[-1].get("type") == card_type:
                 last_content = str(stream_messages[-1].get("content") or "")
                 if content[:50] in last_content or last_content in content:
                     # 已经通过 delta 追加了，跳过
                     return
-            _push_replay_message(stream_messages, "thinking", content)
+            if is_reasoning:
+                stream_messages.append({
+                    "type": "reasoning",
+                    "content": content,
+                    "collapsed": True,
+                    "timestamp": int(datetime.now().timestamp() * 1000),
+                })
+            else:
+                _push_replay_message(stream_messages, "thinking", content)
         return
 
     if event_type == "agent_thinking_delta":
-        _append_replay_thinking_delta(stream_messages, str(event.get("content") or ""))
+        if event.get("reasoning"):
+            _append_replay_reasoning_delta(stream_messages, str(event.get("content") or ""))
+        else:
+            _append_replay_thinking_delta(stream_messages, str(event.get("content") or ""))
         return
 
     if event_type == "agent_tool":
