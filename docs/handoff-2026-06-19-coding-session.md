@@ -42,12 +42,18 @@
 - **⚠️ 未真机 live 验**(与 #1 一并:重打桌面包 → /coding 输入框 @ 选上传的 superpowers skill → 看 agent 是否调 use_skill / 跑 run_python)。
 - DEFER(cosmetic 未修):`python_runner` 截断后缀 `原长度→原始` / `use_skill` resolve 错误 content 英文 / 前端源码串测试可再 co-locate。
 
+**F. #2 token 显示 + 换 session 提醒(dev:5ccd8d8a..b6f4ca1e,6 commit)** — DONE,后端 1191 passed/前端 74 passed。
+- spec `docs/superpowers/specs/2026-06-20-coding-token-display-design.md`,plan `docs/superpowers/plans/2026-06-20-coding-token-display.md`。
+- 四处接线:① 后端 `CodingAgent.token_usage_snapshot()` spread 进两处 codegen `done` 事件(中间层 `**event` 透传,零改);② 前端纯函数 `contextUsage.ts`(formatTokenCount/contextRatio/contextLevel);③ store + done handler + footer 显示「上下文 X% · 累计 N tok」;④ 占用 ≥80% 黄/超90k 红弹告警 banner +「一键新建会话」(调现成 createWorkspaceConversation)。
+- **⚠️ opus 终审逮到真 CRITICAL(逐 task 门漏掉)**:spec 误以为 createWorkspaceConversation/换会话会触发 store reset 清告警态,其实不会 → 一键换session 后 banner 不消、跨会话泄漏。修法:`conversationId` watcher 加 `(id, oldId)` + `if(oldId!=null)` guard 清 token 态(一处覆盖三路径,且跳过 done handler mid-turn 的 null→new 首轮误清)。详见 ledger。
+- **⚠️ 未真机 live 验**(与 #1/#3 一并:跑一轮看 footer 出 token,堆到 ≥80% 弹 banner,点一键换 session 看告警消+上下文清零)。
+
 ## §2 待做(各自 spec→plan→build,#1 是模板)
 
-- **#2** token 用量显示 + 「上下文过长/换 session」提醒(复用 #1 的 token 计数;`estimate_tokens` 已在 `app/agents/token_estimate.py`,`_tokens_input/output` 已累加)。
+- ~~**#2** token 用量显示 + 换 session 提醒~~ **— DONE(见 §1 F)**。
 - ~~**#3** @skill 接入 coding~~ **— DONE(见 §1 E)**。
 - **#4** handoff 结构化上下文包(现状:app→/coding 的 dispatch 只带一条首消息字符串,丢 Builder 历史/确认的 SPEC)。
-- **#1 + #3 live 验**(见上 D/E,一并真机验)。
+- **#1 + #2 + #3 live 验**(见上 D/E/F,一并真机验)。
 
 ## §3 durable 踩坑(本会话调研挖出,见记忆 [[miniprogram_preview_onehit_2026_06_19]] 全文)
 
@@ -68,6 +74,6 @@
 ## §5 推荐下一步顺序
 
 1. ~~合分支~~ **已完成**:feat→dev 零冲突合(merge `90392021`),#1 + #3 全在 dev,1189 passed。
-2. **live 验 #1 + #3**:重打桌面包 → ① 多轮迭代验证 agent 跨轮记忆/不重读(#1);② /coding @ 选上传的 superpowers skill,看 agent 调 use_skill / 跑 run_python(#3)。
+2. **live 验 #1 + #2 + #3**:重打桌面包 → ① 多轮迭代验证 agent 跨轮记忆/不重读(#1);② /coding 跑一轮看 footer token、堆到 ≥80% 弹 banner、点一键换 session 看告警消+清零(#2);③ @ 选上传的 superpowers skill,看 agent 调 use_skill / 跑 run_python(#3)。
 3. 按需推 origin(用户拍板;dev 现领先 origin 很多 commit,均本地)。
-4. 续做 #2(token 显示+换 session 提醒)/ #4(handoff 结构化),各自 spec→plan→build,以 #1/#3 为模板。
+4. 续做 #4(handoff 结构化),spec→plan→build,以 #1/#2/#3 为模板。
