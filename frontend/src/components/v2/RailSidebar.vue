@@ -5,6 +5,7 @@ import { checkAndPromptUpdate } from '@/utils/desktop'
 import { useUserStore } from '@/stores/user'
 import { useThemeStore } from '@/stores/theme'
 import { useModeStore, MODE_META, MODE_ORDER, type AppMode } from '@/stores/mode'
+import { aiChatApi, type AIChatSession } from '@/api/aiChat'
 import ruijingWhaleMarkUrl from '@/assets/brand/ruijing-whale-mark.svg'
 
 interface NavItem { key: string; label: string; icon: string; path: string; badge?: number }
@@ -32,6 +33,10 @@ function onModeHotkey(e: KeyboardEvent) {
   const idx = ['1', '2', '3'].indexOf(e.key)
   if (idx >= 0 && MODE_ORDER[idx]) { e.preventDefault(); switchMode(MODE_ORDER[idx]) }
 }
+
+// 最近对话(AI Builder 会话) —— 在 builder/agent 模式的左栏列出, 恢复旧首页的历史可达。
+const recentSessions = ref<AIChatSession[]>([])
+const showRecent = computed(() => !effectiveCollapsed.value && currentMode.value !== 'code')
 
 const RAIL_COLLAPSE_KEY = 'apaas-rail-collapsed-v1'
 const internalCollapsed = ref<boolean>(localStorage.getItem(RAIL_COLLAPSE_KEY) === '1')
@@ -114,6 +119,13 @@ onMounted(async () => {
     await user.fetchAvailableTenants()
   } catch {
     // Bottom tenant selector stays on current tenant when the list is unavailable.
+  }
+
+  try {
+    const d = await aiChatApi.listSessions()
+    recentSessions.value = (d?.sessions || []).slice(0, 8)
+  } catch {
+    recentSessions.value = []
   }
 
   window.addEventListener('click', closeTenantMenu)
@@ -309,6 +321,21 @@ function renderIcon(name: string): string {
         <span class="rail-item-label">{{ it.label }}</span>
         <span v-if="it.badge" class="rail-item-badge">{{ it.badge }}</span>
       </a>
+
+      <!-- 最近对话(builder/agent 模式): 恢复旧首页的会话历史可达 -->
+      <div v-if="showRecent && recentSessions.length" class="rail-recent">
+        <div class="rail-recent-label">最近对话</div>
+        <a
+          v-for="s in recentSessions"
+          :key="s.id"
+          class="rail-recent-item"
+          :href="resolveHref('/ai-chat/' + s.id)"
+          :class="{ active: route.path === '/ai-chat/' + s.id }"
+          :title="s.title || '未命名会话'"
+          @click="onMenuClick($event, { key: 'sess-' + s.id, label: s.title || '会话', icon: 'chat', path: '/ai-chat/' + s.id })"
+          @auxclick="onMenuClick($event, { key: 'sess-' + s.id, label: s.title || '会话', icon: 'chat', path: '/ai-chat/' + s.id })"
+        >{{ s.title || '未命名会话' }}</a>
+      </div>
     </nav>
 
     <!-- 得小帆·共性能力(三模式共用入口): 技能 / MCP / AI 网关 / 知识库。
@@ -1221,4 +1248,21 @@ html[data-theme="dark"] .rail-expand-top {
 }
 .rail-hub .rail-item-icon { color: var(--agent, #FBBF24); }
 .rail-collapsed .rail-hub { margin: 4px 6px; }
+
+/* 最近对话 */
+.rail-recent { margin-top: 14px; padding: 0 4px; }
+.rail-recent-label { font-size: 11px; color: var(--text-3, #777); padding: 0 8px 6px; }
+.rail-recent-item {
+  display: block;
+  padding: 6px 8px;
+  border-radius: 7px;
+  font-size: 12.5px;
+  color: var(--text-2, #9aa);
+  text-decoration: none;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.rail-recent-item:hover { background: var(--surface-3, rgba(127,127,127,.08)); color: var(--text, #eee); }
+.rail-recent-item.active { background: var(--mcbg, rgba(127,127,127,.12)); color: var(--text, #eee); }
 </style>
