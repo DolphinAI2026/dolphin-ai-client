@@ -398,6 +398,31 @@ async def list_members(
     ]
 
 
+def _dep_to_dict(d: "ProjectArtifactDependency") -> dict:
+    return {"from_ref": d.from_ref, "to_ref": d.to_ref,
+            "expose_label": d.expose_label, "consume_label": d.consume_label, "note": d.note}
+
+
+@router.get("/{project_id}/dependencies")
+async def list_dependencies(
+    project_id: int,
+    ctx: Annotated[AuthContext, Depends(get_auth_context)],
+    db: Annotated[AsyncSession, Depends(get_db)],
+):
+    """列出项目的产物依赖边列表"""
+    from app.models import ProjectArtifactDependency
+    await require_project_access(
+        db,
+        project_id=project_id,
+        user_id=ctx.user.id,
+        tenant_id=ctx.tenant_id,
+    )
+    rows = (await db.execute(
+        select(ProjectArtifactDependency).where(ProjectArtifactDependency.project_id == project_id)
+    )).scalars().all()
+    return [_dep_to_dict(d) for d in rows]
+
+
 @router.post("/{project_id}/members")
 async def add_member(
     project_id: int,
