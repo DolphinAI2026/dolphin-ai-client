@@ -80,20 +80,8 @@
           </div>
         </div>
 
-        <div v-if="showCodingUnselected" class="coding-unselected-pane">
-          <header class="coding-session-header">
-            <div class="coding-session-title-block">
-              <strong class="coding-session-title">未选择会话</strong>
-            </div>
-          </header>
-          <div class="coding-unselected-welcome">
-            <h2>代码工作区</h2>
-            <p>从左侧选择一个开发会话继续，或点击上方「+ 新会话」开始新的自开发任务。AI 会在会话里整理任务、创建工作区，并持续生成页面、接口、脚本或扩展代码。</p>
-          </div>
-        </div>
-
-        <!-- Stream Pane (对话流视图 - 2026-05-17 B 重构：永远显示，IDE/文件改抽屉) -->
-        <div v-else class="stream-pane">
+        <!-- Stream Pane (对话流视图): 永远显示。全新会话=对话优先欢迎页(可直接输入 + 打开本地文件夹), IDE/文件改抽屉 -->
+        <div class="stream-pane">
           <header class="coding-session-header">
             <div class="coding-session-title-block">
               <span class="coding-session-kicker">代码工作区</span>
@@ -148,8 +136,28 @@
             </div>
           </header>
 
+          <!-- 全新会话: 对话优先欢迎页(参考 Claude Code/Codex)。说一句直接开始(下方输入框),
+               或打开本地文件夹 / 去我的开发打开已有工作区。 -->
+          <div v-if="isCodeWelcome" class="coding-new-welcome">
+            <div class="cnw-hero">
+              <h2><AppIcon name="coding" :size="20" /> 全代码开发</h2>
+              <p>说出你要开发什么，睿鲸会自动建工作区直接开始。也可以打开本地文件夹继续已有项目。</p>
+            </div>
+            <div class="cnw-entries">
+              <button v-if="isDesktop" type="button" class="cnw-entry" @click="openLocalFolderInCoding">
+                <AppIcon name="folder" :size="16" />
+                <span>打开本地文件夹</span>
+              </button>
+              <button type="button" class="cnw-entry" @click="router.push('/workspace-catalog')">
+                <AppIcon name="store" :size="16" />
+                <span>我的开发 / 导入源码</span>
+              </button>
+            </div>
+            <p class="cnw-hint">在下方输入框描述需求，回车即开始 ↓</p>
+          </div>
+
           <CodingSceneEntry
-            v-if="!isStreaming && streamMessages.length === 0 && !codeFirst"
+            v-else-if="!isStreaming && streamMessages.length === 0 && !codeFirst"
             :apps="sceneApps"
             :default-app-id="sceneDefaultAppId"
             @submit="onSceneSubmit"
@@ -263,8 +271,8 @@
 
           <!-- 完成态卡片已去掉；发布入口收进下方输入区 footer（codegen 完成且有产物时出现）-->
 
-          <!-- Chat 底部输入框（始终可见:流式中也能输入,按 Enter 进队列;红色按钮可停止生成） -->
-          <div v-if="streamMessages.length > 0 || codeFirst" class="chat-input-bar">
+          <!-- Chat 底部输入框: 非嵌入模式永远可见(含全新会话,修「新建空白没法输入」);流式中也能输入排队;红色按钮停止 -->
+          <div v-if="showCodingComposer" class="chat-input-bar">
             <!-- 上下文过长告警 banner(建议新建会话) -->
             <div v-if="showContextWarning" class="ctx-warn-banner" :class="`lvl-${ctxLevel}`">
               <span class="ctx-warn-text">上下文较长({{ ctxPct }}%),建议新建会话以保持流畅</span>
@@ -634,7 +642,7 @@ import AppIcon from '@/components/common/AppIcon.vue'
 import type { PlatformEnv } from '@/api/platformEnv'
 import { useUserStore } from '@/stores/user'
 import { codingApi } from '@/api/coding'
-import { openExternal } from '@/utils/desktop'
+import { openExternal, isDesktop, pickDirectory } from '@/utils/desktop'
 import type { CodingConversation, WorkspaceInfo, ReplayStreamMessage } from '@/api/coding'
 import CodingSceneEntry from './coding/CodingSceneEntry.vue'
 import InstallModal from './coding/InstallModal.vue'
@@ -657,7 +665,7 @@ import FileTree from './coding/FileTree.vue'
 import CodeViewer from './coding/CodeViewer.vue'
 import RunDebugPanel from './coding/RunDebugPanel.vue'
 import { buildFileTree, type TreeNode } from './coding/fileTree'
-import { getCodingMainPaneStyle, shouldShowWorkspacePane } from './coding/codingLayout'
+import { getCodingMainPaneStyle, shouldShowWorkspacePane, isCodingWelcome, shouldShowCodingComposer } from './coding/codingLayout'
 import { collectChangedFiles, normalizeWorkspacePathLabel, type FileChangeMsg } from './coding/workspaceChanges'
 import { usePanelResize } from '@/components/v2/config-assistant/composables/usePanelResize'
 import { listWorkspaceFiles, getWorkspaceChanges, acceptWorkspaceChanges, type WorkspaceChanges } from '@/api/coding'
@@ -943,6 +951,36 @@ const mainPaneStyle = computed(() =>
 const showWorkspacePane = computed(() =>
   shouldShowWorkspacePane(codingStore.workspace?.id, embeddedAppId.value, chatExpanded.value),
 )
+// 对话优先(参考 Claude Code/Codex): 全新会话渲染欢迎页(可直接输入 + 打开本地文件夹),
+// 底部输入框在非嵌入模式永远可用(修「新建空白没法输入」)。
+const codingViewState = computed(() => ({
+  embedded: !!embeddedAppId.value,
+  codeFirst: codeFirst.value,
+  streaming: isStreaming.value,
+  messageCount: streamMessages.value.length,
+}))
+const isCodeWelcome = computed(() => isCodingWelcome(codingViewState.value))
+const showCodingComposer = computed(() => shouldShowCodingComposer(codingViewState.value))
+
+// 新建会话「打开本地文件夹」(桌面端): 复用 我的开发 同款 pickDirectory + open-local,
+// 选完直接进 /coding?workspace_id 打开该工作区(对齐 Claude Code/Codex 的 open folder)。
+async function openLocalFolderInCoding() {
+  const picked = await pickDirectory('选择要打开的项目文件夹')
+  if (!picked) return
+  try {
+    await ElMessageBox.confirm(
+      'AI 将能读取并修改该文件夹内的文件。请确认这是你信任的项目目录。',
+      '打开本地文件夹',
+      { confirmButtonText: '打开', cancelButtonText: '取消', type: 'warning' },
+    )
+  } catch { return }
+  try {
+    const ws = await codingApi.openLocalFolder(picked)
+    router.push({ path: '/coding', query: { workspace_id: ws.ws_id } })
+  } catch (e: any) {
+    ElMessage.error(e?.response?.data?.detail || e?.message || '打开文件夹失败')
+  }
+}
 
 // 头部 ≡ 只列当前工作区的会话(含还没绑定的当前新会话)——它是"本工作区的聊天历史",
 // 不是跨工作区切换器(那是侧栏/资产库的事)。
@@ -1378,13 +1416,6 @@ const activeCodingSessionTitle = computed(() => {
   }
   return '新建开发会话'
 })
-
-const showCodingUnselected = computed(() =>
-  !isStreaming.value &&
-  streamMessages.value.length === 0 &&
-  !codingStore.workspace &&
-  !codingStore.conversationId,
-)
 
 // Token 用量显示（footer）
 const ctxRatio = computed(() => {

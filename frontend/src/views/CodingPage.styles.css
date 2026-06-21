@@ -1672,41 +1672,79 @@
   background: var(--t-bg-base, #f7f9fd);
 }
 
-.coding-unselected-pane {
+/* 全新会话「对话优先」欢迎页(参考 Claude Code/Codex): 居中 hero + 次要入口, 输入框在下方 */
+.coding-new-welcome {
   flex: 1;
-  min-width: 0;
   min-height: 0;
   display: flex;
   flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 18px;
+  padding: 32px;
+  text-align: center;
   background: var(--t-bg-base, #f7f9fd);
 }
 
-.coding-unselected-welcome {
-  flex: 1;
-  min-height: 0;
-  display: grid;
-  place-content: center;
-  justify-items: center;
+.cnw-hero {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
   gap: 10px;
-  padding: 32px;
-  text-align: center;
-  color: var(--t-text-secondary);
 }
 
-.coding-unselected-welcome h2 {
+.cnw-hero h2 {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
   margin: 0;
   color: var(--t-text-primary);
   font-size: 22px;
   line-height: 1.25;
   font-weight: 720;
 }
+.cnw-hero h2 :deep(svg) { color: var(--fullcode, #A78BFA); }
 
-.coding-unselected-welcome p {
-  max-width: 560px;
+.cnw-hero p {
+  max-width: 520px;
   margin: 0;
   color: var(--t-text-muted);
   font-size: 13px;
   line-height: 1.7;
+}
+
+.cnw-entries {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: 10px;
+}
+
+.cnw-entry {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 9px 16px;
+  border: 1px solid var(--t-border-strong, rgba(11, 27, 63, 0.14));
+  border-radius: 10px;
+  background: var(--t-bg-elevated, #fff);
+  color: var(--t-text-primary);
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: border-color 0.14s, background 0.14s, color 0.14s;
+}
+.cnw-entry:hover {
+  border-color: var(--fullcode, #A78BFA);
+  color: var(--fullcode, #A78BFA);
+  background: color-mix(in srgb, var(--fullcode, #A78BFA) 8%, transparent);
+}
+
+.cnw-hint {
+  margin: 0;
+  color: var(--t-text-muted);
+  font-size: 12px;
+  opacity: 0.8;
 }
 
 /* ── code-first 聊天头部动作: 会话历史 / 新建 / 放大 ── */
