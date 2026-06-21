@@ -62,6 +62,9 @@ const platformNavItem: NavItem = __DESKTOP__
   ? { key: 'platform', label: '平台配置', icon: 'shield', path: '/platform-envs' }
   : { key: 'platform', label: '平台管理', icon: 'shield', path: '/platform-admin' }
 
+// 三模式共用的「得小帆·共性能力」入口(第1块先链技能库, 完整 hub 后续)
+const hubNavItem: NavItem = { key: 'hub', label: '得小帆·共性能力', icon: 'spark', path: '/skills' }
+
 const userAccount = computed(() => user.user?.username || '')
 const userName = computed(() => user.user?.display_name || userAccount.value || '未登录')
 const userAvatarText = computed(() => Array.from(userName.value.trim())[0]?.toUpperCase() || 'U')
@@ -307,6 +310,20 @@ function renderIcon(name: string): string {
         <span v-if="it.badge" class="rail-item-badge">{{ it.badge }}</span>
       </a>
     </nav>
+
+    <!-- 得小帆·共性能力(三模式共用入口): 技能 / MCP / AI 网关 / 知识库。
+         第1块先链到技能库, 完整 4-tab hub 弹窗后续。常驻所有模式 → 切模式不丢这些能力。 -->
+    <a
+      class="rail-item rail-hub"
+      :href="resolveHref('/skills')"
+      :class="{ active: isActive('/skills') }"
+      title="得小帆·共性能力(技能 / MCP / AI 网关 / 知识库)"
+      @click="onMenuClick($event, hubNavItem)"
+      @auxclick="onMenuClick($event, hubNavItem)"
+    >
+      <span class="rail-item-icon" v-html="renderIcon('spark')" />
+      <span class="rail-item-label">得小帆 · 共性能力</span>
+    </a>
 
     <div class="rail-foot">
       <!-- 老的 .rail-collapse-btn 已移到顶部 brand 区，这里删掉减少重复入口 -->
@@ -1194,4 +1211,14 @@ html[data-theme="dark"] .rail-expand-top {
 }
 .mode-seg-icon { display: inline-flex; }
 .mode-seg-label { line-height: 1; }
+
+/* 得小帆·共性能力 共用入口(导航与页脚之间) */
+.rail-hub {
+  margin: 4px 8px;
+  border-top: 1px solid var(--line-1, rgba(127,127,127,.12));
+  padding-top: 10px;
+  color: var(--text-2, #9aa);
+}
+.rail-hub .rail-item-icon { color: var(--agent, #FBBF24); }
+.rail-collapsed .rail-hub { margin: 4px 6px; }
 </style>
