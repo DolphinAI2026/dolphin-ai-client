@@ -1161,15 +1161,16 @@ function onChatClick(e: MouseEvent) {
     try { dev = new URL(href).origin + '/' } catch { /* 解析失败用原始 href 兜底 */ }
     codingStore.activePreview = { dev_url: dev, status: 'ok', errors: [], capture_available: false, round: null, source: 'panel' }
     wsPaneTab.value = 'run'
+    codeDrawerOpen.value = true  // 对话里点本地预览链接 → 打开代码抽屉的「预览」位(否则切了 tab 但抽屉关着看不到)
   } else {
     void openExternal(href)
   }
 }
 
-// 预览结果一到达就自动切到「预览」位, 不用再点链接:
-// - previewEpoch: agent 每跑一次预览(run_result)+1, 即使 dev_url 不变也切(主路径; 自愈轮不递增, 不打扰)。
-// - activePreview.dev_url 变化: 覆盖按钮/链接等其它写入路径。
-watch(() => codingStore.previewEpoch, () => { wsPaneTab.value = 'run' })
+// 预览结果一到达就自动切到「预览」位并弹出代码抽屉, 不用再点链接:
+// - previewEpoch: agent 每跑一次预览(run_result)+1(主路径; 自愈轮不递增, 不打扰)→ 顺手开抽屉给用户看运行结果。
+// - activePreview.dev_url 变化: 覆盖按钮/链接等其它写入路径, 只切 tab(开抽屉交给 previewEpoch / 点击行为, 避免重复弹)。
+watch(() => codingStore.previewEpoch, () => { wsPaneTab.value = 'run'; codeDrawerOpen.value = true })
 watch(() => codingStore.activePreview?.dev_url, (url, old) => {
   if (url && url !== old) wsPaneTab.value = 'run'
 })

@@ -201,9 +201,7 @@ html:not([data-theme="dark"]) .coding-body.code-first .coding-model-trigger {
 
 html[data-theme="dark"] .coding-page,
 html[data-theme="dark"] .coding-body,
-html[data-theme="dark"] .main-content,
-html[data-theme="dark"] .welcome-pane,
-html[data-theme="dark"] .coding-unselected-pane {
+html[data-theme="dark"] .main-content {
   background: #090b10 !important;
   color: rgba(248, 250, 252, 0.94) !important;
 }
@@ -461,26 +459,6 @@ html[data-theme="dark"] .msg-error-row {
   width: auto;
   border-left: none;
 }
-.chat-resizer {
-  position: absolute;
-  left: -6px; top: 0; bottom: 0;
-  width: 12px;
-  cursor: col-resize;
-  z-index: 30;
-  touch-action: none;
-  user-select: none;
-}
-/* 常驻一条细分隔线提示可拖,hover 加重 */
-.chat-resizer::after {
-  content: '';
-  position: absolute;
-  left: 5px; top: 0; bottom: 0;
-  width: 2px;
-  background: transparent;
-  transition: background 0.15s var(--ease, ease);
-}
-.chat-resizer:hover::after { background: var(--brand, #6366f1); }
-
 /* ============ 对话驱动运行/调试结果卡 ============ */
 .coding-run-card { border: 1px solid var(--line, rgba(0,0,0,.1)); border-radius: 10px; padding: 8px 12px; margin: 4px 0; background: var(--surface-2, #f7f7f8); font-size: 13px; }
 .coding-run-card .rc-head { display: flex; align-items: center; gap: 8px; }
