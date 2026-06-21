@@ -1,7 +1,7 @@
 {
   "$schema": "../node_modules/@tauri-apps/cli/config.schema.json",
   "productName": "睿鲸 Builder",
-  "version": "0.2.19",
+  "version": "0.2.20",
   "identifier": "com.ruijing.builder",
   "build": {
     "frontendDist": "../frontend/dist-desktop",
