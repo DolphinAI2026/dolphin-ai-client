@@ -1,11 +1,20 @@
 <script setup lang="ts">
-import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
+import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { checkAndPromptUpdate } from '@/utils/desktop'
 import { useUserStore } from '@/stores/user'
 import { useThemeStore } from '@/stores/theme'
 import { useModeStore, MODE_META, MODE_ORDER, type AppMode } from '@/stores/mode'
 import { aiChatApi, type AIChatSession } from '@/api/aiChat'
+import { codingApi, type CodingConversation } from '@/api/coding'
+import {
+  normalizeAiSessions,
+  normalizeCodingSessions,
+  railSessionTarget,
+  isRailSessionActive,
+  railSessionFallback,
+  type RailSession,
+} from '@/composables/railSessions'
 import ruijingWhaleMarkUrl from '@/assets/brand/ruijing-whale-mark.svg'
 
 interface NavItem { key: string; label: string; icon: string; path: string; badge?: number }
@@ -34,17 +43,36 @@ function onModeHotkey(e: KeyboardEvent) {
   if (idx >= 0 && MODE_ORDER[idx]) { e.preventDefault(); switchMode(MODE_ORDER[idx]) }
 }
 
-// 会话历史(AI Builder 会话) —— 收进左栏单一导航(参考 Claude Code), 页面内层 sidebar 隐掉。
-// builder/agent 模式展示; code 模式有自己的 coding 会话(后续合并)。
-const sessions = ref<AIChatSession[]>([])
-const showRecent = computed(() => !effectiveCollapsed.value && currentMode.value !== 'code')
+// 会话历史 —— 收进左栏单一导航(参考 Claude Code), 页面内层 sidebar 隐掉。
+// builder/agent 模式 = AI Builder 会话(aiChatApi); code 模式 = coding 会话(codingApi)。
+// 两套不同会话系统, 经 railSessions 归一成同一形态后统一分组渲染。
+const aiSessions = ref<AIChatSession[]>([])
+const codingSessions = ref<CodingConversation[]>([])
+const showRecent = computed(() => !effectiveCollapsed.value)
+
+// 当前模式对应的归一会话列表。
+const railSessions = computed<RailSession[]>(() =>
+  currentMode.value === 'code'
+    ? normalizeCodingSessions(codingSessions.value)
+    : normalizeAiSessions(aiSessions.value),
+)
 
 async function loadRailSessions() {
-  try {
-    const d = await aiChatApi.listSessions()
-    sessions.value = d?.sessions || []
-  } catch { sessions.value = [] }
+  if (currentMode.value === 'code') {
+    try {
+      const list = await codingApi.getConversations()
+      codingSessions.value = Array.isArray(list) ? list : []
+    } catch { codingSessions.value = [] }
+  } else {
+    try {
+      const d = await aiChatApi.listSessions()
+      aiSessions.value = d?.sessions || []
+    } catch { aiSessions.value = [] }
+  }
 }
+
+// 切模式时重新拉对应会话源(builder/agent↔code)。
+watch(currentMode, () => { void loadRailSessions() })
 
 // 分组方式: 按日期 / 按应用(参考 Claude Code 左栏的 Group by) + 分组可折叠。
 const RAIL_GROUPBY_KEY = 'apaas-rail-sess-groupby-v1'
@@ -57,11 +85,11 @@ function toggleGroup(label: string) {
   collapsedGroups.value = s
 }
 
-const sessionGroups = computed<{ label: string; items: AIChatSession[] }[]>(() => {
+const sessionGroups = computed<{ label: string; items: RailSession[] }[]>(() => {
   if (groupBy.value === 'app') {
-    const map = new Map<string, AIChatSession[]>()
-    for (const s of sessions.value) {
-      const key = s.generation?.app_name || '未关联应用'
+    const map = new Map<string, RailSession[]>()
+    for (const s of railSessions.value) {
+      const key = s.appName || '未关联应用'
       if (!map.has(key)) map.set(key, [])
       map.get(key)!.push(s)
     }
@@ -71,11 +99,11 @@ const sessionGroups = computed<{ label: string; items: AIChatSession[] }[]>(() =
   const startOfToday = new Date(now.getFullYear(), now.getMonth(), now.getDate()).getTime()
   const dayMs = 86400000
   const buckets = [
-    { label: '今天', items: [] as AIChatSession[] }, { label: '昨天', items: [] as AIChatSession[] },
-    { label: '本周', items: [] as AIChatSession[] }, { label: '更早', items: [] as AIChatSession[] },
+    { label: '今天', items: [] as RailSession[] }, { label: '昨天', items: [] as RailSession[] },
+    { label: '本周', items: [] as RailSession[] }, { label: '更早', items: [] as RailSession[] },
   ]
-  for (const s of sessions.value) {
-    const t = s.updated_at ? new Date(s.updated_at).getTime() : 0
+  for (const s of railSessions.value) {
+    const t = s.updatedAt ? new Date(s.updatedAt).getTime() : 0
     if (t >= startOfToday) buckets[0].items.push(s)
     else if (t >= startOfToday - dayMs) buckets[1].items.push(s)
     else if (t >= startOfToday - 6 * dayMs) buckets[2].items.push(s)
@@ -84,12 +112,16 @@ const sessionGroups = computed<{ label: string; items: AIChatSession[] }[]>(() =
   return buckets.filter(b => b.items.length)
 })
 
-function openSession(id: number) { router.push(`/ai-chat/${id}`) }
-async function deleteRailSession(s: AIChatSession) {
+function openSession(id: number) { router.push(railSessionTarget(currentMode.value, id)) }
+function sessionActive(s: RailSession) { return isRailSessionActive(currentMode.value, s.id, route) }
+async function deleteRailSession(s: RailSession) {
   if (!window.confirm(`删除会话「${s.title || '未命名会话'}」?`)) return
-  try { await aiChatApi.deleteSession(s.id) } catch { /* ignore */ }
+  try {
+    if (currentMode.value === 'code') await codingApi.deleteConversation(s.id)
+    else await aiChatApi.deleteSession(s.id)
+  } catch { /* ignore */ }
   await loadRailSessions()
-  if (route.path === `/ai-chat/${s.id}`) router.push('/')
+  if (sessionActive(s)) router.push(railSessionFallback(currentMode.value))
 }
 
 const RAIL_COLLAPSE_KEY = 'apaas-rail-collapsed-v1'
@@ -399,7 +431,7 @@ function renderIcon(name: string): string {
               v-for="s in g.items"
               :key="s.id"
               class="rail-sess-item"
-              :class="{ active: route.path === '/ai-chat/' + s.id }"
+              :class="{ active: sessionActive(s) }"
               :title="s.title || '未命名会话'"
               @click="openSession(s.id)"
             >

@@ -30,7 +30,7 @@
 
     <div class="coding-body" :class="{ 'code-first': codeFirst, 'chat-expanded': chatExpanded }">
       <SessionSidebar
-        v-if="!embedMode && !embeddedAppId && !codeFirst"
+        v-if="!embedMode && !embeddedAppId && !codeFirst && !useRailSessions"
         module-name="代码工作区"
         brand-color="#6366f1"
         :sessions="sidebarCodingItems"
@@ -670,6 +670,9 @@ const codingStore = useCodingStore()
 // Embed mode (?embed=true) used by WorkspaceShell CodeView iframe
 // (Phase F Task 9): hides nav rail + topbar via .is-embedded CSS hack.
 const embedMode = computed(() => route.query.embed === 'true')
+// 2026-06-21: coding 会话收进全局左栏(ModeRail/RailSidebar, 参考 Claude Code 单一左栏),
+// 页面内层 SessionSidebar 不再渲染。置 false 即恢复页面内层会话目录。
+const useRailSessions = true
 const userStore = useUserStore()
 const themeStore = useThemeStore()
 
