@@ -34,9 +34,51 @@ function onModeHotkey(e: KeyboardEvent) {
   if (idx >= 0 && MODE_ORDER[idx]) { e.preventDefault(); switchMode(MODE_ORDER[idx]) }
 }
 
-// 最近对话(AI Builder 会话) —— 在 builder/agent 模式的左栏列出, 恢复旧首页的历史可达。
-const recentSessions = ref<AIChatSession[]>([])
+// 会话历史(AI Builder 会话) —— 收进左栏单一导航(参考 Claude Code), 页面内层 sidebar 隐掉。
+// builder/agent 模式展示; code 模式有自己的 coding 会话(后续合并)。
+const sessions = ref<AIChatSession[]>([])
 const showRecent = computed(() => !effectiveCollapsed.value && currentMode.value !== 'code')
+
+async function loadRailSessions() {
+  try {
+    const d = await aiChatApi.listSessions()
+    sessions.value = d?.sessions || []
+  } catch { sessions.value = [] }
+}
+
+// 按更新时间分组: 今天 / 昨天 / 本周 / 更早(参考 Claude Code 左栏)
+const sessionGroups = computed(() => {
+  const now = new Date()
+  const startOfToday = new Date(now.getFullYear(), now.getMonth(), now.getDate()).getTime()
+  const dayMs = 86400000
+  const buckets: { label: string; items: AIChatSession[] }[] = [
+    { label: '今天', items: [] }, { label: '昨天', items: [] },
+    { label: '本周', items: [] }, { label: '更早', items: [] },
+  ]
+  for (const s of sessions.value) {
+    const t = s.updated_at ? new Date(s.updated_at).getTime() : 0
+    if (t >= startOfToday) buckets[0].items.push(s)
+    else if (t >= startOfToday - dayMs) buckets[1].items.push(s)
+    else if (t >= startOfToday - 6 * dayMs) buckets[2].items.push(s)
+    else buckets[3].items.push(s)
+  }
+  return buckets.filter(b => b.items.length)
+})
+
+async function newConversation() {
+  try {
+    const created = await aiChatApi.createSession({})
+    await loadRailSessions()
+    router.push(`/ai-chat/${created.id}`)
+  } catch { router.push('/') }
+}
+function openSession(id: number) { router.push(`/ai-chat/${id}`) }
+async function deleteRailSession(s: AIChatSession) {
+  if (!window.confirm(`删除会话「${s.title || '未命名会话'}」?`)) return
+  try { await aiChatApi.deleteSession(s.id) } catch { /* ignore */ }
+  await loadRailSessions()
+  if (route.path === `/ai-chat/${s.id}`) router.push('/')
+}
 
 const RAIL_COLLAPSE_KEY = 'apaas-rail-collapsed-v1'
 const internalCollapsed = ref<boolean>(localStorage.getItem(RAIL_COLLAPSE_KEY) === '1')
@@ -121,12 +163,7 @@ onMounted(async () => {
     // Bottom tenant selector stays on current tenant when the list is unavailable.
   }
 
-  try {
-    const d = await aiChatApi.listSessions()
-    recentSessions.value = (d?.sessions || []).slice(0, 8)
-  } catch {
-    recentSessions.value = []
-  }
+  await loadRailSessions()
 
   window.addEventListener('click', closeTenantMenu)
   window.addEventListener('keydown', onModeHotkey)
@@ -322,19 +359,26 @@ function renderIcon(name: string): string {
         <span v-if="it.badge" class="rail-item-badge">{{ it.badge }}</span>
       </a>
 
-      <!-- 最近对话(builder/agent 模式): 恢复旧首页的会话历史可达 -->
-      <div v-if="showRecent && recentSessions.length" class="rail-recent">
-        <div class="rail-recent-label">最近对话</div>
-        <a
-          v-for="s in recentSessions"
-          :key="s.id"
-          class="rail-recent-item"
-          :href="resolveHref('/ai-chat/' + s.id)"
-          :class="{ active: route.path === '/ai-chat/' + s.id }"
-          :title="s.title || '未命名会话'"
-          @click="onMenuClick($event, { key: 'sess-' + s.id, label: s.title || '会话', icon: 'chat', path: '/ai-chat/' + s.id })"
-          @auxclick="onMenuClick($event, { key: 'sess-' + s.id, label: s.title || '会话', icon: 'chat', path: '/ai-chat/' + s.id })"
-        >{{ s.title || '未命名会话' }}</a>
+      <!-- 会话历史(收进单一左栏, 参考 Claude Code): 新会话 + 按时间分组 + 删除 -->
+      <div v-if="showRecent" class="rail-sessions">
+        <button class="rail-new-conv" type="button" @click="newConversation">
+          <span v-html="renderIcon('plus')" /> 新会话
+        </button>
+        <div v-for="g in sessionGroups" :key="g.label" class="rail-sess-group">
+          <div class="rail-sess-label">{{ g.label }}</div>
+          <div
+            v-for="s in g.items"
+            :key="s.id"
+            class="rail-sess-item"
+            :class="{ active: route.path === '/ai-chat/' + s.id }"
+            :title="s.title || '未命名会话'"
+            @click="openSession(s.id)"
+          >
+            <span class="rail-sess-title">{{ s.title || '未命名会话' }}</span>
+            <button class="rail-sess-del" type="button" title="删除会话" @click.stop="deleteRailSession(s)">×</button>
+          </div>
+        </div>
+        <div v-if="!sessionGroups.length" class="rail-sess-empty">还没有会话</div>
       </div>
     </nav>
 
@@ -1249,20 +1293,28 @@ html[data-theme="dark"] .rail-expand-top {
 .rail-hub .rail-item-icon { color: var(--agent, #FBBF24); }
 .rail-collapsed .rail-hub { margin: 4px 6px; }
 
-/* 最近对话 */
-.rail-recent { margin-top: 14px; padding: 0 4px; }
-.rail-recent-label { font-size: 11px; color: var(--text-3, #777); padding: 0 8px 6px; }
-.rail-recent-item {
-  display: block;
-  padding: 6px 8px;
-  border-radius: 7px;
-  font-size: 12.5px;
-  color: var(--text-2, #9aa);
-  text-decoration: none;
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
+/* 会话历史(单一左栏) */
+.rail-sessions { margin-top: 10px; padding: 0 8px; }
+.rail-new-conv {
+  display: flex; align-items: center; justify-content: center; gap: 6px;
+  width: 100%; height: 34px; margin-bottom: 10px;
+  border: 1px solid var(--line-2, #333); border-radius: 9px;
+  background: var(--surface-2, rgba(127,127,127,.06)); color: var(--text, #eee);
+  font-size: 13px; font-weight: 600; cursor: pointer;
 }
-.rail-recent-item:hover { background: var(--surface-3, rgba(127,127,127,.08)); color: var(--text, #eee); }
-.rail-recent-item.active { background: var(--mcbg, rgba(127,127,127,.12)); color: var(--text, #eee); }
+.rail-new-conv:hover { border-color: var(--build, #34D3E0); color: var(--build, #34D3E0); }
+.rail-sess-group { margin-bottom: 8px; }
+.rail-sess-label { font-size: 11px; color: var(--text-3, #777); padding: 4px 4px 4px; }
+.rail-sess-item {
+  display: flex; align-items: center; gap: 6px;
+  padding: 6px 8px; border-radius: 7px; cursor: pointer;
+  font-size: 12.5px; color: var(--text-2, #9aa);
+}
+.rail-sess-item:hover { background: var(--surface-3, rgba(127,127,127,.08)); color: var(--text, #eee); }
+.rail-sess-item.active { background: var(--surface-3, rgba(127,127,127,.14)); color: var(--text, #eee); }
+.rail-sess-title { flex: 1; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.rail-sess-del { opacity: 0; border: none; background: none; color: var(--text-3, #888); font-size: 15px; line-height: 1; cursor: pointer; padding: 0 2px; }
+.rail-sess-item:hover .rail-sess-del { opacity: .7; }
+.rail-sess-del:hover { opacity: 1 !important; color: #d9685e; }
+.rail-sess-empty { font-size: 12px; color: var(--text-3, #777); padding: 8px; }
 </style>

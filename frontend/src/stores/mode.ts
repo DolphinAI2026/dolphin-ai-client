@@ -43,14 +43,17 @@ export const MODE_META: Record<AppMode, ModeMeta> = {
   },
 }
 
-export const MODE_ORDER: AppMode[] = ['builder', 'agent', 'code']
+// Agent 暂未接入(得小帆功能后续), 切换器先只留 Builder / Code。
+// MODE_META.agent 保留供后续恢复, 但不在 MODE_ORDER 里 = 不渲染入口。
+export const MODE_ORDER: AppMode[] = ['builder', 'code']
 
 const MODE_KEY = 'apaas-app-mode-v1'
 
 function loadMode(): AppMode {
   try {
     const v = localStorage.getItem(MODE_KEY)
-    if (v === 'builder' || v === 'agent' || v === 'code') return v
+    if (v === 'builder' || v === 'code') return v
+    if (v === 'agent') return 'builder'  // 旧持久化的 agent → 落 builder(入口已撤)
   } catch { /* private mode */ }
   return 'builder'
 }

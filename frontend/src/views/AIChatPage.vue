@@ -2,11 +2,12 @@
   <WorkbenchShell>
   <div
     class="ai-chat-app"
-    :class="[themeStore.isDark ? 'theme-dark' : 'theme-light', { 'aside-collapsed': asideCollapsed, 'is-embedded': isEmbeddedAppChat }]"
+    :class="[themeStore.isDark ? 'theme-dark' : 'theme-light', { 'aside-collapsed': asideCollapsed, 'is-embedded': isEmbeddedAppChat, 'no-aside': useRailSessions }]"
   >
-    <!-- ═══════ 左侧 sessions（嵌入模式隐藏） ═══════ -->
+    <!-- ═══════ 左侧 sessions —— 已收进全局左栏(ModeRail/RailSidebar, 参考 Claude Code),
+         页面内层 sidebar 不再渲染(useRailSessions=true); 嵌入模式同样隐藏。 ═══════ -->
     <SessionSidebar
-      v-if="!isEmbeddedAppChat"
+      v-if="!isEmbeddedAppChat && !useRailSessions"
       module-name="AI 对话"
       brand-color="#f59e0b"
       :sessions="sessionItems"
@@ -587,6 +588,10 @@ const sessionsById = computed(() => {
 })
 // chat / cowork 已合并 — 不再提供 tab 筛选
 const sidebarTabs = computed<SessionTab[]>(() => [])
+
+// 2026-06-21: 会话历史已收进全局左栏(ModeRail), 页面不再渲染自己的 SessionSidebar
+// (参考 Claude Code 单一左栏)。置 false 即恢复页面内层会话目录。
+const useRailSessions = true
 // 不再提供模式选择菜单 — 单个 "新建会话" 按钮直接建
 const newSessionOptions: NewSessionOption[] = []
 const messages = ref<AIChatMessage[]>([])
@@ -2766,6 +2771,10 @@ onMounted(async () => {
 }
 .ai-chat-app.aside-collapsed {
   grid-template-columns: 44px 1fr auto;
+}
+/* 会话历史收进全局左栏: 不渲染页面 sidebar, 主区铺满(同嵌入模式网格) */
+.ai-chat-app.no-aside {
+  grid-template-columns: 1fr auto;
 }
 /* 嵌入模式（应用对话调整 iframe）：隐藏 sidebar，主区铺满 */
 .ai-chat-app.is-embedded {
