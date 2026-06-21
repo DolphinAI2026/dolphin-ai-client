@@ -2635,6 +2635,8 @@ watch(
       await loadSession(id)
     } else if (!id) {
       isRestoringRouteSession.value = false
+      // 导航到无 id 的 /ai-chat 或首页(左栏「新建应用」)= 回到新建欢迎草稿态 → 清当前会话。
+      if (route.path === '/ai-chat' || route.path === '/') currentSession.value = null
     }
   },
 )

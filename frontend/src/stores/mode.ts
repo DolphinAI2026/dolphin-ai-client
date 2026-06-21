@@ -21,7 +21,7 @@ export const MODE_META: Record<AppMode, ModeMeta> = {
   builder: {
     key: 'builder', label: 'Builder', sub: '低代码配置 + 二开', colorVar: '--build', home: '/',
     nav: [
-      { key: 'b-new', label: '新建应用', icon: 'plus', path: '/' },
+      { key: 'b-new', label: '新建应用', icon: 'plus', path: '/ai-chat' },
       { key: 'b-apps', label: '应用资产库', icon: 'apps', path: '/apps' },
       { key: 'b-catalog', label: '自开发资产库', icon: 'store', path: '/workspace-catalog' },
     ],

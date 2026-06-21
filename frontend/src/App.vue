@@ -34,13 +34,9 @@ onMounted(() => {
  *   (KeepAlive 分支) → 组件**整个 remount**，in-flight 的 onSend()/SSE 全报废 →
  *   currentSession 变 null、助手回复+工具卡片不显示。把 '/' 一并纳入即修。
  */
-// 2026-06-21: '/' 已从 AIChatPage 改为 ModeHome(三模式首页, 无 SSE), 不再纳入
-// ai-chat 单例 KeepAlive —— 否则 '/'(ModeHome) 与 '/ai-chat'(AIChatPage) 共用
-// key="ai-chat-singleton" 会复用同一缓存实例, 导致 ModeHome 发送跳 /ai-chat 时
-// 渲染的还是缓存的 ModeHome、AIChatPage 不 mount、route.query.prompt 不被消费
-// (= "发送没反应")。只保留真正需要 SSE 保活的 /ai-chat 系列。
+// '/' 与 '/ai-chat' 同为 AIChatPage, 走同一 SSE 保活单例(见下方长注释)。
 function isAiChatRoute(r: RouteLocationNormalized): boolean {
-  return r.path === '/ai-chat' || r.path.startsWith('/ai-chat/')
+  return r.path === '/' || r.path === '/ai-chat' || r.path.startsWith('/ai-chat/')
 }
 
 function isWorkspaceRoute(r: RouteLocationNormalized): boolean {

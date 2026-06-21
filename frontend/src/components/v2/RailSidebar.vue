@@ -46,14 +46,33 @@ async function loadRailSessions() {
   } catch { sessions.value = [] }
 }
 
-// 按更新时间分组: 今天 / 昨天 / 本周 / 更早(参考 Claude Code 左栏)
-const sessionGroups = computed(() => {
+// 分组方式: 按日期 / 按应用(参考 Claude Code 左栏的 Group by) + 分组可折叠。
+const RAIL_GROUPBY_KEY = 'apaas-rail-sess-groupby-v1'
+const groupBy = ref<'date' | 'app'>(localStorage.getItem(RAIL_GROUPBY_KEY) === 'app' ? 'app' : 'date')
+function setGroupBy(g: 'date' | 'app') { groupBy.value = g; try { localStorage.setItem(RAIL_GROUPBY_KEY, g) } catch { /* private */ } }
+const collapsedGroups = ref<Set<string>>(new Set())
+function toggleGroup(label: string) {
+  const s = new Set(collapsedGroups.value)
+  s.has(label) ? s.delete(label) : s.add(label)
+  collapsedGroups.value = s
+}
+
+const sessionGroups = computed<{ label: string; items: AIChatSession[] }[]>(() => {
+  if (groupBy.value === 'app') {
+    const map = new Map<string, AIChatSession[]>()
+    for (const s of sessions.value) {
+      const key = s.generation?.app_name || '未关联应用'
+      if (!map.has(key)) map.set(key, [])
+      map.get(key)!.push(s)
+    }
+    return [...map.entries()].map(([label, items]) => ({ label, items }))
+  }
   const now = new Date()
   const startOfToday = new Date(now.getFullYear(), now.getMonth(), now.getDate()).getTime()
   const dayMs = 86400000
-  const buckets: { label: string; items: AIChatSession[] }[] = [
-    { label: '今天', items: [] }, { label: '昨天', items: [] },
-    { label: '本周', items: [] }, { label: '更早', items: [] },
+  const buckets = [
+    { label: '今天', items: [] as AIChatSession[] }, { label: '昨天', items: [] as AIChatSession[] },
+    { label: '本周', items: [] as AIChatSession[] }, { label: '更早', items: [] as AIChatSession[] },
   ]
   for (const s of sessions.value) {
     const t = s.updated_at ? new Date(s.updated_at).getTime() : 0
@@ -65,13 +84,6 @@ const sessionGroups = computed(() => {
   return buckets.filter(b => b.items.length)
 })
 
-async function newConversation() {
-  try {
-    const created = await aiChatApi.createSession({})
-    await loadRailSessions()
-    router.push(`/ai-chat/${created.id}`)
-  } catch { router.push('/') }
-}
 function openSession(id: number) { router.push(`/ai-chat/${id}`) }
 async function deleteRailSession(s: AIChatSession) {
   if (!window.confirm(`删除会话「${s.title || '未命名会话'}」?`)) return
@@ -144,8 +156,15 @@ const platformHref = computed(() => resolveHref(platformNavItem.path))
 // 在线版: 那条入口指向 admin-spa(仅平台管理员), 保持 isPlatformAdmin 避免租户管理员点进去被弹。
 const platformEntryVisible = computed(() => __DESKTOP__ ? user.isTenantAdmin : user.isPlatformAdmin)
 
+const userMenuOpen = ref(false)
+function toggleUserMenu(e: MouseEvent) {
+  e.stopPropagation()
+  userMenuOpen.value = !userMenuOpen.value
+  tenantMenuOpen.value = false
+}
 function closeTenantMenu() {
   tenantMenuOpen.value = false
+  userMenuOpen.value = false
 }
 
 onMounted(async () => {
@@ -359,24 +378,35 @@ function renderIcon(name: string): string {
         <span v-if="it.badge" class="rail-item-badge">{{ it.badge }}</span>
       </a>
 
-      <!-- 会话历史(收进单一左栏, 参考 Claude Code): 新会话 + 按时间分组 + 删除 -->
+      <!-- 会话历史(单一左栏, 参考 Claude Code): 日期/应用 分组 + 可折叠 + 删除。
+           新建走上方「新建应用」, 不另设新会话按钮。 -->
       <div v-if="showRecent" class="rail-sessions">
-        <button class="rail-new-conv" type="button" @click="newConversation">
-          <span v-html="renderIcon('plus')" /> 新会话
-        </button>
-        <div v-for="g in sessionGroups" :key="g.label" class="rail-sess-group">
-          <div class="rail-sess-label">{{ g.label }}</div>
-          <div
-            v-for="s in g.items"
-            :key="s.id"
-            class="rail-sess-item"
-            :class="{ active: route.path === '/ai-chat/' + s.id }"
-            :title="s.title || '未命名会话'"
-            @click="openSession(s.id)"
-          >
-            <span class="rail-sess-title">{{ s.title || '未命名会话' }}</span>
-            <button class="rail-sess-del" type="button" title="删除会话" @click.stop="deleteRailSession(s)">×</button>
+        <div class="rail-sess-toolbar">
+          <span class="rail-sess-cap">会话</span>
+          <div class="rail-sess-groupby">
+            <button type="button" :class="{ on: groupBy === 'date' }" @click="setGroupBy('date')">日期</button>
+            <button type="button" :class="{ on: groupBy === 'app' }" @click="setGroupBy('app')">应用</button>
           </div>
+        </div>
+        <div v-for="g in sessionGroups" :key="g.label" class="rail-sess-group">
+          <button type="button" class="rail-sess-label" @click="toggleGroup(g.label)">
+            <span class="rail-sess-chev" :class="{ collapsed: collapsedGroups.has(g.label) }" v-html="renderIcon('chevronDown')" />
+            <span class="rail-sess-glabel">{{ g.label }}</span>
+            <span class="rail-sess-cnt">{{ g.items.length }}</span>
+          </button>
+          <template v-if="!collapsedGroups.has(g.label)">
+            <div
+              v-for="s in g.items"
+              :key="s.id"
+              class="rail-sess-item"
+              :class="{ active: route.path === '/ai-chat/' + s.id }"
+              :title="s.title || '未命名会话'"
+              @click="openSession(s.id)"
+            >
+              <span class="rail-sess-title">{{ s.title || '未命名会话' }}</span>
+              <button class="rail-sess-del" type="button" title="删除会话" @click.stop="deleteRailSession(s)">×</button>
+            </div>
+          </template>
         </div>
         <div v-if="!sessionGroups.length" class="rail-sess-empty">还没有会话</div>
       </div>
@@ -399,7 +429,9 @@ function renderIcon(name: string): string {
     <div class="rail-foot">
       <!-- 老的 .rail-collapse-btn 已移到顶部 brand 区，这里删掉减少重复入口 -->
 
-      <div v-if="!effectiveCollapsed" class="rail-console">
+      <div v-if="!effectiveCollapsed" class="rail-console" @click.stop>
+        <!-- 头像点开的菜单(参考 Claude): 租户 / 平台管理 / 主题 / 检查更新 / 退出 —— 平时收起, 底部只留头像行 -->
+        <div v-show="userMenuOpen" class="rail-user-menu">
         <div class="rail-console-label">当前租户</div>
         <div class="tenant-switch-wrap" @click.stop>
           <button
@@ -473,22 +505,25 @@ function renderIcon(name: string): string {
           <span class="theme-row-label">检查更新<span v-if="appVersion" class="rail-version">v{{ appVersion }}</span></span>
         </button>
 
-        <div class="account-row">
+        <button type="button" class="console-row logout-row" title="退出登录" @click="onLogout">
+          <span class="console-row-icon" v-html="renderIcon('logout')" />
+          <span>退出登录</span>
+        </button>
+        </div><!-- /rail-user-menu -->
+
+        <button
+          type="button"
+          class="account-row account-toggle"
+          :class="{ open: userMenuOpen }"
+          @click="toggleUserMenu"
+        >
           <div class="rail-avatar">{{ userAvatarText }}</div>
           <div class="rail-user-info">
             <div class="rail-user-name" :title="userName">{{ userName }}</div>
-            <div class="rail-user-status" :title="userAccount || userName"><span />{{ userAccount || '在线' }}</div>
+            <div class="rail-user-status" :title="currentTenantLabel"><span />{{ currentTenantLabel }}</div>
           </div>
-          <button
-            type="button"
-            class="account-logout"
-            title="退出登录"
-            aria-label="退出登录"
-            @click="onLogout"
-          >
-            <span v-html="renderIcon('logout')" />
-          </button>
-        </div>
+          <span class="account-chev" :class="{ open: userMenuOpen }" v-html="renderIcon('chevronDown')" />
+        </button>
       </div>
     </div>
   </aside>
@@ -1293,18 +1328,25 @@ html[data-theme="dark"] .rail-expand-top {
 .rail-hub .rail-item-icon { color: var(--agent, #FBBF24); }
 .rail-collapsed .rail-hub { margin: 4px 6px; }
 
-/* 会话历史(单一左栏) */
+/* 会话历史(单一左栏, 参考 Claude Code: 日期/应用分组 + 折叠) */
 .rail-sessions { margin-top: 10px; padding: 0 8px; }
-.rail-new-conv {
-  display: flex; align-items: center; justify-content: center; gap: 6px;
-  width: 100%; height: 34px; margin-bottom: 10px;
-  border: 1px solid var(--line-2, #333); border-radius: 9px;
-  background: var(--surface-2, rgba(127,127,127,.06)); color: var(--text, #eee);
-  font-size: 13px; font-weight: 600; cursor: pointer;
+.rail-sess-toolbar { display: flex; align-items: center; justify-content: space-between; padding: 0 4px 6px; }
+.rail-sess-cap { font-size: 11px; color: var(--text-3, #777); }
+.rail-sess-groupby { display: inline-flex; gap: 2px; background: var(--surface-3, rgba(127,127,127,.08)); border-radius: 7px; padding: 2px; }
+.rail-sess-groupby button { border: none; background: none; color: var(--text-3, #888); font-size: 11px; padding: 2px 8px; border-radius: 5px; cursor: pointer; }
+.rail-sess-groupby button.on { background: var(--surface-1, rgba(127,127,127,.18)); color: var(--text, #eee); }
+.rail-sess-group { margin-bottom: 6px; }
+.rail-sess-label {
+  display: flex; align-items: center; gap: 4px; width: 100%;
+  border: none; background: none; cursor: pointer;
+  font-size: 11px; color: var(--text-3, #777); padding: 4px 4px;
 }
-.rail-new-conv:hover { border-color: var(--build, #34D3E0); color: var(--build, #34D3E0); }
-.rail-sess-group { margin-bottom: 8px; }
-.rail-sess-label { font-size: 11px; color: var(--text-3, #777); padding: 4px 4px 4px; }
+.rail-sess-label:hover { color: var(--text-2, #aaa); }
+.rail-sess-chev { display: inline-flex; transition: transform .12s; }
+.rail-sess-chev.collapsed { transform: rotate(-90deg); }
+.rail-sess-chev :deep(svg) { width: 12px; height: 12px; }
+.rail-sess-glabel { flex: 1; text-align: left; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.rail-sess-cnt { font-size: 10px; opacity: .7; }
 .rail-sess-item {
   display: flex; align-items: center; gap: 6px;
   padding: 6px 8px; border-radius: 7px; cursor: pointer;
@@ -1317,4 +1359,21 @@ html[data-theme="dark"] .rail-expand-top {
 .rail-sess-item:hover .rail-sess-del { opacity: .7; }
 .rail-sess-del:hover { opacity: 1 !important; color: #d9685e; }
 .rail-sess-empty { font-size: 12px; color: var(--text-3, #777); padding: 8px; }
+
+/* 头像点开的菜单(收起页脚, 参考 Claude) */
+.rail-user-menu {
+  border: 1px solid var(--line-2, #333); border-radius: 10px;
+  background: var(--surface-1, var(--surface, #161616)); padding: 8px; margin-bottom: 8px;
+}
+.account-toggle {
+  display: flex; align-items: center; gap: 10px; width: 100%;
+  border: 1px solid transparent; background: none; cursor: pointer;
+  padding: 6px; border-radius: 10px; text-align: left;
+}
+.account-toggle:hover, .account-toggle.open { background: var(--surface-3, rgba(127,127,127,.08)); }
+.account-chev { margin-left: auto; display: inline-flex; transition: transform .12s; color: var(--text-3, #888); }
+.account-chev :deep(svg) { width: 14px; height: 14px; }
+.account-chev.open { transform: rotate(180deg); }
+.logout-row { width: 100%; }
+.logout-row:hover { color: #d9685e; }
 </style>
