@@ -126,6 +126,12 @@ html[data-theme="light"] {
   /* Fonts — 2026-05-26 supperagent design 主推 Geist (Vercel/v0 同源, 几何 sans). */
   --font-sans: 'Geist Sans', -apple-system, BlinkMacSystemFont, 'PingFang SC', 'Segoe UI', 'Microsoft YaHei', sans-serif;
   --font-mono: 'Geist Mono', ui-monospace, 'SF Mono', Menlo, Consolas, monospace;
+
+  /* 产物模式色(桌面 IA) */
+  --build:#34D3E0;    --build-bg:rgba(52,211,224,0.12);
+  --lowcode:#7C8CFF;  --lowcode-bg:rgba(124,140,255,0.13);
+  --fullcode:#A78BFA; --fullcode-bg:rgba(167,139,250,0.13);
+  --agent:#FBBF24;    --agent-bg:rgba(251,191,36,0.12);
 }
 
 /* ─── Dark theme ───────────────────────────────────────────────── */
