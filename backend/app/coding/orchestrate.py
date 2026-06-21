@@ -11,6 +11,34 @@ from typing import AsyncIterator, Awaitable, Callable, Optional
 logger = logging.getLogger(__name__)
 
 
+def _unpack_plan(raw):
+    """decomposer 可能返回 (arts, deps) 或 旧式 list 或 None。归一成 (arts, deps)。"""
+    if raw is None:
+        return None, []
+    if isinstance(raw, tuple):
+        arts, deps = raw
+        return (arts or None), (deps or [])
+    return (raw or None), []   # 旧 fake 返回 list
+
+
+async def _default_dep_writer(project_id, edges):
+    """默认把依赖边写 DB;无 project_id 或无边则跳过;异常非致命。"""
+    if not project_id or not edges:
+        return
+    try:
+        from app.database import AsyncSessionLocal
+        from app.models import ProjectArtifactDependency
+        async with AsyncSessionLocal() as s:
+            for e in edges:
+                s.add(ProjectArtifactDependency(
+                    project_id=project_id, from_ref=e["from_ref"], to_ref=e["to_ref"],
+                    expose_label=e.get("expose_label", ""), consume_label=e.get("consume_label", ""),
+                    note=e.get("note", "")))
+            await s.commit()
+    except Exception as exc:  # noqa: BLE001 — 落库失败非致命
+        logger.warning("依赖落库失败(非致命): %r", exc)
+
+
 async def _default_project_factory(params, db) -> Optional[int]:
     """新建一个 Project 行作分组;失败返回 None(产物仍生成, 只是不分组)。"""
     try:
@@ -50,14 +78,16 @@ async def run_multi_artifact(
     project_factory: Optional[Callable[..., Awaitable]] = None,
     serve_fn: Optional[Callable[..., Awaitable]] = None,
     llm_cfg: Optional[dict] = None,
+    dep_writer: Optional[Callable[..., Awaitable]] = None,
 ) -> AsyncIterator[dict]:
     """多端请求 → N 个产物;无计划/异常 → 回落整请求单产物一次。"""
-    plan = None
+    raw = None
     try:
-        plan = await decomposer(params.message, llm_cfg or {}, available_scenes)
+        raw = await decomposer(params.message, llm_cfg or {}, available_scenes)
     except Exception as exc:  # noqa: BLE001
         logger.warning("分解异常, 回落单产物: %r", exc)
-        plan = None
+        raw = None
+    plan, deps = _unpack_plan(raw)
 
     if not plan:
         async for ev in runner(params, db):
@@ -94,5 +124,19 @@ async def run_multi_artifact(
                 port = None
         results.append({"name": art["name"], "side": art["side"], "scene": art["scene"],
                         "workspace_id": ws_id, "status": status, "port": port})
+
+    # 声明式依赖落库(v1 仅 workspace↔workspace;某端产物失败则跳过该边)
+    if deps:
+        ws_by_idx = {i: r["workspace_id"] for i, r in enumerate(results) if r.get("workspace_id")}
+        edges = []
+        for d in deps:
+            fw, tw = ws_by_idx.get(d["from"]), ws_by_idx.get(d["to"])
+            if not fw or not tw:
+                continue
+            edges.append({"from_ref": f"workspace:{fw}", "to_ref": f"workspace:{tw}",
+                          "expose_label": d.get("expose", ""), "consume_label": d.get("consume", ""),
+                          "note": d.get("note", "")})
+        if edges:
+            await (dep_writer or _default_dep_writer)(project_id, edges)
 
     yield {"type": "multi_artifact_summary", "project_id": project_id, "artifacts": results}
