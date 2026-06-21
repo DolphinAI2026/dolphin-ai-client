@@ -1,8 +1,6 @@
 import { describe, it, expect } from 'vitest'
-import { readFileSync } from 'fs'
-import { resolve } from 'path'
-
-const src = readFileSync(resolve(__dirname, 'ArtifactDependencyGraph.vue'), 'utf-8')
+// @ts-ignore
+import src from '@/components/project/ArtifactDependencyGraph.vue?raw'
 
 describe('ArtifactDependencyGraph.vue', () => {
   it('空边不渲染 + 遍历 edges + 显 note', () => {
