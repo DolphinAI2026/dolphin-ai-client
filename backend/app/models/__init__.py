@@ -218,6 +218,21 @@ class ProjectMember(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
 
 
+class ProjectArtifactDependency(Base):
+    """跨产物声明式依赖 — 一个产物暴露、另一个消费(workspace↔workspace, v1)"""
+    __tablename__ = "project_artifact_dependencies"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    project_id: Mapped[int] = mapped_column(
+        Integer, ForeignKey("projects.id", ondelete="CASCADE"), nullable=False, index=True)
+    from_ref: Mapped[str] = mapped_column(String(80), nullable=False)   # workspace:<id>
+    to_ref: Mapped[str] = mapped_column(String(80), nullable=False)
+    expose_label: Mapped[str] = mapped_column(String(120), default="")
+    consume_label: Mapped[str] = mapped_column(String(120), default="")
+    note: Mapped[str] = mapped_column(Text, default="")
+    created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
+
+
 class MarketplaceComponent(Base):
     """组件市场 — 用户发布的可复用组件"""
     __tablename__ = "marketplace_components"
