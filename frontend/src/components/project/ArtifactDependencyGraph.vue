@@ -70,6 +70,10 @@ function chip(mode: string) {
   border-radius: 8px;
   font-size: 12px;
   font-weight: 600;
+  max-width: 160px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .dg-flow {
@@ -90,7 +94,7 @@ function chip(mode: string) {
 .dg-note {
   margin-top: 6px;
   font-size: 12px;
-  color: #d9a441;
+  color: var(--warning, #d9a441);
 }
 
 .dg-more {
