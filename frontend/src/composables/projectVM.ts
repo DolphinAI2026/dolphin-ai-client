@@ -42,3 +42,49 @@ export function normalizeArtifactStatus(raw: string): { label: string; tone: str
     default: return { label: String(raw || '草稿'), tone: 'draft' }
   }
 }
+
+export function buildArtifacts(
+  project: Record<string, any>,
+  workspaces: Array<Record<string, any>>,
+): ArtifactVM[] {
+  const out: ArtifactVM[] = []
+  if (project?.platform_connected && project?.platform_app_id) {
+    out.push({
+      id: `app:${project.platform_app_id}`,
+      name: project.platform_app_name || project.name || '低代码应用',
+      mode: 'build',
+      summary: '低代码应用',
+      status: normalizeArtifactStatus(project.platform_connected ? 'deployed' : 'draft'),
+      target: { path: '/chat', query: { project_id: String(project.id) } },
+    })
+  }
+  for (const w of workspaces || []) {
+    out.push({
+      id: `workspace:${w.id}`,
+      name: w.display_name || w.project_name || String(w.id),
+      mode: projectTypeToMode(w.project_type),
+      summary: projectTypeToLabel(w.project_type),
+      status: normalizeArtifactStatus(w.status),
+      target: { path: '/coding', query: { workspace_id: String(w.id) } },
+    })
+  }
+  return out
+}
+
+export interface ResolvedEdge {
+  from: ArtifactVM; to: ArtifactVM
+  exposeLabel: string; consumeLabel: string; note: string
+}
+export function resolveDependencies(
+  edges: Array<Record<string, any>>,
+  artifacts: ArtifactVM[],
+): ResolvedEdge[] {
+  const byId = new Map(artifacts.map(a => [a.id, a]))
+  const out: ResolvedEdge[] = []
+  for (const e of edges || []) {
+    const from = byId.get(e.from_ref), to = byId.get(e.to_ref)
+    if (!from || !to) continue
+    out.push({ from, to, exposeLabel: e.expose_label || '', consumeLabel: e.consume_label || '', note: e.note || '' })
+  }
+  return out
+}

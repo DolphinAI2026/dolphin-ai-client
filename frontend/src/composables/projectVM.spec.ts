@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { projectTypeToMode, projectTypeToLabel, normalizeArtifactStatus } from '@/composables/projectVM'
+import { projectTypeToMode, projectTypeToLabel, normalizeArtifactStatus, buildArtifacts, resolveDependencies } from '@/composables/projectVM'
 
 describe('projectTypeToMode', () => {
   it('backend-* → fullcode', () => {
@@ -36,5 +36,41 @@ describe('normalizeArtifactStatus', () => {
   })
   it('未知 → draft tone + 原文', () => {
     expect(normalizeArtifactStatus('weird')).toEqual({ label: 'weird', tone: 'draft' })
+  })
+})
+
+describe('buildArtifacts', () => {
+  it('连平台时含应用本体 + 工作区,各带跳转目标', () => {
+    const project: any = { id: 7, platform_connected: true, platform_app_id: 'APP1', platform_app_name: '工单配置端', name: 'p' }
+    const ws: any = [{ id: 'ws1', project_type: 'mobile-page', display_name: '移动端报修', status: 'building' }]
+    const arts = buildArtifacts(project, ws)
+    const app = arts.find(a => a.mode === 'build')!
+    expect(app.target).toEqual({ path: '/chat', query: { project_id: '7' } })
+    const w = arts.find(a => a.id === 'workspace:ws1')!
+    expect(w.mode).toBe('lowcode')
+    expect(w.summary).toBe('移动端页面')
+    expect(w.status).toEqual({ label: '构建中', tone: 'building' })
+    expect(w.target).toEqual({ path: '/coding', query: { workspace_id: 'ws1' } })
+  })
+  it('未连平台 → 无应用本体', () => {
+    const arts = buildArtifacts({ id: 1, platform_connected: false } as any, [])
+    expect(arts.length).toBe(0)
+  })
+})
+
+describe('resolveDependencies', () => {
+  it('按 ref 匹配产物,悬空跳过', () => {
+    const arts = buildArtifacts({ id: 1, platform_connected: false } as any,
+      [{ id: 'a', project_type: 'form-list', status: 'ready' } as any,
+       { id: 'b', project_type: 'mobile-page', status: 'ready' } as any])
+    const edges = [
+      { from_ref: 'workspace:a', to_ref: 'workspace:b', expose_label: 'X', consume_label: 'Y', note: 'n' },
+      { from_ref: 'workspace:a', to_ref: 'workspace:gone', expose_label: 'X', consume_label: 'Y', note: '' },
+    ]
+    const out = resolveDependencies(edges, arts)
+    expect(out.length).toBe(1)
+    expect(out[0].from.id).toBe('workspace:a')
+    expect(out[0].to.id).toBe('workspace:b')
+    expect(out[0].exposeLabel).toBe('X')
   })
 })
