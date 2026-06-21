@@ -1,9 +1,9 @@
 <template>
-  <BuilderFrame :breadcrumbs="[{ label: '自开发资产库' }]">
+  <BuilderFrame :breadcrumbs="[{ label: '我的开发' }]">
     <main class="catalog-page builder-page">
-      <section class="catalog-header page-head" aria-label="自开发资产库">
+      <section class="catalog-header page-head" aria-label="我的开发">
         <div class="catalog-title-block">
-          <h1 class="page-title">自开发资产库</h1>
+          <h1 class="page-title">我的开发</h1>
           <p class="page-subtitle">统一查看代码工作区、组件包和后端接口资产。</p>
         </div>
 
@@ -474,7 +474,7 @@ async function confirmImportSource() {
     appFilter.value = ''
     currentPage.value = 1
     importDialogOpen.value = false
-    ElMessage.success('源码已导入自开发资产库')
+    ElMessage.success('源码已导入我的开发')
   } catch (e: any) {
     ElMessage.error(e?.response?.data?.detail || e?.message || '导入失败')
   } finally {

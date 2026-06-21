@@ -529,7 +529,7 @@
               <button class="cap-deploy-btn" @click="openInstallModal">
                 {{ isBoundDeploy ? '装回应用' : '发布到资产库' }}
               </button>
-              <span class="cap-deploy-hint">{{ isBoundDeploy ? '关联到应用 + 重新发布让组件生效' : '上传到自开发资产库,跨应用复用' }}</span>
+              <span class="cap-deploy-hint">{{ isBoundDeploy ? '关联到应用 + 重新发布让组件生效' : '上传到我的开发,跨应用复用' }}</span>
             </div>
             <template v-if="codingArtifacts.new.length > 0">
               <div class="cap-section-head">
@@ -1646,9 +1646,9 @@ const installRows = computed(() => isBoundDeploy.value ? [
   { icon: 'doc', title: '应用页面 / 组件', desc: '页面类挂到应用菜单下;组件类在表单设计器中引用' },
   { icon: 'flow', title: '路由 / 菜单', desc: '页面类自动注册自开发菜单' },
   { icon: 'lock', title: '权限', desc: '沿用应用现有角色的数据范围' },
-  { icon: 'store', title: '资产登记', desc: '同时登记到自开发资产库,可跨应用复用' },
+  { icon: 'store', title: '资产登记', desc: '同时登记到我的开发,可跨应用复用' },
 ] : [
-  { icon: 'store', title: '自开发资产库', desc: '上传到组件库,可在任意应用的表单设计器中引用' },
+  { icon: 'store', title: '我的开发', desc: '上传到组件库,可在任意应用的表单设计器中引用' },
 ])
 
 function onSceneSubmit(p: { mode: 'bound' | 'lib'; appId: number | null; text: string }) {
@@ -1679,7 +1679,7 @@ async function confirmDeploy() {
     if (r.status === 'installed') {
       ElMessage.success(`已装回应用${r.app?.name ? '「' + r.app.name + '」' : ''}${r.version ? ' · v' + r.version : ''}`)
     } else {
-      ElMessage.success(r.hint || '已发布到自开发资产库')
+      ElMessage.success(r.hint || '已发布到我的开发')
     }
   } catch (e: any) {
     ElMessage.error(e?.response?.data?.detail || e?.message || '装回失败')

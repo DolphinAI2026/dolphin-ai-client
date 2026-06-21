@@ -22,8 +22,8 @@ export const MODE_META: Record<AppMode, ModeMeta> = {
     key: 'builder', label: 'Builder', sub: '低代码配置 + 二开', colorVar: '--build', home: '/',
     nav: [
       { key: 'b-new', label: '新建应用', icon: 'plus', path: '/ai-chat' },
-      { key: 'b-apps', label: '应用资产库', icon: 'apps', path: '/apps' },
-      { key: 'b-catalog', label: '自开发资产库', icon: 'store', path: '/workspace-catalog' },
+      { key: 'b-apps', label: '我的应用', icon: 'apps', path: '/apps' },
+      { key: 'b-catalog', label: '我的开发', icon: 'store', path: '/workspace-catalog' },
     ],
   },
   agent: {
@@ -38,7 +38,7 @@ export const MODE_META: Record<AppMode, ModeMeta> = {
     key: 'code', label: 'Code', sub: '全代码开发', colorVar: '--fullcode', home: '/coding',
     nav: [
       { key: 'c-new', label: '新建会话', icon: 'plus', path: '/coding' },
-      { key: 'c-catalog', label: '自开发资产库', icon: 'store', path: '/workspace-catalog' },
+      { key: 'c-catalog', label: '我的开发', icon: 'store', path: '/workspace-catalog' },
     ],
   },
 }

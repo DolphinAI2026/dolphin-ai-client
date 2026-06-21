@@ -1,9 +1,9 @@
 <template>
-  <BuilderFrame :breadcrumbs="[{ label: '应用资产库' }]">
+  <BuilderFrame :breadcrumbs="[{ label: '我的应用' }]">
     <main class="apps-page builder-page">
       <section class="apps-header page-head" aria-label="应用概览">
         <div class="apps-title-block">
-          <h1 class="page-title">应用资产库</h1>
+          <h1 class="page-title">我的应用</h1>
           <p class="page-subtitle">统一查看应用状态、资产组成和最近更新。</p>
         </div>
       </section>

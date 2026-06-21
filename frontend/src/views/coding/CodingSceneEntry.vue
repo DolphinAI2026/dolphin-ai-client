@@ -36,7 +36,7 @@
           <span class="cse-target-hint">复用其模型 / 接口 / 枚举</span>
         </template>
         <template v-else>
-          <span class="cse-target-chip"><span v-html="iconSvg('store', 13, 2)"></span> 自开发资产库</span>
+          <span class="cse-target-chip"><span v-html="iconSvg('store', 13, 2)"></span> 我的开发</span>
           <span class="cse-target-hint">跨应用复用,可装进任意应用</span>
         </template>
       </div>
@@ -87,7 +87,7 @@ watch(() => props.apps, (apps) => {
 
 const MODES = [
   { id: 'bound', icon: 'building', title: '在应用上定制', desc: '绑定一个已有应用 · 复用其模型与接口' },
-  { id: 'lib', icon: 'box', title: '做通用组件', desc: '不绑应用 · 进自开发资产库跨应用复用' },
+  { id: 'lib', icon: 'box', title: '做通用组件', desc: '不绑应用 · 进我的开发跨应用复用' },
 ]
 
 const examples = computed(() =>
