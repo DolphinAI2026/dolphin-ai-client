@@ -28,7 +28,7 @@
       </div>
     </el-dialog>
 
-    <div class="coding-body" :class="{ 'code-first': codeFirst, 'chat-expanded': chatExpanded }">
+    <div class="coding-body" :class="{ 'code-first': codeFirst }">
       <SessionSidebar
         v-if="!embedMode && !embeddedAppId && !codeFirst && !useRailSessions"
         module-name="代码工作区"
@@ -44,11 +44,7 @@
       />
       <!-- Main Content: 对话流 (B 重构 2026-05-17): 合并 Welcome / Chat / IDE -->
       <!-- 代码为主布局下,main-content 收成右侧聊天列(宽度可拖拽);否则维持原全宽 -->
-      <div
-        class="main-content"
-        :style="mainPaneStyle"
-      >
-        <div v-if="codeFirst && !chatExpanded" class="chat-resizer" @pointerdown="onChatResizeStart" title="拖拽调整聊天宽度" />
+      <div class="main-content">
         <!-- 顶右工具抽屉按钮 (替代 view-toggle-bar): 文件 / 设置 / 产物 -->
         <div
           v-if="!embeddedAppId && !codeFirst && streamMessages.length > 0"
@@ -130,8 +126,8 @@
               >
                 <AppIcon :name="syncingToRepo ? 'refresh' : 'link'" :size="14" />
               </button>
-              <button class="cca-btn" :class="{ active: chatExpanded }" :title="chatExpanded ? '还原对话宽度' : '放大对话'" @click="toggleChatExpand">
-                <AppIcon :name="chatExpanded ? 'shrink' : 'expand'" :size="14" />
+              <button class="cca-btn" :class="{ active: codeDrawerOpen }" title="代码 / 文件(抽屉)" @click="codeDrawerOpen = !codeDrawerOpen">
+                <AppIcon name="coding" :size="14" />
               </button>
             </div>
           </header>
@@ -360,14 +356,25 @@
 
       </div>
 
-      <!-- Task 7 + SP1 C4: 文件/代码 ⇄ 运行/调试 双 tab 右栏 -->
+      <!-- 代码抽屉(对话优先): 点产物/文件/「代码」按钮从右侧滑出(文件树 + 查看器 + 预览), 关掉回全宽对话 -->
+      <el-drawer
+        v-model="codeDrawerOpen"
+        direction="rtl"
+        size="72%"
+        :with-header="false"
+        :append-to-body="true"
+        class="coding-code-drawer"
+      >
       <div
-        v-if="showWorkspacePane"
+        v-if="codingStore.workspace?.id"
         class="ws-pane"
       >
         <div class="ws-pane-tabs">
           <button :class="{ active: wsPaneTab === 'files' }" @click="wsPaneTab = 'files'">文件 / 代码</button>
           <button :class="{ active: wsPaneTab === 'run' }" @click="wsPaneTab = 'run'">预览</button>
+          <button class="ws-pane-close" title="收起代码抽屉" @click="codeDrawerOpen = false">
+            <AppIcon name="x" :size="15" />
+          </button>
         </div>
         <div v-show="wsPaneTab === 'files'" class="ws-pane-files">
           <FileTree
@@ -401,6 +408,7 @@
           :dark="themeStore.isDark"
         />
       </div>
+      </el-drawer>
 
       <!-- 文件抽屉：显示 workspace 文件列表 (P0 留 stub，P1 接 ws files API) -->
       <el-drawer v-model="filesDrawerOpen" title="工作区文件" direction="rtl" size="40%" body-class="coding-files-drawer-body" :append-to-body="true">
@@ -546,7 +554,9 @@
               <div
                 v-for="(f, idx) in codingArtifacts.new"
                 :key="'cn-' + idx + '-' + f.path"
-                class="cap-file"
+                class="cap-file is-openable"
+                title="打开代码"
+                @click="openFileFromChat({ filePath: f.path })"
               >
                 <span class="cap-file-path" :title="f.path">{{ f.path }}</span>
                 <span class="cap-file-size">{{ f.size }}</span>
@@ -565,7 +575,9 @@
               <div
                 v-for="(f, idx) in codingArtifacts.modified"
                 :key="'cm-' + idx + '-' + f.path"
-                class="cap-file"
+                class="cap-file is-openable"
+                title="打开代码"
+                @click="openFileFromChat({ filePath: f.path })"
               >
                 <span class="cap-file-path" :title="f.path">{{ f.path }}</span>
                 <span class="cap-file-size">{{ f.size }}</span>
@@ -665,7 +677,7 @@ import FileTree from './coding/FileTree.vue'
 import CodeViewer from './coding/CodeViewer.vue'
 import RunDebugPanel from './coding/RunDebugPanel.vue'
 import { buildFileTree, type TreeNode } from './coding/fileTree'
-import { getCodingMainPaneStyle, shouldShowWorkspacePane, isCodingWelcome, shouldShowCodingComposer } from './coding/codingLayout'
+import { isCodingWelcome, shouldShowCodingComposer } from './coding/codingLayout'
 import { collectChangedFiles, normalizeWorkspacePathLabel, type FileChangeMsg } from './coding/workspaceChanges'
 import { usePanelResize } from '@/components/v2/config-assistant/composables/usePanelResize'
 import { listWorkspaceFiles, getWorkspaceChanges, acceptWorkspaceChanges, type WorkspaceChanges } from '@/api/coding'
@@ -861,12 +873,16 @@ function looksLikeFilePath(p: string): boolean {
   return !!p && p.length < 200 && !/\s/.test(p) && !/[(){}<>]/.test(p)
 }
 
-// 点击对话里的写/改文件卡 → 左侧打开该文件（有 git 改动 CodeViewer 自动进对比模式）
+// 点击对话里的写/改文件卡 / 产物清单 → 打开代码抽屉并定位该文件（有 git 改动 CodeViewer 自动进对比模式）
 function openFileFromChat(sm: { filePath?: string; fileName?: string }) {
   const rawPath = normalizeWorkspacePathLabel(sm.filePath || sm.fileName)
   // 解析到真实文件才打开; 解析不到只接受"看着像路径"的(刚写、树未刷新), 坏路径(含代码)忽略。
   const target = resolveWorkspacePath(rawPath) || (looksLikeFilePath(rawPath) ? rawPath : null)
-  if (target) selectedFile.value = target
+  if (target) {
+    selectedFile.value = target
+    wsPaneTab.value = 'files'
+    codeDrawerOpen.value = true
+  }
 }
 
 // 查看器选中代码「引用到对话」→ 追加 `路径:行号` + 代码块进输入框
@@ -932,25 +948,11 @@ watch(() => codingStore.workspace?.id, () => {
 // 工作区打开 → 代码为主三栏布局（文件树 | 大代码区 | 右聊天）；未进工作区时维持原引导/新建流程
 const codeFirst = computed(() => !!codingStore.workspace?.id && !embeddedAppId.value)
 const wsPaneTab = ref<'files' | 'run'>('files')
-// 右侧聊天列可拖宽（复用 config 的 usePanelResize，handle 在聊天列左边界）
-const { panelWidth: chatPaneWidth, onResizeStart: onChatResizeStart } = usePanelResize({
-  storageKey: 'coding:chat-pane-width',
-  defaultWidth: 420,
-  minWidth: 320,
-  maxWidth: 760,
-})
 
-// ── code-first 聊天头部: 会话历史 / 新建会话 / 放大(对齐配置助手) ──
-const chatExpanded = ref(false)
-function toggleChatExpand() {
-  chatExpanded.value = !chatExpanded.value
-}
-const mainPaneStyle = computed(() =>
-  getCodingMainPaneStyle(codeFirst.value, chatExpanded.value, chatPaneWidth.value),
-)
-const showWorkspacePane = computed(() =>
-  shouldShowWorkspacePane(codingStore.workspace?.id, embeddedAppId.value, chatExpanded.value),
-)
+// 对话优先(用户拍板「对话主区 + 代码抽屉」, 参考 Claude Code/Codex):
+// 工作区打开后对话占满主区; 点产物/文件/代码按钮从右侧滑出代码抽屉(文件树+查看器+预览),
+// 关掉就回全宽对话。不再走旧的「文件树为主 + 对话窄栏」内嵌三栏。
+const codeDrawerOpen = ref(false)
 // 对话优先(参考 Claude Code/Codex): 全新会话渲染欢迎页(可直接输入 + 打开本地文件夹),
 // 底部输入框在非嵌入模式永远可用(修「新建空白没法输入」)。
 const codingViewState = computed(() => ({
@@ -1141,6 +1143,7 @@ function focusPreview(r: any) {
     codingStore.activePreview = { dev_url: r.dev_url, status: r.status, errors: r.errors, capture_available: r.capture_available, round: r.round }
   }
   wsPaneTab.value = 'run'
+  codeDrawerOpen.value = true
 }
 
 // 对话里点链接: localhost 预览地址 → 聚焦预览位(不导航主界面, 根除「回不去」); 外链 → 系统浏览器。

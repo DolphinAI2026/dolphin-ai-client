@@ -2697,6 +2697,12 @@ html:not([data-theme="dark"]) .chat-input-bar :deep(.ucc-input::placeholder) {
 .cap-file:hover {
   border-color: var(--border, #e5e5ea);
 }
+.cap-file.is-openable {
+  cursor: pointer;
+}
+.cap-file.is-openable:hover {
+  border-color: var(--fullcode, #A78BFA);
+}
 .cap-file-path {
   flex: 1;
   font-family: var(--font-mono, "SF Mono", "Menlo", monospace);

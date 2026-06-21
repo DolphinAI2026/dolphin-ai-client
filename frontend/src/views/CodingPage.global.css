@@ -418,6 +418,8 @@ html[data-theme="dark"] .msg-error-row {
 .ws-pane-tabs { display: flex; gap: 4px; padding: 6px 10px; border-bottom: 1px solid var(--line, rgba(0,0,0,.08)); flex: 0 0 auto; }
 .ws-pane-tabs button { font-size: 12px; border: none; background: none; cursor: pointer; color: var(--text-3, #888); padding: 2px 8px; border-radius: 6px; }
 .ws-pane-tabs button.active { color: var(--text-1, #222); font-weight: 600; background: var(--bg-2, #f3f4f6); }
+.ws-pane-tabs .ws-pane-close { margin-left: auto; display: inline-flex; align-items: center; color: var(--text-3, #888); }
+.ws-pane-tabs .ws-pane-close:hover { color: var(--text-1, #222); background: var(--bg-2, #f3f4f6); }
 .ws-pane-files { display: flex; flex: 1; min-height: 0; }
 .ws-pane-tree { flex: none; border-right: 1px solid var(--line, rgba(0,0,0,.08)); }
 .ws-pane-viewer { flex: 1; min-width: 0; overflow: hidden; }
@@ -442,20 +444,19 @@ html[data-theme="dark"] .msg-error-row {
 }
 .tree-resizer:hover::after { background: var(--brand, #6366f1); }
 
-/* 代码为主三栏布局: SessionSidebar | 文件树+大代码区(主角) | 右聊天列(可拖宽) */
-.coding-body.code-first .ws-pane {
-  order: 1;
+/* 对话优先: 工作区打开后对话占满主区(代码移到右侧抽屉, 见 .coding-code-drawer) */
+.coding-body.code-first .main-content {
   flex: 1 1 auto;
   width: auto;
-  border-left: none;
-}
-.coding-body.code-first .main-content {
-  order: 2;
-  border-left: 1px solid var(--line, rgba(0,0,0,.08));
   position: relative;
 }
-.coding-body.code-first.chat-expanded .main-content {
-  order: 1;
+/* 代码抽屉: ws-pane 填满抽屉 body(去 el-drawer 默认 padding) */
+.coding-code-drawer .el-drawer__body {
+  padding: 0;
+  overflow: hidden;
+  display: flex;
+}
+.coding-code-drawer .ws-pane {
   flex: 1 1 auto;
   width: auto;
   border-left: none;
