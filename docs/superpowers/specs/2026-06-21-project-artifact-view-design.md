@@ -51,10 +51,9 @@
 | (`platform_app` 应用本体,单独处理,非工作区) | **build**(青) | |
 | 未知值 | **lowcode**(兜底) | 不丢产物,记 log |
 
-> **⚠️ 待你拍板的分组决策**:按上表,招聘 dogfood 的两端(admin=`form-list` / user=`mobile-page`)都落 **lowcode**,会同进「低代码」一组,而非设计稿画的「低代码配置端 vs 全代码用户端」两组。这是因为 `mobile-page` 真实身份是 aPaaS 低代码移动页,不是全代码。
-> - **方案 1(v1 采用,推荐)**:按 project_type 真实语义分组,组 = 实际出现的模式。诚实、零后端。设计稿的低/全代码逐产物切分视为示意。
-> - **方案 2(延后)**:让 decompose 每个 artifact 多声明一个 `mode`,存进工作区 meta,严格还原设计稿分组。+ 一点后端。
-> 本 spec 按方案 1 写;复核时若你要严格还原设计稿,改走方案 2。
+> **分组决策(已确认:方案 1)**:按上表,招聘 dogfood 的两端(admin=`form-list` / user=`mobile-page`)都落 **lowcode**,会同进「低代码」一组,而非设计稿画的「低代码配置端 vs 全代码用户端」两组。这是因为 `mobile-page` 真实身份是 aPaaS 低代码移动页,不是全代码。
+> - **方案 1(v1 采用,用户已确认)**:按 project_type 真实语义分组,组 = 实际出现的模式。诚实、零后端。设计稿的低/全代码逐产物切分视为示意。
+> - **方案 2(延后,见 §9)**:让 decompose 每个 artifact 多声明一个 `mode`,存进工作区 meta,严格还原设计稿分组。+ 一点后端。
 
 ### 3.2 摘要 `projectTypeToLabel(project_type)`(纯函数)
 
