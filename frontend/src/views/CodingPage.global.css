@@ -411,7 +411,7 @@ html[data-theme="dark"] .msg-error-row {
 }
 
 /* ============ Task 7: 原生文件树 + 代码查看器右栏 ============ */
-.ws-pane { display: flex; flex-direction: column; height: 100%; min-height: 0; min-width: 0; border-left: 1px solid var(--line, rgba(0,0,0,.08)); width: 420px; flex-shrink: 0; }
+.ws-pane { position: relative; display: flex; flex-direction: column; height: 100%; min-height: 0; min-width: 0; border-left: 1px solid var(--line, rgba(0,0,0,.08)); width: 420px; flex-shrink: 0; }
 /* SP1 C4: 文件/代码 ⇄ 运行/调试 双 tab */
 .ws-pane-tabs { display: flex; gap: 4px; padding: 6px 10px; border-bottom: 1px solid var(--line, rgba(0,0,0,.08)); flex: 0 0 auto; }
 .ws-pane-tabs button { font-size: 12px; border: none; background: none; cursor: pointer; color: var(--text-3, #888); padding: 2px 8px; border-radius: 6px; }
@@ -442,23 +442,33 @@ html[data-theme="dark"] .msg-error-row {
 }
 .tree-resizer:hover::after { background: var(--brand, #6366f1); }
 
-/* 对话优先: 工作区打开后对话占满主区(代码移到右侧抽屉, 见 .coding-code-drawer) */
+/* 对话优先(参考 Claude Code): 对话(main-content)是常驻主列吃 flex:1 剩余空间;
+   代码侧栏(.ws-pane)并排在右(宽度走内联 :style + 可拖), 不遮挡对话。 */
 .coding-body.code-first .main-content {
   flex: 1 1 auto;
   width: auto;
+  min-width: 0;
   position: relative;
 }
-/* 代码抽屉: ws-pane 填满抽屉 body(去 el-drawer 默认 padding) */
-.coding-code-drawer .el-drawer__body {
-  padding: 0;
-  overflow: hidden;
-  display: flex;
+/* 代码侧栏左边界拖宽 handle: 骑在边框上, 不占布局宽度 */
+.ws-pane-resizer {
+  position: absolute;
+  left: -3px; top: 0; bottom: 0;
+  width: 10px;
+  cursor: col-resize;
+  z-index: 30;
+  touch-action: none;
+  user-select: none;
 }
-.coding-code-drawer .ws-pane {
-  flex: 1 1 auto;
-  width: auto;
-  border-left: none;
+.ws-pane-resizer::after {
+  content: '';
+  position: absolute;
+  left: 2px; top: 0; bottom: 0;
+  width: 2px;
+  background: transparent;
+  transition: background 0.15s var(--ease, ease);
 }
+.ws-pane-resizer:hover::after { background: var(--brand, #6366f1); }
 /* ============ 对话驱动运行/调试结果卡 ============ */
 .coding-run-card { border: 1px solid var(--line, rgba(0,0,0,.1)); border-radius: 10px; padding: 8px 12px; margin: 4px 0; background: var(--surface-2, #f7f7f8); font-size: 13px; }
 .coding-run-card .rc-head { display: flex; align-items: center; gap: 8px; }

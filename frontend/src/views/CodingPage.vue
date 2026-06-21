@@ -126,7 +126,7 @@
               >
                 <AppIcon :name="syncingToRepo ? 'refresh' : 'link'" :size="14" />
               </button>
-              <button class="cca-btn" :class="{ active: codeDrawerOpen }" title="代码 / 文件(抽屉)" @click="codeDrawerOpen = !codeDrawerOpen">
+              <button class="cca-btn" :class="{ active: codePaneOpen }" title="代码 / 文件" @click="codePaneOpen = !codePaneOpen">
                 <AppIcon name="coding" :size="14" />
               </button>
             </div>
@@ -356,23 +356,18 @@
 
       </div>
 
-      <!-- 代码抽屉(对话优先): 点产物/文件/「代码」按钮从右侧滑出(文件树 + 查看器 + 预览), 关掉回全宽对话 -->
-      <el-drawer
-        v-model="codeDrawerOpen"
-        direction="rtl"
-        size="72%"
-        :with-header="false"
-        :append-to-body="true"
-        class="coding-code-drawer"
-      >
+      <!-- 代码侧栏(对话优先, 参考 Claude Code): 与对话并排推出(不遮挡对话), 文件树 + 查看器 + 预览;
+           侧栏左边界可拖宽; × 收起回全宽对话。 -->
       <div
-        v-if="codingStore.workspace?.id"
+        v-if="codePaneOpen && codingStore.workspace?.id"
         class="ws-pane"
+        :style="{ flex: '0 0 ' + codePaneWidth + 'px', width: codePaneWidth + 'px' }"
       >
+        <div class="ws-pane-resizer" title="拖拽调整代码栏宽度" @pointerdown="onCodePaneResizeStart" />
         <div class="ws-pane-tabs">
           <button :class="{ active: wsPaneTab === 'files' }" @click="wsPaneTab = 'files'">文件 / 代码</button>
           <button :class="{ active: wsPaneTab === 'run' }" @click="wsPaneTab = 'run'">预览</button>
-          <button class="ws-pane-close" title="收起代码抽屉" @click="codeDrawerOpen = false">
+          <button class="ws-pane-close" title="收起代码栏" @click="codePaneOpen = false">
             <AppIcon name="x" :size="15" />
           </button>
         </div>
@@ -408,7 +403,6 @@
           :dark="themeStore.isDark"
         />
       </div>
-      </el-drawer>
 
       <!-- 文件抽屉：显示 workspace 文件列表 (P0 留 stub，P1 接 ws files API) -->
       <el-drawer v-model="filesDrawerOpen" title="工作区文件" direction="rtl" size="40%" body-class="coding-files-drawer-body" :append-to-body="true">
@@ -881,7 +875,7 @@ function openFileFromChat(sm: { filePath?: string; fileName?: string }) {
   if (target) {
     selectedFile.value = target
     wsPaneTab.value = 'files'
-    codeDrawerOpen.value = true
+    codePaneOpen.value = true
   }
 }
 
@@ -949,10 +943,17 @@ watch(() => codingStore.workspace?.id, () => {
 const codeFirst = computed(() => !!codingStore.workspace?.id && !embeddedAppId.value)
 const wsPaneTab = ref<'files' | 'run'>('files')
 
-// 对话优先(用户拍板「对话主区 + 代码抽屉」, 参考 Claude Code/Codex):
-// 工作区打开后对话占满主区; 点产物/文件/代码按钮从右侧滑出代码抽屉(文件树+查看器+预览),
-// 关掉就回全宽对话。不再走旧的「文件树为主 + 对话窄栏」内嵌三栏。
-const codeDrawerOpen = ref(false)
+// 对话优先(参考 Claude Code/Codex 桌面): 对话是常驻主列, 永远能输入;
+// 点产物/文件/「代码」按钮 → 代码作为右侧并排侧栏推出(文件树+查看器+预览), 不遮挡对话;
+// 关掉(×)回全宽对话。不是覆盖式抽屉(会盖住对话没法聊), 也不是旧的「文件树为主+对话窄栏」。
+const codePaneOpen = ref(false)
+// 右侧代码侧栏可拖宽(handle 在侧栏左边界); 对话(main-content)吃 flex:1 剩余空间作主列。
+const { panelWidth: codePaneWidth, onResizeStart: onCodePaneResizeStart } = usePanelResize({
+  storageKey: 'coding:code-pane-width',
+  defaultWidth: 640,
+  minWidth: 360,
+  maxWidth: 1280,
+})
 // 对话优先(参考 Claude Code/Codex): 全新会话渲染欢迎页(可直接输入 + 打开本地文件夹),
 // 底部输入框在非嵌入模式永远可用(修「新建空白没法输入」)。
 const codingViewState = computed(() => ({
@@ -1143,7 +1144,7 @@ function focusPreview(r: any) {
     codingStore.activePreview = { dev_url: r.dev_url, status: r.status, errors: r.errors, capture_available: r.capture_available, round: r.round }
   }
   wsPaneTab.value = 'run'
-  codeDrawerOpen.value = true
+  codePaneOpen.value = true
 }
 
 // 对话里点链接: localhost 预览地址 → 聚焦预览位(不导航主界面, 根除「回不去」); 外链 → 系统浏览器。
@@ -1161,7 +1162,7 @@ function onChatClick(e: MouseEvent) {
     try { dev = new URL(href).origin + '/' } catch { /* 解析失败用原始 href 兜底 */ }
     codingStore.activePreview = { dev_url: dev, status: 'ok', errors: [], capture_available: false, round: null, source: 'panel' }
     wsPaneTab.value = 'run'
-    codeDrawerOpen.value = true  // 对话里点本地预览链接 → 打开代码抽屉的「预览」位(否则切了 tab 但抽屉关着看不到)
+    codePaneOpen.value = true  // 对话里点本地预览链接 → 打开代码侧栏的「预览」位(否则切了 tab 但侧栏关着看不到)
   } else {
     void openExternal(href)
   }
@@ -1170,7 +1171,7 @@ function onChatClick(e: MouseEvent) {
 // 预览结果一到达就自动切到「预览」位并弹出代码抽屉, 不用再点链接:
 // - previewEpoch: agent 每跑一次预览(run_result)+1(主路径; 自愈轮不递增, 不打扰)→ 顺手开抽屉给用户看运行结果。
 // - activePreview.dev_url 变化: 覆盖按钮/链接等其它写入路径, 只切 tab(开抽屉交给 previewEpoch / 点击行为, 避免重复弹)。
-watch(() => codingStore.previewEpoch, () => { wsPaneTab.value = 'run'; codeDrawerOpen.value = true })
+watch(() => codingStore.previewEpoch, () => { wsPaneTab.value = 'run'; codePaneOpen.value = true })
 watch(() => codingStore.activePreview?.dev_url, (url, old) => {
   if (url && url !== old) wsPaneTab.value = 'run'
 })
