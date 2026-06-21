@@ -27,7 +27,7 @@ export const MODE_META: Record<AppMode, ModeMeta> = {
     ],
   },
   agent: {
-    key: 'agent', label: 'Agent', sub: '得小帆智能体', colorVar: '--agent', home: '/ai-chat',
+    key: 'agent', label: 'Agent', sub: '得小帆智能体', colorVar: '--agent', home: '/',
     nav: [
       { key: 'a-new', label: '新建对话', icon: 'chat', path: '/ai-chat' },
       { key: 'a-skills', label: '技能', icon: 'sparkles', path: '/skills' },

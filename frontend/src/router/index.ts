@@ -18,8 +18,9 @@ const router = createRouter({
     {
       path: '/',
       name: 'Home',
-      // 首页 = AI Builder 融合页（新建 + 历史会话），与 /ai-chat 同组件。
-      component: () => import('@/views/AIChatPage.vue'),
+      // 首页 = 模式首页(参考设计): 按当前模式渲染 greeting + composer。
+      // 历史会话/对话流仍在 /ai-chat(AIChatPage)。
+      component: () => import('@/views/ModeHome.vue'),
       meta: { requiresAuth: true, navExpanded: true }
     },
     {
