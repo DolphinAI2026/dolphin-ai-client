@@ -4,6 +4,7 @@ import { useRoute, useRouter } from 'vue-router'
 import { checkAndPromptUpdate } from '@/utils/desktop'
 import { useUserStore } from '@/stores/user'
 import { useThemeStore } from '@/stores/theme'
+import { useModeStore, MODE_META, MODE_ORDER, type AppMode } from '@/stores/mode'
 import ruijingWhaleMarkUrl from '@/assets/brand/ruijing-whale-mark.svg'
 
 interface NavItem { key: string; label: string; icon: string; path: string; badge?: number }
@@ -13,6 +14,24 @@ const route = useRoute()
 const router = useRouter()
 const user = useUserStore()
 const theme = useThemeStore()
+const modeStore = useModeStore()
+
+// 三模式(参考设计): 顶部切换器 + 每模式自带左栏导航 + 模式色。
+const modes = MODE_ORDER.map(k => MODE_META[k])
+const currentMode = computed<AppMode>(() => modeStore.mode)
+const modeColorVar = computed(() => MODE_META[currentMode.value].colorVar)
+
+function switchMode(m: AppMode) {
+  if (modeStore.mode !== m) modeStore.setMode(m)
+  const home = MODE_META[m].home
+  if (route.path !== home) router.push(home)
+}
+
+function onModeHotkey(e: KeyboardEvent) {
+  if (!(e.metaKey || e.ctrlKey) || e.altKey || e.shiftKey) return
+  const idx = ['1', '2', '3'].indexOf(e.key)
+  if (idx >= 0 && MODE_ORDER[idx]) { e.preventDefault(); switchMode(MODE_ORDER[idx]) }
+}
 
 const RAIL_COLLAPSE_KEY = 'apaas-rail-collapsed-v1'
 const internalCollapsed = ref<boolean>(localStorage.getItem(RAIL_COLLAPSE_KEY) === '1')
@@ -30,22 +49,13 @@ function desktopHidden(path: string): boolean {
   try { return (router.resolve(path).meta as any)?.desktop === 'hidden' } catch { return false }
 }
 
+// 导航 = 当前模式自带的左栏(参考设计: 每模式不同)。apps 项带应用计数 badge。
 const NAV = computed<NavItem[]>(() => {
-  const all: NavItem[] = [
-    { key: 'home', label: 'AI Builder', icon: 'chat', path: '/' },
-    // 三场景分开(2026-06-19): 低代码配置 → 应用资产库点应用进应用工作室 /chat;
-    //   全代码开发 → 自开发资产库点工作区进代码工作区 /coding;
-    //   低代码二次开发 → 应用内上下文动作(带 app 绑定进代码开发)。
-    // 统一工作区 /workspace 不再挂导航(代码留存、可直达 URL),太混了用户分不清场景。
-    { key: 'apps', label: '应用资产库', icon: 'apps', path: '/apps', badge: appCount.value || undefined },
-    { key: 'catalog', label: '自开发资产库', icon: 'store', path: '/workspace-catalog' },
-    { key: 'skills', label: '技能库', icon: 'sparkles', path: '/skills' },
-    { key: 'tenantLogs', label: '租户日志分析', icon: 'activity', path: '/tenant-logs' },
-    // AI Builder（/）= 首页融合页，与 /ai-chat 同组件：新建对话 + 历史会话一体。
-    // 改已有应用从「应用资产库」点进工作室 (/chat)，/chat 不挂菜单。
-    // 数据连接 / 运行发布先隐藏；平台级配置统一从平台管理工作台进入。
-  ]
-  return all.filter(item => !desktopHidden(item.path))
+  const items = MODE_META[currentMode.value].nav.map<NavItem>(it => ({
+    ...it,
+    badge: it.path === '/apps' ? (appCount.value || undefined) : undefined,
+  }))
+  return items.filter(item => !desktopHidden(item.path))
 })
 // 桌面包不含 admin-spa, /platform-admin 内嵌 iframe 会白屏; 桌面下直接进自渲染的配置页 /platform-envs。
 const platformNavItem: NavItem = __DESKTOP__
@@ -104,10 +114,12 @@ onMounted(async () => {
   }
 
   window.addEventListener('click', closeTenantMenu)
+  window.addEventListener('keydown', onModeHotkey)
 })
 
 onBeforeUnmount(() => {
   window.removeEventListener('click', closeTenantMenu)
+  window.removeEventListener('keydown', onModeHotkey)
 })
 
 function toggleCollapsed() {
@@ -212,6 +224,7 @@ const ICONS: Record<string, string> = {
   chevronDown: '<polyline points="6 9 12 15 18 9"/>',
   logout: '<path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/><polyline points="16 17 21 12 16 7"/><line x1="21" y1="12" x2="9" y2="12"/>',
   refresh: '<path d="M21 12a9 9 0 1 1-2.6-6.4"/><polyline points="21 3 21 9 15 9"/>',
+  plus: '<line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/>',
 }
 
 function renderIcon(name: string): string {
@@ -258,6 +271,23 @@ function renderIcon(name: string): string {
     >
       <span v-html="renderIcon('chevronRight')" />
     </button>
+
+    <!-- 三模式切换器(参考设计): Builder / Agent / Code, ⌘1/2/3 -->
+    <div class="mode-switch" :class="{ collapsed: effectiveCollapsed }" :style="{ '--mode-c': `var(${modeColorVar})` }">
+      <button
+        v-for="(m, i) in modes"
+        :key="m.key"
+        type="button"
+        class="mode-seg"
+        :class="{ active: currentMode === m.key }"
+        :style="currentMode === m.key ? { '--seg-c': `var(${m.colorVar})` } : {}"
+        :title="`${m.label} · ${m.sub} (⌘${i + 1})`"
+        @click="switchMode(m.key)"
+      >
+        <span class="mode-seg-icon" v-html="renderIcon(m.key === 'builder' ? 'bldg' : m.key === 'agent' ? 'spark' : 'code')" />
+        <span v-if="!effectiveCollapsed" class="mode-seg-label">{{ m.label }}</span>
+      </button>
+    </div>
 
     <nav class="rail-scroll" aria-label="主导航">
       <!-- 2026-05-23: button → <a href> 让 cmd+click / 中键 / 右键"在新标签中打开" 真开 chrome tab.
@@ -1115,4 +1145,53 @@ html[data-theme="dark"] .rail-expand-top {
 }
 
 /* (deleted) html[data-theme="dark"] .accent-swatch.active — accent picker 死代码 */
+
+/* 三模式切换器(参考设计) */
+.mode-switch {
+  display: flex;
+  gap: 4px;
+  padding: 6px 12px 8px;
+  border-bottom: 1px solid var(--line-1, rgba(127,127,127,.12));
+  margin-bottom: 4px;
+}
+.mode-switch.collapsed {
+  flex-direction: column;
+  padding: 6px 8px 8px;
+  align-items: center;
+}
+.mode-seg {
+  flex: 1;
+  min-width: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
+  height: 34px;
+  padding: 0 2px;
+  border: 1px solid transparent;
+  border-radius: 9px;
+  background: transparent;
+  color: var(--text-3, #8a8a8a);
+  cursor: pointer;
+  font-size: 12px;
+  font-weight: 600;
+  transition: color .12s, background .12s, border-color .12s;
+}
+.mode-seg-icon :deep(svg),
+.mode-seg :deep(svg) { width: 15px; height: 15px; }
+.mode-switch.collapsed .mode-seg {
+  width: 38px;
+  flex: none;
+}
+.mode-seg:hover {
+  color: var(--text, #eee);
+  background: var(--surface-3, rgba(127,127,127,.08));
+}
+.mode-seg.active {
+  color: var(--seg-c);
+  background: color-mix(in srgb, var(--seg-c) 14%, transparent);
+  border-color: color-mix(in srgb, var(--seg-c) 36%, transparent);
+}
+.mode-seg-icon { display: inline-flex; }
+.mode-seg-label { line-height: 1; }
 </style>
