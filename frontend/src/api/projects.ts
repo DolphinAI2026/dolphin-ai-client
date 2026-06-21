@@ -64,6 +64,14 @@ export interface ProjectMember {
   created_at: string
 }
 
+export interface ArtifactDependency {
+  from_ref: string
+  to_ref: string
+  expose_label: string
+  consume_label: string
+  note: string
+}
+
 export interface AddMemberData {
   username?: string
   user_id?: number
@@ -114,6 +122,11 @@ export const projectsApi = {
   /** 列出项目成员 */
   listMembers(id: number) {
     return request.get<any, ProjectMember[]>(`/projects/${id}/members`)
+  },
+
+  /** 列出项目的跨产物依赖边 */
+  listDependencies(id: number) {
+    return request.get<any, ArtifactDependency[]>(`/projects/${id}/dependencies`)
   },
 
   /** 添加项目成员 */
