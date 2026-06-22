@@ -112,19 +112,20 @@ def test_token_error_on_add_propagates():
     assert "401" in str(ei.value)
 
 
-def test_show_in_list_adds_to_query_list():
+def test_show_in_list_does_not_inject_listpageview():
+    # 真机扒出 listPageView 不在 formConfigDetail payload 里; 凭空注入会致 500。
+    # show_in_list=True 不再往 detailPage 注入 listPageView, 只在结果里标注列表列需另配。
     client = FakeClient({"detailPage": {"formComponents": []}})
     res = _run(_add_field_to_form_core(client, **_kw(show_in_list=True)))
     assert res["ok"] is True and res["show_in_list"] is True
-    ql = client.saved_config["detailPage"]["listPageView"]["queryList"]
-    assert "customer.phone" in ql
+    assert "listPageView" not in client.saved_config["detailPage"]
 
 
 def test_default_does_not_touch_query_list():
     client = FakeClient({"detailPage": {"formComponents": []}})
     _run(_add_field_to_form_core(client, **_kw(show_in_list=False)))
     detail = client.saved_config["detailPage"]
-    assert "customer.phone" not in (detail.get("listPageView", {}).get("queryList", []))
+    assert "listPageView" not in detail
 
 
 def test_partial_failure_when_form_save_fails():

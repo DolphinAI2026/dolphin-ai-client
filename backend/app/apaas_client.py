@@ -333,6 +333,26 @@ def _normalize_model_field(raw_field: dict[str, Any]) -> dict[str, Any]:
     return normalized
 
 
+def _db_type_for_field_type(field_type: str) -> str:
+    """aPaaS 逻辑 fieldType → databaseFieldType(存储类型)。
+
+    复用 canonical normalize_database_field_type:它能正确处理 STRING→varchar /
+    TEXT·BIG_TEXT→text / DATE→date / DATETIME→datetime / BOOLEAN→int,只漏认
+    aPaaS 逻辑码 "NUM"(会误落 varchar)→ 在此特判。
+
+    NUM→"double":2026-06-22 真机读 apaas-trial 实测,平台自己的 NUM 字段
+    databaseFieldType 全是 "double"(不是 decimal/int);照搬平台口径最稳。
+
+    用于 add_model_field 未显式传 database_field_type 时按字段类型推导,避免大文本/
+    数字/日期字段统统被建成 VARCHAR(平台字段编辑器类型显示空、原生设计器误渲染)。
+    """
+    ft = (field_type or "STRING").strip().upper()
+    if ft in ("NUM", "NUMBER"):
+        return "double"
+    from app.lowcode_standards import normalize_database_field_type
+    return normalize_database_field_type(field_type or "STRING", component_type=field_type or "STRING")
+
+
 def _log_request(method: str, url: str, payload: Any = None, params: Any = None):
     """记录请求日志"""
     logger.info(f">>> APaaS API 请求: {method} {url}")
@@ -1152,20 +1172,24 @@ class APaaSClient:
     async def add_model_field(self, app_id: str, model_id: str, model_code: str,
                               field_code: str, field_name: str,
                               field_type: str = "STRING",
-                              database_field_type: str = "VARCHAR",
+                              database_field_type: str = "",
                               max_length: int = 255,
                               comment: str = "") -> dict:
         """给已有模型加一个字段（POST /xdap-app/modelField/add）。
 
         field_type: STRING / NUM / DATE / DATETIME / BOOLEAN / TEXT / BIG_TEXT 等
+        database_field_type: 存储类型(varchar/text/decimal/date/datetime…)。留空(默认)
+            时按 field_type 自动推导 —— 否则大文本/数字/日期会统统被建成 VARCHAR,
+            平台字段编辑器类型显示空、原生设计器误渲染(见 _db_type_for_field_type)。
         慎用 approver_id / approval_* 等 apaas 流程保留字 — 平台会 422 拦。
         """
         url = f"{self.base_url}/xdap-app/modelField/add"
+        db_field_type = database_field_type or _db_type_for_field_type(field_type)
         payload = {
             "dataModelId": model_id, "modelId": model_id,
             "modelCode": model_code, "appId": app_id,
             "fieldCode": field_code, "fieldName": field_name,
-            "fieldType": field_type, "databaseFieldType": database_field_type,
+            "fieldType": field_type, "databaseFieldType": db_field_type,
             "fieldStatus": "ENABLE", "fieldComment": comment or "",
             "maxLength": max_length,
         }
@@ -1200,7 +1224,11 @@ class APaaSClient:
             "fieldCode": field_code, "fieldName": field_name,
             "fieldStatus": field_status,
         }
-        if field_type is not None: payload["fieldType"] = field_type
+        if field_type is not None:
+            payload["fieldType"] = field_type
+            # 改类型时同步存储类型, 否则 fieldType 与 databaseFieldType 不一致 → 字段建坏
+            # (平台编辑器类型显示空)。真机实测 update/fromApp 带 databaseFieldType 可正常更新。
+            payload["databaseFieldType"] = _db_type_for_field_type(field_type)
         if max_length is not None: payload["maxLength"] = max_length
         if comment is not None: payload["fieldComment"] = comment
         _log_request("POST", url, payload)

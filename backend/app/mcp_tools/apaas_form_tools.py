@@ -1446,6 +1446,72 @@ def _is_dup_field_error(exc: Exception) -> bool:
     return "duplicate" in low or "already exist" in low
 
 
+def _gen_form_component_uuid() -> str:
+    """生成 aPaaS 表单组件 uuid —— 32 位小写 hex 无连字符(2026-06-22 真机抓包实测格式,
+    平台前端设计器拖入组件时本地生成, 没有服务端 uuid 分配接口)。"""
+    import uuid
+    return uuid.uuid4().hex
+
+
+# 克隆现有组件时要清掉的键: 模板字段的值/默认/字典绑定/规则, 避免新字段继承旧字段配置。
+_CLONE_CLEAR_KEYS = (
+    "value", "defaultValue", "customDefaultKey",
+    "dictionaryCode", "chooseOptions", "dictionaryChooseOptions",
+    "dictionarySelectConfig", "enableRule", "uniqueCheck",
+)
+
+
+def _clone_form_component_for_field(template: dict, *, model_code: str, field_code: str,
+                                    field_name: str, comp_type: str) -> dict:
+    """从现有组件克隆新字段组件: 保留平台完整结构(render/methods/boId/width… ~75 字段),
+    只换身份字段。模板取自"同模型同类型"现有组件时, boId/render/methods 自动正确。
+
+    背景: aPaaS formConfigDetail 保存要求组件完整水合; 残缺组件(无 uuid/boId/render)→ 500。
+    """
+    component = copy.deepcopy(template)
+    component["uuid"] = _gen_form_component_uuid()
+    component["componentType"] = comp_type
+    component["label"] = field_name
+    component["modelField"] = f"{model_code}.{field_code}"
+    component["boCode"] = f"{model_code}~{field_code}"
+    component["modelCode"] = model_code
+    component["modelFieldName"] = field_name
+    model_name = str(template.get("modelName") or "").strip()
+    if model_name:
+        component["fieldFullName"] = f"{model_name}-{field_name}"
+    for key in _CLONE_CLEAR_KEYS:
+        component.pop(key, None)
+    if "validatorList" in component:
+        component["validatorList"] = []
+    component["required"] = False
+    return component
+
+
+def _build_form_component_for_field(existing_components: list, field: dict,
+                                    model_code: str, field_name: str, comp_type: str) -> dict:
+    """构造要铺到表单的新组件。
+
+    优先克隆"同模型同类型"的现有组件(完整水合, 平台保存可接受); 无同类型模板则退化到
+    旧的残缺构造器 _build_basic_component_from_model_field(行为不比现状差, 平台可能拒)。
+    只在 componentType 完全一致时克隆 —— render/methods 是按组件类型定制的, 跨类型克隆
+    会带来错配, 故不跨类型借模板。
+    """
+    field_code = str(field.get("field_code") or "").strip()
+    template = next(
+        (c for c in (existing_components or [])
+         if isinstance(c, dict)
+         and str(c.get("modelCode") or "") == model_code
+         and str(c.get("componentType") or "") == comp_type
+         and str(c.get("uuid") or "").strip()),
+        None,
+    )
+    if template is None:
+        return _build_basic_component_from_model_field(field, model_code)
+    return _clone_form_component_for_field(
+        template, model_code=model_code, field_code=field_code,
+        field_name=field_name, comp_type=comp_type)
+
+
 async def _add_field_to_form_core(
     client,
     *,
@@ -1494,7 +1560,7 @@ async def _add_field_to_form_core(
                     "message": f"给模型 {mcode} 加字段「{field_name}」失败：{exc}"}
         logger.info("add_apaas_field_to_form: 字段 %s 已在模型上, 跳过建字段直接铺表单", target)
 
-    # ── 2. 构造组件(类型自动推导, 复用现成构造器)──
+    # ── 2. 读表单 → 幂等短路 ──
     field = {
         "field_code": fcode,
         "field_name": field_name.strip(),
@@ -1503,7 +1569,17 @@ async def _add_field_to_form_core(
         "dictionary_code": "",
         "required": False,
     }
-    component = _build_basic_component_from_model_field(field, mcode)
+    form_config = await client.query_form_config(aid, form_id.strip())
+    existing = (form_config.get("detailPage") or {}).get("formComponents") or []
+    if any(isinstance(c, dict) and str(c.get("modelField") or "") == target for c in existing):
+        return {"ok": True, "skipped": True, "reason": "FIELD_ALREADY_ON_FORM",
+                "form_id": form_id, "model_field": target,
+                "message": f"字段「{field_name}」已在表单上, 未重复添加。"}
+
+    # ── 3. 构造组件: 优先克隆同模型同类型的现有组件(完整水合, 平台保存才接受)──
+    #    aPaaS formConfigDetail 要求组件 ~75 字段(uuid/boId/render/methods…); 残缺组件 → 500。
+    comp_type = _component_type_from_model_field(field)
+    component = _build_form_component_for_field(existing, field, mcode, field_name.strip(), comp_type)
 
     def _apply_append(cfg: dict) -> None:
         detail = cfg.setdefault("detailPage", {})
@@ -1516,19 +1592,10 @@ async def _add_field_to_form_core(
             cfg["allModelCodes"] = amc
         if mcode not in amc:
             amc.append(mcode)
-        if show_in_list:
-            ql = detail.setdefault("listPageView", {}).setdefault("queryList", [])
-            if target not in ql:
-                ql.append(target)
+        # ⚠️ 不注入 listPageView: 真机抓包确认它不在 formConfigDetail payload 里;
+        #    列表列配置走独立 endpoint(listPageConfigById), 凭空注入会致 500。
 
-    # ── 3. 读表单 → 幂等短路 → 追加 → 存回(乐观锁重试)──
-    form_config = await client.query_form_config(aid, form_id.strip())
-    existing = (form_config.get("detailPage") or {}).get("formComponents") or []
-    if any(isinstance(c, dict) and str(c.get("modelField") or "") == target for c in existing):
-        return {"ok": True, "skipped": True, "reason": "FIELD_ALREADY_ON_FORM",
-                "form_id": form_id, "model_field": target,
-                "message": f"字段「{field_name}」已在表单上, 未重复添加。"}
-
+    # ── 4. 追加 → 存回(乐观锁重试)──
     _apply_append(form_config)
 
     from app.operations.form_config import _save_form_config_with_retry
@@ -1543,10 +1610,13 @@ async def _add_field_to_form_core(
                 "message": f"字段「{field_name}」已加到模型 {mcode}, 但铺到表单失败：{exc}",
                 "field_on_model": True, "field_on_form": False}
 
+    message = f"字段「{field_name}」({fcode}) 已加到模型「{mcode}」并铺到表单。"
+    if show_in_list:
+        message += " 列表列请在「列表设计」中单独配置(平台列表列不随表单详情保存)。"
     return {"ok": True, "form_id": form_id, "model_code": mcode, "field_code": fcode,
             "model_field": target, "component_type": component["componentType"],
             "show_in_list": show_in_list,
-            "message": f"字段「{field_name}」({fcode}) 已加到模型「{mcode}」并铺到表单。",
+            "message": message,
             "next_step": "调 republish_apaas_app 让模型变更生效; 刷新表单设计器查看新字段。"}
 
 
