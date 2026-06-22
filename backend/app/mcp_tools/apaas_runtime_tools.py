@@ -25,8 +25,8 @@ list_apaas_form_components = None
 list_apaas_app_processes = None
 
 
-def _invalidate_section_cache_after_write(apaas_app_id: str) -> None:
-    """Best-effort section_content cache invalidation after process writes."""
+def _invalidate_process_caches_after_write(env_id: int, apaas_app_id: str) -> None:
+    """Best-effort cache invalidation after process writes."""
     aid = str(apaas_app_id or "").strip()
     if not aid:
         return
@@ -38,6 +38,12 @@ def _invalidate_section_cache_after_write(apaas_app_id: str) -> None:
             logger.info("section_content cache invalidated after process write: app=%s cleared=%d", aid, cleared)
     except Exception as exc:  # noqa: BLE001
         logger.debug("section_content cache invalidate skipped after process write (%s): %s", aid, exc)
+    try:
+        from app.mcp_tools.process_tools import _process_list_cache
+
+        _process_list_cache.pop(f"{int(env_id)}:{aid}", None)
+    except Exception as exc:  # noqa: BLE001
+        logger.debug("process list cache invalidate skipped after process write (%s): %s", aid, exc)
 
 
 # ─── 业务数据查询（运行时 data，外部 agent 看数据）──────────────────────
@@ -488,7 +494,7 @@ async def set_apaas_app_process(
         )
         if not ok:
             return raw
-        _invalidate_section_cache_after_write(apaas_app_id)
+        _invalidate_process_caches_after_write(env_id, apaas_app_id)
         return {
             "ok": True,
             "menu_id": menu_id,
@@ -521,7 +527,7 @@ async def set_apaas_app_process(
         lambda c: c.save_process_config(apaas_app_id.strip(), payload))
     if not ok:
         return raw
-    _invalidate_section_cache_after_write(apaas_app_id)
+    _invalidate_process_caches_after_write(env_id, apaas_app_id)
 
     return {
         "ok": True,
