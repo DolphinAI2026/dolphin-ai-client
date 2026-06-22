@@ -163,6 +163,24 @@ class CodingPipelineRequest(BaseModel):
     attachments: list[dict[str, Any]] | None = None
 
 
+@router.get("/coding/run-status")
+async def coding_run_status(
+    conversation_id: int,
+    ctx: Annotated[AuthContext, Depends(get_auth_context)],
+):
+    """该会话是否有在跑的 coding run + 最新 seq —— 前端切回会话据此决定是否重连。"""
+    from app.harness.run_registry import run_registry
+
+    h = run_registry.get(conversation_id)
+    if h and not h.task.done():
+        return {
+            "running": True,
+            "last_seq": getattr(h.event_bus, "current_seq", 0),
+            "run_id": h.run_id,
+        }
+    return {"running": False, "last_seq": 0, "run_id": None}
+
+
 @router.post("/coding/pipeline")
 async def coding_pipeline(
     req: CodingPipelineRequest,
@@ -212,6 +230,11 @@ async def _start_coding_turn_sse(
     message: str,
     metadata: dict[str, Any],
 ):
+    # 守卫:同会话已有在跑 run → 挡住(单会话单 run,避免并发竞态/误丢)
+    from app.harness.run_registry import run_registry
+    if conversation_id is not None and run_registry.is_running(conversation_id):
+        raise HTTPException(status_code=409, detail="该会话有任务在跑,请等它完成或先停止")
+
     mgr = HarnessManager(db)
 
     try:
