@@ -249,10 +249,32 @@ def _build_executable_bpmn_xml(
     return "\n".join(parts)
 
 
+def _process_display_fields(form_components: list | None, limit: int = 4) -> list[dict]:
+    """Pick stable form fields for the process detail display area."""
+    fields: list[dict] = []
+    for component in form_components or []:
+        if not isinstance(component, dict):
+            continue
+        component_id = str(component.get("uuid") or component.get("componentId") or "").strip()
+        component_name = str(component.get("label") or component.get("componentName") or component.get("name") or "").strip()
+        component_type = str(component.get("componentType") or component.get("type") or "").strip()
+        if not component_id or not component_name or not component_type:
+            continue
+        fields.append({
+            "componentId": component_id,
+            "componentName": component_name,
+            "componentType": component_type,
+        })
+        if len(fields) >= limit:
+            break
+    return fields
+
+
 def _build_process_payload_v2(
     app_id: str, form_id: str, menu_id: str,
     process_name: str, process_code: str,
     stages_with_role: list,  # [{name, approver_type, approver_id_or_submitter, approver_label}]
+    form_components: list | None = None,
 ) -> dict:
     """用 capture 实证 schema 构建平台流程 payload.
 
@@ -369,7 +391,11 @@ def _build_process_payload_v2(
             {"componentId": "formName", "name": "表单名称", "type": "COMPONENT"},
             {"value": "流程\\n\n", "type": "TEXT"},
         ],
-        "processDisplayFieldList": [],
+        "processDisplayFieldList": _process_display_fields(form_components),
+        "titleConfigListI18nAssociated": False,
+        "approveUiMobile": "MODAL",
+        "approveUiPc": "DETAIL",
+        "processViewDisplayField": "processStatus",
     }
     return {
         "appId": app_id,

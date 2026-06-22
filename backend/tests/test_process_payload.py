@@ -48,3 +48,28 @@ def test_approver_is_role_id_not_code():
     assert approvers[0]["type"] == "ROLE"
     assert approvers[0]["value"] == "role_id_1"  # 雪花 id，不是 role_code
     assert approvers[0]["displayData"]["label"] == "班组长"
+
+
+def test_process_global_config_matches_designer_save_defaults():
+    p = build_process_payload(
+        app_id="a",
+        form_id="F",
+        menu_id="M",
+        process_name="n",
+        process_code="c",
+        stages_with_role=_fixed_stages(),
+        form_components=[
+            {"uuid": "u1", "label": "字段一", "componentType": "FORM_TEXT_INPUT"},
+            {"uuid": "u2", "label": "字段二", "componentType": "FORM_NUMBER_INPUT"},
+        ],
+    )
+
+    cfg = p["processGlobalConfig"]
+    assert cfg["approveUiMobile"] == "MODAL"
+    assert cfg["approveUiPc"] == "DETAIL"
+    assert cfg["processViewDisplayField"] == "processStatus"
+    assert cfg["titleConfigListI18nAssociated"] is False
+    assert cfg["processDisplayFieldList"] == [
+        {"componentId": "u1", "componentName": "字段一", "componentType": "FORM_TEXT_INPUT"},
+        {"componentId": "u2", "componentName": "字段二", "componentType": "FORM_NUMBER_INPUT"},
+    ]

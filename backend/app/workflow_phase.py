@@ -104,6 +104,7 @@ def build_workflow_payload(
         process_name=wf.get("name") or "审批流程",
         process_code=_workflow_process_code(form_code, wf.get("name") or ""),
         stages_with_role=stages,
+        form_components=fr.get("components") or fr.get("formComponents") or [],
     )
     return payload, None
 

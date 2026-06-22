@@ -421,6 +421,14 @@ async def set_apaas_app_process(
                 ],
             }
 
+    form_components: list[dict[str, Any]] = []
+    ok_components, components_raw = await _with_client(
+        env_id, "查表单组件",
+        lambda c: c.query_form_components(apaas_app_id.strip(), form_id),
+    )
+    if ok_components and isinstance(components_raw, list):
+        form_components = components_raw
+
     if has_definition:
         try:
             from app.process_translator import build_apaas_bpmn_xml, translate_definition_to_apaas_schema
@@ -428,13 +436,6 @@ async def set_apaas_app_process(
             role_lookup: dict[str, dict] = {}
             role_lookup.update(role_by_code)
             role_lookup.update(role_by_id)
-            form_components: list[dict[str, Any]] = []
-            ok_components, components_raw = await _with_client(
-                env_id, "查表单组件",
-                lambda c: c.query_form_components(apaas_app_id.strip(), form_id),
-            )
-            if ok_components and isinstance(components_raw, list):
-                form_components = components_raw
             payload, warnings = translate_definition_to_apaas_schema(
                 process_definition or {},
                 apaas_app_id=apaas_app_id.strip(),
@@ -521,6 +522,7 @@ async def set_apaas_app_process(
         process_name=process_name.strip(),
         process_code=process_code.strip(),
         stages_with_role=stages_with_role,
+        form_components=form_components,
     )
 
     ok, raw = await _with_client(env_id, "存流程",
