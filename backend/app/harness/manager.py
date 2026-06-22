@@ -206,17 +206,20 @@ class HarnessManager:
                     {"error": str(e)},
                 )
             finally:
-                # 更新 thread.last_seq
-                async with AsyncSessionLocal() as session:
-                    thread_row = await session.get(HarnessThreadModel, thread_ctx.thread_id)
-                    if thread_row:
-                        thread_row.last_seq = event_bus.current_seq
-                        await session.commit()
-
+                # 先做无 IO 的收尾:停止键取消 task 时,即便下面 DB 写被再次打断,
+                # sentinel(通知消费者/attach 退出)+ 摘除注册表也已完成。
                 await event_bus.send_sentinel()
-                # 摘除注册表(切会话不丢 run:run 完成/失败才解绑)
                 if thread_ctx.conversation_id is not None:
                     run_registry.unregister(thread_ctx.conversation_id)
+                # 更新 thread.last_seq(放最后;cancel 中途被打断不影响上面的收尾)
+                try:
+                    async with AsyncSessionLocal() as session:
+                        thread_row = await session.get(HarnessThreadModel, thread_ctx.thread_id)
+                        if thread_row:
+                            thread_row.last_seq = event_bus.current_seq
+                            await session.commit()
+                except Exception:
+                    pass
 
         # 启动后台任务
         task = asyncio.create_task(_run_turn_background())

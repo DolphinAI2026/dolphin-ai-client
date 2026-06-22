@@ -181,6 +181,25 @@ async def coding_run_status(
     return {"running": False, "last_seq": 0, "run_id": None}
 
 
+@router.post("/coding/stop")
+async def coding_stop(
+    conversation_id: int,
+    ctx: Annotated[AuthContext, Depends(get_auth_context)],
+):
+    """显式停止该会话在跑的 coding run(停止键)。
+
+    现在 run 是 RunRegistry 强引用的后台 task,断 SSE 不再停它 → 停止键必须显式取消 task。
+    取消后 task 的 finally 会 send_sentinel + 摘除注册表。
+    """
+    from app.harness.run_registry import run_registry
+
+    h = run_registry.get(conversation_id)
+    if h and not h.task.done():
+        h.task.cancel()
+        return {"ok": True, "stopped": True}
+    return {"ok": True, "stopped": False}
+
+
 @router.get("/coding/attach")
 async def coding_attach(
     conversation_id: int,

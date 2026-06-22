@@ -39,6 +39,38 @@ async def test_run_status_not_running():
 
 
 @pytest.mark.asyncio
+async def test_coding_stop_cancels_run():
+    from app.routes.harness import coding_stop
+
+    started = asyncio.Event()
+
+    async def _long():
+        started.set()
+        await asyncio.sleep(10)
+
+    task = asyncio.create_task(_long())
+    await started.wait()
+    run_registry.register(
+        707, RunHandle(task=task, event_bus=SimpleNamespace(current_seq=0), run_id="r", thread_id=1)
+    )
+    try:
+        res = await coding_stop(707, ctx=SimpleNamespace())
+        assert res["stopped"] is True
+        await asyncio.sleep(0.02)
+        assert task.cancelled()
+    finally:
+        run_registry.unregister(707)
+
+
+@pytest.mark.asyncio
+async def test_coding_stop_noop_when_not_running():
+    from app.routes.harness import coding_stop
+
+    res = await coding_stop(888888, ctx=SimpleNamespace())
+    assert res["stopped"] is False
+
+
+@pytest.mark.asyncio
 async def test_pipeline_guard_blocks_when_running():
     from fastapi import HTTPException
 
