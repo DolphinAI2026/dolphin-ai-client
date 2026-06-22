@@ -24,6 +24,22 @@ list_apaas_form_views = None
 list_apaas_form_components = None
 list_apaas_app_processes = None
 
+
+def _invalidate_section_cache_after_write(apaas_app_id: str) -> None:
+    """Best-effort section_content cache invalidation after process writes."""
+    aid = str(apaas_app_id or "").strip()
+    if not aid:
+        return
+    try:
+        from app.routes.applications.section_content import invalidate_section_cache_for_app
+
+        cleared = invalidate_section_cache_for_app(aid)
+        if cleared:
+            logger.info("section_content cache invalidated after process write: app=%s cleared=%d", aid, cleared)
+    except Exception as exc:  # noqa: BLE001
+        logger.debug("section_content cache invalidate skipped after process write (%s): %s", aid, exc)
+
+
 # ─── 业务数据查询（运行时 data，外部 agent 看数据）──────────────────────
 # 之前所有 apaas 工具都在搭建层（角色 / 字典 / 模型 / 表单 / 权限 / 菜单），
 # 没工具能看运行时数据 — 用户在「请假申请」表单提交的具体请假记录。
@@ -472,6 +488,7 @@ async def set_apaas_app_process(
         )
         if not ok:
             return raw
+        _invalidate_section_cache_after_write(apaas_app_id)
         return {
             "ok": True,
             "menu_id": menu_id,
@@ -504,6 +521,7 @@ async def set_apaas_app_process(
         lambda c: c.save_process_config(apaas_app_id.strip(), payload))
     if not ok:
         return raw
+    _invalidate_section_cache_after_write(apaas_app_id)
 
     return {
         "ok": True,
