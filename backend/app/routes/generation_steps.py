@@ -858,6 +858,40 @@ async def _reality_completed_step_keys(app: Application, config: dict, db: Async
     return keys
 
 
+def _workflow_step_keys(config: dict) -> set[str]:
+    data = config.get("data", config)
+    return {
+        f"create_workflow:{idx}"
+        for idx, _ in enumerate(data.get("workflows") or [])
+    }
+
+
+async def _reality_completed_workflow_step_keys(
+    app: Application,
+    config: dict,
+    db: AsyncSession,
+) -> Optional[set[str]]:
+    """Return real completed workflow keys, or None when the platform query fails."""
+    data = config.get("data", config)
+    workflows = data.get("workflows") or []
+    if not WORKFLOW_STEPS_ENABLED or not workflows or not app.apaas_app_id:
+        return set()
+    try:
+        from app.routes.applications.generate import _resolve_env_and_client
+
+        client, _env = await _resolve_env_and_client(app, db)
+        processes = await client.list_processes(str(app.apaas_app_id))
+        process_items = [p for p in (processes or []) if isinstance(p, dict)]
+        return {
+            f"create_workflow:{idx}"
+            for idx, wf in enumerate(workflows)
+            if any(_process_matches_workflow(p, wf, idx) for p in process_items)
+        }
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("steps workflow reality reconcile 失败 app=%s: %s", app.id, exc)
+        return None
+
+
 @router.get("/applications/{app_id}/steps/status", response_model=GenerationStatusResponse)
 async def get_step_status(
     app_id: int,
@@ -879,6 +913,12 @@ async def get_step_status(
                 state = {**state, "steps_completed": list(set(state.get("steps_completed", [])) | reality)}
         except Exception as exc:  # noqa: BLE001
             logger.warning("steps reality reconcile 整体失败 app=%s: %s", app.id, exc)
+        workflow_reality = await _reality_completed_workflow_step_keys(app, config, db)
+        if workflow_reality is not None:
+            completed = set(state.get("steps_completed", []))
+            completed.difference_update(_workflow_step_keys(config))
+            completed.update(workflow_reality)
+            state = {**state, "steps_completed": list(completed)}
 
     steps = _build_steps(config, state, apaas_app_id)
     if app.status == "completed":
@@ -933,7 +973,16 @@ async def execute_step(
     # 如果已完成，跳过
     completed = set(state.get("steps_completed", []))
     if step_key in completed:
-        return StepExecuteResponse(step=step_key, status="completed", result={"message": "已完成，跳过"})
+        if step_key.startswith("create_workflow:"):
+            workflow_reality = await _reality_completed_workflow_step_keys(app, config, db)
+            if workflow_reality is not None and step_key not in workflow_reality:
+                completed.discard(step_key)
+                state["steps_completed"] = list(completed)
+                _save_state(app, state)
+            else:
+                return StepExecuteResponse(step=step_key, status="completed", result={"message": "已完成，跳过"})
+        else:
+            return StepExecuteResponse(step=step_key, status="completed", result={"message": "已完成，跳过"})
 
     # 特殊处理：如果平台应用已存在，create_app 步骤直接跳过
     if step_key == "create_app" and apaas_app_id:
