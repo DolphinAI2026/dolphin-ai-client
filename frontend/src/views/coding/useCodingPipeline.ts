@@ -476,11 +476,43 @@ export function useCodingPipeline(deps: PipelineDeps) {
 
   // ── 主流程 ──
 
-  // 当前流式请求的中止器:用户点「停止」→ abort() → fetch/SSE 抛 AbortError → 收尾(不弹错)。
+  // 当前流式请求的中止器。
   let currentAbort: AbortController | null = null
-  function stopStream() {
+
+  // 切走会话:只断本地读取,后端 run 由 RunRegistry 强引用后台续跑(切回可 attach 续看)。
+  function detachStream() {
     if (currentAbort) currentAbort.abort()
-    isStreaming.value = false  // 立即翻转,UI 不等 abort 落地;后续事件不会再把它设回 true
+    isStreaming.value = false  // 立即翻转,UI 不等 abort 落地
+  }
+
+  // 停止键:run 现在后台续跑,断 SSE 不再能停它 → 必须显式让后端取消 task(best-effort)+ 断本地读取。
+  function stopStream() {
+    const convId = codingStore.conversationId
+    if (convId) harnessApi.stopCodingRun(Number(convId)).catch(() => {})
+    detachStream()
+  }
+
+  // 切回会话且有在跑 run → 重连:补 seq>afterSeq 的缺口 + 跟实时,事件复用现有 SSE 状态机。
+  async function attachStream(conversationId: number, afterSeq: number) {
+    isStreaming.value = true
+    try {
+      currentAbort = new AbortController()
+      const response = await fetch(harnessApi.codingAttachUrl(conversationId, afterSeq), {
+        method: 'GET',
+        headers: { 'Authorization': `Bearer ${userStore.token}` },
+        signal: currentAbort.signal,
+      })
+      if (!response.ok) return
+      await consumePipelineSse(response)
+      await refreshWorkspacesAfterPipeline()
+    } catch (error: any) {
+      if (error?.name !== 'AbortError') {
+        // 重连失败静默:历史已由 replay 渲染,不打断用户
+      }
+    } finally {
+      isStreaming.value = false
+      currentAbort = null
+    }
   }
 
   async function sendMessage() {
@@ -529,6 +561,13 @@ export function useCodingPipeline(deps: PipelineDeps) {
 
       if (!response.ok) {
         const errBody = await response.json().catch(() => ({ detail: `HTTP ${response.status}` }))
+        if (response.status === 409) {
+          // 该会话已有在跑 run(单会话单 run 守卫)→ 提示,不当错误
+          ElMessage.warning(errBody.detail || '该会话有任务在跑,请等它完成或先停止')
+          addStreamMsg({ type: 'status', content: '已有任务在跑,未发起新任务' })
+          isStreaming.value = false
+          return
+        }
         throw new Error(errBody.detail || `HTTP ${response.status}`)
       }
 
@@ -560,6 +599,8 @@ export function useCodingPipeline(deps: PipelineDeps) {
     sendMessage,
     sendSuggestion,
     stopStream,
+    detachStream,   // 切走会话:断读取不停 run
+    attachStream,   // 切回会话:重连在跑 run 续看
     // 暴露给 replay / 其他地方用（很少直接用）
     consumePipelineSse,
     refreshWorkspacesAfterPipeline,

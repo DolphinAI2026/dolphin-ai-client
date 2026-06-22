@@ -648,6 +648,7 @@ import AppIcon from '@/components/common/AppIcon.vue'
 import type { PlatformEnv } from '@/api/platformEnv'
 import { useUserStore } from '@/stores/user'
 import { codingApi } from '@/api/coding'
+import { harnessApi } from '@/api/harness'
 import { openExternal, isDesktop, pickDirectory } from '@/utils/desktop'
 import type { CodingConversation, WorkspaceInfo, ReplayStreamMessage } from '@/api/coding'
 import CodingSceneEntry from './coding/CodingSceneEntry.vue'
@@ -1006,9 +1007,18 @@ function syncCodingUrl(conversationId: number) {
 
 // 切会话/工作区/新建前, 掐断仍在跑的 SSE —— 否则旧流的回调会继续往「现在已切到新会话」的
 // 共享 streamMessages/conversationId 里写(串台/污染)。旧实现靠 /coding remount 销毁 pipeline
-// 闭包来顺带 abort; 现在 /coding 稳定 key 原地切, 必须显式 stopStream()。
+// 切走会话:只断本地读取(detach),后端 run 由 RunRegistry 强引用后台续跑,切回可 attach 续看。
+// (旧逻辑这里 stopStream() 会顺带杀 run = 切会话丢 run 的根因)
 function abortInflightStream() {
-  if (isStreaming.value) stopStream()
+  if (isStreaming.value) detachStream()
+}
+
+// 切回会话:若该会话有在跑 run,重连续看(补 last_seq 之后 + 跟实时)。不 await,后台跟,不挡 UI。
+async function maybeAttachRunningRun(id: number) {
+  try {
+    const st = await harnessApi.getCodingRunStatus(id)
+    if (st.running) attachStream(id, st.last_seq)
+  } catch { /* 查不到状态就当没在跑,历史已由 replay 渲染 */ }
 }
 
 // 头部切换 = 只换聊天上下文, 工作区(文件树/查看器)保持不动
@@ -1027,6 +1037,7 @@ async function switchConversationFromHeader(id: number) {
     applyCodingModelSelection(replay.selected_llm_config_id)
     loadConversationHistory(replay.messages as any, replay.stream_messages || [])
     syncCodingUrl(id)
+    maybeAttachRunningRun(id)  // 该会话有在跑 run 则重连续看
   } catch (e: any) {
     ElMessage.error(`切换会话失败: ${e?.message || e}`)
   }
@@ -1493,6 +1504,7 @@ async function loadCodingConversationOnly(conversationId: number) {
   codingStore.conversationId = conversationId
   localStorage.removeItem('coding_last_workspace_id')
   loadConversationHistory(replay.messages as any, replay.stream_messages || [])
+  maybeAttachRunningRun(conversationId)  // 该会话有在跑 run 则重连续看
 }
 
 function normalizeCreatedCodingConversation(conv: CodingConversation): CodingConversation {
@@ -2064,7 +2076,7 @@ function removeAttachment() {
 // ============ Send Message / Create Workspace ============
 // SSE handlers + upload + build request + consume SSE + sendMessage
 // 全部抽到 useCodingPipeline composable
-const { sendMessage, stopStream } = useCodingPipeline({
+const { sendMessage, stopStream, detachStream, attachStream } = useCodingPipeline({
   model: { codingModelOptions, codingModelLoading, updatingCodingModel, selectedCodingModelValue, persistedCodingModelValue, selectedCodingModelOption, codingModelHint, toCodingModelValue, normalizeCodingModelValue, applyCodingModelSelection, loadCodingModelOptions, handleCodingModelChange } as any,
   stream: { streamMessages, isStreaming, streamContainerRef, scrollStreamToBottom, addStreamMsg, appendToLastThinking, appendToLastCommand, completeStepMsg, addStepRunningMsg, restoreReplayStreamMessages } as any,
   workspace: { allWorkspaces, isDownloading, embeddedAppId, existingWorkspaces, workspaceDisplayName } as any,
