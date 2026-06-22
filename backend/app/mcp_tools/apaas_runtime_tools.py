@@ -372,6 +372,20 @@ async def set_apaas_app_process(
                 "approver_label": "申请人",
             })
             continue
+        if approver_type == "USER":
+            user_id = str(stage.get("approver_code") or stage.get("approver_value") or "").strip()
+            if not user_id:
+                return {
+                    "ok": False, "error_code": "USER_NOT_FOUND",
+                    "message": f"stage 「{stage.get('name')}」的 USER approver_code 不能为空",
+                }
+            stages_with_role.append({
+                "name": stage.get("name") or f"审批 {stage_idx}",
+                "approver_type": "USER",
+                "approver_value": user_id,
+                "approver_label": stage.get("approver_name") or user_id,
+            })
+            continue
         # ROLE — code 或 id 都接, 缺哪个用反查表补齐
         raw_code = str(stage.get("approver_code") or "").strip()
         role_id = ""
