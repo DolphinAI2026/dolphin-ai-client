@@ -333,6 +333,27 @@ def _normalize_model_field(raw_field: dict[str, Any]) -> dict[str, Any]:
     return normalized
 
 
+# aPaaS 逻辑 fieldType 别名 → 平台合法码。2026-06-22 真机实测: 平台只认 STRING/NUM/
+# BIG_TEXT/DATE/DATETIME/BOOLEAN; 传 "TEXT" 之类平台不识别 → 字段建成"类型为空"(编辑器
+# 类型下拉空白)。agent 常传 TEXT/NUMBER/INT 等同义词, 在此归一到合法码。
+_APAAS_FIELD_TYPE_ALIASES = {
+    "TEXT": "BIG_TEXT", "LONGTEXT": "BIG_TEXT", "CLOB": "BIG_TEXT",
+    "TEXTAREA": "BIG_TEXT", "RICHTEXT": "BIG_TEXT", "RICH_TEXT": "BIG_TEXT",
+    "BIGTEXT": "BIG_TEXT",
+    "NUMBER": "NUM", "INT": "NUM", "INTEGER": "NUM", "BIGINT": "NUM",
+    "DOUBLE": "NUM", "DECIMAL": "NUM", "FLOAT": "NUM", "NUMERIC": "NUM",
+    "VARCHAR": "STRING", "CHAR": "STRING", "STR": "STRING",
+    "BOOL": "BOOLEAN",
+    "TIMESTAMP": "DATETIME",
+}
+
+
+def _normalize_apaas_field_type(field_type: str) -> str:
+    """把 agent/调用方传的 fieldType 归一到平台合法逻辑码(TEXT→BIG_TEXT 等)。"""
+    ft = (field_type or "STRING").strip().upper()
+    return _APAAS_FIELD_TYPE_ALIASES.get(ft, ft)
+
+
 def _db_type_for_field_type(field_type: str) -> str:
     """aPaaS 逻辑 fieldType → databaseFieldType(存储类型)。
 
@@ -1184,6 +1205,7 @@ class APaaSClient:
         慎用 approver_id / approval_* 等 apaas 流程保留字 — 平台会 422 拦。
         """
         url = f"{self.base_url}/xdap-app/modelField/add"
+        field_type = _normalize_apaas_field_type(field_type)  # TEXT→BIG_TEXT 等, 否则平台类型为空
         db_field_type = database_field_type or _db_type_for_field_type(field_type)
         payload = {
             "dataModelId": model_id, "modelId": model_id,
@@ -1225,9 +1247,10 @@ class APaaSClient:
             "fieldStatus": field_status,
         }
         if field_type is not None:
+            # TEXT→BIG_TEXT 归一 + 同步存储类型, 否则 fieldType 平台不认 / 与 databaseFieldType
+            # 不一致 → 字段建坏(平台编辑器类型显示空)。真机实测 update/fromApp 带二者可正常更新。
+            field_type = _normalize_apaas_field_type(field_type)
             payload["fieldType"] = field_type
-            # 改类型时同步存储类型, 否则 fieldType 与 databaseFieldType 不一致 → 字段建坏
-            # (平台编辑器类型显示空)。真机实测 update/fromApp 带 databaseFieldType 可正常更新。
             payload["databaseFieldType"] = _db_type_for_field_type(field_type)
         if max_length is not None: payload["maxLength"] = max_length
         if comment is not None: payload["fieldComment"] = comment

@@ -108,9 +108,31 @@ def test_build_falls_back_to_skeletal_without_sibling():
     field = {"field_code": "phone", "field_name": "手机号", "data_type": "STRING",
              "max_length": 20, "dictionary_code": "", "required": False}
     c = _build_form_component_for_field([], field, "customer", "手机号", "FORM_TEXT_INPUT")
-    assert "render" not in c  # 残缺兜底
+    assert "render" not in c  # 无任何同模型组件 → 残缺兜底
     assert c["modelField"] == "customer.phone"
     assert c["componentType"] == "FORM_TEXT_INPUT"
+
+
+def test_build_clones_text_family_when_no_exact_type():
+    # 表单只有单行文本(FORM_TEXT_INPUT), 加多行文本(FORM_TEXTAREA_INPUT) → 文本家族互借克隆,
+    # 转成 textarea(覆盖"表单没有多行文本字段"的高频场景, 不再退化成残缺)。
+    existing = [_sibling()]  # FORM_TEXT_INPUT
+    field = {"field_code": "remark", "field_name": "备注", "data_type": "BIG_TEXT",
+             "max_length": 500, "dictionary_code": "", "required": False}
+    c = _build_form_component_for_field(existing, field, "score_result", "备注", "FORM_TEXTAREA_INPUT")
+    assert c.get("render") == {"r": 1}  # 克隆了完整结构(非残缺)
+    assert c["componentType"] == "FORM_TEXTAREA_INPUT"
+    assert c["modelField"] == "score_result.remark"
+
+
+def test_build_clones_any_same_model_when_no_text_family():
+    # 加数字字段但表单无同类型/无文本家族 → 借任意同模型组件(保证完整水合), 转类型。
+    existing = [_sibling(componentType="FORM_SELECT_INPUT_SINGLE")]
+    field = {"field_code": "score", "field_name": "得分", "data_type": "NUM",
+             "max_length": 0, "dictionary_code": "", "required": False}
+    c = _build_form_component_for_field(existing, field, "score_result", "得分", "FORM_NUMBER_INPUT")
+    assert c.get("render") == {"r": 1}  # 完整水合, 非残缺
+    assert c["componentType"] == "FORM_NUMBER_INPUT"
 
 
 # ── 集成: 通过 _add_field_to_form_core ────────────────────────────────────────
@@ -159,15 +181,17 @@ def test_integration_clones_same_type_sibling_into_form():
     assert re.fullmatch(r"[a-f0-9]{32}", new["uuid"])
 
 
-def test_integration_falls_back_to_skeletal_without_same_type_sibling():
-    # 表单只有 TEXT_INPUT, 加 BIG_TEXT(→TEXTAREA) 无同类型模板 → 残缺兜底(行为不比现状差)。
+def test_integration_clones_text_family_when_no_textarea_sibling():
+    # 表单只有单行文本(无多行文本), 加 BIG_TEXT(→TEXTAREA) → 文本家族互借克隆(非残缺)。
+    # 这正是真机 WMS「仓库区域」表单的场景: 没有多行文本字段当同类型模板。
     fc = {"detailPage": {"formComponents": [_sibling()]}, "allModelCodes": ["score_result"]}
     client = _FakeClient(fc)
     res = asyncio.run(_add_field_to_form_core(client, **_core_kw()))
     assert res["ok"] is True
     comps = client.saved_config["detailPage"]["formComponents"]
     new = next(c for c in comps if c["modelField"] == "score_result.tl_evaluation")
-    assert "render" not in new  # 残缺兜底, 未克隆
+    assert new.get("render") == {"r": 1}  # 文本家族克隆, 完整水合
+    assert new["componentType"] == "FORM_TEXTAREA_INPUT"
 
 
 def test_integration_show_in_list_does_not_inject_listpageview():

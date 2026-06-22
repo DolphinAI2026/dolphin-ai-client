@@ -14,7 +14,40 @@ import json
 
 import httpx
 
-from app.apaas_client import APaaSClient, _db_type_for_field_type
+from app.apaas_client import (
+    APaaSClient,
+    _db_type_for_field_type,
+    _normalize_apaas_field_type,
+)
+
+
+def test_normalize_field_type_aliases_to_platform_codes():
+    # 平台只认 STRING/NUM/BIG_TEXT/DATE/DATETIME/BOOLEAN; agent 常传同义词。
+    assert _normalize_apaas_field_type("TEXT") == "BIG_TEXT"
+    assert _normalize_apaas_field_type("LONGTEXT") == "BIG_TEXT"
+    assert _normalize_apaas_field_type("NUMBER") == "NUM"
+    assert _normalize_apaas_field_type("INT") == "NUM"
+    assert _normalize_apaas_field_type("BIG_TEXT") == "BIG_TEXT"
+    assert _normalize_apaas_field_type("STRING") == "STRING"
+    assert _normalize_apaas_field_type("") == "STRING"
+
+
+def test_add_model_field_normalizes_text_to_bigtext(monkeypatch):
+    # agent 传 "TEXT" → 平台不认 → 字段类型为空(真机 bug)。归一成 BIG_TEXT + db=text。
+    captured = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        captured["body"] = json.loads(request.content)
+        return httpx.Response(200, json={"code": "ok"})
+
+    _patch_transport(monkeypatch, handler)
+    client = APaaSClient(base_url="http://test", tenant_id="t1", token="tok")
+    asyncio.run(client.add_model_field(
+        "app1", "m1", "warehouse_area", "area_remark", "备注",
+        field_type="TEXT", max_length=500,
+    ))
+    assert captured["body"]["fieldType"] == "BIG_TEXT"
+    assert captured["body"]["databaseFieldType"] == "text"
 
 
 def test_db_type_for_field_type_maps_apaas_logical_types():

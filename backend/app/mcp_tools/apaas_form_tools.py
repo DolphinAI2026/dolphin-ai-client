@@ -1453,12 +1453,18 @@ def _gen_form_component_uuid() -> str:
     return uuid.uuid4().hex
 
 
-# 克隆现有组件时要清掉的键: 模板字段的值/默认/字典绑定/规则, 避免新字段继承旧字段配置。
+# 克隆现有组件时要清掉的键: 模板字段的值/默认/字典绑定/规则 + 类型专属配置(跨类型克隆时
+# 避免把模板类型的配置带到新字段), 避免新字段继承旧字段配置。render/methods/width 等保留。
 _CLONE_CLEAR_KEYS = (
     "value", "defaultValue", "customDefaultKey",
     "dictionaryCode", "chooseOptions", "dictionaryChooseOptions",
-    "dictionarySelectConfig", "enableRule", "uniqueCheck",
+    "dictionarySelectConfig", "chooseType", "enableRule", "uniqueCheck",
+    # 类型专属(数字/文本/扫码…)
+    "lengthLimit", "decimalNum", "numberMin", "numberMax",
+    "maxValue", "minValue", "scanConfig", "autoChangeLine",
 )
+
+_TEXT_FAMILY_COMPONENTS = {"FORM_TEXT_INPUT", "FORM_TEXTAREA_INPUT", "FORM_RICH_TEXT"}
 
 
 def _clone_form_component_for_field(template: dict, *, model_code: str, field_code: str,
@@ -1491,20 +1497,35 @@ def _build_form_component_for_field(existing_components: list, field: dict,
                                     model_code: str, field_name: str, comp_type: str) -> dict:
     """构造要铺到表单的新组件。
 
-    优先克隆"同模型同类型"的现有组件(完整水合, 平台保存可接受); 无同类型模板则退化到
-    旧的残缺构造器 _build_basic_component_from_model_field(行为不比现状差, 平台可能拒)。
-    只在 componentType 完全一致时克隆 —— render/methods 是按组件类型定制的, 跨类型克隆
-    会带来错配, 故不跨类型借模板。
+    平台 formConfigDetail 保存要求组件**完整水合**(~75 字段含 uuid/boId/render…), 残缺组件
+    → 500。后端无法凭空合成 render/methods, 故克隆一个**同模型**的现有组件(它带 boId/render/
+    methods/全字段), 换身份 + 转目标类型。模板优先级:
+      1) 同类型(最佳, render/methods 完全对口)
+      2) 文本家族互借(单行/多行/富文本 render 兼容, 覆盖"表单没有多行文本字段"这一高频场景)
+      3) 任意同模型(兜底, 保证完整水合; render 可能略不对口但能存)
+    都没有(空表单/跨模型)才退化到残缺构造器(可能被平台拒)。
     """
     field_code = str(field.get("field_code") or "").strip()
-    template = next(
-        (c for c in (existing_components or [])
-         if isinstance(c, dict)
-         and str(c.get("modelCode") or "") == model_code
-         and str(c.get("componentType") or "") == comp_type
-         and str(c.get("uuid") or "").strip()),
-        None,
-    )
+
+    def _is_same_model(c: dict) -> bool:
+        if str(c.get("modelCode") or "") == model_code:
+            return True
+        mf = str(c.get("modelField") or "")
+        return "." in mf and mf.split(".", 1)[0] == model_code
+
+    same_model = [
+        c for c in (existing_components or [])
+        if isinstance(c, dict) and str(c.get("uuid") or "").strip() and _is_same_model(c)
+    ]
+
+    def _pick(pred):
+        return next((c for c in same_model if pred(c)), None)
+
+    template = _pick(lambda c: str(c.get("componentType") or "") == comp_type)
+    if template is None and comp_type in _TEXT_FAMILY_COMPONENTS:
+        template = _pick(lambda c: str(c.get("componentType") or "") in _TEXT_FAMILY_COMPONENTS)
+    if template is None:
+        template = same_model[0] if same_model else None
     if template is None:
         return _build_basic_component_from_model_field(field, model_code)
     return _clone_form_component_for_field(
