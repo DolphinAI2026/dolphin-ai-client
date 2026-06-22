@@ -42,6 +42,13 @@ function isAiChatRoute(r: RouteLocationNormalized): boolean {
 function isWorkspaceRoute(r: RouteLocationNormalized): boolean {
   return r.path === '/workspace' || r.path.startsWith('/workspace/')
 }
+
+// /coding 用稳定 key 复用实例: 换会话/工作区只变 query, 不再整页 remount(根除「切会话闪一下」)。
+// 会话切换由 CodingPage 监听 route.query 原地处理(类比 ai-chat 的 route.params.id watch)。
+// 离开 /coding 仍正常卸载(不进 KeepAlive), 保持原有 SSE 生命周期。
+function isCodingRoute(r: RouteLocationNormalized): boolean {
+  return r.path === '/coding'
+}
 </script>
 
 <template>
@@ -55,6 +62,8 @@ function isWorkspaceRoute(r: RouteLocationNormalized): boolean {
     <KeepAlive v-else-if="isWorkspaceRoute($route)">
       <component :is="Component" key="workspace-singleton" />
     </KeepAlive>
+    <!-- /coding: 稳定 key, query 变化(换会话/工作区)复用实例不 remount → 不闪 -->
+    <component v-else-if="isCodingRoute($route)" :is="Component" key="coding-stable" />
     <component v-else :is="Component" :key="$route.fullPath" />
   </RouterView>
 </template>

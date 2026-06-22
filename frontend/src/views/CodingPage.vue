@@ -1024,6 +1024,38 @@ async function switchConversationFromHeader(id: number) {
   }
 }
 
+// 按当前 route.query 原地解析要打开的会话/工作区(不 remount, 不闪)。
+// onMounted 首次 + route.query 变化(rail 换会话)都走它; 用 syncCodingUrl(history)同步地址栏,
+// 不经 vue-router 二次导航(避免再触发 watcher)。
+async function resolveCodingRouteSession() {
+  const wsId = (route.query.workspace_id || route.query.ws) as string
+  if (wsId) {
+    if (codingStore.workspace?.id !== wsId) await openWorkspaceById(wsId)
+    // URL 还带 conversation_id 且不是工作区主会话(头部切过会话) → 保工作区, 切回该会话
+    const qConvId = Number(route.query.conversation_id)
+    if (Number.isFinite(qConvId) && qConvId > 0 && qConvId !== codingStore.conversationId) {
+      await switchConversationFromHeader(qConvId)
+    }
+    return
+  }
+  const conversationId = Number(route.query.conversation_id)
+  if (!(Number.isFinite(conversationId) && conversationId > 0)) return
+  if (conversationId === codingStore.conversationId) return  // 已是当前会话, 跳过
+  // 该会话若有 workspace(codegen 会话) → 开工作区恢复结构化工具卡; 无 → 纯文本回放。
+  let wsForConv: string | null = null
+  try {
+    wsForConv = (await codingApi.getConversationWorkspace(conversationId)).workspace_id
+  } catch {
+    wsForConv = null
+  }
+  if (wsForConv) {
+    await openWorkspaceById(wsForConv)
+    syncCodingUrl(conversationId)
+  } else {
+    await loadCodingConversationOnly(conversationId)
+  }
+}
+
 function formatConvTime(iso?: string): string {
   if (!iso) return ''
   const d = new Date(iso)
@@ -1763,36 +1795,12 @@ onMounted(async () => {
     console.error('\u521D\u59CB\u5316 AI Coding \u9875\u9762\u5931\u8D25:', e)
   }
 
-  const wsId = (route.query.workspace_id || route.query.ws) as string
-  if (wsId) {
-    await openWorkspaceById(wsId)
-    // URL 还带 conversation_id 且不是工作区主会话(头部切过会话后刷新) → 保工作区, 切回该会话
-    const _qConvId = Number(route.query.conversation_id)
-    if (Number.isFinite(_qConvId) && _qConvId > 0 && _qConvId !== codingStore.conversationId) {
-      await switchConversationFromHeader(_qConvId)
-    }
+  const hasRouteSession = !!(route.query.workspace_id || route.query.ws) ||
+    (Number.isFinite(Number(route.query.conversation_id)) && Number(route.query.conversation_id) > 0)
+  if (hasRouteSession) {
+    await resolveCodingRouteSession()
   } else {
-    const conversationId = Number(route.query.conversation_id)
-    if (Number.isFinite(conversationId) && conversationId > 0) {
-      // F2: 直接导航到 /coding?conversation_id=N 时，若该会话有 workspace（codegen 会话），
-      // 走 openWorkspaceById 恢复结构化工具卡历史（与 onSidebarCodingSelect 一致）；
-      // 无 workspace（如 READ 问答会话）才降级为纯文本 loadCodingConversationOnly。
-      let wsForConv: string | null = null
-      try {
-        const relation = await codingApi.getConversationWorkspace(conversationId)
-        wsForConv = relation.workspace_id
-      } catch {
-        wsForConv = null
-      }
-      if (wsForConv) {
-        await openWorkspaceById(wsForConv)
-        router.replace({ path: '/coding', query: { conversation_id: String(conversationId), workspace_id: wsForConv } }).catch(() => {})
-      } else {
-        await loadCodingConversationOnly(conversationId)
-      }
-    } else {
-      selectedCodingModelValue.value = normalizeCodingModelValue(selectedCodingModelValue.value)
-    }
+    selectedCodingModelValue.value = normalizeCodingModelValue(selectedCodingModelValue.value)
   }
 })
 
@@ -1962,7 +1970,9 @@ function parseAssistantHistory(text: string) {
   flushThinking()
 }
 
-function startNewWorkspace() {
+// 清回「新建会话」欢迎态(不导航)。startNewWorkspace = 它 + 跳 /coding;
+// rail 点「新建会话」导航到无参 /coding 时, query watcher 也调它(因 /coding 现在稳定 key 不 remount)。
+function resetCodingToWelcome() {
   handoffSourceApp.value = null
   deployAppId.value = null; deployMode.value = 'bound'  // 重置分场景部署绑定(新会话从分场景入口重新选)
   codingStore.reset()
@@ -1970,6 +1980,9 @@ function startNewWorkspace() {
   selectedCodingModelValue.value = normalizeCodingModelValue(selectedCodingModelValue.value)
   streamMessages.value = []
   localStorage.removeItem('coding_last_workspace_id')
+}
+function startNewWorkspace() {
+  resetCodingToWelcome()
   router.replace({ path: '/coding' }).catch(() => {})
 }
 
@@ -2109,6 +2122,26 @@ watch(() => route.path, () => {
     codingStore.reset()
   }
 })
+
+// /coding 现在用稳定 key(App.vue), query 变化不再 remount → 监听 query 原地切会话/工作区(不闪)。
+// onMounted 首次解析; 之后 rail 点会话/新建走这里。syncCodingUrl 用 history 不改 vue-route, 不会回环触发。
+watch(
+  () => `${route.query.conversation_id ?? ''}|${route.query.workspace_id ?? route.query.ws ?? ''}`,
+  () => {
+    if (route.path !== '/coding') return
+    const convId = Number(route.query.conversation_id)
+    const wsId = (route.query.workspace_id || route.query.ws) as string
+    const hasSession = !!wsId || (Number.isFinite(convId) && convId > 0)
+    if (!hasSession) {
+      // 导航到无参 /coding(rail「新建会话」)→ 回欢迎态(仅当前有加载内容时才清, 避免空转)
+      if (codingStore.workspace || codingStore.conversationId || streamMessages.value.length) {
+        resetCodingToWelcome()
+      }
+      return
+    }
+    void resolveCodingRouteSession()
+  },
+)
 </script>
 
 <style scoped src="./CodingPage.styles.css"></style>

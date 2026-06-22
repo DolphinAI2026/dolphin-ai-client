@@ -15,3 +15,16 @@ describe('CodingPage 会话收进全局左栏', () => {
     expect(src).toContain('route.query.conversation_id')
   })
 })
+
+// 2026-06-22: /coding 用稳定 key 不 remount 后, 换会话/工作区靠监听 query 原地切(不闪)。
+describe('CodingPage switches sessions in-place via a route watcher (no remount)', () => {
+  it('has a reusable route-session resolver called from onMounted', () => {
+    expect(src).toContain('resolveCodingRouteSession')
+  })
+
+  it('watches the route query to switch sessions in-place', () => {
+    // watcher getter 串联 conversation_id + workspace_id 作为变化键
+    expect(src).toContain('route.query.conversation_id ??')
+    expect(src).toMatch(/watch\(\s*\(\)\s*=>\s*`\$\{route\.query\.conversation_id/s)
+  })
+})
