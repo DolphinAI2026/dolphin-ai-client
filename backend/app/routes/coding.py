@@ -13,7 +13,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Optional, Annotated, AsyncIterator, Any
 import httpx
-from fastapi import APIRouter, Depends, HTTPException, Query, UploadFile, File
+from fastapi import APIRouter, Depends, HTTPException, Query, Request, UploadFile, File
 from fastapi.responses import StreamingResponse, JSONResponse
 from pydantic import BaseModel
 from sse_starlette.sse import EventSourceResponse
@@ -1435,9 +1435,47 @@ async def upload_file(
 # 自动化 Pipeline（对话式开发）
 # ============================================================
 
+async def _resolve_preview_api_base(ws_id: str, ctx: AuthContext, db: AsyncSession) -> str | None:
+    """ws → 绑定的已部署应用 → /apaas/backend/{tenant}/{app} 真数据前缀(未部署返 None)。
+
+    复用 get_apaas_access_url 的解析:ws meta.project_id → Application → query_app_detail
+    拿 tenantCode/appCode。任一缺失(未绑定/未部署)→ None,预览回退 mock。
+    """
+    from app.coding.workspace import _preview_api_base_path
+    from app.coding.apaas_tools import call_apaas_with_relogin
+
+    app_id = WorkspaceManager().get_project_id(ws_id)
+    if not app_id:
+        return None
+    app = (await db.execute(
+        select(Application).where(
+            Application.id == app_id, Application.tenant_id == ctx.tenant_id,
+        )
+    )).scalar_one_or_none()
+    if not app or not app.platform_env_id or not app.apaas_app_id:
+        return None
+    # 租户来源统一为当前登录用户(对齐 get_apaas_access_url),无则退回 env 自愈
+    if ctx.user.apaas_token:
+        client = APaaSClient(
+            base_url=ctx.user.apaas_base_url,
+            tenant_id=ctx.user.apaas_tenant_id,
+            token=ctx.user.apaas_token,
+        )
+        detail = await client.query_app_detail(str(app.apaas_app_id))
+    else:
+        detail = await call_apaas_with_relogin(
+            app.platform_env_id, db,
+            lambda c: c.query_app_detail(str(app.apaas_app_id)),
+        )
+    if not detail:
+        return None
+    return _preview_api_base_path(str(detail.get("tenantCode") or ""), str(detail.get("appCode") or ""))
+
+
 @router.post("/workspace/{ws_id}/serve")
 async def manage_serve(
     ws_id: str,
+    request: Request,
     ctx: Annotated[AuthContext, Depends(get_auth_context)],
     db: Annotated[AsyncSession, Depends(get_db)],
     action: str = Query(default="start", description="start 或 stop"),
@@ -1447,7 +1485,21 @@ async def manage_serve(
     await _ensure_workspace_access(ws_id, ctx, db, minimum_project_role="member")
     ws_mgr = WorkspaceManager()
     if action == "start":
-        result = await ws_mgr.start_serve(ws_id, kind=kind)
+        # 绑定到已部署应用时,解析真数据前缀 + 后端自身 origin(devServer 代理目标),
+        # 注入预览进程让 $request 拿真平台数据;解析失败/未部署 → 预览回退 mock。
+        api_base = None
+        proxy_target = None
+        try:
+            api_base = await _resolve_preview_api_base(ws_id, ctx, db)
+            if api_base:
+                proxy_target = str(request.base_url).rstrip("/")
+        except Exception:
+            logger.warning("preview 真数据解析失败,回退 mock", exc_info=True)
+            api_base = None
+            proxy_target = None
+        result = await ws_mgr.start_serve(
+            ws_id, kind=kind, apaas_api_base=api_base, proxy_target=proxy_target,
+        )
     elif action == "stop":
         result = await ws_mgr.stop_serve(ws_id)
     else:

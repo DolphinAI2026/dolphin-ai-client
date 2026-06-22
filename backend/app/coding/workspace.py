@@ -74,6 +74,266 @@ def _apaas_backend_build_env(base_env: Optional[dict[str, str]] = None) -> dict[
 # 从模板文件加载（backend/templates/vibe-serve.js），避免 Python 转义污染可读性
 _VIBE_SERVE_JS = (Path(__file__).parent.parent.parent / "templates" / "vibe-serve.js").read_text(encoding="utf-8")
 
+def _preview_api_base_path(tenant_code: str | None, app_code: str | None) -> str | None:
+    """预览真数据的 $request 前缀:/apaas/backend/{tenantCode}/{appCode}。
+
+    与部署版 host(_build_custom_page_host_html)用的 api_base 完全一致。
+    tenant_code / app_code 任一为空(应用未部署到平台)→ None,预览回退 mock。
+    """
+    tc = (tenant_code or "").strip()
+    ac = (app_code or "").strip()
+    if not tc or not ac:
+        return None
+    return f"/apaas/backend/{tc}/{ac}"
+
+
+# ── 可运行 preview harness ────────────────────────────────────────────────
+# 单一真相源(both `_scaffold_via_cli_template` 与 `_scaffold_form_page` 共用)。
+# 背景: src/index.js 是 UMD 库入口(只 export {install} 不 mount)→ serve 起来 #app 空白。
+# preview harness 用独立入口 preview/main.js 真正 new Vue().$mount('#app'),渲染业务组件。
+# 占位 __COMPONENT_TAG__ / __COMPONENT_IMPORT__ 在注入时按工程实际值替换(不走模板变量替换)。
+_PREVIEW_INDEX_HTML = """<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>本地预览</title>
+</head>
+<body>
+  <div id="app"></div>
+</body>
+</html>
+"""
+
+_PREVIEW_APP_VUE = """<template>
+  <div style="min-height: 100vh;">
+    <__COMPONENT_TAG__ />
+  </div>
+</template>
+
+<script>
+export default { name: 'PreviewApp' }
+</script>
+"""
+
+_PREVIEW_MAIN_JS = """import Vue from 'vue'
+import ElementUI from 'element-ui'
+import 'element-ui/lib/theme-chalk/index.css'
+
+import { installRequest } from './apaas-request'
+import { installApaasShim } from './apaas-shim'
+import ApaasCustomComponent from '__COMPONENT_IMPORT__'
+import App from './App.vue'
+
+Vue.use(ElementUI)
+
+// 注入 $request:绑定已部署应用 → 走 /apaas 同源代理拿真数据;否则回退 mock(只渲染结构)
+installRequest(Vue)
+// 注册平台全局组件桩(x-ag-grid 等),否则用了平台组件的页面仍白屏
+installApaasShim(Vue)
+
+// 注册业务组件
+Vue.component('__COMPONENT_TAG__', ApaasCustomComponent)
+
+new Vue({
+  el: '#app',
+  render: h => h(App)
+})
+"""
+
+# 预览 $request:绑定到已部署应用时(VUE_APP_APAAS_API_BASE 注入)走 /apaas 同源代理拿真平台
+# 数据(后端 runtime_proxy 按 appCode 注 token);未注入(未绑定/未部署)时回退本地 mock 只渲染结构。
+# 真请求逻辑镜像部署版 host(得帆 $request body 用 params,返回 {data,success} 归一)。
+# 返回的 ctrl 同时支持平台链式契约(.asyncThen().asyncErrorCatch())与 thenable(.then/.catch/await)。
+_PREVIEW_APAAS_REQUEST_JS = """/**
+ * 预览 $request —— 真数据(/apaas 代理)/ mock 回退,二者都返回链式 + thenable ctrl。
+ */
+// vue-cli/webpack 把 process.env.VUE_APP_* 静态替换为字面量(未设则为 undefined);
+// 不能用 `typeof process` 守卫——浏览器里 process 全局不存在,守卫会恒假把真请求短路掉。
+var API_BASE = process.env.VUE_APP_APAAS_API_BASE || ''
+
+function _normalizeUrl(cfg) {
+  var url = cfg.url || ''
+  if (url.indexOf('http') !== 0) {
+    if (url.charAt(0) !== '/') url = API_BASE + '/' + url
+    else if (url.indexOf('/apaas') !== 0) url = API_BASE + url
+  }
+  return url
+}
+
+function _realFetch(cfg) {
+  var url = _normalizeUrl(cfg)
+  var method = (cfg.method || 'get').toUpperCase()
+  var params = cfg.params || cfg.data
+  var opts = { method: method, headers: { 'Content-Type': 'application/json' } }
+  if (params && method === 'GET') {
+    var qs = Object.keys(params).map(function (k) { return encodeURIComponent(k) + '=' + encodeURIComponent(params[k]) }).join('&')
+    if (qs) url += (url.indexOf('?') < 0 ? '?' : '&') + qs
+  } else if (params) {
+    opts.body = typeof params === 'string' ? params : JSON.stringify(params)
+  }
+  return fetch(url, opts)
+    .then(function (r) { return r.json().catch(function () { return null }) })
+    .then(function (j) { return (j && typeof j === 'object' && 'data' in j) ? j : { data: j, success: true } })
+    .catch(function (e) { console.warn('[preview] $request fail', url, e); return { data: null, success: false } })
+}
+
+// 未绑定应用:不打网络,直接回空结构(组件渲染骨架 + 空态,不白屏)
+function _mockFetch() {
+  return Promise.resolve({ data: [], table: [], total: 0, success: true })
+}
+
+function _wrap(promise) {
+  var ctrl = {
+    asyncThen: function (onSuccess, onError) { promise.then(onSuccess).catch(onError || function () {}); return ctrl },
+    asyncErrorCatch: function (onError) { promise.catch(onError); return ctrl },
+    then: function (onSuccess, onError) { return promise.then(onSuccess, onError) },
+    catch: function (onError) { return promise.catch(onError) }
+  }
+  return ctrl
+}
+
+function apaasRequest(cfg) {
+  if (typeof cfg === 'string') cfg = { url: cfg }
+  cfg = cfg || {}
+  return _wrap(API_BASE ? _realFetch(cfg) : _mockFetch(cfg))
+}
+
+export function installRequest(Vue) {
+  Vue.prototype.$request = apaasRequest
+  // window.df / $df shim:已知方法 + chainable no-op 兜底,防组件取未知方法崩溃
+  var dfBase = {
+    request: apaasRequest, http: apaasRequest,
+    get: function (u, p) { return apaasRequest({ url: u, method: 'get', params: p }) },
+    post: function (u, p) { return apaasRequest({ url: u, method: 'post', params: p }) },
+    getToken: function () { return '' }, t: function (k) { return k }, i18n: { t: function (k) { return k } },
+    user: {}, store: {}, env: {}
+  }
+  var df = (typeof Proxy !== 'undefined')
+    ? new Proxy(dfBase, { get: function (t, k) { return (k in t) ? t[k] : function () { return Promise.resolve(null) } } })
+    : dfBase
+  Vue.prototype.$df = df
+  if (typeof window !== 'undefined') { window.df = df; window.$request = apaasRequest }
+}
+"""
+
+# 平台全局组件桩：aPaaS 自开发页面普遍依赖平台注入的全局组件(最常用 x-ag-grid 表格)。
+# 独立预览里平台运行时不在场 → 不桩则页面渲染成空 div(白屏第二层)。
+# x-ag-grid 用 element-ui el-table 还原(列/行/分页),其余 x-*/df-* 走 ignoredElements 惰性渲染。
+_PREVIEW_APAAS_SHIM_JS = """/**
+ * 平台全局组件桩 —— 让自开发页面在独立预览(无平台运行时)里也能渲染出结构与数据。
+ */
+export function installApaasShim(Vue) {
+  // x-ag-grid → el-table(列 headerName→label / field→prop / valueGetter 经作用域插槽)+ el-pagination
+  Vue.component('x-ag-grid', {
+    props: {
+      tableData: { type: Array, default: function () { return [] } },
+      colConfigs: { type: Array, default: function () { return [] } },
+      pagination: { type: Object, default: null },
+      rowKey: { type: String, default: 'id' }
+    },
+    render: function (h) {
+      var self = this
+      var cols = (this.colConfigs || []).map(function (c) {
+        var data = {
+          props: {
+            label: c.headerName || c.field || '',
+            prop: c.field,
+            showOverflowTooltip: !!c.showOverflowTooltip
+          }
+        }
+        if (typeof c.valueGetter === 'function') {
+          data.scopedSlots = {
+            default: function (scope) {
+              var v = c.valueGetter({ data: scope.row })
+              return [v == null ? '' : String(v)]
+            }
+          }
+        }
+        return h('el-table-column', data)
+      })
+      var children = [
+        h('el-table', { props: { data: this.tableData || [], rowKey: this.rowKey, border: true }, style: 'width:100%' }, cols)
+      ]
+      if (this.pagination) {
+        children.push(h('el-pagination', {
+          style: 'margin-top:12px;text-align:right',
+          props: {
+            currentPage: this.pagination.currentPage,
+            pageSize: this.pagination.pageSize,
+            total: this.pagination.total,
+            pageSizes: [10, 20, 50],
+            layout: 'total, sizes, prev, pager, next'
+          },
+          on: {
+            'current-change': function (p) { self.$emit('current-page-change', p) },
+            'size-change': function (s) { self.$emit('size-change', s) }
+          }
+        }))
+      }
+      return h('div', { staticClass: 'x-ag-grid-preview' }, children)
+    }
+  })
+
+  // 其余平台自定义元素在独立预览里按惰性原生元素渲染,避免 Unknown custom element 噪音
+  var ignored = Vue.config.ignoredElements || []
+  Vue.config.ignoredElements = ignored.concat([/^x-/, /^df-/])
+}
+"""
+
+# isPreview-aware vue.config.js：preview 时删 UMD library + HTML 指向 preview/index.html，
+# 非 preview 时仍输出 UMD(serve/df-apaas-cli build 发布走原路径)。
+_PREVIEW_VUE_CONFIG = """const { defineConfig } = require('@vue/cli-service')
+const path = require('path')
+const apaasJson = require('./src/apaas.json')
+
+const isPreview = process.env.VUE_APP_PREVIEW === 'true'
+
+// 绑定到已部署应用时,后端经 APAAS_PREVIEW_PROXY_TARGET 注入自己的 origin:
+// 把预览里的 /apaas 同源代理到 ai-builder 后端 runtime_proxy(它按 appCode 注平台 token)。
+const apaasProxyTarget = process.env.APAAS_PREVIEW_PROXY_TARGET || ''
+const previewProxy = { '/custom': { target: 'http://localhost:9092', changeOrigin: true } }
+if (apaasProxyTarget) {
+  previewProxy['/apaas'] = { target: apaasProxyTarget, changeOrigin: true }
+}
+
+module.exports = defineConfig({
+  transpileDependencies: true,
+  productionSourceMap: false,
+  devServer: {
+    host: '0.0.0.0',
+    port: isPreview ? 8090 : 8080,
+    hot: true,
+    allowedHosts: 'all',
+    headers: { 'Access-Control-Allow-Origin': '*' },
+    client: { overlay: false },
+    proxy: previewProxy
+  },
+  configureWebpack: (config) => {
+    if (isPreview) {
+      delete config.output.library
+      delete config.output.libraryTarget
+    } else {
+      config.output.library = apaasJson.outputName
+      config.output.libraryTarget = 'umd'
+    }
+  },
+  chainWebpack: (config) => {
+    if (isPreview) {
+      config.plugin('html').tap(args => {
+        args[0].template = path.resolve(__dirname, 'preview/index.html')
+        return args
+      })
+    }
+  },
+  css: {
+    loaderOptions: {
+      sass: { implementation: require('sass') }
+    }
+  }
+})
+"""
+
 WORKSPACE_SEARCH_ROOTS = tuple(
     root for idx, root in enumerate((WORKSPACE_ROOT, LEGACY_WORKSPACE_ROOT))
     if root not in (WORKSPACE_ROOT, LEGACY_WORKSPACE_ROOT)[:idx]
@@ -1810,8 +2070,14 @@ class WorkspaceManager:
             return ["npm", "run", "preview", "--", "--port", str(port)]
         return ["npx", "vue-cli-service", "serve", "src/index.js", "--port", str(port)]
 
-    async def start_serve(self, ws_id: str, kind: str = "web") -> dict:
-        """启动 npm run serve 后台进程，返回端口号"""
+    async def start_serve(self, ws_id: str, kind: str = "web", *,
+                          apaas_api_base: str | None = None,
+                          proxy_target: str | None = None) -> dict:
+        """启动 npm run serve 后台进程，返回端口号。
+
+        apaas_api_base / proxy_target 由调用方(serve 路由)按绑定的已部署应用解析:
+        给齐两者 → 预览 $request 走 /apaas 同源代理拿真数据;否则预览回退 mock。
+        """
         if ws_id in self._serve_processes:
             info = self._serve_processes[ws_id]
             if info["process"].returncode is None:  # 还在运行
@@ -1819,6 +2085,11 @@ class WorkspaceManager:
                         "url": f"http://127.0.0.1:{info['port']}/", "message": "serve 已在运行"}
 
         ws_path = self.get_workspace_path(ws_id)
+
+        # 自愈:白屏修复前建的老工作区缺 preview harness → 按需补注入 + 装 element-ui,
+        # 这样 _resolve_serve_command 才会走 `npm run preview` 真 mount(否则跑 UMD 入口白屏)。
+        if self._ensure_preview_harness(ws_path):
+            await self._ensure_preview_element_ui(ws_path)
 
         # 找到可用端口
         port = self._next_port
@@ -1839,6 +2110,8 @@ class WorkspaceManager:
 
         env = self._build_npm_env()
         env["PORT"] = str(port)
+        # 绑定到已部署应用 → 注入真数据 env(预览 $request 走 /apaas 同源代理);否则回退 mock
+        env.update(self._preview_data_env(apaas_api_base, proxy_target))
         proc = await asyncio.create_subprocess_exec(
             *self._resolve_serve_command(str(ws_path), port),
             cwd=str(ws_path),
@@ -2527,6 +2800,15 @@ const INJECT_CODE = `(function(params) {{
         except Exception:
             return False
 
+    def get_project_id(self, ws_id: str) -> int | None:
+        """读 workspace 绑定的所属应用 id(meta.project_id)。无则 None。"""
+        try:
+            meta = self._read_meta(self.get_workspace_path(ws_id))
+            pid = meta.get("project_id")
+            return int(pid) if pid is not None else None
+        except Exception:
+            return None
+
     def _read_meta(self, ws_path: Path) -> dict:
         meta_file = ws_path / ".workspace.json"
         return json.loads(meta_file.read_text())
@@ -3175,7 +3457,152 @@ export default { install, activate, staticComponents }
                 f"PROXY_BASE={_proxy_base}\n", encoding="utf-8"
             )
 
+        # 5. 注入可运行 preview harness(根治 serve 即白屏)
+        #    页面类(form-page/form-view/form-layout)= 单一业务组件 → 直接 mount。
+        _PAGE_LIKE_COMP_DIR = {
+            ProjectType.FORM_PAGE: "form-page",
+            ProjectType.MENU_PAGE: "form-page",
+            ProjectType.FORM_LIST: "form-view",
+            ProjectType.LAYOUT:    "form-layout",
+        }
+        comp_dir = _PAGE_LIKE_COMP_DIR.get(project_type)
+        if comp_dir:
+            vue_files = sorted((ws_path / "src" / comp_dir).glob("apaas-custom-*.vue"))
+            if vue_files:
+                comp = vue_files[0]
+                self._inject_preview_harness(
+                    ws_path,
+                    component_tag=comp.stem,
+                    component_import=f"../src/{comp_dir}/{comp.name}",
+                )
+            else:
+                logger.warning(
+                    f"preview harness skipped: src/{comp_dir} 下无业务 .vue ({ws_path.name})"
+                )
+
         logger.info(f"Scaffolded {project_type.value} via CLI template: {ws_path.name}")
+
+    def _inject_preview_harness(self, ws_path: Path, *, component_tag: str, component_import: str):
+        """写入可运行的 preview harness：preview/main.js 真正 mount 业务组件 → serve 不再白屏。
+
+        - package.json 加 `preview` 脚本(保留原 serve/build 的 UMD 发布路径不变)+ element-ui 依赖
+        - preview/{index.html,App.vue,main.js,apaas-request.js,apaas-shim.js}
+        - vue.config.js 换成 isPreview-aware 版(preview 删 UMD、HTML 指向 preview/index.html)
+        `component_import` 是相对 preview/main.js 的业务组件路径(如 ../src/form-page/apaas-custom-foo.vue)。
+        """
+        import json as _json
+
+        pkg_path = ws_path / "package.json"
+        pkg = _json.loads(pkg_path.read_text(encoding="utf-8"))
+        scripts = pkg.setdefault("scripts", {})
+        scripts["preview"] = "VUE_APP_PREVIEW=true vue-cli-service serve preview/main.js"
+        deps = pkg.setdefault("dependencies", {})
+        deps.setdefault("element-ui", "^2.15.14")
+        pkg_path.write_text(_json.dumps(pkg, indent=2, ensure_ascii=False), encoding="utf-8")
+
+        self._write(ws_path, "preview/index.html", _PREVIEW_INDEX_HTML)
+        self._write(ws_path, "preview/apaas-request.js", _PREVIEW_APAAS_REQUEST_JS)
+        self._write(ws_path, "preview/apaas-shim.js", _PREVIEW_APAAS_SHIM_JS)
+        self._write(
+            ws_path, "preview/App.vue",
+            _PREVIEW_APP_VUE.replace("__COMPONENT_TAG__", component_tag),
+        )
+        self._write(
+            ws_path, "preview/main.js",
+            _PREVIEW_MAIN_JS
+            .replace("__COMPONENT_IMPORT__", component_import)
+            .replace("__COMPONENT_TAG__", component_tag),
+        )
+        self._write(ws_path, "vue.config.js", _PREVIEW_VUE_CONFIG)
+
+    # 页面类 project_type → 业务组件目录
+    _PAGE_LIKE_COMP_DIR = {
+        "form-page": "form-page",
+        "menu-page": "form-page",
+        "form-list": "form-view",
+        "layout":    "form-layout",
+    }
+
+    @staticmethod
+    def _detect_index_component(ws_path: Path) -> str | None:
+        """从 src/index.js 解析它真正 import 的业务组件相对路径(如 form-page/apaas-custom-foo.vue)。
+
+        多组件工作区里 index.js 注册的才是「发布入口」组件,必须按它选,不能靠 glob 字母序。
+        """
+        try:
+            src = (ws_path / "src" / "index.js").read_text("utf-8")
+        except Exception:
+            return None
+        m = re.search(r"""from\s+['"]\./((?:form-page|form-view|form-layout)/apaas-custom-[\w-]+\.vue)['"]""", src)
+        return m.group(1) if m else None
+
+    def _ensure_preview_harness(self, ws_path: Path) -> bool:
+        """老工作区(白屏修复前建的)缺 preview harness → serve 前按需补注入。幂等。
+
+        返回 True 表示本次注入了(调用方据此补 element-ui 依赖)。已有 preview 脚本 / 非页面类
+        / 找不到业务组件 → 不动,返回 False。
+        """
+        try:
+            pkg = json.loads((ws_path / "package.json").read_text("utf-8"))
+        except Exception:
+            return False
+        if "preview" in (pkg.get("scripts") or {}):
+            return False  # 已有 harness
+        try:
+            ptype = self._read_meta(ws_path).get("project_type", "")
+        except Exception:
+            ptype = ""
+        comp_dir = self._PAGE_LIKE_COMP_DIR.get(ptype)
+        if not comp_dir:
+            return False
+        comp_rel = self._detect_index_component(ws_path)
+        if not comp_rel:
+            vue_files = sorted((ws_path / "src" / comp_dir).glob("apaas-custom-*.vue"))
+            if not vue_files:
+                return False
+            comp_rel = f"{comp_dir}/{vue_files[0].name}"
+        self._inject_preview_harness(
+            ws_path,
+            component_tag=Path(comp_rel).stem,
+            component_import=f"../src/{comp_rel}",
+        )
+        logger.info(f"preview harness 自愈注入(老工作区): {ws_path.name} → {comp_rel}")
+        return True
+
+    async def _ensure_preview_element_ui(self, ws_path: Path) -> None:
+        """harness 依赖 element-ui;老工作区 node_modules(可能软链共享缓存桶)缺它则按需装。"""
+        if (ws_path / "node_modules" / "element-ui").exists():
+            return
+        env = self._build_npm_env()
+        npm_exec = resolve_executable("npm", env)
+        if not npm_exec:
+            logger.warning("preview 自愈:未找到 npm,跳过 element-ui 安装")
+            return
+        try:
+            proc = await asyncio.create_subprocess_exec(
+                npm_exec, "install", "element-ui@^2.15.14", "--no-audit", "--no-fund",
+                cwd=str(ws_path), env=env,
+                stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE,
+            )
+            await proc.wait()
+        except Exception:
+            logger.warning("preview 自愈:element-ui 安装失败", exc_info=True)
+
+    @staticmethod
+    def _preview_data_env(apaas_api_base: str | None, proxy_target: str | None) -> dict[str, str]:
+        """预览真数据所需的子进程 env。
+
+        绑定到已部署应用时(apaas_api_base + proxy_target 都给)→ 注入两个 env:
+          VUE_APP_APAAS_API_BASE   客户端 $request 的 /apaas/backend/{tenant}/{app} 前缀
+          APAAS_PREVIEW_PROXY_TARGET  devServer 把 /apaas 代理到的 ai-builder 后端 origin
+        任一为空(未绑定/未部署)→ 返回 {},预览回退本地 mock。
+        """
+        if apaas_api_base and proxy_target:
+            return {
+                "VUE_APP_APAAS_API_BASE": apaas_api_base,
+                "APAAS_PREVIEW_PROXY_TARGET": proxy_target,
+            }
+        return {}
 
     def _replace_cli_template_vars(self, ws_path: Path, name: str, project_type: ProjectType, display_name: str | None = None):
         """将 CLI 模板中的 'demo' 占位替换为用户实际的项目名。
