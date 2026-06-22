@@ -86,6 +86,7 @@ import { ElMessage, type FormInstance, type FormRules } from 'element-plus'
 import { Lock, Moon, Sunny, User } from '@element-plus/icons-vue'
 import { useUserStore } from '@/stores/user'
 import { useThemeStore } from '@/stores/theme'
+import { isDesktop } from '@/utils/desktop'
 import ruijingWhaleMarkUrl from '@/assets/brand/ruijing-whale-mark.svg'
 
 const router = useRouter()
@@ -122,6 +123,14 @@ const handleLogin = async () => {
 
     loginLoading.value = true
     try {
+      // 桌面端走 account-service 登录(desktopLogin), 无多租户选择; web 端走 login。
+      if (isDesktop) {
+        await userStore.desktopLogin(loginForm.username, loginForm.password)
+        ElMessage.success('登录成功')
+        router.replace(safeRedirectPath(route.query.redirect) || '/')
+        return
+      }
+
       const result = await userStore.login(loginForm.username, loginForm.password)
 
       if (result.requiresSelection) {
