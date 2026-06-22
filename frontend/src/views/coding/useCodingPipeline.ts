@@ -494,6 +494,8 @@ export function useCodingPipeline(deps: PipelineDeps) {
 
   // 切回会话且有在跑 run → 重连:补 seq>afterSeq 的缺口 + 跟实时,事件复用现有 SSE 状态机。
   async function attachStream(conversationId: number, afterSeq: number) {
+    // 守卫:事件写进共享 streamMessages,只在仍是当前会话时 attach,否则会串到别的会话。
+    if (codingStore.conversationId !== conversationId) return
     isStreaming.value = true
     try {
       currentAbort = new AbortController()

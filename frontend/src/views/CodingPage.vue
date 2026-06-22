@@ -1017,7 +1017,10 @@ function abortInflightStream() {
 async function maybeAttachRunningRun(id: number) {
   try {
     const st = await harnessApi.getCodingRunStatus(id)
-    if (st.running) attachStream(id, st.last_seq)
+    if (!st.running) return
+    // 守卫:getRunStatus 是异步的,期间用户可能又切走了 → 别把这个 run 的事件写进别的会话
+    if (codingStore.conversationId !== id) return
+    attachStream(id, st.last_seq)
   } catch { /* 查不到状态就当没在跑,历史已由 replay 渲染 */ }
 }
 
@@ -1087,6 +1090,7 @@ function formatConvTime(iso?: string): string {
 
 // 新建会话但保留当前工作区——首条消息发出后由后端把会话回填绑定到工作区
 async function createWorkspaceConversation() {
+  abortInflightStream()  // 断旧流读取,防旧 run 的事件串进新会话(run 仍后台续跑,回去可 attach)
   const created = normalizeCreatedCodingConversation(
     await codingApi.createConversation(selectedCodingModelOption.value?.id ?? null),
   )
