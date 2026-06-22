@@ -56,6 +56,61 @@ async def test_subscribe_run_events_replay_then_live_to_sentinel():
 
 
 @pytest.mark.asyncio
+async def test_send_runs_agent_in_background_and_publishes_to_bus(monkeypatch):
+    """send_message 把 run_agent 跑进后台任务、事件发到 bus、完成后摘除注册表。
+    (即便没人消费 SSE,后台 run 照常跑完 = 切会话不丢 run 的后端保证)
+    """
+    import json as _json
+    from types import SimpleNamespace
+    from unittest.mock import AsyncMock
+
+    from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
+    from sqlalchemy.pool import StaticPool
+
+    import app.routes.ai_chat as aichat
+    from app.ai_chat.run_bus import ai_chat_run_registry
+    from app.database import Base
+    from app.models import AIChatSession
+
+    engine = create_async_engine(
+        "sqlite+aiosqlite://", connect_args={"check_same_thread": False}, poolclass=StaticPool
+    )
+    async with engine.begin() as conn:
+        await conn.run_sync(Base.metadata.create_all)
+    Session = async_sessionmaker(engine, expire_on_commit=False, class_=AsyncSession)
+    monkeypatch.setattr(aichat, "AsyncSessionLocal", Session)
+
+    async def fake_run_agent(db, s, msg, abort, **kw):
+        yield {"event": "assistant_delta", "data": _json.dumps({"text": "hi"})}
+        yield {"event": "done", "data": _json.dumps({"ok": True})}
+
+    monkeypatch.setattr(aichat, "run_agent", fake_run_agent)
+
+    db = Session()
+    sess = AIChatSession(tenant_id=1, user_id=1, title="我的应用")  # 非默认标题 → 跳过 title 生成
+    db.add(sess)
+    await db.commit()
+    await db.refresh(sess)
+    sid = sess.id
+
+    monkeypatch.setattr(aichat, "_load_session_or_404", AsyncMock(return_value=sess))
+    ctx = SimpleNamespace(user=SimpleNamespace(id=1), tenant_id=1)
+    body = aichat.SendMessageRequest(message="hello")
+
+    await aichat.send_message(sid, body, ctx=ctx, db=db)
+
+    h = ai_chat_run_registry.get(sid)
+    assert h is not None  # 后台 run 已注册
+    await asyncio.wait_for(h.task, timeout=3.0)  # 等后台跑完
+
+    names = [e.get("event") for _, e in h.event_bus.replay_after(0)]
+    assert "user_message" in names
+    assert "assistant_delta" in names
+    assert "done" in names
+    assert ai_chat_run_registry.is_running(sid) is False  # 完成后摘除
+
+
+@pytest.mark.asyncio
 async def test_registry_tracks_running_per_session():
     async def _noop():
         await asyncio.sleep(0.01)

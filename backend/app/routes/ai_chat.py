@@ -24,7 +24,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Annotated, List, Optional
 
-from fastapi import APIRouter, Depends, File, Form, HTTPException, Request, UploadFile
+from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, Request, UploadFile
 from fastapi.responses import FileResponse
 from pydantic import BaseModel
 from sqlalchemy import select, desc
@@ -693,9 +693,19 @@ async def send_message(
     ctx: Annotated[AuthContext, Depends(get_auth_context)],
     db: Annotated[AsyncSession, Depends(get_db)],
 ):
-    """发消息 → 触发 agent loop → SSE 流式回 thinking / tool_call / message / artifact 等事件。"""
+    """发消息 → 触发 agent loop → SSE 流式回 thinking / tool_call / message / artifact 等事件。
+
+    切会话不丢 run(Phase2):run_agent 跑在 RunRegistry 强引用的**后台任务**里,事件发到进程内
+    AiChatRunBus;本 SSE 只是订阅者,客户端断开(切会话/刷新)不杀 run。切回经 /attach 续看。
+    """
+    from app.ai_chat.run_bus import AiChatRunBus, ai_chat_run_registry, subscribe_run_events
+    from app.harness.run_registry import RunHandle
+
     # 用请求级 session 校验权限并写入 user_msg（这一步必须同步落库才能让前端立即看到）
     s = await _load_session_or_404(db, session_id, ctx)
+    # 守卫:同会话已有在跑 run → 挡住(单会话单 run,避免并发竞态/误丢)
+    if ai_chat_run_registry.is_running(session_id):
+        raise HTTPException(status_code=409, detail="该会话有任务在跑,请等它完成或先停止")
     reset_abort_event(session_id)
     abort_event = get_or_create_abort_event(session_id)
 
@@ -713,21 +723,20 @@ async def send_message(
     initial_title = s.title
     is_default_title = (initial_title or "") in _DEFAULT_SESSION_TITLES
 
-    async def event_stream():
-        # 流式必须用一个全新的 AsyncSession：FastAPI 的依赖注入 session 在响应函数返回后
-        # 可能已经被 finally 清理，导致 SSE 内部 `db.commit() / db.refresh()` 抛
-        # "Instance ... is not persistent within this Session"
-        async with AsyncSessionLocal() as stream_db:
-            try:
-                # 重新加载会话到当前 session（避免持有跨 session 的 ORM 实例）
+    bus = AiChatRunBus()
+
+    async def _run_bg():
+        # 后台任务:全新 AsyncSession(请求级 session 响应返回后会被清理)。事件发到 bus,不直接 yield。
+        try:
+            async with AsyncSessionLocal() as stream_db:
                 stream_s = await stream_db.get(AIChatSession, session_id)
                 if stream_s is None:
-                    yield _sse("error", {"error": "会话已被删除"})
+                    await bus.publish(_sse("error", {"error": "会话已被删除"}))
                     return
 
-                yield {"event": "user_message", "data": json.dumps(user_msg_dict, ensure_ascii=False)}
+                await bus.publish({"event": "user_message", "data": json.dumps(user_msg_dict, ensure_ascii=False)})
 
-                # 第一轮自动生成/推断标题。附件-only 会话也要命名，不能永远显示"新会话"。
+                # 第一轮自动生成/推断标题。附件-only 会话也要命名。
                 if is_default_title:
                     msg_count_res = await stream_db.execute(
                         select(AIChatMessage).where(
@@ -754,17 +763,29 @@ async def send_message(
                             stream_s.title = new_title
                             await stream_db.commit()
                             await stream_db.refresh(stream_s)
-                            yield {
+                            await bus.publish({
                                 "event": "session_updated",
                                 "data": json.dumps(_session_to_dict(stream_s), ensure_ascii=False),
-                            }
+                            })
 
                 async for event in run_agent(stream_db, stream_s, body.message, abort_event, section=body.section, view_context=body.view_context):
-                    yield event
-            except Exception as e:
-                import traceback
-                traceback.print_exc()
-                yield {"event": "error", "data": json.dumps({"error": str(e)}, ensure_ascii=False)}
+                    await bus.publish(event)
+        except Exception as e:
+            import traceback
+            traceback.print_exc()
+            await bus.publish({"event": "error", "data": json.dumps({"error": str(e)}, ensure_ascii=False)})
+        finally:
+            await bus.send_sentinel()
+            ai_chat_run_registry.unregister(session_id)
+
+    task = asyncio.create_task(_run_bg())
+    ai_chat_run_registry.register(
+        session_id, RunHandle(task=task, event_bus=bus, run_id=None, thread_id=session_id)
+    )
+
+    async def event_stream():
+        async for ev in subscribe_run_events(bus, 0):
+            yield ev
 
     return EventSourceResponse(event_stream())
 
@@ -779,6 +800,44 @@ async def abort_session(
     ev = get_or_create_abort_event(session_id)
     ev.set()
     return {"ok": True}
+
+
+@router.get("/sessions/{session_id}/run-status")
+async def ai_chat_run_status(
+    session_id: int,
+    ctx: Annotated[AuthContext, Depends(get_auth_context)],
+    db: Annotated[AsyncSession, Depends(get_db)],
+):
+    """该会话是否有在跑的 run + 最新 seq —— 切回会话据此决定是否 attach 续看。"""
+    from app.ai_chat.run_bus import ai_chat_run_registry
+
+    await _load_session_or_404(db, session_id, ctx)
+    h = ai_chat_run_registry.get(session_id)
+    if h and not h.task.done():
+        return {"running": True, "last_seq": getattr(h.event_bus, "current_seq", 0), "run_id": h.run_id}
+    return {"running": False, "last_seq": 0, "run_id": None}
+
+
+@router.get("/sessions/{session_id}/attach")
+async def ai_chat_attach(
+    session_id: int,
+    ctx: Annotated[AuthContext, Depends(get_auth_context)],
+    db: Annotated[AsyncSession, Depends(get_db)],
+    after_seq: int = Query(0, ge=0),
+):
+    """重连在跑 run 的 SSE(切会话/刷新后续看):补 seq>after_seq + 跟实时;不在跑则空流。"""
+    from app.ai_chat.run_bus import ai_chat_run_registry, subscribe_run_events
+
+    await _load_session_or_404(db, session_id, ctx)
+    h = ai_chat_run_registry.get(session_id)
+
+    async def event_stream():
+        if not (h and not h.task.done()):
+            return
+        async for ev in subscribe_run_events(h.event_bus, after_seq):
+            yield ev
+
+    return EventSourceResponse(event_stream())
 
 
 # ═══════════════════════════ Artifacts ═══════════════════════════
