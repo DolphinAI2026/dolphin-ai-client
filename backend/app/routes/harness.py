@@ -181,6 +181,34 @@ async def coding_run_status(
     return {"running": False, "last_seq": 0, "run_id": None}
 
 
+@router.get("/coding/attach")
+async def coding_attach(
+    conversation_id: int,
+    ctx: Annotated[AuthContext, Depends(get_auth_context)],
+    db: Annotated[AsyncSession, Depends(get_db)],
+    after_seq: int = Query(0, ge=0),
+):
+    """重连一个在跑的 coding run(切会话/刷新后续看):补 seq>after_seq + 跟实时,SSE。
+
+    与 /coding/pipeline 同构事件;不在跑则空流(历史由 /coding/conversations/{id}/replay 覆盖)。
+    """
+    mgr = HarnessManager(db)
+    stream = mgr.attach_stream(conversation_id, after_seq=after_seq, tenant_id=ctx.tenant_id)
+
+    async def sse_generator():
+        async for event in stream:
+            if event.get("type") == "heartbeat":
+                yield {"event": "ping", "data": ""}
+            else:
+                yield {"event": "message", "data": json.dumps(event, ensure_ascii=False)}
+
+    return EventSourceResponse(
+        sse_generator(),
+        headers={"X-Accel-Buffering": "no", "Cache-Control": "no-cache, no-store"},
+        ping=15,
+    )
+
+
 @router.post("/coding/pipeline")
 async def coding_pipeline(
     req: CodingPipelineRequest,

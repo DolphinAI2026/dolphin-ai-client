@@ -257,6 +257,58 @@ class HarnessManager:
 
         return _event_stream()
 
+    # ── Attach(切会话不丢 run:重连在跑 run 的实时流)────────────
+
+    async def attach_stream(
+        self, conversation_id: int, *, after_seq: int, tenant_id: int
+    ) -> AsyncIterator[dict]:
+        """重连一个在跑 coding run:先补 seq>after_seq 的缺口(内存历史),再跟实时到结束。
+
+        与 /coding/pipeline 同构(经 coding adapter,带 _seq)。不在跑 → 空流(历史由
+        REST replay 覆盖)。客户端断开只 unsubscribe,**不取消后台 run task**。
+        """
+        from app.harness.events import _SENTINEL
+        from app.harness.run_registry import run_registry
+        from app.harness.sse_adapter import get_sse_adapter
+
+        handle = run_registry.get(conversation_id)
+        if not (handle and not handle.task.done()):
+            return
+
+        event_bus = handle.event_bus
+        adapter = get_sse_adapter("coding")
+        # 先订阅(再 replay)→ 订阅与历史快照之间不留缝;重叠部分按 seq 去重
+        q = event_bus.subscribe()
+        try:
+            seen = after_seq
+            for ev in await event_bus.replay_after(after_seq):
+                seq = ev.get("seq", 0)
+                translated = adapter.translate(ev)
+                if translated:
+                    translated["_seq"] = seq
+                    yield translated
+                seen = max(seen, seq)
+            while True:
+                try:
+                    ev = await asyncio.wait_for(q.get(), timeout=1.0)
+                except asyncio.TimeoutError:
+                    if handle.task.done():
+                        break
+                    yield {"type": "heartbeat"}
+                    continue
+                if ev.get("event_type") == _SENTINEL:
+                    break
+                seq = ev.get("seq", 0)
+                if seq <= seen:
+                    continue  # 历史已补发过
+                seen = seq
+                translated = adapter.translate(ev)
+                if translated:
+                    translated["_seq"] = seq
+                    yield translated
+        finally:
+            event_bus.unsubscribe(q)
+
     # ── Replay ──────────────────────────────────
 
     async def replay_events(
