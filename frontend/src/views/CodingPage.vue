@@ -1004,9 +1004,17 @@ function syncCodingUrl(conversationId: number) {
   window.history.replaceState(window.history.state, '', `${window.location.pathname}?${q.toString()}`)
 }
 
+// 切会话/工作区/新建前, 掐断仍在跑的 SSE —— 否则旧流的回调会继续往「现在已切到新会话」的
+// 共享 streamMessages/conversationId 里写(串台/污染)。旧实现靠 /coding remount 销毁 pipeline
+// 闭包来顺带 abort; 现在 /coding 稳定 key 原地切, 必须显式 stopStream()。
+function abortInflightStream() {
+  if (isStreaming.value) stopStream()
+}
+
 // 头部切换 = 只换聊天上下文, 工作区(文件树/查看器)保持不动
 async function switchConversationFromHeader(id: number) {
   if (id === codingStore.conversationId) return
+  abortInflightStream()
   handoffSourceApp.value = null
   const _boundAppId = codingConversations.value.find(c => c.id === id)?.coding_app_id ?? null
   deployAppId.value = _boundAppId
@@ -1030,7 +1038,7 @@ async function switchConversationFromHeader(id: number) {
 async function resolveCodingRouteSession() {
   const wsId = (route.query.workspace_id || route.query.ws) as string
   if (wsId) {
-    if (codingStore.workspace?.id !== wsId) await openWorkspaceById(wsId)
+    if (codingStore.workspace?.id !== wsId) { abortInflightStream(); await openWorkspaceById(wsId) }
     // URL 还带 conversation_id 且不是工作区主会话(头部切过会话) → 保工作区, 切回该会话
     const qConvId = Number(route.query.conversation_id)
     if (Number.isFinite(qConvId) && qConvId > 0 && qConvId !== codingStore.conversationId) {
@@ -1473,6 +1481,7 @@ const cumTokenText = computed(() => {
 })
 
 async function loadCodingConversationOnly(conversationId: number) {
+  abortInflightStream()  // 切到别的会话前掐断旧 SSE(防串台)
   handoffSourceApp.value = null  // F3: 切到已有会话时清掉 handoff 回跳链，避免串到别的会话
   // 恢复「在应用上定制」绑定:会话持久化了 coding_app_id 就接着绑(刷新/侧栏点开仍记得是哪个应用),
   // 没有才清空,避免把上个会话选的应用串过来。后端也会从会话回读做兜底,这里主要保证 UI 一致。
@@ -1973,6 +1982,7 @@ function parseAssistantHistory(text: string) {
 // 清回「新建会话」欢迎态(不导航)。startNewWorkspace = 它 + 跳 /coding;
 // rail 点「新建会话」导航到无参 /coding 时, query watcher 也调它(因 /coding 现在稳定 key 不 remount)。
 function resetCodingToWelcome() {
+  abortInflightStream()  // 新建会话前掐断旧 SSE(防旧流写进新建态)
   handoffSourceApp.value = null
   deployAppId.value = null; deployMode.value = 'bound'  // 重置分场景部署绑定(新会话从分场景入口重新选)
   codingStore.reset()
@@ -2067,7 +2077,12 @@ const { sendMessage, stopStream } = useCodingPipeline({
   isUploading,
   isCreating,
   boundAppId: deployAppId,
-  onAfterPipeline: refreshCodingConversations,
+  onAfterPipeline: () => {
+    refreshCodingConversations()
+    // 流式建出会话后把地址栏同步成带 conversation_id —— 否则页面停在裸 /coding 却有内容,
+    // 之后点 rail「新建会话」(也跳裸 /coding)query 没变, watcher 不触发, 残留内容清不掉。
+    if (codingStore.conversationId) syncCodingUrl(codingStore.conversationId)
+  },
 })
 
 
