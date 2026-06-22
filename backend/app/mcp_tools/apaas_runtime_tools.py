@@ -309,6 +309,40 @@ async def set_apaas_app_process(
             "message": f"menu_id={menu_id} 不是表单菜单 (formId 空) 或菜单不存在. "
                        f"先调 list_apaas_app_menus 找 form_id 不空那行 menu_id",
         }
+    menu_type = str((target_menu or {}).get("menuType") or "").strip().upper()
+    if menu_type and menu_type != "MODEL":
+        model_menu = None
+
+        def _find_model_menu(nodes):
+            for n in (nodes or []):
+                if not isinstance(n, dict):
+                    continue
+                if (
+                    str(n.get("formId") or "").strip() == form_id
+                    and str(n.get("menuType") or "").strip().upper() == "MODEL"
+                ):
+                    return n
+                sub = _find_model_menu(n.get("submenus") or n.get("children") or [])
+                if sub:
+                    return sub
+            return None
+
+        model_menu = _find_model_menu(menus_raw if isinstance(menus_raw, list) else [])
+        if model_menu:
+            menu_id = str(model_menu.get("id") or model_menu.get("menuId") or menu_id).strip()
+            target_menu = model_menu
+        else:
+            return {
+                "ok": False,
+                "error_code": "MENU_NOT_MODEL_FORM_ENTRY",
+                "message": (
+                    f"menu_id={menu_id} 是 {menu_type} 菜单，不是 MODEL 表单入口。"
+                    "平台流程运行需要绑定 MODEL 菜单；请先为该 form 创建 MODEL 菜单，再设置流程。"
+                ),
+                "menu_id": menu_id,
+                "form_id": form_id,
+                "menu_type": menu_type,
+            }
 
     # 反查角色 — 把 stages 里的 approver_code 映射到 role_id (snowflake), 平台
     # 接受的是 role_id 不是 role_code.
