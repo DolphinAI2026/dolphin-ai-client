@@ -18,6 +18,7 @@ from app.database import AsyncSessionLocal
 from app.harness.models import HarnessThread as HarnessThreadModel, HarnessTurn as HarnessTurnModel
 from app.harness.contracts import ThreadContext, TurnContext, ThreadInfo
 from app.harness.events import EventBus, TURN_STARTED, TURN_COMPLETED, TURN_FAILED, _SENTINEL
+from app.harness.run_registry import RunHandle, run_registry
 from app.harness.profiles import get_profile
 from app.harness.sse_adapter import get_sse_adapter
 
@@ -213,9 +214,23 @@ class HarnessManager:
                         await session.commit()
 
                 await event_bus.send_sentinel()
+                # 摘除注册表(切会话不丢 run:run 完成/失败才解绑)
+                if thread_ctx.conversation_id is not None:
+                    run_registry.unregister(thread_ctx.conversation_id)
 
         # 启动后台任务
         task = asyncio.create_task(_run_turn_background())
+        # 注册到进程级 RunRegistry:强引用 task(防 GC)+ 持有在跑 EventBus(供切回重连)
+        if thread_ctx.conversation_id is not None:
+            run_registry.register(
+                thread_ctx.conversation_id,
+                RunHandle(
+                    task=task,
+                    event_bus=event_bus,
+                    run_id=str(turn_id),
+                    thread_id=thread_ctx.thread_id,
+                ),
+            )
 
         # SSE 事件流生成器
         async def _event_stream() -> AsyncIterator[dict]:
