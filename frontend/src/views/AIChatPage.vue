@@ -1770,6 +1770,7 @@ async function loadSession(id: number) {
     nextTick()
       .then(() => scrollBottom())
       .catch(err => console.warn('会话加载后的滚动定位失败', err))
+    maybeAttachRunningRun(id)  // 该会话有在跑 run 则重连续看(切会话/刷新不丢)
   } catch (e: any) {
     console.error('加载会话失败', e)
     currentSession.value = null
@@ -1784,6 +1785,36 @@ async function loadSession(id: number) {
   } finally {
     isRestoringRouteSession.value = false
   }
+}
+
+// 切回会话:若该会话有在跑 run,重连续看(补 last_seq 之后 + 跟实时),事件喂回同一 SSE 状态机。
+// 不 await,后台跟;停止键仍走 /abort;切走时 loadSession 的 abort 会断掉本 attach 的读取。
+async function maybeAttachRunningRun(id: number) {
+  try {
+    const st = await aiChatApi.getRunStatus(id)
+    if (!st.running) return
+    if (!currentSession.value || currentSession.value.id !== id) return  // 期间又切走了
+    isSending.value = true
+    currentAbort.value = new AbortController()
+    try {
+      await aiChatApi.attachRun(id, st.last_seq, {
+        signal: currentAbort.value.signal,
+        onEvent: handleSseEvent,
+      })
+    } finally {
+      let waited = 0
+      while (pendingChars.value.length > 0 && waited < 30000) {
+        await new Promise(r => setTimeout(r, 50)); waited += 50
+      }
+      stopDrain()
+      isSending.value = false
+      currentAbort.value = null
+      transientItems.value = []
+      streamingText.value = ''
+      // run 跑完后刷一次拿完整持久化数据(此时 run-status 已 false,不会再 attach,无递归)
+      if (currentSession.value && currentSession.value.id === id) await loadSession(id)
+    }
+  } catch { /* 查不到/重连失败:历史已渲染,不打断 */ }
 }
 
 async function onRenameSession(s: AIChatSession) {
@@ -1998,7 +2029,9 @@ async function onSend() {
       },
     )
   } catch (e: any) {
-    if (e.name !== 'AbortError') {
+    if (e?.status === 409) {
+      ElMessage.warning(e.message || '该会话有任务在跑,请等它完成或先停止')
+    } else if (e.name !== 'AbortError') {
       console.error(e)
       ElMessage.error(`发送失败：${e.message}`)
     }

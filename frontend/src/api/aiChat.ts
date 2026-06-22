@@ -95,6 +95,45 @@ export interface AIChatSessionDetail {
   artifacts: AIChatArtifact[]
 }
 
+/** 读 fetch 的 SSE 流,逐帧调 onEvent(eventName, parsedData)。send 与 attach 共用。 */
+async function _consumeSse(resp: Response, onEvent: (eventName: string, data: any) => void): Promise<void> {
+  if (!resp.body) throw new Error('no body')
+  const reader = resp.body.getReader()
+  const decoder = new TextDecoder()
+  let buffer = ''
+  // 兼容 \r\n\r\n(sse_starlette 默认)和 \n\n
+  const findFrameEnd = (s: string): { idx: number; sep: number } => {
+    const a = s.indexOf('\r\n\r\n')
+    const b = s.indexOf('\n\n')
+    if (a === -1 && b === -1) return { idx: -1, sep: 0 }
+    if (a === -1) return { idx: b, sep: 2 }
+    if (b === -1) return { idx: a, sep: 4 }
+    return a < b ? { idx: a, sep: 4 } : { idx: b, sep: 2 }
+  }
+  while (true) {
+    const { done, value } = await reader.read()
+    if (done) break
+    buffer += decoder.decode(value, { stream: true })
+    while (true) {
+      const { idx, sep } = findFrameEnd(buffer)
+      if (idx === -1) break
+      const frame = buffer.slice(0, idx)
+      buffer = buffer.slice(idx + sep)
+      let currentEvent = ''
+      let dataLine = ''
+      for (const line of frame.split(/\r?\n/)) {
+        if (line.startsWith('event:')) currentEvent = line.slice(6).trim()
+        else if (line.startsWith('data:')) dataLine += line.slice(5).trim()
+      }
+      if (currentEvent && dataLine) {
+        let parsed: any = dataLine
+        try { parsed = JSON.parse(dataLine) } catch { /* keep as string */ }
+        onEvent(currentEvent, parsed)
+      }
+    }
+  }
+}
+
 export const aiChatApi = {
   listSessions(params?: { app_id?: number }): Promise<{ sessions: AIChatSession[] }> {
     const qs = params?.app_id != null ? `?app_id=${params.app_id}` : ''
@@ -163,47 +202,33 @@ export const aiChatApi = {
       signal: options.signal,
     })
     if (!resp.ok) {
-      throw new Error(`HTTP ${resp.status}`)
+      let detail = `HTTP ${resp.status}`
+      try { const j = await resp.json(); detail = j?.detail || detail } catch { /* ignore */ }
+      const err: any = new Error(detail)
+      err.status = resp.status  // 409 = 该会话有任务在跑(单会话单 run 守卫)
+      throw err
     }
-    if (!resp.body) throw new Error('no body')
+    await _consumeSse(resp, options.onEvent)
+  },
 
-    const reader = resp.body.getReader()
-    const decoder = new TextDecoder()
-    let buffer = ''
-    let currentEvent = ''
+  /** 该会话是否有在跑 run + 最新 seq —— 切回会话据此决定是否 attach 续看 */
+  getRunStatus(id: number): Promise<{ running: boolean; last_seq: number; run_id: string | null }> {
+    return request.get(`/ai-chat/sessions/${id}/run-status`)
+  },
 
-    // 兼容 \r\n\r\n（sse_starlette 默认）和 \n\n
-    const findFrameEnd = (s: string): { idx: number; sep: number } => {
-      const a = s.indexOf('\r\n\r\n')
-      const b = s.indexOf('\n\n')
-      if (a === -1 && b === -1) return { idx: -1, sep: 0 }
-      if (a === -1) return { idx: b, sep: 2 }
-      if (b === -1) return { idx: a, sep: 4 }
-      return a < b ? { idx: a, sep: 4 } : { idx: b, sep: 2 }
-    }
-
-    while (true) {
-      const { done, value } = await reader.read()
-      if (done) break
-      buffer += decoder.decode(value, { stream: true })
-      while (true) {
-        const { idx, sep } = findFrameEnd(buffer)
-        if (idx === -1) break
-        const frame = buffer.slice(0, idx)
-        buffer = buffer.slice(idx + sep)
-        currentEvent = ''
-        let dataLine = ''
-        // SSE 行分隔可能是 \r\n 或 \n
-        for (const line of frame.split(/\r?\n/)) {
-          if (line.startsWith('event:')) currentEvent = line.slice(6).trim()
-          else if (line.startsWith('data:')) dataLine += line.slice(5).trim()
-        }
-        if (currentEvent && dataLine) {
-          let parsed: any = dataLine
-          try { parsed = JSON.parse(dataLine) } catch { /* keep as string */ }
-          options.onEvent(currentEvent, parsed)
-        }
-      }
-    }
+  /** 重连在跑 run 的 SSE(切会话/刷新后续看):补 seq>afterSeq + 跟实时。复用 send 的事件回调。 */
+  async attachRun(
+    sessionId: number,
+    afterSeq: number,
+    options: { onEvent: (eventName: string, data: any) => void; signal?: AbortSignal },
+  ): Promise<void> {
+    const token = localStorage.getItem('token')
+    const resp = await fetch(`${API_PREFIX}/ai-chat/sessions/${sessionId}/attach?after_seq=${afterSeq}`, {
+      method: 'GET',
+      headers: { Authorization: `Bearer ${token}` },
+      signal: options.signal,
+    })
+    if (!resp.ok) return
+    await _consumeSse(resp, options.onEvent)
   },
 }
