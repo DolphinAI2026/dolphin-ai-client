@@ -810,7 +810,8 @@ async def run_read_query(
                 yield {"type": "content", "content": piece, "delta": True}
         except Exception as exc:
             logger.warning("[read_query] LLM 调用失败 turn=%d: %s", _turn, exc)
-            yield {"type": "content", "content": f"查询时出现错误：{exc}"}
+            from app.agents.base import describe_exception
+            yield {"type": "content", "content": f"查询时出现错误：{describe_exception(exc)}"}
             break
 
         content: str = str(sink["content"]).strip()

@@ -57,6 +57,17 @@ from app.agents.types import (
 logger = logging.getLogger(__name__)
 
 
+def describe_exception(e: BaseException) -> str:
+    """把异常转成给用户/前端看的非空描述。
+
+    超时类异常(asyncio.TimeoutError / httpx.ReadTimeout 等)str(e) 常为空，
+    若直接用 str(e) 会经 adapter 回退成无信息量的「unknown error」。空则退回类型名，
+    保证错误永远可读、可定位。
+    """
+    msg = str(e).strip()
+    return msg if msg else type(e).__name__
+
+
 def _short_args_preview(args: dict[str, Any], limit: int = 140) -> str:
     """给 `tool_call` SSE 事件做一个人看得懂的参数预览。
 
@@ -276,14 +287,14 @@ class BaseAgent(ABC, Generic[ProductT]):
                     response = await self._call_llm_with_retry()
                 except Exception as e:
                     self._stop_reason = StopReason.ERROR
-                    self._error_message = str(e)
+                    self._error_message = describe_exception(e)
                     self.status = AgentStatus.FAILED
                     await self._trace(TraceEventType.ERROR, {
                         "error_type": type(e).__name__,
                         "message": str(e),
                         "traceback": traceback.format_exc(),
                     })
-                    await self._publish("failed", {"error": str(e)})
+                    await self._publish("failed", {"error": describe_exception(e)})
                     break
 
                 await self.on_llm_response(response)
@@ -364,20 +375,20 @@ class BaseAgent(ABC, Generic[ProductT]):
         except Exception as e:
             logger.exception("BaseAgent.run unexpected error")
             self.status = AgentStatus.FAILED
-            self._error_message = str(e)
+            self._error_message = describe_exception(e)
             await self._trace(TraceEventType.ERROR, {
                 "error_type": type(e).__name__,
                 "message": str(e),
                 "traceback": traceback.format_exc(),
             })
-            await self._publish("failed", {"error": str(e)})
+            await self._publish("failed", {"error": describe_exception(e)})
             result = AgentResult(
                 status=AgentStatus.FAILED,
                 stop_reason=StopReason.ERROR,
                 turns_used=self._turn,
                 tokens_input=self._tokens_input,
                 tokens_output=self._tokens_output,
-                error_message=str(e),
+                error_message=describe_exception(e),
             )
             return result
         finally:

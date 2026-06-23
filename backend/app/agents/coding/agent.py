@@ -8,6 +8,7 @@ Stage 分步实施：
 """
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 import time
@@ -296,8 +297,12 @@ class CodingAgent(BaseAgent[dict]):
                 AgentStatus.ABORTED: "aborted",
                 AgentStatus.PAUSED: "success",  # 暂停=本轮正常结束、等用户答，不算失败
             }.get(result.status, "success")
-            await recorder.end_run(
-                self._obs_run_id, status=status, error=result.error_message
+            # shield：run 被取消时(SSE 断连/adapter cancel)，不 shield 则 end_run 会被
+            # 半途取消 → run 永久卡在 "running"、error 写不进库(对齐 builder/unified)。
+            await asyncio.shield(
+                recorder.end_run(
+                    self._obs_run_id, status=status, error=result.error_message
+                )
             )
         await super().after_run(result)
 
