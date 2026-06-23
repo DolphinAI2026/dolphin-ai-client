@@ -9,7 +9,7 @@
  */
 
 import { ref, nextTick } from 'vue'
-import { marked } from 'marked'
+import { renderMd } from '@/utils/markdown'
 
 import type { CodingAttachment, ReplayStreamMessage } from '@/api/coding'
 
@@ -78,13 +78,10 @@ export function formatSceneType(raw: string): string {
   return SCENE_TYPE_LABEL[raw] || raw
 }
 
+// 委托共享缓存实现(utils/markdown.renderMd):切会话/重渲染不再重复解析 marked。
+// 保留导出名 renderMarkdown 给 CodingPage 的 reasoning 卡 + SPEC 预览用。
 export function renderMarkdown(content: string): string {
-  if (!content) return ''
-  try {
-    return marked.parse(content) as string
-  } catch {
-    return content
-  }
+  return renderMd(content)
 }
 
 /** 清理模型输出中的 think 标签和多余空行 */

@@ -11,8 +11,13 @@ import { marked } from 'marked'
 
 marked.setOptions({ breaks: true, gfm: true })
 
-export function renderMd(s: string): string {
-  if (!s) return ''
+// 记忆化：消息 / SPEC / 思维链内容一旦生成就不可变，按内容缓存 marked.parse 结果。
+// 切会话 / 列表重渲染会把整条对话重新渲染，没缓存就对每条消息重复解析 marked —— 这是 Code
+// 切会话「卡顿」的主线程阻塞根因（对话越重：思维链 + diff + SPEC，重复解析越贵）。
+const _mdCache = new Map<string, string>()
+const _MD_CACHE_MAX = 3000
+
+function _parse(s: string): string {
   try {
     return marked.parse(s, { async: false }) as string
   } catch {
@@ -23,4 +28,14 @@ export function renderMd(s: string): string {
       .replace(/`([^`]+)`/g, '<code>$1</code>')
       .replace(/\n/g, '<br/>')
   }
+}
+
+export function renderMd(s: string): string {
+  if (!s) return ''
+  const hit = _mdCache.get(s)
+  if (hit !== undefined) return hit
+  const html = _parse(s)
+  if (_mdCache.size >= _MD_CACHE_MAX) _mdCache.clear()  // 简单上限：超了清空，避免无界增长
+  _mdCache.set(s, html)
+  return html
 }

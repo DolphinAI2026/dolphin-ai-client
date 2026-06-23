@@ -207,13 +207,11 @@
 
 <script setup lang="ts">
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
-import { marked } from 'marked'
+import { renderMd } from '@/utils/markdown'
 import { useThemeStore } from '@/stores/theme'
 import AppIcon from '@/components/common/AppIcon.vue'
 import ToolCard from './agent-conversation/ToolCard.vue'
 import type { AgentMessage, AgentToolPayload, AgentToolGroup, AgentTimelineItem } from './agent-conversation/types'
-
-marked.setOptions({ breaks: true, gfm: true })
 
 const props = withDefaults(defineProps<{
   messages: AgentMessage[]
@@ -352,14 +350,6 @@ function itemKey(item: AgentTimelineItem, idx: number): string {
   return 'm_' + (item.id ?? idx)
 }
 
-function renderMd(text: string): string {
-  if (!text) return ''
-  try {
-    return marked.parse(text) as string
-  } catch {
-    return text
-  }
-}
 
 function imageAttachments(m: AgentMessage) {
   return (m.attachments || []).filter(a => a.kind === 'image' && a.url)
