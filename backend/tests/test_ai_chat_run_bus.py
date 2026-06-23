@@ -111,6 +111,61 @@ async def test_send_runs_agent_in_background_and_publishes_to_bus(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_abort_cancels_background_task(monkeypatch):
+    """Builder 停止键:abort 必须显式 cancel 后台 task。
+
+    send 解耦后 run 是 RunRegistry 强引用的 detached 后台 task —— 断 SSE 不影响它,
+    只 set abort_event 在 LLM I/O 阻塞时也来不及检查 → 必须像 coding /coding/stop
+    那样 task.cancel()。否则点停止「AI 思考中」停不掉(线上 bug)。
+    """
+    from types import SimpleNamespace
+    from unittest.mock import AsyncMock
+
+    import app.routes.ai_chat as aichat
+    from app.ai_chat.run_bus import AiChatRunBus, ai_chat_run_registry
+
+    started = asyncio.Event()
+
+    async def _long():
+        started.set()
+        await asyncio.sleep(10)
+
+    task = asyncio.create_task(_long())
+    await started.wait()
+    sid = 90909
+    ai_chat_run_registry.register(
+        sid, RunHandle(task=task, event_bus=AiChatRunBus(), run_id="r", thread_id=sid)
+    )
+    monkeypatch.setattr(
+        aichat, "_load_session_or_404", AsyncMock(return_value=SimpleNamespace(id=sid))
+    )
+    try:
+        res = await aichat.abort_session(sid, ctx=SimpleNamespace(), db=AsyncMock())
+        assert res.get("stopped") is True
+        await asyncio.sleep(0.02)
+        assert task.cancelled()
+    finally:
+        ai_chat_run_registry.unregister(sid)
+        if not task.done():
+            task.cancel()
+
+
+@pytest.mark.asyncio
+async def test_abort_noop_when_not_running(monkeypatch):
+    """该会话没有在跑 run → abort 不报 stopped:True(不崩)。"""
+    from types import SimpleNamespace
+    from unittest.mock import AsyncMock
+
+    import app.routes.ai_chat as aichat
+
+    monkeypatch.setattr(
+        aichat, "_load_session_or_404", AsyncMock(return_value=SimpleNamespace(id=1))
+    )
+    res = await aichat.abort_session(778899, ctx=SimpleNamespace(), db=AsyncMock())
+    assert res.get("stopped") is not True
+
+
+@pytest.mark.asyncio
 async def test_registry_tracks_running_per_session():
     async def _noop():
         await asyncio.sleep(0.01)

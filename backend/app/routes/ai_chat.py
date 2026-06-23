@@ -796,10 +796,23 @@ async def abort_session(
     ctx: Annotated[AuthContext, Depends(get_auth_context)],
     db: Annotated[AsyncSession, Depends(get_db)],
 ):
+    """停止键:停掉该会话在跑的 ai-chat run。
+
+    send 解耦后 run 是 RunRegistry 强引用的 detached 后台 task —— 断 SSE 不影响它,
+    只 set abort_event 在 LLM I/O 阻塞时也来不及检查 → 必须显式 task.cancel()
+    (对齐 coding /coding/stop)。cancel 触发 CancelledError(BaseException,不被 _run_bg
+    的 except Exception 吞)→ finally send_sentinel + unregister 收尾。
+    """
+    from app.ai_chat.run_bus import ai_chat_run_registry
+
     await _load_session_or_404(db, session_id, ctx)
     ev = get_or_create_abort_event(session_id)
     ev.set()
-    return {"ok": True}
+    h = ai_chat_run_registry.get(session_id)
+    if h and not h.task.done():
+        h.task.cancel()
+        return {"ok": True, "stopped": True}
+    return {"ok": True, "stopped": False}
 
 
 @router.get("/sessions/{session_id}/run-status")
