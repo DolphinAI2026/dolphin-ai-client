@@ -29,7 +29,7 @@ describe('CodingPage 预览呈现', () => {
     expect(src).toContain('preventDefault')
     expect(src).toContain('localhost')               // 本地预览地址判定(走预览位)
     expect(src).toContain('openExternal')            // 外链走系统浏览器
-    expect(src).toMatch(/wsPaneTab\.value\s*=\s*'run'/)  // 预览地址→聚焦预览位
+    expect(src).toMatch(/showPanel\('browser'\)/)    // 预览地址→聚焦浏览器面板(Codex 段控,旧 wsPaneTab='run' 升级)
   })
 
   it('本地预览链接取干净 origin(marked 把中文标点吞进 href)', () => {

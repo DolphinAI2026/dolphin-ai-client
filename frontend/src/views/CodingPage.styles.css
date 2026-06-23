@@ -2536,3 +2536,283 @@ html[data-theme="dark"] .ctx-warn-banner.lvl-danger { background: rgba(207,19,34
 .mrc-caret { font-size: 10px; }
 .mrc-body { margin-top: 4px; padding: 8px 10px; border-left: 2px solid var(--line, #e5e7eb); color: var(--text-3, #888); font-style: italic; white-space: pre-wrap; }
 html[data-theme="dark"] .mrc-body { border-left-color: #3a3a3a; color: #9aa0a6; }
+
+/* ════════════════════════════════════════════════════════════════════
+   Codex skin (Phase 1) — Code 模式对话流像素级复刻 Codex 观感。
+   恒暗,作用域 .coding-body.codex-skin。--cx-* 定义在 styles/codex-tokens.css,
+   这里只做:① 桥接(旧 t- / line 等旧 token 重指到 cx,子组件无感切肤)
+   ② :deep() 覆盖共享组件(ToolCard/AgentConversation/FileCard)硬编码灰
+   ③ 命令/思考/SPEC/ask/run/输入区 微调。0 改共享 .vue。
+   ════════════════════════════════════════════════════════════════════ */
+
+/* ── ① token 桥接(不重定义 --cx-*,只把旧 token 重指过去) ── */
+.coding-body.codex-skin {
+  --t-bg-base: var(--cx-bg-0);
+  --t-bg-panel: var(--cx-bg-1);
+  --t-bg-panel-hover: var(--cx-bg-3);
+  --t-bg-elevated: var(--cx-bg-1);
+  --t-bg-nav: var(--cx-bg-0);
+  --t-bg-code: #000;
+  --t-bg-soft: var(--cx-bg-2);
+  --t-bg-input: var(--cx-bg-2);
+  /* --surface 是 UnifiedChatComposer 输入/发送底色的首选变量(回退链 --surface→--t-bg-input→#fff);
+     不桥接则全局 light 时 Code 模式输入框渲染成白底。恒暗皮肤必须钉死。 */
+  --surface: var(--cx-bg-2);
+  --t-text-primary: var(--cx-text-1);
+  --t-text-secondary: var(--cx-text-2);
+  --t-text-muted: var(--cx-text-3);
+  --t-border-subtle: var(--cx-border);
+  --t-border-soft: var(--cx-border);
+  --t-brand: var(--cx-brand);
+  --t-brand-text: var(--cx-brand);
+  --t-brand-subtle: rgba(90, 120, 255, 0.12);
+  --t-success: var(--cx-green);
+  --t-danger: var(--cx-red);
+  --t-warning: var(--cx-accent);
+  /* run-card / 旧裸 token */
+  --line: var(--cx-border);
+  --surface-2: var(--cx-bg-1);
+  --text-1: var(--cx-text-1);
+  --text-2: var(--cx-text-2);
+  --text-3: var(--cx-text-3);
+  --brand: var(--cx-brand);
+  --ok: var(--cx-green);
+  --err: var(--cx-red);
+  background: var(--cx-bg-0);
+  color: var(--cx-text-1);
+}
+
+/* ── ② 会话头 ── */
+.coding-body.codex-skin .coding-session-header {
+  background: var(--cx-bg-0);
+  border-bottom: 1px solid var(--cx-border);
+}
+.coding-body.codex-skin .coding-session-kicker { color: var(--cx-text-3); font-weight: 400; }
+.coding-body.codex-skin .coding-session-title { color: var(--cx-text-1); font-weight: 500; font-size: 14px; }
+.coding-body.codex-skin .cca-btn,
+.coding-body.codex-skin .coding-back-to-builder {
+  color: var(--cx-text-2);
+  background: transparent;
+  border: 1px solid transparent;
+}
+.coding-body.codex-skin .cca-btn:hover,
+.coding-body.codex-skin .coding-back-to-builder:hover {
+  background: var(--cx-bg-3);
+  color: var(--cx-text-1);
+}
+
+/* ── ③ 主区 / 滚动条 ── */
+.coding-body.codex-skin .main-content,
+.coding-body.codex-skin .stream-pane { background: var(--cx-bg-0); }
+.coding-body.codex-skin .stream-pane ::-webkit-scrollbar { width: 8px; height: 8px; }
+.coding-body.codex-skin .stream-pane ::-webkit-scrollbar-thumb { background: var(--cx-border-hi); border-radius: 4px; }
+
+/* ── ④ AI 消息(:deep 共享 AgentConversation) ── */
+.coding-body.codex-skin :deep(.ac-avatar.brand) {
+  border-radius: 50%;
+  background: var(--cx-bg-3);
+  color: var(--cx-accent);
+  border: 1px solid var(--cx-border);
+  font-size: 11px;
+}
+.coding-body.codex-skin :deep(.ac-bubble.assistant-naked .ac-text) { color: var(--cx-text-1); line-height: 1.7; }
+.coding-body.codex-skin :deep(.ac-text pre),
+.coding-body.codex-skin :deep(.ac-text code) { font-family: var(--cx-mono); }
+.coding-body.codex-skin :deep(.ac-text pre) {
+  background: #000;
+  border: 1px solid var(--cx-border);
+  border-radius: 6px;
+}
+.coding-body.codex-skin :deep(.ac-text :not(pre) > code) {
+  background: rgba(255, 255, 255, 0.04);
+  border-radius: 3px;
+  padding: 1px 6px;
+}
+.coding-body.codex-skin :deep(.ac-fb-btn) { color: var(--cx-text-3); }
+.coding-body.codex-skin :deep(.ac-fb-btn:hover) { background: var(--cx-bg-3); color: var(--cx-text-1); }
+
+/* ── ⑤ 用户消息 ── */
+.coding-body.codex-skin :deep(.ac-bubble.user-bubble) {
+  background: var(--cx-bg-2);
+  border: 1px solid var(--cx-border);
+  border-radius: 12px;
+  padding: 12px 16px;
+}
+.coding-body.codex-skin :deep(.ac-user-tag) { display: none; }
+.coding-body.codex-skin :deep(.ac-attach-chip) {
+  background: rgba(255, 255, 255, 0.04);
+  border: 1px solid var(--cx-border);
+  border-radius: 6px;
+  color: var(--cx-text-2);
+}
+
+/* ── ⑥ 工具卡(:deep ToolCard) ── */
+.coding-body.codex-skin :deep(.tool-card) {
+  background: var(--cx-bg-1);
+  border: 1px solid var(--cx-border);
+  border-radius: 8px;
+}
+.coding-body.codex-skin :deep(.tool-card:hover) { border-color: var(--cx-border-hi); }
+.coding-body.codex-skin :deep(.tc-name) { color: var(--cx-accent); font-family: var(--cx-mono); }
+.coding-body.codex-skin :deep(.tc-sep),
+.coding-body.codex-skin :deep(.tc-args),
+.coding-body.codex-skin :deep(.tc-meta),
+.coding-body.codex-skin :deep(.tc-duration),
+.coding-body.codex-skin :deep(.tc-toggle),
+.coding-body.codex-skin :deep(.tc-section-label) { color: var(--cx-text-3); }
+.coding-body.codex-skin :deep(.tc-status-label.success) { color: var(--cx-green); }
+.coding-body.codex-skin :deep(.tc-status-label.error) { color: var(--cx-red); }
+.coding-body.codex-skin :deep(.tc-status-label.running) { color: var(--cx-brand); }
+.coding-body.codex-skin :deep(.tc-body pre) {
+  background: #000;
+  border: 1px solid var(--cx-border);
+  color: var(--cx-text-1);
+  font-family: var(--cx-mono);
+}
+
+/* ── ⑦ 工具分组 ── */
+.coding-body.codex-skin :deep(.ac-tool-group) {
+  background: var(--cx-bg-1);
+  border: 1px solid var(--cx-border);
+  border-radius: 8px;
+}
+.coding-body.codex-skin :deep(.ac-tool-name) { color: var(--cx-accent); }
+.coding-body.codex-skin :deep(.ac-group-count) {
+  background: rgba(90, 120, 255, 0.12);
+  color: var(--cx-brand);
+}
+
+/* ── ⑧ diff / 文件卡(:deep FileCard) ── */
+.coding-body.codex-skin :deep(.msg-file-card) {
+  background: var(--cx-bg-1);
+  border: 1px solid var(--cx-border);
+  border-radius: 8px;
+}
+.coding-body.codex-skin :deep(.file-card-header) { font-family: var(--cx-mono); }
+.coding-body.codex-skin :deep(.file-card-header:hover) { background: var(--cx-bg-3); }
+.coding-body.codex-skin :deep(.fc-stat-add) { color: var(--cx-green); }
+.coding-body.codex-skin :deep(.fc-stat-del) { color: var(--cx-red); }
+.coding-body.codex-skin :deep(.fc-diff-line.fc-add) { background: color-mix(in srgb, var(--cx-green) 16%, transparent); color: var(--cx-green); }
+.coding-body.codex-skin :deep(.fc-diff-line.fc-del) { background: color-mix(in srgb, var(--cx-red) 16%, transparent); color: var(--cx-red); }
+.coding-body.codex-skin :deep(.file-card-code) { background: #000; font-family: var(--cx-mono); }
+.coding-body.codex-skin :deep(.fc-ln) { color: var(--cx-text-3); }
+
+/* ── ⑨ 命令卡 ── */
+.coding-body.codex-skin .msg-command-card { background: #000; border: 1px solid var(--cx-border); border-radius: 8px; }
+.coding-body.codex-skin .command-prompt { color: var(--cx-green); }
+.coding-body.codex-skin .command-text { color: var(--cx-text-2); }
+.coding-body.codex-skin .command-output { color: var(--cx-text-3); font-family: var(--cx-mono); }
+
+/* ── ⑩ 思考链 / SPEC 卡 ── */
+.coding-body.codex-skin .mrc-head { color: var(--cx-text-3); }
+.coding-body.codex-skin .mrc-body { border-left: 2px solid var(--cx-border-hi); color: var(--cx-text-3); }
+.coding-body.codex-skin .msg-spec-card .mrc-body {
+  background: rgba(90, 120, 255, 0.06);
+  border-left-color: var(--cx-brand);
+  font-style: normal;
+}
+
+/* ── ⑪ ask 澄清卡 ── */
+.coding-body.codex-skin :deep(.ac-ask-card) {
+  background: rgba(90, 120, 255, 0.06);
+  border: 1px solid rgba(90, 120, 255, 0.25);
+  border-radius: 10px;
+}
+.coding-body.codex-skin :deep(.ac-ask-q) { color: var(--cx-text-1); font-weight: 500; }
+.coding-body.codex-skin :deep(.ac-ask-opt) {
+  background: var(--cx-bg-2);
+  border: 1px solid var(--cx-border-hi);
+  color: var(--cx-text-1);
+  border-radius: 14px;
+}
+.coding-body.codex-skin :deep(.ac-ask-opt:hover) {
+  background: var(--cx-brand);
+  border-color: var(--cx-brand);
+  color: #fff;
+}
+
+/* ── ⑫ typing ── */
+.coding-body.codex-skin :deep(.ac-typing span) { background: var(--cx-text-3); }
+.coding-body.codex-skin :deep(.ac-typing-secs) { color: var(--cx-text-3); }
+
+/* ── ⑬ 输入区(:deep UnifiedChatComposer) ── */
+.coding-body.codex-skin .chat-input-bar { background: var(--cx-bg-0); border-top: 1px solid var(--cx-border); }
+.coding-body.codex-skin :deep(.ucc-box) {
+  background: var(--cx-bg-2);
+  border: 1px solid var(--cx-border-hi);
+  border-radius: 14px;
+}
+.coding-body.codex-skin :deep(.ucc-box:focus-within) { border-color: rgba(90, 120, 255, 0.5); }
+.coding-body.codex-skin :deep(.ucc-input) { color: var(--cx-text-1); }
+.coding-body.codex-skin :deep(.ucc-input::placeholder) { color: var(--cx-text-3); }
+.coding-body.codex-skin :deep(.ucc-send) { background: var(--cx-brand); border-radius: 8px; color: #fff; }
+.coding-body.codex-skin :deep(.ucc-send.is-stop) { background: linear-gradient(135deg, #ef4444 0%, #dc2626 100%); }
+.coding-body.codex-skin .coding-model-trigger { color: var(--cx-text-2); font-family: var(--cx-mono); }
+.coding-body.codex-skin .coding-model-menu { background: var(--cx-bg-2); border: 1px solid var(--cx-border-hi); border-radius: 8px; }
+.coding-body.codex-skin .coding-model-option:hover { background: var(--cx-bg-3); }
+.coding-body.codex-skin .coding-model-option.is-selected { color: var(--cx-brand); }
+.coding-body.codex-skin .coding-token-usage { color: var(--cx-text-3); font-family: var(--cx-mono); }
+.coding-body.codex-skin .coding-token-usage .lvl-warn { color: var(--cx-accent); }
+.coding-body.codex-skin .coding-token-usage .lvl-danger { color: var(--cx-red); }
+.coding-body.codex-skin .coding-queue-banner,
+.coding-body.codex-skin .ctx-warn-banner {
+  background: var(--cx-bg-1);
+  border: 1px solid var(--cx-border);
+  border-radius: 10px;
+  color: var(--cx-text-2);
+}
+
+/* ════════════════════════════════════════════════════════════════════
+   Codex 面板外壳(Phase 2) — 右侧单面板宿主 + 段控顶栏。
+   ════════════════════════════════════════════════════════════════════ */
+.codex-panel-host {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  background: var(--cx-bg-1);
+  border-left: 1px solid var(--cx-border);
+}
+.codex-panel-host .cph-topbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  height: 40px;
+  padding: 0 8px 0 10px;
+  border-bottom: 1px solid var(--cx-border);
+  background: var(--cx-bg-0);
+  flex-shrink: 0;
+}
+.codex-panel-host .cph-segments { display: flex; align-items: stretch; gap: 2px; height: 100%; }
+.codex-panel-host .cph-seg {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  background: transparent;
+  border: none;
+  border-bottom: 2px solid transparent;
+  color: var(--cx-text-3);
+  font-size: 12.5px;
+  padding: 0 10px;
+  cursor: pointer;
+  transition: color 0.12s, border-color 0.12s;
+}
+.codex-panel-host .cph-seg:hover { color: var(--cx-text-1); }
+.codex-panel-host .cph-seg.active { color: var(--cx-text-1); border-bottom-color: var(--cx-brand); }
+.codex-panel-host .cph-seg-label { line-height: 1; }
+.codex-panel-host .cph-topbar-actions { display: inline-flex; align-items: center; gap: 2px; }
+.codex-panel-host .cph-icon-btn {
+  display: grid;
+  place-items: center;
+  width: 28px;
+  height: 28px;
+  background: transparent;
+  border: none;
+  border-radius: 6px;
+  color: var(--cx-text-2);
+  cursor: pointer;
+}
+.codex-panel-host .cph-icon-btn:hover { background: var(--cx-bg-3); color: var(--cx-text-1); }
+.codex-panel-host .cph-body-panel { flex: 1 1 auto; min-height: 0; overflow: hidden; }
+/* 文件面板内部仍是 树+resizer+viewer 横排,沿用 .ws-pane-files 既有布局 */
+.codex-panel-host .ws-pane-files.cph-body-panel { display: flex; }

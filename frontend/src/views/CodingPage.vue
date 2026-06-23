@@ -28,7 +28,7 @@
       </div>
     </el-dialog>
 
-    <div class="coding-body" :class="{ 'code-first': codeFirst }">
+    <div class="coding-body codex-skin" :class="{ 'code-first': codeFirst }">
       <SessionSidebar
         v-if="!embedMode && !embeddedAppId && !codeFirst && !useRailSessions"
         module-name="代码工作区"
@@ -116,8 +116,11 @@
               >
                 <AppIcon :name="syncingToRepo ? 'refresh' : 'link'" :size="14" />
               </button>
-              <button class="cca-btn" :class="{ active: codePaneOpen }" title="代码 / 文件" @click="codePaneOpen = !codePaneOpen">
-                <AppIcon name="coding" :size="14" />
+              <button class="cca-btn" title="命令面板 ⌘K" @click="cmdPaletteOpen = true">
+                <AppIcon name="more" :size="15" />
+              </button>
+              <button class="cca-btn" :class="{ active: codePaneOpen }" title="代码 / 面板 (⌘P)" @click="togglePanelHost()">
+                <AppIcon name="square" :size="14" />
               </button>
             </div>
           </header>
@@ -343,18 +346,58 @@
            侧栏左边界可拖宽; × 收起回全宽对话。 -->
       <div
         v-if="codePaneOpen && codingStore.workspace?.id"
-        class="ws-pane"
+        class="ws-pane codex-panel-host"
         :style="{ flex: '0 0 ' + codePaneWidth + 'px', width: codePaneWidth + 'px' }"
       >
-        <div class="ws-pane-resizer" title="拖拽调整代码栏宽度" @pointerdown="onCodePaneResizeStart" />
-        <div class="ws-pane-tabs">
-          <button :class="{ active: wsPaneTab === 'files' }" @click="wsPaneTab = 'files'">文件 / 代码</button>
-          <button :class="{ active: wsPaneTab === 'run' }" @click="wsPaneTab = 'run'">预览</button>
-          <button class="ws-pane-close" title="收起代码栏" @click="codePaneOpen = false">
-            <AppIcon name="x" :size="15" />
-          </button>
+        <div class="ws-pane-resizer cph-resizer" title="拖拽调整代码栏宽度" @pointerdown="onCodePaneResizeStart" />
+        <div class="cph-topbar">
+          <div class="cph-segments">
+            <button
+              v-for="c in codexPanelCommands"
+              :key="c.id"
+              class="cph-seg"
+              :class="{ active: activePanel === c.id }"
+              :title="c.label"
+              @click="showPanel(c.id)"
+            >
+              <AppIcon :name="c.icon" :size="14" />
+              <span class="cph-seg-label">{{ c.label }}</span>
+            </button>
+          </div>
+          <div class="cph-topbar-actions">
+            <button class="cph-icon-btn" title="命令面板 ⌘K" @click="cmdPaletteOpen = true">
+              <AppIcon name="more" :size="15" />
+            </button>
+            <button class="cph-icon-btn" title="收起代码栏" @click="codePaneOpen = false">
+              <AppIcon name="x" :size="15" />
+            </button>
+          </div>
         </div>
-        <div v-show="wsPaneTab === 'files'" class="ws-pane-files">
+
+        <ReviewPanel
+          v-show="activePanel === 'review'"
+          class="cph-body-panel"
+          :changes="wsGitChanges"
+          :selected="selectedFile"
+          :accepting="acceptingWorkspaceChanges"
+          @select-file="onReviewSelectFile"
+          @accept-all="acceptAllWorkspaceChanges"
+        />
+
+        <TerminalPanel
+          v-show="activePanel === 'terminal'"
+          class="cph-body-panel"
+          :ws-id="codingStore.workspace?.id || ''"
+        />
+
+        <RunDebugPanel
+          v-show="activePanel === 'browser'"
+          class="cph-body-panel"
+          :ws-id="codingStore.workspace?.id || ''"
+          :dark="themeStore.isDark"
+        />
+
+        <div v-show="activePanel === 'files'" class="ws-pane-files cph-body-panel">
           <FileTree
             class="ws-pane-tree"
             :style="{ width: treePaneWidth + 'px' }"
@@ -375,17 +418,19 @@
             :diff="selectedGitChange ? null : selectedDiff"
             :change="selectedGitChange"
             :focus-line="viewerFocusLine"
-            :dark="themeStore.isDark"
+            :dark="true"
             @quote="onViewerQuote"
             @accept-change="acceptWorkspaceChange"
           />
         </div>
-        <RunDebugPanel
-          v-show="wsPaneTab === 'run'"
-          :ws-id="codingStore.workspace?.id || ''"
-          :dark="themeStore.isDark"
-        />
       </div>
+
+      <CommandPalette
+        :open="cmdPaletteOpen"
+        :commands="codexCommands"
+        @select="onPaletteSelect"
+        @close="cmdPaletteOpen = false"
+      />
 
       <!-- 文件抽屉：显示 workspace 文件列表 (P0 留 stub，P1 接 ws files API) -->
       <el-drawer v-model="filesDrawerOpen" title="工作区文件" direction="rtl" size="40%" body-class="coding-files-drawer-body" :append-to-body="true">
@@ -512,6 +557,16 @@ import type { UnifiedChatAttachment } from '@/components/common/chatComposer'
 import FileTree from './coding/FileTree.vue'
 import CodeViewer from './coding/CodeViewer.vue'
 import RunDebugPanel from './coding/RunDebugPanel.vue'
+import CommandPalette from './coding/CommandPalette.vue'
+import ReviewPanel from './coding/panels/ReviewPanel.vue'
+import TerminalPanel from './coding/panels/TerminalPanel.vue'
+import {
+  useCodexPanels,
+  matchPalette,
+  matchPanelHotkey,
+  isEditableTarget,
+  type CodexCommandId,
+} from './coding/useCodexPanels'
 import { buildFileTree, type TreeNode } from './coding/fileTree'
 import { isCodingWelcome, shouldShowCodingComposer } from './coding/codingLayout'
 import { collectChangedFiles, normalizeWorkspacePathLabel, type FileChangeMsg } from './coding/workspaceChanges'
@@ -716,8 +771,7 @@ function openFileFromChat(sm: { filePath?: string; fileName?: string }) {
   const target = resolveWorkspacePath(rawPath) || (looksLikeFilePath(rawPath) ? rawPath : null)
   if (target) {
     selectedFile.value = target
-    wsPaneTab.value = 'files'
-    codePaneOpen.value = true
+    showPanel('files')
   }
 }
 
@@ -773,7 +827,48 @@ watch(() => wsChanges.value.lastChangedFile, (p) => {
 // 它俩是「代码面板」才用到的重活(各 ~1.5s 网络)。切会话默认看对话、根本没挂载文件树/CodeViewer,
 // 用不上 → 从「切会话」关键路径上拿掉,改成只在用户打开代码面板(codePaneOpen)时按需拉。
 // codePaneOpen 声明提前到此,便于下方 watcher 引用(原声明在下方,已移除)。
-const codePaneOpen = ref(false)
+// Codex 面板状态机(单一真相源)。codePaneOpen 是 panelOpen 的别名(同一 ref,语义 1:1),
+// 让既有大量 codePaneOpen 引用 + 懒加载/切会话守卫零改动延续。
+const {
+  open: panelOpen,
+  active: activePanel,
+  paletteOpen: cmdPaletteOpen,
+  commands: codexCommands,
+  panelCommands: codexPanelCommands,
+  show: showPanel,
+  toggleHost: togglePanelHost,
+} = useCodexPanels()
+const codePaneOpen = panelOpen
+
+// 审查面板点文件 → 选中并切到文件面板看 diff(CodeViewer 据 selectedFile 进 diff 模式)
+function onReviewSelectFile(path: string) {
+  onTreeSelect(path)
+  showPanel('files')
+}
+// 命令面板选中:有面板的直达;侧边聊天留桩(Phase 2 未实现)
+function onPaletteSelect(id: CodexCommandId) {
+  cmdPaletteOpen.value = false
+  if (id === 'sidechat') { ElMessage.info('侧边聊天即将上线'); return }
+  showPanel(id)
+}
+// 全局快捷键:⌘K 命令面板 / ⌃⇧G 审查 / ⌘P 文件 / ⌘T 浏览器。
+// embed 模式不挂;输入框聚焦时除 ⌘K 外不抢直达键。
+function onCodexKeydown(e: KeyboardEvent) {
+  if (embedMode.value || embeddedAppId.value) return
+  if (matchPalette(e)) {
+    e.preventDefault()
+    cmdPaletteOpen.value = !cmdPaletteOpen.value
+    return
+  }
+  if (isEditableTarget(e.target)) return
+  const panel = matchPanelHotkey(e)
+  if (panel) {
+    e.preventDefault()
+    showPanel(panel)
+  }
+}
+onMounted(() => window.addEventListener('keydown', onCodexKeydown))
+onUnmounted(() => window.removeEventListener('keydown', onCodexKeydown))
 let _codeDataLoadedFor: string | null = null  // 已加载数据的工作区 id;切工作区/codegen 写文件后置 null 失效
 
 async function ensureCodePaneData() {
@@ -820,7 +915,7 @@ watch(() => codingStore.workspace?.id, () => {
 
 // 工作区打开 → 代码为主三栏布局（文件树 | 大代码区 | 右聊天）；未进工作区时维持原引导/新建流程
 const codeFirst = computed(() => !!codingStore.workspace?.id && !embeddedAppId.value)
-const wsPaneTab = ref<'files' | 'run'>('files')
+// wsPaneTab 已被 activePanel(4 值: review/terminal/browser/files)取代,见 useCodexPanels
 
 // 对话优先(参考 Claude Code/Codex 桌面): 对话是常驻主列, 永远能输入;
 // 点产物/文件/「代码」按钮 → 代码作为右侧并排侧栏推出(文件树+查看器+预览), 不遮挡对话;
@@ -1091,8 +1186,7 @@ function focusPreview(r: any) {
   if (r?.dev_url) {
     codingStore.activePreview = { dev_url: r.dev_url, status: r.status, errors: r.errors, capture_available: r.capture_available, round: r.round }
   }
-  wsPaneTab.value = 'run'
-  codePaneOpen.value = true
+  showPanel('browser')
 }
 
 // 对话里点链接: localhost 预览地址 → 聚焦预览位(不导航主界面, 根除「回不去」); 外链 → 系统浏览器。
@@ -1109,8 +1203,7 @@ function onChatClick(e: MouseEvent) {
     let dev = href
     try { dev = new URL(href).origin + '/' } catch { /* 解析失败用原始 href 兜底 */ }
     codingStore.activePreview = { dev_url: dev, status: 'ok', errors: [], capture_available: false, round: null, source: 'panel' }
-    wsPaneTab.value = 'run'
-    codePaneOpen.value = true  // 对话里点本地预览链接 → 打开代码侧栏的「预览」位(否则切了 tab 但侧栏关着看不到)
+    showPanel('browser')  // 对话里点本地预览链接 → 打开浏览器面板(否则切了但侧栏关着看不到)
   } else {
     void openExternal(href)
   }
@@ -1119,9 +1212,9 @@ function onChatClick(e: MouseEvent) {
 // 预览结果一到达就自动切到「预览」位并弹出代码抽屉, 不用再点链接:
 // - previewEpoch: agent 每跑一次预览(run_result)+1(主路径; 自愈轮不递增, 不打扰)→ 顺手开抽屉给用户看运行结果。
 // - activePreview.dev_url 变化: 覆盖按钮/链接等其它写入路径, 只切 tab(开抽屉交给 previewEpoch / 点击行为, 避免重复弹)。
-watch(() => codingStore.previewEpoch, () => { wsPaneTab.value = 'run'; codePaneOpen.value = true })
+watch(() => codingStore.previewEpoch, () => { showPanel('browser') })
 watch(() => codingStore.activePreview?.dev_url, (url, old) => {
-  if (url && url !== old) wsPaneTab.value = 'run'
+  if (url && url !== old) activePanel.value = 'browser'
 })
 
 /** Coding 的 tool StreamMessage(展示字符串模型,content='📖 读取 X' / '🔧 <display>',

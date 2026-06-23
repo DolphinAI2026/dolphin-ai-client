@@ -19,6 +19,8 @@ import './styles/theme-vars.css'
 // theme-vars.css (v1 era --t-* legacy aliases) 保留向后兼容
 // design-v3-tokens.css 现在是唯一 brand/state/surface token 来源
 import './styles/design-v3-tokens.css'
+// Codex 复刻 token(.codex-skin 作用域,Code 模式专用,唯一 --cx-* 定义处)
+import './styles/codex-tokens.css'
 import './style.css'
 import './styles/builder.css'
 import { useThemeStore } from './stores/theme'

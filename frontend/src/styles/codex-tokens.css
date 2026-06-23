@@ -1,0 +1,62 @@
+/* Codex 复刻设计 token —— 唯一权威定义处(勿在别处重复定义同名 --cx-*)。
+ *
+ * 作用域 .codex-skin：Code 模式恒为 Codex 深色,不随全局 light/dark。
+ * 值取自设计稿 frontend/dist/aichat-mockup.html。
+ * Phase 1 的桥接(把旧 --t-*/--line 重指到 --cx-*)写在 CodingPage.styles.css,不在这里。
+ */
+
+.codex-skin {
+  /* ── 背景层 ── */
+  --cx-bg-0: #0a0a0c;   /* 最底:对话主区 / 代码区 */
+  --cx-bg-1: #111114;   /* 侧栏 / 面板底 */
+  --cx-bg-2: #16171b;   /* 卡片 / 输入框 */
+  --cx-bg-3: #1d1e23;   /* 激活态 / 次级按钮 */
+  --cx-bg-hover: rgba(255, 255, 255, 0.04);
+
+  /* ── 描边 ── */
+  --cx-border: rgba(255, 255, 255, 0.06);
+  --cx-border-hi: rgba(255, 255, 255, 0.1);
+
+  /* ── 文字 ── */
+  --cx-text-1: #e8eaed;
+  --cx-text-2: #a1a4ad;
+  --cx-text-3: #6c707a;
+
+  /* ── 强调色 ── */
+  --cx-brand: #5a78ff;   /* 主蓝紫(注:≠ 全局 --t-brand #7c8cff,必须独立) */
+  --cx-accent: #f0824a;  /* 橙:工具名 / AI 头像字 / 品牌点 */
+  --cx-green: #34d399;   /* diff + / 成功 */
+  --cx-red: #f87171;     /* diff - / 失败 */
+  --cx-brand-soft: rgba(90, 120, 255, 0.18);
+  --cx-green-soft: rgba(52, 211, 153, 0.15);
+  --cx-red-soft: rgba(248, 113, 113, 0.18);
+  --cx-accent-soft: rgba(240, 130, 74, 0.14);
+
+  /* ── 字体 ── */
+  --cx-font-sans: -apple-system, BlinkMacSystemFont, "PingFang SC", "Microsoft YaHei", sans-serif;
+  --cx-mono: ui-monospace, SFMono-Regular, "SF Mono", Menlo, monospace;
+
+  /* ── 字号阶梯 ── */
+  --cx-fs-11: 11px;
+  --cx-fs-12: 12px;
+  --cx-fs-125: 12.5px;
+  --cx-fs-13: 13px;
+  --cx-fs-14: 14px;
+  --cx-fs-16: 16px;
+
+  /* ── 圆角 ── */
+  --cx-r-3: 3px;
+  --cx-r-4: 4px;
+  --cx-r-6: 6px;
+  --cx-r-8: 8px;
+  --cx-r-12: 12px;
+  --cx-r-14: 14px;
+  --cx-r-pill: 14px;
+
+  /* ── 阴影(浮层) ── */
+  --cx-shadow-pop: 0 12px 40px rgba(0, 0, 0, 0.55), 0 0 0 1px rgba(255, 255, 255, 0.06);
+
+  /* ── 动效 ── */
+  --cx-motion-fast: 0.1s ease;
+  --cx-motion: 0.15s ease;
+}

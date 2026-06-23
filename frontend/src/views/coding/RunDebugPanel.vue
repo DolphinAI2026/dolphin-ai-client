@@ -6,23 +6,27 @@
 <template>
   <div class="run-debug-panel" :class="{ dark }">
     <div class="rd-toolbar">
-      <span class="rd-title">预览</span>
-      <span v-if="devUrl" class="rd-url">{{ devUrl }}</span>
-      <span class="rd-spacer" />
-      <template v-if="devUrl">
-        <button class="rd-btn" :disabled="loading" @click="reload">刷新</button>
-        <button class="rd-btn" @click="stop">停止</button>
-      </template>
+      <input
+        v-model="address"
+        class="rd-address"
+        type="text"
+        placeholder="输入地址,如 http://127.0.0.1:8087/"
+        spellcheck="false"
+        @keydown.enter="go"
+      />
+      <button v-if="devUrl && current !== devUrl" class="rd-btn" title="带入当前调试预览地址" @click="useDevUrl">带入调试地址</button>
+      <button v-if="current" class="rd-btn" :disabled="loading" @click="reload">刷新</button>
+      <button v-if="devUrl" class="rd-btn" @click="stop">停止</button>
       <button v-else class="rd-btn rd-primary" :disabled="loading || !wsId" @click="start">
         {{ loading ? '启动中…' : '启动预览' }}
       </button>
     </div>
 
     <div class="rd-body">
-      <iframe v-if="devUrl" :key="reloadKey" :src="devUrl" class="rd-iframe" />
+      <iframe v-if="current" :key="reloadKey" :src="current" class="rd-iframe" />
       <div v-else-if="loading" class="rd-empty">正在启动开发服务器（首次需编译，可能要等一会）…</div>
       <div v-else-if="errorMsg" class="rd-err-box">{{ errorMsg }}</div>
-      <div v-else class="rd-empty">点「启动预览」运行此工作区，或在对话里说「跑一下 / 调一下」</div>
+      <div v-else class="rd-empty">点「启动预览」运行此工作区，或在地址栏输入地址,或在对话里说「跑一下 / 调一下」</div>
 
       <div v-if="booting" class="rd-degrade">正在启动，编译完成后会自动刷新；若仍空白，点「刷新」重试</div>
       <div v-if="errors.length" class="rd-errs">
@@ -35,7 +39,7 @@
 </template>
 
 <script setup lang="ts">
-import { computed, ref, onMounted, onUnmounted } from 'vue'
+import { computed, ref, watch, onMounted, onUnmounted } from 'vue'
 import { useCodingStore } from '@/stores/coding'
 import { codingApi } from '@/api/coding'
 
@@ -54,6 +58,30 @@ const capturedErrors = ref<string[]>([])
 
 const preview = computed(() => codingStore.activePreview)
 const devUrl = computed(() => preview.value?.dev_url || '')
+
+// 浏览器地址栏:current=实际加载到 iframe 的地址,可手动输入,也可一键带入调试 serve 地址。
+const address = ref('')
+const current = ref('')
+function normalizeUrl(u: string): string {
+  const s = u.trim()
+  if (!s) return ''
+  return /^https?:\/\//i.test(s) ? s : 'http://' + s
+}
+function go() {
+  const u = normalizeUrl(address.value)
+  if (!u) return
+  address.value = u
+  current.value = u
+  reloadKey.value++
+}
+function useDevUrl() {
+  if (!devUrl.value) return
+  address.value = devUrl.value
+  current.value = devUrl.value
+  reloadKey.value++
+}
+// 调试 serve 地址变化(启动预览 / 对话带入)→ 自动加载到地址栏。
+watch(devUrl, (u) => { if (u) { address.value = u; current.value = u; reloadKey.value++ } })
 // 合并两路：SSE(CDP，dev 模式) + postMessage(harness，包内可用)。
 const errors = computed<string[]>(() => [...(preview.value?.errors || []), ...capturedErrors.value])
 const captureAvailable = computed(() => preview.value?.capture_available ?? false)
@@ -136,6 +164,8 @@ async function stop() {
   codingStore.activePreview = null
   errorMsg.value = ''
   capturedErrors.value = []
+  current.value = ''
+  address.value = ''
 }
 
 onMounted(() => { window.addEventListener('message', onPreviewMessage) })
@@ -151,6 +181,19 @@ onUnmounted(() => {
 .rd-title { font-size: 13px; font-weight: 600; color: var(--text-1, #222); }
 .rd-url { font-size: 12px; color: var(--text-3, #888); font-family: ui-monospace, monospace; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 50%; }
 .rd-spacer { flex: 1; }
+.rd-address {
+  flex: 1;
+  min-width: 0;
+  background: var(--surface, var(--t-bg-input, #fff));
+  border: 1px solid var(--line, #e5e7eb);
+  border-radius: 8px;
+  color: var(--text-1, #222);
+  font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, monospace;
+  font-size: 12px;
+  padding: 5px 10px;
+  outline: none;
+}
+.rd-address:focus { border-color: var(--brand, #2f6bff); }
 .rd-btn { font-size: 13px; padding: 4px 12px; border: 1px solid var(--line, #e5e7eb); border-radius: 6px; background: var(--surface, #fff); cursor: pointer; }
 .rd-btn:hover:not(:disabled) { border-color: var(--brand, #2f6bff); color: var(--brand, #2f6bff); }
 .rd-btn:disabled { opacity: 0.5; cursor: not-allowed; }
