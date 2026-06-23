@@ -248,7 +248,7 @@
           </AgentConversation>
 
           <!-- SPEC 确认门已去按钮(对齐 Builder 对话式):出 SPEC 后对话里出可折叠 SPEC 卡 + 「回复开始」引导,见 agentMessages -->
-          <!-- 右侧产物面板已删:SPEC 进对话(折叠卡);部署/发布入口收进下方输入区上方的 coding-deploy-bar -->
+          <!-- 右侧产物面板已删:SPEC 进对话(折叠卡)。部署/发布按钮按用户要求也去掉(InstallModal 仍在但无入口=死 UI,待决定彻底删/挪) -->
 
           <!-- Chat 底部输入框: 非嵌入模式永远可见(含全新会话,修「新建空白没法输入」);流式中也能输入排队;红色按钮停止 -->
           <div v-if="showCodingComposer" class="chat-input-bar">
@@ -265,11 +265,6 @@
               <span class="cqb-icon"><AppIcon name="clock" :size="13" /></span>
               <span class="cqb-text">{{ pendingQueue.length }} 条消息排队中 · 当前回复结束后自动发送</span>
               <button class="cqb-clear" title="清空队列" @click="pendingQueue = []"><AppIcon name="x" :size="14" /></button>
-            </div>
-            <!-- 部署/发布入口(原右侧产物面板已删,收进输入区上方):codegen 完成且有产物时出现 -->
-            <div v-if="codingArtifactsHasAny && !isStreaming" class="coding-deploy-bar">
-              <span class="cdb-text">{{ isBoundDeploy ? '代码已生成 · 装回应用让组件生效' : '代码已生成 · 发布到资产库可跨应用复用' }}</span>
-              <button class="cdb-btn" @click="openInstallModal">{{ isBoundDeploy ? '装回应用' : '发布到资产库' }}</button>
             </div>
             <UnifiedChatComposer
               v-model="userInput"
@@ -467,7 +462,7 @@
         </template>
       </aside>
 
-      <!-- 右侧产物面板(开发文档/产物清单/接入说明)已删:SPEC → 对话折叠卡;部署 → 输入区上方 coding-deploy-bar;产物清单与代码面板「本轮改动」重复故去掉;接入说明为静态教程去掉。 -->
+      <!-- 右侧产物面板(开发文档/产物清单/接入说明)已删:SPEC → 对话折叠卡;产物清单与代码面板「本轮改动」重复故去掉;接入说明为静态教程去掉;部署/发布按钮按用户要求去掉。 -->
     </div>
     <InstallModal
       :visible="installModalVisible"

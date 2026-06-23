@@ -52,9 +52,8 @@ describe('CodingPage 右侧产物面板已删除', () => {
     expect(src).toContain('cap-spec-doc')  // SPEC 卡 body 仍套 cap-spec-doc 观感
   })
 
-  it('部署/发布入口收进输入区上方 deploy-bar(原唯一入口在面板内)', () => {
-    expect(src).toContain('coding-deploy-bar')
-    expect(src).toContain('openInstallModal')
+  it('部署栏(deploy-bar)已按用户要求去掉', () => {
+    expect(src).not.toContain('coding-deploy-bar')
   })
 })
 

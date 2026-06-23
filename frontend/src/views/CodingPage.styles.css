@@ -2513,22 +2513,6 @@ html:not([data-theme="dark"]) .chat-input-bar :deep(.ucc-input::placeholder) {
 .cap-spec-doc :deep(hr) { border: none; border-top: 1px solid var(--t-border-subtle); margin: 12px 0; }
 .cap-spec-doc :deep(strong) { font-weight: 650; }
 
-/* 部署/发布栏(原右侧产物面板的部署入口,面板删除后收进输入区上方)*/
-.coding-deploy-bar {
-  flex-shrink: 0;
-  display: flex; align-items: center; justify-content: space-between; gap: 12px;
-  margin-bottom: 8px; padding: 8px 14px; border-radius: 10px;
-  background: color-mix(in srgb, var(--t-brand) 8%, var(--t-bg-panel));
-  border: 1px solid color-mix(in srgb, var(--t-brand) 25%, transparent);
-}
-.cdb-text { font-size: 12.5px; color: var(--t-text-secondary); min-width: 0; }
-.cdb-btn {
-  flex-shrink: 0; height: 30px; padding: 0 16px; border: none; border-radius: 8px;
-  background: var(--t-brand); color: #fff; font-size: 12.5px; font-weight: 600;
-  cursor: pointer; transition: filter 0.15s ease;
-}
-.cdb-btn:hover { filter: brightness(0.92); }
-
 .coding-token-usage { margin-left: 10px; font-size: 12px; color: var(--text-3, #888); white-space: nowrap; }
 .coding-token-usage.lvl-warn { color: #d48806; }
 .coding-token-usage.lvl-danger { color: #cf1322; }
