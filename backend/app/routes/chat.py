@@ -792,6 +792,9 @@ async def send_message(
                         history=history,
                         db=db,
                         tenant_id=ctx.tenant_id,
+                        user_id=ctx.user.id,
+                        conversation_id=conversation.id,
+                        app_id=data.application_id,
                     ):
                         if ev.kind == "assistant_delta":
                             last_assistant_text += ev.text or ""

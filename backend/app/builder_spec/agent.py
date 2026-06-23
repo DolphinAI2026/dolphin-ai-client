@@ -6,15 +6,17 @@ filesystem/workspace concerns; tool dispatch is pure SPEC mutation.
 """
 
 from __future__ import annotations
+import asyncio
 import json
 import logging
 import httpx
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, AsyncIterator, Optional
 
 from app.builder_spec.schema import Spec, Phase
 from app.builder_spec.tools import TOOL_DEFINITIONS, dispatch_tool, ToolError
 from app.llm_reasoning import ReasoningSplitter
+from app.observability import recorder
 
 if TYPE_CHECKING:  # avoid hard dep at import time / in tests
     from sqlalchemy.ext.asyncio import AsyncSession
@@ -316,6 +318,7 @@ class _LlmTurnResult:
     full_content: str
     assistant_msg: dict
     tool_calls: list[dict]
+    usage: dict = field(default_factory=dict)
 
 
 async def _stream_llm_turn(
@@ -334,9 +337,12 @@ async def _stream_llm_turn(
         "max_tokens": 4096,
         "temperature": 0.2,
         "stream": True,
+        # 让网关在 [DONE] 前回带 usage chunk（OpenAI 兼容），可观测才采得到 token
+        "stream_options": {"include_usage": True},
     }
     full_content = ""
     tool_calls_map: dict = {}
+    usage_data: dict = {}
     # MiniMax 等把 reasoning 内联进 content 用 <think>...</think> → 增量剥离, content 干净。
     reasoning_splitter = ReasoningSplitter()
 
@@ -351,6 +357,9 @@ async def _stream_llm_turn(
             chunk = json.loads(data_str)
         except json.JSONDecodeError:
             continue
+        # usage chunk：choices 为空、带 usage。必须在 `if not choices` 短路之前抠。
+        if chunk.get("usage"):
+            usage_data = chunk["usage"]
         choices = chunk.get("choices") or []
         if not choices:
             continue
@@ -402,7 +411,7 @@ async def _stream_llm_turn(
         })
     if assembled:
         assistant_msg["tool_calls"] = assembled
-    yield _LlmTurnResult(full_content, assistant_msg, assembled)
+    yield _LlmTurnResult(full_content, assistant_msg, assembled, usage_data)
 
 
 def _dispatch_spec_tool(
@@ -450,6 +459,9 @@ class SpecAgent:
         *,
         db: Optional["AsyncSession"] = None,
         tenant_id: Optional[int] = None,
+        user_id: Optional[int] = None,
+        conversation_id: Optional[int] = None,
+        app_id: Optional[int] = None,
     ) -> AsyncIterator[SpecAgentEvent]:
         """Drive one LLM turn-loop over the SPEC. Yields events; mutates spec in place.
 
@@ -457,6 +469,8 @@ class SpecAgent:
         db / tenant_id: when both supplied, prompt is resolved from agent_prompts
             DB rows (admin-editable); otherwise the module SPEC_*_PROMPT constants
             are used. Tests omit db/tenant — keeps backward compatibility.
+        tenant_id / user_id / conversation_id / app_id: identity for可观测埋点。
+            仅当 tenant_id 非空时才开 run（旁路 recorder，自吞异常；测试省略即不写库）。
         """
         history = history or []
         system_prompt = await build_prompt_async(spec, db=db, tenant_id=tenant_id)
@@ -466,52 +480,96 @@ class SpecAgent:
             {"role": "user", "content": user_message},
         ]
 
+        # 可观测（旁路）：只有带 tenant_id 才开 run。
+        obs_run_id: Optional[str] = None
+        obs_seq = 0
+        obs_status = "success"
+        obs_error: Optional[str] = None
+        if tenant_id is not None:
+            obs_run_id = await recorder.start_run(
+                agent_type="builder",
+                tenant_id=tenant_id,
+                user_id=user_id,
+                session_id=conversation_id,
+                app_id=app_id,
+                model=self.model,
+            )
+
         full_content = ""
-        async with httpx.AsyncClient(
-            timeout=httpx.Timeout(connect=10, read=300, write=10, pool=10)
-        ) as client:
-            for turn in range(self.max_turns):
-                turn_result: _LlmTurnResult | None = None
-                async for item in _stream_llm_turn(
-                    client, self.base_url, self.api_key, self.model, messages, turn, spec
-                ):
-                    if isinstance(item, SpecAgentEvent):
-                        yield item
-                    else:
-                        turn_result = item
-                if turn_result is None:
-                    continue
+        try:
+            async with httpx.AsyncClient(
+                timeout=httpx.Timeout(connect=10, read=300, write=10, pool=10)
+            ) as client:
+                for turn in range(self.max_turns):
+                    turn_result: _LlmTurnResult | None = None
+                    async for item in _stream_llm_turn(
+                        client, self.base_url, self.api_key, self.model, messages, turn, spec
+                    ):
+                        if isinstance(item, SpecAgentEvent):
+                            yield item
+                        else:
+                            turn_result = item
+                    if turn_result is None:
+                        continue
 
-                full_content = turn_result.full_content
-                assembled = turn_result.tool_calls
-                messages.append(turn_result.assistant_msg)
+                    full_content = turn_result.full_content
+                    assembled = turn_result.tool_calls
+                    messages.append(turn_result.assistant_msg)
 
-                if not assembled:
-                    # No tool calls → agent done for this user turn
-                    yield SpecAgentEvent(kind="final", spec=spec, text=full_content)
-                    return
+                    if obs_run_id:
+                        obs_seq += 1
+                        await recorder.record_step(
+                            obs_run_id, step_type="llm", seq=obs_seq,
+                            prompt_tokens=turn_result.usage.get("prompt_tokens"),
+                            completion_tokens=turn_result.usage.get("completion_tokens"),
+                        )
 
-                # Execute tools sequentially against spec; feed results back.
-                enforce_first = False
-                for tc in assembled:
-                    name = tc["function"]["name"]
-                    try:
-                        args = json.loads(tc["function"]["arguments"] or "{}")
-                    except json.JSONDecodeError:
-                        args = {}
-                    spec, result_str, events = _dispatch_spec_tool(
-                        spec, name, args, enforce_first_turn=enforce_first
-                    )
-                    for event in events:
-                        yield event
-                    messages.append({
-                        "role": "tool",
-                        "tool_call_id": tc["id"],
-                        "content": result_str,
-                    })
+                    if not assembled:
+                        # No tool calls → agent done for this user turn
+                        yield SpecAgentEvent(kind="final", spec=spec, text=full_content)
+                        return
 
-            # Hit max_turns
-            yield SpecAgentEvent(kind="final", spec=spec, text=full_content)
+                    # Execute tools sequentially against spec; feed results back.
+                    enforce_first = False
+                    for tc in assembled:
+                        name = tc["function"]["name"]
+                        try:
+                            args = json.loads(tc["function"]["arguments"] or "{}")
+                        except json.JSONDecodeError:
+                            args = {}
+                        spec, result_str, events = _dispatch_spec_tool(
+                            spec, name, args, enforce_first_turn=enforce_first
+                        )
+                        for event in events:
+                            yield event
+                        if obs_run_id:
+                            obs_seq += 1
+                            _failed = result_str.startswith("Error")
+                            await recorder.record_step(
+                                obs_run_id, step_type="tool", seq=obs_seq,
+                                tool_name=name,
+                                status="error" if _failed else "success",
+                                result_text=result_str[:2000] if _failed else None,
+                            )
+                        messages.append({
+                            "role": "tool",
+                            "tool_call_id": tc["id"],
+                            "content": result_str,
+                        })
+
+                # Hit max_turns
+                yield SpecAgentEvent(kind="final", spec=spec, text=full_content)
+        except Exception as e:
+            obs_status = "error"
+            obs_error = str(e)
+            raise
+        finally:
+            if obs_run_id:
+                # shield：SSE 客户端断开会抛 CancelledError，不 shield 则 end_run 可能
+                # 半途取消，run 卡 running（与 ai_chat.run_agent 同理）。
+                await asyncio.shield(
+                    recorder.end_run(obs_run_id, status=obs_status, error=obs_error)
+                )
 
     async def bootstrap_from_doc(
         self,

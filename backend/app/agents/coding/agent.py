@@ -17,7 +17,8 @@ from typing import Any
 from app.agents.base import BaseAgent
 from app.agents.coding.prompts import build_user_prompt
 from app.agents.coding.tools import build_coding_tools
-from app.agents.types import AgentContext, AgentType, LLMResponse, Tool, ToolCall, ToolResult, TraceEventType
+from app.agents.types import AgentContext, AgentResult, AgentStatus, AgentType, LLMResponse, Tool, ToolCall, ToolResult, TraceEventType
+from app.observability import recorder
 from app.coding.prompts import AGENT_SYSTEM_PROMPT
 
 logger = logging.getLogger(__name__)
@@ -169,6 +170,11 @@ class CodingAgent(BaseAgent[dict]):
         # 缓存 project_type（从 workspace 读一次，供 _describe_tool_plan 用）
         self._cached_project_type: str | None = None
 
+        # 可观测（旁路）：run 生命周期由 before_run/after_run 管，
+        # llm/tool step 由 on_llm_response/after_tool_call 记。None=未开 run（hook no-op）。
+        self._obs_run_id: str | None = None
+        self._obs_seq: int = 0
+
     # ══════════════════════════════════════════════════════════════
     # BaseAgent 必须实现的抽象方法
     # ══════════════════════════════════════════════════════════════
@@ -260,11 +266,56 @@ class CodingAgent(BaseAgent[dict]):
     # Hook 覆盖（Stage 2.x 会逐步填充）
     # ══════════════════════════════════════════════════════════════
 
+    def _obs_app_id(self) -> str | None:
+        """best-effort 取绑定应用 id 给可观测 run（headroom；取不到也无妨）。"""
+        extra = self.ctx.extra or {}
+        if extra.get("bound_apaas_app_id"):
+            return str(extra["bound_apaas_app_id"])
+        app_context = (self.ctx.input or {}).get("app_context") or {}
+        return app_context.get("apaas_app_id") or None
+
+    async def before_run(self) -> None:
+        """run 开始：开一条可观测 run（旁路，recorder 自吞异常，绝不反噬主流程）。"""
+        await super().before_run()
+        self._obs_run_id = await recorder.start_run(
+            agent_type="coding",
+            tenant_id=self.ctx.tenant_id,
+            user_id=self.ctx.user_id,
+            session_id=self.ctx.conversation_id,  # coding 以 conversation 为会话维度
+            app_id=self._obs_app_id(),
+            model=self.ctx.model,
+        )
+        self._obs_seq = 0
+
+    async def after_run(self, result: AgentResult) -> None:
+        """run 结束：收尾可观测 run（状态映射到 success/error/aborted）。"""
+        if self._obs_run_id:
+            status = {
+                AgentStatus.COMPLETED: "success",
+                AgentStatus.FAILED: "error",
+                AgentStatus.ABORTED: "aborted",
+                AgentStatus.PAUSED: "success",  # 暂停=本轮正常结束、等用户答，不算失败
+            }.get(result.status, "success")
+            await recorder.end_run(
+                self._obs_run_id, status=status, error=result.error_message
+            )
+        await super().after_run(result)
+
     async def on_llm_response(self, response) -> None:
         """LLM 响应后的处理：
-        1. 如果没 tool_call → 标记 done
-        2. 如果有 tool_call 但 content 为空 → 自动生成简短 progress note 推送（避免用户看到空白轮）
+        1. 可观测：先记一条 llm step（token 来自流式 _call_llm 填的 usage）
+        2. 如果没 tool_call → 标记 done
+        3. 如果有 tool_call 但 content 为空 → 自动生成简短 progress note 推送（避免用户看到空白轮）
         """
+        # 埋点放在最前面，先于下面「无 tool_call 即 return」的早退，保证每轮都记到。
+        if self._obs_run_id:
+            self._obs_seq += 1
+            await recorder.record_step(
+                self._obs_run_id, step_type="llm", seq=self._obs_seq,
+                prompt_tokens=response.tokens_input or None,
+                completion_tokens=response.tokens_output or None,
+            )
+
         if not response.tool_calls:
             self._llm_said_done = True
             self._final_result["final_text"] = response.content
@@ -417,18 +468,16 @@ class CodingAgent(BaseAgent[dict]):
             "is_error": not result.success,
         })
 
-        # 错误埋点
-        if not result.success:
-            recorder = (self.ctx.extra or {}).get("error_recorder")
-            if recorder is not None:
-                error_type = "tool_not_found" if result.error == "tool_not_found" else "tool_fail"
-                await recorder.record(
-                    error_type=error_type,
-                    error_message=result.error or result.content or "",
-                    round_index=(self.ctx.extra or {}).get("round_index", 0),
-                    turn=self._turn,
-                    tool_name=tool_name,
-                )
+        # 可观测：记一条 tool step（成功/失败都记；失败带错误文本）
+        if self._obs_run_id:
+            self._obs_seq += 1
+            await recorder.record_step(
+                self._obs_run_id, step_type="tool", seq=self._obs_seq,
+                tool_name=tool_name,
+                status="success" if result.success else "error",
+                result_text=None if result.success
+                else (result.error or result.content or "")[:2000],
+            )
 
         return result
 
