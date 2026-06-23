@@ -242,6 +242,11 @@ export const codingApi = {
     return request.get<any, { running: boolean; url?: string }>(`/coding/workspace/${wsId}/serve-status`)
   },
 
+  /** 上报预览 harness 采集到的运行时报错（postMessage 转发来），供 AI 按需读取 */
+  ingestRuntimeErrors(wsId: string, errors: any[]) {
+    return request.post<any, { stored: number }>(`/coding/workspace/${wsId}/runtime-errors`, { errors })
+  },
+
   /** 查询自开发页面绑定工作区是否在 npm run serve(预览面板 dev⇄UMD 切换) */
   customPageDevTarget(appId: number, menuId: string, authToken: string) {
     return request.get<any, { dev_running: boolean; port: number | null; ws_id: string | null }>(

@@ -98,6 +98,62 @@ _PREVIEW_INDEX_HTML = """<!DOCTYPE html>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>本地预览</title>
+  <script>
+  // 运行时报错采集：把页面里的 JS 报错 / Promise 拒绝 / console.error / 网络失败
+  // postMessage 回宿主（ruijing Builder 预览面板），宿主转交后端供 AI 按需读取。
+  // 桌面打包排除了 playwright（无法 CDP 抓取），这条纯前端采集是包内唯一的运行时信号来源。
+  (function () {
+    function send(type, payload) {
+      try {
+        parent.postMessage({ source: 'ruijing-preview', type: type, payload: payload }, '*');
+      } catch (e) { /* 跨域/无 parent 时静默 */ }
+    }
+    window.addEventListener('error', function (e) {
+      // 资源加载失败 e.message 为空，退回 target 信息
+      var msg = (e && e.message) || (e && e.target && (e.target.src || e.target.href)) || 'unknown error';
+      send('runtime-error', {
+        kind: 'js-error', message: String(msg),
+        source: e && e.filename, line: e && e.lineno, col: e && e.colno,
+        stack: e && e.error && e.error.stack ? String(e.error.stack).slice(0, 2000) : undefined,
+      });
+    }, true);
+    window.addEventListener('unhandledrejection', function (e) {
+      var r = e && e.reason;
+      send('runtime-error', {
+        kind: 'unhandledrejection',
+        message: r && r.message ? String(r.message) : String(r),
+        stack: r && r.stack ? String(r.stack).slice(0, 2000) : undefined,
+      });
+    });
+    var _err = console.error.bind(console);
+    console.error = function () {
+      try {
+        var parts = Array.prototype.map.call(arguments, function (a) {
+          if (a instanceof Error) return a.message + (a.stack ? '\\n' + a.stack : '');
+          if (typeof a === 'object') { try { return JSON.stringify(a); } catch (_) { return String(a); } }
+          return String(a);
+        });
+        send('runtime-error', { kind: 'console.error', message: parts.join(' ').slice(0, 2000) });
+      } catch (_) {}
+      return _err.apply(null, arguments);
+    };
+    if (window.fetch) {
+      var _fetch = window.fetch.bind(window);
+      window.fetch = function (input, init) {
+        var url = (typeof input === 'string') ? input : (input && input.url) || '';
+        return _fetch(input, init).then(function (resp) {
+          if (resp && resp.status >= 400) {
+            send('runtime-error', { kind: 'network', message: (init && init.method || 'GET') + ' ' + url + ' → ' + resp.status, status: resp.status, url: url });
+          }
+          return resp;
+        }).catch(function (err) {
+          send('runtime-error', { kind: 'network', message: (init && init.method || 'GET') + ' ' + url + ' 请求失败: ' + (err && err.message || err), url: url });
+          throw err;
+        });
+      };
+    }
+  })();
+  </script>
 </head>
 <body>
   <div id="app"></div>
@@ -2016,6 +2072,45 @@ class WorkspaceManager:
     _debug_processes: dict = {}   # {ws_id: {"process": Process}}
     _next_port: int = 8080
     _SERVE_LOG_RING_MAX: int = 2000   # 环形缓冲上限（行）
+
+    # 预览 harness 采集到的运行时报错（前端 postMessage → 后端 ingest 写入）。
+    # 类级共享(同 _serve_processes)：不同 WorkspaceManager 实例看到同一份。
+    _runtime_errors: dict = {}    # {ws_id: {"ring": [ {seq,ts,...} ], "seq": int}}
+    _RUNTIME_ERR_RING_MAX: int = 50
+
+    def record_runtime_errors(self, ws_id: str, errors) -> int:
+        """写入一批运行时报错，返回实际写入条数。非 dict 项忽略；环形缓冲封顶。"""
+        if not ws_id or not isinstance(errors, list):
+            return 0
+        bucket = self._runtime_errors.setdefault(ws_id, {"ring": [], "seq": 0})
+        stored = 0
+        for e in errors:
+            if not isinstance(e, dict):
+                continue
+            bucket["seq"] += 1
+            item = dict(e)
+            item["seq"] = bucket["seq"]
+            item["ts"] = datetime.utcnow().isoformat()
+            # message 防御性截断
+            if isinstance(item.get("message"), str):
+                item["message"] = item["message"][:4000]
+            bucket["ring"].append(item)
+            stored += 1
+        # 封顶：只留最近 N 条
+        if len(bucket["ring"]) > self._RUNTIME_ERR_RING_MAX:
+            bucket["ring"] = bucket["ring"][-self._RUNTIME_ERR_RING_MAX:]
+        return stored
+
+    def get_runtime_errors(self, ws_id: str, *, limit: int = 20) -> list:
+        """取某工作区最近的运行时报错（默认最多 20 条）。"""
+        bucket = self._runtime_errors.get(ws_id)
+        if not bucket:
+            return []
+        return list(bucket["ring"])[-limit:]
+
+    def clear_runtime_errors(self, ws_id: str) -> None:
+        """清空某工作区的运行时报错（重新跑预览前可调，避免旧报错干扰）。"""
+        self._runtime_errors.pop(ws_id, None)
 
     @staticmethod
     def _strip_serve_ansi(text: str) -> str:

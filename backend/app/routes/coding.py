@@ -1438,38 +1438,11 @@ async def upload_file(
 async def _resolve_preview_api_base(ws_id: str, ctx: AuthContext, db: AsyncSession) -> str | None:
     """ws → 绑定的已部署应用 → /apaas/backend/{tenant}/{app} 真数据前缀(未部署返 None)。
 
-    复用 get_apaas_access_url 的解析:ws meta.project_id → Application → query_app_detail
-    拿 tenantCode/appCode。任一缺失(未绑定/未部署)→ None,预览回退 mock。
+    解析逻辑已抽到 app.coding.preview_data（与 agent 驱动的预览共用，避免两份口径）。
+    HTTP 路由有登录用户，传 apaas_user 走 token 快路；无 token 时 resolver 自走 relogin 兜底。
     """
-    from app.coding.workspace import _preview_api_base_path
-    from app.coding.apaas_tools import call_apaas_with_relogin
-
-    app_id = WorkspaceManager().get_project_id(ws_id)
-    if not app_id:
-        return None
-    app = (await db.execute(
-        select(Application).where(
-            Application.id == app_id, Application.tenant_id == ctx.tenant_id,
-        )
-    )).scalar_one_or_none()
-    if not app or not app.platform_env_id or not app.apaas_app_id:
-        return None
-    # 租户来源统一为当前登录用户(对齐 get_apaas_access_url),无则退回 env 自愈
-    if ctx.user.apaas_token:
-        client = APaaSClient(
-            base_url=ctx.user.apaas_base_url,
-            tenant_id=ctx.user.apaas_tenant_id,
-            token=ctx.user.apaas_token,
-        )
-        detail = await client.query_app_detail(str(app.apaas_app_id))
-    else:
-        detail = await call_apaas_with_relogin(
-            app.platform_env_id, db,
-            lambda c: c.query_app_detail(str(app.apaas_app_id)),
-        )
-    if not detail:
-        return None
-    return _preview_api_base_path(str(detail.get("tenantCode") or ""), str(detail.get("appCode") or ""))
+    from app.coding.preview_data import resolve_preview_api_base
+    return await resolve_preview_api_base(ws_id, ctx.tenant_id, db, apaas_user=ctx.user)
 
 
 @router.post("/workspace/{ws_id}/serve")
@@ -1517,6 +1490,26 @@ async def get_serve_status(
     await _ensure_workspace_access(ws_id, ctx, db, minimum_project_role="member")
     ws_mgr = WorkspaceManager()
     return ws_mgr.is_serve_running(ws_id)
+
+
+class RuntimeErrorsIn(BaseModel):
+    errors: list[dict] = []
+
+
+@router.post("/workspace/{ws_id}/runtime-errors")
+async def ingest_runtime_errors(
+    ws_id: str,
+    payload: RuntimeErrorsIn,
+    ctx: Annotated[AuthContext, Depends(get_auth_context)],
+    db: Annotated[AsyncSession, Depends(get_db)],
+):
+    """预览 harness 采集到的运行时报错入库（前端 postMessage 转发来）。
+
+    模式 B：只存不自动改；agent 用 get_runtime_errors 工具按需读取。
+    """
+    await _ensure_workspace_access(ws_id, ctx, db, minimum_project_role="member")
+    stored = WorkspaceManager().record_runtime_errors(ws_id, payload.errors)
+    return {"stored": stored}
 
 
 @router.get("/workspace/{ws_id}/serve-logs")

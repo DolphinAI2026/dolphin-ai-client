@@ -35,7 +35,7 @@
 </template>
 
 <script setup lang="ts">
-import { computed, ref, onUnmounted } from 'vue'
+import { computed, ref, onMounted, onUnmounted } from 'vue'
 import { useCodingStore } from '@/stores/coding'
 import { codingApi } from '@/api/coding'
 
@@ -48,20 +48,49 @@ const reloadKey = ref(0)
 const booting = ref(false)
 let bootTimer: ReturnType<typeof setTimeout> | null = null
 
+// 预览 harness 经 postMessage 回传的运行时报错（桌面包内 CDP 不可用时的唯一信号源）。
+// 本地展示 + 上报后端，供 AI 用 get_runtime_errors 按需读取（模式 B：不自动改）。
+const capturedErrors = ref<string[]>([])
+
 const preview = computed(() => codingStore.activePreview)
 const devUrl = computed(() => preview.value?.dev_url || '')
-const errors = computed<string[]>(() => preview.value?.errors || [])
+// 合并两路：SSE(CDP，dev 模式) + postMessage(harness，包内可用)。
+const errors = computed<string[]>(() => [...(preview.value?.errors || []), ...capturedErrors.value])
 const captureAvailable = computed(() => preview.value?.capture_available ?? false)
 // 手动一键起的预览(source=panel)没尝试 CDP 抓取，不显示「抓取不可用」这条噪音；agent 驱动的才显示。
+// 但只要 harness 已经 postMessage 抓到了报错，说明采集其实是通的 → 不再显示「不可用」误导。
 const showCaptureDegrade = computed(
-  () => !!devUrl.value && !captureAvailable.value && preview.value?.source !== 'panel',
+  () =>
+    !!devUrl.value &&
+    !captureAvailable.value &&
+    preview.value?.source !== 'panel' &&
+    capturedErrors.value.length === 0,
 )
+
+function _fmtRuntimeError(p: any): string {
+  const kind = p?.kind || 'error'
+  let s = `[${kind}] ${p?.message ?? ''}`
+  if (p?.source) s += ` @ ${p.source}${p.line ? ':' + p.line : ''}`
+  return s
+}
+
+async function onPreviewMessage(e: MessageEvent) {
+  const d = e?.data
+  if (!d || d.source !== 'ruijing-preview' || d.type !== 'runtime-error') return
+  capturedErrors.value.push(_fmtRuntimeError(d.payload))
+  if (capturedErrors.value.length > 50) capturedErrors.value = capturedErrors.value.slice(-50)
+  // 上报后端供 agent 读取；失败静默（采集是尽力而为，不能影响预览）。
+  if (props.wsId) {
+    try { await codingApi.ingestRuntimeErrors(props.wsId, [d.payload]) } catch { /* noop */ }
+  }
+}
 
 // 一键启动预览：不依赖对话里的 agent 调 run_workspace_preview。
 async function start() {
   if (!props.wsId || loading.value) return
   loading.value = true
   errorMsg.value = ''
+  capturedErrors.value = []
   try {
     const r = await codingApi.startServe(props.wsId)
     if (r.status === 'error') {
@@ -96,6 +125,7 @@ async function start() {
 }
 
 function reload() {
+  capturedErrors.value = []   // 重新加载即清旧报错，避免上一轮的噪音
   reloadKey.value++
 }
 
@@ -105,9 +135,14 @@ async function stop() {
   if (props.wsId) await codingApi.stopServe(props.wsId).catch(() => {})
   codingStore.activePreview = null
   errorMsg.value = ''
+  capturedErrors.value = []
 }
 
-onUnmounted(() => { if (bootTimer) clearTimeout(bootTimer) })
+onMounted(() => { window.addEventListener('message', onPreviewMessage) })
+onUnmounted(() => {
+  window.removeEventListener('message', onPreviewMessage)
+  if (bootTimer) clearTimeout(bootTimer)
+})
 </script>
 
 <style scoped>

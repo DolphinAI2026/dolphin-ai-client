@@ -466,7 +466,25 @@ async def _run_workspace_preview(args, ctx) -> ToolResult:
 
     kind = (args or {}).get("kind", "web")
     ws_mgr = _get_workspace_manager()
-    serve = await ws_mgr.start_serve(ws_id, kind=kind)
+    # 绑定到已部署应用时注入真数据 env，让 agent 在对话里跑预览也接真平台数据
+    # （对齐手动 manage_serve 路由）；未绑定/未部署/解析失败 → None → 回退 mock，
+    # 绝不让真数据解析的异常把预览整体拖挂。
+    api_base = None
+    proxy_target = None
+    try:
+        from app.coding.preview_data import resolve_preview_api_base, self_proxy_target
+        api_base = await _with_db(
+            ctx, lambda db: resolve_preview_api_base(ws_id, ctx.tenant_id, db)
+        )
+        if api_base:
+            proxy_target = self_proxy_target()
+    except Exception:
+        logger.warning("agent 预览真数据解析失败，回退 mock", exc_info=True)
+        api_base = None
+        proxy_target = None
+    serve = await ws_mgr.start_serve(
+        ws_id, kind=kind, apaas_api_base=api_base, proxy_target=proxy_target,
+    )
     if serve.get("status") == "error":
         msg = serve.get("message", "启动失败")
         return ToolResult(
@@ -505,6 +523,33 @@ async def _run_workspace_preview(args, ctx) -> ToolResult:
         emit_event={"type": "coding.run_result", "data": {
             "source": "manual", "dev_url": dev_url, "status": status,
             "log_tail": log_tail, "errors": errors, "capture_available": capture_available}},
+    )
+
+
+async def _get_runtime_errors(args, ctx) -> ToolResult:
+    """读取当前工作区预览捕获到的运行时报错（模式 B：agent 按需读，不自动改）。"""
+    ws_id = getattr(ctx, "workspace_id", None)
+    if not ws_id:
+        return ToolResult(success=False, content="Error: 当前没有工作区，无法读取运行时报错", error="NO_WORKSPACE_ID")
+    ws_mgr = _get_workspace_manager()
+    errors = ws_mgr.get_runtime_errors(ws_id, limit=30)
+    if not errors:
+        return ToolResult(
+            success=True,
+            content="预览没有捕获到运行时报错（可能还没在预览里跑过页面，或页面运行正常）。",
+        )
+    lines = []
+    for e in errors:
+        kind = e.get("kind", "error")
+        msg = e.get("message", "")
+        loc = ""
+        if e.get("source"):
+            loc = f" @ {e['source']}" + (f":{e['line']}" if e.get("line") else "")
+        lines.append(f"[{kind}] {msg}{loc}")
+    return ToolResult(
+        success=True,
+        content=f"预览捕获到 {len(errors)} 条运行时报错：\n" + "\n".join(lines),
+        data={"errors": errors},
     )
 
 
@@ -803,6 +848,16 @@ def build_coding_tools(registry: ToolRegistry | None = None) -> list[Tool]:
         },
         execute=_run_workspace_preview,
         idempotent=False,
+    ))
+
+    tools.append(Tool(
+        name="get_runtime_errors",
+        description=(
+            "读取当前工作区预览运行时捕获到的报错(页面 JS 报错 / console.error / 网络请求失败)。"
+            "用户反馈页面有问题/接口报错/白屏/数据不对时，先调它看真实运行时报错，据此定位修改，不要盲猜。"
+        ),
+        parameters_schema={"type": "object", "properties": {}},
+        execute=_get_runtime_errors,
     ))
 
     tools.append(Tool(

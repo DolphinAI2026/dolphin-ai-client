@@ -21,7 +21,8 @@ class _WS:
             {"seq": 1, "stream": "stdout", "line": "App running at http://127.0.0.1:8081/"},
         ]}}
 
-    async def start_serve(self, ws_id, kind="web"):
+    async def start_serve(self, ws_id, kind="web", *, apaas_api_base=None, proxy_target=None):
+        self.last_kwargs = {"apaas_api_base": apaas_api_base, "proxy_target": proxy_target}
         return self._serve
 
 
