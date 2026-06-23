@@ -15,7 +15,29 @@
 
 4. **桌面打包**:`scripts/build-desktop.sh` 最小路径出 .app+.dmg。`EXIT=1` 仅因最后给 updater 产物签名缺私钥,`.dmg` 已在那之前完整产出,手动装无影响。⚠️改前端后桌面要重打(sidecar 内嵌 dist-desktop)。
 
-## ⏳ 当前正在做(没动代码,方向已和用户敲定 = B)
+## ✅ 2026-06-23 续:Code 切会话提速 + SPEC 折叠卡 + 删右侧产物面板(本会话,已 commit)
+
+5. **markdown 渲染记忆化**:`utils/markdown.renderMd` 加按内容缓存(Map,上限 3000);`AgentConversation`/`useStreamMessages` 委托它,删各自重复 marked 配置。切会话/重渲染不再对每条消息重复 `marked.parse`。新增 `markdown.spec.ts`。(注:此刀对切会话卡顿无关,但本身是无害正确优化。)
+6. **切会话卡顿根因修复(Claude-in-Chrome 真机埋点定位,实测 5.8s→1.1s)**:卡顿=网络 bound,**不是渲染/markdown**。①`changedPaths` watcher 加 `isStreaming` 守卫——切会话回放也会让 changedPaths 跳变,原来导致文件树/git 改动**各拉两遍**且并发争抢更慢;②文件树+git 改动从「切会话」关键路径移除,改成 `codePaneOpen` 打开代码面板时**按需懒加载**(`ensureCodePaneData`;切工作区/codegen 写文件后 `_codeDataLoadedFor` 失效重拉)。🔑**统一壳(BuilderFrame/RailSidebar)里 Code 切换走 CodingPage 的 `route.query` watcher → `resolveCodingRouteSession`,不是 `onSidebarCodingSelect`**(埋错过一次)。剩余 ~1.1s = `getWorkspace+getWorkspaceConversation`(消息载体,后端)。
+7. **右侧产物面板(开发文档/产物清单/接入说明)整块删除**:SPEC → 对话可折叠卡(`#custom` slot 加 `isSpec` 分支,复用思维链卡 + `cap-spec-doc` 观感,默认展开供审阅);「回复开始」CTA 跟随;部署/发布入口(原**唯一**入口在面板内 `openInstallModal`)收进输入区上方 `coding-deploy-bar`(gate `codingArtifactsHasAny && !isStreaming`,同原门);删面板 state(`showCodingArtifactPanel`/`codingArtifactTab`/`specViewMode`/`specMarkdown` 等)+ ~280 行 `cap-*` CSS(**保留 `cap-spec-doc`**);步骤胶囊「待确认」→「已生成开发 SPEC」。浏览器实测 SPEC 卡展开/收起 + 面板已无 + 无报错;`build:nocheck`+`vue-tsc`(触及文件)+ 105 vitest 全过。
+   - ⚠️ 部署栏(deploy-bar)没跑完整 codegen 实测(要几分钟),逻辑与原部署按钮同门,低风险。
+   - ⚠️ **发布上线会一起带上「2026-06-22 run-survival(builder send 解耦等)」那批未推 commit**——那批没过浏览器 e2e(见上「未做」),发同事前注意。
+
+## ✅ 已实现(2026-06-23,方案 B,已 commit)
+
+**Code 的「SPEC 确认门」对齐 Builder = 保守版 B 已落地**(`CodingPage.vue` + `useCodingPipeline.ts` + `CodingPage.styles.css`,新增 `CodingPage.specgate.spec.ts`):
+1. 删模板 SPEC 确认门 bar(原 250-266)+ `awaitingSpecConfirm` computed + `confirmSpec()` + 对应 CSS(`.coding-confirm-bar`/`.ccb-*`)。
+2. `agentMessages`(原 1146)message 分支改对话式 + **去重只留最新**:循环前预扫 `lastSpecIdx`(最后一条匹配 `SPEC_RE` 的 message),只在 `i === lastSpecIdx && !isStreaming.value && !codingArtifactsHasAny.value` 时给对话式 CTA「📋 开发 SPEC 已生成…确认无误回复「开始」…要调整直接补充需求」;早期版本/已进 codegen → 收成一行里程碑「📋 已生成开发 SPEC」。**CTA 守卫复制了原确认门的逻辑门(不流式+无 codegen 产物)** → 写代码时不会再误喊「回复开始」。
+3. live 流 brainstorm step label `开发 SPEC 待确认` → `已生成开发 SPEC`(CTA 交给对话消息)。
+4. 顺手删死函数 `openCodingArtifactTab`(确认条/完成卡两调用方都已删)+ 无用 `CircleCheck` import。
+5. 后端状态机**没动**:打字「开始/确认」→ `_classify_brainstorm_response` 判 confirm 触发 codegen;补充需求 → 判 revise 出新 SPEC。已用 4 个 Explore agent 核过后端意图分类确实认这些词。
+
+**验证**:`npm run build:nocheck` ✓;`vue-tsc` 触及文件零新错;`vitest` 新增 specgate 7 测全过 + coding 全套 72 测过;全套 252 过(唯一失败 `TenantLogsPage.spec.ts` 已 stash 复核=committed HEAD 即坏的预存失败,与本改无关)。
+**⏳ 未做**:①登录态真机 e2e(需求→SPEC→看到对话式无按钮→打「开始」→codegen 起;预览 harness 与用户在跑的 :5173 vite 抢端口,没去杀用户进程)②桌面重打 DMG(改了前端,sidecar 内嵌 dist-desktop)③git commit(用户没要求,留 working tree)。
+
+---
+
+## (历史)原"正在做"记录:方向敲定 = B
 
 **Code 的「SPEC 确认门」对齐 Builder = 用户选了 B:去掉确认门、做成对话式。**
 

@@ -125,13 +125,14 @@ export function useCodingPipeline(deps: PipelineDeps) {
       running: '正在生成开发 SPEC...',
       done: '',  // label 据后端 data.outcome 动态生成(clarify/spec/skip)
       onDone: (data) => {
-        // 澄清轮不该贴「开发 SPEC 待确认」—— 那轮没出 SPEC,是抛了澄清问题等回答。
+        // 澄清轮不该贴「开发 SPEC」里程碑 —— 那轮没出 SPEC,是抛了澄清问题等回答。
+        // 去按钮确认门后:出 SPEC 的步骤胶囊只报里程碑「已生成开发 SPEC」,「回复开始」CTA 由对话消息承担。
         const outcome = data?.outcome
         const label = outcome === 'clarify'
           ? '澄清问题待回答'
           : outcome === 'skip'
             ? '已分析需求'
-            : '开发 SPEC 待确认'
+            : '已生成开发 SPEC'
         completeStepMsg('brainstorm', label)
       },
     },

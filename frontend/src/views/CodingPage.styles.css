@@ -171,20 +171,6 @@
 .canvas-action-label {
   line-height: 1;
 }
-.cap-count-pill {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  min-width: 18px;
-  height: 18px;
-  padding: 0 6px;
-  border-radius: 9px;
-  background: var(--t-brand-primary, #1D4ED8);
-  color: #fff;
-  font-size: 11px;
-  font-weight: 600;
-  line-height: 1;
-}
 
 .toggle-bar-back-btn {
   display: flex;
@@ -2376,39 +2362,7 @@ html:not([data-theme="dark"]) .chat-input-bar :deep(.ucc-input::placeholder) {
 }
 .cqb-clear:hover { background: var(--t-bg-elevated); color: var(--t-text-primary); }
 
-/* SPEC 确认门 bar(出 SPEC 后等确认,brand 强调) */
-.coding-confirm-bar {
-  flex-shrink: 0;
-  width: calc(100% - 32px);
-  max-width: 880px;
-  margin: 0 auto 10px;
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 16px;
-  padding: 13px 16px;
-  border: 1px solid var(--t-brand);
-  border-radius: 14px;
-  background: color-mix(in srgb, var(--t-brand) 7%, var(--t-bg-panel));
-}
-.ccb-text { display: flex; flex-direction: column; gap: 1px; min-width: 0; }
-.ccb-text strong { font-size: 13.5px; font-weight: 650; color: var(--t-text-primary); }
-.ccb-text span { font-size: 12px; color: var(--t-text-muted); }
-.ccb-actions { display: flex; align-items: center; gap: 8px; flex-shrink: 0; }
-.ccb-btn {
-  display: inline-flex; align-items: center; gap: 6px;
-  height: 34px; padding: 0 16px; border: none; border-radius: 9px;
-  background: var(--t-brand); color: #fff; font-size: 13px; font-weight: 600;
-  cursor: pointer; flex-shrink: 0; transition: filter 0.15s ease;
-}
-.ccb-btn:hover { filter: brightness(0.92); }
-.ccb-btn-ghost {
-  display: inline-flex; align-items: center; gap: 6px;
-  height: 34px; padding: 0 13px; border: 1px solid var(--t-border-strong); border-radius: 9px;
-  background: transparent; color: var(--t-text-secondary); font-size: 13px; font-weight: 500;
-  cursor: pointer; flex-shrink: 0; transition: all 0.15s ease;
-}
-.ccb-btn-ghost:hover { border-color: var(--t-brand); color: var(--t-brand); }
+/* SPEC 确认门 bar 已删(去按钮改对话式,见 CodingPage.vue agentMessages) */
 .chat-input-wrapper {
   display: flex;
   align-items: flex-end;
@@ -2545,33 +2499,7 @@ html:not([data-theme="dark"]) .chat-input-bar :deep(.ucc-input::placeholder) {
   to { transform: rotate(360deg); }
 }
 
-/* ============ v2 redesign: 产物清单 + 接入说明侧板 ============ */
-.coding-artifact-panel {
-  width: 380px;
-  flex-shrink: 0;
-  background: var(--surface, #fff);
-  border-left: 1px solid var(--border, #e5e5ea);
-  display: flex;
-  flex-direction: column;
-  height: 100%;
-  overflow: hidden;
-}
-.cap-note {
-  padding: 10px 14px;
-  background: var(--ai-soft);
-  color: var(--ai-text);
-  font-size: 12px;
-  border-bottom: 1px solid var(--ai-soft-2);
-  line-height: 1.55;
-}
-
-/* ── 开发文档 tab(对标 Builder 设计文档:渲染/原文 + 文档观感)── */
-.cap-spec-bar { display: flex; align-items: center; justify-content: space-between; gap: 10px; margin-bottom: 12px; }
-.cap-spec-seg { display: inline-flex; border: 1px solid var(--t-border-subtle); border-radius: 8px; overflow: hidden; }
-.cap-spec-seg button { height: 28px; padding: 0 12px; border: none; background: transparent; color: var(--t-text-secondary); font-size: 12.5px; cursor: pointer; }
-.cap-spec-seg button.on { background: var(--t-brand); color: #fff; }
-.cap-spec-cta { height: 28px; padding: 0 14px; border: none; border-radius: 8px; background: var(--t-brand); color: #fff; font-size: 12.5px; font-weight: 600; cursor: pointer; }
-.cap-spec-raw { margin: 0; padding: 12px; background: var(--t-bg-soft, rgba(15, 23, 42, 0.05)); border-radius: 10px; font-size: 12px; line-height: 1.6; white-space: pre-wrap; word-break: break-word; color: var(--t-text-primary); font-family: var(--font-mono, ui-monospace, monospace); }
+/* 开发 SPEC 文档样式(右侧面板已删,SPEC 改对话折叠卡仍复用此 markdown 观感)*/
 .cap-spec-doc { font-size: 13px; line-height: 1.7; color: var(--t-text-primary); }
 .cap-spec-doc :deep(h1), .cap-spec-doc :deep(h2) { font-size: 15.5px; font-weight: 700; margin: 14px 0 8px; }
 .cap-spec-doc :deep(h3) { font-size: 13.5px; font-weight: 650; margin: 13px 0 6px; }
@@ -2585,223 +2513,21 @@ html:not([data-theme="dark"]) .chat-input-bar :deep(.ucc-input::placeholder) {
 .cap-spec-doc :deep(hr) { border: none; border-top: 1px solid var(--t-border-subtle); margin: 12px 0; }
 .cap-spec-doc :deep(strong) { font-weight: 650; }
 
-.cap-tabs {
-  display: flex;
-  border-bottom: 1px solid var(--border, #e5e5ea);
-  padding: 0 8px;
+/* 部署/发布栏(原右侧产物面板的部署入口,面板删除后收进输入区上方)*/
+.coding-deploy-bar {
   flex-shrink: 0;
+  display: flex; align-items: center; justify-content: space-between; gap: 12px;
+  margin-bottom: 8px; padding: 8px 14px; border-radius: 10px;
+  background: color-mix(in srgb, var(--t-brand) 8%, var(--t-bg-panel));
+  border: 1px solid color-mix(in srgb, var(--t-brand) 25%, transparent);
 }
-.cap-tab {
-  height: 36px;
-  padding: 0 12px;
-  background: transparent;
-  border: none;
-  border-bottom: 2px solid transparent;
-  color: var(--text-2, #4f4a6e);
-  font-size: 12.5px;
-  font-weight: 500;
-  cursor: pointer;
-  font-family: inherit;
-  transition: color 0.15s ease, border-color 0.15s ease;
+.cdb-text { font-size: 12.5px; color: var(--t-text-secondary); min-width: 0; }
+.cdb-btn {
+  flex-shrink: 0; height: 30px; padding: 0 16px; border: none; border-radius: 8px;
+  background: var(--t-brand); color: #fff; font-size: 12.5px; font-weight: 600;
+  cursor: pointer; transition: filter 0.15s ease;
 }
-.cap-tab:hover {
-  color: var(--text, #1a1525);
-}
-.cap-tab.active {
-  color: var(--brand-text);
-  border-bottom-color: var(--brand, #6366f1);
-}
-.cap-scroll {
-  flex: 1;
-  overflow-y: auto;
-  padding: 12px;
-}
-.cap-deploy-cta {
-  display: flex;
-  flex-direction: column;
-  gap: 6px;
-  padding: 12px;
-  margin-bottom: 10px;
-  border-radius: 12px;
-  background: var(--brand-soft);
-  border: 1px solid var(--brand-soft-2);
-}
-.cap-deploy-btn {
-  height: 38px;
-  border: none;
-  border-radius: 8px;
-  cursor: pointer;
-  background: var(--blue-950);
-  color: #fff;
-  font-size: 13.5px;
-  font-weight: 600;
-  font-family: var(--font-mono);
-  transition: transform 0.15s;
-}
-.cap-deploy-btn:hover { transform: translateY(-1px); }
-.cap-deploy-hint { font-size: 11px; color: var(--text-3); text-align: center; }
-.cap-section-head {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  font-size: 11.5px;
-  font-weight: 600;
-  color: var(--text-3, #837ea0);
-  letter-spacing: 0.04em;
-  text-transform: uppercase;
-  padding: 6px 4px;
-  margin-top: 8px;
-}
-.cap-section-head:first-child {
-  margin-top: 0;
-}
-.cap-badge {
-  display: inline-flex;
-  align-items: center;
-  gap: 4px;
-  height: 18px;
-  padding: 0 8px;
-  border-radius: 9px;
-  font-size: 10.5px;
-  font-weight: 600;
-  letter-spacing: 0.02em;
-  text-transform: none;
-}
-.cap-badge-emerald {
-  background: var(--emerald-bg, rgba(16, 163, 127, 0.10));
-  color: var(--emerald, #10A37F);
-}
-.cap-badge-amber {
-  background: rgba(245, 158, 11, 0.12);
-  color: #B45309;
-}
-.cap-badge-new {
-  background: var(--emerald-bg, rgba(16, 163, 127, 0.10));
-  color: var(--emerald, #10A37F);
-  font-size: 9.5px;
-  letter-spacing: 0.05em;
-  height: 16px;
-  padding: 0 6px;
-}
-.cap-file {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  padding: 8px 10px;
-  border-radius: 8px;
-  background: var(--surface-2, #FAF9FD);
-  margin-bottom: 6px;
-  border: 1px solid transparent;
-  transition: border-color 0.15s ease;
-}
-.cap-file:hover {
-  border-color: var(--border, #e5e5ea);
-}
-.cap-file.is-openable {
-  cursor: pointer;
-}
-.cap-file.is-openable:hover {
-  border-color: var(--fullcode, #A78BFA);
-}
-.cap-file-path {
-  flex: 1;
-  font-family: var(--font-mono, "SF Mono", "Menlo", monospace);
-  font-size: 11.5px;
-  color: var(--text, #1a1525);
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-.cap-file-size {
-  font-size: 10.5px;
-  color: var(--text-3, #837ea0);
-  font-family: var(--font-mono, monospace);
-  flex-shrink: 0;
-}
-.cap-file-diff {
-  font-size: 10.5px;
-  font-family: var(--font-mono, monospace);
-  flex-shrink: 0;
-}
-.cap-file-diff .add {
-  color: var(--emerald, #10A37F);
-}
-.cap-file-diff .del {
-  color: var(--rose, #DC2626);
-  margin-left: 4px;
-}
-.cap-spinner {
-  width: 10px;
-  height: 10px;
-  border: 2px solid var(--brand, #6366f1);
-  border-top-color: transparent;
-  border-radius: 50%;
-  animation: capSpin 0.8s linear infinite;
-  flex-shrink: 0;
-}
-@keyframes capSpin {
-  to { transform: rotate(360deg); }
-}
-.cap-empty {
-  text-align: center;
-  padding: 40px 16px;
-  color: var(--text-3, #837ea0);
-  font-size: 12px;
-}
-.cap-empty p {
-  margin: 0;
-}
-.cap-empty-hint {
-  margin-top: 8px !important;
-  font-size: 11px;
-  line-height: 1.55;
-}
-.cap-guide {
-  display: flex;
-  flex-direction: column;
-  gap: 12px;
-  padding: 4px;
-}
-.cap-guide-step {
-  background: var(--surface-2, #FAF9FD);
-  border: 1px solid var(--border, #e5e5ea);
-  border-radius: 10px;
-  padding: 12px 14px;
-  display: flex;
-  gap: 10px;
-}
-.cap-guide-num {
-  width: 24px;
-  height: 24px;
-  border-radius: 50%;
-  background: var(--brand-soft);
-  color: var(--brand-text);
-  font-size: 11px;
-  font-weight: 700;
-  display: grid;
-  place-items: center;
-  flex-shrink: 0;
-}
-.cap-guide-title {
-  font-size: 13px;
-  font-weight: 600;
-  color: var(--text, #1a1525);
-}
-.cap-guide-desc {
-  font-size: 11.5px;
-  color: var(--text-2, #4f4a6e);
-  margin-top: 4px;
-  line-height: 1.55;
-}
-.cap-guide-desc code {
-  font-family: var(--font-mono, monospace);
-  background: var(--code-bg, #F6F4FB);
-  color: var(--code-text, #4F4A6E);
-  padding: 1px 5px;
-  border-radius: 4px;
-  font-size: 11px;
-}
+.cdb-btn:hover { filter: brightness(0.92); }
 
 .coding-token-usage { margin-left: 10px; font-size: 12px; color: var(--text-3, #888); white-space: nowrap; }
 .coding-token-usage.lvl-warn { color: #d48806; }

@@ -63,16 +63,6 @@
               <el-icon :size="14"><Setting /></el-icon>
               <span class="canvas-action-label">设置</span>
             </button>
-            <button
-              class="canvas-action-btn"
-              :class="{ active: showCodingArtifactPanel }"
-              @click="toggleCodingArtifactPanel"
-              :title="showCodingArtifactPanel ? '隐藏产物面板' : '查看产物 / 接入说明'"
-            >
-              <el-icon :size="14"><Box /></el-icon>
-              <span class="canvas-action-label">产物</span>
-              <span v-if="codingArtifactsHasAny" class="cap-count-pill">{{ codingArtifacts.new.length + codingArtifacts.modified.length }}</span>
-            </button>
           </div>
         </div>
 
@@ -219,6 +209,16 @@
                     <div v-if="!streamCustom(message).sm.collapsed" class="mrc-body" v-html="renderMarkdown(streamCustom(message).sm.content)"></div>
                   </div>
                 </template>
+                <!-- 开发 SPEC 折叠卡（右侧面板删除后 SPEC 进对话;默认展开供审阅,可点击收起）-->
+                <template v-else-if="streamCustom(message).isSpec">
+                  <div class="msg-reasoning-card msg-spec-card">
+                    <button type="button" class="mrc-head" @click="streamCustom(message).sm.collapsed = !streamCustom(message).sm.collapsed">
+                      <span class="mrc-caret">{{ streamCustom(message).sm.collapsed ? '▶' : '▼' }}</span>
+                      <span>📋 开发 SPEC（点击展开 / 收起）</span>
+                    </button>
+                    <div v-if="!streamCustom(message).sm.collapsed" class="mrc-body cap-spec-doc" v-html="renderMarkdown(streamCustom(message).sm.content)"></div>
+                  </div>
+                </template>
                 <!-- run_result（对话驱动运行/调试结果卡）-->
                 <template v-else-if="streamCustom(message).sm.type === 'run_result' && streamCustom(message).sm.run">
                   <div class="coding-run-card">
@@ -247,25 +247,8 @@
             </template>
           </AgentConversation>
 
-          <!-- SPEC 确认门:出了开发 SPEC、待确认 → 一键「确认开发」+ 提示可直接补充调整(不一股脑直接开发) -->
-          <div v-if="awaitingSpecConfirm" class="coding-confirm-bar">
-            <div class="ccb-text">
-              <strong>开发 SPEC 已生成，待你确认</strong>
-              <span>完整 SPEC 在右侧「开发文档」查看；确认无误即开始写代码，要调整就直接在下方补充需求。</span>
-            </div>
-            <div class="ccb-actions">
-              <button class="ccb-btn-ghost" @click="openCodingArtifactTab('spec')">
-                <el-icon :size="15"><Document /></el-icon>
-                <span>查看开发文档</span>
-              </button>
-              <button class="ccb-btn" @click="confirmSpec">
-                <el-icon :size="16"><CircleCheck /></el-icon>
-                <span>确认，开始开发</span>
-              </button>
-            </div>
-          </div>
-
-          <!-- 完成态卡片已去掉；发布入口收进下方输入区 footer（codegen 完成且有产物时出现）-->
+          <!-- SPEC 确认门已去按钮(对齐 Builder 对话式):出 SPEC 后对话里出可折叠 SPEC 卡 + 「回复开始」引导,见 agentMessages -->
+          <!-- 右侧产物面板已删:SPEC 进对话(折叠卡);部署/发布入口收进下方输入区上方的 coding-deploy-bar -->
 
           <!-- Chat 底部输入框: 非嵌入模式永远可见(含全新会话,修「新建空白没法输入」);流式中也能输入排队;红色按钮停止 -->
           <div v-if="showCodingComposer" class="chat-input-bar">
@@ -282,6 +265,11 @@
               <span class="cqb-icon"><AppIcon name="clock" :size="13" /></span>
               <span class="cqb-text">{{ pendingQueue.length }} 条消息排队中 · 当前回复结束后自动发送</span>
               <button class="cqb-clear" title="清空队列" @click="pendingQueue = []"><AppIcon name="x" :size="14" /></button>
+            </div>
+            <!-- 部署/发布入口(原右侧产物面板已删,收进输入区上方):codegen 完成且有产物时出现 -->
+            <div v-if="codingArtifactsHasAny && !isStreaming" class="coding-deploy-bar">
+              <span class="cdb-text">{{ isBoundDeploy ? '代码已生成 · 装回应用让组件生效' : '代码已生成 · 发布到资产库可跨应用复用' }}</span>
+              <button class="cdb-btn" @click="openInstallModal">{{ isBoundDeploy ? '装回应用' : '发布到资产库' }}</button>
             </div>
             <UnifiedChatComposer
               v-model="userInput"
@@ -479,149 +467,7 @@
         </template>
       </aside>
 
-      <!-- v2 redesign: 右侧产物清单 + 接入说明面板
-           替代「不可能实现的实时预览」。低代码自开发组件不支持平台内预览，
-           只能通过编译打包 → 发布到组件市场 → 在表单设计器引用的流程上线。 -->
-      <aside
-        v-if="showCodingArtifactPanel"
-        class="coding-artifact-panel"
-      >
-        <div class="cap-note">
-          提示：低代码自开发组件不支持实时预览。生成产物会发布到组件市场，在表单设计器中引用。
-        </div>
-        <div class="cap-tabs">
-          <button
-            type="button"
-            class="cap-tab"
-            :class="{ active: codingArtifactTab === 'spec' }"
-            @click="codingArtifactTab = 'spec'"
-          >开发文档</button>
-          <button
-            type="button"
-            class="cap-tab"
-            :class="{ active: codingArtifactTab === 'files' }"
-            @click="codingArtifactTab = 'files'"
-          >产物清单</button>
-          <button
-            type="button"
-            class="cap-tab"
-            :class="{ active: codingArtifactTab === 'integrate' }"
-            @click="codingArtifactTab = 'integrate'"
-          >接入说明</button>
-        </div>
-
-        <!-- 开发文档 tab(对标 Builder 设计文档:把开发 SPEC 当一等文档,渲染/原文切换)-->
-        <div v-if="codingArtifactTab === 'spec'" class="cap-scroll">
-          <template v-if="specMarkdown">
-            <div class="cap-spec-bar">
-              <div class="cap-spec-seg">
-                <button type="button" :class="{ on: specViewMode === 'render' }" @click="specViewMode = 'render'">渲染</button>
-                <button type="button" :class="{ on: specViewMode === 'raw' }" @click="specViewMode = 'raw'">原文</button>
-              </div>
-              <button
-                v-if="isBoundDeploy && codingArtifactsHasAny"
-                type="button" class="cap-spec-cta" @click="openInstallModal"
-              >装回应用</button>
-            </div>
-            <div v-if="specViewMode === 'render'" class="cap-spec-doc" v-html="renderMarkdown(specMarkdown)"></div>
-            <pre v-else class="cap-spec-raw">{{ specMarkdown }}</pre>
-          </template>
-          <div v-else class="cap-empty">
-            <p>暂无开发文档。</p>
-            <p class="cap-empty-hint">在左侧描述需求,AI 会先产出「开发 SPEC」——这里就是它的文档视图(可渲染 / 看原文),对标 Builder 的设计文档。</p>
-          </div>
-        </div>
-
-        <!-- 产物清单 tab -->
-        <div v-else-if="codingArtifactTab === 'files'" class="cap-scroll">
-          <template v-if="codingArtifactsHasAny">
-            <div class="cap-deploy-cta">
-              <button class="cap-deploy-btn" @click="openInstallModal">
-                {{ isBoundDeploy ? '装回应用' : '发布到资产库' }}
-              </button>
-              <span class="cap-deploy-hint">{{ isBoundDeploy ? '关联到应用 + 重新发布让组件生效' : '上传到我的开发,跨应用复用' }}</span>
-            </div>
-            <template v-if="codingArtifacts.new.length > 0">
-              <div class="cap-section-head">
-                <span class="cap-badge cap-badge-emerald">新增 {{ codingArtifacts.new.length }}</span>
-              </div>
-              <div
-                v-for="(f, idx) in codingArtifacts.new"
-                :key="'cn-' + idx + '-' + f.path"
-                class="cap-file is-openable"
-                title="打开代码"
-                @click="openFileFromChat({ filePath: f.path })"
-              >
-                <span class="cap-file-path" :title="f.path">{{ f.path }}</span>
-                <span class="cap-file-size">{{ f.size }}</span>
-                <span class="cap-file-diff">
-                  <span class="add">+{{ f.diffAdd }}</span>
-                  <span v-if="f.diffDel > 0" class="del">-{{ f.diffDel }}</span>
-                </span>
-                <span v-if="f.writing" class="cap-spinner" aria-hidden="true" />
-                <span v-else class="cap-badge cap-badge-new">NEW</span>
-              </div>
-            </template>
-            <template v-if="codingArtifacts.modified.length > 0">
-              <div class="cap-section-head">
-                <span class="cap-badge cap-badge-amber">修改 {{ codingArtifacts.modified.length }}</span>
-              </div>
-              <div
-                v-for="(f, idx) in codingArtifacts.modified"
-                :key="'cm-' + idx + '-' + f.path"
-                class="cap-file is-openable"
-                title="打开代码"
-                @click="openFileFromChat({ filePath: f.path })"
-              >
-                <span class="cap-file-path" :title="f.path">{{ f.path }}</span>
-                <span class="cap-file-size">{{ f.size }}</span>
-                <span class="cap-file-diff">
-                  <span class="add">+{{ f.diffAdd }}</span>
-                  <span v-if="f.diffDel > 0" class="del">-{{ f.diffDel }}</span>
-                </span>
-                <span v-if="f.writing" class="cap-spinner" aria-hidden="true" />
-              </div>
-            </template>
-          </template>
-          <div v-else class="cap-empty">
-            <p>暂无产物。</p>
-            <p class="cap-empty-hint">在左侧对话区描述需求，AI 会自动写入文件，产物会出现在这里。</p>
-          </div>
-        </div>
-
-        <!-- 接入说明 tab -->
-        <div v-else class="cap-scroll">
-          <div class="cap-guide">
-            <div class="cap-guide-step">
-              <div class="cap-guide-num">1</div>
-              <div>
-                <div class="cap-guide-title">编译打包</div>
-                <div class="cap-guide-desc">
-                  运行 <code>npm run build:component</code> 生成 UMD bundle。
-                </div>
-              </div>
-            </div>
-            <div class="cap-guide-step">
-              <div class="cap-guide-num">2</div>
-              <div>
-                <div class="cap-guide-title">发布到组件市场</div>
-                <div class="cap-guide-desc">
-                  通过 CI 流水线发布到当前租户的组件市场，发布后绑定到自开发组件库。
-                </div>
-              </div>
-            </div>
-            <div class="cap-guide-step">
-              <div class="cap-guide-num">3</div>
-              <div>
-                <div class="cap-guide-title">在表单设计器中引用</div>
-                <div class="cap-guide-desc">
-                  在表单设计器的「自开发组件」面板中按 <code>code</code> 引用。
-                </div>
-              </div>
-            </div>
-          </div>
-        </div>
-      </aside>
+      <!-- 右侧产物面板(开发文档/产物清单/接入说明)已删:SPEC → 对话折叠卡;部署 → 输入区上方 coding-deploy-bar;产物清单与代码面板「本轮改动」重复故去掉;接入说明为静态教程去掉。 -->
     </div>
     <InstallModal
       :visible="installModalVisible"
@@ -642,7 +488,7 @@
 import { ref, computed, onMounted, onUnmounted, watch, nextTick } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
-import { ArrowLeft, ArrowDown, Download, Delete, Fold, Expand, ChatDotRound, Document, Setting, Box, CircleCheck } from '@element-plus/icons-vue'
+import { ArrowLeft, ArrowDown, Download, Delete, Fold, Expand, ChatDotRound, Document, Setting } from '@element-plus/icons-vue'
 import { useCodingStore } from '@/stores/coding'
 import AppIcon from '@/components/common/AppIcon.vue'
 import type { PlatformEnv } from '@/api/platformEnv'
@@ -928,17 +774,54 @@ watch(() => wsChanges.value.lastChangedFile, (p) => {
   const t = resolveWorkspacePath(p) || (looksLikeFilePath(p) ? p : null)
   if (t) selectedFile.value = t
 })
-// 仅当改动文件“集合增长”（写了新文件）时才重载树，避免多文件 codegen 期间每写一个文件就重复拉一次
-watch(() => changedPaths.value.size, () => { void loadWsFileTree(); scheduleGitChangesRefresh() })
-// 一轮跑完 → 改动清单收口刷新（含 run_command 等树/流事件看不到的写入）
-watch(isStreaming, (s) => { if (!s) { void loadWsGitChanges(); void loadWsFileTree() } })
-// 切换工作区 → 清空选中并重载树 + 改动
+// ── 懒加载代码面板数据(文件树 + git 改动)──
+// 它俩是「代码面板」才用到的重活(各 ~1.5s 网络)。切会话默认看对话、根本没挂载文件树/CodeViewer,
+// 用不上 → 从「切会话」关键路径上拿掉,改成只在用户打开代码面板(codePaneOpen)时按需拉。
+// codePaneOpen 声明提前到此,便于下方 watcher 引用(原声明在下方,已移除)。
+const codePaneOpen = ref(false)
+let _codeDataLoadedFor: string | null = null  // 已加载数据的工作区 id;切工作区/codegen 写文件后置 null 失效
+
+async function ensureCodePaneData() {
+  const id = codingStore.workspace?.id
+  if (!id || !codePaneOpen.value) return
+  if (_codeDataLoadedFor === id) return          // 当前工作区已加载 → 反复开关面板不重复拉
+  _codeDataLoadedFor = id
+  await Promise.all([loadWsFileTree(), loadWsGitChanges()])
+  // 树到位后补选 codegen 期间记下的「最后改动文件」(面板关着时 lastChangedFile watcher 因树未加载选不上)
+  const p = wsChanges.value.lastChangedFile
+  if (p && !selectedFile.value) {
+    const t = resolveWorkspacePath(p) || (looksLikeFilePath(p) ? p : null)
+    if (t) selectedFile.value = t
+  }
+}
+
+// 打开代码面板 → 按需拉一次(切会话路径不再碰它俩)
+watch(codePaneOpen, (open) => { if (open) void ensureCodePaneData() })
+
+// codegen 写文件 → 数据失效;面板开着才即时刷新树/改动(关着等下次开面板再拉)。
+// !isStreaming 直接 return:切会话回放也会让 changedPaths 跳变,那条由下方 workspace 切换逻辑处理。
+watch(() => changedPaths.value.size, () => {
+  if (!isStreaming.value) return
+  _codeDataLoadedFor = null
+  if (!codePaneOpen.value) return
+  void loadWsFileTree(); scheduleGitChangesRefresh()
+})
+
+// 一轮跑完 → 最终状态可能变(含 run_command 等树/流看不到的写入)→ 失效;面板开着才刷新
+watch(isStreaming, (s) => {
+  if (s) return
+  _codeDataLoadedFor = null
+  if (codePaneOpen.value) void ensureCodePaneData()
+})
+
+// 切换工作区 → 清空选中/树/改动(别串台)+ 失效缓存;面板开着才立即补,关着等开面板再拉
 watch(() => codingStore.workspace?.id, () => {
   selectedFile.value = null
   wsGitChanges.value = null
-  void loadWsFileTree()
-  void loadWsGitChanges()
-}, { immediate: true })
+  wsFileTree.value = []
+  _codeDataLoadedFor = null
+  if (codePaneOpen.value) void ensureCodePaneData()
+})
 
 // 工作区打开 → 代码为主三栏布局（文件树 | 大代码区 | 右聊天）；未进工作区时维持原引导/新建流程
 const codeFirst = computed(() => !!codingStore.workspace?.id && !embeddedAppId.value)
@@ -947,7 +830,7 @@ const wsPaneTab = ref<'files' | 'run'>('files')
 // 对话优先(参考 Claude Code/Codex 桌面): 对话是常驻主列, 永远能输入;
 // 点产物/文件/「代码」按钮 → 代码作为右侧并排侧栏推出(文件树+查看器+预览), 不遮挡对话;
 // 关掉(×)回全宽对话。不是覆盖式抽屉(会盖住对话没法聊), 也不是旧的「文件树为主+对话窄栏」。
-const codePaneOpen = ref(false)
+// (codePaneOpen 声明已提前到上方 watcher 区,便于懒加载 watcher 引用)
 // 右侧代码侧栏可拖宽(handle 在侧栏左边界); 对话(main-content)吃 flex:1 剩余空间作主列。
 const { panelWidth: codePaneWidth, onResizeStart: onCodePaneResizeStart } = usePanelResize({
   storageKey: 'coding:code-pane-width',
@@ -1129,6 +1012,13 @@ const codingConversations = ref<CodingConversation[]>([])
 const agentMessages = computed<AgentMessage[]>(() => {
   const list = streamMessages.value
   const out: AgentMessage[] = []
+  // 多版 SPEC(修订堆叠)只在最新那条给「回复开始」对话式引导,早期收成一行里程碑 —— 去重不堆叠。
+  const SPEC_RE = /开发\s*SPEC\s*确认|📋\s*开发\s*SPEC/
+  let lastSpecIdx = -1
+  for (let k = 0; k < list.length; k++) {
+    const m = list[k]!
+    if (m.type === 'message' && SPEC_RE.test(m.content || '')) lastSpecIdx = k
+  }
   for (let i = 0; i < list.length; i++) {
     const msg = list[i]!
     if (msg.type === 'status' && msg.hidden) continue
@@ -1144,9 +1034,17 @@ const agentMessages = computed<AgentMessage[]>(() => {
         })),
       })
     } else if (msg.type === 'message') {
-      // 开发 SPEC 不在对话里大段铺(和右侧「开发文档」重复)——收成一行里程碑提示,完整 SPEC 去产物看。
-      if (/开发\s*SPEC\s*确认|📋\s*开发\s*SPEC/.test(msg.content || '')) {
-        out.push({ id: 'sm' + i, kind: 'status', content: '📋 已生成开发 SPEC —— 在右侧「开发文档」查看完整内容' })
+      // 开发 SPEC:右侧面板已删 → SPEC 进对话,渲染成可折叠卡片(复用思维链卡样式,默认展开供审阅,见 #custom slot)。
+      // 最新一版才出卡;审阅态(不流式 + 无 codegen 产物)再补一条「回复开始」引导。早期修订版收成一行里程碑,不堆叠。
+      if (SPEC_RE.test(msg.content || '')) {
+        if (i === lastSpecIdx) {
+          out.push({ id: 'sm' + i, kind: 'custom', meta: { streamMsg: msg, isLast: i === list.length - 1, isSpec: true } })
+          if (!isStreaming.value && !codingArtifactsHasAny.value) {
+            out.push({ id: 'sm' + i + '-cta', kind: 'status', content: '👆 确认无误回复「开始」我就写代码;要调整直接补充需求即可' })
+          }
+        } else {
+          out.push({ id: 'sm' + i, kind: 'status', content: '📋 已生成开发 SPEC(早期版本)' })
+        }
       } else {
         out.push({ id: 'sm' + i, kind: 'assistant', content: msg.content })
       }
@@ -1182,9 +1080,9 @@ const agentMessages = computed<AgentMessage[]>(() => {
 })
 
 // 把 AgentMessage.meta 解出 streamMsg + isLast — 给 #custom slot 用（避开 TS 严格检查）
-function streamCustom(message: AgentMessage): { sm: any; isLast: boolean } {
-  const meta = (message.meta || {}) as { streamMsg?: any; isLast?: boolean }
-  return { sm: meta.streamMsg || {}, isLast: !!meta.isLast }
+function streamCustom(message: AgentMessage): { sm: any; isLast: boolean; isSpec: boolean } {
+  const meta = (message.meta || {}) as { streamMsg?: any; isLast?: boolean; isSpec?: boolean }
+  return { sm: meta.streamMsg || {}, isLast: !!meta.isLast, isSpec: !!meta.isSpec }
 }
 
 // 运行结果卡（type=run_result）的状态文案 + 「查看预览」聚焦到预览位
@@ -1247,33 +1145,10 @@ function toolPayloadFromStreamMsg(msg: any, id: string, isLast: boolean): AgentT
   }
 }
 
-// ── v2 redesign: 产物清单 / 接入说明 面板 ──
-// 把 streamMessages 里的 file_write / file_edit 整成 new/modified 两组，
-// 提供给右侧 CodingArtifactPanel 渲染。最后一条 file_write 在 isStreaming
-// 时视为「正在写入」展示 spinner。
-const codingArtifactTab = ref<'spec' | 'files' | 'integrate'>('spec')
-const specViewMode = ref<'render' | 'raw'>('render')
-// 开发文档(对标 Builder 设计文档):从对话流取最新「开发 SPEC」md。
-// live(content 事件落 streamMsg)+ 历史回放(带 BRAINSTORM marker)都覆盖,marker 去掉。
-const specMarkdown = computed<string>(() => {
-  const list = streamMessages.value as any[]
-  for (let i = list.length - 1; i >= 0; i--) {
-    const c = String(list[i]?.content || '')
-    if (/开发\s*SPEC\s*确认|📋\s*开发\s*SPEC/.test(c)) {
-      return c.replace(/^<!--\s*BRAINSTORM_PROPOSAL\s*-->\s*/, '').trim()
-    }
-  }
-  return ''
-})
-// SPEC 确认门:出了开发 SPEC、还没产物、不在流式 → 等用户确认(不一股脑直接开发)
-const awaitingSpecConfirm = computed(() =>
-  !isStreaming.value && streamMessages.value.length > 0 && !!specMarkdown.value && !codingArtifactsHasAny.value
-)
-function confirmSpec() {
-  if (isStreaming.value) return
-  userInput.value = '确认,按这份开发 SPEC 开始生成代码'
-  nextTick(() => { sendMessage() })
-}
+// 右侧产物面板已删:开发文档(SPEC)→ 对话折叠卡;产物清单/接入说明去掉。
+// 仍保留 codingArtifacts(下方 computed):喂输入区上方部署栏的「有产物」门 + agentMessages SPEC 卡审阅态判定。
+// SPEC 确认门改对话式(去按钮):出 SPEC 后 agentMessages 在最新 SPEC 那条出可折叠卡 + 「回复开始」引导;
+// 后端 _classify_brainstorm_response 认 confirm/revise/abort 意图。
 
 // 点澄清选项卡片(对齐 Builder):置灰已选 + 把选项作为回答发出
 function onAnswerAsk(option: string) {
@@ -1382,37 +1257,6 @@ const codingArtifactsHasAny = computed(() =>
   codingArtifacts.value.new.length > 0 || codingArtifacts.value.modified.length > 0
 )
 
-// 产物面板 3 态显示策略（image #24 设计反馈）：
-//   null   → 自动：有产物 / streaming 中默认展开，无产物折叠
-//   true   → 用户显式 open（强制展开）
-//   false  → 用户显式 close（强制折叠，即使有产物也尊重）
-// 解决之前 "codingArtifactsHasAny.value return true" 把用户 toggle 意志盖掉的问题。
-const codingArtifactPanelUserToggle = ref<boolean | null>(null)
-
-// 仅在「确有产物」时自动弹产物面板。去掉 isStreaming：之前一开始 streaming（含 READ 问答、
-// codegen 刚起步还没写文件）就弹空面板，体验差（用户反馈「还没产物不着急弹」）。
-// 产物面板改为「按需唤出」(对齐 Builder 的设计文档面板):不再随产物自动弹出挤窄对话区。
-// 完成后由会话流里的「完成态卡片」提示 + 给「查看产物 / 装回应用」入口,需要时再点开面板。
-const codingArtifactPanelAutoShow = computed(() => false)
-
-const showCodingArtifactPanel = computed(() => {
-  if (embeddedAppId.value) return false
-  if (codingArtifactPanelUserToggle.value !== null) {
-    return codingArtifactPanelUserToggle.value
-  }
-  return codingArtifactPanelAutoShow.value
-})
-
-const toggleCodingArtifactPanel = () => {
-  // 反转当前显示状态，把意志写入 userToggle（之后跟随用户，不再随 auto 变）
-  codingArtifactPanelUserToggle.value = !showCodingArtifactPanel.value
-}
-
-// 明确「打开」产物面板到指定 tab(不是切换)——给确认条/完成卡的「查看开发文档/产物」用
-function openCodingArtifactTab(tab: 'spec' | 'files' | 'integrate') {
-  codingArtifactTab.value = tab
-  codingArtifactPanelUserToggle.value = true
-}
 
 function codingTimeGroup(iso: string | null | undefined): string {
   if (!iso) return '更早'
