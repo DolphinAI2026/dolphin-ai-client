@@ -82,7 +82,7 @@ ChatPage 的「设计」配置区由当前的「顶部多 tab（设计/数据/�
 - 删除「数据/流程/权限」顶部 tab 及其面板体。
 - `getEditorUrl` 取 `url`（具体菜单编辑器）；其 `entry_url` 用于返回历史，内嵌场景非必需。
 - 助手刷新：把现有 `@refresh-iframe="refreshPlatformAndSidebar"` 接到新内嵌 iframe 的 `reload()`（并刷新菜单目录）。
-- 顶部 tab 收敛建议（评审确认）：配置（设计）/ SPEC / 自开发 / 体检 / 日志 /（数据源？）。原 `dev`、`health` 这两个从「designer sub-tab」提升为顶部入口（因为承载它们的 designer shell 被删）。
+- **顶部 tab 大幅收敛为两项：配置 + 自开发**。删掉 SPEC / 体检 / 日志 / 数据源 / 数据 / 流程 / 权限 全部 tab。`health`（体检）也删；`dev`（自开发资产）保留并作为「自开发」顶部入口。配置工作区最终只剩「菜单目录 + 内嵌原生编辑器 + AI 助手 + 自开发入口」。
 
 ### 4.3 AIChatPage 设计稿 HTML 预览（独立小修）
 `AIChatPage.vue` 的设计稿 HTML 产物预览（如 `MES系统V0界面原型.html`）当前 iframe sandbox = `allow-same-origin allow-popups`（无脚本）→ 多页导航点不动。改为 `allow-scripts allow-popups`（去掉 same-origin）→ opaque origin 安全、脚本可跑、多页能切。可直接改属性，或复用 `InAppBrowser` 的 untrusted-html 模式。**此项与第 3、4.2 节解耦，可单独提交/发布。**
@@ -101,16 +101,12 @@ ChatPage 的「设计」配置区由当前的「顶部多 tab（设计/数据/�
 - 面板：`FormDesignerPanel`、`ListDesignerPanel`、`ProcessDesignerPanel`、`DataSchemaEditor`、`FormPermPanel`、`BusinessEventPanel`、`DataModelDetailPanel`、`DictEditorPanel`、`RoleManagePanel`。
 - 深链按钮：`OpenLowcodeBackendButton`（编辑器已内嵌，深链多余）。前端 `editorUrl.ts` 的 `getEditorUrl` **保留**（内嵌要用它生成 URL）。
 - ChatPage 顶部「数据 / 流程 / 权限」tab 及其内容分支；designer sub-tab 中 form/list/process/event/data/perm。
+- **额外确认删（2026-06-24，大明哥拍板「删」）**：`SpecDesignPanel`（SPEC tab）、`LogsPanel`（日志 tab）、`AppHealthPanel`（体检）、`AppDatasourcePanel`（数据源 tab）。这四个不是 apaas 自渲染，是我们自己的功能，但用户决定一并删，配置工作区只留核心 + 自开发。连带 topTab `spec`/`log`/`datasource`、`PhaseBar`/`showSpecArtifactPanel` 等 SPEC 相关分支、以及 `AppAssistantPanel` 上 `topTab !== 'spec'` 之类的条件一起清理。
 - 连带的死状态/导入（随删随清，按实现期 grep 核）。
 
-### 保留（不是 apaas 配置自渲染 —— 我们自己做的）
-- `CustomPagePreviewPanel`（自开发 Vue 页面预览 / 跳 IDE）。
-- `AppDevWorkspacePanel`（自开发资产 / IDE）。
-- `AppHealthPanel`（应用体检）。
-- `SpecDesignPanel`（SPEC 设计层）。
-- `LogsPanel`（日志）。
-- `AppAssistantPanel`（AI 配置助手）、`ApaasMenuSidebar`（菜单目录）。
-- `AppDatasourcePanel`（数据源只读）—— 评审确认是否保留。
+### 保留
+- `ApaasMenuSidebar`（菜单目录）、内嵌 `InAppBrowser`（原生编辑器）、`AppAssistantPanel`（AI 配置助手）—— 配置工作区核心三件。
+- 自开发：`CustomPagePreviewPanel`（点 CUSTOM 菜单走我们自己的页面渲染 / 跳 IDE）+ `AppDevWorkspacePanel`（自开发资产 / IDE 入口）。
 
 ### 后端编辑器 URL（保留并可能补全）
 - `backend/app/apaas_editor_url.py` 的 `build_editor_path` / `getEditorUrl` 接口保留。
@@ -131,7 +127,7 @@ ChatPage 的「设计」配置区由当前的「顶部多 tab（设计/数据/�
 - 真机验收（用户）：2-3 个真实 app，逐菜单点开内嵌编辑器，确认渲染稳定、可编辑保存、AI 改完刷新生效、登一次免登。
 
 ## 9. 实现期细化（不阻塞设计）
-- 顶部 tab 最终列表与 `dev`/`health` 的安置。
-- `AppDatasourcePanel` 去留。
+- `dev`（自开发资产）入口在收敛后的安置（顶部「自开发」入口的具体形态）。
 - `RunDebugPanel` 是否复用 `InAppBrowser`（可选、最后做）。
-- 删除后 ChatPage 脚本里随之变成孤儿的状态/函数清理范围。
+- 删除 SPEC / 体检 / 日志 / 数据源 / 数据 / 流程 / 权限 后，ChatPage 脚本里随之变成孤儿的状态/函数/import 清理范围（含 `topTab` 枚举收敛、`PhaseBar`、`SECTION_TO_TOP_TAB` 等映射）。
+- 这些被删功能是否在 ChatPage 之外还有入口（如应用列表跳转），实现期 grep 核并一并处理。
