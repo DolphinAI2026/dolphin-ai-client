@@ -1,24 +1,13 @@
 import { describe, expect, it } from 'vitest'
 import src from './ConfigWorkspacePanel.vue?raw'
 
-describe('ConfigWorkspacePanel', () => {
-  it('reuses ApaasMenuSidebar + the four designer panels + deeplink (复用不重写)', () => {
+describe('ConfigWorkspacePanel 内嵌编辑器', () => {
+  it('用 ApaasMenuSidebar + InAppBrowser 内嵌, 不再引用自渲染面板', () => {
     expect(src).toContain('ApaasMenuSidebar')
-    expect(src).toContain('FormDesignerPanel')
-    expect(src).toContain('DataSchemaEditor')
-    expect(src).toContain('ProcessDesignerPanel')
-    expect(src).toContain('FormPermPanel')
-    expect(src).toContain('OpenLowcodeBackendButton')
-  })
-  it('derives appId from binding.appId', () => {
-    expect(src).toMatch(/binding[\s\S]*appId/)
-  })
-  it('feeds selected menu (id/form/name) to the designer panels', () => {
-    expect(src).toContain('@menu-selected')
-    expect(src).toContain(':menu-id')
-    expect(src).toContain(':form-id')
-  })
-  it('perm sub-tab is gated on form_id', () => {
-    expect(src).toMatch(/perm[\s\S]*formId|formId[\s\S]*FormPermPanel/)
+    expect(src).toContain('InAppBrowser')
+    expect(src).toContain('getEditorUrl')
+    for (const c of ['FormDesignerPanel','DataSchemaEditor','ProcessDesignerPanel','FormPermPanel','OpenLowcodeBackendButton']) {
+      expect(src).not.toContain(c)
+    }
   })
 })

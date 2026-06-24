@@ -8,107 +8,84 @@
       @menus-loaded="onMenusLoaded"
     />
     <div class="cwp-main">
-      <header class="cwp-bar">
-        <nav class="cwp-subtabs">
-          <button
-            v-for="t in subtabs"
-            :key="t.key"
-            :class="{ on: sub === t.key }"
-            :disabled="t.key === 'perm' && !formId"
-            @click="sub = t.key"
-          >{{ t.label }}</button>
-        </nav>
-        <div class="cwp-bar-right">
-          <button class="cwp-refresh" title="刷新" @click="refreshNonce++">刷新</button>
-          <OpenLowcodeBackendButton
-            v-if="appId"
-            :app-id="appId"
-            :menu-type="menuType || 'MODEL'"
-            :menu-id="menuId || ''"
-            :form-id="formId || null"
-          />
-        </div>
-      </header>
-      <div class="cwp-body">
-        <div v-if="!appId" class="cwp-empty">未绑定应用</div>
-        <div v-else-if="menuType === 'CUSTOM'" class="cwp-empty">自定义页菜单请到低代码后台编辑</div>
-        <FormDesignerPanel
-          v-else-if="sub === 'form'"
-          :key="`form-${menuId}`"
-          :app-id="appId"
-          :menu-id="menuId || undefined"
-          :menu-name="menuName"
-          :form-id="formId || undefined"
-          :refresh-nonce="refreshNonce"
-        />
-        <DataSchemaEditor
-          v-else-if="sub === 'data'"
-          :key="`data-${menuId}`"
-          :app-id="appId"
-          :menu-id="menuId || undefined"
-          :menu-name="menuName"
-          :form-id="formId || undefined"
-          :refresh-nonce="refreshNonce"
-        />
-        <ProcessDesignerPanel
-          v-else-if="sub === 'process'"
-          :key="`proc-${menuId}-${refreshNonce}`"
-          :app-id="appId"
-          :menu-id="menuId || undefined"
-          :menu-name="menuName"
-          :form-id="formId || undefined"
-          :hide-lowcode-btn="true"
-        />
-        <FormPermPanel
-          v-else-if="sub === 'perm' && formId"
-          :app-id="appId"
-          :form-id="formId"
-          :menu-name="menuName"
-        />
+      <div v-if="!appId" class="cwp-empty">未绑定应用</div>
+      <div v-else-if="!menuId" class="cwp-empty">
+        <p>选择左侧菜单开始配置</p>
+      </div>
+      <div v-else-if="menuType === 'CUSTOM'" class="cwp-empty">自定义页菜单请到低代码后台编辑</div>
+      <InAppBrowser
+        v-else-if="editorUrl"
+        mode="trusted-url"
+        :url="editorUrl"
+        :title="menuName || '配置'"
+      />
+      <div v-else class="cwp-empty">
+        <p>{{ editorMsg || '正在加载配置页…' }}</p>
       </div>
     </div>
   </div>
 </template>
 
 <script setup lang="ts">
-import { computed, ref } from 'vue'
+import { computed, ref, watch } from 'vue'
 import ApaasMenuSidebar from '@/components/ApaasMenuSidebar.vue'
-import FormDesignerPanel from '@/components/v3/FormDesignerPanel.vue'
-import DataSchemaEditor from '@/components/v3/DataSchemaEditor.vue'
-import ProcessDesignerPanel from '@/components/v3/ProcessDesignerPanel.vue'
-import FormPermPanel from '@/components/v3/FormPermPanel.vue'
-import OpenLowcodeBackendButton from '@/components/v3/OpenLowcodeBackendButton.vue'
+import InAppBrowser from '@/components/common/InAppBrowser.vue'
+import { getEditorUrl } from '@/api/editorUrl'
 import type { Binding } from '../binding'
 
 const props = defineProps<{ binding: Binding; sessionId?: number | null; artifact?: any }>()
 
 const appId = computed(() => (props.binding.kind === 'app' ? props.binding.appId : null))
 
-const subtabs = [
-  { key: 'form' as const, label: '表单' },
-  { key: 'data' as const, label: '数据' },
-  { key: 'process' as const, label: '流程' },
-  { key: 'perm' as const, label: '权限' },
-]
-
-const sub = ref<'form' | 'data' | 'process' | 'perm'>('form')
 const menuId = ref<string | null>(null)
 const menuName = ref('')
 const formId = ref('')
 const menuType = ref('')
-const refreshNonce = ref(0)
+
+const editorUrl = ref('')
+const editorMsg = ref('')
+
+async function loadEditorUrl() {
+  editorUrl.value = ''
+  editorMsg.value = ''
+  if (!appId.value || !menuId.value) return
+  if (menuType.value === 'CUSTOM') return
+  try {
+    const resp = await getEditorUrl(appId.value, {
+      menu_type: menuType.value || 'MODEL',
+      menu_id: menuId.value,
+      form_id: formId.value || '',
+    })
+    if (resp?.ok && resp.url) {
+      editorUrl.value = resp.url
+    } else {
+      editorMsg.value = resp?.message || '应用尚未部署到 aPaaS，无法打开配置页'
+    }
+  } catch (e: any) {
+    editorMsg.value = e?.message || '加载配置页失败'
+  }
+}
 
 function onMenuSelected(menu: any) {
   menuId.value = menu.menu_id
-  menuName.value = menu.menu_name
+  menuName.value = menu.menu_name || ''
   formId.value = String(menu.form_id || '')
-  menuType.value = menu.menu_type || ''
-  if (sub.value === 'perm' && !formId.value) sub.value = 'form'
+  menuType.value = (menu.menu_type || menu.menu_display || '').toUpperCase()
+  loadEditorUrl()
 }
 
 function onMenusLoaded(_menus: any[], firstFormMenu: any | null) {
   if (firstFormMenu && !menuId.value) onMenuSelected(firstFormMenu)
 }
+
+watch(appId, () => {
+  menuId.value = null
+  menuName.value = ''
+  formId.value = ''
+  menuType.value = ''
+  editorUrl.value = ''
+  editorMsg.value = ''
+})
 </script>
 
 <style scoped>
@@ -129,57 +106,6 @@ function onMenusLoaded(_menus: any[], firstFormMenu: any | null) {
   min-width: 0;
   display: flex;
   flex-direction: column;
-}
-.cwp-bar {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 8px;
-  padding: 6px 10px;
-  border-bottom: 1px solid var(--line);
-  flex-shrink: 0;
-}
-.cwp-subtabs {
-  display: flex;
-  gap: 2px;
-}
-.cwp-subtabs button {
-  padding: 4px 10px;
-  border: 0;
-  background: transparent;
-  cursor: pointer;
-  border-radius: 6px;
-  color: var(--text-3);
-}
-.cwp-subtabs button.on {
-  background: var(--brand-soft, rgba(99, 102, 241, 0.1));
-  color: var(--brand);
-}
-.cwp-subtabs button:disabled {
-  opacity: 0.4;
-  cursor: not-allowed;
-}
-.cwp-bar-right {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-}
-.cwp-refresh {
-  padding: 4px 8px;
-  border: 1px solid var(--line);
-  background: transparent;
-  cursor: pointer;
-  border-radius: 6px;
-  color: var(--text-2);
-  font-size: 12px;
-}
-.cwp-refresh:hover {
-  background: var(--surface-1);
-}
-.cwp-body {
-  flex: 1;
-  min-height: 0;
-  overflow: auto;
 }
 .cwp-empty {
   padding: 24px;
