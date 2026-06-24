@@ -372,14 +372,13 @@
         <pre v-else-if="panelTab === 'raw'" class="art-preview-body">{{ activeArtifactContent }}</pre>
         <!-- HTML 产物: 用沙箱 iframe 原样渲染(等同本地打开), 不要走 markdown 渲染器
              (markdown 会把缩进的 HTML 当代码块, 且不应用文件自带 <style>)。 -->
-        <!-- sandbox 不给 allow-scripts: AI 产出的 HTML 可能含恶意/越权脚本, 而 allow-same-origin
-             + allow-scripts 同时给 = 脚本能读父页 token/越权。设计文档多是静态 CSS 布局, 去掉
-             allow-scripts 仍能原样渲染样式/布局(等同本地打开), 又挡住脚本越权。 -->
+        <!-- sandbox 放开 allow-scripts: srcdoc 加载的 HTML 是 opaque origin(与父页异源), 脚本
+             无法读取父页 token/越权。多页导航脚本需 allow-scripts 才能切页。 -->
         <iframe
           v-else-if="isHtmlArtifact"
           class="art-preview-frame"
           :srcdoc="activeArtifactContent"
-          sandbox="allow-same-origin allow-popups"
+          sandbox="allow-scripts allow-popups"
           referrerpolicy="no-referrer"
           title="HTML 产物预览"
         ></iframe>
