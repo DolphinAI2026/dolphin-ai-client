@@ -374,8 +374,7 @@ watch(
       if (_autoRefreshed.has(key)) continue
       _autoRefreshed.add(key)
       // 单次 emit 即可:apaas 写后读有 ~数秒传播延迟(写工具已成功、原生编辑器即时生效,
-      // 但 detailPageConfigById 读接口要一会儿才追上)。这里只发一次刷新信号,
-      // 真正"跨越延迟窗口的静默多档重试"在 FormDesignerPanel(refreshNonce 驱动)里做。
+      // 但 detailPageConfigById 读接口要一会儿才追上)。这里只发一次刷新信号。
       setTimeout(() => emit('refresh-iframe'), 200)
     }
   },
