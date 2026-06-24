@@ -4,6 +4,7 @@
 桥接到 Harness EventBus，提供统一的 thread/turn/event 运行时。
 """
 import logging
+import os
 
 from app.database import AsyncSessionLocal
 from app.harness.contracts import ThreadContext, TurnContext
@@ -11,6 +12,14 @@ from app.harness.events import EventBus, ITEM_STARTED, ITEM_DELTA, ITEM_COMPLETE
 from app.harness.profiles import HarnessProfile, register_profile
 
 logger = logging.getLogger(__name__)
+
+
+def _coding_use_runagent() -> bool:
+    """Phase 1' cutover 开关:Code 改由 run_agent(统一引擎)驱动,而非 coding 流水线。
+
+    默认关(走旧 coding 流水线)。真机验证通过后翻默认,再退役旧流水线。
+    """
+    return os.getenv("CODING_USE_RUNAGENT", "").strip().lower() in ("1", "true", "yes", "on")
 
 # Pipeline 事件 → Harness item_kind 映射
 _PIPELINE_EVENT_TO_KIND = {
@@ -87,6 +96,11 @@ class CodingProfile(HarnessProfile):
             app_id=meta.get("app_id"),
             attachments=meta.get("attachments") or [],
         )
+
+        # Phase 1' cutover(flag 默认关):Code 改由统一引擎 run_agent 驱动,退役 coding 流水线。
+        # 旧路径(下方)原样保留,flag 翻默认 + 真机验证通过后再删。
+        if _coding_use_runagent():
+            return await self._run_turn_via_runagent(params, thread_ctx, turn_ctx, event_bus)
 
         result_text = ""
         done_data = {}
@@ -254,6 +268,174 @@ class CodingProfile(HarnessProfile):
             thread_ctx, turn_ctx, done_data, result_text,
         )
 
+        return result_text or done_data.get("workspace_id", "Pipeline completed")
+
+    # ─────────────── Phase 1' cutover: run_agent 驱动 ───────────────
+
+    @staticmethod
+    def _ws_bind_view_context(ws_id: str) -> str | None:
+        """硬绑既有工作区给 run_agent:所有文件/命令工具用这个 ws_id,禁止新建。
+
+        Code 模式的工作区已存在(面板正显示它),run_agent 必须写进同一个 ws_id,
+        否则它会 create_dev_workspace 另起一个 → 面板看不到改动。
+        """
+        if not ws_id:
+            return None
+        return (
+            f"你正在代码工作区 ws_id='{ws_id}' 内做二次开发。"
+            f"所有 read_workspace_file / write_workspace_files / edit_workspace_files / "
+            f"glob_workspace / grep_workspace / run_workspace_command 工具都必须使用 "
+            f"ws_id='{ws_id}';禁止调用 create_dev_workspace 新建工作区。"
+        )
+
+    @staticmethod
+    def _tool_preview(args) -> str:
+        if not isinstance(args, dict):
+            return ""
+        return ", ".join(f"{k}={str(v)[:60]}" for k, v in args.items())[:120]
+
+    async def _get_or_create_ai_session(self, db, params, thread_ctx, ws_id: str):
+        """取/建一个 AIChatSession 供 run_agent 跑(多轮历史累积在它名下)。
+
+        session id 存进 thread_ctx.metadata 复用,保证续轮有上下文。
+        注:Code 会话当前列在 codingApi.getConversations,这些 ai_chat session 暂不入该列表
+        (会话列表统一留作后续)。
+        """
+        from app.models.ai_chat import AIChatSession
+
+        sid = thread_ctx.metadata.get("ai_chat_session_id")
+        if sid:
+            existing = await db.get(AIChatSession, sid)
+            if existing is not None:
+                return existing
+
+        ws_dir = None
+        if ws_id:
+            try:
+                from app.coding.workspace import WorkspaceManager
+                ws_dir = str(WorkspaceManager().get_workspace_path(ws_id))
+            except Exception:
+                ws_dir = None
+        app_id_int = None
+        try:
+            if params.app_id:
+                app_id_int = int(params.app_id)
+        except (TypeError, ValueError):
+            app_id_int = None
+
+        session = AIChatSession(
+            tenant_id=params.tenant_id,
+            user_id=params.user_id,
+            title=(params.message or "代码会话").replace("\n", " ").strip()[:50] or "代码会话",
+            mode="code",
+            app_id=app_id_int,
+            workspace_dir=ws_dir,
+        )
+        db.add(session)
+        await db.commit()
+        await db.refresh(session)
+        thread_ctx.metadata["ai_chat_session_id"] = session.id
+        return session
+
+    async def _run_turn_via_runagent(
+        self,
+        params,
+        thread_ctx: ThreadContext,
+        turn_ctx: TurnContext,
+        event_bus: EventBus,
+    ) -> str:
+        """用统一引擎 run_agent 跑一轮 Code。
+
+        run_agent 事件 → map_runagent_event → coding 事件 → EventBus(沿用前端契约)。
+        既有 ws_id 经 view_context 硬绑;done 事件补回 workspace_id 让面板自动绑定。
+        """
+        import asyncio
+        import json
+
+        from app.ai_chat.agent import run_agent
+        from app.harness.profiles.runagent_event_map import map_runagent_event
+
+        ws_id = params.workspace_id or thread_ctx.metadata.get("workspace_id") or ""
+        result_text = ""
+        last_assistant = ""
+        done_data: dict = {}
+
+        async with AsyncSessionLocal() as db:
+            session = await self._get_or_create_ai_session(db, params, thread_ctx, ws_id)
+            view_context = self._ws_bind_view_context(ws_id)
+            abort_event = asyncio.Event()  # 停止经 harness task.cancel 生效(run-survival)
+
+            async for ra in run_agent(
+                db, session, params.message, abort_event, view_context=view_context,
+            ):
+                ev = ra.get("event", "")
+                try:
+                    data = json.loads(ra.get("data") or "{}")
+                except Exception:
+                    data = {}
+                if ev == "assistant_message":
+                    last_assistant = data.get("content", "") or last_assistant
+
+                for ce in map_runagent_event(ev, data):
+                    ct = ce.get("type")
+                    if ct == "agent_thinking_delta":
+                        await event_bus.publish(
+                            ITEM_DELTA, turn_ctx.turn_id,
+                            {"kind": "thinking", "text": ce.get("text", ""), "reasoning": False},
+                            item_kind="thinking", persist=False,
+                        )
+                    elif ct == "content":
+                        await event_bus.publish(
+                            ITEM_DELTA, turn_ctx.turn_id,
+                            {"kind": "content", "text": ce.get("content", ""), "delta": False},
+                            item_kind="content",
+                        )
+                    elif ct == "agent_tool":
+                        await event_bus.publish(
+                            ITEM_STARTED, turn_ctx.turn_id,
+                            {
+                                "kind": "tool_call",
+                                "tool": ce.get("action", ""),
+                                "tool_display": ce.get("action", ""),
+                                "preview": self._tool_preview(ce.get("args")),
+                                "args": ce.get("args") or {},
+                            },
+                            item_kind="tool_call",
+                        )
+                    elif ct == "agent_result":
+                        _res = str(ce.get("result") or "")
+                        await event_bus.publish(
+                            ITEM_COMPLETED, turn_ctx.turn_id,
+                            {
+                                "kind": "tool_result",
+                                "tool": ce.get("action", ""),
+                                "output": _res[:2000],
+                                "is_error": ce.get("status") == "error",
+                            },
+                            item_kind="tool_result",
+                        )
+                    elif ct == "clarify":
+                        # system passthrough → CodingSSEAdapter 原样带 type=clarify → 前端 clarify 卡
+                        await event_bus.publish(
+                            ITEM_DELTA, turn_ctx.turn_id,
+                            {"kind": "system", **ce}, item_kind="system", persist=False,
+                        )
+                    elif ct == "agent_done":
+                        result_text = ce.get("result", "") or result_text
+                    elif ct == "done":
+                        ce = {**ce, "workspace_id": ws_id, "conversation_id": params.conversation_id}
+                        done_data = ce
+                        if ws_id:
+                            thread_ctx.metadata["workspace_id"] = ws_id
+                        await event_bus.publish(
+                            ITEM_COMPLETED, turn_ctx.turn_id,
+                            {"kind": "system", **ce}, item_kind="system",
+                        )
+                    elif ct == "error":
+                        raise RuntimeError(ce.get("error", "run_agent error"))
+
+        result_text = result_text or last_assistant
+        await self._save_turn_artifacts(thread_ctx, turn_ctx, done_data, result_text)
         return result_text or done_data.get("workspace_id", "Pipeline completed")
 
     async def _save_turn_artifacts(
