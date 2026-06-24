@@ -588,20 +588,9 @@ async def resolve_effective_coding_model(
 
 
 # ── 对话历史工具 ──────────────────────────────────
-
-async def get_conversation_history(db: AsyncSession, conversation_id: int) -> list:
-    stmt = (
-        select(Message)
-        .where(Message.conversation_id == conversation_id)
-        .order_by(Message.created_at.asc())
-    )
-    result = await db.execute(stmt)
-    messages = result.scalars().all()
-    return [
-        {"role": m.role, "content": m.content}
-        for m in messages
-        if m.role in ("user", "assistant")
-    ]
+# get_conversation_history 已迁到中立模块 app.coding.conversation_history
+# (退役 coding 流水线时 read_query 仍要用)。此处 re-export 保持旧 import 不破。
+from app.coding.conversation_history import get_conversation_history  # noqa: E402,F401
 
 
 async def save_coding_message(db: AsyncSession, conversation_id: int, role: str, content: str):

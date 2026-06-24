@@ -94,7 +94,7 @@ async def test_run_read_query_injects_history(monkeypatch):
             {"role": "assistant", "content": "这是个 CRM"},
             {"role": "user", "content": "可以的"},  # 当前轮(调用前已 save)
         ]
-    monkeypatch.setattr("app.coding.pipeline.get_conversation_history", _fake_hist)
+    monkeypatch.setattr("app.coding.conversation_history.get_conversation_history", _fake_hist)
 
     params = PipelineParams(message="可以的", user_id=1, tenant_id=1, conversation_id=42)
     _ = [ev async for ev in read_query.run_read_query(params, MagicMock())]
@@ -133,7 +133,7 @@ async def test_run_read_query_first_turn_no_history(monkeypatch):
 
     def _boom(db, cid):  # 不应被调用(conversation_id None)
         raise AssertionError("首轮不应加载历史")
-    monkeypatch.setattr("app.coding.pipeline.get_conversation_history", _boom)
+    monkeypatch.setattr("app.coding.conversation_history.get_conversation_history", _boom)
 
     params = PipelineParams(message="讲讲这个项目", user_id=1, tenant_id=1)  # conversation_id 默认 None
     _ = [ev async for ev in read_query.run_read_query(params, MagicMock())]

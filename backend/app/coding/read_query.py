@@ -817,12 +817,12 @@ async def run_read_query(
     # ── 读路径跨轮记忆: 注入最近会话历史(修复读/分析路径失忆) ──────────────
     # 之前 messages 从空起 → 读/分析路径每轮完全无状态(「分析一下」后说「可以的」不知所指)。
     # save_coding_message 早已存每轮 user/assistant, 这里回头加载即可。首轮新会话 conversation_id
-    # 为 None → 无历史(正确)。延迟 import get_conversation_history 避免与 pipeline 循环依赖。
+    # 为 None → 无历史(正确)。get_conversation_history 已迁到中立模块,read_query 不再依赖 pipeline。
     _history_msgs: list[dict] = []
     _cid = getattr(params, "conversation_id", None)
     if _cid:
         try:
-            from app.coding.pipeline import get_conversation_history
+            from app.coding.conversation_history import get_conversation_history
             _hist = await get_conversation_history(db, _cid)
             _history_msgs = _read_history_messages(_hist, params.message)
         except Exception as exc:
