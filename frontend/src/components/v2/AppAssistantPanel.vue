@@ -7,7 +7,7 @@
      （建会话带 app_id、loadSessions 按 app_id 过滤），一套引擎覆盖 配置 + codegen + 会话 +
      产出物 + trace。
 
-     props: applicationId / appName / currentSection / currentSectionTab / designerSub
+     props: applicationId / appName / currentSection / currentSectionTab
      emits: refresh-iframe / close / upload-doc
 
      没有前端单测 runner，验证只能靠 `npm run build:nocheck` 编译；reactivity / binding bug 只会
@@ -39,8 +39,6 @@ const props = defineProps<{
   currentSection?: string | null
   /** 当前 sub-tab（保留兼容 ChatPage 契约，本组件目前仅透传 section 不做 chip 矩阵） */
   currentSectionTab?: string | null
-  /** design tab 选中菜单后的 designer sub（保留兼容 ChatPage 契约） */
-  designerSub?: string | null
   /** 当前选中的菜单名（来自 ChatPage selectedApaasMenuName） */
   selectedMenuName?: string | null
   /** 当前选中的菜单 id（来自 ChatPage selectedApaasMenuId） */
@@ -81,10 +79,7 @@ const sectionRef = toRef(props, 'currentSection')
 const viewContext = computed<string | null>(() => {
   const name = props.selectedMenuName
   if (!name) return null
-  const sub = props.designerSub === 'form' ? '表单设计器'
-    : props.designerSub === 'list' ? '列表设计器'
-    : props.designerSub === 'process' ? '流程设计器'
-    : (props.currentSectionTab || props.currentSection || '')
+  const sub = props.currentSectionTab || props.currentSection || ''
   return `「${name}」${sub ? '（' + sub + '）' : ''}`
 })
 // 模型选择：跟 AIChatPage 一致 —— 拉 builder 模型列表，底部选择器切换，落到会话
@@ -401,16 +396,7 @@ const SECTION_LABELS: Record<string, string> = {
   perm: '权限配置',
   log: '操作记录',
 }
-const DESIGNER_SUB_LABELS: Record<string, string> = {
-  form: '表单设计',
-  list: '列表设计',
-  process: '流程设计',
-  data: '数据 schema',
-  perm: '权限',
-}
 const contextTitle = computed(() => {
-  const sub = (props.designerSub || '').trim()
-  if (sub && DESIGNER_SUB_LABELS[sub]) return DESIGNER_SUB_LABELS[sub]
   const section = (props.currentSection || '').trim()
   return SECTION_LABELS[section] || (props.appName || '当前应用')
 })
