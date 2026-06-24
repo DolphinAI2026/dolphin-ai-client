@@ -59,3 +59,17 @@ def test_dev_apaas_profile_unions_mcp_and_local_tools_minus_paused():
 def test_resolve_unknown_profile_raises():
     with pytest.raises(KeyError):
         resolve_profile("nope")
+
+
+def test_dev_apaas_has_focused_prompt_and_drops_wander_tools():
+    p = resolve_profile("dev-apaas")
+    # 不再是空占位:定制「确认即开干」提示词
+    assert p.system_prompt.strip()
+    assert "确认即开干" in p.system_prompt
+    # 砍掉部署/生成/配置增删改(防 Code agent 跑偏去部署整个应用)
+    for dropped in ("deploy_application", "publish_application", "republish_apaas_app",
+                    "generate_app_from_doc", "update_app_from_doc"):
+        assert dropped not in p.tool_names, f"{dropped} 应被收窄掉"
+    # 但保留工作区读写 + 只读查询
+    assert "write_workspace_files" in p.tool_names
+    assert "read_workspace_file" in p.tool_names

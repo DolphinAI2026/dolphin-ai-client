@@ -68,10 +68,13 @@ async def test_flag_on_drives_runagent_maps_events_and_binds_ws(monkeypatch):
     monkeypatch.setenv("CODING_USE_RUNAGENT", "1")
     captured: dict = {}
 
-    async def fake_run_agent(db, session, message, abort_event, section=None, view_context=None):
+    async def fake_run_agent(db, session, message, abort_event, section=None, view_context=None,
+                             system_prompt_override=None, tool_names_override=None):
         captured["called"] = True
         captured["view_context"] = view_context
         captured["message"] = message
+        captured["system_prompt_override"] = system_prompt_override
+        captured["tool_names_override"] = tool_names_override
         for ev, data in [
             ("tool_call_start", {"id": 1, "tool_name": "write_workspace_files", "args": {"files": []}}),
             ("tool_call_end", {"id": 1, "tool_name": "write_workspace_files", "status": "success", "result_text": "ok"}),
@@ -110,6 +113,11 @@ async def test_flag_on_drives_runagent_maps_events_and_binds_ws(monkeypatch):
     assert dones and dones[0].get("workspace_id") == "ws-1"
     # 最终回复文本取自 assistant_message
     assert result == "改完了"
+    # dev-apaas profile 接进去了:定制提示词 + 收窄工具集(砍 deploy)
+    assert "确认即开干" in (captured.get("system_prompt_override") or "")
+    _allow = captured.get("tool_names_override") or set()
+    assert "deploy_application" not in _allow
+    assert "write_workspace_files" in _allow
 
 
 @pytest.mark.asyncio
@@ -155,7 +163,8 @@ async def test_runagent_error_surfaces_gracefully_not_raises(monkeypatch):
     """run_agent 的'达到最大循环次数'是优雅停止 → 软着陆展示,不红色崩溃。"""
     monkeypatch.setenv("CODING_USE_RUNAGENT", "1")
 
-    async def fake_run_agent(db, session, message, abort_event, section=None, view_context=None):
+    async def fake_run_agent(db, session, message, abort_event, section=None, view_context=None,
+                             system_prompt_override=None, tool_names_override=None):
         yield {"event": "error", "data": json.dumps({"error": "达到最大循环次数 25，已停止"})}
 
     monkeypatch.setattr("app.ai_chat.agent.run_agent", fake_run_agent)

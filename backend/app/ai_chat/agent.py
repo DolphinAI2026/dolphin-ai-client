@@ -598,6 +598,7 @@ async def _build_initial_messages(
     db: AsyncSession, session: AIChatSession, current_user_message: str,
     section: Optional[str] = None,
     view_context: Optional[str] = None,
+    system_prompt_override: Optional[str] = None,
 ) -> list[dict]:
     """从历史消息 + 当前 user message 构造 LLM messages。
 
@@ -608,9 +609,13 @@ async def _build_initial_messages(
         MCP 工具截断到 20K（截断逻辑在各自执行函数/mcp_bridge 里）
     """
     # 静态模板走 DB-first（agent_prompts: unified/system），动态拼接在下面照旧。
-    system_prompt = await _resolve_unified_system_prompt(
-        db, getattr(session, "tenant_id", None),
-    )
+    # profile 覆盖(如 dev-apaas 的定制提示词)优先;app 上下文/技能清单等动态段仍照常拼。
+    if system_prompt_override:
+        system_prompt = system_prompt_override
+    else:
+        system_prompt = await _resolve_unified_system_prompt(
+            db, getattr(session, "tenant_id", None),
+        )
     app_id = getattr(session, "app_id", None)
     if app_id:
         from app.ai_chat.app_context import build_app_context_block
@@ -758,16 +763,22 @@ async def run_agent(
     abort_event: asyncio.Event,
     section: Optional[str] = None,
     view_context: Optional[str] = None,
+    system_prompt_override: Optional[str] = None,
+    tool_names_override: Optional[set] = None,
 ) -> AsyncIterator[dict]:
     """对外入口：包一层 run 生命周期（可观测），把事件原样透传。
 
     用 try/finally 保证 end_run 在所有正常退出点 + SSE 客户端中途断开
     （GeneratorExit）时都恰好触发一次。recorder 自身吞异常，这里不会反噬主流程。
+
+    system_prompt_override / tool_names_override：profile 化用(如 Code 二次开发的
+    dev-apaas profile)。默认 None = 走通用 Builder 行为(prompt/全量工具),零影响。
     """
     holder: dict = {"run_id": None, "status": "error", "error": None}
     try:
         async for event in _run_agent_inner(
-            db, session, current_user_message, abort_event, holder, section, view_context
+            db, session, current_user_message, abort_event, holder, section, view_context,
+            system_prompt_override, tool_names_override,
         ):
             yield event
     finally:
@@ -790,6 +801,8 @@ async def _run_agent_inner(
     holder: dict,
     section: Optional[str] = None,
     view_context: Optional[str] = None,
+    system_prompt_override: Optional[str] = None,
+    tool_names_override: Optional[set] = None,
 ) -> AsyncIterator[dict]:
     """主 agent loop body。run 生命周期由外层 run_agent wrapper 管。
     holder = {"run_id": str|None, "status": "running"/"success"/"error", "error": str|None}
@@ -816,7 +829,10 @@ async def _run_agent_inner(
     _obs_seq = 0  # run 内 step 单调递增序号
 
     try:
-        messages = await _build_initial_messages(db, session, current_user_message, section, view_context)
+        messages = await _build_initial_messages(
+            db, session, current_user_message, section, view_context,
+            system_prompt_override=system_prompt_override,
+        )
     except Exception as e:
         holder["error"] = f"构建上下文失败：{e}"
         yield _sse("error", {"error": holder["error"]})
@@ -828,6 +844,16 @@ async def _run_agent_inner(
     # 每个 session 的第一轮拉一次合并 schemas（base 4 + MCP bridge 注入的 N 个）
     # 这是 lazy 设计 — backend 启动时 MCP 可能还没 ready，所以放在 turn loop 外的第一次调用
     all_schemas = await get_all_tool_schemas()
+    # profile 工具白名单(如 dev-apaas):base 本地工具恒保留(search_tools/ask_clarifying_question 等),
+    # MCP 工具按白名单收窄 — 砍掉 deploy/生成/配置增删改,防 Code agent 跑偏。默认 None 不过滤(Builder 全量)。
+    if tool_names_override is not None:
+        from app.ai_chat.tools import _BASE_LOCAL_NAMES
+        _allow = set(tool_names_override)
+        all_schemas = [
+            s for s in all_schemas
+            if s.get("function", {}).get("name") in _BASE_LOCAL_NAMES
+            or s.get("function", {}).get("name") in _allow
+        ]
     # 延迟工具:核心集恒在；长尾只在 system prompt 列清单，按需 search_tools 激活。
     core_schemas, deferred_by_name = split_core_deferred(all_schemas)
     _manifest = build_deferred_manifest(deferred_by_name)

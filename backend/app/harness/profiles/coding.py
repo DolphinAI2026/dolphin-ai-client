@@ -356,6 +356,7 @@ class CodingProfile(HarnessProfile):
         import asyncio
         import json
 
+        from app.agents.profile import resolve_profile
         from app.ai_chat.agent import run_agent
         from app.harness.profiles.runagent_event_map import map_runagent_event
 
@@ -364,6 +365,10 @@ class CodingProfile(HarnessProfile):
         last_assistant = ""
         done_data: dict = {}
 
+        # dev-apaas profile:定制「确认即开干」提示词 + 收窄工具集(砍 deploy/生成/配置)。
+        # 替掉 run_agent 默认的通用 Builder 提示词 + 全量工具(那套会反复确认 + 跑偏去部署)。
+        profile = resolve_profile("dev-apaas")
+
         async with AsyncSessionLocal() as db:
             session = await self._get_or_create_ai_session(db, params, thread_ctx, ws_id)
             view_context = self._ws_bind_view_context(ws_id)
@@ -371,6 +376,8 @@ class CodingProfile(HarnessProfile):
 
             async for ra in run_agent(
                 db, session, params.message, abort_event, view_context=view_context,
+                system_prompt_override=profile.system_prompt,
+                tool_names_override=set(profile.tool_names),
             ):
                 ev = ra.get("event", "")
                 try:
