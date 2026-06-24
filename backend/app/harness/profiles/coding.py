@@ -297,16 +297,21 @@ class CodingProfile(HarnessProfile):
     async def _get_or_create_ai_session(self, db, params, thread_ctx, ws_id: str):
         """取/建一个 AIChatSession 供 run_agent 跑(多轮历史累积在它名下)。
 
-        session id 存进 thread_ctx.metadata 复用,保证续轮有上下文。
-        注:Code 会话当前列在 codingApi.getConversations,这些 ai_chat session 暂不入该列表
-        (会话列表统一留作后续)。
+        ⚠️ 锚到稳定的 conversation_id(每轮请求都带),**不能**用 thread metadata:
+        Code 端点每轮 create_thread 新建 thread,metadata 不跨轮 → 用它做 key 会每轮新建空
+        session → 彻底失忆(实测过)。conversation_id == 本 AIChatSession.id(turn1 建好后经
+        done 事件回传前端,前端续轮带回)。带 tenant/user/mode 守卫,防 id 撞库误用。
+        注:这些 ai_chat session 暂不进 codingApi.getConversations 列表(会话列表统一留作后续)。
         """
         from app.models.ai_chat import AIChatSession
 
-        sid = thread_ctx.metadata.get("ai_chat_session_id")
-        if sid:
-            existing = await db.get(AIChatSession, sid)
-            if existing is not None:
+        cid = params.conversation_id
+        if cid:
+            existing = await db.get(AIChatSession, cid)
+            if (existing is not None
+                    and existing.tenant_id == params.tenant_id
+                    and existing.user_id == params.user_id
+                    and existing.mode == "code"):
                 return existing
 
         ws_dir = None
@@ -334,7 +339,6 @@ class CodingProfile(HarnessProfile):
         db.add(session)
         await db.commit()
         await db.refresh(session)
-        thread_ctx.metadata["ai_chat_session_id"] = session.id
         return session
 
     async def _run_turn_via_runagent(
@@ -423,16 +427,29 @@ class CodingProfile(HarnessProfile):
                     elif ct == "agent_done":
                         result_text = ce.get("result", "") or result_text
                     elif ct == "done":
-                        ce = {**ce, "workspace_id": ws_id, "conversation_id": params.conversation_id}
+                        # conversation_id 回传 = 本 AIChatSession.id → 前端续轮带回 → 续轮复用同 session
+                        # (修跨轮失忆:不能用每轮新建的 thread metadata 做稳定 key)。
+                        ce = {**ce, "workspace_id": ws_id, "conversation_id": session.id}
                         done_data = ce
                         if ws_id:
                             thread_ctx.metadata["workspace_id"] = ws_id
+                        thread_ctx.conversation_id = session.id
+                        thread_ctx.metadata["conversation_id"] = session.id
                         await event_bus.publish(
                             ITEM_COMPLETED, turn_ctx.turn_id,
                             {"kind": "system", **ce}, item_kind="system",
                         )
                     elif ct == "error":
-                        raise RuntimeError(ce.get("error", "run_agent error"))
+                        # run_agent 的「达到最大循环次数」是优雅兜底停止,不是崩;真错误也一样
+                        # 软着陆:把信息当 content 展示 + 正常收尾,别 raise(否则前端红色崩溃 + Turn failed)。
+                        _err = ce.get("error", "run_agent error")
+                        await event_bus.publish(
+                            ITEM_DELTA, turn_ctx.turn_id,
+                            {"kind": "content",
+                             "text": f"\n\n（本轮在达到处理上限或遇到问题时停止：{_err}）",
+                             "delta": False},
+                            item_kind="content",
+                        )
 
         result_text = result_text or last_assistant
         await self._save_turn_artifacts(thread_ctx, turn_ctx, done_data, result_text)

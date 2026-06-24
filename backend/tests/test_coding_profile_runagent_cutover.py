@@ -116,3 +116,57 @@ async def test_flag_on_drives_runagent_maps_events_and_binds_ws(monkeypatch):
 async def test_ws_bind_view_context_empty_when_no_ws():
     assert CodingProfile._ws_bind_view_context("") is None
     assert "ws-9" in CodingProfile._ws_bind_view_context("ws-9")
+
+
+# ── 跨轮失忆修复:session 锚到稳定 conversation_id(非临时 thread metadata) ──
+
+
+@pytest.mark.asyncio
+async def test_session_reused_by_conversation_id():
+    """conversation_id 命中同租户/用户/code 模式的 AIChatSession → 复用(续轮有历史)。"""
+    prof = CodingProfile()
+    existing = MagicMock(id=55, tenant_id=1, user_id=1, mode="code")
+    db = MagicMock()
+    db.get = AsyncMock(return_value=existing)
+    params = MagicMock(conversation_id=55, tenant_id=1, user_id=1, app_id=None)
+    s = await prof._get_or_create_ai_session(db, params, _thread(), "ws-1")
+    assert s is existing
+    db.get.assert_awaited()
+
+
+@pytest.mark.asyncio
+async def test_session_not_reused_when_mode_or_owner_mismatch():
+    """id 撞库但 mode/owner 不符 → 不复用(防跨表/跨用户误用),改建新。"""
+    prof = CodingProfile()
+    wrong = MagicMock(id=55, tenant_id=1, user_id=1, mode="chat")  # 不是 code 模式
+    db = MagicMock()
+    db.get = AsyncMock(return_value=wrong)
+    db.add = MagicMock()
+    db.commit = AsyncMock()
+    db.refresh = AsyncMock()
+    params = MagicMock(conversation_id=55, tenant_id=1, user_id=1, app_id=None, message="改一下")
+    s = await prof._get_or_create_ai_session(db, params, _thread(), "")
+    assert s is not wrong
+    db.add.assert_called_once()
+
+
+@pytest.mark.asyncio
+async def test_runagent_error_surfaces_gracefully_not_raises(monkeypatch):
+    """run_agent 的'达到最大循环次数'是优雅停止 → 软着陆展示,不红色崩溃。"""
+    monkeypatch.setenv("CODING_USE_RUNAGENT", "1")
+
+    async def fake_run_agent(db, session, message, abort_event, section=None, view_context=None):
+        yield {"event": "error", "data": json.dumps({"error": "达到最大循环次数 25，已停止"})}
+
+    monkeypatch.setattr("app.ai_chat.agent.run_agent", fake_run_agent)
+    monkeypatch.setattr("app.harness.profiles.coding.AsyncSessionLocal", lambda: _FakeACM())
+
+    prof = CodingProfile()
+    monkeypatch.setattr(prof, "_get_or_create_ai_session", AsyncMock(return_value=MagicMock(id=99)))
+    monkeypatch.setattr(prof, "_save_turn_artifacts", AsyncMock())
+
+    bus = _FakeBus()
+    result = await prof.run_turn(_thread(), _turn(), bus)  # 不应抛
+
+    contents = [it["data"].get("text", "") for it in bus.items if it["data"].get("kind") == "content"]
+    assert any("停止" in c for c in contents)
