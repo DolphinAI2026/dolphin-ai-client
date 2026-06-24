@@ -3385,6 +3385,7 @@ html[data-theme="light"] .msg-attachment-chip {
   flex: 1;
   min-height: 0;
   min-width: 0;
+  position: relative; /* 2026-06-24: 锚定配置助手浮层(.ca-embedded), 只盖编辑器区不盖上方 TopBar/tab */
 }
 /* Task 4: 顶部 tab 收敛为「配置」+「自开发」两项, 下划线二级 tab 样式 */
 .config-top-tabs {
@@ -3665,24 +3666,34 @@ html[data-theme="dark"] .config-assistant.ca-floating {
   box-shadow: -2px 0 8px rgba(0, 0, 0, 0.25);
 }
 
-/* 2026-05-29: 配置助手嵌入式右栏 — 对齐「配置」tab 布局。
-   在 .platform-shell-row(flex row) 内当最后一个并排子项, 不浮盖中间内容。
-   宽度由 panel 自带 usePanelResize(:style width) 控制 — 这里不设 width, 只 flex-shrink:0;
-   base .config-assistant 的 height:100% 在 row 里正好填满。左边缘有拖宽 handle。 */
-/* 助手展开态：隐藏中间内容，助手撑满 */
-.platform-shell-row.assistant-expanded > :not(.ca-embedded) {
-  display: none;
-}
+/* 2026-06-24: 配置助手改为浮层(overlay)而非并排挤压。
+   内嵌的 apaas 原生编辑器是宽布局(组件库+画布+右侧属性面板+保存键), 助手并排会把它
+   挤到裁切(右侧属性面板/Save·Close 被挡)。浮层 absolute 落在 .platform-shell-row 内
+   (只盖编辑器区, 不盖上方 TopBar/配置 tab — 区别于旧 .ca-floating 盖到平台按钮的问题),
+   编辑器在底下保持满宽、不重排; 助手关闭(FAB)即完整显示。宽度仍由 usePanelResize 控制。 */
 .config-assistant.ca-embedded {
-  position: relative;
-  flex-shrink: 0;
-  height: auto;
-  align-self: stretch;
+  position: absolute;
+  top: 0;
+  right: 0;
+  bottom: 0;
+  height: auto; /* 覆盖 base .config-assistant 的 height:100%, 让 top/bottom 决定高度 */
+  z-index: 30;  /* 盖在编辑器 iframe 之上 */
+  /* 跨源 iframe(apaas 编辑器)会拿独立合成层 — 单靠 z-index 在部分 Chromium/WebView
+     合成下不保证盖住; 用 translateZ(0) 把浮层也提到自己的 GPU 合成层, 确保稳定盖在 iframe 上。 */
+  transform: translateZ(0);
+  background: var(--t-bg-base, #fff);
   border-left: 1px solid var(--t-border-subtle, #e2e8f0);
-  box-shadow: -2px 0 8px rgba(15, 23, 42, 0.04);
+  box-shadow: -4px 0 16px rgba(15, 23, 42, 0.10);
 }
 html[data-theme="dark"] .config-assistant.ca-embedded {
-  box-shadow: -2px 0 8px rgba(0, 0, 0, 0.2);
+  background: var(--t-bg-base, #0f172a);
+  box-shadow: -4px 0 16px rgba(0, 0, 0, 0.35);
+}
+/* 展开态: 浮层占满整行(聚焦对话), 编辑器仍在底下不卸载。
+   width:auto !important 覆盖 usePanelResize 的内联 width。 */
+.platform-shell-row.assistant-expanded .config-assistant.ca-embedded {
+  left: 0;
+  width: auto !important;
 }
 .platform-loading {
   flex: 1; display: flex; align-items: center; justify-content: center;
