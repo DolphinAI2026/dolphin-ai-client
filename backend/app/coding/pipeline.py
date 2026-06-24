@@ -1754,7 +1754,16 @@ async def run_coding_pipeline(
             if not (_iter_bs or _iter_clarify):
                 # 引用代码块剥掉再分类(「引用 `path:行号`: ```…``` 这段是干嘛的」的问题在块外)
                 _clean_msg = re.sub(r"```[\s\S]*?```", " ", params.message).strip()[:300]
-                if await classify_iteration_intent(params.tenant_id, effective_model, _clean_msg) == "READ":
+                # 上一条 assistant 回复作上下文: 跟在「我建议改三处…」后面的「改一下/按你说的来」
+                # 才能被分类器稳判 BUILD(否则 READ-偏置 LLM 看不到上下文会判 READ, 把用户锁进只读)。
+                _recent_ctx = next(
+                    (m.get("content") for m in reversed(_iter_hist or [])
+                     if m.get("role") == "assistant" and (m.get("content") or "").strip()),
+                    None,
+                )
+                if await classify_iteration_intent(
+                    params.tenant_id, effective_model, _clean_msg, recent_context=_recent_ctx,
+                ) == "READ":
                     logger.info("[intent_gate] 迭代轮 READ 路径, 跳过 codegen, ws=%s", ws_id)
                     await save_coding_message(db, conversation_id, "user", params.message)
                     # READ 轮也要进富回放: 工作区主会话重开走 DB replay,

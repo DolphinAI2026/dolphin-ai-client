@@ -215,21 +215,82 @@ async def classify_coding_intent(
     return "BUILD"
 
 
+# ── 迭代轮「明确动手改/构建」祈使句白名单（确定性兜底，绕开 READ-偏置 LLM）──
+# 仅做「整句归一化后精确等于」匹配，绝不做子串匹配：单字「改」会出现在
+# 「改进 / 改动 / 为什么这么改」等只读语境里，子串匹配会把只读问题误判成
+# BUILD → 触发「未经同意重写代码」事故。整句精确匹配经对抗测试零自然误报。
+_ITER_BUILD_EXACT = {
+    "改", "改一下", "改改", "改下", "改一改", "再改改", "继续改", "改了它",
+    "修", "修一下", "修改", "修改一下", "修复",
+    "调一下", "调整一下", "调整",
+    "优化", "优化一下",
+    "动一下",
+    "重构", "重构一下", "重写", "重写一下",
+    "打包", "打包一下", "重新打包",
+    "部署", "部署一下",
+    "上传", "上传一下",
+    "发布", "发布一下",
+    "上线", "上线一下",
+    "构建", "构建一下",
+    "生成一下",
+}
+# 句首口语前缀（去掉后不改变祈使语气）
+_ITER_LEADING_FILLERS = (
+    "那就", "能不能", "帮我", "麻烦", "给我",
+    "那", "就", "你", "请", "先", "快", "现在", "直接", "来", "可以",
+)
+# 句末语气词/标点（可去多个）。
+# ⚠️ 绝不含「吗」——「改吗 / 能改吗」是疑问句，去掉「吗」会塌成「改」造成真误报。
+_ITER_TRAILING_STRIP = "吧呀啊呗了哈哦喔嘛。，！!~、. ？?；;"
+
+
+def _normalize_iter_intent_msg(message: str) -> str:
+    """归一化迭代轮消息：剥引号、句末语气词/标点、句首口语前缀。"""
+    s = (message or "").strip().strip("\"'`“”‘’ ").strip()
+    while s and s[-1] in _ITER_TRAILING_STRIP:
+        s = s[:-1].rstrip()
+    changed = True
+    while changed:
+        changed = False
+        for f in _ITER_LEADING_FILLERS:
+            if s.startswith(f) and len(s) > len(f):
+                s = s[len(f):].lstrip()
+                changed = True
+                break
+    return s.strip()
+
+
+def _is_explicit_iteration_build(message: str) -> bool:
+    """整句精确命中明确改动/构建祈使句 → True（直接 BUILD）。"""
+    return _normalize_iter_intent_msg(message) in _ITER_BUILD_EXACT
+
+
 async def classify_iteration_intent(
     tenant_id: Optional[int],
     model: str,
     message: str,
+    recent_context: Optional[str] = None,
 ) -> str:
     """迭代轮(已有工作区)的「读/问」vs「改代码」分类。
 
     与首轮 classify_coding_intent 的差异：
-    - 不用关键词快捷路径——迭代轮聊的就是组件/页面/代码，
+    - 不做通用关键词快捷路径——迭代轮聊的就是组件/页面/代码，
       "讲讲这个页面" 含 "页面" 不能秒判 BUILD。
-    - 拿不准 → READ。误判成 READ 顶多多问一句；误判成 BUILD
+    - 但「整句」就是明确改动/构建祈使句（"改一下"/"重构一下"/"部署一下"）时
+      直接 BUILD，绕开 READ-偏置 LLM。这类整句无歧义，经对抗测试零误报；
+      不修这条，用户说"改一下"会被锁进只读路径拒绝改代码（实际发生过）。
+    - 其余拿不准 → READ。误判成 READ 顶多多问一句；误判成 BUILD
       会未经同意重写用户代码（实际发生过的事故），代价不对称。
+    - recent_context = 上一条 assistant 回复，喂给 LLM 消歧：跟在
+      "我建议改三处…" 后面的"按你说的来"才能稳判 BUILD。
     - 基础设施异常(LLM 挂了) → BUILD 维持旧行为，反正 codegen
       也会在下游用同一配置报错，错误能露出来。
     """
+    # 确定性兜底：明确改动/构建祈使句直接 BUILD，不走 LLM（避免偏置误判 + 省延迟）
+    if _is_explicit_iteration_build(message):
+        logger.info("[intent] 迭代轮命中明确改动祈使句 → BUILD, message=%r", message[:100])
+        return "BUILD"
+
     system_prompt = """当前会话绑定了一个已有的代码工作区，用户在和一个能读写代码的 AI 开发助手对话。
 判断这条消息的意图，只输出以下之一：
 - READ：只想看/问/解释/分析/评审代码或项目，不要求改动任何文件
@@ -237,6 +298,8 @@ async def classify_iteration_intent(
 
 **拿不准时输出 READ（宁可先回答，绝不未经同意改代码）。**
 只有消息明确要求动手改代码或执行构建动作时才输出 BUILD。
+**例外**：如果这条消息是对「助手上一条回复中提议的改动」的确认/同意/催促
+（例："改一下"、"就这么改"、"按你说的来"、"可以，动手吧"），输出 BUILD。
 
 示例：
 "读一下工作区的代码" → READ
@@ -257,11 +320,17 @@ async def classify_iteration_intent(
         from app import llm_transport
 
         base_url, api_key, llm_model = await load_coding_llm_config(tenant_id, model)
+        user_content = f"用户消息：{message[:300]}"
+        if recent_context and recent_context.strip():
+            user_content = (
+                "（助手上一条回复，仅用于判断用户这条消息的意图，不要据此作答）：\n"
+                f"{recent_context.strip()[:600]}\n\n用户消息：{message[:300]}"
+            )
         payload = llm_transport.build_chat_payload(
             model=llm_model,
             messages=[
                 {"role": "system", "content": system_prompt},
-                {"role": "user", "content": f"用户消息：{message[:300]}"},
+                {"role": "user", "content": user_content},
             ],
             temperature=0,
             max_tokens=10,

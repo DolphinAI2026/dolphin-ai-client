@@ -27,7 +27,11 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from app.coding.read_query import classify_coding_intent, run_read_query
+from app.coding.read_query import (
+    classify_coding_intent,
+    classify_iteration_intent,
+    run_read_query,
+)
 
 
 # ───────────────────────────────────────────────────────────────────────────
@@ -592,3 +596,88 @@ class TestPipelineIntegration:
         mock_read.assert_not_called()
         # detect_scene 被调了（走进了原 codegen 流程）
         mock_detect.assert_awaited()
+
+
+# ───────────────────────────────────────────────────────────────────────────
+# 5. classify_iteration_intent — 迭代轮意图分类
+#    回归 bug: 用户在已有工作区里说「改一下」被 READ-偏置的 LLM 误判成 READ，
+#    被锁进只读路径拒绝改代码。修复 = 明确改动祈使句直接 BUILD(绕开 LLM) +
+#    把上一条 assistant 回复喂给 LLM 做上下文消歧。
+# ───────────────────────────────────────────────────────────────────────────
+
+
+def _patch_iter_llm(content: str):
+    """patch classify_iteration_intent 走的 LLM: 返回指定 content。
+
+    返回 (load_cm, complete_mock) — complete_mock 用于断言是否被调 / 检查 payload。
+    """
+    complete_mock = AsyncMock(return_value={"content": content})
+    return (
+        patch("app.agents.coding.llm_config.load_coding_llm_config",
+              new=AsyncMock(return_value=("http://api", "key", "model"))),
+        patch("app.llm_transport.complete", new=complete_mock),
+        complete_mock,
+    )
+
+
+class TestClassifyIterationIntent:
+    """迭代轮意图分类：明确改动祈使句必须 BUILD，且不触发 LLM。"""
+
+    @pytest.mark.parametrize("msg", [
+        "改一下", "改一下吧", "那就改一下", "改改", "改", "你改一下", "麻烦改下",
+        "修一下", "修改一下", "优化一下", "重构一下", "重写一下",
+        "优化", "修复", "重构", "调整", "调整一下",
+        "打包", "打包一下", "重新打包", "部署一下", "上传一下", "发布一下", "上线一下",
+        "能不能改一下", "就改",
+    ])
+    @pytest.mark.asyncio
+    async def test_explicit_build_command_is_build_without_llm(self, msg):
+        """明确改动/构建祈使句 → BUILD，且绝不调用 LLM（即使 LLM 会返回 READ）。"""
+        load_cm, complete_cm, complete_mock = _patch_iter_llm("READ")
+        with load_cm, complete_cm:
+            result = await classify_iteration_intent(1, "model", msg)
+        assert result == "BUILD", f"期待 BUILD，得到 {result!r}（消息：{msg!r}）"
+        complete_mock.assert_not_called()  # 命中确定性兜底，不该走 LLM
+
+    @pytest.mark.parametrize("msg", [
+        "讲讲这个页面的逻辑",
+        "为什么这么改的",
+        "评审一下这次的改动",
+        "这个改动有什么问题",
+        "我想了解这个页面是怎么改进的",  # 含「改」但是只读问题，绝不能误判 BUILD
+        "改吗",                          # 「吗」疑问句，不能塌成 BUILD
+        "能改吗",
+        "这块逻辑能改一下吗，还是先不动",
+    ])
+    @pytest.mark.asyncio
+    async def test_read_question_defers_to_llm(self, msg):
+        """只读问题不命中兜底 → 交给 LLM 判定（LLM 返 READ → READ）。"""
+        load_cm, complete_cm, complete_mock = _patch_iter_llm("READ")
+        with load_cm, complete_cm:
+            result = await classify_iteration_intent(1, "model", msg)
+        assert result == "READ", f"期待 READ，得到 {result!r}（消息：{msg!r}）"
+        complete_mock.assert_awaited()  # 必须真的过了 LLM，证明兜底没误触发
+
+    @pytest.mark.asyncio
+    async def test_recent_context_passed_into_llm_payload(self):
+        """recent_context 被注入 LLM payload，让确认类消息能借上下文判定。"""
+        load_cm, complete_cm, complete_mock = _patch_iter_llm("BUILD")
+        ctx = "我建议改三处：src/api/index.js / vue.config.js / preview/mock-api.js"
+        # 用一个不命中兜底白名单的确认语，强制走 LLM
+        with load_cm, complete_cm:
+            result = await classify_iteration_intent(
+                1, "model", "按你说的来", recent_context=ctx,
+            )
+        assert result == "BUILD"
+        complete_mock.assert_awaited()
+        payload = complete_mock.call_args.kwargs["payload"]
+        assert "src/api/index.js" in json.dumps(payload, ensure_ascii=False), \
+            "上一条 assistant 回复应作为上下文进入 LLM payload"
+
+    @pytest.mark.asyncio
+    async def test_llm_failure_falls_back_to_build(self):
+        """LLM 异常 → 兜底 BUILD（维持旧行为，错误能在下游露出）。"""
+        with patch("app.agents.coding.llm_config.load_coding_llm_config",
+                   new=AsyncMock(side_effect=RuntimeError("no llm"))):
+            result = await classify_iteration_intent(1, "model", "讲讲这个页面")
+        assert result == "BUILD"
