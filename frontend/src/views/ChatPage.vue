@@ -1963,15 +1963,16 @@ const loadUploadedDocumentSpec = async (specId?: string | null) => {
 // 把当前应用的结构（模型/表单/流程/角色）打包成 message，结构化交接到 AIChatPage 在应用上下文里
 // 做二次开发，不再跳独立 /coding。AIChatPage.vue onMounted 读 sessionStorage('ai_builder_pending_app_dev')
 // （route.query.app_dev=1 时）建会话并把 message 作为首条发出。
-// ── 配置助手浮动 (2026-05-25) ──
-// 默认收起为 FAB, 不再挤压 iframe. localStorage 持久化用户偏好.
-const ASSISTANT_OPEN_KEY = 'apaas-config-assistant-open-v1'
-const assistantOpen = ref(localStorage.getItem(ASSISTANT_OPEN_KEY) === 'true')
+// ── 配置助手浮动 (2026-05-25; 2026-06-24 改回默认收起) ──
+// 默认收起为 FAB。内嵌的 apaas 原生编辑器是宽布局(组件库+画布+右侧属性面板+保存键),
+// 助手并排(push)会把它挤到裁切(右侧属性面板/Save·Close 被挡)。需要用对话改配置时
+// 点右下 "AI 助手" FAB 打开,改完再收起即可看回完整编辑器。
+// (之前从 localStorage 恢复"打开"偏好,会在原生编辑器上默认并排挤压,故去掉持久化恢复。)
+const assistantOpen = ref(false)
 const assistantExpanded = ref(false)
 function toggleAssistant() {
   assistantOpen.value = !assistantOpen.value
   if (!assistantOpen.value) assistantExpanded.value = false
-  try { localStorage.setItem(ASSISTANT_OPEN_KEY, String(assistantOpen.value)) } catch { /* private mode */ }
 }
 
 // ── 平台配置 iframe ──
