@@ -175,100 +175,21 @@
             :menu-id="selectedApaasMenuId"
             :menu-name="selectedApaasMenuName"
           />
-          <!-- 设计 tab: 选中 MODEL 菜单后显 designer shell (内 4 sub-tab: 表单/列表/流程/页面) -->
+          <!-- 设计 tab: 选中 MODEL 菜单后显内嵌原生编辑器 (Task 3: 替换 designer shell) -->
           <div
             v-else-if="topTab === 'design' && existingAppId && selectedApaasMenuId"
             class="platform-iframe-container mdsh"
           >
-            <!-- designer 内顶部 4 sub-tab -->
-            <div class="mdsh-subnav">
-              <div class="mdsh-subnav-info">
-                <span class="mdsh-menu-name">{{ designerSub === 'dev' ? '自开发资产' : designerSub === 'health' ? '应用体检' : (selectedApaasMenuName || '选中菜单') }}</span>
-              </div>
-              <div class="mdsh-subnav-tabs" role="tablist">
-                <button
-                  v-for="sub in DESIGNER_SUBS"
-                  :key="sub.code"
-                  class="mdsh-subnav-tab"
-                  :class="{ active: designerSub === sub.code }"
-                  role="tab"
-                  :aria-selected="designerSub === sub.code"
-                  @click="designerSub = sub.code"
-                >
-                  {{ sub.label }}
-                </button>
-              </div>
-              <OpenLowcodeBackendButton
-                v-if="existingAppId"
-                class="mdsh-subnav-lowcode"
-                :app-id="existingAppId"
-                menu-type="MODEL"
-                :menu-id="selectedApaasMenuId"
-                :form-id="selectedApaasMenuFormId"
-              />
-            </div>
-            <!-- designer 内容 -->
-            <div class="mdsh-body">
-              <FormDesignerPanel
-                v-if="designerSub === 'form'"
-                :key="`form-${selectedApaasMenuId}`"
-                :app-id="existingAppId"
-                :menu-id="selectedApaasMenuId"
-                :menu-name="selectedApaasMenuName"
-                :form-id="selectedApaasMenuFormId"
-                :refresh-nonce="designerRefreshKey"
-              />
-              <ListDesignerPanel
-                v-else-if="designerSub === 'list'"
-                :key="`list-${selectedApaasMenuId}-${designerRefreshKey}`"
-                :app-id="existingAppId"
-                :menu-id="selectedApaasMenuId"
-                :menu-name="selectedApaasMenuName"
-                :form-id="selectedApaasMenuFormId"
-              />
-              <ProcessDesignerPanel
-                v-else-if="designerSub === 'process'"
-                :key="`process-${selectedApaasMenuId}-${designerRefreshKey}`"
-                :app-id="existingAppId"
-                :menu-id="selectedApaasMenuId"
-                :form-id="selectedApaasMenuFormId"
-                :hide-lowcode-btn="true"
-                :assistant-open="assistantOpen"
-              />
-              <BusinessEventPanel
-                v-else-if="designerSub === 'event'"
-                :key="`event-${selectedApaasMenuId}-${designerRefreshKey}`"
-                :app-id="existingAppId"
-                :menu-name="selectedApaasMenuName"
-              />
-              <DataSchemaEditor
-                v-else-if="designerSub === 'data'"
-                :key="`data-${selectedApaasMenuId}`"
-                :app-id="existingAppId"
-                :menu-id="selectedApaasMenuId"
-                :menu-name="selectedApaasMenuName"
-                :form-id="selectedApaasMenuFormId"
-                :refresh-nonce="designerRefreshKey"
-              />
-              <FormPermPanel
-                v-else-if="designerSub === 'perm' && selectedApaasMenuFormId"
-                :key="`perm-${selectedApaasMenuId}-${designerRefreshKey}`"
-                :app-id="existingAppId"
-                :form-id="selectedApaasMenuFormId"
-                :menu-name="selectedApaasMenuName"
-              />
-              <AppDevWorkspacePanel
-                v-else-if="designerSub === 'dev'"
-                :key="`dev-${existingAppId}-${designerRefreshKey}`"
-                :app-id="existingAppId"
-              />
-              <AppHealthPanel
-                v-else-if="designerSub === 'health'"
-                :key="`health-${existingAppId}-${designerRefreshKey}`"
-                :app-id="existingAppId"
-              />
-              <!-- 2026-05-29: 删「页面设置」sub-tab — 纯占位(⚙️ placeholder "P1 接入"),
-                   点了无功能。改设置走配置助手对话。同步从 DESIGNER_SUBS 移除该 tab。 -->
+            <InAppBrowser
+              v-if="embeddedEditorUrl"
+              ref="editorBrowserRef"
+              mode="trusted-url"
+              :url="embeddedEditorUrl"
+              :title="selectedApaasMenuName || '配置'"
+            />
+            <div v-else class="mdsh-empty">
+              <div class="mdsh-empty-icon"><AppIcon name="wrench" :size="32" /></div>
+              <h3>{{ embeddedEditorMsg || '正在加载配置页…' }}</h3>
             </div>
           </div>
           <!-- 设计 tab + 未选菜单: 空态提示 -->
@@ -705,6 +626,8 @@ import AppHealthPanel from '@/views/coding/AppHealthPanel.vue'
 import AppDatasourcePanel from '@/components/v3/AppDatasourcePanel.vue'
 import CustomPagePreviewPanel from '@/components/v3/CustomPagePreviewPanel.vue'
 import AppDevWorkspacePanel from '@/components/v3/AppDevWorkspacePanel.vue'
+import InAppBrowser from '@/components/common/InAppBrowser.vue'
+import { getEditorUrl } from '@/api/editorUrl'
 // U3 (2026-05-27): SPEC 设计层 panel — 跟"功能" tab 平行的 SPEC 编辑层 (MVP read-only).
 // SPEC tab 休眠中(SPEC_TAB_ENABLED=false)，异步冷藏使其退出主 bundle；恢复时打开 flag 即可。
 // SpecChatPanel/SpecApplyModal 仅被 SpecDesignPanel 引用，会自动跟进同一异步 chunk。
@@ -2289,6 +2212,8 @@ function refreshPlatformAndSidebar() {
   setTimeout(() => {
     try { apaasMenuSidebarRef.value?.reload?.() } catch { /* sidebar 还没 mount 时忽略 */ }
   }, 300)
+  // Task 3: 同步 reload 内嵌编辑器（若已加载）
+  editorBrowserRef.value?.reload()
 }
 
 // 2026-05-25 B-4: 原生菜单 sidebar 选中态 + 切 iframe handler
@@ -2301,6 +2226,29 @@ function onApaasMenusLoaded(_menus: any[], firstFormMenu: any) {
   if (!firstFormMenu) return  // app 只有 task_center 等无表单菜单, 留在总览页
   if (selectedApaasMenuId.value) return  // 用户已经手动选过菜单, 不要覆盖
   onApaasMenuSelected(firstFormMenu)
+}
+
+// Task 3: 内嵌原生编辑器 — URL 拉取 + 刷新接线
+const embeddedEditorUrl = ref<string>('')
+const embeddedEditorMsg = ref<string>('')
+const editorBrowserRef = ref<InstanceType<typeof InAppBrowser> | null>(null)
+
+async function loadEmbeddedEditorUrl() {
+  embeddedEditorUrl.value = ''
+  embeddedEditorMsg.value = ''
+  if (!existingAppId.value || !selectedApaasMenuId.value) return
+  if (selectedApaasMenuType.value === 'CUSTOM') return  // 自开发走 CustomPagePreviewPanel
+  try {
+    const resp = await getEditorUrl(existingAppId.value, {
+      menu_type: selectedApaasMenuType.value || 'MODEL',
+      menu_id: selectedApaasMenuId.value || '',
+      form_id: selectedApaasMenuFormId.value || '',
+    })
+    if (resp?.ok && resp.url) embeddedEditorUrl.value = resp.url
+    else embeddedEditorMsg.value = resp?.message || '应用尚未部署到 aPaaS，无法打开配置页'
+  } catch (e: any) {
+    embeddedEditorMsg.value = e?.message || '加载配置页失败'
+  }
 }
 
 function onApaasMenuSelected(menu: {
@@ -2319,6 +2267,7 @@ function onApaasMenuSelected(menu: {
   selectedApaasMenuType.value = (menu.menu_type || menu.menu_display || '').toUpperCase()
   // 仅在切到 platform 视图后才允许切菜单
   if (activeView.value !== 'platform') activeView.value = 'platform'
+  void loadEmbeddedEditorUrl()
 }
 
 const refreshCurrentAppRemoteMeta = async (appId: number) => {
