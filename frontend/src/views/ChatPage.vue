@@ -108,27 +108,30 @@
     <div class="content-area">
 
       <!-- 平台配置 iframe + 原生菜单 sidebar（v-show 保持不销毁） -->
-      <!-- 2026-05-26 design-v3: 整改 layout — 顶部 5 tab + 左 sub-nav + 中画布 + 右 AI. -->
+      <!-- 2026-06-24 Task 4: layout — 顶部 2 tab(配置/自开发) + 左菜单 + 中内嵌编辑器 + 右 AI. -->
       <div v-show="SHOW_PLATFORM_CONFIG && activeView === 'platform'" class="platform-shell platform-shell-v3">
-        <!-- sub-tab chip strip: 顶部 tab 下方一行. 2026-05-26: 设计 tab 不显
-             chip (改用左侧菜单 list + 右侧 designer 4 sub-tab). 其他 tab 保留.
-             Q2 2026-05-27: 数据源 tab 也不显 chip (扁平 panel, 无 sub). -->
-        <div
-          v-if="existingAppId && topTab !== 'design' && topTab !== 'datasource' && topTab !== 'spec'"
-          class="sub-chip-strip"
-        >
+        <!-- 顶部 tab: 收敛为「配置」+「自开发」两项 (Task 4). -->
+        <div v-if="existingAppId" class="config-top-tabs">
           <button
-            v-for="sub in currentSubTabsForTop"
-            :key="sub.code"
-            class="sub-chip"
-            :class="{ active: currentSectionTab === sub.code }"
-            @click="onSubNavSwitch(sub.code)"
+            v-for="tab in CONFIG_TOP_TABS"
+            :key="tab.code"
+            type="button"
+            class="config-top-tab"
+            :class="{ active: topTab === tab.code }"
+            @click="topTab = tab.code"
           >
-            {{ sub.label }}
+            {{ tab.label }}
           </button>
         </div>
-        <!-- tab content row -->
-        <div class="platform-shell-row" :class="{ 'assistant-expanded': assistantExpanded }">
+        <!-- 自开发 tab: 自开发工作区 -->
+        <div
+          v-if="existingAppId && topTab === 'dev'"
+          class="platform-shell-row"
+        >
+          <AppDevWorkspacePanel :app-id="existingAppId" />
+        </div>
+        <!-- 配置 tab content row -->
+        <div v-else class="platform-shell-row" :class="{ 'assistant-expanded': assistantExpanded }">
           <!-- 设计 tab: 左侧 ApaasMenuSidebar 长显 (不绑 sub-tab) -->
           <ApaasMenuSidebar
             v-if="existingAppId && topTab === 'design'"
@@ -138,8 +141,7 @@
             @menu-selected="onApaasMenuSelected"
             @menus-loaded="onApaasMenusLoaded"
           />
-          <!-- 其他 sub-tab: 走通用 SectionContentList. 当 native panel 自带 master
-               (DictEditorPanel / RoleManagePanel) 时, 不再显 SectionContentList 防重复. -->
+          <!-- 其他 sub-tab: 走通用 SectionContentList. -->
           <SectionContentList
             v-if="existingAppId && shouldShowSectionContent && currentSectionContentKind
                   && !isNativeMasterDetailSubTab"
@@ -150,25 +152,10 @@
             @select-item="onSectionContentItemSelect"
             @request-create="onSectionContentCreateRequest"
           />
-          <!-- 设计 tab: U3 — SPEC 设计层 (跟"功能" tab 平行).
-               改 SPEC 文档 → AI 翻译成 apaas 配置. MVP read-only + P2 接 chat. -->
-          <SpecDesignPanel
-            v-if="topTab === 'spec' && existingAppId"
-            :key="`spec-${designerRefreshKey}`"
-            class="platform-iframe-container"
-            :app-id="existingAppId"
-            :apaas-app-id="store.currentApp?.apaas_app_id || ''"
-          />
-          <!-- 日志 tab: design-v4 K4 — 4 sub-tab LogsPanel (deploy / operation / ai / error) -->
-          <LogsPanel
-            v-else-if="topTab === 'log' && existingAppId"
-            :app-id="existingAppId"
-            class="platform-iframe-container"
-          />
           <!-- 2026-05-26 design-v3 重构: native panel 替 iframe -->
           <!-- 2026-05-27 R: CUSTOM 菜单 (自开发 Vue) 走专门 panel: preview=iframe runtime, edit=跳 IDE -->
           <CustomPagePreviewPanel
-            v-else-if="topTab === 'design' && existingAppId && selectedApaasMenuId && selectedApaasMenuType === 'CUSTOM'"
+            v-if="topTab === 'design' && existingAppId && selectedApaasMenuId && selectedApaasMenuType === 'CUSTOM'"
             :key="`cpp-${selectedApaasMenuId}-${designerRefreshKey}`"
             class="platform-iframe-container"
             :app-id="existingAppId"
@@ -201,67 +188,17 @@
             <h3>选择左侧菜单开始设计</h3>
             <p>从左侧应用菜单列表点击一个菜单, 这里显示该菜单的<strong>表单 / 列表 / 流程 / 页面</strong>设计.</p>
           </div>
-          <!-- 流程 tab + 流程 sub: ProcessDesignerPanel (P0 mock 4 节点 demo, x6 driven) -->
-          <ProcessDesignerPanel
-            v-else-if="topTab === 'logic' && currentSectionTab === 'processes' && existingAppId"
-            :key="`process-fb-${designerRefreshKey}`"
-            class="platform-iframe-container"
-            :app-id="existingAppId"
-            :menu-id="selectedApaasMenuId || undefined"
-            :form-id="selectedApaasMenuFormId"
-            :assistant-open="assistantOpen"
-          />
-          <!-- 数据 tab + 数据模型 sub: 选中模型显字段表格 -->
-          <DataModelDetailPanel
-            v-else-if="topTab === 'data' && currentSectionTab === 'models' && existingAppId && selectedSectionItemId"
-            :key="`dmd-${selectedSectionItemId}`"
-            class="platform-iframe-container"
-            :app-id="existingAppId"
-            :model-id="selectedSectionItemId"
-            :refresh-nonce="designerRefreshKey"
-            @back="onNativePanelBack"
-          />
-          <!-- 数据 tab + 字典 sub: master-detail -->
-          <DictEditorPanel
-            v-else-if="topTab === 'data' && currentSectionTab === 'dicts' && existingAppId"
-            :key="`dict-${designerRefreshKey}`"
-            class="platform-iframe-container"
-            :app-id="existingAppId"
-            :apaas-app-id="store.currentApp?.apaas_app_id || ''"
-            :env-id="store.currentApp?.platform_env_id || 0"
-          />
-          <!-- 权限 tab + 角色 sub: master-detail -->
-          <RoleManagePanel
-            v-else-if="topTab === 'perm' && currentSectionTab === 'roles' && existingAppId"
-            :key="`role-${designerRefreshKey}`"
-            class="platform-iframe-container"
-            :app-id="existingAppId"
-          />
-          <!-- 数据源 tab (Q2 2026-05-27): 应用关联的数据源 (DB connection 维度, 只读) -->
-          <AppDatasourcePanel
-            v-else-if="topTab === 'datasource' && existingAppId"
-            :key="`appds-${designerRefreshKey}`"
-            class="platform-iframe-container"
-            :app-id="existingAppId"
-          />
-          <!-- 非原生 tab（业务事件/字段权限/菜单可见性等）: 去内嵌, 占位 + 深链低代码后台 -->
-          <div v-else class="platform-iframe-container lowcode-deeplink-placeholder">
-            <div class="lcd-ph-icon" aria-hidden="true"><AppIcon name="wrench" :size="32" /></div>
-            <p class="lcd-ph-hint">这块配置在低代码后台编辑。</p>
-            <OpenLowcodeBackendButton v-if="existingAppId" :app-id="existingAppId" />
-          </div>
-        <!-- 2026-05-29: 配置助手嵌入式右栏 — 对齐「设计」tab(SpecDesignPanel 内嵌 chat)的布局,
-             并排不浮盖中间内容。设计 tab(topTab==='spec')自带 SPEC chat, 这里不重复显。
-             收起态走右下 FAB(见 chat-shell 下), 展开态在此并排; 宽度由 panel 内 usePanelResize 控制。 -->
+        <!-- 2026-05-29: 配置助手嵌入式右栏 — 对齐「设计」tab 布局,
+             并排不浮盖中间内容。收起态走右下 FAB(见 chat-shell 下),
+             展开态在此并排; 宽度由 panel 内 usePanelResize 控制。 -->
         <AppAssistantPanel
-          v-if="!embedMode && isPostDeploy && resolvedAppId && topTab !== 'spec' && assistantOpen"
+          v-if="!embedMode && isPostDeploy && resolvedAppId && assistantOpen"
           class="ca-embedded"
           v-model:expanded="assistantExpanded"
           :application-id="resolvedAppId"
           :app-name="builderAppDisplayName || ''"
           :current-section="currentSection"
           :current-section-tab="currentSectionTab"
-          :designer-sub="topTab === 'design' && selectedApaasMenuId ? designerSub : null"
           :selected-menu-name="selectedApaasMenuName"
           :selected-menu-id="selectedApaasMenuId"
           @close="toggleAssistant"
@@ -290,10 +227,9 @@
           'artifacts-hidden': !showAnyBuilderArtifactPanel
         }"
       >
-      <!-- 2026-05-29: 退休老 builder-md-viewer (平铺 SPEC dump)。读 SPEC 统一走「设计」tab
-           (SpecDesignPanel — 结构化分章 + 用对话改 + 确认并生成 + 版本/对比/导出)。
-           草稿应用由 restoreActiveViewForApp 路由到 platform + 设计 tab; 已部署走平台 iframe。
-           原 md-viewer 的"下载/打开应用/部署历史"已分别在 设计 tab 导出 / 顶部"查看应用" / 顶部"历史"。-->
+      <!-- 2026-05-29: 退休老 builder-md-viewer (平铺 SPEC dump)。
+           草稿应用由 restoreActiveViewForApp 路由到 platform + 配置 tab; 已部署走平台 iframe。
+           原 md-viewer 的"下载/打开应用/部署历史"已分别在 顶部"查看应用" / 顶部"历史"。-->
 
       <!-- 2026-05-29: 退休 md-viewer 后, activeView='builder' 这段窗口(应用加载完 →
            restoreActiveViewForApp 翻到 platform 之前)中间会空白。放加载占位别让用户盯白屏;
@@ -511,11 +447,9 @@
     </aside>
     <!-- 2026-05-19 post-deploy 形态: 配置助手, 聊增量调整 -->
     <!-- 2026-05-25: 改浮动模式 — 默认收起 FAB, 点开 overlay 在 iframe 上, 不再挤 iframe 宽度 -->
-    <!-- U6 (2026-05-27): 设计 tab 隐藏浮窗 — SpecDesignPanel 自带内嵌 SPEC chat,
-         避免双 chat 心智混乱 (浮窗 = apaas 现场改 / 内嵌 = SPEC 草稿改). -->
-    <!-- 收起态 FAB: 展开面板已改为嵌入式右栏(在 .platform-shell-row 内, 对齐「设计」tab)。
-         FAB 仅在 platform 视图显 — 嵌入式面板挂在 platform-shell 里, builder 视图点开会落在 v-show 隐藏容器。 -->
-    <template v-if="!embedMode && isPostDeploy && resolvedAppId && topTab !== 'spec' && activeView === 'platform'">
+    <!-- 收起态 FAB: 展开面板已改为嵌入式右栏(在 .platform-shell-row 内, 对齐「配置」tab)。
+         FAB 仅在 platform 视图 + 配置 tab 显 — 自开发 tab 不显配置助手浮窗。 -->
+    <template v-if="!embedMode && isPostDeploy && resolvedAppId && topTab !== 'dev' && activeView === 'platform'">
       <button
         v-if="!assistantOpen"
         class="ca-fab"
@@ -574,7 +508,7 @@
 
 <script setup lang="ts">
 import { API_PREFIX } from '@/utils/request'
-import { ref, reactive, computed, nextTick, onMounted, onBeforeUnmount, watch, defineAsyncComponent } from 'vue'
+import { ref, reactive, computed, nextTick, onMounted, onBeforeUnmount, watch } from 'vue'
 import { useRouter, useRoute } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { usePreviewStore } from '@/stores/preview'
@@ -610,28 +544,10 @@ import {
 import ApaasMenuSidebar from '@/components/ApaasMenuSidebar.vue'
 import AppIcon from '@/components/common/AppIcon.vue'
 import SectionContentList from '@/components/v2/SectionContentList.vue'
-import AppConfigSubNav from '@/components/v3/AppConfigSubNav.vue'
-import FormDesignerPanel from '@/components/v3/FormDesignerPanel.vue'
-import ListDesignerPanel from '@/components/v3/ListDesignerPanel.vue'
-import ProcessDesignerPanel from '@/components/v3/ProcessDesignerPanel.vue'
-import DataSchemaEditor from '@/components/v3/DataSchemaEditor.vue'
-import FormPermPanel from '@/components/v3/FormPermPanel.vue'
-import BusinessEventPanel from '@/components/v3/BusinessEventPanel.vue'
-import OpenLowcodeBackendButton from '@/components/v3/OpenLowcodeBackendButton.vue'
-import DataModelDetailPanel from '@/components/v3/DataModelDetailPanel.vue'
-import DictEditorPanel from '@/components/v3/DictEditorPanel.vue'
-import RoleManagePanel from '@/components/v3/RoleManagePanel.vue'
-import LogsPanel from '@/components/v3/LogsPanel.vue'
-import AppHealthPanel from '@/views/coding/AppHealthPanel.vue'
-import AppDatasourcePanel from '@/components/v3/AppDatasourcePanel.vue'
 import CustomPagePreviewPanel from '@/components/v3/CustomPagePreviewPanel.vue'
 import AppDevWorkspacePanel from '@/components/v3/AppDevWorkspacePanel.vue'
 import InAppBrowser from '@/components/common/InAppBrowser.vue'
 import { getEditorUrl } from '@/api/editorUrl'
-// U3 (2026-05-27): SPEC 设计层 panel — 跟"功能" tab 平行的 SPEC 编辑层 (MVP read-only).
-// SPEC tab 休眠中(SPEC_TAB_ENABLED=false)，异步冷藏使其退出主 bundle；恢复时打开 flag 即可。
-// SpecChatPanel/SpecApplyModal 仅被 SpecDesignPanel 引用，会自动跟进同一异步 chunk。
-const SpecDesignPanel = defineAsyncComponent(() => import('@/components/v3/SpecDesignPanel.vue'))
 import type { ConversationCreate, Message } from '@/types'
 import TopBar from '@/components/TopBar.vue'
 import WorkbenchShell from '@/components/WorkbenchShell.vue'
@@ -646,18 +562,14 @@ import { convertConfig } from '@/api/conversation'
 import { buildStructuredDocFromPreviewConfig } from '@/utils/structuredDoc'
 import { computeStructuredDocDiff } from '@/utils/structuredDocDiff'
 import {
-  APP_CONFIG_TOP_TABS_ENABLED,
   SECTION_DEFAULT_TAB,
   SECTION_STORAGE_KEY,
   SECTION_TAB_STORAGE_KEY,
   SECTION_TO_TOP_TAB,
   SPEC_TAB_ENABLED,
-  TOP_TAB_SUBS,
-  DESIGNER_SUBS,
   getInitialSection,
   getInitialSectionTab,
   normalizeTopTab,
-  type DesignerSubCode,
 } from '@/composables/useAppConfigTabs'
 import { useSpecStore } from '@/stores/spec'
 import PhaseBar from '@/components/spec/PhaseBar.vue'
@@ -2064,8 +1976,7 @@ function toggleAssistant() {
 
 // ── 平台配置 iframe ──
 // 2026-05-27 P2: design-v4 panel 刷新 key — ConfigAssistant 完成调整后 bump 这个,
-// 让 FormDesignerPanel / ListDesignerPanel / ProcessDesignerPanel / DataSchemaEditor /
-// RoleManagePanel 重新挂载 + 重新拉数据 (替代老 iframe.reload). 5 panel 都 bind
+// 让 CustomPagePreviewPanel 重新挂载 + 重新拉数据 (替代老 iframe.reload), bind
 // :key="`{prefix}-${designerRefreshKey}`" 触发 remount.
 const designerRefreshKey = ref(0)
 
@@ -2077,23 +1988,14 @@ const _initSectionTab = getInitialSectionTab(_initSection)
 const currentSection = ref<string>(_initSection)
 const currentSectionTab = ref<string>(_initSectionTab)
 
-// 2026-05-26 design-v3: 顶部 5 tab (设计/数据/流程/权限/日志). 跟旧 currentSection 双向同步.
-// 旧 SECTION (data/ui/logic/permission/extension) 映射到新 TopTab:
-//   data → data, ui → design, logic → logic, permission → perm, extension → 日志 (extension 退场)
-// 2026-05-29: 暂时隐藏「设计」(spec) tab — 用户反馈那一大坨 read-only SPEC 文档平铺太重,
-// 进应用直接用「功能」tab + 配置助手对话调整即可。改开关为 true 即整体恢复(组件/逻辑都保留,
-// 仅不显示 + 把落到 spec 的入口归一到 design)。⚠️ 别删 SpecDesignPanel 本体(low-code 核心线)。
+// 2026-06-24 Task 4: topTab 收敛为「配置」(design) +「自开发」(dev) 两值.
+// 旧 SECTION (data/ui/logic/permission/extension) 经 normalizeTopTab 归一到 design.
 const topTab = ref<string>(normalizeTopTab(SECTION_TO_TOP_TAB[_initSection] || 'design'))
-function onSubNavSwitch(sub: string) {
-  currentSectionTab.value = sub
-  try { localStorage.setItem(SECTION_TAB_STORAGE_KEY, sub) } catch {}
-}
-// sub-tab chips for current top tab (5 个 top tab 各有自己的 sub-tab 集合)
-const currentSubTabsForTop = computed(() => TOP_TAB_SUBS[topTab.value] || [])
-
-// 2026-05-26 设计 tab 内部 designer sub-nav (跟 apaas form designer 顶部 4 tab 对齐).
-// 用户在左侧 ApaasMenuSidebar 选中菜单后, designer 主区域顶部 4 tab 切对应 panel.
-const designerSub = ref<DesignerSubCode>('form')
+// Task 4: 顶部 tab 收敛为「配置」+「自开发」两项.
+const CONFIG_TOP_TABS = [
+  { code: 'design', label: '配置' },
+  { code: 'dev', label: '自开发' },
+] as const
 
 // P1-N6: 这些 sub-tab 走 native master-detail panel — 不需要再显 SectionContentList.
 const isNativeMasterDetailSubTab = computed(() => {
@@ -2160,7 +2062,7 @@ function onSectionContentItemSelect(item: any) {
 
   // 凡是 menu-based 的资源 (forms / lists / processes / field-permissions / menu-visibility)
   // 都走 onApaasMenuSelected 跳到该菜单的编辑页. item 有 menu_id + form_id (来自 extra).
-  // P1-N6: 设计 tab + forms/lists 时, 不切 iframe — FormDesignerPanel 直接显字段.
+  // P1-N6: 设计 tab + forms/lists 时, 不切 iframe — 内嵌编辑器直接显字段.
   const isMenuBased = (
     (currentSection.value === 'ui' && (currentSectionTab.value === 'forms' || currentSectionTab.value === 'lists'))
     || (currentSection.value === 'logic' && currentSectionTab.value === 'processes')
@@ -2169,7 +2071,7 @@ function onSectionContentItemSelect(item: any) {
   if (isMenuBased) {
     const menuId = item?.menu_id || item?.id || item?.extra?.menu_id
     if (menuId) {
-      // 设计 tab + forms/lists: FormDesignerPanel 自己接 menu_id, 不需要切 iframe.
+      // 设计 tab + forms/lists: 内嵌编辑器自己接 menu_id, 不需要切 iframe.
       // 逻辑 tab + processes / 权限 tab + field_perm/menu_vis: 还走 iframe (P2 改 native).
       if (topTab.value !== 'design') {
         onApaasMenuSelected({
@@ -2179,14 +2081,13 @@ function onSectionContentItemSelect(item: any) {
           menu_display: item?.extra?.menu_display,
         } as any)
       } else {
-        // design tab: 记下 selectedApaasMenuId 让 FormDesignerPanel 拿到
+        // design tab: 记下 selectedApaasMenuId 让内嵌编辑器拿到
         selectedApaasMenuId.value = String(menuId)
       }
       return
     }
   }
   // models / dicts / business-events / roles: 平台无直接 deeplink.
-  // P1-N6 现在 data:models 走 DataModelDetailPanel — 由 selectedSectionItemId 触发.
   console.log('[SectionContentList] selected item:', item)
 }
 function onSectionContentCreateRequest() {
@@ -2206,14 +2107,14 @@ function onSectionContentCreateRequest() {
 // 2026-05-26: sidebar 引用 — AI 完成调整后联动 reload, 让新建菜单立刻显
 const apaasMenuSidebarRef = ref<{ reload: () => Promise<void> } | null>(null)
 function refreshPlatformAndSidebar() {
-  // bump design-v4 panel key — 让 5 个 Vue 原生 panel re-mount + re-fetch
+  // bump panel key — 让 CustomPagePreviewPanel re-mount + re-fetch
   designerRefreshKey.value += 1
-  // 略延 300ms 给平台 API 落库, 然后 reload 菜单树
+  // 略延 300ms 给平台 API 落库, 然后 reload 菜单树 + 内嵌编辑器
   setTimeout(() => {
     try { apaasMenuSidebarRef.value?.reload?.() } catch { /* sidebar 还没 mount 时忽略 */ }
+    // Task 3: 同步 reload 内嵌编辑器（若已加载）— 延后到写入落库后再刷
+    editorBrowserRef.value?.reload()
   }, 300)
-  // Task 3: 同步 reload 内嵌编辑器（若已加载）
-  editorBrowserRef.value?.reload()
 }
 
 // 2026-05-25 B-4: 原生菜单 sidebar 选中态 + 切 iframe handler
@@ -2260,7 +2161,7 @@ function onApaasMenuSelected(menu: {
 }) {
   if (!existingAppId.value) return
   selectedApaasMenuId.value = menu.menu_id
-  // design-v4 Phase A: FormDesignerPanel 用 menu_name / form_id 反查 model
+  // design-v4 Phase A: 内嵌编辑器用 menu_name / form_id 反查 model
   selectedApaasMenuName.value = menu.menu_name || ''
   selectedApaasMenuFormId.value = menu.form_id ? String(menu.form_id) : ''
   // R (2026-05-27): 保存 menu_type 让 CUSTOM 菜单走 CustomPagePreviewPanel 分支

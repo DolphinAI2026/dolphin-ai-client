@@ -3386,8 +3386,8 @@ html[data-theme="light"] .msg-attachment-chip {
   min-height: 0;
   min-width: 0;
 }
-/* sub-tab chip strip: 顶部 tab 下方水平 chip 行 (替代 sub-nav 200px 列) */
-.sub-chip-strip {
+/* Task 4: 顶部 tab 收敛为「配置」+「自开发」两项, 下划线二级 tab 样式 */
+.config-top-tabs {
   display: flex;
   align-items: center;
   gap: 4px;
@@ -3398,8 +3398,7 @@ html[data-theme="light"] .msg-attachment-chip {
   font-family: var(--font-sans);
   overflow-x: auto;
 }
-/* 2026-05-29 视觉收口: 胶囊 → 下划线二级 tab, 对齐日志(.lp-subnav-tab)/designer(.mdsh-subnav-tab) */
-.sub-chip {
+.config-top-tab {
   position: relative;
   display: inline-flex;
   align-items: center;
@@ -3416,10 +3415,10 @@ html[data-theme="light"] .msg-attachment-chip {
   white-space: nowrap;
   transition: color 0.14s, border-color 0.14s;
 }
-.sub-chip:hover {
+.config-top-tab:hover {
   color: var(--text);
 }
-.sub-chip.active {
+.config-top-tab.active {
   color: var(--brand);
   border-bottom-color: var(--brand);
   font-weight: 600;
@@ -3581,14 +3580,6 @@ html[data-theme="light"] .msg-attachment-chip {
      让 iframe 完全自适应宽度. 平台 form designer 自己负责内部排布. */
   overflow: hidden;
 }
-.lowcode-deeplink-placeholder {
-  align-items: center;
-  justify-content: center;
-  gap: 12px;
-  color: var(--text-3);
-}
-.lcd-ph-icon { font-size: 40px; }
-.lcd-ph-hint { margin: 0; font-size: 13px; }
 .platform-tab-bar {
   display: flex; align-items: center; gap: 4px; padding: 4px 16px;
   border-bottom: 1px solid var(--t-border-subtle);
@@ -3674,7 +3665,7 @@ html[data-theme="dark"] .config-assistant.ca-floating {
   box-shadow: -2px 0 8px rgba(0, 0, 0, 0.25);
 }
 
-/* 2026-05-29: 配置助手嵌入式右栏 — 对齐「设计」tab(SpecDesignPanel)布局。
+/* 2026-05-29: 配置助手嵌入式右栏 — 对齐「配置」tab 布局。
    在 .platform-shell-row(flex row) 内当最后一个并排子项, 不浮盖中间内容。
    宽度由 panel 自带 usePanelResize(:style width) 控制 — 这里不设 width, 只 flex-shrink:0;
    base .config-assistant 的 height:100% 在 row 里正好填满。左边缘有拖宽 handle。 */
@@ -4351,7 +4342,7 @@ html[data-theme="dark"] .cta-btn.cta-deploy {
   50% { opacity: 0.4; }
 }
 
-/* 开发/生产 segmented toggle — RoleManagePanel 同款 */
+/* 开发/生产 segmented toggle */
 .cta-env-toggle {
   display: inline-flex;
   background: var(--surface-2);
