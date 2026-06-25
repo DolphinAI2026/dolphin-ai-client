@@ -411,36 +411,10 @@ html[data-theme="dark"] .msg-error-row {
 }
 
 /* ============ Task 7: 原生文件树 + 代码查看器右栏 ============ */
+/* .ws-pane = 代码侧栏外框(宽度内联控、左缘可拖)。SP2b T2:文件面板内部布局
+   (.ws-pane-files/-tree/-viewer + .tree-resizer)已随段控/4 面板一并搬进
+   CodexPanelHost.vue 自带样式,这里不再重复定义。 */
 .ws-pane { position: relative; display: flex; flex-direction: column; height: 100%; min-height: 0; min-width: 0; border-left: 1px solid var(--line, rgba(0,0,0,.08)); width: 420px; flex-shrink: 0; }
-/* SP1 C4: 文件/代码 ⇄ 运行/调试 双 tab */
-.ws-pane-tabs { display: flex; gap: 4px; padding: 6px 10px; border-bottom: 1px solid var(--line, rgba(0,0,0,.08)); flex: 0 0 auto; }
-.ws-pane-tabs button { font-size: 12px; border: none; background: none; cursor: pointer; color: var(--text-3, #888); padding: 2px 8px; border-radius: 6px; }
-.ws-pane-tabs button.active { color: var(--text-1, #222); font-weight: 600; background: var(--bg-2, #f3f4f6); }
-.ws-pane-tabs .ws-pane-close { margin-left: auto; display: inline-flex; align-items: center; color: var(--text-3, #888); }
-.ws-pane-tabs .ws-pane-close:hover { color: var(--text-1, #222); background: var(--bg-2, #f3f4f6); }
-.ws-pane-files { display: flex; flex: 1; min-height: 0; }
-.ws-pane-tree { flex: none; border-right: 1px solid var(--line, rgba(0,0,0,.08)); }
-.ws-pane-viewer { flex: 1; min-width: 0; overflow: hidden; }
-/* 树右边界拖宽 handle: 骑在边框上不占布局宽度 */
-.tree-resizer {
-  flex: none;
-  width: 7px;
-  margin: 0 -3px 0 -4px;
-  cursor: col-resize;
-  z-index: 5;
-  position: relative;
-  touch-action: none;
-  user-select: none;
-}
-.tree-resizer::after {
-  content: '';
-  position: absolute;
-  left: 3px; top: 0; bottom: 0;
-  width: 2px;
-  background: transparent;
-  transition: background 0.15s var(--ease, ease);
-}
-.tree-resizer:hover::after { background: var(--brand, #6366f1); }
 
 /* 对话优先(参考 Claude Code): 对话(main-content)是常驻主列吃 flex:1 剩余空间;
    代码侧栏(.ws-pane)并排在右(宽度走内联 :style + 可拖), 不遮挡对话。 */

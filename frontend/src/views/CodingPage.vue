@@ -346,86 +346,39 @@
            侧栏左边界可拖宽; × 收起回全宽对话。 -->
       <div
         v-if="codePaneOpen && codingStore.workspace?.id"
-        class="ws-pane codex-panel-host"
+        class="ws-pane cph-frame"
         :style="{ flex: '0 0 ' + codePaneWidth + 'px', width: codePaneWidth + 'px' }"
       >
         <div class="ws-pane-resizer cph-resizer" title="拖拽调整代码栏宽度" @pointerdown="onCodePaneResizeStart" />
-        <div class="cph-topbar">
-          <div class="cph-segments">
-            <button
-              v-for="c in codexPanelCommands"
-              :key="c.id"
-              class="cph-seg"
-              :class="{ active: activePanel === c.id }"
-              :title="c.label"
-              @click="showPanel(c.id)"
-            >
-              <AppIcon :name="c.icon" :size="14" />
-              <span class="cph-seg-label">{{ c.label }}</span>
-            </button>
-          </div>
-          <div class="cph-topbar-actions">
-            <button class="cph-icon-btn" title="命令面板 ⌘K" @click="cmdPaletteOpen = true">
-              <AppIcon name="more" :size="15" />
-            </button>
-            <button class="cph-icon-btn" title="收起代码栏" @click="codePaneOpen = false">
-              <AppIcon name="x" :size="15" />
-            </button>
-          </div>
-        </div>
-
-        <ReviewPanel
-          v-show="activePanel === 'review'"
-          class="cph-body-panel"
+        <CodexPanelHost
+          :ws-id="codingStore.workspace?.id || ''"
+          :open="codePaneOpen"
+          :active-panel="activePanel"
+          :panel-commands="codexPanelCommands"
           :changes="wsGitChanges"
-          :selected="selectedFile"
-          :accepting="acceptingWorkspaceChanges"
+          :selected-file="selectedFile"
+          :accepting-changes="acceptingWorkspaceChanges"
+          :file-tree="wsFileTree"
+          :changed-paths="changedPaths"
+          :selected-diff="selectedDiff"
+          :selected-git-change="selectedGitChange"
+          :viewer-focus-line="viewerFocusLine"
+          :active-preview="codingStore.activePreview"
+          :tree-pane-width="treePaneWidth"
+          :dark="true"
+          @update:open="v => codePaneOpen = v"
+          @update:active-panel="showPanel"
+          @open-palette="cmdPaletteOpen = true"
           @select-file="onReviewSelectFile"
           @accept-all="acceptAllWorkspaceChanges"
-        />
-
-        <TerminalPanel
-          v-show="activePanel === 'terminal'"
-          class="cph-body-panel"
-          :ws-id="codingStore.workspace?.id || ''"
+          @select-tree="onTreeSelect"
+          @select-tree-line="onTreeSelectLine"
+          @viewer-quote="onViewerQuote"
+          @accept-change="acceptWorkspaceChange"
           @server-detected="onTerminalServerDetected"
-        />
-
-        <RunDebugPanel
-          v-show="activePanel === 'browser'"
-          class="cph-body-panel"
-          :ws-id="codingStore.workspace?.id || ''"
-          :dark="true"
-          :active-preview="codingStore.activePreview"
           @update:active-preview="v => codingStore.activePreview = v"
+          @tree-resize-start="onTreeResizeStart"
         />
-
-        <div v-show="activePanel === 'files'" class="ws-pane-files cph-body-panel">
-          <FileTree
-            class="ws-pane-tree"
-            :style="{ width: treePaneWidth + 'px' }"
-            :tree="wsFileTree"
-            :changed="changedPaths"
-            :changes="wsGitChanges"
-            :selected="selectedFile"
-            :ws-id="codingStore.workspace?.id || ''"
-            @select="onTreeSelect"
-            @select-line="onTreeSelectLine"
-            @accept-all="acceptAllWorkspaceChanges"
-          />
-          <div class="tree-resizer" title="拖拽调整文件树宽度" @pointerdown="onTreeResizeStart" />
-          <CodeViewer
-            class="ws-pane-viewer"
-            :ws-id="codingStore.workspace?.id || ''"
-            :file-path="selectedFile"
-            :diff="selectedGitChange ? null : selectedDiff"
-            :change="selectedGitChange"
-            :focus-line="viewerFocusLine"
-            :dark="true"
-            @quote="onViewerQuote"
-            @accept-change="acceptWorkspaceChange"
-          />
-        </div>
       </div>
 
       <CommandPalette
@@ -557,12 +510,10 @@ import { useCodingWorkspace } from './coding/useCodingWorkspace'
 import { useCodingPipeline } from './coding/useCodingPipeline'
 import UnifiedChatComposer from '@/components/common/UnifiedChatComposer.vue'
 import type { UnifiedChatAttachment } from '@/components/common/chatComposer'
-import FileTree from './coding/FileTree.vue'
-import CodeViewer from './coding/CodeViewer.vue'
-import RunDebugPanel from './coding/RunDebugPanel.vue'
 import CommandPalette from './coding/CommandPalette.vue'
-import ReviewPanel from './coding/panels/ReviewPanel.vue'
-import TerminalPanel from './coding/panels/TerminalPanel.vue'
+// 4 个面板(ReviewPanel/TerminalPanel/RunDebugPanel/FileTree+CodeViewer)+ 段控顶栏已抽进
+// CodexPanelHost(SP2b T2),CodingPage 只挂宿主组件,不再直接 import 这些子件。
+import CodexPanelHost from './coding/CodexPanelHost.vue'
 import {
   useCodexPanels,
   matchPalette,

@@ -2763,56 +2763,9 @@ html[data-theme="dark"] .mrc-body { border-left-color: #3a3a3a; color: #9aa0a6; 
 }
 
 /* ════════════════════════════════════════════════════════════════════
-   Codex 面板外壳(Phase 2) — 右侧单面板宿主 + 段控顶栏。
+   Codex 面板宿主外框(SP2b T2) — 段控顶栏 + 4 面板已抽进 CodexPanelHost.vue,
+   这里只留「外框」: 左缘可拖宽 handle 的定位上下文 + 宽度内联控制。
+   外框不画左边界(那道 --cx-border 边由 CodexPanelHost 根自带,避免双边框)。
    ════════════════════════════════════════════════════════════════════ */
-.codex-panel-host {
-  display: flex;
-  flex-direction: column;
-  min-height: 0;
-  background: var(--cx-bg-1);
-  border-left: 1px solid var(--cx-border);
-}
-.codex-panel-host .cph-topbar {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 8px;
-  height: 40px;
-  padding: 0 8px 0 10px;
-  border-bottom: 1px solid var(--cx-border);
-  background: var(--cx-bg-0);
-  flex-shrink: 0;
-}
-.codex-panel-host .cph-segments { display: flex; align-items: stretch; gap: 2px; height: 100%; }
-.codex-panel-host .cph-seg {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  background: transparent;
-  border: none;
-  border-bottom: 2px solid transparent;
-  color: var(--cx-text-3);
-  font-size: 12.5px;
-  padding: 0 10px;
-  cursor: pointer;
-  transition: color 0.12s, border-color 0.12s;
-}
-.codex-panel-host .cph-seg:hover { color: var(--cx-text-1); }
-.codex-panel-host .cph-seg.active { color: var(--cx-text-1); border-bottom-color: var(--cx-brand); }
-.codex-panel-host .cph-seg-label { line-height: 1; }
-.codex-panel-host .cph-topbar-actions { display: inline-flex; align-items: center; gap: 2px; }
-.codex-panel-host .cph-icon-btn {
-  display: grid;
-  place-items: center;
-  width: 28px;
-  height: 28px;
-  background: transparent;
-  border: none;
-  border-radius: 6px;
-  color: var(--cx-text-2);
-  cursor: pointer;
-}
-.codex-panel-host .cph-icon-btn:hover { background: var(--cx-bg-3); color: var(--cx-text-1); }
-.codex-panel-host .cph-body-panel { flex: 1 1 auto; min-height: 0; overflow: hidden; }
-/* 文件面板内部仍是 树+resizer+viewer 横排,沿用 .ws-pane-files 既有布局 */
-.codex-panel-host .ws-pane-files.cph-body-panel { display: flex; }
+.cph-frame { border-left: none; }
+.cph-frame > .codex-panel-host { height: 100%; }
