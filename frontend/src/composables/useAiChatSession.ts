@@ -300,6 +300,9 @@ export function useAiChatSession(opts?: UseAiChatSessionOptions): UseAiChatSessi
     if (tc.tool_name === 'write_artifact') return `${textOf(a.filename)} (${textOf(a.format) || 'md'})`
     if (tc.tool_name === 'run_python') return textOf(a.code).slice(0, 60).replace(/\n/g, ' ') + '…'
     if (tc.tool_name === 'ask_clarifying_question') return textOf(a.question).slice(0, 80)
+    if (tc.tool_name === 'write_file') return textOf(a.file_path)
+    if (tc.tool_name === 'edit_file') return textOf(a.file_path)
+    if (tc.tool_name === 'run_command') return textOf(a.command)
     return ''
   }
 
@@ -395,6 +398,21 @@ export function useAiChatSession(opts?: UseAiChatSessionOptions): UseAiChatSessi
       if (fname && lines != null) return `✅ 读取 ${fname} (${lines} 行)`
       if (fname) return `✅ 读取 ${fname}`
       return '✅ 已读取附件'
+    }
+    if (name === 'write_file') {
+      const fname = r.file_path || r.path
+      return fname ? `✅ ${fname}` : '✅ 文件已写入'
+    }
+    if (name === 'edit_file') {
+      const fname = r.file_path || r.path
+      return fname ? `✅ ${fname}` : '✅ 文件已编辑'
+    }
+    if (name === 'run_command') {
+      const exitCode = r.exit_code ?? r.code ?? r.return_code
+      if (exitCode != null) {
+        return exitCode === 0 ? '✅ exit 0' : `❌ exit ${exitCode}`
+      }
+      return r.ok === true || r.success === true ? '✅ 完成' : ''
     }
 
     if (r.ok === true || r.success === true) return '✅ 完成'
