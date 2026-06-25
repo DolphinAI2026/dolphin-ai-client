@@ -1154,6 +1154,66 @@ async def git_pull_endpoint(
     return {"ok": True, **rs}
 
 
+# Git 端点 — 代码会话 git P3(从远程仓 clone 起工作区)
+# ---------------------------------------------------------------------------
+class CloneRepoRequest(BaseModel):
+    provider: str          # "github" | "gitlab"
+    remote_url: str        # https://… 或本地路径(测试用)
+    git_connection_id: int
+    name: Optional[str] = None        # 工作区展示名,默认从 remote_url 推
+    project_id: Optional[int] = None  # 可选:绑定应用
+
+
+def _repo_name_from_url(remote_url: str) -> str:
+    """从 remote_url 末段推一个项目名:.../grp/proj.git → proj。"""
+    tail = remote_url.rstrip("/").rsplit("/", 1)[-1]
+    return tail[:-4] if tail.endswith(".git") else tail or "cloned-repo"
+
+
+@router.post("/workspaces/git/clone")
+async def git_clone_workspace_endpoint(
+    body: CloneRepoRequest,
+    ctx: Annotated[AuthContext, Depends(get_auth_context)],
+    db: Annotated[AsyncSession, Depends(get_db)],
+):
+    """从远程仓 clone 起一个新工作区,并立刻绑定远程(push/pull 即用)。"""
+    if body.project_id:
+        await require_project_access(
+            db, project_id=body.project_id, user_id=ctx.user.id,
+            tenant_id=ctx.tenant_id, minimum_role="member",
+        )
+
+    conn = await _load_git_connection(db, body.git_connection_id, ctx)
+    project_name = (body.name or "").strip() or _repo_name_from_url(body.remote_url)
+    ws_id, ws_path = workspace_mgr.prepare_clone_target(project_name=project_name, user_id=ctx.user.id)
+
+    token = decrypt_password(conn.access_token_enc)  # 仅内存
+    authed_url = workspace_git.build_authed_url(body.provider, body.remote_url, token)
+    try:
+        default_branch = await workspace_git.clone(ws_path, authed_url, body.remote_url)
+    except workspace_git.GitError as e:
+        shutil.rmtree(ws_path, ignore_errors=True)   # 清理半成品
+        raise HTTPException(status_code=400, detail=f"clone 失败: {e}")
+    finally:
+        del token, authed_url   # PAT 即时丢弃
+
+    meta = workspace_mgr.register_cloned_workspace(
+        ws_id, ws_path,
+        project_name=project_name, display_name=body.name,
+        user_id=ctx.user.id, tenant_id=ctx.tenant_id, project_id=body.project_id,
+        remote_url=body.remote_url,
+    )
+
+    db.add(WorkspaceGitRemote(
+        ws_id=ws_id, tenant_id=ctx.tenant_id, user_id=ctx.user.id,
+        provider=body.provider, remote_url=body.remote_url,
+        default_branch=default_branch, git_connection_id=body.git_connection_id,
+    ))
+    await db.flush()
+
+    return _decorate_workspace_access(meta, "owner")
+
+
 async def _read_class_file_decompiled(ws_id: str, file_path: str) -> dict:
     """.class 文件按字节没法预览,反编译成文本返回(CFR 优先, javap 兜底)。"""
     from app.coding.class_decompiler import DecompileError, decompile_class_file
