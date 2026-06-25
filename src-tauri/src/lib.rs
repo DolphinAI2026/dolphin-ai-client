@@ -106,6 +106,9 @@ pub fn run() {
                     "--data-dir".to_string(),
                     data_dir.to_string_lossy().to_string(),
                 ])
+                // Phase 1' cutover 验证:桌面包里让 Code 模式走统一引擎 run_agent(dev-apaas profile),
+                // 而 tests/本地 dev 仍走默认关(旧 coding 流水线)→ A/B 验证。验证通过后翻代码默认 + 退役旧码。
+                .env("CODING_USE_RUNAGENT", "1")
                 .spawn()
                 .expect("failed to spawn sidecar");
 
