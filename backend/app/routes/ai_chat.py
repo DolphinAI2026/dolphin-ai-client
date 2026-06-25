@@ -455,6 +455,7 @@ async def list_sessions(
         .where(
             AIChatSession.user_id == ctx.user.id,
             AIChatSession.tenant_id == ctx.tenant_id,
+            AIChatSession.mode != "code",  # SP1: Code 会话不进 Builder 会话列表(止血,见 spec §3.1)
         )
     )
     if app_id is not None:

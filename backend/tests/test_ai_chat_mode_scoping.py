@@ -58,3 +58,38 @@ async def test_load_session_other_user_still_404(db_session):
     with pytest.raises(HTTPException) as exc:
         await _load_session_or_404(db_session, s.id, thief_ctx)
     assert exc.value.status_code == 404
+
+
+@pytest.mark.asyncio
+async def test_list_sessions_excludes_code(db_session):
+    """同一 user 的 chat + code 两会话,列表只返回 chat。"""
+    tenant = Tenant(tenant_name="t_list", tenant_code="t_list_scope")
+    db_session.add(tenant)
+    await db_session.flush()
+    user = await _make_user(db_session, "listscopeuser")
+    chat = AIChatSession(tenant_id=tenant.id, user_id=user.id, title="chat one", mode="chat")
+    code = AIChatSession(tenant_id=tenant.id, user_id=user.id, title="code one", mode="code")
+    db_session.add_all([chat, code])
+    await db_session.flush()
+    chat_id, code_id = chat.id, code.id
+
+    out = await list_sessions(_ctx_for(user, tenant.id), db_session)
+    ids = {s["id"] for s in out["sessions"]}
+    assert chat_id in ids, "chat 会话应出现在 Builder 列表"
+    assert code_id not in ids, "code 会话不应出现在 Builder 列表"
+
+
+@pytest.mark.asyncio
+async def test_list_sessions_keeps_cowork(db_session):
+    """回归:cowork 会话照常出现在列表。"""
+    tenant = Tenant(tenant_name="t_cowork", tenant_code="t_cowork_scope")
+    db_session.add(tenant)
+    await db_session.flush()
+    user = await _make_user(db_session, "coworkuser")
+    cw = AIChatSession(tenant_id=tenant.id, user_id=user.id, title="cw", mode="cowork")
+    db_session.add(cw)
+    await db_session.flush()
+    cw_id = cw.id
+
+    out = await list_sessions(_ctx_for(user, tenant.id), db_session)
+    assert cw_id in {s["id"] for s in out["sessions"]}
