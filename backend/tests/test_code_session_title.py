@@ -6,7 +6,7 @@ from unittest.mock import patch
 import pytest
 
 from app.deps import AuthContext
-from app.models import User
+from app.models import User, Application
 from app.models.tenant import Tenant
 from app.routes.ai_chat import CreateSessionRequest, create_session
 
@@ -38,6 +38,36 @@ async def test_code_session_title_falls_back_when_workspace_lookup_fails(db_sess
     with patch("app.routes.ai_chat.workspace_mgr.get_workspace_info", side_effect=FileNotFoundError):
         result = await create_session(body, ctx, db_session)
     assert result["title"] == "代码会话"  # lookup 失败 → 回退前端传的标题
+
+
+@pytest.mark.asyncio
+async def test_code_session_inherits_workspace_app_binding(db_session):
+    """工作区已绑应用(meta.project_id=Application.id)→ 代码会话继承 app_id,不当孤儿。"""
+    tenant = Tenant(tenant_name="t_app", tenant_code="t_app"); db_session.add(tenant); await db_session.flush()
+    user = User(username="appbind_user", hashed_password="x"); db_session.add(user); await db_session.flush()
+    app = Application(user_id=user.id, tenant_id=tenant.id, created_by=user.id, app_name="CRM", app_code="crm")
+    db_session.add(app); await db_session.flush()
+    ctx = _ctx(user, tenant.id)
+
+    body = CreateSessionRequest(mode="code", workspace_id="1_bound", title="代码会话")
+    with patch("app.routes.ai_chat.workspace_mgr.get_workspace_info",
+               return_value={"display_name": "CRM 自开发", "project_id": app.id}):
+        result = await create_session(body, ctx, db_session)
+    assert result["app_id"] == app.id
+
+
+@pytest.mark.asyncio
+async def test_code_session_no_app_when_workspace_unbound(db_session):
+    """工作区未绑应用 → 会话 app_id 为空(只绑工作区,不强行造关联)。"""
+    tenant = Tenant(tenant_name="t_nb", tenant_code="t_nb"); db_session.add(tenant); await db_session.flush()
+    user = User(username="nobind_user", hashed_password="x"); db_session.add(user); await db_session.flush()
+    ctx = _ctx(user, tenant.id)
+
+    body = CreateSessionRequest(mode="code", workspace_id="1_unbound", title="代码会话")
+    with patch("app.routes.ai_chat.workspace_mgr.get_workspace_info",
+               return_value={"display_name": "练手仓", "project_id": None}):
+        result = await create_session(body, ctx, db_session)
+    assert result["app_id"] is None
 
 
 @pytest.mark.asyncio

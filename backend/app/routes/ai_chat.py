@@ -483,14 +483,28 @@ async def create_session(
             raise HTTPException(status_code=400, detail="所选模型不可用或不支持 AI Builder")
         selected_llm_config_id = cfg.id
     title = body.title or "新会话"
+    app_id = body.app_id
     if body.mode == "code" and body.workspace_id:
-        # 代码会话标题用工作区显示名(比通用「代码会话」有意义);从「我的开发」/clone/本地夹
-        # 各入口进来都覆盖,单点派生。查不到工作区则回退前端传的标题。
+        # 代码会话从「我的开发」/clone/本地夹各入口进来,单点派生两件事:
+        #  ① 标题用工作区显示名(比通用「代码会话」有意义);查不到则回退前端传的标题。
+        #  ② 工作区若已绑应用(meta.project_id=Application.id)→ 会话继承该 app_id,
+        #     让 code agent 拿到应用上下文(build_app_context_block),不当孤儿会话。
         try:
             info = workspace_mgr.get_workspace_info(body.workspace_id)
             ws_name = (info.get("display_name") or info.get("project_name") or "").strip()
             if ws_name:
                 title = ws_name
+            if app_id is None:
+                ws_proj = info.get("project_id")
+                if ws_proj:
+                    bound_app = (await db.execute(
+                        select(Application.id).where(
+                            Application.id == int(ws_proj),
+                            Application.tenant_id == ctx.tenant_id,
+                        )
+                    )).scalar_one_or_none()
+                    if bound_app is not None:
+                        app_id = int(ws_proj)
         except Exception:
             pass
     s = AIChatSession(
@@ -500,7 +514,7 @@ async def create_session(
         selected_llm_config_id=selected_llm_config_id,
         mode="code" if body.mode == "code" else ("cowork" if body.mode == "cowork" else "chat"),
         status="active",
-        app_id=body.app_id,
+        app_id=app_id,
         workspace_id=body.workspace_id,
     )
     db.add(s)

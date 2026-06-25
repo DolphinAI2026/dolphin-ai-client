@@ -102,14 +102,14 @@
             <div class="welcome-hero">
               <div class="welcome-badge">
                 <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3 14 9l6 2-6 2-2 6-2-6-6-2 6-2z"/><path d="M19 17l1 3 3 1-3 1-1 3-1-3-3-1 3-1z"/></svg>
-                <span>AI Builder</span>
+                <span>{{ heroBadge }}</span>
               </div>
-              <h1 class="welcome-title">{{ welcomeTitle }}</h1>
-              <p class="welcome-sub">{{ welcomeIntro }}</p>
+              <h1 class="welcome-title">{{ heroTitle }}</h1>
+              <p class="welcome-sub">{{ heroIntro }}</p>
             </div>
             <div class="welcome-examples" aria-label="开场示例">
               <button
-                v-for="example in introExamples"
+                v-for="example in heroExamples"
                 :key="example.key"
                 type="button"
                 class="welcome-example"
@@ -141,11 +141,8 @@
                 {{ selectedIntroExample.cta }}
               </button>
             </section>
-            <div class="welcome-capabilities" aria-label="AI Builder 能力范围">
-              <span><i></i>整理需求</span>
-              <span><i></i>生成 / 更新应用</span>
-              <span><i></i>自开发页面和组件</span>
-              <span><i></i>接口联调与排错</span>
+            <div class="welcome-capabilities" aria-label="能力范围">
+              <span v-for="cap in heroCapabilities" :key="cap"><i></i>{{ cap }}</span>
             </div>
           </div>
         </template>
@@ -833,6 +830,50 @@ type ActivePreview = {
 
 const codexPanelWsId = computed<string | null>(() => currentSession.value?.workspace_id ?? null)
 const isCodeSession = computed(() => currentSession.value?.mode === 'code' && !!codexPanelWsId.value)
+
+// ── 代码会话专属空状态(与 Builder 搭应用的开场区分)──────────────
+const codeWelcomeTitle = '告诉 AI 要改什么，它读代码、改文件、联调验证。'
+const codeWelcomeIntro = '指定要改的页面或组件、贴运行报错、描述要新增的功能，AI 会读当前工作区代码、改文件、跑命令，必要时联调接口；改动以红绿 diff 呈现，你确认后再合并。'
+const codeIntroExamples: IntroExample[] = [
+  {
+    key: 'code-edit',
+    title: '改页面 / 组件',
+    short: '改某个文件的样式或逻辑',
+    prompt: '帮我改当前工作区的某个页面/组件：先列出相关文件，再把 …… 改成 ……（说清楚改哪、改成什么）。',
+    guideTitle: '适合在已有代码上做调整',
+    guideText: '指定要改的文件或页面，说明期望变化。AI 会先读相关代码,再改文件,改动以红绿 diff 呈现,你确认后合并。',
+    steps: ['指定文件 / 页面 / 组件', '说明要改的样式或逻辑', '确认 diff 后再接受改动'],
+    cta: '填入修改模板',
+  },
+  {
+    key: 'code-fix',
+    title: '修 bug / 排错',
+    short: '贴报错，定位并修复',
+    prompt: '运行时报了这个错（下面贴报错和复现步骤），帮我定位根因并修复。',
+    guideTitle: '适合定位运行 / 编译 / 接口报错',
+    guideText: '把报错、堆栈、复现步骤贴进来。AI 会读代码定位根因,给出修复并改文件,必要时跑命令验证。',
+    steps: ['贴报错 / 堆栈 / 截图', '补复现步骤和目标文件', '说明期望结果'],
+    cta: '填入排错模板',
+  },
+  {
+    key: 'code-feature',
+    title: '加功能 / 联调接口',
+    short: '描述新功能或接口对接',
+    prompt: '在当前工作区新增一个功能：…………；如需对接接口,接口地址 / 参数 / 返回如下:……',
+    guideTitle: '适合新增能力或对接后端接口',
+    guideText: '描述要新增的功能或要对接的接口。AI 会读工程结构,新增 / 改代码实现,并按返回结构联调。',
+    steps: ['描述功能或接口契约', '指明落在哪个模块 / 页面', '确认改动并联调验证'],
+    cta: '填入开发模板',
+  },
+]
+const builderCapabilities = ['整理需求', '生成 / 更新应用', '自开发页面和组件', '接口联调与排错']
+const codeCapabilities = ['读代码 / 文件树', '改文件 · 红绿 diff', '跑命令 / 预览', 'git 分支 / 提交']
+
+const heroBadge = computed(() => isCodeSession.value ? 'Dolphin Code' : 'AI Builder')
+const heroTitle = computed(() => isCodeSession.value ? codeWelcomeTitle : welcomeTitle)
+const heroIntro = computed(() => isCodeSession.value ? codeWelcomeIntro : welcomeIntro)
+const heroExamples = computed<IntroExample[]>(() => isCodeSession.value ? codeIntroExamples : introExamples)
+const heroCapabilities = computed(() => isCodeSession.value ? codeCapabilities : builderCapabilities)
 
 // Codex 面板状态机(open / active / palette),与 CodingPage 同一 composable。
 const {
