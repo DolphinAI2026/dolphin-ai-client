@@ -186,8 +186,10 @@
             <div class="art-card-preview" v-if="artifact.preview">{{ artifact.preview }}</div>
           </div>
         </template>
-        <!-- code 会话文件写改 → FileCard 红绿 diff；其它工具保持默认 ToolCard -->
-        <template #tool-renderer="{ tool }">
+        <!-- code 会话文件写改 → FileCard 红绿 diff；其它工具保持默认 ToolCard。
+             仅 code 会话提供本 slot — chat/cowork 不提供 → 回落 AgentConversation 默认渲染
+             (带展开/收起接线),否则 Builder 单工具卡会永久折叠(SP2b 最终评审捕获的回归)。 -->
+        <template #tool-renderer="{ tool }" v-if="isCodeSession">
           <template v-if="tool.name === 'write_file'">
             <FileCard
               action="write"
