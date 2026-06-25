@@ -2,7 +2,7 @@
  *
  * 作用域 .codex-skin：Code 模式恒为 Codex 深色,不随全局 light/dark。
  * 值取自设计稿 frontend/dist/aichat-mockup.html。
- * Phase 1 的桥接(把旧 --t-*/--line 重指到 --cx-*)写在 CodingPage.styles.css,不在这里。
+ * Phase 1 的桥接(把旧 t- 和 line 等旧 token 重指到 cx)写在 CodingPage.styles.css,不在这里。
  */
 
 .codex-skin {

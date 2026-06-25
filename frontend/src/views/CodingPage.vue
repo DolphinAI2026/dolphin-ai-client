@@ -388,13 +388,14 @@
           v-show="activePanel === 'terminal'"
           class="cph-body-panel"
           :ws-id="codingStore.workspace?.id || ''"
+          @server-detected="onTerminalServerDetected"
         />
 
         <RunDebugPanel
           v-show="activePanel === 'browser'"
           class="cph-body-panel"
           :ws-id="codingStore.workspace?.id || ''"
-          :dark="themeStore.isDark"
+          :dark="true"
           :active-preview="codingStore.activePreview"
           @update:active-preview="v => codingStore.activePreview = v"
         />
@@ -869,8 +870,23 @@ function onCodexKeydown(e: KeyboardEvent) {
     showPanel(panel)
   }
 }
-onMounted(() => window.addEventListener('keydown', onCodexKeydown))
-onUnmounted(() => window.removeEventListener('keydown', onCodexKeydown))
+// Code 模式恒暗:挂载强制 html=dark(让全套已有暗色 CSS 生效——token 桥接盖不住组件里写死的
+// `html:not([data-theme=dark])` 浅色规则),卸载还原用户主题。不走 setTheme(不持久化)。
+// embed 模式不强制(避免 darken 宿主 Builder)。
+function applyCodexDark(on: boolean) {
+  if (embedMode.value || embeddedAppId.value) return
+  const html = document.documentElement
+  if (on) {
+    html.setAttribute('data-theme', 'dark')
+    html.classList.add('dark')
+  } else {
+    const m = themeStore.mode
+    html.setAttribute('data-theme', m)
+    html.classList.toggle('dark', m === 'dark')
+  }
+}
+onMounted(() => { applyCodexDark(true); window.addEventListener('keydown', onCodexKeydown) })
+onUnmounted(() => { applyCodexDark(false); window.removeEventListener('keydown', onCodexKeydown) })
 let _codeDataLoadedFor: string | null = null  // 已加载数据的工作区 id;切工作区/codegen 写文件后置 null 失效
 
 async function ensureCodePaneData() {
@@ -1216,8 +1232,24 @@ function onChatClick(e: MouseEvent) {
 // - activePreview.dev_url 变化: 覆盖按钮/链接等其它写入路径, 只切 tab(开抽屉交给 previewEpoch / 点击行为, 避免重复弹)。
 watch(() => codingStore.previewEpoch, () => { showPanel('browser') })
 watch(() => codingStore.activePreview?.dev_url, (url, old) => {
-  if (url && url !== old) activePanel.value = 'browser'
+  // 终端源不抢焦点(用户正在终端敲命令);agent/panel 起的预览才自动切到浏览器位。
+  if (url && url !== old && codingStore.activePreview?.source !== 'terminal') activePanel.value = 'browser'
 })
+
+// 终端里 npm run preview / vite dev 探测到 server URL → 收敛进单一真相源 activePreview。
+// 浏览器面板据此自动反映(切到浏览器位时即指向它),实现 agent / 终端 / 浏览器三者联动。
+// agent 流式(自愈/codegen)进行中不抢占——那时 activePreview 归 agent,等它跑完再让终端的接管。
+function onTerminalServerDetected(p: { url: string; port: number }) {
+  if (isStreaming.value && codingStore.activePreview?.source === 'agent') return
+  codingStore.activePreview = {
+    source: 'terminal',
+    dev_url: p.url,
+    status: 'ok',
+    errors: [],
+    capture_available: false,
+    round: null,
+  }
+}
 
 /** Coding 的 tool StreamMessage(展示字符串模型,content='📖 读取 X' / '🔧 <display>',
  *  live 时可选 toolName=真实工具名)→ AgentConversation 原生 ToolCard payload。

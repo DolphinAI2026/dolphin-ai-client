@@ -13,7 +13,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Optional, Annotated, AsyncIterator, Any
 import httpx
-from fastapi import APIRouter, Depends, HTTPException, Query, Request, UploadFile, File
+from fastapi import APIRouter, Depends, HTTPException, Query, Request, UploadFile, File, WebSocket, WebSocketDisconnect
 from fastapi.responses import StreamingResponse, JSONResponse
 from pydantic import BaseModel
 from sse_starlette.sse import EventSourceResponse
@@ -1569,6 +1569,115 @@ async def serve_logs_stream(
                     pass
 
     return _event_stream_response(event_stream(), ping=heartbeat_seconds)
+
+
+@router.websocket("/workspace/{ws_id}/pty")
+async def workspace_pty(websocket: WebSocket, ws_id: str, token: str = Query(default="")):
+    """工作区交互式终端(全 PTY)。
+
+    浏览器 WS 无法带 header → token 走 query(同 serve-logs)。在工作区目录起一个真 shell,
+    master_fd 双向桥接到 WS:WS 二进制=键盘输入→pty;WS 文本=控制(resize);pty 输出→WS 二进制。
+    这是用户本机桌面里自己工作区的终端(类比 VS Code 终端),仅本地回环可达。
+    """
+    import pty
+    import fcntl
+    import termios
+    import struct
+    import signal
+    import json as _json
+    from app.auth import decode_token
+
+    # 鉴权:token 必须是本平台合法 JWT(签名校验)
+    try:
+        decode_token(token)
+    except Exception:
+        await websocket.close(code=4401)
+        return
+
+    from app.coding.workspace import WorkspaceManager
+    try:
+        ws_path = WorkspaceManager().get_workspace_path(ws_id)
+    except Exception:
+        ws_path = None
+    if not ws_path or not os.path.isdir(str(ws_path)):
+        await websocket.close(code=4404)
+        return
+
+    await websocket.accept()
+
+    shell = os.environ.get("SHELL") or "/bin/zsh"
+    master_fd, slave_fd = pty.openpty()
+
+    def _setup_controlling_tty():
+        # 新会话 + 把 slave 设为控制终端 —— 否则 Ctrl+C 的 SIGINT 投递不到前台进程组,
+        # 用户按 ^C 杀不掉 dev server(只回显 ^C)。setsid 后必须 TIOCSCTTY 才有 job control。
+        os.setsid()
+        fcntl.ioctl(slave_fd, termios.TIOCSCTTY, 0)
+
+    try:
+        proc = await asyncio.create_subprocess_exec(
+            shell, "-i",
+            stdin=slave_fd, stdout=slave_fd, stderr=slave_fd,
+            cwd=str(ws_path),
+            preexec_fn=_setup_controlling_tty,  # setsid + TIOCSCTTY → Ctrl+C 生效
+            env={**os.environ, "TERM": "xterm-256color"},
+        )
+    except Exception as e:
+        os.close(master_fd); os.close(slave_fd)
+        try:
+            await websocket.send_bytes(f"启动 shell 失败: {e}\r\n".encode())
+        except Exception:
+            pass
+        await websocket.close()
+        return
+    os.close(slave_fd)  # 父进程不持有 slave 端
+
+    loop = asyncio.get_event_loop()
+
+    async def pump_pty_to_ws():
+        try:
+            while True:
+                data = await loop.run_in_executor(None, lambda: os.read(master_fd, 8192))
+                if not data:
+                    break
+                await websocket.send_bytes(data)
+        except Exception:
+            pass
+
+    out_task = asyncio.create_task(pump_pty_to_ws())
+    try:
+        while True:
+            msg = await websocket.receive()
+            if msg.get("type") == "websocket.disconnect":
+                break
+            b = msg.get("bytes")
+            if b is not None:
+                os.write(master_fd, b)  # 键盘输入
+                continue
+            t = msg.get("text")
+            if t:
+                # 文本=控制消息(目前仅 resize)
+                try:
+                    j = _json.loads(t)
+                    if j.get("type") == "resize":
+                        winsize = struct.pack("HHHH", int(j.get("rows", 24)), int(j.get("cols", 80)), 0, 0)
+                        fcntl.ioctl(master_fd, termios.TIOCSWINSZ, winsize)
+                except Exception:
+                    pass
+    except WebSocketDisconnect:
+        pass
+    except Exception as e:
+        logger.warning("pty ws err ws=%s: %s", ws_id, e)
+    finally:
+        out_task.cancel()
+        try:
+            os.killpg(os.getpgid(proc.pid), signal.SIGKILL)
+        except Exception:
+            pass
+        try:
+            os.close(master_fd)
+        except Exception:
+            pass
 
 
 @router.post("/workspace/{ws_id}/publish")

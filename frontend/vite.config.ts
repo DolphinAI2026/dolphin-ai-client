@@ -62,11 +62,13 @@ export default defineConfig({
     proxy: {
       '/api': {
         target: 'http://localhost:8000',
-        changeOrigin: true
+        changeOrigin: true,
+        ws: true
       },
       '/ai-builder/api': {
         target: 'http://localhost:8000',
         changeOrigin: true,
+        ws: true,
         rewrite: (path) => path.replace(/^\/ai-builder\/api/, '/api')
       },
       '/ai-builder/admin': {
