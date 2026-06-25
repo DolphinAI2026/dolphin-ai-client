@@ -40,31 +40,23 @@ export interface RailSessionTarget {
 
 /**
  * 点击左栏会话该导航去哪。
- * - builder/agent → /ai-chat/:id(KeepAlive 单例,组件内 watch route.params.id 切会话)
- * - code → /coding?conversation_id=N。coding 会话选中 ≠ 简单跳转(可能要解析 workspace),
- *   交给 CodingPage onMounted 消费 conversation_id;/coding 非 KeepAlive 且 key=fullPath,
- *   query 变化会整页重挂载 → onMounted 再跑一次恢复该会话/工作区。
+ * - 所有模式统一走 /ai-chat/:id(KeepAlive 单例,组件内 watch route.params.id 切会话)
+ * - code 会话也走 /ai-chat/:id — AIChatPage 按 session.mode==='code' 自动挂 CodexPanelHost。
  */
-export function railSessionTarget(mode: AppMode, id: number): RailSessionTarget {
-  if (mode === 'code') {
-    return { path: '/coding', query: { conversation_id: String(id) } }
-  }
+export function railSessionTarget(_mode: AppMode, id: number): RailSessionTarget {
   return { path: `/ai-chat/${id}` }
 }
 
-/** 当前路由是否正停在该会话上(高亮)。code 看 query.conversation_id,其余看 path。 */
+/** 当前路由是否正停在该会话上(高亮)。统一看 /ai-chat/:id path。 */
 export function isRailSessionActive(
-  mode: AppMode,
+  _mode: AppMode,
   id: number,
   route: { path: string; query: Record<string, unknown> },
 ): boolean {
-  if (mode === 'code') {
-    return String(route.query?.conversation_id ?? '') === String(id)
-  }
   return route.path === `/ai-chat/${id}`
 }
 
 /** 删除当前正在看的会话后,该回退到哪。 */
-export function railSessionFallback(mode: AppMode): string {
-  return mode === 'code' ? '/coding' : '/'
+export function railSessionFallback(_mode: AppMode): string {
+  return '/'
 }

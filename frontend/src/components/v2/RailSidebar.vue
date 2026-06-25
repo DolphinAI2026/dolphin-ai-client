@@ -6,10 +6,8 @@ import { useUserStore } from '@/stores/user'
 import { useThemeStore } from '@/stores/theme'
 import { useModeStore, MODE_META, MODE_ORDER, type AppMode } from '@/stores/mode'
 import { aiChatApi, type AIChatSession } from '@/api/aiChat'
-import { codingApi, type CodingConversation } from '@/api/coding'
 import {
   normalizeAiSessions,
-  normalizeCodingSessions,
   railSessionTarget,
   isRailSessionActive,
   railSessionFallback,
@@ -44,31 +42,18 @@ function onModeHotkey(e: KeyboardEvent) {
 }
 
 // 会话历史 —— 收进左栏单一导航(参考 Claude Code), 页面内层 sidebar 隐掉。
-// builder/agent 模式 = AI Builder 会话(aiChatApi); code 模式 = coding 会话(codingApi)。
-// 两套不同会话系统, 经 railSessions 归一成同一形态后统一分组渲染。
+// 统一使用 aiChatApi 会话(含 code 模式会话, SP2b Task6 放行后一起列出)。
 const aiSessions = ref<AIChatSession[]>([])
-const codingSessions = ref<CodingConversation[]>([])
 const showRecent = computed(() => !effectiveCollapsed.value)
 
-// 当前模式对应的归一会话列表。
-const railSessions = computed<RailSession[]>(() =>
-  currentMode.value === 'code'
-    ? normalizeCodingSessions(codingSessions.value)
-    : normalizeAiSessions(aiSessions.value),
-)
+// 归一会话列表(单一来源)。
+const railSessions = computed<RailSession[]>(() => normalizeAiSessions(aiSessions.value))
 
 async function loadRailSessions() {
-  if (currentMode.value === 'code') {
-    try {
-      const list = await codingApi.getConversations()
-      codingSessions.value = Array.isArray(list) ? list : []
-    } catch { codingSessions.value = [] }
-  } else {
-    try {
-      const d = await aiChatApi.listSessions()
-      aiSessions.value = d?.sessions || []
-    } catch { aiSessions.value = [] }
-  }
+  try {
+    const d = await aiChatApi.listSessions()
+    aiSessions.value = d?.sessions || []
+  } catch { aiSessions.value = [] }
 }
 
 // 切模式时重新拉对应会话源(builder/agent↔code)。
@@ -117,8 +102,7 @@ function sessionActive(s: RailSession) { return isRailSessionActive(currentMode.
 async function deleteRailSession(s: RailSession) {
   if (!window.confirm(`删除会话「${s.title || '未命名会话'}」?`)) return
   try {
-    if (currentMode.value === 'code') await codingApi.deleteConversation(s.id)
-    else await aiChatApi.deleteSession(s.id)
+    await aiChatApi.deleteSession(s.id)
   } catch { /* ignore */ }
   await loadRailSessions()
   if (sessionActive(s)) router.push(railSessionFallback(currentMode.value))
