@@ -1,7 +1,7 @@
 from __future__ import annotations
 from datetime import datetime
 from typing import Optional
-from sqlalchemy import String, Text, DateTime, Integer, Boolean, ForeignKey, UniqueConstraint, JSON, func
+from sqlalchemy import String, Text, DateTime, Integer, Boolean, ForeignKey, UniqueConstraint, Index, JSON, func
 from sqlalchemy.dialects.mysql import LONGTEXT
 from sqlalchemy.orm import Mapped, mapped_column
 from app.database import Base
@@ -463,7 +463,12 @@ class AppHealthSnapshot(Base):
 class RegisteredWorkspace(Base):
     """桌面「打开本地文件夹」external 工作区注册表 (指针进 DB, 不写用户文件夹)。"""
     __tablename__ = "registered_workspaces"
-    __table_args__ = (UniqueConstraint("tenant_id", "abs_path", name="uq_regws_tenant_path"),)
+    # abs_path VARCHAR(1000) utf8mb4 = 4000 字节,直接进唯一约束超 MySQL 索引上限 3072 字节
+    # (本地 SQLite 无此限制,故只在 MySQL 上线时暴露)。改用带 mysql_length 前缀的唯一索引:
+    # MySQL 只索引 abs_path 前 255 字符(255*4=1020<3072),SQLite 忽略 mysql_length 走全列。
+    __table_args__ = (
+        Index("uq_regws_tenant_path", "tenant_id", "abs_path", unique=True, mysql_length={"abs_path": 255}),
+    )
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     ws_id: Mapped[str] = mapped_column(String(60), unique=True, index=True, nullable=False)
