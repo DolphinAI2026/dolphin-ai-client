@@ -59,6 +59,22 @@ async def _seed_session(db) -> AIChatSession:
 
 
 @pytest.mark.asyncio
+async def test_build_initial_messages_injects_view_context_without_app_id(shared_db):
+    """无 app_id(Code 工作区会话)时,view_context(工作区 ws_id 绑定)也要进 system prompt。
+    修前它只在 build_app_context_block(app_id 分支)里拼 → app_id 空就整段丢,
+    agent 看不到当前工作区 → 瞎猜/反问用户 ws_id(实测过)。"""
+    s = await _seed_session(shared_db)  # app_id 默认 None
+    msgs = await agent_mod._build_initial_messages(
+        shared_db, s, "读一下代码",
+        view_context="你正在唯一指定的代码工作区 ws_id='ws-bound' 内做二次开发",
+        system_prompt_override="基础提示词",
+    )
+    sys = msgs[0]["content"]
+    assert "ws_id='ws-bound'" in sys
+    assert "基础提示词" in sys
+
+
+@pytest.mark.asyncio
 async def test_no_tool_run_records_run_and_llm_step(shared_db, monkeypatch):
     s = await _seed_session(shared_db)
 

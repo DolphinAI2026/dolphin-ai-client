@@ -623,6 +623,11 @@ async def _build_initial_messages(
             db, app_id, section=section, tenant_id=getattr(session, "tenant_id", None),
             view_context=view_context, user_id=getattr(session, "user_id", None),
         )
+    elif view_context:
+        # 没绑 app(如 Code 工作区会话,app_id 为空)也要把 view_context 注入提示词,
+        # 否则它只在 build_app_context_block 里拼 → app_id 为空就被整段跳过,agent 看不到
+        # 当前工作区 ws_id → 要么瞎猜别的工作区、要么反过来问用户 ws_id(两种都实测过)。
+        system_prompt = system_prompt + "\n\n## 当前工作上下文\n" + view_context
     messages: list[dict] = [{"role": "system", "content": system_prompt}]
 
     # 历史消息（不含本次 user 消息——routes 已经写库了，这里读回来时要排除最新那条）
