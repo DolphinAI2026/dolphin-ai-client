@@ -1,7 +1,12 @@
-"""SP2a T3: run_agent 在调用方未传 override 时按 session.mode 推导行为。
+"""SP2a T3 + 修复: run_agent 在调用方未传 override 时按 session.mode 推导行为。
 
 地基(休眠):调用方显式传 override 的 harness 老路一字不改;只在两个 override 都为
-None 时,从 session 推导 dev-apaas 提示词 + 收窄工具 + 设 _locked_ws_id。
+None 时,从 session 推导 dev-apaas 提示词 + 收窄工具 + 设 _locked_ws_id +
+**ws 绑定 view_context(告诉 agent 当前 ws_id)**。
+
+⚠️ 2026-06-25 修复: 原 _apply_session_overrides 只推导 (prompt, tools),没推导
+view_context → code 会话经 /ai-chat 发送时 agent 不知道 ws_id,反问用户「请把 ws_id
+发我」。现返回 3 元组,第 3 个是 ws 绑定上下文。
 """
 from __future__ import annotations
 
@@ -19,11 +24,11 @@ def _code_session(ws_id):
     return SimpleNamespace(mode="code", workspace_id=ws_id)
 
 
-# ── 1. code 会话 + 不传 override → 推导 dev-apaas + 收窄 + 设 lock ──
+# ── 1. code 会话 + 不传 override → 推导 dev-apaas + 收窄 + 设 lock + ws view_context ──
 
 def test_code_session_no_override_derives_dev_apaas():
     session = _code_session("ws-77")
-    sp, tn = _apply_session_overrides(session, None, None)
+    sp, tn, vc = _apply_session_overrides(session, None, None)
     profile = resolve_profile("dev-apaas")
     assert sp == profile.system_prompt
     assert "确认即开干" in sp  # dev-apaas 特征串
@@ -33,30 +38,35 @@ def test_code_session_no_override_derives_dev_apaas():
     assert "list_dev_workspaces" not in tn
     # 单工作区锁被设
     assert getattr(session, "_locked_ws_id", None) == "ws-77"
+    # ★ 修复核心: 推导出 ws 绑定 view_context,含 ws_id → agent 不再反问
+    assert vc is not None
+    assert "ws-77" in vc
 
 
-def test_code_session_no_ws_no_lock():
-    """code 会话但 workspace_id 为空 → 仍给 dev-apaas 提示词,但不设 lock。"""
+def test_code_session_no_ws_no_lock_no_vc():
+    """code 会话但 workspace_id 为空 → 仍给 dev-apaas 提示词,但不设 lock、无 ws view_context。"""
     session = _code_session(None)
-    sp, tn = _apply_session_overrides(session, None, None)
+    sp, tn, vc = _apply_session_overrides(session, None, None)
     assert sp == resolve_profile("dev-apaas").system_prompt
     assert getattr(session, "_locked_ws_id", None) is None
+    assert vc is None
 
 
 # ── 2. chat 会话 + 不传 override → 行为同今天(回归保护) ──
 
 def test_chat_session_no_override_unchanged():
     session = SimpleNamespace(mode="chat", workspace_id=None)
-    sp, tn = _apply_session_overrides(session, None, None)
+    sp, tn, vc = _apply_session_overrides(session, None, None)
     assert sp is None
     assert tn is None
+    assert vc is None
     assert getattr(session, "_locked_ws_id", None) is None
 
 
 def test_cowork_session_no_override_unchanged():
     session = SimpleNamespace(mode="cowork", workspace_id=None)
-    sp, tn = _apply_session_overrides(session, None, None)
-    assert sp is None and tn is None
+    sp, tn, vc = _apply_session_overrides(session, None, None)
+    assert sp is None and tn is None and vc is None
     assert getattr(session, "_locked_ws_id", None) is None
 
 
@@ -66,20 +76,22 @@ def test_explicit_override_skips_derivation():
     session = _code_session("ws-99")
     explicit_sp = "调用方自己的提示词"
     explicit_tn = {"read_workspace_file"}
-    sp, tn = _apply_session_overrides(session, explicit_sp, explicit_tn)
+    sp, tn, vc = _apply_session_overrides(session, explicit_sp, explicit_tn)
     assert sp == explicit_sp
     assert tn == explicit_tn
-    # 显式传 override 的老路:_apply_session_overrides 不碰 _locked_ws_id
-    # (harness 自己在 coding.py 里设)。
+    # 显式传 override 的老路: 不推导 view_context(harness 自己传 view_context)
+    assert vc is None
+    # 也不碰 _locked_ws_id(harness 自己在 coding.py 里设)。
     assert not hasattr(session, "_locked_ws_id")
 
 
 def test_explicit_partial_override_still_skips():
     """只传了 system_prompt(tool_names=None)也算调用方显式 → 不推导。"""
     session = _code_session("ws-99")
-    sp, tn = _apply_session_overrides(session, "x", None)
+    sp, tn, vc = _apply_session_overrides(session, "x", None)
     assert sp == "x"
     assert tn is None
+    assert vc is None
     assert not hasattr(session, "_locked_ws_id")
 
 
@@ -87,11 +99,7 @@ def test_explicit_partial_override_still_skips():
 
 @pytest.mark.asyncio
 async def test_run_agent_code_session_sets_lock_no_network(db_session):
-    """code 会话经 run_agent 且不传 override → _locked_ws_id 被设。
-
-    _apply_session_overrides 在 _resolve_llm_config 之前跑,本测试不配 LLM(让它
-    早退 error/done),不打网络,只验证推导接线 + lock 副作用确实发生。
-    """
+    """code 会话经 run_agent 且不传 override → _locked_ws_id 被设。"""
     session = AIChatSession(
         tenant_id=12345, user_id=678, title="t", mode="code", workspace_id="ws-int1"
     )
@@ -106,7 +114,6 @@ async def test_run_agent_code_session_sets_lock_no_network(db_session):
         if ev.get("event") == "done":
             break
 
-    # 没配模型 → 早退,但推导已先发生:lock 被设上
     assert getattr(session, "_locked_ws_id", None) == "ws-int1"
     assert "done" in events
 

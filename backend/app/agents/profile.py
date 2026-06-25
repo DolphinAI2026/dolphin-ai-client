@@ -165,6 +165,25 @@ def narrow_tools_for_locked_ws(tool_names, ws_id: str | None) -> tuple[str, ...]
 MODE_PROFILE: dict[str, str] = {"code": "dev-apaas"}
 
 
+def ws_bind_view_context(ws_id: str | None) -> str | None:
+    """code 会话单工作区硬绑 view_context:告诉 agent 当前 ws_id 并锁死所有工作区工具到它。
+
+    供 run_agent 引擎推导(统一外壳从 /ai-chat 发 code 会话、调用方不传 view_context 时)
+    与 harness 老路复用 —— **文本单一来源**,防两处漂移。
+    缺这段 → agent 拿到 dev-apaas 提示词(说「上下文会给你 ws_id」)却没 ws_id →
+    反问用户「请把 ws_id 发我」(2026-06-25 修复的 bug)。
+    """
+    if not ws_id:
+        return None
+    return (
+        f"【硬性约束·单工作区锁定】你正在唯一指定的代码工作区 ws_id='{ws_id}' 内做二次开发,"
+        f"右侧面板正显示它。用户说的「代码 / 最新代码 / 这个项目 / 这个页面」都**只**指 ws_id='{ws_id}'。"
+        f"所有 read_workspace_file / write_workspace_files / edit_workspace_files / "
+        f"glob_workspace / grep_workspace / run_workspace_command 的 ws_id 参数**必须**填 '{ws_id}';"
+        f"**严禁**填任何其它 ws_id、严禁枚举或切换到别的工作区、严禁 create_dev_workspace 新建。"
+    )
+
+
 def resolve_overrides_for_session(session) -> tuple[str | None, set[str] | None, str | None]:
     """按 session.mode 推导 run_agent 的 (system_prompt, tool_names_set, locked_ws_id)。
 

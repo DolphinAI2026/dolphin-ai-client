@@ -285,20 +285,10 @@ class CodingProfile(HarnessProfile):
 
     @staticmethod
     def _ws_bind_view_context(ws_id: str) -> str | None:
-        """硬绑既有工作区给 run_agent:所有文件/命令工具只能用这个 ws_id,禁止枚举/新建别的。
-
-        Code 模式的工作区已存在(面板正显示它),run_agent 必须读/写进同一个 ws_id。
-        软提示 + 砍掉 list_dev_workspaces 双保险:防 agent 跑去别的工作区读错代码。
-        """
-        if not ws_id:
-            return None
-        return (
-            f"【硬性约束·单工作区锁定】你正在唯一指定的代码工作区 ws_id='{ws_id}' 内做二次开发,"
-            f"右侧面板正显示它。用户说的「代码 / 最新代码 / 这个项目 / 这个页面」都**只**指 ws_id='{ws_id}'。"
-            f"所有 read_workspace_file / write_workspace_files / edit_workspace_files / "
-            f"glob_workspace / grep_workspace / run_workspace_command 的 ws_id 参数**必须**填 '{ws_id}';"
-            f"**严禁**填任何其它 ws_id、严禁枚举或切换到别的工作区、严禁 create_dev_workspace 新建。"
-        )
+        """硬绑既有工作区给 run_agent(harness 老路)。文本单一来源 = profile.ws_bind_view_context,
+        与 run_agent 引擎推导(统一外壳路径)共用,防漂移。"""
+        from app.agents.profile import ws_bind_view_context
+        return ws_bind_view_context(ws_id)
 
     @staticmethod
     def _tool_preview(args) -> str:
