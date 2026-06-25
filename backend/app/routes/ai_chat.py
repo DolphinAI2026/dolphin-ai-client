@@ -57,10 +57,12 @@ _DEFAULT_SESSION_TITLES = {"", "新会话"}
 class CreateSessionRequest(BaseModel):
     title: Optional[str] = None
     selected_llm_config_id: Optional[int] = None
-    # 工作模式：'chat'（从零理需求）/ 'cowork'（批量材料整合）
+    # 工作模式：'chat'（从零理需求）/ 'cowork'（批量材料整合）/ 'code'（二次开发，绑工作区）
     mode: Optional[str] = None
     # 锁定应用上下文：右栏配置助手创建会话时传入，run_agent 据此注入 app 上下文
     app_id: Optional[int] = None
+    # code 会话绑定的工作区 slug（WorkspaceManager）；run_agent 据此锁工作区 + 注入 dev-apaas
+    workspace_id: Optional[str] = None
 
 
 class UpdateSessionRequest(BaseModel):
@@ -484,9 +486,10 @@ async def create_session(
         user_id=ctx.user.id,
         title=body.title or "新会话",
         selected_llm_config_id=selected_llm_config_id,
-        mode="cowork" if body.mode == "cowork" else "chat",
+        mode="code" if body.mode == "code" else ("cowork" if body.mode == "cowork" else "chat"),
         status="active",
         app_id=body.app_id,
+        workspace_id=body.workspace_id,
     )
     db.add(s)
     await db.flush()  # 拿到 id
