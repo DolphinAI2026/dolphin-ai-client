@@ -49,6 +49,23 @@ fn pick_free_port() -> u16 {
         .unwrap_or(8799)
 }
 
+/// 跨启动稳定的端口。WebView origin = http://127.0.0.1:{port};localStorage(含登录 token)
+/// 按 origin 隔离 → 端口每次变就要重新登录。这里把端口持久化进 data_dir/ui_port:
+/// 复用上次端口(仍空闲就用),被占了才另选一个并存下来 → origin 稳定 → token 跨重启/重装保留。
+fn stable_port(data_dir: &std::path::Path) -> u16 {
+    let port_file = data_dir.join("ui_port");
+    if let Ok(s) = std::fs::read_to_string(&port_file) {
+        if let Ok(p) = s.trim().parse::<u16>() {
+            if p != 0 && std::net::TcpListener::bind(("127.0.0.1", p)).is_ok() {
+                return p;
+            }
+        }
+    }
+    let p = pick_free_port();
+    let _ = std::fs::write(&port_file, p.to_string());
+    p
+}
+
 fn wait_healthy(port: u16) -> bool {
     let url = format!("http://127.0.0.1:{}/api/health", port);
     for _ in 0..60 {
@@ -72,10 +89,12 @@ pub fn run() {
         .manage(SidecarChild(Mutex::new(None)))
         .setup(|app| {
             let handle = app.handle().clone();
-            let port = pick_free_port();
 
             let data_dir = handle.path().app_data_dir().expect("app_data_dir");
             std::fs::create_dir_all(&data_dir).ok();
+
+            // 跨启动稳定端口 → WebView origin 不变 → 登录 token(localStorage)保留,不用每次重登。
+            let port = stable_port(&data_dir);
 
             let (mut rx, child) = handle
                 .shell()
@@ -110,6 +129,10 @@ pub fn run() {
                     )
                     .title("睿鲸 Builder")
                     .inner_size(1440.0, 900.0)
+                    // 关掉 Tauri 原生 OS 级拖放处理：它会拦截页面内的 HTML5 drag-and-drop,
+                    // 导致内嵌 apaas 编辑器拖字段失效(真浏览器无此拦截故能拖)。
+                    // 前端不依赖 OS 文件拖放(附件走文件选择/粘贴), 关掉无副作用。
+                    .disable_drag_drop_handler()
                     .build()
                     .expect("failed to build window");
                 } else {
