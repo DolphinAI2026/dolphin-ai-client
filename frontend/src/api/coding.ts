@@ -334,6 +334,23 @@ export const codingApi = {
   gitCheckout(wsId: string, body: { name: string; create?: boolean }) {
     return request.post<any, { ok: boolean; branch: string }>(`/coding/workspace/${wsId}/git/checkout`, body)
   },
+
+  // ========== Git API (P2: 远程 connect/push/pull) ==========
+
+  /** 绑定远程仓并验证可达(fetch),落 WorkspaceGitRemote 行 */
+  gitConnect(wsId: string, body: { provider: string; remote_url: string; git_connection_id: number }) {
+    return request.post<any, { ok: boolean; default_branch: string }>(`/coding/workspace/${wsId}/git/connect`, body)
+  },
+
+  /** 把当前分支 push 到绑定的远程仓 */
+  gitPush(wsId: string) {
+    return request.post<any, { ok: boolean; ahead: number; behind: number }>(`/coding/workspace/${wsId}/git/push`, {})
+  },
+
+  /** 从绑定的远程仓 pull 当前分支 */
+  gitPull(wsId: string) {
+    return request.post<any, { ok: boolean; ahead: number; behind: number }>(`/coding/workspace/${wsId}/git/pull`, {})
+  },
 }
 
 /** 列出工作区文件(扁平相对路径,已排除 node_modules/隐藏文件) */
