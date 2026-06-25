@@ -46,36 +46,45 @@
           </span>
           <span v-else class="title-placeholder">{{ isRestoringRouteSession ? '正在恢复会话...' : '新会话' }}</span>
         </div>
-        <!-- Codex 对齐:顶栏只留高频「面板开关」+ 一个 ··· 溢出菜单,低频动作收进去,标题旁不堆按钮 -->
+        <!-- Codex 对齐:顶栏只留两个 icon —— Agent Trace + 面板 show/hide(右栏开关)。
+             存成技能/脚本回放不进顶栏(存技能改对话里让 agent 存);代码会话/设计文档共用同一个面板开关 icon。 -->
         <div class="header-actions">
-          <!-- 高频:代码会话 → 代码面板开关;否则 → 设计文档(有产物时) -->
+          <button
+            v-if="currentSession"
+            class="trace-entry-btn"
+            title="Agent 活动 / Trace"
+            @click="openSessionTrace"
+          >
+            <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+              <path d="M22 12h-4l-3 9L9 3l-3 9H2" />
+            </svg>
+          </button>
           <button
             v-if="isCodeSession"
-            class="artifacts-toggle"
+            class="panel-toggle-btn"
             :class="{ active: codePanelOpen }"
             @click="codePanelOpen = !codePanelOpen"
-            :title="codePanelOpen ? '收起代码栏' : '展开代码栏'"
-          ><AppIcon name="doc" :size="14" /> 代码</button>
+            :title="codePanelOpen ? '隐藏面板' : '显示面板'"
+            aria-label="显示/隐藏面板"
+          >
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+              <rect x="3" y="4" width="18" height="16" rx="2" />
+              <line x1="14" y1="4" x2="14" y2="20" />
+            </svg>
+          </button>
           <button
             v-else-if="artifacts.length > 0"
-            class="artifacts-toggle"
+            class="panel-toggle-btn"
             :class="{ active: artifactsPanelOpen }"
             @click="artifactsPanelOpen = !artifactsPanelOpen"
-            :title="artifactsPanelOpen ? '收起设计文档' : '展开设计文档'"
-          ><AppIcon name="file" :size="14" /> 设计文档 <span class="badge">{{ artifacts.length }}</span></button>
-          <!-- 低频:Agent 活动 / 脚本回放 / 存成技能 收进溢出菜单 -->
-          <el-dropdown v-if="currentSession" trigger="click" placement="bottom-end" popper-class="header-more-menu">
-            <button class="header-more-btn" title="更多" @click.stop><AppIcon name="more" :size="16" /></button>
-            <template #dropdown>
-              <el-dropdown-menu>
-                <el-dropdown-item @click="openSessionTrace">查看 Agent 活动 / Trace</el-dropdown-item>
-                <el-dropdown-item v-if="automationRunnerEnabled" @click="automationPanelOpen = !automationPanelOpen">
-                  {{ automationPanelOpen ? '收起脚本回放面板' : '脚本回放面板' }}
-                </el-dropdown-item>
-                <el-dropdown-item divided @click="onSaveAsSkill">存成技能</el-dropdown-item>
-              </el-dropdown-menu>
-            </template>
-          </el-dropdown>
+            :title="artifactsPanelOpen ? '隐藏设计文档' : '显示设计文档'"
+            aria-label="显示/隐藏设计文档"
+          >
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+              <rect x="3" y="4" width="18" height="16" rx="2" />
+              <line x1="14" y1="4" x2="14" y2="20" />
+            </svg>
+          </button>
         </div>
       </header>
 
@@ -3183,7 +3192,8 @@ onMounted(async () => {
 }
 .trace-entry-btn,
 .automation-toggle,
-.header-more-btn {
+.header-more-btn,
+.panel-toggle-btn {
   appearance: none;
   display: inline-flex;
   align-items: center;
@@ -3200,10 +3210,17 @@ onMounted(async () => {
 }
 .trace-entry-btn:hover,
 .automation-toggle:hover,
-.header-more-btn:hover {
+.header-more-btn:hover,
+.panel-toggle-btn:hover {
   color: var(--ac-text);
   border-color: var(--ac-border-strong);
   background: var(--ac-input);
+}
+/* 面板开着时高亮(Codex 右栏开关的 on 态) */
+.panel-toggle-btn.active {
+  color: var(--ac-accent, #2563eb);
+  border-color: var(--ac-accent, #2563eb);
+  background: color-mix(in srgb, var(--ac-accent, #2563eb) 12%, transparent);
 }
 .theme-light .trace-entry-btn,
 .theme-light .automation-toggle,
