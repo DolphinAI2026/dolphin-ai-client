@@ -46,42 +46,9 @@
           </span>
           <span v-else class="title-placeholder">{{ isRestoringRouteSession ? '正在恢复会话...' : '新会话' }}</span>
         </div>
+        <!-- Codex 对齐:顶栏只留高频「面板开关」+ 一个 ··· 溢出菜单,低频动作收进去,标题旁不堆按钮 -->
         <div class="header-actions">
-          <button
-            v-if="currentSession"
-            class="trace-entry-btn"
-            title="查看本次会话的 Agent 活动 / Trace"
-            @click="openSessionTrace"
-          >
-            <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-              <path d="M22 12h-4l-3 9L9 3l-3 9H2" />
-            </svg>
-          </button>
-          <button
-            v-if="automationRunnerEnabled"
-            class="automation-toggle"
-            :class="{ active: automationPanelOpen, running: automationRunning }"
-            @click="automationPanelOpen = !automationPanelOpen"
-            :title="automationPanelOpen ? '收起脚本回放面板' : '打开脚本回放面板'"
-            :aria-label="automationPanelOpen ? '收起脚本回放面板' : '打开脚本回放面板'"
-          >
-            <svg
-              width="14"
-              height="14"
-              viewBox="0 0 24 24"
-              fill="none"
-              stroke="currentColor"
-              stroke-width="2"
-              stroke-linecap="round"
-              stroke-linejoin="round"
-              aria-hidden="true"
-            >
-              <path d="M3 12a9 9 0 1 0 3-6.7" />
-              <path d="M3 4v5h5" />
-              <path d="m10 8 6 4-6 4z" fill="currentColor" stroke="none" />
-            </svg>
-          </button>
-          <!-- SP2b T4: code 会话 → 代码面板开关(替代设计文档开关);其它会话照旧显示设计文档开关 -->
+          <!-- 高频:代码会话 → 代码面板开关;否则 → 设计文档(有产物时) -->
           <button
             v-if="isCodeSession"
             class="artifacts-toggle"
@@ -96,14 +63,19 @@
             @click="artifactsPanelOpen = !artifactsPanelOpen"
             :title="artifactsPanelOpen ? '收起设计文档' : '展开设计文档'"
           ><AppIcon name="file" :size="14" /> 设计文档 <span class="badge">{{ artifacts.length }}</span></button>
-          <button
-            v-if="currentSession"
-            class="save-skill-btn"
-            title="把本次会话产出整理成一个可复用技能"
-            @click="onSaveAsSkill"
-          >
-            <AppIcon name="sparkles" :size="14" /> 存成技能
-          </button>
+          <!-- 低频:Agent 活动 / 脚本回放 / 存成技能 收进溢出菜单 -->
+          <el-dropdown v-if="currentSession" trigger="click" placement="bottom-end" popper-class="header-more-menu">
+            <button class="header-more-btn" title="更多" @click.stop><AppIcon name="more" :size="16" /></button>
+            <template #dropdown>
+              <el-dropdown-menu>
+                <el-dropdown-item @click="openSessionTrace">查看 Agent 活动 / Trace</el-dropdown-item>
+                <el-dropdown-item v-if="automationRunnerEnabled" @click="automationPanelOpen = !automationPanelOpen">
+                  {{ automationPanelOpen ? '收起脚本回放面板' : '脚本回放面板' }}
+                </el-dropdown-item>
+                <el-dropdown-item divided @click="onSaveAsSkill">存成技能</el-dropdown-item>
+              </el-dropdown-menu>
+            </template>
+          </el-dropdown>
         </div>
       </header>
 
@@ -3210,7 +3182,8 @@ onMounted(async () => {
   font-family: ui-monospace, Menlo, monospace;
 }
 .trace-entry-btn,
-.automation-toggle {
+.automation-toggle,
+.header-more-btn {
   appearance: none;
   display: inline-flex;
   align-items: center;
@@ -3226,19 +3199,22 @@ onMounted(async () => {
   transition: all 0.15s;
 }
 .trace-entry-btn:hover,
-.automation-toggle:hover {
+.automation-toggle:hover,
+.header-more-btn:hover {
   color: var(--ac-text);
   border-color: var(--ac-border-strong);
   background: var(--ac-input);
 }
 .theme-light .trace-entry-btn,
-.theme-light .automation-toggle {
+.theme-light .automation-toggle,
+.theme-light .header-more-btn {
   background: #ffffff;
   border-color: #cbd5e1;
   color: #334155;
 }
 .theme-light .trace-entry-btn:hover,
-.theme-light .automation-toggle:hover {
+.theme-light .automation-toggle:hover,
+.theme-light .header-more-btn:hover {
   background: #f8fafc;
   border-color: #94a3b8;
   color: #0f172a;
