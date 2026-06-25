@@ -261,8 +261,6 @@
           v-if="isCodeSession && codexPanelWsId"
           :ws-id="codexPanelWsId"
           :workspace-name="currentSession?.title"
-          :workspaces="codeWorkspaceList"
-          @switch-workspace="onSwitchCodeWorkspace"
         />
         <UnifiedChatComposer
           v-model="inputText"
@@ -570,13 +568,11 @@ import { useCodexPanels, type CodexPanelId, type CodexCommandId } from './coding
 import { buildFileTree, type TreeNode } from './coding/fileTree'
 import { usePanelResize } from '@/components/v2/config-assistant/composables/usePanelResize'
 import {
-  codingApi,
   listWorkspaceFiles,
   getWorkspaceChanges,
   acceptWorkspaceChanges,
   type WorkspaceChanges,
   type WorkspaceChangeEntry,
-  type WorkspaceInfo,
 } from '@/api/coding'
 // chat / cowork mode 已合并 — ChatDotRound 用作 session 列表前导 icon（对话界面风格）
 import { ChatDotRound } from '@element-plus/icons-vue'
@@ -838,9 +834,6 @@ type ActivePreview = {
 const codexPanelWsId = computed<string | null>(() => currentSession.value?.workspace_id ?? null)
 const isCodeSession = computed(() => currentSession.value?.mode === 'code' && !!codexPanelWsId.value)
 
-// 代码会话工作区列表(供 CodeSessionGitBar 切换工作区用)
-const codeWorkspaceList = ref<WorkspaceInfo[]>([])
-
 // Codex 面板状态机(open / active / palette),与 CodingPage 同一 composable。
 const {
   open: codePanelOpen,
@@ -900,10 +893,6 @@ async function ensureCodePanelData() {
   if (_codeDataLoadedFor === wsId) return
   _codeDataLoadedFor = wsId
   await Promise.all([loadCodeFileTree(wsId), loadCodeGitChanges(wsId)])
-}
-
-function onSwitchCodeWorkspace(wsId: string) {
-  router.push({ path: '/ai-chat', query: { workspace_id: String(wsId), mode: 'code' } }).catch(() => {})
 }
 
 // 接受单文件 / 全部变更(镜像 CodingPage)。
@@ -977,10 +966,7 @@ function onTerminalServerDetected(p: { url: string; port: number }) {
 // 离开 code 会话 → 收起宿主 + 清状态防残留。
 watch(isCodeSession, (on) => {
   if (on) {
-    // 进入代码会话时加载工作区列表(供 git bar 切换),容忍失败不影响主流程
-    try {
-      codingApi.listWorkspaces().then(list => { codeWorkspaceList.value = list }).catch(() => {})
-    } catch {}
+    // 代码会话工作区从「我的开发」进来即锁定,不再切换(git bar 去掉了工作区切换器)。
   } else {
     closeCodeHost()
     codeSelectedFile.value = null

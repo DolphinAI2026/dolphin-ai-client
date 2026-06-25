@@ -2,8 +2,9 @@ import { describe, expect, it } from 'vitest'
 import src from './CodeSessionGitBar.vue?raw'
 
 describe('CodeSessionGitBar', () => {
-  it('renders 📁 workspace name + ⎇ branch + emits switch-workspace', () => {
-    expect(src).toContain('switch-workspace')   // 切工作区 emit
+  it('renders 📁 固定工作区标签(不切换)+ ⎇ branch', () => {
+    expect(src).toContain('git-chip--static')    // 工作区是固定标签,非可切换下拉
+    expect(src).not.toContain('switch-workspace') // 已移除工作区切换器(从「我的开发」进来即锁定)
     expect(src).toContain('gitStatus')           // 拉当前分支
     expect(src).toContain('gitBranches')         // 列分支
     expect(src).toContain('gitCheckout')         // 切/建分支

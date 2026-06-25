@@ -1,22 +1,9 @@
 <template>
   <div class="git-bar">
-    <!-- 📁 工作区:显当前 + 切(切=开新会话,由父处理) -->
-    <el-dropdown trigger="click" @command="onSwitchWorkspace">
-      <button class="git-chip" title="切换工作区">
-        <AppIcon name="folder" :size="13" /> {{ workspaceName || wsId }} <span class="caret">▾</span>
-      </button>
-      <template #dropdown>
-        <el-dropdown-menu>
-          <el-dropdown-item
-            v-for="w in workspaces"
-            :key="w.ws_id || w.id"
-            :command="w.ws_id || w.id"
-          >
-            {{ w.project_name || w.name || (w.ws_id || w.id) }}
-          </el-dropdown-item>
-        </el-dropdown-menu>
-      </template>
-    </el-dropdown>
+    <!-- 📁 工作区:固定显示当前工作区(从「我的开发」进来即锁定,不切换) -->
+    <span class="git-chip git-chip--static" :title="workspaceName || wsId">
+      <AppIcon name="folder" :size="13" /> {{ workspaceName || wsId }}
+    </span>
 
     <!-- ⎇ 分支:显当前 + 列/切/建 -->
     <el-dropdown trigger="click" @command="onPickBranch">
@@ -101,11 +88,6 @@ import AppIcon from '@/components/common/AppIcon.vue'
 const props = defineProps<{
   wsId: string
   workspaceName?: string
-  workspaces?: any[]
-}>()
-
-const emit = defineEmits<{
-  (e: 'switch-workspace', wsId: string): void
 }>()
 
 const branch = ref('')
@@ -148,10 +130,6 @@ async function refresh() {
 }
 
 watch(() => props.wsId, refresh, { immediate: true })
-
-function onSwitchWorkspace(wsId: string) {
-  if (wsId && wsId !== props.wsId) emit('switch-workspace', wsId)
-}
 
 async function onPickBranch(cmd: string) {
   if (cmd === '__new__') {
@@ -257,6 +235,14 @@ async function onPull() {
 
 .git-chip:hover {
   background: var(--ac-input, #f8fafc);
+}
+
+/* 固定工作区标签:非交互,无指针/悬停态 */
+.git-chip--static {
+  cursor: default;
+}
+.git-chip--static:hover {
+  background: var(--ac-btn, #fff);
 }
 
 .git-chip:disabled {
