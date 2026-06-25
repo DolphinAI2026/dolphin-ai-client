@@ -103,9 +103,11 @@ onUnmounted(() => document.removeEventListener('click', closeOnOutside))
 .builder-model-picker {
   position: relative;
   flex: 0 0 auto;
-  width: clamp(142px, 18vw, 220px);
-  min-width: 132px;
-  max-width: 240px;
+  /* 2026-06-25: 贴合内容宽度(原来固定 clamp 142-220px, 短标签如「Dolphin-默认」也撑很宽,
+     在窄的配置助手面板里显得过长)。max-content 让框子随标签收窄, 长名 168px 封顶 + 省略号。 */
+  width: max-content;
+  min-width: 0;
+  max-width: 168px;
   z-index: 14;
 }
 
