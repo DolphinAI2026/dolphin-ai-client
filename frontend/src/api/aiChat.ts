@@ -14,10 +14,11 @@ export interface AIChatSession {
     deploy_record_id?: number | null
     error_message?: string | null
   } | null
-  /** 工作模式：'chat'（从零理需求）/ 'cowork'（批量材料整合） */
-  mode?: 'chat' | 'cowork' | string
+  /** 工作模式：'chat'（从零理需求）/ 'cowork'（批量材料整合）/ 'code'（智能开发） */
+  mode?: 'chat' | 'cowork' | 'code' | string
   selected_llm_config_id: number | null
   workspace_dir: string | null
+  workspace_id?: string | null
   created_at: string | null
   updated_at: string | null
 }
@@ -139,7 +140,7 @@ export const aiChatApi = {
     const qs = params?.app_id != null ? `?app_id=${params.app_id}` : ''
     return request.get<any, { sessions: AIChatSession[] }>(`/ai-chat/sessions${qs}`)
   },
-  createSession(body: { title?: string; selected_llm_config_id?: number | null; mode?: 'chat' | 'cowork'; app_id?: number | null; section?: string | null }): Promise<AIChatSession> {
+  createSession(body: { title?: string; selected_llm_config_id?: number | null; mode?: 'chat' | 'cowork' | 'code'; app_id?: number | null; workspace_id?: string; section?: string | null }): Promise<AIChatSession> {
     return request.post<any, AIChatSession>('/ai-chat/sessions', body)
   },
   getSession(id: number, params?: { app_id?: number | null }): Promise<AIChatSessionDetail> {

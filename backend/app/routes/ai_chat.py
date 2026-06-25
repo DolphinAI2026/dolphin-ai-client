@@ -111,6 +111,7 @@ def _session_to_dict(s: AIChatSession, generation: Optional[dict] = None) -> dic
         "mode": getattr(s, "mode", None) or "chat",
         "selected_llm_config_id": s.selected_llm_config_id,
         "workspace_dir": s.workspace_dir,
+        "workspace_id": getattr(s, "workspace_id", None),
         "app_id": getattr(s, "app_id", None),
         "created_at": s.created_at.isoformat() if s.created_at else None,
         "updated_at": s.updated_at.isoformat() if s.updated_at else None,
