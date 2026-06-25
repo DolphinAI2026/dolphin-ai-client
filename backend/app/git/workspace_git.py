@@ -67,6 +67,11 @@ def build_authed_url(provider: str, remote_url: str, token: str) -> str:
     return f"https://{token}@{rest}"  # github 及默认
 
 
+async def ls_remote(ws_path: Path, authed_url: str) -> None:
+    """验证远程仓可达(git ls-remote 即使空仓也成功,比 fetch 更安全)。"""
+    await _git_checked(ws_path, "ls-remote", authed_url)
+
+
 async def fetch(ws_path: Path, authed_url: str) -> None:
     await _git_checked(ws_path, "fetch", authed_url)
 

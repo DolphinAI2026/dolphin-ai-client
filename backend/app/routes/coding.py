@@ -961,10 +961,22 @@ async def git_status_endpoint(
     ctx: Annotated[AuthContext, Depends(get_auth_context)],
     db: Annotated[AsyncSession, Depends(get_db)],
 ):
-    """返回工作区当前分支 + 是否有未提交改动。"""
+    """返回工作区当前分支 + 是否有未提交改动。若已绑定远程仓则附带 has_remote/ahead/behind。"""
     await _ensure_workspace_access(ws_id, ctx, db, minimum_project_role="member")
     ws_path = workspace_mgr.get_workspace_path(ws_id)
-    return await workspace_git.status(ws_path)
+    result = dict(await workspace_git.status(ws_path))
+
+    # P2 扩展: 有绑定时注入 has_remote + ahead/behind
+    from sqlalchemy import select as _sa_sel
+    from app.models.workspace_git import WorkspaceGitRemote as _WGR
+    remote = (await db.execute(
+        _sa_sel(_WGR).where(_WGR.ws_id == ws_id)
+    )).scalar_one_or_none()
+    if remote is not None:
+        result["has_remote"] = True
+        rs = await workspace_git.remote_status(ws_path)
+        result.update(rs)
+    return result
 
 
 @router.get("/workspace/{ws_id}/git/branches")
@@ -994,6 +1006,152 @@ async def git_checkout_endpoint(
     except workspace_git.GitError as e:
         raise HTTPException(status_code=400, detail=str(e))
     return {"ok": True, "branch": await workspace_git.current_branch(ws_path)}
+
+
+# Git 端点 — 代码会话 git P2(远程 connect/push/pull + status 扩 ahead/behind)
+# ---------------------------------------------------------------------------
+from sqlalchemy import select as _sa_select  # noqa: E402
+from app.models.collaboration import GitConnection  # noqa: E402
+from app.models.workspace_git import WorkspaceGitRemote  # noqa: E402
+
+
+class GitConnectRequest(BaseModel):
+    provider: str          # "github" | "gitlab"
+    remote_url: str        # https://… 或本地路径(测试用)
+    git_connection_id: int
+
+
+async def _load_git_connection(db: AsyncSession, git_connection_id: int, ctx: AuthContext) -> GitConnection:
+    """按 id 加载 GitConnection 并验证属于当前租户的某个 project。"""
+    from sqlalchemy import select as sa_select
+    # GitConnection 通过 project_id → Project(tenant_id) 归属租户
+    from app.models import Project
+    conn = (await db.execute(
+        sa_select(GitConnection).where(GitConnection.id == git_connection_id)
+    )).scalar_one_or_none()
+    if conn is None:
+        raise HTTPException(status_code=404, detail="GitConnection 不存在")
+    # 验证归属租户
+    proj = (await db.execute(
+        sa_select(Project).where(Project.id == conn.project_id)
+    )).scalar_one_or_none()
+    if proj is None or proj.tenant_id != ctx.tenant_id:
+        raise HTTPException(status_code=403, detail="无权访问该 GitConnection")
+    return conn
+
+
+@router.post("/workspace/{ws_id}/git/connect")
+async def git_connect_endpoint(
+    ws_id: str,
+    body: GitConnectRequest,
+    ctx: Annotated[AuthContext, Depends(get_auth_context)],
+    db: Annotated[AsyncSession, Depends(get_db)],
+):
+    """绑定远程仓并用 PAT 验证可达(fetch),然后落 WorkspaceGitRemote 行。"""
+    await _ensure_workspace_access(ws_id, ctx, db, minimum_project_role="member")
+    ws_path = workspace_mgr.get_workspace_path(ws_id)
+
+    conn = await _load_git_connection(db, body.git_connection_id, ctx)
+    token = decrypt_password(conn.access_token_enc)  # 仅内存,绝不持久化
+    authed_url = workspace_git.build_authed_url(body.provider, body.remote_url, token)
+
+    try:
+        await workspace_git.ls_remote(ws_path, authed_url)
+    except workspace_git.GitError as e:
+        raise HTTPException(status_code=400, detail=f"远程仓不可达: {e}")
+    finally:
+        del token, authed_url  # PAT 即时丢弃
+
+    branch = await workspace_git.current_branch(ws_path)
+
+    # upsert WorkspaceGitRemote(ws_id unique)
+    existing = (await db.execute(
+        _sa_select(WorkspaceGitRemote).where(WorkspaceGitRemote.ws_id == ws_id)
+    )).scalar_one_or_none()
+    if existing is None:
+        row = WorkspaceGitRemote(
+            ws_id=ws_id,
+            tenant_id=ctx.tenant_id,
+            user_id=ctx.user.id,
+            provider=body.provider,
+            remote_url=body.remote_url,
+            default_branch=branch,
+            git_connection_id=body.git_connection_id,
+        )
+        db.add(row)
+    else:
+        existing.provider = body.provider
+        existing.remote_url = body.remote_url
+        existing.default_branch = branch
+        existing.git_connection_id = body.git_connection_id
+        db.add(existing)
+
+    await db.flush()
+    return {"ok": True, "default_branch": branch}
+
+
+@router.post("/workspace/{ws_id}/git/push")
+async def git_push_endpoint(
+    ws_id: str,
+    ctx: Annotated[AuthContext, Depends(get_auth_context)],
+    db: Annotated[AsyncSession, Depends(get_db)],
+):
+    """把当前分支 push 到绑定的远程仓。"""
+    await _ensure_workspace_access(ws_id, ctx, db, minimum_project_role="member")
+    ws_path = workspace_mgr.get_workspace_path(ws_id)
+
+    remote = (await db.execute(
+        _sa_select(WorkspaceGitRemote).where(WorkspaceGitRemote.ws_id == ws_id)
+    )).scalar_one_or_none()
+    if remote is None:
+        raise HTTPException(status_code=400, detail="工作区未绑定远程仓,请先调用 /git/connect")
+
+    conn = await _load_git_connection(db, remote.git_connection_id, ctx)
+    token = decrypt_password(conn.access_token_enc)
+    authed_url = workspace_git.build_authed_url(remote.provider, remote.remote_url, token)
+    branch = await workspace_git.current_branch(ws_path)
+
+    try:
+        await workspace_git.push(ws_path, authed_url, branch)
+    except workspace_git.GitError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    finally:
+        del token, authed_url
+
+    rs = await workspace_git.remote_status(ws_path)
+    return {"ok": True, **rs}
+
+
+@router.post("/workspace/{ws_id}/git/pull")
+async def git_pull_endpoint(
+    ws_id: str,
+    ctx: Annotated[AuthContext, Depends(get_auth_context)],
+    db: Annotated[AsyncSession, Depends(get_db)],
+):
+    """从绑定的远程仓 pull 当前分支。"""
+    await _ensure_workspace_access(ws_id, ctx, db, minimum_project_role="member")
+    ws_path = workspace_mgr.get_workspace_path(ws_id)
+
+    remote = (await db.execute(
+        _sa_select(WorkspaceGitRemote).where(WorkspaceGitRemote.ws_id == ws_id)
+    )).scalar_one_or_none()
+    if remote is None:
+        raise HTTPException(status_code=400, detail="工作区未绑定远程仓,请先调用 /git/connect")
+
+    conn = await _load_git_connection(db, remote.git_connection_id, ctx)
+    token = decrypt_password(conn.access_token_enc)
+    authed_url = workspace_git.build_authed_url(remote.provider, remote.remote_url, token)
+    branch = await workspace_git.current_branch(ws_path)
+
+    try:
+        await workspace_git.pull(ws_path, authed_url, branch)
+    except workspace_git.GitError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    finally:
+        del token, authed_url
+
+    rs = await workspace_git.remote_status(ws_path)
+    return {"ok": True, **rs}
 
 
 async def _read_class_file_decompiled(ws_id: str, file_path: str) -> dict:
