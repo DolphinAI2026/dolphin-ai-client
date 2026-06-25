@@ -373,6 +373,7 @@ class CodingProfile(HarnessProfile):
             mode="code",
             app_id=app_id_int,
             workspace_dir=ws_dir,
+            workspace_id=ws_id or None,  # SP2a：落 ws_id 供引擎推导 ws-lock
         )
         db.add(session)
         await db.commit()

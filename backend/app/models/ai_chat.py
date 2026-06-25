@@ -45,6 +45,9 @@ class AIChatSession(Base):
     app_id: Mapped[Optional[int]] = mapped_column(Integer, nullable=True, index=True)
     # workspace 目录路径（per-session tmp 目录，用于 run_python 的 cwd + 附件存储）
     workspace_dir: Mapped[Optional[str]] = mapped_column(String(500), nullable=True)
+    # 绑定工作区 ws_id（非路径，是 WorkspaceManager 的 ws_id）；Code 会话据此让引擎推导
+    # ws-lock（SP2a：run_agent 无 override 时按 session.mode 推导 dev-apaas + 单工作区锁）。
+    workspace_id: Mapped[Optional[str]] = mapped_column(String(64), nullable=True, index=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, nullable=False)
     updated_at: Mapped[datetime] = mapped_column(
         DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False
