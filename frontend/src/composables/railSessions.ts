@@ -15,12 +15,16 @@ export interface RailSession {
   appName?: string
 }
 
-export function normalizeAiSessions(sessions: AIChatSession[] | null | undefined): RailSession[] {
+export function normalizeAiSessions(
+  sessions: AIChatSession[] | null | undefined,
+  appNameById?: Map<number, string>,
+): RailSession[] {
   return (sessions || []).map((s) => ({
     id: s.id,
     title: s.title || '未命名会话',
     updatedAt: s.updated_at ?? undefined,
-    appName: s.generation?.app_name || undefined,
+    // 优先用生成产出的应用名;否则用会话绑定的 app_id 反查(code 会话从工作区继承 app_id)。
+    appName: s.generation?.app_name || (s.app_id ? appNameById?.get(s.app_id) : undefined) || undefined,
   }))
 }
 

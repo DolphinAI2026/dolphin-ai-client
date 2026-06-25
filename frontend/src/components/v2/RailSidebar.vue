@@ -32,8 +32,11 @@ const currentMode = computed<AppMode>(() => modeStore.mode)
 const aiSessions = ref<AIChatSession[]>([])
 const showRecent = computed(() => !effectiveCollapsed.value)
 
+// app_id → 应用名映射(供「按应用」分组,code 会话从工作区继承 app_id 后据此归到应用)。
+const appNameById = ref<Map<number, string>>(new Map())
+
 // 归一会话列表(单一来源)。
-const railSessions = computed<RailSession[]>(() => normalizeAiSessions(aiSessions.value))
+const railSessions = computed<RailSession[]>(() => normalizeAiSessions(aiSessions.value, appNameById.value))
 
 async function loadRailSessions() {
   try {
@@ -173,7 +176,16 @@ onMounted(async () => {
   try {
     const { applicationApi } = await import('@/api/application')
     const apps: any = (await applicationApi.list?.({ include_remote: false } as any)) ?? []
+    const appList: any[] = Array.isArray(apps) ? apps : (apps?.items ?? [])
     appCount.value = Array.isArray(apps) ? apps.length : (apps?.items?.length ?? apps?.total ?? 0)
+    // 建 app_id → 名称映射,供左栏「按应用」分组反查(含 code 会话继承的 app_id)。
+    const map = new Map<number, string>()
+    for (const a of appList) {
+      const id = Number(a?.id)
+      const name = a?.app_name || a?.appName
+      if (Number.isFinite(id) && id && name) map.set(id, name)
+    }
+    appNameById.value = map
   } catch {
     appCount.value = undefined
   }

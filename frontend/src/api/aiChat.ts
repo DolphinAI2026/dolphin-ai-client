@@ -16,6 +16,8 @@ export interface AIChatSession {
   } | null
   /** 工作模式：'chat'（从零理需求）/ 'cowork'（批量材料整合）/ 'code'（智能开发） */
   mode?: 'chat' | 'cowork' | 'code' | string
+  /** 会话所属应用（code 会话从工作区绑定继承）；用于左栏「按应用」分组 */
+  app_id?: number | null
   selected_llm_config_id: number | null
   workspace_dir: string | null
   workspace_id?: string | null
