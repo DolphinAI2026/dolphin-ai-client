@@ -186,6 +186,27 @@
             <div class="art-card-preview" v-if="artifact.preview">{{ artifact.preview }}</div>
           </div>
         </template>
+        <!-- code 会话文件写改 → FileCard 红绿 diff；其它工具保持默认 ToolCard -->
+        <template #tool-renderer="{ tool }">
+          <template v-if="tool.name === 'write_file'">
+            <FileCard
+              action="write"
+              :file-name="tool.args?.file_path"
+              :file-content="tool.args?.content"
+            />
+          </template>
+          <template v-else-if="tool.name === 'edit_file'">
+            <FileCard
+              action="edit"
+              :file-name="tool.args?.file_path"
+              :old-content="tool.args?.old_string"
+              :file-content="tool.args?.new_string"
+            />
+          </template>
+          <template v-else>
+            <ToolCard :tool="tool" />
+          </template>
+        </template>
         <!-- 应用就绪 CTA — generate_app_from_doc / deploy_application 成功后 inline 一张大卡，
              一键跳 app_view_url（或 fallback 到 /chat?app_id=N）。
              比让用户从工具卡 result JSON 里抠 app_id 直观得多。 -->
@@ -539,6 +560,8 @@ import { useUserStore } from '@/stores/user'
 import WorkbenchShell from '@/components/WorkbenchShell.vue'
 import SessionSidebar, { type SessionItem, type SessionTab, type NewSessionOption } from '@/components/common/SessionSidebar.vue'
 import AgentConversation from '@/components/common/AgentConversation.vue'
+import FileCard from '@/components/FileCard.vue'
+import ToolCard from '@/components/common/agent-conversation/ToolCard.vue'
 import AgentRunTraceDrawer from '@/components/common/AgentRunTraceDrawer.vue'
 import ChooseAppTargetDialog from '@/components/ChooseAppTargetDialog.vue'
 import type { AgentMessage } from '@/components/common/agent-conversation/types'
