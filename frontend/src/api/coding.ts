@@ -317,6 +317,23 @@ export const codingApi = {
     }
     return resp.json()
   },
+
+  // ========== Git API (P1: 本地分支) ==========
+
+  /** 当前分支、dirty 状态 */
+  gitStatus(wsId: string) {
+    return request.get<any, { branch: string; dirty: boolean; has_remote: boolean }>(`/coding/workspace/${wsId}/git/status`)
+  },
+
+  /** 列出本地所有分支 */
+  gitBranches(wsId: string) {
+    return request.get<any, { local: string[] }>(`/coding/workspace/${wsId}/git/branches`)
+  },
+
+  /** 切换或新建本地分支 */
+  gitCheckout(wsId: string, body: { name: string; create?: boolean }) {
+    return request.post<any, { ok: boolean; branch: string }>(`/coding/workspace/${wsId}/git/checkout`, body)
+  },
 }
 
 /** 列出工作区文件(扁平相对路径,已排除 node_modules/隐藏文件) */
