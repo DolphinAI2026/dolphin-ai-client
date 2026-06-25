@@ -126,6 +126,33 @@ async def test_ws_bind_view_context_empty_when_no_ws():
     assert "ws-9" in CodingProfile._ws_bind_view_context("ws-9")
 
 
+# ── 单工作区锁定:防 agent 用 list_dev_workspaces 列出全部、挑错工作区读代码 ──
+
+
+def test_cutover_drops_workspace_enumeration_tools_when_ws_bound():
+    """绑定了工作区 → 砍掉 list_dev_workspaces / create_dev_workspace(枚举/新建),
+    把 agent 锁死在打开的那个 ws_id;读写工作区的工具保留。"""
+    base = {"list_dev_workspaces", "create_dev_workspace", "read_workspace_file",
+            "write_workspace_files", "edit_workspace_files", "glob_workspace"}
+    locked = CodingProfile._cutover_tool_names(base, "ws-1")
+    assert "list_dev_workspaces" not in locked
+    assert "create_dev_workspace" not in locked
+    assert {"read_workspace_file", "write_workspace_files", "edit_workspace_files"} <= locked
+
+
+def test_cutover_keeps_all_tools_when_no_ws():
+    """没绑定工作区(理论新建路径)→ 不砍,保留全集。"""
+    base = {"list_dev_workspaces", "create_dev_workspace", "read_workspace_file"}
+    assert CodingProfile._cutover_tool_names(base, "") == base
+
+
+def test_ws_bind_view_context_hard_locks_single_ws():
+    """绑定提示是强约束:点名 ws_id + 严禁其它/枚举/新建。"""
+    ctx = CodingProfile._ws_bind_view_context("ws-9")
+    assert "ws-9" in ctx
+    assert "严禁" in ctx
+
+
 # ── 跨轮失忆修复:session 锚到稳定 conversation_id(非临时 thread metadata) ──
 
 
