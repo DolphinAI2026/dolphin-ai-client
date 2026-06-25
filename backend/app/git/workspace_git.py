@@ -55,3 +55,33 @@ async def status(ws_path: Path) -> dict:
         "dirty": await is_dirty(ws_path),
         "has_remote": False,  # P1 无远程;P2 接 workspace_git_remote 后改真值
     }
+
+
+def build_authed_url(provider: str, remote_url: str, token: str) -> str:
+    """把 PAT 注入 https remote URL。仅内存用,绝不持久化。"""
+    if not remote_url.startswith("https://"):
+        return remote_url  # ssh/本地路径直接用(测试本地 bare 仓走这条)
+    rest = remote_url[len("https://") :]
+    if provider == "gitlab":
+        return f"https://oauth2:{token}@{rest}"
+    return f"https://{token}@{rest}"  # github 及默认
+
+
+async def fetch(ws_path: Path, authed_url: str) -> None:
+    await _git_checked(ws_path, "fetch", authed_url)
+
+
+async def push(ws_path: Path, authed_url: str, branch: str) -> None:
+    await _git_checked(ws_path, "push", authed_url, f"HEAD:{branch}")
+
+
+async def pull(ws_path: Path, authed_url: str, branch: str) -> None:
+    await _git_checked(ws_path, "pull", "--no-rebase", authed_url, branch)
+
+
+async def remote_status(ws_path: Path) -> dict:
+    code, out, _ = await _git(ws_path, "rev-list", "--left-right", "--count", "@{upstream}...HEAD")
+    if code != 0:  # 无 upstream
+        return {"ahead": 0, "behind": 0}
+    parts = out.split()
+    return {"behind": int(parts[0]), "ahead": int(parts[1])} if len(parts) == 2 else {"ahead": 0, "behind": 0}
