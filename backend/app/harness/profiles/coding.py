@@ -277,15 +277,36 @@ class CodingProfile(HarnessProfile):
     # 会让 agent 列出全部工作区、挑错一个去读代码(读了"工厂孪生"而非用户打开的"访客")。
     _WS_LOCK_DROP_TOOLS = frozenset({"list_dev_workspaces", "create_dev_workspace"})
 
+    # Code 模式砍掉的"需要 app/env 绑定的 apaas 应用级 / 应用管理工具":
+    # Code 会话不绑 app(env_id=0)→ 这些必失败,agent 会死循环(实测 get_apaas_app_overview
+    # 反复 platform_env_id=0 失败)。Code 是工作区代码编辑,二开 grounding 改读工作区自己的
+    # apaas.json + skill 包,不靠 live apaas 查询。保留:工作区代码工具 + 文件 + skill +
+    # lint/doctor/init 后端工作区 + start_serve。
+    _CUTOVER_DROP_APP_TOOLS = frozenset({
+        "get_apaas_app_overview", "get_apaas_form_detail", "get_apaas_user_name",
+        "list_apaas_app_dev_kits", "list_apaas_app_dicts", "list_apaas_app_menus",
+        "list_apaas_app_models", "list_apaas_app_roles", "list_apaas_apps_in_env",
+        "list_apaas_form_components", "list_apaas_form_permissions", "list_apaas_form_views",
+        "list_apaas_models_in_env", "list_apaas_resource_pool_kits", "query_apaas_business_data",
+        "attach_dev_packages_to_apaas_app", "bind_apaas_form_field_to_dict",
+        "build_apaas_feature_from_spec", "enable_apaas_self_dev_config",
+        "rename_apaas_menu", "upload_external_zip_to_apaas",
+        "get_application", "list_my_applications", "list_platform_envs",
+        "compute_app_health", "check_app_code_conflict", "get_role_resource_matrix",
+        "get_dev_scene_full_workflow", "get_dev_scene_spec", "list_dev_scenes", "save_dev_spec",
+    })
+
     @classmethod
     def _cutover_tool_names(cls, base_tools, ws_id: str) -> set[str]:
-        """绑定了工作区(Code 单工作区)→ 砍掉枚举/新建工具,把 agent 锁死在这个 ws_id。
+        """绑定了工作区(Code 单工作区)→ 砍掉枚举/新建工具 + app/env 级 apaas 工具,
+        把 agent 锁死在这个 ws_id、专注工作区代码。
 
         没绑定(理论上的新建项目路径,当前 cutover 不走)→ 保留全集。
         """
         tools = set(base_tools)
         if ws_id:
             tools -= cls._WS_LOCK_DROP_TOOLS
+            tools -= cls._CUTOVER_DROP_APP_TOOLS
         return tools
 
     @staticmethod

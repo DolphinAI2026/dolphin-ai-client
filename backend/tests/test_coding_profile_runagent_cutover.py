@@ -146,6 +146,20 @@ def test_cutover_keeps_all_tools_when_no_ws():
     assert CodingProfile._cutover_tool_names(base, "") == base
 
 
+def test_cutover_drops_app_level_apaas_tools_when_ws_bound():
+    """Code 单工作区 → 砍掉需要 app/env 绑定的 apaas 应用级工具(否则 env_id=0 死循环);
+    工作区代码工具保留。"""
+    base = {"get_apaas_app_overview", "list_apaas_app_models", "query_apaas_business_data",
+            "get_application", "list_my_applications",
+            "read_workspace_file", "edit_workspace_files", "run_workspace_command",
+            "start_serve", "read_skill_file"}
+    locked = CodingProfile._cutover_tool_names(base, "ws-1")
+    assert not ({"get_apaas_app_overview", "list_apaas_app_models", "query_apaas_business_data",
+                 "get_application", "list_my_applications"} & locked)
+    assert {"read_workspace_file", "edit_workspace_files", "run_workspace_command",
+            "start_serve", "read_skill_file"} <= locked
+
+
 def test_ws_bind_view_context_hard_locks_single_ws():
     """绑定提示是强约束:点名 ws_id + 严禁其它/枚举/新建。"""
     ctx = CodingProfile._ws_bind_view_context("ws-9")
