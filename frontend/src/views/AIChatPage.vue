@@ -81,8 +81,16 @@
               <path d="m10 8 6 4-6 4z" fill="currentColor" stroke="none" />
             </svg>
           </button>
+          <!-- SP2b T4: code 会话 → 代码面板开关(替代设计文档开关);其它会话照旧显示设计文档开关 -->
           <button
-            v-if="artifacts.length > 0"
+            v-if="isCodeSession"
+            class="artifacts-toggle"
+            :class="{ active: codePanelOpen }"
+            @click="codePanelOpen = !codePanelOpen"
+            :title="codePanelOpen ? '收起代码栏' : '展开代码栏'"
+          ><AppIcon name="doc" :size="14" /> 代码</button>
+          <button
+            v-else-if="artifacts.length > 0"
             class="artifacts-toggle"
             :class="{ active: artifactsPanelOpen }"
             @click="artifactsPanelOpen = !artifactsPanelOpen"
@@ -279,10 +287,57 @@
       </div>
     </main>
 
-    <!-- ═══════ 右侧 artifacts（仅在有设计文档 + 用户展开时显示）═══════ -->
+    <!-- ═══════ 右侧 Codex 面板宿主（SP2b T4: 仅 code 会话 + 展开时）═══════
+         scoped-dark: 外层 .aichat-codex-host 把 FileTree/CodeViewer 用到的全局 token(--bg/--fg/--line…)
+         本地重指到 --cx-*(由 CodexPanelHost 根 .codex-skin 提供) → 面板子树恒暗,AIChatPage 其余仍亮。-->
+    <div
+      v-if="isCodeSession && codePanelOpen"
+      class="aichat-codex-host codex-skin"
+      :style="{ width: codePaneWidth + 'px' }"
+    >
+      <div class="aichat-codex-resizer" title="拖拽调整代码栏宽度" @pointerdown="onCodePaneResizeStart" />
+      <CodexPanelHost
+        :ws-id="codexPanelWsId || ''"
+        :open="codePanelOpen"
+        :active-panel="codeActivePanel"
+        :panel-commands="codexPanelCommands"
+        :changes="codeGitChanges"
+        :selected-file="codeSelectedFile"
+        :accepting-changes="codeAcceptingChanges"
+        :file-tree="codeFileTree"
+        :changed-paths="codeChangedPaths"
+        :selected-diff="null"
+        :selected-git-change="codeSelectedGitChange"
+        :viewer-focus-line="codeViewerFocusLine"
+        :active-preview="codeActivePreview"
+        :tree-pane-width="codeTreePaneWidth"
+        :dark="true"
+        @update:open="v => codePanelOpen = v"
+        @update:active-panel="showCodePanel"
+        @open-palette="codeCmdPaletteOpen = true"
+        @select-file="onCodeReviewSelectFile"
+        @accept-all="acceptAllCodeChanges"
+        @select-tree="onCodeTreeSelect"
+        @select-tree-line="onCodeTreeSelectLine"
+        @viewer-quote="onCodeViewerQuote"
+        @accept-change="acceptCodeChange"
+        @server-detected="onTerminalServerDetected"
+        @update:active-preview="v => codeActivePreview = v"
+        @tree-resize-start="onCodeTreeResizeStart"
+      />
+    </div>
+
+    <CommandPalette
+      :open="codeCmdPaletteOpen"
+      :commands="codexCommands"
+      @select="onCodePaletteSelect"
+      @close="codeCmdPaletteOpen = false"
+    />
+
+    <!-- ═══════ 右侧 artifacts（仅在有设计文档 + 用户展开时显示；code 会话不显示，走 Codex 面板）═══════ -->
     <aside
       class="aside-right"
-      v-if="currentSession && artifactsPanelOpen && artifacts.length > 0"
+      v-if="!isCodeSession && currentSession && artifactsPanelOpen && artifacts.length > 0"
       :style="{ width: asideRightWidth + 'px' }"
     >
       <div
@@ -494,6 +549,19 @@ import { listSkills } from '@/api/skills'
 import BuilderModelPicker from '@/components/common/BuilderModelPicker.vue'
 import AppIcon from '@/components/common/AppIcon.vue'
 import type { UnifiedChatAttachment } from '@/components/common/chatComposer'
+// ── SP2b T4: Code 会话 → 在右栏挂 Codex 面板宿主(审查/文件/终端/浏览器)，内容驱动 ──
+import CodexPanelHost from './coding/CodexPanelHost.vue'
+import CommandPalette from './coding/CommandPalette.vue'
+import { useCodexPanels, type CodexPanelId, type CodexCommandId } from './coding/useCodexPanels'
+import { buildFileTree, type TreeNode } from './coding/fileTree'
+import { usePanelResize } from '@/components/v2/config-assistant/composables/usePanelResize'
+import {
+  listWorkspaceFiles,
+  getWorkspaceChanges,
+  acceptWorkspaceChanges,
+  type WorkspaceChanges,
+  type WorkspaceChangeEntry,
+} from '@/api/coding'
 // chat / cowork mode 已合并 — ChatDotRound 用作 session 列表前导 icon（对话界面风格）
 import { ChatDotRound } from '@element-plus/icons-vue'
 import { applicationApi } from '@/api/application'
@@ -740,6 +808,173 @@ function startAsideResize(e: MouseEvent) {
   document.body.style.cursor = 'ew-resize'
   document.body.style.userSelect = 'none'
 }
+
+// ═══════════════════════════════════════════════════════════════════════
+// SP2b T4: Code 会话 → 右栏挂 Codex 面板宿主(CodexPanelHost)。
+// 纯增量,仅在 isCodeSession 为真时渲染;chat/cowork 会话走原设计产物 aside,零回归。
+// workspace_id(SP2a 新列,= WorkspaceManager slug)驱动 FileTree/Terminal/RunDebug/CodeViewer。
+// activePreview 由本页本地持有(CodingPage 回写 store,这里用本地 ref,各页独立)。
+// ═══════════════════════════════════════════════════════════════════════
+type ActivePreview = {
+  dev_url: string; status: string; errors: string[]; capture_available: boolean; round: number | null; source?: string
+} | null
+
+const codexPanelWsId = computed<string | null>(() => currentSession.value?.workspace_id ?? null)
+const isCodeSession = computed(() => currentSession.value?.mode === 'code' && !!codexPanelWsId.value)
+
+// Codex 面板状态机(open / active / palette),与 CodingPage 同一 composable。
+const {
+  open: codePanelOpen,
+  active: codeActivePanel,
+  paletteOpen: codeCmdPaletteOpen,
+  commands: codexCommands,
+  panelCommands: codexPanelCommands,
+  show: showCodePanel,
+  closeHost: closeCodeHost,
+} = useCodexPanels()
+
+// 外栏宽度(右栏 Codex 面板,与设计产物 aside 各自一套 storageKey,互不串)。
+const { panelWidth: codePaneWidth, onResizeStart: onCodePaneResizeStart } = usePanelResize({
+  storageKey: 'ai-chat:code-pane-width',
+  defaultWidth: 640,
+  minWidth: 360,
+  maxWidth: 1280,
+})
+// 文件树列拖宽(handle 在树右边界)。
+const { panelWidth: codeTreePaneWidth, onResizeStart: onCodeTreeResizeStart } = usePanelResize({
+  storageKey: 'ai-chat:code-tree-pane-width',
+  defaultWidth: 236,
+  minWidth: 180,
+  maxWidth: 480,
+  handleSide: 'right',
+})
+
+// ── 工作区数据(懒加载,仅 code 会话进来才拉)──
+const codeFileTree = ref<TreeNode[]>([])
+const codeSelectedFile = ref<string | null>(null)
+const codeViewerFocusLine = ref<number | null>(null)
+const codeGitChanges = ref<WorkspaceChanges | null>(null)
+const codeAcceptingChanges = ref(false)
+const codeActivePreview = ref<ActivePreview>(null)
+let _codeDataLoadedFor: string | null = null  // 已加载数据的 ws id;切会话/工作区失效
+
+// AIChatPage 无 coding 的 FileChangeMsg 流 → selectedDiff 永远走 git 基线(null 让 CodeViewer 用 change)。
+// 树徽标的「本轮改动路径」直接取 git 改动文件集合。
+const codeChangedPaths = computed(() => new Set((codeGitChanges.value?.files || []).map(f => f.path)))
+const codeSelectedGitChange = computed<WorkspaceChangeEntry | null>(() =>
+  codeGitChanges.value?.enabled && codeSelectedFile.value
+    ? codeGitChanges.value.files.find(f => f.path === codeSelectedFile.value) || null
+    : null,
+)
+
+async function loadCodeFileTree(wsId: string) {
+  try { codeFileTree.value = buildFileTree(await listWorkspaceFiles(wsId)) }
+  catch (e) { console.warn('[ai-chat] 加载工作区文件树失败', e); codeFileTree.value = [] }
+}
+async function loadCodeGitChanges(wsId: string) {
+  try { codeGitChanges.value = await getWorkspaceChanges(wsId) }
+  catch (e) { console.warn('[ai-chat] 加载工作区改动失败', e); codeGitChanges.value = null }
+}
+async function ensureCodePanelData() {
+  const wsId = codexPanelWsId.value
+  if (!wsId || !isCodeSession.value) return
+  if (_codeDataLoadedFor === wsId) return
+  _codeDataLoadedFor = wsId
+  await Promise.all([loadCodeFileTree(wsId), loadCodeGitChanges(wsId)])
+}
+
+// 接受单文件 / 全部变更(镜像 CodingPage)。
+async function acceptCodeChange(path?: string | null) {
+  const wsId = codexPanelWsId.value
+  if (!wsId || codeAcceptingChanges.value) return
+  codeAcceptingChanges.value = true
+  try {
+    codeGitChanges.value = await acceptWorkspaceChanges(wsId, path || null)
+    await loadCodeFileTree(wsId)
+    ElMessage.success(path ? '已接受此文件变更' : '已接受全部变更')
+  } catch (e: any) {
+    ElMessage.error(e?.response?.data?.detail || e?.message || '接受变更失败')
+  } finally {
+    codeAcceptingChanges.value = false
+  }
+}
+async function acceptAllCodeChanges() {
+  if (!codeGitChanges.value?.files.length) return
+  try {
+    await ElMessageBox.confirm(
+      '接受后会把当前所有改动设为新的对比基线，本轮改动列表将清空。',
+      '接受全部变更',
+      { confirmButtonText: '接受全部', cancelButtonText: '取消', type: 'warning' },
+    )
+  } catch { return }
+  await acceptCodeChange(null)
+}
+
+// 树/审查选中文件 → 选中并切到文件面板(CodeViewer 据 selectedFile 进 diff 模式)。
+function onCodeTreeSelect(path: string) {
+  codeViewerFocusLine.value = null
+  codeSelectedFile.value = path
+}
+function onCodeTreeSelectLine(payload: { path: string; line: number }) {
+  codeSelectedFile.value = payload.path
+  codeViewerFocusLine.value = payload.line
+}
+function onCodeReviewSelectFile(path: string) {
+  onCodeTreeSelect(path)
+  showCodePanel('files')
+}
+// 查看器「引用到对话」→ 追加引用块进输入框。
+function onCodeViewerQuote(q: { path: string; startLine: number | null; endLine: number | null; text: string }) {
+  const loc = q.startLine
+    ? `:${q.startLine}${q.endLine && q.endLine !== q.startLine ? '-' + q.endLine : ''}`
+    : ''
+  const block = '引用 `' + q.path + loc + '`:\n```\n' + q.text + '\n```\n'
+  inputText.value = (inputText.value.trim() ? inputText.value.replace(/\s+$/, '') + '\n\n' : '') + block
+}
+
+// 命令面板选中:有面板的直达;侧边聊天留桩。
+function onCodePaletteSelect(id: CodexCommandId) {
+  codeCmdPaletteOpen.value = false
+  if (id === 'sidechat') { ElMessage.info('侧边聊天即将上线'); return }
+  showCodePanel(id as CodexPanelId)
+}
+
+// 终端探测到 server URL → 收敛进本地 activePreview(单一真相源)。
+// agent 流式(send)进行中不抢占——那时 preview 归 agent,等它跑完再让终端接管。
+// ⚠️ 用 AIChatPage 自己的 isSending(send/attach 时为 true),不是 coding 的 isStreaming。
+function onTerminalServerDetected(p: { url: string; port: number }) {
+  if (isSending.value && codeActivePreview.value?.source === 'agent') return
+  codeActivePreview.value = {
+    dev_url: p.url, status: 'ok', errors: [], capture_available: false, round: null, source: 'terminal',
+  }
+  showCodePanel('browser')
+}
+
+// isCodeSession 翻转:进 code 会话 → 自动开 files 面板并懒加载数据;离开 → 收起宿主防残留。
+watch(isCodeSession, (on) => {
+  if (on) {
+    showCodePanel('files')
+    void ensureCodePanelData()
+  } else {
+    closeCodeHost()
+    codeSelectedFile.value = null
+    codeViewerFocusLine.value = null
+    codeGitChanges.value = null
+    codeFileTree.value = []
+    codeActivePreview.value = null
+    _codeDataLoadedFor = null
+  }
+})
+// 切到不同工作区(同为 code 会话)→ 清选中/树/改动 + 失效缓存,重拉。
+watch(codexPanelWsId, () => {
+  codeSelectedFile.value = null
+  codeViewerFocusLine.value = null
+  codeGitChanges.value = null
+  codeFileTree.value = []
+  codeActivePreview.value = null
+  _codeDataLoadedFor = null
+  if (isCodeSession.value) void ensureCodePanelData()
+})
 
 // 临时存储 ask_user / thinking / artifact_card（流式过程中产生但未持久化的）
 type TransientItem =
@@ -1770,6 +2005,12 @@ async function loadSession(id: number) {
       .then(() => scrollBottom())
       .catch(err => console.warn('会话加载后的滚动定位失败', err))
     maybeAttachRunningRun(id)  // 该会话有在跑 run 则重连续看(切会话/刷新不丢)
+    // SP2b T4: code 会话(带 workspace_id) → 内容驱动自动开文件面板。
+    // (watch(isCodeSession) 也会触发,但首次进/刷新时 currentSession 直接赋值不一定触发 watch,这里兜底)
+    if (data.session.mode === 'code' && data.session.workspace_id) {
+      showCodePanel('files')
+      void ensureCodePanelData()
+    }
   } catch (e: any) {
     console.error('加载会话失败', e)
     currentSession.value = null
@@ -4013,6 +4254,63 @@ onMounted(async () => {
 }
 
 /* ─── Aside right (codex-style file viewer) ─── */
+/* SP2b T4: 右栏 Codex 面板宿主 wrapper, 占第三 grid 列, 与 .aside-right 互斥。
+   scoped-dark: AIChatPage 本体恒亮; Codex 子面板用的是全局主题 token,
+   亮态下会渲染错。CodingPage 靠 html data-theme dark 全局翻暗, 这里不能动全局
+   会黑掉聊天 → 在本 wrapper 内把这些全局 token 本地重指到 cx 暗色 token,
+   子面板子树解析即暗, wrapper 之外一概不受影响。
+   仅覆盖颜色类 token; 几何类与主题无关, 沿用全局。 */
+.aichat-codex-host {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
+  flex-shrink: 0;
+  /* 背景/文字 */
+  --bg: var(--cx-bg-0);
+  --bg-sub: var(--cx-bg-1);
+  --bg-inset: var(--cx-bg-2);
+  --bg-hover: var(--cx-bg-hover);
+  --surface: var(--cx-bg-2);
+  --t-bg-input: var(--cx-bg-2);
+  --fg: var(--cx-text-1);
+  --fg-dim: var(--cx-text-2);
+  --fg-faint: var(--cx-text-3);
+  --text-1: var(--cx-text-1);
+  --text-2: var(--cx-text-2);
+  --text-3: var(--cx-text-3);
+  /* 描边 */
+  --line: var(--cx-border);
+  --line-strong: var(--cx-border-hi);
+  /* 品牌/强调 */
+  --brand: var(--cx-brand);
+  --brand-ink: var(--cx-brand);
+  --brand-soft: var(--cx-brand-soft);
+  --ai: var(--cx-brand);
+  --ai-soft: var(--cx-brand-soft);
+  /* 语义状态色(暗色直值,与 cx 调色一致) */
+  --t-success: var(--cx-green);
+  --t-danger: var(--cx-red);
+  --err: var(--cx-red);
+  --warn: var(--cx-accent);
+}
+/* 左边缘拖宽 handle(对齐 .aside-resizer 行为,骑在边界上) */
+.aichat-codex-resizer {
+  position: absolute;
+  left: 0; top: 0; bottom: 0;
+  width: 5px;
+  cursor: col-resize;
+  background: transparent;
+  z-index: 5;
+  touch-action: none;
+  user-select: none;
+  transition: background 0.12s;
+}
+.aichat-codex-resizer:hover,
+.aichat-codex-resizer:active { background: color-mix(in srgb, var(--cx-brand) 55%, transparent); }
+
 .aside-right {
   background: var(--ac-input); border-left: 1px solid var(--ac-border);
   display: flex; flex-direction: column; overflow: hidden;
