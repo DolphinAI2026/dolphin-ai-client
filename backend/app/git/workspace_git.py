@@ -90,3 +90,15 @@ async def remote_status(ws_path: Path) -> dict:
         return {"ahead": 0, "behind": 0}
     parts = out.split()
     return {"behind": int(parts[0]), "ahead": int(parts[1])} if len(parts) == 2 else {"ahead": 0, "behind": 0}
+
+
+async def clone(target_dir: Path, authed_url: str, clean_url: str) -> str:
+    """从 authed_url clone 到 target_dir,然后把 origin 改成 clean_url(抹掉 PAT)。
+
+    git clone 会把 authed_url(含注入的 PAT)写进 .git/config 的 remote.origin.url。
+    clone 成功后立刻 set-url origin clean_url,使 token 不落盘。返回默认分支名。
+    target_dir clone 前不存在(git 自己建);在父目录下运行 clone。
+    """
+    await _git_checked(target_dir.parent, "clone", authed_url, str(target_dir))
+    await _git_checked(target_dir, "remote", "set-url", "origin", clean_url)
+    return await current_branch(target_dir)
