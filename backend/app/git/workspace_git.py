@@ -6,11 +6,35 @@
 from __future__ import annotations
 
 import asyncio
+import os
+import re
 from pathlib import Path
 
 
 class GitError(Exception):
     """git 命令非零退出。"""
+
+
+# 形如 scheme://user:pass@host 或 scheme://token@host 的凭证段,脱敏成 ***。
+_CREDS_IN_URL = re.compile(r"(\w+://)[^/@\s]+@")
+
+
+def redact_credentials(text: str) -> str:
+    """把字符串里 URL 内嵌的凭证(PAT/用户名密码)替换成 ***,防 token 进日志/错误响应。"""
+    return _CREDS_IN_URL.sub(r"\1***@", text)
+
+
+def assert_https_remote(remote_url: str) -> None:
+    """生产环境只允许 https:// 远程,挡掉 file:// / 裸本地路径 / ext:: / `-` 开头等。
+
+    非 https 会让 git 读服务器本地文件系统(跨租户/越权读任意可读 git 仓),
+    或触发危险传输。本地 bare 仓测试需显式设 ALLOW_INSECURE_GIT_REMOTE=1 放行。
+    """
+    if os.environ.get("ALLOW_INSECURE_GIT_REMOTE"):
+        return
+    u = (remote_url or "").strip()
+    if not u.lower().startswith("https://") or len(u) <= len("https://"):
+        raise GitError("远程仓地址必须以 https:// 开头")
 
 
 async def _git(ws_path: Path, *args: str) -> tuple[int, str, str]:
@@ -26,12 +50,22 @@ async def _git(ws_path: Path, *args: str) -> tuple[int, str, str]:
 async def _git_checked(ws_path: Path, *args: str) -> str:
     code, out, err = await _git(ws_path, *args)
     if code != 0:
-        raise GitError(f"git {' '.join(args)} 失败:{(err or out).strip()[:300]}")
+        # args 可能含注入了 PAT 的 authed_url;err/out 个别 git 版本也回显含 token 的 URL → 一律脱敏。
+        msg = redact_credentials(f"git {' '.join(args)} 失败:{(err or out).strip()[:300]}")
+        raise GitError(msg)
     return out
 
 
 async def current_branch(ws_path: Path) -> str:
-    return (await _git_checked(ws_path, "rev-parse", "--abbrev-ref", "HEAD")).strip()
+    code, out, _ = await _git(ws_path, "rev-parse", "--abbrev-ref", "HEAD")
+    name = out.strip()
+    if code == 0 and name and name != "HEAD":
+        return name
+    # 空仓/unborn branch:rev-parse 给 "HEAD" 或失败 → 用 symbolic-ref 拿默认分支名(如 main)
+    code2, out2, _ = await _git(ws_path, "symbolic-ref", "--short", "HEAD")
+    if code2 == 0 and out2.strip():
+        return out2.strip()
+    return name or "main"
 
 
 async def is_dirty(ws_path: Path) -> bool:

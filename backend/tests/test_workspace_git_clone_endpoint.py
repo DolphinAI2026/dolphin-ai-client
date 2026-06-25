@@ -9,7 +9,7 @@ import pytest
 from app.coding import workspace as ws_mod
 from app.crypto import encrypt_password
 from app.deps import AuthContext
-from app.models import User, Project
+from app.models import User, Project, Application
 from app.models.collaboration import GitConnection
 from app.models.tenant import Tenant
 from app.models.workspace_git import WorkspaceGitRemote
@@ -95,5 +95,55 @@ async def test_clone_endpoint_bad_remote_cleans_up_and_400(db_session, tmp_path,
         await git_clone_workspace_endpoint(body, ctx, db_session)
     assert ei.value.status_code == 400
     # 没留下半成品工作区(clone 失败的目录被清理 → workspaces 根下无新 dir)
+    leftover = [p for p in (tmp_path / "workspaces").iterdir() if p.is_dir()]
+    assert leftover == []
+
+
+@pytest.mark.asyncio
+async def test_clone_endpoint_with_application_binding_no_404(db_session, bare_remote, tmp_path, monkeypatch):
+    """project_id = Application.id(同租户)→ 不该被 require_project_access 当协作项目 404。"""
+    monkeypatch.setattr(ws_mod, "WORKSPACE_ROOT", tmp_path / "workspaces")
+    (tmp_path / "workspaces").mkdir()
+    monkeypatch.setattr(ws_mod, "WORKSPACE_SEARCH_ROOTS", [tmp_path / "workspaces"])
+
+    tenant = Tenant(tenant_name="t_app", tenant_code="t_app"); db_session.add(tenant); await db_session.flush()
+    user = User(username="app_user", hashed_password="x"); db_session.add(user); await db_session.flush()
+    proj = Project(name="p", user_id=user.id, tenant_id=tenant.id); db_session.add(proj); await db_session.flush()
+    conn = GitConnection(project_id=proj.id, provider="gitlab", host="git.example.com",
+                         access_token_enc=encrypt_password("x"))
+    db_session.add(conn)
+    app = Application(user_id=user.id, tenant_id=tenant.id, created_by=user.id, app_name="CRM", app_code="crm")
+    db_session.add(app); await db_session.flush()
+    ctx = _ctx(user, tenant.id)
+
+    body = CloneRepoRequest(provider="gitlab", remote_url=str(bare_remote),
+                            git_connection_id=conn.id, name="app-bound", project_id=app.id)
+    result = await git_clone_workspace_endpoint(body, ctx, db_session)  # 不应抛 404
+    assert result["project_id"] == app.id
+
+
+@pytest.mark.asyncio
+async def test_clone_endpoint_rejects_non_https_when_guard_on(db_session, bare_remote, tmp_path, monkeypatch):
+    """关掉测试放行开关后,非 https remote_url 被 scheme 白名单挡掉(防 file:// 越权读)。"""
+    monkeypatch.delenv("ALLOW_INSECURE_GIT_REMOTE", raising=False)
+    monkeypatch.setattr(ws_mod, "WORKSPACE_ROOT", tmp_path / "workspaces")
+    (tmp_path / "workspaces").mkdir()
+    monkeypatch.setattr(ws_mod, "WORKSPACE_SEARCH_ROOTS", [tmp_path / "workspaces"])
+
+    tenant = Tenant(tenant_name="t_sch", tenant_code="t_sch"); db_session.add(tenant); await db_session.flush()
+    user = User(username="sch_user", hashed_password="x"); db_session.add(user); await db_session.flush()
+    proj = Project(name="p", user_id=user.id, tenant_id=tenant.id); db_session.add(proj); await db_session.flush()
+    conn = GitConnection(project_id=proj.id, provider="gitlab", host="git.example.com",
+                         access_token_enc=encrypt_password("x"))
+    db_session.add(conn); await db_session.flush()
+    ctx = _ctx(user, tenant.id)
+
+    from fastapi import HTTPException
+    body = CloneRepoRequest(provider="gitlab", remote_url=str(bare_remote),  # 本地路径 = 非 https
+                            git_connection_id=conn.id, name="x")
+    with pytest.raises(HTTPException) as ei:
+        await git_clone_workspace_endpoint(body, ctx, db_session)
+    assert ei.value.status_code == 400
+    # 没建任何工作区(scheme 校验在 prepare 之前)
     leftover = [p for p in (tmp_path / "workspaces").iterdir() if p.is_dir()]
     assert leftover == []

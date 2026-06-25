@@ -9,6 +9,9 @@ os.environ.setdefault("JWT_SECRET_KEY", "test-secret-do-not-use-in-prod")
 # Force in-memory sqlite before any app import touches database.py
 os.environ["DATABASE_URL"] = "sqlite+aiosqlite:///:memory:"
 
+# 测试用本地 bare 仓当「远程」(非 https)→ 放行 git 远程 scheme 校验。
+os.environ.setdefault("ALLOW_INSECURE_GIT_REMOTE", "1")
+
 from app.database import Base  # noqa: E402
 from app import models  # noqa: F401, E402  — register all ORM mappings
 

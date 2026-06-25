@@ -1049,6 +1049,10 @@ async def git_connect_endpoint(
 ):
     """绑定远程仓并用 PAT 验证可达(fetch),然后落 WorkspaceGitRemote 行。"""
     await _ensure_workspace_access(ws_id, ctx, db, minimum_project_role="member")
+    try:
+        workspace_git.assert_https_remote(body.remote_url)  # 挡 file:// / 本地路径越权读
+    except workspace_git.GitError as e:
+        raise HTTPException(status_code=400, detail=str(e))
     ws_path = workspace_mgr.get_workspace_path(ws_id)
 
     conn = await _load_git_connection(db, body.git_connection_id, ctx)
@@ -1086,7 +1090,7 @@ async def git_connect_endpoint(
         existing.git_connection_id = body.git_connection_id
         db.add(existing)
 
-    await db.flush()
+    await db.commit()   # get_db 不自动 commit;flush 不落库 → 绑定请求结束即丢失
     return {"ok": True, "default_branch": branch}
 
 
@@ -1177,11 +1181,25 @@ async def git_clone_workspace_endpoint(
     db: Annotated[AsyncSession, Depends(get_db)],
 ):
     """从远程仓 clone 起一个新工作区,并立刻绑定远程(push/pull 即用)。"""
+    try:
+        workspace_git.assert_https_remote(body.remote_url)  # 挡 file:// / 本地路径越权读
+    except workspace_git.GitError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+    # project_id 字段被复用为「所属应用」(Application.id);先按应用绑定判,命中即同租户放行,
+    # 否则才当协作项目走 require_project_access(对齐 create_workspace,避免 Application.id 误判 404)。
     if body.project_id:
-        await require_project_access(
-            db, project_id=body.project_id, user_id=ctx.user.id,
-            tenant_id=ctx.tenant_id, minimum_role="member",
+        app_result = await db.execute(
+            select(Application.id).where(
+                Application.id == body.project_id,
+                Application.tenant_id == ctx.tenant_id,
+            )
         )
+        if app_result.scalar_one_or_none() is None:
+            await require_project_access(
+                db, project_id=body.project_id, user_id=ctx.user.id,
+                tenant_id=ctx.tenant_id, minimum_role="member",
+            )
 
     conn = await _load_git_connection(db, body.git_connection_id, ctx)
     project_name = (body.name or "").strip() or _repo_name_from_url(body.remote_url)
@@ -1209,7 +1227,7 @@ async def git_clone_workspace_endpoint(
         provider=body.provider, remote_url=body.remote_url,
         default_branch=default_branch, git_connection_id=body.git_connection_id,
     ))
-    await db.flush()
+    await db.commit()   # get_db 不自动 commit;flush 不落库 → 绑定请求结束即丢失
 
     return _decorate_workspace_access(meta, "owner")
 
