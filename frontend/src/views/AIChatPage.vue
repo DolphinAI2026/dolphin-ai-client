@@ -956,12 +956,10 @@ function onTerminalServerDetected(p: { url: string; port: number }) {
   showCodePanel('browser')
 }
 
-// isCodeSession 翻转:进 code 会话 → 自动开 files 面板并懒加载数据;离开 → 收起宿主防残留。
+// 用户要求:代码面板**默认不展开** —— 进 code 会话不再自动开,用户点顶栏面板 icon 自己开。
+// 离开 code 会话 → 收起宿主 + 清状态防残留。
 watch(isCodeSession, (on) => {
-  if (on) {
-    showCodePanel('files')
-    void ensureCodePanelData()
-  } else {
+  if (!on) {
     closeCodeHost()
     codeSelectedFile.value = null
     codeViewerFocusLine.value = null
@@ -971,7 +969,11 @@ watch(isCodeSession, (on) => {
     _codeDataLoadedFor = null
   }
 })
-// 切到不同工作区(同为 code 会话)→ 清选中/树/改动 + 失效缓存,重拉。
+// 懒加载:用户**点开**代码面板时才拉文件树/改动(默认不开 → 不预拉,省请求)。
+watch(codePanelOpen, (open) => {
+  if (open && isCodeSession.value) void ensureCodePanelData()
+})
+// 切到不同工作区(同为 code 会话)→ 清选中/树/改动 + 失效缓存;面板开着才重拉。
 watch(codexPanelWsId, () => {
   codeSelectedFile.value = null
   codeViewerFocusLine.value = null
@@ -979,7 +981,7 @@ watch(codexPanelWsId, () => {
   codeFileTree.value = []
   codeActivePreview.value = null
   _codeDataLoadedFor = null
-  if (isCodeSession.value) void ensureCodePanelData()
+  if (isCodeSession.value && codePanelOpen.value) void ensureCodePanelData()
 })
 
 // 临时存储 ask_user / thinking / artifact_card（流式过程中产生但未持久化的）
@@ -2011,12 +2013,7 @@ async function loadSession(id: number) {
       .then(() => scrollBottom())
       .catch(err => console.warn('会话加载后的滚动定位失败', err))
     maybeAttachRunningRun(id)  // 该会话有在跑 run 则重连续看(切会话/刷新不丢)
-    // SP2b T4: code 会话(带 workspace_id) → 内容驱动自动开文件面板。
-    // (watch(isCodeSession) 也会触发,但首次进/刷新时 currentSession 直接赋值不一定触发 watch,这里兜底)
-    if (data.session.mode === 'code' && data.session.workspace_id) {
-      showCodePanel('files')
-      void ensureCodePanelData()
-    }
+    // 代码会话默认不展开面板(用户要求)—— 进来保持收起,用户点顶栏面板 icon 才开+懒加载。
   } catch (e: any) {
     console.error('加载会话失败', e)
     currentSession.value = null
