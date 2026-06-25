@@ -2103,8 +2103,10 @@ async function maybeAttachRunningRun(id: number) {
       currentAbort.value = null
       transientItems.value = []
       streamingText.value = ''
-      // run 跑完后刷一次拿完整持久化数据(此时 run-status 已 false,不会再 attach,无递归)
-      if (currentSession.value && currentSession.value.id === id) await loadSession(id)
+      // run 跑完后刷一次拿完整持久化数据(此时 run-status 已 false,不会再 attach,无递归)。
+      // ⚠️ 只在用户仍停在本会话时回写 —— 切走时的 abort 走这里会把 URL 拽回(切会话失效),
+      // 用 route.params.id 判断(切走后它已是新会话 id)。
+      if (String(route.params.id) === String(id)) await loadSession(id)
     }
   } catch { /* 查不到/重连失败:历史已渲染,不打断 */ }
 }
@@ -2302,6 +2304,7 @@ async function onSend() {
   }
   // 发送
   isSending.value = true
+  const streamingSessionId = currentSession.value.id  // 本轮流式所属会话;用户切走后不回写 URL
   transientItems.value = []
   streamingText.value = ''
   streamingTools.value = {}
@@ -2342,8 +2345,10 @@ async function onSend() {
     streamingText.value = ''
     currentTurnAssistantMessageReceived.value = false
     currentTurnFallbackErrorShown.value = false
-    // 重新拉一次 session 拿到完整持久化数据（messages + tool_calls + artifacts）
-    if (currentSession.value) await loadSession(currentSession.value.id)
+    // 重新拉一次 session 拿到完整持久化数据（messages + tool_calls + artifacts）。
+    // ⚠️ 只在用户仍停在本轮会话时回写 —— 否则切走时的 abort 会触发这里 loadSession 把 URL
+    // 拽回正在跑的会话(切会话失效)。用 route.params.id 判断(切走后它已是新会话 id)。
+    if (String(route.params.id) === String(streamingSessionId)) await loadSession(streamingSessionId)
     // 队列消费：上一轮跑完后，把队列里第一条自动发出去
     if (pendingQueue.value.length > 0) {
       const next = pendingQueue.value.shift()!
