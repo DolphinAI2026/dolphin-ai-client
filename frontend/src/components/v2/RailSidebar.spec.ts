@@ -10,18 +10,20 @@ describe('RailSidebar brand mark', () => {
   })
 })
 
-// Code 模式会话收进左栏(2026-06-21): rail 按当前模式切换会话源
-// (builder/agent→aiChatApi, code→codingApi), 归一逻辑见 composables/railSessions。
-describe('RailSidebar session source switches by mode', () => {
-  it('pulls coding conversations as a session source', () => {
-    expect(railSidebarSource).toContain("from '@/api/coding'")
-    expect(railSidebarSource).toContain('codingApi.getConversations()')
+// SP2b(2026-06-25): rail 会话统一单一来源 aiChatApi(含 code 会话, Task6 放行后一起列出),
+// 不再按 mode 切换 codingApi/aiChatApi 双源; 路由经 railSessions 组合式恒落 /ai-chat。
+describe('RailSidebar unified session source (SP2b)', () => {
+  it('uses a single aiChatApi session source (no codingApi)', () => {
+    expect(railSidebarSource).toContain("from '@/api/aiChat'")
+    expect(railSidebarSource).toContain('aiChatApi.listSessions()')
+    expect(railSidebarSource).not.toContain("from '@/api/coding'")
+    expect(railSidebarSource).not.toContain('codingApi.getConversations()')
   })
 
   it('delegates normalization + routing to the railSessions composable', () => {
     expect(railSidebarSource).toContain("from '@/composables/railSessions'")
-    expect(railSidebarSource).toContain('normalizeCodingSessions')
-    expect(railSidebarSource).toContain('railSessionTarget(currentMode.value')
+    expect(railSidebarSource).toContain('normalizeAiSessions')
+    expect(railSidebarSource).toContain('railSessionTarget(')
   })
 
   it('shows the recent-session list in every mode (no longer excludes code)', () => {
