@@ -16,7 +16,7 @@
       />
       <button v-if="devUrl && current !== devUrl" class="rd-btn" title="带入当前调试预览地址" @click="useDevUrl">带入调试地址</button>
       <button v-if="current" class="rd-btn" :disabled="loading" @click="reload">刷新</button>
-      <button v-if="devUrl" class="rd-btn" @click="stop">停止</button>
+      <button v-if="devUrl" class="rd-btn" @click="stop">{{ preview?.source === 'terminal' ? '断开跟踪' : '停止' }}</button>
       <button v-else class="rd-btn rd-primary" :disabled="loading || !wsId" @click="start">
         {{ loading ? '启动中…' : '启动预览' }}
       </button>
@@ -40,11 +40,14 @@
 
 <script setup lang="ts">
 import { computed, ref, watch, onMounted, onUnmounted } from 'vue'
-import { useCodingStore } from '@/stores/coding'
 import { codingApi } from '@/api/coding'
 
-const props = defineProps<{ wsId: string; dark?: boolean }>()
-const codingStore = useCodingStore()
+type ActivePreview = {
+  dev_url: string; status: string; errors: string[]; capture_available: boolean; round: number | null; source?: string
+} | null
+
+const props = defineProps<{ wsId: string; dark?: boolean; activePreview?: ActivePreview }>()
+const emit = defineEmits<{ (e: 'update:activePreview', v: ActivePreview): void }>()
 
 const loading = ref(false)
 const errorMsg = ref('')
@@ -56,7 +59,7 @@ let bootTimer: ReturnType<typeof setTimeout> | null = null
 // 本地展示 + 上报后端，供 AI 用 get_runtime_errors 按需读取（模式 B：不自动改）。
 const capturedErrors = ref<string[]>([])
 
-const preview = computed(() => codingStore.activePreview)
+const preview = computed(() => props.activePreview)
 const devUrl = computed(() => preview.value?.dev_url || '')
 
 // 浏览器地址栏:current=实际加载到 iframe 的地址,可手动输入,也可一键带入调试 serve 地址。
@@ -92,6 +95,7 @@ const showCaptureDegrade = computed(
     !!devUrl.value &&
     !captureAvailable.value &&
     preview.value?.source !== 'panel' &&
+    preview.value?.source !== 'terminal' &&
     capturedErrors.value.length === 0,
 )
 
@@ -132,14 +136,14 @@ async function start() {
       return
     }
     const ready = r.status === 'ok'  // ok=端口已通 / starting=首屏还在编译
-    codingStore.activePreview = {
+    emit('update:activePreview', {
       source: 'panel',
       dev_url: url,
       status: ready ? 'ok' : 'running',
       errors: [],
       capture_available: false,
       round: null,
-    }
+    })
     if (!ready) {
       booting.value = true
       if (bootTimer) clearTimeout(bootTimer)
@@ -160,8 +164,12 @@ function reload() {
 async function stop() {
   if (bootTimer) { clearTimeout(bootTimer); bootTimer = null }
   booting.value = false
-  if (props.wsId) await codingApi.stopServe(props.wsId).catch(() => {})
-  codingStore.activePreview = null
+  // 终端起的 server 是 PTY 子进程,后端 stopServe 管不到它(杀的是受管 serve)→ 只「断开跟踪」,
+  // 不调 stopServe(否则用户以为停了其实端口还占着;真要停得在终端按 Ctrl+C)。
+  if (preview.value?.source !== 'terminal' && props.wsId) {
+    await codingApi.stopServe(props.wsId).catch(() => {})
+  }
+  emit('update:activePreview', null)
   errorMsg.value = ''
   capturedErrors.value = []
   current.value = ''

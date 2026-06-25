@@ -395,6 +395,8 @@
           class="cph-body-panel"
           :ws-id="codingStore.workspace?.id || ''"
           :dark="themeStore.isDark"
+          :active-preview="codingStore.activePreview"
+          @update:active-preview="v => codingStore.activePreview = v"
         />
 
         <div v-show="activePanel === 'files'" class="ws-pane-files cph-body-panel">
