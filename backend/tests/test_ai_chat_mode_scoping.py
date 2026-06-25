@@ -1,4 +1,11 @@
-"""SP1: Builder 会话路由按 mode 收口 —— Code(mode='code')会话不得漏进 Builder。"""
+"""SP2b go-live: Code 会话是统一 Builder 会话列表和路由的一等公民。
+
+删除了 SP1 两道 mode!='code' 闸后:
+  - _load_session_or_404 允许 code 会话(不再 404)
+  - list_sessions 包含 code 会话
+
+保留 user/tenant 作用域回归测(他人会话仍 404,cowork 照常出现)。
+"""
 import pytest
 from fastapi import HTTPException
 
@@ -35,11 +42,11 @@ async def _seed_session(db, *, username: str, mode: str):
 
 
 @pytest.mark.asyncio
-async def test_load_session_rejects_code(db_session):
+async def test_load_session_allows_code(db_session):
+    """SP2b: code 会话现在可通过 _load_session_or_404(不再 404)。"""
     ctx, s = await _seed_session(db_session, username="scopecode", mode="code")
-    with pytest.raises(HTTPException) as exc:
-        await _load_session_or_404(db_session, s.id, ctx)
-    assert exc.value.status_code == 404
+    out = await _load_session_or_404(db_session, s.id, ctx)
+    assert out.id == s.id
 
 
 @pytest.mark.asyncio
@@ -61,8 +68,8 @@ async def test_load_session_other_user_still_404(db_session):
 
 
 @pytest.mark.asyncio
-async def test_list_sessions_excludes_code(db_session):
-    """同一 user 的 chat + code 两会话,列表只返回 chat。"""
+async def test_list_sessions_includes_code(db_session):
+    """SP2b: 同一 user 的 chat + code 两会话,列表都返回。"""
     tenant = Tenant(tenant_name="t_list", tenant_code="t_list_scope")
     db_session.add(tenant)
     await db_session.flush()
@@ -76,7 +83,7 @@ async def test_list_sessions_excludes_code(db_session):
     out = await list_sessions(_ctx_for(user, tenant.id), db_session)
     ids = {s["id"] for s in out["sessions"]}
     assert chat_id in ids, "chat 会话应出现在 Builder 列表"
-    assert code_id not in ids, "code 会话不应出现在 Builder 列表"
+    assert code_id in ids, "code 会话应出现在统一 Builder 列表(SP2b go-live)"
 
 
 @pytest.mark.asyncio
