@@ -1361,6 +1361,46 @@ class WorkspaceManager:
 
         return meta
 
+    def prepare_clone_target(self, project_name: str, user_id: int) -> tuple[str, Path]:
+        """为 clone 分配 ws_id + 目标路径(不建目录,git clone 会自己建)。"""
+        safe_name = self._slugify_project_token(project_name) or "cloned-repo"
+        ws_id = f"{user_id}_{uuid.uuid4().hex[:8]}"
+        folder_name = self._build_workspace_folder_name(ws_id, safe_name)
+        ws_path = WORKSPACE_ROOT / folder_name
+        return ws_id, ws_path
+
+    def register_cloned_workspace(
+        self,
+        ws_id: str,
+        ws_path: Path,
+        *,
+        project_name: str,
+        display_name: Optional[str],
+        user_id: int,
+        tenant_id: Optional[int],
+        project_id: Optional[int],
+        remote_url: str,
+    ) -> dict:
+        """clone 完成后写 .workspace.json 元信息 + 缓存路径,返回 get_workspace_info。"""
+        resolved_display = display_name or project_name or ws_path.name
+        meta = {
+            "id": ws_id,
+            "folder_name": ws_path.name,
+            "project_id": project_id,
+            "project_type": "git-clone",   # 哨兵:非 apaas 模板类型,列表/展示从不构造 ProjectType()
+            "project_name": project_name or ws_path.name,
+            "display_name": resolved_display,
+            "user_id": user_id,
+            "tenant_id": tenant_id,
+            "status": WorkspaceStatus.READY.value,
+            "cloned_from": remote_url,
+        }
+        (ws_path / ".workspace.json").write_text(
+            json.dumps(meta, ensure_ascii=False, indent=2)
+        )
+        self._workspace_path_cache[ws_id] = ws_path
+        return self.get_workspace_info(ws_id)
+
     @staticmethod
     def _install_state_path(ws_path: Path) -> Path:
         return ws_path / ".install-state.json"
