@@ -568,8 +568,8 @@ function workspaceAccentStyle(ws: WorkspaceInfo) {
 }
 
 function openWorkspace(ws: WorkspaceInfo) {
-  // 打开代码工作区(CodingPage: 文件树 + 代码查看器 + 对话) —— 全代码开发场景。
-  router.push({ path: '/coding', query: { workspace_id: ws.id } }).catch(() => {})
+  // 打开代码工作区 —— 落统一外壳 /ai-chat 的 code 会话(SP2b T9, 不再走独立 /coding)。
+  router.push({ path: '/ai-chat', query: { workspace_id: String(ws.id), mode: 'code' } }).catch(() => {})
 }
 
 async function openLocalFolder() {
@@ -584,7 +584,7 @@ async function openLocalFolder() {
   } catch { return }  // 用户取消确认
   try {
     const ws = await codingApi.openLocalFolder(picked)
-    router.push({ path: '/coding', query: { workspace_id: ws.ws_id } }).catch(() => {})
+    router.push({ path: '/ai-chat', query: { workspace_id: String(ws.ws_id), mode: 'code' } }).catch(() => {})
   } catch (e: any) {
     ElMessage.error(`打开失败: ${e?.response?.data?.detail || e?.message || e}`)
   }

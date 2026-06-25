@@ -2962,6 +2962,32 @@ onMounted(async () => {
   if (idParam) {
     await loadSession(idParam)
   }
+
+  // SP2b T9：「我的开发」/各工作区入口落 /ai-chat?workspace_id=X&mode=code。
+  // 这里建一个绑该工作区的 code 会话 → router.replace 到 /ai-chat/:id（清掉 query 防刷新重建），
+  // 再 loadSession → currentSession.mode==='code' && workspace_id → CodexPanelHost 挂右栏。
+  // 守卫 !currentSession.value（无 :id 才进）+ replace 清 query = 只触发一次。
+  const wsParam = typeof route.query.workspace_id === 'string'
+    ? route.query.workspace_id.trim()
+    : Array.isArray(route.query.workspace_id) ? String(route.query.workspace_id[0] || '').trim() : ''
+  if (!currentSession.value && route.query.mode === 'code' && wsParam) {
+    try {
+      const created = await aiChatApi.createSession({
+        mode: 'code',
+        workspace_id: wsParam,
+        title: '代码会话',
+        selected_llm_config_id: selectedLlmId.value,
+      })
+      sessions.value.unshift(created)
+      router.replace({ path: `/ai-chat/${created.id}` })
+      await loadSession(created.id)
+    } catch (e) {
+      console.error('打开代码工作区失败', e)
+      ElMessage.error('打开代码工作区失败')
+    }
+    return
+  }
+
   // 从 AI Builder 各处「二次开发」入口结构化交接：读 sessionStorage，在应用上下文里发起开发。
   // 落点从旧的 /coding 改到这里 —— AIChatPage 的 agent 已有 coding 工具(create_dev_workspace 等)。
   const appDevRaw = route.query.app_dev === '1' ? sessionStorage.getItem('ai_builder_pending_app_dev') : null

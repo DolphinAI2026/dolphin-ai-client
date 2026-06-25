@@ -42,11 +42,8 @@ describe('rail session navigation target', () => {
     expect(railSessionTarget('agent', 42)).toEqual({ path: '/ai-chat/42' })
   })
 
-  it('routes code sessions to /coding with a conversation_id query (consumed by CodingPage onMounted)', () => {
-    expect(railSessionTarget('code', 42)).toEqual({
-      path: '/coding',
-      query: { conversation_id: '42' },
-    })
+  it('routes code sessions to /ai-chat/:id too (统一外壳,AIChatPage 按 mode 挂 CodexPanelHost)', () => {
+    expect(railSessionTarget('code', 42)).toEqual({ path: '/ai-chat/42' })
   })
 })
 
@@ -56,17 +53,17 @@ describe('rail session active state', () => {
     expect(isRailSessionActive('builder', 9, { path: '/ai-chat/10', query: {} })).toBe(false)
   })
 
-  it('highlights the code session by conversation_id query', () => {
-    expect(isRailSessionActive('code', 9, { path: '/coding', query: { conversation_id: '9' } })).toBe(true)
-    expect(isRailSessionActive('code', 9, { path: '/coding', query: { conversation_id: '10' } })).toBe(false)
+  it('highlights the code session by /ai-chat/:id path too', () => {
+    expect(isRailSessionActive('code', 9, { path: '/ai-chat/9', query: {} })).toBe(true)
+    expect(isRailSessionActive('code', 9, { path: '/ai-chat/10', query: {} })).toBe(false)
     expect(isRailSessionActive('code', 9, { path: '/coding', query: {} })).toBe(false)
   })
 })
 
 describe('rail session fallback after delete', () => {
-  it('falls back to home for builder/agent and /coding for code', () => {
+  it('falls back to home for all modes (统一外壳)', () => {
     expect(railSessionFallback('builder')).toBe('/')
     expect(railSessionFallback('agent')).toBe('/')
-    expect(railSessionFallback('code')).toBe('/coding')
+    expect(railSessionFallback('code')).toBe('/')
   })
 })

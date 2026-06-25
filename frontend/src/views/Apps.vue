@@ -658,7 +658,8 @@ function openDeliveryAssetItem(item: ApplicationDeliveryAssetItem) {
   if (!app) return
   const appId = String(appNumericId(app) ?? app.id)
   if (item.kind === 'dev_workspace' && item.meta?.workspace_id) {
-    router.push({ path: '/coding', query: { workspace_id: String(item.meta.workspace_id) } })
+    // SP2b T9: 落统一外壳 /ai-chat 的 code 会话(不再走独立 /coding)。
+    router.push({ path: '/ai-chat', query: { workspace_id: String(item.meta.workspace_id), mode: 'code' } })
     return
   }
   if (item.kind === 'document_version' || item.meta?.conversation_id) {

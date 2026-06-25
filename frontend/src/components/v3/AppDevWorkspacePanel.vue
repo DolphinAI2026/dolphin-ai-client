@@ -189,7 +189,8 @@ function workspaceAccentStyle(ws: WorkspaceInfo) {
 }
 
 function openWorkspace(ws: WorkspaceInfo) {
-  router.push({ path: '/coding', query: { workspace_id: ws.id } }).catch(() => {})
+  // SP2b T9: 落统一外壳 /ai-chat 的 code 会话(不再走独立 /coding)。
+  router.push({ path: '/ai-chat', query: { workspace_id: String(ws.id), mode: 'code' } }).catch(() => {})
 }
 
 async function downloadWorkspace(ws: WorkspaceInfo, type: 'src' | 'dist') {

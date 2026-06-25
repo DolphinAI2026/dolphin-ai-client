@@ -50,7 +50,7 @@ describe('buildArtifacts', () => {
     expect(w.mode).toBe('lowcode')
     expect(w.summary).toBe('移动端页面')
     expect(w.status).toEqual({ label: '构建中', tone: 'building' })
-    expect(w.target).toEqual({ path: '/coding', query: { workspace_id: 'ws1' } })
+    expect(w.target).toEqual({ path: '/ai-chat', query: { workspace_id: 'ws1', mode: 'code' } })
   })
   it('未连平台 → 无应用本体', () => {
     const arts = buildArtifacts({ id: 1, platform_connected: false } as any, [])
