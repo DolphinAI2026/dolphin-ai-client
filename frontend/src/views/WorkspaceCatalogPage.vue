@@ -16,6 +16,10 @@
             <AppIcon name="folder" :size="14" />
             <span>打开本地文件夹</span>
           </button>
+          <button class="catalog-import-action catalog-import-action--secondary" type="button" @click="openCloneDialog">
+            <AppIcon name="inbox" :size="14" />
+            <span>从 git 仓打开</span>
+          </button>
 
           <div v-if="!loading && visibleWorkspaces.length" class="catalog-summary" aria-label="资产概览">
             <div v-for="item in headerStats" :key="item.label" class="catalog-summary-item">
@@ -245,6 +249,33 @@
     <template #footer>
       <el-button @click="importDialogOpen = false">取消</el-button>
       <el-button type="primary" :disabled="!importFile" :loading="importing" @click="confirmImportSource">导入</el-button>
+    </template>
+  </el-dialog>
+
+  <el-dialog v-model="cloneDialogOpen" title="从 git 仓 clone 工作区" width="480px" :append-to-body="true">
+    <el-form label-width="90px">
+      <el-form-item label="平台">
+        <el-select v-model="cloneForm.provider" style="width: 100%">
+          <el-option label="GitLab" value="gitlab" />
+          <el-option label="GitHub" value="github" />
+        </el-select>
+      </el-form-item>
+      <el-form-item label="仓库 URL">
+        <el-input v-model="cloneForm.remote_url" placeholder="https://gitlab.example.com/group/repo.git" clearable />
+      </el-form-item>
+      <el-form-item label="凭证 ID">
+        <el-input v-model="cloneForm.git_connection_id_str" placeholder="git_connections 表的 id（整数）" clearable />
+      </el-form-item>
+      <el-form-item label="展示名">
+        <el-input v-model="cloneForm.name" placeholder="可选,默认取仓库名" clearable />
+      </el-form-item>
+      <div class="clone-hint">
+        凭证 ID 在「项目设置 → git 连接」里查看。clone 用的 Token 不会落盘。
+      </div>
+    </el-form>
+    <template #footer>
+      <el-button @click="cloneDialogOpen = false">取消</el-button>
+      <el-button type="primary" :loading="cloning" @click="confirmClone">clone 并打开</el-button>
     </template>
   </el-dialog>
 </template>
@@ -479,6 +510,45 @@ async function confirmImportSource() {
     ElMessage.error(e?.response?.data?.detail || e?.message || '导入失败')
   } finally {
     importing.value = false
+  }
+}
+
+// ── P3: 从 git 仓 clone 起工作区 ──────────────────────────────
+const cloneDialogOpen = ref(false)
+const cloning = ref(false)
+const cloneForm = ref({
+  provider: 'gitlab' as 'gitlab' | 'github',
+  remote_url: '',
+  git_connection_id_str: '' as string | number,
+  name: '',
+})
+
+function openCloneDialog() {
+  cloneForm.value = { provider: 'gitlab', remote_url: '', git_connection_id_str: '', name: '' }
+  cloneDialogOpen.value = true
+}
+
+async function confirmClone() {
+  const remote_url = String(cloneForm.value.remote_url).trim()
+  const git_connection_id = Number(cloneForm.value.git_connection_id_str)
+  if (!remote_url) { ElMessage.warning('请填写仓库 URL'); return }
+  if (!git_connection_id || isNaN(git_connection_id)) { ElMessage.warning('请填写有效的凭证 ID（整数）'); return }
+  cloning.value = true
+  try {
+    const ws = await codingApi.gitCloneWorkspace({
+      provider: cloneForm.value.provider,
+      remote_url,
+      git_connection_id,
+      name: String(cloneForm.value.name).trim() || undefined,
+      project_id: routeAppId() || undefined,
+    })
+    cloneDialogOpen.value = false
+    ElMessage.success('clone 完成,正在打开代码会话')
+    router.push({ path: '/ai-chat', query: { workspace_id: String((ws as any).id), mode: 'code' } }).catch(() => {})
+  } catch (e: any) {
+    ElMessage.error(e?.response?.data?.detail || e?.message || 'clone 失败')
+  } finally {
+    cloning.value = false
   }
 }
 
@@ -1429,5 +1499,12 @@ onMounted(async () => {
 
 .import-file-input {
   display: none;
+}
+
+.clone-hint {
+  font-size: 12px;
+  color: var(--text-3);
+  line-height: 1.5;
+  margin-top: 4px;
 }
 </style>

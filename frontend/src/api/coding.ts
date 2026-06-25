@@ -351,6 +351,13 @@ export const codingApi = {
   gitPull(wsId: string) {
     return request.post<any, { ok: boolean; ahead: number; behind: number }>(`/coding/workspace/${wsId}/git/pull`, {})
   },
+
+  // ========== Git API (P3: 从远程仓 clone 起工作区) ==========
+
+  /** 从远程仓 clone 起一个新工作区,并绑定远程。返回工作区 meta。 */
+  gitCloneWorkspace(body: { provider: string; remote_url: string; git_connection_id: number; name?: string; project_id?: number }) {
+    return request.post<any, WorkspaceInfo>(`/coding/workspaces/git/clone`, body)
+  },
 }
 
 /** 列出工作区文件(扁平相对路径,已排除 node_modules/隐藏文件) */
