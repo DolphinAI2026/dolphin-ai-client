@@ -47,10 +47,21 @@ async def test_clone_pulls_files_and_returns_branch(bare_remote: Path, tmp_path:
 @pytest.mark.asyncio
 async def test_clone_scrubs_token_resets_origin_to_clean_url(bare_remote: Path, tmp_path: Path):
     target = tmp_path / "ws_clone2"
-    clean = "https://oauth2:NOPE@git.example.com/grp/proj.git"  # 模拟「不含真 token 的对外 URL」
-    # authed_url = 真能 clone 的 bare 路径;clean_url = 落 .git/config 的对外 URL
+    clean = "https://git.example.com/grp/proj.git"  # 模拟「不含 token 的对外 URL」
+    # authed_url = 真能 clone 的 bare 路径(代表「含 PAT 的 URL」);clean_url = 落盘的对外 URL
     await clone(target, str(bare_remote), clean)
     origin = _run(target, "remote", "get-url", "origin").strip()
     assert origin == clean
-    config_text = (target / ".git" / "config").read_text()
-    assert str(bare_remote) not in config_text  # clone 用的 authed_url(本测里是 bare 路径)已被抹掉
+    # 关键:authed_url 不能残留在 .git 任何文件里。git clone 会把来源 URL 写进
+    # reflog(.git/logs/*),set-url 只改 config,不清 reflog → 不彻底清会泄 PAT。
+    # 扫整个 .git 树确认 authed_url(本测=bare 路径)彻底消失。
+    secret = str(bare_remote)
+    leaked = []
+    for f in (target / ".git").rglob("*"):
+        if f.is_file():
+            try:
+                if secret in f.read_text(encoding="utf-8", errors="ignore"):
+                    leaked.append(str(f.relative_to(target / ".git")))
+            except OSError:
+                pass
+    assert leaked == [], f"authed_url 泄漏在: {leaked}"
