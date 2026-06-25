@@ -50,6 +50,26 @@ from app import llm_transport
 logger = logging.getLogger(__name__)
 
 
+def _apply_session_overrides(session, system_prompt_override, tool_names_override):
+    """SP2a:调用方未显式传 override 时,按 session.mode 推导引擎行为。
+
+    返回 (system_prompt_override, tool_names_override)。语义:
+    - 两个 override 都为 None(统一外壳从 /ai-chat 发会话,不传 override)→ 调
+      resolve_overrides_for_session 推导:code 会话拿 dev-apaas 提示词 + 收窄工具,
+      并把非空 ws_id 设到 session._locked_ws_id(单工作区锁,execute_tool 据此强锁)。
+      非 code 会话推导出 (None, None, None) → 行为同今天的通用 Builder,零变化。
+    - 调用方显式传了任一 override(harness 老路:coding.py 同时传 prompt+tools,
+      并自行设 _locked_ws_id)→ 原样返回,**不推导、不碰 _locked_ws_id**,老路一字不改。
+    """
+    if system_prompt_override is not None or tool_names_override is not None:
+        return system_prompt_override, tool_names_override
+    from app.agents.profile import resolve_overrides_for_session
+    sp, tn, ws_id = resolve_overrides_for_session(session)
+    if ws_id:
+        session._locked_ws_id = ws_id  # type: ignore[attr-defined]
+    return sp, tn
+
+
 def _append_skill_manifest(messages: list[dict]) -> None:
     """把可用 skill 清单追加到 system message（渐进披露）。空集 no-op、异常不致命。
 
@@ -812,6 +832,11 @@ async def _run_agent_inner(
     """主 agent loop body。run 生命周期由外层 run_agent wrapper 管。
     holder = {"run_id": str|None, "status": "running"/"success"/"error", "error": str|None}
     """
+    # SP2a:调用方未显式传 override 时,按 session.mode 推导(code 会话 → dev-apaas +
+    # 收窄工具 + 单工作区锁)。harness 老路显式传 override → 原样透传,行为不变。
+    system_prompt_override, tool_names_override = _apply_session_overrides(
+        session, system_prompt_override, tool_names_override
+    )
     try:
         cfg = await _resolve_llm_config(db, session)
     except RuntimeError as e:
