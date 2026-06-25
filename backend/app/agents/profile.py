@@ -112,3 +112,72 @@ def resolve_profile(name: str) -> AgentProfile:
             f"未知 agent profile: {name!r}(已知:{sorted(_PROFILE_BUILDERS)})"
         )
     return _PROFILE_BUILDERS[name]()
+
+
+# ── 单工作区锁定时按 ws_id 收窄工具(原 coding.py._cutover_tool_names,抽来两边复用)──
+
+# Code 单工作区锁定时砍掉的"工作区发现/新建"工具:Code 模式已绑定打开的工作区,
+# agent 不该枚举/新建别的工作区。实测 list_dev_workspaces(include_unbound=true)
+# 会让 agent 列出全部工作区、挑错一个去读代码(读了"工厂孪生"而非用户打开的"访客")。
+_WS_LOCK_DROP_TOOLS = frozenset({"list_dev_workspaces", "create_dev_workspace"})
+
+# Code 模式砍掉的"需要 app/env 绑定的 apaas 应用级 / 应用管理工具":
+# Code 会话不绑 app(env_id=0)→ 这些必失败,agent 会死循环(实测 get_apaas_app_overview
+# 反复 platform_env_id=0 失败)。Code 是工作区代码编辑,二开 grounding 改读工作区自己的
+# apaas.json + skill 包,不靠 live apaas 查询。保留:工作区代码工具 + 文件 + skill +
+# lint/doctor/init 后端工作区 + start_serve。
+_WS_LOCK_DROP_APP_TOOLS = frozenset({
+    "get_apaas_app_overview", "get_apaas_form_detail", "get_apaas_user_name",
+    "list_apaas_app_dev_kits", "list_apaas_app_dicts", "list_apaas_app_menus",
+    "list_apaas_app_models", "list_apaas_app_roles", "list_apaas_apps_in_env",
+    "list_apaas_form_components", "list_apaas_form_permissions", "list_apaas_form_views",
+    "list_apaas_models_in_env", "list_apaas_resource_pool_kits", "query_apaas_business_data",
+    "attach_dev_packages_to_apaas_app", "bind_apaas_form_field_to_dict",
+    "build_apaas_feature_from_spec", "enable_apaas_self_dev_config",
+    "rename_apaas_menu", "upload_external_zip_to_apaas",
+    "get_application", "list_my_applications", "list_platform_envs",
+    "compute_app_health", "check_app_code_conflict", "get_role_resource_matrix",
+    "get_dev_scene_full_workflow", "get_dev_scene_spec", "list_dev_scenes", "save_dev_spec",
+})
+
+
+def narrow_tools_for_locked_ws(tool_names, ws_id: str | None) -> tuple[str, ...]:
+    """绑定了工作区(Code 单工作区)→ 砍掉枚举/新建工具 + app/env 级 apaas 工具,
+    把 agent 锁死在这个 ws_id、专注工作区代码。没绑定 → 保留全集。
+
+    返回去重后的 tuple(确定性顺序:保留原 tool_names 顺序),供 coding.py harness 老路
+    与 run_agent 引擎推导两边复用。原 coding.py._cutover_tool_names 抽来,行为等价。
+    """
+    if not ws_id:
+        # 去重保序
+        seen: set[str] = set()
+        return tuple(t for t in tool_names if not (t in seen or seen.add(t)))
+    drop = _WS_LOCK_DROP_TOOLS | _WS_LOCK_DROP_APP_TOOLS
+    seen = set()
+    return tuple(
+        t for t in tool_names
+        if t not in drop and not (t in seen or seen.add(t))
+    )
+
+
+# ── mode → profile 映射 + 按会话推导 override(SP2a)──
+
+MODE_PROFILE: dict[str, str] = {"code": "dev-apaas"}
+
+
+def resolve_overrides_for_session(session) -> tuple[str | None, set[str] | None, str | None]:
+    """按 session.mode 推导 run_agent 的 (system_prompt, tool_names_set, locked_ws_id)。
+
+    mode='code' → dev-apaas 提示词 + 按 session.workspace_id 收窄工具集 + 该 ws_id;
+    其它 / 未知 mode → (None, None, None)(走 run_agent 默认通用 Builder 行为,零变化)。
+
+    纯函数:不碰 DB、不改 session。run_agent 在调用方未显式传 override 时调它。
+    """
+    mode = getattr(session, "mode", None)
+    profile_name = MODE_PROFILE.get(mode or "")
+    if profile_name is None:
+        return (None, None, None)
+    profile = resolve_profile(profile_name)
+    ws_id = getattr(session, "workspace_id", None)
+    tool_names = set(narrow_tools_for_locked_ws(profile.tool_names, ws_id))
+    return (profile.system_prompt, tool_names, ws_id or None)
