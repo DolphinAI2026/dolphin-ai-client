@@ -388,6 +388,11 @@ class CodingProfile(HarnessProfile):
 
         async with AsyncSessionLocal() as db:
             session = await self._get_or_create_ai_session(db, params, thread_ctx, ws_id)
+            # 单工作区强制锁(最后一道防线):把绑定的 ws_id 挂到 session 上,execute_tool 据此
+            # 把所有声明 ws_id 的工作区工具的 ws_id 参数强制换成它(忽略 agent 自传)。
+            # 防 agent 从 list_dev_workspaces / app_context 拿到别的 ws_id 去读错工作区。
+            if ws_id:
+                session._locked_ws_id = ws_id  # type: ignore[attr-defined]
             view_context = self._ws_bind_view_context(ws_id)
             abort_event = asyncio.Event()  # 停止经 harness task.cancel 生效(run-survival)
 

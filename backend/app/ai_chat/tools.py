@@ -1440,6 +1440,21 @@ async def _inject_locked_app_ctx(tool_name: str, args: dict, session: "AIChatSes
     return out
 
 
+def _force_locked_ws_id(tool_name: str, args: dict, session: "AIChatSession") -> dict:
+    """Code 单工作区锁定:session 挂了 _locked_ws_id 时,把声明了 ws_id 参数的工具的 ws_id
+    强制换成绑定的那个(忽略 agent 自传)。防 agent 从 list_dev_workspaces / app_context 拿到
+    别的 ws_id 去读错工作区(软提示 + 砍枚举工具都堵不死;这是工具层最后一道防线)。
+    Builder 会话不挂此属性 → 不强制,agent 自选工作区不受影响。"""
+    locked = getattr(session, "_locked_ws_id", None)
+    if not locked or not _tool_declares_param(tool_name, "ws_id"):
+        return args
+    if args.get("ws_id") == locked:
+        return args
+    out = dict(args)
+    out["ws_id"] = locked
+    return out
+
+
 def _normalize_workspace_match_key(value: Any) -> str:
     return re.sub(r"\s+", "", str(value or "").strip().lower())
 
@@ -1632,6 +1647,7 @@ async def execute_tool(
     handler = TOOL_HANDLERS.get(tool_name)
     if handler:
         args = await _inject_locked_app_ctx(tool_name, args, session, db)
+        args = _force_locked_ws_id(tool_name, args, session)
         try:
             return await handler(args, session, db)
         except Exception as e:
@@ -1657,6 +1673,7 @@ async def execute_tool(
                 args = {**args, "artifact_id": real_id}
         # 锁定 app 上下文注入：强制覆盖 LLM 给的 env_id / apaas_app_id (Task A4)
         args = await _inject_locked_app_ctx(tool_name, args, session, db)
+        args = _force_locked_ws_id(tool_name, args, session)
         result_text = await _mcp_call(
             tool_name, args,
             tenant_id=int(getattr(session, "tenant_id", 0) or 0),
