@@ -944,6 +944,58 @@ async def list_workspace_files(
         raise HTTPException(status_code=404, detail="工作区不存在")
 
 
+# ---------------------------------------------------------------------------
+# Git 端点 — 代码会话 git P1(纯本地分支, 无远程)
+# ---------------------------------------------------------------------------
+from app.git import workspace_git  # noqa: E402
+
+
+class GitCheckoutRequest(BaseModel):
+    name: str
+    create: bool = False
+
+
+@router.get("/workspace/{ws_id}/git/status")
+async def git_status_endpoint(
+    ws_id: str,
+    ctx: Annotated[AuthContext, Depends(get_auth_context)],
+    db: Annotated[AsyncSession, Depends(get_db)],
+):
+    """返回工作区当前分支 + 是否有未提交改动。"""
+    await _ensure_workspace_access(ws_id, ctx, db, minimum_project_role="member")
+    ws_path = workspace_mgr.get_workspace_path(ws_id)
+    return await workspace_git.status(ws_path)
+
+
+@router.get("/workspace/{ws_id}/git/branches")
+async def git_branches_endpoint(
+    ws_id: str,
+    ctx: Annotated[AuthContext, Depends(get_auth_context)],
+    db: Annotated[AsyncSession, Depends(get_db)],
+):
+    """列出工作区所有本地分支。"""
+    await _ensure_workspace_access(ws_id, ctx, db, minimum_project_role="member")
+    ws_path = workspace_mgr.get_workspace_path(ws_id)
+    return {"local": await workspace_git.list_local_branches(ws_path)}
+
+
+@router.post("/workspace/{ws_id}/git/checkout")
+async def git_checkout_endpoint(
+    ws_id: str,
+    body: GitCheckoutRequest,
+    ctx: Annotated[AuthContext, Depends(get_auth_context)],
+    db: Annotated[AsyncSession, Depends(get_db)],
+):
+    """切换或新建本地分支。"""
+    await _ensure_workspace_access(ws_id, ctx, db, minimum_project_role="member")
+    ws_path = workspace_mgr.get_workspace_path(ws_id)
+    try:
+        await workspace_git.checkout(ws_path, body.name, body.create)
+    except workspace_git.GitError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    return {"ok": True, "branch": await workspace_git.current_branch(ws_path)}
+
+
 async def _read_class_file_decompiled(ws_id: str, file_path: str) -> dict:
     """.class 文件按字节没法预览,反编译成文本返回(CFR 优先, javap 兜底)。"""
     from app.coding.class_decompiler import DecompileError, decompile_class_file
