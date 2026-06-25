@@ -16,16 +16,16 @@
     </button>
 
     <main class="login-shell">
-      <section class="login-brand-stage" aria-label="睿鲸 Builder 品牌背景">
+      <section class="login-brand-stage" aria-label="Dolphin Code 品牌背景">
         <img class="login-brand-mark-large" :src="ruijingWhaleMarkUrl" alt="" aria-hidden="true" />
       </section>
 
-      <section class="login-auth-panel" aria-label="登录睿鲸 Builder">
+      <section class="login-auth-panel" aria-label="登录Dolphin Code">
         <div class="login-card">
           <div class="login-header">
             <img class="login-logo" :src="ruijingWhaleMarkUrl" alt="" aria-hidden="true" />
             <div>
-              <h1>睿鲸 Builder</h1>
+              <h1>Dolphin Code</h1>
               <p>登录以打开桌面工作台</p>
             </div>
           </div>

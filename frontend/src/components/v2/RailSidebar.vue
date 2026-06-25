@@ -4,7 +4,7 @@ import { useRoute, useRouter } from 'vue-router'
 import { checkAndPromptUpdate } from '@/utils/desktop'
 import { useUserStore } from '@/stores/user'
 import { useThemeStore } from '@/stores/theme'
-import { useModeStore, MODE_META, MODE_ORDER, type AppMode } from '@/stores/mode'
+import { useModeStore, MODE_META, type AppMode } from '@/stores/mode'
 import { aiChatApi, type AIChatSession } from '@/api/aiChat'
 import {
   normalizeAiSessions,
@@ -24,22 +24,8 @@ const user = useUserStore()
 const theme = useThemeStore()
 const modeStore = useModeStore()
 
-// 三模式(参考设计): 顶部切换器 + 每模式自带左栏导航 + 模式色。
-const modes = MODE_ORDER.map(k => MODE_META[k])
+// 当前模式(目前恒为 Builder)仍驱动左栏导航 + 会话路由;切换器 UI 已移除。
 const currentMode = computed<AppMode>(() => modeStore.mode)
-const modeColorVar = computed(() => MODE_META[currentMode.value].colorVar)
-
-function switchMode(m: AppMode) {
-  if (modeStore.mode !== m) modeStore.setMode(m)
-  const home = MODE_META[m].home
-  if (route.path !== home) router.push(home)
-}
-
-function onModeHotkey(e: KeyboardEvent) {
-  if (!(e.metaKey || e.ctrlKey) || e.altKey || e.shiftKey) return
-  const idx = ['1', '2', '3'].indexOf(e.key)
-  if (idx >= 0 && MODE_ORDER[idx]) { e.preventDefault(); switchMode(MODE_ORDER[idx]) }
-}
 
 // 会话历史 —— 收进左栏单一导航(参考 Claude Code), 页面内层 sidebar 隐掉。
 // 统一使用 aiChatApi 会话(含 code 模式会话, SP2b Task6 放行后一起列出)。
@@ -201,12 +187,10 @@ onMounted(async () => {
   await loadRailSessions()
 
   window.addEventListener('click', closeTenantMenu)
-  window.addEventListener('keydown', onModeHotkey)
 })
 
 onBeforeUnmount(() => {
   window.removeEventListener('click', closeTenantMenu)
-  window.removeEventListener('keydown', onModeHotkey)
 })
 
 function toggleCollapsed() {
@@ -326,13 +310,13 @@ function renderIcon(name: string): string {
       <button
         class="rail-logo"
         type="button"
-        :aria-label="effectiveCollapsed ? '展开导航' : '睿鲸AI 首页'"
+        :aria-label="effectiveCollapsed ? '展开导航' : 'Dolphin Code 首页'"
         @click="effectiveCollapsed ? toggleCollapsed() : go('/')"
       >
         <img class="rail-logo-mark" :src="ruijingWhaleMarkUrl" alt="" aria-hidden="true" />
       </button>
       <div v-if="!effectiveCollapsed" class="rail-brand-copy">
-        <div class="rail-title">睿鲸AI</div>
+        <div class="rail-title">Dolphin Code</div>
       </div>
       <!-- 收起按钮放在 brand 区右侧 — 跟 SessionSidebar 的 « 按钮位置一致，
            比放底部更顺手。展开 / 收起两个状态用同一个 button，方向不一样。 -->
@@ -359,22 +343,7 @@ function renderIcon(name: string): string {
       <span v-html="renderIcon('chevronRight')" />
     </button>
 
-    <!-- 三模式切换器(参考设计): Builder / Agent / Code, ⌘1/2/3 -->
-    <div class="mode-switch" :class="{ collapsed: effectiveCollapsed }" :style="{ '--mode-c': `var(${modeColorVar})` }">
-      <button
-        v-for="(m, i) in modes"
-        :key="m.key"
-        type="button"
-        class="mode-seg"
-        :class="{ active: currentMode === m.key }"
-        :style="currentMode === m.key ? { '--seg-c': `var(${m.colorVar})` } : {}"
-        :title="`${m.label} · ${m.sub} (⌘${i + 1})`"
-        @click="switchMode(m.key)"
-      >
-        <span class="mode-seg-icon" v-html="renderIcon(m.key === 'builder' ? 'bldg' : m.key === 'agent' ? 'spark' : 'code')" />
-        <span v-if="!effectiveCollapsed" class="mode-seg-label">{{ m.label }}</span>
-      </button>
-    </div>
+    <!-- 模式切换器已去掉(当前仅 Builder 一种);加其他模式时再恢复。 -->
 
     <nav class="rail-scroll" aria-label="主导航">
       <!-- 2026-05-23: button → <a href> 让 cmd+click / 中键 / 右键"在新标签中打开" 真开 chrome tab.
@@ -1284,55 +1253,6 @@ html[data-theme="dark"] .rail-expand-top {
 }
 
 /* (deleted) html[data-theme="dark"] .accent-swatch.active — accent picker 死代码 */
-
-/* 三模式切换器(参考设计) */
-.mode-switch {
-  display: flex;
-  gap: 4px;
-  padding: 6px 12px 8px;
-  border-bottom: 1px solid var(--line-1, rgba(127,127,127,.12));
-  margin-bottom: 4px;
-}
-.mode-switch.collapsed {
-  flex-direction: column;
-  padding: 6px 8px 8px;
-  align-items: center;
-}
-.mode-seg {
-  flex: 1;
-  min-width: 0;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  gap: 4px;
-  height: 34px;
-  padding: 0 2px;
-  border: 1px solid transparent;
-  border-radius: 9px;
-  background: transparent;
-  color: var(--text-3, #8a8a8a);
-  cursor: pointer;
-  font-size: 12px;
-  font-weight: 600;
-  transition: color .12s, background .12s, border-color .12s;
-}
-.mode-seg-icon :deep(svg),
-.mode-seg :deep(svg) { width: 15px; height: 15px; }
-.mode-switch.collapsed .mode-seg {
-  width: 38px;
-  flex: none;
-}
-.mode-seg:hover {
-  color: var(--text, #eee);
-  background: var(--surface-3, rgba(127,127,127,.08));
-}
-.mode-seg.active {
-  color: var(--seg-c);
-  background: color-mix(in srgb, var(--seg-c) 14%, transparent);
-  border-color: color-mix(in srgb, var(--seg-c) 36%, transparent);
-}
-.mode-seg-icon { display: inline-flex; }
-.mode-seg-label { line-height: 1; }
 
 /* 得小帆·共性能力 共用入口(导航与页脚之间) */
 .rail-hub {

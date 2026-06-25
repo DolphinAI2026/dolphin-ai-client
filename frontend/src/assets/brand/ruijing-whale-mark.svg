@@ -1,59 +1,54 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" role="img" aria-labelledby="ruijing-whale-title ruijing-whale-desc">
-  <title id="ruijing-whale-title">睿鲸 Builder 智能鲸鱼标识</title>
-  <desc id="ruijing-whale-desc">蓝青渐变圆角图标，白色鲸鱼从左上鲸尾延展到右下鲸头，背部连接 AI 电路节点。</desc>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" role="img" aria-labelledby="dc-title dc-desc">
+  <title id="dc-title">Dolphin Code 标识</title>
+  <desc id="dc-desc">蓝青渐变圆角图标，白色跃起的海豚，下方有 &lt;/&gt; 代码符号。</desc>
   <defs>
-    <linearGradient id="ruijing-bg" x1="88" y1="24" x2="424" y2="486" gradientUnits="userSpaceOnUse">
+    <linearGradient id="dc-bg" x1="88" y1="24" x2="424" y2="486" gradientUnits="userSpaceOnUse">
       <stop offset="0" stop-color="#073D8B"/>
       <stop offset="0.52" stop-color="#075FA8"/>
       <stop offset="1" stop-color="#1CC9D9"/>
     </linearGradient>
-    <linearGradient id="ruijing-bg-glow" x1="118" y1="20" x2="426" y2="430" gradientUnits="userSpaceOnUse">
+    <linearGradient id="dc-glow" x1="118" y1="20" x2="426" y2="430" gradientUnits="userSpaceOnUse">
       <stop offset="0" stop-color="#FFFFFF" stop-opacity="0.18"/>
       <stop offset="0.64" stop-color="#FFFFFF" stop-opacity="0"/>
     </linearGradient>
-    <linearGradient id="ruijing-whale-soft" x1="122" y1="98" x2="398" y2="421" gradientUnits="userSpaceOnUse">
+    <linearGradient id="dc-body" x1="150" y1="120" x2="380" y2="380" gradientUnits="userSpaceOnUse">
       <stop offset="0" stop-color="#FFFFFF"/>
-      <stop offset="1" stop-color="#F5FCFF"/>
+      <stop offset="1" stop-color="#EAF8FF"/>
     </linearGradient>
-    <linearGradient id="ruijing-line" x1="197" y1="156" x2="440" y2="250" gradientUnits="userSpaceOnUse">
-      <stop offset="0" stop-color="#9FF2FF"/>
-      <stop offset="0.38" stop-color="#FFFFFF"/>
-      <stop offset="1" stop-color="#FFFFFF"/>
-    </linearGradient>
-    <filter id="ruijing-soft-shadow" x="-8%" y="-8%" width="116%" height="116%" color-interpolation-filters="sRGB">
-      <feDropShadow dx="0" dy="2" stdDeviation="2.2" flood-color="#06235F" flood-opacity="0.28"/>
+    <filter id="dc-shadow" x="-12%" y="-12%" width="124%" height="124%" color-interpolation-filters="sRGB">
+      <feDropShadow dx="0" dy="3" stdDeviation="5" flood-color="#06235F" flood-opacity="0.30"/>
     </filter>
   </defs>
 
-  <rect width="512" height="512" rx="92" fill="url(#ruijing-bg)"/>
-  <rect x="20" y="20" width="472" height="472" rx="82" fill="url(#ruijing-bg-glow)"/>
+  <rect width="512" height="512" rx="92" fill="url(#dc-bg)"/>
+  <rect x="20" y="20" width="472" height="472" rx="82" fill="url(#dc-glow)"/>
 
-  <g filter="url(#ruijing-soft-shadow)">
-    <path data-logo-part="whale" fill="url(#ruijing-whale-soft)" d="M79 84c32 16 60 19 82 49 17-29 47-38 78-60 2 40-21 73-62 90-30 42-39 101-23 153 19 60 75 92 151 87 46-3 88-20 127-47 19-13 42-20 62-14-4 24-23 44-57 58-62 26-139 31-204 9-32 28-74 47-124 53 15-22 41-41 73-55-63-34-96-82-96-143 0-39 15-77 45-113-29-17-48-39-52-67Z"/>
-    <path data-logo-part="head" fill="#FFFFFF" d="M276 373c36-28 78-42 124-46 43-4 83 1 94 16 4 6 2 14-4 19-37 10-76 21-116 34-35 11-72 16-111 13 3-13 8-25 13-36Z"/>
+  <!-- leaping dolphin (snout upper-right, forked tail lower-left) -->
+  <g filter="url(#dc-shadow)">
+    <path fill="url(#dc-body)" d="
+      M 410 138
+      C 372 142 342 158 322 188
+      C 300 178 286 180 286 180
+      C 296 196 300 206 300 220
+      C 276 244 252 278 232 318
+      C 222 300 214 282 212 262
+      C 196 286 196 318 214 344
+      C 188 356 166 372 150 396
+      C 190 388 226 368 256 338
+      C 300 360 352 352 388 318
+      C 360 318 334 318 312 308
+      C 344 286 372 252 388 212
+      C 398 188 420 168 410 138 Z"/>
+    <!-- pectoral flipper -->
+    <path fill="#CFEEFF" d="M 286 296 C 268 318 258 344 256 372 C 280 350 300 324 312 296 Z"/>
   </g>
+  <!-- eye -->
+  <circle cx="356" cy="176" r="10" fill="#07407F"/>
 
-  <path data-logo-part="eye" d="M274 348c10-5 22-4 31 4-8 7-21 9-33 3-2-2-1-5 2-7Z" fill="#0769A9"/>
-
-  <g data-logo-part="mouth-lines" fill="none" stroke="#086BAE" stroke-width="7" stroke-linecap="round">
-    <path d="M296 384c56-3 107-18 169-41"/>
-    <path d="M314 398c49-6 95-21 145-42"/>
-    <path d="M337 410c42-8 78-22 114-38"/>
+  <!-- </> code motif -->
+  <g fill="none" stroke="#A4F2FF" stroke-width="20" stroke-linecap="round" stroke-linejoin="round">
+    <polyline points="152,402 120,424 152,446"/>
+    <polyline points="360,402 392,424 360,446"/>
   </g>
-
-  <g data-logo-part="circuits" fill="none" stroke-linecap="round" stroke-linejoin="round">
-    <path d="M203 256l45-45v-47" stroke="#A4F2FF" stroke-width="8"/>
-    <path d="M244 277l39-39 21-18v-35l39-39" stroke="url(#ruijing-line)" stroke-width="8"/>
-    <path d="M287 291l28-28 31-18v-39l42-42" stroke="#FFFFFF" stroke-width="8"/>
-    <path d="M322 291l25-27 30-28h51" stroke="#FFFFFF" stroke-width="8"/>
-    <path d="M301 186v19l14 14" stroke="#FFFFFF" stroke-width="8"/>
-  </g>
-
-  <g data-logo-part="nodes">
-    <circle cx="249" cy="164" r="17" fill="#0A65A3" stroke="#A4F2FF" stroke-width="8"/>
-    <circle cx="343" cy="146" r="18" fill="#0A65A3" stroke="#FFFFFF" stroke-width="8"/>
-    <circle cx="304" cy="190" r="14" fill="#0A65A3" stroke="#FFFFFF" stroke-width="8"/>
-    <circle cx="389" cy="164" r="17" fill="#0A65A3" stroke="#FFFFFF" stroke-width="8"/>
-    <circle cx="429" cy="236" r="17" fill="#F59E0B" stroke="#FFFFFF" stroke-width="8"/>
-  </g>
+  <line x1="300" y1="396" x2="212" y2="452" stroke="#FFFFFF" stroke-width="20" stroke-linecap="round"/>
 </svg>

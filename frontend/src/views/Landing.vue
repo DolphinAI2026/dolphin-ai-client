@@ -93,8 +93,8 @@ onMounted(() => {
             <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3 14 9l6 2-6 2-2 6-2-6-6-2 6-2z"/><path d="M19 17l1 3 3 1-3 1-1 3-1-3-3-1 3-1z"/></svg>
             <span>AI</span>
           </div>
-          <div class="eyebrow">RUIJING AI BUILDER · APAAS DELIVERY</div>
-          <h1 class="hero-title">把<span class="hl">业务流程</span>说清楚，<br/>睿鲸 AI 直接搭<span class="hl">应用</span>。</h1>
+          <div class="eyebrow">DOLPHIN CODE · APAAS DELIVERY</div>
+          <h1 class="hero-title">把<span class="hl">业务流程</span>说清楚，<br/>Dolphin Code 直接搭<span class="hl">应用</span>。</h1>
           <div class="hero-sub">面向 QMS、设备台账、审批流和现场管理场景，上传材料或描述需求后，AI 会整理字段、角色、流程并进入得帆云应用配置。</div>
         </div>
 
