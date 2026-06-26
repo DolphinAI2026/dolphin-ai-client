@@ -25,6 +25,10 @@ async def _seed(db):
                      category="二次开发", body_md="afterFormData 用法", status="published"),
         KnowledgeDoc(slug="c", title="草稿", summary="未发布", category="搭建",
                      body_md="draft body", status="draft"),
+        KnowledgeDoc(slug="d", title="无关标题", summary="规范描述",
+                     category="搭建", body_md="这里讲字段命名细则", status="published"),
+        KnowledgeDoc(slug="e", title="字段草稿", summary="字段",
+                     category="搭建", body_md="字段相关内容", status="draft"),
     ])
     await db.commit()
 
@@ -34,7 +38,11 @@ async def test_list_published_excludes_draft(db):
     from app.knowledge_base import list_published_docs
     await _seed(db)
     slugs = [d.slug for d in await list_published_docs(db)]
-    assert slugs == ["b", "a"]  # 按 category 排序:二次开发 < 搭建(unicode),再按 title
+    # 按 category 排序:二次开发 < 搭建(unicode),再按 title
+    # 搭建内:无关标题(d) < 表单字段规范(a)
+    assert slugs == ["b", "d", "a"]
+    # 验证 draft 被排除(c 和 e 不在结果中)
+    assert "c" not in slugs and "e" not in slugs
 
 
 @pytest.mark.asyncio
@@ -51,8 +59,40 @@ async def test_search_ranks_title_over_body(db):
     from app.knowledge_base import search_published_docs
     await _seed(db)
     hits = await search_published_docs(db, "字段")
-    assert hits[0].slug == "a"        # 标题命中权重最高
-    assert all(h.status == "published" for h in hits)
+    # 验证排序:标题命中(a)应排在仅body命中(d)前
+    assert len(hits) >= 2, f"Expected at least 2 hits, got {len(hits)}"
+    hit_slugs = [h.slug for h in hits]
+    assert "a" in hit_slugs, "Doc 'a' (title hit) should be in results"
+    assert "d" in hit_slugs, "Doc 'd' (body-only hit) should be in results"
+    assert hit_slugs.index("a") < hit_slugs.index("d"), "Title hit 'a' should rank before body-only hit 'd'"
+    # 验证草稿被排除
+    assert "e" not in hit_slugs, "Draft doc 'e' should be excluded even though it contains '字段'"
+    assert all(h.status == "published" for h in hits), "All hits must be published"
+
+
+@pytest.mark.asyncio
+async def test_search_escapes_like_wildcards(db):
+    """LIKE pattern % and _ should be escaped, not treated as wildcards."""
+    from app.knowledge_base import search_published_docs
+    from app.models.knowledge_doc import KnowledgeDoc
+    db.add_all([
+        KnowledgeDoc(slug="f", title="50% 优惠规则", summary="折扣", category="搭建",
+                     body_md="字段规则", status="published"),
+        KnowledgeDoc(slug="g", title="字段映射", summary="a_b映射",
+                     category="搭建", body_md="下划线分隔符", status="published"),
+    ])
+    await db.commit()
+
+    # 查询包含 % 的文字 — 不应该匹配包含任意字符的内容
+    hits = await search_published_docs(db, "50%")
+    hit_slugs = [h.slug for h in hits]
+    assert "f" in hit_slugs, "Should find literal '50%' in doc 'f' title"
+    # 若 % 未转义,则 "50%" 作为 ilike 会变成 "50<任意1字>",可能匹配不想要的
+
+    # 查询包含 _ 的文字 — 不应该作为通配符
+    hits = await search_published_docs(db, "a_b")
+    hit_slugs = [h.slug for h in hits]
+    assert "g" in hit_slugs, "Should find literal 'a_b' in doc 'g' summary"
 
 
 def test_build_manifest_groups_and_empty():

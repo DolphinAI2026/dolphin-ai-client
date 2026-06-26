@@ -50,10 +50,15 @@ async def search_published_docs(db: AsyncSession, query: str, limit: int = 8) ->
     tokens = _tokenize(query)
     if not tokens:
         return []
+
+    def escape_like_pattern(t: str) -> str:
+        """Escape SQL LIKE wildcards % and _ so they are treated as literals."""
+        return t.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+
     conds = [
-        or_(KnowledgeDoc.title.ilike(f"%{t}%"),
-            KnowledgeDoc.summary.ilike(f"%{t}%"),
-            KnowledgeDoc.body_md.ilike(f"%{t}%"))
+        or_(KnowledgeDoc.title.ilike(f"%{escape_like_pattern(t)}%", escape="\\"),
+            KnowledgeDoc.summary.ilike(f"%{escape_like_pattern(t)}%", escape="\\"),
+            KnowledgeDoc.body_md.ilike(f"%{escape_like_pattern(t)}%", escape="\\"))
         for t in tokens
     ]
     res = await db.execute(
