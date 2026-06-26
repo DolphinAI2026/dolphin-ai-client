@@ -408,6 +408,7 @@ from app.models.ai_chat import (  # noqa: E402, F401
 
 from app.models.agent_prompt import AgentPrompt  # noqa: E402, F401  — agent prompt templates per-tenant per-phase
 from app.models.config_assistant_skill import ConfigAssistantSkill  # noqa: E402, F401  — 配置助手自学习 skills
+from app.models.knowledge_doc import KnowledgeDoc  # noqa: E402, F401  — 平台知识库(规范库)
 
 
 class DbConnection(Base):
