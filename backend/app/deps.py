@@ -333,3 +333,15 @@ async def require_tenant_admin(
             detail="需要租户管理员权限",
         )
     return ctx
+
+
+async def require_platform_admin(
+    ctx: Annotated[AuthContext, Depends(get_auth_context)]
+) -> AuthContext:
+    """Require platform admin role."""
+    if ctx.tenant_role != "platform_admin" and not ctx.user.is_platform_admin:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="需要平台管理员权限",
+        )
+    return ctx
