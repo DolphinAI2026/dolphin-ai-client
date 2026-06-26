@@ -103,7 +103,7 @@
 
 故两个工具在「默认 Builder」与「dev-apaas(Code)」两个 profile 下都自动可用,无需改 `profile.py` 的白名单计算。
 
-- **必须**在 `backend/tool_registry.yaml` 加 entry(category 用 `knowledge` 或 `other`;agents 可留空=通用),否则注册校验/装配漏掉(历史踩坑:新工具漏登记)。
+- 两个工具是**本地工具**(直接查 DB),注册进 `ai_chat/tools.py` 的 `TOOL_SCHEMAS` + `TOOL_HANDLERS` 即可;**不进 `tool_registry.yaml`**(经核实那是 MCP 工具专用,base 本地工具如 `use_skill`/`read_attachment` 都不在其中)。
 - 两个工具都是**只读**,无副作用,任何 profile 给都安全。
 
 ### 检索实现(可移植,避开 SQLite/MySQL 分裂)
