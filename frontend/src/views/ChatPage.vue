@@ -468,8 +468,8 @@
     <!-- 2026-05-19 post-deploy 形态: 配置助手, 聊增量调整 -->
     <!-- 2026-05-25: 改浮动模式 — 默认收起 FAB, 点开 overlay 在 iframe 上, 不再挤 iframe 宽度 -->
     <!-- 收起态 FAB: 展开面板已改为嵌入式右栏(在 .platform-shell-row 内, 对齐「配置」tab)。
-         FAB 仅在 platform 视图 + 配置 tab 显 — 自开发 tab 不显配置助手浮窗。 -->
-    <template v-if="!embedMode && isPostDeploy && resolvedAppId && topTab !== 'dev' && activeView === 'platform'">
+         FAB 仅在 platform 视图 + 配置 tab 显 — 自开发 / 后台配置 tab 不显配置助手浮窗。 -->
+    <template v-if="!embedMode && isPostDeploy && resolvedAppId && topTab !== 'dev' && topTab !== 'admin' && activeView === 'platform'">
       <button
         v-if="!assistantOpen"
         class="ca-fab"
