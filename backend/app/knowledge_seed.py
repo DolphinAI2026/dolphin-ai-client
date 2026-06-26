@@ -262,7 +262,7 @@ _C6_PYTHON_READ = """\
 ## aPaaS 业务事件自定义节点 Python 契约（读侧）
 
 > 来源：apaas-trial 后台「AI 管理 → 提示词管理」81 条平台内置 prompt 中的「Python代码生成」规范（2026-06-05 实证）。
-> **写侧 SDK（definesys.create/update）在平台 AI prompt 库和帮助文档中均未找到，见独立 draft 文档 `平台规范/apaas-event-python-write-sdk`。**
+> **写侧 SDK（definesys.create/update）在平台 AI prompt 库和帮助文档中均未找到，见独立 draft 文档 `apaas-event-python-write-sdk`。**
 
 ### invoke 契约（骨架）
 
@@ -337,7 +337,7 @@ _C6_WRITE_DRAFT = """\
 
 **何时转 published**：用户提供 definesys Python SDK 的写 API 文档（方法签名 + 示例）后，更新此文档并改 status=published。
 
-参考已知读侧规范：`平台规范/apaas-event-python-read-contract`
+参考已知读侧规范：`apaas-event-python-read-contract`
 """
 
 # ---------------------------------------------------------------------------
@@ -345,7 +345,7 @@ _C6_WRITE_DRAFT = """\
 # ---------------------------------------------------------------------------
 SEED: list[dict] = [
     {
-        "slug": "platform/df-sdk-api",
+        "slug": "df-sdk-api",
         "title": "df-sdk API 速查（全局 window.df）",
         "summary": "得帆 aPaaS 平台自开发全局 SDK，含 getVue/getRouter/getStore/getEnv/$request/openFormModal/showToast 等完整 API",
         "category": "平台规范",
@@ -353,7 +353,7 @@ SEED: list[dict] = [
         "status": "published",
     },
     {
-        "slug": "二次开发/form-component-formvalue-storage",
+        "slug": "form-component-formvalue-storage",
         "title": "formValue 存储规范",
         "summary": "自开发组件值必须同步到 formValue 才能入库；复杂类型须 JSON.stringify/parse；推荐 mounted+handleChange 模式",
         "category": "二次开发",
@@ -361,7 +361,7 @@ SEED: list[dict] = [
         "status": "published",
     },
     {
-        "slug": "二次开发/form-engine-api-whitelist",
+        "slug": "form-engine-api-whitelist",
         "title": "formEngine API 白名单",
         "summary": "formEngine 合法属性/方法白名单及臆想方法黑名单（违反会运行时崩溃）；正确赋值用 this.$set(this.formData, uuid, val)",
         "category": "二次开发",
@@ -369,7 +369,7 @@ SEED: list[dict] = [
         "status": "published",
     },
     {
-        "slug": "二次开发/backend-api-conventions",
+        "slug": "backend-api-conventions",
         "title": "后端自开发接口约定（SpringBoot）",
         "summary": "接口路径以 /custom 开头；包名 com.xdap；@ComponentScan 扫 com.definesys.mpaas + com.xdap.*；得帆私有 Maven 源",
         "category": "二次开发",
@@ -377,7 +377,7 @@ SEED: list[dict] = [
         "status": "published",
     },
     {
-        "slug": "二次开发/frontend-tech-stack",
+        "slug": "frontend-tech-stack",
         "title": "前端自开发技术栈约定",
         "summary": "Vue 2.7；Element UI 全局注册无需 import；$dayjs/$lodash；console.info 代替 console.log；得帆私有 npm 源",
         "category": "二次开发",
@@ -385,7 +385,7 @@ SEED: list[dict] = [
         "status": "published",
     },
     {
-        "slug": "平台规范/apaas-event-python-read-contract",
+        "slug": "apaas-event-python-read-contract",
         "title": "aPaaS 业务事件 Python 自定义节点——读侧契约",
         "summary": "invoke() 入口 + definesys.input() 取 customNodeData[0][afterFormData/afterTableData][<uuid>]；返回合法 JSON",
         "category": "平台规范",
@@ -393,7 +393,7 @@ SEED: list[dict] = [
         "status": "published",
     },
     {
-        "slug": "平台规范/apaas-event-python-write-sdk",
+        "slug": "apaas-event-python-write-sdk",
         "title": "definesys Python 自定义节点——写侧 SDK（待补充）",
         "summary": "（占位 draft）definesys 写 SDK API（create/update 等）在平台 AI prompt 库和文档中均未找到，待用户提供权威文档后补充",
         "category": "平台规范",

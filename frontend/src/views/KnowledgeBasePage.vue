@@ -160,7 +160,7 @@ async function load() {
     if (filterStatus.value) params.status = filterStatus.value
     docs.value = await listKnowledgeDocs(params)
   } catch (err: any) {
-    ElMessage.error(err?.message || '加载知识文档失败')
+    ElMessage.error(err?.response?.data?.detail || err?.message || '加载知识文档失败')
   } finally {
     loading.value = false
   }
@@ -205,7 +205,7 @@ async function submitForm() {
     }
     dialogVisible.value = false
   } catch (err: any) {
-    ElMessage.error(err?.message || (editTarget.value ? '保存失败' : '创建失败'))
+    ElMessage.error(err?.response?.data?.detail || err?.message || (editTarget.value ? '保存失败' : '创建失败'))
   } finally {
     saving.value = false
   }
@@ -224,7 +224,7 @@ async function confirmDelete(row: KnowledgeDoc) {
     docs.value = docs.value.filter((d) => d.id !== row.id)
     ElMessage.success('已删除')
   } catch (err: any) {
-    ElMessage.error(err?.message || '删除失败')
+    ElMessage.error(err?.response?.data?.detail || err?.message || '删除失败')
   }
 }
 

@@ -79,7 +79,7 @@ async def test_definesys_write_sdk_is_draft(session_maker):
         row = (
             await db.execute(
                 select(KnowledgeDoc).where(
-                    KnowledgeDoc.slug == "平台规范/apaas-event-python-write-sdk"
+                    KnowledgeDoc.slug == "apaas-event-python-write-sdk"
                 )
             )
         ).scalar_one_or_none()
@@ -103,3 +103,12 @@ async def test_seed_count_matches_seed_list(session_maker):
     assert len(rows) == len(SEED), (
         f"Expected {len(SEED)} docs, found {len(rows)}"
     )
+
+
+def test_seed_slugs_are_route_safe():
+    """seed slug 不能含 '/' — CRUD 路由用 /docs/{slug} 普通转换器, 斜杠会 404,
+    管理页就改/删/看不了默认文档(上线后唯一内容)。"""
+    from app.knowledge_seed import SEED
+
+    bad = [d["slug"] for d in SEED if "/" in d["slug"]]
+    assert not bad, f"含斜杠的 slug 会让管理页 /docs/{{slug}} 路由 404: {bad}"

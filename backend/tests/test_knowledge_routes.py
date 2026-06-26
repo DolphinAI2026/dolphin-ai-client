@@ -54,11 +54,37 @@ async def test_duplicate_slug_409(client):
     assert (await client.post("/api/knowledge/docs", json=body)).status_code == 409
 
 
+_BODY = {"slug": "x", "title": "T", "summary": "", "category": "搭建", "body_md": "b", "status": "draft"}
+
+
 @pytest.mark.asyncio
-async def test_non_admin_403():
-    # 不覆盖 require_platform_admin → 真实依赖,无 token → 401/403
+async def test_all_endpoints_require_auth():
+    """无 token → 每个端点(含写)都被鉴权挡在 handler 之前(401/403)。
+    若某写端点漏挂 require_platform_admin,它会进 handler 返回 200/422 而非 401/403 → 此测试报警。"""
     from app.routes import knowledge
     app = FastAPI()
     app.include_router(knowledge.router, prefix="/api")
     async with AsyncClient(transport=ASGITransport(app=app), base_url="http://t") as c:
         assert (await c.get("/api/knowledge/docs")).status_code in (401, 403)
+        assert (await c.get("/api/knowledge/docs/x")).status_code in (401, 403)
+        assert (await c.post("/api/knowledge/docs", json=_BODY)).status_code in (401, 403)
+        assert (await c.put("/api/knowledge/docs/x", json=_BODY)).status_code in (401, 403)
+        assert (await c.delete("/api/knowledge/docs/x")).status_code in (401, 403)
+
+
+@pytest.mark.asyncio
+async def test_authenticated_non_admin_forbidden():
+    """已认证但非平台管理员(tenant_role=member,is_platform_admin=False)→ 真实 require_platform_admin
+    精确拒 403。覆盖 get_auth_context 返回非管理员 ctx,不覆盖 require_platform_admin → 走真鉴权链。"""
+    from app.routes import knowledge
+    from app.deps import get_auth_context
+    app = FastAPI()
+    app.include_router(knowledge.router, prefix="/api")
+    app.dependency_overrides[get_auth_context] = lambda: SimpleNamespace(
+        user=SimpleNamespace(id=2, is_platform_admin=False),
+        tenant_role="member", tenant_id=1, org_permissions={})
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://t") as c:
+        assert (await c.post("/api/knowledge/docs", json=_BODY)).status_code == 403
+        assert (await c.put("/api/knowledge/docs/x", json=_BODY)).status_code == 403
+        assert (await c.delete("/api/knowledge/docs/x")).status_code == 403
+        assert (await c.get("/api/knowledge/docs")).status_code == 403

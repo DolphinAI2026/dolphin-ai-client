@@ -1300,3 +1300,20 @@ git commit -am "test(knowledge): MySQL 校验 + e2e 验证修正"
 - **占位符**:Task 7(Vue 页面)、Task 8/9(seed)按性质给「过程 + 范本 + 一个 worked example」而非逐行,因内容依赖盘点结果;已诚实标注且给可跑骨架,非空头占位。
 - **类型一致**:`KnowledgeDoc` 字段、`list_published_docs/get_published_doc/search_published_docs/build_knowledge_manifest`、`execute_read_knowledge/execute_search_knowledge`、`require_platform_admin`、`/knowledge/docs` 端点签名在各任务间一致。
 - **spec 订正**:设计文档原写「工具必须进 tool_registry.yaml」——经核实 base 本地工具不进 registry,本计划据实改为注册进 `ai_chat/tools.py`;设计文档已同步订正。
+
+## 已知偏离 / 后续项(2026-06-26 评审后补记)
+
+- **Task 9 Step 4「prompt 留薄(防漂移)」本期未做** —— C2–C5 规范已 `published` 进库,但
+  `backend/app/agents/coding/prompts.py` 的对应段(`_SHARED_FORMVALUE_STORAGE_SECTION`/
+  `_SHARED_FORMENGINE_API_SECTION` 等)仍原样保留,形成 spec 警告的「两份真相源」。
+  - **为何不阻断**:经核实这些 prompt 段**只被退役的 `/coding/pipeline` 引擎的 `CodingAgent` 消费**,
+    知识库只 wire 进 `run_agent`(统一引擎)。两者不交叉 → **没有任何单次 agent 运行会同时吃到两份**,
+    是跨引擎的维护漂移,不是运行时矛盾。且 `/coding/pipeline` 本期明确不接库(设计 §配套清理)。
+  - **权威约定(自此生效)**:这几条规范以**知识库版为唯一权威**;prompts.py 里的副本视为退役引擎的
+    历史残留,改规范只改知识库,不要再改 prompts.py 版。
+  - **真正收口时机**:并入「退役旧 `/coding/pipeline`」那份独立 spec —— 退役该引擎时一并删掉
+    prompts.py 这几段,双真相源随之消失。在此之前不单独动退役引擎的 prompt(避免风险)。
+
+- **seed slug 去斜杠(2026-06-26 修)**:seed 7 篇文档原 slug 带 `category/` 前缀(含 `/`),与
+  `/docs/{slug}` 路由不兼容导致管理页对默认内容编辑/删除/详情 404;已改为无斜杠 kebab slug
+  (`df-sdk-api`/`form-engine-api-whitelist`…),并加 `test_seed_slugs_are_route_safe` 守卫。
