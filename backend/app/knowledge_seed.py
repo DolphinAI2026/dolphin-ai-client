@@ -1,6 +1,6 @@
 """幂等 upsert 平台知识库 seed 文档。按 slug upsert,可重复跑。
 
-SEED 内容来自 docs/knowledge-seed-inventory-2026-06-26.md 标「可搬」的 5 条 +
+SEED 内容来自 docs/knowledge-seed-inventory-2026-06-26.md 标「可搬」的 6 条 +
 definesys 写侧 SDK 1 条占位(status='draft',仓库内无权威来源)。
 prompt 留薄(防漂移)步骤已推迟,本模块仅做 seed,不改任何 prompt 文件。
 """
@@ -413,6 +413,7 @@ async def upsert_seed_docs(db: AsyncSession) -> int:
         if existing:
             for k, v in item.items():
                 setattr(existing, k, v)
+            existing.tenant_id = None
         else:
             db.add(KnowledgeDoc(**item, tenant_id=None))
         n += 1
