@@ -185,6 +185,12 @@ const router = createRouter({
       meta: { requiresAuth: true, requiresPlatformAdmin: true, navExpanded: true, desktop: 'hidden' }
     },
     {
+      path: '/knowledge',
+      name: 'knowledge-base',
+      component: () => import('@/views/KnowledgeBasePage.vue'),
+      meta: { requiresAuth: true, requiresPlatformAdmin: true, navExpanded: true, desktop: 'hidden' }
+    },
+    {
       path: '/desktop-setup',
       name: 'DesktopSetup',
       component: () => import('@/views/DesktopSetupWizard.vue'),

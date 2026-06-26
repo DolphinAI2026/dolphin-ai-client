@@ -476,6 +476,17 @@ function renderIcon(name: string): string {
             <path d="M7 7h10v10" />
           </svg>
         </a>
+        <a
+          v-if="user.isPlatformAdmin && !desktopHidden('/knowledge')"
+          class="console-row"
+          :class="{ active: route.path.startsWith('/knowledge') }"
+          :href="resolveHref('/knowledge')"
+          title="平台知识库"
+          @click.prevent="go('/knowledge')"
+        >
+          <span class="console-row-icon" v-html="renderIcon('store')" />
+          <span>平台知识库</span>
+        </a>
 
         <!-- v3 2026-05-20: 删主题色 picker 让 admin/frontend brand 始终一致蓝；只保留浅深切换 -->
         <!-- 2026-05-21 整 row 改成 button — 之前 label 跟太阳 icon 视觉分离体验割裂。
