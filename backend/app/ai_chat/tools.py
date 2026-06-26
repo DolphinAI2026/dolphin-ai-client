@@ -1257,7 +1257,7 @@ async def execute_use_skill(args: dict, session: AIChatSession, db: AsyncSession
     )
 
 
-async def execute_read_knowledge(args: dict, session, db) -> str:
+async def execute_read_knowledge(args: dict, session: AIChatSession, db: AsyncSession) -> str:
     slug = (args.get("slug") or "").strip()
     if not slug:
         return "错误：缺少 slug 参数"
@@ -1268,7 +1268,7 @@ async def execute_read_knowledge(args: dict, session, db) -> str:
     return f"# {doc.title}\n\n{doc.body_md}"
 
 
-async def execute_search_knowledge(args: dict, session, db) -> str:
+async def execute_search_knowledge(args: dict, session: AIChatSession, db: AsyncSession) -> str:
     query = (args.get("query") or "").strip()
     if not query:
         return "错误：缺少 query 参数"
