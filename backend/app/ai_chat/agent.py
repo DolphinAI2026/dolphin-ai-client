@@ -91,6 +91,23 @@ def _append_skill_manifest(messages: list[dict]) -> None:
         logger.warning("skill manifest skipped: messages[0] is not a system message")
 
 
+async def _append_knowledge_manifest(messages: list[dict], db) -> None:
+    """把平台知识库 published 文档目录追加到 system message(渐进披露)。
+
+    空库 no-op、异常不致命 —— 与 _append_skill_manifest 同模式,但内容来自 DB。
+    """
+    try:
+        from app.knowledge_base import list_published_docs, build_knowledge_manifest
+        manifest = build_knowledge_manifest(await list_published_docs(db))
+    except Exception as exc:  # noqa: BLE001 — 知识库扫描失败不应中断对话
+        logger.warning("knowledge manifest 注入失败: %r", exc)
+        return
+    if manifest and messages and isinstance(messages[0], dict) and messages[0].get("role") == "system":
+        messages[0]["content"] = (messages[0].get("content") or "") + manifest
+    elif manifest:
+        logger.warning("knowledge manifest skipped: messages[0] is not a system message")
+
+
 LLM_RETRY_ATTEMPTS = 2
 PERSISTED_TOOL_ARG_PREVIEW_CHARS = 240
 PERSISTED_TOOL_ARG_MAX_CHARS = 20_000
@@ -900,6 +917,7 @@ async def _run_agent_inner(
     # 技能清单（桌面上传/平台预置）注入 system prompt，否则 use_skill 的描述指向不存在的「可用技能」段、
     # 模型无从得知技能名 → use_skill 实际不可达。空集（云端/无 skill）no-op。
     _append_skill_manifest(messages)
+    await _append_knowledge_manifest(messages, db)   # 平台知识库目录(渐进披露)
     active_tool_names: set[str] = await _reconstruct_active_tools(db, session)
 
     for turn in range(MAX_TURNS):
