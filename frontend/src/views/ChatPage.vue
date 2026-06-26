@@ -130,6 +130,26 @@
         >
           <AppDevWorkspacePanel :app-id="existingAppId" />
         </div>
+        <!-- 后台配置 tab: 内嵌 apaas 应用管理后台 -->
+        <div
+          v-else-if="existingAppId && topTab === 'admin'"
+          class="platform-shell-row"
+        >
+          <div class="platform-iframe-container admin-shell">
+            <InAppBrowser
+              v-if="adminEditorUrl"
+              ref="adminBrowserRef"
+              mode="trusted-url"
+              :url="adminEditorUrl"
+              title="后台配置"
+            />
+            <div v-else class="mdsh-empty">
+              <div class="mdsh-empty-icon"><AppIcon name="wrench" :size="32" /></div>
+              <h3>{{ adminEditorMsg || '正在加载后台配置…' }}</h3>
+              <p v-if="adminEditorMsg">应用需先部署到平台并绑定环境, 才能打开后台配置。</p>
+            </div>
+          </div>
+        </div>
         <!-- 配置 tab content row -->
         <div v-else class="platform-shell-row" :class="{ 'assistant-expanded': assistantExpanded }">
           <!-- 设计 tab: 左侧 ApaasMenuSidebar 长显 (不绑 sub-tab) -->
@@ -548,6 +568,7 @@ import CustomPagePreviewPanel from '@/components/v3/CustomPagePreviewPanel.vue'
 import AppDevWorkspacePanel from '@/components/v3/AppDevWorkspacePanel.vue'
 import InAppBrowser from '@/components/common/InAppBrowser.vue'
 import { getEditorUrl } from '@/api/editorUrl'
+import { resolveAdminEditorState } from '@/views/backendConfigTab'
 import type { ConversationCreate, Message } from '@/types'
 import TopBar from '@/components/TopBar.vue'
 import WorkbenchShell from '@/components/WorkbenchShell.vue'
@@ -1996,6 +2017,7 @@ const topTab = ref<string>(normalizeTopTab(SECTION_TO_TOP_TAB[_initSection] || '
 const CONFIG_TOP_TABS = [
   { code: 'design', label: '配置' },
   { code: 'dev', label: '自开发' },
+  { code: 'admin', label: '后台配置' },
 ] as const
 
 // P1-N6: 这些 sub-tab 走 native master-detail panel — 不需要再显 SectionContentList.
@@ -2152,6 +2174,33 @@ async function loadEmbeddedEditorUrl() {
     embeddedEditorMsg.value = e?.message || '加载配置页失败'
   }
 }
+
+// ── 后台配置 tab: 内嵌 apaas 应用管理后台 (app-store/edit-app) ──
+// host/tid/appId 全来自应用绑定的 PlatformEnv，动态；前端只用后端返回的整条 URL。
+const adminEditorUrl = ref<string>('')
+const adminEditorMsg = ref<string>('')
+const adminBrowserRef = ref<InstanceType<typeof InAppBrowser> | null>(null)
+let adminLoadedForAppId: number | null = null
+
+async function loadAdminEditorUrl() {
+  if (!existingAppId.value) return
+  // 同一应用已拉到 url 就不重拉，避免重复进 tab 时 iframe 闪重载
+  if (adminLoadedForAppId === existingAppId.value && adminEditorUrl.value) return
+  try {
+    const { url, msg } = resolveAdminEditorState(await getEditorUrl(existingAppId.value, {}))
+    adminEditorUrl.value = url
+    adminEditorMsg.value = msg
+    if (url) adminLoadedForAppId = existingAppId.value
+  } catch (e: any) {
+    adminEditorUrl.value = ''
+    adminEditorMsg.value = e?.message || '加载后台配置失败'
+  }
+}
+
+// 切进「后台配置」tab 或绑定应用变化时懒加载一次
+watch([topTab, existingAppId], ([t]) => {
+  if (t === 'admin') void loadAdminEditorUrl()
+})
 
 function onApaasMenuSelected(menu: {
   menu_id: string

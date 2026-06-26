@@ -54,3 +54,26 @@ async def test_editor_url_app_not_deployed(db_session):
     await db_session.commit()
     out = await get_editor_url(app.id, _ctx(user, 7), db_session, menu_type="MODEL", menu_id="", form_id="")
     assert out["ok"] is False and out.get("error_code")
+
+
+@pytest.mark.asyncio
+async def test_editor_url_no_menu_returns_admin_overview(db_session):
+    """「后台配置」tab 依赖：不传 menu → app-store/edit-app 总览，host 来自绑定环境(非写死域名)。"""
+    from app.models import PlatformEnv
+    env = PlatformEnv(
+        tenant_id=7, env_name="prod", base_url="https://my-apaas.example.cn/backend",
+        platform_tenant_id="TID42", token="tok",
+    )
+    db_session.add(env)
+    await db_session.flush()
+    user, app = await _seed_app(db_session, tenant_id=7, apaas_app_id="AP777", env_id=env.id)
+    await db_session.commit()
+
+    out = await get_editor_url(app.id, _ctx(user, 7), db_session,
+                               menu_type="", menu_id="", form_id="")
+    assert out["ok"] is True
+    # host 跟随绑定环境 base_url(去 /backend) —— 换个域名也照样拼对，证明不写死
+    assert out["url"] == (
+        "https://my-apaas.example.cn/platform/TID42/admin/app-store/edit-app"
+        "?appId=AP777&currentStepIndex=0"
+    )
