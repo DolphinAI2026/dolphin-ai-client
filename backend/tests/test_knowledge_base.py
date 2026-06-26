@@ -75,24 +75,42 @@ async def test_search_escapes_like_wildcards(db):
     """LIKE pattern % and _ should be escaped, not treated as wildcards."""
     from app.knowledge_base import search_published_docs
     from app.models.knowledge_doc import KnowledgeDoc
+
+    # Positive cases: docs with literal wildcards
     db.add_all([
         KnowledgeDoc(slug="f", title="50% 优惠规则", summary="折扣", category="搭建",
                      body_md="字段规则", status="published"),
         KnowledgeDoc(slug="g", title="字段映射", summary="a_b映射",
                      category="搭建", body_md="下划线分隔符", status="published"),
+        # Negative cases: docs that unescaped wildcard would match but literal won't
+        KnowledgeDoc(slug="neg1", title="命中50个名额", summary="容量", category="搭建",
+                     body_md="限制信息", status="published"),
+        KnowledgeDoc(slug="neg2", title="aXb映射示例", summary="转换器", category="搭建",
+                     body_md="字符转换", status="published"),
     ])
     await db.commit()
 
-    # 查询包含 % 的文字 — 不应该匹配包含任意字符的内容
+    # 查询包含 % 的文字 — 转义后只匹配字面 %，不作为通配符
     hits = await search_published_docs(db, "50%")
     hit_slugs = [h.slug for h in hits]
+    # Positive: literal "50%" should be found
     assert "f" in hit_slugs, "Should find literal '50%' in doc 'f' title"
-    # 若 % 未转义,则 "50%" 作为 ilike 会变成 "50<任意1字>",可能匹配不想要的
+    # Negative: unescaped "50%" pattern %50%% would match "50个" but escaped %50\%% won't
+    assert "neg1" not in hit_slugs, (
+        "Doc 'neg1' with '50个' should NOT match query '50%' when % is escaped as \\%; "
+        "unescaped would match because %50%% matches any 'X50<any1char>X'"
+    )
 
-    # 查询包含 _ 的文字 — 不应该作为通配符
+    # 查询包含 _ 的文字 — 转义后只匹配字面 _，不作为通配符
     hits = await search_published_docs(db, "a_b")
     hit_slugs = [h.slug for h in hits]
+    # Positive: literal "a_b" should be found
     assert "g" in hit_slugs, "Should find literal 'a_b' in doc 'g' summary"
+    # Negative: unescaped "a_b" pattern %a_b% would match "aXb" but escaped %a\_b% won't
+    assert "neg2" not in hit_slugs, (
+        "Doc 'neg2' with 'aXb' should NOT match query 'a_b' when _ is escaped as \\_; "
+        "unescaped would match because %a_b% matches any 'X<any1char>bX'"
+    )
 
 
 def test_build_manifest_groups_and_empty():
