@@ -48,6 +48,13 @@ path.write_text(f"""<?xml version="1.0" encoding="UTF-8"?>
       <password>{password}</password>
     </server>
   </servers>
+  <mirrors>
+    <mirror>
+      <id>{repo_id}</id>
+      <mirrorOf>external:http:*</mirrorOf>
+      <url>https://registry.dfy.definesys.cn/repository/maven-public/</url>
+    </mirror>
+  </mirrors>
 </settings>
 """, encoding="utf-8")
 path.chmod(0o600)

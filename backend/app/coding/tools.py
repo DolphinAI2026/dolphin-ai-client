@@ -421,7 +421,7 @@ def _resolve_default_npm_registry() -> str:
     return FALLBACK_NPM_REGISTRY
 
 
-def _build_command_env() -> dict[str, str]:
+def _build_command_env(command: str = "") -> dict[str, str]:
     env = ensure_node_tool_env()
     default_registry = _resolve_default_npm_registry()
     env.setdefault("npm_config_registry", default_registry)
@@ -431,7 +431,35 @@ def _build_command_env() -> dict[str, str]:
     env.setdefault("npm_config_audit", "false")
     env.setdefault("npm_config_fund", "false")
     env.setdefault("FORCE_COLOR", "0")
+    if _contains_maven_command(command):
+        from app.coding.workspace import _apaas_backend_build_env
+        env = _apaas_backend_build_env(env)
     return env
+
+
+def _strip_env_assignments(tokens: list[str]) -> list[str]:
+    while tokens and re.match(r"^[A-Za-z_][A-Za-z0-9_]*=", tokens[0]):
+        tokens = tokens[1:]
+    return tokens
+
+
+def _contains_maven_command(command: str) -> bool:
+    tokens = _strip_env_assignments(_extract_primary_shell_tokens(command))
+    if tokens:
+        executable = Path(tokens[0]).name
+        if executable in {"mvn", "mvnw", "mvnw.cmd"}:
+            return True
+    return bool(re.search(r"(^|[;&|]\s*)(?:\./)?mvnw?\b", command))
+
+
+def _is_maven_package_build(command: str) -> bool:
+    tokens = _strip_env_assignments(_extract_primary_shell_tokens(command))
+    if not tokens:
+        return False
+    executable = Path(tokens[0]).name
+    if executable not in {"mvn", "mvnw", "mvnw.cmd"}:
+        return False
+    return any(t == "package" or t.endswith(":package") for t in tokens)
 
 
 def _contains_npm_install(command: str) -> bool:
@@ -568,6 +596,19 @@ async def _run_command(
                 return result["message"]
             return f"Error: {result['message']}"
 
+        if _is_maven_package_build(command):
+            from app.coding.workspace import WorkspaceManager
+
+            await _emit_progress(
+                progress_callback,
+                "[build] 检测到 Maven 打包，已切换为统一 JDK 配置构建流程。\n",
+            )
+            result = await WorkspaceManager().build_project(workspace_path.name)
+            await _emit_progress(progress_callback, f"[build] {result['message']}\n")
+            if result["status"] == "ok":
+                return result["message"]
+            return f"Error: {result['message']}"
+
         if should_sandbox():
             # 桌面态(客户机)把通用命令写入限制在工作区,挡住写出工作区/rm 别的项目。
             proc = await asyncio.create_subprocess_exec(
@@ -575,7 +616,7 @@ async def _run_command(
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.STDOUT,
                 cwd=str(workspace_path),
-                env=_build_command_env(),
+                env=_build_command_env(command),
             )
         else:
             proc = await asyncio.create_subprocess_shell(
@@ -583,7 +624,7 @@ async def _run_command(
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.STDOUT,
                 cwd=str(workspace_path),
-                env=_build_command_env(),
+                env=_build_command_env(command),
             )
         try:
             output = await asyncio.wait_for(
