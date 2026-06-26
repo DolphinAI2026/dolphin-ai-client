@@ -306,6 +306,36 @@ TOOL_SCHEMAS: list[dict] = [
             },
         },
     },
+    {
+        "type": "function",
+        "function": {
+            "name": "read_knowledge",
+            "description": (
+                "读取平台知识库中一篇规范文档的全文(搭建/二次开发/平台规范等)。"
+                "文档清单见系统提示「平台知识库」。需要某条规范细节时调它。"
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {"slug": {"type": "string", "description": "文档 slug(与清单一致)"}},
+                "required": ["slug"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "search_knowledge",
+            "description": (
+                "在平台知识库里按关键词检索规范文档,返回命中文档的 slug/标题/摘要。"
+                "不确定读哪篇、或清单里没直接对上时用它。"
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {"query": {"type": "string", "description": "检索关键词"}},
+                "required": ["query"],
+            },
+        },
+    },
 ]
 
 
@@ -1227,6 +1257,32 @@ async def execute_use_skill(args: dict, session: AIChatSession, db: AsyncSession
     )
 
 
+async def execute_read_knowledge(args: dict, session, db) -> str:
+    slug = (args.get("slug") or "").strip()
+    if not slug:
+        return "错误：缺少 slug 参数"
+    from app.knowledge_base import get_published_doc
+    doc = await get_published_doc(db, slug)
+    if not doc:
+        return f"错误：知识库中不存在已发布的文档 slug='{slug}'(可先用 search_knowledge 检索)"
+    return f"# {doc.title}\n\n{doc.body_md}"
+
+
+async def execute_search_knowledge(args: dict, session, db) -> str:
+    query = (args.get("query") or "").strip()
+    if not query:
+        return "错误：缺少 query 参数"
+    from app.knowledge_base import search_published_docs
+    docs = await search_published_docs(db, query)
+    if not docs:
+        return f"知识库中未检索到与 '{query}' 相关的规范文档。"
+    lines = [f"检索到 {len(docs)} 篇相关规范(用 read_knowledge(slug) 读全文):"]
+    for d in docs:
+        snippet = (d.summary or d.body_md or "")[:200]
+        lines.append(f"- [{d.category}] {d.slug}: {d.title} — {snippet}")
+    return "\n".join(lines)
+
+
 # ─────────────────────────── Dispatcher ───────────────────────────
 
 TOOL_HANDLERS = {
@@ -1240,6 +1296,8 @@ TOOL_HANDLERS = {
     "export_apaas_app_design_doc": execute_export_apaas_app_design_doc,
     "save_binary_artifact": execute_save_binary_artifact,
     "use_skill": execute_use_skill,
+    "read_knowledge": execute_read_knowledge,
+    "search_knowledge": execute_search_knowledge,
 }
 
 
