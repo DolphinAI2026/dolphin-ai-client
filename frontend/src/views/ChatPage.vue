@@ -2197,11 +2197,6 @@ async function loadAdminEditorUrl() {
   }
 }
 
-// 切进「后台配置」tab 或绑定应用变化时懒加载一次
-watch([topTab, existingAppId], ([t]) => {
-  if (t === 'admin') void loadAdminEditorUrl()
-})
-
 function onApaasMenuSelected(menu: {
   menu_id: string
   menu_name?: string
@@ -2776,6 +2771,11 @@ const removeDict = (idx: number) => {
 
 const conversationId = ref<number | null>(null)
 const existingAppId = ref<number | null>(initialRouteAppId)  // 从"继续完善"进来时，关联的已有应用ID
+// 后台配置 tab: 切进 admin tab 或绑定应用变化时懒加载内嵌 URL.
+// 必须放在 existingAppId 声明之后 — watch 的源数组即时求值, 提前引用会 TDZ 崩 setup(整页白屏).
+watch([topTab, existingAppId], ([t]) => {
+  if (t === 'admin') void loadAdminEditorUrl()
+})
 const generating = ref(false)
 
 // AI-Builder 模块定位：基于文档生成/更新应用
