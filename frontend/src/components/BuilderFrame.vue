@@ -1,5 +1,6 @@
 <template>
-  <WorkbenchShell>
+  <!-- 已在 WorkbenchShell 内(如 CapabilitiesHubPage 内嵌)→ 不再套第二层壳, 只渲染内容, 避免双左栏 -->
+  <WorkbenchShell v-if="!nested">
     <section class="builder-view">
       <div v-if="$slots.actions" class="builder-page-actions">
         <slot name="actions" />
@@ -7,14 +8,24 @@
       <slot />
     </section>
   </WorkbenchShell>
+  <section v-else class="builder-view">
+    <div v-if="$slots.actions" class="builder-page-actions">
+      <slot name="actions" />
+    </div>
+    <slot />
+  </section>
 </template>
 
 <script setup lang="ts">
+import { inject } from 'vue'
 import WorkbenchShell from '@/components/WorkbenchShell.vue'
 
 defineProps<{
   breadcrumbs: Array<{ label: string; to?: string }>
 }>()
+
+// 外层若已是 WorkbenchShell(provide inWorkbenchShell)则本 BuilderFrame 不再套壳
+const nested = inject<boolean>('inWorkbenchShell', false)
 </script>
 
 <style scoped>

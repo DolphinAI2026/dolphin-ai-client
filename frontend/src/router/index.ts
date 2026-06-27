@@ -86,10 +86,16 @@ const router = createRouter({
       meta: { requiresAuth: true }
     },
     {
+      path: '/hub',
+      name: 'CapabilitiesHub',
+      component: () => import('@/views/CapabilitiesHubPage.vue'),
+      meta: { requiresAuth: true, navExpanded: true }
+    },
+    {
+      // 技能库已并入 hub;老链接 / router.push('/skills') 重定向到 hub 的技能 tab
       path: '/skills',
       name: 'Skills',
-      component: () => import('@/views/SkillLibraryPage.vue'),
-      meta: { requiresAuth: true, navExpanded: true }
+      redirect: { path: '/hub', query: { tab: 'skills' } }
     },
     {
       path: '/skills/:name/workspace',
@@ -185,10 +191,10 @@ const router = createRouter({
       meta: { requiresAuth: true, requiresPlatformAdmin: true, navExpanded: true, desktop: 'hidden' }
     },
     {
+      // 知识库已并入 hub;老链接重定向到 hub 的知识 tab(hub 内按 isPlatformAdmin 过滤可见性)
       path: '/knowledge',
       name: 'knowledge-base',
-      component: () => import('@/views/KnowledgeBasePage.vue'),
-      meta: { requiresAuth: true, requiresPlatformAdmin: true, navExpanded: true, desktop: 'hidden' }
+      redirect: { path: '/hub', query: { tab: 'knowledge' } }
     },
     {
       path: '/desktop-setup',

@@ -126,8 +126,8 @@ const platformNavItem: NavItem = __DESKTOP__
   ? { key: 'platform', label: '平台配置', icon: 'shield', path: '/platform-envs' }
   : { key: 'platform', label: '平台管理', icon: 'shield', path: '/platform-admin' }
 
-// 三模式共用的「得小帆·共性能力」入口(第1块先链技能库, 完整 hub 后续)
-const hubNavItem: NavItem = { key: 'hub', label: '得小帆·共性能力', icon: 'spark', path: '/skills' }
+// 三模式共用的「能力中心」入口 → hub 页(技能/知识/MCP/AI网关 4 tab)
+const hubNavItem: NavItem = { key: 'hub', label: '能力中心', icon: 'spark', path: '/hub' }
 
 const userAccount = computed(() => user.user?.username || '')
 const userName = computed(() => user.user?.display_name || userAccount.value || '未登录')
@@ -409,18 +409,17 @@ function renderIcon(name: string): string {
       </div>
     </nav>
 
-    <!-- 得小帆·共性能力(三模式共用入口): 技能 / MCP / AI 网关 / 知识库。
-         第1块先链到技能库, 完整 4-tab hub 弹窗后续。常驻所有模式 → 切模式不丢这些能力。 -->
+    <!-- 能力中心(三模式共用入口): 技能 / 知识库 / MCP / AI 网关。常驻所有模式 → 切模式不丢这些能力。 -->
     <a
       class="rail-item rail-hub"
-      :href="resolveHref('/skills')"
-      :class="{ active: isActive('/skills') }"
-      title="得小帆·共性能力(技能 / MCP / AI 网关 / 知识库)"
+      :href="resolveHref('/hub')"
+      :class="{ active: isActive('/hub') }"
+      title="能力中心(技能 / 知识库 / MCP / AI 网关)"
       @click="onMenuClick($event, hubNavItem)"
       @auxclick="onMenuClick($event, hubNavItem)"
     >
       <span class="rail-item-icon" v-html="renderIcon('spark')" />
-      <span class="rail-item-label">得小帆 · 共性能力</span>
+      <span class="rail-item-label">能力中心</span>
     </a>
 
     <div class="rail-foot">
@@ -476,17 +475,8 @@ function renderIcon(name: string): string {
             <path d="M7 7h10v10" />
           </svg>
         </a>
-        <a
-          v-if="user.isPlatformAdmin && !desktopHidden('/knowledge')"
-          class="console-row"
-          :class="{ active: route.path.startsWith('/knowledge') }"
-          :href="resolveHref('/knowledge')"
-          title="平台知识库"
-          @click.prevent="go('/knowledge')"
-        >
-          <span class="console-row-icon" v-html="renderIcon('store')" />
-          <span>平台知识库</span>
-        </a>
+
+        <!-- 知识库已并入「得小帆·共性能力」hub(/hub?tab=knowledge), 不再单列 footer 入口 -->
 
         <!-- v3 2026-05-20: 删主题色 picker 让 admin/frontend brand 始终一致蓝；只保留浅深切换 -->
         <!-- 2026-05-21 整 row 改成 button — 之前 label 跟太阳 icon 视觉分离体验割裂。
