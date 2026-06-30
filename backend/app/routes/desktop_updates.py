@@ -23,14 +23,30 @@ from app.deps import AuthContext, get_auth_context
 router = APIRouter(prefix="/desktop-updates", tags=["desktop-updates"])
 
 # 只允许下载更新包 / sig / manifest。挡掉路径穿越与任意文件读取。
-_SAFE_NAME = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*\.(app\.tar\.gz|app\.tar\.gz\.sig|json)$")
+_SAFE_NAME = re.compile(
+    r"^[A-Za-z0-9][A-Za-z0-9._-]*\."
+    r"(app\.tar\.gz|app\.tar\.gz\.sig|exe|exe\.sig|exe\.zip|exe\.zip\.sig|"
+    r"msi|msi\.sig|msi\.zip|msi\.zip\.sig|json)$"
+)
 
 
 def _updates_dir() -> Path:
     return Path(settings.desktop_updates_dir)
 
 
-_PKG_RE = re.compile(r"^ruijing-(.+)-(aarch64|x86_64)\.app\.tar\.gz$")
+_MAC_PKG_RE = re.compile(r"^ruijing-(.+)-(aarch64|x86_64)\.app\.tar\.gz$")
+_WIN_PKG_RE = re.compile(r"^ruijing-(.+)-windows-(x86_64|aarch64)(?:-setup)?\.(exe|msi)(?:\.zip)?$")
+
+
+def _parse_package_name(name: str) -> tuple[str, str] | None:
+    """Return (version, package_key) for packages shown in release history."""
+    m = _MAC_PKG_RE.match(name)
+    if m:
+        return m.group(1), m.group(2)
+    m = _WIN_PKG_RE.match(name)
+    if m:
+        return m.group(1), f"windows_{m.group(2)}"
+    return None
 
 
 def _ver_key(v: str) -> list:
@@ -148,11 +164,11 @@ async def list_history(ctx: Annotated[AuthContext, Depends(get_auth_context)]):
     # 从包文件聚合每个版本有哪些架构 + 最新 mtime(给没记 history 的旧版本兜底日期)
     from_files: dict[str, dict] = {}
     if d.is_dir():
-        for f in d.glob("ruijing-*.app.tar.gz"):
-            m = _PKG_RE.match(f.name)
-            if not m:
+        for f in d.glob("ruijing-*"):
+            parsed = _parse_package_name(f.name)
+            if not parsed:
                 continue
-            ver, arch = m.group(1), m.group(2)
+            ver, arch = parsed
             e = from_files.setdefault(ver, {"archs": set(), "mtime": 0.0})
             e["archs"].add(arch)
             try:
@@ -180,6 +196,8 @@ async def list_history(ctx: Annotated[AuthContext, Depends(get_auth_context)]):
             "packages": {
                 "aarch64": f"ruijing-{ver}-aarch64.app.tar.gz" if "aarch64" in archs else None,
                 "x86_64": f"ruijing-{ver}-x86_64.app.tar.gz" if "x86_64" in archs else None,
+                "windows_x86_64": f"ruijing-{ver}-windows-x86_64-setup.exe" if "windows_x86_64" in archs else None,
+                "windows_aarch64": f"ruijing-{ver}-windows-aarch64-setup.exe" if "windows_aarch64" in archs else None,
             },
         })
     out.sort(key=lambda x: _ver_key(x["version"]), reverse=True)

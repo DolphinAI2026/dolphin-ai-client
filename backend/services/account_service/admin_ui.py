@@ -640,10 +640,11 @@ a{color:var(--text-link);text-decoration:none}
               <el-table-column label="更新说明" min-width="300">
                 <template #default="{ row }"><span style="color:var(--text-secondary)">{{ row.notes || '—' }}</span></template>
               </el-table-column>
-              <el-table-column label="下载" width="180">
+              <el-table-column label="下载" width="260">
                 <template #default="{ row }">
                   <a v-if="row.packages.aarch64" :href="API+'/desktop-updates/'+row.packages.aarch64" download style="color:var(--accent);text-decoration:none;margin-right:14px;font-size:13px">Apple 芯片</a>
-                  <a v-if="row.packages.x86_64" :href="API+'/desktop-updates/'+row.packages.x86_64" download style="color:var(--accent);text-decoration:none;font-size:13px">Intel</a>
+                  <a v-if="row.packages.x86_64" :href="API+'/desktop-updates/'+row.packages.x86_64" download style="color:var(--accent);text-decoration:none;margin-right:14px;font-size:13px">Intel</a>
+                  <a v-if="row.packages.windows_x86_64" :href="API+'/desktop-updates/'+row.packages.windows_x86_64" download style="color:var(--accent);text-decoration:none;font-size:13px">Windows</a>
                 </template>
               </el-table-column>
             </el-table>

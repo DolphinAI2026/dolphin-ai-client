@@ -973,8 +973,8 @@ def build_apaas_bpmn_xml(
         'xmlns:dc="http://www.omg.org/spec/DD/20100524/DC" '
         'xmlns="http://www.omg.org/spec/BPMN/20100524/MODEL" '
         'xmlns:activiti="http://activiti.org/bpmn" '
-        'id="Definitions_Process" targetNamespace="http://bpmn.io/schema/bpmn" '
-        'exporter="ai-builder" exporterVersion="1.0">'
+        'id="Definitions_1z0losk" targetNamespace="http://bpmn.io/schema/bpmn" '
+        'exporter="bpmn-js (https://demo.bpmn.io)" exporterVersion="5.0.0">'
     )
     parts.append('<process id="Process_Process_" isExecutable="true">')
     parts.append('<startEvent id="START" name="开始"/>')
@@ -988,9 +988,8 @@ def build_apaas_bpmn_xml(
         '<activiti:executionListener xmlns:activiti="http://activiti.org/bpmn" event="end" delegateExpression="${executionListener}"/>'
         '</extensionElements>'
         '<multiInstanceLoopCharacteristics isSequential="false" xmlns:activiti="http://activiti.org/bpmn" '
-        'activiti:collection="${procPersonHandle.processUsers(processId,&apos;START&apos;,documentId,submitter)}" '
+        "activiti:collection=\"${procPersonHandle.processUsers(processId,'START_HIDDEN',documentId,submitter)}\" "
         'activiti:elementVariable="assignee">'
-        '<completionCondition>${nrOfCompletedInstances &gt; 0 and multiIsComplete}</completionCondition>'
         '</multiInstanceLoopCharacteristics>'
         '</userTask>'
     )
@@ -1013,7 +1012,7 @@ def build_apaas_bpmn_xml(
             '<activiti:executionListener xmlns:activiti="http://activiti.org/bpmn" event="end" delegateExpression="${executionListener}"/>'
             '</extensionElements>'
             '<multiInstanceLoopCharacteristics isSequential="false" xmlns:activiti="http://activiti.org/bpmn" '
-            f'activiti:collection="${{procPersonHandle.processUsers(processId,&apos;{_escape_xml_text(bpmn_id)}&apos;,documentId,submitter)}}" '
+            f"activiti:collection=\"${{procPersonHandle.processUsers(processId,'{_escape_xml_text(bpmn_id)}',documentId,submitter)}}\" "
             'activiti:elementVariable="assignee">'
             '<completionCondition>${nrOfCompletedInstances &gt; 0 and multiIsComplete}</completionCondition>'
             '</multiInstanceLoopCharacteristics>'

@@ -614,6 +614,41 @@ async def _ensure_apaas_user(db: AsyncSession, username: str, password: str, use
     return user
 
 
+async def _has_cached_platform_admin_identity(db: AsyncSession, username: str, user_info: dict) -> bool:
+    """Return True when this aPaaS account was previously verified as platform admin.
+
+    The live platform-admin probe is authoritative when it responds. If it times
+    out, keep a previously verified platform identity instead of demoting the
+    user during an otherwise successful tenant login.
+    """
+    apaas_uid = str(user_info.get("id") or user_info.get("userId") or user_info.get("user_id") or "").strip()
+    stmt = select(User).where(User.account_source == "apaas")
+    if apaas_uid:
+        stmt = stmt.where(User.apaas_user_id == apaas_uid)
+    else:
+        stmt = stmt.where(User.username == username)
+    user = (await db.execute(stmt)).scalar_one_or_none()
+    if not user:
+        return False
+    if user.is_platform_admin:
+        return True
+
+    base_url = _normalize_apaas_origin(settings.apaas_base_url)
+    credential = (
+        await db.execute(
+            select(APaaSPlatformCredential.id)
+            .where(
+                APaaSPlatformCredential.user_id == user.id,
+                APaaSPlatformCredential.base_url == base_url,
+                APaaSPlatformCredential.account == username,
+                APaaSPlatformCredential.status == "connected",
+            )
+            .limit(1)
+        )
+    ).scalar_one_or_none()
+    return credential is not None
+
+
 async def _upsert_platform_credential(db: AsyncSession, user: User, username: str, password: str, token: str) -> None:
     base_url = _normalize_apaas_origin(settings.apaas_base_url)
     row = (
@@ -733,9 +768,11 @@ async def _try_apaas_login_flow(user_data: UserLogin, db: AsyncSession) -> Optio
     if not username or not password or not settings.apaas_base_url:
         return None
 
+    platform_probe_failed = False
     try:
         platform_token, platform_payload = await _apaas_platform_login(username, password)
     except Exception as exc:
+        platform_probe_failed = True
         logger.warning(
             "aPaaS platform-admin login probe failed; continue backend login (%s): %s",
             type(exc).__name__,
@@ -761,23 +798,29 @@ async def _try_apaas_login_flow(user_data: UserLogin, db: AsyncSession) -> Optio
         return None
 
     user_info = _extract_apaas_user(backend_payload or platform_payload, username)
+    if platform_probe_failed and not is_platform_admin:
+        is_platform_admin = await _has_cached_platform_admin_identity(db, username, user_info)
 
     switchable_items: list[dict] = []
-    if has_backend_identity and not is_platform_admin:
+    if has_backend_identity:
         switchable_items = await _apaas_switchable_tenants(backend_token, default_tenant_id)
+    platform_items: list[dict] = []
+    if is_platform_admin and platform_token:
+        try:
+            platform_items = await _apaas_all_tenants(platform_token)
+        except Exception as exc:
+            logger.warning("aPaaS platform tenant sync failed during login: %s", exc)
     admin_tenant_ids = {_tenant_item_id(item) for item in switchable_items if _tenant_item_id(item)}
 
     if has_backend_identity:
-        if is_platform_admin:
-            available_items = _merge_tenant_items(
-                [default_tenant_item] if default_tenant_item else [],
-                [],
-            )
-        else:
-            available_items = _merge_tenant_items(
-                [default_tenant_item] if default_tenant_item else [],
-                switchable_items,
-            )
+        available_items = _merge_tenant_items(
+            [default_tenant_item] if default_tenant_item else [],
+            switchable_items,
+        )
+        if is_platform_admin and platform_items:
+            available_ids = {_tenant_item_id(item) for item in available_items if _tenant_item_id(item)}
+            enriched_items = [item for item in platform_items if _tenant_item_id(item) in available_ids]
+            available_items = _merge_tenant_items(available_items, enriched_items)
         available_items = [item for item in available_items if _tenant_enabled(item)]
     else:
         available_items = []
@@ -785,12 +828,23 @@ async def _try_apaas_login_flow(user_data: UserLogin, db: AsyncSession) -> Optio
     user = await _ensure_apaas_user(db, username, password, user_info, is_platform_admin)
     if platform_token:
         await _upsert_platform_credential(db, user, username, password, platform_token)
+    if is_platform_admin:
+        for item in platform_items:
+            if _tenant_enabled(item):
+                await _ensure_apaas_tenant(db, item)
 
     local_tenants: list[Tenant] = []
     for idx, item in enumerate(available_items):
         tenant = await _ensure_apaas_tenant(db, item, username, password)
         local_tenants.append(tenant)
-        if backend_token:
+        should_bind_backend_token = (
+            bool(backend_token)
+            and (
+                not is_platform_admin
+                or (tenant.apaas_tenant_id_str and tenant.apaas_tenant_id_str == default_tenant_id)
+            )
+        )
+        if should_bind_backend_token:
             user.apaas_token = backend_token
             user.apaas_tenant_id = tenant.apaas_tenant_id_str
             await _upsert_user_credential(
@@ -1261,9 +1315,11 @@ async def switch_tenant(
 ):
     """已登录用户切换 active tenant，签发携带新 tid 的 JWT。
 
-    平台管理员可以切到任意 active 租户；普通用户仅限自己 active membership。
+    本地兜底平台管理员可以切到任意 active 租户；aPaaS 登录用户仅限自己可登录的
+    active membership。aPaaS 平台管理员的全量租户同步不等于拥有工作台登录权限。
     """
-    if ctx.user.is_platform_admin:
+    is_apaas_account = ctx.user.account_source == "apaas" or bool(ctx.user.apaas_user_id)
+    if ctx.user.is_platform_admin and not is_apaas_account:
         tenant = (
             await db.execute(
                 select(Tenant).where(Tenant.id == data.tenant_id, Tenant.status == 1)
