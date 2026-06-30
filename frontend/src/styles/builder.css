@@ -212,6 +212,14 @@ select,
   border-color: var(--err) !important;
   color: var(--err) !important;
 }
+/* link 按钮: 必须重置 --primary/--danger 的实心背景(那俩带 !important),
+   否则 link type=primary/danger 会变实心色块 + 文字色=背景色 → 字看不见(暗色下尤甚) */
+.el-button.is-link,
+.el-button.is-link:hover,
+.el-button.is-link:focus {
+  background: transparent !important;
+  border-color: transparent !important;
+}
 .el-button.is-link {
   color: var(--brand);
 }
@@ -219,6 +227,9 @@ select,
   color: var(--brand-hover);
 }
 .el-button--danger.is-link {
+  color: var(--err);
+}
+.el-button--danger.is-link:hover {
   color: var(--err);
 }
 

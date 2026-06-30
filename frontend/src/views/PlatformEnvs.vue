@@ -11,7 +11,7 @@
       </button>
     </template>
     <div class="envs-main builder-page">
-      <div class="tabs-bar">
+      <div v-if="!only" class="tabs-bar">
         <div class="tabs-group">
           <button :class="['tab-item', { active: activeTab === 'envs' }]" @click="setActiveTab('envs')">平台环境</button>
           <button :class="['tab-item', { active: activeTab === 'llm' }]" @click="setActiveTab('llm')">模型配置</button>
@@ -346,12 +346,15 @@ const router = useRouter()
 
 type SettingsTab = 'envs' | 'llm'
 
+// only: 在「能力中心」AI网关 tab 内嵌时传 'llm' —— 只显模型配置, 隐藏 tab 条与平台环境
+const props = defineProps<{ only?: SettingsTab }>()
+
 function normalizeTab(value: unknown): SettingsTab {
   const raw = Array.isArray(value) ? value[0] : value
   return raw === 'llm' ? 'llm' : 'envs'
 }
 
-const activeTab = ref<SettingsTab>(normalizeTab(route.query.tab))
+const activeTab = ref<SettingsTab>(props.only ?? normalizeTab(route.query.tab))
 const activeTabLabel = computed(() => {
   if (activeTab.value === 'envs') return '平台环境'
   return '模型配置'
