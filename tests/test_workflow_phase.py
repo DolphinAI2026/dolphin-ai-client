@@ -50,9 +50,14 @@ def test_build_workflow_payload_accepts_legacy_form_and_role_keys():
     ]
     assert len(approve_nodes) == 1
     approver = approve_nodes[0]["data"]["approvers"][0]
-    assert approver["type"] == "ROLE"
-    assert approver["value"] == "role_id_1"
-    assert payload["processCode"] == "proc_leave_request"
+    assert approver == {
+        "type": "SUBMITTER",
+        "value": "SUBMITTER",
+        "displayData": {"label": "申请人"},
+    }
+    assert "processCode" not in payload
+    assert "processName" not in payload
+    assert "processDataSource" not in payload
     assert "START_HIDDEN" in payload["bpmn"]
 
 
@@ -125,6 +130,34 @@ def test_execute_create_workflow_saves_unified_payload():
 
     assert result["nodes_count"] == 3
     assert result["edges_count"] == 2
-    assert result["process_code"] == "proc_leave_request"
+    assert result["process_code"] is None
     assert client.saved[0] == "app_1"
-    assert client.saved[1]["processDataSource"]["objectId"] == "boc_code_form_1"
+    assert "processDataSource" not in client.saved[1]
+
+
+def test_workflow_payload_matches_designer_canvas_ids_for_runtime():
+    payload, reason = build_workflow_payload(
+        {
+            "name": "请假审批",
+            "form": "请假申请",
+            "nodes": [
+                {"name": "部门经理审批", "role": "dept_manager", "type": "approve"},
+            ],
+        },
+        FORM_RESULTS,
+        ROLE_CODES,
+        app_id="app_1",
+    )
+
+    assert reason is None
+    assert payload is not None
+    assert [(n["id"], n["nodeId"], n["data"]["type"]) for n in payload["nodes"]] == [
+        ("cell-2", "START", "START"),
+        ("cell-3", "END", "END"),
+        ("cell-4", payload["nodes"][2]["nodeId"], "APPROVE"),
+    ]
+    assert payload["edges"][0]["source"] == "cell-2"
+    assert payload["edges"][0]["target"] == "cell-4"
+    assert payload["edges"][1]["source"] == "cell-4"
+    assert payload["edges"][1]["target"] == "cell-3"
+    assert "START_HIDDEN" in payload["bpmn"]

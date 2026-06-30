@@ -36,6 +36,8 @@ def _approve_node_data_template(title: str, bpmn_id: str, approvers: list) -> di
             "approverSource": "", "approverValue": "", "appointType": "",
             "approverType": "APPROVER", "personType": "", "roleId": [],
             "approvalSequenceType": "",
+            "appointValue": "", "xdapDepartments": None, "xdapUsers": [],
+            "xdapRoles": None,
         },
         "approvers": approvers,
         "enableComponentPermission": True,
@@ -45,23 +47,23 @@ def _approve_node_data_template(title: str, bpmn_id: str, approvers: list) -> di
         "processEventStatus": False, "rejectRemindList": [],
         "rejectRemindStatus": False, "approveIsApplicantSkip": False,
         "approveButtons": [
-            {"buttonCode": "APPROVE", "buttonName": "同意", "buttonLabel": "同意", "buttonStatus": True, "buttonStyle": "primary", "buttonLabelI18nAssociated": False},
-            {"buttonCode": "REJECT", "buttonName": "拒绝", "buttonLabel": "拒绝", "buttonStatus": True, "buttonLabelI18nAssociated": False},
-            {"buttonCode": "INQUIRE", "buttonName": "征询", "buttonLabel": "征询", "buttonStyle": "primary", "buttonLabelI18nAssociated": False},
-            {"buttonCode": "REASSIGN", "buttonName": "转交", "buttonLabel": "转交", "buttonStyle": "primary", "buttonLabelI18nAssociated": False, "operatorScope": [], "index": 3},
-            {"buttonCode": "ADDONE", "buttonName": "加签", "buttonLabel": "加签", "buttonStyle": "primary", "buttonLabelI18nAssociated": False},
-            {"buttonCode": "FRONTADDONE", "buttonName": "前加签", "buttonLabel": "前加签", "buttonStyle": "primary", "buttonLabelI18nAssociated": False},
-            {"buttonCode": "ANDCOUNTERSIGN", "buttonName": "并加签", "buttonLabel": "并加签", "buttonStyle": "primary", "buttonLabelI18nAssociated": False},
-            {"buttonCode": "OVERRULE", "buttonName": "驳回", "buttonLabel": "驳回", "buttonStyle": "primary", "buttonLabelI18nAssociated": False, "approveButtonConfigList": [], "overruleType": "any_node", "overruleReapprovalMethodAppoint": "DEFAULT", "overruleReapprovalMethod": "LEVEL_BY_LEVEL_APPROVAL", "modified": False},
-            {"buttonCode": "WITHDRAW", "buttonName": "撤回", "buttonLabel": "撤回", "buttonStatus": False, "buttonStyle": "primary", "buttonLabelI18nAssociated": False, "withdrawalType": "NEXT_NODE", "withdrawalList": []},
-            {"buttonCode": "ABSTAIN", "buttonName": "保留意见", "buttonLabel": "保留意见", "buttonStatus": False, "buttonStyle": "primary", "buttonLabelI18nAssociated": False},
+            {"buttonCode": "APPROVE", "buttonName": "同意", "buttonLabel": "同意", "buttonStatus": True, "buttonStyle": "primary"},
+            {"buttonCode": "REJECT", "buttonName": "拒绝", "buttonLabel": "拒绝", "buttonStatus": True},
+            {"buttonCode": "INQUIRE", "buttonName": "征询", "buttonLabel": "征询", "buttonStyle": "primary"},
+            {"buttonCode": "REASSIGN", "buttonName": "转交", "buttonLabel": "转交", "buttonStyle": "primary", "operatorScope": [], "index": 3},
+            {"buttonCode": "ADDONE", "buttonName": "加签", "buttonLabel": "加签", "buttonStyle": "primary"},
+            {"buttonCode": "FRONTADDONE", "buttonName": "前加签", "buttonLabel": "前加签", "buttonStyle": "primary"},
+            {"buttonCode": "ANDCOUNTERSIGN", "buttonName": "并加签", "buttonLabel": "并加签", "buttonStyle": "primary"},
+            {"buttonCode": "OVERRULE", "buttonName": "驳回", "buttonLabel": "驳回", "buttonStyle": "primary", "approveButtonConfigList": [], "overruleType": "any_node", "overruleReapprovalMethodAppoint": "DEFAULT", "overruleReapprovalMethod": "LEVEL_BY_LEVEL_APPROVAL", "modified": False},
+            {"buttonCode": "WITHDRAW", "buttonName": "支持撤回", "buttonLabel": "撤回", "buttonStatus": False, "buttonStyle": "primary", "withdrawalType": "NEXT_NODE", "withdrawalList": []},
+            {"buttonCode": "ABSTAIN", "buttonName": "保留意见", "buttonLabel": "保留意见", "buttonStatus": False, "buttonStyle": "primary"},
         ],
         "initiatorButtons": [
-            {"buttonCode": "INITIATOR_TERMINATE", "buttonName": "终止", "buttonLabel": "终止", "buttonStatus": False, "buttonStyle": "primary", "buttonLabelI18nAssociated": False},
+            {"buttonCode": "INITIATOR_TERMINATE", "buttonName": "终止", "buttonLabel": "终止", "buttonStatus": False, "buttonStyle": "primary"},
         ],
         "operationButtons": [
-            {"buttonCode": "INFORM", "buttonName": "知会", "buttonLabel": "知会", "buttonStatus": False, "buttonStyle": "primary", "buttonLabelI18nAssociated": False},
-            {"buttonCode": "STAGING", "buttonName": "暂存", "buttonLabel": "暂存", "buttonStatus": False, "buttonStyle": "primary", "buttonLabelI18nAssociated": False},
+            {"buttonCode": "INFORM", "buttonName": "知会", "buttonLabel": "知会", "buttonStatus": False, "buttonStyle": "primary"},
+            {"buttonCode": "STAGING", "buttonName": "暂存", "buttonLabel": "暂存", "buttonStatus": False, "buttonStyle": "primary"},
         ],
         "overtimeHandleConfig": {"status": False, "handleType": "RECOMMEND_DEAL_TIME", "timeUnit": "H"},
         "approveSkipConfig": False,
@@ -71,10 +73,8 @@ def _approve_node_data_template(title: str, bpmn_id: str, approvers: list) -> di
         "externalSystemApproval": {"status": False, "linkUrl": "", "linkMobileUrl": ""},
         "nodeId": bpmn_id,
         "timeoutRemindList": [],
-        "saveFlag": True,
         "supportBatchApprove": True,
         "supportBatchReject": True,
-        "titleI18nAssociated": False,
     }
 
 
@@ -89,12 +89,11 @@ def _start_node_data() -> dict:
         "approvePhraseConfig": {"handleType": "INPUT_TYPE", "phrase": "", "status": False},
         "approveCommentConfig": {"required": False, "attachmentUpload": True, "requiredBtns": [], "show": True},
         "formButtons": [
-            {"buttonCode": "NORMAL_TERMINATE", "buttonName": "终止", "buttonLabel": "终止", "buttonStatus": False, "buttonStyle": "primary", "buttonLabelI18nAssociated": False},
-            {"buttonCode": "RESTART", "buttonName": "重新提交", "buttonLabel": "重新提交", "buttonStatus": False, "buttonStyle": "primary", "buttonLabelI18nAssociated": False},
-            {"buttonCode": "WITHDRAW", "buttonName": "撤回", "buttonLabel": "撤回", "buttonStatus": False, "buttonStyle": "primary", "buttonLabelI18nAssociated": False, "withdrawalType": "NEXT_NODE", "withdrawalList": []},
+            {"buttonCode": "NORMAL_TERMINATE", "buttonName": "终止", "buttonLabel": "终止", "buttonStatus": False, "buttonStyle": "primary"},
+            {"buttonCode": "RESTART", "buttonName": "重新提交", "buttonLabel": "重新提交", "buttonStatus": True, "buttonStyle": "primary"},
+            {"buttonCode": "WITHDRAW", "buttonName": "撤回", "buttonLabel": "撤回", "buttonStatus": False, "buttonStyle": "primary", "withdrawalType": "SPECIFY_NODES", "withdrawalList": []},
         ],
         "externalSystemApproval": {"status": False, "linkUrl": "", "linkMobileUrl": ""},
-        "saveFlag": True, "titleI18nAssociated": False,
     }
 
 
@@ -104,13 +103,9 @@ def _end_node_data() -> dict:
         "type": "END", "nodeId": "END", "title": "结束",
         "enableComponentPermission": False,
         "operationButtons": [
-            {"buttonCode": "INFORM", "buttonName": "知会", "buttonLabel": "知会", "buttonStatus": False, "buttonStyle": "primary", "buttonLabelI18nAssociated": False},
+            {"buttonCode": "INFORM", "buttonName": "知会", "buttonLabel": "知会", "buttonStatus": False, "buttonStyle": "primary"},
         ],
         "externalSystemApproval": {"status": False, "linkUrl": "", "linkMobileUrl": ""},
-        "formButtons": [
-            {"buttonCode": "INFORM", "buttonName": "知会", "buttonLabel": "知会", "buttonStatus": False, "buttonStyle": "primary", "buttonLabelI18nAssociated": False},
-        ],
-        "saveFlag": True, "titleI18nAssociated": False,
     }
 
 
@@ -119,17 +114,18 @@ def _process_edge_template(edge_cell_id: str, source: str, target: str) -> dict:
     return {
         "id": edge_cell_id,
         "data": {
-            "title": "\\\\", "type": "EDGE", "defaultFlow": True,
-            "id": _bpmn_random_id(), "titleI18nAssociated": False,
+            "title": "\\", "type": "EDGE", "defaultFlow": True,
+            "id": _bpmn_random_id(),
         },
         "align": "center", "bendable": True, "editable": False, "endArrow": "classic",
         "fontColor": "rgba(0, 0, 0, 1)", "labelBackgroundColor": "#f8f9fa",
         "movable": True, "orthogonal": True, "rounded": True, "shape": "connector",
         "sourceAnchorDx": "0", "stroke": "#313133", "edge": "orth",
         "sourceAnchorX": "0.5", "sourceAnchorY": "1",
-        "targetAnchorX": "0.5", "targetAnchorY": "0",
-        "label": "\\\\", "x": 0, "y": 0, "width": 0, "height": 0,
-        "relative": True, "translateControlPoints": True, "labelI18nAssociated": False,
+        "targetAnchorX": "0.5", "targetAnchorY": "0", "targetAnchorDx": "0",
+        "targetAnchorDy": "0",
+        "label": "\\", "x": 0, "y": 0, "width": 0, "height": 0,
+        "relative": True, "translateControlPoints": True, "verticalAlign": "middle",
         "schema": {
             "configurators": ["BpmnConfigTitle", "BpmnConfigDefaultFlow"], "hooks": {},
         },
@@ -180,10 +176,10 @@ def _build_executable_bpmn_xml(
                  'xmlns:dc="http://www.omg.org/spec/DD/20100524/DC" '
                  'xmlns="http://www.omg.org/spec/BPMN/20100524/MODEL" '
                  'xmlns:activiti="http://activiti.org/bpmn" '
-                 f'id="Definitions_{process_def_id}" '
+                 'id="Definitions_1z0losk" '
                  'targetNamespace="http://bpmn.io/schema/bpmn" '
-                 'exporter="ai-builder" exporterVersion="1.0">')
-    parts.append(f'<process id="Process_{process_def_id}" isExecutable="true">')
+                 'exporter="bpmn-js (https://demo.bpmn.io)" exporterVersion="5.0.0">')
+    parts.append('<process id="Process_Process_" isExecutable="true">')
     # startEvent + hidden start task.
     #
     # aPaaS VERSION_1.1 runtime expects an executable task after START. Without
@@ -202,9 +198,8 @@ def _build_executable_bpmn_xml(
         '</extensionElements>'
         '<multiInstanceLoopCharacteristics isSequential="false" '
         'xmlns:activiti="http://activiti.org/bpmn" '
-        'activiti:collection="${procPersonHandle.processUsers(processId,&apos;START_HIDDEN&apos;,documentId,submitter)}" '
+        "activiti:collection=\"${procPersonHandle.processUsers(processId,'START_HIDDEN',documentId,submitter)}\" "
         'activiti:elementVariable="assignee">'
-        '<completionCondition>${nrOfCompletedInstances &gt; 0 and multiIsComplete}</completionCondition>'
         '</multiInstanceLoopCharacteristics>'
         '</userTask>'
     )
@@ -229,7 +224,7 @@ def _build_executable_bpmn_xml(
             '</extensionElements>'
             '<multiInstanceLoopCharacteristics isSequential="false" '
             'xmlns:activiti="http://activiti.org/bpmn" '
-            f'activiti:collection="${{procPersonHandle.processUsers(processId,&apos;{bid}&apos;,documentId,submitter)}}" '
+            f"activiti:collection=\"${{procPersonHandle.processUsers(processId,'{bid}',documentId,submitter)}}\" "
             'activiti:elementVariable="assignee">'
             '<completionCondition>${nrOfCompletedInstances &gt; 0 and multiIsComplete}</completionCondition>'
             '</multiInstanceLoopCharacteristics>'
@@ -287,12 +282,12 @@ def _build_process_payload_v2(
     # START / END 节点 — 必须含完整 data 字段, 否则平台后端 deserialize 成
     # NodeStartConfig/NodeEndConfig 时为 null → 触发 NPE "newData is null".
     # 实证 docs/captures/process-*.json START/END 都有 type/formButtons/等完整 data.
-    start_cell_id = "START"
-    end_cell_id = "END"
+    start_cell_id = "cell-2"
+    end_cell_id = "cell-3"
     nodes = [
         {"id": start_cell_id, "x": 372, "y": 32, "height": 64, "width": 64,
          "timeBoudries": [], "data": _start_node_data(), "nodeId": "START"},
-        {"id": end_cell_id, "x": 372, "y": 160 + 160 * max(1, len(stages_with_role)),
+        {"id": end_cell_id, "x": 372, "y": 240 + 120 * max(1, len(stages_with_role)),
          "height": 64, "width": 64,
          "timeBoudries": [], "data": _end_node_data(), "nodeId": "END"},
     ]
@@ -301,12 +296,13 @@ def _build_process_payload_v2(
     stage_bpmn_meta = []  # [{bpmn_id, title, next_edge_bpmn_id}]
     edge_bpmn_meta = []   # [{bpmn_id, source, target}]
     prev_node_id = start_cell_id
-    # START/END 的画布 id 就用 START/END；审批节点画布 id 用 cell-*，
-    # 运行态/BPMN nodeId 用 BPMN_*。
+    # 画布上的 START/END 也用 cell-*；运行态/BPMN nodeId 仍是 START/END。
+    # 平台设计器保存的可运行流程就是这种形态：edges 连接 cell-*，
+    # BPMN XML 连接 START_HIDDEN / BPMN_* / END。
     prev_bpmn_id = "START"
-    cell_idx = 1
-    edge_idx = len(stages_with_role) + 2
-    y_pos = 200
+    cell_idx = 3
+    edge_idx = len(stages_with_role) + 3
+    y_pos = 150
     for stage_idx, stage in enumerate(stages_with_role, start=1):
         cell_idx += 1
         cell_id = f"cell-{cell_idx}"
@@ -315,7 +311,7 @@ def _build_process_payload_v2(
         if approver_type == "SUBMITTER":
             approvers = [{
                 "type": "SUBMITTER", "value": "SUBMITTER",
-                "displayData": {"id": "SUBMITTER", "label": "申请人"},
+                "displayData": {"label": "申请人"},
             }]
         else:
             value = str(stage.get("approver_value") or "")
@@ -326,7 +322,7 @@ def _build_process_payload_v2(
             }]
         title = stage.get("name") or f"审批 {stage_idx}"
         nodes.append({
-            "id": cell_id, "x": 348, "y": y_pos, "height": 48, "width": 112,
+            "id": cell_id, "x": 340, "y": y_pos, "height": 48, "width": 112,
             "timeBoudries": [],
             "data": _approve_node_data_template(
                 title=title, bpmn_id=bpmn_id, approvers=approvers,
@@ -377,22 +373,15 @@ def _build_process_payload_v2(
         edges_data=edge_bpmn_meta,
     )
 
-    # 2026-05-26 修 500: 平台必须有 processDataSource.objectId = boc_code_<form_id>
-    # 否则不知道流程绑哪张表 → 500. capture 实证.
-    process_data_source = {
-        "sourceType": "SOURCE_TYPE_BO",
-        "objectId": f"boc_code_{form_id}",
-    }
     # processGlobalConfig 平台 UI 默认填的流程标题模板 (capture 实证)
     process_global_config = {
         "titleConfigList": [
             {"componentId": "submitter", "name": "发起人", "type": "COMPONENT"},
             {"value": "创建的", "type": "TEXT"},
             {"componentId": "formName", "name": "表单名称", "type": "COMPONENT"},
-            {"value": "流程\\n\n", "type": "TEXT"},
+            {"value": "流程\n", "type": "TEXT"},
         ],
         "processDisplayFieldList": _process_display_fields(form_components),
-        "titleConfigListI18nAssociated": False,
         "approveUiMobile": "MODAL",
         "approveUiPc": "DETAIL",
         "processViewDisplayField": "processStatus",
@@ -401,9 +390,6 @@ def _build_process_payload_v2(
         "appId": app_id,
         "formId": form_id,
         "menuId": menu_id,
-        "tenantId": "",
-        "processName": process_name,
-        "processCode": process_code,
         "bpmn": bpmn_xml,
         "status": "ENABLE",
         "engine": "VERSION_1.1",
@@ -412,11 +398,7 @@ def _build_process_payload_v2(
         "processRule": {},
         "globalSettings": {},
         "processGlobalConfig": process_global_config,
-        "processDataSource": process_data_source,
         "openProcessVersion": False,
-        "boExist": True,
-        "boRemindExist": True,
-        "predictionFlag": False,
     }
 
 

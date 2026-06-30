@@ -26,11 +26,32 @@ WF = {
 def test_build_payload_binds_form_and_role_ids():
     payload, reason = workflow_phase.build_workflow_payload(WF, FORM_RESULTS, ROLE_MAP, app_id="app1")
     assert reason is None
-    assert payload["processDataSource"]["objectId"] == "boc_code_F_report"
+    assert "processDataSource" not in payload
+    assert "processName" not in payload
+    assert "processCode" not in payload
     assert payload["formId"] == "F_report"
     assert payload["menuId"] == "M_report"
-    approve_nodes = [n for n in payload["nodes"] if n["id"] not in ("START", "END")]
-    assert approve_nodes[0]["data"]["approvers"][0]["value"] == "RID_1"  # 角色 id 不是 code
+    approve_nodes = [n for n in payload["nodes"] if n["data"]["type"] == "APPROVE"]
+    assert approve_nodes[0]["data"]["approvers"][0] == {
+        "type": "SUBMITTER",
+        "value": "SUBMITTER",
+        "displayData": {"label": "申请人"},
+    }
+    assert approve_nodes[1]["data"]["approvers"][0]["value"] == "SUBMITTER"
+
+
+def test_explicit_role_approval_still_binds_role_ids():
+    wf = {
+        **WF,
+        "nodes": [
+            {"name": "班组长审批", "role_code": "role_team_leader", "type": "role_approval"},
+            {"name": "质量经理审批", "role_code": "role_quality_mgr", "approver_type": "ROLE"},
+        ],
+    }
+    payload, reason = workflow_phase.build_workflow_payload(wf, FORM_RESULTS, ROLE_MAP, app_id="app1")
+    assert reason is None
+    approve_nodes = [n for n in payload["nodes"] if n["data"]["type"] == "APPROVE"]
+    assert approve_nodes[0]["data"]["approvers"][0]["value"] == "RID_1"
     assert approve_nodes[1]["data"]["approvers"][0]["value"] == "RID_2"
 
 
@@ -43,7 +64,7 @@ def test_build_payload_missing_form_returns_reason():
 
 
 def test_build_payload_missing_role_returns_reason():
-    wf = {**WF, "nodes": [{"name": "审批", "role_code": "role_unknown"}]}
+    wf = {**WF, "nodes": [{"name": "审批", "role_code": "role_unknown", "type": "role_approval"}]}
     payload, reason = workflow_phase.build_workflow_payload(wf, FORM_RESULTS, ROLE_MAP, app_id="app1")
     assert payload is None
     assert reason and "role_unknown" in reason
@@ -67,7 +88,7 @@ async def test_create_workflows_calls_save_and_is_non_fatal():
         events.append(ev)
 
     assert len(saved) == 1
-    assert saved[0][1]["processName"] == "检测报告审批流"
+    assert "processName" not in saved[0][1]
     assert any(e.get("stage") == 5 for e in events)
     assert any("坏的" in (e.get("step") or "") for e in events)
     assert events[-1]["created"] == 1

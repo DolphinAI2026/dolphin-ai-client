@@ -53,8 +53,8 @@ def test_bpmn_sequenceflow_refs_resolve_to_defined_ids():
     ]
     start_node = next(node for node in p["nodes"] if node["data"]["type"] == "START")
     end_node = next(node for node in p["nodes"] if node["data"]["type"] == "END")
-    assert start_node["id"] == "START"
-    assert end_node["id"] == "END"
+    assert start_node["id"] == "cell-2"
+    assert end_node["id"] == "cell-3"
     assert all(node_id.startswith("cell-") for node_id in approve_canvas_ids)
     assert all(node_id.startswith("BPMN_") for node_id in approve_bpmn_node_ids)
     assert not set(approve_canvas_ids) & set(approve_bpmn_node_ids)
@@ -76,4 +76,7 @@ def test_bpmn_uses_hidden_start_task_for_runtime_flow_image():
     assert ("START", "START_HIDDEN") in refs
     assert not any(src == "START" and tgt != "START_HIDDEN" for src, tgt in refs)
     assert any(src == "START_HIDDEN" and tgt.startswith("BPMN_") for src, tgt in refs)
-    assert "processUsers(processId,&apos;START_HIDDEN&apos;,documentId,submitter)" in bpmn
+    assert "processUsers(processId,'START_HIDDEN',documentId,submitter)" in bpmn
+    start_hidden = re.search(r'<userTask\s+id="START_HIDDEN".*?</userTask>', bpmn, re.S)
+    assert start_hidden
+    assert "<completionCondition>" not in start_hidden.group(0)

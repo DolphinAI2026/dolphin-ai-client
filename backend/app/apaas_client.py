@@ -1008,24 +1008,71 @@ class APaaSClient:
 
         async with httpx.AsyncClient(verify=False, timeout=APAAS_HTTP_TIMEOUT) as client:
             headers = self._get_headers(app_id)
-            response = await client.post(url, headers=headers, json=payload)
-            elapsed_ms = (time.time() - start) * 1000
-            # 不用 response.raise_for_status()：它在读响应体之前就抛，把 apaas 的 500
-            # 真错因（哪个字段 null / NPE 堆栈）丢掉，调用方只看到通用 "Server error 500"
-            # 根本没法定位（实测 /process/save/processConfig 500 长期不可调试）。
-            # 非 2xx 时显式捕获平台响应体并带进异常。
-            if response.status_code >= 400:
-                body = (response.text or "")[:2000]
-                _log_response(url, response.status_code, body, elapsed_ms, method="POST", request_body=_to_json(payload))
-                raise Exception(
-                    f"保存流程失败：apaas 返回 HTTP {response.status_code}。平台错误详情：{body}"
+
+            async def _post_save(body_payload: dict, *, started_at: float) -> dict:
+                response = await client.post(url, headers=headers, json=body_payload)
+                elapsed_ms = (time.time() - started_at) * 1000
+                # 不用 response.raise_for_status()：它在读响应体之前就抛，把 apaas 的 500
+                # 真错因（哪个字段 null / NPE 堆栈）丢掉，调用方只看到通用 "Server error 500"
+                # 根本没法定位（实测 /process/save/processConfig 500 长期不可调试）。
+                # 非 2xx 时显式捕获平台响应体并带进异常。
+                if response.status_code >= 400:
+                    body = (response.text or "")[:2000]
+                    _log_response(
+                        url,
+                        response.status_code,
+                        body,
+                        elapsed_ms,
+                        method="POST",
+                        request_body=_to_json(body_payload),
+                    )
+                    raise Exception(
+                        f"保存流程失败：apaas 返回 HTTP {response.status_code}。平台错误详情：{body}"
+                    )
+                data = response.json()
+
+                _log_response(
+                    url,
+                    response.status_code,
+                    data,
+                    elapsed_ms,
+                    method="POST",
+                    request_body=_to_json(body_payload),
                 )
-            data = response.json()
 
-            _log_response(url, response.status_code, data, elapsed_ms, method="POST", request_body=_to_json(payload))
+                if data.get("code") not in ("ok",):
+                    raise Exception(data.get("message", "保存流程失败"))
+                return data
 
-            if data.get("code") not in ("ok",):
-                raise Exception(data.get("message", "保存流程失败"))
+            async def _ensure_menu_process_binding(save_data: dict) -> None:
+                process_config = save_data.get("data") if isinstance(save_data.get("data"), dict) else None
+                process_id = str(
+                    (process_config or {}).get("id")
+                    or payload.get("id")
+                    or payload.get("processId")
+                    or ""
+                ).strip()
+                menu_id = str(
+                    (process_config or {}).get("menuId")
+                    or payload.get("menuId")
+                    or ""
+                ).strip()
+                if not process_id or not menu_id:
+                    return
+                try:
+                    await self.bind_menu_process(app_id, menu_id, process_id)
+                except Exception as exc:  # noqa: BLE001 - flow is saved; surface binding issue in logs.
+                    logger.warning(
+                        "save_process_config: 流程已保存但菜单 processId 绑定失败 "
+                        "(app_id=%s, menu_id=%s, process_id=%s): %s",
+                        app_id,
+                        menu_id,
+                        process_id,
+                        exc,
+                    )
+
+            data = await _post_save(payload, started_at=start)
+            await _ensure_menu_process_binding(data)
             return data
 
     async def save_simple_rule(self, app_id: str, menu_id: str, rule_config: dict) -> dict:
@@ -2065,6 +2112,107 @@ class APaaSClient:
                 logger.info(f"菜单创建成功: {menu_name}")
                 return data.get("data", {})
             raise Exception(data.get("message", "创建菜单失败"))
+
+    async def bind_menu_process(
+        self,
+        app_id: str,
+        menu_id: str,
+        process_id: str,
+    ) -> dict:
+        """Bind a MODEL menu to its workflow processId.
+
+        Runtime form submission resolves the active approval flow through the
+        menu's processId. Saving processConfig creates the process, but some
+        API paths do not backfill this menu field automatically.
+        """
+        resolved_menu_id = str(menu_id or "").strip()
+        resolved_process_id = str(process_id or "").strip()
+        if not resolved_menu_id or not resolved_process_id:
+            raise Exception("menu_id 和 process_id 都不能为空")
+
+        menus = await self.query_menus(app_id)
+        target = None
+
+        def _walk(nodes):
+            nonlocal target
+            for n in nodes or []:
+                if not isinstance(n, dict):
+                    continue
+                if str(n.get("id") or n.get("menuId") or "") == resolved_menu_id:
+                    target = n
+                    return
+                children = n.get("submenus") or n.get("children") or n.get("subMenus") or n.get("menuList")
+                if children:
+                    _walk(children)
+                if target is not None:
+                    return
+
+        _walk(menus or [])
+        if not target:
+            raise Exception(f"找不到 menu_id={resolved_menu_id} 的菜单")
+
+        current_process_id = str(target.get("processId") or "").strip()
+        if current_process_id == resolved_process_id:
+            return {"id": resolved_menu_id, "processId": resolved_process_id, "unchanged": True}
+
+        payload = {
+            k: v for k, v in target.items()
+            if k not in ("submenus", "children", "subMenus", "menuList")
+        }
+        payload["processId"] = resolved_process_id
+        payload.setdefault("appId", app_id)
+        payload.setdefault("menuNameI18nResourceCode", "")
+        payload.setdefault("menuNameI18n", {})
+        payload.setdefault("menuCustomIcon", "")
+        payload.setdefault("datasourceName", "")
+
+        url = f"{self.base_url}/xdap-app/menu/save/menu"
+        _log_request(
+            "POST",
+            url,
+            {
+                "_summary": "bind menu processId",
+                "menu_id": resolved_menu_id,
+                "old_process_id": current_process_id,
+                "new_process_id": resolved_process_id,
+            },
+        )
+        start = time.time()
+        async with httpx.AsyncClient(verify=False, timeout=APAAS_HTTP_TIMEOUT) as client:
+            response = await client.post(url, headers=self._get_headers(app_id), json=payload)
+            elapsed_ms = (time.time() - start) * 1000
+            response.raise_for_status()
+            data = response.json()
+            _log_response(url, response.status_code, data, elapsed_ms)
+            if data.get("code") != "ok":
+                raise Exception(data.get("message", "绑定菜单流程失败"))
+
+        verify_menus = await self.query_menus(app_id)
+        verified = None
+
+        def _verify(nodes):
+            nonlocal verified
+            for n in nodes or []:
+                if not isinstance(n, dict):
+                    continue
+                if str(n.get("id") or n.get("menuId") or "") == resolved_menu_id:
+                    verified = n
+                    return
+                children = n.get("submenus") or n.get("children") or n.get("subMenus") or n.get("menuList")
+                if children:
+                    _verify(children)
+                if verified is not None:
+                    return
+
+        _verify(verify_menus or [])
+        verified_process_id = str((verified or {}).get("processId") or "").strip()
+        if verified_process_id != resolved_process_id:
+            raise Exception(
+                f"菜单流程绑定未生效: menu_id={resolved_menu_id}, "
+                f"expected={resolved_process_id}, actual={verified_process_id or '<empty>'}"
+            )
+        logger.info("菜单流程绑定成功: menu_id=%s process_id=%s", resolved_menu_id, resolved_process_id)
+        return {"id": resolved_menu_id, "processId": resolved_process_id, "unchanged": False}
 
     # 2026-05-25: 菜单分组 + 移动菜单到分组. 平台 /xdap-app/menu/save/menu endpoint
     # 同时支持 menuType=GROUP (分组) 和 parentId (挂到 group 下).
