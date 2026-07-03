@@ -74,6 +74,10 @@ async def init_db():
             "ALTER TABLE users ADD COLUMN display_name VARCHAR(100)",
             "ALTER TABLE users ADD COLUMN apaas_base_url VARCHAR(255)",
             "ALTER TABLE users ADD COLUMN apaas_tenant_id VARCHAR(50)",
+            "ALTER TABLE users ADD COLUMN coding_user_id VARCHAR(80)",
+            "ALTER TABLE users ADD COLUMN coding_base_url VARCHAR(255)",
+            "ALTER TABLE users ADD COLUMN coding_access_token TEXT",
+            "ALTER TABLE users ADD COLUMN coding_refresh_token TEXT",
             # Tenant quota/contact columns added after early multi-tenant installs.
             "ALTER TABLE tenants ADD COLUMN max_applications INTEGER NOT NULL DEFAULT 10",
             "ALTER TABLE tenants ADD COLUMN max_workspaces INTEGER NOT NULL DEFAULT 20",
@@ -153,6 +157,13 @@ async def init_db():
             # 桌面/dev 经本启动块加列（create_all 不改既有表），与 scripts/migrate_aichat_workspace_id.sql 等价。
             "ALTER TABLE ai_chat_sessions ADD COLUMN workspace_id VARCHAR(64)",
             "CREATE INDEX IF NOT EXISTS ix_ai_chat_sessions_workspace_id ON ai_chat_sessions(workspace_id)",
+            # Code 模式外部应用锚点：来自 d-ai-code Control Plane，不在本地 applications 建影子项目。
+            "ALTER TABLE ai_chat_sessions ADD COLUMN external_application_id VARCHAR(80)",
+            "ALTER TABLE ai_chat_sessions ADD COLUMN external_app_name VARCHAR(200)",
+            "ALTER TABLE ai_chat_sessions ADD COLUMN external_app_code VARCHAR(120)",
+            "CREATE INDEX IF NOT EXISTS ix_ai_chat_sessions_external_application_id ON ai_chat_sessions(external_application_id)",
+            # 纯 Code 会话没有本地 applications.id，运行时绑定允许 app_id 为空。
+            "ALTER TABLE code_runtime_bindings MODIFY COLUMN app_id INTEGER NULL",
             # 桌面产品账号来源标记(2026-06-16): 'apaas'=aPaaS同步账号 | 'desktop'=桌面账号
             "ALTER TABLE users ADD COLUMN account_source VARCHAR(20) NOT NULL DEFAULT 'apaas'",
             # account-service: username 全局唯一 → 复合 (username, account_source)
@@ -168,6 +179,8 @@ async def init_db():
                 await conn.execute(text(stmt))
             except Exception:
                 pass  # 列已存在
+
+        await _migrate_code_runtime_binding_app_id_nullable(conn, inspect)
 
         # 兼容文档增量流程：DocumentVersion 可先仅绑定 conversation，稍后再关联 application
         for stmt in [
@@ -207,6 +220,108 @@ async def init_db():
                 await conn.execute(text(idx_stmt))
             except Exception:
                 pass
+
+
+async def _migrate_code_runtime_binding_app_id_nullable(conn, inspect_fn) -> None:
+    """Allow Code runtime bindings to exist without a local applications.id.
+
+    MySQL is handled by the regular ALTER statement above. SQLite cannot alter a
+    column nullability in place, so older dev databases created during the first
+    Code integration need a small table rebuild.
+    """
+
+    if conn.dialect.name != "sqlite":
+        return
+
+    from app.models.ai_chat import CodeRuntimeAgentSession, CodeRuntimeBinding
+
+    await conn.run_sync(lambda sync_conn: CodeRuntimeAgentSession.__table__.create(sync_conn, checkfirst=True))
+    for stmt in [
+        "CREATE INDEX IF NOT EXISTS ix_code_runtime_agent_sessions_tenant_id ON code_runtime_agent_sessions(tenant_id)",
+        "CREATE INDEX IF NOT EXISTS ix_code_runtime_agent_sessions_user_id ON code_runtime_agent_sessions(user_id)",
+        "CREATE INDEX IF NOT EXISTS ix_code_runtime_agent_sessions_session_id ON code_runtime_agent_sessions(session_id)",
+        "CREATE INDEX IF NOT EXISTS ix_code_runtime_agent_sessions_external_application_id ON code_runtime_agent_sessions(external_application_id)",
+        "CREATE INDEX IF NOT EXISTS ix_code_runtime_agent_sessions_workspace_id ON code_runtime_agent_sessions(workspace_id)",
+        "CREATE INDEX IF NOT EXISTS ix_code_runtime_agent_sessions_sandbox_instance_id ON code_runtime_agent_sessions(sandbox_instance_id)",
+        "CREATE INDEX IF NOT EXISTS ix_code_runtime_agent_sessions_runtime_session_id ON code_runtime_agent_sessions(runtime_session_id)",
+    ]:
+        await conn.execute(text(stmt))
+
+    async def table_exists(table_name: str) -> bool:
+        return await conn.run_sync(lambda sync_conn: inspect_fn(sync_conn).has_table(table_name))
+
+    async def table_info(table_name: str):
+        return (await conn.execute(text(f"PRAGMA table_info({table_name})"))).mappings().all()
+
+    async def archive_tables() -> list[str]:
+        rows = (await conn.execute(text(
+            "SELECT name FROM sqlite_master "
+            "WHERE type='table' AND name LIKE 'code_runtime_bindings_app_id_notnull%'"
+        ))).mappings().all()
+        return [str(row["name"]) for row in rows]
+
+    async def drop_non_auto_indexes(table_name: str) -> None:
+        index_rows = (await conn.execute(text(f"PRAGMA index_list({table_name})"))).mappings().all()
+        for row in index_rows:
+            name = str(row.get("name") or "")
+            if name and not name.startswith("sqlite_autoindex"):
+                await conn.execute(text(f'DROP INDEX IF EXISTS "{name}"'))
+
+    async def ensure_current_indexes() -> None:
+        for stmt in [
+            "CREATE INDEX IF NOT EXISTS ix_code_runtime_bindings_tenant_id ON code_runtime_bindings(tenant_id)",
+            "CREATE INDEX IF NOT EXISTS ix_code_runtime_bindings_user_id ON code_runtime_bindings(user_id)",
+            "CREATE INDEX IF NOT EXISTS ix_code_runtime_bindings_app_id ON code_runtime_bindings(app_id)",
+            "CREATE INDEX IF NOT EXISTS ix_code_runtime_bindings_session_id ON code_runtime_bindings(session_id)",
+            "CREATE INDEX IF NOT EXISTS ix_code_runtime_bindings_external_application_id ON code_runtime_bindings(external_application_id)",
+            "CREATE INDEX IF NOT EXISTS ix_code_runtime_bindings_workspace_id ON code_runtime_bindings(workspace_id)",
+            "CREATE INDEX IF NOT EXISTS ix_code_runtime_bindings_sandbox_instance_id ON code_runtime_bindings(sandbox_instance_id)",
+            "CREATE INDEX IF NOT EXISTS ix_code_runtime_bindings_runtime_session_id ON code_runtime_bindings(runtime_session_id)",
+        ]:
+            await conn.execute(text(stmt))
+
+    async def copy_from_archive(archive_name: str, archive_rows) -> None:
+        old_columns = {row.get("name") for row in archive_rows}
+        new_columns = [col.name for col in CodeRuntimeBinding.__table__.columns]
+        common_columns = [name for name in new_columns if name in old_columns]
+        if not common_columns:
+            return
+        columns_sql = ", ".join(common_columns)
+        await conn.execute(text(
+            f"INSERT OR IGNORE INTO code_runtime_bindings ({columns_sql}) "
+            f"SELECT {columns_sql} FROM {archive_name}"
+        ))
+
+    has_table = await table_exists("code_runtime_bindings")
+    if not has_table:
+        await conn.run_sync(lambda sync_conn: CodeRuntimeBinding.__table__.create(sync_conn, checkfirst=True))
+        has_table = True
+
+    rows = await table_info("code_runtime_bindings")
+    app_col = next((row for row in rows if row.get("name") == "app_id"), None)
+    if not app_col:
+        return
+
+    if int(app_col.get("notnull") or 0) == 0:
+        for archive_name in await archive_tables():
+            archive_rows = await table_info(archive_name)
+            await drop_non_auto_indexes(archive_name)
+            await copy_from_archive(archive_name, archive_rows)
+        await ensure_current_indexes()
+        return
+
+    archive_name = "code_runtime_bindings_app_id_notnull"
+    if await conn.run_sync(lambda sync_conn: inspect_fn(sync_conn).has_table(archive_name)):
+        suffix = 2
+        while await conn.run_sync(lambda sync_conn: inspect_fn(sync_conn).has_table(f"{archive_name}_{suffix}")):
+            suffix += 1
+        archive_name = f"{archive_name}_{suffix}"
+
+    await conn.execute(text(f"ALTER TABLE code_runtime_bindings RENAME TO {archive_name}"))
+    await drop_non_auto_indexes(archive_name)
+    await conn.run_sync(lambda sync_conn: CodeRuntimeBinding.__table__.create(sync_conn, checkfirst=True))
+    await copy_from_archive(archive_name, rows)
+    await ensure_current_indexes()
 
 
 async def _migrate_legacy_builder_specs(conn, inspect_fn) -> None:

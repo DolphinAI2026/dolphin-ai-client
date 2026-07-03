@@ -13,7 +13,7 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Optional
 
-from sqlalchemy import String, Text, DateTime, Integer, ForeignKey, JSON, BigInteger
+from sqlalchemy import String, Text, DateTime, Integer, ForeignKey, JSON, BigInteger, UniqueConstraint
 from sqlalchemy.dialects.mysql import LONGTEXT
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -43,11 +43,76 @@ class AIChatSession(Base):
     # 应用上下文常驻锁：非空 = 锁定该内部 applications.id（app 配置/二次开发态）；
     # 空 = 自由态（/ai-chat 0-1 创建/通用）。不加 FK，沿用 ai_chat 解耦风格。
     app_id: Mapped[Optional[int]] = mapped_column(Integer, nullable=True, index=True)
+    # Code 模式外部应用来源：d-ai-code Control Plane 的 applicationId。
+    # 纯代码应用不在本项目 applications 表落本地项目，列表和 workspace/open 都以该 ID 对接。
+    external_application_id: Mapped[Optional[str]] = mapped_column(String(80), nullable=True, index=True)
+    external_app_name: Mapped[Optional[str]] = mapped_column(String(200), nullable=True)
+    external_app_code: Mapped[Optional[str]] = mapped_column(String(120), nullable=True)
     # workspace 目录路径（per-session tmp 目录，用于 run_python 的 cwd + 附件存储）
     workspace_dir: Mapped[Optional[str]] = mapped_column(String(500), nullable=True)
     # 绑定工作区 ws_id（非路径，是 WorkspaceManager 的 ws_id）；Code 会话据此让引擎推导
     # ws-lock（SP2a：run_agent 无 override 时按 session.mode 推导 dev-apaas + 单工作区锁）。
     workspace_id: Mapped[Optional[str]] = mapped_column(String(64), nullable=True, index=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False
+    )
+
+
+class CodeRuntimeBinding(Base):
+    """Dolphin Code 会话到 d-ai-code runtime 的映射。"""
+
+    __tablename__ = "code_runtime_bindings"
+    __table_args__ = (
+        UniqueConstraint("session_id", name="uq_code_runtime_bindings_session"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    tenant_id: Mapped[int] = mapped_column(Integer, nullable=False, index=True)
+    user_id: Mapped[int] = mapped_column(Integer, nullable=False, index=True)
+    app_id: Mapped[Optional[int]] = mapped_column(Integer, nullable=True, index=True)
+    session_id: Mapped[int] = mapped_column(
+        Integer, ForeignKey("ai_chat_sessions.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    external_application_id: Mapped[str] = mapped_column(String(80), nullable=False, index=True)
+    runtime_base_url: Mapped[str] = mapped_column(String(1000), nullable=False)
+    builder_url: Mapped[str] = mapped_column(String(2000), nullable=False)
+    workspace_id: Mapped[Optional[str]] = mapped_column(String(120), nullable=True, index=True)
+    sandbox_instance_id: Mapped[Optional[str]] = mapped_column(String(160), nullable=True, index=True)
+    runtime_session_id: Mapped[Optional[str]] = mapped_column(String(160), nullable=True, index=True)
+    conversation_id: Mapped[Optional[str]] = mapped_column(String(160), nullable=True)
+    status: Mapped[str] = mapped_column(String(32), default="ready", nullable=False)
+    last_error: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False
+    )
+
+
+class CodeRuntimeAgentSession(Base):
+    """External runtime session ownership for the outer Code rail.
+
+    Local debug runtimes may reuse one runtime_base_url for multiple Code apps.
+    This table lets the aPaaS shell remember which runtime sessions were created
+    or activated from each app shell, so the outer rail does not mix histories.
+    """
+
+    __tablename__ = "code_runtime_agent_sessions"
+    __table_args__ = (
+        UniqueConstraint("session_id", "runtime_session_id", name="uq_code_runtime_agent_sessions_shell_runtime"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    tenant_id: Mapped[int] = mapped_column(Integer, nullable=False, index=True)
+    user_id: Mapped[int] = mapped_column(Integer, nullable=False, index=True)
+    app_id: Mapped[Optional[int]] = mapped_column(Integer, nullable=True, index=True)
+    session_id: Mapped[int] = mapped_column(
+        Integer, ForeignKey("ai_chat_sessions.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    external_application_id: Mapped[str] = mapped_column(String(80), nullable=False, index=True)
+    workspace_id: Mapped[Optional[str]] = mapped_column(String(120), nullable=True, index=True)
+    sandbox_instance_id: Mapped[Optional[str]] = mapped_column(String(160), nullable=True, index=True)
+    runtime_session_id: Mapped[str] = mapped_column(String(160), nullable=False, index=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, nullable=False)
     updated_at: Mapped[datetime] = mapped_column(
         DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False

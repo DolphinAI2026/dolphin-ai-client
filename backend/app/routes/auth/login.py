@@ -1,5 +1,6 @@
 import logging
 import re
+import secrets
 from datetime import datetime
 from typing import Annotated, Optional
 from fastapi import APIRouter, Depends, HTTPException, status
@@ -15,6 +16,8 @@ from app.schemas import (
     LoginResponse, TenantOption, TenantSelectRequest
 )
 from app.auth import verify_password, get_password_hash, create_access_token, create_selection_token
+from app.code_runtime.auth import CodingAuthResult, login_to_coding_control_plane
+from app.code_runtime.service import control_plane_base_url
 from app.crypto import encrypt_password
 from app.deps import (
     AuthContext,
@@ -857,14 +860,282 @@ async def _try_apaas_login_flow(user_data: UserLogin, db: AsyncSession) -> Optio
     return None
 
 
-@router.post("/login", response_model=LoginResponse)
-async def login(
-    user_data: UserLogin,
-    db: Annotated[AsyncSession, Depends(get_db)]
-):
-    import httpx
+def _auth_provider() -> str:
+    provider = (getattr(settings, "auth_provider", "") or "").strip().lower()
+    provider = {
+        "self": "local",
+        "own": "local",
+        "native": "local",
+        "builtin": "local",
+    }.get(provider, provider)
+    if provider not in ("", "local", "apaas", "coding"):
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="AUTH_PROVIDER must be one of local, apaas, coding",
+        )
+    return provider
+
+
+def _prime_login_slot(user: User, tenant_id: int) -> None:
     try:
-        apaas_response = await _try_apaas_login_flow(user_data, db)
+        from app.routes.current_app import set_current_app, set_apaas_user_alias
+
+        set_current_app(user.id, tenant_id, 0, "")
+        if user.apaas_user_id:
+            set_apaas_user_alias(user.apaas_user_id, user.id, tenant_id)
+    except Exception as exc:
+        logger.warning("登录后写 current_app slot 失败: %s", exc)
+
+
+async def _try_apaas_real_login(
+    db: AsyncSession,
+    target_user: User,
+    plain_pw: str,
+    target_tid: int,
+) -> None:
+    if target_user.account_source != "apaas" or not target_user.username or not plain_pw:
+        return
+    try:
+        t_res = await db.execute(select(Tenant).where(Tenant.id == target_tid))
+        target_tenant = t_res.scalar_one_or_none()
+        if not target_tenant or not target_tenant.apaas_env_id:
+            return
+        e_res = await db.execute(
+            select(PlatformEnv).where(PlatformEnv.id == target_tenant.apaas_env_id)
+        )
+        env = e_res.scalar_one_or_none()
+        if not env or env.status != "connected":
+            return
+        from app.apaas_client import APaaSClient
+
+        cli = APaaSClient(base_url=env.base_url, tenant_id=env.platform_tenant_id)
+        result = await cli.login(target_user.username, plain_pw)
+        tok = result.get("token") or ""
+        if not tok:
+            return
+        target_user.apaas_token = tok
+        target_user.apaas_base_url = env.base_url
+        target_user.apaas_tenant_id = env.platform_tenant_id
+        uinfo = result.get("user") or {}
+        if uinfo.get("id"):
+            target_user.apaas_user_id = str(uinfo["id"])
+        await db.commit()
+        logger.info(
+            "apaas chain login OK user_id=%s username=%s apaas_tid=%s",
+            target_user.id,
+            target_user.username,
+            env.platform_tenant_id,
+        )
+    except Exception as exc:
+        logger.info(
+            "apaas chain login skipped user_id=%s username=%s: %s",
+            target_user.id,
+            target_user.username,
+            exc,
+        )
+
+
+async def _issue_login_response_for_user(
+    db: AsyncSession,
+    user: User,
+    *,
+    plain_password: str = "",
+    allow_apaas_chain: bool = False,
+) -> LoginResponse:
+    if not user.is_active:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="用户已被禁用",
+        )
+
+    if user.is_platform_admin:
+        tenant_id = await resolve_default_tenant_id_for_user(db, user.id)
+        _prime_login_slot(user, tenant_id or 0)
+        if tenant_id and allow_apaas_chain:
+            await _try_apaas_real_login(db, user, plain_password, tenant_id)
+        access_token = create_access_token(user, tenant_id=tenant_id)
+        return LoginResponse(access_token=access_token)
+
+    result = await db.execute(
+        select(UserTenant).where(
+            UserTenant.user_id == user.id,
+            UserTenant.status == 1,
+        )
+    )
+    memberships = result.scalars().all()
+
+    if not memberships:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="账号未关联任何租户",
+        )
+
+    if len(memberships) == 1:
+        tenant_id = memberships[0].tenant_id
+        _prime_login_slot(user, tenant_id)
+        if allow_apaas_chain:
+            await _try_apaas_real_login(db, user, plain_password, tenant_id)
+        access_token = create_access_token(user, tenant_id=tenant_id)
+        return LoginResponse(access_token=access_token)
+
+    tenant_ids = [m.tenant_id for m in memberships]
+    result = await db.execute(select(Tenant).where(Tenant.id.in_(tenant_ids)))
+    tenant_map = {t.id: t for t in result.scalars().all()}
+
+    tenants = []
+    default_tid = None
+    for m in memberships:
+        t = tenant_map.get(m.tenant_id)
+        if t:
+            tenants.append(TenantOption(
+                tenant_id=t.id,
+                tenant_name=t.tenant_name,
+                tenant_code=t.tenant_code,
+            ))
+            if m.is_default:
+                default_tid = t.id
+
+    if default_tid:
+        _prime_login_slot(user, default_tid)
+        if allow_apaas_chain:
+            await _try_apaas_real_login(db, user, plain_password, default_tid)
+        access_token = create_access_token(user, tenant_id=default_tid)
+        return LoginResponse(access_token=access_token, tenants=tenants)
+
+    selection_token = create_selection_token(user.id)
+    return LoginResponse(
+        requires_tenant_selection=True,
+        selection_token=selection_token,
+        tenants=tenants,
+    )
+
+
+async def _local_login_response(user_data: UserLogin, db: AsyncSession) -> LoginResponse:
+    result = await db.execute(
+        select(User).where(User.username == user_data.username, User.account_source == "apaas")
+    )
+    user = result.scalar_one_or_none()
+
+    if not user or not verify_password(user_data.password, user.hashed_password):
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="用户名或密码错误",
+        )
+
+    return await _issue_login_response_for_user(
+        db,
+        user,
+        plain_password=user_data.password,
+        allow_apaas_chain=True,
+    )
+
+
+async def _ensure_coding_default_tenant(db: AsyncSession) -> Tenant:
+    tenant = (
+        await db.execute(select(Tenant).where(Tenant.tenant_code == "default"))
+    ).scalar_one_or_none()
+    if tenant:
+        return tenant
+
+    tenant = (
+        await db.execute(select(Tenant).where(Tenant.status == 1).order_by(Tenant.id.asc()))
+    ).scalar_one_or_none()
+    if tenant:
+        return tenant
+
+    tenant = Tenant(tenant_name="Default Tenant", tenant_code="default")
+    db.add(tenant)
+    await db.flush()
+    return tenant
+
+
+def _coding_roles_include_admin(roles: list[str]) -> bool:
+    normalized = {str(role or "").strip().upper() for role in roles}
+    return bool(normalized.intersection({"ADMIN", "CONTROL_PLANE_ADMIN", "SYSTEM_ADMIN"}))
+
+
+async def _ensure_coding_user(
+    db: AsyncSession,
+    identity: CodingAuthResult,
+) -> User:
+    user = None
+    if identity.external_user_id:
+        user = (
+            await db.execute(
+                select(User).where(
+                    User.account_source == "coding",
+                    User.coding_user_id == identity.external_user_id,
+                )
+            )
+        ).scalar_one_or_none()
+    if not user:
+        user = (
+            await db.execute(
+                select(User).where(
+                    User.username == identity.username,
+                    User.account_source == "coding",
+                )
+            )
+        ).scalar_one_or_none()
+    if not user:
+        user = User(
+            username=identity.username,
+            hashed_password=get_password_hash(secrets.token_urlsafe(32)),
+            account_source="coding",
+            is_active=True,
+        )
+        db.add(user)
+        await db.flush()
+
+    user.username = identity.username
+    user.display_name = identity.display_name or identity.username
+    user.coding_user_id = identity.external_user_id
+    user.coding_base_url = control_plane_base_url()
+    user.coding_access_token = identity.access_token
+    user.coding_refresh_token = identity.refresh_token
+    user.is_active = True
+    user.is_platform_admin = _coding_roles_include_admin(identity.roles)
+
+    tenant = await _ensure_coding_default_tenant(db)
+    membership = (
+        await db.execute(
+            select(UserTenant).where(
+                UserTenant.user_id == user.id,
+                UserTenant.tenant_id == tenant.id,
+            )
+        )
+    ).scalar_one_or_none()
+    if not membership:
+        db.add(
+            UserTenant(
+                user_id=user.id,
+                tenant_id=tenant.id,
+                status=1,
+                is_default=True,
+            )
+        )
+    else:
+        membership.status = 1
+        membership.is_default = True
+    await db.flush()
+    return user
+
+
+async def _coding_login_response(user_data: UserLogin, db: AsyncSession) -> LoginResponse:
+    identity = await login_to_coding_control_plane(user_data.username, user_data.password)
+    user = await _ensure_coding_user(db, identity)
+    await db.commit()
+    return await _issue_login_response_for_user(db, user)
+
+
+async def _try_apaas_provider_login_response(
+    user_data: UserLogin,
+    db: AsyncSession,
+) -> Optional[LoginResponse]:
+    import httpx
+
+    try:
+        return await _try_apaas_login_flow(user_data, db)
     except httpx.RequestError as exc:
         logger.warning("aPaaS 登录链路网络异常 (%s): %s", type(exc).__name__, exc)
         if not _is_placeholder_apaas_base_url():
@@ -872,7 +1143,7 @@ async def login(
                 status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
                 detail="aPaaS 登录链路暂不可用，请稍后重试",
             ) from exc
-        apaas_response = None
+        return None
     except HTTPException:
         raise
     except IntegrityError as exc:
@@ -896,151 +1167,32 @@ async def login(
             status_code=status.HTTP_502_BAD_GATEWAY,
             detail="aPaaS 登录链路返回异常数据或同步失败，请稍后重试",
         ) from exc
+
+
+@router.post("/login", response_model=LoginResponse)
+async def login(
+    user_data: UserLogin,
+    db: Annotated[AsyncSession, Depends(get_db)]
+):
+    provider = _auth_provider()
+
+    if provider == "local":
+        return await _local_login_response(user_data, db)
+
+    if provider == "coding":
+        return await _coding_login_response(user_data, db)
+
+    apaas_response = await _try_apaas_provider_login_response(user_data, db)
     if apaas_response:
         return apaas_response
 
-    # 验证用户 (本地密码回落 = aPaaS 账号, 必须过滤 account_source 避免撞名 desktop 行 MultipleResultsFound)
-    result = await db.execute(
-        select(User).where(User.username == user_data.username, User.account_source == "apaas")
-    )
-    user = result.scalar_one_or_none()
-
-    if not user or not verify_password(user_data.password, user.hashed_password):
+    if provider == "apaas":
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="用户名或密码错误"
+            detail="aPaaS 登录失败",
         )
 
-    if not user.is_active:
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="用户已被禁用"
-        )
-
-    # 登录成功后立刻往 current_app slot 写入 user→tenant 映射。
-    # 这是 stop bleed 关键：MCP 工具反查 slot 拿真实 tenant_id，避免 slot miss 后
-    # fallback 到 admin（旧行为导致跨租户数据泄漏）。app_id=0 表示用户已登录但未打开
-    # 具体应用 —— 用户进 /apps 打开应用后会再调 set_current_app 覆盖。
-    # 同时写 apaas_uid → 本地 (uid, tid) alias，让外部 agent 透传 aPaaS 大整数 user_id
-    # 调 MCP 工具时 _resolve_identity 能命中缓存零 DB。
-    def _prime_slot(real_user_id: int, real_tenant_id: int) -> None:
-        try:
-            from app.routes.current_app import set_current_app, set_apaas_user_alias
-            set_current_app(real_user_id, real_tenant_id, 0, "")
-            if user.apaas_user_id:
-                set_apaas_user_alias(user.apaas_user_id, real_user_id, real_tenant_id)
-        except Exception as exc:
-            logger.warning("登录后写 current_app slot 失败: %s", exc)
-
-    # 2026-05-10 Phase 4：登 apaas 拿 token 同步存。前提：用户 ai-builder 密码 == apaas
-    # 同名账号密码（生产很少同步，admin 团队偶尔统一）。失败 silent log，登录流程不阻断。
-    # 成功 → user.apaas_token 更新；user.apaas_user_id 校对 backfill；JWT 自动嵌完整 claims。
-    async def _try_apaas_real_login(target_user: User, plain_pw: str, target_tid: int) -> None:
-        if not target_user.username or not plain_pw:
-            return
-        try:
-            # 找 user 默认 tenant 绑定的 apaas env
-            from app.models import PlatformEnv
-            t_res = await db.execute(select(Tenant).where(Tenant.id == target_tid))
-            target_tenant = t_res.scalar_one_or_none()
-            if not target_tenant or not target_tenant.apaas_env_id:
-                return  # 该租户没绑 apaas env
-            e_res = await db.execute(
-                select(PlatformEnv).where(PlatformEnv.id == target_tenant.apaas_env_id)
-            )
-            env = e_res.scalar_one_or_none()
-            if not env or env.status != "connected":
-                return
-            from app.apaas_client import APaaSClient
-            cli = APaaSClient(base_url=env.base_url, tenant_id=env.platform_tenant_id)
-            result = await cli.login(target_user.username, plain_pw)
-            tok = result.get("token") or ""
-            if not tok:
-                return
-            target_user.apaas_token = tok
-            target_user.apaas_base_url = env.base_url
-            target_user.apaas_tenant_id = env.platform_tenant_id
-            uinfo = result.get("user") or {}
-            if uinfo.get("id"):
-                target_user.apaas_user_id = str(uinfo["id"])
-            await db.commit()
-            logger.info(
-                "apaas chain login OK user_id=%s username=%s apaas_tid=%s",
-                target_user.id, target_user.username, env.platform_tenant_id,
-            )
-        except Exception as exc:
-            logger.info(
-                "apaas chain login skipped user_id=%s username=%s: %s",
-                target_user.id, target_user.username, exc,
-            )
-
-    # 平台管理员直接进入默认租户上下文。平台管理权限仍由
-    # is_platform_admin 标识提供，tenant_id 用于租户级配置页查询。
-    if user.is_platform_admin:
-        tenant_id = await resolve_default_tenant_id_for_user(db, user.id)
-        _prime_slot(user.id, tenant_id or 0)
-        if tenant_id:
-            await _try_apaas_real_login(user, user_data.password, tenant_id)
-        access_token = create_access_token(user, tenant_id=tenant_id)
-        return LoginResponse(access_token=access_token)
-
-    # 获取用户的租户成员关系
-    result = await db.execute(
-        select(UserTenant).where(
-            UserTenant.user_id == user.id,
-            UserTenant.status == 1
-        )
-    )
-    memberships = result.scalars().all()
-
-    if not memberships:
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="账号未关联任何租户"
-        )
-
-    if len(memberships) == 1:
-        # 单租户 — 直接登录
-        tenant_id = memberships[0].tenant_id
-        _prime_slot(user.id, tenant_id)
-        await _try_apaas_real_login(user, user_data.password, tenant_id)
-        access_token = create_access_token(user, tenant_id=tenant_id)
-        return LoginResponse(access_token=access_token)
-
-    # 多租户 — 返回租户列表
-    tenant_ids = [m.tenant_id for m in memberships]
-    result = await db.execute(
-        select(Tenant).where(Tenant.id.in_(tenant_ids))
-    )
-    tenant_map = {t.id: t for t in result.scalars().all()}
-
-    tenants = []
-    default_tid = None
-    for m in memberships:
-        t = tenant_map.get(m.tenant_id)
-        if t:
-            tenants.append(TenantOption(
-                tenant_id=t.id,
-                tenant_name=t.tenant_name,
-                tenant_code=t.tenant_code,
-            ))
-            if m.is_default:
-                default_tid = t.id
-
-    # 如果有默认租户，自动选择
-    if default_tid:
-        _prime_slot(user.id, default_tid)
-        await _try_apaas_real_login(user, user_data.password, default_tid)
-        access_token = create_access_token(user, tenant_id=default_tid)
-        return LoginResponse(access_token=access_token, tenants=tenants)
-
-    # 需要用户选择租户
-    selection_token = create_selection_token(user.id)
-    return LoginResponse(
-        requires_tenant_selection=True,
-        selection_token=selection_token,
-        tenants=tenants
-    )
+    return await _local_login_response(user_data, db)
 
 
 @router.post("/select-tenant", response_model=Token)

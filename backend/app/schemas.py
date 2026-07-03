@@ -91,6 +91,8 @@ class ApplicationCreate(BaseModel):
     config_preview: Optional[dict] = None
     canonical_spec_id: Optional[str] = None
     platform_env_id: Optional[int] = None
+    app_type: str = "low-code"
+    source_workspace_id: Optional[str] = None
     # 平台环境配置（可选）
     platform_url: Optional[str] = None
     platform_tenant_id: Optional[str] = None

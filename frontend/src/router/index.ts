@@ -1,6 +1,7 @@
 import { createRouter, createWebHistory } from 'vue-router'
 import { useUserStore } from '@/stores/user'
 import { usePreviewStore } from '@/stores/preview'
+import { useModeStore } from '@/stores/mode'
 import request from '@/utils/request'
 import { resolveDesktopRedirect } from './desktopGuard'
 import { fetchOnboardingState, isOnboardingConfirmed, markOnboardingConfirmed } from '@/composables/useOnboardingState'
@@ -51,6 +52,32 @@ const router = createRouter({
       name: 'AIChat',
       component: () => import('@/views/AIChatPage.vue'),
       meta: { requiresAuth: true }
+    },
+    {
+      path: '/code',
+      component: () => import('@/views/CodeShellLayout.vue'),
+      meta: { requiresAuth: true },
+      children: [
+        {
+          path: '',
+          redirect: { name: 'CodeApps' },
+        },
+        {
+          path: 'apps',
+          name: 'CodeApps',
+          component: () => import('@/views/Apps.vue'),
+        },
+        {
+          path: 'new',
+          name: 'CodeNewApplication',
+          component: () => import('@/views/CodeConversationPage.vue'),
+        },
+        {
+          path: ':id',
+          name: 'CodeConversation',
+          component: () => import('@/views/CodeConversationPage.vue'),
+        }
+      ]
     },
     {
       // 数据接入 group 入口：数据库连接管理
@@ -228,6 +255,7 @@ function safeRedirectPath(raw: unknown): string {
 
 router.beforeEach(async (to, _from, next) => {
   const userStore = useUserStore()
+  const modeStore = useModeStore()
 
   if (to.meta.requiresAuth && !userStore.token) {
     next({ path: '/login', query: { redirect: to.fullPath } })
@@ -290,6 +318,17 @@ router.beforeEach(async (to, _from, next) => {
         next({ path: '/desktop-setup', replace: true }); return
       }
     }
+  }
+
+  if (to.path.startsWith('/code')) {
+    if (modeStore.mode !== 'code') modeStore.setMode('code')
+  } else if (to.path.startsWith('/ai-chat')) {
+    if (modeStore.mode === 'code') modeStore.setMode('builder')
+  }
+
+  if ((to.path === '/' || to.path === '/apps') && modeStore.mode === 'code') {
+    next({ path: '/code/apps', replace: true })
+    return
   }
 
   if (to.path === '/login' && userStore.token) {

@@ -1,0 +1,629 @@
+<template>
+  <main class="code-page">
+    <section v-if="isCreateApplicationRoute" class="code-new-chat" aria-label="新建 Code 应用">
+      <div class="code-new-chat-stream">
+        <div class="code-new-empty">
+          <div class="code-new-mark">
+            <AppIcon name="coding" :size="28" />
+          </div>
+          <div class="code-new-copy">
+            <p class="code-new-kicker">Dolphin Code</p>
+            <h1>全代码应用工作台</h1>
+            <p>描述你要开发的系统、页面和关键能力。创建后会进入独立沙箱，由数字员工协作完成代码、测试和运行验证。</p>
+          </div>
+          <div class="code-new-suggestions" aria-label="Code 应用示例">
+            <button
+              v-for="suggestion in codeAppSuggestions"
+              :key="suggestion.name"
+              type="button"
+              class="code-new-suggestion"
+              @click="generateCodeAppFromSuggestion(suggestion)"
+            >
+              <span>{{ suggestion.name }}</span>
+              <small>{{ suggestion.prompt }}</small>
+            </button>
+          </div>
+        </div>
+      </div>
+      <form class="code-new-composer" @submit.prevent="confirmCreateCodeApplication">
+        <input
+          v-model="newCodeAppName"
+          class="code-new-input"
+          type="text"
+          autocomplete="off"
+          placeholder="应用名称，例如：销售线索评分助手"
+        />
+        <textarea
+          v-model="newCodeAppPrompt"
+          class="code-new-textarea"
+          rows="3"
+          placeholder="补充业务目标、页面或功能要求"
+        />
+        <div class="code-new-actions">
+          <span class="code-new-error">{{ newCodeAppError }}</span>
+          <button class="code-new-confirm" type="submit" :disabled="creatingCodeApplication">
+            {{ creatingCodeApplication ? '创建中' : '确认创建' }}
+          </button>
+        </div>
+      </form>
+    </section>
+    <template v-else>
+      <iframe
+        v-for="frame in frames"
+        :key="frame.key"
+        :class="['code-frame', frame.phase === 'active' ? 'code-frame-active' : 'code-frame-pending']"
+        :src="frame.url"
+        title="Dolphin Code"
+        allow="clipboard-read; clipboard-write"
+        :aria-hidden="frame.phase !== 'active'"
+        @load="frame.phase === 'pending' && promotePendingFrame(frame.key)"
+      />
+      <div v-if="showInitialLoading" class="code-status">正在打开 Code 工作台...</div>
+      <div v-else-if="errorMessage && !hasAnyFrame" class="code-error">
+        <strong>Code 工作台暂时无法打开</strong>
+        <span>{{ errorMessage }}</span>
+        <button type="button" @click="openCurrentSession">重试</button>
+      </div>
+      <div v-if="errorMessage && hasAnyFrame" class="code-error-toast">
+        <span>{{ errorMessage }}</span>
+        <button type="button" @click="openCurrentSession">重试</button>
+      </div>
+      <div v-if="frameSwitching" class="code-switching" aria-live="polite">正在切换 Code 工作台...</div>
+    </template>
+  </main>
+</template>
+
+<script setup lang="ts">
+import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
+import { useRoute, useRouter } from 'vue-router'
+import { codeRuntimeApi } from '@/api/codeRuntime'
+import AppIcon from '@/components/common/AppIcon.vue'
+
+type CodeFramePhase = 'active' | 'pending'
+interface CodeFrame {
+  key: number
+  url: string
+  phase: CodeFramePhase
+}
+
+const route = useRoute()
+const router = useRouter()
+const frames = ref<CodeFrame[]>([])
+const loading = ref(false)
+const errorMessage = ref('')
+const sessionState = ref('')
+const newCodeAppName = ref('')
+const newCodeAppPrompt = ref('')
+const newCodeAppError = ref('')
+const creatingCodeApplication = ref(false)
+let railRefreshTimer: number | undefined
+let frameKey = 0
+let openRequestSeq = 0
+
+const codeAppSuggestions = [
+  {
+    name: '销售线索评分与跟进助手',
+    prompt: '支持线索列表、评分解释、跟进建议、业务助手查询客户和商机。',
+  },
+  {
+    name: '项目风险预警工作台',
+    prompt: '识别延期、预算偏差和未关闭问题，生成风险等级与整改建议。',
+  },
+  {
+    name: '合同审核与归档中心',
+    prompt: '管理合同草稿、审批状态、风险条款和归档记录，提供审核助手。',
+  },
+]
+
+const isCreateApplicationRoute = computed(() => {
+  const rawId = Array.isArray(route.params.id) ? route.params.id[0] : route.params.id
+  return (
+    route.name === 'CodeNewApplication'
+    || route.path === '/code/new'
+    || route.fullPath === '/code/new'
+    || route.path.endsWith('/code/new')
+    || route.fullPath.endsWith('/code/new')
+    || rawId === 'new'
+  )
+})
+const activeFrame = computed(() => frames.value.find(frame => frame.phase === 'active') || null)
+const pendingFrame = computed(() => frames.value.find(frame => frame.phase === 'pending') || null)
+const hasAnyFrame = computed(() => frames.value.length > 0)
+const initialFramePending = computed(() => Boolean(pendingFrame.value && !activeFrame.value))
+const showInitialLoading = computed(() =>
+  (loading.value || initialFramePending.value) && !activeFrame.value && !errorMessage.value
+)
+const frameSwitching = computed(() => Boolean(activeFrame.value && pendingFrame.value))
+
+function currentSessionId(): number {
+  const raw = Array.isArray(route.params.id) ? route.params.id[0] : route.params.id
+  const id = Number(raw)
+  return Number.isFinite(id) && id > 0 ? id : 0
+}
+
+function currentRuntimeAgentId(): string {
+  const raw = Array.isArray(route.query.agent) ? route.query.agent[0] : route.query.agent
+  return String(raw || '').trim()
+}
+
+function isUnavailableRuntimeSessionError(error: any, runtimeAgentId: string): boolean {
+  if (!runtimeAgentId) return false
+  const detail = String(error?.response?.data?.detail || error?.message || '')
+  return detail.includes(runtimeAgentId) && detail.includes('agent session') && detail.includes('is not available')
+}
+
+function clearRouteAgentQueryIfCurrent(runtimeAgentId: string) {
+  if (!runtimeAgentId || currentRuntimeAgentId() !== runtimeAgentId) return
+  const query = { ...route.query }
+  delete query.agent
+  void router.replace({ path: route.path, query })
+}
+
+function generateCodeAppCode(appName: string) {
+  const normalized = appName
+    .trim()
+    .toLowerCase()
+    .normalize('NFKD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/^-+|-+$/g, '')
+  const prefix = /^[a-z]/.test(normalized) ? normalized : 'code-app'
+  return `${prefix.slice(0, 42)}-${Date.now().toString(36)}`
+}
+
+function generateCodeAppFromSuggestion(suggestion: { name: string; prompt: string }) {
+  newCodeAppName.value = suggestion.name
+  newCodeAppPrompt.value = suggestion.prompt
+  newCodeAppError.value = ''
+}
+
+async function confirmCreateCodeApplication() {
+  const appName = newCodeAppName.value.trim()
+  if (!appName) {
+    newCodeAppError.value = '请输入应用名称'
+    return
+  }
+  if (creatingCodeApplication.value) return
+
+  creatingCodeApplication.value = true
+  newCodeAppError.value = ''
+  try {
+    const app = await codeRuntimeApi.createApplication({
+      app_name: appName,
+      app_code: generateCodeAppCode(appName),
+    })
+    const created = await codeRuntimeApi.createSessionFromExternalApp({
+      external_application_id: app.external_application_id,
+      app_name: app.app_name,
+      app_code: app.app_code,
+    })
+    refreshOuterCodeRail()
+    router.push(`/code/${created.id}`)
+  } catch (error: any) {
+    newCodeAppError.value = error?.response?.data?.detail || error?.message || '创建 Code 应用失败'
+  } finally {
+    creatingCodeApplication.value = false
+  }
+}
+
+async function openCurrentSession() {
+  if (isCreateApplicationRoute.value) {
+    frames.value = []
+    loading.value = false
+    errorMessage.value = ''
+    return
+  }
+  const id = currentSessionId()
+  if (!id) {
+    errorMessage.value = '缺少 Code 会话'
+    frames.value = []
+    return
+  }
+  const requestSeq = ++openRequestSeq
+  loading.value = true
+  errorMessage.value = ''
+  try {
+    const runtimeAgentId = currentRuntimeAgentId()
+    const opened = await codeRuntimeApi.openSession(id)
+    if (runtimeAgentId) {
+      try {
+        await codeRuntimeApi.activateAgentSession(id, runtimeAgentId)
+      } catch (activationError: any) {
+        if (!isUnavailableRuntimeSessionError(activationError, runtimeAgentId)) throw activationError
+        clearRouteAgentQueryIfCurrent(runtimeAgentId)
+      }
+    }
+    if (requestSeq !== openRequestSeq) return
+    queuePendingFrame(opened.embed_url)
+    refreshOuterCodeRail()
+  } catch (error: any) {
+    if (requestSeq === openRequestSeq) {
+      errorMessage.value = error?.response?.data?.detail || error?.message || '打开失败'
+    }
+  } finally {
+    if (requestSeq === openRequestSeq) loading.value = false
+  }
+}
+
+function queuePendingFrame(url: string) {
+  const nextFrame: CodeFrame = { key: ++frameKey, url, phase: 'pending' }
+  frames.value = activeFrame.value ? [activeFrame.value, nextFrame] : [nextFrame]
+}
+
+function promotePendingFrame(key: number) {
+  const loaded = frames.value.find(frame => frame.key === key && frame.phase === 'pending')
+  if (!loaded) return
+  frames.value = [{ ...loaded, phase: 'active' }]
+  errorMessage.value = ''
+}
+
+function refreshOuterCodeRail() {
+  window.dispatchEvent(new CustomEvent('code-rail-refresh'))
+}
+
+function scheduleOuterCodeRailRefresh(delay = 1200) {
+  if (railRefreshTimer != null) window.clearTimeout(railRefreshTimer)
+  railRefreshTimer = window.setTimeout(() => {
+    railRefreshTimer = undefined
+    refreshOuterCodeRail()
+  }, delay)
+}
+
+function onShellMessage(event: MessageEvent) {
+  const data = event.data
+  if (!data || typeof data !== 'object') return
+  if (data.type === 'agent.sessionStateChanged') {
+    sessionState.value = String(data.payload?.state || data.payload?.status || '')
+    refreshOuterCodeRail()
+    scheduleOuterCodeRailRefresh()
+  }
+  if (data.type === 'sandbox.failed') {
+    errorMessage.value = String(data.payload?.message || 'Code runtime failed')
+  }
+}
+
+watch(
+  () => [route.name, route.params.id, route.query.agent],
+  () => { void openCurrentSession() },
+)
+
+onMounted(() => {
+  window.addEventListener('message', onShellMessage)
+  void openCurrentSession()
+})
+
+onBeforeUnmount(() => {
+  window.removeEventListener('message', onShellMessage)
+  if (railRefreshTimer != null) window.clearTimeout(railRefreshTimer)
+})
+</script>
+
+<style scoped>
+.code-page {
+  position: relative;
+  flex: 1;
+  min-width: 0;
+  min-height: 0;
+  display: flex;
+  background: var(--bg-app);
+  overflow: hidden;
+}
+
+.code-new-chat {
+  width: min(920px, calc(100% - 48px));
+  min-height: 0;
+  margin: 0 auto;
+  padding: 22px 0 24px;
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  justify-content: space-between;
+  gap: 18px;
+}
+
+.code-new-chat-stream {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 18px 0 8px;
+}
+
+.code-new-empty {
+  width: min(760px, 100%);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 18px;
+  color: var(--text-2);
+  text-align: center;
+}
+
+.code-new-mark {
+  width: 56px;
+  height: 56px;
+  display: grid;
+  place-items: center;
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  background: var(--surface);
+  color: var(--brand);
+  box-shadow: var(--shadow-sm, 0 4px 14px rgba(15, 23, 42, 0.08));
+}
+
+.code-new-copy {
+  max-width: 620px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+}
+
+.code-new-kicker {
+  margin: 0;
+  color: var(--brand);
+  font-size: 12px;
+  font-weight: var(--fw-semibold, 600);
+  line-height: 18px;
+}
+
+.code-new-copy h1 {
+  margin: 0;
+  color: var(--text);
+  font-size: 26px;
+  line-height: 1.25;
+  font-weight: var(--fw-semibold, 600);
+  letter-spacing: 0;
+}
+
+.code-new-copy p:last-child {
+  margin: 0;
+  font-size: 13px;
+  line-height: 1.6;
+}
+
+.code-new-suggestions {
+  width: 100%;
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.code-new-suggestion {
+  min-height: 88px;
+  padding: 12px;
+  border: 1px solid var(--line);
+  border-radius: var(--r-3, 8px);
+  background: var(--surface);
+  color: var(--text);
+  font-family: inherit;
+  text-align: left;
+  cursor: pointer;
+  transition: border-color .16s ease, background .16s ease, transform .16s ease;
+}
+
+.code-new-suggestion:hover {
+  border-color: var(--brand-ring);
+  background: var(--brand-soft);
+  transform: translateY(-1px);
+}
+
+.code-new-suggestion span,
+.code-new-suggestion small {
+  display: block;
+}
+
+.code-new-suggestion span {
+  font-size: 13px;
+  font-weight: var(--fw-semibold, 600);
+  line-height: 18px;
+}
+
+.code-new-suggestion small {
+  margin-top: 7px;
+  color: var(--text-3);
+  font-size: 12px;
+  line-height: 17px;
+}
+
+.code-new-composer {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 14px;
+  border: 1px solid var(--line);
+  border-radius: var(--r-3, 8px);
+  background: var(--surface);
+  box-shadow: var(--shadow-sm, 0 4px 14px rgba(15, 23, 42, 0.08));
+}
+
+.code-new-input,
+.code-new-textarea {
+  width: 100%;
+  box-sizing: border-box;
+  border: 1px solid var(--line);
+  border-radius: var(--r-2, 6px);
+  background: var(--surface-2);
+  color: var(--text);
+  font-family: inherit;
+  font-size: 13px;
+  outline: none;
+}
+
+.code-new-input {
+  height: 36px;
+  padding: 0 11px;
+}
+
+.code-new-textarea {
+  min-height: 72px;
+  resize: vertical;
+  padding: 9px 11px;
+  line-height: 1.5;
+}
+
+.code-new-input:focus,
+.code-new-textarea:focus {
+  border-color: var(--brand-ring);
+  background: var(--surface);
+}
+
+.code-new-actions {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.code-new-error {
+  min-height: 18px;
+  color: var(--err);
+  font-size: 12px;
+}
+
+.code-new-confirm {
+  height: 32px;
+  padding: 0 14px;
+  border: 1px solid var(--brand);
+  border-radius: var(--r-2, 6px);
+  background: var(--brand);
+  color: var(--text-inverse, #fff);
+  font-family: inherit;
+  font-size: 13px;
+  font-weight: var(--fw-medium, 500);
+  cursor: pointer;
+}
+
+.code-new-confirm:disabled {
+  cursor: not-allowed;
+  opacity: 0.65;
+}
+
+.code-frame {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  border: 0;
+  display: block;
+  background: var(--surface);
+}
+
+.code-frame-active {
+  z-index: 1;
+  opacity: 1;
+}
+
+.code-frame-pending {
+  z-index: 0;
+  opacity: 0;
+  pointer-events: none;
+}
+
+.code-status,
+.code-error {
+  position: relative;
+  z-index: 3;
+  margin: auto;
+  max-width: 420px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 10px;
+  color: var(--text-3);
+  font-size: 13px;
+  text-align: center;
+}
+
+.code-error strong {
+  color: var(--text);
+  font-size: 15px;
+  letter-spacing: 0;
+}
+
+.code-error button {
+  height: 30px;
+  padding: 0 12px;
+  border: 1px solid var(--line);
+  border-radius: var(--r-2, 6px);
+  background: var(--surface);
+  color: var(--text);
+  font-family: inherit;
+  cursor: pointer;
+}
+
+.code-error button:hover {
+  border-color: var(--brand-ring);
+  color: var(--brand);
+  background: var(--brand-soft);
+}
+
+.code-error-toast,
+.code-switching {
+  position: absolute;
+  z-index: 4;
+  top: 14px;
+  left: 50%;
+  transform: translateX(-50%);
+  min-height: 32px;
+  max-width: min(520px, calc(100% - 48px));
+  padding: 6px 10px;
+  border: 1px solid var(--line);
+  border-radius: var(--r-2, 6px);
+  background: color-mix(in srgb, var(--surface) 92%, transparent);
+  box-shadow: var(--shadow-sm, 0 4px 14px rgba(15, 23, 42, 0.08));
+  color: var(--text-2);
+  font-size: 12px;
+  line-height: 18px;
+}
+
+.code-error-toast {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.code-error-toast span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.code-error-toast button {
+  height: 22px;
+  flex: 0 0 auto;
+  padding: 0 8px;
+  border: 1px solid var(--line);
+  border-radius: var(--r-2, 6px);
+  background: var(--surface);
+  color: var(--text);
+  font-family: inherit;
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.code-switching {
+  pointer-events: none;
+  text-align: center;
+}
+
+@media (max-width: 760px) {
+  .code-new-chat {
+    width: min(100% - 28px, 920px);
+    padding: 16px 0 18px;
+  }
+
+  .code-new-copy h1 {
+    font-size: 22px;
+  }
+
+  .code-new-suggestions {
+    grid-template-columns: 1fr;
+  }
+
+  .code-new-suggestion {
+    min-height: 72px;
+  }
+}
+</style>

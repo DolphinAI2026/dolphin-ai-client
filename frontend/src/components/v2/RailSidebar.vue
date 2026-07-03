@@ -4,15 +4,19 @@ import { useRoute, useRouter } from 'vue-router'
 import { checkAndPromptUpdate } from '@/utils/desktop'
 import { useUserStore } from '@/stores/user'
 import { useThemeStore } from '@/stores/theme'
-import { useModeStore, MODE_META, type AppMode } from '@/stores/mode'
+import { useModeStore, MODE_META, MODE_ORDER, type AppMode } from '@/stores/mode'
 import { aiChatApi, type AIChatSession } from '@/api/aiChat'
+import { codeRuntimeApi } from '@/api/codeRuntime'
+import { ElMessage } from 'element-plus'
 import {
   normalizeAiSessions,
+  normalizeCodeRailHistory,
   railSessionTarget,
   isRailSessionActive,
   railSessionFallback,
   type RailSession,
 } from '@/composables/railSessions'
+import type { CodeRailHistoryResponse } from '@/api/codeRuntime'
 import ruijingWhaleMarkUrl from '@/assets/brand/ruijing-whale-mark.svg'
 
 interface NavItem { key: string; label: string; icon: string; path: string; badge?: number }
@@ -24,34 +28,112 @@ const user = useUserStore()
 const theme = useThemeStore()
 const modeStore = useModeStore()
 
-// 当前模式(目前恒为 Builder)仍驱动左栏导航 + 会话路由;切换器 UI 已移除。
+// 当前模式驱动左栏导航、会话加载和会话路由。
 const currentMode = computed<AppMode>(() => modeStore.mode)
 
 // 会话历史 —— 收进左栏单一导航(参考 Claude Code), 页面内层 sidebar 隐掉。
-// 统一使用 aiChatApi 会话(含 code 模式会话, SP2b Task6 放行后一起列出)。
+// 统一使用 aiChatApi 会话; Code 模式只展示 mode=code 的应用会话。
 const aiSessions = ref<AIChatSession[]>([])
+const codeRailHistory = ref<CodeRailHistoryResponse | null>(null)
 const showRecent = computed(() => !effectiveCollapsed.value)
 
 // app_id → 应用名映射(供「按应用」分组,code 会话从工作区继承 app_id 后据此归到应用)。
 const appNameById = ref<Map<number, string>>(new Map())
 
 // 归一会话列表(单一来源)。
-const railSessions = computed<RailSession[]>(() => normalizeAiSessions(aiSessions.value, appNameById.value))
+const railSessions = computed<RailSession[]>(() => currentMode.value === 'code'
+  ? normalizeCodeRailHistory(codeRailHistory.value)
+  : normalizeAiSessions(aiSessions.value, appNameById.value))
+
+async function loadRailApps() {
+  try {
+    if (currentMode.value === 'code') {
+      const page = await codeRuntimeApi.listApplications({ pageSize: 100 })
+      const items = page?.items || []
+      appCount.value = Number(page?.total ?? items.length)
+      appNameById.value = new Map()
+      return
+    }
+    const { applicationApi } = await import('@/api/application')
+    const apps: any = (await applicationApi.list?.({
+      include_remote: false,
+      include_config: false,
+      app_type: 'low-code',
+    } as any)) ?? []
+    const appList: any[] = Array.isArray(apps) ? apps : (apps?.items ?? [])
+    appCount.value = Array.isArray(apps) ? apps.length : (apps?.items?.length ?? apps?.total ?? 0)
+    // 建 app_id → 名称映射,供左栏「按应用」分组反查(含 code 会话继承的 app_id)。
+    const map = new Map<number, string>()
+    for (const a of appList) {
+      const id = Number(a?.id)
+      const name = a?.app_name || a?.appName
+      if (Number.isFinite(id) && id && name) map.set(id, name)
+    }
+    appNameById.value = map
+  } catch {
+    appCount.value = undefined
+    appNameById.value = new Map()
+  }
+}
 
 async function loadRailSessions() {
   try {
+    if (currentMode.value === 'code') {
+      codeRailHistory.value = await codeRuntimeApi.listRailHistory()
+      aiSessions.value = []
+      return
+    }
+    codeRailHistory.value = null
     const d = await aiChatApi.listSessions()
-    aiSessions.value = d?.sessions || []
-  } catch { aiSessions.value = [] }
+    const sessions = d?.sessions || []
+    aiSessions.value = sessions.filter(s => s.mode !== 'code')
+  } catch {
+    aiSessions.value = []
+    if (currentMode.value === 'code') codeRailHistory.value = { apps: [] }
+  }
 }
 
-// 切模式时重新拉对应会话源(builder/agent↔code)。
-watch(currentMode, () => { void loadRailSessions() })
+function refreshCodeRail() {
+  if (currentMode.value === 'code') {
+    void loadRailApps()
+    void loadRailSessions()
+  }
+}
 
 // 分组方式: 按日期 / 按应用(参考 Claude Code 左栏的 Group by) + 分组可折叠。
 const RAIL_GROUPBY_KEY = 'apaas-rail-sess-groupby-v1'
-const groupBy = ref<'date' | 'app'>(localStorage.getItem(RAIL_GROUPBY_KEY) === 'app' ? 'app' : 'date')
-function setGroupBy(g: 'date' | 'app') { groupBy.value = g; try { localStorage.setItem(RAIL_GROUPBY_KEY, g) } catch { /* private */ } }
+const RAIL_GROUPBY_CODE_KEY = 'apaas-rail-sess-groupby-code-v1'
+function defaultGroupByForMode(mode: AppMode): 'date' | 'app' {
+  return mode === 'code' ? 'app' : 'date'
+}
+function groupByStorageKey(mode: AppMode): string {
+  return mode === 'code' ? RAIL_GROUPBY_CODE_KEY : RAIL_GROUPBY_KEY
+}
+function loadGroupByForMode(mode: AppMode): 'date' | 'app' {
+  try {
+    const stored = localStorage.getItem(groupByStorageKey(mode))
+    if (stored === 'date' || stored === 'app') return stored
+  } catch { /* private */ }
+  return defaultGroupByForMode(mode)
+}
+const groupBy = ref<'date' | 'app'>(loadGroupByForMode(currentMode.value))
+const groupByMode = ref<AppMode>(currentMode.value)
+const effectiveGroupBy = computed<'date' | 'app'>(() =>
+  groupByMode.value === currentMode.value ? groupBy.value : loadGroupByForMode(currentMode.value)
+)
+function setGroupBy(g: 'date' | 'app') {
+  groupByMode.value = currentMode.value
+  groupBy.value = g
+  try { localStorage.setItem(groupByStorageKey(currentMode.value), g) } catch { /* private */ }
+}
+
+// 切模式时重新拉对应会话源(builder/agent↔code), 并恢复该模式自己的分组偏好。
+watch(currentMode, () => {
+  groupByMode.value = currentMode.value
+  groupBy.value = loadGroupByForMode(currentMode.value)
+  void loadRailApps()
+  void loadRailSessions()
+})
 const collapsedGroups = ref<Set<string>>(new Set())
 function toggleGroup(label: string) {
   const s = new Set(collapsedGroups.value)
@@ -59,15 +141,21 @@ function toggleGroup(label: string) {
   collapsedGroups.value = s
 }
 
-const sessionGroups = computed<{ label: string; items: RailSession[] }[]>(() => {
-  if (groupBy.value === 'app') {
+const creatingCodeAgentSession = ref(false)
+const sessionGroups = computed<{ label: string; items: RailSession[]; shellSessionId?: number }[]>(() => {
+  if (effectiveGroupBy.value === 'app') {
     const map = new Map<string, RailSession[]>()
     for (const s of railSessions.value) {
       const key = s.appName || '未关联应用'
       if (!map.has(key)) map.set(key, [])
       map.get(key)!.push(s)
     }
-    return [...map.entries()].map(([label, items]) => ({ label, items }))
+    return [...map.entries()].map(([label, items]) => {
+      const shellSessionId = currentMode.value === 'code'
+        ? items.find(s => s.shellSessionId)?.shellSessionId
+        : undefined
+      return { label, items, ...(shellSessionId ? { shellSessionId } : {}) }
+    })
   }
   const now = new Date()
   const startOfToday = new Date(now.getFullYear(), now.getMonth(), now.getDate()).getTime()
@@ -86,12 +174,50 @@ const sessionGroups = computed<{ label: string; items: RailSession[] }[]>(() => 
   return buckets.filter(b => b.items.length)
 })
 
-function openSession(id: number) { router.push(railSessionTarget(currentMode.value, id)) }
-function sessionActive(s: RailSession) { return isRailSessionActive(currentMode.value, s.id, route) }
+async function openSession(session: RailSession) {
+  if (currentMode.value === 'code' && session.source === 'code-agent' && session.shellSessionId && session.runtimeSessionId) {
+    try {
+      await codeRuntimeApi.activateAgentSession(session.shellSessionId, session.runtimeSessionId)
+    } catch { /* iframe will surface runtime errors on open */ }
+  }
+  router.push(railSessionTarget(currentMode.value, session))
+}
+function sessionActive(s: RailSession) { return isRailSessionActive(currentMode.value, s, route) }
+async function createCodeAgentSession(shellSessionId?: number | null) {
+  if (creatingCodeAgentSession.value) return
+  const isCodeMode = currentMode.value === 'code'
+  if (!isCodeMode) return
+  if (!shellSessionId) {
+    ElMessage.warning('请先打开一个 Code 应用')
+    return
+  }
+
+  creatingCodeAgentSession.value = true
+  try {
+    const result = await codeRuntimeApi.createAgentSession(shellSessionId)
+    await loadRailSessions()
+    if (result.runtime_session_id) {
+      router.push({
+        path: `/code/${result.shell_session_id || shellSessionId}`,
+        query: { agent: result.runtime_session_id },
+      })
+    } else {
+      router.push(`/code/${shellSessionId}`)
+    }
+  } catch (error: any) {
+    ElMessage.error(error?.response?.data?.detail || error?.message || '新建对话失败')
+  } finally {
+    creatingCodeAgentSession.value = false
+  }
+}
 async function deleteRailSession(s: RailSession) {
   if (!window.confirm(`删除会话「${s.title || '未命名会话'}」?`)) return
   try {
-    await aiChatApi.deleteSession(s.id)
+    if (currentMode.value === 'code' && s.source === 'code-agent' && s.shellSessionId && s.runtimeSessionId) {
+      await codeRuntimeApi.deleteAgentSession(s.shellSessionId, s.runtimeSessionId)
+    } else {
+      await aiChatApi.deleteSession(Number(s.id))
+    }
   } catch { /* ignore */ }
   await loadRailSessions()
   if (sessionActive(s)) router.push(railSessionFallback(currentMode.value))
@@ -117,7 +243,7 @@ function desktopHidden(path: string): boolean {
 const NAV = computed<NavItem[]>(() => {
   const items = MODE_META[currentMode.value].nav.map<NavItem>(it => ({
     ...it,
-    badge: it.path === '/apps' ? (appCount.value || undefined) : undefined,
+    badge: it.key.endsWith('-apps') ? (appCount.value || undefined) : undefined,
   }))
   return items.filter(item => !desktopHidden(item.path))
 })
@@ -173,22 +299,7 @@ function closeTenantMenu() {
 }
 
 onMounted(async () => {
-  try {
-    const { applicationApi } = await import('@/api/application')
-    const apps: any = (await applicationApi.list?.({ include_remote: false } as any)) ?? []
-    const appList: any[] = Array.isArray(apps) ? apps : (apps?.items ?? [])
-    appCount.value = Array.isArray(apps) ? apps.length : (apps?.items?.length ?? apps?.total ?? 0)
-    // 建 app_id → 名称映射,供左栏「按应用」分组反查(含 code 会话继承的 app_id)。
-    const map = new Map<number, string>()
-    for (const a of appList) {
-      const id = Number(a?.id)
-      const name = a?.app_name || a?.appName
-      if (Number.isFinite(id) && id && name) map.set(id, name)
-    }
-    appNameById.value = map
-  } catch {
-    appCount.value = undefined
-  }
+  await loadRailApps()
 
   try {
     await user.fetchAvailableTenants()
@@ -199,10 +310,12 @@ onMounted(async () => {
   await loadRailSessions()
 
   window.addEventListener('click', closeTenantMenu)
+  window.addEventListener('code-rail-refresh', refreshCodeRail)
 })
 
 onBeforeUnmount(() => {
   window.removeEventListener('click', closeTenantMenu)
+  window.removeEventListener('code-rail-refresh', refreshCodeRail)
 })
 
 function toggleCollapsed() {
@@ -213,6 +326,9 @@ function toggleCollapsed() {
 
 function isActive(path: string) {
   const basePath = path.split('?')[0]
+  if (path.includes('create=1')) {
+    return route.path === basePath && route.query.create != null
+  }
   // AI Builder（/）= 融合页，/ai-chat 系列是同一功能，一并高亮。
   if (basePath === '/') return route.path === '/' || route.path.startsWith('/ai-chat')
   return route.path === basePath || route.path.startsWith(basePath + '/')
@@ -233,6 +349,18 @@ async function selectTenant(value: number) {
 function go(path: string) {
   tenantMenuOpen.value = false
   router.push(path)
+}
+
+function goNav(item: NavItem) {
+  tenantMenuOpen.value = false
+  router.push(item.path)
+}
+
+function switchMode(mode: AppMode) {
+  if (mode === currentMode.value) return
+  modeStore.setMode(mode)
+  tenantMenuOpen.value = false
+  router.push(MODE_META[mode].home)
 }
 
 function goPlatformAdmin() {
@@ -256,7 +384,7 @@ function onMenuClick(e: MouseEvent, item: NavItem) {
     return
   }
   e.preventDefault()
-  go(item.path)
+  goNav(item)
 }
 
 function onPlatformClick(e: MouseEvent) {
@@ -355,7 +483,20 @@ function renderIcon(name: string): string {
       <span v-html="renderIcon('chevronRight')" />
     </button>
 
-    <!-- 模式切换器已去掉(当前仅 Builder 一种);加其他模式时再恢复。 -->
+    <div v-if="!effectiveCollapsed" class="rail-mode-switch" role="tablist" aria-label="工作模式">
+      <button
+        v-for="mode in MODE_ORDER"
+        :key="mode"
+        type="button"
+        class="rail-mode-btn"
+        :class="{ active: mode === currentMode }"
+        role="tab"
+        :aria-selected="mode === currentMode"
+        @click="switchMode(mode)"
+      >
+        {{ MODE_META[mode].label }}
+      </button>
+    </div>
 
     <nav class="rail-scroll" aria-label="主导航">
       <!-- 2026-05-23: button → <a href> 让 cmd+click / 中键 / 右键"在新标签中打开" 真开 chrome tab.
@@ -375,22 +516,34 @@ function renderIcon(name: string): string {
         <span v-if="it.badge" class="rail-item-badge">{{ it.badge }}</span>
       </a>
 
-      <!-- 会话历史(单一左栏, 参考 Claude Code): 日期/应用 分组 + 可折叠 + 删除。
-           新建走上方「新建应用」, 不另设新会话按钮。 -->
+      <!-- 会话历史(单一左栏, 参考 Claude Code): 日期/应用 分组 + 可折叠 + 删除。 -->
       <div v-if="showRecent" class="rail-sessions">
         <div class="rail-sess-toolbar">
           <span class="rail-sess-cap">会话</span>
           <div class="rail-sess-groupby">
-            <button type="button" :class="{ on: groupBy === 'date' }" @click="setGroupBy('date')">日期</button>
-            <button type="button" :class="{ on: groupBy === 'app' }" @click="setGroupBy('app')">应用</button>
+            <button type="button" :class="{ on: effectiveGroupBy === 'date' }" @click="setGroupBy('date')">日期</button>
+            <button type="button" :class="{ on: effectiveGroupBy === 'app' }" @click="setGroupBy('app')">应用</button>
           </div>
         </div>
         <div v-for="g in sessionGroups" :key="g.label" class="rail-sess-group">
-          <button type="button" class="rail-sess-label" @click="toggleGroup(g.label)">
-            <span class="rail-sess-chev" :class="{ collapsed: collapsedGroups.has(g.label) }" v-html="renderIcon('chevronDown')" />
-            <span class="rail-sess-glabel">{{ g.label }}</span>
-            <span class="rail-sess-cnt">{{ g.items.length }}</span>
-          </button>
+          <div class="rail-sess-label-row">
+            <button type="button" class="rail-sess-label" @click="toggleGroup(g.label)">
+              <span class="rail-sess-chev" :class="{ collapsed: collapsedGroups.has(g.label) }" v-html="renderIcon('chevronDown')" />
+              <span class="rail-sess-glabel">{{ g.label }}</span>
+              <span class="rail-sess-cnt">{{ g.items.length }}</span>
+            </button>
+            <button
+              v-if="currentMode === 'code' && effectiveGroupBy === 'app' && g.shellSessionId"
+              type="button"
+              class="rail-sess-group-new"
+              title="新建对话"
+              aria-label="新建对话"
+              :disabled="creatingCodeAgentSession"
+              @click.stop="createCodeAgentSession(g.shellSessionId)"
+            >
+              <span v-html="renderIcon('plus')" />
+            </button>
+          </div>
           <template v-if="!collapsedGroups.has(g.label)">
             <div
               v-for="s in g.items"
@@ -398,7 +551,7 @@ function renderIcon(name: string): string {
               class="rail-sess-item"
               :class="{ active: sessionActive(s) }"
               :title="s.title || '未命名会话'"
-              @click="openSession(s.id)"
+              @click="openSession(s)"
             >
               <span class="rail-sess-title">{{ s.title || '未命名会话' }}</span>
               <button class="rail-sess-del" type="button" title="删除会话" @click.stop="deleteRailSession(s)">×</button>
@@ -677,6 +830,41 @@ function renderIcon(name: string): string {
 .rail-expand-top:focus-visible {
   outline: 2px solid var(--line-focus, var(--brand-ring));
   outline-offset: 2px;
+}
+
+.rail-mode-switch {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 2px;
+  margin: 0 10px 6px;
+  padding: 3px;
+  border: 1px solid var(--line);
+  border-radius: var(--r-3, 8px);
+  background: var(--surface-2);
+}
+
+.rail-mode-btn {
+  min-width: 0;
+  height: 28px;
+  border: 0;
+  border-radius: var(--r-2, 6px);
+  background: transparent;
+  color: var(--text-3);
+  font-family: inherit;
+  font-size: 12px;
+  font-weight: var(--fw-semibold, 600);
+  cursor: pointer;
+}
+
+.rail-mode-btn:hover {
+  color: var(--brand);
+  background: var(--brand-soft);
+}
+
+.rail-mode-btn.active {
+  color: var(--brand);
+  background: var(--surface);
+  box-shadow: var(--sh-1);
 }
 
 /* ─── Nav scroll + items ─────────────────────────────────────── */
@@ -1285,8 +1473,28 @@ html[data-theme="dark"] .rail-expand-top {
 .rail-sess-groupby button { border: none; background: none; color: var(--text-3, #888); font-size: 11px; padding: 2px 8px; border-radius: 5px; cursor: pointer; }
 .rail-sess-groupby button.on { background: var(--surface-1, rgba(127,127,127,.18)); color: var(--text, #eee); }
 .rail-sess-group { margin-bottom: 6px; }
+.rail-sess-label-row { display: flex; align-items: center; gap: 2px; }
+.rail-sess-group-new {
+  width: 22px;
+  height: 22px;
+  display: grid;
+  place-items: center;
+  flex-shrink: 0;
+  border: 1px solid transparent;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--text-3, #888);
+  cursor: pointer;
+}
+.rail-sess-group-new:hover:not(:disabled) {
+  color: var(--brand);
+  background: var(--brand-soft);
+  border-color: var(--brand-ring);
+}
+.rail-sess-group-new:disabled { opacity: .5; cursor: wait; }
+.rail-sess-group-new :deep(svg) { width: 13px; height: 13px; }
 .rail-sess-label {
-  display: flex; align-items: center; gap: 4px; width: 100%;
+  display: flex; align-items: center; gap: 4px; flex: 1; min-width: 0;
   border: none; background: none; cursor: pointer;
   font-size: 11px; color: var(--text-3, #777); padding: 4px 4px;
 }

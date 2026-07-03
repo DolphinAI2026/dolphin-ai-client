@@ -92,7 +92,7 @@ export interface MergedApplication {
   app_code?: string
   icon_svg?: string
   description?: string
-  source: 'local' | 'remote' | 'linked'
+  source: 'local' | 'remote' | 'linked' | 'd-ai-code'
   status: string
   local_status?: string
   remote_status?: string
@@ -114,6 +114,7 @@ export interface MergedApplication {
   git_provider?: string | null
   git_default_branch?: string | null
   app_type?: string            // 'low-code' | 'ai-code'
+  external_application_id?: string
   source_workspace_id?: string | null
   created_at?: string
   updated_at?: string

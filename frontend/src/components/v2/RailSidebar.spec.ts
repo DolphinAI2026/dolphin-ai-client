@@ -10,12 +10,15 @@ describe('RailSidebar brand mark', () => {
   })
 })
 
-// SP2b(2026-06-25): rail 会话统一单一来源 aiChatApi(含 code 会话, Task6 放行后一起列出),
-// 不再按 mode 切换 codingApi/aiChatApi 双源; 路由经 railSessions 组合式恒落 /ai-chat。
+// SP2b(2026-06-25): rail 会话统一单一来源 aiChatApi; Code 模式复用同一
+// 会话分组，只是按 mode=code 拉取并路由到 /code。
 describe('RailSidebar unified session source (SP2b)', () => {
   it('uses a single aiChatApi session source (no codingApi)', () => {
     expect(railSidebarSource).toContain("from '@/api/aiChat'")
-    expect(railSidebarSource).toContain('aiChatApi.listSessions()')
+    expect(railSidebarSource).toContain('aiChatApi.listSessions(')
+    expect(railSidebarSource).toContain('codeRuntimeApi.listRailHistory')
+    expect(railSidebarSource).toContain('normalizeCodeRailHistory')
+    expect(railSidebarSource).toContain("sessions.filter(s => s.mode !== 'code')")
     expect(railSidebarSource).not.toContain("from '@/api/coding'")
     expect(railSidebarSource).not.toContain('codingApi.getConversations()')
   })
@@ -23,10 +26,47 @@ describe('RailSidebar unified session source (SP2b)', () => {
   it('delegates normalization + routing to the railSessions composable', () => {
     expect(railSidebarSource).toContain("from '@/composables/railSessions'")
     expect(railSidebarSource).toContain('normalizeAiSessions')
+    expect(railSidebarSource).toContain('normalizeCodeRailHistory')
     expect(railSidebarSource).toContain('railSessionTarget(')
   })
 
-  it('shows the recent-session list in every mode (no longer excludes code)', () => {
+  it('activates Code runtime history before opening the shell route', () => {
+    expect(railSidebarSource).toContain('codeRuntimeApi.activateAgentSession')
+    expect(railSidebarSource).toContain('session.runtimeSessionId')
+    expect(railSidebarSource).toContain('session.shellSessionId')
+  })
+
+  it('exposes Code new runtime conversation actions on application groups', () => {
+    expect(railSidebarSource).toContain('createCodeAgentSession')
+    expect(railSidebarSource).toContain('codeRuntimeApi.createAgentSession')
+    expect(railSidebarSource).toContain('rail-sess-group-new')
+    expect(railSidebarSource).toContain('g.shellSessionId')
+    expect(railSidebarSource).toContain('items.find(s => s.shellSessionId)?.shellSessionId')
+    expect(railSidebarSource).toContain("effectiveGroupBy === 'app'")
+    expect(railSidebarSource).not.toContain('class="rail-sess-new"')
+    expect(railSidebarSource).toContain("query: { agent: result.runtime_session_id }")
+  })
+
+  it('shows the recent-session list in every mode', () => {
     expect(railSidebarSource).not.toContain("currentMode.value !== 'code'")
+  })
+
+  it('defaults Code sessions to application grouping', () => {
+    expect(railSidebarSource).toContain("mode === 'code' ? 'app' : 'date'")
+    expect(railSidebarSource).toContain('rail-sess-groupby-code')
+  })
+
+  it('keeps Code application count on the d-ai-code source', () => {
+    expect(railSidebarSource).toContain("from '@/api/codeRuntime'")
+    expect(railSidebarSource).toContain('codeRuntimeApi.listApplications')
+    expect(railSidebarSource).toContain("app_type: 'low-code'")
+    expect(railSidebarSource).not.toContain("currentMode.value === 'code' ? 'ai-code' : 'low-code'")
+    expect(railSidebarSource).toContain('void loadRailApps()')
+  })
+
+  it('listens for Code rail refresh events from the app list', () => {
+    expect(railSidebarSource).toContain("window.addEventListener('code-rail-refresh'")
+    expect(railSidebarSource).toContain("window.removeEventListener('code-rail-refresh'")
+    expect(railSidebarSource).toContain('refreshCodeRail')
   })
 })

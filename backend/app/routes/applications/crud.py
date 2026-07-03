@@ -36,6 +36,17 @@ from . import _helpers  # noqa: F401
 router = APIRouter()
 logger = logging.getLogger(__name__)
 
+_APPLICATION_TYPES = {"low-code", "ai-code"}
+
+
+def _normalize_application_type(value: str | None) -> str | None:
+    normalized = str(value or "").strip()
+    if not normalized or normalized == "all":
+        return None
+    if normalized not in _APPLICATION_TYPES:
+        raise HTTPException(status_code=400, detail="app_type 必须是 low-code 或 ai-code")
+    return normalized
+
 def _extract_apaas_app_version(app_detail: dict) -> str:
     for key in ("currentVersion", "appVersion", "version"):
         value = app_detail.get(key) if isinstance(app_detail, dict) else None
@@ -467,10 +478,14 @@ async def list_applications(
     include_remote: bool = Query(True),
     source_filter: Optional[str] = Query(None),  # local / remote / linked
     include_config: bool = Query(True),  # False → 省掉沉重的 config_preview blob（计数仍保留）
+    app_type: Optional[str] = Query(None),  # low-code / ai-code / all
 ):
     """获取应用列表（本地 + 得帆云平台合并）"""
+    requested_app_type = _normalize_application_type(app_type)
     # 1. 查本地应用
     query = select(Application).where(Application.tenant_id == ctx.tenant_id)
+    if requested_app_type:
+        query = query.where(Application.app_type == requested_app_type)
     if team_scope == "personal":
         query = query.where(Application.created_by == ctx.user.id, Application.team_id.is_(None))
     elif team_scope and team_scope.isdigit():
@@ -499,7 +514,7 @@ async def list_applications(
 
     # 2. 拉取远程应用（降级处理）
     remote_apps: list = []
-    if include_remote and ctx.user.apaas_token and source_filter != "local":
+    if include_remote and requested_app_type != "ai-code" and ctx.user.apaas_token and source_filter != "local":
         try:
             from app.apaas_client import APaaSClient
             client = APaaSClient(base_url=ctx.user.apaas_base_url, tenant_id=ctx.user.apaas_tenant_id, token=ctx.user.apaas_token)
@@ -523,7 +538,7 @@ async def list_applications(
     # 这里按 platform_env_id 聚合 local apps，调 list_apaas_apps_in_env 拿真实
     # apaas_app_id，按 app_code 匹配回填。
     env_code_to_apaas: dict[int, dict[str, dict]] = {}  # {env_id: {code_lower: remote_app}}
-    if include_remote and source_filter != "local":
+    if include_remote and requested_app_type != "ai-code" and source_filter != "local":
         try:
             from app.coding.apaas_tools import APAAS_TOOL_EXECUTORS_PLATFORM
             list_exec = APAAS_TOOL_EXECUTORS_PLATFORM.get("list_apaas_apps")
@@ -922,6 +937,11 @@ async def create_application(
     if not app_code:
         raise HTTPException(status_code=400, detail=APP_CODE_RULE_TEXT)
 
+    app_type = _normalize_application_type(data.app_type) or "low-code"
+    source_workspace_id = (data.source_workspace_id or "").strip() or None
+    if app_type != "ai-code":
+        source_workspace_id = None
+
     config_preview = data.config_preview
     if isinstance(config_preview, dict):
         preview_data = config_preview.get("data", config_preview)
@@ -943,6 +963,8 @@ async def create_application(
         platform_env_id=data.platform_env_id,
         config_preview=config_str,
         canonical_spec_id=data.canonical_spec_id,
+        app_type=app_type,
+        source_workspace_id=source_workspace_id,
         status="draft"
     )
     db.add(app)
@@ -1670,4 +1692,3 @@ async def generate_application_icon(
     await db.commit()
 
     return GenerateAppIconResponse(ok=True, app_id=app.id, icon_svg=icon_svg)
-

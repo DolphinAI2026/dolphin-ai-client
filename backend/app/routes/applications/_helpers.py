@@ -974,6 +974,8 @@ def _build_linked(app: Application, remote: dict, perms: dict | None = None, env
         git_repo_url=app.git_repo_url,
         git_provider=app.git_provider,
         git_default_branch=app.git_default_branch,
+        app_type=app.app_type,
+        source_workspace_id=app.source_workspace_id,
         created_at=str(enriched.created_at) if enriched.created_at else None,
         updated_at=str(enriched.updated_at) if enriched.updated_at else None,
     )

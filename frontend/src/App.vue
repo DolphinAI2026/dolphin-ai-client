@@ -49,6 +49,12 @@ function isWorkspaceRoute(r: RouteLocationNormalized): boolean {
 function isCodingRoute(r: RouteLocationNormalized): boolean {
   return r.path === '/coding'
 }
+
+// /code/:id 嵌入 d-ai-code iframe。切会话只应让 CodeConversationPage watch route.params.id
+// 重新 open runtime，不能 remount WorkbenchShell/RailSidebar，否则左栏会整块刷新。
+function isCodeRoute(r: RouteLocationNormalized): boolean {
+  return r.path === '/code' || r.path.startsWith('/code/')
+}
 </script>
 
 <template>
@@ -61,6 +67,9 @@ function isCodingRoute(r: RouteLocationNormalized): boolean {
     </KeepAlive>
     <KeepAlive v-else-if="isWorkspaceRoute($route)">
       <component :is="Component" key="workspace-singleton" />
+    </KeepAlive>
+    <KeepAlive v-else-if="isCodeRoute($route)">
+      <component :is="Component" key="code-singleton" />
     </KeepAlive>
     <!-- /coding: 稳定 key, query 变化(换会话/工作区)复用实例不 remount → 不闪 -->
     <component v-else-if="isCodingRoute($route)" :is="Component" key="coding-stable" />

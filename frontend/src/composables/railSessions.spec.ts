@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import {
   normalizeAiSessions,
+  normalizeCodeRailHistory,
   normalizeCodingSessions,
   railSessionTarget,
   isRailSessionActive,
@@ -16,6 +17,140 @@ describe('rail session normalization', () => {
     expect(out).toEqual([
       { id: 7, title: '配置 CRM', updatedAt: '2026-06-21T10:00:00Z', appName: '销售管理' },
       { id: 8, title: '未命名会话', updatedAt: '2026-06-20T10:00:00Z', appName: undefined },
+    ])
+  })
+
+  it('groups Code sessions by the external d-ai-code application name', () => {
+    const out = normalizeAiSessions([
+      {
+        id: 9,
+        title: '客户门户 Code',
+        updated_at: '2026-06-30T10:00:00Z',
+        mode: 'code',
+        app_id: null,
+        external_application_id: 'code-app-1',
+        external_app_name: '客户门户',
+        external_app_code: 'crm_portal',
+      } as any,
+    ])
+
+    expect(out).toEqual([
+      { id: 9, title: '客户门户 Code', updatedAt: '2026-06-30T10:00:00Z', appName: '客户门户' },
+    ])
+  })
+
+  it('keeps one Code rail session per external application using the newest shell session', () => {
+    const out = normalizeAiSessions([
+      {
+        id: 9,
+        title: 'CRM Code',
+        updated_at: '2026-06-30T10:00:00Z',
+        mode: 'code',
+        external_application_id: 'crm',
+        external_app_name: 'CRM',
+      } as any,
+      {
+        id: 12,
+        title: 'CRM Code',
+        updated_at: '2026-07-01T10:00:00Z',
+        mode: 'code',
+        external_application_id: 'crm',
+        external_app_name: 'CRM',
+      } as any,
+      {
+        id: 13,
+        title: 'ERP Code',
+        updated_at: '2026-07-01T09:00:00Z',
+        mode: 'code',
+        external_application_id: 'erp',
+        external_app_name: 'ERP',
+      } as any,
+    ])
+
+    expect(out).toEqual([
+      { id: 12, title: 'CRM Code', updatedAt: '2026-07-01T10:00:00Z', appName: 'CRM' },
+      { id: 13, title: 'ERP Code', updatedAt: '2026-07-01T09:00:00Z', appName: 'ERP' },
+    ])
+  })
+
+  it('maps opened Code runtime agent sessions into application grouped rail items', () => {
+    const out = normalizeCodeRailHistory({
+      apps: [
+        {
+          shell_session_id: 10,
+          external_application_id: 'crm',
+          app_name: 'CRM',
+          app_code: 'crm',
+          runtime_session_id: 'runtime-1',
+          sessions: [
+            {
+              runtimeSessionId: 'runtime-2',
+              title: '修复登录问题',
+              state: 'waiting_input',
+              lastActiveAt: '2026-07-01T07:00:00Z',
+              current: false,
+            },
+            {
+              runtimeSessionId: 'runtime-1',
+              title: '',
+              state: 'busy',
+              lastActiveAt: '2026-07-01T06:30:00Z',
+              current: true,
+            },
+          ],
+        },
+      ],
+    } as any)
+
+    expect(out).toEqual([
+      {
+        id: 'runtime-2',
+        title: '修复登录问题',
+        updatedAt: '2026-07-01T07:00:00Z',
+        appName: 'CRM',
+        shellSessionId: 10,
+        runtimeSessionId: 'runtime-2',
+        current: false,
+        source: 'code-agent',
+      },
+      {
+        id: 'runtime-1',
+        title: '会话 1',
+        updatedAt: '2026-07-01T06:30:00Z',
+        appName: 'CRM',
+        shellSessionId: 10,
+        runtimeSessionId: 'runtime-1',
+        current: true,
+        source: 'code-agent',
+      },
+    ])
+  })
+
+  it('maps shell-only Code applications into clickable rail sessions', () => {
+    const out = normalizeCodeRailHistory({
+      apps: [
+        {
+          shell_session_id: 10,
+          external_application_id: 'crm',
+          app_name: 'CRM',
+          app_code: 'crm',
+          runtime_session_id: null,
+          sessions: [],
+        },
+      ],
+    } as any)
+
+    expect(out).toEqual([
+      {
+        id: 10,
+        title: 'CRM Code',
+        updatedAt: undefined,
+        appName: 'CRM',
+        shellSessionId: 10,
+        runtimeSessionId: undefined,
+        current: false,
+        source: 'code-shell',
+      },
     ])
   })
 
@@ -42,8 +177,18 @@ describe('rail session navigation target', () => {
     expect(railSessionTarget('agent', 42)).toEqual({ path: '/ai-chat/42' })
   })
 
-  it('routes code sessions to /ai-chat/:id too (统一外壳,AIChatPage 按 mode 挂 CodexPanelHost)', () => {
-    expect(railSessionTarget('code', 42)).toEqual({ path: '/ai-chat/42' })
+  it('routes code shell sessions to the embedded Code page', () => {
+    expect(railSessionTarget('code', { id: 42, title: 'CRM Code' })).toEqual({ path: '/code/42' })
+  })
+
+  it('routes code runtime agent sessions through their shell session with runtime query', () => {
+    expect(railSessionTarget('code', {
+      id: 'runtime-2',
+      title: '修复登录问题',
+      shellSessionId: 10,
+      runtimeSessionId: 'runtime-2',
+      source: 'code-agent',
+    })).toEqual({ path: '/code/10', query: { agent: 'runtime-2' } })
   })
 })
 
@@ -53,10 +198,24 @@ describe('rail session active state', () => {
     expect(isRailSessionActive('builder', 9, { path: '/ai-chat/10', query: {} })).toBe(false)
   })
 
-  it('highlights the code session by /ai-chat/:id path too', () => {
-    expect(isRailSessionActive('code', 9, { path: '/ai-chat/9', query: {} })).toBe(true)
-    expect(isRailSessionActive('code', 9, { path: '/ai-chat/10', query: {} })).toBe(false)
-    expect(isRailSessionActive('code', 9, { path: '/coding', query: {} })).toBe(false)
+  it('highlights the code session by /code/:id path', () => {
+    const shell = { id: 9, title: 'CRM Code' }
+    expect(isRailSessionActive('code', shell, { path: '/code/9', query: {} })).toBe(true)
+    expect(isRailSessionActive('code', shell, { path: '/code/10', query: {} })).toBe(false)
+    expect(isRailSessionActive('code', shell, { path: '/coding', query: {} })).toBe(false)
+  })
+
+  it('highlights code runtime agent sessions by shell path and runtime query', () => {
+    const item = {
+      id: 'runtime-2',
+      title: '修复登录问题',
+      shellSessionId: 10,
+      runtimeSessionId: 'runtime-2',
+      source: 'code-agent',
+    } as const
+    expect(isRailSessionActive('code', item, { path: '/code/10', query: { agent: 'runtime-2' } })).toBe(true)
+    expect(isRailSessionActive('code', item, { path: '/code/10', query: { agent: 'runtime-1' } })).toBe(false)
+    expect(isRailSessionActive('code', item, { path: '/code/11', query: { agent: 'runtime-2' } })).toBe(false)
   })
 })
 
@@ -64,6 +223,6 @@ describe('rail session fallback after delete', () => {
   it('falls back to home for all modes (统一外壳)', () => {
     expect(railSessionFallback('builder')).toBe('/')
     expect(railSessionFallback('agent')).toBe('/')
-    expect(railSessionFallback('code')).toBe('/')
+    expect(railSessionFallback('code')).toBe('/code/apps')
   })
 })

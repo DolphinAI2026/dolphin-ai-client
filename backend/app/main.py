@@ -25,6 +25,7 @@ from app.routes import (
     browser,
     chat,
     coding,
+    code_runtime,
     conversations,
     current_app,
     db_connections,
@@ -164,6 +165,8 @@ app.include_router(applications.router, prefix="/api")
 app.include_router(apaas.router, prefix="/api")
 app.include_router(generation_steps.router, prefix="/api")
 app.include_router(coding.router, prefix="/api")
+app.include_router(code_runtime.router, prefix="/api")
+app.include_router(code_runtime.proxy_router, prefix="/api")
 app.include_router(projects.router, prefix="/api")
 app.include_router(templates.router, prefix="/api")
 app.include_router(platform_envs.router, prefix="/api")

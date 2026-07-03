@@ -46,6 +46,8 @@ def has_org_permission(permissions: dict | None, resource_type: str, action: str
     """Check if the org role's permission JSON allows the given action on a resource type."""
     if not permissions:
         return False
+    if permissions.get("*") is True:
+        return True
     if isinstance(action, Action):
         action = action.value
     key = f"{resource_type}:{action}"

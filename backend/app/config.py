@@ -23,6 +23,12 @@ class Settings(BaseSettings):
     )
 
     # aPaaS Platform
+    # Auth provider mode:
+    # "" keeps legacy behavior (try aPaaS when configured, then local fallback).
+    # "local" uses ai-builder local accounts only.
+    # "apaas" uses aPaaS only and never falls back to local passwords.
+    # "coding" authenticates against Dolphin Code Control Plane, then issues ai-builder JWT.
+    auth_provider: str = ""
     apaas_base_url: str = ""
     # 桌面 sidecar: 公网账号权威地址(authority)。空=本实例自身就是 authority。
     public_account_base_url: str = ""
@@ -116,6 +122,16 @@ class Settings(BaseSettings):
     dolphin_base_url: str = ""
     dolphin_api_key: str = ""
     dolphin_model: str = "gpt-5.5"
+
+    # Dolphin Code Control Plane OAuth/PKCE client used by AUTH_PROVIDER=coding.
+    dolphin_code_control_plane_url: str = ""
+    dolphin_code_control_plane_token: str = ""
+    dolphin_code_control_plane_delegation_secret: str = ""
+    dolphin_code_builder_url: str = ""
+    dolphin_code_default_seed_project_id: str = "1781233861147"
+    dolphin_code_auth_client_id: str = "control-plane-console"
+    dolphin_code_auth_redirect_uri: str = "http://localhost/auth/callback"
+    dolphin_code_auth_scopes: str = "profile,admin:control-plane"
 
     # ai-builder 自身的对外 chat URL — 给外部 MCP 客户端生成 deeplink 时用。
     # 外部 agent 把 md push 到 cache 后，工具返回值带

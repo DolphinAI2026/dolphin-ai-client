@@ -92,7 +92,7 @@ function onSelect(prefixedId: string | number) {
     currentSessionId.value = sessionId
   }
 }
-function onSessionChanged(id: number) { currentSessionId.value = id; loadSessions() }
+function onSessionChanged(id: number | null) { currentSessionId.value = id; loadSessions() }
 // 对话里 agent 在某 workspace 干活 → 自动升级绑定(代码面板点亮)。不覆盖显式 app 绑定;
 // 同 workspace 不动。重载后靠 ChatPane 重新检测自愈(无需改 URL)。
 function onWorkspaceDetected(ws: string) {

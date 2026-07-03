@@ -1,10 +1,10 @@
 <template>
-  <BuilderFrame :breadcrumbs="[{ label: '我的应用' }]">
+  <BuilderFrame :breadcrumbs="[{ label: pageTitle }]">
     <main class="apps-page builder-page">
       <section class="apps-header page-head" aria-label="应用概览">
         <div class="apps-title-block">
-          <h1 class="page-title">我的应用</h1>
-          <p class="page-subtitle">统一查看应用状态、资产组成和最近更新。</p>
+          <h1 class="page-title">{{ pageTitle }}</h1>
+          <p class="page-subtitle">{{ pageSubtitle }}</p>
         </div>
       </section>
 
@@ -27,13 +27,21 @@
 
         <div class="apps-toolbar-right">
           <el-input v-model="searchQ" placeholder="搜应用名 / 编码" clearable size="small" style="width: 200px" />
-          <button class="btn btn-secondary apps-toolbar-action" type="button" @click="importDialogOpen = true">
+          <button v-if="!isCodeMode" class="btn btn-secondary apps-toolbar-action" type="button" @click="importDialogOpen = true">
             <el-icon><Download /></el-icon>
             <span>导入应用</span>
           </button>
-          <button class="btn btn-primary apps-toolbar-action" type="button" @click="router.push('/')">
+          <button v-if="!isCodeMode" class="btn btn-primary apps-toolbar-action" type="button" @click="startNewApp">
             <el-icon><Plus /></el-icon>
-            <span>新建应用</span>
+            <span>{{ newAppLabel }}</span>
+          </button>
+          <button v-if="isCodeMode" class="btn btn-primary apps-toolbar-action" type="button" :disabled="creatingCodeApp" @click="startNewCodeApp">
+            <el-icon><Plus /></el-icon>
+            <span>{{ creatingCodeApp ? '创建中' : '新建应用' }}</span>
+          </button>
+          <button v-if="isCodeMode" class="btn btn-secondary apps-toolbar-action" type="button" @click="refreshApps">
+            <el-icon><Refresh /></el-icon>
+            <span>刷新</span>
           </button>
 
           <div class="apps-view-toggle" aria-label="视图切换">
@@ -65,8 +73,8 @@
         </div>
         <div v-else-if="filteredApps.length === 0" class="apps-state apps-empty-v2">
           <EmptyState
-            title="暂无应用"
-            desc="从首页新建应用后，会在这里继续构建、部署和查看历史对话。"
+            :title="emptyTitle"
+            :desc="emptyDesc"
           >
             <template #icon>
               <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
@@ -77,9 +85,13 @@
               </svg>
             </template>
             <template #cta>
-              <button class="btn btn-primary btn-sm apps-empty-cta" type="button" @click="router.push('/')">
+              <button v-if="!isCodeMode" class="btn btn-primary btn-sm apps-empty-cta" type="button" @click="startNewApp">
                 <el-icon><Plus /></el-icon>
-                <span>新建应用</span>
+                <span>{{ newAppLabel }}</span>
+              </button>
+              <button v-else class="btn btn-primary btn-sm apps-empty-cta" type="button" :disabled="creatingCodeApp" @click="startNewCodeApp">
+                <el-icon><Plus /></el-icon>
+                <span>{{ creatingCodeApp ? '创建中' : '新建应用' }}</span>
               </button>
             </template>
           </EmptyState>
@@ -109,7 +121,7 @@
                 <span class="apps-row-meta">
                   <code>{{ app.app_code || `app-${app.id}` }}</code>
                   <BaseTag :tone="app.app_type === 'ai-code' ? 'brand' : 'neutral'">{{ app.app_type === 'ai-code' ? 'AI 代码' : '低代码' }}</BaseTag>
-                  <template v-if="latestHistory(app)">
+                  <template v-if="!isCodeMode && latestHistory(app)">
                     <span class="apps-dot-sep"></span>
                     <button class="apps-history-link" type="button" @click.stop="openLatestConversation(app)">
                       最近：{{ latestHistoryTitle(app) }}
@@ -136,9 +148,9 @@
             <div class="apps-row-actions" @click.stop>
               <button class="apps-mini-action" type="button" @click="openDialog(app)">
                 <AppIcon name="message" :size="13" />
-                <span>对话</span>
+                <span>{{ isCodeMode ? '打开' : '对话' }}</span>
               </button>
-              <button class="apps-mini-action" type="button" @click="openDeliveryAssets(app)">
+              <button v-if="!isCodeMode" class="apps-mini-action" type="button" @click="openDeliveryAssets(app)">
                 <AppIcon name="files" :size="13" />
                 <span>资产</span>
               </button>
@@ -181,7 +193,7 @@
               <span>{{ app.dicts || 0 }} 字典</span>
             </div>
             <button
-              v-if="latestHistory(app)"
+              v-if="!isCodeMode && latestHistory(app)"
               class="apps-card-history"
               type="button"
               @click.stop="openLatestConversation(app)"
@@ -196,9 +208,9 @@
             <div class="apps-card-actions" @click.stop>
               <button class="apps-mini-action primary" type="button" @click="openDialog(app)">
                 <AppIcon name="message" :size="13" />
-                <span>对话</span>
+                <span>{{ isCodeMode ? '打开' : '对话' }}</span>
               </button>
-              <button class="apps-mini-action" type="button" @click="openDeliveryAssets(app)">
+              <button v-if="!isCodeMode" class="apps-mini-action" type="button" @click="openDeliveryAssets(app)">
                 <AppIcon name="files" :size="13" />
                 <span>资产</span>
               </button>
@@ -249,7 +261,7 @@
     </main>
 
     <!-- 导入应用弹窗 -->
-    <ImportAppDialog v-model="importDialogOpen" @imported="refreshApps" />
+    <ImportAppDialog v-if="!isCodeMode" v-model="importDialogOpen" @imported="refreshApps" />
 
     <!-- 2026-05-24: 部署历史抽屉 (Agent C 实现 + 主分支补卡片菜单入口) -->
     <DeployHistoryDrawer
@@ -363,14 +375,16 @@
 
 <script setup lang="ts">
 import { computed, onMounted, ref, watch } from 'vue'
-import { useRouter } from 'vue-router'
-import { Download, Grid, List, MoreFilled, Plus } from '@element-plus/icons-vue'
+import { useRoute, useRouter } from 'vue-router'
+import { Download, Grid, List, MoreFilled, Plus, Refresh } from '@element-plus/icons-vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import AppIcon from '@/components/common/AppIcon.vue'
 import { handleError } from '@/utils/errorHandler'
 import { openExternal } from '@/utils/desktop'
 import { applicationApi, type ApplicationDeliveryAssetItem, type ApplicationDeliveryAssetsResponse } from '@/api/application'
+import { codeRuntimeApi } from '@/api/codeRuntime'
 import { conversationApi, type ConversationWithApp } from '@/api/conversation'
+import { useModeStore } from '@/stores/mode'
 import BuilderFrame from '@/components/BuilderFrame.vue'
 import ImportAppDialog from '@/components/ImportAppDialog.vue'
 import DeployHistoryDrawer from '@/components/v2/DeployHistoryDrawer.vue'
@@ -389,6 +403,8 @@ type AppStage = {
 }
 
 const router = useRouter()
+const route = useRoute()
+const modeStore = useModeStore()
 const apps = ref<MergedApplication[]>([])
 const appHistoryMap = ref<Record<number, ConversationWithApp[]>>({})
 const loading = ref(true)
@@ -397,6 +413,23 @@ const viewMode = ref<ViewMode>('list')
 const searchQ = ref('')
 const importDialogOpen = ref(false)
 const publishingIds = ref<Set<number>>(new Set())
+const creatingCodeApp = ref(false)
+const handledCodeCreateIntent = ref('')
+
+const isCodeMode = computed(() => modeStore.mode === 'code' || route.path.startsWith('/code'))
+const pageTitle = computed(() => isCodeMode.value ? 'Code 应用' : '我的应用')
+const pageSubtitle = computed(() =>
+  isCodeMode.value
+    ? '来自 Code 平台的全代码应用，点击应用进入独立 Code 会话。'
+    : '统一查看低代码应用状态、资产组成和最近更新。',
+)
+const emptyTitle = computed(() => isCodeMode.value ? '暂无 Code 应用' : '暂无应用')
+const emptyDesc = computed(() =>
+  isCodeMode.value
+    ? '当前账号在 Code 平台暂无可见应用，或 Control Plane 认证未配置。'
+    : '从首页新建应用后，会在这里继续构建、部署和查看历史对话。',
+)
+const newAppLabel = computed(() => '新建应用')
 
 const tabDefinitions: Array<{ label: string; value: AppTab }> = [
   { label: '全部', value: 'all' },
@@ -447,6 +480,75 @@ watch(filteredApps, list => {
 
 const deployedCount = computed(() => apps.value.filter(app => appStage(app).group === 'deployed').length)
 const activeCount = computed(() => apps.value.filter(app => appStage(app).group === 'active').length)
+
+function startNewApp() {
+  if (isCodeMode.value) {
+    void startNewCodeApp()
+    return
+  }
+  router.push('/')
+}
+
+function generateCodeAppCode(appName: string) {
+  const normalized = appName
+    .trim()
+    .toLowerCase()
+    .normalize('NFKD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/^-+|-+$/g, '')
+  const prefix = /^[a-z]/.test(normalized) ? normalized : 'code-app'
+  return `${prefix.slice(0, 42)}-${Date.now().toString(36)}`
+}
+
+async function startNewCodeApp() {
+  if (creatingCodeApp.value) return
+  try {
+    const result = await ElMessageBox.prompt('请输入 Code 应用名称', '新建应用', {
+      confirmButtonText: '创建并打开',
+      cancelButtonText: '取消',
+      inputPlaceholder: '例如：销售线索评分助手',
+      inputValidator: value => {
+        const name = String(value || '').trim()
+        if (!name) return '请输入应用名称'
+        if (name.length > 80) return '应用名称不能超过 80 个字符'
+        return true
+      },
+    })
+    const appName = String(result.value || '').trim()
+    if (!appName) return
+    creatingCodeApp.value = true
+    const created = await codeRuntimeApi.createApplication({
+      app_name: appName,
+      app_code: generateCodeAppCode(appName),
+    })
+    ElMessage.success('Code 应用已创建')
+    await refreshApps()
+    await openCodeSessionForApp(created)
+  } catch (error: any) {
+    if (error === 'cancel' || error === 'close' || error?.action === 'cancel' || error?.action === 'close') return
+    ElMessage.error(error?.response?.data?.detail || error?.message || '创建 Code 应用失败')
+  } finally {
+    creatingCodeApp.value = false
+  }
+}
+
+function clearCodeCreateQuery() {
+  if (route.query.create == null) return
+  const query = { ...route.query }
+  delete query.create
+  router.replace({ path: route.path, query }).catch(() => {})
+}
+
+async function handleCodeCreateIntent() {
+  if (!isCodeMode.value || route.path !== '/code/apps' || route.query.create == null) return
+  const raw = Array.isArray(route.query.create) ? route.query.create[0] : route.query.create
+  const token = String(raw || '1')
+  if (handledCodeCreateIntent.value === token) return
+  handledCodeCreateIntent.value = token
+  await startNewCodeApp()
+  clearCodeCreateQuery()
+}
 
 function matchesTab(app: MergedApplication, tab: AppTab) {
   if (tab === 'all') return true
@@ -523,7 +625,30 @@ function appWorkspaceQuery(app: MergedApplication) {
   return { app_id: appId }
 }
 
+async function openCodeSessionForApp(app: MergedApplication) {
+  const externalApplicationId = String((app as any).external_application_id || app.id || '').trim()
+  if (!externalApplicationId) {
+    ElMessage.warning('Code 应用缺少 applicationId')
+    return
+  }
+  try {
+    const created = await codeRuntimeApi.createSessionFromExternalApp({
+      external_application_id: externalApplicationId,
+      app_name: app.app_name,
+      app_code: app.app_code,
+    })
+    window.dispatchEvent(new CustomEvent('code-rail-refresh'))
+    router.push(`/code/${created.id}`)
+  } catch (error: any) {
+    ElMessage.error(error?.response?.data?.detail || error?.message || '创建 Code 会话失败')
+  }
+}
+
 function openApp(app: MergedApplication) {
+  if (isCodeMode.value) {
+    void openCodeSessionForApp(app)
+    return
+  }
   // 打开应用进「应用工作室」(/chat?app_id) —— 低代码配置场景(表单/数据/流程/权限 + SPEC/部署)。
   // 二次开发(给该应用写代码)是应用内的上下文动作，不在这里入口。
   const query = appWorkspaceQuery(app)
@@ -531,7 +656,11 @@ function openApp(app: MergedApplication) {
 }
 
 function openDialog(app: MergedApplication) {
-  // 走跟 openApp 一样的 tab 化逻辑
+  if (isCodeMode.value) {
+    void openCodeSessionForApp(app)
+    return
+  }
+  // Builder 模式走跟 openApp 一样的 tab 化逻辑
   openApp(app)
 }
 
@@ -542,6 +671,7 @@ function openDialog(app: MergedApplication) {
    - 删除应用：canDeleteApp 才显示，触发原有 confirmDelete 二次确认
    每项 v-if 控制可见性，菜单本身只在至少有 1 个动作可执行时才挂出。  */
 function canViewSpec(app: MergedApplication) {
+  if (isCodeMode.value) return false
   return hasDesignOutput(app)
 }
 
@@ -553,6 +683,7 @@ function openSpec(app: MergedApplication) {
 }
 
 function canOpenInPlatform(app: MergedApplication) {
+  if (isCodeMode.value) return false
   return Boolean(app.apaas_url)
 }
 
@@ -570,6 +701,7 @@ function hasCardMoreActions(app: MergedApplication) {
 
 // 2026-05-24: 部署历史入口 (Agent C, 主分支补集成)
 function canViewDeployHistory(app: MergedApplication) {
+  if (isCodeMode.value) return false
   return app.source === 'local' && Boolean(app.id)
 }
 
@@ -676,6 +808,7 @@ function hasDesignOutput(app: MergedApplication) {
 }
 
 function canBuildApp(app: MergedApplication) {
+  if (isCodeMode.value) return false
   if (app.source !== 'local') return false
   if (app.apaas_app_id || app.local_status === 'completed') return false
   if (app.local_status === 'generating' || app.local_status === 'updating') return false
@@ -687,6 +820,7 @@ function buildApp(app: MergedApplication) {
 }
 
 function canPublishApp(app: MergedApplication) {
+  if (isCodeMode.value) return false
   return app.source === 'local' && Boolean(app.apaas_app_id)
 }
 
@@ -852,10 +986,10 @@ async function refreshApps() {
   loading.value = true
   try {
     const [list, conversations] = await Promise.all([
-      applicationApi.list({ include_remote: false }),
-      conversationApi.listWithApps({ agent_type: 'builder' }).catch(() => []),
+      isCodeMode.value ? codeRuntimeApi.listApplications({ pageSize: 100 }) : applicationApi.list({ include_remote: false, app_type: 'low-code' }),
+      isCodeMode.value ? Promise.resolve([]) : conversationApi.listWithApps({ agent_type: 'builder' }).catch(() => []),
     ])
-    apps.value = Array.isArray(list) ? list : []
+    apps.value = Array.isArray(list) ? list : (list?.items || [])
     appHistoryMap.value = buildAppHistoryMap(Array.isArray(conversations) ? conversations : [])
   } catch (error) {
     handleError(error, { fallback: '应用列表加载失败' })
@@ -864,7 +998,18 @@ async function refreshApps() {
   }
 }
 
-onMounted(() => { refreshApps() })
+onMounted(() => {
+  void refreshApps()
+  void handleCodeCreateIntent()
+})
+watch(() => modeStore.mode, () => {
+  activeTab.value = 'all'
+  currentPage.value = 1
+  void refreshApps()
+})
+watch(() => route.fullPath, () => {
+  void handleCodeCreateIntent()
+})
 </script>
 
 <style scoped>
@@ -1780,6 +1925,24 @@ onMounted(() => { refreshApps() })
   border-color: var(--brand-ring);
   color: var(--brand);
   background: var(--brand-soft);
+}
+
+.apps-code-create {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+.apps-code-create label {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.apps-code-create label > span {
+  color: var(--text-2);
+  font-size: 12px;
+  font-weight: var(--fw-semibold, 600);
 }
 
 .apps-assets-kv {

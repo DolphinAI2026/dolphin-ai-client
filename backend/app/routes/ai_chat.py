@@ -116,6 +116,9 @@ def _session_to_dict(s: AIChatSession, generation: Optional[dict] = None) -> dic
         "workspace_dir": s.workspace_dir,
         "workspace_id": getattr(s, "workspace_id", None),
         "app_id": getattr(s, "app_id", None),
+        "external_application_id": getattr(s, "external_application_id", None),
+        "external_app_name": getattr(s, "external_app_name", None),
+        "external_app_code": getattr(s, "external_app_code", None),
         "created_at": s.created_at.isoformat() if s.created_at else None,
         "updated_at": s.updated_at.isoformat() if s.updated_at else None,
     }
@@ -452,6 +455,7 @@ async def list_sessions(
     db: Annotated[AsyncSession, Depends(get_db)],
     limit: int = 50,
     app_id: Optional[int] = None,
+    mode: Optional[str] = None,
 ):
     query = (
         select(AIChatSession)
@@ -462,6 +466,8 @@ async def list_sessions(
     )
     if app_id is not None:
         query = query.where(AIChatSession.app_id == app_id)
+    if mode:
+        query = query.where(AIChatSession.mode == mode)
     query = query.order_by(desc(AIChatSession.updated_at)).limit(limit)
     res = await db.execute(query)
     sessions = res.scalars().all()

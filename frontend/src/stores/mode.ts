@@ -34,20 +34,17 @@ export const MODE_META: Record<AppMode, ModeMeta> = {
       { key: 'a-prompts', label: '智能体', icon: 'spark', path: '/admin/agent-prompts' },
     ],
   },
-  // SP2b T9: Code 已并入 Builder 统一外壳(/ai-chat)。MODE_META.code 保留供类型 +
-  // localStorage 回退安全, 但 home/nav 全指向 /ai-chat(防御:不再有独立 /coding 入口)。
   code: {
-    key: 'code', label: 'Code', sub: '全代码开发', colorVar: '--fullcode', home: '/ai-chat',
+    key: 'code', label: 'Code', sub: '全代码开发', colorVar: '--fullcode', home: '/code/apps',
     nav: [
-      { key: 'c-new', label: '新建会话', icon: 'plus', path: '/ai-chat' },
-      { key: 'c-catalog', label: '我的开发', icon: 'store', path: '/workspace-catalog' },
+      { key: 'c-new', label: '新建应用', icon: 'plus', path: '/code/new' },
+      { key: 'c-apps', label: '我的应用', icon: 'apps', path: '/code/apps' },
     ],
   },
 }
 
-// Agent 暂未接入(得小帆功能后续); Code 已并入 Builder(SP2b T9)。
-// 切换器只留 Builder 一段。MODE_META.agent / .code 保留供回退安全, 不在 MODE_ORDER 里 = 不渲染入口。
-export const MODE_ORDER: AppMode[] = ['builder']
+// Agent 暂未接入(得小帆功能后续); Builder / Code 作为一等壳层模式。
+export const MODE_ORDER: AppMode[] = ['builder', 'code']
 
 const MODE_KEY = 'apaas-app-mode-v1'
 
@@ -55,7 +52,7 @@ function loadMode(): AppMode {
   try {
     const v = localStorage.getItem(MODE_KEY)
     if (v === 'builder') return v
-    if (v === 'code') return 'builder'   // SP2b T9: Code 入口已撤 → 落 builder(避免进缺失 tab)
+    if (v === 'code') return v
     if (v === 'agent') return 'builder'  // 旧持久化的 agent → 落 builder(入口已撤)
   } catch { /* private mode */ }
   return 'builder'

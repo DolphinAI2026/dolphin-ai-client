@@ -139,7 +139,7 @@ async function saveLlm() {
   busy.value = true
   msg.value = ''
   msgErr.value = false
-  if (!llm.api_key.trim()) {
+  if (!String(llm.api_key || '').trim()) {
     msg.value = '请填写 API Key (omnigate 令牌)'
     msgErr.value = true
     busy.value = false

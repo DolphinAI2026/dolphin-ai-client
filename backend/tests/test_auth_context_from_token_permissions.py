@@ -96,3 +96,10 @@ async def test_token_ctx_loads_member_permissions(shared_db):
 
     assert ctx.tenant_role == "member"
     assert has_org_permission(ctx.org_permissions, "application", Action.VIEW) is True
+
+
+def test_wildcard_org_permission_allows_specific_actions():
+    from app.permissions import has_org_permission, Action
+
+    assert has_org_permission({"*": True}, "application", Action.CREATE) is True
+    assert has_org_permission({"*": False}, "application", Action.CREATE) is False

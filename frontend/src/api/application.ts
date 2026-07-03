@@ -70,7 +70,7 @@ export interface ApplicationDeliveryAssetsResponse {
 }
 
 export const applicationApi = {
-  list(params?: { include_remote?: boolean; source_filter?: string; include_config?: boolean }) {
+  list(params?: { include_remote?: boolean; source_filter?: string; include_config?: boolean; app_type?: 'low-code' | 'ai-code' | 'all' }) {
     return request.get<any, MergedApplication[]>('/applications', { params })
   },
   /** 按 app_name / app_code 匹配本租户内当前用户可见的应用。AI-Chat → Builder 选目标弹框使用。 */
@@ -83,7 +83,7 @@ export const applicationApi = {
   get(id: number) {
     return request.get<any, Application>(`/applications/${id}`)
   },
-  create(data: { conversation_id?: number; project_id?: number; app_name: string; app_code: string; description?: string; config_preview?: any; platform_env_id?: number | null }) {
+  create(data: { conversation_id?: number; project_id?: number; app_name: string; app_code: string; description?: string; config_preview?: any; platform_env_id?: number | null; app_type?: 'low-code' | 'ai-code'; source_workspace_id?: string | null }) {
     return request.post<any, Application>('/applications', data)
   },
   update(id: number, data: { conversation_id?: number; project_id?: number; app_name: string; app_code: string; description?: string; config_preview?: any; platform_env_id?: number | null }) {

@@ -9,4 +9,10 @@ describe('App routing keys /coding stably (no remount on session switch)', () =>
     expect(src).toContain('isCodingRoute')
     expect(src).toContain('coding-stable')
   })
+
+  it('keeps /code/:id alive as a singleton, so the rail is not remounted on session switch', () => {
+    expect(src).toContain('isCodeRoute')
+    expect(src).toContain('<KeepAlive v-else-if="isCodeRoute($route)">')
+    expect(src).toContain('code-singleton')
+  })
 })
