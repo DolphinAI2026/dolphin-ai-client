@@ -1,7 +1,7 @@
 import { createRouter, createWebHistory } from 'vue-router'
 import { useUserStore } from '@/stores/user'
 import { usePreviewStore } from '@/stores/preview'
-import { useModeStore } from '@/stores/mode'
+import { modeForRoutePath, useModeStore } from '@/stores/mode'
 import request from '@/utils/request'
 import { resolveDesktopRedirect } from './desktopGuard'
 import { fetchOnboardingState, isOnboardingConfirmed, markOnboardingConfirmed } from '@/composables/useOnboardingState'
@@ -320,15 +320,9 @@ router.beforeEach(async (to, _from, next) => {
     }
   }
 
-  if (to.path.startsWith('/code')) {
-    if (modeStore.mode !== 'code') modeStore.setMode('code')
-  } else if (to.path.startsWith('/ai-chat')) {
-    if (modeStore.mode === 'code') modeStore.setMode('builder')
-  }
-
-  if ((to.path === '/' || to.path === '/apps') && modeStore.mode === 'code') {
-    next({ path: '/code/apps', replace: true })
-    return
+  if (to.meta.requiresAuth) {
+    const routeMode = modeForRoutePath(to.path)
+    if (modeStore.mode !== routeMode) modeStore.setMode(routeMode)
   }
 
   if (to.path === '/login' && userStore.token) {

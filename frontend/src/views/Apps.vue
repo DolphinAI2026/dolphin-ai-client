@@ -384,7 +384,7 @@ import { openExternal } from '@/utils/desktop'
 import { applicationApi, type ApplicationDeliveryAssetItem, type ApplicationDeliveryAssetsResponse } from '@/api/application'
 import { codeRuntimeApi } from '@/api/codeRuntime'
 import { conversationApi, type ConversationWithApp } from '@/api/conversation'
-import { useModeStore } from '@/stores/mode'
+import { isCodeRoutePath } from '@/stores/mode'
 import BuilderFrame from '@/components/BuilderFrame.vue'
 import ImportAppDialog from '@/components/ImportAppDialog.vue'
 import DeployHistoryDrawer from '@/components/v2/DeployHistoryDrawer.vue'
@@ -404,7 +404,6 @@ type AppStage = {
 
 const router = useRouter()
 const route = useRoute()
-const modeStore = useModeStore()
 const apps = ref<MergedApplication[]>([])
 const appHistoryMap = ref<Record<number, ConversationWithApp[]>>({})
 const loading = ref(true)
@@ -415,8 +414,9 @@ const importDialogOpen = ref(false)
 const publishingIds = ref<Set<number>>(new Set())
 const creatingCodeApp = ref(false)
 const handledCodeCreateIntent = ref('')
+let refreshAppsSeq = 0
 
-const isCodeMode = computed(() => modeStore.mode === 'code' || route.path.startsWith('/code'))
+const isCodeMode = computed(() => isCodeRoutePath(route.path))
 const pageTitle = computed(() => isCodeMode.value ? 'Code 应用' : '我的应用')
 const pageSubtitle = computed(() =>
   isCodeMode.value
@@ -983,18 +983,22 @@ async function confirmDelete(app: MergedApplication) {
 }
 
 async function refreshApps() {
+  const seq = ++refreshAppsSeq
+  const codeMode = isCodeMode.value
   loading.value = true
   try {
     const [list, conversations] = await Promise.all([
-      isCodeMode.value ? codeRuntimeApi.listApplications({ pageSize: 100 }) : applicationApi.list({ include_remote: false, app_type: 'low-code' }),
-      isCodeMode.value ? Promise.resolve([]) : conversationApi.listWithApps({ agent_type: 'builder' }).catch(() => []),
+      codeMode ? codeRuntimeApi.listApplications({ pageSize: 100 }) : applicationApi.list({ include_remote: false, app_type: 'low-code' }),
+      codeMode ? Promise.resolve([]) : conversationApi.listWithApps({ agent_type: 'builder' }).catch(() => []),
     ])
+    if (seq !== refreshAppsSeq || codeMode !== isCodeMode.value) return
     apps.value = Array.isArray(list) ? list : (list?.items || [])
     appHistoryMap.value = buildAppHistoryMap(Array.isArray(conversations) ? conversations : [])
   } catch (error) {
+    if (seq !== refreshAppsSeq || codeMode !== isCodeMode.value) return
     handleError(error, { fallback: '应用列表加载失败' })
   } finally {
-    loading.value = false
+    if (seq === refreshAppsSeq) loading.value = false
   }
 }
 
@@ -1002,7 +1006,7 @@ onMounted(() => {
   void refreshApps()
   void handleCodeCreateIntent()
 })
-watch(() => modeStore.mode, () => {
+watch(isCodeMode, () => {
   activeTab.value = 'all'
   currentPage.value = 1
   void refreshApps()

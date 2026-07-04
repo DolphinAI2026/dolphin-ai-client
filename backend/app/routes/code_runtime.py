@@ -6,7 +6,7 @@ from urllib.parse import quote, unquote_plus, urlsplit
 import httpx
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from pydantic import BaseModel
-from sqlalchemy import select
+from sqlalchemy import and_, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from starlette.background import BackgroundTask
 from starlette.responses import RedirectResponse, Response, StreamingResponse
@@ -24,6 +24,7 @@ from app.code_runtime.service import (
 )
 from app.database import get_db
 from app.deps import AuthContext, get_auth_context
+from app.models import Application
 from app.models.ai_chat import AIChatSession, CodeRuntimeAgentSession, CodeRuntimeBinding
 
 router = APIRouter(prefix="/code", tags=["code-runtime"])
@@ -387,11 +388,24 @@ async def list_code_runtime_rail_history(
         await db.execute(
             select(AIChatSession, CodeRuntimeBinding)
             .outerjoin(CodeRuntimeBinding, CodeRuntimeBinding.session_id == AIChatSession.id)
+            .outerjoin(Application, Application.id == AIChatSession.app_id)
             .where(
                 AIChatSession.tenant_id == ctx.tenant_id,
                 AIChatSession.user_id == ctx.user.id,
                 AIChatSession.mode == "code",
                 AIChatSession.status != "archived",
+                or_(AIChatSession.app_id.is_(None), Application.app_type == "ai-code"),
+                or_(
+                    Application.app_type == "ai-code",
+                    and_(
+                        AIChatSession.external_application_id.isnot(None),
+                        AIChatSession.external_application_id != "",
+                    ),
+                    and_(
+                        CodeRuntimeBinding.external_application_id.isnot(None),
+                        CodeRuntimeBinding.external_application_id != "",
+                    ),
+                ),
             )
             .order_by(AIChatSession.updated_at.desc(), CodeRuntimeBinding.updated_at.desc(), AIChatSession.id.desc())
         )

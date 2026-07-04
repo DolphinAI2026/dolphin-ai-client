@@ -4,7 +4,7 @@ import { useRoute, useRouter } from 'vue-router'
 import { checkAndPromptUpdate } from '@/utils/desktop'
 import { useUserStore } from '@/stores/user'
 import { useThemeStore } from '@/stores/theme'
-import { useModeStore, MODE_META, MODE_ORDER, type AppMode } from '@/stores/mode'
+import { isCodeRoutePath, useModeStore, MODE_META, MODE_ORDER, type AppMode } from '@/stores/mode'
 import { aiChatApi, type AIChatSession } from '@/api/aiChat'
 import { codeRuntimeApi } from '@/api/codeRuntime'
 import { ElMessage } from 'element-plus'
@@ -28,14 +28,16 @@ const user = useUserStore()
 const theme = useThemeStore()
 const modeStore = useModeStore()
 
-// 当前模式驱动左栏导航、会话加载和会话路由。
-const currentMode = computed<AppMode>(() => modeStore.mode)
+// 当前路由驱动左栏导航、会话加载和会话路由，避免持久化 mode 污染另一套 shell。
+const currentMode = computed<AppMode>(() => isCodeRoutePath(route.path) ? 'code' : 'builder')
 
 // 会话历史 —— 收进左栏单一导航(参考 Claude Code), 页面内层 sidebar 隐掉。
 // 统一使用 aiChatApi 会话; Code 模式只展示 mode=code 的应用会话。
 const aiSessions = ref<AIChatSession[]>([])
 const codeRailHistory = ref<CodeRailHistoryResponse | null>(null)
 const showRecent = computed(() => !effectiveCollapsed.value)
+let railAppsSeq = 0
+let railSessionsSeq = 0
 
 // app_id → 应用名映射(供「按应用」分组,code 会话从工作区继承 app_id 后据此归到应用)。
 const appNameById = ref<Map<number, string>>(new Map())
@@ -46,9 +48,12 @@ const railSessions = computed<RailSession[]>(() => currentMode.value === 'code'
   : normalizeAiSessions(aiSessions.value, appNameById.value))
 
 async function loadRailApps() {
+  const seq = ++railAppsSeq
+  const mode = currentMode.value
   try {
-    if (currentMode.value === 'code') {
+    if (mode === 'code') {
       const page = await codeRuntimeApi.listApplications({ pageSize: 100 })
+      if (seq !== railAppsSeq || mode !== currentMode.value) return
       const items = page?.items || []
       appCount.value = Number(page?.total ?? items.length)
       appNameById.value = new Map()
@@ -60,6 +65,7 @@ async function loadRailApps() {
       include_config: false,
       app_type: 'low-code',
     } as any)) ?? []
+    if (seq !== railAppsSeq || mode !== currentMode.value) return
     const appList: any[] = Array.isArray(apps) ? apps : (apps?.items ?? [])
     appCount.value = Array.isArray(apps) ? apps.length : (apps?.items?.length ?? apps?.total ?? 0)
     // 建 app_id → 名称映射,供左栏「按应用」分组反查(含 code 会话继承的 app_id)。
@@ -71,25 +77,32 @@ async function loadRailApps() {
     }
     appNameById.value = map
   } catch {
+    if (seq !== railAppsSeq || mode !== currentMode.value) return
     appCount.value = undefined
     appNameById.value = new Map()
   }
 }
 
 async function loadRailSessions() {
+  const seq = ++railSessionsSeq
+  const mode = currentMode.value
   try {
-    if (currentMode.value === 'code') {
-      codeRailHistory.value = await codeRuntimeApi.listRailHistory()
+    if (mode === 'code') {
+      const history = await codeRuntimeApi.listRailHistory()
+      if (seq !== railSessionsSeq || mode !== currentMode.value) return
+      codeRailHistory.value = history
       aiSessions.value = []
       return
     }
-    codeRailHistory.value = null
     const d = await aiChatApi.listSessions()
+    if (seq !== railSessionsSeq || mode !== currentMode.value) return
+    codeRailHistory.value = null
     const sessions = d?.sessions || []
     aiSessions.value = sessions.filter(s => s.mode !== 'code')
   } catch {
+    if (seq !== railSessionsSeq || mode !== currentMode.value) return
     aiSessions.value = []
-    if (currentMode.value === 'code') codeRailHistory.value = { apps: [] }
+    if (mode === 'code') codeRailHistory.value = { apps: [] }
   }
 }
 

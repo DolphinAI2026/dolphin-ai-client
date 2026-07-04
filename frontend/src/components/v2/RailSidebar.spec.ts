@@ -23,6 +23,11 @@ describe('RailSidebar unified session source (SP2b)', () => {
     expect(railSidebarSource).not.toContain('codingApi.getConversations()')
   })
 
+  it('derives the active shell from the route before choosing a rail data source', () => {
+    expect(railSidebarSource).toContain('isCodeRoutePath(route.path)')
+    expect(railSidebarSource).toContain("isCodeRoutePath(route.path) ? 'code' : 'builder'")
+  })
+
   it('delegates normalization + routing to the railSessions composable', () => {
     expect(railSidebarSource).toContain("from '@/composables/railSessions'")
     expect(railSidebarSource).toContain('normalizeAiSessions')

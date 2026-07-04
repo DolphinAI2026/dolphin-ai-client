@@ -413,6 +413,50 @@ async def test_list_code_runtime_rail_history_includes_shell_session_without_bin
 
 
 @pytest.mark.asyncio
+async def test_list_code_runtime_rail_history_excludes_builder_workspace_code_sessions(db_session):
+    from app.routes.code_runtime import list_code_runtime_rail_history
+
+    low_code_app = Application(
+        tenant_id=7,
+        user_id=11,
+        created_by=11,
+        app_name="类 JIRA 项目管理系统",
+        app_code="jira_demo",
+        app_type="low-code",
+        status="completed",
+    )
+    db_session.add(low_code_app)
+    await db_session.flush()
+    db_session.add_all([
+        AIChatSession(
+            tenant_id=7,
+            user_id=11,
+            title="Sprint 燃尽图列表视图",
+            mode="code",
+            status="active",
+            app_id=low_code_app.id,
+            workspace_id="workspace-low-code",
+        ),
+        AIChatSession(
+            tenant_id=7,
+            user_id=11,
+            title="CRM Code",
+            mode="code",
+            status="active",
+            external_application_id="crm",
+            external_app_name="CRM",
+            external_app_code="crm",
+        ),
+    ])
+    await db_session.commit()
+
+    result = await list_code_runtime_rail_history(_ctx(), db_session)
+
+    assert [app["app_name"] for app in result["apps"]] == ["CRM"]
+    assert all(app["shell_session_id"] != 1 for app in result["apps"])
+
+
+@pytest.mark.asyncio
 async def test_create_code_session_from_app_rejects_low_code_app(db_session):
     from fastapi import HTTPException
     from app.routes.code_runtime import CreateCodeSessionRequest, create_code_session_from_app

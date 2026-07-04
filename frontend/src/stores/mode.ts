@@ -46,6 +46,14 @@ export const MODE_META: Record<AppMode, ModeMeta> = {
 // Agent 暂未接入(得小帆功能后续); Builder / Code 作为一等壳层模式。
 export const MODE_ORDER: AppMode[] = ['builder', 'code']
 
+export function isCodeRoutePath(path: string): boolean {
+  return path === '/code' || path.startsWith('/code/')
+}
+
+export function modeForRoutePath(path: string): AppMode {
+  return isCodeRoutePath(path) ? 'code' : 'builder'
+}
+
 const MODE_KEY = 'apaas-app-mode-v1'
 
 function loadMode(): AppMode {

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { MODE_META, MODE_ORDER } from './mode'
+import { isCodeRoutePath, MODE_META, MODE_ORDER, modeForRoutePath } from './mode'
 
 describe('mode store metadata', () => {
   it('exposes Builder and Code as first-class shell modes', () => {
@@ -14,5 +14,14 @@ describe('mode store metadata', () => {
       label: '我的应用',
       path: '/code/apps',
     }))
+  })
+
+  it('derives shell mode from route paths', () => {
+    expect(isCodeRoutePath('/code')).toBe(true)
+    expect(isCodeRoutePath('/code/apps')).toBe(true)
+    expect(isCodeRoutePath('/apps')).toBe(false)
+    expect(isCodeRoutePath('/coding')).toBe(false)
+    expect(modeForRoutePath('/code/apps')).toBe('code')
+    expect(modeForRoutePath('/apps')).toBe('builder')
   })
 })

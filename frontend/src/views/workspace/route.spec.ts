@@ -30,10 +30,9 @@ describe('code route wiring', () => {
     expect(routerSrc.indexOf("path: 'new'")).toBeLessThan(routerSrc.indexOf("path: ':id'"))
   })
 
-  it('keeps persisted Code mode from opening a Builder route on initial load', () => {
-    expect(routerSrc).toContain("(to.path === '/' || to.path === '/apps') && modeStore.mode === 'code'")
-    expect(routerSrc).toContain("path: '/code/apps'")
-    expect(routerSrc).toContain("to.path.startsWith('/code')")
-    expect(routerSrc).toContain("modeStore.setMode('code')")
+  it('derives shell mode from the route instead of redirecting Builder routes by persisted mode', () => {
+    expect(routerSrc).toContain('modeForRoutePath(to.path)')
+    expect(routerSrc).toContain('modeStore.setMode(routeMode)')
+    expect(routerSrc).not.toContain("(to.path === '/' || to.path === '/apps') && modeStore.mode === 'code'")
   })
 })

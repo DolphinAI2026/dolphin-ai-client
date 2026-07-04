@@ -5,7 +5,7 @@ describe('Apps Code mode entry', () => {
   it('starts a Code session from a d-ai-code application id', () => {
     expect(appsSource).toContain("from '@/stores/mode'")
     expect(appsSource).toContain("from '@/api/codeRuntime'")
-    expect(appsSource).toContain("modeStore.mode === 'code'")
+    expect(appsSource).toContain('isCodeRoutePath(route.path)')
     expect(appsSource).toContain('codeRuntimeApi.createSessionFromExternalApp')
     expect(appsSource).toContain('`/code/${created.id}`')
   })
@@ -17,7 +17,7 @@ describe('Apps Code mode entry', () => {
 
   it('loads Code applications from d-ai-code instead of the local application table', () => {
     expect(appsSource).toContain('codeRuntimeApi.listApplications')
-    expect(appsSource).toContain('isCodeMode.value ? codeRuntimeApi.listApplications')
+    expect(appsSource).toContain('codeMode ? codeRuntimeApi.listApplications')
     expect(appsSource).toContain("app_type: 'low-code'")
     expect(appsSource).not.toContain("app_type: isCodeMode.value ? 'ai-code' : 'low-code'")
     expect(appsSource).not.toContain("applicationApi.create")
