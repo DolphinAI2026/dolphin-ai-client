@@ -16,7 +16,7 @@ APP_DEPLOY_ABSTRACT = f"{APP_BRAND} 应用上线"
 
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(
-        env_file=".env",
+        env_file=(".env", ".env.local"),
         env_file_encoding="utf-8",
         case_sensitive=False,
         extra="ignore"
@@ -36,6 +36,10 @@ class Settings(BaseSettings):
     # 环境变量 DESKTOP_UPDATES_DIR 覆盖。
     desktop_updates_dir: str = "/data/desktop-updates"
     apaas_tenant_id: str = ""
+    # Optional local bootstrap credentials for PlatformEnv. Prefer .env.local.
+    apaas_token: str = ""
+    apaas_username: str = ""
+    apaas_password: str = ""
     # 双端口 / 无 /backend 拓扑覆盖（如生产: 登录 API 在 :30607 根路径、RSA 公钥在 UI 端口 :30605）。
     # 留空 = 沿用单 origin 默认推导（trial: origin+/backend、origin/platform/apaasRsa.pub）。
     # 见 routes/mcp_platform._api_base / _get_apaas_rsa_public_key。

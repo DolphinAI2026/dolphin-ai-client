@@ -388,6 +388,18 @@ async def list_remote_apps(
         raise HTTPException(status_code=404, detail="环境不存在")
 
     token = env.token or getattr(ctx.user, "apaas_token", None)
+    if not token and env.username and env.password_enc:
+        try:
+            password = decrypt_password(env.password_enc)
+            login_client = APaaSClient(base_url=env.base_url, tenant_id=env.platform_tenant_id)
+            login_result = await login_client.login(env.username, password)
+            token = login_result.get("token", "")
+            if token:
+                env.token = token
+                env.status = "connected"
+                await db.commit()
+        except Exception as e:
+            raise HTTPException(status_code=400, detail=f"登录平台失败: {e}")
     if not token:
         raise HTTPException(status_code=400, detail="当前用户平台 token 不可用，请重新登录")
 

@@ -1,7 +1,8 @@
 import pytest
+from sqlalchemy import select
 
 from app.deps import AuthContext
-from app.models import Application, User
+from app.models import Application, PlatformEnv, User
 from app.models.tenant import Tenant, UserTenant
 from app.routes.applications import list_applications, list_applications_page, match_applications_by_name
 
@@ -114,7 +115,7 @@ async def test_list_applications_include_config_false_omits_preview_keeps_counts
     # 默认 include_config=True：config_preview 内嵌
     full = await list_applications(
         _ctx(user, tenant.id), db_session,
-        team_scope=None, include_remote=False, source_filter=None, include_config=True,
+        team_scope=None, include_remote=False, source_filter=None, include_config=True, app_type=None,
     )
     assert len(full) == 1
     assert full[0].config_preview is not None
@@ -124,12 +125,157 @@ async def test_list_applications_include_config_false_omits_preview_keeps_counts
     # include_config=False：config_preview 省掉，但计数保留
     lean = await list_applications(
         _ctx(user, tenant.id), db_session,
-        team_scope=None, include_remote=False, source_filter=None, include_config=False,
+        team_scope=None, include_remote=False, source_filter=None, include_config=False, app_type=None,
     )
     assert len(lean) == 1
     assert lean[0].config_preview is None
     assert lean[0].models == 2
     assert lean[0].roles == 1
+
+
+@pytest.mark.asyncio
+async def test_list_applications_uses_current_tenant_platform_env_for_remote_apps(db_session, monkeypatch):
+    from app.routes.applications import crud
+
+    tenant, user = await _seed_user(db_session)
+    db_session.add(
+        PlatformEnv(
+            tenant_id=tenant.id,
+            env_name="Tenant Env",
+            base_url="https://apaas.example.com/backend",
+            platform_tenant_id="apaas-tenant-1",
+            token="env-token",
+            is_default=True,
+            status="connected",
+        )
+    )
+    await db_session.commit()
+
+    calls = []
+
+    class FakeAPaaSClient:
+        def __init__(self, *, base_url, tenant_id, token=None):
+            calls.append({"base_url": base_url, "tenant_id": tenant_id, "token": token})
+
+        async def query_app_list(self):
+            return [{"id": "remote-1", "appName": "Remote App", "appCode": "remote-app"}]
+
+    monkeypatch.setattr(crud, "APaaSClient", FakeAPaaSClient)
+
+    apps = await list_applications(
+        _ctx(user, tenant.id),
+        db_session,
+        team_scope=None,
+        include_remote=True,
+        source_filter=None,
+        include_config=False,
+        app_type=None,
+    )
+
+    assert calls == [{
+        "base_url": "https://apaas.example.com/backend",
+        "tenant_id": "apaas-tenant-1",
+        "token": "env-token",
+    }]
+    assert len(apps) == 1
+    assert apps[0].source == "remote"
+    assert apps[0].apaas_app_id == "remote-1"
+    assert apps[0].apaas_url == (
+        "https://apaas.example.com/platform/apaas-tenant-1/admin/app-store/edit-app"
+        "?appId=remote-1&currentStepIndex=0"
+    )
+
+
+@pytest.mark.asyncio
+async def test_seed_binds_default_tenant_to_configured_apaas_tenant(db_session, monkeypatch):
+    from app.config import settings
+    from app.seed_data import bind_default_tenant_platform_env
+
+    tenant = Tenant(tenant_name="Default Tenant", tenant_code="default")
+    db_session.add(tenant)
+    await db_session.flush()
+
+    monkeypatch.setattr(settings, "apaas_base_url", "https://apaas.example.com/backend", raising=False)
+    monkeypatch.setattr(settings, "apaas_tenant_id", "apaas-tenant-1", raising=False)
+
+    await bind_default_tenant_platform_env(db_session, tenant)
+    await db_session.refresh(tenant)
+
+    env = (
+        await db_session.execute(
+            select(PlatformEnv).where(
+                PlatformEnv.tenant_id == tenant.id,
+                PlatformEnv.platform_tenant_id == "apaas-tenant-1",
+            )
+        )
+    ).scalar_one()
+    assert tenant.apaas_tenant_id_str == "apaas-tenant-1"
+    assert tenant.apaas_env_id == env.id
+    assert env.base_url == "https://apaas.example.com/backend"
+    assert env.is_default is True
+
+
+@pytest.mark.asyncio
+async def test_seed_binds_default_tenant_with_configured_apaas_token(db_session, monkeypatch):
+    from app.config import settings
+    from app.seed_data import bind_default_tenant_platform_env
+
+    tenant = Tenant(tenant_name="Default Tenant", tenant_code="default")
+    db_session.add(tenant)
+    await db_session.flush()
+
+    monkeypatch.setattr(settings, "apaas_base_url", "https://apaas.example.com/backend", raising=False)
+    monkeypatch.setattr(settings, "apaas_tenant_id", "apaas-tenant-1", raising=False)
+    monkeypatch.setattr(settings, "apaas_token", "local-token", raising=False)
+
+    await bind_default_tenant_platform_env(db_session, tenant)
+
+    env = (
+        await db_session.execute(
+            select(PlatformEnv).where(
+                PlatformEnv.tenant_id == tenant.id,
+                PlatformEnv.platform_tenant_id == "apaas-tenant-1",
+            )
+        )
+    ).scalar_one()
+    assert env.token == "local-token"
+    assert env.status == "connected"
+
+
+@pytest.mark.asyncio
+async def test_list_applications_bound_env_without_token_does_not_call_remote(db_session, monkeypatch):
+    from app.routes.applications import crud
+
+    tenant, user = await _seed_user(db_session)
+    db_session.add(
+        PlatformEnv(
+            tenant_id=tenant.id,
+            env_name="Bound Env",
+            base_url="https://apaas.example.com/backend",
+            platform_tenant_id="apaas-tenant-1",
+            is_default=True,
+            status="disconnected",
+        )
+    )
+    await db_session.commit()
+
+    class UnexpectedAPaaSClient:
+        def __init__(self, *args, **kwargs):
+            raise AssertionError("remote aPaaS client should not be created without token or credentials")
+
+    monkeypatch.setattr(crud, "APaaSClient", UnexpectedAPaaSClient)
+
+    apps = await list_applications(
+        _ctx(user, tenant.id),
+        db_session,
+        team_scope=None,
+        include_remote=True,
+        source_filter=None,
+        include_config=False,
+        app_type=None,
+    )
+
+    assert apps == []
 
 
 @pytest.mark.asyncio

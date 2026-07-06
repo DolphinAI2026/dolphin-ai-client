@@ -5,7 +5,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 from app.config import settings
 from app.crypto import encrypt_password
-from app.models import LLMConfig
+from app.models import LLMConfig, PlatformEnv
 from app.models.tenant import Tenant, Role
 from app.permissions import PERMISSION_CODES
 
@@ -272,6 +272,65 @@ async def sync_builtin_llm_configs(
     print("✅ 已同步内置 LLM 配置到 llm_configs")
 
 
+async def bind_default_tenant_platform_env(db: AsyncSession, tenant: Tenant, *, commit: bool = True):
+    """Bind the default local tenant to APAAS_BASE_URL / APAAS_TENANT_ID when configured."""
+    platform_tenant_id = (settings.apaas_tenant_id or "").strip()
+    base_url = (settings.apaas_base_url or "").strip().rstrip("/")
+    configured_token = (settings.apaas_token or "").strip()
+    configured_username = (settings.apaas_username or "").strip()
+    configured_password = settings.apaas_password or ""
+    if not platform_tenant_id or not base_url:
+        return
+
+    if not tenant.apaas_tenant_id_str:
+        tenant.apaas_tenant_id_str = platform_tenant_id
+
+    env = (
+        await db.execute(
+            select(PlatformEnv).where(
+                PlatformEnv.tenant_id == tenant.id,
+                PlatformEnv.platform_tenant_id == platform_tenant_id,
+            )
+        )
+    ).scalar_one_or_none()
+    if env is None:
+        alias = "local-default"
+        alias_conflict = (
+            await db.execute(select(PlatformEnv).where(PlatformEnv.alias == alias))
+        ).scalar_one_or_none()
+        env = PlatformEnv(
+            tenant_id=tenant.id,
+            env_name="本地默认平台环境",
+            alias=None if alias_conflict else alias,
+            base_url=base_url,
+            platform_tenant_id=platform_tenant_id,
+            username=configured_username or None,
+            password_enc=encrypt_password(configured_password) if configured_password else None,
+            token=configured_token or None,
+            is_default=True,
+            status="connected" if configured_token else "disconnected",
+        )
+        db.add(env)
+        await db.flush()
+    else:
+        env.base_url = base_url
+        env.is_default = True
+        if configured_username:
+            env.username = configured_username
+        if configured_password:
+            env.password_enc = encrypt_password(configured_password)
+        if configured_token:
+            env.token = configured_token
+            env.status = "connected"
+
+    tenant.apaas_env_id = env.id
+    if commit:
+        await db.commit()
+    else:
+        await db.flush()
+    print(f"✅ 默认租户已绑定 aPaaS tenant: {platform_tenant_id}")
+
+
 async def seed_initial_data(db: AsyncSession):
     """初始化种子数据"""
 
@@ -298,5 +357,8 @@ async def seed_initial_data(db: AsyncSession):
     # 2. 为默认租户创建角色
     await seed_default_roles(db, default_tenant.id)
 
-    # 3. 同步环境变量中的内置模型到 llm_configs
+    # 3. 本地运行时如果配置了 APAAS_TENANT_ID，自动把 default 租户绑定到该平台租户。
+    await bind_default_tenant_platform_env(db, default_tenant)
+
+    # 4. 同步环境变量中的内置模型到 llm_configs
     await sync_builtin_llm_configs(db)

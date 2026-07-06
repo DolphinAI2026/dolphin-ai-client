@@ -74,6 +74,24 @@ async def resolve_effective_tenant_id(db: AsyncSession, ctx: AuthContext) -> int
     raise HTTPException(status_code=400, detail="未找到可用租户")
 
 
+async def resolve_bound_apaas_tenant_id(db: AsyncSession, tenant_id: int | None) -> str | None:
+    """Return the aPaaS tenant id bound to the local ai-builder tenant."""
+    if not tenant_id:
+        return None
+    result = await db.execute(select(Tenant.apaas_tenant_id_str).where(Tenant.id == int(tenant_id)))
+    value = result.scalar_one_or_none()
+    text = str(value or "").strip()
+    return text or None
+
+
+def _first_text(*values: object) -> str | None:
+    for value in values:
+        text = str(value or "").strip()
+        if text:
+            return text
+    return None
+
+
 async def _resolve_role_context(db: AsyncSession, role_id: int | None) -> tuple[str, dict]:
     """role_id → (tenant_role, org_permissions)。
 
@@ -140,13 +158,14 @@ async def get_auth_context(
                     detail="平台管理员才能访问此资源",
                 )
             resolved_tenant_id = await resolve_default_tenant_id_for_user(db, user_id)
+            bound_apaas_tid = await resolve_bound_apaas_tenant_id(db, resolved_tenant_id)
             return AuthContext(
                 user=user,
                 tenant_id=resolved_tenant_id or 0,
                 tenant_role="platform_admin",
                 org_permissions={"*": True},
                 apaas_user_id=jwt_apaas_uid or user.apaas_user_id or None,
-                apaas_tenant_id=jwt_apaas_tid or user.apaas_tenant_id or None,
+                apaas_tenant_id=_first_text(jwt_apaas_tid, bound_apaas_tid, user.apaas_tenant_id),
             )
 
         tenant_id = int(tenant_id)
@@ -162,7 +181,8 @@ async def get_auth_context(
 
     # 双 ID 解析：JWT 优先，回退 user 行
     eff_apaas_uid = jwt_apaas_uid or user.apaas_user_id or None
-    eff_apaas_tid = jwt_apaas_tid or user.apaas_tenant_id or None
+    bound_apaas_tid = await resolve_bound_apaas_tenant_id(db, tenant_id)
+    eff_apaas_tid = _first_text(jwt_apaas_tid, bound_apaas_tid, user.apaas_tenant_id)
 
     # MCP 后端内部互调短票：由服务端自己签发，只用于调用内部 HTTP endpoint。
     # 它表达的是“服务代表该 tenant 执行落库/解析/部署”，不能再按最终用户租户成员
@@ -241,11 +261,12 @@ async def get_auth_context_from_token(token: str) -> AuthContext:
             raise ValueError("User not found")
 
         eff_apaas_uid = jwt_apaas_uid or user.apaas_user_id or None
-        eff_apaas_tid = jwt_apaas_tid or user.apaas_tenant_id or None
 
         if raw_tenant_id is None:
             if user.is_platform_admin:
                 tenant_id = await resolve_default_tenant_id_for_user(db, user_id) or 0
+                bound_apaas_tid = await resolve_bound_apaas_tenant_id(db, tenant_id)
+                eff_apaas_tid = _first_text(jwt_apaas_tid, bound_apaas_tid, user.apaas_tenant_id)
                 return AuthContext(
                     user=user,
                     tenant_id=tenant_id,
@@ -257,6 +278,9 @@ async def get_auth_context_from_token(token: str) -> AuthContext:
             tenant_id = 0
         else:
             tenant_id = int(raw_tenant_id)
+
+        bound_apaas_tid = await resolve_bound_apaas_tenant_id(db, tenant_id)
+        eff_apaas_tid = _first_text(jwt_apaas_tid, bound_apaas_tid, user.apaas_tenant_id)
 
         if token_type == "mcp_service":
             return AuthContext(

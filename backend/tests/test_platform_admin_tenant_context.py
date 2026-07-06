@@ -7,7 +7,7 @@ from app.auth import create_access_token, decode_token, get_password_hash
 from app.config import settings
 from app.deps import AuthContext, get_auth_context, resolve_effective_tenant_id
 from app.models import APaaSPlatformCredential, APaaSUserCredential, LLMConfig, PlatformEnv, User
-from app.models.tenant import Tenant, UserTenant
+from app.models.tenant import Role, Tenant, UserTenant
 import sys
 import app.routes.auth  # 确保包（含子模块）已加载
 auth_routes = sys.modules["app.routes.auth.login"]  # login 子模块，monkeypatch 在此生效
@@ -69,6 +69,44 @@ async def test_platform_admin_legacy_token_resolves_default_tenant(db_session):
     assert ctx.tenant_id == tenant.id
     assert ctx.tenant_role == "platform_admin"
     assert ctx.org_permissions == {"*": True}
+
+
+@pytest.mark.asyncio
+async def test_auth_context_uses_bound_apaas_tenant_for_current_local_tenant(db_session):
+    tenant = Tenant(
+        tenant_name="Bound Tenant",
+        tenant_code="bound",
+        apaas_tenant_id_str="apaas-tenant-current",
+    )
+    db_session.add(tenant)
+    await db_session.flush()
+
+    user = User(
+        username="tenant-admin",
+        hashed_password=get_password_hash("secret"),
+        apaas_user_id="apaas-user-1",
+        apaas_tenant_id="apaas-tenant-stale",
+        is_active=True,
+    )
+    db_session.add(user)
+    await db_session.flush()
+
+    role = Role(
+        tenant_id=tenant.id,
+        role_name="租户管理员",
+        role_code="R_tenant_admin",
+        permissions={"application:create": True},
+    )
+    db_session.add(role)
+    await db_session.flush()
+    db_session.add(UserTenant(user_id=user.id, tenant_id=tenant.id, role_id=role.id, status=1))
+    await db_session.commit()
+
+    token = create_access_token(user.id, tenant_id=tenant.id)
+    ctx = await get_auth_context(SimpleNamespace(credentials=token), db_session)
+
+    assert ctx.apaas_user_id == "apaas-user-1"
+    assert ctx.apaas_tenant_id == "apaas-tenant-current"
 
 
 @pytest.mark.asyncio

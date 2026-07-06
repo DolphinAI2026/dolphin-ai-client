@@ -224,6 +224,45 @@ async def _resolve_apaas_call_context(db: AsyncSession, ctx: AuthContext) -> tup
     )
 
 
+async def _list_remote_apps_for_current_builder_tenant(
+    db: AsyncSession,
+    ctx: AuthContext,
+) -> tuple[list, str | None, str | None]:
+    """List remote low-code apps through the current local tenant binding."""
+    env = await _resolve_platform_env_for_tenant(db, ctx.tenant_id)
+    if env:
+        token = (env.token or getattr(ctx.user, "apaas_token", "") or "").strip()
+        if not token and not (env.username and env.password_enc):
+            return [], env.base_url, env.platform_tenant_id
+        client = APaaSClient(base_url=env.base_url, tenant_id=env.platform_tenant_id, token=token)
+        try:
+            if not token and env.username and env.password_enc:
+                login_result = await client.login(env.username, decrypt_password(env.password_enc))
+                env.token = (login_result.get("token") or "").strip()
+                env.status = "connected"
+                await db.commit()
+                client = APaaSClient(base_url=env.base_url, tenant_id=env.platform_tenant_id, token=env.token)
+            return await client.query_app_list(), env.base_url, env.platform_tenant_id
+        except Exception:
+            if env.username and env.password_enc:
+                try:
+                    login_result = await client.login(env.username, decrypt_password(env.password_enc))
+                    env.token = (login_result.get("token") or "").strip()
+                    env.status = "connected"
+                    await db.commit()
+                    client = APaaSClient(base_url=env.base_url, tenant_id=env.platform_tenant_id, token=env.token)
+                    return await client.query_app_list(), env.base_url, env.platform_tenant_id
+                except Exception as relogin_error:
+                    raise relogin_error
+            raise
+
+    base_url, tenant_id, token, _source = await _resolve_apaas_call_context(db, ctx)
+    if not base_url or not tenant_id or not token:
+        return [], base_url or None, tenant_id or None
+    client = APaaSClient(base_url=base_url, tenant_id=tenant_id, token=token)
+    return await client.query_app_list(), base_url, tenant_id
+
+
 def _apply_application_list_filters(stmt, ctx: AuthContext, team_scope: str | None, source_filter: str | None, stage: str | None = None):
     stmt = stmt.where(Application.tenant_id == ctx.tenant_id)
     if team_scope == "personal":
@@ -514,11 +553,11 @@ async def list_applications(
 
     # 2. 拉取远程应用（降级处理）
     remote_apps: list = []
-    if include_remote and requested_app_type != "ai-code" and ctx.user.apaas_token and source_filter != "local":
+    if include_remote and requested_app_type != "ai-code" and source_filter != "local":
         try:
-            from app.apaas_client import APaaSClient
-            client = APaaSClient(base_url=ctx.user.apaas_base_url, tenant_id=ctx.user.apaas_tenant_id, token=ctx.user.apaas_token)
-            remote_apps = await client.query_app_list()
+            remote_apps, remote_base_url, remote_tenant_id = await _list_remote_apps_for_current_builder_tenant(db, ctx)
+            env_base_url = remote_base_url or env_base_url
+            env_tenant_id = remote_tenant_id or env_tenant_id
         except Exception as e:
             logger.warning(f"拉取得帆云应用列表失败（降级）: {e}")
 
