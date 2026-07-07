@@ -1,6 +1,6 @@
 """Skill 包文件系统层 — 扫描/解析/读取，路线1，不进 DB。
 
-skill = skills_root/{platform,user}/<name>/SKILL.md(+helper/模板/资源)。
+skill = skills_root/<name>/SKILL.md 或 skills_root/{platform,user}/<name>/SKILL.md(+helper/模板/资源)。
 SKILL.md frontmatter 需含 name + description（与 Claude Code skill 一致）。
 目录不存在 → 空集；显式禁用时整链路 no-op。
 """
@@ -105,40 +105,43 @@ class SkillRegistry:
     def __init__(self, root: Path | None = None):
         self._root = root if root is not None else skills_root()
 
+    def _scan_skill_dirs(self, base: Path, source: str, by_name: dict[str, Skill]) -> None:
+        if not base.is_dir():
+            return
+        for d in sorted(base.iterdir()):
+            if not d.is_dir():
+                continue
+            md = d / "SKILL.md"
+            if not md.is_file():
+                continue
+            try:
+                meta, _ = _parse_frontmatter(md.read_text(encoding="utf-8"))
+            except Exception as exc:
+                log.warning("skill 读取失败 %s: %r", d, exc)
+                continue
+            name = (meta.get("name") or "").strip()
+            desc = (meta.get("description") or "").strip()
+            if not name or not desc:
+                log.warning("skill 缺 name/description, 跳过: %s", d)
+                continue
+            # 顶层摘要（文件名 + 子目录名带 /），供列表展示用——避免带 JRE/大量
+            # 嵌套文件的 skill 把整棵树平铺成上千项撑爆 UI。完整树由 use_skill 递归拷。
+            files = [
+                (p.name + "/" if p.is_dir() else p.name)
+                for p in sorted(d.iterdir())
+                if p.name != "SKILL.md"
+            ]
+            by_name[name] = Skill(name=name, description=desc, dir=d, source=source, files=files)
+
     def scan(self) -> list[Skill]:
         root = self._root
         if root is None or not root.exists():
             return []
         by_name: dict[str, Skill] = {}
-        # platform 先扫，user 后扫覆盖同名（本地优先）。
+        # 先兼容 d-ai-skills 这类扁平技能根；再扫 platform/user，user 后扫覆盖同名。
+        self._scan_skill_dirs(root, "platform", by_name)
         for source in ("platform", "user"):
-            base = root / source
-            if not base.is_dir():
-                continue
-            for d in sorted(base.iterdir()):
-                if not d.is_dir():
-                    continue
-                md = d / "SKILL.md"
-                if not md.is_file():
-                    continue
-                try:
-                    meta, _ = _parse_frontmatter(md.read_text(encoding="utf-8"))
-                except Exception as exc:
-                    log.warning("skill 读取失败 %s: %r", d, exc)
-                    continue
-                name = (meta.get("name") or "").strip()
-                desc = (meta.get("description") or "").strip()
-                if not name or not desc:
-                    log.warning("skill 缺 name/description, 跳过: %s", d)
-                    continue
-                # 顶层摘要（文件名 + 子目录名带 /），供列表展示用——避免带 JRE/大量
-                # 嵌套文件的 skill 把整棵树平铺成上千项撑爆 UI。完整树由 use_skill 递归拷。
-                files = [
-                    (p.name + "/" if p.is_dir() else p.name)
-                    for p in sorted(d.iterdir())
-                    if p.name != "SKILL.md"
-                ]
-                by_name[name] = Skill(name=name, description=desc, dir=d, source=source, files=files)
+            self._scan_skill_dirs(root / source, source, by_name)
         return list(by_name.values())
 
     def get(self, name: str) -> Skill | None:

@@ -52,6 +52,20 @@ def test_user_overrides_platform_same_name(skills_dir):
     assert found["dup"].description == "用户版"
 
 
+def test_scan_supports_flat_skill_root(skills_dir):
+    """d-ai-skills 这类扁平技能目录应能直接作为 RUIJING_SKILLS_DIR。"""
+    flat = skills_dir / "agentic-project-manager"
+    flat.mkdir(parents=True)
+    (flat / "SKILL.md").write_text(
+        "---\nname: agentic-project-manager\ndescription: PM 入口\n---\n正文",
+        encoding="utf-8",
+    )
+
+    found = {s.name: s for s in skmod.SkillRegistry().scan()}
+    assert found["agentic-project-manager"].description == "PM 入口"
+    assert found["agentic-project-manager"].source == "platform"
+
+
 def test_missing_dir_returns_empty(tmp_path, monkeypatch):
     monkeypatch.setenv("RUIJING_SKILLS_DIR", str(tmp_path / "nope"))
     assert skmod.SkillRegistry().scan() == []
