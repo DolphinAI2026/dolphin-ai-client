@@ -1,6 +1,6 @@
 """run_complete_generation 接上 Phase 5：config 带 workflows 时会调 save_process_config。
 
-只验证「接线」——Phase 5 被调用、save_process_config 收到绑了 boc_code 的 payload；
+只验证「接线」——Phase 5 被调用、save_process_config 收到平台设计器同款 payload；
 前 4 个 phase 用 mock client 各自跑过即可（不验证 1-4 的细节）。
 
 方法名/返回结构按 run_complete_generation 实际调用对齐：
@@ -65,5 +65,6 @@ async def test_phase5_creates_workflow_from_config():
     assert any(e.get("stage") == 5 for e in events), f"Phase 5 没跑：{[e.get('stage') for e in events]}"
     client.save_process_config.assert_awaited()
     _app_id, payload = client.save_process_config.await_args.args
-    assert payload["processName"] == "订单审批流"
-    assert payload["processDataSource"]["objectId"] == "boc_code_F1"
+    assert "processName" not in payload
+    assert "processDataSource" not in payload
+    assert payload["formId"] == "F1"

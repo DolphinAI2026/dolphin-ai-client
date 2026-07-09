@@ -530,7 +530,11 @@ def test_start_and_end_node_ids_are_canonicalized_for_bpmn_refs():
 
     defined = set(re.findall(r'<(?:startEvent|endEvent|userTask)\s+id="([^"]+)"', payload["bpmn"]))
     refs = re.findall(r'<sequenceFlow[^>]*\ssourceRef="([^"]+)"[^>]*\stargetRef="([^"]+)"', payload["bpmn"])
+    start_hidden = re.search(r'<userTask\s+id="START_HIDDEN".*?</userTask>', payload["bpmn"], re.S)
     assert ("START_HIDDEN", "approve-1") in refs
     assert ("START", "approve-1") not in refs
     assert ("approve-1", "END") in refs
     assert all(src in defined and tgt in defined for src, tgt in refs)
+    assert start_hidden
+    assert "processUsers(processId,'START_HIDDEN',documentId,submitter)" in start_hidden.group(0)
+    assert "<completionCondition>" not in start_hidden.group(0)

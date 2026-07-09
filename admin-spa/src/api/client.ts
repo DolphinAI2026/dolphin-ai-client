@@ -6,7 +6,7 @@
  *  - response: 401 清掉失效 token，但不再跳独立登录页
  */
 import axios from 'axios'
-import type { AxiosInstance, AxiosError } from 'axios'
+import type { AxiosInstance, AxiosError, AxiosRequestConfig } from 'axios'
 
 export const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || '/api'
 
@@ -36,7 +36,7 @@ api.interceptors.response.use(
 )
 
 /** 包装常用方法（保留 axios 完整 response 给调用方按需取 .data） */
-export const apiGet  = <T = any>(url: string, params?: any) => api.get<T>(url, { params }).then((r) => r.data)
-export const apiPost = <T = any>(url: string, body?: any)   => api.post<T>(url, body).then((r) => r.data)
-export const apiPut  = <T = any>(url: string, body?: any)   => api.put<T>(url, body).then((r) => r.data)
-export const apiDel  = <T = any>(url: string)               => api.delete<T>(url).then((r) => r.data)
+export const apiGet  = <T = any>(url: string, params?: any, config?: AxiosRequestConfig) => api.get<T>(url, { ...config, params }).then((r) => r.data)
+export const apiPost = <T = any>(url: string, body?: any, config?: AxiosRequestConfig)   => api.post<T>(url, body, config).then((r) => r.data)
+export const apiPut  = <T = any>(url: string, body?: any, config?: AxiosRequestConfig)   => api.put<T>(url, body, config).then((r) => r.data)
+export const apiDel  = <T = any>(url: string, config?: AxiosRequestConfig)               => api.delete<T>(url, config).then((r) => r.data)

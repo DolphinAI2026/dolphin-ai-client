@@ -7,7 +7,7 @@ build_workflow_payload —— 纯函数：按 form_code 反查 formId/menuId，�
 from __future__ import annotations
 
 import logging
-from typing import AsyncIterator, List, Optional, Tuple
+from typing import Any, AsyncIterator, List, Optional, Tuple
 
 from app.process_payload import build_process_payload
 
@@ -19,31 +19,108 @@ def _workflow_process_code(form_code: str, name: str) -> str:
     return f"proc_{form_code}"
 
 
+def _text(value: Any) -> str:
+    return str(value or "").strip()
+
+
+def _workflow_form_ref(wf: dict) -> str:
+    return _text(
+        wf.get("form_code")
+        or wf.get("formCode")
+        or wf.get("form")
+        or wf.get("form_name")
+        or wf.get("formName")
+    )
+
+
+def _find_form_result(wf: dict, form_results: List[dict]) -> Optional[dict]:
+    ref = _workflow_form_ref(wf)
+    if not ref:
+        return None
+    for item in form_results or []:
+        candidates = {
+            _text(item.get("formCode")),
+            _text(item.get("form_code")),
+            _text(item.get("formName")),
+            _text(item.get("form_name")),
+            _text(item.get("name")),
+        }
+        if ref in candidates:
+            return item
+    return None
+
+
+def _node_role_code(node: dict) -> str:
+    return _text(
+        node.get("role_code")
+        or node.get("roleCode")
+        or node.get("role")
+        or node.get("approver_code")
+        or node.get("approverCode")
+    )
+
+
+def _node_type(node: dict) -> str:
+    return _text(node.get("type") or node.get("node_type") or node.get("nodeType")).lower()
+
+
+def _node_uses_role_approver(node: dict) -> bool:
+    approver_type = _text(
+        node.get("approver_type")
+        or node.get("approverType")
+        or node.get("approval_type")
+        or node.get("approvalType")
+    ).upper()
+    if approver_type == "ROLE":
+        return True
+    return _node_type(node) == "role_approval"
+
+
+def _is_approval_node(node: dict) -> bool:
+    node_type = _node_type(node)
+    if node_type in {"start", "end"}:
+        return False
+    if node_type in {"approve", "approval", "assignee_approval", "role_approval", "manager_approval"}:
+        return True
+    return bool(_node_role_code(node))
+
+
 def build_workflow_payload(
     wf: dict, form_results: List[dict], role_code_map: dict, *, app_id: str
 ) -> Tuple[Optional[dict], Optional[str]]:
     """(payload, None) 成功；(None, reason) 跳过（reason 是给用户的告警文案）。纯函数，无 IO。"""
-    form_code = wf.get("form_code")
-    fr = next((f for f in form_results if f.get("formCode") == form_code), None)
+    form_ref = _workflow_form_ref(wf)
+    fr = _find_form_result(wf, form_results)
     if not fr or not fr.get("formId"):
-        return None, f"流程 '{wf.get('name')}'：关联表单 '{form_code}' 未找到或未创建成功，跳过"
+        return None, f"流程 '{wf.get('name')}'：关联表单 '{form_ref}' 未找到或未创建成功，跳过"
 
     stages: List[dict] = []
     for node in wf.get("nodes", []):
-        role_code = node.get("role_code")
-        info = role_code_map.get(role_code) or {}
-        role_id = info.get("id")
-        if not role_id:
-            return None, f"流程 '{wf.get('name')}'：审批人角色 '{role_code}' 未找到（需在第二章定义），跳过"
+        if not isinstance(node, dict) or not _is_approval_node(node):
+            continue
+        if _node_uses_role_approver(node):
+            role_code = _node_role_code(node)
+            info = role_code_map.get(role_code) or {}
+            role_id = info.get("id")
+            if not role_id:
+                return None, f"流程 '{wf.get('name')}'：审批人角色 '{role_code}' 未找到（需在第二章定义），跳过"
+            stages.append({
+                "name": node.get("name") or "审批",
+                "approver_type": "ROLE",
+                "approver_value": str(role_id),
+                "approver_label": info.get("roleName") or role_code,
+            })
+            continue
         stages.append({
             "name": node.get("name") or "审批",
-            "approver_type": "ROLE",
-            "approver_value": str(role_id),
-            "approver_label": info.get("roleName") or role_code,
+            "approver_type": "SUBMITTER",
+            "approver_value": "SUBMITTER",
+            "approver_label": "申请人",
         })
     if not stages:
         return None, f"流程 '{wf.get('name')}'：无有效审批节点，跳过"
 
+    form_code = _text(fr.get("formCode") or fr.get("form_code") or form_ref)
     payload = build_process_payload(
         app_id=app_id,
         form_id=fr["formId"],
@@ -51,6 +128,7 @@ def build_workflow_payload(
         process_name=wf.get("name") or "审批流程",
         process_code=_workflow_process_code(form_code, wf.get("name") or ""),
         stages_with_role=stages,
+        form_components=fr.get("components") or fr.get("formComponents") or [],
     )
     return payload, None
 

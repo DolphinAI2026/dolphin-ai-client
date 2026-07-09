@@ -776,16 +776,15 @@ async def list_my_tenants(
 ):
     """返回当前用户可切换的租户列表（用于顶栏 dropdown）。
 
-    平台管理员可切到任意 active 租户（与 /switch-tenant 的鉴权一致），故返回全部
-    active 租户；普通用户仅返回自己的 active membership。两个接口口径必须一致，
-    否则 admin 能切进的租户在下拉里看不到（2026-06-09 修）。
+    aPaaS 登录用户只返回自己可登录的 active membership。平台管理员的全量租户同步
+    只供平台管理使用，不等于这些租户都能进入工作台。
     """
-    if ctx.user.is_platform_admin:
+    is_apaas_account = ctx.user.account_source == "apaas" or bool(ctx.user.apaas_user_id)
+    if ctx.user.is_platform_admin and not is_apaas_account:
+        stmt = select(Tenant).where(Tenant.status == 1)
         rows = (
             await db.execute(
-                select(Tenant)
-                .where(Tenant.status == 1)
-                .order_by(Tenant.tenant_name.asc())
+                stmt.order_by(Tenant.tenant_name.asc())
             )
         ).scalars().all()
     else:
@@ -1159,6 +1158,7 @@ async def get_me(ctx: Annotated[AuthContext, Depends(get_auth_context)], db: Ann
         username=ctx.user.username,
         display_name=ctx.user.display_name,
         is_active=ctx.user.is_active,
+        is_platform_admin=ctx.user.is_platform_admin,
         created_at=ctx.user.created_at,
         tenant_id=ctx.tenant_id if ctx.tenant_id else None,
         tenant_name=tenant_name,

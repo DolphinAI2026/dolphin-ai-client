@@ -48,6 +48,15 @@ async def test_package_served(client):
 
 
 @pytest.mark.asyncio
+async def test_windows_installer_served(client):
+    c, tmp = client
+    (tmp / "ruijing-0.2.0-windows-x86_64-setup.exe").write_bytes(b"EXE")
+    resp = await c.get("/desktop-updates/ruijing-0.2.0-windows-x86_64-setup.exe")
+    assert resp.status_code == 200
+    assert resp.content == b"EXE"
+
+
+@pytest.mark.asyncio
 async def test_package_path_traversal_rejected(client):
     c, _ = client
     resp = await c.get("/desktop-updates/..%2f..%2fetc%2fpasswd")
@@ -135,6 +144,16 @@ async def test_publish_writes_manifest_and_packages(admin_client):
 
 
 @pytest.mark.asyncio
+async def test_publish_accepts_windows_installer(admin_client):
+    c, tmp = admin_client
+    manifest = json.dumps({"version": "0.2.1", "platforms": {"windows-x86_64": {"signature": "s", "url": "u"}}})
+    files = [("packages", ("ruijing-0.2.1-windows-x86_64-setup.exe", b"EXE", "application/octet-stream"))]
+    resp = await c.post("/desktop-updates/admin/publish", data={"manifest": manifest}, files=files)
+    assert resp.status_code == 200, resp.text
+    assert (tmp / "ruijing-0.2.1-windows-x86_64-setup.exe").read_bytes() == b"EXE"
+
+
+@pytest.mark.asyncio
 async def test_publish_rejects_bad_manifest(admin_client):
     c, _ = admin_client
     resp = await c.post("/desktop-updates/admin/publish", data={"manifest": "{not json"})
@@ -171,6 +190,16 @@ async def test_history_records_published_version_with_notes(admin_client):
     assert row["notes"] == "新功能"
     assert row["is_latest"] is True
     assert row["packages"]["aarch64"] == "ruijing-0.3.0-aarch64.app.tar.gz"
+
+
+@pytest.mark.asyncio
+async def test_history_records_windows_installer(admin_client):
+    c, tmp = admin_client
+    (tmp / "ruijing-0.3.1-windows-x86_64-setup.exe").write_bytes(b"EXE")
+    resp = await c.get("/desktop-updates/admin/history")
+    assert resp.status_code == 200
+    row = next(r for r in resp.json() if r["version"] == "0.3.1")
+    assert row["packages"]["windows_x86_64"] == "ruijing-0.3.1-windows-x86_64-setup.exe"
 
 
 @pytest.mark.asyncio

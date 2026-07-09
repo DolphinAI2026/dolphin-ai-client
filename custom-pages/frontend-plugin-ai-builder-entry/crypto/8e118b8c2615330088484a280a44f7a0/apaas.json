@@ -1,0 +1,20 @@
+{
+  "copyAssets": [
+    "public/frontend-plugin/frontend-plugin-demo"
+  ],
+  "templateType": "FRONTEND_PLUGIN",
+  "code": "PLUGIN_DEMO",
+  "name": "demo",
+  "description": "demo plugin",
+  "extraConfig": {
+    "admin": true,
+    "adminCss": false,
+    "adminVersion": "b36f9b68218a0dd272a2033e94468cd5",
+    "app": true,
+    "appCss": false,
+    "appVersion": "b36f9b68218a0dd272a2033e94468cd5",
+    "mobile": true,
+    "mobileCss": false,
+    "mobileVersion": "b36f9b68218a0dd272a2033e94468cd5"
+  }
+}

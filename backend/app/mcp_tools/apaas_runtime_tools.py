@@ -24,6 +24,28 @@ list_apaas_form_views = None
 list_apaas_form_components = None
 list_apaas_app_processes = None
 
+
+def _invalidate_process_caches_after_write(env_id: int, apaas_app_id: str) -> None:
+    """Best-effort cache invalidation after process writes."""
+    aid = str(apaas_app_id or "").strip()
+    if not aid:
+        return
+    try:
+        from app.routes.applications.section_content import invalidate_section_cache_for_app
+
+        cleared = invalidate_section_cache_for_app(aid)
+        if cleared:
+            logger.info("section_content cache invalidated after process write: app=%s cleared=%d", aid, cleared)
+    except Exception as exc:  # noqa: BLE001
+        logger.debug("section_content cache invalidate skipped after process write (%s): %s", aid, exc)
+    try:
+        from app.mcp_tools.process_tools import _process_list_cache
+
+        _process_list_cache.pop(f"{int(env_id)}:{aid}", None)
+    except Exception as exc:  # noqa: BLE001
+        logger.debug("process list cache invalidate skipped after process write (%s): %s", aid, exc)
+
+
 # ─── 业务数据查询（运行时 data，外部 agent 看数据）──────────────────────
 # 之前所有 apaas 工具都在搭建层（角色 / 字典 / 模型 / 表单 / 权限 / 菜单），
 # 没工具能看运行时数据 — 用户在「请假申请」表单提交的具体请假记录。
@@ -287,6 +309,40 @@ async def set_apaas_app_process(
             "message": f"menu_id={menu_id} 不是表单菜单 (formId 空) 或菜单不存在. "
                        f"先调 list_apaas_app_menus 找 form_id 不空那行 menu_id",
         }
+    menu_type = str((target_menu or {}).get("menuType") or "").strip().upper()
+    if menu_type and menu_type != "MODEL":
+        model_menu = None
+
+        def _find_model_menu(nodes):
+            for n in (nodes or []):
+                if not isinstance(n, dict):
+                    continue
+                if (
+                    str(n.get("formId") or "").strip() == form_id
+                    and str(n.get("menuType") or "").strip().upper() == "MODEL"
+                ):
+                    return n
+                sub = _find_model_menu(n.get("submenus") or n.get("children") or [])
+                if sub:
+                    return sub
+            return None
+
+        model_menu = _find_model_menu(menus_raw if isinstance(menus_raw, list) else [])
+        if model_menu:
+            menu_id = str(model_menu.get("id") or model_menu.get("menuId") or menu_id).strip()
+            target_menu = model_menu
+        else:
+            return {
+                "ok": False,
+                "error_code": "MENU_NOT_MODEL_FORM_ENTRY",
+                "message": (
+                    f"menu_id={menu_id} 是 {menu_type} 菜单，不是 MODEL 表单入口。"
+                    "平台流程运行需要绑定 MODEL 菜单；请先为该 form 创建 MODEL 菜单，再设置流程。"
+                ),
+                "menu_id": menu_id,
+                "form_id": form_id,
+                "menu_type": menu_type,
+            }
 
     # 反查角色 — 把 stages 里的 approver_code 映射到 role_id (snowflake), 平台
     # 接受的是 role_id 不是 role_code.
@@ -314,6 +370,20 @@ async def set_apaas_app_process(
                 "approver_type": "SUBMITTER",
                 "approver_value": "SUBMITTER",
                 "approver_label": "申请人",
+            })
+            continue
+        if approver_type == "USER":
+            user_id = str(stage.get("approver_code") or stage.get("approver_value") or "").strip()
+            if not user_id:
+                return {
+                    "ok": False, "error_code": "USER_NOT_FOUND",
+                    "message": f"stage 「{stage.get('name')}」的 USER approver_code 不能为空",
+                }
+            stages_with_role.append({
+                "name": stage.get("name") or f"审批 {stage_idx}",
+                "approver_type": "USER",
+                "approver_value": user_id,
+                "approver_label": stage.get("approver_name") or user_id,
             })
             continue
         # ROLE — code 或 id 都接, 缺哪个用反查表补齐
@@ -399,6 +469,14 @@ async def set_apaas_app_process(
                 ],
             }
 
+    form_components: list[dict[str, Any]] = []
+    ok_components, components_raw = await _with_client(
+        env_id, "查表单组件",
+        lambda c: c.query_form_components(apaas_app_id.strip(), form_id),
+    )
+    if ok_components and isinstance(components_raw, list):
+        form_components = components_raw
+
     if has_definition:
         try:
             from app.process_translator import build_apaas_bpmn_xml, translate_definition_to_apaas_schema
@@ -406,13 +484,6 @@ async def set_apaas_app_process(
             role_lookup: dict[str, dict] = {}
             role_lookup.update(role_by_code)
             role_lookup.update(role_by_id)
-            form_components: list[dict[str, Any]] = []
-            ok_components, components_raw = await _with_client(
-                env_id, "查表单组件",
-                lambda c: c.query_form_components(apaas_app_id.strip(), form_id),
-            )
-            if ok_components and isinstance(components_raw, list):
-                form_components = components_raw
             payload, warnings = translate_definition_to_apaas_schema(
                 process_definition or {},
                 apaas_app_id=apaas_app_id.strip(),
@@ -472,6 +543,7 @@ async def set_apaas_app_process(
         )
         if not ok:
             return raw
+        _invalidate_process_caches_after_write(env_id, apaas_app_id)
         return {
             "ok": True,
             "menu_id": menu_id,
@@ -498,12 +570,14 @@ async def set_apaas_app_process(
         process_name=process_name.strip(),
         process_code=process_code.strip(),
         stages_with_role=stages_with_role,
+        form_components=form_components,
     )
 
     ok, raw = await _with_client(env_id, "存流程",
         lambda c: c.save_process_config(apaas_app_id.strip(), payload))
     if not ok:
         return raw
+    _invalidate_process_caches_after_write(env_id, apaas_app_id)
 
     return {
         "ok": True,

@@ -20,6 +20,7 @@ class UserInfo(BaseModel):
     username: str
     display_name: Optional[str] = None
     is_active: bool
+    is_platform_admin: bool = False
     created_at: datetime
     tenant_id: Optional[int] = None
     tenant_name: Optional[str] = None

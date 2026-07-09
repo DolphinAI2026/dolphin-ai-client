@@ -1952,112 +1952,28 @@ async def execute_create_workflow(
     form_results: List[dict],
     role_codes: Optional[Dict[str, dict]] = None,
 ) -> dict:
-    """为单个表单创建审批流程。使用平台内部 save API（需要完整 nodes+edges+bpmn）。"""
-    role_codes = role_codes or {}
-    form_name = workflow.get("form", "")
-    config_nodes = workflow.get("nodes", [])
+    """为单个表单创建审批流程。使用统一的 capture 验证版 payload builder。"""
+    from app.workflow_phase import build_workflow_payload
 
-    if not config_nodes:
-        return {"message": f"流程 {workflow.get('name', '')} 无节点，跳过"}
-
-    # 找对应表单的 menuId
-    fr = next((f for f in form_results if f.get("formName") == form_name), None)
-    if not fr:
-        raise ValueError(f"未找到表单 {form_name}，无法创建流程")
-
-    menu_id = fr.get("menuId", "")
-    if not menu_id:
-        raise ValueError(f"表单 {form_name} 没有 menuId，无法创建流程")
-
-    # --- 标准按钮模板 ---
-    approve_buttons = [
-        {"buttonCode": "APPROVE", "buttonName": "同意", "buttonLabel": "同意", "buttonStatus": True, "buttonStyle": "primary", "buttonLabelI18nAssociated": False},
-        {"buttonCode": "REJECT", "buttonName": "拒绝", "buttonLabel": "拒绝", "buttonStatus": True, "buttonStyle": "primary", "buttonLabelI18nAssociated": False},
-    ]
-    start_buttons = [
-        {"buttonCode": "NORMAL_TERMINATE", "buttonName": "终止", "buttonLabel": "终止", "buttonStatus": False, "buttonStyle": "primary", "buttonLabelI18nAssociated": False},
-        {"buttonCode": "RESTART", "buttonName": "重新提交", "buttonLabel": "重新提交", "buttonStatus": False, "buttonStyle": "primary", "buttonLabelI18nAssociated": False},
-        {"buttonCode": "WITHDRAW", "buttonName": "撤回", "buttonLabel": "撤回", "buttonStatus": False, "buttonStyle": "primary", "buttonLabelI18nAssociated": False, "withdrawalType": "NEXT_NODE", "withdrawalList": []},
-    ]
-    comment_config = {"required": False, "attachmentUpload": True, "requiredBtns": [], "show": True}
-    phrase_config = {"handleType": "INPUT_TYPE", "phrase": "", "status": False}
-
-    def _make_node(node_id: str, title: str, ntype: str, y: float, approvers=None):
-        n = {
-            "id": node_id, "nodeId": node_id, "timeBoudries": [],
-            "width": "64.0" if ntype in ("START", "END") else "122.0",
-            "height": "64.0" if ntype in ("START", "END") else "48.0",
-            "x": 372.0, "y": y,
-            "data": {
-                "nodeId": node_id, "title": title, "type": ntype,
-                "enableComponentPermission": True, "titleI18nAssociated": False,
-                "approveCommentConfig": comment_config, "approvePhraseConfig": phrase_config,
-                "remindList": [], "processEventStatus": False, "saveFlag": True,
-            },
-        }
-        if ntype == "START":
-            n["data"]["formButtons"] = start_buttons
-        elif ntype == "APPROVE":
-            n["data"]["approveType"] = "SINGLE"
-            n["data"]["approveButtons"] = approve_buttons
-            n["data"]["approvers"] = approvers or []
-        return n
-
-    # --- 构建节点 ---
-    # 固定结构: START → START_HIDDEN(发起申请) → UserTask_1 → UserTask_2 → ... → END
-    platform_nodes = [
-        _make_node("START", "开始", "START", 32.0),
-        _make_node("START_HIDDEN", "发起申请", "APPROVE", 128.0,
-                    [{"approverType": "SUBMITTER", "approverName": "表单提交人", "approverCode": "SUBMITTER"}]),
-    ]
-
-    approve_idx = 0
-    y_pos = 224.0
-    for node in config_nodes:
-        if node.get("type") in ("start", "end"):
-            continue
-        approvers = []
-        if node.get("role"):
-            role_code = node["role"]
-            role_info = role_codes.get(role_code, {})
-            platform_code = role_info.get("roleCode", role_code)
-            platform_name = role_info.get("roleName", node.get("name", role_code))
-            approvers.append({"approverType": "ROLE", "approverName": platform_name, "approverCode": platform_code})
-        if not approvers:
-            # 审批节点必须有审批人，默认用提交人
-            approvers = [{"approverType": "SUBMITTER", "approverName": "表单提交人", "approverCode": "SUBMITTER"}]
-        platform_nodes.append(_make_node(f"UserTask_{approve_idx + 1}", node["name"], "APPROVE", y_pos, approvers))
-        approve_idx += 1
-        y_pos += 96.0
-
-    platform_nodes.append(_make_node("END", "结束", "END", y_pos))
-
-    # --- 构建边 ---
-    platform_edges = []
-    for i in range(len(platform_nodes) - 1):
-        src = platform_nodes[i]["id"]
-        tgt = platform_nodes[i + 1]["id"]
-        platform_edges.append({
-            "id": f"SequenceFlow_{tgt}",
-            "source": src,
-            "target": tgt,
-            "data": {"titleI18nAssociated": False},
-        })
-
-    # --- 最小 BPMN XML（平台会自动重建完整的 BPMN） ---
-    bpmn = '<?xml version="1.0" encoding="UTF-8"?><definitions xmlns="http://www.omg.org/spec/BPMN/20100524/MODEL" xmlns:activiti="http://activiti.org/bpmn" id="Definitions_1" targetNamespace="http://bpmn.io/schema/bpmn"><process id="Process_1" isExecutable="true"><startEvent id="START" name="开始"/><endEvent id="END" name="结束"/></process></definitions>'
-
-    payload = {
-        "appId": app_id,
-        "menuId": menu_id,
-        "bpmn": bpmn,
-        "nodes": platform_nodes,
-        "edges": platform_edges,
-    }
+    payload, reason = build_workflow_payload(
+        workflow,
+        form_results,
+        role_codes or {},
+        app_id=app_id,
+    )
+    if reason:
+        raise ValueError(reason)
 
     await client.save_process_config(app_id, payload)
+    approve_idx = len([
+        node for node in payload.get("nodes", [])
+        if (node.get("data") or {}).get("type") == "APPROVE"
+    ])
     return {
         "message": f"流程创建成功: {workflow.get('name', '')}（{approve_idx} 个审批节点）",
+        "process_code": payload.get("processCode"),
+        "nodes_count": len(payload.get("nodes") or []),
+        "edges_count": len(payload.get("edges") or []),
     }
 
 

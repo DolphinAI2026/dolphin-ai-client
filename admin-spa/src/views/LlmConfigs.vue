@@ -462,7 +462,11 @@ async function saveConfig() {
 async function testConfig(config: LlmConfig) {
   testingId.value = config.id
   try {
-    const resp = await apiPost<{ success: boolean; reply?: string; error?: string }>(`/llm-configs/${config.id}/test`)
+    const resp = await apiPost<{ success: boolean; reply?: string; error?: string }>(
+      `/llm-configs/${config.id}/test`,
+      undefined,
+      { timeout: 90_000 },
+    )
     if (resp.success) {
       ElMessage.success(`测试通过${resp.reply ? `：${resp.reply}` : ''}`)
     } else {

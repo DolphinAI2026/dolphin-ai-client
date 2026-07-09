@@ -169,7 +169,7 @@ async def test_platform_admin_routes_fall_back_to_active_tenant_without_membersh
 
 
 @pytest.mark.asyncio
-async def test_apaas_platform_admin_login_does_not_sync_all_tenants_or_llm_configs(
+async def test_apaas_platform_admin_login_syncs_all_tenants_but_returns_loginable_tenants(
     db_session,
     monkeypatch,
 ):
@@ -188,23 +188,39 @@ async def test_apaas_platform_admin_login_does_not_sync_all_tenants_or_llm_confi
             }
         }
 
-    async def fail_all_tenants(_platform_token):
-        raise AssertionError("login must not sync all aPaaS tenants")
+    async def fake_all_tenants(_platform_token):
+        return [
+            {
+                "tenantId": "822902364821258241",
+                "tenantName": "得帆",
+                "tenantCode": "df",
+            },
+            {
+                "tenantId": "828940713101099009",
+                "tenantName": "火星团队",
+                "tenantCode": "mars",
+            },
+        ]
 
     monkeypatch.setattr(auth_routes, "_apaas_platform_login", fake_platform_login)
     monkeypatch.setattr(auth_routes, "_apaas_backend_login", fake_backend_login)
-    monkeypatch.setattr(auth_routes, "_apaas_all_tenants", fail_all_tenants)
+    monkeypatch.setattr(auth_routes, "_apaas_all_tenants", fake_all_tenants)
 
     response = await _try_apaas_login_flow(UserLogin(username="admin", password="secret"), db_session)
 
     assert response is not None
     assert response.is_platform_admin is True
     assert response.has_tenant_context is True
-    assert len(response.tenants) == 1
+    assert [(t.tenant_name, t.tenant_code) for t in response.tenants] == [
+        ("得帆", "df"),
+    ]
 
-    tenants = (await db_session.execute(select(Tenant))).scalars().all()
-    assert len(tenants) == 1
-    assert tenants[0].apaas_tenant_id_str == "822902364821258241"
+    tenants = (await db_session.execute(select(Tenant).order_by(Tenant.id))).scalars().all()
+    assert len(tenants) == 2
+    assert [t.apaas_tenant_id_str for t in tenants] == [
+        "822902364821258241",
+        "828940713101099009",
+    ]
 
     llm_rows = (await db_session.execute(select(LLMConfig))).scalars().all()
     assert llm_rows == []
@@ -213,6 +229,108 @@ async def test_apaas_platform_admin_login_does_not_sync_all_tenants_or_llm_confi
     user_creds = (await db_session.execute(select(APaaSUserCredential))).scalars().all()
     assert len(platform_creds) == 1
     assert len(user_creds) == 1
+    assert user_creds[0].apaas_tenant_id == "822902364821258241"
+
+
+@pytest.mark.asyncio
+async def test_apaas_platform_admin_without_tenant_access_enters_platform_admin(
+    db_session,
+    monkeypatch,
+):
+    monkeypatch.setattr(settings, "apaas_base_url", "https://apaas-trial.definesys.cn/backend")
+
+    async def fake_platform_login(_username, _password):
+        return "platform.token.sig", {"data": {"token": "platform.token.sig"}}
+
+    async def fake_backend_login(_username, _password, _tenant_id=""):
+        return None, {"code": "error", "message": "no tenant access"}
+
+    async def fake_all_tenants(_platform_token):
+        return [
+            {
+                "tenantId": "822902364821258241",
+                "tenantName": "得帆",
+                "tenantCode": "df",
+            },
+        ]
+
+    monkeypatch.setattr(auth_routes, "_apaas_platform_login", fake_platform_login)
+    monkeypatch.setattr(auth_routes, "_apaas_backend_login", fake_backend_login)
+    monkeypatch.setattr(auth_routes, "_apaas_all_tenants", fake_all_tenants)
+
+    response = await _try_apaas_login_flow(UserLogin(username="admin", password="secret"), db_session)
+
+    assert response is not None
+    assert response.is_platform_admin is True
+    assert response.has_tenant_context is False
+    assert response.entry_path == "/platform-admin"
+    assert response.tenants is None
+
+    tenants = (await db_session.execute(select(Tenant))).scalars().all()
+    assert len(tenants) == 1
+    assert tenants[0].tenant_name == "得帆"
+
+
+@pytest.mark.asyncio
+async def test_apaas_platform_admin_probe_timeout_preserves_cached_identity(
+    db_session,
+    monkeypatch,
+):
+    monkeypatch.setattr(settings, "apaas_base_url", "https://apaas-trial.definesys.cn/backend")
+
+    user = User(
+        username="admin",
+        display_name="管理",
+        hashed_password=get_password_hash("secret"),
+        account_source="apaas",
+        is_platform_admin=False,
+        is_active=True,
+        apaas_user_id="apaas-user-1",
+    )
+    db_session.add(user)
+    await db_session.flush()
+    db_session.add(
+        APaaSPlatformCredential(
+            user_id=user.id,
+            base_url="https://apaas-trial.definesys.cn",
+            account="admin",
+            password_enc="enc",
+            token="cached-platform-token",
+            status="connected",
+        )
+    )
+    await db_session.flush()
+
+    async def timeout_platform_login(_username, _password):
+        raise TimeoutError("platform probe timed out")
+
+    async def fake_backend_login(_username, _password, _tenant_id=""):
+        return "backend.token.sig", {
+            "data": {
+                "token": "backend.token.sig",
+                "defaultTenantId": "822902364821258241",
+                "user": {"id": "apaas-user-1", "username": "admin"},
+                "tenant": {
+                    "tenantId": "822902364821258241",
+                    "tenantName": "得帆",
+                    "tenantCode": "df",
+                },
+            }
+        }
+
+    async def fake_switchable_tenants(_backend_token, _default_tenant_id):
+        return []
+
+    monkeypatch.setattr(auth_routes, "_apaas_platform_login", timeout_platform_login)
+    monkeypatch.setattr(auth_routes, "_apaas_backend_login", fake_backend_login)
+    monkeypatch.setattr(auth_routes, "_apaas_switchable_tenants", fake_switchable_tenants)
+
+    response = await _try_apaas_login_flow(UserLogin(username="admin", password="secret"), db_session)
+
+    assert response is not None
+    assert response.is_platform_admin is True
+    refreshed = (await db_session.execute(select(User).where(User.id == user.id))).scalar_one()
+    assert refreshed.is_platform_admin is True
 
 
 @pytest.mark.asyncio

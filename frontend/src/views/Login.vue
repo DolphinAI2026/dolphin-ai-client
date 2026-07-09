@@ -5,14 +5,14 @@
     <button
       type="button"
       class="login-theme-toggle"
-      :title="themeStore.isDark ? '切换到浅色模式' : '切换到夜间模式'"
+      :title="themeStore.isDark ? '切换到浅色模式' : '切换到深色模式'"
       @click="themeStore.toggle()"
     >
       <el-icon>
         <Sunny v-if="themeStore.isDark" />
         <Moon v-else />
       </el-icon>
-      <span>{{ themeStore.isDark ? '浅色' : '夜间' }}</span>
+      <span>{{ themeStore.isDark ? '浅色' : '深色' }}</span>
     </button>
 
     <main class="login-shell">

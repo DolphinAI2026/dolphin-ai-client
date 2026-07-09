@@ -285,6 +285,15 @@ function tenantLabel(tenant?: { tenant_name?: string | null; tenant_code?: strin
   return name || code || (tenant?.tenant_id ? `租户 ${tenant.tenant_id}` : '未选择租户')
 }
 
+function tenantSubtitle(tenant?: { tenant_name?: string | null; tenant_code?: string | null; tenant_id?: number | string | null }) {
+  const code = String(tenant?.tenant_code || '').trim()
+  const name = String(tenant?.tenant_name || '').trim()
+  if (code && !looksLikeLongId(code)) return `编码：${code}`
+  if (name && looksLikeLongId(name)) return `平台租户ID：${name}`
+  if (tenant?.tenant_id) return `租户ID：${tenant.tenant_id}`
+  return ''
+}
+
 const currentTenantLabel = computed(() => {
   const match = tenantOptions.value.find((tenant) => String(tenant.tenant_id) === currentTenantValue.value)
   return tenantLabel(match || {
@@ -619,7 +628,7 @@ function renderIcon(name: string): string {
               @click="selectTenant(Number(tenant.tenant_id))"
             >
               <span class="tenant-option-name" :title="tenant.tenant_name">{{ tenantLabel(tenant) }}</span>
-              <span v-if="tenant.tenant_code && tenant.tenant_code !== tenantLabel(tenant)" class="tenant-option-code">{{ tenant.tenant_code }}</span>
+              <span v-if="tenantSubtitle(tenant)" class="tenant-option-code">{{ tenantSubtitle(tenant) }}</span>
             </button>
             <div v-if="!tenantOptions.length" class="tenant-empty">暂无可切换租户</div>
           </div>
