@@ -130,6 +130,16 @@ def has_ref(repo_path: str | Path, ref: str) -> bool:
     return git(repo_path, "rev-parse", "--verify", "--quiet", ref, check=False).returncode == 0
 
 
+def resolve_base_ref(repo_path: str | Path, base_branch: str) -> str | None:
+    remote_ref = f"refs/remotes/origin/{base_branch}"
+    local_ref = f"refs/heads/{base_branch}"
+    if has_ref(repo_path, remote_ref):
+        return remote_ref
+    if has_ref(repo_path, local_ref):
+        return local_ref
+    return None
+
+
 def status_clean(repo_path: str | Path) -> bool:
     result = git(repo_path, "status", "--porcelain", "-uall")
     return not result.stdout.strip()
@@ -198,14 +208,7 @@ def inspect_git_state(
     branch = current_branch(worktree)
     head = rev_parse_head(worktree)
     clean = status_clean(worktree)
-    remote_ref = f"refs/remotes/origin/{base_branch}"
-    local_ref = f"refs/heads/{base_branch}"
-    if has_ref(worktree, remote_ref):
-        base_ref = remote_ref
-    elif has_ref(worktree, local_ref):
-        base_ref = local_ref
-    else:
-        base_ref = None
+    base_ref = resolve_base_ref(worktree, base_branch)
     base_missing = base_ref is None
     ahead, behind = (
         ahead_behind(worktree, base_ref)

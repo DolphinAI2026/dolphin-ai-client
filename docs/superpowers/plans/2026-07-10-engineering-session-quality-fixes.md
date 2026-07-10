@@ -47,9 +47,9 @@
 - Test: `backend/tests/test_engineering_sessions_git_state.py`
 - Test: `backend/tests/test_engineering_sessions_service.py`
 
-- [ ] Add tests for `base_missing`, blocked sync/resume/checkpoint/archive, and recovery after restoring the base ref.
+- [ ] Add tests for `base_missing`, lifecycle-preserving sync, gated resume/checkpoint/archive, and recovery after restoring the base ref.
 - [ ] Run the new tests and record RED failures.
-- [ ] Add `GitState.base_missing`, detect absent remote and local refs, map it to `blocked_retained`, and prevent write/archive transitions while blocked.
+- [ ] Add `GitState.base_missing`, detect absent remote and local refs without changing lifecycle status, and prevent write/archive/resume transitions while the base is unavailable.
 - [ ] Re-run focused tests and record GREEN results.
 
 ### Task 4: Align public model annotations with runtime strings

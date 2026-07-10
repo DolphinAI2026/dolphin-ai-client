@@ -375,7 +375,7 @@ def test_sync_recovers_running_after_missing_worktree_is_restored(tmp_path: Path
 
 
 @pytest.mark.parametrize("action", ["checkpoint", "archive"])
-def test_missing_base_blocks_writes_and_recovers_running(
+def test_base_outage_preserves_running_and_rejects_writes(
     tmp_path: Path,
     action: str,
 ):
@@ -386,11 +386,12 @@ def test_missing_base_blocks_writes_and_recovers_running(
     base_head = run_git(repo, "rev-parse", "main")
     (worktree / "committed.txt").write_text("committed\n", encoding="utf-8")
     assert service.checkpoint(session.id) is True
+    run_git(repo, "checkout", "-b", f"parking-{action}")
     run_git(repo, "update-ref", "-d", "refs/heads/main")
     (worktree / "blocked.txt").write_text("do not commit\n", encoding="utf-8")
     before_head = run_git(worktree, "rev-parse", "HEAD")
 
-    blocked = service.sync(session.id)
+    unavailable = service.sync(session.id)
     resumed = service.resume(session.id)
     if action == "checkpoint":
         assert service.checkpoint(session.id) is False
@@ -398,12 +399,12 @@ def test_missing_base_blocks_writes_and_recovers_running(
     else:
         observed = service.archive(session.id)
 
-    assert blocked.status == SessionStatus.BLOCKED_RETAINED
-    assert blocked.git_state.base_missing is True
-    assert blocked.git_state.stale is True
-    assert blocked.cleanup.suggested is False
-    assert resumed.status == SessionStatus.BLOCKED_RETAINED
-    assert observed.status == SessionStatus.BLOCKED_RETAINED
+    assert unavailable.status == SessionStatus.RUNNING
+    assert unavailable.git_state.base_missing is True
+    assert unavailable.git_state.stale is True
+    assert unavailable.cleanup.suggested is False
+    assert resumed.status == SessionStatus.RUNNING
+    assert observed.status == SessionStatus.RUNNING
     assert run_git(worktree, "rev-parse", "HEAD") == before_head
     assert (worktree / "blocked.txt").read_text(encoding="utf-8") == "do not commit\n"
     assert run_git(worktree, "status", "--porcelain")
@@ -416,7 +417,7 @@ def test_missing_base_blocks_writes_and_recovers_running(
     assert restored.git_state.merged_to_base is False
 
 
-def test_missing_base_recovers_merged_session_state(tmp_path: Path):
+def test_base_outage_preserves_merged_session_state(tmp_path: Path):
     repo = make_repo(tmp_path)
     service = make_service(tmp_path, repo)
     session = service.create(SessionType.FEATURE, "Missing merged base")
@@ -424,15 +425,17 @@ def test_missing_base_recovers_merged_session_state(tmp_path: Path):
     (worktree / "merged.txt").write_text("merged\n", encoding="utf-8")
     assert service.checkpoint(session.id) is True
     run_git(repo, "merge", "--no-ff", session.branch, "-m", "merge session")
+    merged = service.sync(session.id)
+    assert merged.status == SessionStatus.MERGED_RETAINED
     merged_head = run_git(repo, "rev-parse", "main")
     run_git(repo, "checkout", "-b", "parking")
     run_git(repo, "update-ref", "-d", "refs/heads/main")
 
-    blocked = service.sync(session.id)
+    unavailable = service.sync(session.id)
 
-    assert blocked.status == SessionStatus.BLOCKED_RETAINED
-    assert blocked.git_state.base_missing is True
-    assert blocked.cleanup.suggested is False
+    assert unavailable.status == SessionStatus.MERGED_RETAINED
+    assert unavailable.git_state.base_missing is True
+    assert unavailable.cleanup.suggested is True
 
     run_git(repo, "update-ref", "refs/heads/main", merged_head)
     restored = service.sync(session.id)
@@ -452,7 +455,7 @@ def test_missing_base_recovers_merged_session_state(tmp_path: Path):
         SessionStatus.ABANDONED_RETAINED,
     ],
 )
-def test_base_outage_restores_recorded_session_status(
+def test_base_outage_keeps_lifecycle_status_orthogonal(
     tmp_path: Path,
     initial_status: SessionStatus,
 ):
@@ -474,26 +477,26 @@ def test_base_outage_restores_recorded_session_status(
     else:
         observed = service.sync(session.id)
     assert observed.status == initial_status
+    initial_cleanup = observed.cleanup.suggested
 
     base_head = run_git(repo, "rev-parse", "main")
     run_git(repo, "checkout", "-b", f"parking-{initial_status.value}")
     run_git(repo, "update-ref", "-d", "refs/heads/main")
 
-    blocked = service.sync(session.id)
-    blocked_again = service.sync(session.id)
+    unavailable = service.sync(session.id)
+    unavailable_again = service.sync(session.id)
 
-    assert blocked.status == SessionStatus.BLOCKED_RETAINED
-    assert blocked.blocked_from_status == initial_status.value
-    assert blocked_again.blocked_from_status == initial_status.value
+    assert unavailable.status == initial_status
+    assert unavailable.git_state.base_missing is True
+    assert unavailable.cleanup.suggested is initial_cleanup
+    assert unavailable_again.status == initial_status
 
     run_git(repo, "update-ref", "refs/heads/main", base_head)
     restored = service.sync(session.id)
 
     assert restored.status == initial_status
-    assert restored.blocked_from_status is None
-    assert restored.cleanup.suggested is (
-        initial_status == SessionStatus.MERGED_RETAINED
-    )
+    assert restored.git_state.base_missing is False
+    assert restored.cleanup.suggested is initial_cleanup
 
 
 def test_manual_blocked_session_remains_blocked_across_base_outage(tmp_path: Path):
@@ -506,33 +509,51 @@ def test_manual_blocked_session_remains_blocked_across_base_outage(tmp_path: Pat
     run_git(repo, "checkout", "-b", "parking-manual-blocked")
     run_git(repo, "update-ref", "-d", "refs/heads/main")
 
-    blocked = service.sync(session.id)
-    blocked_again = service.sync(session.id)
+    unavailable = service.sync(session.id)
+    unavailable_again = service.sync(session.id)
 
-    assert blocked.blocked_from_status == SessionStatus.BLOCKED_RETAINED.value
-    assert blocked_again.blocked_from_status == SessionStatus.BLOCKED_RETAINED.value
+    assert unavailable.status == SessionStatus.BLOCKED_RETAINED
+    assert unavailable.git_state.base_missing is True
+    assert unavailable_again.status == SessionStatus.BLOCKED_RETAINED
 
     run_git(repo, "update-ref", "refs/heads/main", base_head)
     restored = service.sync(session.id)
 
     assert restored.status == SessionStatus.BLOCKED_RETAINED
-    assert restored.blocked_from_status is None
+    assert restored.git_state.base_missing is False
     assert restored.cleanup.suggested is False
 
 
-def test_legacy_blocked_session_without_origin_status_stays_blocked(tmp_path: Path):
+@pytest.mark.parametrize(
+    "updated_status",
+    [SessionStatus.ORPHAN_SESSION, SessionStatus.BLOCKED_RETAINED],
+)
+def test_lifecycle_change_during_base_outage_is_not_overwritten(
+    tmp_path: Path,
+    updated_status: SessionStatus,
+):
     repo = make_repo(tmp_path)
     service = make_service(tmp_path, repo)
-    session = service.create(SessionType.FEATURE, "Legacy blocked")
-    session.status = SessionStatus.BLOCKED_RETAINED
-    session.git_state.base_missing = True
-    service.registry.save(session)
+    session = service.create(SessionType.FEATURE, "Lifecycle during outage")
+    base_head = run_git(repo, "rev-parse", "main")
+    run_git(repo, "checkout", "-b", f"parking-{updated_status.value}")
+    run_git(repo, "update-ref", "-d", "refs/heads/main")
+    unavailable = service.sync(session.id)
+    assert unavailable.status == SessionStatus.RUNNING
+    assert unavailable.git_state.base_missing is True
+    unavailable.status = updated_status
+    service.registry.save(unavailable)
 
+    during_outage = service.sync(session.id)
+
+    assert during_outage.status == updated_status
+    assert during_outage.git_state.base_missing is True
+
+    run_git(repo, "update-ref", "refs/heads/main", base_head)
     restored = service.sync(session.id)
 
-    assert restored.status == SessionStatus.BLOCKED_RETAINED
-    assert restored.blocked_from_status is None
-    assert restored.cleanup.suggested is False
+    assert restored.status == updated_status
+    assert restored.git_state.base_missing is False
 
 
 @pytest.mark.parametrize("merged", [False, True])
@@ -557,18 +578,19 @@ def test_orphan_session_identity_survives_base_outage(
     run_git(repo, "checkout", "-b", f"parking-orphan-{merged}")
     run_git(repo, "update-ref", "-d", "refs/heads/main")
 
-    blocked = service.sync(orphan.id)
-    blocked_again = service.sync(orphan.id)
+    unavailable = service.sync(orphan.id)
+    unavailable_again = service.sync(orphan.id)
 
-    assert blocked.status == SessionStatus.BLOCKED_RETAINED
-    assert blocked.blocked_from_status == SessionStatus.ORPHAN_SESSION.value
-    assert blocked_again.blocked_from_status == SessionStatus.ORPHAN_SESSION.value
+    assert unavailable.status == SessionStatus.ORPHAN_SESSION
+    assert unavailable.git_state.base_missing is True
+    assert unavailable.cleanup.suggested is merged
+    assert unavailable_again.status == SessionStatus.ORPHAN_SESSION
 
     run_git(repo, "update-ref", "refs/heads/main", base_head)
     restored = service.sync(orphan.id)
 
     assert restored.status == SessionStatus.ORPHAN_SESSION
-    assert restored.blocked_from_status is None
+    assert restored.git_state.base_missing is False
     assert restored.git_state.merged_to_base is merged
     assert restored.cleanup.suggested is merged
 
@@ -807,6 +829,53 @@ def test_review_without_worktree_remains_valid_across_entrypoints(
     assert observed.git_state.missing_worktree is False
     assert persisted.status == expected_status
     assert persisted.git_state.missing_worktree is False
+
+
+@pytest.mark.parametrize(
+    "session_type",
+    [SessionType.REVIEW, SessionType.DEPLOY],
+)
+def test_optional_no_worktree_session_tracks_base_availability(
+    tmp_path: Path,
+    session_type: SessionType,
+):
+    repo = make_repo(tmp_path)
+    service = make_service(tmp_path, repo)
+    session = service.create(
+        session_type,
+        "Optional no worktree outage",
+        create_worktree=False,
+    )
+    base_head = run_git(repo, "rev-parse", "main")
+    run_git(repo, "checkout", "-b", f"parking-{session_type.value}")
+    run_git(repo, "update-ref", "-d", "refs/heads/main")
+
+    unavailable = service.sync(session.id)
+
+    assert unavailable.status == SessionStatus.RUNNING
+    assert unavailable.git_state.base_missing is True
+    assert unavailable.git_state.stale is True
+    assert unavailable.git_state.missing_worktree is False
+    assert service.checkpoint(session.id) is False
+
+    archived = service.archive(session.id)
+
+    assert archived.status == SessionStatus.RUNNING
+    assert archived.git_state.base_missing is True
+
+    archived.status = SessionStatus.ABANDONED_RETAINED
+    service.registry.save(archived)
+    resumed = service.resume(session.id)
+
+    assert resumed.status == SessionStatus.ABANDONED_RETAINED
+    assert resumed.git_state.base_missing is True
+
+    run_git(repo, "update-ref", "refs/heads/main", base_head)
+    restored = service.sync(session.id)
+
+    assert restored.status == SessionStatus.ABANDONED_RETAINED
+    assert restored.git_state.base_missing is False
+    assert restored.git_state.stale is False
 
 
 def test_resume_reactivates_archived_dirty_and_preserves_marker(tmp_path: Path):

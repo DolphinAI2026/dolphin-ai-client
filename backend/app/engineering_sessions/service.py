@@ -13,9 +13,11 @@ from app.engineering_sessions.git_state import (
     has_ref,
     inspect_git_state,
     list_git_worktrees,
+    resolve_base_ref,
 )
 from app.engineering_sessions.models import (
     EngineeringSession,
+    GitState,
     SessionStatus,
     SessionType,
     utc_now,
@@ -125,12 +127,21 @@ class EngineeringSessionService:
             return self._mark_missing_worktree(session)
 
         if session.worktree_path is None:
+            base_missing = resolve_base_ref(
+                self.repo_path,
+                session.base_branch,
+            ) is None
+            session.git_state = GitState(
+                clean=True,
+                stale=base_missing,
+                base_missing=base_missing,
+                head_commit=session.base_commit,
+            )
             session.head_commit = session.base_commit
             session.last_sync_at = utc_now()
             return session
 
         previous_status = session.status
-        previous_base_missing = session.git_state.base_missing
         dirty_uncheckpointed = session.git_state.dirty_uncheckpointed
         state = inspect_git_state(
             session.worktree_path,
@@ -148,26 +159,11 @@ class EngineeringSessionService:
         session.git_state = state
         session.head_commit = state.head_commit
         session.last_sync_at = utc_now()
-        if (
-            session.blocked_from_status is not None
-            and not state.missing_worktree
-            and not state.base_missing
-            and not state.branch_mismatch
-        ):
-            previous_status = session.blocked_from_status
-            session.status = previous_status
-            session.blocked_from_status = None
         if state.missing_worktree:
             session.status = SessionStatus.MISSING_WORKTREE
             session.cleanup.suggested = False
         elif state.base_missing:
-            if (
-                not previous_base_missing
-                and session.blocked_from_status is None
-            ):
-                session.blocked_from_status = previous_status
-            session.status = SessionStatus.BLOCKED_RETAINED
-            session.cleanup.suggested = False
+            return session
         elif state.branch_mismatch:
             if previous_status == SessionStatus.MERGED_RETAINED:
                 session.status = SessionStatus.RUNNING
