@@ -86,7 +86,7 @@ cd backend
 python3 scripts/agentic_session.py --repo .. resume S-001
 ```
 
-`resume` 会刷新 registry 和 Git 状态；当 worktree 存在且 branch 匹配时，会话重新进入 `running`。缺失的 worktree 会被标记但不会自动重建，branch mismatch 也不会被强制恢复。
+`resume` 会刷新 registry 和 Git 状态；合法的无 worktree 只读会话，或 worktree 存在且 branch 匹配的会话，会重新进入 `running`。缺失的 worktree 会被标记但不会自动重建，branch mismatch 也不会被强制恢复。
 
 为会话创建 checkpoint：
 

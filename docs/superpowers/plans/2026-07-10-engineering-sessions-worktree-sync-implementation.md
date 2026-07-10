@@ -1901,7 +1901,7 @@ git commit -m "docs: refine engineering session usage"
 
 实际验证结果：
 
-- 工程会话聚焦测试：`73 passed`。
+- 工程会话聚焦测试：`75 passed`。
 - 相邻 workspace Git 测试：`17 passed`。
 - CLI smoke：创建 `S-001`，类型为 `doc-change`，分支为 `session/S-001-doc-change-readme-smoke`，`list --sync` 返回 1 条 clean 会话。
 - README 未被 smoke 修改，无需额外 README 提交。
@@ -1940,5 +1940,6 @@ git commit -m "docs: refine engineering session usage"
 - checkpoint 提交后只做本地状态刷新，避免提交已成功但第二次 fetch 失败造成结果歧义。
 - worktree 同步会校验 Git common-dir，避免同路径、同分支名的其他仓库被误认并提交。
 - 主工作区与 linked worktree 使用同一个 Git common-dir 生成 repo id，共享中央 registry。
-- `resume` 仅在 worktree 存在且 branch 匹配时重新激活会话，并保留 `dirty_uncheckpointed` 风险标记。
+- 活跃 worktree 映射显式排除控制仓库路径，主工作区即使切到 session branch 也不会被误绑定、checkpoint 或归档。
+- `resume` 会重新激活合法的无 worktree 只读会话，以及 worktree 存在且 branch 匹配的会话，并保留 `dirty_uncheckpointed` 风险标记。
 - branch mismatch 优先于 merged/cleanup 状态，错误分支不会触发清理建议。
