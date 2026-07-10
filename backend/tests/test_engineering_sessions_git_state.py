@@ -2,6 +2,7 @@ import shutil
 import subprocess
 from pathlib import Path
 
+import app.engineering_sessions.git_state as git_state
 from app.engineering_sessions.git_state import (
     current_branch,
     inspect_git_state,
@@ -41,6 +42,19 @@ def test_current_branch_is_not_confused_by_same_name_tag(tmp_path: Path):
     assert current_branch(repo) == "main"
 
 
+def test_git_common_dir_identifies_linked_worktrees(tmp_path: Path):
+    repo = make_repo(tmp_path)
+    linked = tmp_path / "linked"
+    other_root = tmp_path / "other"
+    other_root.mkdir()
+    other = make_repo(other_root)
+    run_git(repo, "worktree", "add", "-b", "linked-branch", str(linked), "main")
+
+    assert git_state.git_common_dir(repo) == git_state.git_common_dir(linked)
+    assert git_state.same_git_repository(repo, linked) is True
+    assert git_state.same_git_repository(repo, other) is False
+
+
 def test_inspect_git_state_reports_dirty_and_ahead(tmp_path: Path):
     repo = make_repo(tmp_path)
     run_git(repo, "checkout", "-b", "session/S-001-bugfix-test")
@@ -70,6 +84,24 @@ def test_inspect_existing_non_git_directory_is_missing_worktree(tmp_path: Path):
     not_repo.mkdir()
 
     state = inspect_git_state(not_repo, base_branch="main")
+
+    assert state.missing_worktree is True
+    assert state.clean is False
+
+
+def test_inspect_other_repository_is_missing_worktree(tmp_path: Path):
+    expected_root = tmp_path / "expected"
+    expected_root.mkdir()
+    expected = make_repo(expected_root)
+    other_root = tmp_path / "other"
+    other_root.mkdir()
+    other = make_repo(other_root)
+
+    state = inspect_git_state(
+        other,
+        base_branch="main",
+        expected_repo_path=expected,
+    )
 
     assert state.missing_worktree is True
     assert state.clean is False
@@ -108,6 +140,30 @@ def test_inspect_git_state_reports_branch_mismatch_and_very_stale(tmp_path: Path
     assert state.stale is True
     assert state.very_stale is True
     assert state.branch_mismatch is True
+
+
+def test_branch_mismatch_is_never_reported_as_merged(tmp_path: Path):
+    repo = make_repo(tmp_path)
+    expected_branch = "session/S-009-feature-expected"
+    wrong_branch = "wrong-branch"
+    run_git(repo, "branch", expected_branch, "main")
+    run_git(repo, "checkout", "-b", wrong_branch)
+    (repo / "wrong.txt").write_text("wrong\n", encoding="utf-8")
+    run_git(repo, "add", "wrong.txt")
+    run_git(repo, "commit", "-m", "wrong branch")
+    run_git(repo, "checkout", "main")
+    run_git(repo, "merge", "--no-ff", wrong_branch, "-m", "merge wrong branch")
+    run_git(repo, "checkout", wrong_branch)
+
+    state = inspect_git_state(
+        repo,
+        base_branch="main",
+        expected_branch=expected_branch,
+    )
+
+    assert state.branch_mismatch is True
+    assert state.merged_to_base is False
+    assert state.retained is False
 
 
 def test_merged_to_base_turns_true_after_branch_commit_is_merged(tmp_path: Path):

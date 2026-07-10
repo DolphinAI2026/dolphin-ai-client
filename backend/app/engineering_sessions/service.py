@@ -91,7 +91,18 @@ class EngineeringSessionService:
             return self.registry.save(session)
 
     def resume(self, session_id: str) -> EngineeringSession:
-        return self.sync(session_id)
+        with self.registry.transaction_lock():
+            self._fetch_origin_or_raise()
+            session = self.registry.load(session_id)
+            self._sync_session(session)
+            if (
+                session.worktree_path is not None
+                and not session.git_state.missing_worktree
+                and not session.git_state.branch_mismatch
+            ):
+                session.status = SessionStatus.RUNNING
+                session.cleanup.suggested = False
+            return self.registry.save(session)
 
     def sync(self, session_id: str) -> EngineeringSession:
         with self.registry.transaction_lock():
@@ -111,15 +122,20 @@ class EngineeringSessionService:
             base_branch=session.base_branch,
             expected_branch=session.branch,
             session_base_commit=session.base_commit,
+            expected_repo_path=self.repo_path,
         )
         state.dirty_uncheckpointed = dirty_uncheckpointed and (
-            state.missing_worktree or not state.clean
+            state.missing_worktree or state.branch_mismatch or not state.clean
         )
         session.git_state = state
         session.head_commit = state.head_commit
         session.last_sync_at = utc_now()
         if state.missing_worktree:
             session.status = SessionStatus.MISSING_WORKTREE
+            session.cleanup.suggested = False
+        elif state.branch_mismatch:
+            if previous_status == SessionStatus.MERGED_RETAINED:
+                session.status = SessionStatus.RUNNING
             session.cleanup.suggested = False
         elif previous_status == SessionStatus.ARCHIVED_DIRTY and state.clean:
             if state.merged_to_base:
@@ -323,6 +339,7 @@ class EngineeringSessionService:
                 base_branch=session.base_branch,
                 expected_branch=session.branch,
                 session_base_commit=session.base_commit,
+                expected_repo_path=self.repo_path,
             )
             if state.missing_worktree or state.branch_mismatch:
                 raise ValueError(f"invalid existing worktree: {path}")

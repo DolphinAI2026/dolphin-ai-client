@@ -5,6 +5,9 @@ from pathlib import Path
 
 import pytest
 
+BACKEND_ROOT = Path(__file__).resolve().parents[1]
+CLI_SCRIPT = BACKEND_ROOT / "scripts" / "agentic_session.py"
+
 
 def run_git(repo: Path, *args: str) -> str:
     result = subprocess.run(
@@ -28,29 +31,42 @@ def make_repo(tmp_path: Path) -> Path:
     return repo
 
 
+def cli_command(
+    repo: Path,
+    registry: Path,
+    worktrees: Path,
+    *args: str,
+) -> list[str]:
+    return [
+        sys.executable,
+        str(CLI_SCRIPT),
+        "--repo",
+        str(repo),
+        "--registry-root",
+        str(registry),
+        "--worktree-parent",
+        str(worktrees),
+        *args,
+    ]
+
+
 def test_cli_create_list_resume(tmp_path: Path):
     repo = make_repo(tmp_path)
     registry = tmp_path / "sessions"
     worktrees = tmp_path / "worktrees"
 
     create = subprocess.run(
-        [
-            sys.executable,
-            "-m",
-            "app.engineering_sessions.cli",
-            "--repo",
-            str(repo),
-            "--registry-root",
-            str(registry),
-            "--worktree-parent",
-            str(worktrees),
+        cli_command(
+            repo,
+            registry,
+            worktrees,
             "create",
             "--type",
             "feature",
             "--title",
             "Fast new conversation",
-        ],
-        cwd=Path(__file__).resolve().parents[1],
+        ),
+        cwd=BACKEND_ROOT,
         check=True,
         capture_output=True,
         text=True,
@@ -61,19 +77,13 @@ def test_cli_create_list_resume(tmp_path: Path):
     assert Path(created["worktree_path"]).exists()
 
     listed = subprocess.run(
-        [
-            sys.executable,
-            "-m",
-            "app.engineering_sessions.cli",
-            "--repo",
-            str(repo),
-            "--registry-root",
-            str(registry),
-            "--worktree-parent",
-            str(worktrees),
+        cli_command(
+            repo,
+            registry,
+            worktrees,
             "list",
-        ],
-        cwd=Path(__file__).resolve().parents[1],
+        ),
+        cwd=BACKEND_ROOT,
         check=True,
         capture_output=True,
         text=True,
@@ -93,24 +103,18 @@ def test_cli_rejects_required_session_type_without_worktree(
     worktrees = tmp_path / "worktrees"
 
     result = subprocess.run(
-        [
-            sys.executable,
-            "-m",
-            "app.engineering_sessions.cli",
-            "--repo",
-            str(repo),
-            "--registry-root",
-            str(registry),
-            "--worktree-parent",
-            str(worktrees),
+        cli_command(
+            repo,
+            registry,
+            worktrees,
             "create",
             "--type",
             session_type,
             "--title",
             "Required worktree",
             "--no-worktree",
-        ],
-        cwd=Path(__file__).resolve().parents[1],
+        ),
+        cwd=BACKEND_ROOT,
         capture_output=True,
         text=True,
     )
@@ -119,3 +123,50 @@ def test_cli_rejects_required_session_type_without_worktree(
     assert result.stdout == ""
     assert "requires a worktree" in result.stderr
     assert not list(registry.glob("S-*.yaml"))
+
+
+def test_cli_concurrent_no_worktree_creates_use_process_lock(tmp_path: Path):
+    repo = make_repo(tmp_path)
+    registry = tmp_path / "sessions"
+    worktrees = tmp_path / "worktrees"
+    processes = [
+        subprocess.Popen(
+            cli_command(
+                repo,
+                registry,
+                worktrees,
+                "create",
+                "--type",
+                "review",
+                "--title",
+                f"Concurrent review {index}",
+                "--no-worktree",
+            ),
+            cwd=BACKEND_ROOT,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+        )
+        for index in range(4)
+    ]
+
+    outputs = []
+    for process in processes:
+        stdout, stderr = process.communicate(timeout=15)
+        assert process.returncode == 0, stderr
+        outputs.append(json.loads(stdout))
+
+    assert sorted(item["id"] for item in outputs) == [
+        "S-001",
+        "S-002",
+        "S-003",
+        "S-004",
+    ]
+    assert sorted(path.name for path in registry.glob("S-*.yaml")) == [
+        "S-001.yaml",
+        "S-002.yaml",
+        "S-003.yaml",
+        "S-004.yaml",
+    ]
+    assert not list(registry.glob("*.tmp"))
+    assert not list(registry.glob(".*.tmp"))

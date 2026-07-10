@@ -1,8 +1,34 @@
+import subprocess
 from pathlib import Path
+
+import pytest
+import yaml
 
 from app.engineering_sessions.models import SessionType
 from app.engineering_sessions.paths import registry_root_for_repo, repo_id_for_path
 from app.engineering_sessions.registry import SessionRegistry, SessionRegistryError
+
+
+def run_git(repo: Path, *args: str) -> str:
+    result = subprocess.run(
+        ["git", "-C", str(repo), *args],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    return result.stdout.strip()
+
+
+def make_repo(tmp_path: Path) -> Path:
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    run_git(repo, "init", "-b", "main")
+    run_git(repo, "config", "user.email", "t@example.com")
+    run_git(repo, "config", "user.name", "Tester")
+    (repo / "README.md").write_text("base\n", encoding="utf-8")
+    run_git(repo, "add", "README.md")
+    run_git(repo, "commit", "-m", "base")
+    return repo
 
 
 def test_repo_id_is_stable_and_path_safe(tmp_path: Path):
@@ -13,6 +39,19 @@ def test_repo_id_is_stable_and_path_safe(tmp_path: Path):
 
     assert repo_id.startswith("apaas-builder-ai-")
     assert "/" not in repo_id
+
+
+def test_linked_worktree_uses_same_repo_id_and_registry_root(tmp_path: Path):
+    repo = make_repo(tmp_path)
+    linked = tmp_path / "linked"
+    home = tmp_path / "agentic-home"
+    run_git(repo, "worktree", "add", "-b", "linked-branch", str(linked), "main")
+
+    assert repo_id_for_path(linked) == repo_id_for_path(repo)
+    assert registry_root_for_repo(linked, home=home) == registry_root_for_repo(
+        repo,
+        home=home,
+    )
 
 
 def test_registry_root_uses_override_home(tmp_path: Path):
@@ -84,3 +123,64 @@ def test_registry_reserves_ids_before_save_and_preserves_explicit_roles(tmp_path
     assert first.id == "S-001"
     assert first.roles == []
     assert second.id == "S-002"
+
+
+def test_registry_save_dump_failure_preserves_existing_yaml(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    registry = SessionRegistry(repo, root=tmp_path / "sessions")
+    session = registry.create(
+        session_type=SessionType.REVIEW,
+        title="Original",
+        base_branch="main",
+        worktree_path=None,
+    )
+    registry.save(session)
+    session.title = "Changed"
+
+    def fail_dump(*args, **kwargs):
+        raise RuntimeError("dump failed")
+
+    monkeypatch.setattr(yaml, "safe_dump", fail_dump)
+
+    with pytest.raises(RuntimeError, match="dump failed"):
+        registry.save(session)
+
+    assert registry.load(session.id).title == "Original"
+    assert not list(registry.root.glob("*.tmp"))
+    assert not list(registry.root.glob(".*.tmp"))
+
+
+def test_registry_save_replace_failure_preserves_existing_yaml(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    registry = SessionRegistry(repo, root=tmp_path / "sessions")
+    session = registry.create(
+        session_type=SessionType.REVIEW,
+        title="Original",
+        base_branch="main",
+        worktree_path=None,
+    )
+    registry.save(session)
+    session.title = "Changed"
+    original_replace = Path.replace
+
+    def fail_replace(path: Path, target: Path) -> Path:
+        if path.parent == registry.root and path.suffix == ".tmp":
+            raise OSError("replace failed")
+        return original_replace(path, target)
+
+    monkeypatch.setattr(Path, "replace", fail_replace)
+
+    with pytest.raises(OSError, match="replace failed"):
+        registry.save(session)
+
+    assert registry.load(session.id).title == "Original"
+    assert not list(registry.root.glob("*.tmp"))
+    assert not list(registry.root.glob(".*.tmp"))

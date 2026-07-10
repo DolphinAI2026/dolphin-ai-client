@@ -72,6 +72,26 @@ def is_work_tree_root(repo_path: str | Path) -> bool:
     return top_level == Path(repo_path).resolve()
 
 
+def git_common_dir(repo_path: str | Path) -> Path:
+    result = git(
+        repo_path,
+        "rev-parse",
+        "--path-format=absolute",
+        "--git-common-dir",
+    )
+    return Path(result.stdout.rstrip("\n")).resolve()
+
+
+def same_git_repository(
+    first_path: str | Path,
+    second_path: str | Path,
+) -> bool:
+    try:
+        return git_common_dir(first_path) == git_common_dir(second_path)
+    except GitCommandError:
+        return False
+
+
 def rev_parse_head(repo_path: str | Path) -> str:
     return git(repo_path, "rev-parse", "HEAD").stdout.strip()
 
@@ -115,12 +135,23 @@ def inspect_git_state(
     expected_branch: str | None = None,
     session_base_commit: str | None = None,
     very_stale_behind: int = 20,
+    expected_repo_path: str | Path | None = None,
+    repository_path: str | Path | None = None,
 ) -> GitState:
     if worktree_path is None:
         return GitState(clean=False, missing_worktree=True, stale=True)
 
     worktree = Path(worktree_path)
     if not worktree.exists() or not is_work_tree_root(worktree):
+        return GitState(clean=False, missing_worktree=True, stale=True)
+
+    expected_repository = (
+        expected_repo_path if expected_repo_path is not None else repository_path
+    )
+    if expected_repository is not None and not same_git_repository(
+        worktree,
+        expected_repository,
+    ):
         return GitState(clean=False, missing_worktree=True, stale=True)
 
     branch = current_branch(worktree)
@@ -131,9 +162,11 @@ def inspect_git_state(
     base_ref = remote_ref if has_ref(worktree, remote_ref) else local_ref
     ahead, behind = ahead_behind(worktree, base_ref)
     merged = merged_to_base(worktree, base_ref)
-    if session_base_commit is not None and head == session_base_commit:
-        merged = False
     branch_mismatch = expected_branch is not None and branch != expected_branch
+    if branch_mismatch or (
+        session_base_commit is not None and head == session_base_commit
+    ):
+        merged = False
     return GitState(
         clean=clean,
         ahead=ahead,
