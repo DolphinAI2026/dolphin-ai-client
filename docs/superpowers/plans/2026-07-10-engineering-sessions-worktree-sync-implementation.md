@@ -1830,7 +1830,7 @@ git commit -m "docs: document engineering session worktree cli"
 **文件：**
 - 无新增文件。
 
-- [ ] **步骤 1：运行聚焦测试**
+- [x] **步骤 1：运行聚焦测试**
 
 运行：
 
@@ -1846,7 +1846,7 @@ cd backend && pytest \
 
 预期：全部工程会话测试通过。
 
-- [ ] **步骤 2：运行相邻 Git 测试**
+- [x] **步骤 2：运行相邻 Git 测试**
 
 运行：
 
@@ -1856,7 +1856,7 @@ cd backend && pytest tests/test_workspace_git_p1.py tests/test_workspace_git_cha
 
 预期：现有工作区 Git 测试通过。
 
-- [ ] **步骤 3：在当前 worktree 运行 CLI smoke**
+- [x] **步骤 3：在当前 worktree 运行 CLI smoke**
 
 运行：
 
@@ -1877,7 +1877,7 @@ python3 scripts/agentic_session.py \
 
 预期：第一个命令输出会话 `S-001`；第二个命令输出包含 `S-001` 的列表，`type` 为 `doc-change`，且 `git_state.current_branch` 以 `session/S-001-doc-change-` 开头。
 
-- [ ] **步骤 4：检查 worktree 差异**
+- [x] **步骤 4：检查 worktree 差异**
 
 运行：
 
@@ -1888,7 +1888,7 @@ git diff --stat
 
 预期：只有本计划列出的文件发生修改或新增。
 
-- [ ] **步骤 5：如果 smoke 后 README 变化则提交最终说明**
+- [x] **步骤 5：如果 smoke 后 README 变化则提交最终说明**
 
 如果验证期间 README 有变化，运行：
 
@@ -1898,6 +1898,13 @@ git commit -m "docs: refine engineering session usage"
 ```
 
 预期：smoke 验证未修改 README 时不需要额外提交。
+
+实际验证结果：
+
+- 工程会话聚焦测试：`56 passed`。
+- 相邻 workspace Git 测试：`17 passed`。
+- CLI smoke：创建 `S-001`，类型为 `doc-change`，分支为 `session/S-001-doc-change-readme-smoke`，`list --sync` 返回 1 条 clean 会话。
+- README 未被 smoke 修改，无需额外 README 提交。
 
 ---
 
