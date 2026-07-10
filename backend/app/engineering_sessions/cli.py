@@ -61,6 +61,13 @@ def build_parser() -> argparse.ArgumentParser:
 def main(argv: list[str] | None = None) -> int:
     parser = build_parser()
     args = parser.parse_args(argv)
+    if (
+        args.command == "create"
+        and args.no_worktree
+        and EngineeringSessionService.requires_worktree(args.type)
+    ):
+        parser.error(f"session type '{args.type}' requires a worktree")
+
     service = EngineeringSessionService(
         Path(args.repo),
         registry_root=args.registry_root,

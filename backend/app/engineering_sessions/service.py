@@ -30,6 +30,14 @@ _COMMIT_IDENTITY = [
 
 
 class EngineeringSessionService:
+    @staticmethod
+    def requires_worktree(session_type: SessionType | str) -> bool:
+        normalized_type = SessionType(session_type)
+        return normalized_type in {
+            SessionType.NEW_APP,
+            SessionType.SPEC_CHANGE,
+        }
+
     def __init__(
         self,
         repo_path: str | Path,
@@ -54,6 +62,12 @@ class EngineeringSessionService:
         create_worktree: bool = True,
         roles: list[str] | None = None,
     ) -> EngineeringSession:
+        normalized_type = SessionType(session_type)
+        if not create_worktree and self.requires_worktree(normalized_type):
+            raise ValueError(
+                f"session type '{normalized_type.value}' requires a worktree"
+            )
+
         self._fetch_origin_or_raise()
         base = base_branch or current_branch(self.repo_path)
         base_ref = f"refs/heads/{base}"
@@ -62,7 +76,7 @@ class EngineeringSessionService:
         base_commit = git(self.repo_path, "rev-parse", base_ref).stdout.strip()
         with self.registry.transaction_lock():
             session = self.registry.create(
-                session_type=session_type,
+                session_type=normalized_type,
                 title=title,
                 base_branch=base,
                 worktree_path=None,

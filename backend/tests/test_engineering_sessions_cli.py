@@ -3,6 +3,8 @@ import subprocess
 import sys
 from pathlib import Path
 
+import pytest
+
 
 def run_git(repo: Path, *args: str) -> str:
     result = subprocess.run(
@@ -79,3 +81,41 @@ def test_cli_create_list_resume(tmp_path: Path):
     data = json.loads(listed.stdout)
 
     assert data[0]["id"] == "S-001"
+
+
+@pytest.mark.parametrize("session_type", ["new-app", "spec-change"])
+def test_cli_rejects_required_session_type_without_worktree(
+    tmp_path: Path,
+    session_type: str,
+):
+    repo = make_repo(tmp_path)
+    registry = tmp_path / "sessions"
+    worktrees = tmp_path / "worktrees"
+
+    result = subprocess.run(
+        [
+            sys.executable,
+            "-m",
+            "app.engineering_sessions.cli",
+            "--repo",
+            str(repo),
+            "--registry-root",
+            str(registry),
+            "--worktree-parent",
+            str(worktrees),
+            "create",
+            "--type",
+            session_type,
+            "--title",
+            "Required worktree",
+            "--no-worktree",
+        ],
+        cwd=Path(__file__).resolve().parents[1],
+        capture_output=True,
+        text=True,
+    )
+
+    assert result.returncode == 2
+    assert result.stdout == ""
+    assert "requires a worktree" in result.stderr
+    assert not list(registry.glob("S-*.yaml"))

@@ -195,6 +195,27 @@ def test_create_without_worktree_remains_running(tmp_path: Path):
     assert session.git_state.missing_worktree is False
 
 
+@pytest.mark.parametrize(
+    "session_type",
+    [SessionType.NEW_APP, SessionType.SPEC_CHANGE],
+)
+def test_create_rejects_required_session_type_without_worktree(
+    tmp_path: Path,
+    session_type: SessionType,
+):
+    repo = make_repo(tmp_path)
+    service = make_service(tmp_path, repo)
+
+    with pytest.raises(ValueError, match="requires a worktree"):
+        service.create(
+            session_type,
+            "Required worktree",
+            create_worktree=False,
+        )
+
+    assert not list(service.registry.root.glob("S-*.yaml"))
+
+
 def test_sync_updates_dirty_state(tmp_path: Path):
     repo = make_repo(tmp_path)
     service = make_service(tmp_path, repo)
