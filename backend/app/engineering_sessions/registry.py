@@ -80,7 +80,7 @@ class SessionRegistry:
         normalized_type = SessionType(session_type)
         return EngineeringSession(
             id=session_id,
-            type=normalized_type,
+            type=normalized_type.value,
             title=title,
             repo=self.repo_path.name,
             repo_path=str(self.repo_path),

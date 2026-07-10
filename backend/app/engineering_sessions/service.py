@@ -8,6 +8,7 @@ from app.engineering_sessions.git_state import (
     current_branch,
     fetch_origin,
     git,
+    git_control_worktree,
     git_operation_in_progress,
     has_ref,
     inspect_git_state,
@@ -27,6 +28,8 @@ _COMMIT_IDENTITY = [
     "user.name=ai-builder",
     "-c",
     "user.email=ai-builder@local",
+    "-c",
+    "commit.gpgSign=false",
 ]
 
 
@@ -47,13 +50,7 @@ class EngineeringSessionService:
         worktree_parent: str | Path | None = None,
     ) -> None:
         resolved_repo_path = Path(repo_path).resolve()
-        top_level = git(
-            resolved_repo_path,
-            "rev-parse",
-            "--path-format=absolute",
-            "--show-toplevel",
-        ).stdout.rstrip("\n")
-        self.repo_path = Path(top_level).resolve()
+        self.repo_path = git_control_worktree(resolved_repo_path)
         self.worktree_parent = (
             Path(worktree_parent).resolve()
             if worktree_parent is not None
@@ -105,7 +102,14 @@ class EngineeringSessionService:
             self._sync_session(session)
             if (
                 not session.git_state.missing_worktree
+                and not session.git_state.base_missing
                 and not session.git_state.branch_mismatch
+                and not session.git_state.merged_to_base
+                and session.status
+                not in {
+                    SessionStatus.BLOCKED_RETAINED,
+                    SessionStatus.ORPHAN_SESSION,
+                }
             ):
                 session.status = SessionStatus.RUNNING
                 session.cleanup.suggested = False
@@ -126,6 +130,7 @@ class EngineeringSessionService:
             return session
 
         previous_status = session.status
+        previous_base_missing = session.git_state.base_missing
         dirty_uncheckpointed = session.git_state.dirty_uncheckpointed
         state = inspect_git_state(
             session.worktree_path,
@@ -135,7 +140,10 @@ class EngineeringSessionService:
             expected_repo_path=self.repo_path,
         )
         state.dirty_uncheckpointed = dirty_uncheckpointed and (
-            state.missing_worktree or state.branch_mismatch or not state.clean
+            state.missing_worktree
+            or state.base_missing
+            or state.branch_mismatch
+            or not state.clean
         )
         session.git_state = state
         session.head_commit = state.head_commit
@@ -143,9 +151,18 @@ class EngineeringSessionService:
         if state.missing_worktree:
             session.status = SessionStatus.MISSING_WORKTREE
             session.cleanup.suggested = False
+        elif state.base_missing:
+            session.status = SessionStatus.BLOCKED_RETAINED
+            session.cleanup.suggested = False
         elif state.branch_mismatch:
             if previous_status == SessionStatus.MERGED_RETAINED:
                 session.status = SessionStatus.RUNNING
+            session.cleanup.suggested = False
+        elif (
+            previous_status == SessionStatus.BLOCKED_RETAINED
+            and not previous_base_missing
+        ):
+            session.status = SessionStatus.BLOCKED_RETAINED
             session.cleanup.suggested = False
         elif previous_status == SessionStatus.ORPHAN_SESSION:
             session.status = SessionStatus.ORPHAN_SESSION
@@ -163,6 +180,9 @@ class EngineeringSessionService:
         elif previous_status in (
             SessionStatus.MISSING_WORKTREE,
             SessionStatus.MERGED_RETAINED,
+        ) or (
+            previous_status == SessionStatus.BLOCKED_RETAINED
+            and previous_base_missing
         ):
             session.status = SessionStatus.RUNNING
             session.cleanup.suggested = False
@@ -181,12 +201,18 @@ class EngineeringSessionService:
         with self.registry.transaction_lock():
             self._fetch_origin_or_raise()
             session = self._sync_and_save_locked(session_id)
-            if session.git_state.missing_worktree:
+            if (
+                session.git_state.missing_worktree
+                or session.git_state.base_missing
+            ):
                 return session
 
             if checkpoint and not session.git_state.clean:
                 _, session = self._checkpoint_locked(session)
-                if session.git_state.missing_worktree:
+                if (
+                    session.git_state.missing_worktree
+                    or session.git_state.base_missing
+                ):
                     return session
 
             if session.git_state.clean and session.git_state.merged_to_base:
@@ -277,6 +303,7 @@ class EngineeringSessionService:
         if (
             session.worktree_path is None
             or session.git_state.missing_worktree
+            or session.git_state.base_missing
             or session.git_state.branch_mismatch
             or git_operation_in_progress(session.worktree_path)
             or session.git_state.clean
@@ -295,7 +322,10 @@ class EngineeringSessionService:
             check=False,
         )
         session = self._refresh_and_save_locked(session)
-        return result.returncode == 0, session
+        if result.returncode != 0:
+            detail = (result.stderr or result.stdout).strip()[:500]
+            raise GitCommandError(f"git commit failed: {detail}")
+        return True, session
 
     def _sync_session(
         self,

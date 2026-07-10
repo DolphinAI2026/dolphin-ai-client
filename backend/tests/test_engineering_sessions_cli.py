@@ -1,4 +1,5 @@
 import json
+import os
 import subprocess
 import sys
 from pathlib import Path
@@ -92,6 +93,140 @@ def test_cli_create_list_resume(tmp_path: Path):
     data = json.loads(listed.stdout)
 
     assert data[0]["id"] == "S-001"
+
+
+def test_cli_linked_worktree_repo_sync_resume_and_checkpoint_target_only(
+    tmp_path: Path,
+):
+    repo = make_repo(tmp_path)
+    registry = tmp_path / "sessions"
+    worktrees = tmp_path / "worktrees"
+    created_result = subprocess.run(
+        cli_command(
+            repo,
+            registry,
+            worktrees,
+            "create",
+            "--type",
+            "feature",
+            "--title",
+            "Linked invocation",
+        ),
+        cwd=BACKEND_ROOT,
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    created = json.loads(created_result.stdout)
+    session_worktree = Path(created["worktree_path"])
+    nested = session_worktree / "backend"
+    nested.mkdir()
+    (session_worktree / "linked-change.txt").write_text(
+        "checkpoint me\n",
+        encoding="utf-8",
+    )
+    main_head = run_git(repo, "rev-parse", "HEAD")
+    session_head = run_git(session_worktree, "rev-parse", "HEAD")
+
+    sync_result = subprocess.run(
+        cli_command(
+            nested,
+            registry,
+            worktrees,
+            "sync",
+            created["id"],
+        ),
+        cwd=BACKEND_ROOT,
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    synced = json.loads(sync_result.stdout)
+    assert synced["status"] == "running"
+    assert synced["git_state"]["missing_worktree"] is False
+
+    resume_result = subprocess.run(
+        cli_command(
+            nested,
+            registry,
+            worktrees,
+            "resume",
+            created["id"],
+        ),
+        cwd=BACKEND_ROOT,
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    resumed = json.loads(resume_result.stdout)
+    assert resumed["status"] == "running"
+    assert resumed["git_state"]["missing_worktree"] is False
+
+    checkpoint_result = subprocess.run(
+        cli_command(
+            nested,
+            registry,
+            worktrees,
+            "checkpoint",
+            created["id"],
+        ),
+        cwd=BACKEND_ROOT,
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+
+    assert json.loads(checkpoint_result.stdout) == {"created": True}
+    assert run_git(repo, "rev-parse", "HEAD") == main_head
+    assert run_git(session_worktree, "rev-parse", "HEAD") != session_head
+    assert run_git(session_worktree, "status", "--porcelain") == ""
+
+
+def test_cli_checkpoint_commit_failure_exits_nonzero(tmp_path: Path):
+    repo = make_repo(tmp_path)
+    registry = tmp_path / "sessions"
+    worktrees = tmp_path / "worktrees"
+    created_result = subprocess.run(
+        cli_command(
+            repo,
+            registry,
+            worktrees,
+            "create",
+            "--type",
+            "feature",
+            "--title",
+            "CLI commit failure",
+        ),
+        cwd=BACKEND_ROOT,
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    created = json.loads(created_result.stdout)
+    worktree = Path(created["worktree_path"])
+    (worktree / "invalid-date.txt").write_text("dirty\n", encoding="utf-8")
+    before_head = run_git(worktree, "rev-parse", "HEAD")
+    env = os.environ.copy()
+    env["GIT_AUTHOR_DATE"] = "not-a-valid-git-date"
+
+    checkpoint_result = subprocess.run(
+        cli_command(
+            repo,
+            registry,
+            worktrees,
+            "checkpoint",
+            created["id"],
+        ),
+        cwd=BACKEND_ROOT,
+        capture_output=True,
+        text=True,
+        env=env,
+    )
+
+    assert checkpoint_result.returncode != 0
+    assert "git commit failed" in checkpoint_result.stderr
+    assert "invalid date" in checkpoint_result.stderr
+    assert run_git(worktree, "rev-parse", "HEAD") == before_head
 
 
 def test_cli_default_list_outputs_and_persists_static_missing_worktree(

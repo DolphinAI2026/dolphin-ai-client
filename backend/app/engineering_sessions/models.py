@@ -3,7 +3,7 @@ from __future__ import annotations
 import re
 from datetime import datetime, timezone
 from enum import Enum
-from typing import Literal
+from typing import Literal, TypeAlias
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
@@ -34,6 +34,28 @@ class SessionStatus(str, Enum):
     ORPHAN_SESSION = "orphan_session"
 
 
+SessionTypeValue: TypeAlias = Literal[
+    "new-app",
+    "feature",
+    "bugfix",
+    "deploy",
+    "review",
+    "doc-change",
+    "spec-change",
+]
+SessionStatusValue: TypeAlias = Literal[
+    "running",
+    "verifying",
+    "waiting_merge",
+    "merged_retained",
+    "archived_dirty",
+    "blocked_retained",
+    "abandoned_retained",
+    "missing_worktree",
+    "orphan_session",
+]
+
+
 class GitState(BaseModel):
     clean: bool = True
     ahead: int = 0
@@ -43,6 +65,7 @@ class GitState(BaseModel):
     stale: bool = False
     very_stale: bool = False
     missing_worktree: bool = False
+    base_missing: bool = False
     branch_mismatch: bool = False
     retained: bool = False
     current_branch: str | None = None
@@ -76,9 +99,9 @@ class EngineeringSession(BaseModel):
     )
 
     id: str
-    type: SessionType
+    type: SessionTypeValue
     title: str
-    status: SessionStatus = SessionStatus.RUNNING
+    status: SessionStatusValue = SessionStatus.RUNNING
     repo: str
     repo_path: str
     base_branch: str = "main"
@@ -104,6 +127,11 @@ class EngineeringSession(BaseModel):
         if not re.fullmatch(r"S-\d{3,}", value):
             raise ValueError("session id must use S-001 format")
         return value
+
+    @field_validator("type", "status", mode="before")
+    @classmethod
+    def normalize_enum_value(cls, value: object) -> object:
+        return value.value if isinstance(value, Enum) else value
 
 
 def slugify_title(title: str, *, max_length: int = 48) -> str:

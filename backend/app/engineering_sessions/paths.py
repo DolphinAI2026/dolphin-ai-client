@@ -5,7 +5,11 @@ import os
 import re
 from pathlib import Path
 
-from app.engineering_sessions.git_state import GitCommandError, git_common_dir
+from app.engineering_sessions.git_state import (
+    GitCommandError,
+    git_common_dir,
+    git_control_worktree,
+)
 
 
 def _safe_name(value: str) -> str:
@@ -38,4 +42,9 @@ def registry_root_for_repo(repo_path: str | Path, *, home: str | Path | None = N
 
 
 def default_worktree_parent(repo_path: str | Path) -> Path:
-    return Path(repo_path).resolve().parent / "worktrees"
+    resolved = Path(repo_path).resolve()
+    try:
+        control_repo = git_control_worktree(resolved)
+    except GitCommandError:
+        control_repo = resolved
+    return control_repo.parent / "worktrees" / repo_id_for_path(control_repo)

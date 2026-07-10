@@ -1,9 +1,12 @@
 from datetime import timezone
+from typing import get_type_hints
 
 from app.engineering_sessions.models import (
     EngineeringSession,
     SessionStatus,
+    SessionStatusValue,
     SessionType,
+    SessionTypeValue,
     build_session_branch,
     slugify_title,
 )
@@ -63,3 +66,30 @@ def test_engineering_session_enum_defaults_dump_as_plain_strings():
 
     assert session.status == "verifying"
     assert assigned["status"] == "verifying"
+
+
+def test_engineering_session_annotations_match_string_runtime_contract():
+    hints = get_type_hints(EngineeringSession)
+
+    assert hints["type"] == SessionTypeValue
+    assert hints["status"] == SessionStatusValue
+
+    session = EngineeringSession(
+        id="S-004",
+        type=SessionType.FEATURE,
+        title="Runtime strings",
+        repo="apaas-builder-ai",
+        repo_path="/repo",
+        branch="session/S-004-feature-runtime-strings",
+    )
+
+    assert type(session.type) is str
+    assert type(session.status) is str
+
+    session.type = SessionType.BUGFIX
+    session.status = SessionStatus.WAITING_MERGE
+
+    assert type(session.type) is str
+    assert type(session.status) is str
+    assert session.type == "bugfix"
+    assert session.status == "waiting_merge"

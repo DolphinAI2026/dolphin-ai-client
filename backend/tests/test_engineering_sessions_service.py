@@ -29,8 +29,8 @@ def run_git(repo: Path, *args: str) -> str:
     return result.stdout.strip()
 
 
-def make_repo(tmp_path: Path) -> Path:
-    repo = tmp_path / "repo"
+def make_repo(tmp_path: Path, name: str = "repo") -> Path:
+    repo = tmp_path / name
     repo.mkdir()
     run_git(repo, "init", "-b", "main")
     run_git(repo, "config", "user.email", "t@example.com")
@@ -262,6 +262,54 @@ def test_linked_worktree_services_share_default_registry(
     ]
 
 
+def test_linked_worktree_subdirectory_resolves_control_repository(tmp_path: Path):
+    repo = make_repo(tmp_path)
+    linked = tmp_path / "linked"
+    run_git(repo, "worktree", "add", "-b", "linked-base", str(linked), "main")
+    nested = linked / "backend"
+    nested.mkdir()
+
+    service = EngineeringSessionService(
+        nested,
+        registry_root=tmp_path / "sessions",
+        worktree_parent=tmp_path / "worktrees",
+    )
+
+    assert service.repo_path == repo.resolve()
+    assert service.registry.repo_path == repo.resolve()
+
+
+def test_default_worktree_parent_is_namespaced_for_sibling_repositories(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    first_repo = make_repo(tmp_path, "first-repo")
+    second_repo = make_repo(tmp_path, "second-repo")
+    monkeypatch.setenv("AGENTIC_SESSION_HOME", str(tmp_path / "agentic-home"))
+
+    first_service = EngineeringSessionService(first_repo)
+    second_service = EngineeringSessionService(second_repo)
+
+    assert first_service.worktree_parent != second_service.worktree_parent
+    assert first_service.worktree_parent.parent == tmp_path / "worktrees"
+    assert second_service.worktree_parent.parent == tmp_path / "worktrees"
+
+    first_session = first_service.create(SessionType.FEATURE, "Same title")
+    second_session = second_service.create(SessionType.FEATURE, "Same title")
+
+    assert first_session.worktree_path != second_session.worktree_path
+    assert Path(first_session.worktree_path).exists()
+    assert Path(second_session.worktree_path).exists()
+
+    explicit_parent = tmp_path / "explicit-worktrees"
+    explicit_service = EngineeringSessionService(
+        first_repo,
+        registry_root=tmp_path / "explicit-sessions",
+        worktree_parent=explicit_parent,
+    )
+    assert explicit_service.worktree_parent == explicit_parent.resolve()
+
+
 def test_create_without_worktree_remains_running(tmp_path: Path):
     repo = make_repo(tmp_path)
     service = make_service(tmp_path, repo)
@@ -324,6 +372,75 @@ def test_sync_recovers_running_after_missing_worktree_is_restored(tmp_path: Path
 
     assert restored.status == SessionStatus.RUNNING
     assert restored.git_state.missing_worktree is False
+
+
+@pytest.mark.parametrize("action", ["checkpoint", "archive"])
+def test_missing_base_blocks_writes_and_recovers_running(
+    tmp_path: Path,
+    action: str,
+):
+    repo = make_repo(tmp_path)
+    service = make_service(tmp_path, repo)
+    session = service.create(SessionType.FEATURE, f"Missing base {action}")
+    worktree = Path(session.worktree_path)
+    base_head = run_git(repo, "rev-parse", "main")
+    (worktree / "committed.txt").write_text("committed\n", encoding="utf-8")
+    assert service.checkpoint(session.id) is True
+    run_git(repo, "update-ref", "-d", "refs/heads/main")
+    (worktree / "blocked.txt").write_text("do not commit\n", encoding="utf-8")
+    before_head = run_git(worktree, "rev-parse", "HEAD")
+
+    blocked = service.sync(session.id)
+    resumed = service.resume(session.id)
+    if action == "checkpoint":
+        assert service.checkpoint(session.id) is False
+        observed = service.registry.load(session.id)
+    else:
+        observed = service.archive(session.id)
+
+    assert blocked.status == SessionStatus.BLOCKED_RETAINED
+    assert blocked.git_state.base_missing is True
+    assert blocked.git_state.stale is True
+    assert blocked.cleanup.suggested is False
+    assert resumed.status == SessionStatus.BLOCKED_RETAINED
+    assert observed.status == SessionStatus.BLOCKED_RETAINED
+    assert run_git(worktree, "rev-parse", "HEAD") == before_head
+    assert (worktree / "blocked.txt").read_text(encoding="utf-8") == "do not commit\n"
+    assert run_git(worktree, "status", "--porcelain")
+
+    run_git(repo, "update-ref", "refs/heads/main", base_head)
+    restored = service.sync(session.id)
+
+    assert restored.status == SessionStatus.RUNNING
+    assert restored.git_state.base_missing is False
+    assert restored.git_state.merged_to_base is False
+
+
+def test_missing_base_recovers_merged_session_state(tmp_path: Path):
+    repo = make_repo(tmp_path)
+    service = make_service(tmp_path, repo)
+    session = service.create(SessionType.FEATURE, "Missing merged base")
+    worktree = Path(session.worktree_path)
+    (worktree / "merged.txt").write_text("merged\n", encoding="utf-8")
+    assert service.checkpoint(session.id) is True
+    run_git(repo, "merge", "--no-ff", session.branch, "-m", "merge session")
+    merged_head = run_git(repo, "rev-parse", "main")
+    run_git(repo, "checkout", "-b", "parking")
+    run_git(repo, "update-ref", "-d", "refs/heads/main")
+
+    blocked = service.sync(session.id)
+
+    assert blocked.status == SessionStatus.BLOCKED_RETAINED
+    assert blocked.git_state.base_missing is True
+    assert blocked.cleanup.suggested is False
+
+    run_git(repo, "update-ref", "refs/heads/main", merged_head)
+    restored = service.sync(session.id)
+
+    assert restored.status == SessionStatus.MERGED_RETAINED
+    assert restored.git_state.base_missing is False
+    assert restored.git_state.merged_to_base is True
+    assert restored.cleanup.suggested is True
 
 
 def test_sync_rejects_replacement_worktree_from_other_repository(tmp_path: Path):
@@ -608,6 +725,57 @@ def test_resume_does_not_reactivate_branch_mismatch(tmp_path: Path):
     assert resumed.git_state.branch_mismatch is True
 
 
+def test_resume_preserves_clean_merged_retained_session(tmp_path: Path):
+    repo = make_repo(tmp_path)
+    service = make_service(tmp_path, repo)
+    session = service.create(SessionType.FEATURE, "Resume merged")
+    worktree = Path(session.worktree_path)
+    (worktree / "merged.txt").write_text("merged\n", encoding="utf-8")
+    assert service.checkpoint(session.id) is True
+    run_git(repo, "merge", "--no-ff", session.branch, "-m", "merge session")
+    assert service.sync(session.id).status == SessionStatus.MERGED_RETAINED
+
+    resumed = service.resume(session.id)
+
+    assert resumed.status == SessionStatus.MERGED_RETAINED
+    assert resumed.git_state.merged_to_base is True
+    assert resumed.cleanup.suggested is True
+
+
+def test_resume_preserves_merged_orphan_session(tmp_path: Path):
+    repo = make_repo(tmp_path)
+    service = make_service(tmp_path, repo)
+    branch = "session/S-099-feature-resume-orphan"
+    worktree = tmp_path / "resume-orphan"
+    run_git(repo, "worktree", "add", "-b", branch, str(worktree), "main")
+    (worktree / "orphan.txt").write_text("orphan\n", encoding="utf-8")
+    run_git(worktree, "add", "orphan.txt")
+    run_git(worktree, "commit", "-m", "orphan change")
+    run_git(repo, "merge", "--no-ff", branch, "-m", "merge orphan")
+    orphan = next(item for item in service.reconcile() if item.branch == branch)
+
+    resumed = service.resume(orphan.id)
+
+    assert resumed.status == SessionStatus.ORPHAN_SESSION
+    assert resumed.git_state.merged_to_base is True
+    assert resumed.cleanup.suggested is True
+
+
+def test_resume_preserves_blocked_session_without_recovered_base(tmp_path: Path):
+    repo = make_repo(tmp_path)
+    service = make_service(tmp_path, repo)
+    session = service.create(SessionType.FEATURE, "Resume blocked")
+    session.status = SessionStatus.BLOCKED_RETAINED
+    session.git_state.base_missing = False
+    service.registry.save(session)
+
+    resumed = service.resume(session.id)
+
+    assert resumed.status == SessionStatus.BLOCKED_RETAINED
+    assert resumed.git_state.base_missing is False
+    assert resumed.cleanup.suggested is False
+
+
 def test_create_fetch_failure_has_no_registry_branch_or_worktree_side_effects(
     tmp_path: Path,
 ):
@@ -795,6 +963,58 @@ def test_checkpoint_bypasses_hook_and_uses_custom_message(tmp_path: Path):
     assert created is True
     assert run_git(worktree, "log", "-1", "--pretty=%s") == "custom checkpoint"
     assert run_git(worktree, "show", "HEAD:hooked.txt") == "hook bypassed"
+
+
+@pytest.mark.parametrize("action", ["checkpoint", "archive"])
+def test_checkpoint_commit_failure_refreshes_registry_and_propagates(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    action: str,
+):
+    repo = make_repo(tmp_path)
+    service = make_service(tmp_path, repo)
+    session = service.create(SessionType.FEATURE, f"Failed {action}")
+    worktree = Path(session.worktree_path)
+    (worktree / "invalid-date.txt").write_text("dirty\n", encoding="utf-8")
+    before_head = run_git(worktree, "rev-parse", "HEAD")
+    refresh_calls = 0
+    original_refresh = service._refresh_and_save_locked
+
+    def refresh_and_count(current):
+        nonlocal refresh_calls
+        refresh_calls += 1
+        return original_refresh(current)
+
+    monkeypatch.setattr(service, "_refresh_and_save_locked", refresh_and_count)
+    monkeypatch.setenv("GIT_AUTHOR_DATE", "not-a-valid-git-date")
+
+    with pytest.raises(GitCommandError, match="git commit failed:.*invalid date"):
+        if action == "checkpoint":
+            service.checkpoint(session.id)
+        else:
+            service.archive(session.id)
+
+    persisted = service.registry.load(session.id)
+    assert refresh_calls == 1
+    assert persisted.git_state.clean is False
+    assert persisted.head_commit == before_head
+    assert run_git(worktree, "rev-parse", "HEAD") == before_head
+    assert "invalid-date.txt" in run_git(worktree, "diff", "--cached", "--name-only")
+
+
+def test_checkpoint_disables_repository_commit_signing(tmp_path: Path):
+    repo = make_repo(tmp_path)
+    service = make_service(tmp_path, repo)
+    session = service.create(SessionType.FEATURE, "Unsigned checkpoint")
+    worktree = Path(session.worktree_path)
+    run_git(repo, "config", "commit.gpgSign", "true")
+    run_git(repo, "config", "gpg.program", str(tmp_path / "missing-gpg"))
+    (worktree / "unsigned.txt").write_text("unsigned\n", encoding="utf-8")
+
+    created = service.checkpoint(session.id)
+
+    assert created is True
+    assert run_git(worktree, "show", "HEAD:unsigned.txt") == "unsigned"
 
 
 def test_checkpoint_rejects_unresolved_merge_conflict_without_mutation(

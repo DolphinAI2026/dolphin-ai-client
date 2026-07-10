@@ -59,9 +59,9 @@ npm run dev
 
 ## 工程会话与 Worktree
 
-本地可用 `backend/scripts/agentic_session.py` 管理工程会话。默认会把可写任务放到独立 Git branch + worktree 中；registry 默认写入 `~/.codex/.agentic-coding/workspaces/<repo-id>/sessions/`，也可用 `--registry-root` 覆盖。
+本地可用 `backend/scripts/agentic_session.py` 管理工程会话。默认会把可写任务放到独立 Git branch + worktree 中；默认 worktree 父目录为 `<control-repo-parent>/worktrees/<repo-id>/`，registry 默认写入 `~/.codex/.agentic-coding/workspaces/<repo-id>/sessions/`。两者分别可用 `--worktree-parent`、`--registry-root` 覆盖。
 
-以下示例从主仓库根目录开始执行，每段先进入 `backend/`；`--repo ..` 因而指向主仓库根目录，不能在 session worktree 内照抄。
+以下示例从主仓库根目录开始执行，每段先进入 `backend/`；`--repo ..` 因而指向当前 Git worktree。服务会通过 Git common-dir 统一解析主工作树，因此也可以从主工作区或 linked worktree 的根目录、子目录调用。
 
 创建功能会话：
 
@@ -95,7 +95,7 @@ cd backend
 python3 scripts/agentic_session.py --repo .. checkpoint S-001 --message "checkpoint: S-001 async conversation create"
 ```
 
-`checkpoint` 会在对应 worktree 中执行 `git add -A`，使用内置本地身份并通过 `git commit --no-verify` 提交全部当前改动。输出 `created: false` 可能是 clean no-op、missing worktree、branch mismatch 或 `git commit` 失败；若 `git add -A` 已执行，失败后可能留下 staged 改动，调用方需检查 JSON、`git status` 和 `HEAD`。
+`checkpoint` 会在对应 worktree 中执行 `git add -A`，使用内置本地身份、显式关闭提交签名，并通过 `git commit --no-verify` 提交全部当前改动。输出 `created: false` 仅表示 clean no-op、missing worktree、branch mismatch 或 Git 操作进行中等拒绝状态；实际 `git commit` 失败会刷新 registry 后返回非零退出码。失败前若已执行 `git add -A`，可能留下 staged 改动。
 
 归档会话但保留 worktree：
 
@@ -104,7 +104,7 @@ cd backend
 python3 scripts/agentic_session.py --repo .. archive S-001
 ```
 
-`archive` 默认先尝试 checkpoint。遇到 missing worktree、branch mismatch 或提交失败时，CLI 仍返回 0 和会话 JSON；调用方必须检查 `status`、`git_state` 和 `HEAD` 判断 checkpoint 是否成功。`--no-checkpoint` 会跳过尝试：仅 dirty worktree 标记 `dirty_uncheckpointed`，clean worktree 直接归档为对应 retained 状态。
+`archive` 默认先尝试 checkpoint。missing worktree、branch mismatch 或 Git 操作进行中仍按不可写状态保留会话；实际提交失败会传播为非零退出码，不会伪装为归档成功。`--no-checkpoint` 会跳过尝试：仅 dirty worktree 标记 `dirty_uncheckpointed`，clean worktree 直接归档为对应 retained 状态。
 
 对齐真实 worktree 并回写 registry：
 

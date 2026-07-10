@@ -93,6 +93,19 @@ def git_common_dir(repo_path: str | Path) -> Path:
     return Path(result.stdout.rstrip("\n")).resolve()
 
 
+def git_control_worktree(repo_path: str | Path) -> Path:
+    common_dir = git_common_dir(repo_path)
+    if common_dir.name == ".git":
+        return common_dir.parent
+    top_level = git(
+        repo_path,
+        "rev-parse",
+        "--path-format=absolute",
+        "--show-toplevel",
+    ).stdout.rstrip("\n")
+    return Path(top_level).resolve()
+
+
 def same_git_repository(
     first_path: str | Path,
     second_path: str | Path,
@@ -187,9 +200,23 @@ def inspect_git_state(
     clean = status_clean(worktree)
     remote_ref = f"refs/remotes/origin/{base_branch}"
     local_ref = f"refs/heads/{base_branch}"
-    base_ref = remote_ref if has_ref(worktree, remote_ref) else local_ref
-    ahead, behind = ahead_behind(worktree, base_ref)
-    merged = merged_to_base(worktree, base_ref)
+    if has_ref(worktree, remote_ref):
+        base_ref = remote_ref
+    elif has_ref(worktree, local_ref):
+        base_ref = local_ref
+    else:
+        base_ref = None
+    base_missing = base_ref is None
+    ahead, behind = (
+        ahead_behind(worktree, base_ref)
+        if base_ref is not None
+        else (0, 0)
+    )
+    merged = (
+        merged_to_base(worktree, base_ref)
+        if base_ref is not None
+        else False
+    )
     branch_mismatch = expected_branch is not None and branch != expected_branch
     if branch_mismatch or (
         session_base_commit is not None and head == session_base_commit
@@ -200,9 +227,10 @@ def inspect_git_state(
         ahead=ahead,
         behind=behind,
         merged_to_base=merged,
-        stale=behind > 0,
+        stale=base_missing or behind > 0,
         very_stale=behind >= very_stale_behind,
         missing_worktree=False,
+        base_missing=base_missing,
         branch_mismatch=branch_mismatch,
         current_branch=branch,
         head_commit=head,

@@ -74,6 +74,27 @@ def test_inspect_git_state_reports_dirty_and_ahead(tmp_path: Path):
     assert state.current_branch == "session/S-001-bugfix-test"
 
 
+def test_inspect_git_state_reports_and_recovers_from_missing_base_ref(
+    tmp_path: Path,
+):
+    repo = make_repo(tmp_path)
+    base_head = run_git(repo, "rev-parse", "main")
+    run_git(repo, "checkout", "-b", "session/S-010-feature-base-missing")
+    run_git(repo, "update-ref", "-d", "refs/heads/main")
+
+    missing = inspect_git_state(repo, base_branch="main")
+
+    assert missing.base_missing is True
+    assert missing.stale is True
+    assert missing.merged_to_base is False
+
+    run_git(repo, "update-ref", "refs/heads/main", base_head)
+    restored = inspect_git_state(repo, base_branch="main")
+
+    assert restored.base_missing is False
+    assert restored.stale is False
+
+
 def test_inspect_missing_worktree(tmp_path: Path):
     state = inspect_git_state(tmp_path / "missing", base_branch="main")
 

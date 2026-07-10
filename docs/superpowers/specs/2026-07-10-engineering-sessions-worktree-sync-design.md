@@ -110,7 +110,7 @@ status: running
 repo: apaas-builder-ai
 base_branch: main
 branch: session/S-002-feature-apaas-binding
-worktree_path: /mnt/d/workspaces/d-ai-code/worktrees/S-002-feature-apaas-binding
+worktree_path: /mnt/d/workspaces/d-ai-code/worktrees/<repo-id>/S-002-feature-apaas-binding
 
 base_commit: abc123
 head_commit: def456
@@ -165,13 +165,13 @@ module_locks
 /mnt/d/workspaces/d-ai-code/apaas-builder-ai
   主工作区，保持默认分支
 
-/mnt/d/workspaces/d-ai-code/worktrees/
+/mnt/d/workspaces/d-ai-code/worktrees/<repo-id>/
   S-001-bugfix-code-blank
   S-002-feature-apaas-binding
   S-003-doc-readme-runbook
 ```
 
-可写任务默认创建 worktree：
+默认父目录使用稳定 `repo_id` 命名空间，避免同级多个仓库产生同名 session worktree 冲突；显式 `--worktree-parent` 保持调用方给定路径。可写任务默认创建 worktree：
 
 ```text
 session/S-001-bugfix-code-blank

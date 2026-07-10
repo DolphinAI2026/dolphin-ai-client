@@ -83,6 +83,9 @@ def test_registry_create_save_load_list(tmp_path: Path):
 
     assert loaded.id == "S-001"
     assert loaded.type == SessionType.DOC_CHANGE.value
+    assert type(session.type) is str
+    assert type(loaded.type) is str
+    assert type(loaded.status) is str
     assert loaded.branch == "session/S-001-doc-change-readme"
     assert loaded.base_commit == "abc123"
     assert [item.id for item in sessions] == ["S-001"]
