@@ -73,6 +73,7 @@ def test_engineering_session_annotations_match_string_runtime_contract():
 
     assert hints["type"] == SessionTypeValue
     assert hints["status"] == SessionStatusValue
+    assert hints["blocked_from_status"] == SessionStatusValue | None
 
     session = EngineeringSession(
         id="S-004",
@@ -81,15 +82,20 @@ def test_engineering_session_annotations_match_string_runtime_contract():
         repo="apaas-builder-ai",
         repo_path="/repo",
         branch="session/S-004-feature-runtime-strings",
+        blocked_from_status=SessionStatus.ORPHAN_SESSION,
     )
 
     assert type(session.type) is str
     assert type(session.status) is str
+    assert type(session.blocked_from_status) is str
 
     session.type = SessionType.BUGFIX
     session.status = SessionStatus.WAITING_MERGE
+    session.blocked_from_status = SessionStatus.ARCHIVED_DIRTY
 
     assert type(session.type) is str
     assert type(session.status) is str
+    assert type(session.blocked_from_status) is str
     assert session.type == "bugfix"
     assert session.status == "waiting_merge"
+    assert session.blocked_from_status == "archived_dirty"

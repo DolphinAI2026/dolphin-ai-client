@@ -148,20 +148,31 @@ class EngineeringSessionService:
         session.git_state = state
         session.head_commit = state.head_commit
         session.last_sync_at = utc_now()
+        if (
+            session.blocked_from_status is not None
+            and not state.missing_worktree
+            and not state.base_missing
+            and not state.branch_mismatch
+        ):
+            previous_status = session.blocked_from_status
+            session.status = previous_status
+            session.blocked_from_status = None
         if state.missing_worktree:
             session.status = SessionStatus.MISSING_WORKTREE
             session.cleanup.suggested = False
         elif state.base_missing:
+            if (
+                not previous_base_missing
+                and session.blocked_from_status is None
+            ):
+                session.blocked_from_status = previous_status
             session.status = SessionStatus.BLOCKED_RETAINED
             session.cleanup.suggested = False
         elif state.branch_mismatch:
             if previous_status == SessionStatus.MERGED_RETAINED:
                 session.status = SessionStatus.RUNNING
             session.cleanup.suggested = False
-        elif (
-            previous_status == SessionStatus.BLOCKED_RETAINED
-            and not previous_base_missing
-        ):
+        elif previous_status == SessionStatus.BLOCKED_RETAINED:
             session.status = SessionStatus.BLOCKED_RETAINED
             session.cleanup.suggested = False
         elif previous_status == SessionStatus.ORPHAN_SESSION:
@@ -180,9 +191,6 @@ class EngineeringSessionService:
         elif previous_status in (
             SessionStatus.MISSING_WORKTREE,
             SessionStatus.MERGED_RETAINED,
-        ) or (
-            previous_status == SessionStatus.BLOCKED_RETAINED
-            and previous_base_missing
         ):
             session.status = SessionStatus.RUNNING
             session.cleanup.suggested = False

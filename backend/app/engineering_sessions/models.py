@@ -102,6 +102,7 @@ class EngineeringSession(BaseModel):
     type: SessionTypeValue
     title: str
     status: SessionStatusValue = SessionStatus.RUNNING
+    blocked_from_status: SessionStatusValue | None = None
     repo: str
     repo_path: str
     base_branch: str = "main"
@@ -128,7 +129,7 @@ class EngineeringSession(BaseModel):
             raise ValueError("session id must use S-001 format")
         return value
 
-    @field_validator("type", "status", mode="before")
+    @field_validator("type", "status", "blocked_from_status", mode="before")
     @classmethod
     def normalize_enum_value(cls, value: object) -> object:
         return value.value if isinstance(value, Enum) else value

@@ -443,6 +443,136 @@ def test_missing_base_recovers_merged_session_state(tmp_path: Path):
     assert restored.cleanup.suggested is True
 
 
+@pytest.mark.parametrize(
+    "initial_status",
+    [
+        SessionStatus.RUNNING,
+        SessionStatus.MERGED_RETAINED,
+        SessionStatus.ARCHIVED_DIRTY,
+        SessionStatus.ABANDONED_RETAINED,
+    ],
+)
+def test_base_outage_restores_recorded_session_status(
+    tmp_path: Path,
+    initial_status: SessionStatus,
+):
+    repo = make_repo(tmp_path)
+    service = make_service(tmp_path, repo)
+    session = service.create(SessionType.FEATURE, f"Restore {initial_status.value}")
+    worktree = Path(session.worktree_path)
+
+    if initial_status == SessionStatus.MERGED_RETAINED:
+        (worktree / "merged.txt").write_text("merged\n", encoding="utf-8")
+        assert service.checkpoint(session.id) is True
+        run_git(repo, "merge", "--no-ff", session.branch, "-m", "merge session")
+        observed = service.sync(session.id)
+    elif initial_status == SessionStatus.ARCHIVED_DIRTY:
+        (worktree / "dirty.txt").write_text("dirty\n", encoding="utf-8")
+        observed = service.archive(session.id, checkpoint=False)
+    elif initial_status == SessionStatus.ABANDONED_RETAINED:
+        observed = service.archive(session.id, checkpoint=False)
+    else:
+        observed = service.sync(session.id)
+    assert observed.status == initial_status
+
+    base_head = run_git(repo, "rev-parse", "main")
+    run_git(repo, "checkout", "-b", f"parking-{initial_status.value}")
+    run_git(repo, "update-ref", "-d", "refs/heads/main")
+
+    blocked = service.sync(session.id)
+    blocked_again = service.sync(session.id)
+
+    assert blocked.status == SessionStatus.BLOCKED_RETAINED
+    assert blocked.blocked_from_status == initial_status.value
+    assert blocked_again.blocked_from_status == initial_status.value
+
+    run_git(repo, "update-ref", "refs/heads/main", base_head)
+    restored = service.sync(session.id)
+
+    assert restored.status == initial_status
+    assert restored.blocked_from_status is None
+    assert restored.cleanup.suggested is (
+        initial_status == SessionStatus.MERGED_RETAINED
+    )
+
+
+def test_manual_blocked_session_remains_blocked_across_base_outage(tmp_path: Path):
+    repo = make_repo(tmp_path)
+    service = make_service(tmp_path, repo)
+    session = service.create(SessionType.FEATURE, "Manual blocked outage")
+    session.status = SessionStatus.BLOCKED_RETAINED
+    service.registry.save(session)
+    base_head = run_git(repo, "rev-parse", "main")
+    run_git(repo, "checkout", "-b", "parking-manual-blocked")
+    run_git(repo, "update-ref", "-d", "refs/heads/main")
+
+    blocked = service.sync(session.id)
+    blocked_again = service.sync(session.id)
+
+    assert blocked.blocked_from_status == SessionStatus.BLOCKED_RETAINED.value
+    assert blocked_again.blocked_from_status == SessionStatus.BLOCKED_RETAINED.value
+
+    run_git(repo, "update-ref", "refs/heads/main", base_head)
+    restored = service.sync(session.id)
+
+    assert restored.status == SessionStatus.BLOCKED_RETAINED
+    assert restored.blocked_from_status is None
+    assert restored.cleanup.suggested is False
+
+
+def test_legacy_blocked_session_without_origin_status_stays_blocked(tmp_path: Path):
+    repo = make_repo(tmp_path)
+    service = make_service(tmp_path, repo)
+    session = service.create(SessionType.FEATURE, "Legacy blocked")
+    session.status = SessionStatus.BLOCKED_RETAINED
+    session.git_state.base_missing = True
+    service.registry.save(session)
+
+    restored = service.sync(session.id)
+
+    assert restored.status == SessionStatus.BLOCKED_RETAINED
+    assert restored.blocked_from_status is None
+    assert restored.cleanup.suggested is False
+
+
+@pytest.mark.parametrize("merged", [False, True])
+def test_orphan_session_identity_survives_base_outage(
+    tmp_path: Path,
+    merged: bool,
+):
+    repo = make_repo(tmp_path)
+    service = make_service(tmp_path, repo)
+    branch = f"session/S-099-feature-outage-orphan-{merged}"
+    worktree = tmp_path / f"outage-orphan-{merged}"
+    run_git(repo, "worktree", "add", "-b", branch, str(worktree), "main")
+    (worktree / "orphan.txt").write_text("orphan\n", encoding="utf-8")
+    run_git(worktree, "add", "orphan.txt")
+    run_git(worktree, "commit", "-m", "orphan change")
+    if merged:
+        run_git(repo, "merge", "--no-ff", branch, "-m", "merge orphan")
+    orphan = next(item for item in service.reconcile() if item.branch == branch)
+    assert orphan.status == SessionStatus.ORPHAN_SESSION
+
+    base_head = run_git(repo, "rev-parse", "main")
+    run_git(repo, "checkout", "-b", f"parking-orphan-{merged}")
+    run_git(repo, "update-ref", "-d", "refs/heads/main")
+
+    blocked = service.sync(orphan.id)
+    blocked_again = service.sync(orphan.id)
+
+    assert blocked.status == SessionStatus.BLOCKED_RETAINED
+    assert blocked.blocked_from_status == SessionStatus.ORPHAN_SESSION.value
+    assert blocked_again.blocked_from_status == SessionStatus.ORPHAN_SESSION.value
+
+    run_git(repo, "update-ref", "refs/heads/main", base_head)
+    restored = service.sync(orphan.id)
+
+    assert restored.status == SessionStatus.ORPHAN_SESSION
+    assert restored.blocked_from_status is None
+    assert restored.git_state.merged_to_base is merged
+    assert restored.cleanup.suggested is merged
+
+
 def test_sync_rejects_replacement_worktree_from_other_repository(tmp_path: Path):
     repo = make_repo(tmp_path)
     service = make_service(tmp_path, repo)
