@@ -1901,7 +1901,7 @@ git commit -m "docs: refine engineering session usage"
 
 实际验证结果：
 
-- 工程会话聚焦测试：`75 passed`。
+- 工程会话聚焦测试：`154 passed`。
 - 相邻 workspace Git 测试：`17 passed`。
 - CLI smoke：创建 `S-001`，类型为 `doc-change`，分支为 `session/S-001-doc-change-readme-smoke`，`list --sync` 返回 1 条 clean 会话。
 - README 未被 smoke 修改，无需额外 README 提交。
@@ -1937,9 +1937,15 @@ git commit -m "docs: refine engineering session usage"
 - 显式 `base_branch` 使用捕获的 commit 哈希创建 worktree，避免分支引用推进造成基线漂移。
 - 配置了 `origin` 时，fetch 失败会阻止同步状态和 `last_sync_at` 落盘。
 - `new-app` 和 `spec-change` 在 service 与 CLI 两层强制使用 worktree。
+- checkpoint 提交前拒绝未解决冲突及 merge/rebase/cherry-pick/revert/bisect/sequencer 等进行中 Git 操作；真实提交失败刷新 registry 后抛错，且本地 checkpoint 显式关闭提交签名。
 - checkpoint 提交后只做本地状态刷新，避免提交已成功但第二次 fetch 失败造成结果歧义。
 - worktree 同步会校验 Git common-dir，避免同路径、同分支名的其他仓库被误认并提交。
-- 主工作区与 linked worktree 使用同一个 Git common-dir 生成 repo id，共享中央 registry。
+- 主工作区与 linked worktree 使用同一个 Git common-dir 解析控制仓库、生成 repo id 并共享中央 registry；CLI 可从 linked worktree 根目录或子目录调用。
+- 默认 worktree 父目录增加稳定 repo id 命名空间，避免同级多个仓库的 `S-001` 路径碰撞；显式 `--worktree-parent` 保持原语义。
 - 活跃 worktree 映射显式排除控制仓库路径，主工作区即使切到 session branch 也不会被误绑定、checkpoint 或归档。
 - `resume` 会重新激活合法的无 worktree 只读会话，以及 worktree 存在且 branch 匹配的会话，并保留 `dirty_uncheckpointed` 风险标记。
 - branch mismatch 优先于 merged/cleanup 状态，错误分支不会触发清理建议。
+- base ref 缺失使用独立 `git_state.base_missing` 门禁，不覆盖 running、blocked、orphan、merged 或 archived 生命周期；恢复后按真实 Git 状态重新计算。
+- `missing_worktree`、`branch_mismatch`、`base_missing` 按独立优先级同步，组合状态不会冻结旧的顶层状态。
+- 默认 `list` 不 fetch 或扫描 worktree，但会持久化修正 required-worktree、控制仓库路径和 base-missing cleanup 等静态不变量。
+- `EngineeringSession.type/status` 使用字符串 Literal 契约，和 CLI/YAML 的运行时值保持一致。

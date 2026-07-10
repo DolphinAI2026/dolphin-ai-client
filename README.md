@@ -119,6 +119,8 @@ python3 scripts/agentic_session.py --repo .. reconcile
 
 - `new-app` 和 `spec-change` 不允许使用 `--no-worktree`。
 - 不记录文件锁、路径锁或模块锁，冲突由 Git merge/rebase 暴露。
+- base ref 不可用时会设置 `git_state.base_missing`，保留原生命周期状态，但阻止 resume 激活、checkpoint 和 archive 状态转换，并暂停清理提示。
+- merge、rebase、cherry-pick、revert、bisect、sequencer 或未解决 index 冲突进行中时，checkpoint 不会执行 `git add -A` 或提交。
 - 已合并且 clean 的 worktree 只提示清理，不自动删除。
 - 本 CLI 不执行部署；发布门禁由人工或调用方负责。目标 worktree 必须 clean（`git status --porcelain` 无输出），目标 commit 必须已合入默认分支或明确的 release ref，可用 `git merge-base --is-ancestor <commit> <default-or-release-ref>` 检查：退出码 0 表示已合入，1 表示未合入，其他值表示命令错误。禁止从 dirty 或 unmerged worktree 发布。
 
