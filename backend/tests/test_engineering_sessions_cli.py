@@ -4,6 +4,7 @@ import sys
 from pathlib import Path
 
 import pytest
+import yaml
 
 BACKEND_ROOT = Path(__file__).resolve().parents[1]
 CLI_SCRIPT = BACKEND_ROOT / "scripts" / "agentic_session.py"
@@ -91,6 +92,61 @@ def test_cli_create_list_resume(tmp_path: Path):
     data = json.loads(listed.stdout)
 
     assert data[0]["id"] == "S-001"
+
+
+def test_cli_default_list_outputs_and_persists_static_missing_worktree(
+    tmp_path: Path,
+):
+    repo = make_repo(tmp_path)
+    registry = tmp_path / "sessions"
+    worktrees = tmp_path / "worktrees"
+    create = subprocess.run(
+        cli_command(
+            repo,
+            registry,
+            worktrees,
+            "create",
+            "--type",
+            "new-app",
+            "--title",
+            "Required list",
+        ),
+        cwd=BACKEND_ROOT,
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    created = json.loads(create.stdout)
+    registry_path = registry / f"{created['id']}.yaml"
+    persisted = yaml.safe_load(registry_path.read_text(encoding="utf-8"))
+    persisted["worktree_path"] = None
+    persisted["status"] = "running"
+    persisted["git_state"]["missing_worktree"] = False
+    registry_path.write_text(
+        yaml.safe_dump(persisted, allow_unicode=True, sort_keys=False),
+        encoding="utf-8",
+    )
+    run_git(repo, "remote", "add", "origin", str(tmp_path / "missing-origin.git"))
+
+    listed = subprocess.run(
+        cli_command(
+            repo,
+            registry,
+            worktrees,
+            "list",
+        ),
+        cwd=BACKEND_ROOT,
+        capture_output=True,
+        text=True,
+    )
+
+    assert listed.returncode == 0, listed.stderr
+    data = json.loads(listed.stdout)
+    assert data[0]["status"] == "missing_worktree"
+    assert data[0]["git_state"]["missing_worktree"] is True
+    saved = yaml.safe_load(registry_path.read_text(encoding="utf-8"))
+    assert saved["status"] == "missing_worktree"
+    assert saved["git_state"]["missing_worktree"] is True
 
 
 @pytest.mark.parametrize("session_type", ["new-app", "spec-change"])

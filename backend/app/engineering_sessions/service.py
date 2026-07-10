@@ -117,15 +117,10 @@ class EngineeringSessionService:
             return self._sync_and_save_locked(session_id)
 
     def sync_model(self, session: EngineeringSession) -> EngineeringSession:
-        if (
-            session.worktree_path is not None
-            and Path(session.worktree_path).resolve() == self.repo_path
-        ):
+        if self._violates_static_worktree_invariant(session):
             return self._mark_missing_worktree(session)
 
         if session.worktree_path is None:
-            if self.requires_worktree(session.type):
-                return self._mark_missing_worktree(session)
             session.head_commit = session.base_commit
             session.last_sync_at = utc_now()
             return session
@@ -208,7 +203,16 @@ class EngineeringSessionService:
 
     def list(self, *, sync: bool = False) -> list[EngineeringSession]:
         if not sync:
-            return self.registry.list()
+            with self.registry.transaction_lock():
+                sessions = self.registry.list()
+                for session in sessions:
+                    if self._violates_static_worktree_invariant(session):
+                        self._mark_missing_worktree(
+                            session,
+                            update_last_sync=False,
+                        )
+                        self.registry.save(session)
+                return sessions
         with self.registry.transaction_lock():
             self._fetch_origin_or_raise()
             sessions = self.registry.list()
@@ -316,6 +320,8 @@ class EngineeringSessionService:
     @staticmethod
     def _mark_missing_worktree(
         session: EngineeringSession,
+        *,
+        update_last_sync: bool = True,
     ) -> EngineeringSession:
         dirty_uncheckpointed = session.git_state.dirty_uncheckpointed
         session.git_state = inspect_git_state(
@@ -324,10 +330,19 @@ class EngineeringSessionService:
         )
         session.git_state.dirty_uncheckpointed = dirty_uncheckpointed
         session.head_commit = None
-        session.last_sync_at = utc_now()
+        if update_last_sync:
+            session.last_sync_at = utc_now()
         session.status = SessionStatus.MISSING_WORKTREE
         session.cleanup.suggested = False
         return session
+
+    def _violates_static_worktree_invariant(
+        self,
+        session: EngineeringSession,
+    ) -> bool:
+        if session.worktree_path is None:
+            return self.requires_worktree(session.type)
+        return Path(session.worktree_path).resolve() == self.repo_path
 
     def _active_worktrees(self) -> dict[str, GitWorktreeEntry]:
         control_repo_path = self.repo_path.resolve()

@@ -953,6 +953,47 @@ def test_archive_missing_clean_worktree_preserves_missing_status(tmp_path: Path)
     assert persisted.git_state.dirty_uncheckpointed is False
 
 
+def test_default_list_applies_and_persists_static_worktree_invariants_without_git_io(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    repo = make_repo(tmp_path)
+    service = make_service(tmp_path, repo)
+    required = service.create(SessionType.NEW_APP, "Required list")
+    required.worktree_path = None
+    required.status = SessionStatus.RUNNING
+    required.git_state.missing_worktree = False
+    service.registry.save(required)
+    control = service.create(SessionType.FEATURE, "Control list")
+    control.worktree_path = str(repo.resolve())
+    control.status = SessionStatus.RUNNING
+    control.git_state.missing_worktree = False
+    service.registry.save(control)
+    review = service.create(
+        SessionType.REVIEW,
+        "Review list",
+        create_worktree=False,
+    )
+
+    def fail_git_io():
+        raise AssertionError("default list must not access Git")
+
+    monkeypatch.setattr(service, "_fetch_origin_or_raise", fail_git_io)
+    monkeypatch.setattr(service, "_active_worktrees", fail_git_io)
+
+    listed = {session.id: session for session in service.list()}
+
+    assert listed[required.id].status == SessionStatus.MISSING_WORKTREE
+    assert listed[required.id].git_state.missing_worktree is True
+    assert listed[control.id].status == SessionStatus.MISSING_WORKTREE
+    assert listed[control.id].git_state.missing_worktree is True
+    assert listed[review.id].status == SessionStatus.RUNNING
+    assert listed[review.id].git_state.missing_worktree is False
+    assert service.registry.load(required.id).status == SessionStatus.MISSING_WORKTREE
+    assert service.registry.load(control.id).status == SessionStatus.MISSING_WORKTREE
+    assert service.registry.load(review.id).status == SessionStatus.RUNNING
+
+
 def test_checkpoint_archived_dirty_session_becomes_abandoned_when_clean(tmp_path: Path):
     repo = make_repo(tmp_path)
     service = make_service(tmp_path, repo)
