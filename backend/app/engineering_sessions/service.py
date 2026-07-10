@@ -239,11 +239,7 @@ class EngineeringSessionService:
             with self.registry.transaction_lock():
                 sessions = self.registry.list()
                 for session in sessions:
-                    if self._violates_static_worktree_invariant(session):
-                        self._mark_missing_worktree(
-                            session,
-                            update_last_sync=False,
-                        )
+                    if self._normalize_static_session_invariants(session):
                         self.registry.save(session)
                 return sessions
         with self.registry.transaction_lock():
@@ -380,6 +376,22 @@ class EngineeringSessionService:
         if session.worktree_path is None:
             return self.requires_worktree(session.type)
         return Path(session.worktree_path).resolve() == self.repo_path
+
+    def _normalize_static_session_invariants(
+        self,
+        session: EngineeringSession,
+    ) -> bool:
+        changed = False
+        if self._violates_static_worktree_invariant(session):
+            self._mark_missing_worktree(
+                session,
+                update_last_sync=False,
+            )
+            changed = True
+        if session.git_state.base_missing and session.cleanup.suggested:
+            session.cleanup.suggested = False
+            changed = True
+        return changed
 
     def _active_worktrees(self) -> dict[str, GitWorktreeEntry]:
         control_repo_path = self.repo_path.resolve()

@@ -1,5 +1,6 @@
 import json
 import os
+import shutil
 import subprocess
 import sys
 from pathlib import Path
@@ -282,6 +283,82 @@ def test_cli_default_list_outputs_and_persists_static_missing_worktree(
     saved = yaml.safe_load(registry_path.read_text(encoding="utf-8"))
     assert saved["status"] == "missing_worktree"
     assert saved["git_state"]["missing_worktree"] is True
+
+
+def test_cli_default_list_persists_static_base_missing_cleanup_without_git_scan(
+    tmp_path: Path,
+):
+    repo = make_repo(tmp_path)
+    registry = tmp_path / "sessions"
+    worktrees = tmp_path / "worktrees"
+    create = subprocess.run(
+        cli_command(
+            repo,
+            registry,
+            worktrees,
+            "create",
+            "--type",
+            "feature",
+            "--title",
+            "Static cleanup list",
+        ),
+        cwd=BACKEND_ROOT,
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    created = json.loads(create.stdout)
+    registry_path = registry / f"{created['id']}.yaml"
+    persisted = yaml.safe_load(registry_path.read_text(encoding="utf-8"))
+    persisted["status"] = "merged_retained"
+    persisted["git_state"]["base_missing"] = True
+    persisted["cleanup"]["suggested"] = True
+    registry_path.write_text(
+        yaml.safe_dump(persisted, allow_unicode=True, sort_keys=False),
+        encoding="utf-8",
+    )
+    run_git(repo, "remote", "add", "origin", str(tmp_path / "missing-origin.git"))
+
+    real_git = shutil.which("git")
+    assert real_git is not None
+    wrapper_dir = tmp_path / "git-wrapper"
+    wrapper_dir.mkdir()
+    wrapper = wrapper_dir / "git"
+    wrapper.write_text(
+        "#!/bin/sh\n"
+        'case " $* " in\n'
+        '  *" fetch "*|*" worktree "*) exit 97 ;;\n'
+        "esac\n"
+        'exec "$REAL_GIT" "$@"\n',
+        encoding="utf-8",
+    )
+    wrapper.chmod(0o755)
+    env = os.environ.copy()
+    env["PATH"] = f"{wrapper_dir}{os.pathsep}{env['PATH']}"
+    env["REAL_GIT"] = real_git
+
+    listed = subprocess.run(
+        cli_command(
+            repo,
+            registry,
+            worktrees,
+            "list",
+        ),
+        cwd=BACKEND_ROOT,
+        capture_output=True,
+        text=True,
+        env=env,
+    )
+
+    assert listed.returncode == 0, listed.stderr
+    data = json.loads(listed.stdout)
+    assert data[0]["status"] == "merged_retained"
+    assert data[0]["git_state"]["base_missing"] is True
+    assert data[0]["cleanup"]["suggested"] is False
+    saved = yaml.safe_load(registry_path.read_text(encoding="utf-8"))
+    assert saved["status"] == "merged_retained"
+    assert saved["git_state"]["base_missing"] is True
+    assert saved["cleanup"]["suggested"] is False
 
 
 @pytest.mark.parametrize("session_type", ["new-app", "spec-change"])

@@ -1465,6 +1465,35 @@ def test_default_list_applies_and_persists_static_worktree_invariants_without_gi
     assert service.registry.load(review.id).status == SessionStatus.RUNNING
 
 
+def test_default_list_persists_static_base_missing_cleanup_without_git_io(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    repo = make_repo(tmp_path)
+    service = make_service(tmp_path, repo)
+    session = service.create(SessionType.FEATURE, "Static cleanup list")
+    session.status = SessionStatus.MERGED_RETAINED
+    session.git_state.base_missing = True
+    session.cleanup.suggested = True
+    service.registry.save(session)
+
+    def fail_git_io():
+        raise AssertionError("default list must not fetch or scan worktrees")
+
+    monkeypatch.setattr(service, "_fetch_origin_or_raise", fail_git_io)
+    monkeypatch.setattr(service, "_active_worktrees", fail_git_io)
+
+    listed = service.list(sync=False)
+
+    assert listed[0].status == SessionStatus.MERGED_RETAINED
+    assert listed[0].git_state.base_missing is True
+    assert listed[0].cleanup.suggested is False
+    persisted = service.registry.load(session.id)
+    assert persisted.status == SessionStatus.MERGED_RETAINED
+    assert persisted.git_state.base_missing is True
+    assert persisted.cleanup.suggested is False
+
+
 def test_checkpoint_archived_dirty_session_becomes_abandoned_when_clean(tmp_path: Path):
     repo = make_repo(tmp_path)
     service = make_service(tmp_path, repo)
