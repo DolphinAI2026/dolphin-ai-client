@@ -374,6 +374,42 @@ def test_sync_recovers_running_after_missing_worktree_is_restored(tmp_path: Path
     assert restored.git_state.missing_worktree is False
 
 
+def test_restored_worktree_clears_missing_status_while_base_is_unavailable(
+    tmp_path: Path,
+):
+    repo = make_repo(tmp_path)
+    service = make_service(tmp_path, repo)
+    session = service.create(SessionType.FEATURE, "Restore without base")
+    worktree = Path(session.worktree_path)
+    base_head = run_git(repo, "rev-parse", "main")
+    run_git(repo, "worktree", "remove", str(worktree))
+    run_git(repo, "checkout", "-b", "parking-restore-without-base")
+    run_git(repo, "update-ref", "-d", "refs/heads/main")
+
+    missing = service.sync(session.id)
+
+    assert missing.status == SessionStatus.MISSING_WORKTREE
+    assert missing.git_state.missing_worktree is True
+    assert missing.cleanup.suggested is False
+
+    run_git(repo, "worktree", "add", str(worktree), session.branch)
+    unavailable = service.sync(session.id)
+
+    assert unavailable.status == SessionStatus.RUNNING
+    assert unavailable.git_state.missing_worktree is False
+    assert unavailable.git_state.branch_mismatch is False
+    assert unavailable.git_state.base_missing is True
+    assert unavailable.cleanup.suggested is False
+
+    run_git(repo, "update-ref", "refs/heads/main", base_head)
+    restored = service.sync(session.id)
+
+    assert restored.status == SessionStatus.RUNNING
+    assert restored.git_state.base_missing is False
+    assert restored.git_state.merged_to_base is False
+    assert restored.cleanup.suggested is False
+
+
 @pytest.mark.parametrize("action", ["checkpoint", "archive"])
 def test_base_outage_preserves_running_and_rejects_writes(
     tmp_path: Path,
@@ -974,6 +1010,60 @@ def test_resume_does_not_reactivate_branch_mismatch(tmp_path: Path):
 
     assert resumed.status == SessionStatus.ABANDONED_RETAINED
     assert resumed.git_state.branch_mismatch is True
+
+
+@pytest.mark.parametrize(
+    "previous_status",
+    [SessionStatus.MISSING_WORKTREE, SessionStatus.MERGED_RETAINED],
+)
+@pytest.mark.parametrize("entrypoint", _SYNCING_ENTRYPOINTS)
+def test_branch_mismatch_precedes_base_missing_across_syncing_entrypoints(
+    tmp_path: Path,
+    previous_status: SessionStatus,
+    entrypoint: str,
+):
+    repo = make_repo(tmp_path)
+    service = make_service(tmp_path, repo)
+    session = service.create(
+        SessionType.FEATURE,
+        f"Priority {previous_status.value} {entrypoint}",
+    )
+    worktree = Path(session.worktree_path)
+
+    if previous_status == SessionStatus.MISSING_WORKTREE:
+        run_git(repo, "worktree", "remove", str(worktree))
+        missing = service.sync(session.id)
+        assert missing.status == SessionStatus.MISSING_WORKTREE
+        run_git(repo, "worktree", "add", str(worktree), session.branch)
+    else:
+        (worktree / "merged.txt").write_text("merged\n", encoding="utf-8")
+        assert service.checkpoint(session.id) is True
+        run_git(repo, "merge", "--no-ff", session.branch, "-m", "merge session")
+        merged = service.sync(session.id)
+        assert merged.status == SessionStatus.MERGED_RETAINED
+
+    wrong_branch = f"wrong-{previous_status.value}-{entrypoint}"
+    run_git(worktree, "checkout", "-b", wrong_branch)
+    dirty_file = worktree / "mismatch-dirty.txt"
+    dirty_file.write_text("do not commit\n", encoding="utf-8")
+    before_head = run_git(worktree, "rev-parse", "HEAD")
+    run_git(repo, "checkout", "-b", f"parking-{previous_status.value}-{entrypoint}")
+    run_git(repo, "update-ref", "-d", "refs/heads/main")
+
+    observed = invoke_syncing_entrypoint(service, session.id, entrypoint)
+
+    assert observed.status == SessionStatus.RUNNING
+    assert observed.git_state.missing_worktree is False
+    assert observed.git_state.branch_mismatch is True
+    assert observed.git_state.base_missing is True
+    assert observed.cleanup.suggested is False
+    assert run_git(worktree, "rev-parse", "HEAD") == before_head
+    assert dirty_file.read_text(encoding="utf-8") == "do not commit\n"
+    assert service.checkpoint(session.id) is False
+    persisted = service.registry.load(session.id)
+    assert persisted.status == SessionStatus.RUNNING
+    assert persisted.git_state.branch_mismatch is True
+    assert persisted.git_state.base_missing is True
 
 
 def test_resume_preserves_clean_merged_retained_session(tmp_path: Path):

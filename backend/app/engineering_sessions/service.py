@@ -164,13 +164,18 @@ class EngineeringSessionService:
         if state.missing_worktree:
             session.status = SessionStatus.MISSING_WORKTREE
             session.cleanup.suggested = False
-        elif state.base_missing:
-            session.cleanup.suggested = False
-            return session
         elif state.branch_mismatch:
-            if previous_status == SessionStatus.MERGED_RETAINED:
+            if previous_status in (
+                SessionStatus.MISSING_WORKTREE,
+                SessionStatus.MERGED_RETAINED,
+            ):
                 session.status = SessionStatus.RUNNING
             session.cleanup.suggested = False
+        elif state.base_missing:
+            if previous_status == SessionStatus.MISSING_WORKTREE:
+                session.status = SessionStatus.RUNNING
+            session.cleanup.suggested = False
+            return session
         elif previous_status == SessionStatus.BLOCKED_RETAINED:
             session.status = SessionStatus.BLOCKED_RETAINED
             session.cleanup.suggested = False
