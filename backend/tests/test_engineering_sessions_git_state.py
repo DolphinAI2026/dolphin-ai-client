@@ -2,6 +2,8 @@ import shutil
 import subprocess
 from pathlib import Path
 
+import pytest
+
 import app.engineering_sessions.git_state as git_state
 from app.engineering_sessions.git_state import (
     current_branch,
@@ -116,6 +118,78 @@ def test_inspect_nested_repo_directory_is_not_a_worktree_root(tmp_path: Path):
 
     assert state.missing_worktree is True
     assert state.clean is False
+
+
+def test_git_operation_in_progress_detects_unmerged_index_without_marker(
+    tmp_path: Path,
+):
+    repo = make_repo(tmp_path)
+    run_git(repo, "checkout", "-b", "conflict")
+    (repo / "README.md").write_text("conflict\n", encoding="utf-8")
+    run_git(repo, "add", "README.md")
+    run_git(repo, "commit", "-m", "conflict change")
+    run_git(repo, "checkout", "main")
+    (repo / "README.md").write_text("main\n", encoding="utf-8")
+    run_git(repo, "add", "README.md")
+    run_git(repo, "commit", "-m", "main change")
+    merge = subprocess.run(
+        ["git", "-C", str(repo), "merge", "conflict"],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    assert merge.returncode != 0
+    merge_head = Path(
+        run_git(
+            repo,
+            "rev-parse",
+            "--path-format=absolute",
+            "--git-path",
+            "MERGE_HEAD",
+        )
+    )
+    merge_head.unlink()
+    assert run_git(repo, "ls-files", "--unmerged")
+
+    assert git_state.git_operation_in_progress(repo) is True
+
+
+@pytest.mark.parametrize(
+    ("marker", "is_directory"),
+    [
+        ("MERGE_HEAD", False),
+        ("CHERRY_PICK_HEAD", False),
+        ("REVERT_HEAD", False),
+        ("REBASE_HEAD", False),
+        ("BISECT_LOG", False),
+        ("BISECT_START", False),
+        ("rebase-merge", True),
+        ("rebase-apply", True),
+        ("sequencer", True),
+    ],
+)
+def test_git_operation_in_progress_detects_git_state_markers(
+    tmp_path: Path,
+    marker: str,
+    is_directory: bool,
+):
+    repo = make_repo(tmp_path)
+    marker_path = Path(
+        run_git(
+            repo,
+            "rev-parse",
+            "--path-format=absolute",
+            "--git-path",
+            marker,
+        )
+    )
+    marker_path.parent.mkdir(parents=True, exist_ok=True)
+    if is_directory:
+        marker_path.mkdir()
+    else:
+        marker_path.write_text("in progress\n", encoding="utf-8")
+
+    assert git_state.git_operation_in_progress(repo) is True
 
 
 def test_inspect_git_state_reports_branch_mismatch_and_very_stale(tmp_path: Path):

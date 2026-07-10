@@ -8,6 +8,7 @@ from app.engineering_sessions.git_state import (
     current_branch,
     fetch_origin,
     git,
+    git_operation_in_progress,
     has_ref,
     inspect_git_state,
     list_git_worktrees,
@@ -45,7 +46,14 @@ class EngineeringSessionService:
         registry_root: str | Path | None = None,
         worktree_parent: str | Path | None = None,
     ) -> None:
-        self.repo_path = Path(repo_path).resolve()
+        resolved_repo_path = Path(repo_path).resolve()
+        top_level = git(
+            resolved_repo_path,
+            "rev-parse",
+            "--path-format=absolute",
+            "--show-toplevel",
+        ).stdout.rstrip("\n")
+        self.repo_path = Path(top_level).resolve()
         self.worktree_parent = (
             Path(worktree_parent).resolve()
             if worktree_parent is not None
@@ -95,12 +103,19 @@ class EngineeringSessionService:
             self._fetch_origin_or_raise()
             session = self.registry.load(session_id)
             self._sync_session(session)
-            if (
-                session.worktree_path is None
-                or (
-                    not session.git_state.missing_worktree
-                    and not session.git_state.branch_mismatch
+            if session.worktree_path is None and self.requires_worktree(session.type):
+                dirty_uncheckpointed = session.git_state.dirty_uncheckpointed
+                session.git_state = inspect_git_state(
+                    None,
+                    base_branch=session.base_branch,
                 )
+                session.git_state.dirty_uncheckpointed = dirty_uncheckpointed
+                session.head_commit = None
+                session.status = SessionStatus.MISSING_WORKTREE
+                session.cleanup.suggested = False
+            elif session.worktree_path is None or (
+                not session.git_state.missing_worktree
+                and not session.git_state.branch_mismatch
             ):
                 session.status = SessionStatus.RUNNING
                 session.cleanup.suggested = False
@@ -139,6 +154,9 @@ class EngineeringSessionService:
             if previous_status == SessionStatus.MERGED_RETAINED:
                 session.status = SessionStatus.RUNNING
             session.cleanup.suggested = False
+        elif previous_status == SessionStatus.ORPHAN_SESSION:
+            session.status = SessionStatus.ORPHAN_SESSION
+            session.cleanup.suggested = state.clean and state.merged_to_base
         elif previous_status == SessionStatus.ARCHIVED_DIRTY and state.clean:
             if state.merged_to_base:
                 session.status = SessionStatus.MERGED_RETAINED
@@ -233,7 +251,7 @@ class EngineeringSessionService:
                     title=branch.removeprefix("session/"),
                     base_branch=base_branch,
                     worktree_path=path,
-                    base_commit=item["head"],
+                    base_commit=None,
                     roles=["engineering-manager"],
                 )
                 session.branch = branch
@@ -258,6 +276,7 @@ class EngineeringSessionService:
             session.worktree_path is None
             or session.git_state.missing_worktree
             or session.git_state.branch_mismatch
+            or git_operation_in_progress(session.worktree_path)
             or session.git_state.clean
         ):
             return False, session

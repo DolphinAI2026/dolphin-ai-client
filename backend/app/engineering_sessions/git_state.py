@@ -28,6 +28,17 @@ _CONFIG_ENV_KEYS = {
     "GIT_CONFIG_COUNT",
     "GIT_CONFIG_PARAMETERS",
 }
+_GIT_OPERATION_PATHS = (
+    "MERGE_HEAD",
+    "CHERRY_PICK_HEAD",
+    "REVERT_HEAD",
+    "REBASE_HEAD",
+    "BISECT_LOG",
+    "BISECT_START",
+    "rebase-merge",
+    "rebase-apply",
+    "sequencer",
+)
 
 
 class GitWorktreeEntry(TypedDict):
@@ -109,6 +120,23 @@ def has_ref(repo_path: str | Path, ref: str) -> bool:
 def status_clean(repo_path: str | Path) -> bool:
     result = git(repo_path, "status", "--porcelain", "-uall")
     return not result.stdout.strip()
+
+
+def git_operation_in_progress(repo_path: str | Path) -> bool:
+    if git(repo_path, "ls-files", "--unmerged").stdout.strip():
+        return True
+    for operation_path in _GIT_OPERATION_PATHS:
+        result = git(
+            repo_path,
+            "rev-parse",
+            "--path-format=absolute",
+            "--git-path",
+            operation_path,
+            check=False,
+        )
+        if result.returncode == 0 and Path(result.stdout.rstrip("\n")).exists():
+            return True
+    return False
 
 
 def ahead_behind(repo_path: str | Path, base_ref: str, head_ref: str = "HEAD") -> tuple[int, int]:
