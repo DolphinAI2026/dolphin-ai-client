@@ -197,7 +197,7 @@ def test_package_import_does_not_require_service_module_yet():
 cd backend && pytest tests/test_engineering_sessions_models.py -q
 ```
 
-预期：FAIL because `app.engineering_sessions.models` does not exist.
+预期：失败，因为 `app.engineering_sessions.models` 尚不存在。
 
 - [x] **步骤 3：实现模型**
 
@@ -486,7 +486,7 @@ def test_registry_reserves_ids_before_save_and_preserves_explicit_roles(tmp_path
 cd backend && pytest tests/test_engineering_sessions_registry.py -q
 ```
 
-预期：FAIL because `paths.py` and `registry.py` do not exist.
+预期：失败，因为 `paths.py` 和 `registry.py` 尚不存在。
 
 - [x] **步骤 3：实现路径工具**
 
@@ -879,7 +879,7 @@ def test_list_git_worktrees_preserves_newlines_in_paths(tmp_path: Path):
 cd backend && pytest tests/test_engineering_sessions_git_state.py -q
 ```
 
-预期：FAIL because `git_state.py` does not exist.
+预期：失败，因为 `git_state.py` 尚不存在。
 
 - [x] **步骤 3：实现 Git 状态模块**
 
@@ -1256,7 +1256,7 @@ def test_package_exports_service_after_service_module_exists():
 cd backend && pytest tests/test_engineering_sessions_service.py -q
 ```
 
-预期：FAIL because `service.py` does not exist.
+预期：失败，因为 `service.py` 尚不存在。
 
 - [x] **步骤 3：实现 service**
 
@@ -1607,7 +1607,7 @@ def test_cli_create_list_resume(tmp_path: Path):
 cd backend && pytest tests/test_engineering_sessions_cli.py -q
 ```
 
-预期：FAIL because `cli.py` does not exist.
+预期：失败，因为 `cli.py` 尚不存在。
 
 - [x] **步骤 3：实现 CLI**
 
@@ -1748,7 +1748,7 @@ git commit -m "feat: add engineering session cli"
 
 - [x] **步骤 1：增加 README 章节**
 
-Append this section near the local development or backend tooling section in `README.md`:
+在 `README.md` 的本地开发或后端工具章节附近增加以下内容：
 
 ````markdown
 ## 工程会话与 Worktree
@@ -1814,7 +1814,7 @@ python3 scripts/agentic_session.py --repo .. reconcile
 cd backend && python3 scripts/agentic_session.py --help
 ```
 
-预期：output contains `create`, `resume`, `sync`, `archive`, `checkpoint`, `reconcile`.
+预期：输出包含 `create`、`resume`、`sync`、`archive`、`checkpoint`、`reconcile`。
 
 - [x] **步骤 3：提交**
 
@@ -1901,7 +1901,7 @@ git commit -m "docs: refine engineering session usage"
 
 实际验证结果：
 
-- 工程会话聚焦测试：`56 passed`。
+- 工程会话聚焦测试：`73 passed`。
 - 相邻 workspace Git 测试：`17 passed`。
 - CLI smoke：创建 `S-001`，类型为 `doc-change`，分支为 `session/S-001-doc-change-readme-smoke`，`list --sync` 返回 1 条 clean 会话。
 - README 未被 smoke 修改，无需额外 README 提交。
@@ -1938,3 +1938,7 @@ git commit -m "docs: refine engineering session usage"
 - 配置了 `origin` 时，fetch 失败会阻止同步状态和 `last_sync_at` 落盘。
 - `new-app` 和 `spec-change` 在 service 与 CLI 两层强制使用 worktree。
 - checkpoint 提交后只做本地状态刷新，避免提交已成功但第二次 fetch 失败造成结果歧义。
+- worktree 同步会校验 Git common-dir，避免同路径、同分支名的其他仓库被误认并提交。
+- 主工作区与 linked worktree 使用同一个 Git common-dir 生成 repo id，共享中央 registry。
+- `resume` 仅在 worktree 存在且 branch 匹配时重新激活会话，并保留 `dirty_uncheckpointed` 风险标记。
+- branch mismatch 优先于 merged/cleanup 状态，错误分支不会触发清理建议。

@@ -79,14 +79,14 @@ cd backend
 python3 scripts/agentic_session.py --repo .. list --sync
 ```
 
-读取并同步单个会话：
+读取、同步并恢复单个会话：
 
 ```bash
 cd backend
 python3 scripts/agentic_session.py --repo .. resume S-001
 ```
 
-当前 `resume` 只刷新 registry 和 Git 状态；缺失的 worktree 会被标记，但不会自动重建。
+`resume` 会刷新 registry 和 Git 状态；当 worktree 存在且 branch 匹配时，会话重新进入 `running`。缺失的 worktree 会被标记但不会自动重建，branch mismatch 也不会被强制恢复。
 
 为会话创建 checkpoint：
 
