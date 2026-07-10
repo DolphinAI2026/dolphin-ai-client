@@ -139,6 +139,8 @@ class EngineeringSessionService:
             )
             session.head_commit = session.base_commit
             session.last_sync_at = utc_now()
+            if base_missing:
+                session.cleanup.suggested = False
             return session
 
         previous_status = session.status
@@ -163,6 +165,7 @@ class EngineeringSessionService:
             session.status = SessionStatus.MISSING_WORKTREE
             session.cleanup.suggested = False
         elif state.base_missing:
+            session.cleanup.suggested = False
             return session
         elif state.branch_mismatch:
             if previous_status == SessionStatus.MERGED_RETAINED:
