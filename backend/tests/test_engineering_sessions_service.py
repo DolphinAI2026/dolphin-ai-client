@@ -14,6 +14,15 @@ from app.engineering_sessions.models import SessionStatus, SessionType
 from app.engineering_sessions.registry import SessionRegistry
 from app.engineering_sessions.service import EngineeringSessionService
 
+_SYNCING_ENTRYPOINTS = (
+    "sync",
+    "list",
+    "checkpoint",
+    "archive",
+    "reconcile",
+    "resume",
+)
+
 
 def run_git(repo: Path, *args: str) -> str:
     result = subprocess.run(["git", "-C", str(repo), *args], check=True, capture_output=True, text=True)
@@ -47,6 +56,27 @@ def add_origin(repo: Path, tmp_path: Path) -> Path:
     run_git(repo, "remote", "add", "origin", str(origin))
     run_git(repo, "push", "-u", "origin", "main")
     return origin
+
+
+def invoke_syncing_entrypoint(
+    service: EngineeringSessionService,
+    session_id: str,
+    entrypoint: str,
+):
+    if entrypoint == "sync":
+        return service.sync(session_id)
+    if entrypoint == "list":
+        return next(item for item in service.list(sync=True) if item.id == session_id)
+    if entrypoint == "checkpoint":
+        assert service.checkpoint(session_id) is False
+        return service.registry.load(session_id)
+    if entrypoint == "archive":
+        return service.archive(session_id)
+    if entrypoint == "reconcile":
+        return next(item for item in service.reconcile() if item.id == session_id)
+    if entrypoint == "resume":
+        return service.resume(session_id)
+    raise AssertionError(f"unknown entrypoint: {entrypoint}")
 
 
 def test_create_builds_registry_and_worktree(tmp_path: Path):
@@ -354,6 +384,39 @@ def test_sync_does_not_rebind_session_to_control_repository(tmp_path: Path):
         run_git(repo, "checkout", "main")
 
 
+def test_sync_rejects_registry_worktree_path_pointing_to_control_repository(
+    tmp_path: Path,
+):
+    repo = make_repo(tmp_path)
+    service = make_service(tmp_path, repo)
+    session = service.create(SessionType.FEATURE, "Persisted control repository")
+    linked_worktree = Path(session.worktree_path)
+    run_git(repo, "worktree", "remove", str(linked_worktree))
+    run_git(repo, "checkout", session.branch)
+    session.worktree_path = str(repo.resolve())
+    service.registry.save(session)
+    dirty_file = repo / "control-dirty.txt"
+    dirty_file.write_text("do not checkpoint\n", encoding="utf-8")
+    control_head = run_git(repo, "rev-parse", "HEAD")
+
+    try:
+        synced = service.sync(session.id)
+        checkpointed = service.checkpoint(session.id)
+
+        persisted = service.registry.load(session.id)
+        assert synced.worktree_path == str(repo.resolve())
+        assert synced.status == SessionStatus.MISSING_WORKTREE
+        assert synced.git_state.missing_worktree is True
+        assert checkpointed is False
+        assert persisted.status == SessionStatus.MISSING_WORKTREE
+        assert persisted.git_state.missing_worktree is True
+        assert run_git(repo, "rev-parse", "HEAD") == control_head
+        assert dirty_file.read_text(encoding="utf-8") == "do not checkpoint\n"
+        assert run_git(repo, "status", "--porcelain")
+    finally:
+        run_git(repo, "checkout", "main")
+
+
 def test_nested_repo_path_does_not_rebind_session_to_control_repository(
     tmp_path: Path,
 ):
@@ -444,9 +507,11 @@ def test_resume_reactivates_abandoned_session_without_worktree(tmp_path: Path):
     "session_type",
     [SessionType.NEW_APP, SessionType.SPEC_CHANGE],
 )
-def test_resume_marks_required_session_missing_when_registry_lacks_worktree(
+@pytest.mark.parametrize("entrypoint", _SYNCING_ENTRYPOINTS)
+def test_required_session_missing_worktree_is_enforced_by_all_entrypoints(
     tmp_path: Path,
     session_type: SessionType,
+    entrypoint: str,
 ):
     repo = make_repo(tmp_path)
     service = make_service(tmp_path, repo)
@@ -457,16 +522,44 @@ def test_resume_marks_required_session_missing_when_registry_lacks_worktree(
     session.status = SessionStatus.ABANDONED_RETAINED
     service.registry.save(session)
 
-    resumed = service.resume(session.id)
+    observed = invoke_syncing_entrypoint(service, session.id, entrypoint)
 
     persisted = service.registry.load(session.id)
-    assert resumed.status == SessionStatus.MISSING_WORKTREE
-    assert resumed.worktree_path is None
-    assert resumed.git_state.missing_worktree is True
-    assert resumed.git_state.clean is False
-    assert resumed.cleanup.suggested is False
+    assert observed.status == SessionStatus.MISSING_WORKTREE
+    assert observed.worktree_path is None
+    assert observed.git_state.missing_worktree is True
+    assert observed.git_state.clean is False
+    assert observed.cleanup.suggested is False
     assert persisted.status == SessionStatus.MISSING_WORKTREE
     assert persisted.git_state.missing_worktree is True
+
+
+@pytest.mark.parametrize("entrypoint", _SYNCING_ENTRYPOINTS)
+def test_review_without_worktree_remains_valid_across_entrypoints(
+    tmp_path: Path,
+    entrypoint: str,
+):
+    repo = make_repo(tmp_path)
+    service = make_service(tmp_path, repo)
+    session = service.create(
+        SessionType.REVIEW,
+        "Review without worktree",
+        create_worktree=False,
+    )
+
+    observed = invoke_syncing_entrypoint(service, session.id, entrypoint)
+
+    expected_status = (
+        SessionStatus.ABANDONED_RETAINED
+        if entrypoint == "archive"
+        else SessionStatus.RUNNING
+    )
+    persisted = service.registry.load(session.id)
+    assert observed.status == expected_status
+    assert observed.worktree_path is None
+    assert observed.git_state.missing_worktree is False
+    assert persisted.status == expected_status
+    assert persisted.git_state.missing_worktree is False
 
 
 def test_resume_reactivates_archived_dirty_and_preserves_marker(tmp_path: Path):
