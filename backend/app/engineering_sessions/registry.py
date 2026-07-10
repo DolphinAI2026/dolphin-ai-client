@@ -1,6 +1,11 @@
 from __future__ import annotations
 
+import fcntl
 import re
+import tempfile
+import threading
+from collections.abc import Iterator
+from contextlib import contextmanager
 from pathlib import Path
 
 import yaml
@@ -12,6 +17,9 @@ from app.engineering_sessions.models import (
     utc_now,
 )
 from app.engineering_sessions.paths import registry_root_for_repo
+
+_TRANSACTION_LOCKS: dict[Path, threading.Lock] = {}
+_TRANSACTION_LOCKS_GUARD = threading.Lock()
 
 
 class SessionRegistryError(RuntimeError):
@@ -44,6 +52,20 @@ class SessionRegistry:
                 return session_id
             candidate += 1
 
+    @contextmanager
+    def transaction_lock(self) -> Iterator[None]:
+        self.root.mkdir(parents=True, exist_ok=True)
+        with _TRANSACTION_LOCKS_GUARD:
+            thread_lock = _TRANSACTION_LOCKS.setdefault(self.root, threading.Lock())
+        with thread_lock:
+            lock_path = self.root / ".transaction.lock"
+            with lock_path.open("a+", encoding="utf-8") as lock_file:
+                fcntl.flock(lock_file.fileno(), fcntl.LOCK_EX)
+                try:
+                    yield
+                finally:
+                    fcntl.flock(lock_file.fileno(), fcntl.LOCK_UN)
+
     def create(
         self,
         *,
@@ -74,9 +96,22 @@ class SessionRegistry:
         session.updated_at = utc_now()
         data = session.model_dump(mode="json")
         target = self.path_for(session.id)
-        tmp = target.with_suffix(".yaml.tmp")
-        tmp.write_text(yaml.safe_dump(data, allow_unicode=True, sort_keys=False), encoding="utf-8")
-        tmp.replace(target)
+        tmp_path: Path | None = None
+        try:
+            with tempfile.NamedTemporaryFile(
+                mode="w",
+                encoding="utf-8",
+                dir=self.root,
+                prefix=f".{target.name}.",
+                suffix=".tmp",
+                delete=False,
+            ) as tmp_file:
+                tmp_path = Path(tmp_file.name)
+                yaml.safe_dump(data, tmp_file, allow_unicode=True, sort_keys=False)
+            tmp_path.replace(target)
+        finally:
+            if tmp_path is not None:
+                tmp_path.unlink(missing_ok=True)
         return session
 
     def load(self, session_id: str) -> EngineeringSession:

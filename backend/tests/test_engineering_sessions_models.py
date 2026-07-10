@@ -63,11 +63,3 @@ def test_engineering_session_enum_defaults_dump_as_plain_strings():
 
     assert session.status == "verifying"
     assert assigned["status"] == "verifying"
-
-
-def test_package_import_does_not_require_service_module_yet():
-    import app.engineering_sessions as engineering_sessions
-
-    assert "EngineeringSession" in engineering_sessions.__all__
-    assert "EngineeringSessionService" not in engineering_sessions.__all__
-    assert hasattr(engineering_sessions, "EngineeringSessionService") is False

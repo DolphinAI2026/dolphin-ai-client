@@ -1,0 +1,689 @@
+import shutil
+import subprocess
+import time
+from concurrent.futures import ThreadPoolExecutor
+from contextlib import contextmanager
+from pathlib import Path
+from threading import Event
+
+import pytest
+
+import app.engineering_sessions as engineering_sessions
+from app.engineering_sessions.git_state import GitCommandError
+from app.engineering_sessions.models import SessionStatus, SessionType
+from app.engineering_sessions.registry import SessionRegistry
+from app.engineering_sessions.service import EngineeringSessionService
+
+
+def run_git(repo: Path, *args: str) -> str:
+    result = subprocess.run(["git", "-C", str(repo), *args], check=True, capture_output=True, text=True)
+    return result.stdout.strip()
+
+
+def make_repo(tmp_path: Path) -> Path:
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    run_git(repo, "init", "-b", "main")
+    run_git(repo, "config", "user.email", "t@example.com")
+    run_git(repo, "config", "user.name", "Tester")
+    (repo / "README.md").write_text("base\n", encoding="utf-8")
+    run_git(repo, "add", "README.md")
+    run_git(repo, "commit", "-m", "base")
+    return repo
+
+
+def make_service(tmp_path: Path, repo: Path) -> EngineeringSessionService:
+    return EngineeringSessionService(
+        repo,
+        registry_root=tmp_path / "sessions",
+        worktree_parent=tmp_path / "worktrees",
+    )
+
+
+def test_create_builds_registry_and_worktree(tmp_path: Path):
+    repo = make_repo(tmp_path)
+    service = make_service(tmp_path, repo)
+
+    session = service.create(SessionType.FEATURE, "Worktree sync")
+
+    worktree = Path(session.worktree_path)
+    loaded = service.registry.load(session.id)
+    assert session.id == "S-001"
+    assert worktree.exists()
+    assert run_git(worktree, "branch", "--show-current") == session.branch
+    assert loaded.branch == session.branch
+    assert loaded.status == SessionStatus.RUNNING
+    assert loaded.git_state.merged_to_base is False
+
+
+def test_create_uses_explicit_base_branch_head(tmp_path: Path):
+    repo = make_repo(tmp_path)
+    run_git(repo, "checkout", "-b", "release")
+    (repo / "release.txt").write_text("release\n", encoding="utf-8")
+    run_git(repo, "add", "release.txt")
+    run_git(repo, "commit", "-m", "release")
+    release_head = run_git(repo, "rev-parse", "HEAD")
+    run_git(repo, "checkout", "main")
+    (repo / "main.txt").write_text("main\n", encoding="utf-8")
+    run_git(repo, "add", "main.txt")
+    run_git(repo, "commit", "-m", "main")
+    service = make_service(tmp_path, repo)
+
+    session = service.create(SessionType.FEATURE, "Release work", base_branch="release")
+
+    worktree = Path(session.worktree_path)
+    assert session.base_commit == release_head
+    assert run_git(worktree, "rev-parse", "HEAD") == release_head
+    assert session.status == SessionStatus.RUNNING
+    assert session.git_state.merged_to_base is False
+
+
+def test_create_uses_captured_base_commit_if_base_advances_inside_lock(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    repo = make_repo(tmp_path)
+    service = make_service(tmp_path, repo)
+    captured_base_commit = run_git(repo, "rev-parse", "main")
+    original_transaction_lock = service.registry.transaction_lock
+
+    @contextmanager
+    def advancing_transaction_lock():
+        with original_transaction_lock():
+            (repo / "advanced.txt").write_text("advanced\n", encoding="utf-8")
+            run_git(repo, "add", "advanced.txt")
+            run_git(repo, "commit", "-m", "advance main")
+            yield
+
+    monkeypatch.setattr(
+        service.registry,
+        "transaction_lock",
+        advancing_transaction_lock,
+    )
+
+    session = service.create(SessionType.FEATURE, "Captured base")
+
+    worktree = Path(session.worktree_path)
+    assert run_git(repo, "rev-parse", "main") != captured_base_commit
+    assert session.base_commit == captured_base_commit
+    assert run_git(worktree, "rev-parse", "HEAD") == captured_base_commit
+    assert session.status == SessionStatus.RUNNING
+    assert session.git_state.merged_to_base is False
+
+
+def test_create_rejects_existing_worktree_owned_by_other_repo(tmp_path: Path):
+    first_root = tmp_path / "first"
+    first_root.mkdir()
+    first_repo = make_repo(first_root)
+    second_root = tmp_path / "second"
+    second_root.mkdir()
+    second_repo = make_repo(second_root)
+    worktree_parent = tmp_path / "shared-worktrees"
+    first_service = EngineeringSessionService(
+        first_repo,
+        registry_root=tmp_path / "first-sessions",
+        worktree_parent=worktree_parent,
+    )
+    second_service = EngineeringSessionService(
+        second_repo,
+        registry_root=tmp_path / "second-sessions",
+        worktree_parent=worktree_parent,
+    )
+    first_service.create(SessionType.FEATURE, "Shared path")
+
+    with pytest.raises(ValueError, match="does not belong"):
+        second_service.create(SessionType.FEATURE, "Shared path")
+
+
+def test_concurrent_create_allocates_distinct_sessions(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    repo = make_repo(tmp_path)
+    registry_root = tmp_path / "shared-sessions"
+    worktree_parent = tmp_path / "shared-worktrees"
+    first_service = EngineeringSessionService(
+        repo,
+        registry_root=registry_root,
+        worktree_parent=worktree_parent,
+    )
+    second_service = EngineeringSessionService(
+        repo,
+        registry_root=registry_root,
+        worktree_parent=worktree_parent,
+    )
+    original_next_id = SessionRegistry.next_id
+
+    def delayed_next_id(registry: SessionRegistry) -> str:
+        session_id = original_next_id(registry)
+        time.sleep(0.1)
+        return session_id
+
+    monkeypatch.setattr(SessionRegistry, "next_id", delayed_next_id)
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        futures = [
+            executor.submit(first_service.create, SessionType.FEATURE, "Concurrent first"),
+            executor.submit(second_service.create, SessionType.FEATURE, "Concurrent second"),
+        ]
+        sessions = [future.result() for future in futures]
+
+    assert sorted(session.id for session in sessions) == ["S-001", "S-002"]
+    assert sorted(path.name for path in registry_root.glob("S-*.yaml")) == [
+        "S-001.yaml",
+        "S-002.yaml",
+    ]
+    assert all(not path.name.endswith(".tmp") for path in registry_root.iterdir())
+    assert len({session.branch for session in sessions}) == 2
+    assert len({session.worktree_path for session in sessions}) == 2
+    for session in sessions:
+        worktree = Path(session.worktree_path)
+        persisted = first_service.registry.load(session.id)
+        assert worktree.exists()
+        assert run_git(worktree, "branch", "--show-current") == session.branch
+        assert persisted.branch == session.branch
+        assert persisted.worktree_path == session.worktree_path
+
+
+def test_create_without_worktree_remains_running(tmp_path: Path):
+    repo = make_repo(tmp_path)
+    service = make_service(tmp_path, repo)
+
+    session = service.create(SessionType.REVIEW, "Review only", create_worktree=False)
+
+    assert session.worktree_path is None
+    assert session.status == SessionStatus.RUNNING
+    assert session.git_state.missing_worktree is False
+
+
+def test_sync_updates_dirty_state(tmp_path: Path):
+    repo = make_repo(tmp_path)
+    service = make_service(tmp_path, repo)
+    session = service.create(SessionType.FEATURE, "Dirty state")
+    worktree = Path(session.worktree_path)
+    (worktree / "draft.txt").write_text("draft\n", encoding="utf-8")
+
+    synced = service.sync(session.id)
+
+    assert synced.git_state.clean is False
+    assert synced.git_state.current_branch == session.branch
+
+
+def test_sync_recovers_running_after_missing_worktree_is_restored(tmp_path: Path):
+    repo = make_repo(tmp_path)
+    service = make_service(tmp_path, repo)
+    session = service.create(SessionType.FEATURE, "Restore worktree")
+    worktree = Path(session.worktree_path)
+    run_git(repo, "worktree", "remove", str(worktree))
+
+    missing = service.sync(session.id)
+
+    assert missing.status == SessionStatus.MISSING_WORKTREE
+    assert missing.git_state.missing_worktree is True
+
+    run_git(repo, "worktree", "add", str(worktree), session.branch)
+    restored = service.sync(session.id)
+
+    assert restored.status == SessionStatus.RUNNING
+    assert restored.git_state.missing_worktree is False
+
+
+def test_resume_updates_worktree_path_after_move(tmp_path: Path):
+    repo = make_repo(tmp_path)
+    service = make_service(tmp_path, repo)
+    session = service.create(SessionType.FEATURE, "Resume moved worktree")
+    original = Path(session.worktree_path)
+    moved = tmp_path / "resumed-worktree"
+    run_git(repo, "worktree", "move", str(original), str(moved))
+
+    resumed = service.resume(session.id)
+
+    persisted = service.registry.load(session.id)
+    assert resumed.worktree_path == str(moved.resolve())
+    assert persisted.worktree_path == str(moved.resolve())
+    assert persisted.status == SessionStatus.RUNNING
+    assert persisted.git_state.missing_worktree is False
+
+
+def test_sync_fetch_failure_does_not_update_registry_state(tmp_path: Path):
+    repo = make_repo(tmp_path)
+    origin = tmp_path / "origin.git"
+    origin.mkdir()
+    run_git(origin, "init", "--bare", "-b", "main")
+    run_git(repo, "remote", "add", "origin", str(origin))
+    run_git(repo, "push", "-u", "origin", "main")
+    service = make_service(tmp_path, repo)
+    session = service.create(SessionType.FEATURE, "Fetch failure")
+    before = service.registry.load(session.id)
+    before_git_state = before.git_state.model_dump()
+    run_git(repo, "remote", "set-url", "origin", str(tmp_path / "missing-origin.git"))
+
+    with pytest.raises(GitCommandError, match="failed to fetch origin"):
+        service.sync(session.id)
+
+    persisted = service.registry.load(session.id)
+    assert persisted.last_sync_at == before.last_sync_at
+    assert persisted.git_state.model_dump() == before_git_state
+
+
+def test_sync_recovers_running_after_new_commit_on_merged_session(tmp_path: Path):
+    repo = make_repo(tmp_path)
+    service = make_service(tmp_path, repo)
+    session = service.create(SessionType.FEATURE, "Continue after merge")
+    worktree = Path(session.worktree_path)
+    (worktree / "first.txt").write_text("first\n", encoding="utf-8")
+    assert service.checkpoint(session.id) is True
+    run_git(repo, "merge", "--no-ff", session.branch, "-m", "merge session")
+
+    merged = service.sync(session.id)
+
+    assert merged.status == SessionStatus.MERGED_RETAINED
+    assert merged.cleanup.suggested is True
+
+    (worktree / "second.txt").write_text("second\n", encoding="utf-8")
+    assert service.checkpoint(session.id) is True
+    continued = service.sync(session.id)
+
+    assert continued.status == SessionStatus.RUNNING
+    assert continued.git_state.merged_to_base is False
+    assert continued.cleanup.suggested is False
+
+
+def test_checkpoint_commits_dirty_changes(tmp_path: Path):
+    repo = make_repo(tmp_path)
+    service = make_service(tmp_path, repo)
+    session = service.create(SessionType.FEATURE, "Checkpoint")
+    worktree = Path(session.worktree_path)
+    (worktree / "runbook.md").write_text("# Runbook\n", encoding="utf-8")
+
+    created = service.checkpoint(session.id)
+    synced = service.sync(session.id)
+
+    assert created is True
+    assert synced.git_state.clean is True
+    assert synced.git_state.ahead == 1
+
+
+def test_checkpoint_fetches_once_and_refreshes_registry_locally(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    repo = make_repo(tmp_path)
+    service = make_service(tmp_path, repo)
+    session = service.create(SessionType.FEATURE, "Single fetch checkpoint")
+    worktree = Path(session.worktree_path)
+    before_head = run_git(worktree, "rev-parse", "HEAD")
+    (worktree / "single-fetch.txt").write_text("single fetch\n", encoding="utf-8")
+    fetch_calls = 0
+
+    def fetch_once() -> None:
+        nonlocal fetch_calls
+        fetch_calls += 1
+        if fetch_calls > 1:
+            raise GitCommandError("unexpected second fetch")
+
+    monkeypatch.setattr(service, "_fetch_origin_or_raise", fetch_once)
+
+    created = service.checkpoint(session.id)
+
+    after_head = run_git(worktree, "rev-parse", "HEAD")
+    persisted = service.registry.load(session.id)
+    assert created is True
+    assert fetch_calls == 1
+    assert after_head != before_head
+    assert persisted.git_state.clean is True
+    assert persisted.head_commit == after_head
+
+
+def test_checkpoint_bypasses_hook_and_uses_custom_message(tmp_path: Path):
+    repo = make_repo(tmp_path)
+    service = make_service(tmp_path, repo)
+    session = service.create(SessionType.FEATURE, "Hook bypass")
+    worktree = Path(session.worktree_path)
+    hooks_dir = Path(
+        run_git(worktree, "rev-parse", "--path-format=absolute", "--git-common-dir")
+    ) / "hooks"
+    hooks_dir.mkdir(parents=True, exist_ok=True)
+    pre_commit = hooks_dir / "pre-commit"
+    pre_commit.write_text("#!/bin/sh\nexit 1\n", encoding="utf-8")
+    pre_commit.chmod(0o755)
+    (worktree / "hooked.txt").write_text("hook bypassed\n", encoding="utf-8")
+
+    created = service.checkpoint(session.id, message="custom checkpoint")
+
+    assert created is True
+    assert run_git(worktree, "log", "-1", "--pretty=%s") == "custom checkpoint"
+    assert run_git(worktree, "show", "HEAD:hooked.txt") == "hook bypassed"
+
+
+def test_checkpoint_missing_worktree_saves_missing_status(tmp_path: Path):
+    repo = make_repo(tmp_path)
+    service = make_service(tmp_path, repo)
+    session = service.create(SessionType.FEATURE, "Missing checkpoint")
+    worktree = Path(session.worktree_path)
+    run_git(repo, "worktree", "remove", str(worktree))
+
+    created = service.checkpoint(session.id)
+
+    persisted = service.registry.load(session.id)
+    assert created is False
+    assert persisted.status == SessionStatus.MISSING_WORKTREE
+    assert persisted.git_state.missing_worktree is True
+
+
+def test_checkpoint_merged_clean_session_saves_merged_status(tmp_path: Path):
+    repo = make_repo(tmp_path)
+    service = make_service(tmp_path, repo)
+    session = service.create(SessionType.FEATURE, "Merged checkpoint")
+    worktree = Path(session.worktree_path)
+    (worktree / "merged.txt").write_text("merged\n", encoding="utf-8")
+    assert service.checkpoint(session.id) is True
+    run_git(repo, "merge", "--no-ff", session.branch, "-m", "merge session")
+
+    created = service.checkpoint(session.id)
+
+    persisted = service.registry.load(session.id)
+    assert created is False
+    assert persisted.status == SessionStatus.MERGED_RETAINED
+    assert persisted.cleanup.suggested is True
+
+
+def test_archive_dirty_without_checkpoint_marks_archived_dirty(tmp_path: Path):
+    repo = make_repo(tmp_path)
+    service = make_service(tmp_path, repo)
+    session = service.create(SessionType.FEATURE, "Archive dirty")
+    worktree = Path(session.worktree_path)
+    (worktree / "notes.txt").write_text("unfinished\n", encoding="utf-8")
+
+    archived = service.archive(session.id, checkpoint=False)
+    synced = service.sync(session.id)
+
+    assert archived.status == SessionStatus.ARCHIVED_DIRTY
+    assert archived.git_state.dirty_uncheckpointed is True
+    assert synced.git_state.dirty_uncheckpointed is True
+
+
+def test_sync_missing_worktree_preserves_dirty_uncheckpointed_marker(tmp_path: Path):
+    repo = make_repo(tmp_path)
+    service = make_service(tmp_path, repo)
+    session = service.create(SessionType.FEATURE, "Missing dirty archive")
+    worktree = Path(session.worktree_path)
+    (worktree / "dirty.txt").write_text("dirty\n", encoding="utf-8")
+    archived = service.archive(session.id, checkpoint=False)
+    assert archived.status == SessionStatus.ARCHIVED_DIRTY
+    assert archived.git_state.dirty_uncheckpointed is True
+    shutil.rmtree(worktree)
+
+    missing = service.sync(session.id)
+
+    assert missing.status == SessionStatus.MISSING_WORKTREE
+    assert missing.git_state.dirty_uncheckpointed is True
+
+
+def test_archive_missing_clean_worktree_preserves_missing_status(tmp_path: Path):
+    repo = make_repo(tmp_path)
+    service = make_service(tmp_path, repo)
+    session = service.create(SessionType.FEATURE, "Archive missing")
+    worktree = Path(session.worktree_path)
+    run_git(repo, "worktree", "remove", str(worktree))
+
+    archived = service.archive(session.id)
+
+    persisted = service.registry.load(session.id)
+    assert archived.status == SessionStatus.MISSING_WORKTREE
+    assert persisted.status == SessionStatus.MISSING_WORKTREE
+    assert persisted.git_state.dirty_uncheckpointed is False
+
+
+def test_checkpoint_archived_dirty_session_becomes_abandoned_when_clean(tmp_path: Path):
+    repo = make_repo(tmp_path)
+    service = make_service(tmp_path, repo)
+    session = service.create(SessionType.FEATURE, "Finish archived work")
+    worktree = Path(session.worktree_path)
+    (worktree / "finish.txt").write_text("finish\n", encoding="utf-8")
+    archived = service.archive(session.id, checkpoint=False)
+    assert archived.status == SessionStatus.ARCHIVED_DIRTY
+
+    created = service.checkpoint(session.id)
+
+    persisted = service.registry.load(session.id)
+    assert created is True
+    assert persisted.status == SessionStatus.ABANDONED_RETAINED
+    assert persisted.git_state.clean is True
+    assert persisted.git_state.dirty_uncheckpointed is False
+    assert persisted.cleanup.suggested is False
+
+
+def test_checkpoint_rejects_branch_mismatch(tmp_path: Path):
+    repo = make_repo(tmp_path)
+    service = make_service(tmp_path, repo)
+    session = service.create(SessionType.FEATURE, "Branch mismatch")
+    worktree = Path(session.worktree_path)
+    run_git(worktree, "checkout", "-b", "wrong-branch")
+    (worktree / "wrong.txt").write_text("wrong\n", encoding="utf-8")
+
+    created = service.checkpoint(session.id)
+
+    assert created is False
+    assert run_git(worktree, "status", "--porcelain")
+
+
+def test_reconcile_creates_orphan_session_for_unregistered_worktree(tmp_path: Path):
+    repo = make_repo(tmp_path)
+    service = make_service(tmp_path, repo)
+    branch = "session/S-099-feature-orphan"
+    worktree = tmp_path / "orphan"
+    run_git(repo, "worktree", "add", "-b", branch, str(worktree), "main")
+
+    sessions = service.reconcile()
+
+    orphan = next(item for item in sessions if item.branch == branch)
+    assert orphan.status == SessionStatus.ORPHAN_SESSION
+    assert orphan.worktree_path == str(worktree)
+    assert orphan.git_state.current_branch == branch
+
+
+def test_reconcile_skips_prunable_worktree_entries(tmp_path: Path):
+    repo = make_repo(tmp_path)
+    service = make_service(tmp_path, repo)
+    branch = "session/S-100-feature-prunable"
+    worktree = tmp_path / "prunable"
+    run_git(repo, "worktree", "add", "-b", branch, str(worktree), "main")
+    shutil.rmtree(worktree)
+
+    sessions = service.reconcile()
+
+    assert all(item.branch != branch for item in sessions)
+
+
+def test_reconcile_updates_registered_worktree_path_after_move(tmp_path: Path):
+    repo = make_repo(tmp_path)
+    service = make_service(tmp_path, repo)
+    session = service.create(SessionType.FEATURE, "Moved worktree")
+    original = Path(session.worktree_path)
+    moved = tmp_path / "moved-worktree"
+    run_git(repo, "worktree", "move", str(original), str(moved))
+
+    sessions = service.reconcile()
+
+    reconciled = next(item for item in sessions if item.id == session.id)
+    persisted = service.registry.load(session.id)
+    assert reconciled.worktree_path == str(moved.resolve())
+    assert persisted.worktree_path == str(moved.resolve())
+    assert persisted.status == SessionStatus.RUNNING
+    assert persisted.git_state.missing_worktree is False
+
+
+def test_concurrent_create_and_reconcile_allocate_distinct_sessions(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    repo = make_repo(tmp_path)
+    orphan_branch = "session/S-099-feature-orphan-race"
+    orphan_worktree = tmp_path / "orphan-race"
+    run_git(
+        repo,
+        "worktree",
+        "add",
+        "-b",
+        orphan_branch,
+        str(orphan_worktree),
+        "main",
+    )
+    registry_root = tmp_path / "shared-sessions"
+    worktree_parent = tmp_path / "shared-worktrees"
+    create_service = EngineeringSessionService(
+        repo,
+        registry_root=registry_root,
+        worktree_parent=worktree_parent,
+    )
+    reconcile_service = EngineeringSessionService(
+        repo,
+        registry_root=registry_root,
+        worktree_parent=worktree_parent,
+    )
+    original_next_id = SessionRegistry.next_id
+
+    def delayed_next_id(registry: SessionRegistry) -> str:
+        session_id = original_next_id(registry)
+        time.sleep(0.1)
+        return session_id
+
+    monkeypatch.setattr(SessionRegistry, "next_id", delayed_next_id)
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        create_future = executor.submit(
+            create_service.create,
+            SessionType.FEATURE,
+            "Concurrent create",
+        )
+        reconcile_future = executor.submit(reconcile_service.reconcile)
+        created = create_future.result()
+        reconciled = reconcile_future.result()
+
+    persisted = create_service.registry.list()
+    assert sorted(session.id for session in persisted) == ["S-001", "S-002"]
+    assert sorted(path.name for path in registry_root.glob("S-*.yaml")) == [
+        "S-001.yaml",
+        "S-002.yaml",
+    ]
+    assert {session.branch for session in persisted} == {
+        created.branch,
+        orphan_branch,
+    }
+    assert any(session.branch == orphan_branch for session in reconciled)
+    for session in persisted:
+        assert session.worktree_path is not None
+        worktree = Path(session.worktree_path)
+        assert worktree.exists()
+        assert run_git(worktree, "branch", "--show-current") == session.branch
+
+
+def test_concurrent_reconcile_registers_orphan_once(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    repo = make_repo(tmp_path)
+    orphan_branch = "session/S-099-feature-single-orphan"
+    orphan_worktree = tmp_path / "single-orphan"
+    run_git(
+        repo,
+        "worktree",
+        "add",
+        "-b",
+        orphan_branch,
+        str(orphan_worktree),
+        "main",
+    )
+    registry_root = tmp_path / "shared-sessions"
+    first_service = EngineeringSessionService(
+        repo,
+        registry_root=registry_root,
+        worktree_parent=tmp_path / "shared-worktrees",
+    )
+    second_service = EngineeringSessionService(
+        repo,
+        registry_root=registry_root,
+        worktree_parent=tmp_path / "shared-worktrees",
+    )
+    original_create = SessionRegistry.create
+    create_calls = 0
+
+    def delayed_create(
+        registry: SessionRegistry,
+        **kwargs,
+    ):
+        nonlocal create_calls
+        create_calls += 1
+        time.sleep(0.1)
+        return original_create(registry, **kwargs)
+
+    monkeypatch.setattr(SessionRegistry, "create", delayed_create)
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        futures = [
+            executor.submit(first_service.reconcile),
+            executor.submit(second_service.reconcile),
+        ]
+        results = [future.result() for future in futures]
+
+    persisted = first_service.registry.list()
+    expected = [(persisted[0].id, orphan_branch)]
+    assert create_calls == 1
+    assert len(persisted) == 1
+    assert persisted[0].branch == orphan_branch
+    assert [
+        sorted((session.id, session.branch) for session in result)
+        for result in results
+    ] == [expected, expected]
+
+
+def test_reconcile_does_not_overwrite_concurrent_archive_state(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    repo = make_repo(tmp_path)
+    registry_root = tmp_path / "shared-sessions"
+    worktree_parent = tmp_path / "shared-worktrees"
+    reconcile_service = EngineeringSessionService(
+        repo,
+        registry_root=registry_root,
+        worktree_parent=worktree_parent,
+    )
+    archive_service = EngineeringSessionService(
+        repo,
+        registry_root=registry_root,
+        worktree_parent=worktree_parent,
+    )
+    session = archive_service.create(SessionType.FEATURE, "Concurrent archive")
+    worktree = Path(session.worktree_path)
+    (worktree / "dirty.txt").write_text("dirty\n", encoding="utf-8")
+    listed = Event()
+    archive_started = Event()
+    original_list = reconcile_service.registry.list
+
+    def delayed_list():
+        sessions = original_list()
+        listed.set()
+        assert archive_started.wait(timeout=2)
+        time.sleep(0.1)
+        return sessions
+
+    def archive_session():
+        archive_started.set()
+        return archive_service.archive(session.id, checkpoint=False)
+
+    monkeypatch.setattr(reconcile_service.registry, "list", delayed_list)
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        reconcile_future = executor.submit(reconcile_service.reconcile)
+        assert listed.wait(timeout=2)
+        archive_future = executor.submit(archive_session)
+        reconcile_future.result(timeout=5)
+        archived = archive_future.result(timeout=5)
+
+    persisted = archive_service.registry.load(session.id)
+    assert archived.status == SessionStatus.ARCHIVED_DIRTY
+    assert persisted.status == SessionStatus.ARCHIVED_DIRTY
+    assert persisted.git_state.dirty_uncheckpointed is True
+
+
+def test_package_exports_service_after_service_module_exists():
+    assert "EngineeringSessionService" in engineering_sessions.__all__
+    assert engineering_sessions.EngineeringSessionService is EngineeringSessionService
