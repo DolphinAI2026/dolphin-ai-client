@@ -326,6 +326,34 @@ def test_sync_rejects_replacement_worktree_from_other_repository(tmp_path: Path)
     assert run_git(repo, "rev-parse", session.branch) == session_branch_head
 
 
+def test_sync_does_not_rebind_session_to_control_repository(tmp_path: Path):
+    repo = make_repo(tmp_path)
+    service = make_service(tmp_path, repo)
+    session = service.create(SessionType.FEATURE, "Control repository isolation")
+    session_worktree_path = session.worktree_path
+    assert session_worktree_path is not None
+    linked_worktree = Path(session_worktree_path)
+    run_git(repo, "worktree", "remove", str(linked_worktree))
+    run_git(repo, "checkout", session.branch)
+    dirty_file = repo / "control-dirty.txt"
+    dirty_file.write_text("do not checkpoint\n", encoding="utf-8")
+    control_head = run_git(repo, "rev-parse", "HEAD")
+
+    try:
+        synced = service.sync(session.id)
+        checkpointed = service.checkpoint(session.id)
+
+        assert synced.worktree_path == session_worktree_path
+        assert synced.status == SessionStatus.MISSING_WORKTREE
+        assert synced.git_state.missing_worktree is True
+        assert checkpointed is False
+        assert run_git(repo, "rev-parse", "HEAD") == control_head
+        assert dirty_file.read_text(encoding="utf-8") == "do not checkpoint\n"
+        assert run_git(repo, "status", "--porcelain")
+    finally:
+        run_git(repo, "checkout", "main")
+
+
 def test_resume_updates_worktree_path_after_move(tmp_path: Path):
     repo = make_repo(tmp_path)
     service = make_service(tmp_path, repo)
@@ -353,6 +381,25 @@ def test_resume_reactivates_clean_abandoned_session(tmp_path: Path):
     resumed = service.resume(session.id)
 
     assert resumed.status == SessionStatus.RUNNING
+    assert resumed.cleanup.suggested is False
+
+
+def test_resume_reactivates_abandoned_session_without_worktree(tmp_path: Path):
+    repo = make_repo(tmp_path)
+    service = make_service(tmp_path, repo)
+    session = service.create(
+        SessionType.REVIEW,
+        "Resume review",
+        create_worktree=False,
+    )
+    archived = service.archive(session.id, checkpoint=False)
+    assert archived.status == SessionStatus.ABANDONED_RETAINED
+
+    resumed = service.resume(session.id)
+
+    assert resumed.status == SessionStatus.RUNNING
+    assert resumed.worktree_path is None
+    assert resumed.git_state.missing_worktree is False
     assert resumed.cleanup.suggested is False
 
 

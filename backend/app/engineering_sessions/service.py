@@ -96,9 +96,11 @@ class EngineeringSessionService:
             session = self.registry.load(session_id)
             self._sync_session(session)
             if (
-                session.worktree_path is not None
-                and not session.git_state.missing_worktree
-                and not session.git_state.branch_mismatch
+                session.worktree_path is None
+                or (
+                    not session.git_state.missing_worktree
+                    and not session.git_state.branch_mismatch
+                )
             ):
                 session.status = SessionStatus.RUNNING
                 session.cleanup.suggested = False
@@ -295,10 +297,11 @@ class EngineeringSessionService:
         return self.registry.save(session)
 
     def _active_worktrees(self) -> dict[str, GitWorktreeEntry]:
+        control_repo_path = self.repo_path.resolve()
         return {
             path: item
             for path, item in list_git_worktrees(self.repo_path).items()
-            if not item["prunable"]
+            if not item["prunable"] and Path(path).resolve() != control_repo_path
         }
 
     @staticmethod
