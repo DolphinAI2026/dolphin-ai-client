@@ -67,6 +67,17 @@ def test_enterprise_auth_account_unique_constraint():
     assert ("provider", "base_url", "tenant_ref", "account") in unique_columns
 
 
+def test_enterprise_auth_account_identity_index_is_mysql_safe():
+    account_model, _ = _enterprise_auth_models()
+    identity_columns = ("provider", "base_url", "tenant_ref", "account")
+    total_chars = sum(
+        account_model.__table__.c[column_name].type.length
+        for column_name in identity_columns
+    )
+
+    assert total_chars * 4 <= 3072
+
+
 def test_enterprise_auth_binding_fields_defaults_and_constraints():
     _, binding_model = _enterprise_auth_models()
     table = binding_model.__table__
