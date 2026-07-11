@@ -27,9 +27,11 @@ class Settings(BaseSettings):
     # "" keeps legacy behavior (try aPaaS when configured, then local fallback).
     # "local" uses ai-builder local accounts only.
     # "apaas" uses aPaaS only and never falls back to local passwords.
-    # "coding" authenticates against Dolphin Code Control Plane, then issues ai-builder JWT.
+    # "control_plane" authenticates against Dolphin Code Control Plane.
+    # Legacy "coding" remains accepted as a compatibility alias.
     auth_provider: str = ""
-    # Enables optional enterprise account bindings without changing auth_provider routing.
+    # Optional. Default false. When enabled, Builder best-effort refreshes the
+    # bound secondary credential after the primary login succeeds.
     auth_account_binding_enabled: bool = False
     apaas_base_url: str = ""
     # 桌面 sidecar: 公网账号权威地址(authority)。空=本实例自身就是 authority。
@@ -129,7 +131,7 @@ class Settings(BaseSettings):
     dolphin_api_key: str = ""
     dolphin_model: str = "gpt-5.5"
 
-    # Dolphin Code Control Plane OAuth/PKCE client used by AUTH_PROVIDER=coding.
+    # Dolphin Code Control Plane OAuth/PKCE client used by AUTH_PROVIDER=control_plane.
     dolphin_code_control_plane_url: str = ""
     dolphin_code_control_plane_token: str = ""
     dolphin_code_control_plane_delegation_secret: str = ""

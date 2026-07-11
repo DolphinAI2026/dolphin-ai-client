@@ -44,7 +44,7 @@ Builder 保持单一默认登录入口，并可由平台管理员选择是否启
 ```env
 # 可选项。Builder 默认登录方式。
 # 可选值：control_plane、apaas。
-# 默认值：control_plane。
+# 示例值：control_plane。未配置时保留现有兼容登录行为。
 AUTH_PROVIDER=control_plane
 
 # 可选项。是否启用 Control Plane 与 aPaaS 企业认证账号绑定。
@@ -70,11 +70,11 @@ AUTH_ACCOUNT_BINDING_ENABLED=false
 | `tenant_ref` | 对应系统的稳定租户标识 |
 | `tenant_name` | 管理界面展示名称，不作为匹配事实 |
 | `account` | 管理员账号 |
-| `password_enc` | 加密密码，只写不读 |
+| `password_enc` | 加密密码，仅在后端认证边界内解密，不返回前端 |
 | `access_token_enc` | 可选的加密短期 Token |
 | `refresh_token_enc` | 可选的加密刷新 Token |
 | `token_expires_at` | Token 过期时间 |
-| `status` | `enabled`、`disabled`、`error` |
+| `status` | `unverified`、`connected`、`error`、`disabled` |
 | `last_verified_at` | 最近成功验证时间 |
 | `last_error` | 脱敏并截断后的最近错误 |
 | `created_by` | Builder 平台管理员 ID |
@@ -174,7 +174,7 @@ Builder 本地 JWT 只代表 Builder 会话，不替代上游系统 Token。
 - Builder 登录成功。
 - 当前登录源相关功能正常可用。
 - 依赖另一认证源的功能禁用。
-- 后端返回稳定错误码 `ENTERPRISE_AUTH_BINDING_REQUIRED`。
+- 后端返回稳定错误码 `ENTERPRISE_AUTH_BINDING_UNAVAILABLE`。
 - 前端提示“当前租户尚未配置对应平台账号绑定，请联系平台管理员”。
 - 不要求普通用户输入另一侧账号密码。
 - 不回退到随机账号、全局管理员或全局 service token。
