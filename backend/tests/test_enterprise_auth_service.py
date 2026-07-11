@@ -260,16 +260,33 @@ async def test_resolve_bound_account_returns_unique_lowest_priority(auth_db):
 
 
 @pytest.mark.asyncio
-async def test_resolve_bound_account_locks_source_and_target_queries():
+async def test_resolve_bound_account_uses_canonical_lock_order_for_reverse_source(
+):
     source = _account(
         provider="control_plane",
         base_url="https://coding.example.com",
         tenant_ref="control",
         account="source-user",
     )
-    source.id = 1
+    source.id = 2
     target = _account(account="target-user")
-    target.id = 2
+    target.id = 1
+    binding = EnterpriseAuthBinding(
+        id=10,
+        left_account_id=target.id,
+        right_account_id=source.id,
+        priority=10,
+        enabled=True,
+        created_by=1,
+    )
+    orphan_binding = EnterpriseAuthBinding(
+        id=11,
+        left_account_id=source.id,
+        right_account_id=99,
+        priority=1,
+        enabled=True,
+        created_by=1,
+    )
     statements = []
 
     class FakeResult:
@@ -282,12 +299,19 @@ async def test_resolve_bound_account_locks_source_and_target_queries():
         def all(self):
             return self.value
 
+        def scalars(self):
+            return self
+
     class CapturingSession:
         async def execute(self, statement):
             statements.append(statement)
             if len(statements) == 1:
                 return FakeResult(source)
-            return FakeResult([(target, 10)])
+            if len(statements) == 2:
+                return FakeResult([(target.id, source.id), (source.id, 99)])
+            if len(statements) == 3:
+                return FakeResult([target, source])
+            return FakeResult([binding, orphan_binding])
 
     result = await resolve_bound_account(
         CapturingSession(),
@@ -300,12 +324,31 @@ async def test_resolve_bound_account_locks_source_and_target_queries():
     )
 
     compiled = [
-        str(statement.compile(dialect=mysql.dialect())).upper()
+        " ".join(
+            str(
+                statement.compile(
+                    dialect=mysql.dialect(),
+                    compile_kwargs={"literal_binds": True},
+                )
+            )
+            .upper()
+            .split()
+        )
         for statement in statements
     ]
     assert result.account is target
-    assert len(compiled) == 2
-    assert all("FOR UPDATE" in sql for sql in compiled)
+    assert len(compiled) == 4
+    assert all("FOR UPDATE" not in sql for sql in compiled[:2])
+    assert "IN (1, 2, 99)" in compiled[2]
+    assert (
+        "ORDER BY ENTERPRISE_AUTH_ACCOUNTS.ID ASC FOR UPDATE"
+        in compiled[2]
+    )
+    assert (
+        "ORDER BY ENTERPRISE_AUTH_BINDINGS.LEFT_ACCOUNT_ID ASC, "
+        "ENTERPRISE_AUTH_BINDINGS.RIGHT_ACCOUNT_ID ASC FOR UPDATE"
+        in compiled[3]
+    )
 
 
 @pytest.mark.asyncio
@@ -338,9 +381,20 @@ async def test_resolve_bound_account_works_in_reverse_direction(auth_db):
         "source-user",
         "apaas",
     )
+    locked_result = await resolve_bound_account(
+        db,
+        "control_plane",
+        "https://coding.example.com",
+        "control",
+        "source-user",
+        "apaas",
+        lock=True,
+    )
 
     assert result.code == OK
     assert result.account.id == target.id
+    assert locked_result.code == result.code
+    assert locked_result.account.id == result.account.id
 
 
 @pytest.mark.asyncio
