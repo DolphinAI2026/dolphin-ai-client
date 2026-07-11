@@ -32,6 +32,7 @@ from app.services.enterprise_auth import (
     read_refresh_token,
     refresh_bound_account_after_login,
     resolve_bound_account,
+    resolve_provider_token_for_context,
     set_account_password,
     set_account_tokens,
     validate_enterprise_base_url,
@@ -125,6 +126,54 @@ def test_validates_enterprise_base_url_without_blocking_local_deployments():
     )
 
 
+def test_enterprise_base_url_uses_idna2008_uts46_hostname_normalization():
+    assert (
+        validate_enterprise_base_url("https://faß.de/backend")
+        == "https://xn--fa-hia.de/backend"
+    )
+
+
+@pytest.mark.parametrize(
+    "base_url",
+    [
+        "https://bad_label.example.com",
+        "https://-leading-hyphen.example.com",
+        "https://trailing-hyphen-.example.com",
+    ],
+)
+def test_enterprise_base_url_rejects_invalid_idna_labels(base_url):
+    with pytest.raises(EnterpriseAuthError) as exc_info:
+        validate_enterprise_base_url(base_url)
+
+    assert exc_info.value.code == ENTERPRISE_AUTH_ACCOUNT_INVALID
+
+
+def test_enterprise_base_url_normalizes_rfc_dot_segments():
+    assert (
+        validate_enterprise_base_url("https://apaas.example.com/a/../b")
+        == validate_enterprise_base_url("https://apaas.example.com/b")
+        == "https://apaas.example.com/b"
+    )
+    assert (
+        validate_enterprise_base_url("https://apaas.example.com/a/./b/")
+        == "https://apaas.example.com/a/b"
+    )
+
+
+@pytest.mark.parametrize(
+    "base_url",
+    [
+        "https://apaas.example.com:0/backend",
+        "https://apaas.example.com:65536/backend",
+    ],
+)
+def test_enterprise_base_url_rejects_ports_outside_valid_range(base_url):
+    with pytest.raises(EnterpriseAuthError) as exc_info:
+        validate_enterprise_base_url(base_url)
+
+    assert exc_info.value.code == ENTERPRISE_AUTH_ACCOUNT_INVALID
+
+
 @pytest.mark.parametrize(
     "base_url",
     [
@@ -151,6 +200,10 @@ def test_base_url_origin_change_requires_new_credentials_contract():
         "https://apaas.example.com/backend",
         "https://APAAS.EXAMPLE.COM/other-path",
     )
+    assert not base_url_origin_changed(
+        "https://apaas.example.com:443/backend",
+        "https://apaas.example.com/other-path",
+    )
     assert base_url_origin_changed(
         "http://apaas.example.com/backend",
         "https://apaas.example.com/backend",
@@ -159,6 +212,16 @@ def test_base_url_origin_change_requires_new_credentials_contract():
         "https://apaas.example.com/backend",
         "https://apaas.example.com:8443/backend",
     )
+
+
+def test_base_url_origin_change_rejects_explicit_port_zero():
+    with pytest.raises(EnterpriseAuthError) as exc_info:
+        base_url_origin_changed(
+            "https://apaas.example.com:0/backend",
+            "https://apaas.example.com/backend",
+        )
+
+    assert exc_info.value.code == ENTERPRISE_AUTH_ACCOUNT_INVALID
 
 
 def test_account_credentials_are_encrypted_and_round_trip():
@@ -212,6 +275,358 @@ def test_token_reads_reject_expired_connected_account():
 
     assert read_access_token(account) is None
     assert read_refresh_token(account) is None
+
+
+@pytest.mark.asyncio
+async def test_resolve_provider_token_uses_current_coding_login_token_when_binding_disabled(
+    monkeypatch,
+):
+    from app.config import settings
+
+    class NoQuerySession:
+        async def execute(self, *_args, **_kwargs):
+            raise AssertionError("direct Control Plane login must not query bindings")
+
+    monkeypatch.setattr(settings, "auth_account_binding_enabled", False)
+    ctx = SimpleNamespace(
+        user=SimpleNamespace(
+            account_source="coding",
+            coding_access_token=" direct-control-plane-token ",
+        )
+    )
+
+    token = await resolve_provider_token_for_context(
+        NoQuerySession(),
+        ctx,
+        "control_plane",
+    )
+
+    assert token == "direct-control-plane-token"
+
+
+@pytest.mark.asyncio
+async def test_resolve_provider_token_uses_apaas_binding_identity_and_target_token(
+    monkeypatch,
+):
+    from app.config import settings
+    from app.services import enterprise_auth
+
+    target = _account(
+        provider="control_plane",
+        base_url="https://coding.example.com",
+        tenant_ref="control",
+        account="coding-user",
+    )
+    set_account_tokens(target, "bound-control-plane-token")
+    calls = []
+
+    async def fake_resolve_bound_account(*args, **kwargs):
+        calls.append((args, kwargs))
+        return enterprise_auth.BindingResolution(
+            account=target,
+            code=OK,
+            message="resolved",
+        )
+
+    monkeypatch.setattr(settings, "auth_account_binding_enabled", True)
+    monkeypatch.setattr(settings, "apaas_base_url", "https://settings.example.com")
+    monkeypatch.setattr(
+        enterprise_auth,
+        "resolve_bound_account",
+        fake_resolve_bound_account,
+    )
+    ctx = SimpleNamespace(
+        user=SimpleNamespace(
+            account_source="apaas",
+            username="apaas-user",
+            apaas_base_url="https://user.example.com/backend/",
+            apaas_tenant_id="user-tenant",
+        ),
+        tenant_id=7,
+        apaas_tenant_id="ctx-tenant",
+    )
+
+    token = await resolve_provider_token_for_context(
+        SimpleNamespace(),
+        ctx,
+        "control_plane",
+    )
+
+    assert token == "bound-control-plane-token"
+    assert calls == [(
+        (
+            SimpleNamespace(),
+            "apaas",
+            "https://user.example.com/backend/",
+            "ctx-tenant",
+            "apaas-user",
+            "control_plane",
+        ),
+        {},
+    )]
+
+
+@pytest.mark.asyncio
+async def test_resolve_provider_token_uses_local_tenant_apaas_id_as_last_fallback(
+    monkeypatch,
+):
+    from app.config import settings
+    from app.services import enterprise_auth
+
+    target = _account(provider="control_plane")
+    set_account_tokens(target, "bound-token")
+    captured = {}
+
+    class TenantResult:
+        def scalar_one_or_none(self):
+            return "local-apaas-tenant"
+
+    class TenantSession:
+        async def execute(self, _statement):
+            return TenantResult()
+
+    async def fake_resolve_bound_account(
+        db,
+        source_provider,
+        source_base_url,
+        source_tenant_ref,
+        source_account,
+        target_provider,
+    ):
+        captured.update(
+            db=db,
+            source_provider=source_provider,
+            source_base_url=source_base_url,
+            source_tenant_ref=source_tenant_ref,
+            source_account=source_account,
+            target_provider=target_provider,
+        )
+        return enterprise_auth.BindingResolution(target, OK, "resolved")
+
+    db = TenantSession()
+    monkeypatch.setattr(settings, "auth_account_binding_enabled", True)
+    monkeypatch.setattr(settings, "apaas_base_url", "https://settings.example.com")
+    monkeypatch.setattr(
+        enterprise_auth,
+        "resolve_bound_account",
+        fake_resolve_bound_account,
+    )
+    ctx = SimpleNamespace(
+        user=SimpleNamespace(
+            account_source="apaas",
+            username="apaas-user",
+            apaas_base_url=None,
+            apaas_tenant_id=None,
+        ),
+        tenant_id=7,
+        apaas_tenant_id=None,
+    )
+
+    token = await resolve_provider_token_for_context(db, ctx, "control_plane")
+
+    assert token == "bound-token"
+    assert captured == {
+        "db": db,
+        "source_provider": "apaas",
+        "source_base_url": "https://settings.example.com",
+        "source_tenant_ref": "local-apaas-tenant",
+        "source_account": "apaas-user",
+        "target_provider": "control_plane",
+    }
+
+
+@pytest.mark.asyncio
+async def test_resolve_provider_token_does_not_query_apaas_binding_when_disabled(
+    monkeypatch,
+):
+    from app.config import settings
+
+    class NoQuerySession:
+        async def execute(self, *_args, **_kwargs):
+            raise AssertionError("disabled binding must not query database")
+
+    monkeypatch.setattr(settings, "auth_account_binding_enabled", False)
+    ctx = SimpleNamespace(
+        user=SimpleNamespace(
+            account_source="apaas",
+            username="apaas-user",
+        )
+    )
+
+    token = await resolve_provider_token_for_context(
+        NoQuerySession(),
+        ctx,
+        "control_plane",
+    )
+
+    assert token is None
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "resolution_code",
+    [
+        ENTERPRISE_AUTH_BINDING_NOT_FOUND,
+        ENTERPRISE_AUTH_BINDING_AMBIGUOUS,
+        ENTERPRISE_AUTH_BINDING_UNAVAILABLE,
+    ],
+)
+async def test_resolve_provider_token_fails_closed_for_unusable_binding_resolution(
+    monkeypatch,
+    resolution_code,
+):
+    from app.config import settings
+    from app.services import enterprise_auth
+
+    async def fake_resolve_bound_account(*_args, **_kwargs):
+        return enterprise_auth.BindingResolution(
+            account=None,
+            code=resolution_code,
+            message="not usable",
+        )
+
+    monkeypatch.setattr(settings, "auth_account_binding_enabled", True)
+    monkeypatch.setattr(settings, "apaas_base_url", "https://apaas.example.com")
+    monkeypatch.setattr(
+        enterprise_auth,
+        "resolve_bound_account",
+        fake_resolve_bound_account,
+    )
+    ctx = SimpleNamespace(
+        user=SimpleNamespace(
+            account_source="apaas",
+            username="apaas-user",
+            apaas_base_url=None,
+            apaas_tenant_id="tenant-1",
+        ),
+        tenant_id=7,
+        apaas_tenant_id=None,
+    )
+
+    token = await resolve_provider_token_for_context(
+        SimpleNamespace(),
+        ctx,
+        "control_plane",
+    )
+
+    assert token is None
+
+
+@pytest.mark.asyncio
+async def test_resolve_provider_token_rejects_expired_bound_token(monkeypatch):
+    from app.config import settings
+    from app.services import enterprise_auth
+
+    target = _account(provider="control_plane")
+    set_account_tokens(
+        target,
+        "expired-token",
+        expires_at=datetime.now(UTC).replace(tzinfo=None) - timedelta(seconds=1),
+    )
+
+    async def fake_resolve_bound_account(*_args, **_kwargs):
+        return enterprise_auth.BindingResolution(target, OK, "resolved")
+
+    monkeypatch.setattr(settings, "auth_account_binding_enabled", True)
+    monkeypatch.setattr(settings, "apaas_base_url", "https://apaas.example.com")
+    monkeypatch.setattr(
+        enterprise_auth,
+        "resolve_bound_account",
+        fake_resolve_bound_account,
+    )
+    ctx = SimpleNamespace(
+        user=SimpleNamespace(
+            account_source="apaas",
+            username="apaas-user",
+            apaas_tenant_id="tenant-1",
+        ),
+        tenant_id=7,
+        apaas_tenant_id=None,
+    )
+
+    token = await resolve_provider_token_for_context(
+        SimpleNamespace(),
+        ctx,
+        "control_plane",
+    )
+
+    assert token is None
+
+
+@pytest.mark.asyncio
+async def test_resolve_provider_token_fails_closed_on_decryption_error(monkeypatch):
+    from app.config import settings
+    from app.services import enterprise_auth
+
+    target = _account(
+        provider="control_plane",
+        status=STATUS_CONNECTED,
+        access_token_enc="corrupt-token",
+    )
+
+    async def fake_resolve_bound_account(*_args, **_kwargs):
+        return enterprise_auth.BindingResolution(target, OK, "resolved")
+
+    def fail_decrypt(_value):
+        raise ValueError("secret material must not escape")
+
+    monkeypatch.setattr(settings, "auth_account_binding_enabled", True)
+    monkeypatch.setattr(settings, "apaas_base_url", "https://apaas.example.com")
+    monkeypatch.setattr(
+        enterprise_auth,
+        "resolve_bound_account",
+        fake_resolve_bound_account,
+    )
+    monkeypatch.setattr(enterprise_auth.crypto, "decrypt_password", fail_decrypt)
+    ctx = SimpleNamespace(
+        user=SimpleNamespace(
+            account_source="apaas",
+            username="apaas-user",
+            apaas_tenant_id="tenant-1",
+        ),
+        tenant_id=7,
+        apaas_tenant_id=None,
+    )
+
+    token = await resolve_provider_token_for_context(
+        SimpleNamespace(),
+        ctx,
+        "control_plane",
+    )
+
+    assert token is None
+
+
+@pytest.mark.asyncio
+async def test_resolve_provider_token_fails_closed_on_database_error(monkeypatch):
+    from app.config import settings
+
+    class FailingSession:
+        async def execute(self, *_args, **_kwargs):
+            raise RuntimeError("database unavailable")
+
+        async def rollback(self):
+            return None
+
+    monkeypatch.setattr(settings, "auth_account_binding_enabled", True)
+    monkeypatch.setattr(settings, "apaas_base_url", "https://apaas.example.com")
+    ctx = SimpleNamespace(
+        user=SimpleNamespace(
+            account_source="apaas",
+            username="apaas-user",
+            apaas_tenant_id=None,
+        ),
+        tenant_id=7,
+        apaas_tenant_id=None,
+    )
+
+    token = await resolve_provider_token_for_context(
+        FailingSession(),
+        ctx,
+        "control_plane",
+    )
+
+    assert token is None
 
 
 @pytest.mark.asyncio
@@ -930,6 +1345,92 @@ async def test_refresh_revalidates_binding_before_persisting_tokens(
     await db.refresh(stored)
     assert resolve_count == 2
     assert lock_values == [False, True]
+    assert result.code == ENTERPRISE_AUTH_BINDING_UNAVAILABLE
+    assert stored.access_token_enc is None
+    assert stored.refresh_token_enc is None
+    assert stored.status == STATUS_UNVERIFIED
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("field_name", "new_value"),
+    [
+        ("base_url", "https://changed.example.com"),
+        ("tenant_ref", "changed-tenant"),
+        ("account", "changed-account"),
+        ("password_enc", "changed-password-ciphertext"),
+    ],
+)
+async def test_refresh_discards_authenticated_token_when_target_credentials_change_before_relock(
+    auth_db,
+    monkeypatch,
+    field_name,
+    new_value,
+):
+    from app.config import settings
+    from app.services import enterprise_auth
+
+    db, owner_id = auth_db
+    source = await _persist_account(
+        db,
+        owner_id,
+        provider="control_plane",
+        base_url="https://coding.example.com",
+        tenant_ref="control",
+        account="source-user",
+    )
+    target = await _persist_account(
+        db,
+        owner_id,
+        provider="apaas",
+        base_url="https://apaas.example.com",
+        tenant_ref="tenant-1",
+        account="target-user",
+    )
+    set_account_password(target, "original-password")
+    await _persist_binding(db, owner_id, source, target, priority=10)
+    await db.commit()
+    target_id = target.id
+
+    original_resolve = enterprise_auth.resolve_bound_account
+    resolve_count = 0
+
+    async def fake_resolve(*args, **kwargs):
+        nonlocal resolve_count
+        resolve_count += 1
+        result = await original_resolve(*args, **kwargs)
+        if resolve_count == 2 and result.account is not None:
+            setattr(result.account, field_name, new_value)
+        return result
+
+    async def fake_authenticate(account):
+        set_account_tokens(
+            account,
+            "stale-access-token",
+            refresh_token="stale-refresh-token",
+        )
+        return account
+
+    monkeypatch.setattr(settings, "auth_account_binding_enabled", True)
+    monkeypatch.setattr(enterprise_auth, "resolve_bound_account", fake_resolve)
+    monkeypatch.setattr(
+        enterprise_auth,
+        "authenticate_enterprise_account",
+        fake_authenticate,
+    )
+
+    result = await refresh_bound_account_after_login(
+        db,
+        "coding",
+        "https://coding.example.com",
+        "control",
+        "source-user",
+        "apaas",
+    )
+
+    stored = await db.get(EnterpriseAuthAccount, target_id)
+    await db.refresh(stored)
+    assert resolve_count == 2
     assert result.code == ENTERPRISE_AUTH_BINDING_UNAVAILABLE
     assert stored.access_token_enc is None
     assert stored.refresh_token_enc is None

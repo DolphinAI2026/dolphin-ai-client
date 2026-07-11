@@ -190,22 +190,108 @@ def test_code_runtime_shell_config_exposes_external_session_rail_flag():
 
 
 @pytest.mark.asyncio
+async def test_list_code_runtime_applications_uses_resolved_control_plane_token(
+    monkeypatch,
+):
+    import app.routes.code_runtime as code_runtime_routes
+    from app.routes.code_runtime import list_code_runtime_applications
+
+    calls: list[dict] = []
+    db = SimpleNamespace()
+    ctx = _ctx()
+
+    async def fake_resolve_provider_token_for_context(
+        resolved_db,
+        resolved_ctx,
+        target_provider,
+    ):
+        calls.append({
+            "kind": "resolve",
+            "db": resolved_db,
+            "ctx": resolved_ctx,
+            "target_provider": target_provider,
+        })
+        return "bound-control-plane-token"
+
+    async def fake_list_code_applications(**kwargs):
+        calls.append({"kind": "list", **kwargs})
+        return {"items": []}
+
+    monkeypatch.setattr(
+        code_runtime_routes,
+        "resolve_provider_token_for_context",
+        fake_resolve_provider_token_for_context,
+    )
+    monkeypatch.setattr(
+        code_runtime_routes,
+        "list_code_applications",
+        fake_list_code_applications,
+    )
+
+    result = await list_code_runtime_applications(
+        ctx=ctx,
+        db=db,
+        keyword="crm",
+        provision_status="READY",
+        page=2,
+        page_size=5,
+    )
+
+    assert result == {"items": []}
+    assert calls == [
+        {
+            "kind": "resolve",
+            "db": db,
+            "ctx": ctx,
+            "target_provider": "control_plane",
+        },
+        {
+            "kind": "list",
+            "keyword": "crm",
+            "provision_status": "READY",
+            "page": 2,
+            "page_size": 5,
+            "control_plane_token": "bound-control-plane-token",
+        },
+    ]
+
+
+@pytest.mark.asyncio
 async def test_create_code_runtime_application_delegates_to_control_plane(monkeypatch):
     import app.routes.code_runtime as code_runtime_routes
     from app.routes.code_runtime import CreateCodeApplicationRequest, create_code_runtime_application
 
     calls: list[dict] = []
+    db = SimpleNamespace()
+    ctx = _ctx()
+
+    async def fake_resolve_provider_token_for_context(
+        resolved_db,
+        resolved_ctx,
+        target_provider,
+    ):
+        calls.append({
+            "kind": "resolve",
+            "db": resolved_db,
+            "ctx": resolved_ctx,
+            "target_provider": target_provider,
+        })
+        return "bound-control-plane-token"
 
     async def fake_create_code_application(**kwargs):
-        calls.append(kwargs)
+        calls.append({"kind": "create", **kwargs})
         return {
             "external_application_id": "code-app-new",
             "app_name": "销售线索评分助手",
             "app_code": "sales-lead-helper",
         }
 
+    monkeypatch.setattr(
+        code_runtime_routes,
+        "resolve_provider_token_for_context",
+        fake_resolve_provider_token_for_context,
+    )
     monkeypatch.setattr(code_runtime_routes, "create_code_application", fake_create_code_application)
-    request = SimpleNamespace(headers={"authorization": "Bearer user-token"})
 
     result = await create_code_runtime_application(
         CreateCodeApplicationRequest(
@@ -213,18 +299,193 @@ async def test_create_code_runtime_application_delegates_to_control_plane(monkey
             app_code="sales-lead-helper",
             seed_project_id="90001",
         ),
-        request,
-        _ctx(),
+        ctx,
+        db,
     )
 
     assert result["external_application_id"] == "code-app-new"
-    assert calls == [{
-        "app_name": "销售线索评分助手",
-        "app_code": "sales-lead-helper",
-        "seed_project_id": "90001",
-        "authorization_header": "Bearer user-token",
-        "delegated_context": _ctx(),
-    }]
+    assert calls == [
+        {
+            "kind": "resolve",
+            "db": db,
+            "ctx": ctx,
+            "target_provider": "control_plane",
+        },
+        {
+            "kind": "create",
+            "app_name": "销售线索评分助手",
+            "app_code": "sales-lead-helper",
+            "seed_project_id": "90001",
+            "control_plane_token": "bound-control-plane-token",
+            "delegated_context": ctx,
+        },
+    ]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("route_name", "route_args"),
+    [
+        ("list", {}),
+        (
+            "create",
+            {
+                "body": None,
+            },
+        ),
+    ],
+)
+async def test_code_application_routes_return_403_without_control_plane_token(
+    monkeypatch,
+    route_name,
+    route_args,
+):
+    from fastapi import HTTPException
+    import app.routes.code_runtime as code_runtime_routes
+    from app.routes.code_runtime import (
+        CreateCodeApplicationRequest,
+        create_code_runtime_application,
+        list_code_runtime_applications,
+    )
+
+    async def fake_resolve_provider_token_for_context(*_args, **_kwargs):
+        return None
+
+    monkeypatch.setattr(
+        code_runtime_routes,
+        "resolve_provider_token_for_context",
+        fake_resolve_provider_token_for_context,
+    )
+    ctx = _ctx()
+    db = SimpleNamespace()
+
+    with pytest.raises(HTTPException) as exc_info:
+        if route_name == "list":
+            await list_code_runtime_applications(ctx=ctx, db=db)
+        else:
+            route_args["body"] = CreateCodeApplicationRequest(
+                app_name="无绑定应用",
+                app_code="unbound-app",
+            )
+            await create_code_runtime_application(
+                route_args["body"],
+                ctx,
+                db,
+            )
+
+    assert exc_info.value.status_code == 403
+    assert (
+        exc_info.value.detail["code"]
+        == "ENTERPRISE_AUTH_BINDING_UNAVAILABLE"
+    )
+    assert (
+        "当前账号没有可用的 Control Plane 认证绑定"
+        in exc_info.value.detail["message"]
+    )
+
+
+@pytest.mark.asyncio
+async def test_open_code_runtime_session_passes_resolved_control_plane_token(
+    monkeypatch,
+):
+    import app.routes.code_runtime as code_runtime_routes
+    from app.routes.code_runtime import open_code_runtime_session
+
+    calls: list[dict] = []
+    ctx = _ctx()
+
+    class FakeSession:
+        async def commit(self):
+            calls.append({"kind": "commit"})
+
+    db = FakeSession()
+
+    async def fake_resolve_provider_token_for_context(
+        resolved_db,
+        resolved_ctx,
+        target_provider,
+    ):
+        calls.append({
+            "kind": "resolve",
+            "db": resolved_db,
+            "ctx": resolved_ctx,
+            "target_provider": target_provider,
+        })
+        return "bound-control-plane-token"
+
+    async def fake_open_code_session(**kwargs):
+        calls.append({"kind": "open", **kwargs})
+        return {"session_id": kwargs["session_id"]}
+
+    monkeypatch.setattr(
+        code_runtime_routes,
+        "resolve_provider_token_for_context",
+        fake_resolve_provider_token_for_context,
+    )
+    monkeypatch.setattr(
+        code_runtime_routes,
+        "open_code_session",
+        fake_open_code_session,
+    )
+
+    result = await open_code_runtime_session(17, ctx, db)
+
+    assert result == {"session_id": 17}
+    assert calls == [
+        {
+            "kind": "resolve",
+            "db": db,
+            "ctx": ctx,
+            "target_provider": "control_plane",
+        },
+        {
+            "kind": "open",
+            "db": db,
+            "session_id": 17,
+            "ctx": ctx,
+            "control_plane_token": "bound-control-plane-token",
+        },
+        {"kind": "commit"},
+    ]
+
+
+@pytest.mark.asyncio
+async def test_open_code_runtime_session_returns_403_without_control_plane_token(
+    monkeypatch,
+):
+    from fastapi import HTTPException
+    import app.routes.code_runtime as code_runtime_routes
+    from app.routes.code_runtime import open_code_runtime_session
+
+    async def fake_resolve_provider_token_for_context(*_args, **_kwargs):
+        return None
+
+    async def unexpected_open_code_session(**_kwargs):
+        raise AssertionError("open must not run without a Control Plane token")
+
+    monkeypatch.setattr(
+        code_runtime_routes,
+        "resolve_provider_token_for_context",
+        fake_resolve_provider_token_for_context,
+    )
+    monkeypatch.setattr(
+        code_runtime_routes,
+        "open_code_session",
+        unexpected_open_code_session,
+    )
+
+    with pytest.raises(HTTPException) as exc_info:
+        await open_code_runtime_session(17, _ctx(), SimpleNamespace())
+
+    assert exc_info.value.status_code == 403
+    assert (
+        exc_info.value.detail["code"]
+        == "ENTERPRISE_AUTH_BINDING_UNAVAILABLE"
+    )
+    assert (
+        exc_info.value.detail["message"]
+        == "当前账号没有可用的 Control Plane 认证绑定"
+    )
 
 
 @pytest.mark.asyncio

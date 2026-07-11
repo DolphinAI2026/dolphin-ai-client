@@ -9,6 +9,7 @@ import unicodedata
 from typing import Any, Iterable
 from urllib.parse import urlsplit
 
+import idna
 from sqlalchemy import and_, or_, select, update
 
 from app import crypto
@@ -16,6 +17,7 @@ from app.apaas_client import APaaSClient
 from app.code_runtime.auth import login_to_coding_control_plane
 from app.config import settings
 from app.models import EnterpriseAuthAccount, EnterpriseAuthBinding
+from app.models.tenant import Tenant
 
 PROVIDER_APAAS = "apaas"
 PROVIDER_CONTROL_PLANE = "control_plane"
@@ -100,7 +102,7 @@ def validate_enterprise_base_url(base_url: str) -> str:
         raise _account_invalid()
     try:
         parsed = urlsplit(raw)
-        _ = parsed.port
+        port = parsed.port
     except ValueError:
         raise _account_invalid() from None
     if (
@@ -113,6 +115,8 @@ def validate_enterprise_base_url(base_url: str) -> str:
         or parsed.fragment
     ):
         raise _account_invalid()
+    if port is not None and not 1 <= port <= 65535:
+        raise _account_invalid()
     raw_hostname = parsed.hostname.rstrip(".")
     if not raw_hostname:
         raise _account_invalid()
@@ -120,25 +124,67 @@ def validate_enterprise_base_url(base_url: str) -> str:
         ip_address = ipaddress.ip_address(raw_hostname)
     except ValueError:
         try:
-            hostname = raw_hostname.encode("idna").decode("ascii").lower()
-        except UnicodeError:
+            hostname = idna.encode(
+                raw_hostname,
+                uts46=True,
+                std3_rules=True,
+            ).decode("ascii").lower()
+        except (idna.IDNAError, UnicodeError):
             raise _account_invalid() from None
     else:
         hostname = ip_address.compressed.lower()
     if ":" in hostname:
         hostname = f"[{hostname}]"
-    port = parsed.port
     default_port = 443 if parsed.scheme.lower() == "https" else 80
     port_suffix = f":{port}" if port is not None and port != default_port else ""
-    path = parsed.path.rstrip("/")
+    path = _remove_url_dot_segments(parsed.path).rstrip("/")
     return f"{parsed.scheme.lower()}://{hostname}{port_suffix}{path}"
+
+
+def _remove_url_dot_segments(path: str) -> str:
+    input_buffer = str(path or "")
+    output_buffer = ""
+    while input_buffer:
+        if input_buffer.startswith("../"):
+            input_buffer = input_buffer[3:]
+        elif input_buffer.startswith("./"):
+            input_buffer = input_buffer[2:]
+        elif input_buffer.startswith("/./"):
+            input_buffer = "/" + input_buffer[3:]
+        elif input_buffer == "/.":
+            input_buffer = "/"
+        elif input_buffer.startswith("/../"):
+            input_buffer = "/" + input_buffer[4:]
+            output_buffer = output_buffer.rsplit("/", 1)[0]
+        elif input_buffer == "/..":
+            input_buffer = "/"
+            output_buffer = output_buffer.rsplit("/", 1)[0]
+        elif input_buffer in {".", ".."}:
+            input_buffer = ""
+        else:
+            separator_index = input_buffer.find(
+                "/",
+                1 if input_buffer.startswith("/") else 0,
+            )
+            if separator_index < 0:
+                output_buffer += input_buffer
+                input_buffer = ""
+            else:
+                output_buffer += input_buffer[:separator_index]
+                input_buffer = input_buffer[separator_index:]
+    return output_buffer
 
 
 def base_url_origin_changed(old_base_url: str, new_base_url: str) -> bool:
     def origin(base_url: str) -> tuple[str, str, int]:
         parsed = urlsplit(validate_enterprise_base_url(base_url))
         default_port = 443 if parsed.scheme == "https" else 80
-        return parsed.scheme, str(parsed.hostname or "").lower(), parsed.port or default_port
+        port = parsed.port
+        return (
+            parsed.scheme,
+            str(parsed.hostname or "").lower(),
+            default_port if port is None else port,
+        )
 
     return origin(old_base_url) != origin(new_base_url)
 
@@ -596,6 +642,78 @@ async def _rollback(db: Any) -> bool:
         return False
 
 
+async def resolve_provider_token_for_context(
+    db: Any,
+    ctx: Any,
+    target_provider: str,
+) -> str | None:
+    try:
+        normalized_target_provider = normalize_provider(target_provider)
+        if normalized_target_provider != PROVIDER_CONTROL_PLANE:
+            return None
+
+        user = getattr(ctx, "user", None)
+        account_source = str(
+            getattr(user, "account_source", "") or ""
+        ).strip().lower()
+        if account_source == "coding":
+            token = str(
+                getattr(user, "coding_access_token", "") or ""
+            ).strip()
+            return token or None
+
+        if (
+            account_source != PROVIDER_APAAS
+            or not settings.auth_account_binding_enabled
+        ):
+            return None
+
+        source_base_url = str(
+            getattr(user, "apaas_base_url", None)
+            or settings.apaas_base_url
+            or ""
+        ).strip()
+        source_tenant_ref = str(
+            getattr(ctx, "apaas_tenant_id", None)
+            or getattr(user, "apaas_tenant_id", None)
+            or ""
+        ).strip()
+        if not source_tenant_ref:
+            local_tenant_id = getattr(ctx, "tenant_id", None)
+            if local_tenant_id:
+                source_tenant_ref = str(
+                    (
+                        await db.execute(
+                            select(Tenant.apaas_tenant_id_str).where(
+                                Tenant.id == int(local_tenant_id)
+                            )
+                        )
+                    ).scalar_one_or_none()
+                    or ""
+                ).strip()
+        source_account = str(
+            getattr(user, "username", "") or ""
+        ).strip()
+        if not source_base_url or not source_tenant_ref or not source_account:
+            return None
+
+        resolution = await resolve_bound_account(
+            db,
+            PROVIDER_APAAS,
+            source_base_url,
+            source_tenant_ref,
+            source_account,
+            normalized_target_provider,
+        )
+        if resolution.code != OK or resolution.account is None:
+            return None
+        token = read_access_token(resolution.account)
+        return str(token or "").strip() or None
+    except Exception:
+        await _rollback(db)
+        return None
+
+
 async def _record_account_auth_failure(
     db: Any,
     account_id: int,
@@ -670,6 +788,9 @@ async def refresh_bound_account_after_login(
         return resolution
 
     target_account_id = resolution.account.id
+    target_credential_fingerprint = enterprise_auth_credential_fingerprint(
+        resolution.account
+    )
     try:
         await authenticate_enterprise_account(resolution.account)
         access_token = crypto.decrypt_password(resolution.account.access_token_enc)
@@ -707,6 +828,12 @@ async def refresh_bound_account_after_login(
     if (
         revalidated.account is None
         or revalidated.account.id != target_account_id
+    ):
+        await _rollback(db)
+        return _binding_unavailable()
+    if (
+        enterprise_auth_credential_fingerprint(revalidated.account)
+        != target_credential_fingerprint
     ):
         await _rollback(db)
         return _binding_unavailable()
