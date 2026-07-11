@@ -5,7 +5,7 @@ from datetime import UTC, datetime
 from typing import Any
 from urllib.parse import urlsplit
 
-from sqlalchemy import and_, or_, select
+from sqlalchemy import and_, or_, select, update
 
 from app import crypto
 from app.apaas_client import APaaSClient
@@ -141,19 +141,21 @@ async def resolve_bound_account(
     source_tenant_ref: str,
     source_account: str,
     target_provider: str,
+    lock: bool = False,
 ) -> BindingResolution:
     normalized_source_provider = normalize_provider(source_provider)
     normalized_target_provider = normalize_provider(target_provider)
+    source_statement = select(EnterpriseAuthAccount).where(
+        EnterpriseAuthAccount.provider == normalized_source_provider,
+        EnterpriseAuthAccount.base_url == normalize_base_url(source_base_url),
+        EnterpriseAuthAccount.tenant_ref == str(source_tenant_ref or "").strip(),
+        EnterpriseAuthAccount.account == str(source_account or "").strip(),
+        EnterpriseAuthAccount.status != STATUS_DISABLED,
+    )
+    if lock:
+        source_statement = source_statement.with_for_update()
     source = (
-        await db.execute(
-            select(EnterpriseAuthAccount).where(
-                EnterpriseAuthAccount.provider == normalized_source_provider,
-                EnterpriseAuthAccount.base_url == normalize_base_url(source_base_url),
-                EnterpriseAuthAccount.tenant_ref == str(source_tenant_ref or "").strip(),
-                EnterpriseAuthAccount.account == str(source_account or "").strip(),
-                EnterpriseAuthAccount.status != STATUS_DISABLED,
-            )
-        )
+        await db.execute(source_statement)
     ).scalar_one_or_none()
     if source is None:
         return BindingResolution(
@@ -162,32 +164,33 @@ async def resolve_bound_account(
             message="Enterprise account binding not found",
         )
 
-    rows = (
-        await db.execute(
-            select(EnterpriseAuthAccount, EnterpriseAuthBinding.priority)
-            .join(
-                EnterpriseAuthBinding,
-                or_(
-                    and_(
-                        EnterpriseAuthBinding.left_account_id == source.id,
-                        EnterpriseAuthBinding.right_account_id
-                        == EnterpriseAuthAccount.id,
-                    ),
-                    and_(
-                        EnterpriseAuthBinding.right_account_id == source.id,
-                        EnterpriseAuthBinding.left_account_id
-                        == EnterpriseAuthAccount.id,
-                    ),
+    target_statement = (
+        select(EnterpriseAuthAccount, EnterpriseAuthBinding.priority)
+        .join(
+            EnterpriseAuthBinding,
+            or_(
+                and_(
+                    EnterpriseAuthBinding.left_account_id == source.id,
+                    EnterpriseAuthBinding.right_account_id
+                    == EnterpriseAuthAccount.id,
                 ),
-            )
-            .where(
-                EnterpriseAuthBinding.enabled.is_(True),
-                EnterpriseAuthAccount.provider == normalized_target_provider,
-                EnterpriseAuthAccount.status != STATUS_DISABLED,
-            )
-            .order_by(EnterpriseAuthBinding.priority.asc())
+                and_(
+                    EnterpriseAuthBinding.right_account_id == source.id,
+                    EnterpriseAuthBinding.left_account_id
+                    == EnterpriseAuthAccount.id,
+                ),
+            ),
         )
-    ).all()
+        .where(
+            EnterpriseAuthBinding.enabled.is_(True),
+            EnterpriseAuthAccount.provider == normalized_target_provider,
+            EnterpriseAuthAccount.status != STATUS_DISABLED,
+        )
+        .order_by(EnterpriseAuthBinding.priority.asc())
+    )
+    if lock:
+        target_statement = target_statement.with_for_update()
+    rows = (await db.execute(target_statement)).all()
     if not rows:
         return BindingResolution(
             account=None,
@@ -275,22 +278,44 @@ async def _rollback(db: Any) -> bool:
 async def _record_account_auth_failure(
     db: Any,
     account_id: int,
+    error_message: str,
 ) -> Any | None:
     try:
-        account = await db.get(EnterpriseAuthAccount, account_id)
+        result = await db.execute(
+            update(EnterpriseAuthAccount)
+            .where(
+                EnterpriseAuthAccount.id == account_id,
+                EnterpriseAuthAccount.status != STATUS_DISABLED,
+            )
+            .values(
+                status=STATUS_ERROR,
+                last_error=error_message,
+            )
+            .execution_options(synchronize_session=False)
+        )
     except Exception:
         await _rollback(db)
         return None
-    if account is None or account.status == STATUS_DISABLED:
+    if result.rowcount != 1:
         await _rollback(db)
-        return account
-    account.status = STATUS_ERROR
-    account.last_error = "Enterprise account authentication failed"
+        try:
+            return await db.get(EnterpriseAuthAccount, account_id)
+        except Exception:
+            await _rollback(db)
+            return None
     try:
         await db.commit()
     except Exception:
         await _rollback(db)
-    return account
+        return None
+    try:
+        account = await db.get(EnterpriseAuthAccount, account_id)
+        if account is not None:
+            await db.refresh(account)
+        return account
+    except Exception:
+        await _rollback(db)
+        return None
 
 
 async def refresh_bound_account_after_login(
@@ -338,6 +363,7 @@ async def refresh_bound_account_after_login(
         failed_account = await _record_account_auth_failure(
             db,
             target_account_id,
+            "Enterprise account authentication failed",
         )
         return _binding_unavailable(failed_account)
 
@@ -352,6 +378,7 @@ async def refresh_bound_account_after_login(
             source_tenant_ref,
             source_account,
             target_provider,
+            lock=True,
         )
     except Exception:
         await _rollback(db)
@@ -373,23 +400,49 @@ async def refresh_bound_account_after_login(
         await _rollback(db)
         return _binding_unavailable()
 
-    set_account_tokens(
-        target_account,
-        access_token,
-        refresh_token=refresh_token,
-        expires_at=expires_at,
-    )
     try:
+        persistence_result = await db.execute(
+            update(EnterpriseAuthAccount)
+            .where(
+                EnterpriseAuthAccount.id == target_account_id,
+                EnterpriseAuthAccount.status != STATUS_DISABLED,
+            )
+            .values(
+                access_token_enc=crypto.encrypt_password(access_token),
+                refresh_token_enc=(
+                    crypto.encrypt_password(refresh_token)
+                    if refresh_token
+                    else None
+                ),
+                token_expires_at=expires_at,
+                status=STATUS_CONNECTED,
+                last_verified_at=datetime.now(UTC).replace(tzinfo=None),
+                last_error=None,
+            )
+            .execution_options(synchronize_session=False)
+        )
+        if persistence_result.rowcount != 1:
+            await _rollback(db)
+            return _binding_unavailable()
         await db.commit()
     except Exception:
         await _rollback(db)
         failed_account = await _record_account_auth_failure(
             db,
             target_account_id,
+            "Enterprise account credential persistence failed",
         )
         return _binding_unavailable(failed_account)
-    return BindingResolution(
-        account=target_account,
-        code=OK,
-        message="Enterprise account binding refreshed",
-    )
+    try:
+        persisted_account = await db.get(EnterpriseAuthAccount, target_account_id)
+        if persisted_account is None:
+            return _binding_unavailable()
+        await db.refresh(persisted_account)
+        return BindingResolution(
+            account=persisted_account,
+            code=OK,
+            message="Enterprise account binding refreshed",
+        )
+    except Exception:
+        await _rollback(db)
+        return _binding_unavailable()
