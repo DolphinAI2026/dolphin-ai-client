@@ -87,26 +87,10 @@ export interface EnterpriseAuthDeleteResult {
   deleted_id: number
 }
 
-export class EnterpriseAuthApiError extends Error {
-  code?: string
-  detail?: unknown
-
-  constructor(message: string, code?: string, detail?: unknown) {
-    super(message)
-    this.name = 'EnterpriseAuthApiError'
-    this.code = code
-    this.detail = detail
-  }
-}
-
-export function canonicalizeEnterpriseAuthPair(
-  firstAccountId: number,
-  secondAccountId: number,
-): [number, number] {
-  return firstAccountId <= secondAccountId
-    ? [firstAccountId, secondAccountId]
-    : [secondAccountId, firstAccountId]
-}
+export type EnterpriseAuthIdentitySource = Pick<
+  EnterpriseAuthAccountFormValue,
+  'provider' | 'base_url' | 'account'
+>
 
 export function isEnterpriseAuthBindingPairAllowed(
   left: Pick<EnterpriseAuthAccountSummary, 'id' | 'provider'> | null | undefined,
@@ -120,6 +104,39 @@ export function isEnterpriseAuthBindingPairAllowed(
   )
 }
 
+function baseUrlOrigin(value: string): string {
+  try {
+    return new URL(value.trim()).origin
+  } catch {
+    return value.trim().replace(/\/+$/, '')
+  }
+}
+
+export function hasEnterpriseAuthIdentitySourceChanged(
+  original: EnterpriseAuthIdentitySource,
+  current: EnterpriseAuthIdentitySource,
+): boolean {
+  return (
+    original.provider !== current.provider
+    || original.account.trim() !== current.account.trim()
+    || baseUrlOrigin(original.base_url) !== baseUrlOrigin(current.base_url)
+  )
+}
+
+export function sanitizeEnterpriseAuthLastError(
+  value: string | null | undefined,
+  maxLength = 96,
+): string {
+  const redacted = String(value || '')
+    .replace(/\bBearer\s+\S+/gi, 'Bearer ***')
+    .replace(
+      /\b(password|access[_-]?token|refresh[_-]?token|token)\s*[:=]\s*[^\s,;]+/gi,
+      '$1=***',
+    )
+  if (redacted.length <= maxLength) return redacted
+  return `${redacted.slice(0, Math.max(0, maxLength - 1))}…`
+}
+
 export function buildEnterpriseAuthAccountUpdatePayload(
   value: EnterpriseAuthAccountFormValue,
 ): EnterpriseAuthAccountUpdatePayload {
@@ -131,171 +148,41 @@ export function buildEnterpriseAuthAccountUpdatePayload(
     account: value.account.trim(),
     enabled: value.enabled,
   }
-  if (value.password.trim()) {
-    payload.password = value.password
-  }
+  if (value.password.trim()) payload.password = value.password
   return payload
 }
 
-function detailMessage(detail: unknown): string | undefined {
-  if (typeof detail === 'string' && detail.trim()) return detail
-  if (Array.isArray(detail)) {
-    const first = detail.find((item) => item && typeof item === 'object') as
-      | { msg?: unknown; message?: unknown }
-      | undefined
-    const message = first?.message ?? first?.msg
-    return typeof message === 'string' && message.trim() ? message : undefined
-  }
-  if (detail && typeof detail === 'object') {
-    const message = (detail as { message?: unknown }).message
-    return typeof message === 'string' && message.trim() ? message : undefined
-  }
-  return undefined
-}
-
-function normalizeEnterpriseAuthError(error: unknown): EnterpriseAuthApiError {
-  if (error instanceof EnterpriseAuthApiError) return error
-  const responseData = (
-    error as { response?: { data?: unknown } } | null | undefined
-  )?.response?.data
-  const data = responseData && typeof responseData === 'object'
-    ? responseData as Record<string, unknown>
-    : {}
-  const detail = data.detail
-  const detailRecord = detail && typeof detail === 'object' && !Array.isArray(detail)
-    ? detail as Record<string, unknown>
-    : {}
-  const topLevelCode = typeof data.code === 'string' ? data.code : undefined
-  const detailCode = typeof detailRecord.code === 'string' ? detailRecord.code : undefined
-  const topLevelMessage = typeof data.message === 'string' && data.message.trim()
-    ? data.message
-    : undefined
-  const fallbackMessage = (
-    error as { message?: unknown } | null | undefined
-  )?.message
-  const message = topLevelMessage
-    || detailMessage(detail)
-    || (typeof fallbackMessage === 'string' && fallbackMessage.trim()
-      ? fallbackMessage
-      : '企业认证请求失败')
-  return new EnterpriseAuthApiError(message, topLevelCode || detailCode, detail)
-}
-
-async function enterpriseAuthRequest<T>(operation: () => Promise<T>): Promise<T> {
-  try {
-    return await operation()
-  } catch (error) {
-    throw normalizeEnterpriseAuthError(error)
-  }
-}
-
-function canonicalBindingCreatePayload(
-  payload: EnterpriseAuthBindingCreatePayload,
-): EnterpriseAuthBindingCreatePayload {
-  const [leftAccountId, rightAccountId] = canonicalizeEnterpriseAuthPair(
-    payload.left_account_id,
-    payload.right_account_id,
-  )
-  return {
-    ...payload,
-    left_account_id: leftAccountId,
-    right_account_id: rightAccountId,
-  }
-}
-
-function canonicalBindingUpdatePayload(
-  payload: EnterpriseAuthBindingUpdatePayload,
-): EnterpriseAuthBindingUpdatePayload {
-  if (
-    payload.left_account_id === undefined
-    || payload.right_account_id === undefined
-  ) {
-    return payload
-  }
-  const [leftAccountId, rightAccountId] = canonicalizeEnterpriseAuthPair(
-    payload.left_account_id,
-    payload.right_account_id,
-  )
-  return {
-    ...payload,
-    left_account_id: leftAccountId,
-    right_account_id: rightAccountId,
-  }
-}
-
 export const enterpriseAuthApi = {
-  getStatus(): Promise<EnterpriseAuthStatus> {
-    return enterpriseAuthRequest(() =>
-      request.get<unknown, EnterpriseAuthStatus>('/enterprise-auth/status'))
-  },
-
-  listAccounts(): Promise<EnterpriseAuthAccount[]> {
-    return enterpriseAuthRequest(() =>
-      request.get<unknown, EnterpriseAuthAccount[]>('/enterprise-auth/accounts'))
-  },
-
-  createAccount(
-    payload: EnterpriseAuthAccountCreatePayload,
-  ): Promise<EnterpriseAuthAccount> {
-    return enterpriseAuthRequest(() =>
-      request.post<unknown, EnterpriseAuthAccount>('/enterprise-auth/accounts', payload))
-  },
-
-  updateAccount(
-    accountId: number,
-    payload: EnterpriseAuthAccountUpdatePayload,
-  ): Promise<EnterpriseAuthAccount> {
-    return enterpriseAuthRequest(() =>
-      request.put<unknown, EnterpriseAuthAccount>(
-        `/enterprise-auth/accounts/${accountId}`,
-        payload,
-      ))
-  },
-
-  testAccount(accountId: number): Promise<EnterpriseAuthAccount> {
-    return enterpriseAuthRequest(() =>
-      request.post<unknown, EnterpriseAuthAccount>(
-        `/enterprise-auth/accounts/${accountId}/test`,
-      ))
-  },
-
-  deleteAccount(accountId: number): Promise<EnterpriseAuthDeleteResult> {
-    return enterpriseAuthRequest(() =>
-      request.delete<unknown, EnterpriseAuthDeleteResult>(
-        `/enterprise-auth/accounts/${accountId}`,
-      ))
-  },
-
-  listBindings(): Promise<EnterpriseAuthBinding[]> {
-    return enterpriseAuthRequest(() =>
-      request.get<unknown, EnterpriseAuthBinding[]>('/enterprise-auth/bindings'))
-  },
-
-  createBinding(
-    payload: EnterpriseAuthBindingCreatePayload,
-  ): Promise<EnterpriseAuthBinding> {
-    return enterpriseAuthRequest(() =>
-      request.post<unknown, EnterpriseAuthBinding>(
-        '/enterprise-auth/bindings',
-        canonicalBindingCreatePayload(payload),
-      ))
-  },
-
-  updateBinding(
-    bindingId: number,
-    payload: EnterpriseAuthBindingUpdatePayload,
-  ): Promise<EnterpriseAuthBinding> {
-    return enterpriseAuthRequest(() =>
-      request.put<unknown, EnterpriseAuthBinding>(
-        `/enterprise-auth/bindings/${bindingId}`,
-        canonicalBindingUpdatePayload(payload),
-      ))
-  },
-
-  deleteBinding(bindingId: number): Promise<EnterpriseAuthDeleteResult> {
-    return enterpriseAuthRequest(() =>
-      request.delete<unknown, EnterpriseAuthDeleteResult>(
-        `/enterprise-auth/bindings/${bindingId}`,
-      ))
-  },
+  getStatus: () =>
+    request.get<unknown, EnterpriseAuthStatus>('/enterprise-auth/status'),
+  listAccounts: () =>
+    request.get<unknown, EnterpriseAuthAccount[]>('/enterprise-auth/accounts'),
+  createAccount: (payload: EnterpriseAuthAccountCreatePayload) =>
+    request.post<unknown, EnterpriseAuthAccount>('/enterprise-auth/accounts', payload),
+  updateAccount: (accountId: number, payload: EnterpriseAuthAccountUpdatePayload) =>
+    request.put<unknown, EnterpriseAuthAccount>(
+      `/enterprise-auth/accounts/${accountId}`,
+      payload,
+    ),
+  testAccount: (accountId: number) =>
+    request.post<unknown, EnterpriseAuthAccount>(
+      `/enterprise-auth/accounts/${accountId}/test`,
+    ),
+  deleteAccount: (accountId: number) =>
+    request.delete<unknown, EnterpriseAuthDeleteResult>(
+      `/enterprise-auth/accounts/${accountId}`,
+    ),
+  listBindings: () =>
+    request.get<unknown, EnterpriseAuthBinding[]>('/enterprise-auth/bindings'),
+  createBinding: (payload: EnterpriseAuthBindingCreatePayload) =>
+    request.post<unknown, EnterpriseAuthBinding>('/enterprise-auth/bindings', payload),
+  updateBinding: (bindingId: number, payload: EnterpriseAuthBindingUpdatePayload) =>
+    request.put<unknown, EnterpriseAuthBinding>(
+      `/enterprise-auth/bindings/${bindingId}`,
+      payload,
+    ),
+  deleteBinding: (bindingId: number) =>
+    request.delete<unknown, EnterpriseAuthDeleteResult>(
+      `/enterprise-auth/bindings/${bindingId}`,
+    ),
 }

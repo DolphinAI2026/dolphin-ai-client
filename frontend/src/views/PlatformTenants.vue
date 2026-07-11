@@ -318,7 +318,7 @@
         </template>
       </el-dialog>
         </el-tab-pane>
-        <el-tab-pane label="认证绑定" name="enterprise-auth">
+        <el-tab-pane label="认证绑定" name="enterprise-auth" lazy>
           <EnterpriseAuthBindingsPanel ref="enterpriseAuthPanelRef" />
         </el-tab-pane>
       </el-tabs>

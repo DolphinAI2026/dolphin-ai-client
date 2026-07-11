@@ -74,11 +74,25 @@
               <span class="muted-cell">{{ formatDate(row.last_verified_at) }}</span>
             </template>
           </el-table-column>
+          <el-table-column label="最近错误" min-width="190">
+            <template #default="{ row }">
+              <el-tooltip
+                v-if="row.last_error"
+                :content="sanitizeEnterpriseAuthLastError(row.last_error, 240)"
+                placement="top"
+              >
+                <span class="error-cell">
+                  {{ sanitizeEnterpriseAuthLastError(row.last_error, 48) }}
+                </span>
+              </el-tooltip>
+              <span v-else class="muted-cell">-</span>
+            </template>
+          </el-table-column>
           <el-table-column label="启用" width="76" align="center">
             <template #default="{ row }">
               <el-switch
                 :model-value="row.status !== 'disabled'"
-                :loading="accountMutationIds.has(row.id)"
+                :loading="busyAction === `account:${row.id}`"
                 @change="(value: boolean) => toggleAccount(row, value)"
               />
             </template>
@@ -102,7 +116,7 @@
                     :icon="Connection"
                     aria-label="连接测试"
                     :disabled="row.status === 'disabled'"
-                    :loading="testingAccountIds.has(row.id)"
+                    :loading="busyAction === `test:${row.id}`"
                     @click="testAccount(row)"
                   />
                 </el-tooltip>
@@ -143,12 +157,28 @@
         >
           <el-table-column label="左侧账号" min-width="245">
             <template #default="{ row }">
-              <AccountSummary :account="row.left_account" />
+              <div class="binding-account">
+                <el-tag size="small" effect="plain" :type="providerTagType(row.left_account.provider)">
+                  {{ providerLabel(row.left_account.provider) }}
+                </el-tag>
+                <div class="binding-account-text">
+                  <span>{{ row.left_account.account }}</span>
+                  <small>{{ accountDetail(row.left_account) }}</small>
+                </div>
+              </div>
             </template>
           </el-table-column>
           <el-table-column label="右侧账号" min-width="245">
             <template #default="{ row }">
-              <AccountSummary :account="row.right_account" />
+              <div class="binding-account">
+                <el-tag size="small" effect="plain" :type="providerTagType(row.right_account.provider)">
+                  {{ providerLabel(row.right_account.provider) }}
+                </el-tag>
+                <div class="binding-account-text">
+                  <span>{{ row.right_account.account }}</span>
+                  <small>{{ accountDetail(row.right_account) }}</small>
+                </div>
+              </div>
             </template>
           </el-table-column>
           <el-table-column prop="priority" label="优先级" width="94" align="right" />
@@ -156,7 +186,7 @@
             <template #default="{ row }">
               <el-switch
                 :model-value="row.enabled"
-                :loading="bindingMutationIds.has(row.id)"
+                :loading="busyAction === `binding:${row.id}`"
                 @change="(value: boolean) => toggleBinding(row, value)"
               />
             </template>
@@ -232,21 +262,25 @@
           <el-input v-model="accountForm.account" maxlength="128" autocomplete="off" />
         </el-form-item>
         <el-form-item
-          :label="accountEditingId ? '密码（留空则保持原密码）' : '密码'"
-          :required="!accountEditingId"
+          :label="accountPasswordLabel"
+          :required="accountPasswordRequired"
         >
           <el-input
             v-model="accountForm.password"
             type="password"
+            show-password
             autocomplete="new-password"
             maxlength="4096"
-            :placeholder="accountEditingId ? '留空则保持原密码' : '请输入认证密码'"
+            :placeholder="accountPasswordPlaceholder"
           />
+          <div v-if="accountIdentityChanged" class="form-hint">
+            身份来源变化需重新输入密码
+          </div>
         </el-form-item>
       </el-form>
       <template #footer>
         <el-button @click="accountDialogVisible = false">取消</el-button>
-        <el-button type="primary" :loading="savingAccount" @click="submitAccount">
+        <el-button type="primary" :loading="busyAction === 'account-save'" @click="submitAccount">
           保存
         </el-button>
       </template>
@@ -314,7 +348,7 @@
         <el-button @click="bindingDialogVisible = false">取消</el-button>
         <el-button
           type="primary"
-          :loading="savingBinding"
+          :loading="busyAction === 'binding-save'"
           :disabled="!bindingPairAllowed"
           @click="submitBinding"
         >
@@ -326,20 +360,24 @@
 </template>
 
 <script setup lang="ts">
-import { computed, defineComponent, h, onMounted, ref } from 'vue'
+import { computed, onMounted, ref } from 'vue'
 import { Connection, Delete, Edit, Link, Plus } from '@element-plus/icons-vue'
-import { ElMessage, ElMessageBox, ElTag } from 'element-plus'
+import { ElMessage, ElMessageBox } from 'element-plus'
 import {
   buildEnterpriseAuthAccountUpdatePayload,
   enterpriseAuthApi,
+  hasEnterpriseAuthIdentitySourceChanged,
   isEnterpriseAuthBindingPairAllowed,
+  sanitizeEnterpriseAuthLastError,
   type EnterpriseAuthAccount,
   type EnterpriseAuthAccountFormValue,
   type EnterpriseAuthAccountSummary,
   type EnterpriseAuthBinding,
+  type EnterpriseAuthIdentitySource,
   type EnterpriseAuthProvider,
   type EnterpriseAuthStatus,
 } from '@/api/enterpriseAuth'
+import { extractErrorMessage } from '@/utils/errorHandler'
 
 type BindingSide = 'left' | 'right'
 
@@ -350,45 +388,19 @@ interface BindingFormValue {
   enabled: boolean
 }
 
-const AccountSummary = defineComponent({
-  name: 'EnterpriseAuthAccountSummary',
-  props: {
-    account: {
-      type: Object as () => EnterpriseAuthAccountSummary,
-      required: true,
-    },
-  },
-  setup(props) {
-    return () => h('div', { class: 'binding-account' }, [
-      h(ElTag, {
-        size: 'small',
-        effect: 'plain',
-        type: providerTagType(props.account.provider),
-      }, () => providerLabel(props.account.provider)),
-      h('div', { class: 'binding-account-text' }, [
-        h('span', props.account.account),
-        h('small', `${props.account.tenant_name || props.account.tenant_ref} · ${props.account.base_url}`),
-      ]),
-    ])
-  },
-})
-
 const loading = ref(false)
 const status = ref<EnterpriseAuthStatus | null>(null)
 const accounts = ref<EnterpriseAuthAccount[]>([])
 const bindings = ref<EnterpriseAuthBinding[]>([])
+const busyAction = ref('')
 
 const accountDialogVisible = ref(false)
 const accountEditingId = ref<number | null>(null)
-const savingAccount = ref(false)
-const accountMutationIds = ref(new Set<number>())
-const testingAccountIds = ref(new Set<number>())
 const accountForm = ref<EnterpriseAuthAccountFormValue>(emptyAccountForm())
+const accountOriginalIdentity = ref<EnterpriseAuthIdentitySource | null>(null)
 
 const bindingDialogVisible = ref(false)
 const bindingEditingId = ref<number | null>(null)
-const savingBinding = ref(false)
-const bindingMutationIds = ref(new Set<number>())
 const bindingForm = ref<BindingFormValue>(emptyBindingForm())
 
 const selectedLeftAccount = computed(() =>
@@ -399,6 +411,27 @@ const selectedBindingAccounts = computed(() =>
   Boolean(selectedLeftAccount.value && selectedRightAccount.value))
 const bindingPairAllowed = computed(() =>
   isEnterpriseAuthBindingPairAllowed(selectedLeftAccount.value, selectedRightAccount.value))
+const accountIdentityChanged = computed(() => Boolean(
+  accountOriginalIdentity.value
+  && hasEnterpriseAuthIdentitySourceChanged(
+    accountOriginalIdentity.value,
+    accountForm.value,
+  ),
+))
+const accountPasswordRequired = computed(() =>
+  !accountEditingId.value || accountIdentityChanged.value)
+const accountPasswordLabel = computed(() => {
+  if (!accountEditingId.value) return '密码'
+  return accountIdentityChanged.value
+    ? '密码（身份来源变化需重新输入密码）'
+    : '密码（留空则保持原密码）'
+})
+const accountPasswordPlaceholder = computed(() => {
+  if (!accountEditingId.value) return '请输入认证密码'
+  return accountIdentityChanged.value
+    ? '身份来源变化需重新输入密码'
+    : '留空则保持原密码'
+})
 
 function emptyAccountForm(): EnterpriseAuthAccountFormValue {
   return {
@@ -464,11 +497,17 @@ function accountOptionLabel(account: EnterpriseAuthAccountSummary): string {
   return `${providerLabel(account.provider)} · ${tenant} · ${account.account}`
 }
 
-function replaceSetValue(target: typeof accountMutationIds, id: number, active: boolean) {
-  const next = new Set(target.value)
-  if (active) next.add(id)
-  else next.delete(id)
-  target.value = next
+function accountDetail(account: EnterpriseAuthAccountSummary): string {
+  return `${account.tenant_name || account.tenant_ref} · ${account.base_url}`
+}
+
+function authErrorMessage(error: unknown, fallback: string): string {
+  const topLevelMessage = (
+    error as { response?: { data?: { message?: unknown } } }
+  )?.response?.data?.message
+  return extractErrorMessage(
+    typeof topLevelMessage === 'string' ? topLevelMessage : error,
+  ) || fallback
 }
 
 function upsertAccount(updated: EnterpriseAuthAccount) {
@@ -503,7 +542,7 @@ async function refresh() {
     accounts.value = nextAccounts
     bindings.value = nextBindings
   } catch (error) {
-    ElMessage.error(error instanceof Error ? error.message : '加载企业认证配置失败')
+    ElMessage.error(authErrorMessage(error, '加载企业认证配置失败'))
   } finally {
     loading.value = false
   }
@@ -511,12 +550,18 @@ async function refresh() {
 
 function openCreateAccount() {
   accountEditingId.value = null
+  accountOriginalIdentity.value = null
   accountForm.value = emptyAccountForm()
   accountDialogVisible.value = true
 }
 
 function openEditAccount(account: EnterpriseAuthAccount) {
   accountEditingId.value = account.id
+  accountOriginalIdentity.value = {
+    provider: account.provider,
+    base_url: account.base_url,
+    account: account.account,
+  }
   accountForm.value = {
     provider: account.provider,
     base_url: account.base_url,
@@ -542,8 +587,12 @@ function validateAccountForm(): boolean {
     ElMessage.warning('请输入账号')
     return false
   }
-  if (!accountEditingId.value && !accountForm.value.password.trim()) {
-    ElMessage.warning('请输入认证密码')
+  if (accountPasswordRequired.value && !accountForm.value.password.trim()) {
+    ElMessage.warning(
+      accountIdentityChanged.value
+        ? '身份来源变化需重新输入密码'
+        : '请输入认证密码',
+    )
     return false
   }
   return true
@@ -551,7 +600,7 @@ function validateAccountForm(): boolean {
 
 async function submitAccount() {
   if (!validateAccountForm()) return
-  savingAccount.value = true
+  busyAction.value = 'account-save'
   try {
     const editingId = accountEditingId.value
     const updated = editingId
@@ -573,14 +622,14 @@ async function submitAccount() {
     accountDialogVisible.value = false
     ElMessage.success(editingId ? '认证账号已更新' : '认证账号已创建')
   } catch (error) {
-    ElMessage.error(error instanceof Error ? error.message : '保存认证账号失败')
+    ElMessage.error(authErrorMessage(error, '保存认证账号失败'))
   } finally {
-    savingAccount.value = false
+    busyAction.value = ''
   }
 }
 
 async function testAccount(account: EnterpriseAuthAccount) {
-  replaceSetValue(testingAccountIds, account.id, true)
+  busyAction.value = `test:${account.id}`
   try {
     const updated = await enterpriseAuthApi.testAccount(account.id)
     upsertAccount(updated)
@@ -588,23 +637,23 @@ async function testAccount(account: EnterpriseAuthAccount) {
     ElMessage.success('连接测试通过')
   } catch (error) {
     await refresh()
-    ElMessage.error(error instanceof Error ? error.message : '连接测试失败')
+    ElMessage.error(authErrorMessage(error, '连接测试失败'))
   } finally {
-    replaceSetValue(testingAccountIds, account.id, false)
+    busyAction.value = ''
   }
 }
 
 async function toggleAccount(account: EnterpriseAuthAccount, enabled: boolean) {
-  replaceSetValue(accountMutationIds, account.id, true)
+  busyAction.value = `account:${account.id}`
   try {
     const updated = await enterpriseAuthApi.updateAccount(account.id, { enabled })
     upsertAccount(updated)
     await loadBindings()
     ElMessage.success(enabled ? '认证账号已启用' : '认证账号已停用')
   } catch (error) {
-    ElMessage.error(error instanceof Error ? error.message : '更新账号状态失败')
+    ElMessage.error(authErrorMessage(error, '更新账号状态失败'))
   } finally {
-    replaceSetValue(accountMutationIds, account.id, false)
+    busyAction.value = ''
   }
 }
 
@@ -622,7 +671,7 @@ async function confirmDeleteAccount(account: EnterpriseAuthAccount) {
   } catch {
     return
   }
-  replaceSetValue(accountMutationIds, account.id, true)
+  busyAction.value = `account:${account.id}`
   try {
     await enterpriseAuthApi.deleteAccount(account.id)
     accounts.value = accounts.value.filter((item) => item.id !== account.id)
@@ -630,9 +679,9 @@ async function confirmDeleteAccount(account: EnterpriseAuthAccount) {
       item.left_account_id !== account.id && item.right_account_id !== account.id)
     ElMessage.success('认证账号已删除')
   } catch (error) {
-    ElMessage.error(error instanceof Error ? error.message : '删除认证账号失败')
+    ElMessage.error(authErrorMessage(error, '删除认证账号失败'))
   } finally {
-    replaceSetValue(accountMutationIds, account.id, false)
+    busyAction.value = ''
   }
 }
 
@@ -675,7 +724,7 @@ async function submitBinding() {
   const leftAccountId = bindingForm.value.left_account_id
   const rightAccountId = bindingForm.value.right_account_id
   if (leftAccountId === null || rightAccountId === null) return
-  savingBinding.value = true
+  busyAction.value = 'binding-save'
   try {
     const payload = {
       left_account_id: leftAccountId,
@@ -691,22 +740,22 @@ async function submitBinding() {
     bindingDialogVisible.value = false
     ElMessage.success(editingId ? '账号绑定已更新' : '账号绑定已创建')
   } catch (error) {
-    ElMessage.error(error instanceof Error ? error.message : '保存账号绑定失败')
+    ElMessage.error(authErrorMessage(error, '保存账号绑定失败'))
   } finally {
-    savingBinding.value = false
+    busyAction.value = ''
   }
 }
 
 async function toggleBinding(binding: EnterpriseAuthBinding, enabled: boolean) {
-  replaceSetValue(bindingMutationIds, binding.id, true)
+  busyAction.value = `binding:${binding.id}`
   try {
     const updated = await enterpriseAuthApi.updateBinding(binding.id, { enabled })
     upsertBinding(updated)
     ElMessage.success(enabled ? '账号绑定已启用' : '账号绑定已停用')
   } catch (error) {
-    ElMessage.error(error instanceof Error ? error.message : '更新绑定状态失败')
+    ElMessage.error(authErrorMessage(error, '更新绑定状态失败'))
   } finally {
-    replaceSetValue(bindingMutationIds, binding.id, false)
+    busyAction.value = ''
   }
 }
 
@@ -724,15 +773,15 @@ async function confirmDeleteBinding(binding: EnterpriseAuthBinding) {
   } catch {
     return
   }
-  replaceSetValue(bindingMutationIds, binding.id, true)
+  busyAction.value = `binding:${binding.id}`
   try {
     await enterpriseAuthApi.deleteBinding(binding.id)
     bindings.value = bindings.value.filter((item) => item.id !== binding.id)
     ElMessage.success('账号绑定已删除')
   } catch (error) {
-    ElMessage.error(error instanceof Error ? error.message : '删除账号绑定失败')
+    ElMessage.error(authErrorMessage(error, '删除账号绑定失败'))
   } finally {
-    replaceSetValue(bindingMutationIds, binding.id, false)
+    busyAction.value = ''
   }
 }
 
@@ -742,98 +791,63 @@ onMounted(refresh)
 </script>
 
 <style scoped>
-.enterprise-auth-panel {
-  min-width: 0;
-  color: var(--text);
-}
-
+.enterprise-auth-panel { min-width: 0; color: var(--text); }
 .enterprise-auth-heading,
 .section-heading,
-.section-heading > div {
-  display: flex;
-  align-items: center;
-}
-
+.section-heading > div { display: flex; align-items: center; }
 .enterprise-auth-heading {
   justify-content: space-between;
   gap: 20px;
   margin-bottom: 16px;
 }
-
 .enterprise-auth-heading h2 {
   margin: 0 0 4px;
   font-size: 20px;
   font-weight: var(--fw-bold);
 }
-
 .enterprise-auth-heading p {
   margin: 0;
   color: var(--text-3);
   font-size: 13px;
   line-height: 1.5;
 }
-
-.enterprise-auth-status {
-  margin-bottom: 20px;
-  border-radius: 6px;
-}
-
-.enterprise-auth-section + .enterprise-auth-section {
-  margin-top: 24px;
-}
-
+.enterprise-auth-status { margin-bottom: 20px; border-radius: 6px; }
+.enterprise-auth-section + .enterprise-auth-section { margin-top: 24px; }
 .section-heading {
   justify-content: space-between;
   gap: 16px;
   margin-bottom: 10px;
 }
-
-.section-heading > div {
-  gap: 10px;
-}
-
+.section-heading > div { gap: 10px; }
 .section-heading h3 {
   margin: 0;
   font-size: 15px;
   font-weight: var(--fw-semibold);
 }
-
-.section-heading span {
-  color: var(--text-3);
-  font-size: 12px;
-}
-
+.section-heading span { color: var(--text-3); font-size: 12px; }
 .auth-table-shell {
   min-width: 0;
-  overflow-x: auto;
+  overflow: hidden;
   border: 1px solid var(--line);
   border-radius: 6px;
   background: var(--surface);
 }
-
 .auth-table-shell :deep(.el-table) {
-  min-width: 920px;
+  width: 100%;
+  min-width: 0;
   --el-table-header-bg-color: var(--surface-2);
   --el-table-header-text-color: var(--text-2);
   --el-table-border-color: var(--line);
   --el-table-row-hover-bg-color: var(--surface-2);
   font-size: 13px;
 }
-
 .auth-table-shell :deep(.el-table th.el-table__cell) {
   padding: 9px 0;
   font-size: 12px;
   font-weight: var(--fw-semibold);
 }
-
-.auth-table-shell :deep(.el-table td.el-table__cell) {
-  padding: 8px 0;
-}
-
-.auth-table-shell :deep(.el-table__inner-wrapper::before) {
-  display: none;
-}
-
+.auth-table-shell :deep(.el-table td.el-table__cell) { padding: 8px 0; }
+.auth-table-shell :deep(.el-table__inner-wrapper::before) { display: none; }
 .cell-ellipsis {
   display: block;
   max-width: 100%;
@@ -841,7 +855,14 @@ onMounted(refresh)
   text-overflow: ellipsis;
   white-space: nowrap;
 }
-
+.error-cell {
+  display: block;
+  overflow: hidden;
+  color: var(--err);
+  font-size: 11.5px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
 .stacked-cell,
 .binding-account-text {
   display: flex;
@@ -849,73 +870,44 @@ onMounted(refresh)
   flex-direction: column;
   gap: 2px;
 }
-
 .stacked-cell code,
 .binding-account-text small,
 .muted-cell {
   color: var(--text-3);
   font-size: 11.5px;
 }
-
-.stacked-cell code {
-  font-family: var(--font-mono);
-}
-
+.stacked-cell code { font-family: var(--font-mono); }
 .icon-actions,
-.binding-account {
-  display: flex;
-  align-items: center;
-}
-
-.icon-actions {
-  justify-content: center;
-  gap: 2px;
-}
-
+.binding-account { display: flex; align-items: center; }
+.icon-actions { justify-content: center; gap: 2px; }
 .icon-actions :deep(.el-button) {
   width: 30px;
   height: 30px;
   margin: 0;
 }
-
-.binding-account {
-  min-width: 0;
-  gap: 8px;
-}
-
+.binding-account { min-width: 0; gap: 8px; }
 .binding-account-text span,
 .binding-account-text small {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
-
 .dialog-grid {
   display: grid;
   grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
   gap: 16px;
 }
-
 .dialog-grid :deep(.el-select),
 .dialog-grid :deep(.el-input-number),
-.enterprise-auth-panel :deep(.el-form-item .el-select) {
-  width: 100%;
-}
-
-.full-width {
-  width: 100%;
-}
-
+.enterprise-auth-panel :deep(.el-form-item .el-select) { width: 100%; }
+.full-width { width: 100%; }
+.form-hint { margin-top: 4px; color: var(--warn); font-size: 12px; }
 @media (max-width: 720px) {
   .enterprise-auth-heading {
     align-items: flex-start;
     flex-direction: column;
   }
-
-  .enterprise-auth-heading .el-button {
-    width: 100%;
-  }
-
+  .enterprise-auth-heading .el-button { width: 100%; }
   .dialog-grid {
     grid-template-columns: minmax(0, 1fr);
     gap: 0;
