@@ -31,16 +31,16 @@ from app.services.enterprise_auth import (
     EnterpriseAuthError,
     authenticate_enterprise_account,
     base_url_origin_changed,
+    enterprise_auth_credential_fingerprint,
     lock_enterprise_auth_account_graph,
     lock_enterprise_auth_accounts,
     lock_enterprise_auth_bindings,
     normalize_provider,
     set_account_password,
+    snapshot_enterprise_auth_credentials,
     validate_enterprise_base_url,
 )
 
-
-router = APIRouter(prefix="/enterprise-auth", tags=["enterprise-auth"])
 
 Provider = Literal["apaas", "control_plane"]
 BaseUrl = Annotated[
@@ -61,8 +61,53 @@ AccountName = Annotated[
 ]
 ENTERPRISE_AUTH_ACCOUNT_NOT_FOUND = "ENTERPRISE_AUTH_ACCOUNT_NOT_FOUND"
 ENTERPRISE_AUTH_ACCOUNT_DUPLICATE = "ENTERPRISE_AUTH_ACCOUNT_DUPLICATE"
+ENTERPRISE_AUTH_ACCOUNT_CHANGED = "ENTERPRISE_AUTH_ACCOUNT_CHANGED"
 ENTERPRISE_AUTH_BINDING_NOT_FOUND = "ENTERPRISE_AUTH_BINDING_NOT_FOUND"
 ENTERPRISE_AUTH_BINDING_DUPLICATE = "ENTERPRISE_AUTH_BINDING_DUPLICATE"
+ENTERPRISE_AUTH_BINDING_CHANGED = "ENTERPRISE_AUTH_BINDING_CHANGED"
+ENTERPRISE_AUTH_VALIDATION_ERROR = "ENTERPRISE_AUTH_VALIDATION_ERROR"
+_BINDING_WRITE_LOCK_MAX_ATTEMPTS = 2
+
+
+class EnterpriseAuthValidationIssue(BaseModel):
+    loc: list[str | int]
+    msg: str
+    type: str
+
+
+class EnterpriseAuthErrorResponse(BaseModel):
+    code: str
+    message: str
+    errors: list[EnterpriseAuthValidationIssue] | None = None
+
+
+class EnterpriseAuthAPIError(Exception):
+    def __init__(self, status_code: int, code: str, message: str):
+        super().__init__(message)
+        self.status_code = status_code
+        self.code = code
+        self.message = message
+
+
+ENTERPRISE_AUTH_ERROR_RESPONSES = {
+    error_status: {
+        "model": EnterpriseAuthErrorResponse,
+        "description": "Enterprise authentication administration error",
+    }
+    for error_status in (
+        status.HTTP_400_BAD_REQUEST,
+        status.HTTP_403_FORBIDDEN,
+        status.HTTP_404_NOT_FOUND,
+        status.HTTP_409_CONFLICT,
+        status.HTTP_422_UNPROCESSABLE_ENTITY,
+    )
+}
+
+router = APIRouter(
+    prefix="/enterprise-auth",
+    tags=["enterprise-auth"],
+    responses=ENTERPRISE_AUTH_ERROR_RESPONSES,
+)
 
 
 class StrictInput(BaseModel):
@@ -220,11 +265,12 @@ class EnterpriseAuthStatusView(BaseModel):
     binding_enabled: bool
 
 
-def _api_error(status_code: int, code: str, message: str) -> HTTPException:
-    return HTTPException(
-        status_code=status_code,
-        detail={"code": code, "message": message},
-    )
+def _api_error(
+    status_code: int,
+    code: str,
+    message: str,
+) -> EnterpriseAuthAPIError:
+    return EnterpriseAuthAPIError(status_code, code, message)
 
 
 async def require_enterprise_auth_admin(
@@ -264,11 +310,25 @@ async def enterprise_auth_validation_exception_handler(
     ]
     return JSONResponse(
         status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-        content={"detail": errors},
+        content={
+            "code": ENTERPRISE_AUTH_VALIDATION_ERROR,
+            "message": "请求参数校验失败",
+            "errors": errors,
+        },
     )
 
 
-def _account_not_found() -> HTTPException:
+async def enterprise_auth_api_exception_handler(
+    _request: Request,
+    exc: EnterpriseAuthAPIError,
+) -> JSONResponse:
+    return JSONResponse(
+        status_code=exc.status_code,
+        content={"code": exc.code, "message": exc.message},
+    )
+
+
+def _account_not_found() -> EnterpriseAuthAPIError:
     return _api_error(
         status.HTTP_404_NOT_FOUND,
         ENTERPRISE_AUTH_ACCOUNT_NOT_FOUND,
@@ -276,11 +336,27 @@ def _account_not_found() -> HTTPException:
     )
 
 
-def _binding_not_found() -> HTTPException:
+def _binding_not_found() -> EnterpriseAuthAPIError:
     return _api_error(
         status.HTTP_404_NOT_FOUND,
         ENTERPRISE_AUTH_BINDING_NOT_FOUND,
         "企业认证绑定不存在",
+    )
+
+
+def _account_changed() -> EnterpriseAuthAPIError:
+    return _api_error(
+        status.HTTP_409_CONFLICT,
+        ENTERPRISE_AUTH_ACCOUNT_CHANGED,
+        "企业认证账号凭据发生并发变化",
+    )
+
+
+def _binding_changed() -> EnterpriseAuthAPIError:
+    return _api_error(
+        status.HTTP_409_CONFLICT,
+        ENTERPRISE_AUTH_BINDING_CHANGED,
+        "企业认证绑定发生并发变化",
     )
 
 
@@ -402,6 +478,84 @@ async def _load_binding_accounts(
     return {account.id: account for account in accounts}
 
 
+async def _lock_binding_for_write(
+    db: AsyncSession,
+    binding_id: int,
+    *,
+    requested_left_id: int | None = None,
+    requested_right_id: int | None = None,
+) -> tuple[
+    EnterpriseAuthBinding,
+    dict[int, EnterpriseAuthAccount],
+    list[EnterpriseAuthBinding],
+    int,
+    int,
+]:
+    for attempt in range(_BINDING_WRITE_LOCK_MAX_ATTEMPTS):
+        current = (
+            await db.execute(
+                select(EnterpriseAuthBinding)
+                .where(EnterpriseAuthBinding.id == binding_id)
+                .execution_options(populate_existing=True, autoflush=False)
+            )
+        ).scalar_one_or_none()
+        if current is None:
+            raise _binding_not_found()
+
+        current_pair = (
+            current.left_account_id,
+            current.right_account_id,
+        )
+        desired_pair = tuple(
+            sorted(
+                (
+                    requested_left_id
+                    if requested_left_id is not None
+                    else current_pair[0],
+                    requested_right_id
+                    if requested_right_id is not None
+                    else current_pair[1],
+                )
+            )
+        )
+        left_id, right_id = desired_pair
+        if left_id == right_id:
+            raise _api_error(
+                status.HTTP_400_BAD_REQUEST,
+                ENTERPRISE_AUTH_ACCOUNT_INVALID,
+                "绑定两侧不能是同一账号",
+            )
+
+        account_ids = {*current_pair, *desired_pair}
+        locked_accounts = await lock_enterprise_auth_accounts(db, account_ids)
+        accounts_by_id = _accounts_by_id(locked_accounts, account_ids)
+        locked_bindings = await lock_enterprise_auth_bindings(
+            db,
+            pairs=[current_pair, desired_pair],
+        )
+        binding = next(
+            (item for item in locked_bindings if item.id == binding_id),
+            None,
+        )
+        if binding is not None:
+            return binding, accounts_by_id, locked_bindings, left_id, right_id
+
+        await db.rollback()
+        latest = (
+            await db.execute(
+                select(EnterpriseAuthBinding)
+                .where(EnterpriseAuthBinding.id == binding_id)
+                .execution_options(populate_existing=True, autoflush=False)
+            )
+        ).scalar_one_or_none()
+        if latest is None:
+            raise _binding_not_found()
+        await db.rollback()
+        if attempt + 1 >= _BINDING_WRITE_LOCK_MAX_ATTEMPTS:
+            raise _binding_changed()
+    raise _binding_changed()
+
+
 @router.get("/status", response_model=EnterpriseAuthStatusView)
 async def get_enterprise_auth_status(
     ctx: Annotated[AuthContext, Depends(require_enterprise_auth_admin)],
@@ -475,11 +629,7 @@ async def update_enterprise_auth_account(
     try:
         graph = await lock_enterprise_auth_account_graph(db, account_id)
     except EnterpriseAuthError:
-        raise _api_error(
-            status.HTTP_400_BAD_REQUEST,
-            ENTERPRISE_AUTH_ACCOUNT_INVALID,
-            "企业认证账号绑定发生并发变化",
-        ) from None
+        raise _account_changed() from None
     account = graph.account
     if account is None:
         raise _account_not_found()
@@ -593,11 +743,7 @@ async def test_enterprise_auth_account(
     try:
         graph = await lock_enterprise_auth_account_graph(db, account_id)
     except EnterpriseAuthError:
-        raise _api_error(
-            status.HTTP_400_BAD_REQUEST,
-            ENTERPRISE_AUTH_ACCOUNT_INVALID,
-            "企业认证账号绑定发生并发变化",
-        ) from None
+        raise _account_changed() from None
     account = graph.account
     if account is None:
         raise _account_not_found()
@@ -608,29 +754,49 @@ async def test_enterprise_auth_account(
             ENTERPRISE_AUTH_ACCOUNT_INVALID,
             "企业认证账号已禁用",
         )
+
+    snapshot = snapshot_enterprise_auth_credentials(account)
+    await db.rollback()
+    authentication_failed = False
     try:
-        await authenticate_enterprise_account(account)
-        await db.commit()
-        await db.refresh(account)
-        return _account_view(account)
+        tested_snapshot = await authenticate_enterprise_account(snapshot)
     except Exception:
+        authentication_failed = True
+        tested_snapshot = snapshot
+
+    try:
+        current_graph = await lock_enterprise_auth_account_graph(db, account_id)
+    except EnterpriseAuthError:
+        raise _account_changed() from None
+    current = current_graph.account
+    if (
+        current is None
+        or current.status == STATUS_DISABLED
+        or enterprise_auth_credential_fingerprint(current)
+        != snapshot.credential_fingerprint
+    ):
         await db.rollback()
-        try:
-            failed_graph = await lock_enterprise_auth_account_graph(db, account_id)
-        except EnterpriseAuthError:
-            failed_graph = None
-        failed_account = failed_graph.account if failed_graph is not None else None
-        if failed_account is not None and failed_account.status != STATUS_DISABLED:
-            failed_account.status = STATUS_ERROR
-            failed_account.last_error = "企业认证账号验证失败"
-            await db.commit()
-        else:
-            await db.rollback()
+        raise _account_changed()
+
+    if authentication_failed:
+        current.status = STATUS_ERROR
+        current.last_error = "企业认证账号验证失败"
+        await db.commit()
         raise _api_error(
             status.HTTP_400_BAD_REQUEST,
             ENTERPRISE_AUTH_ACCOUNT_INVALID,
             "企业认证账号验证失败",
         ) from None
+
+    current.access_token_enc = tested_snapshot.access_token_enc
+    current.refresh_token_enc = tested_snapshot.refresh_token_enc
+    current.token_expires_at = tested_snapshot.token_expires_at
+    current.status = tested_snapshot.status
+    current.last_verified_at = tested_snapshot.last_verified_at
+    current.last_error = tested_snapshot.last_error
+    await db.commit()
+    await db.refresh(current)
+    return _account_view(current)
 
 
 @router.get("/bindings", response_model=list[EnterpriseAuthBindingView])
@@ -713,56 +879,19 @@ async def update_enterprise_auth_binding(
     ctx: Annotated[AuthContext, Depends(require_enterprise_auth_admin)],
     db: Annotated[AsyncSession, Depends(get_db)],
 ) -> EnterpriseAuthBindingView:
-    current = (
-        await db.execute(
-            select(EnterpriseAuthBinding).where(
-                EnterpriseAuthBinding.id == binding_id
-            )
-        )
-    ).scalar_one_or_none()
-    if current is None:
-        raise _binding_not_found()
-
-    requested_left = (
-        data.left_account_id
-        if data.left_account_id is not None
-        else current.left_account_id
-    )
-    requested_right = (
-        data.right_account_id
-        if data.right_account_id is not None
-        else current.right_account_id
-    )
-    left_id, right_id = sorted((requested_left, requested_right))
-    if left_id == right_id:
-        raise _api_error(
-            status.HTTP_400_BAD_REQUEST,
-            ENTERPRISE_AUTH_ACCOUNT_INVALID,
-            "绑定两侧不能是同一账号",
-        )
-
-    account_ids = {
-        current.left_account_id,
-        current.right_account_id,
+    (
+        binding,
+        accounts_by_id,
+        locked_bindings,
         left_id,
         right_id,
-    }
-    locked_accounts = await lock_enterprise_auth_accounts(db, account_ids)
-    accounts_by_id = _accounts_by_id(locked_accounts, account_ids)
-    _validate_binding_accounts(left_id, right_id, accounts_by_id)
-    locked_bindings = await lock_enterprise_auth_bindings(
+    ) = await _lock_binding_for_write(
         db,
-        pairs=[
-            (current.left_account_id, current.right_account_id),
-            (left_id, right_id),
-        ],
+        binding_id,
+        requested_left_id=data.left_account_id,
+        requested_right_id=data.right_account_id,
     )
-    binding = next(
-        (item for item in locked_bindings if item.id == binding_id),
-        None,
-    )
-    if binding is None:
-        raise _binding_not_found()
+    _validate_binding_accounts(left_id, right_id, accounts_by_id)
     if any(
         item.id != binding_id
         and item.left_account_id == left_id
@@ -800,25 +929,12 @@ async def delete_enterprise_auth_binding(
     ctx: Annotated[AuthContext, Depends(require_enterprise_auth_admin)],
     db: Annotated[AsyncSession, Depends(get_db)],
 ) -> dict[str, bool | int]:
-    current = (
-        await db.execute(
-            select(EnterpriseAuthBinding).where(
-                EnterpriseAuthBinding.id == binding_id
-            )
+    binding, _accounts_by_id_map, _bindings, _left_id, _right_id = (
+        await _lock_binding_for_write(
+            db,
+            binding_id,
         )
-    ).scalar_one_or_none()
-    if current is None:
-        raise _binding_not_found()
-    pair = (current.left_account_id, current.right_account_id)
-    locked_accounts = await lock_enterprise_auth_accounts(db, pair)
-    _accounts_by_id(locked_accounts, set(pair))
-    locked_bindings = await lock_enterprise_auth_bindings(db, pairs=[pair])
-    binding = next(
-        (item for item in locked_bindings if item.id == binding_id),
-        None,
     )
-    if binding is None:
-        raise _binding_not_found()
     await db.delete(binding)
     await db.commit()
     return {"ok": True, "deleted_id": binding_id}

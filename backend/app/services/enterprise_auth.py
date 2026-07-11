@@ -2,8 +2,11 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import UTC, datetime
-from typing import Any, Iterable
+import hashlib
+import ipaddress
+import json
 import unicodedata
+from typing import Any, Iterable
 from urllib.parse import urlsplit
 
 from sqlalchemy import and_, or_, select, update
@@ -54,6 +57,23 @@ class LockedAccountGraph:
     bindings: list[Any]
 
 
+@dataclass(repr=False)
+class EnterpriseAuthCredentialSnapshot:
+    id: int
+    provider: str
+    base_url: str
+    tenant_ref: str
+    account: str
+    password_enc: str | None
+    credential_fingerprint: str
+    access_token_enc: str | None = None
+    refresh_token_enc: str | None = None
+    token_expires_at: datetime | None = None
+    status: str = STATUS_UNVERIFIED
+    last_verified_at: datetime | None = None
+    last_error: str | None = None
+
+
 def normalize_provider(provider: str) -> str:
     normalized = str(provider or "").strip().lower()
     if normalized == "coding":
@@ -67,7 +87,7 @@ def normalize_provider(provider: str) -> str:
 
 
 def normalize_base_url(base_url: str) -> str:
-    return str(base_url or "").strip().rstrip("/")
+    return validate_enterprise_base_url(base_url)
 
 
 def validate_enterprise_base_url(base_url: str) -> str:
@@ -93,12 +113,25 @@ def validate_enterprise_base_url(base_url: str) -> str:
         or parsed.fragment
     ):
         raise _account_invalid()
+    raw_hostname = parsed.hostname.rstrip(".")
+    if not raw_hostname:
+        raise _account_invalid()
     try:
-        parsed.hostname.encode("idna")
-    except UnicodeError:
-        raise _account_invalid() from None
+        ip_address = ipaddress.ip_address(raw_hostname)
+    except ValueError:
+        try:
+            hostname = raw_hostname.encode("idna").decode("ascii").lower()
+        except UnicodeError:
+            raise _account_invalid() from None
+    else:
+        hostname = ip_address.compressed.lower()
+    if ":" in hostname:
+        hostname = f"[{hostname}]"
+    port = parsed.port
+    default_port = 443 if parsed.scheme.lower() == "https" else 80
+    port_suffix = f":{port}" if port is not None and port != default_port else ""
     path = parsed.path.rstrip("/")
-    return f"{parsed.scheme.lower()}://{parsed.netloc.lower()}{path}"
+    return f"{parsed.scheme.lower()}://{hostname}{port_suffix}{path}"
 
 
 def base_url_origin_changed(old_base_url: str, new_base_url: str) -> bool:
@@ -244,6 +277,36 @@ async def lock_enterprise_auth_account_graph(
     raise EnterpriseAuthError(
         ENTERPRISE_AUTH_ACCOUNT_INVALID,
         "Enterprise account bindings changed concurrently",
+    )
+
+
+def enterprise_auth_credential_fingerprint(account: Any) -> str:
+    credential_values = [
+        str(account.provider),
+        str(account.base_url),
+        str(account.tenant_ref),
+        str(account.account),
+        str(account.password_enc or ""),
+    ]
+    serialized = json.dumps(
+        credential_values,
+        ensure_ascii=False,
+        separators=(",", ":"),
+    ).encode("utf-8")
+    return hashlib.sha256(serialized).hexdigest()
+
+
+def snapshot_enterprise_auth_credentials(
+    account: Any,
+) -> EnterpriseAuthCredentialSnapshot:
+    return EnterpriseAuthCredentialSnapshot(
+        id=int(account.id),
+        provider=str(account.provider),
+        base_url=str(account.base_url),
+        tenant_ref=str(account.tenant_ref),
+        account=str(account.account),
+        password_enc=account.password_enc,
+        credential_fingerprint=enterprise_auth_credential_fingerprint(account),
     )
 
 
