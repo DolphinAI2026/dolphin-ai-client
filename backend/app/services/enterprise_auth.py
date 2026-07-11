@@ -3,6 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import Any
+from urllib.parse import urlsplit
 
 from sqlalchemy import and_, or_, select
 
@@ -58,6 +59,36 @@ def normalize_base_url(base_url: str) -> str:
     return str(base_url or "").strip().rstrip("/")
 
 
+def validate_enterprise_base_url(base_url: str) -> str:
+    raw = str(base_url or "").strip()
+    try:
+        parsed = urlsplit(raw)
+        _ = parsed.port
+    except ValueError:
+        raise _account_invalid() from None
+    if (
+        parsed.scheme.lower() not in {"http", "https"}
+        or not parsed.netloc
+        or not parsed.hostname
+        or parsed.username is not None
+        or parsed.password is not None
+        or parsed.query
+        or parsed.fragment
+    ):
+        raise _account_invalid()
+    path = parsed.path.rstrip("/")
+    return f"{parsed.scheme.lower()}://{parsed.netloc.lower()}{path}"
+
+
+def base_url_origin_changed(old_base_url: str, new_base_url: str) -> bool:
+    def origin(base_url: str) -> tuple[str, str, int]:
+        parsed = urlsplit(validate_enterprise_base_url(base_url))
+        default_port = 443 if parsed.scheme == "https" else 80
+        return parsed.scheme, str(parsed.hostname or "").lower(), parsed.port or default_port
+
+    return origin(old_base_url) != origin(new_base_url)
+
+
 def set_account_password(account: Any, password: str | None) -> None:
     if password:
         account.password_enc = crypto.encrypt_password(password)
@@ -79,14 +110,26 @@ def set_account_tokens(
     account.last_error = None
 
 
+def _account_tokens_are_readable(account: Any) -> bool:
+    if account.status != STATUS_CONNECTED:
+        return False
+    expires_at = account.token_expires_at
+    if expires_at is None:
+        return True
+    now = datetime.now(UTC)
+    if expires_at.tzinfo is None:
+        now = now.replace(tzinfo=None)
+    return expires_at > now
+
+
 def read_access_token(account: Any) -> str | None:
-    if not account.access_token_enc:
+    if not _account_tokens_are_readable(account) or not account.access_token_enc:
         return None
     return crypto.decrypt_password(account.access_token_enc)
 
 
 def read_refresh_token(account: Any) -> str | None:
-    if not account.refresh_token_enc:
+    if not _account_tokens_are_readable(account) or not account.refresh_token_enc:
         return None
     return crypto.decrypt_password(account.refresh_token_enc)
 
@@ -180,7 +223,7 @@ async def authenticate_enterprise_account(account: Any) -> Any:
     try:
         password = crypto.decrypt_password(account.password_enc)
         provider = normalize_provider(account.provider)
-        base_url = normalize_base_url(account.base_url)
+        base_url = validate_enterprise_base_url(account.base_url)
         if provider == PROVIDER_CONTROL_PLANE:
             result = await login_to_coding_control_plane(
                 account.account,
@@ -190,7 +233,12 @@ async def authenticate_enterprise_account(account: Any) -> Any:
             access_token = str(result.access_token or "").strip()
             refresh_token = str(result.refresh_token or "").strip() or None
         else:
-            client = APaaSClient(base_url=base_url, tenant_id=account.tenant_ref)
+            client = APaaSClient(
+                base_url=base_url,
+                tenant_id=account.tenant_ref,
+                verify_tls=True,
+                record_call_logs=False,
+            )
             login_result = await client.login(account.account, password)
             access_token = (
                 str(login_result.get("token") or "").strip()
@@ -206,6 +254,43 @@ async def authenticate_enterprise_account(account: Any) -> Any:
         raise
     except Exception:
         raise _account_invalid() from None
+
+
+def _binding_unavailable(account: Any | None = None) -> BindingResolution:
+    return BindingResolution(
+        account=account,
+        code=ENTERPRISE_AUTH_BINDING_UNAVAILABLE,
+        message="Enterprise account binding is unavailable",
+    )
+
+
+async def _rollback(db: Any) -> bool:
+    try:
+        await db.rollback()
+        return True
+    except Exception:
+        return False
+
+
+async def _record_account_auth_failure(
+    db: Any,
+    account_id: int,
+) -> Any | None:
+    try:
+        account = await db.get(EnterpriseAuthAccount, account_id)
+    except Exception:
+        await _rollback(db)
+        return None
+    if account is None or account.status == STATUS_DISABLED:
+        await _rollback(db)
+        return account
+    account.status = STATUS_ERROR
+    account.last_error = "Enterprise account authentication failed"
+    try:
+        await db.commit()
+    except Exception:
+        await _rollback(db)
+    return account
 
 
 async def refresh_bound_account_after_login(
@@ -233,27 +318,78 @@ async def refresh_bound_account_after_login(
             target_provider,
         )
     except Exception:
-        return BindingResolution(
-            account=None,
-            code=ENTERPRISE_AUTH_BINDING_UNAVAILABLE,
-            message="Enterprise account binding is unavailable",
-        )
+        await _rollback(db)
+        return _binding_unavailable()
     if resolution.account is None:
         return resolution
 
+    target_account_id = resolution.account.id
     try:
         await authenticate_enterprise_account(resolution.account)
-        await db.commit()
-        return resolution
-    except Exception:
-        resolution.account.status = STATUS_ERROR
-        resolution.account.last_error = "Enterprise account authentication failed"
-        try:
-            await db.commit()
-        except Exception:
-            pass
-        return BindingResolution(
-            account=resolution.account,
-            code=ENTERPRISE_AUTH_BINDING_UNAVAILABLE,
-            message="Enterprise account binding is unavailable",
+        access_token = crypto.decrypt_password(resolution.account.access_token_enc)
+        refresh_token = (
+            crypto.decrypt_password(resolution.account.refresh_token_enc)
+            if resolution.account.refresh_token_enc
+            else None
         )
+        expires_at = resolution.account.token_expires_at
+    except Exception:
+        await _rollback(db)
+        failed_account = await _record_account_auth_failure(
+            db,
+            target_account_id,
+        )
+        return _binding_unavailable(failed_account)
+
+    if not await _rollback(db):
+        return _binding_unavailable()
+
+    try:
+        revalidated = await resolve_bound_account(
+            db,
+            source_provider,
+            source_base_url,
+            source_tenant_ref,
+            source_account,
+            target_provider,
+        )
+    except Exception:
+        await _rollback(db)
+        return _binding_unavailable()
+    if (
+        revalidated.account is None
+        or revalidated.account.id != target_account_id
+    ):
+        await _rollback(db)
+        return _binding_unavailable()
+
+    target_account = revalidated.account
+    try:
+        await db.refresh(target_account)
+    except Exception:
+        await _rollback(db)
+        return _binding_unavailable()
+    if target_account.status == STATUS_DISABLED:
+        await _rollback(db)
+        return _binding_unavailable()
+
+    set_account_tokens(
+        target_account,
+        access_token,
+        refresh_token=refresh_token,
+        expires_at=expires_at,
+    )
+    try:
+        await db.commit()
+    except Exception:
+        await _rollback(db)
+        failed_account = await _record_account_auth_failure(
+            db,
+            target_account_id,
+        )
+        return _binding_unavailable(failed_account)
+    return BindingResolution(
+        account=target_account,
+        code=OK,
+        message="Enterprise account binding refreshed",
+    )
