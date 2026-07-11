@@ -1,3 +1,4 @@
+import asyncio
 from types import SimpleNamespace
 
 import pytest
@@ -92,6 +93,35 @@ def test_invalid_auth_provider_lists_canonical_modes_and_coding_alias(monkeypatc
     assert exc_info.value.detail == (
         "AUTH_PROVIDER must be one of local, apaas, control_plane "
         "(coding is a compatibility alias)"
+    )
+
+
+@pytest.mark.parametrize(
+    ("user_info", "expected"),
+    [
+        (
+            {
+                "account": "canonical-account",
+                "username": "canonical-username",
+                "userName": "canonical-user-name",
+            },
+            "canonical-account",
+        ),
+        (
+            {"account": " ", "username": "canonical-username", "userName": "canonical-user-name"},
+            "canonical-username",
+        ),
+        ({"userName": "canonical-user-name"}, "canonical-user-name"),
+        ({}, "login-alias"),
+    ],
+)
+def test_apaas_binding_account_prefers_verified_identity_alias(
+    user_info,
+    expected,
+):
+    assert (
+        auth_routes._extract_apaas_binding_account(user_info, "login-alias")
+        == expected
     )
 
 
@@ -275,7 +305,65 @@ async def test_control_plane_login_ignores_binding_refresh_failure(monkeypatch, 
 
 
 @pytest.mark.asyncio
-async def test_apaas_login_refreshes_control_plane_binding_after_commit(monkeypatch):
+async def test_control_plane_login_bounds_binding_refresh_timeout(
+    monkeypatch,
+    caplog,
+):
+    _set_account_binding_enabled(monkeypatch, True)
+    monkeypatch.setattr(
+        auth_routes,
+        "ENTERPRISE_BINDING_REFRESH_TIMEOUT_SECONDS",
+        0.01,
+        raising=False,
+    )
+    events = []
+
+    class RecordingDb:
+        async def commit(self):
+            events.append("commit")
+
+        async def rollback(self):
+            events.append("rollback")
+
+    async def fake_coding_login(_username, _password):
+        return SimpleNamespace(username="cp-user")
+
+    async def fake_ensure_coding_user(_db, _identity):
+        return (
+            SimpleNamespace(id=12),
+            SimpleNamespace(tenant_code="builder-default"),
+        )
+
+    async def fake_issue_login_response(_db, _user):
+        events.append("issue-response")
+        return SimpleNamespace(access_token="builder-token")
+
+    async def slow_refresh(_db, **_kwargs):
+        events.append("refresh")
+        await asyncio.sleep(0.2)
+        return SimpleNamespace(account=None, code="ENTERPRISE_AUTH_BINDING_NOT_FOUND")
+
+    monkeypatch.setattr(auth_routes, "login_to_coding_control_plane", fake_coding_login)
+    monkeypatch.setattr(auth_routes, "_ensure_coding_user", fake_ensure_coding_user)
+    monkeypatch.setattr(auth_routes, "_issue_login_response_for_user", fake_issue_login_response)
+    monkeypatch.setattr(auth_routes, "refresh_bound_account_after_login", slow_refresh)
+    monkeypatch.setattr(auth_routes, "control_plane_base_url", lambda: "https://cp.example")
+
+    response = await auth_routes._coding_login_response(
+        UserLogin(username="cp-user", password="do-not-log"),
+        RecordingDb(),
+    )
+
+    assert response.access_token == "builder-token"
+    assert events == ["commit", "issue-response", "refresh", "rollback"]
+    assert "source_provider=control_plane" in caplog.text
+    assert "target_provider=apaas" in caplog.text
+    assert "error_type=TimeoutError" in caplog.text
+    assert "do-not-log" not in caplog.text
+
+
+@pytest.mark.asyncio
+async def test_apaas_login_uses_verified_account_alias_for_binding_after_commit(monkeypatch):
     _set_account_binding_enabled(monkeypatch, True)
     monkeypatch.setattr(settings, "apaas_base_url", "https://apaas.example/backend")
     events = []
@@ -299,15 +387,20 @@ async def test_apaas_login_refreshes_control_plane_binding_after_commit(monkeypa
                         "tenantCode": "tenant-one",
                     }
                 ],
-                "user": {"id": "apaas-user-1"},
+                "user": {
+                    "id": "apaas-user-1",
+                    "account": "canonical-apaas-account",
+                    "username": "secondary-apaas-account",
+                },
             }
         }
 
     async def no_switchable_tenants(_token, _tenant_id):
         return []
 
-    async def fake_ensure_user(_db, username, _password, _user_info, is_platform_admin):
+    async def fake_ensure_user(_db, username, _password, user_info, is_platform_admin):
         assert is_platform_admin is False
+        assert user_info["account"] == "canonical-apaas-account"
         return SimpleNamespace(
             id=9,
             username=username,
@@ -355,7 +448,7 @@ async def test_apaas_login_refreshes_control_plane_binding_after_commit(monkeypa
             "source_provider": "apaas",
             "source_base_url": "https://apaas.example/backend",
             "source_tenant_ref": "apaas-tenant-1",
-            "source_account": "apaas-login",
+            "source_account": "canonical-apaas-account",
             "target_provider": "control_plane",
         }
     ]

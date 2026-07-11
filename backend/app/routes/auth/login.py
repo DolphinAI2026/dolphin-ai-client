@@ -1,3 +1,4 @@
+import asyncio
 import logging
 import re
 import secrets
@@ -120,6 +121,15 @@ def _extract_apaas_user(payload: object, username: str) -> dict:
             if found:
                 return found
     return {"account": username, "username": username}
+
+
+def _extract_apaas_binding_account(user_info: dict, fallback: str) -> str:
+    if isinstance(user_info, dict):
+        for key in ("account", "username", "userName"):
+            value = str(user_info.get(key) or "").strip()
+            if value:
+                return value
+    return str(fallback or "").strip()
 
 
 def _extract_user_display_name(user_info: dict, fallback: str = "") -> str:
@@ -314,6 +324,7 @@ def _is_placeholder_apaas_base_url() -> bool:
 
 
 APAAS_LOGIN_TIMEOUT_SECONDS = 30
+ENTERPRISE_BINDING_REFRESH_TIMEOUT_SECONDS = 10
 
 
 async def _refresh_optional_enterprise_binding(
@@ -345,14 +356,36 @@ async def _refresh_optional_enterprise_binding(
         return
 
     try:
-        result = await refresh_bound_account_after_login(
-            db,
-            source_provider=source_provider,
-            source_base_url=identity["source_base_url"],
-            source_tenant_ref=identity["source_tenant_ref"],
-            source_account=identity["source_account"],
-            target_provider=target_provider,
+        result = await asyncio.wait_for(
+            refresh_bound_account_after_login(
+                db,
+                source_provider=source_provider,
+                source_base_url=identity["source_base_url"],
+                source_tenant_ref=identity["source_tenant_ref"],
+                source_account=identity["source_account"],
+                target_provider=target_provider,
+            ),
+            timeout=ENTERPRISE_BINDING_REFRESH_TIMEOUT_SECONDS,
         )
+    except TimeoutError as exc:
+        try:
+            await db.rollback()
+        except Exception as rollback_exc:
+            logger.warning(
+                "enterprise auth secondary refresh rollback failed "
+                "source_provider=%s target_provider=%s error_type=%s",
+                source_provider,
+                target_provider,
+                type(rollback_exc).__name__,
+            )
+        logger.warning(
+            "enterprise auth secondary refresh failed source_provider=%s "
+            "target_provider=%s error_type=%s",
+            source_provider,
+            target_provider,
+            type(exc).__name__,
+        )
+        return
     except Exception as exc:
         logger.warning(
             "enterprise auth secondary refresh failed source_provider=%s "
@@ -859,6 +892,7 @@ async def _try_apaas_login_flow(user_data: UserLogin, db: AsyncSession) -> Optio
         return None
 
     user_info = _extract_apaas_user(backend_payload or platform_payload, username)
+    binding_source_account = _extract_apaas_binding_account(user_info, username)
     if platform_probe_failed and not is_platform_admin:
         is_platform_admin = await _has_cached_platform_admin_identity(db, username, user_info)
 
@@ -964,7 +998,7 @@ async def _try_apaas_login_flow(user_data: UserLogin, db: AsyncSession) -> Optio
             source_provider="apaas",
             source_base_url=settings.apaas_base_url,
             source_tenant_ref=selected.apaas_tenant_id_str or user.apaas_tenant_id or default_tenant_id,
-            source_account=username,
+            source_account=binding_source_account,
             target_provider="control_plane",
         )
         return response
@@ -982,7 +1016,7 @@ async def _try_apaas_login_flow(user_data: UserLogin, db: AsyncSession) -> Optio
             source_provider="apaas",
             source_base_url=settings.apaas_base_url,
             source_tenant_ref=default_tenant_id,
-            source_account=username,
+            source_account=binding_source_account,
             target_provider="control_plane",
         )
         return response
@@ -1258,6 +1292,7 @@ async def _ensure_coding_user(
 async def _coding_login_response(user_data: UserLogin, db: AsyncSession) -> LoginResponse:
     identity = await login_to_coding_control_plane(user_data.username, user_data.password)
     user, tenant = await _ensure_coding_user(db, identity)
+    # 企业绑定按 Builder 默认本地租户编码对齐，不改变 Control Plane 认证协议。
     source_tenant_ref = tenant.tenant_code
     await db.commit()
     response = await _issue_login_response_for_user(db, user)
