@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import UTC, datetime
-from typing import Any
+from typing import Any, Iterable
 from urllib.parse import urlsplit
 
 from sqlalchemy import and_, or_, select, update
@@ -89,6 +89,67 @@ def base_url_origin_changed(old_base_url: str, new_base_url: str) -> bool:
         return parsed.scheme, str(parsed.hostname or "").lower(), parsed.port or default_port
 
     return origin(old_base_url) != origin(new_base_url)
+
+
+async def lock_enterprise_auth_accounts(
+    db: Any,
+    account_ids: Iterable[int],
+) -> list[EnterpriseAuthAccount]:
+    """Lock enterprise accounts in the global account-id order."""
+    normalized_ids = sorted({int(account_id) for account_id in account_ids})
+    if not normalized_ids:
+        return []
+    result = await db.execute(
+        select(EnterpriseAuthAccount)
+        .where(EnterpriseAuthAccount.id.in_(normalized_ids))
+        .order_by(EnterpriseAuthAccount.id.asc())
+        .with_for_update()
+        .execution_options(populate_existing=True, autoflush=False)
+    )
+    return list(result.scalars().all())
+
+
+async def lock_enterprise_auth_bindings(
+    db: Any,
+    *,
+    account_id: int | None = None,
+    pairs: Iterable[tuple[int, int]] = (),
+) -> list[EnterpriseAuthBinding]:
+    """Lock related binding rows after account locks, in canonical pair order."""
+    conditions = []
+    if account_id is not None:
+        normalized_account_id = int(account_id)
+        conditions.append(
+            or_(
+                EnterpriseAuthBinding.left_account_id == normalized_account_id,
+                EnterpriseAuthBinding.right_account_id == normalized_account_id,
+            )
+        )
+    for first_id, second_id in sorted(
+        {
+            tuple(sorted((int(first_id), int(second_id))))
+            for first_id, second_id in pairs
+        }
+    ):
+        conditions.append(
+            and_(
+                EnterpriseAuthBinding.left_account_id == first_id,
+                EnterpriseAuthBinding.right_account_id == second_id,
+            )
+        )
+    if not conditions:
+        return []
+    result = await db.execute(
+        select(EnterpriseAuthBinding)
+        .where(or_(*conditions))
+        .order_by(
+            EnterpriseAuthBinding.left_account_id.asc(),
+            EnterpriseAuthBinding.right_account_id.asc(),
+        )
+        .with_for_update()
+        .execution_options(populate_existing=True, autoflush=False)
+    )
+    return list(result.scalars().all())
 
 
 def set_account_password(account: Any, password: str | None) -> None:
