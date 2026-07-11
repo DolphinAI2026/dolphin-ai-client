@@ -32,6 +32,7 @@ class SessionStatus(str, Enum):
     ABANDONED_RETAINED = "abandoned_retained"
     MISSING_WORKTREE = "missing_worktree"
     ORPHAN_SESSION = "orphan_session"
+    AMBIGUOUS_WORKTREE = "ambiguous_worktree"
 
 
 SessionTypeValue: TypeAlias = Literal[
@@ -53,10 +54,13 @@ SessionStatusValue: TypeAlias = Literal[
     "abandoned_retained",
     "missing_worktree",
     "orphan_session",
+    "ambiguous_worktree",
 ]
 
 
 class GitState(BaseModel):
+    model_config = ConfigDict(extra="allow")
+
     clean: bool = True
     ahead: int = 0
     behind: int = 0
@@ -67,12 +71,15 @@ class GitState(BaseModel):
     missing_worktree: bool = False
     base_missing: bool = False
     branch_mismatch: bool = False
+    worktree_ambiguous: bool = False
     retained: bool = False
     current_branch: str | None = None
     head_commit: str | None = None
 
 
 class RuntimeProfile(BaseModel):
+    model_config = ConfigDict(extra="allow")
+
     backend_port: int | None = None
     frontend_port: int | None = None
     db_profile: str | None = None
@@ -82,17 +89,22 @@ class RuntimeProfile(BaseModel):
 
 
 class VerificationState(BaseModel):
+    model_config = ConfigDict(extra="allow")
+
     last_status: Literal["pending", "passed", "failed", "skipped"] = "pending"
     last_commands: list[str] = Field(default_factory=list)
 
 
 class CleanupState(BaseModel):
+    model_config = ConfigDict(extra="allow")
+
     suggested: bool = False
     auto_delete: bool = False
 
 
 class EngineeringSession(BaseModel):
     model_config = ConfigDict(
+        extra="allow",
         use_enum_values=True,
         validate_default=True,
         validate_assignment=True,
@@ -120,6 +132,7 @@ class EngineeringSession(BaseModel):
     updated_at: datetime = Field(default_factory=utc_now)
     last_sync_at: datetime | None = None
     summary: str | None = None
+    unavailable_lifecycle_status: SessionStatusValue | None = None
 
     @field_validator("id")
     @classmethod

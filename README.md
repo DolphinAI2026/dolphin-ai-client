@@ -67,10 +67,12 @@ npm run dev
 
 ```bash
 cd backend
-python3 scripts/agentic_session.py --repo .. create --type feature --title "新增会话先返回再异步加载"
+python3 scripts/agentic_session.py --repo .. create --type feature --title "新增会话"
 ```
 
-省略 `--base-branch` 时使用 `--repo` 指向仓库的当前本地分支；要固定默认分支或 release 基线，请显式传入 `--base-branch`。
+省略 `--base-branch` 时优先使用 `origin/HEAD` 指向的默认分支。仓库配置了 `origin` 时，每次创建都会在 fetch 后刷新并校验该引用，远端默认分支变更不会继续沿用本地陈旧值；无法确定时直接报错，不会静默落到错误基线。没有 `origin` 时依次尝试 `main`、`master`，最后才使用非 `session/*` 的控制工作区当前分支。基线 commit 优先取 fetch 后的 `origin/<base>`，因此不会从落后的本地默认分支创建一个立即 stale 的会话。release、集成分支或其他非默认基线必须显式传入 `--base-branch`。
+
+`create` 会扫描现存 `session/S-*` branch 和 `refs/agentic/sessions/S-*` 隐藏身份引用，并通过 Git ref compare-and-swap 原子预留 session ID。所有 registry 根目录共享 Git common-dir 下的仓库级变更锁；即使并发创建，或创建的是没有 worktree 的 review/deploy 会话，也会自动重试到不同 ID。标准 SHA-1 与 SHA-256 Git 仓库都使用各自对象格式对应的零 OID 完成 compare-and-swap。权限、磁盘或 ref lock 等基础设施错误会直接返回真实 Git 错误，不会伪装成 ID 冲突重试。Git 命令在已生效后超时时会回读 ref/worktree：可以确认成功时继续创建，无法确认时保留现场。每个 worktree branch 还会写入指向 registry owner 的 symbolic claim，避免不同 registry 同时认领同一 orphan。registry 丢失或切换后，不会把旧 branch/worktree 静默接管为新任务；已有对象由原 owner 的 `reconcile` 恢复为 `orphan_session`。只要 branch 已完成预留，后续 worktree 创建或 registry 保存失败都会保留 branch、identity ref 和 claim，已创建的 worktree 也会一并保留，并在原异常中提示运行 `reconcile` 恢复；系统不会在回滚中删除可能已被外部 Git 推进的分支。
 
 查看并同步会话：
 
@@ -95,7 +97,7 @@ cd backend
 python3 scripts/agentic_session.py --repo .. checkpoint S-001 --message "checkpoint: S-001 async conversation create"
 ```
 
-`checkpoint` 会在对应 worktree 中执行 `git add -A`，使用内置本地身份、显式关闭提交签名，并通过 `git commit --no-verify` 提交全部当前改动。输出 `created: false` 仅表示 clean no-op、missing worktree、branch mismatch 或 Git 操作进行中等拒绝状态；实际 `git commit` 失败会刷新 registry 后返回非零退出码。失败前若已执行 `git add -A`，可能留下 staged 改动。
+`checkpoint` 使用独立临时 Git index 执行 `git add -A`，然后通过 `git write-tree`、`git commit-tree` 和带旧 HEAD 校验的 `git update-ref` 创建 checkpoint。提交明确更新 registry 中的目标 `session/*` branch，不依赖命令执行瞬间的当前分支；发布 live index 时同时持有目标 branch 的 Git ref lock 和 `index.lock`，并重新校验 branch 名称、目标 HEAD 与 index 内容，保留原 index 权限并持久化 rename 所在目录。外部 reset、暂存、checkout 或现有 lock 抢先发生时不会被覆盖；如果 branch 已提交但 live index 发布被拒绝，会刷新 registry 并返回“部分成功”错误，不会错误输出成功。`update-ref` 已生效后的 index 或 registry 刷新失败同样按部分成功状态重新同步 registry，恢复和提交前临时文件清理错误只作为主异常的附加诊断；durable publish 完成后的临时文件清理失败只记录 warning，不会把成功 checkpoint 误报为失败。输出 `created: false` 仅表示 clean no-op、missing worktree、branch mismatch、重复 worktree 或 Git 操作进行中等提交前拒绝状态；实际提交失败或提交后的 index 发布失败会刷新 registry 后返回非零退出码。
 
 归档会话但保留 worktree：
 
@@ -104,7 +106,7 @@ cd backend
 python3 scripts/agentic_session.py --repo .. archive S-001
 ```
 
-`archive` 默认先尝试 checkpoint。missing worktree、branch mismatch 或 Git 操作进行中仍按不可写状态保留会话；实际提交失败会传播为非零退出码，不会伪装为归档成功。`--no-checkpoint` 会跳过尝试：仅 dirty worktree 标记 `dirty_uncheckpointed`，clean worktree 直接归档为对应 retained 状态。
+`archive` 默认先尝试 checkpoint。missing worktree、branch mismatch、重复 worktree 或 Git 操作进行中仍按不可写状态保留会话；`blocked_retained` 不会被 archive 覆盖成可清理状态。实际提交失败会传播为非零退出码，不会伪装为归档成功。`--no-checkpoint` 会跳过尝试：仅 dirty worktree 标记 `dirty_uncheckpointed`，clean worktree 直接归档为对应 retained 状态。
 
 对齐真实 worktree 并回写 registry：
 
@@ -113,14 +115,22 @@ cd backend
 python3 scripts/agentic_session.py --repo .. reconcile
 ```
 
-`reconcile` 会同步已登记会话，并为未登记的 `session/*` worktree 建立 `orphan_session`，不是只读扫描。
+`reconcile` 会同步已登记会话，并为未登记的 `session/*` worktree 建立 `orphan_session`，不是只读扫描。创建失败后只剩 branch、identity 和 claim、尚无 worktree 的现场也会登记为 `missing_worktree`，保留 `orphan_session` 生命周期供后续恢复。创建期间已写入但尚未落 registry 的同 owner claim 会按原 session ID 恢复；其他 registry 已 claim 的对象会跳过并输出 warning。branch ID 或 claim ID 对应损坏、不兼容的 registry YAML 时会 fail-closed：保留原文件和身份并输出 warning，不会覆盖损坏记录或另分配新 ID。
+
+如果同一个 branch 被强制挂载到多个 worktree，会话进入 `ambiguous_worktree`，设置 `git_state.worktree_ambiguous=true`，并阻止 resume 激活、checkpoint、archive 和清理提示；系统不会通过路径排序静默选择其中一个 worktree。
 
 约束：
 
 - `new-app` 和 `spec-change` 不允许使用 `--no-worktree`。
 - 不记录文件锁、路径锁或模块锁，冲突由 Git merge/rebase 暴露。
+- registry 根目录包含原子发布的 `.repository.yaml` 所有权标记，禁止不同仓库通过相同 `--registry-root` 相互覆盖。旧 registry 必须至少有一条可验证且所有者一致的记录才能补建 owner；只有损坏记录或出现冲突 owner 时会拒绝认领。单条损坏或不兼容的 session YAML 会被 `list/reconcile` 跳过，并以 stderr JSON `warnings` 返回；其他健康会话仍可读取和修复。
+- registry 使用临时文件、原子替换、文件与目录 `fsync`；未知 YAML 字段会在旧版本 load/save 后保留。临时文件清理失败不会遮蔽正在传播的主异常。进程锁同时支持 POSIX `fcntl` 和原生 Windows `msvcrt`；Windows 锁竞争使用有截止时间的非阻塞重试，超时会返回明确错误。
 - base ref 不可用时会设置 `git_state.base_missing`，保留原生命周期状态，但阻止 resume 激活、checkpoint 和 archive 状态转换，并暂停清理提示。
+- 无 worktree 的 review/deploy 会话会比较 `base_commit` 与当前 base ref；base 前进或发生分叉时同样标记 `stale` 并计算 ahead/behind。
 - merge、rebase、cherry-pick、revert、bisect、sequencer 或未解决 index 冲突进行中时，checkpoint 不会执行 `git add -A` 或提交。
+- `fetch origin` 在 registry 事务锁外执行，慢网络不会阻塞同仓库的本地 `list`。CLI `create` 仍会等待 fetch 和 worktree 创建完成后返回，产品层的“先展示会话、后台初始化”由后续 Engineering Manager/API 接入负责。
+- CLI 参数错误和运行错误统一写入 stderr JSON，格式为 `{"error":{"code":"...","message":"..."}}`，不输出 Python traceback。
+- 标准 Git 仓库及常规 linked worktree 共享同一个控制工作区。`--separate-git-dir` 从主工作树调用受支持；其 linked worktree 无法从 Git 元数据可靠反查原始工作树时会明确拒绝，不会误认 metadata 目录。
 - 已合并且 clean 的 worktree 只提示清理，不自动删除。
 - 本 CLI 不执行部署；发布门禁由人工或调用方负责。目标 worktree 必须 clean（`git status --porcelain` 无输出），目标 commit 必须已合入默认分支或明确的 release ref，可用 `git merge-base --is-ancestor <commit> <default-or-release-ref>` 检查：退出码 0 表示已合入，1 表示未合入，其他值表示命令错误。禁止从 dirty 或 unmerged worktree 发布。
 

@@ -2,11 +2,31 @@ from __future__ import annotations
 
 import argparse
 import json
+import sys
 from pathlib import Path
 from typing import Any
 
+from app.engineering_sessions.git_state import GitCommandError
 from app.engineering_sessions.models import SessionType
+from app.engineering_sessions.registry import SessionRegistryError
 from app.engineering_sessions.service import EngineeringSessionService
+
+
+class JsonArgumentParser(argparse.ArgumentParser):
+    def error(self, message: str) -> None:
+        print(
+            json.dumps(
+                {
+                    "error": {
+                        "code": "invalid_arguments",
+                        "message": message,
+                    }
+                },
+                ensure_ascii=False,
+            ),
+            file=sys.stderr,
+        )
+        raise SystemExit(2)
 
 
 def _json(data: Any) -> None:
@@ -20,8 +40,36 @@ def _json(data: Any) -> None:
     print(json.dumps(data, ensure_ascii=False, indent=2))
 
 
+def _json_error(
+    code: str,
+    message: str,
+    *,
+    details: list[str] | None = None,
+) -> int:
+    error = {"code": code, "message": message}
+    if details:
+        error["details"] = details
+    print(
+        json.dumps(
+            {"error": error},
+            ensure_ascii=False,
+        ),
+        file=sys.stderr,
+    )
+    return 1
+
+
+def _json_warnings(messages: list[str]) -> None:
+    if not messages:
+        return
+    print(
+        json.dumps({"warnings": messages}, ensure_ascii=False),
+        file=sys.stderr,
+    )
+
+
 def build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(prog="agentic session")
+    parser = JsonArgumentParser(prog="agentic session")
     parser.add_argument("--repo", default=".", help="Git repo path")
     parser.add_argument(
         "--registry-root",
@@ -68,51 +116,84 @@ def main(argv: list[str] | None = None) -> int:
     ):
         parser.error(f"session type '{args.type}' requires a worktree")
 
-    service = EngineeringSessionService(
-        Path(args.repo),
-        registry_root=args.registry_root,
-        worktree_parent=args.worktree_parent,
-    )
-
-    if args.command == "create":
-        session = service.create(
-            args.type,
-            args.title,
-            base_branch=args.base_branch,
-            create_worktree=not args.no_worktree,
+    try:
+        service = EngineeringSessionService(
+            Path(args.repo),
+            registry_root=args.registry_root,
+            worktree_parent=args.worktree_parent,
         )
-        _json(session)
-        return 0
-    if args.command == "resume":
-        _json(service.resume(args.session_id))
-        return 0
-    if args.command == "sync":
-        _json(service.sync(args.session_id))
-        return 0
-    if args.command == "list":
-        _json(service.list(sync=args.sync))
-        return 0
-    if args.command == "archive":
-        _json(
-            service.archive(
-                args.session_id,
-                checkpoint=not args.no_checkpoint,
+        if args.command == "create":
+            session = service.create(
+                args.type,
+                args.title,
+                base_branch=args.base_branch,
+                create_worktree=not args.no_worktree,
             )
-        )
-        return 0
-    if args.command == "checkpoint":
-        _json(
-            {
-                "created": service.checkpoint(
+            _json(session)
+            return 0
+        if args.command == "resume":
+            _json(service.resume(args.session_id))
+            return 0
+        if args.command == "sync":
+            _json(service.sync(args.session_id))
+            return 0
+        if args.command == "list":
+            sessions = service.list(sync=args.sync)
+            _json(sessions)
+            _json_warnings(service.registry.last_read_errors)
+            return 0
+        if args.command == "archive":
+            _json(
+                service.archive(
                     args.session_id,
-                    message=args.message,
+                    checkpoint=not args.no_checkpoint,
                 )
-            }
+            )
+            return 0
+        if args.command == "checkpoint":
+            _json(
+                {
+                    "created": service.checkpoint(
+                        args.session_id,
+                        message=args.message,
+                    )
+                }
+            )
+            return 0
+        if args.command == "reconcile":
+            sessions = service.reconcile()
+            _json(sessions)
+            _json_warnings(service.registry.last_read_errors)
+            return 0
+    except SessionRegistryError as exc:
+        code = (
+            "session_not_found"
+            if str(exc).startswith("session not found:")
+            else "session_registry_error"
         )
-        return 0
-    if args.command == "reconcile":
-        _json(service.reconcile())
-        return 0
+        return _json_error(
+            code,
+            str(exc),
+            details=getattr(exc, "__notes__", None),
+        )
+    except GitCommandError as exc:
+        return _json_error(
+            "git_error",
+            str(exc),
+            details=getattr(exc, "__notes__", None),
+        )
+    except ValueError as exc:
+        return _json_error(
+            "invalid_request",
+            str(exc),
+            details=getattr(exc, "__notes__", None),
+        )
+    except Exception as exc:
+        return _json_error(
+            "internal_error",
+            str(exc),
+            details=getattr(exc, "__notes__", None),
+        )
     parser.error(f"unknown command: {args.command}")
     return 2
 

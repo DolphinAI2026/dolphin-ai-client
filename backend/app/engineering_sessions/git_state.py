@@ -51,7 +51,12 @@ class GitCommandError(RuntimeError):
     pass
 
 
-def git(repo_path: str | Path, *args: str, check: bool = True) -> subprocess.CompletedProcess[str]:
+def git(
+    repo_path: str | Path,
+    *args: str,
+    check: bool = True,
+    env_overrides: dict[str, str] | None = None,
+) -> subprocess.CompletedProcess[str]:
     env = os.environ.copy()
     env.setdefault("HOME", str(Path.home()))
     for key in list(env):
@@ -62,13 +67,20 @@ def git(repo_path: str | Path, *args: str, check: bool = True) -> subprocess.Com
             or key.startswith("GIT_CONFIG_VALUE_")
         ):
             env.pop(key, None)
-    result = subprocess.run(
-        ["git", "-C", str(repo_path), *args],
-        capture_output=True,
-        text=True,
-        timeout=_GIT_TIMEOUT,
-        env=env,
-    )
+    if env_overrides is not None:
+        env.update(env_overrides)
+    try:
+        result = subprocess.run(
+            ["git", "-C", str(repo_path), *args],
+            capture_output=True,
+            text=True,
+            timeout=_GIT_TIMEOUT,
+            env=env,
+        )
+    except subprocess.TimeoutExpired as exc:
+        raise GitCommandError(
+            f"git {' '.join(args)} timed out after {_GIT_TIMEOUT}s"
+        ) from exc
     if check and result.returncode != 0:
         message = (result.stderr or result.stdout).strip()[:500]
         raise GitCommandError(f"git {' '.join(args)} failed: {message}")
@@ -97,13 +109,40 @@ def git_control_worktree(repo_path: str | Path) -> Path:
     common_dir = git_common_dir(repo_path)
     if common_dir.name == ".git":
         return common_dir.parent
-    top_level = git(
+    top_level = Path(
+        git(
+            repo_path,
+            "rev-parse",
+            "--path-format=absolute",
+            "--show-toplevel",
+        ).stdout.rstrip("\n")
+    ).resolve()
+    git_marker = top_level / ".git"
+    if git_marker.is_file():
+        marker = git_marker.read_text(encoding="utf-8").strip()
+        if marker.startswith("gitdir:"):
+            marker_path = Path(marker.removeprefix("gitdir:").strip())
+            if not marker_path.is_absolute():
+                marker_path = git_marker.parent / marker_path
+            if marker_path.resolve() == common_dir:
+                return top_level
+    result = git(
         repo_path,
-        "rev-parse",
-        "--path-format=absolute",
-        "--show-toplevel",
-    ).stdout.rstrip("\n")
-    return Path(top_level).resolve()
+        "worktree",
+        "list",
+        "--porcelain",
+        "-z",
+    )
+    for field in result.stdout.split("\0"):
+        if field.startswith("worktree "):
+            candidate = Path(field.removeprefix("worktree ")).resolve()
+            if is_work_tree_root(candidate):
+                return candidate
+            break
+    raise GitCommandError(
+        "cannot resolve control worktree for non-standard Git common-dir: "
+        f"{common_dir}"
+    )
 
 
 def same_git_repository(
@@ -124,6 +163,49 @@ def current_branch(repo_path: str | Path) -> str:
     result = git(repo_path, "symbolic-ref", "--quiet", "HEAD", check=False)
     name = result.stdout.strip()
     return name.removeprefix("refs/heads/") if result.returncode == 0 else "HEAD"
+
+
+def remote_default_branch(repo_path: str | Path) -> str | None:
+    result = git(
+        repo_path,
+        "symbolic-ref",
+        "--quiet",
+        "--short",
+        "refs/remotes/origin/HEAD",
+        check=False,
+    )
+    name = result.stdout.strip()
+    if result.returncode != 0 or not name.startswith("origin/"):
+        return None
+    return name.removeprefix("origin/")
+
+
+def discover_remote_default_branch(repo_path: str | Path) -> str | None:
+    remotes = git(repo_path, "remote", check=False)
+    if "origin" not in remotes.stdout.split():
+        return None
+    result = git(
+        repo_path,
+        "remote",
+        "set-head",
+        "origin",
+        "--auto",
+        check=False,
+    )
+    if result.returncode != 0:
+        detail = (result.stderr or result.stdout).strip()[:500]
+        raise GitCommandError(
+            f"cannot determine origin/HEAD after fetch: {detail}"
+        )
+    branch = remote_default_branch(repo_path)
+    if branch is None or not has_ref(
+        repo_path,
+        f"refs/remotes/origin/{branch}",
+    ):
+        raise GitCommandError(
+            "cannot determine origin/HEAD after fetch"
+        )
+    return branch
 
 
 def has_ref(repo_path: str | Path, ref: str) -> bool:
@@ -242,10 +324,9 @@ def inspect_git_state(
 
 
 def fetch_origin(repo_path: str | Path) -> bool:
-    if not has_ref(repo_path, "refs/remotes/origin/HEAD"):
-        remotes = git(repo_path, "remote", check=False)
-        if "origin" not in remotes.stdout.split():
-            return False
+    remotes = git(repo_path, "remote", check=False)
+    if "origin" not in remotes.stdout.split():
+        return False
     return git(repo_path, "fetch", "origin", check=False).returncode == 0
 
 

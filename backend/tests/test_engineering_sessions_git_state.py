@@ -7,6 +7,7 @@ import pytest
 import app.engineering_sessions.git_state as git_state
 from app.engineering_sessions.git_state import (
     current_branch,
+    git_control_worktree,
     inspect_git_state,
     list_git_worktrees,
     rev_parse_head,
@@ -55,6 +56,38 @@ def test_git_common_dir_identifies_linked_worktrees(tmp_path: Path):
     assert git_state.git_common_dir(repo) == git_state.git_common_dir(linked)
     assert git_state.same_git_repository(repo, linked) is True
     assert git_state.same_git_repository(repo, other) is False
+
+
+def test_git_control_worktree_supports_separate_git_dir(tmp_path: Path):
+    repo = tmp_path / "repo"
+    metadata = tmp_path / "metadata"
+    subprocess.run(
+        [
+            "git",
+            "init",
+            "-b",
+            "main",
+            f"--separate-git-dir={metadata}",
+            str(repo),
+        ],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    run_git(repo, "config", "user.email", "t@example.com")
+    run_git(repo, "config", "user.name", "Tester")
+    (repo / "README.md").write_text("base\n", encoding="utf-8")
+    run_git(repo, "add", "README.md")
+    run_git(repo, "commit", "-m", "base")
+    linked = tmp_path / "linked"
+    run_git(repo, "worktree", "add", "-b", "linked", str(linked), "main")
+
+    assert git_control_worktree(repo) == repo.resolve()
+    with pytest.raises(
+        git_state.GitCommandError,
+        match="cannot resolve control worktree",
+    ):
+        git_control_worktree(linked)
 
 
 def test_inspect_git_state_reports_dirty_and_ahead(tmp_path: Path):

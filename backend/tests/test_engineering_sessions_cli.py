@@ -8,6 +8,8 @@ from pathlib import Path
 import pytest
 import yaml
 
+import app.engineering_sessions.cli as engineering_session_cli
+
 BACKEND_ROOT = Path(__file__).resolve().parents[1]
 CLI_SCRIPT = BACKEND_ROOT / "scripts" / "agentic_session.py"
 
@@ -228,6 +230,127 @@ def test_cli_checkpoint_commit_failure_exits_nonzero(tmp_path: Path):
     assert "git commit failed" in checkpoint_result.stderr
     assert "invalid date" in checkpoint_result.stderr
     assert run_git(worktree, "rev-parse", "HEAD") == before_head
+
+
+def test_cli_runtime_error_uses_stable_json_without_traceback(tmp_path: Path):
+    repo = make_repo(tmp_path)
+    result = subprocess.run(
+        cli_command(
+            repo,
+            tmp_path / "sessions",
+            tmp_path / "worktrees",
+            "resume",
+            "S-999",
+        ),
+        cwd=BACKEND_ROOT,
+        capture_output=True,
+        text=True,
+    )
+
+    assert result.returncode == 1
+    assert result.stdout == ""
+    error = json.loads(result.stderr)
+    assert error["error"]["code"] == "session_not_found"
+    assert "S-999" in error["error"]["message"]
+    assert "Traceback" not in result.stderr
+
+
+def test_cli_argument_error_uses_stable_json(tmp_path: Path):
+    repo = make_repo(tmp_path)
+    result = subprocess.run(
+        cli_command(
+            repo,
+            tmp_path / "sessions",
+            tmp_path / "worktrees",
+            "create",
+            "--type",
+            "feature",
+        ),
+        cwd=BACKEND_ROOT,
+        capture_output=True,
+        text=True,
+    )
+
+    assert result.returncode == 2
+    assert result.stdout == ""
+    error = json.loads(result.stderr)
+    assert error["error"]["code"] == "invalid_arguments"
+    assert "--title" in error["error"]["message"]
+
+
+def test_cli_error_includes_recovery_notes(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+):
+    repo = make_repo(tmp_path)
+    error = RuntimeError("registry save failed")
+    error.add_note("retained worktree; run reconcile")
+
+    class FailingService:
+        def __init__(self, *_args, **_kwargs):
+            raise error
+
+    monkeypatch.setattr(
+        engineering_session_cli,
+        "EngineeringSessionService",
+        FailingService,
+    )
+
+    result = engineering_session_cli.main(
+        [
+            "--repo",
+            str(repo),
+            "list",
+        ]
+    )
+
+    captured = capsys.readouterr()
+    assert result == 1
+    payload = json.loads(captured.err)
+    assert payload["error"]["details"] == [
+        "retained worktree; run reconcile"
+    ]
+
+
+def test_cli_list_reports_corrupt_registry_records_as_json_warnings(
+    tmp_path: Path,
+):
+    repo = make_repo(tmp_path)
+    registry = tmp_path / "sessions"
+    worktrees = tmp_path / "worktrees"
+    for title in ("First", "Second"):
+        subprocess.run(
+            cli_command(
+                repo,
+                registry,
+                worktrees,
+                "create",
+                "--type",
+                "review",
+                "--title",
+                title,
+                "--no-worktree",
+            ),
+            cwd=BACKEND_ROOT,
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+    (registry / "S-001.yaml").write_text("id: [broken\n", encoding="utf-8")
+
+    result = subprocess.run(
+        cli_command(repo, registry, worktrees, "list"),
+        cwd=BACKEND_ROOT,
+        capture_output=True,
+        text=True,
+    )
+
+    assert result.returncode == 0
+    assert [item["id"] for item in json.loads(result.stdout)] == ["S-002"]
+    warning = json.loads(result.stderr)
+    assert len(warning["warnings"]) == 1
+    assert "S-001" in warning["warnings"][0]
 
 
 def test_cli_default_list_outputs_and_persists_static_missing_worktree(
