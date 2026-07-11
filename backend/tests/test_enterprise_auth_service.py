@@ -9,8 +9,8 @@ from app.database import Base
 from app.code_runtime.auth import CodingAuthResult
 from app.models import EnterpriseAuthAccount, EnterpriseAuthBinding, User
 from app.services.enterprise_auth import (
-    ACCOUNT_INVALID,
     DISABLED,
+    ENTERPRISE_AUTH_ACCOUNT_INVALID,
     ENTERPRISE_AUTH_BINDING_AMBIGUOUS,
     ENTERPRISE_AUTH_BINDING_NOT_FOUND,
     ENTERPRISE_AUTH_BINDING_UNAVAILABLE,
@@ -94,7 +94,7 @@ async def _persist_binding(db, owner_id, left, right, *, priority=100, enabled=T
     return binding
 
 
-def test_normalizes_supported_enterprise_providers_and_base_urls():
+def test_normalizes_enterprise_identity_and_rejects_invalid_provider():
     assert normalize_provider("apaas") == "apaas"
     assert normalize_provider("coding") == "control_plane"
     assert normalize_provider(" control_plane ") == "control_plane"
@@ -103,7 +103,7 @@ def test_normalizes_supported_enterprise_providers_and_base_urls():
     with pytest.raises(EnterpriseAuthError) as exc_info:
         normalize_provider("unsupported")
 
-    assert exc_info.value.code == ACCOUNT_INVALID
+    assert exc_info.value.code == ENTERPRISE_AUTH_ACCOUNT_INVALID
 
 
 def test_account_credentials_are_encrypted_and_round_trip():
@@ -283,6 +283,42 @@ async def test_resolve_bound_account_returns_not_found_without_binding(auth_db):
 
 
 @pytest.mark.asyncio
+async def test_resolve_bound_account_ignores_disabled_source_account(auth_db):
+    db, owner_id = auth_db
+    source = await _persist_account(
+        db,
+        owner_id,
+        provider="control_plane",
+        base_url="https://coding.example.com",
+        tenant_ref="control",
+        account="source-user",
+        status="disabled",
+    )
+    target = await _persist_account(
+        db,
+        owner_id,
+        provider="apaas",
+        base_url="https://apaas.example.com",
+        tenant_ref="tenant-1",
+        account="target-user",
+    )
+    await _persist_binding(db, owner_id, source, target, priority=10)
+    await db.commit()
+
+    result = await resolve_bound_account(
+        db,
+        "coding",
+        "https://coding.example.com",
+        "control",
+        "source-user",
+        "apaas",
+    )
+
+    assert result.account is None
+    assert result.code == ENTERPRISE_AUTH_BINDING_NOT_FOUND
+
+
+@pytest.mark.asyncio
 async def test_authenticate_apaas_account_saves_encrypted_token(monkeypatch):
     from app.services import enterprise_auth
 
@@ -353,13 +389,13 @@ async def test_authenticate_control_plane_account_uses_own_base_url_and_saves_to
 
 
 @pytest.mark.asyncio
-async def test_authenticate_account_without_password_is_account_invalid():
+async def test_authenticate_account_without_password_uses_approved_invalid_code():
     account = _account(password_enc=None)
 
     with pytest.raises(EnterpriseAuthError) as exc_info:
         await authenticate_enterprise_account(account)
 
-    assert exc_info.value.code == ACCOUNT_INVALID
+    assert exc_info.value.code == ENTERPRISE_AUTH_ACCOUNT_INVALID
 
 
 @pytest.mark.asyncio

@@ -22,7 +22,7 @@ STATUS_DISABLED = "disabled"
 
 OK = "OK"
 DISABLED = "DISABLED"
-ACCOUNT_INVALID = "ACCOUNT_INVALID"
+ENTERPRISE_AUTH_ACCOUNT_INVALID = "ENTERPRISE_AUTH_ACCOUNT_INVALID"
 ENTERPRISE_AUTH_BINDING_NOT_FOUND = "ENTERPRISE_AUTH_BINDING_NOT_FOUND"
 ENTERPRISE_AUTH_BINDING_AMBIGUOUS = "ENTERPRISE_AUTH_BINDING_AMBIGUOUS"
 ENTERPRISE_AUTH_BINDING_UNAVAILABLE = "ENTERPRISE_AUTH_BINDING_UNAVAILABLE"
@@ -47,7 +47,10 @@ def normalize_provider(provider: str) -> str:
     if normalized == "coding":
         normalized = PROVIDER_CONTROL_PLANE
     if normalized not in {PROVIDER_APAAS, PROVIDER_CONTROL_PLANE}:
-        raise EnterpriseAuthError(ACCOUNT_INVALID, "Unsupported enterprise auth provider")
+        raise EnterpriseAuthError(
+            ENTERPRISE_AUTH_ACCOUNT_INVALID,
+            "Unsupported enterprise auth provider",
+        )
     return normalized
 
 
@@ -105,6 +108,7 @@ async def resolve_bound_account(
                 EnterpriseAuthAccount.base_url == normalize_base_url(source_base_url),
                 EnterpriseAuthAccount.tenant_ref == str(source_tenant_ref or "").strip(),
                 EnterpriseAuthAccount.account == str(source_account or "").strip(),
+                EnterpriseAuthAccount.status != STATUS_DISABLED,
             )
         )
     ).scalar_one_or_none()
@@ -165,7 +169,7 @@ async def resolve_bound_account(
 
 def _account_invalid() -> EnterpriseAuthError:
     return EnterpriseAuthError(
-        ACCOUNT_INVALID,
+        ENTERPRISE_AUTH_ACCOUNT_INVALID,
         "Enterprise account credentials are invalid",
     )
 
