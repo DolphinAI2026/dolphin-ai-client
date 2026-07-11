@@ -226,7 +226,7 @@ async def test_control_plane_login_refreshes_apaas_binding_after_commit(monkeypa
             "source_provider": "control_plane",
             "source_base_url": "https://cp.example",
             "source_tenant_ref": "builder-default",
-            "source_account": "login-name",
+            "source_account": "canonical-name",
             "target_provider": "apaas",
         }
     ]

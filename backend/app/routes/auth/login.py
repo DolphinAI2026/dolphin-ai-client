@@ -1266,7 +1266,7 @@ async def _coding_login_response(user_data: UserLogin, db: AsyncSession) -> Logi
         source_provider="control_plane",
         source_base_url=control_plane_base_url(),
         source_tenant_ref=source_tenant_ref,
-        source_account=user_data.username,
+        source_account=identity.username,
         target_provider="apaas",
     )
     return response
