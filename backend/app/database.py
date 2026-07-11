@@ -243,12 +243,20 @@ async def _ensure_enterprise_auth_account_auth_generation(
     if not columns or "auth_generation" in columns:
         return
 
-    await conn.execute(
-        text(
-            "ALTER TABLE enterprise_auth_accounts "
-            "ADD COLUMN auth_generation INTEGER NOT NULL DEFAULT 0"
+    try:
+        await conn.execute(
+            text(
+                "ALTER TABLE enterprise_auth_accounts "
+                "ADD COLUMN auth_generation INTEGER NOT NULL DEFAULT 0"
+            )
         )
-    )
+    except Exception:
+        if conn.dialect.name not in {"sqlite", "mysql"}:
+            raise
+        columns = await conn.run_sync(table_columns)
+        if "auth_generation" in columns:
+            return
+        raise
 
 
 async def _migrate_code_runtime_binding_app_id_nullable(conn, inspect_fn) -> None:

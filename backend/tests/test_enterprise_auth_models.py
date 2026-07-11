@@ -212,6 +212,74 @@ async def test_enterprise_auth_generation_migration_uses_mysql_compatible_ddl():
     ]
 
 
+@pytest.mark.asyncio
+@pytest.mark.parametrize("dialect_name", ["sqlite", "mysql"])
+async def test_enterprise_auth_generation_migration_accepts_competing_migrator(
+    dialect_name,
+):
+    database = import_module("app.database")
+
+    class RacingConnection:
+        dialect = SimpleNamespace(name=dialect_name)
+
+        def __init__(self):
+            self.inspect_calls = 0
+            self.alter_calls = 0
+
+        async def run_sync(self, _callable):
+            self.inspect_calls += 1
+            if self.inspect_calls == 1:
+                return {"id", "provider"}
+            return {"id", "provider", "auth_generation"}
+
+        async def execute(self, _statement):
+            self.alter_calls += 1
+            raise RuntimeError("duplicate column from competing migrator")
+
+    connection = RacingConnection()
+
+    await database._ensure_enterprise_auth_account_auth_generation(
+        connection,
+        database.inspect,
+    )
+
+    assert connection.alter_calls == 1
+    assert connection.inspect_calls == 2
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("dialect_name", ["sqlite", "mysql"])
+async def test_enterprise_auth_generation_migration_reraises_other_ddl_errors(
+    dialect_name,
+):
+    database = import_module("app.database")
+    ddl_error = RuntimeError("permission denied for ALTER TABLE")
+
+    class FailingConnection:
+        dialect = SimpleNamespace(name=dialect_name)
+
+        def __init__(self):
+            self.inspect_calls = 0
+
+        async def run_sync(self, _callable):
+            self.inspect_calls += 1
+            return {"id", "provider"}
+
+        async def execute(self, _statement):
+            raise ddl_error
+
+    connection = FailingConnection()
+
+    with pytest.raises(RuntimeError) as exc_info:
+        await database._ensure_enterprise_auth_account_auth_generation(
+            connection,
+            database.inspect,
+        )
+
+    assert exc_info.value is ddl_error
+    assert connection.inspect_calls == 2
+
+
 def test_enterprise_auth_account_unique_constraint():
     account_model, _ = _enterprise_auth_models()
     unique_columns = {
