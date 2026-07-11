@@ -57,6 +57,12 @@ class EnterpriseAuthAccount(Base):
         server_default="unverified",
         nullable=False,
     )
+    auth_generation: Mapped[int] = mapped_column(
+        Integer,
+        default=0,
+        server_default="0",
+        nullable=False,
+    )
     last_verified_at: Mapped[Optional[datetime]] = mapped_column(
         DateTime, nullable=True
     )

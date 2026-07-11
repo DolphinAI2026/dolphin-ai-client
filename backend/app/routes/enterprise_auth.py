@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import UTC, datetime, timedelta
+from datetime import datetime
 from typing import Annotated, Any, Literal
 
 from fastapi import APIRouter, Depends, HTTPException, Request, status
@@ -278,7 +278,7 @@ class EnterpriseAuthStatusView(BaseModel):
 class EnterpriseAuthConnectionTestSnapshot:
     credentials: Any
     credential_fingerprint: str
-    generation: datetime
+    generation: int
 
 
 def _api_error(
@@ -379,14 +379,6 @@ def _is_enterprise_auth_path(path: str) -> bool:
         or path == "/api/enterprise-auth"
         or path.startswith("/api/enterprise-auth/")
     )
-
-
-def _next_connection_test_generation(updated_at: datetime) -> datetime:
-    current = updated_at
-    if current.tzinfo is not None:
-        current = current.astimezone(UTC).replace(tzinfo=None)
-    now = datetime.now(UTC).replace(tzinfo=None)
-    return max(now, current + timedelta(microseconds=1))
 
 
 def _account_not_found() -> EnterpriseAuthAPIError:
@@ -816,8 +808,8 @@ async def test_enterprise_auth_account(
             "企业认证账号已禁用",
         )
 
-    generation = _next_connection_test_generation(account.updated_at)
-    account.updated_at = generation
+    account.auth_generation = (account.auth_generation or 0) + 1
+    generation = account.auth_generation
     credentials = snapshot_enterprise_auth_credentials(account)
     await db.commit()
     snapshot = EnterpriseAuthConnectionTestSnapshot(
@@ -842,7 +834,7 @@ async def test_enterprise_auth_account(
     if (
         current is None
         or current.status == STATUS_DISABLED
-        or current.updated_at != snapshot.generation
+        or current.auth_generation != snapshot.generation
         or enterprise_auth_credential_fingerprint(current)
         != snapshot.credential_fingerprint
     ):

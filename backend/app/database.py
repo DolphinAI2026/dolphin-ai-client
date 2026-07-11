@@ -66,6 +66,7 @@ async def init_db():
         await conn.run_sync(Base.metadata.create_all)
         await _migrate_legacy_builder_specs(conn, inspect)
         await conn.run_sync(Base.metadata.create_all)
+        await _ensure_enterprise_auth_account_auth_generation(conn, inspect)
         # 迁移：确保新列存在（兼容 SQLite 和 MySQL）
         for stmt in [
             "ALTER TABLE applications ADD COLUMN generation_state TEXT",
@@ -221,6 +222,33 @@ async def init_db():
                 await conn.execute(text(idx_stmt))
             except Exception:
                 pass
+
+
+async def _ensure_enterprise_auth_account_auth_generation(
+    conn,
+    inspect_fn,
+) -> None:
+    """Add the durable enterprise authentication CAS generation to old tables."""
+
+    def table_columns(sync_conn) -> set[str]:
+        inspector = inspect_fn(sync_conn)
+        if not inspector.has_table("enterprise_auth_accounts"):
+            return set()
+        return {
+            column["name"]
+            for column in inspector.get_columns("enterprise_auth_accounts")
+        }
+
+    columns = await conn.run_sync(table_columns)
+    if not columns or "auth_generation" in columns:
+        return
+
+    await conn.execute(
+        text(
+            "ALTER TABLE enterprise_auth_accounts "
+            "ADD COLUMN auth_generation INTEGER NOT NULL DEFAULT 0"
+        )
+    )
 
 
 async def _migrate_code_runtime_binding_app_id_nullable(conn, inspect_fn) -> None:

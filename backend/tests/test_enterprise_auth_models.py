@@ -1,9 +1,19 @@
 from importlib import import_module
+from types import SimpleNamespace
 
 import pytest
-from sqlalchemy import CheckConstraint, UniqueConstraint, create_engine, event
+from sqlalchemy import (
+    CheckConstraint,
+    Integer,
+    UniqueConstraint,
+    create_engine,
+    event,
+    text,
+)
 from sqlalchemy.exc import IntegrityError
+from sqlalchemy.ext.asyncio import create_async_engine
 from sqlalchemy.orm import Session
+from sqlalchemy.pool import StaticPool
 
 from app.config import Settings
 from app.database import Base
@@ -101,6 +111,7 @@ def test_enterprise_auth_account_fields_and_defaults():
         "refresh_token_enc",
         "token_expires_at",
         "status",
+        "auth_generation",
         "last_verified_at",
         "last_error",
         "created_by",
@@ -110,6 +121,95 @@ def test_enterprise_auth_account_fields_and_defaults():
     for column_name in ("provider", "base_url", "tenant_ref", "account"):
         assert table.c[column_name].nullable is False
     assert table.c.status.default.arg == "unverified"
+    generation = table.c.auth_generation
+    assert isinstance(generation.type, Integer)
+    assert generation.nullable is False
+    assert generation.default.arg == 0
+    assert str(generation.server_default.arg) == "0"
+
+
+@pytest.mark.asyncio
+async def test_enterprise_auth_generation_migration_upgrades_legacy_sqlite():
+    database = import_module("app.database")
+    engine = create_async_engine(
+        "sqlite+aiosqlite://",
+        connect_args={"check_same_thread": False},
+        poolclass=StaticPool,
+    )
+
+    async with engine.begin() as connection:
+        await connection.execute(
+            text(
+                "CREATE TABLE enterprise_auth_accounts "
+                "(id INTEGER PRIMARY KEY, account VARCHAR(128) NOT NULL)"
+            )
+        )
+        await connection.execute(
+            text(
+                "INSERT INTO enterprise_auth_accounts (id, account) "
+                "VALUES (1, 'legacy-account')"
+            )
+        )
+
+        await database._ensure_enterprise_auth_account_auth_generation(
+            connection,
+            database.inspect,
+        )
+        await database._ensure_enterprise_auth_account_auth_generation(
+            connection,
+            database.inspect,
+        )
+
+        columns = await connection.run_sync(
+            lambda sync_connection: {
+                column["name"]: column
+                for column in database.inspect(sync_connection).get_columns(
+                    "enterprise_auth_accounts"
+                )
+            }
+        )
+        generation = (
+            await connection.execute(
+                text(
+                    "SELECT auth_generation "
+                    "FROM enterprise_auth_accounts WHERE id = 1"
+                )
+            )
+        ).scalar_one()
+
+    await engine.dispose()
+
+    assert columns["auth_generation"]["nullable"] is False
+    assert generation == 0
+
+
+@pytest.mark.asyncio
+async def test_enterprise_auth_generation_migration_uses_mysql_compatible_ddl():
+    database = import_module("app.database")
+
+    class MySQLConnection:
+        dialect = SimpleNamespace(name="mysql")
+
+        def __init__(self):
+            self.statements = []
+
+        async def run_sync(self, _callable):
+            return {"id", "provider"}
+
+        async def execute(self, statement):
+            self.statements.append(str(statement))
+
+    connection = MySQLConnection()
+
+    await database._ensure_enterprise_auth_account_auth_generation(
+        connection,
+        database.inspect,
+    )
+
+    assert connection.statements == [
+        "ALTER TABLE enterprise_auth_accounts "
+        "ADD COLUMN auth_generation INTEGER NOT NULL DEFAULT 0"
+    ]
 
 
 def test_enterprise_auth_account_unique_constraint():

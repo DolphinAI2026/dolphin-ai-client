@@ -958,6 +958,7 @@ async def test_older_failed_connection_test_cannot_overwrite_newer_success(
     async with api.session_factory() as session:
         stored = await session.get(EnterpriseAuthAccount, account["id"])
         assert stored.status == STATUS_CONNECTED
+        assert stored.auth_generation == 2
         assert decrypt_password(stored.access_token_enc) == "newer-access-token"
         assert stored.last_error is None
 
@@ -1001,6 +1002,7 @@ async def test_older_successful_connection_test_cannot_overwrite_newer_failure(
     async with api.session_factory() as session:
         stored = await session.get(EnterpriseAuthAccount, account["id"])
         assert stored.status == STATUS_ERROR
+        assert stored.auth_generation == 2
         assert stored.access_token_enc is None
         assert stored.last_error == "企业认证账号验证失败"
 
