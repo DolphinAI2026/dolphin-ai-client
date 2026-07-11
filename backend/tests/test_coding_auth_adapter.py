@@ -121,7 +121,11 @@ async def test_login_to_coding_control_plane_runs_password_oauth_chain(monkeypat
     monkeypatch.setattr(settings, "dolphin_code_auth_redirect_uri", "http://localhost/auth/callback", raising=False)
     monkeypatch.setattr(settings, "dolphin_code_auth_scopes", "profile,admin:control-plane", raising=False)
 
-    result = await coding_auth.login_to_coding_control_plane("system_admin", "password")
+    result = await coding_auth.login_to_coding_control_plane(
+        "system_admin",
+        "password",
+        base_url=" https://override.example.com/// ",
+    )
 
     assert result.username == "system_admin"
     assert result.display_name == "System Admin"
@@ -130,3 +134,7 @@ async def test_login_to_coding_control_plane_runs_password_oauth_chain(monkeypat
     assert result.access_token == "access-1"
     assert result.refresh_token == "refresh-1"
     assert [method for method, _url, _kwargs in calls] == ["GET", "POST", "POST", "POST", "GET"]
+    assert all(
+        url.startswith("https://override.example.com/api/auth/")
+        for _method, url, _kwargs in calls
+    )
