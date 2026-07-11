@@ -3,24 +3,35 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Annotated, Literal
 
-from fastapi import APIRouter, Depends, HTTPException, status
-from pydantic import BaseModel, ConfigDict, Field, StringConstraints, field_validator
+from fastapi import APIRouter, Depends, HTTPException, Request, status
+from fastapi.exception_handlers import request_validation_exception_handler
+from fastapi.exceptions import RequestValidationError
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    Field,
+    SecretStr,
+    StringConstraints,
+    field_validator,
+)
 from sqlalchemy import delete, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
+from starlette.responses import JSONResponse
 
 from app.config import settings
 from app.database import get_db
-from app.deps import AuthContext, require_platform_admin
+from app.deps import AuthContext, get_auth_context, require_platform_admin
 from app.models import EnterpriseAuthAccount, EnterpriseAuthBinding
 from app.services.enterprise_auth import (
     ENTERPRISE_AUTH_ACCOUNT_INVALID,
     STATUS_DISABLED,
+    STATUS_ERROR,
     STATUS_UNVERIFIED,
     EnterpriseAuthError,
-    _record_account_auth_failure,
     authenticate_enterprise_account,
     base_url_origin_changed,
+    lock_enterprise_auth_account_graph,
     lock_enterprise_auth_accounts,
     lock_enterprise_auth_bindings,
     normalize_provider,
@@ -48,11 +59,6 @@ AccountName = Annotated[
     str,
     StringConstraints(strip_whitespace=True, min_length=1, max_length=128),
 ]
-Password = Annotated[
-    str,
-    StringConstraints(strip_whitespace=True, min_length=1, max_length=4096),
-]
-
 ENTERPRISE_AUTH_ACCOUNT_NOT_FOUND = "ENTERPRISE_AUTH_ACCOUNT_NOT_FOUND"
 ENTERPRISE_AUTH_ACCOUNT_DUPLICATE = "ENTERPRISE_AUTH_ACCOUNT_DUPLICATE"
 ENTERPRISE_AUTH_BINDING_NOT_FOUND = "ENTERPRISE_AUTH_BINDING_NOT_FOUND"
@@ -69,7 +75,7 @@ class EnterpriseAuthAccountCreate(StrictInput):
     tenant_ref: TenantRef
     tenant_name: TenantName | None = None
     account: AccountName
-    password: Password
+    password: SecretStr
     enabled: bool = True
 
     @field_validator("provider", mode="before")
@@ -93,6 +99,19 @@ class EnterpriseAuthAccountCreate(StrictInput):
     def _normalize_tenant_name(cls, value: str | None) -> str | None:
         return value or None
 
+    @field_validator("password", mode="before")
+    @classmethod
+    def _preserve_password(cls, value: object) -> object:
+        return SecretStr(value) if isinstance(value, str) else value
+
+    @field_validator("password")
+    @classmethod
+    def _validate_password(cls, value: SecretStr) -> SecretStr:
+        raw_password = value.get_secret_value()
+        if not 1 <= len(raw_password) <= 4096 or not raw_password.strip():
+            raise ValueError("password must be non-empty and at most 4096 characters")
+        return value
+
 
 class EnterpriseAuthAccountUpdate(StrictInput):
     provider: Provider | None = None
@@ -100,7 +119,7 @@ class EnterpriseAuthAccountUpdate(StrictInput):
     tenant_ref: TenantRef | None = None
     tenant_name: TenantName | None = None
     account: AccountName | None = None
-    password: Password | None = None
+    password: SecretStr | None = None
     enabled: bool | None = None
 
     @field_validator("provider", mode="before")
@@ -127,6 +146,21 @@ class EnterpriseAuthAccountUpdate(StrictInput):
     @classmethod
     def _normalize_tenant_name(cls, value: str | None) -> str | None:
         return value or None
+
+    @field_validator("password", mode="before")
+    @classmethod
+    def _preserve_password(cls, value: object) -> object:
+        return SecretStr(value) if isinstance(value, str) else value
+
+    @field_validator("password")
+    @classmethod
+    def _validate_password(cls, value: SecretStr | None) -> SecretStr | None:
+        if value is None:
+            return None
+        raw_password = value.get_secret_value()
+        if not 1 <= len(raw_password) <= 4096 or not raw_password.strip():
+            raise ValueError("password must be non-empty and at most 4096 characters")
+        return value
 
 
 class EnterpriseAuthBindingCreate(StrictInput):
@@ -190,6 +224,47 @@ def _api_error(status_code: int, code: str, message: str) -> HTTPException:
     return HTTPException(
         status_code=status_code,
         detail={"code": code, "message": message},
+    )
+
+
+async def require_enterprise_auth_admin(
+    ctx: Annotated[AuthContext, Depends(get_auth_context)],
+) -> AuthContext:
+    try:
+        return await require_platform_admin(ctx)
+    except HTTPException as exc:
+        if exc.status_code != status.HTTP_403_FORBIDDEN:
+            raise
+        raise _api_error(
+            status.HTTP_403_FORBIDDEN,
+            "ENTERPRISE_AUTH_ADMIN_REQUIRED",
+            "需要平台管理员权限",
+        ) from None
+
+
+async def enterprise_auth_validation_exception_handler(
+    request: Request,
+    exc: RequestValidationError,
+) -> JSONResponse:
+    path = request.url.path
+    if not (
+        path == "/enterprise-auth"
+        or path.startswith("/enterprise-auth/")
+        or path == "/api/enterprise-auth"
+        or path.startswith("/api/enterprise-auth/")
+    ):
+        return await request_validation_exception_handler(request, exc)
+    errors = [
+        {
+            key: error[key]
+            for key in ("loc", "msg", "type")
+            if key in error
+        }
+        for error in exc.errors()
+    ]
+    return JSONResponse(
+        status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+        content={"detail": errors},
     )
 
 
@@ -329,7 +404,7 @@ async def _load_binding_accounts(
 
 @router.get("/status", response_model=EnterpriseAuthStatusView)
 async def get_enterprise_auth_status(
-    ctx: Annotated[AuthContext, Depends(require_platform_admin)],
+    ctx: Annotated[AuthContext, Depends(require_enterprise_auth_admin)],
 ) -> EnterpriseAuthStatusView:
     provider = str(settings.auth_provider or "").strip().lower()
     if provider in {"apaas", "coding", "control_plane"}:
@@ -342,7 +417,7 @@ async def get_enterprise_auth_status(
 
 @router.get("/accounts", response_model=list[EnterpriseAuthAccountView])
 async def list_enterprise_auth_accounts(
-    ctx: Annotated[AuthContext, Depends(require_platform_admin)],
+    ctx: Annotated[AuthContext, Depends(require_enterprise_auth_admin)],
     db: Annotated[AsyncSession, Depends(get_db)],
 ) -> list[EnterpriseAuthAccountView]:
     accounts = (
@@ -360,7 +435,7 @@ async def list_enterprise_auth_accounts(
 )
 async def create_enterprise_auth_account(
     data: EnterpriseAuthAccountCreate,
-    ctx: Annotated[AuthContext, Depends(require_platform_admin)],
+    ctx: Annotated[AuthContext, Depends(require_enterprise_auth_admin)],
     db: Annotated[AsyncSession, Depends(get_db)],
 ) -> EnterpriseAuthAccountView:
     account = EnterpriseAuthAccount(
@@ -372,7 +447,7 @@ async def create_enterprise_auth_account(
         status=STATUS_UNVERIFIED if data.enabled else STATUS_DISABLED,
         created_by=ctx.user.id,
     )
-    set_account_password(account, data.password)
+    set_account_password(account, data.password.get_secret_value())
     db.add(account)
     try:
         await db.commit()
@@ -394,11 +469,20 @@ async def create_enterprise_auth_account(
 async def update_enterprise_auth_account(
     account_id: int,
     data: EnterpriseAuthAccountUpdate,
-    ctx: Annotated[AuthContext, Depends(require_platform_admin)],
+    ctx: Annotated[AuthContext, Depends(require_enterprise_auth_admin)],
     db: Annotated[AsyncSession, Depends(get_db)],
 ) -> EnterpriseAuthAccountView:
-    account = await _lock_account(db, account_id)
-    await lock_enterprise_auth_bindings(db, account_id=account_id)
+    try:
+        graph = await lock_enterprise_auth_account_graph(db, account_id)
+    except EnterpriseAuthError:
+        raise _api_error(
+            status.HTTP_400_BAD_REQUEST,
+            ENTERPRISE_AUTH_ACCOUNT_INVALID,
+            "企业认证账号绑定发生并发变化",
+        ) from None
+    account = graph.account
+    if account is None:
+        raise _account_not_found()
 
     provider = data.provider if data.provider is not None else account.provider
     base_url = data.base_url if data.base_url is not None else account.base_url
@@ -417,6 +501,20 @@ async def update_enterprise_auth_account(
             ENTERPRISE_AUTH_ACCOUNT_INVALID,
             "认证源、账号或地址来源变化时必须重新提供密码",
         )
+    if provider != account.provider:
+        for binding in graph.bindings:
+            other_account_id = (
+                binding.right_account_id
+                if binding.left_account_id == account_id
+                else binding.left_account_id
+            )
+            other_account = graph.accounts_by_id.get(other_account_id)
+            if other_account is None or other_account.provider == provider:
+                raise _api_error(
+                    status.HTTP_400_BAD_REQUEST,
+                    ENTERPRISE_AUTH_ACCOUNT_INVALID,
+                    "修改认证源会使已有绑定两侧认证源相同",
+                )
 
     credentials_changed = (
         provider != account.provider
@@ -434,7 +532,7 @@ async def update_enterprise_auth_account(
     if "tenant_name" in data.model_fields_set:
         account.tenant_name = data.tenant_name
     if data.password is not None:
-        set_account_password(account, data.password)
+        set_account_password(account, data.password.get_secret_value())
 
     if credentials_changed:
         account.access_token_enc = None
@@ -467,7 +565,7 @@ async def update_enterprise_auth_account(
 @router.delete("/accounts/{account_id}")
 async def delete_enterprise_auth_account(
     account_id: int,
-    ctx: Annotated[AuthContext, Depends(require_platform_admin)],
+    ctx: Annotated[AuthContext, Depends(require_enterprise_auth_admin)],
     db: Annotated[AsyncSession, Depends(get_db)],
 ) -> dict[str, bool | int]:
     account = await _lock_account(db, account_id)
@@ -489,10 +587,20 @@ async def delete_enterprise_auth_account(
 )
 async def test_enterprise_auth_account(
     account_id: int,
-    ctx: Annotated[AuthContext, Depends(require_platform_admin)],
+    ctx: Annotated[AuthContext, Depends(require_enterprise_auth_admin)],
     db: Annotated[AsyncSession, Depends(get_db)],
 ) -> EnterpriseAuthAccountView:
-    account = await _lock_account(db, account_id)
+    try:
+        graph = await lock_enterprise_auth_account_graph(db, account_id)
+    except EnterpriseAuthError:
+        raise _api_error(
+            status.HTTP_400_BAD_REQUEST,
+            ENTERPRISE_AUTH_ACCOUNT_INVALID,
+            "企业认证账号绑定发生并发变化",
+        ) from None
+    account = graph.account
+    if account is None:
+        raise _account_not_found()
     if account.status == STATUS_DISABLED:
         await db.rollback()
         raise _api_error(
@@ -507,11 +615,17 @@ async def test_enterprise_auth_account(
         return _account_view(account)
     except Exception:
         await db.rollback()
-        await _record_account_auth_failure(
-            db,
-            account_id,
-            "企业认证账号验证失败",
-        )
+        try:
+            failed_graph = await lock_enterprise_auth_account_graph(db, account_id)
+        except EnterpriseAuthError:
+            failed_graph = None
+        failed_account = failed_graph.account if failed_graph is not None else None
+        if failed_account is not None and failed_account.status != STATUS_DISABLED:
+            failed_account.status = STATUS_ERROR
+            failed_account.last_error = "企业认证账号验证失败"
+            await db.commit()
+        else:
+            await db.rollback()
         raise _api_error(
             status.HTTP_400_BAD_REQUEST,
             ENTERPRISE_AUTH_ACCOUNT_INVALID,
@@ -521,7 +635,7 @@ async def test_enterprise_auth_account(
 
 @router.get("/bindings", response_model=list[EnterpriseAuthBindingView])
 async def list_enterprise_auth_bindings(
-    ctx: Annotated[AuthContext, Depends(require_platform_admin)],
+    ctx: Annotated[AuthContext, Depends(require_enterprise_auth_admin)],
     db: Annotated[AsyncSession, Depends(get_db)],
 ) -> list[EnterpriseAuthBindingView]:
     bindings = (
@@ -544,7 +658,7 @@ async def list_enterprise_auth_bindings(
 )
 async def create_enterprise_auth_binding(
     data: EnterpriseAuthBindingCreate,
-    ctx: Annotated[AuthContext, Depends(require_platform_admin)],
+    ctx: Annotated[AuthContext, Depends(require_enterprise_auth_admin)],
     db: Annotated[AsyncSession, Depends(get_db)],
 ) -> EnterpriseAuthBindingView:
     left_id, right_id = sorted((data.left_account_id, data.right_account_id))
@@ -596,7 +710,7 @@ async def create_enterprise_auth_binding(
 async def update_enterprise_auth_binding(
     binding_id: int,
     data: EnterpriseAuthBindingUpdate,
-    ctx: Annotated[AuthContext, Depends(require_platform_admin)],
+    ctx: Annotated[AuthContext, Depends(require_enterprise_auth_admin)],
     db: Annotated[AsyncSession, Depends(get_db)],
 ) -> EnterpriseAuthBindingView:
     current = (
@@ -683,7 +797,7 @@ async def update_enterprise_auth_binding(
 @router.delete("/bindings/{binding_id}")
 async def delete_enterprise_auth_binding(
     binding_id: int,
-    ctx: Annotated[AuthContext, Depends(require_platform_admin)],
+    ctx: Annotated[AuthContext, Depends(require_enterprise_auth_admin)],
     db: Annotated[AsyncSession, Depends(get_db)],
 ) -> dict[str, bool | int]:
     current = (

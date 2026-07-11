@@ -5,7 +5,9 @@ from types import SimpleNamespace
 import pytest
 import pytest_asyncio
 from fastapi import FastAPI
+from fastapi.exceptions import RequestValidationError
 from httpx import ASGITransport, AsyncClient
+from pydantic import BaseModel, Field
 from sqlalchemy import event, select
 from sqlalchemy.dialects import mysql
 from sqlalchemy.ext.asyncio import (
@@ -16,8 +18,9 @@ from sqlalchemy.ext.asyncio import (
 from sqlalchemy.pool import StaticPool
 
 from app.database import Base, get_db
-from app.deps import get_auth_context, require_platform_admin
+from app.deps import get_auth_context
 from app.models import EnterpriseAuthAccount, EnterpriseAuthBinding, User
+from app.crypto import decrypt_password
 from app.services.enterprise_auth import (
     ENTERPRISE_AUTH_ACCOUNT_INVALID,
     STATUS_CONNECTED,
@@ -31,6 +34,10 @@ from app.services.enterprise_auth import (
 
 ACCOUNT_PATH = "/enterprise-auth/accounts"
 BINDING_PATH = "/enterprise-auth/bindings"
+
+
+class OtherValidationInput(BaseModel):
+    name: str = Field(min_length=3)
 
 
 def _account_payload(**overrides):
@@ -122,9 +129,15 @@ async def api():
             yield session
 
     app = FastAPI()
+    app.add_exception_handler(
+        RequestValidationError,
+        enterprise_auth.enterprise_auth_validation_exception_handler,
+    )
     app.include_router(enterprise_auth.router)
     app.dependency_overrides[get_db] = _override_db
-    app.dependency_overrides[require_platform_admin] = lambda: SimpleNamespace(
+    app.dependency_overrides[
+        enterprise_auth.require_enterprise_auth_admin
+    ] = lambda: SimpleNamespace(
         user=SimpleNamespace(id=owner_id, is_platform_admin=True),
         tenant_role="platform_admin",
     )
@@ -197,6 +210,10 @@ async def test_all_endpoints_require_real_platform_admin(method, path, json_body
         response = await client.request(method, path, json=json_body)
 
     assert response.status_code == 403
+    assert response.json()["detail"] == {
+        "code": "ENTERPRISE_AUTH_ADMIN_REQUIRED",
+        "message": "需要平台管理员权限",
+    }
 
 
 @pytest.mark.asyncio
@@ -238,6 +255,96 @@ async def test_create_and_list_accounts_normalize_and_hide_secrets(api):
         assert stored.password_enc != "secret-password"
         assert stored.created_by == api.owner_id
         assert stored.status == STATUS_UNVERIFIED
+
+
+@pytest.mark.asyncio
+async def test_create_and_update_preserve_password_whitespace_exactly(api):
+    created = await _create_account(api, password="  secret  ")
+    async with api.session_factory() as session:
+        stored = await session.get(EnterpriseAuthAccount, created["id"])
+        assert decrypt_password(stored.password_enc) == "  secret  "
+
+    response = await api.client.put(
+        f"{ACCOUNT_PATH}/{created['id']}",
+        json={"password": "  rotated secret  "},
+    )
+
+    assert response.status_code == 200, response.text
+    async with api.session_factory() as session:
+        stored = await session.get(EnterpriseAuthAccount, created["id"])
+        assert decrypt_password(stored.password_enc) == "  rotated secret  "
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("payload", "secret_value"),
+    [
+        (_account_payload(password="   "), None),
+        (
+            _account_payload(password="overlong-secret-" + ("x" * 4090)),
+            "overlong-secret-",
+        ),
+        (
+            _account_payload(
+                password_enc="password-enc-secret",
+                access_token_enc="access-token-enc-secret",
+            ),
+            "password-enc-secret",
+        ),
+    ],
+)
+async def test_enterprise_auth_validation_errors_are_redacted(
+    api,
+    payload,
+    secret_value,
+):
+    response = await api.client.post(ACCOUNT_PATH, json=payload)
+
+    assert response.status_code == 422
+    assert '"input"' not in response.text
+    assert '"ctx"' not in response.text
+    if secret_value is not None:
+        assert secret_value not in response.text
+    for error in response.json()["detail"]:
+        assert set(error) <= {"loc", "msg", "type"}
+
+
+@pytest.mark.asyncio
+async def test_validation_handler_delegates_non_enterprise_paths_to_fastapi_default():
+    from app.routes.enterprise_auth import (
+        enterprise_auth_validation_exception_handler,
+    )
+
+    app = FastAPI()
+    app.add_exception_handler(
+        RequestValidationError,
+        enterprise_auth_validation_exception_handler,
+    )
+
+    @app.post("/other")
+    async def other_route(data: OtherValidationInput):
+        return data
+
+    async with AsyncClient(
+        transport=ASGITransport(app=app),
+        base_url="http://test",
+    ) as client:
+        response = await client.post("/other", json={"name": "x"})
+
+    assert response.status_code == 422
+    assert response.json()["detail"][0]["input"] == "x"
+
+
+def test_production_main_registers_enterprise_auth_validation_handler():
+    from app.main import app
+    from app.routes.enterprise_auth import (
+        enterprise_auth_validation_exception_handler,
+    )
+
+    assert (
+        app.exception_handlers[RequestValidationError]
+        is enterprise_auth_validation_exception_handler
+    )
 
 
 @pytest.mark.asyncio
@@ -287,6 +394,158 @@ async def test_identity_or_origin_change_requires_new_password(api, change):
 
     assert response.status_code == 400
     assert response.json()["detail"]["code"] == ENTERPRISE_AUTH_ACCOUNT_INVALID
+
+
+@pytest.mark.asyncio
+async def test_provider_update_rejects_same_provider_existing_binding(api):
+    apaas = await _create_account(api)
+    control = await _create_account(
+        api,
+        provider="control_plane",
+        base_url="https://control.example.com",
+        tenant_ref="enterprise-1",
+        account="control-one",
+    )
+    binding = await api.client.post(
+        BINDING_PATH,
+        json={
+            "left_account_id": apaas["id"],
+            "right_account_id": control["id"],
+            "priority": 0,
+            "enabled": True,
+        },
+    )
+    assert binding.status_code == 201
+
+    response = await api.client.put(
+        f"{ACCOUNT_PATH}/{apaas['id']}",
+        json={
+            "provider": "control_plane",
+            "password": "new-secret",
+        },
+    )
+
+    assert response.status_code == 400
+    assert response.json()["detail"]["code"] == ENTERPRISE_AUTH_ACCOUNT_INVALID
+    async with api.session_factory() as session:
+        stored = await session.get(EnterpriseAuthAccount, apaas["id"])
+        stored_binding = await session.get(
+            EnterpriseAuthBinding,
+            binding.json()["id"],
+        )
+        assert stored.provider == "apaas"
+        assert stored_binding is not None
+
+
+@pytest.mark.asyncio
+async def test_account_graph_lock_retries_endpoint_drift_in_canonical_order():
+    from app.services.enterprise_auth import lock_enterprise_auth_account_graph
+
+    target = EnterpriseAuthAccount(
+        id=1,
+        provider="apaas",
+        base_url="https://apaas.example.com",
+        tenant_ref="tenant-1",
+        account="target",
+        created_by=1,
+    )
+    first_endpoint = EnterpriseAuthAccount(
+        id=2,
+        provider="control_plane",
+        base_url="https://control.example.com",
+        tenant_ref="control-1",
+        account="first",
+        created_by=1,
+    )
+    drift_endpoint = EnterpriseAuthAccount(
+        id=3,
+        provider="control_plane",
+        base_url="https://control.example.com",
+        tenant_ref="control-2",
+        account="drift",
+        created_by=1,
+    )
+    first_binding = EnterpriseAuthBinding(
+        id=10,
+        left_account_id=1,
+        right_account_id=2,
+        priority=0,
+        enabled=True,
+        created_by=1,
+    )
+    drift_binding = EnterpriseAuthBinding(
+        id=11,
+        left_account_id=1,
+        right_account_id=3,
+        priority=1,
+        enabled=True,
+        created_by=1,
+    )
+
+    class FakeResult:
+        def __init__(self, value):
+            self.value = value
+
+        def all(self):
+            return self.value
+
+        def scalars(self):
+            return self
+
+    class DriftSession:
+        def __init__(self):
+            self.statements = []
+            self.rollback_count = 0
+
+        async def execute(self, statement):
+            self.statements.append(statement)
+            attempt = (len(self.statements) - 1) // 3
+            phase = (len(self.statements) - 1) % 3
+            if phase == 0:
+                pairs = [(1, 2)]
+                if attempt == 1:
+                    pairs.append((1, 3))
+                return FakeResult(pairs)
+            if phase == 1:
+                accounts = [target, first_endpoint]
+                if attempt == 1:
+                    accounts.append(drift_endpoint)
+                return FakeResult(accounts)
+            return FakeResult([first_binding, drift_binding])
+
+        async def rollback(self):
+            self.rollback_count += 1
+
+    session = DriftSession()
+
+    graph = await lock_enterprise_auth_account_graph(session, target.id)
+
+    compiled = [
+        " ".join(
+            str(
+                statement.compile(
+                    dialect=mysql.dialect(),
+                    compile_kwargs={"literal_binds": True},
+                )
+            )
+            .upper()
+            .split()
+        )
+        for statement in session.statements
+    ]
+    assert session.rollback_count == 1
+    assert graph.account is target
+    assert set(graph.accounts_by_id) == {1, 2, 3}
+    assert [binding.id for binding in graph.bindings] == [10, 11]
+    assert all("FOR UPDATE" not in compiled[index] for index in (0, 3))
+    assert "IN (1, 2)" in compiled[1]
+    assert "IN (1, 2, 3)" in compiled[4]
+    assert "ORDER BY ENTERPRISE_AUTH_ACCOUNTS.ID ASC FOR UPDATE" in compiled[4]
+    assert (
+        "ORDER BY ENTERPRISE_AUTH_BINDINGS.LEFT_ACCOUNT_ID ASC, "
+        "ENTERPRISE_AUTH_BINDINGS.RIGHT_ACCOUNT_ID ASC FOR UPDATE"
+        in compiled[5]
+    )
 
 
 @pytest.mark.asyncio
@@ -409,6 +668,113 @@ async def test_account_connection_test_success_commits_masked_tokens(api, monkey
         stored = await session.get(EnterpriseAuthAccount, account["id"])
         assert stored.access_token_enc
         assert stored.access_token_enc != "access-secret"
+
+
+@pytest.mark.asyncio
+async def test_account_connection_test_holds_full_account_graph_lock(
+    api,
+    monkeypatch,
+):
+    apaas = await _create_account(api)
+    control = await _create_account(
+        api,
+        provider="control_plane",
+        base_url="https://control.example.com",
+        tenant_ref="enterprise-1",
+        account="control-one",
+    )
+    assert (
+        await api.client.post(
+            BINDING_PATH,
+            json={
+                "left_account_id": apaas["id"],
+                "right_account_id": control["id"],
+                "priority": 0,
+                "enabled": True,
+            },
+        )
+    ).status_code == 201
+    original_lock = api.routes.lock_enterprise_auth_account_graph
+    locked_account_sets = []
+
+    async def _recording_lock(db, account_id):
+        graph = await original_lock(db, account_id)
+        locked_account_sets.append(set(graph.accounts_by_id))
+        return graph
+
+    async def _authenticate(stored):
+        set_account_tokens(stored, "access-secret")
+        return stored
+
+    monkeypatch.setattr(
+        api.routes,
+        "lock_enterprise_auth_account_graph",
+        _recording_lock,
+    )
+    monkeypatch.setattr(api.routes, "authenticate_enterprise_account", _authenticate)
+
+    response = await api.client.post(f"{ACCOUNT_PATH}/{apaas['id']}/test")
+
+    assert response.status_code == 200
+    assert locked_account_sets == [{apaas["id"], control["id"]}]
+
+
+@pytest.mark.asyncio
+async def test_failed_connection_test_relocks_full_graph_before_recording_error(
+    api,
+    monkeypatch,
+):
+    apaas = await _create_account(api)
+    control = await _create_account(
+        api,
+        provider="control_plane",
+        base_url="https://control.example.com",
+        tenant_ref="enterprise-1",
+        account="control-one",
+    )
+    assert (
+        await api.client.post(
+            BINDING_PATH,
+            json={
+                "left_account_id": apaas["id"],
+                "right_account_id": control["id"],
+                "priority": 0,
+                "enabled": True,
+            },
+        )
+    ).status_code == 201
+    original_lock = api.routes.lock_enterprise_auth_account_graph
+    locked_account_sets = []
+
+    async def _recording_lock(db, account_id):
+        graph = await original_lock(db, account_id)
+        locked_account_sets.append(set(graph.accounts_by_id))
+        return graph
+
+    async def _authenticate(_stored):
+        raise EnterpriseAuthError(
+            ENTERPRISE_AUTH_ACCOUNT_INVALID,
+            "upstream failure",
+        )
+
+    monkeypatch.setattr(
+        api.routes,
+        "lock_enterprise_auth_account_graph",
+        _recording_lock,
+    )
+    monkeypatch.setattr(api.routes, "authenticate_enterprise_account", _authenticate)
+
+    response = await api.client.post(f"{ACCOUNT_PATH}/{apaas['id']}/test")
+
+    assert response.status_code == 400
+    assert locked_account_sets == [
+        {apaas["id"], control["id"]},
+        {apaas["id"], control["id"]},
+    ]
+    async with api.session_factory() as session:
+        stored = await session.get(EnterpriseAuthAccount, apaas["id"])
+        assert stored.status == STATUS_ERROR
+        assert stored.last_error == "企业认证账号验证失败"
 
 
 @pytest.mark.asyncio
@@ -731,6 +1097,29 @@ async def test_missing_account_and_binding_return_structured_not_found(api):
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
+    ("method", "path", "payload"),
+    [
+        ("PUT", f"{ACCOUNT_PATH}/99999", {"tenant_name": "missing"}),
+        ("POST", f"{ACCOUNT_PATH}/99999/test", None),
+    ],
+)
+async def test_account_graph_writes_keep_account_not_found_contract(
+    api,
+    method,
+    path,
+    payload,
+):
+    response = await api.client.request(method, path, json=payload)
+
+    assert response.status_code == 404
+    assert (
+        response.json()["detail"]["code"]
+        == "ENTERPRISE_AUTH_ACCOUNT_NOT_FOUND"
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
     ("field", "value"),
     [
         ("base_url", f"https://example.com/{'x' * 240}"),
@@ -745,6 +1134,30 @@ async def test_account_input_length_limits_return_422(api, field, value):
     response = await api.client.post(ACCOUNT_PATH, json=payload)
 
     assert response.status_code == 422
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "base_url",
+    [
+        "https://exa mple.com/backend",
+        "https://example.com/bad path",
+        "https://example.com/bad\tpath",
+        "https://example.com/bad\u0001path",
+        f"https://{'a' * 64}.example.com/backend",
+    ],
+)
+async def test_account_base_url_rejects_whitespace_control_and_invalid_idna(
+    api,
+    base_url,
+):
+    response = await api.client.post(
+        ACCOUNT_PATH,
+        json=_account_payload(base_url=base_url),
+    )
+
+    assert response.status_code == 422
+    assert '"input"' not in response.text
 
 
 @pytest.mark.asyncio

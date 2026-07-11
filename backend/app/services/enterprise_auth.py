@@ -3,6 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import Any, Iterable
+import unicodedata
 from urllib.parse import urlsplit
 
 from sqlalchemy import and_, or_, select, update
@@ -29,6 +30,7 @@ ENTERPRISE_AUTH_BINDING_AMBIGUOUS = "ENTERPRISE_AUTH_BINDING_AMBIGUOUS"
 ENTERPRISE_AUTH_BINDING_UNAVAILABLE = "ENTERPRISE_AUTH_BINDING_UNAVAILABLE"
 
 _LOCKED_BINDING_RESOLUTION_MAX_ATTEMPTS = 2
+_ACCOUNT_GRAPH_LOCK_MAX_ATTEMPTS = 2
 
 
 class EnterpriseAuthError(Exception):
@@ -43,6 +45,13 @@ class BindingResolution:
     account: Any | None
     code: str
     message: str
+
+
+@dataclass(frozen=True)
+class LockedAccountGraph:
+    account: Any | None
+    accounts_by_id: dict[int, Any]
+    bindings: list[Any]
 
 
 def normalize_provider(provider: str) -> str:
@@ -63,6 +72,12 @@ def normalize_base_url(base_url: str) -> str:
 
 def validate_enterprise_base_url(base_url: str) -> str:
     raw = str(base_url or "").strip()
+    if any(
+        character.isspace()
+        or unicodedata.category(character).startswith("C")
+        for character in raw
+    ):
+        raise _account_invalid()
     try:
         parsed = urlsplit(raw)
         _ = parsed.port
@@ -78,6 +93,10 @@ def validate_enterprise_base_url(base_url: str) -> str:
         or parsed.fragment
     ):
         raise _account_invalid()
+    try:
+        parsed.hostname.encode("idna")
+    except UnicodeError:
+        raise _account_invalid() from None
     path = parsed.path.rstrip("/")
     return f"{parsed.scheme.lower()}://{parsed.netloc.lower()}{path}"
 
@@ -150,6 +169,82 @@ async def lock_enterprise_auth_bindings(
         .execution_options(populate_existing=True, autoflush=False)
     )
     return list(result.scalars().all())
+
+
+async def lock_enterprise_auth_account_graph(
+    db: Any,
+    account_id: int,
+) -> LockedAccountGraph:
+    normalized_account_id = int(account_id)
+    for attempt in range(_ACCOUNT_GRAPH_LOCK_MAX_ATTEMPTS):
+        related_pairs = (
+            await db.execute(
+                select(
+                    EnterpriseAuthBinding.left_account_id,
+                    EnterpriseAuthBinding.right_account_id,
+                )
+                .where(
+                    or_(
+                        EnterpriseAuthBinding.left_account_id
+                        == normalized_account_id,
+                        EnterpriseAuthBinding.right_account_id
+                        == normalized_account_id,
+                    )
+                )
+                .order_by(
+                    EnterpriseAuthBinding.left_account_id.asc(),
+                    EnterpriseAuthBinding.right_account_id.asc(),
+                )
+            )
+        ).all()
+        discovered_account_ids = {normalized_account_id}
+        for left_account_id, right_account_id in related_pairs:
+            discovered_account_ids.update((left_account_id, right_account_id))
+
+        locked_accounts = await lock_enterprise_auth_accounts(
+            db,
+            discovered_account_ids,
+        )
+        locked_bindings = await lock_enterprise_auth_bindings(
+            db,
+            account_id=normalized_account_id,
+        )
+        locked_endpoint_ids = {
+            endpoint_id
+            for binding in locked_bindings
+            for endpoint_id in (
+                binding.left_account_id,
+                binding.right_account_id,
+            )
+        }
+        accounts_by_id = {account.id: account for account in locked_accounts}
+        if normalized_account_id not in accounts_by_id:
+            return LockedAccountGraph(
+                account=None,
+                accounts_by_id=accounts_by_id,
+                bindings=list(locked_bindings),
+            )
+        endpoint_drifted = bool(
+            locked_endpoint_ids - discovered_account_ids
+            or discovered_account_ids - set(accounts_by_id)
+        )
+        if endpoint_drifted:
+            await db.rollback()
+            if attempt + 1 < _ACCOUNT_GRAPH_LOCK_MAX_ATTEMPTS:
+                continue
+            raise EnterpriseAuthError(
+                ENTERPRISE_AUTH_ACCOUNT_INVALID,
+                "Enterprise account bindings changed concurrently",
+            )
+        return LockedAccountGraph(
+            account=accounts_by_id.get(normalized_account_id),
+            accounts_by_id=accounts_by_id,
+            bindings=list(locked_bindings),
+        )
+    raise EnterpriseAuthError(
+        ENTERPRISE_AUTH_ACCOUNT_INVALID,
+        "Enterprise account bindings changed concurrently",
+    )
 
 
 def set_account_password(account: Any, password: str | None) -> None:

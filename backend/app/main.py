@@ -5,6 +5,7 @@ import os
 import time
 from pathlib import Path
 from fastapi import FastAPI
+from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from starlette.exceptions import HTTPException as StarletteHTTPException
@@ -137,6 +138,10 @@ app = FastAPI(
     description=APP_DESCRIPTION,
     version=APP_VERSION,
     lifespan=lifespan
+)
+app.add_exception_handler(
+    RequestValidationError,
+    enterprise_auth.enterprise_auth_validation_exception_handler,
 )
 
 # CORS配置
