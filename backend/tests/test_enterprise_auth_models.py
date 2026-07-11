@@ -1,6 +1,9 @@
 from importlib import import_module
 
-from sqlalchemy import CheckConstraint, UniqueConstraint
+import pytest
+from sqlalchemy import CheckConstraint, UniqueConstraint, create_engine, event
+from sqlalchemy.exc import IntegrityError
+from sqlalchemy.orm import Session
 
 from app.config import Settings
 from app.database import Base
@@ -9,6 +12,59 @@ from app.database import Base
 def _enterprise_auth_models():
     module = import_module("app.models.enterprise_auth")
     return module.EnterpriseAuthAccount, module.EnterpriseAuthBinding
+
+
+@pytest.fixture
+def sqlite_auth_db():
+    models = import_module("app.models")
+    account_model, binding_model = _enterprise_auth_models()
+    engine = create_engine("sqlite:///:memory:")
+
+    @event.listens_for(engine, "connect")
+    def _enable_foreign_keys(dbapi_connection, _connection_record):
+        cursor = dbapi_connection.cursor()
+        cursor.execute("PRAGMA foreign_keys=ON")
+        cursor.close()
+
+    Base.metadata.create_all(
+        engine,
+        tables=[
+            models.User.__table__,
+            account_model.__table__,
+            binding_model.__table__,
+        ],
+    )
+
+    with Session(engine) as session:
+        user = models.User(username="owner", hashed_password="hash")
+        session.add(user)
+        session.commit()
+        yield session, user.id, account_model, binding_model
+
+    engine.dispose()
+
+
+def _create_account(
+    session,
+    account_model,
+    user_id,
+    *,
+    account,
+    provider="apaas",
+    status="unverified",
+):
+    row = account_model(
+        provider=provider,
+        base_url="https://example.test",
+        tenant_ref="tenant-1",
+        account=account,
+        status=status,
+        created_by=user_id,
+    )
+    session.add(row)
+    session.commit()
+    session.refresh(row)
+    return row
 
 
 def test_auth_account_binding_is_disabled_by_default(monkeypatch):
@@ -107,9 +163,62 @@ def test_enterprise_auth_binding_fields_defaults_and_constraints():
         for constraint in table.constraints
         if isinstance(constraint, CheckConstraint)
     }
-    assert "left_account_id!=right_account_id" in checks
+    assert "left_account_id<right_account_id" in checks
 
     for column_name in ("left_account_id", "right_account_id"):
         foreign_key = next(iter(table.c[column_name].foreign_keys))
         assert foreign_key.target_fullname == "enterprise_auth_accounts.id"
         assert foreign_key.ondelete == "CASCADE"
+
+
+def test_sqlite_rejects_noncanonical_reverse_binding(sqlite_auth_db):
+    session, user_id, account_model, binding_model = sqlite_auth_db
+    left = _create_account(session, account_model, user_id, account="left")
+    right = _create_account(session, account_model, user_id, account="right")
+    session.add(
+        binding_model(
+            left_account_id=left.id,
+            right_account_id=right.id,
+            created_by=user_id,
+        )
+    )
+    session.commit()
+
+    with pytest.raises(IntegrityError):
+        session.add(
+            binding_model(
+                left_account_id=right.id,
+                right_account_id=left.id,
+                created_by=user_id,
+            )
+        )
+        session.commit()
+    session.rollback()
+
+
+def test_sqlite_rejects_invalid_enterprise_auth_provider(sqlite_auth_db):
+    session, user_id, account_model, _ = sqlite_auth_db
+
+    with pytest.raises(IntegrityError):
+        _create_account(
+            session,
+            account_model,
+            user_id,
+            account="invalid-provider",
+            provider="unsupported",
+        )
+    session.rollback()
+
+
+def test_sqlite_rejects_invalid_enterprise_auth_status(sqlite_auth_db):
+    session, user_id, account_model, _ = sqlite_auth_db
+
+    with pytest.raises(IntegrityError):
+        _create_account(
+            session,
+            account_model,
+            user_id,
+            account="invalid-status",
+            status="pending",
+        )
+    session.rollback()

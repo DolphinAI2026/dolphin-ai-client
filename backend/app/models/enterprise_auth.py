@@ -29,6 +29,14 @@ class EnterpriseAuthAccount(Base):
             "account",
             name="uq_enterprise_auth_account_identity",
         ),
+        CheckConstraint(
+            "provider IN ('apaas', 'control_plane')",
+            name="ck_enterprise_auth_account_provider",
+        ),
+        CheckConstraint(
+            "status IN ('unverified', 'connected', 'error', 'disabled')",
+            name="ck_enterprise_auth_account_status",
+        ),
     )
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
@@ -76,8 +84,8 @@ class EnterpriseAuthBinding(Base):
             name="uq_enterprise_auth_binding_pair",
         ),
         CheckConstraint(
-            "left_account_id != right_account_id",
-            name="ck_enterprise_auth_binding_distinct_accounts",
+            "left_account_id < right_account_id",
+            name="ck_enterprise_auth_binding_canonical_order",
         ),
     )
 
