@@ -1,10 +1,30 @@
 <template>
-  <BuilderFrame :breadcrumbs="[{ label: '平台' }, { label: '租户管理' }]">
+  <BuilderFrame
+    :breadcrumbs="[
+      { label: '平台' },
+      { label: activeTab === 'tenants' ? '租户管理' : '认证绑定' },
+    ]"
+  >
     <template #actions>
-      <el-button @click="load" :loading="loading">刷新</el-button>
-      <el-button type="primary" @click="openCreate">新建租户</el-button>
+      <el-button
+        :icon="Refresh"
+        :loading="activeTab === 'tenants' ? loading : authRefreshing"
+        @click="refreshActiveTab"
+      >
+        刷新
+      </el-button>
+      <el-button
+        v-if="activeTab === 'tenants'"
+        type="primary"
+        :icon="Plus"
+        @click="openCreate"
+      >
+        新建租户
+      </el-button>
     </template>
     <div class="platform-tenants-page builder-page">
+      <el-tabs v-model="activeTab" class="platform-admin-tabs">
+        <el-tab-pane label="租户管理" name="tenants">
       <div class="platform-tenants-header">
         <div>
           <h1>租户管理</h1>
@@ -297,16 +317,22 @@
           <el-button type="primary" :loading="memberSaving" @click="submitAddMember">添加</el-button>
         </template>
       </el-dialog>
+        </el-tab-pane>
+        <el-tab-pane label="认证绑定" name="enterprise-auth">
+          <EnterpriseAuthBindingsPanel ref="enterpriseAuthPanelRef" />
+        </el-tab-pane>
+      </el-tabs>
     </div>
   </BuilderFrame>
 </template>
 
 <script setup lang="ts">
-import { onMounted, ref } from 'vue'
+import { computed, onMounted, ref } from 'vue'
+import { Plus, Refresh } from '@element-plus/icons-vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import BuilderFrame from '@/components/BuilderFrame.vue'
+import EnterpriseAuthBindingsPanel from '@/components/platform/EnterpriseAuthBindingsPanel.vue'
 import EmptyState from '@/components/states/EmptyState.vue'
-import { computed } from 'vue'
 import {
   authApi,
   type PlatformUserItem,
@@ -322,6 +348,9 @@ import { useUserStore } from '@/stores/user'
 
 const userStore = useUserStore()
 
+const activeTab = ref<'tenants' | 'enterprise-auth'>('tenants')
+const authRefreshing = ref(false)
+const enterpriseAuthPanelRef = ref<{ refresh: () => Promise<void> } | null>(null)
 const loading = ref(false)
 const saving = ref(false)
 const tenants = ref<TenantAdminItem[]>([])
@@ -399,6 +428,19 @@ async function loadDashboard() {
   } catch {
     dashboard.value = null
   }
+}
+
+async function refreshActiveTab() {
+  if (activeTab.value === 'enterprise-auth') {
+    authRefreshing.value = true
+    try {
+      await enterpriseAuthPanelRef.value?.refresh()
+    } finally {
+      authRefreshing.value = false
+    }
+    return
+  }
+  await Promise.all([load(), loadDashboard()])
 }
 
 async function setDefault(row: TenantAdminItem) {
@@ -665,6 +707,21 @@ onMounted(() => {
   padding: 24px;
   font-family: var(--font-sans);
   color: var(--text);
+}
+
+.platform-admin-tabs :deep(.el-tabs__header) {
+  margin-bottom: 20px;
+}
+
+.platform-admin-tabs :deep(.el-tabs__item) {
+  height: 38px;
+  font-size: 14px;
+  font-weight: var(--fw-medium);
+}
+
+.platform-admin-tabs :deep(.el-tabs__content) {
+  min-width: 0;
+  overflow: visible;
 }
 
 .platform-tenants-header {
