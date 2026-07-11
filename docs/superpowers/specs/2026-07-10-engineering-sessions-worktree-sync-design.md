@@ -1,542 +1,736 @@
 ---
-title: 工程会话与 Worktree 同步机制设计
+title: 工程会话、按需 Worktree 与同步机制设计
 date: 2026-07-10
-status: implemented
+updated: 2026-07-11
+status: approved
 language: zh-CN
-scope: agentic-ai-user 代码生命周期
+scope: Builder AI Code 多会话、工程任务与 Agent Runtime
 ---
 
-# 工程会话、Worktree 与同步机制设计
+# 工程会话、按需 Worktree 与同步机制设计
 
-> 实现状态：第一版后端模型、YAML registry、Git 状态读取、worktree 管理、checkpoint、archive、reconcile、本地 CLI 和 README 入口已落地。产品 UI、完整工程经理技能、验证记录和自动清理仍按 P3-P5 后续推进。
+## 1. 背景
 
-## 背景
+Builder AI 的 Code 页面当前包含两层会话：
 
-当前 `builder-ai/code` 的工作流已经覆盖新建功能、修 BUG、本地运行、后台管理、认证配置、部署建议和文档沉淀等任务。问题不在于单个任务能不能完成，而在于多个任务或多个对话并行时，容易出现这些风险：
+- aPaaS Builder AI 外层 Code 应用和会话导航。
+- Agent Runtime 内层真实 Code 对话、Codex Session、Timeline 和数字员工活动。
 
-- 对话上下文归档了，但代码 worktree、运行进程、验证结果还在。
-- 任务之间改动不同，但都落在同一个主工作区，互相污染验证结论。
-- 绑定关系、README、部署说明、BUG 修复等工作混在一次会话里，后续很难追踪。
-- 多个 worktree 长期存在后，状态、主线同步、是否已合并、是否可清理缺少统一判断。
+外层通过 `externalSessionRail=true`、`hideHistory=true`、`hideNewSession=true` 隐藏内层重复的历史会话和新建按钮，因此产品入口已经明确由外层 Code 会话栏负责。
 
-这份设计把所有 code 工作统一成“工程会话”。工程会话不是聊天历史，而是一个有状态的工程任务实体。代码隔离交给 Git worktree，冲突检测交给 Git merge/rebase；系统重点管理会话状态、同步时机、checkpoint、reconcile、验证、合并和 worktree 保留/清理提醒。
+现有会话仍缺少稳定的工程任务和 Git worktree 绑定。多个会话同时修改同一工程时，容易出现以下问题：
 
-## 目标
+- 新增会话等待 Runtime 或工作区初始化，用户感知很慢。
+- 查询、解释代码等只读对话也被迫承担 worktree 成本。
+- 多个会话可能写入同一工作区，验证结论互相污染。
+- 对话归档和任务完成语义混在一起，导致 worktree 被误删或长期失联。
+- Runtime 重启后，Session、任务、worktree、分支和 Git `HEAD` 可能无法恢复一致。
+- 对话流中的完整 Plan 卡与右上角 TODO 弹层重复展示任务状态。
 
-1. 所有 code 生命周期任务都有会话：新建应用、增加需求、修 BUG、部署运维、评审、文档修改、Spec 修改。
-2. 所有可写任务默认创建独立 branch + worktree，主工作区保持默认分支和可运行状态。
-3. 不做文件级 `touched_paths`、`risk_areas`、file lock、module lock，避免重造 Git 冲突系统。
-4. 把同步时机设计成硬门禁：恢复、写入、测试、启动服务、合并、部署、归档前必须同步。
-5. 用 checkpoint commit 解决长期 dirty worktree 无边界的问题。
-6. 用 reconcile 解决 registry 与真实 Git worktree 不一致的问题。
-7. worktree 默认不删除；已合并且 clean 的 worktree 进入提醒清理状态，是否自动删除由配置控制，默认关闭。
+本设计将“聊天会话”“工程任务”“worktree”拆成独立实体，通过按需升级、Git 同步门禁和统一执行面板解决上述问题。
 
-## 非目标
+## 2. 目标
 
-- 不在第一版实现完整 UI 看板。
-- 不自动解决语义冲突；语义冲突靠主工作区总验证和人工评审暴露。
-- 不从任意 dirty worktree 直接部署。
-- 不把会话 registry 放进某个任务 worktree 里。
-- 不替代 Git 分支、Git worktree、Git merge/rebase。
+1. 新增 Code 会话立即返回并显示，不同步等待 worktree 初始化。
+2. 查询和只读分析不创建 worktree。
+3. 明确修改、构建、测试或写文档时，当前会话自动升级为工程任务并按需创建 worktree。
+4. 不同任务通过独立 worktree 并行；同一任务保持一致的执行顺序。
+5. 多个会话可以显式共享同一个任务和 worktree。
+6. 同步、恢复、合并和清理由 Git 事实驱动，不建立文件级锁系统。
+7. 归档会话不等于完成任务，也不等于删除 worktree。
+8. 前端只保留一套会话导航和一套执行状态面板。
+9. Runtime 重启后能够恢复 Session、Task、Worktree 和 Git 状态。
+10. Worktree 路径和收尾行为遵循 Superpowers 约定。
 
-## 任务类型
+## 3. 非目标
 
-工程会话支持以下类型：
+- 不实现 `touched_paths`、`risk_areas`、文件锁、模块锁或业务域锁。
+- 不自动解决 Git 冲突或语义冲突。
+- 不在 Agent Turn 结束后自动创建 checkpoint commit。
+- 不从 dirty worktree 直接部署。
+- 不把日常任务入口放到 Control Plane 管理页面。
+- 不为查询会话提前创建空分支或空 worktree。
+- 不允许 Agent 因 worktree 异常静默回退到主工作区写入。
 
-| 类型 | 说明 | 默认策略 |
-| --- | --- | --- |
-| `new-app` | 新建完整应用、系统或复杂业务体验 | 完整 agentic-ai-user DAG，必须 worktree |
-| `feature` | 增加需求或功能 | quick/standard 角色链，默认 worktree |
-| `bugfix` | 修改 BUG、排查异常 | debugging + TDD + verification，默认 worktree |
-| `deploy` | 部署、灰度、回滚、运维排障 | 独立 deploy 会话，只能部署 merged/default/release commit |
-| `review` | 代码、方案、风险评审 | 可只读；若要改代码则转 feature/bugfix 会话 |
-| `doc-change` | README、部署手册、运行说明、API 文档 | 默认 worktree，验证文档命令和路径真实性 |
-| `spec-change` | 需求、架构、Superpowers Spec、Builder 投影文档 | 必须 worktree，必须 doctor/一致性检查 |
+## 4. 核心实体
 
-## 角色调度
-
-所有任务先进入统一控制器：
+### 4.1 关系模型
 
 ```text
-agentic-ai-user-engineering-manager
+CodeAppShell 1 --- N AgentSession
+EngineeringTask 1 --- N AgentSession
+AgentSession belongs_to 0..1 EngineeringTask
+EngineeringTask owns 0..1 WorktreeBinding
 ```
 
-控制器负责：
+含义：
 
-- 判断任务类型和复杂度。
-- 创建或恢复工程会话。
-- 创建 branch + worktree。
-- 决定角色链。
-- 执行同步门禁。
-- 调用 debugging、TDD、verification 等工程方法。
-- 记录验证和 handoff。
-- 驱动合并、部署或归档。
+- `CodeAppShell`：aPaaS Builder AI 中的 Code 应用外壳。
+- `AgentSession`：用户看到的一次 Code 对话。
+- `EngineeringTask`：一次可以被多个会话继续处理的工程任务。
+- `WorktreeBinding`：任务需要本地代码隔离时绑定的 Git worktree。
 
-角色链按任务类型收敛：
+普通查询会话没有 `EngineeringTask`。纯远程运维任务可以有 `EngineeringTask`，但不一定有 `WorktreeBinding`。
 
-| 类型 | 角色链 |
-| --- | --- |
-| `new-app` | PM -> 业务分析 -> 产品 -> UI -> 技术 -> 测试 -> 原型 |
-| `feature` | 需求澄清/产品 -> 技术 -> 测试 -> 实现 |
-| `bugfix` | 问题分诊 -> 技术根因 -> 测试回归 -> 实现 |
-| `deploy` | 发布协调 -> 运维/技术 -> 验证 -> 回滚记录 |
-| `review` | 技术评审 -> 测试风险 -> findings |
-| `doc-change` | 文档负责人 -> 技术校验 |
-| `spec-change` | PM -> 技术 -> 测试/验收 -> spec doctor |
+### 4.2 AgentSession
 
-复杂度分三档：
-
-```text
-quick: 小修、小文档、小 BUG，1-2 个角色
-standard: 普通需求/普通修复，2-4 个角色
-full: 新应用、大架构、大权限、大部署，完整 DAG
-```
-
-## 会话 Registry
-
-中央 registry 放在 Agentic/Codex 全局状态目录，而不是 repo worktree 内：
-
-```text
-~/.codex/.agentic-coding/workspaces/<repo-id>/sessions/
-```
-
-每个会话一份 YAML。示例：
+建议字段：
 
 ```yaml
-id: S-002
-type: feature
-title: aPaaS 账号绑定
-status: running
-repo: apaas-builder-ai
-base_branch: main
-branch: session/S-002-feature-apaas-binding
-worktree_path: /mnt/d/workspaces/d-ai-code/worktrees/<repo-id>/S-002-feature-apaas-binding
-
-base_commit: abc123
-head_commit: def456
-merged_commit: null
-
-git_state:
-  clean: false
-  ahead: 1
-  behind: 0
-  merged_to_base: false
-  dirty_uncheckpointed: false
-  stale: false
-
-runtime_profile:
-  backend_port: 8001
-  frontend_port: 5174
-  db_profile: shared-local
-  started_from_worktree: /mnt/d/workspaces/d-ai-code/worktrees/S-002-feature-apaas-binding
-
-roles:
-  - engineering-manager
-  - technical
-  - test
-
-verification:
-  last_status: pending
-  last_commands: []
-
-cleanup:
-  suggested: false
-  auto_delete: false
-
-last_sync_at: 2026-07-10T04:00:00+08:00
+id: runtime-session-id
+shell_session_id: 123
+engineering_task_id: null
+workspace_mode: base_readonly
+workspace_path: /workspace/repository
+state: waiting_input
+archived_at: null
+created_at: 2026-07-11T12:00:00+08:00
+updated_at: 2026-07-11T12:00:00+08:00
 ```
 
-明确不记录：
+`workspace_mode`：
+
+- `base_readonly`：默认工程的只读视图。
+- `task_worktree`：已绑定任务 worktree。
+- `remote_only`：远程运维任务，不访问本地代码。
+
+### 4.3 EngineeringTask
+
+建议字段：
+
+```yaml
+id: task-20260711-001
+shell_session_id: 123
+title: 修复登录状态丢失
+task_type: bugfix
+state: active
+worktree_binding_id: worktree-001
+active_turn_session_id: runtime-session-a
+queue_revision: 4
+created_from_session_id: runtime-session-a
+created_at: 2026-07-11T12:05:00+08:00
+updated_at: 2026-07-11T12:10:00+08:00
+```
+
+任务类型至少包括：
+
+- `new_app`
+- `feature`
+- `bugfix`
+- `doc_change`
+- `spec_change`
+- `test_build`
+- `deploy_ops`
+- `review`
+
+### 4.4 WorktreeBinding
+
+建议字段：
+
+```yaml
+id: worktree-001
+engineering_task_id: task-20260711-001
+repository_id: apaas-builder-ai
+branch: task/task-20260711-001-fix-login-state
+path: /workspace/repository/.worktrees/task-20260711-001-fix-login-state
+git_common_dir: /workspace/repository/.git
+base_branch: main
+base_head: abc123
+current_head: def456
+state: ready
+created_at: 2026-07-11T12:05:02+08:00
+last_verified_at: 2026-07-11T12:10:00+08:00
+```
+
+## 5. 场景与 Worktree 策略
+
+| 场景 | 是否创建任务 | 是否创建 worktree |
+| --- | --- | --- |
+| 查询代码、解释逻辑、讨论方案 | 否 | 否 |
+| 查看 Git 状态、只读检索 | 否 | 否 |
+| 新建应用、增加功能、修改 BUG | 是 | 是 |
+| 修改 README、Spec、部署文档 | 是 | 是 |
+| 运行测试、构建或可能产生文件的命令 | 是 | 是 |
+| 代码评审但不修改 | 可选 | 否 |
+| 查询日志、查看远程环境 | 是或否 | 否 |
+| 修改部署清单、脚本或配置 | 是 | 是 |
+| 纯远程发布或回滚 | 是 | 否 |
+
+## 6. 按需升级
+
+### 6.1 默认行为
+
+点击“新建会话”只创建 `AgentSession`，立即返回并插入左侧会话栏：
+
+```text
+POST /api/agent/sessions
+-> 202 Accepted
+-> session.state = waiting_input
+-> workspace_mode = base_readonly
+-> engineering_task_id = null
+```
+
+不会在这个请求中创建分支或 worktree。
+
+### 6.2 自动升级触发
+
+以下意图明确时，Runtime 自动创建任务并准备 worktree：
+
+- 新增、修改、删除代码或文档。
+- 修复 BUG。
+- 新建应用。
+- 运行测试、构建、格式化、代码生成等可能写入文件的命令。
+- 修改部署清单、运维脚本或本地配置。
+
+流程：
+
+```text
+用户发送消息
+  -> Runtime 判断为明确写入意图
+  -> 持久化 EngineeringTask
+  -> 返回 task_preparing 状态
+  -> 后台创建 WorktreeBinding
+  -> 启动或切换 Codex Thread 到 worktree cwd
+  -> 执行首条消息
+```
+
+首条消息在 worktree 未就绪时进入任务队列，不丢失，也不要求用户重复发送。
+
+### 6.3 不明确意图
+
+当用户表达既可能是分析，也可能要求修改时，询问一次：
+
+```text
+仅分析当前实现，还是进入工程任务并修改？
+```
+
+明确的修改请求不重复询问。
+
+### 6.4 首次写入保护
+
+如果前置判断为只读，但 Agent 后续尝试写文件或执行写能力命令，Runtime 必须在实际写入前：
+
+1. 暂停当前 Turn。
+2. 创建或绑定工程任务。
+3. 创建 worktree。
+4. 将 Session 的 workspace 重新绑定到 worktree。
+5. 恢复 Turn。
+
+禁止写入主工作区后再补建 worktree。
+
+## 7. 会话创建模式
+
+前端和 API 支持三种显式模式：
+
+### 7.1 `new_conversation`
+
+- 新建普通查询会话。
+- 不创建任务。
+- 不创建 worktree。
+- 是应用分组 `+` 的默认行为。
+
+### 7.2 `continue_task`
+
+- 新建一个 AgentSession。
+- 绑定已有 EngineeringTask。
+- 复用已有 worktree。
+- 多个会话共享任务，但遵守同一任务的执行协调。
+
+### 7.3 `fork_task`
+
+- 从已有任务的最后提交 `HEAD` 创建新任务和新 worktree。
+- 不复制未提交修改。
+- 如果源任务 dirty，必须明确提示未提交修改不会进入派生任务。
+
+## 8. Worktree 约定
+
+使用 Superpowers 默认目录：
+
+```text
+<repo>/.worktrees/<task-id>-<slug>
+```
+
+要求：
+
+- `<repo>/.worktrees/` 必须在 `.gitignore` 中。
+- 分支名包含稳定任务 ID，避免仅依赖易变标题。
+- Agent Runtime 持久化绝对路径，但 UI 默认只显示分支名和 worktree 短名称。
+- 主工作区保持默认分支，不切换到任务分支。
+- Agent Turn 的写权限只覆盖当前任务 worktree、Git common-dir 和 Session Runtime 临时目录。
+- 主工作区和其他 worktree 不进入本次 Turn 的写权限范围。
+
+## 9. 并发模型
+
+### 9.1 可以并行
+
+- 普通查询会话之间。
+- 不同 EngineeringTask 之间。
+- 不同 worktree 之间。
+
+### 9.2 同一任务
+
+同一 EngineeringTask 同时只允许一个活跃 Agent Turn，包括读写 Turn，避免读取到修改一半的工作区。
+
+第二个会话发送消息时提供：
+
+- 排队执行。
+- 派生新任务。
+- 取消发送。
+
+队列项记录：
+
+```yaml
+id: queue-item-id
+session_id: runtime-session-b
+expected_head: def456
+message_ref: message-id
+state: queued
+```
+
+轮到执行时，如果 `expected_head` 和当前任务 `HEAD` 不一致，队列项进入 `needs_confirmation`，要求刷新上下文后继续。
+
+### 9.3 不建立文件锁
+
+系统不记录：
 
 ```yaml
 touched_paths
 risk_areas
 file_locks
 module_locks
+runtime_locks
 ```
 
-代码冲突由 Git 决定，registry 只记录会话与 Git 状态。
+代码冲突由 Git merge/rebase 判断。运行端口冲突由启动命令即时检查，不进入持久化锁模型。
 
-## Worktree 策略
+## 10. 同步时机
 
-主工作区保持默认分支，用于总验证、运行和部署前检查。
+同步只在明确时机执行，避免后台持续修改任务分支：
+
+1. 会话升级为任务前。
+2. 打开或恢复任务时。
+3. Agent Turn 开始前。
+4. 排队消息执行前。
+5. Agent Turn 结束后刷新状态。
+6. 完成任务前。
+7. 合并、创建 PR 或恢复异常任务前。
+8. Runtime 启动 reconcile 时。
+
+同步规则：
+
+- `git fetch` 获取远端事实。
+- 只允许安全快进。
+- 不自动 rebase、merge 或解决冲突。
+- 不自动创建 checkpoint commit。
+- Turn 结束后只刷新 `HEAD`、clean/dirty、ahead/behind 和 merged 状态。
+- 分叉、冲突或 dirty 状态不符合动作前置条件时停止操作。
+
+## 11. Runtime 组件边界
+
+### 11.1 `EngineeringTaskService`
+
+- 创建普通会话。
+- 判断或接收任务升级意图。
+- 创建、继续、派生和完成任务。
+
+### 11.2 `EngineeringTaskStore`
+
+- 持久化 Session、Task、WorktreeBinding 和队列。
+- 提供 revision/CAS，避免并发覆盖。
+- 保证 Agent Runtime 是任务状态的唯一写入者。
+
+### 11.3 `TaskWorktreeManager`
+
+- 创建和校验 worktree。
+- 读取 Git 状态。
+- 识别 worktree 缺失、分支不匹配和 Git common-dir 不匹配。
+- 执行经过确认的清理。
+
+### 11.4 `TaskExecutionCoordinator`
+
+- 维护任务级活跃 Turn。
+- 管理排队、取消和派生。
+- 校验 `expectedHead`。
+
+### 11.5 `TaskGitSynchronizer`
+
+- fetch 和安全快进。
+- 刷新 ahead/behind、clean/dirty、merged。
+- 拒绝静默冲突处理。
+
+### 11.6 `TaskLifecycleGateway`
+
+- 在 Agent Turn 外执行 merge、PR、keep、discard。
+- 完成前校验共享 Session、活跃 Turn、dirty 和 merged 状态。
+- 避免 Agent 在对话中自行删除当前 cwd。
+
+## 12. aPaaS Builder 与 Runtime 所有权
+
+### 12.1 aPaaS Builder AI
+
+负责：
+
+- Code 应用外壳。
+- 外层左侧会话栏。
+- 调用 Agent Runtime Session/Task API。
+- 展示任务状态投影。
+- 将 Session 切换和用户操作代理到 Runtime。
+
+不负责：
+
+- 直接创建 Git worktree。
+- 直接修改 Runtime 任务状态。
+- 自己维护第二套任务 registry。
+
+### 12.2 Agent Runtime
+
+负责：
+
+- AgentSession、EngineeringTask、WorktreeBinding 的真实状态。
+- Codex Thread cwd 和写权限。
+- 并发协调、同步、恢复和任务收尾。
+- 任务、数字员工和 Trace 的统一数据源。
+
+### 12.3 Control Plane
+
+负责沙箱和部署级运维能力，不作为日常会话、任务和 worktree 的主要产品入口。
+
+## 13. 前端设计
+
+### 13.1 页面归属
+
+主要改造位置：
+
+- `apaas-builder-ai/frontend/src/components/v2/RailSidebar.vue`
+- `apaas-builder-ai/frontend/src/views/CodeConversationPage.vue`
+- `agent-runtime/web/builder/src/components/chat/ChatPane.tsx`
+
+内嵌 Runtime 保持：
 
 ```text
-/mnt/d/workspaces/d-ai-code/apaas-builder-ai
-  主工作区，保持默认分支
-
-/mnt/d/workspaces/d-ai-code/worktrees/<repo-id>/
-  S-001-bugfix-code-blank
-  S-002-feature-apaas-binding
-  S-003-doc-readme-runbook
+externalSessionRail = true
+hideHistory = true
+hideNewSession = true
 ```
 
-默认父目录使用稳定 `repo_id` 命名空间，避免同级多个仓库产生同名 session worktree 冲突；显式 `--worktree-parent` 保持调用方给定路径。可写任务默认创建 worktree：
+不在 iframe 内重复增加完整会话历史。
+
+### 13.2 左侧会话栏
+
+应用分组 `+`：
+
+- 默认立即创建普通会话。
+- 不等待任务或 worktree。
+
+会话行按状态显示：
+
+- 等待输入。
+- 准备工作区。
+- 执行中。
+- 排队中。
+- 上下文已变化。
+- 等待合并。
+- 已合并。
+- 工作区异常。
+
+只有绑定 EngineeringTask 的会话才显示 Git 和任务状态。
+
+会话菜单：
+
+- 继续此任务。
+- 派生新任务。
+- 完成任务。
+- 归档会话。
+
+普通查询会话只显示归档；在明确要求修改时原地升级。
+
+多个会话共享任务时显示：
 
 ```text
-session/S-001-bugfix-code-blank
-session/S-002-feature-apaas-binding
-session/S-003-doc-readme-runbook
+共享任务 · N 个会话
 ```
 
-只读分析可以不创建 worktree。部署会话不能从 dirty worktree 发版，只能部署已合并的 default/release commit。
+### 13.3 对话区
 
-## 同步门禁
+对话头部只显示当前上下文：
 
-同步是这套方案的核心。以下动作前必须同步：
+- 普通会话不显示 branch/worktree。
+- 任务会话显示任务名、分支和同步状态。
+- 并发、准备、`HEAD` 变化等提示显示在输入框上方。
 
-1. 创建会话前。
-2. 恢复会话前。
-3. 写文件前。
-4. 运行测试前。
-5. 启动服务前。
-6. 切换会话前。
-7. 合并前。
-8. 部署前。
-9. 归档前。
-
-同步命令以 Git 为权威：
-
-```bash
-git worktree list --porcelain
-git -C <worktree> status --short
-git -C <worktree> rev-parse HEAD
-git -C <worktree> fetch origin
-git -C <worktree> rev-list --left-right --count HEAD...origin/<default>
-git -C <worktree> merge-base HEAD origin/<default>
-```
-
-每次恢复会话或开始写入前，必须展示或校验：
+对话流不再展示完整 Plan 卡，只保留一条进度摘要：
 
 ```text
-current_session
-cwd
-worktree_path
-branch
-git clean/dirty
-ahead/behind
-last verification
+计划执行中 · 2/4 · 正在派发专业设计角色 · 查看任务
 ```
 
-这样避免“以为在 S-003，实际 shell 在 S-001”的事故。
+点击摘要打开统一执行面板的“任务”Tab。
 
-## Git 状态判定
+### 13.4 统一执行面板
 
-会话同步后只判断这些状态：
+右上角只保留一个“执行活动”入口，使用一个面板和三个 Tab：
 
-| 状态 | 含义 |
-| --- | --- |
-| `clean` / `dirty` | worktree 是否有未提交改动 |
-| `ahead` / `behind` | session branch 相对默认分支的提交差异 |
-| `merged_to_base` | session branch 是否已合入默认分支 |
-| `stale` | 默认分支更新后，会话未同步 |
-| `very_stale` | behind 超过阈值或超过指定天数未同步 |
-| `orphan_session` | worktree/branch/registry 三者无法互相对应 |
-| `retained` | 已合并但 worktree 仍保留 |
+#### 任务
 
-恢复 `very_stale` 会话时，第一步必须同步默认分支并重新验证，不能直接继续写。
+- 当前工程任务。
+- 是否已创建 worktree。
+- branch、同步状态、当前 `HEAD` 摘要。
+- 活跃会话和排队数量。
+- 执行计划步骤。
+- 完成任务入口。
 
-## Checkpoint 规则
+#### 数字员工
 
-Git 对 commit 边界最可靠。长期 dirty worktree 是同步最大漏洞。
+- 角色名称。
+- waiting/running/completed/blocked 状态。
+- 当前工作摘要。
+- 打开数字员工详细 Timeline。
 
-离开会话、归档、合并前，如果有改动，必须二选一：
+#### Trace
+
+- 工具调用。
+- 技能调用。
+- Runtime 状态变更。
+- 原始错误代码和诊断信息。
+
+面板在桌面端作为 Code 工作区内的右侧停靠面板，打开时收缩对话区域，不覆盖内容。窄屏使用全宽 Drawer。
+
+移除：
+
+- 对话右侧重复的完整 Plan 卡。
+- 活动弹层中任务和数字员工的纵向混排。
+- 两套独立任务完成状态。
+
+## 14. 归档
+
+归档只作用于 AgentSession：
+
+1. 中断该 Session 的活跃 Turn。
+2. 将 Session 标记为 archived。
+3. 不提交、不合并、不删除 worktree。
+4. 不自动完成 EngineeringTask。
+
+如果归档的是任务的最后一个可见 Session：
+
+- EngineeringTask 保持 active/retained。
+- 任务出现在应用的“继续任务”列表。
+- 用户可以创建新会话重新绑定任务。
+
+## 15. 完成任务
+
+完成任务提供四种结果：
+
+### 15.1 本地合并
+
+- 同步并验证。
+- 合并到默认分支。
+- 按 Superpowers 默认执行 cleanup，但必须先满足 Runtime 安全前置条件。
+
+安全前置条件：
+
+- 没有活跃 Agent Turn。
+- 没有待执行队列。
+- 没有其他 Session 正在使用该 cwd。
+- worktree clean。
+- 分支已经合并。
+
+前置条件不满足时保留 worktree并提示处理。
+
+### 15.2 创建 PR
+
+- 创建或记录 PR。
+- 保留分支和 worktree。
+
+### 15.3 保留任务
+
+- 保留任务、分支和 worktree。
+- 状态进入 retained。
+
+### 15.4 放弃任务
+
+- 要求输入任务名确认。
+- 检查 active turn、dirty 和未提交修改。
+- 确认后删除 worktree和任务分支。
+
+未合并、dirty、blocked 的 worktree 不进入自动清理。
+
+已合并且 clean 的保留 worktree可以进入定期清理候选。
+
+## 16. 恢复与 Reconcile
+
+Runtime 启动和任务打开时执行 reconcile。
+
+每个 worktree 根目录写入：
 
 ```text
-1. 创建本地 checkpoint commit
-2. 标记 dirty_uncheckpointed
+.agentic/task-worktree.yaml
 ```
 
-推荐默认创建本地 checkpoint commit，不一定 push：
-
-```text
-checkpoint: S-002 aPaaS binding backend endpoint
-checkpoint: S-002 admin UI binding dialog
-```
-
-`dirty_uncheckpointed` 允许存在，但恢复和合并时必须高亮提示。未 checkpoint 的 dirty worktree 不允许自动清理。
-
-## Reconcile 机制
-
-需要一个手动或周期性命令：
-
-```text
-agentic session reconcile
-```
-
-reconcile 做双向修复：
-
-| 发现 | 处理 |
-| --- | --- |
-| registry 有 session，但 worktree 不存在 | 标记 `missing_worktree` |
-| worktree 存在，但 registry 没记录 | 创建 `orphan_session` |
-| branch 已合并，但 session 未更新 | 标记 `merged_retained` |
-| worktree dirty，registry 说 clean | 更新为 dirty |
-| session 长期未同步 | 标记 `stale` 或 `very_stale` |
-| registry branch 与 worktree branch 不一致 | 标记 `branch_mismatch`，停止写入 |
-
-这解决“对话归档了，但 worktree 还在、状态不同步”的问题。
-
-## 文档任务
-
-文档作为一等会话，不再作为顺手改动。
-
-`doc-change` 包括：
-
-- README。
-- 本地运行方式。
-- 部署手册。
-- 运维 runbook。
-- API 文档。
-
-验证方式：
-
-- README 中的命令能跑通。
-- 路径和端口真实存在。
-- API 文档有 curl 或测试对应。
-- 部署文档包含启动、停止、回滚和环境变量检查。
-
-`spec-change` 包括：
-
-- 需求规格。
-- 架构设计。
-- Superpowers Spec。
-- Builder 投影文档。
-
-验证方式：
-
-- 必须运行对应 doctor 或一致性检查。
-- 不能绕过 Builder 投影生成规则手写生成资产。
-
-如果文档描述某个功能，会话要依赖对应功能会话：
+只记录非敏感身份信息：
 
 ```yaml
-depends_on:
-  - S-002-feature-apaas-binding
+engineering_task_id: task-20260711-001
+repository_id: apaas-builder-ai
+branch: task/task-20260711-001-fix-login-state
+created_at: 2026-07-11T12:05:02+08:00
 ```
 
-避免文档先合并，功能还未合并。
+恢复矩阵：
 
-## 运行资源
+| Store | Worktree | Git 状态 | 处理 |
+| --- | --- | --- | --- |
+| 有 | 有 | 匹配 | 恢复 ready |
+| 有 | 无 | - | `WORKTREE_MISSING` |
+| 无 | 有 | 元数据完整 | 提示恢复绑定 |
+| 有 | 有 | branch 不匹配 | `WORKTREE_BINDING_MISMATCH` |
+| 有 | 有 | common-dir 不匹配 | 停止执行 |
+| 有 | 有 | `HEAD` 变化 | 刷新或要求确认 |
 
-worktree 不隔离运行资源。runtime 只做 profile 记录和启动时检测，不做复杂锁系统：
+任何恢复失败都不能回退到主工作区写入。
 
-```yaml
-runtime_profile:
-  backend_port: 8001
-  frontend_port: 5174
-  db_profile: shared-local
-  env_file: .env.session
-  log_path: .run/S-002/
-```
+## 17. 错误码
 
-启动服务前必须校验：
+| 错误码 | 含义 | 用户动作 |
+| --- | --- | --- |
+| `TASK_BUSY` | 同一任务已有活跃 Turn | 排队、派生或取消 |
+| `TASK_HEAD_CHANGED` | 入队后任务 `HEAD` 已变化 | 刷新上下文后继续 |
+| `WORKTREE_INIT_FAILED` | worktree 创建失败 | 重试、仅分析、绑定已有任务 |
+| `WORKTREE_MISSING` | 持久化目录不存在 | 重建或重新绑定 |
+| `WORKTREE_BINDING_MISMATCH` | branch/path/common-dir 不匹配 | 停止并恢复 |
+| `TASK_FINISH_BLOCKED` | 任务不满足收尾条件 | 处理 active/dirty/queue |
+| `TASK_WRITE_REQUIRES_WORKTREE` | 查询会话准备写入 | 自动升级或等待确认 |
 
-- 当前 cwd 是否等于会话 worktree。
-- 端口是否已被其他进程占用。
-- 进程是否来自当前 worktree。
-- 共享数据库是否会影响验证结论。
+任务 Tab 显示可理解的处理建议；Trace Tab 保留原始错误码和诊断。
 
-如果发现端口冲突，换端口或停止旧进程；如果发现服务来自其他 worktree，必须停止并重启，不能继续用旧服务验证新代码。
+## 18. API 方向
 
-## 合并流程
-
-合并完全走 Git：
+建议接口：
 
 ```text
-1. sync session
-2. 确认 clean 或 checkpoint
-3. fetch origin
-4. merge/rebase default 到 session branch
-5. 解决 Git 冲突
-6. worktree 内跑验证
-7. 合并到 default
-8. 主工作区更新并跑总验证
-9. 标记 merged_commit
-10. session 状态改 merged_retained
-11. 提示 worktree 可关闭/清理
+POST   /api/agent/sessions
+POST   /api/agent/sessions/{sessionId}/upgrade-task
+POST   /api/engineering-tasks/{taskId}/sessions
+POST   /api/engineering-tasks/{taskId}/fork
+GET    /api/engineering-tasks/{taskId}
+GET    /api/engineering-tasks/{taskId}/activity
+POST   /api/engineering-tasks/{taskId}/queue
+DELETE /api/engineering-tasks/{taskId}/queue/{queueItemId}
+POST   /api/engineering-tasks/{taskId}/finish
+POST   /api/engineering-tasks/{taskId}/reconcile
 ```
 
-Git 冲突进入：
+aPaaS Builder 通过现有 Code Runtime Proxy 转发，不直接访问 Runtime 持久化目录。
 
-```text
-merge_conflict
-```
+所有修改 Task/Worktree 状态的请求携带 revision，使用 CAS 防止重复点击和并发覆盖。
 
-不提前用文件锁预测。无 Git 冲突但行为可能冲突时，靠主工作区总验证暴露。
+## 19. 迁移
 
-## 部署流程
+现有 Agent Runtime Session 迁移规则：
 
-部署作为独立 `deploy` 会话。
+- 保持原 Session ID 和对话历史。
+- 默认 `engineering_task_id = null`。
+- 默认 `workspace_mode = base_readonly`。
+- 如果现有 Session 已有明确独立 workspace 映射，可以由 reconcile 建议绑定任务，不自动修改。
+- 首次明确写入时按新流程升级。
 
-硬规则：
+现有 aPaaS `CodeRuntimeAgentSession` 映射继续保留，新增 `engineering_task_id` 和任务状态投影字段。
 
-- 部署源必须是 default/release/merged commit。
-- 不允许部署 dirty worktree。
-- 部署前必须跑总验证。
-- 部署记录必须包含 release commit、环境、回滚点、健康检查结果。
+## 20. 实施阶段
 
-部署队列按环境串行：
+### Phase 1：Runtime 基础
 
-```yaml
-deploy_queue:
-  environment: staging
-  current_release_session: S-010
-  pending_sessions:
-    - S-011
-```
+- 可选任务和 worktree 绑定。
+- 按需升级。
+- Worktree Manager。
+- Task Execution Coordinator。
+- 持久化、revision 和 reconcile。
 
-## Worktree 保留与清理
+### Phase 2：Builder AI 前端
 
-worktree 默认不删除。
+- 左栏任务状态和菜单。
+- 普通会话即时创建。
+- 统一执行活动三 Tab。
+- Plan 摘要入口。
+- 并发和 `HEAD` 变化交互。
 
-会话状态：
+### Phase 3：任务收尾
 
-```text
-running
-verifying
-waiting_merge
-merged_retained
-archived_dirty
-blocked_retained
-abandoned_retained
-missing_worktree
-orphan_session
-```
-
-清理策略默认只提醒，不自动删：
-
-```yaml
-cleanup_policy:
-  merged_clean:
-    prompt_after_days: 1
-    remind_after_days: 7
-    cleanup_candidate_after_days: 30
-    auto_delete: false
-
-  dirty:
-    auto_delete: false
-
-  unmerged:
-    auto_delete: false
-
-  blocked:
-    auto_delete: false
-```
-
-只有用户明确同意，或配置显式打开 `auto_delete`，才执行：
-
-```bash
-git worktree remove <path>
-```
-
-未合并、dirty、blocked 的 worktree 永不自动删除。
-
-## 归档流程
-
-对话归档不等于 worktree 删除。
-
-归档前：
-
-1. 同步 registry 与 Git。
-2. 记录当前 branch/head/clean/dirty/ahead/behind。
-3. 如果 dirty，要求 checkpoint 或标记 `dirty_uncheckpointed`。
-4. 写 session summary。
-5. 停止或释放运行进程。
-6. 若已合并且 clean，标记 `merged_retained` 并提示可清理。
-7. 若未合并或 dirty，保留 worktree。
-
-## 第一版落地范围
-
-第一版不做完整 UI，先实现协议和本地 registry。
-
-### P0：规范文档
-
-交付：
-
-- 会话类型与状态。
-- worktree 策略。
-- 同步门禁。
-- checkpoint 规则。
-- reconcile 规则。
-- cleanup 规则。
-
-### P1：Session Registry
-
-交付：
-
-- `agentic session create`
-- `agentic session resume`
-- `agentic session sync`
-- `agentic session archive`
-- `agentic session list`
-- YAML registry。
-
-### P2：Worktree Manager
-
-交付：
-
-- 创建 branch + worktree。
-- 检查 clean/dirty/ahead/behind/merged。
-- 创建 checkpoint commit。
-- 标记 `merged_retained`。
-- 标记 `missing_worktree`、`orphan_session`。
-
-### P3：Engineering Manager Skill
-
-交付：
-
-- feature/bugfix/doc-change 三类先接入。
-- 角色链 quick/standard/full。
-- 写入前同步校验。
-- 验证前同步校验。
-
-### P4：验证与合并流程
-
-交付：
-
-- pytest/build/curl/Playwright 结果记录。
-- worktree 内验证。
-- 主工作区总验证。
-- merged commit 记录。
-
-### P5：产品 UI
-
-交付：
-
-- 会话列表。
-- 会话详情。
-- worktree 状态。
-- 验证记录。
+- merge、PR、keep、discard。
+- 清理安全前置条件。
 - 已合并 worktree 清理提醒。
+- 异常恢复入口。
 
-## 验收标准
+## 21. 测试
 
-1. 可写任务默认在独立 worktree 执行。
-2. 恢复会话前能准确显示 worktree、branch、clean/dirty、ahead/behind。
-3. registry 丢失或 worktree 孤儿时，reconcile 能发现并标记。
-4. dirty worktree 离开会话前能 checkpoint 或标记 `dirty_uncheckpointed`。
-5. 合并前能自动识别 stale/behind 并要求同步。
-6. 合并后 worktree 不删除，状态变为 `merged_retained`，并提示清理。
-7. doc-change 和 spec-change 能作为独立会话管理。
-8. deploy 会话只能部署 merged/default/release commit。
+### 21.1 Runtime 单元测试
 
-## 风险与缓解
+- 普通会话不创建任务和 worktree。
+- 明确写入意图创建任务。
+- 不明确意图等待确认。
+- 首次写入保护不会写入主工作区。
+- revision/CAS 拒绝旧写入。
+- 同一任务只允许一个活跃 Turn。
+- `expectedHead` 变化进入确认。
 
-| 风险 | 缓解 |
-| --- | --- |
-| worktree 数量长期增长 | 已合并 clean worktree 定期提醒清理，默认不自动删除 |
-| registry 与 Git 状态分叉 | 每次关键动作前 sync，定期 reconcile |
-| dirty worktree 无边界 | 离开、归档、合并前 checkpoint 或标记 |
-| agent 在错误目录执行 | 写入、测试、启动服务前校验 cwd/worktree/branch |
-| 无 Git 冲突但语义冲突 | 合并后主工作区总验证作为硬门禁 |
-| 文档提前合并 | doc-change 支持 depends_on，依赖功能会话合并后再合文档 |
-| 部署幽灵版本 | deploy 只允许 merged/default/release commit |
+### 21.2 Git 集成测试
 
-## 后续决策点
+- 创建、继续和派生真实 worktree。
+- dirty 源任务派生不复制未提交修改。
+- ahead/behind/merged 判定。
+- worktree missing、branch mismatch、common-dir mismatch。
+- merge cleanup 安全前置条件。
+- PR/keep 保留 worktree。
+- discard 需要确认。
 
-1. registry 存储是否只用 YAML，还是同时提供 SQLite 索引。
-2. checkpoint commit 是否默认自动创建，还是每次询问。
-3. `very_stale` 阈值：按天数、commit 数，或两者结合。
-4. 已合并 worktree 是否永远只提醒，还是允许配置自动删除。
-5. 第一版 CLI 命令命名使用 `agentic session`，还是集成到现有 Builder/Code 后台命令体系。
+### 21.3 前端测试
+
+- 普通会话即时插入左栏。
+- 任务升级状态切换。
+- 只有任务会话显示 Git 状态。
+- 继续任务、派生任务、完成任务菜单。
+- 任务、数字员工、Trace 三 Tab。
+- Plan 摘要点击打开任务 Tab。
+- 移除重复 Plan/TODO。
+- 桌面停靠面板和窄屏 Drawer。
+
+### 21.4 端到端测试
+
+- 查询会话全程不创建 worktree。
+- 查询会话后续修改时原地升级。
+- 新增会话期间立即输入首条消息。
+- 不同任务并行执行。
+- 同一任务排队和派生。
+- Runtime 重启后恢复任务。
+- 归档最后一个会话后仍可继续任务。
+- 合并、PR、保留和放弃完整流程。
+
+## 22. 验收标准
+
+1. 新增普通会话在持久化后立即显示，不等待 Runtime 工作区初始化。
+2. 查询、解释和只读分析不会创建 worktree。
+3. 明确修改请求在实际写入前自动创建任务和 worktree。
+4. Agent 永远不能因任务绑定失败而写入主工作区。
+5. 不同任务可以并行，同一任务正确串行。
+6. 多个会话可以共享任务和 worktree。
+7. 归档会话不会完成任务或删除 worktree。
+8. Runtime 重启后能够恢复 Session、Task、Worktree 和 Git 状态。
+9. 同步只执行 fetch 和安全快进，不自动 merge/rebase/checkpoint。
+10. 冲突完全交给 Git，不引入文件锁。
+11. 前端只保留一个会话导航和一个执行活动面板。
+12. 任务、数字员工、Trace 使用三个 Tab 展示。
+13. 对话流只显示 Plan 摘要，不再出现重复 TODO/Plan。
+14. 合并、PR、保留、放弃遵循 Superpowers 和 Runtime 安全前置条件。
+15. 未合并或 dirty worktree 不会被自动清理。
+
+## 23. 已确认决策
+
+- 采用方案 B：外层左栏管理会话，对话区展示当前上下文。
+- 使用一个统一执行活动面板。
+- 面板分为“任务 / 数字员工 / Trace”三个 Tab。
+- 普通查询会话不创建 worktree。
+- 明确写入请求自动升级，语义不明确时询问。
+- 同一任务串行，不同任务并行。
+- 不做文件锁。
+- 不自动 checkpoint。
+- 归档不删除 worktree。
+- 合并和清理遵循 Superpowers 默认流程，并增加 Runtime 共享任务安全检查。
