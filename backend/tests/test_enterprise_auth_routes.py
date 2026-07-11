@@ -1,10 +1,11 @@
 from __future__ import annotations
 
+import asyncio
 from types import SimpleNamespace
 
 import pytest
 import pytest_asyncio
-from fastapi import FastAPI
+from fastapi import FastAPI, HTTPException
 from fastapi.exceptions import RequestValidationError
 from httpx import ASGITransport, AsyncClient
 from pydantic import BaseModel, Field
@@ -16,7 +17,9 @@ from sqlalchemy.ext.asyncio import (
     create_async_engine,
 )
 from sqlalchemy.pool import StaticPool
+from starlette.exceptions import HTTPException as StarletteHTTPException
 
+from app.auth import create_access_token
 from app.database import Base, get_db
 from app.deps import get_auth_context
 from app.models import EnterpriseAuthAccount, EnterpriseAuthBinding, User
@@ -137,6 +140,10 @@ async def api():
         enterprise_auth.EnterpriseAuthAPIError,
         enterprise_auth.enterprise_auth_api_exception_handler,
     )
+    app.add_exception_handler(
+        StarletteHTTPException,
+        enterprise_auth.enterprise_auth_http_exception_handler,
+    )
     app.include_router(enterprise_auth.router)
     app.dependency_overrides[get_db] = _override_db
     app.dependency_overrides[
@@ -203,6 +210,10 @@ async def test_all_endpoints_require_real_platform_admin(method, path, json_body
     app.add_exception_handler(
         enterprise_auth.EnterpriseAuthAPIError,
         enterprise_auth.enterprise_auth_api_exception_handler,
+    )
+    app.add_exception_handler(
+        StarletteHTTPException,
+        enterprise_auth.enterprise_auth_http_exception_handler,
     )
     app.include_router(enterprise_auth.router)
     app.dependency_overrides[get_auth_context] = lambda: SimpleNamespace(
@@ -323,6 +334,7 @@ async def test_enterprise_auth_validation_errors_are_redacted(
 @pytest.mark.asyncio
 async def test_validation_handler_delegates_non_enterprise_paths_to_fastapi_default():
     from app.routes.enterprise_auth import (
+        enterprise_auth_http_exception_handler,
         enterprise_auth_validation_exception_handler,
     )
 
@@ -331,19 +343,30 @@ async def test_validation_handler_delegates_non_enterprise_paths_to_fastapi_defa
         RequestValidationError,
         enterprise_auth_validation_exception_handler,
     )
+    app.add_exception_handler(
+        StarletteHTTPException,
+        enterprise_auth_http_exception_handler,
+    )
 
     @app.post("/other")
     async def other_route(data: OtherValidationInput):
         return data
+
+    @app.get("/other-error")
+    async def other_error_route():
+        raise HTTPException(status_code=403, detail="outside enterprise auth")
 
     async with AsyncClient(
         transport=ASGITransport(app=app),
         base_url="http://test",
     ) as client:
         response = await client.post("/other", json={"name": "x"})
+        error_response = await client.get("/other-error")
 
     assert response.status_code == 422
     assert response.json()["detail"][0]["input"] == "x"
+    assert error_response.status_code == 403
+    assert error_response.json() == {"detail": "outside enterprise auth"}
 
 
 def test_production_main_registers_enterprise_auth_validation_handler():
@@ -351,6 +374,7 @@ def test_production_main_registers_enterprise_auth_validation_handler():
     from app.routes.enterprise_auth import (
         EnterpriseAuthAPIError,
         enterprise_auth_api_exception_handler,
+        enterprise_auth_http_exception_handler,
         enterprise_auth_validation_exception_handler,
     )
 
@@ -362,11 +386,15 @@ def test_production_main_registers_enterprise_auth_validation_handler():
         app.exception_handlers[EnterpriseAuthAPIError]
         is enterprise_auth_api_exception_handler
     )
+    assert (
+        app.exception_handlers[StarletteHTTPException]
+        is enterprise_auth_http_exception_handler
+    )
 
 
 def test_enterprise_auth_openapi_declares_uniform_error_responses(api):
     schema = api.app.openapi()
-    expected_statuses = {"400", "403", "404", "409", "422"}
+    expected_statuses = {"400", "401", "403", "404", "409", "422"}
     operations = [
         operation
         for path, path_item in schema["paths"].items()
@@ -385,6 +413,73 @@ def test_enterprise_auth_openapi_declares_uniform_error_responses(api):
             assert response_schema["$ref"].endswith(
                 "/EnterpriseAuthErrorResponse"
             )
+
+
+@pytest.mark.asyncio
+async def test_enterprise_auth_auth_dependency_errors_are_top_level(api):
+    from app.routes import enterprise_auth
+
+    async def _override_db():
+        async with api.session_factory() as session:
+            yield session
+
+    async with api.session_factory() as session:
+        non_admin = User(
+            username="enterprise-auth-member",
+            hashed_password="hash",
+            is_platform_admin=False,
+        )
+        session.add(non_admin)
+        await session.commit()
+        non_admin_id = non_admin.id
+
+    app = FastAPI()
+    app.add_exception_handler(
+        StarletteHTTPException,
+        enterprise_auth.enterprise_auth_http_exception_handler,
+    )
+    app.add_exception_handler(
+        enterprise_auth.EnterpriseAuthAPIError,
+        enterprise_auth.enterprise_auth_api_exception_handler,
+    )
+    app.include_router(enterprise_auth.router, prefix="/api")
+    app.dependency_overrides[get_db] = _override_db
+    non_admin_token = create_access_token(non_admin_id, tenant_id=None)
+    api_account_path = f"/api{ACCOUNT_PATH}"
+
+    async with AsyncClient(
+        transport=ASGITransport(app=app),
+        base_url="http://test",
+    ) as client:
+        missing = await client.get(api_account_path)
+        invalid = await client.get(
+            api_account_path,
+            headers={"Authorization": "Bearer invalid-token-secret"},
+        )
+        forbidden = await client.get(
+            api_account_path,
+            headers={"Authorization": f"Bearer {non_admin_token}"},
+        )
+
+    assert missing.status_code in {401, 403}
+    assert missing.json() == {
+        "code": "ENTERPRISE_AUTH_AUTHENTICATION_REQUIRED",
+        "message": "需要有效的认证凭证",
+    }
+    assert invalid.status_code == 401
+    assert invalid.json() == {
+        "code": "ENTERPRISE_AUTH_AUTHENTICATION_REQUIRED",
+        "message": "需要有效的认证凭证",
+    }
+    assert invalid.headers["www-authenticate"] == "Bearer"
+    assert forbidden.status_code == 403
+    assert forbidden.json() == {
+        "code": "ENTERPRISE_AUTH_ADMIN_REQUIRED",
+        "message": "需要平台管理员权限",
+    }
+    for response in (missing, invalid, forbidden):
+        assert "detail" not in response.json()
+        assert "input" not in response.text
 
 
 @pytest.mark.asyncio
@@ -822,6 +917,92 @@ async def test_failed_connection_test_does_not_overwrite_new_disabled_state(
         stored = await session.get(EnterpriseAuthAccount, account["id"])
         assert stored.status == STATUS_DISABLED
         assert stored.last_error is None
+
+
+@pytest.mark.asyncio
+async def test_older_failed_connection_test_cannot_overwrite_newer_success(
+    api,
+    monkeypatch,
+):
+    account = await _create_account(api)
+    older_started = asyncio.Event()
+    release_older = asyncio.Event()
+    call_count = 0
+
+    async def _authenticate(snapshot):
+        nonlocal call_count
+        call_count += 1
+        if call_count == 1:
+            older_started.set()
+            await release_older.wait()
+            raise EnterpriseAuthError(
+                ENTERPRISE_AUTH_ACCOUNT_INVALID,
+                "older failure",
+            )
+        set_account_tokens(snapshot, "newer-access-token")
+        return snapshot
+
+    monkeypatch.setattr(api.routes, "authenticate_enterprise_account", _authenticate)
+
+    older_request = asyncio.create_task(
+        api.client.post(f"{ACCOUNT_PATH}/{account['id']}/test")
+    )
+    await older_started.wait()
+    newer_response = await api.client.post(f"{ACCOUNT_PATH}/{account['id']}/test")
+    release_older.set()
+    older_response = await older_request
+
+    assert newer_response.status_code == 200
+    assert older_response.status_code == 409
+    assert older_response.json()["code"] == "ENTERPRISE_AUTH_ACCOUNT_CHANGED"
+    async with api.session_factory() as session:
+        stored = await session.get(EnterpriseAuthAccount, account["id"])
+        assert stored.status == STATUS_CONNECTED
+        assert decrypt_password(stored.access_token_enc) == "newer-access-token"
+        assert stored.last_error is None
+
+
+@pytest.mark.asyncio
+async def test_older_successful_connection_test_cannot_overwrite_newer_failure(
+    api,
+    monkeypatch,
+):
+    account = await _create_account(api)
+    older_started = asyncio.Event()
+    release_older = asyncio.Event()
+    call_count = 0
+
+    async def _authenticate(snapshot):
+        nonlocal call_count
+        call_count += 1
+        if call_count == 1:
+            older_started.set()
+            await release_older.wait()
+            set_account_tokens(snapshot, "older-access-token")
+            return snapshot
+        raise EnterpriseAuthError(
+            ENTERPRISE_AUTH_ACCOUNT_INVALID,
+            "newer failure",
+        )
+
+    monkeypatch.setattr(api.routes, "authenticate_enterprise_account", _authenticate)
+
+    older_request = asyncio.create_task(
+        api.client.post(f"{ACCOUNT_PATH}/{account['id']}/test")
+    )
+    await older_started.wait()
+    newer_response = await api.client.post(f"{ACCOUNT_PATH}/{account['id']}/test")
+    release_older.set()
+    older_response = await older_request
+
+    assert newer_response.status_code == 400
+    assert older_response.status_code == 409
+    assert older_response.json()["code"] == "ENTERPRISE_AUTH_ACCOUNT_CHANGED"
+    async with api.session_factory() as session:
+        stored = await session.get(EnterpriseAuthAccount, account["id"])
+        assert stored.status == STATUS_ERROR
+        assert stored.access_token_enc is None
+        assert stored.last_error == "企业认证账号验证失败"
 
 
 @pytest.mark.asyncio

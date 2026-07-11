@@ -1,10 +1,14 @@
 from __future__ import annotations
 
-from datetime import datetime
-from typing import Annotated, Literal
+from dataclasses import dataclass
+from datetime import UTC, datetime, timedelta
+from typing import Annotated, Any, Literal
 
 from fastapi import APIRouter, Depends, HTTPException, Request, status
-from fastapi.exception_handlers import request_validation_exception_handler
+from fastapi.exception_handlers import (
+    http_exception_handler,
+    request_validation_exception_handler,
+)
 from fastapi.exceptions import RequestValidationError
 from pydantic import (
     BaseModel,
@@ -17,6 +21,7 @@ from pydantic import (
 from sqlalchemy import delete, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
+from starlette.exceptions import HTTPException as StarletteHTTPException
 from starlette.responses import JSONResponse
 
 from app.config import settings
@@ -65,6 +70,9 @@ ENTERPRISE_AUTH_ACCOUNT_CHANGED = "ENTERPRISE_AUTH_ACCOUNT_CHANGED"
 ENTERPRISE_AUTH_BINDING_NOT_FOUND = "ENTERPRISE_AUTH_BINDING_NOT_FOUND"
 ENTERPRISE_AUTH_BINDING_DUPLICATE = "ENTERPRISE_AUTH_BINDING_DUPLICATE"
 ENTERPRISE_AUTH_BINDING_CHANGED = "ENTERPRISE_AUTH_BINDING_CHANGED"
+ENTERPRISE_AUTH_AUTHENTICATION_REQUIRED = (
+    "ENTERPRISE_AUTH_AUTHENTICATION_REQUIRED"
+)
 ENTERPRISE_AUTH_VALIDATION_ERROR = "ENTERPRISE_AUTH_VALIDATION_ERROR"
 _BINDING_WRITE_LOCK_MAX_ATTEMPTS = 2
 
@@ -96,6 +104,7 @@ ENTERPRISE_AUTH_ERROR_RESPONSES = {
     }
     for error_status in (
         status.HTTP_400_BAD_REQUEST,
+        status.HTTP_401_UNAUTHORIZED,
         status.HTTP_403_FORBIDDEN,
         status.HTTP_404_NOT_FOUND,
         status.HTTP_409_CONFLICT,
@@ -265,6 +274,13 @@ class EnterpriseAuthStatusView(BaseModel):
     binding_enabled: bool
 
 
+@dataclass(frozen=True)
+class EnterpriseAuthConnectionTestSnapshot:
+    credentials: Any
+    credential_fingerprint: str
+    generation: datetime
+
+
 def _api_error(
     status_code: int,
     code: str,
@@ -292,13 +308,7 @@ async def enterprise_auth_validation_exception_handler(
     request: Request,
     exc: RequestValidationError,
 ) -> JSONResponse:
-    path = request.url.path
-    if not (
-        path == "/enterprise-auth"
-        or path.startswith("/enterprise-auth/")
-        or path == "/api/enterprise-auth"
-        or path.startswith("/api/enterprise-auth/")
-    ):
+    if not _is_enterprise_auth_path(request.url.path):
         return await request_validation_exception_handler(request, exc)
     errors = [
         {
@@ -318,6 +328,40 @@ async def enterprise_auth_validation_exception_handler(
     )
 
 
+async def enterprise_auth_http_exception_handler(
+    request: Request,
+    exc: StarletteHTTPException,
+) -> JSONResponse:
+    if not _is_enterprise_auth_path(request.url.path):
+        return await http_exception_handler(request, exc)
+
+    detail = str(exc.detail or "")
+    missing_credentials = (
+        exc.status_code == status.HTTP_401_UNAUTHORIZED
+        or (
+            exc.status_code == status.HTTP_403_FORBIDDEN
+            and detail
+            in {
+                "Not authenticated",
+                "Invalid authentication credentials",
+            }
+        )
+    )
+    if missing_credentials:
+        code = ENTERPRISE_AUTH_AUTHENTICATION_REQUIRED
+        message = "需要有效的认证凭证"
+    elif exc.status_code == status.HTTP_403_FORBIDDEN:
+        code = "ENTERPRISE_AUTH_ADMIN_REQUIRED"
+        message = "需要平台管理员权限"
+    else:
+        return await http_exception_handler(request, exc)
+    return JSONResponse(
+        status_code=exc.status_code,
+        content={"code": code, "message": message},
+        headers=exc.headers,
+    )
+
+
 async def enterprise_auth_api_exception_handler(
     _request: Request,
     exc: EnterpriseAuthAPIError,
@@ -326,6 +370,23 @@ async def enterprise_auth_api_exception_handler(
         status_code=exc.status_code,
         content={"code": exc.code, "message": exc.message},
     )
+
+
+def _is_enterprise_auth_path(path: str) -> bool:
+    return (
+        path == "/enterprise-auth"
+        or path.startswith("/enterprise-auth/")
+        or path == "/api/enterprise-auth"
+        or path.startswith("/api/enterprise-auth/")
+    )
+
+
+def _next_connection_test_generation(updated_at: datetime) -> datetime:
+    current = updated_at
+    if current.tzinfo is not None:
+        current = current.astimezone(UTC).replace(tzinfo=None)
+    now = datetime.now(UTC).replace(tzinfo=None)
+    return max(now, current + timedelta(microseconds=1))
 
 
 def _account_not_found() -> EnterpriseAuthAPIError:
@@ -755,14 +816,23 @@ async def test_enterprise_auth_account(
             "企业认证账号已禁用",
         )
 
-    snapshot = snapshot_enterprise_auth_credentials(account)
-    await db.rollback()
+    generation = _next_connection_test_generation(account.updated_at)
+    account.updated_at = generation
+    credentials = snapshot_enterprise_auth_credentials(account)
+    await db.commit()
+    snapshot = EnterpriseAuthConnectionTestSnapshot(
+        credentials=credentials,
+        credential_fingerprint=credentials.credential_fingerprint,
+        generation=generation,
+    )
     authentication_failed = False
     try:
-        tested_snapshot = await authenticate_enterprise_account(snapshot)
+        tested_credentials = await authenticate_enterprise_account(
+            snapshot.credentials
+        )
     except Exception:
         authentication_failed = True
-        tested_snapshot = snapshot
+        tested_credentials = snapshot.credentials
 
     try:
         current_graph = await lock_enterprise_auth_account_graph(db, account_id)
@@ -772,6 +842,7 @@ async def test_enterprise_auth_account(
     if (
         current is None
         or current.status == STATUS_DISABLED
+        or current.updated_at != snapshot.generation
         or enterprise_auth_credential_fingerprint(current)
         != snapshot.credential_fingerprint
     ):
@@ -788,12 +859,12 @@ async def test_enterprise_auth_account(
             "企业认证账号验证失败",
         ) from None
 
-    current.access_token_enc = tested_snapshot.access_token_enc
-    current.refresh_token_enc = tested_snapshot.refresh_token_enc
-    current.token_expires_at = tested_snapshot.token_expires_at
-    current.status = tested_snapshot.status
-    current.last_verified_at = tested_snapshot.last_verified_at
-    current.last_error = tested_snapshot.last_error
+    current.access_token_enc = tested_credentials.access_token_enc
+    current.refresh_token_enc = tested_credentials.refresh_token_enc
+    current.token_expires_at = tested_credentials.token_expires_at
+    current.status = tested_credentials.status
+    current.last_verified_at = tested_credentials.last_verified_at
+    current.last_error = tested_credentials.last_error
     await db.commit()
     await db.refresh(current)
     return _account_view(current)

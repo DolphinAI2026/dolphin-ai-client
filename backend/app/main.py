@@ -147,6 +147,10 @@ app.add_exception_handler(
     enterprise_auth.EnterpriseAuthAPIError,
     enterprise_auth.enterprise_auth_api_exception_handler,
 )
+app.add_exception_handler(
+    StarletteHTTPException,
+    enterprise_auth.enterprise_auth_http_exception_handler,
+)
 
 # CORS配置
 cors_origins = [
