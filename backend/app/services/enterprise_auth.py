@@ -28,6 +28,8 @@ ENTERPRISE_AUTH_BINDING_NOT_FOUND = "ENTERPRISE_AUTH_BINDING_NOT_FOUND"
 ENTERPRISE_AUTH_BINDING_AMBIGUOUS = "ENTERPRISE_AUTH_BINDING_AMBIGUOUS"
 ENTERPRISE_AUTH_BINDING_UNAVAILABLE = "ENTERPRISE_AUTH_BINDING_UNAVAILABLE"
 
+_LOCKED_BINDING_RESOLUTION_MAX_ATTEMPTS = 2
+
 
 class EnterpriseAuthError(Exception):
     def __init__(self, code: str, message: str):
@@ -155,17 +157,48 @@ async def resolve_bound_account(
         EnterpriseAuthAccount.account == normalized_source_account,
         EnterpriseAuthAccount.status != STATUS_DISABLED,
     )
-    source = (
-        await db.execute(source_statement)
-    ).scalar_one_or_none()
-    if source is None:
-        return BindingResolution(
-            account=None,
-            code=ENTERPRISE_AUTH_BINDING_NOT_FOUND,
-            message="Enterprise account binding not found",
-        )
 
-    if lock:
+    attempts = _LOCKED_BINDING_RESOLUTION_MAX_ATTEMPTS if lock else 1
+    for attempt in range(attempts):
+        source = (
+            await db.execute(source_statement)
+        ).scalar_one_or_none()
+        if source is None:
+            return BindingResolution(
+                account=None,
+                code=ENTERPRISE_AUTH_BINDING_NOT_FOUND,
+                message="Enterprise account binding not found",
+            )
+
+        if not lock:
+            target_statement = (
+                select(EnterpriseAuthAccount, EnterpriseAuthBinding.priority)
+                .join(
+                    EnterpriseAuthBinding,
+                    or_(
+                        and_(
+                            EnterpriseAuthBinding.left_account_id == source.id,
+                            EnterpriseAuthBinding.right_account_id
+                            == EnterpriseAuthAccount.id,
+                        ),
+                        and_(
+                            EnterpriseAuthBinding.right_account_id == source.id,
+                            EnterpriseAuthBinding.left_account_id
+                            == EnterpriseAuthAccount.id,
+                        ),
+                    ),
+                )
+                .where(
+                    EnterpriseAuthBinding.enabled.is_(True),
+                    EnterpriseAuthAccount.provider
+                    == normalized_target_provider,
+                    EnterpriseAuthAccount.status != STATUS_DISABLED,
+                )
+                .order_by(EnterpriseAuthBinding.priority.asc())
+            )
+            rows = (await db.execute(target_statement)).all()
+            break
+
         related_pair_statement = select(
             EnterpriseAuthBinding.left_account_id,
             EnterpriseAuthBinding.right_account_id,
@@ -206,6 +239,24 @@ async def resolve_bound_account(
                 .execution_options(populate_existing=True, autoflush=False)
             )
         ).scalars().all()
+        locked_endpoint_ids = {
+            account_id
+            for binding in locked_bindings
+            for account_id in (
+                binding.left_account_id,
+                binding.right_account_id,
+            )
+        }
+        if locked_endpoint_ids - related_account_ids:
+            await db.rollback()
+            if attempt + 1 < attempts:
+                continue
+            return BindingResolution(
+                account=None,
+                code=ENTERPRISE_AUTH_BINDING_UNAVAILABLE,
+                message="Enterprise account binding is unavailable",
+            )
+
         accounts_by_id = {account.id: account for account in locked_accounts}
         locked_source = accounts_by_id.get(source.id)
         if (
@@ -241,32 +292,7 @@ async def resolve_bound_account(
                 continue
             rows.append((target, binding.priority))
         rows.sort(key=lambda row: row[1])
-    else:
-        target_statement = (
-            select(EnterpriseAuthAccount, EnterpriseAuthBinding.priority)
-            .join(
-                EnterpriseAuthBinding,
-                or_(
-                    and_(
-                        EnterpriseAuthBinding.left_account_id == source.id,
-                        EnterpriseAuthBinding.right_account_id
-                        == EnterpriseAuthAccount.id,
-                    ),
-                    and_(
-                        EnterpriseAuthBinding.right_account_id == source.id,
-                        EnterpriseAuthBinding.left_account_id
-                        == EnterpriseAuthAccount.id,
-                    ),
-                ),
-            )
-            .where(
-                EnterpriseAuthBinding.enabled.is_(True),
-                EnterpriseAuthAccount.provider == normalized_target_provider,
-                EnterpriseAuthAccount.status != STATUS_DISABLED,
-            )
-            .order_by(EnterpriseAuthBinding.priority.asc())
-        )
-        rows = (await db.execute(target_statement)).all()
+        break
     if not rows:
         return BindingResolution(
             account=None,

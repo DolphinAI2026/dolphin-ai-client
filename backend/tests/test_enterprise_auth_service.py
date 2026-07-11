@@ -260,7 +260,7 @@ async def test_resolve_bound_account_returns_unique_lowest_priority(auth_db):
 
 
 @pytest.mark.asyncio
-async def test_resolve_bound_account_uses_canonical_lock_order_for_reverse_source(
+async def test_resolve_bound_account_retries_and_ignores_persistent_orphan(
 ):
     source = _account(
         provider="control_plane",
@@ -303,18 +303,30 @@ async def test_resolve_bound_account_uses_canonical_lock_order_for_reverse_sourc
             return self
 
     class CapturingSession:
+        def __init__(self):
+            self.rollback_count = 0
+
         async def execute(self, statement):
             statements.append(statement)
-            if len(statements) == 1:
+            attempt = (len(statements) - 1) // 4
+            phase = (len(statements) - 1) % 4
+            if phase == 0:
                 return FakeResult(source)
-            if len(statements) == 2:
-                return FakeResult([(target.id, source.id), (source.id, 99)])
-            if len(statements) == 3:
+            if phase == 1:
+                pairs = [(target.id, source.id)]
+                if attempt == 1:
+                    pairs.append((source.id, 99))
+                return FakeResult(pairs)
+            if phase == 2:
                 return FakeResult([target, source])
             return FakeResult([binding, orphan_binding])
 
+        async def rollback(self):
+            self.rollback_count += 1
+
+    session = CapturingSession()
     result = await resolve_bound_account(
-        CapturingSession(),
+        session,
         "coding",
         "https://coding.example.com",
         "control",
@@ -337,18 +349,134 @@ async def test_resolve_bound_account_uses_canonical_lock_order_for_reverse_sourc
         for statement in statements
     ]
     assert result.account is target
-    assert len(compiled) == 4
-    assert all("FOR UPDATE" not in sql for sql in compiled[:2])
-    assert "IN (1, 2, 99)" in compiled[2]
+    assert len(compiled) == 8
+    assert session.rollback_count == 1
+    assert all("FOR UPDATE" not in compiled[index] for index in (0, 1, 4, 5))
+    assert "IN (1, 2)" in compiled[2]
+    assert "IN (1, 2, 99)" in compiled[6]
     assert (
         "ORDER BY ENTERPRISE_AUTH_ACCOUNTS.ID ASC FOR UPDATE"
-        in compiled[2]
+        in compiled[6]
     )
     assert (
         "ORDER BY ENTERPRISE_AUTH_BINDINGS.LEFT_ACCOUNT_ID ASC, "
         "ENTERPRISE_AUTH_BINDINGS.RIGHT_ACCOUNT_ID ASC FOR UPDATE"
-        in compiled[3]
+        in compiled[7]
     )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("new_priority", "expected_code"),
+    [
+        (5, OK),
+        (10, ENTERPRISE_AUTH_BINDING_AMBIGUOUS),
+    ],
+)
+async def test_resolve_bound_account_retries_when_locked_binding_adds_endpoint(
+    new_priority,
+    expected_code,
+):
+    old_target = _account(account="old-target")
+    old_target.id = 1
+    new_target = _account(account="new-target")
+    new_target.id = 2
+    source = _account(
+        provider="control_plane",
+        base_url="https://coding.example.com",
+        tenant_ref="control",
+        account="source-user",
+    )
+    source.id = 3
+    old_binding = EnterpriseAuthBinding(
+        id=10,
+        left_account_id=old_target.id,
+        right_account_id=source.id,
+        priority=10,
+        enabled=True,
+        created_by=1,
+    )
+    new_binding = EnterpriseAuthBinding(
+        id=11,
+        left_account_id=new_target.id,
+        right_account_id=source.id,
+        priority=new_priority,
+        enabled=True,
+        created_by=1,
+    )
+
+    class FakeResult:
+        def __init__(self, value):
+            self.value = value
+
+        def scalar_one_or_none(self):
+            return self.value
+
+        def all(self):
+            return self.value
+
+        def scalars(self):
+            return self
+
+    class EndpointDriftSession:
+        def __init__(self):
+            self.statements = []
+            self.rollback_count = 0
+
+        async def execute(self, statement):
+            self.statements.append(statement)
+            attempt = (len(self.statements) - 1) // 4
+            phase = (len(self.statements) - 1) % 4
+            if phase == 0:
+                return FakeResult(source)
+            if phase == 1:
+                pairs = [(old_target.id, source.id)]
+                if attempt == 1:
+                    pairs.append((new_target.id, source.id))
+                return FakeResult(pairs)
+            if phase == 2:
+                accounts = [old_target, source]
+                if attempt == 1:
+                    accounts.insert(1, new_target)
+                return FakeResult(accounts)
+            return FakeResult([old_binding, new_binding])
+
+        async def rollback(self):
+            self.rollback_count += 1
+
+    session = EndpointDriftSession()
+    result = await resolve_bound_account(
+        session,
+        "coding",
+        "https://coding.example.com",
+        "control",
+        "source-user",
+        "apaas",
+        lock=True,
+    )
+
+    assert session.rollback_count == 1
+    assert len(session.statements) == 8
+    second_account_lock = " ".join(
+        str(
+            session.statements[6].compile(
+                dialect=mysql.dialect(),
+                compile_kwargs={"literal_binds": True},
+            )
+        )
+        .upper()
+        .split()
+    )
+    assert "IN (1, 2, 3)" in second_account_lock
+    assert (
+        "ORDER BY ENTERPRISE_AUTH_ACCOUNTS.ID ASC FOR UPDATE"
+        in second_account_lock
+    )
+    assert result.code == expected_code
+    if expected_code == OK:
+        assert result.account is new_target
+    else:
+        assert result.account is None
 
 
 @pytest.mark.asyncio
