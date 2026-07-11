@@ -61,6 +61,7 @@ async def init_db():
     import app.models.agent_observability  # noqa: F401  — Agent 可观测底座
     # 代码会话 git 远程仓绑定（2026-06-25）— WorkspaceGitRemote
     import app.models.workspace_git  # noqa: F401
+    import app.models.enterprise_auth  # noqa: F401
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
         await _migrate_legacy_builder_specs(conn, inspect)

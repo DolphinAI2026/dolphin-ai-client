@@ -29,6 +29,8 @@ class Settings(BaseSettings):
     # "apaas" uses aPaaS only and never falls back to local passwords.
     # "coding" authenticates against Dolphin Code Control Plane, then issues ai-builder JWT.
     auth_provider: str = ""
+    # Enables optional enterprise account bindings without changing auth_provider routing.
+    auth_account_binding_enabled: bool = False
     apaas_base_url: str = ""
     # 桌面 sidecar: 公网账号权威地址(authority)。空=本实例自身就是 authority。
     public_account_base_url: str = ""
