@@ -368,6 +368,7 @@ async def test_apaas_login_uses_verified_account_alias_for_binding_after_commit(
     monkeypatch.setattr(settings, "apaas_base_url", "https://apaas.example/backend")
     events = []
     refresh_calls = []
+    credential_calls = []
 
     class RecordingDb:
         async def commit(self):
@@ -419,6 +420,9 @@ async def test_apaas_login_uses_verified_account_alias_for_binding_after_commit(
     async def no_op(*_args, **_kwargs):
         return None
 
+    async def capture_user_credential(*_args, **kwargs):
+        credential_calls.append(kwargs)
+
     async def fake_refresh(_db, **kwargs):
         events.append("refresh")
         refresh_calls.append(kwargs)
@@ -429,7 +433,11 @@ async def test_apaas_login_uses_verified_account_alias_for_binding_after_commit(
     monkeypatch.setattr(auth_routes, "_apaas_switchable_tenants", no_switchable_tenants)
     monkeypatch.setattr(auth_routes, "_ensure_apaas_user", fake_ensure_user)
     monkeypatch.setattr(auth_routes, "_ensure_apaas_tenant", fake_ensure_tenant)
-    monkeypatch.setattr(auth_routes, "_upsert_user_credential", no_op)
+    monkeypatch.setattr(
+        auth_routes,
+        "_upsert_user_credential",
+        capture_user_credential,
+    )
     monkeypatch.setattr(auth_routes, "_sync_user_membership", no_op)
     monkeypatch.setattr(auth_routes, "create_access_token", lambda *_args, **_kwargs: "builder-token")
     monkeypatch.setattr(auth_routes, "refresh_bound_account_after_login", fake_refresh, raising=False)
@@ -443,6 +451,12 @@ async def test_apaas_login_uses_verified_account_alias_for_binding_after_commit(
 
     assert response.access_token == "builder-token"
     assert events == ["commit", "refresh"]
+    assert credential_calls[0]["source_base_url"] == (
+        "https://apaas.example/backend"
+    )
+    assert credential_calls[0]["source_account"] == (
+        "canonical-apaas-account"
+    )
     assert refresh_calls == [
         {
             "source_provider": "apaas",

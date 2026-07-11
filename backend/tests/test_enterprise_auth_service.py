@@ -1,3 +1,4 @@
+import asyncio
 from datetime import UTC, datetime, timedelta
 from types import SimpleNamespace
 
@@ -11,7 +12,13 @@ from sqlalchemy.sql.dml import Update
 
 from app.database import Base
 from app.code_runtime.auth import CodingAuthResult
-from app.models import EnterpriseAuthAccount, EnterpriseAuthBinding, User
+from app.models import (
+    APaaSUserCredential,
+    EnterpriseAuthAccount,
+    EnterpriseAuthBinding,
+    User,
+)
+from app.models.tenant import Tenant
 from app.services.enterprise_auth import (
     DISABLED,
     ENTERPRISE_AUTH_ACCOUNT_INVALID,
@@ -26,12 +33,14 @@ from app.services.enterprise_auth import (
     EnterpriseAuthError,
     authenticate_enterprise_account,
     base_url_origin_changed,
+    claim_enterprise_auth_generation,
     normalize_base_url,
     normalize_provider,
     read_access_token,
     read_refresh_token,
     refresh_bound_account_after_login,
     resolve_bound_account,
+    resolve_provider_token_resolution_for_context,
     resolve_provider_token_for_context,
     set_account_password,
     set_account_tokens,
@@ -64,6 +73,8 @@ async def auth_db():
                 sync_connection,
                 tables=[
                     User.__table__,
+                    Tenant.__table__,
+                    APaaSUserCredential.__table__,
                     EnterpriseAuthAccount.__table__,
                     EnterpriseAuthBinding.__table__,
                 ],
@@ -130,6 +141,19 @@ def test_enterprise_base_url_uses_idna2008_uts46_hostname_normalization():
     assert (
         validate_enterprise_base_url("https://faß.de/backend")
         == "https://xn--fa-hia.de/backend"
+    )
+
+
+@pytest.mark.parametrize(
+    "separator",
+    ["\u3002", "\uff0e", "\uff61"],
+)
+def test_enterprise_base_url_normalizes_unicode_hostname_separators(separator):
+    assert (
+        validate_enterprise_base_url(
+            f"https://apaas{separator}example{separator}com./backend"
+        )
+        == "https://apaas.example.com/backend"
     )
 
 
@@ -292,6 +316,7 @@ async def test_resolve_provider_token_uses_current_coding_login_token_when_bindi
         user=SimpleNamespace(
             account_source="coding",
             coding_access_token=" direct-control-plane-token ",
+            coding_base_url="https://coding.example.com/backend",
         )
     )
 
@@ -302,6 +327,61 @@ async def test_resolve_provider_token_uses_current_coding_login_token_when_bindi
     )
 
     assert token == "direct-control-plane-token"
+
+
+@pytest.mark.asyncio
+async def test_resolve_provider_token_binds_direct_login_token_to_control_plane_url(
+    monkeypatch,
+):
+    from app.config import settings
+
+    monkeypatch.setattr(settings, "auth_account_binding_enabled", False)
+    ctx = SimpleNamespace(
+        user=SimpleNamespace(
+            account_source="coding",
+            coding_access_token="direct-token",
+            coding_base_url="https://cp-a.example.com/backend/",
+        )
+    )
+
+    result = await resolve_provider_token_resolution_for_context(
+        SimpleNamespace(),
+        ctx,
+        "control_plane",
+        expected_base_url="https://cp-b.example.com/backend",
+    )
+
+    assert result.token is None
+    assert result.base_url == "https://cp-a.example.com/backend"
+    assert result.code == ENTERPRISE_AUTH_BINDING_UNAVAILABLE
+    assert "地址" in result.message
+
+
+@pytest.mark.asyncio
+async def test_resolve_provider_token_accepts_normalized_matching_control_plane_url(
+    monkeypatch,
+):
+    from app.config import settings
+
+    monkeypatch.setattr(settings, "auth_account_binding_enabled", False)
+    ctx = SimpleNamespace(
+        user=SimpleNamespace(
+            account_source="coding",
+            coding_access_token="direct-token",
+            coding_base_url="https://CP-A.example.com/a/../backend/",
+        )
+    )
+
+    result = await resolve_provider_token_resolution_for_context(
+        SimpleNamespace(),
+        ctx,
+        "control_plane",
+        expected_base_url="https://cp-a.example.com/backend",
+    )
+
+    assert result.token == "direct-token"
+    assert result.base_url == "https://cp-a.example.com/backend"
+    assert result.code == OK
 
 
 @pytest.mark.asyncio
@@ -364,6 +444,134 @@ async def test_resolve_provider_token_uses_apaas_binding_identity_and_target_tok
         ),
         {},
     )]
+
+
+@pytest.mark.asyncio
+async def test_resolve_provider_token_rejects_bound_token_for_different_control_plane(
+    monkeypatch,
+):
+    from app.config import settings
+    from app.services import enterprise_auth
+
+    target = _account(
+        provider="control_plane",
+        base_url="https://cp-a.example.com/backend",
+    )
+    set_account_tokens(target, "cp-a-token")
+
+    async def fake_resolve_bound_account(*_args, **_kwargs):
+        return enterprise_auth.BindingResolution(
+            target,
+            OK,
+            "resolved",
+        )
+
+    monkeypatch.setattr(settings, "auth_account_binding_enabled", True)
+    monkeypatch.setattr(
+        settings,
+        "apaas_base_url",
+        "https://apaas.example.com/backend",
+    )
+    monkeypatch.setattr(
+        enterprise_auth,
+        "resolve_bound_account",
+        fake_resolve_bound_account,
+    )
+    ctx = SimpleNamespace(
+        user=SimpleNamespace(
+            account_source="apaas",
+            username="apaas-user",
+            apaas_tenant_id="tenant-1",
+        ),
+        tenant_id=7,
+        apaas_tenant_id="tenant-1",
+    )
+
+    result = await resolve_provider_token_resolution_for_context(
+        SimpleNamespace(),
+        ctx,
+        "control_plane",
+        expected_base_url="https://cp-b.example.com/backend",
+    )
+
+    assert result.token is None
+    assert result.base_url == "https://cp-a.example.com/backend"
+    assert result.code == ENTERPRISE_AUTH_BINDING_UNAVAILABLE
+
+
+@pytest.mark.asyncio
+async def test_resolve_provider_token_prefers_tenant_credential_alias_and_full_base_url(
+    auth_db,
+    monkeypatch,
+):
+    from app.config import settings
+
+    db, owner_id = auth_db
+    tenant = Tenant(
+        tenant_name="Tenant One",
+        tenant_code="tenant-one",
+        apaas_tenant_id_str="tenant-from-local-row",
+    )
+    db.add(tenant)
+    await db.flush()
+    db.add(
+        APaaSUserCredential(
+            user_id=owner_id,
+            local_tenant_id=tenant.id,
+            apaas_tenant_id="canonical-tenant",
+            base_url="https://apaas.example.com/backend",
+            account="canonical-account",
+            password_enc="encrypted-password",
+        )
+    )
+    source = await _persist_account(
+        db,
+        owner_id,
+        provider="apaas",
+        base_url="https://apaas.example.com/backend",
+        tenant_ref="canonical-tenant",
+        account="canonical-account",
+    )
+    target = await _persist_account(
+        db,
+        owner_id,
+        provider="control_plane",
+        base_url="https://coding.example.com/control-plane",
+        tenant_ref="control",
+        account="coding-user",
+    )
+    set_account_tokens(target, "bound-token")
+    await _persist_binding(db, owner_id, source, target)
+    await db.commit()
+
+    monkeypatch.setattr(settings, "auth_account_binding_enabled", True)
+    monkeypatch.setattr(
+        settings,
+        "apaas_base_url",
+        "https://legacy.example.com",
+    )
+    ctx = SimpleNamespace(
+        user=SimpleNamespace(
+            id=owner_id,
+            account_source="apaas",
+            username="login-account",
+            apaas_base_url="https://apaas.example.com",
+            apaas_tenant_id="legacy-tenant",
+        ),
+        tenant_id=tenant.id,
+        apaas_tenant_id="claim-tenant",
+    )
+
+    result = await resolve_provider_token_resolution_for_context(
+        db,
+        ctx,
+        "control_plane",
+        expected_base_url="https://coding.example.com/control-plane",
+    )
+
+    assert result.code == OK
+    assert result.token == "bound-token"
+    assert result.base_url == "https://coding.example.com/control-plane"
 
 
 @pytest.mark.asyncio
@@ -503,13 +711,15 @@ async def test_resolve_provider_token_fails_closed_for_unusable_binding_resoluti
         apaas_tenant_id=None,
     )
 
-    token = await resolve_provider_token_for_context(
+    result = await resolve_provider_token_resolution_for_context(
         SimpleNamespace(),
         ctx,
         "control_plane",
     )
 
-    assert token is None
+    assert result.token is None
+    assert result.code == resolution_code
+    assert result.message == "not usable"
 
 
 @pytest.mark.asyncio
@@ -1272,6 +1482,91 @@ async def test_refresh_bound_account_disabled_does_not_query_database(monkeypatc
 
 
 @pytest.mark.asyncio
+async def test_claim_auth_generation_serializes_real_sqlite_connections(
+    tmp_path,
+):
+    database_path = tmp_path / "enterprise-auth-claim.sqlite3"
+    engine = create_async_engine(
+        f"sqlite+aiosqlite:///{database_path}",
+        connect_args={"timeout": 0.01},
+    )
+    async with engine.begin() as connection:
+        await connection.run_sync(
+            lambda sync_connection: Base.metadata.create_all(
+                sync_connection,
+                tables=[
+                    User.__table__,
+                    EnterpriseAuthAccount.__table__,
+                ],
+            )
+        )
+    session_factory = async_sessionmaker(
+        engine,
+        class_=AsyncSession,
+        expire_on_commit=False,
+    )
+    async with session_factory() as setup:
+        owner = User(username="claim-owner", hashed_password="hash")
+        setup.add(owner)
+        await setup.flush()
+        account = _account(created_by=owner.id)
+        setup.add(account)
+        await setup.commit()
+        account_id = account.id
+
+    first_update_holds_lock = asyncio.Event()
+    release_first_update = asyncio.Event()
+
+    class DelayedClaimSession:
+        def __init__(self, session):
+            self.session = session
+            self.delayed = False
+
+        async def execute(self, statement, *args, **kwargs):
+            result = await self.session.execute(statement, *args, **kwargs)
+            if isinstance(statement, Update) and not self.delayed:
+                self.delayed = True
+                first_update_holds_lock.set()
+                await release_first_update.wait()
+            return result
+
+        async def commit(self):
+            await self.session.commit()
+
+        async def rollback(self):
+            await self.session.rollback()
+
+    async with session_factory() as first, session_factory() as second:
+        first_task = asyncio.create_task(
+            claim_enterprise_auth_generation(
+                DelayedClaimSession(first),
+                account_id,
+            )
+        )
+        await first_update_holds_lock.wait()
+        second_task = asyncio.create_task(
+            claim_enterprise_auth_generation(second, account_id)
+        )
+        await asyncio.sleep(0.03)
+        release_first_update.set()
+        first_claim, second_claim = await asyncio.gather(
+            first_task,
+            second_task,
+        )
+
+    assert sorted(
+        [first_claim.generation, second_claim.generation]
+    ) == [1, 2]
+    async with session_factory() as verification:
+        stored = await verification.get(
+            EnterpriseAuthAccount,
+            account_id,
+        )
+        assert stored.auth_generation == 2
+    await engine.dispose()
+
+
+@pytest.mark.asyncio
 async def test_refresh_revalidates_binding_before_persisting_tokens(
     auth_db,
     monkeypatch,
@@ -1583,8 +1878,8 @@ async def test_refresh_persists_tokens_with_atomic_conditional_update(
 
     assert result.code == OK
     assert result.account.id == target_id
-    assert tracking_db.update_count == 1
-    assert tracking_db.refresh_count >= 2
+    assert tracking_db.update_count == 2
+    assert tracking_db.refresh_count == 1
     assert read_access_token(result.account) == "atomic-access-token"
     assert read_refresh_token(result.account) == "atomic-refresh-token"
 
@@ -1685,19 +1980,32 @@ async def test_failure_status_update_is_atomic_and_does_not_match_disabled():
             statements.append(statement)
             return SimpleNamespace(rowcount=0)
 
-        async def get(self, *_args, **_kwargs):
-            return _account(id=7, status=STATUS_DISABLED)
-
         async def commit(self):
             raise AssertionError("disabled account must not be updated")
 
         async def rollback(self):
             return None
 
-    result = await enterprise_auth._record_account_auth_failure(
+    account = _account(
+        id=7,
+        status=STATUS_UNVERIFIED,
+        auth_generation=3,
+        password_enc="credential-ciphertext",
+    )
+    credentials = enterprise_auth.snapshot_enterprise_auth_credentials(
+        account
+    )
+    claim = enterprise_auth.EnterpriseAuthGenerationClaim(
+        account_id=7,
+        generation=3,
+        credential_fingerprint=credentials.credential_fingerprint,
+        credentials=credentials,
+    )
+
+    result = await enterprise_auth.persist_enterprise_auth_claim_result(
         DisabledAccountSession(),
-        7,
-        "classified failure",
+        claim,
+        error_message="classified failure",
     )
 
     compiled = str(
@@ -1706,9 +2014,11 @@ async def test_failure_status_update_is_atomic_and_does_not_match_disabled():
             compile_kwargs={"literal_binds": True},
         )
     ).lower()
-    assert result.status == STATUS_DISABLED
+    assert result is None
     assert "update enterprise_auth_accounts" in compiled
     assert "status != 'disabled'" in compiled
+    assert "auth_generation = 3" in compiled
+    assert "password_enc = 'credential-ciphertext'" in compiled
 
 
 @pytest.mark.asyncio
@@ -1740,7 +2050,7 @@ async def test_refresh_commit_failure_records_persistence_error(
     await db.commit()
     target_id = target.id
 
-    class FailFirstCommitSession:
+    class FailTokenCommitSession:
         def __init__(self, session):
             self.session = session
             self.commit_count = 0
@@ -1756,7 +2066,7 @@ async def test_refresh_commit_failure_records_persistence_error(
 
         async def commit(self):
             self.commit_count += 1
-            if self.commit_count == 1:
+            if self.commit_count == 2:
                 raise RuntimeError("credential commit failed")
             await self.session.commit()
 
@@ -1771,7 +2081,7 @@ async def test_refresh_commit_failure_records_persistence_error(
         )
         return account
 
-    failing_db = FailFirstCommitSession(db)
+    failing_db = FailTokenCommitSession(db)
     monkeypatch.setattr(settings, "auth_account_binding_enabled", True)
     monkeypatch.setattr(
         enterprise_auth,
@@ -1871,7 +2181,7 @@ async def test_refresh_rolls_back_when_token_and_error_commits_both_fail(
     await db.commit()
     target_id = target.id
 
-    class FailingCommitSession:
+    class FailingResultCommitSession:
         def __init__(self, session):
             self.session = session
             self.commit_count = 0
@@ -1888,7 +2198,9 @@ async def test_refresh_rolls_back_when_token_and_error_commits_both_fail(
 
         async def commit(self):
             self.commit_count += 1
-            raise RuntimeError("commit failed")
+            if self.commit_count >= 2:
+                raise RuntimeError("commit failed")
+            await self.session.commit()
 
         async def rollback(self):
             self.rollback_count += 1
@@ -1902,7 +2214,7 @@ async def test_refresh_rolls_back_when_token_and_error_commits_both_fail(
         )
         return account
 
-    failing_db = FailingCommitSession(db)
+    failing_db = FailingResultCommitSession(db)
     monkeypatch.setattr(settings, "auth_account_binding_enabled", True)
     monkeypatch.setattr(
         enterprise_auth,
@@ -1920,8 +2232,8 @@ async def test_refresh_rolls_back_when_token_and_error_commits_both_fail(
     )
 
     assert result.code == ENTERPRISE_AUTH_BINDING_UNAVAILABLE
-    assert failing_db.commit_count == 2
-    assert failing_db.rollback_count >= 3
+    assert failing_db.commit_count == 3
+    assert failing_db.rollback_count == 3
     stored = await db.get(EnterpriseAuthAccount, target_id)
     await db.refresh(stored)
     assert stored.status == STATUS_UNVERIFIED

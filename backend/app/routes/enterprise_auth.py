@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
 from datetime import datetime
 from typing import Annotated, Any, Literal
 
@@ -36,13 +35,13 @@ from app.services.enterprise_auth import (
     EnterpriseAuthError,
     authenticate_enterprise_account,
     base_url_origin_changed,
-    enterprise_auth_credential_fingerprint,
+    claim_enterprise_auth_generation,
     lock_enterprise_auth_account_graph,
     lock_enterprise_auth_accounts,
     lock_enterprise_auth_bindings,
     normalize_provider,
+    persist_enterprise_auth_claim_result,
     set_account_password,
-    snapshot_enterprise_auth_credentials,
     validate_enterprise_base_url,
 )
 
@@ -272,13 +271,6 @@ class EnterpriseAuthBindingView(BaseModel):
 class EnterpriseAuthStatusView(BaseModel):
     auth_provider: str
     binding_enabled: bool
-
-
-@dataclass(frozen=True)
-class EnterpriseAuthConnectionTestSnapshot:
-    credentials: Any
-    credential_fingerprint: str
-    generation: int
 
 
 def _api_error(
@@ -794,71 +786,59 @@ async def test_enterprise_auth_account(
     db: Annotated[AsyncSession, Depends(get_db)],
 ) -> EnterpriseAuthAccountView:
     try:
-        graph = await lock_enterprise_auth_account_graph(db, account_id)
-    except EnterpriseAuthError:
+        claim = await claim_enterprise_auth_generation(db, account_id)
+    except Exception:
         raise _account_changed() from None
-    account = graph.account
-    if account is None:
-        raise _account_not_found()
-    if account.status == STATUS_DISABLED:
-        await db.rollback()
-        raise _api_error(
-            status.HTTP_400_BAD_REQUEST,
-            ENTERPRISE_AUTH_ACCOUNT_INVALID,
-            "企业认证账号已禁用",
-        )
+    if claim is None:
+        account = await db.get(EnterpriseAuthAccount, account_id)
+        if account is None:
+            raise _account_not_found()
+        if account.status == STATUS_DISABLED:
+            raise _api_error(
+                status.HTTP_400_BAD_REQUEST,
+                ENTERPRISE_AUTH_ACCOUNT_INVALID,
+                "企业认证账号已禁用",
+            )
+        raise _account_changed()
 
-    account.auth_generation = (account.auth_generation or 0) + 1
-    generation = account.auth_generation
-    credentials = snapshot_enterprise_auth_credentials(account)
-    await db.commit()
-    snapshot = EnterpriseAuthConnectionTestSnapshot(
-        credentials=credentials,
-        credential_fingerprint=credentials.credential_fingerprint,
-        generation=generation,
-    )
     authentication_failed = False
     try:
         tested_credentials = await authenticate_enterprise_account(
-            snapshot.credentials
+            claim.credentials
         )
     except Exception:
         authentication_failed = True
-        tested_credentials = snapshot.credentials
-
-    try:
-        current_graph = await lock_enterprise_auth_account_graph(db, account_id)
-    except EnterpriseAuthError:
-        raise _account_changed() from None
-    current = current_graph.account
-    if (
-        current is None
-        or current.status == STATUS_DISABLED
-        or current.auth_generation != snapshot.generation
-        or enterprise_auth_credential_fingerprint(current)
-        != snapshot.credential_fingerprint
-    ):
-        await db.rollback()
-        raise _account_changed()
+        tested_credentials = None
 
     if authentication_failed:
-        current.status = STATUS_ERROR
-        current.last_error = "企业认证账号验证失败"
-        await db.commit()
+        try:
+            current = await persist_enterprise_auth_claim_result(
+                db,
+                claim,
+                error_message="企业认证账号验证失败",
+            )
+        except Exception:
+            await db.rollback()
+            raise _account_changed() from None
+        if current is None:
+            raise _account_changed()
         raise _api_error(
             status.HTTP_400_BAD_REQUEST,
             ENTERPRISE_AUTH_ACCOUNT_INVALID,
             "企业认证账号验证失败",
         ) from None
 
-    current.access_token_enc = tested_credentials.access_token_enc
-    current.refresh_token_enc = tested_credentials.refresh_token_enc
-    current.token_expires_at = tested_credentials.token_expires_at
-    current.status = tested_credentials.status
-    current.last_verified_at = tested_credentials.last_verified_at
-    current.last_error = tested_credentials.last_error
-    await db.commit()
-    await db.refresh(current)
+    try:
+        current = await persist_enterprise_auth_claim_result(
+            db,
+            claim,
+            authenticated=tested_credentials,
+        )
+    except Exception:
+        await db.rollback()
+        raise _account_changed() from None
+    if current is None:
+        raise _account_changed()
     return _account_view(current)
 
 

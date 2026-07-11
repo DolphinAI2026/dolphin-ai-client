@@ -7,10 +7,31 @@ from sqlalchemy import select
 
 from app.models import Application
 from app.models.ai_chat import AIChatSession, CodeRuntimeAgentSession, CodeRuntimeBinding
+from app.services.enterprise_auth import (
+    ENTERPRISE_AUTH_BINDING_AMBIGUOUS,
+    ENTERPRISE_AUTH_BINDING_NOT_FOUND,
+    ENTERPRISE_AUTH_BINDING_UNAVAILABLE,
+    OK,
+    ProviderTokenResolution,
+)
 
 
 def _ctx(user_id: int = 11, tenant_id: int = 7, role: str = "member"):
     return SimpleNamespace(user=SimpleNamespace(id=user_id), tenant_id=tenant_id, tenant_role=role)
+
+
+def _provider_token_resolution(
+    token: str | None,
+    *,
+    code: str = OK,
+    message: str = "resolved",
+) -> ProviderTokenResolution:
+    return ProviderTokenResolution(
+        token=token,
+        base_url="https://code.example.com/control-plane" if token else None,
+        code=code,
+        message=message,
+    )
 
 
 def test_code_runtime_proxy_rewrites_upstream_location_headers():
@@ -190,6 +211,78 @@ def test_code_runtime_shell_config_exposes_external_session_rail_flag():
 
 
 @pytest.mark.asyncio
+async def test_control_plane_access_context_rejects_non_access_tokens():
+    from fastapi import Request
+    from app.auth import (
+        create_ide_access_token,
+        create_mcp_service_token,
+        create_selection_token,
+    )
+    from app.routes.code_runtime import get_control_plane_access_context
+    from app.routes.enterprise_auth import EnterpriseAuthAPIError
+
+    tokens = {
+        "mcp_service": create_mcp_service_token(11, 7),
+        "ide_access": create_ide_access_token(11, 7, "workspace-1"),
+        "selection": create_selection_token(11),
+    }
+    for token_type, token in tokens.items():
+        request = Request({
+            "type": "http",
+            "headers": [
+                (b"authorization", f"Bearer {token}".encode("ascii")),
+            ],
+        })
+        with pytest.raises(EnterpriseAuthAPIError) as exc_info:
+            await get_control_plane_access_context(
+                request,
+                SimpleNamespace(),
+            )
+
+        assert exc_info.value.status_code == 403
+        assert exc_info.value.code == "ENTERPRISE_AUTH_ACCESS_TOKEN_REQUIRED"
+        assert token_type in str(exc_info.value)
+
+
+@pytest.mark.asyncio
+async def test_control_plane_access_context_reuses_get_auth_context(
+    monkeypatch,
+):
+    from fastapi import Request
+    from app.auth import create_access_token
+    import app.routes.code_runtime as code_runtime_routes
+    from app.routes.code_runtime import get_control_plane_access_context
+
+    db = SimpleNamespace()
+    expected_ctx = _ctx()
+    calls = []
+
+    async def fake_get_auth_context(credentials, resolved_db):
+        calls.append((credentials, resolved_db))
+        return expected_ctx
+
+    monkeypatch.setattr(
+        code_runtime_routes,
+        "get_auth_context",
+        fake_get_auth_context,
+    )
+    token = create_access_token(11, tenant_id=7)
+    request = Request({
+        "type": "http",
+        "headers": [
+            (b"authorization", f"Bearer {token}".encode("ascii")),
+        ],
+    })
+
+    result = await get_control_plane_access_context(request, db)
+
+    assert result is expected_ctx
+    assert calls[0][0].scheme == "Bearer"
+    assert calls[0][0].credentials == token
+    assert calls[0][1] is db
+
+
+@pytest.mark.asyncio
 async def test_list_code_runtime_applications_uses_resolved_control_plane_token(
     monkeypatch,
 ):
@@ -200,18 +293,21 @@ async def test_list_code_runtime_applications_uses_resolved_control_plane_token(
     db = SimpleNamespace()
     ctx = _ctx()
 
-    async def fake_resolve_provider_token_for_context(
+    async def fake_resolve_provider_token_resolution_for_context(
         resolved_db,
         resolved_ctx,
         target_provider,
+        *,
+        expected_base_url,
     ):
         calls.append({
             "kind": "resolve",
             "db": resolved_db,
             "ctx": resolved_ctx,
             "target_provider": target_provider,
+            "expected_base_url": expected_base_url,
         })
-        return "bound-control-plane-token"
+        return _provider_token_resolution("bound-control-plane-token")
 
     async def fake_list_code_applications(**kwargs):
         calls.append({"kind": "list", **kwargs})
@@ -219,8 +315,13 @@ async def test_list_code_runtime_applications_uses_resolved_control_plane_token(
 
     monkeypatch.setattr(
         code_runtime_routes,
-        "resolve_provider_token_for_context",
-        fake_resolve_provider_token_for_context,
+        "resolve_provider_token_resolution_for_context",
+        fake_resolve_provider_token_resolution_for_context,
+    )
+    monkeypatch.setattr(
+        code_runtime_routes,
+        "control_plane_base_url",
+        lambda: "https://code.example.com/control-plane",
     )
     monkeypatch.setattr(
         code_runtime_routes,
@@ -244,6 +345,7 @@ async def test_list_code_runtime_applications_uses_resolved_control_plane_token(
             "db": db,
             "ctx": ctx,
             "target_provider": "control_plane",
+            "expected_base_url": "https://code.example.com/control-plane",
         },
         {
             "kind": "list",
@@ -265,18 +367,21 @@ async def test_create_code_runtime_application_delegates_to_control_plane(monkey
     db = SimpleNamespace()
     ctx = _ctx()
 
-    async def fake_resolve_provider_token_for_context(
+    async def fake_resolve_provider_token_resolution_for_context(
         resolved_db,
         resolved_ctx,
         target_provider,
+        *,
+        expected_base_url,
     ):
         calls.append({
             "kind": "resolve",
             "db": resolved_db,
             "ctx": resolved_ctx,
             "target_provider": target_provider,
+            "expected_base_url": expected_base_url,
         })
-        return "bound-control-plane-token"
+        return _provider_token_resolution("bound-control-plane-token")
 
     async def fake_create_code_application(**kwargs):
         calls.append({"kind": "create", **kwargs})
@@ -288,8 +393,13 @@ async def test_create_code_runtime_application_delegates_to_control_plane(monkey
 
     monkeypatch.setattr(
         code_runtime_routes,
-        "resolve_provider_token_for_context",
-        fake_resolve_provider_token_for_context,
+        "resolve_provider_token_resolution_for_context",
+        fake_resolve_provider_token_resolution_for_context,
+    )
+    monkeypatch.setattr(
+        code_runtime_routes,
+        "control_plane_base_url",
+        lambda: "https://code.example.com/control-plane",
     )
     monkeypatch.setattr(code_runtime_routes, "create_code_application", fake_create_code_application)
 
@@ -310,6 +420,7 @@ async def test_create_code_runtime_application_delegates_to_control_plane(monkey
             "db": db,
             "ctx": ctx,
             "target_provider": "control_plane",
+            "expected_base_url": "https://code.example.com/control-plane",
         },
         {
             "kind": "create",
@@ -324,14 +435,31 @@ async def test_create_code_runtime_application_delegates_to_control_plane(monkey
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
-    ("route_name", "route_args"),
+    ("route_name", "route_args", "resolution_code"),
     [
-        ("list", {}),
+        ("list", {}, ENTERPRISE_AUTH_BINDING_NOT_FOUND),
+        ("list", {}, ENTERPRISE_AUTH_BINDING_AMBIGUOUS),
+        ("list", {}, ENTERPRISE_AUTH_BINDING_UNAVAILABLE),
         (
             "create",
             {
                 "body": None,
             },
+            ENTERPRISE_AUTH_BINDING_NOT_FOUND,
+        ),
+        (
+            "create",
+            {
+                "body": None,
+            },
+            ENTERPRISE_AUTH_BINDING_AMBIGUOUS,
+        ),
+        (
+            "create",
+            {
+                "body": None,
+            },
+            ENTERPRISE_AUTH_BINDING_UNAVAILABLE,
         ),
     ],
 )
@@ -339,8 +467,8 @@ async def test_code_application_routes_return_403_without_control_plane_token(
     monkeypatch,
     route_name,
     route_args,
+    resolution_code,
 ):
-    from fastapi import HTTPException
     import app.routes.code_runtime as code_runtime_routes
     from app.routes.code_runtime import (
         CreateCodeApplicationRequest,
@@ -348,18 +476,27 @@ async def test_code_application_routes_return_403_without_control_plane_token(
         list_code_runtime_applications,
     )
 
-    async def fake_resolve_provider_token_for_context(*_args, **_kwargs):
-        return None
+    async def fake_resolve_provider_token_resolution_for_context(
+        *_args,
+        **_kwargs,
+    ):
+        return _provider_token_resolution(
+            None,
+            code=resolution_code,
+            message="not found",
+        )
 
     monkeypatch.setattr(
         code_runtime_routes,
-        "resolve_provider_token_for_context",
-        fake_resolve_provider_token_for_context,
+        "resolve_provider_token_resolution_for_context",
+        fake_resolve_provider_token_resolution_for_context,
     )
     ctx = _ctx()
     db = SimpleNamespace()
 
-    with pytest.raises(HTTPException) as exc_info:
+    from app.routes.enterprise_auth import EnterpriseAuthAPIError
+
+    with pytest.raises(EnterpriseAuthAPIError) as exc_info:
         if route_name == "list":
             await list_code_runtime_applications(ctx=ctx, db=db)
         else:
@@ -374,13 +511,10 @@ async def test_code_application_routes_return_403_without_control_plane_token(
             )
 
     assert exc_info.value.status_code == 403
-    assert (
-        exc_info.value.detail["code"]
-        == "ENTERPRISE_AUTH_BINDING_UNAVAILABLE"
-    )
+    assert exc_info.value.code == resolution_code
     assert (
         "当前账号没有可用的 Control Plane 认证绑定"
-        in exc_info.value.detail["message"]
+        in exc_info.value.message
     )
 
 
@@ -400,27 +534,41 @@ async def test_open_code_runtime_session_passes_resolved_control_plane_token(
 
     db = FakeSession()
 
-    async def fake_resolve_provider_token_for_context(
+    async def fake_resolve_provider_token_resolution_for_context(
         resolved_db,
         resolved_ctx,
         target_provider,
+        *,
+        expected_base_url,
     ):
         calls.append({
             "kind": "resolve",
             "db": resolved_db,
             "ctx": resolved_ctx,
             "target_provider": target_provider,
+            "expected_base_url": expected_base_url,
         })
-        return "bound-control-plane-token"
+        return _provider_token_resolution("bound-control-plane-token")
 
     async def fake_open_code_session(**kwargs):
-        calls.append({"kind": "open", **kwargs})
+        resolver = kwargs.pop("control_plane_token_resolver")
+        resolved_token = await resolver()
+        calls.append({
+            "kind": "open",
+            **kwargs,
+            "resolved_control_plane_token": resolved_token,
+        })
         return {"session_id": kwargs["session_id"]}
 
     monkeypatch.setattr(
         code_runtime_routes,
-        "resolve_provider_token_for_context",
-        fake_resolve_provider_token_for_context,
+        "resolve_provider_token_resolution_for_context",
+        fake_resolve_provider_token_resolution_for_context,
+    )
+    monkeypatch.setattr(
+        code_runtime_routes,
+        "control_plane_base_url",
+        lambda: "https://code.example.com/control-plane",
     )
     monkeypatch.setattr(
         code_runtime_routes,
@@ -437,13 +585,14 @@ async def test_open_code_runtime_session_passes_resolved_control_plane_token(
             "db": db,
             "ctx": ctx,
             "target_provider": "control_plane",
+            "expected_base_url": "https://code.example.com/control-plane",
         },
         {
             "kind": "open",
             "db": db,
             "session_id": 17,
             "ctx": ctx,
-            "control_plane_token": "bound-control-plane-token",
+            "resolved_control_plane_token": "bound-control-plane-token",
         },
         {"kind": "commit"},
     ]
@@ -453,39 +602,81 @@ async def test_open_code_runtime_session_passes_resolved_control_plane_token(
 async def test_open_code_runtime_session_returns_403_without_control_plane_token(
     monkeypatch,
 ):
-    from fastapi import HTTPException
     import app.routes.code_runtime as code_runtime_routes
     from app.routes.code_runtime import open_code_runtime_session
 
-    async def fake_resolve_provider_token_for_context(*_args, **_kwargs):
-        return None
+    async def fake_resolve_provider_token_resolution_for_context(
+        *_args,
+        **_kwargs,
+    ):
+        return _provider_token_resolution(
+            None,
+            code=ENTERPRISE_AUTH_BINDING_NOT_FOUND,
+            message="not found",
+        )
 
-    async def unexpected_open_code_session(**_kwargs):
-        raise AssertionError("open must not run without a Control Plane token")
+    async def fake_open_code_session(**kwargs):
+        await kwargs["control_plane_token_resolver"]()
+        raise AssertionError("unreachable")
 
     monkeypatch.setattr(
         code_runtime_routes,
-        "resolve_provider_token_for_context",
-        fake_resolve_provider_token_for_context,
+        "resolve_provider_token_resolution_for_context",
+        fake_resolve_provider_token_resolution_for_context,
     )
     monkeypatch.setattr(
         code_runtime_routes,
         "open_code_session",
-        unexpected_open_code_session,
+        fake_open_code_session,
     )
 
-    with pytest.raises(HTTPException) as exc_info:
+    from app.routes.enterprise_auth import EnterpriseAuthAPIError
+
+    with pytest.raises(EnterpriseAuthAPIError) as exc_info:
         await open_code_runtime_session(17, _ctx(), SimpleNamespace())
 
     assert exc_info.value.status_code == 403
+    assert exc_info.value.code == ENTERPRISE_AUTH_BINDING_NOT_FOUND
     assert (
-        exc_info.value.detail["code"]
-        == "ENTERPRISE_AUTH_BINDING_UNAVAILABLE"
+        "当前账号没有可用的 Control Plane 认证绑定"
+        in exc_info.value.message
     )
-    assert (
-        exc_info.value.detail["message"]
-        == "当前账号没有可用的 Control Plane 认证绑定"
+
+
+@pytest.mark.asyncio
+async def test_open_code_runtime_session_preserves_local_not_found_before_token_resolution(
+    monkeypatch,
+):
+    from fastapi import HTTPException
+    import app.routes.code_runtime as code_runtime_routes
+    from app.routes.code_runtime import open_code_runtime_session
+
+    resolver_calls = 0
+
+    async def unexpected_resolve(*_args, **_kwargs):
+        nonlocal resolver_calls
+        resolver_calls += 1
+        raise AssertionError("token resolution must happen after local validation")
+
+    async def fake_open_code_session(**_kwargs):
+        raise HTTPException(status_code=404, detail="Code 会话不存在")
+
+    monkeypatch.setattr(
+        code_runtime_routes,
+        "resolve_provider_token_resolution_for_context",
+        unexpected_resolve,
     )
+    monkeypatch.setattr(
+        code_runtime_routes,
+        "open_code_session",
+        fake_open_code_session,
+    )
+
+    with pytest.raises(HTTPException) as exc_info:
+        await open_code_runtime_session(999, _ctx(), SimpleNamespace())
+
+    assert exc_info.value.status_code == 404
+    assert resolver_calls == 0
 
 
 @pytest.mark.asyncio

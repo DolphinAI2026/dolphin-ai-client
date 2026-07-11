@@ -18,6 +18,7 @@ from app.models.collaboration import ApplicationMember
 from app.models.ai_chat import AIChatSession, CodeRuntimeAgentSession, CodeRuntimeBinding
 
 WorkspaceOpen = Callable[[str, str | None], Awaitable[dict[str, Any]]]
+ControlPlaneTokenResolver = Callable[[], Awaitable[str]]
 
 _EMBED_TOKEN_TYPE = "code_runtime_embed"
 _PROXY_COOKIE_TOKEN_TYPE = "code_runtime_proxy"
@@ -270,11 +271,19 @@ def _control_plane_headers(
     delegated_context: Any | None = None,
     shell_session_id: int | None = None,
 ) -> dict[str, str]:
-    _ = authorization_header
     headers: dict[str, str] = {}
     if include_content_type:
         headers["Content-Type"] = "application/json"
     token = str(control_plane_token or "").strip()
+    if not token:
+        compatibility_header = str(authorization_header or "").strip()
+        scheme, separator, compatibility_token = compatibility_header.partition(" ")
+        if (
+            separator
+            and scheme.lower() == "bearer"
+            and compatibility_token.strip()
+        ):
+            token = compatibility_token.strip()
     if not token and system_request:
         token = (
             os.getenv("DOLPHIN_CODE_CONTROL_PLANE_TOKEN", "").strip()
@@ -539,6 +548,7 @@ async def open_code_session(
     handoff_id: str | None = None,
     authorization_header: str | None = None,
     control_plane_token: str | None = None,
+    control_plane_token_resolver: ControlPlaneTokenResolver | None = None,
     system_request: bool = False,
 ) -> dict[str, Any]:
     session = await db.get(AIChatSession, int(session_id))
@@ -556,9 +566,12 @@ async def open_code_session(
     if workspace_open is not None:
         opened = await workspace_open(external_app_id, handoff_id)
     else:
+        if not str(control_plane_token or "").strip() and control_plane_token_resolver is not None:
+            control_plane_token = await control_plane_token_resolver()
         opened = await default_workspace_open(
             external_app_id,
             handoff_id,
+            authorization_header=authorization_header,
             control_plane_token=control_plane_token,
             system_request=system_request,
             delegated_context=ctx,

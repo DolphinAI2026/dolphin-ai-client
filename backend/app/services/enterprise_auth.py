@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 from dataclasses import dataclass
 from datetime import UTC, datetime
 import hashlib
@@ -11,12 +12,17 @@ from urllib.parse import urlsplit
 
 import idna
 from sqlalchemy import and_, or_, select, update
+from sqlalchemy.exc import OperationalError
 
 from app import crypto
 from app.apaas_client import APaaSClient
 from app.code_runtime.auth import login_to_coding_control_plane
 from app.config import settings
-from app.models import EnterpriseAuthAccount, EnterpriseAuthBinding
+from app.models import (
+    APaaSUserCredential,
+    EnterpriseAuthAccount,
+    EnterpriseAuthBinding,
+)
 from app.models.tenant import Tenant
 
 PROVIDER_APAAS = "apaas"
@@ -36,6 +42,8 @@ ENTERPRISE_AUTH_BINDING_UNAVAILABLE = "ENTERPRISE_AUTH_BINDING_UNAVAILABLE"
 
 _LOCKED_BINDING_RESOLUTION_MAX_ATTEMPTS = 2
 _ACCOUNT_GRAPH_LOCK_MAX_ATTEMPTS = 2
+_AUTH_GENERATION_CLAIM_MAX_ATTEMPTS = 5
+_AUTH_GENERATION_CLAIM_RETRY_DELAY_SECONDS = 0.01
 
 
 class EnterpriseAuthError(Exception):
@@ -48,6 +56,14 @@ class EnterpriseAuthError(Exception):
 @dataclass(frozen=True)
 class BindingResolution:
     account: Any | None
+    code: str
+    message: str
+
+
+@dataclass(frozen=True)
+class ProviderTokenResolution:
+    token: str | None
+    base_url: str | None
     code: str
     message: str
 
@@ -74,6 +90,14 @@ class EnterpriseAuthCredentialSnapshot:
     status: str = STATUS_UNVERIFIED
     last_verified_at: datetime | None = None
     last_error: str | None = None
+
+
+@dataclass(frozen=True)
+class EnterpriseAuthGenerationClaim:
+    account_id: int
+    generation: int
+    credential_fingerprint: str
+    credentials: EnterpriseAuthCredentialSnapshot
 
 
 def normalize_provider(provider: str) -> str:
@@ -117,7 +141,11 @@ def validate_enterprise_base_url(base_url: str) -> str:
         raise _account_invalid()
     if port is not None and not 1 <= port <= 65535:
         raise _account_invalid()
-    raw_hostname = parsed.hostname.rstrip(".")
+    raw_hostname = (
+        parsed.hostname
+        .translate(str.maketrans({"\u3002": ".", "\uff0e": ".", "\uff61": "."}))
+        .rstrip(".")
+    )
     if not raw_hostname:
         raise _account_invalid()
     try:
@@ -354,6 +382,142 @@ def snapshot_enterprise_auth_credentials(
         password_enc=account.password_enc,
         credential_fingerprint=enterprise_auth_credential_fingerprint(account),
     )
+
+
+def _sqlite_database_is_locked(exc: BaseException) -> bool:
+    return "database is locked" in str(exc).lower()
+
+
+async def claim_enterprise_auth_generation(
+    db: Any,
+    account_id: int,
+) -> EnterpriseAuthGenerationClaim | None:
+    normalized_account_id = int(account_id)
+    if not await _rollback(db):
+        raise RuntimeError("enterprise auth generation claim rollback failed")
+    for attempt in range(_AUTH_GENERATION_CLAIM_MAX_ATTEMPTS):
+        try:
+            result = await db.execute(
+                update(EnterpriseAuthAccount)
+                .where(
+                    EnterpriseAuthAccount.id == normalized_account_id,
+                    EnterpriseAuthAccount.status != STATUS_DISABLED,
+                )
+                .values(
+                    auth_generation=EnterpriseAuthAccount.auth_generation + 1,
+                )
+                .execution_options(synchronize_session=False)
+            )
+            if result.rowcount != 1:
+                await db.rollback()
+                return None
+            account = (
+                await db.execute(
+                    select(EnterpriseAuthAccount)
+                    .where(EnterpriseAuthAccount.id == normalized_account_id)
+                    .execution_options(
+                        populate_existing=True,
+                        autoflush=False,
+                    )
+                )
+            ).scalar_one_or_none()
+            if account is None or account.status == STATUS_DISABLED:
+                await db.rollback()
+                return None
+            credentials = snapshot_enterprise_auth_credentials(account)
+            claim = EnterpriseAuthGenerationClaim(
+                account_id=normalized_account_id,
+                generation=int(account.auth_generation),
+                credential_fingerprint=credentials.credential_fingerprint,
+                credentials=credentials,
+            )
+            await db.commit()
+            return claim
+        except OperationalError as exc:
+            await _rollback(db)
+            if (
+                _sqlite_database_is_locked(exc)
+                and attempt + 1 < _AUTH_GENERATION_CLAIM_MAX_ATTEMPTS
+            ):
+                await asyncio.sleep(
+                    _AUTH_GENERATION_CLAIM_RETRY_DELAY_SECONDS
+                    * (attempt + 1)
+                )
+                continue
+            raise
+        except Exception:
+            await _rollback(db)
+            raise
+    return None
+
+
+def _claim_matches_account(
+    claim: EnterpriseAuthGenerationClaim,
+    account: Any,
+) -> bool:
+    return bool(
+        account is not None
+        and int(account.id) == claim.account_id
+        and account.status != STATUS_DISABLED
+        and int(account.auth_generation) == claim.generation
+        and enterprise_auth_credential_fingerprint(account)
+        == claim.credential_fingerprint
+    )
+
+
+def _claim_credential_conditions(
+    claim: EnterpriseAuthGenerationClaim,
+) -> tuple[Any, ...]:
+    credentials = claim.credentials
+    return (
+        EnterpriseAuthAccount.id == claim.account_id,
+        EnterpriseAuthAccount.status != STATUS_DISABLED,
+        EnterpriseAuthAccount.auth_generation == claim.generation,
+        EnterpriseAuthAccount.provider == credentials.provider,
+        EnterpriseAuthAccount.base_url == credentials.base_url,
+        EnterpriseAuthAccount.tenant_ref == credentials.tenant_ref,
+        EnterpriseAuthAccount.account == credentials.account,
+        EnterpriseAuthAccount.password_enc == credentials.password_enc,
+    )
+
+
+async def persist_enterprise_auth_claim_result(
+    db: Any,
+    claim: EnterpriseAuthGenerationClaim,
+    *,
+    authenticated: EnterpriseAuthCredentialSnapshot | None = None,
+    error_message: str | None = None,
+) -> Any | None:
+    if (authenticated is None) == (error_message is None):
+        raise ValueError("exactly one enterprise auth result is required")
+    if authenticated is not None:
+        values = {
+            "access_token_enc": authenticated.access_token_enc,
+            "refresh_token_enc": authenticated.refresh_token_enc,
+            "token_expires_at": authenticated.token_expires_at,
+            "status": authenticated.status,
+            "last_verified_at": authenticated.last_verified_at,
+            "last_error": authenticated.last_error,
+        }
+    else:
+        values = {
+            "status": STATUS_ERROR,
+            "last_error": str(error_message),
+        }
+    result = await db.execute(
+        update(EnterpriseAuthAccount)
+        .where(*_claim_credential_conditions(claim))
+        .values(**values)
+        .execution_options(synchronize_session=False)
+    )
+    if result.rowcount != 1:
+        await db.rollback()
+        return None
+    await db.commit()
+    account = await db.get(EnterpriseAuthAccount, claim.account_id)
+    if account is not None:
+        await db.refresh(account)
+    return account
 
 
 def set_account_password(account: Any, password: str | None) -> None:
@@ -647,10 +811,81 @@ async def resolve_provider_token_for_context(
     ctx: Any,
     target_provider: str,
 ) -> str | None:
+    resolution = await resolve_provider_token_resolution_for_context(
+        db,
+        ctx,
+        target_provider,
+    )
+    return resolution.token
+
+
+def _provider_token_unavailable(
+    *,
+    base_url: str | None = None,
+    message: str = "Enterprise account binding is unavailable",
+) -> ProviderTokenResolution:
+    return ProviderTokenResolution(
+        token=None,
+        base_url=base_url,
+        code=ENTERPRISE_AUTH_BINDING_UNAVAILABLE,
+        message=message,
+    )
+
+
+def _provider_token_not_found(
+    message: str = "Enterprise account binding not found",
+) -> ProviderTokenResolution:
+    return ProviderTokenResolution(
+        token=None,
+        base_url=None,
+        code=ENTERPRISE_AUTH_BINDING_NOT_FOUND,
+        message=message,
+    )
+
+
+def _validate_provider_token_base_url(
+    token: str,
+    token_base_url: str,
+    expected_base_url: str | None,
+) -> ProviderTokenResolution:
+    try:
+        normalized_token_base_url = validate_enterprise_base_url(token_base_url)
+        normalized_expected_base_url = (
+            validate_enterprise_base_url(expected_base_url)
+            if expected_base_url is not None
+            else None
+        )
+    except Exception:
+        return _provider_token_unavailable(
+            message="Control Plane token 签发地址无效",
+        )
+    if (
+        normalized_expected_base_url is not None
+        and normalized_token_base_url != normalized_expected_base_url
+    ):
+        return _provider_token_unavailable(
+            base_url=normalized_token_base_url,
+            message="Control Plane token 签发地址与当前服务地址不一致",
+        )
+    return ProviderTokenResolution(
+        token=token,
+        base_url=normalized_token_base_url,
+        code=OK,
+        message="Control Plane token resolved",
+    )
+
+
+async def resolve_provider_token_resolution_for_context(
+    db: Any,
+    ctx: Any,
+    target_provider: str,
+    *,
+    expected_base_url: str | None = None,
+) -> ProviderTokenResolution:
     try:
         normalized_target_provider = normalize_provider(target_provider)
         if normalized_target_provider != PROVIDER_CONTROL_PLANE:
-            return None
+            return _provider_token_not_found()
 
         user = getattr(ctx, "user", None)
         account_source = str(
@@ -660,26 +895,55 @@ async def resolve_provider_token_for_context(
             token = str(
                 getattr(user, "coding_access_token", "") or ""
             ).strip()
-            return token or None
+            if not token:
+                return _provider_token_not_found(
+                    "Control Plane login token not found",
+                )
+            token_base_url = str(
+                getattr(user, "coding_base_url", "") or ""
+            ).strip()
+            if not token_base_url:
+                return _provider_token_unavailable(
+                    message="Control Plane token 签发地址不可用",
+                )
+            return _validate_provider_token_base_url(
+                token,
+                token_base_url,
+                expected_base_url,
+            )
 
         if (
             account_source != PROVIDER_APAAS
             or not settings.auth_account_binding_enabled
         ):
-            return None
+            return _provider_token_not_found()
+
+        local_tenant_id = getattr(ctx, "tenant_id", None)
+        credential = None
+        if getattr(user, "id", None) and local_tenant_id:
+            credential = (
+                await db.execute(
+                    select(APaaSUserCredential).where(
+                        APaaSUserCredential.user_id == int(user.id),
+                        APaaSUserCredential.local_tenant_id
+                        == int(local_tenant_id),
+                    )
+                )
+            ).scalar_one_or_none()
 
         source_base_url = str(
-            getattr(user, "apaas_base_url", None)
+            getattr(credential, "base_url", None)
+            or getattr(user, "apaas_base_url", None)
             or settings.apaas_base_url
             or ""
         ).strip()
         source_tenant_ref = str(
-            getattr(ctx, "apaas_tenant_id", None)
+            getattr(credential, "apaas_tenant_id", None)
+            or getattr(ctx, "apaas_tenant_id", None)
             or getattr(user, "apaas_tenant_id", None)
             or ""
         ).strip()
         if not source_tenant_ref:
-            local_tenant_id = getattr(ctx, "tenant_id", None)
             if local_tenant_id:
                 source_tenant_ref = str(
                     (
@@ -692,10 +956,12 @@ async def resolve_provider_token_for_context(
                     or ""
                 ).strip()
         source_account = str(
-            getattr(user, "username", "") or ""
+            getattr(credential, "account", None)
+            or getattr(user, "username", "")
+            or ""
         ).strip()
         if not source_base_url or not source_tenant_ref or not source_account:
-            return None
+            return _provider_token_not_found()
 
         resolution = await resolve_bound_account(
             db,
@@ -706,55 +972,33 @@ async def resolve_provider_token_for_context(
             normalized_target_provider,
         )
         if resolution.code != OK or resolution.account is None:
-            return None
-        token = read_access_token(resolution.account)
-        return str(token or "").strip() or None
-    except Exception:
-        await _rollback(db)
-        return None
-
-
-async def _record_account_auth_failure(
-    db: Any,
-    account_id: int,
-    error_message: str,
-) -> Any | None:
-    try:
-        result = await db.execute(
-            update(EnterpriseAuthAccount)
-            .where(
-                EnterpriseAuthAccount.id == account_id,
-                EnterpriseAuthAccount.status != STATUS_DISABLED,
+            return ProviderTokenResolution(
+                token=None,
+                base_url=None,
+                code=resolution.code,
+                message=resolution.message,
             )
-            .values(
-                status=STATUS_ERROR,
-                last_error=error_message,
+        target_base_url = str(
+            getattr(resolution.account, "base_url", "") or ""
+        ).strip()
+        try:
+            token = str(read_access_token(resolution.account) or "").strip()
+        except Exception:
+            return _provider_token_unavailable(
+                base_url=target_base_url or None,
             )
-            .execution_options(synchronize_session=False)
+        if not token:
+            return _provider_token_unavailable(
+                base_url=target_base_url or None,
+            )
+        return _validate_provider_token_base_url(
+            token,
+            target_base_url,
+            expected_base_url,
         )
     except Exception:
         await _rollback(db)
-        return None
-    if result.rowcount != 1:
-        await _rollback(db)
-        try:
-            return await db.get(EnterpriseAuthAccount, account_id)
-        except Exception:
-            await _rollback(db)
-            return None
-    try:
-        await db.commit()
-    except Exception:
-        await _rollback(db)
-        return None
-    try:
-        account = await db.get(EnterpriseAuthAccount, account_id)
-        if account is not None:
-            await db.refresh(account)
-        return account
-    except Exception:
-        await _rollback(db)
-        return None
+        return _provider_token_unavailable()
 
 
 async def refresh_bound_account_after_login(
@@ -787,30 +1031,25 @@ async def refresh_bound_account_after_login(
     if resolution.account is None:
         return resolution
 
-    target_account_id = resolution.account.id
-    target_credential_fingerprint = enterprise_auth_credential_fingerprint(
-        resolution.account
-    )
     try:
-        await authenticate_enterprise_account(resolution.account)
-        access_token = crypto.decrypt_password(resolution.account.access_token_enc)
-        refresh_token = (
-            crypto.decrypt_password(resolution.account.refresh_token_enc)
-            if resolution.account.refresh_token_enc
-            else None
+        claim = await claim_enterprise_auth_generation(
+            db,
+            resolution.account.id,
         )
-        expires_at = resolution.account.token_expires_at
     except Exception:
         await _rollback(db)
-        failed_account = await _record_account_auth_failure(
-            db,
-            target_account_id,
-            "Enterprise account authentication failed",
-        )
-        return _binding_unavailable(failed_account)
-
-    if not await _rollback(db):
         return _binding_unavailable()
+    if claim is None:
+        return _binding_unavailable()
+
+    try:
+        authenticated = await authenticate_enterprise_account(
+            claim.credentials
+        )
+        authentication_failed = False
+    except Exception:
+        authenticated = None
+        authentication_failed = True
 
     try:
         revalidated = await resolve_bound_account(
@@ -822,70 +1061,36 @@ async def refresh_bound_account_after_login(
             target_provider,
             lock=True,
         )
-    except Exception:
-        await _rollback(db)
-        return _binding_unavailable()
-    if (
-        revalidated.account is None
-        or revalidated.account.id != target_account_id
-    ):
-        await _rollback(db)
-        return _binding_unavailable()
-    if (
-        enterprise_auth_credential_fingerprint(revalidated.account)
-        != target_credential_fingerprint
-    ):
-        await _rollback(db)
-        return _binding_unavailable()
-
-    target_account = revalidated.account
-    try:
-        await db.refresh(target_account)
-    except Exception:
-        await _rollback(db)
-        return _binding_unavailable()
-    if target_account.status == STATUS_DISABLED:
-        await _rollback(db)
-        return _binding_unavailable()
-
-    try:
-        persistence_result = await db.execute(
-            update(EnterpriseAuthAccount)
-            .where(
-                EnterpriseAuthAccount.id == target_account_id,
-                EnterpriseAuthAccount.status != STATUS_DISABLED,
-            )
-            .values(
-                access_token_enc=crypto.encrypt_password(access_token),
-                refresh_token_enc=(
-                    crypto.encrypt_password(refresh_token)
-                    if refresh_token
-                    else None
-                ),
-                token_expires_at=expires_at,
-                status=STATUS_CONNECTED,
-                last_verified_at=datetime.now(UTC).replace(tzinfo=None),
-                last_error=None,
-            )
-            .execution_options(synchronize_session=False)
-        )
-        if persistence_result.rowcount != 1:
+        if (
+            revalidated.account is None
+            or not _claim_matches_account(claim, revalidated.account)
+        ):
             await _rollback(db)
             return _binding_unavailable()
-        await db.commit()
     except Exception:
         await _rollback(db)
-        failed_account = await _record_account_auth_failure(
-            db,
-            target_account_id,
-            "Enterprise account credential persistence failed",
-        )
+        return _binding_unavailable()
+
+    if authentication_failed:
+        try:
+            failed_account = await persist_enterprise_auth_claim_result(
+                db,
+                claim,
+                error_message="Enterprise account authentication failed",
+            )
+        except Exception:
+            await _rollback(db)
+            return _binding_unavailable()
         return _binding_unavailable(failed_account)
+
     try:
-        persisted_account = await db.get(EnterpriseAuthAccount, target_account_id)
+        persisted_account = await persist_enterprise_auth_claim_result(
+            db,
+            claim,
+            authenticated=authenticated,
+        )
         if persisted_account is None:
             return _binding_unavailable()
-        await db.refresh(persisted_account)
         return BindingResolution(
             account=persisted_account,
             code=OK,
@@ -893,4 +1098,30 @@ async def refresh_bound_account_after_login(
         )
     except Exception:
         await _rollback(db)
-        return _binding_unavailable()
+        try:
+            revalidated = await resolve_bound_account(
+                db,
+                source_provider,
+                source_base_url,
+                source_tenant_ref,
+                source_account,
+                target_provider,
+                lock=True,
+            )
+            if (
+                revalidated.account is None
+                or not _claim_matches_account(claim, revalidated.account)
+            ):
+                await _rollback(db)
+                return _binding_unavailable()
+            failed_account = await persist_enterprise_auth_claim_result(
+                db,
+                claim,
+                error_message=(
+                    "Enterprise account credential persistence failed"
+                ),
+            )
+            return _binding_unavailable(failed_account)
+        except Exception:
+            await _rollback(db)
+            return _binding_unavailable()

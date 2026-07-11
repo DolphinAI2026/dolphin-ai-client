@@ -806,7 +806,7 @@ async def test_account_connection_test_success_commits_masked_tokens(api, monkey
 
 
 @pytest.mark.asyncio
-async def test_account_connection_test_releases_graph_lock_during_external_auth(
+async def test_account_connection_test_releases_claim_transaction_during_external_auth(
     api,
     monkeypatch,
 ):
@@ -829,16 +829,13 @@ async def test_account_connection_test_releases_graph_lock_during_external_auth(
             },
         )
     ).status_code == 201
-    original_lock = api.routes.lock_enterprise_auth_account_graph
-    locked_account_sets = []
+    original_claim = api.routes.claim_enterprise_auth_generation
     route_db = None
 
-    async def _recording_lock(db, account_id):
+    async def _recording_claim(db, account_id):
         nonlocal route_db
         route_db = db
-        graph = await original_lock(db, account_id)
-        locked_account_sets.append(set(graph.accounts_by_id))
-        return graph
+        return await original_claim(db, account_id)
 
     async def _authenticate(stored):
         assert route_db is not None
@@ -848,18 +845,17 @@ async def test_account_connection_test_releases_graph_lock_during_external_auth(
 
     monkeypatch.setattr(
         api.routes,
-        "lock_enterprise_auth_account_graph",
-        _recording_lock,
+        "claim_enterprise_auth_generation",
+        _recording_claim,
     )
     monkeypatch.setattr(api.routes, "authenticate_enterprise_account", _authenticate)
 
     response = await api.client.post(f"{ACCOUNT_PATH}/{apaas['id']}/test")
 
     assert response.status_code == 200
-    assert locked_account_sets == [
-        {apaas["id"], control["id"]},
-        {apaas["id"], control["id"]},
-    ]
+    async with api.session_factory() as session:
+        stored = await session.get(EnterpriseAuthAccount, apaas["id"])
+        assert stored.auth_generation == 1
 
 
 @pytest.mark.asyncio
@@ -1008,7 +1004,93 @@ async def test_older_successful_connection_test_cannot_overwrite_newer_failure(
 
 
 @pytest.mark.asyncio
-async def test_failed_connection_test_relocks_full_graph_before_recording_error(
+async def test_connection_test_cannot_overwrite_interleaved_login_refresh(
+    api,
+    monkeypatch,
+):
+    from app.config import settings
+    from app.services import enterprise_auth as enterprise_auth_service
+
+    source = await _create_account(api)
+    target = await _create_account(
+        api,
+        provider="control_plane",
+        base_url="https://control.example.com",
+        tenant_ref="control",
+        account="control-user",
+    )
+    assert (
+        await api.client.post(
+            BINDING_PATH,
+            json={
+                "left_account_id": source["id"],
+                "right_account_id": target["id"],
+                "priority": 0,
+                "enabled": True,
+            },
+        )
+    ).status_code == 201
+    connection_test_started = asyncio.Event()
+    release_connection_test = asyncio.Event()
+
+    async def _connection_test_authenticate(snapshot):
+        connection_test_started.set()
+        await release_connection_test.wait()
+        set_account_tokens(snapshot, "stale-connection-test-token")
+        return snapshot
+
+    async def _login_refresh_authenticate(snapshot):
+        set_account_tokens(snapshot, "fresh-login-refresh-token")
+        return snapshot
+
+    monkeypatch.setattr(settings, "auth_account_binding_enabled", True)
+    monkeypatch.setattr(
+        api.routes,
+        "authenticate_enterprise_account",
+        _connection_test_authenticate,
+    )
+    monkeypatch.setattr(
+        enterprise_auth_service,
+        "authenticate_enterprise_account",
+        _login_refresh_authenticate,
+    )
+
+    connection_test = asyncio.create_task(
+        api.client.post(f"{ACCOUNT_PATH}/{target['id']}/test")
+    )
+    await connection_test_started.wait()
+    async with api.session_factory() as session:
+        refresh_result = (
+            await enterprise_auth_service.refresh_bound_account_after_login(
+                session,
+                "apaas",
+                "https://apaas.example.com/backend",
+                "tenant-1",
+                "builder-admin",
+                "control_plane",
+            )
+        )
+    release_connection_test.set()
+    connection_response = await connection_test
+
+    assert refresh_result.code == "OK"
+    assert connection_response.status_code == 409
+    assert (
+        connection_response.json()["code"]
+        == "ENTERPRISE_AUTH_ACCOUNT_CHANGED"
+    )
+    async with api.session_factory() as session:
+        stored = await session.get(EnterpriseAuthAccount, target["id"])
+        assert stored.auth_generation == 2
+        assert (
+            decrypt_password(stored.access_token_enc)
+            == "fresh-login-refresh-token"
+        )
+        assert stored.last_error is None
+
+
+@pytest.mark.asyncio
+async def test_failed_connection_test_records_error_with_claim_generation_cas(
     api,
     monkeypatch,
 ):
@@ -1031,37 +1113,21 @@ async def test_failed_connection_test_relocks_full_graph_before_recording_error(
             },
         )
     ).status_code == 201
-    original_lock = api.routes.lock_enterprise_auth_account_graph
-    locked_account_sets = []
-
-    async def _recording_lock(db, account_id):
-        graph = await original_lock(db, account_id)
-        locked_account_sets.append(set(graph.accounts_by_id))
-        return graph
-
     async def _authenticate(_stored):
         raise EnterpriseAuthError(
             ENTERPRISE_AUTH_ACCOUNT_INVALID,
             "upstream failure",
         )
 
-    monkeypatch.setattr(
-        api.routes,
-        "lock_enterprise_auth_account_graph",
-        _recording_lock,
-    )
     monkeypatch.setattr(api.routes, "authenticate_enterprise_account", _authenticate)
 
     response = await api.client.post(f"{ACCOUNT_PATH}/{apaas['id']}/test")
 
     assert response.status_code == 400
-    assert locked_account_sets == [
-        {apaas["id"], control["id"]},
-        {apaas["id"], control["id"]},
-    ]
     async with api.session_factory() as session:
         stored = await session.get(EnterpriseAuthAccount, apaas["id"])
         assert stored.status == STATUS_ERROR
+        assert stored.auth_generation == 1
         assert stored.last_error == "企业认证账号验证失败"
 
 

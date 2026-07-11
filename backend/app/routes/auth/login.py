@@ -27,7 +27,10 @@ from app.deps import (
 )
 from app.config import settings
 from app.error_messages import SELECT_TOKEN_INVALID, SELECT_TOKEN_EXPIRED
-from app.services.enterprise_auth import refresh_bound_account_after_login
+from app.services.enterprise_auth import (
+    refresh_bound_account_after_login,
+    validate_enterprise_base_url,
+)
 from pydantic import BaseModel
 
 logger = logging.getLogger(__name__)
@@ -770,7 +773,8 @@ async def _upsert_user_credential(
     db: AsyncSession,
     user: User,
     tenant: Tenant,
-    username: str,
+    source_base_url: str,
+    source_account: str,
     password: str,
     token: str,
     apaas_user_id: Optional[str],
@@ -789,8 +793,8 @@ async def _upsert_user_credential(
             user_id=user.id,
             local_tenant_id=tenant.id,
             apaas_tenant_id=apaas_tenant_id,
-            base_url=_normalize_apaas_origin(settings.apaas_base_url),
-            account=username,
+            base_url=source_base_url,
+            account=source_account,
             password_enc=encrypt_password(password),
         )
         db.add(row)
@@ -798,8 +802,8 @@ async def _upsert_user_credential(
         row.password_enc = encrypt_password(password)
     row.apaas_user_id = apaas_user_id
     row.apaas_tenant_id = apaas_tenant_id
-    row.base_url = _normalize_apaas_origin(settings.apaas_base_url)
-    row.account = username
+    row.base_url = source_base_url
+    row.account = source_account
     row.token = token
     row.token_expire_at = _decode_jwt_exp(token)
     row.status = "connected"
@@ -893,6 +897,9 @@ async def _try_apaas_login_flow(user_data: UserLogin, db: AsyncSession) -> Optio
 
     user_info = _extract_apaas_user(backend_payload or platform_payload, username)
     binding_source_account = _extract_apaas_binding_account(user_info, username)
+    binding_source_base_url = validate_enterprise_base_url(
+        settings.apaas_base_url
+    )
     if platform_probe_failed and not is_platform_admin:
         is_platform_admin = await _has_cached_platform_admin_identity(db, username, user_info)
 
@@ -943,14 +950,17 @@ async def _try_apaas_login_flow(user_data: UserLogin, db: AsyncSession) -> Optio
             user.apaas_token = backend_token
             user.apaas_tenant_id = tenant.apaas_tenant_id_str
             await _upsert_user_credential(
-                db,
-                user,
-                tenant,
-                username,
-                password,
-                backend_token,
-                user.apaas_user_id,
-                tenant.apaas_tenant_id_str or _tenant_item_id(item),
+                db=db,
+                user=user,
+                tenant=tenant,
+                source_base_url=binding_source_base_url,
+                source_account=binding_source_account,
+                password=password,
+                token=backend_token,
+                apaas_user_id=user.apaas_user_id,
+                apaas_tenant_id=(
+                    tenant.apaas_tenant_id_str or _tenant_item_id(item)
+                ),
             )
         await _sync_user_membership(
             db,
@@ -996,7 +1006,7 @@ async def _try_apaas_login_flow(user_data: UserLogin, db: AsyncSession) -> Optio
         await _refresh_optional_enterprise_binding(
             db,
             source_provider="apaas",
-            source_base_url=settings.apaas_base_url,
+            source_base_url=binding_source_base_url,
             source_tenant_ref=selected.apaas_tenant_id_str or user.apaas_tenant_id or default_tenant_id,
             source_account=binding_source_account,
             target_provider="control_plane",
@@ -1014,7 +1024,7 @@ async def _try_apaas_login_flow(user_data: UserLogin, db: AsyncSession) -> Optio
         await _refresh_optional_enterprise_binding(
             db,
             source_provider="apaas",
-            source_base_url=settings.apaas_base_url,
+            source_base_url=binding_source_base_url,
             source_tenant_ref=default_tenant_id,
             source_account=binding_source_account,
             target_provider="control_plane",

@@ -5,6 +5,8 @@ from urllib.parse import quote, unquote_plus, urlsplit
 
 import httpx
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
+from fastapi.security import HTTPAuthorizationCredentials
+from jose import JWTError
 from pydantic import BaseModel
 from sqlalchemy import and_, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -13,6 +15,7 @@ from starlette.responses import RedirectResponse, Response, StreamingResponse
 
 from app.code_runtime.service import (
     code_runtime_proxy_prefix,
+    control_plane_base_url,
     create_code_application,
     create_proxy_cookie_token,
     ensure_code_application,
@@ -22,17 +25,21 @@ from app.code_runtime.service import (
     validate_embed_token,
     validate_proxy_cookie_token,
 )
+from app.auth import decode_token
 from app.database import get_db
 from app.deps import AuthContext, get_auth_context
 from app.models import Application
 from app.models.ai_chat import AIChatSession, CodeRuntimeAgentSession, CodeRuntimeBinding
 from app.services.enterprise_auth import (
     ENTERPRISE_AUTH_BINDING_UNAVAILABLE,
-    resolve_provider_token_for_context,
+    resolve_provider_token_resolution_for_context,
 )
+from app.routes.enterprise_auth import EnterpriseAuthAPIError
 
 router = APIRouter(prefix="/code", tags=["code-runtime"])
 proxy_router = APIRouter(prefix="/code-runtime", tags=["code-runtime-proxy"])
+
+ENTERPRISE_AUTH_ACCESS_TOKEN_REQUIRED = "ENTERPRISE_AUTH_ACCESS_TOKEN_REQUIRED"
 
 
 class CreateCodeSessionRequest(BaseModel):
@@ -55,23 +62,60 @@ class CreateCodeApplicationRequest(BaseModel):
     seed_project_id: Optional[str] = None
 
 
+async def get_control_plane_access_context(
+    request: Request,
+    db: Annotated[AsyncSession, Depends(get_db)],
+) -> AuthContext:
+    authorization = str(request.headers.get("authorization") or "").strip()
+    scheme, separator, token = authorization.partition(" ")
+    if not separator or scheme.lower() != "bearer" or not token.strip():
+        raise EnterpriseAuthAPIError(
+            401,
+            "ENTERPRISE_AUTH_AUTHENTICATION_REQUIRED",
+            "需要有效的访问令牌",
+        )
+    token = token.strip()
+    try:
+        payload = decode_token(token)
+    except JWTError as exc:
+        raise EnterpriseAuthAPIError(
+            401,
+            "ENTERPRISE_AUTH_AUTHENTICATION_REQUIRED",
+            "访问令牌无效或已过期",
+        ) from exc
+    token_type = str(payload.get("type") or "")
+    if token_type != "access":
+        raise EnterpriseAuthAPIError(
+            403,
+            ENTERPRISE_AUTH_ACCESS_TOKEN_REQUIRED,
+            f"Control Plane 业务请求仅接受 access JWT，当前类型为 {token_type or 'unknown'}",
+        )
+    return await get_auth_context(
+        HTTPAuthorizationCredentials(scheme="Bearer", credentials=token),
+        db,
+    )
+
+
 async def _control_plane_token_or_403(
     db: AsyncSession,
     ctx: AuthContext,
 ) -> str:
-    token = await resolve_provider_token_for_context(
+    resolution = await resolve_provider_token_resolution_for_context(
         db,
         ctx,
         "control_plane",
+        expected_base_url=control_plane_base_url(),
     )
-    if token:
-        return token
-    raise HTTPException(
-        status_code=403,
-        detail={
-            "code": ENTERPRISE_AUTH_BINDING_UNAVAILABLE,
-            "message": "当前账号没有可用的 Control Plane 认证绑定",
-        },
+    if resolution.token:
+        return resolution.token
+    reason = str(resolution.message or "").strip()
+    message = "当前账号没有可用的 Control Plane 认证绑定"
+    if reason:
+        message = f"{message}：{reason}"
+    raise EnterpriseAuthAPIError(
+        403,
+        resolution.code or ENTERPRISE_AUTH_BINDING_UNAVAILABLE,
+        message,
     )
 
 
@@ -95,7 +139,7 @@ def _session_to_dict(session: AIChatSession) -> dict:
 
 @router.get("/applications")
 async def list_code_runtime_applications(
-    ctx: Annotated[AuthContext, Depends(get_auth_context)],
+    ctx: Annotated[AuthContext, Depends(get_control_plane_access_context)],
     db: Annotated[AsyncSession, Depends(get_db)],
     keyword: Optional[str] = None,
     provision_status: Optional[str] = Query(default=None, alias="provisionStatus"),
@@ -115,7 +159,7 @@ async def list_code_runtime_applications(
 @router.post("/applications")
 async def create_code_runtime_application(
     body: CreateCodeApplicationRequest,
-    ctx: Annotated[AuthContext, Depends(get_auth_context)],
+    ctx: Annotated[AuthContext, Depends(get_control_plane_access_context)],
     db: Annotated[AsyncSession, Depends(get_db)],
 ):
     control_plane_token = await _control_plane_token_or_403(db, ctx)
@@ -218,15 +262,14 @@ async def create_code_session_from_external_app(
 @router.post("/sessions/{session_id}/open")
 async def open_code_runtime_session(
     session_id: int,
-    ctx: Annotated[AuthContext, Depends(get_auth_context)],
+    ctx: Annotated[AuthContext, Depends(get_control_plane_access_context)],
     db: Annotated[AsyncSession, Depends(get_db)],
 ):
-    control_plane_token = await _control_plane_token_or_403(db, ctx)
     result = await open_code_session(
         db=db,
         session_id=session_id,
         ctx=ctx,
-        control_plane_token=control_plane_token,
+        control_plane_token_resolver=lambda: _control_plane_token_or_403(db, ctx),
     )
     await db.commit()
     return result
