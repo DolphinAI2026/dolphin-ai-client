@@ -111,6 +111,24 @@
             {{ formatStatus(pick(row, ['status', 'state'])) }}
           </template>
         </el-table-column>
+        <el-table-column label="环境绑定" min-width="250">
+          <template #default="{ row }">
+            <div class="binding-cell">
+              <el-tag :type="row.environmentBound ? 'success' : 'warning'" effect="plain">
+                {{ row.environmentBound ? '已绑定' : '未绑定' }}
+              </el-tag>
+              <span class="binding-tenant-id">{{ row.platformTenantId || '-' }}</span>
+              <el-button
+                link
+                type="primary"
+                :disabled="!admins.length"
+                @click="openBinding(row)"
+              >
+                {{ row.environmentBound ? '修改绑定' : '绑定环境' }}
+              </el-button>
+            </div>
+          </template>
+        </el-table-column>
       </el-table>
       <div class="pagination-wrap">
         <el-pagination
@@ -150,6 +168,40 @@
         <el-button type="primary" :loading="adminSaving" @click="saveAdmin">保存并登录</el-button>
       </template>
     </el-dialog>
+
+    <el-dialog
+      v-model="bindingVisible"
+      :title="`环境绑定 — ${pick(bindingTarget, ['tenantName', 'tenant_name']) || ''}`"
+      width="520px"
+      :close-on-click-modal="false"
+    >
+      <el-form :model="bindingForm" label-position="top">
+        <el-form-item label="平台管理员账号" required>
+          <el-select v-model="bindingForm.admin_id" style="width: 100%" placeholder="选择平台管理员">
+            <el-option
+              v-for="item in admins"
+              :key="item.id"
+              :label="`${item.name}（${item.account}）`"
+              :value="item.id"
+            />
+          </el-select>
+        </el-form-item>
+        <el-form-item label="aPaaS 地址" required>
+          <el-input
+            v-model="bindingForm.base_url"
+            placeholder="https://apaas.example.com/backend"
+            autocomplete="off"
+          />
+        </el-form-item>
+        <el-form-item label="aPaaS 租户 ID" required>
+          <el-input v-model="bindingForm.platform_tenant_id" autocomplete="off" />
+        </el-form-item>
+      </el-form>
+      <template #footer>
+        <el-button @click="bindingVisible = false">取消</el-button>
+        <el-button type="primary" :loading="bindingSaving" @click="saveBinding">保存绑定</el-button>
+      </template>
+    </el-dialog>
   </div>
 </template>
 
@@ -162,6 +214,7 @@ interface AdminRow {
   id: string
   name: string
   account: string
+  base_url?: string
   is_default: boolean
   status: string
   last_login_at?: string | null
@@ -179,11 +232,19 @@ const adminDialogVisible = ref(false)
 const adminSaving = ref(false)
 const editingAdminId = ref('')
 const editingAdminAccount = ref('')
+const bindingVisible = ref(false)
+const bindingSaving = ref(false)
+const bindingTarget = ref<any | null>(null)
 const adminForm = ref({
   name: '',
   account: '',
   password: '',
   is_default: false,
+})
+const bindingForm = ref({
+  admin_id: '',
+  base_url: '',
+  platform_tenant_id: '',
 })
 
 // 客户端分页 + 实时搜索（rows 已经一次性拉全 page_size=500，搜索/翻页都本地处理）
@@ -368,6 +429,46 @@ async function deleteAdmin(row: AdminRow) {
   }
 }
 
+function openBinding(row: any) {
+  const admin = admins.value.find((item) => item.id === selectedAdminId.value)
+    || admins.value.find((item) => item.is_default)
+    || admins.value[0]
+  bindingTarget.value = row
+  bindingForm.value = {
+    admin_id: admin?.id || '',
+    base_url: row.baseUrl || admin?.base_url || '',
+    platform_tenant_id: row.platformTenantId || pick(row, ['tenantId', 'tenant_id']) || '',
+  }
+  bindingVisible.value = true
+}
+
+async function saveBinding() {
+  if (
+    !bindingTarget.value
+    || !bindingForm.value.admin_id
+    || !bindingForm.value.base_url.trim()
+    || !bindingForm.value.platform_tenant_id.trim()
+  ) {
+    ElMessage.warning('请选择平台管理员并填写 aPaaS 地址和租户 ID')
+    return
+  }
+  bindingSaving.value = true
+  try {
+    await apiPut(`/mcp-platform/apaas-tenants/${bindingTarget.value.localTenantId}/binding`, {
+      admin_id: bindingForm.value.admin_id,
+      base_url: bindingForm.value.base_url.trim(),
+      platform_tenant_id: bindingForm.value.platform_tenant_id.trim(),
+    })
+    bindingVisible.value = false
+    await loadLocalTenants()
+    ElMessage.success('环境绑定已保存')
+  } catch (e: any) {
+    ElMessage.error(errorMessage(e, '环境绑定失败'))
+  } finally {
+    bindingSaving.value = false
+  }
+}
+
 async function loadLocalTenants() {
   loading.value = true
   error.value = ''
@@ -392,10 +493,11 @@ async function syncTenants(options: { silent?: boolean } = {}) {
       admin_id: selectedAdminId.value || undefined,
       page_size: 500,
     })
-    rows.value = resp.items || []
+    const remoteCount = resp.items?.length || 0
     const synced = resp.synced || {}
+    await loadLocalTenants()
     if (!options.silent) {
-      ElMessage.success(`已刷新 ${rows.value.length} 个租户，同步本地 ${synced.tenants ?? 0} 个租户 / ${synced.envs ?? 0} 个环境`)
+      ElMessage.success(`已刷新 ${remoteCount} 个租户，同步本地 ${synced.tenants ?? 0} 个租户 / ${synced.envs ?? 0} 个环境`)
     }
     await loadAdmins()
   } catch (e: any) {
@@ -446,6 +548,20 @@ onMounted(async () => {
 }
 .admin-card {
   margin-bottom: 16px;
+}
+.binding-cell {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+.binding-tenant-id {
+  color: var(--text-3);
+  font-family: var(--font-mono);
+  font-size: 12px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 .pagination-wrap {
   display: flex;

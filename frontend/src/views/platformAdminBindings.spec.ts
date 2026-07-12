@@ -18,4 +18,14 @@ describe('aPaaS platform admin bindings', () => {
   it('does not allow tenant refresh without an admin account', () => {
     expect(source).toContain(':disabled="!selectedAdminId"')
   })
+
+  it('supports one default environment binding per tenant', () => {
+    expect(source).toContain('环境绑定')
+    expect(source).toContain('绑定环境')
+    expect(source).toContain('aPaaS 地址')
+    expect(source).toContain('aPaaS 租户 ID')
+    expect(source).toContain(
+      'apiPut(`/mcp-platform/apaas-tenants/${bindingTarget.value.localTenantId}/binding`',
+    )
+  })
 })
