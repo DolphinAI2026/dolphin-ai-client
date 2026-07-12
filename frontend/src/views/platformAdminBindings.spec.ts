@@ -15,6 +15,10 @@ describe('aPaaS platform admin bindings', () => {
     expect(source).toContain('apiPost(`/mcp-platform/apaas-admins/${row.id}/login`)')
   })
 
+  it('labels the platform account login action as a test login', () => {
+    expect(source).toContain('@click="loginAdmin(row)">测试登录</el-button>')
+  })
+
   it('does not allow tenant refresh without an admin account', () => {
     expect(source).toContain(':disabled="!selectedAdminId"')
   })

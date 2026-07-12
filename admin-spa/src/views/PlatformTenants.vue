@@ -78,7 +78,7 @@
         </el-table-column>
         <el-table-column label="操作" width="260" fixed="right">
           <template #default="{ row }">
-            <el-button link type="primary" :loading="row._logging" @click="loginAdmin(row)">登录</el-button>
+            <el-button link type="primary" :loading="row._logging" @click="loginAdmin(row)">测试登录</el-button>
             <el-button link type="primary" @click="openEditAdmin(row)">编辑</el-button>
             <el-button v-if="!row.is_default" link @click="setDefaultAdmin(row)">设为默认</el-button>
             <el-button link type="danger" @click="deleteAdmin(row)">删除</el-button>
