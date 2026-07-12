@@ -1,3 +1,5 @@
+import { readFileSync } from 'node:fs'
+import { resolve } from 'node:path'
 import { describe, expect, it } from 'vitest'
 import { buildPlatformAdminIframeSrc, resolvePlatformAdminPath } from './platformAdminEmbedState'
 
@@ -21,5 +23,14 @@ describe('platform admin embed state', () => {
       adminPath: '/status',
       token: 'token-1',
     })).toBe('http://localhost:5173/ai-builder/admin/status?embed=1&handoff_token=token-1')
+  })
+
+  it('does not block iframe load on remote Google Fonts', () => {
+    const adminTokens = readFileSync(
+      resolve(process.cwd(), '../admin-spa/src/styles/design-v3-tokens.css'),
+      'utf8',
+    )
+
+    expect(adminTokens).not.toContain('fonts.googleapis.com')
   })
 })

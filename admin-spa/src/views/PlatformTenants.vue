@@ -20,7 +20,13 @@
           clearable
           style="width: 240px"
         />
-        <el-button @click="syncTenants()" :loading="loading" type="primary" title="从 aPaaS 拉取最新租户列表（与搜索独立）">
+        <el-button
+          @click="syncTenants()"
+          :loading="loading"
+          :disabled="!selectedAdminId"
+          type="primary"
+          title="从 aPaaS 拉取最新租户列表（与搜索独立）"
+        >
           刷新租户
         </el-button>
       </div>
@@ -44,7 +50,44 @@
       style="margin-bottom: 16px"
     />
 
-    <el-card>
+    <el-card class="admin-card">
+      <template #header>
+        <div class="card-head">
+          <div>
+            <span>平台管理员账号</span>
+            <span class="card-meta">后端登录 aPaaS 并维护 Token</span>
+          </div>
+          <el-button type="primary" size="small" @click="openCreateAdmin">新增账号</el-button>
+        </div>
+      </template>
+      <el-table :data="admins" v-loading="adminsLoading" stripe empty-text="暂无平台管理员账号">
+        <el-table-column prop="name" label="名称" min-width="150" />
+        <el-table-column prop="account" label="登录账号" min-width="180" />
+        <el-table-column label="状态" width="110">
+          <template #default="{ row }">
+            <el-tag :type="row.status === 'connected' ? 'success' : 'info'" effect="plain">
+              {{ row.status === 'connected' ? '已连接' : '未连接' }}
+            </el-tag>
+          </template>
+        </el-table-column>
+        <el-table-column label="默认" width="80">
+          <template #default="{ row }">{{ row.is_default ? '是' : '-' }}</template>
+        </el-table-column>
+        <el-table-column label="最近登录" min-width="170">
+          <template #default="{ row }">{{ formatDate(row.last_login_at) }}</template>
+        </el-table-column>
+        <el-table-column label="操作" width="260" fixed="right">
+          <template #default="{ row }">
+            <el-button link type="primary" :loading="row._logging" @click="loginAdmin(row)">登录</el-button>
+            <el-button link type="primary" @click="openEditAdmin(row)">编辑</el-button>
+            <el-button v-if="!row.is_default" link @click="setDefaultAdmin(row)">设为默认</el-button>
+            <el-button link type="danger" @click="deleteAdmin(row)">删除</el-button>
+          </template>
+        </el-table-column>
+      </el-table>
+    </el-card>
+
+    <el-card class="tenant-card">
       <template #header>
         <div class="card-head">
           <span>租户列表</span>
@@ -82,13 +125,38 @@
       </div>
     </el-card>
 
+    <el-dialog
+      v-model="adminDialogVisible"
+      :title="editingAdminId ? '编辑平台管理员账号' : '新增平台管理员账号'"
+      width="480px"
+      :close-on-click-modal="false"
+    >
+      <el-form :model="adminForm" label-position="top">
+        <el-form-item label="名称" required>
+          <el-input v-model="adminForm.name" placeholder="如：试用环境管理员" maxlength="80" />
+        </el-form-item>
+        <el-form-item label="aPaaS 登录账号" required>
+          <el-input v-model="adminForm.account" autocomplete="off" />
+        </el-form-item>
+        <el-form-item :label="editingAdminId ? '密码（留空则不修改）' : '密码'" :required="!editingAdminId">
+          <el-input v-model="adminForm.password" type="password" show-password autocomplete="new-password" />
+        </el-form-item>
+        <el-form-item>
+          <el-checkbox v-model="adminForm.is_default">设为默认账号</el-checkbox>
+        </el-form-item>
+      </el-form>
+      <template #footer>
+        <el-button @click="adminDialogVisible = false">取消</el-button>
+        <el-button type="primary" :loading="adminSaving" @click="saveAdmin">保存并登录</el-button>
+      </template>
+    </el-dialog>
   </div>
 </template>
 
 <script setup lang="ts">
 import { computed, onMounted, ref, watch } from 'vue'
-import { ElMessage } from 'element-plus'
-import { apiGet } from '@/api/client'
+import { ElMessage, ElMessageBox } from 'element-plus'
+import { apiDel, apiGet, apiPost, apiPut } from '@/api/client'
 
 interface AdminRow {
   id: string
@@ -96,15 +164,27 @@ interface AdminRow {
   account: string
   is_default: boolean
   status: string
-  token_fingerprint?: string
+  last_login_at?: string | null
+  _logging?: boolean
 }
 
 const admins = ref<AdminRow[]>([])
+const adminsLoading = ref(false)
 const selectedAdminId = ref('')
 const rows = ref<any[]>([])
 const searchQuery = ref('')
 const loading = ref(false)
 const error = ref('')
+const adminDialogVisible = ref(false)
+const adminSaving = ref(false)
+const editingAdminId = ref('')
+const editingAdminAccount = ref('')
+const adminForm = ref({
+  name: '',
+  account: '',
+  password: '',
+  is_default: false,
+})
 
 // 客户端分页 + 实时搜索（rows 已经一次性拉全 page_size=500，搜索/翻页都本地处理）
 const currentPage = ref(1)
@@ -150,10 +230,142 @@ function formatStatus(value: any) {
   return value || '-'
 }
 
+function formatDate(value?: string | null) {
+  if (!value) return '-'
+  const date = new Date(value)
+  return Number.isNaN(date.getTime()) ? value : date.toLocaleString('zh-CN', { hour12: false })
+}
+
+function errorMessage(e: any, fallback: string) {
+  return e?.response?.data?.detail || e?.message || fallback
+}
+
 async function loadAdmins() {
-  const resp = await apiGet<{ items: AdminRow[] }>('/mcp-platform/apaas-admins')
-  admins.value = resp.items || []
-  selectedAdminId.value = selectedAdminId.value || admins.value.find((x) => x.is_default)?.id || admins.value[0]?.id || ''
+  adminsLoading.value = true
+  try {
+    const resp = await apiGet<{ items: AdminRow[] }>('/mcp-platform/apaas-admins')
+    admins.value = resp.items || []
+    if (!admins.value.some((item) => item.id === selectedAdminId.value)) {
+      selectedAdminId.value = admins.value.find((item) => item.is_default)?.id || admins.value[0]?.id || ''
+    }
+  } finally {
+    adminsLoading.value = false
+  }
+}
+
+function openCreateAdmin() {
+  editingAdminId.value = ''
+  editingAdminAccount.value = ''
+  adminForm.value = {
+    name: '',
+    account: '',
+    password: '',
+    is_default: admins.value.length === 0,
+  }
+  adminDialogVisible.value = true
+}
+
+function openEditAdmin(row: AdminRow) {
+  editingAdminId.value = row.id
+  editingAdminAccount.value = row.account
+  adminForm.value = {
+    name: row.name,
+    account: row.account,
+    password: '',
+    is_default: row.is_default,
+  }
+  adminDialogVisible.value = true
+}
+
+async function saveAdmin() {
+  const name = adminForm.value.name.trim()
+  const account = adminForm.value.account.trim()
+  const password = adminForm.value.password
+  if (!name || !account || (!editingAdminId.value && !password)) {
+    ElMessage.warning('请填写名称、账号和密码')
+    return
+  }
+  if (editingAdminId.value && account !== editingAdminAccount.value && !password) {
+    ElMessage.warning('修改登录账号时必须重新填写密码')
+    return
+  }
+
+  adminSaving.value = true
+  try {
+    let adminId = editingAdminId.value
+    if (adminId) {
+      const payload: Record<string, any> = {
+        name,
+        account,
+        is_default: adminForm.value.is_default,
+      }
+      if (password) payload.password = password
+      await apiPut(`/mcp-platform/apaas-admins/${editingAdminId.value}`, payload)
+    } else {
+      const created = await apiPost<AdminRow>('/mcp-platform/apaas-admins', {
+        name,
+        account,
+        password,
+        is_default: adminForm.value.is_default,
+      })
+      adminId = created.id
+    }
+
+    try {
+      await apiPost(`/mcp-platform/apaas-admins/${adminId}/login`)
+      ElMessage.success('账号已保存并登录')
+    } catch (e: any) {
+      ElMessage.warning(`账号已保存，但登录失败：${errorMessage(e, '请检查账号密码')}`)
+    }
+    selectedAdminId.value = adminId
+    adminDialogVisible.value = false
+    await loadAdmins()
+  } catch (e: any) {
+    ElMessage.error(errorMessage(e, '保存失败'))
+  } finally {
+    adminSaving.value = false
+  }
+}
+
+async function loginAdmin(row: AdminRow) {
+  row._logging = true
+  try {
+    await apiPost(`/mcp-platform/apaas-admins/${row.id}/login`)
+    selectedAdminId.value = row.id
+    ElMessage.success('aPaaS 登录成功')
+    await loadAdmins()
+  } catch (e: any) {
+    ElMessage.error(errorMessage(e, '登录失败'))
+  } finally {
+    row._logging = false
+  }
+}
+
+async function setDefaultAdmin(row: AdminRow) {
+  try {
+    await apiPut(`/mcp-platform/apaas-admins/${row.id}`, { is_default: true })
+    selectedAdminId.value = row.id
+    await loadAdmins()
+    ElMessage.success('已设为默认账号')
+  } catch (e: any) {
+    ElMessage.error(errorMessage(e, '设置失败'))
+  }
+}
+
+async function deleteAdmin(row: AdminRow) {
+  try {
+    await ElMessageBox.confirm(`确认删除账号“${row.account}”？`, '删除平台管理员账号', {
+      type: 'warning',
+      confirmButtonText: '删除',
+      cancelButtonText: '取消',
+    })
+    await apiDel(`/mcp-platform/apaas-admins/${row.id}`)
+    await loadAdmins()
+    ElMessage.success('账号已删除')
+  } catch (e: any) {
+    if (e === 'cancel' || e === 'close') return
+    ElMessage.error(errorMessage(e, '删除失败'))
+  }
 }
 
 async function loadLocalTenants() {
@@ -230,6 +442,10 @@ onMounted(async () => {
   color: var(--text-3);
   font-size: 12px;
   font-weight: var(--fw-medium, 500);
+  margin-left: 10px;
+}
+.admin-card {
+  margin-bottom: 16px;
 }
 .pagination-wrap {
   display: flex;
