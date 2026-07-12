@@ -120,8 +120,22 @@ kube -n "$KUBE_NAMESPACE" set env "deployment/${CONTROL_PLANE_DEPLOYMENT}" \
   CONTROL_PLANE_AUTH_FULL_WORKSPACE_BASE_URL="$DOLPHIN_WORKSPACE_BASE_URL" >/dev/null
 kube -n "$KUBE_NAMESPACE" set env "deployment/${CONTROL_PLANE_DEPLOYMENT}" \
   --from="secret/${DELEGATION_SECRET}" >/dev/null
-kube -n "$KUBE_NAMESPACE" wait \
-  --for=condition=Available "deployment/${CONTROL_PLANE_DEPLOYMENT}" --timeout=300s
+control_plane_ready=false
+for _ in $(seq 1 150); do
+  read -r generation observed desired updated available < <(
+    kube -n "$KUBE_NAMESPACE" get "deployment/${CONTROL_PLANE_DEPLOYMENT}" \
+      -o jsonpath='{.metadata.generation}{" "}{.status.observedGeneration}{" "}{.spec.replicas}{" "}{.status.updatedReplicas}{" "}{.status.availableReplicas}{"\n"}'
+  )
+  if [[ "$generation" == "$observed" && "$desired" == "$updated" && "$desired" == "$available" ]]; then
+    control_plane_ready=true
+    break
+  fi
+  sleep 2
+done
+if [[ "$control_plane_ready" != "true" ]]; then
+  echo "Control Plane deployment did not become ready within 300 seconds" >&2
+  exit 1
+fi
 
 awk '
   /^  default.conf: \|$/ { capture=1; next }
