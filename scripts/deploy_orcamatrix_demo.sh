@@ -120,7 +120,8 @@ kube -n "$KUBE_NAMESPACE" set env "deployment/${CONTROL_PLANE_DEPLOYMENT}" \
   CONTROL_PLANE_AUTH_FULL_WORKSPACE_BASE_URL="$DOLPHIN_WORKSPACE_BASE_URL" >/dev/null
 kube -n "$KUBE_NAMESPACE" set env "deployment/${CONTROL_PLANE_DEPLOYMENT}" \
   --from="secret/${DELEGATION_SECRET}" >/dev/null
-kube -n "$KUBE_NAMESPACE" rollout status "deployment/${CONTROL_PLANE_DEPLOYMENT}" --timeout=300s
+kube -n "$KUBE_NAMESPACE" wait \
+  --for=condition=Available "deployment/${CONTROL_PLANE_DEPLOYMENT}" --timeout=300s
 
 awk '
   /^  default.conf: \|$/ { capture=1; next }
