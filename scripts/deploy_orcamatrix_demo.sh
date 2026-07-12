@@ -103,12 +103,12 @@ AUTH_PROVIDER=control_plane
 CONTROL_PLANE_BINDING_ENABLED=${CONTROL_PLANE_BINDING_ENABLED}
 DOLPHIN_WORKSPACE_BASE_URL=${DOLPHIN_WORKSPACE_BASE_URL}
 DOLPHIN_CODE_CONTROL_PLANE_URL=${CONTROL_PLANE_URL}
-DOLPHIN_CODE_BUILDER_URL=${PUBLIC_BASE_URL}
 AI_BUILDER_CHAT_DEEPLINK_BASE=${PUBLIC_BASE_URL}
 HOST=0.0.0.0
 PORT=8003
 EOF
 chmod 600 "$tmp_dir/backend.env"
+backend_env_checksum="$(sha256sum "$tmp_dir/backend.env" | awk '{print $1}')"
 
 if ! kube -n "$KUBE_NAMESPACE" get secret "$DELEGATION_SECRET" >/dev/null 2>&1; then
   delegation_value="$(python3 -c 'import secrets; print(secrets.token_hex(32))')"
@@ -203,6 +203,8 @@ spec:
       labels:
         app.kubernetes.io/name: ai-builder
         app.kubernetes.io/part-of: orcamatrix
+      annotations:
+        checksum/backend-env: ${backend_env_checksum}
     spec:
       imagePullSecrets:
         - name: ${IMAGE_PULL_SECRET}
