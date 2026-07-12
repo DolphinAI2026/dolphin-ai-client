@@ -8,7 +8,7 @@ import app.routes.auth  # noqa: F401 - ensure login submodule is loaded
 from app.auth import decode_token, get_password_hash, verify_password
 from app.config import settings
 from app.models import PlatformEnv, User
-from app.models.tenant import Tenant, UserTenant
+from app.models.tenant import Role, Tenant, UserTenant
 from app.routes.auth import login
 from app.routes.mcp_platform import _sync_platform_user
 from app.code_runtime.auth import control_plane_access_token
@@ -291,3 +291,15 @@ async def test_control_plane_login_without_binding_uses_only_dolphin_current_ten
         )
     ).scalar_one()
     assert tenant.tenant_code == "workspace-default"
+    membership = (
+        await db_session.execute(
+            select(UserTenant).where(
+                UserTenant.user_id == int(payload["sub"]),
+                UserTenant.tenant_id == tenant.id,
+            )
+        )
+    ).scalar_one()
+    role = await db_session.get(Role, membership.role_id)
+    assert role is not None
+    assert role.role_code == "R_tenant_admin"
+    assert role.permissions["application:create"] is True

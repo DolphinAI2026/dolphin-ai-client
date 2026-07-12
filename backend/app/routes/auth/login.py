@@ -1232,6 +1232,8 @@ async def _ensure_control_plane_user(
                     preferred_role_codes=preferred_roles,
                 )
     elif identity.tenant_id:
+        from app.seed_data import seed_default_roles
+
         tenant_code = _normalize_tenant_code(
             f"workspace-{identity.tenant_id}",
             identity.tenant_id,
@@ -1246,6 +1248,7 @@ async def _ensure_control_plane_user(
             )
             db.add(tenant)
             await db.flush()
+        await seed_default_roles(db, tenant.id, commit=False)
         membership = await _sync_user_membership(
             db,
             user,
