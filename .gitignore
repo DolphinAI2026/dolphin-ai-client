@@ -69,6 +69,7 @@ workspaces/
 extensions/ruijing-ai/dist/
 extensions/ruijing-ai/*.vsix
 .serena/
+.codegraph/
 
 # Stale dirs (cleaned up 2026-05-25)
 marketplace_store/

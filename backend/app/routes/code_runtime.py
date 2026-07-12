@@ -22,9 +22,17 @@ from app.code_runtime.service import (
     validate_embed_token,
     validate_proxy_cookie_token,
 )
+from app.code_runtime.auth import (
+    control_plane_access_token,
+    control_plane_refresh_token,
+    control_plane_token_needs_refresh,
+    refresh_control_plane_token,
+    store_control_plane_credentials,
+)
+from app.config import settings
 from app.database import get_db
 from app.deps import AuthContext, get_auth_context
-from app.models import Application
+from app.models import Application, User
 from app.models.ai_chat import AIChatSession, CodeRuntimeAgentSession, CodeRuntimeBinding
 
 router = APIRouter(prefix="/code", tags=["code-runtime"])
@@ -69,22 +77,65 @@ def _session_to_dict(session: AIChatSession) -> dict:
     }
 
 
+async def _control_plane_request_auth(
+    request: Request,
+    ctx: AuthContext,
+    db: AsyncSession,
+) -> tuple[str | None, str | None]:
+    if not settings.control_plane_binding_enabled:
+        return request.headers.get("authorization"), None
+    token = control_plane_access_token(ctx.user)
+    if token and not control_plane_token_needs_refresh(token):
+        return f"Bearer {token}", "builder-control-plane"
+
+    user = (
+        await db.execute(
+            select(User)
+            .where(User.id == ctx.user.id)
+            .with_for_update()
+        )
+    ).scalar_one()
+    token = control_plane_access_token(user)
+    if token and not control_plane_token_needs_refresh(token):
+        return f"Bearer {token}", "builder-control-plane"
+
+    refresh_token = control_plane_refresh_token(user)
+    if not refresh_token:
+        raise HTTPException(
+            status_code=403,
+            detail="当前账号未绑定 Control Plane，或用户 Token 已失效，请重新登录",
+        )
+    refreshed = await refresh_control_plane_token(refresh_token)
+    store_control_plane_credentials(
+        user,
+        refreshed.access_token,
+        refreshed.refresh_token or refresh_token,
+    )
+    await db.commit()
+    ctx.user.coding_access_token = user.coding_access_token
+    ctx.user.coding_refresh_token = user.coding_refresh_token
+    return f"Bearer {refreshed.access_token}", "builder-control-plane"
+
+
 @router.get("/applications")
 async def list_code_runtime_applications(
     request: Request,
     ctx: Annotated[AuthContext, Depends(get_auth_context)],
+    db: Annotated[AsyncSession, Depends(get_db)],
     keyword: Optional[str] = None,
     provision_status: Optional[str] = Query(default=None, alias="provisionStatus"),
     page: int = 1,
     page_size: int = Query(default=50, alias="pageSize"),
 ):
-    _ = ctx
+    authorization, auth_provider = await _control_plane_request_auth(request, ctx, db)
     return await list_code_applications(
         keyword=keyword,
         provision_status=provision_status,
         page=page,
         page_size=page_size,
-        authorization_header=request.headers.get("authorization"),
+        authorization_header=authorization,
+        delegated_context=ctx,
+        auth_provider=auth_provider,
     )
 
 
@@ -93,13 +144,16 @@ async def create_code_runtime_application(
     body: CreateCodeApplicationRequest,
     request: Request,
     ctx: Annotated[AuthContext, Depends(get_auth_context)],
+    db: Annotated[AsyncSession, Depends(get_db)],
 ):
+    authorization, auth_provider = await _control_plane_request_auth(request, ctx, db)
     return await create_code_application(
         app_name=body.app_name,
         app_code=body.app_code,
         seed_project_id=body.seed_project_id,
-        authorization_header=request.headers.get("authorization"),
+        authorization_header=authorization,
         delegated_context=ctx,
+        auth_provider=auth_provider,
     )
 
 
@@ -197,11 +251,13 @@ async def open_code_runtime_session(
     ctx: Annotated[AuthContext, Depends(get_auth_context)],
     db: Annotated[AsyncSession, Depends(get_db)],
 ):
+    authorization, auth_provider = await _control_plane_request_auth(request, ctx, db)
     result = await open_code_session(
         db=db,
         session_id=session_id,
         ctx=ctx,
-        authorization_header=request.headers.get("authorization"),
+        authorization_header=authorization,
+        auth_provider=auth_provider,
     )
     await db.commit()
     return result

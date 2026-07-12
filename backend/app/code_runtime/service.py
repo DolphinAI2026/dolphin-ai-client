@@ -267,20 +267,29 @@ def _control_plane_headers(
     include_content_type: bool = False,
     delegated_context: Any | None = None,
     shell_session_id: int | None = None,
+    auth_provider: str | None = None,
 ) -> dict[str, str]:
     headers: dict[str, str] = {}
     if include_content_type:
         headers["Content-Type"] = "application/json"
-    token = (
-        os.getenv("DOLPHIN_CODE_CONTROL_PLANE_TOKEN", "").strip()
-        or (settings.dolphin_code_control_plane_token or "").strip()
-    )
-    if token:
-        headers["Authorization"] = f"Bearer {token}"
-    else:
-        incoming = str(authorization_header or "").strip()
+    incoming = str(authorization_header or "").strip()
+    if auth_provider:
         if incoming.lower().startswith("bearer "):
             headers["Authorization"] = incoming
+    else:
+        token = (
+            os.getenv("DOLPHIN_CODE_CONTROL_PLANE_TOKEN", "").strip()
+            or (settings.dolphin_code_control_plane_token or "").strip()
+        )
+        if token:
+            headers["Authorization"] = f"Bearer {token}"
+        elif incoming.lower().startswith("bearer "):
+            headers["Authorization"] = incoming
+    if auth_provider:
+        headers["X-Auth-Provider"] = auth_provider
+        tenant_id = _header_text(getattr(delegated_context, "apaas_tenant_id", None))
+        if tenant_id:
+            headers["X-Tenant-Id"] = tenant_id
     delegation_secret = (
         os.getenv("DOLPHIN_CODE_CONTROL_PLANE_DELEGATION_SECRET", "").strip()
         or (settings.dolphin_code_control_plane_delegation_secret or "").strip()
@@ -391,6 +400,8 @@ async def list_code_applications(
     page: int = 1,
     page_size: int = 50,
     authorization_header: str | None = None,
+    delegated_context: Any | None = None,
+    auth_provider: str | None = None,
 ) -> dict[str, Any]:
     base_url = control_plane_base_url()
     params: dict[str, Any] = {"page": max(1, int(page or 1)), "pageSize": max(1, int(page_size or 50))}
@@ -402,7 +413,11 @@ async def list_code_applications(
         async with httpx.AsyncClient(timeout=httpx.Timeout(connect=10, read=30, write=10, pool=10)) as client:
             response = await client.get(
                 f"{base_url}/api/applications",
-                headers=_control_plane_headers(authorization_header),
+                headers=_control_plane_headers(
+                    authorization_header,
+                    delegated_context=delegated_context,
+                    auth_provider=auth_provider,
+                ),
                 params=params,
             )
     except httpx.RequestError as exc:
@@ -428,6 +443,7 @@ async def create_code_application(
     seed_project_id: str | None = None,
     authorization_header: str | None = None,
     delegated_context: Any | None = None,
+    auth_provider: str | None = None,
 ) -> dict[str, Any]:
     name = str(app_name or "").strip()
     code = str(app_code or "").strip()
@@ -453,6 +469,7 @@ async def create_code_application(
                     authorization_header,
                     include_content_type=True,
                     delegated_context=delegated_context,
+                    auth_provider=auth_provider,
                 ),
                 json=body,
             )
@@ -486,6 +503,7 @@ async def default_workspace_open(
     authorization_header: str | None = None,
     delegated_context: Any | None = None,
     shell_session_id: int | None = None,
+    auth_provider: str | None = None,
 ) -> dict[str, Any]:
     base_url = control_plane_base_url()
     body = {"handoffId": handoff_id} if handoff_id else None
@@ -499,6 +517,7 @@ async def default_workspace_open(
                     include_content_type=True,
                     delegated_context=delegated_context,
                     shell_session_id=shell_session_id,
+                    auth_provider=auth_provider,
                 ),
                 json=body,
             )
@@ -523,6 +542,7 @@ async def open_code_session(
     embed_token_factory: Callable[..., str] = create_embed_token,
     handoff_id: str | None = None,
     authorization_header: str | None = None,
+    auth_provider: str | None = None,
 ) -> dict[str, Any]:
     session = await db.get(AIChatSession, int(session_id))
     if not session or session.tenant_id != int(ctx.tenant_id) or session.user_id != int(ctx.user.id):
@@ -545,6 +565,7 @@ async def open_code_session(
             authorization_header=authorization_header,
             delegated_context=ctx,
             shell_session_id=session.id,
+            auth_provider=auth_provider,
         )
     builder_url = str(opened.get("specReviewUrl") or opened.get("builderUrl") or "").strip()
     if not builder_url:

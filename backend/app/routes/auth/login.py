@@ -4,7 +4,7 @@ import secrets
 from datetime import datetime
 from typing import Annotated, Optional
 from fastapi import APIRouter, Depends, HTTPException, status
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.exc import IntegrityError, SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 from jose import jwt, JWTError
@@ -16,9 +16,14 @@ from app.schemas import (
     LoginResponse, TenantOption, TenantSelectRequest
 )
 from app.auth import verify_password, get_password_hash, create_access_token, create_selection_token
-from app.code_runtime.auth import CodingAuthResult, login_to_coding_control_plane
-from app.code_runtime.service import control_plane_base_url
-from app.crypto import encrypt_password
+from app.code_runtime.auth import (
+    ControlPlaneAuthResult,
+    bind_apaas_identity,
+    exchange_apaas_identity,
+    login_to_control_plane,
+    store_control_plane_credentials,
+)
+from app.crypto import decrypt_password, encrypt_password
 from app.deps import (
     AuthContext,
     get_auth_context,
@@ -874,6 +879,26 @@ async def _try_apaas_login_flow(user_data: UserLogin, db: AsyncSession) -> Optio
             ),
         )
 
+    if settings.control_plane_binding_enabled:
+        if not local_tenants:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="aPaaS 账号未返回可绑定的租户",
+            )
+        selected_tenant = local_tenants[0]
+        selected_apaas_tenant_id = str(selected_tenant.apaas_tenant_id_str or "").strip()
+        subject_token = str(backend_token or platform_token or "").strip()
+        if not selected_apaas_tenant_id or not subject_token:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="aPaaS 账号未返回可用于 Control Plane 绑定的租户或 Token",
+            )
+        await _store_federated_control_plane_token(
+            user,
+            subject_token=subject_token,
+            tenant_id=selected_apaas_tenant_id,
+        )
+
     await db.commit()
 
     if local_tenants:
@@ -921,11 +946,12 @@ def _auth_provider() -> str:
         "own": "local",
         "native": "local",
         "builtin": "local",
+        "coding": "control_plane",
     }.get(provider, provider)
-    if provider not in ("", "local", "apaas", "coding"):
+    if provider not in ("", "local", "apaas", "control_plane"):
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="AUTH_PROVIDER must be one of local, apaas, coding",
+            detail="AUTH_PROVIDER must be one of control_plane, apaas",
         )
     return provider
 
@@ -1084,58 +1110,137 @@ async def _local_login_response(user_data: UserLogin, db: AsyncSession) -> Login
     )
 
 
-async def _ensure_coding_default_tenant(db: AsyncSession) -> Tenant:
-    tenant = (
-        await db.execute(select(Tenant).where(Tenant.tenant_code == "default"))
-    ).scalar_one_or_none()
-    if tenant:
-        return tenant
-
-    tenant = (
-        await db.execute(select(Tenant).where(Tenant.status == 1).order_by(Tenant.id.asc()))
-    ).scalar_one_or_none()
-    if tenant:
-        return tenant
-
-    tenant = Tenant(tenant_name="Default Tenant", tenant_code="default")
-    db.add(tenant)
-    await db.flush()
-    return tenant
-
-
-def _coding_roles_include_admin(roles: list[str]) -> bool:
+def _control_plane_roles_include_admin(roles: list[str]) -> bool:
     normalized = {str(role or "").strip().upper() for role in roles}
     return bool(normalized.intersection({"ADMIN", "CONTROL_PLANE_ADMIN", "SYSTEM_ADMIN"}))
 
 
-async def _ensure_coding_user(
+async def _store_federated_control_plane_token(
+    user: User,
+    *,
+    subject_token: str,
+    tenant_id: str,
+    proof_identity: ControlPlaneAuthResult | None = None,
+) -> None:
+    exchange = await exchange_apaas_identity(subject_token, tenant_id)
+    result = exchange
+    if exchange.status == "BINDING_REQUIRED":
+        if not exchange.binding_challenge:
+            raise HTTPException(status_code=502, detail="Control Plane 未返回账号绑定挑战")
+        if not exchange.trace_id:
+            raise HTTPException(status_code=502, detail="Control Plane 未返回账号绑定 traceId")
+        if proof_identity is None:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="aPaaS 账号未自动匹配 Control Plane 账号，请由管理员预先完成账号绑定",
+            )
+        result = await bind_apaas_identity(
+            exchange.binding_challenge,
+            proof_identity.access_token,
+            tenant_id,
+            exchange.trace_id,
+        )
+        user.coding_user_id = result.control_plane_user_id or proof_identity.external_user_id
+
+    if result.status != "TOKEN_ISSUED" or not result.access_token:
+        raise HTTPException(status_code=502, detail="Control Plane 未返回有效用户 Token")
+    if result.control_plane_user_id:
+        user.coding_user_id = result.control_plane_user_id
+    store_control_plane_credentials(user, result.access_token, result.refresh_token)
+
+
+async def _bind_control_plane_login_to_apaas(
     db: AsyncSession,
-    identity: CodingAuthResult,
+    user: User,
+    identity: ControlPlaneAuthResult,
+) -> None:
+    tenant_id = await resolve_default_tenant_id_for_user(db, user.id)
+    if not tenant_id:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="当前 Control Plane 账号未在 Builder 平台管理中绑定租户",
+        )
+    tenant = (await db.execute(select(Tenant).where(Tenant.id == tenant_id))).scalar_one()
+    env = None
+    if tenant.apaas_env_id:
+        env = (
+            await db.execute(select(PlatformEnv).where(PlatformEnv.id == tenant.apaas_env_id))
+        ).scalar_one_or_none()
+    if not env:
+        env = (
+            await db.execute(
+                select(PlatformEnv)
+                .where(PlatformEnv.tenant_id == tenant_id)
+                .order_by(PlatformEnv.is_default.desc(), PlatformEnv.id.asc())
+            )
+        ).scalars().first()
+    if not env or not env.platform_tenant_id:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="当前租户未在 Builder 平台管理中配置 aPaaS 环境",
+        )
+    if not env.username or env.username.strip().lower() != identity.username.strip().lower():
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="平台管理中配置的 aPaaS 账号与当前 Control Plane 账号不一致",
+        )
+
+    subject_token = str(env.token or "").strip()
+    if env.username and env.password_enc:
+        from app.apaas_client import APaaSClient
+
+        client = APaaSClient(base_url=env.base_url, tenant_id=env.platform_tenant_id)
+        login_result = await client.login(env.username, decrypt_password(env.password_enc))
+        subject_token = str(login_result.get("token") or "").strip()
+        if subject_token:
+            env.token = subject_token
+            env.status = "connected"
+    if not subject_token:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="当前租户未配置可用的 aPaaS 账号、密码或 Token",
+        )
+
+    await _store_federated_control_plane_token(
+        user,
+        subject_token=subject_token,
+        tenant_id=env.platform_tenant_id,
+        proof_identity=identity,
+    )
+
+
+async def _ensure_control_plane_user(
+    db: AsyncSession,
+    identity: ControlPlaneAuthResult,
 ) -> User:
     user = None
     if identity.external_user_id:
         user = (
             await db.execute(
-                select(User).where(
-                    User.account_source == "coding",
-                    User.coding_user_id == identity.external_user_id,
-                )
+                select(User)
+                .where(User.coding_user_id == identity.external_user_id)
+                .order_by(User.id.asc())
+                .limit(1)
             )
         ).scalar_one_or_none()
     if not user:
-        user = (
-            await db.execute(
-                select(User).where(
-                    User.username == identity.username,
-                    User.account_source == "coding",
-                )
+        user = (await db.execute(
+            select(User)
+            .where(
+                User.username == identity.username,
+                User.account_source.in_(("control_plane", "coding")),
             )
-        ).scalar_one_or_none()
+            .order_by(
+                (User.account_source == "control_plane").desc(),
+                User.id.asc(),
+            )
+            .limit(1)
+        )).scalar_one_or_none()
     if not user:
         user = User(
             username=identity.username,
             hashed_password=get_password_hash(secrets.token_urlsafe(32)),
-            account_source="coding",
+            account_source="control_plane",
             is_active=True,
         )
         db.add(user)
@@ -1144,42 +1249,48 @@ async def _ensure_coding_user(
     user.username = identity.username
     user.display_name = identity.display_name or identity.username
     user.coding_user_id = identity.external_user_id
-    user.coding_base_url = control_plane_base_url()
-    user.coding_access_token = identity.access_token
-    user.coding_refresh_token = identity.refresh_token
+    store_control_plane_credentials(user, identity.access_token, identity.refresh_token)
     user.is_active = True
-    user.is_platform_admin = _coding_roles_include_admin(identity.roles)
-
-    tenant = await _ensure_coding_default_tenant(db)
-    membership = (
-        await db.execute(
-            select(UserTenant).where(
-                UserTenant.user_id == user.id,
-                UserTenant.tenant_id == tenant.id,
-            )
-        )
-    ).scalar_one_or_none()
-    if not membership:
-        db.add(
-            UserTenant(
-                user_id=user.id,
-                tenant_id=tenant.id,
-                status=1,
-                is_default=True,
-            )
-        )
-    else:
-        membership.status = 1
-        membership.is_default = True
+    user.is_platform_admin = _control_plane_roles_include_admin(identity.roles)
     await db.flush()
+
+    mapped_envs = (
+        await db.execute(
+            select(PlatformEnv)
+            .where(func.lower(PlatformEnv.username) == identity.username.strip().lower())
+            .order_by(PlatformEnv.is_default.desc(), PlatformEnv.id.asc())
+        )
+    ).scalars().all()
+    preferred_roles = (
+        ("R_tenant_admin", "admin", "R_developer")
+        if user.is_platform_admin
+        else ("R_developer", "R_tenant_admin", "admin")
+    )
+    for index, env in enumerate(mapped_envs):
+        tenant = (
+            await db.execute(
+                select(Tenant).where(Tenant.id == env.tenant_id, Tenant.status == 1)
+            )
+        ).scalar_one_or_none()
+        if tenant:
+            await _sync_user_membership(
+                db,
+                user,
+                tenant,
+                is_default=index == 0,
+                preferred_role_codes=preferred_roles,
+            )
     return user
 
 
-async def _coding_login_response(user_data: UserLogin, db: AsyncSession) -> LoginResponse:
-    identity = await login_to_coding_control_plane(user_data.username, user_data.password)
-    user = await _ensure_coding_user(db, identity)
+async def _control_plane_login_response(user_data: UserLogin, db: AsyncSession) -> LoginResponse:
+    identity = await login_to_control_plane(user_data.username, user_data.password)
+    user = await _ensure_control_plane_user(db, identity)
+    if settings.control_plane_binding_enabled:
+        await _bind_control_plane_login_to_apaas(db, user, identity)
+    response = await _issue_login_response_for_user(db, user)
     await db.commit()
-    return await _issue_login_response_for_user(db, user)
+    return response
 
 
 async def _try_apaas_provider_login_response(
@@ -1233,8 +1344,8 @@ async def login(
     if provider == "local":
         return await _local_login_response(user_data, db)
 
-    if provider == "coding":
-        return await _coding_login_response(user_data, db)
+    if provider == "control_plane":
+        return await _control_plane_login_response(user_data, db)
 
     apaas_response = await _try_apaas_provider_login_response(user_data, db)
     if apaas_response:

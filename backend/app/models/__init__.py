@@ -52,7 +52,7 @@ class User(Base):
     coding_base_url: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
     coding_access_token: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     coding_refresh_token: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
-    # 账号来源: 'apaas'(aPaaS 同步/默认) | 'desktop'(桌面产品账号) | 'coding'(Dolphin Code)。
+    # 账号来源: 'apaas' | 'desktop' | 'control_plane'；'coding' 仅兼容历史数据。
     # 用于把桌面登录与 aPaaS 登录链路隔离, 避免 username 撞名被 aPaaS 抢先认证。
     account_source: Mapped[str] = mapped_column(String(20), default="apaas", nullable=False, server_default="apaas")
     is_platform_admin: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)

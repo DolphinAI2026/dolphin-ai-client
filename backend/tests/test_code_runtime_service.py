@@ -86,14 +86,23 @@ def test_control_plane_base_url_defaults_to_local_dev_port(monkeypatch):
     assert control_plane_base_url() == "http://127.0.0.1:8080"
 
 
-def test_control_plane_headers_use_settings_token_when_env_is_unset(monkeypatch):
+def test_control_plane_headers_prefer_user_token_and_add_builder_tenant_headers(monkeypatch):
     from app.config import settings
     from app.code_runtime import service
 
     monkeypatch.delenv("DOLPHIN_CODE_CONTROL_PLANE_TOKEN", raising=False)
     monkeypatch.setattr(settings, "dolphin_code_control_plane_token", "settings-token", raising=False)
 
-    assert service._control_plane_headers("Bearer user-token")["Authorization"] == "Bearer settings-token"
+    ctx = SimpleNamespace(apaas_tenant_id="tenant-1")
+    headers = service._control_plane_headers(
+        "Bearer user-token",
+        delegated_context=ctx,
+        auth_provider="builder-control-plane",
+    )
+
+    assert headers["Authorization"] == "Bearer user-token"
+    assert headers["X-Auth-Provider"] == "builder-control-plane"
+    assert headers["X-Tenant-Id"] == "tenant-1"
 
 
 def test_control_plane_headers_include_delegation_secret(monkeypatch):
@@ -804,6 +813,7 @@ async def test_open_code_session_passes_auth_context_to_control_plane_open(db_se
         authorization_header: str | None = None,
         delegated_context=None,
         shell_session_id: int | None = None,
+        auth_provider: str | None = None,
     ):
         captured.update({
             "external_application_id": external_application_id,
@@ -811,6 +821,7 @@ async def test_open_code_session_passes_auth_context_to_control_plane_open(db_se
             "authorization_header": authorization_header,
             "delegated_context": delegated_context,
             "shell_session_id": shell_session_id,
+            "auth_provider": auth_provider,
         })
         return {
             "workspaceId": "ws-1",
@@ -839,6 +850,7 @@ async def test_open_code_session_passes_auth_context_to_control_plane_open(db_se
     assert captured["authorization_header"] == "Bearer user-token"
     assert captured["delegated_context"] is ctx
     assert captured["shell_session_id"] == session.id
+    assert captured["auth_provider"] is None
 
 
 @pytest.mark.asyncio

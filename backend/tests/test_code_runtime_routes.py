@@ -190,8 +190,13 @@ def test_code_runtime_shell_config_exposes_external_session_rail_flag():
 
 
 @pytest.mark.asyncio
-async def test_create_code_runtime_application_delegates_to_control_plane(monkeypatch):
+async def test_create_code_runtime_application_delegates_to_control_plane(
+    db_session,
+    monkeypatch,
+):
     import app.routes.code_runtime as code_runtime_routes
+    from app.config import settings
+    from app.code_runtime.auth import store_control_plane_credentials
     from app.routes.code_runtime import CreateCodeApplicationRequest, create_code_runtime_application
 
     calls: list[dict] = []
@@ -205,7 +210,10 @@ async def test_create_code_runtime_application_delegates_to_control_plane(monkey
         }
 
     monkeypatch.setattr(code_runtime_routes, "create_code_application", fake_create_code_application)
-    request = SimpleNamespace(headers={"authorization": "Bearer user-token"})
+    monkeypatch.setattr(settings, "control_plane_binding_enabled", True)
+    ctx = _ctx()
+    store_control_plane_credentials(ctx.user, "user-token")
+    ctx.apaas_tenant_id = "apaas-tenant-7"
 
     result = await create_code_runtime_application(
         CreateCodeApplicationRequest(
@@ -213,8 +221,9 @@ async def test_create_code_runtime_application_delegates_to_control_plane(monkey
             app_code="sales-lead-helper",
             seed_project_id="90001",
         ),
-        request,
-        _ctx(),
+        SimpleNamespace(headers={"authorization": "Bearer builder-token"}),
+        ctx,
+        db_session,
     )
 
     assert result["external_application_id"] == "code-app-new"
@@ -223,8 +232,58 @@ async def test_create_code_runtime_application_delegates_to_control_plane(monkey
         "app_code": "sales-lead-helper",
         "seed_project_id": "90001",
         "authorization_header": "Bearer user-token",
-        "delegated_context": _ctx(),
+        "delegated_context": ctx,
+        "auth_provider": "builder-control-plane",
     }]
+
+
+@pytest.mark.asyncio
+async def test_control_plane_request_refreshes_expired_user_token(
+    db_session,
+    monkeypatch,
+):
+    from jose import jwt
+
+    import app.routes.code_runtime as code_runtime_routes
+    from app.auth import get_password_hash
+    from app.code_runtime.auth import (
+        control_plane_access_token,
+        store_control_plane_credentials,
+    )
+    from app.config import settings
+    from app.models import User
+
+    user = User(
+        username="refresh-user",
+        hashed_password=get_password_hash("unused"),
+        account_source="control_plane",
+        is_active=True,
+    )
+    expired = jwt.encode({"exp": 1}, "test", algorithm="HS256")
+    store_control_plane_credentials(user, expired, "refresh-token")
+    db_session.add(user)
+    await db_session.flush()
+    ctx = SimpleNamespace(user=user, apaas_tenant_id="apaas-tenant-1")
+
+    async def fake_refresh(refresh_token):
+        assert refresh_token == "refresh-token"
+        return SimpleNamespace(
+            access_token="fresh-access-token",
+            refresh_token="fresh-refresh-token",
+        )
+
+    monkeypatch.setattr(settings, "control_plane_binding_enabled", True)
+    monkeypatch.setattr(code_runtime_routes, "refresh_control_plane_token", fake_refresh)
+
+    authorization, provider = await code_runtime_routes._control_plane_request_auth(
+        SimpleNamespace(headers={}),
+        ctx,
+        db_session,
+    )
+
+    assert authorization == "Bearer fresh-access-token"
+    assert provider == "builder-control-plane"
+    assert control_plane_access_token(user) == "fresh-access-token"
 
 
 @pytest.mark.asyncio

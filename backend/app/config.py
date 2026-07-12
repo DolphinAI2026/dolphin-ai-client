@@ -23,12 +23,11 @@ class Settings(BaseSettings):
     )
 
     # aPaaS Platform
-    # Auth provider mode:
-    # "" keeps legacy behavior (try aPaaS when configured, then local fallback).
-    # "local" uses ai-builder local accounts only.
-    # "apaas" uses aPaaS only and never falls back to local passwords.
-    # "coding" authenticates against Dolphin Code Control Plane, then issues ai-builder JWT.
+    # 登录方式：control_plane 或 apaas。local/coding 仅保留旧部署兼容。
     auth_provider: str = ""
+    # 可选项：开启后，登录必须完成 aPaaS 与 Control Plane 账号/租户绑定并换取用户 Token。
+    # 默认关闭；关闭时不影响现有 aPaaS 登录。
+    control_plane_binding_enabled: bool = False
     apaas_base_url: str = ""
     # 桌面 sidecar: 公网账号权威地址(authority)。空=本实例自身就是 authority。
     public_account_base_url: str = ""
@@ -127,7 +126,7 @@ class Settings(BaseSettings):
     dolphin_api_key: str = ""
     dolphin_model: str = "gpt-5.5"
 
-    # Dolphin Code Control Plane OAuth/PKCE client used by AUTH_PROVIDER=coding.
+    # Control Plane 地址和 Code 模式兼容配置。
     dolphin_code_control_plane_url: str = ""
     dolphin_code_control_plane_token: str = ""
     dolphin_code_control_plane_delegation_secret: str = ""
