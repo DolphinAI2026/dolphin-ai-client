@@ -1122,6 +1122,23 @@ def _control_plane_roles_include_admin(roles: list[str]) -> bool:
     }))
 
 
+def _control_plane_identity_is_platform_admin(identity: ControlPlaneAuthResult) -> bool:
+    permissions = getattr(identity, "org_permissions", {}) or {}
+    return (
+        _control_plane_roles_include_admin(identity.roles)
+        or permissions.get("*") is True
+        or permissions.get("system.*") is True
+    )
+
+
+def _control_plane_identity_is_tenant_admin(identity: ControlPlaneAuthResult) -> bool:
+    normalized = {str(role or "").strip().upper() for role in identity.roles}
+    return (
+        _control_plane_identity_is_platform_admin(identity)
+        or bool(normalized.intersection({"TENANT_ADMIN", "ORG_ADMIN"}))
+    )
+
+
 async def _require_control_plane_platform_binding(
     db: AsyncSession,
     user: User,
@@ -1201,12 +1218,12 @@ async def _ensure_control_plane_user(
     user.coding_tenant_id = identity.tenant_id
     store_control_plane_credentials(user, identity.access_token, identity.refresh_token)
     user.is_active = True
-    user.is_platform_admin = _control_plane_roles_include_admin(identity.roles)
+    user.is_platform_admin = _control_plane_identity_is_platform_admin(identity)
     await db.flush()
 
     preferred_roles = (
         ("R_tenant_admin", "admin", "R_developer")
-        if user.is_platform_admin
+        if _control_plane_identity_is_tenant_admin(identity)
         else ("R_developer", "R_tenant_admin", "admin")
     )
     if settings.control_plane_binding_enabled:
@@ -1232,7 +1249,7 @@ async def _ensure_control_plane_user(
                     preferred_role_codes=preferred_roles,
                 )
     elif identity.tenant_id:
-        from app.seed_data import seed_default_roles
+        from app.seed_data import seed_default_roles, sync_builtin_llm_configs
 
         tenant_code = _normalize_tenant_code(
             f"workspace-{identity.tenant_id}",
@@ -1249,6 +1266,14 @@ async def _ensure_control_plane_user(
             db.add(tenant)
             await db.flush()
         await seed_default_roles(db, tenant.id, commit=False)
+        try:
+            await sync_builtin_llm_configs(db, tenant_ids=[tenant.id], commit=False)
+        except Exception as exc:
+            logger.warning(
+                "sync_builtin_llm_configs failed for Dolphin tenant %s: %s",
+                tenant.id,
+                exc,
+            )
         membership = await _sync_user_membership(
             db,
             user,

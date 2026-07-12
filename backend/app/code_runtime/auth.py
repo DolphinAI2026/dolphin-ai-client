@@ -19,6 +19,7 @@ class ControlPlaneAuthResult:
     display_name: str | None = None
     external_user_id: str | None = None
     roles: list[str] = field(default_factory=list)
+    org_permissions: dict[str, bool] = field(default_factory=dict)
     tenant_id: str | None = None
     tenant_name: str | None = None
     access_token: str = ""
@@ -167,12 +168,17 @@ async def login_to_control_plane(
         raise HTTPException(status_code=503, detail="Dolphin 登录服务暂不可用") from exc
 
     role = str(current_user.get("role") or "").strip()
+    permissions = current_user.get("org_permissions")
     resolved_username = str(current_user.get("username") or username).strip() or username
     return ControlPlaneAuthResult(
         username=resolved_username,
         display_name=str(current_user.get("nickname") or resolved_username).strip(),
         external_user_id=str(current_user.get("id") or "").strip() or None,
         roles=[role] if role else [],
+        org_permissions={
+            str(code): bool(allowed)
+            for code, allowed in permissions.items()
+        } if isinstance(permissions, dict) else {},
         tenant_id=str(current_user.get("tenant_id") or "").strip() or None,
         tenant_name=str(current_user.get("tenant_name") or "").strip() or None,
         access_token=access_token,

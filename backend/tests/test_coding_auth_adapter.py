@@ -95,6 +95,7 @@ async def test_login_to_control_plane_uses_dolphin_token_and_current_user(monkey
                 "username": "admin",
                 "nickname": "Platform Admin",
                 "role": "platform_admin",
+                "org_permissions": {"system.*": True},
                 "tenant_id": "default",
                 "tenant_name": "Default Tenant",
                 "tenants": [{
@@ -123,6 +124,7 @@ async def test_login_to_control_plane_uses_dolphin_token_and_current_user(monkey
     assert result.display_name == "Platform Admin"
     assert result.external_user_id == "7"
     assert result.roles == ["platform_admin"]
+    assert result.org_permissions == {"system.*": True}
     assert result.tenant_id == "default"
     assert result.access_token == "access-1"
     assert result.refresh_token == "refresh-1"

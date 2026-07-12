@@ -5,6 +5,7 @@ from fastapi import HTTPException
 from sqlalchemy import func, select
 
 import app.routes.auth  # noqa: F401 - ensure login submodule is loaded
+import app.seed_data as seed_data
 from app.auth import decode_token, get_password_hash, verify_password
 from app.config import settings
 from app.models import PlatformEnv, User
@@ -257,13 +258,19 @@ async def test_control_plane_login_without_binding_uses_only_dolphin_current_ten
         status="connected",
     ))
     await db_session.flush()
+    synced_tenant_ids = []
+
+    async def fake_sync_builtin_llm_configs(_db, tenant_ids=None, *, commit=True):
+        synced_tenant_ids.extend(tenant_ids or [])
+        assert commit is False
 
     async def fake_control_plane_login(*_args):
         return SimpleNamespace(
             username="workspace_admin",
             display_name="Workspace Admin",
             external_user_id="workspace-user-1",
-            roles=["platform_admin"],
+            roles=["tenant_admin"],
+            org_permissions={},
             tenant_id="default",
             tenant_name="Default Tenant",
             access_token="workspace-access-token",
@@ -271,6 +278,7 @@ async def test_control_plane_login_without_binding_uses_only_dolphin_current_ten
         )
 
     monkeypatch.setattr(auth_routes, "login_to_control_plane", fake_control_plane_login)
+    monkeypatch.setattr(seed_data, "sync_builtin_llm_configs", fake_sync_builtin_llm_configs)
 
     response = await login(
         UserLogin(
@@ -303,3 +311,48 @@ async def test_control_plane_login_without_binding_uses_only_dolphin_current_ten
     assert role is not None
     assert role.role_code == "R_tenant_admin"
     assert role.permissions["application:create"] is True
+    assert synced_tenant_ids == [tenant.id]
+
+
+@pytest.mark.asyncio
+async def test_control_plane_system_permission_projects_platform_admin(
+    db_session,
+    monkeypatch,
+):
+    _set_auth_provider(monkeypatch, "control_plane")
+    monkeypatch.setattr(settings, "control_plane_binding_enabled", False)
+
+    async def fake_control_plane_login(*_args):
+        return SimpleNamespace(
+            username="system_admin",
+            display_name="System Admin",
+            external_user_id="system-user-1",
+            roles=["tenant_admin"],
+            org_permissions={"system.*": True},
+            tenant_id="system",
+            tenant_name="System Tenant",
+            access_token="system-access-token",
+            refresh_token="system-refresh-token",
+        )
+
+    async def fake_sync_builtin_llm_configs(_db, tenant_ids=None, *, commit=True):
+        assert tenant_ids
+        assert commit is False
+
+    monkeypatch.setattr(auth_routes, "login_to_control_plane", fake_control_plane_login)
+    monkeypatch.setattr(seed_data, "sync_builtin_llm_configs", fake_sync_builtin_llm_configs)
+
+    response = await login(
+        UserLogin(
+            username="system_admin",
+            password="password",
+            captcha_id="captcha-1",
+            captcha_code="0854",
+        ),
+        db_session,
+    )
+
+    payload = decode_token(response.access_token)
+    user = await db_session.get(User, int(payload["sub"]))
+    assert user is not None
+    assert user.is_platform_admin is True
