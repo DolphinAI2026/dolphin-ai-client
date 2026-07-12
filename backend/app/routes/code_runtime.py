@@ -694,9 +694,17 @@ def _request_raw_query_string(request: Request) -> bytes:
     return str(raw_query or "").encode("latin-1")
 
 
-def _redirect_target_without_dolphin_token(path: str, raw_query: bytes | str) -> str:
+def _redirect_target_without_dolphin_token(
+    path: str,
+    raw_query: bytes | str,
+    forwarded_prefix: str = "",
+) -> str:
+    prefix = str(forwarded_prefix or "").split(",", 1)[0].strip().rstrip("/")
+    target_path = "/" + str(path or "").lstrip("/")
+    if prefix.startswith("/") and prefix != "/" and not target_path.startswith(prefix + "/"):
+        target_path = prefix + target_path
     qs = _query_string_without_key(raw_query, "dolphin_token")
-    return f"{path}{'?' + qs if qs else ''}"
+    return f"{target_path}{'?' + qs if qs else ''}"
 
 
 def _content_disposition_ascii(value: str) -> str:
@@ -1001,7 +1009,11 @@ async def _authorize_proxy_request(request: Request, session_id: int) -> Respons
             tenant_id=int(payload["tid"]),
         )
         redirect = RedirectResponse(
-            _redirect_target_without_dolphin_token(request.url.path, _request_raw_query_string(request)),
+            _redirect_target_without_dolphin_token(
+                request.url.path,
+                _request_raw_query_string(request),
+                request.headers.get("x-forwarded-prefix", ""),
+            ),
             status_code=307,
         )
         redirect.set_cookie(

@@ -50,6 +50,11 @@ def test_code_runtime_proxy_token_redirect_stays_on_current_origin():
         "/api/code-runtime/12/builder",
         b"dolphin_token=embed",
     ) == "/api/code-runtime/12/builder"
+    assert _redirect_target_without_dolphin_token(
+        "/api/code-runtime/12/builder",
+        b"token=entry&dolphin_token=embed",
+        "/ai-builder",
+    ) == "/ai-builder/api/code-runtime/12/builder?token=entry"
 
 
 def test_code_runtime_proxy_preserves_vite_bare_url_query():
