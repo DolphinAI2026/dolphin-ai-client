@@ -417,6 +417,66 @@ async def test_create_code_application_uses_seed_project_override(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_create_code_application_falls_back_to_local_builder_when_seed_is_missing(monkeypatch):
+    from app.code_runtime import service
+
+    class FakeResponse:
+        status_code = 404
+        text = '{"code":"SEED_PROJECT_NOT_FOUND","message":"seed project not found"}'
+
+        def json(self):
+            return {
+                "code": "SEED_PROJECT_NOT_FOUND",
+                "message": "seed project not found",
+            }
+
+    class FakeClient:
+        def __init__(self, *args, **kwargs):
+            pass
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *_args):
+            return False
+
+        async def post(self, _url: str, **_kwargs):
+            return FakeResponse()
+
+    monkeypatch.setenv("DOLPHIN_CODE_BUILDER_URL", "http://127.0.0.1:5175/builder/")
+    monkeypatch.setattr(service.httpx, "AsyncClient", FakeClient)
+
+    result = await service.create_code_application(
+        app_name="本地 Code 应用",
+        app_code="local-code-app",
+    )
+
+    assert result["external_application_id"].startswith("local-")
+    assert result["app_name"] == "本地 Code 应用"
+    assert result["app_code"] == "local-code-app"
+    assert result["status"] == "READY"
+    assert result["local_status"] == "completed"
+
+
+@pytest.mark.asyncio
+async def test_default_workspace_open_uses_local_builder_for_local_application(monkeypatch):
+    from app.code_runtime import service
+
+    class UnexpectedClient:
+        def __init__(self, *args, **kwargs):
+            raise AssertionError("local application must not call Control Plane")
+
+    monkeypatch.setenv("DOLPHIN_CODE_BUILDER_URL", "http://127.0.0.1:5175/builder/")
+    monkeypatch.setattr(service.httpx, "AsyncClient", UnexpectedClient)
+
+    opened = await service.default_workspace_open("local-abc123")
+
+    assert opened["applicationId"] == "local-abc123"
+    assert opened["workspaceId"] == "local-builder-local-abc123"
+    assert opened["specReviewUrl"] == "http://127.0.0.1:5175/builder/"
+
+
+@pytest.mark.asyncio
 async def test_default_workspace_open_forwards_request_authorization_when_no_service_token(monkeypatch):
     from app.config import settings
     from app.code_runtime import service

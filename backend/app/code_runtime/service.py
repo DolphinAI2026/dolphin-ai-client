@@ -5,6 +5,7 @@ import base64
 from datetime import datetime, timedelta, timezone
 from typing import Any, Awaitable, Callable
 from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
+from uuid import uuid4
 
 import httpx
 from fastapi import HTTPException
@@ -24,6 +25,7 @@ _PROXY_COOKIE_TOKEN_TYPE = "code_runtime_proxy"
 _EMBED_TOKEN_ISSUER = "ai-builder"
 _DEFAULT_CONTROL_PLANE_URL = "http://127.0.0.1:8080"
 _DEFAULT_SEED_PROJECT_ID = "1781233861147"
+_LOCAL_APPLICATION_PREFIX = "local-"
 
 
 def derive_runtime_base_url(builder_url: str) -> str:
@@ -352,6 +354,35 @@ def _control_plane_error_detail(response: httpx.Response) -> str:
     return text[:500] or "Code Control Plane request failed"
 
 
+def _control_plane_error_code(response: httpx.Response) -> str:
+    try:
+        payload = response.json()
+    except ValueError:
+        return ""
+    if not isinstance(payload, dict):
+        return ""
+    return str(payload.get("code") or payload.get("errorCode") or "").strip().upper()
+
+
+def _is_loopback_builder_url(builder_url: str) -> bool:
+    hostname = (urlsplit(str(builder_url or "").strip()).hostname or "").lower()
+    return hostname in {"127.0.0.1", "localhost", "::1"}
+
+
+def _local_application_data(*, app_name: str, app_code: str) -> dict[str, Any]:
+    return {
+        "applicationId": f"{_LOCAL_APPLICATION_PREFIX}{uuid4().hex}",
+        "appCode": app_code,
+        "appName": app_name,
+        "description": None,
+        "provisionStatus": "READY",
+    }
+
+
+def _is_local_application_id(application_id: str) -> bool:
+    return str(application_id or "").strip().startswith(_LOCAL_APPLICATION_PREFIX)
+
+
 def _status_to_local_status(status: str | None) -> str:
     normalized = str(status or "").strip().upper()
     if normalized in {"READY", "COMPLETED", "COMPLETE", "SUCCEEDED", "SUCCESS"}:
@@ -473,6 +504,13 @@ async def create_code_application(
     except httpx.RequestError as exc:
         raise HTTPException(status_code=503, detail=f"无法连接 Code Control Plane: {base_url}") from exc
     if response.status_code >= 400:
+        builder_url = local_builder_url()
+        if (
+            response.status_code == 404
+            and _control_plane_error_code(response) == "SEED_PROJECT_NOT_FOUND"
+            and _is_loopback_builder_url(builder_url)
+        ):
+            return _normalize_code_application(_local_application_data(app_name=name, app_code=code))
         raise HTTPException(status_code=response.status_code, detail=_control_plane_error_detail(response))
     data = response.json()
     if not isinstance(data, dict):
@@ -502,6 +540,9 @@ async def default_workspace_open(
     shell_session_id: int | None = None,
     auth_provider: str | None = None,
 ) -> dict[str, Any]:
+    if _is_local_application_id(external_application_id):
+        return local_builder_workspace_open(external_application_id)
+
     base_url = control_plane_base_url()
     body = {"handoffId": handoff_id} if handoff_id else None
     target = f"{base_url}/api/applications/{external_application_id}/workspace/open"

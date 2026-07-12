@@ -141,11 +141,11 @@ JWT_SECRET_KEY=<generate-a-long-random-secret>
 # Dolphin Code integration
 DOLPHIN_CODE_CONTROL_PLANE_URL=http://127.0.0.1:8080
 DOLPHIN_CODE_CONTROL_PLANE_TOKEN=<optional-control-plane-token>
-DOLPHIN_CODE_BUILDER_URL=http://127.0.0.1:5173/builder/
+DOLPHIN_CODE_BUILDER_URL=http://127.0.0.1:5173/builder/ # 可选，本地 runtime fallback
 DOLPHIN_CODE_DEFAULT_SEED_PROJECT_ID=<seed-project-id>
 ```
 
-`DOLPHIN_CODE_BUILDER_URL` 只适合本地开发 fallback。生产应通过 `DOLPHIN_CODE_CONTROL_PLANE_URL` 打开真实隔离 workspace，避免所有 Code 应用共用同一个本地 builder。
+`DOLPHIN_CODE_BUILDER_URL` 是可选项，只适合本地开发 fallback。仅 loopback 地址会在 seed 不存在时创建本地 Code 应用；生产应通过 `DOLPHIN_CODE_CONTROL_PLANE_URL` 打开真实隔离 workspace，避免所有 Code 应用共用同一个本地 builder。
 
 ## 常用流程
 
