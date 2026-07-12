@@ -11,6 +11,7 @@ import base64
 import asyncio
 import os
 import re
+import secrets
 import time
 import uuid
 from datetime import datetime
@@ -408,14 +409,13 @@ async def _sync_platform_user(db: AsyncSession, row: dict[str, Any], plain_passw
             return
         user = User(
             username=account,
-            hashed_password=get_password_hash(plain_password),
+            hashed_password=get_password_hash(secrets.token_urlsafe(32)),
             is_platform_admin=True,
             is_active=True,
         )
         db.add(user)
     else:
-        if plain_password:
-            user.hashed_password = get_password_hash(plain_password)
+        user.hashed_password = get_password_hash(secrets.token_urlsafe(32))
         user.is_platform_admin = True
         user.is_active = True
     user.apaas_base_url = base_url

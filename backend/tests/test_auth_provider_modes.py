@@ -5,11 +5,12 @@ from fastapi import HTTPException
 from sqlalchemy import func, select
 
 import app.routes.auth  # noqa: F401 - ensure login submodule is loaded
-from app.auth import decode_token, get_password_hash
+from app.auth import decode_token, get_password_hash, verify_password
 from app.config import settings
 from app.models import PlatformEnv, User
 from app.models.tenant import Tenant, UserTenant
 from app.routes.auth import login
+from app.routes.mcp_platform import _sync_platform_user
 from app.code_runtime.auth import control_plane_access_token
 import sys
 from app.schemas import UserLogin
@@ -62,6 +63,64 @@ async def _seed_login_user(
     )
     await db_session.flush()
     return user, tenant
+
+
+@pytest.mark.asyncio
+async def test_apaas_identity_does_not_store_external_password_for_local_login(db_session):
+    user = await auth_routes._ensure_apaas_user(
+        db_session,
+        "apaas_identity",
+        "external-password",
+        {"id": "apaas-user-1"},
+        is_platform_admin=False,
+    )
+
+    assert verify_password("external-password", user.hashed_password) is False
+
+
+@pytest.mark.asyncio
+async def test_apaas_identity_sync_invalidates_existing_local_password(db_session):
+    user, _tenant = await _seed_login_user(
+        db_session,
+        username="legacy_local_identity",
+        password="legacy-local-password",
+        source="apaas",
+    )
+
+    await auth_routes._ensure_apaas_user(
+        db_session,
+        user.username,
+        "external-password",
+        {"id": "apaas-user-2"},
+        is_platform_admin=True,
+    )
+
+    assert verify_password("legacy-local-password", user.hashed_password) is False
+    assert verify_password("external-password", user.hashed_password) is False
+
+
+@pytest.mark.asyncio
+async def test_platform_credential_sync_does_not_create_local_login_password(db_session):
+    user, _tenant = await _seed_login_user(
+        db_session,
+        username="platform_credential_admin",
+        password="legacy-local-password",
+        source="apaas",
+    )
+
+    await _sync_platform_user(
+        db_session,
+        {
+            "account": user.username,
+            "base_url": "https://apaas.example/backend",
+            "password_enc": "encrypted-password",
+            "status": "connected",
+        },
+        plain_password="external-password",
+    )
+
+    assert verify_password("legacy-local-password", user.hashed_password) is False
+    assert verify_password("external-password", user.hashed_password) is False
 
 
 @pytest.mark.asyncio

@@ -601,7 +601,7 @@ async def _ensure_apaas_user(db: AsyncSession, username: str, password: str, use
         user = User(
             username=username,
             display_name=display_name or None,
-            hashed_password=get_password_hash(password),
+            hashed_password=get_password_hash(secrets.token_urlsafe(32)),
             apaas_user_id=apaas_uid,
             account_source="apaas",
             is_platform_admin=is_platform_admin,
@@ -613,7 +613,7 @@ async def _ensure_apaas_user(db: AsyncSession, username: str, password: str, use
         user.username = username
         if display_name:
             user.display_name = display_name
-        user.hashed_password = get_password_hash(password)
+        user.hashed_password = get_password_hash(secrets.token_urlsafe(32))
         if apaas_uid:
             user.apaas_user_id = apaas_uid
         user.is_platform_admin = is_platform_admin
