@@ -64,9 +64,10 @@ sh deploy.sh
 
 脚本会交互式询问：
 
-- `APAAS_BASE_URL`：客户 aPaaS 后端地址，例如 `https://apaas.customer.com/backend`
+- `DATABASE_URL`：PostgreSQL async URL
+- `DOLPHIN_CODE_CONTROL_PLANE_URL`：Control Plane API 地址
 
-不会在部署阶段询问 `APAAS_TENANT_ID` 或 LLM 配置；这些由客户部署完成后进入平台配置。
+默认使用 Dolphin/Control Plane 认证。`APAAS_TENANT_ID` 和 LLM 配置仍由客户部署完成后进入平台配置。
 
 其他部署参数不在交互里打扰客户，默认值如下：
 
@@ -75,7 +76,9 @@ sh deploy.sh
 - `NAMESPACE=apaas-builder`
 - `APP_NAME=apaas-builder`
 - `STORAGE_CLASS=local-path`
-- `DATABASE_URL=mysql+aiomysql://apaas:apaas2024@mysql.mysql.svc.cluster.local:3306/apaas_builder?charset=utf8mb4`
+- `AUTH_PROVIDER=control_plane`
+- `DOLPHIN_WORKSPACE_BASE_URL=https://dolphin.dfy.definesys.cn`
+- `DATABASE_URL=postgresql+asyncpg://apaas:<password>@postgres:5432/apaas_builder`
 - `INGRESS_CLASS=nginx`
 - `BUILDER_HOST` 默认为空，Ingress 使用不限定域名的规则
 

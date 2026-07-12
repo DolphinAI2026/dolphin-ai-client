@@ -63,32 +63,39 @@ else
     echo "[entrypoint] Maven settings exists: $MAVEN_SETTINGS_PATH"
 fi
 
-# 可选：等 MySQL 就绪
-if [ "${WAIT_FOR_MYSQL:-1}" = "1" ] && [ -n "${DATABASE_URL:-}" ]; then
-    case "$DATABASE_URL" in
-      mysql*|*aiomysql*)
-        echo "[entrypoint] waiting for MySQL..."
-        python - <<'PYEOF' || echo "[entrypoint] MySQL probe failed, continuing anyway"
-import os, re, socket, time, sys
-url = os.environ.get("DATABASE_URL", "")
-m = re.search(r"@([^:/]+)(?::(\d+))?/", url)
-if not m:
+# 可选：等外置数据库就绪。WAIT_FOR_MYSQL 作为旧部署兼容别名保留。
+if [ "${WAIT_FOR_DATABASE:-${WAIT_FOR_MYSQL:-1}}" = "1" ] && [ -n "${DATABASE_URL:-}" ]; then
+    echo "[entrypoint] waiting for database..."
+    python - <<'PYEOF' || echo "[entrypoint] database probe failed, continuing anyway"
+import os
+import socket
+import sys
+import time
+
+from sqlalchemy.engine import make_url
+
+url = make_url(os.environ.get("DATABASE_URL", ""))
+if url.drivername.startswith("sqlite") or not url.host:
     sys.exit(0)
-host = m.group(1)
-port = int(m.group(2) or "3306")
+
+default_ports = {"mysql": 3306, "postgresql": 5432}
+dialect = url.get_backend_name()
+host = url.host
+port = url.port or default_ports.get(dialect)
+if not port:
+    sys.exit(0)
+
 deadline = time.time() + 30
 while time.time() < deadline:
     try:
         with socket.create_connection((host, port), timeout=2):
-            print(f"[entrypoint]   MySQL {host}:{port} reachable")
+            print(f"[entrypoint]   {dialect} {host}:{port} reachable")
             sys.exit(0)
     except OSError:
         time.sleep(1)
-print(f"[entrypoint]   timeout connecting to MySQL {host}:{port}")
+print(f"[entrypoint]   timeout connecting to {dialect} {host}:{port}")
 sys.exit(1)
 PYEOF
-        ;;
-    esac
 fi
 
 echo "[entrypoint] exec supervisord"

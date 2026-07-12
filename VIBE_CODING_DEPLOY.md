@@ -9,7 +9,7 @@
 - 阿里云 ECS（推荐 4C8G 起步；vibe-sandbox 镜像 ~1.2GB，每个 workspace `node_modules` 1-3GB，磁盘 100GB+）
 - ECS 已装 docker 24+ 和 docker compose v2
 - 域名 + SSL 证书（**HTTPS 必须**，否则浏览器拒绝麦克风/语音输入）
-- 外置 MySQL（DATABASE_URL 走 .env）
+- 外置 PostgreSQL（`DATABASE_URL` 走 `.env`）
 
 ## 1. 构建 vibe-sandbox 镜像（关键！）
 

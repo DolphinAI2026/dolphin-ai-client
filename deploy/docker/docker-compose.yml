@@ -26,7 +26,7 @@
 #   - 宿主机建好 ${WORKSPACES_DIR} 目录
 #   - 宿主机预先 build vibe-sandbox 镜像：docker build -t vibe-sandbox:latest <repo>/docker/vibe-sandbox/
 #   - ${BACKEND_ENV_FILE} 已写好（客户部署由 deploy/customer/deploy.sh 生成）
-#   - 外置 MySQL 可达（DATABASE_URL 在 .env 里）
+#   - 外置 PostgreSQL 可达（DATABASE_URL 在 .env 里）
 
 services:
   apaas-builder:

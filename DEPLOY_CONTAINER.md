@@ -7,7 +7,7 @@
 ## 适用场景
 
 - 单台云主机或内网服务器
-- 外置 MySQL
+- 外置 PostgreSQL
 - TLS、域名和证书由宿主机 nginx 处理
 - 需要支持 AI Builder、应用资产、自开发资产、代码工作区和工作区命令执行
 
@@ -38,7 +38,7 @@
 │  │  - /var/run/docker.sock                  │  │
 │  └──────────────────────────────────────────┘  │
 │                                                │
-│  外置 MySQL                                    │
+│  外置 PostgreSQL                               │
 │  宿主 nginx: /ai-builder/ -> 127.0.0.1:8003    │
 └────────────────────────────────────────────────┘
 ```
@@ -50,7 +50,7 @@
 | 项 | 要求 |
 |---|---|
 | Docker | 24.0+，建议 26+，安装 docker compose 插件 |
-| MySQL | MySQL 5.7 / 8.x，提前建好库和账号 |
+| PostgreSQL | PostgreSQL 14+，提前建好库和账号 |
 | 磁盘 | 6GB+ 镜像与工作区空间，真实项目建议 50GB+ |
 | 内存 | 2GB+，多人自开发建议 4GB+ |
 | nginx | 宿主机已配置 TLS 和反向代理 |
@@ -77,7 +77,10 @@ vi /data/apaas/backend.env
 至少确认：
 
 ```dotenv
-DATABASE_URL=mysql+aiomysql://<user>:<pass>@127.0.0.1:3306/apaas_builder
+DATABASE_URL=postgresql+asyncpg://<user>:<pass>@127.0.0.1:5432/apaas_builder
+AUTH_PROVIDER=control_plane
+DOLPHIN_WORKSPACE_BASE_URL=https://dolphin.dfy.definesys.cn
+DOLPHIN_CODE_CONTROL_PLANE_URL=https://<control-plane-host>
 JWT_SECRET_KEY=<生产随机长字符串>
 ENCRYPTION_KEY=<生产随机长字符串>
 LLM_API_KEY=<按实际模型供应商填写>
@@ -91,16 +94,22 @@ APAAS_BACKEND_JDK_VERSION=17
 
 `APAAS_WORKSPACE_ROOT` 必须是宿主机和容器内都能看到的同一路径。后端通过宿主 Docker daemon 启动 sandbox 容器时，会把这个路径直接传给 `docker run -v`。
 
-### 3. MySQL 建库
+### 3. PostgreSQL 建库
 
 ```sql
-CREATE DATABASE apaas_builder DEFAULT CHARSET utf8mb4 COLLATE utf8mb4_unicode_ci;
-CREATE USER 'apaas'@'%' IDENTIFIED BY '<pass>';
-GRANT ALL ON apaas_builder.* TO 'apaas'@'%';
-FLUSH PRIVILEGES;
+CREATE USER apaas WITH PASSWORD '<pass>';
+CREATE DATABASE apaas_builder OWNER apaas;
 ```
 
 后端启动时会自动建表。
+
+Control Plane 部署还需设置：
+
+```dotenv
+CONTROL_PLANE_AUTH_FULL_WORKSPACE_BASE_URL=https://dolphin.dfy.definesys.cn
+```
+
+该配置属于 Control Plane 运行环境，不需要修改 Control Plane 源码。
 
 ### 4. 可选：构建自开发 sandbox 镜像
 

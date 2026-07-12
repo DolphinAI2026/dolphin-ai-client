@@ -58,8 +58,8 @@ class Settings(BaseSettings):
     anthropic_api_key: str | None = None
     anthropic_model: str = "MiniMax-M2.7"
 
-    # Database (MySQL)
-    database_url: str = "mysql+aiomysql://root:password@localhost:3306/apaas_builder"
+    # Database (PostgreSQL for server deployments; SQLite remains available locally)
+    database_url: str = "postgresql+asyncpg://postgres:password@localhost:5432/apaas_builder"
 
     # JWT
     jwt_secret_key: str

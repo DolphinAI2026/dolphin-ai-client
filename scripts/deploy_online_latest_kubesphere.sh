@@ -296,7 +296,7 @@ spec:
           image: ${IMAGE}
           imagePullPolicy: IfNotPresent
           env:
-            - name: WAIT_FOR_MYSQL
+            - name: WAIT_FOR_DATABASE
               value: "1"
             - name: APAAS_WORKSPACE_ROOT
               value: "/root/apaas-builder/workspaces"

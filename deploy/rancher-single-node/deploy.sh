@@ -143,7 +143,10 @@ collect_inputs() {
   WORKSPACES_SIZE="${WORKSPACES_SIZE:-50Gi}"
   INGRESS_CLASS="${INGRESS_CLASS:-nginx}"
   BUILDER_HOST="${BUILDER_HOST:-}"
-  DATABASE_URL="${DATABASE_URL:-sqlite+aiosqlite:////root/apaas-builder/workspaces/apaas_builder.db}"
+  DATABASE_URL="${DATABASE_URL:-}"
+  AUTH_PROVIDER="${AUTH_PROVIDER:-control_plane}"
+  DOLPHIN_WORKSPACE_BASE_URL="${DOLPHIN_WORKSPACE_BASE_URL:-https://dolphin.dfy.definesys.cn}"
+  DOLPHIN_CODE_CONTROL_PLANE_URL="${DOLPHIN_CODE_CONTROL_PLANE_URL:-}"
 
   if [ -n "$BUILDER_HOST" ]; then
     default_public_url="$(external_base_url)/ai-builder/login"
@@ -151,8 +154,14 @@ collect_inputs() {
     default_public_url=""
   fi
 
-  printf '\n%s\n' "Please enter aPaaS connection setting."
-  prompt APAAS_BASE_URL "aPaaS backend URL, for example https://apaas.example.com/backend" "${APAAS_BASE_URL:-}"
+  printf '\n%s\n' "Please enter Builder connection settings."
+  prompt DATABASE_URL "PostgreSQL URL, for example postgresql+asyncpg://apaas:password@postgres:5432/apaas_builder" "$DATABASE_URL"
+  if [ "$AUTH_PROVIDER" = "control_plane" ]; then
+    prompt DOLPHIN_CODE_CONTROL_PLANE_URL "Control Plane API base URL" "$DOLPHIN_CODE_CONTROL_PLANE_URL"
+    APAAS_BASE_URL="${APAAS_BASE_URL:-}"
+  else
+    prompt APAAS_BASE_URL "aPaaS backend URL, for example https://apaas.example.com/backend" "${APAAS_BASE_URL:-}"
+  fi
   BUILDER_HOST_NAME="$(external_host_name)"
   export BUILDER_HOST_NAME
 
@@ -168,6 +177,10 @@ create_backend_secret() {
   : > "$BACKEND_ENV_TMP"
 
   append_env DATABASE_URL "$DATABASE_URL"
+  append_env AUTH_PROVIDER "$AUTH_PROVIDER"
+  append_env CONTROL_PLANE_BINDING_ENABLED "${CONTROL_PLANE_BINDING_ENABLED:-false}"
+  append_env DOLPHIN_WORKSPACE_BASE_URL "$DOLPHIN_WORKSPACE_BASE_URL"
+  append_env DOLPHIN_CODE_CONTROL_PLANE_URL "$DOLPHIN_CODE_CONTROL_PLANE_URL"
   append_env APAAS_BASE_URL "$APAAS_BASE_URL"
   append_env APAAS_TENANT_ID "$APAAS_TENANT_ID"
   append_env JWT_SECRET_KEY "$JWT_SECRET_KEY"
@@ -425,7 +438,7 @@ ${IMAGE_PULL_SECRETS_BLOCK}
           image: ${IMAGE}
           imagePullPolicy: ${IMAGE_PULL_POLICY}
           env:
-            - name: WAIT_FOR_MYSQL
+            - name: WAIT_FOR_DATABASE
               value: "1"
             - name: APAAS_WORKSPACE_ROOT
               value: "/root/apaas-builder/workspaces"

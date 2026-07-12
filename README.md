@@ -112,8 +112,8 @@ apaas-builder-ai/
 | 后端 | FastAPI + SQLAlchemy 2.0 async + Pydantic v2 + httpx + SSE |
 | 桌面端 | Tauri 2 + Rust + Python sidecar + PyInstaller |
 | 自开发资产模板 | Vue 2.7 + df-apaas-cli + Element UI/Vant/ECharts |
-| 数据库 | SQLite/aiosqlite（本地、桌面）+ MySQL/aiomysql（部署） |
-| 认证 | JWT + aPaaS 登录 + 桌面账号 federation |
+| 数据库 | SQLite/aiosqlite（本地、桌面）+ PostgreSQL/asyncpg（部署） |
+| 认证 | Builder JWT + Dolphin/Control Plane 登录 + aPaaS 登录 |
 | LLM | OpenAI/Anthropic 兼容 API，经后端和平台配置统一封装 |
 | 部署 | Docker Compose、Kubernetes、Rancher 单节点、nginx、supervisord |
 
@@ -122,28 +122,31 @@ apaas-builder-ai/
 环境变量请在本地 `backend/.env` 配置，仓库只保留占位示例：
 
 ```env
-# aPaaS Platform
-APAAS_BASE_URL=https://your-apaas.example.com/backend
-# 本地初始化 default 租户时用于绑定 aPaaS 平台租户
-APAAS_TENANT_ID=<your-apaas-tenant-id>
+# Authentication
+AUTH_PROVIDER=control_plane
+DOLPHIN_WORKSPACE_BASE_URL=https://dolphin.dfy.definesys.cn
+DOLPHIN_CODE_CONTROL_PLANE_URL=https://your-control-plane.example.com
 
 # LLM Configuration
 LLM_API_BASE=https://your-llm-gateway.example.com/openai
 LLM_API_KEY=<your-llm-api-key>
 LLM_MODEL=<your-model-name>
 
-# Database
-DATABASE_URL=sqlite+aiosqlite:///./apaas_builder.db
+# Database (server)
+DATABASE_URL=postgresql+asyncpg://apaas:<password>@postgres:5432/apaas_builder
 
 # JWT
 JWT_SECRET_KEY=<generate-a-long-random-secret>
 
 # Dolphin Code integration
-DOLPHIN_CODE_CONTROL_PLANE_URL=http://127.0.0.1:8080
 DOLPHIN_CODE_CONTROL_PLANE_TOKEN=<optional-control-plane-token>
 DOLPHIN_CODE_BUILDER_URL=http://127.0.0.1:5173/builder/ # 可选，本地 runtime fallback
 DOLPHIN_CODE_DEFAULT_SEED_PROJECT_ID=<seed-project-id>
 ```
+
+Control Plane 服务端还必须配置
+`CONTROL_PLANE_AUTH_FULL_WORKSPACE_BASE_URL=https://dolphin.dfy.definesys.cn`，
+否则它无法校验 Builder 转发的 Dolphin 用户 Token。
 
 `DOLPHIN_CODE_BUILDER_URL` 是可选项，只适合本地开发 fallback。仅 loopback 地址会在 seed 不存在时创建本地 Code 应用；生产应通过 `DOLPHIN_CODE_CONTROL_PLANE_URL` 打开真实隔离 workspace，避免所有 Code 应用共用同一个本地 builder。
 

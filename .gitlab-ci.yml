@@ -1,0 +1,101 @@
+workflow:
+  rules:
+    - if: '$CI_PIPELINE_SOURCE == "push" && $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH'
+      when: always
+    - if: '$CI_PIPELINE_SOURCE == "web" || $CI_PIPELINE_SOURCE == "api" || $CI_PIPELINE_SOURCE == "trigger"'
+      when: always
+    - when: never
+
+stages:
+  - verify
+  - release
+
+variables:
+  BUILDER_IMAGE_REPOSITORY: "om-harbor.dfy.definesys.cn/om-demo/ai-builder"
+  BUILDER_K8S_NAMESPACE: "orcamatrix-demo"
+  BUILDER_K8S_STATEFULSET: "ai-builder"
+  BUILDER_K8S_BACKEND_CONTAINER: "ai-builder"
+  BUILDER_K8S_DIST_INIT_CONTAINER: "copy-frontend-dist"
+  BUILDER_VITE_BASE_URL: "/ai-builder/"
+  BUILDER_ROLLOUT_TIMEOUT: "300s"
+
+verify_builder:
+  stage: verify
+  image:
+    name: hub-mirror.dfy.definesys.cn/library/python:3.12-alpine
+    entrypoint: [""]
+  before_script:
+    - apk add --no-cache bash
+  script:
+    - bash -n deploy/docker/entrypoint.sh deploy/customer/deploy.sh scripts/deploy_k8s_dev.sh scripts/deploy_online_latest_kubesphere.sh scripts/deploy_k8s_dev_web_terminal.sh
+    - python3 -m compileall -q backend/app
+
+release_and_update_server:
+  stage: release
+  image:
+    name: hub-mirror.dfy.definesys.cn/moby/buildkit:v0.25.2
+    entrypoint: [""]
+  variables:
+    BUILDKITD_FLAGS: "--oci-worker-no-process-sandbox"
+  rules:
+    - if: '$RUN_RELEASE_AND_UPDATE_SERVER == "1" && $BUILDER_RELEASE_CONFIRM == "release-and-update-server"'
+      when: on_success
+    - when: never
+  before_script:
+    - apk add --no-cache bash kubectl python3
+  script:
+    - test -n "${APAAS_DOCKER_USERNAME:-}"
+    - test -n "${APAAS_DOCKER_PASSWORD:-}"
+    - test -n "${APAAS_KUBECONFIG_B64:-}${APAAS_KUBECONFIG:-}"
+    - export BUILDER_IMAGE_TAG="${BUILDER_IMAGE_TAG:-$(date +%Y.%m.%d)-${CI_COMMIT_SHORT_SHA}}"
+    - export BUILDER_IMAGE="${BUILDER_IMAGE_REPOSITORY}:${BUILDER_IMAGE_TAG}"
+    - export DOCKER_CONFIG="${CI_PROJECT_DIR}/.docker"
+    - mkdir -p "${DOCKER_CONFIG}"
+    - |
+      python3 - <<'PY'
+      import base64
+      import json
+      import os
+      from pathlib import Path
+
+      registry = os.environ["BUILDER_IMAGE_REPOSITORY"].split("/", 1)[0]
+      credentials = (
+          f'{os.environ["APAAS_DOCKER_USERNAME"]}:'
+          f'{os.environ["APAAS_DOCKER_PASSWORD"]}'
+      ).encode()
+      config = {
+          "auths": {
+              registry: {
+                  "auth": base64.b64encode(credentials).decode(),
+              }
+          }
+      }
+      Path(os.environ["DOCKER_CONFIG"], "config.json").write_text(
+          json.dumps(config),
+          encoding="utf-8",
+      )
+      PY
+    - |
+      buildctl-daemonless.sh build \
+        --frontend dockerfile.v0 \
+        --local context=. \
+        --local dockerfile=. \
+        --opt filename=deploy/docker/Dockerfile \
+        --opt "build-arg:VITE_BASE_URL=${BUILDER_VITE_BASE_URL}" \
+        --output "type=image,name=${BUILDER_IMAGE},push=true"
+    - |
+      if [ -n "${APAAS_KUBECONFIG_B64:-}" ]; then
+        printf '%s' "${APAAS_KUBECONFIG_B64}" | base64 -d > /tmp/kubeconfig
+      else
+        cp "${APAAS_KUBECONFIG}" /tmp/kubeconfig
+      fi
+      chmod 600 /tmp/kubeconfig
+      export KUBECONFIG=/tmp/kubeconfig
+      kubectl -n "${BUILDER_K8S_NAMESPACE}" set image \
+        "statefulset/${BUILDER_K8S_STATEFULSET}" \
+        "${BUILDER_K8S_BACKEND_CONTAINER}=${BUILDER_IMAGE}" \
+        "${BUILDER_K8S_DIST_INIT_CONTAINER}=${BUILDER_IMAGE}"
+      kubectl -n "${BUILDER_K8S_NAMESPACE}" rollout status \
+        "statefulset/${BUILDER_K8S_STATEFULSET}" \
+        --timeout="${BUILDER_ROLLOUT_TIMEOUT}"
+      printf 'builderImage=%s\n' "${BUILDER_IMAGE}"

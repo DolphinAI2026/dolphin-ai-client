@@ -57,8 +57,8 @@ StatefulSet apaas-builder (replicas=1, nodeAffinity app-tier=true)
 
 ## 前置
 
-- **MySQL**：已部署在 `mysql` 命名空间（单节点，集群内 DNS `mysql.mysql.svc.cluster.local:3306`）。业务库/账号已创建：`apaas_builder` / `apaas:apaas2024`。详见 [../../主备部署mysql(1).md](../../../../../Downloads/单节点部署mysql.md) 的单节点修改版。
-- **镜像**：当前部署使用 `hub.dfy.definesys.cn/ai-builder/apaas-builder:20260428-ruijing`。
+- **PostgreSQL**：直接复用 Control Plane 的 `om-postgresql:5432/orcamatrix` 和 `control-plane-db-secret`，不新建数据库或账号。
+- **镜像**：`om-harbor.dfy.definesys.cn/om-demo/ai-builder:<tag>`。
 - **节点标签**：`apaas.definesys.com/app-tier=true` 已在 `i8vbj7weas0dx1id3v9wa` 上（PV + 调度会绑到这台）。
 - **IngressClass**：`nginx`（集群已有）。
 
@@ -76,8 +76,12 @@ ANTHROPIC_BASE_URL=https://api.minimaxi.com/anthropic
 ANTHROPIC_API_KEY=<同上>
 ANTHROPIC_MODEL=MiniMax-M2.7
 
-# 指向集群内 MySQL
-DATABASE_URL=mysql+aiomysql://apaas:apaas2024@mysql.mysql.svc.cluster.local:3306/apaas_builder?charset=utf8mb4
+# 直接复用 Control Plane PostgreSQL。username/password 取自
+# orcamatrix-demo/control-plane-db-secret。
+DATABASE_URL=postgresql+asyncpg://<control-plane-username>:<control-plane-password>@om-postgresql.orcamatrix-demo.svc.cluster.local:5432/orcamatrix
+AUTH_PROVIDER=control_plane
+DOLPHIN_WORKSPACE_BASE_URL=https://dolphin.dfy.definesys.cn
+DOLPHIN_CODE_CONTROL_PLANE_URL=https://om-demo.dfy.definesys.cn/control-plane-fw-auth-preview
 
 JWT_SECRET_KEY=<换成随机长字符串>
 JWT_ALGORITHM=HS256
@@ -151,7 +155,7 @@ kubectl apply -f .
 ## 验证
 
 ```bash
-# Pod Ready（首次启动会等 MySQL + init_db + seed_data，约 1-3 分钟）
+# Pod Ready（首次启动会等 PostgreSQL + init_db + seed_data，约 1-3 分钟）
 kubectl -n apaas-builder get pods -w
 
 # 日志
@@ -236,6 +240,35 @@ kubectl delete ns apaas-builder
 |---|---|---|
 | Pod ImagePullBackOff | 私库要凭据 | 建 regcred-hub-dfy secret，yaml 加 imagePullSecrets |
 | Pod Pending（调度不上）| 没有 `app-tier=true` 标签节点，或 PVC 绑定失败 | `kubectl describe pod` 看 events；标签通过 `kubectl label node <x> apaas.definesys.com/app-tier=true` 加 |
-| readinessProbe 失败 | 首次启动 init_db 慢（远程 MySQL 连慢） | 看 apaas-builder 容器日志里有没有 `Application startup complete`；改 probe initialDelay |
+| readinessProbe 失败 | 首次启动 init_db 慢（远程 PostgreSQL 连接慢） | 看 apaas-builder 容器日志里有没有 `Application startup complete`；改 probe initialDelay |
 | nginx sidecar 404 / 无 index.html | initContainer cp 失败 | `kubectl logs apaas-builder-0 -c copy-frontend-dist`；检查镜像里是否真有 `/app/frontend/dist` |
 | SSE 请求被断 | ingress 漏配 proxy-buffering off | 已在 50-ingress.yaml annotations 里配，检查 nginx-ingress-controller 是否尊重 |
+
+## GitLab CI 发布
+
+仓库根目录 `.gitlab-ci.yml` 参考 `agent-runtime`，仅允许 Web、API 或 Trigger
+手动触发。GitLab 项目变量需配置：
+
+- `APAAS_DOCKER_USERNAME`、`APAAS_DOCKER_PASSWORD`
+- `APAAS_KUBECONFIG_B64`，或文件类型变量 `APAAS_KUBECONFIG`
+- `RUN_RELEASE_AND_UPDATE_SERVER=1`
+- `BUILDER_RELEASE_CONFIRM=release-and-update-server`
+
+流水线会用 BuildKit 构建并推送 `BUILDER_IMAGE_REPOSITORY`，随后同时更新
+`orcamatrix-demo` 下 `ai-builder` StatefulSet 的 `ai-builder` 和
+`copy-frontend-dist` 镜像并等待滚动完成。
+
+默认发布配置已经对齐同环境其他工程：
+
+```text
+BUILDER_IMAGE_REPOSITORY=om-harbor.dfy.definesys.cn/om-demo/ai-builder
+BUILDER_K8S_NAMESPACE=orcamatrix-demo
+BUILDER_K8S_STATEFULSET=ai-builder
+BUILDER_K8S_BACKEND_CONTAINER=ai-builder
+```
+
+Control Plane 运行环境需要同时配置：
+
+```text
+CONTROL_PLANE_AUTH_FULL_WORKSPACE_BASE_URL=https://dolphin.dfy.definesys.cn
+```

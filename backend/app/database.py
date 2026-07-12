@@ -1,4 +1,5 @@
 import logging
+import re
 
 from sqlalchemy import inspect, text
 from sqlalchemy.ext.asyncio import create_async_engine, AsyncSession, async_sessionmaker
@@ -40,6 +41,59 @@ async def get_db():
             yield session
         finally:
             await session.close()
+
+
+def _schema_statement_for_dialect(statement: str, dialect_name: str) -> str:
+    if dialect_name != "postgresql":
+        return statement
+
+    statement = re.sub(r"\bDATETIME\b", "TIMESTAMP", statement)
+    modify_nullable = re.fullmatch(
+        r"ALTER TABLE ([A-Za-z0-9_]+) MODIFY COLUMN ([A-Za-z0-9_]+) .+ NULL",
+        statement,
+    )
+    if modify_nullable:
+        table_name, column_name = modify_nullable.groups()
+        return f"ALTER TABLE {table_name} ALTER COLUMN {column_name} DROP NOT NULL"
+    return statement
+
+
+def _insert_select_ignore_conflicts_sql(
+    *,
+    dialect_name: str,
+    target_table: str,
+    columns: list[str],
+    source_table: str,
+) -> str:
+    columns_sql = ", ".join(columns)
+    if dialect_name == "mysql":
+        prefix = "INSERT IGNORE"
+        suffix = ""
+    elif dialect_name == "sqlite":
+        prefix = "INSERT OR IGNORE"
+        suffix = ""
+    else:
+        prefix = "INSERT"
+        suffix = " ON CONFLICT DO NOTHING" if dialect_name == "postgresql" else ""
+    return (
+        f"{prefix} INTO {target_table} ({columns_sql}) "
+        f"SELECT {columns_sql} FROM {source_table}{suffix}"
+    )
+
+
+async def _execute_best_effort(conn, statement: str) -> None:
+    statement = _schema_statement_for_dialect(statement, conn.dialect.name)
+    if conn.dialect.name == "postgresql":
+        try:
+            async with conn.begin_nested():
+                await conn.execute(text(statement))
+        except Exception:
+            return
+    else:
+        try:
+            await conn.execute(text(statement))
+        except Exception:
+            return
 
 
 async def init_db():
@@ -176,10 +230,7 @@ async def init_db():
             "ALTER TABLE ai_chat_artifacts ADD COLUMN file_path VARCHAR(1000)",
             "ALTER TABLE ai_chat_artifacts ADD COLUMN size_bytes BIGINT NOT NULL DEFAULT 0",
         ]:
-            try:
-                await conn.execute(text(stmt))
-            except Exception:
-                pass  # 列已存在
+            await _execute_best_effort(conn, stmt)
 
         await _migrate_code_runtime_binding_app_id_nullable(conn, inspect)
 
@@ -188,27 +239,20 @@ async def init_db():
             "ALTER TABLE document_versions MODIFY COLUMN application_id INTEGER NULL",
             "ALTER TABLE document_versions MODIFY COLUMN conversation_id INTEGER NULL",
         ]:
-            try:
-                await conn.execute(text(stmt))
-            except Exception:
-                pass
+            await _execute_best_effort(conn, stmt)
 
         # project_members 表 — create_all 已处理，此处确保唯一约束
-        try:
-            await conn.execute(text(
-                "CREATE UNIQUE INDEX IF NOT EXISTS uq_project_member ON project_members(project_id, user_id)"
-            ))
-        except Exception:
-            pass
+        await _execute_best_effort(
+            conn,
+            "CREATE UNIQUE INDEX IF NOT EXISTS uq_project_member ON project_members(project_id, user_id)",
+        )
 
         # 只清理既没有 application_id 也没有 conversation_id 的真正孤立记录。
         # conversation_id 存在的记录可能还要在应用创建后回填 application_id。
-        try:
-            await conn.execute(text(
-                "DELETE FROM document_versions WHERE application_id IS NULL AND conversation_id IS NULL"
-            ))
-        except Exception:
-            pass
+        await _execute_best_effort(
+            conn,
+            "DELETE FROM document_versions WHERE application_id IS NULL AND conversation_id IS NULL",
+        )
 
         # document_versions / change_plans — create_all 已处理，确保索引存在
         for idx_stmt in [
@@ -217,10 +261,7 @@ async def init_db():
             "CREATE INDEX IF NOT EXISTS ix_change_plans_conversation_id ON change_plans(conversation_id)",
             "CREATE INDEX IF NOT EXISTS ix_document_versions_conversation_id ON document_versions(conversation_id)",
         ]:
-            try:
-                await conn.execute(text(idx_stmt))
-            except Exception:
-                pass
+            await _execute_best_effort(conn, idx_stmt)
 
 
 async def _migrate_code_runtime_binding_app_id_nullable(conn, inspect_fn) -> None:
@@ -369,12 +410,12 @@ async def _migrate_legacy_builder_specs(conn, inspect_fn) -> None:
         "tenant_id",
     ]
     if set(copy_cols).issubset(specs_cols) and set(copy_cols).issubset(builder_cols):
-        insert_keyword = "INSERT IGNORE" if conn.dialect.name == "mysql" else "INSERT OR IGNORE"
-        columns_sql = ", ".join(copy_cols)
-        await conn.execute(text(
-            f"{insert_keyword} INTO builder_specs ({columns_sql}) "
-            f"SELECT {columns_sql} FROM specs"
-        ))
+        await conn.execute(text(_insert_select_ignore_conflicts_sql(
+            dialect_name=conn.dialect.name,
+            target_table="builder_specs",
+            columns=copy_cols,
+            source_table="specs",
+        )))
 
     archive_name = "legacy_builder_specs"
     if await conn.run_sync(lambda sync_conn: inspect_fn(sync_conn).has_table(archive_name)):

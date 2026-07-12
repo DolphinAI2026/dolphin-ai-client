@@ -515,7 +515,7 @@ async def test_default_workspace_open_forwards_request_authorization_when_no_ser
 
 
 @pytest.mark.asyncio
-async def test_default_workspace_open_sends_delegated_identity_with_service_token(monkeypatch):
+async def test_default_workspace_open_forwards_user_token_with_delegated_identity(monkeypatch):
     from app.code_runtime import service
 
     calls: list[dict] = []
@@ -562,7 +562,7 @@ async def test_default_workspace_open_sends_delegated_identity_with_service_toke
     )
 
     headers = calls[0]["headers"]
-    assert headers["Authorization"] == "Bearer cp-token"
+    assert headers["Authorization"] == "Bearer user-token"
     assert headers["X-AI-Builder-Delegation-Secret"] == "shared-secret"
     assert headers["X-AI-Builder-Delegated-User-Id"] == "100169876816012509184"
     assert headers["X-AI-Builder-Delegated-Tenant-Id"] == "844246516607483905"

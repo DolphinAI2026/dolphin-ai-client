@@ -110,7 +110,7 @@ ensure_backend_env() {
     esac
   done < "$TEMPLATE" >> "$BACKEND_ENV_FILE"
   ok "已生成 $BACKEND_ENV_FILE（密钥随机，权限 600）"
-  warn "请编辑该文件，把所有 __SET_ME__ 填成客户真实值（DB / aPaaS），然后重新运行本脚本。"
+  warn "请编辑该文件，把所有 __SET_ME__ 填成客户真实值（DB / Control Plane），然后重新运行本脚本。"
   exit 0
 }
 
@@ -120,25 +120,44 @@ validate_backend_env() {
     die "backend.env still有未填的 __SET_ME__，请补全后重跑。"
   fi
   grep -q '__GENERATE__' "$BACKEND_ENV_FILE" && die "backend.env 残留 __GENERATE__ 占位，疑似生成异常，请删除 $BACKEND_ENV_FILE 重跑。"
-  local missing=()
-  for k in DATABASE_URL APAAS_BASE_URL JWT_SECRET_KEY ENCRYPTION_KEY; do
+  local missing=() provider
+  for k in DATABASE_URL JWT_SECRET_KEY ENCRYPTION_KEY; do
     local v; v="$(env_get "$k")"
     [ -n "$v" ] || missing+=("$k")
   done
+  provider="$(env_get AUTH_PROVIDER)"
+  case "$provider" in
+    control_plane)
+      [ -n "$(env_get DOLPHIN_WORKSPACE_BASE_URL)" ] || missing+=("DOLPHIN_WORKSPACE_BASE_URL")
+      [ -n "$(env_get DOLPHIN_CODE_CONTROL_PLANE_URL)" ] || missing+=("DOLPHIN_CODE_CONTROL_PLANE_URL")
+      ;;
+    apaas)
+      [ -n "$(env_get APAAS_BASE_URL)" ] || missing+=("APAAS_BASE_URL")
+      ;;
+    *)
+      die "AUTH_PROVIDER 必须为 control_plane 或 apaas，当前值: ${provider:-<empty>}"
+      ;;
+  esac
   [ ${#missing[@]} -eq 0 ] || die "backend.env 缺必填项: ${missing[*]}"
   ok "backend.env 校验通过"
 }
 
-# ── 4. MySQL 可达性（仅告警，不阻断；entrypoint 也会等）──────────
-probe_mysql() {
-  local url host port
+# ── 4. 数据库可达性（仅告警，不阻断；entrypoint 也会等）────────
+probe_database() {
+  local url host port database_name
   url="$(env_get DATABASE_URL)"
   if [[ "$url" =~ @([^:/]+)(:([0-9]+))?/ ]]; then
-    host="${BASH_REMATCH[1]}"; port="${BASH_REMATCH[3]:-3306}"
+    host="${BASH_REMATCH[1]}"
+    case "$url" in
+      postgresql*|postgres*) database_name="PostgreSQL"; port="${BASH_REMATCH[3]:-5432}" ;;
+      mysql*) database_name="MySQL"; port="${BASH_REMATCH[3]:-3306}" ;;
+      *) database_name="database"; port="${BASH_REMATCH[3]:-}" ;;
+    esac
+    [ -n "$port" ] || return 0
     if (exec 3<>"/dev/tcp/$host/$port") 2>/dev/null; then
-      ok "MySQL $host:$port 可达"; exec 3>&- || true
+      ok "$database_name $host:$port 可达"; exec 3>&- || true
     else
-      warn "MySQL $host:$port 暂不可达 —— 请确认客户 MySQL 已起、库与账号已建、网络可通。"
+      warn "$database_name $host:$port 暂不可达 —— 请确认数据库已启动、库与账号已建、网络可通。"
     fi
   fi
 }
@@ -226,7 +245,7 @@ main() {
   load_customer_config
   validate_backend_env
   ensure_image
-  probe_mysql
+  probe_database
   compose_up
   wait_health
   seed_admin

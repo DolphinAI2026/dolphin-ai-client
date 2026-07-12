@@ -48,7 +48,7 @@ spec:
           image: hub.dfy.definesys.cn/ai-builder/apaas-builder:20260428-ruijing
           imagePullPolicy: IfNotPresent
           env:
-            - name: WAIT_FOR_MYSQL
+            - name: WAIT_FOR_DATABASE
               value: "1"
             # backend/app/coding/workspace.py 直接读取进程环境变量；
             # 仅写在 backend.env 文件里不会生效，必须在 Pod env 显式注入。

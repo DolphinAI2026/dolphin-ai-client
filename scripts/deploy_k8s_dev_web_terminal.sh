@@ -188,10 +188,10 @@ else
   printf 'APAAS_BASE_URL=%s\\n' "\$APAAS_BASE_URL" >> /tmp/apaas-builder-backend.env
 fi
 sed -i '/^APAAS_TENANT_ID=/d' /tmp/apaas-builder-backend.env
-if grep -q '^DATABASE_URL=mysql' /tmp/apaas-builder-backend.env; then
+if grep -Eq '^DATABASE_URL=(postgresql|postgres|mysql)' /tmp/apaas-builder-backend.env; then
   sed -i -E "s#^(DATABASE_URL=[^:]+://[^/]+/)[^?]*(.*)#\\1\${DEV_DATABASE_NAME}\\2#" /tmp/apaas-builder-backend.env
 else
-  echo "ERROR: DATABASE_URL is missing or not mysql; refusing to deploy dev against an unknown database" >&2
+  echo "ERROR: DATABASE_URL is missing or unsupported; refusing to deploy dev against an unknown database" >&2
   exit 1
 fi
 if grep -q '^MCP_API_KEYS=' /tmp/apaas-builder-backend.env; then
@@ -297,7 +297,7 @@ spec:
           image: \${IMAGE}
           imagePullPolicy: Always
           env:
-            - name: WAIT_FOR_MYSQL
+            - name: WAIT_FOR_DATABASE
               value: "1"
             - name: APAAS_WORKSPACE_ROOT
               value: "/root/apaas-builder/workspaces"

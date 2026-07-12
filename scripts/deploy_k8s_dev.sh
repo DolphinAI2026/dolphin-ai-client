@@ -187,7 +187,7 @@ for line in env_path.read_text().splitlines():
     elif key == "DATABASE_URL":
         value = line.split("=", 1)[1]
         parsed = urlsplit(value)
-        if parsed.scheme.startswith("mysql"):
+        if parsed.scheme.startswith(("postgresql", "postgres", "mysql")):
             lines.append(f"DATABASE_URL={urlunsplit((parsed.scheme, parsed.netloc, '/' + dev_db, parsed.query, parsed.fragment))}")
         else:
             raise SystemExit(f"unsupported DATABASE_URL for dev split: {parsed.scheme}")
@@ -300,7 +300,7 @@ spec:
           image: ${IMAGE}
           imagePullPolicy: IfNotPresent
           env:
-            - name: WAIT_FOR_MYSQL
+            - name: WAIT_FOR_DATABASE
               value: "1"
             - name: APAAS_WORKSPACE_ROOT
               value: "/root/apaas-builder/workspaces"
