@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import os
 import base64
+import re
 from datetime import datetime, timedelta, timezone
 from typing import Any, Awaitable, Callable
 from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
@@ -313,6 +314,16 @@ def _header_b64(value: Any) -> str | None:
     return base64.urlsafe_b64encode(text.encode("utf-8")).decode("ascii")
 
 
+def _delegated_git_username(username: Any, local_user_id: Any) -> str | None:
+    value = _header_text(username)
+    if not value:
+        return None
+    if value.lower() not in {"admin", "root"}:
+        return value
+    suffix = re.sub(r"[^a-zA-Z0-9_-]+", "-", str(local_user_id or "user")).strip("-") or "user"
+    return f"ai-builder-{value.lower()}-{suffix}"
+
+
 def _delegated_identity_headers(
     ctx: Any | None,
     *,
@@ -326,7 +337,7 @@ def _delegated_identity_headers(
     local_tenant_id = _header_text(getattr(ctx, "tenant_id", None))
     delegated_user_id = _header_text(getattr(ctx, "apaas_user_id", None)) or local_user_id
     delegated_tenant_id = _header_text(getattr(ctx, "apaas_tenant_id", None)) or local_tenant_id
-    username = _header_text(getattr(user, "username", None))
+    username = _delegated_git_username(getattr(user, "username", None), local_user_id)
     display_name_b64 = _header_b64(getattr(user, "display_name", None))
 
     headers: dict[str, str] = {}

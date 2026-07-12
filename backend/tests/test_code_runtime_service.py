@@ -568,9 +568,22 @@ async def test_default_workspace_open_forwards_user_token_with_delegated_identit
     assert headers["X-AI-Builder-Delegated-Tenant-Id"] == "844246516607483905"
     assert headers["X-AI-Builder-Local-User-Id"] == "11"
     assert headers["X-AI-Builder-Local-Tenant-Id"] == "7"
-    assert headers["X-AI-Builder-Delegated-Username"] == "admin"
+    assert headers["X-AI-Builder-Delegated-Username"] == "ai-builder-admin-11"
     assert headers["X-AI-Builder-Shell-Session-Id"] == "42"
     assert base64.urlsafe_b64decode(headers["X-AI-Builder-Delegated-Display-Name-B64"]).decode() == "张三"
+
+
+def test_delegated_identity_keeps_non_reserved_username():
+    from app.code_runtime import service
+
+    ctx = SimpleNamespace(
+        user=SimpleNamespace(id=12, username="zhangsan", display_name="张三"),
+        tenant_id=7,
+    )
+
+    headers = service._delegated_identity_headers(ctx)
+
+    assert headers["X-AI-Builder-Delegated-Username"] == "zhangsan"
 
 
 def test_embed_token_round_trip_is_bound_to_session():

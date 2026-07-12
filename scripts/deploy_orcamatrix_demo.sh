@@ -10,6 +10,7 @@
 #   KUBE_NAMESPACE=orcamatrix-demo
 #   KUBE_CONTEXT=<context>
 #   CONTROL_PLANE_URL=https://om-demo.dfy.definesys.cn/control-plane-fw-auth-preview
+#   CONTROL_PLANE_DEPLOYMENT=control-plane-fw-auth-preview
 #   DOLPHIN_WORKSPACE_BASE_URL=https://dolphin.dfy.definesys.cn
 #   CONTROL_PLANE_BINDING_ENABLED=false
 #
@@ -24,11 +25,13 @@ KUBE_CONTEXT="${KUBE_CONTEXT:-}"
 IMAGE="${IMAGE:-}"
 BACKEND_ENV_FILE="${BACKEND_ENV_FILE:-}"
 CONTROL_PLANE_URL="${CONTROL_PLANE_URL:-https://om-demo.dfy.definesys.cn/control-plane-fw-auth-preview}"
+CONTROL_PLANE_DEPLOYMENT="${CONTROL_PLANE_DEPLOYMENT:-control-plane-fw-auth-preview}"
 DOLPHIN_WORKSPACE_BASE_URL="${DOLPHIN_WORKSPACE_BASE_URL:-https://dolphin.dfy.definesys.cn}"
 CONTROL_PLANE_BINDING_ENABLED="${CONTROL_PLANE_BINDING_ENABLED:-false}"
 PUBLIC_BASE_URL="${PUBLIC_BASE_URL:-https://om-demo.dfy.definesys.cn/ai-builder}"
 DATABASE_SECRET="${DATABASE_SECRET:-control-plane-db-secret}"
 IMAGE_PULL_SECRET="${IMAGE_PULL_SECRET:-om-demo-harbor-pull-secret}"
+DELEGATION_SECRET="${DELEGATION_SECRET:-ai-builder-control-plane-delegation}"
 NGINX_IMAGE="${NGINX_IMAGE:-hub-mirror.dfy.definesys.cn/library/nginx:1.27-alpine}"
 STORAGE_CLASS="${STORAGE_CLASS:-local-path}"
 STORAGE_SIZE="${STORAGE_SIZE:-50Gi}"
@@ -89,7 +92,7 @@ PY
 )"
 
 awk '
-  !/^(DATABASE_URL|AUTH_PROVIDER|CONTROL_PLANE_BINDING_ENABLED|DOLPHIN_WORKSPACE_BASE_URL|DOLPHIN_CODE_CONTROL_PLANE_URL|DOLPHIN_CODE_BUILDER_URL|AI_BUILDER_CHAT_DEEPLINK_BASE|HOST|PORT)=/
+  !/^(DATABASE_URL|AUTH_PROVIDER|CONTROL_PLANE_BINDING_ENABLED|DOLPHIN_WORKSPACE_BASE_URL|DOLPHIN_CODE_CONTROL_PLANE_URL|DOLPHIN_CODE_CONTROL_PLANE_DELEGATION_SECRET|DOLPHIN_CODE_BUILDER_URL|AI_BUILDER_CHAT_DEEPLINK_BASE|HOST|PORT)=/
 ' "$BACKEND_ENV_FILE" > "$tmp_dir/backend.env"
 cat >> "$tmp_dir/backend.env" <<EOF
 
@@ -106,6 +109,18 @@ HOST=0.0.0.0
 PORT=8003
 EOF
 chmod 600 "$tmp_dir/backend.env"
+
+if ! kube -n "$KUBE_NAMESPACE" get secret "$DELEGATION_SECRET" >/dev/null 2>&1; then
+  delegation_value="$(python3 -c 'import secrets; print(secrets.token_hex(32))')"
+  kube -n "$KUBE_NAMESPACE" create secret generic "$DELEGATION_SECRET" \
+    --from-literal=CONTROL_PLANE_WORKSPACE_DELEGATION_SECRET="$delegation_value" >/dev/null
+fi
+
+kube -n "$KUBE_NAMESPACE" set env "deployment/${CONTROL_PLANE_DEPLOYMENT}" \
+  CONTROL_PLANE_AUTH_FULL_WORKSPACE_BASE_URL="$DOLPHIN_WORKSPACE_BASE_URL" >/dev/null
+kube -n "$KUBE_NAMESPACE" set env "deployment/${CONTROL_PLANE_DEPLOYMENT}" \
+  --from="secret/${DELEGATION_SECRET}" >/dev/null
+kube -n "$KUBE_NAMESPACE" rollout status "deployment/${CONTROL_PLANE_DEPLOYMENT}" --timeout=300s
 
 awk '
   /^  default.conf: \|$/ { capture=1; next }
@@ -217,6 +232,11 @@ spec:
                   key: DATABASE_URL
             - name: WAIT_FOR_DATABASE
               value: "1"
+            - name: DOLPHIN_CODE_CONTROL_PLANE_DELEGATION_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: ${DELEGATION_SECRET}
+                  key: CONTROL_PLANE_WORKSPACE_DELEGATION_SECRET
             - name: APAAS_WORKSPACE_ROOT
               value: /root/apaas-builder/workspaces
             - name: APAAS_NPM_CACHE_DIR
