@@ -69,6 +69,12 @@ class APaaSUserTokenRequest(BaseModel):
     admin_id: Optional[str] = None
 
 
+class APaaSTenantBindingRequest(BaseModel):
+    admin_id: str = Field(..., min_length=1)
+    base_url: str = Field(..., min_length=1)
+    platform_tenant_id: str = Field(..., min_length=1)
+
+
 @router.post("/login", response_model=LoginResponse)
 async def login_admin_spa_compat(
     user_data: UserLogin,
@@ -208,12 +214,25 @@ def _public_admin(row: dict[str, Any]) -> dict[str, Any]:
         "id": row.get("id"),
         "name": row.get("name"),
         "account": row.get("account"),
+        "base_url": _platform_env_api_base(row.get("base_url") or APAAS_BASE_URL),
         "is_default": bool(row.get("is_default")),
         "has_password": bool(row.get("password_enc")),
         "has_token": bool(row.get("token")),
         "status": row.get("status") or ("connected" if row.get("token") else "disconnected"),
         "last_login_at": row.get("last_login_at"),
         "token_fingerprint": _fingerprint(row.get("token")),
+    }
+
+
+def _public_environment_binding(tenant: Tenant, env: PlatformEnv) -> dict[str, Any]:
+    return {
+        "localTenantId": tenant.id,
+        "platformEnvId": env.id,
+        "baseUrl": env.base_url,
+        "platformTenantId": env.platform_tenant_id,
+        "environmentBound": bool(env.base_url and env.platform_tenant_id),
+        "adminAccount": env.username or "",
+        "status": env.status,
     }
 
 
@@ -235,6 +254,13 @@ def _normalize_origin(base_url: str) -> str:
     if base.endswith("/backend"):
         base = base[:-len("/backend")]
     return base
+
+
+def _platform_env_api_base(base_url: str) -> str:
+    base = base_url.strip().rstrip("/")
+    if not base:
+        return ""
+    return base if base.endswith("/backend") else f"{base}/backend"
 
 
 def _api_base(base_url: str) -> str:
@@ -672,6 +698,91 @@ async def get_apaas_user_token(
     }
 
 
+@router.put("/apaas-tenants/{local_tenant_id}/binding")
+async def bind_apaas_tenant_environment(
+    local_tenant_id: int,
+    body: APaaSTenantBindingRequest,
+    ctx: Annotated[AuthContext, Depends(get_auth_context)],
+    db: Annotated[AsyncSession, Depends(get_db)],
+):
+    _require_platform_admin(ctx)
+    tenant = (
+        await db.execute(select(Tenant).where(Tenant.id == local_tenant_id))
+    ).scalar_one_or_none()
+    if not tenant:
+        raise HTTPException(status_code=404, detail="租户不存在")
+
+    admins = await _load_db_admins(db)
+    admin = _select_admin(admins, body.admin_id)
+    base_url = _platform_env_api_base(body.base_url)
+    platform_tenant_id = body.platform_tenant_id.strip()
+    if not base_url:
+        raise HTTPException(status_code=400, detail="aPaaS 地址不能为空")
+    if not platform_tenant_id:
+        raise HTTPException(status_code=400, detail="aPaaS 租户 ID 不能为空")
+
+    env = None
+    if tenant.apaas_env_id:
+        env = (
+            await db.execute(
+                select(PlatformEnv).where(
+                    PlatformEnv.id == tenant.apaas_env_id,
+                    PlatformEnv.tenant_id == tenant.id,
+                )
+            )
+        ).scalar_one_or_none()
+    if env is None:
+        env = (
+            await db.execute(
+                select(PlatformEnv)
+                .where(PlatformEnv.tenant_id == tenant.id)
+                .order_by(PlatformEnv.is_default.desc(), PlatformEnv.id.asc())
+                .limit(1)
+            )
+        ).scalar_one_or_none()
+    if env is None:
+        env = PlatformEnv(
+            tenant_id=tenant.id,
+            env_name=f"{tenant.tenant_name}-默认环境",
+            base_url=base_url,
+            platform_tenant_id=platform_tenant_id,
+            is_default=True,
+            status="disconnected",
+        )
+        db.add(env)
+        await db.flush()
+
+    binding_changed = (
+        env.base_url != base_url
+        or env.platform_tenant_id != platform_tenant_id
+        or env.username != admin.get("account")
+        or env.password_enc != admin.get("password_enc")
+    )
+    await db.execute(
+        PlatformEnv.__table__.update()
+        .where(
+            PlatformEnv.tenant_id == tenant.id,
+            PlatformEnv.id != env.id,
+        )
+        .values(is_default=False)
+    )
+    env.env_name = env.env_name or f"{tenant.tenant_name}-默认环境"
+    env.base_url = base_url
+    env.platform_tenant_id = platform_tenant_id
+    env.username = admin.get("account")
+    env.password_enc = admin.get("password_enc")
+    env.is_default = True
+    if binding_changed or env.token:
+        env.token = None
+        env.status = "disconnected"
+
+    tenant.apaas_env_id = env.id
+    tenant.apaas_tenant_id_str = platform_tenant_id
+    await db.commit()
+    await db.refresh(env)
+    return _public_environment_binding(tenant, env)
+
+
 @router.get("/apaas-tenants")
 async def list_apaas_tenants(
     ctx: Annotated[AuthContext, Depends(get_auth_context)],
@@ -712,6 +823,10 @@ async def list_apaas_tenants(
                 "platformEnvId": env.id if env else None,
                 "platformEnvName": env.env_name if env else "",
                 "platformEnvStatus": env.status if env else "",
+                "baseUrl": env.base_url if env else "",
+                "platformTenantId": env.platform_tenant_id if env else tenant.apaas_tenant_id_str or "",
+                "environmentBound": bool(env and env.base_url and env.platform_tenant_id),
+                "adminAccount": env.username if env else "",
                 "adminList": [],
                 "source": "local",
             })
