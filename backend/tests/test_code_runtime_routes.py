@@ -37,6 +37,12 @@ def test_code_runtime_proxy_rewrites_upstream_location_headers():
         binding,
         12,
     ) == "/api/code-runtime/12/api/readyz"
+    assert _rewrite_location_header(
+        "/api/readyz",
+        binding,
+        12,
+        "/ai-builder",
+    ) == "/ai-builder/api/code-runtime/12/api/readyz"
 
 
 def test_code_runtime_proxy_token_redirect_stays_on_current_origin():
@@ -108,6 +114,9 @@ def test_code_runtime_proxy_rewrites_vite_dev_asset_paths():
     assert b'from "/api/code-runtime/12/src/app/App.tsx"' in rewritten
     assert b"from '/api/code-runtime/12/@react-refresh'" in rewritten
 
+    prefixed = _rewrite_runtime_dev_asset_paths(content, 12, "/ai-builder")
+    assert b'src="/ai-builder/api/code-runtime/12/@vite/client"' in prefixed
+
 
 def test_code_runtime_proxy_only_buffers_vite_dev_asset_paths():
     from app.routes.code_runtime import _should_buffer_dev_asset_path
@@ -143,6 +152,16 @@ def test_code_runtime_proxy_forwards_runtime_cookies_without_proxy_cookie():
     assert headers["cookie"] == "runtime_sid=abc; runtime_theme=dark"
     assert "dolphin_code_runtime_12" not in headers["cookie"]
     assert "host" not in {key.lower() for key in headers}
+
+
+def test_code_runtime_proxy_scopes_runtime_cookie_to_forwarded_prefix():
+    from app.routes.code_runtime import _rewrite_set_cookie_path
+
+    assert _rewrite_set_cookie_path(
+        "runtime_sid=abc; Path=/; HttpOnly",
+        12,
+        "/ai-builder",
+    ) == "runtime_sid=abc; Path=/ai-builder/api/code-runtime/12; HttpOnly"
 
 
 def test_code_runtime_shell_origin_prefers_referer_over_backend_base():
@@ -188,6 +207,14 @@ def test_code_runtime_shell_config_exposes_external_session_rail_flag():
     assert b".workspace-file-viewer-tree" in injected
     assert b"rewriteWorkspaceRelativeLink" not in injected
     assert b"/api/workspace/files/content?" not in injected
+
+    prefixed = _inject_shell_config(
+        b"<html><head></head><body></body></html>",
+        12,
+        "https://om-demo.dfy.definesys.cn",
+        "/ai-builder",
+    )
+    assert b"externalBasePath:'/ai-builder/api/code-runtime/12'" in prefixed
     assert b'closest(".markdown-view,.workspace-file-viewer-preview")' not in injected
     assert b'document.addEventListener("click"' not in injected
     assert b"window.location.assign" not in injected

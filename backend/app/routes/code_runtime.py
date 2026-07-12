@@ -643,10 +643,27 @@ def _copyable_request_headers(request: Request, session_id: int) -> dict[str, st
     return copied
 
 
-def _rewrite_location_header(value: str, binding: CodeRuntimeBinding, session_id: int) -> str:
+def _path_with_forwarded_prefix(path: str, forwarded_prefix: str = "") -> str:
+    prefix = str(forwarded_prefix or "").split(",", 1)[0].strip().rstrip("/")
+    target_path = "/" + str(path or "").lstrip("/")
+    if prefix.startswith("/") and prefix != "/" and not target_path.startswith(prefix + "/"):
+        return prefix + target_path
+    return target_path
+
+
+def _public_proxy_prefix(session_id: int, forwarded_prefix: str = "") -> str:
+    return _path_with_forwarded_prefix(code_runtime_proxy_prefix(session_id), forwarded_prefix)
+
+
+def _rewrite_location_header(
+    value: str,
+    binding: CodeRuntimeBinding,
+    session_id: int,
+    forwarded_prefix: str = "",
+) -> str:
     if not value:
         return value
-    proxy_prefix = code_runtime_proxy_prefix(session_id)
+    proxy_prefix = _public_proxy_prefix(session_id, forwarded_prefix)
     runtime_base = binding.runtime_base_url.rstrip("/")
     if value == runtime_base:
         return proxy_prefix
@@ -699,10 +716,7 @@ def _redirect_target_without_dolphin_token(
     raw_query: bytes | str,
     forwarded_prefix: str = "",
 ) -> str:
-    prefix = str(forwarded_prefix or "").split(",", 1)[0].strip().rstrip("/")
-    target_path = "/" + str(path or "").lstrip("/")
-    if prefix.startswith("/") and prefix != "/" and not target_path.startswith(prefix + "/"):
-        target_path = prefix + target_path
+    target_path = _path_with_forwarded_prefix(path, forwarded_prefix)
     qs = _query_string_without_key(raw_query, "dolphin_token")
     return f"{target_path}{'?' + qs if qs else ''}"
 
@@ -748,6 +762,7 @@ def _copyable_response_headers(
     headers: httpx.Headers,
     binding: CodeRuntimeBinding | None = None,
     session_id: int | None = None,
+    forwarded_prefix: str = "",
 ) -> dict[str, str]:
     excluded = {
         "connection",
@@ -766,22 +781,23 @@ def _copyable_response_headers(
     if binding is not None and session_id is not None:
         for key, value in list(copied.items()):
             if key.lower() == "location":
-                copied[key] = _rewrite_location_header(value, binding, session_id)
+                copied[key] = _rewrite_location_header(value, binding, session_id, forwarded_prefix)
     return copied
 
 
-def _rewrite_set_cookie_path(value: str, session_id: int) -> str:
+def _rewrite_set_cookie_path(value: str, session_id: int, forwarded_prefix: str = "") -> str:
+    proxy_prefix = _public_proxy_prefix(session_id, forwarded_prefix)
     parts = [part.strip() for part in value.split(";")]
     rewritten: list[str] = []
     saw_path = False
     for part in parts:
         if part.lower().startswith("path="):
-            rewritten.append(f"Path={code_runtime_proxy_prefix(session_id)}")
+            rewritten.append(f"Path={proxy_prefix}")
             saw_path = True
         else:
             rewritten.append(part)
     if not saw_path:
-        rewritten.append(f"Path={code_runtime_proxy_prefix(session_id)}")
+        rewritten.append(f"Path={proxy_prefix}")
     return "; ".join(rewritten)
 
 
@@ -921,10 +937,15 @@ html.dolphin-code-external-session-rail .workbench-shell[data-layout-state="spli
 """
 
 
-def _inject_shell_config(html: bytes, session_id: int, origin: str) -> bytes:
+def _inject_shell_config(
+    html: bytes,
+    session_id: int,
+    origin: str,
+    forwarded_prefix: str = "",
+) -> bytes:
     shell_config = (
         "{"
-        f"externalBasePath:{code_runtime_proxy_prefix(session_id)!r},"
+        f"externalBasePath:{_public_proxy_prefix(session_id, forwarded_prefix)!r},"
         f"webConsoleOrigin:{origin!r},"
         "externalSessionRail:true,"
         "hideHistory:true,"
@@ -971,8 +992,12 @@ def _browser_origin_from_headers(headers, fallback: str) -> str:
     return _origin_from_absolute_url(fallback) or str(fallback or "").rstrip("/")
 
 
-def _rewrite_runtime_dev_asset_paths(content: bytes, session_id: int) -> bytes:
-    prefix = code_runtime_proxy_prefix(session_id).encode("utf-8")
+def _rewrite_runtime_dev_asset_paths(
+    content: bytes,
+    session_id: int,
+    forwarded_prefix: str = "",
+) -> bytes:
+    prefix = _public_proxy_prefix(session_id, forwarded_prefix).encode("utf-8")
     rewritten = content
     for root in (b"@vite/", b"@react-refresh", b"src/", b"node_modules/", b"@id/", b"@fs/"):
         rewritten = rewritten.replace(b'"/' + root, b'"' + prefix + b"/" + root)
@@ -1022,7 +1047,7 @@ async def _authorize_proxy_request(request: Request, session_id: int) -> Respons
             httponly=True,
             max_age=12 * 60 * 60,
             samesite="lax",
-            path=code_runtime_proxy_prefix(session_id),
+            path=_public_proxy_prefix(session_id, request.headers.get("x-forwarded-prefix", "")),
         )
         return redirect
     if cookie_token:
@@ -1044,6 +1069,7 @@ async def proxy_code_runtime(
     request: Request,
     db: Annotated[AsyncSession, Depends(get_db)],
 ):
+    forwarded_prefix = request.headers.get("x-forwarded-prefix", "")
     auth_response = await _authorize_proxy_request(request, session_id)
     if auth_response is not None:
         return auth_response
@@ -1070,16 +1096,17 @@ async def proxy_code_runtime(
                 content,
                 session_id,
                 _browser_origin_from_headers(request.headers, str(request.base_url).rstrip("/")),
+                forwarded_prefix,
             )
-            content = _rewrite_runtime_dev_asset_paths(content, session_id)
+            content = _rewrite_runtime_dev_asset_paths(content, session_id, forwarded_prefix)
         response = Response(
             content=content,
             status_code=upstream.status_code,
-            headers=_copyable_response_headers(upstream.headers, binding, session_id),
+            headers=_copyable_response_headers(upstream.headers, binding, session_id, forwarded_prefix),
             media_type=content_type.split(";", 1)[0] if content_type else None,
         )
         for value in upstream.headers.get_list("set-cookie"):
-            response.headers.append("set-cookie", _rewrite_set_cookie_path(value, session_id))
+            response.headers.append("set-cookie", _rewrite_set_cookie_path(value, session_id, forwarded_prefix))
         return response
 
     if request.method == "GET" and _should_buffer_dev_asset_path(path):
@@ -1088,15 +1115,15 @@ async def proxy_code_runtime(
         content_type = upstream.headers.get("content-type", "")
         content = upstream.content
         if _should_rewrite_buffered_response(path, content_type):
-            content = _rewrite_runtime_dev_asset_paths(content, session_id)
+            content = _rewrite_runtime_dev_asset_paths(content, session_id, forwarded_prefix)
         response = Response(
             content=content,
             status_code=upstream.status_code,
-            headers=_copyable_response_headers(upstream.headers, binding, session_id),
+            headers=_copyable_response_headers(upstream.headers, binding, session_id, forwarded_prefix),
             media_type=content_type.split(";", 1)[0] if content_type else None,
         )
         for value in upstream.headers.get_list("set-cookie"):
-            response.headers.append("set-cookie", _rewrite_set_cookie_path(value, session_id))
+            response.headers.append("set-cookie", _rewrite_set_cookie_path(value, session_id, forwarded_prefix))
         return response
 
     client = httpx.AsyncClient(follow_redirects=False, timeout=None)
@@ -1105,11 +1132,11 @@ async def proxy_code_runtime(
     response = StreamingResponse(
         upstream.aiter_raw(),
         status_code=upstream.status_code,
-        headers=_copyable_response_headers(upstream.headers, binding, session_id),
+        headers=_copyable_response_headers(upstream.headers, binding, session_id, forwarded_prefix),
         background=BackgroundTask(_close_upstream, upstream, client),
     )
     for value in upstream.headers.get_list("set-cookie"):
-        response.headers.append("set-cookie", _rewrite_set_cookie_path(value, session_id))
+        response.headers.append("set-cookie", _rewrite_set_cookie_path(value, session_id, forwarded_prefix))
     return response
 
 
