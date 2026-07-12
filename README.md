@@ -123,10 +123,6 @@ apaas-builder-ai/
 
 ```env
 # aPaaS Platform
-# 可选：local / apaas / control_plane；coding 仅作为 control_plane 兼容别名。
-AUTH_PROVIDER=apaas
-# 可选，默认 false。开启后，主登录成功会按平台管理中的账号绑定刷新另一侧凭据。
-AUTH_ACCOUNT_BINDING_ENABLED=false
 APAAS_BASE_URL=https://your-apaas.example.com/backend
 # 本地初始化 default 租户时用于绑定 aPaaS 平台租户
 APAAS_TENANT_ID=<your-apaas-tenant-id>
@@ -148,11 +144,6 @@ DOLPHIN_CODE_CONTROL_PLANE_TOKEN=<optional-control-plane-token>
 DOLPHIN_CODE_BUILDER_URL=http://127.0.0.1:5173/builder/
 DOLPHIN_CODE_DEFAULT_SEED_PROJECT_ID=<seed-project-id>
 ```
-
-企业认证绑定完全由 Builder 管理，不要求修改 Control Plane 或 SDK。开关关闭时只执行
-`AUTH_PROVIDER` 指定的登录；开关开启时，可在 Builder 平台管理的“认证绑定”页维护
-aPaaS 与 Control Plane 企业账号及其多对多绑定。绑定缺失或次级换票失败不影响主登录，
-但依赖另一认证源的业务功能会返回明确的绑定不可用错误。
 
 `DOLPHIN_CODE_BUILDER_URL` 只适合本地开发 fallback。生产应通过 `DOLPHIN_CODE_CONTROL_PLANE_URL` 打开真实隔离 workspace，避免所有 Code 应用共用同一个本地 builder。
 

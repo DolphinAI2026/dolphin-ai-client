@@ -438,20 +438,11 @@ def _b64_to_pem(b64_key: str) -> str:
 
 
 class APaaSClient:
-    def __init__(
-        self,
-        base_url: Optional[str] = None,
-        tenant_id: Optional[str] = None,
-        token: Optional[str] = None,
-        verify_tls: bool = False,
-        record_call_logs: bool = True,
-    ):
+    def __init__(self, base_url: Optional[str] = None, tenant_id: Optional[str] = None, token: Optional[str] = None):
         from app.config import settings
         self.base_url = (base_url or settings.apaas_base_url).rstrip("/")
         self.tenant_id = (tenant_id or "").strip()
         self.token = token
-        self.verify_tls = verify_tls
-        self.record_call_logs = record_call_logs
         self.user_id = None
 
     def _get_timestamp(self) -> str:
@@ -492,7 +483,7 @@ class APaaSClient:
         _log_request("POST", url, payload)
         start = time.time()
 
-        async with httpx.AsyncClient(verify=self.verify_tls, timeout=45.0) as client:
+        async with httpx.AsyncClient(verify=False, timeout=45.0) as client:
             response = await client.post(
                 url,
                 headers={"Content-Type": "application/json"},
@@ -508,15 +499,7 @@ class APaaSClient:
             response.raise_for_status()
             data = response.json()
 
-            if self.record_call_logs:
-                _log_response(
-                    url,
-                    response.status_code,
-                    data,
-                    elapsed_ms,
-                    method="POST",
-                    request_body=_to_json(payload),
-                )
+            _log_response(url, response.status_code, data, elapsed_ms, method="POST", request_body=_to_json(payload))
 
             if data.get("code") == "ok":
                 self.token = data["data"]["token"]

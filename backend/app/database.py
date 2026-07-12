@@ -61,12 +61,10 @@ async def init_db():
     import app.models.agent_observability  # noqa: F401  — Agent 可观测底座
     # 代码会话 git 远程仓绑定（2026-06-25）— WorkspaceGitRemote
     import app.models.workspace_git  # noqa: F401
-    import app.models.enterprise_auth  # noqa: F401
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
         await _migrate_legacy_builder_specs(conn, inspect)
         await conn.run_sync(Base.metadata.create_all)
-        await _ensure_enterprise_auth_account_auth_generation(conn, inspect)
         # 迁移：确保新列存在（兼容 SQLite 和 MySQL）
         for stmt in [
             "ALTER TABLE applications ADD COLUMN generation_state TEXT",
@@ -222,41 +220,6 @@ async def init_db():
                 await conn.execute(text(idx_stmt))
             except Exception:
                 pass
-
-
-async def _ensure_enterprise_auth_account_auth_generation(
-    conn,
-    inspect_fn,
-) -> None:
-    """Add the durable enterprise authentication CAS generation to old tables."""
-
-    def table_columns(sync_conn) -> set[str]:
-        inspector = inspect_fn(sync_conn)
-        if not inspector.has_table("enterprise_auth_accounts"):
-            return set()
-        return {
-            column["name"]
-            for column in inspector.get_columns("enterprise_auth_accounts")
-        }
-
-    columns = await conn.run_sync(table_columns)
-    if not columns or "auth_generation" in columns:
-        return
-
-    try:
-        await conn.execute(
-            text(
-                "ALTER TABLE enterprise_auth_accounts "
-                "ADD COLUMN auth_generation INTEGER NOT NULL DEFAULT 0"
-            )
-        )
-    except Exception:
-        if conn.dialect.name not in {"sqlite", "mysql"}:
-            raise
-        columns = await conn.run_sync(table_columns)
-        if "auth_generation" in columns:
-            return
-        raise
 
 
 async def _migrate_code_runtime_binding_app_id_nullable(conn, inspect_fn) -> None:

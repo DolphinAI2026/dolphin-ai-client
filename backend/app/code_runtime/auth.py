@@ -130,16 +130,8 @@ def _require_text(payload: dict[str, Any], key: str, stage: str) -> str:
     return value
 
 
-async def login_to_coding_control_plane(
-    username: str,
-    password: str,
-    base_url: str | None = None,
-) -> CodingAuthResult:
-    resolved_base_url = (
-        str(base_url).strip().rstrip("/")
-        if base_url is not None
-        else control_plane_base_url()
-    )
+async def login_to_coding_control_plane(username: str, password: str) -> CodingAuthResult:
+    base_url = control_plane_base_url()
     client_id = _coding_auth_client_id()
     redirect_uri = _coding_auth_redirect_uri()
     scopes = _coding_auth_scopes()
@@ -148,12 +140,12 @@ async def login_to_coding_control_plane(
     try:
         async with httpx.AsyncClient(timeout=30.0) as client:
             login_key = _unwrap_envelope(
-                await client.get(f"{resolved_base_url}/api/auth/login-key"),
+                await client.get(f"{base_url}/api/auth/login-key"),
                 failure_status=503,
             )
             authorization = _unwrap_envelope(
                 await client.post(
-                    f"{resolved_base_url}/api/auth/authorize",
+                    f"{base_url}/api/auth/authorize",
                     json={
                         "responseType": "code",
                         "clientId": client_id,
@@ -172,7 +164,7 @@ async def login_to_coding_control_plane(
             public_key = _require_text(login_key, "publicKey", "login-key")
             login_result = _unwrap_envelope(
                 await client.post(
-                    f"{resolved_base_url}/api/auth/login",
+                    f"{base_url}/api/auth/login",
                     json={
                         "authorizationRequestId": _require_text(
                             authorization,
@@ -193,7 +185,7 @@ async def login_to_coding_control_plane(
 
             token = _unwrap_envelope(
                 await client.post(
-                    f"{resolved_base_url}/api/auth/token",
+                    f"{base_url}/api/auth/token",
                     json={
                         "grantType": "authorization_code",
                         "code": _require_text(login_result, "code", "login"),
@@ -207,7 +199,7 @@ async def login_to_coding_control_plane(
             access_token = _require_text(token, "accessToken", "token")
             current_user = _unwrap_envelope(
                 await client.get(
-                    f"{resolved_base_url}/api/auth/me",
+                    f"{base_url}/api/auth/me",
                     headers={"Authorization": f"Bearer {access_token}"},
                 ),
                 failure_status=401,

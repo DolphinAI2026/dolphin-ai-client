@@ -18,7 +18,6 @@ from app.models.collaboration import ApplicationMember
 from app.models.ai_chat import AIChatSession, CodeRuntimeAgentSession, CodeRuntimeBinding
 
 WorkspaceOpen = Callable[[str, str | None], Awaitable[dict[str, Any]]]
-ControlPlaneTokenResolver = Callable[[], Awaitable[str]]
 
 _EMBED_TOKEN_TYPE = "code_runtime_embed"
 _PROXY_COOKIE_TOKEN_TYPE = "code_runtime_proxy"
@@ -265,8 +264,6 @@ def _rebase_workspace_open_builder_urls(opened: dict[str, Any]) -> dict[str, Any
 def _control_plane_headers(
     authorization_header: str | None = None,
     *,
-    control_plane_token: str | None = None,
-    system_request: bool = False,
     include_content_type: bool = False,
     delegated_context: Any | None = None,
     shell_session_id: int | None = None,
@@ -274,23 +271,16 @@ def _control_plane_headers(
     headers: dict[str, str] = {}
     if include_content_type:
         headers["Content-Type"] = "application/json"
-    token = str(control_plane_token or "").strip()
-    if not token:
-        compatibility_header = str(authorization_header or "").strip()
-        scheme, separator, compatibility_token = compatibility_header.partition(" ")
-        if (
-            separator
-            and scheme.lower() == "bearer"
-            and compatibility_token.strip()
-        ):
-            token = compatibility_token.strip()
-    if not token and system_request:
-        token = (
-            os.getenv("DOLPHIN_CODE_CONTROL_PLANE_TOKEN", "").strip()
-            or (settings.dolphin_code_control_plane_token or "").strip()
-        )
+    token = (
+        os.getenv("DOLPHIN_CODE_CONTROL_PLANE_TOKEN", "").strip()
+        or (settings.dolphin_code_control_plane_token or "").strip()
+    )
     if token:
         headers["Authorization"] = f"Bearer {token}"
+    else:
+        incoming = str(authorization_header or "").strip()
+        if incoming.lower().startswith("bearer "):
+            headers["Authorization"] = incoming
     delegation_secret = (
         os.getenv("DOLPHIN_CODE_CONTROL_PLANE_DELEGATION_SECRET", "").strip()
         or (settings.dolphin_code_control_plane_delegation_secret or "").strip()
@@ -401,8 +391,6 @@ async def list_code_applications(
     page: int = 1,
     page_size: int = 50,
     authorization_header: str | None = None,
-    control_plane_token: str | None = None,
-    system_request: bool = False,
 ) -> dict[str, Any]:
     base_url = control_plane_base_url()
     params: dict[str, Any] = {"page": max(1, int(page or 1)), "pageSize": max(1, int(page_size or 50))}
@@ -414,11 +402,7 @@ async def list_code_applications(
         async with httpx.AsyncClient(timeout=httpx.Timeout(connect=10, read=30, write=10, pool=10)) as client:
             response = await client.get(
                 f"{base_url}/api/applications",
-                headers=_control_plane_headers(
-                    authorization_header,
-                    control_plane_token=control_plane_token,
-                    system_request=system_request,
-                ),
+                headers=_control_plane_headers(authorization_header),
                 params=params,
             )
     except httpx.RequestError as exc:
@@ -443,8 +427,6 @@ async def create_code_application(
     app_code: str,
     seed_project_id: str | None = None,
     authorization_header: str | None = None,
-    control_plane_token: str | None = None,
-    system_request: bool = False,
     delegated_context: Any | None = None,
 ) -> dict[str, Any]:
     name = str(app_name or "").strip()
@@ -469,8 +451,6 @@ async def create_code_application(
                 f"{base_url}/api/applications",
                 headers=_control_plane_headers(
                     authorization_header,
-                    control_plane_token=control_plane_token,
-                    system_request=system_request,
                     include_content_type=True,
                     delegated_context=delegated_context,
                 ),
@@ -504,8 +484,6 @@ async def default_workspace_open(
     handoff_id: str | None = None,
     *,
     authorization_header: str | None = None,
-    control_plane_token: str | None = None,
-    system_request: bool = False,
     delegated_context: Any | None = None,
     shell_session_id: int | None = None,
 ) -> dict[str, Any]:
@@ -518,8 +496,6 @@ async def default_workspace_open(
                 target,
                 headers=_control_plane_headers(
                     authorization_header,
-                    control_plane_token=control_plane_token,
-                    system_request=system_request,
                     include_content_type=True,
                     delegated_context=delegated_context,
                     shell_session_id=shell_session_id,
@@ -547,9 +523,6 @@ async def open_code_session(
     embed_token_factory: Callable[..., str] = create_embed_token,
     handoff_id: str | None = None,
     authorization_header: str | None = None,
-    control_plane_token: str | None = None,
-    control_plane_token_resolver: ControlPlaneTokenResolver | None = None,
-    system_request: bool = False,
 ) -> dict[str, Any]:
     session = await db.get(AIChatSession, int(session_id))
     if not session or session.tenant_id != int(ctx.tenant_id) or session.user_id != int(ctx.user.id):
@@ -566,14 +539,10 @@ async def open_code_session(
     if workspace_open is not None:
         opened = await workspace_open(external_app_id, handoff_id)
     else:
-        if not str(control_plane_token or "").strip() and control_plane_token_resolver is not None:
-            control_plane_token = await control_plane_token_resolver()
         opened = await default_workspace_open(
             external_app_id,
             handoff_id,
             authorization_header=authorization_header,
-            control_plane_token=control_plane_token,
-            system_request=system_request,
             delegated_context=ctx,
             shell_session_id=session.id,
         )

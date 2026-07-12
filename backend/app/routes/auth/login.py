@@ -1,4 +1,3 @@
-import asyncio
 import logging
 import re
 import secrets
@@ -27,10 +26,6 @@ from app.deps import (
 )
 from app.config import settings
 from app.error_messages import SELECT_TOKEN_INVALID, SELECT_TOKEN_EXPIRED
-from app.services.enterprise_auth import (
-    refresh_bound_account_after_login,
-    validate_enterprise_base_url,
-)
 from pydantic import BaseModel
 
 logger = logging.getLogger(__name__)
@@ -124,15 +119,6 @@ def _extract_apaas_user(payload: object, username: str) -> dict:
             if found:
                 return found
     return {"account": username, "username": username}
-
-
-def _extract_apaas_binding_account(user_info: dict, fallback: str) -> str:
-    if isinstance(user_info, dict):
-        for key in ("account", "username", "userName"):
-            value = str(user_info.get(key) or "").strip()
-            if value:
-                return value
-    return str(fallback or "").strip()
 
 
 def _extract_user_display_name(user_info: dict, fallback: str = "") -> str:
@@ -327,86 +313,6 @@ def _is_placeholder_apaas_base_url() -> bool:
 
 
 APAAS_LOGIN_TIMEOUT_SECONDS = 30
-ENTERPRISE_BINDING_REFRESH_TIMEOUT_SECONDS = 10
-
-
-async def _refresh_optional_enterprise_binding(
-    db: AsyncSession,
-    *,
-    source_provider: str,
-    source_base_url: str,
-    source_tenant_ref: str,
-    source_account: str,
-    target_provider: str,
-) -> None:
-    if not settings.auth_account_binding_enabled:
-        return
-
-    identity = {
-        "source_base_url": str(source_base_url or "").strip(),
-        "source_tenant_ref": str(source_tenant_ref or "").strip(),
-        "source_account": str(source_account or "").strip(),
-    }
-    missing_fields = [name for name, value in identity.items() if not value]
-    if missing_fields:
-        logger.info(
-            "enterprise auth secondary refresh skipped source_provider=%s "
-            "target_provider=%s missing_fields=%s",
-            source_provider,
-            target_provider,
-            ",".join(missing_fields),
-        )
-        return
-
-    try:
-        result = await asyncio.wait_for(
-            refresh_bound_account_after_login(
-                db,
-                source_provider=source_provider,
-                source_base_url=identity["source_base_url"],
-                source_tenant_ref=identity["source_tenant_ref"],
-                source_account=identity["source_account"],
-                target_provider=target_provider,
-            ),
-            timeout=ENTERPRISE_BINDING_REFRESH_TIMEOUT_SECONDS,
-        )
-    except TimeoutError as exc:
-        try:
-            await db.rollback()
-        except Exception as rollback_exc:
-            logger.warning(
-                "enterprise auth secondary refresh rollback failed "
-                "source_provider=%s target_provider=%s error_type=%s",
-                source_provider,
-                target_provider,
-                type(rollback_exc).__name__,
-            )
-        logger.warning(
-            "enterprise auth secondary refresh failed source_provider=%s "
-            "target_provider=%s error_type=%s",
-            source_provider,
-            target_provider,
-            type(exc).__name__,
-        )
-        return
-    except Exception as exc:
-        logger.warning(
-            "enterprise auth secondary refresh failed source_provider=%s "
-            "target_provider=%s error_type=%s",
-            source_provider,
-            target_provider,
-            type(exc).__name__,
-        )
-        return
-
-    if getattr(result, "account", None) is None:
-        logger.info(
-            "enterprise auth secondary refresh unavailable source_provider=%s "
-            "target_provider=%s code=%s",
-            source_provider,
-            target_provider,
-            getattr(result, "code", "UNKNOWN"),
-        )
 
 
 def _extract_login_error_message(*payloads: object) -> str:
@@ -773,8 +679,7 @@ async def _upsert_user_credential(
     db: AsyncSession,
     user: User,
     tenant: Tenant,
-    source_base_url: str,
-    source_account: str,
+    username: str,
     password: str,
     token: str,
     apaas_user_id: Optional[str],
@@ -793,8 +698,8 @@ async def _upsert_user_credential(
             user_id=user.id,
             local_tenant_id=tenant.id,
             apaas_tenant_id=apaas_tenant_id,
-            base_url=source_base_url,
-            account=source_account,
+            base_url=_normalize_apaas_origin(settings.apaas_base_url),
+            account=username,
             password_enc=encrypt_password(password),
         )
         db.add(row)
@@ -802,8 +707,8 @@ async def _upsert_user_credential(
         row.password_enc = encrypt_password(password)
     row.apaas_user_id = apaas_user_id
     row.apaas_tenant_id = apaas_tenant_id
-    row.base_url = source_base_url
-    row.account = source_account
+    row.base_url = _normalize_apaas_origin(settings.apaas_base_url)
+    row.account = username
     row.token = token
     row.token_expire_at = _decode_jwt_exp(token)
     row.status = "connected"
@@ -896,10 +801,6 @@ async def _try_apaas_login_flow(user_data: UserLogin, db: AsyncSession) -> Optio
         return None
 
     user_info = _extract_apaas_user(backend_payload or platform_payload, username)
-    binding_source_account = _extract_apaas_binding_account(user_info, username)
-    binding_source_base_url = validate_enterprise_base_url(
-        settings.apaas_base_url
-    )
     if platform_probe_failed and not is_platform_admin:
         is_platform_admin = await _has_cached_platform_admin_identity(db, username, user_info)
 
@@ -950,17 +851,14 @@ async def _try_apaas_login_flow(user_data: UserLogin, db: AsyncSession) -> Optio
             user.apaas_token = backend_token
             user.apaas_tenant_id = tenant.apaas_tenant_id_str
             await _upsert_user_credential(
-                db=db,
-                user=user,
-                tenant=tenant,
-                source_base_url=binding_source_base_url,
-                source_account=binding_source_account,
-                password=password,
-                token=backend_token,
-                apaas_user_id=user.apaas_user_id,
-                apaas_tenant_id=(
-                    tenant.apaas_tenant_id_str or _tenant_item_id(item)
-                ),
+                db,
+                user,
+                tenant,
+                username,
+                password,
+                backend_token,
+                user.apaas_user_id,
+                tenant.apaas_tenant_id_str or _tenant_item_id(item),
             )
         await _sync_user_membership(
             db,
@@ -993,7 +891,7 @@ async def _try_apaas_login_flow(user_data: UserLogin, db: AsyncSession) -> Optio
             apaas_user_id=user.apaas_user_id,
             apaas_tenant_id=selected.apaas_tenant_id_str or user.apaas_tenant_id,
         )
-        response = LoginResponse(
+        return LoginResponse(
             access_token=access_token,
             tenants=[
                 TenantOption(tenant_id=t.id, tenant_name=t.tenant_name, tenant_code=t.tenant_code)
@@ -1003,33 +901,15 @@ async def _try_apaas_login_flow(user_data: UserLogin, db: AsyncSession) -> Optio
             is_platform_admin=is_platform_admin,
             has_tenant_context=True,
         )
-        await _refresh_optional_enterprise_binding(
-            db,
-            source_provider="apaas",
-            source_base_url=binding_source_base_url,
-            source_tenant_ref=selected.apaas_tenant_id_str or user.apaas_tenant_id or default_tenant_id,
-            source_account=binding_source_account,
-            target_provider="control_plane",
-        )
-        return response
 
     if is_platform_admin:
         access_token = create_access_token(user, tenant_id=None, apaas_user_id=user.apaas_user_id)
-        response = LoginResponse(
+        return LoginResponse(
             access_token=access_token,
             entry_path="/platform-admin",
             is_platform_admin=True,
             has_tenant_context=False,
         )
-        await _refresh_optional_enterprise_binding(
-            db,
-            source_provider="apaas",
-            source_base_url=binding_source_base_url,
-            source_tenant_ref=default_tenant_id,
-            source_account=binding_source_account,
-            target_provider="control_plane",
-        )
-        return response
 
     return None
 
@@ -1041,15 +921,11 @@ def _auth_provider() -> str:
         "own": "local",
         "native": "local",
         "builtin": "local",
-        "coding": "control_plane",
     }.get(provider, provider)
-    if provider not in ("", "local", "apaas", "control_plane"):
+    if provider not in ("", "local", "apaas", "coding"):
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=(
-                "AUTH_PROVIDER must be one of local, apaas, control_plane "
-                "(coding is a compatibility alias)"
-            ),
+            detail="AUTH_PROVIDER must be one of local, apaas, coding",
         )
     return provider
 
@@ -1235,7 +1111,7 @@ def _coding_roles_include_admin(roles: list[str]) -> bool:
 async def _ensure_coding_user(
     db: AsyncSession,
     identity: CodingAuthResult,
-) -> tuple[User, Tenant]:
+) -> User:
     user = None
     if identity.external_user_id:
         user = (
@@ -1296,25 +1172,14 @@ async def _ensure_coding_user(
         membership.status = 1
         membership.is_default = True
     await db.flush()
-    return user, tenant
+    return user
 
 
 async def _coding_login_response(user_data: UserLogin, db: AsyncSession) -> LoginResponse:
     identity = await login_to_coding_control_plane(user_data.username, user_data.password)
-    user, tenant = await _ensure_coding_user(db, identity)
-    # 企业绑定按 Builder 默认本地租户编码对齐，不改变 Control Plane 认证协议。
-    source_tenant_ref = tenant.tenant_code
+    user = await _ensure_coding_user(db, identity)
     await db.commit()
-    response = await _issue_login_response_for_user(db, user)
-    await _refresh_optional_enterprise_binding(
-        db,
-        source_provider="control_plane",
-        source_base_url=control_plane_base_url(),
-        source_tenant_ref=source_tenant_ref,
-        source_account=identity.username,
-        target_provider="apaas",
-    )
-    return response
+    return await _issue_login_response_for_user(db, user)
 
 
 async def _try_apaas_provider_login_response(
@@ -1368,7 +1233,7 @@ async def login(
     if provider == "local":
         return await _local_login_response(user_data, db)
 
-    if provider == "control_plane":
+    if provider == "coding":
         return await _coding_login_response(user_data, db)
 
     apaas_response = await _try_apaas_provider_login_response(user_data, db)

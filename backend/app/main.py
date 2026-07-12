@@ -5,7 +5,6 @@ import os
 import time
 from pathlib import Path
 from fastapi import FastAPI
-from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from starlette.exceptions import HTTPException as StarletteHTTPException
@@ -31,7 +30,6 @@ from app.routes import (
     current_app,
     db_connections,
     desktop_auth,
-    enterprise_auth,
     generation_steps,
     git_connection,
     harness,
@@ -139,18 +137,6 @@ app = FastAPI(
     version=APP_VERSION,
     lifespan=lifespan
 )
-app.add_exception_handler(
-    RequestValidationError,
-    enterprise_auth.enterprise_auth_validation_exception_handler,
-)
-app.add_exception_handler(
-    enterprise_auth.EnterpriseAuthAPIError,
-    enterprise_auth.enterprise_auth_api_exception_handler,
-)
-app.add_exception_handler(
-    StarletteHTTPException,
-    enterprise_auth.enterprise_auth_http_exception_handler,
-)
 
 # CORS配置
 cors_origins = [
@@ -173,7 +159,6 @@ app.include_router(conversations.router, prefix="/api")
 app.include_router(chat.router, prefix="/api")
 app.include_router(ai_chat.router, prefix="/api")
 app.include_router(knowledge.router, prefix="/api")
-app.include_router(enterprise_auth.router, prefix="/api")
 app.include_router(skills_routes.router, prefix="/api")
 app.include_router(agent_observability.router, prefix="/api")
 app.include_router(applications.router, prefix="/api")

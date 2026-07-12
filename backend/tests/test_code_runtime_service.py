@@ -86,67 +86,14 @@ def test_control_plane_base_url_defaults_to_local_dev_port(monkeypatch):
     assert control_plane_base_url() == "http://127.0.0.1:8080"
 
 
-def test_control_plane_headers_prefer_explicit_user_token(monkeypatch):
-    from app.code_runtime import service
-
-    monkeypatch.setenv("DOLPHIN_CODE_CONTROL_PLANE_TOKEN", "service-token")
-
-    headers = service._control_plane_headers(
-        "Bearer compatibility-token",
-        control_plane_token="bound-user-token",
-    )
-
-    assert headers["Authorization"] == "Bearer bound-user-token"
-
-
-def test_control_plane_headers_use_service_token_only_for_system_request(monkeypatch):
+def test_control_plane_headers_use_settings_token_when_env_is_unset(monkeypatch):
     from app.config import settings
     from app.code_runtime import service
 
     monkeypatch.delenv("DOLPHIN_CODE_CONTROL_PLANE_TOKEN", raising=False)
     monkeypatch.setattr(settings, "dolphin_code_control_plane_token", "settings-token", raising=False)
 
-    assert "Authorization" not in service._control_plane_headers()
-    assert (
-        service._control_plane_headers(system_request=True)["Authorization"]
-        == "Bearer settings-token"
-    )
-
-
-def test_control_plane_headers_accept_explicit_bearer_authorization_compatibility(
-    monkeypatch,
-):
-    from app.config import settings
-    from app.code_runtime import service
-
-    monkeypatch.delenv("DOLPHIN_CODE_CONTROL_PLANE_TOKEN", raising=False)
-    monkeypatch.setattr(
-        settings,
-        "dolphin_code_control_plane_token",
-        "",
-        raising=False,
-    )
-
-    headers = service._control_plane_headers("Bearer builder-jwt")
-
-    assert headers["Authorization"] == "Bearer builder-jwt"
-
-
-def test_control_plane_headers_reject_non_bearer_authorization_compatibility(
-    monkeypatch,
-):
-    from app.config import settings
-    from app.code_runtime import service
-
-    monkeypatch.delenv("DOLPHIN_CODE_CONTROL_PLANE_TOKEN", raising=False)
-    monkeypatch.setattr(
-        settings,
-        "dolphin_code_control_plane_token",
-        "",
-        raising=False,
-    )
-
-    assert "Authorization" not in service._control_plane_headers("Basic credentials")
+    assert service._control_plane_headers("Bearer user-token")["Authorization"] == "Bearer settings-token"
 
 
 def test_control_plane_headers_include_delegation_secret(monkeypatch):
@@ -311,19 +258,14 @@ async def test_list_code_applications_fetches_and_maps_control_plane_apps(monkey
             return FakeResponse()
 
     monkeypatch.setenv("DOLPHIN_CODE_CONTROL_PLANE_URL", "https://code.example.com/control-plane")
-    monkeypatch.setenv("DOLPHIN_CODE_CONTROL_PLANE_TOKEN", "service-token")
+    monkeypatch.setenv("DOLPHIN_CODE_CONTROL_PLANE_TOKEN", "cp-token")
     monkeypatch.setattr(service.httpx, "AsyncClient", FakeClient)
 
-    result = await service.list_code_applications(
-        keyword="crm",
-        page=2,
-        page_size=5,
-        control_plane_token="bound-user-token",
-    )
+    result = await service.list_code_applications(keyword="crm", page=2, page_size=5)
 
     assert calls == [{
         "url": "https://code.example.com/control-plane/api/applications",
-        "headers": {"Authorization": "Bearer bound-user-token"},
+        "headers": {"Authorization": "Bearer cp-token"},
         "params": {"page": 2, "pageSize": 5, "keyword": "crm"},
     }]
     assert result["page"] == 2
@@ -389,22 +331,18 @@ async def test_create_code_application_posts_to_control_plane_with_default_seed(
             return FakeResponse()
 
     monkeypatch.setenv("DOLPHIN_CODE_CONTROL_PLANE_URL", "https://code.example.com/control-plane")
-    monkeypatch.setenv("DOLPHIN_CODE_CONTROL_PLANE_TOKEN", "service-token")
+    monkeypatch.setenv("DOLPHIN_CODE_CONTROL_PLANE_TOKEN", "cp-token")
     monkeypatch.delenv("DOLPHIN_CODE_DEFAULT_SEED_PROJECT_ID", raising=False)
     monkeypatch.setattr(service.httpx, "AsyncClient", FakeClient)
 
     result = await service.create_code_application(
         app_name="销售线索评分助手",
         app_code="sales-lead-helper",
-        control_plane_token="bound-user-token",
     )
 
     assert calls == [{
         "url": "https://code.example.com/control-plane/api/applications",
-        "headers": {
-            "Authorization": "Bearer bound-user-token",
-            "Content-Type": "application/json",
-        },
+        "headers": {"Authorization": "Bearer cp-token", "Content-Type": "application/json"},
         "json": {
             "appCode": "sales-lead-helper",
             "appName": "销售线索评分助手",
@@ -460,18 +398,15 @@ async def test_create_code_application_uses_seed_project_override(monkeypatch):
         app_name="库存助手",
         app_code="inventory-copilot",
         seed_project_id="90002",
-        authorization_header="Bearer builder-jwt",
-        control_plane_token="bound-user-token",
+        authorization_header="Bearer user-token",
     )
 
-    assert calls[0]["headers"]["Authorization"] == "Bearer bound-user-token"
+    assert calls[0]["headers"]["Authorization"] == "Bearer user-token"
     assert calls[0]["json"]["seedProjectId"] == "90002"
 
 
 @pytest.mark.asyncio
-async def test_default_workspace_open_accepts_explicit_bearer_authorization_compatibility(
-    monkeypatch,
-):
+async def test_default_workspace_open_forwards_request_authorization_when_no_service_token(monkeypatch):
     from app.config import settings
     from app.code_runtime import service
 
@@ -503,16 +438,13 @@ async def test_default_workspace_open_accepts_explicit_bearer_authorization_comp
     monkeypatch.setattr(settings, "dolphin_code_control_plane_token", "")
     monkeypatch.setattr(service.httpx, "AsyncClient", FakeClient)
 
-    await service.default_workspace_open(
-        "code-app-1",
-        authorization_header="Bearer builder-jwt",
-    )
+    await service.default_workspace_open("code-app-1", authorization_header="Bearer user-token")
 
-    assert calls[0]["headers"]["Authorization"] == "Bearer builder-jwt"
+    assert calls[0]["headers"]["Authorization"] == "Bearer user-token"
 
 
 @pytest.mark.asyncio
-async def test_default_workspace_open_sends_user_token_and_delegated_identity(monkeypatch):
+async def test_default_workspace_open_sends_delegated_identity_with_service_token(monkeypatch):
     from app.code_runtime import service
 
     calls: list[dict] = []
@@ -547,20 +479,19 @@ async def test_default_workspace_open_sends_user_token_and_delegated_identity(mo
     )
 
     monkeypatch.setenv("DOLPHIN_CODE_CONTROL_PLANE_URL", "https://code.example.com/control-plane")
-    monkeypatch.setenv("DOLPHIN_CODE_CONTROL_PLANE_TOKEN", "service-token")
+    monkeypatch.setenv("DOLPHIN_CODE_CONTROL_PLANE_TOKEN", "cp-token")
     monkeypatch.setenv("DOLPHIN_CODE_CONTROL_PLANE_DELEGATION_SECRET", "shared-secret")
     monkeypatch.setattr(service.httpx, "AsyncClient", FakeClient)
 
     await service.default_workspace_open(
         "code-app-1",
-        authorization_header="Bearer builder-jwt",
-        control_plane_token="bound-user-token",
+        authorization_header="Bearer user-token",
         delegated_context=ctx,
         shell_session_id=42,
     )
 
     headers = calls[0]["headers"]
-    assert headers["Authorization"] == "Bearer bound-user-token"
+    assert headers["Authorization"] == "Bearer cp-token"
     assert headers["X-AI-Builder-Delegation-Secret"] == "shared-secret"
     assert headers["X-AI-Builder-Delegated-User-Id"] == "100169876816012509184"
     assert headers["X-AI-Builder-Delegated-Tenant-Id"] == "844246516607483905"
@@ -871,8 +802,6 @@ async def test_open_code_session_passes_auth_context_to_control_plane_open(db_se
         handoff_id: str | None = None,
         *,
         authorization_header: str | None = None,
-        control_plane_token: str | None = None,
-        system_request: bool = False,
         delegated_context=None,
         shell_session_id: int | None = None,
     ):
@@ -880,8 +809,6 @@ async def test_open_code_session_passes_auth_context_to_control_plane_open(db_se
             "external_application_id": external_application_id,
             "handoff_id": handoff_id,
             "authorization_header": authorization_header,
-            "control_plane_token": control_plane_token,
-            "system_request": system_request,
             "delegated_context": delegated_context,
             "shell_session_id": shell_session_id,
         })
@@ -892,13 +819,6 @@ async def test_open_code_session_passes_auth_context_to_control_plane_open(db_se
         }
 
     monkeypatch.setattr(service, "default_workspace_open", fake_default_workspace_open)
-    resolver_calls = 0
-
-    async def resolve_control_plane_token():
-        nonlocal resolver_calls
-        resolver_calls += 1
-        return "bound-user-token"
-
     ctx = SimpleNamespace(
         user=SimpleNamespace(id=11, username="admin", display_name="管理员"),
         tenant_id=7,
@@ -911,16 +831,12 @@ async def test_open_code_session_passes_auth_context_to_control_plane_open(db_se
         db=db_session,
         session_id=session.id,
         ctx=ctx,
-        authorization_header="Bearer builder-jwt",
-        control_plane_token_resolver=resolve_control_plane_token,
+        authorization_header="Bearer user-token",
         embed_token_factory=lambda **_: "dolphin-embed",
     )
 
-    assert resolver_calls == 1
     assert captured["external_application_id"] == "code-app-1"
-    assert captured["authorization_header"] == "Bearer builder-jwt"
-    assert captured["control_plane_token"] == "bound-user-token"
-    assert captured["system_request"] is False
+    assert captured["authorization_header"] == "Bearer user-token"
     assert captured["delegated_context"] is ctx
     assert captured["shell_session_id"] == session.id
 
@@ -952,15 +868,12 @@ async def test_open_code_session_rejects_low_code_app(db_session):
     await db_session.commit()
     await db_session.refresh(session)
 
-    async def unexpected_token_resolution():
-        raise AssertionError("local app validation must run first")
-
     with pytest.raises(HTTPException) as exc:
         await open_code_session(
             db=db_session,
             session_id=session.id,
             ctx=SimpleNamespace(user=SimpleNamespace(id=11), tenant_id=7, tenant_role="member"),
-            control_plane_token_resolver=unexpected_token_resolution,
+            workspace_open=lambda *_args, **_kwargs: None,
         )
 
     assert exc.value.status_code == 400
@@ -983,15 +896,12 @@ async def test_open_code_session_rejects_non_code_session(db_session):
     await db_session.commit()
     await db_session.refresh(session)
 
-    async def unexpected_token_resolution():
-        raise AssertionError("local mode validation must run first")
-
     with pytest.raises(HTTPException) as exc:
         await open_code_session(
             db=db_session,
             session_id=session.id,
             ctx=SimpleNamespace(user=SimpleNamespace(id=11), tenant_id=7, tenant_role="member"),
-            control_plane_token_resolver=unexpected_token_resolution,
+            workspace_open=lambda *_args, **_kwargs: None,
         )
 
     assert exc.value.status_code == 400
