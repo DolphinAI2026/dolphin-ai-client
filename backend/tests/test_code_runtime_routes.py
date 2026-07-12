@@ -210,10 +210,11 @@ async def test_create_code_runtime_application_delegates_to_control_plane(
         }
 
     monkeypatch.setattr(code_runtime_routes, "create_code_application", fake_create_code_application)
-    monkeypatch.setattr(settings, "control_plane_binding_enabled", True)
+    monkeypatch.setattr(settings, "auth_provider", "control_plane")
+    monkeypatch.setattr(settings, "control_plane_binding_enabled", False)
     ctx = _ctx()
     store_control_plane_credentials(ctx.user, "user-token")
-    ctx.apaas_tenant_id = "apaas-tenant-7"
+    ctx.user.coding_tenant_id = "default"
 
     result = await create_code_runtime_application(
         CreateCodeApplicationRequest(
@@ -233,7 +234,7 @@ async def test_create_code_runtime_application_delegates_to_control_plane(
         "seed_project_id": "90001",
         "authorization_header": "Bearer user-token",
         "delegated_context": ctx,
-        "auth_provider": "builder-control-plane",
+        "auth_provider": None,
     }]
 
 
@@ -263,6 +264,7 @@ async def test_control_plane_request_refreshes_expired_user_token(
     store_control_plane_credentials(user, expired, "refresh-token")
     db_session.add(user)
     await db_session.flush()
+    user.coding_tenant_id = "default"
     ctx = SimpleNamespace(user=user, apaas_tenant_id="apaas-tenant-1")
 
     async def fake_refresh(refresh_token):
@@ -272,7 +274,8 @@ async def test_control_plane_request_refreshes_expired_user_token(
             refresh_token="fresh-refresh-token",
         )
 
-    monkeypatch.setattr(settings, "control_plane_binding_enabled", True)
+    monkeypatch.setattr(settings, "auth_provider", "control_plane")
+    monkeypatch.setattr(settings, "control_plane_binding_enabled", False)
     monkeypatch.setattr(code_runtime_routes, "refresh_control_plane_token", fake_refresh)
 
     authorization, provider = await code_runtime_routes._control_plane_request_auth(
@@ -282,7 +285,7 @@ async def test_control_plane_request_refreshes_expired_user_token(
     )
 
     assert authorization == "Bearer fresh-access-token"
-    assert provider == "builder-control-plane"
+    assert provider is None
     assert control_plane_access_token(user) == "fresh-access-token"
 
 

@@ -75,6 +75,7 @@ async def init_db():
             "ALTER TABLE users ADD COLUMN apaas_base_url VARCHAR(255)",
             "ALTER TABLE users ADD COLUMN apaas_tenant_id VARCHAR(50)",
             "ALTER TABLE users ADD COLUMN coding_user_id VARCHAR(80)",
+            "ALTER TABLE users ADD COLUMN coding_tenant_id VARCHAR(80)",
             "ALTER TABLE users ADD COLUMN coding_base_url VARCHAR(255)",
             "ALTER TABLE users ADD COLUMN coding_access_token TEXT",
             "ALTER TABLE users ADD COLUMN coding_refresh_token TEXT",

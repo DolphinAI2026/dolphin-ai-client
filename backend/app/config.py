@@ -25,9 +25,11 @@ class Settings(BaseSettings):
     # aPaaS Platform
     # 登录方式：control_plane 或 apaas。local/coding 仅保留旧部署兼容。
     auth_provider: str = ""
-    # 可选项：开启后，登录必须完成 aPaaS 与 Control Plane 账号/租户绑定并换取用户 Token。
-    # 默认关闭；关闭时不影响现有 aPaaS 登录。
+    # 可选项：开启后，Dolphin 登录账号必须已在平台管理绑定本地租户和 aPaaS 环境。
+    # 默认关闭；关闭时按 Dolphin 当前租户自动创建/复用本地租户上下文。
     control_plane_binding_enabled: bool = False
+    # 可选项：Dolphin 大平台认证地址；默认使用线上大平台。
+    dolphin_workspace_base_url: str = "https://dolphin.dfy.definesys.cn"
     apaas_base_url: str = ""
     # 桌面 sidecar: 公网账号权威地址(authority)。空=本实例自身就是 authority。
     public_account_base_url: str = ""
@@ -132,9 +134,6 @@ class Settings(BaseSettings):
     dolphin_code_control_plane_delegation_secret: str = ""
     dolphin_code_builder_url: str = ""
     dolphin_code_default_seed_project_id: str = "1781233861147"
-    dolphin_code_auth_client_id: str = "control-plane-console"
-    dolphin_code_auth_redirect_uri: str = "http://localhost/auth/callback"
-    dolphin_code_auth_scopes: str = "profile,admin:control-plane"
 
     # ai-builder 自身的对外 chat URL — 给外部 MCP 客户端生成 deeplink 时用。
     # 外部 agent 把 md push 到 cache 后，工具返回值带

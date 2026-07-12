@@ -1,35 +1,23 @@
 import pytest
 
 
+class FakeResponse:
+    status_code = 200
+    text = ""
+
+    def __init__(self, payload):
+        self._payload = payload
+
+    def json(self):
+        return self._payload
+
+
 @pytest.mark.asyncio
-async def test_login_to_control_plane_runs_builder_password_oauth_chain(monkeypatch):
-    from cryptography.hazmat.primitives import serialization
-    from cryptography.hazmat.primitives.asymmetric import rsa
-
-    from app.config import settings
+async def test_fetch_dolphin_captcha_uses_full_workspace_auth_api(monkeypatch):
     from app.code_runtime import auth as coding_auth
+    from app.config import settings
 
-    private_key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
-    public_pem = (
-        private_key.public_key()
-        .public_bytes(
-            encoding=serialization.Encoding.PEM,
-            format=serialization.PublicFormat.SubjectPublicKeyInfo,
-        )
-        .decode("ascii")
-    )
-    public_body = coding_auth.normalize_spki_public_key_body(public_pem)
     calls = []
-
-    class FakeResponse:
-        status_code = 200
-        text = ""
-
-        def __init__(self, payload):
-            self._payload = payload
-
-        def json(self):
-            return self._payload
 
     class FakeClient:
         def __init__(self, *args, **kwargs):
@@ -42,130 +30,35 @@ async def test_login_to_control_plane_runs_builder_password_oauth_chain(monkeypa
             return False
 
         async def get(self, url, **kwargs):
-            calls.append(("GET", url, kwargs))
-            if url.endswith("/api/builder-auth/oauth/login-key"):
-                return FakeResponse({
-                    "code": "OK",
-                    "data": {
-                        "keyId": "key-1",
-                        "algorithm": "RSA",
-                        "publicKey": public_pem,
-                        "status": "ACTIVE",
-                    },
-                })
-            if url.endswith("/api/builder-auth/me"):
-                assert kwargs["headers"]["Authorization"] == "Bearer access-1"
-                assert kwargs["headers"]["X-Auth-Provider"] == "builder-control-plane"
-                return FakeResponse({
-                    "code": "OK",
-                    "data": {
-                        "userId": "user-1",
-                        "username": "system_admin",
-                        "displayName": "System Admin",
-                        "roles": ["ADMIN"],
-                        "status": "ENABLED",
-                    },
-                })
-            raise AssertionError(url)
-
-        async def post(self, url, **kwargs):
-            calls.append(("POST", url, kwargs))
-            body = kwargs.get("json") or {}
-            if url.endswith("/api/builder-auth/oauth/authorize"):
-                assert "clientId" not in body
-                assert "redirectUri" not in body
-                assert body["scopes"] == ["profile", "admin:control-plane"]
-                return FakeResponse({
-                    "code": "OK",
-                    "data": {
-                        "loginRequired": True,
-                        "authorizationRequestId": "authz-1",
-                        "state": body["state"],
-                    },
-                })
-            if url.endswith("/api/builder-auth/oauth/login"):
-                assert body["authorizationRequestId"] == "authz-1"
-                assert body["username"] == "system_admin"
-                assert body["encryptedPassword"] != "password"
-                assert body["keyId"] == "key-1"
-                assert kwargs["headers"]["rsa-public-key"] == public_body
-                authorize_body = calls[1][2]["json"]
-                return FakeResponse({
-                    "code": "OK",
-                    "data": {
-                        "code": "auth-code-1",
-                        "state": authorize_body["state"],
-                        "sessionId": "session-1",
-                    },
-                })
-            if url.endswith("/api/builder-auth/oauth/token"):
-                assert body["grantType"] == "authorization_code"
-                assert body["code"] == "auth-code-1"
-                assert "clientId" not in body
-                assert "redirectUri" not in body
-                assert body["codeVerifier"]
-                return FakeResponse({
-                    "code": "OK",
-                    "data": {
-                        "accessToken": "access-1",
-                        "tokenType": "Bearer",
-                        "expiresIn": 3600,
-                        "refreshToken": "refresh-1",
-                        "refreshExpiresIn": 7200,
-                        "scopes": ["profile", "admin:control-plane"],
-                    },
-                })
-            raise AssertionError(url)
+            calls.append((url, kwargs))
+            return FakeResponse({
+                "captcha_id": "captcha-1",
+                "image_data": "data:image/svg+xml;base64,PHN2Zy8+",
+            })
 
     monkeypatch.setattr(coding_auth.httpx, "AsyncClient", FakeClient)
-    monkeypatch.setenv("DOLPHIN_CODE_CONTROL_PLANE_URL", "https://code.example.com")
-    monkeypatch.setattr(settings, "dolphin_code_auth_scopes", "profile,admin:control-plane", raising=False)
+    monkeypatch.setattr(
+        settings,
+        "dolphin_workspace_base_url",
+        "https://dolphin.example.com/",
+        raising=False,
+    )
 
-    result = await coding_auth.login_to_control_plane("system_admin", "password")
+    result = await coding_auth.fetch_dolphin_captcha()
 
-    assert result.username == "system_admin"
-    assert result.display_name == "System Admin"
-    assert result.external_user_id == "user-1"
-    assert result.roles == ["ADMIN"]
-    assert result.access_token == "access-1"
-    assert result.refresh_token == "refresh-1"
-    assert [method for method, _url, _kwargs in calls] == ["GET", "POST", "POST", "POST", "GET"]
+    assert result == {
+        "captcha_id": "captcha-1",
+        "image_data": "data:image/svg+xml;base64,PHN2Zy8+",
+    }
+    assert calls == [("https://dolphin.example.com/api/auth/captcha", {})]
 
 
 @pytest.mark.asyncio
-async def test_exchange_apaas_identity_returns_binding_challenge(monkeypatch):
-    from app.code_runtime import auth as control_plane_auth
+async def test_login_to_control_plane_uses_dolphin_token_and_current_user(monkeypatch):
+    from app.code_runtime import auth as coding_auth
+    from app.config import settings
 
     calls = []
-
-    class FakeResponse:
-        status_code = 200
-        text = ""
-
-        def __init__(self, data):
-            self.data = data
-
-        def json(self):
-            return {
-                "code": "OK",
-                "data": self.data,
-            }
-
-    exchange_data = {
-        "status": "BINDING_REQUIRED",
-        "bindingChallenge": "challenge-1",
-        "errorCode": "ACCOUNT_BINDING_REQUIRED",
-        "message": "Binding is required",
-        "traceId": "trace-1",
-    }
-    bind_data = {
-        "bound": True,
-        "tokenResponse": {
-            "accessToken": "bound-access-token",
-            "refreshToken": "bound-refresh-token",
-        },
-        "traceId": "trace-1",
-    }
 
     class FakeClient:
         def __init__(self, *args, **kwargs):
@@ -178,40 +71,137 @@ async def test_exchange_apaas_identity_returns_binding_challenge(monkeypatch):
             return False
 
         async def post(self, url, **kwargs):
-            calls.append((url, kwargs))
-            if url.endswith("/api/builder-auth/federation/apaas/bind"):
-                return FakeResponse(bind_data)
-            return FakeResponse(exchange_data)
+            calls.append(("POST", url, kwargs))
+            assert url == "https://dolphin.example.com/api/auth/login"
+            assert kwargs["json"] == {
+                "username": "admin",
+                "password": "password",
+                "captcha_id": "captcha-1",
+                "captcha_code": "0854",
+            }
+            return FakeResponse({
+                "access_token": "access-1",
+                "refresh_token": "refresh-1",
+                "token_type": "bearer",
+                "requires_tenant_selection": False,
+            })
 
-    monkeypatch.setattr(control_plane_auth.httpx, "AsyncClient", FakeClient)
-    monkeypatch.setenv("DOLPHIN_CODE_CONTROL_PLANE_URL", "https://code.example.com")
+        async def get(self, url, **kwargs):
+            calls.append(("GET", url, kwargs))
+            assert url == "https://dolphin.example.com/api/auth/me"
+            assert kwargs["headers"] == {"Authorization": "Bearer access-1"}
+            return FakeResponse({
+                "id": 7,
+                "username": "admin",
+                "nickname": "Platform Admin",
+                "role": "platform_admin",
+                "tenant_id": "default",
+                "tenant_name": "Default Tenant",
+                "tenants": [{
+                    "tenant_id": "default",
+                    "tenant_name": "Default Tenant",
+                    "is_default": True,
+                }],
+            })
 
-    result = await control_plane_auth.exchange_apaas_identity("apaas-token", "tenant-1")
-
-    assert result.status == "BINDING_REQUIRED"
-    assert result.binding_challenge == "challenge-1"
-    bound = await control_plane_auth.bind_apaas_identity(
-        result.binding_challenge,
-        "control-plane-proof",
-        "tenant-1",
-        result.trace_id,
+    monkeypatch.setattr(coding_auth.httpx, "AsyncClient", FakeClient)
+    monkeypatch.setattr(
+        settings,
+        "dolphin_workspace_base_url",
+        "https://dolphin.example.com",
+        raising=False,
     )
 
-    assert bound.access_token == "bound-access-token"
-    assert calls[0][0] == "https://code.example.com/api/builder-auth/federation/apaas/exchange"
-    assert calls[0][1]["json"] == {
-        "subjectToken": "apaas-token",
-        "tenantId": "tenant-1",
-    }
-    assert calls[0][1]["headers"]["X-Trace-Id"]
-    assert calls[1] == (
-        "https://code.example.com/api/builder-auth/federation/apaas/bind",
-        {
-            "json": {
-                "bindingChallenge": "challenge-1",
-                "controlPlaneProofToken": "control-plane-proof",
-                "tenantId": "tenant-1",
-            },
-            "headers": {"X-Trace-Id": result.trace_id},
-        },
+    result = await coding_auth.login_to_control_plane(
+        "admin",
+        "password",
+        "captcha-1",
+        "0854",
     )
+
+    assert result.username == "admin"
+    assert result.display_name == "Platform Admin"
+    assert result.external_user_id == "7"
+    assert result.roles == ["platform_admin"]
+    assert result.tenant_id == "default"
+    assert result.access_token == "access-1"
+    assert result.refresh_token == "refresh-1"
+    assert [method for method, _url, _kwargs in calls] == ["POST", "GET"]
+
+
+@pytest.mark.asyncio
+async def test_refresh_control_plane_token_uses_dolphin_refresh_api(monkeypatch):
+    from app.code_runtime import auth as coding_auth
+    from app.config import settings
+
+    class FakeClient:
+        def __init__(self, *args, **kwargs):
+            pass
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *_args):
+            return False
+
+        async def post(self, url, **kwargs):
+            assert url == "https://dolphin.example.com/api/auth/refresh"
+            assert kwargs["json"] == {"refresh_token": "refresh-1"}
+            return FakeResponse({
+                "access_token": "access-2",
+                "refresh_token": "refresh-2",
+            })
+
+    monkeypatch.setattr(coding_auth.httpx, "AsyncClient", FakeClient)
+    monkeypatch.setattr(
+        settings,
+        "dolphin_workspace_base_url",
+        "https://dolphin.example.com",
+        raising=False,
+    )
+
+    result = await coding_auth.refresh_control_plane_token("refresh-1")
+
+    assert result.access_token == "access-2"
+    assert result.refresh_token == "refresh-2"
+
+
+@pytest.mark.asyncio
+async def test_exchange_apaas_token_uses_dolphin_binding_api(monkeypatch):
+    from app.code_runtime import auth as coding_auth
+    from app.config import settings
+
+    class FakeClient:
+        def __init__(self, *args, **kwargs):
+            pass
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *_args):
+            return False
+
+        async def post(self, url, **kwargs):
+            assert url == "https://dolphin.example.com/api/auth/apaas/exchange"
+            assert kwargs["json"] == {
+                "apaas_token": "apaas-token",
+                "apaas_tenant_id": "apaas-tenant-1",
+            }
+            return FakeResponse({
+                "access_token": "workspace-access",
+                "refresh_token": "workspace-refresh",
+                "tenant_id": "default",
+            })
+
+    monkeypatch.setattr(coding_auth.httpx, "AsyncClient", FakeClient)
+    monkeypatch.setattr(
+        settings,
+        "dolphin_workspace_base_url",
+        "https://dolphin.example.com",
+    )
+
+    result = await coding_auth.exchange_apaas_token("apaas-token", "apaas-tenant-1")
+
+    assert result.access_token == "workspace-access"
+    assert result.refresh_token == "workspace-refresh"
+    assert result.tenant_id == "default"

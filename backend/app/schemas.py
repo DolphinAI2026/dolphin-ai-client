@@ -8,6 +8,8 @@ from datetime import datetime
 class UserLogin(BaseModel):
     username: str
     password: str
+    captcha_id: Optional[str] = None
+    captcha_code: Optional[str] = None
 
 
 class Token(BaseModel):

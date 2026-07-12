@@ -61,6 +61,31 @@
               />
             </el-form-item>
 
+            <el-form-item
+              v-if="captchaRequired"
+              prop="captcha_code"
+              class="login-field-item"
+            >
+              <div class="captcha-row">
+                <el-input
+                  v-model="loginForm.captcha_code"
+                  placeholder="验证码"
+                  size="large"
+                  maxlength="6"
+                  @keyup.enter="handleLogin"
+                />
+                <button
+                  type="button"
+                  class="captcha-image-button"
+                  title="刷新验证码"
+                  @click="refreshCaptcha"
+                >
+                  <img v-if="captchaImage" :src="captchaImage" alt="验证码" />
+                  <span v-else>刷新</span>
+                </button>
+              </div>
+            </el-form-item>
+
             <el-form-item class="login-submit-item">
               <el-button
                 type="primary"
@@ -80,10 +105,11 @@
 </template>
 
 <script setup lang="ts">
-import { ref, reactive } from 'vue'
+import { onMounted, ref, reactive } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { ElMessage, type FormInstance, type FormRules } from 'element-plus'
 import { Lock, Moon, Sunny, User } from '@element-plus/icons-vue'
+import { authApi } from '@/api/auth'
 import { useUserStore } from '@/stores/user'
 import { useThemeStore } from '@/stores/theme'
 import { isDesktop } from '@/utils/desktop'
@@ -96,16 +122,47 @@ const themeStore = useThemeStore()
 
 const loginFormRef = ref<FormInstance>()
 const loginLoading = ref(false)
+const captchaRequired = ref(false)
+const captchaId = ref('')
+const captchaImage = ref('')
 
 const loginForm = reactive({
   username: '',
-  password: ''
+  password: '',
+  captcha_code: '',
 })
 
 const loginRules: FormRules = {
   username: [{ required: true, message: '请输入账号', trigger: ['blur', 'change'] }],
-  password: [{ required: true, message: '请输入密码', trigger: ['blur', 'change'] }]
+  password: [{ required: true, message: '请输入密码', trigger: ['blur', 'change'] }],
+  captcha_code: [{
+    validator: (_rule, value, callback) => {
+      if (captchaRequired.value && !String(value || '').trim()) {
+        callback(new Error('请输入验证码'))
+        return
+      }
+      callback()
+    },
+    trigger: ['blur', 'change'],
+  }],
 }
+
+const refreshCaptcha = async () => {
+  if (isDesktop) return
+  try {
+    const result = await authApi.getCaptcha()
+    captchaRequired.value = result.required
+    captchaId.value = result.captcha_id || ''
+    captchaImage.value = result.image_data || ''
+    loginForm.captcha_code = ''
+  } catch {
+    captchaRequired.value = true
+    captchaId.value = ''
+    captchaImage.value = ''
+  }
+}
+
+onMounted(refreshCaptcha)
 
 function safeRedirectPath(raw: unknown): string {
   const value = Array.isArray(raw) ? raw[0] : raw
@@ -131,7 +188,12 @@ const handleLogin = async () => {
         return
       }
 
-      const result = await userStore.login(loginForm.username, loginForm.password)
+      const result = await userStore.login(
+        loginForm.username,
+        loginForm.password,
+        captchaId.value,
+        loginForm.captcha_code,
+      )
 
       if (result.requiresSelection) {
         const redirect = safeRedirectPath(route.query.redirect)
@@ -154,6 +216,9 @@ const handleLogin = async () => {
         error?.message ||
         '登录失败，请检查用户名和密码'
       ElMessage.error(detail)
+      if (!isDesktop && captchaRequired.value) {
+        await refreshCaptcha()
+      }
     } finally {
       loginLoading.value = false
     }
@@ -317,6 +382,32 @@ const handleLogin = async () => {
 
 .login-form {
   margin: 0;
+}
+
+.captcha-row {
+  width: 100%;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 128px;
+  gap: 10px;
+}
+
+.captcha-image-button {
+  width: 128px;
+  height: 52px;
+  padding: 0;
+  overflow: hidden;
+  border: 1px solid #e2e8f0;
+  border-radius: 8px;
+  background: #f8fafc;
+  color: #64748b;
+  cursor: pointer;
+}
+
+.captcha-image-button img {
+  display: block;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
 }
 
 :deep(.el-form-item) {

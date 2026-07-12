@@ -82,11 +82,16 @@ async def _control_plane_request_auth(
     ctx: AuthContext,
     db: AsyncSession,
 ) -> tuple[str | None, str | None]:
-    if not settings.control_plane_binding_enabled:
+    provider = str(settings.auth_provider or "").strip().lower()
+    uses_dolphin_token = (
+        settings.control_plane_binding_enabled
+        or provider in {"control_plane", "coding"}
+    )
+    if not uses_dolphin_token:
         return request.headers.get("authorization"), None
     token = control_plane_access_token(ctx.user)
     if token and not control_plane_token_needs_refresh(token):
-        return f"Bearer {token}", "builder-control-plane"
+        return f"Bearer {token}", None
 
     user = (
         await db.execute(
@@ -97,7 +102,7 @@ async def _control_plane_request_auth(
     ).scalar_one()
     token = control_plane_access_token(user)
     if token and not control_plane_token_needs_refresh(token):
-        return f"Bearer {token}", "builder-control-plane"
+        return f"Bearer {token}", None
 
     refresh_token = control_plane_refresh_token(user)
     if not refresh_token:
@@ -114,7 +119,7 @@ async def _control_plane_request_auth(
     await db.commit()
     ctx.user.coding_access_token = user.coding_access_token
     ctx.user.coding_refresh_token = user.coding_refresh_token
-    return f"Bearer {refreshed.access_token}", "builder-control-plane"
+    return f"Bearer {refreshed.access_token}", None
 
 
 @router.get("/applications")

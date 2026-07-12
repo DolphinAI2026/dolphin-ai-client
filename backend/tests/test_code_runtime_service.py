@@ -86,23 +86,25 @@ def test_control_plane_base_url_defaults_to_local_dev_port(monkeypatch):
     assert control_plane_base_url() == "http://127.0.0.1:8080"
 
 
-def test_control_plane_headers_prefer_user_token_and_add_builder_tenant_headers(monkeypatch):
+def test_control_plane_headers_prefer_user_token_and_add_workspace_tenant(monkeypatch):
     from app.config import settings
     from app.code_runtime import service
 
     monkeypatch.delenv("DOLPHIN_CODE_CONTROL_PLANE_TOKEN", raising=False)
     monkeypatch.setattr(settings, "dolphin_code_control_plane_token", "settings-token", raising=False)
 
-    ctx = SimpleNamespace(apaas_tenant_id="tenant-1")
+    ctx = SimpleNamespace(
+        user=SimpleNamespace(coding_tenant_id="default"),
+        apaas_tenant_id="apaas-tenant-1",
+    )
     headers = service._control_plane_headers(
         "Bearer user-token",
         delegated_context=ctx,
-        auth_provider="builder-control-plane",
     )
 
     assert headers["Authorization"] == "Bearer user-token"
-    assert headers["X-Auth-Provider"] == "builder-control-plane"
-    assert headers["X-Tenant-Id"] == "tenant-1"
+    assert "X-Auth-Provider" not in headers
+    assert headers["X-Tenant-Id"] == "default"
 
 
 def test_control_plane_headers_include_delegation_secret(monkeypatch):

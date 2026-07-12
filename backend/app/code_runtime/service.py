@@ -273,9 +273,8 @@ def _control_plane_headers(
     if include_content_type:
         headers["Content-Type"] = "application/json"
     incoming = str(authorization_header or "").strip()
-    if auth_provider:
-        if incoming.lower().startswith("bearer "):
-            headers["Authorization"] = incoming
+    if incoming.lower().startswith("bearer "):
+        headers["Authorization"] = incoming
     else:
         token = (
             os.getenv("DOLPHIN_CODE_CONTROL_PLANE_TOKEN", "").strip()
@@ -283,13 +282,11 @@ def _control_plane_headers(
         )
         if token:
             headers["Authorization"] = f"Bearer {token}"
-        elif incoming.lower().startswith("bearer "):
-            headers["Authorization"] = incoming
-    if auth_provider:
-        headers["X-Auth-Provider"] = auth_provider
-        tenant_id = _header_text(getattr(delegated_context, "apaas_tenant_id", None))
-        if tenant_id:
-            headers["X-Tenant-Id"] = tenant_id
+    workspace_tenant_id = _header_text(
+        getattr(getattr(delegated_context, "user", None), "coding_tenant_id", None)
+    )
+    if workspace_tenant_id:
+        headers["X-Tenant-Id"] = workspace_tenant_id
     delegation_secret = (
         os.getenv("DOLPHIN_CODE_CONTROL_PLANE_DELEGATION_SECRET", "").strip()
         or (settings.dolphin_code_control_plane_delegation_secret or "").strip()

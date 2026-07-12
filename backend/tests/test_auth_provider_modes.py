@@ -165,6 +165,7 @@ async def test_control_plane_auth_provider_uses_platform_binding_without_merging
     monkeypatch,
 ):
     _set_auth_provider(monkeypatch, "control_plane")
+    monkeypatch.setattr(settings, "control_plane_binding_enabled", True)
     monkeypatch.setattr(settings, "apaas_base_url", "")
     calls = []
     apaas_user, tenant = await _seed_login_user(
@@ -183,13 +184,14 @@ async def test_control_plane_auth_provider_uses_platform_binding_without_merging
     await db_session.flush()
     tenant_count_before = await db_session.scalar(select(func.count(Tenant.id)))
 
-    async def fake_control_plane_login(username, password):
-        calls.append((username, password))
+    async def fake_control_plane_login(username, password, captcha_id, captcha_code):
+        calls.append((username, password, captcha_id, captcha_code))
         return SimpleNamespace(
             username="control_plane_admin",
             display_name="Control Plane Admin",
             external_user_id="code-user-1",
             roles=["CONTROL_PLANE_ADMIN"],
+            tenant_id="default",
             access_token="control-plane-access-token",
             refresh_token="control-plane-refresh-token",
         )
@@ -202,11 +204,16 @@ async def test_control_plane_auth_provider_uses_platform_binding_without_merging
     )
 
     response = await login(
-        UserLogin(username="control_plane_admin", password="password"),
+        UserLogin(
+            username="control_plane_admin",
+            password="password",
+            captcha_id="captcha-1",
+            captcha_code="0854",
+        ),
         db_session,
     )
 
-    assert calls == [("control_plane_admin", "password")]
+    assert calls == [("control_plane_admin", "password", "captcha-1", "0854")]
     assert response.access_token
 
     result = await db_session.execute(
@@ -218,6 +225,7 @@ async def test_control_plane_auth_provider_uses_platform_binding_without_merging
     user = result.scalar_one()
     assert user.display_name == "Control Plane Admin"
     assert user.coding_user_id == "code-user-1"
+    assert user.coding_tenant_id == "default"
     assert control_plane_access_token(user) == "control-plane-access-token"
     assert user.coding_refresh_token.startswith("enc:v1:")
     assert await db_session.scalar(select(func.count(Tenant.id))) == tenant_count_before
@@ -229,62 +237,57 @@ async def test_control_plane_auth_provider_uses_platform_binding_without_merging
 
 
 @pytest.mark.asyncio
-async def test_control_plane_binding_stores_exchanged_user_token(db_session, monkeypatch):
-    user, _tenant = await _seed_login_user(
+async def test_control_plane_login_without_binding_uses_only_dolphin_current_tenant(
+    db_session,
+    monkeypatch,
+):
+    _set_auth_provider(monkeypatch, "control_plane")
+    monkeypatch.setattr(settings, "control_plane_binding_enabled", False)
+    _apaas_user, mapped_tenant = await _seed_login_user(
         db_session,
-        username="federated_admin",
+        username="workspace_admin",
         source="apaas",
     )
+    db_session.add(PlatformEnv(
+        tenant_id=mapped_tenant.id,
+        env_name="legacy mapping",
+        base_url="https://apaas.example/backend",
+        platform_tenant_id="apaas-tenant-1",
+        username="workspace_admin",
+        status="connected",
+    ))
+    await db_session.flush()
 
-    async def fake_exchange(subject_token, tenant_id):
-        assert subject_token == "apaas-token"
-        assert tenant_id == "apaas-tenant-1"
+    async def fake_control_plane_login(*_args):
         return SimpleNamespace(
-            status="TOKEN_ISSUED",
-            access_token="fresh-control-plane-token",
-            refresh_token="fresh-refresh-token",
-            binding_challenge=None,
-            control_plane_user_id="cp-user-1",
+            username="workspace_admin",
+            display_name="Workspace Admin",
+            external_user_id="workspace-user-1",
+            roles=["platform_admin"],
+            tenant_id="default",
+            tenant_name="Default Tenant",
+            access_token="workspace-access-token",
+            refresh_token="workspace-refresh-token",
         )
 
-    monkeypatch.setattr(auth_routes, "exchange_apaas_identity", fake_exchange)
+    monkeypatch.setattr(auth_routes, "login_to_control_plane", fake_control_plane_login)
 
-    await auth_routes._store_federated_control_plane_token(
-        user,
-        subject_token="apaas-token",
-        tenant_id="apaas-tenant-1",
-    )
-
-    assert user.coding_user_id == "cp-user-1"
-    assert control_plane_access_token(user) == "fresh-control-plane-token"
-    assert user.coding_refresh_token.startswith("enc:v1:")
-
-
-@pytest.mark.asyncio
-async def test_apaas_binding_challenge_requires_explicit_control_plane_proof(db_session, monkeypatch):
-    user, _tenant = await _seed_login_user(
+    response = await login(
+        UserLogin(
+            username="workspace_admin",
+            password="password",
+            captcha_id="captcha-1",
+            captcha_code="0854",
+        ),
         db_session,
-        username="binding_admin",
-        source="apaas",
     )
-    async def fake_exchange(_subject_token, _tenant_id):
-        return SimpleNamespace(
-            status="BINDING_REQUIRED",
-            access_token=None,
-            refresh_token=None,
-            binding_challenge="challenge-1",
-            control_plane_user_id=None,
-            trace_id="trace-1",
+
+    assert response.access_token
+    assert response.requires_tenant_selection is False
+    payload = decode_token(response.access_token)
+    tenant = (
+        await db_session.execute(
+            select(Tenant).where(Tenant.id == payload["tid"])
         )
-
-    monkeypatch.setattr(auth_routes, "exchange_apaas_identity", fake_exchange)
-
-    with pytest.raises(HTTPException) as exc_info:
-        await auth_routes._store_federated_control_plane_token(
-            user,
-            subject_token="apaas-token",
-            tenant_id="apaas-tenant-2",
-        )
-
-    assert exc_info.value.status_code == 403
-    assert "管理员预先完成账号绑定" in str(exc_info.value.detail)
+    ).scalar_one()
+    assert tenant.tenant_code == "workspace-default"

@@ -51,8 +51,18 @@ export const useUserStore = defineStore('user', () => {
     }
   }
 
-  const login = async (username: string, password: string) => {
-    const res = await authApi.login({ username, password })
+  const login = async (
+    username: string,
+    password: string,
+    captchaId?: string,
+    captchaCode?: string,
+  ) => {
+    const res = await authApi.login({
+      username,
+      password,
+      captcha_id: captchaId,
+      captcha_code: captchaCode,
+    })
 
     // 多租户登录处理
     if (res.requires_tenant_selection) {

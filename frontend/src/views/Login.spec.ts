@@ -24,4 +24,10 @@ describe('Login page handles both web and desktop auth', () => {
     expect(loginSource).toContain('requiresSelection')
     expect(loginSource).toContain('/tenant-select')
   })
+
+  it('collects the Dolphin captcha for web login', () => {
+    expect(loginSource).toContain('captcha_code')
+    expect(loginSource).toContain('captchaImage')
+    expect(loginSource).toContain('refreshCaptcha')
+  })
 })

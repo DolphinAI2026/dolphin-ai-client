@@ -18,8 +18,8 @@ from app.schemas import (
 from app.auth import verify_password, get_password_hash, create_access_token, create_selection_token
 from app.code_runtime.auth import (
     ControlPlaneAuthResult,
-    bind_apaas_identity,
-    exchange_apaas_identity,
+    exchange_apaas_token,
+    fetch_dolphin_captcha,
     login_to_control_plane,
     store_control_plane_credentials,
 )
@@ -893,10 +893,12 @@ async def _try_apaas_login_flow(user_data: UserLogin, db: AsyncSession) -> Optio
                 status_code=status.HTTP_403_FORBIDDEN,
                 detail="aPaaS 账号未返回可用于 Control Plane 绑定的租户或 Token",
             )
-        await _store_federated_control_plane_token(
+        dolphin_token = await exchange_apaas_token(subject_token, selected_apaas_tenant_id)
+        user.coding_tenant_id = dolphin_token.tenant_id
+        store_control_plane_credentials(
             user,
-            subject_token=subject_token,
-            tenant_id=selected_apaas_tenant_id,
+            dolphin_token.access_token,
+            dolphin_token.refresh_token,
         )
 
     await db.commit()
@@ -1112,44 +1114,15 @@ async def _local_login_response(user_data: UserLogin, db: AsyncSession) -> Login
 
 def _control_plane_roles_include_admin(roles: list[str]) -> bool:
     normalized = {str(role or "").strip().upper() for role in roles}
-    return bool(normalized.intersection({"ADMIN", "CONTROL_PLANE_ADMIN", "SYSTEM_ADMIN"}))
+    return bool(normalized.intersection({
+        "ADMIN",
+        "PLATFORM_ADMIN",
+        "CONTROL_PLANE_ADMIN",
+        "SYSTEM_ADMIN",
+    }))
 
 
-async def _store_federated_control_plane_token(
-    user: User,
-    *,
-    subject_token: str,
-    tenant_id: str,
-    proof_identity: ControlPlaneAuthResult | None = None,
-) -> None:
-    exchange = await exchange_apaas_identity(subject_token, tenant_id)
-    result = exchange
-    if exchange.status == "BINDING_REQUIRED":
-        if not exchange.binding_challenge:
-            raise HTTPException(status_code=502, detail="Control Plane 未返回账号绑定挑战")
-        if not exchange.trace_id:
-            raise HTTPException(status_code=502, detail="Control Plane 未返回账号绑定 traceId")
-        if proof_identity is None:
-            raise HTTPException(
-                status_code=status.HTTP_403_FORBIDDEN,
-                detail="aPaaS 账号未自动匹配 Control Plane 账号，请由管理员预先完成账号绑定",
-            )
-        result = await bind_apaas_identity(
-            exchange.binding_challenge,
-            proof_identity.access_token,
-            tenant_id,
-            exchange.trace_id,
-        )
-        user.coding_user_id = result.control_plane_user_id or proof_identity.external_user_id
-
-    if result.status != "TOKEN_ISSUED" or not result.access_token:
-        raise HTTPException(status_code=502, detail="Control Plane 未返回有效用户 Token")
-    if result.control_plane_user_id:
-        user.coding_user_id = result.control_plane_user_id
-    store_control_plane_credentials(user, result.access_token, result.refresh_token)
-
-
-async def _bind_control_plane_login_to_apaas(
+async def _require_control_plane_platform_binding(
     db: AsyncSession,
     user: User,
     identity: ControlPlaneAuthResult,
@@ -1184,30 +1157,6 @@ async def _bind_control_plane_login_to_apaas(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="平台管理中配置的 aPaaS 账号与当前 Control Plane 账号不一致",
         )
-
-    subject_token = str(env.token or "").strip()
-    if env.username and env.password_enc:
-        from app.apaas_client import APaaSClient
-
-        client = APaaSClient(base_url=env.base_url, tenant_id=env.platform_tenant_id)
-        login_result = await client.login(env.username, decrypt_password(env.password_enc))
-        subject_token = str(login_result.get("token") or "").strip()
-        if subject_token:
-            env.token = subject_token
-            env.status = "connected"
-    if not subject_token:
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="当前租户未配置可用的 aPaaS 账号、密码或 Token",
-        )
-
-    await _store_federated_control_plane_token(
-        user,
-        subject_token=subject_token,
-        tenant_id=env.platform_tenant_id,
-        proof_identity=identity,
-    )
-
 
 async def _ensure_control_plane_user(
     db: AsyncSession,
@@ -1249,45 +1198,90 @@ async def _ensure_control_plane_user(
     user.username = identity.username
     user.display_name = identity.display_name or identity.username
     user.coding_user_id = identity.external_user_id
+    user.coding_tenant_id = identity.tenant_id
     store_control_plane_credentials(user, identity.access_token, identity.refresh_token)
     user.is_active = True
     user.is_platform_admin = _control_plane_roles_include_admin(identity.roles)
     await db.flush()
 
-    mapped_envs = (
-        await db.execute(
-            select(PlatformEnv)
-            .where(func.lower(PlatformEnv.username) == identity.username.strip().lower())
-            .order_by(PlatformEnv.is_default.desc(), PlatformEnv.id.asc())
-        )
-    ).scalars().all()
     preferred_roles = (
         ("R_tenant_admin", "admin", "R_developer")
         if user.is_platform_admin
         else ("R_developer", "R_tenant_admin", "admin")
     )
-    for index, env in enumerate(mapped_envs):
-        tenant = (
+    if settings.control_plane_binding_enabled:
+        mapped_envs = (
             await db.execute(
-                select(Tenant).where(Tenant.id == env.tenant_id, Tenant.status == 1)
+                select(PlatformEnv)
+                .where(func.lower(PlatformEnv.username) == identity.username.strip().lower())
+                .order_by(PlatformEnv.is_default.desc(), PlatformEnv.id.asc())
             )
+        ).scalars().all()
+        for index, env in enumerate(mapped_envs):
+            tenant = (
+                await db.execute(
+                    select(Tenant).where(Tenant.id == env.tenant_id, Tenant.status == 1)
+                )
+            ).scalar_one_or_none()
+            if tenant:
+                await _sync_user_membership(
+                    db,
+                    user,
+                    tenant,
+                    is_default=index == 0,
+                    preferred_role_codes=preferred_roles,
+                )
+    elif identity.tenant_id:
+        tenant_code = _normalize_tenant_code(
+            f"workspace-{identity.tenant_id}",
+            identity.tenant_id,
+        )
+        tenant = (
+            await db.execute(select(Tenant).where(Tenant.tenant_code == tenant_code))
         ).scalar_one_or_none()
-        if tenant:
-            await _sync_user_membership(
-                db,
-                user,
-                tenant,
-                is_default=index == 0,
-                preferred_role_codes=preferred_roles,
+        if not tenant:
+            tenant = Tenant(
+                tenant_name=identity.tenant_name or identity.tenant_id,
+                tenant_code=tenant_code,
             )
+            db.add(tenant)
+            await db.flush()
+        membership = await _sync_user_membership(
+            db,
+            user,
+            tenant,
+            is_default=True,
+            preferred_role_codes=preferred_roles,
+        )
+        await db.flush()
+        await db.execute(
+            UserTenant.__table__.update()
+            .where(UserTenant.user_id == user.id)
+            .values(is_default=False)
+        )
+        await db.execute(
+            UserTenant.__table__.update()
+            .where(UserTenant.id == membership.id)
+            .values(is_default=True)
+        )
+        await db.flush()
     return user
 
 
 async def _control_plane_login_response(user_data: UserLogin, db: AsyncSession) -> LoginResponse:
-    identity = await login_to_control_plane(user_data.username, user_data.password)
+    captcha_id = str(user_data.captcha_id or "").strip()
+    captcha_code = str(user_data.captcha_code or "").strip()
+    if not captcha_id or not captcha_code:
+        raise HTTPException(status_code=400, detail="请输入 Dolphin 验证码")
+    identity = await login_to_control_plane(
+        user_data.username,
+        user_data.password,
+        captcha_id,
+        captcha_code,
+    )
     user = await _ensure_control_plane_user(db, identity)
     if settings.control_plane_binding_enabled:
-        await _bind_control_plane_login_to_apaas(db, user, identity)
+        await _require_control_plane_platform_binding(db, user, identity)
     response = await _issue_login_response_for_user(db, user)
     await db.commit()
     return response
@@ -1332,6 +1326,13 @@ async def _try_apaas_provider_login_response(
             status_code=status.HTTP_502_BAD_GATEWAY,
             detail="aPaaS 登录链路返回异常数据或同步失败，请稍后重试",
         ) from exc
+
+
+@router.get("/captcha")
+async def captcha():
+    if _auth_provider() != "control_plane":
+        return {"required": False}
+    return {"required": True, **(await fetch_dolphin_captcha())}
 
 
 @router.post("/login", response_model=LoginResponse)

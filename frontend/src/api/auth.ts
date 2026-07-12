@@ -1,5 +1,13 @@
 import request from '@/utils/request'
-import type { LoginRequest, Token, User, LoginResponse, TenantSelectRequest, TenantOption } from '@/types'
+import type {
+  LoginCaptcha,
+  LoginRequest,
+  Token,
+  User,
+  LoginResponse,
+  TenantSelectRequest,
+  TenantOption,
+} from '@/types'
 
 export interface TenantRoleOption {
   id: number
@@ -124,6 +132,10 @@ export interface TenantUpdatePayload {
 }
 
 export const authApi = {
+  getCaptcha() {
+    return request.get<any, LoginCaptcha>('/auth/captcha')
+  },
+
   login(data: LoginRequest) {
     return request.post<any, LoginResponse>('/auth/login', data)
   },

@@ -14,6 +14,14 @@ export interface User {
 export interface LoginRequest {
   username: string
   password: string
+  captcha_id?: string
+  captcha_code?: string
+}
+
+export interface LoginCaptcha {
+  required: boolean
+  captcha_id?: string
+  image_data?: string
 }
 
 export interface TenantOption {

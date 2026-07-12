@@ -49,6 +49,7 @@ class User(Base):
     apaas_base_url: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
     apaas_tenant_id: Mapped[Optional[str]] = mapped_column(String(50), nullable=True)
     coding_user_id: Mapped[Optional[str]] = mapped_column(String(80), nullable=True)
+    coding_tenant_id: Mapped[Optional[str]] = mapped_column(String(80), nullable=True)
     coding_base_url: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
     coding_access_token: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     coding_refresh_token: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
