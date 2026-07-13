@@ -225,7 +225,7 @@ async function openCurrentSession() {
   try {
     const runtimeAgentId = currentRuntimeAgentId()
     const opened = await codeRuntimeApi.openSession(id)
-    if (runtimeAgentId) {
+    if (runtimeAgentId && opened.runtime_session_id !== runtimeAgentId) {
       try {
         await codeRuntimeApi.activateAgentSession(id, runtimeAgentId)
       } catch (activationError: any) {

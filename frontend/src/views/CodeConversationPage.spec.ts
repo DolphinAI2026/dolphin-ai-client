@@ -39,6 +39,7 @@ describe('CodeConversationPage', () => {
   it('opens the sandbox before activating the route agent so restore is not overwritten', () => {
     expect(pageSource).toContain('function currentRuntimeAgentId()')
     expect(pageSource).toContain('codeRuntimeApi.activateAgentSession(id, runtimeAgentId)')
+    expect(pageSource).toContain('runtimeAgentId && opened.runtime_session_id !== runtimeAgentId')
     expect(pageSource.indexOf('codeRuntimeApi.openSession(id)'))
       .toBeLessThan(pageSource.indexOf('codeRuntimeApi.activateAgentSession(id, runtimeAgentId)'))
     expect(pageSource.indexOf('codeRuntimeApi.activateAgentSession(id, runtimeAgentId)'))
