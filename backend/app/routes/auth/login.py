@@ -1251,17 +1251,28 @@ async def _ensure_control_plane_user(
     elif identity.tenant_id:
         from app.seed_data import seed_default_roles, sync_builtin_llm_configs
 
-        tenant_code = _normalize_tenant_code(
+        workspace_tenant_code = _normalize_tenant_code(
             f"workspace-{identity.tenant_id}",
             identity.tenant_id,
         )
-        tenant = (
-            await db.execute(select(Tenant).where(Tenant.tenant_code == tenant_code))
-        ).scalar_one_or_none()
+        tenant_codes = [workspace_tenant_code]
+        if identity.tenant_id.strip().lower() == "default":
+            tenant_codes.append("default")
+        tenant = None
+        for tenant_code in tenant_codes:
+            tenant = (
+                await db.execute(select(Tenant).where(Tenant.tenant_code == tenant_code))
+            ).scalar_one_or_none()
+            if tenant:
+                break
         if not tenant:
             tenant = Tenant(
                 tenant_name=identity.tenant_name or identity.tenant_id,
-                tenant_code=tenant_code,
+                tenant_code=(
+                    "default"
+                    if identity.tenant_id.strip().lower() == "default"
+                    else workspace_tenant_code
+                ),
             )
             db.add(tenant)
             await db.flush()

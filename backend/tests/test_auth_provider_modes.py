@@ -244,6 +244,12 @@ async def test_control_plane_login_without_binding_uses_only_dolphin_current_ten
 ):
     _set_auth_provider(monkeypatch, "control_plane")
     monkeypatch.setattr(settings, "control_plane_binding_enabled", False)
+    fallback_tenant = Tenant(
+        tenant_name="Default Tenant",
+        tenant_code="default",
+    )
+    db_session.add(fallback_tenant)
+    await db_session.flush()
     _apaas_user, mapped_tenant = await _seed_login_user(
         db_session,
         username="workspace_admin",
@@ -258,6 +264,7 @@ async def test_control_plane_login_without_binding_uses_only_dolphin_current_ten
         status="connected",
     ))
     await db_session.flush()
+    tenant_count_before = await db_session.scalar(select(func.count(Tenant.id)))
     synced_tenant_ids = []
 
     async def fake_sync_builtin_llm_configs(_db, tenant_ids=None, *, commit=True):
@@ -298,7 +305,9 @@ async def test_control_plane_login_without_binding_uses_only_dolphin_current_ten
             select(Tenant).where(Tenant.id == payload["tid"])
         )
     ).scalar_one()
-    assert tenant.tenant_code == "workspace-default"
+    assert tenant.id == fallback_tenant.id
+    assert tenant.tenant_code == "default"
+    assert await db_session.scalar(select(func.count(Tenant.id))) == tenant_count_before
     membership = (
         await db_session.execute(
             select(UserTenant).where(
