@@ -13,9 +13,12 @@
 #   CONTROL_PLANE_DEPLOYMENT=control-plane-fw-auth-preview
 #   DOLPHIN_WORKSPACE_BASE_URL=https://dolphin.dfy.definesys.cn
 #   CONTROL_PLANE_BINDING_ENABLED=false
+#   MODEL_PROVIDER_SECRET=sandbox-runtime-model-provider-real
 #
 # CONTROL_PLANE_BINDING_ENABLED is optional. Keep it false unless platform
 # administrators require explicit Dolphin account and aPaaS environment binding.
+# MODEL_PROVIDER_SECRET is optional. Set it to an empty value to skip reusing
+# the shared Agent Runtime model provider as Builder's default model.
 set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -32,6 +35,8 @@ PUBLIC_BASE_URL="${PUBLIC_BASE_URL:-https://om-demo.dfy.definesys.cn/ai-builder}
 DATABASE_SECRET="${DATABASE_SECRET:-control-plane-db-secret}"
 IMAGE_PULL_SECRET="${IMAGE_PULL_SECRET:-om-demo-harbor-pull-secret}"
 DELEGATION_SECRET="${DELEGATION_SECRET:-ai-builder-control-plane-delegation}"
+MODEL_PROVIDER_SECRET="${MODEL_PROVIDER_SECRET-sandbox-runtime-model-provider-real}"
+MODEL_PROVIDER_SECRET_KEY="${MODEL_PROVIDER_SECRET_KEY:-model-provider.json}"
 NGINX_IMAGE="${NGINX_IMAGE:-hub-mirror.dfy.definesys.cn/library/nginx:1.27-alpine}"
 STORAGE_CLASS="${STORAGE_CLASS:-local-path}"
 STORAGE_SIZE="${STORAGE_SIZE:-50Gi}"
@@ -91,6 +96,45 @@ print(f"postgresql+asyncpg://{username}:{password}@{host}:{port}/{database}")
 PY
 )"
 
+if [[ -n "$MODEL_PROVIDER_SECRET" ]] \
+  && kube -n "$KUBE_NAMESPACE" get secret "$MODEL_PROVIDER_SECRET" >/dev/null 2>&1; then
+  kube -n "$KUBE_NAMESPACE" get secret "$MODEL_PROVIDER_SECRET" -o json \
+    | MODEL_PROVIDER_SECRET_KEY="$MODEL_PROVIDER_SECRET_KEY" \
+      MODEL_PROVIDER_ENV_FILE="$tmp_dir/model-provider.env" \
+      python3 -c '
+import base64
+import json
+import os
+import sys
+from pathlib import Path
+
+secret = json.load(sys.stdin)
+encoded = (secret.get("data") or {}).get(os.environ["MODEL_PROVIDER_SECRET_KEY"], "")
+if not encoded:
+    raise SystemExit("shared model provider secret key is missing")
+payload = json.loads(base64.b64decode(encoded))
+provider_id = str(payload.get("defaultProviderId") or "").strip()
+providers = payload.get("providers") or []
+provider = next(
+    (item for item in providers if str(item.get("providerId") or "").strip() == provider_id),
+    providers[0] if providers else {},
+)
+base_url = str(provider.get("apiBaseUrl") or "").strip()
+api_key = str(provider.get("token") or "").strip()
+model = str(provider.get("defaultModel") or "").strip()
+if not base_url or not api_key or not model:
+    raise SystemExit("shared model provider is incomplete")
+if any("\n" in value or "\r" in value for value in (base_url, api_key, model)):
+    raise SystemExit("shared model provider contains unsupported line breaks")
+Path(os.environ["MODEL_PROVIDER_ENV_FILE"]).write_text(
+    f"DOLPHIN_BASE_URL={base_url}\n"
+    f"DOLPHIN_API_KEY={api_key}\n"
+    f"DOLPHIN_MODEL={model}\n",
+    encoding="utf-8",
+)
+'
+fi
+
 awk '
   !/^(DATABASE_URL|AUTH_PROVIDER|CONTROL_PLANE_BINDING_ENABLED|DOLPHIN_WORKSPACE_BASE_URL|DOLPHIN_CODE_CONTROL_PLANE_URL|DOLPHIN_CODE_CONTROL_PLANE_DELEGATION_SECRET|DOLPHIN_CODE_BUILDER_URL|AI_BUILDER_CHAT_DEEPLINK_BASE|HOST|PORT)=/
 ' "$BACKEND_ENV_FILE" > "$tmp_dir/backend.env"
@@ -107,6 +151,13 @@ AI_BUILDER_CHAT_DEEPLINK_BASE=${PUBLIC_BASE_URL}
 HOST=0.0.0.0
 PORT=8003
 EOF
+if [[ -s "$tmp_dir/model-provider.env" ]]; then
+  cat >> "$tmp_dir/backend.env" <<EOF
+
+# Optional shared Agent Runtime model provider used as Builder's default model.
+EOF
+  cat "$tmp_dir/model-provider.env" >> "$tmp_dir/backend.env"
+fi
 chmod 600 "$tmp_dir/backend.env"
 backend_env_checksum="$(sha256sum "$tmp_dir/backend.env" | awk '{print $1}')"
 

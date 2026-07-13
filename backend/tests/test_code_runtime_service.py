@@ -49,7 +49,7 @@ def test_build_embed_url_keeps_runtime_query_and_adds_dolphin_token():
     )
 
     assert url == (
-        "/api/code-runtime/12/builder"
+        "/api/code-runtime/12/builder/"
         "?token=entry-token&handoffId=handoff-1"
         "&externalSessionRail=1&hideHistory=1&hideNewSession=1&dolphin_token=embed-token"
     )
@@ -219,8 +219,8 @@ async def test_default_workspace_open_rebases_builder_urls_to_local_builder(monk
 
     opened = await service.default_workspace_open("app-1")
 
-    assert opened["chatUrl"] == "http://127.0.0.1:5173/builder?token=entry-token"
-    assert opened["specReviewUrl"] == "http://127.0.0.1:5173/builder?tab=spec&token=entry-token"
+    assert opened["chatUrl"] == "http://127.0.0.1:5173/builder/?token=entry-token"
+    assert opened["specReviewUrl"] == "http://127.0.0.1:5173/builder/?tab=spec&token=entry-token"
     assert opened["webideUrl"] == "https://sandbox.mock/workspaces/ws-1/ide/?token=entry-token"
 
 
@@ -673,7 +673,7 @@ async def test_open_code_session_upserts_runtime_binding(db_session):
     assert calls == ["91001"]
     assert result["session_id"] == session.id
     assert result["external_base_path"] == f"/api/code-runtime/{session.id}"
-    assert result["embed_url"].startswith(f"/api/code-runtime/{session.id}/builder?")
+    assert result["embed_url"].startswith(f"/api/code-runtime/{session.id}/builder/?")
     assert "dolphin_token=dolphin-embed" in result["embed_url"]
 
     binding = (

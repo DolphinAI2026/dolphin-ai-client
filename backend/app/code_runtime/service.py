@@ -52,6 +52,8 @@ def _builder_suffix(builder_url: str) -> tuple[str, list[tuple[str, str]]]:
         suffix = path[path.index(marker):]
     else:
         suffix = "/" + path.rsplit("/", 1)[-1]
+    if suffix == marker:
+        suffix += "/"
     return suffix or "/builder", parse_qsl(parsed.query, keep_blank_values=True)
 
 
