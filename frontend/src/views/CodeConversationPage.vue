@@ -255,6 +255,7 @@ function promotePendingFrame(key: number) {
   if (!loaded) return
   frames.value = [{ ...loaded, phase: 'active' }]
   errorMessage.value = ''
+  scheduleOuterCodeRailRefresh(500)
 }
 
 function refreshOuterCodeRail() {

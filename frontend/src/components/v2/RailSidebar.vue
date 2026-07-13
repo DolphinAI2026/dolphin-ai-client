@@ -90,7 +90,7 @@ async function loadRailSessions() {
     if (mode === 'code') {
       const history = await codeRuntimeApi.listRailHistory()
       if (seq !== railSessionsSeq || mode !== currentMode.value) return
-      codeRailHistory.value = history
+      codeRailHistory.value = await hydrateCodeRailHistory(history)
       aiSessions.value = []
       return
     }
@@ -104,6 +104,20 @@ async function loadRailSessions() {
     aiSessions.value = []
     if (mode === 'code') codeRailHistory.value = { apps: [] }
   }
+}
+
+async function hydrateCodeRailHistory(history: CodeRailHistoryResponse): Promise<CodeRailHistoryResponse> {
+  const apps = await Promise.all((history.apps || []).map(async (app) => {
+    const shellSessionId = Number(app.shell_session_id)
+    if (!Number.isFinite(shellSessionId) || shellSessionId <= 0) return app
+    try {
+      const payload = await codeRuntimeApi.listAgentSessions(shellSessionId)
+      return { ...app, sessions: payload.sessions || [], error: undefined }
+    } catch {
+      return app
+    }
+  }))
+  return { apps }
 }
 
 function refreshCodeRail() {

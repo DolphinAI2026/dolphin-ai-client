@@ -392,6 +392,21 @@ async def _runtime_session_ids_scoped_to_other_shells(db: AsyncSession, session_
     return {str(value or "").strip() for value in rows if str(value or "").strip()}
 
 
+def _filter_browser_runtime_sessions(
+    sessions: list[Any],
+    *,
+    other_scoped_ids: set[str],
+) -> list[dict[str, Any]]:
+    return [
+        item for item in sessions
+        if (
+            isinstance(item, dict)
+            and str(item.get("runtimeSessionId") or "").strip()
+            and str(item.get("runtimeSessionId") or "").strip() not in other_scoped_ids
+        )
+    ]
+
+
 async def _remember_runtime_agent_session(
     db: AsyncSession,
     session: AIChatSession,
@@ -432,12 +447,28 @@ def _path_requires_runtime_current_alignment(path: str) -> bool:
     return normalized == "/api/agent/sessions/current" or normalized.startswith("/api/agent/sessions/current/")
 
 
-async def _ensure_runtime_current_session(binding: CodeRuntimeBinding, path: str) -> None:
+async def _ensure_runtime_current_session(
+    binding: CodeRuntimeBinding,
+    path: str,
+    *,
+    request: Request | None = None,
+    session_id: int | None = None,
+) -> None:
     runtime_session_id = str(binding.runtime_session_id or "").strip()
     if not runtime_session_id or not _path_requires_runtime_current_alignment(path):
         return
     encoded_id = quote(runtime_session_id, safe="")
-    await _runtime_json_request(binding, "POST", f"/api/agent/sessions/{encoded_id}/activate")
+    target_path = f"/api/agent/sessions/{encoded_id}/activate"
+    if request is not None and session_id is not None:
+        await _browser_runtime_json_request(
+            binding,
+            "POST",
+            target_path,
+            request=request,
+            session_id=session_id,
+        )
+        return
+    await _runtime_json_request(binding, "POST", target_path)
 
 
 @router.get("/rail/history")
@@ -641,6 +672,39 @@ def _copyable_request_headers(request: Request, session_id: int) -> dict[str, st
     if cookie_header:
         copied["cookie"] = cookie_header
     return copied
+
+
+async def _browser_runtime_json_request(
+    binding: CodeRuntimeBinding,
+    method: str,
+    path: str,
+    *,
+    request: Request,
+    session_id: int,
+    json_body: Any = None,
+) -> Any:
+    target = f"{binding.runtime_base_url.rstrip('/')}/{path.lstrip('/')}"
+    headers = _copyable_request_headers(request, session_id)
+    headers.pop("authorization", None)
+    headers["accept"] = "application/json"
+    if json_body is not None:
+        headers["content-type"] = "application/json"
+    try:
+        async with httpx.AsyncClient(follow_redirects=False, timeout=60.0) as client:
+            response = await client.request(method, target, headers=headers, json=json_body)
+    except httpx.RequestError as exc:
+        raise HTTPException(status_code=503, detail="Code runtime 暂时不可用") from exc
+    if response.status_code >= 400:
+        raise HTTPException(
+            status_code=response.status_code,
+            detail=response.text[:500] or "Code runtime request failed",
+        )
+    if not response.content:
+        return {}
+    try:
+        return response.json()
+    except ValueError as exc:
+        raise HTTPException(status_code=502, detail="Code runtime 返回了无效 JSON") from exc
 
 
 def _path_with_forwarded_prefix(path: str, forwarded_prefix: str = "") -> str:
@@ -1056,6 +1120,147 @@ async def _authorize_proxy_request(request: Request, session_id: int) -> Respons
     raise HTTPException(status_code=401, detail="Code runtime token required")
 
 
+@proxy_router.get("/{session_id}/shell/agent-sessions")
+async def list_browser_authenticated_agent_sessions(
+    session_id: int,
+    request: Request,
+    ctx: Annotated[AuthContext, Depends(get_auth_context)],
+    db: Annotated[AsyncSession, Depends(get_db)],
+):
+    auth_response = await _authorize_proxy_request(request, session_id)
+    if auth_response is not None:
+        return auth_response
+    _session, binding = await _authorized_code_runtime_binding(db, session_id, ctx)
+    payload = await _browser_runtime_json_request(
+        binding,
+        "GET",
+        "/api/agent/sessions",
+        request=request,
+        session_id=session_id,
+    )
+    sessions = payload.get("sessions") if isinstance(payload, dict) else []
+    normalized_sessions = sessions if isinstance(sessions, list) else []
+    other_scoped_ids = await _runtime_session_ids_scoped_to_other_shells(db, session_id)
+    normalized_sessions = _filter_browser_runtime_sessions(
+        normalized_sessions,
+        other_scoped_ids=other_scoped_ids,
+    )
+    current_runtime_id = str(binding.runtime_session_id or "").strip()
+    if current_runtime_id and not any(
+        str(item.get("runtimeSessionId") or "").strip() == current_runtime_id
+        for item in normalized_sessions
+    ):
+        normalized_sessions.insert(0, _runtime_session_placeholder(binding, current_runtime_id))
+    return {"sessions": normalized_sessions}
+
+
+@proxy_router.post("/{session_id}/shell/agent-sessions")
+async def create_browser_authenticated_agent_session(
+    session_id: int,
+    request: Request,
+    ctx: Annotated[AuthContext, Depends(get_auth_context)],
+    db: Annotated[AsyncSession, Depends(get_db)],
+):
+    auth_response = await _authorize_proxy_request(request, session_id)
+    if auth_response is not None:
+        return auth_response
+    session, binding = await _authorized_code_runtime_binding(db, session_id, ctx)
+    payload = await _browser_runtime_json_request(
+        binding,
+        "POST",
+        "/api/agent/sessions",
+        request=request,
+        session_id=session_id,
+        json_body={},
+    )
+    runtime_session_id = str(
+        (payload or {}).get("runtimeSessionId")
+        or (payload or {}).get("runtime_session_id")
+        or (payload or {}).get("id")
+        or ""
+    ).strip()
+    if not runtime_session_id:
+        raise HTTPException(status_code=502, detail="Code runtime 未返回新会话 ID")
+    binding.runtime_session_id = runtime_session_id
+    await _remember_runtime_agent_session(db, session, binding, runtime_session_id)
+    await db.commit()
+    return {
+        "shell_session_id": int(session_id),
+        "runtime_session_id": runtime_session_id,
+        "session": payload,
+    }
+
+
+@proxy_router.post("/{session_id}/shell/agent-sessions/{runtime_session_id}/activate")
+async def activate_browser_authenticated_agent_session(
+    session_id: int,
+    runtime_session_id: str,
+    request: Request,
+    ctx: Annotated[AuthContext, Depends(get_auth_context)],
+    db: Annotated[AsyncSession, Depends(get_db)],
+):
+    auth_response = await _authorize_proxy_request(request, session_id)
+    if auth_response is not None:
+        return auth_response
+    session, binding = await _authorized_code_runtime_binding(db, session_id, ctx)
+    encoded_id = quote(str(runtime_session_id), safe="")
+    payload = await _browser_runtime_json_request(
+        binding,
+        "POST",
+        f"/api/agent/sessions/{encoded_id}/activate",
+        request=request,
+        session_id=session_id,
+    )
+    activated_id = str((payload or {}).get("runtimeSessionId") or runtime_session_id)
+    binding.runtime_session_id = activated_id
+    await _remember_runtime_agent_session(db, session, binding, activated_id)
+    await db.commit()
+    return {
+        "shell_session_id": int(session_id),
+        "runtime_session_id": activated_id,
+        "session": payload,
+    }
+
+
+@proxy_router.delete("/{session_id}/shell/agent-sessions/{runtime_session_id}")
+async def delete_browser_authenticated_agent_session(
+    session_id: int,
+    runtime_session_id: str,
+    request: Request,
+    ctx: Annotated[AuthContext, Depends(get_auth_context)],
+    db: Annotated[AsyncSession, Depends(get_db)],
+):
+    auth_response = await _authorize_proxy_request(request, session_id)
+    if auth_response is not None:
+        return auth_response
+    _session, binding = await _authorized_code_runtime_binding(db, session_id, ctx)
+    encoded_id = quote(str(runtime_session_id), safe="")
+    payload = await _browser_runtime_json_request(
+        binding,
+        "DELETE",
+        f"/api/agent/sessions/{encoded_id}",
+        request=request,
+        session_id=session_id,
+    )
+    scoped = (
+        await db.execute(
+            select(CodeRuntimeAgentSession).where(
+                CodeRuntimeAgentSession.session_id == int(session_id),
+                CodeRuntimeAgentSession.runtime_session_id == str(runtime_session_id),
+            )
+        )
+    ).scalar_one_or_none()
+    if scoped:
+        await db.delete(scoped)
+    current = payload.get("current") if isinstance(payload, dict) else None
+    if isinstance(current, dict) and current.get("runtimeSessionId"):
+        binding.runtime_session_id = str(current["runtimeSessionId"])
+    elif binding.runtime_session_id == runtime_session_id:
+        binding.runtime_session_id = None
+    await db.commit()
+    return payload if isinstance(payload, dict) else {"ok": True}
+
+
 def _target_url(binding: CodeRuntimeBinding, path: str, request: Request) -> str:
     qs = _query_string_without_key(_request_raw_query_string(request), "dolphin_token")
     rooted = "/" + path.lstrip("/")
@@ -1080,7 +1285,12 @@ async def proxy_code_runtime(
     if not binding:
         raise HTTPException(status_code=404, detail="Code runtime binding not found")
 
-    await _ensure_runtime_current_session(binding, path)
+    await _ensure_runtime_current_session(
+        binding,
+        path,
+        request=request,
+        session_id=session_id,
+    )
     target = _target_url(binding, path, request)
     body = b"" if request.method in {"GET", "HEAD"} else await request.body()
     headers = _copyable_request_headers(request, session_id)

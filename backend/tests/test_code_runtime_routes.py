@@ -154,6 +154,47 @@ def test_code_runtime_proxy_forwards_runtime_cookies_without_proxy_cookie():
     assert "host" not in {key.lower() for key in headers}
 
 
+@pytest.mark.asyncio
+async def test_browser_runtime_request_drops_builder_authorization_and_keeps_runtime_cookie(monkeypatch):
+    import httpx
+    import app.routes.code_runtime as code_runtime_routes
+    from starlette.datastructures import Headers
+    from app.routes.code_runtime import _browser_runtime_json_request
+
+    binding = CodeRuntimeBinding(
+        session_id=12,
+        runtime_base_url="https://runtime.example.com/workspaces/ws-1",
+    )
+    request = SimpleNamespace(headers=Headers({
+        "authorization": "Bearer builder-token",
+        "cookie": "dolphin_code_runtime_12=proxy-token; apaas_sandbox_token=runtime-cookie",
+        "accept": "application/json",
+    }))
+
+    def handler(upstream: httpx.Request) -> httpx.Response:
+        assert "authorization" not in upstream.headers
+        assert upstream.headers["cookie"] == "apaas_sandbox_token=runtime-cookie"
+        return httpx.Response(200, json={"sessions": []})
+
+    transport = httpx.MockTransport(handler)
+    original = code_runtime_routes.httpx.AsyncClient
+    monkeypatch.setattr(
+        code_runtime_routes.httpx,
+        "AsyncClient",
+        lambda **kwargs: original(transport=transport, **kwargs),
+    )
+
+    result = await _browser_runtime_json_request(
+        binding,
+        "GET",
+        "/api/agent/sessions",
+        request=request,
+        session_id=12,
+    )
+
+    assert result == {"sessions": []}
+
+
 def test_code_runtime_proxy_scopes_runtime_cookie_to_forwarded_prefix():
     from app.routes.code_runtime import _rewrite_set_cookie_path
 
@@ -162,6 +203,26 @@ def test_code_runtime_proxy_scopes_runtime_cookie_to_forwarded_prefix():
         12,
         "/ai-builder",
     ) == "runtime_sid=abc; Path=/ai-builder/api/code-runtime/12; HttpOnly"
+
+
+def test_browser_session_filter_keeps_unscoped_history_and_excludes_other_shells():
+    from app.routes.code_runtime import _filter_browser_runtime_sessions
+
+    sessions = [
+        {"runtimeSessionId": "runtime-old", "title": "历史会话"},
+        {"runtimeSessionId": "runtime-current", "title": "当前会话"},
+        {"runtimeSessionId": "runtime-other", "title": "其它应用会话"},
+    ]
+
+    filtered = _filter_browser_runtime_sessions(
+        sessions,
+        other_scoped_ids={"runtime-other"},
+    )
+
+    assert [item["runtimeSessionId"] for item in filtered] == [
+        "runtime-old",
+        "runtime-current",
+    ]
 
 
 def test_code_runtime_shell_origin_prefers_referer_over_backend_base():
@@ -382,6 +443,47 @@ async def test_code_runtime_proxy_does_not_align_non_current_requests(monkeypatc
     await _ensure_runtime_current_session(binding, "api/agent/sessions")
 
     assert calls == 0
+
+
+@pytest.mark.asyncio
+async def test_code_runtime_proxy_aligns_current_session_with_browser_runtime_cookie(monkeypatch):
+    import app.routes.code_runtime as code_runtime_routes
+    from starlette.datastructures import Headers
+    from app.routes.code_runtime import _ensure_runtime_current_session
+
+    binding = CodeRuntimeBinding(
+        session_id=14,
+        runtime_base_url="http://runtime.local/shared",
+        runtime_session_id="runtime-demo",
+    )
+    request = SimpleNamespace(headers=Headers({
+        "authorization": "Bearer builder-token",
+        "cookie": "dolphin_code_runtime_14=proxy-token; apaas_sandbox_token=runtime-cookie",
+    }))
+    seen: dict = {}
+
+    async def fake_browser_request(binding, method, path, *, request, session_id, json_body=None):
+        seen.update({
+            "method": method,
+            "path": path,
+            "request": request,
+            "session_id": session_id,
+        })
+        return {"runtimeSessionId": "runtime-demo"}
+
+    monkeypatch.setattr(code_runtime_routes, "_browser_runtime_json_request", fake_browser_request)
+
+    await _ensure_runtime_current_session(
+        binding,
+        "api/agent/sessions/current/conversation",
+        request=request,
+        session_id=14,
+    )
+
+    assert seen["method"] == "POST"
+    assert seen["path"] == "/api/agent/sessions/runtime-demo/activate"
+    assert seen["request"] is request
+    assert seen["session_id"] == 14
 
 
 @pytest.mark.asyncio
@@ -1210,6 +1312,80 @@ async def test_create_code_runtime_agent_session_proxies_to_runtime_and_updates_
         select(CodeRuntimeAgentSession).where(
             CodeRuntimeAgentSession.session_id == 1,
             CodeRuntimeAgentSession.runtime_session_id == "runtime-new",
+        )
+    )).scalar_one()
+    assert scoped.external_application_id == "crm"
+
+
+@pytest.mark.asyncio
+async def test_create_browser_authenticated_agent_session_forwards_runtime_cookie_and_updates_binding(
+    db_session,
+    monkeypatch,
+):
+    import app.routes.code_runtime as code_runtime_routes
+    from starlette.datastructures import Headers
+    from app.routes.code_runtime import create_browser_authenticated_agent_session
+
+    db_session.add(AIChatSession(
+        tenant_id=7,
+        user_id=11,
+        title="CRM Code",
+        mode="code",
+        status="active",
+        external_application_id="crm",
+        external_app_name="CRM",
+    ))
+    await db_session.flush()
+    db_session.add(CodeRuntimeBinding(
+        tenant_id=7,
+        user_id=11,
+        session_id=1,
+        external_application_id="crm",
+        runtime_base_url="http://runtime.local/workspaces/crm",
+        builder_url="http://runtime.local/workspaces/crm/builder",
+        status="ready",
+    ))
+    await db_session.commit()
+
+    request = SimpleNamespace(headers=Headers({
+        "authorization": "Bearer builder-token",
+        "cookie": "dolphin_code_runtime_1=proxy-token; runtime_sid=sandbox-cookie",
+    }))
+    seen: dict = {}
+
+    async def fake_authorize(_request, session_id):
+        assert session_id == 1
+        return None
+
+    async def fake_runtime_request(binding, method, path, *, request, session_id, json_body=None):
+        seen.update({
+            "binding": binding,
+            "method": method,
+            "path": path,
+            "request": request,
+            "session_id": session_id,
+            "json_body": json_body,
+        })
+        return {"runtimeSessionId": "runtime-browser"}
+
+    monkeypatch.setattr(code_runtime_routes, "_authorize_proxy_request", fake_authorize)
+    monkeypatch.setattr(code_runtime_routes, "_browser_runtime_json_request", fake_runtime_request)
+
+    result = await create_browser_authenticated_agent_session(1, request, _ctx(), db_session)
+
+    assert seen["method"] == "POST"
+    assert seen["path"] == "/api/agent/sessions"
+    assert seen["session_id"] == 1
+    assert seen["json_body"] == {}
+    assert result["runtime_session_id"] == "runtime-browser"
+    binding = (await db_session.execute(
+        select(CodeRuntimeBinding).where(CodeRuntimeBinding.session_id == 1)
+    )).scalar_one()
+    assert binding.runtime_session_id == "runtime-browser"
+    scoped = (await db_session.execute(
+        select(CodeRuntimeAgentSession).where(
+            CodeRuntimeAgentSession.session_id == 1,
+            CodeRuntimeAgentSession.runtime_session_id == "runtime-browser",
         )
     )).scalar_one()
     assert scoped.external_application_id == "crm"

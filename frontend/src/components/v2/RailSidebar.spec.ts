@@ -52,6 +52,12 @@ describe('RailSidebar unified session source (SP2b)', () => {
     expect(railSidebarSource).toContain("query: { agent: result.runtime_session_id }")
   })
 
+  it('hydrates every application shell with browser-authenticated runtime sessions', () => {
+    expect(railSidebarSource).toContain('hydrateCodeRailHistory')
+    expect(railSidebarSource).toContain('codeRuntimeApi.listAgentSessions')
+    expect(railSidebarSource).toContain('sessions: payload.sessions || []')
+  })
+
   it('shows the recent-session list in every mode', () => {
     expect(railSidebarSource).not.toContain("currentMode.value !== 'code'")
   })

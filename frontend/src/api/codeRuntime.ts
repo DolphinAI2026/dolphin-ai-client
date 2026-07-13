@@ -103,17 +103,24 @@ export const codeRuntimeApi = {
   listRailHistory() {
     return request.get<any, CodeRailHistoryResponse>('/code/rail/history')
   },
+  listAgentSessions(shellSessionId: number) {
+    return request.get<any, { sessions: CodeAgentSessionRecord[] }>(
+      `/code-runtime/${shellSessionId}/shell/agent-sessions`,
+    )
+  },
   createAgentSession(shellSessionId: number) {
-    return request.post<any, CodeAgentSessionActivateResponse>(`/code/sessions/${shellSessionId}/agent-sessions`)
+    return request.post<any, CodeAgentSessionActivateResponse>(
+      `/code-runtime/${shellSessionId}/shell/agent-sessions`,
+    )
   },
   activateAgentSession(shellSessionId: number, runtimeSessionId: string) {
     return request.post<any, CodeAgentSessionActivateResponse>(
-      `/code/sessions/${shellSessionId}/agent-sessions/${encodeURIComponent(runtimeSessionId)}/activate`,
+      `/code-runtime/${shellSessionId}/shell/agent-sessions/${encodeURIComponent(runtimeSessionId)}/activate`,
     )
   },
   deleteAgentSession(shellSessionId: number, runtimeSessionId: string) {
     return request.delete<any, { ok?: boolean }>(
-      `/code/sessions/${shellSessionId}/agent-sessions/${encodeURIComponent(runtimeSessionId)}`,
+      `/code-runtime/${shellSessionId}/shell/agent-sessions/${encodeURIComponent(runtimeSessionId)}`,
     )
   },
 }
