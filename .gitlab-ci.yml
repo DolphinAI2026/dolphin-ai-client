@@ -104,14 +104,12 @@ release_and_update_server:
 update_builder_runtime_config:
   stage: release
   image:
-    name: hub-mirror.dfy.definesys.cn/library/python:3.12-alpine
+    name: hub-mirror.dfy.definesys.cn/bitnami/kubectl:1.30.7
     entrypoint: [""]
   rules:
     - if: '$RUN_BUILDER_CONFIG_UPDATE == "1" && $BUILDER_CONFIG_CONFIRM == "update-builder-config"'
       when: on_success
     - when: never
-  before_script:
-    - apk add --no-cache kubectl
   script:
     - |
       if [ -n "${APAAS_KUBECONFIG_B64:-}" ]; then
@@ -121,47 +119,41 @@ update_builder_runtime_config:
       fi
       chmod 600 /tmp/kubeconfig
       export KUBECONFIG=/tmp/kubeconfig
-    - kubectl -n "${BUILDER_K8S_NAMESPACE}" get secret ai-builder-backend-env -o json > /tmp/backend-secret.json
     - |
-      python3 - <<'PY'
-      import base64
-      import hashlib
-      import json
-      import os
-      from pathlib import Path
-
-      secret = json.loads(Path("/tmp/backend-secret.json").read_text(encoding="utf-8"))
-      encoded = secret["data"]["backend.env"]
-      text = base64.b64decode(encoded).decode("utf-8")
-      key = "DOLPHIN_CODE_CONTROL_PLANE_URL"
-      value = os.environ["BUILDER_CONTROL_PLANE_URL"].rstrip("/")
-      lines = text.splitlines()
-      output = []
-      replaced = False
-      for line in lines:
-          if line.startswith(f"{key}="):
-              if not replaced:
-                  output.append(f"{key}={value}")
-                  replaced = True
-              continue
-          output.append(line)
-      if not replaced:
-          output.extend(["", f"{key}={value}"])
-      updated = "\n".join(output).rstrip() + "\n"
-      digest = hashlib.sha256(updated.encode()).hexdigest()
-      patch = {
-          "data": {
-              "backend.env": base64.b64encode(updated.encode()).decode(),
-          }
-      }
-      Path("/tmp/backend-secret-patch.json").write_text(json.dumps(patch), encoding="utf-8")
-      Path("/tmp/backend-env-checksum").write_text(digest, encoding="utf-8")
-      PY
-    - kubectl -n "${BUILDER_K8S_NAMESPACE}" patch secret ai-builder-backend-env --type merge --patch-file /tmp/backend-secret-patch.json
-    - |
-      checksum="$(cat /tmp/backend-env-checksum)"
+      set -eu
+      encoded_env="$(
+        kubectl -n "${BUILDER_K8S_NAMESPACE}" get secret ai-builder-backend-env \
+          -o 'jsonpath={.data.backend\.env}'
+      )"
+      backend_env="$(printf '%s' "${encoded_env}" | base64 -d)"
+      updated_env="$(
+        printf '%s\n' "${backend_env}" | awk \
+          -v value="${BUILDER_CONTROL_PLANE_URL%/}" '
+            BEGIN { key = "DOLPHIN_CODE_CONTROL_PLANE_URL"; replaced = 0 }
+            index($0, key "=") == 1 {
+              if (!replaced) {
+                print key "=" value
+                replaced = 1
+              }
+              next
+            }
+            { print }
+            END {
+              if (!replaced) {
+                print key "=" value
+              }
+            }
+          '
+      )"
+      updated_env="${updated_env}
+      "
+      encoded_updated_env="$(printf '%s' "${updated_env}" | base64 | tr -d '\n')"
+      checksum="$(printf '%s' "${updated_env}" | sha256sum | awk '{print $1}')"
+      kubectl -n "${BUILDER_K8S_NAMESPACE}" patch secret ai-builder-backend-env \
+        --type merge \
+        -p "{\"data\":{\"backend.env\":\"${encoded_updated_env}\"}}"
       kubectl -n "${BUILDER_K8S_NAMESPACE}" patch "statefulset/${BUILDER_K8S_STATEFULSET}" \
         --type merge \
         -p "{\"spec\":{\"template\":{\"metadata\":{\"annotations\":{\"checksum/backend-env\":\"${checksum}\"}}}}}"
     - kubectl -n "${BUILDER_K8S_NAMESPACE}" rollout status "statefulset/${BUILDER_K8S_STATEFULSET}" --timeout="${BUILDER_ROLLOUT_TIMEOUT}"
-    - rm -f /tmp/kubeconfig /tmp/backend-secret.json /tmp/backend-secret-patch.json /tmp/backend-env-checksum
+    - rm -f /tmp/kubeconfig
