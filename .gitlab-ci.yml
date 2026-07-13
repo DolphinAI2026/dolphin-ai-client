@@ -18,7 +18,6 @@ variables:
   BUILDER_K8S_DIST_INIT_CONTAINER: "copy-frontend-dist"
   BUILDER_VITE_BASE_URL: "/ai-builder/"
   BUILDER_ROLLOUT_TIMEOUT: "300s"
-  BUILDER_CONTROL_PLANE_URL: "https://om-demo.dfy.definesys.cn/control-plane"
 
 verify_builder:
   stage: verify
@@ -100,60 +99,3 @@ release_and_update_server:
         "statefulset/${BUILDER_K8S_STATEFULSET}" \
         --timeout="${BUILDER_ROLLOUT_TIMEOUT}"
       printf 'builderImage=%s\n' "${BUILDER_IMAGE}"
-
-update_builder_runtime_config:
-  stage: release
-  image:
-    name: hub-mirror.dfy.definesys.cn/bitnami/kubectl:1.30.7
-    entrypoint: [""]
-  rules:
-    - if: '$RUN_BUILDER_CONFIG_UPDATE == "1" && $BUILDER_CONFIG_CONFIRM == "update-builder-config"'
-      when: on_success
-    - when: never
-  script:
-    - |
-      if [ -n "${APAAS_KUBECONFIG_B64:-}" ]; then
-        printf '%s' "${APAAS_KUBECONFIG_B64}" | base64 -d > /tmp/kubeconfig
-      else
-        cp "${APAAS_KUBECONFIG}" /tmp/kubeconfig
-      fi
-      chmod 600 /tmp/kubeconfig
-      export KUBECONFIG=/tmp/kubeconfig
-    - |
-      set -eu
-      encoded_env="$(
-        kubectl -n "${BUILDER_K8S_NAMESPACE}" get secret ai-builder-backend-env \
-          -o 'jsonpath={.data.backend\.env}'
-      )"
-      backend_env="$(printf '%s' "${encoded_env}" | base64 -d)"
-      updated_env="$(
-        printf '%s\n' "${backend_env}" | awk \
-          -v value="${BUILDER_CONTROL_PLANE_URL%/}" '
-            BEGIN { key = "DOLPHIN_CODE_CONTROL_PLANE_URL"; replaced = 0 }
-            index($0, key "=") == 1 {
-              if (!replaced) {
-                print key "=" value
-                replaced = 1
-              }
-              next
-            }
-            { print }
-            END {
-              if (!replaced) {
-                print key "=" value
-              }
-            }
-          '
-      )"
-      updated_env="${updated_env}
-      "
-      encoded_updated_env="$(printf '%s' "${updated_env}" | base64 | tr -d '\n')"
-      checksum="$(printf '%s' "${updated_env}" | sha256sum | awk '{print $1}')"
-      kubectl -n "${BUILDER_K8S_NAMESPACE}" patch secret ai-builder-backend-env \
-        --type merge \
-        -p "{\"data\":{\"backend.env\":\"${encoded_updated_env}\"}}"
-      kubectl -n "${BUILDER_K8S_NAMESPACE}" patch "statefulset/${BUILDER_K8S_STATEFULSET}" \
-        --type merge \
-        -p "{\"spec\":{\"template\":{\"metadata\":{\"annotations\":{\"checksum/backend-env\":\"${checksum}\"}}}}}"
-    - kubectl -n "${BUILDER_K8S_NAMESPACE}" rollout status "statefulset/${BUILDER_K8S_STATEFULSET}" --timeout="${BUILDER_ROLLOUT_TIMEOUT}"
-    - rm -f /tmp/kubeconfig
