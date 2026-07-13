@@ -28,8 +28,10 @@ class Settings(BaseSettings):
     # 可选项：开启后，Dolphin 登录账号必须已在平台管理绑定本地租户和 aPaaS 环境。
     # 默认关闭；关闭时按 Dolphin 当前租户自动创建/复用本地租户上下文。
     control_plane_binding_enabled: bool = False
-    # 可选项：Dolphin 大平台认证地址；默认使用线上大平台。
-    dolphin_workspace_base_url: str = "https://dolphin.dfy.definesys.cn"
+    # 可选项：Control Plane 登录页所在环境的根地址。
+    dolphin_workspace_base_url: str = "https://om-demo.dfy.definesys.cn"
+    # 可选项：Control Plane 登录是否要求验证码；新认证页默认不要求。
+    control_plane_captcha_enabled: bool = False
     apaas_base_url: str = ""
     # 桌面 sidecar: 公网账号权威地址(authority)。空=本实例自身就是 authority。
     public_account_base_url: str = ""

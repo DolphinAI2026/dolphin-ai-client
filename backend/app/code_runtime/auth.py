@@ -131,17 +131,21 @@ async def login_to_control_plane(
     captcha_code: str,
 ) -> ControlPlaneAuthResult:
     base_url = _dolphin_workspace_base_url()
+    login_payload = {
+        "username": username,
+        "password": password,
+    }
+    if captcha_id and captcha_code:
+        login_payload.update({
+            "captcha_id": captcha_id,
+            "captcha_code": captcha_code,
+        })
     try:
         async with httpx.AsyncClient(timeout=30.0) as client:
             token = _response_payload(
                 await client.post(
                     f"{base_url}/api/auth/login",
-                    json={
-                        "username": username,
-                        "password": password,
-                        "captcha_id": captcha_id,
-                        "captcha_code": captcha_code,
-                    },
+                    json=login_payload,
                 ),
                 fallback="Dolphin 登录失败",
                 failure_status=401,

@@ -28,6 +28,15 @@ def _set_auth_provider(monkeypatch, provider: str) -> None:
     )
 
 
+def _set_control_plane_captcha_enabled(monkeypatch, enabled: bool) -> None:
+    monkeypatch.setattr(
+        settings.__class__,
+        "control_plane_captcha_enabled",
+        property(lambda _settings: enabled),
+        raising=False,
+    )
+
+
 async def _seed_login_user(
     db_session,
     *,
@@ -238,7 +247,68 @@ async def test_control_plane_auth_provider_uses_platform_binding_without_merging
 
 
 @pytest.mark.asyncio
-async def test_control_plane_login_without_binding_uses_only_dolphin_current_tenant(
+async def test_control_plane_auth_provider_allows_login_without_captcha_when_disabled(
+    db_session,
+    monkeypatch,
+):
+    _set_auth_provider(monkeypatch, "control_plane")
+    _set_control_plane_captcha_enabled(monkeypatch, False)
+    monkeypatch.setattr(settings, "control_plane_binding_enabled", False)
+    calls = []
+
+    async def fake_control_plane_login(username, password, captcha_id, captcha_code):
+        calls.append((username, password, captcha_id, captcha_code))
+        return SimpleNamespace(
+            username="workspace_admin",
+            display_name="Workspace Admin",
+            external_user_id="workspace-user-1",
+            roles=["tenant_admin"],
+            org_permissions={},
+            tenant_id="tenant-1",
+            tenant_name="Tenant 1",
+            access_token="workspace-access-token",
+            refresh_token="workspace-refresh-token",
+        )
+
+    async def fake_sync_builtin_llm_configs(_db, tenant_ids=None, *, commit=True):
+        assert tenant_ids
+        assert commit is False
+
+    monkeypatch.setattr(auth_routes, "login_to_control_plane", fake_control_plane_login)
+    monkeypatch.setattr(seed_data, "sync_builtin_llm_configs", fake_sync_builtin_llm_configs)
+
+    response = await login(
+        UserLogin(username="workspace_admin", password="password"),
+        db_session,
+    )
+
+    assert response.access_token
+    assert calls == [("workspace_admin", "password", "", "")]
+    payload = decode_token(response.access_token)
+    user = await db_session.get(User, int(payload["sub"]))
+    tenant = await db_session.get(Tenant, int(payload["tid"]))
+    assert user is not None
+    assert user.coding_tenant_id == "tenant-1"
+    assert tenant is not None
+    assert tenant.tenant_code == "workspace-tenant-1"
+    assert tenant.tenant_name == "Tenant 1"
+
+
+@pytest.mark.asyncio
+async def test_control_plane_captcha_endpoint_reports_not_required_when_disabled(monkeypatch):
+    _set_auth_provider(monkeypatch, "control_plane")
+    _set_control_plane_captcha_enabled(monkeypatch, False)
+
+    async def unexpected_captcha_fetch():
+        raise AssertionError("disabled captcha must not call the upstream captcha endpoint")
+
+    monkeypatch.setattr(auth_routes, "fetch_dolphin_captcha", unexpected_captcha_fetch)
+
+    assert await auth_routes.captcha() == {"required": False}
+
+
+@pytest.mark.asyncio
+async def test_control_plane_login_without_binding_uses_only_control_plane_current_tenant(
     db_session,
     monkeypatch,
 ):

@@ -132,6 +132,55 @@ async def test_login_to_control_plane_uses_dolphin_token_and_current_user(monkey
 
 
 @pytest.mark.asyncio
+async def test_login_to_control_plane_omits_empty_captcha_fields(monkeypatch):
+    from app.code_runtime import auth as coding_auth
+    from app.config import settings
+
+    class FakeClient:
+        def __init__(self, *args, **kwargs):
+            pass
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *_args):
+            return False
+
+        async def post(self, url, **kwargs):
+            assert url == "https://om-demo.example.com/api/auth/login"
+            assert kwargs["json"] == {
+                "username": "admin",
+                "password": "password",
+            }
+            return FakeResponse({
+                "access_token": "access-1",
+                "refresh_token": "refresh-1",
+            })
+
+        async def get(self, url, **kwargs):
+            assert url == "https://om-demo.example.com/api/auth/me"
+            return FakeResponse({
+                "id": 7,
+                "username": "admin",
+                "role": "tenant_admin",
+                "tenant_id": "tenant-1",
+                "tenant_name": "Tenant 1",
+            })
+
+    monkeypatch.setattr(coding_auth.httpx, "AsyncClient", FakeClient)
+    monkeypatch.setattr(
+        settings,
+        "dolphin_workspace_base_url",
+        "https://om-demo.example.com",
+        raising=False,
+    )
+
+    result = await coding_auth.login_to_control_plane("admin", "password", "", "")
+
+    assert result.tenant_id == "tenant-1"
+
+
+@pytest.mark.asyncio
 async def test_refresh_control_plane_token_uses_dolphin_refresh_api(monkeypatch):
     from app.code_runtime import auth as coding_auth
     from app.config import settings
