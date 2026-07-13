@@ -12,6 +12,15 @@ describe('shouldRedirectToLoginOnHttpError', () => {
     })).toBe(false)
   })
 
+  it('does not clear ai-builder login while the runtime proxy cookie is bootstrapping', () => {
+    expect(shouldRedirectToLoginOnHttpError({
+      status: 401,
+      reqUrl: '/code-runtime/2/shell/agent-sessions',
+      errorDetail: 'sandbox token is required',
+      isLoginPage: false,
+    })).toBe(false)
+  })
+
   it('does not treat forbidden business APIs as expired login sessions', () => {
     expect(shouldRedirectToLoginOnHttpError({
       status: 403,

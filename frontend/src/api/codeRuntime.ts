@@ -71,6 +71,12 @@ export interface CodeAgentSessionActivateResponse {
   session?: Record<string, any> | null
 }
 
+export function resolveCodeRuntimeEmbedUrl(url: string, baseUrl = import.meta.env.BASE_URL): string {
+  if (!url.startsWith('/api/code-runtime/')) return url
+  const base = String(baseUrl || '/').replace(/\/+$/, '')
+  return `${base === '/' ? '' : base}${url}`
+}
+
 export const codeRuntimeApi = {
   listApplications(params?: { keyword?: string; provisionStatus?: string; page?: number; pageSize?: number }) {
     return request.get<any, CodeApplicationListResponse>('/code/applications', { params })
@@ -97,8 +103,12 @@ export const codeRuntimeApi = {
       ...(body?.selected_llm_config_id != null ? { selected_llm_config_id: body.selected_llm_config_id } : {}),
     })
   },
-  openSession(sessionId: number) {
-    return request.post<any, CodeRuntimeOpenResponse>(`/code/sessions/${sessionId}/open`)
+  async openSession(sessionId: number) {
+    const opened = await request.post<any, CodeRuntimeOpenResponse>(`/code/sessions/${sessionId}/open`)
+    return {
+      ...opened,
+      embed_url: resolveCodeRuntimeEmbedUrl(opened.embed_url),
+    }
   },
   listRailHistory() {
     return request.get<any, CodeRailHistoryResponse>('/code/rail/history')

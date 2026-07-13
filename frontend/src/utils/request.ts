@@ -34,7 +34,11 @@ export function shouldRedirectToLoginOnHttpError(input: {
   const isAuthRequest =
     reqUrl.includes('/auth/login') ||
     reqUrl.includes('/auth/select-tenant')
-  const isCodeRuntimeRequest = reqUrl.startsWith('/code/') || reqUrl.includes('/code/')
+  const isCodeRuntimeRequest =
+    reqUrl.startsWith('/code/') ||
+    reqUrl.includes('/code/') ||
+    reqUrl.startsWith('/code-runtime/') ||
+    reqUrl.includes('/code-runtime/')
   const isPlatformSessionIssue =
     isApaasTokenError(errorDetail) ||
     (errorDetail.includes('平台') && errorDetail.includes('token'))
