@@ -2,6 +2,7 @@ import request, { API_PREFIX } from '@/utils/request'
 
 export interface AIChatSession {
   id: number
+  public_id?: string
   title: string
   status: string
   generation?: {

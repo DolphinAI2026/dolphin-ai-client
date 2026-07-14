@@ -77,7 +77,7 @@ describe('rail session normalization', () => {
     const out = normalizeCodeRailHistory({
       apps: [
         {
-          shell_session_id: 10,
+          shell_session_id: 'e9a6aa2a-9043-4bb5-bb5d-6d764c5fbfa3',
           external_application_id: 'crm',
           app_name: 'CRM',
           app_code: 'crm',
@@ -108,7 +108,7 @@ describe('rail session normalization', () => {
         title: '修复登录问题',
         updatedAt: '2026-07-01T07:00:00Z',
         appName: 'CRM',
-        shellSessionId: 10,
+        shellSessionId: 'e9a6aa2a-9043-4bb5-bb5d-6d764c5fbfa3',
         runtimeSessionId: 'runtime-2',
         current: false,
         source: 'code-agent',
@@ -118,7 +118,7 @@ describe('rail session normalization', () => {
         title: '会话 1',
         updatedAt: '2026-07-01T06:30:00Z',
         appName: 'CRM',
-        shellSessionId: 10,
+        shellSessionId: 'e9a6aa2a-9043-4bb5-bb5d-6d764c5fbfa3',
         runtimeSessionId: 'runtime-1',
         current: true,
         source: 'code-agent',
@@ -130,7 +130,7 @@ describe('rail session normalization', () => {
     const out = normalizeCodeRailHistory({
       apps: [
         {
-          shell_session_id: 10,
+          shell_session_id: 'e9a6aa2a-9043-4bb5-bb5d-6d764c5fbfa3',
           external_application_id: 'crm',
           app_name: 'CRM',
           app_code: 'crm',
@@ -142,11 +142,11 @@ describe('rail session normalization', () => {
 
     expect(out).toEqual([
       {
-        id: 10,
+        id: 'e9a6aa2a-9043-4bb5-bb5d-6d764c5fbfa3',
         title: 'CRM Code',
         updatedAt: undefined,
         appName: 'CRM',
-        shellSessionId: 10,
+        shellSessionId: 'e9a6aa2a-9043-4bb5-bb5d-6d764c5fbfa3',
         runtimeSessionId: undefined,
         current: false,
         source: 'code-shell',
@@ -185,10 +185,13 @@ describe('rail session navigation target', () => {
     expect(railSessionTarget('code', {
       id: 'runtime-2',
       title: '修复登录问题',
-      shellSessionId: 10,
+      shellSessionId: 'e9a6aa2a-9043-4bb5-bb5d-6d764c5fbfa3',
       runtimeSessionId: 'runtime-2',
       source: 'code-agent',
-    })).toEqual({ path: '/code/10', query: { agent: 'runtime-2' } })
+    })).toEqual({
+      path: '/code/e9a6aa2a-9043-4bb5-bb5d-6d764c5fbfa3',
+      query: { agent: 'runtime-2' },
+    })
   })
 })
 
@@ -209,12 +212,18 @@ describe('rail session active state', () => {
     const item = {
       id: 'runtime-2',
       title: '修复登录问题',
-      shellSessionId: 10,
+      shellSessionId: 'e9a6aa2a-9043-4bb5-bb5d-6d764c5fbfa3',
       runtimeSessionId: 'runtime-2',
       source: 'code-agent',
     } as const
-    expect(isRailSessionActive('code', item, { path: '/code/10', query: { agent: 'runtime-2' } })).toBe(true)
-    expect(isRailSessionActive('code', item, { path: '/code/10', query: { agent: 'runtime-1' } })).toBe(false)
+    expect(isRailSessionActive('code', item, {
+      path: '/code/e9a6aa2a-9043-4bb5-bb5d-6d764c5fbfa3',
+      query: { agent: 'runtime-2' },
+    })).toBe(true)
+    expect(isRailSessionActive('code', item, {
+      path: '/code/e9a6aa2a-9043-4bb5-bb5d-6d764c5fbfa3',
+      query: { agent: 'runtime-1' },
+    })).toBe(false)
     expect(isRailSessionActive('code', item, { path: '/code/11', query: { agent: 'runtime-2' } })).toBe(false)
   })
 })

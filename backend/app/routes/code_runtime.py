@@ -12,13 +12,16 @@ from starlette.background import BackgroundTask
 from starlette.responses import RedirectResponse, Response, StreamingResponse
 
 from app.code_runtime.service import (
+    CodeSessionRef,
     code_runtime_proxy_prefix,
     create_code_application,
     create_proxy_cookie_token,
+    ensure_code_session_public_id,
     ensure_code_application,
     ensure_application_access,
     list_code_applications,
     open_code_session,
+    resolve_code_session,
     validate_embed_token,
     validate_proxy_cookie_token,
 )
@@ -62,6 +65,7 @@ class CreateCodeApplicationRequest(BaseModel):
 def _session_to_dict(session: AIChatSession) -> dict:
     return {
         "id": session.id,
+        "public_id": ensure_code_session_public_id(session),
         "title": session.title,
         "status": session.status,
         "mode": session.mode,
@@ -214,6 +218,9 @@ async def create_code_session_from_external_app(
     ).scalar_one_or_none()
     if existing:
         changed = False
+        if not getattr(existing, "public_id", None):
+            ensure_code_session_public_id(existing)
+            changed = True
         if app_name and existing.external_app_name != app_name:
             existing.external_app_name = app_name
             changed = True
@@ -251,7 +258,7 @@ async def create_code_session_from_external_app(
 
 @router.post("/sessions/{session_id}/open")
 async def open_code_runtime_session(
-    session_id: int,
+    session_id: str,
     request: Request,
     ctx: Annotated[AuthContext, Depends(get_auth_context)],
     db: Annotated[AsyncSession, Depends(get_db)],
@@ -349,15 +356,23 @@ async def _current_runtime_session_item(
 
 async def _authorized_code_runtime_binding(
     db: AsyncSession,
-    session_id: int,
+    session_id: CodeSessionRef,
     ctx: AuthContext,
 ) -> tuple[AIChatSession, CodeRuntimeBinding]:
+    session = await resolve_code_session(db, session_id)
+    if (
+        not session
+        or session.tenant_id != ctx.tenant_id
+        or session.user_id != ctx.user.id
+        or session.mode != "code"
+    ):
+        raise HTTPException(status_code=404, detail="Code runtime binding not found")
     row = (
         await db.execute(
             select(AIChatSession, CodeRuntimeBinding)
             .join(CodeRuntimeBinding, CodeRuntimeBinding.session_id == AIChatSession.id)
             .where(
-                AIChatSession.id == int(session_id),
+                AIChatSession.id == session.id,
                 AIChatSession.tenant_id == ctx.tenant_id,
                 AIChatSession.user_id == ctx.user.id,
                 AIChatSession.mode == "code",
@@ -517,7 +532,7 @@ async def list_code_runtime_rail_history(
         emitted_external_ids.add(dedupe_key)
 
         app: dict[str, Any] = {
-            "shell_session_id": session.id,
+            "shell_session_id": ensure_code_session_public_id(session),
             "external_application_id": external_id,
             "app_name": session.external_app_name or session.title,
             "app_code": session.external_app_code,
@@ -564,12 +579,13 @@ async def list_code_runtime_rail_history(
             app["sessions"] = normalized_sessions
         apps.append(app)
 
+    await db.commit()
     return {"apps": apps}
 
 
 @router.post("/sessions/{session_id}/agent-sessions")
 async def create_code_runtime_agent_session(
-    session_id: int,
+    session_id: str,
     ctx: Annotated[AuthContext, Depends(get_auth_context)],
     db: Annotated[AsyncSession, Depends(get_db)],
 ):
@@ -587,7 +603,7 @@ async def create_code_runtime_agent_session(
     await _remember_runtime_agent_session(db, session, binding, runtime_session_id)
     await db.commit()
     return {
-        "shell_session_id": int(session_id),
+        "shell_session_id": ensure_code_session_public_id(session),
         "runtime_session_id": runtime_session_id,
         "session": payload,
     }
@@ -595,7 +611,7 @@ async def create_code_runtime_agent_session(
 
 @router.post("/sessions/{session_id}/agent-sessions/{runtime_session_id}/activate")
 async def activate_code_runtime_agent_session(
-    session_id: int,
+    session_id: str,
     runtime_session_id: str,
     ctx: Annotated[AuthContext, Depends(get_auth_context)],
     db: Annotated[AsyncSession, Depends(get_db)],
@@ -608,7 +624,7 @@ async def activate_code_runtime_agent_session(
     await _remember_runtime_agent_session(db, session, binding, activated_id)
     await db.commit()
     return {
-        "shell_session_id": int(session_id),
+        "shell_session_id": ensure_code_session_public_id(session),
         "runtime_session_id": activated_id,
         "session": payload,
     }
@@ -616,18 +632,18 @@ async def activate_code_runtime_agent_session(
 
 @router.delete("/sessions/{session_id}/agent-sessions/{runtime_session_id}")
 async def delete_code_runtime_agent_session(
-    session_id: int,
+    session_id: str,
     runtime_session_id: str,
     ctx: Annotated[AuthContext, Depends(get_auth_context)],
     db: Annotated[AsyncSession, Depends(get_db)],
 ):
-    _session, binding = await _authorized_code_runtime_binding(db, session_id, ctx)
+    session, binding = await _authorized_code_runtime_binding(db, session_id, ctx)
     encoded_id = quote(str(runtime_session_id), safe="")
     payload = await _runtime_json_request(binding, "DELETE", f"/api/agent/sessions/{encoded_id}")
     scoped = (
         await db.execute(
             select(CodeRuntimeAgentSession).where(
-                CodeRuntimeAgentSession.session_id == int(session_id),
+                CodeRuntimeAgentSession.session_id == session.id,
                 CodeRuntimeAgentSession.runtime_session_id == str(runtime_session_id),
             )
         )
@@ -643,11 +659,11 @@ async def delete_code_runtime_agent_session(
     return payload if isinstance(payload, dict) else {"ok": True}
 
 
-def _embed_cookie_name(session_id: int) -> str:
-    return f"dolphin_code_runtime_{int(session_id)}"
+def _embed_cookie_name(session_id: CodeSessionRef) -> str:
+    return f"dolphin_code_runtime_{str(session_id).strip()}"
 
 
-def _runtime_cookie_header(cookie_header: str, session_id: int) -> str:
+def _runtime_cookie_header(cookie_header: str, session_id: CodeSessionRef) -> str:
     proxy_cookie_name = _embed_cookie_name(session_id)
     forwarded: list[str] = []
     for part in str(cookie_header or "").split(";"):
@@ -661,7 +677,7 @@ def _runtime_cookie_header(cookie_header: str, session_id: int) -> str:
     return "; ".join(forwarded)
 
 
-def _copyable_request_headers(request: Request, session_id: int) -> dict[str, str]:
+def _copyable_request_headers(request: Request, session_id: CodeSessionRef) -> dict[str, str]:
     excluded = {"host", "connection", "content-length", "cookie"}
     copied = {
         key: value
@@ -680,7 +696,7 @@ async def _browser_runtime_json_request(
     path: str,
     *,
     request: Request,
-    session_id: int,
+    session_id: CodeSessionRef,
     json_body: Any = None,
 ) -> Any:
     target = f"{binding.runtime_base_url.rstrip('/')}/{path.lstrip('/')}"
@@ -715,14 +731,14 @@ def _path_with_forwarded_prefix(path: str, forwarded_prefix: str = "") -> str:
     return target_path
 
 
-def _public_proxy_prefix(session_id: int, forwarded_prefix: str = "") -> str:
+def _public_proxy_prefix(session_id: CodeSessionRef, forwarded_prefix: str = "") -> str:
     return _path_with_forwarded_prefix(code_runtime_proxy_prefix(session_id), forwarded_prefix)
 
 
 def _rewrite_location_header(
     value: str,
     binding: CodeRuntimeBinding,
-    session_id: int,
+    session_id: CodeSessionRef,
     forwarded_prefix: str = "",
 ) -> str:
     if not value:
@@ -849,7 +865,7 @@ def _copyable_response_headers(
     return copied
 
 
-def _rewrite_set_cookie_path(value: str, session_id: int, forwarded_prefix: str = "") -> str:
+def _rewrite_set_cookie_path(value: str, session_id: CodeSessionRef, forwarded_prefix: str = "") -> str:
     proxy_prefix = _public_proxy_prefix(session_id, forwarded_prefix)
     parts = [part.strip() for part in value.split(";")]
     rewritten: list[str] = []
@@ -1003,7 +1019,7 @@ html.dolphin-code-external-session-rail .workbench-shell[data-layout-state="spli
 
 def _inject_shell_config(
     html: bytes,
-    session_id: int,
+    session_id: CodeSessionRef,
     origin: str,
     forwarded_prefix: str = "",
 ) -> bytes:
@@ -1058,7 +1074,7 @@ def _browser_origin_from_headers(headers, fallback: str) -> str:
 
 def _rewrite_runtime_dev_asset_paths(
     content: bytes,
-    session_id: int,
+    session_id: CodeSessionRef,
     forwarded_prefix: str = "",
 ) -> bytes:
     prefix = _public_proxy_prefix(session_id, forwarded_prefix).encode("utf-8")
@@ -1087,11 +1103,20 @@ def _should_rewrite_buffered_response(path: str, content_type: str) -> bool:
     return _should_buffer_dev_asset_path(path)
 
 
-async def _authorize_proxy_request(request: Request, session_id: int) -> Response | None:
+async def _authorize_proxy_request(
+    request: Request,
+    session_id: CodeSessionRef,
+    *,
+    legacy_session_id: int | None = None,
+) -> Response | None:
     query_token = request.query_params.get("dolphin_token", "").strip()
     cookie_token = request.cookies.get(_embed_cookie_name(session_id), "").strip()
     if query_token:
-        payload = validate_embed_token(query_token, session_id=session_id)
+        payload = validate_embed_token(
+            query_token,
+            session_id=session_id,
+            legacy_session_id=legacy_session_id,
+        )
         proxy_token = create_proxy_cookie_token(
             session_id=session_id,
             user_id=int(payload["sub"]),
@@ -1115,7 +1140,11 @@ async def _authorize_proxy_request(request: Request, session_id: int) -> Respons
         )
         return redirect
     if cookie_token:
-        validate_proxy_cookie_token(cookie_token, session_id=session_id)
+        validate_proxy_cookie_token(
+            cookie_token,
+            session_id=session_id,
+            legacy_session_id=legacy_session_id,
+        )
         return None
     raise HTTPException(status_code=401, detail="Code runtime token required")
 
@@ -1123,7 +1152,7 @@ async def _authorize_proxy_request(request: Request, session_id: int) -> Respons
 def _renew_authenticated_proxy_cookie(
     response: Response,
     request: Request,
-    session_id: int,
+    session_id: CodeSessionRef,
     ctx: AuthContext,
 ) -> None:
     proxy_token = create_proxy_cookie_token(
@@ -1146,13 +1175,13 @@ def _renew_authenticated_proxy_cookie(
 
 @proxy_router.get("/{session_id}/shell/agent-sessions")
 async def list_browser_authenticated_agent_sessions(
-    session_id: int,
+    session_id: str,
     request: Request,
     response: Response,
     ctx: Annotated[AuthContext, Depends(get_auth_context)],
     db: Annotated[AsyncSession, Depends(get_db)],
 ):
-    _session, binding = await _authorized_code_runtime_binding(db, session_id, ctx)
+    session, binding = await _authorized_code_runtime_binding(db, session_id, ctx)
     _renew_authenticated_proxy_cookie(response, request, session_id, ctx)
     payload = await _browser_runtime_json_request(
         binding,
@@ -1163,7 +1192,7 @@ async def list_browser_authenticated_agent_sessions(
     )
     sessions = payload.get("sessions") if isinstance(payload, dict) else []
     normalized_sessions = sessions if isinstance(sessions, list) else []
-    other_scoped_ids = await _runtime_session_ids_scoped_to_other_shells(db, session_id)
+    other_scoped_ids = await _runtime_session_ids_scoped_to_other_shells(db, session.id)
     normalized_sessions = _filter_browser_runtime_sessions(
         normalized_sessions,
         other_scoped_ids=other_scoped_ids,
@@ -1179,7 +1208,7 @@ async def list_browser_authenticated_agent_sessions(
 
 @proxy_router.post("/{session_id}/shell/agent-sessions")
 async def create_browser_authenticated_agent_session(
-    session_id: int,
+    session_id: str,
     request: Request,
     response: Response,
     ctx: Annotated[AuthContext, Depends(get_auth_context)],
@@ -1207,7 +1236,7 @@ async def create_browser_authenticated_agent_session(
     await _remember_runtime_agent_session(db, session, binding, runtime_session_id)
     await db.commit()
     return {
-        "shell_session_id": int(session_id),
+        "shell_session_id": ensure_code_session_public_id(session),
         "runtime_session_id": runtime_session_id,
         "session": payload,
     }
@@ -1215,7 +1244,7 @@ async def create_browser_authenticated_agent_session(
 
 @proxy_router.post("/{session_id}/shell/agent-sessions/{runtime_session_id}/activate")
 async def activate_browser_authenticated_agent_session(
-    session_id: int,
+    session_id: str,
     runtime_session_id: str,
     request: Request,
     response: Response,
@@ -1237,7 +1266,7 @@ async def activate_browser_authenticated_agent_session(
     await _remember_runtime_agent_session(db, session, binding, activated_id)
     await db.commit()
     return {
-        "shell_session_id": int(session_id),
+        "shell_session_id": ensure_code_session_public_id(session),
         "runtime_session_id": activated_id,
         "session": payload,
     }
@@ -1245,14 +1274,14 @@ async def activate_browser_authenticated_agent_session(
 
 @proxy_router.delete("/{session_id}/shell/agent-sessions/{runtime_session_id}")
 async def delete_browser_authenticated_agent_session(
-    session_id: int,
+    session_id: str,
     runtime_session_id: str,
     request: Request,
     response: Response,
     ctx: Annotated[AuthContext, Depends(get_auth_context)],
     db: Annotated[AsyncSession, Depends(get_db)],
 ):
-    _session, binding = await _authorized_code_runtime_binding(db, session_id, ctx)
+    session, binding = await _authorized_code_runtime_binding(db, session_id, ctx)
     _renew_authenticated_proxy_cookie(response, request, session_id, ctx)
     encoded_id = quote(str(runtime_session_id), safe="")
     payload = await _browser_runtime_json_request(
@@ -1265,7 +1294,7 @@ async def delete_browser_authenticated_agent_session(
     scoped = (
         await db.execute(
             select(CodeRuntimeAgentSession).where(
-                CodeRuntimeAgentSession.session_id == int(session_id),
+                CodeRuntimeAgentSession.session_id == session.id,
                 CodeRuntimeAgentSession.runtime_session_id == str(runtime_session_id),
             )
         )
@@ -1289,18 +1318,25 @@ def _target_url(binding: CodeRuntimeBinding, path: str, request: Request) -> str
 
 @proxy_router.api_route("/{session_id}/{path:path}", methods=["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"])
 async def proxy_code_runtime(
-    session_id: int,
+    session_id: str,
     path: str,
     request: Request,
     db: Annotated[AsyncSession, Depends(get_db)],
 ):
     forwarded_prefix = request.headers.get("x-forwarded-prefix", "")
-    auth_response = await _authorize_proxy_request(request, session_id)
+    session = await resolve_code_session(db, session_id)
+    if not session or session.mode != "code":
+        raise HTTPException(status_code=404, detail="Code runtime binding not found")
+    auth_response = await _authorize_proxy_request(
+        request,
+        session_id,
+        legacy_session_id=session.id,
+    )
     if auth_response is not None:
         return auth_response
 
     binding = (
-        await db.execute(select(CodeRuntimeBinding).where(CodeRuntimeBinding.session_id == int(session_id)))
+        await db.execute(select(CodeRuntimeBinding).where(CodeRuntimeBinding.session_id == session.id))
     ).scalar_one_or_none()
     if not binding:
         raise HTTPException(status_code=404, detail="Code runtime binding not found")

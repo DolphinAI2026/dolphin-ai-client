@@ -57,11 +57,38 @@ def _builder_suffix(builder_url: str) -> tuple[str, list[tuple[str, str]]]:
     return suffix or "/builder", parse_qsl(parsed.query, keep_blank_values=True)
 
 
-def code_runtime_proxy_prefix(session_id: int) -> str:
-    return f"/api/code-runtime/{int(session_id)}"
+CodeSessionRef = str | int
 
 
-def build_embed_url(session_id: int, builder_url: str, dolphin_token: str) -> str:
+def ensure_code_session_public_id(session: AIChatSession) -> str:
+    public_id = str(getattr(session, "public_id", "") or "").strip()
+    if not public_id:
+        public_id = str(uuid4())
+        session.public_id = public_id
+    return public_id
+
+
+async def resolve_code_session(db: AsyncSession, session_ref: CodeSessionRef) -> AIChatSession | None:
+    normalized = str(session_ref or "").strip()
+    if not normalized:
+        return None
+    session = (
+        await db.execute(
+            select(AIChatSession).where(AIChatSession.public_id == normalized)
+        )
+    ).scalar_one_or_none()
+    if session is None and normalized.isdigit():
+        session = await db.get(AIChatSession, int(normalized))
+    if session is not None:
+        ensure_code_session_public_id(session)
+    return session
+
+
+def code_runtime_proxy_prefix(session_id: CodeSessionRef) -> str:
+    return f"/api/code-runtime/{str(session_id).strip()}"
+
+
+def build_embed_url(session_id: CodeSessionRef, builder_url: str, dolphin_token: str) -> str:
     suffix, query_items = _builder_suffix(builder_url)
     for key in ("externalSessionRail", "hideHistory", "hideNewSession"):
         if not any(item_key == key for item_key, _value in query_items):
@@ -81,12 +108,14 @@ def strip_dolphin_token_from_url(url: str) -> str:
     return urlunsplit((parsed.scheme, parsed.netloc, parsed.path, urlencode(query_items), parsed.fragment))
 
 
-def _create_runtime_token(*, token_type: str, session_id: int, user_id: int, tenant_id: int, minutes: int) -> str:
+def _create_runtime_token(
+    *, token_type: str, session_id: CodeSessionRef, user_id: int, tenant_id: int, minutes: int
+) -> str:
     now = datetime.now(timezone.utc)
     payload = {
         "sub": str(user_id),
         "tid": int(tenant_id),
-        "sid": int(session_id),
+        "sid": str(session_id),
         "type": token_type,
         "iat": now,
         "exp": now + timedelta(minutes=minutes),
@@ -95,7 +124,7 @@ def _create_runtime_token(*, token_type: str, session_id: int, user_id: int, ten
     return jwt.encode(payload, settings.jwt_secret_key, algorithm=settings.jwt_algorithm)
 
 
-def create_embed_token(*, session_id: int, user_id: int, tenant_id: int, minutes: int = 10) -> str:
+def create_embed_token(*, session_id: CodeSessionRef, user_id: int, tenant_id: int, minutes: int = 10) -> str:
     return _create_runtime_token(
         token_type=_EMBED_TOKEN_TYPE,
         session_id=session_id,
@@ -105,7 +134,9 @@ def create_embed_token(*, session_id: int, user_id: int, tenant_id: int, minutes
     )
 
 
-def create_proxy_cookie_token(*, session_id: int, user_id: int, tenant_id: int, minutes: int = 12 * 60) -> str:
+def create_proxy_cookie_token(
+    *, session_id: CodeSessionRef, user_id: int, tenant_id: int, minutes: int = 12 * 60
+) -> str:
     return _create_runtime_token(
         token_type=_PROXY_COOKIE_TOKEN_TYPE,
         session_id=session_id,
@@ -115,7 +146,13 @@ def create_proxy_cookie_token(*, session_id: int, user_id: int, tenant_id: int, 
     )
 
 
-def _validate_runtime_token(token: str, *, session_id: int, token_type: str) -> dict[str, Any]:
+def _validate_runtime_token(
+    token: str,
+    *,
+    session_id: CodeSessionRef,
+    token_type: str,
+    legacy_session_id: int | None = None,
+) -> dict[str, Any]:
     try:
         payload = jwt.decode(
             token,
@@ -125,17 +162,34 @@ def _validate_runtime_token(token: str, *, session_id: int, token_type: str) -> 
         )
     except JWTError as exc:
         raise HTTPException(status_code=401, detail="Code runtime token invalid") from exc
-    if payload.get("type") != token_type or int(payload.get("sid") or 0) != int(session_id):
+    accepted_session_ids = {str(session_id)}
+    if legacy_session_id is not None:
+        accepted_session_ids.add(str(legacy_session_id))
+    if payload.get("type") != token_type or str(payload.get("sid") or "") not in accepted_session_ids:
         raise HTTPException(status_code=401, detail="Code runtime token invalid")
     return payload
 
 
-def validate_embed_token(token: str, *, session_id: int) -> dict[str, Any]:
-    return _validate_runtime_token(token, session_id=session_id, token_type=_EMBED_TOKEN_TYPE)
+def validate_embed_token(
+    token: str, *, session_id: CodeSessionRef, legacy_session_id: int | None = None
+) -> dict[str, Any]:
+    return _validate_runtime_token(
+        token,
+        session_id=session_id,
+        token_type=_EMBED_TOKEN_TYPE,
+        legacy_session_id=legacy_session_id,
+    )
 
 
-def validate_proxy_cookie_token(token: str, *, session_id: int) -> dict[str, Any]:
-    return _validate_runtime_token(token, session_id=session_id, token_type=_PROXY_COOKIE_TOKEN_TYPE)
+def validate_proxy_cookie_token(
+    token: str, *, session_id: CodeSessionRef, legacy_session_id: int | None = None
+) -> dict[str, Any]:
+    return _validate_runtime_token(
+        token,
+        session_id=session_id,
+        token_type=_PROXY_COOKIE_TOKEN_TYPE,
+        legacy_session_id=legacy_session_id,
+    )
 
 
 def _is_application_admin(ctx: Any) -> bool:
@@ -589,7 +643,7 @@ async def default_workspace_open(
 async def open_code_session(
     *,
     db: AsyncSession,
-    session_id: int,
+    session_id: CodeSessionRef,
     ctx: Any,
     workspace_open: WorkspaceOpen | None = None,
     embed_token_factory: Callable[..., str] = create_embed_token,
@@ -597,7 +651,7 @@ async def open_code_session(
     authorization_header: str | None = None,
     auth_provider: str | None = None,
 ) -> dict[str, Any]:
-    session = await db.get(AIChatSession, int(session_id))
+    session = await resolve_code_session(db, session_id)
     if not session or session.tenant_id != int(ctx.tenant_id) or session.user_id != int(ctx.user.id):
         raise HTTPException(status_code=404, detail="Code 会话不存在")
     if session.mode != "code":
@@ -672,14 +726,15 @@ async def open_code_session(
     binding.last_error = None
     await db.flush()
 
-    token = embed_token_factory(session_id=session.id, user_id=session.user_id, tenant_id=session.tenant_id)
+    public_id = ensure_code_session_public_id(session)
+    token = embed_token_factory(session_id=public_id, user_id=session.user_id, tenant_id=session.tenant_id)
     return {
-        "session_id": session.id,
+        "session_id": public_id,
         "app_id": session.app_id,
         "external_application_id": external_app_id,
         "workspace_id": binding.workspace_id,
         "sandbox_instance_id": binding.sandbox_instance_id,
         "runtime_session_id": binding.runtime_session_id,
-        "external_base_path": code_runtime_proxy_prefix(session.id),
-        "embed_url": build_embed_url(session.id, builder_url, token),
+        "external_base_path": code_runtime_proxy_prefix(public_id),
+        "embed_url": build_embed_url(public_id, builder_url, token),
     }

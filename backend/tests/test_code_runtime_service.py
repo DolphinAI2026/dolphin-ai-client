@@ -33,10 +33,19 @@ def test_ai_chat_session_model_tracks_external_code_application():
 
     cols = {c.name for c in sa_inspect(AIChatSession).columns}
     assert {
+        "public_id",
         "external_application_id",
         "external_app_name",
         "external_app_code",
     }.issubset(cols)
+
+
+def test_code_runtime_proxy_prefix_accepts_public_uuid():
+    from app.code_runtime.service import code_runtime_proxy_prefix
+
+    public_id = "e9a6aa2a-9043-4bb5-bb5d-6d764c5fbfa3"
+
+    assert code_runtime_proxy_prefix(public_id) == f"/api/code-runtime/{public_id}"
 
 
 def test_build_embed_url_keeps_runtime_query_and_adds_dolphin_token():
@@ -592,7 +601,7 @@ def test_embed_token_round_trip_is_bound_to_session():
     token = create_embed_token(session_id=12, user_id=34, tenant_id=56, minutes=1)
 
     payload = validate_embed_token(token, session_id=12)
-    assert payload["sid"] == 12
+    assert payload["sid"] == "12"
     assert payload["sub"] == "34"
     assert payload["tid"] == 56
 
@@ -665,9 +674,9 @@ async def test_open_code_session_upserts_runtime_binding(db_session):
     )
 
     assert calls == ["91001"]
-    assert result["session_id"] == session.id
-    assert result["external_base_path"] == f"/api/code-runtime/{session.id}"
-    assert result["embed_url"].startswith(f"/api/code-runtime/{session.id}/builder/?")
+    assert result["session_id"] == session.public_id
+    assert result["external_base_path"] == f"/api/code-runtime/{session.public_id}"
+    assert result["embed_url"].startswith(f"/api/code-runtime/{session.public_id}/builder/?")
     assert "dolphin_token=dolphin-embed" in result["embed_url"]
 
     binding = (

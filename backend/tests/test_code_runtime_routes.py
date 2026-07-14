@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from types import SimpleNamespace
+from uuid import UUID
 
 import pytest
 from sqlalchemy import select
@@ -595,6 +596,7 @@ async def test_create_code_session_from_external_app_creates_mode_code_session_w
     )
 
     assert result["mode"] == "code"
+    assert str(UUID(result["public_id"])) == result["public_id"]
     assert result["app_id"] is None
     assert result["external_application_id"] == "code-app-1"
     assert result["external_app_name"] == "客户门户"
@@ -659,17 +661,17 @@ async def test_list_code_runtime_rail_history_includes_shell_session_without_bin
 
     result = await list_code_runtime_rail_history(_ctx(), db_session)
 
-    assert result == {
-        "apps": [
-            {
-                "shell_session_id": 1,
-                "external_application_id": "crm",
-                "app_name": "CRM",
-                "app_code": "crm",
-                "runtime_session_id": None,
-                "sessions": [],
-            }
-        ]
+    assert len(result["apps"]) == 1
+    app = result["apps"][0]
+    assert app["shell_session_id"] != "1"
+    assert len(app["shell_session_id"]) == 36
+    assert app == {
+        "shell_session_id": app["shell_session_id"],
+        "external_application_id": "crm",
+        "app_name": "CRM",
+        "app_code": "crm",
+        "runtime_session_id": None,
+        "sessions": [],
     }
 
 
@@ -880,16 +882,20 @@ async def test_list_code_runtime_rail_history_returns_opened_app_agent_sessions(
     result = await list_code_runtime_rail_history(_ctx(), db_session)
 
     apps_by_external_id = {app["external_application_id"]: app for app in result["apps"]}
+    unopened_shell_id = apps_by_external_id["never-opened"]["shell_session_id"]
+    assert str(UUID(unopened_shell_id)) == unopened_shell_id
     assert apps_by_external_id["never-opened"] == {
-        "shell_session_id": 2,
+        "shell_session_id": unopened_shell_id,
         "external_application_id": "never-opened",
         "app_name": "未打开",
         "app_code": None,
         "runtime_session_id": None,
         "sessions": [],
     }
+    crm_shell_id = apps_by_external_id["crm"]["shell_session_id"]
+    assert str(UUID(crm_shell_id)) == crm_shell_id
     assert apps_by_external_id["crm"] == {
-        "shell_session_id": 1,
+        "shell_session_id": crm_shell_id,
         "external_application_id": "crm",
         "app_name": "CRM",
         "app_code": "crm",
@@ -1298,7 +1304,7 @@ async def test_activate_code_runtime_agent_session_proxies_to_runtime_and_update
     result = await activate_code_runtime_agent_session(1, "runtime-2", _ctx(), db_session)
 
     assert seen == [("POST", "/workspaces/crm/api/agent/sessions/runtime-2/activate")]
-    assert result["shell_session_id"] == 1
+    assert str(UUID(result["shell_session_id"])) == result["shell_session_id"]
     assert result["runtime_session_id"] == "runtime-2"
     assert result["session"]["runtimeSessionId"] == "runtime-2"
     binding = (await db_session.execute(
@@ -1366,7 +1372,7 @@ async def test_create_code_runtime_agent_session_proxies_to_runtime_and_updates_
     result = await create_code_runtime_agent_session(1, _ctx(), db_session)
 
     assert seen == [("POST", "/workspaces/crm/api/agent/sessions", b"{}")]
-    assert result["shell_session_id"] == 1
+    assert str(UUID(result["shell_session_id"])) == result["shell_session_id"]
     assert result["runtime_session_id"] == "runtime-new"
     assert result["session"]["runtimeSessionId"] == "runtime-new"
     binding = (await db_session.execute(

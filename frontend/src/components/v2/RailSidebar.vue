@@ -108,8 +108,8 @@ async function loadRailSessions() {
 
 async function hydrateCodeRailHistory(history: CodeRailHistoryResponse): Promise<CodeRailHistoryResponse> {
   const apps = await Promise.all((history.apps || []).map(async (app) => {
-    const shellSessionId = Number(app.shell_session_id)
-    if (!Number.isFinite(shellSessionId) || shellSessionId <= 0) return app
+    const shellSessionId = String(app.shell_session_id || '').trim()
+    if (!shellSessionId) return app
     try {
       const payload = await codeRuntimeApi.listAgentSessions(shellSessionId)
       return { ...app, sessions: payload.sessions || [], error: undefined }
@@ -169,7 +169,7 @@ function toggleGroup(label: string) {
 }
 
 const creatingCodeAgentSession = ref(false)
-const sessionGroups = computed<{ label: string; items: RailSession[]; shellSessionId?: number }[]>(() => {
+const sessionGroups = computed<{ label: string; items: RailSession[]; shellSessionId?: string }[]>(() => {
   if (effectiveGroupBy.value === 'app') {
     const map = new Map<string, RailSession[]>()
     for (const s of railSessions.value) {
@@ -210,7 +210,7 @@ async function openSession(session: RailSession) {
   router.push(railSessionTarget(currentMode.value, session))
 }
 function sessionActive(s: RailSession) { return isRailSessionActive(currentMode.value, s, route) }
-async function createCodeAgentSession(shellSessionId?: number | null) {
+async function createCodeAgentSession(shellSessionId?: string | null) {
   if (creatingCodeAgentSession.value) return
   const isCodeMode = currentMode.value === 'code'
   if (!isCodeMode) return

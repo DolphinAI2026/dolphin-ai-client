@@ -7,7 +7,7 @@ describe('Apps Code mode entry', () => {
     expect(appsSource).toContain("from '@/api/codeRuntime'")
     expect(appsSource).toContain('isCodeRoutePath(route.path)')
     expect(appsSource).toContain('codeRuntimeApi.createSessionFromExternalApp')
-    expect(appsSource).toContain('`/code/${created.id}`')
+    expect(appsSource).toContain('`/code/${created.public_id}`')
   })
 
   it('refreshes the outer rail after opening a Code application', () => {

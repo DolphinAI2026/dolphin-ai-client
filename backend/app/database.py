@@ -213,6 +213,8 @@ async def init_db():
             "ALTER TABLE ai_chat_sessions ADD COLUMN workspace_id VARCHAR(64)",
             "CREATE INDEX IF NOT EXISTS ix_ai_chat_sessions_workspace_id ON ai_chat_sessions(workspace_id)",
             # Code 模式外部应用锚点：来自 d-ai-code Control Plane，不在本地 applications 建影子项目。
+            "ALTER TABLE ai_chat_sessions ADD COLUMN public_id VARCHAR(36)",
+            "CREATE UNIQUE INDEX IF NOT EXISTS ix_ai_chat_sessions_public_id ON ai_chat_sessions(public_id)",
             "ALTER TABLE ai_chat_sessions ADD COLUMN external_application_id VARCHAR(80)",
             "ALTER TABLE ai_chat_sessions ADD COLUMN external_app_name VARCHAR(200)",
             "ALTER TABLE ai_chat_sessions ADD COLUMN external_app_code VARCHAR(120)",

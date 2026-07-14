@@ -15,7 +15,7 @@ export interface RailSession {
   /** 用于「按应用」分组(coding 会话暂无,落「未关联应用」) */
   appName?: string
   source?: 'ai-chat' | 'code-agent' | 'code-shell'
-  shellSessionId?: number
+  shellSessionId?: string
   runtimeSessionId?: string
   current?: boolean
 }
@@ -83,8 +83,8 @@ export function normalizeCodeRailHistory(history: CodeRailHistoryResponse | null
   const apps = history?.apps || []
   const out: RailSession[] = []
   for (const app of apps) {
-    const shellSessionId = Number(app.shell_session_id)
-    if (!Number.isFinite(shellSessionId) || shellSessionId <= 0) continue
+    const shellSessionId = String(app.shell_session_id || '').trim()
+    if (!shellSessionId) continue
     const appName = String(app.app_name || app.app_code || app.external_application_id || '未关联应用').trim()
     const runtimeSessions = app.sessions || []
     if (!runtimeSessions.length) {
@@ -161,12 +161,12 @@ export function isRailSessionActive(
 
 function isCodeAgentRailSession(session: RailSession | { id: number | string }): session is RailSession & {
   source: 'code-agent'
-  shellSessionId: number
+  shellSessionId: string
   runtimeSessionId: string
 } {
   return 'source' in session
     && session.source === 'code-agent'
-    && Number.isFinite(Number(session.shellSessionId))
+    && Boolean(session.shellSessionId)
     && Boolean(session.runtimeSessionId)
 }
 

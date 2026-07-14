@@ -26,7 +26,7 @@ export interface CreateCodeApplicationRequest {
 }
 
 export interface CodeRuntimeOpenResponse {
-  session_id: number
+  session_id: string
   app_id: number | null
   external_application_id: string
   workspace_id?: string | null
@@ -52,7 +52,7 @@ export interface CodeAgentSessionRecord {
 }
 
 export interface CodeRailHistoryApp {
-  shell_session_id: number
+  shell_session_id: string
   external_application_id: string
   app_name?: string | null
   app_code?: string | null
@@ -66,7 +66,7 @@ export interface CodeRailHistoryResponse {
 }
 
 export interface CodeAgentSessionActivateResponse {
-  shell_session_id: number
+  shell_session_id: string
   runtime_session_id: string
   session?: Record<string, any> | null
 }
@@ -103,7 +103,7 @@ export const codeRuntimeApi = {
       ...(body?.selected_llm_config_id != null ? { selected_llm_config_id: body.selected_llm_config_id } : {}),
     })
   },
-  async openSession(sessionId: number) {
+  async openSession(sessionId: string) {
     const opened = await request.post<any, CodeRuntimeOpenResponse>(`/code/sessions/${sessionId}/open`)
     return {
       ...opened,
@@ -113,22 +113,22 @@ export const codeRuntimeApi = {
   listRailHistory() {
     return request.get<any, CodeRailHistoryResponse>('/code/rail/history')
   },
-  listAgentSessions(shellSessionId: number) {
+  listAgentSessions(shellSessionId: string) {
     return request.get<any, { sessions: CodeAgentSessionRecord[] }>(
       `/code-runtime/${shellSessionId}/shell/agent-sessions`,
     )
   },
-  createAgentSession(shellSessionId: number) {
+  createAgentSession(shellSessionId: string) {
     return request.post<any, CodeAgentSessionActivateResponse>(
       `/code-runtime/${shellSessionId}/shell/agent-sessions`,
     )
   },
-  activateAgentSession(shellSessionId: number, runtimeSessionId: string) {
+  activateAgentSession(shellSessionId: string, runtimeSessionId: string) {
     return request.post<any, CodeAgentSessionActivateResponse>(
       `/code-runtime/${shellSessionId}/shell/agent-sessions/${encodeURIComponent(runtimeSessionId)}/activate`,
     )
   },
-  deleteAgentSession(shellSessionId: number, runtimeSessionId: string) {
+  deleteAgentSession(shellSessionId: string, runtimeSessionId: string) {
     return request.delete<any, { ok?: boolean }>(
       `/code-runtime/${shellSessionId}/shell/agent-sessions/${encodeURIComponent(runtimeSessionId)}`,
     )

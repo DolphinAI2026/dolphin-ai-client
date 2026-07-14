@@ -12,6 +12,7 @@ from __future__ import annotations
 
 from datetime import datetime
 from typing import Optional
+from uuid import uuid4
 
 from sqlalchemy import String, Text, DateTime, Integer, ForeignKey, JSON, BigInteger, UniqueConstraint
 from sqlalchemy.dialects.mysql import LONGTEXT
@@ -30,6 +31,9 @@ class AIChatSession(Base):
     __tablename__ = "ai_chat_sessions"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    public_id: Mapped[Optional[str]] = mapped_column(
+        String(36), default=lambda: str(uuid4()), nullable=True, unique=True, index=True
+    )
     tenant_id: Mapped[int] = mapped_column(Integer, nullable=False, index=True)
     user_id: Mapped[int] = mapped_column(Integer, nullable=False, index=True)
     title: Mapped[str] = mapped_column(String(200), default="新会话", nullable=False)

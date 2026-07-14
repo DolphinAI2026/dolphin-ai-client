@@ -38,11 +38,11 @@ describe('CodeConversationPage', () => {
 
   it('opens the sandbox before activating the route agent so restore is not overwritten', () => {
     expect(pageSource).toContain('function currentRuntimeAgentId()')
-    expect(pageSource).toContain('codeRuntimeApi.activateAgentSession(id, runtimeAgentId)')
+    expect(pageSource).toContain('codeRuntimeApi.activateAgentSession(sessionRef, runtimeAgentId)')
     expect(pageSource).toContain('runtimeAgentId && opened.runtime_session_id !== runtimeAgentId')
-    expect(pageSource.indexOf('codeRuntimeApi.openSession(id)'))
-      .toBeLessThan(pageSource.indexOf('codeRuntimeApi.activateAgentSession(id, runtimeAgentId)'))
-    expect(pageSource.indexOf('codeRuntimeApi.activateAgentSession(id, runtimeAgentId)'))
+    expect(pageSource.indexOf('codeRuntimeApi.openSession(sessionRef)'))
+      .toBeLessThan(pageSource.indexOf('codeRuntimeApi.activateAgentSession(sessionRef, runtimeAgentId)'))
+    expect(pageSource.indexOf('codeRuntimeApi.activateAgentSession(sessionRef, runtimeAgentId)'))
       .toBeLessThan(pageSource.indexOf('queuePendingFrame(opened.embed_url)'))
   })
 
@@ -61,7 +61,9 @@ describe('CodeConversationPage', () => {
     expect(pageSource).toContain('确认创建')
     expect(pageSource).toContain('codeRuntimeApi.createApplication')
     expect(pageSource).toContain('codeRuntimeApi.createSessionFromExternalApp')
-    expect(pageSource).toContain('`/code/${created.id}`')
+    expect(pageSource).toContain('`/code/${created.public_id}`')
+    expect(pageSource).toContain('opened.session_id !== sessionRef')
+    expect(pageSource).toContain('router.replace')
   })
 
   it('uses a Builder-style empty page for the Code new-application conversation', () => {
