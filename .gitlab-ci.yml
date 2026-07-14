@@ -18,6 +18,8 @@ variables:
   BUILDER_K8S_DIST_INIT_CONTAINER: "copy-frontend-dist"
   BUILDER_VITE_BASE_URL: "/ai-builder/"
   BUILDER_ROLLOUT_TIMEOUT: "300s"
+  # Optional: override when the default Alpine package mirror is unavailable.
+  ALPINE_APK_MIRROR: "https://mirrors.aliyun.com/alpine"
 
 verify_builder:
   stage: verify
@@ -42,6 +44,7 @@ release_and_update_server:
       when: on_success
     - when: never
   before_script:
+    - sed -i "s|https://dl-cdn.alpinelinux.org/alpine|${ALPINE_APK_MIRROR}|g" /etc/apk/repositories
     - apk add --no-cache bash kubectl python3
   script:
     - test -n "${APAAS_DOCKER_USERNAME:-}"
