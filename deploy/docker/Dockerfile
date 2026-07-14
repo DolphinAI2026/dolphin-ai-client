@@ -12,6 +12,7 @@ ARG JDK8_IMAGE=eclipse-temurin:8-jdk-jammy
 ARG JDK17_IMAGE=eclipse-temurin:17-jdk-jammy
 ARG MAVEN_IMAGE=maven:3.9.9-eclipse-temurin-17
 ARG PYTHON_IMAGE=python:3.12-slim-bookworm
+ARG DOCKER_CLI_IMAGE=docker:24.0.7-cli
 ARG NPM_REGISTRY=https://registry.npmjs.org
 ARG PIP_INDEX_URL=https://pypi.org/simple
 
@@ -71,6 +72,7 @@ RUN node_modules/.bin/vite build --base="${VITE_ADMIN_BASE}"
 FROM ${JDK8_IMAGE} AS jdk8
 FROM ${JDK17_IMAGE} AS jdk17
 FROM ${MAVEN_IMAGE} AS maven-bin
+FROM ${DOCKER_CLI_IMAGE} AS docker-cli
 
 
 # ------------------------------------------------------------
@@ -114,23 +116,9 @@ RUN set -eux; \
     apt-get purge -y --auto-remove build-essential; \
     rm -rf /var/lib/apt/lists/*
 
-# --- docker CLI（仅 client，不带 daemon）—— mars 独有，vibe-coding 沙箱要 ---
-# 后端要起 vibe-coding 沙箱容器（vibe-sandbox:latest），通过挂载
-# host /var/run/docker.sock 复用 host docker daemon。从官方静态二进制
-# 装最稳，跟 apt 源/dockerd 都解耦。
-ARG DOCKER_CLI_VERSION=24.0.7
-RUN set -eux; \
-    arch=$(dpkg --print-architecture); \
-    case "$arch" in \
-      amd64) docker_arch=x86_64 ;; \
-      arm64) docker_arch=aarch64 ;; \
-      *) echo "unsupported arch: $arch" >&2; exit 1 ;; \
-    esac; \
-    curl -fsSL "https://download.docker.com/linux/static/stable/${docker_arch}/docker-${DOCKER_CLI_VERSION}.tgz" -o /tmp/docker.tgz; \
-    tar -xzC /tmp -f /tmp/docker.tgz; \
-    install -m 0755 /tmp/docker/docker /usr/local/bin/docker; \
-    rm -rf /tmp/docker /tmp/docker.tgz; \
-    docker --version
+# --- docker CLI（仅 client，不带 daemon）—— vibe-coding 沙箱需要 ---
+COPY --from=docker-cli /usr/local/bin/docker /usr/local/bin/docker
+RUN docker --version
 
 COPY --from=jdk8 /opt/java/openjdk /opt/jdk8
 COPY --from=jdk17 /opt/java/openjdk /opt/jdk17

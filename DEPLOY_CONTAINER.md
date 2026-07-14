@@ -133,10 +133,59 @@ docker build --platform linux/amd64 \
 
 1. `frontend-builder`：构建主前端 `frontend/dist/`。
 2. `admin-builder`：构建平台管理前端 `admin-spa/dist/`。
-3. `jdk8` / `jdk17` / `maven-bin`：准备后端打包运行所需 JDK 与 Maven。
+3. `jdk8` / `jdk17` / `maven-bin` / `docker-cli`：准备后端打包运行所需工具。
 4. `runtime`：安装 Python 依赖、Node 20、docker CLI、后端代码和前端产物。
 
 Apple Silicon 本机给线上 amd64 机器构建时必须显式传 `--platform linux/amd64`。
+
+## orcamatrix-demo 本地发布
+
+`orcamatrix-demo` 默认从开发机使用 Podman 构建并推送镜像，再滚动更新 Kubernetes。
+不要依赖共享 GitLab Runner 临时下载 Docker Hub、PyPI、npm 或 Docker CLI 资源。
+
+```bash
+export IMAGE_TAG="$(date +%Y.%m.%d)-$(git rev-parse --short=8 HEAD)"
+export IMAGE="om-harbor.dfy.definesys.cn/om-demo/ai-builder:${IMAGE_TAG}"
+export KUBECONFIG_FILE=/path/to/orcamatrix-demo-kubeconfig
+
+printf '%s' "${HARBOR_PASSWORD}" \
+  | podman login om-harbor.dfy.definesys.cn \
+      --username "${HARBOR_USERNAME}" \
+      --password-stdin
+
+podman build --layers \
+  -f deploy/docker/Dockerfile \
+  -t "${IMAGE}" \
+  --build-arg VITE_BASE_URL=/ai-builder/ \
+  --build-arg NODE_IMAGE=hub-mirror.dfy.definesys.cn/library/node:20-bookworm-slim \
+  --build-arg JDK8_IMAGE=hub-mirror.dfy.definesys.cn/library/eclipse-temurin:8-jdk-jammy \
+  --build-arg JDK17_IMAGE=hub-mirror.dfy.definesys.cn/library/eclipse-temurin:17-jdk-jammy \
+  --build-arg MAVEN_IMAGE=hub-mirror.dfy.definesys.cn/library/maven:3.9.9-eclipse-temurin-17 \
+  --build-arg PYTHON_IMAGE=hub-mirror.dfy.definesys.cn/library/python:3.12-slim-bookworm \
+  --build-arg DOCKER_CLI_IMAGE=hub-mirror.dfy.definesys.cn/library/docker:24.0.7-cli \
+  --build-arg NPM_REGISTRY=https://registry.npmmirror.com \
+  --build-arg PIP_INDEX_URL=https://mirrors.aliyun.com/pypi/simple \
+  .
+
+podman push "${IMAGE}"
+
+kubectl_container() {
+  podman run --rm --network=host --user 0 \
+    -v "${KUBECONFIG_FILE}:/kubeconfig:ro" \
+    hub-mirror.dfy.definesys.cn/bitnami/kubectl:1.30.7 \
+    --kubeconfig=/kubeconfig -n orcamatrix-demo "$@"
+}
+
+kubectl_container set image statefulset/ai-builder \
+  ai-builder="${IMAGE}" \
+  copy-frontend-dist="${IMAGE}"
+kubectl_container rollout status statefulset/ai-builder --timeout=600s
+kubectl_container get pod ai-builder-0
+curl -fsS https://om-demo.dfy.definesys.cn/ai-builder/api/health
+```
+
+发布凭据和 kubeconfig 不得提交到仓库。镜像发布成功后，后端容器和
+`copy-frontend-dist` initContainer 必须使用同一镜像标签。
 
 ## 启动容器
 
