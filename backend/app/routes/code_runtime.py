@@ -1120,17 +1120,40 @@ async def _authorize_proxy_request(request: Request, session_id: int) -> Respons
     raise HTTPException(status_code=401, detail="Code runtime token required")
 
 
+def _renew_authenticated_proxy_cookie(
+    response: Response,
+    request: Request,
+    session_id: int,
+    ctx: AuthContext,
+) -> None:
+    proxy_token = create_proxy_cookie_token(
+        session_id=session_id,
+        user_id=int(ctx.user.id),
+        tenant_id=int(ctx.tenant_id),
+    )
+    response.set_cookie(
+        _embed_cookie_name(session_id),
+        proxy_token,
+        httponly=True,
+        max_age=12 * 60 * 60,
+        samesite="lax",
+        path=_public_proxy_prefix(
+            session_id,
+            request.headers.get("x-forwarded-prefix", ""),
+        ),
+    )
+
+
 @proxy_router.get("/{session_id}/shell/agent-sessions")
 async def list_browser_authenticated_agent_sessions(
     session_id: int,
     request: Request,
+    response: Response,
     ctx: Annotated[AuthContext, Depends(get_auth_context)],
     db: Annotated[AsyncSession, Depends(get_db)],
 ):
-    auth_response = await _authorize_proxy_request(request, session_id)
-    if auth_response is not None:
-        return auth_response
     _session, binding = await _authorized_code_runtime_binding(db, session_id, ctx)
+    _renew_authenticated_proxy_cookie(response, request, session_id, ctx)
     payload = await _browser_runtime_json_request(
         binding,
         "GET",
@@ -1158,13 +1181,12 @@ async def list_browser_authenticated_agent_sessions(
 async def create_browser_authenticated_agent_session(
     session_id: int,
     request: Request,
+    response: Response,
     ctx: Annotated[AuthContext, Depends(get_auth_context)],
     db: Annotated[AsyncSession, Depends(get_db)],
 ):
-    auth_response = await _authorize_proxy_request(request, session_id)
-    if auth_response is not None:
-        return auth_response
     session, binding = await _authorized_code_runtime_binding(db, session_id, ctx)
+    _renew_authenticated_proxy_cookie(response, request, session_id, ctx)
     payload = await _browser_runtime_json_request(
         binding,
         "POST",
@@ -1196,13 +1218,12 @@ async def activate_browser_authenticated_agent_session(
     session_id: int,
     runtime_session_id: str,
     request: Request,
+    response: Response,
     ctx: Annotated[AuthContext, Depends(get_auth_context)],
     db: Annotated[AsyncSession, Depends(get_db)],
 ):
-    auth_response = await _authorize_proxy_request(request, session_id)
-    if auth_response is not None:
-        return auth_response
     session, binding = await _authorized_code_runtime_binding(db, session_id, ctx)
+    _renew_authenticated_proxy_cookie(response, request, session_id, ctx)
     encoded_id = quote(str(runtime_session_id), safe="")
     payload = await _browser_runtime_json_request(
         binding,
@@ -1227,13 +1248,12 @@ async def delete_browser_authenticated_agent_session(
     session_id: int,
     runtime_session_id: str,
     request: Request,
+    response: Response,
     ctx: Annotated[AuthContext, Depends(get_auth_context)],
     db: Annotated[AsyncSession, Depends(get_db)],
 ):
-    auth_response = await _authorize_proxy_request(request, session_id)
-    if auth_response is not None:
-        return auth_response
     _session, binding = await _authorized_code_runtime_binding(db, session_id, ctx)
+    _renew_authenticated_proxy_cookie(response, request, session_id, ctx)
     encoded_id = quote(str(runtime_session_id), safe="")
     payload = await _browser_runtime_json_request(
         binding,

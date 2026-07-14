@@ -195,6 +195,71 @@ async def test_browser_runtime_request_drops_builder_authorization_and_keeps_run
     assert result == {"sessions": []}
 
 
+@pytest.mark.asyncio
+async def test_shell_agent_sessions_renews_expired_proxy_cookie_for_authenticated_builder_user(monkeypatch):
+    from starlette.datastructures import Headers
+    from starlette.responses import Response
+
+    import app.routes.code_runtime as code_runtime_routes
+    from app.code_runtime.service import validate_proxy_cookie_token
+    from app.routes.code_runtime import list_browser_authenticated_agent_sessions
+
+    binding = CodeRuntimeBinding(
+        session_id=13,
+        runtime_base_url="https://runtime.example.com/workspaces/ws-13",
+    )
+
+    async def fake_authorized_binding(_db, session_id, ctx):
+        assert session_id == 13
+        assert ctx.user.id == 11
+        return SimpleNamespace(id=13), binding
+
+    async def fake_browser_request(_binding, method, path, **_kwargs):
+        assert method == "GET"
+        assert path == "/api/agent/sessions"
+        return {"sessions": []}
+
+    async def fake_other_scoped_ids(_db, session_id):
+        assert session_id == 13
+        return set()
+
+    monkeypatch.setattr(code_runtime_routes, "_authorized_code_runtime_binding", fake_authorized_binding)
+    monkeypatch.setattr(code_runtime_routes, "_browser_runtime_json_request", fake_browser_request)
+    monkeypatch.setattr(
+        code_runtime_routes,
+        "_runtime_session_ids_scoped_to_other_shells",
+        fake_other_scoped_ids,
+    )
+
+    request = SimpleNamespace(
+        headers=Headers({
+            "authorization": "Bearer builder-token",
+            "x-forwarded-prefix": "/ai-builder",
+        }),
+        query_params={},
+        cookies={"dolphin_code_runtime_13": "expired-proxy-cookie"},
+    )
+    response = Response()
+
+    result = await list_browser_authenticated_agent_sessions(
+        session_id=13,
+        request=request,
+        response=response,
+        ctx=_ctx(),
+        db=SimpleNamespace(),
+    )
+
+    assert result == {"sessions": []}
+    set_cookie = response.headers["set-cookie"]
+    assert "dolphin_code_runtime_13=" in set_cookie
+    assert "Max-Age=43200" in set_cookie
+    assert "Path=/ai-builder/api/code-runtime/13" in set_cookie
+    proxy_token = set_cookie.split("dolphin_code_runtime_13=", 1)[1].split(";", 1)[0]
+    payload = validate_proxy_cookie_token(proxy_token, session_id=13)
+    assert payload["sub"] == "11"
+    assert payload["tid"] == 7
+
+
 def test_code_runtime_proxy_scopes_runtime_cookie_to_forwarded_prefix():
     from app.routes.code_runtime import _rewrite_set_cookie_path
 
@@ -1324,6 +1389,7 @@ async def test_create_browser_authenticated_agent_session_forwards_runtime_cooki
 ):
     import app.routes.code_runtime as code_runtime_routes
     from starlette.datastructures import Headers
+    from starlette.responses import Response
     from app.routes.code_runtime import create_browser_authenticated_agent_session
 
     db_session.add(AIChatSession(
@@ -1351,11 +1417,8 @@ async def test_create_browser_authenticated_agent_session_forwards_runtime_cooki
         "authorization": "Bearer builder-token",
         "cookie": "dolphin_code_runtime_1=proxy-token; runtime_sid=sandbox-cookie",
     }))
+    response = Response()
     seen: dict = {}
-
-    async def fake_authorize(_request, session_id):
-        assert session_id == 1
-        return None
 
     async def fake_runtime_request(binding, method, path, *, request, session_id, json_body=None):
         seen.update({
@@ -1368,16 +1431,22 @@ async def test_create_browser_authenticated_agent_session_forwards_runtime_cooki
         })
         return {"runtimeSessionId": "runtime-browser"}
 
-    monkeypatch.setattr(code_runtime_routes, "_authorize_proxy_request", fake_authorize)
     monkeypatch.setattr(code_runtime_routes, "_browser_runtime_json_request", fake_runtime_request)
 
-    result = await create_browser_authenticated_agent_session(1, request, _ctx(), db_session)
+    result = await create_browser_authenticated_agent_session(
+        1,
+        request,
+        response,
+        _ctx(),
+        db_session,
+    )
 
     assert seen["method"] == "POST"
     assert seen["path"] == "/api/agent/sessions"
     assert seen["session_id"] == 1
     assert seen["json_body"] == {}
     assert result["runtime_session_id"] == "runtime-browser"
+    assert "dolphin_code_runtime_1=" in response.headers["set-cookie"]
     binding = (await db_session.execute(
         select(CodeRuntimeBinding).where(CodeRuntimeBinding.session_id == 1)
     )).scalar_one()
