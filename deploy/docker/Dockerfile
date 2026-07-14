@@ -7,11 +7,16 @@
 # jdk8 + jdk17 + maven-bin 替代（XHH e7bcb00 + dcec96c cherry-pick），
 # mvn wrapper 按 pom.xml 自动 JDK 8/17 切换。
 
+ARG NODE_IMAGE=node:20-bookworm-slim
+ARG JDK8_IMAGE=eclipse-temurin:8-jdk-jammy
+ARG JDK17_IMAGE=eclipse-temurin:17-jdk-jammy
+ARG MAVEN_IMAGE=maven:3.9.9-eclipse-temurin-17
+ARG PYTHON_IMAGE=python:3.12-slim-bookworm
 
 # ------------------------------------------------------------
 # stage 1: 构建前端（Vite）
 # ------------------------------------------------------------
-FROM node:20-bookworm-slim AS frontend-builder
+FROM ${NODE_IMAGE} AS frontend-builder
 
 # URL 前缀：
 #   主机独占部署 → /ai-builder/
@@ -36,7 +41,7 @@ RUN node_modules/.bin/vite build
 # ------------------------------------------------------------
 # stage 1b: 构建平台管理前端（admin-spa）
 # ------------------------------------------------------------
-FROM node:20-bookworm-slim AS admin-builder
+FROM ${NODE_IMAGE} AS admin-builder
 
 ARG VITE_ADMIN_BASE=/ai-builder/admin/
 ARG VITE_API_BASE_URL=/ai-builder/api
@@ -59,9 +64,9 @@ RUN node_modules/.bin/vite build --base="${VITE_ADMIN_BASE}"
 #   - aPaaS 4.x: JDK 8 / Java 1.8
 #   - aPaaS 5.x: JDK 17
 # ------------------------------------------------------------
-FROM eclipse-temurin:8-jdk-jammy AS jdk8
-FROM eclipse-temurin:17-jdk-jammy AS jdk17
-FROM maven:3.9.9-eclipse-temurin-17 AS maven-bin
+FROM ${JDK8_IMAGE} AS jdk8
+FROM ${JDK17_IMAGE} AS jdk17
+FROM ${MAVEN_IMAGE} AS maven-bin
 
 
 # ------------------------------------------------------------
@@ -71,7 +76,7 @@ FROM maven:3.9.9-eclipse-temurin-17 AS maven-bin
 #   - Playwright Chromium
 #   - supervisord 作为 PID 1
 # ------------------------------------------------------------
-FROM python:3.12-slim-bookworm AS runtime
+FROM ${PYTHON_IMAGE} AS runtime
 # 注：后端代码用到了 PEP 701（f-string 可含反斜杠），Python 3.12+ 必需
 
 ENV DEBIAN_FRONTEND=noninteractive \

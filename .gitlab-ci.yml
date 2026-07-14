@@ -19,6 +19,11 @@ variables:
   BUILDER_K8S_DIST_INIT_CONTAINER: "copy-frontend-dist"
   BUILDER_VITE_BASE_URL: "/ai-builder/"
   BUILDER_ROLLOUT_TIMEOUT: "300s"
+  BUILDER_NODE_IMAGE: "hub-mirror.dfy.definesys.cn/library/node:20-bookworm-slim"
+  BUILDER_JDK8_IMAGE: "hub-mirror.dfy.definesys.cn/library/eclipse-temurin:8-jdk-jammy"
+  BUILDER_JDK17_IMAGE: "hub-mirror.dfy.definesys.cn/library/eclipse-temurin:17-jdk-jammy"
+  BUILDER_MAVEN_IMAGE: "hub-mirror.dfy.definesys.cn/library/maven:3.9.9-eclipse-temurin-17"
+  BUILDER_PYTHON_IMAGE: "hub-mirror.dfy.definesys.cn/library/python:3.12-slim-bookworm"
   # Optional: override when the default Alpine package mirror is unavailable.
   ALPINE_APK_MIRROR: "https://mirrors.aliyun.com/alpine"
 
@@ -63,6 +68,11 @@ build_release_image:
         --local dockerfile=. \
         --opt filename=deploy/docker/Dockerfile \
         --opt "build-arg:VITE_BASE_URL=${BUILDER_VITE_BASE_URL}" \
+        --opt "build-arg:NODE_IMAGE=${BUILDER_NODE_IMAGE}" \
+        --opt "build-arg:JDK8_IMAGE=${BUILDER_JDK8_IMAGE}" \
+        --opt "build-arg:JDK17_IMAGE=${BUILDER_JDK17_IMAGE}" \
+        --opt "build-arg:MAVEN_IMAGE=${BUILDER_MAVEN_IMAGE}" \
+        --opt "build-arg:PYTHON_IMAGE=${BUILDER_PYTHON_IMAGE}" \
         --output "type=image,name=${BUILDER_IMAGE},push=true"
     - printf 'BUILDER_IMAGE=%s\n' "${BUILDER_IMAGE}" > build/release.env
   artifacts:
