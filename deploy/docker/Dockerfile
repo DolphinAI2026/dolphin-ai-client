@@ -12,12 +12,15 @@ ARG JDK8_IMAGE=eclipse-temurin:8-jdk-jammy
 ARG JDK17_IMAGE=eclipse-temurin:17-jdk-jammy
 ARG MAVEN_IMAGE=maven:3.9.9-eclipse-temurin-17
 ARG PYTHON_IMAGE=python:3.12-slim-bookworm
+ARG NPM_REGISTRY=https://registry.npmjs.org
+ARG PIP_INDEX_URL=https://pypi.org/simple
 
 # ------------------------------------------------------------
 # stage 1: 构建前端（Vite）
 # ------------------------------------------------------------
 FROM ${NODE_IMAGE} AS frontend-builder
 
+ARG NPM_REGISTRY
 # URL 前缀：
 #   主机独占部署 → /ai-builder/
 #   与主机裸跑并存 → /ai-builder-docker/
@@ -28,7 +31,7 @@ WORKDIR /build/frontend
 
 # 先拷 package 清单，利用 Docker 层缓存
 COPY frontend/package.json frontend/package-lock.json* ./
-RUN npm ci --prefer-offline --no-audit --progress=false
+RUN npm ci --registry="${NPM_REGISTRY}" --prefer-offline --no-audit --progress=false
 
 # 再拷源码构建
 COPY frontend/ ./
@@ -43,6 +46,7 @@ RUN node_modules/.bin/vite build
 # ------------------------------------------------------------
 FROM ${NODE_IMAGE} AS admin-builder
 
+ARG NPM_REGISTRY
 ARG VITE_ADMIN_BASE=/ai-builder/admin/
 ARG VITE_API_BASE_URL=/ai-builder/api
 ARG VITE_MCP_PUBLIC_BASE=
@@ -50,7 +54,7 @@ ARG VITE_MCP_PUBLIC_BASE=
 WORKDIR /build/admin-spa
 
 COPY admin-spa/package.json admin-spa/package-lock.json* ./
-RUN npm ci --prefer-offline --no-audit --progress=false
+RUN npm ci --registry="${NPM_REGISTRY}" --prefer-offline --no-audit --progress=false
 
 COPY admin-spa/ ./
 ENV VITE_API_BASE_URL=${VITE_API_BASE_URL}
@@ -79,6 +83,7 @@ FROM ${MAVEN_IMAGE} AS maven-bin
 FROM ${PYTHON_IMAGE} AS runtime
 # 注：后端代码用到了 PEP 701（f-string 可含反斜杠），Python 3.12+ 必需
 
+ARG PIP_INDEX_URL
 ENV DEBIAN_FRONTEND=noninteractive \
     PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
@@ -148,7 +153,7 @@ RUN chmod +x /usr/local/bin/mvn \
 # --- 后端 Python 依赖 ---------------------------------------
 WORKDIR /app/backend
 COPY backend/requirements.txt ./
-RUN pip install --no-cache-dir -r requirements.txt
+RUN pip install --no-cache-dir --index-url="${PIP_INDEX_URL}" -r requirements.txt
 
 # --- Playwright 浏览器（默认不装，按需启用）-----------------
 # 目前 /api/coding/workspace/{ws_id}/browser/* 端点前端未调用，跳过 Chromium

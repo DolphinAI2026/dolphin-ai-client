@@ -24,6 +24,8 @@ variables:
   BUILDER_JDK17_IMAGE: "hub-mirror.dfy.definesys.cn/library/eclipse-temurin:17-jdk-jammy"
   BUILDER_MAVEN_IMAGE: "hub-mirror.dfy.definesys.cn/library/maven:3.9.9-eclipse-temurin-17"
   BUILDER_PYTHON_IMAGE: "hub-mirror.dfy.definesys.cn/library/python:3.12-slim-bookworm"
+  BUILDER_NPM_REGISTRY: "https://registry.npmmirror.com"
+  BUILDER_PIP_INDEX_URL: "https://mirrors.aliyun.com/pypi/simple"
   # Optional: override when the default Alpine package mirror is unavailable.
   ALPINE_APK_MIRROR: "https://mirrors.aliyun.com/alpine"
 
@@ -73,6 +75,8 @@ build_release_image:
         --opt "build-arg:JDK17_IMAGE=${BUILDER_JDK17_IMAGE}" \
         --opt "build-arg:MAVEN_IMAGE=${BUILDER_MAVEN_IMAGE}" \
         --opt "build-arg:PYTHON_IMAGE=${BUILDER_PYTHON_IMAGE}" \
+        --opt "build-arg:NPM_REGISTRY=${BUILDER_NPM_REGISTRY}" \
+        --opt "build-arg:PIP_INDEX_URL=${BUILDER_PIP_INDEX_URL}" \
         --output "type=image,name=${BUILDER_IMAGE},push=true"
     - printf 'BUILDER_IMAGE=%s\n' "${BUILDER_IMAGE}" > build/release.env
   artifacts:
