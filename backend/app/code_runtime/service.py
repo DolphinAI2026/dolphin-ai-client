@@ -278,7 +278,8 @@ def _control_plane_headers(
     if include_content_type:
         headers["Content-Type"] = "application/json"
     incoming = str(authorization_header or "").strip()
-    if incoming.lower().startswith("bearer "):
+    has_user_bearer = incoming.lower().startswith("bearer ")
+    if has_user_bearer:
         headers["Authorization"] = incoming
     else:
         token = (
@@ -296,9 +297,10 @@ def _control_plane_headers(
         os.getenv("DOLPHIN_CODE_CONTROL_PLANE_DELEGATION_SECRET", "").strip()
         or (settings.dolphin_code_control_plane_delegation_secret or "").strip()
     )
-    if delegation_secret and delegated_context is not None:
+    if not has_user_bearer and delegation_secret and delegated_context is not None:
         headers["X-AI-Builder-Delegation-Secret"] = delegation_secret
-    headers.update(_delegated_identity_headers(delegated_context, shell_session_id=shell_session_id))
+    if not has_user_bearer:
+        headers.update(_delegated_identity_headers(delegated_context, shell_session_id=shell_session_id))
     return headers
 
 

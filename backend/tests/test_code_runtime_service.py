@@ -105,6 +105,7 @@ def test_control_plane_headers_prefer_user_token_and_add_workspace_tenant(monkey
     assert headers["Authorization"] == "Bearer user-token"
     assert "X-Auth-Provider" not in headers
     assert headers["X-Tenant-Id"] == "default"
+    assert not any(key.startswith("X-AI-Builder-") for key in headers)
 
 
 def test_control_plane_headers_include_delegation_secret(monkeypatch):
@@ -515,7 +516,7 @@ async def test_default_workspace_open_forwards_request_authorization_when_no_ser
 
 
 @pytest.mark.asyncio
-async def test_default_workspace_open_forwards_user_token_with_delegated_identity(monkeypatch):
+async def test_default_workspace_open_omits_delegation_headers_for_user_token(monkeypatch):
     from app.code_runtime import service
 
     calls: list[dict] = []
@@ -563,14 +564,7 @@ async def test_default_workspace_open_forwards_user_token_with_delegated_identit
 
     headers = calls[0]["headers"]
     assert headers["Authorization"] == "Bearer user-token"
-    assert headers["X-AI-Builder-Delegation-Secret"] == "shared-secret"
-    assert headers["X-AI-Builder-Delegated-User-Id"] == "100169876816012509184"
-    assert headers["X-AI-Builder-Delegated-Tenant-Id"] == "844246516607483905"
-    assert headers["X-AI-Builder-Local-User-Id"] == "11"
-    assert headers["X-AI-Builder-Local-Tenant-Id"] == "7"
-    assert headers["X-AI-Builder-Delegated-Username"] == "ai-builder-admin-11"
-    assert headers["X-AI-Builder-Shell-Session-Id"] == "42"
-    assert base64.urlsafe_b64decode(headers["X-AI-Builder-Delegated-Display-Name-B64"]).decode() == "张三"
+    assert not any(key.startswith("X-AI-Builder-") for key in headers)
 
 
 def test_delegated_identity_keeps_non_reserved_username():
