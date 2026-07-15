@@ -343,6 +343,8 @@ def _control_plane_headers(
         if token:
             headers["Authorization"] = f"Bearer {token}"
     workspace_tenant_id = _header_text(
+        getattr(delegated_context, "control_plane_tenant_id", None)
+    ) or _header_text(
         getattr(getattr(delegated_context, "user", None), "coding_tenant_id", None)
     )
     if workspace_tenant_id:

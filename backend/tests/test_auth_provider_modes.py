@@ -394,6 +394,57 @@ async def test_control_plane_login_without_binding_uses_only_control_plane_curre
 
 
 @pytest.mark.asyncio
+async def test_control_plane_login_preserves_existing_builder_default_tenant(
+    db_session,
+    monkeypatch,
+):
+    monkeypatch.setattr(settings, "control_plane_binding_enabled", False)
+    user, existing_tenant = await _seed_login_user(
+        db_session,
+        username="workspace_admin",
+        source="control_plane",
+    )
+    user.coding_user_id = "workspace-user-1"
+    await db_session.flush()
+
+    async def fake_sync_builtin_llm_configs(_db, tenant_ids=None, *, commit=True):
+        assert tenant_ids
+        assert commit is False
+
+    monkeypatch.setattr(seed_data, "sync_builtin_llm_configs", fake_sync_builtin_llm_configs)
+
+    identity = SimpleNamespace(
+        username="workspace_admin",
+        display_name="Workspace Admin",
+        external_user_id="workspace-user-1",
+        roles=["tenant_admin"],
+        org_permissions={},
+        tenant_id="new-tenant",
+        tenant_name="New Tenant",
+        access_token="workspace-access-token",
+        refresh_token="workspace-refresh-token",
+    )
+
+    await auth_routes._ensure_control_plane_user(db_session, identity)
+
+    memberships = (
+        await db_session.execute(
+            select(UserTenant)
+            .where(UserTenant.user_id == user.id)
+            .order_by(UserTenant.tenant_id.asc())
+        )
+    ).scalars().all()
+    default_memberships = [membership for membership in memberships if membership.is_default]
+
+    assert len(default_memberships) == 1
+    assert default_memberships[0].tenant_id == existing_tenant.id
+    assert any(
+        membership.tenant_id != existing_tenant.id and not membership.is_default
+        for membership in memberships
+    )
+
+
+@pytest.mark.asyncio
 async def test_control_plane_system_permission_projects_platform_admin(
     db_session,
     monkeypatch,
