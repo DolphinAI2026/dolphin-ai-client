@@ -1285,23 +1285,24 @@ async def _ensure_control_plane_user(
                 tenant.id,
                 exc,
             )
-        membership = await _sync_user_membership(
+        existing_default = (
+            await db.execute(
+                select(UserTenant)
+                .where(
+                    UserTenant.user_id == user.id,
+                    UserTenant.status == 1,
+                    UserTenant.is_default == True,
+                )
+                .order_by(UserTenant.joined_at.asc(), UserTenant.id.asc())
+                .limit(1)
+            )
+        ).scalar_one_or_none()
+        await _sync_user_membership(
             db,
             user,
             tenant,
-            is_default=True,
+            is_default=existing_default is None or existing_default.tenant_id == tenant.id,
             preferred_role_codes=preferred_roles,
-        )
-        await db.flush()
-        await db.execute(
-            UserTenant.__table__.update()
-            .where(UserTenant.user_id == user.id)
-            .values(is_default=False)
-        )
-        await db.execute(
-            UserTenant.__table__.update()
-            .where(UserTenant.id == membership.id)
-            .values(is_default=True)
         )
         await db.flush()
     return user
