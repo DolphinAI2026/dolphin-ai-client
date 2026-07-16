@@ -1254,7 +1254,13 @@ def _inject_shell_config(
         "hideNewSession:true"
         "}"
     )
-    injection = _EXTERNAL_SESSION_RAIL_INJECTION.replace("__SHELL_CONFIG__", shell_config).encode("utf-8")
+    injection = (
+        '<script id="dolphin-code-shell-config">'
+        "(function(){"
+        "window.__APAAS_SHELL__=Object.assign({},window.__APAAS_SHELL__||{},__SHELL_CONFIG__);"
+        "})();"
+        "</script>"
+    ).replace("__SHELL_CONFIG__", shell_config).encode("utf-8")
     marker = b"</head>"
     if marker in html:
         return html.replace(marker, injection + marker, 1)

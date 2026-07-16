@@ -528,26 +528,12 @@ def test_code_runtime_shell_config_exposes_external_session_rail_flag():
 
     assert b"externalSessionRail:true" in injected
     assert b"hideHistory:false" in injected
-    assert b"dolphin-code-external-session-rail" in injected
-    assert b'button[aria-label="\\65b0\\5efa\\4f1a\\8bdd"]' in injected
-    assert b"MutationObserver" in injected
-    assert b'button[aria-label="\\5386\\53f2\\4f1a\\8bdd"]' in injected
-    assert b".chat-session-history-panel" in injected
-    assert b".workbench-panel-open-control" in injected
-    assert b"display: inline-flex !important" in injected
-    assert b"display: flex !important" in injected
-    assert b"right: 64px !important" in injected
-    assert b"top: 12px !important" in injected
-    assert b"border: 1px solid #cbd5e1 !important" in injected
-    assert b"border-radius: 6px !important" in injected
-    assert b"background: var(--code-embed-panel) !important" in injected
-    assert b".workbench-panel-tabbar" in injected
-    assert b"min-height: 40px !important" in injected
-    assert b"padding: 4px 10px !important" in injected
-    assert b".workbench-panel-icon-button" in injected
-    assert b".workspace-file-viewer-toolbar-actions button" in injected
-    assert b"grid-template-columns: minmax(0, 1fr) minmax(240px, 300px) !important" in injected
-    assert b".workspace-file-viewer-tree" in injected
+    assert b"hideNewSession:true" in injected
+    assert b"window.__APAAS_SHELL__" in injected
+    assert b"MutationObserver" not in injected
+    assert b"querySelectorAll" not in injected
+    assert b"<style>" not in injected
+    assert b"!important" not in injected
     assert b"rewriteWorkspaceRelativeLink" not in injected
     assert b"/api/workspace/files/content?" not in injected
 
