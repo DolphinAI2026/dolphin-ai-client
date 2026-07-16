@@ -6,7 +6,7 @@ import re
 from datetime import datetime, timedelta, timezone
 from typing import Any, Awaitable, Callable
 from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
-from uuid import uuid4
+from uuid import NAMESPACE_URL, uuid4, uuid5
 
 import httpx
 from fastapi import HTTPException
@@ -63,7 +63,12 @@ CodeSessionRef = str | int
 def ensure_code_session_public_id(session: AIChatSession) -> str:
     public_id = str(getattr(session, "public_id", "") or "").strip()
     if not public_id:
-        public_id = str(uuid4())
+        session_id = getattr(session, "id", None)
+        public_id = str(
+            uuid5(NAMESPACE_URL, f"ai-builder:code-session:{session_id}")
+            if session_id is not None
+            else uuid4()
+        )
         session.public_id = public_id
     return public_id
 

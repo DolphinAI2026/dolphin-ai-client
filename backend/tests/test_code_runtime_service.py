@@ -655,6 +655,15 @@ def test_embed_token_round_trip_is_bound_to_session():
         validate_proxy_cookie_token(token, session_id=12)
 
 
+def test_legacy_code_session_public_id_is_stable_across_concurrent_loads():
+    from app.code_runtime.service import ensure_code_session_public_id
+
+    first = AIChatSession(id=23)
+    second = AIChatSession(id=23)
+
+    assert ensure_code_session_public_id(first) == ensure_code_session_public_id(second)
+
+
 def test_strip_dolphin_token_keeps_runtime_token_query():
     from app.code_runtime.service import strip_dolphin_token_from_url
 
