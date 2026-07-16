@@ -196,13 +196,13 @@ describe('code frame lifecycle', () => {
     expect(isCodeFrameInteractive(state, state.active!)).toBe(true)
   })
 
-  it('does not mount a duplicate frame for the same active session URL', () => {
+  it('retains the latest route when reusing the same active session URL', () => {
     let state = activateInitialFrame()
     const active = state.active!
     state = beginCodeFrameOpen(state, {
       requestId: 2,
       sessionRef: active.sessionRef,
-      route: routeLocation(active.sessionRef, 'agent-1'),
+      route: routeLocation(active.sessionRef, 'agent-2'),
     })
     state = queuePendingCodeFrame(state, {
       requestId: 2,
@@ -211,11 +211,36 @@ describe('code frame lifecycle', () => {
       baseUrl,
     })
 
-    expect(state.active).toBe(active)
+    expect(state.active).toMatchObject({
+      key: active.key,
+      sourceUrl: active.sourceUrl,
+    })
     expect(state.pending).toBeNull()
     expect(state.request).toBeNull()
     expect(state.nextFrameId).toBe(2)
-    expect(isCodeFrameInteractive(state, active)).toBe(true)
+    expect(state.active?.route).toEqual(routeLocation(active.sessionRef, 'agent-2'))
+    expect(state.lastReadyRoute).toEqual(routeLocation(active.sessionRef, 'agent-2'))
+    expect(isCodeFrameInteractive(state, state.active!)).toBe(true)
+
+    state = beginCodeFrameOpen(state, {
+      requestId: 3,
+      sessionRef: 'session-2',
+      route: routeLocation('session-2', 'agent-3'),
+    })
+    state = queuePendingCodeFrame(state, {
+      requestId: 3,
+      sessionRef: 'session-2',
+      url: '/api/code-runtime/session-2/embed',
+      baseUrl,
+    })
+    state = failCodeFrameOpen(state, {
+      requestId: 3,
+      frameKey: state.pending!.key,
+      message: 'runtime failed',
+    })
+
+    expect(state.active?.route).toEqual(routeLocation(active.sessionRef, 'agent-2'))
+    expect(state.lastReadyRoute).toEqual(routeLocation(active.sessionRef, 'agent-2'))
   })
 
   it('ignores a stale ready timeout after a newer pending frame replaces it', () => {

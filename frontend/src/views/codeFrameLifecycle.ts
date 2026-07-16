@@ -98,9 +98,14 @@ export function queuePendingCodeFrame(
   ) {
     return {
       ...state,
+      active: {
+        ...state.active,
+        route: cloneCodeFrameRoute(state.request.route),
+      },
       pending: null,
       request: null,
       failed: null,
+      lastReadyRoute: cloneCodeFrameRoute(state.request.route),
     }
   }
 
