@@ -13,6 +13,22 @@ def _ctx(user_id: int = 11, tenant_id: int = 7, role: str = "member"):
     return SimpleNamespace(user=SimpleNamespace(id=user_id), tenant_id=tenant_id, tenant_role=role)
 
 
+@pytest.mark.asyncio
+async def test_resolve_control_plane_tenant_id_prefers_workspace_tenant_code(db_session):
+    from app.models.tenant import Tenant
+    from app.routes.code_runtime import _resolve_control_plane_tenant_id
+
+    tenant = Tenant(tenant_name="admin 的组织", tenant_code="workspace-0")
+    db_session.add(tenant)
+    await db_session.flush()
+    ctx = SimpleNamespace(
+        tenant_id=tenant.id,
+        user=SimpleNamespace(coding_tenant_id="2077284540335579137"),
+    )
+
+    assert await _resolve_control_plane_tenant_id(db_session, ctx) == "0"
+
+
 def test_code_runtime_proxy_rewrites_upstream_location_headers():
     from app.models.ai_chat import CodeRuntimeBinding
     from app.routes.code_runtime import _rewrite_location_header
