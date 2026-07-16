@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from types import SimpleNamespace
 from uuid import UUID
 
@@ -526,28 +527,14 @@ def test_code_runtime_shell_config_exposes_external_session_rail_flag():
         "http://127.0.0.1:5273",
     )
 
-    assert b"externalSessionRail:true" in injected
-    assert b"hideHistory:false" in injected
-    assert b"dolphin-code-external-session-rail" in injected
-    assert b'button[aria-label="\\65b0\\5efa\\4f1a\\8bdd"]' in injected
-    assert b"MutationObserver" in injected
-    assert b'button[aria-label="\\5386\\53f2\\4f1a\\8bdd"]' in injected
-    assert b".chat-session-history-panel" in injected
-    assert b".workbench-panel-open-control" in injected
-    assert b"display: inline-flex !important" in injected
-    assert b"display: flex !important" in injected
-    assert b"right: 64px !important" in injected
-    assert b"top: 12px !important" in injected
-    assert b"border: 1px solid #cbd5e1 !important" in injected
-    assert b"border-radius: 6px !important" in injected
-    assert b"background: var(--code-embed-panel) !important" in injected
-    assert b".workbench-panel-tabbar" in injected
-    assert b"min-height: 40px !important" in injected
-    assert b"padding: 4px 10px !important" in injected
-    assert b".workbench-panel-icon-button" in injected
-    assert b".workspace-file-viewer-toolbar-actions button" in injected
-    assert b"grid-template-columns: minmax(0, 1fr) minmax(240px, 300px) !important" in injected
-    assert b".workspace-file-viewer-tree" in injected
+    assert b'"externalSessionRail":true' in injected
+    assert b'"hideHistory":false' in injected
+    assert b'"hideNewSession":true' in injected
+    assert b"window.__APAAS_SHELL__" in injected
+    assert b"MutationObserver" not in injected
+    assert b"querySelectorAll" not in injected
+    assert b"<style>" not in injected
+    assert b"!important" not in injected
     assert b"rewriteWorkspaceRelativeLink" not in injected
     assert b"/api/workspace/files/content?" not in injected
 
@@ -557,11 +544,37 @@ def test_code_runtime_shell_config_exposes_external_session_rail_flag():
         "https://om-demo.dfy.definesys.cn",
         "/ai-builder",
     )
-    assert b"externalBasePath:'/ai-builder/api/code-runtime/12'" in prefixed
+    assert b'"externalBasePath":"/ai-builder/api/code-runtime/12"' in prefixed
     assert b'closest(".markdown-view,.workspace-file-viewer-preview")' not in injected
     assert b'document.addEventListener("click"' not in injected
     assert b"window.location.assign" not in injected
     assert b"window.open(" not in injected
+
+
+def test_code_runtime_shell_config_uses_script_safe_json():
+    from app.routes.code_runtime import _inject_shell_config
+
+    dangerous_origin = 'https://console.example.com/"quoted"</script><script>alert(1)</script>'
+    injected = _inject_shell_config(
+        b"<html><head></head><body></body></html>",
+        12,
+        dangerous_origin,
+        '/ai-builder/"quoted"</script>',
+    ).decode("utf-8")
+    config_source = injected.split("window.__APAAS_SHELL__||{},", 1)[1].split(
+        ");})();</script>",
+        1,
+    )[0]
+
+    assert "</script>" not in config_source.lower()
+    assert "\\u003c/script\\u003e" in config_source.lower()
+    assert json.loads(config_source) == {
+        "externalBasePath": '/ai-builder/"quoted"</script>/api/code-runtime/12',
+        "webConsoleOrigin": dangerous_origin,
+        "externalSessionRail": True,
+        "hideHistory": False,
+        "hideNewSession": True,
+    }
 
 
 @pytest.mark.asyncio

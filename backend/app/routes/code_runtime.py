@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from typing import Annotated, Any, Optional
 from urllib.parse import parse_qsl, quote, unquote_plus, urlsplit
 
@@ -1245,16 +1246,30 @@ def _inject_shell_config(
     origin: str,
     forwarded_prefix: str = "",
 ) -> bytes:
-    shell_config = (
-        "{"
-        f"externalBasePath:{_public_proxy_prefix(session_id, forwarded_prefix)!r},"
-        f"webConsoleOrigin:{origin!r},"
-        "externalSessionRail:true,"
-        "hideHistory:false,"
-        "hideNewSession:true"
-        "}"
+    shell_config = json.dumps(
+        {
+            "externalBasePath": _public_proxy_prefix(session_id, forwarded_prefix),
+            "webConsoleOrigin": origin,
+            "externalSessionRail": True,
+            "hideHistory": False,
+            "hideNewSession": True,
+        },
+        ensure_ascii=True,
+        separators=(",", ":"),
     )
-    injection = _EXTERNAL_SESSION_RAIL_INJECTION.replace("__SHELL_CONFIG__", shell_config).encode("utf-8")
+    shell_config = (
+        shell_config
+        .replace("<", "\\u003c")
+        .replace(">", "\\u003e")
+        .replace("&", "\\u0026")
+    )
+    injection = (
+        '<script id="dolphin-code-shell-config">'
+        "(function(){"
+        "window.__APAAS_SHELL__=Object.assign({},window.__APAAS_SHELL__||{},__SHELL_CONFIG__);"
+        "})();"
+        "</script>"
+    ).replace("__SHELL_CONFIG__", shell_config).encode("utf-8")
     marker = b"</head>"
     if marker in html:
         return html.replace(marker, injection + marker, 1)
