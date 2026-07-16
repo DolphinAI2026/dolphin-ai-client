@@ -62,6 +62,40 @@ def test_code_runtime_proxy_rewrites_upstream_location_headers():
     ) == "/ai-builder/api/code-runtime/12/api/readyz"
 
 
+@pytest.mark.asyncio
+async def test_authorize_shell_request_accepts_authenticated_builder_request():
+    from starlette.datastructures import Headers
+    from app.routes.code_runtime import _authorize_shell_request
+
+    request = SimpleNamespace(headers=Headers({
+        "authorization": "Bearer builder-token",
+    }))
+
+    assert await _authorize_shell_request(request, 20) is None
+
+
+@pytest.mark.asyncio
+async def test_authorize_shell_request_keeps_proxy_token_check_without_builder_auth(monkeypatch):
+    import app.routes.code_runtime as code_runtime_routes
+    from starlette.datastructures import Headers
+
+    expected = SimpleNamespace(status_code=307)
+
+    async def fake_authorize_proxy_request(request, session_id):
+        assert request.headers.get("authorization") is None
+        assert session_id == 20
+        return expected
+
+    monkeypatch.setattr(
+        code_runtime_routes,
+        "_authorize_proxy_request",
+        fake_authorize_proxy_request,
+    )
+    request = SimpleNamespace(headers=Headers({}))
+
+    assert await code_runtime_routes._authorize_shell_request(request, 20) is expected
+
+
 def test_code_runtime_proxy_token_redirect_stays_on_current_origin():
     from app.routes.code_runtime import _redirect_target_without_dolphin_token
 
@@ -329,13 +363,15 @@ def test_code_runtime_shell_config_exposes_external_session_rail_flag():
     )
 
     assert b"externalSessionRail:true" in injected
+    assert b"hideHistory:false" in injected
     assert b"dolphin-code-external-session-rail" in injected
-    assert b'button[aria-label="\\5386\\53f2\\4f1a\\8bdd"]' in injected
     assert b'button[aria-label="\\65b0\\5efa\\4f1a\\8bdd"]' in injected
     assert b"MutationObserver" in injected
-    assert b".chat-session-history-panel {" not in injected
+    assert b'button[aria-label="\\5386\\53f2\\4f1a\\8bdd"]' in injected
+    assert b".chat-session-history-panel" in injected
     assert b".workbench-panel-open-control" in injected
     assert b"display: inline-flex !important" in injected
+    assert b"display: flex !important" in injected
     assert b"right: 64px !important" in injected
     assert b"top: 12px !important" in injected
     assert b"border: 1px solid #cbd5e1 !important" in injected
@@ -1182,7 +1218,7 @@ async def test_list_code_runtime_rail_history_includes_current_empty_session_pla
     sessions = result["apps"][0]["sessions"]
     assert [s["runtimeSessionId"] for s in sessions] == ["runtime-new-empty", "runtime-old"]
     assert sessions[0]["current"] is True
-    assert sessions[0]["title"] == "未命名会话"
+    assert sessions[0]["title"] == "CRM Code"
 
 
 @pytest.mark.asyncio

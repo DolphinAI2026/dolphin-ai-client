@@ -60,11 +60,11 @@ def test_build_embed_url_keeps_runtime_query_and_adds_dolphin_token():
     assert url == (
         "/api/code-runtime/12/builder/"
         "?token=entry-token&handoffId=handoff-1"
-        "&externalSessionRail=1&hideHistory=1&hideNewSession=1&dolphin_token=embed-token"
+        "&externalSessionRail=1&hideNewSession=1&dolphin_token=embed-token"
     )
 
 
-def test_build_embed_url_hides_runtime_history_and_new_session_controls():
+def test_build_embed_url_keeps_runtime_history_and_hides_new_session_control():
     from app.code_runtime.service import build_embed_url
 
     url = build_embed_url(
@@ -74,7 +74,7 @@ def test_build_embed_url_hides_runtime_history_and_new_session_controls():
     )
 
     assert "externalSessionRail=1" in url
-    assert "hideHistory=1" in url
+    assert "hideHistory=" not in url
     assert "hideNewSession=1" in url
 
 
@@ -126,6 +126,26 @@ def test_control_plane_headers_prefer_current_builder_tenant_mapping(monkeypatch
 
     ctx = SimpleNamespace(
         user=SimpleNamespace(coding_tenant_id="new-tenant"),
+        control_plane_tenant_id="0",
+        tenant_id=3,
+    )
+    headers = service._control_plane_headers(
+        "Bearer user-token",
+        delegated_context=ctx,
+    )
+
+    assert headers["X-Tenant-Id"] == "0"
+
+
+def test_control_plane_headers_prefer_active_builder_tenant_mapping(monkeypatch):
+    from app.config import settings
+    from app.code_runtime import service
+
+    monkeypatch.delenv("DOLPHIN_CODE_CONTROL_PLANE_TOKEN", raising=False)
+    monkeypatch.setattr(settings, "dolphin_code_control_plane_token", "", raising=False)
+
+    ctx = SimpleNamespace(
+        user=SimpleNamespace(coding_tenant_id="2077284540335579137"),
         control_plane_tenant_id="0",
         tenant_id=3,
     )

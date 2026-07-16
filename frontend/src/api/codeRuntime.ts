@@ -103,8 +103,9 @@ export const codeRuntimeApi = {
       ...(body?.selected_llm_config_id != null ? { selected_llm_config_id: body.selected_llm_config_id } : {}),
     })
   },
-  async openSession(sessionId: string) {
-    const opened = await request.post<any, CodeRuntimeOpenResponse>(`/code/sessions/${sessionId}/open`)
+  async openSession(sessionRef: number | string) {
+    const encodedSessionRef = encodeURIComponent(String(sessionRef))
+    const opened = await request.post<any, CodeRuntimeOpenResponse>(`/code/sessions/${encodedSessionRef}/open`)
     return {
       ...opened,
       embed_url: resolveCodeRuntimeEmbedUrl(opened.embed_url),

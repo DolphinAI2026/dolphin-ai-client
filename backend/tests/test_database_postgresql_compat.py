@@ -1,6 +1,16 @@
 from app import database
 
 
+def test_ai_chat_public_id_has_startup_migration():
+    import inspect
+
+    from app.models.ai_chat import AIChatSession
+
+    column = AIChatSession.__table__.columns["public_id"]
+    assert column.nullable is True
+    assert "ALTER TABLE ai_chat_sessions ADD COLUMN public_id" in inspect.getsource(database.init_db)
+
+
 def test_postgresql_schema_statement_uses_supported_types_and_alter_syntax():
     assert database._schema_statement_for_dialect(
         "ALTER TABLE platform_envs ADD COLUMN created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP",

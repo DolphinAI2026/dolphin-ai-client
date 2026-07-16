@@ -233,7 +233,7 @@ async function openCurrentSession() {
     }
     if (runtimeAgentId && opened.runtime_session_id !== runtimeAgentId) {
       try {
-        await codeRuntimeApi.activateAgentSession(sessionRef, runtimeAgentId)
+        await codeRuntimeApi.activateAgentSession(opened.session_id, runtimeAgentId)
       } catch (activationError: any) {
         if (!isUnavailableRuntimeSessionError(activationError, runtimeAgentId)) throw activationError
         clearRouteAgentQueryIfCurrent(runtimeAgentId)

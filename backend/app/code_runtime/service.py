@@ -90,7 +90,12 @@ def code_runtime_proxy_prefix(session_id: CodeSessionRef) -> str:
 
 def build_embed_url(session_id: CodeSessionRef, builder_url: str, dolphin_token: str) -> str:
     suffix, query_items = _builder_suffix(builder_url)
-    for key in ("externalSessionRail", "hideHistory", "hideNewSession"):
+    query_items = [
+        (key, value)
+        for key, value in query_items
+        if key != "hideHistory"
+    ]
+    for key in ("externalSessionRail", "hideNewSession"):
         if not any(item_key == key for item_key, _value in query_items):
             query_items.append((key, "1"))
     query_items.append(("dolphin_token", dolphin_token))

@@ -275,9 +275,9 @@ async def create_code_session_from_external_app(
     return _session_to_dict(session)
 
 
-@router.post("/sessions/{session_id}/open")
+@router.post("/sessions/{session_ref}/open")
 async def open_code_runtime_session(
-    session_id: str,
+    session_ref: str,
     request: Request,
     ctx: Annotated[AuthContext, Depends(get_auth_context)],
     db: Annotated[AsyncSession, Depends(get_db)],
@@ -285,7 +285,7 @@ async def open_code_runtime_session(
     authorization, auth_provider = await _control_plane_request_auth(request, ctx, db)
     result = await open_code_session(
         db=db,
-        session_id=session_id,
+        session_id=session_ref,
         ctx=ctx,
         authorization_header=authorization,
         auth_provider=auth_provider,
@@ -324,11 +324,15 @@ def _runtime_session_has_visible_title(session: dict[str, Any]) -> bool:
     return bool(str(session.get("title") or "").strip() or str(session.get("summary") or "").strip())
 
 
-def _runtime_session_placeholder(binding: CodeRuntimeBinding, runtime_session_id: str) -> dict[str, Any]:
+def _runtime_session_placeholder(
+    binding: CodeRuntimeBinding,
+    runtime_session_id: str,
+    fallback_title: str | None = None,
+) -> dict[str, Any]:
     timestamp = binding.updated_at.isoformat() if binding.updated_at else None
     return {
         "runtimeSessionId": runtime_session_id,
-        "title": "未命名会话",
+        "title": str(fallback_title or "").strip() or "未命名会话",
         "state": "running",
         "createdAt": timestamp,
         "updatedAt": timestamp,
@@ -360,6 +364,7 @@ async def _runtime_session_detail_or_none(
 async def _current_runtime_session_item(
     binding: CodeRuntimeBinding,
     runtime_session_id: str,
+    fallback_title: str | None = None,
 ) -> dict[str, Any]:
     detail = await _runtime_session_detail_or_none(binding, runtime_session_id)
     if detail and _runtime_session_has_visible_title(detail):
@@ -370,7 +375,7 @@ async def _current_runtime_session_item(
         item.setdefault("capabilityStale", False)
         item.setdefault("codexSessionResumable", True)
         return item
-    return _runtime_session_placeholder(binding, runtime_session_id)
+    return _runtime_session_placeholder(binding, runtime_session_id, fallback_title)
 
 
 async def _authorized_code_runtime_binding(
@@ -594,7 +599,14 @@ async def list_code_runtime_rail_history(
                     current_found = True
                     break
             if not current_found:
-                normalized_sessions.insert(0, await _current_runtime_session_item(binding, current_runtime_id))
+                normalized_sessions.insert(
+                    0,
+                    await _current_runtime_session_item(
+                        binding,
+                        current_runtime_id,
+                        session.title,
+                    ),
+                )
             app["sessions"] = normalized_sessions
         apps.append(app)
 
@@ -902,9 +914,16 @@ def _rewrite_set_cookie_path(value: str, session_id: CodeSessionRef, forwarded_p
 
 _EXTERNAL_SESSION_RAIL_INJECTION = r"""
 <style id="dolphin-code-external-session-rail-style">
-html.dolphin-code-external-session-rail button[aria-label="\5386\53f2\4f1a\8bdd"],
+html.dolphin-code-external-session-rail .builder-shell[data-external-session-rail="true"] .chat-session-actions button[aria-label="\5386\53f2\4f1a\8bdd"],
+html.dolphin-code-external-session-rail .builder-shell[data-external-session-rail="true"] .chat-session-actions [title="\5386\53f2\4f1a\8bdd"] {
+  display: inline-flex !important;
+  visibility: visible !important;
+  pointer-events: auto !important;
+}
+html.dolphin-code-external-session-rail .builder-shell[data-external-session-rail="true"] .chat-session-history-panel {
+  display: flex !important;
+}
 html.dolphin-code-external-session-rail button[aria-label="\65b0\5efa\4f1a\8bdd"],
-html.dolphin-code-external-session-rail [title="\5386\53f2\4f1a\8bdd"],
 html.dolphin-code-external-session-rail [title="\65b0\5efa\4f1a\8bdd"] {
   display: none !important;
   visibility: hidden !important;
@@ -994,9 +1013,7 @@ html.dolphin-code-external-session-rail .workbench-shell[data-layout-state="spli
   window.__APAAS_SHELL__=Object.assign({},window.__APAAS_SHELL__||{},__SHELL_CONFIG__);
   document.documentElement.classList.add("dolphin-code-external-session-rail");
   var selectors=[
-    "button[aria-label=\"\u5386\u53f2\u4f1a\u8bdd\"]",
     "button[aria-label=\"\u65b0\u5efa\u4f1a\u8bdd\"]",
-    "[title=\"\u5386\u53f2\u4f1a\u8bdd\"]",
     "[title=\"\u65b0\u5efa\u4f1a\u8bdd\"]"
   ];
   var scheduled=false;
@@ -1047,7 +1064,7 @@ def _inject_shell_config(
         f"externalBasePath:{_public_proxy_prefix(session_id, forwarded_prefix)!r},"
         f"webConsoleOrigin:{origin!r},"
         "externalSessionRail:true,"
-        "hideHistory:true,"
+        "hideHistory:false,"
         "hideNewSession:true"
         "}"
     )
@@ -1168,6 +1185,16 @@ async def _authorize_proxy_request(
     raise HTTPException(status_code=401, detail="Code runtime token required")
 
 
+async def _authorize_shell_request(
+    request: Request,
+    session_id: CodeSessionRef,
+) -> Response | None:
+    authorization = str(request.headers.get("authorization") or "").strip()
+    if authorization.lower().startswith("bearer "):
+        return None
+    return await _authorize_proxy_request(request, session_id)
+
+
 def _renew_authenticated_proxy_cookie(
     response: Response,
     request: Request,
@@ -1200,6 +1227,9 @@ async def list_browser_authenticated_agent_sessions(
     ctx: Annotated[AuthContext, Depends(get_auth_context)],
     db: Annotated[AsyncSession, Depends(get_db)],
 ):
+    auth_response = await _authorize_shell_request(request, session_id)
+    if auth_response is not None:
+        return auth_response
     session, binding = await _authorized_code_runtime_binding(db, session_id, ctx)
     _renew_authenticated_proxy_cookie(response, request, session_id, ctx)
     payload = await _browser_runtime_json_request(
@@ -1221,7 +1251,10 @@ async def list_browser_authenticated_agent_sessions(
         str(item.get("runtimeSessionId") or "").strip() == current_runtime_id
         for item in normalized_sessions
     ):
-        normalized_sessions.insert(0, _runtime_session_placeholder(binding, current_runtime_id))
+        normalized_sessions.insert(
+            0,
+            _runtime_session_placeholder(binding, current_runtime_id, session.title),
+        )
     return {"sessions": normalized_sessions}
 
 
@@ -1233,6 +1266,9 @@ async def create_browser_authenticated_agent_session(
     ctx: Annotated[AuthContext, Depends(get_auth_context)],
     db: Annotated[AsyncSession, Depends(get_db)],
 ):
+    auth_response = await _authorize_shell_request(request, session_id)
+    if auth_response is not None:
+        return auth_response
     session, binding = await _authorized_code_runtime_binding(db, session_id, ctx)
     _renew_authenticated_proxy_cookie(response, request, session_id, ctx)
     payload = await _browser_runtime_json_request(
@@ -1270,6 +1306,9 @@ async def activate_browser_authenticated_agent_session(
     ctx: Annotated[AuthContext, Depends(get_auth_context)],
     db: Annotated[AsyncSession, Depends(get_db)],
 ):
+    auth_response = await _authorize_shell_request(request, session_id)
+    if auth_response is not None:
+        return auth_response
     session, binding = await _authorized_code_runtime_binding(db, session_id, ctx)
     _renew_authenticated_proxy_cookie(response, request, session_id, ctx)
     encoded_id = quote(str(runtime_session_id), safe="")
@@ -1300,6 +1339,9 @@ async def delete_browser_authenticated_agent_session(
     ctx: Annotated[AuthContext, Depends(get_auth_context)],
     db: Annotated[AsyncSession, Depends(get_db)],
 ):
+    auth_response = await _authorize_shell_request(request, session_id)
+    if auth_response is not None:
+        return auth_response
     session, binding = await _authorized_code_runtime_binding(db, session_id, ctx)
     _renew_authenticated_proxy_cookie(response, request, session_id, ctx)
     encoded_id = quote(str(runtime_session_id), safe="")
