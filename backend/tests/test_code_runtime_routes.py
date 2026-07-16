@@ -240,6 +240,33 @@ def test_runtime_request_headers_replace_query_token_bootstrap_with_bound_bearer
     assert "cookie" not in headers
 
 
+def test_runtime_request_headers_force_entry_token_replaces_stale_runtime_cookie():
+    from starlette.datastructures import Headers
+    from app.routes.code_runtime import _runtime_request_headers
+
+    binding = CodeRuntimeBinding(
+        session_id=12,
+        runtime_base_url="https://runtime.example.com/workspaces/ws-1",
+        builder_url="https://runtime.example.com/workspaces/ws-1/builder?token=entry-token",
+    )
+    request = SimpleNamespace(headers=Headers({
+        "cookie": (
+            "dolphin_code_runtime_12=proxy-token; "
+            "apaas_sandbox_token=stale-runtime-cookie; runtime_theme=dark"
+        ),
+    }))
+
+    headers = _runtime_request_headers(
+        request,
+        12,
+        binding,
+        force_entry_token=True,
+    )
+
+    assert headers["authorization"] == "Bearer entry-token"
+    assert headers["cookie"] == "runtime_theme=dark"
+
+
 @pytest.mark.asyncio
 async def test_browser_runtime_request_prefers_runtime_cookie_over_entry_token(monkeypatch):
     import httpx

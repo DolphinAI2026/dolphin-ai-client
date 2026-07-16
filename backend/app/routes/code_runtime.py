@@ -833,18 +833,21 @@ def _embed_cookie_name(session_id: CodeSessionRef) -> str:
     return f"dolphin_code_runtime_{str(session_id).strip()}"
 
 
-def _runtime_cookie_header(cookie_header: str, session_id: CodeSessionRef) -> str:
-    proxy_cookie_name = _embed_cookie_name(session_id)
+def _cookie_header_without_name(cookie_header: str, cookie_name: str) -> str:
     forwarded: list[str] = []
     for part in str(cookie_header or "").split(";"):
         item = part.strip()
         if not item or "=" not in item:
             continue
         name, _value = item.split("=", 1)
-        if name.strip() == proxy_cookie_name:
+        if name.strip() == cookie_name:
             continue
         forwarded.append(item)
     return "; ".join(forwarded)
+
+
+def _runtime_cookie_header(cookie_header: str, session_id: CodeSessionRef) -> str:
+    return _cookie_header_without_name(cookie_header, _embed_cookie_name(session_id))
 
 
 def _copyable_request_headers(request: Request, session_id: CodeSessionRef) -> dict[str, str]:
@@ -885,14 +888,25 @@ def _runtime_request_headers(
     request: Request,
     session_id: CodeSessionRef,
     binding: CodeRuntimeBinding,
+    *,
+    force_entry_token: bool = False,
 ) -> dict[str, str]:
     headers = _copyable_request_headers(request, session_id)
     headers.pop("authorization", None)
+    if force_entry_token:
+        cookie_header = _cookie_header_without_name(
+            headers.get("cookie", ""),
+            "apaas_sandbox_token",
+        )
+        if cookie_header:
+            headers["cookie"] = cookie_header
+        else:
+            headers.pop("cookie", None)
     has_runtime_cookie = _cookie_header_has_value(
         headers.get("cookie", ""),
         "apaas_sandbox_token",
     )
-    if not has_runtime_cookie:
+    if force_entry_token or not has_runtime_cookie:
         runtime_token = _runtime_entry_token(binding)
         if runtime_token:
             headers["authorization"] = f"Bearer {runtime_token}"
@@ -1601,6 +1615,23 @@ async def proxy_code_runtime(
     if request.method == "GET" and path.rstrip("/") in {"builder", "builder/index.html"}:
         async with httpx.AsyncClient(follow_redirects=False, timeout=60.0) as client:
             upstream = await client.request(request.method, target, headers=headers, content=body)
+            if (
+                upstream.status_code == 401
+                and "authorization" not in headers
+                and _runtime_entry_token(binding)
+            ):
+                headers = _runtime_request_headers(
+                    request,
+                    session_id,
+                    binding,
+                    force_entry_token=True,
+                )
+                upstream = await client.request(
+                    request.method,
+                    target,
+                    headers=headers,
+                    content=body,
+                )
         content_type = upstream.headers.get("content-type", "")
         content = upstream.content
         if "text/html" in content_type:
