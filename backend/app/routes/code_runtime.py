@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from typing import Annotated, Any, Optional
-from urllib.parse import quote, unquote_plus, urlsplit
+from urllib.parse import parse_qsl, quote, unquote_plus, urlsplit
 
 import httpx
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
@@ -314,6 +314,9 @@ async def _runtime_json_request(
 ) -> Any:
     target = f"{binding.runtime_base_url.rstrip('/')}/{path.lstrip('/')}"
     headers = {"accept": "application/json"}
+    runtime_token = _runtime_entry_token(binding)
+    if runtime_token:
+        headers["authorization"] = f"Bearer {runtime_token}"
     if json_body is not None:
         headers["content-type"] = "application/json"
     try:
@@ -329,6 +332,64 @@ async def _runtime_json_request(
         return response.json()
     except ValueError as exc:
         raise HTTPException(status_code=502, detail="Code runtime 返回了无效 JSON") from exc
+
+
+async def _refresh_runtime_binding(
+    session: AIChatSession,
+    binding: CodeRuntimeBinding,
+    request: Request,
+    ctx: AuthContext,
+    db: AsyncSession,
+) -> None:
+    uses_local_builder = bool(
+        not session.app_id
+        and is_local_code_application_id(session.external_application_id or "")
+    )
+    if uses_local_builder:
+        authorization, auth_provider = None, None
+    else:
+        authorization, auth_provider = await _control_plane_request_auth(request, ctx, db)
+    await open_code_session(
+        db=db,
+        session_id=session.id,
+        ctx=ctx,
+        authorization_header=authorization,
+        auth_provider=auth_provider,
+    )
+    await db.flush()
+
+
+async def _runtime_json_request_for_session(
+    session: AIChatSession,
+    binding: CodeRuntimeBinding,
+    method: str,
+    path: str,
+    *,
+    request: Request,
+    ctx: AuthContext,
+    db: AsyncSession,
+    json_body: Any = None,
+    timeout: float = 60.0,
+) -> Any:
+    try:
+        return await _runtime_json_request(
+            binding,
+            method,
+            path,
+            json_body=json_body,
+            timeout=timeout,
+        )
+    except HTTPException as exc:
+        if exc.status_code != 401:
+            raise
+    await _refresh_runtime_binding(session, binding, request, ctx, db)
+    return await _runtime_json_request(
+        binding,
+        method,
+        path,
+        json_body=json_body,
+        timeout=timeout,
+    )
 
 
 def _runtime_session_has_visible_title(session: dict[str, Any]) -> bool:
@@ -552,6 +613,7 @@ async def _ensure_runtime_current_session(
 
 @router.get("/rail/history")
 async def list_code_runtime_rail_history(
+    request: Request,
     ctx: Annotated[AuthContext, Depends(get_auth_context)],
     db: Annotated[AsyncSession, Depends(get_db)],
 ):
@@ -607,10 +669,14 @@ async def list_code_runtime_rail_history(
             apps.append(app)
             continue
         try:
-            payload = await _runtime_json_request(
+            payload = await _runtime_json_request_for_session(
+                session,
                 binding,
                 "GET",
                 "/api/agent/sessions",
+                request=request,
+                ctx=ctx,
+                db=db,
                 timeout=2.0,
             )
             sessions = payload.get("sessions") if isinstance(payload, dict) else []
@@ -662,11 +728,21 @@ async def list_code_runtime_rail_history(
 @router.post("/sessions/{session_id}/agent-sessions")
 async def create_code_runtime_agent_session(
     session_id: str,
+    request: Request,
     ctx: Annotated[AuthContext, Depends(get_auth_context)],
     db: Annotated[AsyncSession, Depends(get_db)],
 ):
     session, binding = await _authorized_code_runtime_binding(db, session_id, ctx)
-    payload = await _runtime_json_request(binding, "POST", "/api/agent/sessions", json_body={})
+    payload = await _runtime_json_request_for_session(
+        session,
+        binding,
+        "POST",
+        "/api/agent/sessions",
+        request=request,
+        ctx=ctx,
+        db=db,
+        json_body={},
+    )
     runtime_session_id = str(
         (payload or {}).get("runtimeSessionId")
         or (payload or {}).get("runtime_session_id")
@@ -689,12 +765,21 @@ async def create_code_runtime_agent_session(
 async def activate_code_runtime_agent_session(
     session_id: str,
     runtime_session_id: str,
+    request: Request,
     ctx: Annotated[AuthContext, Depends(get_auth_context)],
     db: Annotated[AsyncSession, Depends(get_db)],
 ):
     session, binding = await _authorized_code_runtime_binding(db, session_id, ctx)
     encoded_id = quote(str(runtime_session_id), safe="")
-    payload = await _runtime_json_request(binding, "POST", f"/api/agent/sessions/{encoded_id}/activate")
+    payload = await _runtime_json_request_for_session(
+        session,
+        binding,
+        "POST",
+        f"/api/agent/sessions/{encoded_id}/activate",
+        request=request,
+        ctx=ctx,
+        db=db,
+    )
     activated_id = str((payload or {}).get("runtimeSessionId") or runtime_session_id)
     binding.runtime_session_id = activated_id
     await _remember_runtime_agent_session(db, session, binding, activated_id)
@@ -710,12 +795,21 @@ async def activate_code_runtime_agent_session(
 async def delete_code_runtime_agent_session(
     session_id: str,
     runtime_session_id: str,
+    request: Request,
     ctx: Annotated[AuthContext, Depends(get_auth_context)],
     db: Annotated[AsyncSession, Depends(get_db)],
 ):
     session, binding = await _authorized_code_runtime_binding(db, session_id, ctx)
     encoded_id = quote(str(runtime_session_id), safe="")
-    payload = await _runtime_json_request(binding, "DELETE", f"/api/agent/sessions/{encoded_id}")
+    payload = await _runtime_json_request_for_session(
+        session,
+        binding,
+        "DELETE",
+        f"/api/agent/sessions/{encoded_id}",
+        request=request,
+        ctx=ctx,
+        db=db,
+    )
     scoped = (
         await db.execute(
             select(CodeRuntimeAgentSession).where(
@@ -766,6 +860,54 @@ def _copyable_request_headers(request: Request, session_id: CodeSessionRef) -> d
     return copied
 
 
+def _runtime_entry_token(binding: CodeRuntimeBinding) -> str | None:
+    query = urlsplit(str(binding.builder_url or "")).query
+    for key, value in parse_qsl(query, keep_blank_values=False):
+        if key == "token":
+            token = str(value or "").strip()
+            if token:
+                return token
+    return None
+
+
+def _cookie_header_has_value(cookie_header: str, cookie_name: str) -> bool:
+    for part in str(cookie_header or "").split(";"):
+        item = part.strip()
+        if not item or "=" not in item:
+            continue
+        name, value = item.split("=", 1)
+        if name.strip() == cookie_name and value.strip():
+            return True
+    return False
+
+
+def _runtime_request_headers(
+    request: Request,
+    session_id: CodeSessionRef,
+    binding: CodeRuntimeBinding,
+    *,
+    allow_query_token: bool = False,
+) -> dict[str, str]:
+    headers = _copyable_request_headers(request, session_id)
+    headers.pop("authorization", None)
+    has_runtime_cookie = _cookie_header_has_value(
+        headers.get("cookie", ""),
+        "apaas_sandbox_token",
+    )
+    has_query_token = False
+    if allow_query_token:
+        raw_query = _request_raw_query_string(request).decode("utf-8", "ignore")
+        has_query_token = any(
+            key == "token" and bool(str(value or "").strip())
+            for key, value in parse_qsl(raw_query, keep_blank_values=False)
+        )
+    if not has_runtime_cookie and not has_query_token:
+        runtime_token = _runtime_entry_token(binding)
+        if runtime_token:
+            headers["authorization"] = f"Bearer {runtime_token}"
+    return headers
+
+
 async def _browser_runtime_json_request(
     binding: CodeRuntimeBinding,
     method: str,
@@ -776,8 +918,7 @@ async def _browser_runtime_json_request(
     json_body: Any = None,
 ) -> Any:
     target = f"{binding.runtime_base_url.rstrip('/')}/{path.lstrip('/')}"
-    headers = _copyable_request_headers(request, session_id)
-    headers.pop("authorization", None)
+    headers = _runtime_request_headers(request, session_id, binding)
     headers["accept"] = "application/json"
     if json_body is not None:
         headers["content-type"] = "application/json"
@@ -1457,7 +1598,12 @@ async def proxy_code_runtime(
         await db.commit()
     target = _target_url(binding, path, request)
     body = b"" if request.method in {"GET", "HEAD"} else await request.body()
-    headers = _copyable_request_headers(request, session_id)
+    headers = _runtime_request_headers(
+        request,
+        session_id,
+        binding,
+        allow_query_token=True,
+    )
 
     # Builder HTML 要注入 shell 配置，让 d-ai-code 的 runtimePath() 走 Dolphin 代理前缀。
     if request.method == "GET" and path.rstrip("/") in {"builder", "builder/index.html"}:

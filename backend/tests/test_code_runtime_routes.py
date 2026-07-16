@@ -14,6 +14,12 @@ def _ctx(user_id: int = 11, tenant_id: int = 7, role: str = "member"):
     return SimpleNamespace(user=SimpleNamespace(id=user_id), tenant_id=tenant_id, tenant_role=role)
 
 
+def _request(headers: dict[str, str] | None = None):
+    from starlette.datastructures import Headers
+
+    return SimpleNamespace(headers=Headers(headers or {}))
+
+
 @pytest.mark.asyncio
 async def test_resolve_control_plane_tenant_id_uses_workspace_tenant_code(db_session):
     from app.models.tenant import Tenant
@@ -205,8 +211,36 @@ def test_code_runtime_proxy_forwards_runtime_cookies_without_proxy_cookie():
     assert "host" not in {key.lower() for key in headers}
 
 
+def test_runtime_request_headers_preserve_query_token_bootstrap_without_bearer():
+    from starlette.datastructures import Headers
+    from app.routes.code_runtime import _runtime_request_headers
+
+    binding = CodeRuntimeBinding(
+        session_id=12,
+        runtime_base_url="https://runtime.example.com/workspaces/ws-1",
+        builder_url="https://runtime.example.com/workspaces/ws-1/builder?token=entry-token",
+    )
+    request = SimpleNamespace(
+        headers=Headers({
+            "authorization": "Bearer builder-token",
+            "cookie": "dolphin_code_runtime_12=proxy-token",
+        }),
+        scope={"query_string": b"token=entry-token&externalSessionRail=1"},
+    )
+
+    headers = _runtime_request_headers(
+        request,
+        12,
+        binding,
+        allow_query_token=True,
+    )
+
+    assert "authorization" not in headers
+    assert "cookie" not in headers
+
+
 @pytest.mark.asyncio
-async def test_browser_runtime_request_drops_builder_authorization_and_keeps_runtime_cookie(monkeypatch):
+async def test_browser_runtime_request_prefers_runtime_cookie_over_entry_token(monkeypatch):
     import httpx
     import app.routes.code_runtime as code_runtime_routes
     from starlette.datastructures import Headers
@@ -215,6 +249,7 @@ async def test_browser_runtime_request_drops_builder_authorization_and_keeps_run
     binding = CodeRuntimeBinding(
         session_id=12,
         runtime_base_url="https://runtime.example.com/workspaces/ws-1",
+        builder_url="https://runtime.example.com/workspaces/ws-1/builder?token=entry-token",
     )
     request = SimpleNamespace(headers=Headers({
         "authorization": "Bearer builder-token",
@@ -244,6 +279,130 @@ async def test_browser_runtime_request_drops_builder_authorization_and_keeps_run
     )
 
     assert result == {"sessions": []}
+
+
+@pytest.mark.asyncio
+async def test_browser_runtime_request_uses_entry_token_without_runtime_cookie(monkeypatch):
+    import httpx
+    import app.routes.code_runtime as code_runtime_routes
+    from starlette.datastructures import Headers
+    from app.routes.code_runtime import _browser_runtime_json_request
+
+    binding = CodeRuntimeBinding(
+        session_id=12,
+        runtime_base_url="https://runtime.example.com/workspaces/ws-1",
+        builder_url="https://runtime.example.com/workspaces/ws-1/builder?token=entry-token",
+    )
+    request = SimpleNamespace(headers=Headers({
+        "authorization": "Bearer builder-token",
+        "cookie": "dolphin_code_runtime_12=proxy-token",
+        "accept": "application/json",
+    }))
+
+    def handler(upstream: httpx.Request) -> httpx.Response:
+        assert upstream.headers["authorization"] == "Bearer entry-token"
+        assert "cookie" not in upstream.headers
+        return httpx.Response(200, json={"sessions": []})
+
+    transport = httpx.MockTransport(handler)
+    original = code_runtime_routes.httpx.AsyncClient
+    monkeypatch.setattr(
+        code_runtime_routes.httpx,
+        "AsyncClient",
+        lambda **kwargs: original(transport=transport, **kwargs),
+    )
+
+    result = await _browser_runtime_json_request(
+        binding,
+        "GET",
+        "/api/agent/sessions",
+        request=request,
+        session_id=12,
+    )
+
+    assert result == {"sessions": []}
+
+
+@pytest.mark.asyncio
+async def test_server_runtime_request_uses_runtime_entry_token(monkeypatch):
+    import httpx
+    import app.routes.code_runtime as code_runtime_routes
+    from app.routes.code_runtime import _runtime_json_request
+
+    binding = CodeRuntimeBinding(
+        session_id=12,
+        runtime_base_url="https://runtime.example.com/workspaces/ws-1",
+        builder_url=(
+            "https://runtime.example.com/workspaces/ws-1/builder"
+            "?tab=spec&token=entry-token&externalSessionRail=1"
+        ),
+    )
+
+    def handler(upstream: httpx.Request) -> httpx.Response:
+        assert upstream.headers["authorization"] == "Bearer entry-token"
+        return httpx.Response(200, json={"sessions": []})
+
+    transport = httpx.MockTransport(handler)
+    original = code_runtime_routes.httpx.AsyncClient
+    monkeypatch.setattr(
+        code_runtime_routes.httpx,
+        "AsyncClient",
+        lambda **kwargs: original(transport=transport, **kwargs),
+    )
+
+    result = await _runtime_json_request(binding, "GET", "/api/agent/sessions")
+
+    assert result == {"sessions": []}
+
+
+@pytest.mark.asyncio
+async def test_server_runtime_request_refreshes_binding_once_after_unauthorized(monkeypatch):
+    from fastapi import HTTPException
+    import app.routes.code_runtime as code_runtime_routes
+
+    session = SimpleNamespace(
+        id=12,
+        app_id=None,
+        external_application_id="code-app-1",
+    )
+    binding = CodeRuntimeBinding(
+        session_id=12,
+        runtime_base_url="https://runtime.example.com/workspaces/ws-1",
+        builder_url="https://runtime.example.com/workspaces/ws-1/builder?token=stale-token",
+    )
+    calls: list[str] = []
+
+    async def fake_runtime_request(current_binding, method, path, **kwargs):
+        calls.append(str(current_binding.builder_url))
+        if len(calls) == 1:
+            raise HTTPException(status_code=401, detail="entry token expired")
+        return {"sessions": []}
+
+    async def fake_refresh(session_arg, binding_arg, request_arg, ctx_arg, db_arg):
+        assert session_arg is session
+        assert binding_arg is binding
+        binding_arg.builder_url = (
+            "https://runtime.example.com/workspaces/ws-1/builder?token=fresh-token"
+        )
+
+    monkeypatch.setattr(code_runtime_routes, "_runtime_json_request", fake_runtime_request)
+    monkeypatch.setattr(code_runtime_routes, "_refresh_runtime_binding", fake_refresh)
+
+    result = await code_runtime_routes._runtime_json_request_for_session(
+        session,
+        binding,
+        "GET",
+        "/api/agent/sessions",
+        request=_request(),
+        ctx=_ctx(),
+        db=SimpleNamespace(),
+    )
+
+    assert result == {"sessions": []}
+    assert calls == [
+        "https://runtime.example.com/workspaces/ws-1/builder?token=stale-token",
+        "https://runtime.example.com/workspaces/ws-1/builder?token=fresh-token",
+    ]
 
 
 @pytest.mark.asyncio
@@ -804,7 +963,7 @@ async def test_list_code_runtime_rail_history_includes_shell_session_without_bin
     ))
     await db_session.commit()
 
-    result = await list_code_runtime_rail_history(_ctx(), db_session)
+    result = await list_code_runtime_rail_history(_request(), _ctx(), db_session)
 
     assert len(result["apps"]) == 1
     app = result["apps"][0]
@@ -858,7 +1017,7 @@ async def test_list_code_runtime_rail_history_excludes_builder_workspace_code_se
     ])
     await db_session.commit()
 
-    result = await list_code_runtime_rail_history(_ctx(), db_session)
+    result = await list_code_runtime_rail_history(_request(), _ctx(), db_session)
 
     assert [app["app_name"] for app in result["apps"]] == ["CRM"]
     assert all(app["shell_session_id"] != 1 for app in result["apps"])
@@ -1024,7 +1183,7 @@ async def test_list_code_runtime_rail_history_returns_opened_app_agent_sessions(
         lambda **kwargs: original(transport=transport, **kwargs),
     )
 
-    result = await list_code_runtime_rail_history(_ctx(), db_session)
+    result = await list_code_runtime_rail_history(_request(), _ctx(), db_session)
 
     apps_by_external_id = {app["external_application_id"]: app for app in result["apps"]}
     unopened_shell_id = apps_by_external_id["never-opened"]["shell_session_id"]
@@ -1138,7 +1297,7 @@ async def test_list_code_runtime_rail_history_filters_sessions_by_shell_scope(db
         lambda **kwargs: original(transport=transport, **kwargs),
     )
 
-    result = await list_code_runtime_rail_history(_ctx(), db_session)
+    result = await list_code_runtime_rail_history(_request(), _ctx(), db_session)
 
     assert result["apps"][0]["external_application_id"] == "demo-app"
     assert [item["runtimeSessionId"] for item in result["apps"][0]["sessions"]] == ["runtime-demo"]
@@ -1233,7 +1392,7 @@ async def test_list_code_runtime_rail_history_excludes_sessions_scoped_to_other_
         lambda **kwargs: original(transport=transport, **kwargs),
     )
 
-    result = await list_code_runtime_rail_history(_ctx(), db_session)
+    result = await list_code_runtime_rail_history(_request(), _ctx(), db_session)
 
     apps_by_external_id = {app["external_application_id"]: app for app in result["apps"]}
     assert [item["runtimeSessionId"] for item in apps_by_external_id["crm"]["sessions"]] == ["runtime-crm"]
@@ -1305,7 +1464,7 @@ async def test_list_code_runtime_rail_history_includes_current_empty_session_pla
         lambda **kwargs: original(transport=transport, **kwargs),
     )
 
-    result = await list_code_runtime_rail_history(_ctx(), db_session)
+    result = await list_code_runtime_rail_history(_request(), _ctx(), db_session)
 
     assert result["apps"][0]["runtime_session_id"] == "runtime-new-empty"
     sessions = result["apps"][0]["sessions"]
@@ -1385,7 +1544,7 @@ async def test_list_code_runtime_rail_history_uses_current_session_detail_when_l
         lambda **kwargs: original(transport=transport, **kwargs),
     )
 
-    result = await list_code_runtime_rail_history(_ctx(), db_session)
+    result = await list_code_runtime_rail_history(_request(), _ctx(), db_session)
 
     assert paths == [
         "/workspaces/crm/api/agent/sessions",
@@ -1446,7 +1605,13 @@ async def test_activate_code_runtime_agent_session_proxies_to_runtime_and_update
         lambda **kwargs: original(transport=transport, **kwargs),
     )
 
-    result = await activate_code_runtime_agent_session(1, "runtime-2", _ctx(), db_session)
+    result = await activate_code_runtime_agent_session(
+        1,
+        "runtime-2",
+        _request(),
+        _ctx(),
+        db_session,
+    )
 
     assert seen == [("POST", "/workspaces/crm/api/agent/sessions/runtime-2/activate")]
     assert str(UUID(result["shell_session_id"])) == result["shell_session_id"]
@@ -1514,7 +1679,7 @@ async def test_create_code_runtime_agent_session_proxies_to_runtime_and_updates_
         lambda **kwargs: original(transport=transport, **kwargs),
     )
 
-    result = await create_code_runtime_agent_session(1, _ctx(), db_session)
+    result = await create_code_runtime_agent_session(1, _request(), _ctx(), db_session)
 
     assert seen == [("POST", "/workspaces/crm/api/agent/sessions", b"{}")]
     assert str(UUID(result["shell_session_id"])) == result["shell_session_id"]

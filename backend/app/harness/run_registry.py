@@ -2,7 +2,7 @@
 
 强引用后台 task(否则 asyncio 只弱引用、客户端断开后闭包被 GC → task 被取消)。
 按 conversation_id 持有(一会话单 run),重连时据此接回同一条在跑 EventBus。
-进程内:后端重启不保(startup_recovery 兜底标 aborted)。
+进程内：后端重启后不保留运行状态。
 """
 from __future__ import annotations
 
