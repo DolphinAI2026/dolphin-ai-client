@@ -51,11 +51,11 @@ def test_build_embed_url_keeps_runtime_query_and_adds_dolphin_token():
     assert url == (
         "/api/code-runtime/12/builder/"
         "?token=entry-token&handoffId=handoff-1"
-        "&externalSessionRail=1&hideHistory=1&hideNewSession=1&dolphin_token=embed-token"
+        "&externalSessionRail=1&hideNewSession=1&dolphin_token=embed-token"
     )
 
 
-def test_build_embed_url_hides_runtime_history_and_new_session_controls():
+def test_build_embed_url_keeps_runtime_history_and_hides_new_session_control():
     from app.code_runtime.service import build_embed_url
 
     url = build_embed_url(
@@ -65,7 +65,7 @@ def test_build_embed_url_hides_runtime_history_and_new_session_controls():
     )
 
     assert "externalSessionRail=1" in url
-    assert "hideHistory=1" in url
+    assert "hideHistory=" not in url
     assert "hideNewSession=1" in url
 
 

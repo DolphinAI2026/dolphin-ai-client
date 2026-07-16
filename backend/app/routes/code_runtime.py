@@ -867,9 +867,16 @@ def _rewrite_set_cookie_path(value: str, session_id: int, forwarded_prefix: str 
 
 _EXTERNAL_SESSION_RAIL_INJECTION = r"""
 <style id="dolphin-code-external-session-rail-style">
-html.dolphin-code-external-session-rail button[aria-label="\5386\53f2\4f1a\8bdd"],
+html.dolphin-code-external-session-rail .builder-shell[data-external-session-rail="true"] .chat-session-actions button[aria-label="\5386\53f2\4f1a\8bdd"],
+html.dolphin-code-external-session-rail .builder-shell[data-external-session-rail="true"] .chat-session-actions [title="\5386\53f2\4f1a\8bdd"] {
+  display: inline-flex !important;
+  visibility: visible !important;
+  pointer-events: auto !important;
+}
+html.dolphin-code-external-session-rail .builder-shell[data-external-session-rail="true"] .chat-session-history-panel {
+  display: flex !important;
+}
 html.dolphin-code-external-session-rail button[aria-label="\65b0\5efa\4f1a\8bdd"],
-html.dolphin-code-external-session-rail [title="\5386\53f2\4f1a\8bdd"],
 html.dolphin-code-external-session-rail [title="\65b0\5efa\4f1a\8bdd"] {
   display: none !important;
   visibility: hidden !important;
@@ -959,9 +966,7 @@ html.dolphin-code-external-session-rail .workbench-shell[data-layout-state="spli
   window.__APAAS_SHELL__=Object.assign({},window.__APAAS_SHELL__||{},__SHELL_CONFIG__);
   document.documentElement.classList.add("dolphin-code-external-session-rail");
   var selectors=[
-    "button[aria-label=\"\u5386\u53f2\u4f1a\u8bdd\"]",
     "button[aria-label=\"\u65b0\u5efa\u4f1a\u8bdd\"]",
-    "[title=\"\u5386\u53f2\u4f1a\u8bdd\"]",
     "[title=\"\u65b0\u5efa\u4f1a\u8bdd\"]"
   ];
   var scheduled=false;
@@ -1012,7 +1017,7 @@ def _inject_shell_config(
         f"externalBasePath:{_public_proxy_prefix(session_id, forwarded_prefix)!r},"
         f"webConsoleOrigin:{origin!r},"
         "externalSessionRail:true,"
-        "hideHistory:true,"
+        "hideHistory:false,"
         "hideNewSession:true"
         "}"
     )

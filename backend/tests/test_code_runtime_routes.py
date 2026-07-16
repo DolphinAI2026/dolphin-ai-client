@@ -247,13 +247,15 @@ def test_code_runtime_shell_config_exposes_external_session_rail_flag():
     )
 
     assert b"externalSessionRail:true" in injected
+    assert b"hideHistory:false" in injected
     assert b"dolphin-code-external-session-rail" in injected
-    assert b'button[aria-label="\\5386\\53f2\\4f1a\\8bdd"]' in injected
     assert b'button[aria-label="\\65b0\\5efa\\4f1a\\8bdd"]' in injected
     assert b"MutationObserver" in injected
-    assert b".chat-session-history-panel {" not in injected
+    assert b'button[aria-label="\\5386\\53f2\\4f1a\\8bdd"]' in injected
+    assert b".chat-session-history-panel" in injected
     assert b".workbench-panel-open-control" in injected
     assert b"display: inline-flex !important" in injected
+    assert b"display: flex !important" in injected
     assert b"right: 64px !important" in injected
     assert b"top: 12px !important" in injected
     assert b"border: 1px solid #cbd5e1 !important" in injected
