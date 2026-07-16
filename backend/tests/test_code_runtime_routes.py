@@ -108,7 +108,7 @@ def test_code_runtime_proxy_token_redirect_stays_on_current_origin():
     assert _redirect_target_without_dolphin_token(
         "/api/code-runtime/12/builder",
         b"token=entry&dolphin_token=embed&handoffId=h1",
-    ) == "/api/code-runtime/12/builder?token=entry&handoffId=h1"
+    ) == "/api/code-runtime/12/builder?handoffId=h1"
     assert _redirect_target_without_dolphin_token(
         "/api/code-runtime/12/builder",
         b"dolphin_token=embed",
@@ -117,7 +117,7 @@ def test_code_runtime_proxy_token_redirect_stays_on_current_origin():
         "/api/code-runtime/12/builder",
         b"token=entry&dolphin_token=embed",
         "/ai-builder",
-    ) == "/ai-builder/api/code-runtime/12/builder?token=entry"
+    ) == "/ai-builder/api/code-runtime/12/builder"
 
 
 def test_code_runtime_proxy_preserves_vite_bare_url_query():
@@ -130,7 +130,9 @@ def test_code_runtime_proxy_preserves_vite_bare_url_query():
         session_id=12,
         runtime_base_url="http://127.0.0.1:5173",
     )
-    request = SimpleNamespace(scope={"query_string": b"url&dolphin_token=embed&v=1"})
+    request = SimpleNamespace(
+        scope={"query_string": b"url&token=entry&dolphin_token=embed&v=1"}
+    )
 
     assert _target_url(
         binding,
@@ -211,7 +213,7 @@ def test_code_runtime_proxy_forwards_runtime_cookies_without_proxy_cookie():
     assert "host" not in {key.lower() for key in headers}
 
 
-def test_runtime_request_headers_preserve_query_token_bootstrap_without_bearer():
+def test_runtime_request_headers_replace_query_token_bootstrap_with_bound_bearer():
     from starlette.datastructures import Headers
     from app.routes.code_runtime import _runtime_request_headers
 
@@ -232,10 +234,9 @@ def test_runtime_request_headers_preserve_query_token_bootstrap_without_bearer()
         request,
         12,
         binding,
-        allow_query_token=True,
     )
 
-    assert "authorization" not in headers
+    assert headers["authorization"] == "Bearer entry-token"
     assert "cookie" not in headers
 
 

@@ -885,8 +885,6 @@ def _runtime_request_headers(
     request: Request,
     session_id: CodeSessionRef,
     binding: CodeRuntimeBinding,
-    *,
-    allow_query_token: bool = False,
 ) -> dict[str, str]:
     headers = _copyable_request_headers(request, session_id)
     headers.pop("authorization", None)
@@ -894,14 +892,7 @@ def _runtime_request_headers(
         headers.get("cookie", ""),
         "apaas_sandbox_token",
     )
-    has_query_token = False
-    if allow_query_token:
-        raw_query = _request_raw_query_string(request).decode("utf-8", "ignore")
-        has_query_token = any(
-            key == "token" and bool(str(value or "").strip())
-            for key, value in parse_qsl(raw_query, keep_blank_values=False)
-        )
-    if not has_runtime_cookie and not has_query_token:
+    if not has_runtime_cookie:
         runtime_token = _runtime_entry_token(binding)
         if runtime_token:
             headers["authorization"] = f"Bearer {runtime_token}"
@@ -1015,6 +1006,7 @@ def _redirect_target_without_dolphin_token(
 ) -> str:
     target_path = _path_with_forwarded_prefix(path, forwarded_prefix)
     qs = _query_string_without_key(raw_query, "dolphin_token")
+    qs = _query_string_without_key(qs, "token")
     return f"{target_path}{'?' + qs if qs else ''}"
 
 
@@ -1559,6 +1551,7 @@ async def delete_browser_authenticated_agent_session(
 
 def _target_url(binding: CodeRuntimeBinding, path: str, request: Request) -> str:
     qs = _query_string_without_key(_request_raw_query_string(request), "dolphin_token")
+    qs = _query_string_without_key(qs, "token")
     rooted = "/" + path.lstrip("/")
     return f"{binding.runtime_base_url.rstrip('/')}{rooted}{'?' + qs if qs else ''}"
 
@@ -1602,7 +1595,6 @@ async def proxy_code_runtime(
         request,
         session_id,
         binding,
-        allow_query_token=True,
     )
 
     # Builder HTML 要注入 shell 配置，让 d-ai-code 的 runtimePath() 走 Dolphin 代理前缀。
