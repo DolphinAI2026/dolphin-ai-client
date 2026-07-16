@@ -108,6 +108,7 @@ async def test_platform_admin_can_switch_to_any_active_tenant(db_session):
         hashed_password=get_password_hash("secret"),
         is_active=True,
         is_platform_admin=True,
+        account_source="control_plane",
     )
     db_session.add(admin)
     await db_session.flush()

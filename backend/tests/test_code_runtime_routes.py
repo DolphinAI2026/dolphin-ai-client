@@ -100,6 +100,40 @@ def test_code_runtime_proxy_rewrites_upstream_location_headers():
     ) == "/ai-builder/api/code-runtime/12/api/readyz"
 
 
+@pytest.mark.asyncio
+async def test_authorize_shell_request_accepts_authenticated_builder_request():
+    from starlette.datastructures import Headers
+    from app.routes.code_runtime import _authorize_shell_request
+
+    request = SimpleNamespace(headers=Headers({
+        "authorization": "Bearer builder-token",
+    }))
+
+    assert await _authorize_shell_request(request, 20) is None
+
+
+@pytest.mark.asyncio
+async def test_authorize_shell_request_keeps_proxy_token_check_without_builder_auth(monkeypatch):
+    import app.routes.code_runtime as code_runtime_routes
+    from starlette.datastructures import Headers
+
+    expected = SimpleNamespace(status_code=307)
+
+    async def fake_authorize_proxy_request(request, session_id):
+        assert request.headers.get("authorization") is None
+        assert session_id == 20
+        return expected
+
+    monkeypatch.setattr(
+        code_runtime_routes,
+        "_authorize_proxy_request",
+        fake_authorize_proxy_request,
+    )
+    request = SimpleNamespace(headers=Headers({}))
+
+    assert await code_runtime_routes._authorize_shell_request(request, 20) is expected
+
+
 def test_code_runtime_proxy_token_redirect_stays_on_current_origin():
     from app.routes.code_runtime import _redirect_target_without_dolphin_token
 

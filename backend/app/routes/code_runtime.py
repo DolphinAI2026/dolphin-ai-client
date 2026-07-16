@@ -1171,6 +1171,13 @@ async def _authorize_proxy_request(request: Request, session_id: int) -> Respons
     raise HTTPException(status_code=401, detail="Code runtime token required")
 
 
+async def _authorize_shell_request(request: Request, session_id: int) -> Response | None:
+    authorization = str(request.headers.get("authorization") or "").strip()
+    if authorization.lower().startswith("bearer "):
+        return None
+    return await _authorize_proxy_request(request, session_id)
+
+
 @proxy_router.get("/{session_id}/shell/agent-sessions")
 async def list_browser_authenticated_agent_sessions(
     session_id: int,
@@ -1178,7 +1185,7 @@ async def list_browser_authenticated_agent_sessions(
     ctx: Annotated[AuthContext, Depends(get_auth_context)],
     db: Annotated[AsyncSession, Depends(get_db)],
 ):
-    auth_response = await _authorize_proxy_request(request, session_id)
+    auth_response = await _authorize_shell_request(request, session_id)
     if auth_response is not None:
         return auth_response
     session, binding = await _authorized_code_runtime_binding(db, session_id, ctx)
@@ -1215,7 +1222,7 @@ async def create_browser_authenticated_agent_session(
     ctx: Annotated[AuthContext, Depends(get_auth_context)],
     db: Annotated[AsyncSession, Depends(get_db)],
 ):
-    auth_response = await _authorize_proxy_request(request, session_id)
+    auth_response = await _authorize_shell_request(request, session_id)
     if auth_response is not None:
         return auth_response
     session, binding = await _authorized_code_runtime_binding(db, session_id, ctx)
@@ -1253,7 +1260,7 @@ async def activate_browser_authenticated_agent_session(
     ctx: Annotated[AuthContext, Depends(get_auth_context)],
     db: Annotated[AsyncSession, Depends(get_db)],
 ):
-    auth_response = await _authorize_proxy_request(request, session_id)
+    auth_response = await _authorize_shell_request(request, session_id)
     if auth_response is not None:
         return auth_response
     session, binding = await _authorized_code_runtime_binding(db, session_id, ctx)
@@ -1284,7 +1291,7 @@ async def delete_browser_authenticated_agent_session(
     ctx: Annotated[AuthContext, Depends(get_auth_context)],
     db: Annotated[AsyncSession, Depends(get_db)],
 ):
-    auth_response = await _authorize_proxy_request(request, session_id)
+    auth_response = await _authorize_shell_request(request, session_id)
     if auth_response is not None:
         return auth_response
     _session, binding = await _authorized_code_runtime_binding(db, session_id, ctx)
