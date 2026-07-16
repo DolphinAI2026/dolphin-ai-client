@@ -833,6 +833,21 @@ def _embed_cookie_name(session_id: CodeSessionRef) -> str:
     return f"dolphin_code_runtime_{str(session_id).strip()}"
 
 
+def _runtime_entry_cookie_name(session_id: CodeSessionRef) -> str:
+    return f"dolphin_code_runtime_entry_{str(session_id).strip()}"
+
+
+def _cookie_header_value(cookie_header: str, cookie_name: str) -> str:
+    for part in str(cookie_header or "").split(";"):
+        item = part.strip()
+        if not item or "=" not in item:
+            continue
+        name, value = item.split("=", 1)
+        if name.strip() == cookie_name:
+            return value.strip()
+    return ""
+
+
 def _cookie_header_without_name(cookie_header: str, cookie_name: str) -> str:
     forwarded: list[str] = []
     for part in str(cookie_header or "").split(";"):
@@ -847,7 +862,14 @@ def _cookie_header_without_name(cookie_header: str, cookie_name: str) -> str:
 
 
 def _runtime_cookie_header(cookie_header: str, session_id: CodeSessionRef) -> str:
-    return _cookie_header_without_name(cookie_header, _embed_cookie_name(session_id))
+    without_proxy_cookie = _cookie_header_without_name(
+        cookie_header,
+        _embed_cookie_name(session_id),
+    )
+    return _cookie_header_without_name(
+        without_proxy_cookie,
+        _runtime_entry_cookie_name(session_id),
+    )
 
 
 def _copyable_request_headers(request: Request, session_id: CodeSessionRef) -> dict[str, str]:
@@ -891,6 +913,10 @@ def _runtime_request_headers(
     *,
     force_entry_token: bool = False,
 ) -> dict[str, str]:
+    browser_entry_token = _cookie_header_value(
+        request.headers.get("cookie", ""),
+        _runtime_entry_cookie_name(session_id),
+    )
     headers = _copyable_request_headers(request, session_id)
     headers.pop("authorization", None)
     if force_entry_token:
@@ -907,7 +933,7 @@ def _runtime_request_headers(
         "apaas_sandbox_token",
     )
     if force_entry_token or not has_runtime_cookie:
-        runtime_token = _runtime_entry_token(binding)
+        runtime_token = browser_entry_token or _runtime_entry_token(binding)
         if runtime_token:
             headers["authorization"] = f"Bearer {runtime_token}"
     return headers
@@ -1338,6 +1364,7 @@ async def _authorize_proxy_request(
     legacy_session_id: int | None = None,
 ) -> Response | None:
     query_token = request.query_params.get("dolphin_token", "").strip()
+    runtime_entry_token = request.query_params.get("token", "").strip()
     cookie_token = request.cookies.get(_embed_cookie_name(session_id), "").strip()
     if query_token:
         payload = validate_embed_token(
@@ -1366,6 +1393,19 @@ async def _authorize_proxy_request(
             samesite="lax",
             path=_public_proxy_prefix(session_id, request.headers.get("x-forwarded-prefix", "")),
         )
+        if runtime_entry_token:
+            redirect.set_cookie(
+                _runtime_entry_cookie_name(session_id),
+                runtime_entry_token,
+                httponly=True,
+                max_age=10 * 60,
+                samesite="lax",
+                secure=request.url.scheme == "https",
+                path=_public_proxy_prefix(
+                    session_id,
+                    request.headers.get("x-forwarded-prefix", ""),
+                ),
+            )
         return redirect
     if cookie_token:
         validate_proxy_cookie_token(

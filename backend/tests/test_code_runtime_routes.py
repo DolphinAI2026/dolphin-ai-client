@@ -120,6 +120,36 @@ def test_code_runtime_proxy_token_redirect_stays_on_current_origin():
     ) == "/ai-builder/api/code-runtime/12/builder"
 
 
+@pytest.mark.asyncio
+async def test_code_runtime_proxy_redirect_binds_runtime_entry_token_to_browser_cookie():
+    from starlette.requests import Request
+    from app.code_runtime.service import create_embed_token
+    from app.routes.code_runtime import _authorize_proxy_request
+
+    embed_token = create_embed_token(session_id=12, user_id=11, tenant_id=7)
+    request = Request({
+        "type": "http",
+        "method": "GET",
+        "scheme": "https",
+        "server": ("om-demo.dfy.definesys.cn", 443),
+        "path": "/api/code-runtime/12/builder/",
+        "query_string": (
+            f"token=window-entry-token&dolphin_token={embed_token}"
+        ).encode(),
+        "headers": [],
+    })
+
+    response = await _authorize_proxy_request(request, 12)
+
+    assert response.status_code == 307
+    assert response.headers["location"] == "/api/code-runtime/12/builder/"
+    cookies = response.headers.getlist("set-cookie")
+    assert any(
+        cookie.startswith("dolphin_code_runtime_entry_12=window-entry-token;")
+        for cookie in cookies
+    )
+
+
 def test_code_runtime_proxy_preserves_vite_bare_url_query():
     from app.models.ai_chat import CodeRuntimeBinding
     from app.routes.code_runtime import _query_string_without_key, _target_url
@@ -252,6 +282,7 @@ def test_runtime_request_headers_force_entry_token_replaces_stale_runtime_cookie
     request = SimpleNamespace(headers=Headers({
         "cookie": (
             "dolphin_code_runtime_12=proxy-token; "
+            "dolphin_code_runtime_entry_12=window-entry-token; "
             "apaas_sandbox_token=stale-runtime-cookie; runtime_theme=dark"
         ),
     }))
@@ -263,7 +294,7 @@ def test_runtime_request_headers_force_entry_token_replaces_stale_runtime_cookie
         force_entry_token=True,
     )
 
-    assert headers["authorization"] == "Bearer entry-token"
+    assert headers["authorization"] == "Bearer window-entry-token"
     assert headers["cookie"] == "runtime_theme=dark"
 
 
