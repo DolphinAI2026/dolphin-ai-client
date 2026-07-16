@@ -1097,7 +1097,7 @@ async def test_list_code_runtime_rail_history_includes_current_empty_session_pla
     sessions = result["apps"][0]["sessions"]
     assert [s["runtimeSessionId"] for s in sessions] == ["runtime-new-empty", "runtime-old"]
     assert sessions[0]["current"] is True
-    assert sessions[0]["title"] == "未命名会话"
+    assert sessions[0]["title"] == "CRM Code"
 
 
 @pytest.mark.asyncio

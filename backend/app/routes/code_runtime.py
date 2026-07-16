@@ -298,11 +298,15 @@ def _runtime_session_has_visible_title(session: dict[str, Any]) -> bool:
     return bool(str(session.get("title") or "").strip() or str(session.get("summary") or "").strip())
 
 
-def _runtime_session_placeholder(binding: CodeRuntimeBinding, runtime_session_id: str) -> dict[str, Any]:
+def _runtime_session_placeholder(
+    binding: CodeRuntimeBinding,
+    runtime_session_id: str,
+    fallback_title: str | None = None,
+) -> dict[str, Any]:
     timestamp = binding.updated_at.isoformat() if binding.updated_at else None
     return {
         "runtimeSessionId": runtime_session_id,
-        "title": "未命名会话",
+        "title": str(fallback_title or "").strip() or "未命名会话",
         "state": "running",
         "createdAt": timestamp,
         "updatedAt": timestamp,
@@ -334,6 +338,7 @@ async def _runtime_session_detail_or_none(
 async def _current_runtime_session_item(
     binding: CodeRuntimeBinding,
     runtime_session_id: str,
+    fallback_title: str | None = None,
 ) -> dict[str, Any]:
     detail = await _runtime_session_detail_or_none(binding, runtime_session_id)
     if detail and _runtime_session_has_visible_title(detail):
@@ -344,7 +349,7 @@ async def _current_runtime_session_item(
         item.setdefault("capabilityStale", False)
         item.setdefault("codexSessionResumable", True)
         return item
-    return _runtime_session_placeholder(binding, runtime_session_id)
+    return _runtime_session_placeholder(binding, runtime_session_id, fallback_title)
 
 
 async def _authorized_code_runtime_binding(
@@ -560,7 +565,14 @@ async def list_code_runtime_rail_history(
                     current_found = True
                     break
             if not current_found:
-                normalized_sessions.insert(0, await _current_runtime_session_item(binding, current_runtime_id))
+                normalized_sessions.insert(
+                    0,
+                    await _current_runtime_session_item(
+                        binding,
+                        current_runtime_id,
+                        session.title,
+                    ),
+                )
             app["sessions"] = normalized_sessions
         apps.append(app)
 
@@ -1135,7 +1147,7 @@ async def list_browser_authenticated_agent_sessions(
     auth_response = await _authorize_proxy_request(request, session_id)
     if auth_response is not None:
         return auth_response
-    _session, binding = await _authorized_code_runtime_binding(db, session_id, ctx)
+    session, binding = await _authorized_code_runtime_binding(db, session_id, ctx)
     payload = await _browser_runtime_json_request(
         binding,
         "GET",
@@ -1155,7 +1167,10 @@ async def list_browser_authenticated_agent_sessions(
         str(item.get("runtimeSessionId") or "").strip() == current_runtime_id
         for item in normalized_sessions
     ):
-        normalized_sessions.insert(0, _runtime_session_placeholder(binding, current_runtime_id))
+        normalized_sessions.insert(
+            0,
+            _runtime_session_placeholder(binding, current_runtime_id, session.title),
+        )
     return {"sessions": normalized_sessions}
 
 
