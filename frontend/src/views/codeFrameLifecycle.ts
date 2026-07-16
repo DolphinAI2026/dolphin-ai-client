@@ -1,8 +1,14 @@
 export type CodeFramePhase = 'active' | 'pending'
 
+export interface CodeFrameRouteLocation {
+  path: string
+  query: Record<string, string | null | Array<string | null>>
+}
+
 export interface CodeFrame {
   key: string
   sessionRef: string
+  route: CodeFrameRouteLocation
   sourceUrl: string
   url: string
   origin: string
@@ -14,6 +20,7 @@ export interface CodeFrame {
 export interface CodeFrameOpenRequest {
   requestId: number
   sessionRef: string
+  route: CodeFrameRouteLocation
 }
 
 export interface CodeFrameFailure extends CodeFrameOpenRequest {
@@ -32,7 +39,20 @@ export interface CodeFrameLifecycle {
   pending: CodeFrame | null
   request: CodeFrameOpenRequest | null
   failed: CodeFrameFailure | null
+  lastReadyRoute: CodeFrameRouteLocation | null
   nextFrameId: number
+}
+
+function cloneCodeFrameRoute(route: CodeFrameRouteLocation): CodeFrameRouteLocation {
+  return {
+    path: route.path,
+    query: Object.fromEntries(
+      Object.entries(route.query).map(([key, value]) => [
+        key,
+        Array.isArray(value) ? [...value] : value,
+      ]),
+    ),
+  }
 }
 
 export function createCodeFrameLifecycle(): CodeFrameLifecycle {
@@ -41,6 +61,7 @@ export function createCodeFrameLifecycle(): CodeFrameLifecycle {
     pending: null,
     request: null,
     failed: null,
+    lastReadyRoute: null,
     nextFrameId: 1,
   }
 }
@@ -52,14 +73,17 @@ export function beginCodeFrameOpen(
   return {
     ...state,
     pending: null,
-    request: { ...request },
+    request: {
+      ...request,
+      route: cloneCodeFrameRoute(request.route),
+    },
     failed: null,
   }
 }
 
 export function queuePendingCodeFrame(
   state: CodeFrameLifecycle,
-  input: CodeFrameOpenRequest & { url: string; baseUrl: string },
+  input: Pick<CodeFrameOpenRequest, 'requestId' | 'sessionRef'> & { url: string; baseUrl: string },
 ): CodeFrameLifecycle {
   if (
     state.request?.requestId !== input.requestId
@@ -97,6 +121,7 @@ export function queuePendingCodeFrame(
     pending: {
       key,
       sessionRef: input.sessionRef,
+      route: cloneCodeFrameRoute(state.request.route),
       sourceUrl: input.url,
       url: resolvedUrl.toString(),
       origin: resolvedUrl.origin,
@@ -140,6 +165,7 @@ export function promoteReadyCodeFrame(state: CodeFrameLifecycle, frameKey: strin
     pending: null,
     request: null,
     failed: null,
+    lastReadyRoute: cloneCodeFrameRoute(pending.route),
   }
 }
 

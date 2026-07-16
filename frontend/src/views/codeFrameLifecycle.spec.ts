@@ -10,13 +10,25 @@ import {
   markCodeFrameLoaded,
   promoteReadyCodeFrame,
   queuePendingCodeFrame,
+  type CodeFrameRouteLocation,
 } from './codeFrameLifecycle'
 
 const baseUrl = 'https://builder.example.com/code/session-1'
 
+function routeLocation(sessionRef: string, agent?: string): CodeFrameRouteLocation {
+  return {
+    path: `/code/${sessionRef}`,
+    query: agent ? { agent } : {},
+  }
+}
+
 function openInitialFrame() {
   let state = createCodeFrameLifecycle()
-  state = beginCodeFrameOpen(state, { requestId: 1, sessionRef: 'session-1' })
+  state = beginCodeFrameOpen(state, {
+    requestId: 1,
+    sessionRef: 'session-1',
+    route: routeLocation('session-1', 'agent-1'),
+  })
   state = queuePendingCodeFrame(state, {
     requestId: 1,
     sessionRef: 'session-1',
@@ -63,7 +75,11 @@ describe('code frame lifecycle', () => {
     let state = activateInitialFrame()
     const oldFrame = state.active!
 
-    state = beginCodeFrameOpen(state, { requestId: 2, sessionRef: 'session-2' })
+    state = beginCodeFrameOpen(state, {
+      requestId: 2,
+      sessionRef: 'session-2',
+      route: routeLocation('session-2', 'agent-2'),
+    })
 
     expect(isCodeFrameSwitching(state)).toBe(true)
     expect(isCodeFrameVisible(state, oldFrame)).toBe(true)
@@ -88,7 +104,11 @@ describe('code frame lifecycle', () => {
   it('atomically replaces the old frame only when the current pending frame is ready', () => {
     let state = activateInitialFrame()
     const oldKey = state.active!.key
-    state = beginCodeFrameOpen(state, { requestId: 2, sessionRef: 'session-2' })
+    state = beginCodeFrameOpen(state, {
+      requestId: 2,
+      sessionRef: 'session-2',
+      route: routeLocation('session-2', 'agent-2'),
+    })
     state = queuePendingCodeFrame(state, {
       requestId: 2,
       sessionRef: 'session-2',
@@ -107,7 +127,11 @@ describe('code frame lifecycle', () => {
 
   it('ignores a late ready from a frame replaced by a newer switch', () => {
     let state = activateInitialFrame()
-    state = beginCodeFrameOpen(state, { requestId: 2, sessionRef: 'session-2' })
+    state = beginCodeFrameOpen(state, {
+      requestId: 2,
+      sessionRef: 'session-2',
+      route: routeLocation('session-2', 'agent-2'),
+    })
     state = queuePendingCodeFrame(state, {
       requestId: 2,
       sessionRef: 'session-2',
@@ -116,7 +140,11 @@ describe('code frame lifecycle', () => {
     })
     const staleKey = state.pending!.key
 
-    state = beginCodeFrameOpen(state, { requestId: 3, sessionRef: 'session-3' })
+    state = beginCodeFrameOpen(state, {
+      requestId: 3,
+      sessionRef: 'session-3',
+      route: routeLocation('session-3', 'agent-3'),
+    })
     state = queuePendingCodeFrame(state, {
       requestId: 3,
       sessionRef: 'session-3',
@@ -137,7 +165,11 @@ describe('code frame lifecycle', () => {
   it('rolls back a failed switch and restores old-frame interaction', () => {
     let state = activateInitialFrame()
     const oldFrame = state.active!
-    state = beginCodeFrameOpen(state, { requestId: 2, sessionRef: 'session-2' })
+    state = beginCodeFrameOpen(state, {
+      requestId: 2,
+      sessionRef: 'session-2',
+      route: routeLocation('session-2', 'agent-2'),
+    })
     state = queuePendingCodeFrame(state, {
       requestId: 2,
       sessionRef: 'session-2',
@@ -156,6 +188,7 @@ describe('code frame lifecycle', () => {
     expect(state.failed).toEqual({
       requestId: 2,
       sessionRef: 'session-2',
+      route: routeLocation('session-2', 'agent-2'),
       frameKey: 'code-frame-2',
       message: 'runtime failed',
     })
@@ -166,7 +199,11 @@ describe('code frame lifecycle', () => {
   it('does not mount a duplicate frame for the same active session URL', () => {
     let state = activateInitialFrame()
     const active = state.active!
-    state = beginCodeFrameOpen(state, { requestId: 2, sessionRef: active.sessionRef })
+    state = beginCodeFrameOpen(state, {
+      requestId: 2,
+      sessionRef: active.sessionRef,
+      route: routeLocation(active.sessionRef, 'agent-1'),
+    })
     state = queuePendingCodeFrame(state, {
       requestId: 2,
       sessionRef: active.sessionRef,
@@ -179,5 +216,71 @@ describe('code frame lifecycle', () => {
     expect(state.request).toBeNull()
     expect(state.nextFrameId).toBe(2)
     expect(isCodeFrameInteractive(state, active)).toBe(true)
+  })
+
+  it('ignores a stale ready timeout after a newer pending frame replaces it', () => {
+    let state = activateInitialFrame()
+    state = beginCodeFrameOpen(state, {
+      requestId: 2,
+      sessionRef: 'session-2',
+      route: routeLocation('session-2', 'agent-2'),
+    })
+    state = queuePendingCodeFrame(state, {
+      requestId: 2,
+      sessionRef: 'session-2',
+      url: '/api/code-runtime/session-2/embed',
+      baseUrl,
+    })
+    const staleFrameKey = state.pending!.key
+
+    state = beginCodeFrameOpen(state, {
+      requestId: 3,
+      sessionRef: 'session-3',
+      route: routeLocation('session-3', 'agent-3'),
+    })
+    state = queuePendingCodeFrame(state, {
+      requestId: 3,
+      sessionRef: 'session-3',
+      url: '/api/code-runtime/session-3/embed',
+      baseUrl,
+    })
+
+    const afterStaleTimeout = failCodeFrameOpen(state, {
+      requestId: 2,
+      frameKey: staleFrameKey,
+      message: 'ready timeout',
+    })
+
+    expect(afterStaleTimeout).toBe(state)
+    expect(afterStaleTimeout.pending?.sessionRef).toBe('session-3')
+    expect(afterStaleTimeout.active?.sessionRef).toBe('session-1')
+  })
+
+  it('preserves the last ready route and failed target for route rollback and retry', () => {
+    let state = activateInitialFrame()
+
+    expect(state.lastReadyRoute).toEqual(routeLocation('session-1', 'agent-1'))
+
+    state = beginCodeFrameOpen(state, {
+      requestId: 2,
+      sessionRef: 'session-2',
+      route: routeLocation('session-2', 'agent-2'),
+    })
+    state = queuePendingCodeFrame(state, {
+      requestId: 2,
+      sessionRef: 'session-2',
+      url: '/api/code-runtime/session-2/embed',
+      baseUrl,
+    })
+    state = failCodeFrameOpen(state, {
+      requestId: 2,
+      frameKey: state.pending!.key,
+      message: 'ready timeout',
+    })
+
+    expect(state.active?.route).toEqual(routeLocation('session-1', 'agent-1'))
+    expect(state.lastReadyRoute).toEqual(routeLocation('session-1', 'agent-1'))
+    expect(state.failed?.route).toEqual(routeLocation('session-2', 'agent-2'))
+    expect(isCodeFrameInteractive(state, state.active!)).toBe(true)
   })
 })

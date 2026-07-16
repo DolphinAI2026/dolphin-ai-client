@@ -71,11 +71,11 @@
       <div v-else-if="errorMessage && !hasAnyFrame" class="code-error">
         <strong>Code 工作台暂时无法打开</strong>
         <span>{{ errorMessage }}</span>
-        <button type="button" @click="openCurrentSession">重试</button>
+        <button type="button" @click="retryFailedSession">重试</button>
       </div>
       <div v-if="errorMessage && hasAnyFrame" class="code-error-toast">
         <span>{{ errorMessage }}</span>
-        <button type="button" @click="openCurrentSession">重试</button>
+        <button type="button" @click="retryFailedSession">重试</button>
       </div>
       <div v-if="frameSwitching" class="code-frame-interaction-guard">
         <div class="code-switching" aria-live="polite">正在切换 Code 工作台...</div>
@@ -101,6 +101,8 @@ import {
   promoteReadyCodeFrame,
   queuePendingCodeFrame,
   type CodeFrame,
+  type CodeFrameFailureInput,
+  type CodeFrameRouteLocation,
 } from './codeFrameLifecycle'
 import {
   createShellStateMessages,
@@ -110,6 +112,7 @@ import {
 
 const route = useRoute()
 const router = useRouter()
+const READY_TIMEOUT_MS = 30_000
 const frameLifecycle = ref(createCodeFrameLifecycle())
 const frameElements = new Map<string, HTMLIFrameElement>()
 const pageVisible = ref(document.visibilityState !== 'hidden')
@@ -122,6 +125,12 @@ const newCodeAppError = ref('')
 const creatingCodeApplication = ref(false)
 let railRefreshTimer: number | undefined
 let openRequestSeq = 0
+let pendingReadyTimer: {
+  handle: number
+  requestId: number
+  frameKey: string
+} | undefined
+let routeRestoreTarget: CodeFrameRouteLocation | null = null
 
 const outboundShellMessageTypes = [
   'shell.visibilityChanged',
@@ -172,6 +181,39 @@ function currentSessionRef(): string {
 function currentRuntimeAgentId(): string {
   const raw = Array.isArray(route.query.agent) ? route.query.agent[0] : route.query.agent
   return String(raw || '').trim()
+}
+
+function currentCodeRouteLocation(): CodeFrameRouteLocation {
+  const query: CodeFrameRouteLocation['query'] = {}
+  for (const [key, value] of Object.entries(route.query)) {
+    query[key] = Array.isArray(value)
+      ? value.map(item => item == null ? null : String(item))
+      : value == null ? null : String(value)
+  }
+  return {
+    path: route.path,
+    query,
+  }
+}
+
+function codeRouteLocationKey(location: CodeFrameRouteLocation): string {
+  return JSON.stringify([
+    location.path,
+    Object.keys(location.query)
+      .sort()
+      .map(key => [key, location.query[key]]),
+  ])
+}
+
+function codeRouteLocationsEqual(left: CodeFrameRouteLocation, right: CodeFrameRouteLocation): boolean {
+  return codeRouteLocationKey(left) === codeRouteLocationKey(right)
+}
+
+function consumeRouteRestore(): boolean {
+  const target = routeRestoreTarget
+  if (!target || !codeRouteLocationsEqual(currentCodeRouteLocation(), target)) return false
+  routeRestoreTarget = null
+  return true
 }
 
 function isUnavailableRuntimeSessionError(error: any, runtimeAgentId: string): boolean {
@@ -235,6 +277,7 @@ async function confirmCreateCodeApplication() {
 }
 
 async function openCurrentSession() {
+  clearPendingReadyTimer()
   if (isCreateApplicationRoute.value) {
     openRequestSeq += 1
     resetCodeFrames()
@@ -253,6 +296,7 @@ async function openCurrentSession() {
   frameLifecycle.value = beginCodeFrameOpen(frameLifecycle.value, {
     requestId: requestSeq,
     sessionRef,
+    route: currentCodeRouteLocation(),
   })
   loading.value = true
   errorMessage.value = ''
@@ -280,11 +324,10 @@ async function openCurrentSession() {
   } catch (error: any) {
     if (requestSeq === openRequestSeq) {
       const message = error?.response?.data?.detail || error?.message || '打开失败'
-      frameLifecycle.value = failCodeFrameOpen(frameLifecycle.value, {
+      failCurrentFrameOpen({
         requestId: requestSeq,
         message,
       })
-      errorMessage.value = message
     }
   } finally {
     if (requestSeq === openRequestSeq) loading.value = false
@@ -299,6 +342,8 @@ function queuePendingFrame(url: string) {
     url,
     baseUrl: window.location.href,
   })
+  const pending = frameLifecycle.value.pending
+  if (pending) startPendingReadyTimer(pending)
 }
 
 function isFrameVisible(frame: CodeFrame) {
@@ -317,13 +362,77 @@ function onCodeFrameError(frameKey: string) {
   const pending = frameLifecycle.value.pending
   const request = frameLifecycle.value.request
   if (!pending || pending.key !== frameKey || !request) return
-  const message = 'Code 工作台加载失败'
-  frameLifecycle.value = failCodeFrameOpen(frameLifecycle.value, {
+  failCurrentFrameOpen({
     requestId: request.requestId,
     frameKey,
-    message,
+    message: 'Code 工作台加载失败',
   })
-  errorMessage.value = message
+}
+
+function clearPendingReadyTimer() {
+  if (!pendingReadyTimer) return
+  window.clearTimeout(pendingReadyTimer.handle)
+  pendingReadyTimer = undefined
+}
+
+function startPendingReadyTimer(frame: CodeFrame) {
+  clearPendingReadyTimer()
+  const requestId = frame.requestId
+  const frameKey = frame.key
+  const handle = window.setTimeout(() => {
+    if (pendingReadyTimer?.handle === handle) pendingReadyTimer = undefined
+    failCurrentFrameOpen({
+      requestId,
+      frameKey,
+      message: 'Code 工作台准备超时，请重试',
+    })
+  }, READY_TIMEOUT_MS)
+  pendingReadyTimer = {
+    handle,
+    requestId,
+    frameKey,
+  }
+}
+
+function restoreActiveRouteAfterFailure() {
+  const target = frameLifecycle.value.lastReadyRoute
+  if (
+    !frameLifecycle.value.active
+    || !target
+    || codeRouteLocationsEqual(currentCodeRouteLocation(), target)
+  ) {
+    return
+  }
+  routeRestoreTarget = target
+  void router.replace({
+    path: target.path,
+    query: target.query,
+  }).catch(() => {
+    if (routeRestoreTarget === target) routeRestoreTarget = null
+  })
+}
+
+function failCurrentFrameOpen(failure: CodeFrameFailureInput): boolean {
+  const previousState = frameLifecycle.value
+  const nextState = failCodeFrameOpen(previousState, failure)
+  if (nextState === previousState) return false
+  clearPendingReadyTimer()
+  frameLifecycle.value = nextState
+  errorMessage.value = failure.message
+  restoreActiveRouteAfterFailure()
+  return true
+}
+
+function retryFailedSession() {
+  const target = frameLifecycle.value.failed?.route
+  if (!target || codeRouteLocationsEqual(currentCodeRouteLocation(), target)) {
+    void openCurrentSession()
+    return
+  }
+  void router.push({
+    path: target.path,
+    query: target.query,
+  })
 }
 
 function setCodeFrameElement(frameKey: string, element: unknown) {
@@ -382,6 +491,7 @@ function publishCodeFrameDeactivation() {
 }
 
 function resetCodeFrames() {
+  clearPendingReadyTimer()
   publishCodeFrameDeactivation()
   frameLifecycle.value = createCodeFrameLifecycle()
   frameElements.clear()
@@ -420,6 +530,7 @@ function onShellMessage(event: MessageEvent) {
     const previousState = frameLifecycle.value
     frameLifecycle.value = promoteReadyCodeFrame(previousState, frame.key)
     if (frameLifecycle.value === previousState) return
+    clearPendingReadyTimer()
     errorMessage.value = ''
     scheduleOuterCodeRailRefresh(500)
     return
@@ -428,12 +539,11 @@ function onShellMessage(event: MessageEvent) {
   if (message.type === 'sandbox.failed') {
     if (frame.phase === 'pending' && frameLifecycle.value.request) {
       const runtimeMessage = String(message.payload.message || 'Code runtime failed')
-      frameLifecycle.value = failCodeFrameOpen(frameLifecycle.value, {
+      failCurrentFrameOpen({
         requestId: frameLifecycle.value.request.requestId,
         frameKey: frame.key,
         message: runtimeMessage,
       })
-      errorMessage.value = runtimeMessage
     } else if (isFrameInteractive(frame)) {
       errorMessage.value = String(message.payload.message || 'Code runtime failed')
     }
@@ -450,7 +560,10 @@ function onShellMessage(event: MessageEvent) {
 
 watch(
   () => [route.name, route.params.id, route.query.agent],
-  () => { void openCurrentSession() },
+  () => {
+    if (consumeRouteRestore()) return
+    void openCurrentSession()
+  },
 )
 
 watch(frameLifecycle, () => {
@@ -464,6 +577,7 @@ onMounted(() => {
 })
 
 onBeforeUnmount(() => {
+  clearPendingReadyTimer()
   publishCodeFrameDeactivation()
   window.removeEventListener('message', onShellMessage)
   document.removeEventListener('visibilitychange', onDocumentVisibilityChange)

@@ -70,6 +70,30 @@ describe('CodeConversationPage', () => {
     expect(pageSource).toContain('pointer-events: none')
   })
 
+  it('fails a pending frame after a request-bound builder.ready timeout and clears timers', () => {
+    expect(pageSource).toContain('READY_TIMEOUT_MS = 30_000')
+    expect(pageSource).toContain('pendingReadyTimer')
+    expect(pageSource).toContain('startPendingReadyTimer')
+    expect(pageSource).toContain('clearPendingReadyTimer')
+    expect(pageSource).toContain('window.setTimeout')
+    expect(pageSource).toContain('requestId')
+    expect(pageSource).toContain('frameKey')
+    expect(pageSource).toContain('Code 工作台准备超时')
+    expect(pageSource).toContain('failCodeFrameOpen')
+    expect(pageSource).toContain('onBeforeUnmount')
+  })
+
+  it('restores the last ready route after pending failure without reopening the active frame', () => {
+    expect(pageSource).toContain('lastReadyRoute')
+    expect(pageSource).toContain('restoreActiveRouteAfterFailure')
+    expect(pageSource).toContain('routeRestoreTarget')
+    expect(pageSource).toContain('consumeRouteRestore')
+    expect(pageSource).toContain('router.replace')
+    expect(pageSource).toContain('failed?.route')
+    expect(pageSource).toContain('retryFailedSession')
+    expect(pageSource).toContain('@click="retryFailedSession"')
+  })
+
   it('opens the sandbox before activating the route agent so restore is not overwritten', () => {
     expect(pageSource).toContain('function currentRuntimeAgentId()')
     expect(pageSource).toContain('function currentSessionRef(): string')
