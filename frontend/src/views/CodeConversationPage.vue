@@ -216,6 +216,10 @@ function consumeRouteRestore(): boolean {
   return true
 }
 
+function clearRouteRestoreTarget(target: CodeFrameRouteLocation) {
+  if (routeRestoreTarget === target) routeRestoreTarget = null
+}
+
 function isUnavailableRuntimeSessionError(error: any, runtimeAgentId: string): boolean {
   if (!runtimeAgentId) return false
   const detail = String(error?.response?.data?.detail || error?.message || '')
@@ -407,9 +411,10 @@ function restoreActiveRouteAfterFailure() {
   void router.replace({
     path: target.path,
     query: target.query,
-  }).catch(() => {
-    if (routeRestoreTarget === target) routeRestoreTarget = null
-  })
+  }).catch(() => undefined)
+    .finally(() => {
+      clearRouteRestoreTarget(target)
+    })
 }
 
 function failCurrentFrameOpen(failure: CodeFrameFailureInput): boolean {

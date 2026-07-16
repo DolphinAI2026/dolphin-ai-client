@@ -84,6 +84,11 @@ describe('CodeConversationPage', () => {
   })
 
   it('restores the last ready route after pending failure without reopening the active frame', () => {
+    const restoreSource = pageSource.slice(
+      pageSource.indexOf('function restoreActiveRouteAfterFailure'),
+      pageSource.indexOf('function failCurrentFrameOpen'),
+    )
+
     expect(pageSource).toContain('lastReadyRoute')
     expect(pageSource).toContain('restoreActiveRouteAfterFailure')
     expect(pageSource).toContain('routeRestoreTarget')
@@ -92,6 +97,10 @@ describe('CodeConversationPage', () => {
     expect(pageSource).toContain('failed?.route')
     expect(pageSource).toContain('retryFailedSession')
     expect(pageSource).toContain('@click="retryFailedSession"')
+    expect(pageSource).toContain('function clearRouteRestoreTarget')
+    expect(restoreSource).toContain('.catch(() => undefined)')
+    expect(restoreSource).toContain('.finally(() => {')
+    expect(restoreSource).toContain('clearRouteRestoreTarget(target)')
   })
 
   it('opens the sandbox before activating the route agent so restore is not overwritten', () => {

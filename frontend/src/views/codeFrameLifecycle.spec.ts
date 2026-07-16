@@ -196,13 +196,13 @@ describe('code frame lifecycle', () => {
     expect(isCodeFrameInteractive(state, state.active!)).toBe(true)
   })
 
-  it('retains the latest route when reusing the same active session URL', () => {
+  it('reuses the active frame only when session, source URL and route are unchanged', () => {
     let state = activateInitialFrame()
     const active = state.active!
     state = beginCodeFrameOpen(state, {
       requestId: 2,
       sessionRef: active.sessionRef,
-      route: routeLocation(active.sessionRef, 'agent-2'),
+      route: routeLocation(active.sessionRef, 'agent-1'),
     })
     state = queuePendingCodeFrame(state, {
       requestId: 2,
@@ -218,9 +218,42 @@ describe('code frame lifecycle', () => {
     expect(state.pending).toBeNull()
     expect(state.request).toBeNull()
     expect(state.nextFrameId).toBe(2)
+    expect(state.active?.route).toEqual(routeLocation(active.sessionRef, 'agent-1'))
+    expect(state.lastReadyRoute).toEqual(routeLocation(active.sessionRef, 'agent-1'))
+    expect(isCodeFrameInteractive(state, state.active!)).toBe(true)
+  })
+
+  it('queues a new frame when the route query changes for the same session URL', () => {
+    let state = activateInitialFrame()
+    const active = state.active!
+    state = beginCodeFrameOpen(state, {
+      requestId: 2,
+      sessionRef: active.sessionRef,
+      route: routeLocation(active.sessionRef, 'agent-2'),
+    })
+    state = queuePendingCodeFrame(state, {
+      requestId: 2,
+      sessionRef: active.sessionRef,
+      url: active.sourceUrl,
+      baseUrl,
+    })
+
+    expect(state.active?.key).toBe(active.key)
+    expect(state.active?.route).toEqual(routeLocation(active.sessionRef, 'agent-1'))
+    expect(state.pending).toMatchObject({
+      key: 'code-frame-2',
+      sessionRef: active.sessionRef,
+      route: routeLocation(active.sessionRef, 'agent-2'),
+      sourceUrl: active.sourceUrl,
+      phase: 'pending',
+    })
+    expect(state.request?.requestId).toBe(2)
+    expect(state.lastReadyRoute).toEqual(routeLocation(active.sessionRef, 'agent-1'))
+    expect(isCodeFrameInteractive(state, active)).toBe(false)
+
+    state = promoteReadyCodeFrame(state, state.pending!.key)
     expect(state.active?.route).toEqual(routeLocation(active.sessionRef, 'agent-2'))
     expect(state.lastReadyRoute).toEqual(routeLocation(active.sessionRef, 'agent-2'))
-    expect(isCodeFrameInteractive(state, state.active!)).toBe(true)
 
     state = beginCodeFrameOpen(state, {
       requestId: 3,

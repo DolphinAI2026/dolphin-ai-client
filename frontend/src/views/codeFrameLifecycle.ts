@@ -55,6 +55,19 @@ function cloneCodeFrameRoute(route: CodeFrameRouteLocation): CodeFrameRouteLocat
   }
 }
 
+function codeFrameRoutesEqual(
+  left: CodeFrameRouteLocation,
+  right: CodeFrameRouteLocation,
+): boolean {
+  return JSON.stringify([
+    left.path,
+    Object.keys(left.query).sort().map(key => [key, left.query[key]]),
+  ]) === JSON.stringify([
+    right.path,
+    Object.keys(right.query).sort().map(key => [key, right.query[key]]),
+  ])
+}
+
 export function createCodeFrameLifecycle(): CodeFrameLifecycle {
   return {
     active: null,
@@ -95,6 +108,7 @@ export function queuePendingCodeFrame(
   if (
     state.active?.sessionRef === input.sessionRef
     && state.active.sourceUrl === input.url
+    && codeFrameRoutesEqual(state.active.route, state.request.route)
   ) {
     return {
       ...state,

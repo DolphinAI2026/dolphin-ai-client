@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from types import SimpleNamespace
 from uuid import UUID
 
@@ -526,9 +527,9 @@ def test_code_runtime_shell_config_exposes_external_session_rail_flag():
         "http://127.0.0.1:5273",
     )
 
-    assert b"externalSessionRail:true" in injected
-    assert b"hideHistory:false" in injected
-    assert b"hideNewSession:true" in injected
+    assert b'"externalSessionRail":true' in injected
+    assert b'"hideHistory":false' in injected
+    assert b'"hideNewSession":true' in injected
     assert b"window.__APAAS_SHELL__" in injected
     assert b"MutationObserver" not in injected
     assert b"querySelectorAll" not in injected
@@ -543,11 +544,37 @@ def test_code_runtime_shell_config_exposes_external_session_rail_flag():
         "https://om-demo.dfy.definesys.cn",
         "/ai-builder",
     )
-    assert b"externalBasePath:'/ai-builder/api/code-runtime/12'" in prefixed
+    assert b'"externalBasePath":"/ai-builder/api/code-runtime/12"' in prefixed
     assert b'closest(".markdown-view,.workspace-file-viewer-preview")' not in injected
     assert b'document.addEventListener("click"' not in injected
     assert b"window.location.assign" not in injected
     assert b"window.open(" not in injected
+
+
+def test_code_runtime_shell_config_uses_script_safe_json():
+    from app.routes.code_runtime import _inject_shell_config
+
+    dangerous_origin = 'https://console.example.com/"quoted"</script><script>alert(1)</script>'
+    injected = _inject_shell_config(
+        b"<html><head></head><body></body></html>",
+        12,
+        dangerous_origin,
+        '/ai-builder/"quoted"</script>',
+    ).decode("utf-8")
+    config_source = injected.split("window.__APAAS_SHELL__||{},", 1)[1].split(
+        ");})();</script>",
+        1,
+    )[0]
+
+    assert "</script>" not in config_source.lower()
+    assert "\\u003c/script\\u003e" in config_source.lower()
+    assert json.loads(config_source) == {
+        "externalBasePath": '/ai-builder/"quoted"</script>/api/code-runtime/12',
+        "webConsoleOrigin": dangerous_origin,
+        "externalSessionRail": True,
+        "hideHistory": False,
+        "hideNewSession": True,
+    }
 
 
 @pytest.mark.asyncio
