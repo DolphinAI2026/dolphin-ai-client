@@ -1,5 +1,5 @@
 <template>
-  <main class="code-page">
+  <main ref="codePageElement" class="code-page">
     <section v-if="isCreateApplicationRoute" class="code-new-chat" aria-label="新建 Code 应用">
       <div class="code-new-chat-stream">
         <div class="code-new-empty">
@@ -81,6 +81,17 @@
         <div class="code-switching" aria-live="polite">正在切换 Code 工作台...</div>
       </div>
     </template>
+    <Teleport to="body">
+      <button
+        v-if="hostActivityModalFrameKey && hostRailOverlayWidth > 0"
+        type="button"
+        class="code-host-activity-scrim"
+        :style="{ width: `${hostRailOverlayWidth}px` }"
+        tabindex="-1"
+        aria-label="关闭执行活动面板"
+        @click="closeHostedActivityDrawer"
+      />
+    </Teleport>
   </main>
 </template>
 
@@ -105,6 +116,7 @@ import {
   type CodeFrameRouteLocation,
 } from './codeFrameLifecycle'
 import {
+  createShellActivityPanelCloseMessage,
   createShellStateMessages,
   resolveTrustedShellMessage,
   type ShellFrameEndpoint,
@@ -114,11 +126,14 @@ const route = useRoute()
 const router = useRouter()
 const READY_TIMEOUT_MS = 30_000
 const frameLifecycle = ref(createCodeFrameLifecycle())
+const codePageElement = ref<HTMLElement | null>(null)
 const frameElements = new Map<string, HTMLIFrameElement>()
 const pageVisible = ref(document.visibilityState !== 'hidden')
 const loading = ref(false)
 const errorMessage = ref('')
 const sessionState = ref('')
+const hostActivityModalFrameKey = ref('')
+const hostRailOverlayWidth = ref(0)
 const newCodeAppName = ref('')
 const newCodeAppPrompt = ref('')
 const newCodeAppError = ref('')
@@ -495,8 +510,34 @@ function publishCodeFrameDeactivation() {
   }
 }
 
+function updateHostRailOverlayWidth() {
+  hostRailOverlayWidth.value = Math.max(0, Math.round(codePageElement.value?.getBoundingClientRect().left ?? 0))
+}
+
+function clearHostedActivityModal(frameKey = '') {
+  if (frameKey && hostActivityModalFrameKey.value !== frameKey) return
+  hostActivityModalFrameKey.value = ''
+  hostRailOverlayWidth.value = 0
+}
+
+function closeHostedActivityDrawer() {
+  const frameKey = hostActivityModalFrameKey.value
+  if (!frameKey) return
+  const frame = frames.value.find(candidate => candidate.key === frameKey)
+  const target = frameElements.get(frameKey)?.contentWindow
+  if (!frame || !target || !isFrameInteractive(frame)) {
+    clearHostedActivityModal(frameKey)
+    return
+  }
+  target.postMessage(createShellActivityPanelCloseMessage({
+    frameKey,
+    occurredAt: new Date().toISOString(),
+  }), frame.origin)
+}
+
 function resetCodeFrames() {
   clearPendingReadyTimer()
+  clearHostedActivityModal()
   publishCodeFrameDeactivation()
   frameLifecycle.value = createCodeFrameLifecycle()
   frameElements.clear()
@@ -556,6 +597,18 @@ function onShellMessage(event: MessageEvent) {
   }
 
   if (!isFrameInteractive(frame)) return
+  if (message.type === 'builder.activityPanelChanged') {
+    const open = message.payload.open === true
+    const modal = message.payload.modal === true
+    const presentation = String(message.payload.presentation || '')
+    if (open && modal && presentation === 'drawer') {
+      hostActivityModalFrameKey.value = frame.key
+      updateHostRailOverlayWidth()
+    } else {
+      clearHostedActivityModal(frame.key)
+    }
+    return
+  }
   if (message.type === 'agent.sessionStateChanged') {
     sessionState.value = String(message.payload.state || message.payload.status || '')
     refreshOuterCodeRail()
@@ -572,11 +625,16 @@ watch(
 )
 
 watch(frameLifecycle, () => {
+  if (hostActivityModalFrameKey.value) {
+    const hostedFrame = frames.value.find(candidate => candidate.key === hostActivityModalFrameKey.value)
+    if (!hostedFrame || !isFrameInteractive(hostedFrame)) clearHostedActivityModal()
+  }
   void nextTick(publishCodeFrameShellState)
 })
 
 onMounted(() => {
   window.addEventListener('message', onShellMessage)
+  window.addEventListener('resize', updateHostRailOverlayWidth)
   document.addEventListener('visibilitychange', onDocumentVisibilityChange)
   void openCurrentSession()
 })
@@ -584,7 +642,9 @@ onMounted(() => {
 onBeforeUnmount(() => {
   clearPendingReadyTimer()
   publishCodeFrameDeactivation()
+  clearHostedActivityModal()
   window.removeEventListener('message', onShellMessage)
+  window.removeEventListener('resize', updateHostRailOverlayWidth)
   document.removeEventListener('visibilitychange', onDocumentVisibilityChange)
   if (railRefreshTimer != null) window.clearTimeout(railRefreshTimer)
 })
@@ -599,6 +659,18 @@ onBeforeUnmount(() => {
   display: flex;
   background: var(--bg-app);
   overflow: hidden;
+}
+
+.code-host-activity-scrim {
+  position: fixed;
+  z-index: 3000;
+  inset: 0 auto 0 0;
+  display: block;
+  height: 100vh;
+  padding: 0;
+  border: 0;
+  background: rgba(15, 23, 42, 0.28);
+  cursor: default;
 }
 
 .code-new-chat {

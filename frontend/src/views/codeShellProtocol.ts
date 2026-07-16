@@ -36,9 +36,19 @@ export type ShellStateMessage =
     }
   }
 
+export interface ShellActivityPanelCloseMessage {
+  type: 'shell.activityPanelCloseRequested'
+  frameKey: string
+  occurredAt: string
+  payload: {
+    frameKey: string
+  }
+}
+
 const trustedShellEventTypes = new Set([
   'sandbox.ready',
   'builder.ready',
+  'builder.activityPanelChanged',
   'builder.dirtyChanged',
   'agent.sessionStateChanged',
   'spec.confirmed',
@@ -109,4 +119,18 @@ export function createShellStateMessages(state: {
       },
     },
   ]
+}
+
+export function createShellActivityPanelCloseMessage(state: {
+  frameKey: string
+  occurredAt: string
+}): ShellActivityPanelCloseMessage {
+  return {
+    type: 'shell.activityPanelCloseRequested',
+    frameKey: state.frameKey,
+    occurredAt: state.occurredAt,
+    payload: {
+      frameKey: state.frameKey,
+    },
+  }
 }

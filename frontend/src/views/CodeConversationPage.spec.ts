@@ -62,6 +62,15 @@ describe('CodeConversationPage', () => {
     expect(pageSource).toContain('visibilitychange')
   })
 
+  it('extends drawer modality across the host rail and closes it through the trusted shell channel', () => {
+    expect(pageSource).toContain("message.type === 'builder.activityPanelChanged'")
+    expect(pageSource).toContain('code-host-activity-scrim')
+    expect(pageSource).toContain('hostActivityModalFrameKey')
+    expect(pageSource).toContain('createShellActivityPanelCloseMessage')
+    expect(pageSource).toContain('closeHostedActivityDrawer')
+    expect(pageSource).toContain('<Teleport to="body">')
+  })
+
   it('binds frame identity to the iframe DOM node and disables stale interaction during switches', () => {
     expect(pageSource).toContain(':data-frame-key="frame.key"')
     expect(pageSource).toContain(':name="frame.key"')

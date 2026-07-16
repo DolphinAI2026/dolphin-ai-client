@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import {
+  createShellActivityPanelCloseMessage,
   createShellStateMessages,
   resolveTrustedShellMessage,
   type ShellFrameEndpoint,
@@ -123,5 +124,37 @@ describe('code shell protocol', () => {
         },
       },
     ])
+  })
+
+  it('accepts activity drawer state only from the trusted frame', () => {
+    const resolved = resolveTrustedShellMessage(messageEvent({
+      data: {
+        type: 'builder.activityPanelChanged',
+        frameKey: 'code-frame-2',
+        payload: {
+          frameKey: 'code-frame-2',
+          open: true,
+          presentation: 'drawer',
+          modal: true,
+        },
+      },
+    }), [endpoint])
+
+    expect(resolved?.message.type).toBe('builder.activityPanelChanged')
+    expect(resolved?.message.payload.modal).toBe(true)
+  })
+
+  it('creates a frame-bound activity panel close command', () => {
+    expect(createShellActivityPanelCloseMessage({
+      frameKey: 'code-frame-2',
+      occurredAt: '2026-07-16T12:00:00.000Z',
+    })).toEqual({
+      type: 'shell.activityPanelCloseRequested',
+      frameKey: 'code-frame-2',
+      occurredAt: '2026-07-16T12:00:00.000Z',
+      payload: {
+        frameKey: 'code-frame-2',
+      },
+    })
   })
 })
