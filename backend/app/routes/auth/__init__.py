@@ -18,10 +18,12 @@ from app.deps import get_auth_context, AuthContext  # noqa: F401
 # 加载完后再把关键名称覆盖成函数，确保 from auth import login 拿到函数，
 # 而 import app.routes.auth.login（走 sys.modules）仍能拿到子模块。
 import app.routes.auth.login  # noqa: E402
+import app.routes.auth.settings  # noqa: E402
 import app.routes.auth.tenants_admin  # noqa: E402
 import app.routes.auth.tenant_members  # noqa: E402
 
 _login_module = _sys.modules["app.routes.auth.login"]
+_settings_module = _sys.modules["app.routes.auth.settings"]
 _tenants_admin_module = _sys.modules["app.routes.auth.tenants_admin"]
 _tenant_members_module = _sys.modules["app.routes.auth.tenant_members"]
 
@@ -58,6 +60,7 @@ from app.routes.auth.tenants_admin import (  # noqa: F401
     get_tenant_usage_endpoint,
     update_tenant_status,
     set_my_default_tenant,
+    bind_user_apaas_account,
     admin_reset_user_password,
     list_platform_users,
     list_my_tenants,
@@ -77,6 +80,7 @@ from app.routes.auth.tenants_admin import (  # noqa: F401
     TenantStatusRequest,
     TenantUpdateRequest,
     TenantAdminItem,
+    BindApaasAccountRequest,
     ResetPasswordRequest,
 )
 
@@ -99,6 +103,7 @@ router = APIRouter(prefix="/auth", tags=["认证"])
 
 # 挂载顺序重要：保证最终路由表与拆分前完全一致。
 router.include_router(_login_module.router)
+router.include_router(_settings_module.public_router)
 router.include_router(_tenants_admin_module.router)
 router.include_router(_tenant_members_module.router)
 

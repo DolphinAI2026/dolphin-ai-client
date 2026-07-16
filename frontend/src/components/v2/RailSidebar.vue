@@ -16,7 +16,7 @@ import {
   railSessionFallback,
   type RailSession,
 } from '@/composables/railSessions'
-import type { CodeRailHistoryResponse } from '@/api/codeRuntime'
+import type { CodeAgentSessionRecord, CodeRailHistoryResponse } from '@/api/codeRuntime'
 import ruijingWhaleMarkUrl from '@/assets/brand/ruijing-whale-mark.svg'
 
 interface NavItem { key: string; label: string; icon: string; path: string; badge?: number }
@@ -90,7 +90,7 @@ async function loadRailSessions() {
     if (mode === 'code') {
       const history = await codeRuntimeApi.listRailHistory()
       if (seq !== railSessionsSeq || mode !== currentMode.value) return
-      codeRailHistory.value = await hydrateCodeRailHistory(history)
+      codeRailHistory.value = history
       aiSessions.value = []
       return
     }
@@ -104,20 +104,6 @@ async function loadRailSessions() {
     aiSessions.value = []
     if (mode === 'code') codeRailHistory.value = { apps: [] }
   }
-}
-
-async function hydrateCodeRailHistory(history: CodeRailHistoryResponse): Promise<CodeRailHistoryResponse> {
-  const apps = await Promise.all((history.apps || []).map(async (app) => {
-    const shellSessionId = String(app.shell_session_id || '').trim()
-    if (!shellSessionId) return app
-    try {
-      const payload = await codeRuntimeApi.listAgentSessions(shellSessionId)
-      return { ...app, sessions: payload.sessions || [], error: undefined }
-    } catch {
-      return app
-    }
-  }))
-  return { apps }
 }
 
 function refreshCodeRail() {
@@ -210,6 +196,44 @@ async function openSession(session: RailSession) {
   router.push(railSessionTarget(currentMode.value, session))
 }
 function sessionActive(s: RailSession) { return isRailSessionActive(currentMode.value, s, route) }
+
+function upsertOptimisticCodeAgentSession(
+  shellSessionId: string,
+  runtimeSessionId: string,
+  session?: Record<string, any> | null,
+) {
+  const history = codeRailHistory.value
+  if (!history || !runtimeSessionId) return
+  const now = new Date().toISOString()
+  const optimistic: CodeAgentSessionRecord = {
+    runtimeSessionId,
+    title: String(session?.title || session?.summary || '').trim() || null,
+    summary: typeof session?.summary === 'string' ? session.summary : null,
+    state: String(session?.state || 'waiting_input'),
+    model: typeof session?.model === 'string' ? session.model : null,
+    createdAt: String(session?.createdAt || now),
+    updatedAt: String(session?.updatedAt || now),
+    lastActiveAt: String(session?.lastActiveAt || session?.updatedAt || now),
+    current: true,
+    deletedAt: null,
+    capabilityStale: Boolean(session?.capabilityStale),
+    codexSessionResumable: session?.codexSessionResumable !== false,
+  }
+  codeRailHistory.value = {
+    apps: history.apps.map((app) => {
+      if (String(app.shell_session_id || '') !== shellSessionId) return app
+      const sessions = (app.sessions || [])
+        .filter(item => String(item.runtimeSessionId || '') !== runtimeSessionId)
+        .map(item => ({ ...item, current: false }))
+      return {
+        ...app,
+        runtime_session_id: runtimeSessionId,
+        sessions: [optimistic, ...sessions],
+      }
+    }),
+  }
+}
+
 async function createCodeAgentSession(shellSessionId?: string | null) {
   if (creatingCodeAgentSession.value) return
   const isCodeMode = currentMode.value === 'code'
@@ -222,8 +246,8 @@ async function createCodeAgentSession(shellSessionId?: string | null) {
   creatingCodeAgentSession.value = true
   try {
     const result = await codeRuntimeApi.createAgentSession(shellSessionId)
-    await loadRailSessions()
     if (result.runtime_session_id) {
+      upsertOptimisticCodeAgentSession(shellSessionId, result.runtime_session_id, result.session)
       router.push({
         path: `/code/${result.shell_session_id || shellSessionId}`,
         query: { agent: result.runtime_session_id },
@@ -231,6 +255,7 @@ async function createCodeAgentSession(shellSessionId?: string | null) {
     } else {
       router.push(`/code/${shellSessionId}`)
     }
+    void loadRailSessions()
   } catch (error: any) {
     ElMessage.error(error?.response?.data?.detail || error?.message || '新建对话失败')
   } finally {

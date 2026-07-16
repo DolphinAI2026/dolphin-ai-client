@@ -501,6 +501,50 @@ async def test_control_plane_request_refreshes_expired_user_token(
 
 
 @pytest.mark.asyncio
+async def test_open_local_code_runtime_session_does_not_require_control_plane_auth(
+    db_session,
+    monkeypatch,
+):
+    import app.routes.code_runtime as code_runtime_routes
+    from app.routes.code_runtime import open_code_runtime_session
+
+    session = AIChatSession(
+        tenant_id=7,
+        user_id=11,
+        title="本地 Code",
+        mode="code",
+        status="active",
+        external_application_id="local-code-smoke",
+        external_app_name="本地 Code",
+        external_app_code="local-code-smoke",
+    )
+    db_session.add(session)
+    await db_session.flush()
+    monkeypatch.setenv("DOLPHIN_CODE_BUILDER_URL", "http://127.0.0.1:61137/builder/")
+
+    async def fail_if_control_plane_auth_is_requested(*_args, **_kwargs):
+        raise AssertionError("local Code sessions must not request Control Plane auth")
+
+    monkeypatch.setattr(
+        code_runtime_routes,
+        "_control_plane_request_auth",
+        fail_if_control_plane_auth_is_requested,
+    )
+
+    result = await open_code_runtime_session(
+        session.public_id,
+        SimpleNamespace(headers={}),
+        _ctx(),
+        db_session,
+    )
+
+    assert result["external_application_id"] == "local-code-smoke"
+    assert result["embed_url"].startswith(
+        f"/api/code-runtime/{session.public_id}/builder/?"
+    )
+
+
+@pytest.mark.asyncio
 async def test_code_runtime_proxy_aligns_current_requests_to_bound_runtime_session(monkeypatch):
     import httpx
     import app.routes.code_runtime as code_runtime_routes
@@ -530,6 +574,55 @@ async def test_code_runtime_proxy_aligns_current_requests_to_bound_runtime_sessi
     await _ensure_runtime_current_session(binding, "api/agent/sessions/current/conversation")
 
     assert seen == [("POST", "/shared/api/agent/sessions/runtime-demo/activate")]
+
+
+@pytest.mark.asyncio
+async def test_code_runtime_proxy_recovers_when_bound_runtime_session_is_missing(monkeypatch):
+    from fastapi import HTTPException
+
+    import app.routes.code_runtime as code_runtime_routes
+    from app.routes.code_runtime import _ensure_runtime_current_session
+
+    binding = CodeRuntimeBinding(
+        session_id=14,
+        runtime_base_url="http://runtime.local/shared",
+        runtime_session_id="runtime-stale",
+    )
+    calls: list[tuple[str, str]] = []
+
+    async def fake_browser_request(
+        _binding,
+        method,
+        path,
+        *,
+        request,
+        session_id,
+        json_body=None,
+    ):
+        calls.append((method, path))
+        if method == "POST":
+            raise HTTPException(status_code=404, detail="agent session not found")
+        return {"runtimeSessionId": "runtime-current"}
+
+    monkeypatch.setattr(
+        code_runtime_routes,
+        "_browser_runtime_json_request",
+        fake_browser_request,
+    )
+
+    changed = await _ensure_runtime_current_session(
+        binding,
+        "api/agent/sessions/current",
+        request=SimpleNamespace(),
+        session_id="shell-public-id",
+    )
+
+    assert changed is True
+    assert binding.runtime_session_id == "runtime-current"
+    assert calls == [
+        ("POST", "/api/agent/sessions/runtime-stale/activate"),
+        ("GET", "/api/agent/sessions/current"),
+    ]
 
 
 @pytest.mark.asyncio

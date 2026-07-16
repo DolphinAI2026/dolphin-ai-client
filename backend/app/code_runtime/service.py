@@ -455,7 +455,7 @@ def _local_application_data(*, app_name: str, app_code: str) -> dict[str, Any]:
     }
 
 
-def _is_local_application_id(application_id: str) -> bool:
+def is_local_code_application_id(application_id: str) -> bool:
     return str(application_id or "").strip().startswith(_LOCAL_APPLICATION_PREFIX)
 
 
@@ -616,7 +616,7 @@ async def default_workspace_open(
     shell_session_id: int | None = None,
     auth_provider: str | None = None,
 ) -> dict[str, Any]:
-    if _is_local_application_id(external_application_id):
+    if is_local_code_application_id(external_application_id):
         return local_builder_workspace_open(external_application_id)
 
     base_url = control_plane_base_url()

@@ -2,16 +2,18 @@ import subprocess
 from contextlib import AsyncExitStack, asynccontextmanager
 import json
 import os
+import re
 import time
 from pathlib import Path
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from starlette.exceptions import HTTPException as StarletteHTTPException
-from starlette.responses import FileResponse
+from starlette.responses import FileResponse, Response
 from app.config import settings, APP_TITLE, APP_DESCRIPTION, APP_VERSION
 from app.database import init_db
 from app import runtime
+from app.routes.auth.settings import admin_router as auth_settings_admin_router
 from app.routes import (
     admin_mcp,
     agent_observability,
@@ -154,6 +156,7 @@ app.add_middleware(
 
 # 注册路由
 app.include_router(auth.router, prefix="/api")
+app.include_router(auth_settings_admin_router, prefix="/api/admin/auth")
 app.include_router(desktop_auth.router, prefix="/api")
 app.include_router(conversations.router, prefix="/api")
 app.include_router(chat.router, prefix="/api")
@@ -403,27 +406,73 @@ class _SpaStaticFiles(StaticFiles):
             return await super().get_response("index.html", scope)
 
 
+class _AdminSpaStaticFiles(_SpaStaticFiles):
+    async def get_response(self, path, scope):
+        try:
+            return await StaticFiles.get_response(self, path, scope)
+        except StarletteHTTPException as exc:
+            if exc.status_code != 404:
+                raise
+            return _admin_spa_index_response()
+
+
+_ADMIN_SPA_ENTRY_RE = re.compile(r'\s*<script\s+type="module"\s+crossorigin\s+src="([^"]+)"></script>')
+
+
+def _admin_spa_index_response() -> Response:
+    html = (_admin_spa_dir / "index.html").read_text(encoding="utf-8")
+    match = _ADMIN_SPA_ENTRY_RE.search(html)
+    if not match:
+        return Response(html, media_type="text/html")
+
+    entry_src = match.group(1)
+    html = _ADMIN_SPA_ENTRY_RE.sub("", html, count=1)
+    loader = (
+        "<script>"
+        "(function(){"
+        f"var src={json.dumps(entry_src)};"
+        "function load(){"
+        "if(!document.body){setTimeout(load,0);return;}"
+        "if(document.querySelector('script[data-admin-spa-entry]'))return;"
+        "var script=document.createElement('script');"
+        "script.type='module';"
+        "script.crossOrigin='';"
+        "script.src=src;"
+        "script.dataset.adminSpaEntry='true';"
+        "document.body.appendChild(script);"
+        "}"
+        "load();"
+        "})();"
+        "</script>"
+    )
+    if '<link rel="stylesheet"' in html:
+        html = html.replace('<link rel="stylesheet"', f"{loader}\n    <link rel=\"stylesheet\"", 1)
+    else:
+        html = html.replace("</head>", f"    {loader}\n  </head>", 1)
+    return Response(html, media_type="text/html")
+
+
 # 平台管理前端静态资源。开发时由 frontend:5173 代理 /admin 到这里，
 # 因此本地只需要 5173 + 8000 + 8004 三个端口。
 _admin_spa_dir = Path(__file__).resolve().parents[2] / "admin-spa" / "dist"
 if _admin_spa_dir.is_dir():
     @app.get("/platform-admin", include_in_schema=False)
     async def platform_admin_index():
-        return FileResponse(_admin_spa_dir / "index.html")
+        return _admin_spa_index_response()
 
     @app.get("/ai-builder/admin", include_in_schema=False)
     async def prefixed_admin_index():
-        return FileResponse(_admin_spa_dir / "index.html")
+        return _admin_spa_index_response()
 
     @app.get("/ai-builder/platform-admin", include_in_schema=False)
     async def prefixed_platform_admin_index():
-        return FileResponse(_admin_spa_dir / "index.html")
+        return _admin_spa_index_response()
 
-    app.mount("/admin", _SpaStaticFiles(directory=str(_admin_spa_dir), html=True), name="admin-spa")
+    app.mount("/admin", _AdminSpaStaticFiles(directory=str(_admin_spa_dir), html=True), name="admin-spa")
     # 线上入口 /ai-builder/platform-admin 由主前端接管；若外层 nginx/Ingress
     # 暂时把该路径转到后端，也返回管理台 SPA，避免直接暴露 FastAPI 404。
-    app.mount("/platform-admin", _SpaStaticFiles(directory=str(_admin_spa_dir), html=True), name="platform-admin-spa")
-    app.mount("/ai-builder/admin", _SpaStaticFiles(directory=str(_admin_spa_dir), html=True), name="prefixed-admin-spa")
+    app.mount("/platform-admin", _AdminSpaStaticFiles(directory=str(_admin_spa_dir), html=True), name="platform-admin-spa")
+    app.mount("/ai-builder/admin", _AdminSpaStaticFiles(directory=str(_admin_spa_dir), html=True), name="prefixed-admin-spa")
 
 
 # 静态文件（浏览器预览页面等）

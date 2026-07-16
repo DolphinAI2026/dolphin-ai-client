@@ -19,6 +19,7 @@ from app.code_runtime.service import (
     ensure_code_session_public_id,
     ensure_code_application,
     ensure_application_access,
+    is_local_code_application_id,
     list_code_applications,
     open_code_session,
     resolve_code_session,
@@ -282,7 +283,16 @@ async def open_code_runtime_session(
     ctx: Annotated[AuthContext, Depends(get_auth_context)],
     db: Annotated[AsyncSession, Depends(get_db)],
 ):
-    authorization, auth_provider = await _control_plane_request_auth(request, ctx, db)
+    session = await resolve_code_session(db, session_ref)
+    uses_local_builder = bool(
+        session
+        and not session.app_id
+        and is_local_code_application_id(session.external_application_id or "")
+    )
+    if uses_local_builder:
+        authorization, auth_provider = None, None
+    else:
+        authorization, auth_provider = await _control_plane_request_auth(request, ctx, db)
     result = await open_code_session(
         db=db,
         session_id=session_ref,
@@ -300,13 +310,14 @@ async def _runtime_json_request(
     path: str,
     *,
     json_body: Any = None,
+    timeout: float = 60.0,
 ) -> Any:
     target = f"{binding.runtime_base_url.rstrip('/')}/{path.lstrip('/')}"
     headers = {"accept": "application/json"}
     if json_body is not None:
         headers["content-type"] = "application/json"
     try:
-        async with httpx.AsyncClient(follow_redirects=False, timeout=60.0) as client:
+        async with httpx.AsyncClient(follow_redirects=False, timeout=timeout) as client:
             response = await client.request(method, target, headers=headers, json=json_body)
     except httpx.RequestError as exc:
         raise HTTPException(status_code=503, detail="Code runtime 暂时不可用") from exc
@@ -491,23 +502,52 @@ async def _ensure_runtime_current_session(
     path: str,
     *,
     request: Request | None = None,
-    session_id: int | None = None,
-) -> None:
+    session_id: CodeSessionRef | None = None,
+) -> bool:
     runtime_session_id = str(binding.runtime_session_id or "").strip()
     if not runtime_session_id or not _path_requires_runtime_current_alignment(path):
-        return
+        return False
     encoded_id = quote(runtime_session_id, safe="")
     target_path = f"/api/agent/sessions/{encoded_id}/activate"
     if request is not None and session_id is not None:
-        await _browser_runtime_json_request(
+        try:
+            await _browser_runtime_json_request(
+                binding,
+                "POST",
+                target_path,
+                request=request,
+                session_id=session_id,
+            )
+        except HTTPException as exc:
+            if exc.status_code != 404:
+                raise
+            current = await _browser_runtime_json_request(
+                binding,
+                "GET",
+                "/api/agent/sessions/current",
+                request=request,
+                session_id=session_id,
+            )
+            binding.runtime_session_id = str(
+                (current or {}).get("runtimeSessionId") or ""
+            ).strip() or None
+            return True
+        return False
+    try:
+        await _runtime_json_request(binding, "POST", target_path)
+    except HTTPException as exc:
+        if exc.status_code != 404:
+            raise
+        current = await _runtime_json_request(
             binding,
-            "POST",
-            target_path,
-            request=request,
-            session_id=session_id,
+            "GET",
+            "/api/agent/sessions/current",
         )
-        return
-    await _runtime_json_request(binding, "POST", target_path)
+        binding.runtime_session_id = str(
+            (current or {}).get("runtimeSessionId") or ""
+        ).strip() or None
+        return True
+    return False
 
 
 @router.get("/rail/history")
@@ -567,7 +607,12 @@ async def list_code_runtime_rail_history(
             apps.append(app)
             continue
         try:
-            payload = await _runtime_json_request(binding, "GET", "/api/agent/sessions")
+            payload = await _runtime_json_request(
+                binding,
+                "GET",
+                "/api/agent/sessions",
+                timeout=2.0,
+            )
             sessions = payload.get("sessions") if isinstance(payload, dict) else []
             normalized_sessions = sessions if isinstance(sessions, list) else []
             scoped_ids = await _scoped_runtime_session_ids(db, session.id)
@@ -1402,12 +1447,14 @@ async def proxy_code_runtime(
     if not binding:
         raise HTTPException(status_code=404, detail="Code runtime binding not found")
 
-    await _ensure_runtime_current_session(
+    binding_changed = await _ensure_runtime_current_session(
         binding,
         path,
         request=request,
         session_id=session_id,
     )
+    if binding_changed:
+        await db.commit()
     target = _target_url(binding, path, request)
     body = b"" if request.method in {"GET", "HEAD"} else await request.body()
     headers = _copyable_request_headers(request, session_id)

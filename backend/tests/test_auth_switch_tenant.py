@@ -2,11 +2,12 @@
 import pytest
 from jose import jwt
 from fastapi import HTTPException
+from sqlalchemy import select
 
 from app.auth import get_password_hash
 from app.config import settings
 from app.deps import AuthContext
-from app.models import User
+from app.models import APaaSUserCredential, User
 from app.models.tenant import Tenant, UserTenant
 from app.routes.auth import (
     ResetPasswordRequest,
@@ -127,6 +128,77 @@ async def test_platform_admin_can_switch_to_any_active_tenant(db_session):
         options={"verify_aud": False},
     )
     assert payload["tid"] == tenants[1].id
+
+
+@pytest.mark.asyncio
+async def test_coding_platform_admin_lists_only_membership_tenants(db_session):
+    tenants = []
+    for i in range(2):
+        t = Tenant(tenant_name=f"T{i}", tenant_code=f"coding-list-{i}", status=1)
+        db_session.add(t)
+        tenants.append(t)
+    user = User(
+        username="code_admin",
+        hashed_password=get_password_hash("secret"),
+        account_source="coding",
+        is_active=True,
+        is_platform_admin=True,
+    )
+    db_session.add(user)
+    await db_session.flush()
+    db_session.add(
+        UserTenant(
+            user_id=user.id,
+            tenant_id=tenants[0].id,
+            status=1,
+            is_default=True,
+        )
+    )
+    await db_session.flush()
+
+    ctx = AuthContext(user=user, tenant_id=tenants[0].id, tenant_role="platform_admin", org_permissions={"*": True})
+
+    res = await list_my_tenants(ctx, db_session)
+
+    assert [item.tenant_id for item in res] == [tenants[0].id]
+
+
+@pytest.mark.asyncio
+async def test_coding_platform_admin_cannot_switch_to_unbound_tenant(db_session):
+    tenants = []
+    for i in range(2):
+        t = Tenant(tenant_name=f"T{i}", tenant_code=f"coding-switch-{i}", status=1)
+        db_session.add(t)
+        tenants.append(t)
+    user = User(
+        username="code_admin_switch",
+        hashed_password=get_password_hash("secret"),
+        account_source="coding",
+        is_active=True,
+        is_platform_admin=True,
+    )
+    db_session.add(user)
+    await db_session.flush()
+    db_session.add(
+        UserTenant(
+            user_id=user.id,
+            tenant_id=tenants[0].id,
+            status=1,
+            is_default=True,
+        )
+    )
+    await db_session.flush()
+
+    ctx = AuthContext(user=user, tenant_id=tenants[0].id, tenant_role="platform_admin", org_permissions={"*": True})
+
+    with pytest.raises(HTTPException) as exc:
+        await switch_tenant(
+            TenantSwitchRequest(tenant_id=tenants[1].id),
+            ctx,
+            db_session,
+        )
+
+    assert exc.value.status_code == 403
 
 
 @pytest.mark.asyncio
@@ -590,3 +662,125 @@ async def test_normal_user_cannot_reset_password(db_session):
             target.id, ResetPasswordRequest(new_password="newpw123"), ctx, db_session,
         )
     assert exc.value.status_code == 403
+
+
+# ─────────────────────── aPaaS account binding ───────────────────────
+
+
+@pytest.mark.asyncio
+async def test_platform_admin_can_bind_coding_user_to_apaas_account(db_session, monkeypatch):
+    import app.routes.auth.tenants_admin as tenants_admin
+
+    admin = User(
+        username="root_bind",
+        hashed_password=get_password_hash("x"),
+        is_active=True,
+        is_platform_admin=True,
+    )
+    target = User(
+        username="syt_bind",
+        hashed_password=get_password_hash("x"),
+        account_source="coding",
+        coding_user_id="coding-user-1",
+        is_active=True,
+        is_platform_admin=True,
+    )
+    old_tenant = Tenant(tenant_name="Default Tenant", tenant_code="default-bind-old", status=1)
+    db_session.add_all([admin, target, old_tenant])
+    await db_session.flush()
+    db_session.add(
+        UserTenant(
+            user_id=target.id,
+            tenant_id=old_tenant.id,
+            status=1,
+            is_default=True,
+        )
+    )
+    await db_session.flush()
+
+    apaas_tenant = {
+        "tenantId": "apaas-tenant-1",
+        "tenantName": "三津食品",
+        "tenantCode": "sanjin",
+        "status": 1,
+    }
+
+    async def fake_apaas_backend_login(username: str, password: str, tenant_id: str = ""):
+        assert username == "apaas-admin"
+        assert password == "secret"
+        return "token-for-apaas-tenant-1", {
+            "data": {
+                "defaultTenantId": "apaas-tenant-1",
+                "tenantInfos": [apaas_tenant],
+                "user": {
+                    "id": "apaas-user-1",
+                    "username": "apaas-admin",
+                    "displayName": "aPaaS 管理员",
+                },
+            }
+        }
+
+    async def fake_apaas_switchable_tenants(_token: str, _default_tenant_id: str):
+        return []
+
+    monkeypatch.setattr(settings, "apaas_base_url", "https://apaas.example.com/backend")
+    monkeypatch.setattr(tenants_admin, "_apaas_backend_login", fake_apaas_backend_login)
+    monkeypatch.setattr(tenants_admin, "_apaas_switchable_tenants", fake_apaas_switchable_tenants)
+
+    ctx = AuthContext(user=admin, tenant_id=0, tenant_role="platform_admin", org_permissions={"*": True})
+    result = await tenants_admin.bind_user_apaas_account(
+        target.id,
+        tenants_admin.BindApaasAccountRequest(username="apaas-admin", password="secret"),
+        ctx,
+        db_session,
+    )
+
+    await db_session.refresh(target)
+    assert target.account_source == "coding"
+    assert target.apaas_user_id == "apaas-user-1"
+    assert target.apaas_tenant_id == "apaas-tenant-1"
+    assert target.apaas_token == "token-for-apaas-tenant-1"
+    assert target.display_name == "aPaaS 管理员"
+
+    tenant = (
+        await db_session.execute(
+            select(Tenant).where(Tenant.apaas_tenant_id_str == "apaas-tenant-1")
+        )
+    ).scalar_one()
+    membership = (
+        await db_session.execute(
+            select(UserTenant).where(
+                UserTenant.user_id == target.id,
+                UserTenant.tenant_id == tenant.id,
+                UserTenant.status == 1,
+            )
+        )
+    ).scalar_one()
+    assert membership.is_default is True
+    old_membership = (
+        await db_session.execute(
+            select(UserTenant).where(
+                UserTenant.user_id == target.id,
+                UserTenant.tenant_id == old_tenant.id,
+            )
+        )
+    ).scalar_one()
+    assert old_membership.is_default is False
+
+    credential = (
+        await db_session.execute(
+            select(APaaSUserCredential).where(
+                APaaSUserCredential.user_id == target.id,
+                APaaSUserCredential.local_tenant_id == tenant.id,
+            )
+        )
+    ).scalar_one()
+    assert credential.account == "apaas-admin"
+    assert credential.apaas_user_id == "apaas-user-1"
+    assert credential.apaas_tenant_id == "apaas-tenant-1"
+    assert credential.token == "token-for-apaas-tenant-1"
+
+    assert result["id"] == target.id
+    assert result["account_source"] == "coding"
+    assert result["apaas_bound"] is True
+    assert result["apaas_tenant_id"] == "apaas-tenant-1"

@@ -3,6 +3,7 @@ from typing import Annotated, Optional
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
+from app.config import settings
 from app.database import get_db
 from app.models import User
 from app.models.tenant import Tenant, UserTenant, Role
@@ -13,6 +14,22 @@ from app.deps import (
     get_auth_context,
     require_tenant_admin,
     resolve_default_tenant_id_for_user,
+)
+from app.routes.auth.login import (
+    _apaas_backend_login,
+    _apaas_membership_role_preference,
+    _apaas_switchable_tenants,
+    _ensure_apaas_tenant,
+    _extract_apaas_user,
+    _extract_default_tenant_item,
+    _extract_login_error_message,
+    _extract_user_display_name,
+    _merge_tenant_items,
+    _normalize_apaas_origin,
+    _sync_user_membership,
+    _tenant_enabled,
+    _tenant_item_id,
+    _upsert_user_credential,
 )
 from pydantic import BaseModel
 
@@ -36,6 +53,16 @@ def _resolve_tenant_role(role: Optional[Role]) -> tuple[str, Optional[str], dict
     return "member", role.role_name, role.permissions or {}
 
 
+def _serialize_account_binding(user: User) -> dict:
+    return {
+        "account_source": user.account_source,
+        "apaas_user_id": user.apaas_user_id,
+        "apaas_tenant_id": user.apaas_tenant_id,
+        "coding_user_id": user.coding_user_id,
+        "apaas_bound": bool(user.apaas_user_id and user.apaas_tenant_id),
+    }
+
+
 def _serialize_tenant_user(user: User, membership: UserTenant, role: Optional[Role], tenant: Optional[Tenant] = None) -> dict:
     tenant_role, role_name, permissions = _resolve_tenant_role(role)
     return {
@@ -54,6 +81,7 @@ def _serialize_tenant_user(user: User, membership: UserTenant, role: Optional[Ro
         "org_permissions": permissions,
         "joined_at": membership.joined_at.isoformat() if membership.joined_at else None,
         "created_at": user.created_at.isoformat() if user.created_at else None,
+        **_serialize_account_binding(user),
     }
 
 
@@ -106,6 +134,7 @@ def _serialize_platform_user(user: User, memberships: list[tuple[UserTenant, Ten
         "org_permissions": permissions,
         "joined_at": active_memberships[0].joined_at.isoformat() if active_memberships else None,
         "created_at": user.created_at.isoformat() if user.created_at else None,
+        **_serialize_account_binding(user),
     }
 
 
@@ -212,6 +241,12 @@ class TenantSwitchRequest(BaseModel):
 
 class ResetPasswordRequest(BaseModel):
     new_password: str
+
+
+class BindApaasAccountRequest(BaseModel):
+    username: str
+    password: str
+    apaas_tenant_id: Optional[str] = None
 
 
 # ─── Helper functions ──────────────────────────────────────────────────────────
@@ -686,6 +721,136 @@ async def set_my_default_tenant(
     return {"ok": True, "tenant_id": data.tenant_id, "stored": True}
 
 
+@router.post("/users/{user_id}/apaas-binding")
+async def bind_user_apaas_account(
+    user_id: int,
+    data: BindApaasAccountRequest,
+    ctx: Annotated[AuthContext, Depends(get_auth_context)],
+    db: Annotated[AsyncSession, Depends(get_db)],
+):
+    """给本地/Control Plane 账号绑定 aPaaS 用户与租户。
+
+    绑定后账号仍按原 account_source 登录；aPaaS 凭据只用于租户、应用和长任务续 token。
+    """
+    _require_platform_admin(ctx)
+
+    username = (data.username or "").strip()
+    password = data.password or ""
+    requested_tenant_id = (data.apaas_tenant_id or "").strip()
+    if not username:
+        raise HTTPException(status_code=400, detail="aPaaS 账号不能为空")
+    if not password:
+        raise HTTPException(status_code=400, detail="aPaaS 密码不能为空")
+    if not (settings.apaas_base_url or "").strip():
+        raise HTTPException(status_code=400, detail="未配置 aPaaS 地址")
+
+    target = (await db.execute(select(User).where(User.id == user_id))).scalar_one_or_none()
+    if not target:
+        raise HTTPException(status_code=404, detail="账号不存在")
+
+    backend_token, backend_payload = await _apaas_backend_login(username, password, "")
+    if not backend_token:
+        message = _extract_login_error_message(backend_payload) or "aPaaS 账号或密码验证失败"
+        raise HTTPException(status_code=401, detail=message)
+
+    user_info = _extract_apaas_user(backend_payload, username)
+    default_item = _extract_default_tenant_item(backend_payload)
+    default_tenant_id = _tenant_item_id(default_item) if default_item else ""
+    switchable_items = await _apaas_switchable_tenants(backend_token, default_tenant_id)
+    tenant_items = _merge_tenant_items([default_item] if default_item else [], switchable_items)
+
+    selected_item = None
+    selected_tenant_id = requested_tenant_id or default_tenant_id
+    if selected_tenant_id:
+        selected_item = next((item for item in tenant_items if _tenant_item_id(item) == selected_tenant_id), None)
+    if not selected_item and not requested_tenant_id and tenant_items:
+        selected_item = tenant_items[0]
+        selected_tenant_id = _tenant_item_id(selected_item)
+
+    selected_token = backend_token
+    selected_payload = backend_payload
+    if requested_tenant_id and (not selected_item or requested_tenant_id != default_tenant_id):
+        selected_token, selected_payload = await _apaas_backend_login(username, password, requested_tenant_id)
+        if not selected_token:
+            message = _extract_login_error_message(selected_payload) or "aPaaS 账号无法登录指定租户"
+            raise HTTPException(status_code=403, detail=message)
+        scoped_item = _extract_default_tenant_item(selected_payload)
+        if scoped_item and _tenant_item_id(scoped_item) == requested_tenant_id:
+            selected_item = {**(selected_item or {}), **scoped_item}
+        elif not selected_item:
+            selected_item = {
+                "tenantId": requested_tenant_id,
+                "tenantName": requested_tenant_id,
+                "tenantCode": requested_tenant_id,
+                "status": 1,
+            }
+        selected_tenant_id = requested_tenant_id
+
+    if not selected_item or not selected_tenant_id:
+        raise HTTPException(status_code=400, detail="未获取到可绑定的 aPaaS 租户")
+    if not _tenant_enabled(selected_item):
+        raise HTTPException(status_code=400, detail="aPaaS 租户未启用")
+
+    scoped_user_info = _extract_apaas_user(selected_payload, username)
+    user_info = {**user_info, **scoped_user_info}
+    apaas_user_id = str(
+        user_info.get("id") or user_info.get("userId") or user_info.get("user_id") or ""
+    ).strip() or None
+    display_name = _extract_user_display_name(user_info, fallback=username)
+
+    tenant = await _ensure_apaas_tenant(db, selected_item, username, password)
+    target.apaas_user_id = apaas_user_id
+    target.apaas_tenant_id = selected_tenant_id
+    target.apaas_base_url = _normalize_apaas_origin(settings.apaas_base_url)
+    target.apaas_token = selected_token
+    if display_name:
+        target.display_name = display_name
+
+    await _upsert_user_credential(
+        db,
+        target,
+        tenant,
+        username,
+        password,
+        selected_token,
+        apaas_user_id,
+        selected_tenant_id,
+    )
+    await db.execute(
+        UserTenant.__table__.update()
+        .where(UserTenant.user_id == target.id)
+        .values(is_default=False)
+    )
+    membership = await _sync_user_membership(
+        db,
+        target,
+        tenant,
+        is_default=True,
+        preferred_role_codes=_apaas_membership_role_preference(
+            selected_item,
+            username,
+            user_info,
+            set(),
+            False,
+        ),
+    )
+    await db.flush()
+    await db.execute(
+        UserTenant.__table__.update()
+        .where(
+            UserTenant.user_id == target.id,
+            UserTenant.tenant_id == tenant.id,
+        )
+        .values(is_default=True)
+    )
+    membership.is_default = True
+
+    await db.commit()
+    await db.refresh(target)
+    memberships = await _load_user_memberships(db, [target.id])
+    return _serialize_platform_user(target, memberships.get(target.id, []))
+
+
 @router.post("/users/{user_id}/reset-password")
 async def admin_reset_user_password(
     user_id: int,
@@ -779,8 +944,9 @@ async def list_my_tenants(
     aPaaS 登录用户只返回自己可登录的 active membership。平台管理员的全量租户同步
     只供平台管理使用，不等于这些租户都能进入工作台。
     """
-    is_apaas_account = ctx.user.account_source == "apaas" or bool(ctx.user.apaas_user_id)
-    if ctx.user.is_platform_admin and not is_apaas_account:
+    is_apaas_account = bool(ctx.user.apaas_user_id)
+    is_unbound_coding_account = ctx.user.account_source == "coding" and not ctx.user.apaas_user_id
+    if ctx.user.is_platform_admin and not is_apaas_account and not is_unbound_coding_account:
         stmt = select(Tenant).where(Tenant.status == 1)
         rows = (
             await db.execute(

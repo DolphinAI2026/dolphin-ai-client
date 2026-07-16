@@ -24,6 +24,25 @@ export interface LoginCaptcha {
   image_data?: string
 }
 
+export type LoginProvider = 'apaas' | 'platform'
+
+export interface PublicAuthProvider {
+  provider: LoginProvider
+  label: string
+  enabled: boolean
+  default: boolean
+}
+
+export interface PublicBuilderAuthSettings {
+  default_login_provider: LoginProvider
+  enabled_login_providers: LoginProvider[]
+  products: {
+    builder: { enabled: boolean }
+    code: { enabled: boolean }
+  }
+  providers: PublicAuthProvider[]
+}
+
 export interface TenantOption {
   tenant_id: number
   tenant_name: string

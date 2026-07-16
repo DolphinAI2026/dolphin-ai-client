@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { ref } from 'vue'
 import { codingApi } from '@/api/coding'
+import { useCodingPipeline } from './useCodingPipeline'
 
 const codingStore = vi.hoisted(() => ({
   workspace: { id: 'ws-1' },
@@ -54,7 +55,6 @@ describe('useCodingPipeline', () => {
   })
 
   it('refreshes conversations after a successful pipeline turn', async () => {
-    const { useCodingPipeline } = await import('./useCodingPipeline')
     const streamMessages = ref<any[]>([])
     const refreshCodingConversations = vi.fn().mockResolvedValue(undefined)
     const pipeline = useCodingPipeline({
@@ -92,7 +92,6 @@ describe('useCodingPipeline', () => {
   })
 
   it('keeps uploaded images visible in the user turn and passes attachment metadata to backend', async () => {
-    const { useCodingPipeline } = await import('./useCodingPipeline')
     const streamMessages = ref<any[]>([])
     const file = { name: 'dict.png', type: 'image/png' } as File
     ;(codingApi.uploadFile as any).mockResolvedValue({

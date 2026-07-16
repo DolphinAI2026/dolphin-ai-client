@@ -1,11 +1,12 @@
 <template>
   <section class="platform-admin-embed">
     <iframe
+      ref="frameRef"
       :key="iframeSrc"
       class="embed-frame"
       :src="iframeSrc"
       title="平台管理"
-      @load="loading = false"
+      @load="handleFrameLoad"
     />
     <div v-if="loading" class="embed-loading">正在加载平台管理...</div>
   </section>
@@ -32,6 +33,9 @@ const route = useRoute()
 const router = useRouter()
 const userStore = useUserStore()
 const loading = ref(true)
+const frameRef = ref<HTMLIFrameElement | null>(null)
+let readinessTimer: number | undefined
+let loadingFallbackTimer: number | undefined
 
 const adminPath = computed(() => {
   const raw = route.params.pathMatch
@@ -47,8 +51,49 @@ const iframeSrc = computed(() => {
   })
 })
 
-watch(iframeSrc, () => {
+function clearLoadingTimers() {
+  if (readinessTimer) {
+    window.clearTimeout(readinessTimer)
+    readinessTimer = undefined
+  }
+  if (loadingFallbackTimer) {
+    window.clearTimeout(loadingFallbackTimer)
+    loadingFallbackTimer = undefined
+  }
+}
+
+function probeFrameReady() {
+  try {
+    const doc = frameRef.value?.contentDocument
+    const appRoot = doc?.querySelector('#app')
+    if (appRoot?.firstElementChild || doc?.body?.innerText?.trim()) {
+      loading.value = false
+      clearLoadingTimers()
+      return
+    }
+  } catch {
+    // Same-origin in normal deployment; keep the fallback for unusual proxy setups.
+  }
+  readinessTimer = window.setTimeout(probeFrameReady, 250)
+}
+
+function scheduleLoadingProbe() {
+  if (typeof window === 'undefined') return
+  clearLoadingTimers()
   loading.value = true
+  readinessTimer = window.setTimeout(probeFrameReady, 250)
+  loadingFallbackTimer = window.setTimeout(() => {
+    loading.value = false
+    clearLoadingTimers()
+  }, 10000)
+}
+
+function handleFrameLoad() {
+  probeFrameReady()
+}
+
+watch(iframeSrc, () => {
+  scheduleLoadingProbe()
 })
 
 // v3 2026-05-20 fix (code review #P1): postMessage listener 加 origin 检查 + cleanup
@@ -79,6 +124,7 @@ function handleAdminMessage(event: MessageEvent) {
 onMounted(() => {
   if (typeof window === 'undefined') return
   window.addEventListener('message', handleAdminMessage)
+  scheduleLoadingProbe()
 
   // 兼容老 userStore 用法（保留兜底以防其他地方 watch tenantId）
   if (!userStore.tenantId) {
@@ -89,6 +135,7 @@ onMounted(() => {
 onBeforeUnmount(() => {
   if (typeof window === 'undefined') return
   window.removeEventListener('message', handleAdminMessage)
+  clearLoadingTimers()
 })
 </script>
 

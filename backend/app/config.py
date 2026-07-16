@@ -25,6 +25,14 @@ class Settings(BaseSettings):
     # aPaaS Platform
     # 登录方式：control_plane 或 apaas。local/coding 仅保留旧部署兼容。
     auth_provider: str = ""
+    # Builder 登录策略和产品入口可由配置文件显式覆盖；留空时兼容 AUTH_PROVIDER。
+    builder_auth_default_login_provider: str = ""
+    builder_auth_enabled_login_providers: str = ""
+    builder_product_builder_enabled: bool = True
+    builder_product_code_enabled: bool = True
+    builder_auth_platform_mode: str = ""
+    builder_auth_apaas_label: str = "aPaaS 账号"
+    builder_auth_platform_label: str = "平台账号"
     # 可选项：开启后，Dolphin 登录账号必须已在平台管理绑定本地租户和 aPaaS 环境。
     # 默认关闭；关闭时按 Dolphin 当前租户自动创建/复用本地租户上下文。
     control_plane_binding_enabled: bool = False

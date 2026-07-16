@@ -52,10 +52,17 @@ describe('RailSidebar unified session source (SP2b)', () => {
     expect(railSidebarSource).toContain("query: { agent: result.runtime_session_id }")
   })
 
-  it('hydrates every application shell with browser-authenticated runtime sessions', () => {
-    expect(railSidebarSource).toContain('hydrateCodeRailHistory')
-    expect(railSidebarSource).toContain('codeRuntimeApi.listAgentSessions')
-    expect(railSidebarSource).toContain('sessions: payload.sessions || []')
+  it('keeps the application-scoped sessions returned by Code rail history', () => {
+    expect(railSidebarSource).toContain('codeRuntimeApi.listRailHistory')
+    expect(railSidebarSource).toContain('codeRailHistory.value = history')
+    expect(railSidebarSource).not.toContain('hydrateCodeRailHistory')
+    expect(railSidebarSource).not.toContain('codeRuntimeApi.listAgentSessions')
+  })
+
+  it('shows a newly created Code conversation before history refresh finishes', () => {
+    expect(railSidebarSource).toContain('upsertOptimisticCodeAgentSession')
+    expect(railSidebarSource).toContain('sessions: [optimistic, ...sessions]')
+    expect(railSidebarSource).toContain('void loadRailSessions()')
   })
 
   it('shows the recent-session list in every mode', () => {

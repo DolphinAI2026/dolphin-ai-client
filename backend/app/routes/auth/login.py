@@ -1623,7 +1623,10 @@ async def switch_tenant(
     active membership。aPaaS 平台管理员的全量租户同步不等于拥有工作台登录权限。
     """
     is_apaas_account = ctx.user.account_source == "apaas" or bool(ctx.user.apaas_user_id)
-    if ctx.user.is_platform_admin and not is_apaas_account:
+    is_unbound_coding_account = (
+        ctx.user.account_source == "coding" and not ctx.user.apaas_user_id
+    )
+    if ctx.user.is_platform_admin and not is_apaas_account and not is_unbound_coding_account:
         tenant = (
             await db.execute(
                 select(Tenant).where(Tenant.id == data.tenant_id, Tenant.status == 1)
