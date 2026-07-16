@@ -30,6 +30,7 @@ class AIChatSession(Base):
     __tablename__ = "ai_chat_sessions"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    public_id: Mapped[Optional[str]] = mapped_column(String(36), nullable=True, unique=True, index=True)
     tenant_id: Mapped[int] = mapped_column(Integer, nullable=False, index=True)
     user_id: Mapped[int] = mapped_column(Integer, nullable=False, index=True)
     title: Mapped[str] = mapped_column(String(200), default="新会话", nullable=False)

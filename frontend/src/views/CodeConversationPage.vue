@@ -135,10 +135,9 @@ const showInitialLoading = computed(() =>
 )
 const frameSwitching = computed(() => Boolean(activeFrame.value && pendingFrame.value))
 
-function currentSessionId(): number {
+function currentSessionRef(): string {
   const raw = Array.isArray(route.params.id) ? route.params.id[0] : route.params.id
-  const id = Number(raw)
-  return Number.isFinite(id) && id > 0 ? id : 0
+  return String(raw || '').trim()
 }
 
 function currentRuntimeAgentId(): string {
@@ -213,8 +212,8 @@ async function openCurrentSession() {
     errorMessage.value = ''
     return
   }
-  const id = currentSessionId()
-  if (!id) {
+  const sessionRef = currentSessionRef()
+  if (!sessionRef) {
     errorMessage.value = '缺少 Code 会话'
     frames.value = []
     return
@@ -224,10 +223,10 @@ async function openCurrentSession() {
   errorMessage.value = ''
   try {
     const runtimeAgentId = currentRuntimeAgentId()
-    const opened = await codeRuntimeApi.openSession(id)
+    const opened = await codeRuntimeApi.openSession(sessionRef)
     if (runtimeAgentId && opened.runtime_session_id !== runtimeAgentId) {
       try {
-        await codeRuntimeApi.activateAgentSession(id, runtimeAgentId)
+        await codeRuntimeApi.activateAgentSession(opened.session_id, runtimeAgentId)
       } catch (activationError: any) {
         if (!isUnavailableRuntimeSessionError(activationError, runtimeAgentId)) throw activationError
         clearRouteAgentQueryIfCurrent(runtimeAgentId)

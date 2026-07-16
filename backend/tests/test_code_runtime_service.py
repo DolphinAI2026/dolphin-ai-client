@@ -107,6 +107,26 @@ def test_control_plane_headers_prefer_user_token_and_add_workspace_tenant(monkey
     assert headers["X-Tenant-Id"] == "default"
 
 
+def test_control_plane_headers_prefer_active_builder_tenant_mapping(monkeypatch):
+    from app.config import settings
+    from app.code_runtime import service
+
+    monkeypatch.delenv("DOLPHIN_CODE_CONTROL_PLANE_TOKEN", raising=False)
+    monkeypatch.setattr(settings, "dolphin_code_control_plane_token", "", raising=False)
+
+    ctx = SimpleNamespace(
+        user=SimpleNamespace(coding_tenant_id="2077284540335579137"),
+        control_plane_tenant_id="0",
+        tenant_id=3,
+    )
+    headers = service._control_plane_headers(
+        "Bearer user-token",
+        delegated_context=ctx,
+    )
+
+    assert headers["X-Tenant-Id"] == "0"
+
+
 def test_control_plane_headers_include_delegation_secret(monkeypatch):
     from app.config import settings
     from app.code_runtime import service

@@ -13,6 +13,61 @@ def _ctx(user_id: int = 11, tenant_id: int = 7, role: str = "member"):
     return SimpleNamespace(user=SimpleNamespace(id=user_id), tenant_id=tenant_id, tenant_role=role)
 
 
+@pytest.mark.asyncio
+async def test_resolve_control_plane_tenant_id_uses_active_admin_workspace(db_session):
+    from app.models.tenant import Tenant
+    from app.routes.code_runtime import _resolve_control_plane_tenant_id
+
+    tenant = Tenant(tenant_name="admin 的组织", tenant_code="workspace-0")
+    db_session.add(tenant)
+    await db_session.flush()
+    ctx = SimpleNamespace(
+        tenant_id=tenant.id,
+        user=SimpleNamespace(coding_tenant_id="2077284540335579137"),
+    )
+
+    assert await _resolve_control_plane_tenant_id(db_session, ctx) == "0"
+
+
+@pytest.mark.asyncio
+async def test_open_code_runtime_session_accepts_public_session_id(db_session, monkeypatch):
+    import app.routes.code_runtime as code_runtime_routes
+    from app.routes.code_runtime import open_code_runtime_session
+
+    session = AIChatSession(
+        public_id="93904bb5-5ef6-4db4-b264-a82ecba9bb0a",
+        tenant_id=7,
+        user_id=11,
+        title="中粮 IT4IT Code",
+        mode="code",
+        status="active",
+        external_application_id="1784132286940",
+    )
+    db_session.add(session)
+    await db_session.flush()
+    calls: list[dict] = []
+
+    async def fake_request_auth(*_args, **_kwargs):
+        return "Bearer control-plane-token", None
+
+    async def fake_open_code_session(**kwargs):
+        calls.append(kwargs)
+        return {"session_id": kwargs["session_id"], "embed_url": "/runtime"}
+
+    monkeypatch.setattr(code_runtime_routes, "_control_plane_request_auth", fake_request_auth)
+    monkeypatch.setattr(code_runtime_routes, "open_code_session", fake_open_code_session)
+
+    result = await open_code_runtime_session(
+        session.public_id,
+        SimpleNamespace(headers={}),
+        _ctx(),
+        db_session,
+    )
+
+    assert result["session_id"] == session.id
+    assert calls[0]["session_id"] == session.id
+
+
 def test_code_runtime_proxy_rewrites_upstream_location_headers():
     from app.models.ai_chat import CodeRuntimeBinding
     from app.routes.code_runtime import _rewrite_location_header

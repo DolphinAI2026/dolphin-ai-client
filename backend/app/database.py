@@ -196,6 +196,9 @@ async def init_db():
             "ALTER TABLE conversations ADD COLUMN coding_agent_state TEXT",
             # AIChat 工作模式：chat（从零理需求）/ cowork（批量材料整合）
             "ALTER TABLE ai_chat_sessions ADD COLUMN mode VARCHAR(20) NOT NULL DEFAULT 'chat'",
+            # 兼容旧版公开会话链接；历史数据允许为空，新会话仍使用数字 ID 作为主键。
+            "ALTER TABLE ai_chat_sessions ADD COLUMN public_id VARCHAR(36)",
+            "CREATE UNIQUE INDEX IF NOT EXISTS ix_ai_chat_sessions_public_id ON ai_chat_sessions(public_id)",
             # AIChat 工具调用：存 LLM 返回的原始 call id，跨轮 history 重建用
             "ALTER TABLE ai_chat_tool_calls ADD COLUMN provider_call_id VARCHAR(120)",
             "CREATE INDEX IF NOT EXISTS ix_ai_chat_tool_calls_provider_call_id ON ai_chat_tool_calls(provider_call_id)",

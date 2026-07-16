@@ -33,6 +33,7 @@ from app.config import settings
 from app.database import get_db
 from app.deps import AuthContext, get_auth_context
 from app.models import Application, User
+from app.models.tenant import Tenant
 from app.models.ai_chat import AIChatSession, CodeRuntimeAgentSession, CodeRuntimeBinding
 
 router = APIRouter(prefix="/code", tags=["code-runtime"])
@@ -57,6 +58,37 @@ class CreateCodeApplicationRequest(BaseModel):
     app_name: str
     app_code: str
     seed_project_id: Optional[str] = None
+
+
+async def _resolve_control_plane_tenant_id(
+    db: AsyncSession,
+    ctx: AuthContext,
+) -> str | None:
+    tenant_id = int(getattr(ctx, "tenant_id", 0) or 0)
+    if tenant_id:
+        tenant = await db.get(Tenant, tenant_id)
+        tenant_code = str(getattr(tenant, "tenant_code", "") or "").strip()
+        if tenant_code == "default":
+            return "default"
+        if tenant_code.startswith("workspace-"):
+            mapped_id = tenant_code.removeprefix("workspace-").strip()
+            if mapped_id:
+                return mapped_id
+    return str(getattr(ctx.user, "coding_tenant_id", "") or "").strip() or None
+
+
+async def _resolve_code_session_id(db: AsyncSession, session_ref: str) -> int:
+    normalized = str(session_ref or "").strip()
+    if normalized.isdigit() and int(normalized) > 0:
+        return int(normalized)
+    session_id = (
+        await db.execute(
+            select(AIChatSession.id).where(AIChatSession.public_id == normalized)
+        )
+    ).scalar_one_or_none()
+    if session_id is None:
+        raise HTTPException(status_code=404, detail="Code 会话不存在")
+    return int(session_id)
 
 
 def _session_to_dict(session: AIChatSession) -> dict:
@@ -89,6 +121,7 @@ async def _control_plane_request_auth(
     )
     if not uses_dolphin_token:
         return request.headers.get("authorization"), None
+    ctx.control_plane_tenant_id = await _resolve_control_plane_tenant_id(db, ctx)
     token = control_plane_access_token(ctx.user)
     if token and not control_plane_token_needs_refresh(token):
         return f"Bearer {token}", None
@@ -249,13 +282,14 @@ async def create_code_session_from_external_app(
     return _session_to_dict(session)
 
 
-@router.post("/sessions/{session_id}/open")
+@router.post("/sessions/{session_ref}/open")
 async def open_code_runtime_session(
-    session_id: int,
+    session_ref: str,
     request: Request,
     ctx: Annotated[AuthContext, Depends(get_auth_context)],
     db: Annotated[AsyncSession, Depends(get_db)],
 ):
+    session_id = await _resolve_code_session_id(db, session_ref)
     authorization, auth_provider = await _control_plane_request_auth(request, ctx, db)
     result = await open_code_session(
         db=db,
