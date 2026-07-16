@@ -108,7 +108,7 @@ def test_code_runtime_proxy_token_redirect_stays_on_current_origin():
     assert _redirect_target_without_dolphin_token(
         "/api/code-runtime/12/builder",
         b"token=entry&dolphin_token=embed&handoffId=h1",
-    ) == "/api/code-runtime/12/builder?handoffId=h1"
+    ) == "/api/code-runtime/12/builder?token=entry&handoffId=h1"
     assert _redirect_target_without_dolphin_token(
         "/api/code-runtime/12/builder",
         b"dolphin_token=embed",
@@ -117,37 +117,7 @@ def test_code_runtime_proxy_token_redirect_stays_on_current_origin():
         "/api/code-runtime/12/builder",
         b"token=entry&dolphin_token=embed",
         "/ai-builder",
-    ) == "/ai-builder/api/code-runtime/12/builder"
-
-
-@pytest.mark.asyncio
-async def test_code_runtime_proxy_redirect_binds_runtime_entry_token_to_browser_cookie():
-    from starlette.requests import Request
-    from app.code_runtime.service import create_embed_token
-    from app.routes.code_runtime import _authorize_proxy_request
-
-    embed_token = create_embed_token(session_id=12, user_id=11, tenant_id=7)
-    request = Request({
-        "type": "http",
-        "method": "GET",
-        "scheme": "https",
-        "server": ("om-demo.dfy.definesys.cn", 443),
-        "path": "/api/code-runtime/12/builder/",
-        "query_string": (
-            f"token=window-entry-token&dolphin_token={embed_token}"
-        ).encode(),
-        "headers": [],
-    })
-
-    response = await _authorize_proxy_request(request, 12)
-
-    assert response.status_code == 307
-    assert response.headers["location"] == "/api/code-runtime/12/builder/"
-    cookies = response.headers.getlist("set-cookie")
-    assert any(
-        cookie.startswith("dolphin_code_runtime_entry_12=window-entry-token;")
-        for cookie in cookies
-    )
+    ) == "/ai-builder/api/code-runtime/12/builder?token=entry"
 
 
 def test_code_runtime_proxy_preserves_vite_bare_url_query():
@@ -168,7 +138,10 @@ def test_code_runtime_proxy_preserves_vite_bare_url_query():
         binding,
         "node_modules/pdfjs-dist/build/pdf.worker.mjs",
         request,
-    ) == "http://127.0.0.1:5173/node_modules/pdfjs-dist/build/pdf.worker.mjs?url&v=1"
+    ) == (
+        "http://127.0.0.1:5173/node_modules/pdfjs-dist/build/pdf.worker.mjs"
+        "?url&token=entry&v=1"
+    )
 
 
 def test_code_runtime_proxy_rewrites_unicode_content_disposition_header():
@@ -243,7 +216,7 @@ def test_code_runtime_proxy_forwards_runtime_cookies_without_proxy_cookie():
     assert "host" not in {key.lower() for key in headers}
 
 
-def test_runtime_request_headers_replace_query_token_bootstrap_with_bound_bearer():
+def test_runtime_request_headers_preserve_query_token_bootstrap_without_bearer():
     from starlette.datastructures import Headers
     from app.routes.code_runtime import _runtime_request_headers
 
@@ -264,38 +237,11 @@ def test_runtime_request_headers_replace_query_token_bootstrap_with_bound_bearer
         request,
         12,
         binding,
+        allow_query_token=True,
     )
 
-    assert headers["authorization"] == "Bearer entry-token"
+    assert "authorization" not in headers
     assert "cookie" not in headers
-
-
-def test_runtime_request_headers_force_entry_token_replaces_stale_runtime_cookie():
-    from starlette.datastructures import Headers
-    from app.routes.code_runtime import _runtime_request_headers
-
-    binding = CodeRuntimeBinding(
-        session_id=12,
-        runtime_base_url="https://runtime.example.com/workspaces/ws-1",
-        builder_url="https://runtime.example.com/workspaces/ws-1/builder?token=entry-token",
-    )
-    request = SimpleNamespace(headers=Headers({
-        "cookie": (
-            "dolphin_code_runtime_12=proxy-token; "
-            "dolphin_code_runtime_entry_12=window-entry-token; "
-            "apaas_sandbox_token=stale-runtime-cookie; runtime_theme=dark"
-        ),
-    }))
-
-    headers = _runtime_request_headers(
-        request,
-        12,
-        binding,
-        force_entry_token=True,
-    )
-
-    assert headers["authorization"] == "Bearer window-entry-token"
-    assert headers["cookie"] == "runtime_theme=dark"
 
 
 @pytest.mark.asyncio
