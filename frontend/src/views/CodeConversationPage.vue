@@ -51,12 +51,21 @@
       <iframe
         v-for="frame in frames"
         :key="frame.key"
-        :class="['code-frame', frame.phase === 'active' ? 'code-frame-active' : 'code-frame-pending']"
+        :ref="element => setCodeFrameElement(frame.key, element)"
+        :class="[
+          'code-frame',
+          frame.phase === 'active' ? 'code-frame-active' : 'code-frame-pending',
+          { 'code-frame-frozen': !isFrameInteractive(frame) },
+        ]"
         :src="frame.url"
+        :name="frame.key"
+        :data-frame-key="frame.key"
         title="Dolphin Code"
         allow="clipboard-read; clipboard-write"
-        :aria-hidden="frame.phase !== 'active'"
-        @load="frame.phase === 'pending' && promotePendingFrame(frame.key)"
+        :aria-hidden="!isFrameVisible(frame)"
+        :tabindex="isFrameInteractive(frame) ? 0 : -1"
+        @load="onCodeFrameLoad(frame.key)"
+        @error="onCodeFrameError(frame.key)"
       />
       <div v-if="showInitialLoading" class="code-status">正在打开 Code 工作台...</div>
       <div v-else-if="errorMessage && !hasAnyFrame" class="code-error">
@@ -68,27 +77,42 @@
         <span>{{ errorMessage }}</span>
         <button type="button" @click="openCurrentSession">重试</button>
       </div>
-      <div v-if="frameSwitching" class="code-switching" aria-live="polite">正在切换 Code 工作台...</div>
+      <div v-if="frameSwitching" class="code-frame-interaction-guard">
+        <div class="code-switching" aria-live="polite">正在切换 Code 工作台...</div>
+      </div>
     </template>
   </main>
 </template>
 
 <script setup lang="ts">
-import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
+import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { codeRuntimeApi } from '@/api/codeRuntime'
 import AppIcon from '@/components/common/AppIcon.vue'
-
-type CodeFramePhase = 'active' | 'pending'
-interface CodeFrame {
-  key: number
-  url: string
-  phase: CodeFramePhase
-}
+import {
+  beginCodeFrameOpen,
+  createCodeFrameLifecycle,
+  failCodeFrameOpen,
+  getCodeFrames,
+  isCodeFrameInteractive,
+  isCodeFrameSwitching,
+  isCodeFrameVisible,
+  markCodeFrameLoaded,
+  promoteReadyCodeFrame,
+  queuePendingCodeFrame,
+  type CodeFrame,
+} from './codeFrameLifecycle'
+import {
+  createShellStateMessages,
+  resolveTrustedShellMessage,
+  type ShellFrameEndpoint,
+} from './codeShellProtocol'
 
 const route = useRoute()
 const router = useRouter()
-const frames = ref<CodeFrame[]>([])
+const frameLifecycle = ref(createCodeFrameLifecycle())
+const frameElements = new Map<string, HTMLIFrameElement>()
+const pageVisible = ref(document.visibilityState !== 'hidden')
 const loading = ref(false)
 const errorMessage = ref('')
 const sessionState = ref('')
@@ -97,8 +121,12 @@ const newCodeAppPrompt = ref('')
 const newCodeAppError = ref('')
 const creatingCodeApplication = ref(false)
 let railRefreshTimer: number | undefined
-let frameKey = 0
 let openRequestSeq = 0
+
+const outboundShellMessageTypes = [
+  'shell.visibilityChanged',
+  'shell.sessionActivationChanged',
+] as const
 
 const codeAppSuggestions = [
   {
@@ -126,14 +154,15 @@ const isCreateApplicationRoute = computed(() => {
     || rawId === 'new'
   )
 })
-const activeFrame = computed(() => frames.value.find(frame => frame.phase === 'active') || null)
-const pendingFrame = computed(() => frames.value.find(frame => frame.phase === 'pending') || null)
+const frames = computed(() => getCodeFrames(frameLifecycle.value))
+const activeFrame = computed(() => frameLifecycle.value.active)
+const pendingFrame = computed(() => frameLifecycle.value.pending)
 const hasAnyFrame = computed(() => frames.value.length > 0)
-const initialFramePending = computed(() => Boolean(pendingFrame.value && !activeFrame.value))
+const initialFramePending = computed(() => Boolean(frameLifecycle.value.request && !activeFrame.value))
 const showInitialLoading = computed(() =>
   (loading.value || initialFramePending.value) && !activeFrame.value && !errorMessage.value
 )
-const frameSwitching = computed(() => Boolean(activeFrame.value && pendingFrame.value))
+const frameSwitching = computed(() => isCodeFrameSwitching(frameLifecycle.value))
 
 function currentSessionRef(): string {
   const raw = Array.isArray(route.params.id) ? route.params.id[0] : route.params.id
@@ -207,18 +236,24 @@ async function confirmCreateCodeApplication() {
 
 async function openCurrentSession() {
   if (isCreateApplicationRoute.value) {
-    frames.value = []
+    openRequestSeq += 1
+    resetCodeFrames()
     loading.value = false
     errorMessage.value = ''
     return
   }
   const sessionRef = currentSessionRef()
   if (!sessionRef) {
+    openRequestSeq += 1
     errorMessage.value = '缺少 Code 会话'
-    frames.value = []
+    resetCodeFrames()
     return
   }
   const requestSeq = ++openRequestSeq
+  frameLifecycle.value = beginCodeFrameOpen(frameLifecycle.value, {
+    requestId: requestSeq,
+    sessionRef,
+  })
   loading.value = true
   errorMessage.value = ''
   try {
@@ -244,7 +279,12 @@ async function openCurrentSession() {
     refreshOuterCodeRail()
   } catch (error: any) {
     if (requestSeq === openRequestSeq) {
-      errorMessage.value = error?.response?.data?.detail || error?.message || '打开失败'
+      const message = error?.response?.data?.detail || error?.message || '打开失败'
+      frameLifecycle.value = failCodeFrameOpen(frameLifecycle.value, {
+        requestId: requestSeq,
+        message,
+      })
+      errorMessage.value = message
     }
   } finally {
     if (requestSeq === openRequestSeq) loading.value = false
@@ -252,16 +292,104 @@ async function openCurrentSession() {
 }
 
 function queuePendingFrame(url: string) {
-  const nextFrame: CodeFrame = { key: ++frameKey, url, phase: 'pending' }
-  frames.value = activeFrame.value ? [activeFrame.value, nextFrame] : [nextFrame]
+  const request = frameLifecycle.value.request
+  if (!request) return
+  frameLifecycle.value = queuePendingCodeFrame(frameLifecycle.value, {
+    ...request,
+    url,
+    baseUrl: window.location.href,
+  })
 }
 
-function promotePendingFrame(key: number) {
-  const loaded = frames.value.find(frame => frame.key === key && frame.phase === 'pending')
-  if (!loaded) return
-  frames.value = [{ ...loaded, phase: 'active' }]
-  errorMessage.value = ''
-  scheduleOuterCodeRailRefresh(500)
+function isFrameVisible(frame: CodeFrame) {
+  return isCodeFrameVisible(frameLifecycle.value, frame)
+}
+
+function isFrameInteractive(frame: CodeFrame) {
+  return isCodeFrameInteractive(frameLifecycle.value, frame)
+}
+
+function onCodeFrameLoad(frameKey: string) {
+  frameLifecycle.value = markCodeFrameLoaded(frameLifecycle.value, frameKey)
+}
+
+function onCodeFrameError(frameKey: string) {
+  const pending = frameLifecycle.value.pending
+  const request = frameLifecycle.value.request
+  if (!pending || pending.key !== frameKey || !request) return
+  const message = 'Code 工作台加载失败'
+  frameLifecycle.value = failCodeFrameOpen(frameLifecycle.value, {
+    requestId: request.requestId,
+    frameKey,
+    message,
+  })
+  errorMessage.value = message
+}
+
+function setCodeFrameElement(frameKey: string, element: unknown) {
+  if (element instanceof HTMLIFrameElement) {
+    frameElements.set(frameKey, element)
+    void nextTick(publishCodeFrameShellState)
+    return
+  }
+  frameElements.delete(frameKey)
+}
+
+function shellFrameEndpoints(): ShellFrameEndpoint[] {
+  return frames.value.flatMap((frame) => {
+    const source = frameElements.get(frame.key)?.contentWindow
+    return source ? [{ key: frame.key, origin: frame.origin, source }] : []
+  })
+}
+
+function publishCodeFrameShellState() {
+  const occurredAt = new Date().toISOString()
+  for (const frame of frames.value) {
+    const target = frameElements.get(frame.key)?.contentWindow
+    if (!target) continue
+    const visible = pageVisible.value && isFrameVisible(frame)
+    const interactive = pageVisible.value && isFrameInteractive(frame)
+    const active = frameLifecycle.value.active?.key === frame.key && frameLifecycle.value.request == null
+    const messages = createShellStateMessages({
+      frameKey: frame.key,
+      visible,
+      interactive,
+      active,
+      occurredAt,
+    })
+    for (const message of messages) {
+      if (!outboundShellMessageTypes.includes(message.type)) continue
+      target.postMessage(message, frame.origin)
+    }
+  }
+}
+
+function publishCodeFrameDeactivation() {
+  const occurredAt = new Date().toISOString()
+  for (const frame of frames.value) {
+    const target = frameElements.get(frame.key)?.contentWindow
+    if (!target) continue
+    for (const message of createShellStateMessages({
+      frameKey: frame.key,
+      visible: false,
+      interactive: false,
+      active: false,
+      occurredAt,
+    })) {
+      target.postMessage(message, frame.origin)
+    }
+  }
+}
+
+function resetCodeFrames() {
+  publishCodeFrameDeactivation()
+  frameLifecycle.value = createCodeFrameLifecycle()
+  frameElements.clear()
+}
+
+function onDocumentVisibilityChange() {
+  pageVisible.value = document.visibilityState !== 'hidden'
+  publishCodeFrameShellState()
 }
 
 function refreshOuterCodeRail() {
@@ -277,15 +405,46 @@ function scheduleOuterCodeRailRefresh(delay = 1200) {
 }
 
 function onShellMessage(event: MessageEvent) {
-  const data = event.data
-  if (!data || typeof data !== 'object') return
-  if (data.type === 'agent.sessionStateChanged') {
-    sessionState.value = String(data.payload?.state || data.payload?.status || '')
+  const resolved = resolveTrustedShellMessage({
+    origin: event.origin,
+    source: event.source,
+    data: event.data,
+  }, shellFrameEndpoints())
+  if (!resolved) return
+
+  const { message } = resolved
+  const frame = frames.value.find(candidate => candidate.key === resolved.frame.key)
+  if (!frame) return
+  if (message.type === 'builder.ready') {
+    if (frameLifecycle.value.pending?.key !== frame.key || frame.phase !== 'pending') return
+    const previousState = frameLifecycle.value
+    frameLifecycle.value = promoteReadyCodeFrame(previousState, frame.key)
+    if (frameLifecycle.value === previousState) return
+    errorMessage.value = ''
+    scheduleOuterCodeRailRefresh(500)
+    return
+  }
+
+  if (message.type === 'sandbox.failed') {
+    if (frame.phase === 'pending' && frameLifecycle.value.request) {
+      const runtimeMessage = String(message.payload.message || 'Code runtime failed')
+      frameLifecycle.value = failCodeFrameOpen(frameLifecycle.value, {
+        requestId: frameLifecycle.value.request.requestId,
+        frameKey: frame.key,
+        message: runtimeMessage,
+      })
+      errorMessage.value = runtimeMessage
+    } else if (isFrameInteractive(frame)) {
+      errorMessage.value = String(message.payload.message || 'Code runtime failed')
+    }
+    return
+  }
+
+  if (!isFrameInteractive(frame)) return
+  if (message.type === 'agent.sessionStateChanged') {
+    sessionState.value = String(message.payload.state || message.payload.status || '')
     refreshOuterCodeRail()
     scheduleOuterCodeRailRefresh()
-  }
-  if (data.type === 'sandbox.failed') {
-    errorMessage.value = String(data.payload?.message || 'Code runtime failed')
   }
 }
 
@@ -294,13 +453,20 @@ watch(
   () => { void openCurrentSession() },
 )
 
+watch(frameLifecycle, () => {
+  void nextTick(publishCodeFrameShellState)
+})
+
 onMounted(() => {
   window.addEventListener('message', onShellMessage)
+  document.addEventListener('visibilitychange', onDocumentVisibilityChange)
   void openCurrentSession()
 })
 
 onBeforeUnmount(() => {
+  publishCodeFrameDeactivation()
   window.removeEventListener('message', onShellMessage)
+  document.removeEventListener('visibilitychange', onDocumentVisibilityChange)
   if (railRefreshTimer != null) window.clearTimeout(railRefreshTimer)
 })
 </script>
@@ -528,6 +694,18 @@ onBeforeUnmount(() => {
   pointer-events: none;
 }
 
+.code-frame-frozen {
+  pointer-events: none;
+}
+
+.code-frame-interaction-guard {
+  position: absolute;
+  z-index: 2;
+  inset: 0;
+  pointer-events: auto;
+  cursor: progress;
+}
+
 .code-status,
 .code-error {
   position: relative;
@@ -611,6 +789,7 @@ onBeforeUnmount(() => {
 }
 
 .code-switching {
+  z-index: 1;
   pointer-events: none;
   text-align: center;
 }

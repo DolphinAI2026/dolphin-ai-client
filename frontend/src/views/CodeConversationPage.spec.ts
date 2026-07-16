@@ -24,16 +24,50 @@ describe('CodeConversationPage', () => {
   it('refreshes the outer rail when the embedded runtime reports session state changes', () => {
     const handlerSource = pageSource.slice(pageSource.indexOf('function onShellMessage'))
 
-    expect(handlerSource).toContain("data.type === 'agent.sessionStateChanged'")
+    expect(handlerSource).toContain("message.type === 'agent.sessionStateChanged'")
+    expect(handlerSource).toContain('resolveTrustedShellMessage')
     expect(handlerSource).toContain('refreshOuterCodeRail()')
   })
 
-  it('keeps the old Code iframe visible while the next iframe loads', () => {
+  it('keeps the old Code iframe visible while the next iframe waits for trusted readiness', () => {
     expect(pageSource).toContain('v-for="frame in frames"')
     expect(pageSource).toContain('code-frame-pending')
-    expect(pageSource).toContain('promotePendingFrame(frame.key)')
+    expect(pageSource).toContain('@load="onCodeFrameLoad(frame.key)"')
+    expect(pageSource).toContain('markCodeFrameLoaded')
+    expect(pageSource).not.toContain('@load="frame.phase === \'pending\' && promotePendingFrame(frame.key)"')
     expect(pageSource).toContain('frameSwitching')
+    expect(pageSource).toContain('code-frame-interaction-guard')
+    expect(pageSource).toContain('code-frame-frozen')
     expect(pageSource).not.toContain('v-if="loading" class="code-status"')
+  })
+
+  it('promotes only a trusted pending builder.ready message', () => {
+    expect(pageSource).toContain("from './codeFrameLifecycle'")
+    expect(pageSource).toContain("from './codeShellProtocol'")
+    expect(pageSource).toContain('resolveTrustedShellMessage')
+    expect(pageSource).toContain("message.type === 'builder.ready'")
+    expect(pageSource).toContain("frame.phase !== 'pending'")
+    expect(pageSource).toContain('promoteReadyCodeFrame')
+    expect(pageSource).toContain('event.origin')
+    expect(pageSource).toContain('event.source')
+    expect(pageSource).toContain('frame.key')
+  })
+
+  it('publishes visibility and session activation state to every mounted frame', () => {
+    expect(pageSource).toContain('createShellStateMessages')
+    expect(pageSource).toContain('shell.visibilityChanged')
+    expect(pageSource).toContain('shell.sessionActivationChanged')
+    expect(pageSource).toContain('contentWindow')
+    expect(pageSource).toContain('postMessage')
+    expect(pageSource).toContain('visibilitychange')
+  })
+
+  it('binds frame identity to the iframe DOM node and disables stale interaction during switches', () => {
+    expect(pageSource).toContain(':data-frame-key="frame.key"')
+    expect(pageSource).toContain(':name="frame.key"')
+    expect(pageSource).toContain('setCodeFrameElement(frame.key')
+    expect(pageSource).toContain('isCodeFrameInteractive')
+    expect(pageSource).toContain('pointer-events: none')
   })
 
   it('opens the sandbox before activating the route agent so restore is not overwritten', () => {
