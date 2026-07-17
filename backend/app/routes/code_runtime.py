@@ -101,6 +101,7 @@ async def sandbox_auth_state_endpoint() -> dict[str, str]:
 
 
 _control_plane_user_locks: dict[int, asyncio.Lock] = {}
+_code_session_open_locks: dict[str, asyncio.Lock] = {}
 
 
 def _control_plane_user_lock(user_id: int) -> asyncio.Lock:
@@ -108,6 +109,15 @@ def _control_plane_user_lock(user_id: int) -> asyncio.Lock:
     if lock is None:
         lock = asyncio.Lock()
         _control_plane_user_locks[int(user_id)] = lock
+    return lock
+
+
+def _code_session_open_lock(session_ref: str) -> asyncio.Lock:
+    key = str(session_ref).strip()
+    lock = _code_session_open_locks.get(key)
+    if lock is None:
+        lock = asyncio.Lock()
+        _code_session_open_locks[key] = lock
     return lock
 
 
@@ -385,29 +395,30 @@ async def open_code_runtime_session(
     ctx: Annotated[AuthContext, Depends(get_auth_context)],
     db: Annotated[AsyncSession, Depends(get_db)],
 ):
-    session = await resolve_code_session(db, session_ref)
-    uses_local_builder = bool(
-        session
-        and not session.app_id
-        and is_local_code_application_id(session.external_application_id or "")
-    )
-    if uses_local_builder:
-        authorization, auth_provider = None, None
-    else:
-        authorization, auth_provider = await _control_plane_request_auth(request, ctx, db)
-    result = await open_code_session(
-        db=db,
-        session_id=session_ref,
-        ctx=ctx,
-        authorization_header=authorization,
-        auth_provider=auth_provider,
-    )
-    try:
-        await db.commit()
-    except Exception as exc:
-        await db.rollback()
-        raise HTTPException(status_code=500, detail="Code runtime session open failed") from exc
-    return result
+    async with _code_session_open_lock(session_ref):
+        session = await resolve_code_session(db, session_ref)
+        uses_local_builder = bool(
+            session
+            and not session.app_id
+            and is_local_code_application_id(session.external_application_id or "")
+        )
+        if uses_local_builder:
+            authorization, auth_provider = None, None
+        else:
+            authorization, auth_provider = await _control_plane_request_auth(request, ctx, db)
+        result = await open_code_session(
+            db=db,
+            session_id=session_ref,
+            ctx=ctx,
+            authorization_header=authorization,
+            auth_provider=auth_provider,
+        )
+        try:
+            await db.commit()
+        except Exception as exc:
+            await db.rollback()
+            raise HTTPException(status_code=500, detail="Code runtime session open failed") from exc
+        return result
 
 
 async def _runtime_json_request(

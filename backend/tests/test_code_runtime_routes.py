@@ -1190,6 +1190,52 @@ async def test_open_local_code_runtime_session_does_not_require_control_plane_au
 
 
 @pytest.mark.asyncio
+async def test_open_code_runtime_session_serializes_same_session_first_open(monkeypatch):
+    import app.routes.code_runtime as code_runtime_routes
+    from app.routes.code_runtime import open_code_runtime_session
+
+    session = SimpleNamespace(
+        app_id=None,
+        external_application_id="app-e2e",
+    )
+    active = 0
+    max_active = 0
+
+    async def fake_resolve(*_args, **_kwargs):
+        return session
+
+    async def fake_auth(*_args, **_kwargs):
+        return "Bearer access", None
+
+    async def fake_open_code_session(*_args, **_kwargs):
+        nonlocal active, max_active
+        active += 1
+        max_active = max(max_active, active)
+        await asyncio.sleep(0.02)
+        active -= 1
+        return {"ok": True}
+
+    class FakeDB:
+        async def commit(self):
+            return None
+
+        async def rollback(self):
+            return None
+
+    monkeypatch.setattr(code_runtime_routes, "resolve_code_session", fake_resolve)
+    monkeypatch.setattr(code_runtime_routes, "_control_plane_request_auth", fake_auth)
+    monkeypatch.setattr(code_runtime_routes, "open_code_session", fake_open_code_session)
+
+    results = await asyncio.gather(
+        open_code_runtime_session("same-session", _request(), _ctx(), FakeDB()),
+        open_code_runtime_session("same-session", _request(), _ctx(), FakeDB()),
+    )
+
+    assert results == [{"ok": True}, {"ok": True}]
+    assert max_active == 1
+
+
+@pytest.mark.asyncio
 async def test_open_code_runtime_session_rolls_back_and_does_not_return_canary_on_commit_failure(
     monkeypatch,
 ):
