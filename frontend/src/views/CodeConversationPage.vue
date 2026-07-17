@@ -118,7 +118,6 @@ import {
 import {
   createShellActivityPanelCloseMessage,
   createShellStateMessages,
-  resolveExternalNavigationUrl,
   resolveTrustedShellMessage,
   type ShellFrameEndpoint,
 } from './codeShellProtocol'
@@ -598,12 +597,6 @@ function onShellMessage(event: MessageEvent) {
   }
 
   if (!isFrameInteractive(frame)) return
-  if (message.type === 'builder.externalNavigationRequested') {
-    const url = resolveExternalNavigationUrl(message.payload.url)
-    if (!url) return
-    window.open(url, '_blank', 'noopener,noreferrer')
-    return
-  }
   if (message.type === 'builder.activityPanelChanged') {
     const open = message.payload.open === true
     const modal = message.payload.modal === true

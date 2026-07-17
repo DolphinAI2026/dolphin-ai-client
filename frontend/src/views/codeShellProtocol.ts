@@ -49,7 +49,6 @@ const trustedShellEventTypes = new Set([
   'sandbox.ready',
   'builder.ready',
   'builder.activityPanelChanged',
-  'builder.externalNavigationRequested',
   'builder.dirtyChanged',
   'agent.sessionStateChanged',
   'spec.confirmed',
@@ -61,18 +60,6 @@ const trustedShellEventTypes = new Set([
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return value != null && typeof value === 'object' && !Array.isArray(value)
-}
-
-export function resolveExternalNavigationUrl(value: unknown): string | null {
-  if (typeof value !== 'string') return null
-  const url = value.trim()
-  if (!url) return null
-  try {
-    const protocol = new URL(url).protocol
-    return protocol === 'http:' || protocol === 'https:' ? url : null
-  } catch {
-    return null
-  }
 }
 
 export function resolveTrustedShellMessage(

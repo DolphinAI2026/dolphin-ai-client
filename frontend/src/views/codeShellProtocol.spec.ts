@@ -2,7 +2,6 @@ import { describe, expect, it } from 'vitest'
 import {
   createShellActivityPanelCloseMessage,
   createShellStateMessages,
-  resolveExternalNavigationUrl,
   resolveTrustedShellMessage,
   type ShellFrameEndpoint,
 } from './codeShellProtocol'
@@ -143,41 +142,6 @@ describe('code shell protocol', () => {
 
     expect(resolved?.message.type).toBe('builder.activityPanelChanged')
     expect(resolved?.message.payload.modal).toBe(true)
-  })
-
-  it('accepts external navigation requests only from the trusted frame', () => {
-    const resolved = resolveTrustedShellMessage(messageEvent({
-      data: {
-        type: 'builder.externalNavigationRequested',
-        frameKey: 'code-frame-2',
-        payload: {
-          frameKey: 'code-frame-2',
-          url: 'https://example.com/docs',
-        },
-      },
-    }), [endpoint])
-
-    expect(resolved?.message).toEqual({
-      type: 'builder.externalNavigationRequested',
-      frameKey: 'code-frame-2',
-      payload: {
-        frameKey: 'code-frame-2',
-        url: 'https://example.com/docs',
-      },
-    })
-  })
-
-  it.each([
-    ['https URL', 'https://example.com/docs', 'https://example.com/docs'],
-    ['http URL', 'http://example.com/docs', 'http://example.com/docs'],
-    ['javascript URL', 'javascript:alert(1)', null],
-    ['data URL', 'data:text/html,unsafe', null],
-    ['file URL', 'file:///tmp/secret', null],
-    ['relative URL', '/docs', null],
-    ['malformed URL', 'https://', null],
-    ['non-string URL', { href: 'https://example.com' }, null],
-  ])('resolves %s through the http/https external navigation allowlist', (_label, value, expected) => {
-    expect(resolveExternalNavigationUrl(value)).toBe(expected)
   })
 
   it('creates a frame-bound activity panel close command', () => {
