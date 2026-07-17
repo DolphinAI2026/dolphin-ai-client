@@ -3236,3 +3236,62 @@ async def test_sandbox_auth_state_endpoint_is_hidden_and_reports_writer_contract
         "writer_contract": "clean_builder_url_v1",
         "app_version": APP_VERSION,
     }
+
+
+@pytest.mark.asyncio
+async def test_cleanup_apply_writer_contract_gate_requires_every_instance(
+    capsys,
+):
+    import httpx
+    from scripts.cleanup_code_runtime_builder_urls import verify_writer_contract
+
+    responses = {
+        "/instance-1": {"writer_contract": "clean_builder_url_v1"},
+        "/instance-2": {"writer_contract": "clean_builder_url_v1"},
+        "/old-instance": {"writer_contract": "legacy_writer"},
+    }
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json=responses[request.url.path])
+
+    transport = httpx.MockTransport(handler)
+    factory = lambda: httpx.AsyncClient(transport=transport)
+
+    assert await verify_writer_contract(
+        [
+            "https://builder.test/instance-1",
+            "https://builder.test/instance-2",
+        ],
+        client_factory=factory,
+    ) is True
+    assert await verify_writer_contract(
+        [
+            "https://builder.test/instance-1",
+            "https://builder.test/old-instance",
+        ],
+        client_factory=factory,
+    ) is False
+    assert await verify_writer_contract([], client_factory=factory) is False
+    output = capsys.readouterr().out
+    assert "builder.test" not in output
+    assert "legacy_writer" not in output
+    assert "status=blocked" in output
+
+
+@pytest.mark.asyncio
+async def test_cleanup_cli_apply_stops_before_database_without_writer_instances(
+    monkeypatch,
+):
+    import scripts.cleanup_code_runtime_builder_urls as cleanup_script
+
+    async def unexpected_cleanup(**_kwargs):
+        raise AssertionError("database cleanup must not run before writer gate")
+
+    monkeypatch.setattr(cleanup_script, "cleanup_builder_urls", unexpected_cleanup)
+    exit_code = await cleanup_script._run(SimpleNamespace(
+        apply=True,
+        batch_size=2,
+        builder_state_url=[],
+    ))
+
+    assert exit_code == 2

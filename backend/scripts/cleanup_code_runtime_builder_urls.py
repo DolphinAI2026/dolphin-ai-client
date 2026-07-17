@@ -4,10 +4,12 @@ import argparse
 import asyncio
 from dataclasses import asdict, dataclass
 import json
+import os
 from pathlib import Path
 import sys
 from typing import Any, Callable
 
+import httpx
 from sqlalchemy import select
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
@@ -106,10 +108,72 @@ def _parser() -> argparse.ArgumentParser:
         help="Commit changes. The default is dry-run.",
     )
     parser.add_argument("--batch-size", type=int, default=100)
+    parser.add_argument(
+        "--builder-state-url",
+        action="append",
+        default=[],
+        help=(
+            "Builder sandbox auth state endpoint. Repeat for every live instance. "
+            "BUILDER_STATE_URLS may also provide a comma-separated list."
+        ),
+    )
     return parser
 
 
+def _builder_state_urls(args: argparse.Namespace) -> list[str]:
+    configured = [
+        str(value or "").strip()
+        for value in getattr(args, "builder_state_url", [])
+        if str(value or "").strip()
+    ]
+    configured.extend(
+        value.strip()
+        for value in os.getenv("BUILDER_STATE_URLS", "").split(",")
+        if value.strip()
+    )
+    return list(dict.fromkeys(configured))
+
+
+async def verify_writer_contract(
+    state_urls: list[str],
+    *,
+    client_factory: Callable[[], Any] | None = None,
+) -> bool:
+    if not state_urls:
+        print("writer_contract_check status=blocked reason=no_instances")
+        return False
+    factory = client_factory or (
+        lambda: httpx.AsyncClient(
+            follow_redirects=False,
+            timeout=httpx.Timeout(5.0),
+        )
+    )
+    async with factory() as client:
+        for index, url in enumerate(state_urls, start=1):
+            try:
+                response = await client.get(url)
+                payload = response.json() if response.status_code == 200 else {}
+            except (httpx.RequestError, ValueError):
+                print(
+                    f"writer_contract_check instance={index} "
+                    "status=blocked reason=request_failed"
+                )
+                return False
+            if payload.get("writer_contract") != "clean_builder_url_v1":
+                print(
+                    f"writer_contract_check instance={index} "
+                    "status=blocked reason=contract_mismatch"
+                )
+                return False
+            print(f"writer_contract_check instance={index} status=ready")
+    return True
+
+
 async def _run(args: argparse.Namespace) -> int:
+    if args.apply and not await verify_writer_contract(
+        _builder_state_urls(args)
+    ):
+        return 2
     stats = await cleanup_builder_urls(
         batch_size=args.batch_size,
         apply=args.apply,
