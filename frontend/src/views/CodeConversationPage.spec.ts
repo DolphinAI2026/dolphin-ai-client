@@ -71,6 +71,28 @@ describe('CodeConversationPage', () => {
     expect(pageSource).toContain('<Teleport to="body">')
   })
 
+  it('opens trusted interactive runtime links in a new browser tab without navigating the iframe', () => {
+    const handlerSource = pageSource.slice(
+      pageSource.indexOf('function onShellMessage'),
+      pageSource.indexOf('watch(', pageSource.indexOf('function onShellMessage')),
+    )
+    const interactiveGuardIndex = handlerSource.indexOf('if (!isFrameInteractive(frame)) return')
+    const externalNavigationIndex = handlerSource.indexOf(
+      "if (message.type === 'builder.externalNavigationRequested')",
+    )
+
+    expect(interactiveGuardIndex).toBeGreaterThanOrEqual(0)
+    expect(externalNavigationIndex).toBeGreaterThan(interactiveGuardIndex)
+
+    const externalNavigationSource = handlerSource.slice(
+      externalNavigationIndex,
+      handlerSource.indexOf("if (message.type === 'builder.activityPanelChanged')", externalNavigationIndex),
+    )
+    expect(externalNavigationSource).toContain('resolveExternalNavigationUrl(message.payload.url)')
+    expect(externalNavigationSource).toContain("window.open(url, '_blank', 'noopener,noreferrer')")
+    expect(externalNavigationSource).not.toMatch(/frame\.url\s*=|location\.(?:href|assign|replace)/)
+  })
+
   it('binds frame identity to the iframe DOM node and disables stale interaction during switches', () => {
     expect(pageSource).toContain(':data-frame-key="frame.key"')
     expect(pageSource).toContain(':name="frame.key"')
