@@ -1251,7 +1251,7 @@ def _inject_shell_config(
             "externalBasePath": _public_proxy_prefix(session_id, forwarded_prefix),
             "webConsoleOrigin": origin,
             "externalSessionRail": True,
-            "hideHistory": False,
+            "hideHistory": True,
             "hideNewSession": True,
         },
         ensure_ascii=True,
