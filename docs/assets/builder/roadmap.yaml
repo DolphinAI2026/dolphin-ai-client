@@ -1,0 +1,6 @@
+kind: sandbox-builder-roadmap
+schema_version: v1
+roadmap_id: project
+roadmap_ref: docs/solutions/l1/roadmap/project-roadmap.md
+status: active
+phases: []
