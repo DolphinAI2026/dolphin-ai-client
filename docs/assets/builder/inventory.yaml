@@ -1,3 +1,123 @@
 kind: sandbox-builder-document-inventory
 schema_version: v1
-documents: []
+documents:
+- path: docs/solutions/l1/arch/builder-tenant-auth-panorama.md
+  document_kind: reference
+  classification: needs-review
+  content_hash: sha256:894e82c58fe7710c909d0efd90e8f813de2cf94086620fa2c580ecf151051c73
+  normalization:
+    status: not_requested
+  git:
+    tracked: true
+- path: docs/solutions/l1/roadmap/builder-tenant-auth-optimization-roadmap.md
+  document_kind: reference
+  classification: needs-review
+  content_hash: sha256:da7b2982df12038607be775bcdbc91a3ccdb3a7a8ebd1a5026132e2f3abc2156
+  normalization:
+    status: not_requested
+  git:
+    tracked: true
+- path: docs/superpowers/plans/2026-07-09-builder-ai-unified-auth.md
+  document_kind: reference
+  classification: needs-review
+  content_hash: sha256:f082ad5b7a02baac4585bd750b28cd1e96ccecb455f60ce796bd9cecd3adbf8f
+  normalization:
+    status: not_requested
+  git:
+    tracked: true
+- path: docs/superpowers/plans/2026-07-10-engineering-sessions-worktree-sync-implementation.md
+  document_kind: reference
+  classification: needs-review
+  content_hash: sha256:a48aabb1cbedf4bf0e16766ce1ef7c06c290dfd4b77b6383d873a2eb469627f4
+  normalization:
+    status: not_requested
+  git:
+    tracked: true
+- path: docs/superpowers/plans/2026-07-11-builder-control-plane-apaas-federated-auth.md
+  document_kind: reference
+  classification: needs-review
+  content_hash: sha256:dc0cc3d58baffb9746798297710a4646a0c7be0ecee624c2786b83f82411edc6
+  normalization:
+    status: not_requested
+  git:
+    tracked: true
+- path: docs/superpowers/plans/2026-07-11-engineering-sessions-worktree-sync.md
+  document_kind: reference
+  classification: needs-review
+  content_hash: sha256:be20b92ba224fd97e18ba90f8b3244a854a788d891bd1234b064c65a95c56093
+  normalization:
+    status: not_requested
+  git:
+    tracked: true
+- path: docs/superpowers/plans/2026-07-12-apaas-platform-admin-binding.md
+  document_kind: reference
+  classification: needs-review
+  content_hash: sha256:96746cdf400f00aa8dbebfa2501424f7a38c19916c6a3fee914555ed964bd7f0
+  normalization:
+    status: not_requested
+  git:
+    tracked: true
+- path: docs/superpowers/plans/2026-07-12-apaas-tenant-environment-binding.md
+  document_kind: reference
+  classification: needs-review
+  content_hash: sha256:49a0a113fd624a8a2f8cbaca986caf81c5fdfdb05de7823fc11f5ea4dcbed0d4
+  normalization:
+    status: not_requested
+  git:
+    tracked: true
+- path: docs/superpowers/plans/2026-07-16-builder-code-embedded-experience.md
+  document_kind: reference
+  classification: needs-review
+  content_hash: sha256:40f90a6b3f6c64b01ffc97c63e65de20b0c0aff407698c0a5b13cd6cd8a24fc4
+  normalization:
+    status: not_requested
+  git:
+    tracked: true
+- path: docs/superpowers/specs/2026-07-10-engineering-sessions-worktree-sync-design.md
+  document_kind: reference
+  classification: needs-review
+  content_hash: sha256:8db9dde6916c2c96ed86d6ddb9221c4b8c02b52f0f83a033a1c4d443164bf4d1
+  normalization:
+    status: not_requested
+  git:
+    tracked: true
+- path: docs/superpowers/specs/2026-07-11-builder-control-plane-apaas-federated-auth-design.md
+  document_kind: reference
+  classification: needs-review
+  content_hash: sha256:336f34b5e10134bf4b8c25033a3bec22e2995269560ae77398f9c1a478034a38
+  normalization:
+    status: not_requested
+  git:
+    tracked: true
+- path: docs/superpowers/specs/2026-07-12-apaas-platform-admin-binding-design.md
+  document_kind: reference
+  classification: needs-review
+  content_hash: sha256:6fad22e88f967cd864b1d8184ae74ee844fe091f10dabd59911a60cc2f00e041
+  normalization:
+    status: not_requested
+  git:
+    tracked: true
+- path: docs/superpowers/specs/2026-07-12-apaas-tenant-environment-binding-design.md
+  document_kind: reference
+  classification: needs-review
+  content_hash: sha256:e52e47f97479c53b94cb113969f2ff9b5f16d8fc3196b4c2ddab59488de7a6de
+  normalization:
+    status: not_requested
+  git:
+    tracked: true
+- path: docs/superpowers/specs/2026-07-16-builder-code-embedded-experience-design.md
+  document_kind: reference
+  classification: needs-review
+  content_hash: sha256:db7b0a48a07baf3c165f8f233ff50446639eea27fde53262638f51b1d68765b0
+  normalization:
+    status: not_requested
+  git:
+    tracked: true
+- path: docs/superpowers/specs/2026-07-17-builder-sandbox-token-free-transparent-renewal-design.md
+  document_kind: reference
+  classification: needs-review
+  content_hash: sha256:cc623c4523724ad5cbad4110ca0403fa296b3915fccdb2939a80d3040ab91d1a
+  normalization:
+    status: not_requested
+  git:
+    tracked: true
