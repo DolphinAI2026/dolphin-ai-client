@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import hashlib
 import json
 from types import SimpleNamespace
@@ -7,6 +8,7 @@ from uuid import UUID
 
 import pytest
 from sqlalchemy import select
+from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
 from app.models import Application
 from app.models.ai_chat import (
@@ -15,6 +17,15 @@ from app.models.ai_chat import (
     CodeRuntimeBinding,
     CodeRuntimeBrowserSession,
 )
+
+
+async def _renewal_session_factory(tmp_path):
+    from app.database import Base
+
+    engine = create_async_engine(f"sqlite+aiosqlite:///{tmp_path / 'renewal.db'}")
+    async with engine.begin() as conn:
+        await conn.run_sync(Base.metadata.create_all)
+    return engine, async_sessionmaker(engine, expire_on_commit=False, class_=AsyncSession)
 
 
 def _runtime_service_session_enc() -> str:
@@ -1095,7 +1106,7 @@ async def test_control_plane_request_refreshes_expired_user_token(
     expired = jwt.encode({"exp": 1}, "test", algorithm="HS256")
     store_control_plane_credentials(user, expired, "refresh-token")
     db_session.add(user)
-    await db_session.flush()
+    await db_session.commit()
     user.coding_tenant_id = "default"
     ctx = SimpleNamespace(user=user, apaas_tenant_id="apaas-tenant-1")
 
@@ -2292,3 +2303,296 @@ async def test_create_browser_authenticated_agent_session_forwards_runtime_cooki
         )
     )).scalar_one()
     assert scoped.external_application_id == "crm"
+
+
+@pytest.mark.asyncio
+async def test_concurrent_browser_renewal_singleflight_joins_new_generation(
+    tmp_path,
+):
+    from app.code_runtime.sandbox_auth import (
+        RuntimeBootstrap,
+        renew_browser_runtime_session,
+    )
+
+    engine, Session = await _renewal_session_factory(tmp_path)
+    async with Session() as db:
+        session, binding, rows = await _seed_browser_runtime(db)
+        binding_id = binding.id
+        observed_generation = rows["browser-a"].generation
+
+    open_started = asyncio.Event()
+    release_open = asyncio.Event()
+    open_calls = 0
+    bootstrap_calls = 0
+
+    async def authorization_provider(*, force_refresh=False, rejected_access_token=None):
+        assert force_refresh is False
+        assert rejected_access_token is None
+        return "Bearer user-token"
+
+    async def workspace_open(authorization):
+        nonlocal open_calls
+        assert authorization == "Bearer user-token"
+        open_calls += 1
+        open_started.set()
+        await asyncio.wait_for(release_open.wait(), timeout=5)
+        return {
+            "specReviewUrl": "https://runtime.test/workspaces/crm/builder?token=launch",
+            "workspaceId": "workspace-1",
+            "sandboxInstanceId": "sandbox-1",
+        }
+
+    async def bootstrap(builder_url):
+        nonlocal bootstrap_calls
+        assert builder_url.endswith("?token=launch")
+        bootstrap_calls += 1
+        return RuntimeBootstrap(
+            clean_builder_url="https://runtime.test/workspaces/crm/builder",
+            runtime_base_url="https://runtime.test/workspaces/crm",
+            runtime_cookie="renewed-cookie",
+            runtime_cookie_hash=hashlib.sha256(b"renewed-cookie").hexdigest(),
+            expires_at=None,
+        )
+
+    tasks = [
+        asyncio.create_task(renew_browser_runtime_session(
+            binding_id=binding_id,
+            browser_session_id="browser-a",
+            observed_generation=observed_generation,
+            session_factory=Session,
+            authorization_provider=authorization_provider,
+            workspace_open=workspace_open,
+            bootstrap=bootstrap,
+        ))
+        for _ in range(6)
+    ]
+    await asyncio.wait_for(open_started.wait(), timeout=5)
+    await asyncio.sleep(0)
+    release_open.set()
+    results = await asyncio.wait_for(asyncio.gather(*tasks), timeout=30)
+
+    assert open_calls == 1
+    assert bootstrap_calls == 1
+    assert {result.generation for result in results} == {8}
+    assert sum(result.joined for result in results) == 5
+    async with Session() as db:
+        row = (await db.execute(select(CodeRuntimeBrowserSession))).scalar_one()
+        assert row.generation == 8
+    await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_two_browser_forced_control_plane_refresh_is_singleflight(
+    tmp_path,
+    monkeypatch,
+):
+    from jose import jwt
+
+    import app.routes.code_runtime as code_runtime_routes
+    from app.auth import get_password_hash
+    from app.code_runtime.auth import store_control_plane_credentials
+    from app.models import User
+
+    engine, Session = await _renewal_session_factory(tmp_path)
+    expired = jwt.encode({"exp": 1}, "test", algorithm="HS256")
+    async with Session() as db:
+        user = User(
+            username="two-browser-refresh",
+            hashed_password=get_password_hash("unused"),
+            account_source="control_plane",
+            is_active=True,
+        )
+        store_control_plane_credentials(user, expired, "refresh-token")
+        db.add(user)
+        await db.commit()
+        user_id = user.id
+
+    refresh_started = asyncio.Event()
+    release_refresh = asyncio.Event()
+    refresh_calls = 0
+
+    async def fake_refresh(refresh_token):
+        nonlocal refresh_calls
+        assert refresh_token == "refresh-token"
+        refresh_calls += 1
+        refresh_started.set()
+        await asyncio.wait_for(release_refresh.wait(), timeout=5)
+        return SimpleNamespace(
+            access_token="fresh-access-token",
+            refresh_token="fresh-refresh-token",
+        )
+
+    monkeypatch.setattr(code_runtime_routes, "refresh_control_plane_token", fake_refresh)
+    calls = [
+        asyncio.create_task(code_runtime_routes._locked_control_plane_user_authorization(
+            user_id=user_id,
+            session_factory=Session,
+            force_refresh=True,
+            rejected_access_token=expired,
+        ))
+        for _browser in ("browser-a", "browser-b")
+    ]
+    await asyncio.wait_for(refresh_started.wait(), timeout=5)
+    release_refresh.set()
+    authorizations = await asyncio.wait_for(asyncio.gather(*calls), timeout=30)
+
+    assert authorizations == ["Bearer fresh-access-token"] * 2
+    assert refresh_calls == 1
+    await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_renew_bootstrap_failure_reopens_once_without_loop(
+    tmp_path,
+):
+    from fastapi import HTTPException
+    from app.code_runtime.sandbox_auth import (
+        RuntimeBootstrap,
+        renew_browser_runtime_session,
+    )
+
+    engine, Session = await _renewal_session_factory(tmp_path)
+    async with Session() as db:
+        _session, binding, rows = await _seed_browser_runtime(db)
+        binding_id = binding.id
+        observed_generation = rows["browser-a"].generation
+    open_calls = 0
+    bootstrap_calls = 0
+
+    async def authorization_provider(**_kwargs):
+        return "Bearer user-token"
+
+    async def workspace_open(_authorization):
+        nonlocal open_calls
+        open_calls += 1
+        return {"specReviewUrl": f"https://runtime.test/builder?token=launch-{open_calls}"}
+
+    async def bootstrap(builder_url):
+        nonlocal bootstrap_calls
+        bootstrap_calls += 1
+        if bootstrap_calls == 1:
+            raise HTTPException(status_code=503, detail="Runtime bootstrap unavailable")
+        return RuntimeBootstrap(
+            clean_builder_url="https://runtime.test/builder",
+            runtime_base_url="https://runtime.test",
+            runtime_cookie="renewed-cookie",
+            runtime_cookie_hash=hashlib.sha256(b"renewed-cookie").hexdigest(),
+            expires_at=None,
+        )
+
+    result = await renew_browser_runtime_session(
+        binding_id=binding_id,
+        browser_session_id="browser-a",
+        observed_generation=observed_generation,
+        session_factory=Session,
+        authorization_provider=authorization_provider,
+        workspace_open=workspace_open,
+        bootstrap=bootstrap,
+    )
+
+    assert result.generation == 8
+    assert open_calls == 2
+    assert bootstrap_calls == 2
+    await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_renew_commit_failure_is_temporary_and_does_not_loop(
+    tmp_path,
+):
+    from app.code_runtime.sandbox_auth import (
+        RuntimeBootstrap,
+        SandboxRenewalFailure,
+        renew_browser_runtime_session,
+    )
+
+    engine, Session = await _renewal_session_factory(tmp_path)
+    async with Session() as db:
+        _session, binding, rows = await _seed_browser_runtime(db)
+        binding_id = binding.id
+        observed_generation = rows["browser-a"].generation
+
+    class FailingCommitSession(AsyncSession):
+        async def commit(self):
+            raise RuntimeError("commit failed")
+
+    FailingSession = async_sessionmaker(
+        engine,
+        expire_on_commit=False,
+        class_=FailingCommitSession,
+    )
+    open_calls = 0
+    bootstrap_calls = 0
+
+    async def authorization_provider(**_kwargs):
+        return "Bearer user-token"
+
+    async def workspace_open(_authorization):
+        nonlocal open_calls
+        open_calls += 1
+        return {"specReviewUrl": "https://runtime.test/builder?token=launch"}
+
+    async def bootstrap(_builder_url):
+        nonlocal bootstrap_calls
+        bootstrap_calls += 1
+        return RuntimeBootstrap(
+            clean_builder_url="https://runtime.test/builder",
+            runtime_base_url="https://runtime.test",
+            runtime_cookie="orphan-cookie",
+            runtime_cookie_hash=hashlib.sha256(b"orphan-cookie").hexdigest(),
+            expires_at=None,
+        )
+
+    with pytest.raises(SandboxRenewalFailure) as exc_info:
+        await renew_browser_runtime_session(
+            binding_id=binding_id,
+            browser_session_id="browser-a",
+            observed_generation=observed_generation,
+            session_factory=FailingSession,
+            authorization_provider=authorization_provider,
+            workspace_open=workspace_open,
+            bootstrap=bootstrap,
+        )
+
+    assert exc_info.value.code == "workspace_temporarily_unavailable"
+    assert exc_info.value.clear_cookies is False
+    assert open_calls == 1
+    assert bootstrap_calls == 1
+    async with Session() as db:
+        row = (await db.execute(select(CodeRuntimeBrowserSession))).scalar_one()
+        assert row.generation == observed_generation
+    await engine.dispose()
+
+
+@pytest.mark.parametrize(
+    ("code", "clear_cookies"),
+    [
+        ("login_required", True),
+        ("workspace_forbidden", True),
+        ("sandbox_unavailable", True),
+        ("workspace_temporarily_unavailable", False),
+    ],
+)
+def test_hard_failure_response_clears_only_current_browser_cookies(
+    code,
+    clear_cookies,
+):
+    from app.code_runtime.sandbox_auth import SandboxRenewalFailure
+    from app.routes.code_runtime import _sandbox_renewal_failure_response
+
+    response = _sandbox_renewal_failure_response(
+        SandboxRenewalFailure(code),
+        session_id="session-1",
+        forwarded_prefix="/ai-builder",
+    )
+
+    assert response.status_code in {401, 403, 404, 503}
+    assert response.body == json.dumps(
+        {"detail": code},
+        separators=(",", ":"),
+    ).encode()
+    set_cookies = response.headers.getlist("set-cookie")
+    assert bool(set_cookies) is clear_cookies
+    if clear_cookies:
+        assert any("dolphin_code_runtime_session-1=" in value for value in set_cookies)
+        assert any("apaas_sandbox_token=" in value for value in set_cookies)

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import hashlib
 import json
 from dataclasses import dataclass, field
@@ -10,7 +11,7 @@ import httpx
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from pydantic import BaseModel
 from sqlalchemy import and_, or_, select
-from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from starlette.background import BackgroundTask
 from starlette.responses import RedirectResponse, Response, StreamingResponse
 
@@ -39,11 +40,12 @@ from app.code_runtime.auth import (
 from app.code_runtime.sandbox_auth import (
     RUNTIME_AUTH_ERROR_HEADER,
     RUNTIME_COOKIE_NAME,
+    SandboxRenewalFailure,
     decrypt_runtime_cookie,
     validate_expired_proxy_cookie_token,
 )
 from app.config import settings
-from app.database import get_db
+from app.database import AsyncSessionLocal, get_db
 from app.deps import AuthContext, get_auth_context
 from app.models import Application, User
 from app.models.tenant import Tenant
@@ -76,6 +78,70 @@ class CreateCodeApplicationRequest(BaseModel):
     app_name: str
     app_code: str
     seed_project_id: Optional[str] = None
+
+
+_control_plane_user_locks: dict[int, asyncio.Lock] = {}
+
+
+def _control_plane_user_lock(user_id: int) -> asyncio.Lock:
+    lock = _control_plane_user_locks.get(int(user_id))
+    if lock is None:
+        lock = asyncio.Lock()
+        _control_plane_user_locks[int(user_id)] = lock
+    return lock
+
+
+async def _locked_control_plane_user_authorization(
+    *,
+    user_id: int,
+    session_factory=AsyncSessionLocal,
+    force_refresh: bool = False,
+    rejected_access_token: str | None = None,
+) -> str:
+    async with _control_plane_user_lock(user_id):
+        async with session_factory() as db:
+            user = (
+                await db.execute(
+                    select(User).where(User.id == int(user_id)).with_for_update()
+                )
+            ).scalar_one_or_none()
+            if user is None:
+                raise SandboxRenewalFailure("login_required")
+
+            access_token = control_plane_access_token(user)
+            already_rotated = bool(
+                force_refresh
+                and rejected_access_token
+                and access_token
+                and access_token != rejected_access_token
+            )
+            if already_rotated or (
+                access_token
+                and not force_refresh
+                and not control_plane_token_needs_refresh(access_token)
+            ):
+                return f"Bearer {access_token}"
+
+            refresh_token = control_plane_refresh_token(user)
+            if not refresh_token:
+                raise SandboxRenewalFailure("login_required")
+            try:
+                refreshed = await refresh_control_plane_token(refresh_token)
+            except Exception as exc:
+                raise SandboxRenewalFailure("login_required") from exc
+            store_control_plane_credentials(
+                user,
+                refreshed.access_token,
+                refreshed.refresh_token or refresh_token,
+            )
+            try:
+                await db.commit()
+            except Exception as exc:
+                await db.rollback()
+                raise SandboxRenewalFailure(
+                    "workspace_temporarily_unavailable"
+                ) from exc
+            return f"Bearer {refreshed.access_token}"
 
 
 async def _resolve_control_plane_tenant_id(
@@ -131,33 +197,35 @@ async def _control_plane_request_auth(
     if token and not control_plane_token_needs_refresh(token):
         return f"Bearer {token}", None
 
-    user = (
-        await db.execute(
-            select(User)
-            .where(User.id == ctx.user.id)
-            .with_for_update()
+    try:
+        session_factory = (
+            async_sessionmaker(
+                db.bind,
+                class_=AsyncSession,
+                expire_on_commit=False,
+            )
+            if db.bind is not None
+            else AsyncSessionLocal
         )
-    ).scalar_one()
-    token = control_plane_access_token(user)
-    if token and not control_plane_token_needs_refresh(token):
-        return f"Bearer {token}", None
-
-    refresh_token = control_plane_refresh_token(user)
-    if not refresh_token:
-        raise HTTPException(
-            status_code=403,
-            detail="当前账号未绑定 Control Plane，或用户 Token 已失效，请重新登录",
+        authorization = await _locked_control_plane_user_authorization(
+            user_id=int(ctx.user.id),
+            session_factory=session_factory,
         )
-    refreshed = await refresh_control_plane_token(refresh_token)
-    store_control_plane_credentials(
-        user,
-        refreshed.access_token,
-        refreshed.refresh_token or refresh_token,
-    )
-    await db.commit()
-    ctx.user.coding_access_token = user.coding_access_token
-    ctx.user.coding_refresh_token = user.coding_refresh_token
-    return f"Bearer {refreshed.access_token}", None
+    except SandboxRenewalFailure as exc:
+        if exc.code == "login_required":
+            raise HTTPException(
+                status_code=403,
+                detail="当前账号未绑定 Control Plane，或用户 Token 已失效，请重新登录",
+            ) from exc
+        raise HTTPException(status_code=exc.status_code, detail=exc.code) from exc
+    fresh_access_token = authorization.removeprefix("Bearer ").strip()
+    if fresh_access_token:
+        store_control_plane_credentials(
+            ctx.user,
+            fresh_access_token,
+            control_plane_refresh_token(ctx.user),
+        )
+    return authorization, None
 
 
 @router.get("/applications")
@@ -1622,6 +1690,38 @@ def _set_runtime_cookie(
         samesite="lax",
         path=_public_proxy_prefix(session_id, forwarded_prefix),
     )
+
+
+def _sandbox_renewal_failure_response(
+    failure: SandboxRenewalFailure,
+    *,
+    session_id: CodeSessionRef,
+    forwarded_prefix: str = "",
+) -> Response:
+    response = Response(
+        content=json.dumps(
+            {"detail": failure.code},
+            separators=(",", ":"),
+        ),
+        status_code=failure.status_code,
+        media_type="application/json",
+    )
+    if not failure.clear_cookies:
+        return response
+    cookie_path = _public_proxy_prefix(session_id, forwarded_prefix)
+    response.delete_cookie(
+        _embed_cookie_name(session_id),
+        path=cookie_path,
+        httponly=True,
+        samesite="lax",
+    )
+    response.delete_cookie(
+        RUNTIME_COOKIE_NAME,
+        path=cookie_path,
+        httponly=True,
+        samesite="lax",
+    )
+    return response
 
 
 async def _authorized_browser_shell(

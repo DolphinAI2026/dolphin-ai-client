@@ -1,16 +1,18 @@
 from __future__ import annotations
 
+import asyncio
 import hashlib
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 from email.utils import parsedate_to_datetime
 from http.cookies import SimpleCookie
-from typing import Callable
+from typing import Any, Callable
 from urllib.parse import quote, unquote_plus, urlsplit, urlunsplit
 
 import httpx
 from fastapi import HTTPException
 from jose import JWTError, jwt
+from sqlalchemy import select
 
 from app.config import settings
 from app.crypto import decrypt_password, encrypt_password
@@ -32,6 +34,222 @@ class RuntimeBootstrap:
     runtime_cookie: str = field(repr=False)
     runtime_cookie_hash: str
     expires_at: datetime | None
+
+
+@dataclass(frozen=True)
+class SandboxRenewalResult:
+    generation: int
+    joined: bool
+    runtime_cookie: str = field(repr=False)
+    runtime_cookie_hash: str
+    expires_at: datetime | None
+
+
+class SandboxRenewalFailure(Exception):
+    _DETAILS = {
+        "login_required": (401, True),
+        "workspace_forbidden": (403, True),
+        "sandbox_unavailable": (404, True),
+        "workspace_temporarily_unavailable": (503, False),
+    }
+
+    def __init__(self, code: str):
+        if code not in self._DETAILS:
+            raise ValueError(f"Unknown sandbox renewal failure: {code}")
+        super().__init__(code)
+        self.code = code
+        self.status_code, self.clear_cookies = self._DETAILS[code]
+
+
+_renewal_locks: dict[tuple[int, str], asyncio.Lock] = {}
+
+
+def _renewal_lock(binding_id: int, browser_session_id: str) -> asyncio.Lock:
+    key = (int(binding_id), str(browser_session_id))
+    lock = _renewal_locks.get(key)
+    if lock is None:
+        lock = asyncio.Lock()
+        _renewal_locks[key] = lock
+    return lock
+
+
+def _renewal_failure(exc: BaseException) -> SandboxRenewalFailure:
+    if isinstance(exc, SandboxRenewalFailure):
+        return exc
+    if isinstance(exc, HTTPException):
+        if exc.status_code == 401:
+            return SandboxRenewalFailure("login_required")
+        if exc.status_code == 403:
+            return SandboxRenewalFailure("workspace_forbidden")
+        if exc.status_code in {404, 410}:
+            return SandboxRenewalFailure("sandbox_unavailable")
+    return SandboxRenewalFailure("workspace_temporarily_unavailable")
+
+
+async def _workspace_open_with_refresh(
+    authorization: str,
+    *,
+    authorization_provider: Callable[..., Any],
+    workspace_open: Callable[[str], Any],
+) -> tuple[dict[str, Any], str]:
+    try:
+        opened = await asyncio.wait_for(workspace_open(authorization), timeout=60.0)
+        return opened, authorization
+    except HTTPException as exc:
+        if exc.status_code != 401:
+            raise _renewal_failure(exc) from exc
+    except (asyncio.TimeoutError, httpx.RequestError) as exc:
+        raise SandboxRenewalFailure("workspace_temporarily_unavailable") from exc
+
+    rejected_access_token = authorization.removeprefix("Bearer ").strip() or None
+    try:
+        refreshed_authorization = await authorization_provider(
+            force_refresh=True,
+            rejected_access_token=rejected_access_token,
+        )
+        opened = await asyncio.wait_for(
+            workspace_open(refreshed_authorization),
+            timeout=60.0,
+        )
+        return opened, refreshed_authorization
+    except HTTPException as exc:
+        raise _renewal_failure(exc) from exc
+    except SandboxRenewalFailure:
+        raise
+    except (asyncio.TimeoutError, httpx.RequestError) as exc:
+        raise SandboxRenewalFailure("workspace_temporarily_unavailable") from exc
+    except Exception as exc:
+        raise SandboxRenewalFailure("login_required") from exc
+
+
+async def renew_browser_runtime_session(
+    *,
+    binding_id: int,
+    browser_session_id: str,
+    observed_generation: int,
+    session_factory: Callable[[], Any],
+    authorization_provider: Callable[..., Any],
+    workspace_open: Callable[[str], Any],
+    bootstrap: Callable[[str], Any],
+) -> SandboxRenewalResult:
+    from app.models.ai_chat import CodeRuntimeBinding, CodeRuntimeBrowserSession
+
+    async with _renewal_lock(binding_id, browser_session_id):
+        async with session_factory() as db:
+            browser_session = (
+                await db.execute(
+                    select(CodeRuntimeBrowserSession)
+                    .where(
+                        CodeRuntimeBrowserSession.binding_id == int(binding_id),
+                        CodeRuntimeBrowserSession.browser_session_id == str(browser_session_id),
+                    )
+                    .with_for_update()
+                )
+            ).scalar_one_or_none()
+            binding = (
+                await db.execute(
+                    select(CodeRuntimeBinding)
+                    .where(CodeRuntimeBinding.id == int(binding_id))
+                    .with_for_update()
+                )
+            ).scalar_one_or_none()
+            if browser_session is None or binding is None:
+                raise SandboxRenewalFailure("sandbox_unavailable")
+
+            current_generation = int(browser_session.generation or 0)
+            if current_generation > int(observed_generation):
+                try:
+                    runtime_cookie = decrypt_runtime_cookie(
+                        browser_session.runtime_session_cookie_enc
+                    )
+                except ValueError as exc:
+                    raise SandboxRenewalFailure(
+                        "workspace_temporarily_unavailable"
+                    ) from exc
+                return SandboxRenewalResult(
+                    generation=current_generation,
+                    joined=True,
+                    runtime_cookie=runtime_cookie,
+                    runtime_cookie_hash=browser_session.runtime_session_hash,
+                    expires_at=browser_session.runtime_session_expires_at,
+                )
+
+            try:
+                authorization = await authorization_provider(
+                    force_refresh=False,
+                    rejected_access_token=None,
+                )
+            except HTTPException as exc:
+                raise _renewal_failure(exc) from exc
+            except SandboxRenewalFailure:
+                raise
+            except Exception as exc:
+                raise SandboxRenewalFailure("login_required") from exc
+
+            opened: dict[str, Any] | None = None
+            runtime_bootstrap: RuntimeBootstrap | None = None
+            for bootstrap_attempt in range(2):
+                opened, authorization = await _workspace_open_with_refresh(
+                    authorization,
+                    authorization_provider=authorization_provider,
+                    workspace_open=workspace_open,
+                )
+                builder_url = str(
+                    opened.get("specReviewUrl") or opened.get("builderUrl") or ""
+                ).strip()
+                if not builder_url:
+                    raise SandboxRenewalFailure(
+                        "workspace_temporarily_unavailable"
+                    )
+                try:
+                    runtime_bootstrap = await asyncio.wait_for(
+                        bootstrap(builder_url),
+                        timeout=10.0,
+                    )
+                    break
+                except SandboxRenewalFailure:
+                    raise
+                except Exception as exc:
+                    if bootstrap_attempt == 1:
+                        raise _renewal_failure(exc) from exc
+
+            if opened is None or runtime_bootstrap is None:
+                raise SandboxRenewalFailure("workspace_temporarily_unavailable")
+
+            next_generation = max(
+                current_generation,
+                int(binding.auth_generation or 0),
+            ) + 1
+            encrypted_cookie = encrypt_runtime_cookie(runtime_bootstrap.runtime_cookie)
+            browser_session.runtime_session_cookie_enc = encrypted_cookie
+            browser_session.runtime_session_hash = runtime_bootstrap.runtime_cookie_hash
+            browser_session.runtime_session_expires_at = runtime_bootstrap.expires_at
+            browser_session.generation = next_generation
+            binding.runtime_service_session_enc = encrypted_cookie
+            binding.auth_generation = next_generation
+            binding.builder_url = runtime_bootstrap.clean_builder_url
+            binding.runtime_base_url = runtime_bootstrap.runtime_base_url
+            binding.workspace_id = opened.get("workspaceId") or binding.workspace_id
+            binding.sandbox_instance_id = (
+                opened.get("sandboxInstanceId") or binding.sandbox_instance_id
+            )
+            binding.status = "ready"
+            binding.last_error = None
+            try:
+                await db.commit()
+            except Exception as exc:
+                await db.rollback()
+                raise SandboxRenewalFailure(
+                    "workspace_temporarily_unavailable"
+                ) from exc
+
+            return SandboxRenewalResult(
+                generation=next_generation,
+                joined=False,
+                runtime_cookie=runtime_bootstrap.runtime_cookie,
+                runtime_cookie_hash=runtime_bootstrap.runtime_cookie_hash,
+                expires_at=runtime_bootstrap.expires_at,
+            )
 
 
 def validate_expired_proxy_cookie_token(
