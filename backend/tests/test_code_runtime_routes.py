@@ -3141,6 +3141,7 @@ async def test_cleanup_builder_urls_is_batched_dry_run_apply_and_idempotent(
     db_session,
     capsys,
 ):
+    import httpx
     from scripts.cleanup_code_runtime_builder_urls import cleanup_builder_urls
 
     seeded = []
@@ -3167,6 +3168,15 @@ async def test_cleanup_builder_urls_is_batched_dry_run_apply_and_idempotent(
         expire_on_commit=False,
         class_=AsyncSession,
     )
+    contract_transport = httpx.MockTransport(
+        lambda _request: httpx.Response(
+            200,
+            json={"writer_contract": "clean_builder_url_v1"},
+        )
+    )
+    contract_client_factory = lambda: httpx.AsyncClient(
+        transport=contract_transport
+    )
 
     dry_run = await cleanup_builder_urls(
         session_factory=Session,
@@ -3190,6 +3200,8 @@ async def test_cleanup_builder_urls_is_batched_dry_run_apply_and_idempotent(
         session_factory=Session,
         batch_size=2,
         apply=True,
+        state_urls=["https://builder.test/internal/sandbox-auth-state"],
+        contract_client_factory=contract_client_factory,
     )
     await db_session.rollback()
     rows = (
@@ -3213,6 +3225,8 @@ async def test_cleanup_builder_urls_is_batched_dry_run_apply_and_idempotent(
         session_factory=Session,
         batch_size=2,
         apply=True,
+        state_urls=["https://builder.test/internal/sandbox-auth-state"],
+        contract_client_factory=contract_client_factory,
     )
     assert repeated.rows_cleaned == 0
     output = capsys.readouterr().out
@@ -3280,14 +3294,9 @@ async def test_cleanup_apply_writer_contract_gate_requires_every_instance(
 
 @pytest.mark.asyncio
 async def test_cleanup_cli_apply_stops_before_database_without_writer_instances(
-    monkeypatch,
 ):
     import scripts.cleanup_code_runtime_builder_urls as cleanup_script
 
-    async def unexpected_cleanup(**_kwargs):
-        raise AssertionError("database cleanup must not run before writer gate")
-
-    monkeypatch.setattr(cleanup_script, "cleanup_builder_urls", unexpected_cleanup)
     exit_code = await cleanup_script._run(SimpleNamespace(
         apply=True,
         batch_size=2,
@@ -3295,3 +3304,21 @@ async def test_cleanup_cli_apply_stops_before_database_without_writer_instances(
     ))
 
     assert exit_code == 2
+
+
+@pytest.mark.asyncio
+async def test_cleanup_write_boundary_rejects_apply_without_writer_contract():
+    from scripts.cleanup_code_runtime_builder_urls import (
+        WriterContractGateError,
+        cleanup_builder_urls,
+    )
+
+    def unexpected_session_factory():
+        raise AssertionError("database must not be opened before writer gate")
+
+    with pytest.raises(WriterContractGateError):
+        await cleanup_builder_urls(
+            session_factory=unexpected_session_factory,
+            apply=True,
+            state_urls=[],
+        )

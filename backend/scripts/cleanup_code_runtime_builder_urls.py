@@ -23,12 +23,26 @@ class CleanupStats:
     last_checkpoint: int = 0
 
 
+class WriterContractGateError(RuntimeError):
+    pass
+
+
 async def cleanup_builder_urls(
     *,
     session_factory: Callable[[], Any] | None = None,
     batch_size: int = 100,
     apply: bool = False,
+    state_urls: list[str] | None = None,
+    contract_client_factory: Callable[[], Any] | None = None,
 ) -> CleanupStats:
+    if apply and not await verify_writer_contract(
+        state_urls or [],
+        client_factory=contract_client_factory,
+    ):
+        raise WriterContractGateError(
+            "All Builder instances must report clean_builder_url_v1"
+        )
+
     from app.code_runtime.sandbox_auth import remove_builder_entry_tokens
     from app.database import AsyncSessionLocal
     from app.models.ai_chat import CodeRuntimeBinding
@@ -170,14 +184,14 @@ async def verify_writer_contract(
 
 
 async def _run(args: argparse.Namespace) -> int:
-    if args.apply and not await verify_writer_contract(
-        _builder_state_urls(args)
-    ):
+    try:
+        stats = await cleanup_builder_urls(
+            batch_size=args.batch_size,
+            apply=args.apply,
+            state_urls=_builder_state_urls(args),
+        )
+    except WriterContractGateError:
         return 2
-    stats = await cleanup_builder_urls(
-        batch_size=args.batch_size,
-        apply=args.apply,
-    )
     print(json.dumps(asdict(stats), separators=(",", ":"), sort_keys=True))
     if not args.apply:
         print("dry_run=true")
