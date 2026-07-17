@@ -10,7 +10,9 @@ from urllib.parse import quote, unquote_plus, urlsplit, urlunsplit
 
 import httpx
 from fastapi import HTTPException
+from jose import JWTError, jwt
 
+from app.config import settings
 from app.crypto import decrypt_password, encrypt_password
 
 RUNTIME_COOKIE_NAME = "apaas_sandbox_token"
@@ -20,6 +22,7 @@ _LAUNCH_AUTH_ERRORS = {
     "sandbox_launch_token_expired",
     "sandbox_launch_token_invalid",
 }
+_PROXY_COOKIE_TOKEN_TYPE = "code_runtime_proxy"
 
 
 @dataclass(frozen=True)
@@ -29,6 +32,40 @@ class RuntimeBootstrap:
     runtime_cookie: str = field(repr=False)
     runtime_cookie_hash: str
     expires_at: datetime | None
+
+
+def validate_expired_proxy_cookie_token(
+    token: str,
+    *,
+    session_id: str | int,
+    legacy_session_id: int | None = None,
+) -> dict:
+    try:
+        payload = jwt.decode(
+            token,
+            settings.jwt_secret_key,
+            algorithms=[settings.jwt_algorithm],
+            options={"verify_aud": False, "verify_exp": False},
+        )
+    except JWTError as exc:
+        raise HTTPException(status_code=401, detail="Code runtime token invalid") from exc
+    accepted_session_ids = {str(session_id)}
+    if legacy_session_id is not None:
+        accepted_session_ids.add(str(legacy_session_id))
+    browser_session_id = str(payload.get("bsid") or "").strip()
+    try:
+        expired = float(payload.get("exp")) <= datetime.now(timezone.utc).timestamp()
+    except (TypeError, ValueError):
+        expired = False
+    if (
+        payload.get("type") != _PROXY_COOKIE_TOKEN_TYPE
+        or str(payload.get("sid") or "") not in accepted_session_ids
+        or not browser_session_id
+        or len(browser_session_id) > 64
+        or not expired
+    ):
+        raise HTTPException(status_code=401, detail="Code runtime token invalid")
+    return payload
 
 
 def split_entry_token(builder_url: str) -> tuple[str, str]:

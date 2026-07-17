@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import hashlib
 import json
+from dataclasses import dataclass, field
 from typing import Annotated, Any, Optional
 from urllib.parse import parse_qsl, quote, unquote_plus, urlsplit
 
@@ -36,14 +38,21 @@ from app.code_runtime.auth import (
 )
 from app.code_runtime.sandbox_auth import (
     RUNTIME_AUTH_ERROR_HEADER,
+    RUNTIME_COOKIE_NAME,
     decrypt_runtime_cookie,
+    validate_expired_proxy_cookie_token,
 )
 from app.config import settings
 from app.database import get_db
 from app.deps import AuthContext, get_auth_context
 from app.models import Application, User
 from app.models.tenant import Tenant
-from app.models.ai_chat import AIChatSession, CodeRuntimeAgentSession, CodeRuntimeBinding
+from app.models.ai_chat import (
+    AIChatSession,
+    CodeRuntimeAgentSession,
+    CodeRuntimeBinding,
+    CodeRuntimeBrowserSession,
+)
 
 router = APIRouter(prefix="/code", tags=["code-runtime"])
 proxy_router = APIRouter(prefix="/code-runtime", tags=["code-runtime-proxy"])
@@ -586,6 +595,7 @@ async def _ensure_runtime_current_session(
     *,
     request: Request | None = None,
     session_id: CodeSessionRef | None = None,
+    runtime_cookie: str | None = None,
 ) -> bool:
     runtime_session_id = str(binding.runtime_session_id or "").strip()
     if not runtime_session_id or not _path_requires_runtime_current_alignment(path):
@@ -594,13 +604,10 @@ async def _ensure_runtime_current_session(
     target_path = f"/api/agent/sessions/{encoded_id}/activate"
     if request is not None and session_id is not None:
         try:
-            await _browser_runtime_json_request(
-                binding,
-                "POST",
-                target_path,
-                request=request,
-                session_id=session_id,
-            )
+            kwargs = {"request": request, "session_id": session_id}
+            if runtime_cookie is not None:
+                kwargs["runtime_cookie"] = runtime_cookie
+            await _browser_runtime_json_request(binding, "POST", target_path, **kwargs)
         except HTTPException as exc:
             if exc.status_code != 404:
                 raise
@@ -608,8 +615,7 @@ async def _ensure_runtime_current_session(
                 binding,
                 "GET",
                 "/api/agent/sessions/current",
-                request=request,
-                session_id=session_id,
+                **kwargs,
             )
             binding.runtime_session_id = str(
                 (current or {}).get("runtimeSessionId") or ""
@@ -855,7 +861,7 @@ def _embed_cookie_name(session_id: CodeSessionRef) -> str:
     return f"dolphin_code_runtime_{str(session_id).strip()}"
 
 
-def _runtime_cookie_header(cookie_header: str, session_id: CodeSessionRef) -> str:
+def strip_proxy_and_runtime_cookies(cookie_header: str, session_id: CodeSessionRef) -> str:
     proxy_cookie_name = _embed_cookie_name(session_id)
     forwarded: list[str] = []
     for part in str(cookie_header or "").split(";"):
@@ -863,10 +869,19 @@ def _runtime_cookie_header(cookie_header: str, session_id: CodeSessionRef) -> st
         if not item or "=" not in item:
             continue
         name, _value = item.split("=", 1)
-        if name.strip() == proxy_cookie_name:
+        if name.strip() in {proxy_cookie_name, RUNTIME_COOKIE_NAME}:
             continue
         forwarded.append(item)
     return "; ".join(forwarded)
+
+
+def inject_runtime_cookie(headers: dict[str, str], runtime_cookie: str) -> None:
+    cookie = str(runtime_cookie or "").strip()
+    if not cookie:
+        return
+    existing = str(headers.get("cookie") or "").strip()
+    item = f"{RUNTIME_COOKIE_NAME}={cookie}"
+    headers["cookie"] = f"{existing}; {item}" if existing else item
 
 
 def _copyable_request_headers(request: Request, session_id: CodeSessionRef) -> dict[str, str]:
@@ -876,7 +891,10 @@ def _copyable_request_headers(request: Request, session_id: CodeSessionRef) -> d
         for key, value in request.headers.items()
         if key.lower() not in excluded
     }
-    cookie_header = _runtime_cookie_header(request.headers.get("cookie", ""), session_id)
+    cookie_header = strip_proxy_and_runtime_cookies(
+        request.headers.get("cookie", ""),
+        session_id,
+    )
     if cookie_header:
         copied["cookie"] = cookie_header
     return copied
@@ -893,15 +911,28 @@ def _cookie_header_has_value(cookie_header: str, cookie_name: str) -> bool:
     return False
 
 
+def _cookie_header_value(cookie_header: str, cookie_name: str) -> str:
+    for part in str(cookie_header or "").split(";"):
+        item = part.strip()
+        if not item or "=" not in item:
+            continue
+        name, value = item.split("=", 1)
+        if name.strip() == cookie_name:
+            return value.strip()
+    return ""
+
+
 def _runtime_request_headers(
     request: Request,
     session_id: CodeSessionRef,
     binding: CodeRuntimeBinding,
     *,
     allow_query_token: bool = False,
+    runtime_cookie: str | None = None,
 ) -> dict[str, str]:
     headers = _copyable_request_headers(request, session_id)
     headers.pop("authorization", None)
+    inject_runtime_cookie(headers, runtime_cookie or "")
     return headers
 
 
@@ -913,9 +944,15 @@ async def _browser_runtime_json_request(
     request: Request,
     session_id: CodeSessionRef,
     json_body: Any = None,
+    runtime_cookie: str | None = None,
 ) -> Any:
     target = f"{binding.runtime_base_url.rstrip('/')}/{path.lstrip('/')}"
-    headers = _runtime_request_headers(request, session_id, binding)
+    headers = _runtime_request_headers(
+        request,
+        session_id,
+        binding,
+        runtime_cookie=runtime_cookie,
+    )
     headers["accept"] = "application/json"
     if json_body is not None:
         headers["content-type"] = "application/json"
@@ -1336,12 +1373,86 @@ def _should_rewrite_buffered_response(path: str, content_type: str) -> bool:
     return _should_buffer_dev_asset_path(path)
 
 
+@dataclass(frozen=True)
+class ProxyAuthorization:
+    browser_session_id: str
+    response: Response | None = None
+    runtime_cookie: str | None = field(default=None, repr=False)
+    runtime_cookie_hash: str | None = None
+    observed_generation: int | None = None
+    proxy_cookie_reissue_required: bool = False
+
+
+async def _proxy_authorization_from_payload(
+    payload: dict[str, Any],
+    *,
+    db: AsyncSession | None,
+    binding: CodeRuntimeBinding | None,
+    shell_session: AIChatSession | None = None,
+    ctx: AuthContext | None = None,
+) -> ProxyAuthorization:
+    browser_session_id = str(payload.get("bsid") or "").strip()
+    try:
+        user_id = int(payload["sub"])
+        tenant_id = int(payload["tid"])
+    except (KeyError, TypeError, ValueError) as exc:
+        raise HTTPException(status_code=401, detail="Code runtime token invalid") from exc
+    if binding is None or db is None:
+        return ProxyAuthorization(browser_session_id=browser_session_id)
+    if (
+        int(binding.user_id) != user_id
+        or int(binding.tenant_id) != tenant_id
+        or (
+            shell_session is not None
+            and (
+                int(binding.session_id) != int(shell_session.id)
+                or int(shell_session.user_id) != user_id
+                or int(shell_session.tenant_id) != tenant_id
+            )
+        )
+        or (
+            ctx is not None
+            and (int(ctx.user.id) != user_id or int(ctx.tenant_id) != tenant_id)
+        )
+    ):
+        raise HTTPException(status_code=401, detail="Code runtime token invalid")
+    browser_session = (
+        await db.execute(
+            select(CodeRuntimeBrowserSession).where(
+                CodeRuntimeBrowserSession.binding_id == binding.id,
+                CodeRuntimeBrowserSession.browser_session_id == browser_session_id,
+            )
+        )
+    ).scalar_one_or_none()
+    if browser_session is None:
+        if (
+            is_local_code_application_id(binding.external_application_id)
+            and not binding.runtime_service_session_enc
+        ):
+            return ProxyAuthorization(browser_session_id=browser_session_id)
+        raise HTTPException(status_code=401, detail="Code runtime token invalid")
+    try:
+        runtime_cookie = decrypt_runtime_cookie(browser_session.runtime_session_cookie_enc)
+    except ValueError as exc:
+        raise HTTPException(status_code=503, detail="Code runtime session unavailable") from exc
+    return ProxyAuthorization(
+        browser_session_id=browser_session_id,
+        runtime_cookie=runtime_cookie,
+        runtime_cookie_hash=browser_session.runtime_session_hash,
+        observed_generation=int(browser_session.generation),
+    )
+
+
 async def _authorize_proxy_request(
     request: Request,
     session_id: CodeSessionRef,
     *,
     legacy_session_id: int | None = None,
-) -> Response | None:
+    db: AsyncSession | None = None,
+    binding: CodeRuntimeBinding | None = None,
+    shell_session: AIChatSession | None = None,
+    ctx: AuthContext | None = None,
+) -> ProxyAuthorization:
     query_token = request.query_params.get("dolphin_token", "").strip()
     cookie_token = request.cookies.get(_embed_cookie_name(session_id), "").strip()
     if query_token:
@@ -1350,11 +1461,18 @@ async def _authorize_proxy_request(
             session_id=session_id,
             legacy_session_id=legacy_session_id,
         )
+        authorized = await _proxy_authorization_from_payload(
+            payload,
+            db=db,
+            binding=binding,
+            shell_session=shell_session,
+            ctx=ctx,
+        )
         proxy_token = create_proxy_cookie_token(
             session_id=session_id,
             user_id=int(payload["sub"]),
             tenant_id=int(payload["tid"]),
-            browser_session_id=str(payload["bsid"]),
+            browser_session_id=authorized.browser_session_id,
         )
         redirect = RedirectResponse(
             _redirect_target_without_dolphin_token(
@@ -1372,25 +1490,97 @@ async def _authorize_proxy_request(
             samesite="lax",
             path=_public_proxy_prefix(session_id, request.headers.get("x-forwarded-prefix", "")),
         )
-        return redirect
+        if authorized.runtime_cookie:
+            _set_runtime_cookie(
+                redirect,
+                authorized.runtime_cookie,
+                session_id,
+                request.headers.get("x-forwarded-prefix", ""),
+            )
+        return ProxyAuthorization(
+            browser_session_id=authorized.browser_session_id,
+            response=redirect,
+            runtime_cookie=authorized.runtime_cookie,
+            runtime_cookie_hash=authorized.runtime_cookie_hash,
+            observed_generation=authorized.observed_generation,
+        )
     if cookie_token:
-        validate_proxy_cookie_token(
+        payload = validate_proxy_cookie_token(
             cookie_token,
             session_id=session_id,
             legacy_session_id=legacy_session_id,
         )
-        return None
+        return await _proxy_authorization_from_payload(
+            payload,
+            db=db,
+            binding=binding,
+            shell_session=shell_session,
+            ctx=ctx,
+        )
     raise HTTPException(status_code=401, detail="Code runtime token required")
 
 
 async def _authorize_shell_request(
     request: Request,
     session_id: CodeSessionRef,
-) -> Response | None:
+    *,
+    db: AsyncSession | None = None,
+    binding: CodeRuntimeBinding | None = None,
+    legacy_session_id: int | None = None,
+    ctx: AuthContext | None = None,
+    shell_session: AIChatSession | None = None,
+) -> ProxyAuthorization:
     authorization = str(request.headers.get("authorization") or "").strip()
     if authorization.lower().startswith("bearer "):
-        return None
-    return await _authorize_proxy_request(request, session_id)
+        cookies = getattr(request, "cookies", {})
+        cookie_token = str(
+            cookies.get(_embed_cookie_name(session_id), "")
+            or _cookie_header_value(
+                request.headers.get("cookie", ""),
+                _embed_cookie_name(session_id),
+            )
+        ).strip()
+        if not cookie_token:
+            raise HTTPException(status_code=401, detail="Code runtime token required")
+        try:
+            payload = validate_proxy_cookie_token(
+                cookie_token,
+                session_id=session_id,
+                legacy_session_id=legacy_session_id,
+            )
+            expired = False
+        except HTTPException:
+            payload = validate_expired_proxy_cookie_token(
+                cookie_token,
+                session_id=session_id,
+                legacy_session_id=legacy_session_id,
+            )
+            expired = True
+        authorized = await _proxy_authorization_from_payload(
+            payload,
+            db=db,
+            binding=binding,
+            shell_session=shell_session,
+            ctx=ctx,
+        )
+        if not expired:
+            return authorized
+        return ProxyAuthorization(
+            browser_session_id=authorized.browser_session_id,
+            runtime_cookie=authorized.runtime_cookie,
+            runtime_cookie_hash=authorized.runtime_cookie_hash,
+            observed_generation=authorized.observed_generation,
+            proxy_cookie_reissue_required=True,
+        )
+    return await _authorize_proxy_request(
+        request,
+        session_id,
+        legacy_session_id=legacy_session_id,
+        db=db,
+        binding=binding,
+        shell_session=shell_session,
+        ctx=ctx,
+    )
 
 
 def _renew_authenticated_proxy_cookie(
@@ -1398,11 +1588,13 @@ def _renew_authenticated_proxy_cookie(
     request: Request,
     session_id: CodeSessionRef,
     ctx: AuthContext,
+    browser_session_id: str,
 ) -> None:
     proxy_token = create_proxy_cookie_token(
         session_id=session_id,
         user_id=int(ctx.user.id),
         tenant_id=int(ctx.tenant_id),
+        browser_session_id=browser_session_id,
     )
     response.set_cookie(
         _embed_cookie_name(session_id),
@@ -1417,6 +1609,49 @@ def _renew_authenticated_proxy_cookie(
     )
 
 
+def _set_runtime_cookie(
+    response: Response,
+    runtime_cookie: str,
+    session_id: CodeSessionRef,
+    forwarded_prefix: str = "",
+) -> None:
+    response.set_cookie(
+        RUNTIME_COOKIE_NAME,
+        runtime_cookie,
+        httponly=True,
+        samesite="lax",
+        path=_public_proxy_prefix(session_id, forwarded_prefix),
+    )
+
+
+async def _authorized_browser_shell(
+    request: Request,
+    response: Response,
+    session_id: CodeSessionRef,
+    ctx: AuthContext,
+    db: AsyncSession,
+) -> tuple[AIChatSession, CodeRuntimeBinding, ProxyAuthorization]:
+    session, binding = await _authorized_code_runtime_binding(db, session_id, ctx)
+    authorization = await _authorize_shell_request(
+        request,
+        session_id,
+        db=db,
+        binding=binding,
+        legacy_session_id=session.id,
+        ctx=ctx,
+        shell_session=session,
+    )
+    if authorization.proxy_cookie_reissue_required:
+        _renew_authenticated_proxy_cookie(
+            response,
+            request,
+            session_id,
+            ctx,
+            authorization.browser_session_id,
+        )
+    return session, binding, authorization
+
+
 @proxy_router.get("/{session_id}/shell/agent-sessions")
 async def list_browser_authenticated_agent_sessions(
     session_id: str,
@@ -1425,17 +1660,18 @@ async def list_browser_authenticated_agent_sessions(
     ctx: Annotated[AuthContext, Depends(get_auth_context)],
     db: Annotated[AsyncSession, Depends(get_db)],
 ):
-    auth_response = await _authorize_shell_request(request, session_id)
-    if auth_response is not None:
-        return auth_response
-    session, binding = await _authorized_code_runtime_binding(db, session_id, ctx)
-    _renew_authenticated_proxy_cookie(response, request, session_id, ctx)
+    session, binding, authorization = await _authorized_browser_shell(
+        request, response, session_id, ctx, db
+    )
+    if authorization.response is not None:
+        return authorization.response
     payload = await _browser_runtime_json_request(
         binding,
         "GET",
         "/api/agent/sessions",
         request=request,
         session_id=session_id,
+        runtime_cookie=authorization.runtime_cookie,
     )
     sessions = payload.get("sessions") if isinstance(payload, dict) else []
     normalized_sessions = sessions if isinstance(sessions, list) else []
@@ -1464,11 +1700,11 @@ async def create_browser_authenticated_agent_session(
     ctx: Annotated[AuthContext, Depends(get_auth_context)],
     db: Annotated[AsyncSession, Depends(get_db)],
 ):
-    auth_response = await _authorize_shell_request(request, session_id)
-    if auth_response is not None:
-        return auth_response
-    session, binding = await _authorized_code_runtime_binding(db, session_id, ctx)
-    _renew_authenticated_proxy_cookie(response, request, session_id, ctx)
+    session, binding, authorization = await _authorized_browser_shell(
+        request, response, session_id, ctx, db
+    )
+    if authorization.response is not None:
+        return authorization.response
     payload = await _browser_runtime_json_request(
         binding,
         "POST",
@@ -1476,6 +1712,7 @@ async def create_browser_authenticated_agent_session(
         request=request,
         session_id=session_id,
         json_body={},
+        runtime_cookie=authorization.runtime_cookie,
     )
     runtime_session_id = str(
         (payload or {}).get("runtimeSessionId")
@@ -1504,11 +1741,11 @@ async def activate_browser_authenticated_agent_session(
     ctx: Annotated[AuthContext, Depends(get_auth_context)],
     db: Annotated[AsyncSession, Depends(get_db)],
 ):
-    auth_response = await _authorize_shell_request(request, session_id)
-    if auth_response is not None:
-        return auth_response
-    session, binding = await _authorized_code_runtime_binding(db, session_id, ctx)
-    _renew_authenticated_proxy_cookie(response, request, session_id, ctx)
+    session, binding, authorization = await _authorized_browser_shell(
+        request, response, session_id, ctx, db
+    )
+    if authorization.response is not None:
+        return authorization.response
     encoded_id = quote(str(runtime_session_id), safe="")
     payload = await _browser_runtime_json_request(
         binding,
@@ -1516,6 +1753,7 @@ async def activate_browser_authenticated_agent_session(
         f"/api/agent/sessions/{encoded_id}/activate",
         request=request,
         session_id=session_id,
+        runtime_cookie=authorization.runtime_cookie,
     )
     activated_id = str((payload or {}).get("runtimeSessionId") or runtime_session_id)
     binding.runtime_session_id = activated_id
@@ -1537,11 +1775,11 @@ async def delete_browser_authenticated_agent_session(
     ctx: Annotated[AuthContext, Depends(get_auth_context)],
     db: Annotated[AsyncSession, Depends(get_db)],
 ):
-    auth_response = await _authorize_shell_request(request, session_id)
-    if auth_response is not None:
-        return auth_response
-    session, binding = await _authorized_code_runtime_binding(db, session_id, ctx)
-    _renew_authenticated_proxy_cookie(response, request, session_id, ctx)
+    session, binding, authorization = await _authorized_browser_shell(
+        request, response, session_id, ctx, db
+    )
+    if authorization.response is not None:
+        return authorization.response
     encoded_id = quote(str(runtime_session_id), safe="")
     payload = await _browser_runtime_json_request(
         binding,
@@ -1549,6 +1787,7 @@ async def delete_browser_authenticated_agent_session(
         f"/api/agent/sessions/{encoded_id}",
         request=request,
         session_id=session_id,
+        runtime_cookie=authorization.runtime_cookie,
     )
     scoped = (
         await db.execute(
@@ -1575,6 +1814,25 @@ def _target_url(binding: CodeRuntimeBinding, path: str, request: Request) -> str
     return f"{binding.runtime_base_url.rstrip('/')}{rooted}{'?' + qs if qs else ''}"
 
 
+def _decorate_runtime_response(
+    response: Response,
+    upstream: httpx.Response,
+    *,
+    session_id: CodeSessionRef,
+    forwarded_prefix: str,
+    runtime_cookie: str | None,
+    cookie_reissue_required: bool,
+) -> Response:
+    for value in upstream.headers.get_list("set-cookie"):
+        response.headers.append(
+            "set-cookie",
+            _rewrite_set_cookie_path(value, session_id, forwarded_prefix),
+        )
+    if cookie_reissue_required and runtime_cookie:
+        _set_runtime_cookie(response, runtime_cookie, session_id, forwarded_prefix)
+    return response
+
+
 @proxy_router.api_route("/{session_id}/{path:path}", methods=["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"])
 async def proxy_code_runtime(
     session_id: str,
@@ -1586,25 +1844,37 @@ async def proxy_code_runtime(
     session = await resolve_code_session(db, session_id)
     if not session or session.mode != "code":
         raise HTTPException(status_code=404, detail="Code runtime binding not found")
-    auth_response = await _authorize_proxy_request(
-        request,
-        session_id,
-        legacy_session_id=session.id,
-    )
-    if auth_response is not None:
-        return auth_response
-
     binding = (
         await db.execute(select(CodeRuntimeBinding).where(CodeRuntimeBinding.session_id == session.id))
     ).scalar_one_or_none()
     if not binding:
         raise HTTPException(status_code=404, detail="Code runtime binding not found")
+    authorization = await _authorize_proxy_request(
+        request,
+        session_id,
+        legacy_session_id=session.id,
+        db=db,
+        binding=binding,
+        shell_session=session,
+    )
+    if authorization.response is not None:
+        return authorization.response
+    incoming_runtime_cookie = _cookie_header_value(
+        request.headers.get("cookie", ""),
+        RUNTIME_COOKIE_NAME,
+    )
+    cookie_reissue_required = bool(
+        authorization.runtime_cookie_hash
+        and hashlib.sha256(incoming_runtime_cookie.encode("utf-8")).hexdigest()
+        != authorization.runtime_cookie_hash
+    )
 
     binding_changed = await _ensure_runtime_current_session(
         binding,
         path,
         request=request,
         session_id=session_id,
+        runtime_cookie=authorization.runtime_cookie,
     )
     if binding_changed:
         await db.commit()
@@ -1615,6 +1885,7 @@ async def proxy_code_runtime(
         session_id,
         binding,
         allow_query_token=True,
+        runtime_cookie=authorization.runtime_cookie,
     )
 
     # Builder HTML 要注入 shell 配置，让 d-ai-code 的 runtimePath() 走 Dolphin 代理前缀。
@@ -1637,9 +1908,14 @@ async def proxy_code_runtime(
             headers=_copyable_response_headers(upstream.headers, binding, session_id, forwarded_prefix),
             media_type=content_type.split(";", 1)[0] if content_type else None,
         )
-        for value in upstream.headers.get_list("set-cookie"):
-            response.headers.append("set-cookie", _rewrite_set_cookie_path(value, session_id, forwarded_prefix))
-        return response
+        return _decorate_runtime_response(
+            response,
+            upstream,
+            session_id=session_id,
+            forwarded_prefix=forwarded_prefix,
+            runtime_cookie=authorization.runtime_cookie,
+            cookie_reissue_required=cookie_reissue_required,
+        )
 
     if request.method == "GET" and _should_buffer_dev_asset_path(path):
         async with httpx.AsyncClient(follow_redirects=False, timeout=60.0) as client:
@@ -1654,9 +1930,14 @@ async def proxy_code_runtime(
             headers=_copyable_response_headers(upstream.headers, binding, session_id, forwarded_prefix),
             media_type=content_type.split(";", 1)[0] if content_type else None,
         )
-        for value in upstream.headers.get_list("set-cookie"):
-            response.headers.append("set-cookie", _rewrite_set_cookie_path(value, session_id, forwarded_prefix))
-        return response
+        return _decorate_runtime_response(
+            response,
+            upstream,
+            session_id=session_id,
+            forwarded_prefix=forwarded_prefix,
+            runtime_cookie=authorization.runtime_cookie,
+            cookie_reissue_required=cookie_reissue_required,
+        )
 
     client = httpx.AsyncClient(follow_redirects=False, timeout=None)
     upstream_request = client.build_request(request.method, target, headers=headers, content=body)
@@ -1667,9 +1948,14 @@ async def proxy_code_runtime(
         headers=_copyable_response_headers(upstream.headers, binding, session_id, forwarded_prefix),
         background=BackgroundTask(_close_upstream, upstream, client),
     )
-    for value in upstream.headers.get_list("set-cookie"):
-        response.headers.append("set-cookie", _rewrite_set_cookie_path(value, session_id, forwarded_prefix))
-    return response
+    return _decorate_runtime_response(
+        response,
+        upstream,
+        session_id=session_id,
+        forwarded_prefix=forwarded_prefix,
+        runtime_cookie=authorization.runtime_cookie,
+        cookie_reissue_required=cookie_reissue_required,
+    )
 
 
 async def _close_upstream(upstream: httpx.Response, client: httpx.AsyncClient) -> None:
