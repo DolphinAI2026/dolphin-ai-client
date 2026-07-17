@@ -88,17 +88,28 @@ export function resolveTrustedShellMessage(
   if (topLevelFrameKey && payloadFrameKey && topLevelFrameKey !== payloadFrameKey) return null
 
   const frameKey = topLevelFrameKey || payloadFrameKey
-  if (!frameKey) return null
+  if (!event.source) return null
 
-  const frame = frames.find(candidate => candidate.key === frameKey)
-  if (!frame || !event.source || !frame.source) return null
+  const legacySourceMatches = frameKey
+    ? []
+    : frames.filter(candidate => (
+        candidate.source
+        && event.origin === candidate.origin
+        && event.source === candidate.source
+      ))
+  const frame = frameKey
+    ? frames.find(candidate => candidate.key === frameKey)
+    : legacySourceMatches.length === 1
+      ? legacySourceMatches[0]
+      : undefined
+  if (!frame || !frame.source) return null
   if (event.origin !== frame.origin || event.source !== frame.source) return null
 
   return {
     frame,
     message: {
       type: event.data.type,
-      frameKey,
+      frameKey: frameKey || frame.key,
       payload,
     },
   }

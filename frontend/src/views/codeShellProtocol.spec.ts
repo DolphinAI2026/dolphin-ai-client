@@ -45,6 +45,37 @@ describe('code shell protocol', () => {
     })
   })
 
+  it('infers a legacy ready message frame identity from its unique trusted source', () => {
+    const resolved = resolveTrustedShellMessage(messageEvent({
+      data: {
+        type: 'builder.ready',
+      },
+    }), [endpoint])
+
+    expect(resolved).toEqual({
+      frame: endpoint,
+      message: {
+        type: 'builder.ready',
+        frameKey: 'code-frame-2',
+        payload: {},
+      },
+    })
+  })
+
+  it('rejects a legacy message when its source does not identify exactly one frame', () => {
+    expect(resolveTrustedShellMessage(messageEvent({
+      data: {
+        type: 'builder.ready',
+      },
+    }), [
+      endpoint,
+      {
+        ...endpoint,
+        key: 'code-frame-3',
+      },
+    ])).toBeNull()
+  })
+
   it.each([
     ['origin', { origin: 'https://attacker.example.com' }],
     ['source', { source: {} as WindowProxy }],
