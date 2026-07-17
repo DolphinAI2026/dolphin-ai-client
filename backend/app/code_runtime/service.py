@@ -15,6 +15,7 @@ from sqlalchemy import or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import settings
+from app.code_runtime.sandbox_auth import split_entry_token
 from app.models import Application, Project, ProjectMember
 from app.models.collaboration import ApplicationMember
 from app.models.ai_chat import AIChatSession, CodeRuntimeAgentSession, CodeRuntimeBinding
@@ -27,6 +28,7 @@ _EMBED_TOKEN_ISSUER = "ai-builder"
 _DEFAULT_CONTROL_PLANE_URL = "http://127.0.0.1:8080"
 _DEFAULT_SEED_PROJECT_ID = "1781233861147"
 _LOCAL_APPLICATION_PREFIX = "local-"
+_LEGACY_BROWSER_SESSION_ID = "legacy-browser-session"
 
 
 def derive_runtime_base_url(builder_url: str) -> str:
@@ -94,7 +96,12 @@ def code_runtime_proxy_prefix(session_id: CodeSessionRef) -> str:
 
 
 def build_embed_url(session_id: CodeSessionRef, builder_url: str, dolphin_token: str) -> str:
-    suffix, query_items = _builder_suffix(builder_url)
+    raw_query_items = urlsplit(str(builder_url or "")).query.split("&")
+    if any(item.partition("=")[0] == "token" for item in raw_query_items if item):
+        clean_builder_url, _entry_token = split_entry_token(builder_url)
+    else:
+        clean_builder_url = builder_url
+    suffix, query_items = _builder_suffix(clean_builder_url)
     query_items = [
         (key, value)
         for key, value in query_items
@@ -105,7 +112,9 @@ def build_embed_url(session_id: CodeSessionRef, builder_url: str, dolphin_token:
             query_items.append((key, "1"))
     query_items.append(("dolphin_token", dolphin_token))
     query = urlencode(query_items)
-    return f"{code_runtime_proxy_prefix(session_id)}{suffix}{'?' + query if query else ''}"
+    fragment = urlsplit(clean_builder_url).fragment
+    embedded_url = f"{code_runtime_proxy_prefix(session_id)}{suffix}{'?' + query if query else ''}"
+    return f"{embedded_url}#{fragment}" if fragment else embedded_url
 
 
 def strip_dolphin_token_from_url(url: str) -> str:
@@ -119,13 +128,21 @@ def strip_dolphin_token_from_url(url: str) -> str:
 
 
 def _create_runtime_token(
-    *, token_type: str, session_id: CodeSessionRef, user_id: int, tenant_id: int, minutes: int
+    *,
+    token_type: str,
+    session_id: CodeSessionRef,
+    user_id: int,
+    tenant_id: int,
+    browser_session_id: str | None,
+    minutes: int,
 ) -> str:
+    browser_session_id = _normalize_browser_session_id(browser_session_id)
     now = datetime.now(timezone.utc)
     payload = {
         "sub": str(user_id),
         "tid": int(tenant_id),
         "sid": str(session_id),
+        "bsid": browser_session_id,
         "type": token_type,
         "iat": now,
         "exp": now + timedelta(minutes=minutes),
@@ -134,24 +151,45 @@ def _create_runtime_token(
     return jwt.encode(payload, settings.jwt_secret_key, algorithm=settings.jwt_algorithm)
 
 
-def create_embed_token(*, session_id: CodeSessionRef, user_id: int, tenant_id: int, minutes: int = 10) -> str:
+def _normalize_browser_session_id(browser_session_id: str | None) -> str:
+    value = _LEGACY_BROWSER_SESSION_ID if browser_session_id is None else str(browser_session_id).strip()
+    if not value or len(value) > 64:
+        raise ValueError("browser_session_id must be non-empty and at most 64 characters")
+    return value
+
+
+def create_embed_token(
+    *,
+    session_id: CodeSessionRef,
+    user_id: int,
+    tenant_id: int,
+    browser_session_id: str | None = None,
+    minutes: int = 10,
+) -> str:
     return _create_runtime_token(
         token_type=_EMBED_TOKEN_TYPE,
         session_id=session_id,
         user_id=user_id,
         tenant_id=tenant_id,
+        browser_session_id=browser_session_id,
         minutes=minutes,
     )
 
 
 def create_proxy_cookie_token(
-    *, session_id: CodeSessionRef, user_id: int, tenant_id: int, minutes: int = 12 * 60
+    *,
+    session_id: CodeSessionRef,
+    user_id: int,
+    tenant_id: int,
+    browser_session_id: str | None = None,
+    minutes: int = 12 * 60,
 ) -> str:
     return _create_runtime_token(
         token_type=_PROXY_COOKIE_TOKEN_TYPE,
         session_id=session_id,
         user_id=user_id,
         tenant_id=tenant_id,
+        browser_session_id=browser_session_id,
         minutes=minutes,
     )
 
@@ -161,6 +199,7 @@ def _validate_runtime_token(
     *,
     session_id: CodeSessionRef,
     token_type: str,
+    browser_session_id: str | None = None,
     legacy_session_id: int | None = None,
 ) -> dict[str, Any]:
     try:
@@ -175,29 +214,43 @@ def _validate_runtime_token(
     accepted_session_ids = {str(session_id)}
     if legacy_session_id is not None:
         accepted_session_ids.add(str(legacy_session_id))
-    if payload.get("type") != token_type or str(payload.get("sid") or "") not in accepted_session_ids:
+    if (
+        payload.get("type") != token_type
+        or str(payload.get("sid") or "") not in accepted_session_ids
+        or str(payload.get("bsid") or "") != _normalize_browser_session_id(browser_session_id)
+    ):
         raise HTTPException(status_code=401, detail="Code runtime token invalid")
     return payload
 
 
 def validate_embed_token(
-    token: str, *, session_id: CodeSessionRef, legacy_session_id: int | None = None
+    token: str,
+    *,
+    session_id: CodeSessionRef,
+    browser_session_id: str | None = None,
+    legacy_session_id: int | None = None,
 ) -> dict[str, Any]:
     return _validate_runtime_token(
         token,
         session_id=session_id,
         token_type=_EMBED_TOKEN_TYPE,
+        browser_session_id=browser_session_id,
         legacy_session_id=legacy_session_id,
     )
 
 
 def validate_proxy_cookie_token(
-    token: str, *, session_id: CodeSessionRef, legacy_session_id: int | None = None
+    token: str,
+    *,
+    session_id: CodeSessionRef,
+    browser_session_id: str | None = None,
+    legacy_session_id: int | None = None,
 ) -> dict[str, Any]:
     return _validate_runtime_token(
         token,
         session_id=session_id,
         token_type=_PROXY_COOKIE_TOKEN_TYPE,
+        browser_session_id=browser_session_id,
         legacy_session_id=legacy_session_id,
     )
 

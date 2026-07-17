@@ -309,20 +309,25 @@ def test_code_runtime_proxy_prefix_accepts_public_uuid():
     assert code_runtime_proxy_prefix(public_id) == f"/api/code-runtime/{public_id}"
 
 
-def test_build_embed_url_keeps_runtime_query_and_adds_dolphin_token():
+def test_build_embed_url_removes_runtime_entry_token_and_adds_dolphin_token():
     from app.code_runtime.service import build_embed_url
 
     url = build_embed_url(
         session_id=12,
-        builder_url="https://sandbox.example.com/workspaces/ws-1/builder?token=entry-token&handoffId=handoff-1",
+        builder_url=(
+            "https://sandbox.example.com/workspaces/ws-1/builder"
+            "?token=entry-token&handoffId=handoff-1&tab=#editor"
+        ),
         dolphin_token="embed-token",
     )
 
     assert url == (
         "/api/code-runtime/12/builder/"
-        "?token=entry-token&handoffId=handoff-1"
+        "?handoffId=handoff-1&tab="
         "&externalSessionRail=1&hideHistory=1&hideNewSession=1&dolphin_token=embed-token"
+        "#editor"
     )
+    assert "entry-token" not in url
 
 
 def test_build_embed_url_passes_hide_history_to_embedded_runtime():
@@ -890,7 +895,7 @@ def test_delegated_identity_keeps_non_reserved_username():
     assert headers["X-AI-Builder-Delegated-Username"] == "zhangsan"
 
 
-def test_embed_token_round_trip_is_bound_to_session():
+def test_embed_token_round_trip_is_bound_to_session_and_browser_session():
     from fastapi import HTTPException
     from app.code_runtime.service import (
         create_embed_token,
@@ -899,21 +904,161 @@ def test_embed_token_round_trip_is_bound_to_session():
         validate_proxy_cookie_token,
     )
 
-    token = create_embed_token(session_id=12, user_id=34, tenant_id=56, minutes=1)
+    token = create_embed_token(
+        session_id=12,
+        user_id=34,
+        tenant_id=56,
+        browser_session_id="browser-session-1",
+        minutes=1,
+    )
 
-    payload = validate_embed_token(token, session_id=12)
+    payload = validate_embed_token(
+        token,
+        session_id=12,
+        browser_session_id="browser-session-1",
+    )
     assert payload["sid"] == "12"
     assert payload["sub"] == "34"
     assert payload["tid"] == 56
+    assert payload["bsid"] == "browser-session-1"
 
     with pytest.raises(HTTPException):
-        validate_embed_token(token, session_id=13)
+        validate_embed_token(token, session_id=13, browser_session_id="browser-session-1")
+    with pytest.raises(HTTPException):
+        validate_embed_token(token, session_id=12, browser_session_id="browser-session-2")
 
-    proxy_token = create_proxy_cookie_token(session_id=12, user_id=34, tenant_id=56, minutes=60)
-    assert validate_proxy_cookie_token(proxy_token, session_id=12)["type"] == "code_runtime_proxy"
+    proxy_token = create_proxy_cookie_token(
+        session_id=12,
+        user_id=34,
+        tenant_id=56,
+        browser_session_id="browser-session-1",
+        minutes=60,
+    )
+    assert validate_proxy_cookie_token(
+        proxy_token,
+        session_id=12,
+        browser_session_id="browser-session-1",
+    )["type"] == "code_runtime_proxy"
 
     with pytest.raises(HTTPException):
-        validate_proxy_cookie_token(token, session_id=12)
+        validate_proxy_cookie_token(token, session_id=12, browser_session_id="browser-session-1")
+
+    with pytest.raises(ValueError):
+        create_embed_token(session_id=12, user_id=34, tenant_id=56, browser_session_id="")
+    with pytest.raises(ValueError):
+        create_proxy_cookie_token(
+            session_id=12,
+            user_id=34,
+            tenant_id=56,
+            browser_session_id="x" * 65,
+        )
+
+
+def test_split_entry_token_removes_only_token_and_never_exposes_sensitive_values():
+    from app.code_runtime.sandbox_auth import split_entry_token
+
+    clean_url, entry_token = split_entry_token(
+        "https://sandbox.example.com/workspaces/ws-1/builder"
+        "?handoffId=h1&token=entry-secret&tab=&token=second-secret#editor"
+    )
+
+    assert clean_url == (
+        "https://sandbox.example.com/workspaces/ws-1/builder"
+        "?handoffId=h1&tab=#editor"
+    )
+    assert entry_token == "entry-secret"
+
+    with pytest.raises(ValueError) as exc_info:
+        split_entry_token("https://sandbox.example.com/builder?handoffId=h1")
+    assert "https://" not in str(exc_info.value)
+    assert "h1" not in str(exc_info.value)
+
+
+def test_runtime_cookie_encryption_round_trip_rejects_invalid_ciphertext_without_leaking_value():
+    from app.code_runtime.sandbox_auth import (
+        RUNTIME_COOKIE_NAME,
+        decrypt_runtime_cookie,
+        encrypt_runtime_cookie,
+    )
+
+    encrypted = encrypt_runtime_cookie("runtime-cookie-secret")
+
+    assert RUNTIME_COOKIE_NAME == "apaas_sandbox_token"
+    assert encrypted.startswith("enc:v1:")
+    assert "runtime-cookie-secret" not in encrypted
+    assert decrypt_runtime_cookie(encrypted) == "runtime-cookie-secret"
+
+    with pytest.raises(ValueError) as exc_info:
+        decrypt_runtime_cookie("enc:v1:not-a-valid-fernet-token")
+    assert "not-a-valid-fernet-token" not in str(exc_info.value)
+
+
+@pytest.mark.asyncio
+async def test_bootstrap_runtime_session_uses_entry_token_only_upstream_and_returns_cookie_metadata():
+    import hashlib
+    from datetime import datetime, timezone
+
+    import httpx
+
+    from app.code_runtime.sandbox_auth import bootstrap_runtime_session
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        assert str(request.url) == (
+            "https://sandbox.example.com/workspaces/ws-1/api/status?token=entry-secret"
+        )
+        return httpx.Response(
+            200,
+            headers={
+                "set-cookie": (
+                    "apaas_sandbox_token=runtime-cookie-secret; Max-Age=120; Path=/; HttpOnly"
+                ),
+            },
+        )
+
+    transport = httpx.MockTransport(handler)
+    bootstrap = await bootstrap_runtime_session(
+        "https://sandbox.example.com/workspaces/ws-1/builder?token=entry-secret&handoffId=h1",
+        client_factory=lambda: httpx.AsyncClient(transport=transport),
+    )
+
+    assert bootstrap.clean_builder_url == (
+        "https://sandbox.example.com/workspaces/ws-1/builder?handoffId=h1"
+    )
+    assert bootstrap.runtime_base_url == "https://sandbox.example.com/workspaces/ws-1"
+    assert bootstrap.runtime_cookie == "runtime-cookie-secret"
+    assert bootstrap.runtime_cookie_hash == hashlib.sha256(
+        b"runtime-cookie-secret"
+    ).hexdigest()
+    assert bootstrap.expires_at is not None
+    assert bootstrap.expires_at > datetime.now(timezone.utc)
+    assert "entry-secret" not in repr(bootstrap)
+    assert "runtime-cookie-secret" not in repr(bootstrap)
+
+
+@pytest.mark.asyncio
+async def test_bootstrap_runtime_session_classifies_only_stable_launch_auth_errors_without_secret_leaks():
+    import httpx
+    from fastapi import HTTPException
+
+    from app.code_runtime.sandbox_auth import bootstrap_runtime_session
+
+    def handler(_request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            401,
+            headers={"X-APAAS-Sandbox-Auth-Error": "sandbox_launch_token_expired"},
+        )
+
+    with pytest.raises(HTTPException) as exc_info:
+        await bootstrap_runtime_session(
+            "https://sandbox.example.com/workspaces/ws-1/builder?token=entry-secret",
+            client_factory=lambda: httpx.AsyncClient(transport=httpx.MockTransport(handler)),
+        )
+
+    assert exc_info.value.status_code == 401
+    assert exc_info.value.headers == {
+        "X-APAAS-Sandbox-Auth-Error": "sandbox_launch_token_expired"
+    }
+    assert "entry-secret" not in str(exc_info.value.detail)
 
 
 def test_legacy_code_session_public_id_is_stable_across_concurrent_loads():
