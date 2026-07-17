@@ -11,6 +11,12 @@ from app.models import Application
 from app.models.ai_chat import AIChatSession, CodeRuntimeAgentSession, CodeRuntimeBinding
 
 
+def _runtime_service_session_enc() -> str:
+    from app.code_runtime.sandbox_auth import encrypt_runtime_cookie
+
+    return encrypt_runtime_cookie("test-runtime-cookie")
+
+
 def _ctx(user_id: int = 11, tenant_id: int = 7, role: str = "member"):
     return SimpleNamespace(user=SimpleNamespace(id=user_id), tenant_id=tenant_id, tenant_role=role)
 
@@ -288,7 +294,7 @@ async def test_browser_runtime_request_prefers_runtime_cookie_over_entry_token(m
 
 
 @pytest.mark.asyncio
-async def test_browser_runtime_request_uses_entry_token_without_runtime_cookie(monkeypatch):
+async def test_browser_runtime_request_never_uses_entry_token_without_runtime_cookie(monkeypatch):
     import httpx
     import app.routes.code_runtime as code_runtime_routes
     from starlette.datastructures import Headers
@@ -306,7 +312,7 @@ async def test_browser_runtime_request_uses_entry_token_without_runtime_cookie(m
     }))
 
     def handler(upstream: httpx.Request) -> httpx.Response:
-        assert upstream.headers["authorization"] == "Bearer entry-token"
+        assert "authorization" not in upstream.headers
         assert "cookie" not in upstream.headers
         return httpx.Response(200, json={"sessions": []})
 
@@ -330,22 +336,22 @@ async def test_browser_runtime_request_uses_entry_token_without_runtime_cookie(m
 
 
 @pytest.mark.asyncio
-async def test_server_runtime_request_uses_runtime_entry_token(monkeypatch):
+async def test_server_runtime_request_uses_encrypted_runtime_service_cookie(monkeypatch):
     import httpx
     import app.routes.code_runtime as code_runtime_routes
+    from app.code_runtime.sandbox_auth import encrypt_runtime_cookie
     from app.routes.code_runtime import _runtime_json_request
 
     binding = CodeRuntimeBinding(
         session_id=12,
         runtime_base_url="https://runtime.example.com/workspaces/ws-1",
-        builder_url=(
-            "https://runtime.example.com/workspaces/ws-1/builder"
-            "?tab=spec&token=entry-token&externalSessionRail=1"
-        ),
+        builder_url="https://runtime.example.com/workspaces/ws-1/builder?tab=spec",
+        runtime_service_session_enc=encrypt_runtime_cookie("runtime-cookie-secret"),
     )
 
     def handler(upstream: httpx.Request) -> httpx.Response:
-        assert upstream.headers["authorization"] == "Bearer entry-token"
+        assert "authorization" not in upstream.headers
+        assert upstream.headers["cookie"] == "apaas_sandbox_token=runtime-cookie-secret"
         return httpx.Response(200, json={"sessions": []})
 
     transport = httpx.MockTransport(handler)
@@ -362,7 +368,7 @@ async def test_server_runtime_request_uses_runtime_entry_token(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_server_runtime_request_refreshes_binding_once_after_unauthorized(monkeypatch):
+async def test_server_runtime_request_refreshes_binding_once_after_stable_runtime_unauthorized(monkeypatch):
     from fastapi import HTTPException
     import app.routes.code_runtime as code_runtime_routes
 
@@ -381,15 +387,17 @@ async def test_server_runtime_request_refreshes_binding_once_after_unauthorized(
     async def fake_runtime_request(current_binding, method, path, **kwargs):
         calls.append(str(current_binding.builder_url))
         if len(calls) == 1:
-            raise HTTPException(status_code=401, detail="entry token expired")
+            raise HTTPException(
+                status_code=401,
+                detail="Runtime session expired",
+                headers={"X-APAAS-Sandbox-Auth-Error": "sandbox_session_expired"},
+            )
         return {"sessions": []}
 
     async def fake_refresh(session_arg, binding_arg, request_arg, ctx_arg, db_arg):
         assert session_arg is session
         assert binding_arg is binding
-        binding_arg.builder_url = (
-            "https://runtime.example.com/workspaces/ws-1/builder?token=fresh-token"
-        )
+        binding_arg.runtime_service_session_enc = "enc:v1:fresh-cookie"
 
     monkeypatch.setattr(code_runtime_routes, "_runtime_json_request", fake_runtime_request)
     monkeypatch.setattr(code_runtime_routes, "_refresh_runtime_binding", fake_refresh)
@@ -407,8 +415,46 @@ async def test_server_runtime_request_refreshes_binding_once_after_unauthorized(
     assert result == {"sessions": []}
     assert calls == [
         "https://runtime.example.com/workspaces/ws-1/builder?token=stale-token",
-        "https://runtime.example.com/workspaces/ws-1/builder?token=fresh-token",
+        "https://runtime.example.com/workspaces/ws-1/builder?token=stale-token",
     ]
+
+
+@pytest.mark.asyncio
+async def test_server_runtime_request_does_not_refresh_for_unknown_unauthorized(monkeypatch):
+    from fastapi import HTTPException
+    import app.routes.code_runtime as code_runtime_routes
+
+    session = SimpleNamespace(id=12, app_id=None, external_application_id="code-app-1")
+    binding = CodeRuntimeBinding(
+        session_id=12,
+        runtime_base_url="https://runtime.example.com/workspaces/ws-1",
+        builder_url="https://runtime.example.com/workspaces/ws-1/builder",
+    )
+    refreshes = 0
+
+    async def fake_runtime_request(*_args, **_kwargs):
+        raise HTTPException(status_code=401, detail="unknown unauthorized")
+
+    async def fake_refresh(*_args, **_kwargs):
+        nonlocal refreshes
+        refreshes += 1
+
+    monkeypatch.setattr(code_runtime_routes, "_runtime_json_request", fake_runtime_request)
+    monkeypatch.setattr(code_runtime_routes, "_refresh_runtime_binding", fake_refresh)
+
+    with pytest.raises(HTTPException) as exc_info:
+        await code_runtime_routes._runtime_json_request_for_session(
+            session,
+            binding,
+            "GET",
+            "/api/agent/sessions",
+            request=_request(),
+            ctx=_ctx(),
+            db=SimpleNamespace(),
+        )
+
+    assert exc_info.value.status_code == 401
+    assert refreshes == 0
 
 
 @pytest.mark.asyncio
@@ -722,6 +768,53 @@ async def test_open_local_code_runtime_session_does_not_require_control_plane_au
 
 
 @pytest.mark.asyncio
+async def test_open_code_runtime_session_rolls_back_and_does_not_return_canary_on_commit_failure(
+    monkeypatch,
+):
+    from fastapi import HTTPException
+
+    import app.routes.code_runtime as code_runtime_routes
+    from app.routes.code_runtime import open_code_runtime_session
+
+    session = SimpleNamespace(
+        app_id=None,
+        external_application_id="local-code-smoke",
+    )
+    db = SimpleNamespace()
+    rollbacks = 0
+
+    async def fake_resolve(*_args, **_kwargs):
+        return session
+
+    async def fake_open_code_session(*_args, **_kwargs):
+        return {"canary": "must-not-return"}
+
+    async def fail_commit():
+        raise RuntimeError("commit failed")
+
+    async def fake_rollback():
+        nonlocal rollbacks
+        rollbacks += 1
+
+    db.commit = fail_commit
+    db.rollback = fake_rollback
+    monkeypatch.setattr(code_runtime_routes, "resolve_code_session", fake_resolve)
+    monkeypatch.setattr(code_runtime_routes, "open_code_session", fake_open_code_session)
+
+    with pytest.raises(HTTPException) as exc_info:
+        await open_code_runtime_session(
+            "session-1",
+            _request(),
+            _ctx(),
+            db,
+        )
+
+    assert exc_info.value.status_code == 500
+    assert rollbacks == 1
+    assert "canary" not in str(exc_info.value.detail)
+
+
+@pytest.mark.asyncio
 async def test_code_runtime_proxy_aligns_current_requests_to_bound_runtime_session(monkeypatch):
     import httpx
     import app.routes.code_runtime as code_runtime_routes
@@ -731,6 +824,7 @@ async def test_code_runtime_proxy_aligns_current_requests_to_bound_runtime_sessi
         session_id=14,
         runtime_base_url="http://runtime.local/shared",
         runtime_session_id="runtime-demo",
+        runtime_service_session_enc=_runtime_service_session_enc(),
     )
     seen: list[tuple[str, str]] = []
 
@@ -1156,6 +1250,7 @@ async def test_list_code_runtime_rail_history_returns_opened_app_agent_sessions(
         external_application_id="crm",
         runtime_base_url="http://runtime.local/workspaces/crm",
         builder_url="http://runtime.local/workspaces/crm/builder",
+        runtime_service_session_enc=_runtime_service_session_enc(),
         runtime_session_id="runtime-1",
         status="ready",
     ))
@@ -1441,6 +1536,7 @@ async def test_list_code_runtime_rail_history_includes_current_empty_session_pla
         external_application_id="crm",
         runtime_base_url="http://runtime.local/workspaces/crm",
         builder_url="http://runtime.local/workspaces/crm/builder",
+        runtime_service_session_enc=_runtime_service_session_enc(),
         runtime_session_id="runtime-new-empty",
         status="ready",
     ))
@@ -1515,6 +1611,7 @@ async def test_list_code_runtime_rail_history_uses_current_session_detail_when_l
         external_application_id="crm",
         runtime_base_url="http://runtime.local/workspaces/crm",
         builder_url="http://runtime.local/workspaces/crm/builder",
+        runtime_service_session_enc=_runtime_service_session_enc(),
         runtime_session_id="runtime-new-title",
         status="ready",
     ))
@@ -1597,6 +1694,7 @@ async def test_activate_code_runtime_agent_session_proxies_to_runtime_and_update
         external_application_id="crm",
         runtime_base_url="http://runtime.local/workspaces/crm",
         builder_url="http://runtime.local/workspaces/crm/builder",
+        runtime_service_session_enc=_runtime_service_session_enc(),
         runtime_session_id="runtime-1",
         status="ready",
     ))
@@ -1671,6 +1769,7 @@ async def test_create_code_runtime_agent_session_proxies_to_runtime_and_updates_
         external_application_id="crm",
         runtime_base_url="http://runtime.local/workspaces/crm",
         builder_url="http://runtime.local/workspaces/crm/builder",
+        runtime_service_session_enc=_runtime_service_session_enc(),
         runtime_session_id="runtime-1",
         status="ready",
     ))

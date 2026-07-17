@@ -34,6 +34,10 @@ from app.code_runtime.auth import (
     refresh_control_plane_token,
     store_control_plane_credentials,
 )
+from app.code_runtime.sandbox_auth import (
+    RUNTIME_AUTH_ERROR_HEADER,
+    decrypt_runtime_cookie,
+)
 from app.config import settings
 from app.database import get_db
 from app.deps import AuthContext, get_auth_context
@@ -301,7 +305,11 @@ async def open_code_runtime_session(
         authorization_header=authorization,
         auth_provider=auth_provider,
     )
-    await db.commit()
+    try:
+        await db.commit()
+    except Exception as exc:
+        await db.rollback()
+        raise HTTPException(status_code=500, detail="Code runtime session open failed") from exc
     return result
 
 
@@ -315,9 +323,11 @@ async def _runtime_json_request(
 ) -> Any:
     target = f"{binding.runtime_base_url.rstrip('/')}/{path.lstrip('/')}"
     headers = {"accept": "application/json"}
-    runtime_token = _runtime_entry_token(binding)
-    if runtime_token:
-        headers["authorization"] = f"Bearer {runtime_token}"
+    try:
+        runtime_cookie = decrypt_runtime_cookie(binding.runtime_service_session_enc or "")
+    except ValueError as exc:
+        raise HTTPException(status_code=503, detail="Code runtime session unavailable") from exc
+    headers["cookie"] = f"apaas_sandbox_token={runtime_cookie}"
     if json_body is not None:
         headers["content-type"] = "application/json"
     try:
@@ -326,7 +336,13 @@ async def _runtime_json_request(
     except httpx.RequestError as exc:
         raise HTTPException(status_code=503, detail="Code runtime 暂时不可用") from exc
     if response.status_code >= 400:
-        raise HTTPException(status_code=response.status_code, detail=response.text[:500] or "Code runtime request failed")
+        auth_error = str(response.headers.get(RUNTIME_AUTH_ERROR_HEADER) or "").strip()
+        response_headers = {RUNTIME_AUTH_ERROR_HEADER: auth_error} if auth_error else None
+        raise HTTPException(
+            status_code=response.status_code,
+            detail=response.text[:500] or "Code runtime request failed",
+            headers=response_headers,
+        )
     if not response.content:
         return {}
     try:
@@ -381,7 +397,11 @@ async def _runtime_json_request_for_session(
             timeout=timeout,
         )
     except HTTPException as exc:
-        if exc.status_code != 401:
+        if not (
+            exc.status_code == 401
+            and (exc.headers or {}).get(RUNTIME_AUTH_ERROR_HEADER)
+            in {"sandbox_session_expired", "sandbox_session_invalid"}
+        ):
             raise
     await _refresh_runtime_binding(session, binding, request, ctx, db)
     return await _runtime_json_request(
@@ -861,16 +881,6 @@ def _copyable_request_headers(request: Request, session_id: CodeSessionRef) -> d
     return copied
 
 
-def _runtime_entry_token(binding: CodeRuntimeBinding) -> str | None:
-    query = urlsplit(str(binding.builder_url or "")).query
-    for key, value in parse_qsl(query, keep_blank_values=False):
-        if key == "token":
-            token = str(value or "").strip()
-            if token:
-                return token
-    return None
-
-
 def _cookie_header_has_value(cookie_header: str, cookie_name: str) -> bool:
     for part in str(cookie_header or "").split(";"):
         item = part.strip()
@@ -891,21 +901,6 @@ def _runtime_request_headers(
 ) -> dict[str, str]:
     headers = _copyable_request_headers(request, session_id)
     headers.pop("authorization", None)
-    has_runtime_cookie = _cookie_header_has_value(
-        headers.get("cookie", ""),
-        "apaas_sandbox_token",
-    )
-    has_query_token = False
-    if allow_query_token:
-        raw_query = _request_raw_query_string(request).decode("utf-8", "ignore")
-        has_query_token = any(
-            key == "token" and bool(str(value or "").strip())
-            for key, value in parse_qsl(raw_query, keep_blank_values=False)
-        )
-    if not has_runtime_cookie and not has_query_token:
-        runtime_token = _runtime_entry_token(binding)
-        if runtime_token:
-            headers["authorization"] = f"Bearer {runtime_token}"
     return headers
 
 
@@ -1358,6 +1353,7 @@ async def _authorize_proxy_request(
             session_id=session_id,
             user_id=int(payload["sub"]),
             tenant_id=int(payload["tid"]),
+            browser_session_id=str(payload["bsid"]),
         )
         redirect = RedirectResponse(
             _redirect_target_without_dolphin_token(

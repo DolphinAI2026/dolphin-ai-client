@@ -2,13 +2,33 @@ from __future__ import annotations
 
 import base64
 from types import SimpleNamespace
+from urllib.parse import parse_qsl, urlsplit
 
 import pytest
+from fastapi import HTTPException
 from sqlalchemy import inspect as sa_inspect
 from sqlalchemy.ext.asyncio import create_async_engine
 
 from app.models import Application
 from app.models.ai_chat import AIChatSession
+
+
+@pytest.fixture(autouse=True)
+def _stub_service_runtime_bootstrap(monkeypatch):
+    from app.code_runtime import service
+    from app.code_runtime.sandbox_auth import RuntimeBootstrap, split_entry_token
+
+    async def fake_bootstrap(builder_url: str):
+        clean_builder_url, _entry_token = split_entry_token(builder_url)
+        return RuntimeBootstrap(
+            clean_builder_url=clean_builder_url,
+            runtime_base_url=service.derive_runtime_base_url(clean_builder_url),
+            runtime_cookie="test-runtime-cookie",
+            runtime_cookie_hash="c" * 64,
+            expires_at=None,
+        )
+
+    monkeypatch.setattr(service, "bootstrap_runtime_session", fake_bootstrap)
 
 
 def test_code_runtime_binding_model_is_registered():
@@ -1143,6 +1163,246 @@ async def test_open_code_session_upserts_runtime_binding(db_session):
     assert binding.workspace_id == "93001"
     assert binding.sandbox_instance_id == "sandbox-93001"
     assert binding.runtime_base_url == "https://sandbox.example.com/workspaces/93001"
+
+
+@pytest.mark.asyncio
+async def test_open_code_session_bootstraps_token_free_binding_and_new_browser_session(
+    db_session,
+    monkeypatch,
+):
+    from datetime import datetime, timedelta, timezone
+
+    from sqlalchemy import select
+
+    from app.code_runtime import service
+    from app.code_runtime.sandbox_auth import (
+        RuntimeBootstrap,
+        decrypt_runtime_cookie,
+    )
+    from app.code_runtime.service import open_code_session, validate_embed_token
+    from app.models.ai_chat import CodeRuntimeBinding, CodeRuntimeBrowserSession
+
+    session = AIChatSession(
+        tenant_id=7,
+        user_id=11,
+        external_application_id="code-app-1",
+        title="客户门户 Code",
+        mode="code",
+        status="active",
+    )
+    db_session.add(session)
+    await db_session.commit()
+
+    bootstrap_urls: list[str] = []
+
+    async def fake_bootstrap(builder_url: str):
+        bootstrap_urls.append(builder_url)
+        return RuntimeBootstrap(
+            clean_builder_url=(
+                "https://sandbox.example.com/workspaces/ws-1/builder?handoffId=h1"
+            ),
+            runtime_base_url="https://sandbox.example.com/workspaces/ws-1",
+            runtime_cookie="runtime-cookie-secret",
+            runtime_cookie_hash="a" * 64,
+            expires_at=datetime.now(timezone.utc) + timedelta(minutes=30),
+        )
+
+    async def fake_open(_external_application_id: str, _handoff_id: str | None = None):
+        return {
+            "workspaceId": "ws-1",
+            "sandboxInstanceId": "sandbox-1",
+            "specReviewUrl": (
+                "https://sandbox.example.com/workspaces/ws-1/builder"
+                "?token=entry-secret&handoffId=h1"
+            ),
+        }
+
+    monkeypatch.setattr(service, "bootstrap_runtime_session", fake_bootstrap)
+    ctx = SimpleNamespace(user=SimpleNamespace(id=11), tenant_id=7, tenant_role="member")
+    first = await open_code_session(
+        db=db_session,
+        session_id=session.id,
+        ctx=ctx,
+        workspace_open=fake_open,
+    )
+    await db_session.commit()
+    second = await open_code_session(
+        db=db_session,
+        session_id=session.id,
+        ctx=ctx,
+        workspace_open=fake_open,
+    )
+    await db_session.commit()
+
+    binding = (
+        await db_session.execute(
+            select(CodeRuntimeBinding).where(CodeRuntimeBinding.session_id == session.id)
+        )
+    ).scalar_one()
+    browser_rows = (
+        await db_session.execute(
+            select(CodeRuntimeBrowserSession)
+            .where(CodeRuntimeBrowserSession.binding_id == binding.id)
+            .order_by(CodeRuntimeBrowserSession.generation)
+        )
+    ).scalars().all()
+
+    assert bootstrap_urls == [
+        "https://sandbox.example.com/workspaces/ws-1/builder?token=entry-secret&handoffId=h1",
+        "https://sandbox.example.com/workspaces/ws-1/builder?token=entry-secret&handoffId=h1",
+    ]
+    assert binding.builder_url == (
+        "https://sandbox.example.com/workspaces/ws-1/builder?handoffId=h1"
+    )
+    assert "entry-secret" not in binding.builder_url
+    assert decrypt_runtime_cookie(binding.runtime_service_session_enc) == "runtime-cookie-secret"
+    assert binding.auth_generation == 2
+    assert len(browser_rows) == 2
+    assert len({row.browser_session_id for row in browser_rows}) == 2
+    assert all(0 < len(row.browser_session_id) <= 64 for row in browser_rows)
+    assert all(
+        decrypt_runtime_cookie(row.runtime_session_cookie_enc) == "runtime-cookie-secret"
+        for row in browser_rows
+    )
+    assert [row.runtime_session_hash for row in browser_rows] == ["a" * 64, "a" * 64]
+    assert [row.generation for row in browser_rows] == [1, 2]
+    assert "entry-secret" not in first["embed_url"]
+    assert "runtime-cookie-secret" not in first["embed_url"]
+    first_token = dict(parse_qsl(urlsplit(first["embed_url"]).query))["dolphin_token"]
+    validate_embed_token(
+        first_token,
+        session_id=session.public_id,
+        browser_session_id=browser_rows[0].browser_session_id,
+    )
+    with pytest.raises(HTTPException):
+        validate_embed_token(
+            first_token,
+            session_id=session.public_id,
+            browser_session_id=browser_rows[1].browser_session_id,
+        )
+    assert "entry-secret" not in repr(first)
+    assert "runtime-cookie-secret" not in repr(second)
+
+
+@pytest.mark.asyncio
+async def test_open_code_session_retries_workspace_bootstrap_once_for_expired_launch_token(
+    db_session,
+    monkeypatch,
+):
+    from app.code_runtime import service
+    from app.code_runtime.sandbox_auth import RuntimeBootstrap
+    from app.code_runtime.service import open_code_session
+
+    session = AIChatSession(
+        tenant_id=7,
+        user_id=11,
+        external_application_id="code-app-1",
+        title="客户门户 Code",
+        mode="code",
+        status="active",
+    )
+    db_session.add(session)
+    await db_session.commit()
+    opens = 0
+    bootstraps = 0
+
+    async def fake_open(_external_application_id: str, _handoff_id: str | None = None):
+        nonlocal opens
+        opens += 1
+        return {
+            "workspaceId": f"ws-{opens}",
+            "specReviewUrl": (
+                f"https://sandbox.example.com/workspaces/ws-{opens}/builder?token=entry-{opens}"
+            ),
+        }
+
+    async def fake_bootstrap(builder_url: str):
+        nonlocal bootstraps
+        bootstraps += 1
+        if bootstraps == 1:
+            raise HTTPException(
+                status_code=401,
+                detail="Runtime launch authorization expired",
+                headers={"X-APAAS-Sandbox-Auth-Error": "sandbox_launch_token_expired"},
+            )
+        return RuntimeBootstrap(
+            clean_builder_url="https://sandbox.example.com/workspaces/ws-2/builder",
+            runtime_base_url="https://sandbox.example.com/workspaces/ws-2",
+            runtime_cookie="runtime-cookie",
+            runtime_cookie_hash="b" * 64,
+            expires_at=None,
+        )
+
+    monkeypatch.setattr(service, "bootstrap_runtime_session", fake_bootstrap)
+    result = await open_code_session(
+        db=db_session,
+        session_id=session.id,
+        ctx=SimpleNamespace(user=SimpleNamespace(id=11), tenant_id=7, tenant_role="member"),
+        workspace_open=fake_open,
+    )
+
+    assert opens == 2
+    assert bootstraps == 2
+    assert "entry-2" not in result["embed_url"]
+
+
+@pytest.mark.asyncio
+async def test_open_code_session_does_not_retry_invalid_launch_token(
+    db_session,
+    monkeypatch,
+):
+    from app.code_runtime import service
+    from app.code_runtime.service import open_code_session
+
+    session = AIChatSession(
+        tenant_id=7,
+        user_id=11,
+        external_application_id="code-app-1",
+        title="客户门户 Code",
+        mode="code",
+        status="active",
+    )
+    db_session.add(session)
+    await db_session.commit()
+    opens = 0
+    bootstraps = 0
+    canary = "invalid-launch-token-canary"
+
+    async def fake_open(_external_application_id: str, _handoff_id: str | None = None):
+        nonlocal opens
+        opens += 1
+        return {
+            "workspaceId": "ws-1",
+            "specReviewUrl": (
+                f"https://sandbox.example.com/workspaces/ws-1/builder?token={canary}"
+            ),
+        }
+
+    async def fake_bootstrap(_builder_url: str):
+        nonlocal bootstraps
+        bootstraps += 1
+        raise HTTPException(
+            status_code=401,
+            detail="Runtime launch authorization invalid",
+            headers={
+                "X-APAAS-Sandbox-Auth-Error": "sandbox_launch_token_invalid",
+            },
+        )
+
+    monkeypatch.setattr(service, "bootstrap_runtime_session", fake_bootstrap)
+
+    with pytest.raises(HTTPException) as exc_info:
+        await open_code_session(
+            db=db_session,
+            session_id=session.id,
+            ctx=SimpleNamespace(user=SimpleNamespace(id=11), tenant_id=7, tenant_role="member"),
+            workspace_open=fake_open,
+        )
+
+    assert opens == 1
+    assert bootstraps == 1
+    assert canary not in str(exc_info.value)
+    assert canary not in str(exc_info.value.detail)
 
 
 @pytest.mark.asyncio

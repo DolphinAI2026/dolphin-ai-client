@@ -15,7 +15,7 @@ from app.crypto import decrypt_password, encrypt_password
 
 RUNTIME_COOKIE_NAME = "apaas_sandbox_token"
 _ENCRYPTED_COOKIE_PREFIX = "enc:v1:"
-_RUNTIME_AUTH_ERROR_HEADER = "X-APAAS-Sandbox-Auth-Error"
+RUNTIME_AUTH_ERROR_HEADER = "X-APAAS-Sandbox-Auth-Error"
 _LAUNCH_AUTH_ERRORS = {
     "sandbox_launch_token_expired",
     "sandbox_launch_token_invalid",
@@ -142,7 +142,7 @@ async def bootstrap_runtime_session(
         raise HTTPException(status_code=503, detail="Runtime bootstrap unavailable") from None
 
     if response.status_code == 401:
-        auth_error = str(response.headers.get(_RUNTIME_AUTH_ERROR_HEADER) or "").strip()
+        auth_error = str(response.headers.get(RUNTIME_AUTH_ERROR_HEADER) or "").strip()
         if auth_error in _LAUNCH_AUTH_ERRORS:
             raise HTTPException(
                 status_code=401,
@@ -151,7 +151,7 @@ async def bootstrap_runtime_session(
                     if auth_error.endswith("_expired")
                     else "Runtime launch authorization invalid"
                 ),
-                headers={_RUNTIME_AUTH_ERROR_HEADER: auth_error},
+                headers={RUNTIME_AUTH_ERROR_HEADER: auth_error},
             )
     if response.status_code >= 400:
         raise HTTPException(status_code=response.status_code, detail="Runtime bootstrap failed")

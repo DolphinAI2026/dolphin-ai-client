@@ -3,6 +3,7 @@ from __future__ import annotations
 import os
 import base64
 import re
+import secrets
 from datetime import datetime, timedelta, timezone
 from typing import Any, Awaitable, Callable
 from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
@@ -15,10 +16,20 @@ from sqlalchemy import or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import settings
-from app.code_runtime.sandbox_auth import split_entry_token
+from app.code_runtime.sandbox_auth import (
+    RUNTIME_AUTH_ERROR_HEADER,
+    bootstrap_runtime_session,
+    encrypt_runtime_cookie,
+    split_entry_token,
+)
 from app.models import Application, Project, ProjectMember
 from app.models.collaboration import ApplicationMember
-from app.models.ai_chat import AIChatSession, CodeRuntimeAgentSession, CodeRuntimeBinding
+from app.models.ai_chat import (
+    AIChatSession,
+    CodeRuntimeAgentSession,
+    CodeRuntimeBinding,
+    CodeRuntimeBrowserSession,
+)
 
 WorkspaceOpen = Callable[[str, str | None], Awaitable[dict[str, Any]]]
 
@@ -214,10 +225,18 @@ def _validate_runtime_token(
     accepted_session_ids = {str(session_id)}
     if legacy_session_id is not None:
         accepted_session_ids.add(str(legacy_session_id))
+    expected_browser_session_id = (
+        _normalize_browser_session_id(browser_session_id)
+        if browser_session_id is not None
+        else None
+    )
     if (
         payload.get("type") != token_type
         or str(payload.get("sid") or "") not in accepted_session_ids
-        or str(payload.get("bsid") or "") != _normalize_browser_session_id(browser_session_id)
+        or (
+            expected_browser_session_id is not None
+            and str(payload.get("bsid") or "") != expected_browser_session_id
+        )
     ):
         raise HTTPException(status_code=401, detail="Code runtime token invalid")
     return payload
@@ -728,10 +747,10 @@ async def open_code_session(
     if not external_app_id:
         raise HTTPException(status_code=400, detail="Code 会话未绑定应用")
 
-    if workspace_open is not None:
-        opened = await workspace_open(external_app_id, handoff_id)
-    else:
-        opened = await default_workspace_open(
+    async def workspace_open_once() -> dict[str, Any]:
+        if workspace_open is not None:
+            return await workspace_open(external_app_id, handoff_id)
+        return await default_workspace_open(
             external_app_id,
             handoff_id,
             authorization_header=authorization_header,
@@ -739,10 +758,34 @@ async def open_code_session(
             shell_session_id=session.id,
             auth_provider=auth_provider,
         )
+
+    opened = await workspace_open_once()
     builder_url = str(opened.get("specReviewUrl") or opened.get("builderUrl") or "").strip()
     if not builder_url:
         raise HTTPException(status_code=502, detail="Code Control Plane 未返回 builder URL")
-    runtime_base_url = derive_runtime_base_url(builder_url)
+
+    bootstrap = None
+    if is_local_code_application_id(external_app_id):
+        clean_builder_url = builder_url
+        runtime_base_url = derive_runtime_base_url(builder_url)
+    else:
+        try:
+            bootstrap = await bootstrap_runtime_session(builder_url)
+        except HTTPException as exc:
+            if not (
+                exc.status_code == 401
+                and (exc.headers or {}).get(RUNTIME_AUTH_ERROR_HEADER)
+                == "sandbox_launch_token_expired"
+            ):
+                raise
+            opened = await workspace_open_once()
+            builder_url = str(opened.get("specReviewUrl") or opened.get("builderUrl") or "").strip()
+            if not builder_url:
+                raise HTTPException(status_code=502, detail="Code Control Plane 未返回 builder URL")
+            bootstrap = await bootstrap_runtime_session(builder_url)
+        clean_builder_url = bootstrap.clean_builder_url
+        runtime_base_url = bootstrap.runtime_base_url
+
     runtime_session_id = (
         opened.get("runtimeSessionId")
         or (opened.get("session") or {}).get("runtimeSessionId")
@@ -752,6 +795,7 @@ async def open_code_session(
     binding = (
         await db.execute(select(CodeRuntimeBinding).where(CodeRuntimeBinding.session_id == session.id))
     ).scalar_one_or_none()
+    is_new_binding = binding is None
     if not binding:
         binding = CodeRuntimeBinding(
             tenant_id=session.tenant_id,
@@ -760,7 +804,7 @@ async def open_code_session(
             session_id=session.id,
             external_application_id=external_app_id,
             runtime_base_url=runtime_base_url,
-            builder_url=builder_url,
+            builder_url=clean_builder_url,
         )
         db.add(binding)
 
@@ -769,7 +813,7 @@ async def open_code_session(
     binding.app_id = int(session.app_id) if session.app_id else None
     binding.external_application_id = external_app_id
     binding.runtime_base_url = runtime_base_url
-    binding.builder_url = builder_url
+    binding.builder_url = clean_builder_url
     binding.workspace_id = opened.get("workspaceId") or binding.workspace_id
     binding.sandbox_instance_id = opened.get("sandboxInstanceId") or binding.sandbox_instance_id
     if runtime_session_id:
@@ -791,8 +835,28 @@ async def open_code_session(
     binding.last_error = None
     await db.flush()
 
+    browser_session_id = None
+    if bootstrap is not None:
+        binding.runtime_service_session_enc = encrypt_runtime_cookie(bootstrap.runtime_cookie)
+        binding.auth_generation = 1 if is_new_binding else int(binding.auth_generation or 0) + 1
+        browser_session_id = secrets.token_urlsafe(32)
+        db.add(CodeRuntimeBrowserSession(
+            binding_id=binding.id,
+            browser_session_id=browser_session_id,
+            runtime_session_cookie_enc=encrypt_runtime_cookie(bootstrap.runtime_cookie),
+            runtime_session_hash=bootstrap.runtime_cookie_hash,
+            runtime_session_expires_at=bootstrap.expires_at,
+            generation=binding.auth_generation,
+        ))
+        await db.flush()
+
     public_id = ensure_code_session_public_id(session)
-    token = embed_token_factory(session_id=public_id, user_id=session.user_id, tenant_id=session.tenant_id)
+    token = embed_token_factory(
+        session_id=public_id,
+        user_id=session.user_id,
+        tenant_id=session.tenant_id,
+        browser_session_id=browser_session_id,
+    )
     return {
         "session_id": public_id,
         "app_id": session.app_id,
@@ -801,5 +865,5 @@ async def open_code_session(
         "sandbox_instance_id": binding.sandbox_instance_id,
         "runtime_session_id": binding.runtime_session_id,
         "external_base_path": code_runtime_proxy_prefix(public_id),
-        "embed_url": build_embed_url(public_id, builder_url, token),
+        "embed_url": build_embed_url(public_id, clean_builder_url, token),
     }
