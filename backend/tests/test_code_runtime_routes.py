@@ -368,6 +368,43 @@ async def test_server_runtime_request_uses_encrypted_runtime_service_cookie(monk
 
 
 @pytest.mark.asyncio
+async def test_server_runtime_request_without_service_cookie_forwards_local_json_request(
+    monkeypatch,
+):
+    import httpx
+    import app.routes.code_runtime as code_runtime_routes
+    from app.routes.code_runtime import _runtime_json_request
+
+    binding = CodeRuntimeBinding(
+        session_id=12,
+        runtime_base_url="http://127.0.0.1:8100/workspaces/ws-1",
+        builder_url="http://127.0.0.1:8100/workspaces/ws-1/builder",
+    )
+
+    def handler(upstream: httpx.Request) -> httpx.Response:
+        assert "cookie" not in upstream.headers
+        assert json.loads(upstream.content) == {"prompt": "hello"}
+        return httpx.Response(200, json={"ok": True})
+
+    transport = httpx.MockTransport(handler)
+    original = code_runtime_routes.httpx.AsyncClient
+    monkeypatch.setattr(
+        code_runtime_routes.httpx,
+        "AsyncClient",
+        lambda **kwargs: original(transport=transport, **kwargs),
+    )
+
+    result = await _runtime_json_request(
+        binding,
+        "POST",
+        "/api/agent/sessions",
+        json_body={"prompt": "hello"},
+    )
+
+    assert result == {"ok": True}
+
+
+@pytest.mark.asyncio
 async def test_server_runtime_request_refreshes_binding_once_after_stable_runtime_unauthorized(monkeypatch):
     from fastapi import HTTPException
     import app.routes.code_runtime as code_runtime_routes

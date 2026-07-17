@@ -323,11 +323,12 @@ async def _runtime_json_request(
 ) -> Any:
     target = f"{binding.runtime_base_url.rstrip('/')}/{path.lstrip('/')}"
     headers = {"accept": "application/json"}
-    try:
-        runtime_cookie = decrypt_runtime_cookie(binding.runtime_service_session_enc or "")
-    except ValueError as exc:
-        raise HTTPException(status_code=503, detail="Code runtime session unavailable") from exc
-    headers["cookie"] = f"apaas_sandbox_token={runtime_cookie}"
+    if binding.runtime_service_session_enc:
+        try:
+            runtime_cookie = decrypt_runtime_cookie(binding.runtime_service_session_enc)
+        except ValueError as exc:
+            raise HTTPException(status_code=503, detail="Code runtime session unavailable") from exc
+        headers["cookie"] = f"apaas_sandbox_token={runtime_cookie}"
     if json_body is not None:
         headers["content-type"] = "application/json"
     try:
