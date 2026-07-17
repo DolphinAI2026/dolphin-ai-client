@@ -3046,3 +3046,77 @@ async def test_sse_response_does_not_start_before_recoverable_auth_renewal(
         for event in events
     )
     assert attempts == 2
+
+
+@pytest.mark.asyncio
+async def test_buffered_proxy_closes_upstream_when_body_read_fails(
+    db_session,
+    monkeypatch,
+):
+    import httpx
+    import app.routes.code_runtime as code_runtime_routes
+    from app.code_runtime.service import create_proxy_cookie_token
+    from app.routes.code_runtime import proxy_code_runtime
+
+    class FailingStream(httpx.AsyncByteStream):
+        def __init__(self):
+            self.closed = False
+
+        async def __aiter__(self):
+            raise httpx.ReadError("upstream disconnected")
+            yield b""
+
+        async def aclose(self):
+            self.closed = True
+
+    session, _binding, _rows = await _seed_browser_runtime(db_session)
+    proxy_token = create_proxy_cookie_token(
+        session_id=session.public_id,
+        user_id=11,
+        tenant_id=7,
+        browser_session_id="browser-a",
+    )
+    request = _proxy_request(
+        session.public_id,
+        cookie=f"dolphin_code_runtime_{session.public_id}={proxy_token}",
+        path="src/main.ts",
+    )
+    stream = FailingStream()
+    close_calls = 0
+    original_close = code_runtime_routes._close_upstream_attempt
+
+    def handler(_upstream: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            stream=stream,
+            headers={"content-type": "application/javascript"},
+        )
+
+    async def tracked_close(attempt):
+        nonlocal close_calls
+        close_calls += 1
+        await original_close(attempt)
+
+    transport = httpx.MockTransport(handler)
+    original_client = code_runtime_routes.httpx.AsyncClient
+    monkeypatch.setattr(
+        code_runtime_routes.httpx,
+        "AsyncClient",
+        lambda **kwargs: original_client(transport=transport, **kwargs),
+    )
+    monkeypatch.setattr(
+        code_runtime_routes,
+        "_close_upstream_attempt",
+        tracked_close,
+    )
+
+    with pytest.raises(httpx.ReadError):
+        await proxy_code_runtime(
+            session.public_id,
+            "src/main.ts",
+            request,
+            db_session,
+        )
+
+    assert close_calls == 1
+    assert stream.closed is True

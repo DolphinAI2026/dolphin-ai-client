@@ -2157,53 +2157,54 @@ async def proxy_code_runtime(
 
     upstream = attempt.response
     if is_builder_html or is_buffered_dev_asset:
-        content_type = upstream.headers.get("content-type", "")
-        content = await upstream.aread()
-        if is_builder_html and "text/html" in content_type:
-            content = _inject_shell_config(
-                content,
-                session_id,
-                _browser_origin_from_headers(
-                    request.headers,
-                    str(request.base_url).rstrip("/"),
+        try:
+            content_type = upstream.headers.get("content-type", "")
+            content = await upstream.aread()
+            if is_builder_html and "text/html" in content_type:
+                content = _inject_shell_config(
+                    content,
+                    session_id,
+                    _browser_origin_from_headers(
+                        request.headers,
+                        str(request.base_url).rstrip("/"),
+                    ),
+                    forwarded_prefix,
+                )
+                content = _rewrite_runtime_dev_asset_paths(
+                    content,
+                    session_id,
+                    forwarded_prefix,
+                )
+            elif is_buffered_dev_asset and _should_rewrite_buffered_response(
+                path,
+                content_type,
+            ):
+                content = _rewrite_runtime_dev_asset_paths(
+                    content,
+                    session_id,
+                    forwarded_prefix,
+                )
+            response = Response(
+                content=content,
+                status_code=upstream.status_code,
+                headers=_copyable_response_headers(
+                    upstream.headers,
+                    binding,
+                    session_id,
+                    forwarded_prefix,
                 ),
-                forwarded_prefix,
+                media_type=content_type.split(";", 1)[0] if content_type else None,
             )
-            content = _rewrite_runtime_dev_asset_paths(
-                content,
-                session_id,
-                forwarded_prefix,
+            return _decorate_runtime_response(
+                response,
+                upstream,
+                session_id=session_id,
+                forwarded_prefix=forwarded_prefix,
+                runtime_cookie=authorization.runtime_cookie,
+                cookie_reissue_required=cookie_reissue_required,
             )
-        elif is_buffered_dev_asset and _should_rewrite_buffered_response(
-            path,
-            content_type,
-        ):
-            content = _rewrite_runtime_dev_asset_paths(
-                content,
-                session_id,
-                forwarded_prefix,
-            )
-        response = Response(
-            content=content,
-            status_code=upstream.status_code,
-            headers=_copyable_response_headers(
-                upstream.headers,
-                binding,
-                session_id,
-                forwarded_prefix,
-            ),
-            media_type=content_type.split(";", 1)[0] if content_type else None,
-        )
-        response = _decorate_runtime_response(
-            response,
-            upstream,
-            session_id=session_id,
-            forwarded_prefix=forwarded_prefix,
-            runtime_cookie=authorization.runtime_cookie,
-            cookie_reissue_required=cookie_reissue_required,
-        )
-        await _close_upstream_attempt(attempt)
-        return response
+        finally:
+            await _close_upstream_attempt(attempt)
 
     response = StreamingResponse(
         upstream.aiter_raw(),
