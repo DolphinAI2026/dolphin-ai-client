@@ -1,7 +1,7 @@
 import logging
 import re
 
-from sqlalchemy import inspect, text
+from sqlalchemy import event, inspect, text
 from sqlalchemy.ext.asyncio import create_async_engine, AsyncSession, async_sessionmaker
 from sqlalchemy.orm import DeclarativeBase
 from app.config import settings
@@ -27,6 +27,16 @@ if not settings.database_url.startswith("sqlite"):
         _engine_kwargs["pool_pre_ping"] = True
 
 engine = create_async_engine(settings.database_url, **_engine_kwargs)
+
+if settings.database_url.startswith("sqlite"):
+    @event.listens_for(engine.sync_engine, "connect")
+    def _enable_sqlite_foreign_keys(dbapi_connection, _connection_record):
+        cursor = dbapi_connection.cursor()
+        try:
+            cursor.execute("PRAGMA foreign_keys=ON")
+        finally:
+            cursor.close()
+
 
 AsyncSessionLocal = async_sessionmaker(
     engine,

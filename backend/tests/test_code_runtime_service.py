@@ -59,6 +59,68 @@ def test_code_runtime_browser_session_model_has_isolated_identity_and_unique_bin
 
 
 @pytest.mark.asyncio
+async def test_application_sqlite_engine_enables_foreign_keys_and_cascades_browser_sessions():
+    from app import database
+    from app.models.ai_chat import AIChatSession, CodeRuntimeBinding, CodeRuntimeBrowserSession
+
+    async with database.engine.begin() as conn:
+        await conn.run_sync(lambda sync_conn: CodeRuntimeBrowserSession.__table__.drop(
+            sync_conn, checkfirst=True
+        ))
+        await conn.run_sync(lambda sync_conn: CodeRuntimeBinding.__table__.drop(
+            sync_conn, checkfirst=True
+        ))
+        await conn.run_sync(lambda sync_conn: AIChatSession.__table__.drop(
+            sync_conn, checkfirst=True
+        ))
+        await conn.run_sync(lambda sync_conn: AIChatSession.__table__.create(sync_conn))
+        await conn.run_sync(lambda sync_conn: CodeRuntimeBinding.__table__.create(sync_conn))
+        await conn.run_sync(lambda sync_conn: CodeRuntimeBrowserSession.__table__.create(sync_conn))
+
+        assert await conn.scalar(database.text("PRAGMA foreign_keys")) == 1
+        await conn.execute(database.text(
+            """
+            INSERT INTO ai_chat_sessions (
+                id, tenant_id, user_id, title, status, mode, created_at, updated_at
+            )
+            VALUES (
+                901, 7, 11, 'FK test', 'active', 'code', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP
+            )
+            """
+        ))
+        await conn.execute(database.text(
+            """
+            INSERT INTO code_runtime_bindings (
+                id, tenant_id, user_id, app_id, session_id, external_application_id,
+                runtime_base_url, builder_url, status, created_at, updated_at
+            ) VALUES (
+                901, 7, 11, NULL, 901, 'code-app-fk',
+                'https://sandbox.example.com/workspaces/ws-fk',
+                'https://sandbox.example.com/workspaces/ws-fk/builder',
+                'ready', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP
+            )
+            """
+        ))
+        await conn.execute(database.text(
+            """
+            INSERT INTO code_runtime_browser_sessions (
+                id, binding_id, browser_session_id, runtime_session_cookie_enc,
+                runtime_session_hash, created_at, updated_at
+            ) VALUES (
+                901, 901, 'browser-fk', 'cookie-fk', 'hash-fk',
+                CURRENT_TIMESTAMP, CURRENT_TIMESTAMP
+            )
+            """
+        ))
+        await conn.execute(database.text(
+            "DELETE FROM code_runtime_bindings WHERE id = 901"
+        ))
+        assert await conn.scalar(database.text(
+            "SELECT COUNT(*) FROM code_runtime_browser_sessions WHERE id = 901"
+        )) == 0
+
+
+@pytest.mark.asyncio
 async def test_init_db_expands_old_runtime_binding_schema_without_cleaning_builder_url(tmp_path, monkeypatch):
     from app import database
 
@@ -69,7 +131,6 @@ async def test_init_db_expands_old_runtime_binding_schema_without_cleaning_build
         "?token=legacy-entry-token&handoffId=legacy-handoff"
     )
     async with legacy_engine.begin() as conn:
-        await conn.exec_driver_sql("PRAGMA foreign_keys=ON")
         await conn.exec_driver_sql(
             """
             CREATE TABLE ai_chat_sessions (
@@ -147,7 +208,6 @@ async def test_init_db_expands_old_runtime_binding_schema_without_cleaning_build
     await database.init_db()
 
     async with legacy_engine.begin() as conn:
-        await conn.exec_driver_sql("PRAGMA foreign_keys=ON")
         binding_columns = {
             row["name"] for row in (await conn.execute(
                 database.text("PRAGMA table_info(code_runtime_bindings)")
@@ -218,13 +278,6 @@ async def test_init_db_expands_old_runtime_binding_schema_without_cleaning_build
             "SELECT COUNT(*) FROM code_runtime_browser_sessions "
             "WHERE binding_id = :binding_id"
         ), {"binding_id": new_binding_id}) == 1
-        await conn.execute(database.text(
-            "DELETE FROM code_runtime_bindings WHERE id = :binding_id"
-        ), {"binding_id": new_binding_id})
-        assert await conn.scalar(database.text(
-            "SELECT COUNT(*) FROM code_runtime_browser_sessions "
-            "WHERE binding_id = :binding_id"
-        ), {"binding_id": new_binding_id}) == 0
 
         archive_count = await conn.scalar(database.text(
             "SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' "
