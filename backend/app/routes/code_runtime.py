@@ -48,7 +48,7 @@ from app.code_runtime.sandbox_auth import (
     validate_expired_proxy_cookie_token,
 )
 from app.code_runtime.sandbox_metrics import sandbox_auth_metrics
-from app.config import settings
+from app.config import APP_VERSION, settings
 from app.database import AsyncSessionLocal, get_db
 from app.deps import AuthContext, get_auth_context
 from app.models import Application, User
@@ -90,6 +90,14 @@ async def sandbox_auth_metrics_endpoint() -> Response:
         content=sandbox_auth_metrics.render(),
         media_type="text/plain; version=0.0.4",
     )
+
+
+@router.get("/internal/sandbox-auth-state", include_in_schema=False)
+async def sandbox_auth_state_endpoint() -> dict[str, str]:
+    return {
+        "writer_contract": "clean_builder_url_v1",
+        "app_version": APP_VERSION,
+    }
 
 
 _control_plane_user_locks: dict[int, asyncio.Lock] = {}

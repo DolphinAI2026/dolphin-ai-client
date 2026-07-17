@@ -345,16 +345,27 @@ def split_entry_token(builder_url: str) -> tuple[str, str]:
         raise ValueError("Runtime builder URL is invalid")
 
     entry_token: str | None = None
-    clean_items: list[str] = []
     for item in parsed.query.split("&") if parsed.query else []:
         key, separator, value = item.partition("=")
         if key == "token":
             if entry_token is None:
                 entry_token = unquote_plus(value) if separator else ""
-            continue
-        clean_items.append(item)
     if not entry_token:
         raise ValueError("Runtime entry token is missing")
+    clean_url, _removed = remove_builder_entry_tokens(builder_url)
+    return clean_url, entry_token
+
+
+def remove_builder_entry_tokens(builder_url: str) -> tuple[str, int]:
+    parsed = urlsplit(str(builder_url or ""))
+    clean_items: list[str] = []
+    removed = 0
+    for item in parsed.query.split("&") if parsed.query else []:
+        key, _separator, _value = item.partition("=")
+        if key == "token":
+            removed += 1
+            continue
+        clean_items.append(item)
     return (
         urlunsplit(
             (
@@ -365,7 +376,7 @@ def split_entry_token(builder_url: str) -> tuple[str, str]:
                 parsed.fragment,
             )
         ),
-        entry_token,
+        removed,
     )
 
 
@@ -439,7 +450,12 @@ async def bootstrap_runtime_session(
     *,
     client_factory: Callable[[], httpx.AsyncClient] | None = None,
 ) -> RuntimeBootstrap:
-    clean_builder_url, entry_token = split_entry_token(builder_url)
+    try:
+        clean_builder_url, entry_token = split_entry_token(builder_url)
+    except ValueError:
+        sandbox_auth_metrics.record_builder_url_cleanup("failure")
+        raise
+    sandbox_auth_metrics.record_builder_url_cleanup("success")
     runtime_base_url = _derive_runtime_base_url(clean_builder_url)
     request_url = f"{runtime_base_url}/api/status?token={quote(entry_token, safe='')}"
     factory = client_factory or (lambda: httpx.AsyncClient(timeout=10.0))

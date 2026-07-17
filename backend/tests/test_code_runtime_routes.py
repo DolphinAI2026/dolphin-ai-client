@@ -3120,3 +3120,119 @@ async def test_buffered_proxy_closes_upstream_when_body_read_fails(
 
     assert close_calls == 1
     assert stream.closed is True
+
+
+def test_remove_builder_entry_tokens_preserves_raw_query_shape_and_fragment():
+    from app.code_runtime.sandbox_auth import remove_builder_entry_tokens
+
+    cleaned, removed = remove_builder_entry_tokens(
+        "https://runtime.test/builder?x=&token=secret&empty&%74oken=kept"
+        "&token=second#panel",
+    )
+
+    assert removed == 2
+    assert cleaned == (
+        "https://runtime.test/builder?x=&empty&%74oken=kept#panel"
+    )
+
+
+@pytest.mark.asyncio
+async def test_cleanup_builder_urls_is_batched_dry_run_apply_and_idempotent(
+    db_session,
+    capsys,
+):
+    from scripts.cleanup_code_runtime_builder_urls import cleanup_builder_urls
+
+    seeded = []
+    for index in range(4):
+        session, binding, _rows = await _seed_browser_runtime(
+            db_session,
+            public_id=f"00000000-0000-0000-0000-0000000000{index + 10}",
+        )
+        seeded.append((session, binding))
+    seeded[0][1].builder_url = (
+        "https://runtime.test/builder?token=entry-canary&tab=spec#panel"
+    )
+    seeded[1][1].builder_url = (
+        "https://runtime.test/builder?x=&token=entry-two&empty"
+        "&token=entry-three#panel"
+    )
+    seeded[2][1].builder_url = (
+        "https://runtime.test/builder?mytoken=kept&%74oken=kept"
+    )
+    seeded[3][1].builder_url = "https://runtime.test/builder"
+    await db_session.commit()
+    Session = async_sessionmaker(
+        db_session.bind,
+        expire_on_commit=False,
+        class_=AsyncSession,
+    )
+
+    dry_run = await cleanup_builder_urls(
+        session_factory=Session,
+        batch_size=2,
+        apply=False,
+    )
+    await db_session.rollback()
+    rows = (
+        await db_session.execute(
+            select(CodeRuntimeBinding).order_by(CodeRuntimeBinding.id)
+        )
+    ).scalars().all()
+
+    assert dry_run.rows_scanned == 4
+    assert dry_run.rows_cleaned == 2
+    assert dry_run.rows_recontaminated == 0
+    assert dry_run.last_checkpoint == rows[-1].id
+    assert "entry-canary" in rows[0].builder_url
+
+    applied = await cleanup_builder_urls(
+        session_factory=Session,
+        batch_size=2,
+        apply=True,
+    )
+    await db_session.rollback()
+    rows = (
+        await db_session.execute(
+            select(CodeRuntimeBinding).order_by(CodeRuntimeBinding.id)
+        )
+    ).scalars().all()
+
+    assert applied.rows_scanned == 4
+    assert applied.rows_cleaned == 2
+    assert applied.rows_recontaminated == 0
+    assert rows[0].builder_url == (
+        "https://runtime.test/builder?tab=spec#panel"
+    )
+    assert rows[1].builder_url == (
+        "https://runtime.test/builder?x=&empty#panel"
+    )
+    assert rows[2].builder_url.endswith("?mytoken=kept&%74oken=kept")
+
+    repeated = await cleanup_builder_urls(
+        session_factory=Session,
+        batch_size=2,
+        apply=True,
+    )
+    assert repeated.rows_cleaned == 0
+    output = capsys.readouterr().out
+    assert "entry-canary" not in output
+    assert "entry-two" not in output
+    assert "runtime.test" not in output
+
+
+@pytest.mark.asyncio
+async def test_sandbox_auth_state_endpoint_is_hidden_and_reports_writer_contract():
+    import app.routes.code_runtime as code_runtime_routes
+    from app.config import APP_VERSION
+
+    route = next(
+        item
+        for item in code_runtime_routes.router.routes
+        if item.path == "/code/internal/sandbox-auth-state"
+    )
+    assert route.include_in_schema is False
+    assert await code_runtime_routes.sandbox_auth_state_endpoint() == {
+        "writer_contract": "clean_builder_url_v1",
+        "app_version": APP_VERSION,
+    }
