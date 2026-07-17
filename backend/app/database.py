@@ -287,7 +287,11 @@ async def _migrate_code_runtime_binding_app_id_nullable(conn, inspect_fn) -> Non
     if conn.dialect.name != "sqlite":
         return
 
-    from app.models.ai_chat import CodeRuntimeAgentSession, CodeRuntimeBinding
+    from app.models.ai_chat import (
+        CodeRuntimeAgentSession,
+        CodeRuntimeBinding,
+        CodeRuntimeBrowserSession,
+    )
 
     await conn.run_sync(lambda sync_conn: CodeRuntimeAgentSession.__table__.create(sync_conn, checkfirst=True))
     for stmt in [
@@ -346,6 +350,43 @@ async def _migrate_code_runtime_binding_app_id_nullable(conn, inspect_fn) -> Non
             f"SELECT {columns_sql} FROM {archive_name}"
         ))
 
+    async def ensure_browser_session_foreign_key() -> None:
+        browser_table = CodeRuntimeBrowserSession.__table__
+        if not await table_exists(browser_table.name):
+            await conn.run_sync(lambda sync_conn: browser_table.create(sync_conn, checkfirst=True))
+            return
+
+        foreign_keys = (await conn.execute(
+            text("PRAGMA foreign_key_list(code_runtime_browser_sessions)")
+        )).mappings().all()
+        if {row.get("table") for row in foreign_keys} == {"code_runtime_bindings"}:
+            return
+
+        archive_name = "code_runtime_browser_sessions_fk_archive"
+        if await table_exists(archive_name):
+            suffix = 2
+            while await table_exists(f"{archive_name}_{suffix}"):
+                suffix += 1
+            archive_name = f"{archive_name}_{suffix}"
+
+        await conn.execute(text(
+            f"ALTER TABLE code_runtime_browser_sessions RENAME TO {archive_name}"
+        ))
+        await drop_non_auto_indexes(archive_name)
+        await conn.run_sync(lambda sync_conn: browser_table.create(sync_conn, checkfirst=True))
+
+        archive_rows = await table_info(archive_name)
+        old_columns = {row.get("name") for row in archive_rows}
+        new_columns = [column.name for column in browser_table.columns]
+        common_columns = [name for name in new_columns if name in old_columns]
+        if common_columns:
+            columns_sql = ", ".join(common_columns)
+            await conn.execute(text(
+                f"INSERT OR IGNORE INTO code_runtime_browser_sessions ({columns_sql}) "
+                f"SELECT {columns_sql} FROM {archive_name}"
+            ))
+        await conn.execute(text(f"DROP TABLE {archive_name}"))
+
     has_table = await table_exists("code_runtime_bindings")
     if not has_table:
         await conn.run_sync(lambda sync_conn: CodeRuntimeBinding.__table__.create(sync_conn, checkfirst=True))
@@ -354,6 +395,7 @@ async def _migrate_code_runtime_binding_app_id_nullable(conn, inspect_fn) -> Non
     rows = await table_info("code_runtime_bindings")
     app_col = next((row for row in rows if row.get("name") == "app_id"), None)
     if not app_col:
+        await ensure_browser_session_foreign_key()
         return
 
     if int(app_col.get("notnull") or 0) == 0:
@@ -362,6 +404,7 @@ async def _migrate_code_runtime_binding_app_id_nullable(conn, inspect_fn) -> Non
             await drop_non_auto_indexes(archive_name)
             await copy_from_archive(archive_name, archive_rows)
         await ensure_current_indexes()
+        await ensure_browser_session_foreign_key()
         return
 
     archive_name = "code_runtime_bindings_app_id_notnull"
@@ -376,6 +419,7 @@ async def _migrate_code_runtime_binding_app_id_nullable(conn, inspect_fn) -> Non
     await conn.run_sync(lambda sync_conn: CodeRuntimeBinding.__table__.create(sync_conn, checkfirst=True))
     await copy_from_archive(archive_name, rows)
     await ensure_current_indexes()
+    await ensure_browser_session_foreign_key()
 
 
 async def _migrate_legacy_builder_specs(conn, inspect_fn) -> None:

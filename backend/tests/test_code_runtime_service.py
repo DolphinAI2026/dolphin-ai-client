@@ -69,6 +69,7 @@ async def test_init_db_expands_old_runtime_binding_schema_without_cleaning_build
         "?token=legacy-entry-token&handoffId=legacy-handoff"
     )
     async with legacy_engine.begin() as conn:
+        await conn.exec_driver_sql("PRAGMA foreign_keys=ON")
         await conn.exec_driver_sql(
             """
             CREATE TABLE ai_chat_sessions (
@@ -100,6 +101,24 @@ async def test_init_db_expands_old_runtime_binding_schema_without_cleaning_build
         )
         await conn.exec_driver_sql(
             """
+            CREATE TABLE code_runtime_browser_sessions (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                binding_id INTEGER NOT NULL,
+                browser_session_id VARCHAR(64) NOT NULL,
+                runtime_session_cookie_enc TEXT NOT NULL,
+                runtime_session_hash VARCHAR(64) NOT NULL,
+                runtime_session_expires_at DATETIME,
+                generation INTEGER NOT NULL DEFAULT 1,
+                created_at DATETIME NOT NULL,
+                updated_at DATETIME NOT NULL,
+                CONSTRAINT uq_code_runtime_browser_sessions_binding_browser
+                    UNIQUE (binding_id, browser_session_id),
+                FOREIGN KEY(binding_id) REFERENCES code_runtime_bindings(id) ON DELETE CASCADE
+            )
+            """
+        )
+        await conn.exec_driver_sql(
+            """
             INSERT INTO code_runtime_bindings (
                 tenant_id, user_id, app_id, session_id, external_application_id,
                 runtime_base_url, builder_url, status, created_at, updated_at
@@ -111,12 +130,24 @@ async def test_init_db_expands_old_runtime_binding_schema_without_cleaning_build
             """,
             (builder_url,),
         )
+        await conn.exec_driver_sql(
+            """
+            INSERT INTO code_runtime_browser_sessions (
+                binding_id, browser_session_id, runtime_session_cookie_enc,
+                runtime_session_hash, created_at, updated_at
+            ) VALUES (
+                1, 'legacy-browser', 'legacy-cookie', 'legacy-hash',
+                CURRENT_TIMESTAMP, CURRENT_TIMESTAMP
+            )
+            """
+        )
 
     monkeypatch.setattr(database, "engine", legacy_engine)
     await database.init_db()
     await database.init_db()
 
-    async with legacy_engine.connect() as conn:
+    async with legacy_engine.begin() as conn:
+        await conn.exec_driver_sql("PRAGMA foreign_keys=ON")
         binding_columns = {
             row["name"] for row in (await conn.execute(
                 database.text("PRAGMA table_info(code_runtime_bindings)")
@@ -129,6 +160,16 @@ async def test_init_db_expands_old_runtime_binding_schema_without_cleaning_build
         assert binding.builder_url == builder_url
         assert binding.auth_generation == 1
 
+        browser_fk = (await conn.execute(database.text(
+            "PRAGMA foreign_key_list(code_runtime_browser_sessions)"
+        ))).mappings().all()
+        assert {row["table"] for row in browser_fk} == {"code_runtime_bindings"}
+        historical_browser = (await conn.execute(database.text(
+            "SELECT runtime_session_cookie_enc FROM code_runtime_browser_sessions "
+            "WHERE binding_id = 1 AND browser_session_id = 'legacy-browser'"
+        ))).one()
+        assert historical_browser.runtime_session_cookie_enc == "legacy-cookie"
+
         browser_table = await conn.scalar(database.text(
             "SELECT name FROM sqlite_master WHERE type = 'table' "
             "AND name = 'code_runtime_browser_sessions'"
@@ -140,6 +181,51 @@ async def test_init_db_expands_old_runtime_binding_schema_without_cleaning_build
             )).mappings()
         }
         assert "uq_code_runtime_browser_sessions_binding_browser" in index_names
+
+        await conn.execute(database.text(
+            """
+            INSERT INTO ai_chat_sessions (id) VALUES (2)
+            """
+        ))
+        await conn.execute(database.text(
+            """
+            INSERT INTO code_runtime_bindings (
+                tenant_id, user_id, app_id, session_id, external_application_id,
+                runtime_base_url, builder_url, status, created_at, updated_at
+            ) VALUES (
+                7, 11, NULL, 2, 'code-app-2',
+                'https://sandbox.example.com/workspaces/ws-2',
+                'https://sandbox.example.com/workspaces/ws-2/builder',
+                'ready', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP
+            )
+            """
+        ))
+        new_binding_id = await conn.scalar(database.text(
+            "SELECT id FROM code_runtime_bindings WHERE session_id = 2"
+        ))
+        await conn.execute(database.text(
+            """
+            INSERT INTO code_runtime_browser_sessions (
+                binding_id, browser_session_id, runtime_session_cookie_enc,
+                runtime_session_hash, created_at, updated_at
+            ) VALUES (
+                :binding_id, 'new-browser', 'new-cookie', 'new-hash',
+                CURRENT_TIMESTAMP, CURRENT_TIMESTAMP
+            )
+            """
+        ), {"binding_id": new_binding_id})
+        assert await conn.scalar(database.text(
+            "SELECT COUNT(*) FROM code_runtime_browser_sessions "
+            "WHERE binding_id = :binding_id"
+        ), {"binding_id": new_binding_id}) == 1
+        await conn.execute(database.text(
+            "DELETE FROM code_runtime_bindings WHERE id = :binding_id"
+        ), {"binding_id": new_binding_id})
+        assert await conn.scalar(database.text(
+            "SELECT COUNT(*) FROM code_runtime_browser_sessions "
+            "WHERE binding_id = :binding_id"
+        ), {"binding_id": new_binding_id}) == 0
+
         archive_count = await conn.scalar(database.text(
             "SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' "
             "AND name LIKE 'code_runtime_bindings_app_id_notnull%'"
