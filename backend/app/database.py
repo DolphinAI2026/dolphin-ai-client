@@ -234,6 +234,13 @@ async def init_db():
             "ALTER TABLE ai_chat_artifacts ADD COLUMN storage VARCHAR(10) NOT NULL DEFAULT 'text'",
             "ALTER TABLE ai_chat_artifacts ADD COLUMN file_path VARCHAR(1000)",
             "ALTER TABLE ai_chat_artifacts ADD COLUMN size_bytes BIGINT NOT NULL DEFAULT 0",
+            # Code runtime browser-session expand (Task 4); token cleanup is deferred.
+            "ALTER TABLE code_runtime_bindings ADD COLUMN runtime_service_session_enc TEXT",
+            "ALTER TABLE code_runtime_bindings ADD COLUMN auth_generation INTEGER NOT NULL DEFAULT 1",
+            "CREATE INDEX IF NOT EXISTS ix_code_runtime_browser_sessions_binding_id "
+            "ON code_runtime_browser_sessions(binding_id)",
+            "CREATE UNIQUE INDEX IF NOT EXISTS uq_code_runtime_browser_sessions_binding_browser "
+            "ON code_runtime_browser_sessions(binding_id, browser_session_id)",
         ]:
             await _execute_best_effort(conn, stmt)
 

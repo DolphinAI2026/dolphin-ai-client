@@ -84,9 +84,41 @@ class CodeRuntimeBinding(Base):
     workspace_id: Mapped[Optional[str]] = mapped_column(String(120), nullable=True, index=True)
     sandbox_instance_id: Mapped[Optional[str]] = mapped_column(String(160), nullable=True, index=True)
     runtime_session_id: Mapped[Optional[str]] = mapped_column(String(160), nullable=True, index=True)
+    runtime_service_session_enc: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    auth_generation: Mapped[int] = mapped_column(Integer, default=1, server_default="1", nullable=False)
     conversation_id: Mapped[Optional[str]] = mapped_column(String(160), nullable=True)
     status: Mapped[str] = mapped_column(String(32), default="ready", nullable=False)
     last_error: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False
+    )
+
+
+class CodeRuntimeBrowserSession(Base):
+    """Isolated browser session credentials for a Code runtime binding."""
+
+    __tablename__ = "code_runtime_browser_sessions"
+    __table_args__ = (
+        UniqueConstraint(
+            "binding_id",
+            "browser_session_id",
+            name="uq_code_runtime_browser_sessions_binding_browser",
+        ),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    binding_id: Mapped[int] = mapped_column(
+        Integer,
+        ForeignKey("code_runtime_bindings.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    browser_session_id: Mapped[str] = mapped_column(String(64), nullable=False)
+    runtime_session_cookie_enc: Mapped[str] = mapped_column(Text, nullable=False)
+    runtime_session_hash: Mapped[str] = mapped_column(String(64), nullable=False)
+    runtime_session_expires_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
+    generation: Mapped[int] = mapped_column(Integer, default=1, server_default="1", nullable=False)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, nullable=False)
     updated_at: Mapped[datetime] = mapped_column(
         DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False

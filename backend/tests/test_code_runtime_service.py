@@ -4,13 +4,14 @@ import base64
 from types import SimpleNamespace
 
 import pytest
+from sqlalchemy import inspect as sa_inspect
+from sqlalchemy.ext.asyncio import create_async_engine
 
 from app.models import Application
 from app.models.ai_chat import AIChatSession
 
 
 def test_code_runtime_binding_model_is_registered():
-    from sqlalchemy import inspect as sa_inspect
     from app.models.ai_chat import CodeRuntimeBinding
 
     cols = {c.name for c in sa_inspect(CodeRuntimeBinding).columns}
@@ -23,8 +24,129 @@ def test_code_runtime_binding_model_is_registered():
         "workspace_id",
         "sandbox_instance_id",
         "runtime_session_id",
+        "runtime_service_session_enc",
+        "auth_generation",
     }.issubset(cols)
     assert sa_inspect(CodeRuntimeBinding).columns.app_id.nullable is True
+
+
+def test_code_runtime_browser_session_model_has_isolated_identity_and_unique_binding_key():
+    from app.models.ai_chat import CodeRuntimeBrowserSession
+
+    columns = {column.name: column for column in sa_inspect(CodeRuntimeBrowserSession).columns}
+    assert {
+        "id",
+        "binding_id",
+        "browser_session_id",
+        "runtime_session_cookie_enc",
+        "runtime_session_hash",
+        "runtime_session_expires_at",
+        "generation",
+        "created_at",
+        "updated_at",
+    }.issubset(columns)
+    assert columns["binding_id"].index is True
+    assert columns["browser_session_id"].nullable is False
+    assert columns["runtime_session_cookie_enc"].nullable is False
+    assert columns["runtime_session_hash"].nullable is False
+    assert columns["generation"].nullable is False
+    assert columns["generation"].default.arg == 1
+    assert {
+        constraint.name
+        for constraint in CodeRuntimeBrowserSession.__table__.constraints
+        if constraint.__class__.__name__ == "UniqueConstraint"
+    } == {"uq_code_runtime_browser_sessions_binding_browser"}
+
+
+@pytest.mark.asyncio
+async def test_init_db_expands_old_runtime_binding_schema_without_cleaning_builder_url(tmp_path, monkeypatch):
+    from app import database
+
+    db_path = tmp_path / "legacy-runtime.sqlite"
+    legacy_engine = create_async_engine(f"sqlite+aiosqlite:///{db_path}")
+    builder_url = (
+        "https://sandbox.example.com/workspaces/ws-1/builder"
+        "?token=legacy-entry-token&handoffId=legacy-handoff"
+    )
+    async with legacy_engine.begin() as conn:
+        await conn.exec_driver_sql(
+            """
+            CREATE TABLE ai_chat_sessions (
+                id INTEGER PRIMARY KEY
+            )
+            """
+        )
+        await conn.exec_driver_sql(
+            """
+            CREATE TABLE code_runtime_bindings (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                tenant_id INTEGER NOT NULL,
+                user_id INTEGER NOT NULL,
+                app_id INTEGER NOT NULL,
+                session_id INTEGER NOT NULL,
+                external_application_id VARCHAR(80) NOT NULL,
+                runtime_base_url VARCHAR(1000) NOT NULL,
+                builder_url VARCHAR(2000) NOT NULL,
+                workspace_id VARCHAR(120),
+                sandbox_instance_id VARCHAR(160),
+                runtime_session_id VARCHAR(160),
+                conversation_id VARCHAR(160),
+                status VARCHAR(32) NOT NULL,
+                last_error TEXT,
+                created_at DATETIME NOT NULL,
+                updated_at DATETIME NOT NULL
+            )
+            """
+        )
+        await conn.exec_driver_sql(
+            """
+            INSERT INTO code_runtime_bindings (
+                tenant_id, user_id, app_id, session_id, external_application_id,
+                runtime_base_url, builder_url, status, created_at, updated_at
+            ) VALUES (
+                7, 11, 42, 1, 'code-app-1',
+                'https://sandbox.example.com/workspaces/ws-1',
+                ?, 'ready', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP
+            )
+            """,
+            (builder_url,),
+        )
+
+    monkeypatch.setattr(database, "engine", legacy_engine)
+    await database.init_db()
+    await database.init_db()
+
+    async with legacy_engine.connect() as conn:
+        binding_columns = {
+            row["name"] for row in (await conn.execute(
+                database.text("PRAGMA table_info(code_runtime_bindings)")
+            )).mappings()
+        }
+        assert {"runtime_service_session_enc", "auth_generation"}.issubset(binding_columns)
+        binding = (await conn.execute(database.text(
+            "SELECT builder_url, auth_generation FROM code_runtime_bindings WHERE id = 1"
+        ))).one()
+        assert binding.builder_url == builder_url
+        assert binding.auth_generation == 1
+
+        browser_table = await conn.scalar(database.text(
+            "SELECT name FROM sqlite_master WHERE type = 'table' "
+            "AND name = 'code_runtime_browser_sessions'"
+        ))
+        assert browser_table == "code_runtime_browser_sessions"
+        index_names = {
+            row["name"] for row in (await conn.execute(
+                database.text("PRAGMA index_list(code_runtime_browser_sessions)")
+            )).mappings()
+        }
+        assert "uq_code_runtime_browser_sessions_binding_browser" in index_names
+        archive_count = await conn.scalar(database.text(
+            "SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' "
+            "AND name LIKE 'code_runtime_bindings_app_id_notnull%'"
+        ))
+        assert archive_count == 1
+
+    await legacy_engine.dispose()
 
 
 def test_ai_chat_session_model_tracks_external_code_application():

@@ -409,6 +409,7 @@ from app.models.ai_chat import (  # noqa: E402, F401
     AIChatAttachment,
     AIChatArtifact,
     CodeRuntimeBinding,
+    CodeRuntimeBrowserSession,
     CodeRuntimeAgentSession,
 )
 
