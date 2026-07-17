@@ -482,7 +482,7 @@ async def _refresh_runtime_binding(
         authorization_header=authorization,
         auth_provider=auth_provider,
     )
-    await db.flush()
+    await db.commit()
 
 
 async def _runtime_json_request_for_session(
@@ -1061,9 +1061,12 @@ async def _browser_runtime_json_request(
     except httpx.RequestError as exc:
         raise HTTPException(status_code=503, detail="Code runtime 暂时不可用") from exc
     if response.status_code >= 400:
+        auth_error = str(response.headers.get(RUNTIME_AUTH_ERROR_HEADER) or "").strip()
+        response_headers = {RUNTIME_AUTH_ERROR_HEADER: auth_error} if auth_error else None
         raise HTTPException(
             status_code=response.status_code,
             detail=response.text[:500] or "Code runtime request failed",
+            headers=response_headers,
         )
     if not response.content:
         return {}
@@ -1071,6 +1074,55 @@ async def _browser_runtime_json_request(
         return response.json()
     except ValueError as exc:
         raise HTTPException(status_code=502, detail="Code runtime 返回了无效 JSON") from exc
+
+
+async def _browser_runtime_json_request_for_session(
+    session: AIChatSession,
+    binding: CodeRuntimeBinding,
+    authorization: ProxyAuthorization,
+    method: str,
+    path: str,
+    *,
+    request: Request,
+    session_id: CodeSessionRef,
+    db: AsyncSession,
+    json_body: Any = None,
+) -> tuple[Any, ProxyAuthorization]:
+    try:
+        payload = await _browser_runtime_json_request(
+            binding,
+            method,
+            path,
+            request=request,
+            session_id=session_id,
+            json_body=json_body,
+            runtime_cookie=authorization.runtime_cookie,
+        )
+        return payload, authorization
+    except HTTPException as exc:
+        auth_error = (exc.headers or {}).get(RUNTIME_AUTH_ERROR_HEADER)
+        if exc.status_code != 401 or auth_error not in {
+            "sandbox_session_expired",
+            "sandbox_session_invalid",
+        }:
+            raise
+    renewed = await _renew_proxy_runtime_authorization(
+        session,
+        binding,
+        authorization,
+        db,
+        reason=auth_error,
+    )
+    payload = await _browser_runtime_json_request(
+        binding,
+        method,
+        path,
+        request=request,
+        session_id=session_id,
+        json_body=json_body,
+        runtime_cookie=renewed.runtime_cookie,
+    )
+    return payload, renewed
 
 
 def _path_with_forwarded_prefix(path: str, forwarded_prefix: str = "") -> str:
@@ -1899,14 +1951,30 @@ async def list_browser_authenticated_agent_sessions(
     )
     if authorization.response is not None:
         return authorization.response
-    payload = await _browser_runtime_json_request(
-        binding,
-        "GET",
-        "/api/agent/sessions",
-        request=request,
-        session_id=session_id,
-        runtime_cookie=authorization.runtime_cookie,
-    )
+    try:
+        payload, authorization = await _browser_runtime_json_request_for_session(
+            session,
+            binding,
+            authorization,
+            "GET",
+            "/api/agent/sessions",
+            request=request,
+            session_id=session_id,
+            db=db,
+        )
+    except SandboxRenewalFailure as exc:
+        return _sandbox_renewal_failure_response(
+            exc,
+            session_id=session_id,
+            forwarded_prefix=request.headers.get("x-forwarded-prefix", ""),
+        )
+    if authorization.proxy_cookie_reissue_required and authorization.runtime_cookie:
+        _set_runtime_cookie(
+            response,
+            authorization.runtime_cookie,
+            session_id,
+            request.headers.get("x-forwarded-prefix", ""),
+        )
     sessions = payload.get("sessions") if isinstance(payload, dict) else []
     normalized_sessions = sessions if isinstance(sessions, list) else []
     other_scoped_ids = await _runtime_session_ids_scoped_to_other_shells(db, session.id)
@@ -1939,15 +2007,31 @@ async def create_browser_authenticated_agent_session(
     )
     if authorization.response is not None:
         return authorization.response
-    payload = await _browser_runtime_json_request(
-        binding,
-        "POST",
-        "/api/agent/sessions",
-        request=request,
-        session_id=session_id,
-        json_body={},
-        runtime_cookie=authorization.runtime_cookie,
-    )
+    try:
+        payload, authorization = await _browser_runtime_json_request_for_session(
+            session,
+            binding,
+            authorization,
+            "POST",
+            "/api/agent/sessions",
+            request=request,
+            session_id=session_id,
+            db=db,
+            json_body={},
+        )
+    except SandboxRenewalFailure as exc:
+        return _sandbox_renewal_failure_response(
+            exc,
+            session_id=session_id,
+            forwarded_prefix=request.headers.get("x-forwarded-prefix", ""),
+        )
+    if authorization.proxy_cookie_reissue_required and authorization.runtime_cookie:
+        _set_runtime_cookie(
+            response,
+            authorization.runtime_cookie,
+            session_id,
+            request.headers.get("x-forwarded-prefix", ""),
+        )
     runtime_session_id = str(
         (payload or {}).get("runtimeSessionId")
         or (payload or {}).get("runtime_session_id")
@@ -1981,14 +2065,30 @@ async def activate_browser_authenticated_agent_session(
     if authorization.response is not None:
         return authorization.response
     encoded_id = quote(str(runtime_session_id), safe="")
-    payload = await _browser_runtime_json_request(
-        binding,
-        "POST",
-        f"/api/agent/sessions/{encoded_id}/activate",
-        request=request,
-        session_id=session_id,
-        runtime_cookie=authorization.runtime_cookie,
-    )
+    try:
+        payload, authorization = await _browser_runtime_json_request_for_session(
+            session,
+            binding,
+            authorization,
+            "POST",
+            f"/api/agent/sessions/{encoded_id}/activate",
+            request=request,
+            session_id=session_id,
+            db=db,
+        )
+    except SandboxRenewalFailure as exc:
+        return _sandbox_renewal_failure_response(
+            exc,
+            session_id=session_id,
+            forwarded_prefix=request.headers.get("x-forwarded-prefix", ""),
+        )
+    if authorization.proxy_cookie_reissue_required and authorization.runtime_cookie:
+        _set_runtime_cookie(
+            response,
+            authorization.runtime_cookie,
+            session_id,
+            request.headers.get("x-forwarded-prefix", ""),
+        )
     activated_id = str((payload or {}).get("runtimeSessionId") or runtime_session_id)
     binding.runtime_session_id = activated_id
     await _remember_runtime_agent_session(db, session, binding, activated_id)
@@ -2015,14 +2115,30 @@ async def delete_browser_authenticated_agent_session(
     if authorization.response is not None:
         return authorization.response
     encoded_id = quote(str(runtime_session_id), safe="")
-    payload = await _browser_runtime_json_request(
-        binding,
-        "DELETE",
-        f"/api/agent/sessions/{encoded_id}",
-        request=request,
-        session_id=session_id,
-        runtime_cookie=authorization.runtime_cookie,
-    )
+    try:
+        payload, authorization = await _browser_runtime_json_request_for_session(
+            session,
+            binding,
+            authorization,
+            "DELETE",
+            f"/api/agent/sessions/{encoded_id}",
+            request=request,
+            session_id=session_id,
+            db=db,
+        )
+    except SandboxRenewalFailure as exc:
+        return _sandbox_renewal_failure_response(
+            exc,
+            session_id=session_id,
+            forwarded_prefix=request.headers.get("x-forwarded-prefix", ""),
+        )
+    if authorization.proxy_cookie_reissue_required and authorization.runtime_cookie:
+        _set_runtime_cookie(
+            response,
+            authorization.runtime_cookie,
+            session_id,
+            request.headers.get("x-forwarded-prefix", ""),
+        )
     scoped = (
         await db.execute(
             select(CodeRuntimeAgentSession).where(
@@ -2067,7 +2183,10 @@ def _decorate_runtime_response(
     return response
 
 
-@proxy_router.api_route("/{session_id}/{path:path}", methods=["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"])
+@proxy_router.api_route(
+    "/{session_id}/{path:path}",
+    methods=["GET", "HEAD", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
+)
 async def proxy_code_runtime(
     session_id: str,
     path: str,

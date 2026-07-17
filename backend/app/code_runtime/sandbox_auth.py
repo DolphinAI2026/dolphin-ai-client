@@ -159,7 +159,6 @@ async def _renew_browser_runtime_session(
                 await db.execute(
                     select(CodeRuntimeBinding)
                     .where(CodeRuntimeBinding.id == int(binding_id))
-                    .with_for_update()
                 )
             ).scalar_one_or_none()
             if browser_session is None or binding is None:
@@ -221,6 +220,27 @@ async def _renew_browser_runtime_session(
                     break
                 except SandboxRenewalFailure:
                     raise
+                except HTTPException as exc:
+                    auth_error = str(
+                        (exc.headers or {}).get(RUNTIME_AUTH_ERROR_HEADER) or ""
+                    ).strip()
+                    if (
+                        auth_error == "sandbox_launch_token_expired"
+                        and bootstrap_attempt == 0
+                    ):
+                        continue
+                    if auth_error in _LAUNCH_AUTH_ERRORS or exc.status_code == 401:
+                        raise SandboxRenewalFailure(
+                            "workspace_temporarily_unavailable",
+                            stage="bootstrap",
+                        ) from exc
+                    if bootstrap_attempt == 0:
+                        continue
+                    failure = _renewal_failure(exc)
+                    raise SandboxRenewalFailure(
+                        failure.code,
+                        stage="bootstrap",
+                    ) from exc
                 except Exception as exc:
                     if bootstrap_attempt == 1:
                         failure = _renewal_failure(exc)
