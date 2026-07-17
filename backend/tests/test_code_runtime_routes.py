@@ -51,6 +51,9 @@ def _proxy_request(
     query_string: bytes = b"",
     authorization: str = "",
     forwarded_prefix: str = "",
+    method: str = "GET",
+    body: bytes = b"",
+    path: str = "builder",
 ):
     from starlette.requests import Request
 
@@ -61,18 +64,28 @@ def _proxy_request(
         headers.append((b"authorization", authorization.encode("latin-1")))
     if forwarded_prefix:
         headers.append((b"x-forwarded-prefix", forwarded_prefix.encode("latin-1")))
+    sent = False
+
+    async def receive():
+        nonlocal sent
+        if sent:
+            return {"type": "http.request", "body": b"", "more_body": False}
+        sent = True
+        return {"type": "http.request", "body": body, "more_body": False}
+
+    request_path = f"/api/code-runtime/{session_id}/{path.lstrip('/')}"
     return Request({
         "type": "http",
-        "method": "GET",
+        "method": method,
         "scheme": "https",
         "server": ("builder.test", 443),
         "client": ("127.0.0.1", 12345),
         "root_path": "",
-        "path": f"/api/code-runtime/{session_id}/builder",
-        "raw_path": f"/api/code-runtime/{session_id}/builder".encode("ascii"),
+        "path": request_path,
+        "raw_path": request_path.encode("ascii"),
         "query_string": query_string,
         "headers": headers,
-    })
+    }, receive)
 
 
 async def _seed_browser_runtime(
@@ -2736,3 +2749,300 @@ async def test_sandbox_auth_metrics_endpoint_is_hidden_and_renders_prometheus_te
     assert response.status_code == 200
     assert b"sandbox_auth_renew_total" in response.body
     assert b"sandbox_auth_singleflight_join_total" in response.body
+
+
+def test_recoverable_runtime_auth_error_requires_stable_known_header():
+    import httpx
+    from app.routes.code_runtime import _recoverable_runtime_auth_error
+
+    assert _recoverable_runtime_auth_error(httpx.Response(
+        401,
+        headers={"X-APAAS-Sandbox-Auth-Error": "sandbox_session_expired"},
+    )) == "sandbox_session_expired"
+    assert _recoverable_runtime_auth_error(httpx.Response(
+        401,
+        headers={"X-APAAS-Sandbox-Auth-Error": "sandbox_session_invalid"},
+    )) == "sandbox_session_invalid"
+    for response in (
+        httpx.Response(401),
+        httpx.Response(401, headers={"X-APAAS-Sandbox-Auth-Error": "unknown"}),
+        httpx.Response(401, headers={
+            "X-APAAS-Sandbox-Auth-Error": "sandbox_credential_missing",
+        }),
+        httpx.Response(403, headers={
+            "X-APAAS-Sandbox-Auth-Error": "sandbox_session_expired",
+        }),
+    ):
+        assert _recoverable_runtime_auth_error(response) is None
+
+
+@pytest.mark.asyncio
+async def test_proxy_replays_post_body_once_after_recoverable_runtime_auth(
+    db_session,
+    monkeypatch,
+):
+    from dataclasses import replace
+
+    import httpx
+    import app.routes.code_runtime as code_runtime_routes
+    from app.code_runtime.service import create_proxy_cookie_token
+    from app.routes.code_runtime import proxy_code_runtime
+
+    session, _binding, _rows = await _seed_browser_runtime(db_session)
+    proxy_token = create_proxy_cookie_token(
+        session_id=session.public_id,
+        user_id=11,
+        tenant_id=7,
+        browser_session_id="browser-a",
+    )
+    raw_body = b'{"prompt":"same bytes"}'
+    request = _proxy_request(
+        session.public_id,
+        cookie=(
+            f"dolphin_code_runtime_{session.public_id}={proxy_token}; "
+            "apaas_sandbox_token=db-cookie-a"
+        ),
+        method="POST",
+        body=raw_body,
+        path="api/write",
+    )
+    attempts: list[tuple[bytes, str]] = []
+    renew_calls = 0
+
+    def handler(upstream: httpx.Request) -> httpx.Response:
+        attempts.append((upstream.content, upstream.headers["cookie"]))
+        if len(attempts) == 1:
+            return httpx.Response(
+                401,
+                content=b"expired",
+                headers={
+                    "X-APAAS-Sandbox-Auth-Error": "sandbox_session_expired",
+                },
+            )
+        return httpx.Response(200, content=b"ok")
+
+    async def fake_renew(_session, _binding, authorization, _db, *, reason):
+        nonlocal renew_calls
+        assert reason == "sandbox_session_expired"
+        renew_calls += 1
+        return replace(
+            authorization,
+            runtime_cookie="renewed-cookie",
+            runtime_cookie_hash=hashlib.sha256(b"renewed-cookie").hexdigest(),
+            observed_generation=int(authorization.observed_generation or 0) + 1,
+        )
+
+    transport = httpx.MockTransport(handler)
+    original = code_runtime_routes.httpx.AsyncClient
+    monkeypatch.setattr(
+        code_runtime_routes.httpx,
+        "AsyncClient",
+        lambda **kwargs: original(transport=transport, **kwargs),
+    )
+    monkeypatch.setattr(
+        code_runtime_routes,
+        "_renew_proxy_runtime_authorization",
+        fake_renew,
+    )
+
+    response = await proxy_code_runtime(
+        session.public_id,
+        "api/write",
+        request,
+        db_session,
+    )
+    body = b"".join([chunk async for chunk in response.body_iterator])
+    if response.background:
+        await response.background()
+
+    assert response.status_code == 200
+    assert body == b"ok"
+    assert attempts == [
+        (raw_body, "apaas_sandbox_token=db-cookie-a"),
+        (raw_body, "apaas_sandbox_token=renewed-cookie"),
+    ]
+    assert renew_calls == 1
+
+
+@pytest.mark.asyncio
+async def test_proxy_second_recoverable_401_is_returned_without_third_attempt(
+    db_session,
+    monkeypatch,
+):
+    from dataclasses import replace
+
+    import httpx
+    import app.routes.code_runtime as code_runtime_routes
+    from app.code_runtime.service import create_proxy_cookie_token
+    from app.routes.code_runtime import proxy_code_runtime
+
+    session, _binding, _rows = await _seed_browser_runtime(db_session)
+    proxy_token = create_proxy_cookie_token(
+        session_id=session.public_id,
+        user_id=11,
+        tenant_id=7,
+        browser_session_id="browser-a",
+    )
+    request = _proxy_request(
+        session.public_id,
+        cookie=f"dolphin_code_runtime_{session.public_id}={proxy_token}",
+        path="api/events",
+    )
+    attempts = 0
+    renew_calls = 0
+
+    def handler(_upstream: httpx.Request) -> httpx.Response:
+        nonlocal attempts
+        attempts += 1
+        return httpx.Response(
+            401,
+            content=f"expired-{attempts}".encode(),
+            headers={
+                "content-type": "text/event-stream",
+                "X-APAAS-Sandbox-Auth-Error": "sandbox_session_expired",
+            },
+        )
+
+    async def fake_renew(_session, _binding, authorization, _db, *, reason):
+        nonlocal renew_calls
+        renew_calls += 1
+        return replace(authorization, runtime_cookie="renewed-cookie")
+
+    transport = httpx.MockTransport(handler)
+    original = code_runtime_routes.httpx.AsyncClient
+    monkeypatch.setattr(
+        code_runtime_routes.httpx,
+        "AsyncClient",
+        lambda **kwargs: original(transport=transport, **kwargs),
+    )
+    monkeypatch.setattr(
+        code_runtime_routes,
+        "_renew_proxy_runtime_authorization",
+        fake_renew,
+    )
+
+    response = await proxy_code_runtime(
+        session.public_id,
+        "api/events",
+        request,
+        db_session,
+    )
+    body = b"".join([chunk async for chunk in response.body_iterator])
+    if response.background:
+        await response.background()
+
+    assert response.status_code == 401
+    assert body == b"expired-2"
+    assert attempts == 2
+    assert renew_calls == 1
+
+
+@pytest.mark.asyncio
+async def test_sse_response_does_not_start_before_recoverable_auth_renewal(
+    db_session,
+    monkeypatch,
+):
+    from dataclasses import replace
+    from starlette.requests import Request
+
+    import httpx
+    import app.routes.code_runtime as code_runtime_routes
+    from app.code_runtime.service import create_proxy_cookie_token
+    from app.routes.code_runtime import proxy_code_runtime
+
+    session, _binding, _rows = await _seed_browser_runtime(db_session)
+    proxy_token = create_proxy_cookie_token(
+        session_id=session.public_id,
+        user_id=11,
+        tenant_id=7,
+        browser_session_id="browser-a",
+    )
+    template_request = _proxy_request(
+        session.public_id,
+        cookie=f"dolphin_code_runtime_{session.public_id}={proxy_token}",
+        path="api/events",
+    )
+    attempts = 0
+    renew_started = asyncio.Event()
+    release_renew = asyncio.Event()
+    events: list[dict] = []
+
+    def handler(_upstream: httpx.Request) -> httpx.Response:
+        nonlocal attempts
+        attempts += 1
+        if attempts == 1:
+            return httpx.Response(
+                401,
+                headers={
+                    "content-type": "text/event-stream",
+                    "X-APAAS-Sandbox-Auth-Error": "sandbox_session_expired",
+                },
+            )
+        return httpx.Response(
+            200,
+            content=b"data: ready\n\n",
+            headers={"content-type": "text/event-stream"},
+        )
+
+    async def fake_renew(_session, _binding, authorization, _db, *, reason):
+        renew_started.set()
+        assert events == []
+        await asyncio.wait_for(release_renew.wait(), timeout=5)
+        return replace(authorization, runtime_cookie="renewed-cookie")
+
+    transport = httpx.MockTransport(handler)
+    original = code_runtime_routes.httpx.AsyncClient
+    monkeypatch.setattr(
+        code_runtime_routes.httpx,
+        "AsyncClient",
+        lambda **kwargs: original(transport=transport, **kwargs),
+    )
+    monkeypatch.setattr(
+        code_runtime_routes,
+        "_renew_proxy_runtime_authorization",
+        fake_renew,
+    )
+
+    response_finished = asyncio.Event()
+    request_received = False
+
+    async def receive():
+        nonlocal request_received
+        if not request_received:
+            request_received = True
+            return {"type": "http.request", "body": b"", "more_body": False}
+        await response_finished.wait()
+        return {"type": "http.disconnect"}
+
+    async def send(event):
+        events.append(event)
+        if (
+            event["type"] == "http.response.body"
+            and not event.get("more_body", False)
+        ):
+            response_finished.set()
+
+    async def app(scope, receive_callable, send_callable):
+        request = Request(scope, receive_callable)
+        response = await proxy_code_runtime(
+            session.public_id,
+            "api/events",
+            request,
+            db_session,
+        )
+        await response(scope, receive_callable, send_callable)
+
+    task = asyncio.create_task(app(template_request.scope, receive, send))
+    await asyncio.wait_for(renew_started.wait(), timeout=5)
+    assert events == []
+    release_renew.set()
+    await asyncio.wait_for(task, timeout=10)
+
+    assert events[0]["type"] == "http.response.start"
+    assert events[0]["status"] == 200
+    assert any(
+        event["type"] == "http.response.body"
+        and event.get("body") == b"data: ready\n\n"
+        for event in events
+    )
+    assert attempts == 2

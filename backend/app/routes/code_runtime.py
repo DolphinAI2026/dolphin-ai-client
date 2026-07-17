@@ -3,7 +3,7 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import json
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from typing import Annotated, Any, Optional
 from urllib.parse import parse_qsl, quote, unquote_plus, urlsplit
 
@@ -20,6 +20,7 @@ from app.code_runtime.service import (
     code_runtime_proxy_prefix,
     create_code_application,
     create_proxy_cookie_token,
+    default_workspace_open,
     ensure_code_session_public_id,
     ensure_code_application,
     ensure_application_access,
@@ -41,7 +42,9 @@ from app.code_runtime.sandbox_auth import (
     RUNTIME_AUTH_ERROR_HEADER,
     RUNTIME_COOKIE_NAME,
     SandboxRenewalFailure,
+    bootstrap_runtime_session,
     decrypt_runtime_cookie,
+    renew_browser_runtime_session,
     validate_expired_proxy_cookie_token,
 )
 from app.code_runtime.sandbox_metrics import sandbox_auth_metrics
@@ -1460,6 +1463,109 @@ class ProxyAuthorization:
     proxy_cookie_reissue_required: bool = False
 
 
+@dataclass(frozen=True)
+class UpstreamAttempt:
+    response: httpx.Response
+    client: httpx.AsyncClient
+    recoverable_auth_error: str | None
+
+
+def _recoverable_runtime_auth_error(response: httpx.Response) -> str | None:
+    if response.status_code != 401:
+        return None
+    auth_error = str(
+        response.headers.get(RUNTIME_AUTH_ERROR_HEADER) or ""
+    ).strip()
+    if auth_error in {"sandbox_session_expired", "sandbox_session_invalid"}:
+        return auth_error
+    return None
+
+
+async def _send_upstream_once(
+    *,
+    method: str,
+    target: str,
+    headers: dict[str, str],
+    body: bytes,
+    timeout: float | None,
+) -> UpstreamAttempt:
+    client = httpx.AsyncClient(follow_redirects=False, timeout=timeout)
+    request = client.build_request(method, target, headers=headers, content=body)
+    try:
+        response = await client.send(request, stream=True)
+    except httpx.RequestError as exc:
+        await client.aclose()
+        raise HTTPException(status_code=503, detail="Code runtime 暂时不可用") from exc
+    if response.is_stream_consumed:
+        response = httpx.Response(
+            response.status_code,
+            headers=response.headers.raw,
+            stream=httpx.ByteStream(response.content),
+            request=request,
+            extensions=response.extensions,
+        )
+    return UpstreamAttempt(
+        response=response,
+        client=client,
+        recoverable_auth_error=_recoverable_runtime_auth_error(response),
+    )
+
+
+async def _close_upstream_attempt(attempt: UpstreamAttempt) -> None:
+    await attempt.response.aclose()
+    await attempt.client.aclose()
+
+
+async def _renew_proxy_runtime_authorization(
+    session: AIChatSession,
+    binding: CodeRuntimeBinding,
+    authorization: ProxyAuthorization,
+    db: AsyncSession,
+    *,
+    reason: str,
+) -> ProxyAuthorization:
+    async def authorization_provider(
+        *,
+        force_refresh: bool,
+        rejected_access_token: str | None,
+    ) -> str:
+        return await _locked_control_plane_user_authorization(
+            user_id=int(session.user_id),
+            force_refresh=force_refresh,
+            rejected_access_token=rejected_access_token,
+        )
+
+    async def workspace_open(current_authorization: str) -> dict[str, Any]:
+        return await default_workspace_open(
+            binding.external_application_id,
+            authorization_header=current_authorization,
+            shell_session_id=session.id,
+        )
+
+    result = await renew_browser_runtime_session(
+        binding_id=binding.id,
+        browser_session_id=authorization.browser_session_id,
+        observed_generation=int(
+            authorization.observed_generation
+            if authorization.observed_generation is not None
+            else binding.auth_generation
+        ),
+        session_factory=AsyncSessionLocal,
+        authorization_provider=authorization_provider,
+        workspace_open=workspace_open,
+        bootstrap=bootstrap_runtime_session,
+        reason=reason,
+    )
+    await db.refresh(binding)
+    return replace(
+        authorization,
+        runtime_cookie=result.runtime_cookie,
+        runtime_cookie_hash=result.runtime_cookie_hash,
+        observed_generation=result.generation,
+        proxy_cookie_reissue_required=True,
+    )
+
+
 async def _proxy_authorization_from_payload(
     payload: dict[str, Any],
     *,
@@ -1996,28 +2102,99 @@ async def proxy_code_runtime(
         allow_query_token=True,
         runtime_cookie=authorization.runtime_cookie,
     )
+    is_builder_html = (
+        request.method == "GET"
+        and path.rstrip("/") in {"builder", "builder/index.html"}
+    )
+    is_buffered_dev_asset = (
+        request.method == "GET"
+        and _should_buffer_dev_asset_path(path)
+    )
+    attempt = await _send_upstream_once(
+        method=request.method,
+        target=target,
+        headers=headers,
+        body=body,
+        timeout=60.0 if is_builder_html or is_buffered_dev_asset else None,
+    )
+    if attempt.recoverable_auth_error:
+        recoverable_auth_error = attempt.recoverable_auth_error
+        await _close_upstream_attempt(attempt)
+        try:
+            authorization = await _renew_proxy_runtime_authorization(
+                session,
+                binding,
+                authorization,
+                db,
+                reason=recoverable_auth_error,
+            )
+        except SandboxRenewalFailure as exc:
+            sandbox_auth_metrics.record_replay(request.method, "failure")
+            return _sandbox_renewal_failure_response(
+                exc,
+                session_id=session_id,
+                forwarded_prefix=forwarded_prefix,
+            )
+        headers = _runtime_request_headers(
+            request,
+            session_id,
+            binding,
+            allow_query_token=True,
+            runtime_cookie=authorization.runtime_cookie,
+        )
+        attempt = await _send_upstream_once(
+            method=request.method,
+            target=target,
+            headers=headers,
+            body=body,
+            timeout=60.0 if is_builder_html or is_buffered_dev_asset else None,
+        )
+        sandbox_auth_metrics.record_replay(
+            request.method,
+            "failure" if attempt.response.status_code >= 400 else "success",
+        )
+        cookie_reissue_required = True
 
-    # Builder HTML 要注入 shell 配置，让 d-ai-code 的 runtimePath() 走 Dolphin 代理前缀。
-    if request.method == "GET" and path.rstrip("/") in {"builder", "builder/index.html"}:
-        async with httpx.AsyncClient(follow_redirects=False, timeout=60.0) as client:
-            upstream = await client.request(request.method, target, headers=headers, content=body)
+    upstream = attempt.response
+    if is_builder_html or is_buffered_dev_asset:
         content_type = upstream.headers.get("content-type", "")
-        content = upstream.content
-        if "text/html" in content_type:
+        content = await upstream.aread()
+        if is_builder_html and "text/html" in content_type:
             content = _inject_shell_config(
                 content,
                 session_id,
-                _browser_origin_from_headers(request.headers, str(request.base_url).rstrip("/")),
+                _browser_origin_from_headers(
+                    request.headers,
+                    str(request.base_url).rstrip("/"),
+                ),
                 forwarded_prefix,
             )
-            content = _rewrite_runtime_dev_asset_paths(content, session_id, forwarded_prefix)
+            content = _rewrite_runtime_dev_asset_paths(
+                content,
+                session_id,
+                forwarded_prefix,
+            )
+        elif is_buffered_dev_asset and _should_rewrite_buffered_response(
+            path,
+            content_type,
+        ):
+            content = _rewrite_runtime_dev_asset_paths(
+                content,
+                session_id,
+                forwarded_prefix,
+            )
         response = Response(
             content=content,
             status_code=upstream.status_code,
-            headers=_copyable_response_headers(upstream.headers, binding, session_id, forwarded_prefix),
+            headers=_copyable_response_headers(
+                upstream.headers,
+                binding,
+                session_id,
+                forwarded_prefix,
+            ),
             media_type=content_type.split(";", 1)[0] if content_type else None,
         )
-        return _decorate_runtime_response(
+        response = _decorate_runtime_response(
             response,
             upstream,
             session_id=session_id,
@@ -2025,37 +2202,14 @@ async def proxy_code_runtime(
             runtime_cookie=authorization.runtime_cookie,
             cookie_reissue_required=cookie_reissue_required,
         )
+        await _close_upstream_attempt(attempt)
+        return response
 
-    if request.method == "GET" and _should_buffer_dev_asset_path(path):
-        async with httpx.AsyncClient(follow_redirects=False, timeout=60.0) as client:
-            upstream = await client.request(request.method, target, headers=headers, content=body)
-        content_type = upstream.headers.get("content-type", "")
-        content = upstream.content
-        if _should_rewrite_buffered_response(path, content_type):
-            content = _rewrite_runtime_dev_asset_paths(content, session_id, forwarded_prefix)
-        response = Response(
-            content=content,
-            status_code=upstream.status_code,
-            headers=_copyable_response_headers(upstream.headers, binding, session_id, forwarded_prefix),
-            media_type=content_type.split(";", 1)[0] if content_type else None,
-        )
-        return _decorate_runtime_response(
-            response,
-            upstream,
-            session_id=session_id,
-            forwarded_prefix=forwarded_prefix,
-            runtime_cookie=authorization.runtime_cookie,
-            cookie_reissue_required=cookie_reissue_required,
-        )
-
-    client = httpx.AsyncClient(follow_redirects=False, timeout=None)
-    upstream_request = client.build_request(request.method, target, headers=headers, content=body)
-    upstream = await client.send(upstream_request, stream=True)
     response = StreamingResponse(
         upstream.aiter_raw(),
         status_code=upstream.status_code,
         headers=_copyable_response_headers(upstream.headers, binding, session_id, forwarded_prefix),
-        background=BackgroundTask(_close_upstream, upstream, client),
+        background=BackgroundTask(_close_upstream, upstream, attempt.client),
     )
     return _decorate_runtime_response(
         response,
