@@ -2508,6 +2508,75 @@ async def test_renew_bootstrap_failure_reopens_once_without_loop(
 
 
 @pytest.mark.asyncio
+async def test_renew_forces_control_plane_refresh_at_most_once_across_reopen(
+    tmp_path,
+):
+    from fastapi import HTTPException
+    from app.code_runtime.sandbox_auth import (
+        RuntimeBootstrap,
+        SandboxRenewalFailure,
+        renew_browser_runtime_session,
+    )
+
+    engine, Session = await _renewal_session_factory(tmp_path)
+    async with Session() as db:
+        _session, binding, rows = await _seed_browser_runtime(db)
+        binding_id = binding.id
+        observed_generation = rows["browser-a"].generation
+    refresh_calls = 0
+    open_calls = 0
+    bootstrap_calls = 0
+
+    async def authorization_provider(*, force_refresh, rejected_access_token):
+        nonlocal refresh_calls
+        if force_refresh:
+            refresh_calls += 1
+            assert rejected_access_token == "stale-token"
+            return "Bearer fresh-token"
+        return "Bearer stale-token"
+
+    async def workspace_open(authorization):
+        nonlocal open_calls
+        open_calls += 1
+        if open_calls == 1:
+            raise HTTPException(status_code=401, detail="expired access token")
+        if open_calls == 3:
+            assert authorization == "Bearer fresh-token"
+            raise HTTPException(status_code=401, detail="rejected again")
+        return {"specReviewUrl": "https://runtime.test/builder?token=launch"}
+
+    async def bootstrap(_builder_url):
+        nonlocal bootstrap_calls
+        bootstrap_calls += 1
+        if bootstrap_calls == 1:
+            raise HTTPException(status_code=503, detail="bootstrap failed")
+        return RuntimeBootstrap(
+            clean_builder_url="https://runtime.test/builder",
+            runtime_base_url="https://runtime.test",
+            runtime_cookie="unused",
+            runtime_cookie_hash=hashlib.sha256(b"unused").hexdigest(),
+            expires_at=None,
+        )
+
+    with pytest.raises(SandboxRenewalFailure) as exc_info:
+        await renew_browser_runtime_session(
+            binding_id=binding_id,
+            browser_session_id="browser-a",
+            observed_generation=observed_generation,
+            session_factory=Session,
+            authorization_provider=authorization_provider,
+            workspace_open=workspace_open,
+            bootstrap=bootstrap,
+        )
+
+    assert exc_info.value.code == "login_required"
+    assert refresh_calls == 1
+    assert open_calls == 3
+    assert bootstrap_calls == 1
+    await engine.dispose()
+
+
+@pytest.mark.asyncio
 async def test_renew_commit_failure_is_temporary_and_does_not_loop(
     tmp_path,
 ):

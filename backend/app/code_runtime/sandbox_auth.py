@@ -97,16 +97,19 @@ async def _workspace_open_with_refresh(
     *,
     authorization_provider: Callable[..., Any],
     workspace_open: Callable[[str], Any],
-) -> tuple[dict[str, Any], str]:
+    forced_refresh_used: bool,
+) -> tuple[dict[str, Any], str, bool]:
     try:
         opened = await asyncio.wait_for(workspace_open(authorization), timeout=60.0)
-        return opened, authorization
+        return opened, authorization, forced_refresh_used
     except HTTPException as exc:
         if exc.status_code != 401:
             raise _renewal_failure(exc) from exc
     except (asyncio.TimeoutError, httpx.RequestError) as exc:
         raise SandboxRenewalFailure("workspace_temporarily_unavailable") from exc
 
+    if forced_refresh_used:
+        raise SandboxRenewalFailure("login_required")
     rejected_access_token = authorization.removeprefix("Bearer ").strip() or None
     try:
         refreshed_authorization = await authorization_provider(
@@ -117,7 +120,7 @@ async def _workspace_open_with_refresh(
             workspace_open(refreshed_authorization),
             timeout=60.0,
         )
-        return opened, refreshed_authorization
+        return opened, refreshed_authorization, True
     except HTTPException as exc:
         raise _renewal_failure(exc) from exc
     except SandboxRenewalFailure:
@@ -194,12 +197,15 @@ async def _renew_browser_runtime_session(
 
             opened: dict[str, Any] | None = None
             runtime_bootstrap: RuntimeBootstrap | None = None
+            forced_refresh_used = False
             for bootstrap_attempt in range(2):
-                opened, authorization = await _workspace_open_with_refresh(
+                opened, authorization, forced_refresh_used = (
+                    await _workspace_open_with_refresh(
                     authorization,
                     authorization_provider=authorization_provider,
                     workspace_open=workspace_open,
-                )
+                    forced_refresh_used=forced_refresh_used,
+                ))
                 builder_url = str(
                     opened.get("specReviewUrl") or opened.get("builderUrl") or ""
                 ).strip()
