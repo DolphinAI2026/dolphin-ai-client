@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
+import time
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 from email.utils import parsedate_to_datetime
@@ -15,6 +16,10 @@ from jose import JWTError, jwt
 from sqlalchemy import select
 
 from app.config import settings
+from app.code_runtime.sandbox_metrics import (
+    SandboxAuthMetricsRegistry,
+    sandbox_auth_metrics,
+)
 from app.crypto import decrypt_password, encrypt_password
 
 RUNTIME_COOKIE_NAME = "apaas_sandbox_token"
@@ -53,11 +58,12 @@ class SandboxRenewalFailure(Exception):
         "workspace_temporarily_unavailable": (503, False),
     }
 
-    def __init__(self, code: str):
+    def __init__(self, code: str, *, stage: str | None = None):
         if code not in self._DETAILS:
             raise ValueError(f"Unknown sandbox renewal failure: {code}")
         super().__init__(code)
         self.code = code
+        self.stage = stage
         self.status_code, self.clear_cookies = self._DETAILS[code]
 
 
@@ -122,7 +128,7 @@ async def _workspace_open_with_refresh(
         raise SandboxRenewalFailure("login_required") from exc
 
 
-async def renew_browser_runtime_session(
+async def _renew_browser_runtime_session(
     *,
     binding_id: int,
     browser_session_id: str,
@@ -211,7 +217,11 @@ async def renew_browser_runtime_session(
                     raise
                 except Exception as exc:
                     if bootstrap_attempt == 1:
-                        raise _renewal_failure(exc) from exc
+                        failure = _renewal_failure(exc)
+                        raise SandboxRenewalFailure(
+                            failure.code,
+                            stage="bootstrap",
+                        ) from exc
 
             if opened is None or runtime_bootstrap is None:
                 raise SandboxRenewalFailure("workspace_temporarily_unavailable")
@@ -240,7 +250,8 @@ async def renew_browser_runtime_session(
             except Exception as exc:
                 await db.rollback()
                 raise SandboxRenewalFailure(
-                    "workspace_temporarily_unavailable"
+                    "workspace_temporarily_unavailable",
+                    stage="commit",
                 ) from exc
 
             return SandboxRenewalResult(
@@ -250,6 +261,42 @@ async def renew_browser_runtime_session(
                 runtime_cookie_hash=runtime_bootstrap.runtime_cookie_hash,
                 expires_at=runtime_bootstrap.expires_at,
             )
+
+
+async def renew_browser_runtime_session(
+    *,
+    binding_id: int,
+    browser_session_id: str,
+    observed_generation: int,
+    session_factory: Callable[[], Any],
+    authorization_provider: Callable[..., Any],
+    workspace_open: Callable[[str], Any],
+    bootstrap: Callable[[str], Any],
+    metrics: SandboxAuthMetricsRegistry = sandbox_auth_metrics,
+    reason: str = "sandbox_session_expired",
+) -> SandboxRenewalResult:
+    started = time.monotonic()
+    try:
+        result = await _renew_browser_runtime_session(
+            binding_id=binding_id,
+            browser_session_id=browser_session_id,
+            observed_generation=observed_generation,
+            session_factory=session_factory,
+            authorization_provider=authorization_provider,
+            workspace_open=workspace_open,
+            bootstrap=bootstrap,
+        )
+    except SandboxRenewalFailure as exc:
+        metrics.record_renew("failure", exc.code, time.monotonic() - started)
+        metrics.record_hard_failure(exc.code)
+        if exc.stage:
+            metrics.record_orphan(exc.stage)
+        raise
+    if result.joined:
+        metrics.record_singleflight_join()
+        reason = "joined"
+    metrics.record_renew("success", reason, time.monotonic() - started)
+    return result
 
 
 def validate_expired_proxy_cookie_token(

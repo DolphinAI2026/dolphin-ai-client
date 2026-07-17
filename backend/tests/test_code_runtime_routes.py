@@ -2313,8 +2313,10 @@ async def test_concurrent_browser_renewal_singleflight_joins_new_generation(
         RuntimeBootstrap,
         renew_browser_runtime_session,
     )
+    from app.code_runtime.sandbox_metrics import SandboxAuthMetricsRegistry
 
     engine, Session = await _renewal_session_factory(tmp_path)
+    metrics = SandboxAuthMetricsRegistry()
     async with Session() as db:
         session, binding, rows = await _seed_browser_runtime(db)
         binding_id = binding.id
@@ -2363,6 +2365,7 @@ async def test_concurrent_browser_renewal_singleflight_joins_new_generation(
             authorization_provider=authorization_provider,
             workspace_open=workspace_open,
             bootstrap=bootstrap,
+            metrics=metrics,
         ))
         for _ in range(6)
     ]
@@ -2375,6 +2378,14 @@ async def test_concurrent_browser_renewal_singleflight_joins_new_generation(
     assert bootstrap_calls == 1
     assert {result.generation for result in results} == {8}
     assert sum(result.joined for result in results) == 5
+    snapshot = metrics.snapshot()
+    assert snapshot[
+        'sandbox_auth_renew_total{reason="sandbox_session_expired",result="success"}'
+    ] == 1
+    assert snapshot[
+        'sandbox_auth_renew_total{reason="joined",result="success"}'
+    ] == 5
+    assert snapshot["sandbox_auth_singleflight_join_total"] == 5
     async with Session() as db:
         row = (await db.execute(select(CodeRuntimeBrowserSession))).scalar_one()
         assert row.generation == 8
@@ -2505,8 +2516,10 @@ async def test_renew_commit_failure_is_temporary_and_does_not_loop(
         SandboxRenewalFailure,
         renew_browser_runtime_session,
     )
+    from app.code_runtime.sandbox_metrics import SandboxAuthMetricsRegistry
 
     engine, Session = await _renewal_session_factory(tmp_path)
+    metrics = SandboxAuthMetricsRegistry()
     async with Session() as db:
         _session, binding, rows = await _seed_browser_runtime(db)
         binding_id = binding.id
@@ -2552,12 +2565,23 @@ async def test_renew_commit_failure_is_temporary_and_does_not_loop(
             authorization_provider=authorization_provider,
             workspace_open=workspace_open,
             bootstrap=bootstrap,
+            metrics=metrics,
         )
 
     assert exc_info.value.code == "workspace_temporarily_unavailable"
     assert exc_info.value.clear_cookies is False
     assert open_calls == 1
     assert bootstrap_calls == 1
+    snapshot = metrics.snapshot()
+    assert snapshot[
+        'sandbox_auth_renew_total{reason="workspace_temporarily_unavailable",result="failure"}'
+    ] == 1
+    assert snapshot[
+        'sandbox_auth_orphan_session_total{stage="commit"}'
+    ] == 1
+    assert snapshot[
+        'sandbox_auth_renew_total{reason="workspace_temporarily_unavailable",result="success"}'
+    ] == 0
     async with Session() as db:
         row = (await db.execute(select(CodeRuntimeBrowserSession))).scalar_one()
         assert row.generation == observed_generation
@@ -2596,3 +2620,50 @@ def test_hard_failure_response_clears_only_current_browser_cookies(
     if clear_cookies:
         assert any("dolphin_code_runtime_session-1=" in value for value in set_cookies)
         assert any("apaas_sandbox_token=" in value for value in set_cookies)
+
+
+def test_sandbox_auth_metrics_registry_keeps_fixed_low_cardinality_labels():
+    from app.code_runtime.sandbox_metrics import SandboxAuthMetricsRegistry
+
+    metrics = SandboxAuthMetricsRegistry()
+    metrics.record_renew("success", "sandbox_session_expired", 0.25)
+    metrics.record_replay("POST", "success")
+    metrics.record_hard_failure("tenant-7-canary")
+    metrics.record_builder_url_cleanup("success")
+
+    snapshot = metrics.snapshot()
+    assert snapshot[
+        'sandbox_auth_renew_total{reason="sandbox_session_expired",result="success"}'
+    ] == 1
+    assert snapshot[
+        'sandbox_auth_replay_total{method="POST",result="success"}'
+    ] == 1
+    assert snapshot[
+        'sandbox_auth_hard_failure_total{reason="other"}'
+    ] == 1
+    assert snapshot[
+        'sandbox_builder_url_cleanup_total{result="success"}'
+    ] == 1
+    assert snapshot["sandbox_auth_renew_duration_count"] == 1
+    rendered = metrics.render()
+    assert "tenant-7-canary" not in rendered
+    assert "http://" not in rendered
+    assert "https://" not in rendered
+
+
+@pytest.mark.asyncio
+async def test_sandbox_auth_metrics_endpoint_is_hidden_and_renders_prometheus_text():
+    import app.routes.code_runtime as code_runtime_routes
+
+    route = next(
+        item
+        for item in code_runtime_routes.router.routes
+        if item.path == "/code/internal/sandbox-auth-metrics"
+    )
+    assert route.include_in_schema is False
+
+    response = await code_runtime_routes.sandbox_auth_metrics_endpoint()
+
+    assert response.status_code == 200
+    assert b"sandbox_auth_renew_total" in response.body
+    assert b"sandbox_auth_singleflight_join_total" in response.body

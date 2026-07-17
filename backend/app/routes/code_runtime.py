@@ -44,6 +44,7 @@ from app.code_runtime.sandbox_auth import (
     decrypt_runtime_cookie,
     validate_expired_proxy_cookie_token,
 )
+from app.code_runtime.sandbox_metrics import sandbox_auth_metrics
 from app.config import settings
 from app.database import AsyncSessionLocal, get_db
 from app.deps import AuthContext, get_auth_context
@@ -78,6 +79,14 @@ class CreateCodeApplicationRequest(BaseModel):
     app_name: str
     app_code: str
     seed_project_id: Optional[str] = None
+
+
+@router.get("/internal/sandbox-auth-metrics", include_in_schema=False)
+async def sandbox_auth_metrics_endpoint() -> Response:
+    return Response(
+        content=sandbox_auth_metrics.render(),
+        media_type="text/plain; version=0.0.4",
+    )
 
 
 _control_plane_user_locks: dict[int, asyncio.Lock] = {}
