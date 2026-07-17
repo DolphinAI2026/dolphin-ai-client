@@ -528,7 +528,7 @@ def test_code_runtime_shell_config_exposes_external_session_rail_flag():
     )
 
     assert b'"externalSessionRail":true' in injected
-    assert b'"hideHistory":false' in injected
+    assert b'"hideHistory":true' in injected
     assert b'"hideNewSession":true' in injected
     assert b"window.__APAAS_SHELL__" in injected
     assert b"MutationObserver" not in injected
@@ -572,7 +572,7 @@ def test_code_runtime_shell_config_uses_script_safe_json():
         "externalBasePath": '/ai-builder/"quoted"</script>/api/code-runtime/12',
         "webConsoleOrigin": dangerous_origin,
         "externalSessionRail": True,
-        "hideHistory": False,
+        "hideHistory": True,
         "hideNewSession": True,
     }
 
