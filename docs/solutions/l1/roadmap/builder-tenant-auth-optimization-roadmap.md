@@ -42,7 +42,9 @@
 | P3 | 请求级租户上下文统一 | Future | 显式 tenant、逐请求校验、去除 ambient tenant |
 | P4 | Control Plane Builder federation | Future | `/api/builder-auth/**`、Provider router、SDK binding |
 | P5 | Builder 浏览器会话收敛 | Future | session/refresh/revoke、减少 localStorage 暴露 |
+| P5-A | 统一账号 refresh 跨系统提交恢复 | Planned | issuer 幂等重取、SDK 透传、Builder pending operation |
 | P6 | Workspace 与 Runtime delegation 加固 | Future | 用户调用优先、service identity 限域 |
+| P6-A | 沙箱 token-free 与无感续期安全切片 | Ready | entry token 不落库/浏览器、跨浏览器隔离、透明续期 |
 | P7 | Builder 管理端授权收敛 | Future | 角色、权限资源、guard、审计统一 |
 | P8 | 数据迁移、兼容删除与真实 E2E | Future | 删除启发式映射和旧 token 路径 |
 
@@ -232,6 +234,36 @@
 - P1 完成。
 - P4 接口可用，或 P1 明确选择独立 Builder BFF session。
 
+### P5-A：统一账号 refresh 跨系统提交恢复
+
+**目标**
+
+关闭一次性 refresh token 已在 issuer 轮换、但 Builder 保存新凭据失败后无法
+重取结果的窗口。
+
+**范围**
+
+- 锁定真实 refresh issuer、Admin SDK/Provider 源仓库和唯一调用路径。
+- issuer 按 idempotency key 重取同一次 token pair。
+- Control Plane adapter/SDK 透传幂等键。
+- Builder 在远端调用前持久化 pending refresh operation。
+- 故障注入验证远端成功、本地提交失败后的恢复。
+
+**非目标**
+
+- 不与 P6-A 的 Runtime session、entry token 或 iframe proxy 改造混在一个 Spec。
+
+**验收**
+
+- 相同 refresh operation 不会发生第二次 token 轮换。
+- Builder 崩溃或提交失败后可重取同一结果并完成本地凭据更新。
+- issuer、SDK、Control Plane 和 Builder 的所有者及仓库路径已明确。
+
+**依赖**
+
+- P4 的最终 Builder refresh 调用路径冻结。
+- Auth SDK/Provider 支持或接受幂等 refresh contract。
+
 ## 10. P6：Workspace 与 Runtime delegation 加固
 
 **目标**
@@ -258,6 +290,29 @@
 
 - P3 完成 tenant 统一。
 - P4/P5 明确用户 token 传递方式。
+
+### P6-A：沙箱 token-free 与无感续期安全切片
+
+该切片因直接消除 entry token 落库、浏览器暴露和可恢复超时用户可见错误，按
+安全热路径提前设计和实施。它只复用已经确认的“Control Plane 用户/平台租户
+权威、平台租户可绑定 aPaaS 租户”结论，不表示 P1 全量完成，也不解锁 P6 其他
+delegation 改造。
+
+**范围**
+
+- `docs/superpowers/specs/2026-07-17-builder-sandbox-token-free-transparent-renewal-design.md`
+- 复用 Builder 已加密保存的 Control Plane access/refresh token。
+- 复用现有 authenticated `workspace/open` 和 Runtime query-token bootstrap。
+- 增加 Runtime session TTL、浏览器会话隔离和透明续期。
+- 按 L1-L4 分级验证，并包含真实 Chromium + Firefox 同账号并发。
+
+**门禁**
+
+- 不新增 renewal grant 或宽权限 service delegation。
+- 统一账号 refresh、账号、租户或 workspace 权限失效时 fail closed。
+- 远端 refresh 轮换成功但 Builder 本地提交失败的恢复由 P5-A 负责，不在本切片
+  宣称无感。
+- 本切片完成不能作为 P2-P5 或 P6 其余范围的依赖完成证明。
 
 ## 11. P7：Builder 管理端授权收敛
 
