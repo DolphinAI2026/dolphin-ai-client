@@ -25,6 +25,32 @@ def test_postgresql_schema_statement_uses_supported_types_and_alter_syntax():
     ) == "ALTER TABLE code_runtime_bindings ALTER COLUMN app_id DROP NOT NULL"
 
 
+def test_legacy_code_runtime_agent_session_columns_become_nullable_on_startup():
+    import inspect
+
+    source = inspect.getsource(database.init_db)
+    legacy_columns = {
+        "conversation_id": "VARCHAR(160)",
+        "conversation_purpose": "VARCHAR(32)",
+        "conversation_purpose_revision": "BIGINT",
+        "status": "VARCHAR(32)",
+    }
+
+    for column_name, column_type in legacy_columns.items():
+        statement = (
+            "ALTER TABLE code_runtime_agent_sessions "
+            f"MODIFY COLUMN {column_name} {column_type} NULL"
+        )
+        assert statement in source
+        assert database._schema_statement_for_dialect(
+            statement,
+            "postgresql",
+        ) == (
+            "ALTER TABLE code_runtime_agent_sessions "
+            f"ALTER COLUMN {column_name} DROP NOT NULL"
+        )
+
+
 def test_postgresql_insert_select_ignores_conflicts_with_on_conflict():
     statement = database._insert_select_ignore_conflicts_sql(
         dialect_name="postgresql",

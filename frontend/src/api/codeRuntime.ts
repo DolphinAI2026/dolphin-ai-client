@@ -120,18 +120,22 @@ export const codeRuntimeApi = {
     )
   },
   createAgentSession(shellSessionId: string) {
+    // 外层工作台尚未持有 iframe 的 Runtime Cookie，必须复用 Builder 登录态。
+    const encodedShellSessionId = encodeURIComponent(shellSessionId)
     return request.post<any, CodeAgentSessionActivateResponse>(
-      `/code-runtime/${shellSessionId}/shell/agent-sessions`,
+      `/code/sessions/${encodedShellSessionId}/agent-sessions`,
     )
   },
   activateAgentSession(shellSessionId: string, runtimeSessionId: string) {
+    const encodedShellSessionId = encodeURIComponent(shellSessionId)
     return request.post<any, CodeAgentSessionActivateResponse>(
-      `/code-runtime/${shellSessionId}/shell/agent-sessions/${encodeURIComponent(runtimeSessionId)}/activate`,
+      `/code/sessions/${encodedShellSessionId}/agent-sessions/${encodeURIComponent(runtimeSessionId)}/activate`,
     )
   },
   deleteAgentSession(shellSessionId: string, runtimeSessionId: string) {
+    const encodedShellSessionId = encodeURIComponent(shellSessionId)
     return request.delete<any, { ok?: boolean }>(
-      `/code-runtime/${shellSessionId}/shell/agent-sessions/${encodeURIComponent(runtimeSessionId)}`,
+      `/code/sessions/${encodedShellSessionId}/agent-sessions/${encodeURIComponent(runtimeSessionId)}`,
     )
   },
 }
