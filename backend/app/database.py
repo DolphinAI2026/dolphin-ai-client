@@ -302,11 +302,11 @@ async def init_db():
 
 
 async def _migrate_code_runtime_binding_app_id_nullable(conn, inspect_fn) -> None:
-    """Allow Code runtime bindings to exist without a local applications.id.
+    """Rebuild SQLite Code runtime tables that need nullability compatibility.
 
-    MySQL is handled by the regular ALTER statement above. SQLite cannot alter a
-    column nullability in place, so older dev databases created during the first
-    Code integration need a small table rebuild.
+    MySQL is handled by the regular ALTER statements above. SQLite cannot alter
+    column nullability in place, so older Code runtime bindings and agent
+    sessions need a small table rebuild.
     """
 
     if conn.dialect.name != "sqlite":
@@ -317,18 +317,6 @@ async def _migrate_code_runtime_binding_app_id_nullable(conn, inspect_fn) -> Non
         CodeRuntimeBinding,
         CodeRuntimeBrowserSession,
     )
-
-    await conn.run_sync(lambda sync_conn: CodeRuntimeAgentSession.__table__.create(sync_conn, checkfirst=True))
-    for stmt in [
-        "CREATE INDEX IF NOT EXISTS ix_code_runtime_agent_sessions_tenant_id ON code_runtime_agent_sessions(tenant_id)",
-        "CREATE INDEX IF NOT EXISTS ix_code_runtime_agent_sessions_user_id ON code_runtime_agent_sessions(user_id)",
-        "CREATE INDEX IF NOT EXISTS ix_code_runtime_agent_sessions_session_id ON code_runtime_agent_sessions(session_id)",
-        "CREATE INDEX IF NOT EXISTS ix_code_runtime_agent_sessions_external_application_id ON code_runtime_agent_sessions(external_application_id)",
-        "CREATE INDEX IF NOT EXISTS ix_code_runtime_agent_sessions_workspace_id ON code_runtime_agent_sessions(workspace_id)",
-        "CREATE INDEX IF NOT EXISTS ix_code_runtime_agent_sessions_sandbox_instance_id ON code_runtime_agent_sessions(sandbox_instance_id)",
-        "CREATE INDEX IF NOT EXISTS ix_code_runtime_agent_sessions_runtime_session_id ON code_runtime_agent_sessions(runtime_session_id)",
-    ]:
-        await conn.execute(text(stmt))
 
     async def table_exists(table_name: str) -> bool:
         return await conn.run_sync(lambda sync_conn: inspect_fn(sync_conn).has_table(table_name))
@@ -349,6 +337,72 @@ async def _migrate_code_runtime_binding_app_id_nullable(conn, inspect_fn) -> Non
             name = str(row.get("name") or "")
             if name and not name.startswith("sqlite_autoindex"):
                 await conn.execute(text(f'DROP INDEX IF EXISTS "{name}"'))
+
+    async def ensure_current_agent_session_indexes() -> None:
+        for stmt in [
+            "CREATE INDEX IF NOT EXISTS ix_code_runtime_agent_sessions_tenant_id ON code_runtime_agent_sessions(tenant_id)",
+            "CREATE INDEX IF NOT EXISTS ix_code_runtime_agent_sessions_user_id ON code_runtime_agent_sessions(user_id)",
+            "CREATE INDEX IF NOT EXISTS ix_code_runtime_agent_sessions_app_id ON code_runtime_agent_sessions(app_id)",
+            "CREATE INDEX IF NOT EXISTS ix_code_runtime_agent_sessions_session_id ON code_runtime_agent_sessions(session_id)",
+            "CREATE INDEX IF NOT EXISTS ix_code_runtime_agent_sessions_external_application_id ON code_runtime_agent_sessions(external_application_id)",
+            "CREATE INDEX IF NOT EXISTS ix_code_runtime_agent_sessions_workspace_id ON code_runtime_agent_sessions(workspace_id)",
+            "CREATE INDEX IF NOT EXISTS ix_code_runtime_agent_sessions_sandbox_instance_id ON code_runtime_agent_sessions(sandbox_instance_id)",
+            "CREATE INDEX IF NOT EXISTS ix_code_runtime_agent_sessions_runtime_session_id ON code_runtime_agent_sessions(runtime_session_id)",
+        ]:
+            await conn.execute(text(stmt))
+
+    async def ensure_agent_session_schema() -> None:
+        table_name = CodeRuntimeAgentSession.__tablename__
+        table = CodeRuntimeAgentSession.__table__
+        if not await table_exists(table_name):
+            await conn.run_sync(lambda sync_conn: table.create(sync_conn, checkfirst=True))
+            await ensure_current_agent_session_indexes()
+            return
+
+        rows = await table_info(table_name)
+        old_columns = {row.get("name") for row in rows}
+        nullable_legacy_columns = {
+            "conversation_id",
+            "conversation_purpose",
+            "conversation_purpose_revision",
+            "status",
+        }
+        needs_rebuild = (
+            any(column.name not in old_columns for column in table.columns)
+            or any(
+                int(next(
+                    row.get("notnull") or 0
+                    for row in rows
+                    if row.get("name") == column_name
+                ))
+                for column_name in nullable_legacy_columns
+                if column_name in old_columns
+            )
+        )
+        if not needs_rebuild:
+            await ensure_current_agent_session_indexes()
+            return
+
+        archive_name = "code_runtime_agent_sessions_legacy_schema"
+        if await table_exists(archive_name):
+            suffix = 2
+            while await table_exists(f"{archive_name}_{suffix}"):
+                suffix += 1
+            archive_name = f"{archive_name}_{suffix}"
+
+        await conn.execute(text(f"ALTER TABLE {table_name} RENAME TO {archive_name}"))
+        await drop_non_auto_indexes(archive_name)
+        await conn.run_sync(lambda sync_conn: table.create(sync_conn, checkfirst=True))
+
+        common_columns = [column.name for column in table.columns if column.name in old_columns]
+        if common_columns:
+            columns_sql = ", ".join(common_columns)
+            await conn.execute(text(
+                f"INSERT OR IGNORE INTO {table_name} ({columns_sql}) "
+                f"SELECT {columns_sql} FROM {archive_name}"
+            ))
+        await conn.execute(text(f"DROP TABLE {archive_name}"))
+        await ensure_current_agent_session_indexes()
 
     async def ensure_current_indexes() -> None:
         for stmt in [
@@ -411,6 +465,8 @@ async def _migrate_code_runtime_binding_app_id_nullable(conn, inspect_fn) -> Non
                 f"SELECT {columns_sql} FROM {archive_name}"
             ))
         await conn.execute(text(f"DROP TABLE {archive_name}"))
+
+    await ensure_agent_session_schema()
 
     has_table = await table_exists("code_runtime_bindings")
     if not has_table:

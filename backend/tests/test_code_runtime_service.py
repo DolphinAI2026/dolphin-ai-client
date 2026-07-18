@@ -326,6 +326,103 @@ async def test_init_db_expands_old_runtime_binding_schema_without_cleaning_build
     await legacy_engine.dispose()
 
 
+@pytest.mark.asyncio
+async def test_init_db_rebuilds_old_runtime_agent_sessions_with_nullable_legacy_columns(
+    tmp_path,
+    monkeypatch,
+):
+    from app import database
+
+    db_path = tmp_path / "legacy-runtime-agent-sessions.sqlite"
+    legacy_engine = create_async_engine(f"sqlite+aiosqlite:///{db_path}")
+    async with legacy_engine.begin() as conn:
+        await conn.exec_driver_sql("CREATE TABLE ai_chat_sessions (id INTEGER PRIMARY KEY)")
+        await conn.exec_driver_sql(
+            """
+            CREATE TABLE code_runtime_agent_sessions (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                tenant_id INTEGER NOT NULL,
+                user_id INTEGER NOT NULL,
+                app_id INTEGER,
+                session_id INTEGER NOT NULL,
+                external_application_id VARCHAR(80) NOT NULL,
+                workspace_id VARCHAR(120),
+                sandbox_instance_id VARCHAR(160),
+                runtime_session_id VARCHAR(160) NOT NULL,
+                conversation_id VARCHAR(160) NOT NULL,
+                conversation_purpose VARCHAR(32) NOT NULL,
+                conversation_purpose_revision BIGINT NOT NULL,
+                status VARCHAR(32) NOT NULL,
+                created_at DATETIME NOT NULL,
+                updated_at DATETIME NOT NULL,
+                CONSTRAINT uq_code_runtime_agent_sessions_shell_runtime
+                    UNIQUE (session_id, runtime_session_id)
+            )
+            """
+        )
+        await conn.exec_driver_sql("INSERT INTO ai_chat_sessions (id) VALUES (1)")
+        await conn.exec_driver_sql(
+            """
+            INSERT INTO code_runtime_agent_sessions (
+                tenant_id, user_id, session_id, external_application_id,
+                runtime_session_id, conversation_id, conversation_purpose,
+                conversation_purpose_revision, status, created_at, updated_at
+            ) VALUES (
+                7, 11, 1, 'crm', 'runtime-legacy', 'conversation-1', 'code',
+                3, 'active', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP
+            )
+            """
+        )
+
+    monkeypatch.setattr(database, "engine", legacy_engine)
+    await database.init_db()
+
+    async with legacy_engine.begin() as conn:
+        columns = {
+            row["name"]: row
+            for row in (await conn.execute(
+                database.text("PRAGMA table_info(code_runtime_agent_sessions)")
+            )).mappings()
+        }
+        for column_name in {
+            "conversation_id",
+            "conversation_purpose",
+            "conversation_purpose_revision",
+            "status",
+        }:
+            assert columns[column_name]["notnull"] == 0
+
+        historical = (await conn.execute(database.text(
+            """
+            SELECT runtime_session_id, conversation_id, conversation_purpose_revision
+            FROM code_runtime_agent_sessions
+            WHERE runtime_session_id = 'runtime-legacy'
+            """
+        ))).one()
+        assert historical.runtime_session_id == "runtime-legacy"
+        assert historical.conversation_id == "conversation-1"
+        assert historical.conversation_purpose_revision == 3
+
+        await conn.execute(database.text("INSERT INTO ai_chat_sessions (id) VALUES (2)"))
+        await conn.execute(database.text(
+            """
+            INSERT INTO code_runtime_agent_sessions (
+                tenant_id, user_id, session_id, external_application_id,
+                runtime_session_id, conversation_id, conversation_purpose,
+                conversation_purpose_revision, status, created_at, updated_at
+            ) VALUES (
+                7, 11, 2, 'crm', 'runtime-null-legacy', NULL, NULL, NULL, NULL,
+                CURRENT_TIMESTAMP, CURRENT_TIMESTAMP
+            )
+            """
+        ))
+        assert await conn.scalar(database.text(
+            "SELECT COUNT(*) FROM code_runtime_agent_sessions"
+        )) == 2
+
+    await legacy_engine.dispose()
+
+
 def test_ai_chat_session_model_tracks_external_code_application():
     from sqlalchemy import inspect as sa_inspect
     from app.models.ai_chat import AIChatSession

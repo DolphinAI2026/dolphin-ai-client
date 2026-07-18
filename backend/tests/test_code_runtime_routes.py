@@ -183,6 +183,86 @@ async def test_remember_runtime_agent_session_persists_rail_snapshot(db_session)
     assert row.codex_session_resumable is True
 
 
+def test_runtime_snapshot_time_converts_offset_to_utc():
+    from datetime import datetime
+
+    from app.routes.code_runtime import _runtime_snapshot_time
+
+    assert _runtime_snapshot_time("2026-07-18T09:00:00+08:00") == datetime(
+        2026, 7, 18, 1, 0, 0
+    )
+
+
+@pytest.mark.asyncio
+async def test_remember_runtime_agent_session_recovers_unique_conflict_without_overwriting_newer_snapshot(
+    db_session,
+    monkeypatch,
+):
+    from datetime import datetime
+
+    from sqlalchemy.exc import IntegrityError
+
+    import app.routes.code_runtime as code_runtime_routes
+
+    session, binding, _rows = await _seed_browser_runtime(db_session)
+    db_session.add(CodeRuntimeAgentSession(
+        tenant_id=session.tenant_id,
+        user_id=session.user_id,
+        session_id=session.id,
+        external_application_id=binding.external_application_id,
+        runtime_session_id="runtime-race",
+        title="newer snapshot",
+        runtime_updated_at=datetime(2026, 7, 18, 2, 0, 0),
+        last_active_at=datetime(2026, 7, 18, 2, 0, 0),
+    ))
+    await db_session.commit()
+
+    original_execute = db_session.execute
+    original_flush = db_session.flush
+    first_lookup = True
+    unique_conflicts = 0
+
+    async def miss_first_lookup(statement, *args, **kwargs):
+        nonlocal first_lookup
+        if first_lookup:
+            first_lookup = False
+            return SimpleNamespace(scalar_one_or_none=lambda: None)
+        return await original_execute(statement, *args, **kwargs)
+
+    async def raise_unique_conflict(*args, **kwargs):
+        nonlocal unique_conflicts
+        if not unique_conflicts:
+            unique_conflicts += 1
+            raise IntegrityError("insert runtime agent session", {}, Exception("duplicate key"))
+        return await original_flush(*args, **kwargs)
+
+    monkeypatch.setattr(db_session, "execute", miss_first_lookup)
+    monkeypatch.setattr(db_session, "flush", raise_unique_conflict)
+
+    await code_runtime_routes._remember_runtime_agent_session(
+        db_session,
+        session,
+        binding,
+        "runtime-race",
+        {
+            "title": "older snapshot",
+            "updatedAt": "2026-07-18T01:00:00Z",
+            "lastActiveAt": "2026-07-18T01:00:00Z",
+        },
+    )
+
+    row = (
+        await db_session.execute(
+            select(CodeRuntimeAgentSession).where(
+                CodeRuntimeAgentSession.runtime_session_id == "runtime-race"
+            )
+        )
+    ).scalar_one()
+    assert unique_conflicts == 1
+    assert row.title == "newer snapshot"
+    assert row.runtime_updated_at == datetime(2026, 7, 18, 2, 0, 0)
+
+
 @pytest.mark.asyncio
 async def test_resolve_control_plane_tenant_id_uses_workspace_tenant_code(db_session):
     from app.models.tenant import Tenant
@@ -2451,6 +2531,42 @@ async def test_create_code_runtime_agent_session_proxies_to_runtime_and_updates_
 
 
 @pytest.mark.asyncio
+async def test_create_code_runtime_agent_session_propagates_snapshot_commit_failure(
+    db_session,
+    monkeypatch,
+):
+    import app.routes.code_runtime as code_runtime_routes
+    from app.routes.code_runtime import create_code_runtime_agent_session
+
+    session, _binding, _rows = await _seed_browser_runtime(db_session)
+
+    async def fake_runtime_request(*_args, **_kwargs):
+        return {
+            "runtimeSessionId": "runtime-commit-failure",
+            "title": "不能返回成功",
+            "updatedAt": "2026-07-18T01:00:00Z",
+        }
+
+    async def fail_commit():
+        raise RuntimeError("snapshot commit failed")
+
+    monkeypatch.setattr(
+        code_runtime_routes,
+        "_runtime_json_request_for_session",
+        fake_runtime_request,
+    )
+    monkeypatch.setattr(db_session, "commit", fail_commit)
+
+    with pytest.raises(RuntimeError, match="snapshot commit failed"):
+        await create_code_runtime_agent_session(
+            session.public_id,
+            _request(),
+            _ctx(),
+            db_session,
+        )
+
+
+@pytest.mark.asyncio
 async def test_create_browser_authenticated_agent_session_forwards_runtime_cookie_and_updates_binding(
     db_session,
     monkeypatch,
@@ -2499,7 +2615,11 @@ async def test_create_browser_authenticated_agent_session_forwards_runtime_cooki
             "json_body": json_body,
             "runtime_cookie": runtime_cookie,
         })
-        return {"runtimeSessionId": "runtime-browser"}
+        return {
+            "runtimeSessionId": "runtime-browser",
+            "title": "浏览器创建快照",
+            "updatedAt": "2026-07-18T01:00:00Z",
+        }
 
     monkeypatch.setattr(code_runtime_routes, "_browser_runtime_json_request", fake_runtime_request)
 
@@ -2529,6 +2649,64 @@ async def test_create_browser_authenticated_agent_session_forwards_runtime_cooki
         )
     )).scalar_one()
     assert scoped.external_application_id == "crm"
+    assert scoped.title == "浏览器创建快照"
+
+
+@pytest.mark.asyncio
+async def test_activate_browser_authenticated_agent_session_persists_runtime_snapshot(
+    db_session,
+    monkeypatch,
+):
+    import app.routes.code_runtime as code_runtime_routes
+    from app.code_runtime.service import create_proxy_cookie_token
+    from app.routes.code_runtime import activate_browser_authenticated_agent_session
+    from starlette.datastructures import Headers
+    from starlette.responses import Response
+
+    session, _binding, _rows = await _seed_browser_runtime(db_session)
+    proxy_token = create_proxy_cookie_token(
+        session_id=session.public_id,
+        user_id=11,
+        tenant_id=7,
+        browser_session_id="browser-a",
+    )
+    request = SimpleNamespace(headers=Headers({
+        "authorization": "Bearer builder-token",
+        "cookie": (
+            f"dolphin_code_runtime_{session.public_id}={proxy_token}; "
+            "apaas_sandbox_token=browser-cookie"
+        ),
+    }))
+
+    async def fake_runtime_request(*_args, **_kwargs):
+        return {
+            "runtimeSessionId": "runtime-browser-active",
+            "title": "浏览器激活快照",
+            "updatedAt": "2026-07-18T01:10:00Z",
+        }
+
+    monkeypatch.setattr(
+        code_runtime_routes,
+        "_browser_runtime_json_request",
+        fake_runtime_request,
+    )
+
+    await activate_browser_authenticated_agent_session(
+        session.public_id,
+        "runtime-browser-active",
+        request,
+        Response(),
+        _ctx(),
+        db_session,
+    )
+
+    scoped = (await db_session.execute(
+        select(CodeRuntimeAgentSession).where(
+            CodeRuntimeAgentSession.session_id == session.id,
+            CodeRuntimeAgentSession.runtime_session_id == "runtime-browser-active",
+        )
+    )).scalar_one()
+    assert scoped.title == "浏览器激活快照"
 
 
 @pytest.mark.asyncio
