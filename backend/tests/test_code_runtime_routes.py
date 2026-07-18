@@ -349,6 +349,63 @@ async def test_remember_runtime_agent_session_preserves_versioned_snapshot_again
 
 
 @pytest.mark.asyncio
+async def test_remember_runtime_agent_session_uses_legacy_last_active_at_as_version(
+    db_session,
+):
+    from datetime import datetime
+
+    from app.routes.code_runtime import _remember_runtime_agent_session
+
+    session, binding, _rows = await _seed_browser_runtime(db_session)
+    historical = CodeRuntimeAgentSession(
+        tenant_id=session.tenant_id,
+        user_id=session.user_id,
+        session_id=session.id,
+        external_application_id=binding.external_application_id,
+        workspace_id=binding.workspace_id,
+        sandbox_instance_id=binding.sandbox_instance_id,
+        runtime_session_id="runtime-legacy-last-active",
+        title="historical snapshot",
+        last_active_at=datetime(2026, 7, 18, 2, 0, 0),
+    )
+    db_session.add(historical)
+    await db_session.commit()
+
+    await _remember_runtime_agent_session(
+        db_session,
+        session,
+        binding,
+        "runtime-legacy-last-active",
+        {
+            "title": "older snapshot",
+            "lastActiveAt": "2026-07-18T01:00:00Z",
+        },
+    )
+    await db_session.commit()
+
+    await _remember_runtime_agent_session(
+        db_session,
+        session,
+        binding,
+        "runtime-legacy-last-active",
+        {"title": "unversioned snapshot"},
+    )
+    await db_session.commit()
+
+    row = (
+        await db_session.execute(
+            select(CodeRuntimeAgentSession).where(
+                CodeRuntimeAgentSession.runtime_session_id
+                == "runtime-legacy-last-active"
+            )
+        )
+    ).scalar_one()
+    assert row.title == "historical snapshot"
+    assert row.runtime_updated_at is None
+    assert row.last_active_at == datetime(2026, 7, 18, 2, 0, 0)
+
+
+@pytest.mark.asyncio
 async def test_resolve_control_plane_tenant_id_uses_workspace_tenant_code(db_session):
     from app.models.tenant import Tenant
     from app.routes.code_runtime import _resolve_control_plane_tenant_id

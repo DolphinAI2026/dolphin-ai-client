@@ -678,9 +678,12 @@ def _apply_runtime_agent_session_snapshot(
     runtime_updated_at = _runtime_snapshot_time(
         payload.get("updatedAt")
     ) or _runtime_snapshot_time(payload.get("lastActiveAt"))
-    if existing.runtime_updated_at is not None and (
+    existing_runtime_version = (
+        existing.runtime_updated_at or existing.last_active_at
+    )
+    if existing_runtime_version is not None and (
         runtime_updated_at is None
-        or runtime_updated_at < existing.runtime_updated_at
+        or runtime_updated_at < existing_runtime_version
     ):
         return
     existing.title = _runtime_snapshot_text(payload.get("title"), 300) or existing.title
