@@ -141,6 +141,7 @@ const newCodeAppError = ref('')
 const creatingCodeApplication = ref(false)
 let railRefreshTimer: number | undefined
 let openRequestSeq = 0
+let runtimeAuthRecoveryPromise: Promise<void> | null = null
 let pendingReadyTimer: {
   handle: number
   requestId: number
@@ -456,6 +457,15 @@ function retryFailedSession() {
   })
 }
 
+function recoverRuntimeAuthentication() {
+  if (runtimeAuthRecoveryPromise) return
+  errorMessage.value = ''
+  runtimeAuthRecoveryPromise = openCurrentSession()
+    .finally(() => {
+      runtimeAuthRecoveryPromise = null
+    })
+}
+
 function setCodeFrameElement(frameKey: string, element: unknown) {
   if (element instanceof HTMLIFrameElement) {
     frameElements.set(frameKey, element)
@@ -584,6 +594,14 @@ function onShellMessage(event: MessageEvent) {
   }
 
   if (message.type === 'sandbox.failed') {
+    if (
+      message.payload.recoverable === true
+      && message.payload.code === 'runtime_auth_invalid'
+      && isFrameInteractive(frame)
+    ) {
+      recoverRuntimeAuthentication()
+      return
+    }
     if (frame.phase === 'pending' && frameLifecycle.value.request) {
       const runtimeMessage = String(message.payload.message || 'Code runtime failed')
       failCurrentFrameOpen({
