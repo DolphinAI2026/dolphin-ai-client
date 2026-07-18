@@ -264,6 +264,91 @@ async def test_remember_runtime_agent_session_recovers_unique_conflict_without_o
 
 
 @pytest.mark.asyncio
+async def test_remember_runtime_agent_session_preserves_newer_snapshot_against_older_last_active_at(
+    db_session,
+):
+    from datetime import datetime
+
+    from app.routes.code_runtime import _remember_runtime_agent_session
+
+    session, binding, _rows = await _seed_browser_runtime(db_session)
+    await _remember_runtime_agent_session(
+        db_session,
+        session,
+        binding,
+        "runtime-last-active-version",
+        {
+            "title": "newer snapshot",
+            "updatedAt": "2026-07-18T02:00:00Z",
+        },
+    )
+    await db_session.commit()
+
+    await _remember_runtime_agent_session(
+        db_session,
+        session,
+        binding,
+        "runtime-last-active-version",
+        {
+            "title": "older last active snapshot",
+            "lastActiveAt": "2026-07-18T01:00:00Z",
+        },
+    )
+    await db_session.commit()
+
+    row = (
+        await db_session.execute(
+            select(CodeRuntimeAgentSession).where(
+                CodeRuntimeAgentSession.runtime_session_id == "runtime-last-active-version"
+            )
+        )
+    ).scalar_one()
+    assert row.title == "newer snapshot"
+    assert row.runtime_updated_at == datetime(2026, 7, 18, 2, 0, 0)
+
+
+@pytest.mark.asyncio
+async def test_remember_runtime_agent_session_preserves_versioned_snapshot_against_unversioned_payload(
+    db_session,
+):
+    from datetime import datetime
+
+    from app.routes.code_runtime import _remember_runtime_agent_session
+
+    session, binding, _rows = await _seed_browser_runtime(db_session)
+    await _remember_runtime_agent_session(
+        db_session,
+        session,
+        binding,
+        "runtime-unversioned",
+        {
+            "title": "versioned snapshot",
+            "updatedAt": "2026-07-18T02:00:00Z",
+        },
+    )
+    await db_session.commit()
+
+    await _remember_runtime_agent_session(
+        db_session,
+        session,
+        binding,
+        "runtime-unversioned",
+        {"title": "unversioned snapshot"},
+    )
+    await db_session.commit()
+
+    row = (
+        await db_session.execute(
+            select(CodeRuntimeAgentSession).where(
+                CodeRuntimeAgentSession.runtime_session_id == "runtime-unversioned"
+            )
+        )
+    ).scalar_one()
+    assert row.title == "versioned snapshot"
+    assert row.runtime_updated_at == datetime(2026, 7, 18, 2, 0, 0)
+
+
+@pytest.mark.asyncio
 async def test_resolve_control_plane_tenant_id_uses_workspace_tenant_code(db_session):
     from app.models.tenant import Tenant
     from app.routes.code_runtime import _resolve_control_plane_tenant_id

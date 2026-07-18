@@ -37,10 +37,20 @@ def test_legacy_code_runtime_agent_session_columns_become_nullable_on_startup():
     }
 
     for column_name, column_type in legacy_columns.items():
+        add_statement = (
+            "ALTER TABLE code_runtime_agent_sessions "
+            f"ADD COLUMN {column_name} {column_type}"
+        )
         statement = (
             "ALTER TABLE code_runtime_agent_sessions "
             f"MODIFY COLUMN {column_name} {column_type} NULL"
         )
+        assert add_statement in source
+        assert source.index(add_statement) < source.index(statement)
+        assert database._schema_statement_for_dialect(
+            add_statement,
+            "postgresql",
+        ) == add_statement
         assert statement in source
         assert database._schema_statement_for_dialect(
             statement,
@@ -49,6 +59,15 @@ def test_legacy_code_runtime_agent_session_columns_become_nullable_on_startup():
             "ALTER TABLE code_runtime_agent_sessions "
             f"ALTER COLUMN {column_name} DROP NOT NULL"
         )
+
+
+def test_sqlite_agent_session_rebuild_copies_rows_without_ignoring_conflicts():
+    import inspect
+
+    source = inspect.getsource(database._migrate_code_runtime_binding_app_id_nullable)
+    assert "INSERT OR IGNORE INTO {table_name}" not in source
+    assert "archive_row_count" in source
+    assert "current_row_count" in source
 
 
 def test_code_runtime_agent_session_snapshot_has_startup_migrations():

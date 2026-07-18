@@ -361,6 +361,7 @@ async def test_init_db_rebuilds_old_runtime_agent_sessions_with_nullable_legacy_
             """
         )
         await conn.exec_driver_sql("INSERT INTO ai_chat_sessions (id) VALUES (1)")
+        await conn.exec_driver_sql("INSERT INTO ai_chat_sessions (id) VALUES (2)")
         await conn.exec_driver_sql(
             """
             INSERT INTO code_runtime_agent_sessions (
@@ -370,6 +371,18 @@ async def test_init_db_rebuilds_old_runtime_agent_sessions_with_nullable_legacy_
             ) VALUES (
                 7, 11, 1, 'crm', 'runtime-legacy', 'conversation-1', 'code',
                 3, 'active', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP
+            )
+            """
+        )
+        await conn.exec_driver_sql(
+            """
+            INSERT INTO code_runtime_agent_sessions (
+                tenant_id, user_id, session_id, external_application_id,
+                runtime_session_id, conversation_id, conversation_purpose,
+                conversation_purpose_revision, status, created_at, updated_at
+            ) VALUES (
+                7, 11, 2, 'crm', 'runtime-legacy-2', 'conversation-2', 'code',
+                4, 'active', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP
             )
             """
         )
@@ -402,8 +415,11 @@ async def test_init_db_rebuilds_old_runtime_agent_sessions_with_nullable_legacy_
         assert historical.runtime_session_id == "runtime-legacy"
         assert historical.conversation_id == "conversation-1"
         assert historical.conversation_purpose_revision == 3
+        assert await conn.scalar(database.text(
+            "SELECT COUNT(*) FROM code_runtime_agent_sessions"
+        )) == 2
 
-        await conn.execute(database.text("INSERT INTO ai_chat_sessions (id) VALUES (2)"))
+        await conn.execute(database.text("INSERT INTO ai_chat_sessions (id) VALUES (3)"))
         await conn.execute(database.text(
             """
             INSERT INTO code_runtime_agent_sessions (
@@ -411,14 +427,14 @@ async def test_init_db_rebuilds_old_runtime_agent_sessions_with_nullable_legacy_
                 runtime_session_id, conversation_id, conversation_purpose,
                 conversation_purpose_revision, status, created_at, updated_at
             ) VALUES (
-                7, 11, 2, 'crm', 'runtime-null-legacy', NULL, NULL, NULL, NULL,
+                7, 11, 3, 'crm', 'runtime-null-legacy', NULL, NULL, NULL, NULL,
                 CURRENT_TIMESTAMP, CURRENT_TIMESTAMP
             )
             """
         ))
         assert await conn.scalar(database.text(
             "SELECT COUNT(*) FROM code_runtime_agent_sessions"
-        )) == 2
+        )) == 3
 
     await legacy_engine.dispose()
 

@@ -235,6 +235,10 @@ async def init_db():
             # 纯 Code 会话没有本地 applications.id，运行时绑定允许 app_id 为空。
             "ALTER TABLE code_runtime_bindings MODIFY COLUMN app_id INTEGER NULL",
             # 早期多会话表包含以下必填字段；当前模型已不再写入，旧库必须释放非空约束。
+            "ALTER TABLE code_runtime_agent_sessions ADD COLUMN conversation_id VARCHAR(160)",
+            "ALTER TABLE code_runtime_agent_sessions ADD COLUMN conversation_purpose VARCHAR(32)",
+            "ALTER TABLE code_runtime_agent_sessions ADD COLUMN conversation_purpose_revision BIGINT",
+            "ALTER TABLE code_runtime_agent_sessions ADD COLUMN status VARCHAR(32)",
             "ALTER TABLE code_runtime_agent_sessions MODIFY COLUMN conversation_id VARCHAR(160) NULL",
             "ALTER TABLE code_runtime_agent_sessions MODIFY COLUMN conversation_purpose VARCHAR(32) NULL",
             "ALTER TABLE code_runtime_agent_sessions MODIFY COLUMN conversation_purpose_revision BIGINT NULL",
@@ -395,12 +399,22 @@ async def _migrate_code_runtime_binding_app_id_nullable(conn, inspect_fn) -> Non
         await conn.run_sync(lambda sync_conn: table.create(sync_conn, checkfirst=True))
 
         common_columns = [column.name for column in table.columns if column.name in old_columns]
+        archive_row_count = await conn.scalar(
+            text(f"SELECT COUNT(*) FROM {archive_name}")
+        )
         if common_columns:
             columns_sql = ", ".join(common_columns)
             await conn.execute(text(
-                f"INSERT OR IGNORE INTO {table_name} ({columns_sql}) "
+                f"INSERT INTO {table_name} ({columns_sql}) "
                 f"SELECT {columns_sql} FROM {archive_name}"
             ))
+        current_row_count = await conn.scalar(
+            text(f"SELECT COUNT(*) FROM {table_name}")
+        )
+        if current_row_count != archive_row_count:
+            raise RuntimeError(
+                "SQLite code runtime agent session rebuild copied an unexpected row count"
+            )
         await conn.execute(text(f"DROP TABLE {archive_name}"))
         await ensure_current_agent_session_indexes()
 

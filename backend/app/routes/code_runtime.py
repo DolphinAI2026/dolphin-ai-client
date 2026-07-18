@@ -675,11 +675,12 @@ def _apply_runtime_agent_session_snapshot(
     snapshot: dict[str, Any] | None,
 ) -> None:
     payload = snapshot if isinstance(snapshot, dict) else {}
-    runtime_updated_at = _runtime_snapshot_time(payload.get("updatedAt"))
-    if (
-        runtime_updated_at is not None
-        and existing.runtime_updated_at is not None
-        and runtime_updated_at < existing.runtime_updated_at
+    runtime_updated_at = _runtime_snapshot_time(
+        payload.get("updatedAt")
+    ) or _runtime_snapshot_time(payload.get("lastActiveAt"))
+    if existing.runtime_updated_at is not None and (
+        runtime_updated_at is None
+        or runtime_updated_at < existing.runtime_updated_at
     ):
         return
     existing.title = _runtime_snapshot_text(payload.get("title"), 300) or existing.title
