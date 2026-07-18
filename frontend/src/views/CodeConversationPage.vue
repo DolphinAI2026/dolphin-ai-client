@@ -345,6 +345,32 @@ async function openCurrentSession() {
 
   try {
     const runtimeAgentId = currentRuntimeAgentId()
+    const reusableCachedState = activateCachedCodeFrame(frameLifecycle.value, {
+      requestId: requestSeq,
+      sessionRef,
+      requireRouteMatch: false,
+    })
+    if (reusableCachedState !== frameLifecycle.value) {
+      // The mounted Runtime shell already owns a valid sandbox session. When
+      // only the inner agent changes, activate it directly and keep the shell
+      // iframe mounted instead of reopening the workspace through Control Plane.
+      if (runtimeAgentId) {
+        try {
+          await codeRuntimeApi.activateAgentSession(sessionRef, runtimeAgentId)
+        } catch (activationError: any) {
+          if (!isUnavailableRuntimeSessionError(activationError, runtimeAgentId)) {
+            throw activationError
+          }
+          clearRouteAgentQueryIfCurrent(runtimeAgentId)
+          return
+        }
+      }
+      if (requestSeq !== openRequestSeq) return
+      frameLifecycle.value = reusableCachedState
+      refreshOuterCodeRail()
+      return
+    }
+
     const opened = await codeRuntimeApi.openSession(sessionRef)
     if (opened.session_id !== sessionRef) {
       await router.replace({
