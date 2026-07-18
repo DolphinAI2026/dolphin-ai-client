@@ -2075,12 +2075,12 @@ async def test_list_ai_chat_sessions_returns_external_code_app_fields(db_session
 
 
 @pytest.mark.asyncio
-async def test_list_code_runtime_rail_history_returns_opened_app_agent_sessions(db_session, monkeypatch):
-    import httpx
-    import app.routes.code_runtime as code_runtime_routes
+async def test_list_code_runtime_rail_history_returns_opened_app_agent_sessions(db_session):
+    from datetime import datetime
+
     from app.routes.code_runtime import list_code_runtime_rail_history
 
-    db_session.add(AIChatSession(
+    crm_session = AIChatSession(
         tenant_id=7,
         user_id=11,
         title="CRM Code",
@@ -2089,8 +2089,8 @@ async def test_list_code_runtime_rail_history_returns_opened_app_agent_sessions(
         external_application_id="crm",
         external_app_name="CRM",
         external_app_code="crm",
-    ))
-    db_session.add(AIChatSession(
+    )
+    unopened_session = AIChatSession(
         tenant_id=7,
         user_id=11,
         title="未打开 Code",
@@ -2098,60 +2098,47 @@ async def test_list_code_runtime_rail_history_returns_opened_app_agent_sessions(
         status="active",
         external_application_id="never-opened",
         external_app_name="未打开",
-    ))
-    await db_session.flush()
-    db_session.add(CodeRuntimeBinding(
-        tenant_id=7,
-        user_id=11,
-        session_id=1,
-        external_application_id="crm",
-        runtime_base_url="http://runtime.local/workspaces/crm",
-        builder_url="http://runtime.local/workspaces/crm/builder",
-        runtime_service_session_enc=_runtime_service_session_enc(),
-        runtime_session_id="runtime-1",
-        status="ready",
-    ))
-    await db_session.commit()
-
-    def handler(request: httpx.Request) -> httpx.Response:
-        assert request.method == "GET"
-        assert request.url.path == "/workspaces/crm/api/agent/sessions"
-        return httpx.Response(200, json={
-            "sessions": [
-                {
-                    "runtimeSessionId": "runtime-2",
-                    "title": "修复登录问题",
-                    "state": "waiting_input",
-                    "createdAt": "2026-07-01T06:00:00Z",
-                    "updatedAt": "2026-07-01T07:00:00Z",
-                    "lastActiveAt": "2026-07-01T07:00:00Z",
-                    "current": False,
-                    "deletedAt": None,
-                    "capabilityStale": False,
-                    "codexSessionResumable": True,
-                },
-                {
-                    "runtimeSessionId": "runtime-1",
-                    "title": "需求梳理",
-                    "state": "busy",
-                    "createdAt": "2026-07-01T05:00:00Z",
-                    "updatedAt": "2026-07-01T06:30:00Z",
-                    "lastActiveAt": "2026-07-01T06:30:00Z",
-                    "current": True,
-                    "deletedAt": None,
-                    "capabilityStale": False,
-                    "codexSessionResumable": True,
-                },
-            ]
-        })
-
-    transport = httpx.MockTransport(handler)
-    original = code_runtime_routes.httpx.AsyncClient
-    monkeypatch.setattr(
-        code_runtime_routes.httpx,
-        "AsyncClient",
-        lambda **kwargs: original(transport=transport, **kwargs),
     )
+    db_session.add_all([crm_session, unopened_session])
+    await db_session.flush()
+    db_session.add_all([
+        CodeRuntimeBinding(
+            tenant_id=7,
+            user_id=11,
+            session_id=crm_session.id,
+            external_application_id="crm",
+            runtime_base_url="http://runtime.local/workspaces/crm",
+            builder_url="http://runtime.local/workspaces/crm/builder",
+            runtime_service_session_enc=_runtime_service_session_enc(),
+            runtime_session_id="runtime-1",
+            status="ready",
+        ),
+        CodeRuntimeAgentSession(
+            tenant_id=7,
+            user_id=11,
+            session_id=crm_session.id,
+            external_application_id="crm",
+            runtime_session_id="runtime-2",
+            title="修复登录问题",
+            state="waiting_input",
+            runtime_created_at=datetime(2026, 7, 1, 6, 0, 0),
+            runtime_updated_at=datetime(2026, 7, 1, 7, 0, 0),
+            last_active_at=datetime(2026, 7, 1, 7, 0, 0),
+        ),
+        CodeRuntimeAgentSession(
+            tenant_id=7,
+            user_id=11,
+            session_id=crm_session.id,
+            external_application_id="crm",
+            runtime_session_id="runtime-1",
+            title="需求梳理",
+            state="busy",
+            runtime_created_at=datetime(2026, 7, 1, 5, 0, 0),
+            runtime_updated_at=datetime(2026, 7, 1, 6, 30, 0),
+            last_active_at=datetime(2026, 7, 1, 6, 30, 0),
+        ),
+    ])
+    await db_session.commit()
 
     result = await list_code_runtime_rail_history(_request(), _ctx(), db_session)
 
@@ -2168,48 +2155,75 @@ async def test_list_code_runtime_rail_history_returns_opened_app_agent_sessions(
     }
     crm_shell_id = apps_by_external_id["crm"]["shell_session_id"]
     assert str(UUID(crm_shell_id)) == crm_shell_id
-    assert apps_by_external_id["crm"] == {
-        "shell_session_id": crm_shell_id,
-        "external_application_id": "crm",
-        "app_name": "CRM",
-        "app_code": "crm",
-        "runtime_session_id": "runtime-1",
-        "sessions": [
-            {
-                "runtimeSessionId": "runtime-2",
-                "title": "修复登录问题",
-                "state": "waiting_input",
-                "createdAt": "2026-07-01T06:00:00Z",
-                "updatedAt": "2026-07-01T07:00:00Z",
-                "lastActiveAt": "2026-07-01T07:00:00Z",
-                "current": False,
-                "deletedAt": None,
-                "capabilityStale": False,
-                "codexSessionResumable": True,
-            },
-            {
-                "runtimeSessionId": "runtime-1",
-                "title": "需求梳理",
-                "state": "busy",
-                "createdAt": "2026-07-01T05:00:00Z",
-                "updatedAt": "2026-07-01T06:30:00Z",
-                "lastActiveAt": "2026-07-01T06:30:00Z",
-                "current": True,
-                "deletedAt": None,
-                "capabilityStale": False,
-                "codexSessionResumable": True,
-            },
-        ],
-    }
+    crm_app = apps_by_external_id["crm"]
+    assert crm_app["app_name"] == "CRM"
+    assert crm_app["app_code"] == "crm"
+    assert crm_app["runtime_session_id"] == "runtime-1"
+    assert [
+        (item["runtimeSessionId"], item["title"], item["current"])
+        for item in crm_app["sessions"]
+    ] == [
+        ("runtime-2", "修复登录问题", False),
+        ("runtime-1", "需求梳理", True),
+    ]
 
 
 @pytest.mark.asyncio
-async def test_list_code_runtime_rail_history_filters_sessions_by_shell_scope(db_session, monkeypatch):
-    import httpx
+async def test_list_code_runtime_rail_history_is_database_only(db_session, monkeypatch):
     import app.routes.code_runtime as code_runtime_routes
     from app.routes.code_runtime import list_code_runtime_rail_history
 
-    db_session.add(AIChatSession(
+    session, binding, _rows = await _seed_browser_runtime(db_session)
+    binding.runtime_session_id = "runtime-current"
+    db_session.add(CodeRuntimeAgentSession(
+        tenant_id=7,
+        user_id=11,
+        session_id=session.id,
+        external_application_id="crm",
+        runtime_session_id="runtime-current",
+        title="数据库快照",
+        state="waiting_input",
+        capability_stale=False,
+        codex_session_resumable=True,
+    ))
+    await db_session.commit()
+
+    async def unexpected_runtime_call(*_args, **_kwargs):
+        raise AssertionError("rail history must not call Runtime")
+
+    monkeypatch.setattr(
+        code_runtime_routes,
+        "_runtime_json_request_for_session",
+        unexpected_runtime_call,
+    )
+    monkeypatch.setattr(
+        code_runtime_routes,
+        "_runtime_session_detail_or_none",
+        unexpected_runtime_call,
+    )
+
+    result = await list_code_runtime_rail_history(_request(), _ctx(), db_session)
+
+    assert result["apps"][0]["sessions"][0]["runtimeSessionId"] == "runtime-current"
+    assert result["apps"][0]["sessions"][0]["title"] == "数据库快照"
+    assert result["apps"][0]["sessions"][0]["current"] is True
+
+
+@pytest.mark.asyncio
+async def test_list_code_runtime_rail_history_filters_sessions_by_shell_scope(db_session):
+    from app.routes.code_runtime import list_code_runtime_rail_history
+
+    crm_session = AIChatSession(
+        tenant_id=7,
+        user_id=11,
+        title="CRM Code",
+        mode="code",
+        status="active",
+        external_application_id="crm",
+        external_app_name="CRM",
+        external_app_code="crm",
+    )
+    demo_session = AIChatSession(
         tenant_id=7,
         user_id=11,
         title="发布会 Demo Code",
@@ -2218,96 +2232,14 @@ async def test_list_code_runtime_rail_history_filters_sessions_by_shell_scope(db
         external_application_id="demo-app",
         external_app_name="发布会 Demo",
         external_app_code="demo",
-    ))
-    await db_session.flush()
-    db_session.add(CodeRuntimeBinding(
-        tenant_id=7,
-        user_id=11,
-        session_id=1,
-        external_application_id="demo-app",
-        runtime_base_url="http://runtime.local/shared",
-        builder_url="http://runtime.local/shared/builder",
-        runtime_session_id="runtime-demo",
-        status="ready",
-    ))
-    db_session.add(CodeRuntimeAgentSession(
-        tenant_id=7,
-        user_id=11,
-        session_id=1,
-        external_application_id="demo-app",
-        runtime_session_id="runtime-demo",
-    ))
-    await db_session.commit()
-
-    def handler(request: httpx.Request) -> httpx.Response:
-        assert request.method == "GET"
-        assert request.url.path == "/shared/api/agent/sessions"
-        return httpx.Response(200, json={
-            "sessions": [
-                {
-                    "runtimeSessionId": "runtime-crm",
-                    "title": "CRM 历史",
-                    "state": "waiting_input",
-                    "current": False,
-                },
-                {
-                    "runtimeSessionId": "runtime-demo",
-                    "title": "Demo 1：AI Native 应用设计",
-                    "state": "waiting_input",
-                    "current": False,
-                },
-            ]
-        })
-
-    transport = httpx.MockTransport(handler)
-    original = code_runtime_routes.httpx.AsyncClient
-    monkeypatch.setattr(
-        code_runtime_routes.httpx,
-        "AsyncClient",
-        lambda **kwargs: original(transport=transport, **kwargs),
     )
-
-    result = await list_code_runtime_rail_history(_request(), _ctx(), db_session)
-
-    assert result["apps"][0]["external_application_id"] == "demo-app"
-    assert [item["runtimeSessionId"] for item in result["apps"][0]["sessions"]] == ["runtime-demo"]
-    assert result["apps"][0]["sessions"][0]["current"] is True
-
-
-@pytest.mark.asyncio
-async def test_list_code_runtime_rail_history_excludes_sessions_scoped_to_other_shells(db_session, monkeypatch):
-    import httpx
-    import app.routes.code_runtime as code_runtime_routes
-    from app.routes.code_runtime import list_code_runtime_rail_history
-
-    db_session.add_all([
-        AIChatSession(
-            tenant_id=7,
-            user_id=11,
-            title="CRM Code",
-            mode="code",
-            status="active",
-            external_application_id="crm",
-            external_app_name="CRM",
-            external_app_code="crm",
-        ),
-        AIChatSession(
-            tenant_id=7,
-            user_id=11,
-            title="发布会 Demo Code",
-            mode="code",
-            status="active",
-            external_application_id="demo-app",
-            external_app_name="发布会 Demo",
-            external_app_code="demo",
-        ),
-    ])
+    db_session.add_all([crm_session, demo_session])
     await db_session.flush()
     db_session.add_all([
         CodeRuntimeBinding(
             tenant_id=7,
             user_id=11,
-            session_id=1,
+            session_id=crm_session.id,
             external_application_id="crm",
             runtime_base_url="http://runtime.local/shared",
             builder_url="http://runtime.local/shared/builder",
@@ -2317,7 +2249,7 @@ async def test_list_code_runtime_rail_history_excludes_sessions_scoped_to_other_
         CodeRuntimeBinding(
             tenant_id=7,
             user_id=11,
-            session_id=2,
+            session_id=demo_session.id,
             external_application_id="demo-app",
             runtime_base_url="http://runtime.local/shared",
             builder_url="http://runtime.local/shared/builder",
@@ -2327,55 +2259,37 @@ async def test_list_code_runtime_rail_history_excludes_sessions_scoped_to_other_
         CodeRuntimeAgentSession(
             tenant_id=7,
             user_id=11,
-            session_id=2,
+            session_id=crm_session.id,
+            external_application_id="crm",
+            runtime_session_id="runtime-crm",
+            title="CRM 历史",
+            state="waiting_input",
+        ),
+        CodeRuntimeAgentSession(
+            tenant_id=7,
+            user_id=11,
+            session_id=demo_session.id,
             external_application_id="demo-app",
             runtime_session_id="runtime-demo",
+            title="Demo 1：AI Native 应用设计",
+            state="waiting_input",
         ),
     ])
     await db_session.commit()
-
-    def handler(request: httpx.Request) -> httpx.Response:
-        assert request.method == "GET"
-        assert request.url.path == "/shared/api/agent/sessions"
-        return httpx.Response(200, json={
-            "sessions": [
-                {
-                    "runtimeSessionId": "runtime-crm",
-                    "title": "CRM 历史",
-                    "state": "waiting_input",
-                    "current": False,
-                },
-                {
-                    "runtimeSessionId": "runtime-demo",
-                    "title": "Demo 1：AI Native 应用设计",
-                    "state": "waiting_input",
-                    "current": False,
-                },
-            ]
-        })
-
-    transport = httpx.MockTransport(handler)
-    original = code_runtime_routes.httpx.AsyncClient
-    monkeypatch.setattr(
-        code_runtime_routes.httpx,
-        "AsyncClient",
-        lambda **kwargs: original(transport=transport, **kwargs),
-    )
 
     result = await list_code_runtime_rail_history(_request(), _ctx(), db_session)
 
     apps_by_external_id = {app["external_application_id"]: app for app in result["apps"]}
     assert [item["runtimeSessionId"] for item in apps_by_external_id["crm"]["sessions"]] == ["runtime-crm"]
     assert [item["runtimeSessionId"] for item in apps_by_external_id["demo-app"]["sessions"]] == ["runtime-demo"]
+    assert apps_by_external_id["demo-app"]["sessions"][0]["current"] is True
 
 
 @pytest.mark.asyncio
-async def test_list_code_runtime_rail_history_includes_current_empty_session_placeholder(db_session, monkeypatch):
-    import httpx
-    import app.routes.code_runtime as code_runtime_routes
+async def test_list_code_runtime_rail_history_excludes_sessions_scoped_to_other_shells(db_session):
     from app.routes.code_runtime import list_code_runtime_rail_history
 
-    db_session.add(AIChatSession(
+    crm_session = AIChatSession(
         tenant_id=7,
         user_id=11,
         title="CRM Code",
@@ -2384,12 +2298,81 @@ async def test_list_code_runtime_rail_history_includes_current_empty_session_pla
         external_application_id="crm",
         external_app_name="CRM",
         external_app_code="crm",
-    ))
+    )
+    demo_session = AIChatSession(
+        tenant_id=7,
+        user_id=11,
+        title="发布会 Demo Code",
+        mode="code",
+        status="active",
+        external_application_id="demo-app",
+        external_app_name="发布会 Demo",
+        external_app_code="demo",
+    )
+    db_session.add_all([crm_session, demo_session])
+    await db_session.flush()
+    db_session.add_all([
+        CodeRuntimeBinding(
+            tenant_id=7,
+            user_id=11,
+            session_id=crm_session.id,
+            external_application_id="crm",
+            runtime_base_url="http://runtime.local/shared",
+            builder_url="http://runtime.local/shared/builder",
+            runtime_session_id="runtime-shared",
+            status="ready",
+        ),
+        CodeRuntimeBinding(
+            tenant_id=7,
+            user_id=11,
+            session_id=demo_session.id,
+            external_application_id="demo-app",
+            runtime_base_url="http://runtime.local/shared",
+            builder_url="http://runtime.local/shared/builder",
+            runtime_session_id="runtime-shared",
+            status="ready",
+        ),
+        CodeRuntimeAgentSession(
+            tenant_id=7,
+            user_id=11,
+            session_id=demo_session.id,
+            external_application_id="demo-app",
+            runtime_session_id="runtime-shared",
+            title="只属于 Demo 的同名会话",
+            state="waiting_input",
+        ),
+    ])
+    await db_session.commit()
+
+    result = await list_code_runtime_rail_history(_request(), _ctx(), db_session)
+
+    apps_by_external_id = {app["external_application_id"]: app for app in result["apps"]}
+    crm_sessions = apps_by_external_id["crm"]["sessions"]
+    assert [item["runtimeSessionId"] for item in crm_sessions] == ["runtime-shared"]
+    assert crm_sessions[0]["title"] == "CRM Code"
+    assert apps_by_external_id["demo-app"]["sessions"][0]["title"] == "只属于 Demo 的同名会话"
+
+
+@pytest.mark.asyncio
+async def test_list_code_runtime_rail_history_includes_current_empty_session_placeholder(db_session):
+    from app.routes.code_runtime import list_code_runtime_rail_history
+
+    session = AIChatSession(
+        tenant_id=7,
+        user_id=11,
+        title="CRM Code",
+        mode="code",
+        status="active",
+        external_application_id="crm",
+        external_app_name="CRM",
+        external_app_code="crm",
+    )
+    db_session.add(session)
     await db_session.flush()
     db_session.add(CodeRuntimeBinding(
         tenant_id=7,
         user_id=11,
-        session_id=1,
+        session_id=session.id,
         external_application_id="crm",
         runtime_base_url="http://runtime.local/workspaces/crm",
         builder_url="http://runtime.local/workspaces/crm/builder",
@@ -2399,58 +2382,20 @@ async def test_list_code_runtime_rail_history_includes_current_empty_session_pla
     ))
     await db_session.commit()
 
-    def handler(request: httpx.Request) -> httpx.Response:
-        assert request.method == "GET"
-        if request.url.path == "/workspaces/crm/api/agent/sessions/runtime-new-empty":
-            return httpx.Response(200, json={
-                "runtimeSessionId": "runtime-new-empty",
-                "title": "",
-                "summary": "",
-                "state": "running",
-                "createdAt": "2026-07-01T08:00:00Z",
-                "updatedAt": "2026-07-01T08:00:00Z",
-                "lastActiveAt": "2026-07-01T08:00:00Z",
-                "current": True,
-            })
-        assert request.url.path == "/workspaces/crm/api/agent/sessions"
-        return httpx.Response(200, json={
-            "sessions": [
-                {
-                    "runtimeSessionId": "runtime-old",
-                    "title": "已有对话",
-                    "state": "waiting_input",
-                    "createdAt": "2026-07-01T06:00:00Z",
-                    "updatedAt": "2026-07-01T07:00:00Z",
-                    "lastActiveAt": "2026-07-01T07:00:00Z",
-                    "current": False,
-                },
-            ]
-        })
-
-    transport = httpx.MockTransport(handler)
-    original = code_runtime_routes.httpx.AsyncClient
-    monkeypatch.setattr(
-        code_runtime_routes.httpx,
-        "AsyncClient",
-        lambda **kwargs: original(transport=transport, **kwargs),
-    )
-
     result = await list_code_runtime_rail_history(_request(), _ctx(), db_session)
 
     assert result["apps"][0]["runtime_session_id"] == "runtime-new-empty"
     sessions = result["apps"][0]["sessions"]
-    assert [s["runtimeSessionId"] for s in sessions] == ["runtime-new-empty", "runtime-old"]
+    assert [s["runtimeSessionId"] for s in sessions] == ["runtime-new-empty"]
     assert sessions[0]["current"] is True
     assert sessions[0]["title"] == "CRM Code"
 
 
 @pytest.mark.asyncio
-async def test_list_code_runtime_rail_history_uses_current_session_detail_when_list_filters_it(db_session, monkeypatch):
-    import httpx
-    import app.routes.code_runtime as code_runtime_routes
+async def test_list_code_runtime_rail_history_prefers_persisted_current_snapshot(db_session):
     from app.routes.code_runtime import list_code_runtime_rail_history
 
-    db_session.add(AIChatSession(
+    session = AIChatSession(
         tenant_id=7,
         user_id=11,
         title="CRM Code",
@@ -2459,71 +2404,37 @@ async def test_list_code_runtime_rail_history_uses_current_session_detail_when_l
         external_application_id="crm",
         external_app_name="CRM",
         external_app_code="crm",
-    ))
-    await db_session.flush()
-    db_session.add(CodeRuntimeBinding(
-        tenant_id=7,
-        user_id=11,
-        session_id=1,
-        external_application_id="crm",
-        runtime_base_url="http://runtime.local/workspaces/crm",
-        builder_url="http://runtime.local/workspaces/crm/builder",
-        runtime_service_session_enc=_runtime_service_session_enc(),
-        runtime_session_id="runtime-new-title",
-        status="ready",
-    ))
-    await db_session.commit()
-
-    paths: list[str] = []
-
-    def handler(request: httpx.Request) -> httpx.Response:
-        assert request.method == "GET"
-        paths.append(request.url.path)
-        if request.url.path == "/workspaces/crm/api/agent/sessions":
-            return httpx.Response(200, json={
-                "sessions": [
-                    {
-                        "runtimeSessionId": "runtime-old",
-                        "title": "已有对话",
-                        "state": "waiting_input",
-                        "createdAt": "2026-07-01T06:00:00Z",
-                        "updatedAt": "2026-07-01T07:00:00Z",
-                        "lastActiveAt": "2026-07-01T07:00:00Z",
-                        "current": False,
-                    },
-                ]
-            })
-        if request.url.path == "/workspaces/crm/api/agent/sessions/runtime-new-title":
-            return httpx.Response(200, json={
-                "runtimeSessionId": "runtime-new-title",
-                "title": "你好，请输入XXX",
-                "state": "waiting_input",
-                "createdAt": "2026-07-01T08:00:00Z",
-                "updatedAt": "2026-07-01T08:10:00Z",
-                "lastActiveAt": "2026-07-01T08:10:00Z",
-                "current": False,
-                "deletedAt": None,
-                "capabilityStale": False,
-                "codexSessionResumable": True,
-            })
-        return httpx.Response(404, json={"error": "not found"})
-
-    transport = httpx.MockTransport(handler)
-    original = code_runtime_routes.httpx.AsyncClient
-    monkeypatch.setattr(
-        code_runtime_routes.httpx,
-        "AsyncClient",
-        lambda **kwargs: original(transport=transport, **kwargs),
     )
+    db_session.add(session)
+    await db_session.flush()
+    db_session.add_all([
+        CodeRuntimeBinding(
+            tenant_id=7,
+            user_id=11,
+            session_id=session.id,
+            external_application_id="crm",
+            runtime_base_url="http://runtime.local/workspaces/crm",
+            builder_url="http://runtime.local/workspaces/crm/builder",
+            runtime_service_session_enc=_runtime_service_session_enc(),
+            runtime_session_id="runtime-new-title",
+            status="ready",
+        ),
+        CodeRuntimeAgentSession(
+            tenant_id=7,
+            user_id=11,
+            session_id=session.id,
+            external_application_id="crm",
+            runtime_session_id="runtime-new-title",
+            title="你好，请输入XXX",
+            state="waiting_input",
+        ),
+    ])
+    await db_session.commit()
 
     result = await list_code_runtime_rail_history(_request(), _ctx(), db_session)
 
-    assert paths == [
-        "/workspaces/crm/api/agent/sessions",
-        "/workspaces/crm/api/agent/sessions/runtime-new-title",
-    ]
     sessions = result["apps"][0]["sessions"]
-    assert [s["runtimeSessionId"] for s in sessions] == ["runtime-new-title", "runtime-old"]
+    assert [s["runtimeSessionId"] for s in sessions] == ["runtime-new-title"]
     assert sessions[0]["title"] == "你好，请输入XXX"
     assert sessions[0]["current"] is True
 

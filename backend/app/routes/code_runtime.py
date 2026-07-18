@@ -548,6 +548,29 @@ def _runtime_session_placeholder(
     }
 
 
+def _runtime_agent_snapshot_item(
+    row: CodeRuntimeAgentSession,
+    current_runtime_id: str,
+) -> dict[str, Any]:
+    created_at = row.runtime_created_at or row.created_at
+    updated_at = row.runtime_updated_at or row.updated_at
+    last_active_at = row.last_active_at or updated_at
+    return {
+        "runtimeSessionId": row.runtime_session_id,
+        "title": row.title or row.summary or "未命名会话",
+        "summary": row.summary,
+        "state": row.state or "waiting_input",
+        "model": row.model,
+        "createdAt": created_at.isoformat() if created_at else None,
+        "updatedAt": updated_at.isoformat() if updated_at else None,
+        "lastActiveAt": last_active_at.isoformat() if last_active_at else None,
+        "current": row.runtime_session_id == current_runtime_id,
+        "deletedAt": row.deleted_at.isoformat() if row.deleted_at else None,
+        "capabilityStale": bool(row.capability_stale),
+        "codexSessionResumable": bool(row.codex_session_resumable),
+    }
+
+
 async def _runtime_session_detail_or_none(
     binding: CodeRuntimeBinding,
     runtime_session_id: str,
@@ -858,6 +881,29 @@ async def list_code_runtime_rail_history(
         )
     ).all()
 
+    shell_session_ids = [int(session.id) for session, _binding in rows]
+    snapshot_rows = []
+    if shell_session_ids:
+        snapshot_rows = (
+            await db.execute(
+                select(CodeRuntimeAgentSession)
+                .where(
+                    CodeRuntimeAgentSession.tenant_id == ctx.tenant_id,
+                    CodeRuntimeAgentSession.user_id == ctx.user.id,
+                    CodeRuntimeAgentSession.session_id.in_(shell_session_ids),
+                    CodeRuntimeAgentSession.deleted_at.is_(None),
+                )
+                .order_by(
+                    CodeRuntimeAgentSession.last_active_at.desc(),
+                    CodeRuntimeAgentSession.updated_at.desc(),
+                    CodeRuntimeAgentSession.id.desc(),
+                )
+            )
+        ).scalars().all()
+    snapshots_by_shell: dict[int, list[CodeRuntimeAgentSession]] = {}
+    for snapshot in snapshot_rows:
+        snapshots_by_shell.setdefault(int(snapshot.session_id), []).append(snapshot)
+
     apps: list[dict[str, Any]] = []
     emitted_external_ids: set[str] = set()
     for session, binding in rows:
@@ -882,60 +928,25 @@ async def list_code_runtime_rail_history(
         if not binding:
             apps.append(app)
             continue
-        try:
-            payload = await _runtime_json_request_for_session(
-                session,
-                binding,
-                "GET",
-                "/api/agent/sessions",
-                request=request,
-                ctx=ctx,
-                db=db,
-                timeout=2.0,
+        current_runtime_id = str(binding.runtime_session_id or "").strip() if binding else ""
+        app["sessions"] = [
+            _runtime_agent_snapshot_item(snapshot, current_runtime_id)
+            for snapshot in snapshots_by_shell.get(int(session.id), [])
+        ]
+        if binding and current_runtime_id and not any(
+            item["runtimeSessionId"] == current_runtime_id
+            for item in app["sessions"]
+        ):
+            app["sessions"].insert(
+                0,
+                _runtime_session_placeholder(
+                    binding,
+                    current_runtime_id,
+                    session.title,
+                ),
             )
-            sessions = payload.get("sessions") if isinstance(payload, dict) else []
-            normalized_sessions = sessions if isinstance(sessions, list) else []
-            scoped_ids = await _scoped_runtime_session_ids(db, session.id)
-            if scoped_ids:
-                normalized_sessions = [
-                    item for item in normalized_sessions
-                    if isinstance(item, dict) and str(item.get("runtimeSessionId") or "").strip() in scoped_ids
-                ]
-            else:
-                other_scoped_ids = await _runtime_session_ids_scoped_to_other_shells(db, session.id)
-                if other_scoped_ids:
-                    normalized_sessions = [
-                        item for item in normalized_sessions
-                        if (
-                            isinstance(item, dict)
-                            and str(item.get("runtimeSessionId") or "").strip() not in other_scoped_ids
-                        )
-                    ]
-            app["sessions"] = normalized_sessions
-        except HTTPException as exc:
-            app["error"] = exc.detail
-        current_runtime_id = str(binding.runtime_session_id or "").strip()
-        if current_runtime_id:
-            normalized_sessions = [item for item in app["sessions"] if isinstance(item, dict)]
-            current_found = False
-            for item in normalized_sessions:
-                if str(item.get("runtimeSessionId") or "").strip() == current_runtime_id:
-                    item["current"] = True
-                    current_found = True
-                    break
-            if not current_found:
-                normalized_sessions.insert(
-                    0,
-                    await _current_runtime_session_item(
-                        binding,
-                        current_runtime_id,
-                        session.title,
-                    ),
-                )
-            app["sessions"] = normalized_sessions
         apps.append(app)
 
-    await db.commit()
     return {"apps": apps}
 
 
