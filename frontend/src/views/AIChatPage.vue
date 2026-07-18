@@ -73,7 +73,7 @@
             </svg>
           </button>
           <button
-            v-else-if="artifacts.length > 0"
+            v-else-if="currentSession"
             class="panel-toggle-btn"
             :class="{ active: artifactsPanelOpen }"
             @click="artifactsPanelOpen = !artifactsPanelOpen"
@@ -340,10 +340,10 @@
       @close="codeCmdPaletteOpen = false"
     />
 
-    <!-- ═══════ 右侧 artifacts（仅在有设计文档 + 用户展开时显示；code 会话不显示，走 Codex 面板）═══════ -->
+    <!-- ═══════ 右侧 artifacts（用户展开时显示；code 会话不显示，走 Codex 面板）═══════ -->
     <aside
       class="aside-right"
-      v-if="!isCodeSession && currentSession && artifactsPanelOpen && artifacts.length > 0"
+      v-if="!isCodeSession && currentSession && artifactsPanelOpen"
       :style="{ width: asideRightWidth + 'px' }"
     >
       <div
@@ -446,7 +446,7 @@
         <div v-else class="art-preview-body md" v-html="renderMd(activeArtifactContent)"></div>
       </div>
       <div v-else class="art-empty">
-        <p class="muted">点击左侧文件查看</p>
+        <p class="muted">{{ artifacts.length > 0 ? '点击左侧文件查看' : '暂无设计文档' }}</p>
       </div>
     </aside>
 
