@@ -75,4 +75,27 @@ describe('code applications store', () => {
       .resolves.toEqual(page('refreshed'))
     expect(list).toHaveBeenCalledTimes(2)
   })
+
+  it('keeps singleflight across clear and drops stale cache writes', async () => {
+    let resolveRequest!: (value: CodeApplicationListResponse) => void
+    const upstream = new Promise<CodeApplicationListResponse>((resolve) => {
+      resolveRequest = resolve
+    })
+    const list = vi.spyOn(codeRuntimeApi, 'listApplications').mockReturnValue(upstream)
+    const store = useCodeApplicationsStore()
+    const scope = { tenantId: 3 }
+
+    const first = store.load(scope, { pageSize: 100 })
+    store.clear()
+    const second = store.load(scope, { pageSize: 100 })
+    expect(list).toHaveBeenCalledTimes(1)
+
+    resolveRequest(page('stale'))
+    await expect(first).resolves.toEqual(page('stale'))
+    await expect(second).resolves.toEqual(page('stale'))
+
+    list.mockResolvedValueOnce(page('fresh'))
+    await expect(store.load(scope, { pageSize: 100 })).resolves.toEqual(page('fresh'))
+    expect(list).toHaveBeenCalledTimes(2)
+  })
 })

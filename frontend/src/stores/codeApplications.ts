@@ -47,6 +47,8 @@ function cacheKey(
 export const useCodeApplicationsStore = defineStore('codeApplications', () => {
   const cache = new Map<string, CacheEntry>()
   const inflight = new Map<string, Promise<CodeApplicationListResponse>>()
+  let cacheGeneration = 0
+  const tenantGenerations = new Map<string, number>()
 
   function refresh(
     scope: CodeApplicationCacheScope,
@@ -57,13 +59,21 @@ export const useCodeApplicationsStore = defineStore('codeApplications', () => {
     if (joined) return joined
 
     const normalized = normalizeParams(params)
+    const tenantId = String(scope.tenantId)
+    const requestGeneration = cacheGeneration
+    const requestTenantGeneration = tenantGenerations.get(tenantId) || 0
     const pending = codeRuntimeApi.listApplications(normalized)
       .then((page) => {
-        cache.set(key, {
-          tenantId: String(scope.tenantId),
-          loadedAt: Date.now(),
-          page,
-        })
+        if (
+          cacheGeneration === requestGeneration
+          && (tenantGenerations.get(tenantId) || 0) === requestTenantGeneration
+        ) {
+          cache.set(key, {
+            tenantId,
+            loadedAt: Date.now(),
+            page,
+          })
+        }
         return page
       })
       .finally(() => {
@@ -95,11 +105,12 @@ export const useCodeApplicationsStore = defineStore('codeApplications', () => {
     for (const [key, entry] of cache.entries()) {
       if (entry.tenantId === expected) cache.delete(key)
     }
+    tenantGenerations.set(expected, (tenantGenerations.get(expected) || 0) + 1)
   }
 
   function clear(): void {
     cache.clear()
-    inflight.clear()
+    cacheGeneration += 1
   }
 
   return { load, invalidateTenant, clear }
