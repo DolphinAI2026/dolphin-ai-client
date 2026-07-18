@@ -47,6 +47,7 @@ function cacheKey(
 export const useCodeApplicationsStore = defineStore('codeApplications', () => {
   const cache = new Map<string, CacheEntry>()
   const inflight = new Map<string, Promise<CodeApplicationListResponse>>()
+  const forcedInflight = new Set<string>()
   const queuedRefresh = new Map<string, Promise<CodeApplicationListResponse>>()
   let cacheGeneration = 0
   const tenantGenerations = new Map<string, number>()
@@ -54,6 +55,7 @@ export const useCodeApplicationsStore = defineStore('codeApplications', () => {
   function startRefresh(
     scope: CodeApplicationCacheScope,
     params: CodeApplicationListParams = {},
+    force = false,
   ): Promise<CodeApplicationListResponse> {
     const key = cacheKey(scope, params)
     const joined = inflight.get(key)
@@ -78,9 +80,13 @@ export const useCodeApplicationsStore = defineStore('codeApplications', () => {
         return page
       })
       .finally(() => {
-        if (inflight.get(key) === pending) inflight.delete(key)
+        if (inflight.get(key) === pending) {
+          inflight.delete(key)
+          forcedInflight.delete(key)
+        }
       })
     inflight.set(key, pending)
+    if (force) forcedInflight.add(key)
     return pending
   }
 
@@ -91,12 +97,14 @@ export const useCodeApplicationsStore = defineStore('codeApplications', () => {
   ): Promise<CodeApplicationListResponse> {
     const key = cacheKey(scope, params)
     const joined = inflight.get(key)
-    if (!force || !joined) return joined || startRefresh(scope, params)
+    if (!force) return joined || startRefresh(scope, params)
+    if (!joined) return startRefresh(scope, params, true)
 
     const queued = queuedRefresh.get(key)
     if (queued) return queued
+    if (forcedInflight.has(key)) return joined
 
-    const runRefresh = () => startRefresh(scope, params)
+    const runRefresh = () => startRefresh(scope, params, true)
     const pending = joined
       .then(runRefresh, runRefresh)
       .finally(() => {

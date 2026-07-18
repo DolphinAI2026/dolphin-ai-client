@@ -76,6 +76,25 @@ describe('code applications store', () => {
     expect(list).toHaveBeenCalledTimes(2)
   })
 
+  it('joins concurrent force refreshes when no request is active', async () => {
+    let resolveRequest!: (value: CodeApplicationListResponse) => void
+    const upstream = new Promise<CodeApplicationListResponse>((resolve) => {
+      resolveRequest = resolve
+    })
+    const list = vi.spyOn(codeRuntimeApi, 'listApplications').mockReturnValue(upstream)
+    const store = useCodeApplicationsStore()
+    const scope = { tenantId: 3 }
+
+    const first = store.load(scope, { pageSize: 100 }, { force: true })
+    const second = store.load(scope, { pageSize: 100 }, { force: true })
+    expect(list).toHaveBeenCalledTimes(1)
+
+    resolveRequest(page('forced'))
+    await expect(first).resolves.toEqual(page('forced'))
+    await expect(second).resolves.toEqual(page('forced'))
+    expect(list).toHaveBeenCalledTimes(1)
+  })
+
   it('queues one shared force refresh behind an existing request', async () => {
     let resolveFirst!: (value: CodeApplicationListResponse) => void
     let resolveRefresh!: (value: CodeApplicationListResponse) => void
