@@ -30,10 +30,6 @@ from app.deps import (
     resolve_default_tenant_id_for_user,
 )
 from app.config import settings
-from app.control_plane_tenants import (
-    is_unbound_control_plane_account,
-    matches_current_control_plane_tenant,
-)
 from app.error_messages import SELECT_TOKEN_INVALID, SELECT_TOKEN_EXPIRED
 from pydantic import BaseModel
 
@@ -762,10 +758,7 @@ async def _sync_user_membership(
     if is_default:
         await db.execute(
             UserTenant.__table__.update()
-            .where(
-                UserTenant.user_id == user.id,
-                UserTenant.tenant_id != tenant.id,
-            )
+            .where(UserTenant.user_id == user.id)
             .values(is_default=False)
         )
         membership.is_default = True
@@ -1292,11 +1285,23 @@ async def _ensure_control_plane_user(
                 tenant.id,
                 exc,
             )
+        existing_default = (
+            await db.execute(
+                select(UserTenant)
+                .where(
+                    UserTenant.user_id == user.id,
+                    UserTenant.status == 1,
+                    UserTenant.is_default == True,
+                )
+                .order_by(UserTenant.joined_at.asc(), UserTenant.id.asc())
+                .limit(1)
+            )
+        ).scalar_one_or_none()
         await _sync_user_membership(
             db,
             user,
             tenant,
-            is_default=True,
+            is_default=existing_default is None or existing_default.tenant_id == tenant.id,
             preferred_role_codes=preferred_roles,
         )
         await db.flush()
@@ -1621,26 +1626,7 @@ async def switch_tenant(
     is_unbound_coding_account = (
         ctx.user.account_source == "coding" and not ctx.user.apaas_user_id
     )
-    restrict_to_current_control_plane_tenant = (
-        not settings.control_plane_binding_enabled
-        and is_unbound_control_plane_account(ctx.user)
-    )
-    if restrict_to_current_control_plane_tenant:
-        tenant = (
-            await db.execute(
-                select(Tenant)
-                .join(UserTenant, UserTenant.tenant_id == Tenant.id)
-                .where(
-                    Tenant.id == data.tenant_id,
-                    Tenant.status == 1,
-                    UserTenant.user_id == ctx.user.id,
-                    UserTenant.status == 1,
-                )
-            )
-        ).scalar_one_or_none()
-        if not tenant or not matches_current_control_plane_tenant(ctx.user, tenant):
-            raise HTTPException(status_code=403, detail="当前平台账号不可访问目标租户")
-    elif ctx.user.is_platform_admin and not is_apaas_account and not is_unbound_coding_account:
+    if ctx.user.is_platform_admin and not is_apaas_account and not is_unbound_coding_account:
         tenant = (
             await db.execute(
                 select(Tenant).where(Tenant.id == data.tenant_id, Tenant.status == 1)

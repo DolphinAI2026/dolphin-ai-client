@@ -394,7 +394,7 @@ async def test_control_plane_login_without_binding_uses_only_control_plane_curre
 
 
 @pytest.mark.asyncio
-async def test_control_plane_login_promotes_current_platform_tenant_to_default(
+async def test_control_plane_login_preserves_existing_builder_default_tenant(
     db_session,
     monkeypatch,
 ):
@@ -435,17 +435,13 @@ async def test_control_plane_login_promotes_current_platform_tenant_to_default(
         )
     ).scalars().all()
     default_memberships = [membership for membership in memberships if membership.is_default]
-    current_tenant = (
-        await db_session.execute(
-            select(Tenant).where(Tenant.tenant_code == "workspace-new-tenant")
-        )
-    ).scalar_one()
 
     assert len(default_memberships) == 1
-    assert default_memberships[0].tenant_id == current_tenant.id
-    assert next(
-        membership for membership in memberships if membership.tenant_id == existing_tenant.id
-    ).is_default is False
+    assert default_memberships[0].tenant_id == existing_tenant.id
+    assert any(
+        membership.tenant_id != existing_tenant.id and not membership.is_default
+        for membership in memberships
+    )
 
 
 @pytest.mark.asyncio

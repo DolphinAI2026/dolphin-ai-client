@@ -11,11 +11,6 @@ from app.database import get_db
 from app.models import User
 from app.models.tenant import UserTenant, Role, Tenant
 from app.auth import security, decode_token
-from app.config import settings
-from app.control_plane_tenants import (
-    is_unbound_control_plane_account,
-    matches_current_control_plane_tenant,
-)
 
 logger = logging.getLogger(__name__)
 
@@ -87,30 +82,6 @@ async def resolve_bound_apaas_tenant_id(db: AsyncSession, tenant_id: int | None)
     value = result.scalar_one_or_none()
     text = str(value or "").strip()
     return text or None
-
-
-async def resolve_current_control_plane_tenant_id(
-    db: AsyncSession,
-    user: User,
-) -> int | None:
-    if settings.control_plane_binding_enabled or not is_unbound_control_plane_account(user):
-        return None
-    rows = (
-        await db.execute(
-            select(Tenant)
-            .join(UserTenant, UserTenant.tenant_id == Tenant.id)
-            .where(
-                UserTenant.user_id == user.id,
-                UserTenant.status == 1,
-                Tenant.status == 1,
-            )
-        )
-    ).scalars().all()
-    match = next(
-        (tenant for tenant in rows if matches_current_control_plane_tenant(user, tenant)),
-        None,
-    )
-    return match.id if match else None
 
 
 def _first_text(*values: object) -> str | None:
@@ -187,10 +158,6 @@ async def get_auth_context(
                     detail="平台管理员才能访问此资源",
                 )
             resolved_tenant_id = await resolve_default_tenant_id_for_user(db, user_id)
-            resolved_tenant_id = (
-                await resolve_current_control_plane_tenant_id(db, user)
-                or resolved_tenant_id
-            )
             bound_apaas_tid = await resolve_bound_apaas_tenant_id(db, resolved_tenant_id)
             return AuthContext(
                 user=user,
@@ -211,8 +178,6 @@ async def get_auth_context(
     user = result.scalar_one_or_none()
     if not user or not user.is_active:
         raise credentials_exception
-
-    tenant_id = await resolve_current_control_plane_tenant_id(db, user) or tenant_id
 
     # 双 ID 解析：JWT 优先，回退 user 行
     eff_apaas_uid = jwt_apaas_uid or user.apaas_user_id or None
@@ -300,10 +265,6 @@ async def get_auth_context_from_token(token: str) -> AuthContext:
         if raw_tenant_id is None:
             if user.is_platform_admin:
                 tenant_id = await resolve_default_tenant_id_for_user(db, user_id) or 0
-                tenant_id = (
-                    await resolve_current_control_plane_tenant_id(db, user)
-                    or tenant_id
-                )
                 bound_apaas_tid = await resolve_bound_apaas_tenant_id(db, tenant_id)
                 eff_apaas_tid = _first_text(jwt_apaas_tid, bound_apaas_tid, user.apaas_tenant_id)
                 return AuthContext(
@@ -317,8 +278,6 @@ async def get_auth_context_from_token(token: str) -> AuthContext:
             tenant_id = 0
         else:
             tenant_id = int(raw_tenant_id)
-
-        tenant_id = await resolve_current_control_plane_tenant_id(db, user) or tenant_id
 
         bound_apaas_tid = await resolve_bound_apaas_tenant_id(db, tenant_id)
         eff_apaas_tid = _first_text(jwt_apaas_tid, bound_apaas_tid, user.apaas_tenant_id)

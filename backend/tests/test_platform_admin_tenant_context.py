@@ -72,46 +72,6 @@ async def test_platform_admin_legacy_token_resolves_default_tenant(db_session):
 
 
 @pytest.mark.asyncio
-async def test_control_plane_context_normalizes_stale_token_to_current_platform_tenant(
-    db_session,
-    monkeypatch,
-):
-    monkeypatch.setattr(settings, "control_plane_binding_enabled", False)
-    current = Tenant(tenant_name="Current", tenant_code="default")
-    stale = Tenant(tenant_name="Stale", tenant_code="workspace-other")
-    user = User(
-        username="control-plane-admin",
-        hashed_password=get_password_hash("secret"),
-        account_source="control_plane",
-        coding_tenant_id="default",
-        is_platform_admin=True,
-        is_active=True,
-    )
-    db_session.add_all([current, stale, user])
-    await db_session.flush()
-    db_session.add_all([
-        UserTenant(
-            user_id=user.id,
-            tenant_id=current.id,
-            status=1,
-            is_default=True,
-        ),
-        UserTenant(
-            user_id=user.id,
-            tenant_id=stale.id,
-            status=1,
-            is_default=False,
-        ),
-    ])
-    await db_session.commit()
-    stale_token = create_access_token(user.id, tenant_id=stale.id)
-
-    ctx = await get_auth_context(SimpleNamespace(credentials=stale_token), db_session)
-
-    assert ctx.tenant_id == current.id
-
-
-@pytest.mark.asyncio
 async def test_auth_context_uses_bound_apaas_tenant_for_current_local_tenant(db_session):
     tenant = Tenant(
         tenant_name="Bound Tenant",
