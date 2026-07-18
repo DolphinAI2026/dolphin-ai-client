@@ -2188,25 +2188,194 @@ async def test_list_code_runtime_rail_history_is_database_only(db_session, monke
     ))
     await db_session.commit()
 
-    async def unexpected_runtime_call(*_args, **_kwargs):
-        raise AssertionError("rail history must not call Runtime")
+    runtime_calls: dict[str, int] = {}
 
-    monkeypatch.setattr(
-        code_runtime_routes,
+    def block_runtime_helper(name: str):
+        async def unexpected_runtime_call(*_args, **_kwargs):
+            runtime_calls[name] = runtime_calls.get(name, 0) + 1
+            raise AssertionError(f"rail history must not call {name}")
+
+        return unexpected_runtime_call
+
+    for helper_name in (
+        "_runtime_json_request",
         "_runtime_json_request_for_session",
-        unexpected_runtime_call,
-    )
-    monkeypatch.setattr(
-        code_runtime_routes,
         "_runtime_session_detail_or_none",
-        unexpected_runtime_call,
-    )
+        "_current_runtime_session_item",
+        "_browser_runtime_json_request",
+        "_browser_runtime_json_request_for_session",
+    ):
+        monkeypatch.setattr(
+            code_runtime_routes,
+            helper_name,
+            block_runtime_helper(helper_name),
+        )
 
     result = await list_code_runtime_rail_history(_request(), _ctx(), db_session)
 
     assert result["apps"][0]["sessions"][0]["runtimeSessionId"] == "runtime-current"
     assert result["apps"][0]["sessions"][0]["title"] == "数据库快照"
     assert result["apps"][0]["sessions"][0]["current"] is True
+    assert runtime_calls == {}
+
+
+@pytest.mark.asyncio
+async def test_list_code_runtime_rail_history_queries_only_latest_shell_snapshot_per_application(
+    db_session,
+    monkeypatch,
+):
+    import re
+    from datetime import datetime, timedelta
+
+    from app.routes.code_runtime import list_code_runtime_rail_history
+
+    first_updated_at = datetime(2026, 7, 18, 8, 0, 0)
+    shells = [
+        AIChatSession(
+            tenant_id=7,
+            user_id=11,
+            title=f"CRM 历史 Shell {index}",
+            mode="code",
+            status="active",
+            external_application_id="crm",
+            external_app_name="CRM",
+            external_app_code="crm",
+            updated_at=first_updated_at + timedelta(minutes=index),
+        )
+        for index in range(9)
+    ]
+    db_session.add_all(shells)
+    await db_session.flush()
+
+    for index, shell in enumerate(shells):
+        updated_at = first_updated_at + timedelta(minutes=index)
+        db_session.add_all([
+            CodeRuntimeBinding(
+                tenant_id=7,
+                user_id=11,
+                session_id=shell.id,
+                external_application_id="crm",
+                runtime_base_url="http://runtime.local/workspaces/crm",
+                builder_url="http://runtime.local/workspaces/crm/builder",
+                runtime_session_id=f"runtime-crm-{index}",
+                status="ready",
+                updated_at=updated_at,
+            ),
+            CodeRuntimeAgentSession(
+                tenant_id=7,
+                user_id=11,
+                session_id=shell.id,
+                external_application_id="crm",
+                runtime_session_id=f"runtime-crm-{index}",
+                title=f"CRM 快照 {index}",
+                state="waiting_input",
+                last_active_at=updated_at,
+            ),
+        ])
+    await db_session.commit()
+
+    snapshot_query_sql: list[str] = []
+    original_execute = db_session.execute
+
+    async def capture_snapshot_query(statement, *args, **kwargs):
+        compiled = str(statement.compile(
+            dialect=db_session.bind.dialect,
+            compile_kwargs={"literal_binds": True},
+        ))
+        if "FROM code_runtime_agent_sessions" in compiled:
+            snapshot_query_sql.append(compiled)
+        return await original_execute(statement, *args, **kwargs)
+
+    monkeypatch.setattr(db_session, "execute", capture_snapshot_query)
+
+    result = await list_code_runtime_rail_history(_request(), _ctx(), db_session)
+
+    assert len(result["apps"]) == 1
+    assert result["apps"][0]["shell_session_id"] == shells[-1].public_id
+    assert [item["runtimeSessionId"] for item in result["apps"][0]["sessions"]] == [
+        "runtime-crm-8"
+    ]
+    assert len(snapshot_query_sql) == 1
+    matched_session_ids = re.search(
+        r"code_runtime_agent_sessions\.session_id IN \(([^)]*)\)",
+        snapshot_query_sql[0],
+    )
+    assert matched_session_ids is not None
+    assert {
+        int(session_id.strip())
+        for session_id in matched_session_ids.group(1).split(",")
+    } == {shells[-1].id}
+
+
+@pytest.mark.asyncio
+async def test_list_code_runtime_rail_history_sorts_snapshots_by_activity_fallback(db_session):
+    from datetime import datetime
+
+    from app.routes.code_runtime import list_code_runtime_rail_history
+
+    session = AIChatSession(
+        tenant_id=7,
+        user_id=11,
+        title="CRM Code",
+        mode="code",
+        status="active",
+        external_application_id="crm",
+        external_app_name="CRM",
+        external_app_code="crm",
+    )
+    db_session.add(session)
+    await db_session.flush()
+    db_session.add_all([
+        CodeRuntimeBinding(
+            tenant_id=7,
+            user_id=11,
+            session_id=session.id,
+            external_application_id="crm",
+            runtime_base_url="http://runtime.local/workspaces/crm",
+            builder_url="http://runtime.local/workspaces/crm/builder",
+            runtime_session_id="runtime-runtime-updated",
+            status="ready",
+        ),
+        CodeRuntimeAgentSession(
+            tenant_id=7,
+            user_id=11,
+            session_id=session.id,
+            external_application_id="crm",
+            runtime_session_id="runtime-db-updated",
+            title="数据库更新时间",
+            updated_at=datetime(2026, 7, 18, 10, 0, 0),
+        ),
+        CodeRuntimeAgentSession(
+            tenant_id=7,
+            user_id=11,
+            session_id=session.id,
+            external_application_id="crm",
+            runtime_session_id="runtime-last-active",
+            title="最后活动时间",
+            last_active_at=datetime(2026, 7, 18, 12, 0, 0),
+            runtime_updated_at=datetime(2026, 7, 18, 15, 0, 0),
+            updated_at=datetime(2026, 7, 18, 9, 0, 0),
+        ),
+        CodeRuntimeAgentSession(
+            tenant_id=7,
+            user_id=11,
+            session_id=session.id,
+            external_application_id="crm",
+            runtime_session_id="runtime-runtime-updated",
+            title="Runtime 更新时间",
+            runtime_updated_at=datetime(2026, 7, 18, 13, 0, 0),
+            updated_at=datetime(2026, 7, 18, 8, 0, 0),
+        ),
+    ])
+    await db_session.commit()
+
+    result = await list_code_runtime_rail_history(_request(), _ctx(), db_session)
+
+    assert [item["runtimeSessionId"] for item in result["apps"][0]["sessions"]] == [
+        "runtime-runtime-updated",
+        "runtime-last-active",
+        "runtime-db-updated",
+    ]
 
 
 @pytest.mark.asyncio

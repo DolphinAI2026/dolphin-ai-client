@@ -11,7 +11,7 @@ from urllib.parse import parse_qsl, quote, unquote_plus, urlsplit
 import httpx
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from pydantic import BaseModel
-from sqlalchemy import and_, or_, select
+from sqlalchemy import String, and_, cast, func, literal, or_, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from starlette.background import BackgroundTask
@@ -854,28 +854,58 @@ async def list_code_runtime_rail_history(
     ctx: Annotated[AuthContext, Depends(get_auth_context)],
     db: Annotated[AsyncSession, Depends(get_db)],
 ):
+    external_application_id = func.coalesce(
+        func.nullif(func.trim(CodeRuntimeBinding.external_application_id), ""),
+        func.nullif(func.trim(AIChatSession.external_application_id), ""),
+    )
+    representative_shell_key = func.coalesce(
+        external_application_id,
+        literal("session:") + cast(AIChatSession.id, String),
+    )
+    representative_shells = (
+        select(
+            AIChatSession.id.label("shell_session_id"),
+            func.row_number().over(
+                partition_by=representative_shell_key,
+                order_by=(
+                    AIChatSession.updated_at.desc(),
+                    CodeRuntimeBinding.updated_at.desc(),
+                    AIChatSession.id.desc(),
+                ),
+            ).label("representative_rank"),
+        )
+        .outerjoin(CodeRuntimeBinding, CodeRuntimeBinding.session_id == AIChatSession.id)
+        .outerjoin(Application, Application.id == AIChatSession.app_id)
+        .where(
+            AIChatSession.tenant_id == ctx.tenant_id,
+            AIChatSession.user_id == ctx.user.id,
+            AIChatSession.mode == "code",
+            AIChatSession.status != "archived",
+            or_(AIChatSession.app_id.is_(None), Application.app_type == "ai-code"),
+            or_(
+                Application.app_type == "ai-code",
+                and_(
+                    AIChatSession.external_application_id.isnot(None),
+                    AIChatSession.external_application_id != "",
+                ),
+                and_(
+                    CodeRuntimeBinding.external_application_id.isnot(None),
+                    CodeRuntimeBinding.external_application_id != "",
+                ),
+            ),
+        )
+        .subquery()
+    )
     rows = (
         await db.execute(
             select(AIChatSession, CodeRuntimeBinding)
+            .join(
+                representative_shells,
+                representative_shells.c.shell_session_id == AIChatSession.id,
+            )
             .outerjoin(CodeRuntimeBinding, CodeRuntimeBinding.session_id == AIChatSession.id)
-            .outerjoin(Application, Application.id == AIChatSession.app_id)
             .where(
-                AIChatSession.tenant_id == ctx.tenant_id,
-                AIChatSession.user_id == ctx.user.id,
-                AIChatSession.mode == "code",
-                AIChatSession.status != "archived",
-                or_(AIChatSession.app_id.is_(None), Application.app_type == "ai-code"),
-                or_(
-                    Application.app_type == "ai-code",
-                    and_(
-                        AIChatSession.external_application_id.isnot(None),
-                        AIChatSession.external_application_id != "",
-                    ),
-                    and_(
-                        CodeRuntimeBinding.external_application_id.isnot(None),
-                        CodeRuntimeBinding.external_application_id != "",
-                    ),
-                ),
+                representative_shells.c.representative_rank == 1,
             )
             .order_by(AIChatSession.updated_at.desc(), CodeRuntimeBinding.updated_at.desc(), AIChatSession.id.desc())
         )
@@ -894,8 +924,11 @@ async def list_code_runtime_rail_history(
                     CodeRuntimeAgentSession.deleted_at.is_(None),
                 )
                 .order_by(
-                    CodeRuntimeAgentSession.last_active_at.desc(),
-                    CodeRuntimeAgentSession.updated_at.desc(),
+                    func.coalesce(
+                        CodeRuntimeAgentSession.last_active_at,
+                        CodeRuntimeAgentSession.runtime_updated_at,
+                        CodeRuntimeAgentSession.updated_at,
+                    ).desc(),
                     CodeRuntimeAgentSession.id.desc(),
                 )
             )
@@ -905,17 +938,12 @@ async def list_code_runtime_rail_history(
         snapshots_by_shell.setdefault(int(snapshot.session_id), []).append(snapshot)
 
     apps: list[dict[str, Any]] = []
-    emitted_external_ids: set[str] = set()
     for session, binding in rows:
         external_id = str(
             (binding.external_application_id if binding else None)
             or session.external_application_id
             or ""
         ).strip()
-        dedupe_key = external_id or f"session:{session.id}"
-        if dedupe_key in emitted_external_ids:
-            continue
-        emitted_external_ids.add(dedupe_key)
 
         app: dict[str, Any] = {
             "shell_session_id": ensure_code_session_public_id(session),
