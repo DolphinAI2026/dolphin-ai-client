@@ -234,6 +234,11 @@ async def init_db():
             "CREATE INDEX IF NOT EXISTS ix_ai_chat_sessions_external_application_id ON ai_chat_sessions(external_application_id)",
             # 纯 Code 会话没有本地 applications.id，运行时绑定允许 app_id 为空。
             "ALTER TABLE code_runtime_bindings MODIFY COLUMN app_id INTEGER NULL",
+            # 早期多会话表包含以下必填字段；当前模型已不再写入，旧库必须释放非空约束。
+            "ALTER TABLE code_runtime_agent_sessions MODIFY COLUMN conversation_id VARCHAR(160) NULL",
+            "ALTER TABLE code_runtime_agent_sessions MODIFY COLUMN conversation_purpose VARCHAR(32) NULL",
+            "ALTER TABLE code_runtime_agent_sessions MODIFY COLUMN conversation_purpose_revision BIGINT NULL",
+            "ALTER TABLE code_runtime_agent_sessions MODIFY COLUMN status VARCHAR(32) NULL",
             # 桌面产品账号来源标记(2026-06-16): 'apaas'=aPaaS同步账号 | 'desktop'=桌面账号
             "ALTER TABLE users ADD COLUMN account_source VARCHAR(20) NOT NULL DEFAULT 'apaas'",
             # account-service: username 全局唯一 → 复合 (username, account_source)

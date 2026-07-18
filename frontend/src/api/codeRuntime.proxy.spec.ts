@@ -3,10 +3,16 @@ import { resolveCodeRuntimeEmbedUrl } from './codeRuntime'
 import apiSource from './codeRuntime.ts?raw'
 
 describe('Code runtime browser-authenticated session APIs', () => {
-  it('keeps runtime session operations under the session proxy cookie path', () => {
+  it('keeps iframe reads on the proxy cookie path and outer mutations on Builder auth', () => {
     expect(apiSource).toContain('listAgentSessions(shellSessionId')
     expect(apiSource).toContain('`/code-runtime/${shellSessionId}/shell/agent-sessions`')
-    expect(apiSource).not.toContain('`/code/sessions/${shellSessionId}/agent-sessions`')
+    expect(apiSource).toContain('`/code/sessions/${encodedShellSessionId}/agent-sessions`')
+    expect(apiSource).toContain(
+      '`/code/sessions/${encodedShellSessionId}/agent-sessions/${encodeURIComponent(runtimeSessionId)}/activate`',
+    )
+    expect(apiSource).toContain(
+      '`/code/sessions/${encodedShellSessionId}/agent-sessions/${encodeURIComponent(runtimeSessionId)}`',
+    )
   })
 
   it('adds the deployed application base to runtime iframe URLs', () => {
