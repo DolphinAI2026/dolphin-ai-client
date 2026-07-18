@@ -21,7 +21,10 @@ interface CacheEntry {
   page: CodeApplicationListResponse
 }
 
-const CACHE_TTL_MS = 5_000
+// Opening a sandbox can take several seconds. Keep the tenant-scoped application
+// snapshot long enough for list -> workspace navigation to reuse it; explicit refresh
+// and tenant invalidation still bypass or clear this cache immediately.
+const CACHE_TTL_MS = 30_000
 
 function normalizeParams(params: CodeApplicationListParams = {}) {
   return {
