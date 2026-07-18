@@ -16,6 +16,7 @@ from sqlalchemy import String, and_, cast, func, literal, or_, select, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from starlette.background import BackgroundTask
+from starlette.requests import ClientDisconnect
 from starlette.responses import RedirectResponse, Response, StreamingResponse
 
 from app.code_runtime.service import (
@@ -2613,7 +2614,12 @@ async def proxy_code_runtime(
     if binding_changed:
         await db.commit()
     target = _target_url(binding, path, request)
-    body = b"" if request.method in {"GET", "HEAD"} else await request.body()
+    try:
+        body = b"" if request.method in {"GET", "HEAD"} else await request.body()
+    except ClientDisconnect:
+        # Hidden hot frames abort in-flight polling when shell visibility
+        # changes. That is an expected client cancellation, not an ASGI error.
+        return Response(status_code=499)
     headers = _runtime_request_headers(
         request,
         session_id,
