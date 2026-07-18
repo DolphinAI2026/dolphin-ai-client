@@ -76,6 +76,64 @@ describe('code applications store', () => {
     expect(list).toHaveBeenCalledTimes(2)
   })
 
+  it('queues one shared force refresh behind an existing request', async () => {
+    let resolveFirst!: (value: CodeApplicationListResponse) => void
+    let resolveRefresh!: (value: CodeApplicationListResponse) => void
+    const firstUpstream = new Promise<CodeApplicationListResponse>((resolve) => {
+      resolveFirst = resolve
+    })
+    const refreshUpstream = new Promise<CodeApplicationListResponse>((resolve) => {
+      resolveRefresh = resolve
+    })
+    const list = vi.spyOn(codeRuntimeApi, 'listApplications')
+      .mockReturnValueOnce(firstUpstream)
+      .mockReturnValueOnce(refreshUpstream)
+    const store = useCodeApplicationsStore()
+    const scope = { tenantId: 3 }
+
+    const first = store.load(scope, { pageSize: 100 })
+    const forced = store.load(scope, { pageSize: 100 }, { force: true })
+    const joinedForce = store.load(scope, { pageSize: 100 }, { force: true })
+    expect(list).toHaveBeenCalledTimes(1)
+
+    resolveFirst(page('stale'))
+    await expect(first).resolves.toEqual(page('stale'))
+    expect(list).toHaveBeenCalledTimes(2)
+
+    resolveRefresh(page('fresh'))
+    await expect(forced).resolves.toEqual(page('fresh'))
+    await expect(joinedForce).resolves.toEqual(page('fresh'))
+    expect(list).toHaveBeenCalledTimes(2)
+  })
+
+  it('runs a queued force refresh after the existing request fails', async () => {
+    let rejectFirst!: (reason: Error) => void
+    let resolveRefresh!: (value: CodeApplicationListResponse) => void
+    const firstUpstream = new Promise<CodeApplicationListResponse>((_resolve, reject) => {
+      rejectFirst = reject
+    })
+    const refreshUpstream = new Promise<CodeApplicationListResponse>((resolve) => {
+      resolveRefresh = resolve
+    })
+    const list = vi.spyOn(codeRuntimeApi, 'listApplications')
+      .mockReturnValueOnce(firstUpstream)
+      .mockReturnValueOnce(refreshUpstream)
+    const store = useCodeApplicationsStore()
+    const scope = { tenantId: 3 }
+
+    const first = store.load(scope, { pageSize: 100 })
+    const forced = store.load(scope, { pageSize: 100 }, { force: true })
+    const firstResult = expect(first).rejects.toThrow('upstream failed')
+    expect(list).toHaveBeenCalledTimes(1)
+
+    rejectFirst(new Error('upstream failed'))
+    await firstResult
+    expect(list).toHaveBeenCalledTimes(2)
+
+    resolveRefresh(page('recovered'))
+    await expect(forced).resolves.toEqual(page('recovered'))
+  })
+
   it('keeps singleflight across clear and drops stale cache writes', async () => {
     let resolveRequest!: (value: CodeApplicationListResponse) => void
     const upstream = new Promise<CodeApplicationListResponse>((resolve) => {

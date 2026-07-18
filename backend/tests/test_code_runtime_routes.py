@@ -406,6 +406,95 @@ async def test_remember_runtime_agent_session_uses_legacy_last_active_at_as_vers
 
 
 @pytest.mark.asyncio
+async def test_remember_runtime_agent_session_atomically_rejects_stale_snapshot(
+    tmp_path,
+):
+    from datetime import datetime
+
+    from app.routes.code_runtime import _remember_runtime_agent_session
+
+    engine, Session = await _renewal_session_factory(tmp_path)
+    try:
+        async with Session() as setup:
+            session, binding, _rows = await _seed_browser_runtime(setup)
+            session_id = session.id
+            binding_id = binding.id
+            await _remember_runtime_agent_session(
+                setup,
+                session,
+                binding,
+                "runtime-atomic-version",
+                {
+                    "title": "initial snapshot",
+                    "updatedAt": "2026-07-18T00:30:00Z",
+                },
+            )
+            await setup.commit()
+
+        async with Session() as t1, Session() as t2:
+            t1_session = await t1.get(AIChatSession, session_id)
+            t1_binding = await t1.get(CodeRuntimeBinding, binding_id)
+            assert t1_session is not None
+            assert t1_binding is not None
+            stale_row = (
+                await t1.execute(
+                    select(CodeRuntimeAgentSession).where(
+                        CodeRuntimeAgentSession.session_id == session_id,
+                        CodeRuntimeAgentSession.runtime_session_id
+                        == "runtime-atomic-version",
+                    )
+                )
+            ).scalar_one()
+            assert stale_row.title == "initial snapshot"
+            await t1.commit()
+
+            t2_session = await t2.get(AIChatSession, session_id)
+            t2_binding = await t2.get(CodeRuntimeBinding, binding_id)
+            assert t2_session is not None
+            assert t2_binding is not None
+            await _remember_runtime_agent_session(
+                t2,
+                t2_session,
+                t2_binding,
+                "runtime-atomic-version",
+                {
+                    "title": "newer snapshot",
+                    "updatedAt": "2026-07-18T02:00:00Z",
+                },
+            )
+            await t2.commit()
+
+            t1_binding.workspace_id = "workspace-from-t1"
+            await _remember_runtime_agent_session(
+                t1,
+                t1_session,
+                t1_binding,
+                "runtime-atomic-version",
+                {
+                    "title": "older snapshot",
+                    "updatedAt": "2026-07-18T01:00:00Z",
+                },
+            )
+            await t1.commit()
+
+        async with Session() as verify:
+            row = (
+                await verify.execute(
+                    select(CodeRuntimeAgentSession).where(
+                        CodeRuntimeAgentSession.session_id == session_id,
+                        CodeRuntimeAgentSession.runtime_session_id
+                        == "runtime-atomic-version",
+                    )
+                )
+            ).scalar_one()
+            assert row.title == "newer snapshot"
+            assert row.runtime_updated_at == datetime(2026, 7, 18, 2, 0, 0)
+            assert row.workspace_id == "workspace-from-t1"
+    finally:
+        await engine.dispose()
+
+
+@pytest.mark.asyncio
 async def test_resolve_control_plane_tenant_id_uses_workspace_tenant_code(db_session):
     from app.models.tenant import Tenant
     from app.routes.code_runtime import _resolve_control_plane_tenant_id

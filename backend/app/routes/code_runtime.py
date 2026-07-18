@@ -12,7 +12,7 @@ from urllib.parse import parse_qsl, quote, unquote_plus, urlsplit
 import httpx
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from pydantic import BaseModel
-from sqlalchemy import String, and_, cast, func, literal, or_, select
+from sqlalchemy import String, and_, cast, func, literal, or_, select, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from starlette.background import BackgroundTask
@@ -713,10 +713,7 @@ def _apply_runtime_agent_session_snapshot(
     existing: CodeRuntimeAgentSession,
     snapshot: dict[str, Any] | None,
 ) -> None:
-    payload = snapshot if isinstance(snapshot, dict) else {}
-    runtime_updated_at = _runtime_snapshot_time(
-        payload.get("updatedAt")
-    ) or _runtime_snapshot_time(payload.get("lastActiveAt"))
+    runtime_updated_at, values = _runtime_agent_session_snapshot_values(snapshot)
     existing_runtime_version = (
         existing.runtime_updated_at or existing.last_active_at
     )
@@ -725,23 +722,43 @@ def _apply_runtime_agent_session_snapshot(
         or runtime_updated_at < existing_runtime_version
     ):
         return
-    existing.title = _runtime_snapshot_text(payload.get("title"), 300) or existing.title
-    existing.summary = _runtime_snapshot_text(payload.get("summary")) or existing.summary
-    existing.state = _runtime_snapshot_text(payload.get("state"), 40) or existing.state
-    existing.model = _runtime_snapshot_text(payload.get("model"), 120) or existing.model
-    existing.runtime_created_at = (
-        _runtime_snapshot_time(payload.get("createdAt")) or existing.runtime_created_at
+    for field_name, value in values.items():
+        setattr(existing, field_name, value)
+
+
+def _runtime_agent_session_snapshot_values(
+    snapshot: dict[str, Any] | None,
+) -> tuple[datetime | None, dict[str, Any]]:
+    payload = snapshot if isinstance(snapshot, dict) else {}
+    runtime_updated_at = _runtime_snapshot_time(
+        payload.get("updatedAt")
+    ) or _runtime_snapshot_time(payload.get("lastActiveAt"))
+    values: dict[str, Any] = {}
+    text_fields = (
+        ("title", "title", 300),
+        ("summary", "summary", None),
+        ("state", "state", 40),
+        ("model", "model", 120),
     )
-    existing.runtime_updated_at = runtime_updated_at or existing.runtime_updated_at
-    existing.last_active_at = (
-        _runtime_snapshot_time(payload.get("lastActiveAt")) or existing.last_active_at
-    )
+    for payload_key, field_name, limit in text_fields:
+        value = _runtime_snapshot_text(payload.get(payload_key), limit)
+        if value is not None:
+            values[field_name] = value
+    runtime_created_at = _runtime_snapshot_time(payload.get("createdAt"))
+    if runtime_created_at is not None:
+        values["runtime_created_at"] = runtime_created_at
+    if runtime_updated_at is not None:
+        values["runtime_updated_at"] = runtime_updated_at
+    last_active_at = _runtime_snapshot_time(payload.get("lastActiveAt"))
+    if last_active_at is not None:
+        values["last_active_at"] = last_active_at
     if "deletedAt" in payload:
-        existing.deleted_at = _runtime_snapshot_time(payload.get("deletedAt"))
+        values["deleted_at"] = _runtime_snapshot_time(payload.get("deletedAt"))
     if "capabilityStale" in payload:
-        existing.capability_stale = bool(payload["capabilityStale"])
+        values["capability_stale"] = bool(payload["capabilityStale"])
     if "codexSessionResumable" in payload:
-        existing.codex_session_resumable = bool(payload["codexSessionResumable"])
+        values["codex_session_resumable"] = bool(payload["codexSessionResumable"])
+    return runtime_updated_at, values
 
 
 def _sync_runtime_agent_session_identity(
@@ -755,6 +772,56 @@ def _sync_runtime_agent_session_identity(
     existing.external_application_id = binding.external_application_id
     existing.workspace_id = binding.workspace_id
     existing.sandbox_instance_id = binding.sandbox_instance_id
+
+
+async def _update_runtime_agent_session(
+    db: AsyncSession,
+    session: AIChatSession,
+    binding: CodeRuntimeBinding,
+    runtime_id: str,
+    snapshot: dict[str, Any] | None,
+) -> None:
+    row_matches = (
+        CodeRuntimeAgentSession.session_id == int(session.id),
+        CodeRuntimeAgentSession.runtime_session_id == runtime_id,
+    )
+    await db.execute(
+        update(CodeRuntimeAgentSession)
+        .where(*row_matches)
+        .values(
+            tenant_id=session.tenant_id,
+            user_id=session.user_id,
+            app_id=int(session.app_id) if session.app_id else None,
+            external_application_id=binding.external_application_id,
+            workspace_id=binding.workspace_id,
+            sandbox_instance_id=binding.sandbox_instance_id,
+        )
+        .execution_options(synchronize_session=False)
+    )
+
+    incoming_version, snapshot_values = _runtime_agent_session_snapshot_values(
+        snapshot
+    )
+    if not snapshot_values:
+        return
+    existing_version = func.coalesce(
+        CodeRuntimeAgentSession.runtime_updated_at,
+        CodeRuntimeAgentSession.last_active_at,
+    )
+    version_condition = (
+        existing_version.is_(None)
+        if incoming_version is None
+        else or_(
+            existing_version.is_(None),
+            existing_version <= incoming_version,
+        )
+    )
+    await db.execute(
+        update(CodeRuntimeAgentSession)
+        .where(*row_matches, version_condition)
+        .values(**snapshot_values)
+        .execution_options(synchronize_session=False)
+    )
 
 
 async def _remember_runtime_agent_session(
@@ -805,8 +872,13 @@ async def _remember_runtime_agent_session(
                 raise exc
         else:
             return
-    _sync_runtime_agent_session_identity(existing, session, binding)
-    _apply_runtime_agent_session_snapshot(existing, snapshot)
+    await _update_runtime_agent_session(
+        db,
+        session,
+        binding,
+        runtime_id,
+        snapshot,
+    )
 
 
 def _path_requires_runtime_current_alignment(path: str) -> bool:

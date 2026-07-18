@@ -47,10 +47,11 @@ function cacheKey(
 export const useCodeApplicationsStore = defineStore('codeApplications', () => {
   const cache = new Map<string, CacheEntry>()
   const inflight = new Map<string, Promise<CodeApplicationListResponse>>()
+  const queuedRefresh = new Map<string, Promise<CodeApplicationListResponse>>()
   let cacheGeneration = 0
   const tenantGenerations = new Map<string, number>()
 
-  function refresh(
+  function startRefresh(
     scope: CodeApplicationCacheScope,
     params: CodeApplicationListParams = {},
   ): Promise<CodeApplicationListResponse> {
@@ -83,6 +84,28 @@ export const useCodeApplicationsStore = defineStore('codeApplications', () => {
     return pending
   }
 
+  function refresh(
+    scope: CodeApplicationCacheScope,
+    params: CodeApplicationListParams = {},
+    force = false,
+  ): Promise<CodeApplicationListResponse> {
+    const key = cacheKey(scope, params)
+    const joined = inflight.get(key)
+    if (!force || !joined) return joined || startRefresh(scope, params)
+
+    const queued = queuedRefresh.get(key)
+    if (queued) return queued
+
+    const runRefresh = () => startRefresh(scope, params)
+    const pending = joined
+      .then(runRefresh, runRefresh)
+      .finally(() => {
+        if (queuedRefresh.get(key) === pending) queuedRefresh.delete(key)
+      })
+    queuedRefresh.set(key, pending)
+    return pending
+  }
+
   function load(
     scope: CodeApplicationCacheScope,
     params: CodeApplicationListParams = {},
@@ -97,7 +120,7 @@ export const useCodeApplicationsStore = defineStore('codeApplications', () => {
     ) {
       return Promise.resolve(cached.page)
     }
-    return refresh(scope, params)
+    return refresh(scope, params, options.force)
   }
 
   function invalidateTenant(tenantId: number | string): void {
