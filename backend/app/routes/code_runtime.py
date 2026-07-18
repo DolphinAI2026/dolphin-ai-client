@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import json
+import time
 from dataclasses import dataclass, field, replace
 from datetime import datetime, timezone
 from typing import Annotated, Any, Optional
@@ -270,16 +271,31 @@ async def list_code_runtime_applications(
     page: int = 1,
     page_size: int = Query(default=50, alias="pageSize"),
 ):
-    authorization, auth_provider = await _control_plane_request_auth(request, ctx, db)
-    return await list_code_applications(
-        keyword=keyword,
-        provision_status=provision_status,
-        page=page,
-        page_size=page_size,
-        authorization_header=authorization,
-        delegated_context=ctx,
-        auth_provider=auth_provider,
+    started = time.monotonic()
+    try:
+        authorization, auth_provider = await _control_plane_request_auth(request, ctx, db)
+        result = await list_code_applications(
+            keyword=keyword,
+            provision_status=provision_status,
+            page=page,
+            page_size=page_size,
+            authorization_header=authorization,
+            delegated_context=ctx,
+            auth_provider=auth_provider,
+        )
+    except Exception:
+        sandbox_auth_metrics.record_builder_stage(
+            "applications_shared_load",
+            "failure",
+            time.monotonic() - started,
+        )
+        raise
+    sandbox_auth_metrics.record_builder_stage(
+        "applications_shared_load",
+        "success",
+        time.monotonic() - started,
     )
+    return result
 
 
 @router.post("/applications")
@@ -854,128 +870,144 @@ async def list_code_runtime_rail_history(
     ctx: Annotated[AuthContext, Depends(get_auth_context)],
     db: Annotated[AsyncSession, Depends(get_db)],
 ):
-    external_application_id = func.coalesce(
-        func.nullif(func.trim(CodeRuntimeBinding.external_application_id), ""),
-        func.nullif(func.trim(AIChatSession.external_application_id), ""),
-    )
-    representative_shell_key = func.coalesce(
-        external_application_id,
-        literal("session:") + cast(AIChatSession.id, String),
-    )
-    representative_shells = (
-        select(
-            AIChatSession.id.label("shell_session_id"),
-            func.row_number().over(
-                partition_by=representative_shell_key,
-                order_by=(
-                    AIChatSession.updated_at.desc(),
-                    CodeRuntimeBinding.updated_at.desc(),
-                    AIChatSession.id.desc(),
-                ),
-            ).label("representative_rank"),
+    started = time.monotonic()
+    try:
+        external_application_id = func.coalesce(
+            func.nullif(func.trim(CodeRuntimeBinding.external_application_id), ""),
+            func.nullif(func.trim(AIChatSession.external_application_id), ""),
         )
-        .outerjoin(CodeRuntimeBinding, CodeRuntimeBinding.session_id == AIChatSession.id)
-        .outerjoin(Application, Application.id == AIChatSession.app_id)
-        .where(
-            AIChatSession.tenant_id == ctx.tenant_id,
-            AIChatSession.user_id == ctx.user.id,
-            AIChatSession.mode == "code",
-            AIChatSession.status != "archived",
-            or_(AIChatSession.app_id.is_(None), Application.app_type == "ai-code"),
-            or_(
-                Application.app_type == "ai-code",
-                and_(
-                    AIChatSession.external_application_id.isnot(None),
-                    AIChatSession.external_application_id != "",
-                ),
-                and_(
-                    CodeRuntimeBinding.external_application_id.isnot(None),
-                    CodeRuntimeBinding.external_application_id != "",
-                ),
-            ),
+        representative_shell_key = func.coalesce(
+            external_application_id,
+            literal("session:") + cast(AIChatSession.id, String),
         )
-        .subquery()
-    )
-    rows = (
-        await db.execute(
-            select(AIChatSession, CodeRuntimeBinding)
-            .join(
-                representative_shells,
-                representative_shells.c.shell_session_id == AIChatSession.id,
+        representative_shells = (
+            select(
+                AIChatSession.id.label("shell_session_id"),
+                func.row_number().over(
+                    partition_by=representative_shell_key,
+                    order_by=(
+                        AIChatSession.updated_at.desc(),
+                        CodeRuntimeBinding.updated_at.desc(),
+                        AIChatSession.id.desc(),
+                    ),
+                ).label("representative_rank"),
             )
             .outerjoin(CodeRuntimeBinding, CodeRuntimeBinding.session_id == AIChatSession.id)
+            .outerjoin(Application, Application.id == AIChatSession.app_id)
             .where(
-                representative_shells.c.representative_rank == 1,
-            )
-            .order_by(AIChatSession.updated_at.desc(), CodeRuntimeBinding.updated_at.desc(), AIChatSession.id.desc())
-        )
-    ).all()
-
-    shell_session_ids = [int(session.id) for session, _binding in rows]
-    snapshot_rows = []
-    if shell_session_ids:
-        snapshot_rows = (
-            await db.execute(
-                select(CodeRuntimeAgentSession)
-                .where(
-                    CodeRuntimeAgentSession.tenant_id == ctx.tenant_id,
-                    CodeRuntimeAgentSession.user_id == ctx.user.id,
-                    CodeRuntimeAgentSession.session_id.in_(shell_session_ids),
-                    CodeRuntimeAgentSession.deleted_at.is_(None),
-                )
-                .order_by(
-                    func.coalesce(
-                        CodeRuntimeAgentSession.last_active_at,
-                        CodeRuntimeAgentSession.runtime_updated_at,
-                        CodeRuntimeAgentSession.updated_at,
-                    ).desc(),
-                    CodeRuntimeAgentSession.id.desc(),
-                )
-            )
-        ).scalars().all()
-    snapshots_by_shell: dict[int, list[CodeRuntimeAgentSession]] = {}
-    for snapshot in snapshot_rows:
-        snapshots_by_shell.setdefault(int(snapshot.session_id), []).append(snapshot)
-
-    apps: list[dict[str, Any]] = []
-    for session, binding in rows:
-        external_id = str(
-            (binding.external_application_id if binding else None)
-            or session.external_application_id
-            or ""
-        ).strip()
-
-        app: dict[str, Any] = {
-            "shell_session_id": ensure_code_session_public_id(session),
-            "external_application_id": external_id,
-            "app_name": session.external_app_name or session.title,
-            "app_code": session.external_app_code,
-            "runtime_session_id": binding.runtime_session_id if binding else None,
-            "sessions": [],
-        }
-        if not binding:
-            apps.append(app)
-            continue
-        current_runtime_id = str(binding.runtime_session_id or "").strip() if binding else ""
-        app["sessions"] = [
-            _runtime_agent_snapshot_item(snapshot, current_runtime_id)
-            for snapshot in snapshots_by_shell.get(int(session.id), [])
-        ]
-        if binding and current_runtime_id and not any(
-            item["runtimeSessionId"] == current_runtime_id
-            for item in app["sessions"]
-        ):
-            app["sessions"].insert(
-                0,
-                _runtime_session_placeholder(
-                    binding,
-                    current_runtime_id,
-                    session.title,
+                AIChatSession.tenant_id == ctx.tenant_id,
+                AIChatSession.user_id == ctx.user.id,
+                AIChatSession.mode == "code",
+                AIChatSession.status != "archived",
+                or_(AIChatSession.app_id.is_(None), Application.app_type == "ai-code"),
+                or_(
+                    Application.app_type == "ai-code",
+                    and_(
+                        AIChatSession.external_application_id.isnot(None),
+                        AIChatSession.external_application_id != "",
+                    ),
+                    and_(
+                        CodeRuntimeBinding.external_application_id.isnot(None),
+                        CodeRuntimeBinding.external_application_id != "",
+                    ),
                 ),
             )
-        apps.append(app)
+            .subquery()
+        )
+        rows = (
+            await db.execute(
+                select(AIChatSession, CodeRuntimeBinding)
+                .join(
+                    representative_shells,
+                    representative_shells.c.shell_session_id == AIChatSession.id,
+                )
+                .outerjoin(CodeRuntimeBinding, CodeRuntimeBinding.session_id == AIChatSession.id)
+                .where(
+                    representative_shells.c.representative_rank == 1,
+                )
+                .order_by(AIChatSession.updated_at.desc(), CodeRuntimeBinding.updated_at.desc(), AIChatSession.id.desc())
+            )
+        ).all()
 
-    return {"apps": apps}
+        shell_session_ids = [int(session.id) for session, _binding in rows]
+        snapshot_rows = []
+        if shell_session_ids:
+            snapshot_rows = (
+                await db.execute(
+                    select(CodeRuntimeAgentSession)
+                    .where(
+                        CodeRuntimeAgentSession.tenant_id == ctx.tenant_id,
+                        CodeRuntimeAgentSession.user_id == ctx.user.id,
+                        CodeRuntimeAgentSession.session_id.in_(shell_session_ids),
+                        CodeRuntimeAgentSession.deleted_at.is_(None),
+                    )
+                    .order_by(
+                        func.coalesce(
+                            CodeRuntimeAgentSession.last_active_at,
+                            CodeRuntimeAgentSession.runtime_updated_at,
+                            CodeRuntimeAgentSession.updated_at,
+                        ).desc(),
+                        CodeRuntimeAgentSession.id.desc(),
+                    )
+                )
+            ).scalars().all()
+        snapshots_by_shell: dict[int, list[CodeRuntimeAgentSession]] = {}
+        for snapshot in snapshot_rows:
+            snapshots_by_shell.setdefault(int(snapshot.session_id), []).append(snapshot)
+
+        apps: list[dict[str, Any]] = []
+        for session, binding in rows:
+            external_id = str(
+                (binding.external_application_id if binding else None)
+                or session.external_application_id
+                or ""
+            ).strip()
+
+            app: dict[str, Any] = {
+                "shell_session_id": ensure_code_session_public_id(session),
+                "external_application_id": external_id,
+                "app_name": session.external_app_name or session.title,
+                "app_code": session.external_app_code,
+                "runtime_session_id": binding.runtime_session_id if binding else None,
+                "sessions": [],
+            }
+            if not binding:
+                apps.append(app)
+                continue
+            current_runtime_id = str(
+                binding.runtime_session_id or ""
+            ).strip() if binding else ""
+            app["sessions"] = [
+                _runtime_agent_snapshot_item(snapshot, current_runtime_id)
+                for snapshot in snapshots_by_shell.get(int(session.id), [])
+            ]
+            if binding and current_runtime_id and not any(
+                item["runtimeSessionId"] == current_runtime_id
+                for item in app["sessions"]
+            ):
+                app["sessions"].insert(
+                    0,
+                    _runtime_session_placeholder(
+                        binding,
+                        current_runtime_id,
+                        session.title,
+                    ),
+                )
+            apps.append(app)
+        result = {"apps": apps}
+    except Exception:
+        sandbox_auth_metrics.record_builder_stage(
+            "rail_history_db",
+            "failure",
+            time.monotonic() - started,
+        )
+        raise
+    sandbox_auth_metrics.record_builder_stage(
+        "rail_history_db",
+        "success",
+        time.monotonic() - started,
+    )
+    return result
 
 
 @router.post("/sessions/{session_id}/agent-sessions")

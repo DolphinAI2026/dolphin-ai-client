@@ -3440,6 +3440,25 @@ def test_sandbox_auth_metrics_registry_keeps_fixed_low_cardinality_labels():
     assert "https://" not in rendered
 
 
+def test_builder_stage_metrics_use_only_bounded_labels():
+    from app.code_runtime.sandbox_metrics import SandboxAuthMetricsRegistry
+
+    metrics = SandboxAuthMetricsRegistry()
+    metrics.record_builder_stage("rail_history_db", "success", 0.125)
+    rendered = metrics.render()
+
+    assert (
+        'builder_stage_duration_seconds_count{result="success",stage="rail_history_db"} 1'
+        in rendered
+    )
+    assert (
+        'builder_stage_duration_seconds_sum{result="success",stage="rail_history_db"} 0.125'
+        in rendered
+    )
+    assert "tenant" not in rendered
+    assert "session_id" not in rendered
+
+
 @pytest.mark.asyncio
 async def test_sandbox_auth_metrics_endpoint_is_hidden_and_renders_prometheus_text():
     import app.routes.code_runtime as code_runtime_routes

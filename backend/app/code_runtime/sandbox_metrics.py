@@ -28,6 +28,8 @@ _HARD_FAILURE_REASONS = (
     "other",
 )
 _CLEANUP_RESULTS = ("success", "failure", "other")
+_BUILDER_STAGES = ("applications_shared_load", "rail_history_db")
+_BUILDER_STAGE_RESULTS = ("success", "failure")
 
 
 def _label(value: str, allowed: tuple[str, ...], fallback: str = "other") -> str:
@@ -76,6 +78,18 @@ class SandboxAuthMetricsRegistry:
                 "sandbox_builder_url_cleanup_total",
                 result=result,
             )] = 0.0
+        self._builder_stage_count: dict[str, float] = {}
+        self._builder_stage_sum: dict[str, float] = {}
+        for stage, result in product(_BUILDER_STAGES, _BUILDER_STAGE_RESULTS):
+            labels = {"stage": stage, "result": result}
+            self._builder_stage_count[_series(
+                "builder_stage_duration_seconds_count",
+                **labels,
+            )] = 0.0
+            self._builder_stage_sum[_series(
+                "builder_stage_duration_seconds_sum",
+                **labels,
+            )] = 0.0
         self._renew_duration_count = 0
         self._renew_duration_sum = 0.0
 
@@ -123,8 +137,24 @@ class SandboxAuthMetricsRegistry:
             result=result,
         )] += 1
 
+    def record_builder_stage(
+        self,
+        stage: str,
+        result: str,
+        duration_seconds: float,
+    ) -> None:
+        stage = _label(stage, _BUILDER_STAGES, "rail_history_db")
+        result = _label(result, _BUILDER_STAGE_RESULTS, "failure")
+        labels = {"stage": stage, "result": result}
+        count_key = _series("builder_stage_duration_seconds_count", **labels)
+        sum_key = _series("builder_stage_duration_seconds_sum", **labels)
+        self._builder_stage_count[count_key] += 1
+        self._builder_stage_sum[sum_key] += max(0.0, float(duration_seconds))
+
     def snapshot(self) -> dict[str, float]:
         snapshot = dict(self._counters)
+        snapshot.update(self._builder_stage_count)
+        snapshot.update(self._builder_stage_sum)
         snapshot["sandbox_auth_renew_duration_count"] = float(
             self._renew_duration_count
         )
@@ -140,6 +170,7 @@ class SandboxAuthMetricsRegistry:
             "# TYPE sandbox_auth_orphan_session_total counter",
             "# TYPE sandbox_auth_hard_failure_total counter",
             "# TYPE sandbox_builder_url_cleanup_total counter",
+            "# TYPE builder_stage_duration_seconds summary",
         ]
         snapshot = self.snapshot()
         lines.extend(
