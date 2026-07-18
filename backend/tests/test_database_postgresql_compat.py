@@ -51,6 +51,15 @@ def test_legacy_code_runtime_agent_session_columns_become_nullable_on_startup():
         )
 
 
+def test_code_runtime_agent_session_snapshot_has_startup_migrations():
+    import inspect
+
+    source = inspect.getsource(database.init_db)
+    assert "ALTER TABLE code_runtime_agent_sessions ADD COLUMN title" in source
+    assert "ALTER TABLE code_runtime_agent_sessions ADD COLUMN last_active_at" in source
+    assert "ALTER TABLE code_runtime_agent_sessions ADD COLUMN codex_session_resumable" in source
+
+
 def test_postgresql_insert_select_ignores_conflicts_with_on_conflict():
     statement = database._insert_select_ignore_conflicts_sql(
         dialect_name="postgresql",

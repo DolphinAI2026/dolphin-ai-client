@@ -4,6 +4,7 @@ import asyncio
 import hashlib
 import json
 from dataclasses import dataclass, field, replace
+from datetime import datetime
 from typing import Annotated, Any, Optional
 from urllib.parse import parse_qsl, quote, unquote_plus, urlsplit
 
@@ -648,11 +649,30 @@ def _filter_browser_runtime_sessions(
     ]
 
 
+def _runtime_snapshot_text(value: Any, limit: int | None = None) -> str | None:
+    text = str(value or "").strip()
+    if not text:
+        return None
+    return text[:limit] if limit else text
+
+
+def _runtime_snapshot_time(value: Any) -> datetime | None:
+    text = str(value or "").strip()
+    if not text:
+        return None
+    try:
+        parsed = datetime.fromisoformat(text.replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    return parsed.replace(tzinfo=None)
+
+
 async def _remember_runtime_agent_session(
     db: AsyncSession,
     session: AIChatSession,
     binding: CodeRuntimeBinding,
     runtime_session_id: str,
+    snapshot: dict[str, Any] | None = None,
 ) -> None:
     runtime_id = str(runtime_session_id or "").strip()
     if not runtime_id:
@@ -681,6 +701,26 @@ async def _remember_runtime_agent_session(
     existing.external_application_id = binding.external_application_id
     existing.workspace_id = binding.workspace_id
     existing.sandbox_instance_id = binding.sandbox_instance_id
+    payload = snapshot if isinstance(snapshot, dict) else {}
+    existing.title = _runtime_snapshot_text(payload.get("title"), 300) or existing.title
+    existing.summary = _runtime_snapshot_text(payload.get("summary")) or existing.summary
+    existing.state = _runtime_snapshot_text(payload.get("state"), 40) or existing.state
+    existing.model = _runtime_snapshot_text(payload.get("model"), 120) or existing.model
+    existing.runtime_created_at = (
+        _runtime_snapshot_time(payload.get("createdAt")) or existing.runtime_created_at
+    )
+    existing.runtime_updated_at = (
+        _runtime_snapshot_time(payload.get("updatedAt")) or existing.runtime_updated_at
+    )
+    existing.last_active_at = (
+        _runtime_snapshot_time(payload.get("lastActiveAt")) or existing.last_active_at
+    )
+    if "deletedAt" in payload:
+        existing.deleted_at = _runtime_snapshot_time(payload.get("deletedAt"))
+    if "capabilityStale" in payload:
+        existing.capability_stale = bool(payload["capabilityStale"])
+    if "codexSessionResumable" in payload:
+        existing.codex_session_resumable = bool(payload["codexSessionResumable"])
 
 
 def _path_requires_runtime_current_alignment(path: str) -> bool:
@@ -879,7 +919,7 @@ async def create_code_runtime_agent_session(
     if not runtime_session_id:
         raise HTTPException(status_code=502, detail="Code runtime 未返回新会话 ID")
     binding.runtime_session_id = runtime_session_id
-    await _remember_runtime_agent_session(db, session, binding, runtime_session_id)
+    await _remember_runtime_agent_session(db, session, binding, runtime_session_id, payload)
     await db.commit()
     return {
         "shell_session_id": ensure_code_session_public_id(session),
@@ -909,7 +949,7 @@ async def activate_code_runtime_agent_session(
     )
     activated_id = str((payload or {}).get("runtimeSessionId") or runtime_session_id)
     binding.runtime_session_id = activated_id
-    await _remember_runtime_agent_session(db, session, binding, activated_id)
+    await _remember_runtime_agent_session(db, session, binding, activated_id, payload)
     await db.commit()
     return {
         "shell_session_id": ensure_code_session_public_id(session),

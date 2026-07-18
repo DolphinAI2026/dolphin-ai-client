@@ -142,6 +142,48 @@ async def _seed_browser_runtime(
 
 
 @pytest.mark.asyncio
+async def test_remember_runtime_agent_session_persists_rail_snapshot(db_session):
+    from app.routes.code_runtime import _remember_runtime_agent_session
+
+    session, binding, _rows = await _seed_browser_runtime(db_session)
+    await _remember_runtime_agent_session(
+        db_session,
+        session,
+        binding,
+        "runtime-1",
+        {
+            "runtimeSessionId": "runtime-1",
+            "title": "实现登录",
+            "summary": "完成认证链路",
+            "state": "waiting_input",
+            "model": "gpt-5",
+            "createdAt": "2026-07-18T01:00:00Z",
+            "updatedAt": "2026-07-18T01:05:00Z",
+            "lastActiveAt": "2026-07-18T01:06:00Z",
+            "deletedAt": None,
+            "capabilityStale": False,
+            "codexSessionResumable": True,
+        },
+    )
+    await db_session.commit()
+
+    row = (
+        await db_session.execute(
+            select(CodeRuntimeAgentSession).where(
+                CodeRuntimeAgentSession.runtime_session_id == "runtime-1"
+            )
+        )
+    ).scalar_one()
+    assert row.title == "实现登录"
+    assert row.summary == "完成认证链路"
+    assert row.state == "waiting_input"
+    assert row.model == "gpt-5"
+    assert row.last_active_at.isoformat() == "2026-07-18T01:06:00"
+    assert row.capability_stale is False
+    assert row.codex_session_resumable is True
+
+
+@pytest.mark.asyncio
 async def test_resolve_control_plane_tenant_id_uses_workspace_tenant_code(db_session):
     from app.models.tenant import Tenant
     from app.routes.code_runtime import _resolve_control_plane_tenant_id

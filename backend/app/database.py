@@ -239,6 +239,16 @@ async def init_db():
             "ALTER TABLE code_runtime_agent_sessions MODIFY COLUMN conversation_purpose VARCHAR(32) NULL",
             "ALTER TABLE code_runtime_agent_sessions MODIFY COLUMN conversation_purpose_revision BIGINT NULL",
             "ALTER TABLE code_runtime_agent_sessions MODIFY COLUMN status VARCHAR(32) NULL",
+            "ALTER TABLE code_runtime_agent_sessions ADD COLUMN title VARCHAR(300)",
+            "ALTER TABLE code_runtime_agent_sessions ADD COLUMN summary TEXT",
+            "ALTER TABLE code_runtime_agent_sessions ADD COLUMN state VARCHAR(40)",
+            "ALTER TABLE code_runtime_agent_sessions ADD COLUMN model VARCHAR(120)",
+            "ALTER TABLE code_runtime_agent_sessions ADD COLUMN runtime_created_at DATETIME",
+            "ALTER TABLE code_runtime_agent_sessions ADD COLUMN runtime_updated_at DATETIME",
+            "ALTER TABLE code_runtime_agent_sessions ADD COLUMN last_active_at DATETIME",
+            "ALTER TABLE code_runtime_agent_sessions ADD COLUMN deleted_at DATETIME",
+            "ALTER TABLE code_runtime_agent_sessions ADD COLUMN capability_stale BOOLEAN NOT NULL DEFAULT FALSE",
+            "ALTER TABLE code_runtime_agent_sessions ADD COLUMN codex_session_resumable BOOLEAN NOT NULL DEFAULT TRUE",
             # 桌面产品账号来源标记(2026-06-16): 'apaas'=aPaaS同步账号 | 'desktop'=桌面账号
             "ALTER TABLE users ADD COLUMN account_source VARCHAR(20) NOT NULL DEFAULT 'apaas'",
             # account-service: username 全局唯一 → 复合 (username, account_source)

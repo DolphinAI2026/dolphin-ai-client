@@ -14,7 +14,7 @@ from datetime import datetime
 from typing import Optional
 from uuid import uuid4
 
-from sqlalchemy import String, Text, DateTime, Integer, ForeignKey, JSON, BigInteger, UniqueConstraint
+from sqlalchemy import Boolean, String, Text, DateTime, Integer, ForeignKey, JSON, BigInteger, UniqueConstraint
 from sqlalchemy.dialects.mysql import LONGTEXT
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -149,6 +149,20 @@ class CodeRuntimeAgentSession(Base):
     workspace_id: Mapped[Optional[str]] = mapped_column(String(120), nullable=True, index=True)
     sandbox_instance_id: Mapped[Optional[str]] = mapped_column(String(160), nullable=True, index=True)
     runtime_session_id: Mapped[str] = mapped_column(String(160), nullable=False, index=True)
+    title: Mapped[Optional[str]] = mapped_column(String(300), nullable=True)
+    summary: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    state: Mapped[Optional[str]] = mapped_column(String(40), nullable=True)
+    model: Mapped[Optional[str]] = mapped_column(String(120), nullable=True)
+    runtime_created_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
+    runtime_updated_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
+    last_active_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
+    deleted_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
+    capability_stale: Mapped[bool] = mapped_column(
+        Boolean, default=False, server_default="0", nullable=False
+    )
+    codex_session_resumable: Mapped[bool] = mapped_column(
+        Boolean, default=True, server_default="1", nullable=False
+    )
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, nullable=False)
     updated_at: Mapped[datetime] = mapped_column(
         DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False

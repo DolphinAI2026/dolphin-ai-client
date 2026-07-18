@@ -50,6 +50,24 @@ def test_code_runtime_binding_model_is_registered():
     assert sa_inspect(CodeRuntimeBinding).columns.app_id.nullable is True
 
 
+def test_code_runtime_agent_session_model_has_rail_snapshot_columns():
+    from app.models.ai_chat import CodeRuntimeAgentSession
+
+    columns = {column.name for column in sa_inspect(CodeRuntimeAgentSession).columns}
+    assert {
+        "title",
+        "summary",
+        "state",
+        "model",
+        "runtime_created_at",
+        "runtime_updated_at",
+        "last_active_at",
+        "deleted_at",
+        "capability_stale",
+        "codex_session_resumable",
+    }.issubset(columns)
+
+
 def test_code_runtime_browser_session_model_has_isolated_identity_and_unique_binding_key():
     from app.models.ai_chat import CodeRuntimeBrowserSession
 
