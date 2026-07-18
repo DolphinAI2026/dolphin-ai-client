@@ -36,7 +36,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.coding.workspace import WorkspaceManager
 from app.deps import AuthContext
 from app.models import Application
-from app.project_access import project_role_at_least, require_project_access
+from app.project_access import require_project_access
 
 
 workspace_mgr = WorkspaceManager()
@@ -72,10 +72,10 @@ def resolve_conversation_app_id(conv: Any) -> int | None:
 
 def _workspace_permissions(access_role: str) -> dict[str, bool]:
     return {
-        "edit": project_role_at_least(access_role, "member"),
-        "delete": project_role_at_least(access_role, "admin"),
-        "publish": project_role_at_least(access_role, "admin"),
-        "upload_to_platform": project_role_at_least(access_role, "admin"),
+        "edit": True,
+        "delete": True,
+        "publish": True,
+        "upload_to_platform": True,
     }
 
 
@@ -111,10 +111,7 @@ async def _ensure_workspace_access(
             )
         )
         if app_row.scalar_one_or_none() is not None:
-            role = "owner" if meta.get("user_id") == ctx.user.id else "member"
-            if minimum_project_role in ("admin", "owner") and role != "owner":
-                raise HTTPException(status_code=403, detail="无权执行该操作")
-            return _decorate_workspace_access(meta, role)
+            return _decorate_workspace_access(meta, "tenant")
         access = await require_project_access(
             db,
             project_id=int(project_id),
@@ -124,7 +121,10 @@ async def _ensure_workspace_access(
         )
         return _decorate_workspace_access(meta, access.role)
 
-    if meta.get("user_id") != ctx.user.id:
-        raise HTTPException(status_code=403, detail="无权访问该工作区")
+    meta_tenant_id = meta.get("tenant_id")
+    if meta_tenant_id is not None and int(meta_tenant_id) != int(ctx.tenant_id):
+        raise HTTPException(status_code=404, detail="工作区不存在")
+    if meta_tenant_id is None and meta.get("user_id") != ctx.user.id:
+        raise HTTPException(status_code=404, detail="工作区不存在")
 
-    return _decorate_workspace_access(meta, "owner")
+    return _decorate_workspace_access(meta, "tenant")

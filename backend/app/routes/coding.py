@@ -23,7 +23,7 @@ from sqlalchemy.exc import IntegrityError
 
 from app.crypto import decrypt_password
 from app.database import get_db, AsyncSessionLocal
-from app.models import User, Conversation, Message, Project, ProjectMember, Application, RegisteredWorkspace
+from app.models import User, Conversation, Message, Project, Application, RegisteredWorkspace
 from app.deps import get_auth_context, AuthContext, auth_from_header_or_query
 from app.coding.scenes import SceneType, get_scene, get_all_scenes, get_scenes_by_category
 from app.coding.workspace import WorkspaceManager, ProjectType
@@ -1434,18 +1434,11 @@ async def list_workspaces(
     ctx: Annotated[AuthContext, Depends(get_auth_context)],
     db: Annotated[AsyncSession, Depends(get_db)],
 ):
-    """列出当前用户的所有工作区"""
-    owned_result = await db.execute(
-        select(Project.id).where(
-            Project.tenant_id == ctx.tenant_id,
-            Project.user_id == ctx.user.id,
-        )
+    """列出当前租户的所有工作区。"""
+    project_result = await db.execute(
+        select(Project.id).where(Project.tenant_id == ctx.tenant_id)
     )
-    member_result = await db.execute(
-        select(ProjectMember.project_id).where(ProjectMember.user_id == ctx.user.id)
-    )
-    project_ids = {row[0] for row in owned_result.all()}
-    project_ids.update(row[0] for row in member_result.all())
+    project_ids = {row[0] for row in project_result.all()}
 
     # ws meta 的 project_id 字段被复用为「所属应用」(Application.id, 应用锁定建工作区时注入)。
     # 可见性允许集合必须把本租户应用也算进去, 否则应用绑定的工作区在资产库直接消失。
@@ -1535,7 +1528,7 @@ async def list_workspaces(
         if project_id and int(project_id) in application_ids:
             # 应用绑定(Application.id 复用 project_id 字段) → 不是协作项目, 可见性已由
             # allowed 集合控制, 不走 require_project_access(那是查 Project 表, 会 404)
-            decorated.append(_decorate_workspace_access(ws, "owner"))
+            decorated.append(_decorate_workspace_access(ws, "tenant"))
         elif project_id:
             access = await require_project_access(
                 db,
@@ -1545,7 +1538,7 @@ async def list_workspaces(
             )
             decorated.append(_decorate_workspace_access(ws, access.role))
         else:
-            decorated.append(_decorate_workspace_access(ws, "owner"))
+            decorated.append(_decorate_workspace_access(ws, "tenant"))
     return decorated
 
 

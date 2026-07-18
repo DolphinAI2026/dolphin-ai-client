@@ -7,7 +7,7 @@ from fastapi import HTTPException
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.models import Project, ProjectMember
+from app.models import Project
 
 
 PROJECT_ROLE_LEVELS = {
@@ -33,22 +33,20 @@ def normalize_project_role(role: Optional[str]) -> str:
 
 
 def project_role_at_least(role: Optional[str], required: str) -> bool:
-    actual = PROJECT_ROLE_LEVELS.get(normalize_project_role(role), 0)
-    expected = PROJECT_ROLE_LEVELS.get(normalize_project_role(required), 0)
-    return actual >= expected
+    """项目权限尚未设计，租户内项目不按成员角色限制操作。"""
+    return True
 
 
 def project_role_permissions(role: Optional[str]) -> dict[str, bool]:
-    normalized = normalize_project_role(role)
     return {
-        "can_view": True,  # viewer 起就能看
-        "can_edit": project_role_at_least(normalized, "contributor"),
-        "can_manage_project": project_role_at_least(normalized, "maintainer"),
-        "can_manage_platform": project_role_at_least(normalized, "maintainer"),
-        "can_manage_members": project_role_at_least(normalized, "maintainer"),
-        "can_manage_member_roles": normalized == "owner",
-        "can_delete": normalized == "owner",
-        "can_publish": project_role_at_least(normalized, "maintainer"),
+        "can_view": True,
+        "can_edit": True,
+        "can_manage_project": True,
+        "can_manage_platform": True,
+        "can_manage_members": True,
+        "can_manage_member_roles": True,
+        "can_delete": True,
+        "can_publish": True,
     }
 
 
@@ -79,22 +77,7 @@ async def get_project_access(
     if not project:
         return None
 
-    member_result = await db.execute(
-        select(ProjectMember).where(
-            ProjectMember.project_id == project_id,
-            ProjectMember.user_id == user_id,
-        )
-    )
-    member = member_result.scalar_one_or_none()
-    if not member:
-        if project.user_id == user_id:
-            return ProjectAccess(project=project, role="owner")
-        return None
-
-    return ProjectAccess(
-        project=project,
-        role=normalize_project_role(member.role or "contributor"),
-    )
+    return ProjectAccess(project=project, role="tenant")
 
 
 async def require_project_access(
@@ -113,6 +96,4 @@ async def require_project_access(
     )
     if not access:
         raise HTTPException(status_code=404, detail="项目不存在")
-    if not project_role_at_least(access.role, minimum_role):
-        raise HTTPException(status_code=403, detail="无权访问该项目")
     return access

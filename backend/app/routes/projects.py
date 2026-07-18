@@ -3,25 +3,22 @@ Project API 路由 — 项目管理 + 平台环境配置
 """
 from __future__ import annotations
 
-import json
 import logging
 from typing import Annotated, Optional
 
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
-from sqlalchemy import select, or_
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.database import get_db
 from app.models import Project, ProjectMember, User
 from app.deps import get_auth_context, AuthContext
 from app.apaas_client import APaaSClient
-from app.coding.workspace import WorkspaceManager, WORKSPACE_ROOT
+from app.coding.workspace import WorkspaceManager
 from app.error_messages import APAAS_TOKEN_EXPIRED_PROJECT, APAAS_TOKEN_REFRESH_FAILED
 from app.models.tenant import UserTenant
 from app.project_access import (
-    ProjectAccess,
-    get_project_access,
     normalize_project_role,
     project_role_at_least,
     project_role_permissions,
@@ -144,34 +141,15 @@ async def list_projects(
     ctx: Annotated[AuthContext, Depends(get_auth_context)],
     db: Annotated[AsyncSession, Depends(get_db)],
 ):
-    """列出当前用户的所有项目（包括作为成员参与的项目）"""
-    # 查询用户参与的项目 ID 列表
-    member_result = await db.execute(
-        select(ProjectMember.project_id).where(ProjectMember.user_id == ctx.user.id)
-    )
-    member_project_ids = [row[0] for row in member_result.all()]
-    role_result = await db.execute(
-        select(ProjectMember.project_id, ProjectMember.role).where(ProjectMember.user_id == ctx.user.id)
-    )
-    role_map = {project_id: role for project_id, role in role_result.all()}
-
+    """列出当前租户的所有项目。"""
     result = await db.execute(
         select(Project)
-        .where(
-            Project.tenant_id == ctx.tenant_id,
-            or_(
-                Project.user_id == ctx.user.id,
-                Project.id.in_(member_project_ids) if member_project_ids else False,
-            ),
-        )
+        .where(Project.tenant_id == ctx.tenant_id)
         .order_by(Project.updated_at.desc())
     )
     projects = result.scalars().all()
     return [
-        _project_to_dict(
-            p,
-            current_role=role_map.get(p.id) or ("owner" if p.user_id == ctx.user.id else "member"),
-        )
+        _project_to_dict(p, current_role="tenant")
         for p in projects
     ]
 
@@ -476,8 +454,6 @@ async def add_member(
     requested = normalize_project_role(req.role)
     if requested == "owner":
         raise HTTPException(status_code=400, detail="不能直接邀请为 owner，仅项目创建者拥有该角色")
-    if requested == "maintainer" and access.role != "owner":
-        raise HTTPException(status_code=403, detail="仅项目所有者可添加管理员（maintainer）")
     role = requested
 
     member = ProjectMember(
@@ -526,10 +502,6 @@ async def remove_member(
         raise HTTPException(status_code=400, detail="无法移除项目所有者")
     if member.user_id == ctx.user.id:
         raise HTTPException(status_code=400, detail="请勿通过项目设置移除自己")
-    member_normalized = normalize_project_role(member.role)
-    if member_normalized == "maintainer" and access.role != "owner":
-        raise HTTPException(status_code=403, detail="仅项目所有者可移除管理员（maintainer）")
-
     await db.delete(member)
     await db.commit()
     return {"status": "ok"}
