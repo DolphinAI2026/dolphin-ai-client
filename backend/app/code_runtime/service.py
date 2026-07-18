@@ -734,6 +734,7 @@ async def open_code_session(
     handoff_id: str | None = None,
     authorization_header: str | None = None,
     auth_provider: str | None = None,
+    browser_session_id: str | None = None,
 ) -> dict[str, Any]:
     session = await resolve_code_session(db, session_id)
     if not session or session.tenant_id != int(ctx.tenant_id) or session.user_id != int(ctx.user.id):
@@ -835,19 +836,37 @@ async def open_code_session(
     binding.last_error = None
     await db.flush()
 
-    browser_session_id = None
+    resolved_browser_session_id = None
     if bootstrap is not None:
         binding.runtime_service_session_enc = encrypt_runtime_cookie(bootstrap.runtime_cookie)
         binding.auth_generation = 1 if is_new_binding else int(binding.auth_generation or 0) + 1
-        browser_session_id = secrets.token_urlsafe(32)
-        db.add(CodeRuntimeBrowserSession(
-            binding_id=binding.id,
-            browser_session_id=browser_session_id,
-            runtime_session_cookie_enc=encrypt_runtime_cookie(bootstrap.runtime_cookie),
-            runtime_session_hash=bootstrap.runtime_cookie_hash,
-            runtime_session_expires_at=bootstrap.expires_at,
-            generation=binding.auth_generation,
-        ))
+        resolved_browser_session_id = (
+            str(browser_session_id or "").strip() or secrets.token_urlsafe(32)
+        )
+        browser_session = (
+            await db.execute(
+                select(CodeRuntimeBrowserSession).where(
+                    CodeRuntimeBrowserSession.binding_id == binding.id,
+                    CodeRuntimeBrowserSession.browser_session_id
+                    == resolved_browser_session_id,
+                )
+            )
+        ).scalar_one_or_none()
+        if browser_session is None:
+            browser_session = CodeRuntimeBrowserSession(
+                binding_id=binding.id,
+                browser_session_id=resolved_browser_session_id,
+                runtime_session_cookie_enc="",
+                runtime_session_hash="",
+                generation=binding.auth_generation,
+            )
+            db.add(browser_session)
+        browser_session.runtime_session_cookie_enc = encrypt_runtime_cookie(
+            bootstrap.runtime_cookie
+        )
+        browser_session.runtime_session_hash = bootstrap.runtime_cookie_hash
+        browser_session.runtime_session_expires_at = bootstrap.expires_at
+        browser_session.generation = binding.auth_generation
         await db.flush()
 
     public_id = ensure_code_session_public_id(session)
@@ -855,7 +874,7 @@ async def open_code_session(
         session_id=public_id,
         user_id=session.user_id,
         tenant_id=session.tenant_id,
-        browser_session_id=browser_session_id,
+        browser_session_id=resolved_browser_session_id,
     )
     return {
         "session_id": public_id,

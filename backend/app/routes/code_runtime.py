@@ -1532,6 +1532,7 @@ class ProxyAuthorization:
     runtime_cookie_hash: str | None = None
     observed_generation: int | None = None
     proxy_cookie_reissue_required: bool = False
+    proxy_cookie_token: str | None = field(default=None, repr=False)
 
 
 @dataclass(frozen=True)
@@ -1644,6 +1645,7 @@ async def _proxy_authorization_from_payload(
     binding: CodeRuntimeBinding | None,
     shell_session: AIChatSession | None = None,
     ctx: AuthContext | None = None,
+    allow_missing_browser_session: bool = False,
 ) -> ProxyAuthorization:
     browser_session_id = str(payload.get("bsid") or "").strip()
     try:
@@ -1684,6 +1686,8 @@ async def _proxy_authorization_from_payload(
             and not binding.runtime_service_session_enc
         ):
             return ProxyAuthorization(browser_session_id=browser_session_id)
+        if allow_missing_browser_session:
+            return ProxyAuthorization(browser_session_id=browser_session_id)
         raise HTTPException(status_code=401, detail="Code runtime token invalid")
     try:
         runtime_cookie = decrypt_runtime_cookie(browser_session.runtime_session_cookie_enc)
@@ -1695,6 +1699,69 @@ async def _proxy_authorization_from_payload(
         runtime_cookie_hash=browser_session.runtime_session_hash,
         observed_generation=int(browser_session.generation),
     )
+
+
+async def _recover_proxy_browser_session(
+    payload: dict[str, Any],
+    *,
+    session_id: CodeSessionRef,
+    db: AsyncSession,
+    binding: CodeRuntimeBinding,
+    shell_session: AIChatSession,
+) -> ProxyAuthorization:
+    browser_session_id = str(payload.get("bsid") or "").strip()
+    async with _code_session_open_lock(str(session_id)):
+        current = await _proxy_authorization_from_payload(
+            payload,
+            db=db,
+            binding=binding,
+            shell_session=shell_session,
+            allow_missing_browser_session=True,
+        )
+        if current.runtime_cookie:
+            return current
+
+        user = await db.get(User, int(shell_session.user_id))
+        if user is None:
+            raise HTTPException(status_code=401, detail="Code runtime token invalid")
+        recovery_ctx = AuthContext(
+            user=user,
+            tenant_id=int(shell_session.tenant_id),
+            tenant_role="member",
+            org_permissions={},
+        )
+        recovery_ctx.control_plane_tenant_id = await _resolve_control_plane_tenant_id(
+            db,
+            recovery_ctx,
+        )
+        authorization = await _locked_control_plane_user_authorization(
+            user_id=int(shell_session.user_id),
+        )
+        await open_code_session(
+            db=db,
+            session_id=session_id,
+            ctx=recovery_ctx,
+            authorization_header=authorization,
+            browser_session_id=browser_session_id,
+        )
+        await db.commit()
+        await db.refresh(binding)
+        recovered = await _proxy_authorization_from_payload(
+            payload,
+            db=db,
+            binding=binding,
+            shell_session=shell_session,
+        )
+        return replace(
+            recovered,
+            proxy_cookie_reissue_required=True,
+            proxy_cookie_token=create_proxy_cookie_token(
+                session_id=session_id,
+                user_id=int(payload["sub"]),
+                tenant_id=int(payload["tid"]),
+                browser_session_id=browser_session_id,
+            ),
+        )
 
 
 async def _authorize_proxy_request(
@@ -1759,18 +1826,54 @@ async def _authorize_proxy_request(
             observed_generation=authorized.observed_generation,
         )
     if cookie_token:
-        payload = validate_proxy_cookie_token(
-            cookie_token,
-            session_id=session_id,
-            legacy_session_id=legacy_session_id,
-        )
-        return await _proxy_authorization_from_payload(
+        try:
+            payload = validate_proxy_cookie_token(
+                cookie_token,
+                session_id=session_id,
+                legacy_session_id=legacy_session_id,
+            )
+            proxy_cookie_expired = False
+        except HTTPException:
+            payload = validate_expired_proxy_cookie_token(
+                cookie_token,
+                session_id=session_id,
+                legacy_session_id=legacy_session_id,
+            )
+            proxy_cookie_expired = True
+        authorized = await _proxy_authorization_from_payload(
             payload,
             db=db,
             binding=binding,
             shell_session=shell_session,
             ctx=ctx,
+            allow_missing_browser_session=True,
         )
+        if (
+            not authorized.runtime_cookie
+            and db is not None
+            and binding is not None
+            and shell_session is not None
+            and not is_local_code_application_id(binding.external_application_id)
+        ):
+            return await _recover_proxy_browser_session(
+                payload,
+                session_id=session_id,
+                db=db,
+                binding=binding,
+                shell_session=shell_session,
+            )
+        if proxy_cookie_expired:
+            return replace(
+                authorized,
+                proxy_cookie_reissue_required=True,
+                proxy_cookie_token=create_proxy_cookie_token(
+                    session_id=session_id,
+                    user_id=int(payload["sub"]),
+                    tenant_id=int(payload["tid"]),
+                    browser_session_id=authorized.browser_session_id,
+                ),
+            )
+        return authorized
     raise HTTPException(status_code=401, detail="Code runtime token required")
 
 
@@ -1850,16 +1953,27 @@ def _renew_authenticated_proxy_cookie(
         tenant_id=int(ctx.tenant_id),
         browser_session_id=browser_session_id,
     )
+    _set_proxy_cookie(
+        response,
+        proxy_token,
+        session_id,
+        request.headers.get("x-forwarded-prefix", ""),
+    )
+
+
+def _set_proxy_cookie(
+    response: Response,
+    proxy_token: str,
+    session_id: CodeSessionRef,
+    forwarded_prefix: str = "",
+) -> None:
     response.set_cookie(
         _embed_cookie_name(session_id),
         proxy_token,
         httponly=True,
         max_age=12 * 60 * 60,
         samesite="lax",
-        path=_public_proxy_prefix(
-            session_id,
-            request.headers.get("x-forwarded-prefix", ""),
-        ),
+        path=_public_proxy_prefix(session_id, forwarded_prefix),
     )
 
 
@@ -2172,6 +2286,7 @@ def _decorate_runtime_response(
     forwarded_prefix: str,
     runtime_cookie: str | None,
     cookie_reissue_required: bool,
+    proxy_cookie_token: str | None,
 ) -> Response:
     for value in upstream.headers.get_list("set-cookie"):
         response.headers.append(
@@ -2180,6 +2295,13 @@ def _decorate_runtime_response(
         )
     if cookie_reissue_required and runtime_cookie:
         _set_runtime_cookie(response, runtime_cookie, session_id, forwarded_prefix)
+    if proxy_cookie_token:
+        _set_proxy_cookie(
+            response,
+            proxy_cookie_token,
+            session_id,
+            forwarded_prefix,
+        )
     return response
 
 
@@ -2202,14 +2324,21 @@ async def proxy_code_runtime(
     ).scalar_one_or_none()
     if not binding:
         raise HTTPException(status_code=404, detail="Code runtime binding not found")
-    authorization = await _authorize_proxy_request(
-        request,
-        session_id,
-        legacy_session_id=session.id,
-        db=db,
-        binding=binding,
-        shell_session=session,
-    )
+    try:
+        authorization = await _authorize_proxy_request(
+            request,
+            session_id,
+            legacy_session_id=session.id,
+            db=db,
+            binding=binding,
+            shell_session=session,
+        )
+    except SandboxRenewalFailure as exc:
+        return _sandbox_renewal_failure_response(
+            exc,
+            session_id=session_id,
+            forwarded_prefix=forwarded_prefix,
+        )
     if authorization.response is not None:
         return authorization.response
     incoming_runtime_cookie = _cookie_header_value(
@@ -2340,6 +2469,7 @@ async def proxy_code_runtime(
                 forwarded_prefix=forwarded_prefix,
                 runtime_cookie=authorization.runtime_cookie,
                 cookie_reissue_required=cookie_reissue_required,
+                proxy_cookie_token=authorization.proxy_cookie_token,
             )
         finally:
             await _close_upstream_attempt(attempt)
@@ -2357,6 +2487,7 @@ async def proxy_code_runtime(
         forwarded_prefix=forwarded_prefix,
         runtime_cookie=authorization.runtime_cookie,
         cookie_reissue_required=cookie_reissue_required,
+        proxy_cookie_token=authorization.proxy_cookie_token,
     )
 
 
