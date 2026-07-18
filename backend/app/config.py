@@ -144,6 +144,7 @@ class Settings(BaseSettings):
     dolphin_code_control_plane_delegation_secret: str = ""
     dolphin_code_builder_url: str = ""
     dolphin_code_default_seed_project_id: str = "1781233861147"
+    dolphin_code_allow_cookieless_loopback_runtime: bool = False
 
     # ai-builder 自身的对外 chat URL — 给外部 MCP 客户端生成 deeplink 时用。
     # 外部 agent 把 md push 到 cache 后，工具返回值带

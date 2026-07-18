@@ -18,7 +18,6 @@ from app.error_messages import (
     APAAS_LOGIN_FAILED,
     is_apaas_token_error,
 )
-from app.project_access import require_project_access
 
 from ._helpers import (
     _dump_preview_config,
@@ -62,9 +61,7 @@ async def publish_application(
             detail="应用还在生成中（模型/表单/权限尚未全部就绪），请等生成完成（status=completed）后再上线。可轮询 get_application / 步骤状态查进度。",
         )
 
-    permissions = await _require_application_permission(ctx, db, app, Action.EDIT)
-    if not permissions.get("publish", False):
-        raise HTTPException(status_code=403, detail="当前角色无权上线该应用")
+    await _require_application_permission(ctx, db, app, Action.EDIT)
 
     env = None
     if app.platform_env_id:
@@ -486,10 +483,6 @@ async def patch_application_default_mode(
         raise HTTPException(404, "应用不存在")
     if not app.project_id:
         raise HTTPException(400, "应用未关联 project，无法设置默认模式")
-    await require_project_access(
-        db, project_id=app.project_id, user_id=ctx.user.id, tenant_id=ctx.tenant_id,
-        minimum_role="maintainer",
-    )
     if req.default_mode not in (None, "simple", "pro"):
         raise HTTPException(400, "default_mode 仅支持 None / 'simple' / 'pro'")
     app.default_mode = req.default_mode
@@ -514,17 +507,7 @@ async def ensure_application_git_project(
         raise HTTPException(404, "应用不存在")
 
     if app.project_id:
-        await require_project_access(
-            db,
-            project_id=app.project_id,
-            user_id=ctx.user.id,
-            tenant_id=ctx.tenant_id,
-            minimum_role="member",
-        )
         return {"application_id": app.id, "project_id": app.project_id, "created": False}
-
-    if app.user_id != ctx.user.id and app.created_by != ctx.user.id:
-        raise HTTPException(403, "无权为该应用创建 Git 项目")
 
     project = Project(
         name=app.app_name or app.app_code or f"应用 {app.id}",
@@ -981,4 +964,3 @@ async def deploy_status(
         error=error,
         app_id=app.id,
     )
-

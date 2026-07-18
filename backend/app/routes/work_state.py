@@ -13,16 +13,12 @@ from app.models.collaboration import (
 )
 from app.models.spec import Spec as SpecORM
 from app.models.preference import UserPreference
-from app.project_access import normalize_project_role, project_role_at_least
-from app.routes.application_members import _user_role_on_application
+from app.project_access import normalize_project_role
 
 router = APIRouter(prefix="/applications", tags=["work-state"])
 
 
-def _effective_mode(user_pref: str, app_default: Optional[str], current_role: str) -> str:
-    """contributor/viewer 强制 simple；maintainer+ 看 app_default 优先，再 user_pref"""
-    if not project_role_at_least(current_role, "maintainer"):
-        return "simple"
+def _effective_mode(user_pref: str, app_default: Optional[str]) -> str:
     return app_default or user_pref or "simple"
 
 
@@ -39,11 +35,6 @@ async def get_work_state(
     )).scalar_one_or_none()
     if not app:
         raise HTTPException(404, "应用不存在")
-
-    # 用户对此应用的 role
-    user_role = await _user_role_on_application(db, application=app, user_id=ctx.user.id)
-    if not user_role:
-        raise HTTPException(403, "无权访问该应用")
 
     # canonical Spec
     canonical = None
@@ -137,7 +128,7 @@ async def get_work_state(
         select(UserPreference).where(UserPreference.user_id == ctx.user.id)
     )).scalar_one_or_none()
     user_mode = pref.default_mode if pref else "simple"
-    effective = _effective_mode(user_mode, app.default_mode, user_role)
+    effective = _effective_mode(user_mode, app.default_mode)
 
     return {
         "application": {
@@ -153,6 +144,6 @@ async def get_work_state(
         "git": git_info,
         "members": list(members.values()),
         "effective_mode": effective,
-        "user_role_on_app": user_role,
+        "user_role_on_app": "tenant",
         "user_pref_mode": user_mode,
     }

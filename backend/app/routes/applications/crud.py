@@ -11,12 +11,11 @@ from pydantic import BaseModel, Field
 from sqlalchemy import select, desc, func as sa_func, delete, and_, not_, or_
 from sqlalchemy.ext.asyncio import AsyncSession
 from app.database import get_db
-from app.models import User, Application, DocumentVersion, ChangePlan, ApiCallLog, PlatformEnv, Conversation, ConfigSnapshot, Project, ProjectMember, Tenant, APaaSUserCredential
-from app.models.collaboration import ApplicationMember
+from app.models import User, Application, DocumentVersion, ChangePlan, ApiCallLog, PlatformEnv, Conversation, ConfigSnapshot, Tenant, APaaSUserCredential
 from app.auth import get_current_user
 from app.schemas import ApplicationCreate, ApplicationPageResponse, ApplicationResponse, MergedAppResponse
 from app.deps import get_auth_context, AuthContext
-from app.permissions import has_org_permission, check_resource_permission, batch_get_permissions, Action
+from app.permissions import check_resource_permission, Action
 from jose import JWTError, jwt
 from app.config import settings, APP_DEPLOY_ABSTRACT
 from app.apaas_client import APaaSClient
@@ -28,7 +27,6 @@ from app.error_messages import (
     is_apaas_token_error,
 )
 from app.services.config_converter import convert_analysis_to_app_config
-from app.project_access import get_project_access, normalize_project_role, project_role_at_least, require_project_access
 
 from ._helpers import *  # noqa: F401,F403
 from . import _helpers  # noqa: F401
@@ -107,35 +105,6 @@ async def _deploy_apaas_app_with_version_retry(
         })
         await client.deploy_app(apaas_app_id, retry_version, abstract=abstract)
         return retry_version, events
-
-
-def _is_application_admin(ctx: AuthContext) -> bool:
-    return ctx.tenant_role in ("platform_admin", "tenant_admin")
-
-
-def _application_access_clause(ctx: AuthContext):
-    if _is_application_admin(ctx):
-        return None
-    project_owner_ids = (
-        select(Project.id)
-        .where(Project.tenant_id == ctx.tenant_id, Project.user_id == ctx.user.id)
-    )
-    project_member_ids = (
-        select(ProjectMember.project_id)
-        .join(Project, Project.id == ProjectMember.project_id)
-        .where(Project.tenant_id == ctx.tenant_id, ProjectMember.user_id == ctx.user.id)
-    )
-    direct_member_ids = (
-        select(ApplicationMember.application_id)
-        .where(ApplicationMember.user_id == ctx.user.id)
-    )
-    return or_(
-        Application.created_by == ctx.user.id,
-        Application.user_id == ctx.user.id,
-        Application.project_id.in_(project_owner_ids),
-        Application.project_id.in_(project_member_ids),
-        Application.id.in_(direct_member_ids),
-    )
 
 
 def _application_stage_clause(stage: str | None):
@@ -265,14 +234,8 @@ async def _list_remote_apps_for_current_builder_tenant(
 
 def _apply_application_list_filters(stmt, ctx: AuthContext, team_scope: str | None, source_filter: str | None, stage: str | None = None):
     stmt = stmt.where(Application.tenant_id == ctx.tenant_id)
-    if team_scope == "personal":
-        stmt = stmt.where(Application.created_by == ctx.user.id, Application.team_id.is_(None))
-    elif team_scope and team_scope.isdigit():
+    if team_scope and team_scope.isdigit():
         stmt = stmt.where(Application.team_id == int(team_scope))
-
-    access_clause = _application_access_clause(ctx)
-    if access_clause is not None:
-        stmt = stmt.where(access_clause)
 
     if source_filter == "local":
         stmt = stmt.where(Application.apaas_app_id.is_(None))
@@ -298,56 +261,16 @@ async def _get_application_permissions(
     db: AsyncSession,
     app: Application,
 ) -> Optional[dict[str, bool]]:
-    def role_permissions(role: str) -> dict[str, bool]:
-        normalized = normalize_project_role(role)
-        return {
-            Action.VIEW: True,
-            Action.EDIT: project_role_at_least(normalized, "contributor"),
-            Action.DELETE: normalized == "owner",
-            Action.CLONE: project_role_at_least(normalized, "contributor"),
-            "publish": project_role_at_least(normalized, "maintainer"),
-            "can_manage_members": project_role_at_least(normalized, "maintainer"),
-            "can_manage_member_roles": normalized == "owner",
-            "access_role": normalized,
-        }
-
-    if ctx.tenant_role in ("platform_admin", "tenant_admin"):
-        return {
-            **role_permissions("owner"),
-            "access_role": "tenant_admin",
-        }
-
-    effective_role: Optional[str] = "owner" if (app.created_by == ctx.user.id or app.user_id == ctx.user.id) else None
-
-    if app.project_id:
-        access = await get_project_access(
-            db,
-            project_id=int(app.project_id),
-            user_id=ctx.user.id,
-            tenant_id=ctx.tenant_id,
-        )
-        if access:
-            effective_role = max(
-                [role for role in (effective_role, access.role) if role],
-                key=lambda role: {"viewer": 1, "contributor": 2, "maintainer": 3, "owner": 4}.get(normalize_project_role(role), 0),
-            )
-
-    direct_member = (await db.execute(
-        select(ApplicationMember).where(
-            ApplicationMember.application_id == app.id,
-            ApplicationMember.user_id == ctx.user.id,
-        )
-    )).scalar_one_or_none()
-    if direct_member:
-        effective_role = max(
-            [role for role in (effective_role, direct_member.role) if role],
-            key=lambda role: {"viewer": 1, "contributor": 2, "maintainer": 3, "owner": 4}.get(normalize_project_role(role), 0),
-        )
-
-    if not effective_role:
-        return None
-
-    return role_permissions(effective_role)
+    return {
+        Action.VIEW: True,
+        Action.EDIT: True,
+        Action.DELETE: True,
+        Action.CLONE: True,
+        "publish": True,
+        "can_manage_members": True,
+        "can_manage_member_roles": True,
+        "access_role": "tenant",
+    }
 
 
 async def _require_application_permission(
@@ -356,12 +279,7 @@ async def _require_application_permission(
     app: Application,
     action: str,
 ) -> dict[str, bool]:
-    permissions = await _get_application_permissions(ctx, db, app)
-    if not permissions:
-        raise HTTPException(status_code=404, detail="应用不存在")
-    if not permissions.get(action, False):
-        raise HTTPException(status_code=403, detail="无权操作该应用")
-    return permissions
+    return await _get_application_permissions(ctx, db, app)
 
 
 
@@ -475,10 +393,7 @@ async def match_applications_by_name(
         select(Application)
         .where(Application.tenant_id == ctx.tenant_id)
     )
-    access_clause = _application_access_clause(ctx)
-    if access_clause is not None:
-        stmt = stmt.where(access_clause)
-    # 先用租户/权限约束取轻量候选，再在 Python 里做归一化相似匹配。
+    # 先用租户约束取轻量候选，再在 Python 里做归一化相似匹配。
     # 只用 SQL ILIKE 会漏掉「客户拜访管理应用」→「客户拜访管理」这类反向包含。
     stmt = stmt.order_by(desc(Application.updated_at)).limit(min(max(limit * 100, 500), 2000))
     rows = (await db.execute(stmt)).scalars().all()
@@ -525,9 +440,7 @@ async def list_applications(
     query = select(Application).where(Application.tenant_id == ctx.tenant_id)
     if requested_app_type:
         query = query.where(Application.app_type == requested_app_type)
-    if team_scope == "personal":
-        query = query.where(Application.created_by == ctx.user.id, Application.team_id.is_(None))
-    elif team_scope and team_scope.isdigit():
+    if team_scope and team_scope.isdigit():
         query = query.where(Application.team_id == int(team_scope))
     query = query.order_by(desc(Application.updated_at))
     result = await db.execute(query)
@@ -940,27 +853,6 @@ async def create_application(
         granted_permissions,
     )
 
-    # 检查创建权限
-    if not has_org_permission(ctx.org_permissions, "application", Action.CREATE):
-        logger.warning(
-            "create_application forbidden user_id=%s tenant_id=%s tenant_role=%s missing_permission=%s granted_permissions=%s",
-            ctx.user.id,
-            ctx.tenant_id,
-            ctx.tenant_role,
-            "application:create",
-            granted_permissions,
-        )
-        raise HTTPException(status_code=403, detail="你的角色没有创建应用的权限")
-
-    if data.project_id:
-        await require_project_access(
-            db,
-            project_id=data.project_id,
-            user_id=ctx.user.id,
-            tenant_id=ctx.tenant_id,
-            minimum_role="member",
-        )
-
     if data.canonical_spec_id:
         from app.builder_spec.persistence import load_spec
         spec = await load_spec(db, data.canonical_spec_id, tenant_id=ctx.tenant_id)
@@ -1275,15 +1167,6 @@ async def auto_create_application(
                 platform_env_id=existing.platform_env_id,
                 platform_env_name=existing_env_name,
             )
-
-    if data.project_id:
-        await require_project_access(
-            db,
-            project_id=data.project_id,
-            user_id=ctx.user.id,
-            tenant_id=ctx.tenant_id,
-            minimum_role="member",
-        )
 
     # 生成 app_code：优先使用解析文档中的 appCode
     import hashlib

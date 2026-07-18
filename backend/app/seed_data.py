@@ -32,13 +32,8 @@ async def seed_default_roles(db: AsyncSession, tenant_id: int, *, commit: bool =
     )
     db.add(admin_role)
 
-    # 2. 开发者 — 应用和对话的全部权限
+    # 2. 开发者 — 对话的全部权限
     developer_permissions = {
-        "application:view": True,
-        "application:create": True,
-        "application:edit": True,
-        "application:delete": True,
-        "application:clone": True,
         "conversation:view": True,
         "conversation:create": True,
         "conversation:delete": True,
@@ -48,7 +43,7 @@ async def seed_default_roles(db: AsyncSession, tenant_id: int, *, commit: bool =
         tenant_id=tenant_id,
         role_name="开发者",
         role_code="R_developer",
-        description="开发者，可以创建和管理应用",
+        description="开发者，可以管理对话",
         permissions=developer_permissions,
         is_system=False
     )
@@ -56,14 +51,13 @@ async def seed_default_roles(db: AsyncSession, tenant_id: int, *, commit: bool =
 
     # 3. 查看者 — 只读权限
     viewer_permissions = {
-        "application:view": True,
         "conversation:view": True,
     }
     viewer_role = Role(
         tenant_id=tenant_id,
         role_name="查看者",
         role_code="R_viewer",
-        description="查看者，只能查看应用和对话",
+        description="查看者，只能查看对话",
         permissions=viewer_permissions,
         is_system=False
     )

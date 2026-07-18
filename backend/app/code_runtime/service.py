@@ -12,7 +12,7 @@ from uuid import NAMESPACE_URL, uuid4, uuid5
 import httpx
 from fastapi import HTTPException
 from jose import JWTError, jwt
-from sqlalchemy import or_, select
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import settings
@@ -22,8 +22,7 @@ from app.code_runtime.sandbox_auth import (
     encrypt_runtime_cookie,
     split_entry_token,
 )
-from app.models import Application, Project, ProjectMember
-from app.models.collaboration import ApplicationMember
+from app.models import Application
 from app.models.ai_chat import (
     AIChatSession,
     CodeRuntimeAgentSession,
@@ -274,37 +273,17 @@ def validate_proxy_cookie_token(
     )
 
 
-def _is_application_admin(ctx: Any) -> bool:
-    return getattr(ctx, "tenant_role", "") in ("platform_admin", "tenant_admin")
-
-
 async def ensure_application_access(db: AsyncSession, app_id: int, ctx: Any) -> Application:
-    conditions = [Application.id == int(app_id), Application.tenant_id == int(ctx.tenant_id)]
-    if not _is_application_admin(ctx):
-        project_owner_ids = select(Project.id).where(
-            Project.tenant_id == int(ctx.tenant_id),
-            Project.user_id == int(ctx.user.id),
-        )
-        project_member_ids = (
-            select(ProjectMember.project_id)
-            .join(Project, Project.id == ProjectMember.project_id)
-            .where(Project.tenant_id == int(ctx.tenant_id), ProjectMember.user_id == int(ctx.user.id))
-        )
-        direct_member_ids = select(ApplicationMember.application_id).where(
-            ApplicationMember.user_id == int(ctx.user.id)
-        )
-        conditions.append(
-            or_(
-                Application.created_by == int(ctx.user.id),
-                Application.user_id == int(ctx.user.id),
-                Application.project_id.in_(project_owner_ids),
-                Application.project_id.in_(project_member_ids),
-                Application.id.in_(direct_member_ids),
+    app = (
+        await db.execute(
+            select(Application).where(
+                Application.id == int(app_id),
+                Application.tenant_id == int(ctx.tenant_id),
             )
         )
-    app = (await db.execute(select(Application).where(*conditions))).scalar_one_or_none()
+    ).scalar_one_or_none()
     if not app:
-        raise HTTPException(status_code=404, detail="应用不存在或无权访问")
+        raise HTTPException(status_code=404, detail="应用不存在")
     return app
 
 
@@ -770,20 +749,30 @@ async def open_code_session(
         clean_builder_url = builder_url
         runtime_base_url = derive_runtime_base_url(builder_url)
     else:
-        try:
-            bootstrap = await bootstrap_runtime_session(builder_url)
-        except HTTPException as exc:
-            if not (
-                exc.status_code == 401
-                and (exc.headers or {}).get(RUNTIME_AUTH_ERROR_HEADER)
-                == "sandbox_launch_token_expired"
-            ):
-                raise
+        for attempt in range(2):
+            try:
+                bootstrap = await bootstrap_runtime_session(builder_url)
+                break
+            except ValueError as exc:
+                if attempt > 0:
+                    raise HTTPException(
+                        status_code=502,
+                        detail="Code Control Plane 未返回 runtime entry token",
+                    ) from exc
+            except HTTPException as exc:
+                launch_token_expired = (
+                    exc.status_code == 401
+                    and (exc.headers or {}).get(RUNTIME_AUTH_ERROR_HEADER)
+                    == "sandbox_launch_token_expired"
+                )
+                if not launch_token_expired or attempt > 0:
+                    raise
             opened = await workspace_open_once()
             builder_url = str(opened.get("specReviewUrl") or opened.get("builderUrl") or "").strip()
             if not builder_url:
                 raise HTTPException(status_code=502, detail="Code Control Plane 未返回 builder URL")
-            bootstrap = await bootstrap_runtime_session(builder_url)
+        if bootstrap is None:
+            raise HTTPException(status_code=502, detail="Code runtime bootstrap failed")
         clean_builder_url = bootstrap.clean_builder_url
         runtime_base_url = bootstrap.runtime_base_url
 

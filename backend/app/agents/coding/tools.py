@@ -271,16 +271,15 @@ def _coerce_int(value: Any) -> int | None:
 def _agent_auth_context(ctx: AgentContext):
     """把 AgentContext 降级成共享 workspace/deploy helper 需要的 AuthContext。
 
-    AgentContext 当前没有完整 tenant_role/org_permissions；这里保留用户、租户两个
-    强约束，并给 application:view 一个最小权限兜底，真实发布权限仍由 workspace
-    admin 校验控制。
+    AgentContext 当前没有完整 tenant_role/org_permissions；这里只保留用户和租户
+    两个约束。
     """
     from app.deps import AuthContext
 
     extra = ctx.extra if isinstance(ctx.extra, dict) else {}
     org_permissions = extra.get("org_permissions")
     if not isinstance(org_permissions, dict):
-        org_permissions = {"application:view": True}
+        org_permissions = {}
 
     return AuthContext(
         user=SimpleNamespace(id=ctx.user_id, is_platform_admin=False),

@@ -51,7 +51,7 @@ CREATE TABLE IF NOT EXISTS roles (
     role_name VARCHAR(64) NOT NULL,
     role_code VARCHAR(64) NOT NULL,
     description TEXT DEFAULT NULL,
-    permissions JSON NOT NULL COMMENT '{"application:create": true, ...}',
+    permissions JSON NOT NULL COMMENT '{"conversation:create": true, ...}',
     is_system TINYINT(1) NOT NULL DEFAULT 0 COMMENT '系统角色不可删除',
     created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
     UNIQUE KEY uq_tenant_role_code (tenant_id, role_code),
@@ -180,13 +180,13 @@ ON DUPLICATE KEY UPDATE tenant_name = tenant_name;
 
 -- 默认管理员角色（完整权限）
 INSERT INTO roles (tenant_id, role_name, role_code, permissions, is_system)
-SELECT t.id, 'Admin', 'admin', '{"application:view":true,"application:create":true,"application:edit":true,"application:delete":true,"application:clone":true,"conversation:view":true,"conversation:create":true,"conversation:delete":true,"team:view":true,"team:create":true,"team:manage":true,"member:view":true,"member:invite":true,"member:manage":true,"role:view":true,"role:create":true,"role:edit":true,"role:delete":true}', 1
+SELECT t.id, 'Admin', 'admin', '{"conversation:view":true,"conversation:create":true,"conversation:delete":true,"team:view":true,"team:create":true,"team:manage":true,"member:view":true,"member:invite":true,"member:manage":true,"role:view":true,"role:create":true,"role:edit":true,"role:delete":true}', 1
 FROM tenants t WHERE t.tenant_code = 'default'
 ON DUPLICATE KEY UPDATE role_name = role_name;
 
 -- 默认普通用户角色（基础权限）
 INSERT INTO roles (tenant_id, role_name, role_code, permissions, is_system)
-SELECT t.id, 'Member', 'member', '{"application:view":true,"application:create":true,"application:edit":true,"application:delete":true,"application:clone":true,"conversation:view":true,"conversation:create":true,"conversation:delete":true,"team:view":true}', 0
+SELECT t.id, 'Member', 'member', '{"conversation:view":true,"conversation:create":true,"conversation:delete":true,"team:view":true}', 0
 FROM tenants t WHERE t.tenant_code = 'default'
 ON DUPLICATE KEY UPDATE role_name = role_name;
 

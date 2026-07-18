@@ -62,7 +62,7 @@ class Role(Base):
     role_name: Mapped[str] = mapped_column(String(64), nullable=False)
     role_code: Mapped[str] = mapped_column(String(64), nullable=False)
     description: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
-    permissions: Mapped[dict] = mapped_column(JSON, nullable=False, default=dict)  # {"application:create": true, ...}
+    permissions: Mapped[dict] = mapped_column(JSON, nullable=False, default=dict)
     is_system: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)  # 系统角色不可删除
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, nullable=False)
 
@@ -96,5 +96,4 @@ class TeamMember(Base):
     user_id: Mapped[int] = mapped_column(Integer, ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True)
     team_role: Mapped[str] = mapped_column(String(32), default="member", nullable=False)  # admin / member / viewer
     joined_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, nullable=False)
-
 

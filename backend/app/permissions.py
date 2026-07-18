@@ -24,7 +24,6 @@ class Action(str, Enum):
 
 # All permission codes defined in the system
 PERMISSION_CODES = [
-    "application:view", "application:create", "application:edit", "application:delete", "application:clone",
     "conversation:view", "conversation:create", "conversation:delete",
     "team:view", "team:create", "team:manage",
     "member:view", "member:invite", "member:manage",
@@ -87,6 +86,10 @@ async def check_resource_permission(
     Layer 1: Org role permission (from role.permissions via ctx.org_permissions)
     Layer 2: Resource scope (ownership + team role)
     """
+    # 应用权限尚未设计，当前只由各接口自身的租户条件隔离。
+    if resource_type == "application":
+        return
+
     # Super admin / tenant admin bypass all checks
     if ctx.tenant_role in ("platform_admin", "tenant_admin"):
         return
@@ -152,6 +155,10 @@ async def batch_get_permissions(
     resource_type: str,
 ) -> list[dict[str, bool]]:
     """Batch compute permissions for a list of resources (avoids N+1 team queries)."""
+    if resource_type == "application":
+        full = {Action.EDIT: True, Action.DELETE: True, Action.CLONE: True}
+        return [full for _ in resources]
+
     # Super admin / tenant admin: all permissions
     if ctx.tenant_role in ("platform_admin", "tenant_admin"):
         full = {Action.EDIT: True, Action.DELETE: True, Action.CLONE: True}

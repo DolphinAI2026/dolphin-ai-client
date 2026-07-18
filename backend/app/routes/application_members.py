@@ -17,7 +17,7 @@ from app.deps import get_auth_context, AuthContext
 from app.models import Application, Project, ProjectMember, User
 from app.models.collaboration import ApplicationMember
 from app.models.tenant import Role, UserTenant
-from app.project_access import normalize_project_role, project_role_at_least
+from app.project_access import normalize_project_role
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/applications", tags=["application-members"])
@@ -55,65 +55,13 @@ async def _resolve_application_or_404(
     return app
 
 
-async def _user_role_on_application(
-    db: AsyncSession,
-    *,
-    application: Application,
-    user_id: int,
-) -> Optional[str]:
-    """返回用户对 application 的 effective role（取 direct + inherited 的最高）。
-
-    优先级：creator → direct (ApplicationMember) → inherited (ProjectMember)。
-    """
-    direct_role: Optional[str] = None
-    inherited_role: Optional[str] = None
-
-    am = (await db.execute(
-        select(ApplicationMember).where(
-            ApplicationMember.application_id == application.id,
-            ApplicationMember.user_id == user_id,
-        )
-    )).scalar_one_or_none()
-    if am:
-        direct_role = normalize_project_role(am.role)
-
-    if application.project_id:
-        pm = (await db.execute(
-            select(ProjectMember).where(
-                ProjectMember.project_id == application.project_id,
-                ProjectMember.user_id == user_id,
-            )
-        )).scalar_one_or_none()
-        if pm:
-            inherited_role = normalize_project_role(pm.role)
-
-    if application.created_by == user_id:
-        return "owner"
-
-    candidates = [r for r in (direct_role, inherited_role) if r]
-    if not candidates:
-        return None
-    return max(candidates, key=lambda r: _ROLE_LEVELS.get(r, 0))
-
-
 async def _require_application_access(
     db: AsyncSession,
     *,
     application_id: int,
-    user_id: int,
     tenant_id: int,
-    minimum_role: str = "contributor",
-    tenant_role: str | None = None,
-) -> tuple[Application, str]:
-    app = await _resolve_application_or_404(db, application_id, tenant_id)
-    if tenant_role in ("platform_admin", "tenant_admin"):
-        return app, "owner"
-    role = await _user_role_on_application(db, application=app, user_id=user_id)
-    if not role:
-        raise HTTPException(404, "应用不存在或无权访问")
-    if not project_role_at_least(role, minimum_role):
-        raise HTTPException(403, "无权访问该应用")
-    return app, role
+) -> Application:
+    return await _resolve_application_or_404(db, application_id, tenant_id)
 
 
 def _merge_member(members: dict[int, dict], item: dict) -> None:
@@ -164,12 +112,10 @@ async def list_application_members(
     db: Annotated[AsyncSession, Depends(get_db)],
 ):
     """列出应用的所有成员（合并 inherited + direct + creator）"""
-    app, _role = await _require_application_access(
+    app = await _require_application_access(
         db,
         application_id=application_id,
-        user_id=ctx.user.id,
         tenant_id=ctx.tenant_id,
-        tenant_role=ctx.tenant_role,
     )
 
     members: dict[int, dict] = {}
@@ -231,13 +177,10 @@ async def invite_application_member(
     db: Annotated[AsyncSession, Depends(get_db)],
 ):
     """邀请用户加入应用（外部协作者）"""
-    app, role = await _require_application_access(
+    app = await _require_application_access(
         db,
         application_id=application_id,
-        user_id=ctx.user.id,
         tenant_id=ctx.tenant_id,
-        minimum_role="maintainer",
-        tenant_role=ctx.tenant_role,
     )
 
     if req.user_id:
@@ -264,8 +207,6 @@ async def invite_application_member(
     requested = normalize_project_role(req.role)
     if requested == "owner":
         raise HTTPException(400, "不能直接邀请为 owner（只有创建者持有）")
-    if requested == "maintainer" and role != "owner":
-        raise HTTPException(403, "仅应用 owner 可添加 maintainer")
     if app.created_by == target.id:
         raise HTTPException(400, "创建者已拥有 owner 权限")
 
@@ -320,13 +261,10 @@ async def update_application_member_role(
     db: Annotated[AsyncSession, Depends(get_db)],
 ):
     """改 application 直接成员的 role（不影响 inherited）"""
-    _app, role = await _require_application_access(
+    await _require_application_access(
         db,
         application_id=application_id,
-        user_id=ctx.user.id,
         tenant_id=ctx.tenant_id,
-        minimum_role="owner",
-        tenant_role=ctx.tenant_role,
     )
     am = (await db.execute(
         select(ApplicationMember).where(
@@ -357,13 +295,10 @@ async def remove_application_member(
     db: Annotated[AsyncSession, Depends(get_db)],
 ):
     """移除 application 直接成员"""
-    _app, role = await _require_application_access(
+    await _require_application_access(
         db,
         application_id=application_id,
-        user_id=ctx.user.id,
         tenant_id=ctx.tenant_id,
-        minimum_role="maintainer",
-        tenant_role=ctx.tenant_role,
     )
     am = (await db.execute(
         select(ApplicationMember).where(
@@ -375,9 +310,6 @@ async def remove_application_member(
         raise HTTPException(404, "应用直接成员不存在")
     if user_id == ctx.user.id:
         raise HTTPException(400, "请勿通过应用设置移除自己")
-    if normalize_project_role(am.role) == "maintainer" and role != "owner":
-        raise HTTPException(403, "仅 owner 可移除 maintainer")
-
     await db.delete(am)
     await db.commit()
     return {"status": "ok"}
