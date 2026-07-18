@@ -1709,8 +1709,29 @@ async def test_open_code_runtime_session_serializes_same_session_first_open(monk
         open_code_runtime_session("same-session", _request(), _ctx(), FakeDB()),
     )
 
-    assert results == [{"ok": True}, {"ok": True}]
+    assert all(result["ok"] is True for result in results)
+    assert all(result["cache_profile"] == "normal" for result in results)
+    assert all(result["browser_hot_frames"] == 2 for result in results)
     assert max_active == 1
+
+
+def test_code_sandbox_cache_config_resolves_performance_profile(monkeypatch):
+    import app.routes.code_runtime as code_runtime_routes
+    from app.config import settings
+
+    monkeypatch.setattr(settings, "dolphin_code_cache_profile", "performance")
+    monkeypatch.setattr(settings, "dolphin_code_performance_browser_hot_frames", 5)
+    monkeypatch.setattr(
+        settings,
+        "dolphin_code_performance_server_warm_sandboxes_per_user",
+        10,
+    )
+
+    assert code_runtime_routes._resolved_code_sandbox_cache_config() == {
+        "cache_profile": "performance",
+        "browser_hot_frames": 5,
+        "server_warm_sandboxes_per_user": 10,
+    }
 
 
 @pytest.mark.asyncio

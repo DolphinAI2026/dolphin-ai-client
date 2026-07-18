@@ -124,6 +124,23 @@ def _code_session_open_lock(session_ref: str) -> asyncio.Lock:
     return lock
 
 
+def _resolved_code_sandbox_cache_config() -> dict[str, int | str]:
+    profile = str(settings.dolphin_code_cache_profile or "normal").strip().lower()
+    if profile not in {"normal", "performance"}:
+        profile = "normal"
+    if profile == "performance":
+        browser_hot_frames = settings.dolphin_code_performance_browser_hot_frames
+        server_warm_sandboxes = settings.dolphin_code_performance_server_warm_sandboxes_per_user
+    else:
+        browser_hot_frames = settings.dolphin_code_normal_browser_hot_frames
+        server_warm_sandboxes = settings.dolphin_code_normal_server_warm_sandboxes_per_user
+    return {
+        "cache_profile": profile,
+        "browser_hot_frames": min(10, max(1, int(browser_hot_frames))),
+        "server_warm_sandboxes_per_user": min(50, max(1, int(server_warm_sandboxes))),
+    }
+
+
 async def _locked_control_plane_user_authorization(
     *,
     user_id: int,
@@ -436,7 +453,12 @@ async def open_code_runtime_session(
         except Exception as exc:
             await db.rollback()
             raise HTTPException(status_code=500, detail="Code runtime session open failed") from exc
-        return result
+        # Piggyback the resolved cache profile on the existing open call so the
+        # browser does not add another request to the workspace critical path.
+        return {
+            **result,
+            **_resolved_code_sandbox_cache_config(),
+        }
 
 
 async def _runtime_json_request(

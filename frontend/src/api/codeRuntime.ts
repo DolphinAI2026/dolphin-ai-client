@@ -34,6 +34,9 @@ export interface CodeRuntimeOpenResponse {
   runtime_session_id?: string | null
   external_base_path: string
   embed_url: string
+  cache_profile?: 'normal' | 'performance'
+  browser_hot_frames?: number
+  server_warm_sandboxes_per_user?: number
 }
 
 export interface CodeAgentSessionRecord {

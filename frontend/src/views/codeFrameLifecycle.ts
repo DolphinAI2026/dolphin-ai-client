@@ -1,4 +1,4 @@
-export type CodeFramePhase = 'active' | 'pending'
+export type CodeFramePhase = 'active' | 'hot_hidden' | 'pending'
 
 export interface CodeFrameRouteLocation {
   path: string
@@ -15,6 +15,7 @@ export interface CodeFrame {
   phase: CodeFramePhase
   loaded: boolean
   requestId: number
+  lastUsedOrder: number
 }
 
 export interface CodeFrameOpenRequest {
@@ -36,11 +37,14 @@ export interface CodeFrameFailureInput {
 
 export interface CodeFrameLifecycle {
   active: CodeFrame | null
+  hot: CodeFrame[]
   pending: CodeFrame | null
   request: CodeFrameOpenRequest | null
   failed: CodeFrameFailure | null
   lastReadyRoute: CodeFrameRouteLocation | null
   nextFrameId: number
+  nextAccessOrder: number
+  maxFrames: number
 }
 
 function cloneCodeFrameRoute(route: CodeFrameRouteLocation): CodeFrameRouteLocation {
@@ -71,11 +75,47 @@ function codeFrameRoutesEqual(
 export function createCodeFrameLifecycle(): CodeFrameLifecycle {
   return {
     active: null,
+    hot: [],
     pending: null,
     request: null,
     failed: null,
     lastReadyRoute: null,
     nextFrameId: 1,
+    nextAccessOrder: 1,
+    maxFrames: 2,
+  }
+}
+
+function normalizeFrameLimit(maxFrames: number): number {
+  if (!Number.isFinite(maxFrames)) return 2
+  return Math.min(10, Math.max(1, Math.trunc(maxFrames)))
+}
+
+function trimHotFrames(hot: CodeFrame[], maxFrames: number): CodeFrame[] {
+  const hiddenLimit = Math.max(0, normalizeFrameLimit(maxFrames) - 1)
+  return [...hot]
+    .sort((left, right) => right.lastUsedOrder - left.lastUsedOrder)
+    .slice(0, hiddenLimit)
+}
+
+function hiddenFrame(frame: CodeFrame): CodeFrame {
+  return {
+    ...frame,
+    phase: 'hot_hidden',
+  }
+}
+
+export function setCodeFrameCacheLimit(
+  state: CodeFrameLifecycle,
+  maxFrames: number,
+): CodeFrameLifecycle {
+  const normalized = normalizeFrameLimit(maxFrames)
+  const hot = trimHotFrames(state.hot, normalized)
+  if (state.maxFrames === normalized && hot.length === state.hot.length) return state
+  return {
+    ...state,
+    hot,
+    maxFrames: normalized,
   }
 }
 
@@ -147,6 +187,7 @@ export function queuePendingCodeFrame(
       phase: 'pending',
       loaded: false,
       requestId: input.requestId,
+      lastUsedOrder: 0,
     },
     failed: null,
     nextFrameId: state.nextFrameId + 1,
@@ -174,17 +215,72 @@ export function promoteReadyCodeFrame(state: CodeFrameLifecycle, frameKey: strin
     return state
   }
 
+  // A shell session owns at most one mounted iframe. Reopening another agent
+  // route for the same shell replaces that frame instead of retaining a stale
+  // duplicate with the same runtime identity.
+  const previousFrames = [
+    ...state.hot,
+    ...(state.active ? [state.active] : []),
+  ].filter(frame => frame.sessionRef !== pending.sessionRef)
+
   return {
     ...state,
     active: {
       ...pending,
       phase: 'active',
       loaded: true,
+      lastUsedOrder: state.nextAccessOrder,
     },
+    hot: trimHotFrames(previousFrames.map(hiddenFrame), state.maxFrames),
     pending: null,
     request: null,
     failed: null,
     lastReadyRoute: cloneCodeFrameRoute(pending.route),
+    nextAccessOrder: state.nextAccessOrder + 1,
+  }
+}
+
+export function activateCachedCodeFrame(
+  state: CodeFrameLifecycle,
+  options: {
+    requestId: number
+    sessionRef: string
+    requireRouteMatch: boolean
+  },
+): CodeFrameLifecycle {
+  const request = state.request
+  if (
+    request?.requestId !== options.requestId
+    || request.sessionRef !== options.sessionRef
+  ) {
+    return state
+  }
+
+  const cached = state.hot.find(frame =>
+    frame.sessionRef === options.sessionRef
+    && (!options.requireRouteMatch || codeFrameRoutesEqual(frame.route, request.route)),
+  )
+  if (!cached) return state
+
+  const previousFrames = [
+    ...state.hot.filter(frame => frame.key !== cached.key),
+    ...(state.active && state.active.sessionRef !== cached.sessionRef ? [state.active] : []),
+  ]
+
+  return {
+    ...state,
+    active: {
+      ...cached,
+      route: cloneCodeFrameRoute(request.route),
+      phase: 'active',
+      lastUsedOrder: state.nextAccessOrder,
+    },
+    hot: trimHotFrames(previousFrames.map(hiddenFrame), state.maxFrames),
+    pending: null,
+    request: null,
+    failed: null,
+    lastReadyRoute: cloneCodeFrameRoute(request.route),
+    nextAccessOrder: state.nextAccessOrder + 1,
   }
 }
 
@@ -209,7 +305,8 @@ export function failCodeFrameOpen(
 }
 
 export function getCodeFrames(state: CodeFrameLifecycle): CodeFrame[] {
-  return [state.active, state.pending].filter((frame): frame is CodeFrame => frame != null)
+  return [state.active, ...state.hot, state.pending]
+    .filter((frame): frame is CodeFrame => frame != null)
 }
 
 export function isCodeFrameSwitching(state: CodeFrameLifecycle): boolean {

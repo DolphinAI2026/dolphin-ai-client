@@ -145,6 +145,13 @@ class Settings(BaseSettings):
     dolphin_code_builder_url: str = ""
     dolphin_code_default_seed_project_id: str = "1781233861147"
     dolphin_code_allow_cookieless_loopback_runtime: bool = False
+    # 浏览器热 iframe 只影响切换缓存数量，不改变 Runtime Cookie、Secret
+    # 轮换或失败恢复协议。Control Plane 租户覆盖接入前，这里作为部署级默认值。
+    dolphin_code_cache_profile: str = "normal"
+    dolphin_code_normal_browser_hot_frames: int = 2
+    dolphin_code_performance_browser_hot_frames: int = 5
+    dolphin_code_normal_server_warm_sandboxes_per_user: int = 4
+    dolphin_code_performance_server_warm_sandboxes_per_user: int = 10
 
     # ai-builder 自身的对外 chat URL — 给外部 MCP 客户端生成 deeplink 时用。
     # 外部 agent 把 md push 到 cache 后，工具返回值带

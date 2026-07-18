@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import {
+  activateCachedCodeFrame,
   beginCodeFrameOpen,
   createCodeFrameLifecycle,
   failCodeFrameOpen,
@@ -10,6 +11,7 @@ import {
   markCodeFrameLoaded,
   promoteReadyCodeFrame,
   queuePendingCodeFrame,
+  setCodeFrameCacheLimit,
   type CodeFrameRouteLocation,
 } from './codeFrameLifecycle'
 
@@ -101,7 +103,7 @@ describe('code frame lifecycle', () => {
     expect(isCodeFrameInteractive(state, pending)).toBe(false)
   })
 
-  it('atomically replaces the old frame only when the current pending frame is ready', () => {
+  it('atomically promotes the new frame and retains the previous frame as hot-hidden', () => {
     let state = activateInitialFrame()
     const oldKey = state.active!.key
     state = beginCodeFrameOpen(state, {
@@ -122,7 +124,75 @@ describe('code frame lifecycle', () => {
     expect(state.request).toBeNull()
     expect(state.pending).toBeNull()
     expect(state.active).toMatchObject({ key: pendingKey, sessionRef: 'session-2', phase: 'active' })
-    expect(getCodeFrames(state).map(frame => frame.key)).not.toContain(oldKey)
+    expect(getCodeFrames(state)).toEqual([
+      expect.objectContaining({ key: pendingKey, phase: 'active' }),
+      expect.objectContaining({ key: oldKey, phase: 'hot_hidden' }),
+    ])
+  })
+
+  it('reuses a hot frame and evicts hidden frames by the configured LRU limit', () => {
+    let state = activateInitialFrame()
+    state = setCodeFrameCacheLimit(state, 2)
+
+    for (const [requestId, sessionRef] of [[2, 'session-2'], [3, 'session-3']] as const) {
+      state = beginCodeFrameOpen(state, {
+        requestId,
+        sessionRef,
+        route: routeLocation(sessionRef),
+      })
+      state = queuePendingCodeFrame(state, {
+        requestId,
+        sessionRef,
+        url: `/api/code-runtime/${sessionRef}/embed`,
+        baseUrl,
+      })
+      state = promoteReadyCodeFrame(state, state.pending!.key)
+    }
+
+    expect(getCodeFrames(state).map(frame => frame.sessionRef)).toEqual(['session-3', 'session-2'])
+
+    state = beginCodeFrameOpen(state, {
+      requestId: 4,
+      sessionRef: 'session-2',
+      route: routeLocation('session-2'),
+    })
+    state = activateCachedCodeFrame(state, {
+      requestId: 4,
+      sessionRef: 'session-2',
+      requireRouteMatch: true,
+    })
+
+    expect(state.active?.sessionRef).toBe('session-2')
+    expect(state.hot.map(frame => frame.sessionRef)).toEqual(['session-3'])
+    expect(state.request).toBeNull()
+  })
+
+  it('retains five total frames in performance mode without changing frame semantics', () => {
+    let state = setCodeFrameCacheLimit(createCodeFrameLifecycle(), 5)
+
+    for (let requestId = 1; requestId <= 6; requestId += 1) {
+      const sessionRef = `session-${requestId}`
+      state = beginCodeFrameOpen(state, {
+        requestId,
+        sessionRef,
+        route: routeLocation(sessionRef),
+      })
+      state = queuePendingCodeFrame(state, {
+        requestId,
+        sessionRef,
+        url: `/api/code-runtime/${sessionRef}/embed`,
+        baseUrl,
+      })
+      state = promoteReadyCodeFrame(state, state.pending!.key)
+    }
+
+    expect(getCodeFrames(state).map(frame => frame.sessionRef)).toEqual([
+      'session-6',
+      'session-5',
+      'session-4',
+      'session-3',
+      'session-2',
+    ])
   })
 
   it('ignores a late ready from a frame replaced by a newer switch', () => {

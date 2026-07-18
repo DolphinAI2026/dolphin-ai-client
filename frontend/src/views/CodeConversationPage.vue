@@ -54,7 +54,11 @@
         :ref="element => setCodeFrameElement(frame.key, element)"
         :class="[
           'code-frame',
-          frame.phase === 'active' ? 'code-frame-active' : 'code-frame-pending',
+          frame.phase === 'active'
+            ? 'code-frame-active'
+            : frame.phase === 'hot_hidden'
+              ? 'code-frame-hidden'
+              : 'code-frame-pending',
           { 'code-frame-frozen': !isFrameInteractive(frame) },
         ]"
         :src="frame.url"
@@ -101,6 +105,7 @@ import { useRoute, useRouter } from 'vue-router'
 import { codeRuntimeApi } from '@/api/codeRuntime'
 import AppIcon from '@/components/common/AppIcon.vue'
 import {
+  activateCachedCodeFrame,
   beginCodeFrameOpen,
   createCodeFrameLifecycle,
   failCodeFrameOpen,
@@ -111,6 +116,7 @@ import {
   markCodeFrameLoaded,
   promoteReadyCodeFrame,
   queuePendingCodeFrame,
+  setCodeFrameCacheLimit,
   type CodeFrame,
   type CodeFrameFailureInput,
   type CodeFrameRouteLocation,
@@ -321,6 +327,22 @@ async function openCurrentSession() {
   })
   loading.value = true
   errorMessage.value = ''
+
+  // An exact cached route is already authenticated inside its mounted iframe.
+  // Promote it synchronously so a normal back-and-forth sandbox switch does
+  // not wait for Control Plane or rebuild the Runtime document.
+  const exactCachedState = activateCachedCodeFrame(frameLifecycle.value, {
+    requestId: requestSeq,
+    sessionRef,
+    requireRouteMatch: true,
+  })
+  if (exactCachedState !== frameLifecycle.value) {
+    frameLifecycle.value = exactCachedState
+    loading.value = false
+    refreshOuterCodeRail()
+    return
+  }
+
   try {
     const runtimeAgentId = currentRuntimeAgentId()
     const opened = await codeRuntimeApi.openSession(sessionRef)
@@ -340,6 +362,25 @@ async function openCurrentSession() {
       }
     }
     if (requestSeq !== openRequestSeq) return
+
+    frameLifecycle.value = setCodeFrameCacheLimit(
+      frameLifecycle.value,
+      Number(opened.browser_hot_frames || 2),
+    )
+
+    // A different agent route still needs the activation API above, but the
+    // shell iframe itself can be reused after activation instead of reloaded.
+    const cachedState = activateCachedCodeFrame(frameLifecycle.value, {
+      requestId: requestSeq,
+      sessionRef,
+      requireRouteMatch: false,
+    })
+    if (cachedState !== frameLifecycle.value) {
+      frameLifecycle.value = cachedState
+      refreshOuterCodeRail()
+      return
+    }
+
     queuePendingFrame(opened.embed_url)
     refreshOuterCodeRail()
   } catch (error: any) {
@@ -907,6 +948,12 @@ onBeforeUnmount(() => {
 .code-frame-pending {
   z-index: 0;
   opacity: 0;
+  pointer-events: none;
+}
+
+.code-frame-hidden {
+  z-index: 0;
+  visibility: hidden;
   pointer-events: none;
 }
 
