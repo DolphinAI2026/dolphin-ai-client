@@ -202,6 +202,101 @@ async def test_coding_platform_admin_cannot_switch_to_unbound_tenant(db_session)
 
 
 @pytest.mark.asyncio
+async def test_control_plane_platform_admin_lists_only_current_platform_tenant(
+    db_session,
+    monkeypatch,
+):
+    monkeypatch.setattr(settings, "control_plane_binding_enabled", False)
+    current = Tenant(tenant_name="Current", tenant_code="default", status=1)
+    stale = Tenant(tenant_name="Stale", tenant_code="workspace-other", status=1)
+    user = User(
+        username="control_plane_admin",
+        hashed_password=get_password_hash("secret"),
+        account_source="control_plane",
+        coding_tenant_id="default",
+        is_active=True,
+        is_platform_admin=True,
+    )
+    db_session.add_all([current, stale, user])
+    await db_session.flush()
+    db_session.add_all([
+        UserTenant(
+            user_id=user.id,
+            tenant_id=current.id,
+            status=1,
+            is_default=True,
+        ),
+        UserTenant(
+            user_id=user.id,
+            tenant_id=stale.id,
+            status=1,
+            is_default=False,
+        ),
+    ])
+    await db_session.flush()
+    ctx = AuthContext(
+        user=user,
+        tenant_id=current.id,
+        tenant_role="platform_admin",
+        org_permissions={"*": True},
+    )
+
+    result = await list_my_tenants(ctx, db_session)
+
+    assert [item.tenant_id for item in result] == [current.id]
+
+
+@pytest.mark.asyncio
+async def test_control_plane_platform_admin_cannot_switch_to_stale_platform_tenant(
+    db_session,
+    monkeypatch,
+):
+    monkeypatch.setattr(settings, "control_plane_binding_enabled", False)
+    current = Tenant(tenant_name="Current", tenant_code="default", status=1)
+    stale = Tenant(tenant_name="Stale", tenant_code="workspace-other", status=1)
+    user = User(
+        username="control_plane_admin_switch",
+        hashed_password=get_password_hash("secret"),
+        account_source="control_plane",
+        coding_tenant_id="default",
+        is_active=True,
+        is_platform_admin=True,
+    )
+    db_session.add_all([current, stale, user])
+    await db_session.flush()
+    db_session.add_all([
+        UserTenant(
+            user_id=user.id,
+            tenant_id=current.id,
+            status=1,
+            is_default=True,
+        ),
+        UserTenant(
+            user_id=user.id,
+            tenant_id=stale.id,
+            status=1,
+            is_default=False,
+        ),
+    ])
+    await db_session.flush()
+    ctx = AuthContext(
+        user=user,
+        tenant_id=current.id,
+        tenant_role="platform_admin",
+        org_permissions={"*": True},
+    )
+
+    with pytest.raises(HTTPException) as exc:
+        await switch_tenant(
+            TenantSwitchRequest(tenant_id=stale.id),
+            ctx,
+            db_session,
+        )
+
+    assert exc.value.status_code == 403
+
+
+@pytest.mark.asyncio
 async def test_list_my_tenants_returns_only_active_memberships(db_session):
     # member 关系：T0 active, T1 active, T2 not member
     user, tenants = await _seed_user_and_tenants(db_session, num_tenants=3, member_indices=[0, 1])

@@ -4,6 +4,10 @@ from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 from app.config import settings
+from app.control_plane_tenants import (
+    is_unbound_control_plane_account,
+    matches_current_control_plane_tenant,
+)
 from app.database import get_db
 from app.models import User
 from app.models.tenant import Tenant, UserTenant, Role
@@ -946,7 +950,16 @@ async def list_my_tenants(
     """
     is_apaas_account = bool(ctx.user.apaas_user_id)
     is_unbound_coding_account = ctx.user.account_source == "coding" and not ctx.user.apaas_user_id
-    if ctx.user.is_platform_admin and not is_apaas_account and not is_unbound_coding_account:
+    restrict_to_current_control_plane_tenant = (
+        not settings.control_plane_binding_enabled
+        and is_unbound_control_plane_account(ctx.user)
+    )
+    if (
+        ctx.user.is_platform_admin
+        and not is_apaas_account
+        and not is_unbound_coding_account
+        and not restrict_to_current_control_plane_tenant
+    ):
         stmt = select(Tenant).where(Tenant.status == 1)
         rows = (
             await db.execute(
@@ -966,6 +979,12 @@ async def list_my_tenants(
                 .order_by(UserTenant.is_default.desc(), Tenant.tenant_name.asc())
             )
         ).scalars().all()
+    if restrict_to_current_control_plane_tenant:
+        rows = [
+            tenant
+            for tenant in rows
+            if matches_current_control_plane_tenant(ctx.user, tenant)
+        ]
     return [
         TenantOption(tenant_id=t.id, tenant_name=t.tenant_name, tenant_code=t.tenant_code)
         for t in rows
