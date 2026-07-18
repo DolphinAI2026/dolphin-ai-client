@@ -74,12 +74,18 @@ describe('RailSidebar unified session source (SP2b)', () => {
     expect(railSidebarSource).toContain('rail-sess-groupby-code')
   })
 
-  it('keeps Code application count on the d-ai-code source', () => {
-    expect(railSidebarSource).toContain("from '@/api/codeRuntime'")
-    expect(railSidebarSource).toContain('codeRuntimeApi.listApplications')
-    expect(railSidebarSource).toContain("app_type: 'low-code'")
-    expect(railSidebarSource).not.toContain("currentMode.value === 'code' ? 'ai-code' : 'low-code'")
-    expect(railSidebarSource).toContain('void loadRailApps()')
+  it('uses the shared tenant-scoped Code application store', () => {
+    expect(railSidebarSource).toContain("from '@/stores/codeApplications'")
+    expect(railSidebarSource).toContain('codeApplications.load')
+    expect(railSidebarSource).toContain('tenantId: user.tenantId')
+    expect(railSidebarSource).not.toContain('codeRuntimeApi.listApplications')
+  })
+
+  it('starts independent rail loads in parallel', () => {
+    expect(railSidebarSource).toContain('Promise.allSettled([')
+    expect(railSidebarSource).toContain('loadRailApps()')
+    expect(railSidebarSource).toContain('user.fetchAvailableTenants()')
+    expect(railSidebarSource).toContain('loadRailSessions()')
   })
 
   it('listens for Code rail refresh events from the app list', () => {

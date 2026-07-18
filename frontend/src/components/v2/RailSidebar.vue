@@ -4,6 +4,7 @@ import { useRoute, useRouter } from 'vue-router'
 import { checkAndPromptUpdate } from '@/utils/desktop'
 import { useUserStore } from '@/stores/user'
 import { useThemeStore } from '@/stores/theme'
+import { useCodeApplicationsStore } from '@/stores/codeApplications'
 import { isCodeRoutePath, useModeStore, MODE_META, MODE_ORDER, type AppMode } from '@/stores/mode'
 import { aiChatApi, type AIChatSession } from '@/api/aiChat'
 import { codeRuntimeApi } from '@/api/codeRuntime'
@@ -27,6 +28,7 @@ const router = useRouter()
 const user = useUserStore()
 const theme = useThemeStore()
 const modeStore = useModeStore()
+const codeApplications = useCodeApplicationsStore()
 
 // 当前路由驱动左栏导航、会话加载和会话路由，避免持久化 mode 污染另一套 shell。
 const currentMode = computed<AppMode>(() => isCodeRoutePath(route.path) ? 'code' : 'builder')
@@ -52,7 +54,10 @@ async function loadRailApps() {
   const mode = currentMode.value
   try {
     if (mode === 'code') {
-      const page = await codeRuntimeApi.listApplications({ pageSize: 100 })
+      const page = await codeApplications.load(
+        { tenantId: user.tenantId || 0, tenantEpoch: 0 },
+        { pageSize: 100 },
+      )
       if (seq !== railAppsSeq || mode !== currentMode.value) return
       const items = page?.items || []
       appCount.value = Number(page?.total ?? items.length)
@@ -359,17 +364,12 @@ function closeTenantMenu() {
   userMenuOpen.value = false
 }
 
-onMounted(async () => {
-  await loadRailApps()
-
-  try {
-    await user.fetchAvailableTenants()
-  } catch {
-    // Bottom tenant selector stays on current tenant when the list is unavailable.
-  }
-
-  await loadRailSessions()
-
+onMounted(() => {
+  void Promise.allSettled([
+    loadRailApps(),
+    user.fetchAvailableTenants(),
+    loadRailSessions(),
+  ])
   window.addEventListener('click', closeTenantMenu)
   window.addEventListener('code-rail-refresh', refreshCodeRail)
 })

@@ -39,7 +39,7 @@
             <el-icon><Plus /></el-icon>
             <span>{{ creatingCodeApp ? '创建中' : '新建应用' }}</span>
           </button>
-          <button v-if="isCodeMode" class="btn btn-secondary apps-toolbar-action" type="button" @click="refreshApps">
+          <button v-if="isCodeMode" class="btn btn-secondary apps-toolbar-action" type="button" @click="refreshApps(true)">
             <el-icon><Refresh /></el-icon>
             <span>刷新</span>
           </button>
@@ -269,7 +269,7 @@
       v-model:open="deployHistoryOpen"
       :application-id="Number(deployHistoryApp.id)"
       :app-name="deployHistoryApp.app_name"
-      @rolled-back="refreshApps"
+      @rolled-back="() => refreshApps()"
     />
 
     <el-drawer
@@ -384,7 +384,9 @@ import { openExternal } from '@/utils/desktop'
 import { applicationApi, type ApplicationDeliveryAssetItem, type ApplicationDeliveryAssetsResponse } from '@/api/application'
 import { codeRuntimeApi } from '@/api/codeRuntime'
 import { conversationApi, type ConversationWithApp } from '@/api/conversation'
+import { useCodeApplicationsStore } from '@/stores/codeApplications'
 import { isCodeRoutePath } from '@/stores/mode'
+import { useUserStore } from '@/stores/user'
 import BuilderFrame from '@/components/BuilderFrame.vue'
 import ImportAppDialog from '@/components/ImportAppDialog.vue'
 import DeployHistoryDrawer from '@/components/v2/DeployHistoryDrawer.vue'
@@ -404,6 +406,8 @@ type AppStage = {
 
 const router = useRouter()
 const route = useRoute()
+const user = useUserStore()
+const codeApplications = useCodeApplicationsStore()
 const apps = ref<MergedApplication[]>([])
 const appHistoryMap = ref<Record<number, ConversationWithApp[]>>({})
 const loading = ref(true)
@@ -523,7 +527,7 @@ async function startNewCodeApp() {
       app_code: generateCodeAppCode(appName),
     })
     ElMessage.success('Code 应用已创建')
-    await refreshApps()
+    await refreshApps(true)
     await openCodeSessionForApp(created)
   } catch (error: any) {
     if (error === 'cancel' || error === 'close' || error?.action === 'cancel' || error?.action === 'close') return
@@ -982,13 +986,20 @@ async function confirmDelete(app: MergedApplication) {
   }
 }
 
-async function refreshApps() {
+async function refreshApps(forceCode = false) {
   const seq = ++refreshAppsSeq
   const codeMode = isCodeMode.value
   loading.value = true
   try {
+    const codeList = codeMode
+      ? codeApplications.load(
+          { tenantId: user.tenantId || 0, tenantEpoch: 0 },
+          { pageSize: 100 },
+          { force: forceCode },
+        )
+      : applicationApi.list({ include_remote: false, app_type: 'low-code' })
     const [list, conversations] = await Promise.all([
-      codeMode ? codeRuntimeApi.listApplications({ pageSize: 100 }) : applicationApi.list({ include_remote: false, app_type: 'low-code' }),
+      codeList,
       codeMode ? Promise.resolve([]) : conversationApi.listWithApps({ agent_type: 'builder' }).catch(() => []),
     ])
     if (seq !== refreshAppsSeq || codeMode !== isCodeMode.value) return

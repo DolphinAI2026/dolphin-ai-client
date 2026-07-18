@@ -15,12 +15,11 @@ describe('Apps Code mode entry', () => {
     expect(appsSource).toContain('window.dispatchEvent')
   })
 
-  it('loads Code applications from d-ai-code instead of the local application table', () => {
-    expect(appsSource).toContain('codeRuntimeApi.listApplications')
-    expect(appsSource).toContain('codeMode ? codeRuntimeApi.listApplications')
-    expect(appsSource).toContain("app_type: 'low-code'")
-    expect(appsSource).not.toContain("app_type: isCodeMode.value ? 'ai-code' : 'low-code'")
-    expect(appsSource).not.toContain("applicationApi.create")
+  it('loads Code applications through the shared tenant-scoped store', () => {
+    expect(appsSource).toContain("from '@/stores/codeApplications'")
+    expect(appsSource).toContain('codeApplications.load')
+    expect(appsSource).toContain('tenantId: user.tenantId')
+    expect(appsSource).not.toContain('codeMode ? codeRuntimeApi.listApplications')
   })
 
   it('creates a Code application from the Code application list', () => {
