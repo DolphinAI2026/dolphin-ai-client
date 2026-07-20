@@ -121,6 +121,14 @@ documents:
     status: not_requested
   git:
     tracked: true
+- path: docs/superpowers/plans/2026-07-20-builder-tenant-url-public-uuid.md
+  document_kind: reference
+  classification: needs-review
+  content_hash: sha256:6db5f8409eec48f0e087b2baf624860e0886e558bc7873325b5537b5b676551a
+  normalization:
+    status: not_requested
+  git:
+    tracked: true
 - path: docs/superpowers/specs/2026-07-10-engineering-sessions-worktree-sync-design.md
   document_kind: reference
   classification: needs-review
