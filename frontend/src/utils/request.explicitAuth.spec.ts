@@ -97,15 +97,29 @@ describe('request explicit Authorization', () => {
     })
   })
 
-  it('lets typed public auth requests bypass bootstrap pending without Authorization', async () => {
+  it('lets typed public auth requests bypass bootstrap pending without adapter Authorization', async () => {
     localStorage.setItem('token', 'stale-bootstrap-token')
 
     const config = await runRequestInterceptor({
-      headers: { Authorization: 'Bearer must-not-leak' },
+      headers: {},
       authPolicy: 'public',
     })
 
     expect(config.headers?.Authorization).toBeUndefined()
+  })
+
+  it.each([
+    ['Basic', { Authorization: 'Basic caller-credential' }],
+    ['lowercase Bearer', { authorization: 'Bearer caller-credential' }],
+  ])('preserves explicit %s Authorization for typed public requests', async (_name, headers) => {
+    localStorage.setItem('token', 'stale-bootstrap-token')
+
+    const config = await runRequestInterceptor({
+      headers,
+      authPolicy: 'public',
+    })
+
+    expect(config.headers).toEqual(headers)
   })
 
   it('marks captcha, login, tenant selection, public settings, and desktop login as public', async () => {

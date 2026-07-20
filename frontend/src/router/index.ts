@@ -2,7 +2,7 @@ import { createRouter, createWebHistory } from 'vue-router'
 import { useUserStore } from '@/stores/user'
 import { usePreviewStore } from '@/stores/preview'
 import { modeForRoutePath, useModeStore } from '@/stores/mode'
-import request from '@/utils/request'
+import request, { getAuthSessionState } from '@/utils/request'
 import { resolveDesktopRedirect } from './desktopGuard'
 import { fetchOnboardingState, isOnboardingConfirmed, markOnboardingConfirmed } from '@/composables/useOnboardingState'
 
@@ -253,32 +253,44 @@ function safeRedirectPath(raw: unknown): string {
   return text
 }
 
+function hasCommittedAuthSession(): boolean {
+  const session = getAuthSessionState()
+  return session.initialized && Boolean(session.token)
+}
+
 router.beforeEach(async (to, _from, next) => {
   const userStore = useUserStore()
   const modeStore = useModeStore()
+  let hasCommittedSession = hasCommittedAuthSession()
 
-  if (to.meta.requiresAuth && !userStore.token) {
-    next({ path: '/login', query: { redirect: to.fullPath } })
-    return
-  }
-
-  // 有 token 但 user 对象为空（页面刷新后），自动恢复用户信息 + aPaaS 连接状态
-  if (userStore.token && !userStore.user) {
+  // 已提交 session 或 bootstrap candidate 但 user 对象为空时，尝试恢复用户信息。
+  // bootstrap 5xx/network 只会保留候选，不可把它当作已登录状态。
+  if (!userStore.user && (hasCommittedSession || userStore.token)) {
     try {
       await userStore.fetchUser()
-      // 同时恢复 aPaaS 连接状态
-      const previewStore = usePreviewStore()
-      try {
-        const data = await request.get<any, any>('/apaas/status')
-        if (data) {
-          previewStore.connected = data.connected
-        }
-      } catch { /* ignore */ }
+      hasCommittedSession = hasCommittedAuthSession()
+      if (hasCommittedSession) {
+        // 同时恢复 aPaaS 连接状态
+        const previewStore = usePreviewStore()
+        try {
+          const data = await request.get<any, any>('/apaas/status')
+          if (data) {
+            previewStore.connected = data.connected
+          }
+        } catch { /* ignore */ }
+      }
     } catch {
-      // token 过期或无效，跳登录
-      next({ path: '/login', query: { redirect: to.fullPath } })
-      return
+      hasCommittedSession = hasCommittedAuthSession()
+      if (to.meta.requiresAuth) {
+        next({ path: '/login', query: { redirect: to.fullPath } })
+        return
+      }
     }
+  }
+
+  if (to.meta.requiresAuth && !hasCommittedSession) {
+    next({ path: '/login', query: { redirect: to.fullPath } })
+    return
   }
 
   // v3 2026-05-20 fix (code review #P2-10): 权限被拒时用 replace
@@ -304,7 +316,7 @@ router.beforeEach(async (to, _from, next) => {
     return
   }
 
-  if (__DESKTOP__ && userStore.token) {
+  if (__DESKTOP__ && hasCommittedSession) {
     // 功能边界: hidden 路由落降级页
     const red = resolveDesktopRedirect(true, (to.meta as any), to.path)
     if (red) { next({ path: red, replace: true }); return }
@@ -325,7 +337,7 @@ router.beforeEach(async (to, _from, next) => {
     if (modeStore.mode !== routeMode) modeStore.setMode(routeMode)
   }
 
-  if (to.path === '/login' && userStore.token) {
+  if (to.path === '/login' && hasCommittedSession) {
     next(safeRedirectPath(to.query.redirect) || '/')
   } else {
     next()

@@ -52,7 +52,7 @@ import { ref, computed, onMounted, watch } from 'vue'
 import { useRouter } from 'vue-router'
 import AppIcon from '@/components/common/AppIcon.vue'
 import { codingApi } from '@/api/coding'
-import { getCommittedAuthTokenOrThrow } from '@/utils/request'
+import { getCommittedAuthToken } from '@/utils/request'
 
 const props = defineProps<{
   appId: number
@@ -87,7 +87,8 @@ watch(() => [props.appId, props.menuId], refreshDevTarget)
 // _k 用于 ↻ 刷新强制 reload; _auth 走 query 传 token (iframe src GET 带不了 header).
 const hostUrl = computed(() => {
   if (!props.appId || !props.menuId) return ''
-  const tok = getCommittedAuthTokenOrThrow()
+  const tok = getCommittedAuthToken()
+  if (!tok) return ''
   return `/api/applications/${props.appId}/custom-page-host`
     + `?menu_id=${encodeURIComponent(props.menuId)}`
     + `&_auth=${encodeURIComponent(tok)}&_k=${iframeKey.value}`
@@ -95,6 +96,7 @@ const hostUrl = computed(() => {
 
 // dev server 运行中 → 直连 dev URL(HMR);否则 → UMD host(保留作部署/只读回退)。
 const previewSrc = computed(() => {
+  if (!hostUrl.value) return ''
   if (devServerPort.value) return `http://127.0.0.1:${devServerPort.value}/`
   return hostUrl.value
 })
