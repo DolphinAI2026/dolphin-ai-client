@@ -3,7 +3,7 @@ asset_kind: page-interaction
 asset_id: page-interaction.tenant-aware-navigation
 knowledge_level: L3
 source_spec_ref: docs/superpowers/specs/2026-07-20-builder-tenant-url-public-uuid-design.md
-source_spec_hash: sha256:183883d6e29b27e533a8e7691a42fd40f93cad87bee51fbbeae6eaeefe580e26
+source_spec_hash: sha256:a535c11062500a4d7d88b0ba45bf25fc44dc2465012e2abefa356db7b26887b6
 phase_id: 2026-07-20-builder-tenant-url-public-uuid
 revision: 1
 source_section_refs:
@@ -69,7 +69,7 @@ resolution_rules:
     action: continue
     destination: requested-page
   - condition: tenantId-is-accessible-other-tenant
-    action: switch-token-context-once
+    action: issue-candidate-token-validate-me-then-commit-once
     destination: original-full-path
   - condition: tenantId-invalid-or-inaccessible
     action: reject-before-page-mount
@@ -78,6 +78,13 @@ active_switch_rules:
   preserve_resource_path: false
   destination_source: MODE_META
   side_effect_owner: userStore.switchTenantContext
+  candidate_validation:
+    endpoint: GET /auth/me
+    authorization_source: explicit-candidate-token
+    commit_requires:
+      - numeric-tenant-id-match
+      - public-uuid-match
+    local_storage_before_validation: unchanged
 route_context_matrix:
   tenant_required:
     - /
@@ -146,3 +153,4 @@ URL 中的公共 UUID 让租户上下文显性且稳定，但它不承担授权�
 - 多标签页收到其他标签页 token 更新时必须对齐新租户首页，不自动切回旧 URL。
 - storage event 的 `/auth/me` 必须使用事件 token；旧 generation 或 token 已变化的
   乱序响应不得写 user 或触发导航。
+- `current_app` 是既有进程内 hint，不是 URL resolver 或 Builder API 的租户权威。

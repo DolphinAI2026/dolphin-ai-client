@@ -3,7 +3,7 @@ asset_kind: page-interaction
 asset_id: page-interaction.code-tenant-deep-link
 knowledge_level: L3
 source_spec_ref: docs/superpowers/specs/2026-07-20-builder-tenant-url-public-uuid-design.md
-source_spec_hash: sha256:183883d6e29b27e533a8e7691a42fd40f93cad87bee51fbbeae6eaeefe580e26
+source_spec_hash: sha256:a535c11062500a4d7d88b0ba45bf25fc44dc2465012e2abefa356db7b26887b6
 phase_id: 2026-07-20-builder-tenant-url-public-uuid
 revision: 1
 source_section_refs:
@@ -71,6 +71,12 @@ runtime_contract:
 build_proof:
   meta_name: builder-build-sha
   required_ancestor_commit: 49a4bef4
+  source: CI_COMMIT_SHA-through-docker-build-arg
+  deployment_model: single-image-backend-and-frontend-dist
+  release_owner:
+    - .gitlab-ci.yml
+    - scripts/deploy_online_latest_kubesphere.sh
+  browser_acceptance_channel: msedge
 ```
 
 ## 决策依据/Rationale

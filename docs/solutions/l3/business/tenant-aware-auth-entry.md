@@ -3,7 +3,7 @@ asset_kind: page-interaction
 asset_id: page-interaction.tenant-aware-auth-entry
 knowledge_level: L3
 source_spec_ref: docs/superpowers/specs/2026-07-20-builder-tenant-url-public-uuid-design.md
-source_spec_hash: sha256:183883d6e29b27e533a8e7691a42fd40f93cad87bee51fbbeae6eaeefe580e26
+source_spec_hash: sha256:a535c11062500a4d7d88b0ba45bf25fc44dc2465012e2abefa356db7b26887b6
 phase_id: 2026-07-20-builder-tenant-url-public-uuid
 revision: 1
 source_section_refs:
@@ -51,16 +51,42 @@ source_refs:
   - "8. 登录与多租户选择"
 forms:
   - form_code: login-deep-link
-    inputs:
+    submitted_fields:
       - username
       - password
+      - captcha_id
+      - captcha_code
+    preserved_client_state:
       - redirect
+      - target_tenant_public_id
+    validation:
+      captcha_required_when_server_requests: true
+      redirect_must_be_same_origin_path: true
+    failure_states:
+      - invalid_credentials
+      - captcha_required_or_invalid
+      - target_tenant_inaccessible
+    success:
+      direct_token: validate_me_then_redirect
+      tenant_selection_required: map_target_uuid_from_response
     output: LoginResponse
   - form_code: multi-tenant-selection
-    inputs:
+    submitted_fields:
       - selection_token
       - tenant_id
-      - tenant_public_id
+    derived_client_fields:
+      tenant_id: LoginResponse.tenants[].tenant_id
+      tenant_public_id: LoginResponse.tenants[].tenant_public_id
+    preserved_client_state:
+      - redirect
+      - target_tenant_public_id
+    validation:
+      target_uuid_must_map_to_returned_tenant: true
+    failure_states:
+      - selection_token_expired
+      - target_tenant_inaccessible
+    success:
+      token: call_me_then_redirect
     output: Token
 redirect_contract:
   preserve:
