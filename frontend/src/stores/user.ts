@@ -1,20 +1,48 @@
 import { defineStore } from 'pinia'
-import { ref, computed } from 'vue'
+import { ref, computed, onScopeDispose } from 'vue'
 import { authApi } from '@/api/auth'
 import type { User, TenantOption } from '@/types'
 import { resetOnboardingCache } from '@/composables/useOnboardingState'
 import { MODE_META, modeForRoutePath, useModeStore } from '@/stores/mode'
-import { setCommittedAuthToken } from '@/utils/request'
+import {
+  beginAuthSessionBootstrap,
+  clearAuthSession,
+  commitAuthSession,
+  getAuthSessionBootstrapToken,
+  getAuthSessionState,
+  subscribeToAuthSessionClear,
+} from '@/utils/request'
+
+let activeSessionOwnerCleanup: (() => void) | null = null
+
+if (import.meta.hot) {
+  import.meta.hot.dispose(() => {
+    activeSessionOwnerCleanup?.()
+    activeSessionOwnerCleanup = null
+  })
+}
 
 export const useUserStore = defineStore('user', () => {
   const user = ref<User | null>(null)
-  const initialToken = localStorage.getItem('token')
-  const token = ref<string | null>(initialToken)
+  const initialSession = getAuthSessionState()
+  const sharedInitialToken = localStorage.getItem('token')
+  const initialBootstrapToken = (
+    !initialSession.initialized
+    && typeof sharedInitialToken === 'string'
+    && sharedInitialToken
+  )
+    ? sharedInitialToken
+    : null
+  const token = ref<string | null>(
+    initialSession.initialized ? initialSession.token : initialBootstrapToken,
+  )
   const availableTenants = ref<TenantOption[]>([])
   let storageAlignmentGeneration = 0
   let storageAlignmentAbortController: AbortController | null = null
 
-  setCommittedAuthToken(initialToken)
+  if (initialBootstrapToken) {
+    beginAuthSessionBootstrap(initialBootstrapToken)
+  }
 
   const invalidateStorageAlignment = () => {
     storageAlignmentGeneration += 1
@@ -76,38 +104,80 @@ export const useUserStore = defineStore('user', () => {
   const setToken = (newToken: string) => {
     invalidateStorageAlignment()
     token.value = newToken
-    setCommittedAuthToken(newToken)
+    commitAuthSession(newToken)
     localStorage.setItem('token', newToken)
   }
 
-  const clearToken = () => {
+  const clearSessionMemory = () => {
     invalidateStorageAlignment()
     token.value = null
     user.value = null
-    setCommittedAuthToken(null)
-    localStorage.removeItem('token')
     localStorage.removeItem('admin_token')
     resetOnboardingCache()
   }
 
+  const clearToken = () => {
+    clearAuthSession()
+    localStorage.removeItem('token')
+  }
+
+  const ownsCurrentSession = (requestToken: string, requestRevision: number) => {
+    const session = getAuthSessionState()
+    return (
+      session.token === requestToken
+      && session.revision === requestRevision
+      && requestToken === localStorage.getItem('token')
+    )
+  }
+
+  const ownsCurrentBootstrap = (requestToken: string, requestRevision: number) => {
+    const session = getAuthSessionState()
+    return (
+      getAuthSessionBootstrapToken() === requestToken
+      && session.revision === requestRevision
+      && requestToken === localStorage.getItem('token')
+    )
+  }
+
+  const isUnauthorized = (error: unknown) => (
+    (error as { response?: { status?: number } })?.response?.status === 401
+  )
+
   const fetchUser = async () => {
-    const requestToken = token.value
+    const session = getAuthSessionState()
+    const bootstrapToken = getAuthSessionBootstrapToken()
+    const requestToken = bootstrapToken || session.token
+    const requestRevision = session.revision
+    const isBootstrap = bootstrapToken === requestToken && Boolean(requestToken)
+    if (!requestToken) return
+
     try {
-      const fetchedUser = await authApi.getMe()
-      if (
-        requestToken === token.value
-        && requestToken === localStorage.getItem('token')
-      ) {
+      const fetchedUser = isBootstrap
+        ? await authApi.getMeWithToken(requestToken)
+        : await authApi.getMe()
+      if (isBootstrap) {
+        if (!ownsCurrentBootstrap(requestToken, requestRevision)) return
+        commitAuthSession(requestToken)
+        token.value = requestToken
+        user.value = fetchedUser
+        return
+      }
+      if (ownsCurrentSession(requestToken, requestRevision)) {
         user.value = fetchedUser
       }
     } catch (error) {
-      if (
-        requestToken === token.value
-        && requestToken === localStorage.getItem('token')
-      ) {
+      if (isBootstrap) {
+        if (!ownsCurrentBootstrap(requestToken, requestRevision)) return
+        if (!isUnauthorized(error)) return
         clearToken()
+        throw error
       }
-      throw error
+      if (
+        (error as { config?: { authSessionFailure?: string } })?.config?.authSessionFailure
+        === 'authoritative'
+      ) {
+        throw error
+      }
     }
   }
 
@@ -222,7 +292,7 @@ export const useUserStore = defineStore('user', () => {
 
       token.value = eventToken
       user.value = alignedUser
-      setCommittedAuthToken(eventToken)
+      commitAuthSession(eventToken)
       try { localStorage.removeItem('ai-builder-tabs-v1') } catch { /* ignore */ }
       window.location.replace(destination)
       if (storageAlignmentAbortController === controller) {
@@ -235,19 +305,46 @@ export const useUserStore = defineStore('user', () => {
     }
   }
 
+  activeSessionOwnerCleanup?.()
+
+  const unsubscribeFromSessionClear = subscribeToAuthSessionClear(clearSessionMemory)
+  const storageListener = (event: StorageEvent) => {
+    if (event.key !== 'token') return
+
+    const eventToken = event.newValue
+    if (!eventToken) {
+      clearToken()
+      return
+    }
+
+    if (localStorage.getItem('token') !== eventToken) return
+    void alignTokenFromStorage(eventToken)
+  }
   if (typeof window !== 'undefined') {
-    window.addEventListener('storage', (event) => {
-      if (event.key !== 'token') return
+    window.addEventListener('storage', storageListener)
+  }
 
-      const eventToken = event.newValue
-      if (!eventToken) {
-        clearToken()
-        return
-      }
+  const releaseSessionOwner = () => {
+    unsubscribeFromSessionClear()
+    if (typeof window !== 'undefined') {
+      window.removeEventListener('storage', storageListener)
+    }
+    if (activeSessionOwnerCleanup === releaseSessionOwner) {
+      activeSessionOwnerCleanup = null
+    }
+  }
+  activeSessionOwnerCleanup = releaseSessionOwner
+  onScopeDispose(releaseSessionOwner)
 
-      if (localStorage.getItem('token') !== eventToken) return
-      void alignTokenFromStorage(eventToken)
-    })
+  const currentSession = getAuthSessionState()
+  const sharedToken = localStorage.getItem('token')
+  if (
+    currentSession.initialized
+    && typeof sharedToken === 'string'
+    && sharedToken
+    && sharedToken !== currentSession.token
+  ) {
+    void alignTokenFromStorage(sharedToken)
   }
 
   const logout = () => {

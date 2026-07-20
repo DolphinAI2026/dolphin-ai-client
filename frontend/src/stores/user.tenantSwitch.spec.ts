@@ -48,6 +48,7 @@ function makeTenantOption(tenantId: number, tenantPublicId: string): TenantOptio
 
 function installBrowserGlobals(pathname = '/') {
   const storage = new Map<string, string>()
+  const sessionStorage = new Map<string, string>()
   const replace = vi.fn()
   const location = {
     pathname,
@@ -63,6 +64,11 @@ function installBrowserGlobals(pathname = '/') {
     setItem: (key: string, value: string) => storage.set(key, value),
     removeItem: (key: string) => storage.delete(key),
   })
+  vi.stubGlobal('sessionStorage', {
+    getItem: (key: string) => sessionStorage.get(key) ?? null,
+    setItem: (key: string, value: string) => sessionStorage.set(key, value),
+    removeItem: (key: string) => sessionStorage.delete(key),
+  })
   vi.stubGlobal('window', {
     location,
     addEventListener: (type: string, listener: (event: { key: string | null; newValue: string | null }) => void) => {
@@ -76,6 +82,7 @@ function installBrowserGlobals(pathname = '/') {
   return {
     location,
     replace,
+    sessionStorage,
     fireStorageEvent: (token: string | null) => {
       for (const listener of storageListeners) {
         listener({ key: 'token', newValue: token })
@@ -117,11 +124,13 @@ function runResponseErrorInterceptor(error: {
 
 function deferred<T>() {
   let resolve!: (value: T) => void
-  const promise = new Promise<T>((resolvePromise) => {
+  let reject!: (reason?: unknown) => void
+  const promise = new Promise<T>((resolvePromise, rejectPromise) => {
     resolve = resolvePromise
+    reject = rejectPromise
   })
 
-  return { promise, resolve }
+  return { promise, resolve, reject }
 }
 
 async function flushPromises() {
@@ -133,6 +142,29 @@ describe('user tenant switching', () => {
   beforeEach(() => {
     vi.clearAllMocks()
     vi.unstubAllGlobals()
+  })
+
+  it('fails closed for ordinary requests until a cold-start token passes explicit validation', async () => {
+    installBrowserGlobals()
+    const pendingCandidate = deferred<User>()
+    localStorage.setItem('token', 'boot-token')
+    authMocks.getMeWithToken.mockReturnValue(pendingCandidate.promise)
+
+    setActivePinia(createPinia())
+    const store = useUserStore()
+
+    await expect(
+      Promise.resolve().then(() => runRequestInterceptor({ headers: {} })),
+    ).rejects.toMatchObject({ code: 'AUTH_SESSION_PENDING' })
+
+    const fetchUserPromise = store.fetchUser()
+    expect(authMocks.getMeWithToken).toHaveBeenCalledWith('boot-token')
+
+    pendingCandidate.resolve(makeUser())
+    await fetchUserPromise
+
+    const config = await runRequestInterceptor({ headers: {} })
+    expect(config.headers?.Authorization).toBe('Bearer boot-token')
   })
 
   it('keeps source state when candidate /auth/me UUID mismatches', async () => {
@@ -280,6 +312,7 @@ describe('user tenant switching', () => {
 
     setActivePinia(createPinia())
     const store = useUserStore()
+    store.setToken('source-token')
     store.user = makeUser()
 
     localStorage.setItem('token', 'candidate-token')
@@ -297,6 +330,7 @@ describe('user tenant switching', () => {
 
     setActivePinia(createPinia())
     const store = useUserStore()
+    store.setToken('source-token')
     store.user = makeUser()
 
     localStorage.setItem('token', 'candidate-token')
@@ -314,6 +348,7 @@ describe('user tenant switching', () => {
 
     setActivePinia(createPinia())
     const store = useUserStore()
+    store.setToken('source-token')
     store.user = makeUser()
     localStorage.setItem('token', 'candidate-token')
 
@@ -342,6 +377,7 @@ describe('user tenant switching', () => {
 
     setActivePinia(createPinia())
     const store = useUserStore()
+    store.setToken('source-token')
     store.user = makeUser()
 
     localStorage.setItem('token', 'candidate-token')
@@ -392,6 +428,7 @@ describe('user tenant switching', () => {
 
     setActivePinia(createPinia())
     const store = useUserStore()
+    store.setToken('source-token')
     const fetchUserPromise = store.fetchUser()
 
     localStorage.setItem('token', 'candidate-token')
@@ -452,5 +489,119 @@ describe('user tenant switching', () => {
     expect(store.user).toEqual(freshUser)
     expect(localStorage.getItem('ai-builder-tabs-v1')).toBe('source-tabs')
     expect(replace).not.toHaveBeenCalled()
+  })
+
+  it('drops an old fetchUser success after local session A to B to A', async () => {
+    installBrowserGlobals()
+    const slowSourceUser = deferred<User>()
+    const freshUser = makeUser({ display_name: 'Fresh session A' })
+    const staleUser = makeUser({ display_name: 'Stale session A' })
+    authMocks.getMe.mockReturnValue(slowSourceUser.promise)
+
+    setActivePinia(createPinia())
+    const store = useUserStore()
+    store.setToken('token-a')
+
+    const fetchUserPromise = store.fetchUser()
+    store.setToken('token-b')
+    store.user = makeUser({ display_name: 'Session B' })
+    store.setToken('token-a')
+    store.user = freshUser
+    slowSourceUser.resolve(staleUser)
+    await fetchUserPromise
+
+    expect(store.user).toEqual(freshUser)
+  })
+
+  it('silently drops a split-state fetchUser 401 instead of exposing it to the router', async () => {
+    const { fireStorageEvent, location, replace } = installBrowserGlobals()
+    const slowSourceUser = deferred<User>()
+    const pendingCandidate = deferred<User>()
+    localStorage.setItem('token', 'source-token')
+    authMocks.getMe.mockReturnValue(slowSourceUser.promise)
+    authMocks.getMeWithToken.mockReturnValue(pendingCandidate.promise)
+
+    setActivePinia(createPinia())
+    const store = useUserStore()
+    store.setToken('source-token')
+    store.user = makeUser()
+
+    const fetchUserPromise = store.fetchUser()
+    localStorage.setItem('token', 'candidate-token')
+    fireStorageEvent('candidate-token')
+    slowSourceUser.reject({
+      response: { status: 401, data: { detail: 'source token expired' } },
+    })
+
+    await expect(fetchUserPromise).resolves.toBeUndefined()
+    expect(localStorage.getItem('token')).toBe('candidate-token')
+    expect(location.href).toBe('')
+    expect(replace).not.toHaveBeenCalled()
+  })
+
+  it('clears the committed session and user memory before requests after an authoritative 401', async () => {
+    const { location } = installBrowserGlobals()
+
+    setActivePinia(createPinia())
+    const store = useUserStore()
+    store.setToken('source-token')
+    store.user = makeUser()
+
+    const sourceRequest = await runRequestInterceptor({ headers: {} })
+    const error = {
+      response: { status: 401, data: { detail: 'Not authenticated' } },
+      config: { url: '/applications', ...sourceRequest },
+    }
+
+    await expect(runResponseErrorInterceptor(error)).rejects.toBe(error)
+
+    const afterInvalidation = await runRequestInterceptor({ headers: {} })
+    expect(afterInvalidation.headers?.Authorization).toBeUndefined()
+    expect(store.token).toBeNull()
+    expect(store.user).toBeNull()
+    expect(localStorage.getItem('token')).toBeNull()
+    expect(location.href).toContain('login?redirect=')
+  })
+
+  it('restores a verified session snapshot before aligning a different shared token after store reconstruction', async () => {
+    const { sessionStorage } = installBrowserGlobals()
+    const pendingCandidate = deferred<User>()
+    authMocks.getMeWithToken.mockReturnValue(pendingCandidate.promise)
+
+    setActivePinia(createPinia())
+    const firstStore = useUserStore()
+    firstStore.setToken('source-token')
+    firstStore.user = makeUser()
+    firstStore.$dispose()
+
+    localStorage.setItem('token', 'candidate-token')
+    setActivePinia(createPinia())
+    const rebuiltStore = useUserStore()
+    await flushPromises()
+
+    const config = await runRequestInterceptor({ headers: {} })
+    expect(rebuiltStore.token).toBe('source-token')
+    expect(config.headers?.Authorization).toBe('Bearer source-token')
+    expect(sessionStorage.get('ai-builder-auth-session-v1')).toContain('source-token')
+    expect(authMocks.getMeWithToken).toHaveBeenCalledWith('candidate-token', expect.any(AbortSignal))
+  })
+
+  it('removes the disposed store storage listener before a replacement store handles an event', async () => {
+    const { fireStorageEvent } = installBrowserGlobals()
+    const pendingCandidate = deferred<User>()
+    authMocks.getMeWithToken.mockReturnValue(pendingCandidate.promise)
+
+    setActivePinia(createPinia())
+    const firstStore = useUserStore()
+    firstStore.setToken('source-token')
+    firstStore.$dispose()
+
+    setActivePinia(createPinia())
+    useUserStore()
+    localStorage.setItem('token', 'candidate-token')
+    fireStorageEvent('candidate-token')
+    await flushPromises()
+
+    expect(authMocks.getMeWithToken).toHaveBeenCalledTimes(1)
   })
 })
