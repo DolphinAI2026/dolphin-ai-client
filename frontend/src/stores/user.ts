@@ -119,11 +119,9 @@ export const useUserStore = defineStore('user', () => {
     tenantRole.value === 'platform_admin' || user.value?.is_platform_admin === true
   )
 
-  const commitLocalToken = (newToken: string, preserveCurrentSwitch = false) => {
+  const commitLocalToken = (newToken: string) => {
     invalidateStorageAlignment()
-    if (!preserveCurrentSwitch) {
-      invalidateTenantSwitch()
-    }
+    invalidateTenantSwitch()
     token.value = newToken
     commitAuthSession(newToken)
     localStorage.setItem('token', newToken)
@@ -131,6 +129,27 @@ export const useUserStore = defineStore('user', () => {
 
   const setToken = (newToken: string) => {
     commitLocalToken(newToken)
+  }
+
+  const commitTenantSwitch = (
+    newToken: string,
+    nextUser: User,
+    destination: string,
+  ) => {
+    // Shared storage is the only fallible part of this commit. Do it before
+    // changing the per-tab adapter or Pinia state so a rejected write leaves
+    // the source session intact.
+    localStorage.setItem('token', newToken)
+
+    invalidateStorageAlignment()
+    commitAuthSession(newToken)
+    token.value = newToken
+    user.value = nextUser
+
+    if (typeof window !== 'undefined') {
+      try { localStorage.removeItem('ai-builder-tabs-v1') } catch { /* ignore */ }
+      window.location.replace(destination)
+    }
   }
 
   const clearSessionMemory = () => {
@@ -271,6 +290,7 @@ export const useUserStore = defineStore('user', () => {
     tenantSwitchAbortController?.abort()
     const controller = new AbortController()
     tenantSwitchAbortController = controller
+    let commitStarted = false
     const isCurrentOperation = () => (
       !controller.signal.aborted
       && generation === tenantSwitchGeneration
@@ -290,15 +310,10 @@ export const useUserStore = defineStore('user', () => {
         throw new Error('tenant candidate mismatch')
       }
 
-      commitLocalToken(candidate.access_token, true)
-      user.value = candidateUser
-
-      if (typeof window !== 'undefined') {
-        try { localStorage.removeItem('ai-builder-tabs-v1') } catch { /* ignore */ }
-        window.location.replace(destination)
-      }
+      commitStarted = true
+      commitTenantSwitch(candidate.access_token, candidateUser, destination)
     } catch (error) {
-      if (!isCurrentOperation()) return
+      if (!commitStarted && !isCurrentOperation()) return
       throw error
     } finally {
       if (tenantSwitchAbortController === controller) {

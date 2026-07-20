@@ -17,7 +17,7 @@ vi.mock('@/composables/useOnboardingState', () => ({
 
 import { useUserStore } from './user'
 import type { TenantOption, User } from '@/types'
-import request from '@/utils/request'
+import request, { getAuthSessionState } from '@/utils/request'
 import { aiChatApi } from '@/api/aiChat'
 import { extensionApi } from '@/api/extension'
 
@@ -230,6 +230,48 @@ describe('user tenant switching', () => {
     expect(store.user?.tenant_public_id).toBe(targetUuid)
     expect(replace).toHaveBeenCalledWith(targetPath)
   })
+
+  it.each(['SecurityError', 'QuotaExceededError'])(
+    'keeps the source session intact and rejects when active switch shared storage write throws %s',
+    async (errorName) => {
+      const { replace } = installBrowserGlobals()
+      const sourceUser = makeUser({ display_name: 'Source session' })
+      const targetUser = makeUser({
+        tenant_id: 2,
+        tenant_name: 'Target tenant',
+        tenant_public_id: targetUuid,
+      })
+      authMocks.switchTenant.mockResolvedValue({ access_token: 'candidate-token' })
+      authMocks.getMeWithToken.mockResolvedValue(targetUser)
+
+      setActivePinia(createPinia())
+      const store = useUserStore()
+      store.setToken('source-token')
+      store.user = sourceUser
+      localStorage.setItem('ai-builder-tabs-v1', 'source-tabs')
+      const sourceRevision = getAuthSessionState().revision
+      const originalSetItem = localStorage.setItem
+      vi.spyOn(localStorage, 'setItem').mockImplementation((key: string, value: string) => {
+        if (key === 'token' && value === 'candidate-token') {
+          const error = new Error(`blocked ${errorName}`)
+          error.name = errorName
+          throw error
+        }
+        originalSetItem.call(localStorage, key, value)
+      })
+
+      await expect(
+        store.switchTenantContext(2, targetUuid, targetPath),
+      ).rejects.toMatchObject({ name: errorName })
+
+      expect(getAuthSessionState().revision).toBe(sourceRevision)
+      expect(store.token).toBe('source-token')
+      expect(store.user).toEqual(sourceUser)
+      expect(localStorage.getItem('token')).toBe('source-token')
+      expect(localStorage.getItem('ai-builder-tabs-v1')).toBe('source-tabs')
+      expect(replace).not.toHaveBeenCalled()
+    },
+  )
 
   it('uses the authorized available tenant UUID in the switchTenant compatibility wrapper', async () => {
     const { replace } = installBrowserGlobals()

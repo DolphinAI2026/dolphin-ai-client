@@ -52,6 +52,7 @@ import { ref, computed, onMounted, watch } from 'vue'
 import { useRouter } from 'vue-router'
 import AppIcon from '@/components/common/AppIcon.vue'
 import { codingApi } from '@/api/coding'
+import { useUserStore } from '@/stores/user'
 import { getCommittedAuthToken } from '@/utils/request'
 
 const props = defineProps<{
@@ -63,6 +64,7 @@ const props = defineProps<{
 }>()
 
 const router = useRouter()
+const userStore = useUserStore()
 const iframeKey = ref(0)
 
 // SP1 C3: 若该应用绑定的工作区正在 npm run serve, 预览直吃 dev server(带 HMR);
@@ -87,8 +89,9 @@ watch(() => [props.appId, props.menuId], refreshDevTarget)
 // _k 用于 ↻ 刷新强制 reload; _auth 走 query 传 token (iframe src GET 带不了 header).
 const hostUrl = computed(() => {
   if (!props.appId || !props.menuId) return ''
+  const sessionToken = userStore.token
   const tok = getCommittedAuthToken()
-  if (!tok) return ''
+  if (!sessionToken || !tok) return ''
   return `/api/applications/${props.appId}/custom-page-host`
     + `?menu_id=${encodeURIComponent(props.menuId)}`
     + `&_auth=${encodeURIComponent(tok)}&_k=${iframeKey.value}`

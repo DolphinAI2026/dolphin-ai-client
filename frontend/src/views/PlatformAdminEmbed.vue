@@ -1,6 +1,7 @@
 <template>
   <section class="platform-admin-embed">
     <iframe
+      v-if="iframeSrc"
       ref="frameRef"
       :key="iframeSrc"
       class="embed-frame"
@@ -44,8 +45,9 @@ const adminPath = computed(() => {
 })
 
 const iframeSrc = computed(() => {
+  const sessionToken = userStore.token
   const token = getCommittedAuthToken()
-  if (!token) return ''
+  if (!sessionToken || !token) return ''
   return buildPlatformAdminIframeSrc({
     origin: window.location.origin,
     baseUrl: import.meta.env.BASE_URL || '/',
@@ -95,7 +97,12 @@ function handleFrameLoad() {
   probeFrameReady()
 }
 
-watch(iframeSrc, () => {
+watch(iframeSrc, (src) => {
+  if (!src) {
+    clearLoadingTimers()
+    loading.value = false
+    return
+  }
   scheduleLoadingProbe()
 })
 
@@ -127,7 +134,11 @@ function handleAdminMessage(event: MessageEvent) {
 onMounted(() => {
   if (typeof window === 'undefined') return
   window.addEventListener('message', handleAdminMessage)
-  scheduleLoadingProbe()
+  if (iframeSrc.value) {
+    scheduleLoadingProbe()
+  } else {
+    loading.value = false
+  }
 
   // 兼容老 userStore 用法（保留兜底以防其他地方 watch tenantId）
   if (!userStore.tenantId) {
