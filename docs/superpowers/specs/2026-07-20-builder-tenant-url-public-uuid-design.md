@@ -668,10 +668,10 @@ VITE_BUILD_SHA="$BUILD_SHA" npm --prefix frontend run build
 BUILDER_ORIGIN="https://<builder-origin>" \
 DEPLOYED_REVISION="$BUILD_SHA" \
 BUILDER_AUTH_BEARER="<redacted-test-access-value>" \
-KUBE_NAMESPACE="<namespace>" \
-KUBE_LABEL_SELECTOR="app=apaas-builder-backend" \
-KUBE_CONTAINER="<backend-container>" \
-KUBE_BACKEND_PORT="8000" \
+KUBE_NAMESPACE="apaas-builder" \
+KUBE_LABEL_SELECTOR="app=apaas-builder" \
+KUBE_CONTAINER="apaas-builder" \
+KUBE_BACKEND_PORT="8003" \
 bash scripts/verify_builder_tenant_url_release.sh
 ```
 
@@ -684,10 +684,10 @@ bash scripts/verify_builder_tenant_url_release.sh
 4. 要求 `BUILDER_AUTH_BEARER`、`KUBE_NAMESPACE`、`KUBE_LABEL_SELECTOR`、
    `KUBE_CONTAINER` 和 `KUBE_BACKEND_PORT` 非空；缺少任一输入立即非零退出。认证值
    只能进入 curl header，不得写入 stdout、stderr 或临时文件。
-5. 使用
-   `kubectl -n "$KUBE_NAMESPACE" get pods -l "$KUBE_LABEL_SELECTOR" --field-selector=status.phase=Running`
-   枚举 Ready Pod，数量必须大于零。对每个 Pod 使用 `kubectl exec` 在容器内通过 Python
-   标准库访问
+5. 使用 `kubectl -n "$KUBE_NAMESPACE" get pods -l "$KUBE_LABEL_SELECTOR" -o json`
+   枚举全部匹配 Pod，数量必须大于零；逐个断言 `status.phase` 为 `Running` 且
+   `status.conditions[type=Ready].status` 为 `True`，不能用 Running 代替 Ready。然后对
+   每个 Pod 使用 `kubectl exec` 在容器内通过 Python 标准库访问
    `http://127.0.0.1:$KUBE_BACKEND_PORT/api/auth/internal/tenant-switch-contract`，逐个断言
    204 和 `X-Tenant-Switch-Contract: v2`；任一 Pod 非 Ready、无法执行或版本不符都
    非零退出。

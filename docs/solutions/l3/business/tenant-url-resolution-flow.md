@@ -3,7 +3,7 @@ asset_kind: business-flow
 asset_id: business-flow.tenant-url-resolution
 knowledge_level: L3
 source_spec_ref: docs/superpowers/specs/2026-07-20-builder-tenant-url-public-uuid-design.md
-source_spec_hash: sha256:841b24aa26341b0b522935e9380fd4d67ff5ad9c0e9c30d774a87bef370ff8ef
+source_spec_hash: sha256:183883d6e29b27e533a8e7691a42fd40f93cad87bee51fbbeae6eaeefe580e26
 phase_id: 2026-07-20-builder-tenant-url-public-uuid
 revision: 1
 source_section_refs:
