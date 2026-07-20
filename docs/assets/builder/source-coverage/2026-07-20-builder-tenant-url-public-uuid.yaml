@@ -1,0 +1,25 @@
+kind: source-coverage-ledger
+schema_version: v1
+phase_id: 2026-07-20-builder-tenant-url-public-uuid
+source_ref: docs/superpowers/specs/2026-07-20-builder-tenant-url-public-uuid-design.md
+source_hash: sha256:d472f7bb6fdc34913e94de77882d00c404804cfd2eb2d38b46750050e4891232
+source_profile:
+  long_document_mode: false
+coverage:
+  expected_pages:
+  - page_code: tenant-aware-protected-route
+    source_chunks:
+    - 2026-07-20-builder-tenant-url-public-uuid-summary
+    fact_packet_ids:
+    - page.tenant-aware-navigation
+    mapped_to_specs:
+    - docs/superpowers/specs/2026-07-20-builder-tenant-url-public-uuid-design.md
+    mapped_to_assets:
+    - page-interaction.tenant-aware-navigation
+    coverage_status: covered
+    status: covered
+    exemption_reason: ''
+  expected_forms: []
+  expected_flows: []
+  expected_operations: []
+  open_items: []

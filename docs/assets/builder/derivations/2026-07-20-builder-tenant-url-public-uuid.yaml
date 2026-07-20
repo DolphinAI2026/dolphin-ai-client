@@ -1,0 +1,77 @@
+kind: agentic-spec-to-knowledge-derivation
+schema_version: v1
+phase_id: 2026-07-20-builder-tenant-url-public-uuid
+source_spec_ref: docs/superpowers/specs/2026-07-20-builder-tenant-url-public-uuid-design.md
+source_spec_hash: sha256:d472f7bb6fdc34913e94de77882d00c404804cfd2eb2d38b46750050e4891232
+asset_index_ref: docs/assets/builder/asset-index.yaml
+status: ready_for_review
+generator:
+  provider: agentic-coding
+  mode: llm
+  version: v1
+changes:
+- asset_id: page-interaction.tenant-aware-navigation
+  asset_kind: page-interaction
+  knowledge_level: L3
+  path: docs/solutions/l3/business/tenant-aware-navigation.md
+  phase_id: 2026-07-20-builder-tenant-url-public-uuid
+  change_type: added
+  status: ready_for_review
+  source_spec_ref: docs/superpowers/specs/2026-07-20-builder-tenant-url-public-uuid-design.md
+  source_spec_hash: sha256:d472f7bb6fdc34913e94de77882d00c404804cfd2eb2d38b46750050e4891232
+  source_section_refs:
+  - "7. \u524D\u7AEF URL \u72B6\u6001\u673A"
+  - "8. \u767B\u5F55\u4E0E\u591A\u79DF\u6237\u9009\u62E9"
+  - "9. \u4E3B\u52A8\u5207\u79DF\u6237"
+  - "10. Code \u6DF1\u94FE\u63A5\u4E0E\u8FD0\u884C\u65F6"
+  - "17. \u9A8C\u6536\u6807\u51C6"
+  summary: "\u5B9A\u4E49\u79DF\u6237 UUID URL \u89C4\u8303\u5316\u3001\u6DF1\u94FE\
+    \u63A5\u81EA\u52A8\u5207\u6362\u3001\u767B\u5F55\u56DE\u8DF3\u3001\u4E3B\u52A8\
+    \u5207\u6362\u548C Code \u9996\u5F00\u4EA4\u4E92\u5951\u7EA6\u3002"
+- asset_id: spec.2026-07-20-builder-tenant-url-public-uuid
+  asset_kind: spec
+  knowledge_level: L1
+  path: docs/superpowers/specs/2026-07-20-builder-tenant-url-public-uuid-design.md
+  phase_id: 2026-07-20-builder-tenant-url-public-uuid
+  change_type: added
+  status: ready_for_review
+  source_spec_ref: docs/superpowers/specs/2026-07-20-builder-tenant-url-public-uuid-design.md
+  source_spec_hash: sha256:d472f7bb6fdc34913e94de77882d00c404804cfd2eb2d38b46750050e4891232
+  source_section_refs:
+  - "Builder \u79DF\u6237 URL \u516C\u5171 UUID \u8BBE\u8BA1"
+  summary: "\u767B\u8BB0\u5F53\u524D phase source Spec\u3002"
+diagnostics:
+  lint_status: passed
+  repair_attempted: false
+  blocking_conditions: []
+  messages:
+  - severity: info
+    code: deterministic_lint_passed
+    message: "\u5DF2\u767B\u8BB0\u79DF\u6237 URL \u516C\u5171 UUID source Spec\uFF0C\
+      \u786E\u5B9A\u6027 derivation lint \u5DF2\u901A\u8FC7\u3002"
+source_chunk_index_ref: docs/assets/builder/source-coverage/2026-07-20-builder-tenant-url-public-uuid.chunks.yaml
+source_chunk_index_hash: sha256:bfcbb70acf969439d5f886c8f4726aed30f6a5ecd463fcdec8d14ecd25ea8a8a
+source_coverage_ledger_ref: docs/assets/builder/source-coverage/2026-07-20-builder-tenant-url-public-uuid.yaml
+source_coverage_ledger_hash: sha256:2694015131f2dd0cd9a72d4c2cf183ef760190c67d064ae4f48c586e64ebba50
+typed_assets:
+- asset_id: page-interaction.tenant-aware-navigation
+  asset_kind: page-interaction
+  path: docs/solutions/l3/business/tenant-aware-navigation.md
+  schema_version: interaction-model/v1
+  source_spec_ref: docs/superpowers/specs/2026-07-20-builder-tenant-url-public-uuid-design.md
+  source_spec_hash: sha256:d472f7bb6fdc34913e94de77882d00c404804cfd2eb2d38b46750050e4891232
+  structured_block_hash: sha256:bef8da2fe7a9169fc6ac9da677230e64cf10326d6c36e555c973b95bb2954820
+  fact_packet_refs:
+  - page.tenant-aware-navigation
+  status: ready
+  blocking_codes: []
+  source_coverage_ledger_ref: docs/assets/builder/source-coverage/2026-07-20-builder-tenant-url-public-uuid.yaml
+  source_coverage_ledger_hash: sha256:2694015131f2dd0cd9a72d4c2cf183ef760190c67d064ae4f48c586e64ebba50
+  source_chunk_index_ref: docs/assets/builder/source-coverage/2026-07-20-builder-tenant-url-public-uuid.chunks.yaml
+  source_chunk_index_hash: sha256:bfcbb70acf969439d5f886c8f4726aed30f6a5ecd463fcdec8d14ecd25ea8a8a
+source_asset_refs:
+- asset_id: page-interaction.tenant-aware-navigation
+  asset_kind: page-interaction
+  path: docs/solutions/l3/business/tenant-aware-navigation.md
+  hash: sha256:e5aae520c5454bf3cd187f0feaf63e24d999b254f26be7a54adbb19fbcb4b6a0
+  section_ref: '#interaction_model'

@@ -3,4 +3,10 @@ schema_version: v1
 roadmap_id: project
 roadmap_ref: docs/solutions/l1/roadmap/project-roadmap.md
 status: active
-phases: []
+phases:
+  - phase_id: 2026-07-20-builder-tenant-url-public-uuid
+    title: Builder 租户 URL 公共 UUID
+    status: ready_for_review
+    depends_on: []
+    spec_ref: docs/superpowers/specs/2026-07-20-builder-tenant-url-public-uuid-design.md
+    phase_metadata_ref: docs/assets/builder/phases/2026-07-20-builder-tenant-url-public-uuid.yaml

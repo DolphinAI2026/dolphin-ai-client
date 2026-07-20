@@ -1,3 +1,37 @@
 kind: sandbox-builder-asset-index
 schema_version: v1
-assets: []
+current_phase_id: 2026-07-20-builder-tenant-url-public-uuid
+source_spec_ref: docs/superpowers/specs/2026-07-20-builder-tenant-url-public-uuid-design.md
+source_spec_hash: sha256:d472f7bb6fdc34913e94de77882d00c404804cfd2eb2d38b46750050e4891232
+generator:
+  provider: agentic-coding
+  version: v1
+assets:
+  - asset_id: page-interaction.tenant-aware-navigation
+    asset_kind: page-interaction
+    knowledge_level: L3
+    path: docs/solutions/l3/business/tenant-aware-navigation.md
+    phase_id: 2026-07-20-builder-tenant-url-public-uuid
+    change_type: added
+    status: ready_for_review
+    source_spec_ref: docs/superpowers/specs/2026-07-20-builder-tenant-url-public-uuid-design.md
+    source_spec_hash: sha256:d472f7bb6fdc34913e94de77882d00c404804cfd2eb2d38b46750050e4891232
+    source_section_refs:
+      - "7. 前端 URL 状态机"
+      - "8. 登录与多租户选择"
+      - "9. 主动切租户"
+      - "10. Code 深链接与运行时"
+      - "17. 验收标准"
+    summary: "定义租户 UUID URL 规范化、深链接自动切换、登录回跳、主动切换和 Code 首开交互契约。"
+  - asset_id: spec.2026-07-20-builder-tenant-url-public-uuid
+    asset_kind: spec
+    knowledge_level: L1
+    path: docs/superpowers/specs/2026-07-20-builder-tenant-url-public-uuid-design.md
+    phase_id: 2026-07-20-builder-tenant-url-public-uuid
+    change_type: added
+    status: ready_for_review
+    source_spec_ref: docs/superpowers/specs/2026-07-20-builder-tenant-url-public-uuid-design.md
+    source_spec_hash: sha256:d472f7bb6fdc34913e94de77882d00c404804cfd2eb2d38b46750050e4891232
+    source_section_refs:
+      - "Builder 租户 URL 公共 UUID 设计"
+    summary: "登记当前 phase source Spec。"

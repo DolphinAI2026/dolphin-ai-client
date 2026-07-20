@@ -1,0 +1,13 @@
+kind: source-chunk-index
+schema_version: v1
+phase_id: 2026-07-20-builder-tenant-url-public-uuid
+source_ref: docs/superpowers/specs/2026-07-20-builder-tenant-url-public-uuid-design.md
+source_hash: sha256:d472f7bb6fdc34913e94de77882d00c404804cfd2eb2d38b46750050e4891232
+chunks:
+- chunk_id: 2026-07-20-builder-tenant-url-public-uuid-summary
+  source_section: overall
+  form_codes: []
+  criticality: standard
+  extraction_status: completed
+  retry_count: 0
+  error: ''
