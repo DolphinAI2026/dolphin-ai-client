@@ -3,7 +3,7 @@ asset_kind: page-interaction
 asset_id: page-interaction.tenant-aware-navigation
 knowledge_level: L3
 source_spec_ref: docs/superpowers/specs/2026-07-20-builder-tenant-url-public-uuid-design.md
-source_spec_hash: sha256:ecc48b381fdb294e5a79ee598a202ec57e7eb8272634e862da9b4517f992de66
+source_spec_hash: sha256:f5936354b5aacca01dc239092fad4e2f54749b1a2816926c899a2c4860ad93ed
 phase_id: 2026-07-20-builder-tenant-url-public-uuid
 revision: 1
 source_section_refs:
@@ -113,6 +113,11 @@ storage_event_policy:
   automatic_reverse_switch: false
   convergence: last-successful-shared-token
   destination: current-mode-home-with-new-tenant-id
+  request_token_source: immutable-event-new-value
+  stale_response_guard:
+    - latest-storage-alignment-generation
+    - local-storage-token-equals-event-token
+    - abort-previous-alignment-request
 feedback:
   invalid_uuid: 租户链接无效
   inaccessible_tenant: 无权访问该租户
@@ -139,3 +144,5 @@ URL 中的公共 UUID 让租户上下文显性且稳定，但它不承担授权�
 - 不要在主动切租户时保留旧租户资源 ID。
 - 不要把 `tenantId` 拼入 Runtime 上游 URL。
 - 多标签页收到其他标签页 token 更新时必须对齐新租户首页，不自动切回旧 URL。
+- storage event 的 `/auth/me` 必须使用事件 token；旧 generation 或 token 已变化的
+  乱序响应不得写 user 或触发导航。

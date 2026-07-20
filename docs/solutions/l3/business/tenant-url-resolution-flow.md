@@ -3,7 +3,7 @@ asset_kind: business-flow
 asset_id: business-flow.tenant-url-resolution
 knowledge_level: L3
 source_spec_ref: docs/superpowers/specs/2026-07-20-builder-tenant-url-public-uuid-design.md
-source_spec_hash: sha256:ecc48b381fdb294e5a79ee598a202ec57e7eb8272634e862da9b4517f992de66
+source_spec_hash: sha256:f5936354b5aacca01dc239092fad4e2f54749b1a2816926c899a2c4860ad93ed
 phase_id: 2026-07-20-builder-tenant-url-public-uuid
 revision: 1
 source_section_refs:
@@ -139,7 +139,7 @@ operations:
       evidence: inactive, token-only, UUID mismatch, timeout, and cross-tab cases
     rollback_contract:
       status: covered
-      evidence: source token and user remain untouched until response validation passes
+      evidence: switch endpoint does not mutate current_app; rejected candidate leaves source token, user, URL, and server slot untouched
     audit_contract:
       status: covered
       evidence: tenant_switch structured log and low-cardinality metrics
