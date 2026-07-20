@@ -15,7 +15,7 @@ import { ElMessage } from 'element-plus'
 import { useRoute } from 'vue-router'
 
 import { useCodingStore } from '@/stores/coding'
-import { useUserStore } from '@/stores/user'
+import { getCommittedAuthTokenOrThrow } from '@/utils/request'
 import { normalizeRunResult } from './runResult'
 import { consumeSseResponse } from '@/utils/sse'
 import { codingApi } from '@/api/coding'
@@ -54,7 +54,6 @@ export interface PipelineDeps {
 
 export function useCodingPipeline(deps: PipelineDeps) {
   const codingStore = useCodingStore()
-  const userStore = useUserStore()
   const route = useRoute()
 
   const {
@@ -502,7 +501,7 @@ export function useCodingPipeline(deps: PipelineDeps) {
       currentAbort = new AbortController()
       const response = await fetch(harnessApi.codingAttachUrl(conversationId, afterSeq), {
         method: 'GET',
-        headers: { 'Authorization': `Bearer ${userStore.token}` },
+        headers: { 'Authorization': `Bearer ${getCommittedAuthTokenOrThrow()}` },
         signal: currentAbort.signal,
       })
       if (!response.ok) return
@@ -556,7 +555,7 @@ export function useCodingPipeline(deps: PipelineDeps) {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
-          'Authorization': `Bearer ${userStore.token}`,
+          'Authorization': `Bearer ${getCommittedAuthTokenOrThrow()}`,
         },
         body: JSON.stringify(body),
         signal: currentAbort.signal,

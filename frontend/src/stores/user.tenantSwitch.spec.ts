@@ -18,6 +18,8 @@ vi.mock('@/composables/useOnboardingState', () => ({
 import { useUserStore } from './user'
 import type { TenantOption, User } from '@/types'
 import request from '@/utils/request'
+import { aiChatApi } from '@/api/aiChat'
+import { extensionApi } from '@/api/extension'
 
 const sourceUuid = '11111111-1111-4111-8111-111111111111'
 const targetUuid = '22222222-2222-4222-8222-222222222222'
@@ -133,6 +135,17 @@ function deferred<T>() {
   return { promise, resolve, reject }
 }
 
+function completedSseResponse() {
+  return {
+    ok: true,
+    body: {
+      getReader: () => ({
+        read: vi.fn().mockResolvedValue({ done: true, value: undefined }),
+      }),
+    },
+  }
+}
+
 async function flushPromises() {
   await Promise.resolve()
   await Promise.resolve()
@@ -238,7 +251,7 @@ describe('user tenant switching', () => {
 
     await store.switchTenant(2)
 
-    expect(authMocks.switchTenant).toHaveBeenCalledWith(2)
+    expect(authMocks.switchTenant).toHaveBeenCalledWith(2, expect.any(AbortSignal))
     expect(replace).toHaveBeenCalledWith('/?tenantId=22222222-2222-4222-8222-222222222222')
   })
 
@@ -340,6 +353,84 @@ describe('user tenant switching', () => {
     const config = await runRequestInterceptor({ headers: {} })
 
     expect(config.headers?.Authorization).toBe('Bearer source-token')
+  })
+
+  it('uses the source committed token for native fetch and SSE while storage alignment is pending', async () => {
+    const { fireStorageEvent } = installBrowserGlobals()
+    const pendingCandidate = deferred<User>()
+    const fetch = vi.fn().mockResolvedValue(completedSseResponse())
+    const eventSourceUrls: string[] = []
+    class FakeEventSource {
+      onerror: ((event: Event) => void) | null = null
+      constructor(url: string) {
+        eventSourceUrls.push(url)
+      }
+      addEventListener() {}
+      close() {}
+    }
+    vi.stubGlobal('fetch', fetch)
+    vi.stubGlobal('EventSource', FakeEventSource)
+    localStorage.setItem('token', 'source-token')
+    authMocks.getMeWithToken.mockReturnValue(pendingCandidate.promise)
+
+    setActivePinia(createPinia())
+    const store = useUserStore()
+    store.setToken('source-token')
+    store.user = makeUser()
+
+    localStorage.setItem('token', 'candidate-token')
+    fireStorageEvent('candidate-token')
+    await aiChatApi.sendMessage(1, { message: 'hello' }, { onEvent: vi.fn() })
+    extensionApi.openUpdateEventStream(1, {})
+
+    expect(fetch).toHaveBeenCalledWith(
+      expect.stringContaining('/ai-chat/sessions/1/send'),
+      expect.objectContaining({
+        headers: expect.objectContaining({ Authorization: 'Bearer source-token' }),
+      }),
+    )
+    expect(eventSourceUrls[0]).toContain('token=source-token')
+    expect(eventSourceUrls[0]).not.toContain('candidate-token')
+  })
+
+  it('keeps native fetch on the source token after storage alignment fails', async () => {
+    const { fireStorageEvent } = installBrowserGlobals()
+    const fetch = vi.fn().mockResolvedValue(completedSseResponse())
+    vi.stubGlobal('fetch', fetch)
+    localStorage.setItem('token', 'source-token')
+    authMocks.getMeWithToken.mockRejectedValue(new Error('candidate failed'))
+
+    setActivePinia(createPinia())
+    const store = useUserStore()
+    store.setToken('source-token')
+    store.user = makeUser()
+
+    localStorage.setItem('token', 'candidate-token')
+    fireStorageEvent('candidate-token')
+    await flushPromises()
+    await aiChatApi.sendMessage(1, { message: 'hello' }, { onEvent: vi.fn() })
+
+    expect(fetch).toHaveBeenCalledWith(
+      expect.any(String),
+      expect.objectContaining({
+        headers: expect.objectContaining({ Authorization: 'Bearer source-token' }),
+      }),
+    )
+  })
+
+  it('fails closed for native fetch before a cold-start token is verified', async () => {
+    installBrowserGlobals()
+    const fetch = vi.fn()
+    vi.stubGlobal('fetch', fetch)
+    localStorage.setItem('token', 'boot-token')
+
+    setActivePinia(createPinia())
+    useUserStore()
+
+    await expect(
+      aiChatApi.sendMessage(1, { message: 'hello' }, { onEvent: vi.fn() }),
+    ).rejects.toMatchObject({ code: 'AUTH_SESSION_PENDING' })
+    expect(fetch).not.toHaveBeenCalled()
   })
 
   it('does not clear the shared candidate token or navigate when a source request returns 401', async () => {
@@ -603,5 +694,95 @@ describe('user tenant switching', () => {
     await flushPromises()
 
     expect(authMocks.getMeWithToken).toHaveBeenCalledTimes(1)
+  })
+
+  it('cannot commit a storage response after its owner is disposed', async () => {
+    const { fireStorageEvent, replace } = installBrowserGlobals()
+    const staleCandidate = deferred<User>()
+    const sourceUser = makeUser({ display_name: 'Source session' })
+    authMocks.getMeWithToken.mockImplementationOnce(() => staleCandidate.promise)
+    authMocks.getMeWithToken.mockRejectedValueOnce(new Error('replacement candidate failed'))
+
+    setActivePinia(createPinia())
+    const firstStore = useUserStore()
+    firstStore.setToken('source-token')
+    firstStore.user = sourceUser
+    localStorage.setItem('token', 'candidate-token')
+    fireStorageEvent('candidate-token')
+    firstStore.$dispose()
+
+    setActivePinia(createPinia())
+    const replacementStore = useUserStore()
+    await flushPromises()
+    staleCandidate.resolve(makeUser({
+      tenant_id: 2,
+      tenant_name: 'Target tenant',
+      tenant_public_id: targetUuid,
+    }))
+    await flushPromises()
+
+    expect(replacementStore.token).toBe('source-token')
+    expect(replacementStore.user).toBeNull()
+    expect(replace).not.toHaveBeenCalled()
+  })
+
+  it('keeps the latest tenant switch when an earlier candidate completes last', async () => {
+    const { replace } = installBrowserGlobals()
+    const slowB = deferred<User>()
+    const userB = makeUser({ tenant_id: 2, tenant_name: 'Tenant B', tenant_public_id: targetUuid })
+    const uuidC = '33333333-3333-4333-8333-333333333333'
+    const userC = makeUser({ tenant_id: 3, tenant_name: 'Tenant C', tenant_public_id: uuidC })
+    authMocks.switchTenant.mockImplementation((tenantId: number) => Promise.resolve({
+      access_token: tenantId === 2 ? 'token-b' : 'token-c',
+    }))
+    authMocks.getMeWithToken.mockImplementation((candidateToken: string) => {
+      if (candidateToken === 'token-b') return slowB.promise
+      if (candidateToken === 'token-c') return Promise.resolve(userC)
+      throw new Error(`unexpected token ${candidateToken}`)
+    })
+
+    setActivePinia(createPinia())
+    const store = useUserStore()
+    store.setToken('source-token')
+    store.user = makeUser()
+
+    const switchB = store.switchTenantContext(2, targetUuid, '/?tenantId=tenant-b')
+    await flushPromises()
+    await store.switchTenantContext(3, uuidC, '/?tenantId=tenant-c')
+    slowB.resolve(userB)
+    await switchB
+
+    expect(store.token).toBe('token-c')
+    expect(store.user).toEqual(userC)
+    expect(replace).toHaveBeenCalledTimes(1)
+    expect(replace).toHaveBeenCalledWith('/?tenantId=tenant-c')
+  })
+
+  it('drops a tenant switch when its source auth revision changes', async () => {
+    const { replace } = installBrowserGlobals()
+    const slowCandidate = deferred<User>()
+    authMocks.switchTenant.mockResolvedValue({ access_token: 'candidate-token' })
+    authMocks.getMeWithToken.mockReturnValue(slowCandidate.promise)
+
+    setActivePinia(createPinia())
+    const store = useUserStore()
+    store.setToken('source-token')
+    store.user = makeUser()
+
+    const switchPromise = store.switchTenantContext(2, targetUuid, '/?tenantId=target')
+    await flushPromises()
+    store.setToken('new-source-token')
+    const freshUser = makeUser({ display_name: 'Fresh source session' })
+    store.user = freshUser
+    slowCandidate.resolve(makeUser({
+      tenant_id: 2,
+      tenant_name: 'Target tenant',
+      tenant_public_id: targetUuid,
+    }))
+    await switchPromise
+
+    expect(store.token).toBe('new-source-token')
+    expect(store.user).toEqual(freshUser)
+    expect(replace).not.toHaveBeenCalled()
   })
 })

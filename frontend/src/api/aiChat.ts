@@ -1,4 +1,4 @@
-import request, { API_PREFIX } from '@/utils/request'
+import request, { API_PREFIX, getCommittedAuthTokenOrThrow } from '@/utils/request'
 
 export interface AIChatSession {
   id: number
@@ -183,7 +183,7 @@ export const aiChatApi = {
   },
   /** 二进制产物（storage=='file'）的下载地址 —— 带 token query 让浏览器直接 GET 拿文件 */
   artifactDownloadUrl(id: number, filename: string, version?: number): string {
-    const token = localStorage.getItem('token') || ''
+    const token = getCommittedAuthTokenOrThrow()
     const params = new URLSearchParams()
     if (version != null) params.set('version', String(version))
     if (token) params.set('token', token)
@@ -202,7 +202,7 @@ export const aiChatApi = {
       signal?: AbortSignal
     },
   ): Promise<void> {
-    const token = localStorage.getItem('token')
+    const token = getCommittedAuthTokenOrThrow()
     const resp = await fetch(`${API_PREFIX}/ai-chat/sessions/${sessionId}/send`, {
       method: 'POST',
       headers: {
@@ -233,7 +233,7 @@ export const aiChatApi = {
     afterSeq: number,
     options: { onEvent: (eventName: string, data: any) => void; signal?: AbortSignal },
   ): Promise<void> {
-    const token = localStorage.getItem('token')
+    const token = getCommittedAuthTokenOrThrow()
     const resp = await fetch(`${API_PREFIX}/ai-chat/sessions/${sessionId}/attach?after_seq=${afterSeq}`, {
       method: 'GET',
       headers: { Authorization: `Bearer ${token}` },

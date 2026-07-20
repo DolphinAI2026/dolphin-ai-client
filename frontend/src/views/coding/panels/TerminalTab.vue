@@ -9,7 +9,7 @@ import { ref, watch, onMounted, onBeforeUnmount } from 'vue'
 import { Terminal } from '@xterm/xterm'
 import { FitAddon } from '@xterm/addon-fit'
 import '@xterm/xterm/css/xterm.css'
-import { API_PREFIX } from '@/utils/request'
+import { API_PREFIX, getCommittedAuthTokenOrThrow } from '@/utils/request'
 import { detectServerUrl } from '../detectServerUrl'
 
 const props = defineProps<{ wsId: string }>()
@@ -48,7 +48,7 @@ let ro: ResizeObserver | null = null
 
 function wsUrl(): string {
   const proto = location.protocol === 'https:' ? 'wss:' : 'ws:'
-  const token = localStorage.getItem('token') || ''
+  const token = getCommittedAuthTokenOrThrow()
   return `${proto}//${location.host}${API_PREFIX}/coding/workspace/${props.wsId}/pty?token=${encodeURIComponent(token)}`
 }
 function sendResize() {
@@ -63,7 +63,12 @@ function connect() {
   sniffBuf = ''
   lastDetectedUrl = ''
   emit('state', 'idle')
-  ws = new WebSocket(wsUrl())
+  try {
+    ws = new WebSocket(wsUrl())
+  } catch {
+    emit('state', 'closed')
+    return
+  }
   ws.binaryType = 'arraybuffer'
   ws.onopen = () => { emit('state', 'open'); sendResize(); term?.focus() }
   ws.onclose = () => emit('state', 'closed')

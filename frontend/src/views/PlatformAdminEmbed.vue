@@ -27,6 +27,7 @@
 import { computed, onMounted, onBeforeUnmount, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { useUserStore } from '@/stores/user'
+import { getCommittedAuthTokenOrThrow } from '@/utils/request'
 import { buildPlatformAdminIframeSrc, resolvePlatformAdminPath } from './platformAdminEmbedState'
 
 const route = useRoute()
@@ -47,7 +48,7 @@ const iframeSrc = computed(() => {
     origin: window.location.origin,
     baseUrl: import.meta.env.BASE_URL || '/',
     adminPath: adminPath.value,
-    token: localStorage.getItem('token') || '',
+    token: getCommittedAuthTokenOrThrow(),
   })
 })
 

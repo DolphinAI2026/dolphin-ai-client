@@ -209,6 +209,7 @@
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { renderMd } from '@/utils/markdown'
 import { useThemeStore } from '@/stores/theme'
+import { getCommittedAuthTokenOrThrow } from '@/utils/request'
 import AppIcon from '@/components/common/AppIcon.vue'
 import ToolCard from './agent-conversation/ToolCard.vue'
 import type { AgentMessage, AgentToolPayload, AgentToolGroup, AgentTimelineItem } from './agent-conversation/types'
@@ -363,8 +364,12 @@ function fileAttachments(m: AgentMessage) {
 // 外链 / blob: / data: 不动。
 function withAuthToken(url?: string): string {
   if (!url || !url.startsWith('/')) return url || ''
-  const token = localStorage.getItem('token') || ''
-  if (!token) return url
+  let token: string
+  try {
+    token = getCommittedAuthTokenOrThrow()
+  } catch {
+    return ''
+  }
   return url + (url.includes('?') ? '&' : '?') + 'token=' + encodeURIComponent(token)
 }
 function imageAttachmentUrls(m: AgentMessage): string[] {

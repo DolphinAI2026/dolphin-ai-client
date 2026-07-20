@@ -50,9 +50,9 @@
 <script setup lang="ts">
 import { ref, computed, onMounted, watch } from 'vue'
 import { useRouter } from 'vue-router'
-import { useUserStore } from '@/stores/user'
 import AppIcon from '@/components/common/AppIcon.vue'
 import { codingApi } from '@/api/coding'
+import { getCommittedAuthTokenOrThrow } from '@/utils/request'
 
 const props = defineProps<{
   appId: number
@@ -63,8 +63,6 @@ const props = defineProps<{
 }>()
 
 const router = useRouter()
-const userStore = useUserStore()
-
 const iframeKey = ref(0)
 
 // SP1 C3: 若该应用绑定的工作区正在 npm run serve, 预览直吃 dev server(带 HMR);
@@ -74,9 +72,8 @@ const devServerPort = ref<number | null>(null)
 async function refreshDevTarget() {
   devServerPort.value = null
   if (!props.appId || !props.menuId) return
-  const tok = userStore.token || localStorage.getItem('token') || ''
   try {
-    const r = await codingApi.customPageDevTarget(props.appId, props.menuId, tok)
+    const r = await codingApi.customPageDevTarget(props.appId, props.menuId)
     if (r.dev_running && r.port) devServerPort.value = r.port
   } catch {
     devServerPort.value = null
@@ -90,7 +87,7 @@ watch(() => [props.appId, props.menuId], refreshDevTarget)
 // _k 用于 ↻ 刷新强制 reload; _auth 走 query 传 token (iframe src GET 带不了 header).
 const hostUrl = computed(() => {
   if (!props.appId || !props.menuId) return ''
-  const tok = userStore.token || localStorage.getItem('token') || ''
+  const tok = getCommittedAuthTokenOrThrow()
   return `/api/applications/${props.appId}/custom-page-host`
     + `?menu_id=${encodeURIComponent(props.menuId)}`
     + `&_auth=${encodeURIComponent(tok)}&_k=${iframeKey.value}`

@@ -1,6 +1,5 @@
-import request from '@/utils/request'
+import request, { API_PREFIX, getCommittedAuthTokenOrThrow } from '@/utils/request'
 import type { Application, MergedApplication } from '@/types'
-import { API_PREFIX } from '@/utils/request'
 
 // ── 业务事件 (对应后端 BusinessEventsResponse / BusinessEventItem) ──────────────
 export interface BusinessEventItem {
@@ -151,7 +150,7 @@ export const applicationApi = {
   // 增量文档变更
   /** 上传文档新版本（SSE） */
   uploadDocVersionUrl(appId: number): string {
-    const token = localStorage.getItem('token') || ''
+    const token = getCommittedAuthTokenOrThrow()
     return `${API_PREFIX}/applications/${appId}/upload-doc-version?token=${token}`
   },
 
@@ -206,7 +205,7 @@ export const applicationApi = {
 
   /** 执行变更计划（SSE） */
   executeChangePlanUrl(appId: number, planId: number): string {
-    const token = localStorage.getItem('token') || ''
+    const token = getCommittedAuthTokenOrThrow()
     return `${API_PREFIX}/applications/${appId}/change-plans/${planId}/execute?token=${token}`
   },
 

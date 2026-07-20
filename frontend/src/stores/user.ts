@@ -14,11 +14,13 @@ import {
 } from '@/utils/request'
 
 let activeSessionOwnerCleanup: (() => void) | null = null
+let activeSessionOwner: symbol | null = null
 
 if (import.meta.hot) {
   import.meta.hot.dispose(() => {
     activeSessionOwnerCleanup?.()
     activeSessionOwnerCleanup = null
+    activeSessionOwner = null
   })
 }
 
@@ -39,6 +41,10 @@ export const useUserStore = defineStore('user', () => {
   const availableTenants = ref<TenantOption[]>([])
   let storageAlignmentGeneration = 0
   let storageAlignmentAbortController: AbortController | null = null
+  let tenantSwitchGeneration = 0
+  let tenantSwitchAbortController: AbortController | null = null
+  let sessionOwner: symbol | null = null
+  let sessionOwnerReleased = false
 
   if (initialBootstrapToken) {
     beginAuthSessionBootstrap(initialBootstrapToken)
@@ -49,6 +55,18 @@ export const useUserStore = defineStore('user', () => {
     storageAlignmentAbortController?.abort()
     storageAlignmentAbortController = null
   }
+
+  const invalidateTenantSwitch = () => {
+    tenantSwitchGeneration += 1
+    tenantSwitchAbortController?.abort()
+    tenantSwitchAbortController = null
+  }
+
+  const ownsSessionOwner = () => (
+    !sessionOwnerReleased
+    && sessionOwner !== null
+    && activeSessionOwner === sessionOwner
+  )
 
   const currentModeTenantHome = (tenantPublicId: string) => {
     const base = import.meta.env.BASE_URL || '/'
@@ -101,15 +119,23 @@ export const useUserStore = defineStore('user', () => {
     tenantRole.value === 'platform_admin' || user.value?.is_platform_admin === true
   )
 
-  const setToken = (newToken: string) => {
+  const commitLocalToken = (newToken: string, preserveCurrentSwitch = false) => {
     invalidateStorageAlignment()
+    if (!preserveCurrentSwitch) {
+      invalidateTenantSwitch()
+    }
     token.value = newToken
     commitAuthSession(newToken)
     localStorage.setItem('token', newToken)
   }
 
+  const setToken = (newToken: string) => {
+    commitLocalToken(newToken)
+  }
+
   const clearSessionMemory = () => {
     invalidateStorageAlignment()
+    invalidateTenantSwitch()
     token.value = null
     user.value = null
     localStorage.removeItem('admin_token')
@@ -117,6 +143,8 @@ export const useUserStore = defineStore('user', () => {
   }
 
   const clearToken = () => {
+    invalidateStorageAlignment()
+    invalidateTenantSwitch()
     clearAuthSession()
     localStorage.removeItem('token')
   }
@@ -238,21 +266,44 @@ export const useUserStore = defineStore('user', () => {
     targetTenantPublicId: string,
     destination: string,
   ) => {
-    const candidate = await authApi.switchTenant(targetTenantId)
-    const candidateUser = await authApi.getMeWithToken(candidate.access_token)
-    if (
-      candidateUser.tenant_id !== targetTenantId
-      || candidateUser.tenant_public_id !== targetTenantPublicId
-    ) {
-      throw new Error('tenant candidate mismatch')
-    }
+    const sourceRevision = getAuthSessionState().revision
+    const generation = ++tenantSwitchGeneration
+    tenantSwitchAbortController?.abort()
+    const controller = new AbortController()
+    tenantSwitchAbortController = controller
+    const isCurrentOperation = () => (
+      !controller.signal.aborted
+      && generation === tenantSwitchGeneration
+      && getAuthSessionState().revision === sourceRevision
+    )
 
-    setToken(candidate.access_token)
-    user.value = candidateUser
+    try {
+      const candidate = await authApi.switchTenant(targetTenantId, controller.signal)
+      if (!isCurrentOperation()) return
 
-    if (typeof window !== 'undefined') {
-      try { localStorage.removeItem('ai-builder-tabs-v1') } catch { /* ignore */ }
-      window.location.replace(destination)
+      const candidateUser = await authApi.getMeWithToken(candidate.access_token, controller.signal)
+      if (!isCurrentOperation()) return
+      if (
+        candidateUser.tenant_id !== targetTenantId
+        || candidateUser.tenant_public_id !== targetTenantPublicId
+      ) {
+        throw new Error('tenant candidate mismatch')
+      }
+
+      commitLocalToken(candidate.access_token, true)
+      user.value = candidateUser
+
+      if (typeof window !== 'undefined') {
+        try { localStorage.removeItem('ai-builder-tabs-v1') } catch { /* ignore */ }
+        window.location.replace(destination)
+      }
+    } catch (error) {
+      if (!isCurrentOperation()) return
+      throw error
+    } finally {
+      if (tenantSwitchAbortController === controller) {
+        tenantSwitchAbortController = null
+      }
     }
   }
 
@@ -284,6 +335,7 @@ export const useUserStore = defineStore('user', () => {
       if (
         controller.signal.aborted
         || generation !== storageAlignmentGeneration
+        || !ownsSessionOwner()
         || localStorage.getItem('token') !== eventToken
         || !destination
       ) {
@@ -306,6 +358,8 @@ export const useUserStore = defineStore('user', () => {
   }
 
   activeSessionOwnerCleanup?.()
+  sessionOwner = Symbol('auth-session-owner')
+  activeSessionOwner = sessionOwner
 
   const unsubscribeFromSessionClear = subscribeToAuthSessionClear(clearSessionMemory)
   const storageListener = (event: StorageEvent) => {
@@ -325,9 +379,16 @@ export const useUserStore = defineStore('user', () => {
   }
 
   const releaseSessionOwner = () => {
+    if (sessionOwnerReleased) return
+    sessionOwnerReleased = true
+    invalidateStorageAlignment()
+    invalidateTenantSwitch()
     unsubscribeFromSessionClear()
     if (typeof window !== 'undefined') {
       window.removeEventListener('storage', storageListener)
+    }
+    if (activeSessionOwner === sessionOwner) {
+      activeSessionOwner = null
     }
     if (activeSessionOwnerCleanup === releaseSessionOwner) {
       activeSessionOwnerCleanup = null

@@ -1,5 +1,4 @@
-import request from '@/utils/request'
-import { API_PREFIX } from '@/utils/request'
+import request, { API_PREFIX, getCommittedAuthTokenOrThrow } from '@/utils/request'
 import { buildServeLogsUrl } from '@/views/coding/serveLogsUrl'
 
 export interface CodingScene {
@@ -155,7 +154,7 @@ export const codingApi = {
 
   /** 下载构建包或源码 zip */
   async downloadZip(wsId: string, type: 'dist' | 'src' = 'dist') {
-    const token = localStorage.getItem('token') || ''
+    const token = getCommittedAuthTokenOrThrow()
     const resp = await fetch(`${API_PREFIX}/coding/workspace/${wsId}/download?type=${type}`, {
       headers: { 'Authorization': `Bearer ${token}` }
     })
@@ -248,16 +247,16 @@ export const codingApi = {
   },
 
   /** 查询自开发页面绑定工作区是否在 npm run serve(预览面板 dev⇄UMD 切换) */
-  customPageDevTarget(appId: number, menuId: string, authToken: string) {
+  customPageDevTarget(appId: number, menuId: string) {
     return request.get<any, { dev_running: boolean; port: number | null; ws_id: string | null }>(
       `/applications/${appId}/custom-page-dev-target`,
-      { params: { menu_id: menuId, _auth: authToken } },
+      { params: { menu_id: menuId, _auth: getCommittedAuthTokenOrThrow() } },
     )
   },
 
   /** serve-logs SSE 的完整 URL（给 EventSource 用，token 走 query） */
   serveLogsUrl(wsId: string, lastSeenSeq: number): string {
-    return buildServeLogsUrl(API_PREFIX, wsId, lastSeenSeq, localStorage.getItem('token') || '')
+    return buildServeLogsUrl(API_PREFIX, wsId, lastSeenSeq, getCommittedAuthTokenOrThrow())
   },
 
   /** 构建 + 上传到平台环境 */
@@ -280,7 +279,7 @@ export const codingApi = {
 
   /** 打包发布（返回 zip blob） */
   async publish(wsId: string): Promise<Blob> {
-    const token = localStorage.getItem('token') || ''
+    const token = getCommittedAuthTokenOrThrow()
     const resp = await fetch(`${API_PREFIX}/coding/workspace/${wsId}/publish`, {
       method: 'POST',
       headers: { 'Authorization': `Bearer ${token}` }
@@ -300,7 +299,7 @@ export const codingApi = {
 
   /** 上传文件（图片/文档附件） */
   async uploadFile(file: File, workspaceId?: string): Promise<UploadResult> {
-    const token = localStorage.getItem('token') || ''
+    const token = getCommittedAuthTokenOrThrow()
     const formData = new FormData()
     formData.append('file', file)
     const params = new URLSearchParams()

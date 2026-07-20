@@ -1,6 +1,7 @@
-import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { ref } from 'vue'
 import { codingApi } from '@/api/coding'
+import { clearAuthSession, commitAuthSession } from '@/utils/request'
 import { useCodingPipeline } from './useCodingPipeline'
 
 const codingStore = vi.hoisted(() => ({
@@ -16,10 +17,6 @@ vi.mock('vue-router', () => ({
 
 vi.mock('@/stores/coding', () => ({
   useCodingStore: () => codingStore,
-}))
-
-vi.mock('@/stores/user', () => ({
-  useUserStore: () => ({ token: 'test-token' }),
 }))
 
 vi.mock('@/api/harness', () => ({
@@ -43,6 +40,7 @@ vi.mock('@/utils/sse', () => ({
 describe('useCodingPipeline', () => {
   beforeEach(() => {
     vi.clearAllMocks()
+    commitAuthSession('test-token')
     ;(globalThis as any).window = {}
     ;(globalThis as any).URL.createObjectURL = vi.fn(() => 'blob:preview')
     ;(globalThis as any).URL.revokeObjectURL = vi.fn()
@@ -52,6 +50,10 @@ describe('useCodingPipeline', () => {
     })
     codingStore.workspace = { id: 'ws-1' }
     codingStore.conversationId = 1
+  })
+
+  afterEach(() => {
+    clearAuthSession()
   })
 
   it('refreshes conversations after a successful pipeline turn', async () => {

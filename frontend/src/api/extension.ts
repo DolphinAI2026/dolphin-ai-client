@@ -7,7 +7,7 @@
  *  - notifyExtensionUpdate: ai-coding 完成 publish 后由 backend 调; 前端测试用
  *  - republishApplication: 触发 aPaaS 重发版本
  */
-import request, { API_PREFIX } from '@/utils/request'
+import request, { API_PREFIX, getCommittedAuthTokenOrThrow } from '@/utils/request'
 
 export interface DevKitItem {
   id: string
@@ -106,7 +106,7 @@ export const extensionApi = {
       onOpen?: () => void
     },
   ): { close: () => void } {
-    const token = localStorage.getItem('token') || ''
+    const token = getCommittedAuthTokenOrThrow()
     const url = `${API_PREFIX}/applications/${appId}/extension-update-events${token ? `?token=${encodeURIComponent(token)}` : ''}`
 
     let es: EventSource | null = null

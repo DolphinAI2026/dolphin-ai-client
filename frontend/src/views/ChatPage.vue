@@ -527,7 +527,6 @@
 </template>
 
 <script setup lang="ts">
-import { API_PREFIX } from '@/utils/request'
 import { ref, reactive, computed, nextTick, onMounted, onBeforeUnmount, watch } from 'vue'
 import { useRouter, useRoute } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
@@ -540,7 +539,7 @@ import ConnectModal from '@/components/ConnectModal.vue'
 import EnvSelectModal from '@/components/EnvSelectModal.vue'
 import VoiceInputButton from '@/components/common/VoiceInputButton.vue'
 import { platformEnvApi } from '@/api/platformEnv'
-import request from '@/utils/request'
+import request, { API_PREFIX, getCommittedAuthTokenOrThrow } from '@/utils/request'
 import { isApaasTokenError, handleError } from '@/utils/errorHandler'
 import { resolveComponentLabel } from '@/utils/componentTypes'
 import {
@@ -4966,7 +4965,7 @@ const uploadDocFile = async (file: File) => {
   scrollToBottom()
 
   try {
-    const token = localStorage.getItem('token')
+    const token = getCommittedAuthTokenOrThrow()
     const formData = new FormData()
     formData.append('file', file)
     if (conversationId.value) {
@@ -5473,7 +5472,7 @@ const handleDocVersionUpload = async (file: File, appId: number, options: DocVer
         throw new Error('创建会话失败')
       }
     }
-    const token = localStorage.getItem('token')
+    const token = getCommittedAuthTokenOrThrow()
     const formData = new FormData()
     formData.append('file', file)
     formData.append('conversation_id', conversationId.value.toString())
@@ -5745,7 +5744,7 @@ const executeChangePlan = async () => {
     await applicationApi.updateSelections(appId, planId, selections)
 
     // SSE 执行
-    const token = localStorage.getItem('token')
+    const token = getCommittedAuthTokenOrThrow()
     const url = applicationApi.executeChangePlanUrl(appId, planId)
     const response = await fetch(url, {
       method: 'POST',
@@ -5876,7 +5875,7 @@ const startAssembleConfig = async () => {
   const prompt = userMessages.join('\n') || '请根据对话内容生成应用配置'
 
   try {
-    const token = localStorage.getItem('token')
+    const token = getCommittedAuthTokenOrThrow()
     const response = await fetch(`${API_PREFIX}/chat/generate-config`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` },
@@ -6152,7 +6151,7 @@ async function streamDraftDocUpdate(
   payload: { instruction: string; conversation_id?: number | null; selected_llm_config_id?: number | null; current_doc?: string },
   onThinking: (text: string) => void,
 ): Promise<any> {
-  const token = localStorage.getItem('token') || ''
+  const token = getCommittedAuthTokenOrThrow()
   const url = `${API_PREFIX}/applications/${appId}/draft-doc-update-stream`
   const response = await fetch(url, {
     method: 'POST',
@@ -6452,7 +6451,7 @@ const sendMessage = async () => {
 
   // 调用后端API
   try {
-    const token = localStorage.getItem('token')
+    const token = getCommittedAuthTokenOrThrow()
     const response = attachmentPayloads.length > 0
       ? await (() => {
           const formData = new FormData()
@@ -7271,12 +7270,10 @@ onMounted(async () => {
 
   // 检查平台连接状态
   try {
-    const token = localStorage.getItem('token')
-    if (token) {
-      const data = await request.get<any, any>('/apaas/status')
-      if (data) {
-        store.connected = data.connected
-      }
+    getCommittedAuthTokenOrThrow()
+    const data = await request.get<any, any>('/apaas/status')
+    if (data) {
+      store.connected = data.connected
     }
   } catch (e) { /* ignore */ }
 

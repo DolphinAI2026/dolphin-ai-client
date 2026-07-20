@@ -5,6 +5,7 @@ import { isApaasTokenError } from './errorHandler'
 declare module 'axios' {
   interface AxiosRequestConfig {
     authFailurePolicy?: 'preserve-source-session'
+    authPolicy?: 'public'
     committedAuthToken?: string | null
     usesCommittedAuthToken?: boolean
     authSessionRevision?: number
@@ -159,6 +160,7 @@ type AuthorizationHeaders = {
   has?: (header: string) => boolean
   get?: (header: string) => unknown
   set?: (header: string, value: string) => void
+  delete?: (header: string) => boolean
   Authorization?: unknown
   authorization?: unknown
 }
@@ -180,6 +182,23 @@ function setAuthorization(headers: AuthorizationHeaders, token: string) {
     return
   }
   headers.Authorization = `Bearer ${token}`
+}
+
+function clearAuthorization(headers: AuthorizationHeaders) {
+  if (typeof headers.delete === 'function') {
+    headers.delete('Authorization')
+    return
+  }
+  delete headers.Authorization
+  delete headers.authorization
+}
+
+export function getCommittedAuthTokenOrThrow(): string {
+  const session = getAuthSessionState()
+  if (getAuthSessionBootstrapToken() || !session.initialized || !session.token) {
+    throw new AuthSessionPendingError()
+  }
+  return session.token
 }
 
 function currentRouteAsRedirect(): string {
@@ -226,6 +245,10 @@ export function shouldRedirectToLoginOnHttpError(input: {
 request.interceptors.request.use(
   (config) => {
     const headers = (config.headers ||= new AxiosHeaders()) as AuthorizationHeaders
+    if (config.authPolicy === 'public') {
+      clearAuthorization(headers)
+      return config
+    }
     if (!hasExplicitAuthorization(headers)) {
       const session = getAuthSessionState()
       if (
@@ -234,7 +257,6 @@ request.interceptors.request.use(
       ) {
         throw new AuthSessionPendingError()
       }
-
       const token = session.token
       config.committedAuthToken = token
       config.usesCommittedAuthToken = true

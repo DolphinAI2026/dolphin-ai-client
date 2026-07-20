@@ -133,19 +133,19 @@ export interface TenantUpdatePayload {
 
 export const authApi = {
   getCaptcha() {
-    return request.get<any, LoginCaptcha>('/auth/captcha')
+    return request.get<any, LoginCaptcha>('/auth/captcha', { authPolicy: 'public' })
   },
 
   login(data: LoginRequest) {
-    return request.post<any, LoginResponse>('/auth/login', data)
+    return request.post<any, LoginResponse>('/auth/login', data, { authPolicy: 'public' })
   },
 
   selectTenant(data: TenantSelectRequest) {
-    return request.post<any, Token>('/auth/select-tenant', data)
+    return request.post<any, Token>('/auth/select-tenant', data, { authPolicy: 'public' })
   },
 
-  switchTenant(tenantId: number) {
-    return request.post<any, Token>('/auth/switch-tenant', { tenant_id: tenantId })
+  switchTenant(tenantId: number, signal?: AbortSignal) {
+    return request.post<any, Token>('/auth/switch-tenant', { tenant_id: tenantId }, { signal })
   },
 
   listMyTenants() {
