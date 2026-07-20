@@ -3,7 +3,7 @@ asset_kind: page-interaction
 asset_id: page-interaction.tenant-aware-navigation
 knowledge_level: L3
 source_spec_ref: docs/superpowers/specs/2026-07-20-builder-tenant-url-public-uuid-design.md
-source_spec_hash: sha256:f5936354b5aacca01dc239092fad4e2f54749b1a2816926c899a2c4860ad93ed
+source_spec_hash: sha256:841b24aa26341b0b522935e9380fd4d67ff5ad9c0e9c30d774a87bef370ff8ef
 phase_id: 2026-07-20-builder-tenant-url-public-uuid
 revision: 1
 source_section_refs:

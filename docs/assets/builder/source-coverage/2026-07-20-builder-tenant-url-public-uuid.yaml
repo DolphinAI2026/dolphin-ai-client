@@ -2,7 +2,7 @@ kind: source-coverage-ledger
 schema_version: v1
 phase_id: 2026-07-20-builder-tenant-url-public-uuid
 source_ref: docs/superpowers/specs/2026-07-20-builder-tenant-url-public-uuid-design.md
-source_hash: sha256:f5936354b5aacca01dc239092fad4e2f54749b1a2816926c899a2c4860ad93ed
+source_hash: sha256:841b24aa26341b0b522935e9380fd4d67ff5ad9c0e9c30d774a87bef370ff8ef
 source_profile:
   long_document_mode: false
 coverage:

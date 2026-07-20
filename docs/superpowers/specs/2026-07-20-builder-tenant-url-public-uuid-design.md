@@ -521,6 +521,15 @@ tenant_switch
 指标 label。switch request ID 写入响应 body、`X-Request-ID` Header 和日志；URL event
 request ID 按上面的来源规则写入请求、204 Header 和日志。
 
+auth registry 固定通过隐藏端点 `GET /auth/internal/tenant-url-metrics` 暴露 Prometheus
+文本，只允许 `is_platform_admin` 身份访问，非平台管理员返回 403。外部反向代理路径为
+`/api/auth/internal/tenant-url-metrics`，发布脚本不得猜测其他 metrics URL。
+
+后端同时提供无副作用的隐藏探针 `GET /auth/internal/tenant-switch-contract`，返回 204
+和 Header `X-Tenant-Switch-Contract: v2`。该探针不读取用户、租户或 token，不签发
+JWT，只用于 readiness 与逐实例发布校验；外部路径固定为
+`/api/auth/internal/tenant-switch-contract`。
+
 前端构建必须注入 `VITE_BUILD_SHA`，并在 `index.html` 输出：
 
 ```html
@@ -658,6 +667,11 @@ BUILD_SHA="$(git rev-parse HEAD)"
 VITE_BUILD_SHA="$BUILD_SHA" npm --prefix frontend run build
 BUILDER_ORIGIN="https://<builder-origin>" \
 DEPLOYED_REVISION="$BUILD_SHA" \
+BUILDER_AUTH_BEARER="<redacted-test-access-value>" \
+KUBE_NAMESPACE="<namespace>" \
+KUBE_LABEL_SELECTOR="app=apaas-builder-backend" \
+KUBE_CONTAINER="<backend-container>" \
+KUBE_BACKEND_PORT="8000" \
 bash scripts/verify_builder_tenant_url_release.sh
 ```
 
@@ -667,10 +681,25 @@ bash scripts/verify_builder_tenant_url_release.sh
    `meta[name=builder-build-sha]`。
 2. 断言 meta 值等于 `DEPLOYED_REVISION`，且为 40 位小写 Git SHA。
 3. 执行 `git merge-base --is-ancestor 49a4bef4 "$DEPLOYED_REVISION"`；失败即发布失败。
-4. 使用受控 Bearer 凭据向 `/api/auth/tenant-url-events` 发送合法、非法和 31 次限流
-   请求，断言 204/422/429、同值 `X-Request-ID`，并从 metrics endpoint 断言对应
+4. 要求 `BUILDER_AUTH_BEARER`、`KUBE_NAMESPACE`、`KUBE_LABEL_SELECTOR`、
+   `KUBE_CONTAINER` 和 `KUBE_BACKEND_PORT` 非空；缺少任一输入立即非零退出。认证值
+   只能进入 curl header，不得写入 stdout、stderr 或临时文件。
+5. 使用
+   `kubectl -n "$KUBE_NAMESPACE" get pods -l "$KUBE_LABEL_SELECTOR" --field-selector=status.phase=Running`
+   枚举 Ready Pod，数量必须大于零。对每个 Pod 使用 `kubectl exec` 在容器内通过 Python
+   标准库访问
+   `http://127.0.0.1:$KUBE_BACKEND_PORT/api/auth/internal/tenant-switch-contract`，逐个断言
+   204 和 `X-Tenant-Switch-Contract: v2`；任一 Pod 非 Ready、无法执行或版本不符都
+   非零退出。
+6. 使用该受控平台管理员认证值向 `/api/auth/tenant-url-events` 发送合法、非法和 31 次
+   限流请求，断言 204/422/429 和同值 `X-Request-ID`。
+7. 调用固定路径 `/api/auth/internal/tenant-url-metrics`，比较请求前后样本并断言对应
    `tenant_url_resolution_total{outcome}` 只按低基数 outcome 增量。
-5. 检查响应和采集日志样本不包含 Authorization、JWT、Cookie 或密码。
+8. 通过
+   `kubectl -n "$KUBE_NAMESPACE" logs -l "$KUBE_LABEL_SELECTOR" -c "$KUBE_CONTAINER" --since=5m`
+   获取日志样本，按本次 request ID 定位 URL event；断言存在同值 request ID，且样本
+   不包含 Authorization、JWT、Cookie、密码或认证值本身。kubectl、pod、日志或匹配
+   缺失都必须非零退出。
 
 ## 17. 验收标准
 
