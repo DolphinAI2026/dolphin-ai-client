@@ -68,15 +68,46 @@ export const useUserStore = defineStore('user', () => {
     && activeSessionOwner === sessionOwner
   )
 
-  const currentModeTenantHome = (tenantPublicId: string) => {
+  const currentAppBasePath = () => {
     const base = import.meta.env.BASE_URL || '/'
-    const prefix = base === '/' ? '' : base.replace(/\/$/, '')
+    const path = `/${base.replace(/^\/+|\/+$/g, '')}`
+    return path === '/' ? '/' : path
+  }
+
+  const normalizeTenantDestination = (destination: string): string | null => {
+    if (
+      typeof destination !== 'string'
+      || !destination.startsWith('/')
+      || destination.startsWith('//')
+    ) {
+      return null
+    }
+
+    try {
+      const origin = 'https://tenant-switch.invalid'
+      const parsed = new URL(destination, origin)
+      const basePath = currentAppBasePath()
+      const isWithinBase = (
+        basePath === '/'
+        || parsed.pathname === basePath
+        || parsed.pathname.startsWith(`${basePath}/`)
+      )
+      if (parsed.origin !== origin || !isWithinBase) return null
+      return `${parsed.pathname}${parsed.search}${parsed.hash}`
+    } catch {
+      return null
+    }
+  }
+
+  const currentModeTenantHome = (tenantPublicId: string) => {
+    const basePath = currentAppBasePath()
+    const prefix = basePath === '/' ? '' : basePath
     const pathname = typeof window === 'undefined' ? '' : window.location.pathname
     const routePath = (
-      base !== '/'
-      && pathname.startsWith(base)
+      basePath !== '/'
+      && (pathname === basePath || pathname.startsWith(`${basePath}/`))
     )
-      ? `/${pathname.slice(base.length).replace(/^\/+/, '')}`
+      ? `/${pathname.slice(basePath.length).replace(/^\/+/, '')}`
       : pathname
     const mode = routePath
       ? modeForRoutePath(routePath)
@@ -87,7 +118,9 @@ export const useUserStore = defineStore('user', () => {
 
   const storageAlignmentDestination = (alignedUser: User): string | null => {
     if (alignedUser.tenant_id === null && alignedUser.tenant_public_id === null) {
-      return '/platform-admin/'
+      const basePath = currentAppBasePath()
+      const prefix = basePath === '/' ? '' : basePath
+      return `${prefix}/platform-admin/`
     }
     if (
       typeof alignedUser.tenant_id !== 'number'
@@ -136,20 +169,31 @@ export const useUserStore = defineStore('user', () => {
     nextUser: User,
     destination: string,
   ) => {
-    // Shared storage is the only fallible part of this commit. Do it before
-    // changing the per-tab adapter or Pinia state so a rejected write leaves
-    // the source session intact.
+    // Shared storage and navigation may throw. Keep both ahead of all per-tab
+    // adapter, Pinia, and tab mutations so failure preserves the source session.
+    const sourceSharedToken = localStorage.getItem('token')
     localStorage.setItem('token', newToken)
+    try {
+      window.location.replace(destination)
+    } catch (error) {
+      try {
+        if (sourceSharedToken === null) {
+          localStorage.removeItem('token')
+        } else {
+          localStorage.setItem('token', sourceSharedToken)
+        }
+      } catch {
+        // The per-tab session remains untouched even if storage rollback fails.
+      }
+      throw error
+    }
 
     invalidateStorageAlignment()
     commitAuthSession(newToken)
     token.value = newToken
     user.value = nextUser
 
-    if (typeof window !== 'undefined') {
-      try { localStorage.removeItem('ai-builder-tabs-v1') } catch { /* ignore */ }
-      window.location.replace(destination)
-    }
+    try { localStorage.removeItem('ai-builder-tabs-v1') } catch { /* ignore */ }
   }
 
   const clearSessionMemory = () => {
@@ -285,6 +329,11 @@ export const useUserStore = defineStore('user', () => {
     targetTenantPublicId: string,
     destination: string,
   ) => {
+    const normalizedDestination = normalizeTenantDestination(destination)
+    if (!normalizedDestination) {
+      throw new Error('invalid tenant switch destination')
+    }
+
     const sourceRevision = getAuthSessionState().revision
     const generation = ++tenantSwitchGeneration
     tenantSwitchAbortController?.abort()
@@ -311,7 +360,7 @@ export const useUserStore = defineStore('user', () => {
       }
 
       commitStarted = true
-      commitTenantSwitch(candidate.access_token, candidateUser, destination)
+      commitTenantSwitch(candidate.access_token, candidateUser, normalizedDestination)
     } catch (error) {
       if (!commitStarted && !isCurrentOperation()) return
       throw error
@@ -347,21 +396,24 @@ export const useUserStore = defineStore('user', () => {
     try {
       const alignedUser = await authApi.getMeWithToken(eventToken, controller.signal)
       const destination = storageAlignmentDestination(alignedUser)
+      const normalizedDestination = destination
+        ? normalizeTenantDestination(destination)
+        : null
       if (
         controller.signal.aborted
         || generation !== storageAlignmentGeneration
         || !ownsSessionOwner()
         || localStorage.getItem('token') !== eventToken
-        || !destination
+        || !normalizedDestination
       ) {
         return
       }
 
+      window.location.replace(normalizedDestination)
+      commitAuthSession(eventToken)
       token.value = eventToken
       user.value = alignedUser
-      commitAuthSession(eventToken)
       try { localStorage.removeItem('ai-builder-tabs-v1') } catch { /* ignore */ }
-      window.location.replace(destination)
       if (storageAlignmentAbortController === controller) {
         storageAlignmentAbortController = null
       }
