@@ -55,9 +55,12 @@ export function shouldRedirectToLoginOnHttpError(input: {
 // 请求拦截器
 request.interceptors.request.use(
   (config) => {
-    const token = localStorage.getItem('token')
-    if (token) {
-      config.headers.Authorization = `Bearer ${token}`
+    const existingAuthorization = config.headers?.Authorization
+    if (!existingAuthorization) {
+      const token = localStorage.getItem('token')
+      if (token) {
+        config.headers.Authorization = `Bearer ${token}`
+      }
     }
     return config
   },
@@ -81,8 +84,21 @@ request.interceptors.response.use(
       ''
     )
     const isLoginPage = window.location.pathname.endsWith('/login')
+    const sourceToken = localStorage.getItem('token')
+    const errorHeaders = error.config?.headers
+    const explicitAuthorization = typeof errorHeaders?.get === 'function'
+      ? errorHeaders.get('Authorization')
+      : errorHeaders?.Authorization || errorHeaders?.authorization
+    const isCandidateAuthorization = Boolean(
+      sourceToken
+      && explicitAuthorization
+      && explicitAuthorization !== `Bearer ${sourceToken}`
+    )
 
-    if (shouldRedirectToLoginOnHttpError({ status, reqUrl, errorDetail, isLoginPage })) {
+    if (
+      !isCandidateAuthorization
+      && shouldRedirectToLoginOnHttpError({ status, reqUrl, errorDetail, isLoginPage })
+    ) {
       localStorage.removeItem('token')
       const redirect = encodeURIComponent(currentRouteAsRedirect())
       window.location.href = `${import.meta.env.BASE_URL}login?redirect=${redirect}`

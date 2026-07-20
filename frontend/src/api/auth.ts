@@ -216,6 +216,13 @@ export const authApi = {
     return request.get<any, User>('/auth/me')
   },
 
+  getMeWithToken(candidateToken: string, signal?: AbortSignal) {
+    return request.get<any, User>('/auth/me', {
+      headers: { Authorization: `Bearer ${candidateToken}` },
+      signal,
+    })
+  },
+
   listTenantUsers() {
     return request.get<any, TenantUser[]>('/auth/tenant-users')
   },

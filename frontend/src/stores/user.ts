@@ -8,6 +8,8 @@ export const useUserStore = defineStore('user', () => {
   const user = ref<User | null>(null)
   const token = ref<string | null>(localStorage.getItem('token'))
   const availableTenants = ref<TenantOption[]>([])
+  let storageAlignmentGeneration = 0
+  let storageAlignmentAbortController: AbortController | null = null
 
   // 多租户状态
   const tenantId = computed(() => user.value?.tenant_id || null)
@@ -103,22 +105,88 @@ export const useUserStore = defineStore('user', () => {
     return availableTenants.value
   }
 
-  const switchTenant = async (targetTenantId: number) => {
-    if (targetTenantId === tenantId.value) return
-    const res = await authApi.switchTenant(targetTenantId)
-    setToken(res.access_token)
-    await fetchUser()
+  const switchTenantContext = async (
+    targetTenantId: number,
+    targetTenantPublicId: string,
+    destination: string,
+  ) => {
+    const candidate = await authApi.switchTenant(targetTenantId)
+    const candidateUser = await authApi.getMeWithToken(candidate.access_token)
+    if (
+      candidateUser.tenant_id !== targetTenantId
+      || candidateUser.tenant_public_id !== targetTenantPublicId
+    ) {
+      throw new Error('tenant candidate mismatch')
+    }
 
-    // 2026-05-22 修"切租户数据不刷新"用户痛点 — 整页 reload 让所有 store / 组件
-    // state 重拉新租户数据. 反模式: 只更新 user.tenant_id 不动其他 store 导致
-    // applications / SPEC / workspace / artifact 等列表全部 stale (上一个租户残留).
-    // 整页 reload 避免漏 invalidate 某些 store 缓存. 切租户本来就是 disruptive
-    // 重置工作环境的行为, 副作用 (in-flight SSE 断 / 填一半表单丢) 可接受.
+    setToken(candidate.access_token)
+    user.value = candidateUser
+
     if (typeof window !== 'undefined') {
       try { localStorage.removeItem('ai-builder-tabs-v1') } catch { /* ignore */ }
-      // 切到首页再 reload 防止用户停在 /chat?app_id=N 那种含其他租户 app id 的 url
-      window.location.href = '/ai-builder/'
+      window.location.replace(destination)
     }
+  }
+
+  const switchTenant = async (targetTenantId: number) => {
+    if (targetTenantId === tenantId.value) return
+    const targetTenant = availableTenants.value.find(
+      (tenant) => tenant.tenant_id === targetTenantId,
+    )
+    if (!targetTenant?.tenant_public_id) {
+      throw new Error('target tenant is not authorized')
+    }
+
+    await switchTenantContext(targetTenantId, targetTenant.tenant_public_id, '/ai-builder/')
+  }
+
+  const alignTokenFromStorage = async (eventToken: string) => {
+    const generation = ++storageAlignmentGeneration
+    storageAlignmentAbortController?.abort()
+    const controller = new AbortController()
+    storageAlignmentAbortController = controller
+
+    try {
+      const alignedUser = await authApi.getMeWithToken(eventToken, controller.signal)
+      if (
+        controller.signal.aborted
+        || generation !== storageAlignmentGeneration
+        || localStorage.getItem('token') !== eventToken
+      ) {
+        return
+      }
+
+      token.value = eventToken
+      user.value = alignedUser
+      try { localStorage.removeItem('ai-builder-tabs-v1') } catch { /* ignore */ }
+      window.location.replace('/ai-builder/')
+    } catch {
+      if (
+        !controller.signal.aborted
+        && generation === storageAlignmentGeneration
+        && localStorage.getItem('token') === eventToken
+      ) {
+        clearToken()
+      }
+    }
+  }
+
+  if (typeof window !== 'undefined') {
+    window.addEventListener('storage', (event) => {
+      if (event.key !== 'token') return
+
+      const eventToken = event.newValue
+      if (!eventToken) {
+        storageAlignmentGeneration += 1
+        storageAlignmentAbortController?.abort()
+        storageAlignmentAbortController = null
+        clearToken()
+        return
+      }
+
+      if (localStorage.getItem('token') !== eventToken) return
+      void alignTokenFromStorage(eventToken)
+    })
   }
 
   const logout = () => {
@@ -142,6 +210,7 @@ export const useUserStore = defineStore('user', () => {
     login,
     desktopLogin,
     selectTenant,
+    switchTenantContext,
     switchTenant,
     fetchAvailableTenants,
     logout
