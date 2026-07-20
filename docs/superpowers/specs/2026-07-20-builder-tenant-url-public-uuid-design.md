@@ -611,9 +611,10 @@ npm run build
 
 - 创建临时 SQLite 数据库、当前租户、可访问目标租户、停用租户、无权 UUID、管理员
   用户、Code session 和 Agent session。
-- 强制执行 `npm --prefix frontend run build`，断言
-  `frontend/dist/index.html` 存在且包含非空 `builder-build-sha` meta，再在随机空闲端口
-  启动后端与构建后的前端入口并等待 health/content ready。
+- 计算 `BUILD_SHA="$(git rev-parse HEAD)"`，强制执行
+  `VITE_BUILD_SHA="$BUILD_SHA" npm --prefix frontend run build`，断言
+  `frontend/dist/index.html` 存在且唯一 `builder-build-sha` meta 精确等于该 40 位 SHA，
+  再在随机空闲端口启动后端与构建后的前端入口并等待 health/content ready。
 - 通过环境变量把 Builder base URL、fixture ID 和浏览器 channel 传给 `.mjs`。
 - trap 关闭子进程并删除临时数据库、日志和 profile；失败时输出脱敏后的后端、前端和
   Playwright 日志路径。
@@ -646,7 +647,8 @@ npm run build
 ```bash
 npm ci
 npm --prefix frontend ci
-npm --prefix frontend run build
+BUILD_SHA="$(git rev-parse HEAD)"
+VITE_BUILD_SHA="$BUILD_SHA" npm --prefix frontend run build
 npm exec -- playwright install chromium msedge
 test -f frontend/dist/index.html
 test -f tests/e2e/builder-tenant-url-public-uuid-fixture.sh

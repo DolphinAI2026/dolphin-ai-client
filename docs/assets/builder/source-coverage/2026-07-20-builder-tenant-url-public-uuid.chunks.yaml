@@ -2,7 +2,7 @@ kind: source-chunk-index
 schema_version: v1
 phase_id: 2026-07-20-builder-tenant-url-public-uuid
 source_ref: docs/superpowers/specs/2026-07-20-builder-tenant-url-public-uuid-design.md
-source_hash: sha256:8562ec25c1043cef7ce7038455fb01bc9de5d104951991156ab0571fb65638a2
+source_hash: sha256:6acee24aea52edeece77b33dcc438eb3f1e1af00594a9bca69a8070d0e6878c4
 chunks:
 - chunk_id: 2026-07-20-builder-tenant-url-public-uuid-summary
   source_section: Builder 租户 URL 公共 UUID 设计

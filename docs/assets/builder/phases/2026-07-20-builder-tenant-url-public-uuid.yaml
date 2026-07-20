@@ -3,14 +3,14 @@ schema_version: v1
 phase_id: 2026-07-20-builder-tenant-url-public-uuid
 status: ready_for_review
 source_spec_ref: docs/superpowers/specs/2026-07-20-builder-tenant-url-public-uuid-design.md
-source_spec_hash: sha256:8562ec25c1043cef7ce7038455fb01bc9de5d104951991156ab0571fb65638a2
+source_spec_hash: sha256:6acee24aea52edeece77b33dcc438eb3f1e1af00594a9bca69a8070d0e6878c4
 asset_index_ref: docs/assets/builder/asset-index.yaml
 derivation_manifest_ref: docs/assets/builder/derivations/2026-07-20-builder-tenant-url-public-uuid.yaml
 prototype_requirement:
   status: not_required
   source: agentic-coding
   source_spec_ref: docs/superpowers/specs/2026-07-20-builder-tenant-url-public-uuid-design.md
-  source_spec_hash: sha256:8562ec25c1043cef7ce7038455fb01bc9de5d104951991156ab0571fb65638a2
+  source_spec_hash: sha256:6acee24aea52edeece77b33dcc438eb3f1e1af00594a9bca69a8070d0e6878c4
   reason: "本 phase 修改现有 Builder 的租户路由和鉴权行为，不新增独立视觉页面或原型交付面。"
   decided_at: "2026-07-20T13:28:05Z"
   evidence:
