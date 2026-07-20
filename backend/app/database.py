@@ -5,7 +5,7 @@ from sqlalchemy import event, inspect, text
 from sqlalchemy.ext.asyncio import create_async_engine, AsyncSession, async_sessionmaker
 from sqlalchemy.orm import DeclarativeBase
 from app.config import settings
-from app.tenant_public_id import reconcile_tenant_public_ids
+from app.tenant_public_id import TenantPublicIdStrictError, reconcile_tenant_public_ids
 
 
 class Base(DeclarativeBase):
@@ -129,7 +129,13 @@ async def init_db():
     import app.models.workspace_git  # noqa: F401
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
-        await reconcile_tenant_public_ids(conn)
+        tenant_public_id_result = await reconcile_tenant_public_ids(conn)
+        if (
+            tenant_public_id_result.null_count
+            or tenant_public_id_result.conflict_tenant_ids
+            or tenant_public_id_result.invalid_tenant_ids
+        ):
+            raise TenantPublicIdStrictError(tenant_public_id_result)
         await _migrate_legacy_builder_specs(conn, inspect)
         await conn.run_sync(Base.metadata.create_all)
         # 迁移：确保新列存在（兼容 SQLite 和 MySQL）

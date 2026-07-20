@@ -45,6 +45,7 @@ verify_builder:
 
 verify_tenant_public_id_dialects:
   stage: verify
+  privileged: true
   image:
     name: $BUILDER_DOCKER_CLI_IMAGE
     entrypoint: [""]

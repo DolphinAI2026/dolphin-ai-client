@@ -1,6 +1,12 @@
+import subprocess
+import sys
+from pathlib import Path
 from uuid import UUID
 
+import pytest
+
 from app.models.tenant import Tenant
+from app import tenant_public_id
 from app.tenant_public_id import historical_tenant_public_id, new_tenant_public_id
 
 
@@ -26,3 +32,66 @@ def test_tenant_public_id_column_is_nullable_unique_indexed_uuid_default():
     assert column.unique is True
     assert column.index is True
     assert UUID(column.default.arg(None)).version == 4
+
+
+def test_cli_formats_all_strict_reconciliation_ids_stably():
+    result = tenant_public_id.TenantPublicIdReconciliation(
+        scanned_count=5,
+        filled_count=1,
+        null_count=1,
+        null_tenant_ids=(2,),
+        conflict_tenant_ids=(7, 11),
+        invalid_tenant_ids=(4, 9),
+    )
+
+    assert tenant_public_id._format_result(result) == (
+        "scanned_count=5 filled_count=1 null_count=1 "
+        "null_tenant_ids=2 conflict_tenant_ids=7,11 invalid_tenant_ids=4,9"
+    )
+
+
+def test_cli_prints_strict_reconciliation_ids_without_traceback(monkeypatch, capsys):
+    result = tenant_public_id.TenantPublicIdReconciliation(
+        scanned_count=2,
+        filled_count=0,
+        null_count=0,
+        null_tenant_ids=(),
+        conflict_tenant_ids=(7, 11),
+        invalid_tenant_ids=(4, 9),
+    )
+
+    async def run_reconciliation(_verify_only_after_write):
+        return result
+
+    monkeypatch.setattr(tenant_public_id, "_run_cli_reconciliation", run_reconciliation)
+    monkeypatch.setattr(sys, "argv", ["tenant_public_id.py", "reconcile"])
+
+    with pytest.raises(SystemExit) as exc_info:
+        tenant_public_id.main()
+
+    assert exc_info.value.code == 1
+    assert capsys.readouterr().out == (
+        "scanned_count=2 filled_count=0 null_count=0 "
+        "null_tenant_ids= conflict_tenant_ids=7,11 invalid_tenant_ids=4,9\n"
+    )
+
+
+def test_dialect_runner_selects_reachable_host_for_local_docker_and_dind():
+    runner = Path(__file__).parent / "integration" / "run_tenant_public_id_dialects.sh"
+    command = (
+        'source "$1"; '
+        'DOCKER_HOST=""; '
+        'printf "local=%s|%s\\n" "$(database_host)" "$(port_bind_host)"; '
+        'DOCKER_HOST="tcp://docker:2375"; '
+        'printf "dind=%s|%s\\n" "$(database_host)" "$(port_bind_host)"'
+    )
+
+    result = subprocess.run(
+        ["bash", "-c", command, "bash", str(runner)],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert result.stdout == "local=127.0.0.1|127.0.0.1\ndind=docker|0.0.0.0\n"

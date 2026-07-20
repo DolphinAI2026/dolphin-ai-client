@@ -7,15 +7,26 @@ cd "$backend_dir"
 mysql_name="tenant-public-id-mysql-$$"
 pg_name="tenant-public-id-postgresql-$$"
 
+database_host() {
+  if [[ "${DOCKER_HOST:-}" == tcp://* ]]; then
+    local docker_endpoint="${DOCKER_HOST#tcp://}"
+    printf '%s\n' "${docker_endpoint%%[:/]*}"
+    return
+  fi
+  printf '%s\n' "127.0.0.1"
+}
+
+port_bind_host() {
+  if [[ "${DOCKER_HOST:-}" == tcp://* ]]; then
+    printf '%s\n' "0.0.0.0"
+    return
+  fi
+  printf '%s\n' "127.0.0.1"
+}
+
 cleanup() {
   docker rm -f "$mysql_name" "$pg_name" >/dev/null 2>&1 || true
 }
-trap cleanup EXIT
-
-export LLM_API_KEY="tenant-public-id-test-key"
-export JWT_SECRET_KEY="tenant-public-id-test-secret"
-export APAAS_ENCRYPTION_KEY="xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
-export ALLOW_DEFAULT_ENCRYPTION_KEY="1"
 
 wait_for_mysql() {
   for _ in $(seq 1 60); do
@@ -86,27 +97,46 @@ run_dialect() {
   echo "${dialect}=passed"
 }
 
-python -m pytest -q tests/test_tenant_public_id.py tests/test_tenant_public_id_migration.py
-echo "sqlite=passed"
+main() {
+  trap cleanup EXIT
 
-docker run -d --rm --name "$mysql_name" \
-  -e MYSQL_ROOT_PASSWORD=test \
-  -e MYSQL_DATABASE=builder \
-  -p 127.0.0.1::3306 \
-  mysql:8.4
-docker run -d --rm --name "$pg_name" \
-  -e POSTGRES_PASSWORD=test \
-  -e POSTGRES_DB=builder \
-  -p 127.0.0.1::5432 \
-  postgres:16
+  export LLM_API_KEY="tenant-public-id-test-key"
+  export JWT_SECRET_KEY="tenant-public-id-test-secret"
+  export APAAS_ENCRYPTION_KEY="xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+  export ALLOW_DEFAULT_ENCRYPTION_KEY="1"
 
-wait_for_mysql
-wait_for_postgresql
+  python -m pytest -q tests/test_tenant_public_id.py tests/test_tenant_public_id_migration.py
+  echo "sqlite=passed"
 
-mysql_port="$(docker port "$mysql_name" 3306/tcp | awk -F: 'NR == 1 { print $NF }')"
-pg_port="$(docker port "$pg_name" 5432/tcp | awk -F: 'NR == 1 { print $NF }')"
-mysql_url="mysql+aiomysql://root:test@127.0.0.1:${mysql_port}/builder"
-postgresql_url="postgresql+asyncpg://postgres:test@127.0.0.1:${pg_port}/builder"
+  local bind_host
+  bind_host="$(port_bind_host)"
+  docker run -d --rm --name "$mysql_name" \
+    -e MYSQL_ROOT_PASSWORD=test \
+    -e MYSQL_DATABASE=builder \
+    -p "${bind_host}::3306" \
+    mysql:8.4
+  docker run -d --rm --name "$pg_name" \
+    -e POSTGRES_PASSWORD=test \
+    -e POSTGRES_DB=builder \
+    -p "${bind_host}::5432" \
+    postgres:16
 
-run_dialect mysql "$mysql_url"
-run_dialect postgresql "$postgresql_url"
+  wait_for_mysql
+  wait_for_postgresql
+
+  local mysql_port
+  local pg_port
+  local db_host
+  mysql_port="$(docker port "$mysql_name" 3306/tcp | awk -F: 'NR == 1 { print $NF }')"
+  pg_port="$(docker port "$pg_name" 5432/tcp | awk -F: 'NR == 1 { print $NF }')"
+  db_host="$(database_host)"
+  local mysql_url="mysql+aiomysql://root:test@${db_host}:${mysql_port}/builder"
+  local postgresql_url="postgresql+asyncpg://postgres:test@${db_host}:${pg_port}/builder"
+
+  run_dialect mysql "$mysql_url"
+  run_dialect postgresql "$postgresql_url"
+}
+
+if [[ "${BASH_SOURCE[0]}" == "$0" ]]; then
+  main "$@"
+fi
