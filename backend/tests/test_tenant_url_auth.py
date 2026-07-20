@@ -184,6 +184,32 @@ async def test_me_tenants_returns_tenant_public_id(client, auth_db_factory):
 
 
 @pytest.mark.asyncio
+async def test_me_tenants_durably_backfills_legacy_null_tenant_public_id(
+    client,
+    auth_db_factory,
+):
+    user, tenants = await seed_tenant_user(auth_db_factory)
+    tenant = tenants[0]
+    token = create_access_token(user, tenant_id=tenant.id)
+
+    async with auth_db_factory() as session:
+        persisted = await session.get(Tenant, tenant.id)
+        persisted.public_id = None
+        await session.commit()
+
+    response = await client.get("/api/auth/me/tenants", headers=bearer(token))
+
+    assert response.status_code == 200
+    assert response.json()[0]["tenant_public_id"] == historical_tenant_public_id(
+        tenant.id
+    )
+    async with auth_db_factory() as session:
+        persisted = await session.get(Tenant, tenant.id)
+
+    assert persisted.public_id == response.json()[0]["tenant_public_id"]
+
+
+@pytest.mark.asyncio
 async def test_switch_tenant_response_remains_token_only(client, auth_db_factory):
     user, tenants = await seed_tenant_user(auth_db_factory, tenant_count=2)
     token = create_access_token(user, tenant_id=tenants[0].id)
@@ -209,6 +235,43 @@ async def test_multi_tenant_login_projects_tenant_public_ids(auth_db_factory):
     assert response.requires_tenant_selection is True
     assert [option.tenant_public_id for option in response.tenants] == [
         tenant.public_id for tenant in tenants
+    ]
+
+
+@pytest.mark.asyncio
+async def test_multi_tenant_login_durably_backfills_legacy_null_tenant_public_ids(
+    auth_db_factory,
+):
+    user, tenants = await seed_tenant_user(auth_db_factory, tenant_count=2)
+
+    async with auth_db_factory() as session:
+        persisted_tenants = (
+            await session.execute(
+                select(Tenant).where(Tenant.id.in_([tenant.id for tenant in tenants]))
+            )
+        ).scalars().all()
+        for tenant in persisted_tenants:
+            tenant.public_id = None
+        await session.commit()
+
+    async with auth_db_factory() as session:
+        persisted_user = await session.get(User, user.id)
+        response = await _issue_login_response_for_user(session, persisted_user)
+
+    assert [option.tenant_public_id for option in response.tenants] == [
+        historical_tenant_public_id(tenant.id) for tenant in tenants
+    ]
+    async with auth_db_factory() as session:
+        persisted_tenants = (
+            await session.execute(
+                select(Tenant)
+                .where(Tenant.id.in_([tenant.id for tenant in tenants]))
+                .order_by(Tenant.id)
+            )
+        ).scalars().all()
+
+    assert [tenant.public_id for tenant in persisted_tenants] == [
+        historical_tenant_public_id(tenant.id) for tenant in tenants
     ]
 
 

@@ -5,8 +5,9 @@ from uuid import UUID, uuid4
 
 import pytest
 import pytest_asyncio
-from sqlalchemy import String, text
+from sqlalchemy import String, event, select, text
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
+from sqlalchemy.pool import AsyncAdaptedQueuePool
 
 from app import database, tenant_public_id
 from app.database import Base
@@ -504,6 +505,7 @@ async def test_ensure_tenant_public_id_durably_backfills_legacy_null_across_sess
         async with session_factory() as session:
             tenant = await session.get(Tenant, tenant_id)
             projected_public_id = await ensure_tenant_public_id(session, tenant)
+            await session.commit()
 
         async with session_factory() as session:
             persisted = await session.get(Tenant, tenant_id)
@@ -544,7 +546,9 @@ async def test_ensure_tenant_public_id_concurrently_returns_the_durable_legacy_v
             async with session_factory() as session:
                 tenant = await session.get(Tenant, tenant_id)
                 await barrier.wait()
-                return await ensure_tenant_public_id(session, tenant)
+                public_id_value = await ensure_tenant_public_id(session, tenant)
+                await session.commit()
+                return public_id_value
 
         first, second = await asyncio.gather(
             project_public_id(),
@@ -556,6 +560,114 @@ async def test_ensure_tenant_public_id_concurrently_returns_the_durable_legacy_v
 
         assert first == second == persisted.public_id
         assert persisted.public_id == historical_tenant_public_id(tenant_id)
+    finally:
+        await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_ensure_tenant_public_id_reuses_callers_pool_connection_and_commit_is_durable(
+    tmp_path,
+):
+    engine = create_async_engine(
+        f"sqlite+aiosqlite:///{tmp_path / 'tenant-public-id-one-connection.db'}",
+        pool_size=1,
+        max_overflow=0,
+        pool_timeout=0.1,
+        poolclass=AsyncAdaptedQueuePool,
+    )
+    try:
+        async with engine.begin() as conn:
+            await conn.run_sync(Base.metadata.create_all)
+        session_factory = async_sessionmaker(
+            engine,
+            class_=AsyncSession,
+            expire_on_commit=False,
+        )
+        async with session_factory() as session:
+            tenant = Tenant(tenant_name="tenant", tenant_code="tenant")
+            session.add(tenant)
+            await session.commit()
+            tenant_id = tenant.id
+
+        async with session_factory() as session:
+            tenant = await session.get(Tenant, tenant_id)
+            tenant.public_id = None
+            await session.commit()
+
+        async with session_factory() as session:
+            tenant = (
+                await session.execute(select(Tenant).where(Tenant.id == tenant_id))
+            ).scalar_one()
+
+            public_id_value = await asyncio.wait_for(
+                ensure_tenant_public_id(session, tenant),
+                timeout=1,
+            )
+            await session.commit()
+
+        async with session_factory() as session:
+            persisted = await session.get(Tenant, tenant_id)
+
+        assert public_id_value == historical_tenant_public_id(tenant_id)
+        assert persisted.public_id == public_id_value
+    finally:
+        await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_ensure_tenant_public_id_does_not_autoflush_or_commit_pending_state(tmp_path):
+    engine = create_async_engine(
+        f"sqlite+aiosqlite:///{tmp_path / 'tenant-public-id-pending-state.db'}",
+        pool_size=2,
+        max_overflow=0,
+        poolclass=AsyncAdaptedQueuePool,
+    )
+    try:
+        async with engine.begin() as conn:
+            await conn.run_sync(Base.metadata.create_all)
+        session_factory = async_sessionmaker(
+            engine,
+            class_=AsyncSession,
+            expire_on_commit=False,
+        )
+        async with session_factory() as session:
+            legacy_tenant = Tenant(tenant_name="legacy", tenant_code="legacy")
+            unrelated_tenant = Tenant(tenant_name="other", tenant_code="other")
+            session.add_all([legacy_tenant, unrelated_tenant])
+            await session.commit()
+            legacy_tenant_id = legacy_tenant.id
+            unrelated_tenant_id = unrelated_tenant.id
+
+        async with session_factory() as session:
+            legacy_tenant = await session.get(Tenant, legacy_tenant_id)
+            legacy_tenant.public_id = None
+            await session.commit()
+
+        async with session_factory() as session:
+            legacy_tenant = await session.get(Tenant, legacy_tenant_id)
+            unrelated_tenant = await session.get(Tenant, unrelated_tenant_id)
+            unrelated_tenant.tenant_name = "not yet committed"
+            flushes = []
+
+            def track_flush(*_args):
+                flushes.append(True)
+
+            event.listen(session.sync_session, "before_flush", track_flush)
+            try:
+                public_id_value = await ensure_tenant_public_id(session, legacy_tenant)
+            finally:
+                event.remove(session.sync_session, "before_flush", track_flush)
+
+            assert public_id_value == historical_tenant_public_id(legacy_tenant_id)
+            assert flushes == []
+            await session.rollback()
+
+        async with session_factory() as session:
+            persisted_legacy = await session.get(Tenant, legacy_tenant_id)
+            persisted_unrelated = await session.get(Tenant, unrelated_tenant_id)
+
+        assert persisted_legacy.public_id is None
+        assert persisted_unrelated.tenant_name == "other"
     finally:
         await engine.dispose()
 

@@ -48,6 +48,17 @@ async def _tenant_option(db: AsyncSession, tenant: Tenant) -> TenantOption:
     )
 
 
+async def _tenant_options_with_durable_public_ids(
+    db: AsyncSession,
+    tenants: list[Tenant],
+) -> list[TenantOption]:
+    needs_public_id_commit = any(tenant.public_id is None for tenant in tenants)
+    options = [await _tenant_option(db, tenant) for tenant in tenants]
+    if needs_public_id_commit:
+        await db.commit()
+    return options
+
+
 def _normalize_apaas_origin(base_url: str) -> str:
     base = (base_url or "").strip().rstrip("/")
     if base.endswith("/backend"):
@@ -930,7 +941,10 @@ async def _try_apaas_login_flow(user_data: UserLogin, db: AsyncSession) -> Optio
         )
         return LoginResponse(
             access_token=access_token,
-            tenants=[await _tenant_option(db, tenant) for tenant in local_tenants],
+            tenants=await _tenant_options_with_durable_public_ids(
+                db,
+                local_tenants,
+            ),
             entry_path="/",
             is_platform_admin=is_platform_admin,
             has_tenant_context=True,
@@ -1071,14 +1085,16 @@ async def _issue_login_response_for_user(
     result = await db.execute(select(Tenant).where(Tenant.id.in_(tenant_ids)))
     tenant_map = {t.id: t for t in result.scalars().all()}
 
-    tenants = []
+    option_tenants = []
     default_tid = None
     for m in memberships:
         t = tenant_map.get(m.tenant_id)
         if t:
-            tenants.append(await _tenant_option(db, t))
+            option_tenants.append(t)
             if m.is_default:
                 default_tid = t.id
+
+    tenants = await _tenant_options_with_durable_public_ids(db, option_tenants)
 
     if default_tid:
         _prime_login_slot(user, default_tid)

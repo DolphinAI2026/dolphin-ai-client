@@ -17,7 +17,7 @@ from app.deps import (
     resolve_default_tenant_id_for_user,
 )
 from app.routes.auth.login import (
-    _tenant_option,
+    _tenant_options_with_durable_public_ids,
     _apaas_backend_login,
     _apaas_membership_role_preference,
     _apaas_switchable_tenants,
@@ -968,7 +968,7 @@ async def list_my_tenants(
                 .order_by(UserTenant.is_default.desc(), Tenant.tenant_name.asc())
             )
         ).scalars().all()
-    return [await _tenant_option(db, tenant) for tenant in rows]
+    return await _tenant_options_with_durable_public_ids(db, rows)
 
 
 @router.get("/users")
@@ -1318,7 +1318,10 @@ async def get_me(ctx: Annotated[AuthContext, Depends(get_auth_context)], db: Ann
         tenant = result.scalar_one_or_none()
         if tenant:
             tenant_name = tenant.tenant_name
+            needs_public_id_commit = tenant.public_id is None
             tenant_public_id = await ensure_tenant_public_id(db, tenant)
+            if needs_public_id_commit:
+                await db.commit()
 
     return UserInfo(
         id=ctx.user.id,

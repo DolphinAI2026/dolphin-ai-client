@@ -6,6 +6,7 @@ from typing import TYPE_CHECKING, Any
 from uuid import UUID, uuid4, uuid5
 
 from sqlalchemy import inspect, select, text, update
+from sqlalchemy.orm.attributes import set_committed_value
 
 if TYPE_CHECKING:
     from sqlalchemy.ext.asyncio import AsyncSession
@@ -350,35 +351,30 @@ async def ensure_tenant_public_id(
         return tenant.public_id
 
     if tenant.id is None or not inspect(tenant).persistent:
-        await session.flush()
-        if tenant.public_id is not None:
-            return tenant.public_id
-
-    if tenant.id is None:
-        raise RuntimeError("tenant must be persistent before public ID backfill")
+        await session.flush([tenant])
+        if tenant.public_id is None:
+            raise RuntimeError("tenant public ID was not assigned during flush")
+        return tenant.public_id
 
     from app.models.tenant import Tenant
 
     tenant_id = int(tenant.id)
-    bind = session.bind
-    if bind is None:
-        raise RuntimeError("tenant public ID backfill requires a session bind")
-
-    # Existing NULL values are legacy rows. Backfill in an isolated transaction
-    # so the UUID is durable without committing unrelated caller changes.
-    async with bind.begin() as connection:
-        await connection.execute(
+    # Reuse the caller's transaction and connection. The auth projection
+    # call sites commit this targeted backfill before building a response.
+    with session.no_autoflush:
+        await session.execute(
             update(Tenant)
             .where(Tenant.id == tenant_id, Tenant.public_id.is_(None))
             .values(public_id=historical_tenant_public_id(tenant_id))
+            .execution_options(synchronize_session=False)
         )
         public_id = (
-            await connection.execute(
+            await session.execute(
                 select(Tenant.public_id).where(Tenant.id == tenant_id)
             )
         ).scalar_one()
 
-    await session.refresh(tenant, attribute_names=["public_id"])
+    set_committed_value(tenant, "public_id", public_id)
     return str(public_id)
 
 
