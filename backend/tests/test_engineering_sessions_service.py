@@ -100,6 +100,143 @@ def test_create_builds_registry_and_worktree(tmp_path: Path):
     assert loaded.git_state.merged_to_base is False
 
 
+def test_ensure_application_session_reuses_the_same_worktree(tmp_path: Path):
+    repo = make_repo(tmp_path)
+    service = make_service(tmp_path, repo)
+
+    first = service.ensure_application_session("app-1", "App One")
+    second = service.ensure_application_session("app-1", "App One")
+
+    assert first.id == second.id
+    assert first.application_id == "app-1"
+    assert first.worktree_path == second.worktree_path
+
+
+def test_ensure_application_session_is_unique_across_concurrent_services(
+    tmp_path: Path,
+):
+    repo = make_repo(tmp_path)
+    registry_root = tmp_path / "sessions"
+    worktree_parent = tmp_path / "worktrees"
+    first_service = EngineeringSessionService(
+        repo,
+        registry_root=registry_root,
+        worktree_parent=worktree_parent,
+    )
+    second_service = EngineeringSessionService(
+        repo,
+        registry_root=registry_root,
+        worktree_parent=worktree_parent,
+    )
+
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        first, second = [
+            future.result()
+            for future in (
+                executor.submit(
+                    service.ensure_application_session,
+                    "app-1",
+                    "App One",
+                )
+                for service in (first_service, second_service)
+            )
+        ]
+
+    assert first.id == second.id
+    assert [item.id for item in first_service.registry.list()] == [first.id]
+    assert Path(first.worktree_path).exists()
+
+
+def test_ensure_application_session_rejects_duplicate_active_ownership(
+    tmp_path: Path,
+):
+    repo = make_repo(tmp_path)
+    service = make_service(tmp_path, repo)
+    first = service.create(SessionType.NEW_APP, "First app")
+    second = service.create(SessionType.NEW_APP, "Second app")
+    first.application_id = "app-1"
+    second.application_id = "app-1"
+    service.registry.save(first)
+    service.registry.save(second)
+
+    with pytest.raises(
+        ValueError,
+        match="multiple active sessions claim application: app-1",
+    ):
+        service.ensure_application_session("app-1", "App One")
+
+
+def test_ensure_application_session_rejects_blank_application_id(tmp_path: Path):
+    repo = make_repo(tmp_path)
+    service = make_service(tmp_path, repo)
+
+    with pytest.raises(ValueError, match="application_id must not be blank"):
+        service.ensure_application_session("  ", "App One")
+
+
+def test_merge_keeps_worktree_and_marks_merged_retained(tmp_path: Path):
+    repo = make_repo(tmp_path)
+    service = make_service(tmp_path, repo)
+    session = service.ensure_application_session("app-1", "App One")
+    Path(session.worktree_path, "feature.txt").write_text(
+        "done\n",
+        encoding="utf-8",
+    )
+    assert service.checkpoint(session.id, "feat: local runtime change") is True
+
+    merged = service.merge(session.id)
+
+    assert merged.status == SessionStatus.MERGED_RETAINED
+    assert Path(merged.worktree_path).exists()
+    assert merged.merged_commit == run_git(repo, "rev-parse", "HEAD")
+
+
+def test_merge_conflict_aborts_and_retains_session_worktree(tmp_path: Path):
+    repo = make_repo(tmp_path)
+    service = make_service(tmp_path, repo)
+    session = service.ensure_application_session("app-1", "App One")
+    worktree = Path(session.worktree_path)
+    (worktree / "README.md").write_text("session change\n", encoding="utf-8")
+    assert service.checkpoint(session.id, "feat: conflicting session change") is True
+    (repo / "README.md").write_text("base change\n", encoding="utf-8")
+    run_git(repo, "add", "README.md")
+    run_git(repo, "commit", "-m", "base conflict")
+
+    with pytest.raises(ValueError, match="WORKTREE_MERGE_CONFLICT"):
+        service.merge(session.id)
+
+    assert worktree.exists()
+    assert run_git(worktree, "branch", "--show-current") == session.branch
+    assert run_git(repo, "status", "--porcelain") == ""
+
+
+def test_dispose_refuses_dirty_or_unmerged_session(tmp_path: Path):
+    repo = make_repo(tmp_path)
+    service = make_service(tmp_path, repo)
+    session = service.ensure_application_session("app-1", "App One")
+    Path(session.worktree_path, "dirty.txt").write_text("dirty", encoding="utf-8")
+
+    with pytest.raises(ValueError, match="clean and merged"):
+        service.dispose(session.id)
+
+
+def test_dispose_removes_clean_merged_retained_worktree_and_branch(
+    tmp_path: Path,
+):
+    repo = make_repo(tmp_path)
+    service = make_service(tmp_path, repo)
+    session = service.ensure_application_session("app-1", "App One")
+    worktree = Path(session.worktree_path)
+    (worktree / "feature.txt").write_text("done\n", encoding="utf-8")
+    assert service.checkpoint(session.id) is True
+    service.merge(session.id)
+
+    service.dispose(session.id)
+
+    assert not worktree.exists()
+    assert run_git(repo, "branch", "--list", session.branch) == ""
+
+
 def test_create_uses_explicit_base_branch_head(tmp_path: Path):
     repo = make_repo(tmp_path)
     run_git(repo, "checkout", "-b", "release")

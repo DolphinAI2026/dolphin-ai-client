@@ -9,7 +9,10 @@ from typing import Any
 from app.engineering_sessions.git_state import GitCommandError
 from app.engineering_sessions.models import SessionType
 from app.engineering_sessions.registry import SessionRegistryError
-from app.engineering_sessions.service import EngineeringSessionService
+from app.engineering_sessions.service import (
+    EngineeringSessionOperationError,
+    EngineeringSessionService,
+)
 
 
 class JsonArgumentParser(argparse.ArgumentParser):
@@ -93,7 +96,14 @@ def build_parser() -> argparse.ArgumentParser:
     create.add_argument("--base-branch", default=None)
     create.add_argument("--no-worktree", action="store_true")
 
-    for name in ("resume", "sync", "archive", "checkpoint"):
+    for name in (
+        "resume",
+        "sync",
+        "archive",
+        "checkpoint",
+        "merge",
+        "dispose",
+    ):
         item = sub.add_parser(name)
         item.add_argument("session_id")
     sub.add_parser("list").add_argument("--sync", action="store_true")
@@ -160,6 +170,12 @@ def main(argv: list[str] | None = None) -> int:
                 }
             )
             return 0
+        if args.command == "merge":
+            _json(service.merge(args.session_id))
+            return 0
+        if args.command == "dispose":
+            _json(service.dispose(args.session_id))
+            return 0
         if args.command == "reconcile":
             sessions = service.reconcile()
             _json(sessions)
@@ -179,6 +195,12 @@ def main(argv: list[str] | None = None) -> int:
     except GitCommandError as exc:
         return _json_error(
             "git_error",
+            str(exc),
+            details=getattr(exc, "__notes__", None),
+        )
+    except EngineeringSessionOperationError as exc:
+        return _json_error(
+            exc.code,
             str(exc),
             details=getattr(exc, "__notes__", None),
         )

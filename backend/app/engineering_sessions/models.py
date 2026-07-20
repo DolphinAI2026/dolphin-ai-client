@@ -111,6 +111,7 @@ class EngineeringSession(BaseModel):
     )
 
     id: str
+    application_id: str | None = None
     type: SessionTypeValue
     title: str
     status: SessionStatusValue = SessionStatus.RUNNING

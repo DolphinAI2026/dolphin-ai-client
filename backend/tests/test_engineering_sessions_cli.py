@@ -561,3 +561,119 @@ def test_cli_concurrent_no_worktree_creates_use_process_lock(tmp_path: Path):
     ]
     assert not list(registry.glob("*.tmp"))
     assert not list(registry.glob(".*.tmp"))
+
+
+def test_cli_merge_keeps_worktree_and_dispose_removes_it(tmp_path: Path):
+    repo = make_repo(tmp_path)
+    registry = tmp_path / "sessions"
+    worktrees = tmp_path / "worktrees"
+    created_result = subprocess.run(
+        cli_command(
+            repo,
+            registry,
+            worktrees,
+            "create",
+            "--type",
+            "new-app",
+            "--title",
+            "App One",
+        ),
+        cwd=BACKEND_ROOT,
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    created = json.loads(created_result.stdout)
+    worktree = Path(created["worktree_path"])
+    (worktree / "feature.txt").write_text("done\n", encoding="utf-8")
+    subprocess.run(
+        cli_command(
+            repo,
+            registry,
+            worktrees,
+            "checkpoint",
+            created["id"],
+        ),
+        cwd=BACKEND_ROOT,
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+
+    merged_result = subprocess.run(
+        cli_command(repo, registry, worktrees, "merge", created["id"]),
+        cwd=BACKEND_ROOT,
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+
+    assert json.loads(merged_result.stdout)["status"] == "merged_retained"
+    assert worktree.exists()
+
+    disposed_result = subprocess.run(
+        cli_command(repo, registry, worktrees, "dispose", created["id"]),
+        cwd=BACKEND_ROOT,
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+
+    assert json.loads(disposed_result.stdout) is None
+    assert not worktree.exists()
+    assert run_git(repo, "branch", "--list", created["branch"]) == ""
+
+
+def test_cli_merge_conflict_uses_worktree_merge_conflict_error_code(
+    tmp_path: Path,
+):
+    repo = make_repo(tmp_path)
+    registry = tmp_path / "sessions"
+    worktrees = tmp_path / "worktrees"
+    created_result = subprocess.run(
+        cli_command(
+            repo,
+            registry,
+            worktrees,
+            "create",
+            "--type",
+            "new-app",
+            "--title",
+            "App One",
+        ),
+        cwd=BACKEND_ROOT,
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    created = json.loads(created_result.stdout)
+    worktree = Path(created["worktree_path"])
+    (worktree / "README.md").write_text("session change\n", encoding="utf-8")
+    subprocess.run(
+        cli_command(
+            repo,
+            registry,
+            worktrees,
+            "checkpoint",
+            created["id"],
+        ),
+        cwd=BACKEND_ROOT,
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    (repo / "README.md").write_text("base change\n", encoding="utf-8")
+    run_git(repo, "add", "README.md")
+    run_git(repo, "commit", "-m", "base conflict")
+
+    result = subprocess.run(
+        cli_command(repo, registry, worktrees, "merge", created["id"]),
+        cwd=BACKEND_ROOT,
+        capture_output=True,
+        text=True,
+    )
+
+    assert result.returncode == 1
+    assert json.loads(result.stderr)["error"]["code"] == "WORKTREE_MERGE_CONFLICT"
+    assert worktree.exists()
+    assert run_git(worktree, "branch", "--show-current") == created["branch"]
