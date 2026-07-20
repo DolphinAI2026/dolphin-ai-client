@@ -5,6 +5,8 @@ import { isApaasTokenError } from './errorHandler'
 declare module 'axios' {
   interface AxiosRequestConfig {
     authFailurePolicy?: 'preserve-source-session'
+    committedAuthToken?: string | null
+    usesCommittedAuthToken?: boolean
   }
 }
 
@@ -17,6 +19,12 @@ const request: AxiosInstance = axios.create({
   baseURL: API_PREFIX,
   timeout: 60000
 })
+
+let committedAuthToken: string | null | undefined
+
+export function setCommittedAuthToken(token: string | null) {
+  committedAuthToken = token
+}
 
 type AuthorizationHeaders = {
   has?: (header: string) => boolean
@@ -90,7 +98,11 @@ request.interceptors.request.use(
   (config) => {
     const headers = (config.headers ||= new AxiosHeaders()) as AuthorizationHeaders
     if (!hasExplicitAuthorization(headers)) {
-      const token = localStorage.getItem('token')
+      const token = committedAuthToken === undefined
+        ? localStorage.getItem('token')
+        : committedAuthToken
+      config.committedAuthToken = token
+      config.usesCommittedAuthToken = true
       if (token) {
         setAuthorization(headers, token)
       }
@@ -121,7 +133,17 @@ request.interceptors.response.use(
       ''
     )
     const isLoginPage = window.location.pathname.endsWith('/login')
-    if (shouldRedirectToLoginOnHttpError({ status, reqUrl, errorDetail, isLoginPage })) {
+    const requestToken = error.config?.committedAuthToken
+    const ownsCurrentSession = (
+      error.config?.usesCommittedAuthToken === true
+      && typeof requestToken === 'string'
+      && requestToken === committedAuthToken
+      && requestToken === localStorage.getItem('token')
+    )
+    if (
+      ownsCurrentSession
+      && shouldRedirectToLoginOnHttpError({ status, reqUrl, errorDetail, isLoginPage })
+    ) {
       localStorage.removeItem('token')
       const redirect = encodeURIComponent(currentRouteAsRedirect())
       window.location.href = `${import.meta.env.BASE_URL}login?redirect=${redirect}`

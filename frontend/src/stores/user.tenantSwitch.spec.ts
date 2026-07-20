@@ -17,6 +17,7 @@ vi.mock('@/composables/useOnboardingState', () => ({
 
 import { useUserStore } from './user'
 import type { TenantOption, User } from '@/types'
+import request from '@/utils/request'
 
 const sourceUuid = '11111111-1111-4111-8111-111111111111'
 const targetUuid = '22222222-2222-4222-8222-222222222222'
@@ -45,9 +46,16 @@ function makeTenantOption(tenantId: number, tenantPublicId: string): TenantOptio
   }
 }
 
-function installBrowserGlobals() {
+function installBrowserGlobals(pathname = '/') {
   const storage = new Map<string, string>()
   const replace = vi.fn()
+  const location = {
+    pathname,
+    search: '',
+    hash: '',
+    href: '',
+    replace,
+  }
   const storageListeners = new Set<(event: { key: string | null; newValue: string | null }) => void>()
 
   vi.stubGlobal('localStorage', {
@@ -56,7 +64,7 @@ function installBrowserGlobals() {
     removeItem: (key: string) => storage.delete(key),
   })
   vi.stubGlobal('window', {
-    location: { replace },
+    location,
     addEventListener: (type: string, listener: (event: { key: string | null; newValue: string | null }) => void) => {
       if (type === 'storage') storageListeners.add(listener)
     },
@@ -66,6 +74,7 @@ function installBrowserGlobals() {
   })
 
   return {
+    location,
     replace,
     fireStorageEvent: (token: string | null) => {
       for (const listener of storageListeners) {
@@ -73,6 +82,37 @@ function installBrowserGlobals() {
       }
     },
   }
+}
+
+function runRequestInterceptor(config: { headers?: Record<string, string> }) {
+  const handler = (
+    request.interceptors.request as unknown as {
+      handlers: Array<{ fulfilled?: (value: typeof config) => typeof config }>
+    }
+  ).handlers.find((candidate) => candidate.fulfilled)?.fulfilled
+
+  if (!handler) {
+    throw new Error('request interceptor is not registered')
+  }
+
+  return handler(config)
+}
+
+function runResponseErrorInterceptor(error: {
+  response?: { status?: number; data?: { detail?: string } }
+  config?: Record<string, unknown>
+}) {
+  const handler = (
+    request.interceptors.response as unknown as {
+      handlers: Array<{ rejected?: (reason: typeof error) => Promise<never> }>
+    }
+  ).handlers.find((candidate) => candidate.rejected)?.rejected
+
+  if (!handler) {
+    throw new Error('response interceptor is not registered')
+  }
+
+  return handler(error)
 }
 
 function deferred<T>() {
@@ -232,11 +272,94 @@ describe('user tenant switching', () => {
     expect(replace).not.toHaveBeenCalled()
   })
 
+  it('uses the source committed token for normal requests while storage alignment is pending', async () => {
+    const { fireStorageEvent } = installBrowserGlobals()
+    const pendingCandidate = deferred<User>()
+    localStorage.setItem('token', 'source-token')
+    authMocks.getMeWithToken.mockReturnValue(pendingCandidate.promise)
+
+    setActivePinia(createPinia())
+    const store = useUserStore()
+    store.user = makeUser()
+
+    localStorage.setItem('token', 'candidate-token')
+    fireStorageEvent('candidate-token')
+
+    const config = await runRequestInterceptor({ headers: {} })
+
+    expect(config.headers?.Authorization).toBe('Bearer source-token')
+  })
+
+  it('keeps using the source committed token for normal requests after storage alignment fails', async () => {
+    const { fireStorageEvent } = installBrowserGlobals()
+    localStorage.setItem('token', 'source-token')
+    authMocks.getMeWithToken.mockRejectedValue(new Error('candidate request failed'))
+
+    setActivePinia(createPinia())
+    const store = useUserStore()
+    store.user = makeUser()
+
+    localStorage.setItem('token', 'candidate-token')
+    fireStorageEvent('candidate-token')
+    await flushPromises()
+
+    const config = await runRequestInterceptor({ headers: {} })
+
+    expect(config.headers?.Authorization).toBe('Bearer source-token')
+  })
+
+  it('does not clear the shared candidate token or navigate when a source request returns 401', async () => {
+    const { location, replace } = installBrowserGlobals()
+    localStorage.setItem('token', 'source-token')
+
+    setActivePinia(createPinia())
+    const store = useUserStore()
+    store.user = makeUser()
+    localStorage.setItem('token', 'candidate-token')
+
+    const config = await runRequestInterceptor({ headers: {} })
+    const error = {
+      response: { status: 401, data: { detail: 'source request expired' } },
+      config: { url: '/applications', ...config },
+    }
+
+    await expect(runResponseErrorInterceptor(error)).rejects.toBe(error)
+
+    expect(config.headers?.Authorization).toBe('Bearer source-token')
+    expect(localStorage.getItem('token')).toBe('candidate-token')
+    expect(location.href).toBe('')
+    expect(replace).not.toHaveBeenCalled()
+  })
+
+  it('uses the aligned token for normal requests after storage alignment succeeds', async () => {
+    const { fireStorageEvent } = installBrowserGlobals()
+    localStorage.setItem('token', 'source-token')
+    authMocks.getMeWithToken.mockResolvedValue(makeUser({
+      tenant_id: 2,
+      tenant_name: 'Target tenant',
+      tenant_public_id: targetUuid,
+    }))
+
+    setActivePinia(createPinia())
+    const store = useUserStore()
+    store.user = makeUser()
+
+    localStorage.setItem('token', 'candidate-token')
+    fireStorageEvent('candidate-token')
+    await flushPromises()
+
+    const config = await runRequestInterceptor({ headers: {} })
+
+    expect(config.headers?.Authorization).toBe('Bearer candidate-token')
+  })
+
   it.each([
     ['builder', '/?tenantId=22222222-2222-4222-8222-222222222222'],
     ['code', '/code/apps?tenantId=22222222-2222-4222-8222-222222222222'],
   ])('aligns a tenant session to the current %s mode home', async (mode, expectedDestination) => {
-    const { fireStorageEvent, replace } = installBrowserGlobals()
+    const { fireStorageEvent, replace } = installBrowserGlobals(
+      mode === 'code' ? '/code/apps' : '/',
+    )
     localStorage.setItem('token', 'source-token')
     localStorage.setItem('apaas-app-mode-v1', mode)
     authMocks.getMeWithToken.mockResolvedValue(makeUser({
@@ -253,6 +376,32 @@ describe('user tenant switching', () => {
     await flushPromises()
 
     expect(replace).toHaveBeenCalledWith(expectedDestination)
+  })
+
+  it('uses the initial Code pathname over persisted builder mode during pending user loading', async () => {
+    const { fireStorageEvent, replace } = installBrowserGlobals('/code/projects/42')
+    const pendingSourceUser = deferred<User>()
+    localStorage.setItem('token', 'source-token')
+    localStorage.setItem('apaas-app-mode-v1', 'builder')
+    authMocks.getMe.mockReturnValue(pendingSourceUser.promise)
+    authMocks.getMeWithToken.mockResolvedValue(makeUser({
+      tenant_id: 2,
+      tenant_name: 'Target tenant',
+      tenant_public_id: targetUuid,
+    }))
+
+    setActivePinia(createPinia())
+    const store = useUserStore()
+    const fetchUserPromise = store.fetchUser()
+
+    localStorage.setItem('token', 'candidate-token')
+    fireStorageEvent('candidate-token')
+    await flushPromises()
+
+    expect(replace).toHaveBeenCalledWith('/code/apps?tenantId=22222222-2222-4222-8222-222222222222')
+
+    pendingSourceUser.resolve(makeUser())
+    await fetchUserPromise
   })
 
   it('aligns a no-tenant platform session directly to platform admin', async () => {

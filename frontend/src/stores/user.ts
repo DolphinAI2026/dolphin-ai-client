@@ -3,14 +3,18 @@ import { ref, computed } from 'vue'
 import { authApi } from '@/api/auth'
 import type { User, TenantOption } from '@/types'
 import { resetOnboardingCache } from '@/composables/useOnboardingState'
-import { MODE_META, useModeStore } from '@/stores/mode'
+import { MODE_META, modeForRoutePath, useModeStore } from '@/stores/mode'
+import { setCommittedAuthToken } from '@/utils/request'
 
 export const useUserStore = defineStore('user', () => {
   const user = ref<User | null>(null)
-  const token = ref<string | null>(localStorage.getItem('token'))
+  const initialToken = localStorage.getItem('token')
+  const token = ref<string | null>(initialToken)
   const availableTenants = ref<TenantOption[]>([])
   let storageAlignmentGeneration = 0
   let storageAlignmentAbortController: AbortController | null = null
+
+  setCommittedAuthToken(initialToken)
 
   const invalidateStorageAlignment = () => {
     storageAlignmentGeneration += 1
@@ -21,7 +25,17 @@ export const useUserStore = defineStore('user', () => {
   const currentModeTenantHome = (tenantPublicId: string) => {
     const base = import.meta.env.BASE_URL || '/'
     const prefix = base === '/' ? '' : base.replace(/\/$/, '')
-    const home = MODE_META[useModeStore().mode].home
+    const pathname = typeof window === 'undefined' ? '' : window.location.pathname
+    const routePath = (
+      base !== '/'
+      && pathname.startsWith(base)
+    )
+      ? `/${pathname.slice(base.length).replace(/^\/+/, '')}`
+      : pathname
+    const mode = routePath
+      ? modeForRoutePath(routePath)
+      : useModeStore().mode
+    const home = MODE_META[mode].home
     return `${prefix}${home}?tenantId=${encodeURIComponent(tenantPublicId)}`
   }
 
@@ -62,6 +76,7 @@ export const useUserStore = defineStore('user', () => {
   const setToken = (newToken: string) => {
     invalidateStorageAlignment()
     token.value = newToken
+    setCommittedAuthToken(newToken)
     localStorage.setItem('token', newToken)
   }
 
@@ -69,16 +84,29 @@ export const useUserStore = defineStore('user', () => {
     invalidateStorageAlignment()
     token.value = null
     user.value = null
+    setCommittedAuthToken(null)
     localStorage.removeItem('token')
     localStorage.removeItem('admin_token')
     resetOnboardingCache()
   }
 
   const fetchUser = async () => {
+    const requestToken = token.value
     try {
-      user.value = await authApi.getMe()
+      const fetchedUser = await authApi.getMe()
+      if (
+        requestToken === token.value
+        && requestToken === localStorage.getItem('token')
+      ) {
+        user.value = fetchedUser
+      }
     } catch (error) {
-      clearToken()
+      if (
+        requestToken === token.value
+        && requestToken === localStorage.getItem('token')
+      ) {
+        clearToken()
+      }
       throw error
     }
   }
@@ -194,6 +222,7 @@ export const useUserStore = defineStore('user', () => {
 
       token.value = eventToken
       user.value = alignedUser
+      setCommittedAuthToken(eventToken)
       try { localStorage.removeItem('ai-builder-tabs-v1') } catch { /* ignore */ }
       window.location.replace(destination)
       if (storageAlignmentAbortController === controller) {
