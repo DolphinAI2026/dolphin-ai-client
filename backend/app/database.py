@@ -5,6 +5,7 @@ from sqlalchemy import event, inspect, text
 from sqlalchemy.ext.asyncio import create_async_engine, AsyncSession, async_sessionmaker
 from sqlalchemy.orm import DeclarativeBase
 from app.config import settings
+from app.tenant_public_id import reconcile_tenant_public_ids
 
 
 class Base(DeclarativeBase):
@@ -107,6 +108,7 @@ async def _execute_best_effort(conn, statement: str) -> None:
 
 
 async def init_db():
+    import app.models.tenant  # noqa: F401
     # 确保 extension models 被 Base 注册（create_all 会创建新表）
     import app.harness.models  # noqa: F401
     # 智能开发 V2 - agent 架构相关表（agent_messages / brainstorm_sessions / specs / ...）
@@ -127,6 +129,7 @@ async def init_db():
     import app.models.workspace_git  # noqa: F401
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
+        await reconcile_tenant_public_ids(conn)
         await _migrate_legacy_builder_specs(conn, inspect)
         await conn.run_sync(Base.metadata.create_all)
         # 迁移：确保新列存在（兼容 SQLite 和 MySQL）

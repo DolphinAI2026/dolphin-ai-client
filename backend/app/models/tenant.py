@@ -5,6 +5,7 @@ from typing import Optional
 from sqlalchemy import String, Text, DateTime, Integer, Boolean, ForeignKey, JSON, UniqueConstraint
 from sqlalchemy.orm import Mapped, mapped_column
 from app.database import Base
+from app.tenant_public_id import new_tenant_public_id
 
 
 class Tenant(Base):
@@ -12,6 +13,13 @@ class Tenant(Base):
     __tablename__ = "tenants"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    public_id: Mapped[Optional[str]] = mapped_column(
+        String(36),
+        nullable=True,
+        unique=True,
+        index=True,
+        default=new_tenant_public_id,
+    )
     tenant_name: Mapped[str] = mapped_column(String(128), nullable=False)
     tenant_code: Mapped[str] = mapped_column(String(64), nullable=False, unique=True, index=True)
     plan_type: Mapped[str] = mapped_column(String(32), default="free", nullable=False)  # free/pro/enterprise
@@ -96,4 +104,3 @@ class TeamMember(Base):
     user_id: Mapped[int] = mapped_column(Integer, ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True)
     team_role: Mapped[str] = mapped_column(String(32), default="member", nullable=False)  # admin / member / viewer
     joined_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, nullable=False)
-

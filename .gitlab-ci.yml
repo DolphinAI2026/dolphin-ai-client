@@ -25,6 +25,7 @@ variables:
   BUILDER_MAVEN_IMAGE: "hub-mirror.dfy.definesys.cn/library/maven:3.9.9-eclipse-temurin-17"
   BUILDER_PYTHON_IMAGE: "hub-mirror.dfy.definesys.cn/library/python:3.12-slim-bookworm"
   BUILDER_DOCKER_CLI_IMAGE: "hub-mirror.dfy.definesys.cn/library/docker:24.0.7-cli"
+  BUILDER_DOCKER_DIND_IMAGE: "hub-mirror.dfy.definesys.cn/library/docker:24.0.7-dind"
   BUILDER_NPM_REGISTRY: "https://registry.npmmirror.com"
   BUILDER_PIP_INDEX_URL: "https://mirrors.aliyun.com/pypi/simple"
   # Optional: override when the default Alpine package mirror is unavailable.
@@ -41,6 +42,24 @@ verify_builder:
   script:
     - bash -n deploy/docker/entrypoint.sh deploy/customer/deploy.sh scripts/deploy_k8s_dev.sh scripts/deploy_online_latest_kubesphere.sh scripts/deploy_k8s_dev_web_terminal.sh
     - python3 -m compileall -q backend/app
+
+verify_tenant_public_id_dialects:
+  stage: verify
+  image:
+    name: $BUILDER_DOCKER_CLI_IMAGE
+    entrypoint: [""]
+  services:
+    - name: $BUILDER_DOCKER_DIND_IMAGE
+      alias: docker
+  variables:
+    DOCKER_HOST: "tcp://docker:2375"
+    DOCKER_TLS_CERTDIR: ""
+  before_script:
+    - apk add --no-cache bash python3 py3-pip
+    - python3 -m pip install --no-cache-dir --break-system-packages -r backend/requirements.txt
+  script:
+    - cd backend
+    - bash tests/integration/run_tenant_public_id_dialects.sh
 
 build_release_image:
   stage: build
