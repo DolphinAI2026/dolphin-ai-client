@@ -45,6 +45,17 @@ async def resolve_default_tenant_id_for_user(db: AsyncSession, user_id: int) -> 
     return membership.tenant_id if membership else None
 
 
+async def _require_active_tenant(db: AsyncSession, tenant_id: int) -> Tenant:
+    tenant = (
+        await db.execute(
+            select(Tenant).where(Tenant.id == tenant_id, Tenant.status == 1)
+        )
+    ).scalar_one_or_none()
+    if not tenant:
+        raise HTTPException(status_code=403, detail="目标租户不可用")
+    return tenant
+
+
 async def resolve_effective_tenant_id(db: AsyncSession, ctx: AuthContext) -> int:
     """Resolve a usable tenant id for tenant-scoped settings pages.
 
@@ -158,6 +169,8 @@ async def get_auth_context(
                     detail="平台管理员才能访问此资源",
                 )
             resolved_tenant_id = await resolve_default_tenant_id_for_user(db, user_id)
+            if resolved_tenant_id:
+                await _require_active_tenant(db, resolved_tenant_id)
             bound_apaas_tid = await resolve_bound_apaas_tenant_id(db, resolved_tenant_id)
             return AuthContext(
                 user=user,
@@ -178,6 +191,8 @@ async def get_auth_context(
     user = result.scalar_one_or_none()
     if not user or not user.is_active:
         raise credentials_exception
+
+    await _require_active_tenant(db, tenant_id)
 
     # 双 ID 解析：JWT 优先，回退 user 行
     eff_apaas_uid = jwt_apaas_uid or user.apaas_user_id or None
@@ -265,6 +280,11 @@ async def get_auth_context_from_token(token: str) -> AuthContext:
         if raw_tenant_id is None:
             if user.is_platform_admin:
                 tenant_id = await resolve_default_tenant_id_for_user(db, user_id) or 0
+                if tenant_id:
+                    try:
+                        await _require_active_tenant(db, tenant_id)
+                    except HTTPException as exc:
+                        raise ValueError("Tenant is inactive") from exc
                 bound_apaas_tid = await resolve_bound_apaas_tenant_id(db, tenant_id)
                 eff_apaas_tid = _first_text(jwt_apaas_tid, bound_apaas_tid, user.apaas_tenant_id)
                 return AuthContext(
@@ -278,6 +298,12 @@ async def get_auth_context_from_token(token: str) -> AuthContext:
             tenant_id = 0
         else:
             tenant_id = int(raw_tenant_id)
+
+        if tenant_id:
+            try:
+                await _require_active_tenant(db, tenant_id)
+            except HTTPException as exc:
+                raise ValueError("Tenant is inactive") from exc
 
         bound_apaas_tid = await resolve_bound_apaas_tenant_id(db, tenant_id)
         eff_apaas_tid = _first_text(jwt_apaas_tid, bound_apaas_tid, user.apaas_tenant_id)

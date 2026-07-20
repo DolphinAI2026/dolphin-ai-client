@@ -26,6 +26,7 @@ class UserInfo(BaseModel):
     created_at: datetime
     tenant_id: Optional[int] = None
     tenant_name: Optional[str] = None
+    tenant_public_id: Optional[str] = None
     tenant_role: Optional[str] = None
     org_permissions: Optional[dict] = None
 
@@ -35,6 +36,7 @@ class TenantOption(BaseModel):
     tenant_id: int
     tenant_name: str
     tenant_code: str
+    tenant_public_id: str
 
 
 class LoginResponse(BaseModel):

@@ -9,6 +9,7 @@ from app.models import User
 from app.models.tenant import Tenant, UserTenant, Role
 from app.schemas import UserInfo, TenantOption
 from app.auth import get_password_hash
+from app.tenant_public_id import ensure_tenant_public_id
 from app.deps import (
     AuthContext,
     get_auth_context,
@@ -16,6 +17,7 @@ from app.deps import (
     resolve_default_tenant_id_for_user,
 )
 from app.routes.auth.login import (
+    _tenant_option,
     _apaas_backend_login,
     _apaas_membership_role_preference,
     _apaas_switchable_tenants,
@@ -966,10 +968,7 @@ async def list_my_tenants(
                 .order_by(UserTenant.is_default.desc(), Tenant.tenant_name.asc())
             )
         ).scalars().all()
-    return [
-        TenantOption(tenant_id=t.id, tenant_name=t.tenant_name, tenant_code=t.tenant_code)
-        for t in rows
-    ]
+    return [await _tenant_option(db, tenant) for tenant in rows]
 
 
 @router.get("/users")
@@ -1313,11 +1312,13 @@ async def update_tenant_user_role(
 async def get_me(ctx: Annotated[AuthContext, Depends(get_auth_context)], db: Annotated[AsyncSession, Depends(get_db)]):
     # 获取租户信息
     tenant_name = None
+    tenant_public_id = None
     if ctx.tenant_id:
         result = await db.execute(select(Tenant).where(Tenant.id == ctx.tenant_id))
         tenant = result.scalar_one_or_none()
         if tenant:
             tenant_name = tenant.tenant_name
+            tenant_public_id = await ensure_tenant_public_id(db, tenant)
 
     return UserInfo(
         id=ctx.user.id,
@@ -1328,6 +1329,7 @@ async def get_me(ctx: Annotated[AuthContext, Depends(get_auth_context)], db: Ann
         created_at=ctx.user.created_at,
         tenant_id=ctx.tenant_id if ctx.tenant_id else None,
         tenant_name=tenant_name,
+        tenant_public_id=tenant_public_id,
         tenant_role=ctx.tenant_role,
         org_permissions=ctx.org_permissions or {}
     )

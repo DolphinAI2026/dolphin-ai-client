@@ -31,11 +31,21 @@ from app.deps import (
 )
 from app.config import settings
 from app.error_messages import SELECT_TOKEN_INVALID, SELECT_TOKEN_EXPIRED
+from app.tenant_public_id import ensure_tenant_public_id
 from pydantic import BaseModel
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter()
+
+
+async def _tenant_option(db: AsyncSession, tenant: Tenant) -> TenantOption:
+    return TenantOption(
+        tenant_id=tenant.id,
+        tenant_name=tenant.tenant_name,
+        tenant_code=tenant.tenant_code,
+        tenant_public_id=await ensure_tenant_public_id(db, tenant),
+    )
 
 
 def _normalize_apaas_origin(base_url: str) -> str:
@@ -920,10 +930,7 @@ async def _try_apaas_login_flow(user_data: UserLogin, db: AsyncSession) -> Optio
         )
         return LoginResponse(
             access_token=access_token,
-            tenants=[
-                TenantOption(tenant_id=t.id, tenant_name=t.tenant_name, tenant_code=t.tenant_code)
-                for t in local_tenants
-            ],
+            tenants=[await _tenant_option(db, tenant) for tenant in local_tenants],
             entry_path="/",
             is_platform_admin=is_platform_admin,
             has_tenant_context=True,
@@ -1069,11 +1076,7 @@ async def _issue_login_response_for_user(
     for m in memberships:
         t = tenant_map.get(m.tenant_id)
         if t:
-            tenants.append(TenantOption(
-                tenant_id=t.id,
-                tenant_name=t.tenant_name,
-                tenant_code=t.tenant_code,
-            ))
+            tenants.append(await _tenant_option(db, t))
             if m.is_default:
                 default_tid = t.id
 

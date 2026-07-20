@@ -71,6 +71,7 @@ async def test_switch_tenant_signs_new_token_for_member(db_session):
         ctx,
         db_session,
     )
+    assert set(res.model_dump()) == {"access_token", "token_type"}
 
     payload = jwt.decode(
         res.access_token,
