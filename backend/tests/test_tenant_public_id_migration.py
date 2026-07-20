@@ -5,10 +5,11 @@ from uuid import UUID, uuid4
 
 import pytest
 import pytest_asyncio
-from sqlalchemy import String, event, select, text
+from sqlalchemy import String, event, inspect, select, text
 from sqlalchemy.dialects import mysql
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 from sqlalchemy.pool import AsyncAdaptedQueuePool
+from sqlalchemy.orm import load_only
 
 from app import database, tenant_public_id
 from app.database import Base
@@ -39,6 +40,43 @@ async def _create_legacy_tenants(sqlite_engine, *, with_public_id: bool = False)
             f"{public_id_column}"
             ")"
         ))
+
+
+async def _create_configured_dialect_helper_schema(conn) -> None:
+    await conn.execute(text("DROP TABLE IF EXISTS tenants"))
+    await conn.execute(text(
+        "CREATE TABLE tenants ("
+        "id INTEGER PRIMARY KEY, "
+        "public_id VARCHAR(36), "
+        "updated_at TIMESTAMP"
+        ")"
+    ))
+
+
+class _ConfiguredDialectSchemaCapture:
+    def __init__(self) -> None:
+        self.statements: list[str] = []
+
+    async def execute(self, statement, *_args, **_kwargs) -> None:
+        self.statements.append(str(statement))
+
+
+@pytest.mark.asyncio
+async def test_configured_dialect_helper_schema_is_minimal_and_foreign_key_free():
+    conn = _ConfiguredDialectSchemaCapture()
+
+    await _create_configured_dialect_helper_schema(conn)
+
+    assert conn.statements == [
+        "DROP TABLE IF EXISTS tenants",
+        (
+            "CREATE TABLE tenants ("
+            "id INTEGER PRIMARY KEY, "
+            "public_id VARCHAR(36), "
+            "updated_at TIMESTAMP"
+            ")"
+        ),
+    ]
 
 
 async def run_reconciliation(sqlite_engine, legacy_rows):
@@ -816,29 +854,38 @@ async def test_ensure_tenant_public_id_concurrently_reads_current_value_on_confi
     engine = create_async_engine(database_url)
     try:
         async with engine.begin() as conn:
-            await conn.run_sync(Tenant.__table__.drop, checkfirst=True)
-            await conn.run_sync(Tenant.__table__.create)
+            await _create_configured_dialect_helper_schema(conn)
         session_factory = async_sessionmaker(
             engine,
             class_=AsyncSession,
             expire_on_commit=False,
         )
         async with session_factory() as session:
-            tenant = Tenant(tenant_name="tenant", tenant_code="tenant")
-            session.add(tenant)
+            await session.execute(
+                text(
+                    "INSERT INTO tenants (id, public_id) "
+                    "VALUES (:id, :public_id)"
+                ),
+                {"id": 1, "public_id": None},
+            )
             await session.commit()
-            tenant_id = tenant.id
-
-        async with session_factory() as session:
-            tenant = await session.get(Tenant, tenant_id)
-            tenant.public_id = None
-            await session.commit()
+            tenant_id = 1
 
         barrier = asyncio.Barrier(2)
+        barrier_arrivals = 0
 
         async def project_public_id() -> str:
+            nonlocal barrier_arrivals
             async with session_factory() as session:
-                tenant = await session.get(Tenant, tenant_id)
+                tenant = (
+                    await session.scalars(
+                        select(Tenant)
+                        .options(load_only(Tenant.id, Tenant.public_id))
+                        .where(Tenant.id == tenant_id)
+                    )
+                ).one()
+                assert inspect(tenant).persistent
+                barrier_arrivals += 1
                 await barrier.wait()
                 public_id_value = await ensure_tenant_public_id(session, tenant)
                 await session.commit()
@@ -850,13 +897,16 @@ async def test_ensure_tenant_public_id_concurrently_reads_current_value_on_confi
         )
 
         async with session_factory() as session:
-            persisted = await session.get(Tenant, tenant_id)
+            persisted = await session.scalar(
+                select(Tenant.public_id).where(Tenant.id == tenant_id)
+            )
 
+        assert barrier_arrivals == 2
         assert first == second == historical_tenant_public_id(tenant_id)
-        assert persisted.public_id == first
+        assert persisted == first
     finally:
         async with engine.begin() as conn:
-            await conn.run_sync(Tenant.__table__.drop, checkfirst=True)
+            await conn.execute(text("DROP TABLE IF EXISTS tenants"))
         await engine.dispose()
 
 
