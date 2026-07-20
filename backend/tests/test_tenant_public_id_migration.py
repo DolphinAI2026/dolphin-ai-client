@@ -11,6 +11,7 @@ from app import database, tenant_public_id
 from app.database import Base
 from app.models.tenant import Tenant
 from app.tenant_public_id import (
+    TenantPublicIdStrictError,
     ensure_tenant_public_id,
     historical_tenant_public_id,
     reconcile_tenant_public_ids,
@@ -115,6 +116,28 @@ class _DdlRaceConnection:
         raise self.error
 
 
+class _PostgresqlDdlRaceConnection(_DdlRaceConnection):
+    def __init__(self, error: Exception):
+        super().__init__(error)
+        self.dialect = SimpleNamespace(name="postgresql")
+        self.savepoint_rolled_back = False
+
+    def begin_nested(self):
+        return _PostgresqlSavepoint(self)
+
+
+class _PostgresqlSavepoint:
+    def __init__(self, conn: _PostgresqlDdlRaceConnection):
+        self.conn = conn
+
+    async def __aenter__(self):
+        return self
+
+    async def __aexit__(self, exc_type, *_args):
+        self.conn.savepoint_rolled_back = exc_type is not None
+        return False
+
+
 class _NoopBegin:
     async def __aenter__(self):
         return self
@@ -192,6 +215,22 @@ async def test_reconcile_reports_every_invalid_tenant_id_without_traceback(sqlit
 
 
 @pytest.mark.asyncio
+async def test_reconcile_does_not_partially_backfill_when_invalid_values_block_strict_state(
+    sqlite_engine,
+):
+    await seed_public_id(sqlite_engine, tenant_id=2, public_id=None)
+    await old_writer_insert(sqlite_engine, tenant_id=9, public_id="not-a-uuid")
+
+    async with sqlite_engine.begin() as conn:
+        result = await reconcile_tenant_public_ids(conn)
+
+    assert result.filled_count == 0
+    assert result.null_tenant_ids == (2,)
+    assert result.invalid_tenant_ids == (9,)
+    assert await public_id(sqlite_engine, 2) is None
+
+
+@pytest.mark.asyncio
 async def test_reconcile_reports_historical_uuid_collision_before_writing_null_row(sqlite_engine):
     await seed_public_id(
         sqlite_engine,
@@ -252,6 +291,42 @@ async def test_init_db_blocks_strict_reconciliation_with_all_tenant_ids(
 
 
 @pytest.mark.asyncio
+async def test_init_db_reports_durable_null_and_invalid_ids_without_partial_backfill(
+    monkeypatch,
+    tmp_path,
+):
+    engine = create_async_engine(
+        f"sqlite+aiosqlite:///{tmp_path / 'strict-reconciliation.db'}"
+    )
+    try:
+        await _create_legacy_tenants(engine, with_public_id=True)
+        async with engine.begin() as conn:
+            await conn.execute(text(
+                "INSERT INTO tenants (id, tenant_name, tenant_code, public_id) "
+                "VALUES (2, 'tenant-2', 'tenant-2', NULL), "
+                "(9, 'tenant-9', 'tenant-9', 'not-a-uuid')"
+            ))
+
+        monkeypatch.setattr(database, "engine", engine)
+
+        with pytest.raises(TenantPublicIdStrictError) as exc_info:
+            await database.init_db()
+
+        result = exc_info.value.result
+        assert result.filled_count == 0
+        assert result.null_tenant_ids == (2,)
+        assert result.invalid_tenant_ids == (9,)
+        assert exc_info.value.tenant_ids == (2, 9)
+        async with engine.connect() as conn:
+            durable_rows = (await conn.execute(text(
+                "SELECT id, public_id FROM tenants WHERE id IN (2, 9) ORDER BY id"
+            ))).all()
+        assert durable_rows == [(2, None), (9, "not-a-uuid")]
+    finally:
+        await engine.dispose()
+
+
+@pytest.mark.asyncio
 async def test_add_column_race_is_tolerated_only_after_expected_column_recheck(monkeypatch):
     column_states = iter([
         {},
@@ -288,6 +363,32 @@ async def test_add_column_race_rethrows_when_recheck_is_not_expected(monkeypatch
 
     with pytest.raises(RuntimeError, match="duplicate column name"):
         await tenant_public_id._ensure_nullable_column(_DdlRaceConnection(error))
+
+
+@pytest.mark.asyncio
+async def test_postgresql_add_column_race_rechecks_after_savepoint_rollback(monkeypatch):
+    error = RuntimeError("driver error")
+    error.orig = SimpleNamespace(sqlstate="42701")
+    conn = _PostgresqlDdlRaceConnection(error)
+
+    async def tenant_columns(_conn):
+        if conn.savepoint_rolled_back:
+            return {
+                "public_id": {
+                    "nullable": True,
+                    "type": String(36),
+                },
+            }
+        return {}
+
+    monkeypatch.setattr(tenant_public_id, "_tenant_columns", tenant_columns)
+
+    await tenant_public_id._ensure_nullable_column(conn)
+
+    assert conn.savepoint_rolled_back is True
+    assert conn.executed_statements == [
+        "ALTER TABLE tenants ADD COLUMN public_id VARCHAR(36)"
+    ]
 
 
 @pytest.mark.asyncio
@@ -330,6 +431,29 @@ async def test_create_unique_index_propagates_non_race_errors(monkeypatch):
         await tenant_public_id._ensure_unique_index(
             _DdlRaceConnection(RuntimeError("connection lost"))
         )
+
+
+@pytest.mark.asyncio
+async def test_postgresql_create_index_race_rechecks_after_savepoint_rollback(monkeypatch):
+    error = RuntimeError("driver error")
+    error.orig = SimpleNamespace(pgcode="42P07")
+    conn = _PostgresqlDdlRaceConnection(error)
+
+    async def has_unique_index(_conn):
+        return conn.savepoint_rolled_back
+
+    monkeypatch.setattr(
+        tenant_public_id,
+        "_has_unique_public_id_index",
+        has_unique_index,
+    )
+
+    await tenant_public_id._ensure_unique_index(conn)
+
+    assert conn.savepoint_rolled_back is True
+    assert conn.executed_statements == [
+        "CREATE UNIQUE INDEX ix_tenants_public_id ON tenants(public_id)"
+    ]
 
 
 @pytest.mark.asyncio

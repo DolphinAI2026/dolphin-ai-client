@@ -1,9 +1,11 @@
 import subprocess
 import sys
 from pathlib import Path
+from types import SimpleNamespace
 from uuid import UUID
 
 import pytest
+import yaml
 
 from app.models.tenant import Tenant
 from app import tenant_public_id
@@ -95,3 +97,84 @@ def test_dialect_runner_selects_reachable_host_for_local_docker_and_dind():
 
     assert result.returncode == 0, result.stderr
     assert result.stdout == "local=127.0.0.1|127.0.0.1\ndind=docker|0.0.0.0\n"
+
+
+@pytest.mark.parametrize(
+    ("dialect_name", "error", "column_duplicate", "index_duplicate"),
+    [
+        (
+            "postgresql",
+            SimpleNamespace(orig=SimpleNamespace(sqlstate="42701")),
+            True,
+            False,
+        ),
+        (
+            "postgresql",
+            SimpleNamespace(orig=SimpleNamespace(pgcode="42P07")),
+            False,
+            True,
+        ),
+        (
+            "mysql",
+            SimpleNamespace(orig=SimpleNamespace(errno=1060)),
+            True,
+            False,
+        ),
+        (
+            "mysql",
+            SimpleNamespace(orig=SimpleNamespace(errno=1061)),
+            False,
+            True,
+        ),
+        (
+            "sqlite",
+            RuntimeError("duplicate column name: public_id"),
+            True,
+            False,
+        ),
+        (
+            "sqlite",
+            RuntimeError("index ix_tenants_public_id already exists"),
+            False,
+            True,
+        ),
+    ],
+)
+def test_duplicate_ddl_errors_use_dialect_driver_codes_before_sqlite_fallback(
+    dialect_name,
+    error,
+    column_duplicate,
+    index_duplicate,
+):
+    assert (
+        tenant_public_id._is_duplicate_column_error(dialect_name, error)
+        is column_duplicate
+    )
+    assert (
+        tenant_public_id._is_duplicate_index_error(dialect_name, error)
+        is index_duplicate
+    )
+
+
+def test_duplicate_ddl_message_fallback_is_limited_to_sqlite():
+    error = RuntimeError("duplicate column name: public_id")
+
+    assert tenant_public_id._is_duplicate_column_error("sqlite", error)
+    assert not tenant_public_id._is_duplicate_column_error("postgresql", error)
+    assert not tenant_public_id._is_duplicate_column_error("mysql", error)
+
+
+def test_dialect_runner_job_uses_standard_gitlab_yaml_and_preserves_dind_networking():
+    config_path = Path(__file__).parents[2] / ".gitlab-ci.yml"
+    config = yaml.safe_load(config_path.read_text())
+    job = config["verify_tenant_public_id_dialects"]
+
+    assert "privileged" not in job
+    assert job["services"] == [
+        {
+            "name": "$BUILDER_DOCKER_DIND_IMAGE",
+            "alias": "docker",
+        },
+    ]
+    assert job["variables"]["DOCKER_HOST"] == "tcp://docker:2375"
+    assert job["variables"]["DOCKER_TLS_CERTDIR"] == ""

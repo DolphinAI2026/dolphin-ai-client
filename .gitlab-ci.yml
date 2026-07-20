@@ -45,7 +45,8 @@ verify_builder:
 
 verify_tenant_public_id_dialects:
   stage: verify
-  privileged: true
+  # Prerequisite: the assigned Docker executor must enable privileged DinD
+  # in its GitLab Runner config.toml; this is not a job-level CI keyword.
   image:
     name: $BUILDER_DOCKER_CLI_IMAGE
     entrypoint: [""]

@@ -72,39 +72,84 @@ def _is_expected_public_id_column(column: dict[str, Any] | None) -> bool:
     return getattr(column.get("type"), "length", None) == 36
 
 
-def _is_duplicate_column_error(error: Exception) -> bool:
-    message = str(error).lower()
-    return "public_id" in message and (
-        "duplicate column" in message
-        or ("column" in message and "already exists" in message)
-    )
+def _error_chain(error: Exception) -> list[Any]:
+    errors: list[Any] = []
+    pending = [error]
+    seen: set[int] = set()
+    while pending:
+        current = pending.pop()
+        if current is None or id(current) in seen:
+            continue
+        seen.add(id(current))
+        errors.append(current)
+        pending.extend(
+            getattr(current, attribute, None)
+            for attribute in ("orig", "__cause__", "__context__")
+        )
+    return errors
 
 
-def _is_duplicate_index_error(error: Exception) -> bool:
-    message = str(error).lower()
-    return "ix_tenants_public_id" in message and (
-        "duplicate key name" in message
-        or ("index" in message and "already exists" in message)
-        or ("relation" in message and "already exists" in message)
-    )
+def _driver_error_code(error: Exception, *attributes: str) -> str | None:
+    for current in _error_chain(error):
+        for attribute in attributes:
+            value = getattr(current, attribute, None)
+            if value is not None:
+                return str(value)
+    return None
+
+
+def _is_duplicate_column_error(dialect_name: str, error: Exception) -> bool:
+    if dialect_name == "postgresql":
+        return _driver_error_code(error, "sqlstate", "pgcode") == "42701"
+    if dialect_name == "mysql":
+        return _driver_error_code(error, "errno") == "1060"
+    if dialect_name == "sqlite":
+        return "duplicate column name: public_id" in str(error).lower()
+    return False
+
+
+def _is_duplicate_index_error(dialect_name: str, error: Exception) -> bool:
+    if dialect_name == "postgresql":
+        return _driver_error_code(error, "sqlstate", "pgcode") == "42P07"
+    if dialect_name == "mysql":
+        return _driver_error_code(error, "errno") == "1061"
+    if dialect_name == "sqlite":
+        return "index ix_tenants_public_id already exists" in str(error).lower()
+    return False
+
+
+async def _execute_concurrent_ddl(conn: Any, statement: str) -> Exception | None:
+    if conn.dialect.name == "postgresql":
+        try:
+            async with conn.begin_nested():
+                await conn.execute(text(statement))
+        except Exception as exc:
+            return exc
+        return None
+
+    try:
+        await conn.execute(text(statement))
+    except Exception as exc:
+        return exc
+    return None
 
 
 async def _ensure_nullable_column(conn: Any) -> None:
     columns = await _tenant_columns(conn)
     public_id_column = columns.get("public_id")
     if public_id_column is None:
-        try:
-            await conn.execute(text(
-                "ALTER TABLE tenants ADD COLUMN public_id VARCHAR(36)"
-            ))
-        except Exception as exc:
-            if not _is_duplicate_column_error(exc):
-                raise
+        error = await _execute_concurrent_ddl(
+            conn,
+            "ALTER TABLE tenants ADD COLUMN public_id VARCHAR(36)",
+        )
+        if error is not None:
+            if not _is_duplicate_column_error(conn.dialect.name, error):
+                raise error
             if _is_expected_public_id_column(
                 (await _tenant_columns(conn)).get("public_id")
             ):
                 return
-            raise
+            raise error
         return
     if _is_expected_public_id_column(public_id_column):
         return
@@ -145,16 +190,16 @@ async def _has_unique_public_id_index(conn: Any) -> bool:
 async def _ensure_unique_index(conn: Any) -> None:
     if await _has_unique_public_id_index(conn):
         return
-    try:
-        await conn.execute(text(
-            "CREATE UNIQUE INDEX ix_tenants_public_id ON tenants(public_id)"
-        ))
-    except Exception as exc:
-        if not _is_duplicate_index_error(exc):
-            raise
+    error = await _execute_concurrent_ddl(
+        conn,
+        "CREATE UNIQUE INDEX ix_tenants_public_id ON tenants(public_id)",
+    )
+    if error is not None:
+        if not _is_duplicate_index_error(conn.dialect.name, error):
+            raise error
         if await _has_unique_public_id_index(conn):
             return
-        raise
+        raise error
 
 
 async def _tenant_public_id_rows(conn: Any) -> list[dict[str, Any]]:
@@ -209,6 +254,22 @@ def _analyze_tenant_public_id_rows(
     )
 
 
+def _result_from_analysis(
+    analysis: _TenantPublicIdAnalysis,
+    *,
+    scanned_count: int,
+    filled_count: int,
+) -> TenantPublicIdReconciliation:
+    return TenantPublicIdReconciliation(
+        scanned_count=scanned_count,
+        filled_count=filled_count,
+        null_count=len(analysis.null_tenant_ids),
+        null_tenant_ids=analysis.null_tenant_ids,
+        conflict_tenant_ids=analysis.conflict_tenant_ids,
+        invalid_tenant_ids=analysis.invalid_tenant_ids,
+    )
+
+
 async def _reconciliation_result(
     conn: Any,
     *,
@@ -216,13 +277,10 @@ async def _reconciliation_result(
     filled_count: int,
 ) -> TenantPublicIdReconciliation:
     analysis = _analyze_tenant_public_id_rows(await _tenant_public_id_rows(conn))
-    result = TenantPublicIdReconciliation(
+    result = _result_from_analysis(
+        analysis,
         scanned_count=scanned_count,
         filled_count=filled_count,
-        null_count=len(analysis.null_tenant_ids),
-        null_tenant_ids=analysis.null_tenant_ids,
-        conflict_tenant_ids=analysis.conflict_tenant_ids,
-        invalid_tenant_ids=analysis.invalid_tenant_ids,
     )
     if not (
         result.null_count
@@ -237,6 +295,13 @@ async def reconcile_tenant_public_ids(conn: Any) -> TenantPublicIdReconciliation
     await _ensure_nullable_column(conn)
     rows = await _tenant_public_id_rows(conn)
     analysis = _analyze_tenant_public_id_rows(rows)
+    if analysis.conflict_tenant_ids or analysis.invalid_tenant_ids:
+        return _result_from_analysis(
+            analysis,
+            scanned_count=len(rows),
+            filled_count=0,
+        )
+
     filled_count = 0
 
     for tenant_id in analysis.backfill_tenant_ids:
