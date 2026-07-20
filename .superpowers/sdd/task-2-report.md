@@ -4,7 +4,9 @@
 
 - `backend/app/engineering_sessions/service.py`
 - `backend/app/engineering_sessions/git_state.py`
+- `backend/app/engineering_sessions/models.py`
 - `backend/app/engineering_sessions/registry.py`
+- `backend/tests/test_engineering_sessions_models.py`
 - `backend/tests/test_engineering_sessions_service.py`
 - `.superpowers/sdd/task-2-report.md`
 
@@ -27,6 +29,16 @@
   branch 已删除时继续 prune。任何中间失败均保留 registry 记录，允许同一
   `dispose(session_id)` 重试。
 - dispose 全部成功后删除 registry 记录，避免留下仍声称可运行的 session。
+- merge abort 恢复失败新增向后兼容的持久化原因
+  `recovery_reason=merge_abort_failed`。当 control worktree 已由人工或外部清理、
+  不再存在 Git operation 时，`resume`、`sync` 或再次 `merge` 会只解除该特定
+  阻塞；其他来源的 `blocked_retained` 不会自动解除。
+- 带 `origin` 的 session 在 merge 后执行 `archive` 时，会继续使用
+  `merged_commit` 对本地 base branch 的祖先验证，保持 `merged_retained`。
+  `git_state.merged_to_base` 的远端优先语义未改变。
+- dispose 在目标 branch 存在 prunable worktree 管理记录时，先执行
+  `git worktree prune --expire now` 并重读 worktree 状态，再删除 branch。
+  prune 中途失败会保留 branch 与 registry，可用同一 `dispose(session_id)` 重试。
 - 未实现 Task 3-6。
 
 ## 新增与增强测试
@@ -38,6 +50,13 @@
   - 覆盖 abort 非零返回。
   - 覆盖 abort 直接抛出 Git 异常。
 - `test_dispose_retries_after_worktree_remove_succeeds_and_branch_delete_fails`
+- `test_engineering_session_recovery_reason_is_backward_compatible`
+- `test_merge_abort_failure_recovers_after_control_operation_is_cleared`
+- `test_manual_blocked_session_without_recovery_reason_stays_blocked`
+- `test_merge_with_origin_archive_stays_merged_and_can_dispose`
+- `test_dispose_prunes_missing_worktree_metadata_before_branch_delete`
+  - 覆盖首次 prune 成功。
+  - 覆盖首次 prune 失败后使用同一 session 重试成功。
 - 增强既有 dispose 成功测试，断言 registry 记录已删除。
 
 ## RED 证据
@@ -79,6 +98,42 @@ cd backend
 ```
 
 失败证明 `git merge --abort` 直接抛出异常时仍会绕过稳定错误码和阻塞持久化。
+
+第二轮 service 场景 RED：
+
+```bash
+cd backend
+.venv/bin/pytest tests/test_engineering_sessions_models.py::test_engineering_session_recovery_reason_is_backward_compatible tests/test_engineering_sessions_service.py -q -k 'merge_abort_failure_recovers_after_control_operation_is_cleared or manual_blocked_session_without_recovery_reason_stays_blocked or merge_with_origin_archive_stays_merged_and_can_dispose or dispose_prunes_missing_worktree_metadata_before_branch_delete'
+```
+
+输出：
+
+```text
+F.FFF
+4 failed, 1 passed, 174 deselected in 2.92s
+```
+
+失败分别证明：
+
+- abort 失败未持久化可识别的恢复原因。
+- origin merge 后 archive 错误降级为 `abandoned_retained`。
+- dispose 未在 branch delete 前处理 prunable worktree 管理记录。
+- prune 首次失败后的重试路径不可完成。
+
+第二轮模型兼容性 RED：
+
+```bash
+cd backend
+.venv/bin/pytest tests/test_engineering_sessions_models.py::test_engineering_session_recovery_reason_is_backward_compatible -q
+```
+
+输出：
+
+```text
+1 failed in 0.11s
+```
+
+失败证明旧 registry payload 加载后的 session 尚无向后兼容的恢复原因字段。
 
 ## GREEN 证据
 
@@ -134,6 +189,58 @@ cd backend
 2 passed, 12 deselected in 2.48s
 ```
 
+第二轮模型兼容性：
+
+```bash
+cd backend
+.venv/bin/pytest tests/test_engineering_sessions_models.py::test_engineering_session_recovery_reason_is_backward_compatible -q
+```
+
+输出：
+
+```text
+1 passed in 0.09s
+```
+
+第二轮新增 service 场景：
+
+```bash
+cd backend
+.venv/bin/pytest tests/test_engineering_sessions_service.py -q -k 'merge_abort_failure_recovers_after_control_operation_is_cleared or manual_blocked_session_without_recovery_reason_stays_blocked or merge_with_origin_archive_stays_merged_and_can_dispose or dispose_prunes_missing_worktree_metadata_before_branch_delete'
+```
+
+输出：
+
+```text
+5 passed, 173 deselected in 3.73s
+```
+
+第二轮 service 广泛回归：
+
+```bash
+cd backend
+.venv/bin/pytest tests/test_engineering_sessions_service.py -q -k 'blocked or merge or dispose or archive'
+```
+
+输出：
+
+```text
+53 passed, 125 deselected in 18.40s
+```
+
+第二轮 models 与 CLI 回归：
+
+```bash
+cd backend
+.venv/bin/pytest tests/test_engineering_sessions_models.py tests/test_engineering_sessions_cli.py -q
+```
+
+输出：
+
+```text
+20 passed in 8.50s
+```
+
 完整 Engineering Session 集合：
 
 ```bash
@@ -144,5 +251,5 @@ cd backend
 输出：
 
 ```text
-192 passed in 44.95s
+198 passed in 47.56s
 ```

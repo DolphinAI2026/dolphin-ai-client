@@ -179,7 +179,7 @@ class EngineeringSessionService:
 
     def resume(self, session_id: str) -> EngineeringSession:
         self._fetch_origin_or_raise()
-        with self.registry.transaction_lock():
+        with self.registry.transaction_lock(), self._git_mutation_lock():
             return self._resume_locked(session_id)
 
     def _create_locked(
@@ -255,6 +255,7 @@ class EngineeringSessionService:
     def _resume_locked(self, session_id: str) -> EngineeringSession:
         session = self.registry.load(session_id)
         self._sync_session(session)
+        self._recover_merge_abort_failure_locked(session)
         if (
             not session.git_state.missing_worktree
             and not session.git_state.base_missing
@@ -274,7 +275,7 @@ class EngineeringSessionService:
 
     def sync(self, session_id: str) -> EngineeringSession:
         self._fetch_origin_or_raise()
-        with self.registry.transaction_lock():
+        with self.registry.transaction_lock(), self._git_mutation_lock():
             return self._sync_and_save_locked(session_id)
 
     def sync_model(self, session: EngineeringSession) -> EngineeringSession:
@@ -456,7 +457,10 @@ class EngineeringSessionService:
                 ):
                     return session
 
-            if session.git_state.clean and session.git_state.merged_to_base:
+            if session.git_state.clean and (
+                session.git_state.merged_to_base
+                or self._merged_to_local_base(session)
+            ):
                 session.status = SessionStatus.MERGED_RETAINED
                 session.cleanup.suggested = True
             elif session.git_state.clean:
@@ -473,6 +477,7 @@ class EngineeringSessionService:
         with self.registry.transaction_lock(), self._git_mutation_lock():
             session = self.registry.load(session_id)
             self._sync_session(session)
+            self._recover_merge_abort_failure_locked(session)
             session = self.registry.save(session)
             self._require_mergeable_session(session)
             if git_operation_in_progress(self.repo_path):
@@ -517,6 +522,7 @@ class EngineeringSessionService:
                         ).strip()[:500]
                     if abort_exception is not None or abort_result.returncode != 0:
                         session.status = SessionStatus.BLOCKED_RETAINED
+                        session.recovery_reason = "merge_abort_failed"
                         session.cleanup.suggested = False
                         self.registry.save(session)
                         operation_error = EngineeringSessionOperationError(
@@ -555,7 +561,9 @@ class EngineeringSessionService:
             lifecycle_status = session.status
             if session.status == SessionStatus.BLOCKED_RETAINED:
                 raise ValueError("blocked session cannot be disposed")
-            worktrees = self._active_worktrees()
+            worktrees = self._worktrees_after_pruning_session_entries(
+                session.branch
+            )
             paths_by_branch = self._worktree_paths_by_branch(worktrees)
             actual_paths = paths_by_branch.get(session.branch, [])
             if len(actual_paths) > 1:
@@ -604,7 +612,13 @@ class EngineeringSessionService:
                     "-d",
                     session.branch,
                 )
-            git(self.repo_path, "worktree", "prune")
+            git(
+                self.repo_path,
+                "worktree",
+                "prune",
+                "--expire",
+                "now",
+            )
             self.registry.delete(session.id)
 
     def list(self, *, sync: bool = False) -> list[EngineeringSession]:
@@ -724,7 +738,26 @@ class EngineeringSessionService:
     def _sync_and_save_locked(self, session_id: str) -> EngineeringSession:
         session = self.registry.load(session_id)
         self._sync_session(session)
+        self._recover_merge_abort_failure_locked(session)
         return self.registry.save(session)
+
+    def _recover_merge_abort_failure_locked(
+        self,
+        session: EngineeringSession,
+    ) -> None:
+        if (
+            session.status != SessionStatus.BLOCKED_RETAINED
+            or session.recovery_reason != "merge_abort_failed"
+            or session.git_state.missing_worktree
+            or session.git_state.base_missing
+            or session.git_state.branch_mismatch
+            or session.git_state.worktree_ambiguous
+            or git_operation_in_progress(self.repo_path)
+        ):
+            return
+        session.status = SessionStatus.RUNNING
+        session.recovery_reason = None
+        session.cleanup.suggested = False
 
     def _merged_to_local_base(self, session: EngineeringSession) -> bool:
         if session.merged_commit is None:
@@ -1089,6 +1122,36 @@ class EngineeringSessionService:
         return {
             path: item
             for path, item in list_git_worktrees(self.repo_path).items()
+            if not item["prunable"]
+        }
+
+    def _worktrees_after_pruning_session_entries(
+        self,
+        branch: str,
+    ) -> dict[str, GitWorktreeEntry]:
+        worktrees = list_git_worktrees(self.repo_path)
+        if any(
+            item["prunable"] and item["branch"] == branch
+            for item in worktrees.values()
+        ):
+            git(
+                self.repo_path,
+                "worktree",
+                "prune",
+                "--expire",
+                "now",
+            )
+            worktrees = list_git_worktrees(self.repo_path)
+            if any(
+                item["prunable"] and item["branch"] == branch
+                for item in worktrees.values()
+            ):
+                raise GitCommandError(
+                    "git worktree prune left a prunable session worktree"
+                )
+        return {
+            path: item
+            for path, item in worktrees.items()
             if not item["prunable"]
         }
 

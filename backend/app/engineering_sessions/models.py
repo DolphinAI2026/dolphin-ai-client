@@ -56,6 +56,7 @@ SessionStatusValue: TypeAlias = Literal[
     "orphan_session",
     "ambiguous_worktree",
 ]
+RecoveryReasonValue: TypeAlias = Literal["merge_abort_failed"]
 
 
 class GitState(BaseModel):
@@ -134,6 +135,7 @@ class EngineeringSession(BaseModel):
     last_sync_at: datetime | None = None
     summary: str | None = None
     unavailable_lifecycle_status: SessionStatusValue | None = None
+    recovery_reason: RecoveryReasonValue | None = None
 
     @field_validator("id")
     @classmethod
