@@ -3,7 +3,7 @@ asset_kind: business-flow
 asset_id: business-flow.tenant-url-resolution
 knowledge_level: L3
 source_spec_ref: docs/superpowers/specs/2026-07-20-builder-tenant-url-public-uuid-design.md
-source_spec_hash: sha256:a535c11062500a4d7d88b0ba45bf25fc44dc2465012e2abefa356db7b26887b6
+source_spec_hash: sha256:8562ec25c1043cef7ce7038455fb01bc9de5d104951991156ab0571fb65638a2
 phase_id: 2026-07-20-builder-tenant-url-public-uuid
 revision: 1
 source_section_refs:
@@ -237,8 +237,10 @@ operations:
       - deploy/docker/Dockerfile
       - .gitlab-ci.yml::build_release_image
       - .gitlab-ci.yml::release_and_update_server
+      - .gitlab-ci.yml::release_builder_browser_smoke
       - scripts/deploy_online_latest_kubesphere.sh
       - scripts/verify_builder_tenant_url_smoke.sh
+      - package.json::devDependencies.playwright
     api_contract:
       status: covered
       evidence: /api/code/sessions create, activate, and delete use Builder Bearer
@@ -250,13 +252,13 @@ operations:
       evidence: existing Code session persistence contract is unchanged
     test_contract:
       status: covered
-      evidence: self-contained Chromium/Edge fixture and post-rollout Edge smoke
+      evidence: root Playwright owner, self-building Chromium/Edge fixture and dependent Edge smoke job
     rollback_contract:
       status: covered
       evidence: single historical image rollback retains nullable UUID column and values
     audit_contract:
       status: covered
-      evidence: CI SHA meta, per-Pod image/imageID, reconciliation and 49a4bef4 ancestry
+      evidence: CI SHA meta, immutable digest, backend/init imageID equality, per-Pod web meta, reconciliation and 49a4bef4 ancestry
 ```
 
 ## 决策依据/Rationale

@@ -2,7 +2,7 @@ kind: sandbox-builder-asset-index
 schema_version: v1
 current_phase_id: 2026-07-20-builder-tenant-url-public-uuid
 source_spec_ref: docs/superpowers/specs/2026-07-20-builder-tenant-url-public-uuid-design.md
-source_spec_hash: sha256:a535c11062500a4d7d88b0ba45bf25fc44dc2465012e2abefa356db7b26887b6
+source_spec_hash: sha256:8562ec25c1043cef7ce7038455fb01bc9de5d104951991156ab0571fb65638a2
 generator:
   provider: agentic-coding
   version: v1
@@ -15,7 +15,7 @@ assets:
     change_type: added
     status: ready_for_review
     source_spec_ref: docs/superpowers/specs/2026-07-20-builder-tenant-url-public-uuid-design.md
-    source_spec_hash: sha256:a535c11062500a4d7d88b0ba45bf25fc44dc2465012e2abefa356db7b26887b6
+    source_spec_hash: sha256:8562ec25c1043cef7ce7038455fb01bc9de5d104951991156ab0571fb65638a2
     source_section_refs:
       - "6. API 契约"
       - "8. 登录与多租户选择"
@@ -29,7 +29,7 @@ assets:
     change_type: added
     status: ready_for_review
     source_spec_ref: docs/superpowers/specs/2026-07-20-builder-tenant-url-public-uuid-design.md
-    source_spec_hash: sha256:a535c11062500a4d7d88b0ba45bf25fc44dc2465012e2abefa356db7b26887b6
+    source_spec_hash: sha256:8562ec25c1043cef7ce7038455fb01bc9de5d104951991156ab0571fb65638a2
     source_section_refs:
       - "10. Code 深链接与运行时"
       - "15. 兼容、发布与回滚"
@@ -44,7 +44,7 @@ assets:
     change_type: added
     status: ready_for_review
     source_spec_ref: docs/superpowers/specs/2026-07-20-builder-tenant-url-public-uuid-design.md
-    source_spec_hash: sha256:a535c11062500a4d7d88b0ba45bf25fc44dc2465012e2abefa356db7b26887b6
+    source_spec_hash: sha256:8562ec25c1043cef7ce7038455fb01bc9de5d104951991156ab0571fb65638a2
     source_section_refs:
       - "5. 数据模型"
       - "6. API 契约"
@@ -64,7 +64,7 @@ assets:
     change_type: added
     status: ready_for_review
     source_spec_ref: docs/superpowers/specs/2026-07-20-builder-tenant-url-public-uuid-design.md
-    source_spec_hash: sha256:a535c11062500a4d7d88b0ba45bf25fc44dc2465012e2abefa356db7b26887b6
+    source_spec_hash: sha256:8562ec25c1043cef7ce7038455fb01bc9de5d104951991156ab0571fb65638a2
     source_section_refs:
       - "7. 前端 URL 状态机"
       - "8. 登录与多租户选择"
@@ -80,7 +80,7 @@ assets:
     change_type: added
     status: ready_for_review
     source_spec_ref: docs/superpowers/specs/2026-07-20-builder-tenant-url-public-uuid-design.md
-    source_spec_hash: sha256:a535c11062500a4d7d88b0ba45bf25fc44dc2465012e2abefa356db7b26887b6
+    source_spec_hash: sha256:8562ec25c1043cef7ce7038455fb01bc9de5d104951991156ab0571fb65638a2
     source_section_refs:
       - "Builder 租户 URL 公共 UUID 设计"
     summary: "登记当前 phase source Spec。"

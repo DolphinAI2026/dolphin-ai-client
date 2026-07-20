@@ -180,7 +180,7 @@ documents:
 - path: docs/superpowers/specs/2026-07-20-builder-tenant-url-public-uuid-design.md
   document_kind: unknown-markdown
   classification: managed-by-asset-index
-  content_hash: sha256:a535c11062500a4d7d88b0ba45bf25fc44dc2465012e2abefa356db7b26887b6
+  content_hash: sha256:8562ec25c1043cef7ce7038455fb01bc9de5d104951991156ab0571fb65638a2
   normalization:
     status: not_requested
   git:

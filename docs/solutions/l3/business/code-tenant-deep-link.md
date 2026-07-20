@@ -3,7 +3,7 @@ asset_kind: page-interaction
 asset_id: page-interaction.code-tenant-deep-link
 knowledge_level: L3
 source_spec_ref: docs/superpowers/specs/2026-07-20-builder-tenant-url-public-uuid-design.md
-source_spec_hash: sha256:a535c11062500a4d7d88b0ba45bf25fc44dc2465012e2abefa356db7b26887b6
+source_spec_hash: sha256:8562ec25c1043cef7ce7038455fb01bc9de5d104951991156ab0571fb65638a2
 phase_id: 2026-07-20-builder-tenant-url-public-uuid
 revision: 1
 source_section_refs:
@@ -73,9 +73,17 @@ build_proof:
   required_ancestor_commit: 49a4bef4
   source: CI_COMMIT_SHA-through-docker-build-arg
   deployment_model: single-image-backend-and-frontend-dist
+  immutable_image_identity: repository-at-sha256-digest
+  pod_evidence:
+    - backend-image-id-equals-buildkit-digest
+    - dist-init-image-id-equals-backend-image-id
+    - web-sidecar-build-sha-equals-deployed-revision
   release_owner:
     - .gitlab-ci.yml
     - scripts/deploy_online_latest_kubesphere.sh
+  release_jobs:
+    deploy: release_and_update_server
+    browser_gate: release_builder_browser_smoke
   browser_acceptance_channel: msedge
 ```
 

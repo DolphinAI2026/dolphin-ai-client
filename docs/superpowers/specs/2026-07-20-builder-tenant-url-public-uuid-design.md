@@ -492,12 +492,15 @@ Code runtime 诊断和 `/code/internal/sandbox-auth-metrics`，不得建立平�
 现有镜像同时包含后端和 `frontend/dist`，本 phase 不虚构前后端两阶段发布。发布 owner
 保持 `.gitlab-ci.yml`、`scripts/deploy_online_latest_kubesphere.sh` 和现有 StatefulSet：
 
-1. CI 用 `CI_COMMIT_SHA` 作为 `VITE_BUILD_SHA` Docker build arg 构建一个镜像。
+1. CI 用 `CI_COMMIT_SHA` 作为 `VITE_BUILD_SHA` Docker build arg 构建一个镜像，并从
+   BuildKit metadata 解析内容 digest；后续部署固定使用
+   `<repository>@sha256:<digest>`，不使用可变 tag 作为发布身份。
 2. 同一镜像同时更新 backend container 与 `copy-frontend-dist` initContainer。
 3. 滚动期间保持 API 向后兼容：旧前端忽略新增 UUID；新前端仍消费旧有 `Token` switch
    响应。若命中旧后端而 `/auth/me` 缺 UUID，新前端失败关闭并提示稍后重试。
-4. rollout 完成后，现有发布脚本调用共享 smoke helper；逐 Pod 断言 Ready、两个容器
-   使用预期镜像/imageID，并确认旧 Pod 为零。
+4. rollout 完成后，现有发布脚本完成部署 job；依赖该 job 的 browser-smoke job 调用
+   共享 smoke helper。逐 Pod 断言 Ready、backend 与 dist initContainer 使用同一预期
+   digest，并确认旧 Pod 为零。
 5. 在一个新 Pod 内执行租户 UUID reconciliation CLI，断言 `NULL=0`、UUID 合法唯一。
 6. 公网读取 `builder-build-sha`，确认等于部署 commit 且祖先包含 `49a4bef4`。
 7. 使用受控测试账号执行登录、切租户、分享链接和 Code 首开验证。
@@ -600,13 +603,17 @@ npm run build
 
 ### 16.3 浏览器 E2E
 
-新增 `tests/e2e/builder-tenant-url-public-uuid-fixture.sh` 和
+根 `package.json` 是所有 `tests/e2e/*.mjs` 的唯一 Playwright package owner，版本固定为
+`1.61.1`；移除 `frontend/package.json` 中重复的 Playwright dependency。新增
+`tests/e2e/builder-tenant-url-public-uuid-fixture.sh` 和
 `tests/e2e/builder-tenant-url-public-uuid.spec.mjs`。fixture 必须复用
 `builder-sandbox-auth-renewal-fixture.sh` 的自包含模式：
 
 - 创建临时 SQLite 数据库、当前租户、可访问目标租户、停用租户、无权 UUID、管理员
   用户、Code session 和 Agent session。
-- 在随机空闲端口启动后端与构建后的前端入口，等待 health/content ready。
+- 强制执行 `npm --prefix frontend run build`，断言
+  `frontend/dist/index.html` 存在且包含非空 `builder-build-sha` meta，再在随机空闲端口
+  启动后端与构建后的前端入口并等待 health/content ready。
 - 通过环境变量把 Builder base URL、fixture ID 和浏览器 channel 传给 `.mjs`。
 - trap 关闭子进程并删除临时数据库、日志和 profile；失败时输出脱敏后的后端、前端和
   Playwright 日志路径。
@@ -637,16 +644,27 @@ npm run build
 固定命令：
 
 ```bash
-cd frontend
 npm ci
+npm --prefix frontend ci
+npm --prefix frontend run build
 npm exec -- playwright install chromium msedge
-cd ..
+test -f frontend/dist/index.html
+test -f tests/e2e/builder-tenant-url-public-uuid-fixture.sh
+test -f tests/e2e/builder-tenant-url-public-uuid.spec.mjs
 PLAYWRIGHT_BROWSERS_PATH="${PLAYWRIGHT_BROWSERS_PATH:-$HOME/.cache/ms-playwright}" \
 BROWSER_CHANNEL=chromium \
 bash tests/e2e/builder-tenant-url-public-uuid-fixture.sh
 PLAYWRIGHT_BROWSERS_PATH="${PLAYWRIGHT_BROWSERS_PATH:-$HOME/.cache/ms-playwright}" \
 BROWSER_CHANNEL=msedge \
 bash tests/e2e/builder-tenant-url-public-uuid-fixture.sh
+```
+
+fixture 即使被单独调用，也必须检查根和 frontend 依赖、重新构建 frontend 并校验 dist，
+不能依赖调用者恰好先执行了 build。根安装与 frontend 安装分别固定为：
+
+```bash
+npm ci
+npm --prefix frontend ci
 ```
 
 若浏览器 executable 缺失，先执行上述 Playwright install；下载仍失败时发布阻塞，并
@@ -656,8 +674,10 @@ bash tests/e2e/builder-tenant-url-public-uuid-fixture.sh
 ### 16.4 现有发布入口与线上 smoke
 
 实现交付共享 helper `scripts/verify_builder_tenant_url_smoke.sh`，但它不是平行发布入口。
-`.gitlab-ci.yml` 的 `release_and_update_server` 和
-`scripts/deploy_online_latest_kubesphere.sh` 在现有 `rollout status` 成功后调用它。
+`scripts/deploy_online_latest_kubesphere.sh` 在交互式发布时调用它；GitLab CI 中
+`release_and_update_server` 只负责 kubectl rollout，新增
+`release_builder_browser_smoke` 以 `needs: [release_and_update_server]` 调用 helper，
+只有 browser-smoke 成功才把整条 release pipeline 视为完成。
 
 CI 构建链固定增加：
 
@@ -666,11 +686,21 @@ CI_COMMIT_SHA
   -> buildctl build-arg VITE_BUILD_SHA
   -> deploy/docker/Dockerfile ARG/ENV
   -> frontend/index.html builder-build-sha meta
+buildctl --metadata-file
+  -> containerimage.digest
+  -> BUILDER_IMAGE=<repository>@sha256:<digest>
+  -> StatefulSet backend + copy-frontend-dist
 ```
+
+`release_builder_browser_smoke` 使用包含 Node 20 与 Playwright `1.61.1` 的固定浏览器镜像，
+安装或携带固定 `kubectl 1.30.7`，执行根 `npm ci` 和
+`npm exec -- playwright install msedge`。kubectl-only 的 release job 不承担浏览器
+安装。浏览器 job 缺 Edge、Node、根 Playwright 依赖或 kubectl 时失败关闭。
 
 共享 helper 的固定输入是 `BUILDER_ORIGIN`、`DEPLOYED_REVISION`、`BUILDER_IMAGE`、
 `KUBE_NAMESPACE`、`KUBE_LABEL_SELECTOR`、`KUBE_BACKEND_CONTAINER`、
-`KUBE_DIST_INIT_CONTAINER`、`BUILDER_SMOKE_USERNAME`、`BUILDER_SMOKE_PASSWORD`、
+`KUBE_DIST_INIT_CONTAINER`、`KUBE_WEB_CONTAINER`、`BUILDER_SMOKE_USERNAME`、
+`BUILDER_SMOKE_PASSWORD`、
 `BUILDER_SMOKE_TENANT_NAME`、`BUILDER_SMOKE_CODE_SESSION_ID` 和可选
 `BUILDER_SMOKE_AGENT_ID`。密码只进入 stdin/header，不写 stdout、stderr、参数列表或
 临时文件。
@@ -681,8 +711,11 @@ helper 必须：
    `DEPLOYED_REVISION`，并执行
    `git merge-base --is-ancestor 49a4bef4 "$DEPLOYED_REVISION"`。
 2. 枚举 selector 命中的全部 Pod，数量大于零；逐个断言 Ready、StatefulSet rollout
-   revision 一致、backend 与 dist initContainer 的 image 等于 `BUILDER_IMAGE`，运行中
-   backend container 的 imageID 非空且所有 Pod 一致。
+   revision 一致、backend 与 dist initContainer 的 image 等于 digest 形式的
+   `BUILDER_IMAGE`。读取
+   `status.containerStatuses[backend].imageID` 和
+   `status.initContainerStatuses[copy-frontend-dist].imageID`，归一化后必须非空、互相
+   相等、等于 BuildKit 输出 digest，且所有 Pod 一致。
 3. 在一个 Ready 新 Pod 内执行
    `python -m app.tenant_public_id reconcile --verify-only-after-write`，输出仅含扫描数、
    补齐数、空值数和冲突数字 ID；断言空值和冲突均为零。
@@ -691,11 +724,15 @@ helper 必须：
    `/auth/me` 必须返回合法 `tenant_public_id`，`/auth/me/tenants` 每项 UUID 非空。
 5. 从另一个可访问租户调用现有 `/auth/switch-tenant`，使用候选 token 显式调用
    `/auth/me`，断言目标 UUID 后再进行浏览器 smoke；不得把候选 token 写入日志。
-6. 用 Edge channel 打开
+6. 对每个 Pod 使用
+   `kubectl exec -c "$KUBE_WEB_CONTAINER" -- wget -qO- http://127.0.0.1/ai-builder/`
+   读取该 Pod web sidecar 实际提供的 HTML；唯一 `builder-build-sha` 必须等于
+   `DEPLOYED_REVISION`。公网 Ingress meta 检查只作为补充，不替代逐 Pod 检查。
+7. 用 Edge channel 打开
    `/ai-builder/code/<session>?tenantId=<uuid>&agent=<agent>`，断言 URL 保留 tenantId、
    首次 activate 只调用 `/api/code/sessions/.../activate`、不调用
    `/api/code-runtime/.../activate`，且无 `Code runtime token required` 或 401。
-7. 采样本次 rollout 后端日志，断言不包含测试密码、Authorization、JWT 或 Cookie。
+8. 采样本次 rollout 后端日志，断言不包含测试密码、Authorization、JWT 或 Cookie。
 
 任何输入缺失、Pod/image/revision 不一致、reconciliation 非零、登录/切换失败、Edge
 不可用或 Code 深链接断言失败都返回非零，并使现有发布 job 失败。
@@ -748,6 +785,8 @@ helper 必须：
 - `deploy/docker/Dockerfile`、`.gitlab-ci.yml` 和
   `scripts/deploy_online_latest_kubesphere.sh` 是构建与发布 owner；共享 smoke helper
   只能由这些入口调用。
+- 根 `package.json`/`package-lock.json` 是 E2E Playwright 唯一依赖 owner；frontend
+  package 只拥有 Vue/Vitest 构建与单元测试依赖。
 
 与 `2026-07-18-builder-fast-auth-multi-sandbox-cache-design.md` 的边界：
 
