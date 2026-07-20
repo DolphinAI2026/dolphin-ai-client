@@ -93,8 +93,25 @@ def _driver_error_code(error: Exception, *attributes: str) -> str | None:
     for current in _error_chain(error):
         for attribute in attributes:
             value = getattr(current, attribute, None)
-            if value is not None:
+            if attribute == "errno":
+                code = _normalise_driver_error_code(value)
+                if code is not None:
+                    return code
+            elif value is not None:
                 return str(value)
+        if "errno" in attributes:
+            args = getattr(current, "args", ())
+            code = _normalise_driver_error_code(args[0] if args else None)
+            if code is not None:
+                return code
+    return None
+
+
+def _normalise_driver_error_code(value: Any) -> str | None:
+    if isinstance(value, int) and not isinstance(value, bool):
+        return str(value)
+    if isinstance(value, str) and value.isdigit():
+        return value
     return None
 
 

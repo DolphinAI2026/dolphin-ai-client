@@ -6,10 +6,17 @@ from uuid import UUID
 
 import pytest
 import yaml
+from sqlalchemy.exc import DBAPIError
 
 from app.models.tenant import Tenant
 from app import tenant_public_id
 from app.tenant_public_id import historical_tenant_public_id, new_tenant_public_id
+
+try:
+    from pymysql.err import OperationalError as MySqlOperationalError
+except ImportError:
+    class MySqlOperationalError(Exception):
+        pass
 
 
 def test_new_tenant_public_id_is_uuid4():
@@ -115,18 +122,6 @@ def test_dialect_runner_selects_reachable_host_for_local_docker_and_dind():
             True,
         ),
         (
-            "mysql",
-            SimpleNamespace(orig=SimpleNamespace(errno=1060)),
-            True,
-            False,
-        ),
-        (
-            "mysql",
-            SimpleNamespace(orig=SimpleNamespace(errno=1061)),
-            False,
-            True,
-        ),
-        (
             "sqlite",
             RuntimeError("duplicate column name: public_id"),
             True,
@@ -154,6 +149,67 @@ def test_duplicate_ddl_errors_use_dialect_driver_codes_before_sqlite_fallback(
         tenant_public_id._is_duplicate_index_error(dialect_name, error)
         is index_duplicate
     )
+
+
+@pytest.mark.parametrize(
+    ("code", "column_duplicate", "index_duplicate"),
+    [
+        (1060, True, False),
+        ("1060", True, False),
+        (1061, False, True),
+        ("1061", False, True),
+    ],
+)
+def test_mysql_duplicate_ddl_errors_read_dbapi_args_through_sqlalchemy_orig(
+    code,
+    column_duplicate,
+    index_duplicate,
+):
+    error = DBAPIError.instance(
+        "ALTER TABLE tenants ADD COLUMN public_id VARCHAR(36)",
+        {},
+        MySqlOperationalError(code, "driver message"),
+        Exception,
+    )
+
+    assert (
+        tenant_public_id._is_duplicate_column_error("mysql", error)
+        is column_duplicate
+    )
+    assert (
+        tenant_public_id._is_duplicate_index_error("mysql", error)
+        is index_duplicate
+    )
+
+
+@pytest.mark.parametrize(
+    "code",
+    [
+        1060.0,
+        " 1060",
+        "1060 ",
+        "1060x",
+        b"1060",
+        None,
+    ],
+)
+def test_mysql_duplicate_ddl_errors_reject_non_integer_or_non_numeric_args(code):
+    error = DBAPIError.instance(
+        "ALTER TABLE tenants ADD COLUMN public_id VARCHAR(36)",
+        {},
+        MySqlOperationalError(code, "driver message"),
+        Exception,
+    )
+
+    assert not tenant_public_id._is_duplicate_column_error("mysql", error)
+    assert not tenant_public_id._is_duplicate_index_error("mysql", error)
+
+
+def test_mysql_duplicate_ddl_errors_keep_errno_compatibility():
+    error = SimpleNamespace(orig=SimpleNamespace(errno=1060))
+
+    assert tenant_public_id._is_duplicate_column_error("mysql", error)
+    assert not tenant_public_id._is_duplicate_index_error("mysql", error)
 
 
 def test_duplicate_ddl_message_fallback_is_limited_to_sqlite():
