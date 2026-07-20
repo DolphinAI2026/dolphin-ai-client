@@ -153,9 +153,22 @@ class EngineeringSessionService:
 
         self._fetch_origin_or_raise()
         with self.registry.transaction_lock(), self._git_mutation_lock():
+            sessions = self.registry.list()
+            if (
+                self.registry.last_read_errors
+                or self.registry.last_unreadable_ids
+            ):
+                unreadable = ", ".join(
+                    sorted(self.registry.last_unreadable_ids)
+                )
+                detail = "; ".join(self.registry.last_read_errors)
+                raise SessionRegistryError(
+                    "cannot ensure application session while registry "
+                    f"records are unreadable: {unreadable or detail}"
+                )
             matches = [
                 session
-                for session in self.registry.list()
+                for session in sessions
                 if session.application_id == normalized
                 and session.status
                 not in {
@@ -760,18 +773,29 @@ class EngineeringSessionService:
         session.cleanup.suggested = False
 
     def _merged_to_local_base(self, session: EngineeringSession) -> bool:
-        if session.merged_commit is None:
-            return False
         local_base_ref = f"refs/heads/{session.base_branch}"
         if not has_ref(self.repo_path, local_base_ref):
             return False
         branch_ref = f"refs/heads/{session.branch}"
         if has_ref(self.repo_path, branch_ref):
+            if (
+                session.base_commit is not None
+                and has_ref(self.repo_path, session.base_commit)
+            ):
+                ahead, _ = ahead_behind(
+                    self.repo_path,
+                    session.base_commit,
+                    branch_ref,
+                )
+                if ahead == 0:
+                    return False
             return merged_to_base(
                 self.repo_path,
                 local_base_ref,
                 branch_ref,
             )
+        if session.merged_commit is None:
+            return False
         if not has_ref(
             self.repo_path,
             session.merged_commit,

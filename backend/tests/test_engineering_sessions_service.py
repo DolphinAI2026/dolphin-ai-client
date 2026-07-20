@@ -16,7 +16,7 @@ import app.engineering_sessions.git_state as engineering_session_git_state
 import app.engineering_sessions.service as engineering_session_service
 from app.engineering_sessions.git_state import GitCommandError
 from app.engineering_sessions.models import SessionStatus, SessionType
-from app.engineering_sessions.registry import SessionRegistry
+from app.engineering_sessions.registry import SessionRegistry, SessionRegistryError
 from app.engineering_sessions.service import (
     EngineeringSessionOperationError,
     EngineeringSessionService,
@@ -175,6 +175,24 @@ def test_ensure_application_session_rejects_blank_application_id(tmp_path: Path)
 
     with pytest.raises(ValueError, match="application_id must not be blank"):
         service.ensure_application_session("  ", "App One")
+
+
+def test_ensure_application_session_fails_closed_for_unreadable_registry(
+    tmp_path: Path,
+):
+    repo = make_repo(tmp_path)
+    service = make_service(tmp_path, repo)
+    assert service.registry.list() == []
+    corrupt_record = service.registry.root / "S-001.yaml"
+    corrupt_record.write_text("id: [broken\n", encoding="utf-8")
+    worktrees_before = run_git(repo, "worktree", "list", "--porcelain")
+
+    with pytest.raises(SessionRegistryError):
+        service.ensure_application_session("app-1", "App One")
+
+    assert run_git(repo, "worktree", "list", "--porcelain") == worktrees_before
+    assert corrupt_record.read_text(encoding="utf-8") == "id: [broken\n"
+    assert run_git(repo, "branch", "--list", "session/*") == ""
 
 
 def test_merge_keeps_worktree_and_marks_merged_retained(tmp_path: Path):
@@ -423,6 +441,56 @@ def test_merge_with_origin_archive_stays_merged_and_can_dispose(
     assert not worktree.exists()
     assert run_git(repo, "branch", "--list", session.branch) == ""
     assert not service.registry.path_for(session.id).exists()
+
+
+@pytest.mark.parametrize("merged_commit_mode", ["missing", "null"])
+def test_origin_merge_recovers_without_persisted_merged_commit(
+    tmp_path: Path,
+    merged_commit_mode: str,
+):
+    repo = make_repo(tmp_path)
+    add_origin(repo, tmp_path)
+    service = make_service(tmp_path, repo)
+    session = service.ensure_application_session("app-1", "App One")
+    worktree = Path(session.worktree_path)
+    (worktree / "feature.txt").write_text("done\n", encoding="utf-8")
+    assert service.checkpoint(session.id) is True
+    service.merge(session.id)
+    record = service.registry.path_for(session.id)
+
+    def clear_merged_commit(status: str) -> None:
+        payload = yaml.safe_load(record.read_text(encoding="utf-8"))
+        if merged_commit_mode == "missing":
+            payload.pop("merged_commit", None)
+        else:
+            payload["merged_commit"] = None
+        payload["status"] = status
+        payload["cleanup"]["suggested"] = False
+        record.write_text(
+            yaml.safe_dump(payload, allow_unicode=True, sort_keys=False),
+            encoding="utf-8",
+        )
+
+    clear_merged_commit(SessionStatus.RUNNING.value)
+    synced = service.sync(session.id)
+
+    assert synced.status == SessionStatus.MERGED_RETAINED
+    assert synced.merged_commit is None
+    assert synced.git_state.merged_to_base is False
+
+    clear_merged_commit(SessionStatus.RUNNING.value)
+    archived = service.archive(session.id)
+
+    assert archived.status == SessionStatus.MERGED_RETAINED
+    assert archived.merged_commit is None
+    assert archived.git_state.merged_to_base is False
+
+    clear_merged_commit(SessionStatus.MERGED_RETAINED.value)
+    service.dispose(session.id)
+
+    assert not worktree.exists()
+    assert run_git(repo, "branch", "--list", session.branch) == ""
+    assert not record.exists()
 
 
 def test_dispose_refuses_dirty_or_unmerged_session(tmp_path: Path):

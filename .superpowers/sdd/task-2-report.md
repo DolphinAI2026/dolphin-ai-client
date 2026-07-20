@@ -39,6 +39,13 @@
 - dispose 在目标 branch 存在 prunable worktree 管理记录时，先执行
   `git worktree prune --expire now` 并重读 worktree 状态，再删除 branch。
   prune 中途失败会保留 branch 与 registry，可用同一 `dispose(session_id)` 重试。
+- 本地 base 与 session branch 都存在时，生命周期恢复直接检查 branch 是否已成为
+  本地 base 的祖先，不再要求 `merged_commit` 已持久化。为避免把尚无 session
+  提交的新建 branch 误判为已合并，存在有效 `base_commit` 时还要求 branch 相对
+  该提交确有新增提交。branch 已删除时仍使用 `merged_commit` 回退。
+- `ensure_application_session` 在 registry 列表读取出现任何
+  `last_read_errors` 或 `last_unreadable_ids` 时 fail closed，并在创建 session、
+  branch 或 worktree 前抛出 `SessionRegistryError`。
 - 未实现 Task 3-6。
 
 ## 新增与增强测试
@@ -57,6 +64,11 @@
 - `test_dispose_prunes_missing_worktree_metadata_before_branch_delete`
   - 覆盖首次 prune 成功。
   - 覆盖首次 prune 失败后使用同一 session 重试成功。
+- `test_ensure_application_session_fails_closed_for_unreadable_registry`
+- `test_origin_merge_recovers_without_persisted_merged_commit`
+  - 覆盖 registry 中 `merged_commit` 字段缺失。
+  - 覆盖 registry 中 `merged_commit: null`。
+  - 依次覆盖 `sync`、`archive` 与 `dispose`。
 - 增强既有 dispose 成功测试，断言 registry 记录已删除。
 
 ## RED 证据
@@ -134,6 +146,28 @@ cd backend
 ```
 
 失败证明旧 registry payload 加载后的 session 尚无向后兼容的恢复原因字段。
+
+第三轮有效 RED：
+
+```bash
+cd backend
+.venv/bin/pytest tests/test_engineering_sessions_service.py -q -k 'ensure_application_session_fails_closed_for_unreadable_registry or origin_merge_recovers_without_persisted_merged_commit'
+```
+
+输出：
+
+```text
+FFF
+3 failed, 178 deselected in 2.21s
+```
+
+失败分别证明：
+
+- 损坏 registry 记录存在时，`ensure_application_session` 未抛错并继续创建。
+- 带 origin 的本地 merge 在 `merged_commit` 字段缺失时，`sync` 保持
+  `running`。
+- 带 origin 的本地 merge 在 `merged_commit: null` 时，`sync` 保持
+  `running`。
 
 ## GREEN 证据
 
@@ -241,6 +275,45 @@ cd backend
 20 passed in 8.50s
 ```
 
+第三轮新增场景：
+
+```bash
+cd backend
+.venv/bin/pytest tests/test_engineering_sessions_service.py -q -k 'ensure_application_session_fails_closed_for_unreadable_registry or origin_merge_recovers_without_persisted_merged_commit'
+```
+
+输出：
+
+```text
+3 passed, 178 deselected in 1.80s
+```
+
+第三轮既有 ensure 生命周期回归：
+
+```bash
+cd backend
+.venv/bin/pytest tests/test_engineering_sessions_service.py -q -k 'ensure_application_session_reuses_the_same_worktree or ensure_application_session_is_unique_across_concurrent_services or ensure_application_session_rejects_duplicate_active_ownership'
+```
+
+输出：
+
+```text
+3 passed, 178 deselected in 0.96s
+```
+
+第三轮 Task 2 聚焦回归：
+
+```bash
+cd backend
+.venv/bin/pytest tests/test_engineering_sessions_service.py -q -k 'ensure_application_session or merge_with_origin or origin_merge_recovers_without_persisted_merged_commit or archive or dispose'
+```
+
+输出：
+
+```text
+31 passed, 150 deselected in 10.66s
+```
+
 完整 Engineering Session 集合：
 
 ```bash
@@ -251,5 +324,5 @@ cd backend
 输出：
 
 ```text
-198 passed in 47.56s
+201 passed in 51.73s
 ```
