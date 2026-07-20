@@ -35,18 +35,20 @@
 | `rustc --test src-tauri/src/local_runtime/mxc_driver.rs ... && /tmp/task-1-mxc-driver-test --exact tests::linux_probe_reports_bubblewrap_or_a_blocking_reason` | 成功，1 个测试通过；该测试链接真实 `mxc_sdk::platform_support()`。 |
 | `rustfmt --edition 2021 --check src-tauri/src/local_runtime/mod.rs src-tauri/src/local_runtime/mxc_driver.rs` | 成功。 |
 | `git diff --check` | 成功。 |
-| `cargo check --manifest-path src-tauri/Cargo.toml` | 被环境阻断：缺少 `pkg-config` 和 `libdbus-1-dev`，Tauri Linux 依赖在 `libdbus-sys` 构建阶段失败。 |
-| `cargo test --manifest-path src-tauri/Cargo.toml local_runtime::mxc_driver::tests::linux_probe_reports_bubblewrap_or_a_blocking_reason` | 被同一系统依赖阻断，尚未进入 app crate 的测试编译。 |
+| `podman exec orcamatrix-tauri-ci sh -lc 'export PATH=/root/.cargo/bin:$PATH; rustc --version; cargo test --manifest-path src-tauri/Cargo.toml local_runtime::mxc_driver::tests::linux_probe_reports_bubblewrap_or_a_blocking_reason'` | 成功，持久验证容器中的完整 app crate 测试编译和目标测试均完成；Rust 1.93.1，1 个测试通过、0 个失败，输出无 warning。 |
+
+## 审查修复
+
+- 将 `src-tauri/src/lib.rs` 中的 `local_runtime` 声明调整为 `pub mod local_runtime;`，让
+  Task 1 已定义的 `local_runtime::mxc_driver::probe()` 公共接口保持明确可见；未加入假调用、
+  crate 级 `allow` 或 Task 4 逻辑。
+- `orcamatrix-tauri-ci` 是当前的持久 app crate 验证容器；其中的
+  `src-tauri/binaries/ruijing-sidecar-x86_64-unknown-linux-gnu` 仅为 gitignored 的编译期
+  sidecar 验收占位，不属于 Task 1 产物，也不再构成当前未解决的系统依赖阻塞。
 
 ## 提交
 
 - 实现提交：`fa9d598d517d97cc50b5e2fcc22d22e0f8361fe6`
 - 提交信息：`feat: add local MXC runtime probe`
-
-## 遗留关注点
-
-- 当前宿主机没有 `pkg-config`、`libdbus-1-dev` 以及 Tauri 所需的 GTK/WebKit
-  开发依赖，且没有免密 sudo；因此完整 app crate 的 `cargo check`/`cargo test`
-  无法在本环境完成。未修改系统依赖、未降级依赖，也未绕过真实 Tauri 构建链路。
 - `mxc_version` 当前反映锁定的 `mxc-sdk 0.7.0`；后续升级 MXC revision 时应同步更新
   该值及对应测试/兼容性验证。
