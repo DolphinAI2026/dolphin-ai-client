@@ -90,7 +90,8 @@ run_dialect() {
 
   TENANT_PUBLIC_ID_TEST_DATABASE_URL="$database_url" \
     python -m pytest -q \
-      tests/test_tenant_public_id_migration.py::test_reconcile_runs_against_configured_sql_dialect
+      tests/test_tenant_public_id_migration.py::test_reconcile_runs_against_configured_sql_dialect \
+      tests/test_tenant_public_id_migration.py::test_ensure_tenant_public_id_concurrently_reads_current_value_on_configured_sql_dialect
   prepare_cli_legacy_table "$database_url"
   DATABASE_URL="$database_url" \
     python -m app.tenant_public_id reconcile --verify-only-after-write

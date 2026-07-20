@@ -1,13 +1,14 @@
 """Tenant public UUID authentication projections."""
 from __future__ import annotations
 
+import importlib
 from types import SimpleNamespace
 
 import pytest
 import pytest_asyncio
 from fastapi import FastAPI, HTTPException
 from httpx import ASGITransport, AsyncClient
-from sqlalchemy import select
+from sqlalchemy import event, select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 from sqlalchemy.pool import StaticPool
 from starlette.requests import Request
@@ -19,9 +20,12 @@ from app.deps import get_auth_context, get_auth_context_from_token
 from app.models import User
 from app.models.tenant import Tenant, UserTenant
 from app.routes.auth import router as auth_router
-from app.routes.auth.login import _issue_login_response_for_user
+from app.routes.auth.login import _issue_login_response_for_user, _local_login_response
 from app.routes.applications.section_content import _serve_custom_page_asset
+from app.schemas import UserLogin
 from app.tenant_public_id import historical_tenant_public_id
+
+login_routes = importlib.import_module("app.routes.auth.login")
 
 
 def bearer(token: str) -> dict[str, str]:
@@ -255,8 +259,10 @@ async def test_multi_tenant_login_durably_backfills_legacy_null_tenant_public_id
         await session.commit()
 
     async with auth_db_factory() as session:
-        persisted_user = await session.get(User, user.id)
-        response = await _issue_login_response_for_user(session, persisted_user)
+        response = await _local_login_response(
+            UserLogin(username=user.username, password="secret"),
+            session,
+        )
 
     assert [option.tenant_public_id for option in response.tenants] == [
         historical_tenant_public_id(tenant.id) for tenant in tenants
@@ -273,6 +279,136 @@ async def test_multi_tenant_login_durably_backfills_legacy_null_tenant_public_id
     assert [tenant.public_id for tenant in persisted_tenants] == [
         historical_tenant_public_id(tenant.id) for tenant in tenants
     ]
+
+
+@pytest.mark.asyncio
+async def test_control_plane_legacy_projection_rolls_back_pending_sync_on_response_failure(
+    auth_db_factory,
+    monkeypatch,
+):
+    user, tenants = await seed_tenant_user(auth_db_factory, tenant_count=2)
+    legacy_tenant = tenants[0]
+    original_display_name = user.display_name
+
+    async with auth_db_factory() as session:
+        persisted = await session.get(Tenant, legacy_tenant.id)
+        persisted.public_id = None
+        await session.commit()
+
+    async def fake_control_plane_login(*_args):
+        return SimpleNamespace(username=user.username)
+
+    async def fake_ensure_control_plane_user(db, _identity):
+        persisted_user = await db.get(User, user.id)
+        persisted_user.display_name = "pending control plane sync"
+        persisted_user.coding_access_token = "pending-control-plane-token"
+        return persisted_user
+
+    def fail_response_encoding(*_args):
+        raise RuntimeError("response encoding failed")
+
+    monkeypatch.setattr(login_routes.settings, "control_plane_binding_enabled", False)
+    monkeypatch.setattr(
+        login_routes,
+        "login_to_control_plane",
+        fake_control_plane_login,
+    )
+    monkeypatch.setattr(
+        login_routes,
+        "_ensure_control_plane_user",
+        fake_ensure_control_plane_user,
+    )
+    monkeypatch.setattr(
+        login_routes,
+        "create_selection_token",
+        fail_response_encoding,
+    )
+
+    async with auth_db_factory() as session:
+        with pytest.raises(RuntimeError, match="response encoding failed"):
+            await login_routes._control_plane_login_response(
+                UserLogin(
+                    username=user.username,
+                    password="secret",
+                    captcha_id="captcha",
+                    captcha_code="code",
+                ),
+                session,
+            )
+        await session.rollback()
+
+    async with auth_db_factory() as session:
+        persisted_user = await session.get(User, user.id)
+        persisted_tenant = await session.get(Tenant, legacy_tenant.id)
+
+    assert persisted_user.display_name == original_display_name
+    assert persisted_user.coding_access_token is None
+    assert persisted_tenant.public_id is None
+
+
+@pytest.mark.asyncio
+async def test_control_plane_legacy_projection_commits_once_at_outer_boundary(
+    auth_db_factory,
+    monkeypatch,
+):
+    user, tenants = await seed_tenant_user(auth_db_factory, tenant_count=2)
+    legacy_tenant = tenants[0]
+
+    async with auth_db_factory() as session:
+        persisted = await session.get(Tenant, legacy_tenant.id)
+        persisted.public_id = None
+        await session.commit()
+
+    async def fake_control_plane_login(*_args):
+        return SimpleNamespace(username=user.username)
+
+    async def fake_ensure_control_plane_user(db, _identity):
+        persisted_user = await db.get(User, user.id)
+        persisted_user.display_name = "committed control plane sync"
+        persisted_user.coding_access_token = "committed-control-plane-token"
+        return persisted_user
+
+    monkeypatch.setattr(login_routes.settings, "control_plane_binding_enabled", False)
+    monkeypatch.setattr(
+        login_routes,
+        "login_to_control_plane",
+        fake_control_plane_login,
+    )
+    monkeypatch.setattr(
+        login_routes,
+        "_ensure_control_plane_user",
+        fake_ensure_control_plane_user,
+    )
+
+    async with auth_db_factory() as session:
+        commits = []
+
+        def track_commit(*_args):
+            commits.append(True)
+
+        event.listen(session.sync_session, "after_commit", track_commit)
+        try:
+            response = await login_routes._control_plane_login_response(
+                UserLogin(
+                    username=user.username,
+                    password="secret",
+                    captcha_id="captcha",
+                    captcha_code="code",
+                ),
+                session,
+            )
+        finally:
+            event.remove(session.sync_session, "after_commit", track_commit)
+
+    assert response.requires_tenant_selection is True
+    assert commits == [True]
+    async with auth_db_factory() as session:
+        persisted_user = await session.get(User, user.id)
+        persisted_tenant = await session.get(Tenant, legacy_tenant.id)
+
+    assert persisted_user.display_name == "committed control plane sync"
+    assert persisted_user.coding_access_token == "committed-control-plane-token"
+    assert persisted_tenant.public_id == historical_tenant_public_id(legacy_tenant.id)
 
 
 @pytest.mark.asyncio

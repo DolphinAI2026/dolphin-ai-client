@@ -52,11 +52,7 @@ async def _tenant_options_with_durable_public_ids(
     db: AsyncSession,
     tenants: list[Tenant],
 ) -> list[TenantOption]:
-    needs_public_id_commit = any(tenant.public_id is None for tenant in tenants)
-    options = [await _tenant_option(db, tenant) for tenant in tenants]
-    if needs_public_id_commit:
-        await db.commit()
-    return options
+    return [await _tenant_option(db, tenant) for tenant in tenants]
 
 
 def _normalize_apaas_origin(base_url: str) -> str:
@@ -939,12 +935,14 @@ async def _try_apaas_login_flow(user_data: UserLogin, db: AsyncSession) -> Optio
             apaas_user_id=user.apaas_user_id,
             apaas_tenant_id=selected.apaas_tenant_id_str or user.apaas_tenant_id,
         )
+        tenant_options = await _tenant_options_with_durable_public_ids(
+            db,
+            local_tenants,
+        )
+        await db.commit()
         return LoginResponse(
             access_token=access_token,
-            tenants=await _tenant_options_with_durable_public_ids(
-                db,
-                local_tenants,
-            ),
+            tenants=tenant_options,
             entry_path="/",
             is_platform_admin=is_platform_admin,
             has_tenant_context=True,
@@ -1123,12 +1121,14 @@ async def _local_login_response(user_data: UserLogin, db: AsyncSession) -> Login
             detail="用户名或密码错误",
         )
 
-    return await _issue_login_response_for_user(
+    response = await _issue_login_response_for_user(
         db,
         user,
         plain_password=user_data.password,
         allow_apaas_chain=True,
     )
+    await db.commit()
+    return response
 
 
 def _control_plane_roles_include_admin(roles: list[str]) -> bool:

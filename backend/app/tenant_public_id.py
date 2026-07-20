@@ -58,6 +58,15 @@ def historical_tenant_public_id(tenant_id: int) -> str:
     return str(uuid5(TENANT_PUBLIC_ID_NAMESPACE, f"tenant:{int(tenant_id)}"))
 
 
+def _canonical_tenant_public_id(value: Any) -> str:
+    if value is None:
+        raise RuntimeError("tenant public ID backfill did not produce a value")
+    try:
+        return str(UUID(str(value)))
+    except (TypeError, ValueError) as exc:
+        raise RuntimeError("tenant public ID backfill returned an invalid UUID") from exc
+
+
 async def _tenant_columns(conn: Any) -> dict[str, dict[str, Any]]:
     return await conn.run_sync(
         lambda sync_conn: {
@@ -359,20 +368,28 @@ async def ensure_tenant_public_id(
     from app.models.tenant import Tenant
 
     tenant_id = int(tenant.id)
+    candidate_public_id = historical_tenant_public_id(tenant_id)
     # Reuse the caller's transaction and connection. The auth projection
     # call sites commit this targeted backfill before building a response.
     with session.no_autoflush:
-        await session.execute(
+        update_result = await session.execute(
             update(Tenant)
             .where(Tenant.id == tenant_id, Tenant.public_id.is_(None))
-            .values(public_id=historical_tenant_public_id(tenant_id))
+            .values(public_id=candidate_public_id)
             .execution_options(synchronize_session=False)
         )
-        public_id = (
-            await session.execute(
-                select(Tenant.public_id).where(Tenant.id == tenant_id)
+        if update_result.rowcount and update_result.rowcount > 0:
+            public_id = candidate_public_id
+        else:
+            public_id = _canonical_tenant_public_id(
+                (
+                    await session.execute(
+                        select(Tenant.public_id)
+                        .where(Tenant.id == tenant_id)
+                        .with_for_update()
+                    )
+                ).scalar_one()
             )
-        ).scalar_one()
 
     set_committed_value(tenant, "public_id", public_id)
     return str(public_id)

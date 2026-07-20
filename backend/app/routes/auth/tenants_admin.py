@@ -968,7 +968,9 @@ async def list_my_tenants(
                 .order_by(UserTenant.is_default.desc(), Tenant.tenant_name.asc())
             )
         ).scalars().all()
-    return await _tenant_options_with_durable_public_ids(db, rows)
+    options = await _tenant_options_with_durable_public_ids(db, rows)
+    await db.commit()
+    return options
 
 
 @router.get("/users")

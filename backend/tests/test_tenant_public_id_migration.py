@@ -6,6 +6,7 @@ from uuid import UUID, uuid4
 import pytest
 import pytest_asyncio
 from sqlalchemy import String, event, select, text
+from sqlalchemy.dialects import mysql
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 from sqlalchemy.pool import AsyncAdaptedQueuePool
 
@@ -669,6 +670,193 @@ async def test_ensure_tenant_public_id_does_not_autoflush_or_commit_pending_stat
         assert persisted_legacy.public_id is None
         assert persisted_unrelated.tenant_name == "other"
     finally:
+        await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_ensure_tenant_public_id_uses_mysql_locking_read_after_lost_update(
+    monkeypatch,
+):
+    engine = create_async_engine("sqlite+aiosqlite:///:memory:")
+    try:
+        async with engine.begin() as conn:
+            await conn.run_sync(Base.metadata.create_all)
+        session_factory = async_sessionmaker(
+            engine,
+            class_=AsyncSession,
+            expire_on_commit=False,
+        )
+        async with session_factory() as session:
+            tenant = Tenant(tenant_name="tenant", tenant_code="tenant")
+            session.add(tenant)
+            await session.commit()
+            tenant_id = tenant.id
+
+        async with session_factory() as session:
+            tenant = await session.get(Tenant, tenant_id)
+            tenant.public_id = None
+            await session.commit()
+
+        async with session_factory() as session:
+            tenant = await session.get(Tenant, tenant_id)
+            statements = []
+
+            async def execute(statement, *_args, **_kwargs):
+                statements.append(statement)
+                if len(statements) == 1:
+                    return SimpleNamespace(rowcount=0)
+                return SimpleNamespace(
+                    scalar_one=lambda: historical_tenant_public_id(tenant_id)
+                )
+
+            monkeypatch.setattr(session, "execute", execute)
+
+            public_id_value = await ensure_tenant_public_id(session, tenant)
+
+        assert public_id_value == historical_tenant_public_id(tenant_id)
+        assert "FOR UPDATE" in str(statements[1].compile(dialect=mysql.dialect()))
+    finally:
+        await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_ensure_tenant_public_id_rejects_null_current_read_after_lost_update(
+    monkeypatch,
+):
+    engine = create_async_engine("sqlite+aiosqlite:///:memory:")
+    try:
+        async with engine.begin() as conn:
+            await conn.run_sync(Base.metadata.create_all)
+        session_factory = async_sessionmaker(
+            engine,
+            class_=AsyncSession,
+            expire_on_commit=False,
+        )
+        async with session_factory() as session:
+            tenant = Tenant(tenant_name="tenant", tenant_code="tenant")
+            session.add(tenant)
+            await session.commit()
+            tenant_id = tenant.id
+
+        async with session_factory() as session:
+            tenant = await session.get(Tenant, tenant_id)
+            tenant.public_id = None
+            await session.commit()
+
+        async with session_factory() as session:
+            tenant = await session.get(Tenant, tenant_id)
+            responses = iter((
+                SimpleNamespace(rowcount=0),
+                SimpleNamespace(scalar_one=lambda: None),
+            ))
+
+            async def execute(*_args, **_kwargs):
+                return next(responses)
+
+            monkeypatch.setattr(session, "execute", execute)
+
+            with pytest.raises(RuntimeError, match="tenant public ID"):
+                await ensure_tenant_public_id(session, tenant)
+    finally:
+        await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_ensure_tenant_public_id_uses_candidate_after_successful_update(
+    monkeypatch,
+):
+    engine = create_async_engine("sqlite+aiosqlite:///:memory:")
+    try:
+        async with engine.begin() as conn:
+            await conn.run_sync(Base.metadata.create_all)
+        session_factory = async_sessionmaker(
+            engine,
+            class_=AsyncSession,
+            expire_on_commit=False,
+        )
+        async with session_factory() as session:
+            tenant = Tenant(tenant_name="tenant", tenant_code="tenant")
+            session.add(tenant)
+            await session.commit()
+            tenant_id = tenant.id
+
+        async with session_factory() as session:
+            tenant = await session.get(Tenant, tenant_id)
+            tenant.public_id = None
+            await session.commit()
+
+        async with session_factory() as session:
+            tenant = await session.get(Tenant, tenant_id)
+            statements = []
+
+            async def execute(statement, *_args, **_kwargs):
+                statements.append(statement)
+                if len(statements) == 1:
+                    return SimpleNamespace(rowcount=1)
+                return SimpleNamespace(
+                    scalar_one=lambda: historical_tenant_public_id(tenant_id)
+                )
+
+            monkeypatch.setattr(session, "execute", execute)
+
+            public_id_value = await ensure_tenant_public_id(session, tenant)
+
+        assert public_id_value == historical_tenant_public_id(tenant_id)
+        assert len(statements) == 1
+    finally:
+        await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_ensure_tenant_public_id_concurrently_reads_current_value_on_configured_sql_dialect():
+    database_url = os.environ.get("TENANT_PUBLIC_ID_TEST_DATABASE_URL")
+    if not database_url:
+        pytest.skip("TENANT_PUBLIC_ID_TEST_DATABASE_URL is not configured")
+
+    engine = create_async_engine(database_url)
+    try:
+        async with engine.begin() as conn:
+            await conn.run_sync(Tenant.__table__.drop, checkfirst=True)
+            await conn.run_sync(Tenant.__table__.create)
+        session_factory = async_sessionmaker(
+            engine,
+            class_=AsyncSession,
+            expire_on_commit=False,
+        )
+        async with session_factory() as session:
+            tenant = Tenant(tenant_name="tenant", tenant_code="tenant")
+            session.add(tenant)
+            await session.commit()
+            tenant_id = tenant.id
+
+        async with session_factory() as session:
+            tenant = await session.get(Tenant, tenant_id)
+            tenant.public_id = None
+            await session.commit()
+
+        barrier = asyncio.Barrier(2)
+
+        async def project_public_id() -> str:
+            async with session_factory() as session:
+                tenant = await session.get(Tenant, tenant_id)
+                await barrier.wait()
+                public_id_value = await ensure_tenant_public_id(session, tenant)
+                await session.commit()
+                return public_id_value
+
+        first, second = await asyncio.gather(
+            project_public_id(),
+            project_public_id(),
+        )
+
+        async with session_factory() as session:
+            persisted = await session.get(Tenant, tenant_id)
+
+        assert first == second == historical_tenant_public_id(tenant_id)
+        assert persisted.public_id == first
+    finally:
+        async with engine.begin() as conn:
+            await conn.run_sync(Tenant.__table__.drop, checkfirst=True)
         await engine.dispose()
 
 
