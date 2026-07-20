@@ -17,10 +17,34 @@ documents:
     status: not_requested
   git:
     tracked: true
+- path: docs/solutions/l3/business/code-tenant-deep-link.md
+  document_kind: unknown-markdown
+  classification: managed-by-asset-index
+  content_hash: sha256:664739b8b21abf31ac7940cd301d659a6a79967d484468f40f676256ec60827f
+  normalization:
+    status: not_requested
+  git:
+    tracked: true
+- path: docs/solutions/l3/business/tenant-aware-auth-entry.md
+  document_kind: unknown-markdown
+  classification: managed-by-asset-index
+  content_hash: sha256:836f45ea41d9917ffffcdc6cf14263a7604f427f6ef4f043ff4633512a9961e9
+  normalization:
+    status: not_requested
+  git:
+    tracked: true
 - path: docs/solutions/l3/business/tenant-aware-navigation.md
   document_kind: unknown-markdown
   classification: managed-by-asset-index
-  content_hash: sha256:e5aae520c5454bf3cd187f0feaf63e24d999b254f26be7a54adbb19fbcb4b6a0
+  content_hash: sha256:84b8f117b3292b2988b116ab0416d91b2d874fac09a6332984063cb7d95ccbff
+  normalization:
+    status: not_requested
+  git:
+    tracked: true
+- path: docs/solutions/l3/business/tenant-url-resolution-flow.md
+  document_kind: unknown-markdown
+  classification: managed-by-asset-index
+  content_hash: sha256:f857b26ea590c27e08cbb3f8523562cfc9d645f0a4db60a9fa1a9af27208c3be
   normalization:
     status: not_requested
   git:
@@ -156,7 +180,7 @@ documents:
 - path: docs/superpowers/specs/2026-07-20-builder-tenant-url-public-uuid-design.md
   document_kind: unknown-markdown
   classification: managed-by-asset-index
-  content_hash: sha256:d472f7bb6fdc34913e94de77882d00c404804cfd2eb2d38b46750050e4891232
+  content_hash: sha256:ecc48b381fdb294e5a79ee598a202ec57e7eb8272634e862da9b4517f992de66
   normalization:
     status: not_requested
   git:
