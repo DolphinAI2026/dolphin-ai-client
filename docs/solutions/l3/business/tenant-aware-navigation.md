@@ -3,7 +3,7 @@ asset_kind: page-interaction
 asset_id: page-interaction.tenant-aware-navigation
 knowledge_level: L3
 source_spec_ref: docs/superpowers/specs/2026-07-20-builder-tenant-url-public-uuid-design.md
-source_spec_hash: sha256:d472f7bb6fdc34913e94de77882d00c404804cfd2eb2d38b46750050e4891232
+source_spec_hash: sha256:ecc48b381fdb294e5a79ee598a202ec57e7eb8272634e862da9b4517f992de66
 phase_id: 2026-07-20-builder-tenant-url-public-uuid
 revision: 1
 source_section_refs:
@@ -47,8 +47,6 @@ states:
   - ready
 controls:
   - tenant_menu
-  - login_submit
-  - tenant_select
   - retry_tenant_navigation
 source_refs:
   - "7. 前端 URL 状态机"
@@ -78,17 +76,43 @@ resolution_rules:
     destination: current-mode-home
 active_switch_rules:
   preserve_resource_path: false
-  destination: target-mode-home
-  clear_tenant_scoped_state: true
-login_redirect_rules:
-  preserve_full_path: true
-  auto_select_accessible_target_tenant: true
-  reject_inaccessible_target_before_business-load: true
-code_deep_link_rules:
-  wait_for_tenant_resolution: true
-  preserve_agent_query: true
-  pass_tenant_id_to_runtime_upstream: false
-  require_cookie_prewarm_without_agent: false
+  destination_source: MODE_META
+  side_effect_owner: userStore.switchTenantContext
+route_context_matrix:
+  tenant_required:
+    - /
+    - /chat/:id?
+    - /ai-chat/:id?
+    - /code/**
+    - /db-connections
+    - /apps
+    - /workspace-catalog
+    - /workspace/:id?
+    - /tenant-logs
+    - /hub
+    - /skills/**
+    - /project/:id
+    - /project/:id/git
+    - /git/callback/:provider
+    - /settings
+    - /coding
+    - /admin/mcp
+    - /admin/agent-prompts
+    - /work/:appId
+    - /datasources
+    - /platform-envs
+    - /tenant-users
+    - /knowledge
+    - /generate/:id?
+  tenant_none:
+    - /platform-admin/**
+    - /admin/tenants
+    - /desktop-setup
+    - /desktop-unavailable
+storage_event_policy:
+  automatic_reverse_switch: false
+  convergence: last-successful-shared-token
+  destination: current-mode-home-with-new-tenant-id
 feedback:
   invalid_uuid: 租户链接无效
   inaccessible_tenant: 无权访问该租户
@@ -99,6 +123,7 @@ loop_guard:
   max_automatic_attempts: 1
   marker_ttl_seconds: 30
   concurrent_switch_policy: singleflight
+  cross_tab_policy: align-without-reverse-switch
 ```
 
 ## 决策依据/Rationale
@@ -113,4 +138,4 @@ URL 中的公共 UUID 让租户上下文显性且稳定，但它不承担授权�
 - 不要把 URL UUID 直接作为可信数据库过滤条件。
 - 不要在主动切租户时保留旧租户资源 ID。
 - 不要把 `tenantId` 拼入 Runtime 上游 URL。
-- 多标签页共享 token 的限制必须保留在验收和用户提示中。
+- 多标签页收到其他标签页 token 更新时必须对齐新租户首页，不自动切回旧 URL。

@@ -1,0 +1,90 @@
+---
+asset_kind: page-interaction
+asset_id: page-interaction.tenant-aware-auth-entry
+knowledge_level: L3
+source_spec_ref: docs/superpowers/specs/2026-07-20-builder-tenant-url-public-uuid-design.md
+source_spec_hash: sha256:ecc48b381fdb294e5a79ee598a202ec57e7eb8272634e862da9b4517f992de66
+phase_id: 2026-07-20-builder-tenant-url-public-uuid
+revision: 1
+source_section_refs:
+  - "6. API 契约"
+  - "8. 登录与多租户选择"
+  - "16. 验证策略"
+relations:
+  - type: supports
+    target: business-flow.tenant-url-resolution
+---
+
+# 租户感知登录入口
+
+## 背景/Context
+
+未登录用户打开带 `tenantId` 的深链接时，登录页和多租户选择页必须保留完整目标
+地址，并使用服务端返回的可访问租户 UUID 决定是否自动选择。
+
+## 方案/Solution
+
+登录页只接受站内 redirect。单租户登录完成后由 `/auth/me` 恢复当前 UUID；多租户
+登录响应通过 `TenantOption.tenant_public_id` 映射目标租户并调用现有选择接口。
+
+## interaction_model
+
+```yaml
+schema_version: interaction-model/v1
+surface: tenant-aware-auth-entry
+route_role: public-authentication-entry
+object_refs:
+  - tenant-public-identity
+states:
+  - login_idle
+  - login_submitting
+  - tenant_selection_required
+  - target_tenant_selected
+  - target_tenant_rejected
+  - redirecting
+controls:
+  - login_submit
+  - tenant_select
+  - retry_login
+source_refs:
+  - "6. API 契约"
+  - "8. 登录与多租户选择"
+forms:
+  - form_code: login-deep-link
+    inputs:
+      - username
+      - password
+      - redirect
+    output: LoginResponse
+  - form_code: multi-tenant-selection
+    inputs:
+      - selection_token
+      - tenant_id
+      - tenant_public_id
+    output: Token
+redirect_contract:
+  preserve:
+    - path
+    - query
+    - hash
+  allowed_origin: same-origin-path-only
+  rejected_prefixes:
+    - "//"
+    - /login
+    - /tenant-select
+selection_rules:
+  target_uuid_present_and_accessible: auto-select
+  target_uuid_missing: use-existing-default-or-user-choice
+  target_uuid_inaccessible: reject-and-enter-current-home
+```
+
+## 决策依据/Rationale
+
+现有登录与 tenant-select 已有 redirect 和 selection token 契约，本 phase 只增加 UUID
+映射和失败关闭，不引入第二套登录会话。
+
+## 后续避坑/Lessons
+
+- 不从 URL UUID 推导数字 ID，只能使用登录响应中的租户列表。
+- 不允许绝对 URL、协议相对 URL 或编码绕过进入 redirect。
+- 登录响应的直接 token 分支不伪造 user snapshot，统一由 `/auth/me` 恢复。

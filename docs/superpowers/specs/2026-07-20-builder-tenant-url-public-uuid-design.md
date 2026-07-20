@@ -70,8 +70,8 @@ Builder 当前通过 Builder JWT 的数字型 `tid` 表达当前租户。浏览�
 2. 查询参数名称固定为 `tenantId`，值固定为租户公开 UUID 的小写规范格式。
 3. 租户公开 UUID 创建后不可变；重命名租户不改变现有链接。
 4. URL 缺少 `tenantId` 时，前端用当前租户 UUID 原地 `replace` 为规范 URL。
-5. URL 指向账号有权访问的其他租户时，自动切换 token 和当前用户上下文，再整页
-   `replace` 到原始深链接。
+5. URL 指向账号有权访问的其他租户时，URL resolver 调用 user store 的稳定切换接口；
+   当前适配器在原子提交 token 和 user snapshot 后整页 `replace` 到原始深链接。
 6. URL 指向无权访问、未知或格式非法的 UUID 时，不尝试猜测租户，也不发出目标页面
    的业务请求；回到当前模式首页并显示稳定错误提示。
 7. 侧边栏主动切租户时，不保留旧租户的资源路径；进入目标模式首页，避免把旧租户的
@@ -83,6 +83,12 @@ Builder 当前通过 Builder JWT 的数字型 `tid` 表达当前租户。浏览�
    ```
 
    查询参数顺序不作为契约，`tenantId` 和 `agent` 均须保留。
+9. 本 phase 只拥有公共 UUID、URL 解析、规范化和导航恢复；不重复实现
+   `2026-07-18-builder-fast-auth-multi-sandbox-cache-design.md` 的 Auth Bootstrap、
+   `tenant_epoch` 和无 reload 缓存切换。
+10. URL resolver 不直接清理 Pinia store、标签页或 iframe；这些副作用只由
+    `userStore.switchTenantContext()` 适配器拥有。
+11. 平台管理和桌面设置等租户无关页面不得携带 `tenantId`。
 
 ## 5. 数据模型
 
@@ -104,8 +110,19 @@ public_id: VARCHAR(36), NOT NULL, UNIQUE, INDEXED
 
 ### 5.2 历史数据回填
 
-当前工程采用启动时 best-effort DDL，不依赖 Alembic。为了支持多实例并发启动，历史
-租户的回填不得为同一行各自生成随机 UUID。迁移分三步：
+当前工程不依赖 Alembic。租户公共 ID 是启动硬依赖，不能进入会吞异常的
+`_execute_best_effort()`。新增专用严格 helper
+`_ensure_tenant_public_ids(conn)`，由 `init_db()` 在开放请求前调用。
+
+固定 namespace 为：
+
+```text
+BUILDER_TENANT_PUBLIC_ID_NAMESPACE =
+  UUID("13ad9ef8-0005-5fc9-a95d-ac66f5c431ed")
+```
+
+该常量版本属于 `apaas-builder-ai`，不可按部署环境配置或在后续版本重新生成。历史
+租户的回填不得为同一行各自生成随机 UUID。迁移分四步：
 
 1. 添加允许为空的 `public_id` 列。
 2. 对历史租户使用固定 namespace 的 UUID v5：
@@ -115,8 +132,19 @@ public_id: VARCHAR(36), NOT NULL, UNIQUE, INDEXED
    ```
 
    同一租户在任意实例上得到同一值，重试幂等。
-3. 在空值为零后创建唯一索引；支持的数据库若不能在线增加 `NOT NULL`，则由启动
+3. 校验所有已有非空值均为规范 UUID 且全局唯一；非法值和冲突值均失败关闭。
+4. 在空值为零后创建唯一索引；支持的数据库若不能在线增加 `NOT NULL`，则由启动
    doctor 和模型校验共同保证非空，后续数据库专项迁移再收紧物理约束。
+
+并发和方言规则：
+
+- 支持 SQLite、MySQL 和 PostgreSQL。
+- 添加列或索引时，只有“对象已存在”可在重新 inspect 确认结构正确后视为成功。
+- 回填使用 `UPDATE ... WHERE id=:id AND public_id IS NULL`，并发实例只能写入相同
+  UUID v5。
+- helper 在当前启动事务中执行；任何非预期 DDL、回填、校验或唯一索引错误必须向上
+  抛出，禁止记录后继续启动。
+- 新建租户由模型默认值生成 UUID v4；历史回填只使用上述 UUID v5。
 
 启动迁移必须记录：
 
@@ -129,39 +157,89 @@ UUID 的状态下继续提供登录和租户切换。
 
 ## 6. API 契约
 
-### 6.1 响应字段
+### 6.1 公共 schema
 
-以下响应增加必填字符串字段 `tenant_public_id`：
+`UserInfo` 增加：
 
-- 登录成功响应中的当前租户信息。
-- `UserInfo` / `/auth/me`。
-- `TenantOption` / `/auth/me/tenants`。
-- 多租户登录选择列表。
+```text
+tenant_public_id: string | null
+```
 
-字段格式：
+有租户上下文时必填规范 UUID；无租户的平台管理员为 `null`。`TenantOption` 增加：
+
+```text
+tenant_public_id: string
+```
+
+`tenant_id` 继续保留，避免破坏现有客户端和后端内部调用。
+
+新增专用响应：
 
 ```json
 {
-  "tenant_id": 3,
-  "tenant_public_id": "34af86ef-0af1-44bb-ae06-0b7131bc86c9",
-  "tenant_name": "admin 的组织"
+  "access_token": "<token>",
+  "token_type": "bearer",
+  "user": {
+    "id": 1,
+    "username": "admin",
+    "is_active": true,
+    "is_platform_admin": true,
+    "created_at": "2026-07-20T00:00:00Z",
+    "tenant_id": 3,
+    "tenant_public_id": "34af86ef-0af1-44bb-ae06-0b7131bc86c9",
+    "tenant_name": "admin 的组织",
+    "tenant_role": "platform_admin",
+    "org_permissions": {"*": true}
+  },
+  "tenant_epoch": null,
+  "request_id": "9cfc76ab-82cf-43cc-934e-776ae42f961a"
 }
 ```
 
-`tenant_id` 暂时保留，避免破坏现有客户端和后端内部调用。
+对应 schema 名为 `TenantSwitchResponse`：
 
-### 6.2 切租户请求
+- `access_token: str`，必填。
+- `token_type: Literal["bearer"]`，必填。
+- `user: UserInfo`，必填，必须是候选 token 对应的目标租户 snapshot。
+- `tenant_epoch: int | null = null`，仅为 2026-07-18 Phase 2 预留；本 phase 不消费。
+- `request_id: UUID`，必填，同时写入响应 Header `X-Request-ID` 和后端日志。
 
-本切片保留现有 `POST /auth/switch-tenant` 数字 `tenant_id` 请求契约。前端只能从
-`/auth/me/tenants` 返回的可访问列表中，将 URL UUID 映射到数字 ID 后发起切换。
+### 6.2 逐端点契约
 
-服务端继续执行成员关系和租户状态校验。平台管理员也必须通过现有服务端规则获得目标
-租户上下文，前端不得构造未出现在可访问列表中的数字 ID。
+| Endpoint | 响应契约 | `tenant_public_id` 规则 |
+| --- | --- | --- |
+| `POST /auth/login` | 保持现有 `LoginResponse` | 多租户分支的 `tenants[]` 必填；直接登录仍只返回 token，随后由 `/auth/me` 恢复 |
+| `POST /auth/select-tenant` | 保持现有 `Token` | 选完后由 `/auth/me` 获取；请求继续使用数字 `tenant_id` |
+| `POST /auth/switch-tenant` | 改为 `TenantSwitchResponse` | `user.tenant_public_id` 必须等于目标租户 UUID |
+| `GET /auth/me` | `UserInfo` | 租户上下文为 UUID，无租户为 `null` |
+| `GET /auth/me/tenants` | `list[TenantOption]` | 每一项必填 UUID，只返回 active 且可切换租户 |
 
-切换成功响应必须包含新 token 和新的 `UserInfo.tenant_public_id`。前端在
-`tenant_public_id` 与目标 UUID 不一致时视为契约错误，不继续加载目标页面。
+前端 TypeScript 同步增加 `User.tenant_public_id`、`TenantOption.tenant_public_id` 和
+`TenantSwitchResponse`，不使用 `any` 绕过。
 
-### 6.3 错误语义
+### 6.3 切租户原子提交
+
+本切片保留 `POST /auth/switch-tenant` 的数字 `tenant_id` 请求。前端只能从
+`/auth/me/tenants` 返回的可访问列表中，将 URL UUID 映射到数字 ID。
+
+服务端必须联查成员关系与 `Tenant.status == 1`。`get_auth_context()` 和
+`get_auth_context_from_token()` 也必须拒绝携带停用租户的存量 token。
+
+`userStore.switchTenantContext()` 按以下顺序处理：
+
+1. 保留源 token、源 user snapshot 和源 URL，不先写 `localStorage`。
+2. 调用 switch endpoint，得到候选 token 和目标 user snapshot。
+3. 验证 `response.user.tenant_public_id == targetTenantPublicId`。
+4. 验证通过后一次性写入 token、user、available tenant context，并调用唯一的
+   tenant switch side-effect adapter。
+5. 当前 adapter 返回 `reload_required: true`；未来 2026-07-18 Phase 2 可改为
+   `false` 并接管 `tenant_epoch`、请求取消和 tenant-scoped store 原子切换。
+
+滚动发布期间旧后端若返回 token-only 响应，前端视为不兼容失败，不保存候选 token，
+保留源上下文并提示重试。JWT 切换是无服务端会话副作用的签发操作，因此丢弃候选 token
+即可回滚。
+
+### 6.4 错误语义
 
 沿用现有 switch endpoint 的 HTTP 状态，前端归一化为以下路由结果：
 
@@ -174,32 +252,52 @@ UUID 的状态下继续提供登录和租户切换。
 | 切换请求返回 403/404 | 当前模式首页 | `无权访问该租户` |
 | 切换请求超时或 5xx | 保持当前租户首页 | `租户切换失败，请重试` |
 | 切换响应 UUID 不匹配 | 当前租户首页并记录错误 | `租户切换失败，请重试` |
+| 旧后端返回 token-only | 保持源租户和源 URL | `服务正在升级，请稍后重试` |
 
 错误回退 URL 必须携带当前有效租户的 `tenantId`，不得继续保留无效目标 UUID。
 
 ## 7. 前端 URL 状态机
 
-### 7.1 适用范围
+### 7.1 路由元数据与覆盖矩阵
 
-状态机运行于全局路由守卫，覆盖 `meta.requiresAuth` 且当前用户有
-`tenant_public_id` 的路由。
+主 SPA 的每个受保护路由必须显式声明：
 
-不适用：
+```ts
+tenantContext: 'required' | 'none'
+```
 
-- 登录页。
-- 多租户选择页。
-- 无租户上下文的平台管理页面。
-- 404 等公共错误页。
+未知或缺少分类的 `requiresAuth` 路由在测试中失败，在运行时拒绝挂载并回到安全首页。
+子路由可继承父路由元数据。覆盖矩阵：
+
+| 分类 | 路由 |
+| --- | --- |
+| `required` | `/`、`/chat/:id?`、`/ai-chat/:id?`、`/code/**`、`/db-connections`、`/apps`、`/workspace-catalog`、`/workspace/:id?`、`/tenant-logs`、`/hub`、`/skills`、`/skills/:name/workspace`、`/project/:id`、`/project/:id/git`、`/git/callback/:provider`、`/settings`、`/coding`、`/admin/mcp`、`/admin/agent-prompts`、`/work/:appId`、`/datasources`、`/platform-envs`、`/tenant-users`、`/knowledge`、`/generate/:id?` |
+| `none` | `/platform-admin/:pathMatch(.*)*`、`/admin/tenants`、`/desktop-setup`、`/desktop-unavailable` |
+| public | `/login`、`/tenant-select`、公共错误页 |
+
+独立 `admin-spa` 的全部路由均为平台级 `tenantContext: none`，内部 URL 不增加
+`tenantId`。外层 `/platform-admin/**` 进入时若携带旧 `tenantId`，主 SPA 使用
+`router.replace` 删除它。
 
 ### 7.2 执行顺序
 
 守卫必须按以下顺序执行：
 
 1. 恢复本地 token 并调用 `/auth/me`。
-2. 获取当前 `tenant_public_id` 和可访问租户列表。
-3. 解析目标 URL 的 `tenantId`。
-4. 在允许目标页面组件挂载和业务请求前完成规范化、拒绝或切换。
-5. 租户一致后再执行权限守卫和目标页面加载。
+2. 对 `tenantContext: none` 删除 `tenantId` 后继续。
+3. 对 `tenantContext: required` 获取当前 `tenant_public_id` 和可访问租户列表。
+4. 解析目标 URL 的 `tenantId`。
+5. 在允许目标页面组件挂载和业务请求前完成规范化、拒绝或切换。
+6. 租户一致后再执行权限守卫和目标页面加载。
+
+租户决议前允许的请求白名单只有：
+
+- `/auth/me`
+- `/auth/me/tenants`
+- `/auth/switch-tenant`
+- `/auth/tenant-url-events`
+
+目标页面组件、Code iframe 和其他 `/api/**` 请求均不得启动。
 
 ### 7.3 状态转移
 
@@ -225,10 +323,12 @@ UUID 的状态下继续提供登录和租户切换。
    }
    ```
 
-2. 调用 `switchTenant(mappedNumericTenantId)`。
-3. 更新 token 和用户上下文，清理租户级缓存、标签页、Code iframe 和运行时状态。
-4. 校验响应 UUID 与目标 UUID 一致。
-5. 使用 `window.location.replace(targetFullPath)` 整页恢复，不新增历史记录。
+2. 调用 `switchTenantContext(mappedNumericTenantId, targetTenantPublicId)`。
+3. store 在保存候选 token 前校验目标 user snapshot，并原子提交。
+4. 当前 adapter 返回 `reload_required: true` 时，使用
+   `window.location.replace(targetFullPath)` 整页恢复，不新增历史记录。
+5. 未来 adapter 返回 `reload_required: false` 时，router 使用
+   `router.replace(targetFullPath)`；URL 状态机本身不变。
 
 #### D. URL UUID 非法或不可访问
 
@@ -252,7 +352,8 @@ UUID 的状态下继续提供登录和租户切换。
 和 hash。登录成功后：
 
 - 单租户账号：若租户 UUID 匹配则回跳；不匹配则按无权访问处理。
-- 多租户账号：若目标 UUID 存在于登录响应的租户列表，自动选择该租户后回跳。
+- 多租户账号：`LoginResponse.tenants[]` 已包含 UUID；若目标 UUID 存在，使用对应数字
+  ID 调用 `/auth/select-tenant` 后回跳。
 - 目标 UUID 不可访问：进入当前或默认可访问租户首页，并显示无权访问提示。
 
 ### 8.2 无 `tenantId` 的旧登录链接
@@ -275,11 +376,11 @@ UUID 的状态下继续提供登录和租户切换。
 | 当前模式 | 目标地址 |
 | --- | --- |
 | AI Builder | `/ai-builder/?tenantId=<target-uuid>` |
-| 管理后台 | `/admin/?tenantId=<target-uuid>` |
-| 其他租户业务模式 | 该模式已登记的首页 |
+| Code | `/ai-builder/code/apps?tenantId=<target-uuid>` |
 
-未登记模式回退 `/ai-builder/`。目标模式首页必须在路由配置中集中定义，不能在多个
-组件中复制字符串规则。
+目标首页直接复用 `MODE_META.builder.home` 和 `MODE_META.code.home`。平台管理页面是
+`tenantContext: none`，不显示租户业务切换入口，也不生成带 `tenantId` 的管理后台
+URL。未登记模式回退 Builder 首页。
 
 ## 10. Code 深链接与运行时
 
@@ -295,32 +396,37 @@ Code 页面遵循通用租户守卫后才执行 application、session、open、a
    `/code-runtime/...` 路径。
 5. 首次打开分享链接不要求先访问无 `agent` URL 以建立 Cookie。
 
-## 11. 缓存与存储清理
+## 11. 缓存与存储所有权
 
-租户切换成功后必须清理所有 tenant-scoped 前端状态：
+URL resolver 不直接清理任何 tenant-scoped store。唯一 owner 是
+`userStore.switchTenantContext()` 的 side-effect adapter：
 
-- Pinia 中的应用、项目、会话、权限和租户资源缓存。
-- 已打开标签页及其持久化状态。
-- Code iframe、runtime session 选择和最近历史。
-- 以旧租户为 key 的查询缓存。
+- 当前 adapter 复用既有整页 reload，提交新 token/user 后清除持久化标签页并关闭旧
+  iframe，其他内存状态由重载释放。
+- 2026-07-18 Phase 2 接管后，由其统一取消旧请求、切换 `tenant_epoch`、隔离查询
+  cache 和关闭热帧；本 phase 不再创建第二套 invalidation 列表。
+- URL resolver 只接收 `{reload_required, destination}`，不导入具体业务 store。
 
-不得清理：
-
-- 新签发的登录 token。
-- 与租户无关的主题、语言和界面偏好。
-- 用于恢复目标 URL 的当前切换标记；它在重载校验完成后删除。
+主题、语言和界面偏好始终不清理。切换标记在目标 UUID 验证成功后删除。
 
 ## 12. 并发、失败与恢复
 
 ### 12.1 多标签页
 
-每个标签页独立解析 URL。token 更新通过现有共享 storage 可见，但每个标签页仍须
-在下一次导航或收到 storage 事件时重新 `/auth/me`，不得假设其他标签页的页面租户
-仍有效。
+多个标签页共享 `localStorage` token，因此本切片明确采用“最后成功切换的租户在所有
+标签页收敛”策略，不支持不同标签页长期停留在不同租户。
 
-当两个标签页同时请求不同租户时，以最后成功写入的 token 为账号当前共享登录态。
-较早标签页在下一次 API 401/403、storage 事件或导航时重新执行 URL 状态机并恢复其
-显式目标租户。此切片不承诺两个标签页同时长期停留在不同租户。
+收到其他标签页的 token storage event 时：
+
+1. 当前标签页不按旧 URL 自动切回，避免两个标签页互相重签 token。
+2. 调用 `/auth/me` 获取新共享 token 的租户 UUID。
+3. 停止挂载新业务内容；当前 adapter 使用
+   `window.location.replace(currentModeHome?tenantId=<new-uuid>)` 收敛到新租户首页。
+4. 若新 token 无租户，则进入 `/platform-admin/`。
+5. 只有用户后续显式打开旧深链接，才允许再次触发一次自动切换。
+
+两个标签页并发发起不同切换时，以最后完成且写入 storage 的响应为准；每个标签页
+最多再执行一次 storage 对齐导航，不得自动反向切换。
 
 ### 12.2 网络失败
 
@@ -329,8 +435,9 @@ Code 页面遵循通用租户守卫后才执行 application、session、open、a
 
 ### 12.3 部分成功
 
-如果 switch endpoint 已成功但 `/auth/me` 或重载失败，切换标记保留至 30 秒。
-恢复时重新读取 token 和 `/auth/me`：
+如果 switch endpoint 已返回但响应 snapshot 验证失败，源 token 从未被覆盖，直接回
+源租户首页。如果原子提交已完成但重载失败，切换标记保留至 30 秒。恢复时重新读取
+token 和 `/auth/me`：
 
 - 当前 UUID 等于目标：继续原深链接。
 - 当前 UUID 不等于目标：按循环保护回当前租户首页。
@@ -347,17 +454,20 @@ Code 页面遵循通用租户守卫后才执行 application、session、open、a
 
 ## 14. 可观测性
 
-前端为每次租户 URL 决策记录结构化事件：
+新增 `POST /auth/tenant-url-events`，只接受认证用户的非正常或状态变化事件：
 
 ```text
 tenant_url_resolution
-  outcome=matched|canonicalized|switched|rejected|failed|loop_prevented
+  outcome=canonicalized|switched|rejected|failed|loop_prevented|storage_aligned
   source=initial_load|router_navigation|login_redirect|tenant_menu|storage_event
   current_tenant_public_id
   target_tenant_public_id
   route_name
   request_id
 ```
+
+匹配成功的普通导航不发送事件。endpoint 校验 enum 和 UUID，每用户每分钟最多 30 次，
+返回 204；只写结构化日志和低基数指标，不保存独立业务表。
 
 后端 switch 日志增加：
 
@@ -375,9 +485,23 @@ tenant_switch
 
 - `tenant_url_resolution_total{outcome}`
 - `tenant_switch_total{outcome}`
-- `tenant_switch_duration_ms`
+- `tenant_switch_duration_seconds`
 - `tenant_public_id_backfill_failed`
 - Code 首次深链接 activate 的 401 数量
+
+实现复用 `backend/app/code_runtime/sandbox_metrics.py` 的 in-process registry/render
+模式，新建 auth 专用 registry，禁止把 user ID、租户 ID、UUID 或 route name 作为
+指标 label。`request_id` 由 switch endpoint 生成，写入响应 body、`X-Request-ID`
+Header 和日志。
+
+前端构建必须注入 `VITE_BUILD_SHA`，并在 `index.html` 输出：
+
+```html
+<meta name="builder-build-sha" content="%VITE_BUILD_SHA%">
+```
+
+线上 smoke 读取该 meta，确认值等于部署 revision，且该 revision 的祖先包含
+`49a4bef4`。静态资源 hash 或 `Last-Modified` 不能替代该证明。
 
 ## 15. 兼容、发布与回滚
 
@@ -386,7 +510,7 @@ tenant_switch
 1. 发布数据库列、幂等回填和后端响应字段。
 2. 确认所有租户均有唯一 `public_id`，`/auth/me` 和租户列表稳定返回 UUID。
 3. 发布前端 URL 状态机和导航改造。
-4. 发布包含 `49a4bef4` Code 外层会话鉴权修复的静态资源。
+4. 构建时注入当前 Git SHA，发布包含 `49a4bef4` Code 外层会话鉴权修复的静态资源。
 5. 执行线上登录、切租户、分享链接和 Code 首开验证。
 
 后端先发布期间旧前端忽略新增字段。前端发布前不得依赖尚未完成回填的 UUID。
@@ -403,12 +527,20 @@ tenant_switch
 ### 16.1 后端测试
 
 - 新租户生成合法、唯一、稳定的 UUID v4。
-- 历史回填对同一数字 ID 幂等，多个并发执行结果一致。
-- 回填失败或唯一冲突导致启动失败关闭。
-- `/auth/me`、登录响应和租户列表包含 `tenant_public_id`。
-- switch 成功响应 UUID 与目标租户一致。
-- 无成员关系、停用租户和未知租户仍被拒绝。
+- 历史回填精确等于固定 namespace 的 UUID v5，重复和并发执行结果一致。
+- SQLite 文件数据库执行重入测试；MySQL 和 PostgreSQL 容器执行真实 DDL/并发测试。
+- 回填异常、非法现有值、唯一冲突和索引失败均使 `init_db()` 抛错且服务不 ready。
+- `/auth/me`、登录多租户列表和 `/auth/me/tenants` 包含正确 UUID/null 语义。
+- switch 返回完整 `TenantSwitchResponse`，body/header/log 使用同一 request ID。
+- 无成员关系、停用租户、未知租户和携带停用租户的存量 token 均被拒绝。
 - 旧客户端只发送数字 `tenant_id` 仍可工作。
+
+固定命令：
+
+```bash
+cd backend
+pytest -q tests/test_tenant_public_id.py tests/test_tenant_public_id_migration.py tests/test_tenant_url_auth.py
+```
 
 ### 16.2 前端单元测试
 
@@ -418,11 +550,32 @@ tenant_switch
 - 非法、未知和无权 UUID 不挂载目标页面。
 - 401、403、404、5xx、超时和响应 UUID 不匹配按表格回退。
 - 切换标记过期、一次重试和并发导航不会形成循环。
+- `router.getRoutes()` 验证所有受保护路由都有 `tenantContext` 分类。
+- tenant 决议前只允许 auth 白名单请求，目标组件和 iframe 均未挂载。
+- token-only 旧响应和 UUID 不匹配都不覆盖源 token。
+- storage event 使其他标签页对齐新租户首页，不自动切回旧 URL。
 - 登录和多租户选择保留并消费目标 UUID。
 - 侧边栏切换进入目标模式首页，不携带旧资源 ID。
 - Code 的 `agent` 更新保留 `tenantId`。
+- admin-spa 和平台管理路由移除或拒绝 `tenantId`。
+
+固定命令：
+
+```bash
+cd frontend
+npm test -- src/router/tenantUrlGuard.spec.ts src/stores/user.tenantSwitch.spec.ts \
+  src/views/codeFrameLifecycle.spec.ts
+npm run build
+```
 
 ### 16.3 浏览器 E2E
+
+新增 `tests/e2e/builder-tenant-url-public-uuid.spec.mjs`，fixture 创建当前租户、可访问
+目标租户、停用租户和无权 UUID。网络断言在 tenant 决议前：
+
+- 只允许 `/auth/me`、`/auth/me/tenants`、`/auth/switch-tenant` 和事件 endpoint。
+- 其他业务 API 请求数为零。
+- 目标页面组件和 iframe 未挂载。
 
 使用真实浏览器验证：
 
@@ -435,7 +588,18 @@ tenant_switch
 7. 首次直接打开带 `agent` 的 Code 链接，create/activate 请求成功，不出现
    `Code runtime token required`。
 8. 切租户后不显示旧租户的应用、会话或 iframe。
-9. Chromium 与 Edge 至少各执行一次关键深链接流程。
+9. 两个标签页分别打开不同租户链接后，switch 次数有界并最终收敛到最后成功租户。
+10. 首次 Code 激活只调用 `/api/code/sessions/.../activate`，不调用
+    `/api/code-runtime/.../activate`，401 数量为零。
+11. Chromium 与 Edge channel 至少各执行一次关键深链接流程；若 Edge channel
+    不可用，安装失败必须作为发布 blocker，不用 Chromium 冒充。
+
+固定命令：
+
+```bash
+npm exec -- playwright install chromium msedge
+node tests/e2e/builder-tenant-url-public-uuid.spec.mjs
+```
 
 ## 17. 验收标准
 
@@ -446,20 +610,36 @@ tenant_switch
 - 旧链接保持可用并自动规范化。
 - 侧边栏切租户不会携带旧租户资源 ID。
 - UUID 回填可重入、并发一致，回滚不改变已生成 UUID。
+- 停用租户不能切入，携带停用租户的存量 token 不能继续访问。
+- 两个标签页不会因不同显式 URL 持续互相切租户。
 - Code 首次分享链接不再需要无 `agent` 预热，且 activate 不返回
   `Code runtime token required`。
-- 后端、前端和浏览器测试均通过，线上静态资源可证明包含 `49a4bef4` 对应修复。
+- 后端、前端和浏览器测试均通过；`builder-build-sha` 等于部署 revision，且该 revision
+  的祖先包含 `49a4bef4`。
 
 ## 18. 实施边界
 
 实施计划应优先复用：
 
 - `frontend/src/router/index.ts` 的全局守卫。
-- `frontend/src/stores/user.ts` 的 `switchTenant` 和用户恢复流程。
+- `frontend/src/stores/user.ts` 的用户恢复流程，并把现有 `switchTenant` 收敛为
+  `switchTenantContext` 稳定接口。
 - `frontend/src/components/v2/RailSidebar.vue` 的租户菜单。
+- `frontend/src/stores/mode.ts` 的 Builder/Code 首页，不新增 admin mode。
 - 登录和多租户选择现有 `redirect` 契约。
-- `backend/app/database.py` 的启动 DDL 机制。
+- `backend/app/database.py` 的 `init_db()`，但租户 UUID 使用独立严格 helper，禁止走
+  `_execute_best_effort()`。
 - 现有 UUID public ID 模式和 Code 外层 session API。
+- `backend/app/code_runtime/sandbox_metrics.py` 的 registry/render 模式。
+
+与 `2026-07-18-builder-fast-auth-multi-sandbox-cache-design.md` 的边界：
+
+- 本 phase 拥有 `tenant_public_id`、路由 metadata、URL resolver、登录 redirect 消费
+  和稳定 switch response。
+- 7 月 18 日设计拥有 Auth Bootstrap、`tenant_epoch` 的最终语义、无 reload 切换、
+  请求取消和 tenant-scoped cache。
+- 当前 adapter 的整页 reload 是兼容实现，不在 URL resolver 中复制 cache 清理逻辑；
+  后续替换 adapter 时 URL、API UUID 和路由测试不变。
 
 除非代码证据表明现有边界无法承载，不新建第二套路由器、租户状态管理器、token
 存储或数据库迁移框架。

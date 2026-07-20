@@ -2,7 +2,7 @@ kind: source-coverage-ledger
 schema_version: v1
 phase_id: 2026-07-20-builder-tenant-url-public-uuid
 source_ref: docs/superpowers/specs/2026-07-20-builder-tenant-url-public-uuid-design.md
-source_hash: sha256:d472f7bb6fdc34913e94de77882d00c404804cfd2eb2d38b46750050e4891232
+source_hash: sha256:ecc48b381fdb294e5a79ee598a202ec57e7eb8272634e862da9b4517f992de66
 source_profile:
   long_document_mode: false
 coverage:
@@ -19,7 +19,147 @@ coverage:
     coverage_status: covered
     status: covered
     exemption_reason: ''
-  expected_forms: []
-  expected_flows: []
-  expected_operations: []
+  - page_code: tenant-aware-auth-entry
+    source_chunks:
+    - 2026-07-20-builder-tenant-url-public-uuid-summary
+    fact_packet_ids:
+    - page.tenant-aware-auth-entry
+    mapped_to_specs:
+    - docs/superpowers/specs/2026-07-20-builder-tenant-url-public-uuid-design.md
+    mapped_to_assets:
+    - page-interaction.tenant-aware-auth-entry
+    coverage_status: covered
+    status: covered
+    exemption_reason: ''
+  - page_code: code-tenant-deep-link
+    source_chunks:
+    - 2026-07-20-builder-tenant-url-public-uuid-summary
+    fact_packet_ids:
+    - page.code-tenant-deep-link
+    mapped_to_specs:
+    - docs/superpowers/specs/2026-07-20-builder-tenant-url-public-uuid-design.md
+    mapped_to_assets:
+    - page-interaction.code-tenant-deep-link
+    coverage_status: covered
+    status: covered
+    exemption_reason: ''
+  expected_forms:
+  - form_code: login-deep-link
+    source_chunks:
+    - 2026-07-20-builder-tenant-url-public-uuid-summary
+    fact_packet_ids:
+    - fact.form.login-deep-link
+    mapped_to_specs:
+    - docs/superpowers/specs/2026-07-20-builder-tenant-url-public-uuid-design.md
+    mapped_to_assets:
+    - page-interaction.tenant-aware-auth-entry
+    coverage_status: covered
+    status: covered
+    exemption_reason: ''
+  - form_code: multi-tenant-selection
+    source_chunks:
+    - 2026-07-20-builder-tenant-url-public-uuid-summary
+    fact_packet_ids:
+    - fact.form.multi-tenant-selection
+    mapped_to_specs:
+    - docs/superpowers/specs/2026-07-20-builder-tenant-url-public-uuid-design.md
+    mapped_to_assets:
+    - page-interaction.tenant-aware-auth-entry
+    coverage_status: covered
+    status: covered
+    exemption_reason: ''
+  expected_flows:
+  - flow_id: tenant-url-resolution
+    source_chunks:
+    - 2026-07-20-builder-tenant-url-public-uuid-summary
+    fact_packet_ids:
+    - flow.tenant-url-resolution
+    mapped_to_specs:
+    - docs/superpowers/specs/2026-07-20-builder-tenant-url-public-uuid-design.md
+    mapped_to_assets:
+    - business-flow.tenant-url-resolution
+    mapped_to_operations:
+    - tenant-public-id.ensure
+    - auth.tenant-context-project
+    - tenant-url.resolve
+    - tenant-context.switch
+    - code-auth-fix.publish
+    coverage_status: covered
+    status: covered
+    exemption_reason: ''
+  expected_operations:
+  - operation_code: tenant-public-id.ensure
+    flow_model_ref: business-flow.tenant-url-resolution
+    page_ref: page-interaction.tenant-aware-navigation
+    source_chunks:
+    - 2026-07-20-builder-tenant-url-public-uuid-summary
+    fact_packet_ids:
+    - operation.tenant-public-id.ensure
+    mapped_to_specs:
+    - docs/superpowers/specs/2026-07-20-builder-tenant-url-public-uuid-design.md
+    mapped_to_assets:
+    - business-flow.tenant-url-resolution
+    coverage_status: covered
+    status: covered
+    exemption_reason: ''
+  - operation_code: auth.tenant-context-project
+    flow_model_ref: business-flow.tenant-url-resolution
+    page_ref: page-interaction.tenant-aware-auth-entry
+    source_chunks:
+    - 2026-07-20-builder-tenant-url-public-uuid-summary
+    fact_packet_ids:
+    - operation.auth.tenant-context-project
+    mapped_to_specs:
+    - docs/superpowers/specs/2026-07-20-builder-tenant-url-public-uuid-design.md
+    mapped_to_assets:
+    - business-flow.tenant-url-resolution
+    - page-interaction.tenant-aware-auth-entry
+    coverage_status: covered
+    status: covered
+    exemption_reason: ''
+  - operation_code: tenant-url.resolve
+    flow_model_ref: business-flow.tenant-url-resolution
+    page_ref: page-interaction.tenant-aware-navigation
+    source_chunks:
+    - 2026-07-20-builder-tenant-url-public-uuid-summary
+    fact_packet_ids:
+    - operation.tenant-url.resolve
+    mapped_to_specs:
+    - docs/superpowers/specs/2026-07-20-builder-tenant-url-public-uuid-design.md
+    mapped_to_assets:
+    - business-flow.tenant-url-resolution
+    - page-interaction.tenant-aware-navigation
+    coverage_status: covered
+    status: covered
+    exemption_reason: ''
+  - operation_code: tenant-context.switch
+    flow_model_ref: business-flow.tenant-url-resolution
+    page_ref: page-interaction.tenant-aware-navigation
+    source_chunks:
+    - 2026-07-20-builder-tenant-url-public-uuid-summary
+    fact_packet_ids:
+    - operation.tenant-context.switch
+    mapped_to_specs:
+    - docs/superpowers/specs/2026-07-20-builder-tenant-url-public-uuid-design.md
+    mapped_to_assets:
+    - business-flow.tenant-url-resolution
+    - page-interaction.tenant-aware-navigation
+    coverage_status: covered
+    status: covered
+    exemption_reason: ''
+  - operation_code: code-auth-fix.publish
+    flow_model_ref: business-flow.tenant-url-resolution
+    page_ref: page-interaction.code-tenant-deep-link
+    source_chunks:
+    - 2026-07-20-builder-tenant-url-public-uuid-summary
+    fact_packet_ids:
+    - operation.code-auth-fix.publish
+    mapped_to_specs:
+    - docs/superpowers/specs/2026-07-20-builder-tenant-url-public-uuid-design.md
+    mapped_to_assets:
+    - business-flow.tenant-url-resolution
+    - page-interaction.code-tenant-deep-link
+    coverage_status: covered
+    status: covered
+    exemption_reason: ''
   open_items: []

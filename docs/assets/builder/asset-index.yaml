@@ -2,11 +2,60 @@ kind: sandbox-builder-asset-index
 schema_version: v1
 current_phase_id: 2026-07-20-builder-tenant-url-public-uuid
 source_spec_ref: docs/superpowers/specs/2026-07-20-builder-tenant-url-public-uuid-design.md
-source_spec_hash: sha256:d472f7bb6fdc34913e94de77882d00c404804cfd2eb2d38b46750050e4891232
+source_spec_hash: sha256:ecc48b381fdb294e5a79ee598a202ec57e7eb8272634e862da9b4517f992de66
 generator:
   provider: agentic-coding
   version: v1
 assets:
+  - asset_id: page-interaction.tenant-aware-auth-entry
+    asset_kind: page-interaction
+    knowledge_level: L3
+    path: docs/solutions/l3/business/tenant-aware-auth-entry.md
+    phase_id: 2026-07-20-builder-tenant-url-public-uuid
+    change_type: added
+    status: ready_for_review
+    source_spec_ref: docs/superpowers/specs/2026-07-20-builder-tenant-url-public-uuid-design.md
+    source_spec_hash: sha256:ecc48b381fdb294e5a79ee598a202ec57e7eb8272634e862da9b4517f992de66
+    source_section_refs:
+      - "6. API 契约"
+      - "8. 登录与多租户选择"
+      - "16. 验证策略"
+    summary: "定义带租户 UUID 深链接的登录、租户选择和安全 redirect 交互。"
+  - asset_id: page-interaction.code-tenant-deep-link
+    asset_kind: page-interaction
+    knowledge_level: L3
+    path: docs/solutions/l3/business/code-tenant-deep-link.md
+    phase_id: 2026-07-20-builder-tenant-url-public-uuid
+    change_type: added
+    status: ready_for_review
+    source_spec_ref: docs/superpowers/specs/2026-07-20-builder-tenant-url-public-uuid-design.md
+    source_spec_hash: sha256:ecc48b381fdb294e5a79ee598a202ec57e7eb8272634e862da9b4517f992de66
+    source_section_refs:
+      - "10. Code 深链接与运行时"
+      - "15. 兼容、发布与回滚"
+      - "16. 验证策略"
+      - "17. 验收标准"
+    summary: "定义 Code 深链接的租户前置决议、外层会话 API 和构建版本证明。"
+  - asset_id: business-flow.tenant-url-resolution
+    asset_kind: business-flow
+    knowledge_level: L3
+    path: docs/solutions/l3/business/tenant-url-resolution-flow.md
+    phase_id: 2026-07-20-builder-tenant-url-public-uuid
+    change_type: added
+    status: ready_for_review
+    source_spec_ref: docs/superpowers/specs/2026-07-20-builder-tenant-url-public-uuid-design.md
+    source_spec_hash: sha256:ecc48b381fdb294e5a79ee598a202ec57e7eb8272634e862da9b4517f992de66
+    source_section_refs:
+      - "5. 数据模型"
+      - "6. API 契约"
+      - "7. 前端 URL 状态机"
+      - "8. 登录与多租户选择"
+      - "9. 主动切租户"
+      - "10. Code 深链接与运行时"
+      - "14. 可观测性"
+      - "15. 兼容、发布与回滚"
+      - "16. 验证策略"
+    summary: "把租户 UUID 迁移、认证投影、URL 决议、原子切换和发布证明连接为完整操作流。"
   - asset_id: page-interaction.tenant-aware-navigation
     asset_kind: page-interaction
     knowledge_level: L3
@@ -15,7 +64,7 @@ assets:
     change_type: added
     status: ready_for_review
     source_spec_ref: docs/superpowers/specs/2026-07-20-builder-tenant-url-public-uuid-design.md
-    source_spec_hash: sha256:d472f7bb6fdc34913e94de77882d00c404804cfd2eb2d38b46750050e4891232
+    source_spec_hash: sha256:ecc48b381fdb294e5a79ee598a202ec57e7eb8272634e862da9b4517f992de66
     source_section_refs:
       - "7. 前端 URL 状态机"
       - "8. 登录与多租户选择"
@@ -31,7 +80,7 @@ assets:
     change_type: added
     status: ready_for_review
     source_spec_ref: docs/superpowers/specs/2026-07-20-builder-tenant-url-public-uuid-design.md
-    source_spec_hash: sha256:d472f7bb6fdc34913e94de77882d00c404804cfd2eb2d38b46750050e4891232
+    source_spec_hash: sha256:ecc48b381fdb294e5a79ee598a202ec57e7eb8272634e862da9b4517f992de66
     source_section_refs:
       - "Builder 租户 URL 公共 UUID 设计"
     summary: "登记当前 phase source Spec。"

@@ -2,7 +2,7 @@ kind: agentic-spec-to-knowledge-derivation
 schema_version: v1
 phase_id: 2026-07-20-builder-tenant-url-public-uuid
 source_spec_ref: docs/superpowers/specs/2026-07-20-builder-tenant-url-public-uuid-design.md
-source_spec_hash: sha256:d472f7bb6fdc34913e94de77882d00c404804cfd2eb2d38b46750050e4891232
+source_spec_hash: sha256:ecc48b381fdb294e5a79ee598a202ec57e7eb8272634e862da9b4517f992de66
 asset_index_ref: docs/assets/builder/asset-index.yaml
 status: ready_for_review
 generator:
@@ -10,6 +10,60 @@ generator:
   mode: llm
   version: v1
 changes:
+- asset_id: page-interaction.tenant-aware-auth-entry
+  asset_kind: page-interaction
+  knowledge_level: L3
+  path: docs/solutions/l3/business/tenant-aware-auth-entry.md
+  phase_id: 2026-07-20-builder-tenant-url-public-uuid
+  change_type: added
+  status: ready_for_review
+  source_spec_ref: docs/superpowers/specs/2026-07-20-builder-tenant-url-public-uuid-design.md
+  source_spec_hash: sha256:ecc48b381fdb294e5a79ee598a202ec57e7eb8272634e862da9b4517f992de66
+  source_section_refs:
+  - "6. API \u5951\u7EA6"
+  - "8. \u767B\u5F55\u4E0E\u591A\u79DF\u6237\u9009\u62E9"
+  - "16. \u9A8C\u8BC1\u7B56\u7565"
+  summary: "\u5B9A\u4E49\u5E26\u79DF\u6237 UUID \u6DF1\u94FE\u63A5\u7684\u767B\u5F55\
+    \u3001\u79DF\u6237\u9009\u62E9\u548C\u5B89\u5168 redirect \u4EA4\u4E92\u3002"
+- asset_id: page-interaction.code-tenant-deep-link
+  asset_kind: page-interaction
+  knowledge_level: L3
+  path: docs/solutions/l3/business/code-tenant-deep-link.md
+  phase_id: 2026-07-20-builder-tenant-url-public-uuid
+  change_type: added
+  status: ready_for_review
+  source_spec_ref: docs/superpowers/specs/2026-07-20-builder-tenant-url-public-uuid-design.md
+  source_spec_hash: sha256:ecc48b381fdb294e5a79ee598a202ec57e7eb8272634e862da9b4517f992de66
+  source_section_refs:
+  - "10. Code \u6DF1\u94FE\u63A5\u4E0E\u8FD0\u884C\u65F6"
+  - "15. \u517C\u5BB9\u3001\u53D1\u5E03\u4E0E\u56DE\u6EDA"
+  - "16. \u9A8C\u8BC1\u7B56\u7565"
+  - "17. \u9A8C\u6536\u6807\u51C6"
+  summary: "\u5B9A\u4E49 Code \u6DF1\u94FE\u63A5\u7684\u79DF\u6237\u524D\u7F6E\u51B3\
+    \u8BAE\u3001\u5916\u5C42\u4F1A\u8BDD API \u548C\u6784\u5EFA\u7248\u672C\u8BC1\u660E\
+    \u3002"
+- asset_id: business-flow.tenant-url-resolution
+  asset_kind: business-flow
+  knowledge_level: L3
+  path: docs/solutions/l3/business/tenant-url-resolution-flow.md
+  phase_id: 2026-07-20-builder-tenant-url-public-uuid
+  change_type: added
+  status: ready_for_review
+  source_spec_ref: docs/superpowers/specs/2026-07-20-builder-tenant-url-public-uuid-design.md
+  source_spec_hash: sha256:ecc48b381fdb294e5a79ee598a202ec57e7eb8272634e862da9b4517f992de66
+  source_section_refs:
+  - "5. \u6570\u636E\u6A21\u578B"
+  - "6. API \u5951\u7EA6"
+  - "7. \u524D\u7AEF URL \u72B6\u6001\u673A"
+  - "8. \u767B\u5F55\u4E0E\u591A\u79DF\u6237\u9009\u62E9"
+  - "9. \u4E3B\u52A8\u5207\u79DF\u6237"
+  - "10. Code \u6DF1\u94FE\u63A5\u4E0E\u8FD0\u884C\u65F6"
+  - "14. \u53EF\u89C2\u6D4B\u6027"
+  - "15. \u517C\u5BB9\u3001\u53D1\u5E03\u4E0E\u56DE\u6EDA"
+  - "16. \u9A8C\u8BC1\u7B56\u7565"
+  summary: "\u628A\u79DF\u6237 UUID \u8FC1\u79FB\u3001\u8BA4\u8BC1\u6295\u5F71\u3001\
+    URL \u51B3\u8BAE\u3001\u539F\u5B50\u5207\u6362\u548C\u53D1\u5E03\u8BC1\u660E\u8FDE\
+    \u63A5\u4E3A\u5B8C\u6574\u64CD\u4F5C\u6D41\u3002"
 - asset_id: page-interaction.tenant-aware-navigation
   asset_kind: page-interaction
   knowledge_level: L3
@@ -18,7 +72,7 @@ changes:
   change_type: added
   status: ready_for_review
   source_spec_ref: docs/superpowers/specs/2026-07-20-builder-tenant-url-public-uuid-design.md
-  source_spec_hash: sha256:d472f7bb6fdc34913e94de77882d00c404804cfd2eb2d38b46750050e4891232
+  source_spec_hash: sha256:ecc48b381fdb294e5a79ee598a202ec57e7eb8272634e862da9b4517f992de66
   source_section_refs:
   - "7. \u524D\u7AEF URL \u72B6\u6001\u673A"
   - "8. \u767B\u5F55\u4E0E\u591A\u79DF\u6237\u9009\u62E9"
@@ -36,7 +90,7 @@ changes:
   change_type: added
   status: ready_for_review
   source_spec_ref: docs/superpowers/specs/2026-07-20-builder-tenant-url-public-uuid-design.md
-  source_spec_hash: sha256:d472f7bb6fdc34913e94de77882d00c404804cfd2eb2d38b46750050e4891232
+  source_spec_hash: sha256:ecc48b381fdb294e5a79ee598a202ec57e7eb8272634e862da9b4517f992de66
   source_section_refs:
   - "Builder \u79DF\u6237 URL \u516C\u5171 UUID \u8BBE\u8BA1"
   summary: "\u767B\u8BB0\u5F53\u524D phase source Spec\u3002"
@@ -50,28 +104,90 @@ diagnostics:
     message: "\u5DF2\u767B\u8BB0\u79DF\u6237 URL \u516C\u5171 UUID source Spec\uFF0C\
       \u786E\u5B9A\u6027 derivation lint \u5DF2\u901A\u8FC7\u3002"
 source_chunk_index_ref: docs/assets/builder/source-coverage/2026-07-20-builder-tenant-url-public-uuid.chunks.yaml
-source_chunk_index_hash: sha256:bfcbb70acf969439d5f886c8f4726aed30f6a5ecd463fcdec8d14ecd25ea8a8a
+source_chunk_index_hash: sha256:68a563561ad849178b894d00017feca52200ded7a315412f2d7505f5483e0ab0
 source_coverage_ledger_ref: docs/assets/builder/source-coverage/2026-07-20-builder-tenant-url-public-uuid.yaml
-source_coverage_ledger_hash: sha256:2694015131f2dd0cd9a72d4c2cf183ef760190c67d064ae4f48c586e64ebba50
+source_coverage_ledger_hash: sha256:72f40fb1e21589d6d45bcd0bde6fc23ec252740d857489e046877198f8a572d5
 typed_assets:
+- asset_id: page-interaction.tenant-aware-auth-entry
+  asset_kind: page-interaction
+  path: docs/solutions/l3/business/tenant-aware-auth-entry.md
+  schema_version: interaction-model/v1
+  source_spec_ref: docs/superpowers/specs/2026-07-20-builder-tenant-url-public-uuid-design.md
+  source_spec_hash: sha256:ecc48b381fdb294e5a79ee598a202ec57e7eb8272634e862da9b4517f992de66
+  structured_block_hash: sha256:30727b56d790a3dea3255a4943d13edb3b3faeff384817b2048ba36f972ab91f
+  fact_packet_refs:
+  - page.tenant-aware-auth-entry
+  - fact.form.login-deep-link
+  - fact.form.multi-tenant-selection
+  status: ready
+  blocking_codes: []
+  source_coverage_ledger_ref: docs/assets/builder/source-coverage/2026-07-20-builder-tenant-url-public-uuid.yaml
+  source_coverage_ledger_hash: sha256:72f40fb1e21589d6d45bcd0bde6fc23ec252740d857489e046877198f8a572d5
+  source_chunk_index_ref: docs/assets/builder/source-coverage/2026-07-20-builder-tenant-url-public-uuid.chunks.yaml
+  source_chunk_index_hash: sha256:68a563561ad849178b894d00017feca52200ded7a315412f2d7505f5483e0ab0
+- asset_id: page-interaction.code-tenant-deep-link
+  asset_kind: page-interaction
+  path: docs/solutions/l3/business/code-tenant-deep-link.md
+  schema_version: interaction-model/v1
+  source_spec_ref: docs/superpowers/specs/2026-07-20-builder-tenant-url-public-uuid-design.md
+  source_spec_hash: sha256:ecc48b381fdb294e5a79ee598a202ec57e7eb8272634e862da9b4517f992de66
+  structured_block_hash: sha256:68ce3e9831162af334bd1623e9ea6bfbe1967eb9989ef5ac1244b46a802ec286
+  fact_packet_refs:
+  - page.code-tenant-deep-link
+  status: ready
+  blocking_codes: []
+  source_coverage_ledger_ref: docs/assets/builder/source-coverage/2026-07-20-builder-tenant-url-public-uuid.yaml
+  source_coverage_ledger_hash: sha256:72f40fb1e21589d6d45bcd0bde6fc23ec252740d857489e046877198f8a572d5
+  source_chunk_index_ref: docs/assets/builder/source-coverage/2026-07-20-builder-tenant-url-public-uuid.chunks.yaml
+  source_chunk_index_hash: sha256:68a563561ad849178b894d00017feca52200ded7a315412f2d7505f5483e0ab0
+- asset_id: business-flow.tenant-url-resolution
+  asset_kind: business-flow
+  path: docs/solutions/l3/business/tenant-url-resolution-flow.md
+  schema_version: flow-model/v1
+  source_spec_ref: docs/superpowers/specs/2026-07-20-builder-tenant-url-public-uuid-design.md
+  source_spec_hash: sha256:ecc48b381fdb294e5a79ee598a202ec57e7eb8272634e862da9b4517f992de66
+  structured_block_hash: sha256:71551d9db589380bbd4fd8952d59c73403f82457129b410637628bc3e6c4a630
+  fact_packet_refs:
+  - flow.tenant-url-resolution
+  status: ready
+  blocking_codes: []
+  source_coverage_ledger_ref: docs/assets/builder/source-coverage/2026-07-20-builder-tenant-url-public-uuid.yaml
+  source_coverage_ledger_hash: sha256:72f40fb1e21589d6d45bcd0bde6fc23ec252740d857489e046877198f8a572d5
+  source_chunk_index_ref: docs/assets/builder/source-coverage/2026-07-20-builder-tenant-url-public-uuid.chunks.yaml
+  source_chunk_index_hash: sha256:68a563561ad849178b894d00017feca52200ded7a315412f2d7505f5483e0ab0
 - asset_id: page-interaction.tenant-aware-navigation
   asset_kind: page-interaction
   path: docs/solutions/l3/business/tenant-aware-navigation.md
   schema_version: interaction-model/v1
   source_spec_ref: docs/superpowers/specs/2026-07-20-builder-tenant-url-public-uuid-design.md
-  source_spec_hash: sha256:d472f7bb6fdc34913e94de77882d00c404804cfd2eb2d38b46750050e4891232
-  structured_block_hash: sha256:bef8da2fe7a9169fc6ac9da677230e64cf10326d6c36e555c973b95bb2954820
+  source_spec_hash: sha256:ecc48b381fdb294e5a79ee598a202ec57e7eb8272634e862da9b4517f992de66
+  structured_block_hash: sha256:591b02dc6a7a220bfbb8f2a18355df08b6d3fe126757599c6e47f1ac3b705417
   fact_packet_refs:
   - page.tenant-aware-navigation
   status: ready
   blocking_codes: []
   source_coverage_ledger_ref: docs/assets/builder/source-coverage/2026-07-20-builder-tenant-url-public-uuid.yaml
-  source_coverage_ledger_hash: sha256:2694015131f2dd0cd9a72d4c2cf183ef760190c67d064ae4f48c586e64ebba50
+  source_coverage_ledger_hash: sha256:72f40fb1e21589d6d45bcd0bde6fc23ec252740d857489e046877198f8a572d5
   source_chunk_index_ref: docs/assets/builder/source-coverage/2026-07-20-builder-tenant-url-public-uuid.chunks.yaml
-  source_chunk_index_hash: sha256:bfcbb70acf969439d5f886c8f4726aed30f6a5ecd463fcdec8d14ecd25ea8a8a
+  source_chunk_index_hash: sha256:68a563561ad849178b894d00017feca52200ded7a315412f2d7505f5483e0ab0
 source_asset_refs:
+- asset_id: page-interaction.tenant-aware-auth-entry
+  asset_kind: page-interaction
+  path: docs/solutions/l3/business/tenant-aware-auth-entry.md
+  hash: sha256:836f45ea41d9917ffffcdc6cf14263a7604f427f6ef4f043ff4633512a9961e9
+  section_ref: '#interaction_model'
+- asset_id: page-interaction.code-tenant-deep-link
+  asset_kind: page-interaction
+  path: docs/solutions/l3/business/code-tenant-deep-link.md
+  hash: sha256:664739b8b21abf31ac7940cd301d659a6a79967d484468f40f676256ec60827f
+  section_ref: '#interaction_model'
+- asset_id: business-flow.tenant-url-resolution
+  asset_kind: business-flow
+  path: docs/solutions/l3/business/tenant-url-resolution-flow.md
+  hash: sha256:f857b26ea590c27e08cbb3f8523562cfc9d645f0a4db60a9fa1a9af27208c3be
+  section_ref: '#flow_model'
 - asset_id: page-interaction.tenant-aware-navigation
   asset_kind: page-interaction
   path: docs/solutions/l3/business/tenant-aware-navigation.md
-  hash: sha256:e5aae520c5454bf3cd187f0feaf63e24d999b254f26be7a54adbb19fbcb4b6a0
+  hash: sha256:84b8f117b3292b2988b116ab0416d91b2d874fac09a6332984063cb7d95ccbff
   section_ref: '#interaction_model'
