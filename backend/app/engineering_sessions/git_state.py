@@ -227,8 +227,12 @@ def status_clean(repo_path: str | Path) -> bool:
     return not result.stdout.strip()
 
 
+def has_unmerged_index(repo_path: str | Path) -> bool:
+    return bool(git(repo_path, "ls-files", "--unmerged").stdout.strip())
+
+
 def git_operation_in_progress(repo_path: str | Path) -> bool:
-    if git(repo_path, "ls-files", "--unmerged").stdout.strip():
+    if has_unmerged_index(repo_path):
         return True
     for operation_path in _GIT_OPERATION_PATHS:
         result = git(

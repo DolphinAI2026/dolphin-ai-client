@@ -26,9 +26,11 @@ from app.engineering_sessions.git_state import (
     git_common_dir,
     git_control_worktree,
     git_operation_in_progress,
+    has_unmerged_index,
     has_ref,
     inspect_git_state,
     list_git_worktrees,
+    merged_to_base,
     resolve_base_ref,
 )
 from app.engineering_sessions.models import (
@@ -262,6 +264,7 @@ class EngineeringSessionService:
             and session.status
             not in {
                 SessionStatus.BLOCKED_RETAINED,
+                SessionStatus.MERGED_RETAINED,
                 SessionStatus.ORPHAN_SESSION,
             }
         ):
@@ -379,6 +382,9 @@ class EngineeringSessionService:
         elif previous_status == SessionStatus.ORPHAN_SESSION:
             session.status = SessionStatus.ORPHAN_SESSION
             session.cleanup.suggested = state.clean and state.merged_to_base
+        elif state.clean and self._merged_to_local_base(session):
+            session.status = SessionStatus.MERGED_RETAINED
+            session.cleanup.suggested = True
         elif previous_status == SessionStatus.ARCHIVED_DIRTY and state.clean:
             if state.merged_to_base:
                 session.status = SessionStatus.MERGED_RETAINED
@@ -483,6 +489,7 @@ class EngineeringSessionService:
 
             result = git(
                 self.repo_path,
+                *_COMMIT_IDENTITY,
                 "merge",
                 "--no-ff",
                 "--no-edit",
@@ -491,20 +498,39 @@ class EngineeringSessionService:
             )
             if result.returncode != 0:
                 detail = (result.stderr or result.stdout).strip()[:500]
+                merge_conflict = has_unmerged_index(self.repo_path)
                 if git_operation_in_progress(self.repo_path):
-                    abort_result = git(
-                        self.repo_path,
-                        "merge",
-                        "--abort",
-                        check=False,
-                    )
-                    if abort_result.returncode != 0:
+                    abort_exception: Exception | None = None
+                    try:
+                        abort_result = git(
+                            self.repo_path,
+                            "merge",
+                            "--abort",
+                            check=False,
+                        )
+                    except Exception as exc:
+                        abort_exception = exc
+                        abort_detail = str(exc)[:500]
+                    else:
                         abort_detail = (
                             abort_result.stderr or abort_result.stdout
                         ).strip()[:500]
-                        detail = (
-                            f"{detail}; git merge --abort failed: {abort_detail}"
+                    if abort_exception is not None or abort_result.returncode != 0:
+                        session.status = SessionStatus.BLOCKED_RETAINED
+                        session.cleanup.suggested = False
+                        self.registry.save(session)
+                        operation_error = EngineeringSessionOperationError(
+                            "WORKTREE_MERGE_ABORT_FAILED",
+                            (
+                                f"{detail or 'git merge failed'}; "
+                                "git merge --abort failed: "
+                                f"{abort_detail or 'unknown error'}"
+                            ),
                         )
+                        if abort_exception is not None:
+                            raise operation_error from abort_exception
+                        raise operation_error
+                if merge_conflict:
                     raise EngineeringSessionOperationError(
                         "WORKTREE_MERGE_CONFLICT",
                         detail or "merge conflict",
@@ -517,7 +543,7 @@ class EngineeringSessionService:
                 "HEAD",
             ).stdout.strip()
             self._sync_session(session)
-            if session.git_state.clean and session.git_state.merged_to_base:
+            if session.git_state.clean and self._merged_to_local_base(session):
                 session.status = SessionStatus.MERGED_RETAINED
                 session.cleanup.suggested = True
             return self.registry.save(session)
@@ -526,31 +552,60 @@ class EngineeringSessionService:
         self._fetch_origin_or_raise()
         with self.registry.transaction_lock(), self._git_mutation_lock():
             session = self.registry.load(session_id)
-            self._sync_session(session)
-            session = self.registry.save(session)
+            lifecycle_status = session.status
+            if session.status == SessionStatus.BLOCKED_RETAINED:
+                raise ValueError("blocked session cannot be disposed")
+            worktrees = self._active_worktrees()
+            paths_by_branch = self._worktree_paths_by_branch(worktrees)
+            actual_paths = paths_by_branch.get(session.branch, [])
+            if len(actual_paths) > 1:
+                raise ValueError("session worktree is ambiguous")
+            if actual_paths:
+                self._sync_session(
+                    session,
+                    paths_by_branch=paths_by_branch,
+                )
+            locally_merged = (
+                session.git_state.merged_to_base
+                or self._merged_to_local_base(session)
+            )
+            retained_status = lifecycle_status == SessionStatus.MERGED_RETAINED or (
+                session.unavailable_lifecycle_status
+                == SessionStatus.MERGED_RETAINED
+            )
             if (
-                session.status != SessionStatus.MERGED_RETAINED
-                or not session.git_state.clean
-                or not session.git_state.merged_to_base
-                or session.worktree_path is None
+                not retained_status
+                or not locally_merged
+                or (
+                    actual_paths
+                    and (
+                        not session.git_state.clean
+                        or session.git_state.branch_mismatch
+                        or session.git_state.worktree_ambiguous
+                    )
+                )
             ):
                 raise ValueError(
                     "session must be clean and merged before disposal"
                 )
 
-            git(
-                self.repo_path,
-                "worktree",
-                "remove",
-                session.worktree_path,
-            )
-            git(
-                self.repo_path,
-                "branch",
-                "-d",
-                session.branch,
-            )
+            if actual_paths:
+                git(
+                    self.repo_path,
+                    "worktree",
+                    "remove",
+                    actual_paths[0],
+                )
+            branch_ref = f"refs/heads/{session.branch}"
+            if has_ref(self.repo_path, branch_ref):
+                git(
+                    self.repo_path,
+                    "branch",
+                    "-d",
+                    session.branch,
+                )
             git(self.repo_path, "worktree", "prune")
+            self.registry.delete(session.id)
 
     def list(self, *, sync: bool = False) -> list[EngineeringSession]:
         if not sync:
@@ -671,8 +726,34 @@ class EngineeringSessionService:
         self._sync_session(session)
         return self.registry.save(session)
 
+    def _merged_to_local_base(self, session: EngineeringSession) -> bool:
+        if session.merged_commit is None:
+            return False
+        local_base_ref = f"refs/heads/{session.base_branch}"
+        if not has_ref(self.repo_path, local_base_ref):
+            return False
+        branch_ref = f"refs/heads/{session.branch}"
+        if has_ref(self.repo_path, branch_ref):
+            return merged_to_base(
+                self.repo_path,
+                local_base_ref,
+                branch_ref,
+            )
+        if not has_ref(
+            self.repo_path,
+            session.merged_commit,
+        ):
+            return False
+        return merged_to_base(
+            self.repo_path,
+            local_base_ref,
+            session.merged_commit,
+        )
+
     @staticmethod
     def _require_mergeable_session(session: EngineeringSession) -> None:
+        if session.status == SessionStatus.BLOCKED_RETAINED:
+            raise ValueError("session is blocked after an incomplete merge recovery")
         if session.worktree_path is None:
             raise ValueError("session worktree is required for merge")
         if session.git_state.missing_worktree:
