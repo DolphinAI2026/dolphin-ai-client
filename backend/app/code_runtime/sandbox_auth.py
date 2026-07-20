@@ -32,6 +32,12 @@ _LAUNCH_AUTH_ERRORS = {
 _PROXY_COOKIE_TOKEN_TYPE = "code_runtime_proxy"
 
 
+def runtime_session_expiry_for_storage(value: datetime | None) -> datetime | None:
+    if value is None or value.tzinfo is None:
+        return value
+    return value.astimezone(timezone.utc).replace(tzinfo=None)
+
+
 @dataclass(frozen=True)
 class RuntimeBootstrap:
     clean_builder_url: str
@@ -259,7 +265,9 @@ async def _renew_browser_runtime_session(
             encrypted_cookie = encrypt_runtime_cookie(runtime_bootstrap.runtime_cookie)
             browser_session.runtime_session_cookie_enc = encrypted_cookie
             browser_session.runtime_session_hash = runtime_bootstrap.runtime_cookie_hash
-            browser_session.runtime_session_expires_at = runtime_bootstrap.expires_at
+            browser_session.runtime_session_expires_at = runtime_session_expiry_for_storage(
+                runtime_bootstrap.expires_at
+            )
             browser_session.generation = next_generation
             binding.runtime_service_session_enc = encrypted_cookie
             binding.auth_generation = next_generation

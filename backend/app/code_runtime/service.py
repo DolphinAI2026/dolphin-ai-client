@@ -20,6 +20,7 @@ from app.code_runtime.sandbox_auth import (
     RUNTIME_AUTH_ERROR_HEADER,
     bootstrap_runtime_session,
     encrypt_runtime_cookie,
+    runtime_session_expiry_for_storage,
     split_entry_token,
 )
 from app.models import Application
@@ -854,7 +855,9 @@ async def open_code_session(
             bootstrap.runtime_cookie
         )
         browser_session.runtime_session_hash = bootstrap.runtime_cookie_hash
-        browser_session.runtime_session_expires_at = bootstrap.expires_at
+        browser_session.runtime_session_expires_at = runtime_session_expiry_for_storage(
+            bootstrap.expires_at
+        )
         browser_session.generation = binding.auth_generation
         await db.flush()
 

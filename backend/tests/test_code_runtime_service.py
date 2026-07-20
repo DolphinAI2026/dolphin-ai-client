@@ -1186,6 +1186,40 @@ async def test_bootstrap_runtime_session_uses_entry_token_only_upstream_and_retu
     assert "runtime-cookie-secret" not in repr(bootstrap)
 
 
+def test_runtime_session_expiry_for_storage_normalizes_aware_datetime_to_naive_utc():
+    from datetime import datetime, timedelta, timezone
+
+    from app.code_runtime.sandbox_auth import runtime_session_expiry_for_storage
+
+    expires_at = datetime(
+        2026,
+        7,
+        20,
+        17,
+        30,
+        tzinfo=timezone(timedelta(hours=8)),
+    )
+
+    assert runtime_session_expiry_for_storage(expires_at) == datetime(
+        2026,
+        7,
+        20,
+        9,
+        30,
+    )
+
+
+def test_runtime_session_expiry_for_storage_preserves_none_and_naive_datetime():
+    from datetime import datetime
+
+    from app.code_runtime.sandbox_auth import runtime_session_expiry_for_storage
+
+    expires_at = datetime(2026, 7, 20, 9, 30)
+
+    assert runtime_session_expiry_for_storage(None) is None
+    assert runtime_session_expiry_for_storage(expires_at) is expires_at
+
+
 @pytest.mark.asyncio
 async def test_bootstrap_runtime_session_classifies_only_stable_launch_auth_errors_without_secret_leaks():
     import httpx
