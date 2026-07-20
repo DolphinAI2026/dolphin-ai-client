@@ -20,7 +20,7 @@ documents:
 - path: docs/solutions/l3/business/code-tenant-deep-link.md
   document_kind: unknown-markdown
   classification: managed-by-asset-index
-  content_hash: sha256:664739b8b21abf31ac7940cd301d659a6a79967d484468f40f676256ec60827f
+  content_hash: sha256:648e90e897f513c763da5a96fb692e6accfe9f2c2dcafed1dc0ca1170b34f94f
   normalization:
     status: not_requested
   git:
@@ -28,7 +28,7 @@ documents:
 - path: docs/solutions/l3/business/tenant-aware-auth-entry.md
   document_kind: unknown-markdown
   classification: managed-by-asset-index
-  content_hash: sha256:836f45ea41d9917ffffcdc6cf14263a7604f427f6ef4f043ff4633512a9961e9
+  content_hash: sha256:92bd8a1b1a0c4c3caeb0fefdce52532eef3b42461647e7cb25cb350790355a7f
   normalization:
     status: not_requested
   git:
@@ -36,7 +36,7 @@ documents:
 - path: docs/solutions/l3/business/tenant-aware-navigation.md
   document_kind: unknown-markdown
   classification: managed-by-asset-index
-  content_hash: sha256:84b8f117b3292b2988b116ab0416d91b2d874fac09a6332984063cb7d95ccbff
+  content_hash: sha256:a43d313133b8f16425d7747a0464c639727e7dcacdb11d58c76cb521b6683e84
   normalization:
     status: not_requested
   git:
@@ -44,7 +44,7 @@ documents:
 - path: docs/solutions/l3/business/tenant-url-resolution-flow.md
   document_kind: unknown-markdown
   classification: managed-by-asset-index
-  content_hash: sha256:f857b26ea590c27e08cbb3f8523562cfc9d645f0a4db60a9fa1a9af27208c3be
+  content_hash: sha256:57d0df11a0ea255f269ff3ea8441a9d85c21751b013c6cde194d7006f0f7288e
   normalization:
     status: not_requested
   git:
@@ -180,7 +180,7 @@ documents:
 - path: docs/superpowers/specs/2026-07-20-builder-tenant-url-public-uuid-design.md
   document_kind: unknown-markdown
   classification: managed-by-asset-index
-  content_hash: sha256:ecc48b381fdb294e5a79ee598a202ec57e7eb8272634e862da9b4517f992de66
+  content_hash: sha256:f5936354b5aacca01dc239092fad4e2f54749b1a2816926c899a2c4860ad93ed
   normalization:
     status: not_requested
   git:
