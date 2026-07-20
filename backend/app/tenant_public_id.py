@@ -5,7 +5,7 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
 from uuid import UUID, uuid4, uuid5
 
-from sqlalchemy import inspect, text
+from sqlalchemy import inspect, select, text, update
 
 if TYPE_CHECKING:
     from sqlalchemy.ext.asyncio import AsyncSession
@@ -346,10 +346,40 @@ async def ensure_tenant_public_id(
     session: "AsyncSession",
     tenant: "Tenant",
 ) -> str:
-    if tenant.public_id is None:
-        tenant.public_id = new_tenant_public_id()
-    await session.flush()
-    return tenant.public_id
+    if tenant.public_id is not None:
+        return tenant.public_id
+
+    if tenant.id is None or not inspect(tenant).persistent:
+        await session.flush()
+        if tenant.public_id is not None:
+            return tenant.public_id
+
+    if tenant.id is None:
+        raise RuntimeError("tenant must be persistent before public ID backfill")
+
+    from app.models.tenant import Tenant
+
+    tenant_id = int(tenant.id)
+    bind = session.bind
+    if bind is None:
+        raise RuntimeError("tenant public ID backfill requires a session bind")
+
+    # Existing NULL values are legacy rows. Backfill in an isolated transaction
+    # so the UUID is durable without committing unrelated caller changes.
+    async with bind.begin() as connection:
+        await connection.execute(
+            update(Tenant)
+            .where(Tenant.id == tenant_id, Tenant.public_id.is_(None))
+            .values(public_id=historical_tenant_public_id(tenant_id))
+        )
+        public_id = (
+            await connection.execute(
+                select(Tenant.public_id).where(Tenant.id == tenant_id)
+            )
+        ).scalar_one()
+
+    await session.refresh(tenant, attribute_names=["public_id"])
+    return str(public_id)
 
 
 async def _verify_tenant_public_ids(conn: Any) -> TenantPublicIdReconciliation:

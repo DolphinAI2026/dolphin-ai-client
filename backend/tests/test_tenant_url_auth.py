@@ -7,17 +7,21 @@ import pytest
 import pytest_asyncio
 from fastapi import FastAPI, HTTPException
 from httpx import ASGITransport, AsyncClient
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 from sqlalchemy.pool import StaticPool
+from starlette.requests import Request
 
 import app.database as database
-from app.auth import create_access_token, get_password_hash
+from app.auth import create_access_token, create_mcp_service_token, get_password_hash
 from app.database import Base, get_db
 from app.deps import get_auth_context, get_auth_context_from_token
 from app.models import User
 from app.models.tenant import Tenant, UserTenant
 from app.routes.auth import router as auth_router
 from app.routes.auth.login import _issue_login_response_for_user
+from app.routes.applications.section_content import _serve_custom_page_asset
+from app.tenant_public_id import historical_tenant_public_id
 
 
 def bearer(token: str) -> dict[str, str]:
@@ -101,6 +105,32 @@ async def disable_tenant(session: AsyncSession, tenant_id: int) -> None:
     await session.commit()
 
 
+async def disable_membership(session: AsyncSession, user_id: int, tenant_id: int) -> None:
+    membership = (
+        await session.execute(
+            select(UserTenant).where(
+                UserTenant.user_id == user_id,
+                UserTenant.tenant_id == tenant_id,
+            )
+        )
+    ).scalar_one()
+    membership.status = 0
+    await session.commit()
+
+
+async def remove_membership(session: AsyncSession, user_id: int, tenant_id: int) -> None:
+    membership = (
+        await session.execute(
+            select(UserTenant).where(
+                UserTenant.user_id == user_id,
+                UserTenant.tenant_id == tenant_id,
+            )
+        )
+    ).scalar_one()
+    await session.delete(membership)
+    await session.commit()
+
+
 @pytest.mark.asyncio
 async def test_me_returns_current_tenant_public_id(client, auth_db_factory):
     user, tenants = await seed_tenant_user(auth_db_factory)
@@ -111,6 +141,28 @@ async def test_me_returns_current_tenant_public_id(client, auth_db_factory):
 
     assert response.status_code == 200
     assert response.json()["tenant_public_id"] == tenant.public_id
+
+
+@pytest.mark.asyncio
+async def test_me_durably_backfills_legacy_null_tenant_public_id(client, auth_db_factory):
+    user, tenants = await seed_tenant_user(auth_db_factory)
+    tenant = tenants[0]
+    token = create_access_token(user, tenant_id=tenant.id)
+
+    async with auth_db_factory() as session:
+        persisted = await session.get(Tenant, tenant.id)
+        persisted.public_id = None
+        await session.commit()
+
+    response = await client.get("/api/auth/me", headers=bearer(token))
+
+    assert response.status_code == 200
+    projected_public_id = response.json()["tenant_public_id"]
+    async with auth_db_factory() as session:
+        persisted = await session.get(Tenant, tenant.id)
+
+    assert projected_public_id == historical_tenant_public_id(tenant.id)
+    assert persisted.public_id == projected_public_id
 
 
 @pytest.mark.asyncio
@@ -185,3 +237,76 @@ async def test_query_token_auth_rejects_inactive_tenant_token(auth_db_factory):
 
     with pytest.raises(ValueError, match="Tenant is inactive"):
         await get_auth_context_from_token(token)
+
+
+@pytest.mark.asyncio
+async def test_query_token_rejects_disabled_membership(auth_db_factory):
+    user, tenants = await seed_tenant_user(auth_db_factory)
+    tenant = tenants[0]
+    token = create_access_token(user, tenant_id=tenant.id)
+
+    async with auth_db_factory() as session:
+        await disable_membership(session, user.id, tenant.id)
+
+    with pytest.raises(ValueError, match="Tenant membership is inactive"):
+        await get_auth_context_from_token(token)
+
+
+@pytest.mark.asyncio
+async def test_custom_page_query_token_rejects_removed_membership(auth_db_factory):
+    user, tenants = await seed_tenant_user(auth_db_factory)
+    tenant = tenants[0]
+    token = create_access_token(user, tenant_id=tenant.id)
+
+    async with auth_db_factory() as session:
+        await remove_membership(session, user.id, tenant.id)
+        request = Request(
+            {
+                "type": "http",
+                "method": "GET",
+                "path": "/api/applications/1/custom-page-assets-auth/token/bundle/app.js",
+                "headers": [],
+                "query_string": b"",
+            }
+        )
+        with pytest.raises(HTTPException) as exc:
+            await _serve_custom_page_asset(
+                app_id=1,
+                bundle_dir="bundle",
+                asset_path="app.js",
+                request=request,
+                db=session,
+                token=token,
+            )
+
+    assert exc.value.status_code == 401
+
+
+@pytest.mark.asyncio
+async def test_query_token_keeps_platform_admin_special_branch(auth_db_factory):
+    user, tenants = await seed_tenant_user(auth_db_factory, is_platform_admin=True)
+    tenant = tenants[0]
+    token = create_access_token(user, tenant_id=tenant.id)
+
+    async with auth_db_factory() as session:
+        await remove_membership(session, user.id, tenant.id)
+
+    ctx = await get_auth_context_from_token(token)
+
+    assert ctx.tenant_id == tenant.id
+    assert ctx.tenant_role == "platform_admin"
+
+
+@pytest.mark.asyncio
+async def test_query_token_keeps_mcp_service_special_branch(auth_db_factory):
+    user, tenants = await seed_tenant_user(auth_db_factory)
+    tenant = tenants[0]
+    token = create_mcp_service_token(user.id, tenant.id)
+
+    async with auth_db_factory() as session:
+        await remove_membership(session, user.id, tenant.id)
+
+    ctx = await get_auth_context_from_token(token)
+
+    assert ctx.tenant_id == tenant.id
+    assert ctx.tenant_role == "platform_admin"

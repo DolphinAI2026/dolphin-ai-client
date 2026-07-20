@@ -337,8 +337,16 @@ async def get_auth_context_from_token(token: str) -> AuthContext:
             )
         )
         user_tenant = result.scalar_one_or_none()
+        if not user_tenant:
+            logger.warning(
+                "auth_context_from_token forbidden: user is not an active tenant member "
+                "user_id=%s tenant_id=%s",
+                user_id,
+                tenant_id,
+            )
+            raise ValueError("Tenant membership is inactive")
         tenant_role, org_permissions = await _resolve_role_context(
-            db, user_tenant.role_id if user_tenant else None
+            db, user_tenant.role_id
         )
         return AuthContext(
             user=user,

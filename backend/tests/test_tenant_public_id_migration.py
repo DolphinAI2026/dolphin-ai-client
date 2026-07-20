@@ -1,3 +1,4 @@
+import asyncio
 import os
 from types import SimpleNamespace
 from uuid import UUID, uuid4
@@ -472,6 +473,89 @@ async def test_ensure_tenant_public_id_assigns_uuid4_and_flushes():
             assert tenant.id is not None
             assert public_id_value == tenant.public_id
             assert UUID(public_id_value).version == 4
+    finally:
+        await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_ensure_tenant_public_id_durably_backfills_legacy_null_across_sessions(tmp_path):
+    engine = create_async_engine(
+        f"sqlite+aiosqlite:///{tmp_path / 'tenant-public-id-durable.db'}"
+    )
+    try:
+        async with engine.begin() as conn:
+            await conn.run_sync(Base.metadata.create_all)
+        session_factory = async_sessionmaker(
+            engine,
+            class_=AsyncSession,
+            expire_on_commit=False,
+        )
+        async with session_factory() as session:
+            tenant = Tenant(tenant_name="tenant", tenant_code="tenant")
+            session.add(tenant)
+            await session.commit()
+            tenant_id = tenant.id
+
+        async with session_factory() as session:
+            tenant = await session.get(Tenant, tenant_id)
+            tenant.public_id = None
+            await session.commit()
+
+        async with session_factory() as session:
+            tenant = await session.get(Tenant, tenant_id)
+            projected_public_id = await ensure_tenant_public_id(session, tenant)
+
+        async with session_factory() as session:
+            persisted = await session.get(Tenant, tenant_id)
+
+        assert projected_public_id == historical_tenant_public_id(tenant_id)
+        assert persisted.public_id == projected_public_id
+    finally:
+        await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_ensure_tenant_public_id_concurrently_returns_the_durable_legacy_value(tmp_path):
+    engine = create_async_engine(
+        f"sqlite+aiosqlite:///{tmp_path / 'tenant-public-id-concurrent.db'}"
+    )
+    try:
+        async with engine.begin() as conn:
+            await conn.run_sync(Base.metadata.create_all)
+        session_factory = async_sessionmaker(
+            engine,
+            class_=AsyncSession,
+            expire_on_commit=False,
+        )
+        async with session_factory() as session:
+            tenant = Tenant(tenant_name="tenant", tenant_code="tenant")
+            session.add(tenant)
+            await session.commit()
+            tenant_id = tenant.id
+
+        async with session_factory() as session:
+            tenant = await session.get(Tenant, tenant_id)
+            tenant.public_id = None
+            await session.commit()
+
+        barrier = asyncio.Barrier(2)
+
+        async def project_public_id() -> str:
+            async with session_factory() as session:
+                tenant = await session.get(Tenant, tenant_id)
+                await barrier.wait()
+                return await ensure_tenant_public_id(session, tenant)
+
+        first, second = await asyncio.gather(
+            project_public_id(),
+            project_public_id(),
+        )
+
+        async with session_factory() as session:
+            persisted = await session.get(Tenant, tenant_id)
+
+        assert first == second == persisted.public_id
+        assert persisted.public_id == historical_tenant_public_id(tenant_id)
     finally:
         await engine.dispose()
 
