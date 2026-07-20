@@ -1,6 +1,12 @@
-import axios from 'axios'
+import axios, { AxiosHeaders } from 'axios'
 import type { AxiosInstance, AxiosResponse } from 'axios'
 import { isApaasTokenError } from './errorHandler'
+
+declare module 'axios' {
+  interface AxiosRequestConfig {
+    authFailurePolicy?: 'preserve-source-session'
+  }
+}
 
 /** API 路径前缀：本地开发固定走 Vite 代理 `/api`，生产环境跟随 base */
 export const API_PREFIX = import.meta.env.DEV
@@ -11,6 +17,33 @@ const request: AxiosInstance = axios.create({
   baseURL: API_PREFIX,
   timeout: 60000
 })
+
+type AuthorizationHeaders = {
+  has?: (header: string) => boolean
+  get?: (header: string) => unknown
+  set?: (header: string, value: string) => void
+  Authorization?: unknown
+  authorization?: unknown
+}
+
+function hasExplicitAuthorization(headers: AuthorizationHeaders): boolean {
+  if (
+    typeof headers.has === 'function'
+    && typeof headers.get === 'function'
+    && typeof headers.set === 'function'
+  ) {
+    return headers.has('Authorization') && Boolean(headers.get('Authorization'))
+  }
+  return Boolean(headers.Authorization || headers.authorization)
+}
+
+function setAuthorization(headers: AuthorizationHeaders, token: string) {
+  if (typeof headers.set === 'function') {
+    headers.set('Authorization', `Bearer ${token}`)
+    return
+  }
+  headers.Authorization = `Bearer ${token}`
+}
 
 function currentRouteAsRedirect(): string {
   const base = import.meta.env.BASE_URL || '/'
@@ -55,11 +88,11 @@ export function shouldRedirectToLoginOnHttpError(input: {
 // 请求拦截器
 request.interceptors.request.use(
   (config) => {
-    const existingAuthorization = config.headers?.Authorization
-    if (!existingAuthorization) {
+    const headers = (config.headers ||= new AxiosHeaders()) as AuthorizationHeaders
+    if (!hasExplicitAuthorization(headers)) {
       const token = localStorage.getItem('token')
       if (token) {
-        config.headers.Authorization = `Bearer ${token}`
+        setAuthorization(headers, token)
       }
     }
     return config
@@ -75,6 +108,10 @@ request.interceptors.response.use(
     return response.data
   },
   (error) => {
+    if (error.config?.authFailurePolicy === 'preserve-source-session') {
+      return Promise.reject(error)
+    }
+
     const status = error.response?.status
     const reqUrl = String(error.config?.url || '')
     const errorDetail = String(
@@ -84,21 +121,7 @@ request.interceptors.response.use(
       ''
     )
     const isLoginPage = window.location.pathname.endsWith('/login')
-    const sourceToken = localStorage.getItem('token')
-    const errorHeaders = error.config?.headers
-    const explicitAuthorization = typeof errorHeaders?.get === 'function'
-      ? errorHeaders.get('Authorization')
-      : errorHeaders?.Authorization || errorHeaders?.authorization
-    const isCandidateAuthorization = Boolean(
-      sourceToken
-      && explicitAuthorization
-      && explicitAuthorization !== `Bearer ${sourceToken}`
-    )
-
-    if (
-      !isCandidateAuthorization
-      && shouldRedirectToLoginOnHttpError({ status, reqUrl, errorDetail, isLoginPage })
-    ) {
+    if (shouldRedirectToLoginOnHttpError({ status, reqUrl, errorDetail, isLoginPage })) {
       localStorage.removeItem('token')
       const redirect = encodeURIComponent(currentRouteAsRedirect())
       window.location.href = `${import.meta.env.BASE_URL}login?redirect=${redirect}`

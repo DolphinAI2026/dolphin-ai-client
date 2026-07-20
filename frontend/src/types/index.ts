@@ -5,8 +5,8 @@ export interface User {
   is_active: boolean
   is_platform_admin?: boolean
   created_at: string
-  tenant_id?: number
-  tenant_public_id?: string
+  tenant_id?: number | null
+  tenant_public_id?: string | null
   tenant_name?: string
   tenant_role?: string
   org_permissions?: Record<string, boolean>

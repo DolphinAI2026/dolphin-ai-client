@@ -220,6 +220,7 @@ export const authApi = {
     return request.get<any, User>('/auth/me', {
       headers: { Authorization: `Bearer ${candidateToken}` },
       signal,
+      authFailurePolicy: 'preserve-source-session',
     })
   },
 

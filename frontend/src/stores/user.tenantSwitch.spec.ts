@@ -167,7 +167,7 @@ describe('user tenant switching', () => {
     await store.switchTenant(2)
 
     expect(authMocks.switchTenant).toHaveBeenCalledWith(2)
-    expect(replace).toHaveBeenCalledWith('/ai-builder/')
+    expect(replace).toHaveBeenCalledWith('/?tenantId=22222222-2222-4222-8222-222222222222')
   })
 
   it('ignores a storage event whose token no longer matches localStorage', async () => {
@@ -208,6 +208,100 @@ describe('user tenant switching', () => {
 
     expect(signalForB.aborted).toBe(true)
     expect(store.user).toEqual(userA)
-    expect(replace).toHaveBeenCalledWith('/ai-builder/')
+    expect(replace).toHaveBeenCalledWith('/?tenantId=11111111-1111-4111-8111-111111111111')
+  })
+
+  it('keeps the current in-memory session and tabs when storage alignment fails', async () => {
+    const { fireStorageEvent, replace } = installBrowserGlobals()
+    const sourceUser = makeUser({ display_name: 'Source session' })
+    localStorage.setItem('token', 'source-token')
+    localStorage.setItem('ai-builder-tabs-v1', 'source-tabs')
+    authMocks.getMeWithToken.mockRejectedValue(new Error('candidate request failed'))
+
+    setActivePinia(createPinia())
+    const store = useUserStore()
+    store.user = sourceUser
+
+    localStorage.setItem('token', 'candidate-token')
+    fireStorageEvent('candidate-token')
+    await flushPromises()
+
+    expect(store.token).toBe('source-token')
+    expect(store.user).toEqual(sourceUser)
+    expect(localStorage.getItem('ai-builder-tabs-v1')).toBe('source-tabs')
+    expect(replace).not.toHaveBeenCalled()
+  })
+
+  it.each([
+    ['builder', '/?tenantId=22222222-2222-4222-8222-222222222222'],
+    ['code', '/code/apps?tenantId=22222222-2222-4222-8222-222222222222'],
+  ])('aligns a tenant session to the current %s mode home', async (mode, expectedDestination) => {
+    const { fireStorageEvent, replace } = installBrowserGlobals()
+    localStorage.setItem('token', 'source-token')
+    localStorage.setItem('apaas-app-mode-v1', mode)
+    authMocks.getMeWithToken.mockResolvedValue(makeUser({
+      tenant_id: 2,
+      tenant_name: 'Target tenant',
+      tenant_public_id: targetUuid,
+    }))
+
+    setActivePinia(createPinia())
+    useUserStore()
+
+    localStorage.setItem('token', 'candidate-token')
+    fireStorageEvent('candidate-token')
+    await flushPromises()
+
+    expect(replace).toHaveBeenCalledWith(expectedDestination)
+  })
+
+  it('aligns a no-tenant platform session directly to platform admin', async () => {
+    const { fireStorageEvent, replace } = installBrowserGlobals()
+    localStorage.setItem('token', 'source-token')
+    authMocks.getMeWithToken.mockResolvedValue(makeUser({
+      tenant_id: null,
+      tenant_public_id: null,
+      tenant_name: undefined,
+      tenant_role: 'platform_admin',
+      is_platform_admin: true,
+    }))
+
+    setActivePinia(createPinia())
+    useUserStore()
+
+    localStorage.setItem('token', 'platform-token')
+    fireStorageEvent('platform-token')
+    await flushPromises()
+
+    expect(replace).toHaveBeenCalledWith('/platform-admin/')
+  })
+
+  it('drops an ABA storage response after local token commits return to the same value', async () => {
+    const { fireStorageEvent, replace } = installBrowserGlobals()
+    const slowA = deferred<User>()
+    const freshUser = makeUser({ display_name: 'Fresh local session' })
+    const staleUser = makeUser({ display_name: 'Stale storage response' })
+    localStorage.setItem('token', 'token-a')
+    localStorage.setItem('ai-builder-tabs-v1', 'source-tabs')
+    authMocks.getMeWithToken.mockImplementation((candidateToken: string) => {
+      if (candidateToken === 'token-a') return slowA.promise
+      throw new Error(`unexpected candidate token: ${candidateToken}`)
+    })
+
+    setActivePinia(createPinia())
+    const store = useUserStore()
+    store.user = makeUser({ display_name: 'Initial session' })
+
+    fireStorageEvent('token-a')
+    store.setToken('token-b')
+    store.user = makeUser({ display_name: 'Intermediate local session' })
+    store.setToken('token-a')
+    store.user = freshUser
+    slowA.resolve(staleUser)
+    await flushPromises()
+
+    expect(store.user).toEqual(freshUser)
+    expect(localStorage.getItem('ai-builder-tabs-v1')).toBe('source-tabs')
+    expect(replace).not.toHaveBeenCalled()
   })
 })

@@ -3,6 +3,7 @@ import { ref, computed } from 'vue'
 import { authApi } from '@/api/auth'
 import type { User, TenantOption } from '@/types'
 import { resetOnboardingCache } from '@/composables/useOnboardingState'
+import { MODE_META, useModeStore } from '@/stores/mode'
 
 export const useUserStore = defineStore('user', () => {
   const user = ref<User | null>(null)
@@ -10,6 +11,33 @@ export const useUserStore = defineStore('user', () => {
   const availableTenants = ref<TenantOption[]>([])
   let storageAlignmentGeneration = 0
   let storageAlignmentAbortController: AbortController | null = null
+
+  const invalidateStorageAlignment = () => {
+    storageAlignmentGeneration += 1
+    storageAlignmentAbortController?.abort()
+    storageAlignmentAbortController = null
+  }
+
+  const currentModeTenantHome = (tenantPublicId: string) => {
+    const base = import.meta.env.BASE_URL || '/'
+    const prefix = base === '/' ? '' : base.replace(/\/$/, '')
+    const home = MODE_META[useModeStore().mode].home
+    return `${prefix}${home}?tenantId=${encodeURIComponent(tenantPublicId)}`
+  }
+
+  const storageAlignmentDestination = (alignedUser: User): string | null => {
+    if (alignedUser.tenant_id === null && alignedUser.tenant_public_id === null) {
+      return '/platform-admin/'
+    }
+    if (
+      typeof alignedUser.tenant_id !== 'number'
+      || typeof alignedUser.tenant_public_id !== 'string'
+      || !alignedUser.tenant_public_id
+    ) {
+      return null
+    }
+    return currentModeTenantHome(alignedUser.tenant_public_id)
+  }
 
   // 多租户状态
   const tenantId = computed(() => user.value?.tenant_id || null)
@@ -32,11 +60,13 @@ export const useUserStore = defineStore('user', () => {
   )
 
   const setToken = (newToken: string) => {
+    invalidateStorageAlignment()
     token.value = newToken
     localStorage.setItem('token', newToken)
   }
 
   const clearToken = () => {
+    invalidateStorageAlignment()
     token.value = null
     user.value = null
     localStorage.removeItem('token')
@@ -137,7 +167,11 @@ export const useUserStore = defineStore('user', () => {
       throw new Error('target tenant is not authorized')
     }
 
-    await switchTenantContext(targetTenantId, targetTenant.tenant_public_id, '/ai-builder/')
+    await switchTenantContext(
+      targetTenantId,
+      targetTenant.tenant_public_id,
+      currentModeTenantHome(targetTenant.tenant_public_id),
+    )
   }
 
   const alignTokenFromStorage = async (eventToken: string) => {
@@ -148,10 +182,12 @@ export const useUserStore = defineStore('user', () => {
 
     try {
       const alignedUser = await authApi.getMeWithToken(eventToken, controller.signal)
+      const destination = storageAlignmentDestination(alignedUser)
       if (
         controller.signal.aborted
         || generation !== storageAlignmentGeneration
         || localStorage.getItem('token') !== eventToken
+        || !destination
       ) {
         return
       }
@@ -159,14 +195,13 @@ export const useUserStore = defineStore('user', () => {
       token.value = eventToken
       user.value = alignedUser
       try { localStorage.removeItem('ai-builder-tabs-v1') } catch { /* ignore */ }
-      window.location.replace('/ai-builder/')
+      window.location.replace(destination)
+      if (storageAlignmentAbortController === controller) {
+        storageAlignmentAbortController = null
+      }
     } catch {
-      if (
-        !controller.signal.aborted
-        && generation === storageAlignmentGeneration
-        && localStorage.getItem('token') === eventToken
-      ) {
-        clearToken()
+      if (storageAlignmentAbortController === controller) {
+        storageAlignmentAbortController = null
       }
     }
   }
@@ -177,9 +212,6 @@ export const useUserStore = defineStore('user', () => {
 
       const eventToken = event.newValue
       if (!eventToken) {
-        storageAlignmentGeneration += 1
-        storageAlignmentAbortController?.abort()
-        storageAlignmentAbortController = null
         clearToken()
         return
       }
