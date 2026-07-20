@@ -17,6 +17,14 @@ documents:
     status: not_requested
   git:
     tracked: true
+- path: docs/solutions/l3/business/tenant-aware-navigation.md
+  document_kind: unknown-markdown
+  classification: managed-by-asset-index
+  content_hash: sha256:e5aae520c5454bf3cd187f0feaf63e24d999b254f26be7a54adbb19fbcb4b6a0
+  normalization:
+    status: not_requested
+  git:
+    tracked: true
 - path: docs/superpowers/plans/2026-07-09-builder-ai-unified-auth.md
   document_kind: reference
   classification: needs-review
@@ -73,6 +81,22 @@ documents:
     status: not_requested
   git:
     tracked: true
+- path: docs/superpowers/plans/2026-07-17-builder-sandbox-token-free-transparent-renewal.md
+  document_kind: reference
+  classification: needs-review
+  content_hash: sha256:ce4307f8889ac0d15d4ca5d062c079b1d55bee224ea77a4f5f251c62a78c18a8
+  normalization:
+    status: not_requested
+  git:
+    tracked: true
+- path: docs/superpowers/plans/2026-07-18-builder-fast-auth-phase1-loading.md
+  document_kind: reference
+  classification: needs-review
+  content_hash: sha256:e8861a0b47bf1d794a731a34a1bbe1bddb81e088c87f11415f30d8e169336c9d
+  normalization:
+    status: not_requested
+  git:
+    tracked: true
 - path: docs/superpowers/specs/2026-07-10-engineering-sessions-worktree-sync-design.md
   document_kind: reference
   classification: needs-review
@@ -117,6 +141,22 @@ documents:
   document_kind: reference
   classification: needs-review
   content_hash: sha256:cc623c4523724ad5cbad4110ca0403fa296b3915fccdb2939a80d3040ab91d1a
+  normalization:
+    status: not_requested
+  git:
+    tracked: true
+- path: docs/superpowers/specs/2026-07-18-builder-fast-auth-multi-sandbox-cache-design.md
+  document_kind: reference
+  classification: needs-review
+  content_hash: sha256:5e46529619352d0a9ac785797aacdc24771cd0cb91a5cc742f41af0572a71d39
+  normalization:
+    status: not_requested
+  git:
+    tracked: true
+- path: docs/superpowers/specs/2026-07-20-builder-tenant-url-public-uuid-design.md
+  document_kind: unknown-markdown
+  classification: managed-by-asset-index
+  content_hash: sha256:d472f7bb6fdc34913e94de77882d00c404804cfd2eb2d38b46750050e4891232
   normalization:
     status: not_requested
   git:
