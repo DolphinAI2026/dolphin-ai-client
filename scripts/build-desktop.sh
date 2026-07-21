@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# 一键构建桌面包: 前端 → PyInstaller sidecar → rename → tauri build
+# 一键构建桌面包: 前端 → PyInstaller sidecar → Linux appliance → tauri build
 set -euo pipefail
 
 START_TS=$(date +%s)
@@ -28,8 +28,14 @@ cp "$ROOT/backend/dist/ruijing-sidecar" "$ROOT/src-tauri/binaries/ruijing-sideca
 chmod +x "$ROOT/src-tauri/binaries/ruijing-sidecar-${TRIPLE}"
 ls -lh "$ROOT/src-tauri/binaries/"
 
+if [[ "$(uname -s)" == "Linux" ]]; then
+    echo ""
+    echo "==> 4/5 构建 Linux 本地运行时 appliance"
+    "$ROOT/scripts/prepare-local-runtime-appliance-linux.sh"
+fi
+
 echo ""
-echo "==> 4/4 Tauri 出包"
+echo "==> Tauri 出包"
 cd "$ROOT" && npx tauri build || {
     echo ""
     echo "    WARNING: tauri build failed (possibly DMG needs full Xcode); falling back to --bundles app"
