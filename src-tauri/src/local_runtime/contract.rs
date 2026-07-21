@@ -15,6 +15,7 @@ pub enum InstanceState {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct StartRequest {
     pub runtime_scope_id: String,
     pub application_id: String,

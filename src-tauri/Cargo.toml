@@ -32,3 +32,5 @@ mxc-sdk = { git = "https://github.com/microsoft/mxc.git", rev = "fd7e9061fabb518
 thiserror = "2"
 chrono = { version = "0.4", features = ["serde"] }
 libc = "0.2"
+getrandom = "0.3"
+tiny_http = "0.12"
