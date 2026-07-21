@@ -13,7 +13,7 @@ import { desktopLogin } from '@/api/desktopAuth'
 
 function runRequestInterceptor(config: {
   headers?: Record<string, string> | AxiosHeaders
-  authPolicy?: 'public'
+  authPolicy?: 'public' | 'candidate'
 }) {
   const handler = (
     request.interceptors.request as unknown as {
@@ -34,7 +34,7 @@ function runResponseErrorInterceptor(error: {
     url?: string
     headers?: Record<string, string>
     authFailurePolicy?: 'preserve-source-session'
-    authPolicy?: 'public'
+    authPolicy?: 'public' | 'candidate'
   }
 }) {
   const handler = (
@@ -100,6 +100,7 @@ describe('request explicit Authorization', () => {
       headers: { Authorization: 'Bearer candidate-token' },
       signal,
       authFailurePolicy: 'preserve-source-session',
+      authPolicy: 'candidate',
     })
   })
 
@@ -132,20 +133,60 @@ describe('request explicit Authorization', () => {
     expect(config.headers?.Authorization).toBeUndefined()
   })
 
-  it('lets public and explicit candidate requests bypass cross-tab alignment pending', async () => {
+  it('lets public requests bypass cross-tab alignment pending', async () => {
     commitAuthSession('source-token')
     beginAuthSessionAlignment('candidate-token')
     localStorage.setItem('token', 'candidate-token')
 
     const publicConfig = await runRequestInterceptor({
-      headers: {},
+      headers: { Authorization: 'Bearer source-token' },
       authPolicy: 'public',
     })
+
+    expect(publicConfig.headers?.Authorization).toBe('Bearer source-token')
+  })
+
+  it.each([
+    ['source token', 'Bearer source-token'],
+    ['arbitrary bearer', 'Bearer unrelated-token'],
+  ])('rejects an untyped explicit %s during cross-tab alignment', async (_name, authorization) => {
+    commitAuthSession('source-token')
+    beginAuthSessionAlignment('candidate-token')
+    localStorage.setItem('token', 'candidate-token')
+
+    await expect(
+      Promise.resolve().then(() => runRequestInterceptor({
+        headers: { Authorization: authorization },
+      })),
+    ).rejects.toMatchObject({ code: 'AUTH_SESSION_PENDING' })
+  })
+
+  it.each([
+    ['source token', 'Bearer source-token'],
+    ['arbitrary bearer', 'Bearer unrelated-token'],
+  ])('rejects a typed candidate %s that does not match the bootstrap token', async (_name, authorization) => {
+    commitAuthSession('source-token')
+    beginAuthSessionAlignment('candidate-token')
+    localStorage.setItem('token', 'candidate-token')
+
+    await expect(
+      Promise.resolve().then(() => runRequestInterceptor({
+        headers: { Authorization: authorization },
+        authPolicy: 'candidate',
+      })),
+    ).rejects.toMatchObject({ code: 'AUTH_SESSION_PENDING' })
+  })
+
+  it('allows only a typed candidate whose Authorization matches the bootstrap token', async () => {
+    commitAuthSession('source-token')
+    beginAuthSessionAlignment('candidate-token')
+    localStorage.setItem('token', 'candidate-token')
+
     const candidateConfig = await runRequestInterceptor({
       headers: { Authorization: 'Bearer candidate-token' },
+      authPolicy: 'candidate',
     })
 
-    expect(publicConfig.headers?.Authorization).toBeUndefined()
     expect(candidateConfig.headers?.Authorization).toBe('Bearer candidate-token')
   })
 
@@ -252,6 +293,35 @@ describe('request explicit Authorization', () => {
     })
 
     expect(directReads).toEqual([])
+  })
+
+  it('reserves typed candidate auth for the auth API candidate verifier', () => {
+    const sourceRoot = join(process.cwd(), 'src')
+    const files: string[] = []
+    const collect = (directory: string) => {
+      for (const entry of readdirSync(directory, { withFileTypes: true })) {
+        const path = join(directory, entry.name)
+        if (entry.isDirectory()) {
+          collect(path)
+        } else if (
+          (entry.name.endsWith('.ts') || entry.name.endsWith('.vue'))
+          && !entry.name.includes('.spec.')
+          && !entry.name.includes('.test.')
+        ) {
+          files.push(path)
+        }
+      }
+    }
+    collect(sourceRoot)
+
+    const candidatePolicySources = files.flatMap((file) => {
+      const source = readFileSync(file, 'utf8')
+      return source.includes("authPolicy: 'candidate'")
+        ? [relative(sourceRoot, file)]
+        : []
+    })
+
+    expect(candidatePolicySources).toEqual(['api/auth.ts'])
   })
 
   it('does not use the mutable user-store token for native coding streams', () => {

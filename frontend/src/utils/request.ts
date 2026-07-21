@@ -5,7 +5,7 @@ import { isApaasTokenError } from './errorHandler'
 declare module 'axios' {
   interface AxiosRequestConfig {
     authFailurePolicy?: 'preserve-source-session'
-    authPolicy?: 'public'
+    authPolicy?: 'public' | 'candidate'
     committedAuthToken?: string | null
     usesCommittedAuthToken?: boolean
     authSessionRevision?: number
@@ -180,15 +180,15 @@ type AuthorizationHeaders = {
   authorization?: unknown
 }
 
-function hasExplicitAuthorization(headers: AuthorizationHeaders): boolean {
+function explicitAuthorization(headers: AuthorizationHeaders): unknown {
   if (
     typeof headers.has === 'function'
     && typeof headers.get === 'function'
     && typeof headers.set === 'function'
   ) {
-    return headers.has('Authorization') && Boolean(headers.get('Authorization'))
+    return headers.has('Authorization') ? headers.get('Authorization') : null
   }
-  return Boolean(headers.Authorization || headers.authorization)
+  return headers.Authorization || headers.authorization || null
 }
 
 function setAuthorization(headers: AuthorizationHeaders, token: string) {
@@ -262,12 +262,26 @@ request.interceptors.request.use(
     if (config.authPolicy === 'public') {
       return config
     }
-    if (!hasExplicitAuthorization(headers)) {
-      const session = getAuthSessionState()
+    const authorization = explicitAuthorization(headers)
+    const session = getAuthSessionState()
+    const bootstrapToken = getAuthSessionBootstrapToken()
+    if (bootstrapToken) {
       if (
-        getAuthSessionBootstrapToken()
-        || (!session.initialized && localStorage.getItem('token'))
+        config.authPolicy !== 'candidate'
+        || authorization !== `Bearer ${bootstrapToken}`
       ) {
+        throw new AuthSessionPendingError()
+      }
+      return config
+    }
+    if (config.authPolicy === 'candidate') {
+      if (!authorization) {
+        throw new AuthSessionPendingError()
+      }
+      return config
+    }
+    if (!authorization) {
+      if (!session.initialized && localStorage.getItem('token')) {
         throw new AuthSessionPendingError()
       }
       const token = session.token

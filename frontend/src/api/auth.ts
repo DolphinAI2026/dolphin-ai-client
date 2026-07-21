@@ -225,6 +225,7 @@ export const authApi = {
       headers: { Authorization: `Bearer ${candidateToken}` },
       signal,
       authFailurePolicy: 'preserve-source-session',
+      authPolicy: 'candidate',
     })
   },
 
