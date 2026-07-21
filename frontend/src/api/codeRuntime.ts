@@ -2,6 +2,9 @@ import request from '@/utils/request'
 import type { AIChatSession } from '@/api/aiChat'
 import type { MergedApplication } from '@/types'
 
+// This owner must change with any automatic activate retry added by the client.
+export const CODE_RUNTIME_ACTIVATION_RETRY_DELAYS_MS = [] as const
+
 export interface CodeApplication extends MergedApplication {
   id: string
   external_application_id: string

@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
 import { createRequire } from "node:module";
 
 const require = createRequire(import.meta.url);
@@ -23,14 +24,44 @@ for (const [name, value] of Object.entries(required)) {
   assert.ok(value, `${name} is required`);
 }
 
-assert.match(required.origin, /^https?:\/\/[^/\s]+(?:\/[^?\s]*)?$/);
+const originUrl = new URL(required.origin);
+assert.ok(["http:", "https:"].includes(originUrl.protocol), "origin must use http(s)");
+assert.equal(originUrl.username, "", "origin must not contain username");
+assert.equal(originUrl.password, "", "origin must not contain password");
+assert.equal(originUrl.pathname, "/", "origin must not include a path");
+assert.equal(originUrl.search, "", "origin must not include a query");
+assert.equal(originUrl.hash, "", "origin must not include a fragment");
 assert.match(required.revision, /^[0-9a-f]{40}$/);
 assert.match(required.image, /@sha256:[0-9a-f]{64}$/);
 
-const origin = required.origin.replace(/\/+$/, "");
+const origin = originUrl.origin;
 const appBase = `${origin}/ai-builder`;
 const agentId = process.env.BUILDER_SMOKE_AGENT_ID || "";
 const uuidPattern = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
+
+const activationRetryScheduleSource = readFileSync(
+  new URL("../../frontend/src/api/codeRuntime.ts", import.meta.url),
+  "utf8",
+);
+const activationRetryScheduleMatch = activationRetryScheduleSource.match(
+  /export const CODE_RUNTIME_ACTIVATION_RETRY_DELAYS_MS\s*=\s*\[([^\]]*)\]\s*as const/,
+);
+assert.ok(
+  activationRetryScheduleMatch,
+  "Code activation retry schedule owner is missing",
+);
+const activationRetryDelaysMs = activationRetryScheduleMatch[1].trim()
+  ? activationRetryScheduleMatch[1].split(",").map((value) => Number(value.trim()))
+  : [];
+for (const delay of activationRetryDelaysMs) {
+  assert.ok(
+    Number.isInteger(delay) && delay >= 0,
+    "Code activation retry schedule contains an invalid delay",
+  );
+}
+const activationRetrySafetyMarginMs = 250;
+const activationObservationWindowMs = Math.max(0, ...activationRetryDelaysMs)
+  + activationRetrySafetyMarginMs;
 
 function authorization(token) {
   return { Authorization: `Bearer ${token}` };
@@ -223,8 +254,8 @@ function assertActivationContract(observer) {
   assert.equal(observer.code401s.length, 0, "Code endpoint returned 401");
 }
 
-function waitForQuietPeriod(timeoutMs) {
-  return new Promise((resolve) => setTimeout(resolve, timeoutMs));
+function waitForActivationRetryWindow() {
+  return new Promise((resolve) => setTimeout(resolve, activationObservationWindowMs));
 }
 
 function fakeActivationResponse(observedAgentId, status = 200) {
@@ -260,17 +291,21 @@ async function runActivationObserverContract() {
   const delayedObserver = observeCodeActivation(delayedPage);
   setTimeout(() => delayedPage.emit("response", fakeActivationResponse(agentId)), 40);
   await delayedObserver.waitForExpectedActivation(200);
-  await waitForQuietPeriod(80);
+  await waitForActivationRetryWindow();
   assertActivationContract(delayedObserver);
 
   const duplicatePage = fakeEventPage();
   const duplicateObserver = observeCodeActivation(duplicatePage);
   setTimeout(() => duplicatePage.emit("response", fakeActivationResponse(agentId)), 10);
-  setTimeout(() => duplicatePage.emit("response", fakeActivationResponse(agentId)), 50);
+  setTimeout(
+    () => duplicatePage.emit("response", fakeActivationResponse(agentId)),
+    Math.max(20, activationObservationWindowMs - 10),
+  );
   await duplicateObserver.waitForExpectedActivation(200);
-  await waitForQuietPeriod(100);
+  await waitForActivationRetryWindow();
   assert.throws(() => assertActivationContract(duplicateObserver), /exactly one/);
   console.log("ACTIVATION_OBSERVER_CONTRACT=PASS");
+  console.log("ACTIVATION_RETRY_CONTRACT=PASS");
 }
 
 async function runReleaseSmoke() {
@@ -338,7 +373,7 @@ async function runReleaseSmoke() {
       timeout: 20_000,
     });
     await page.locator("body").waitFor({ state: "visible", timeout: 20_000 });
-    await page.waitForTimeout(2_000);
+    await waitForActivationRetryWindow();
     assertActivationContract(activationObserver);
     const pageText = await page.locator("body").innerText();
     assert.equal(

@@ -20,6 +20,7 @@ variables:
   BUILDER_K8S_LABEL_SELECTOR: "app.kubernetes.io/name=ai-builder"
   BUILDER_K8S_WEB_CONTAINER: "web"
   BUILDER_K8S_EXPECTED_HOST: "om-demo.dfy.definesys.cn"
+  BUILDER_K8S_EXPECTED_ORIGIN: "https://om-demo.dfy.definesys.cn"
   BUILDER_K8S_INGRESS: "ai-builder"
   BUILDER_K8S_SERVICE: "ai-builder"
   BUILDER_K8S_INGRESS_PATH: "/ai-builder"
@@ -172,6 +173,7 @@ release_builder_preflight:
     KUBE_LABEL_SELECTOR: $BUILDER_K8S_LABEL_SELECTOR
     KUBE_WEB_CONTAINER: $BUILDER_K8S_WEB_CONTAINER
     KUBE_EXPECTED_HOST: $BUILDER_K8S_EXPECTED_HOST
+    KUBE_EXPECTED_ORIGIN: $BUILDER_K8S_EXPECTED_ORIGIN
     KUBE_INGRESS: $BUILDER_K8S_INGRESS
     KUBE_SERVICE: $BUILDER_K8S_SERVICE
     KUBE_INGRESS_PATH: $BUILDER_K8S_INGRESS_PATH
@@ -205,6 +207,7 @@ release_builder_preflight:
 
 release_and_update_server:
   stage: release
+  resource_group: "$BUILDER_K8S_NAMESPACE/$BUILDER_K8S_STATEFULSET"
   image:
     name: hub-mirror.dfy.definesys.cn/bitnami/kubectl:1.30.7
     entrypoint: [""]
@@ -226,6 +229,59 @@ release_and_update_server:
       fi
       chmod 600 /tmp/kubeconfig
       export KUBECONFIG=/tmp/kubeconfig
+      release_lock_name="${BUILDER_K8S_STATEFULSET}-release-lock"
+      release_lock_owner="ci-${CI_PIPELINE_ID:-unknown}-${CI_JOB_ID:-unknown}"
+      lock_value() {
+        kubectl -n "${BUILDER_K8S_NAMESPACE}" get "configmap/${release_lock_name}" \
+          -o "jsonpath={.data.$1}"
+      }
+      lock_matches() {
+        [ "$(lock_value owner)" = "${release_lock_owner}" ] \
+          && [ "$(lock_value target_image)" = "${BUILDER_IMAGE}" ]
+      }
+      template_matches() {
+        [ "$(kubectl -n "${BUILDER_K8S_NAMESPACE}" get "statefulset/${BUILDER_K8S_STATEFULSET}" \
+          -o jsonpath="{range .spec.template.spec.containers[?(@.name==\"${BUILDER_K8S_BACKEND_CONTAINER}\")]}{.image}{end}")" = "$1" ] \
+          && [ "$(kubectl -n "${BUILDER_K8S_NAMESPACE}" get "statefulset/${BUILDER_K8S_STATEFULSET}" \
+          -o jsonpath="{range .spec.template.spec.initContainers[?(@.name==\"${BUILDER_K8S_DIST_INIT_CONTAINER}\")]}{.image}{end}")" = "$2" ]
+      }
+      verify_previous_workload() {
+        kubectl -n "${BUILDER_K8S_NAMESPACE}" rollout status \
+          "statefulset/${BUILDER_K8S_STATEFULSET}" --timeout="${BUILDER_ROLLOUT_TIMEOUT}" \
+          || return 1
+        template_matches "${previous_backend_image}" "${previous_init_image}" || return 1
+        revisions="$(kubectl -n "${BUILDER_K8S_NAMESPACE}" get "statefulset/${BUILDER_K8S_STATEFULSET}" \
+          -o jsonpath='{.status.currentRevision}{" "}{.status.updateRevision}')"
+        [ "${revisions%% *}" = "${revisions##* }" ] || return 1
+        pods="$(kubectl -n "${BUILDER_K8S_NAMESPACE}" get pods -l "${BUILDER_K8S_LABEL_SELECTOR}" \
+          -o jsonpath='{range .items[*]}{.metadata.name}{"\n"}{end}')"
+        [ -n "${pods}" ] || return 1
+        while IFS= read -r pod; do
+          [ -n "${pod}" ] || continue
+          [ "$(kubectl -n "${BUILDER_K8S_NAMESPACE}" get pod "${pod}" \
+            -o jsonpath='{range .status.conditions[?(@.type=="Ready")]}{.status}{end}')" = "True" ] || return 1
+          [ "$(kubectl -n "${BUILDER_K8S_NAMESPACE}" get pod "${pod}" \
+            -o jsonpath='{range .metadata.ownerReferences[?(@.kind=="StatefulSet")]}{.name}{end}')" = "${BUILDER_K8S_STATEFULSET}" ] || return 1
+        done <<<"${pods}"
+      }
+      release_lock_if_owned() {
+        lock_matches || return 1
+        kubectl -n "${BUILDER_K8S_NAMESPACE}" delete configmap "${release_lock_name}" >/dev/null
+      }
+      rollback_update_job() {
+        lock_matches || { printf 'release lock owner or target changed; refusing rollback\n' >&2; return 1; }
+        if template_matches "${BUILDER_IMAGE}" "${BUILDER_IMAGE}"; then
+          kubectl -n "${BUILDER_K8S_NAMESPACE}" set image \
+            "statefulset/${BUILDER_K8S_STATEFULSET}" \
+            "${BUILDER_K8S_BACKEND_CONTAINER}=${previous_backend_image}" \
+            "${BUILDER_K8S_DIST_INIT_CONTAINER}=${previous_init_image}" || return 1
+        elif ! template_matches "${previous_backend_image}" "${previous_init_image}"; then
+          printf 'rollback CAS rejected because StatefulSet no longer uses this release image\n' >&2
+          return 1
+        fi
+        verify_previous_workload || return 1
+        release_lock_if_owned
+      }
       previous_backend_image="$(kubectl -n "${BUILDER_K8S_NAMESPACE}" get "statefulset/${BUILDER_K8S_STATEFULSET}" \
         -o jsonpath="{range .spec.template.spec.containers[?(@.name==\"${BUILDER_K8S_BACKEND_CONTAINER}\")]}{.image}{end}")"
       previous_init_image="$(kubectl -n "${BUILDER_K8S_NAMESPACE}" get "statefulset/${BUILDER_K8S_STATEFULSET}" \
@@ -236,15 +292,35 @@ release_and_update_server:
       printf '%s\n' "${previous_init_image}" | grep -Eq '^[^[:space:]@]+@sha256:[0-9a-f]{64}$'
       printf 'PREVIOUS_BACKEND_IMAGE=%s\nPREVIOUS_DIST_INIT_IMAGE=%s\n' \
         "${previous_backend_image}" "${previous_init_image}" >> build/release.env
-      kubectl -n "${BUILDER_K8S_NAMESPACE}" set image \
+      printf 'RELEASE_LOCK_NAME=%s\nRELEASE_LOCK_OWNER=%s\n' \
+        "${release_lock_name}" "${release_lock_owner}" >> build/release.env
+      if ! kubectl -n "${BUILDER_K8S_NAMESPACE}" create configmap "${release_lock_name}" \
+        --from-literal="owner=${release_lock_owner}" \
+        --from-literal="target_image=${BUILDER_IMAGE}" \
+        --from-literal="previous_backend_image=${previous_backend_image}" \
+        --from-literal="previous_init_image=${previous_init_image}" \
+        --from-literal="acquired_at=$(date -u +%Y-%m-%dT%H:%M:%SZ)" >/dev/null; then
+        printf 'release lock exists or cannot be acquired; manual recovery is required\n' >&2
+        exit 1
+      fi
+      if ! kubectl -n "${BUILDER_K8S_NAMESPACE}" set image \
         "statefulset/${BUILDER_K8S_STATEFULSET}" \
         "${BUILDER_K8S_BACKEND_CONTAINER}=${BUILDER_IMAGE}" \
-        "${BUILDER_K8S_DIST_INIT_CONTAINER}=${BUILDER_IMAGE}"
-      kubectl -n "${BUILDER_K8S_NAMESPACE}" rollout status \
+        "${BUILDER_K8S_DIST_INIT_CONTAINER}=${BUILDER_IMAGE}"; then
+        rollback_update_job || { printf 'image update failed and rollback failed\n' >&2; exit 1; }
+        printf 'image update failed; rollback completed\n' >&2
+        exit 1
+      fi
+      if ! kubectl -n "${BUILDER_K8S_NAMESPACE}" rollout status \
         "statefulset/${BUILDER_K8S_STATEFULSET}" \
-        --timeout="${BUILDER_ROLLOUT_TIMEOUT}"
+        --timeout="${BUILDER_ROLLOUT_TIMEOUT}"; then
+        rollback_update_job || { printf 'rollout failed and rollback failed\n' >&2; exit 1; }
+        printf 'rollout failed; rollback completed\n' >&2
+        exit 1
+      fi
       printf 'builderImage=%s\n' "${BUILDER_IMAGE}"
   artifacts:
+    when: always
     expire_in: 1 day
     paths:
       - build/release.env
@@ -268,6 +344,7 @@ release_builder_browser_smoke:
     KUBE_LABEL_SELECTOR: $BUILDER_K8S_LABEL_SELECTOR
     KUBE_WEB_CONTAINER: $BUILDER_K8S_WEB_CONTAINER
     KUBE_EXPECTED_HOST: $BUILDER_K8S_EXPECTED_HOST
+    KUBE_EXPECTED_ORIGIN: $BUILDER_K8S_EXPECTED_ORIGIN
     KUBE_INGRESS: $BUILDER_K8S_INGRESS
     KUBE_SERVICE: $BUILDER_K8S_SERVICE
     KUBE_INGRESS_PATH: $BUILDER_K8S_INGRESS_PATH
@@ -295,8 +372,30 @@ release_builder_browser_smoke:
     - test -n "${DEPLOYED_REVISION:-}"
     - test -n "${PREVIOUS_BACKEND_IMAGE:-}"
     - test -n "${PREVIOUS_DIST_INIT_IMAGE:-}"
+    - test -n "${RELEASE_LOCK_NAME:-}"
+    - test -n "${RELEASE_LOCK_OWNER:-}"
     - |
+      lock_value() {
+        kubectl -n "${KUBE_NAMESPACE}" get "configmap/${RELEASE_LOCK_NAME}" \
+          -o "jsonpath={.data.$1}"
+      }
+      lock_matches() {
+        [ "$(lock_value owner)" = "${RELEASE_LOCK_OWNER}" ] \
+          && [ "$(lock_value target_image)" = "${BUILDER_IMAGE}" ]
+      }
+      template_matches_target() {
+        [ "$(kubectl -n "${KUBE_NAMESPACE}" get "statefulset/${KUBE_STATEFULSET}" \
+          -o jsonpath="{range .spec.template.spec.containers[?(@.name==\"${KUBE_BACKEND_CONTAINER}\")]}{.image}{end}")" = "${BUILDER_IMAGE}" ] \
+          && [ "$(kubectl -n "${KUBE_NAMESPACE}" get "statefulset/${KUBE_STATEFULSET}" \
+          -o jsonpath="{range .spec.template.spec.initContainers[?(@.name==\"${KUBE_DIST_INIT_CONTAINER}\")]}{.image}{end}")" = "${BUILDER_IMAGE}" ]
+      }
+      release_lock_if_owned() {
+        lock_matches || return 1
+        kubectl -n "${KUBE_NAMESPACE}" delete configmap "${RELEASE_LOCK_NAME}" >/dev/null
+      }
       rollback_release() {
+        lock_matches || { printf 'release lock owner or target changed; refusing rollback\n' >&2; return 1; }
+        template_matches_target || { printf 'rollback CAS rejected because StatefulSet no longer uses this release image\n' >&2; return 1; }
         if ! kubectl -n "${KUBE_NAMESPACE}" set image \
           "statefulset/${KUBE_STATEFULSET}" \
           "${KUBE_BACKEND_CONTAINER}=${PREVIOUS_BACKEND_IMAGE}" \
@@ -316,8 +415,9 @@ release_builder_browser_smoke:
           printf 'rollback workload verification failed\n' >&2
           return 1
         fi
-        return 0
+        release_lock_if_owned
       }
+      lock_matches || { printf 'release lock owner or target changed before browser smoke\n' >&2; exit 1; }
       set +e
       bash scripts/verify_builder_tenant_url_smoke.sh
       smoke_status=$?
@@ -329,3 +429,4 @@ release_builder_browser_smoke:
         fi
         exit "${smoke_status}"
       fi
+      release_lock_if_owned || { printf 'browser smoke passed but lock release failed\n' >&2; exit 1; }

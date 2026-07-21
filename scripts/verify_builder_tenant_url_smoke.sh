@@ -119,6 +119,7 @@ verify_inputs() {
     KUBE_DIST_INIT_CONTAINER
     KUBE_WEB_CONTAINER
     KUBE_EXPECTED_HOST
+    KUBE_EXPECTED_ORIGIN
     KUBE_INGRESS
     KUBE_SERVICE
     KUBE_INGRESS_PATH
@@ -132,8 +133,6 @@ verify_inputs() {
   for name in "${required_envs[@]}"; do
     require_env "$name"
   done
-  [[ "$BUILDER_ORIGIN" =~ ^https?://[^[:space:]]+$ ]] \
-    || die "BUILDER_ORIGIN must be an http(s) origin"
   [[ "$DEPLOYED_REVISION" =~ ^[0-9a-f]{40}$ ]] \
     || die "DEPLOYED_REVISION must be a full lowercase Git SHA"
   if [ "$require_image" != "0" ]; then
@@ -142,21 +141,55 @@ verify_inputs() {
   fi
 }
 
-origin_hostname() {
-  local authority
-  authority="${BUILDER_ORIGIN#*://}"
-  authority="${authority%%/*}"
-  authority="${authority%%:*}"
-  [ -n "$authority" ] || return 1
-  printf '%s\n' "$authority"
-}
-
 verify_origin_host_config() {
-  local host
+  local reason
 
-  host="$(origin_hostname)" || die "BUILDER_ORIGIN hostname is invalid"
-  [ "$host" = "$KUBE_EXPECTED_HOST" ] \
-    || die "origin host mismatch"
+  if ! reason="$(node - <<'NODE'
+const raw = process.env.BUILDER_ORIGIN;
+const expectedRaw = process.env.KUBE_EXPECTED_ORIGIN;
+const expectedHost = process.env.KUBE_EXPECTED_HOST;
+let origin;
+let expected;
+try {
+  origin = new URL(raw);
+  expected = new URL(expectedRaw);
+} catch {
+  console.log("BUILDER_ORIGIN must be a valid http(s) origin");
+  process.exit(1);
+}
+if (!["http:", "https:"].includes(origin.protocol)
+  || !["http:", "https:"].includes(expected.protocol)) {
+  console.log("BUILDER_ORIGIN must use http(s)");
+  process.exit(1);
+}
+if (origin.username || origin.password) {
+  console.log("BUILDER_ORIGIN must not contain credentials");
+  process.exit(1);
+}
+if (expected.username || expected.password) {
+  console.log("KUBE_EXPECTED_ORIGIN must not contain credentials");
+  process.exit(1);
+}
+if (origin.pathname !== "/" || origin.search || origin.hash) {
+  console.log("BUILDER_ORIGIN must be an origin without path, query, or fragment");
+  process.exit(1);
+}
+if (expected.pathname !== "/" || expected.search || expected.hash) {
+  console.log("KUBE_EXPECTED_ORIGIN must be an origin without path, query, or fragment");
+  process.exit(1);
+}
+if (origin.origin !== expected.origin) {
+  console.log("origin mismatch");
+  process.exit(1);
+}
+if (expected.hostname !== expectedHost) {
+  console.log("KUBE_EXPECTED_HOST does not match KUBE_EXPECTED_ORIGIN");
+  process.exit(1);
+}
+NODE
+  )"; then
+    die "${reason:-BUILDER_ORIGIN validation failed}"
+  fi
 }
 
 verify_kubernetes_rbac() {
@@ -167,6 +200,9 @@ verify_kubernetes_rbac() {
     "get pods" \
     "get services" \
     "get ingresses.networking.k8s.io" \
+    "get configmaps" \
+    "create configmaps" \
+    "delete configmaps" \
     "get pods/log" \
     "create pods/exec"; do
     verb="${verb_resource%% *}"
@@ -220,13 +256,10 @@ verify_current_rollout_health() {
 }
 
 verify_cluster_preflight() {
-  local allow_absent_workload="${1:-0}"
-
   kubectl config current-context >/dev/null 2>&1 \
     || die "kubectl has no configured kubeconfig context"
   verify_kubernetes_rbac
   if ! kubectl -n "$KUBE_NAMESPACE" get statefulset "$KUBE_STATEFULSET" >/dev/null 2>&1; then
-    [ "$allow_absent_workload" = "1" ] && return 0
     die "StatefulSet is not accessible: ${KUBE_STATEFULSET}"
   fi
   statefulset_container_exists container "$KUBE_BACKEND_CONTAINER" \
@@ -257,21 +290,19 @@ verify_common_preflight() {
 
 preflight() {
   verify_common_preflight 1
-  verify_cluster_preflight 0
+  verify_cluster_preflight
   printf '[builder-release-smoke][ok] release preflight passed\n'
 }
 
 online_prebuild_preflight() {
   verify_common_preflight 0
-  kubectl config current-context >/dev/null 2>&1 \
-    || die "kubectl has no configured kubeconfig context"
-  verify_kubernetes_rbac
+  verify_cluster_preflight
   printf '[builder-release-smoke][ok] online prebuild preflight passed\n'
 }
 
 online_preflight() {
   verify_common_preflight 1
-  verify_cluster_preflight 1
+  verify_cluster_preflight
   printf '[builder-release-smoke][ok] online release preflight passed\n'
 }
 
@@ -527,7 +558,7 @@ scan_rollout_logs() {
       category="smoke_password"
     elif printf '%s' "$logs" | grep -Eiq '(^|[[:space:][:punct:]])authorization[[:space:][:punct:]]*(bearer|basic|token)[[:space:]]+'; then
       category="authorization"
-    elif printf '%s' "$logs" | grep -Eq '[A-Za-z0-9_-]{2,}\.[A-Za-z0-9_-]{2,}\.[A-Za-z0-9_-]{16,}'; then
+    elif printf '%s' "$logs" | grep -Eq '[A-Za-z0-9_-]{2,}\.[A-Za-z0-9_-]{2,}\.[A-Za-z0-9_-]*'; then
       category="jwt_like"
     elif printf '%s' "$logs" | grep -Eiq '(^|[[:space:][:punct:]])(set-)?cookie[[:space:][:punct:]]*'; then
       category="cookie"

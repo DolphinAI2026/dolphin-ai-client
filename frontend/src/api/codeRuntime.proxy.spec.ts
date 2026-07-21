@@ -1,5 +1,8 @@
 import { describe, expect, it } from 'vitest'
-import { resolveCodeRuntimeEmbedUrl } from './codeRuntime'
+import {
+  CODE_RUNTIME_ACTIVATION_RETRY_DELAYS_MS,
+  resolveCodeRuntimeEmbedUrl,
+} from './codeRuntime'
 import apiSource from './codeRuntime.ts?raw'
 
 describe('Code runtime browser-authenticated session APIs', () => {
@@ -20,5 +23,10 @@ describe('Code runtime browser-authenticated session APIs', () => {
       .toBe('/ai-builder/api/code-runtime/2/builder/')
     expect(resolveCodeRuntimeEmbedUrl('/api/code-runtime/2/builder/', '/'))
       .toBe('/api/code-runtime/2/builder/')
+  })
+
+  it('declares the complete automatic activation retry schedule', () => {
+    expect(CODE_RUNTIME_ACTIVATION_RETRY_DELAYS_MS).toEqual([])
+    expect(apiSource).toContain('CODE_RUNTIME_ACTIVATION_RETRY_DELAYS_MS = [] as const')
   })
 })

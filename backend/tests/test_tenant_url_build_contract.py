@@ -506,6 +506,40 @@ def test_online_git_caller_uses_immutable_cli_branches(repo_root: Path):
     assert "git clone --depth" not in text
 
 
+def test_online_release_is_existing_workload_image_only(repo_root: Path):
+    text = (
+        repo_root / "scripts" / "deploy_online_latest_kubesphere.sh"
+    ).read_text(encoding="utf-8")
+
+    assert "first installation requires bootstrap" in text
+    assert "run_release_builder_prebuild_preflight" in text
+    assert "acquire_release_lock" in text
+    assert "recover_failed_release" in text
+    assert "rollback CAS rejected" in text
+    assert 'set image "statefulset/${APP_NAME}"' in text
+    assert '"${KUBE_BACKEND_CONTAINER:-apaas-builder}=${1}"' in text
+    assert '"${KUBE_DIST_INIT_CONTAINER:-copy-frontend-dist}=${2}"' in text
+    main_text = text[text.index("main() {") :]
+    assert main_text.index("run_release_builder_prebuild_preflight") < main_text.index(
+        "docker_login_if_requested"
+    )
+    assert main_text.index("acquire_release_lock") < main_text.index(
+        'set_release_images "$IMAGE" "$IMAGE"'
+    )
+    for forbidden in (
+        "kubectl apply",
+        "create namespace",
+        "apply_namespace",
+        "apply_nginx_config",
+        "ensure_dev_secret",
+        "apply_workloads",
+        "cleanup_fresh_workload",
+        "delete ingress",
+        "delete service",
+    ):
+        assert forbidden not in text
+
+
 def test_rebuild_script_invokes_wrapper_for_dev_and_main(repo_root: Path):
     text = (repo_root / "scripts" / "rebuild_images_dev_main.sh").read_text(
         encoding="utf-8"

@@ -403,3 +403,107 @@ PASS: builder tenant URL release smoke contract
   证据。任一缺失/拓扑不一致会 fail closed。
 - rollback 仅恢复 captured immutable backend/init refs；fresh cleanup 有意保留
   namespace、ConfigMap、Secret 和 PVC，避免删除共享或持久化资源。
+
+## 架构收敛修复
+
+### RED
+
+多轮 rollback 修补暴露 shared release state 与 full apply 的架构问题后，先扩展
+`tests/release/test_builder_tenant_url_smoke.sh` 的 fake Kubernetes 合同，再修改发布实现。
+
+初始 RED：
+
+```bash
+bash tests/release/test_builder_tenant_url_smoke.sh
+```
+
+关键输出：
+
+```text
+FAIL: command unexpectedly succeeded: run_fake_helper --preflight
+```
+
+该命令使用 `https://builder.example:443@staging.example`。旧 helper 的手写 authority
+拆分错误地接受生产 host 前缀，而标准 URL 解析实际会访问 `staging.example`。
+
+扩展后的动态合同还覆盖：
+
+- `D_old -> D_new` preflight 不比较旧 template image，full smoke 仍拒绝新 digest mismatch；
+- CI update job 的 set/rollout failure 在同一 job rollback，artifact 为 `when: always`；
+- browser smoke 在 lock owner/target 与 template 仍为本轮 `D_new` 时才可 rollback；
+  模拟 B 已切到另一 digest 时，A 被 CAS 拒绝且保留 lock；
+- A 持锁期间 B update job 无法写 StatefulSet；
+- online 首次安装/StatefulSet 缺失发生在 build/push 前失败；
+- online set、rollout、smoke 三种失败都只恢复 captured old image pair；
+- online fake command log 无 `apply`、Ingress/Service 删除或 fresh cleanup；
+- compact `alg=none` 空签名 JWT 被日志 gate 拒绝；
+- activation observer 从导航前开始，覆盖 owner 声明的最大 retry delay 加 safety margin，
+  边界内 delayed duplicate 必须失败。
+
+### GREEN
+
+- `scripts/deploy_online_latest_kubesphere.sh` 现在只支持已存在、已绑定正确的
+  StatefulSet image update。严格 existing-workload preflight 在 registry mutation
+  前执行；缺 StatefulSet 明确提示 bootstrap 流程。删除了 namespace、ConfigMap、
+  Secret、PVC、Service、Ingress 与 manifest full apply/fresh cleanup 路径。
+- CI 与 online 都使用同 namespace `${STATEFULSET}-release-lock` ConfigMap，记录
+  owner、target immutable image、previous backend/init refs 与 acquired timestamp。
+  create 是原子获取；已有 lock 保持 fail-closed 并提示人工恢复；成功或 verified rollback
+  仅 owner 可删除。
+- CI update job 在 set/rollout failure 内完成 lock CAS、old pair rollback、rollout、
+  template/Pod health 验证与 lock release；browser job 先验证 lock，再在 smoke failure
+  时用 owner+target+template CAS rollback。CAS 不匹配时拒绝覆盖。
+- online 所有 StatefulSet image mutation 在 lock guard 内；capture、set、rollout 或
+  smoke 失败均走同一 existing-workload recovery。rollback 仍使用 immutable old refs，
+  不会更改任何非 image 资源。
+- helper 使用 Node `URL` 从环境读取 origin，拒绝 userinfo、path、query、fragment，
+  并精确比较 `KUBE_EXPECTED_ORIGIN`；随后继续校验 Ingress path->Service 与 Service
+  selector。compact JWT 的第三段允许为空。
+- `frontend/src/api/codeRuntime.ts` 导出
+  `CODE_RUNTIME_ACTIVATION_RETRY_DELAYS_MS = [] as const`。release smoke 从该 owner
+  读取 schedule，而不是使用任意 quiet timeout；未来增加 client retry 时必须同步更新
+  owner，release contract 才会继续覆盖最大 retry boundary。
+- `backend/tests/test_tenant_url_build_contract.py` 新增 online existing-workload
+  image-only 合同，禁止 full apply/bootstrap 资源写入，并验证 prebuild、lock/CAS 与
+  two-image mutation 主路径。
+
+本轮 GREEN 与验证：
+
+```bash
+bash tests/release/test_builder_tenant_url_smoke.sh
+python3 -m pytest -q backend/tests/test_tenant_url_build_contract.py
+podman run --rm --entrypoint /bin/sh \
+  -v "$PWD:/workspace:ro" \
+  -v /mnt/d/workspaces/d-ai-code/apaas-builder-ai/.git:/mnt/d/workspaces/d-ai-code/apaas-builder-ai/.git:ro \
+  -w /workspace \
+  om-harbor.dfy.definesys.cn/om-demo/ai-builder:2026.07.20-3f90e08a-runtime-expiry-timezone \
+  -lc 'git config --global --add safe.directory /workspace && python -m pytest -q -p no:cacheprovider backend/tests/test_tenant_url_build_contract.py'
+npm --prefix frontend test -- --run src/api/codeRuntime.proxy.spec.ts --reporter=dot
+bash -n scripts/verify_builder_tenant_url_smoke.sh \
+  scripts/deploy_online_latest_kubesphere.sh \
+  tests/release/test_builder_tenant_url_smoke.sh
+node --check tests/e2e/builder-tenant-url-release-smoke.spec.mjs
+ruby -e 'require "yaml"; YAML.load_file(".gitlab-ci.yml"); puts "GitLab YAML parse: PASS"'
+git diff --check
+```
+
+关键输出：
+
+```text
+CI_UPDATE_LOCK_CONTRACT=PASS
+ONLINE_IMAGE_ONLY_CONTRACT=PASS
+ACTIVATION_OBSERVER_CONTRACT=PASS
+PASS: builder tenant URL release smoke contract
+29 passed
+Test Files 1 passed
+GitLab YAML parse: PASS
+```
+
+### 架构收敛 Concerns
+
+- 本轮严格未连接/修改真实 Kubernetes，未构建或推送镜像，未运行线上受控账号、
+  Playwright Edge 或 Code session smoke。
+- ConfigMap lock 的实际 RBAC、跨 runner 生命周期和人工 stale-lock 恢复流程仍需在
+  隔离 release pipeline 验证；实现不会自动抢占已有 lock。
+- 真实 Ingress controller/DNS、registry digest、protected variables 与 Kubernetes
+  JSONPath 的环境行为仍需在受控线上演练中提供证据；任一不匹配保持 fail-closed。
