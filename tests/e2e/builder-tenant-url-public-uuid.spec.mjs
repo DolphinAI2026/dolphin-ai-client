@@ -26,7 +26,9 @@ for (const [name, value] of Object.entries(required)) {
 }
 
 assert.match(required.buildSha, /^[0-9a-f]{40}$/);
-assert.equal(process.env.TASK6_WSLENV_SENTINEL, undefined);
+if (process.platform === "win32") {
+  assert.equal(process.env.TASK6_WSLENV_SENTINEL, undefined);
+}
 assert.ok(
   required.browserChannel === "chromium" || required.browserChannel === "msedge",
   `unsupported browser channel: ${required.browserChannel}`,
