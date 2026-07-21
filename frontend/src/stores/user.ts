@@ -569,6 +569,7 @@ export const useUserStore = defineStore('user', () => {
     }
 
     if (localStorage.getItem('token') !== eventToken) return
+    advanceTenantNavigationEpoch()
     void alignTokenFromStorage(eventToken)
   }
   if (typeof window !== 'undefined') {

@@ -1194,6 +1194,65 @@ describe('user tenant switching', () => {
     expect(replace).toHaveBeenCalledWith('/?tenantId=tenant-c')
   })
 
+  it('cancels an in-flight local switch before aligning a confirmed cross-tab token', async () => {
+    const { fireStorageEvent, replace } = installBrowserGlobals()
+    const slowB = deferred<User>()
+    const slowC = deferred<User>()
+    const userB = makeUser({
+      tenant_id: 2,
+      tenant_name: 'Tenant B',
+      tenant_public_id: targetUuid,
+    })
+    const uuidC = '33333333-3333-4333-8333-333333333333'
+    const userC = makeUser({
+      tenant_id: 3,
+      tenant_name: 'Tenant C',
+      tenant_public_id: uuidC,
+    })
+    authMocks.switchTenant.mockResolvedValue({ access_token: 'token-b' })
+    authMocks.getMeWithToken.mockImplementation((candidateToken: string) => {
+      if (candidateToken === 'token-b') return slowB.promise
+      if (candidateToken === 'token-c') return slowC.promise
+      throw new Error(`unexpected token ${candidateToken}`)
+    })
+
+    setActivePinia(createPinia())
+    const store = useUserStore()
+    store.setToken('source-token')
+    store.user = makeUser()
+    const setItem = vi.spyOn(localStorage, 'setItem')
+
+    const switchB = store.switchTenantContext(
+      2,
+      targetUuid,
+      '/?tenantId=tenant-b',
+    )
+    await flushPromises()
+
+    localStorage.setItem('token', 'token-c')
+    fireStorageEvent('token-c')
+    await flushPromises()
+    expect(authMocks.getMeWithToken).toHaveBeenCalledWith(
+      'token-c',
+      expect.any(AbortSignal),
+    )
+
+    slowB.resolve(userB)
+    await expect(switchB).resolves.toBe('stale_cancelled')
+    expect(setItem).not.toHaveBeenCalledWith('token', 'token-b')
+    expect(localStorage.getItem('token')).toBe('token-c')
+    expect(replace).not.toHaveBeenCalled()
+
+    slowC.resolve(userC)
+    await flushPromises()
+
+    expect(store.token).toBe('token-c')
+    expect(store.user).toEqual(userC)
+    expect(localStorage.getItem('token')).toBe('token-c')
+    expect(replace).toHaveBeenCalledTimes(1)
+    expect(replace).toHaveBeenCalledWith(`/?tenantId=${uuidC}`)
+  })
+
   it('drops a tenant switch when its source auth revision changes', async () => {
     const { replace } = installBrowserGlobals()
     const slowCandidate = deferred<User>()

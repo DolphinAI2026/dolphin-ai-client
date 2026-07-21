@@ -229,3 +229,58 @@ exit code 0
 
 本轮按聚焦范围未重跑 Chromium/msedge 长 E2E；该风险保留给后续 clean-HEAD
 浏览器验证。
+
+## Edge 跨标签 tenant switch 竞态修复
+
+日期：2026-07-21
+
+Windows Edge 的 B 慢/C 快场景暴露出跨标签竞态：第二个标签已将共享 token 更新为
+C，但第一个标签的 storage listener 只启动 C alignment，没有立即取消本标签在途的
+B switch。若 B candidate `/auth/me` 在 C alignment 完成前返回，B 仍满足原有
+generation、epoch 和 auth revision 检查，并把共享 token 覆盖回 B。
+
+修复保持 storage event 的 fail-closed 检查：仅当非空 event token 仍等于当前
+`localStorage.token` 时，先推进 tenant navigation epoch、取消本标签在途 switch，
+再启动原有 storage alignment。storage alignment 使用独立 generation 和
+AbortController，因此不会被这次 tenant epoch 推进取消。
+
+TDD RED：
+
+```text
+cd frontend
+npm exec -- vitest run src/stores/user.tenantSwitch.spec.ts \
+  -t "cancels an in-flight local switch before aligning a confirmed cross-tab token"
+
+Test Files  1 failed (1)
+Tests       1 failed | 44 skipped (45)
+Expected: stale_cancelled
+Received: committed_reload
+```
+
+聚焦 GREEN：
+
+```text
+Test Files  1 passed (1)
+Tests       1 passed | 44 skipped (45)
+```
+
+完整 store 与 router 回归：
+
+```text
+npm exec -- vitest run src/stores/user.tenantSwitch.spec.ts
+Test Files  1 passed (1)
+Tests       45 passed (45)
+
+npm exec -- vitest run src/router/tenantUrlGuard.spec.ts
+Test Files  1 passed (1)
+Tests       49 passed (49)
+```
+
+Typecheck：
+
+```text
+npm exec -- vue-tsc --build --noEmit --pretty false
+exit code 0
+```
+
+本轮未重跑 Windows Edge 长 E2E；修复后的 clean-HEAD Edge 验证仍是最终浏览器证据。
