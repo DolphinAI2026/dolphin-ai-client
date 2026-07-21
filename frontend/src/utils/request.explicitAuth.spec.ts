@@ -100,6 +100,24 @@ describe('request explicit Authorization', () => {
     })
   })
 
+  it('passes an abort signal through the public tenant-selection request', async () => {
+    const signal = new AbortController().signal
+    const post = vi.spyOn(request, 'post').mockResolvedValue({} as never)
+
+    await authApi.selectTenant(
+      { selection_token: 'selection', tenant_id: 2 },
+      signal,
+    )
+
+    expect(post).toHaveBeenCalledWith('/auth/select-tenant', {
+      selection_token: 'selection',
+      tenant_id: 2,
+    }, {
+      authPolicy: 'public',
+      signal,
+    })
+  })
+
   it('lets typed public auth requests bypass bootstrap pending without adapter Authorization', async () => {
     localStorage.setItem('token', 'stale-bootstrap-token')
 

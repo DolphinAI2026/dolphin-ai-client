@@ -32,7 +32,8 @@ const harness = vi.hoisted(() => ({
 
 const targetUuid = '22222222-2222-4222-8222-222222222222'
 
-vi.mock('vue-router', () => ({
+vi.mock('vue-router', async importOriginal => ({
+  ...await importOriginal<typeof import('vue-router')>(),
   useRoute: () => harness.route,
   useRouter: () => ({
     replace: harness.replace,
@@ -73,6 +74,52 @@ async function flushPromises() {
   await nextTick()
 }
 
+function selectionCommit(onRollback?: () => void) {
+  return {
+    rollback: vi.fn(() => {
+      onRollback?.()
+      return true
+    }),
+    finalize: vi.fn(),
+  }
+}
+
+function mountTenantSelect() {
+  const container = document.createElement('div')
+  document.body.appendChild(container)
+  const app = createApp(TenantSelect)
+  app.component('el-icon', { template: '<span><slot /></span>' })
+  app.component('el-button', {
+    inheritAttrs: false,
+    template: '<button v-bind="$attrs"><slot /></button>',
+  })
+  app.mount(container)
+  return { app, container }
+}
+
+async function createAbortedNavigationFailure() {
+  const {
+    createMemoryHistory,
+    createRouter,
+    isNavigationFailure,
+  } = await vi.importActual<typeof import('vue-router')>('vue-router')
+  const router = createRouter({
+    history: createMemoryHistory(),
+    routes: [
+      { path: '/tenant-select', component: { template: '<div />' } },
+      {
+        path: '/target',
+        component: { template: '<div />' },
+        beforeEnter: () => false,
+      },
+    ],
+  })
+  await router.push('/tenant-select')
+  const failure = await router.replace('/target')
+  expect(isNavigationFailure(failure)).toBe(true)
+  return failure
+}
+
 describe('TenantSelect pending selection', () => {
   afterEach(() => {
     vi.clearAllMocks()
@@ -81,14 +128,10 @@ describe('TenantSelect pending selection', () => {
 
   it('keeps every card disabled until automatic selection navigation settles', async () => {
     const navigation = deferred<void>()
-    harness.selectTenant.mockResolvedValue(undefined)
+    const commit = selectionCommit()
+    harness.selectTenant.mockResolvedValue(commit)
     harness.replace.mockReturnValue(navigation.promise)
-    const container = document.createElement('div')
-    document.body.appendChild(container)
-    const app = createApp(TenantSelect)
-    app.component('el-icon', { template: '<span><slot /></span>' })
-    app.component('el-button', { template: '<button><slot /></button>' })
-    app.mount(container)
+    const { app, container } = mountTenantSelect()
 
     await flushPromises()
 
@@ -100,6 +143,7 @@ describe('TenantSelect pending selection', () => {
       'selection-token',
       2,
       targetUuid,
+      expect.any(AbortSignal),
     )
     expect(harness.replace).toHaveBeenCalledTimes(1)
     expect(cards).toHaveLength(2)
@@ -114,6 +158,71 @@ describe('TenantSelect pending selection', () => {
     await flushPromises()
 
     expect(cards.every(card => card.disabled)).toBe(false)
+    expect(commit.finalize).toHaveBeenCalledTimes(1)
+    app.unmount()
+  })
+
+  it('disables and fail-closes return-to-login while selection is pending', async () => {
+    const selection = deferred<ReturnType<typeof selectionCommit>>()
+    harness.selectTenant.mockReturnValue(selection.promise)
+    const { app, container } = mountTenantSelect()
+
+    await flushPromises()
+
+    const logout = container.querySelector<HTMLButtonElement>('.select-footer button')
+    expect(logout?.disabled).toBe(true)
+    logout?.click()
+    await flushPromises()
+
+    expect(harness.push).not.toHaveBeenCalled()
+    selection.resolve(selectionCommit())
+    await flushPromises()
+    app.unmount()
+  })
+
+  it('aborts an unmounted selection and rolls back any late commit handle', async () => {
+    const selection = deferred<ReturnType<typeof selectionCommit>>()
+    const commit = selectionCommit()
+    let signal: AbortSignal | undefined
+    harness.selectTenant.mockImplementation((
+      _selectionToken: string,
+      _tenantId: number,
+      _tenantPublicId: string,
+      candidateSignal: AbortSignal,
+    ) => {
+      signal = candidateSignal
+      return selection.promise
+    })
+    const { app } = mountTenantSelect()
+
+    await flushPromises()
+    app.unmount()
+
+    expect(signal?.aborted).toBe(true)
+    selection.resolve(commit)
+    await flushPromises()
+
+    expect(commit.rollback).toHaveBeenCalledTimes(1)
+    expect(harness.replace).not.toHaveBeenCalled()
+    expect(harness.success).not.toHaveBeenCalled()
+  })
+
+  it('rolls back a committed candidate when replace resolves a navigation failure', async () => {
+    let session = 'candidate'
+    const commit = selectionCommit(() => {
+      session = 'source'
+    })
+    harness.selectTenant.mockResolvedValue(commit)
+    harness.replace.mockResolvedValue(await createAbortedNavigationFailure())
+    const { app } = mountTenantSelect()
+
+    await flushPromises()
+    await flushPromises()
+
+    expect(commit.rollback).toHaveBeenCalledTimes(1)
+    expect(commit.finalize).not.toHaveBeenCalled()
+    expect(session).toBe('source')
+    expect(harness.success).not.toHaveBeenCalled()
     app.unmount()
   })
 })

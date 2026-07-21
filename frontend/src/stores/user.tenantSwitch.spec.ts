@@ -203,8 +203,11 @@ describe('user tenant switching', () => {
     expect(authMocks.selectTenant).toHaveBeenCalledWith({
       selection_token: 'selection-token',
       tenant_id: 2,
-    })
-    expect(authMocks.getMeWithToken).toHaveBeenCalledWith('candidate-token')
+    }, expect.any(AbortSignal))
+    expect(authMocks.getMeWithToken).toHaveBeenCalledWith(
+      'candidate-token',
+      expect.any(AbortSignal),
+    )
     expect(getAuthSessionState().revision).toBe(sourceRevision)
     expect(localStorage.getItem('token')).toBe('source-token')
     expect(store.token).toBe('source-token')
@@ -226,11 +229,96 @@ describe('user tenant switching', () => {
     store.setToken('source-token')
     store.user = makeUser()
 
-    await store.selectTenant('selection-token', 2, targetUuid)
+    const commit = await store.selectTenant('selection-token', 2, targetUuid)
 
     expect(localStorage.getItem('token')).toBe('candidate-token')
     expect(store.token).toBe('candidate-token')
     expect(store.user).toEqual(targetUser)
+    commit.finalize()
+  })
+
+  it('does not commit when selection is aborted after candidate user validation starts', async () => {
+    installBrowserGlobals()
+    const sourceUser = makeUser({ display_name: 'Source session' })
+    const pendingCandidate = deferred<User>()
+    const controller = new AbortController()
+    authMocks.selectTenant.mockResolvedValue({ access_token: 'candidate-token' })
+    authMocks.getMeWithToken.mockReturnValue(pendingCandidate.promise)
+
+    setActivePinia(createPinia())
+    const store = useUserStore()
+    store.setToken('source-token')
+    store.user = sourceUser
+    const sourceRevision = getAuthSessionState().revision
+
+    const selection = store.selectTenant(
+      'selection-token',
+      2,
+      targetUuid,
+      controller.signal,
+    )
+    await flushPromises()
+    controller.abort()
+    pendingCandidate.resolve(makeUser({
+      tenant_id: 2,
+      tenant_name: 'Target tenant',
+      tenant_public_id: targetUuid,
+    }))
+
+    await expect(selection).rejects.toMatchObject({ name: 'AbortError' })
+    expect(getAuthSessionState().revision).toBe(sourceRevision)
+    expect(localStorage.getItem('token')).toBe('source-token')
+    expect(store.token).toBe('source-token')
+    expect(store.user).toEqual(sourceUser)
+  })
+
+  it('aborts an older selection intent before it can commit', async () => {
+    installBrowserGlobals()
+    const firstToken = deferred<{ access_token: string }>()
+    authMocks.selectTenant
+      .mockReturnValueOnce(firstToken.promise)
+      .mockRejectedValueOnce(new Error('replacement failed'))
+
+    setActivePinia(createPinia())
+    const store = useUserStore()
+    store.setToken('source-token')
+    store.user = makeUser()
+    const first = store.selectTenant('selection-one', 2, targetUuid)
+    await flushPromises()
+    const second = store.selectTenant('selection-two', 3, '33333333-3333-4333-8333-333333333333')
+    const secondExpectation = expect(second).rejects.toThrow('replacement failed')
+    firstToken.resolve({ access_token: 'stale-token' })
+
+    await expect(first).rejects.toMatchObject({ name: 'AbortError' })
+    await secondExpectation
+    expect(authMocks.getMeWithToken).not.toHaveBeenCalled()
+    expect(localStorage.getItem('token')).toBe('source-token')
+    expect(store.token).toBe('source-token')
+  })
+
+  it('rolls back only the currently committed selected-tenant candidate', async () => {
+    installBrowserGlobals()
+    const sourceUser = makeUser({ display_name: 'Source session' })
+    const targetUser = makeUser({
+      tenant_id: 2,
+      tenant_name: 'Target tenant',
+      tenant_public_id: targetUuid,
+    })
+    authMocks.selectTenant.mockResolvedValue({ access_token: 'candidate-token' })
+    authMocks.getMeWithToken.mockResolvedValue(targetUser)
+
+    setActivePinia(createPinia())
+    const store = useUserStore()
+    store.setToken('source-token')
+    store.user = sourceUser
+
+    const commit = await store.selectTenant('selection-token', 2, targetUuid)
+    expect(commit.rollback()).toBe(true)
+
+    expect(localStorage.getItem('token')).toBe('source-token')
+    expect(store.token).toBe('source-token')
+    expect(store.user).toEqual(sourceUser)
+    expect(commit.rollback()).toBe(false)
   })
 
   it('keeps source state when candidate /auth/me UUID mismatches', async () => {

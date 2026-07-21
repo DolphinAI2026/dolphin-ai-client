@@ -140,8 +140,12 @@ export const authApi = {
     return request.post<any, LoginResponse>('/auth/login', data, { authPolicy: 'public' })
   },
 
-  selectTenant(data: TenantSelectRequest) {
-    return request.post<any, Token>('/auth/select-tenant', data, { authPolicy: 'public' })
+  selectTenant(data: TenantSelectRequest, signal?: AbortSignal) {
+    return request.post<any, Token>(
+      '/auth/select-tenant',
+      data,
+      signal ? { authPolicy: 'public', signal } : { authPolicy: 'public' },
+    )
   },
 
   switchTenant(tenantId: number, signal?: AbortSignal) {

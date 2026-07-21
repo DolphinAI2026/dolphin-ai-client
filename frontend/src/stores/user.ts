@@ -18,6 +18,11 @@ let activeSessionOwner: symbol | null = null
 
 export type TenantSwitchContextOutcome = 'committed_reload' | 'stale_cancelled'
 
+export interface TenantSelectionCommit {
+  rollback: () => boolean
+  finalize: () => void
+}
+
 if (import.meta.hot) {
   import.meta.hot.dispose(() => {
     activeSessionOwnerCleanup?.()
@@ -45,6 +50,8 @@ export const useUserStore = defineStore('user', () => {
   let storageAlignmentAbortController: AbortController | null = null
   let tenantSwitchGeneration = 0
   let tenantSwitchAbortController: AbortController | null = null
+  let tenantSelectionGeneration = 0
+  let tenantSelectionAbortController: AbortController | null = null
   let tenantNavigationEpoch = 0
   let sessionOwner: symbol | null = null
   let sessionOwnerReleased = false
@@ -213,9 +220,16 @@ export const useUserStore = defineStore('user', () => {
     localStorage.setItem('token', newToken)
     invalidateStorageAlignment()
     advanceTenantNavigationEpoch()
-    commitAuthSession(newToken)
+    const committedSession = commitAuthSession(newToken)
     token.value = newToken
     user.value = nextUser
+    return committedSession
+  }
+
+  const tenantSelectionAbortError = () => {
+    const error = new Error('Tenant selection aborted')
+    error.name = 'AbortError'
+    return error
   }
 
   const clearSessionMemory = () => {
@@ -335,16 +349,89 @@ export const useUserStore = defineStore('user', () => {
     selectionToken: string,
     tenantId: number,
     tenantPublicId: string,
-  ) => {
-    const res = await authApi.selectTenant({ selection_token: selectionToken, tenant_id: tenantId })
-    const candidateUser = await authApi.getMeWithToken(res.access_token)
-    if (
-      candidateUser.tenant_id !== tenantId
-      || candidateUser.tenant_public_id !== tenantPublicId
-    ) {
-      throw new Error('tenant candidate mismatch')
+    externalSignal?: AbortSignal,
+  ): Promise<TenantSelectionCommit> => {
+    const sourceSession = getAuthSessionState()
+    const sourceUser = user.value
+    const generation = ++tenantSelectionGeneration
+    tenantSelectionAbortController?.abort()
+    const controller = new AbortController()
+    tenantSelectionAbortController = controller
+    const abortFromExternal = () => controller.abort(externalSignal?.reason)
+    if (externalSignal?.aborted) {
+      abortFromExternal()
+    } else {
+      externalSignal?.addEventListener('abort', abortFromExternal, { once: true })
     }
-    commitVerifiedSession(res.access_token, candidateUser)
+    const isCurrentOperation = () => (
+      !controller.signal.aborted
+      && generation === tenantSelectionGeneration
+      && getAuthSessionState().revision === sourceSession.revision
+    )
+    const requireCurrentOperation = () => {
+      if (!isCurrentOperation()) throw tenantSelectionAbortError()
+    }
+
+    try {
+      requireCurrentOperation()
+      const res = await authApi.selectTenant(
+        { selection_token: selectionToken, tenant_id: tenantId },
+        controller.signal,
+      )
+      requireCurrentOperation()
+      const candidateUser = await authApi.getMeWithToken(
+        res.access_token,
+        controller.signal,
+      )
+      requireCurrentOperation()
+      if (
+        candidateUser.tenant_id !== tenantId
+        || candidateUser.tenant_public_id !== tenantPublicId
+      ) {
+        throw new Error('tenant candidate mismatch')
+      }
+      requireCurrentOperation()
+
+      const committedSession = commitVerifiedSession(res.access_token, candidateUser)
+      let active = true
+      return {
+        rollback: () => {
+          if (!active) return false
+          active = false
+          const currentSession = getAuthSessionState()
+          if (
+            currentSession.revision !== committedSession.revision
+            || currentSession.token !== res.access_token
+            || token.value !== res.access_token
+          ) {
+            return false
+          }
+
+          const sourceToken = sourceSession.initialized ? sourceSession.token : null
+          if (sourceToken) {
+            localStorage.setItem('token', sourceToken)
+            commitAuthSession(sourceToken)
+            token.value = sourceToken
+            user.value = sourceUser
+          } else {
+            localStorage.removeItem('token')
+            clearAuthSession()
+            token.value = null
+            user.value = null
+          }
+          advanceTenantNavigationEpoch()
+          return true
+        },
+        finalize: () => {
+          active = false
+        },
+      }
+    } finally {
+      externalSignal?.removeEventListener('abort', abortFromExternal)
+      if (tenantSelectionAbortController === controller) {
+        tenantSelectionAbortController = null
+      }
+    }
   }
 
   const fetchAvailableTenants = async () => {
@@ -490,6 +577,9 @@ export const useUserStore = defineStore('user', () => {
   const releaseSessionOwner = () => {
     if (sessionOwnerReleased) return
     sessionOwnerReleased = true
+    tenantSelectionGeneration += 1
+    tenantSelectionAbortController?.abort()
+    tenantSelectionAbortController = null
     invalidateStorageAlignment()
     advanceTenantNavigationEpoch()
     unsubscribeFromSessionClear()

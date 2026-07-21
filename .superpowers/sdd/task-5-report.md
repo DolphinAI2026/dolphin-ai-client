@@ -155,3 +155,69 @@ exit code 0
 
 构建仅保留既有大 chunk warning；测试仅保留既有 Vue Router `next()` deprecation、
 Vue scope 和 onboarding 错误路径日志，无失败。未推送，未开始 Task 6。
+
+## 复审新增修复（ADV-T5-005）
+
+### pending 与取消边界
+
+- TenantSelect 在选择请求、候选校验和导航完成前持续保持同一
+  `selectionPending`；租户卡片和“返回登录”按钮均 disabled。
+- `handleLogout()` 额外检查 pending，避免仅依赖按钮属性；非 pending 的明确退出会先
+  取消现有 operation，再进入登录页。
+- 组件为每次选择维护 generation 和 `AbortController`。组件卸载、明确取消或新 intent
+  会使旧 operation 失效；旧 operation 即使晚到 commit handle，也会立即 rollback。
+
+### 候选 session 与导航失败
+
+- `authApi.selectTenant()`、候选 `getMeWithToken()` 和 store 的 `selectTenant()` 链路均
+  支持 `AbortSignal`。
+- store 在请求前、两次候选响应后及 commit 前检查 generation、abort 状态和源 session
+  revision，失效候选抛出 `AbortError`，不得提交 token/user。
+- 候选提交返回一次性 `rollback()/finalize()` handle；rollback 仅能回滚当前仍匹配的
+  committed candidate，避免覆盖更新的 session。
+- TenantSelect 检查 `router.replace()` resolved value；任何
+  `isNavigationFailure()` 结果都不显示成功，并 rollback 本次 committed candidate，
+  使页面停留时恢复源 session。
+
+## ADV-T5-005 TDD 证据
+
+### RED
+
+- 新增测试首次运行共 10 项失败，分别复现：
+  - pending 时返回登录仍可触发；
+  - unmount/新 intent 未中止旧选择；
+  - select/getMe 未透传 signal；
+  - resolved NavigationFailure 被误报成功且未回滚 session。
+
+### GREEN
+
+```text
+ADV-T5-005 定向:
+Test Files  3 passed (3)
+Tests       60 passed (60)
+
+Task 5 + Task 3/4 frontend:
+Test Files  9 passed (9)
+Tests       173 passed (173)
+
+完整 frontend:
+Test Files  92 passed (92)
+Tests       508 passed (508)
+
+backend auth:
+48 passed
+
+npm exec -- vue-tsc --build --noEmit --pretty false:
+exit code 0
+
+npm run build:
+exit code 0
+2479 modules transformed
+
+git diff --check:
+exit code 0
+```
+
+构建仍仅有既有大 chunk warning；测试仍仅有既有 Vue Router `next()` deprecation、
+Vue scope、onboarding 错误路径日志和后端 datetime deprecation warning。未推送，
+未开始 Task 6。

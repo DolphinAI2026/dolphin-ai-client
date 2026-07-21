@@ -27,15 +27,15 @@
       </div>
 
       <div class="select-footer">
-        <el-button text @click="handleLogout">返回登录</el-button>
+        <el-button text :disabled="selectionPending" @click="handleLogout">返回登录</el-button>
       </div>
     </div>
   </div>
 </template>
 
 <script setup lang="ts">
-import { ref, onMounted } from 'vue'
-import { useRouter, useRoute } from 'vue-router'
+import { onBeforeUnmount, onMounted, ref } from 'vue'
+import { isNavigationFailure, useRoute, useRouter } from 'vue-router'
 import { ElMessage } from 'element-plus'
 import { ArrowRight } from '@element-plus/icons-vue'
 import { useUserStore } from '@/stores/user'
@@ -49,24 +49,76 @@ const userStore = useUserStore()
 const selectionToken = ref('')
 const tenants = ref<TenantOption[]>([])
 const selectionPending = ref(false)
+let selectionGeneration = 0
+let selectionController: AbortController | null = null
+
+const cancelSelectionOperation = () => {
+  selectionGeneration += 1
+  selectionController?.abort()
+  selectionController = null
+}
+
+const isAbortError = (error: unknown) => (
+  (error as { name?: string })?.name === 'AbortError'
+  || (error as { code?: string })?.code === 'ERR_CANCELED'
+)
 
 const handleSelect = async (tenant: TenantOption) => {
   if (selectionPending.value) return
+  selectionController?.abort()
+  const generation = ++selectionGeneration
+  const controller = new AbortController()
+  selectionController = controller
   selectionPending.value = true
+  let commit: Awaited<ReturnType<typeof userStore.selectTenant>> | null = null
+  const isCurrentOperation = () => (
+    generation === selectionGeneration
+    && selectionController === controller
+    && !controller.signal.aborted
+  )
   try {
-    await userStore.selectTenant(
+    commit = await userStore.selectTenant(
       selectionToken.value,
       tenant.tenant_id,
       tenant.tenant_public_id,
+      controller.signal,
     )
-    await router.replace(safeLoginRedirectPath(route.query.redirect) || '/')
-    ElMessage.success('登录成功')
+    if (!isCurrentOperation()) {
+      commit.rollback()
+      return
+    }
+
+    const navigationFailure = await router.replace(
+      safeLoginRedirectPath(route.query.redirect) || '/',
+    )
+    if (isNavigationFailure(navigationFailure)) {
+      commit.rollback()
+      if (isCurrentOperation()) {
+        ElMessage.error('登录导航未完成，请重试')
+      }
+      return
+    }
+
+    commit.finalize()
+    if (isCurrentOperation()) {
+      ElMessage.success('登录成功')
+    }
   } catch (error: any) {
-    ElMessage.error(error.response?.data?.detail || '选择租户失败')
+    commit?.rollback()
+    if (isCurrentOperation() && !isAbortError(error)) {
+      ElMessage.error(error.response?.data?.detail || '选择租户失败')
+    }
   } finally {
-    selectionPending.value = false
+    if (generation === selectionGeneration) {
+      selectionPending.value = false
+      if (selectionController === controller) {
+        selectionController = null
+      }
+    }
   }
 }
+
+onBeforeUnmount(cancelSelectionOperation)
 
 onMounted(() => {
   selectionToken.value = route.query.token as string
@@ -89,6 +141,8 @@ onMounted(() => {
 })
 
 const handleLogout = () => {
+  if (selectionPending.value) return
+  cancelSelectionOperation()
   const redirect = safeLoginRedirectPath(route.query.redirect)
   router.push({ path: '/login', query: redirect ? { redirect } : {} })
 }
