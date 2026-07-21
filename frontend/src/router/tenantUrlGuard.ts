@@ -55,10 +55,12 @@ interface TenantSwitchMarker {
   targetFullPath: string
   startedAt: number
   attempt: number
+  ownerId: number
 }
 
 interface TenantSwitchFlight {
   targetTenantPublicId: string
+  targetFullPath: string
   sourceTenantPublicId: string | null
   sourceUser: TenantUrlUserStore['user']
   userStore: TenantUrlUserStore
@@ -66,7 +68,22 @@ interface TenantSwitchFlight {
   operation: Promise<TenantSwitchContextOutcome>
 }
 
+interface TenantResolverIntent {
+  generation: number
+  targetTenantPublicId: string
+  sourceTenantPublicId: string | null
+  sourceUser: TenantUrlUserStore['user']
+  userStore: TenantUrlUserStore
+}
+
+interface TenantResolverIntentState {
+  latest: TenantResolverIntent | null
+}
+
 let activeTenantSwitch: TenantSwitchFlight | null = null
+let nextTenantResolverIntentGeneration = 0
+let nextTenantSwitchMarkerOwnerId = 0
+const tenantResolverIntentStates = new WeakMap<TenantUrlUserStore, TenantResolverIntentState>()
 
 function firstQueryValue(raw: unknown): unknown {
   return Array.isArray(raw) ? raw[0] : raw
@@ -165,6 +182,8 @@ function readSwitchMarker(): TenantSwitchMarker | null {
       || !marker.targetFullPath.startsWith('/')
       || !Number.isFinite(marker.startedAt)
       || marker.attempt !== 1
+      || !Number.isSafeInteger(marker.ownerId)
+      || marker.ownerId < 1
       || Date.now() - marker.startedAt > TENANT_SWITCH_MARKER_TTL_MS
     ) {
       sessionStorage.removeItem(TENANT_SWITCH_MARKER_KEY)
@@ -181,10 +200,7 @@ function clearSwitchMarkerIfOwned(marker: TenantSwitchMarker): void {
     const stored = readSwitchMarker()
     if (
       stored
-      && stored.targetTenantPublicId === marker.targetTenantPublicId
-      && stored.targetFullPath === marker.targetFullPath
-      && stored.startedAt === marker.startedAt
-      && stored.attempt === marker.attempt
+      && stored.ownerId === marker.ownerId
     ) {
       sessionStorage.removeItem(TENANT_SWITCH_MARKER_KEY)
     }
@@ -209,15 +225,58 @@ function clearSwitchMarkerForTarget(targetTenantPublicId: string | null): void {
   }
 }
 
+function beginTenantResolverIntent(
+  targetTenantPublicId: string,
+  sourceTenantPublicId: string | null,
+  sourceUser: TenantUrlUserStore['user'],
+  userStore: TenantUrlUserStore,
+): TenantResolverIntent {
+  const intent: TenantResolverIntent = {
+    generation: ++nextTenantResolverIntentGeneration,
+    targetTenantPublicId,
+    sourceTenantPublicId,
+    sourceUser,
+    userStore,
+  }
+  const state = tenantResolverIntentStates.get(userStore) || { latest: null }
+  state.latest = intent
+  tenantResolverIntentStates.set(userStore, state)
+  return intent
+}
+
+function isLatestTenantResolverIntent(intent: TenantResolverIntent): boolean {
+  const state = tenantResolverIntentStates.get(intent.userStore)
+  return (
+    state?.latest === intent
+    && state.latest.generation === intent.generation
+    && intent.userStore.user === intent.sourceUser
+    && normalizeTenantPublicId(intent.userStore.user?.tenant_public_id)
+      === intent.sourceTenantPublicId
+  )
+}
+
+function liveTenantHome(
+  userStore: TenantUrlUserStore,
+  modeStore: TenantUrlModeStore,
+): RouteLocationRaw | false {
+  return tenantHome(
+    normalizeTenantPublicId(userStore.user?.tenant_public_id),
+    modeStore,
+    userStore.isPlatformAdmin,
+  )
+}
+
 function sameTenantSwitchFlight(
   flight: TenantSwitchFlight,
   targetTenantPublicId: string,
+  targetFullPath: string,
   sourceTenantPublicId: string | null,
   sourceUser: TenantUrlUserStore['user'],
   userStore: TenantUrlUserStore,
 ): boolean {
   return (
     flight.targetTenantPublicId === targetTenantPublicId
+    && flight.targetFullPath === targetFullPath
     && flight.sourceTenantPublicId === sourceTenantPublicId
     && flight.sourceUser === sourceUser
     && flight.userStore === userStore
@@ -262,6 +321,22 @@ export async function resolveTenantUrl(
     return tenantHome(currentTenantPublicId, modeStore, userStore.isPlatformAdmin)
   }
 
+  const sourceUser = userStore.user
+  const requestedTenantPublicId = tenantContext === 'required'
+    ? normalizeTenantPublicId(to.query.tenantId)
+    : null
+  const resolverIntent = (
+    requestedTenantPublicId
+    && requestedTenantPublicId !== currentTenantPublicId
+  )
+    ? beginTenantResolverIntent(
+      requestedTenantPublicId,
+      currentTenantPublicId,
+      sourceUser,
+      userStore,
+    )
+    : null
+
   let availableTenants = userStore.availableTenants || []
   let decision = classifyTenantTarget({
     rawTenantId: to.query.tenantId,
@@ -278,6 +353,9 @@ export async function resolveTenantUrl(
     && userStore.fetchAvailableTenants
   ) {
     availableTenants = await userStore.fetchAvailableTenants()
+    if (resolverIntent && !isLatestTenantResolverIntent(resolverIntent)) {
+      return liveTenantHome(userStore, modeStore)
+    }
     decision = classifyTenantTarget({
       rawTenantId: to.query.tenantId,
       currentTenantPublicId,
@@ -305,13 +383,17 @@ export async function resolveTenantUrl(
     return tenantHome(currentTenantPublicId, modeStore, userStore.isPlatformAdmin)
   }
 
-  const sourceUser = userStore.user
+  if (resolverIntent && !isLatestTenantResolverIntent(resolverIntent)) {
+    return liveTenantHome(userStore, modeStore)
+  }
+
   const activeSwitch = activeTenantSwitch
   if (
     activeSwitch
     && sameTenantSwitchFlight(
       activeSwitch,
       decision.tenantPublicId,
+      to.fullPath,
       currentTenantPublicId,
       sourceUser,
       userStore,
@@ -340,6 +422,7 @@ export async function resolveTenantUrl(
     targetFullPath: to.fullPath,
     startedAt: Date.now(),
     attempt: 1,
+    ownerId: ++nextTenantSwitchMarkerOwnerId,
   }
   writeSwitchMarker(flightMarker)
 
@@ -357,6 +440,7 @@ export async function resolveTenantUrl(
 
   const flight: TenantSwitchFlight = {
     targetTenantPublicId: decision.tenantPublicId,
+    targetFullPath: to.fullPath,
     sourceTenantPublicId: currentTenantPublicId,
     sourceUser,
     userStore,

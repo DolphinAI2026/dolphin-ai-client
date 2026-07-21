@@ -446,6 +446,7 @@ describe('resolveTenantUrl', () => {
       targetFullPath,
       startedAt: 1_000,
       attempt: 1,
+      ownerId: expect.any(Number),
     })
   })
 
@@ -472,11 +473,16 @@ describe('resolveTenantUrl', () => {
     expect(storage.get('tenant-url-switch')).toBeTruthy()
   })
 
-  it('shares the in-flight switch for the same tenant on a different path', async () => {
+  it('supersedes a same-target flight when a newer full path needs a different reload destination', async () => {
     installSessionStorage()
-    const switchFlight = deferred<TenantSwitchOutcome>()
+    const firstSwitch = deferred<TenantSwitchOutcome>()
+    const latestSwitch = deferred<TenantSwitchOutcome>()
+    let switchCall = 0
     const userStore = makeUserStore({
-      switchTenantContext: vi.fn(() => switchFlight.promise),
+      switchTenantContext: vi.fn(() => {
+        switchCall += 1
+        return switchCall === 1 ? firstSwitch.promise : latestSwitch.promise
+      }),
     })
     const first = resolveTenantUrl(makeRoute({
       fullPath: `/apps?tenantId=${targetUuid}&view=one`,
@@ -487,12 +493,21 @@ describe('resolveTenantUrl', () => {
       query: { tenantId: targetUuid, view: 'two' },
     }), userStore, builderModeStore)
 
-    expect(userStore.switchTenantContext).toHaveBeenCalledTimes(1)
     userStore.user = { tenant_public_id: targetUuid }
-    switchFlight.resolve('committed_reload')
+    latestSwitch.resolve('committed_reload')
+    firstSwitch.resolve('stale_cancelled')
 
-    await expect(first).resolves.toBe(false)
     await expect(second).resolves.toBe(false)
+    await expect(first).resolves.toEqual({
+      path: '/',
+      query: { tenantId: targetUuid },
+      replace: true,
+    })
+    expect(userStore.switchTenantContext).toHaveBeenCalledTimes(2)
+    expect(userStore.switchTenantContext.mock.calls.map(call => call[2])).toEqual([
+      `/apps?tenantId=${targetUuid}&view=one`,
+      `/apps?tenantId=${targetUuid}&view=two`,
+    ])
   })
 
   it('starts the latest cross-target switch instead of sharing a different target flight', async () => {
@@ -576,8 +591,7 @@ describe('resolveTenantUrl', () => {
       query: { tenantId: targetUuid },
     }), userStore, builderModeStore)
     const code = resolveTenantUrl(makeRoute({
-      path: '/code/apps',
-      fullPath: `/code/apps?tenantId=${targetUuid}`,
+      fullPath: `/apps?tenantId=${targetUuid}`,
       query: { tenantId: targetUuid },
     }), userStore, codeModeStore)
 
@@ -635,6 +649,143 @@ describe('resolveTenantUrl', () => {
     })
   })
 
+  it('does not let a slow B tenant-list recovery supersede a newer C navigation', async () => {
+    installSessionStorage()
+    const fetchB = deferred<typeof availableTenants>()
+    const fetchC = deferred<typeof availableTenants>()
+    const userStore = makeUserStore({
+      availableTenants: [],
+      fetchAvailableTenants: vi.fn()
+        .mockImplementationOnce(() => fetchB.promise)
+        .mockImplementationOnce(() => fetchC.promise),
+    })
+    userStore.switchTenantContext.mockImplementation(async (
+      _tenantId: number,
+      tenantPublicId: string,
+    ) => {
+      userStore.user = { tenant_public_id: tenantPublicId }
+      return 'committed_reload' as const
+    })
+    const builderB = resolveTenantUrl(makeRoute({
+      fullPath: `/apps?tenantId=${targetUuid}`,
+      query: { tenantId: targetUuid },
+    }), userStore, builderModeStore)
+    const codeC = resolveTenantUrl(makeRoute({
+      path: '/code/apps',
+      fullPath: `/code/apps?tenantId=${targetCUuid}`,
+      query: { tenantId: targetCUuid },
+    }), userStore, codeModeStore)
+
+    fetchC.resolve(availableTenants)
+    await expect(codeC).resolves.toBe(false)
+    fetchB.resolve(availableTenants)
+
+    await expect(builderB).resolves.toEqual({
+      path: '/',
+      query: { tenantId: targetCUuid },
+      replace: true,
+    })
+    expect(userStore.switchTenantContext).toHaveBeenCalledTimes(1)
+    expect(userStore.switchTenantContext).toHaveBeenCalledWith(
+      3,
+      targetCUuid,
+      `/code/apps?tenantId=${targetCUuid}`,
+    )
+  })
+
+  it('does not let a slow C tenant-list recovery supersede a newer B navigation', async () => {
+    installSessionStorage()
+    const fetchC = deferred<typeof availableTenants>()
+    const fetchB = deferred<typeof availableTenants>()
+    const userStore = makeUserStore({
+      availableTenants: [],
+      fetchAvailableTenants: vi.fn()
+        .mockImplementationOnce(() => fetchC.promise)
+        .mockImplementationOnce(() => fetchB.promise),
+    })
+    userStore.switchTenantContext.mockImplementation(async (
+      _tenantId: number,
+      tenantPublicId: string,
+    ) => {
+      userStore.user = { tenant_public_id: tenantPublicId }
+      return 'committed_reload' as const
+    })
+    const codeC = resolveTenantUrl(makeRoute({
+      path: '/code/apps',
+      fullPath: `/code/apps?tenantId=${targetCUuid}`,
+      query: { tenantId: targetCUuid },
+    }), userStore, codeModeStore)
+    const builderB = resolveTenantUrl(makeRoute({
+      fullPath: `/apps?tenantId=${targetUuid}`,
+      query: { tenantId: targetUuid },
+    }), userStore, builderModeStore)
+
+    fetchB.resolve(availableTenants)
+    await expect(builderB).resolves.toBe(false)
+    fetchC.resolve(availableTenants)
+
+    await expect(codeC).resolves.toEqual({
+      path: '/code/apps',
+      query: { tenantId: targetUuid },
+      replace: true,
+    })
+    expect(userStore.switchTenantContext).toHaveBeenCalledTimes(1)
+    expect(userStore.switchTenantContext).toHaveBeenCalledWith(
+      2,
+      targetUuid,
+      `/apps?tenantId=${targetUuid}`,
+    )
+  })
+
+  it('keeps the newest same-millisecond B marker when B-C-B flights settle out of order', async () => {
+    const storage = installSessionStorage()
+    vi.spyOn(Date, 'now').mockReturnValue(1_000)
+    const firstB = deferred<TenantSwitchOutcome>()
+    const middleC = deferred<TenantSwitchOutcome>()
+    const latestB = deferred<TenantSwitchOutcome>()
+    const userStore = makeUserStore({
+      switchTenantContext: vi.fn()
+        .mockImplementationOnce(() => firstB.promise)
+        .mockImplementationOnce(() => middleC.promise)
+        .mockImplementationOnce(() => latestB.promise),
+    })
+    const oldB = resolveTenantUrl(makeRoute({
+      fullPath: `/apps?tenantId=${targetUuid}`,
+      query: { tenantId: targetUuid },
+    }), userStore, builderModeStore)
+    const middle = resolveTenantUrl(makeRoute({
+      path: '/code/apps',
+      fullPath: `/code/apps?tenantId=${targetCUuid}`,
+      query: { tenantId: targetCUuid },
+    }), userStore, codeModeStore)
+    const newestB = resolveTenantUrl(makeRoute({
+      fullPath: `/apps?tenantId=${targetUuid}`,
+      query: { tenantId: targetUuid },
+    }), userStore, builderModeStore)
+    const newestMarker = JSON.parse(storage.get('tenant-url-switch') || '')
+
+    firstB.resolve('stale_cancelled')
+    await expect(oldB).resolves.toEqual({
+      path: '/',
+      query: { tenantId: currentUuid },
+      replace: true,
+    })
+    expect(JSON.parse(storage.get('tenant-url-switch') || '')).toMatchObject({
+      targetTenantPublicId: targetUuid,
+      ownerId: newestMarker.ownerId,
+    })
+
+    middleC.resolve('stale_cancelled')
+    userStore.user = { tenant_public_id: targetUuid }
+    latestB.resolve('committed_reload')
+    await expect(middle).resolves.toEqual({
+      path: '/code/apps',
+      query: { tenantId: targetUuid },
+      replace: true,
+    })
+    await expect(newestB).resolves.toBe(false)
+  })
+
   it.each([
     ['invalid', '123'],
     ['inaccessible', unknownUuid],
@@ -685,6 +836,7 @@ describe('resolveTenantUrl', () => {
       targetFullPath,
       startedAt: 5_000,
       attempt: 1,
+      ownerId: 1,
     }))
     const userStore = makeUserStore()
 
