@@ -77,13 +77,15 @@ statefulset_container_image() {
 }
 
 verify_statefulset_image_contract() {
+  local expected_backend_image="${1:-${BUILDER_IMAGE:-}}"
+  local expected_init_image="${2:-${BUILDER_IMAGE:-}}"
   local backend_image init_image
 
   backend_image="$(statefulset_container_image container "$KUBE_BACKEND_CONTAINER")"
   init_image="$(statefulset_container_image init "$KUBE_DIST_INIT_CONTAINER")"
-  [ "$backend_image" = "$BUILDER_IMAGE" ] \
+  [ "$backend_image" = "$expected_backend_image" ] \
     || die "StatefulSet backend image mismatch"
-  [ "$init_image" = "$BUILDER_IMAGE" ] \
+  [ "$init_image" = "$expected_init_image" ] \
     || die "StatefulSet dist init image mismatch"
 }
 
@@ -116,6 +118,10 @@ verify_inputs() {
     KUBE_BACKEND_CONTAINER
     KUBE_DIST_INIT_CONTAINER
     KUBE_WEB_CONTAINER
+    KUBE_EXPECTED_HOST
+    KUBE_INGRESS
+    KUBE_SERVICE
+    KUBE_INGRESS_PATH
     BUILDER_SMOKE_USERNAME
     BUILDER_SMOKE_PASSWORD
     BUILDER_SMOKE_TENANT_NAME
@@ -136,11 +142,89 @@ verify_inputs() {
   fi
 }
 
+origin_hostname() {
+  local authority
+  authority="${BUILDER_ORIGIN#*://}"
+  authority="${authority%%/*}"
+  authority="${authority%%:*}"
+  [ -n "$authority" ] || return 1
+  printf '%s\n' "$authority"
+}
+
+verify_origin_host_config() {
+  local host
+
+  host="$(origin_hostname)" || die "BUILDER_ORIGIN hostname is invalid"
+  [ "$host" = "$KUBE_EXPECTED_HOST" ] \
+    || die "origin host mismatch"
+}
+
+verify_kubernetes_rbac() {
+  local verb resource answer
+
+  for verb_resource in \
+    "get statefulsets" \
+    "get pods" \
+    "get services" \
+    "get ingresses.networking.k8s.io" \
+    "get pods/log" \
+    "create pods/exec"; do
+    verb="${verb_resource%% *}"
+    resource="${verb_resource#* }"
+    answer="$(kubectl auth can-i "$verb" "$resource" -n "$KUBE_NAMESPACE")" \
+      || die "unable to verify Kubernetes RBAC: ${verb} ${resource}"
+    [ "$answer" = "yes" ] || die "Kubernetes RBAC denied: ${verb} ${resource}"
+  done
+}
+
+ingress_backend_service() {
+  kubectl -n "$KUBE_NAMESPACE" get ingress "$KUBE_INGRESS" \
+    -o jsonpath="{range .spec.rules[?(@.host==\"${KUBE_EXPECTED_HOST}\")].http.paths[?(@.path==\"${KUBE_INGRESS_PATH}\")]}{.backend.service.name}{end}"
+}
+
+service_selector() {
+  kubectl -n "$KUBE_NAMESPACE" get service "$KUBE_SERVICE" \
+    -o go-template='{{range $key, $value := .spec.selector}}{{printf "%s=%s" $key $value}}{{end}}'
+}
+
+verify_release_resource_binding() {
+  local backend_service selector
+
+  backend_service="$(ingress_backend_service)" \
+    || die "Ingress is not accessible: ${KUBE_INGRESS}"
+  [ "$backend_service" = "$KUBE_SERVICE" ] \
+    || die "Ingress backend service mismatch"
+  selector="$(service_selector)" \
+    || die "Service is not accessible: ${KUBE_SERVICE}"
+  [ "$selector" = "$KUBE_LABEL_SELECTOR" ] \
+    || die "Service selector mismatch"
+}
+
+selector_pod_names() {
+  kubectl -n "$KUBE_NAMESPACE" get pods -l "$KUBE_LABEL_SELECTOR" \
+    -o jsonpath='{range .items[*]}{.metadata.name}{"\n"}{end}'
+}
+
+verify_current_rollout_health() {
+  local pod_names pod
+
+  verify_statefulset_revision
+  pod_names="$(selector_pod_names)"
+  [ -n "$pod_names" ] || die "no Pods found for selector: ${KUBE_LABEL_SELECTOR}"
+  while IFS= read -r pod; do
+    [ -n "$pod" ] || continue
+    pod_is_ready "$pod" || die "Pod is not Ready: ${pod}"
+    [ "$(pod_statefulset_owner "$pod")" = "$KUBE_STATEFULSET" ] \
+      || die "Pod is not owned by StatefulSet: ${pod}"
+  done <<<"$pod_names"
+}
+
 verify_cluster_preflight() {
-  local allow_absent_workload="${1:-0}" pod_names pod
+  local allow_absent_workload="${1:-0}"
 
   kubectl config current-context >/dev/null 2>&1 \
     || die "kubectl has no configured kubeconfig context"
+  verify_kubernetes_rbac
   if ! kubectl -n "$KUBE_NAMESPACE" get statefulset "$KUBE_STATEFULSET" >/dev/null 2>&1; then
     [ "$allow_absent_workload" = "1" ] && return 0
     die "StatefulSet is not accessible: ${KUBE_STATEFULSET}"
@@ -151,15 +235,8 @@ verify_cluster_preflight() {
     || die "dist init container is not present: ${KUBE_DIST_INIT_CONTAINER}"
   statefulset_container_exists container "$KUBE_WEB_CONTAINER" \
     || die "web container is not present: ${KUBE_WEB_CONTAINER}"
-  verify_statefulset_image_contract
-  pod_names="$(kubectl -n "$KUBE_NAMESPACE" get pods -l "$KUBE_LABEL_SELECTOR" \
-    -o jsonpath='{range .items[*]}{.metadata.name}{"\n"}{end}')"
-  [ -n "$pod_names" ] || die "no Pods found for selector: ${KUBE_LABEL_SELECTOR}"
-  while IFS= read -r pod; do
-    [ -n "$pod" ] || continue
-    [ "$(pod_statefulset_owner "$pod")" = "$KUBE_STATEFULSET" ] \
-      || die "Pod is not owned by StatefulSet: ${pod}"
-  done <<<"$pod_names"
+  verify_release_resource_binding
+  verify_current_rollout_health
 }
 
 verify_common_preflight() {
@@ -172,6 +249,7 @@ verify_common_preflight() {
   need node
   need sed
   verify_inputs "$require_image"
+  verify_origin_host_config
   verify_playwright_and_edge
   git -C "$ROOT_DIR" merge-base --is-ancestor "$PROVENANCE_FLOOR" "$DEPLOYED_REVISION" \
     || die "DEPLOYED_REVISION is below provenance floor"
@@ -187,6 +265,7 @@ online_prebuild_preflight() {
   verify_common_preflight 0
   kubectl config current-context >/dev/null 2>&1 \
     || die "kubectl has no configured kubeconfig context"
+  verify_kubernetes_rbac
   printf '[builder-release-smoke][ok] online prebuild preflight passed\n'
 }
 
@@ -194,6 +273,35 @@ online_preflight() {
   verify_common_preflight 1
   verify_cluster_preflight 1
   printf '[builder-release-smoke][ok] online release preflight passed\n'
+}
+
+verify_rollback_state() {
+  local name
+  local required_envs=(
+    KUBE_NAMESPACE
+    KUBE_STATEFULSET
+    KUBE_LABEL_SELECTOR
+    KUBE_BACKEND_CONTAINER
+    KUBE_DIST_INIT_CONTAINER
+    ROLLBACK_BACKEND_IMAGE
+    ROLLBACK_DIST_INIT_IMAGE
+  )
+
+  for name in "${required_envs[@]}"; do
+    require_env "$name"
+  done
+  kubectl config current-context >/dev/null 2>&1 \
+    || die "kubectl has no configured kubeconfig context"
+  verify_kubernetes_rbac
+  kubectl -n "$KUBE_NAMESPACE" get statefulset "$KUBE_STATEFULSET" >/dev/null \
+    || die "StatefulSet is not accessible: ${KUBE_STATEFULSET}"
+  statefulset_container_exists container "$KUBE_BACKEND_CONTAINER" \
+    || die "backend container is not present: ${KUBE_BACKEND_CONTAINER}"
+  statefulset_container_exists init "$KUBE_DIST_INIT_CONTAINER" \
+    || die "dist init container is not present: ${KUBE_DIST_INIT_CONTAINER}"
+  verify_statefulset_image_contract "$ROLLBACK_BACKEND_IMAGE" "$ROLLBACK_DIST_INIT_IMAGE"
+  verify_current_rollout_health
+  printf '[builder-release-smoke][ok] rollback workload verification passed\n'
 }
 
 verify_public_build_sha() {
@@ -419,7 +527,7 @@ scan_rollout_logs() {
       category="smoke_password"
     elif printf '%s' "$logs" | grep -Eiq '(^|[[:space:][:punct:]])authorization[[:space:][:punct:]]*(bearer|basic|token)[[:space:]]+'; then
       category="authorization"
-    elif printf '%s' "$logs" | grep -Eq '[A-Za-z0-9_-]{20,}\.[A-Za-z0-9_-]{20,}\.[A-Za-z0-9_-]{20,}'; then
+    elif printf '%s' "$logs" | grep -Eq '[A-Za-z0-9_-]{2,}\.[A-Za-z0-9_-]{2,}\.[A-Za-z0-9_-]{16,}'; then
       category="jwt_like"
     elif printf '%s' "$logs" | grep -Eiq '(^|[[:space:][:punct:]])(set-)?cookie[[:space:][:punct:]]*'; then
       category="cookie"
@@ -464,10 +572,15 @@ main() {
       [ "$#" -eq 1 ] || die "usage: $0 [--preflight|--online-prebuild|--online-preflight]"
       online_preflight
       ;;
+    --verify-rollback)
+      [ "$#" -eq 1 ] || die "usage: $0 [--preflight|--online-prebuild|--online-preflight|--verify-rollback]"
+      verify_rollback_state
+      ;;
     "")
       preflight
       verify_public_build_sha
       verify_statefulset_revision
+      verify_statefulset_image_contract
       verify_ready_pods
       run_reconciliation
       scan_rollout_logs before-browser
@@ -476,7 +589,7 @@ main() {
       printf '[builder-release-smoke][ok] release tenant URL smoke passed\n'
       ;;
     *)
-      die "usage: $0 [--preflight|--online-prebuild|--online-preflight]"
+      die "usage: $0 [--preflight|--online-prebuild|--online-preflight|--verify-rollback]"
       ;;
   esac
 }

@@ -80,6 +80,7 @@ case "${1:-}" in
     cat >/dev/null
     ;;
   *builder-tenant-url-release-smoke.spec.mjs)
+    [ "${FAKE_BROWSER_FAIL:-0}" != "1" ] || exit 1
     [ -z "${FAKE_BROWSER_MARKER:-}" ] || : >"${FAKE_BROWSER_MARKER}"
     printf 'RELEASE_BROWSER_SMOKE=PASS\n'
     ;;
@@ -99,17 +100,62 @@ fi
 exec /usr/bin/grep "$@"
 EOF
 
-  cat >"${FAKE_BIN}/kubectl" <<'EOF'
+cat >"${FAKE_BIN}/kubectl" <<'EOF'
 #!/usr/bin/env bash
 set -euo pipefail
 
 args=" $* "
+state_value() {
+  local key="$1" line
+  [ -n "${FAKE_KUBE_STATE:-}" ] || return 0
+  [ -f "${FAKE_KUBE_STATE}" ] || return 0
+  line="$(grep -E "^${key}=" "${FAKE_KUBE_STATE}" || true)"
+  printf '%s' "${line#*=}"
+}
+
+set_state_value() {
+  local key="$1" value="$2" tmp
+  [ -n "${FAKE_KUBE_STATE:-}" ] || return 0
+  tmp="${FAKE_KUBE_STATE}.tmp"
+  if [ -f "${FAKE_KUBE_STATE}" ]; then
+    grep -Ev "^${key}=" "${FAKE_KUBE_STATE}" >"${tmp}" || true
+  else
+    : >"${tmp}"
+  fi
+  printf '%s=%s\n' "$key" "$value" >>"${tmp}"
+  mv "${tmp}" "${FAKE_KUBE_STATE}"
+}
+
+if [[ "$args" == *" auth can-i "* ]]; then
+  printf '%s\n' "${FAKE_RBAC:-yes}"
+  exit 0
+fi
 if [[ "$args" == *" config current-context "* ]]; then
   printf 'fake-context\n'
   exit 0
 fi
-if [[ "$args" == *" get statefulset ai-builder "* ]]; then
-  if [ "${FAKE_STS_ABSENT:-0}" = "1" ]; then
+if [[ "$args" == *" get pods,sts,svc,ingress,pvc "* ]]; then
+  printf 'NAME\n'
+  exit 0
+fi
+if [[ "$args" == *" get ingress ai-builder "* ]]; then
+  if [ "${FAKE_INGRESS_ABSENT:-0}" = "1" ] || [ "$(state_value ingress_deleted)" = "1" ]; then
+    printf 'Error from server (NotFound): ingresses.networking.k8s.io "ai-builder" not found\n' >&2
+    exit 1
+  fi
+  printf '%s\n' "${FAKE_INGRESS_SERVICE:-ai-builder}"
+  exit 0
+fi
+if [[ "$args" == *" get service ai-builder "* ]]; then
+  if [ "${FAKE_SERVICE_ABSENT:-0}" = "1" ] || [ "$(state_value service_deleted)" = "1" ]; then
+    printf 'Error from server (NotFound): services "ai-builder" not found\n' >&2
+    exit 1
+  fi
+  printf '%s\n' "${FAKE_SERVICE_SELECTOR:-app.kubernetes.io/name=ai-builder}"
+  exit 0
+fi
+if [[ "$args" == *" get statefulset ai-builder "* || "$args" == *" get statefulset/ai-builder "* ]]; then
+  if [ "${FAKE_STS_ABSENT:-0}" = "1" ] || [ "$(state_value sts_deleted)" = "1" ]; then
     printf 'Error from server (NotFound): statefulsets.apps "ai-builder" not found\n' >&2
     exit 1
   fi
@@ -118,9 +164,11 @@ if [[ "$args" == *" get statefulset ai-builder "* ]]; then
   elif [[ "$args" == *"currentRevision"* || "$args" == *"updateRevision"* ]]; then
     printf '%s\n' "${FAKE_STS_REVISIONS:-rev-7 rev-7}"
   elif [[ "$args" == *"spec.template.spec.containers"* && "$args" == *"image"* ]]; then
-    printf '%s\n' "${FAKE_STS_BACKEND_IMAGE:-registry.example/ai-builder@sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb}"
+    image="$(state_value backend_image)"
+    printf '%s\n' "${image:-${FAKE_STS_BACKEND_IMAGE:-registry.example/ai-builder@sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb}}"
   elif [[ "$args" == *"spec.template.spec.initContainers"* && "$args" == *"image"* ]]; then
-    printf '%s\n' "${FAKE_STS_INIT_IMAGE:-registry.example/ai-builder@sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb}"
+    image="$(state_value init_image)"
+    printf '%s\n' "${image:-${FAKE_STS_INIT_IMAGE:-registry.example/ai-builder@sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb}}"
   elif [[ "$args" == *"containers"* ]]; then
     printf '%s\n' "${FAKE_CONTAINERS:-ai-builder web}"
   elif [[ "$args" == *"initContainers"* ]]; then
@@ -158,10 +206,12 @@ if [[ "$args" == *" get pod pod-a "* || "$args" == *" get pod pod-b "* || "$args
   elif [[ "$args" == *"conditions"* ]]; then
     printf 'True\n'
   elif [[ "$args" == *"spec.containers"* && "$args" == *"image"* ]]; then
-    image="${FAKE_POD_BACKEND_IMAGE:-registry.example/ai-builder@sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb}"
+    image="$(state_value backend_image)"
+    image="${image:-${FAKE_POD_BACKEND_IMAGE:-registry.example/ai-builder@sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb}}"
     printf '%s\n' "$image"
   elif [[ "$args" == *"spec.initContainers"* && "$args" == *"image"* ]]; then
-    image="${FAKE_POD_INIT_IMAGE:-registry.example/ai-builder@sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb}"
+    image="$(state_value init_image)"
+    image="${image:-${FAKE_POD_INIT_IMAGE:-registry.example/ai-builder@sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb}}"
     printf '%s\n' "$image"
   elif [[ "$args" == *"containerStatuses"* ]]; then
     digest="${FAKE_BACKEND_DIGEST:-sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb}"
@@ -174,6 +224,37 @@ if [[ "$args" == *" get pod pod-a "* || "$args" == *" get pod pod-b "* || "$args
     printf 'unexpected Pod query\n' >&2
     exit 64
   fi
+  exit 0
+fi
+if [[ "$args" == *" set image statefulset/ai-builder "* ]]; then
+  backend_image=""
+  init_image=""
+  for argument in "$@"; do
+    case "$argument" in
+      ai-builder=*) backend_image="${argument#ai-builder=}" ;;
+      apaas-builder=*) backend_image="${argument#apaas-builder=}" ;;
+      copy-frontend-dist=*) init_image="${argument#copy-frontend-dist=}" ;;
+    esac
+  done
+  [ -n "$backend_image" ] && [ -n "$init_image" ] || exit 64
+  set_state_value backend_image "$backend_image"
+  set_state_value init_image "$init_image"
+  [ -z "${FAKE_KUBE_LOG:-}" ] || printf 'set-image backend=%s init=%s\n' "$backend_image" "$init_image" >>"${FAKE_KUBE_LOG}"
+  exit 0
+fi
+if [[ "$args" == *" rollout status statefulset/ai-builder "* ]]; then
+  [ -z "${FAKE_KUBE_LOG:-}" ] || printf 'rollout-status\n' >>"${FAKE_KUBE_LOG}"
+  [ "${FAKE_ROLLBACK_ROLLOUT_FAIL:-0}" = "1" ] && exit 1
+  exit 0
+fi
+if [[ "$args" == *" delete ingress ai-builder "* || "$args" == *" delete statefulset ai-builder "* || "$args" == *" delete service ai-builder "* || "$args" == *" delete service ai-builder-headless "* ]]; then
+  [ -z "${FAKE_KUBE_LOG:-}" ] || printf 'delete %s\n' "$*" >>"${FAKE_KUBE_LOG}"
+  case "$args" in
+    *" delete ingress ai-builder "*) set_state_value ingress_deleted 1 ;;
+    *" delete statefulset ai-builder "*) set_state_value sts_deleted 1 ;;
+    *" delete service ai-builder-headless "*) set_state_value headless_deleted 1 ;;
+    *" delete service ai-builder "*) set_state_value service_deleted 1 ;;
+  esac
   exit 0
 fi
 if [[ "$args" == *" exec "* ]]; then
@@ -263,12 +344,20 @@ expected = {
   "KUBE_DIST_INIT_CONTAINER" => "$BUILDER_K8S_DIST_INIT_CONTAINER",
   "KUBE_LABEL_SELECTOR" => "$BUILDER_K8S_LABEL_SELECTOR",
   "KUBE_WEB_CONTAINER" => "$BUILDER_K8S_WEB_CONTAINER",
+  "KUBE_EXPECTED_HOST" => "$BUILDER_K8S_EXPECTED_HOST",
+  "KUBE_INGRESS" => "$BUILDER_K8S_INGRESS",
+  "KUBE_SERVICE" => "$BUILDER_K8S_SERVICE",
+  "KUBE_INGRESS_PATH" => "$BUILDER_K8S_INGRESS_PATH",
 }
 [preflight, smoke].each do |job|
   expected.each { |key, value| abort "missing #{key} mapping" unless job.dig("variables", key) == value }
 end
 abort "wrong default selector" unless config.dig("variables", "BUILDER_K8S_LABEL_SELECTOR") == "app.kubernetes.io/name=ai-builder"
 abort "wrong default web container" unless config.dig("variables", "BUILDER_K8S_WEB_CONTAINER") == "web"
+abort "wrong default expected host" unless config.dig("variables", "BUILDER_K8S_EXPECTED_HOST") == "om-demo.dfy.definesys.cn"
+abort "wrong default ingress" unless config.dig("variables", "BUILDER_K8S_INGRESS") == "ai-builder"
+abort "wrong default service" unless config.dig("variables", "BUILDER_K8S_SERVICE") == "ai-builder"
+abort "wrong default ingress path" unless config.dig("variables", "BUILDER_K8S_INGRESS_PATH") == "/ai-builder"
 abort "release must need preflight" unless config.fetch("release_and_update_server").fetch("needs").any? { |need| need["job"] == "release_builder_preflight" && need["artifacts"] }
 abort "smoke must use release spec" unless smoke.fetch("script").join("\n").include?("verify_builder_tenant_url_smoke.sh")
 puts "CI_METADATA_MAPPING=PASS"
@@ -319,6 +408,14 @@ ci_metadata_script() {
   ruby -ryaml - "${ROOT_DIR}/.gitlab-ci.yml" <<'RUBY'
 config = YAML.load_file(ARGV.fetch(0))
 puts config.fetch("publish_release_metadata").fetch("script").join("\n")
+RUBY
+}
+
+ci_job_script() {
+  local job="$1"
+  ruby -ryaml - "${ROOT_DIR}/.gitlab-ci.yml" "$job" <<'RUBY'
+config = YAML.load_file(ARGV.fetch(0))
+puts config.fetch(ARGV.fetch(1)).fetch("script").join("\n")
 RUBY
 }
 
@@ -468,20 +565,24 @@ run_fake_helper() {
   local mode="${1:-}"
   shift $(( $# > 0 ? 1 : 0 ))
   PATH="${FAKE_BIN}:$PATH" \
-  BUILDER_ORIGIN="https://builder.example" \
-  BUILDER_IMAGE="registry.example/ai-builder@${TEST_DIGEST}" \
-  DEPLOYED_REVISION="$TEST_REVISION" \
-  KUBE_NAMESPACE="release-ns" \
-  KUBE_STATEFULSET="ai-builder" \
+  BUILDER_ORIGIN="${BUILDER_ORIGIN:-https://builder.example}" \
+  BUILDER_IMAGE="${BUILDER_IMAGE:-registry.example/ai-builder@${TEST_DIGEST}}" \
+  DEPLOYED_REVISION="${DEPLOYED_REVISION:-$TEST_REVISION}" \
+  KUBE_NAMESPACE="${KUBE_NAMESPACE:-release-ns}" \
+  KUBE_STATEFULSET="${KUBE_STATEFULSET:-ai-builder}" \
   KUBE_LABEL_SELECTOR="${KUBE_LABEL_SELECTOR:-app.kubernetes.io/name=ai-builder}" \
-  KUBE_BACKEND_CONTAINER="ai-builder" \
-  KUBE_DIST_INIT_CONTAINER="copy-frontend-dist" \
+  KUBE_BACKEND_CONTAINER="${KUBE_BACKEND_CONTAINER:-ai-builder}" \
+  KUBE_DIST_INIT_CONTAINER="${KUBE_DIST_INIT_CONTAINER:-copy-frontend-dist}" \
   KUBE_WEB_CONTAINER="${KUBE_WEB_CONTAINER:-web}" \
-  BUILDER_SMOKE_USERNAME="release-user" \
-  BUILDER_SMOKE_PASSWORD="$TEST_PASSWORD" \
-  BUILDER_SMOKE_TENANT_NAME="Release Tenant" \
-  BUILDER_SMOKE_CODE_SESSION_ID="session-1" \
-  BUILDER_SMOKE_AGENT_ID="agent-1" \
+  KUBE_EXPECTED_HOST="${KUBE_EXPECTED_HOST:-builder.example}" \
+  KUBE_INGRESS="${KUBE_INGRESS:-ai-builder}" \
+  KUBE_SERVICE="${KUBE_SERVICE:-ai-builder}" \
+  KUBE_INGRESS_PATH="${KUBE_INGRESS_PATH:-/ai-builder}" \
+  BUILDER_SMOKE_USERNAME="${BUILDER_SMOKE_USERNAME:-release-user}" \
+  BUILDER_SMOKE_PASSWORD="${BUILDER_SMOKE_PASSWORD:-$TEST_PASSWORD}" \
+  BUILDER_SMOKE_TENANT_NAME="${BUILDER_SMOKE_TENANT_NAME:-Release Tenant}" \
+  BUILDER_SMOKE_CODE_SESSION_ID="${BUILDER_SMOKE_CODE_SESSION_ID:-session-1}" \
+  BUILDER_SMOKE_AGENT_ID="${BUILDER_SMOKE_AGENT_ID:-agent-1}" \
   bash "${ROOT_DIR}/scripts/verify_builder_tenant_url_smoke.sh" "$mode"
 }
 
@@ -489,6 +590,10 @@ assert_fake_helper_contract() {
   run_fake_helper >/dev/null
 
   local output
+  FAKE_STS_BACKEND_IMAGE="registry.example/ai-builder@sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc" \
+  FAKE_STS_INIT_IMAGE="registry.example/ai-builder@sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc" \
+    run_fake_helper --preflight >/dev/null
+
   output="$(FAKE_STS_REVISIONS="rev-7 rev-8" assert_command_fails_without_secret run_fake_helper)"
   assert_contains "$output" "StatefulSet revision mismatch"
 
@@ -523,11 +628,14 @@ assert_fake_helper_contract() {
   output="$(FAKE_LOG='{"Cookie":"session=canary"}' assert_command_fails_without_secret run_fake_helper)"
   assert_contains "$output" "category=cookie"
 
+  output="$(FAKE_LOG='eyJhbGciOiJIUzI1NiJ9.e30.abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNO' assert_command_fails_without_secret run_fake_helper)"
+  assert_contains "$output" "category=jwt_like"
+
   output="$(FAKE_LOG="$TEST_PASSWORD" assert_command_fails_without_secret run_fake_helper)"
   assert_contains "$output" "category=smoke_password"
 
   output="$(KUBE_LABEL_SELECTOR="wrong=selector" assert_command_fails_without_secret run_fake_helper)"
-  assert_contains "$output" "no Pods found for selector"
+  assert_contains "$output" "Service selector mismatch"
 
   output="$(KUBE_WEB_CONTAINER="wrong-web" assert_command_fails_without_secret run_fake_helper)"
   assert_contains "$output" "web container is not present"
@@ -550,7 +658,39 @@ assert_fake_helper_contract() {
   assert_contains "$output" "category=authorization"
   assert_not_contains "$output" "post-browser-canary"
 
+  output="$(BUILDER_ORIGIN="https://staging.example" assert_command_fails_without_secret run_fake_helper --preflight)"
+  assert_contains "$output" "origin host mismatch"
+
+  output="$(FAKE_INGRESS_SERVICE="wrong-service" assert_command_fails_without_secret run_fake_helper --preflight)"
+  assert_contains "$output" "Ingress backend service mismatch"
+
+  output="$(FAKE_SERVICE_SELECTOR="app=wrong" assert_command_fails_without_secret run_fake_helper --preflight)"
+  assert_contains "$output" "Service selector mismatch"
+
   printf 'FAKE_KUBECTL_RELEASE_CONTRACT=PASS\n'
+}
+
+assert_activation_observer_contract() {
+  local output
+  output="$(
+    RELEASE_SMOKE_ACTIVATION_CONTRACT=1 \
+    BUILDER_ORIGIN="https://builder.example" \
+    DEPLOYED_REVISION="$TEST_REVISION" \
+    BUILDER_IMAGE="registry.example/ai-builder@${TEST_DIGEST}" \
+    KUBE_NAMESPACE="release-ns" \
+    KUBE_LABEL_SELECTOR="app.kubernetes.io/name=ai-builder" \
+    KUBE_BACKEND_CONTAINER="ai-builder" \
+    KUBE_DIST_INIT_CONTAINER="copy-frontend-dist" \
+    KUBE_WEB_CONTAINER="web" \
+    BUILDER_SMOKE_USERNAME="release-user" \
+    BUILDER_SMOKE_PASSWORD="$TEST_PASSWORD" \
+    BUILDER_SMOKE_TENANT_NAME="Release Tenant" \
+    BUILDER_SMOKE_CODE_SESSION_ID="session-1" \
+    BUILDER_SMOKE_AGENT_ID="agent-1" \
+      node "${ROOT_DIR}/tests/e2e/builder-tenant-url-release-smoke.spec.mjs"
+  )"
+  assert_contains "$output" "ACTIVATION_OBSERVER_CONTRACT=PASS"
+  printf 'ACTIVATION_OBSERVER_CONTRACT=PASS\n'
 }
 
 assert_online_selector_contract() {
@@ -573,16 +713,179 @@ assert_online_selector_contract() {
   printf 'ONLINE_SELECTOR_CONTRACT=PASS\n'
 }
 
+run_fake_online_recovery() {
+  local state_file="$1" kube_log="$2" workload_exists="$3"
+  PATH="${FAKE_BIN}:$PATH" \
+  WORKDIR="${ROOT_DIR}" \
+  NAMESPACE="release-ns" \
+  APP_NAME="ai-builder" \
+  HOST="builder.example" \
+  BUILDER_ORIGIN="https://builder.example" \
+  BUILDER_IMAGE="registry.example/ai-builder@${TEST_DIGEST}" \
+  DEPLOYED_REVISION="$TEST_REVISION" \
+  KUBE_NAMESPACE="release-ns" \
+  KUBE_STATEFULSET="ai-builder" \
+  KUBE_LABEL_SELECTOR="app.kubernetes.io/name=ai-builder" \
+  KUBE_BACKEND_CONTAINER="ai-builder" \
+  KUBE_DIST_INIT_CONTAINER="copy-frontend-dist" \
+  KUBE_WEB_CONTAINER="web" \
+  KUBE_EXPECTED_HOST="builder.example" \
+  KUBE_INGRESS="ai-builder" \
+  KUBE_SERVICE="ai-builder" \
+  KUBE_INGRESS_PATH="/ai-builder" \
+  BUILDER_SMOKE_USERNAME="release-user" \
+  BUILDER_SMOKE_PASSWORD="$TEST_PASSWORD" \
+  BUILDER_SMOKE_TENANT_NAME="Release Tenant" \
+  BUILDER_SMOKE_CODE_SESSION_ID="session-1" \
+  RECOVERY_WORKLOAD_EXISTS="$workload_exists" \
+  RECOVERY_BACKEND_IMAGE="registry.example/ai-builder@sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc" \
+  RECOVERY_DIST_INIT_IMAGE="registry.example/ai-builder@sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd" \
+  FAKE_KUBE_STATE="$state_file" \
+  FAKE_KUBE_LOG="$kube_log" \
+  FAKE_CONTAINERS="ai-builder apaas-builder web" \
+    bash -c '
+      source "$1/scripts/deploy_online_latest_kubesphere.sh"
+      PREVIOUS_WORKLOAD_EXISTS="${RECOVERY_WORKLOAD_EXISTS}"
+      PREVIOUS_BACKEND_IMAGE="${RECOVERY_BACKEND_IMAGE}"
+      PREVIOUS_DIST_INIT_IMAGE="${RECOVERY_DIST_INIT_IMAGE}"
+      run_release_builder_smoke() { return 1; }
+      if rollout_and_verify; then
+        exit 99
+      fi
+      recover_failed_release
+    ' bash "$ROOT_DIR"
+}
+
+assert_online_rollback_contract() {
+  local state_file kube_log output
+  state_file="${TMP_DIR}/online-recovery.state"
+  kube_log="${TMP_DIR}/online-recovery.log"
+  : >"$state_file"
+  : >"$kube_log"
+
+  output="$(
+    PATH="${FAKE_BIN}:$PATH" \
+    NAMESPACE="release-ns" \
+    APP_NAME="ai-builder" \
+    FAKE_STS_BACKEND_IMAGE="registry.example/ai-builder:mutable" \
+      assert_command_fails_without_secret bash -c '
+        source "$1/scripts/deploy_online_latest_kubesphere.sh"
+        capture_previous_workload
+      ' bash "$ROOT_DIR"
+  )"
+  assert_contains "$output" "previous StatefulSet image refs must be immutable"
+
+  run_fake_online_recovery "$state_file" "$kube_log" 1
+  assert_contains "$(<"$kube_log")" "set-image backend=registry.example/ai-builder@sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc init=registry.example/ai-builder@sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd"
+  assert_contains "$(<"$kube_log")" "rollout-status"
+  assert_contains "$(<"$state_file")" "backend_image=registry.example/ai-builder@sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
+  assert_contains "$(<"$state_file")" "init_image=registry.example/ai-builder@sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd"
+
+  : >"$state_file"
+  : >"$kube_log"
+  output="$(
+    FAKE_ROLLBACK_ROLLOUT_FAIL=1 \
+      assert_command_fails_without_secret run_fake_online_recovery "$state_file" "$kube_log" 1
+  )"
+  assert_contains "$output" "rollback rollout failed"
+
+  : >"$state_file"
+  : >"$kube_log"
+  run_fake_online_recovery "$state_file" "$kube_log" 0
+  assert_contains "$(<"$kube_log")" "delete -n release-ns delete ingress ai-builder"
+  assert_contains "$(<"$kube_log")" "delete -n release-ns delete statefulset ai-builder"
+  assert_contains "$(<"$kube_log")" "delete -n release-ns delete service ai-builder"
+  assert_contains "$(<"$state_file")" "ingress_deleted=1"
+  assert_contains "$(<"$state_file")" "sts_deleted=1"
+  assert_contains "$(<"$state_file")" "service_deleted=1"
+  printf 'ONLINE_ROLLBACK_CONTRACT=PASS\n'
+}
+
+assert_ci_rollback_contract() {
+  local job_dir state_file kube_log update_script browser_script output
+  job_dir="${TMP_DIR}/ci-rollback"
+  state_file="${TMP_DIR}/ci-rollback.state"
+  kube_log="${TMP_DIR}/ci-rollback.log"
+  update_script="$(ci_job_script release_and_update_server)"
+  browser_script="$(ci_job_script release_builder_browser_smoke)"
+  mkdir -p "${job_dir}/build"
+  ln -s "${ROOT_DIR}/scripts" "${job_dir}/scripts"
+  ln -s "${ROOT_DIR}/node_modules" "${job_dir}/node_modules"
+  printf 'backend_image=registry.example/ai-builder@sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc\ninit_image=registry.example/ai-builder@sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd\n' >"$state_file"
+  : >"$kube_log"
+  printf 'BUILDER_IMAGE=registry.example/ai-builder@%s\nDEPLOYED_REVISION=%s\n' \
+    "$TEST_DIGEST" "$TEST_REVISION" >"${job_dir}/build/release.env"
+  : >"${job_dir}/kubeconfig"
+
+  (
+    cd "$job_dir"
+    PATH="${FAKE_BIN}:$PATH" \
+    APAAS_KUBECONFIG="${job_dir}/kubeconfig" \
+    BUILDER_IMAGE="registry.example/ai-builder@${TEST_DIGEST}" \
+    BUILDER_K8S_NAMESPACE="release-ns" \
+    BUILDER_K8S_STATEFULSET="ai-builder" \
+    BUILDER_K8S_BACKEND_CONTAINER="ai-builder" \
+    BUILDER_K8S_DIST_INIT_CONTAINER="copy-frontend-dist" \
+    BUILDER_ROLLOUT_TIMEOUT="30s" \
+    FAKE_KUBE_STATE="$state_file" \
+    FAKE_KUBE_LOG="$kube_log" \
+      bash -c "$update_script"
+  )
+  assert_contains "$(<"${job_dir}/build/release.env")" "PREVIOUS_BACKEND_IMAGE=registry.example/ai-builder@sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
+  assert_contains "$(<"${job_dir}/build/release.env")" "PREVIOUS_DIST_INIT_IMAGE=registry.example/ai-builder@sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd"
+  assert_contains "$(<"$state_file")" "backend_image=registry.example/ai-builder@${TEST_DIGEST}"
+
+  output="$(
+    (
+      cd "$job_dir"
+      set -a
+      . build/release.env
+      set +a
+      PATH="${FAKE_BIN}:$PATH" \
+      APAAS_KUBECONFIG="${job_dir}/kubeconfig" \
+      BUILDER_ORIGIN="https://builder.example" \
+      KUBE_NAMESPACE="release-ns" \
+      KUBE_STATEFULSET="ai-builder" \
+      KUBE_LABEL_SELECTOR="app.kubernetes.io/name=ai-builder" \
+      KUBE_BACKEND_CONTAINER="ai-builder" \
+      KUBE_DIST_INIT_CONTAINER="copy-frontend-dist" \
+      KUBE_WEB_CONTAINER="web" \
+      KUBE_EXPECTED_HOST="builder.example" \
+      KUBE_INGRESS="ai-builder" \
+      KUBE_SERVICE="ai-builder" \
+      KUBE_INGRESS_PATH="/ai-builder" \
+      BUILDER_SMOKE_USERNAME="release-user" \
+      BUILDER_SMOKE_PASSWORD="$TEST_PASSWORD" \
+      BUILDER_SMOKE_TENANT_NAME="Release Tenant" \
+      BUILDER_SMOKE_CODE_SESSION_ID="session-1" \
+      BUILDER_ROLLOUT_TIMEOUT="30s" \
+      FAKE_BROWSER_FAIL=1 \
+      FAKE_KUBE_STATE="$state_file" \
+      FAKE_KUBE_LOG="$kube_log" \
+        assert_command_fails_without_secret bash -c "$browser_script"
+    )
+  )"
+  assert_not_contains "$output" "$TEST_PASSWORD"
+  assert_contains "$(<"$state_file")" "backend_image=registry.example/ai-builder@sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
+  assert_contains "$(<"$state_file")" "init_image=registry.example/ai-builder@sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd"
+  assert_contains "$(<"$kube_log")" "set-image backend=registry.example/ai-builder@${TEST_DIGEST}"
+  assert_contains "$(<"$kube_log")" "set-image backend=registry.example/ai-builder@sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
+  printf 'CI_ROLLBACK_CONTRACT=PASS\n'
+}
+
 main() {
   write_fake_tools
+  assert_fake_helper_contract
   assert_ci_metadata_and_mapping
   assert_ci_metadata_flow
   assert_podman_digestfile
   assert_online_build_cli_branches
   assert_online_source_and_docker_preflight
   assert_online_selector_contract
-  assert_fake_helper_contract
+  assert_online_rollback_contract
+  assert_ci_rollback_contract
   assert_release_spec_contract
+  assert_activation_observer_contract
   printf 'PASS: builder tenant URL release smoke contract\n'
 }
 

@@ -61,8 +61,12 @@ else
 fi
 
 KUBE_LABEL_SELECTOR="${KUBE_LABEL_SELECTOR:-app=${APP_NAME}}"
+KUBE_INGRESS_PATH="${KUBE_INGRESS_PATH:-/ai-builder}"
 TMP_PARENT="${TMP_PARENT:-/tmp}"
 WORKDIR="${WORKDIR:-${TMP_PARENT}/apaas-builder-online-${DEPLOY_TARGET}-${GIT_BRANCH}}"
+PREVIOUS_WORKLOAD_EXISTS=0
+PREVIOUS_BACKEND_IMAGE=""
+PREVIOUS_DIST_INIT_IMAGE=""
 
 log() { printf '[online-deploy] %s\n' "$*"; }
 ok() { printf '[online-deploy][ok] %s\n' "$*"; }
@@ -71,6 +75,10 @@ die() { printf '[online-deploy][fail] %s\n' "$*" >&2; exit 1; }
 
 need() {
   command -v "$1" >/dev/null 2>&1 || die "missing command: $1"
+}
+
+is_immutable_image_ref() {
+  [[ "$1" =~ ^[^[:space:]@]+@sha256:[0-9a-f]{64}$ ]]
 }
 
 base64_decode() {
@@ -473,7 +481,10 @@ YAML
 
 rollout_and_verify() {
   log "wait for rollout: statefulset/${APP_NAME}"
-  kubectl -n "$NAMESPACE" rollout status "statefulset/${APP_NAME}" --timeout="$ROLL_TIMEOUT"
+  if ! kubectl -n "$NAMESPACE" rollout status "statefulset/${APP_NAME}" --timeout="$ROLL_TIMEOUT"; then
+    warn "rollout failed: statefulset/${APP_NAME}"
+    return 1
+  fi
   kubectl -n "$NAMESPACE" get pods,sts,svc,ingress,pvc | grep -E "NAME|${APP_NAME}|${WORKSPACES_PVC}" || true
 
   if command -v curl >/dev/null 2>&1; then
@@ -483,7 +494,11 @@ rollout_and_verify() {
       "$PUBLIC_URL" || warn "public URL check failed; inspect ingress and pod logs"
   fi
 
-  run_release_builder_smoke
+  if ! run_release_builder_smoke; then
+    warn "immutable digest and tenant URL release smoke failed"
+    return 1
+  fi
+  return 0
 }
 
 run_release_builder_preflight() {
@@ -497,6 +512,10 @@ run_release_builder_preflight() {
   KUBE_BACKEND_CONTAINER="apaas-builder" \
   KUBE_DIST_INIT_CONTAINER="copy-frontend-dist" \
   KUBE_WEB_CONTAINER="web" \
+  KUBE_EXPECTED_HOST="$HOST" \
+  KUBE_INGRESS="$APP_NAME" \
+  KUBE_SERVICE="$APP_NAME" \
+  KUBE_INGRESS_PATH="$KUBE_INGRESS_PATH" \
     bash "$WORKDIR/scripts/verify_builder_tenant_url_smoke.sh" --online-preflight
 }
 
@@ -510,6 +529,10 @@ run_release_builder_prebuild_preflight() {
   KUBE_BACKEND_CONTAINER="apaas-builder" \
   KUBE_DIST_INIT_CONTAINER="copy-frontend-dist" \
   KUBE_WEB_CONTAINER="web" \
+  KUBE_EXPECTED_HOST="$HOST" \
+  KUBE_INGRESS="$APP_NAME" \
+  KUBE_SERVICE="$APP_NAME" \
+  KUBE_INGRESS_PATH="$KUBE_INGRESS_PATH" \
     bash "$WORKDIR/scripts/verify_builder_tenant_url_smoke.sh" --online-prebuild
 }
 
@@ -523,8 +546,97 @@ run_release_builder_smoke() {
   KUBE_BACKEND_CONTAINER="apaas-builder" \
   KUBE_DIST_INIT_CONTAINER="copy-frontend-dist" \
   KUBE_WEB_CONTAINER="web" \
+  KUBE_EXPECTED_HOST="$HOST" \
+  KUBE_INGRESS="$APP_NAME" \
+  KUBE_SERVICE="$APP_NAME" \
+  KUBE_INGRESS_PATH="$KUBE_INGRESS_PATH" \
   BUILDER_ORIGIN="${BUILDER_ORIGIN:-https://${HOST}}" \
     bash "$WORKDIR/scripts/verify_builder_tenant_url_smoke.sh"
+}
+
+capture_previous_workload() {
+  local backend_image init_image
+
+  PREVIOUS_WORKLOAD_EXISTS=0
+  PREVIOUS_BACKEND_IMAGE=""
+  PREVIOUS_DIST_INIT_IMAGE=""
+  if ! kubectl -n "$NAMESPACE" get statefulset "$APP_NAME" >/dev/null 2>&1; then
+    return 0
+  fi
+  backend_image="$(kubectl -n "$NAMESPACE" get statefulset "$APP_NAME" \
+    -o jsonpath='{range .spec.template.spec.containers[?(@.name=="apaas-builder")]}{.image}{end}')"
+  init_image="$(kubectl -n "$NAMESPACE" get statefulset "$APP_NAME" \
+    -o jsonpath='{range .spec.template.spec.initContainers[?(@.name=="copy-frontend-dist")]}{.image}{end}')"
+  [ -n "$backend_image" ] && [ -n "$init_image" ] \
+    || die "unable to capture previous StatefulSet image refs"
+  is_immutable_image_ref "$backend_image" && is_immutable_image_ref "$init_image" \
+    || die "previous StatefulSet image refs must be immutable digest references"
+  PREVIOUS_WORKLOAD_EXISTS=1
+  PREVIOUS_BACKEND_IMAGE="$backend_image"
+  PREVIOUS_DIST_INIT_IMAGE="$init_image"
+  ok "captured previous immutable workload image refs"
+}
+
+verify_online_rollback() {
+  ROLLBACK_BACKEND_IMAGE="$PREVIOUS_BACKEND_IMAGE" \
+  ROLLBACK_DIST_INIT_IMAGE="$PREVIOUS_DIST_INIT_IMAGE" \
+  KUBE_NAMESPACE="$NAMESPACE" \
+  KUBE_STATEFULSET="$APP_NAME" \
+  KUBE_LABEL_SELECTOR="$KUBE_LABEL_SELECTOR" \
+  KUBE_BACKEND_CONTAINER="apaas-builder" \
+  KUBE_DIST_INIT_CONTAINER="copy-frontend-dist" \
+    bash "$WORKDIR/scripts/verify_builder_tenant_url_smoke.sh" --verify-rollback
+}
+
+rollback_existing_workload() {
+  if ! kubectl -n "$NAMESPACE" set image "statefulset/${APP_NAME}" \
+    "apaas-builder=${PREVIOUS_BACKEND_IMAGE}" \
+    "copy-frontend-dist=${PREVIOUS_DIST_INIT_IMAGE}"; then
+    warn "rollback set image failed"
+    return 1
+  fi
+  if ! kubectl -n "$NAMESPACE" rollout status "statefulset/${APP_NAME}" --timeout="$ROLL_TIMEOUT"; then
+    warn "rollback rollout failed"
+    return 1
+  fi
+  if ! verify_online_rollback; then
+    warn "rollback workload verification failed"
+    return 1
+  fi
+  ok "rolled back existing workload to previous immutable image refs"
+  return 0
+}
+
+cleanup_fresh_workload() {
+  if ! kubectl -n "$NAMESPACE" delete ingress "$APP_NAME" --ignore-not-found=false; then
+    warn "fresh rollback ingress removal failed"
+    return 1
+  fi
+  if ! kubectl -n "$NAMESPACE" delete statefulset "$APP_NAME" --ignore-not-found=false; then
+    warn "fresh rollback StatefulSet removal failed"
+    return 1
+  fi
+  if ! kubectl -n "$NAMESPACE" delete service "$APP_NAME" "$APP_NAME-headless" --ignore-not-found=false; then
+    warn "fresh rollback Service removal failed"
+    return 1
+  fi
+  if kubectl -n "$NAMESPACE" get ingress "$APP_NAME" >/dev/null 2>&1 \
+    || kubectl -n "$NAMESPACE" get statefulset "$APP_NAME" >/dev/null 2>&1 \
+    || kubectl -n "$NAMESPACE" get service "$APP_NAME" >/dev/null 2>&1 \
+    || kubectl -n "$NAMESPACE" get service "${APP_NAME}-headless" >/dev/null 2>&1; then
+    warn "fresh rollback resource removal verification failed"
+    return 1
+  fi
+  ok "removed fresh workload traffic and resources after failed smoke"
+  return 0
+}
+
+recover_failed_release() {
+  if [ "$PREVIOUS_WORKLOAD_EXISTS" = "1" ]; then
+    rollback_existing_workload
+  else
+    cleanup_fresh_workload
+  fi
 }
 
 main() {
@@ -542,11 +654,17 @@ main() {
   docker_login_if_requested
   build_and_push_image
   run_release_builder_preflight
+  capture_previous_workload
   apply_namespace
   apply_nginx_config
   ensure_dev_secret
   apply_workloads
-  rollout_and_verify
+  if ! rollout_and_verify; then
+    if ! recover_failed_release; then
+      die "release smoke failed for immutable image ${IMAGE}; rollback also failed"
+    fi
+    die "release smoke failed for immutable image ${IMAGE}; rollback completed"
+  fi
 
   ok "deployed ${APP_NAME}"
   ok "source ${GIT_BRANCH}@${GIT_FULL_SHA}"

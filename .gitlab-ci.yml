@@ -19,6 +19,10 @@ variables:
   BUILDER_K8S_DIST_INIT_CONTAINER: "copy-frontend-dist"
   BUILDER_K8S_LABEL_SELECTOR: "app.kubernetes.io/name=ai-builder"
   BUILDER_K8S_WEB_CONTAINER: "web"
+  BUILDER_K8S_EXPECTED_HOST: "om-demo.dfy.definesys.cn"
+  BUILDER_K8S_INGRESS: "ai-builder"
+  BUILDER_K8S_SERVICE: "ai-builder"
+  BUILDER_K8S_INGRESS_PATH: "/ai-builder"
   BUILDER_VITE_BASE_URL: "/ai-builder/"
   BUILDER_ROLLOUT_TIMEOUT: "300s"
   BUILDER_NODE_IMAGE: "hub-mirror.dfy.definesys.cn/library/node:20-bookworm-slim"
@@ -167,6 +171,10 @@ release_builder_preflight:
     KUBE_DIST_INIT_CONTAINER: $BUILDER_K8S_DIST_INIT_CONTAINER
     KUBE_LABEL_SELECTOR: $BUILDER_K8S_LABEL_SELECTOR
     KUBE_WEB_CONTAINER: $BUILDER_K8S_WEB_CONTAINER
+    KUBE_EXPECTED_HOST: $BUILDER_K8S_EXPECTED_HOST
+    KUBE_INGRESS: $BUILDER_K8S_INGRESS
+    KUBE_SERVICE: $BUILDER_K8S_SERVICE
+    KUBE_INGRESS_PATH: $BUILDER_K8S_INGRESS_PATH
   rules:
     - if: '$RUN_RELEASE_AND_UPDATE_SERVER == "1" && $BUILDER_RELEASE_CONFIRM == "release-and-update-server"'
       when: on_success
@@ -218,6 +226,16 @@ release_and_update_server:
       fi
       chmod 600 /tmp/kubeconfig
       export KUBECONFIG=/tmp/kubeconfig
+      previous_backend_image="$(kubectl -n "${BUILDER_K8S_NAMESPACE}" get "statefulset/${BUILDER_K8S_STATEFULSET}" \
+        -o jsonpath="{range .spec.template.spec.containers[?(@.name==\"${BUILDER_K8S_BACKEND_CONTAINER}\")]}{.image}{end}")"
+      previous_init_image="$(kubectl -n "${BUILDER_K8S_NAMESPACE}" get "statefulset/${BUILDER_K8S_STATEFULSET}" \
+        -o jsonpath="{range .spec.template.spec.initContainers[?(@.name==\"${BUILDER_K8S_DIST_INIT_CONTAINER}\")]}{.image}{end}")"
+      test -n "${previous_backend_image}"
+      test -n "${previous_init_image}"
+      printf '%s\n' "${previous_backend_image}" | grep -Eq '^[^[:space:]@]+@sha256:[0-9a-f]{64}$'
+      printf '%s\n' "${previous_init_image}" | grep -Eq '^[^[:space:]@]+@sha256:[0-9a-f]{64}$'
+      printf 'PREVIOUS_BACKEND_IMAGE=%s\nPREVIOUS_DIST_INIT_IMAGE=%s\n' \
+        "${previous_backend_image}" "${previous_init_image}" >> build/release.env
       kubectl -n "${BUILDER_K8S_NAMESPACE}" set image \
         "statefulset/${BUILDER_K8S_STATEFULSET}" \
         "${BUILDER_K8S_BACKEND_CONTAINER}=${BUILDER_IMAGE}" \
@@ -228,6 +246,8 @@ release_and_update_server:
       printf 'builderImage=%s\n' "${BUILDER_IMAGE}"
   artifacts:
     expire_in: 1 day
+    paths:
+      - build/release.env
     reports:
       dotenv: build/release.env
 
@@ -247,6 +267,10 @@ release_builder_browser_smoke:
     KUBE_DIST_INIT_CONTAINER: $BUILDER_K8S_DIST_INIT_CONTAINER
     KUBE_LABEL_SELECTOR: $BUILDER_K8S_LABEL_SELECTOR
     KUBE_WEB_CONTAINER: $BUILDER_K8S_WEB_CONTAINER
+    KUBE_EXPECTED_HOST: $BUILDER_K8S_EXPECTED_HOST
+    KUBE_INGRESS: $BUILDER_K8S_INGRESS
+    KUBE_SERVICE: $BUILDER_K8S_SERVICE
+    KUBE_INGRESS_PATH: $BUILDER_K8S_INGRESS_PATH
   rules:
     - if: '$RUN_RELEASE_AND_UPDATE_SERVER == "1" && $BUILDER_RELEASE_CONFIRM == "release-and-update-server"'
       when: on_success
@@ -269,4 +293,39 @@ release_builder_browser_smoke:
   script:
     - test -n "${BUILDER_IMAGE:-}"
     - test -n "${DEPLOYED_REVISION:-}"
-    - bash scripts/verify_builder_tenant_url_smoke.sh
+    - test -n "${PREVIOUS_BACKEND_IMAGE:-}"
+    - test -n "${PREVIOUS_DIST_INIT_IMAGE:-}"
+    - |
+      rollback_release() {
+        if ! kubectl -n "${KUBE_NAMESPACE}" set image \
+          "statefulset/${KUBE_STATEFULSET}" \
+          "${KUBE_BACKEND_CONTAINER}=${PREVIOUS_BACKEND_IMAGE}" \
+          "${KUBE_DIST_INIT_CONTAINER}=${PREVIOUS_DIST_INIT_IMAGE}"; then
+          printf 'rollback set image failed\n' >&2
+          return 1
+        fi
+        if ! kubectl -n "${KUBE_NAMESPACE}" rollout status \
+          "statefulset/${KUBE_STATEFULSET}" \
+          --timeout="${BUILDER_ROLLOUT_TIMEOUT}"; then
+          printf 'rollback rollout failed\n' >&2
+          return 1
+        fi
+        if ! ROLLBACK_BACKEND_IMAGE="${PREVIOUS_BACKEND_IMAGE}" \
+          ROLLBACK_DIST_INIT_IMAGE="${PREVIOUS_DIST_INIT_IMAGE}" \
+          bash scripts/verify_builder_tenant_url_smoke.sh --verify-rollback; then
+          printf 'rollback workload verification failed\n' >&2
+          return 1
+        fi
+        return 0
+      }
+      set +e
+      bash scripts/verify_builder_tenant_url_smoke.sh
+      smoke_status=$?
+      set -e
+      if [ "${smoke_status}" -ne 0 ]; then
+        if ! rollback_release; then
+          printf 'release smoke failed and rollback failed\n' >&2
+          exit 1
+        fi
+        exit "${smoke_status}"
+      fi

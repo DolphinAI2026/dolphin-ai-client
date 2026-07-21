@@ -285,3 +285,121 @@ gitlab yaml parse OK
 - GitLab runner 的实际 protected variables、registry、kubeconfig、在线
   Playwright/Edge 与现有 workload topology 仍需在隔离发布 pipeline 中提供真实
   证据；缺失任何输入会按设计 fail closed。
+
+## 最后一轮集中修复
+
+### RED
+
+围绕 review 的 I-1..I-5 先扩展 fake release 合同：
+
+- 健康 StatefulSet 仍为 `D_old`、本轮 `BUILDER_IMAGE=D_new` 时，
+  `--preflight` 必须通过；full smoke 的 exact template/Pod/imageID 检查仍必须在
+  rollout 后拒绝 `D_new` mismatch。
+- fake ingress/service 覆盖 staging origin、错误 backend Service、错误 selector；
+  fake RBAC、owner、Ready 和 revision 保持可观察。
+- release spec 使用同文件 fake event source，覆盖延迟正确 activation 与 quiet period
+  内延迟 duplicate。
+- raw compact JWT `eyJhbGciOiJIUzI1NiJ9.e30.<signature>` 必须触发 log gate。
+- fake kubectl 覆盖 online smoke fail 后的 existing rollback、rollback rollout 二次
+  失败、fresh Ingress-first cleanup，以及从 GitLab YAML 提取的 CI update/browser
+  script 捕获 old pair、set new、browser failure 后回滚 old pair。
+- `registry:tag` previous image ref 必须拒绝，不能作为 rollback target。
+
+初始动态 RED：
+
+```bash
+bash tests/release/test_builder_tenant_url_smoke.sh
+```
+
+关键输出：
+
+```text
+[builder-release-smoke][fail] StatefulSet backend image mismatch
+```
+
+这证明旧实现把 `D_old` 当前 template 错误地与本轮 `D_new` 比较，阻塞正常升级。
+
+随后 mutable rollback target 的 RED：
+
+```text
+FAIL: command unexpectedly succeeded: bash -c
+source "$1/scripts/deploy_online_latest_kubesphere.sh"
+capture_previous_workload
+```
+
+### GREEN
+
+- `scripts/verify_builder_tenant_url_smoke.sh`
+  - preflight 现在只验证输入、origin host、provenance、kubectl context/RBAC、
+    StatefulSet container topology、Ingress/Service/selector binding、selector Pod
+    owner/Ready 与 currentRevision/updateRevision health；不比较旧 image 与新 digest。
+  - full smoke 才检查 StatefulSet template、每个 Pod spec 和 imageID 均为本轮
+    `BUILDER_IMAGE`；rollback mode 则以 captured old backend/init digest refs 检查
+    template、Pod Ready/owner 和 revision health。
+  - 新增 `KUBE_EXPECTED_HOST`、`KUBE_INGRESS`、`KUBE_SERVICE`、
+    `KUBE_INGRESS_PATH`。origin hostname 必须匹配 expected host，指定 Ingress 的
+    host/path backend 必须指向指定 Service，Service selector 必须精确等于
+    `KUBE_LABEL_SELECTOR`。
+  - compact JWT 检测改为现实的三段 base64url 下限，短 `{}` payload 也 fail closed。
+- `tests/e2e/builder-tenant-url-release-smoke.spec.mjs`
+  - 导航前创建 expected activation promise；等待目标 session/optional agent 的 200，
+    iframe/src、document ready/body visible 后继续 2 秒 quiet period，再严格断言一次
+    activation、无 legacy activation/401。
+  - 提供 `RELEASE_SMOKE_ACTIVATION_CONTRACT=1` fake event-source mode，动态证明慢
+    正确 response 不 false-fail，quiet period 内 duplicate 不 false-pass。
+- `.gitlab-ci.yml`
+  - 固定 production resource binding defaults：
+    `orcamatrix-demo` / `om-demo.dfy.definesys.cn` / Ingress `ai-builder` /
+    Service `ai-builder` / `/ai-builder`，并映射到 preflight/browser helper。
+  - `release_and_update_server` 在 set image 前读取 old backend/init exact digest refs，
+    拒绝 mutable refs，并追加 `PREVIOUS_*` 到 downstream dotenv artifact。
+  - browser smoke 失败时恢复 old pair、等待 rollout、调用 helper rollback verifier；
+    rollback 二次失败显式报错，成功 rollback 后仍以原 smoke 非零退出。
+- `scripts/deploy_online_latest_kubesphere.sh`
+  - 传递 online origin/resource binding；workload mutation 前记录 existing workload
+    与 immutable old pair。
+  - downstream smoke/rollout 失败时：existing workload restore old pair 并验证；
+    fresh workload 先删除 Ingress 停止流量，再删除本轮 StatefulSet/Services 并确认
+    资源不存在，不删除 namespace、Secret 或 PVC。
+  - `rollout_and_verify` 以显式返回值传播 rollout/smoke failure；最终失败日志仍标识
+    本轮 immutable `IMAGE`。
+
+本轮 GREEN 与最终验证命令：
+
+```bash
+bash tests/release/test_builder_tenant_url_smoke.sh
+python3 -m pytest -q backend/tests/test_tenant_url_build_contract.py
+podman run --rm --entrypoint /bin/sh \
+  -v "$PWD:/workspace:ro" \
+  -v /mnt/d/workspaces/d-ai-code/apaas-builder-ai/.git:/mnt/d/workspaces/d-ai-code/apaas-builder-ai/.git:ro \
+  -w /workspace \
+  om-harbor.dfy.definesys.cn/om-demo/ai-builder:2026.07.20-3f90e08a-runtime-expiry-timezone \
+  -lc 'git config --global --add safe.directory /workspace && python -m pytest -q -p no:cacheprovider backend/tests/test_tenant_url_build_contract.py'
+bash -n scripts/verify_builder_tenant_url_smoke.sh \
+  scripts/deploy_online_latest_kubesphere.sh \
+  tests/release/test_builder_tenant_url_smoke.sh
+node --check tests/e2e/builder-tenant-url-release-smoke.spec.mjs
+ruby -e 'require "yaml"; YAML.load_file(".gitlab-ci.yml"); puts "gitlab yaml parse OK"'
+git diff --check
+```
+
+关键 GREEN 输出：
+
+```text
+FAKE_KUBECTL_RELEASE_CONTRACT=PASS
+ONLINE_ROLLBACK_CONTRACT=PASS
+CI_ROLLBACK_CONTRACT=PASS
+ACTIVATION_OBSERVER_CONTRACT=PASS
+PASS: builder tenant URL release smoke contract
+28 passed
+```
+
+### 最后一轮 Concerns
+
+- 严格遵守限制：未连接/修改真实 Kubernetes，未 build/push image，未执行线上账号、
+  Edge 或 Code session smoke。
+- GitLab runner 的实际 kubeconfig/RBAC、Ingress JSONPath/go-template 兼容性、protected
+  variables、registry 与真实 browser installation 仍需要隔离 release pipeline
+  证据。任一缺失/拓扑不一致会 fail closed。
+- rollback 仅恢复 captured immutable backend/init refs；fresh cleanup 有意保留
+  namespace、ConfigMap、Secret 和 PVC，避免删除共享或持久化资源。

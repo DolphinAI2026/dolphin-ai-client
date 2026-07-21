@@ -140,6 +140,11 @@ function isNewActivation(response) {
   return newActivationAgentId(response) !== null;
 }
 
+function isExpectedActivation(response) {
+  const observedAgentId = newActivationAgentId(response);
+  return observedAgentId !== null && (!agentId || observedAgentId === agentId);
+}
+
 function isLegacyActivation(request) {
   const url = new URL(request.url());
   return request.method() === "POST"
@@ -153,10 +158,125 @@ function isCode401(response) {
   return url.pathname.startsWith("/ai-builder/api/code/");
 }
 
-const api = await request.newContext({ baseURL: origin });
-const browser = await chromium.launch({ channel: "msedge" });
+function observeCodeActivation(page) {
+  const newActivations = [];
+  const legacyActivations = [];
+  const code401s = [];
+  let expectedActivation = null;
+  const waiters = [];
 
-try {
+  page.on("request", (entry) => {
+    if (isLegacyActivation(entry)) legacyActivations.push(entry);
+  });
+  page.on("response", (entry) => {
+    if (isNewActivation(entry)) newActivations.push(entry);
+    if (isExpectedActivation(entry) && entry.status() === 200) {
+      expectedActivation = entry;
+      for (const resolve of waiters.splice(0)) resolve(entry);
+    }
+    if (isCode401(entry)) code401s.push(entry);
+  });
+
+  return {
+    newActivations,
+    legacyActivations,
+    code401s,
+    waitForExpectedActivation(timeoutMs) {
+      if (expectedActivation) return Promise.resolve(expectedActivation);
+      return new Promise((resolve, reject) => {
+        const timeout = setTimeout(
+          () => reject(new Error("expected Code activation did not return 200")),
+          timeoutMs,
+        );
+        waiters.push((response) => {
+          clearTimeout(timeout);
+          resolve(response);
+        });
+      });
+    },
+  };
+}
+
+function assertActivationContract(observer) {
+  assert.equal(
+    observer.newActivations.length,
+    1,
+    "expected exactly one new Code activation",
+  );
+  assert.equal(
+    observer.newActivations[0].status(),
+    200,
+    "new Code activation did not return 200",
+  );
+  if (agentId) {
+    assert.equal(
+      newActivationAgentId(observer.newActivations[0]),
+      agentId,
+      "new Code activation used the wrong configured agent",
+    );
+  }
+  assert.equal(
+    observer.legacyActivations.length,
+    0,
+    "legacy Code activation endpoint was called",
+  );
+  assert.equal(observer.code401s.length, 0, "Code endpoint returned 401");
+}
+
+function waitForQuietPeriod(timeoutMs) {
+  return new Promise((resolve) => setTimeout(resolve, timeoutMs));
+}
+
+function fakeActivationResponse(observedAgentId, status = 200) {
+  return {
+    request() {
+      return { method: () => "POST" };
+    },
+    status() {
+      return status;
+    },
+    url() {
+      return `${origin}/ai-builder/api/code/sessions/${required.codeSessionId}/agent-sessions/${observedAgentId}/activate`;
+    },
+  };
+}
+
+function fakeEventPage() {
+  const listeners = new Map();
+  return {
+    emit(event, payload) {
+      for (const listener of listeners.get(event) || []) listener(payload);
+    },
+    on(event, listener) {
+      const entries = listeners.get(event) || [];
+      entries.push(listener);
+      listeners.set(event, entries);
+    },
+  };
+}
+
+async function runActivationObserverContract() {
+  const delayedPage = fakeEventPage();
+  const delayedObserver = observeCodeActivation(delayedPage);
+  setTimeout(() => delayedPage.emit("response", fakeActivationResponse(agentId)), 40);
+  await delayedObserver.waitForExpectedActivation(200);
+  await waitForQuietPeriod(80);
+  assertActivationContract(delayedObserver);
+
+  const duplicatePage = fakeEventPage();
+  const duplicateObserver = observeCodeActivation(duplicatePage);
+  setTimeout(() => duplicatePage.emit("response", fakeActivationResponse(agentId)), 10);
+  setTimeout(() => duplicatePage.emit("response", fakeActivationResponse(agentId)), 50);
+  await duplicateObserver.waitForExpectedActivation(200);
+  await waitForQuietPeriod(100);
+  assert.throws(() => assertActivationContract(duplicateObserver), /exactly one/);
+  console.log("ACTIVATION_OBSERVER_CONTRACT=PASS");
+}
+
+async function runReleaseSmoke() {
+  const api = await request.newContext({ baseURL: origin });
+  const browser = await chromium.launch({ channel: "msedge" });
+  try {
   let token = await login(api);
   let current = await getMe(api, token, "initial /auth/me verification failed");
   const tenants = await availableTenants(api, token);
@@ -195,17 +315,8 @@ try {
       localStorage.setItem("token", accessToken);
     }, candidateToken);
     const page = await context.newPage();
-    const newActivations = [];
-    const legacyActivations = [];
-    const code401s = [];
-
-    page.on("request", (entry) => {
-      if (isLegacyActivation(entry)) legacyActivations.push(entry);
-    });
-    page.on("response", (entry) => {
-      if (isNewActivation(entry)) newActivations.push(entry);
-      if (isCode401(entry)) code401s.push(entry);
-    });
+    const activationObserver = observeCodeActivation(page);
+    const expectedActivation = activationObserver.waitForExpectedActivation(20_000);
 
     await page.goto(codeUrl(target.tenant_public_id));
     await page.waitForURL((url) => (
@@ -222,20 +333,13 @@ try {
       false,
       "outer tenantId leaked into Code iframe src",
     );
-    await page.waitForTimeout(500);
-    assert.equal(newActivations.length, 1, "expected exactly one new Code activation");
-    for (const response of newActivations) {
-      assert.equal(response.status(), 200, "new Code activation did not return 200");
-    }
-    if (agentId) {
-      assert.equal(
-        newActivationAgentId(newActivations[0]),
-        agentId,
-        "new Code activation used the wrong configured agent",
-      );
-    }
-    assert.equal(legacyActivations.length, 0, "legacy Code activation endpoint was called");
-    assert.equal(code401s.length, 0, "Code endpoint returned 401");
+    await expectedActivation;
+    await page.waitForFunction(() => document.readyState === "complete", null, {
+      timeout: 20_000,
+    });
+    await page.locator("body").waitFor({ state: "visible", timeout: 20_000 });
+    await page.waitForTimeout(2_000);
+    assertActivationContract(activationObserver);
     const pageText = await page.locator("body").innerText();
     assert.equal(
       pageText.includes("Code runtime token required"),
@@ -247,7 +351,14 @@ try {
   }
 
   console.log(`RELEASE_BROWSER_SMOKE=PASS revision=${required.revision}`);
-} finally {
-  await browser.close();
-  await api.dispose();
+  } finally {
+    await browser.close();
+    await api.dispose();
+  }
+}
+
+if (process.env.RELEASE_SMOKE_ACTIVATION_CONTRACT === "1") {
+  await runActivationObserverContract();
+} else {
+  await runReleaseSmoke();
 }
