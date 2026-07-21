@@ -499,6 +499,7 @@ import base64
 import json
 import mimetypes
 import os
+import threading
 import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
@@ -509,6 +510,8 @@ from urllib.request import Request, urlopen
 DIST = Path(os.environ["DIST_DIR"]).resolve()
 BACKEND = os.environ["BACKEND_ORIGIN"].rstrip("/")
 DELAY_TENANT_ID = int(os.environ["DELAY_TENANT_ID"])
+DELAY_RELEASE_TENANT_ID = int(os.environ["DELAY_RELEASE_TENANT_ID"])
+CANDIDATE_ME_RELEASE = threading.Event()
 
 
 def bearer_tenant_id(value):
@@ -544,13 +547,40 @@ class Handler(BaseHTTPRequestHandler):
         }
         headers["X-Forwarded-Prefix"] = "/ai-builder"
         headers["X-Forwarded-Proto"] = "http"
-        if (
-            suffix == "/auth/me"
-            and bearer_tenant_id(headers.get("Authorization")) == DELAY_TENANT_ID
-        ):
-            print("frontend_proxy candidate_me_delay=started tenant=target-b", flush=True)
-            time.sleep(1.5)
-            print("frontend_proxy candidate_me_delay=finished tenant=target-b", flush=True)
+        candidate_tenant_id = bearer_tenant_id(headers.get("Authorization"))
+        if suffix == "/auth/me" and candidate_tenant_id == DELAY_RELEASE_TENANT_ID:
+            print(
+                "frontend_proxy candidate_me_latch=release-observed tenant=target-c",
+                flush=True,
+            )
+            CANDIDATE_ME_RELEASE.set()
+        if suffix == "/auth/me" and candidate_tenant_id == DELAY_TENANT_ID:
+            print(
+                "frontend_proxy candidate_me_latch=waiting tenant=target-b "
+                "release=target-c timeout_seconds=15",
+                flush=True,
+            )
+            if not CANDIDATE_ME_RELEASE.wait(timeout=15):
+                print(
+                    "frontend_proxy candidate_me_latch=timeout tenant=target-b "
+                    "release=target-c status=504",
+                    flush=True,
+                )
+                self.send_error(
+                    504,
+                    "target C candidate /auth/me was not observed before latch timeout",
+                )
+                return
+            print(
+                "frontend_proxy candidate_me_latch=releasing tenant=target-b "
+                "after=target-c delay_ms=250",
+                flush=True,
+            )
+            time.sleep(0.25)
+            print(
+                "frontend_proxy candidate_me_latch=released tenant=target-b",
+                flush=True,
+            )
         request = Request(target, data=body, headers=headers, method=self.command)
         try:
             response = urlopen(request, timeout=65)
@@ -626,6 +656,7 @@ PY
 DIST_DIR="${ROOT_DIR}/frontend/dist" \
 BACKEND_ORIGIN="${backend_base_url}" \
 DELAY_TENANT_ID="${target_tenant_id}" \
+DELAY_RELEASE_TENANT_ID="${target_c_tenant_id}" \
 FRONTEND_PORT="${frontend_port}" \
 "${PYTHON}" "${TMP_DIR}/frontend_server.py" >"${FRONTEND_LOG}" 2>&1 &
 frontend_pid=$!

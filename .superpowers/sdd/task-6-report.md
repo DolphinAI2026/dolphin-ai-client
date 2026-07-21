@@ -284,3 +284,44 @@ exit code 0
 ```
 
 本轮未重跑 Windows Edge 长 E2E；修复后的 clean-HEAD Edge 验证仍是最终浏览器证据。
+
+## Chromium B 慢/C 快 fixture 确定性门闩
+
+日期：2026-07-21
+
+干净 revision `6a67ca0cafc6fa7c30c16eca75316b8d1d9722a1` 的 Chromium E2E
+在等待 C switch response 时超时，frontend proxy 日志只有 B switch。原 fixture
+仅把 B candidate `/auth/me` 固定延迟 1.5 秒；B 仍可能在第二标签发出 C switch 前
+完成，并通过 storage navigation 改写第二标签位置，导致 C 请求根本没有启动。
+
+生成的 Python proxy 现使用 `threading.Event` 建立因果门闩：
+
+- B candidate `/auth/me` 最多等待 15 秒，直到 proxy 已观察到 C candidate
+  `/auth/me` 进入；
+- C 进入时记录 `candidate_me_latch=release-observed` 并释放事件；
+- B 被释放后额外等待 250ms，再继续请求 backend，并记录 waiting、releasing 和
+  released 顺序；
+- 15 秒内未观察到 C 时记录明确 timeout，并返回 HTTP 504，不再静默退化为固定
+  sleep。
+
+提交前静态验证：
+
+```text
+bash -n tests/e2e/builder-tenant-url-public-uuid-fixture.sh
+exit code 0
+
+python3 <generated frontend_server.py AST contract check>
+frontend_server.py ast-parse=PASS
+event-release=PASS
+event-wait-timeout-15=PASS
+timeout-send-error-504=PASS
+post-release-delay-250ms=PASS
+release-before-wait-source-order=PASS
+target-c-env=PASS
+
+git diff --check
+exit code 0
+```
+
+fixture 的 clean-input gate 会拒绝包含自身未提交修改的工作树，因此 Chromium
+动态验证在提交后、clean HEAD 上执行；最终结果以该次命令输出和提交 SHA 为准。
