@@ -81,11 +81,13 @@ const realVueRouter = await vi.importActual<typeof import('vue-router')>('vue-ro
 
 const currentUuid = '11111111-1111-4111-8111-111111111111'
 const targetUuid = '22222222-2222-4222-8222-222222222222'
-const unknownUuid = '33333333-3333-4333-8333-333333333333'
+const targetCUuid = '33333333-3333-4333-8333-333333333333'
+const unknownUuid = '44444444-4444-4444-8444-444444444444'
 
 const availableTenants = [
   { tenant_id: 1, tenant_public_id: currentUuid },
   { tenant_id: 2, tenant_public_id: targetUuid },
+  { tenant_id: 3, tenant_public_id: targetCUuid },
 ]
 
 describe('tenant URL target classification', () => {
@@ -178,6 +180,8 @@ describe('tenant URL route mount gate', () => {
       fetchAvailableTenants: vi.fn(),
       switchTenantContext: vi.fn(async () => {
         requestOrder.push('/auth/switch-tenant')
+        userStore.user = { tenant_public_id: targetUuid }
+        return 'committed_reload' as const
       }),
     }
     routerGuardState.session = { initialized: true, token: 'committed-token' }
@@ -211,9 +215,7 @@ describe('tenant URL route mount gate', () => {
 function createRedirectRouter() {
   installSessionStorage()
   vi.stubGlobal('__DESKTOP__', false)
-  const switchTenantContext = vi.fn().mockResolvedValue(undefined)
-  routerGuardState.session = { initialized: true, token: 'committed-token' }
-  routerGuardState.userStore = {
+  const userStore = {
     user: { tenant_public_id: currentUuid },
     token: 'committed-token',
     tenantId: 1,
@@ -222,8 +224,16 @@ function createRedirectRouter() {
     availableTenants,
     fetchUser: vi.fn(),
     fetchAvailableTenants: vi.fn(),
-    switchTenantContext,
+    switchTenantContext: vi.fn(async (
+      _tenantId: number,
+      tenantPublicId: string,
+    ) => {
+      userStore.user = { tenant_public_id: tenantPublicId }
+      return 'committed_reload' as const
+    }),
   }
+  routerGuardState.session = { initialized: true, token: 'committed-token' }
+  routerGuardState.userStore = userStore
   routerGuardState.modeStore = {
     mode: 'builder',
     meta: builderModeStore.meta,
@@ -236,7 +246,7 @@ function createRedirectRouter() {
     routes,
   })
   installRouterGuards(memoryRouter)
-  return { memoryRouter, switchTenantContext }
+  return { memoryRouter, switchTenantContext: userStore.switchTenantContext }
 }
 
 describe('route redirect tenant context', () => {
@@ -283,13 +293,20 @@ function installSessionStorage() {
 }
 
 function makeUserStore(overrides: Record<string, unknown> = {}) {
-  return {
+  const userStore: Record<string, any> = {
     user: { tenant_public_id: currentUuid },
     availableTenants,
     fetchAvailableTenants: vi.fn().mockResolvedValue(availableTenants),
-    switchTenantContext: vi.fn().mockResolvedValue(undefined),
-    ...overrides,
+    switchTenantContext: vi.fn(async (
+      _tenantId: number,
+      tenantPublicId: string,
+    ) => {
+      userStore.user = { tenant_public_id: tenantPublicId }
+      return 'committed_reload' as const
+    }),
   }
+  Object.assign(userStore, overrides)
+  return userStore
 }
 
 function makeRoute(overrides: Record<string, unknown> = {}) {
@@ -305,6 +322,17 @@ function makeRoute(overrides: Record<string, unknown> = {}) {
 
 const builderModeStore = { meta: { home: '/' } }
 const codeModeStore = { meta: { home: '/code/apps' } }
+type TenantSwitchOutcome = 'committed_reload' | 'stale_cancelled'
+
+function deferred<T>() {
+  let resolve: (value: T) => void = () => undefined
+  let reject: (reason?: unknown) => void = () => undefined
+  const promise = new Promise<T>((resolvePromise, rejectPromise) => {
+    resolve = resolvePromise
+    reject = rejectPromise
+  })
+  return { promise, resolve, reject }
+}
 
 describe('resolveTenantUrl', () => {
   afterEach(() => {
@@ -423,11 +451,9 @@ describe('resolveTenantUrl', () => {
 
   it('shares the in-flight switch for repeated navigation to the same full path', async () => {
     const storage = installSessionStorage()
-    let completeSwitch: (() => void) | undefined
+    const switchFlight = deferred<TenantSwitchOutcome>()
     const userStore = makeUserStore({
-      switchTenantContext: vi.fn(() => new Promise<void>((resolve) => {
-        completeSwitch = resolve
-      })),
+      switchTenantContext: vi.fn(() => switchFlight.promise),
     })
     const route = makeRoute({
       fullPath: `/apps?tenantId=${targetUuid}`,
@@ -438,7 +464,8 @@ describe('resolveTenantUrl', () => {
     const second = resolveTenantUrl(route, userStore, builderModeStore)
 
     expect(userStore.switchTenantContext).toHaveBeenCalledTimes(1)
-    completeSwitch?.()
+    userStore.user = { tenant_public_id: targetUuid }
+    switchFlight.resolve('committed_reload')
 
     await expect(first).resolves.toBe(false)
     await expect(second).resolves.toBe(false)
@@ -447,11 +474,9 @@ describe('resolveTenantUrl', () => {
 
   it('shares the in-flight switch for the same tenant on a different path', async () => {
     installSessionStorage()
-    let completeSwitch: (() => void) | undefined
+    const switchFlight = deferred<TenantSwitchOutcome>()
     const userStore = makeUserStore({
-      switchTenantContext: vi.fn(() => new Promise<void>((resolve) => {
-        completeSwitch = resolve
-      })),
+      switchTenantContext: vi.fn(() => switchFlight.promise),
     })
     const first = resolveTenantUrl(makeRoute({
       fullPath: `/apps?tenantId=${targetUuid}&view=one`,
@@ -463,10 +488,151 @@ describe('resolveTenantUrl', () => {
     }), userStore, builderModeStore)
 
     expect(userStore.switchTenantContext).toHaveBeenCalledTimes(1)
-    completeSwitch?.()
+    userStore.user = { tenant_public_id: targetUuid }
+    switchFlight.resolve('committed_reload')
 
     await expect(first).resolves.toBe(false)
     await expect(second).resolves.toBe(false)
+  })
+
+  it('starts the latest cross-target switch instead of sharing a different target flight', async () => {
+    const storage = installSessionStorage()
+    const switchB = deferred<TenantSwitchOutcome>()
+    const switchC = deferred<TenantSwitchOutcome>()
+    const userStore = makeUserStore({
+      switchTenantContext: vi.fn((tenantId: number) => (
+        tenantId === 2 ? switchB.promise : switchC.promise
+      )),
+    })
+    const builderB = resolveTenantUrl(makeRoute({
+      fullPath: `/apps?tenantId=${targetUuid}`,
+      query: { tenantId: targetUuid },
+    }), userStore, builderModeStore)
+    const codeC = resolveTenantUrl(makeRoute({
+      path: '/code/apps',
+      fullPath: `/code/apps?tenantId=${targetCUuid}`,
+      query: { tenantId: targetCUuid },
+    }), userStore, codeModeStore)
+
+    userStore.user = { tenant_public_id: targetCUuid }
+    switchC.resolve('committed_reload')
+    switchB.resolve('stale_cancelled')
+
+    await expect(codeC).resolves.toBe(false)
+    await expect(builderB).resolves.toEqual({
+      path: '/',
+      query: { tenantId: targetCUuid },
+      replace: true,
+    })
+    expect(userStore.switchTenantContext).toHaveBeenCalledTimes(2)
+    expect(JSON.parse(storage.get('tenant-url-switch') || '')).toMatchObject({
+      targetTenantPublicId: targetCUuid,
+    })
+  })
+
+  it('maps a cross-target failure to each waiter mode instead of the first waiter fallback', async () => {
+    installSessionStorage()
+    const switchB = deferred<TenantSwitchOutcome>()
+    const switchC = deferred<TenantSwitchOutcome>()
+    const userStore = makeUserStore({
+      switchTenantContext: vi.fn((tenantId: number) => (
+        tenantId === 2 ? switchB.promise : switchC.promise
+      )),
+    })
+    const builderB = resolveTenantUrl(makeRoute({
+      fullPath: `/apps?tenantId=${targetUuid}`,
+      query: { tenantId: targetUuid },
+    }), userStore, builderModeStore)
+    const codeC = resolveTenantUrl(makeRoute({
+      path: '/code/apps',
+      fullPath: `/code/apps?tenantId=${targetCUuid}`,
+      query: { tenantId: targetCUuid },
+    }), userStore, codeModeStore)
+
+    switchC.reject(new Error('tenant C switch failed'))
+    switchB.resolve('stale_cancelled')
+
+    await expect(builderB).resolves.toEqual({
+      path: '/',
+      query: { tenantId: currentUuid },
+      replace: true,
+    })
+    expect(userStore.switchTenantContext).toHaveBeenCalledTimes(2)
+    await expect(codeC).resolves.toEqual({
+      path: '/code/apps',
+      query: { tenantId: currentUuid },
+      replace: true,
+    })
+  })
+
+  it('uses each same-target waiter mode when the shared operation fails', async () => {
+    installSessionStorage()
+    const switchFlight = deferred<TenantSwitchOutcome>()
+    const userStore = makeUserStore({
+      switchTenantContext: vi.fn(() => switchFlight.promise),
+    })
+    const builder = resolveTenantUrl(makeRoute({
+      fullPath: `/apps?tenantId=${targetUuid}`,
+      query: { tenantId: targetUuid },
+    }), userStore, builderModeStore)
+    const code = resolveTenantUrl(makeRoute({
+      path: '/code/apps',
+      fullPath: `/code/apps?tenantId=${targetUuid}`,
+      query: { tenantId: targetUuid },
+    }), userStore, codeModeStore)
+
+    expect(userStore.switchTenantContext).toHaveBeenCalledTimes(1)
+    switchFlight.reject(new Error('tenant switch failed'))
+
+    await expect(builder).resolves.toEqual({
+      path: '/',
+      query: { tenantId: currentUuid },
+      replace: true,
+    })
+    await expect(code).resolves.toEqual({
+      path: '/code/apps',
+      query: { tenantId: currentUuid },
+      replace: true,
+    })
+  })
+
+  it('fails closed and removes its marker when Task 3 reports a stale source revision', async () => {
+    const storage = installSessionStorage()
+    const userStore = makeUserStore({
+      switchTenantContext: vi.fn().mockResolvedValue('stale_cancelled'),
+    })
+
+    await expect(resolveTenantUrl(makeRoute({
+      fullPath: `/apps?tenantId=${targetUuid}`,
+      query: { tenantId: targetUuid },
+    }), userStore, builderModeStore)).resolves.toEqual({
+      path: '/',
+      query: { tenantId: currentUuid },
+      replace: true,
+    })
+
+    expect(storage.get('tenant-url-switch')).toBeUndefined()
+  })
+
+  it('fails closed to the live tenant home when a sidebar switch supersedes the resolver', async () => {
+    installSessionStorage()
+    const switchFlight = deferred<TenantSwitchOutcome>()
+    const userStore = makeUserStore({
+      switchTenantContext: vi.fn(() => switchFlight.promise),
+    })
+    const resolution = resolveTenantUrl(makeRoute({
+      fullPath: `/apps?tenantId=${targetUuid}`,
+      query: { tenantId: targetUuid },
+    }), userStore, builderModeStore)
+
+    userStore.user = { tenant_public_id: targetCUuid }
+    switchFlight.resolve('stale_cancelled')
+
+    await expect(resolution).resolves.toEqual({
+      path: '/',
+      query: { tenantId: targetCUuid },
+      replace: true,
+    })
   })
 
   it.each([

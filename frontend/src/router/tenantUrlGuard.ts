@@ -1,3 +1,4 @@
+import type { TenantSwitchContextOutcome } from '@/stores/user'
 import type { LocationQuery, RouteLocationRaw } from 'vue-router'
 
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/
@@ -42,7 +43,7 @@ export interface TenantUrlUserStore {
     targetTenantId: number,
     targetTenantPublicId: string,
     destination: string,
-  ) => Promise<void>
+  ) => Promise<TenantSwitchContextOutcome>
 }
 
 export interface TenantUrlModeStore {
@@ -57,7 +58,12 @@ interface TenantSwitchMarker {
 }
 
 interface TenantSwitchFlight {
-  promise: Promise<RouteLocationRaw | false>
+  targetTenantPublicId: string
+  sourceTenantPublicId: string | null
+  sourceUser: TenantUrlUserStore['user']
+  userStore: TenantUrlUserStore
+  marker: TenantSwitchMarker
+  operation: Promise<TenantSwitchContextOutcome>
 }
 
 let activeTenantSwitch: TenantSwitchFlight | null = null
@@ -170,9 +176,18 @@ function readSwitchMarker(): TenantSwitchMarker | null {
   }
 }
 
-function clearSwitchMarker(): void {
+function clearSwitchMarkerIfOwned(marker: TenantSwitchMarker): void {
   try {
-    sessionStorage.removeItem(TENANT_SWITCH_MARKER_KEY)
+    const stored = readSwitchMarker()
+    if (
+      stored
+      && stored.targetTenantPublicId === marker.targetTenantPublicId
+      && stored.targetFullPath === marker.targetFullPath
+      && stored.startedAt === marker.startedAt
+      && stored.attempt === marker.attempt
+    ) {
+      sessionStorage.removeItem(TENANT_SWITCH_MARKER_KEY)
+    }
   } catch {
     // Storage may be unavailable; the server-side switch validation remains authoritative.
   }
@@ -183,6 +198,56 @@ function writeSwitchMarker(marker: TenantSwitchMarker): void {
     sessionStorage.setItem(TENANT_SWITCH_MARKER_KEY, JSON.stringify(marker))
   } catch {
     // The marker prevents browser loops but must not block an authorized server-side switch.
+  }
+}
+
+function clearSwitchMarkerForTarget(targetTenantPublicId: string | null): void {
+  if (!targetTenantPublicId) return
+  const marker = readSwitchMarker()
+  if (marker?.targetTenantPublicId === targetTenantPublicId) {
+    clearSwitchMarkerIfOwned(marker)
+  }
+}
+
+function sameTenantSwitchFlight(
+  flight: TenantSwitchFlight,
+  targetTenantPublicId: string,
+  sourceTenantPublicId: string | null,
+  sourceUser: TenantUrlUserStore['user'],
+  userStore: TenantUrlUserStore,
+): boolean {
+  return (
+    flight.targetTenantPublicId === targetTenantPublicId
+    && flight.sourceTenantPublicId === sourceTenantPublicId
+    && flight.sourceUser === sourceUser
+    && flight.userStore === userStore
+  )
+}
+
+async function resolveTenantSwitchFlight(
+  flight: TenantSwitchFlight,
+  targetTenantPublicId: string,
+  userStore: TenantUrlUserStore,
+  modeStore: TenantUrlModeStore,
+): Promise<RouteLocationRaw | false> {
+  try {
+    const outcome = await flight.operation
+    const liveTenantPublicId = normalizeTenantPublicId(userStore.user?.tenant_public_id)
+    if (
+      outcome === 'committed_reload'
+      && liveTenantPublicId === targetTenantPublicId
+    ) {
+      return false
+    }
+    clearSwitchMarkerIfOwned(flight.marker)
+    return tenantHome(liveTenantPublicId, modeStore, userStore.isPlatformAdmin)
+  } catch {
+    clearSwitchMarkerIfOwned(flight.marker)
+    return tenantHome(
+      normalizeTenantPublicId(userStore.user?.tenant_public_id),
+      modeStore,
+      userStore.isPlatformAdmin,
+    )
   }
 }
 
@@ -222,10 +287,7 @@ export async function resolveTenantUrl(
   }
 
   if (decision.kind === 'continue') {
-    const marker = readSwitchMarker()
-    if (marker?.targetTenantPublicId === currentTenantPublicId) {
-      clearSwitchMarker()
-    }
+    clearSwitchMarkerForTarget(currentTenantPublicId)
     return true
   }
 
@@ -240,12 +302,28 @@ export async function resolveTenantUrl(
   }
 
   if (decision.kind === 'reject') {
-    clearSwitchMarker()
     return tenantHome(currentTenantPublicId, modeStore, userStore.isPlatformAdmin)
   }
 
+  const sourceUser = userStore.user
   const activeSwitch = activeTenantSwitch
-  if (activeSwitch) return activeSwitch.promise
+  if (
+    activeSwitch
+    && sameTenantSwitchFlight(
+      activeSwitch,
+      decision.tenantPublicId,
+      currentTenantPublicId,
+      sourceUser,
+      userStore,
+    )
+  ) {
+    return resolveTenantSwitchFlight(
+      activeSwitch,
+      decision.tenantPublicId,
+      userStore,
+      modeStore,
+    )
+  }
 
   const marker = readSwitchMarker()
   if (
@@ -253,41 +331,51 @@ export async function resolveTenantUrl(
     && marker.targetTenantPublicId === decision.tenantPublicId
     && marker.targetFullPath === to.fullPath
   ) {
-    clearSwitchMarker()
+    clearSwitchMarkerIfOwned(marker)
     return tenantHome(currentTenantPublicId, modeStore, userStore.isPlatformAdmin)
   }
 
-  writeSwitchMarker({
+  const flightMarker = {
     targetTenantPublicId: decision.tenantPublicId,
     targetFullPath: to.fullPath,
     startedAt: Date.now(),
     attempt: 1,
-  })
+  }
+  writeSwitchMarker(flightMarker)
 
-  let switchPromise: Promise<RouteLocationRaw | false>
+  let operation: Promise<TenantSwitchContextOutcome>
   try {
-    const operation = userStore.switchTenantContext(
+    operation = userStore.switchTenantContext(
       decision.tenantId,
       decision.tenantPublicId,
       tenantSwitchDestination(to.fullPath),
     )
-    switchPromise = operation.then(
-      () => false,
-      () => {
-        clearSwitchMarker()
-        return tenantHome(currentTenantPublicId, modeStore, userStore.isPlatformAdmin)
-      },
-    )
   } catch {
-    clearSwitchMarker()
+    clearSwitchMarkerIfOwned(flightMarker)
     return tenantHome(currentTenantPublicId, modeStore, userStore.isPlatformAdmin)
   }
 
-  const flight = { promise: switchPromise }
-  activeTenantSwitch = flight
-  try {
-    return await switchPromise
-  } finally {
-    if (activeTenantSwitch === flight) activeTenantSwitch = null
+  const flight: TenantSwitchFlight = {
+    targetTenantPublicId: decision.tenantPublicId,
+    sourceTenantPublicId: currentTenantPublicId,
+    sourceUser,
+    userStore,
+    marker: flightMarker,
+    operation,
   }
+  activeTenantSwitch = flight
+  void operation.then(
+    () => {
+      if (activeTenantSwitch === flight) activeTenantSwitch = null
+    },
+    () => {
+      if (activeTenantSwitch === flight) activeTenantSwitch = null
+    },
+  )
+  return resolveTenantSwitchFlight(
+    flight,
+    decision.tenantPublicId,
+    userStore,
+    modeStore,
+  )
 }

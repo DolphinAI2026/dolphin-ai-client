@@ -16,6 +16,8 @@ import {
 let activeSessionOwnerCleanup: (() => void) | null = null
 let activeSessionOwner: symbol | null = null
 
+export type TenantSwitchContextOutcome = 'committed_reload' | 'stale_cancelled'
+
 if (import.meta.hot) {
   import.meta.hot.dispose(() => {
     activeSessionOwnerCleanup?.()
@@ -348,10 +350,10 @@ export const useUserStore = defineStore('user', () => {
 
     try {
       const candidate = await authApi.switchTenant(targetTenantId, controller.signal)
-      if (!isCurrentOperation()) return
+      if (!isCurrentOperation()) return 'stale_cancelled' as const
 
       const candidateUser = await authApi.getMeWithToken(candidate.access_token, controller.signal)
-      if (!isCurrentOperation()) return
+      if (!isCurrentOperation()) return 'stale_cancelled' as const
       if (
         candidateUser.tenant_id !== targetTenantId
         || candidateUser.tenant_public_id !== targetTenantPublicId
@@ -361,8 +363,9 @@ export const useUserStore = defineStore('user', () => {
 
       commitStarted = true
       commitTenantSwitch(candidate.access_token, candidateUser, normalizedDestination)
+      return 'committed_reload' as const
     } catch (error) {
-      if (!commitStarted && !isCurrentOperation()) return
+      if (!commitStarted && !isCurrentOperation()) return 'stale_cancelled' as const
       throw error
     } finally {
       if (tenantSwitchAbortController === controller) {

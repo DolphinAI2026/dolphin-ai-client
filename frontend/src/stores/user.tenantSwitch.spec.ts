@@ -223,7 +223,8 @@ describe('user tenant switching', () => {
     localStorage.setItem('token', 'source-token')
     localStorage.setItem('ai-builder-tabs-v1', 'source-tabs')
 
-    await store.switchTenantContext(2, targetUuid, targetPath)
+    await expect(store.switchTenantContext(2, targetUuid, targetPath))
+      .resolves.toBe('committed_reload')
 
     expect(localStorage.getItem('token')).toBe('candidate-token')
     expect(localStorage.getItem('ai-builder-tabs-v1')).toBeNull()
@@ -890,9 +891,10 @@ describe('user tenant switching', () => {
 
     const switchB = store.switchTenantContext(2, targetUuid, '/?tenantId=tenant-b')
     await flushPromises()
-    await store.switchTenantContext(3, uuidC, '/?tenantId=tenant-c')
+    await expect(store.switchTenantContext(3, uuidC, '/?tenantId=tenant-c'))
+      .resolves.toBe('committed_reload')
     slowB.resolve(userB)
-    await switchB
+    await expect(switchB).resolves.toBe('stale_cancelled')
 
     expect(store.token).toBe('token-c')
     expect(store.user).toEqual(userC)
@@ -921,7 +923,7 @@ describe('user tenant switching', () => {
       tenant_name: 'Target tenant',
       tenant_public_id: targetUuid,
     }))
-    await switchPromise
+    await expect(switchPromise).resolves.toBe('stale_cancelled')
 
     expect(store.token).toBe('new-source-token')
     expect(store.user).toEqual(freshUser)
