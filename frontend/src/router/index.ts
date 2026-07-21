@@ -4,6 +4,7 @@ import { usePreviewStore } from '@/stores/preview'
 import { modeForRoutePath, useModeStore } from '@/stores/mode'
 import request, { getAuthSessionState } from '@/utils/request'
 import { resolveDesktopRedirect } from './desktopGuard'
+import { resolveTenantUrl } from './tenantUrlGuard'
 import { fetchOnboardingState, isOnboardingConfirmed, markOnboardingConfirmed } from '@/composables/useOnboardingState'
 
 const router = createRouter({
@@ -22,13 +23,13 @@ const router = createRouter({
       // 首页 = AI Builder 融合页(新建欢迎草稿 + 对话流), 与 /ai-chat 同组件。
       // (2026-06-21 撤回 ModeHome —— 用已有的新会话欢迎页, 不重复造。)
       component: () => import('@/views/AIChatPage.vue'),
-      meta: { requiresAuth: true, navExpanded: true }
+      meta: { requiresAuth: true, tenantContext: 'required', navExpanded: true }
     },
     {
       path: '/chat/:id?',
       name: 'Chat',
       component: () => import('@/views/ChatPage.vue'),
-      meta: { requiresAuth: true },
+      meta: { requiresAuth: true, tenantContext: 'required' },
       beforeEnter: (to, _from, next) => {
         // ChatPage 必须绑定到某个应用才有意义
         // 没 app_id / conversation_id / deploy_app_id 也没 pending 上传素材的话直接重定向应用列表
@@ -51,12 +52,12 @@ const router = createRouter({
       path: '/ai-chat/:id?',
       name: 'AIChat',
       component: () => import('@/views/AIChatPage.vue'),
-      meta: { requiresAuth: true }
+      meta: { requiresAuth: true, tenantContext: 'required' }
     },
     {
       path: '/code',
       component: () => import('@/views/CodeShellLayout.vue'),
-      meta: { requiresAuth: true },
+      meta: { requiresAuth: true, tenantContext: 'required' },
       children: [
         {
           path: '',
@@ -84,13 +85,13 @@ const router = createRouter({
       path: '/db-connections',
       name: 'DbConnections',
       component: () => import('@/views/DbConnectionsPage.vue'),
-      meta: { requiresAuth: true, navExpanded: true }
+      meta: { requiresAuth: true, tenantContext: 'required', navExpanded: true }
     },
     {
       path: '/apps',
       name: 'Apps',
       component: () => import('@/views/Apps.vue'),
-      meta: { requiresAuth: true }
+      meta: { requiresAuth: true, tenantContext: 'required' }
     },
     // /projects (v2) 已删 — Project 表无真实进度字段, 真应用页在 /project/:id (单数).
     // /agents /specs /industry /runtime /mcp(McpHub) 这几个 v2 stub 页已删 (2026-06-08 清理).
@@ -98,55 +99,56 @@ const router = createRouter({
       path: '/workspace-catalog',
       name: 'WorkspaceCatalog',
       component: () => import('@/views/WorkspaceCatalogPage.vue'),
-      meta: { requiresAuth: true }
+      meta: { requiresAuth: true, tenantContext: 'required' }
     },
     {
       path: '/workspace/:id?',
       name: 'Workspace',
       component: () => import('@/views/workspace/WorkspaceShell.vue'),
-      meta: { requiresAuth: true, navExpanded: true }
+      meta: { requiresAuth: true, tenantContext: 'required', navExpanded: true }
     },
     {
       path: '/tenant-logs',
       name: 'TenantLogs',
       component: () => import('@/views/TenantLogsPage.vue'),
-      meta: { requiresAuth: true }
+      meta: { requiresAuth: true, tenantContext: 'required' }
     },
     {
       path: '/hub',
       name: 'CapabilitiesHub',
       component: () => import('@/views/CapabilitiesHubPage.vue'),
-      meta: { requiresAuth: true, navExpanded: true }
+      meta: { requiresAuth: true, tenantContext: 'required', navExpanded: true }
     },
     {
       // 技能库已并入 hub;老链接 / router.push('/skills') 重定向到 hub 的技能 tab
       path: '/skills',
       name: 'Skills',
-      redirect: { path: '/hub', query: { tab: 'skills' } }
+      redirect: { path: '/hub', query: { tab: 'skills' } },
+      meta: { requiresAuth: true, tenantContext: 'required' }
     },
     {
       path: '/skills/:name/workspace',
       name: 'SkillWorkspace',
       component: () => import('@/views/SkillWorkspacePage.vue'),
-      meta: { requiresAuth: true }
+      meta: { requiresAuth: true, tenantContext: 'required' }
     },
     {
       path: '/project/:id',
       name: 'ProjectOverview',
       component: () => import('@/views/ProjectOverview.vue'),
-      meta: { requiresAuth: true }
+      meta: { requiresAuth: true, tenantContext: 'required' }
     },
     {
       path: '/project/:id/git',
       name: 'ProjectGitSetup',
       component: () => import('@/views/ProjectGitSetup.vue'),
-      meta: { requiresAuth: true }
+      meta: { requiresAuth: true, tenantContext: 'required' }
     },
     {
       path: '/git/callback/:provider',
       name: 'GitOAuthCallback',
       component: () => import('@/views/GitOAuthCallback.vue'),
-      meta: { requiresAuth: true }
+      meta: { requiresAuth: true, tenantContext: 'required' }
     },
     {
       path: '/settings',
@@ -159,37 +161,38 @@ const router = createRouter({
         if (tab === 'team' || tab === 'members') return { path: '/tenant-users' }
         return { path: '/platform-envs', query: { tab: 'llm' } }
       },
-      meta: { requiresAuth: true, navExpanded: true }
+      meta: { requiresAuth: true, tenantContext: 'required', navExpanded: true }
     },
     {
       path: '/coding',
       name: 'Coding',
       component: () => import('@/views/CodingPage.vue'),
-      meta: { requiresAuth: true, navExpanded: true }
+      meta: { requiresAuth: true, tenantContext: 'required', navExpanded: true }
     },
     {
       path: '/admin/mcp',
       name: 'McpTools',
       component: () => import('@/views/McpToolsPage.vue'),
-      meta: { requiresAuth: true, navExpanded: true }
+      meta: { requiresAuth: true, tenantContext: 'required', navExpanded: true }
     },
     {
       path: '/admin/agent-prompts',
       name: 'AgentPrompts',
       component: () => import('@/views/AgentPromptsPage.vue'),
-      meta: { requiresAuth: true, requiresTenantAdmin: true, navExpanded: true }
+      meta: { requiresAuth: true, tenantContext: 'required', requiresTenantAdmin: true, navExpanded: true }
     },
     {
       path: '/work/:appId',
       name: 'WorkspaceShell',
       redirect: to => ({ path: '/chat', query: { app_id: String(to.params.appId) } }),
-      meta: { requiresAuth: true }
+      meta: { requiresAuth: true, tenantContext: 'required' }
     },
     // M3 (2026-05-27): 删 /datasources stub — 用老 /db-connections 真页 (DbConnectionsPage)
     // 当 "数据源" nav 入口. 重定向兼容 G3 老路径.
     {
       path: '/datasources',
       redirect: '/db-connections',
+      meta: { requiresAuth: true, tenantContext: 'required' }
     },
     // M1: 删 4 stub 路由 (/apis /docs /reports /models) — 产品定位不符.
     // L1: 删 /manage stub — admin-spa 已是平台管理完整入口. nav 管理直跳 /platform-admin.
@@ -197,50 +200,51 @@ const router = createRouter({
       path: '/platform-envs',
       name: 'PlatformEnvs',
       component: () => import('@/views/PlatformEnvs.vue'),
-      meta: { requiresAuth: true, requiresTenantAdmin: true, navExpanded: true }
+      meta: { requiresAuth: true, tenantContext: 'required', requiresTenantAdmin: true, navExpanded: true }
     },
     {
       path: '/platform-admin/:pathMatch(.*)*',
       name: 'PlatformAdmin',
       component: () => import('@/views/PlatformAdminEmbed.vue'),
-      meta: { requiresAuth: true, requiresPlatformAdmin: true, navExpanded: true, desktop: 'hidden' }
+      meta: { requiresAuth: true, tenantContext: 'none', requiresPlatformAdmin: true, navExpanded: true, desktop: 'hidden' }
     },
     {
       path: '/tenant-users',
       name: 'TenantUsers',
       component: () => import('@/views/TenantUsers.vue'),
-      meta: { requiresAuth: true, requiresTenantAdmin: true, navExpanded: true }
+      meta: { requiresAuth: true, tenantContext: 'required', requiresTenantAdmin: true, navExpanded: true }
     },
     {
       path: '/admin/tenants',
       name: 'PlatformTenants',
       component: () => import('@/views/PlatformTenants.vue'),
-      meta: { requiresAuth: true, requiresPlatformAdmin: true, navExpanded: true, desktop: 'hidden' }
+      meta: { requiresAuth: true, tenantContext: 'none', requiresPlatformAdmin: true, navExpanded: true, desktop: 'hidden' }
     },
     {
       // 知识库已并入 hub;老链接重定向到 hub 的知识 tab(hub 内按 isPlatformAdmin 过滤可见性)
       path: '/knowledge',
       name: 'knowledge-base',
-      redirect: { path: '/hub', query: { tab: 'knowledge' } }
+      redirect: { path: '/hub', query: { tab: 'knowledge' } },
+      meta: { requiresAuth: true, tenantContext: 'required' }
     },
     {
       path: '/desktop-setup',
       name: 'DesktopSetup',
       component: () => import('@/views/DesktopSetupWizard.vue'),
-      meta: { requiresAuth: true }
+      meta: { requiresAuth: true, tenantContext: 'none' }
     },
     {
       path: '/desktop-unavailable',
       name: 'DesktopUnavailable',
       component: () => import('@/views/DesktopUnavailable.vue'),
-      meta: { requiresAuth: true }
+      meta: { requiresAuth: true, tenantContext: 'none' }
     },
     {
       path: '/generate/:id?',
       name: 'Generate',
       // 重定向到 ChatPage 并自动打开部署面板
       redirect: to => ({ path: '/chat', query: { deploy_app_id: to.params.id as string } }),
-      meta: { requiresAuth: true }
+      meta: { requiresAuth: true, tenantContext: 'required' }
     }
   ]
 })
@@ -291,6 +295,14 @@ router.beforeEach(async (to, _from, next) => {
   if (to.meta.requiresAuth && !hasCommittedSession) {
     next({ path: '/login', query: { redirect: to.fullPath } })
     return
+  }
+
+  if (to.meta.requiresAuth) {
+    const tenantResolution = await resolveTenantUrl(to, userStore, modeStore)
+    if (tenantResolution !== true) {
+      next(tenantResolution)
+      return
+    }
   }
 
   // v3 2026-05-20 fix (code review #P2-10): 权限被拒时用 replace
