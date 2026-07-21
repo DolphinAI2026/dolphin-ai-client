@@ -870,6 +870,7 @@ abort "metadata parser is not strict" unless metadata_script.include?("sha256:[0
 abort "metadata dotenv missing deployed revision" unless metadata_script.include?("DEPLOYED_REVISION")
 abort "metadata must generate strict child variables" unless metadata_script.include?("release-builder-child-vars.yml")
 abort "metadata must validate the deployed revision" unless metadata_script.include?("[0-9a-f]{40}")
+abort "metadata must validate release target variables" unless metadata_script.include?("target_patterns")
 
 preflight = config.fetch("release_builder_preflight")
 trigger = config.fetch("release_builder_pipeline")
@@ -915,6 +916,26 @@ abort "release trigger must not forward arbitrary pipeline variables" \
   unless trigger.dig("trigger", "forward", "pipeline_variables") == false
 abort "release trigger must not forward parent YAML variables" \
   unless trigger.dig("trigger", "forward", "yaml_variables") == false
+target_keys = %w[
+  BUILDER_K8S_NAMESPACE
+  BUILDER_K8S_STATEFULSET
+  BUILDER_K8S_BACKEND_CONTAINER
+  BUILDER_K8S_DIST_INIT_CONTAINER
+  BUILDER_K8S_LABEL_SELECTOR
+  BUILDER_K8S_WEB_CONTAINER
+  BUILDER_K8S_EXPECTED_HOST
+  BUILDER_K8S_EXPECTED_ORIGIN
+  BUILDER_K8S_INGRESS
+  BUILDER_K8S_SERVICE
+  BUILDER_K8S_INGRESS_PATH
+  BUILDER_ROLLOUT_TIMEOUT
+]
+target_keys.each do |key|
+  abort "metadata must project #{key} into the child config" \
+    unless metadata_script.include?(key)
+end
+abort "child pipeline must not retain a fallback production target" \
+  unless target_keys.none? { |key| child.fetch("variables", {}).key?(key) }
 %w[release_and_update_server release_builder_browser_smoke release_builder_recovery].each do |job|
   abort "parent pipeline still owns child job #{job}" if config.key?(job)
   abort "child job #{job} must not hold the parent resource group" if child.fetch(job).key?("resource_group")
@@ -1058,6 +1079,18 @@ assert_ci_metadata_flow() {
     cd "$metadata_dir"
     BUILDER_IMAGE_REPOSITORY="registry.example/ai-builder" \
     CI_COMMIT_SHA="$TEST_REVISION" \
+    BUILDER_K8S_NAMESPACE="release-ns" \
+    BUILDER_K8S_STATEFULSET="ai-builder-staging" \
+    BUILDER_K8S_BACKEND_CONTAINER="backend" \
+    BUILDER_K8S_DIST_INIT_CONTAINER="dist-init" \
+    BUILDER_K8S_LABEL_SELECTOR="app.kubernetes.io/name=ai-builder-staging" \
+    BUILDER_K8S_WEB_CONTAINER="web" \
+    BUILDER_K8S_EXPECTED_HOST="staging.example" \
+    BUILDER_K8S_EXPECTED_ORIGIN="https://staging.example" \
+    BUILDER_K8S_INGRESS="ai-builder-staging" \
+    BUILDER_K8S_SERVICE="ai-builder-staging" \
+    BUILDER_K8S_INGRESS_PATH="/ai-builder" \
+    BUILDER_ROLLOUT_TIMEOUT="420s" \
     BUILDER_IMAGE="registry.example/attacker@sha256:ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff" \
     DEPLOYED_REVISION="ffffffffffffffffffffffffffffffffffffffff" \
       bash -c "$script"
@@ -1074,13 +1107,34 @@ abort "generated child config must include the repository-owned child pipeline" 
   unless config["include"] == [{"local" => ".gitlab/ci/release-builder-child.yml"}]
 variables = config.fetch("variables")
 abort "generated child config has unexpected variables" \
-  unless variables.keys.sort == %w[BUILDER_IMAGE DEPLOYED_REVISION]
+  unless variables.keys.sort == %w[
+    BUILDER_IMAGE
+    BUILDER_K8S_BACKEND_CONTAINER
+    BUILDER_K8S_DIST_INIT_CONTAINER
+    BUILDER_K8S_EXPECTED_HOST
+    BUILDER_K8S_EXPECTED_ORIGIN
+    BUILDER_K8S_INGRESS
+    BUILDER_K8S_INGRESS_PATH
+    BUILDER_K8S_LABEL_SELECTOR
+    BUILDER_K8S_NAMESPACE
+    BUILDER_K8S_SERVICE
+    BUILDER_K8S_STATEFULSET
+    BUILDER_K8S_WEB_CONTAINER
+    BUILDER_ROLLOUT_TIMEOUT
+    DEPLOYED_REVISION
+  ]
 puts variables.fetch("BUILDER_IMAGE")
 puts variables.fetch("DEPLOYED_REVISION")
+puts variables.fetch("BUILDER_K8S_NAMESPACE")
+puts variables.fetch("BUILDER_K8S_STATEFULSET")
+puts variables.fetch("BUILDER_K8S_EXPECTED_ORIGIN")
 RUBY
   )"
   assert_contains "$child_vars" "registry.example/ai-builder@${TEST_DIGEST}"
   assert_contains "$child_vars" "$TEST_REVISION"
+  assert_contains "$child_vars" "release-ns"
+  assert_contains "$child_vars" "ai-builder-staging"
+  assert_contains "$child_vars" "https://staging.example"
 
   printf '{"containerimage.digest":"sha256:invalid"}\n' \
     >"${metadata_dir}/build/metadata.json"
@@ -1089,6 +1143,8 @@ RUBY
   printf '{"containerimage.digest":"%s"}\n' "$TEST_DIGEST" \
     >"${metadata_dir}/build/metadata.json"
   assert_command_fails_without_secret bash -c "cd '$metadata_dir' && BUILDER_IMAGE_REPOSITORY=registry.example/ai-builder CI_COMMIT_SHA=invalid bash -c \"\$0\"" "$script" \
+    >/dev/null
+  assert_command_fails_without_secret bash -c "cd '$metadata_dir' && BUILDER_IMAGE_REPOSITORY=registry.example/ai-builder CI_COMMIT_SHA=$TEST_REVISION BUILDER_K8S_NAMESPACE='bad namespace' bash -c \"\$0\"" "$script" \
     >/dev/null
   printf 'CI_METADATA_FLOW=PASS\n'
 }
@@ -1253,6 +1309,19 @@ abort "root dependency preparation must run after clone and before online prebui
   unless clone_at && prepare_at && prebuild_at && clone_at < prepare_at && prepare_at < prebuild_at
 RUBY
   printf 'ONLINE_ROOT_PLAYWRIGHT_DEPENDENCIES=PASS\n'
+}
+
+assert_online_unique_workdir_contract() {
+  ruby - "${ROOT_DIR}/scripts/deploy_online_latest_kubesphere.sh" <<'RUBY'
+source = File.read(ARGV.fetch(0))
+clone = source.split("clone_latest_code() {", 2).fetch(1).split("\n}", 2).fetch(0)
+build = source.split("build_and_push_image() {", 2).fetch(1).split("\n}", 2).fetch(0)
+abort "online clone must allocate a unique workdir" unless clone.include?("mktemp -d")
+abort "online clone must not delete a shared workdir" if clone.include?("rm -rf \"$WORKDIR\"")
+abort "online build must pin the cloned full revision" \
+  unless build.include?("CLONED_GIT_FULL_SHA") && build.include?("source worktree changed after clone")
+RUBY
+  printf 'ONLINE_UNIQUE_WORKDIR=PASS\n'
 }
 
 run_fake_helper() {
@@ -2360,6 +2429,7 @@ main() {
   assert_online_build_cli_branches
   assert_online_source_and_docker_preflight
   assert_online_root_playwright_dependencies_contract
+  assert_online_unique_workdir_contract
   assert_online_selector_contract
   assert_online_rollback_contract
   assert_ci_recovery_contract

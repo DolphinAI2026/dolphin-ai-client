@@ -23,7 +23,12 @@ from app.auth import (
     get_password_hash,
 )
 from app.database import Base, get_db
-from app.deps import get_auth_context, get_auth_context_from_token
+from app.deps import (
+    get_auth_context,
+    get_auth_context_from_token,
+    require_platform_admin,
+    require_tenant_admin,
+)
 from app.models import User
 from app.models.tenant import Tenant, UserTenant
 from app.routes.auth import router as auth_router
@@ -666,12 +671,25 @@ async def test_external_platform_admin_active_membership_keeps_wildcard_permissi
         assert ctx.org_permissions == {"*": True}
 
 
+@pytest.mark.parametrize(
+    ("account_source", "apaas_base_url"),
+    [
+        ("apaas", "https://apaas.example"),
+        ("coding", None),
+        ("control_plane", None),
+    ],
+)
 @pytest.mark.asyncio
-async def test_external_platform_admin_without_tid_remains_unscoped(auth_db_factory):
+async def test_external_platform_admin_without_tid_is_platform_only_after_membership_removal(
+    auth_db_factory,
+    account_source,
+    apaas_base_url,
+):
     user, tenants = await seed_tenant_user(
         auth_db_factory,
         is_platform_admin=True,
-        account_source="control_plane",
+        account_source=account_source,
+        apaas_base_url=apaas_base_url,
     )
     token = create_access_token(user, tenant_id=None)
 
@@ -684,6 +702,10 @@ async def test_external_platform_admin_without_tid_remains_unscoped(auth_db_fact
         assert ctx.tenant_id == 0
         assert ctx.tenant_role == "platform_admin"
         assert ctx.org_permissions == {"*": True}
+        assert ctx.tenant_access_scope == "platform_only"
+        with pytest.raises(HTTPException, match="需要租户上下文"):
+            await require_tenant_admin(ctx)
+        assert await require_platform_admin(ctx) is ctx
 
 
 @pytest.mark.asyncio

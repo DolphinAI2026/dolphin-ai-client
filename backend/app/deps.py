@@ -29,6 +29,7 @@ class AuthContext:
     org_permissions: dict  # Org-level permissions (from role.permissions)
     apaas_user_id: Optional[str] = None  # aPaaS 平台 user_id（21 位 string）
     apaas_tenant_id: Optional[str] = None  # aPaaS 平台 tenant_id（21 位 string）
+    tenant_access_scope: str = "tenant"  # tenant | unscoped | platform_only
 
 
 async def resolve_default_tenant_id_for_user(db: AsyncSession, user_id: int) -> int | None:
@@ -67,12 +68,14 @@ async def resolve_effective_tenant_id(db: AsyncSession, ctx: AuthContext) -> int
     """
     if ctx.tenant_id and ctx.tenant_id > 0:
         return ctx.tenant_id
+    if ctx.tenant_access_scope == "platform_only":
+        raise HTTPException(status_code=403, detail="需要租户上下文")
 
     fallback = await resolve_default_tenant_id_for_user(db, ctx.user.id)
     if fallback:
         return fallback
 
-    if ctx.tenant_role == "platform_admin" or ctx.user.is_platform_admin:
+    if ctx.tenant_access_scope == "unscoped":
         result = await db.execute(
             select(Tenant.id)
             .where(Tenant.status == 1)
@@ -209,6 +212,11 @@ async def get_auth_context(
             resolved_tenant_id = await resolve_default_tenant_id_for_user(db, user_id)
             if resolved_tenant_id:
                 await _require_active_tenant(db, resolved_tenant_id)
+            tenant_access_scope = (
+                "unscoped"
+                if platform_admin_has_unscoped_tenant_access(user)
+                else ("tenant" if resolved_tenant_id else "platform_only")
+            )
             bound_apaas_tid = await resolve_bound_apaas_tenant_id(db, resolved_tenant_id)
             return AuthContext(
                 user=user,
@@ -217,6 +225,7 @@ async def get_auth_context(
                 org_permissions={"*": True},
                 apaas_user_id=jwt_apaas_uid or user.apaas_user_id or None,
                 apaas_tenant_id=_first_text(jwt_apaas_tid, bound_apaas_tid, user.apaas_tenant_id),
+                tenant_access_scope=tenant_access_scope,
             )
 
         tenant_id = int(tenant_id)
@@ -249,6 +258,7 @@ async def get_auth_context(
             org_permissions={"*": True},
             apaas_user_id=eff_apaas_uid,
             apaas_tenant_id=eff_apaas_tid,
+            tenant_access_scope="tenant",
         )
 
     if platform_admin_has_unscoped_tenant_access(user):
@@ -259,6 +269,7 @@ async def get_auth_context(
             org_permissions={"*": True},
             apaas_user_id=eff_apaas_uid,
             apaas_tenant_id=eff_apaas_tid,
+            tenant_access_scope="unscoped",
         )
 
     # Get user-tenant relationship
@@ -337,6 +348,11 @@ async def get_auth_context_from_token(token: str) -> AuthContext:
                     org_permissions={"*": True},
                     apaas_user_id=eff_apaas_uid,
                     apaas_tenant_id=eff_apaas_tid,
+                    tenant_access_scope=(
+                        "unscoped"
+                        if platform_admin_has_unscoped_tenant_access(user)
+                        else ("tenant" if tenant_id else "platform_only")
+                    ),
                 )
             tenant_id = 0
         else:
@@ -359,6 +375,7 @@ async def get_auth_context_from_token(token: str) -> AuthContext:
                 org_permissions={"*": True},
                 apaas_user_id=eff_apaas_uid,
                 apaas_tenant_id=eff_apaas_tid,
+                tenant_access_scope="tenant",
             )
 
         if platform_admin_has_unscoped_tenant_access(user):
@@ -369,6 +386,7 @@ async def get_auth_context_from_token(token: str) -> AuthContext:
                 org_permissions={"*": True},
                 apaas_user_id=eff_apaas_uid,
                 apaas_tenant_id=eff_apaas_tid,
+                tenant_access_scope="unscoped",
             )
         # 普通租户用户：查 UserTenant→Role 拿真实角色权限，与 header 路径一致。
         # （旧实现硬编码 member/{} → 自开发整页预览/SSE 等 query-token 入口丢权限。）
@@ -430,6 +448,11 @@ async def require_tenant_admin(
     ctx: Annotated[AuthContext, Depends(get_auth_context)]
 ) -> AuthContext:
     """Require tenant admin role."""
+    if ctx.tenant_access_scope == "platform_only":
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="需要租户上下文",
+        )
     if ctx.tenant_role not in ("platform_admin", "tenant_admin"):
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,

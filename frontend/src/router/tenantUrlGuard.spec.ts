@@ -348,6 +348,34 @@ describe('tenant URL route mount gate', () => {
 
     expect(requestHarness.get).not.toHaveBeenCalled()
   })
+
+  it('retries preview status on the next aligned navigation after the first request fails', async () => {
+    await new Promise((resolve) => setTimeout(resolve, 0))
+    installBootstrapState()
+    requestHarness.get
+      .mockRejectedValueOnce(new Error('temporary failure'))
+      .mockResolvedValueOnce({ connected: true })
+    const route = {
+      path: '/apps',
+      fullPath: `/apps?tenantId=${currentUuid}`,
+      query: { tenantId: currentUuid },
+      hash: '',
+      meta: { requiresAuth: true, tenantContext: 'required' },
+    }
+
+    await runGuard(route)
+    commitNavigation(route)
+    await vi.waitFor(() => expect(requestHarness.get).toHaveBeenCalledTimes(1))
+    await Promise.resolve()
+    await Promise.resolve()
+
+    commitNavigation(route)
+    await vi.waitFor(() => expect(requestHarness.get).toHaveBeenCalledTimes(2))
+
+    commitNavigation(route)
+    await Promise.resolve()
+    expect(requestHarness.get).toHaveBeenCalledTimes(2)
+  })
 })
 
 function createRedirectRouter() {

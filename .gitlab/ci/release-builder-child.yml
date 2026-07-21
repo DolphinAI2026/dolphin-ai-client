@@ -9,20 +9,6 @@ stages:
   - smoke
   - recovery
 
-variables:
-  BUILDER_K8S_NAMESPACE: "orcamatrix-demo"
-  BUILDER_K8S_STATEFULSET: "ai-builder"
-  BUILDER_K8S_BACKEND_CONTAINER: "ai-builder"
-  BUILDER_K8S_DIST_INIT_CONTAINER: "copy-frontend-dist"
-  BUILDER_K8S_LABEL_SELECTOR: "app.kubernetes.io/name=ai-builder"
-  BUILDER_K8S_WEB_CONTAINER: "web"
-  BUILDER_K8S_EXPECTED_HOST: "om-demo.dfy.definesys.cn"
-  BUILDER_K8S_EXPECTED_ORIGIN: "https://om-demo.dfy.definesys.cn"
-  BUILDER_K8S_INGRESS: "ai-builder"
-  BUILDER_K8S_SERVICE: "ai-builder"
-  BUILDER_K8S_INGRESS_PATH: "/ai-builder"
-  BUILDER_ROLLOUT_TIMEOUT: "300s"
-
 release_and_update_server:
   stage: update
   image:
@@ -31,6 +17,10 @@ release_and_update_server:
   script:
     - test -n "${BUILDER_IMAGE:-}"
     - test -n "${DEPLOYED_REVISION:-}"
+    - test -n "${BUILDER_K8S_NAMESPACE:-}"
+    - test -n "${BUILDER_K8S_STATEFULSET:-}"
+    - test -n "${BUILDER_SMOKE_USERNAME:-}"
+    - test -n "${BUILDER_SMOKE_PASSWORD:-}"
     - mkdir -p build
     - printf 'BUILDER_IMAGE=%s\nDEPLOYED_REVISION=%s\n' "${BUILDER_IMAGE}" "${DEPLOYED_REVISION}" > build/release.env
     - test -n "${APAAS_KUBECONFIG_B64:-}${APAAS_KUBECONFIG:-}"

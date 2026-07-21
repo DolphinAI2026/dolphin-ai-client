@@ -289,14 +289,21 @@ function hasCommittedAuthSession(): boolean {
 }
 
 let previewStatusRestorePending = false
+let previewStatusRestoreGeneration = 0
+let previewStatusRestoreInFlightGeneration: number | null = null
+let previewStatusRestoreFailures = 0
+let previewStatusRestoreRetryAt = 0
+const PREVIEW_STATUS_RETRY_DELAYS_MS = [0, 1_000, 5_000, 30_000]
 
-async function restorePreviewStatus(): Promise<void> {
+async function restorePreviewStatus(): Promise<boolean> {
   const previewStore = usePreviewStore()
   try {
     const data = await request.get<any, any>('/apaas/status')
     if (data) previewStore.connected = data.connected
+    return true
   } catch {
     // Preview state is optional and must not block route resolution.
+    return false
   }
 }
 
@@ -314,6 +321,9 @@ export function installRouterGuards(targetRouter: Router): void {
       hasCommittedSession = hasCommittedAuthSession()
       if (hasCommittedSession) {
         previewStatusRestorePending = true
+        previewStatusRestoreGeneration += 1
+        previewStatusRestoreFailures = 0
+        previewStatusRestoreRetryAt = 0
       }
     } catch {
       hasCommittedSession = hasCommittedAuthSession()
@@ -400,6 +410,8 @@ export function installRouterGuards(targetRouter: Router): void {
   targetRouter.afterEach((to, _from, failure) => {
     if (
       !previewStatusRestorePending
+      || previewStatusRestoreInFlightGeneration === previewStatusRestoreGeneration
+      || Date.now() < previewStatusRestoreRetryAt
       || failure
       || !to.meta.requiresAuth
       || to.meta.tenantContext !== 'required'
@@ -419,8 +431,26 @@ export function installRouterGuards(targetRouter: Router): void {
     ) {
       return
     }
-    previewStatusRestorePending = false
-    void restorePreviewStatus()
+    const restoreGeneration = previewStatusRestoreGeneration
+    previewStatusRestoreInFlightGeneration = restoreGeneration
+    void restorePreviewStatus().then((restored) => {
+      if (previewStatusRestoreInFlightGeneration === restoreGeneration) {
+        previewStatusRestoreInFlightGeneration = null
+      }
+      if (previewStatusRestoreGeneration !== restoreGeneration) return
+      if (restored) {
+        previewStatusRestorePending = false
+        previewStatusRestoreFailures = 0
+        previewStatusRestoreRetryAt = 0
+        return
+      }
+      const delayIndex = Math.min(
+        previewStatusRestoreFailures,
+        PREVIEW_STATUS_RETRY_DELAYS_MS.length - 1,
+      )
+      previewStatusRestoreFailures += 1
+      previewStatusRestoreRetryAt = Date.now() + PREVIEW_STATUS_RETRY_DELAYS_MS[delayIndex]
+    })
   })
 
 // 部署后老 tab 引用旧 index.html，里面 import 的 chunk hash 已被新 build 覆盖：

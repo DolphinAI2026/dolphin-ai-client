@@ -141,12 +141,16 @@ export const useUserStore = defineStore('user', () => {
 
   const storageAlignmentReloadDestination = (): string | null => {
     if (typeof window === 'undefined') return null
-    const query = new URLSearchParams(window.location.search)
-    query.delete('tenantId')
-    const search = query.toString()
-    return normalizeTenantDestination(
-      `${window.location.pathname}${search ? `?${search}` : ''}${window.location.hash}`,
+    const basePath = currentAppBasePath()
+    const prefix = basePath === '/' ? '' : basePath
+    const pathname = window.location.pathname
+    const routePath = (
+      basePath !== '/'
+      && (pathname === basePath || pathname.startsWith(`${basePath}/`))
     )
+      ? `/${pathname.slice(basePath.length).replace(/^\/+/, '')}`
+      : pathname
+    return normalizeTenantDestination(`${prefix}${MODE_META[modeForRoutePath(routePath)].home}`)
   }
 
   // 多租户状态

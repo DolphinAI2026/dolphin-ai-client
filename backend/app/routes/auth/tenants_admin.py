@@ -750,6 +750,7 @@ async def bind_user_apaas_account(
     target = (await db.execute(select(User).where(User.id == user_id))).scalar_one_or_none()
     if not target:
         raise HTTPException(status_code=404, detail="账号不存在")
+    preserve_unscoped_admin = platform_admin_has_unscoped_tenant_access(target)
 
     backend_token, backend_payload = await _apaas_backend_login(username, password, "")
     if not backend_token:
@@ -802,6 +803,8 @@ async def bind_user_apaas_account(
     display_name = _extract_user_display_name(user_info, fallback=username)
 
     tenant = await _ensure_apaas_tenant(db, selected_item, username, password)
+    if preserve_unscoped_admin and str(target.account_source or "").strip().lower() == "apaas":
+        target.account_source = "desktop"
     target.apaas_user_id = apaas_user_id
     target.apaas_tenant_id = selected_tenant_id
     target.apaas_base_url = _normalize_apaas_origin(settings.apaas_base_url)
@@ -1075,6 +1078,7 @@ async def invite_tenant_user(
             user = User(
                 username=username,
                 hashed_password=get_password_hash(req.password),
+                account_source="desktop",
                 is_platform_admin=role_code == "platform_admin",
             )
             db.add(user)

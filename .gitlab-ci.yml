@@ -140,6 +140,26 @@ publish_release_metadata:
       digest = str(metadata.get("containerimage.digest") or "")
       repository = os.environ["BUILDER_IMAGE_REPOSITORY"]
       revision = os.environ["CI_COMMIT_SHA"]
+      target_patterns = {
+          "BUILDER_K8S_NAMESPACE": r"[a-z0-9]([-a-z0-9.]*[a-z0-9])?",
+          "BUILDER_K8S_STATEFULSET": r"[a-z0-9]([-a-z0-9.]*[a-z0-9])?",
+          "BUILDER_K8S_BACKEND_CONTAINER": r"[a-z0-9]([-a-z0-9.]*[a-z0-9])?",
+          "BUILDER_K8S_DIST_INIT_CONTAINER": r"[a-z0-9]([-a-z0-9.]*[a-z0-9])?",
+          "BUILDER_K8S_LABEL_SELECTOR": r"[A-Za-z0-9./_-]+=[A-Za-z0-9./_-]+",
+          "BUILDER_K8S_WEB_CONTAINER": r"[a-z0-9]([-a-z0-9.]*[a-z0-9])?",
+          "BUILDER_K8S_EXPECTED_HOST": r"[A-Za-z0-9.-]+",
+          "BUILDER_K8S_EXPECTED_ORIGIN": r"https://[A-Za-z0-9.-]+(?::[0-9]+)?",
+          "BUILDER_K8S_INGRESS": r"[a-z0-9]([-a-z0-9.]*[a-z0-9])?",
+          "BUILDER_K8S_SERVICE": r"[a-z0-9]([-a-z0-9.]*[a-z0-9])?",
+          "BUILDER_K8S_INGRESS_PATH": r"/[A-Za-z0-9._~!$&'()*+,;=:@%/-]*",
+          "BUILDER_ROLLOUT_TIMEOUT": r"[1-9][0-9]*[smh]",
+      }
+      target_variables = {}
+      for key, pattern in target_patterns.items():
+          value = os.environ[key]
+          if not re.fullmatch(pattern, value):
+              raise SystemExit(f"invalid release target variable: {key}")
+          target_variables[key] = value
       image = f"{repository}@{digest}"
       if not re.fullmatch(r"[^@\s]+@sha256:[0-9a-f]{64}", image):
           raise SystemExit("invalid immutable BuildKit image reference")
@@ -151,12 +171,22 @@ publish_release_metadata:
           f"DEPLOYED_REVISION={revision}\n"
       )
       Path("build/release.env").write_text(release_env, encoding="utf-8")
+      child_variables = {
+          "BUILDER_IMAGE": image,
+          "DEPLOYED_REVISION": revision,
+          **target_variables,
+      }
+      child_yaml = [
+          "include:",
+          '  - local: ".gitlab/ci/release-builder-child.yml"',
+          "variables:",
+      ]
+      child_yaml.extend(
+          f"  {key}: {json.dumps(value)}"
+          for key, value in child_variables.items()
+      )
       Path("build/release-builder-child-vars.yml").write_text(
-          "include:\n"
-          '  - local: ".gitlab/ci/release-builder-child.yml"\n'
-          "variables:\n"
-          f"  BUILDER_IMAGE: {json.dumps(image)}\n"
-          f"  DEPLOYED_REVISION: {json.dumps(revision)}\n",
+          "\n".join(child_yaml) + "\n",
           encoding="utf-8",
       )
       PY

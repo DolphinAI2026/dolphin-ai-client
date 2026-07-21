@@ -39,7 +39,8 @@ fi
 
 KUBE_LABEL_SELECTOR="${KUBE_LABEL_SELECTOR:-app=${APP_NAME}}"
 KUBE_INGRESS_PATH="${KUBE_INGRESS_PATH:-/ai-builder}"
-WORKDIR="${WORKDIR:-${TMP_PARENT}/apaas-builder-online-${DEPLOY_TARGET}-${GIT_BRANCH}}"
+WORKDIR_BASE="${WORKDIR:-${TMP_PARENT}/apaas-builder-online-${DEPLOY_TARGET}-${GIT_BRANCH}}"
+WORKDIR="${WORKDIR:-}"
 RELEASE_LOCK_NAME="${RELEASE_LOCK_NAME:-${APP_NAME}-release-lock}"
 RELEASE_LOCK_OWNER="${RELEASE_LOCK_OWNER:-online-${USER:-unknown}-$$-$(date +%s)}"
 PREVIOUS_BACKEND_IMAGE=""
@@ -49,6 +50,7 @@ VALIDATED_STATEFULSET_RESOURCE_VERSION=""
 IMAGE=""
 GIT_SHA=""
 GIT_FULL_SHA=""
+CLONED_GIT_FULL_SHA=""
 LOCK_ACQUIRED=0
 RELEASE_LOCK_UID=""
 RELEASE_LOCK_RESOURCE_VERSION=""
@@ -79,11 +81,13 @@ setup_kubeconfig() {
 
 clone_latest_code() {
   log "clone latest online code: ${GIT_REPO} branch=${GIT_BRANCH}"
-  [ -n "$WORKDIR" ] && [ "$WORKDIR" != "/" ] || die "unsafe WORKDIR: ${WORKDIR}"
-  rm -rf "$WORKDIR"
+  [ -n "$WORKDIR_BASE" ] && [ "$WORKDIR_BASE" != "/" ] || die "unsafe WORKDIR base: ${WORKDIR_BASE}"
+  mkdir -p "$(dirname "$WORKDIR_BASE")"
+  WORKDIR="$(mktemp -d "${WORKDIR_BASE}.XXXXXX")"
   git clone --branch "$GIT_BRANCH" "$GIT_REPO" "$WORKDIR"
   GIT_SHA="$(git -C "$WORKDIR" rev-parse --short HEAD)"
   GIT_FULL_SHA="$(git -C "$WORKDIR" rev-parse HEAD)"
+  CLONED_GIT_FULL_SHA="$GIT_FULL_SHA"
   verify_source_provenance "$GIT_FULL_SHA"
   ok "checked out ${GIT_BRANCH}@${GIT_FULL_SHA}"
 }
@@ -147,6 +151,8 @@ build_and_push_image() {
   local image_tag_ref image_digest cli_name build_push
   GIT_FULL_SHA="$(git -C "$WORKDIR" rev-parse HEAD)"
   [[ "$GIT_FULL_SHA" =~ ^[0-9a-f]{40}$ ]] || die "HEAD is not a full lowercase Git SHA"
+  [ -z "$CLONED_GIT_FULL_SHA" ] || [ "$GIT_FULL_SHA" = "$CLONED_GIT_FULL_SHA" ] \
+    || die "source worktree changed after clone"
   [ -n "$IMAGE_TAG" ] || IMAGE_TAG="${IMAGE_TAG_PREFIX}-$(date +%Y%m%d-%H%M%S)-${GIT_SHA}"
   IMAGE="${IMAGE_REPO}:${IMAGE_TAG}"
   cli_name="$(basename "$CONTAINER_CLI")"

@@ -862,3 +862,71 @@ async def test_platform_admin_can_bind_coding_user_to_apaas_account(db_session, 
     assert result["account_source"] == "coding"
     assert result["apaas_bound"] is True
     assert result["apaas_tenant_id"] == "apaas-tenant-1"
+
+
+@pytest.mark.asyncio
+async def test_binding_legacy_local_platform_admin_preserves_unscoped_origin(
+    db_session,
+    monkeypatch,
+):
+    import app.routes.auth.tenants_admin as tenants_admin
+    from app.deps import platform_admin_has_unscoped_tenant_access
+
+    admin = User(
+        username="root_bind_local",
+        hashed_password=get_password_hash("x"),
+        account_source="desktop",
+        is_active=True,
+        is_platform_admin=True,
+    )
+    target = User(
+        username="legacy_local_admin",
+        hashed_password=get_password_hash("x"),
+        account_source="apaas",
+        is_active=True,
+        is_platform_admin=True,
+    )
+    db_session.add_all([admin, target])
+    await db_session.flush()
+    assert platform_admin_has_unscoped_tenant_access(target) is True
+
+    apaas_tenant = {
+        "tenantId": "apaas-tenant-local",
+        "tenantName": "Local Binding",
+        "tenantCode": "local-binding",
+        "status": 1,
+    }
+
+    async def fake_apaas_backend_login(_username: str, _password: str, _tenant_id: str = ""):
+        return "token-local-binding", {
+            "data": {
+                "defaultTenantId": "apaas-tenant-local",
+                "tenantInfos": [apaas_tenant],
+                "user": {"id": "apaas-user-local", "username": "bound-local"},
+            }
+        }
+
+    async def fake_apaas_switchable_tenants(_token: str, _default_tenant_id: str):
+        return []
+
+    monkeypatch.setattr(settings, "apaas_base_url", "https://apaas.example.com/backend")
+    monkeypatch.setattr(tenants_admin, "_apaas_backend_login", fake_apaas_backend_login)
+    monkeypatch.setattr(tenants_admin, "_apaas_switchable_tenants", fake_apaas_switchable_tenants)
+
+    ctx = AuthContext(
+        user=admin,
+        tenant_id=0,
+        tenant_role="platform_admin",
+        org_permissions={"*": True},
+    )
+    await tenants_admin.bind_user_apaas_account(
+        target.id,
+        tenants_admin.BindApaasAccountRequest(username="bound-local", password="secret"),
+        ctx,
+        db_session,
+    )
+
+    await db_session.refresh(target)
+    assert target.account_source == "desktop"
+    assert target.apaas_user_id == "apaas-user-local"
+    assert platform_admin_has_unscoped_tenant_access(target) is True

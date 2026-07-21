@@ -719,7 +719,7 @@ describe('user tenant switching', () => {
     expect(replace).toHaveBeenCalledWith('/')
   })
 
-  it('fails closed and reloads the current Code session without tenantId on a storage token change', async () => {
+  it('fails closed and reloads the Code tenant home without retaining source resource IDs', async () => {
     const { fireStorageEvent, replace } = installBrowserGlobals(
       '/code/session-42',
       `?tenantId=${sourceUuid}&agent=codex&view=diff`,
@@ -740,7 +740,7 @@ describe('user tenant switching', () => {
       Promise.resolve().then(() => runRequestInterceptor({ headers: {} })),
     ).rejects.toMatchObject({ code: 'AUTH_SESSION_PENDING' })
     expect(authMocks.getMeWithToken).not.toHaveBeenCalled()
-    expect(replace).toHaveBeenCalledWith('/code/session-42?agent=codex&view=diff#latest')
+    expect(replace).toHaveBeenCalledWith('/code/apps')
   })
 
   it('keeps storage alignment fail-closed when controlled navigation throws', async () => {
@@ -949,7 +949,7 @@ describe('user tenant switching', () => {
     expect(replace).toHaveBeenCalledWith(expectedDestination)
   })
 
-  it('uses the initial Code pathname over persisted builder mode during pending user loading', async () => {
+  it('uses the initial Code pathname to select the safe Code home during pending user loading', async () => {
     const { fireStorageEvent, replace } = installBrowserGlobals('/code/projects/42')
     const pendingSourceUser = deferred<User>()
     localStorage.setItem('token', 'source-token')
@@ -970,7 +970,7 @@ describe('user tenant switching', () => {
     fireStorageEvent('candidate-token')
     await flushPromises()
 
-    expect(replace).toHaveBeenCalledWith('/code/projects/42')
+    expect(replace).toHaveBeenCalledWith('/code/apps')
     expect(authMocks.getMeWithToken).not.toHaveBeenCalled()
 
     pendingSourceUser.resolve(makeUser())
