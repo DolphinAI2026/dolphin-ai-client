@@ -27,6 +27,7 @@ ARG NPM_REGISTRY
 #   与主机裸跑并存 → /ai-builder-docker/
 # 用法：docker build --build-arg VITE_BASE_URL=/ai-builder-docker/ ...
 ARG VITE_BASE_URL=/ai-builder/
+ARG VITE_BUILD_SHA
 
 WORKDIR /build/frontend
 
@@ -37,9 +38,10 @@ RUN npm ci --registry="${NPM_REGISTRY}" --prefer-offline --no-audit --progress=f
 # 再拷源码构建
 COPY frontend/ ./
 ENV VITE_BASE_URL=${VITE_BASE_URL}
+ENV VITE_BUILD_SHA=${VITE_BUILD_SHA}
 # 与 DEPLOY.md 第 37 行的线上构建命令一致：直接 vite build，
 # 跳过 vue-tsc 类型检查（项目代码有遗留 TS 错误，主机部署流程也跳过）
-RUN node_modules/.bin/vite build
+RUN test -n "${VITE_BUILD_SHA}" && node_modules/.bin/vite build
 
 
 # ------------------------------------------------------------
