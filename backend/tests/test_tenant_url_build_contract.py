@@ -19,6 +19,19 @@ def _package(path: Path) -> dict:
     return json.loads(path.read_text(encoding="utf-8"))
 
 
+def _has_direct_builder_dockerfile_build(text: str) -> bool:
+    normalized = re.sub(r"\\\s*\n\s*", " ", text)
+    cli = r"(?:docker|podman|[\"']?\$\{?CONTAINER_CLI\}?[\"']?)"
+    file_option = r"(?:-f\s+|--file(?:=|\s+))"
+    return bool(
+        re.search(
+            rf"(?<![A-Za-z0-9_]){cli}\s+(?:buildx\s+)?build\b[^\n]*"
+            rf"{file_option}[^\n]*deploy/docker/Dockerfile",
+            normalized,
+        )
+    )
+
+
 def test_root_package_is_only_playwright_owner(repo_root: Path):
     root = _package(repo_root / "package.json")
     frontend = _package(repo_root / "frontend" / "package.json")
@@ -59,57 +72,55 @@ def test_dockerfile_requires_vite_build_sha(repo_root: Path):
 
 
 def test_direct_dockerfile_callers_are_provenance_safe(repo_root: Path):
-    expected_callers = {
-        ".gitlab-ci.yml": "build-arg:VITE_BUILD_SHA=${CI_COMMIT_SHA}",
-        "scripts/build_builder_image.sh": (
-            '--build-arg "VITE_BUILD_SHA=${BUILD_SHA}"'
-        ),
-        "scripts/deploy_k8s_dev.sh": '--build-arg "VITE_BUILD_SHA=${BUILD_SHA}"',
-        "scripts/deploy_k8s_dev_web_terminal.sh": (
-            '--build-arg "VITE_BUILD_SHA=${BUILD_SHA}"'
-        ),
-        "scripts/deploy_login_sync_hotfix.sh": (
-            '--build-arg "VITE_BUILD_SHA=${BUILD_SHA}"'
-        ),
-        "scripts/deploy_online_latest_kubesphere.sh": (
-            '--build-arg "VITE_BUILD_SHA=${GIT_FULL_SHA}"'
-        ),
-        "scripts/deploy_platform_proxy_hotfix.sh": (
-            '--build-arg "VITE_BUILD_SHA=${BUILD_SHA}"'
-        ),
-        "scripts/rebuild_images_dev_main.sh": (
-            '--build-arg "VITE_BUILD_SHA=${BUILD_SHA}"'
-        ),
-    }
-    caller_patterns = (
-        re.compile(r"-f\s+[^\n]*deploy/docker/Dockerfile"),
-        re.compile(r"filename=deploy/docker/Dockerfile"),
-        re.compile(r"dockerfile:\s*deploy/docker/Dockerfile"),
-    )
-    discovered: set[str] = set()
-    search_roots = [
-        repo_root / ".gitlab-ci.yml",
-        repo_root / "DEPLOY_CONTAINER.md",
-        repo_root / "deploy",
-        repo_root / "scripts",
-    ]
-    candidates = []
-    for root in search_roots:
-        candidates.extend([root] if root.is_file() else root.rglob("*"))
-    for path in candidates:
-        if not path.is_file():
+    tracked = subprocess.run(
+        ["git", "ls-files", "-z"],
+        cwd=repo_root,
+        capture_output=True,
+        check=True,
+    ).stdout.split(b"\0")
+    direct_callers: set[str] = set()
+    for raw_relative_path in tracked:
+        if not raw_relative_path:
             continue
+        relative_path = raw_relative_path.decode()
+        if relative_path == "backend/tests/test_tenant_url_build_contract.py":
+            continue
+        path = repo_root / relative_path
         try:
             text = path.read_text(encoding="utf-8")
         except UnicodeDecodeError:
             continue
-        if any(pattern.search(text) for pattern in caller_patterns):
-            discovered.add(path.relative_to(repo_root).as_posix())
+        if "filename=deploy/docker/Dockerfile" in text:
+            direct_callers.add(relative_path)
+        if _has_direct_builder_dockerfile_build(text):
+            direct_callers.add(relative_path)
+        if (
+            relative_path == "scripts/build_builder_image.sh"
+            and "deploy/docker/Dockerfile" in text
+        ):
+            direct_callers.add(relative_path)
 
-    assert discovered == set(expected_callers)
-    for relative_path, required_text in expected_callers.items():
-        text = (repo_root / relative_path).read_text(encoding="utf-8")
-        assert required_text in text, relative_path
+    assert direct_callers == {
+        ".gitlab-ci.yml",
+        "scripts/build_builder_image.sh",
+    }
+    ci = (repo_root / ".gitlab-ci.yml").read_text(encoding="utf-8")
+    assert "build-arg:VITE_BUILD_SHA=${CI_COMMIT_SHA}" in ci
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        "docker build -f deploy/docker/Dockerfile .",
+        "docker build --file deploy/docker/Dockerfile .",
+        "docker build --file=deploy/docker/Dockerfile .",
+        "docker buildx build --file deploy/docker/Dockerfile .",
+        "podman build --file=deploy/docker/Dockerfile .",
+        '${CONTAINER_CLI} build -f "$ROOT/deploy/docker/Dockerfile" .',
+    ],
+)
+def test_direct_caller_scanner_covers_dockerfile_option_forms(command: str):
+    assert _has_direct_builder_dockerfile_build(command)
 
 
 def test_manual_build_paths_use_shared_wrapper(repo_root: Path):
@@ -152,7 +163,7 @@ def test_compose_uses_prebuilt_image_only(repo_root: Path):
     assert "VITE_BUILD_SHA" not in compose_env
 
 
-def test_shared_wrapper_gates_inputs_before_reading_head(repo_root: Path):
+def test_shared_wrapper_builds_from_head_archive_snapshot(repo_root: Path):
     text = (repo_root / "scripts" / "build_builder_image.sh").read_text(
         encoding="utf-8"
     )
@@ -160,23 +171,19 @@ def test_shared_wrapper_gates_inputs_before_reading_head(repo_root: Path):
     assert "eval" not in text
     assert 'CONTAINER_CLI="${CONTAINER_CLI:-docker}"' in text
     assert 'IMAGE="${IMAGE:-apaas-builder:${IMAGE_TAG:-latest}}"' in text
-    for build_input in (
-        "frontend",
-        "backend",
-        "admin-spa",
-        "deploy/docker",
-        ".dockerignore",
-    ):
-        assert build_input in text
-    assert "git diff --quiet --cached" in text
-    assert "git diff --quiet --" in text
-    assert "git ls-files --others --exclude-standard" in text
-    assert re.search(
-        r"assert_clean_build_inputs\s*\n"
-        r"\s*BUILD_SHA=.*git .*rev-parse HEAD",
-        text,
-    )
+    assert 'REPO_ROOT="${REPO_ROOT:-' in text
+    assert "git -C \"$REPO_ROOT\" rev-parse HEAD" in text
     assert r"^[0-9a-f]{40}$" in text
+    assert 'SNAPSHOT_DIR="$(mktemp -d' in text
+    assert 'trap cleanup EXIT' in text
+    assert 'archive --format=tar "$BUILD_SHA"' in text
+    assert 'tar -xf - -C "$SNAPSHOT_DIR"' in text
+    assert '[ -f "$SNAPSHOT_DIR/deploy/docker/Dockerfile" ]' in text
+    assert '"$SNAPSHOT_DIR"' in text
+    assert text.index("rev-parse HEAD") < text.index("archive --format=tar")
+    assert text.index("archive --format=tar") < text.index(
+        '"$SNAPSHOT_DIR/deploy/docker/Dockerfile"'
+    )
 
 
 def _init_wrapper_repo(repo_root: Path, tmp_path: Path) -> tuple[Path, Path, Path]:
@@ -197,11 +204,16 @@ def _init_wrapper_repo(repo_root: Path, tmp_path: Path) -> tuple[Path, Path, Pat
         "deploy/docker/Dockerfile",
         "deploy/docker/runtime.txt",
         ".dockerignore",
+        ".gitignore",
     ):
         (temp_repo / relative_path).write_text(
             f"tracked fixture: {relative_path}\n",
             encoding="utf-8",
         )
+    (temp_repo / ".gitignore").write_text(
+        "backend/.pytest_cache/\n",
+        encoding="utf-8",
+    )
 
     wrapper = temp_repo / "scripts" / "build_builder_image.sh"
     shutil.copy2(repo_root / "scripts" / "build_builder_image.sh", wrapper)
@@ -227,74 +239,38 @@ def _init_wrapper_repo(repo_root: Path, tmp_path: Path) -> tuple[Path, Path, Pat
     fake_cli.write_text(
         "#!/usr/bin/env bash\n"
         "set -euo pipefail\n"
-        "printf '%s\\n' \"$@\" > \"$FAKE_CONTAINER_LOG\"\n",
+        "if [ \"${1:-}\" = buildx ] && [ \"${2:-}\" = version ]; then\n"
+        "  [ \"${FAKE_BUILDX_AVAILABLE:-0}\" = 1 ]\n"
+        "  exit\n"
+        "fi\n"
+        "{ printf '%s\\n' '==='; printf '%s\\n' \"$@\"; } "
+        ">> \"$FAKE_CONTAINER_LOG\"\n"
+        "if { [ \"${1:-}\" = build ] || "
+        "{ [ \"${1:-}\" = buildx ] && [ \"${2:-}\" = build ]; }; }; then\n"
+        "  context=\"${!#}\"\n"
+        "  printf '%s\\n' \"$context\" > \"$FAKE_CONTEXT_PATH\"\n"
+        "  rm -rf \"$FAKE_CONTEXT_COPY\"\n"
+        "  mkdir -p \"$FAKE_CONTEXT_COPY\"\n"
+        "  cp -a \"$context/.\" \"$FAKE_CONTEXT_COPY/\"\n"
+        "fi\n",
         encoding="utf-8",
     )
     fake_cli.chmod(0o755)
     return temp_repo, wrapper, fake_cli
 
 
-@pytest.mark.parametrize(
-    ("dirty_kind", "relative_path"),
-    [
-        ("staged", "frontend/source.txt"),
-        ("unstaged", "backend/source.txt"),
-        ("untracked", "deploy/docker/untracked.txt"),
-    ],
-)
-def test_shared_wrapper_fails_closed_before_container_cli(
-    repo_root: Path,
+def _wrapper_env(
+    temp_repo: Path,
+    fake_cli: Path,
     tmp_path: Path,
-    dirty_kind: str,
-    relative_path: str,
-):
-    temp_repo, wrapper, fake_cli = _init_wrapper_repo(repo_root, tmp_path)
-    dirty_path = temp_repo / relative_path
-    if dirty_kind == "untracked":
-        dirty_path.write_text("untracked Docker input\n", encoding="utf-8")
-    else:
-        dirty_path.write_text("dirty Docker input\n", encoding="utf-8")
-        if dirty_kind == "staged":
-            subprocess.run(
-                ["git", "add", relative_path], cwd=temp_repo, check=True
-            )
-
-    call_log = tmp_path / "container-cli.log"
-    result = subprocess.run(
-        [str(wrapper)],
-        cwd=temp_repo,
-        env={
-            **os.environ,
-            "CONTAINER_CLI": str(fake_cli),
-            "FAKE_CONTAINER_LOG": str(call_log),
-        },
-        text=True,
-        capture_output=True,
-        check=False,
-    )
-
-    assert result.returncode != 0
-    assert "Docker build inputs are dirty" in result.stderr
-    assert not call_log.exists()
-
-
-def test_shared_wrapper_clean_path_passes_full_sha_and_build_args(
-    repo_root: Path,
-    tmp_path: Path,
-):
-    temp_repo, wrapper, fake_cli = _init_wrapper_repo(repo_root, tmp_path)
-    call_log = tmp_path / "container-cli.log"
-    expected_sha = subprocess.run(
-        ["git", "rev-parse", "HEAD"],
-        cwd=temp_repo,
-        text=True,
-        capture_output=True,
-        check=True,
-    ).stdout.strip()
-    env = {
+) -> dict[str, str]:
+    return {
         **os.environ,
+        "REPO_ROOT": str(temp_repo),
         "CONTAINER_CLI": str(fake_cli),
-        "FAKE_CONTAINER_LOG": str(call_log),
+        "FAKE_CONTAINER_LOG": str(tmp_path / "container-cli.log"),
+        "FAKE_CONTEXT_PATH": str(tmp_path / "context-path.log"),
+        "FAKE_CONTEXT_COPY": str(tmp_path / "context-copy"),
         "IMAGE": "registry.example.invalid/builder:contract",
         "PLATFORM": "linux/arm64",
         "VITE_BASE_URL": "/builder/",
@@ -311,6 +287,37 @@ def test_shared_wrapper_clean_path_passes_full_sha_and_build_args(
         "PIP_INDEX_URL": "https://pypi.example.invalid/simple",
     }
 
+
+def _fake_invocations(path: Path) -> list[list[str]]:
+    return [
+        block.splitlines()
+        for block in path.read_text(encoding="utf-8").split("===\n")
+        if block.strip()
+    ]
+
+
+def test_shared_wrapper_excludes_live_dirty_and_ignored_files_from_context(
+    repo_root: Path,
+    tmp_path: Path,
+):
+    temp_repo, wrapper, fake_cli = _init_wrapper_repo(repo_root, tmp_path)
+    (temp_repo / "frontend/source.txt").write_text(
+        "staged live content\n", encoding="utf-8"
+    )
+    subprocess.run(
+        ["git", "add", "frontend/source.txt"], cwd=temp_repo, check=True
+    )
+    (temp_repo / "backend/source.txt").write_text(
+        "unstaged live content\n", encoding="utf-8"
+    )
+    (temp_repo / "deploy/docker/untracked.txt").write_text(
+        "untracked live content\n", encoding="utf-8"
+    )
+    ignored = temp_repo / "backend/.pytest_cache/sentinel.txt"
+    ignored.parent.mkdir(parents=True)
+    ignored.write_text("ignored but Docker-included\n", encoding="utf-8")
+
+    env = _wrapper_env(temp_repo, fake_cli, tmp_path)
     result = subprocess.run(
         [str(wrapper)],
         cwd=temp_repo,
@@ -321,7 +328,53 @@ def test_shared_wrapper_clean_path_passes_full_sha_and_build_args(
     )
 
     assert result.returncode == 0, result.stderr
-    assert call_log.read_text(encoding="utf-8").splitlines() == [
+    context_copy = Path(env["FAKE_CONTEXT_COPY"])
+    assert (context_copy / "frontend/source.txt").read_text(
+        encoding="utf-8"
+    ) == "tracked fixture: frontend/source.txt\n"
+    assert (context_copy / "backend/source.txt").read_text(
+        encoding="utf-8"
+    ) == "tracked fixture: backend/source.txt\n"
+    assert (context_copy / "deploy/docker/Dockerfile").is_file()
+    assert not (context_copy / "deploy/docker/untracked.txt").exists()
+    assert not (context_copy / "backend/.pytest_cache/sentinel.txt").exists()
+
+    snapshot_context = Path(
+        Path(env["FAKE_CONTEXT_PATH"]).read_text(encoding="utf-8").strip()
+    )
+    assert temp_repo not in snapshot_context.parents
+    assert not snapshot_context.exists()
+
+
+def test_shared_wrapper_clean_path_passes_full_sha_and_build_args(
+    repo_root: Path,
+    tmp_path: Path,
+):
+    temp_repo, wrapper, fake_cli = _init_wrapper_repo(repo_root, tmp_path)
+    call_log = tmp_path / "container-cli.log"
+    expected_sha = subprocess.run(
+        ["git", "rev-parse", "HEAD"],
+        cwd=temp_repo,
+        text=True,
+        capture_output=True,
+        check=True,
+    ).stdout.strip()
+    env = _wrapper_env(temp_repo, fake_cli, tmp_path)
+
+    result = subprocess.run(
+        [str(wrapper)],
+        cwd=temp_repo,
+        env=env,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+
+    assert result.returncode == 0, result.stderr
+    snapshot_context = Path(
+        Path(env["FAKE_CONTEXT_PATH"]).read_text(encoding="utf-8").strip()
+    )
+    assert _fake_invocations(call_log) == [[
         "build",
         "--platform",
         "linux/arm64",
@@ -352,11 +405,53 @@ def test_shared_wrapper_clean_path_passes_full_sha_and_build_args(
         "--build-arg",
         "PIP_INDEX_URL=https://pypi.example.invalid/simple",
         "-f",
-        str(temp_repo / "deploy/docker/Dockerfile"),
+        str(snapshot_context / "deploy/docker/Dockerfile"),
         "-t",
         "registry.example.invalid/builder:contract",
-        str(temp_repo),
-    ]
+        str(snapshot_context),
+    ]]
+    assert not snapshot_context.exists()
+
+
+@pytest.mark.parametrize(
+    ("buildx_available", "expected_prefixes"),
+    [
+        (True, [("buildx", "build")]),
+        (False, [("build",), ("push",)]),
+    ],
+)
+def test_shared_wrapper_push_modes(
+    repo_root: Path,
+    tmp_path: Path,
+    buildx_available: bool,
+    expected_prefixes: list[tuple[str, ...]],
+):
+    temp_repo, wrapper, fake_cli = _init_wrapper_repo(repo_root, tmp_path)
+    env = _wrapper_env(temp_repo, fake_cli, tmp_path)
+    env["PUSH"] = "1"
+    env["FAKE_BUILDX_AVAILABLE"] = "1" if buildx_available else "0"
+
+    result = subprocess.run(
+        [str(wrapper)],
+        cwd=temp_repo,
+        env=env,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+
+    assert result.returncode == 0, result.stderr
+    invocations = _fake_invocations(Path(env["FAKE_CONTAINER_LOG"]))
+    assert [tuple(call[: len(prefix)]) for call, prefix in zip(
+        invocations, expected_prefixes, strict=True
+    )] == expected_prefixes
+    if buildx_available:
+        assert "--push" in invocations[0]
+    else:
+        assert invocations[1] == [
+            "push",
+            "registry.example.invalid/builder:contract",
+        ]
 
 
 @pytest.mark.parametrize(
@@ -370,17 +465,32 @@ def test_shared_wrapper_clean_path_passes_full_sha_and_build_args(
         "scripts/rebuild_images_dev_main.sh",
     ],
 )
-def test_git_docker_callers_require_clean_build_inputs(
+def test_git_docker_callers_delegate_to_snapshot_wrapper(
     repo_root: Path,
     relative_path: str,
 ):
     text = (repo_root / relative_path).read_text(encoding="utf-8")
 
-    assert "assert_clean_build_inputs" in text
-    assert "git diff --quiet --cached" in text
-    assert "git diff --quiet --" in text
-    assert "git ls-files --others --exclude-standard" in text
-    assert "rev-parse HEAD" in text
+    assert "build_builder_image.sh" in text
+    assert "PUSH=1" in text
+    assert "assert_clean_build_inputs" not in text
+    assert "deploy/docker/Dockerfile" not in text
+    assert not _has_direct_builder_dockerfile_build(text)
+    if relative_path == "scripts/deploy_online_latest_kubesphere.sh":
+        assert 'REPO_ROOT="$WORKDIR"' in text
+        assert '"$WORKDIR/scripts/build_builder_image.sh"' in text
+    else:
+        assert 'REPO_ROOT="$REPO_ROOT"' in text
+        assert '"$REPO_ROOT/scripts/build_builder_image.sh"' in text
+
+
+def test_rebuild_script_invokes_wrapper_for_dev_and_main(repo_root: Path):
+    text = (repo_root / "scripts" / "rebuild_images_dev_main.sh").read_text(
+        encoding="utf-8"
+    )
+
+    assert 'build_image "$DEV_TAG" "$DEV_MCP_PUBLIC_BASE"' in text
+    assert 'build_image "$MAIN_TAG" "$MAIN_MCP_PUBLIC_BASE"' in text
 
 
 def test_fixture_fails_closed_on_dirty_build_inputs(repo_root: Path):

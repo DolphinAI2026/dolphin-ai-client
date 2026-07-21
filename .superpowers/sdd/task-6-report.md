@@ -399,3 +399,94 @@ exit code 0
 
 本轮没有执行真实容器镜像构建；container argv 与 fail-closed 行为由 fake CLI 合同
 验证，Compose 由当前可用的 `podman-compose 1.0.6` 完成配置展开。
+
+## Task6 第二轮 Important：HEAD snapshot 构建架构收口
+
+日期：2026-07-21
+
+第二轮复审指出两个相关问题：共享 wrapper 仍从 live worktree 构建，无法排除
+Git-ignored 但会进入 Docker context 的文件，也存在 clean-check 与实际 build 之间的
+TOCTOU；六个部署脚本仍各自复制直接 Docker/buildx 构建逻辑。本轮采用单一 HEAD
+snapshot 架构收口，未处理复审中的三个 Minor。
+
+测试扫描器初稿曾把合同文件里的命令 fixture 当成真实 caller，并漏识别
+`${CONTAINER_CLI}` 形式；修正测试自身后取得有效 TDD RED：
+
+```text
+backend/.venv/bin/python -m pytest -q \
+  backend/tests/test_tenant_url_build_contract.py
+
+12 failed, 16 passed
+```
+
+失败覆盖：
+
+- 全仓 tracked caller 集合仍包含六个直接构建脚本；
+- wrapper 没有 `REPO_ROOT` override、`git archive`、外部 snapshot 或 cleanup trap；
+- staged/unstaged live 内容仍会被旧 clean gate 拒绝，ignored sentinel 的隔离合同失败；
+- 最终 Docker context 仍是 live repository；
+- `PUSH=1` 的 buildx `--push` 和普通 build 后 push 路径不存在；
+- 六脚本尚未调用共享 wrapper。
+
+实现：
+
+- wrapper 解析并 canonicalize `REPO_ROOT`，确认它是 Git worktree，读取并校验完整
+  40 位小写 `HEAD`；
+- 使用 `git archive --format=tar "$BUILD_SHA"` 解到
+  `/tmp/apaas-builder-image.XXXXXX`，校验 snapshot 内 Dockerfile，最终 Dockerfile
+  和 context 都只指向 snapshot；
+- `trap cleanup EXIT` 在成功、构建失败或 archive 失败时清理 snapshot；
+- live staged、unstaged、普通 untracked、Git-ignored 但 Docker-included 文件均不
+  进入 context，同时消除 check/build TOCTOU；
+- wrapper 保留全部 Vite、基础镜像和 registry build args；
+- 默认只执行本地 build；`PUSH=1` 且 buildx 可用时执行 `buildx build --push`，
+  否则普通 build 后调用同一 `CONTAINER_CLI push`；
+- 六个部署脚本删除 `assert_clean_build_inputs`、直接 Dockerfile、build/buildx/push
+  逻辑，统一调用 wrapper；online clone 显式传 `REPO_ROOT="$WORKDIR"` 并执行克隆目录
+  内 wrapper；双镜像 rebuild 通过两次 `build_image` 调用分别执行 wrapper。
+
+GREEN：
+
+```text
+backend/.venv/bin/python -m pytest -q \
+  backend/tests/test_tenant_url_build_contract.py
+
+28 passed in 0.83s
+
+backend/.venv/bin/python -m pytest -q \
+  backend/tests/test_tenant_url_build_contract.py \
+  -k 'shared_wrapper or direct_dockerfile_callers or direct_caller_scanner or git_docker_callers or rebuild_script'
+
+20 passed, 8 deselected
+```
+
+动态 fake CLI snapshot 合同在真实临时 Git repo 中同时放入 staged frontend、
+unstaged backend、non-ignored untracked Docker 文件和
+`backend/.pytest_cache/sentinel.txt` ignored 文件。传入 CLI 的 snapshot 只包含
+tracked HEAD 内容，完整 HEAD 作为 `VITE_BUILD_SHA`，所有 sentinel 均不存在；
+wrapper 返回后原 snapshot path 已删除。buildx 与 fallback push 两条 argv 路径均
+通过。
+
+caller 合同通过 `git ls-files` 扫描全仓 tracked 文件，并识别反斜杠续行以及 `-f`、
+`--file path`、`--file=path` 形式。允许的直接 Builder Dockerfile caller 仅为
+GitLab CI BuildKit 和共享 wrapper；CI 继续使用完整 `${CI_COMMIT_SHA}`。
+
+其他验证：
+
+```text
+bash -n scripts/build_builder_image.sh \
+  scripts/deploy_k8s_dev.sh \
+  scripts/deploy_k8s_dev_web_terminal.sh \
+  scripts/deploy_login_sync_hotfix.sh \
+  scripts/deploy_online_latest_kubesphere.sh \
+  scripts/deploy_platform_proxy_hotfix.sh \
+  scripts/rebuild_images_dev_main.sh
+
+bash-n-seven=PASS
+
+git diff --check
+exit code 0
+```
+
+本轮未执行真实 Docker/Podman 镜像构建或 push；snapshot 内容、完整 build args、
+buildx push、fallback push 与 cleanup 由 fake CLI 合同验证。

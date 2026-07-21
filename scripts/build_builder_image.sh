@@ -2,11 +2,12 @@
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-REPO_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
+REPO_ROOT="${REPO_ROOT:-${SCRIPT_DIR}/..}"
 
 CONTAINER_CLI="${CONTAINER_CLI:-docker}"
 IMAGE="${IMAGE:-apaas-builder:${IMAGE_TAG:-latest}}"
 PLATFORM="${PLATFORM:-linux/amd64}"
+PUSH="${PUSH:-0}"
 VITE_BASE_URL="${VITE_BASE_URL:-/ai-builder/}"
 VITE_ADMIN_BASE="${VITE_ADMIN_BASE:-/ai-builder/admin/}"
 VITE_API_BASE_URL="${VITE_API_BASE_URL:-/ai-builder/api}"
@@ -30,14 +31,12 @@ need() {
   command -v "$1" >/dev/null 2>&1 || die "missing command: $1"
 }
 
-assert_clean_build_inputs() {
-  (
-    cd "$REPO_ROOT"
-    build_inputs=(frontend backend admin-spa deploy/docker .dockerignore)
-    git diff --quiet --cached -- "${build_inputs[@]}" &&
-    git diff --quiet -- "${build_inputs[@]}" &&
-    [ -z "$(git ls-files --others --exclude-standard -- "${build_inputs[@]}")" ]
-  ) || die "Docker build inputs are dirty; commit them before building"
+SNAPSHOT_DIR=""
+
+cleanup() {
+  if [ -n "$SNAPSHOT_DIR" ] && [ -d "$SNAPSHOT_DIR" ]; then
+    rm -rf "$SNAPSHOT_DIR"
+  fi
 }
 
 main() {
@@ -45,14 +44,29 @@ main() {
   local -a build_args
 
   need git
+  need tar
+  need mktemp
   need "$CONTAINER_CLI"
-  assert_clean_build_inputs
+  REPO_ROOT="$(cd "$REPO_ROOT" && pwd -P)" \
+    || die "invalid REPO_ROOT: $REPO_ROOT"
+  git -C "$REPO_ROOT" rev-parse --is-inside-work-tree >/dev/null 2>&1 \
+    || die "REPO_ROOT is not a Git worktree: $REPO_ROOT"
   BUILD_SHA="$(git -C "$REPO_ROOT" rev-parse HEAD)"
   [[ "$BUILD_SHA" =~ ^[0-9a-f]{40}$ ]] \
     || die "HEAD is not a full lowercase Git SHA"
+  case "$PUSH" in
+    0|1) ;;
+    *) die "PUSH must be 0 or 1" ;;
+  esac
+
+  SNAPSHOT_DIR="$(mktemp -d /tmp/apaas-builder-image.XXXXXX)"
+  trap cleanup EXIT
+  git -C "$REPO_ROOT" archive --format=tar "$BUILD_SHA" \
+    | tar -xf - -C "$SNAPSHOT_DIR"
+  [ -f "$SNAPSHOT_DIR/deploy/docker/Dockerfile" ] \
+    || die "snapshot is missing deploy/docker/Dockerfile"
 
   build_args=(
-    build
     --platform "$PLATFORM"
     --build-arg "VITE_BASE_URL=${VITE_BASE_URL}"
     --build-arg "VITE_BUILD_SHA=${BUILD_SHA}"
@@ -67,14 +81,22 @@ main() {
     --build-arg "DOCKER_CLI_IMAGE=${DOCKER_CLI_IMAGE}"
     --build-arg "NPM_REGISTRY=${NPM_REGISTRY}"
     --build-arg "PIP_INDEX_URL=${PIP_INDEX_URL}"
-    -f "$REPO_ROOT/deploy/docker/Dockerfile"
+    -f "$SNAPSHOT_DIR/deploy/docker/Dockerfile"
     -t "$IMAGE"
-    "$REPO_ROOT"
   )
 
   printf '[build-builder-image] image=%s platform=%s sha=%s\n' \
     "$IMAGE" "$PLATFORM" "$BUILD_SHA"
-  "$CONTAINER_CLI" "${build_args[@]}"
+  if [ "$PUSH" = "1" ] \
+    && "$CONTAINER_CLI" buildx version >/dev/null 2>&1; then
+    "$CONTAINER_CLI" buildx build \
+      "${build_args[@]}" --push "$SNAPSHOT_DIR"
+  else
+    "$CONTAINER_CLI" build "${build_args[@]}" "$SNAPSHOT_DIR"
+    if [ "$PUSH" = "1" ]; then
+      "$CONTAINER_CLI" push "$IMAGE"
+    fi
+  fi
 }
 
 main "$@"

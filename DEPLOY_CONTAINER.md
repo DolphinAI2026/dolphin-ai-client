@@ -129,9 +129,13 @@ VITE_BASE_URL=/ai-builder/ \
 scripts/build_builder_image.sh
 ```
 
-共享构建脚本会先确认实际 Docker 输入没有 staged、unstaged 或 relevant untracked
-改动，再读取完整 `HEAD` 并传入 `VITE_BUILD_SHA`。有未提交构建输入时会拒绝构建，
-避免镜像内容与 build SHA 不一致。
+共享构建脚本会校验完整 `HEAD`，再通过 `git archive` 把该 revision 解到仓库外的
+临时 snapshot，并只用 snapshot 作为 Docker context。live worktree 中的 staged、
+unstaged、untracked 或 Git-ignored 文件都不会进入镜像，因此镜像内容与
+`VITE_BUILD_SHA` 始终来自同一 commit；构建结束或失败时 snapshot 会自动清理。
+
+默认只构建本地镜像。设置 `PUSH=1` 时，Docker buildx 可用则执行
+`buildx build --push`，否则先普通 build 再调用 container CLI push。
 
 构建阶段：
 

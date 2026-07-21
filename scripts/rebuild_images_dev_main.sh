@@ -12,6 +12,7 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 
 IMAGE_REPO="${IMAGE_REPO:-hub.dfy.definesys.cn/ai-builder/apaas-builder}"
+CONTAINER_CLI="${CONTAINER_CLI:-docker}"
 PLATFORM="${PLATFORM:-linux/amd64}"
 VITE_BASE_URL="${VITE_BASE_URL:-/ai-builder/}"
 VITE_ADMIN_BASE="${VITE_ADMIN_BASE:-/ai-builder/admin/}"
@@ -24,23 +25,8 @@ GIT_SHA="${GIT_SHA:-$(git -C "$REPO_ROOT" rev-parse --short HEAD)}"
 DEV_TAG="${DEV_TAG:-dev-${DATE_TAG}-${GIT_SHA}}"
 MAIN_TAG="${MAIN_TAG:-main-${DATE_TAG}-${GIT_SHA}}"
 
-CAN_BUILDX=0
-if command -v docker >/dev/null 2>&1 && docker buildx version >/dev/null 2>&1; then
-  CAN_BUILDX=1
-fi
-
 need() {
   command -v "$1" >/dev/null 2>&1 || { echo "missing command: $1" >&2; exit 1; }
-}
-
-assert_clean_build_inputs() {
-  (
-    cd "$REPO_ROOT"
-    build_inputs=(frontend backend admin-spa deploy/docker)
-    git diff --quiet --cached -- "${build_inputs[@]}"
-    git diff --quiet -- "${build_inputs[@]}"
-    [ -z "$(git ls-files --others --exclude-standard -- "${build_inputs[@]}")" ]
-  ) || { echo "Docker build inputs are dirty; commit them before building" >&2; exit 1; }
 }
 
 build_image() {
@@ -49,44 +35,23 @@ build_image() {
   local image="${IMAGE_REPO}:${tag}"
 
   echo "[build] ${image}"
-
-  if [ "$CAN_BUILDX" = "1" ]; then
-    docker buildx build \
-      --platform "$PLATFORM" \
-      --build-arg "VITE_BASE_URL=${VITE_BASE_URL}" \
-      --build-arg "VITE_BUILD_SHA=${BUILD_SHA}" \
-      --build-arg "VITE_ADMIN_BASE=${VITE_ADMIN_BASE}" \
-      --build-arg "VITE_API_BASE_URL=${VITE_API_BASE_URL}" \
-      --build-arg "VITE_MCP_PUBLIC_BASE=${mcp_public}" \
-      -f "$REPO_ROOT/deploy/docker/Dockerfile" \
-      -t "$image" \
-      --push \
-      "$REPO_ROOT"
-  else
-    docker build \
-      --build-arg "VITE_BASE_URL=${VITE_BASE_URL}" \
-      --build-arg "VITE_BUILD_SHA=${BUILD_SHA}" \
-      --build-arg "VITE_ADMIN_BASE=${VITE_ADMIN_BASE}" \
-      --build-arg "VITE_API_BASE_URL=${VITE_API_BASE_URL}" \
-      --build-arg "VITE_MCP_PUBLIC_BASE=${mcp_public}" \
-      -f "$REPO_ROOT/deploy/docker/Dockerfile" \
-      -t "$image" \
-      "$REPO_ROOT"
-    docker push "$image"
-  fi
+  REPO_ROOT="$REPO_ROOT" \
+  CONTAINER_CLI="$CONTAINER_CLI" \
+  IMAGE="$image" \
+  PLATFORM="$PLATFORM" \
+  VITE_BASE_URL="$VITE_BASE_URL" \
+  VITE_ADMIN_BASE="$VITE_ADMIN_BASE" \
+  VITE_API_BASE_URL="$VITE_API_BASE_URL" \
+  VITE_MCP_PUBLIC_BASE="$mcp_public" \
+  PUSH=1 \
+    "$REPO_ROOT/scripts/build_builder_image.sh"
 
   echo "[push] ${image}"
 }
 
 main() {
-  need docker
+  need "$CONTAINER_CLI"
   need git
-  assert_clean_build_inputs
-  BUILD_SHA="$(git -C "$REPO_ROOT" rev-parse HEAD)"
-  [[ "$BUILD_SHA" =~ ^[0-9a-f]{40}$ ]] || {
-    echo "HEAD is not a full lowercase Git SHA" >&2
-    exit 1
-  }
 
   echo "repository: $REPO_ROOT"
   echo "platform: $PLATFORM"

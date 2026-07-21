@@ -17,6 +17,7 @@ DEPLOY_TARGET="${DEPLOY_TARGET:-dev}"
 
 NAMESPACE="${NAMESPACE:-apaas-builder}"
 IMAGE_REPO="${IMAGE_REPO:-hub.dfy.definesys.cn/ai-builder/apaas-builder}"
+CONTAINER_CLI="${CONTAINER_CLI:-docker}"
 PLATFORM="${PLATFORM:-linux/amd64}"
 IMAGE_TAG="${IMAGE_TAG:-}"
 IMAGE_PULL_SECRET="${IMAGE_PULL_SECRET:-regcred-hub-dfy}"
@@ -70,16 +71,6 @@ need() {
   command -v "$1" >/dev/null 2>&1 || die "missing command: $1"
 }
 
-assert_clean_build_inputs() {
-  (
-    cd "$WORKDIR"
-    build_inputs=(frontend backend admin-spa deploy/docker)
-    git diff --quiet --cached -- "${build_inputs[@]}"
-    git diff --quiet -- "${build_inputs[@]}"
-    [ -z "$(git ls-files --others --exclude-standard -- "${build_inputs[@]}")" ]
-  ) || die "Docker build inputs are dirty; commit them before building"
-}
-
 base64_decode() {
   if base64 --help 2>&1 | grep -q -- '-d'; then
     base64 -d
@@ -112,14 +103,14 @@ docker_login_if_requested() {
     local registry
     registry="${IMAGE_REPO%%/*}"
     log "docker login: ${registry}"
-    printf '%s' "$DOCKER_PASSWORD" | docker login "$registry" -u "$DOCKER_USERNAME" --password-stdin
+    printf '%s' "$DOCKER_PASSWORD" \
+      | "$CONTAINER_CLI" login "$registry" -u "$DOCKER_USERNAME" --password-stdin
   else
-    warn "DOCKER_USERNAME/DOCKER_PASSWORD not set; assuming docker is already logged in"
+    warn "DOCKER_USERNAME/DOCKER_PASSWORD not set; assuming container CLI is already logged in"
   fi
 }
 
 build_and_push_image() {
-  assert_clean_build_inputs
   GIT_FULL_SHA="$(git -C "$WORKDIR" rev-parse HEAD)"
   [[ "$GIT_FULL_SHA" =~ ^[0-9a-f]{40}$ ]] || die "HEAD is not a full lowercase Git SHA"
   if [ -z "$IMAGE_TAG" ]; then
@@ -128,30 +119,16 @@ build_and_push_image() {
   IMAGE="${IMAGE_REPO}:${IMAGE_TAG}"
 
   log "build and push image: ${IMAGE}"
-  if docker buildx version >/dev/null 2>&1; then
-    docker buildx build \
-      --platform "$PLATFORM" \
-      --build-arg "VITE_BASE_URL=${VITE_BASE_URL}" \
-      --build-arg "VITE_BUILD_SHA=${GIT_FULL_SHA}" \
-      --build-arg "VITE_ADMIN_BASE=${VITE_ADMIN_BASE}" \
-      --build-arg "VITE_API_BASE_URL=${VITE_API_BASE_URL}" \
-      --build-arg "VITE_MCP_PUBLIC_BASE=${VITE_MCP_PUBLIC_BASE:-https://${HOST}/ai-builder}" \
-      -f "$WORKDIR/deploy/docker/Dockerfile" \
-      -t "$IMAGE" \
-      --push \
-      "$WORKDIR"
-  else
-    docker build \
-      --build-arg "VITE_BASE_URL=${VITE_BASE_URL}" \
-      --build-arg "VITE_BUILD_SHA=${GIT_FULL_SHA}" \
-      --build-arg "VITE_ADMIN_BASE=${VITE_ADMIN_BASE}" \
-      --build-arg "VITE_API_BASE_URL=${VITE_API_BASE_URL}" \
-      --build-arg "VITE_MCP_PUBLIC_BASE=${VITE_MCP_PUBLIC_BASE:-https://${HOST}/ai-builder}" \
-      -f "$WORKDIR/deploy/docker/Dockerfile" \
-      -t "$IMAGE" \
-      "$WORKDIR"
-    docker push "$IMAGE"
-  fi
+  REPO_ROOT="$WORKDIR" \
+  CONTAINER_CLI="$CONTAINER_CLI" \
+  IMAGE="$IMAGE" \
+  PLATFORM="$PLATFORM" \
+  VITE_BASE_URL="$VITE_BASE_URL" \
+  VITE_ADMIN_BASE="$VITE_ADMIN_BASE" \
+  VITE_API_BASE_URL="$VITE_API_BASE_URL" \
+  VITE_MCP_PUBLIC_BASE="${VITE_MCP_PUBLIC_BASE:-https://${HOST}/ai-builder}" \
+  PUSH=1 \
+    "$WORKDIR/scripts/build_builder_image.sh"
   ok "image pushed: ${IMAGE}"
 }
 
@@ -442,7 +419,7 @@ rollout_and_verify() {
 
 main() {
   need git
-  need docker
+  need "$CONTAINER_CLI"
   need kubectl
   need awk
   need sed
