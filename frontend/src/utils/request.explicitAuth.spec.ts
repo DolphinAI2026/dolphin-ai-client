@@ -8,7 +8,10 @@ import { authApi } from '@/api/auth'
 import { authSettingsApi } from '@/api/authSettings'
 import { desktopLogin } from '@/api/desktopAuth'
 
-function runRequestInterceptor(config: { headers?: Record<string, string> | AxiosHeaders }) {
+function runRequestInterceptor(config: {
+  headers?: Record<string, string> | AxiosHeaders
+  authPolicy?: 'public'
+}) {
   const handler = (
     request.interceptors.request as unknown as {
       handlers: Array<{ fulfilled?: (value: typeof config) => typeof config }>

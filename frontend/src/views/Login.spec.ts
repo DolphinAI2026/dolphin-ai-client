@@ -6,7 +6,7 @@ import {
   resolveLoginTenant,
   safeLoginRedirectPath,
   tenantIdFromRedirect,
-} from './loginTenantRedirect'
+} from '@/router/loginRedirect'
 
 const currentUuid = '11111111-1111-4111-8111-111111111111'
 const targetUuid = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa'
@@ -81,7 +81,7 @@ describe('tenant-aware login redirects', () => {
   it('wires the server-returned tenant list into TenantSelect auto-selection', () => {
     expect(loginSource).toContain('safeLoginRedirectPath')
     expect(tenantSelectSource).toContain('resolveLoginTenant')
-    expect(tenantSelectSource).toContain('handleSelect(targetTenant.tenant_id)')
+    expect(tenantSelectSource).toContain('handleSelect(targetTenant)')
   })
 
   it('never submits tenant_public_id in TenantSelectRequest', () => {

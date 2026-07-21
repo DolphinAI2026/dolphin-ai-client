@@ -34,15 +34,16 @@ class AuthContext:
 async def resolve_default_tenant_id_for_user(db: AsyncSession, user_id: int) -> int | None:
     """Return the user's default active tenant id, falling back to the first active membership."""
     result = await db.execute(
-        select(UserTenant)
+        select(UserTenant.tenant_id)
+        .join(Tenant, Tenant.id == UserTenant.tenant_id)
         .where(
             UserTenant.user_id == user_id,
             UserTenant.status == 1,
+            Tenant.status == 1,
         )
         .order_by(UserTenant.is_default.desc(), UserTenant.joined_at.asc())
     )
-    membership = result.scalars().first()
-    return membership.tenant_id if membership else None
+    return result.scalars().first()
 
 
 async def _require_active_tenant(db: AsyncSession, tenant_id: int) -> Tenant:

@@ -14,7 +14,13 @@ from sqlalchemy.pool import StaticPool
 from starlette.requests import Request
 
 import app.database as database
-from app.auth import create_access_token, create_mcp_service_token, get_password_hash
+from app.auth import (
+    create_access_token,
+    create_mcp_service_token,
+    create_selection_token,
+    decode_token,
+    get_password_hash,
+)
 from app.database import Base, get_db
 from app.deps import get_auth_context, get_auth_context_from_token
 from app.models import User
@@ -240,6 +246,71 @@ async def test_multi_tenant_login_projects_tenant_public_ids(auth_db_factory):
     assert [option.tenant_public_id for option in response.tenants] == [
         tenant.public_id for tenant in tenants
     ]
+
+
+@pytest.mark.asyncio
+async def test_multi_tenant_login_excludes_inactive_tenant(auth_db_factory):
+    user, tenants = await seed_tenant_user(auth_db_factory, tenant_count=3)
+    async with auth_db_factory() as session:
+        await disable_tenant(session, tenants[2].id)
+        persisted_user = await session.get(User, user.id)
+        response = await _issue_login_response_for_user(session, persisted_user)
+
+    assert response.requires_tenant_selection is True
+    assert [option.tenant_id for option in response.tenants] == [
+        tenants[0].id,
+        tenants[1].id,
+    ]
+
+
+@pytest.mark.asyncio
+async def test_single_active_tenant_login_never_signs_inactive_membership(
+    auth_db_factory,
+):
+    user, tenants = await seed_tenant_user(auth_db_factory, tenant_count=2)
+    async with auth_db_factory() as session:
+        await disable_tenant(session, tenants[1].id)
+        persisted_user = await session.get(User, user.id)
+        response = await _issue_login_response_for_user(session, persisted_user)
+
+    payload = decode_token(response.access_token)
+    assert response.requires_tenant_selection is False
+    assert payload["tid"] == tenants[0].id
+
+
+@pytest.mark.asyncio
+async def test_login_rejects_active_membership_for_only_inactive_tenant(
+    auth_db_factory,
+):
+    user, tenants = await seed_tenant_user(auth_db_factory)
+    async with auth_db_factory() as session:
+        await disable_tenant(session, tenants[0].id)
+        persisted_user = await session.get(User, user.id)
+        with pytest.raises(HTTPException) as exc:
+            await _issue_login_response_for_user(session, persisted_user)
+
+    assert exc.value.status_code == 403
+
+
+@pytest.mark.asyncio
+async def test_select_tenant_rejects_active_membership_for_inactive_tenant(
+    client,
+    auth_db_factory,
+):
+    user, tenants = await seed_tenant_user(auth_db_factory)
+    async with auth_db_factory() as session:
+        await disable_tenant(session, tenants[0].id)
+
+    response = await client.post(
+        "/api/auth/select-tenant",
+        json={
+            "selection_token": create_selection_token(user.id),
+            "tenant_id": tenants[0].id,
+        },
+    )
+
+    assert response.status_code == 403
+    assert response.json()["detail"] == "目标租户不可用"
 
 
 @pytest.mark.asyncio

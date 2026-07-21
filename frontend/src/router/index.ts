@@ -1,10 +1,17 @@
-import { createRouter, createWebHistory, type RouteRecordRaw, type Router } from 'vue-router'
+import {
+  createRouter,
+  createWebHistory,
+  type RouteLocationRaw,
+  type RouteRecordRaw,
+  type Router,
+} from 'vue-router'
 import { useUserStore } from '@/stores/user'
 import { usePreviewStore } from '@/stores/preview'
 import { modeForRoutePath, useModeStore } from '@/stores/mode'
 import request, { getAuthSessionState } from '@/utils/request'
 import { resolveDesktopRedirect } from './desktopGuard'
 import { resolveTenantUrl } from './tenantUrlGuard'
+import { safeLoginRedirectPath } from './loginRedirect'
 import { fetchOnboardingState, isOnboardingConfirmed, markOnboardingConfirmed } from '@/composables/useOnboardingState'
 
 export const routes: RouteRecordRaw[] = [
@@ -273,14 +280,6 @@ const router = createRouter({
   routes,
 })
 
-function safeRedirectPath(raw: unknown): string {
-  const value = Array.isArray(raw) ? raw[0] : raw
-  const text = typeof value === 'string' ? value.trim() : ''
-  if (!text.startsWith('/') || text.startsWith('//')) return ''
-  if (text.startsWith('/login') || text.startsWith('/tenant-select')) return ''
-  return text
-}
-
 function hasCommittedAuthSession(): boolean {
   const session = getAuthSessionState()
   return session.initialized && Boolean(session.token)
@@ -330,7 +329,11 @@ export function installRouterGuards(targetRouter: Router): void {
   if (to.meta.requiresAuth) {
     const tenantResolution = await resolveTenantUrl(to, userStore, modeStore)
     if (tenantResolution !== true) {
-      next(tenantResolution)
+      if (tenantResolution === false) {
+        next(false)
+      } else {
+        next(tenantResolution as RouteLocationRaw)
+      }
       return
     }
     if (previewStatusRestorePending) {
@@ -384,7 +387,7 @@ export function installRouterGuards(targetRouter: Router): void {
   }
 
   if (to.path === '/login' && hasCommittedSession) {
-    next(safeRedirectPath(to.query.redirect) || '/')
+    next(safeLoginRedirectPath(to.query.redirect) || '/')
   } else {
     next()
   }

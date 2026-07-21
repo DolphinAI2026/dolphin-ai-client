@@ -209,6 +209,15 @@ export const useUserStore = defineStore('user', () => {
     try { localStorage.removeItem('ai-builder-tabs-v1') } catch { /* ignore */ }
   }
 
+  const commitVerifiedSession = (newToken: string, nextUser: User) => {
+    localStorage.setItem('token', newToken)
+    invalidateStorageAlignment()
+    advanceTenantNavigationEpoch()
+    commitAuthSession(newToken)
+    token.value = newToken
+    user.value = nextUser
+  }
+
   const clearSessionMemory = () => {
     invalidateStorageAlignment()
     advanceTenantNavigationEpoch()
@@ -322,10 +331,20 @@ export const useUserStore = defineStore('user', () => {
     return { ok: true }
   }
 
-  const selectTenant = async (selectionToken: string, tenantId: number) => {
+  const selectTenant = async (
+    selectionToken: string,
+    tenantId: number,
+    tenantPublicId: string,
+  ) => {
     const res = await authApi.selectTenant({ selection_token: selectionToken, tenant_id: tenantId })
-    setToken(res.access_token)
-    await fetchUser()
+    const candidateUser = await authApi.getMeWithToken(res.access_token)
+    if (
+      candidateUser.tenant_id !== tenantId
+      || candidateUser.tenant_public_id !== tenantPublicId
+    ) {
+      throw new Error('tenant candidate mismatch')
+    }
+    commitVerifiedSession(res.access_token, candidateUser)
   }
 
   const fetchAvailableTenants = async () => {

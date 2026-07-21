@@ -1,8 +1,10 @@
-import { afterEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, describe, expect, it, vi, type Mock } from 'vitest'
 import {
   classifyTenantTarget,
   normalizeTenantPublicId,
   resolveTenantUrl,
+  type TenantUrlTenant,
+  type TenantUrlUserStore,
 } from './tenantUrlGuard'
 
 const routerHarness = vi.hoisted(() => ({
@@ -227,6 +229,8 @@ function createRedirectRouter() {
     switchTenantContext: vi.fn(async (
       _tenantId: number,
       tenantPublicId: string,
+      _destination: string,
+      _navigationEpoch: number,
     ) => {
       userStore.user = { tenant_public_id: tenantPublicId }
       return 'committed_reload' as const
@@ -280,6 +284,20 @@ describe('route redirect tenant context', () => {
       expect(destination.searchParams.get(key)).toBe(value)
     }
   })
+
+  it.each([
+    ['encoded backslash authority', encodeURIComponent('/\\evil.example/code')],
+    ['encoded scheme-relative authority', '%2F%2Fevil.example%2Fcode'],
+    ['encoded dot-segment login loop', '/safe/%2e%2e/login'],
+  ])('fails closed for %s in the real router', async (_name, unsafe) => {
+    const { memoryRouter, switchTenantContext } = createRedirectRouter()
+
+    await expect(memoryRouter.push(`/login?redirect=${unsafe}`)).resolves.toBeUndefined()
+
+    expect(memoryRouter.currentRoute.value.path).toBe('/')
+    expect(memoryRouter.currentRoute.value.query.tenantId).toBe(currentUuid)
+    expect(switchTenantContext).not.toHaveBeenCalled()
+  })
 })
 
 function installSessionStorage() {
@@ -292,30 +310,48 @@ function installSessionStorage() {
   return values
 }
 
-function installNavigationCoordinator<T extends Record<string, any>>(userStore: T): T {
+type NavigationCoordinator = Pick<
+  TenantUrlUserStore,
+  'advanceTenantNavigationEpoch' | 'isTenantNavigationEpochCurrent'
+>
+type TenantUrlUserStoreHarness = Omit<
+  TenantUrlUserStore,
+  'fetchAvailableTenants' | 'switchTenantContext'
+> & {
+  fetchAvailableTenants: Mock<() => Promise<TenantUrlTenant[]>>
+  switchTenantContext: Mock<TenantUrlUserStore['switchTenantContext']>
+} & Record<string, any>
+
+function installNavigationCoordinator<T extends Record<string, any>>(
+  userStore: T,
+): T & NavigationCoordinator {
   let epoch = 0
   Object.assign(userStore, {
     advanceTenantNavigationEpoch: vi.fn(() => ++epoch),
     isTenantNavigationEpochCurrent: vi.fn((candidate: number) => candidate === epoch),
   })
-  return userStore
+  return userStore as T & NavigationCoordinator
 }
 
-function makeUserStore(overrides: Record<string, unknown> = {}) {
-  const userStore: Record<string, any> = {
+function makeUserStore(
+  overrides: Record<string, unknown> = {},
+): TenantUrlUserStoreHarness {
+  const userStore = {
     user: { tenant_public_id: currentUuid },
     availableTenants,
     fetchAvailableTenants: vi.fn().mockResolvedValue(availableTenants),
     switchTenantContext: vi.fn(async (
       _tenantId: number,
       tenantPublicId: string,
+      _destination: string,
+      _navigationEpoch: number,
     ) => {
       userStore.user = { tenant_public_id: tenantPublicId }
       return 'committed_reload' as const
     }),
   }
   Object.assign(userStore, overrides)
-  return installNavigationCoordinator(userStore)
+  return installNavigationCoordinator(userStore) as TenantUrlUserStoreHarness
 }
 
 function makeRoute(overrides: Record<string, unknown> = {}) {
@@ -528,7 +564,7 @@ describe('resolveTenantUrl', () => {
       replace: true,
     })
     expect(userStore.switchTenantContext).toHaveBeenCalledTimes(2)
-    expect(userStore.switchTenantContext.mock.calls.map(call => call[2])).toEqual([
+    expect(userStore.switchTenantContext.mock.calls.map((call: unknown[]) => call[2])).toEqual([
       `/apps?tenantId=${targetUuid}&view=one`,
       `/apps?tenantId=${targetUuid}&view=two`,
     ])

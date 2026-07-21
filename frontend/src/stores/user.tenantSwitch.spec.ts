@@ -4,6 +4,7 @@ import { createPinia, setActivePinia } from 'pinia'
 const authMocks = vi.hoisted(() => ({
   getMe: vi.fn(),
   getMeWithToken: vi.fn(),
+  selectTenant: vi.fn(),
   switchTenant: vi.fn(),
 }))
 
@@ -178,6 +179,58 @@ describe('user tenant switching', () => {
 
     const config = await runRequestInterceptor({ headers: {} })
     expect(config.headers?.Authorization).toBe('Bearer boot-token')
+  })
+
+  it('keeps the source session when selected-tenant candidate validation fails', async () => {
+    installBrowserGlobals()
+    const sourceUser = makeUser({ display_name: 'Source session' })
+    const forbidden = Object.assign(new Error('inactive tenant'), {
+      response: { status: 403 },
+    })
+    authMocks.selectTenant.mockResolvedValue({ access_token: 'candidate-token' })
+    authMocks.getMeWithToken.mockRejectedValue(forbidden)
+
+    setActivePinia(createPinia())
+    const store = useUserStore()
+    store.setToken('source-token')
+    store.user = sourceUser
+    const sourceRevision = getAuthSessionState().revision
+
+    await expect(
+      store.selectTenant('selection-token', 2, targetUuid),
+    ).rejects.toBe(forbidden)
+
+    expect(authMocks.selectTenant).toHaveBeenCalledWith({
+      selection_token: 'selection-token',
+      tenant_id: 2,
+    })
+    expect(authMocks.getMeWithToken).toHaveBeenCalledWith('candidate-token')
+    expect(getAuthSessionState().revision).toBe(sourceRevision)
+    expect(localStorage.getItem('token')).toBe('source-token')
+    expect(store.token).toBe('source-token')
+    expect(store.user).toEqual(sourceUser)
+  })
+
+  it('commits a selected tenant only after numeric ID and public UUID validation', async () => {
+    installBrowserGlobals()
+    const targetUser = makeUser({
+      tenant_id: 2,
+      tenant_name: 'Target tenant',
+      tenant_public_id: targetUuid,
+    })
+    authMocks.selectTenant.mockResolvedValue({ access_token: 'candidate-token' })
+    authMocks.getMeWithToken.mockResolvedValue(targetUser)
+
+    setActivePinia(createPinia())
+    const store = useUserStore()
+    store.setToken('source-token')
+    store.user = makeUser()
+
+    await store.selectTenant('selection-token', 2, targetUuid)
+
+    expect(localStorage.getItem('token')).toBe('candidate-token')
+    expect(store.token).toBe('candidate-token')
+    expect(store.user).toEqual(targetUser)
   })
 
   it('keeps source state when candidate /auth/me UUID mismatches', async () => {

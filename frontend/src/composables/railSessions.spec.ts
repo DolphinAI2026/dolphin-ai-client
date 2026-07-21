@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest'
+import type { LocationQueryRaw } from 'vue-router'
 import {
   normalizeAiSessions,
   normalizeCodeRailHistory,
@@ -200,16 +201,24 @@ describe('rail session navigation target', () => {
       tenantId: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',
       agent: 'runtime-old',
       panel: 'activity',
-    }
+      repeated: ['one', null, 'two'],
+      empty: null,
+    } satisfies LocationQueryRaw
+    const replaced: LocationQueryRaw = nextAgentQuery(currentQuery, 'runtime-new')
+    const removed: LocationQueryRaw = nextAgentQuery(currentQuery)
 
-    expect(nextAgentQuery(currentQuery, 'runtime-new')).toEqual({
+    expect(replaced).toEqual({
       tenantId: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',
       agent: 'runtime-new',
       panel: 'activity',
+      repeated: ['one', null, 'two'],
+      empty: null,
     })
-    expect(nextAgentQuery(currentQuery)).toEqual({
+    expect(removed).toEqual({
       tenantId: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',
       panel: 'activity',
+      repeated: ['one', null, 'two'],
+      empty: null,
     })
   })
 

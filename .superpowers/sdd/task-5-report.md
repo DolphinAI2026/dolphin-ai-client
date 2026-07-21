@@ -86,3 +86,72 @@ Task 3/4 回归保留既有 Vue Router `next()` deprecation warning；无失败�
   `/auth/select-tenant` 对 `selection_token + tenant_id` 服务端校验，URL UUID 不参与授权。
 - 本任务未执行真实浏览器跨标签页或网络乱序 E2E；Task 3/4 状态机回归 91 项保持通过。
 - 未修改主工作区、未推送、未开始 Task 6。
+
+## 独立评审修复（ADV-T5-001..004）
+
+### 路由 query 类型与构建
+
+- `nextAgentQuery()`、`RailSessionTarget.query` 和 active route query 改用 Vue Router
+  `LocationQueryRaw`、`LocationQueryValueRaw`、`LocationQuery`。
+- 保留 string、array、`null` 等合法 query 值，Task 5 的 RailSidebar 和
+  CodeConversationPage 生产调用点通过 project-reference 类型检查。
+- 清理同分支暴露的 Task 4 guard marker、`next(false)` 分支和测试 mock 类型错误。
+
+### TenantSelect 选择事务
+
+- 自动选择与人工点击共用单一 `selectionPending`。
+- 租户卡片改为原生 button；选择请求和 `await router.replace()` 完成前全部 disabled。
+- 新增 happy-dom 挂载测试：延迟导航 Promise 后点击第二张卡片，选择接口仍只调用一次。
+
+### inactive tenant 后端边界
+
+- 默认租户解析、普通用户登录 membership 投影同时要求 `UserTenant.status == 1`
+  和 `Tenant.status == 1`。
+- inactive tenant 不进入多租户 options；过滤后仅剩一个 active tenant 时只签发该
+  active tenant token；仅剩 inactive tenant 时返回 403。
+- `/auth/select-tenant` 在 membership 校验和签发 token 前再次权威校验 Tenant active。
+
+### 候选 token 原子提交
+
+- `selectTenant()` 先使用候选 access token 调用显式 `getMeWithToken()`。
+- numeric tenant ID 和 server-returned public UUID 都匹配后，才一次提交共享 token、
+  request adapter token 和 Pinia user。
+- 候选 `/auth/me` 的 403、网络失败或上下文不匹配均不改变原 session。
+- `TenantSelectRequest` 仍只发送 `selection_token + tenant_id`，public UUID 只用于
+  客户端候选响应一致性验证。
+
+### 唯一安全 redirect
+
+- helper 提升到 `frontend/src/router/loginRedirect.ts`，Login、TenantSelect 和全局
+  router guard 共用唯一 `safeLoginRedirectPath()`。
+- 真实 memory-router 测试覆盖 encoded backslash authority、encoded
+  scheme-relative authority 和 encoded dot-segment 登录回环，均 fail closed 到当前
+  tenant home。
+
+## 评审修复验证
+
+```text
+backend auth:
+48 passed
+
+Task 5 + Task 3/4 frontend:
+Test Files  9 passed (9)
+Tests       166 passed (166)
+
+完整 frontend:
+Test Files  92 passed (92)
+Tests       501 passed (501)
+
+npm exec -- vue-tsc --build --noEmit --pretty false:
+exit code 0
+
+npm run build:
+exit code 0
+2479 modules transformed
+
+git diff --check:
+exit code 0
+```
+
+构建仅保留既有大 chunk warning；测试仅保留既有 Vue Router `next()` deprecation、
+Vue scope 和 onboarding 错误路径日志，无失败。未推送，未开始 Task 6。

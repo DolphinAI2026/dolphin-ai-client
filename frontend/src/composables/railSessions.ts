@@ -2,6 +2,11 @@ import type { AIChatSession } from '@/api/aiChat'
 import type { CodeRailHistoryResponse } from '@/api/codeRuntime'
 import type { CodingConversation } from '@/api/coding'
 import type { AppMode } from '@/stores/mode'
+import type {
+  LocationQuery,
+  LocationQueryRaw,
+  LocationQueryValueRaw,
+} from 'vue-router'
 
 /**
  * 左栏会话项的归一形态。三模式共用全局左栏(参考 Claude Code 单一左栏):
@@ -126,15 +131,15 @@ function fallbackRuntimeSessionTitle(runtimeSessionId: string): string {
 
 export interface RailSessionTarget {
   path: string
-  query?: Record<string, unknown>
+  query?: LocationQueryRaw
 }
 
 type RailSessionLike = RailSession | number
 
 export function nextAgentQuery(
-  query: Record<string, unknown> | null | undefined,
-  agent?: string,
-): Record<string, unknown> {
+  query: LocationQueryRaw | null | undefined,
+  agent?: LocationQueryValueRaw,
+): LocationQueryRaw {
   const next = { ...(query || {}) }
   if (agent) {
     next.agent = agent
@@ -152,7 +157,7 @@ export function nextAgentQuery(
 export function railSessionTarget(
   mode: AppMode,
   session: RailSessionLike,
-  currentQuery: Record<string, unknown> = {},
+  currentQuery: LocationQueryRaw = {},
 ): RailSessionTarget {
   const item = typeof session === 'object' ? session : { id: session }
   if (mode === 'code' && isCodeAgentRailSession(item)) {
@@ -170,7 +175,7 @@ export function railSessionTarget(
 export function isRailSessionActive(
   mode: AppMode,
   session: RailSessionLike,
-  route: { path: string; query: Record<string, unknown> },
+  route: { path: string; query: LocationQuery },
 ): boolean {
   const item = typeof session === 'object' ? session : { id: session }
   if (mode === 'code' && isCodeAgentRailSession(item)) {

@@ -1058,9 +1058,12 @@ async def _issue_login_response_for_user(
         return LoginResponse(access_token=access_token)
 
     result = await db.execute(
-        select(UserTenant).where(
+        select(UserTenant)
+        .join(Tenant, Tenant.id == UserTenant.tenant_id)
+        .where(
             UserTenant.user_id == user.id,
             UserTenant.status == 1,
+            Tenant.status == 1,
         )
     )
     memberships = result.scalars().all()
@@ -1080,7 +1083,9 @@ async def _issue_login_response_for_user(
         return LoginResponse(access_token=access_token)
 
     tenant_ids = [m.tenant_id for m in memberships]
-    result = await db.execute(select(Tenant).where(Tenant.id.in_(tenant_ids)))
+    result = await db.execute(
+        select(Tenant).where(Tenant.id.in_(tenant_ids), Tenant.status == 1)
+    )
     tenant_map = {t.id: t for t in result.scalars().all()}
 
     option_tenants = []
@@ -1434,6 +1439,17 @@ async def select_tenant(
         user_id = int(payload.get("sub"))
     except JWTError:
         raise HTTPException(status_code=401, detail=SELECT_TOKEN_EXPIRED)
+
+    tenant = (
+        await db.execute(
+            select(Tenant).where(
+                Tenant.id == data.tenant_id,
+                Tenant.status == 1,
+            )
+        )
+    ).scalar_one_or_none()
+    if not tenant:
+        raise HTTPException(status_code=403, detail="目标租户不可用")
 
     # 验证用户属于该租户
     result = await db.execute(

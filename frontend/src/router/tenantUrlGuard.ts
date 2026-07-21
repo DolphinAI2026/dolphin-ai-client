@@ -162,15 +162,19 @@ function readSwitchMarker(): TenantSwitchMarker | null {
     const raw = sessionStorage.getItem(TENANT_SWITCH_MARKER_KEY)
     if (!raw) return null
     const marker = JSON.parse(raw) as Partial<TenantSwitchMarker>
+    const startedAt = marker.startedAt
+    const ownerId = marker.ownerId
     if (
       normalizeTenantPublicId(marker.targetTenantPublicId) === null
       || typeof marker.targetFullPath !== 'string'
       || !marker.targetFullPath.startsWith('/')
-      || !Number.isFinite(marker.startedAt)
+      || typeof startedAt !== 'number'
+      || !Number.isFinite(startedAt)
       || marker.attempt !== 1
-      || !Number.isSafeInteger(marker.ownerId)
-      || marker.ownerId < 1
-      || Date.now() - marker.startedAt > TENANT_SWITCH_MARKER_TTL_MS
+      || typeof ownerId !== 'number'
+      || !Number.isSafeInteger(ownerId)
+      || ownerId < 1
+      || Date.now() - startedAt > TENANT_SWITCH_MARKER_TTL_MS
     ) {
       sessionStorage.removeItem(TENANT_SWITCH_MARKER_KEY)
       return null

@@ -7,11 +7,13 @@
       </div>
 
       <div class="tenant-list">
-        <div
+        <button
           v-for="tenant in tenants"
           :key="tenant.tenant_id"
+          type="button"
           class="tenant-card"
-          @click="handleSelect(tenant.tenant_id)"
+          :disabled="selectionPending"
+          @click="handleSelect(tenant)"
         >
           <div class="tenant-icon">
             <span>{{ tenant.tenant_name.charAt(0) }}</span>
@@ -21,7 +23,7 @@
             <div class="tenant-code">{{ tenant.tenant_code }}</div>
           </div>
           <el-icon class="arrow-icon"><ArrowRight /></el-icon>
-        </div>
+        </button>
       </div>
 
       <div class="select-footer">
@@ -38,7 +40,7 @@ import { ElMessage } from 'element-plus'
 import { ArrowRight } from '@element-plus/icons-vue'
 import { useUserStore } from '@/stores/user'
 import type { TenantOption } from '@/types'
-import { resolveLoginTenant, safeLoginRedirectPath } from './loginTenantRedirect'
+import { resolveLoginTenant, safeLoginRedirectPath } from '@/router/loginRedirect'
 
 const router = useRouter()
 const route = useRoute()
@@ -46,19 +48,23 @@ const userStore = useUserStore()
 
 const selectionToken = ref('')
 const tenants = ref<TenantOption[]>([])
-const selectingTenantId = ref<number | null>(null)
+const selectionPending = ref(false)
 
-const handleSelect = async (tenantId: number) => {
-  if (selectingTenantId.value !== null) return
-  selectingTenantId.value = tenantId
+const handleSelect = async (tenant: TenantOption) => {
+  if (selectionPending.value) return
+  selectionPending.value = true
   try {
-    await userStore.selectTenant(selectionToken.value, tenantId)
+    await userStore.selectTenant(
+      selectionToken.value,
+      tenant.tenant_id,
+      tenant.tenant_public_id,
+    )
+    await router.replace(safeLoginRedirectPath(route.query.redirect) || '/')
     ElMessage.success('登录成功')
-    router.replace(safeLoginRedirectPath(route.query.redirect) || '/')
   } catch (error: any) {
     ElMessage.error(error.response?.data?.detail || '选择租户失败')
   } finally {
-    selectingTenantId.value = null
+    selectionPending.value = false
   }
 }
 
@@ -74,7 +80,7 @@ onMounted(() => {
     tenants.value = JSON.parse(tenantsStr)
     const targetTenant = resolveLoginTenant(route.query.redirect, tenants.value)
     if (targetTenant) {
-      void handleSelect(targetTenant.tenant_id)
+      void handleSelect(targetTenant)
     }
   } catch {
     ElMessage.error('数据解析失败')
@@ -142,6 +148,10 @@ const handleLogout = () => {
 }
 
 .tenant-card {
+  width: 100%;
+  color: inherit;
+  font: inherit;
+  text-align: left;
   display: flex;
   align-items: center;
   gap: var(--s-4, 16px);
@@ -155,7 +165,7 @@ const handleLogout = () => {
               transform 0.18s var(--ease, cubic-bezier(0.2, 0.8, 0.2, 1));
 }
 
-.tenant-card:hover {
+.tenant-card:hover:not(:disabled) {
   border-color: var(--brand);
   box-shadow: 0 0 0 3px var(--brand-ring), var(--sh-2);
   transform: translateY(-2px);
@@ -164,6 +174,11 @@ const handleLogout = () => {
 .tenant-card:focus-visible {
   outline: 2px solid var(--line-focus, var(--brand-ring));
   outline-offset: 2px;
+}
+
+.tenant-card:disabled {
+  cursor: wait;
+  opacity: 0.65;
 }
 
 .tenant-icon {
@@ -207,7 +222,7 @@ const handleLogout = () => {
               transform 0.18s var(--ease, cubic-bezier(0.2, 0.8, 0.2, 1));
 }
 
-.tenant-card:hover .arrow-icon {
+.tenant-card:hover:not(:disabled) .arrow-icon {
   color: var(--brand);
   transform: translateX(4px);
 }

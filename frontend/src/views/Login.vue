@@ -114,7 +114,7 @@ import { useUserStore } from '@/stores/user'
 import { useThemeStore } from '@/stores/theme'
 import { isDesktop } from '@/utils/desktop'
 import ruijingWhaleMarkUrl from '@/assets/brand/ruijing-whale-mark.svg'
-import { safeLoginRedirectPath } from './loginTenantRedirect'
+import { safeLoginRedirectPath } from '@/router/loginRedirect'
 
 const router = useRouter()
 const route = useRoute()

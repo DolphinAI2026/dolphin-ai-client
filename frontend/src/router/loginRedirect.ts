@@ -1,5 +1,5 @@
 import type { TenantOption } from '@/types'
-import { normalizeTenantPublicId } from '@/router/tenantUrlGuard'
+import { normalizeTenantPublicId } from './tenantUrlGuard'
 
 const REDIRECT_ORIGIN = 'https://login-redirect.invalid'
 
