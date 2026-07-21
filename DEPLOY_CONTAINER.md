@@ -123,13 +123,15 @@ docker image inspect vibe-sandbox:latest --format '{{.Id}}'
 ## 构建镜像
 
 ```bash
-BUILD_SHA=$(git rev-parse HEAD)
-docker build --platform linux/amd64 \
-  -f deploy/docker/Dockerfile \
-  --build-arg VITE_BASE_URL=/ai-builder/ \
-  --build-arg VITE_BUILD_SHA=${BUILD_SHA} \
-  -t apaas-builder:latest .
+IMAGE=apaas-builder:latest \
+PLATFORM=linux/amd64 \
+VITE_BASE_URL=/ai-builder/ \
+scripts/build_builder_image.sh
 ```
+
+共享构建脚本会先确认实际 Docker 输入没有 staged、unstaged 或 relevant untracked
+改动，再读取完整 `HEAD` 并传入 `VITE_BUILD_SHA`。有未提交构建输入时会拒绝构建，
+避免镜像内容与 build SHA 不一致。
 
 构建阶段：
 
@@ -149,27 +151,25 @@ Apple Silicon 本机给线上 amd64 机器构建时必须显式传 `--platform l
 export IMAGE_TAG="$(date +%Y.%m.%d)-$(git rev-parse --short=8 HEAD)"
 export IMAGE="om-harbor.dfy.definesys.cn/om-demo/ai-builder:${IMAGE_TAG}"
 export KUBECONFIG_FILE=/path/to/orcamatrix-demo-kubeconfig
-export BUILD_SHA="$(git rev-parse HEAD)"
 
 printf '%s' "${HARBOR_PASSWORD}" \
   | podman login om-harbor.dfy.definesys.cn \
       --username "${HARBOR_USERNAME}" \
       --password-stdin
 
-podman build --layers \
-  -f deploy/docker/Dockerfile \
-  -t "${IMAGE}" \
-  --build-arg VITE_BASE_URL=/ai-builder/ \
-  --build-arg VITE_BUILD_SHA=${BUILD_SHA} \
-  --build-arg NODE_IMAGE=hub-mirror.dfy.definesys.cn/library/node:20-bookworm-slim \
-  --build-arg JDK8_IMAGE=hub-mirror.dfy.definesys.cn/library/eclipse-temurin:8-jdk-jammy \
-  --build-arg JDK17_IMAGE=hub-mirror.dfy.definesys.cn/library/eclipse-temurin:17-jdk-jammy \
-  --build-arg MAVEN_IMAGE=hub-mirror.dfy.definesys.cn/library/maven:3.9.9-eclipse-temurin-17 \
-  --build-arg PYTHON_IMAGE=hub-mirror.dfy.definesys.cn/library/python:3.12-slim-bookworm \
-  --build-arg DOCKER_CLI_IMAGE=hub-mirror.dfy.definesys.cn/library/docker:24.0.7-cli \
-  --build-arg NPM_REGISTRY=https://registry.npmmirror.com \
-  --build-arg PIP_INDEX_URL=https://mirrors.aliyun.com/pypi/simple \
-  .
+CONTAINER_CLI=podman \
+IMAGE="${IMAGE}" \
+PLATFORM=linux/amd64 \
+VITE_BASE_URL=/ai-builder/ \
+NODE_IMAGE=hub-mirror.dfy.definesys.cn/library/node:20-bookworm-slim \
+JDK8_IMAGE=hub-mirror.dfy.definesys.cn/library/eclipse-temurin:8-jdk-jammy \
+JDK17_IMAGE=hub-mirror.dfy.definesys.cn/library/eclipse-temurin:17-jdk-jammy \
+MAVEN_IMAGE=hub-mirror.dfy.definesys.cn/library/maven:3.9.9-eclipse-temurin-17 \
+PYTHON_IMAGE=hub-mirror.dfy.definesys.cn/library/python:3.12-slim-bookworm \
+DOCKER_CLI_IMAGE=hub-mirror.dfy.definesys.cn/library/docker:24.0.7-cli \
+NPM_REGISTRY=https://registry.npmmirror.com \
+PIP_INDEX_URL=https://mirrors.aliyun.com/pypi/simple \
+scripts/build_builder_image.sh
 
 podman push "${IMAGE}"
 
@@ -273,8 +273,8 @@ docker exec apaas-builder docker image inspect vibe-sandbox:latest --format '{{.
 
 ```bash
 git pull
+IMAGE=apaas-builder:latest scripts/build_builder_image.sh
 cd deploy/docker
-docker compose build
 docker compose up -d
 docker compose logs -f
 ```

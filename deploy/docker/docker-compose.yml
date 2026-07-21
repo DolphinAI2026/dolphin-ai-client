@@ -8,6 +8,7 @@
 #      会派生 compose env 供本文件插值。
 #
 # 用法：
+#   IMAGE=apaas-builder:latest scripts/build_builder_image.sh
 #   cd deploy/docker
 #   docker compose up -d        # 或 podman-compose up -d
 #   docker compose logs -f
@@ -30,12 +31,6 @@
 
 services:
   apaas-builder:
-    build:
-      context: ../..
-      dockerfile: deploy/docker/Dockerfile
-      args:
-        VITE_BASE_URL: ${VITE_BASE_URL:-/ai-builder/}
-        VITE_BUILD_SHA: ${VITE_BUILD_SHA:?set VITE_BUILD_SHA to a 40-character lowercase Git commit SHA}
     image: apaas-builder:${IMAGE_TAG:-latest}
     container_name: ${CONTAINER_NAME:-apaas-builder}
     restart: unless-stopped

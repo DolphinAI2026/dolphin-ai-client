@@ -179,12 +179,10 @@ curl -s -H 'Host: df-aigc.dfy.definesys.cn' http://<节点IP>/api/health
 
 ```bash
 # 1. 本地构建新镜像
-BUILD_SHA=$(git rev-parse HEAD)
-docker build --platform linux/amd64 \
-  -f deploy/docker/Dockerfile \
-  --build-arg VITE_BASE_URL=/ai-builder/ \
-  --build-arg VITE_BUILD_SHA=${BUILD_SHA} \
-  -t apaas-builder:local .
+IMAGE=apaas-builder:local \
+PLATFORM=linux/amd64 \
+VITE_BASE_URL=/ai-builder/ \
+scripts/build_builder_image.sh
 
 # 2. 推到私库（日期 tag）
 TAG=$(date +%Y%m%d)
@@ -213,7 +211,10 @@ kubectl -n apaas-builder rollout status statefulset/apaas-builder
 如果要换成根路径或其他前缀部署，必须**重新构建镜像**：
 
 ```bash
-docker build --platform linux/amd64 --build-arg VITE_BASE_URL=<prefix> ...
+IMAGE=apaas-builder:local \
+PLATFORM=linux/amd64 \
+VITE_BASE_URL=<prefix> \
+scripts/build_builder_image.sh
 ```
 
 并同步修改 Ingress 的 path、nginx sidecar ConfigMap 里的 location 规则。

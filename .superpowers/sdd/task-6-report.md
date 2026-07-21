@@ -325,3 +325,77 @@ exit code 0
 
 fixture 的 clean-input gate 会拒绝包含自身未提交修改的工作树，因此 Chromium
 动态验证在提交后、clean HEAD 上执行；最终结果以该次命令输出和提交 SHA 为准。
+
+## T6-FINAL-001 Docker build provenance 收口
+
+日期：2026-07-21
+
+最终复审发现人工文档和 Compose 仍可从 dirty build context 构建镜像，同时把未变的
+`HEAD` 写入 `builder-build-sha`。本轮只修复 T6-FINAL-001，未处理复审中的两个
+Minor。
+
+TDD RED：
+
+```text
+backend/.venv/bin/python -m pytest -q \
+  backend/tests/test_tenant_url_build_contract.py
+
+8 failed, 13 passed
+```
+
+失败覆盖：
+
+- 直接 Dockerfile caller 集合仍包含 Compose、客户提示和三个人工文档；
+- 人工入口未调用 `scripts/build_builder_image.sh`；
+- Compose 仍包含 `build:`，compose env 仍要求 `VITE_BUILD_SHA`；
+- 共享 wrapper 不存在，三类 dirty 输入与 clean fake-CLI 合同均失败。
+
+实现后首次运行得到 `2 failed, 19 passed`：真实临时 Git 仓库测试证明
+`(...) || die` 会抑制 subshell 内的 `set -e`，使 staged/unstaged 的非零状态被后续
+命令覆盖。wrapper 随后改为显式 `&&` 链，确保任一 provenance 检查失败都在读取
+`HEAD` 和调用 container CLI 前终止。
+
+最终 GREEN：
+
+```text
+backend/.venv/bin/python -m pytest -q \
+  backend/tests/test_tenant_url_build_contract.py
+
+21 passed in 0.25s
+```
+
+合同使用真实临时 Git 仓库分别制造 staged、unstaged 和 relevant untracked Docker
+输入，均断言 fake container CLI 未被调用。clean 路径断言完整 40 位小写 HEAD、
+`PLATFORM`、五个 Vite 参数、六个基础镜像参数、两个 registry 参数、Dockerfile、
+image tag 和 build context 均通过独立 argv 传给 fake CLI。
+
+实现结果：
+
+- 新增 `scripts/build_builder_image.sh`，默认使用 `docker`，也可通过
+  `CONTAINER_CLI=podman` 使用 Podman；
+- wrapper 在读取 `HEAD` 前检查 `frontend`、`backend`、`admin-spa`、
+  `deploy/docker` 和 `.dockerignore` 的 staged、unstaged、relevant untracked；
+- wrapper 校验完整 40 位小写 SHA，并使用 Bash 数组传递 build 参数，不使用
+  `eval` 或不安全字符串拆分；
+- Compose 删除源码 `build:`，只消费本地或预载的
+  `apaas-builder:${IMAGE_TAG:-latest}`；
+- compose env 删除 `VITE_BUILD_SHA`；
+- `DEPLOY_CONTAINER.md`、K8s、Rancher 和客户缺镜像提示统一调用共享 wrapper；
+- 客户 `ensure_image` 的 tar load、本地 image inspect 和既有镜像命名契约保持不变。
+
+其他验证：
+
+```text
+bash -n scripts/build_builder_image.sh deploy/customer/deploy.sh
+bash-n=PASS
+
+podman-compose --env-file deploy/docker/compose.env.example \
+  -f deploy/docker/docker-compose.yml config
+exit code 0; image=apaas-builder:latest; no build section
+
+git diff --check
+exit code 0
+```
+
+本轮没有执行真实容器镜像构建；container argv 与 fail-closed 行为由 fake CLI 合同
+验证，Compose 由当前可用的 `podman-compose 1.0.6` 完成配置展开。
