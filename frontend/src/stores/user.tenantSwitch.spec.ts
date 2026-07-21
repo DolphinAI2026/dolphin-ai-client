@@ -321,6 +321,89 @@ describe('user tenant switching', () => {
     expect(commit.rollback()).toBe(false)
   })
 
+  it('does not roll back an initialized source after shared storage moves to a newer token', async () => {
+    const { fireStorageEvent } = installBrowserGlobals()
+    const pendingAlignment = deferred<User>()
+    const sourceUser = makeUser({ display_name: 'Source session' })
+    const targetUser = makeUser({
+      tenant_id: 2,
+      tenant_name: 'Target tenant',
+      tenant_public_id: targetUuid,
+    })
+    authMocks.selectTenant.mockResolvedValue({ access_token: 'candidate-token' })
+    authMocks.getMeWithToken
+      .mockResolvedValueOnce(targetUser)
+      .mockReturnValueOnce(pendingAlignment.promise)
+
+    setActivePinia(createPinia())
+    const store = useUserStore()
+    store.setToken('source-token')
+    store.user = sourceUser
+
+    const commit = await store.selectTenant('selection-token', 2, targetUuid)
+    const candidateSession = getAuthSessionState()
+    localStorage.setItem('token', 'newer-shared-token')
+    fireStorageEvent('newer-shared-token')
+    await flushPromises()
+    const setItem = vi.spyOn(localStorage, 'setItem')
+    const removeItem = vi.spyOn(localStorage, 'removeItem')
+
+    expect(commit.rollback()).toBe(false)
+
+    expect(authMocks.getMeWithToken).toHaveBeenLastCalledWith(
+      'newer-shared-token',
+      expect.any(AbortSignal),
+    )
+    expect(getAuthSessionState()).toEqual(candidateSession)
+    expect(store.token).toBe('candidate-token')
+    expect(store.user).toEqual(targetUser)
+    expect(localStorage.getItem('token')).toBe('newer-shared-token')
+    expect(setItem).not.toHaveBeenCalled()
+    expect(removeItem).not.toHaveBeenCalled()
+  })
+
+  it('does not clear a newer shared token when the selected-tenant source was uninitialized', async () => {
+    const { fireStorageEvent } = installBrowserGlobals()
+    const pendingAlignment = deferred<User>()
+    const targetUser = makeUser({
+      tenant_id: 2,
+      tenant_name: 'Target tenant',
+      tenant_public_id: targetUuid,
+    })
+    authMocks.selectTenant.mockResolvedValue({ access_token: 'candidate-token' })
+    authMocks.getMeWithToken
+      .mockResolvedValueOnce(targetUser)
+      .mockReturnValueOnce(pendingAlignment.promise)
+
+    setActivePinia(createPinia())
+    const store = useUserStore()
+    expect(getAuthSessionState()).toMatchObject({
+      token: null,
+      initialized: false,
+    })
+
+    const commit = await store.selectTenant('selection-token', 2, targetUuid)
+    const candidateSession = getAuthSessionState()
+    localStorage.setItem('token', 'newer-shared-token')
+    fireStorageEvent('newer-shared-token')
+    await flushPromises()
+    const setItem = vi.spyOn(localStorage, 'setItem')
+    const removeItem = vi.spyOn(localStorage, 'removeItem')
+
+    expect(commit.rollback()).toBe(false)
+
+    expect(authMocks.getMeWithToken).toHaveBeenLastCalledWith(
+      'newer-shared-token',
+      expect.any(AbortSignal),
+    )
+    expect(getAuthSessionState()).toEqual(candidateSession)
+    expect(store.token).toBe('candidate-token')
+    expect(store.user).toEqual(targetUser)
+    expect(localStorage.getItem('token')).toBe('newer-shared-token')
+    expect(setItem).not.toHaveBeenCalled()
+    expect(removeItem).not.toHaveBeenCalled()
+  })
+
   it('keeps source state when candidate /auth/me UUID mismatches', async () => {
     const { replace } = installBrowserGlobals()
     const sourceUser = makeUser()

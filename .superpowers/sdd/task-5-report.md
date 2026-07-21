@@ -221,3 +221,57 @@ exit code 0
 构建仍仅有既有大 chunk warning；测试仍仅有既有 Vue Router `next()` deprecation、
 Vue scope、onboarding 错误路径日志和后端 datetime deprecation warning。未推送，
 未开始 Task 6。
+
+## ADV-T5-005 跨标签 rollback ownership 收尾
+
+- selected-tenant rollback 在任何 session/storage 写操作前统一验证：
+  - auth session revision 仍等于 candidate commit revision；
+  - auth session token 仍等于 candidate token；
+  - Pinia token 仍等于 candidate token；
+  - shared `localStorage` token 仍等于 candidate token。
+- 任一 ownership 条件不匹配时，rollback 返回 `false`，不得恢复旧源 session、删除或
+  覆盖 shared token，也不得修改 auth session、Pinia token/user。
+- 新增真实 store 测试覆盖 source session initialized 与 uninitialized 两种状态：
+  candidate C commit 后，跨标签 shared storage 更新为 B 且 alignment 保持 pending，
+  旧 rollback 均拒绝执行，B 保留，源 session 不恢复。
+
+### TDD
+
+```text
+RED:
+Test Files  1 failed (1)
+Tests       2 failed | 42 passed (44)
+
+两项均在旧 rollback 返回 true 处按预期失败。
+
+GREEN focused store:
+Test Files  1 passed (1)
+Tests       44 passed (44)
+```
+
+### 最终验证
+
+```text
+Task 5 + Task 3/4 frontend:
+Test Files  9 passed (9)
+Tests       175 passed (175)
+
+完整 frontend:
+Test Files  92 passed (92)
+Tests       510 passed (510)
+
+backend auth:
+48 passed
+
+npm exec -- vue-tsc --build --noEmit --pretty false:
+exit code 0
+
+npm run build:
+exit code 0
+2479 modules transformed
+
+git diff --check:
+exit code 0
+```
+
+构建与测试仅保留前述既有 warning。未推送，未开始 Task 6。

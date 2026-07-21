@@ -403,6 +403,7 @@ export const useUserStore = defineStore('user', () => {
             currentSession.revision !== committedSession.revision
             || currentSession.token !== res.access_token
             || token.value !== res.access_token
+            || localStorage.getItem('token') !== res.access_token
           ) {
             return false
           }
