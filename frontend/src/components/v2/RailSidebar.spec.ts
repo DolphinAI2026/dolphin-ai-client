@@ -33,6 +33,7 @@ describe('RailSidebar unified session source (SP2b)', () => {
     expect(railSidebarSource).toContain('normalizeAiSessions')
     expect(railSidebarSource).toContain('normalizeCodeRailHistory')
     expect(railSidebarSource).toContain('railSessionTarget(')
+    expect(railSidebarSource).toContain('nextAgentQuery')
   })
 
   it('activates Code runtime history before opening the shell route', () => {
@@ -49,7 +50,9 @@ describe('RailSidebar unified session source (SP2b)', () => {
     expect(railSidebarSource).toContain('items.find(s => s.shellSessionId)?.shellSessionId')
     expect(railSidebarSource).toContain("effectiveGroupBy === 'app'")
     expect(railSidebarSource).not.toContain('class="rail-sess-new"')
-    expect(railSidebarSource).toContain("query: { agent: result.runtime_session_id }")
+    expect(railSidebarSource).toContain(
+      'nextAgentQuery(route.query, result.runtime_session_id)',
+    )
   })
 
   it('keeps the application-scoped sessions returned by Code rail history', () => {
@@ -92,5 +95,31 @@ describe('RailSidebar unified session source (SP2b)', () => {
     expect(railSidebarSource).toContain("window.addEventListener('code-rail-refresh'")
     expect(railSidebarSource).toContain("window.removeEventListener('code-rail-refresh'")
     expect(railSidebarSource).toContain('refreshCodeRail')
+  })
+})
+
+describe('RailSidebar tenant UUID navigation', () => {
+  it('uses tenant_public_id as the option value and maps numeric ids from available tenants', () => {
+    expect(railSidebarSource).toContain(
+      '@click="selectTenant(tenant.tenant_public_id)"',
+    )
+    expect(railSidebarSource).toContain(
+      'tenant.tenant_public_id === currentTenantValue',
+    )
+    expect(railSidebarSource).toContain(
+      'tenantOptions.value.find(item => item.tenant_public_id === targetPublicId)',
+    )
+  })
+
+  it('enters the current mode home through the shared epoch switch contract', () => {
+    expect(railSidebarSource).toContain('MODE_META[currentMode.value].home')
+    expect(railSidebarSource).toContain('user.advanceTenantNavigationEpoch()')
+    expect(railSidebarSource).toContain('user.switchTenantContext(')
+    expect(railSidebarSource).toContain('withTenantId(')
+  })
+
+  it('does not navigate a second time after the tenant switch adapter replaces location', () => {
+    expect(railSidebarSource).not.toContain('await user.switchTenant(value)')
+    expect(railSidebarSource).not.toContain("router.push('/')")
   })
 })

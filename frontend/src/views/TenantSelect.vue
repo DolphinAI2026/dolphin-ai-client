@@ -38,6 +38,7 @@ import { ElMessage } from 'element-plus'
 import { ArrowRight } from '@element-plus/icons-vue'
 import { useUserStore } from '@/stores/user'
 import type { TenantOption } from '@/types'
+import { resolveLoginTenant, safeLoginRedirectPath } from './loginTenantRedirect'
 
 const router = useRouter()
 const route = useRoute()
@@ -45,13 +46,20 @@ const userStore = useUserStore()
 
 const selectionToken = ref('')
 const tenants = ref<TenantOption[]>([])
+const selectingTenantId = ref<number | null>(null)
 
-function safeRedirectPath(raw: unknown): string {
-  const value = Array.isArray(raw) ? raw[0] : raw
-  const text = typeof value === 'string' ? value.trim() : ''
-  if (!text.startsWith('/') || text.startsWith('//')) return ''
-  if (text.startsWith('/login') || text.startsWith('/tenant-select')) return ''
-  return text
+const handleSelect = async (tenantId: number) => {
+  if (selectingTenantId.value !== null) return
+  selectingTenantId.value = tenantId
+  try {
+    await userStore.selectTenant(selectionToken.value, tenantId)
+    ElMessage.success('登录成功')
+    router.replace(safeLoginRedirectPath(route.query.redirect) || '/')
+  } catch (error: any) {
+    ElMessage.error(error.response?.data?.detail || '选择租户失败')
+  } finally {
+    selectingTenantId.value = null
+  }
 }
 
 onMounted(() => {
@@ -64,24 +72,18 @@ onMounted(() => {
   }
   try {
     tenants.value = JSON.parse(tenantsStr)
+    const targetTenant = resolveLoginTenant(route.query.redirect, tenants.value)
+    if (targetTenant) {
+      void handleSelect(targetTenant.tenant_id)
+    }
   } catch {
     ElMessage.error('数据解析失败')
     router.push('/login')
   }
 })
 
-const handleSelect = async (tenantId: number) => {
-  try {
-    await userStore.selectTenant(selectionToken.value, tenantId)
-    ElMessage.success('登录成功')
-    router.replace(safeRedirectPath(route.query.redirect) || '/')
-  } catch (error: any) {
-    ElMessage.error(error.response?.data?.detail || '选择租户失败')
-  }
-}
-
 const handleLogout = () => {
-  const redirect = safeRedirectPath(route.query.redirect)
+  const redirect = safeLoginRedirectPath(route.query.redirect)
   router.push({ path: '/login', query: redirect ? { redirect } : {} })
 }
 </script>

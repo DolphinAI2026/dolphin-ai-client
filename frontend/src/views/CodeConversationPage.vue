@@ -103,6 +103,7 @@
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { codeRuntimeApi } from '@/api/codeRuntime'
+import { nextAgentQuery } from '@/composables/railSessions'
 import AppIcon from '@/components/common/AppIcon.vue'
 import {
   activateCachedCodeFrame,
@@ -251,9 +252,10 @@ function isUnavailableRuntimeSessionError(error: any, runtimeAgentId: string): b
 
 function clearRouteAgentQueryIfCurrent(runtimeAgentId: string) {
   if (!runtimeAgentId || currentRuntimeAgentId() !== runtimeAgentId) return
-  const query = { ...route.query }
-  delete query.agent
-  void router.replace({ path: route.path, query })
+  void router.replace({
+    path: route.path,
+    query: nextAgentQuery(route.query),
+  })
 }
 
 function generateCodeAppCode(appName: string) {
@@ -295,7 +297,10 @@ async function confirmCreateCodeApplication() {
       app_code: app.app_code,
     })
     refreshOuterCodeRail()
-    router.push(`/code/${created.public_id}`)
+    router.push({
+      path: `/code/${created.public_id}`,
+      query: nextAgentQuery(route.query),
+    })
   } catch (error: any) {
     newCodeAppError.value = error?.response?.data?.detail || error?.message || '创建 Code 应用失败'
   } finally {

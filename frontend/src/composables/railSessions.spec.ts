@@ -3,6 +3,7 @@ import {
   normalizeAiSessions,
   normalizeCodeRailHistory,
   normalizeCodingSessions,
+  nextAgentQuery,
   railSessionTarget,
   isRailSessionActive,
   railSessionFallback,
@@ -191,6 +192,45 @@ describe('rail session navigation target', () => {
     })).toEqual({
       path: '/code/e9a6aa2a-9043-4bb5-bb5d-6d764c5fbfa3',
       query: { agent: 'runtime-2' },
+    })
+  })
+
+  it('preserves tenantId and other query values while replacing or removing agent', () => {
+    const currentQuery = {
+      tenantId: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',
+      agent: 'runtime-old',
+      panel: 'activity',
+    }
+
+    expect(nextAgentQuery(currentQuery, 'runtime-new')).toEqual({
+      tenantId: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',
+      agent: 'runtime-new',
+      panel: 'activity',
+    })
+    expect(nextAgentQuery(currentQuery)).toEqual({
+      tenantId: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',
+      panel: 'activity',
+    })
+  })
+
+  it('preserves the current query when building a Code rail target', () => {
+    expect(railSessionTarget('code', {
+      id: 'runtime-2',
+      title: '修复登录问题',
+      shellSessionId: 'shell-1',
+      runtimeSessionId: 'runtime-2',
+      source: 'code-agent',
+    }, {
+      tenantId: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',
+      agent: 'runtime-old',
+      panel: 'activity',
+    })).toEqual({
+      path: '/code/shell-1',
+      query: {
+        tenantId: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',
+        agent: 'runtime-2',
+        panel: 'activity',
+      },
     })
   })
 })

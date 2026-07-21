@@ -126,22 +126,44 @@ function fallbackRuntimeSessionTitle(runtimeSessionId: string): string {
 
 export interface RailSessionTarget {
   path: string
-  query?: Record<string, string>
+  query?: Record<string, unknown>
 }
 
 type RailSessionLike = RailSession | number
+
+export function nextAgentQuery(
+  query: Record<string, unknown> | null | undefined,
+  agent?: string,
+): Record<string, unknown> {
+  const next = { ...(query || {}) }
+  if (agent) {
+    next.agent = agent
+  } else {
+    delete next.agent
+  }
+  return next
+}
 
 /**
  * 点击左栏会话该导航去哪。
  * - Builder/Agent 走 /ai-chat/:id
  * - Code 会话走 /code/:id，主区嵌入 d-ai-code Builder Runtime。
  */
-export function railSessionTarget(mode: AppMode, session: RailSessionLike): RailSessionTarget {
+export function railSessionTarget(
+  mode: AppMode,
+  session: RailSessionLike,
+  currentQuery: Record<string, unknown> = {},
+): RailSessionTarget {
   const item = typeof session === 'object' ? session : { id: session }
   if (mode === 'code' && isCodeAgentRailSession(item)) {
-    return { path: `/code/${item.shellSessionId}`, query: { agent: item.runtimeSessionId } }
+    return {
+      path: `/code/${item.shellSessionId}`,
+      query: nextAgentQuery(currentQuery, item.runtimeSessionId),
+    }
   }
-  return { path: mode === 'code' ? `/code/${item.id}` : `/ai-chat/${item.id}` }
+  const path = mode === 'code' ? `/code/${item.id}` : `/ai-chat/${item.id}`
+  const query = nextAgentQuery(currentQuery)
+  return Object.keys(query).length ? { path, query } : { path }
 }
 
 /** 当前路由是否正停在该会话上(高亮)。 */

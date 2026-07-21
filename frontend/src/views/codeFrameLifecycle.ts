@@ -173,6 +173,7 @@ export function queuePendingCodeFrame(
 
   const key = `code-frame-${state.nextFrameId}`
   const resolvedUrl = new URL(input.url, input.baseUrl)
+  resolvedUrl.searchParams.delete('tenantId')
   resolvedUrl.searchParams.set('frameKey', key)
 
   return {

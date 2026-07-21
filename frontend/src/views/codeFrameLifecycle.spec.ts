@@ -73,6 +73,32 @@ describe('code frame lifecycle', () => {
     expect(isCodeFrameInteractive(state, state.active!)).toBe(true)
   })
 
+  it('does not copy the outer tenantId into the runtime iframe URL', () => {
+    let state = createCodeFrameLifecycle()
+    state = beginCodeFrameOpen(state, {
+      requestId: 1,
+      sessionRef: 'session-1',
+      route: {
+        path: '/code/session-1',
+        query: {
+          tenantId: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',
+          agent: 'agent-1',
+        },
+      },
+    })
+    state = queuePendingCodeFrame(state, {
+      requestId: 1,
+      sessionRef: 'session-1',
+      url: '/api/code-runtime/session-1/embed?tenantId=outer-tenant&token=one',
+      baseUrl: `${baseUrl}?tenantId=aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa`,
+    })
+
+    const iframeUrl = new URL(state.pending!.url)
+    expect(iframeUrl.searchParams.get('tenantId')).toBeNull()
+    expect(iframeUrl.searchParams.get('token')).toBe('one')
+    expect(iframeUrl.searchParams.get('frameKey')).toBe(state.pending!.key)
+  })
+
   it('keeps the old frame visible but freezes it immediately during a switch', () => {
     let state = activateInitialFrame()
     const oldFrame = state.active!

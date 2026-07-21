@@ -12,6 +12,7 @@ import { ElMessage } from 'element-plus'
 import {
   normalizeAiSessions,
   normalizeCodeRailHistory,
+  nextAgentQuery,
   railSessionTarget,
   isRailSessionActive,
   railSessionFallback,
@@ -198,7 +199,7 @@ async function openSession(session: RailSession) {
       await codeRuntimeApi.activateAgentSession(session.shellSessionId, session.runtimeSessionId)
     } catch { /* iframe will surface runtime errors on open */ }
   }
-  router.push(railSessionTarget(currentMode.value, session))
+  router.push(railSessionTarget(currentMode.value, session, route.query))
 }
 function sessionActive(s: RailSession) { return isRailSessionActive(currentMode.value, s, route) }
 
@@ -255,10 +256,13 @@ async function createCodeAgentSession(shellSessionId?: string | null) {
       upsertOptimisticCodeAgentSession(shellSessionId, result.runtime_session_id, result.session)
       router.push({
         path: `/code/${result.shell_session_id || shellSessionId}`,
-        query: { agent: result.runtime_session_id },
+        query: nextAgentQuery(route.query, result.runtime_session_id),
       })
     } else {
-      router.push(`/code/${shellSessionId}`)
+      router.push({
+        path: `/code/${shellSessionId}`,
+        query: nextAgentQuery(route.query),
+      })
     }
     void loadRailSessions()
   } catch (error: any) {
@@ -277,7 +281,12 @@ async function deleteRailSession(s: RailSession) {
     }
   } catch { /* ignore */ }
   await loadRailSessions()
-  if (sessionActive(s)) router.push(railSessionFallback(currentMode.value))
+  if (sessionActive(s)) {
+    router.push({
+      path: railSessionFallback(currentMode.value),
+      query: nextAgentQuery(route.query),
+    })
+  }
 }
 
 const RAIL_COLLAPSE_KEY = 'apaas-rail-collapsed-v1'
@@ -316,7 +325,7 @@ const userAccount = computed(() => user.user?.username || '')
 const userName = computed(() => user.user?.display_name || userAccount.value || '未登录')
 const userAvatarText = computed(() => Array.from(userName.value.trim())[0]?.toUpperCase() || 'U')
 const tenantOptions = computed(() => user.availableTenants || [])
-const currentTenantValue = computed(() => user.tenantId ? String(user.tenantId) : '')
+const currentTenantValue = computed(() => user.user?.tenant_public_id || '')
 function looksLikeLongId(value?: string | null) {
   return /^\d{12,}$/.test(String(value || '').trim())
 }
@@ -339,7 +348,9 @@ function tenantSubtitle(tenant?: { tenant_name?: string | null; tenant_code?: st
 }
 
 const currentTenantLabel = computed(() => {
-  const match = tenantOptions.value.find((tenant) => String(tenant.tenant_id) === currentTenantValue.value)
+  const match = tenantOptions.value.find(
+    tenant => tenant.tenant_public_id === currentTenantValue.value,
+  )
   return tenantLabel(match || {
     tenant_name: user.user?.tenant_name,
     tenant_code: undefined,
@@ -400,11 +411,27 @@ function toggleTenantMenu(event: MouseEvent) {
   tenantMenuOpen.value = !tenantMenuOpen.value
 }
 
-async function selectTenant(value: number) {
+function withTenantId(path: string, targetPublicId: string): string {
+  const base = import.meta.env.BASE_URL || '/'
+  const basePath = `/${base.replace(/^\/+|\/+$/g, '')}`
+  const prefix = basePath === '/' ? '' : basePath
+  const parsed = new URL(`${prefix}${path}`, 'https://tenant-navigation.invalid')
+  parsed.searchParams.set('tenantId', targetPublicId)
+  return `${parsed.pathname}${parsed.search}${parsed.hash}`
+}
+
+async function selectTenant(targetPublicId: string) {
   tenantMenuOpen.value = false
-  if (!Number.isFinite(value) || !value || value === user.tenantId) return
-  await user.switchTenant(value)
-  router.push('/')
+  const navigationEpoch = user.advanceTenantNavigationEpoch()
+  const tenant = tenantOptions.value.find(item => item.tenant_public_id === targetPublicId)
+  if (!tenant || tenant.tenant_id === user.tenantId) return
+  const destination = withTenantId(MODE_META[currentMode.value].home, targetPublicId)
+  await user.switchTenantContext(
+    tenant.tenant_id,
+    targetPublicId,
+    destination,
+    navigationEpoch,
+  )
 }
 
 function go(path: string) {
@@ -659,12 +686,12 @@ function renderIcon(name: string): string {
           <div v-if="tenantMenuOpen" class="tenant-menu" role="menu">
             <button
               v-for="tenant in tenantOptions"
-              :key="tenant.tenant_id"
+              :key="tenant.tenant_public_id"
               type="button"
               class="tenant-option"
-              :class="{ active: String(tenant.tenant_id) === currentTenantValue }"
+              :class="{ active: tenant.tenant_public_id === currentTenantValue }"
               role="menuitem"
-              @click="selectTenant(Number(tenant.tenant_id))"
+              @click="selectTenant(tenant.tenant_public_id)"
             >
               <span class="tenant-option-name" :title="tenant.tenant_name">{{ tenantLabel(tenant) }}</span>
               <span v-if="tenantSubtitle(tenant)" class="tenant-option-code">{{ tenantSubtitle(tenant) }}</span>

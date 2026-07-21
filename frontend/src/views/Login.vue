@@ -114,6 +114,7 @@ import { useUserStore } from '@/stores/user'
 import { useThemeStore } from '@/stores/theme'
 import { isDesktop } from '@/utils/desktop'
 import ruijingWhaleMarkUrl from '@/assets/brand/ruijing-whale-mark.svg'
+import { safeLoginRedirectPath } from './loginTenantRedirect'
 
 const router = useRouter()
 const route = useRoute()
@@ -164,14 +165,6 @@ const refreshCaptcha = async () => {
 
 onMounted(refreshCaptcha)
 
-function safeRedirectPath(raw: unknown): string {
-  const value = Array.isArray(raw) ? raw[0] : raw
-  const text = typeof value === 'string' ? value.trim() : ''
-  if (!text.startsWith('/') || text.startsWith('//')) return ''
-  if (text.startsWith('/login') || text.startsWith('/tenant-select')) return ''
-  return text
-}
-
 const handleLogin = async () => {
   if (!loginFormRef.value) return
 
@@ -184,7 +177,7 @@ const handleLogin = async () => {
       if (isDesktop) {
         await userStore.desktopLogin(loginForm.username, loginForm.password)
         ElMessage.success('登录成功')
-        router.replace(safeRedirectPath(route.query.redirect) || '/')
+        router.replace(safeLoginRedirectPath(route.query.redirect) || '/')
         return
       }
 
@@ -196,7 +189,7 @@ const handleLogin = async () => {
       )
 
       if (result.requiresSelection) {
-        const redirect = safeRedirectPath(route.query.redirect)
+        const redirect = safeLoginRedirectPath(route.query.redirect)
         router.push({
           path: '/tenant-select',
           query: {
@@ -207,7 +200,7 @@ const handleLogin = async () => {
         })
       } else {
         ElMessage.success('登录成功')
-        router.replace(safeRedirectPath(route.query.redirect) || '/')
+        router.replace(safeLoginRedirectPath(route.query.redirect) || '/')
       }
     } catch (error: any) {
       const detail =

@@ -149,7 +149,7 @@ describe('CodeConversationPage', () => {
   it('drops stale route agent query when the runtime session no longer exists', () => {
     expect(pageSource).toContain('function isUnavailableRuntimeSessionError')
     expect(pageSource).toContain('function clearRouteAgentQueryIfCurrent')
-    expect(pageSource).toContain('delete query.agent')
+    expect(pageSource).toContain('nextAgentQuery(route.query)')
     expect(pageSource).toContain('isUnavailableRuntimeSessionError(activationError, runtimeAgentId)')
   })
 
@@ -162,6 +162,7 @@ describe('CodeConversationPage', () => {
     expect(pageSource).toContain('codeRuntimeApi.createApplication')
     expect(pageSource).toContain('codeRuntimeApi.createSessionFromExternalApp')
     expect(pageSource).toContain('`/code/${created.public_id}`')
+    expect(pageSource).toContain('query: nextAgentQuery(route.query)')
     expect(pageSource).toContain('opened.session_id !== sessionRef')
     expect(pageSource).toContain('router.replace')
   })
