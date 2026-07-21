@@ -365,6 +365,74 @@ describe('user tenant switching', () => {
     expect(replace).toHaveBeenCalledWith('/?tenantId=22222222-2222-4222-8222-222222222222')
   })
 
+  it('uses the shared navigation epoch to cancel an active tenant switch', async () => {
+    const { replace } = installBrowserGlobals()
+    const slowCandidate = deferred<User>()
+    authMocks.switchTenant.mockResolvedValue({ access_token: 'candidate-token' })
+    authMocks.getMeWithToken.mockReturnValue(slowCandidate.promise)
+
+    setActivePinia(createPinia())
+    const store = useUserStore()
+    store.setToken('source-token')
+    store.user = makeUser()
+
+    expect(store.advanceTenantNavigationEpoch).toBeTypeOf('function')
+    const resolverEpoch = store.advanceTenantNavigationEpoch()
+    const switchB = store.switchTenantContext(2, targetUuid, targetPath, resolverEpoch)
+    await flushPromises()
+    store.advanceTenantNavigationEpoch()
+    slowCandidate.resolve(makeUser({
+      tenant_id: 2,
+      tenant_name: 'Target tenant',
+      tenant_public_id: targetUuid,
+    }))
+
+    await expect(switchB).resolves.toBe('stale_cancelled')
+    expect(replace).not.toHaveBeenCalled()
+  })
+
+  it('advances the shared navigation epoch before sidebar switchTenant starts Task 3', async () => {
+    const { replace } = installBrowserGlobals()
+    const slowB = deferred<User>()
+    const userC = makeUser({
+      tenant_id: 3,
+      tenant_name: 'Tenant C',
+      tenant_public_id: '33333333-3333-4333-8333-333333333333',
+    })
+    authMocks.switchTenant.mockImplementation((tenantId: number) => Promise.resolve({
+      access_token: tenantId === 2 ? 'token-b' : 'token-c',
+    }))
+    authMocks.getMeWithToken.mockImplementation((candidateToken: string) => {
+      if (candidateToken === 'token-b') return slowB.promise
+      if (candidateToken === 'token-c') return Promise.resolve(userC)
+      throw new Error(`unexpected token ${candidateToken}`)
+    })
+
+    setActivePinia(createPinia())
+    const store = useUserStore()
+    store.setToken('source-token')
+    store.user = makeUser()
+    store.availableTenants = [
+      makeTenantOption(1, sourceUuid),
+      makeTenantOption(2, targetUuid),
+      makeTenantOption(3, userC.tenant_public_id!),
+    ]
+
+    expect(store.advanceTenantNavigationEpoch).toBeTypeOf('function')
+    const resolverEpoch = store.advanceTenantNavigationEpoch()
+    const switchB = store.switchTenantContext(2, targetUuid, '/?tenantId=tenant-b', resolverEpoch)
+    await flushPromises()
+    await store.switchTenant(3)
+    slowB.resolve(makeUser({
+      tenant_id: 2,
+      tenant_name: 'Tenant B',
+      tenant_public_id: targetUuid,
+    }))
+
+    await expect(switchB).resolves.toBe('stale_cancelled')
+    expect(replace).toHaveBeenCalledTimes(1)
+  })
+
   it('ignores a storage event whose token no longer matches localStorage', async () => {
     const { fireStorageEvent } = installBrowserGlobals()
     localStorage.setItem('token', 'token-a')

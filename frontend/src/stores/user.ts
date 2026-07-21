@@ -45,6 +45,7 @@ export const useUserStore = defineStore('user', () => {
   let storageAlignmentAbortController: AbortController | null = null
   let tenantSwitchGeneration = 0
   let tenantSwitchAbortController: AbortController | null = null
+  let tenantNavigationEpoch = 0
   let sessionOwner: symbol | null = null
   let sessionOwnerReleased = false
 
@@ -63,6 +64,16 @@ export const useUserStore = defineStore('user', () => {
     tenantSwitchAbortController?.abort()
     tenantSwitchAbortController = null
   }
+
+  const advanceTenantNavigationEpoch = () => {
+    tenantNavigationEpoch += 1
+    invalidateTenantSwitch()
+    return tenantNavigationEpoch
+  }
+
+  const isTenantNavigationEpochCurrent = (epoch: number) => (
+    epoch === tenantNavigationEpoch
+  )
 
   const ownsSessionOwner = () => (
     !sessionOwnerReleased
@@ -156,7 +167,7 @@ export const useUserStore = defineStore('user', () => {
 
   const commitLocalToken = (newToken: string) => {
     invalidateStorageAlignment()
-    invalidateTenantSwitch()
+    advanceTenantNavigationEpoch()
     token.value = newToken
     commitAuthSession(newToken)
     localStorage.setItem('token', newToken)
@@ -200,7 +211,7 @@ export const useUserStore = defineStore('user', () => {
 
   const clearSessionMemory = () => {
     invalidateStorageAlignment()
-    invalidateTenantSwitch()
+    advanceTenantNavigationEpoch()
     token.value = null
     user.value = null
     localStorage.removeItem('admin_token')
@@ -209,7 +220,7 @@ export const useUserStore = defineStore('user', () => {
 
   const clearToken = () => {
     invalidateStorageAlignment()
-    invalidateTenantSwitch()
+    advanceTenantNavigationEpoch()
     clearAuthSession()
     localStorage.removeItem('token')
   }
@@ -330,7 +341,13 @@ export const useUserStore = defineStore('user', () => {
     targetTenantId: number,
     targetTenantPublicId: string,
     destination: string,
+    navigationEpoch?: number,
   ) => {
+    const epoch = navigationEpoch ?? advanceTenantNavigationEpoch()
+    if (!isTenantNavigationEpochCurrent(epoch)) {
+      return 'stale_cancelled' as const
+    }
+
     const normalizedDestination = normalizeTenantDestination(destination)
     if (!normalizedDestination) {
       throw new Error('invalid tenant switch destination')
@@ -345,6 +362,7 @@ export const useUserStore = defineStore('user', () => {
     const isCurrentOperation = () => (
       !controller.signal.aborted
       && generation === tenantSwitchGeneration
+      && isTenantNavigationEpochCurrent(epoch)
       && getAuthSessionState().revision === sourceRevision
     )
 
@@ -375,6 +393,7 @@ export const useUserStore = defineStore('user', () => {
   }
 
   const switchTenant = async (targetTenantId: number) => {
+    const navigationEpoch = advanceTenantNavigationEpoch()
     if (targetTenantId === tenantId.value) return
     const targetTenant = availableTenants.value.find(
       (tenant) => tenant.tenant_id === targetTenantId,
@@ -387,6 +406,7 @@ export const useUserStore = defineStore('user', () => {
       targetTenantId,
       targetTenant.tenant_public_id,
       currentModeTenantHome(targetTenant.tenant_public_id),
+      navigationEpoch,
     )
   }
 
@@ -452,7 +472,7 @@ export const useUserStore = defineStore('user', () => {
     if (sessionOwnerReleased) return
     sessionOwnerReleased = true
     invalidateStorageAlignment()
-    invalidateTenantSwitch()
+    advanceTenantNavigationEpoch()
     unsubscribeFromSessionClear()
     if (typeof window !== 'undefined') {
       window.removeEventListener('storage', storageListener)
@@ -502,6 +522,8 @@ export const useUserStore = defineStore('user', () => {
     switchTenantContext,
     switchTenant,
     fetchAvailableTenants,
+    advanceTenantNavigationEpoch,
+    isTenantNavigationEpochCurrent,
     logout
   }
 })

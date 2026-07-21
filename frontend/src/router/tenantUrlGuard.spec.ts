@@ -125,7 +125,7 @@ describe('tenant URL route mount gate', () => {
   it('resolves a required tenant URL before evaluating tenant-admin permission', async () => {
     const setMode = vi.fn()
     routerGuardState.session = { initialized: true, token: 'committed-token' }
-    routerGuardState.userStore = {
+    routerGuardState.userStore = installNavigationCoordinator({
       user: { tenant_public_id: currentUuid },
       token: 'committed-token',
       tenantId: 1,
@@ -134,7 +134,7 @@ describe('tenant URL route mount gate', () => {
       availableTenants,
       fetchAvailableTenants: vi.fn(),
       switchTenantContext: vi.fn(),
-    }
+    })
     routerGuardState.modeStore = {
       mode: 'builder',
       meta: builderModeStore.meta,
@@ -166,7 +166,7 @@ describe('tenant URL route mount gate', () => {
 
   it('does not read aPaaS state before a cold-start cross-tenant resolution completes', async () => {
     const requestOrder: string[] = []
-    const userStore = {
+    const userStore = installNavigationCoordinator({
       user: null as { tenant_public_id: string } | null,
       token: 'committed-token',
       tenantId: 1,
@@ -183,7 +183,7 @@ describe('tenant URL route mount gate', () => {
         userStore.user = { tenant_public_id: targetUuid }
         return 'committed_reload' as const
       }),
-    }
+    })
     routerGuardState.session = { initialized: true, token: 'committed-token' }
     routerGuardState.userStore = userStore
     routerGuardState.modeStore = {
@@ -215,7 +215,7 @@ describe('tenant URL route mount gate', () => {
 function createRedirectRouter() {
   installSessionStorage()
   vi.stubGlobal('__DESKTOP__', false)
-  const userStore = {
+  const userStore = installNavigationCoordinator({
     user: { tenant_public_id: currentUuid },
     token: 'committed-token',
     tenantId: 1,
@@ -231,7 +231,7 @@ function createRedirectRouter() {
       userStore.user = { tenant_public_id: tenantPublicId }
       return 'committed_reload' as const
     }),
-  }
+  })
   routerGuardState.session = { initialized: true, token: 'committed-token' }
   routerGuardState.userStore = userStore
   routerGuardState.modeStore = {
@@ -292,6 +292,15 @@ function installSessionStorage() {
   return values
 }
 
+function installNavigationCoordinator<T extends Record<string, any>>(userStore: T): T {
+  let epoch = 0
+  Object.assign(userStore, {
+    advanceTenantNavigationEpoch: vi.fn(() => ++epoch),
+    isTenantNavigationEpochCurrent: vi.fn((candidate: number) => candidate === epoch),
+  })
+  return userStore
+}
+
 function makeUserStore(overrides: Record<string, unknown> = {}) {
   const userStore: Record<string, any> = {
     user: { tenant_public_id: currentUuid },
@@ -306,7 +315,7 @@ function makeUserStore(overrides: Record<string, unknown> = {}) {
     }),
   }
   Object.assign(userStore, overrides)
-  return userStore
+  return installNavigationCoordinator(userStore)
 }
 
 function makeRoute(overrides: Record<string, unknown> = {}) {
@@ -440,7 +449,12 @@ describe('resolveTenantUrl', () => {
     )).resolves.toBe(false)
 
     expect(userStore.fetchAvailableTenants).toHaveBeenCalledTimes(1)
-    expect(userStore.switchTenantContext).toHaveBeenCalledWith(2, targetUuid, targetFullPath)
+    expect(userStore.switchTenantContext).toHaveBeenCalledWith(
+      2,
+      targetUuid,
+      targetFullPath,
+      expect.any(Number),
+    )
     expect(JSON.parse(storage.get('tenant-url-switch') || '')).toEqual({
       targetTenantPublicId: targetUuid,
       targetFullPath,
@@ -450,11 +464,16 @@ describe('resolveTenantUrl', () => {
     })
   })
 
-  it('shares the in-flight switch for repeated navigation to the same full path', async () => {
+  it('restarts the same full path under the latest resolver epoch', async () => {
     const storage = installSessionStorage()
-    const switchFlight = deferred<TenantSwitchOutcome>()
+    const firstSwitch = deferred<TenantSwitchOutcome>()
+    const latestSwitch = deferred<TenantSwitchOutcome>()
+    let switchCall = 0
     const userStore = makeUserStore({
-      switchTenantContext: vi.fn(() => switchFlight.promise),
+      switchTenantContext: vi.fn(() => {
+        switchCall += 1
+        return switchCall === 1 ? firstSwitch.promise : latestSwitch.promise
+      }),
     })
     const route = makeRoute({
       fullPath: `/apps?tenantId=${targetUuid}`,
@@ -464,12 +483,17 @@ describe('resolveTenantUrl', () => {
     const first = resolveTenantUrl(route, userStore, builderModeStore)
     const second = resolveTenantUrl(route, userStore, builderModeStore)
 
-    expect(userStore.switchTenantContext).toHaveBeenCalledTimes(1)
     userStore.user = { tenant_public_id: targetUuid }
-    switchFlight.resolve('committed_reload')
+    latestSwitch.resolve('committed_reload')
+    firstSwitch.resolve('stale_cancelled')
 
-    await expect(first).resolves.toBe(false)
     await expect(second).resolves.toBe(false)
+    await expect(first).resolves.toEqual({
+      path: '/',
+      query: { tenantId: targetUuid },
+      replace: true,
+    })
+    expect(userStore.switchTenantContext).toHaveBeenCalledTimes(2)
     expect(storage.get('tenant-url-switch')).toBeTruthy()
   })
 
@@ -580,11 +604,16 @@ describe('resolveTenantUrl', () => {
     })
   })
 
-  it('uses each same-target waiter mode when the shared operation fails', async () => {
+  it('uses each same-target waiter mode when each latest-epoch operation fails', async () => {
     installSessionStorage()
-    const switchFlight = deferred<TenantSwitchOutcome>()
+    const builderSwitch = deferred<TenantSwitchOutcome>()
+    const codeSwitch = deferred<TenantSwitchOutcome>()
+    let switchCall = 0
     const userStore = makeUserStore({
-      switchTenantContext: vi.fn(() => switchFlight.promise),
+      switchTenantContext: vi.fn(() => {
+        switchCall += 1
+        return switchCall === 1 ? builderSwitch.promise : codeSwitch.promise
+      }),
     })
     const builder = resolveTenantUrl(makeRoute({
       fullPath: `/apps?tenantId=${targetUuid}`,
@@ -595,8 +624,9 @@ describe('resolveTenantUrl', () => {
       query: { tenantId: targetUuid },
     }), userStore, codeModeStore)
 
-    expect(userStore.switchTenantContext).toHaveBeenCalledTimes(1)
-    switchFlight.reject(new Error('tenant switch failed'))
+    expect(userStore.switchTenantContext).toHaveBeenCalledTimes(2)
+    builderSwitch.reject(new Error('builder tenant switch failed'))
+    codeSwitch.reject(new Error('code tenant switch failed'))
 
     await expect(builder).resolves.toEqual({
       path: '/',
@@ -649,6 +679,152 @@ describe('resolveTenantUrl', () => {
     })
   })
 
+  it('cancels a slow B preflight when a current-tenant route is newer', async () => {
+    installSessionStorage()
+    const fetchB = deferred<typeof availableTenants>()
+    const userStore = makeUserStore({
+      availableTenants: [],
+      fetchAvailableTenants: vi.fn(() => fetchB.promise),
+    })
+    const oldB = resolveTenantUrl(makeRoute({
+      fullPath: `/apps?tenantId=${targetUuid}`,
+      query: { tenantId: targetUuid },
+    }), userStore, builderModeStore)
+
+    await expect(resolveTenantUrl(makeRoute(), userStore, builderModeStore)).resolves.toBe(true)
+    fetchB.resolve(availableTenants)
+
+    await expect(oldB).resolves.toEqual({
+      path: '/',
+      query: { tenantId: currentUuid },
+      replace: true,
+    })
+    expect(userStore.switchTenantContext).not.toHaveBeenCalled()
+    expect(userStore.advanceTenantNavigationEpoch).toHaveBeenCalledTimes(2)
+  })
+
+  it('cancels a slow B preflight when a tenantContext none route is newer', async () => {
+    installSessionStorage()
+    const fetchB = deferred<typeof availableTenants>()
+    const userStore = makeUserStore({
+      availableTenants: [],
+      fetchAvailableTenants: vi.fn(() => fetchB.promise),
+    })
+    const oldB = resolveTenantUrl(makeRoute({
+      fullPath: `/apps?tenantId=${targetUuid}`,
+      query: { tenantId: targetUuid },
+    }), userStore, builderModeStore)
+
+    await expect(resolveTenantUrl(makeRoute({
+      path: '/platform-admin/audit',
+      fullPath: `/platform-admin/audit?tenantId=${currentUuid}`,
+      query: { tenantId: currentUuid },
+      meta: { requiresAuth: true, tenantContext: 'none' },
+    }), userStore, builderModeStore)).resolves.toEqual({
+      path: '/platform-admin/audit',
+      query: {},
+      replace: true,
+    })
+    fetchB.resolve(availableTenants)
+
+    await expect(oldB).resolves.toEqual({
+      path: '/',
+      query: { tenantId: currentUuid },
+      replace: true,
+    })
+    expect(userStore.switchTenantContext).not.toHaveBeenCalled()
+  })
+
+  it.each([
+    ['invalid UUID', {
+      fullPath: '/apps?tenantId=123',
+      query: { tenantId: '123' },
+    }],
+    ['missing UUID', {
+      fullPath: '/apps?tab=latest',
+      query: { tab: 'latest' },
+    }],
+  ])('cancels a slow B preflight when a newer %s route does not switch', async (_name, route) => {
+    installSessionStorage()
+    const fetchB = deferred<typeof availableTenants>()
+    const userStore = makeUserStore({
+      availableTenants: [],
+      fetchAvailableTenants: vi.fn(() => fetchB.promise),
+    })
+    const oldB = resolveTenantUrl(makeRoute({
+      fullPath: `/apps?tenantId=${targetUuid}`,
+      query: { tenantId: targetUuid },
+    }), userStore, builderModeStore)
+
+    await resolveTenantUrl(makeRoute(route), userStore, builderModeStore)
+    fetchB.resolve(availableTenants)
+
+    await expect(oldB).resolves.toEqual({
+      path: '/',
+      query: { tenantId: currentUuid },
+      replace: true,
+    })
+    expect(userStore.switchTenantContext).not.toHaveBeenCalled()
+  })
+
+  it('cancels a slow B preflight when sidebar C advances the shared epoch', async () => {
+    installSessionStorage()
+    const fetchB = deferred<typeof availableTenants>()
+    const userStore = makeUserStore({
+      availableTenants: [],
+      fetchAvailableTenants: vi.fn(() => fetchB.promise),
+    })
+    const oldB = resolveTenantUrl(makeRoute({
+      fullPath: `/apps?tenantId=${targetUuid}`,
+      query: { tenantId: targetUuid },
+    }), userStore, builderModeStore)
+    const sidebarEpoch = userStore.advanceTenantNavigationEpoch()
+
+    await expect(userStore.switchTenantContext(
+      3,
+      targetCUuid,
+      `/?tenantId=${targetCUuid}`,
+      sidebarEpoch,
+    )).resolves.toBe('committed_reload')
+    fetchB.resolve(availableTenants)
+
+    await expect(oldB).resolves.toEqual({
+      path: '/',
+      query: { tenantId: targetCUuid },
+      replace: true,
+    })
+    expect(userStore.switchTenantContext).toHaveBeenCalledTimes(1)
+    expect(userStore.switchTenantContext).toHaveBeenCalledWith(
+      3,
+      targetCUuid,
+      `/?tenantId=${targetCUuid}`,
+      sidebarEpoch,
+    )
+  })
+
+  it('cancels an active B Task 3 flight when a current-tenant route is newer', async () => {
+    installSessionStorage()
+    const switchB = deferred<TenantSwitchOutcome>()
+    const userStore = makeUserStore({
+      switchTenantContext: vi.fn(() => switchB.promise),
+    })
+    const oldB = resolveTenantUrl(makeRoute({
+      fullPath: `/apps?tenantId=${targetUuid}`,
+      query: { tenantId: targetUuid },
+    }), userStore, builderModeStore)
+
+    await expect(resolveTenantUrl(makeRoute(), userStore, builderModeStore)).resolves.toBe(true)
+    switchB.resolve('stale_cancelled')
+
+    await expect(oldB).resolves.toEqual({
+      path: '/',
+      query: { tenantId: currentUuid },
+      replace: true,
+    })
+    expect(userStore.switchTenantContext).toHaveBeenCalledTimes(1)
+    expect(userStore.advanceTenantNavigationEpoch).toHaveBeenCalledTimes(2)
+  })
+
   it('does not let a slow B tenant-list recovery supersede a newer C navigation', async () => {
     installSessionStorage()
     const fetchB = deferred<typeof availableTenants>()
@@ -690,6 +866,7 @@ describe('resolveTenantUrl', () => {
       3,
       targetCUuid,
       `/code/apps?tenantId=${targetCUuid}`,
+      expect.any(Number),
     )
   })
 
@@ -734,6 +911,7 @@ describe('resolveTenantUrl', () => {
       2,
       targetUuid,
       `/apps?tenantId=${targetUuid}`,
+      expect.any(Number),
     )
   })
 
