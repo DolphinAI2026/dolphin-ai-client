@@ -46,6 +46,17 @@
 - `ensure_application_session` 在 registry 列表读取出现任何
   `last_read_errors` 或 `last_unreadable_ids` 时 fail closed，并在创建 session、
   branch 或 worktree 前抛出 `SessionRegistryError`。
+- dispose 仅在 worktree 缺失、无法同步的重试路径使用持久化终态或
+  `unavailable_lifecycle_status` 回退；worktree 存在时以 `_sync_session` 更新后的
+  `session.status` 判断是否为 `merged_retained`，覆盖 merge 成功但 registry
+  仍为 `running` 的崩溃窗口。
+- merge 捕获 `GitCommandError` 后只对异常链中可识别的
+  `subprocess.TimeoutExpired` 检查实际 Git 状态。仍有 operation 时复用统一 abort
+  helper；merge 已完成时同步 control HEAD、`merged_commit` 和
+  `merged_retained`；其他情况原样重抛。非 timeout Git 异常不被吞掉。
+- branch-based 本地 merge 恢复要求 `base_commit` 非空、可解析为 commit、确为
+  session branch 祖先，且 branch 相对它至少新增一个提交。branch 已删除时仍可用
+  可解析的 `merged_commit` 回退。
 - 未实现 Task 3-6。
 
 ## 新增与增强测试
@@ -69,6 +80,13 @@
   - 覆盖 registry 中 `merged_commit` 字段缺失。
   - 覆盖 registry 中 `merged_commit: null`。
   - 依次覆盖 `sync`、`archive` 与 `dispose`。
+- `test_dispose_syncs_running_local_merge_before_retained_check`
+  - 覆盖 `merged_commit` 字段缺失与 `null`。
+- `test_merge_timeout_with_operation_aborts_and_reports_conflict`
+- `test_merge_timeout_after_success_recovers_merged_session`
+- `test_merge_non_timeout_git_exception_is_preserved`
+- `test_branch_recovery_requires_trustworthy_advancing_base_commit`
+  - 覆盖 `base_commit` 字段缺失、`null`、无效对象和零增量。
 - 增强既有 dispose 成功测试，断言 registry 记录已删除。
 
 ## RED 证据
@@ -168,6 +186,30 @@ FFF
   `running`。
 - 带 origin 的本地 merge 在 `merged_commit: null` 时，`sync` 保持
   `running`。
+
+第四轮有效 RED：
+
+```bash
+cd backend
+.venv/bin/pytest tests/test_engineering_sessions_service.py -q -k 'dispose_syncs_running_local_merge_before_retained_check or merge_timeout_with_operation_aborts_and_reports_conflict or merge_timeout_after_success_recovers_merged_session or merge_non_timeout_git_exception_is_preserved or branch_recovery_requires_trustworthy_advancing_base_commit'
+```
+
+输出：
+
+```text
+.FFFFFFF.
+7 failed, 2 passed, 181 deselected in 5.37s
+```
+
+失败分别证明：
+
+- timeout 后遗留 merge operation 时未执行状态恢复与 abort。
+- merge 已完成后抛 timeout 时未恢复 `merged_retained`。
+- worktree 存在时 dispose 错用同步前 `running` 状态，字段缺失与 `null` 均失败。
+- `base_commit` 缺失、`null` 时 branch-based 恢复过于宽松。
+- 无效 `base_commit` 被送入 `git rev-list` 并抛出 `GitCommandError`。
+
+同一 RED 中，非 timeout Git 异常原样传播和零增量不判定 merged 两项基线通过。
 
 ## GREEN 证据
 
@@ -314,6 +356,45 @@ cd backend
 31 passed, 150 deselected in 10.66s
 ```
 
+第四轮新增场景：
+
+```bash
+cd backend
+.venv/bin/pytest tests/test_engineering_sessions_service.py -q -k 'dispose_syncs_running_local_merge_before_retained_check or merge_timeout_with_operation_aborts_and_reports_conflict or merge_timeout_after_success_recovers_merged_session or merge_non_timeout_git_exception_is_preserved or branch_recovery_requires_trustworthy_advancing_base_commit'
+```
+
+输出：
+
+```text
+9 passed, 181 deselected in 4.61s
+```
+
+第四轮既有 abort 分类与恢复回归：
+
+```bash
+cd backend
+.venv/bin/pytest tests/test_engineering_sessions_service.py -q -k 'merge_conflict_with_abort_failure_blocks_session or merge_abort_failure_recovers_after_control_operation_is_cleared or merge_conflict_aborts_and_retains_session_worktree or non_conflict_merge_commit_failure_is_not_reported_as_conflict'
+```
+
+输出：
+
+```text
+5 passed, 185 deselected in 4.29s
+```
+
+第四轮 origin、dispose 与保守恢复回归：
+
+```bash
+cd backend
+.venv/bin/pytest tests/test_engineering_sessions_service.py -q -k 'merge_with_origin or origin_merge or dispose or branch_recovery_requires_trustworthy_advancing_base_commit'
+```
+
+输出：
+
+```text
+15 passed, 175 deselected in 9.22s
+```
+
 完整 Engineering Session 集合：
 
 ```bash
@@ -324,5 +405,5 @@ cd backend
 输出：
 
 ```text
-201 passed in 51.73s
+210 passed in 57.42s
 ```
