@@ -17,6 +17,8 @@ variables:
   BUILDER_K8S_STATEFULSET: "ai-builder"
   BUILDER_K8S_BACKEND_CONTAINER: "ai-builder"
   BUILDER_K8S_DIST_INIT_CONTAINER: "copy-frontend-dist"
+  BUILDER_K8S_LABEL_SELECTOR: "app.kubernetes.io/name=ai-builder"
+  BUILDER_K8S_WEB_CONTAINER: "web"
   BUILDER_VITE_BASE_URL: "/ai-builder/"
   BUILDER_ROLLOUT_TIMEOUT: "300s"
   BUILDER_NODE_IMAGE: "hub-mirror.dfy.definesys.cn/library/node:20-bookworm-slim"
@@ -24,6 +26,7 @@ variables:
   BUILDER_JDK17_IMAGE: "hub-mirror.dfy.definesys.cn/library/eclipse-temurin:17-jdk-jammy"
   BUILDER_MAVEN_IMAGE: "hub-mirror.dfy.definesys.cn/library/maven:3.9.9-eclipse-temurin-17"
   BUILDER_PYTHON_IMAGE: "hub-mirror.dfy.definesys.cn/library/python:3.12-slim-bookworm"
+  BUILDER_METADATA_PYTHON_IMAGE: "hub-mirror.dfy.definesys.cn/library/python:3.12-slim-bookworm"
   BUILDER_DOCKER_CLI_IMAGE: "hub-mirror.dfy.definesys.cn/library/docker:24.0.7-cli"
   BUILDER_DOCKER_DIND_IMAGE: "hub-mirror.dfy.definesys.cn/library/docker:24.0.7-dind"
   BUILDER_NPM_REGISTRY: "https://registry.npmmirror.com"
@@ -103,12 +106,92 @@ build_release_image:
         --opt "build-arg:PIP_INDEX_URL=${BUILDER_PIP_INDEX_URL}" \
         --output "type=image,name=${BUILDER_IMAGE},push=true" \
         --metadata-file build/metadata.json
-    - digest="$(python3 -c 'import json; print(json.load(open("build/metadata.json"))["containerimage.digest"])')"
-    - test "${digest#sha256:}" != "${digest}"
-    - printf 'BUILDER_IMAGE=%s@%s\n' "${BUILDER_IMAGE_REPOSITORY}" "${digest}" > build/release.env
-    - printf 'DEPLOYED_REVISION=%s\n' "${CI_COMMIT_SHA}" >> build/release.env
   artifacts:
     expire_in: 1 day
+    paths:
+      - build/metadata.json
+
+publish_release_metadata:
+  stage: build
+  image:
+    name: $BUILDER_METADATA_PYTHON_IMAGE
+    entrypoint: [""]
+  needs:
+    - job: build_release_image
+      artifacts: true
+  rules:
+    - if: '$RUN_RELEASE_AND_UPDATE_SERVER == "1" && $BUILDER_RELEASE_CONFIRM == "release-and-update-server"'
+      when: on_success
+    - when: never
+  script:
+    - |
+      python3 - <<'PY'
+      import json
+      import os
+      import re
+      from pathlib import Path
+
+      metadata = json.loads(Path("build/metadata.json").read_text(encoding="utf-8"))
+      digest = str(metadata.get("containerimage.digest") or "")
+      if not re.fullmatch(r"sha256:[0-9a-f]{64}", digest):
+          raise SystemExit("invalid BuildKit containerimage.digest")
+      Path("build/release.env").write_text(
+          "BUILDER_IMAGE={repository}@{digest}\nDEPLOYED_REVISION={revision}\n".format(
+              repository=os.environ["BUILDER_IMAGE_REPOSITORY"],
+              digest=digest,
+              revision=os.environ["CI_COMMIT_SHA"],
+          ),
+          encoding="utf-8",
+      )
+      PY
+  artifacts:
+    expire_in: 1 day
+    paths:
+      - build/release.env
+    reports:
+      dotenv: build/release.env
+
+release_builder_preflight:
+  stage: release
+  image:
+    name: mcr.microsoft.com/playwright:v1.61.1-noble
+    entrypoint: [""]
+  needs:
+    - job: publish_release_metadata
+      artifacts: true
+  variables:
+    GIT_DEPTH: "0"
+    KUBE_NAMESPACE: $BUILDER_K8S_NAMESPACE
+    KUBE_STATEFULSET: $BUILDER_K8S_STATEFULSET
+    KUBE_BACKEND_CONTAINER: $BUILDER_K8S_BACKEND_CONTAINER
+    KUBE_DIST_INIT_CONTAINER: $BUILDER_K8S_DIST_INIT_CONTAINER
+    KUBE_LABEL_SELECTOR: $BUILDER_K8S_LABEL_SELECTOR
+    KUBE_WEB_CONTAINER: $BUILDER_K8S_WEB_CONTAINER
+  rules:
+    - if: '$RUN_RELEASE_AND_UPDATE_SERVER == "1" && $BUILDER_RELEASE_CONFIRM == "release-and-update-server"'
+      when: on_success
+    - when: never
+  before_script:
+    - curl -fsSLo /usr/local/bin/kubectl https://dl.k8s.io/release/v1.30.7/bin/linux/amd64/kubectl
+    - chmod +x /usr/local/bin/kubectl
+    - kubectl version --client
+    - npm ci
+    - npm exec -- playwright install msedge
+    - |
+      test -n "${APAAS_KUBECONFIG_B64:-}${APAAS_KUBECONFIG:-}"
+      if [ -n "${APAAS_KUBECONFIG_B64:-}" ]; then
+        printf '%s' "${APAAS_KUBECONFIG_B64}" | base64 -d > /tmp/kubeconfig
+      else
+        cp "${APAAS_KUBECONFIG}" /tmp/kubeconfig
+      fi
+      chmod 600 /tmp/kubeconfig
+      export KUBECONFIG=/tmp/kubeconfig
+  script:
+    - bash scripts/verify_builder_tenant_url_smoke.sh --preflight
+  artifacts:
+    expire_in: 1 day
+    paths:
+      - build/release.env
     reports:
       dotenv: build/release.env
 
@@ -118,7 +201,7 @@ release_and_update_server:
     name: hub-mirror.dfy.definesys.cn/bitnami/kubectl:1.30.7
     entrypoint: [""]
   needs:
-    - job: build_release_image
+    - job: release_builder_preflight
       artifacts: true
   rules:
     - if: '$RUN_RELEASE_AND_UPDATE_SERVER == "1" && $BUILDER_RELEASE_CONFIRM == "release-and-update-server"'
@@ -156,6 +239,14 @@ release_builder_browser_smoke:
   needs:
     - job: release_and_update_server
       artifacts: true
+  variables:
+    GIT_DEPTH: "0"
+    KUBE_NAMESPACE: $BUILDER_K8S_NAMESPACE
+    KUBE_STATEFULSET: $BUILDER_K8S_STATEFULSET
+    KUBE_BACKEND_CONTAINER: $BUILDER_K8S_BACKEND_CONTAINER
+    KUBE_DIST_INIT_CONTAINER: $BUILDER_K8S_DIST_INIT_CONTAINER
+    KUBE_LABEL_SELECTOR: $BUILDER_K8S_LABEL_SELECTOR
+    KUBE_WEB_CONTAINER: $BUILDER_K8S_WEB_CONTAINER
   rules:
     - if: '$RUN_RELEASE_AND_UPDATE_SERVER == "1" && $BUILDER_RELEASE_CONFIRM == "release-and-update-server"'
       when: on_success

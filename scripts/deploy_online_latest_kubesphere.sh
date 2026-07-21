@@ -22,6 +22,7 @@ PLATFORM="${PLATFORM:-linux/amd64}"
 IMAGE_TAG="${IMAGE_TAG:-}"
 IMAGE_PULL_SECRET="${IMAGE_PULL_SECRET:-regcred-hub-dfy}"
 ROLL_TIMEOUT="${ROLL_TIMEOUT:-300s}"
+KUBE_LABEL_SELECTOR="${KUBE_LABEL_SELECTOR:-app.kubernetes.io/name=ai-builder}"
 
 VITE_BASE_URL="${VITE_BASE_URL:-/ai-builder/}"
 VITE_ADMIN_BASE="${VITE_ADMIN_BASE:-/ai-builder/admin/}"
@@ -111,7 +112,7 @@ docker_login_if_requested() {
 }
 
 build_and_push_image() {
-  local image_tag_ref image_digest
+  local image_tag_ref image_digest cli_name build_push
 
   GIT_FULL_SHA="$(git -C "$WORKDIR" rev-parse HEAD)"
   [[ "$GIT_FULL_SHA" =~ ^[0-9a-f]{40}$ ]] || die "HEAD is not a full lowercase Git SHA"
@@ -119,6 +120,12 @@ build_and_push_image() {
     IMAGE_TAG="${IMAGE_TAG_PREFIX}-$(date +%Y%m%d-%H%M%S)-${GIT_SHA}"
   fi
   IMAGE="${IMAGE_REPO}:${IMAGE_TAG}"
+  cli_name="$(basename "$CONTAINER_CLI")"
+  case "$cli_name" in
+    podman) build_push=0 ;;
+    docker) build_push=1 ;;
+    *) die "unsupported CONTAINER_CLI for immutable digest release: ${CONTAINER_CLI}" ;;
+  esac
 
   log "build and push image: ${IMAGE}"
   REPO_ROOT="$WORKDIR" \
@@ -129,28 +136,44 @@ build_and_push_image() {
   VITE_ADMIN_BASE="$VITE_ADMIN_BASE" \
   VITE_API_BASE_URL="$VITE_API_BASE_URL" \
   VITE_MCP_PUBLIC_BASE="${VITE_MCP_PUBLIC_BASE:-https://${HOST}/ai-builder}" \
-  PUSH=1 \
+  PUSH="$build_push" \
     "$WORKDIR/scripts/build_builder_image.sh"
   image_tag_ref="$IMAGE"
-  image_digest="$(resolve_pushed_image_digest "$image_tag_ref")"
+  case "$cli_name" in
+    podman)
+      image_digest="$(push_podman_image_and_capture_digest "$image_tag_ref")"
+      ;;
+    docker)
+      image_digest="$(resolve_docker_pushed_image_digest "$image_tag_ref")"
+      ;;
+  esac
   IMAGE="${IMAGE_REPO}@${image_digest}"
   ok "image pushed: ${IMAGE}"
 }
 
-resolve_pushed_image_digest() {
-  local image_tag_ref="$1" digest image_id
+push_podman_image_and_capture_digest() {
+  local image_tag_ref="$1" digest_file digest
 
-  if "$CONTAINER_CLI" buildx version >/dev/null 2>&1; then
-    digest="$("$CONTAINER_CLI" buildx imagetools inspect "$image_tag_ref" \
-      --format '{{.Manifest.Digest}}')" \
-      || die "unable to resolve pushed image digest: ${image_tag_ref}"
-  else
-    image_id="$("$CONTAINER_CLI" image inspect "$image_tag_ref" \
-      --format '{{index .RepoDigests 0}}')" \
-      || die "unable to inspect pushed image digest: ${image_tag_ref}"
-    digest="${image_id##*@}"
+  digest_file="$(mktemp "${TMP_PARENT}/apaas-builder-push-digest.XXXXXX")"
+  if ! "$CONTAINER_CLI" push --digestfile "$digest_file" "$image_tag_ref" >/dev/null; then
+    rm -f "$digest_file"
+    die "podman push failed: ${image_tag_ref}"
   fi
+  digest="$(tr -d '[:space:]' <"$digest_file")"
+  rm -f "$digest_file"
+  [[ "$digest" =~ ^sha256:[0-9a-f]{64}$ ]] \
+    || die "invalid Podman push digest"
+  printf '%s\n' "$digest"
+}
 
+resolve_docker_pushed_image_digest() {
+  local image_tag_ref="$1" digest
+
+  "$CONTAINER_CLI" buildx imagetools inspect --help >/dev/null 2>&1 \
+    || die "Docker buildx imagetools is required to resolve the pushed image digest"
+  digest="$("$CONTAINER_CLI" buildx imagetools inspect "$image_tag_ref" \
+    --format '{{.Manifest.Digest}}')" \
+    || die "unable to resolve pushed image digest: ${image_tag_ref}"
   [[ "$digest" =~ ^sha256:[0-9a-f]{64}$ ]] \
     || die "invalid pushed image digest: ${digest}"
   printf '%s\n' "$digest"
@@ -245,6 +268,7 @@ metadata:
   namespace: ${NAMESPACE}
   labels:
     app: ${APP_NAME}
+    app.kubernetes.io/name: ai-builder
 spec:
   type: ClusterIP
   selector:
@@ -284,6 +308,7 @@ spec:
     metadata:
       labels:
         app: ${APP_NAME}
+        app.kubernetes.io/name: ai-builder
     spec:
       affinity:
         nodeAffinity:
@@ -443,16 +468,31 @@ rollout_and_verify() {
   run_release_builder_smoke
 }
 
+run_release_builder_preflight() {
+  log "run release preflight before Kubernetes mutation"
+  BUILDER_ORIGIN="${BUILDER_ORIGIN:-https://${HOST}}" \
+  BUILDER_IMAGE="$IMAGE" \
+  DEPLOYED_REVISION="$GIT_FULL_SHA" \
+  KUBE_NAMESPACE="$NAMESPACE" \
+  KUBE_STATEFULSET="$APP_NAME" \
+  KUBE_LABEL_SELECTOR="$KUBE_LABEL_SELECTOR" \
+  KUBE_BACKEND_CONTAINER="apaas-builder" \
+  KUBE_DIST_INIT_CONTAINER="copy-frontend-dist" \
+  KUBE_WEB_CONTAINER="web" \
+    bash "$WORKDIR/scripts/verify_builder_tenant_url_smoke.sh" --preflight
+}
+
 run_release_builder_smoke() {
   log "run immutable digest and tenant URL release smoke"
   BUILDER_IMAGE="$IMAGE" \
   DEPLOYED_REVISION="$GIT_FULL_SHA" \
   KUBE_NAMESPACE="$NAMESPACE" \
-  KUBE_POD_SELECTOR="app=${APP_NAME}" \
+  KUBE_STATEFULSET="$APP_NAME" \
+  KUBE_LABEL_SELECTOR="$KUBE_LABEL_SELECTOR" \
   KUBE_BACKEND_CONTAINER="apaas-builder" \
   KUBE_DIST_INIT_CONTAINER="copy-frontend-dist" \
   KUBE_WEB_CONTAINER="web" \
-  BUILDER_BASE_URL="${BUILDER_BASE_URL:-https://${HOST}}" \
+  BUILDER_ORIGIN="${BUILDER_ORIGIN:-https://${HOST}}" \
     bash "$WORKDIR/scripts/verify_builder_tenant_url_smoke.sh"
 }
 
@@ -463,11 +503,13 @@ main() {
   need awk
   need sed
   need base64
+  need mktemp
 
   setup_kubeconfig
   clone_latest_code
   docker_login_if_requested
   build_and_push_image
+  run_release_builder_preflight
   apply_namespace
   apply_nginx_config
   ensure_dev_secret
@@ -480,4 +522,6 @@ main() {
   ok "url ${PUBLIC_URL}"
 }
 
-main "$@"
+if [[ "${BASH_SOURCE[0]}" == "$0" ]]; then
+  main "$@"
+fi
