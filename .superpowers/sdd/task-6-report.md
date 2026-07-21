@@ -172,3 +172,60 @@ Task 6 只有在 post-commit 日志同时包含以下结果且 `git status` 保�
 TENANT_URL_FIXTURE=PASS channel=chromium build_sha=<final HEAD>
 TENANT_URL_FIXTURE=PASS channel=msedge build_sha=<final HEAD>
 ```
+
+## Chromium rejected redirect 聚焦修复
+
+日期：2026-07-21
+
+干净 revision `9ada89d7160121407af477759f59ad43ba4435f9` 的 Chromium E2E
+证明：bootstrap 后访问无权 `tenantId` 时，`/apaas/status` 可能在浏览器地址仍为
+被拒绝 URL 时发起。根因是 preview status pending 在 router `beforeEach` 中、
+导航最终提交前被消费。
+
+本轮将恢复时机移到 router `afterEach`。只有同时满足以下条件才清除 pending 并
+异步请求 `/apaas/status`：
+
+- navigation 没有 failure；
+- 路由要求认证；
+- `tenantContext=required`；
+- URL 中规范化后的 tenant UUID 与已提交用户的 tenant UUID 相等；
+- auth session 已提交。
+
+`tenantContext=none`、未认证路由、navigation failure、rejected URL 和尚未完成的
+canonical redirect 均不恢复 preview status。
+
+TDD RED：
+
+```text
+cd frontend
+npm exec -- vitest run src/router/tenantUrlGuard.spec.ts
+
+Test Files  1 failed (1)
+Tests       5 failed | 44 passed (49)
+```
+
+五个新增场景均因 `router afterEach was not registered` 按预期失败。首次 RED 还发现
+rejected 场景的 tenant-list refresh mock 返回 `undefined`；修正测试 fixture 后重新
+取得上述有效 RED，再修改 production router。
+
+GREEN：
+
+```text
+cd frontend
+npm exec -- vitest run src/router/tenantUrlGuard.spec.ts
+
+Test Files  1 passed (1)
+Tests       49 passed (49)
+```
+
+Typecheck：
+
+```text
+cd frontend
+npm exec -- vue-tsc --build --noEmit --pretty false
+
+exit code 0
+```
+
+本轮按聚焦范围未重跑 Chromium/msedge 长 E2E；该风险保留给后续 clean-HEAD
+浏览器验证。

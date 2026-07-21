@@ -10,6 +10,7 @@ import {
 const routerHarness = vi.hoisted(() => ({
   routes: [] as Array<{ path: string; meta: Record<string, unknown> }>,
   guard: null as null | ((to: any, from: any, next: (target?: unknown) => void) => Promise<void>),
+  afterGuard: null as null | ((to: any, from: any, failure?: unknown) => void),
 }))
 
 const routerGuardState = vi.hoisted(() => ({
@@ -54,6 +55,9 @@ vi.mock('vue-router', () => {
         getRoutes: () => routerHarness.routes,
         beforeEach: (guard: typeof routerHarness.guard) => {
           routerHarness.guard = guard
+        },
+        afterEach: (guard: typeof routerHarness.afterGuard) => {
+          routerHarness.afterGuard = guard
         },
         onError: vi.fn(),
       }
@@ -124,6 +128,47 @@ describe('tenantContext route classification', () => {
 })
 
 describe('tenant URL route mount gate', () => {
+  function installBootstrapState() {
+    vi.stubGlobal('__DESKTOP__', false)
+    const userStore = installNavigationCoordinator({
+      user: null as { tenant_public_id: string } | null,
+      token: 'committed-token',
+      tenantId: 1,
+      isTenantAdmin: true,
+      isPlatformAdmin: false,
+      availableTenants,
+      fetchUser: vi.fn(async () => {
+        userStore.user = { tenant_public_id: currentUuid }
+      }),
+      fetchAvailableTenants: vi.fn().mockResolvedValue(availableTenants),
+      switchTenantContext: vi.fn(),
+    })
+    routerGuardState.session = { initialized: true, token: 'committed-token' }
+    routerGuardState.userStore = userStore
+    routerGuardState.modeStore = {
+      mode: 'builder',
+      meta: builderModeStore.meta,
+      setMode: vi.fn(),
+    }
+    requestHarness.get.mockReset().mockResolvedValue({ connected: true })
+    return userStore
+  }
+
+  async function runGuard(to: Record<string, any>) {
+    if (!routerHarness.guard) throw new Error('router guard was not registered')
+    const next = vi.fn()
+    await routerHarness.guard(to, {}, next)
+    return next
+  }
+
+  function commitNavigation(
+    to: Record<string, any>,
+    failure?: unknown,
+  ) {
+    if (!routerHarness.afterGuard) throw new Error('router afterEach was not registered')
+    routerHarness.afterGuard(to, {}, failure)
+  }
+
   it('resolves a required tenant URL before evaluating tenant-admin permission', async () => {
     const setMode = vi.fn()
     routerGuardState.session = { initialized: true, token: 'committed-token' }
@@ -211,6 +256,95 @@ describe('tenant URL route mount gate', () => {
     expect(requestOrder).toEqual(['/auth/me', '/auth/switch-tenant'])
     expect(requestHarness.get).not.toHaveBeenCalled()
     expect(next).toHaveBeenCalledWith(false)
+  })
+
+  it.each([
+    ['rejected', {
+      path: '/apps',
+      fullPath: `/apps?tenantId=${unknownUuid}`,
+      query: { tenantId: unknownUuid },
+      hash: '',
+      meta: { requiresAuth: true, tenantContext: 'required' },
+    }],
+    ['canonical', {
+      path: '/apps',
+      fullPath: '/apps?tab=latest',
+      query: { tab: 'latest' },
+      hash: '',
+      meta: { requiresAuth: true, tenantContext: 'required' },
+    }],
+  ])(
+    'restores preview status only after the bootstrap %s redirect commits an aligned required URL',
+    async (_name, initialRoute) => {
+      installBootstrapState()
+      const initialNext = await runGuard(initialRoute)
+
+      expect(initialNext).toHaveBeenCalledWith(expect.objectContaining({
+        query: expect.objectContaining({ tenantId: currentUuid }),
+        replace: true,
+      }))
+      expect(requestHarness.get).not.toHaveBeenCalled()
+
+      commitNavigation(initialRoute)
+      expect(requestHarness.get).not.toHaveBeenCalled()
+
+      const finalRoute = {
+        path: '/apps',
+        fullPath: `/apps?tenantId=${currentUuid}`,
+        query: { tenantId: currentUuid },
+        hash: '',
+        meta: { requiresAuth: true, tenantContext: 'required' },
+      }
+      const finalNext = await runGuard(finalRoute)
+      expect(finalNext).toHaveBeenCalledWith()
+      expect(requestHarness.get).not.toHaveBeenCalled()
+
+      commitNavigation(finalRoute)
+      expect(requestHarness.get).toHaveBeenCalledOnce()
+      expect(requestHarness.get).toHaveBeenCalledWith('/apaas/status')
+    },
+  )
+
+  it.each([
+    ['a navigation failure', {
+      path: '/apps',
+      fullPath: `/apps?tenantId=${currentUuid}`,
+      query: { tenantId: currentUuid },
+      hash: '',
+      meta: { requiresAuth: true, tenantContext: 'required' },
+    }, new Error('cancelled')],
+    ['an unauthenticated route', {
+      path: '/login',
+      fullPath: `/login?tenantId=${currentUuid}`,
+      query: { tenantId: currentUuid },
+      hash: '',
+      meta: { requiresAuth: false, tenantContext: 'required' },
+    }, undefined],
+    ['a tenantContext none route', {
+      path: '/platform-admin/audit',
+      fullPath: '/platform-admin/audit',
+      query: {},
+      hash: '',
+      meta: { requiresAuth: true, tenantContext: 'none' },
+    }, undefined],
+  ])('does not restore pending preview status after %s', async (
+    _name,
+    committedRoute,
+    failure,
+  ) => {
+    installBootstrapState()
+    const canonicalRoute = {
+      path: '/apps',
+      fullPath: '/apps',
+      query: {},
+      hash: '',
+      meta: { requiresAuth: true, tenantContext: 'required' },
+    }
+    await runGuard(canonicalRoute)
+
+    commitNavigation(committedRoute, failure)
+
+    expect(requestHarness.get).not.toHaveBeenCalled()
   })
 })
 

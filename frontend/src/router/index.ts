@@ -10,7 +10,7 @@ import { usePreviewStore } from '@/stores/preview'
 import { modeForRoutePath, useModeStore } from '@/stores/mode'
 import request, { getAuthSessionState } from '@/utils/request'
 import { resolveDesktopRedirect } from './desktopGuard'
-import { resolveTenantUrl } from './tenantUrlGuard'
+import { normalizeTenantPublicId, resolveTenantUrl } from './tenantUrlGuard'
 import { safeLoginRedirectPath } from './loginRedirect'
 import { fetchOnboardingState, isOnboardingConfirmed, markOnboardingConfirmed } from '@/composables/useOnboardingState'
 
@@ -336,10 +336,6 @@ export function installRouterGuards(targetRouter: Router): void {
       }
       return
     }
-    if (previewStatusRestorePending) {
-      previewStatusRestorePending = false
-      await restorePreviewStatus()
-    }
   }
 
   // v3 2026-05-20 fix (code review #P2-10): 权限被拒时用 replace
@@ -391,6 +387,32 @@ export function installRouterGuards(targetRouter: Router): void {
   } else {
     next()
   }
+  })
+
+  targetRouter.afterEach((to, _from, failure) => {
+    if (
+      !previewStatusRestorePending
+      || failure
+      || !to.meta.requiresAuth
+      || to.meta.tenantContext !== 'required'
+      || !hasCommittedAuthSession()
+    ) {
+      return
+    }
+    const userStore = useUserStore()
+    const routeTenantPublicId = normalizeTenantPublicId(to.query.tenantId)
+    const committedTenantPublicId = normalizeTenantPublicId(
+      userStore.user?.tenant_public_id,
+    )
+    if (
+      !routeTenantPublicId
+      || !committedTenantPublicId
+      || routeTenantPublicId !== committedTenantPublicId
+    ) {
+      return
+    }
+    previewStatusRestorePending = false
+    void restorePreviewStatus()
   })
 
 // 部署后老 tab 引用旧 index.html，里面 import 的 chunk hash 已被新 build 覆盖：
