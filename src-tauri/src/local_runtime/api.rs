@@ -59,8 +59,14 @@ pub struct LocalRuntimeApiServer {
 }
 
 impl LocalRuntimeApiServer {
-    pub fn start(data_root: impl Into<PathBuf>) -> Result<Self, LocalRuntimeError> {
-        let manager = Arc::new(LocalRuntimeManager::new(data_root, MxcRuntimeDriver::new()));
+    pub fn start(
+        data_root: impl Into<PathBuf>,
+        appliance_root: impl Into<PathBuf>,
+    ) -> Result<Self, LocalRuntimeError> {
+        let manager = Arc::new(LocalRuntimeManager::new(
+            data_root,
+            MxcRuntimeDriver::with_appliance_root(appliance_root),
+        ));
         let _ = manager.reconcile();
         Self::start_with_manager(manager)
     }

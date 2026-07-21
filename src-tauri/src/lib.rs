@@ -8,15 +8,19 @@ pub mod local_runtime;
 struct SidecarChild(Mutex<Option<CommandChild>>);
 struct LocalRuntimeManagerState(Mutex<Option<local_runtime::api::LocalRuntimeApiServer>>);
 
-fn packaged_agent_runtime_path(handle: &tauri::AppHandle) -> std::path::PathBuf {
+fn packaged_agent_runtime_root(handle: &tauri::AppHandle) -> std::path::PathBuf {
     if let Some(path) = std::env::var_os("DOLPHIN_AGENT_RUNTIME_PATH") {
-        return path.into();
+        let path: std::path::PathBuf = path.into();
+        return path
+            .parent()
+            .and_then(std::path::Path::parent)
+            .map(std::path::Path::to_path_buf)
+            .unwrap_or(path);
     }
     handle
         .path()
         .resource_dir()
         .expect("resource directory is available")
-        .join("agent-runtime")
         .join("agent-runtime")
 }
 
@@ -110,11 +114,18 @@ pub fn run() {
 
             let data_dir = handle.path().app_data_dir().expect("app_data_dir");
             std::fs::create_dir_all(&data_dir).ok();
-            let local_runtime_manager = local_runtime::api::LocalRuntimeApiServer::start(&data_dir)
-                .expect("failed to start local runtime manager");
+            let agent_runtime_root = packaged_agent_runtime_root(&handle);
+            let appliance_bwrap = agent_runtime_root.join("bin").join("bwrap");
+            if appliance_bwrap.is_file() {
+                local_runtime::mxc_driver::configure_bubblewrap_from_appliance(&agent_runtime_root)
+                    .expect("failed to configure local runtime Bubblewrap");
+            }
+            let local_runtime_manager =
+                local_runtime::api::LocalRuntimeApiServer::start(&data_dir, &agent_runtime_root)
+                    .expect("failed to start local runtime manager");
             let local_runtime_manager_url = local_runtime_manager.base_url.clone();
             let local_runtime_manager_token = local_runtime_manager.token.clone();
-            let agent_runtime_path = packaged_agent_runtime_path(&handle);
+            let agent_runtime_path = agent_runtime_root.join("bin").join("agent-runtime");
             handle.manage(LocalRuntimeManagerState(Mutex::new(Some(
                 local_runtime_manager,
             ))));

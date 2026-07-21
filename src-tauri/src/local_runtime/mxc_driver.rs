@@ -3,6 +3,7 @@ use super::manager::RuntimeDriver;
 use mxc_sdk::policy::{FilesystemSection, NetworkSection};
 use mxc_sdk::{Sandbox, SandboxPolicy};
 use std::collections::HashMap;
+use std::ffi::OsString;
 use std::fs;
 use std::path::Path;
 use std::sync::Mutex;
@@ -64,8 +65,36 @@ pub fn probe() -> Result<ProbeResult, LocalRuntimeError> {
     })
 }
 
+pub fn configure_bubblewrap_from_appliance(appliance_root: &Path) -> Result<(), LocalRuntimeError> {
+    let appliance_root = fs::canonicalize(appliance_root).map_err(|_| {
+        LocalRuntimeError::new(
+            LocalRuntimeErrorCode::InvalidRequest,
+            "local runtime appliance is unavailable",
+        )
+    })?;
+    let bwrap = appliance_root.join("bin").join("bwrap");
+    if !bwrap.is_file() {
+        return Err(LocalRuntimeError::new(
+            LocalRuntimeErrorCode::InvalidRequest,
+            "local runtime appliance is missing Bubblewrap",
+        ));
+    }
+    let path = bubblewrap_path_with_appliance(std::env::var_os("PATH"), &appliance_root);
+    std::env::set_var("PATH", path);
+    Ok(())
+}
+
+fn bubblewrap_path_with_appliance(existing: Option<OsString>, appliance_root: &Path) -> OsString {
+    let mut paths = vec![appliance_root.join("bin")];
+    if let Some(existing) = existing {
+        paths.extend(std::env::split_paths(&existing));
+    }
+    std::env::join_paths(paths).expect("local runtime appliance path does not contain separators")
+}
+
 pub struct MxcRuntimeDriver {
     sandboxes: Mutex<HashMap<u32, Sandbox>>,
+    appliance_root: Option<std::path::PathBuf>,
 }
 
 impl Default for MxcRuntimeDriver {
@@ -78,6 +107,14 @@ impl MxcRuntimeDriver {
     pub fn new() -> Self {
         Self {
             sandboxes: Mutex::new(HashMap::new()),
+            appliance_root: None,
+        }
+    }
+
+    pub fn with_appliance_root(appliance_root: impl Into<std::path::PathBuf>) -> Self {
+        Self {
+            sandboxes: Mutex::new(HashMap::new()),
+            appliance_root: Some(appliance_root.into()),
         }
     }
 }
@@ -89,6 +126,7 @@ impl RuntimeDriver for MxcRuntimeDriver {
         ownership_nonce: &str,
     ) -> Result<ProcessIdentity, LocalRuntimeError> {
         probe()?;
+        let appliance_root = self.readonly_appliance_root(request)?;
         let policy = SandboxPolicy {
             version: format!("{MXC_SDK_VERSION}-alpha"),
             filesystem: Some(FilesystemSection {
@@ -98,9 +136,7 @@ impl RuntimeDriver for MxcRuntimeDriver {
                     request.codex_home.display().to_string(),
                     request.runtime_dir.display().to_string(),
                 ],
-                readonly_paths: vec![parent_directory(&request.agent_runtime_path)?
-                    .display()
-                    .to_string()],
+                readonly_paths: vec![appliance_root.display().to_string()],
                 denied_paths: Vec::new(),
                 clear_policy_on_exit: Some(true),
             }),
@@ -122,7 +158,8 @@ impl RuntimeDriver for MxcRuntimeDriver {
                     format!("cannot build MXC sandbox request: {error}"),
                 )
             })?;
-        let environment = filtered_environment(request, ownership_nonce)?;
+        let mut environment = filtered_environment(request, ownership_nonce)?;
+        environment.extend(appliance_environment(&appliance_root));
         sandbox_request
             .set_working_directory(request.worktree_path.display().to_string())
             .set_env(environment);
@@ -238,6 +275,55 @@ impl RuntimeDriver for MxcRuntimeDriver {
     fn identity(&self, pid: u32) -> Result<Option<ProcessIdentity>, LocalRuntimeError> {
         process_identity(pid)
     }
+}
+
+impl MxcRuntimeDriver {
+    fn readonly_appliance_root(
+        &self,
+        request: &StartRequest,
+    ) -> Result<std::path::PathBuf, LocalRuntimeError> {
+        let agent_runtime = std::fs::canonicalize(&request.agent_runtime_path).map_err(|_| {
+            LocalRuntimeError::new(
+                LocalRuntimeErrorCode::InvalidRequest,
+                "agent runtime executable is unavailable",
+            )
+        })?;
+        if let Some(configured_root) = &self.appliance_root {
+            let root = std::fs::canonicalize(configured_root).map_err(|_| {
+                LocalRuntimeError::new(
+                    LocalRuntimeErrorCode::InvalidRequest,
+                    "local runtime appliance is unavailable",
+                )
+            })?;
+            if !agent_runtime.starts_with(&root) {
+                return Err(LocalRuntimeError::new(
+                    LocalRuntimeErrorCode::InvalidRequest,
+                    "agent runtime executable is outside the trusted local appliance",
+                ));
+            }
+            return Ok(root);
+        }
+        parent_directory(&agent_runtime).map(std::path::Path::to_path_buf)
+    }
+}
+
+fn appliance_environment(appliance_root: &Path) -> Vec<(String, String)> {
+    let root = appliance_root.display().to_string();
+    vec![
+        (
+            "APAAS_CODEX_APP_SERVER_BINARY".to_string(),
+            format!("{root}/codex/bin/codex"),
+        ),
+        (
+            "APAAS_AGENTIC_PACK_DIR".to_string(),
+            format!("{root}/agentic-coding-pack"),
+        ),
+        ("AGENTIC_ROOT".to_string(), format!("{root}/agentic-coding")),
+        (
+            "AGENTIC_PACK_PYTHON".to_string(),
+            format!("{root}/agentic-coding/.venv/bin/python"),
+        ),
+    ]
 }
 
 fn cleanup_failed_sandbox(sandbox: &mut Sandbox) {
@@ -467,5 +553,78 @@ mod tests {
             .iter()
             .any(|(key, value)| { key == "APAAS_RUNTIME_OWNERSHIP_NONCE" && value == "nonce-a" }));
         assert!(!environment.iter().any(|(key, _)| key == "PATH"));
+    }
+
+    #[test]
+    fn appliance_environment_uses_only_the_trusted_appliance_root() {
+        let root = Path::new("/opt/dolphin/agent-runtime");
+        let environment = appliance_environment(root);
+
+        assert!(environment
+            .iter()
+            .all(|(_, value)| value.starts_with("/opt/dolphin/agent-runtime/")));
+        assert!(environment.iter().any(|(key, value)| {
+            key == "APAAS_CODEX_APP_SERVER_BINARY"
+                && value == "/opt/dolphin/agent-runtime/codex/bin/codex"
+        }));
+        assert!(environment.iter().any(|(key, value)| {
+            key == "APAAS_AGENTIC_PACK_DIR"
+                && value == "/opt/dolphin/agent-runtime/agentic-coding-pack"
+        }));
+    }
+
+    #[test]
+    fn trusted_appliance_rejects_an_external_agent_runtime() {
+        let unique = format!(
+            "orcamatrix-local-runtime-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .expect("system clock is after epoch")
+                .as_nanos()
+        );
+        let root = std::env::temp_dir().join(unique);
+        let appliance = root.join("appliance");
+        let outside = root.join("outside-agent-runtime");
+        std::fs::create_dir_all(&appliance).expect("create appliance");
+        std::fs::write(&outside, "#!/bin/sh\n").expect("create external runtime");
+
+        let request = StartRequest {
+            runtime_scope_id: "scope-a".into(),
+            application_id: "app-a".into(),
+            sandbox_instance_id: "instance-a".into(),
+            workspace_id: "workspace-a".into(),
+            worktree_path: "/tmp/worktree".into(),
+            git_common_dir: "/tmp/git-common".into(),
+            codex_home: "/tmp/codex".into(),
+            runtime_dir: "/tmp/runtime".into(),
+            runtime_context_path: "/tmp/runtime/runtime-context.json".into(),
+            agent_runtime_path: outside,
+            runtime_addr: "127.0.0.1:41001".into(),
+            environment: Default::default(),
+        };
+        let driver = MxcRuntimeDriver::with_appliance_root(&appliance);
+
+        let error = driver.readonly_appliance_root(&request).unwrap_err();
+        assert_eq!(error.code, LocalRuntimeErrorCode::InvalidRequest);
+        assert!(error
+            .message
+            .contains("outside the trusted local appliance"));
+
+        std::fs::remove_dir_all(root).expect("clean test directory");
+    }
+
+    #[test]
+    fn appliance_bubblewrap_path_precedes_the_existing_path() {
+        let appliance = Path::new("/opt/dolphin/agent-runtime");
+        let path = bubblewrap_path_with_appliance(
+            Some(std::ffi::OsString::from("/usr/local/bin:/usr/bin")),
+            appliance,
+        );
+
+        assert_eq!(
+            path,
+            std::ffi::OsString::from("/opt/dolphin/agent-runtime/bin:/usr/local/bin:/usr/bin")
+        );
     }
 }
