@@ -56,6 +56,12 @@ interface TenantSwitchMarker {
   attempt: number
 }
 
+interface TenantSwitchFlight {
+  promise: Promise<RouteLocationRaw | false>
+}
+
+let activeTenantSwitch: TenantSwitchFlight | null = null
+
 function firstQueryValue(raw: unknown): unknown {
   return Array.isArray(raw) ? raw[0] : raw
 }
@@ -73,10 +79,14 @@ export function classifyTenantTarget({
   tenantContext = 'required',
 }: TenantTargetInput): TenantResolutionDecision {
   if (tenantContext === 'none') {
-    return firstQueryValue(rawTenantId) == null ? { kind: 'continue' } : { kind: 'remove' }
+    return rawTenantId === undefined ? { kind: 'continue' } : { kind: 'remove' }
   }
 
   const current = normalizeTenantPublicId(currentTenantPublicId)
+  const isArray = Array.isArray(rawTenantId)
+  if (isArray && rawTenantId.length !== 1) {
+    return { kind: 'reject', reason: 'invalid' }
+  }
   const raw = firstQueryValue(rawTenantId)
   if (raw == null) {
     return current
@@ -87,7 +97,7 @@ export function classifyTenantTarget({
   const target = normalizeTenantPublicId(raw)
   if (!target) return { kind: 'reject', reason: 'invalid' }
   if (target === current) {
-    return raw === target
+    return !isArray && raw === target
       ? { kind: 'continue' }
       : { kind: 'canonicalize', tenantPublicId: target }
   }
@@ -97,7 +107,7 @@ export function classifyTenantTarget({
   ))
   if (!tenant) return { kind: 'reject', reason: 'inaccessible' }
 
-  return raw === target
+  return !isArray && raw === target
     ? { kind: 'switch', tenantId: tenant.tenant_id, tenantPublicId: target }
     : { kind: 'canonicalize', tenantPublicId: target }
 }
@@ -234,6 +244,9 @@ export async function resolveTenantUrl(
     return tenantHome(currentTenantPublicId, modeStore, userStore.isPlatformAdmin)
   }
 
+  const activeSwitch = activeTenantSwitch
+  if (activeSwitch) return activeSwitch.promise
+
   const marker = readSwitchMarker()
   if (
     marker
@@ -251,15 +264,30 @@ export async function resolveTenantUrl(
     attempt: 1,
   })
 
+  let switchPromise: Promise<RouteLocationRaw | false>
   try {
-    await userStore.switchTenantContext(
+    const operation = userStore.switchTenantContext(
       decision.tenantId,
       decision.tenantPublicId,
       tenantSwitchDestination(to.fullPath),
     )
-    return false
+    switchPromise = operation.then(
+      () => false,
+      () => {
+        clearSwitchMarker()
+        return tenantHome(currentTenantPublicId, modeStore, userStore.isPlatformAdmin)
+      },
+    )
   } catch {
     clearSwitchMarker()
     return tenantHome(currentTenantPublicId, modeStore, userStore.isPlatformAdmin)
+  }
+
+  const flight = { promise: switchPromise }
+  activeTenantSwitch = flight
+  try {
+    return await switchPromise
+  } finally {
+    if (activeTenantSwitch === flight) activeTenantSwitch = null
   }
 }

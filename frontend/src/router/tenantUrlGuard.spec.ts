@@ -16,6 +16,10 @@ const routerGuardState = vi.hoisted(() => ({
   modeStore: {} as Record<string, any>,
 }))
 
+const requestHarness = vi.hoisted(() => ({
+  get: vi.fn(),
+}))
+
 vi.mock('vue-router', () => {
   const joinPath = (parentPath: string, childPath: string) => {
     if (childPath.startsWith('/')) return childPath
@@ -62,7 +66,7 @@ vi.mock('@/stores/mode', () => ({
   useModeStore: () => routerGuardState.modeStore,
 }))
 vi.mock('@/utils/request', () => ({
-  default: { get: vi.fn() },
+  default: { get: requestHarness.get },
   getAuthSessionState: () => routerGuardState.session,
 }))
 vi.mock('@/composables/useOnboardingState', () => ({
@@ -71,7 +75,9 @@ vi.mock('@/composables/useOnboardingState', () => ({
   markOnboardingConfirmed: vi.fn(),
 }))
 
-import router from './index'
+import router, { installRouterGuards, routes } from './index'
+
+const realVueRouter = await vi.importActual<typeof import('vue-router')>('vue-router')
 
 const currentUuid = '11111111-1111-4111-8111-111111111111'
 const targetUuid = '22222222-2222-4222-8222-222222222222'
@@ -154,6 +160,115 @@ describe('tenant URL route mount gate', () => {
       replace: true,
     })
     expect(setMode).not.toHaveBeenCalled()
+  })
+
+  it('does not read aPaaS state before a cold-start cross-tenant resolution completes', async () => {
+    const requestOrder: string[] = []
+    const userStore = {
+      user: null as { tenant_public_id: string } | null,
+      token: 'committed-token',
+      tenantId: 1,
+      isTenantAdmin: true,
+      isPlatformAdmin: false,
+      availableTenants,
+      fetchUser: vi.fn(async () => {
+        requestOrder.push('/auth/me')
+        userStore.user = { tenant_public_id: currentUuid }
+      }),
+      fetchAvailableTenants: vi.fn(),
+      switchTenantContext: vi.fn(async () => {
+        requestOrder.push('/auth/switch-tenant')
+      }),
+    }
+    routerGuardState.session = { initialized: true, token: 'committed-token' }
+    routerGuardState.userStore = userStore
+    routerGuardState.modeStore = {
+      mode: 'builder',
+      meta: builderModeStore.meta,
+      setMode: vi.fn(),
+    }
+    requestHarness.get.mockImplementation(async (url: string) => {
+      requestOrder.push(url)
+      return null
+    })
+    const next = vi.fn()
+
+    if (!routerHarness.guard) throw new Error('router guard was not registered')
+    await routerHarness.guard({
+      path: '/apps',
+      fullPath: `/apps?tenantId=${targetUuid}`,
+      query: { tenantId: targetUuid },
+      hash: '',
+      meta: { requiresAuth: true, tenantContext: 'required' },
+    }, {}, next)
+
+    expect(requestOrder).toEqual(['/auth/me', '/auth/switch-tenant'])
+    expect(requestHarness.get).not.toHaveBeenCalled()
+    expect(next).toHaveBeenCalledWith(false)
+  })
+})
+
+function createRedirectRouter() {
+  installSessionStorage()
+  vi.stubGlobal('__DESKTOP__', false)
+  const switchTenantContext = vi.fn().mockResolvedValue(undefined)
+  routerGuardState.session = { initialized: true, token: 'committed-token' }
+  routerGuardState.userStore = {
+    user: { tenant_public_id: currentUuid },
+    token: 'committed-token',
+    tenantId: 1,
+    isTenantAdmin: true,
+    isPlatformAdmin: false,
+    availableTenants,
+    fetchUser: vi.fn(),
+    fetchAvailableTenants: vi.fn(),
+    switchTenantContext,
+  }
+  routerGuardState.modeStore = {
+    mode: 'builder',
+    meta: builderModeStore.meta,
+    setMode: vi.fn(),
+  }
+  requestHarness.get.mockReset()
+
+  const memoryRouter = realVueRouter.createRouter({
+    history: realVueRouter.createMemoryHistory(),
+    routes,
+  })
+  installRouterGuards(memoryRouter)
+  return { memoryRouter, switchTenantContext }
+}
+
+describe('route redirect tenant context', () => {
+  afterEach(() => {
+    vi.unstubAllGlobals()
+  })
+
+  it.each([
+    ['/skills', '/hub', { tab: 'skills' }],
+    ['/settings', '/platform-envs', { tab: 'envs' }],
+    ['/work/42', '/chat', { app_id: '42' }],
+    ['/knowledge', '/hub', { tab: 'knowledge' }],
+    ['/generate/42', '/chat', { deploy_app_id: '42' }],
+    ['/code', '/code/apps', {}],
+  ])('preserves tenant context through %s redirects', async (sourcePath, targetPath, redirectQuery) => {
+    const { memoryRouter, switchTenantContext } = createRedirectRouter()
+    const source = `${sourcePath}?tenantId=${targetUuid}&keep=1${sourcePath === '/settings' ? '&tab=envs' : ''}#deep-link`
+
+    await memoryRouter.push(source)
+
+    expect(switchTenantContext).toHaveBeenCalledTimes(1)
+    const destination = new URL(
+      switchTenantContext.mock.calls[0][2],
+      'https://tenant-url-redirect.invalid',
+    )
+    expect(destination.pathname).toBe(targetPath)
+    expect(destination.searchParams.get('tenantId')).toBe(targetUuid)
+    expect(destination.searchParams.get('keep')).toBe('1')
+    expect(destination.hash).toBe('#deep-link')
+    for (const [key, value] of Object.entries(redirectQuery)) {
+      expect(destination.searchParams.get(key)).toBe(value)
+    }
   })
 })
 
@@ -249,6 +364,33 @@ describe('resolveTenantUrl', () => {
     expect(userStore.switchTenantContext).not.toHaveBeenCalled()
   })
 
+  it('rejects duplicate tenantId values on required routes', () => {
+    expect(classifyTenantTarget({
+      rawTenantId: [currentUuid, targetUuid],
+      currentTenantPublicId: currentUuid,
+      availableTenants,
+    })).toEqual({ kind: 'reject', reason: 'invalid' })
+  })
+
+  it('removes tenantId from a none route whenever the query key is an array', async () => {
+    installSessionStorage()
+
+    await expect(resolveTenantUrl(
+      makeRoute({
+        path: '/platform-admin/audit',
+        fullPath: `/platform-admin/audit?tenantId&tenantId=${currentUuid}`,
+        query: { tenantId: [null, currentUuid] },
+        meta: { requiresAuth: true, tenantContext: 'none' },
+      }),
+      makeUserStore(),
+      builderModeStore,
+    )).resolves.toEqual({
+      path: '/platform-admin/audit',
+      query: {},
+      replace: true,
+    })
+  })
+
   it('loads the authorized tenant list and switches only to a listed target', async () => {
     const storage = installSessionStorage()
     vi.spyOn(Date, 'now').mockReturnValue(1_000)
@@ -277,6 +419,54 @@ describe('resolveTenantUrl', () => {
       startedAt: 1_000,
       attempt: 1,
     })
+  })
+
+  it('shares the in-flight switch for repeated navigation to the same full path', async () => {
+    const storage = installSessionStorage()
+    let completeSwitch: (() => void) | undefined
+    const userStore = makeUserStore({
+      switchTenantContext: vi.fn(() => new Promise<void>((resolve) => {
+        completeSwitch = resolve
+      })),
+    })
+    const route = makeRoute({
+      fullPath: `/apps?tenantId=${targetUuid}`,
+      query: { tenantId: targetUuid },
+    })
+
+    const first = resolveTenantUrl(route, userStore, builderModeStore)
+    const second = resolveTenantUrl(route, userStore, builderModeStore)
+
+    expect(userStore.switchTenantContext).toHaveBeenCalledTimes(1)
+    completeSwitch?.()
+
+    await expect(first).resolves.toBe(false)
+    await expect(second).resolves.toBe(false)
+    expect(storage.get('tenant-url-switch')).toBeTruthy()
+  })
+
+  it('shares the in-flight switch for the same tenant on a different path', async () => {
+    installSessionStorage()
+    let completeSwitch: (() => void) | undefined
+    const userStore = makeUserStore({
+      switchTenantContext: vi.fn(() => new Promise<void>((resolve) => {
+        completeSwitch = resolve
+      })),
+    })
+    const first = resolveTenantUrl(makeRoute({
+      fullPath: `/apps?tenantId=${targetUuid}&view=one`,
+      query: { tenantId: targetUuid, view: 'one' },
+    }), userStore, builderModeStore)
+    const second = resolveTenantUrl(makeRoute({
+      fullPath: `/apps?tenantId=${targetUuid}&view=two`,
+      query: { tenantId: targetUuid, view: 'two' },
+    }), userStore, builderModeStore)
+
+    expect(userStore.switchTenantContext).toHaveBeenCalledTimes(1)
+    completeSwitch?.()
+
+    await expect(first).resolves.toBe(false)
+    await expect(second).resolves.toBe(false)
   })
 
   it.each([

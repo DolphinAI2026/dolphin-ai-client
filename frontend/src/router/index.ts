@@ -1,4 +1,4 @@
-import { createRouter, createWebHistory } from 'vue-router'
+import { createRouter, createWebHistory, type RouteRecordRaw, type Router } from 'vue-router'
 import { useUserStore } from '@/stores/user'
 import { usePreviewStore } from '@/stores/preview'
 import { modeForRoutePath, useModeStore } from '@/stores/mode'
@@ -7,9 +7,7 @@ import { resolveDesktopRedirect } from './desktopGuard'
 import { resolveTenantUrl } from './tenantUrlGuard'
 import { fetchOnboardingState, isOnboardingConfirmed, markOnboardingConfirmed } from '@/composables/useOnboardingState'
 
-const router = createRouter({
-  history: createWebHistory(import.meta.env.BASE_URL),
-  routes: [
+export const routes: RouteRecordRaw[] = [
     { path: '/login', name: 'Login',
       component: () => import('@/views/Login.vue') },
     {
@@ -123,7 +121,11 @@ const router = createRouter({
       // 技能库已并入 hub;老链接 / router.push('/skills') 重定向到 hub 的技能 tab
       path: '/skills',
       name: 'Skills',
-      redirect: { path: '/hub', query: { tab: 'skills' } },
+      redirect: to => ({
+        path: '/hub',
+        query: { ...to.query, tab: 'skills' },
+        hash: to.hash,
+      }),
       meta: { requiresAuth: true, tenantContext: 'required' }
     },
     {
@@ -156,10 +158,16 @@ const router = createRouter({
       redirect: to => {
         const rawTab = Array.isArray(to.query.tab) ? to.query.tab[0] : to.query.tab
         const tab = String(rawTab || 'llm')
-        if (tab === 'envs') return { path: '/platform-envs', query: { tab: 'envs' } }
-        if (tab === 'assistant') return { path: '/platform-envs', query: { tab: 'assistant' } }
-        if (tab === 'team' || tab === 'members') return { path: '/tenant-users' }
-        return { path: '/platform-envs', query: { tab: 'llm' } }
+        if (tab === 'envs') {
+          return { path: '/platform-envs', query: { ...to.query, tab: 'envs' }, hash: to.hash }
+        }
+        if (tab === 'assistant') {
+          return { path: '/platform-envs', query: { ...to.query, tab: 'assistant' }, hash: to.hash }
+        }
+        if (tab === 'team' || tab === 'members') {
+          return { path: '/tenant-users', query: { ...to.query }, hash: to.hash }
+        }
+        return { path: '/platform-envs', query: { ...to.query, tab: 'llm' }, hash: to.hash }
       },
       meta: { requiresAuth: true, tenantContext: 'required', navExpanded: true }
     },
@@ -184,7 +192,11 @@ const router = createRouter({
     {
       path: '/work/:appId',
       name: 'WorkspaceShell',
-      redirect: to => ({ path: '/chat', query: { app_id: String(to.params.appId) } }),
+      redirect: to => ({
+        path: '/chat',
+        query: { ...to.query, app_id: String(to.params.appId) },
+        hash: to.hash,
+      }),
       meta: { requiresAuth: true, tenantContext: 'required' }
     },
     // M3 (2026-05-27): 删 /datasources stub — 用老 /db-connections 真页 (DbConnectionsPage)
@@ -224,7 +236,11 @@ const router = createRouter({
       // 知识库已并入 hub;老链接重定向到 hub 的知识 tab(hub 内按 isPlatformAdmin 过滤可见性)
       path: '/knowledge',
       name: 'knowledge-base',
-      redirect: { path: '/hub', query: { tab: 'knowledge' } },
+      redirect: to => ({
+        path: '/hub',
+        query: { ...to.query, tab: 'knowledge' },
+        hash: to.hash,
+      }),
       meta: { requiresAuth: true, tenantContext: 'required' }
     },
     {
@@ -243,10 +259,18 @@ const router = createRouter({
       path: '/generate/:id?',
       name: 'Generate',
       // 重定向到 ChatPage 并自动打开部署面板
-      redirect: to => ({ path: '/chat', query: { deploy_app_id: to.params.id as string } }),
+      redirect: to => ({
+        path: '/chat',
+        query: { ...to.query, deploy_app_id: to.params.id as string },
+        hash: to.hash,
+      }),
       meta: { requiresAuth: true, tenantContext: 'required' }
     }
-  ]
+]
+
+const router = createRouter({
+  history: createWebHistory(import.meta.env.BASE_URL),
+  routes,
 })
 
 function safeRedirectPath(raw: unknown): string {
@@ -262,7 +286,20 @@ function hasCommittedAuthSession(): boolean {
   return session.initialized && Boolean(session.token)
 }
 
-router.beforeEach(async (to, _from, next) => {
+let previewStatusRestorePending = false
+
+async function restorePreviewStatus(): Promise<void> {
+  const previewStore = usePreviewStore()
+  try {
+    const data = await request.get<any, any>('/apaas/status')
+    if (data) previewStore.connected = data.connected
+  } catch {
+    // Preview state is optional and must not block route resolution.
+  }
+}
+
+export function installRouterGuards(targetRouter: Router): void {
+  targetRouter.beforeEach(async (to, _from, next) => {
   const userStore = useUserStore()
   const modeStore = useModeStore()
   let hasCommittedSession = hasCommittedAuthSession()
@@ -274,14 +311,7 @@ router.beforeEach(async (to, _from, next) => {
       await userStore.fetchUser()
       hasCommittedSession = hasCommittedAuthSession()
       if (hasCommittedSession) {
-        // 同时恢复 aPaaS 连接状态
-        const previewStore = usePreviewStore()
-        try {
-          const data = await request.get<any, any>('/apaas/status')
-          if (data) {
-            previewStore.connected = data.connected
-          }
-        } catch { /* ignore */ }
+        previewStatusRestorePending = true
       }
     } catch {
       hasCommittedSession = hasCommittedAuthSession()
@@ -302,6 +332,10 @@ router.beforeEach(async (to, _from, next) => {
     if (tenantResolution !== true) {
       next(tenantResolution)
       return
+    }
+    if (previewStatusRestorePending) {
+      previewStatusRestorePending = false
+      await restorePreviewStatus()
     }
   }
 
@@ -354,20 +388,23 @@ router.beforeEach(async (to, _from, next) => {
   } else {
     next()
   }
-})
+  })
 
 // 部署后老 tab 引用旧 index.html，里面 import 的 chunk hash 已被新 build 覆盖：
 // 切路由时 dynamic import 404 → 用户卡死。这里捕获该错误自动 reload 一次拿新 index.html。
 // sessionStorage 标志位防止 reload 后还失败导致死循环。
-router.onError((error) => {
-  const msg = (error && (error as Error).message) || ''
-  if (/Failed to fetch dynamically imported module|Importing a module script failed|Loading chunk \S+ failed/.test(msg)) {
-    if (!sessionStorage.getItem('__chunk_reload_attempted')) {
-      sessionStorage.setItem('__chunk_reload_attempted', String(Date.now()))
-      window.location.reload()
+  targetRouter.onError((error) => {
+    const msg = (error && (error as Error).message) || ''
+    if (/Failed to fetch dynamically imported module|Importing a module script failed|Loading chunk \S+ failed/.test(msg)) {
+      if (!sessionStorage.getItem('__chunk_reload_attempted')) {
+        sessionStorage.setItem('__chunk_reload_attempted', String(Date.now()))
+        window.location.reload()
+      }
     }
-  }
-})
+  })
+}
+
+installRouterGuards(router)
 
 // reload 之后清掉标志位（10 秒后），让下次部署也能再触发
 if (typeof window !== 'undefined') {
