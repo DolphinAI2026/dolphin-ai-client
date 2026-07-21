@@ -669,3 +669,75 @@ GitLab YAML parse: PASS
   pipeline 演练。
 - released tombstone 保留在 namespace 中并作为下一次 release 的 CAS lease；active 或
   异常状态不自动抢占，保持 fail-closed。
+
+## Task 7 fencing 收口
+
+### Review RED
+
+本轮接手 fresh review 的 4 个 Important：
+
+- released lease 缺少 generation，可能在同 digest 重跑或 baseline persist 前中断后读取
+  上一轮 baseline。
+- recovery 将 ConfigMap get 的瞬时 API、鉴权或 timeout 错误误判为 NotFound。
+- lock 被替换后，旧执行者仍可能继续修改 StatefulSet image。
+- released tombstone reuse 未校验 owner/target 为空。
+
+release contract 还暴露过一次测试夹具重复执行：`FAKE_LOG_AFTER` 子 shell 重复调用 helper，
+产生额外副作用并遗留 `scripts/scripts` symlink，后续误报 online build 早于
+existing-workload preflight。收口后该 helper 仅调用一次，夹具不再泄漏 symlink，生产
+`main` 顺序仍为 preflight、login、build。
+
+### GREEN
+
+- ConfigMap lease 固定预置 `lease_generation`、`baseline_generation`、validated
+  StatefulSet identity 和 previous image 字段；released reuse 在同一 JSON Patch 中测试
+  UID、resourceVersion、state、空 owner、空 target，写入新 generation 并清空旧 baseline。
+- baseline persist 将 `baseline_generation` 写为当前 lease generation；release 测试
+  generation，并清空 baseline identity/image 字段。
+- acquisition 后先以 StatefulSet UID/resourceVersion CAS 写入
+  `builder.ai/release-generation` fence，再捕获 baseline。annotations 缺失、空 map、已有
+ 其它 annotation 和已有 fence 均使用对应 JSON Patch 分支，不覆盖其它 annotation。
+- online、CI forward、rollback 和 recovery 统一使用 StatefulSet JSON Patch；patch 原子
+  测试 UID、resourceVersion、fence generation、backend/init container name 和预期 image，
+  再替换两个 image。release 路径不再使用 `kubectl set image`。
+- CI update 将 `LEASE_GENERATION` 写入 dotenv；browser 使用 artifact generation 校验
+  active lock、baseline generation、StatefulSet fence 和目标 image。recovery 不依赖
+  artifact，直接读取 lease/baseline generation，并要求两者非空相等且 fence 匹配。
+- recovery existence 使用 `kubectl get ... --ignore-not-found -o name`；仅 exit 0 且空输出
+  视为无锁，API 错误保持 fail-closed。
+- fake kubectl 支持 lock generation/baseline、StatefulSet fence 和 image JSON Patch
+  语义；动态覆盖 stale baseline、released tombstone、annotations 分支和 replacement
+  fencing。保留 `dependencies: []`、existing-workload、无 full apply/bootstrap。
+
+### 最终验证
+
+```bash
+bash tests/release/test_builder_tenant_url_smoke.sh
+python3 -m pytest -q backend/tests/test_tenant_url_build_contract.py
+bash -n scripts/verify_builder_tenant_url_smoke.sh \
+  scripts/deploy_online_latest_kubesphere.sh \
+  tests/release/test_builder_tenant_url_smoke.sh
+node --check tests/e2e/builder-tenant-url-release-smoke.spec.mjs
+ruby -e 'require "yaml"; YAML.load_file(".gitlab-ci.yml")'
+git diff --check
+```
+
+关键输出：
+
+```text
+PASS: builder tenant URL release smoke contract
+29 passed in 0.77s
+GitLab YAML parse: PASS
+Release mutation forbidden-command scan: PASS
+```
+
+smoke contract 在清理夹具遗留后连续两次完整退出 0，随后由 writer lease owner 再次运行也
+完整退出 0。Bash syntax、Node syntax、GitLab YAML parse 和 `git diff --check` 均通过。
+
+### 残余风险
+
+- 按要求未连接真实 Kubernetes、registry 或账号；真实 API server 的 JSON Patch、
+  resourceVersion 冲突和 RBAC 行为仍需在隔离 release pipeline 演练。
+- StatefulSet fence annotation 会保留最后一次 release generation；下一次合法 lease 通过
+  UID/resourceVersion 和旧 fence test 原子接管。异常 active lock 仍不自动抢占。
+- formal spec 未修改，review 中保留的 M-1 继续作为 Minor。

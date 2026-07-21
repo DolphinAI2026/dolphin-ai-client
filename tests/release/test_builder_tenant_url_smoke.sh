@@ -190,6 +190,12 @@ state_value() {
   printf '%s' "${line#*=}"
 }
 
+state_has_key() {
+  local key="$1"
+  [ -n "${FAKE_KUBE_STATE:-}" ] && [ -f "${FAKE_KUBE_STATE}" ] \
+    && grep -Eq "^${key}=" "${FAKE_KUBE_STATE}"
+}
+
 set_state_value() {
   local key="$1" value="$2" tmp
   [ -n "${FAKE_KUBE_STATE:-}" ] || return 0
@@ -203,12 +209,157 @@ set_state_value() {
   mv "${tmp}" "${FAKE_KUBE_STATE}"
 }
 
+json_patch_rows() {
+  /usr/bin/python3 - "$1" <<'PY'
+import base64
+import json
+import sys
+
+for operation in json.loads(sys.argv[1]):
+    encoded = base64.b64encode(
+        json.dumps(operation.get("value"), separators=(",", ":")).encode()
+    ).decode()
+    print(f'{operation["op"]}\t{operation["path"]}\t{encoded}')
+PY
+}
+
+json_patch_value() {
+  /usr/bin/python3 - "$1" <<'PY'
+import base64
+import json
+import sys
+
+value = json.loads(base64.b64decode(sys.argv[1]))
+if isinstance(value, str):
+    print(value, end="")
+else:
+    print(json.dumps(value, separators=(",", ":")), end="")
+PY
+}
+
+lock_state_key() {
+  case "$1" in
+    /metadata/uid) printf 'lock_uid' ;;
+    /metadata/resourceVersion) printf 'lock_resource_version' ;;
+    /data/owner) printf 'lock_owner' ;;
+    /data/target_image) printf 'lock_target' ;;
+    /data/state) printf 'lock_state' ;;
+    /data/lease_generation) printf 'lock_generation' ;;
+    /data/baseline_generation) printf 'lock_baseline_generation' ;;
+    /data/validated_statefulset_uid) printf 'lock_sts_uid' ;;
+    /data/validated_statefulset_resource_version) printf 'lock_sts_resource_version' ;;
+    /data/previous_backend_image) printf 'lock_previous_backend' ;;
+    /data/previous_init_image) printf 'lock_previous_init' ;;
+    /data/acquired_at) printf 'lock_acquired_at' ;;
+    /data/released_by) printf 'lock_released_by' ;;
+    *) return 1 ;;
+  esac
+}
+
+statefulset_uid() {
+  local value
+  value="$(state_value sts_uid)"
+  printf '%s' "${value:-${FAKE_STS_UID:-sts-uid-1}}"
+}
+
+statefulset_resource_version() {
+  local value
+  value="$(state_value sts_resource_version)"
+  printf '%s' "${value:-1}"
+}
+
+statefulset_annotations_present() {
+  if state_has_key sts_annotations_present; then
+    [ "$(state_value sts_annotations_present)" = "1" ]
+  else
+    return 0
+  fi
+}
+
+statefulset_other_annotation() {
+  local value
+  if state_has_key sts_other_annotation; then
+    value="$(state_value sts_other_annotation)"
+  else
+    value="keep"
+  fi
+  printf '%s' "$value"
+}
+
+statefulset_fence_present() {
+  state_has_key sts_fence_present && [ "$(state_value sts_fence_present)" = "1" ]
+}
+
+container_name_at() {
+  printf '%s\n' "${FAKE_CONTAINERS:-ai-builder web}" | tr ' ' '\n' | sed -n "$(( $1 + 1 ))p"
+}
+
+init_container_name_at() {
+  printf '%s\n' "${FAKE_INIT_TOPOLOGY:-copy-frontend-dist}" | tr ' ' '\n' | sed -n "$(( $1 + 1 ))p"
+}
+
+statefulset_path_exists() {
+  local path="$1" index
+  case "$path" in
+    /metadata/uid|/metadata/resourceVersion) return 0 ;;
+    /metadata/annotations) statefulset_annotations_present ;;
+    /metadata/annotations/builder.ai~1release-generation) statefulset_fence_present ;;
+    /spec/template/spec/containers/*/name|/spec/template/spec/containers/*/image)
+      index="${path#/spec/template/spec/containers/}"
+      index="${index%%/*}"
+      [ -n "$(container_name_at "$index")" ]
+      ;;
+    /spec/template/spec/initContainers/*/name|/spec/template/spec/initContainers/*/image)
+      index="${path#/spec/template/spec/initContainers/}"
+      index="${index%%/*}"
+      [ -n "$(init_container_name_at "$index")" ]
+      ;;
+    *) return 1 ;;
+  esac
+}
+
+statefulset_path_value() {
+  local path="$1" index name
+  case "$path" in
+    /metadata/uid) statefulset_uid ;;
+    /metadata/resourceVersion) statefulset_resource_version ;;
+    /metadata/annotations/builder.ai~1release-generation) state_value sts_fence_generation ;;
+    /spec/template/spec/containers/*/name)
+      index="${path#/spec/template/spec/containers/}"
+      container_name_at "${index%%/*}"
+      ;;
+    /spec/template/spec/containers/*/image)
+      index="${path#/spec/template/spec/containers/}"
+      name="$(container_name_at "${index%%/*}")"
+      case "$name" in
+        ai-builder|apaas-builder)
+          printf '%s' "$(state_value backend_image)"
+          ;;
+        *) printf '%s' "${FAKE_WEB_IMAGE:-registry.example/web@sha256:ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff}" ;;
+      esac
+      ;;
+    /spec/template/spec/initContainers/*/name)
+      index="${path#/spec/template/spec/initContainers/}"
+      init_container_name_at "${index%%/*}"
+      ;;
+    /spec/template/spec/initContainers/*/image)
+      index="${path#/spec/template/spec/initContainers/}"
+      name="$(init_container_name_at "${index%%/*}")"
+      [ "$name" = "copy-frontend-dist" ] || return 1
+      printf '%s' "$(state_value init_image)"
+      ;;
+    *) return 1 ;;
+  esac
+}
+
 replace_lock_with_owner_b() {
   set_state_value lock_owner "${FAKE_REPLACEMENT_OWNER:-owner-b}"
   set_state_value lock_target "${FAKE_REPLACEMENT_TARGET:-registry.example/ai-builder@sha256:eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee}"
   set_state_value lock_state "${FAKE_REPLACEMENT_LOCK_STATE:-active}"
   set_state_value lock_uid "${FAKE_REPLACEMENT_LOCK_UID:-lock-uid-b}"
   set_state_value lock_resource_version "${FAKE_REPLACEMENT_LOCK_RESOURCE_VERSION:-1}"
+  set_state_value lock_generation "${FAKE_REPLACEMENT_GENERATION:-generation-b}"
+  set_state_value lock_baseline_generation "${FAKE_REPLACEMENT_BASELINE_GENERATION:-}"
   set_state_value lock_previous_backend "${FAKE_REPLACEMENT_PREVIOUS_BACKEND:-}"
   set_state_value lock_previous_init "${FAKE_REPLACEMENT_PREVIOUS_INIT:-}"
   set_state_value lock_sts_uid "${FAKE_REPLACEMENT_STS_UID:-}"
@@ -216,12 +367,31 @@ replace_lock_with_owner_b() {
   [ -z "${FAKE_KUBE_LOG:-}" ] || printf 'lock-replace owner=%s\n' "$(state_value lock_owner)" >>"${FAKE_KUBE_LOG}"
 }
 
+replace_lease_and_fence_for_new_executor() {
+  local generation lock_resource_version sts_resource_version
+  generation="${FAKE_REPLACEMENT_GENERATION:-generation-new}"
+  set_state_value lock_owner "${FAKE_REPLACEMENT_OWNER:-$(state_value lock_owner)}"
+  set_state_value lock_target "${FAKE_REPLACEMENT_TARGET:-$(state_value lock_target)}"
+  set_state_value lock_state active
+  set_state_value lock_generation "$generation"
+  set_state_value lock_baseline_generation "$generation"
+  lock_resource_version="$(state_value lock_resource_version)"
+  set_state_value lock_resource_version "$(( ${lock_resource_version:-1} + 1 ))"
+  set_state_value sts_annotations_present 1
+  set_state_value sts_fence_present 1
+  set_state_value sts_fence_generation "$generation"
+  sts_resource_version="$(statefulset_resource_version)"
+  set_state_value sts_resource_version "$((sts_resource_version + 1))"
+  [ -z "${FAKE_KUBE_LOG:-}" ] \
+    || printf 'lease-fence-replace generation=%s\n' "$generation" >>"${FAKE_KUBE_LOG}"
+}
+
 if [[ "$args" == *" auth can-i "* ]]; then
   printf '%s\n' "${FAKE_RBAC:-yes}"
   exit 0
 fi
 if [[ "$args" == *" create configmap ai-builder-release-lock "* ]]; then
-  [ "$(state_value lock_owner)" = "" ] || exit 1
+  [ -z "$(state_value lock_uid)" ] && [ -z "$(state_value lock_state)" ] || exit 1
   if [ "${FAKE_INTERLEAVE_ON_LOCK_CREATE:-0}" = "1" ] \
     && [ "$(state_value interleave_completed)" != "1" ]; then
     set_state_value backend_image "registry.example/ai-builder@sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd"
@@ -235,12 +405,21 @@ if [[ "$args" == *" create configmap ai-builder-release-lock "* ]]; then
       --from-literal=owner=*) set_state_value lock_owner "${argument#--from-literal=owner=}" ;;
       --from-literal=target_image=*) set_state_value lock_target "${argument#--from-literal=target_image=}" ;;
       --from-literal=state=*) set_state_value lock_state "${argument#--from-literal=state=}" ;;
+      --from-literal=lease_generation=*) set_state_value lock_generation "${argument#--from-literal=lease_generation=}" ;;
+      --from-literal=baseline_generation=*) set_state_value lock_baseline_generation "${argument#--from-literal=baseline_generation=}" ;;
+      --from-literal=validated_statefulset_uid=*) set_state_value lock_sts_uid "${argument#--from-literal=validated_statefulset_uid=}" ;;
+      --from-literal=validated_statefulset_resource_version=*) set_state_value lock_sts_resource_version "${argument#--from-literal=validated_statefulset_resource_version=}" ;;
       --from-literal=previous_backend_image=*) set_state_value lock_previous_backend "${argument#--from-literal=previous_backend_image=}" ;;
       --from-literal=previous_init_image=*) set_state_value lock_previous_init "${argument#--from-literal=previous_init_image=}" ;;
+      --from-literal=acquired_at=*) set_state_value lock_acquired_at "${argument#--from-literal=acquired_at=}" ;;
     esac
   done
   [ -n "$(state_value lock_owner)" ] && [ -n "$(state_value lock_target)" ] || exit 64
   [ -n "$(state_value lock_state)" ] || set_state_value lock_state active
+  state_has_key lock_generation || exit 64
+  for key in lock_baseline_generation lock_sts_uid lock_sts_resource_version lock_previous_backend lock_previous_init; do
+    state_has_key "$key" || exit 64
+  done
   [ -n "$(state_value lock_uid)" ] || set_state_value lock_uid "${FAKE_LOCK_UID_ON_CREATE:-lock-uid-a}"
   [ -n "$(state_value lock_resource_version)" ] || set_state_value lock_resource_version "${FAKE_LOCK_RESOURCE_VERSION_ON_CREATE:-1}"
   [ -z "${FAKE_KUBE_LOG:-}" ] || printf 'lock-create owner=%s target=%s\n' "$(state_value lock_owner)" "$(state_value lock_target)" >>"${FAKE_KUBE_LOG}"
@@ -252,7 +431,7 @@ if [[ "$args" == *" create configmap ai-builder-release-lock "* ]]; then
   exit 0
 fi
 if [[ "$args" == *" patch configmap ai-builder-release-lock "* ]]; then
-  [ -n "$(state_value lock_owner)" ] || exit 1
+  [ -n "$(state_value lock_uid)" ] || exit 1
   if [ "${FAKE_REPLACE_LOCK_ON_PATCH:-0}" = "1" ] \
     && [ "$(state_value lock_replaced_on_patch)" != "1" ]; then
     set_state_value lock_replaced_on_patch 1
@@ -268,33 +447,31 @@ if [[ "$args" == *" patch configmap ai-builder-release-lock "* ]]; then
     previous="$argument"
   done
   [ -n "$patch" ] || exit 64
-  if [[ "$args" == *" --type=json "* ]] \
-    && [ "$(state_value lock_replaced_on_patch)" = "1" ]; then
-    # The replacement occurs after A's stale read. A JSON Patch with UID/RV tests
-    # must fail before it can write B's lease fields.
-    exit 1
-  fi
-  for key in owner target_image state; do
-    value="$(printf '%s' "$patch" | sed -nE "s~.*\"path\":\"/data/${key}\",\"value\":\"([^\"]*)\".*~\\1~p")"
-    [[ "$patch" != *"\"path\":\"/data/${key}\""* ]] || case "$key" in
-      owner) set_state_value lock_owner "$value" ;;
-      target_image) set_state_value lock_target "$value" ;;
-      state) set_state_value lock_state "$value" ;;
+  rows="$(mktemp)"
+  json_patch_rows "$patch" >"$rows"
+  while IFS=$'\t' read -r operation path encoded; do
+    key="$(lock_state_key "$path")" || { rm -f "$rows"; exit 64; }
+    expected="$(json_patch_value "$encoded")"
+    case "$operation" in
+      test)
+        [ "$(state_value "$key")" = "$expected" ] || { rm -f "$rows"; exit 1; }
+        ;;
+      replace)
+        state_has_key "$key" || { rm -f "$rows"; exit 1; }
+        ;;
+      add) ;;
+      *) rm -f "$rows"; exit 64 ;;
     esac
-  done
-  if [[ "$patch" == *"validated_statefulset_uid"* ]]; then
-    for key in validated_statefulset_uid validated_statefulset_resource_version previous_backend_image previous_init_image; do
-      value="$(printf '%s' "$patch" | tr '}' '\n' \
-        | sed -nE "s~.*\"path\":\"/data/${key}\",\"value\":\"([^\"]*)\".*~\\1~p")"
-      [ -n "$value" ] || exit 64
-      case "$key" in
-        validated_statefulset_uid) set_state_value lock_sts_uid "$value" ;;
-        validated_statefulset_resource_version) set_state_value lock_sts_resource_version "$value" ;;
-        previous_backend_image) set_state_value lock_previous_backend "$value" ;;
-        previous_init_image) set_state_value lock_previous_init "$value" ;;
-      esac
-    done
-  fi
+  done <"$rows"
+  while IFS=$'\t' read -r operation path encoded; do
+    case "$operation" in
+      add|replace)
+        key="$(lock_state_key "$path")"
+        set_state_value "$key" "$(json_patch_value "$encoded")"
+        ;;
+    esac
+  done <"$rows"
+  rm -f "$rows"
   set_state_value lock_resource_version "$(( $(state_value lock_resource_version) + 1 ))"
   [ -z "${FAKE_KUBE_LOG:-}" ] || printf 'lock-patch uid=%s rv=%s\n' \
     "$(state_value lock_sts_uid)" "$(state_value lock_sts_resource_version)" >>"${FAKE_KUBE_LOG}"
@@ -306,8 +483,17 @@ if [[ "$args" == *" patch configmap ai-builder-release-lock "* ]]; then
   exit 0
 fi
 if [[ "$args" == *" get configmap ai-builder-release-lock "* || "$args" == *" get configmap/ai-builder-release-lock "* ]]; then
-  [ -n "$(state_value lock_owner)" ] || [ "$(state_value lock_state)" = "released" ] || exit 1
+  [ "${FAKE_LOCK_GET_TRANSIENT_FAIL:-0}" != "1" ] || exit 1
+  if [ -z "$(state_value lock_uid)" ] && [ -z "$(state_value lock_state)" ]; then
+    [[ "$args" == *" --ignore-not-found "* ]] && exit 0
+    exit 1
+  fi
   case "$args" in
+    *"metadata.uid"*"data.state"*"data.owner"*)
+      printf '%s|%s|%s|%s|%s\n' \
+        "$(state_value lock_uid)" "$(state_value lock_resource_version)" \
+        "$(state_value lock_state)" "$(state_value lock_owner)" "$(state_value lock_target)"
+      ;;
     *"metadata.uid"*"metadata.resourceVersion"*)
       printf '%s %s\n' "$(state_value lock_uid)" "$(state_value lock_resource_version)"
       ;;
@@ -318,6 +504,8 @@ if [[ "$args" == *" get configmap ai-builder-release-lock "* || "$args" == *" ge
     *"previous_init_image"*) printf '%s\n' "$(state_value lock_previous_init)" ;;
     *"validated_statefulset_uid"*) printf '%s\n' "$(state_value lock_sts_uid)" ;;
     *"validated_statefulset_resource_version"*) printf '%s\n' "$(state_value lock_sts_resource_version)" ;;
+    *"baseline_generation"*) printf '%s\n' "$(state_value lock_baseline_generation)" ;;
+    *"lease_generation"*) printf '%s\n' "$(state_value lock_generation)" ;;
     *"state"*) printf '%s\n' "$(state_value lock_state)" ;;
     *"owner"*) printf '%s\n' "$(state_value lock_owner)" ;;
     *) printf 'configmap/ai-builder-release-lock\n' ;;
@@ -369,6 +557,114 @@ if [[ "$args" == *" get service ai-builder "* ]]; then
   printf '%s\n' "${FAKE_SERVICE_SELECTOR:-app.kubernetes.io/name=ai-builder}"
   exit 0
 fi
+if [[ "$args" == *" patch statefulset ai-builder "* || "$args" == *" patch statefulset/ai-builder "* ]]; then
+  patch=""
+  previous=""
+  for argument in "$@"; do
+    if [ "$previous" = "--patch" ]; then
+      patch="$argument"
+      break
+    fi
+    previous="$argument"
+  done
+  [ -n "$patch" ] || exit 64
+  patch_count="$(state_value statefulset_patch_count)"
+  patch_count="$(( ${patch_count:-0} + 1 ))"
+  set_state_value statefulset_patch_count "$patch_count"
+  if [ "${FAKE_REPLACE_LEASE_ON_STS_PATCH:-0}" = "1" ] \
+    && [ "$patch_count" = "${FAKE_REPLACE_LEASE_ON_STS_PATCH_NUMBER:-1}" ]; then
+    replace_lease_and_fence_for_new_executor
+  fi
+  if [[ "$patch" == *"/image\""* ]]; then
+    if [ "${FAKE_SET_IMAGE_FAIL_ONCE:-0}" = "1" ] \
+      && [ "$(state_value set_image_failed_once)" != "1" ]; then
+      set_state_value set_image_failed_once 1
+      exit 1
+    fi
+    [ "${FAKE_SET_IMAGE_FAIL:-0}" != "1" ] || exit 1
+  fi
+  rows="$(mktemp)"
+  json_patch_rows "$patch" >"$rows"
+  while IFS=$'\t' read -r operation path encoded; do
+    expected="$(json_patch_value "$encoded")"
+    case "$operation" in
+      test)
+        statefulset_path_exists "$path" || { rm -f "$rows"; exit 1; }
+        [ "$(statefulset_path_value "$path")" = "$expected" ] \
+          || { rm -f "$rows"; exit 1; }
+        ;;
+      replace)
+        statefulset_path_exists "$path" || { rm -f "$rows"; exit 1; }
+        ;;
+      add)
+        case "$path" in
+          /metadata/annotations) ;;
+          /metadata/annotations/builder.ai~1release-generation)
+            statefulset_annotations_present || { rm -f "$rows"; exit 1; }
+            ;;
+          *) statefulset_path_exists "$path" || { rm -f "$rows"; exit 1; } ;;
+        esac
+        ;;
+      *) rm -f "$rows"; exit 64 ;;
+    esac
+  done <"$rows"
+  next_backend=""
+  next_init=""
+  next_fence=""
+  while IFS=$'\t' read -r operation path encoded; do
+    case "$operation" in
+      add|replace)
+        value="$(json_patch_value "$encoded")"
+        case "$path" in
+          /metadata/annotations)
+            next_fence="$(/usr/bin/python3 - "$value" <<'PY'
+import json
+import sys
+print(json.loads(sys.argv[1])["builder.ai/release-generation"], end="")
+PY
+)"
+            set_state_value sts_annotations_present 1
+            set_state_value sts_other_annotation ""
+            set_state_value sts_fence_present 1
+            set_state_value sts_fence_generation "$next_fence"
+            ;;
+          /metadata/annotations/builder.ai~1release-generation)
+            next_fence="$value"
+            set_state_value sts_fence_present 1
+            set_state_value sts_fence_generation "$next_fence"
+            ;;
+          /spec/template/spec/containers/*/image)
+            next_backend="$value"
+            set_state_value backend_image "$value"
+            ;;
+          /spec/template/spec/initContainers/*/image)
+            next_init="$value"
+            set_state_value init_image "$value"
+            ;;
+        esac
+        ;;
+    esac
+  done <"$rows"
+  rm -f "$rows"
+  resource_version="$(statefulset_resource_version)"
+  set_state_value sts_resource_version "$((resource_version + 1))"
+  if [ -n "$next_backend" ] || [ -n "$next_init" ]; then
+    [ -z "${FAKE_KUBE_LOG:-}" ] \
+      || printf 'image-patch backend=%s init=%s fence=%s\n' \
+        "$(state_value backend_image)" "$(state_value init_image)" \
+        "$(state_value sts_fence_generation)" >>"${FAKE_KUBE_LOG}"
+  elif [ -n "$next_fence" ]; then
+    [ -z "${FAKE_KUBE_LOG:-}" ] \
+      || printf 'fence-patch generation=%s other=%s\n' \
+        "$next_fence" "$(statefulset_other_annotation)" >>"${FAKE_KUBE_LOG}"
+  fi
+  if [[ "$args" == *"metadata.uid"* && "$args" == *"metadata.resourceVersion"* ]]; then
+    printf '%s %s\n' "$(statefulset_uid)" "$(statefulset_resource_version)"
+  elif [[ "$args" == *"metadata.resourceVersion"* ]]; then
+    printf '%s\n' "$(statefulset_resource_version)"
+  fi
+  exit 0
+fi
 if [[ "$args" == *" get statefulset ai-builder "* || "$args" == *" get statefulset/ai-builder "* ]]; then
   if [ "${FAKE_STS_ABSENT:-0}" = "1" ] || [ "$(state_value sts_deleted)" = "1" ]; then
     printf 'Error from server (NotFound): statefulsets.apps "ai-builder" not found\n' >&2
@@ -376,14 +672,22 @@ if [[ "$args" == *" get statefulset ai-builder "* || "$args" == *" get statefuls
   fi
   if [[ "$args" != *" -o "* ]]; then
     printf 'statefulset/ai-builder\n'
+  elif [[ "$args" == *'index .metadata.annotations "builder.ai/release-generation"'* ]]; then
+    statefulset_fence_present && printf '%s' "$(state_value sts_fence_generation)"
+  elif [[ "$args" == *".metadata.annotations"* ]]; then
+    if statefulset_annotations_present; then
+      other_annotation="$(statefulset_other_annotation)"
+      [ -z "$other_annotation" ] || printf 'other.example/key=%s\n' "$other_annotation"
+      statefulset_fence_present \
+        && printf 'builder.ai/release-generation=%s\n' "$(state_value sts_fence_generation)"
+    fi
   elif [[ "$args" == *"metadata.uid"* || "$args" == *"metadata.resourceVersion"* ]]; then
-    resource_version="$(state_value sts_resource_version)"
     if [[ "$args" == *"metadata.uid"* && "$args" == *"metadata.resourceVersion"* ]]; then
-      printf '%s %s\n' "${FAKE_STS_UID:-sts-uid-1}" "${resource_version:-1}"
+      printf '%s %s\n' "$(statefulset_uid)" "$(statefulset_resource_version)"
     elif [[ "$args" == *"metadata.uid"* ]]; then
-      printf '%s\n' "${FAKE_STS_UID:-sts-uid-1}"
+      printf '%s\n' "$(statefulset_uid)"
     else
-      printf '%s\n' "${resource_version:-1}"
+      printf '%s\n' "$(statefulset_resource_version)"
     fi
   elif [[ "$args" == *"currentRevision"* || "$args" == *"updateRevision"* ]]; then
     printf '%s\n' "${FAKE_STS_REVISIONS:-rev-7 rev-7}"
@@ -394,9 +698,17 @@ if [[ "$args" == *" get statefulset ai-builder "* || "$args" == *" get statefuls
     image="$(state_value init_image)"
     printf '%s\n' "${image:-${FAKE_STS_INIT_IMAGE:-registry.example/ai-builder@sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb}}"
   elif [[ "$args" == *"containers"* ]]; then
-    printf '%s\n' "${FAKE_CONTAINERS:-ai-builder web}"
+    if [[ "$args" == *'{"\n"}'* ]]; then
+      printf '%s\n' "${FAKE_CONTAINERS:-ai-builder web}" | tr ' ' '\n'
+    else
+      printf '%s ' ${FAKE_CONTAINERS:-ai-builder web}
+    fi
   elif [[ "$args" == *"initContainers"* ]]; then
-    printf '%s\n' "${FAKE_INIT_TOPOLOGY:-copy-frontend-dist}"
+    if [[ "$args" == *'{"\n"}'* ]]; then
+      printf '%s\n' "${FAKE_INIT_TOPOLOGY:-copy-frontend-dist}" | tr ' ' '\n'
+    else
+      printf '%s ' ${FAKE_INIT_TOPOLOGY:-copy-frontend-dist}
+    fi
   else
     printf 'unexpected StatefulSet query\n' >&2
     exit 64
@@ -451,28 +763,8 @@ if [[ "$args" == *" get pod pod-a "* || "$args" == *" get pod pod-b "* || "$args
   exit 0
 fi
 if [[ "$args" == *" set image statefulset/ai-builder "* ]]; then
-  backend_image=""
-  init_image=""
-  for argument in "$@"; do
-    case "$argument" in
-      ai-builder=*) backend_image="${argument#ai-builder=}" ;;
-      apaas-builder=*) backend_image="${argument#apaas-builder=}" ;;
-      copy-frontend-dist=*) init_image="${argument#copy-frontend-dist=}" ;;
-    esac
-  done
-  [ -n "$backend_image" ] && [ -n "$init_image" ] || exit 64
-  set_state_value backend_image "$backend_image"
-  set_state_value init_image "$init_image"
-  resource_version="$(state_value sts_resource_version)"
-  resource_version="${resource_version:-1}"
-  set_state_value sts_resource_version "$((resource_version + 1))"
-  [ -z "${FAKE_KUBE_LOG:-}" ] || printf 'set-image backend=%s init=%s\n' "$backend_image" "$init_image" >>"${FAKE_KUBE_LOG}"
-  if [ "${FAKE_SET_IMAGE_FAIL_ONCE:-0}" = "1" ] && [ "$(state_value set_image_failed_once)" != "1" ]; then
-    set_state_value set_image_failed_once 1
-    exit 1
-  fi
-  [ "${FAKE_SET_IMAGE_FAIL:-0}" != "1" ] || exit 1
-  exit 0
+  printf 'kubectl set image is forbidden by the release fencing contract\n' >&2
+  exit 64
 fi
 if [[ "$args" == *" rollout status statefulset/ai-builder "* ]]; then
   [ -z "${FAKE_KUBE_LOG:-}" ] || printf 'rollout-status\n' >>"${FAKE_KUBE_LOG}"
@@ -606,11 +898,16 @@ abort "release jobs must serialize the workload" unless update["resource_group"]
 update_script = update.fetch("script").join("\n")
 abort "update job must own ConfigMap release lock" unless update_script.include?("release_lock_owner")
 create_at = update_script.index('if ! identity="$(kubectl -n "${BUILDER_K8S_NAMESPACE}" create configmap')
-capture_at = update_script.index('identity="$(current_statefulset_identity)"', create_at)
-patch_at = update_script.index('patch_release_lock_cas "${patch}"', capture_at)
-set_at = update_script.index('set image', patch_at)
-abort "update job must acquire lock before capture" unless create_at && capture_at && create_at < capture_at
-abort "update job must validate baseline before mutation" unless patch_at && set_at && patch_at < set_at
+fence_at = create_at && update_script.index("fence_statefulset_for_generation", create_at)
+capture_at = fence_at && update_script.index("read_statefulset_snapshot", fence_at)
+patch_at = capture_at && update_script.index('patch_release_lock_cas "${patch}"', capture_at)
+set_at = patch_at && update_script.index('if ! patch_statefulset_images_cas', patch_at)
+abort "update job must acquire lock before fencing and capture" \
+  unless create_at && fence_at && capture_at && create_at < fence_at && fence_at < capture_at
+abort "update job must persist baseline before mutation" unless patch_at
+abort "update job must mutate images with StatefulSet JSON Patch" unless set_at
+abort "update job must validate baseline before mutation" unless patch_at < set_at
+abort "update job must export lease generation" unless update_script.include?("LEASE_GENERATION=")
 abort "browser job must verify ConfigMap release lock" unless smoke.fetch("script").join("\n").include?("release_lock_owner")
 abort "missing recovery stage" unless config.fetch("stages").include?("recovery")
 abort "recovery must run after release" unless config.fetch("stages").index("recovery") > config.fetch("stages").index("release")
@@ -621,6 +918,8 @@ abort "recovery must explicitly disable previous-stage artifact downloads" unles
 recovery_script = recovery.fetch("script").join("\n")
 abort "recovery must read lock previous refs" unless recovery_script.include?("previous_backend_image")
 abort "recovery must not read browser dotenv" if recovery_script.include?("PREVIOUS_BACKEND_IMAGE")
+abort "recovery lock existence check must distinguish NotFound from API failures" \
+  unless recovery_script.include?("--ignore-not-found") && recovery_script.include?("-o name")
 online_source = File.read(File.join(File.dirname(path), "scripts/deploy_online_latest_kubesphere.sh"))
 [update.fetch("script").join("\n"), smoke.fetch("script").join("\n"), recovery_script, online_source].each do |source|
   abort "release lock baseline/release must use JSON Patch CAS" unless source.include?("--type=json")
@@ -631,6 +930,32 @@ end
 [update.fetch("script").join("\n"), recovery_script].each do |source|
   abort "kubectl-only job must not require curl" if source.match?(/\bcurl\b/)
 end
+[update.fetch("script").join("\n"), smoke.fetch("script").join("\n"), recovery_script, online_source].each do |source|
+  %w[lease_generation baseline_generation builder.ai/release-generation].each do |contract|
+    abort "missing release generation/fence contract #{contract}" unless source.include?(contract)
+  end
+end
+[update.fetch("script").join("\n"), recovery_script, online_source].each do |source|
+  abort "release image mutation must use StatefulSet JSON Patch CAS" if source.include?("set image")
+  abort "release image mutation is missing StatefulSet metadata fence tests" unless source.include?("/metadata/annotations/")
+  %w[
+    /metadata/uid
+    /metadata/resourceVersion
+    /spec/template/spec/containers/
+    /spec/template/spec/initContainers/
+    /name
+    /image
+  ].each do |path|
+    abort "StatefulSet image CAS is missing #{path}" unless source.include?(path)
+  end
+end
+abort "update dotenv must include LEASE_GENERATION" \
+  unless update.fetch("script").join("\n").include?("LEASE_GENERATION=%s")
+abort "browser must consume artifact lease generation" \
+  unless smoke.fetch("script").join("\n").include?("${LEASE_GENERATION}")
+abort "released reuse must test empty owner and target" \
+  unless update_script.include?('"path":"/data/owner","value":""') \
+    && update_script.include?('"path":"/data/target_image","value":""')
 puts "CI_METADATA_MAPPING=PASS"
 RUBY
 }
@@ -1059,8 +1384,184 @@ assert_online_rollback_contract() {
   printf 'ONLINE_ROLLBACK_CONTRACT=PASS\n'
 }
 
+assert_online_generation_fencing_contract() {
+  local state_file kube_log output generation mode
+  state_file="${TMP_DIR}/online-generation.state"
+  kube_log="${TMP_DIR}/online-generation.log"
+
+  for mode in missing-parent nonempty-parent existing-fence; do
+    printf '%s\n' \
+      "backend_image=registry.example/ai-builder@sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc" \
+      "init_image=registry.example/ai-builder@sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd" \
+      "sts_resource_version=1" \
+      "sts_annotations_present=$([ "$mode" = "missing-parent" ] && printf 0 || printf 1)" \
+      "sts_other_annotation=$([ "$mode" = "missing-parent" ] && printf '' || printf keep)" \
+      "sts_fence_present=$([ "$mode" = "existing-fence" ] && printf 1 || printf 0)" \
+      "sts_fence_generation=$([ "$mode" = "existing-fence" ] && printf generation-old || printf '')" \
+      >"$state_file"
+    : >"$kube_log"
+    if ! output="$(
+      PATH="${FAKE_BIN}:$PATH" \
+      FAKE_KUBE_STATE="$state_file" \
+      FAKE_KUBE_LOG="$kube_log" \
+        bash -c '
+          source "$1/scripts/deploy_online_latest_kubesphere.sh"
+          NAMESPACE="release-ns"
+          APP_NAME="ai-builder"
+          KUBE_BACKEND_CONTAINER="ai-builder"
+          KUBE_DIST_INIT_CONTAINER="copy-frontend-dist"
+          RELEASE_LOCK_NAME="ai-builder-release-lock"
+          RELEASE_LOCK_OWNER="online-generation"
+          IMAGE="registry.example/ai-builder@$2"
+          acquire_release_lock
+          fence_statefulset_for_generation
+          capture_previous_workload
+          persist_validated_baseline
+        ' bash "$ROOT_DIR" "$TEST_DIGEST" 2>&1
+    )"; then
+      printf 'online generation mode=%s output:\n%s\nstate:\n%s\nlog:\n%s\n' \
+        "$mode" "$output" "$(<"$state_file")" "$(<"$kube_log")" >&2
+      fail "online generation setup failed"
+    fi
+    generation="$(state_file_value "$state_file" lock_generation)"
+    [ -n "$generation" ] || fail "online fresh lock did not create a lease generation"
+    [ "$(state_file_value "$state_file" lock_baseline_generation)" = "$generation" ] \
+      || fail "online baseline generation does not match its lease"
+    [ "$(state_file_value "$state_file" sts_fence_generation)" = "$generation" ] \
+      || fail "online StatefulSet fence does not match its lease"
+    if [ "$mode" != "missing-parent" ]; then
+      [ "$(state_file_value "$state_file" sts_other_annotation)" = "keep" ] \
+        || fail "online fence patch overwrote another StatefulSet annotation"
+    fi
+  done
+
+  printf '%s\n' \
+    "backend_image=registry.example/ai-builder@sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc" \
+    "init_image=registry.example/ai-builder@sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd" \
+    "sts_resource_version=4" \
+    "lock_owner=" \
+    "lock_target=" \
+    "lock_state=released" \
+    "lock_uid=lock-uid-a" \
+    "lock_resource_version=7" \
+    "lock_generation=generation-old" \
+    "lock_baseline_generation=generation-old" \
+    "lock_previous_backend=registry.example/ai-builder@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa" \
+    "lock_previous_init=registry.example/ai-builder@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa" \
+    "lock_sts_uid=sts-uid-old" \
+    "lock_sts_resource_version=2" >"$state_file"
+  PATH="${FAKE_BIN}:$PATH" \
+  FAKE_KUBE_STATE="$state_file" \
+    bash -c '
+      source "$1/scripts/deploy_online_latest_kubesphere.sh"
+      NAMESPACE="release-ns"
+      APP_NAME="ai-builder"
+      RELEASE_LOCK_NAME="ai-builder-release-lock"
+      RELEASE_LOCK_OWNER="online-generation"
+      IMAGE="registry.example/ai-builder@$2"
+      acquire_release_lock
+      [ "$LEASE_GENERATION" != "generation-old" ]
+      ! load_validated_baseline_from_lock
+    ' bash "$ROOT_DIR" "$TEST_DIGEST"
+  generation="$(state_file_value "$state_file" lock_generation)"
+  [ -n "$generation" ] && [ "$generation" != "generation-old" ] \
+    || fail "released lease reuse did not install a new generation"
+  [ -z "$(state_file_value "$state_file" lock_baseline_generation)" ] \
+    || fail "released lease reuse retained stale baseline generation"
+  [ -z "$(state_file_value "$state_file" lock_previous_backend)" ] \
+    && [ -z "$(state_file_value "$state_file" lock_previous_init)" ] \
+    || fail "released lease reuse retained stale previous images"
+
+  for mode in owner target; do
+    printf '%s\n' \
+      "lock_owner=$([ "$mode" = "owner" ] && printf stale-owner || printf '')" \
+      "lock_target=$([ "$mode" = "target" ] && printf "registry.example/ai-builder@%s" "$TEST_DIGEST" || printf '')" \
+      "lock_state=released" \
+      "lock_uid=lock-uid-a" \
+      "lock_resource_version=9" \
+      "lock_generation=generation-old" \
+      "lock_baseline_generation=" \
+      "lock_previous_backend=" \
+      "lock_previous_init=" \
+      "lock_sts_uid=" \
+      "lock_sts_resource_version=" >"$state_file"
+    output="$(
+      PATH="${FAKE_BIN}:$PATH" \
+      FAKE_KUBE_STATE="$state_file" \
+        assert_command_fails_without_secret bash -c '
+          source "$1/scripts/deploy_online_latest_kubesphere.sh"
+          NAMESPACE="release-ns"
+          APP_NAME="ai-builder"
+          RELEASE_LOCK_NAME="ai-builder-release-lock"
+          RELEASE_LOCK_OWNER="online-generation"
+          IMAGE="registry.example/ai-builder@$2"
+          acquire_release_lock
+        ' bash "$ROOT_DIR" "$TEST_DIGEST"
+    )"
+    assert_contains "$output" "manual recovery is required"
+    [ "$(state_file_value "$state_file" lock_generation)" = "generation-old" ] \
+      || fail "inconsistent released tombstone was mutated"
+  done
+
+  for mode in forward rollback recovery; do
+    printf '%s\n' \
+      "backend_image=$([ "$mode" = "forward" ] && printf "registry.example/ai-builder@sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc" || printf "registry.example/ai-builder@%s" "$TEST_DIGEST")" \
+      "init_image=$([ "$mode" = "forward" ] && printf "registry.example/ai-builder@sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd" || printf "registry.example/ai-builder@%s" "$TEST_DIGEST")" \
+      "sts_resource_version=12" \
+      "sts_annotations_present=1" \
+      "sts_other_annotation=keep" \
+      "sts_fence_present=1" \
+      "sts_fence_generation=generation-new" \
+      "lock_owner=online-generation" \
+      "lock_target=registry.example/ai-builder@${TEST_DIGEST}" \
+      "lock_state=active" \
+      "lock_uid=lock-uid-a" \
+      "lock_resource_version=12" \
+      "lock_generation=generation-new" \
+      "lock_baseline_generation=generation-new" \
+      "lock_previous_backend=registry.example/ai-builder@sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc" \
+      "lock_previous_init=registry.example/ai-builder@sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd" \
+      "lock_sts_uid=sts-uid-1" \
+      "lock_sts_resource_version=10" >"$state_file"
+    : >"$kube_log"
+    output="$(
+      PATH="${FAKE_BIN}:$PATH" \
+      FAKE_KUBE_STATE="$state_file" \
+      FAKE_KUBE_LOG="$kube_log" \
+        assert_command_fails_without_secret bash -c '
+          source "$1/scripts/deploy_online_latest_kubesphere.sh"
+          NAMESPACE="release-ns"
+          APP_NAME="ai-builder"
+          RELEASE_LOCK_NAME="ai-builder-release-lock"
+          RELEASE_LOCK_OWNER="online-generation"
+          IMAGE="registry.example/ai-builder@$2"
+          LEASE_GENERATION="generation-old"
+          RELEASE_LOCK_UID="lock-uid-a"
+          RELEASE_LOCK_RESOURCE_VERSION="12"
+          LOCK_ACQUIRED=1
+          case "$3" in
+            forward)
+              patch_statefulset_images_cas \
+                "registry.example/ai-builder@sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc" \
+                "registry.example/ai-builder@sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd" \
+                "$IMAGE" "$IMAGE"
+              ;;
+            rollback)
+              patch_statefulset_images_cas "$IMAGE" "$IMAGE" \
+                "registry.example/ai-builder@sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc" \
+                "registry.example/ai-builder@sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd"
+              ;;
+            recovery) recover_failed_release ;;
+          esac
+        ' bash "$ROOT_DIR" "$TEST_DIGEST" "$mode"
+    )"
+    assert_not_contains "$(<"$kube_log")" "image-patch"
+  done
+  printf 'ONLINE_GENERATION_FENCING=PASS\n'
+}
+
 assert_ci_recovery_contract() {
-  local job_dir state_file kube_log update_script browser_script recovery_script output
+  local job_dir state_file kube_log update_script browser_script recovery_script output generation
   job_dir="${TMP_DIR}/ci-recovery"
   state_file="${TMP_DIR}/ci-recovery.state"
   kube_log="${TMP_DIR}/ci-recovery.log"
@@ -1098,6 +1599,13 @@ assert_ci_recovery_contract() {
   [ "$(state_file_value "$state_file" lock_owner)" = "ci-pipeline-a" ] \
     || fail "CI update did not acquire pipeline-owned release lock"
   assert_contains "$(<"$state_file")" "backend_image=registry.example/ai-builder@${TEST_DIGEST}"
+  generation="$(state_file_value "$state_file" lock_generation)"
+  [ -n "$generation" ] || fail "CI update did not create a lease generation"
+  [ "$(state_file_value "$state_file" lock_baseline_generation)" = "$generation" ] \
+    || fail "CI update baseline generation does not match its lease"
+  [ "$(state_file_value "$state_file" sts_fence_generation)" = "$generation" ] \
+    || fail "CI update StatefulSet fence does not match its lease"
+  assert_contains "$(<"${job_dir}/build/release.env")" "LEASE_GENERATION=${generation}"
 
   output="$(
     (
@@ -1171,9 +1679,14 @@ assert_ci_recovery_contract() {
     "backend_image=registry.example/ai-builder@${TEST_DIGEST}" \
     "init_image=registry.example/ai-builder@${TEST_DIGEST}" \
     "sts_resource_version=9" \
+    "sts_annotations_present=1" \
+    "sts_fence_present=1" \
+    "sts_fence_generation=generation-a" \
     "lock_owner=ci-pipeline-a" \
     "lock_target=registry.example/ai-builder@${TEST_DIGEST}" \
     "lock_state=active" \
+    "lock_generation=generation-a" \
+    "lock_baseline_generation=generation-a" \
     "lock_previous_backend=registry.example/ai-builder@sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc" \
     "lock_previous_init=registry.example/ai-builder@sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd" \
     "lock_sts_uid=sts-uid-1" \
@@ -1268,9 +1781,14 @@ assert_ci_recovery_contract() {
     "backend_image=registry.example/ai-builder@${TEST_DIGEST}" \
     "init_image=registry.example/ai-builder@${TEST_DIGEST}" \
     "sts_resource_version=3" \
+    "sts_annotations_present=1" \
+    "sts_fence_present=1" \
+    "sts_fence_generation=generation-d" \
     "lock_owner=ci-pipeline-d" \
     "lock_target=registry.example/ai-builder@${TEST_DIGEST}" \
     "lock_state=active" \
+    "lock_generation=generation-d" \
+    "lock_baseline_generation=generation-d" \
     "lock_previous_backend=registry.example/ai-builder@sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc" \
     "lock_previous_init=registry.example/ai-builder@sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd" \
     "lock_sts_uid=sts-uid-1" \
@@ -1334,8 +1852,8 @@ assert_ci_update_failure_and_lock_contract() {
     printf 'CI update rollback output: %s\n' "$output" >&2
     fail "expected rollout failed; rollback completed"
   fi
-  assert_contains "$(<"$kube_log")" "set-image backend=registry.example/ai-builder@${TEST_DIGEST}"
-  assert_contains "$(<"$kube_log")" "set-image backend=registry.example/ai-builder@sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
+  assert_contains "$(<"$kube_log")" "image-patch backend=registry.example/ai-builder@${TEST_DIGEST}"
+  assert_contains "$(<"$kube_log")" "image-patch backend=registry.example/ai-builder@sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
   assert_contains "$(<"$state_file")" "backend_image=registry.example/ai-builder@sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
   [ -z "$(state_file_value "$state_file" lock_owner)" ] || fail "CI update rollback did not release its lock"
 
@@ -1366,7 +1884,7 @@ assert_ci_update_failure_and_lock_contract() {
     )
   )"
   assert_contains "$output" "release lock"
-  assert_not_contains "$(<"$kube_log")" "set-image backend=registry.example/ai-builder@${TEST_DIGEST}"
+  assert_not_contains "$(<"$kube_log")" "image-patch backend=registry.example/ai-builder@${TEST_DIGEST}"
 
   printf '%s\n' \
     "backend_image=registry.example/ai-builder@sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc" \
@@ -1470,8 +1988,12 @@ assert_online_image_only_contract() {
       printf 'online %s output: %s\n' "$mode" "$output" >&2
       fail "expected rollback completed"
     fi
-    assert_contains "$(<"$kube_log")" "set-image backend=registry.example/ai-builder@${TEST_DIGEST}"
-    assert_contains "$(<"$kube_log")" "set-image backend=registry.example/ai-builder@sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
+    if [ "$mode" = "set" ]; then
+      assert_not_contains "$(<"$kube_log")" "image-patch"
+    else
+      assert_contains "$(<"$kube_log")" "image-patch backend=registry.example/ai-builder@${TEST_DIGEST}"
+      assert_contains "$(<"$kube_log")" "image-patch backend=registry.example/ai-builder@sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
+    fi
     assert_not_contains "$(<"$kube_log")" " apply "
     assert_not_contains "$(<"$kube_log")" " delete "
     [ -z "$(state_file_value "$state_file" lock_owner)" ] || fail "online ${mode} rollback did not release its lock"
@@ -1493,8 +2015,8 @@ assert_online_lock_baseline_interleave_contract() {
   output="$(assert_command_fails_without_secret run_fake_online_main "$state_file" "$kube_log" interleave "$marker")"
   assert_contains "$output" "rollback completed"
   assert_contains "$(<"$kube_log")" "interleave-release backend=registry.example/ai-builder@sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd"
-  assert_contains "$(<"$kube_log")" "set-image backend=registry.example/ai-builder@${TEST_DIGEST}"
-  assert_contains "$(<"$kube_log")" "set-image backend=registry.example/ai-builder@sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd"
+  assert_contains "$(<"$kube_log")" "image-patch backend=registry.example/ai-builder@${TEST_DIGEST}"
+  assert_contains "$(<"$kube_log")" "image-patch backend=registry.example/ai-builder@sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd"
   assert_contains "$(<"$state_file")" "backend_image=registry.example/ai-builder@sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd"
   [ -z "$(state_file_value "$state_file" lock_owner)" ] || fail "online interleave recovery did not release its lock"
   printf 'ONLINE_LOCK_BASELINE_INTERLEAVE=PASS\n'
@@ -1518,7 +2040,13 @@ assert_replacement_lock_cas_contract() {
     "lock_target=registry.example/ai-builder@${TEST_DIGEST}" \
     "lock_state=active" \
     "lock_uid=lock-uid-a" \
-    "lock_resource_version=7" >"$state_file"
+    "lock_resource_version=7" \
+    "lock_generation=generation-a" \
+    "lock_baseline_generation=" \
+    "lock_previous_backend=" \
+    "lock_previous_init=" \
+    "lock_sts_uid=" \
+    "lock_sts_resource_version=" >"$state_file"
   : >"$kube_log"
   output="$(
     PATH="${FAKE_BIN}:$PATH" \
@@ -1534,6 +2062,7 @@ assert_replacement_lock_cas_contract() {
         RELEASE_LOCK_OWNER="online-a"
         RELEASE_LOCK_UID="lock-uid-a"
         RELEASE_LOCK_RESOURCE_VERSION="7"
+        LEASE_GENERATION="generation-a"
         VALIDATED_STATEFULSET_UID="sts-uid-1"
         VALIDATED_STATEFULSET_RESOURCE_VERSION="1"
         PREVIOUS_BACKEND_IMAGE="registry.example/ai-builder@sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
@@ -1554,7 +2083,13 @@ assert_replacement_lock_cas_contract() {
     "lock_target=registry.example/ai-builder@${TEST_DIGEST}" \
     "lock_state=active" \
     "lock_uid=lock-uid-a" \
-    "lock_resource_version=7" >"$state_file"
+    "lock_resource_version=7" \
+    "lock_generation=generation-a" \
+    "lock_baseline_generation=" \
+    "lock_previous_backend=" \
+    "lock_previous_init=" \
+    "lock_sts_uid=" \
+    "lock_sts_resource_version=" >"$state_file"
   output="$(
     PATH="${FAKE_BIN}:$PATH" \
     FAKE_KUBE_STATE="$state_file" \
@@ -1569,6 +2104,7 @@ assert_replacement_lock_cas_contract() {
         RELEASE_LOCK_OWNER="online-a"
         RELEASE_LOCK_UID="lock-uid-a"
         RELEASE_LOCK_RESOURCE_VERSION="7"
+        LEASE_GENERATION="generation-a"
         LOCK_ACQUIRED=1
         release_lock_if_owned
       ' bash "$ROOT_DIR" "$TEST_DIGEST"
@@ -1614,11 +2150,21 @@ assert_replacement_lock_cas_contract() {
   printf '%s\n' \
     "backend_image=registry.example/ai-builder@${TEST_DIGEST}" \
     "init_image=registry.example/ai-builder@${TEST_DIGEST}" \
+    "sts_resource_version=3" \
+    "sts_annotations_present=1" \
+    "sts_fence_present=1" \
+    "sts_fence_generation=generation-a" \
     "lock_owner=ci-pipeline-a" \
     "lock_target=registry.example/ai-builder@${TEST_DIGEST}" \
     "lock_state=active" \
     "lock_uid=lock-uid-a" \
-    "lock_resource_version=7" >"$state_file"
+    "lock_resource_version=7" \
+    "lock_generation=generation-a" \
+    "lock_baseline_generation=generation-a" \
+    "lock_previous_backend=registry.example/ai-builder@sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc" \
+    "lock_previous_init=registry.example/ai-builder@sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd" \
+    "lock_sts_uid=sts-uid-1" \
+    "lock_sts_resource_version=2" >"$state_file"
   output="$(
     (
       cd "$job_dir"
@@ -1643,6 +2189,7 @@ assert_replacement_lock_cas_contract() {
       BUILDER_SMOKE_TENANT_NAME="Release Tenant" \
       BUILDER_SMOKE_CODE_SESSION_ID="session-1" \
       CI_PIPELINE_ID="pipeline-a" \
+      LEASE_GENERATION="generation-a" \
       FAKE_REAL_NODE="$REAL_NODE" \
       FAKE_REPLACE_LOCK_ON_PATCH=1 \
       FAKE_KUBE_STATE="$state_file" \
@@ -1658,11 +2205,16 @@ assert_replacement_lock_cas_contract() {
     "backend_image=registry.example/ai-builder@${TEST_DIGEST}" \
     "init_image=registry.example/ai-builder@${TEST_DIGEST}" \
     "sts_resource_version=1" \
+    "sts_annotations_present=1" \
+    "sts_fence_present=1" \
+    "sts_fence_generation=generation-a" \
     "lock_owner=ci-pipeline-a" \
     "lock_target=registry.example/ai-builder@${TEST_DIGEST}" \
     "lock_state=active" \
     "lock_uid=lock-uid-a" \
     "lock_resource_version=7" \
+    "lock_generation=generation-a" \
+    "lock_baseline_generation=generation-a" \
     "lock_previous_backend=registry.example/ai-builder@sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc" \
     "lock_previous_init=registry.example/ai-builder@sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd" \
     "lock_sts_uid=sts-uid-1" \
@@ -1694,6 +2246,7 @@ assert_replacement_lock_cas_contract() {
 main() {
   write_fake_tools
   assert_fake_helper_contract
+  assert_online_generation_fencing_contract
   assert_ci_metadata_and_mapping
   assert_ci_metadata_flow
   assert_podman_digestfile

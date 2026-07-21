@@ -516,15 +516,20 @@ def test_online_release_is_existing_workload_image_only(repo_root: Path):
     assert "acquire_release_lock" in text
     assert "recover_failed_release" in text
     assert "rollback CAS rejected" in text
-    assert 'set image "statefulset/${APP_NAME}"' in text
-    assert '"${KUBE_BACKEND_CONTAINER:-apaas-builder}=${1}"' in text
-    assert '"${KUBE_DIST_INIT_CONTAINER:-copy-frontend-dist}=${2}"' in text
+    assert "kubectl set image" not in text
+    assert "patch_statefulset_images_cas" in text
+    assert "fence_statefulset_for_generation" in text
+    assert "/metadata/annotations/builder.ai~1release-generation" in text
+    assert "/spec/template/spec/containers/%s/name" in text
+    assert "/spec/template/spec/containers/%s/image" in text
+    assert "/spec/template/spec/initContainers/%s/name" in text
+    assert "/spec/template/spec/initContainers/%s/image" in text
     main_text = text[text.index("main() {") :]
     assert main_text.index("run_release_builder_prebuild_preflight") < main_text.index(
         "docker_login_if_requested"
     )
     assert main_text.index("acquire_release_lock") < main_text.index(
-        'set_release_images "$IMAGE" "$IMAGE"'
+        'set_release_images "$PREVIOUS_BACKEND_IMAGE"'
     )
     for forbidden in (
         "kubectl apply",
