@@ -202,7 +202,9 @@ verify_kubernetes_rbac() {
     "get ingresses.networking.k8s.io" \
     "get configmaps" \
     "create configmaps" \
+    "patch configmaps" \
     "delete configmaps" \
+    "patch statefulsets" \
     "get pods/log" \
     "create pods/exec"; do
     verb="${verb_resource%% *}"

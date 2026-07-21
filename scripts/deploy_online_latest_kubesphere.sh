@@ -44,6 +44,8 @@ RELEASE_LOCK_NAME="${RELEASE_LOCK_NAME:-${APP_NAME}-release-lock}"
 RELEASE_LOCK_OWNER="${RELEASE_LOCK_OWNER:-online-${USER:-unknown}-$$-$(date +%s)}"
 PREVIOUS_BACKEND_IMAGE=""
 PREVIOUS_DIST_INIT_IMAGE=""
+VALIDATED_STATEFULSET_UID=""
+VALIDATED_STATEFULSET_RESOURCE_VERSION=""
 IMAGE=""
 GIT_SHA=""
 GIT_FULL_SHA=""
@@ -207,14 +209,24 @@ statefulset_image() {
 }
 
 capture_previous_workload() {
-  kubectl -n "$NAMESPACE" get "statefulset/${APP_NAME}" >/dev/null \
-    || die "StatefulSet is not accessible: ${APP_NAME}; first installation requires bootstrap"
+  local identity
+
+  if ! kubectl -n "$NAMESPACE" get "statefulset/${APP_NAME}" >/dev/null; then
+    warn "StatefulSet is not accessible: ${APP_NAME}; first installation requires bootstrap"
+    return 1
+  fi
+  identity="$(kubectl -n "$NAMESPACE" get "statefulset/${APP_NAME}" \
+    -o jsonpath='{.metadata.uid}{" "}{.metadata.resourceVersion}')" || return 1
+  read -r VALIDATED_STATEFULSET_UID VALIDATED_STATEFULSET_RESOURCE_VERSION <<<"$identity"
+  [[ "$VALIDATED_STATEFULSET_UID" =~ ^[A-Za-z0-9.-]+$ ]] \
+    && [[ "$VALIDATED_STATEFULSET_RESOURCE_VERSION" =~ ^[0-9]+$ ]] \
+    || { warn "unable to capture StatefulSet UID/resourceVersion"; return 1; }
   PREVIOUS_BACKEND_IMAGE="$(statefulset_image backend "${KUBE_BACKEND_CONTAINER:-apaas-builder}")"
   PREVIOUS_DIST_INIT_IMAGE="$(statefulset_image init "${KUBE_DIST_INIT_CONTAINER:-copy-frontend-dist}")"
   [ -n "$PREVIOUS_BACKEND_IMAGE" ] && [ -n "$PREVIOUS_DIST_INIT_IMAGE" ] \
-    || die "unable to capture previous StatefulSet image refs"
+    || { warn "unable to capture previous StatefulSet image refs"; return 1; }
   is_immutable_image_ref "$PREVIOUS_BACKEND_IMAGE" && is_immutable_image_ref "$PREVIOUS_DIST_INIT_IMAGE" \
-    || die "previous StatefulSet image refs must be immutable digest references"
+    || { warn "previous StatefulSet image refs must be immutable digest references"; return 1; }
 }
 
 lock_value() {
@@ -233,8 +245,6 @@ acquire_release_lock() {
   if kubectl -n "$NAMESPACE" create configmap "$RELEASE_LOCK_NAME" \
     --from-literal="owner=${RELEASE_LOCK_OWNER}" \
     --from-literal="target_image=${IMAGE}" \
-    --from-literal="previous_backend_image=${PREVIOUS_BACKEND_IMAGE}" \
-    --from-literal="previous_init_image=${PREVIOUS_DIST_INIT_IMAGE}" \
     --from-literal="acquired_at=$(date -u +%Y-%m-%dT%H:%M:%SZ)" >/dev/null; then
     LOCK_ACQUIRED=1
     return 0
@@ -243,6 +253,40 @@ acquire_release_lock() {
     die "release lock exists (${RELEASE_LOCK_NAME}); manual recovery is required"
   fi
   die "unable to acquire release lock: ${RELEASE_LOCK_NAME}"
+}
+
+persist_validated_baseline() {
+  local patch
+
+  verify_release_lock || return 1
+  patch="$(printf '{"data":{"validated_statefulset_uid":"%s","validated_statefulset_resource_version":"%s","previous_backend_image":"%s","previous_init_image":"%s"}}' \
+    "$VALIDATED_STATEFULSET_UID" "$VALIDATED_STATEFULSET_RESOURCE_VERSION" \
+    "$PREVIOUS_BACKEND_IMAGE" "$PREVIOUS_DIST_INIT_IMAGE")"
+  kubectl -n "$NAMESPACE" patch configmap "$RELEASE_LOCK_NAME" --type=merge --patch "$patch" >/dev/null
+}
+
+load_validated_baseline_from_lock() {
+  PREVIOUS_BACKEND_IMAGE="$(lock_value previous_backend_image)"
+  PREVIOUS_DIST_INIT_IMAGE="$(lock_value previous_init_image)"
+  VALIDATED_STATEFULSET_UID="$(lock_value validated_statefulset_uid)"
+  VALIDATED_STATEFULSET_RESOURCE_VERSION="$(lock_value validated_statefulset_resource_version)"
+  is_immutable_image_ref "$PREVIOUS_BACKEND_IMAGE" \
+    && is_immutable_image_ref "$PREVIOUS_DIST_INIT_IMAGE" \
+    && [[ "$VALIDATED_STATEFULSET_UID" =~ ^[A-Za-z0-9.-]+$ ]] \
+    && [[ "$VALIDATED_STATEFULSET_RESOURCE_VERSION" =~ ^[0-9]+$ ]]
+}
+
+validated_baseline_matches_current_workload() {
+  local identity current_uid current_resource_version
+
+  verify_release_lock || return 1
+  load_validated_baseline_from_lock || return 1
+  identity="$(kubectl -n "$NAMESPACE" get "statefulset/${APP_NAME}" \
+    -o jsonpath='{.metadata.uid}{" "}{.metadata.resourceVersion}')" || return 1
+  read -r current_uid current_resource_version <<<"$identity"
+  [ "$current_uid" = "$VALIDATED_STATEFULSET_UID" ] \
+    && [ "$current_resource_version" = "$VALIDATED_STATEFULSET_RESOURCE_VERSION" ] \
+    && template_matches "$PREVIOUS_BACKEND_IMAGE" "$PREVIOUS_DIST_INIT_IMAGE"
 }
 
 release_lock_if_owned() {
@@ -264,8 +308,9 @@ template_matches() {
 }
 
 verify_online_rollback() {
-  ROLLBACK_BACKEND_IMAGE="$PREVIOUS_BACKEND_IMAGE" \
-  ROLLBACK_DIST_INIT_IMAGE="$PREVIOUS_DIST_INIT_IMAGE" \
+  local previous_backend_image="$1" previous_init_image="$2"
+  ROLLBACK_BACKEND_IMAGE="$previous_backend_image" \
+  ROLLBACK_DIST_INIT_IMAGE="$previous_init_image" \
   KUBE_NAMESPACE="$NAMESPACE" KUBE_STATEFULSET="$APP_NAME" KUBE_LABEL_SELECTOR="$KUBE_LABEL_SELECTOR" \
   KUBE_BACKEND_CONTAINER="${KUBE_BACKEND_CONTAINER:-apaas-builder}" \
   KUBE_DIST_INIT_CONTAINER="${KUBE_DIST_INIT_CONTAINER:-copy-frontend-dist}" \
@@ -275,6 +320,13 @@ verify_online_rollback() {
 recover_failed_release() {
   [ "$LOCK_ACQUIRED" = "1" ] || return 0
   verify_release_lock || return 1
+  load_validated_baseline_from_lock || { warn "release lock baseline is invalid"; return 1; }
+  local identity current_uid
+  identity="$(kubectl -n "$NAMESPACE" get "statefulset/${APP_NAME}" -o jsonpath='{.metadata.uid}')" \
+    || return 1
+  current_uid="$identity"
+  [ "$current_uid" = "$VALIDATED_STATEFULSET_UID" ] \
+    || { warn "rollback CAS rejected because StatefulSet UID changed"; return 1; }
   if template_matches "$PREVIOUS_BACKEND_IMAGE" "$PREVIOUS_DIST_INIT_IMAGE"; then
     ok "release already uses the captured previous immutable images"
   elif template_matches "$IMAGE" "$IMAGE"; then
@@ -286,7 +338,7 @@ recover_failed_release() {
       warn "rollback rollout failed"
       return 1
     fi
-    if ! verify_online_rollback; then
+    if ! verify_online_rollback "$PREVIOUS_BACKEND_IMAGE" "$PREVIOUS_DIST_INIT_IMAGE"; then
       warn "rollback workload verification failed"
       return 1
     fi
@@ -296,6 +348,14 @@ recover_failed_release() {
   fi
   release_lock_if_owned || { warn "rollback succeeded but lock release failed"; return 1; }
   ok "rolled back existing workload to previous immutable image refs"
+}
+
+fail_before_mutation() {
+  local reason="$1"
+  if ! release_lock_if_owned; then
+    die "${reason}; release lock cleanup failed"
+  fi
+  die "$reason"
 }
 
 fail_with_recovery() {
@@ -318,8 +378,16 @@ main() {
   docker_login_if_requested
   build_and_push_image
   run_release_builder_preflight
-  capture_previous_workload
   acquire_release_lock
+  if ! capture_previous_workload; then
+    fail_before_mutation "unable to capture existing workload baseline"
+  fi
+  if ! persist_validated_baseline; then
+    fail_before_mutation "unable to persist release lock baseline"
+  fi
+  if ! validated_baseline_matches_current_workload; then
+    fail_before_mutation "StatefulSet changed after release lock acquisition; refusing image mutation"
+  fi
   if ! set_release_images "$IMAGE" "$IMAGE"; then
     fail_with_recovery "image update failed for immutable image ${IMAGE}"
   fi

@@ -507,3 +507,98 @@ GitLab YAML parse: PASS
   隔离 release pipeline 验证；实现不会自动抢占已有 lock。
 - 真实 Ingress controller/DNS、registry digest、protected variables 与 Kubernetes
   JSONPath 的环境行为仍需在受控线上演练中提供证据；任一不匹配保持 fail-closed。
+
+## 锁生命周期最终修复
+
+### RED
+
+先扩展 `tests/release/test_builder_tenant_url_smoke.sh` 的 YAML/fake-kubectl 动态合同：
+
+- CI/online 必须先原子创建只含 owner、target、acquired timestamp 的 lock，之后才可
+  读取 StatefulSet UID/resourceVersion 与 previous backend/init immutable refs；
+- lock patch 必须保存已验证的 UID/resourceVersion/previous pair；set image 前重新读取
+  UID/resourceVersion/template pair，任何漂移都只能释放本 owner 的 lock 并失败；
+- A 在锁外等待、B 完整 D0->D1 并释放后，A 的失败 D2 只能回滚 D1；
+- browser smoke/setup/artifact handoff 失败必须保留 lock，由无 dotenv 输入的
+  `when: always` recovery job 从 ConfigMap 读取 baseline 回滚；
+- recovery 覆盖 no-lock no-op、foreign lock 不动、成功 browser 释放后 no-op 和
+  rollback rollout 二次失败保留 lock。
+
+初始 RED：
+
+```bash
+bash tests/release/test_builder_tenant_url_smoke.sh
+```
+
+关键输出：
+
+```text
+key not found: "release_builder_recovery"
+```
+
+这证明旧 CI 没有独立 recovery owner。其后 YAML 动态断言还捕获了旧 update path
+在 lock 之前读取 previous pair；fake interleave 会把失败 D2 错误地恢复到 D0。
+
+### GREEN
+
+- `scripts/deploy_online_latest_kubesphere.sh`
+  - lock 初始创建不再携带 previous refs；成功获取后捕获 StatefulSet UID、
+    resourceVersion 和 immutable previous pair，再 patch 回 lock。
+  - set image 前按 lock 中 baseline 重读 UID/resourceVersion/template pair；漂移时
+    owner-only 释放 lock 并在 mutation 前失败。
+  - rollback 从 lock 重新读取 previous pair，并以 owner、target、StatefulSet UID 和
+    current target template 作 CAS，避免使用早期 shell 变量。
+- `.gitlab-ci.yml`
+  - `release_and_update_server` 采用同一 lock-first baseline 协议，set/rollout failure
+    仍在原 job 完成 rollback。
+  - browser job 不再竞争 rollback；它只验证 owner/target/template、运行 smoke，并在
+    成功后释放 lock。
+  - 新增固定 `kubectl:1.30.7` 的 `release_builder_recovery` recovery stage/job，
+    `when: always` 且不消费 browser dotenv/artifact。它只用 kubeconfig、当前 pipeline
+    owner 和 ConfigMap baseline 做 CAS rollback/rollout/health verification；foreign 或
+    stale lock 保持 fail-closed。
+- `scripts/verify_builder_tenant_url_smoke.sh` preflight 增加 `patch configmaps` 与
+  `patch statefulsets` RBAC 检查。
+- fake contract 增加 StatefulSet UID/resourceVersion、ConfigMap patch、D0/D1/D2
+  interleave、browser setup/artifact failure、foreign lock、successful release/no-op 和
+  recovery failure 的可执行覆盖。
+
+本轮 GREEN 与验证：
+
+```bash
+bash tests/release/test_builder_tenant_url_smoke.sh
+python3 -m pytest -q backend/tests/test_tenant_url_build_contract.py
+podman run --rm --entrypoint /bin/sh \
+  -v "$PWD:/workspace:ro" \
+  -v /mnt/d/workspaces/d-ai-code/apaas-builder-ai/.git:/mnt/d/workspaces/d-ai-code/apaas-builder-ai/.git:ro \
+  -w /workspace \
+  om-harbor.dfy.definesys.cn/om-demo/ai-builder:2026.07.20-3f90e08a-runtime-expiry-timezone \
+  -lc 'git config --global --add safe.directory /workspace && python -m pytest -q -p no:cacheprovider backend/tests/test_tenant_url_build_contract.py'
+bash -n scripts/verify_builder_tenant_url_smoke.sh \
+  scripts/deploy_online_latest_kubesphere.sh \
+  tests/release/test_builder_tenant_url_smoke.sh
+node --check tests/e2e/builder-tenant-url-release-smoke.spec.mjs
+ruby -e 'require "yaml"; YAML.load_file(".gitlab-ci.yml"); puts "GitLab YAML parse: PASS"'
+git diff --check
+```
+
+关键 GREEN 输出：
+
+```text
+CI_RECOVERY_CONTRACT=PASS
+CI_UPDATE_LOCK_CONTRACT=PASS
+ONLINE_LOCK_BASELINE_INTERLEAVE=PASS
+PASS: builder tenant URL release smoke contract
+29 passed
+GitLab YAML parse: PASS
+```
+
+### 最终修复 Concerns
+
+- 按约束未连接/修改真实 Kubernetes、未构建或推送镜像、未运行线上账号、Edge 或 Code
+  session smoke。
+- runner 进程丢失、取消或 kubeconfig/recovery job 自身无法启动时仍会留下 fail-closed
+  lock，必须由人工按 lock 的 owner/target/baseline 信息恢复；实现不会自动抢占 stale
+  lock。
+- 真实 GitLab stage failure/cancellation、ConfigMap RBAC、StatefulSet
+  resourceVersion 行为和跨 runner 资源组调度仍需在隔离 release pipeline 中演练。
