@@ -13,6 +13,7 @@ from app.tenant_public_id import ensure_tenant_public_id
 from app.deps import (
     AuthContext,
     get_auth_context,
+    platform_admin_has_unscoped_tenant_access,
     require_tenant_admin,
     resolve_default_tenant_id_for_user,
 )
@@ -946,9 +947,7 @@ async def list_my_tenants(
     aPaaS 登录用户只返回自己可登录的 active membership。平台管理员的全量租户同步
     只供平台管理使用，不等于这些租户都能进入工作台。
     """
-    is_apaas_account = bool(ctx.user.apaas_user_id)
-    is_unbound_coding_account = ctx.user.account_source == "coding" and not ctx.user.apaas_user_id
-    if ctx.user.is_platform_admin and not is_apaas_account and not is_unbound_coding_account:
+    if platform_admin_has_unscoped_tenant_access(ctx.user):
         stmt = select(Tenant).where(Tenant.status == 1)
         rows = (
             await db.execute(

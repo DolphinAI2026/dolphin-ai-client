@@ -134,9 +134,12 @@ async def test_switch_tenant_rejects_active_membership_for_disabled_tenant(
     token_signer.assert_not_called()
 
 
+@pytest.mark.parametrize("account_source", ["apaas", "desktop"])
 @pytest.mark.asyncio
-async def test_platform_admin_can_switch_to_any_active_tenant(db_session):
-    # 平台管理员，没成员关系也可以切到任意 active 租户
+async def test_local_platform_admin_lists_and_switches_any_active_tenant(
+    db_session,
+    account_source,
+):
     tenants = []
     for i in range(2):
         t = Tenant(tenant_name=f"T{i}", tenant_code=f"t{i}", status=1)
@@ -147,18 +150,21 @@ async def test_platform_admin_can_switch_to_any_active_tenant(db_session):
         hashed_password=get_password_hash("secret"),
         is_active=True,
         is_platform_admin=True,
-        account_source="control_plane",
+        account_source=account_source,
     )
     db_session.add(admin)
     await db_session.flush()
 
     ctx = AuthContext(user=admin, tenant_id=tenants[0].id, tenant_role="platform_admin", org_permissions={"*": True})
 
+    listed = await list_my_tenants(ctx, db_session)
     res = await switch_tenant(
         TenantSwitchRequest(tenant_id=tenants[1].id),
         ctx,
         db_session,
     )
+
+    assert [item.tenant_id for item in listed] == [tenants[0].id, tenants[1].id]
     payload = jwt.decode(
         res.access_token,
         settings.jwt_secret_key,
@@ -168,17 +174,34 @@ async def test_platform_admin_can_switch_to_any_active_tenant(db_session):
     assert payload["tid"] == tenants[1].id
 
 
+@pytest.mark.parametrize(
+    ("account_source", "apaas_user_id"),
+    [
+        ("apaas", "apaas-user-1"),
+        ("coding", None),
+        ("control_plane", None),
+    ],
+)
 @pytest.mark.asyncio
-async def test_coding_platform_admin_lists_only_membership_tenants(db_session):
+async def test_external_platform_admin_lists_only_membership_tenants(
+    db_session,
+    account_source,
+    apaas_user_id,
+):
     tenants = []
     for i in range(2):
-        t = Tenant(tenant_name=f"T{i}", tenant_code=f"coding-list-{i}", status=1)
+        t = Tenant(
+            tenant_name=f"T{i}",
+            tenant_code=f"{account_source}-list-{i}",
+            status=1,
+        )
         db_session.add(t)
         tenants.append(t)
     user = User(
-        username="code_admin",
+        username=f"{account_source}_admin",
         hashed_password=get_password_hash("secret"),
-        account_source="coding",
+        account_source=account_source,
+        apaas_user_id=apaas_user_id,
         is_active=True,
         is_platform_admin=True,
     )
@@ -201,17 +224,34 @@ async def test_coding_platform_admin_lists_only_membership_tenants(db_session):
     assert [item.tenant_id for item in res] == [tenants[0].id]
 
 
+@pytest.mark.parametrize(
+    ("account_source", "apaas_user_id"),
+    [
+        ("apaas", "apaas-user-2"),
+        ("coding", None),
+        ("control_plane", None),
+    ],
+)
 @pytest.mark.asyncio
-async def test_coding_platform_admin_cannot_switch_to_unbound_tenant(db_session):
+async def test_external_platform_admin_cannot_switch_to_unbound_tenant(
+    db_session,
+    account_source,
+    apaas_user_id,
+):
     tenants = []
     for i in range(2):
-        t = Tenant(tenant_name=f"T{i}", tenant_code=f"coding-switch-{i}", status=1)
+        t = Tenant(
+            tenant_name=f"T{i}",
+            tenant_code=f"{account_source}-switch-{i}",
+            status=1,
+        )
         db_session.add(t)
         tenants.append(t)
     user = User(
-        username="code_admin_switch",
+        username=f"{account_source}_admin_switch",
         hashed_password=get_password_hash("secret"),
-        account_source="coding",
+        account_source=account_source,
+        apaas_user_id=apaas_user_id,
         is_active=True,
         is_platform_admin=True,
     )

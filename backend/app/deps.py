@@ -104,6 +104,43 @@ def _first_text(*values: object) -> str | None:
     return None
 
 
+def platform_admin_has_unscoped_tenant_access(user: User) -> bool:
+    """Return whether a platform admin may enter any active local tenant.
+
+    Legacy local admins share the historical ``apaas`` account_source default,
+    so an aPaaS account is considered external only after it carries aPaaS
+    identity/binding data. Coding and Control Plane accounts are always external.
+    """
+    if not user.is_platform_admin:
+        return False
+    account_source = str(user.account_source or "").strip().lower()
+    if account_source in {"coding", "control_plane"}:
+        return False
+    if account_source == "apaas" and _first_text(
+        user.apaas_user_id,
+        user.apaas_base_url,
+        user.apaas_tenant_id,
+        user.apaas_token,
+    ):
+        return False
+    return True
+
+
+async def _active_tenant_membership(
+    db: AsyncSession,
+    user_id: int,
+    tenant_id: int,
+) -> UserTenant | None:
+    result = await db.execute(
+        select(UserTenant).where(
+            UserTenant.user_id == user_id,
+            UserTenant.tenant_id == tenant_id,
+            UserTenant.status == 1,
+        )
+    )
+    return result.scalar_one_or_none()
+
+
 async def _resolve_role_context(db: AsyncSession, role_id: int | None) -> tuple[str, dict]:
     """role_id → (tenant_role, org_permissions)。
 
@@ -214,7 +251,7 @@ async def get_auth_context(
             apaas_tenant_id=eff_apaas_tid,
         )
 
-    if user.is_platform_admin:
+    if platform_admin_has_unscoped_tenant_access(user):
         return AuthContext(
             user=user,
             tenant_id=tenant_id,
@@ -225,14 +262,7 @@ async def get_auth_context(
         )
 
     # Get user-tenant relationship
-    result = await db.execute(
-        select(UserTenant).where(
-            UserTenant.user_id == user_id,
-            UserTenant.tenant_id == tenant_id,
-            UserTenant.status == 1
-        )
-    )
-    user_tenant = result.scalar_one_or_none()
+    user_tenant = await _active_tenant_membership(db, user_id, tenant_id)
     if not user_tenant:
         logger.warning(
             "auth_context forbidden: user is not an active tenant member user_id=%s tenant_id=%s",
@@ -242,6 +272,16 @@ async def get_auth_context(
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="你不是该租户的成员",
+        )
+
+    if user.is_platform_admin:
+        return AuthContext(
+            user=user,
+            tenant_id=tenant_id,
+            tenant_role="platform_admin",
+            org_permissions={"*": True},
+            apaas_user_id=eff_apaas_uid,
+            apaas_tenant_id=eff_apaas_tid,
         )
 
     # Get role and permissions (shared resolver — keep header/token paths in sync)
@@ -275,6 +315,8 @@ async def get_auth_context_from_token(token: str) -> AuthContext:
         user = result.scalar_one_or_none()
         if not user:
             raise ValueError("User not found")
+        if not user.is_active:
+            raise ValueError("User is disabled")
 
         eff_apaas_uid = jwt_apaas_uid or user.apaas_user_id or None
 
@@ -319,7 +361,7 @@ async def get_auth_context_from_token(token: str) -> AuthContext:
                 apaas_tenant_id=eff_apaas_tid,
             )
 
-        if user.is_platform_admin:
+        if platform_admin_has_unscoped_tenant_access(user):
             return AuthContext(
                 user=user,
                 tenant_id=tenant_id,
@@ -330,14 +372,7 @@ async def get_auth_context_from_token(token: str) -> AuthContext:
             )
         # 普通租户用户：查 UserTenant→Role 拿真实角色权限，与 header 路径一致。
         # （旧实现硬编码 member/{} → 自开发整页预览/SSE 等 query-token 入口丢权限。）
-        result = await db.execute(
-            select(UserTenant).where(
-                UserTenant.user_id == user_id,
-                UserTenant.tenant_id == tenant_id,
-                UserTenant.status == 1,
-            )
-        )
-        user_tenant = result.scalar_one_or_none()
+        user_tenant = await _active_tenant_membership(db, user_id, tenant_id)
         if not user_tenant:
             logger.warning(
                 "auth_context_from_token forbidden: user is not an active tenant member "
@@ -346,6 +381,15 @@ async def get_auth_context_from_token(token: str) -> AuthContext:
                 tenant_id,
             )
             raise ValueError("Tenant membership is inactive")
+        if user.is_platform_admin:
+            return AuthContext(
+                user=user,
+                tenant_id=tenant_id,
+                tenant_role="platform_admin",
+                org_permissions={"*": True},
+                apaas_user_id=eff_apaas_uid,
+                apaas_tenant_id=eff_apaas_tid,
+            )
         tenant_role, org_permissions = await _resolve_role_context(
             db, user_tenant.role_id
         )

@@ -27,6 +27,7 @@ from app.crypto import decrypt_password, encrypt_password
 from app.deps import (
     AuthContext,
     get_auth_context,
+    platform_admin_has_unscoped_tenant_access,
     resolve_default_tenant_id_for_user,
 )
 from app.config import settings
@@ -1657,11 +1658,7 @@ async def switch_tenant(
     本地兜底平台管理员可以切到任意 active 租户；aPaaS 登录用户仅限自己可登录的
     active membership。aPaaS 平台管理员的全量租户同步不等于拥有工作台登录权限。
     """
-    is_apaas_account = ctx.user.account_source == "apaas" or bool(ctx.user.apaas_user_id)
-    is_unbound_coding_account = (
-        ctx.user.account_source == "coding" and not ctx.user.apaas_user_id
-    )
-    if ctx.user.is_platform_admin and not is_apaas_account and not is_unbound_coding_account:
+    if platform_admin_has_unscoped_tenant_access(ctx.user):
         tenant = (
             await db.execute(
                 select(Tenant).where(Tenant.id == data.tenant_id, Tenant.status == 1)

@@ -83,6 +83,8 @@ async def seed_tenant_user(
     *,
     tenant_count: int = 1,
     is_platform_admin: bool = False,
+    account_source: str = "apaas",
+    apaas_base_url: str | None = None,
 ):
     async with auth_db_factory() as session:
         user = User(
@@ -90,6 +92,8 @@ async def seed_tenant_user(
             hashed_password=get_password_hash("secret"),
             is_active=True,
             is_platform_admin=is_platform_admin,
+            account_source=account_source,
+            apaas_base_url=apaas_base_url,
         )
         tenants = [
             Tenant(tenant_name=f"Tenant {index}", tenant_code=f"tenant-{index}", status=1)
@@ -547,6 +551,142 @@ async def test_query_token_rejects_disabled_membership(auth_db_factory):
 
 
 @pytest.mark.asyncio
+async def test_query_token_rejects_disabled_user(auth_db_factory):
+    user, tenants = await seed_tenant_user(auth_db_factory)
+    token = create_access_token(user, tenant_id=tenants[0].id)
+
+    async with auth_db_factory() as session:
+        persisted_user = await session.get(User, user.id)
+        persisted_user.is_active = False
+        await session.commit()
+
+    with pytest.raises(ValueError, match="User is disabled"):
+        await get_auth_context_from_token(token)
+
+
+@pytest.mark.asyncio
+async def test_query_token_rejects_missing_user(auth_db_factory):
+    token = create_access_token(999_999, tenant_id=1)
+
+    with pytest.raises(ValueError, match="User not found"):
+        await get_auth_context_from_token(token)
+
+
+@pytest.mark.parametrize(
+    ("account_source", "apaas_base_url"),
+    [
+        ("apaas", "https://apaas.example"),
+        ("coding", None),
+        ("control_plane", None),
+    ],
+)
+@pytest.mark.asyncio
+async def test_header_token_rejects_revoked_external_platform_admin_membership(
+    auth_db_factory,
+    account_source,
+    apaas_base_url,
+):
+    user, tenants = await seed_tenant_user(
+        auth_db_factory,
+        is_platform_admin=True,
+        account_source=account_source,
+        apaas_base_url=apaas_base_url,
+    )
+    tenant = tenants[0]
+    token = create_access_token(user, tenant_id=tenant.id)
+
+    async with auth_db_factory() as session:
+        await remove_membership(session, user.id, tenant.id)
+        with pytest.raises(HTTPException) as exc:
+            await get_auth_context(credentials_for(token), session)
+
+    assert exc.value.status_code == 403
+
+
+@pytest.mark.parametrize(
+    ("account_source", "apaas_base_url"),
+    [
+        ("apaas", "https://apaas.example"),
+        ("coding", None),
+        ("control_plane", None),
+    ],
+)
+@pytest.mark.asyncio
+async def test_query_token_rejects_revoked_external_platform_admin_membership(
+    auth_db_factory,
+    account_source,
+    apaas_base_url,
+):
+    user, tenants = await seed_tenant_user(
+        auth_db_factory,
+        is_platform_admin=True,
+        account_source=account_source,
+        apaas_base_url=apaas_base_url,
+    )
+    tenant = tenants[0]
+    token = create_access_token(user, tenant_id=tenant.id)
+
+    async with auth_db_factory() as session:
+        await remove_membership(session, user.id, tenant.id)
+
+    with pytest.raises(ValueError, match="Tenant membership is inactive"):
+        await get_auth_context_from_token(token)
+
+
+@pytest.mark.parametrize(
+    ("account_source", "apaas_base_url"),
+    [
+        ("apaas", "https://apaas.example"),
+        ("coding", None),
+        ("control_plane", None),
+    ],
+)
+@pytest.mark.asyncio
+async def test_external_platform_admin_active_membership_keeps_wildcard_permissions(
+    auth_db_factory,
+    account_source,
+    apaas_base_url,
+):
+    user, tenants = await seed_tenant_user(
+        auth_db_factory,
+        is_platform_admin=True,
+        account_source=account_source,
+        apaas_base_url=apaas_base_url,
+    )
+    tenant = tenants[0]
+    token = create_access_token(user, tenant_id=tenant.id)
+
+    async with auth_db_factory() as session:
+        header_ctx = await get_auth_context(credentials_for(token), session)
+    query_ctx = await get_auth_context_from_token(token)
+
+    for ctx in (header_ctx, query_ctx):
+        assert ctx.tenant_id == tenant.id
+        assert ctx.tenant_role == "platform_admin"
+        assert ctx.org_permissions == {"*": True}
+
+
+@pytest.mark.asyncio
+async def test_external_platform_admin_without_tid_remains_unscoped(auth_db_factory):
+    user, tenants = await seed_tenant_user(
+        auth_db_factory,
+        is_platform_admin=True,
+        account_source="control_plane",
+    )
+    token = create_access_token(user, tenant_id=None)
+
+    async with auth_db_factory() as session:
+        await remove_membership(session, user.id, tenants[0].id)
+        header_ctx = await get_auth_context(credentials_for(token), session)
+    query_ctx = await get_auth_context_from_token(token)
+
+    for ctx in (header_ctx, query_ctx):
+        assert ctx.tenant_id == 0
+        assert ctx.tenant_role == "platform_admin"
+        assert ctx.org_permissions == {"*": True}
+
+
+@pytest.mark.asyncio
 async def test_custom_page_query_token_rejects_removed_membership(auth_db_factory):
     user, tenants = await seed_tenant_user(auth_db_factory)
     tenant = tenants[0]
@@ -577,18 +717,29 @@ async def test_custom_page_query_token_rejects_removed_membership(auth_db_factor
 
 
 @pytest.mark.asyncio
-async def test_query_token_keeps_platform_admin_special_branch(auth_db_factory):
-    user, tenants = await seed_tenant_user(auth_db_factory, is_platform_admin=True)
+@pytest.mark.parametrize("account_source", ["apaas", "desktop"])
+async def test_local_platform_admin_keeps_unscoped_header_and_query_access(
+    auth_db_factory,
+    account_source,
+):
+    user, tenants = await seed_tenant_user(
+        auth_db_factory,
+        is_platform_admin=True,
+        account_source=account_source,
+    )
     tenant = tenants[0]
     token = create_access_token(user, tenant_id=tenant.id)
 
     async with auth_db_factory() as session:
         await remove_membership(session, user.id, tenant.id)
+        header_ctx = await get_auth_context(credentials_for(token), session)
 
-    ctx = await get_auth_context_from_token(token)
+    query_ctx = await get_auth_context_from_token(token)
 
-    assert ctx.tenant_id == tenant.id
-    assert ctx.tenant_role == "platform_admin"
+    for ctx in (header_ctx, query_ctx):
+        assert ctx.tenant_id == tenant.id
+        assert ctx.tenant_role == "platform_admin"
+        assert ctx.org_permissions == {"*": True}
 
 
 @pytest.mark.asyncio
@@ -599,8 +750,11 @@ async def test_query_token_keeps_mcp_service_special_branch(auth_db_factory):
 
     async with auth_db_factory() as session:
         await remove_membership(session, user.id, tenant.id)
+        header_ctx = await get_auth_context(credentials_for(token), session)
 
-    ctx = await get_auth_context_from_token(token)
+    query_ctx = await get_auth_context_from_token(token)
 
-    assert ctx.tenant_id == tenant.id
-    assert ctx.tenant_role == "platform_admin"
+    for ctx in (header_ctx, query_ctx):
+        assert ctx.tenant_id == tenant.id
+        assert ctx.tenant_role == "platform_admin"
+        assert ctx.org_permissions == {"*": True}
