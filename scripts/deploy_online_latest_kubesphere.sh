@@ -88,6 +88,13 @@ clone_latest_code() {
   ok "checked out ${GIT_BRANCH}@${GIT_FULL_SHA}"
 }
 
+prepare_root_playwright_dependencies() {
+  need npm
+  log "install root Playwright dependencies from package-lock"
+  (cd "$WORKDIR" && npm ci)
+  ok "root Playwright dependencies installed"
+}
+
 verify_source_provenance() {
   local revision="${1:-${GIT_FULL_SHA:-}}"
   [[ "$revision" =~ ^[0-9a-f]{40}$ ]] \
@@ -520,6 +527,7 @@ main() {
   need mktemp
   setup_kubeconfig
   clone_latest_code
+  prepare_root_playwright_dependencies
   # This strict existing-workload check happens before login/build/push.
   run_release_builder_prebuild_preflight
   docker_login_if_requested

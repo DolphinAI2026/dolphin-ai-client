@@ -1159,6 +1159,46 @@ assert_online_source_and_docker_preflight() {
   printf 'ONLINE_SOURCE_DOCKER_PREFLIGHT=PASS\n'
 }
 
+assert_online_root_playwright_dependencies_contract() {
+  local npm_bin npm_log output workdir
+  npm_bin="${TMP_DIR}/root-playwright-bin"
+  npm_log="${TMP_DIR}/root-playwright-npm.log"
+  workdir="${TMP_DIR}/root-playwright-workdir"
+  mkdir -p "$npm_bin" "$workdir"
+  cat >"${npm_bin}/npm" <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+printf '%s|%s\n' "$PWD" "$*" >"$FAKE_NPM_LOG"
+EOF
+  chmod 755 "${npm_bin}/npm"
+
+  if ! output="$(
+    PATH="${npm_bin}:$PATH" \
+    WORKDIR="$workdir" \
+    FAKE_NPM_LOG="$npm_log" \
+      bash -c '
+        source "$1/scripts/deploy_online_latest_kubesphere.sh"
+        prepare_root_playwright_dependencies
+      ' bash "$ROOT_DIR" 2>&1
+  )"; then
+    printf '%s\n' "$output" >&2
+    fail "online release did not prepare root Playwright dependencies"
+  fi
+  [ "$(<"$npm_log")" = "${workdir}|ci" ] \
+    || fail "online release root dependencies must use package-lock via npm ci"
+
+  ruby - "${ROOT_DIR}/scripts/deploy_online_latest_kubesphere.sh" <<'RUBY'
+source = File.read(ARGV.fetch(0))
+main = source.split("main() {", 2).fetch(1)
+clone_at = main.index("\n  clone_latest_code\n")
+prepare_at = main.index("\n  prepare_root_playwright_dependencies\n")
+prebuild_at = main.index("\n  run_release_builder_prebuild_preflight\n")
+abort "root dependency preparation must run after clone and before online prebuild" \
+  unless clone_at && prepare_at && prebuild_at && clone_at < prepare_at && prepare_at < prebuild_at
+RUBY
+  printf 'ONLINE_ROOT_PLAYWRIGHT_DEPENDENCIES=PASS\n'
+}
+
 run_fake_helper() {
   local mode="${1:-}"
   shift $(( $# > 0 ? 1 : 0 ))
@@ -1946,6 +1986,7 @@ run_fake_online_main() {
       source "$1/scripts/deploy_online_latest_kubesphere.sh"
       setup_kubeconfig() { :; }
       clone_latest_code() { GIT_SHA=aaaaaaaa; GIT_FULL_SHA="$FAKE_ONLINE_REVISION"; }
+      prepare_root_playwright_dependencies() { :; }
       docker_login_if_requested() { :; }
       build_and_push_image() { : >"$FAKE_BUILD_MARKER"; IMAGE="registry.example/ai-builder@$FAKE_ONLINE_DIGEST"; }
       if [ "$FAKE_ONLINE_MODE" != "missing" ]; then
@@ -2252,6 +2293,7 @@ main() {
   assert_podman_digestfile
   assert_online_build_cli_branches
   assert_online_source_and_docker_preflight
+  assert_online_root_playwright_dependencies_contract
   assert_online_selector_contract
   assert_online_rollback_contract
   assert_ci_recovery_contract
