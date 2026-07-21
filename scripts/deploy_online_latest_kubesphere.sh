@@ -92,7 +92,8 @@ prepare_root_playwright_dependencies() {
   need npm
   log "install root Playwright dependencies from package-lock"
   (cd "$WORKDIR" && npm ci)
-  ok "root Playwright dependencies installed"
+  (cd "$WORKDIR" && npm exec -- playwright install msedge)
+  ok "root Playwright dependencies and msedge installed"
 }
 
 verify_source_provenance() {

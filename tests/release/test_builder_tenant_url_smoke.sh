@@ -1160,7 +1160,7 @@ assert_online_source_and_docker_preflight() {
 }
 
 assert_online_root_playwright_dependencies_contract() {
-  local npm_bin npm_log output workdir
+  local expected_calls npm_bin npm_calls npm_log output workdir
   npm_bin="${TMP_DIR}/root-playwright-bin"
   npm_log="${TMP_DIR}/root-playwright-npm.log"
   workdir="${TMP_DIR}/root-playwright-workdir"
@@ -1168,7 +1168,7 @@ assert_online_root_playwright_dependencies_contract() {
   cat >"${npm_bin}/npm" <<'EOF'
 #!/usr/bin/env bash
 set -euo pipefail
-printf '%s|%s\n' "$PWD" "$*" >"$FAKE_NPM_LOG"
+printf '%s|%s\n' "$PWD" "$*" >>"$FAKE_NPM_LOG"
 EOF
   chmod 755 "${npm_bin}/npm"
 
@@ -1184,8 +1184,10 @@ EOF
     printf '%s\n' "$output" >&2
     fail "online release did not prepare root Playwright dependencies"
   fi
-  [ "$(<"$npm_log")" = "${workdir}|ci" ] \
-    || fail "online release root dependencies must use package-lock via npm ci"
+  npm_calls="$(<"$npm_log")"
+  expected_calls="$(printf '%s|ci\n%s|exec -- playwright install msedge\n' "$workdir" "$workdir")"
+  [ "$npm_calls" = "$expected_calls" ] \
+    || fail "online release must install msedge with locked local Playwright after npm ci"
 
   ruby - "${ROOT_DIR}/scripts/deploy_online_latest_kubesphere.sh" <<'RUBY'
 source = File.read(ARGV.fetch(0))
