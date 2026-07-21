@@ -48,9 +48,17 @@ set -euo pipefail
 if [[ "$1" == "-C" ]]; then
   shift 2
 fi
-if [[ "$1" == "merge-base" && "$2" == "--is-ancestor" && "$3" == "49a4bef4" ]]; then
-  exit 0
-fi
+case "${1:-}" in
+  merge-base)
+    if [[ "${2:-}" == "--is-ancestor" && "${3:-}" == "49a4bef4" ]]; then
+      [ "${FAKE_GIT_PROVENANCE_FAIL:-0}" = "1" ] && exit 1
+      exit 0
+    fi
+    ;;
+  rev-parse)
+    [ "${2:-}" = "HEAD" ] && printf '%s\n' "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa" && exit 0
+    ;;
+esac
 printf 'unexpected fake git command\n' >&2
 exit 64
 EOF
@@ -72,6 +80,7 @@ case "${1:-}" in
     cat >/dev/null
     ;;
   *builder-tenant-url-release-smoke.spec.mjs)
+    [ -z "${FAKE_BROWSER_MARKER:-}" ] || : >"${FAKE_BROWSER_MARKER}"
     printf 'RELEASE_BROWSER_SMOKE=PASS\n'
     ;;
   *)
@@ -79,6 +88,15 @@ case "${1:-}" in
     exit 64
     ;;
 esac
+EOF
+
+  cat >"${FAKE_BIN}/grep" <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+if [ -n "${FAKE_GREP_LOG:-}" ]; then
+  printf '%s\n' "$*" >>"${FAKE_GREP_LOG}"
+fi
+exec /usr/bin/grep "$@"
 EOF
 
   cat >"${FAKE_BIN}/kubectl" <<'EOF'
@@ -91,10 +109,18 @@ if [[ "$args" == *" config current-context "* ]]; then
   exit 0
 fi
 if [[ "$args" == *" get statefulset ai-builder "* ]]; then
+  if [ "${FAKE_STS_ABSENT:-0}" = "1" ]; then
+    printf 'Error from server (NotFound): statefulsets.apps "ai-builder" not found\n' >&2
+    exit 1
+  fi
   if [[ "$args" != *" -o "* ]]; then
     printf 'statefulset/ai-builder\n'
   elif [[ "$args" == *"currentRevision"* || "$args" == *"updateRevision"* ]]; then
     printf '%s\n' "${FAKE_STS_REVISIONS:-rev-7 rev-7}"
+  elif [[ "$args" == *"spec.template.spec.containers"* && "$args" == *"image"* ]]; then
+    printf '%s\n' "${FAKE_STS_BACKEND_IMAGE:-registry.example/ai-builder@sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb}"
+  elif [[ "$args" == *"spec.template.spec.initContainers"* && "$args" == *"image"* ]]; then
+    printf '%s\n' "${FAKE_STS_INIT_IMAGE:-registry.example/ai-builder@sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb}"
   elif [[ "$args" == *"containers"* ]]; then
     printf '%s\n' "${FAKE_CONTAINERS:-ai-builder web}"
   elif [[ "$args" == *"initContainers"* ]]; then
@@ -109,17 +135,34 @@ if [[ "$args" == *" get pods "* && "$args" == *" -l "* ]]; then
   if [[ "$args" != *" ${FAKE_EXPECT_SELECTOR:-app.kubernetes.io/name=ai-builder} "* ]]; then
     printf '\n'
   else
-    printf 'pod-a\npod-b\n'
+    if [ "${FAKE_COLLISION:-0}" = "1" ]; then
+      printf 'pod-a\npod-prod\n'
+    else
+      printf 'pod-a\npod-b\n'
+    fi
   fi
   exit 0
 fi
-if [[ "$args" == *" get pod pod-a "* || "$args" == *" get pod pod-b "* ]]; then
+if [[ "$args" == *" get pod pod-a "* || "$args" == *" get pod pod-b "* || "$args" == *" get pod pod-prod "* ]]; then
   pod="pod-a"
   [[ "$args" == *" get pod pod-b "* ]] && pod="pod-b"
+  [[ "$args" == *" get pod pod-prod "* ]] && pod="pod-prod"
   if [[ "$args" == *"controller-revision-hash"* ]]; then
     printf 'rev-7\n'
+  elif [[ "$args" == *"ownerReferences"* ]]; then
+    if [[ "$pod" == "pod-prod" ]]; then
+      printf 'ai-builder-prod\n'
+    else
+      printf 'ai-builder\n'
+    fi
   elif [[ "$args" == *"conditions"* ]]; then
     printf 'True\n'
+  elif [[ "$args" == *"spec.containers"* && "$args" == *"image"* ]]; then
+    image="${FAKE_POD_BACKEND_IMAGE:-registry.example/ai-builder@sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb}"
+    printf '%s\n' "$image"
+  elif [[ "$args" == *"spec.initContainers"* && "$args" == *"image"* ]]; then
+    image="${FAKE_POD_INIT_IMAGE:-registry.example/ai-builder@sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb}"
+    printf '%s\n' "$image"
   elif [[ "$args" == *"containerStatuses"* ]]; then
     digest="${FAKE_BACKEND_DIGEST:-sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb}"
     [[ "$pod" == "pod-b" && -n "${FAKE_POD_B_BACKEND_DIGEST:-}" ]] && digest="$FAKE_POD_B_BACKEND_DIGEST"
@@ -145,7 +188,11 @@ if [[ "$args" == *" exec "* ]]; then
   exit 0
 fi
 if [[ "$args" == *" logs "* ]]; then
-  printf '%s\n' "${FAKE_LOG:-release completed without credentials}"
+  if [ -n "${FAKE_BROWSER_MARKER:-}" ] && [ -e "${FAKE_BROWSER_MARKER}" ]; then
+    printf '%s\n' "${FAKE_LOG_AFTER:-${FAKE_LOG:-release completed without credentials}}"
+  else
+    printf '%s\n' "${FAKE_LOG_BEFORE:-${FAKE_LOG:-release completed without credentials}}"
+  fi
   exit 0
 fi
 printf 'unexpected fake kubectl command: %s\n' "$*" >&2
@@ -156,6 +203,7 @@ EOF
 #!/usr/bin/env bash
 set -euo pipefail
 if [[ "$1" == "push" && "$2" == "--digestfile" ]]; then
+  [ -z "${FAKE_SEQUENCE_LOG:-}" ] || printf 'podman %s\n' "$*" >>"${FAKE_SEQUENCE_LOG}"
   printf '%s\n' "${FAKE_PODMAN_DIGEST:-sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb}" >"$3"
   printf 'pushed %s\n' "$4"
   exit 0
@@ -164,8 +212,29 @@ printf 'unexpected fake podman command: %s\n' "$*" >&2
 exit 64
 EOF
 
+cat >"${FAKE_BIN}/docker" <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+if [[ "${1:-}" == "buildx" && "${2:-}" == "version" ]]; then
+  [ -z "${FAKE_SEQUENCE_LOG:-}" ] || printf 'docker %s\n' "$*" >>"${FAKE_SEQUENCE_LOG}"
+  [ "${FAKE_DOCKER_IMAGETOOLS:-0}" = "1" ]
+  exit
+fi
+if [[ "${1:-}" == "buildx" && "${2:-}" == "imagetools" && "${3:-}" == "inspect" ]]; then
+  [ -z "${FAKE_SEQUENCE_LOG:-}" ] || printf 'docker %s\n' "$*" >>"${FAKE_SEQUENCE_LOG}"
+  [ "${FAKE_DOCKER_IMAGETOOLS:-0}" = "1" ] || exit 1
+  if [[ "${4:-}" == "--help" ]]; then
+    exit 0
+  fi
+  printf 'sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb\n'
+  exit 0
+fi
+printf 'unexpected fake docker command: %s\n' "$*" >&2
+exit 64
+EOF
+
   chmod 755 "${FAKE_BIN}/git" "${FAKE_BIN}/curl" "${FAKE_BIN}/node" \
-    "${FAKE_BIN}/kubectl" "${FAKE_BIN}/podman"
+    "${FAKE_BIN}/grep" "${FAKE_BIN}/kubectl" "${FAKE_BIN}/podman" "${FAKE_BIN}/docker"
 }
 
 assert_ci_metadata_and_mapping() {
@@ -237,6 +306,11 @@ source = File.read(ARGV.fetch(0))
   /api/code/sessions/
   /api/code-runtime/
 ].each { |contract| abort "release spec is missing #{contract}" unless source.include?(contract) }
+%w[
+  newActivationAgentId
+  newActivations.length, 1
+  wrong configured agent
+].each { |contract| abort "release spec does not bind activation exactly: #{contract}" unless source.include?(contract) }
 puts "RELEASE_SPEC_CONTRACT=PASS"
 RUBY
 }
@@ -286,23 +360,129 @@ assert_podman_digestfile() {
   printf 'PODMAN_DIGESTFILE=PASS\n'
 }
 
+assert_online_build_cli_branches() {
+  local workdir sequence wrapper_log output
+  workdir="${TMP_DIR}/online-workdir"
+  sequence="${TMP_DIR}/online-sequence.log"
+  wrapper_log="${TMP_DIR}/online-wrapper.log"
+  mkdir -p "${workdir}/scripts"
+  cat >"${workdir}/scripts/build_builder_image.sh" <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+printf 'wrapper PUSH=%s\n' "$PUSH" >>"${FAKE_SEQUENCE_LOG}"
+printf '%s\n' "$PUSH" >>"${FAKE_BUILD_WRAPPER_LOG}"
+EOF
+  chmod 755 "${workdir}/scripts/build_builder_image.sh"
+
+  PATH="${FAKE_BIN}:$PATH" \
+  WORKDIR="$workdir" \
+  CONTAINER_CLI="${FAKE_BIN}/podman" \
+  IMAGE_REPO="registry.example/ai-builder" \
+  IMAGE_TAG="contract" \
+  FAKE_SEQUENCE_LOG="$sequence" \
+  FAKE_BUILD_WRAPPER_LOG="$wrapper_log" \
+    bash -c '
+      source "$1/scripts/deploy_online_latest_kubesphere.sh"
+      build_and_push_image
+    ' bash "$ROOT_DIR" >/dev/null
+  [ "$(<"$wrapper_log")" = "0" ] || fail "Podman wrapper did not use PUSH=0"
+  [ "$(grep -c '^podman push --digestfile ' "$sequence")" = "1" ] \
+    || fail "Podman did not perform exactly one digestfile push"
+  grep -q '^wrapper PUSH=0$' "$sequence" || fail "Podman wrapper sequence is missing"
+
+  : >"$sequence"
+  : >"$wrapper_log"
+  PATH="${FAKE_BIN}:$PATH" \
+  WORKDIR="$workdir" \
+  CONTAINER_CLI="${FAKE_BIN}/docker" \
+  IMAGE_REPO="registry.example/ai-builder" \
+  IMAGE_TAG="contract" \
+  FAKE_DOCKER_IMAGETOOLS=1 \
+  FAKE_SEQUENCE_LOG="$sequence" \
+  FAKE_BUILD_WRAPPER_LOG="$wrapper_log" \
+    bash -c '
+      source "$1/scripts/deploy_online_latest_kubesphere.sh"
+      build_and_push_image
+    ' bash "$ROOT_DIR" >/dev/null
+  [ "$(<"$wrapper_log")" = "1" ] || fail "Docker wrapper did not use PUSH=1"
+  [ "$(grep -n '^docker buildx version$' "$sequence" | cut -d: -f1)" \
+    -lt "$(grep -n '^wrapper PUSH=1$' "$sequence" | cut -d: -f1)" ] \
+    || fail "Docker capability was not checked before the wrapper build"
+
+  : >"$sequence"
+  : >"$wrapper_log"
+  output="$(
+    PATH="${FAKE_BIN}:$PATH" \
+    WORKDIR="$workdir" \
+    CONTAINER_CLI="${FAKE_BIN}/docker" \
+    IMAGE_REPO="registry.example/ai-builder" \
+    IMAGE_TAG="contract" \
+    FAKE_DOCKER_IMAGETOOLS=0 \
+    FAKE_SEQUENCE_LOG="$sequence" \
+    FAKE_BUILD_WRAPPER_LOG="$wrapper_log" \
+      assert_command_fails_without_secret bash -c '
+        source "$1/scripts/deploy_online_latest_kubesphere.sh"
+        build_and_push_image
+      ' bash "$ROOT_DIR"
+  )"
+  assert_contains "$output" "Docker buildx imagetools is required"
+  [ ! -s "$wrapper_log" ] || fail "Docker wrapper ran without immutable digest capability"
+  printf 'ONLINE_BUILD_CLI_BRANCHES=PASS\n'
+}
+
+assert_online_source_and_docker_preflight() {
+  PATH="${FAKE_BIN}:$PATH" \
+  FAKE_DOCKER_IMAGETOOLS=1 \
+  CONTAINER_CLI="${FAKE_BIN}/docker" \
+    bash -c '
+      source "$1/scripts/deploy_online_latest_kubesphere.sh"
+      verify_source_provenance "$2"
+      verify_docker_digest_capability
+    ' bash "$ROOT_DIR" "$TEST_REVISION"
+
+  local output
+  output="$(
+    PATH="${FAKE_BIN}:$PATH" \
+    FAKE_DOCKER_IMAGETOOLS=0 \
+    CONTAINER_CLI="${FAKE_BIN}/docker" \
+      assert_command_fails_without_secret bash -c '
+        source "$1/scripts/deploy_online_latest_kubesphere.sh"
+        verify_docker_digest_capability
+      ' bash "$ROOT_DIR"
+  )"
+  assert_contains "$output" "Docker buildx imagetools is required"
+
+  output="$(
+    PATH="${FAKE_BIN}:$PATH" \
+    FAKE_GIT_PROVENANCE_FAIL=1 \
+      assert_command_fails_without_secret bash -c '
+        source "$1/scripts/deploy_online_latest_kubesphere.sh"
+        verify_source_provenance "$2"
+      ' bash "$ROOT_DIR" "$TEST_REVISION"
+  )"
+  assert_contains "$output" "below provenance floor"
+  printf 'ONLINE_SOURCE_DOCKER_PREFLIGHT=PASS\n'
+}
+
 run_fake_helper() {
+  local mode="${1:-}"
+  shift $(( $# > 0 ? 1 : 0 ))
   PATH="${FAKE_BIN}:$PATH" \
   BUILDER_ORIGIN="https://builder.example" \
   BUILDER_IMAGE="registry.example/ai-builder@${TEST_DIGEST}" \
   DEPLOYED_REVISION="$TEST_REVISION" \
   KUBE_NAMESPACE="release-ns" \
   KUBE_STATEFULSET="ai-builder" \
-  KUBE_LABEL_SELECTOR="${1:-app.kubernetes.io/name=ai-builder}" \
+  KUBE_LABEL_SELECTOR="${KUBE_LABEL_SELECTOR:-app.kubernetes.io/name=ai-builder}" \
   KUBE_BACKEND_CONTAINER="ai-builder" \
   KUBE_DIST_INIT_CONTAINER="copy-frontend-dist" \
-  KUBE_WEB_CONTAINER="${2:-web}" \
+  KUBE_WEB_CONTAINER="${KUBE_WEB_CONTAINER:-web}" \
   BUILDER_SMOKE_USERNAME="release-user" \
   BUILDER_SMOKE_PASSWORD="$TEST_PASSWORD" \
   BUILDER_SMOKE_TENANT_NAME="Release Tenant" \
   BUILDER_SMOKE_CODE_SESSION_ID="session-1" \
   BUILDER_SMOKE_AGENT_ID="agent-1" \
-  bash "${ROOT_DIR}/scripts/verify_builder_tenant_url_smoke.sh"
+  bash "${ROOT_DIR}/scripts/verify_builder_tenant_url_smoke.sh" "$mode"
 }
 
 assert_fake_helper_contract() {
@@ -315,23 +495,82 @@ assert_fake_helper_contract() {
   output="$(FAKE_POD_B_BACKEND_DIGEST="sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc" assert_command_fails_without_secret run_fake_helper)"
   assert_contains "$output" "backend digest mismatch"
 
+  output="$(FAKE_STS_BACKEND_IMAGE="registry.example/ai-builder:mutable" assert_command_fails_without_secret run_fake_helper)"
+  assert_contains "$output" "StatefulSet backend image mismatch"
+
+  output="$(FAKE_POD_BACKEND_IMAGE="registry.example/ai-builder:mutable" assert_command_fails_without_secret run_fake_helper)"
+  assert_contains "$output" "backend spec image mismatch"
+
+  output="$(FAKE_COLLISION=1 assert_command_fails_without_secret run_fake_helper)"
+  assert_contains "$output" "Pod is not owned by StatefulSet"
+
   output="$(FAKE_RECONCILE="scanned_count=2 filled_count=0 null_count=1 null_tenant_ids=9 conflict_tenant_ids= invalid_tenant_ids=" assert_command_fails_without_secret run_fake_helper)"
   assert_contains "$output" "reconciliation null_count=1"
 
-  output="$(FAKE_LOG="Authorization: Bearer token-canary" assert_command_fails_without_secret run_fake_helper)"
+  output="$(FAKE_RECONCILE="scanned_count=2 filled_count=0 null_count=0 null_tenant_ids= conflict_tenant_ids=" assert_command_fails_without_secret run_fake_helper)"
+  assert_contains "$output" "missing reconciliation output key"
+
+  output="$(FAKE_RECONCILE="scanned_count=2 filled_count=0 null_count=0 null_count=0 null_tenant_ids= conflict_tenant_ids= invalid_tenant_ids=" assert_command_fails_without_secret run_fake_helper)"
+  assert_contains "$output" "duplicate reconciliation output key"
+
+  output="$(FAKE_RECONCILE=$'scanned_count=2 filled_count=0 null_count=0 null_tenant_ids= conflict_tenant_ids= invalid_tenant_ids=\ntrailing=1' assert_command_fails_without_secret run_fake_helper)"
+  assert_contains "$output" "invalid reconciliation output"
+
+  output="$(FAKE_LOG='{"Authorization":"Bearer token-canary"}' assert_command_fails_without_secret run_fake_helper)"
   assert_contains "$output" "category=authorization"
   assert_not_contains "$output" "token-canary"
+
+  output="$(FAKE_LOG='{"Cookie":"session=canary"}' assert_command_fails_without_secret run_fake_helper)"
+  assert_contains "$output" "category=cookie"
 
   output="$(FAKE_LOG="$TEST_PASSWORD" assert_command_fails_without_secret run_fake_helper)"
   assert_contains "$output" "category=smoke_password"
 
-  output="$(assert_command_fails_without_secret run_fake_helper "wrong=selector")"
+  output="$(KUBE_LABEL_SELECTOR="wrong=selector" assert_command_fails_without_secret run_fake_helper)"
   assert_contains "$output" "no Pods found for selector"
 
-  output="$(assert_command_fails_without_secret run_fake_helper "app.kubernetes.io/name=ai-builder" "wrong-web")"
+  output="$(KUBE_WEB_CONTAINER="wrong-web" assert_command_fails_without_secret run_fake_helper)"
   assert_contains "$output" "web container is not present"
 
+  output="$(FAKE_STS_ABSENT=1 assert_command_fails_without_secret run_fake_helper --preflight)"
+  assert_contains "$output" "StatefulSet is not accessible"
+
+  FAKE_STS_ABSENT=1 run_fake_helper --online-preflight >/dev/null
+
+  local grep_log
+  grep_log="${TMP_DIR}/grep-argv.log"
+  FAKE_GREP_LOG="$grep_log" run_fake_helper >/dev/null
+  assert_not_contains "$(<"$grep_log")" "$TEST_PASSWORD"
+
+  output="$(
+    FAKE_BROWSER_MARKER="${TMP_DIR}/browser-done" \
+    FAKE_LOG_AFTER='{"Authorization":"Bearer post-browser-canary"}' \
+      assert_command_fails_without_secret run_fake_helper
+  )"
+  assert_contains "$output" "category=authorization"
+  assert_not_contains "$output" "post-browser-canary"
+
   printf 'FAKE_KUBECTL_RELEASE_CONTRACT=PASS\n'
+}
+
+assert_online_selector_contract() {
+  local dev_selector prod_selector
+  dev_selector="$(
+    DEPLOY_TARGET=dev bash -c '
+      source "$1/scripts/deploy_online_latest_kubesphere.sh"
+      printf "%s" "$KUBE_LABEL_SELECTOR"
+    ' bash "$ROOT_DIR"
+  )"
+  prod_selector="$(
+    DEPLOY_TARGET=prod bash -c '
+      source "$1/scripts/deploy_online_latest_kubesphere.sh"
+      printf "%s" "$KUBE_LABEL_SELECTOR"
+    ' bash "$ROOT_DIR"
+  )"
+  [ "$dev_selector" = "app=apaas-builder-dev" ] || fail "dev selector is not workload-specific"
+  [ "$prod_selector" = "app=apaas-builder" ] || fail "prod selector is not workload-specific"
+  [ "$dev_selector" != "$prod_selector" ] || fail "dev and prod selectors collide"
+  printf 'ONLINE_SELECTOR_CONTRACT=PASS\n'
 }
 
 main() {
@@ -339,6 +578,9 @@ main() {
   assert_ci_metadata_and_mapping
   assert_ci_metadata_flow
   assert_podman_digestfile
+  assert_online_build_cli_branches
+  assert_online_source_and_docker_preflight
+  assert_online_selector_contract
   assert_fake_helper_contract
   assert_release_spec_contract
   printf 'PASS: builder tenant URL release smoke contract\n'

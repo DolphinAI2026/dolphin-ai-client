@@ -22,7 +22,7 @@ PLATFORM="${PLATFORM:-linux/amd64}"
 IMAGE_TAG="${IMAGE_TAG:-}"
 IMAGE_PULL_SECRET="${IMAGE_PULL_SECRET:-regcred-hub-dfy}"
 ROLL_TIMEOUT="${ROLL_TIMEOUT:-300s}"
-KUBE_LABEL_SELECTOR="${KUBE_LABEL_SELECTOR:-app.kubernetes.io/name=ai-builder}"
+PROVENANCE_FLOOR="49a4bef4"
 
 VITE_BASE_URL="${VITE_BASE_URL:-/ai-builder/}"
 VITE_ADMIN_BASE="${VITE_ADMIN_BASE:-/ai-builder/admin/}"
@@ -60,6 +60,7 @@ else
   IMAGE_TAG_PREFIX="${IMAGE_TAG_PREFIX:-dev}"
 fi
 
+KUBE_LABEL_SELECTOR="${KUBE_LABEL_SELECTOR:-app=${APP_NAME}}"
 TMP_PARENT="${TMP_PARENT:-/tmp}"
 WORKDIR="${WORKDIR:-${TMP_PARENT}/apaas-builder-online-${DEPLOY_TARGET}-${GIT_BRANCH}}"
 
@@ -92,11 +93,27 @@ clone_latest_code() {
   log "clone latest online code: ${GIT_REPO} branch=${GIT_BRANCH}"
   [ -n "$WORKDIR" ] && [ "$WORKDIR" != "/" ] || die "unsafe WORKDIR: ${WORKDIR}"
   rm -rf "$WORKDIR"
-  git clone --depth 1 --branch "$GIT_BRANCH" "$GIT_REPO" "$WORKDIR"
+  git clone --branch "$GIT_BRANCH" "$GIT_REPO" "$WORKDIR"
   cd "$WORKDIR"
   GIT_SHA="$(git rev-parse --short HEAD)"
   GIT_FULL_SHA="$(git rev-parse HEAD)"
+  verify_source_provenance "$GIT_FULL_SHA"
   ok "checked out ${GIT_BRANCH}@${GIT_FULL_SHA}"
+}
+
+verify_source_provenance() {
+  local revision="${1:-${GIT_FULL_SHA:-}}"
+
+  [[ "$revision" =~ ^[0-9a-f]{40}$ ]] \
+    || die "source revision is not a full lowercase Git SHA"
+  git -C "$WORKDIR" merge-base --is-ancestor "$PROVENANCE_FLOOR" "$revision" \
+    || die "source revision is below provenance floor or clone history is incomplete"
+}
+
+verify_docker_digest_capability() {
+  "$CONTAINER_CLI" buildx version >/dev/null 2>&1 \
+    && "$CONTAINER_CLI" buildx imagetools inspect --help >/dev/null 2>&1 \
+    || die "Docker buildx imagetools is required to resolve the pushed image digest"
 }
 
 docker_login_if_requested() {
@@ -123,7 +140,10 @@ build_and_push_image() {
   cli_name="$(basename "$CONTAINER_CLI")"
   case "$cli_name" in
     podman) build_push=0 ;;
-    docker) build_push=1 ;;
+    docker)
+      verify_docker_digest_capability
+      build_push=1
+      ;;
     *) die "unsupported CONTAINER_CLI for immutable digest release: ${CONTAINER_CLI}" ;;
   esac
 
@@ -169,8 +189,6 @@ push_podman_image_and_capture_digest() {
 resolve_docker_pushed_image_digest() {
   local image_tag_ref="$1" digest
 
-  "$CONTAINER_CLI" buildx imagetools inspect --help >/dev/null 2>&1 \
-    || die "Docker buildx imagetools is required to resolve the pushed image digest"
   digest="$("$CONTAINER_CLI" buildx imagetools inspect "$image_tag_ref" \
     --format '{{.Manifest.Digest}}')" \
     || die "unable to resolve pushed image digest: ${image_tag_ref}"
@@ -479,7 +497,20 @@ run_release_builder_preflight() {
   KUBE_BACKEND_CONTAINER="apaas-builder" \
   KUBE_DIST_INIT_CONTAINER="copy-frontend-dist" \
   KUBE_WEB_CONTAINER="web" \
-    bash "$WORKDIR/scripts/verify_builder_tenant_url_smoke.sh" --preflight
+    bash "$WORKDIR/scripts/verify_builder_tenant_url_smoke.sh" --online-preflight
+}
+
+run_release_builder_prebuild_preflight() {
+  log "run online release input preflight before registry mutation"
+  BUILDER_ORIGIN="${BUILDER_ORIGIN:-https://${HOST}}" \
+  DEPLOYED_REVISION="$GIT_FULL_SHA" \
+  KUBE_NAMESPACE="$NAMESPACE" \
+  KUBE_STATEFULSET="$APP_NAME" \
+  KUBE_LABEL_SELECTOR="$KUBE_LABEL_SELECTOR" \
+  KUBE_BACKEND_CONTAINER="apaas-builder" \
+  KUBE_DIST_INIT_CONTAINER="copy-frontend-dist" \
+  KUBE_WEB_CONTAINER="web" \
+    bash "$WORKDIR/scripts/verify_builder_tenant_url_smoke.sh" --online-prebuild
 }
 
 run_release_builder_smoke() {
@@ -507,6 +538,7 @@ main() {
 
   setup_kubeconfig
   clone_latest_code
+  run_release_builder_prebuild_preflight
   docker_login_if_requested
   build_and_push_image
   run_release_builder_preflight

@@ -460,7 +460,6 @@ def test_shared_wrapper_push_modes(
         "scripts/deploy_k8s_dev.sh",
         "scripts/deploy_k8s_dev_web_terminal.sh",
         "scripts/deploy_login_sync_hotfix.sh",
-        "scripts/deploy_online_latest_kubesphere.sh",
         "scripts/deploy_platform_proxy_hotfix.sh",
         "scripts/rebuild_images_dev_main.sh",
     ],
@@ -482,6 +481,29 @@ def test_git_docker_callers_delegate_to_snapshot_wrapper(
     else:
         assert 'REPO_ROOT="$REPO_ROOT"' in text
         assert '"$REPO_ROOT/scripts/build_builder_image.sh"' in text
+
+
+def test_online_git_caller_uses_immutable_cli_branches(repo_root: Path):
+    text = (
+        repo_root / "scripts" / "deploy_online_latest_kubesphere.sh"
+    ).read_text(encoding="utf-8")
+
+    assert 'REPO_ROOT="$WORKDIR"' in text
+    assert '"$WORKDIR/scripts/build_builder_image.sh"' in text
+    assert 'podman) build_push=0 ;;' in text
+    assert re.search(
+        r"docker\)\s+verify_docker_digest_capability\s+build_push=1\s+;;",
+        text,
+    )
+    assert 'PUSH="$build_push"' in text
+    assert 'push --digestfile "$digest_file" "$image_tag_ref"' in text
+    assert "verify_source_provenance" in text
+    assert "verify_docker_digest_capability" in text
+    assert text.index("verify_source_provenance") < text.index("build_and_push_image")
+    assert text.index("verify_docker_digest_capability") < text.index(
+        '"$WORKDIR/scripts/build_builder_image.sh"'
+    )
+    assert "git clone --depth" not in text
 
 
 def test_rebuild_script_invokes_wrapper_for_dev_and_main(repo_root: Path):

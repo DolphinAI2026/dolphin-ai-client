@@ -61,6 +61,32 @@ statefulset_container_exists() {
   [[ " ${names} " == *" ${name} "* ]]
 }
 
+statefulset_container_image() {
+  local kind="$1" name="$2"
+  case "$kind" in
+    container)
+      kubectl -n "$KUBE_NAMESPACE" get statefulset "$KUBE_STATEFULSET" \
+        -o jsonpath="{range .spec.template.spec.containers[?(@.name==\"${name}\")]}{.image}{end}"
+      ;;
+    init)
+      kubectl -n "$KUBE_NAMESPACE" get statefulset "$KUBE_STATEFULSET" \
+        -o jsonpath="{range .spec.template.spec.initContainers[?(@.name==\"${name}\")]}{.image}{end}"
+      ;;
+    *) die "unknown StatefulSet container kind: ${kind}" ;;
+  esac
+}
+
+verify_statefulset_image_contract() {
+  local backend_image init_image
+
+  backend_image="$(statefulset_container_image container "$KUBE_BACKEND_CONTAINER")"
+  init_image="$(statefulset_container_image init "$KUBE_DIST_INIT_CONTAINER")"
+  [ "$backend_image" = "$BUILDER_IMAGE" ] \
+    || die "StatefulSet backend image mismatch"
+  [ "$init_image" = "$BUILDER_IMAGE" ] \
+    || die "StatefulSet dist init image mismatch"
+}
+
 verify_playwright_and_edge() {
   local version
 
@@ -80,11 +106,10 @@ NODE
 }
 
 verify_inputs() {
-  local name
+  local require_image="${1:-1}" name
   local required_envs=(
     BUILDER_ORIGIN
     DEPLOYED_REVISION
-    BUILDER_IMAGE
     KUBE_NAMESPACE
     KUBE_STATEFULSET
     KUBE_LABEL_SELECTOR
@@ -97,6 +122,7 @@ verify_inputs() {
     BUILDER_SMOKE_CODE_SESSION_ID
   )
 
+  [ "$require_image" = "0" ] || required_envs+=(BUILDER_IMAGE)
   for name in "${required_envs[@]}"; do
     require_env "$name"
   done
@@ -104,41 +130,70 @@ verify_inputs() {
     || die "BUILDER_ORIGIN must be an http(s) origin"
   [[ "$DEPLOYED_REVISION" =~ ^[0-9a-f]{40}$ ]] \
     || die "DEPLOYED_REVISION must be a full lowercase Git SHA"
-  EXPECTED_DIGEST="$(normalize_digest "$BUILDER_IMAGE")" \
-    || die "BUILDER_IMAGE must use an immutable sha256 digest"
+  if [ "$require_image" != "0" ]; then
+    EXPECTED_DIGEST="$(normalize_digest "$BUILDER_IMAGE")" \
+      || die "BUILDER_IMAGE must use an immutable sha256 digest"
+  fi
 }
 
 verify_cluster_preflight() {
-  local pod_names
+  local allow_absent_workload="${1:-0}" pod_names pod
 
   kubectl config current-context >/dev/null 2>&1 \
     || die "kubectl has no configured kubeconfig context"
-  kubectl -n "$KUBE_NAMESPACE" get statefulset "$KUBE_STATEFULSET" >/dev/null \
-    || die "StatefulSet is not accessible: ${KUBE_STATEFULSET}"
+  if ! kubectl -n "$KUBE_NAMESPACE" get statefulset "$KUBE_STATEFULSET" >/dev/null 2>&1; then
+    [ "$allow_absent_workload" = "1" ] && return 0
+    die "StatefulSet is not accessible: ${KUBE_STATEFULSET}"
+  fi
   statefulset_container_exists container "$KUBE_BACKEND_CONTAINER" \
     || die "backend container is not present: ${KUBE_BACKEND_CONTAINER}"
   statefulset_container_exists init "$KUBE_DIST_INIT_CONTAINER" \
     || die "dist init container is not present: ${KUBE_DIST_INIT_CONTAINER}"
   statefulset_container_exists container "$KUBE_WEB_CONTAINER" \
     || die "web container is not present: ${KUBE_WEB_CONTAINER}"
+  verify_statefulset_image_contract
   pod_names="$(kubectl -n "$KUBE_NAMESPACE" get pods -l "$KUBE_LABEL_SELECTOR" \
     -o jsonpath='{range .items[*]}{.metadata.name}{"\n"}{end}')"
   [ -n "$pod_names" ] || die "no Pods found for selector: ${KUBE_LABEL_SELECTOR}"
+  while IFS= read -r pod; do
+    [ -n "$pod" ] || continue
+    [ "$(pod_statefulset_owner "$pod")" = "$KUBE_STATEFULSET" ] \
+      || die "Pod is not owned by StatefulSet: ${pod}"
+  done <<<"$pod_names"
 }
 
-preflight() {
+verify_common_preflight() {
+  local require_image="$1"
+
   need curl
   need git
   need grep
   need kubectl
   need node
   need sed
-  verify_inputs
+  verify_inputs "$require_image"
   verify_playwright_and_edge
   git -C "$ROOT_DIR" merge-base --is-ancestor "$PROVENANCE_FLOOR" "$DEPLOYED_REVISION" \
     || die "DEPLOYED_REVISION is below provenance floor"
-  verify_cluster_preflight
+}
+
+preflight() {
+  verify_common_preflight 1
+  verify_cluster_preflight 0
   printf '[builder-release-smoke][ok] release preflight passed\n'
+}
+
+online_prebuild_preflight() {
+  verify_common_preflight 0
+  kubectl config current-context >/dev/null 2>&1 \
+    || die "kubectl has no configured kubeconfig context"
+  printf '[builder-release-smoke][ok] online prebuild preflight passed\n'
+}
+
+online_preflight() {
+  verify_common_preflight 1
+  verify_cluster_preflight 1
+  printf '[builder-release-smoke][ok] online release preflight passed\n'
 }
 
 verify_public_build_sha() {
@@ -179,6 +234,27 @@ pod_controller_revision() {
     -o jsonpath='{.metadata.labels.controller-revision-hash}'
 }
 
+pod_statefulset_owner() {
+  local pod="$1"
+  kubectl -n "$KUBE_NAMESPACE" get pod "$pod" \
+    -o jsonpath='{range .metadata.ownerReferences[?(@.kind=="StatefulSet")]}{.name}{end}'
+}
+
+pod_spec_image() {
+  local pod="$1" kind="$2" name="$3"
+  case "$kind" in
+    container)
+      kubectl -n "$KUBE_NAMESPACE" get pod "$pod" \
+        -o jsonpath="{range .spec.containers[?(@.name==\"${name}\")]}{.image}{end}"
+      ;;
+    init)
+      kubectl -n "$KUBE_NAMESPACE" get pod "$pod" \
+        -o jsonpath="{range .spec.initContainers[?(@.name==\"${name}\")]}{.image}{end}"
+      ;;
+    *) die "unknown Pod container kind: ${kind}" ;;
+  esac
+}
+
 pod_status_image_id() {
   local pod="$1"
   kubectl -n "$KUBE_NAMESPACE" get pod "$pod" \
@@ -192,7 +268,7 @@ pod_init_status_image_id() {
 }
 
 verify_ready_pods() {
-  local pod controller_revision backend_image_id init_image_id
+  local pod controller_revision backend_image_id init_image_id backend_spec_image init_spec_image
   local backend_digest init_digest observed_digest pod_html build_sha
   local -a pods=()
 
@@ -205,9 +281,18 @@ verify_ready_pods() {
   for pod in "${pods[@]}"; do
     [ -n "$pod" ] || continue
     pod_is_ready "$pod" || die "Pod is not Ready: ${pod}"
+    [ "$(pod_statefulset_owner "$pod")" = "$KUBE_STATEFULSET" ] \
+      || die "Pod is not owned by StatefulSet: ${pod}"
     controller_revision="$(pod_controller_revision "$pod")"
     [ "$controller_revision" = "$ROLLOUT_REVISION" ] \
       || die "Pod controller revision mismatch: ${pod}"
+
+    backend_spec_image="$(pod_spec_image "$pod" container "$KUBE_BACKEND_CONTAINER")"
+    init_spec_image="$(pod_spec_image "$pod" init "$KUBE_DIST_INIT_CONTAINER")"
+    [ "$backend_spec_image" = "$BUILDER_IMAGE" ] \
+      || die "backend spec image mismatch for Pod: ${pod}"
+    [ "$init_spec_image" = "$BUILDER_IMAGE" ] \
+      || die "initContainer spec image mismatch for Pod: ${pod}"
 
     backend_image_id="$(pod_status_image_id "$pod")"
     init_image_id="$(pod_init_status_image_id "$pod")"
@@ -240,34 +325,72 @@ verify_ready_pods() {
 }
 
 verify_reconciliation_output() {
-  local output="$1" part key value
-  local scanned_count="" filled_count="" null_count=""
-  local null_tenant_ids="" conflict_tenant_ids="" invalid_tenant_ids=""
+  local output="$1" part key value count
+  local -A values=() seen=()
+  local -a parts=()
+  local required_keys=(
+    scanned_count
+    filled_count
+    null_count
+    null_tenant_ids
+    conflict_tenant_ids
+    invalid_tenant_ids
+  )
 
-  for part in $output; do
+  [[ "$output" != *$'\n'* && "$output" != *$'\r'* && "$output" != *$'\t'* ]] \
+    || die "invalid reconciliation output"
+  read -r -a parts <<<"$output"
+  [ "${#parts[@]}" -gt 0 ] || die "invalid reconciliation output"
+  for part in "${parts[@]}"; do
     key="${part%%=*}"
     value="${part#*=}"
     [ "$key" != "$part" ] || die "invalid reconciliation output"
     case "$key" in
-      scanned_count) scanned_count="$value" ;;
-      filled_count) filled_count="$value" ;;
-      null_count) null_count="$value" ;;
-      null_tenant_ids) null_tenant_ids="$value" ;;
-      conflict_tenant_ids) conflict_tenant_ids="$value" ;;
-      invalid_tenant_ids) invalid_tenant_ids="$value" ;;
+      scanned_count|filled_count|null_count|null_tenant_ids|conflict_tenant_ids|invalid_tenant_ids)
+        [ -z "${seen[$key]:-}" ] || die "duplicate reconciliation output key: ${key}"
+        seen["$key"]=1
+        values["$key"]="$value"
+        ;;
       *) die "unexpected reconciliation output key" ;;
     esac
   done
 
-  [[ "$scanned_count" =~ ^[0-9]+$ ]] || die "invalid reconciliation scanned_count"
-  [[ "$filled_count" =~ ^[0-9]+$ ]] || die "invalid reconciliation filled_count"
-  [[ "$null_count" =~ ^[0-9]+$ ]] || die "invalid reconciliation null_count"
-  [ "$null_count" = "0" ] || die "reconciliation null_count=${null_count}"
-  [ -z "$null_tenant_ids" ] || die "reconciliation null tenant IDs are present"
-  [ -z "$conflict_tenant_ids" ] || die "reconciliation conflict tenant IDs are present"
-  [ -z "$invalid_tenant_ids" ] || die "reconciliation invalid tenant IDs are present"
+  for key in "${required_keys[@]}"; do
+    [ -n "${seen[$key]:-}" ] || die "missing reconciliation output key: ${key}"
+  done
+  [[ "${values[scanned_count]}" =~ ^[0-9]+$ ]] \
+    || die "invalid reconciliation scanned_count"
+  [[ "${values[filled_count]}" =~ ^[0-9]+$ ]] \
+    || die "invalid reconciliation filled_count"
+  [[ "${values[null_count]}" =~ ^[0-9]+$ ]] \
+    || die "invalid reconciliation null_count"
+  for key in null_tenant_ids conflict_tenant_ids invalid_tenant_ids; do
+    value="${values[$key]}"
+    [ -z "$value" ] || [[ "$value" =~ ^[1-9][0-9]*(,[1-9][0-9]*)*$ ]] \
+      || die "invalid reconciliation ${key}"
+  done
+  if [ -n "${values[null_tenant_ids]}" ]; then
+    IFS=, read -r -a parts <<<"${values[null_tenant_ids]}"
+    count="${#parts[@]}"
+  else
+    count=0
+  fi
+  [ "$count" = "${values[null_count]}" ] \
+    || die "reconciliation null list/count mismatch"
+  (( 10#${values[filled_count]} <= 10#${values[scanned_count]} )) \
+    || die "reconciliation filled_count exceeds scanned_count"
+  (( 10#${values[null_count]} <= 10#${values[scanned_count]} )) \
+    || die "reconciliation null_count exceeds scanned_count"
+  [ "${values[null_count]}" = "0" ] \
+    || die "reconciliation null_count=${values[null_count]}"
+  [ -z "${values[null_tenant_ids]}" ] \
+    || die "reconciliation null tenant IDs are present"
+  [ -z "${values[conflict_tenant_ids]}" ] \
+    || die "reconciliation conflict tenant IDs are present"
+  [ -z "${values[invalid_tenant_ids]}" ] \
+    || die "reconciliation invalid tenant IDs are present"
   printf '[builder-release-smoke][ok] reconciliation scanned=%s filled=%s null=0 conflict=0 invalid=0\n' \
-    "$scanned_count" "$filled_count"
+    "${values[scanned_count]}" "${values[filled_count]}"
 }
 
 run_reconciliation() {
@@ -279,7 +402,7 @@ run_reconciliation() {
 }
 
 scan_rollout_logs() {
-  local pod logs category
+  local phase="$1" pod logs category
   local -a pods=()
 
   mapfile -t pods < <(
@@ -292,18 +415,18 @@ scan_rollout_logs() {
       --since="${KUBE_ROLLOUT_LOG_SINCE:-10m}")" \
       || die "unable to sample backend logs for Pod: ${pod}"
     category=""
-    if printf '%s' "$logs" | grep -Fq -- "$BUILDER_SMOKE_PASSWORD"; then
+    if [[ "$logs" == *"$BUILDER_SMOKE_PASSWORD"* ]]; then
       category="smoke_password"
-    elif printf '%s' "$logs" | grep -Eiq 'authorization:[[:space:]]*(bearer|basic|token)'; then
+    elif printf '%s' "$logs" | grep -Eiq '(^|[[:space:][:punct:]])authorization[[:space:][:punct:]]*(bearer|basic|token)[[:space:]]+'; then
       category="authorization"
     elif printf '%s' "$logs" | grep -Eq '[A-Za-z0-9_-]{20,}\.[A-Za-z0-9_-]{20,}\.[A-Za-z0-9_-]{20,}'; then
       category="jwt_like"
-    elif printf '%s' "$logs" | grep -Eiq '(^|[^A-Za-z])(cookie|set-cookie)[[:space:]]*:'; then
+    elif printf '%s' "$logs" | grep -Eiq '(^|[[:space:][:punct:]])(set-)?cookie[[:space:][:punct:]]*'; then
       category="cookie"
     fi
     [ -z "$category" ] || die "sensitive backend log category=${category} pod=${pod}"
   done
-  printf '[builder-release-smoke][ok] backend log canary passed\n'
+  printf '[builder-release-smoke][ok] backend log canary passed phase=%s\n' "$phase"
 }
 
 run_browser_smoke() {
@@ -330,8 +453,16 @@ run_browser_smoke() {
 main() {
   case "${1:-}" in
     --preflight)
-      [ "$#" -eq 1 ] || die "usage: $0 [--preflight]"
+      [ "$#" -eq 1 ] || die "usage: $0 [--preflight|--online-prebuild|--online-preflight]"
       preflight
+      ;;
+    --online-prebuild)
+      [ "$#" -eq 1 ] || die "usage: $0 [--preflight|--online-prebuild|--online-preflight]"
+      online_prebuild_preflight
+      ;;
+    --online-preflight)
+      [ "$#" -eq 1 ] || die "usage: $0 [--preflight|--online-prebuild|--online-preflight]"
+      online_preflight
       ;;
     "")
       preflight
@@ -339,12 +470,13 @@ main() {
       verify_statefulset_revision
       verify_ready_pods
       run_reconciliation
-      scan_rollout_logs
+      scan_rollout_logs before-browser
       run_browser_smoke
+      scan_rollout_logs after-browser
       printf '[builder-release-smoke][ok] release tenant URL smoke passed\n'
       ;;
     *)
-      die "usage: $0 [--preflight]"
+      die "usage: $0 [--preflight|--online-prebuild|--online-preflight]"
       ;;
   esac
 }

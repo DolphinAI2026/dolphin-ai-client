@@ -155,3 +155,133 @@ gitlab yaml parse OK
   历史工作负载若尚无该 label，需先通过受控发布迁移到该标签契约。
 - GitLab dotenv artifact 的实际下载与 protected variables 可见性仍需隔离 pipeline
   验证；本地 YAML/metadata parser/fake kubectl 测试未替代真实 runner 证据。
+
+## 第二修复波次
+
+### RED
+
+先扩展 release fake 合同与后端公共合同，覆盖评审 I-1..I-6、M-1：
+
+- 在线 clone/source provenance 必须在 build/push 前通过 floor
+  `49a4bef4`，Docker `buildx`/`imagetools` 也必须在 wrapper 前可用；
+- fake Podman 检查 wrapper `PUSH=0` 且只执行一次
+  `push --digestfile`；fake Docker 检查可用/不可用分支以及不可用时 wrapper
+  不得启动；
+- fake kubectl 覆盖 fresh namespace、legacy `app=<APP_NAME>` selector、dev/prod
+  碰撞 Pod owner、StatefulSet template 与逐 Pod spec image、status imageID；
+- reconcile 覆盖缺 key、重复 key、追加换行截断，并检查 password 不进入 grep argv；
+- 浏览器完成后才出现的 JSON `Authorization` 与 JSON `Cookie` log canary 必须失败；
+- release Code spec 对可选 agent 必须只接受一次且精确匹配该 agent 的 activation。
+
+初始 RED 命令：
+
+```bash
+bash tests/release/test_builder_tenant_url_smoke.sh
+python3 -m pytest -q backend/tests/test_tenant_url_build_contract.py
+```
+
+初始 RED 关键输出：
+
+```text
+bash: line 3: verify_source_provenance: command not found
+FAILED test_online_git_caller_uses_immutable_cli_branches
+assert "verify_source_provenance" in text
+```
+
+在实现后进一步加入 reconciliation 追加行注入，确认 parser 的首行截断问题：
+
+```bash
+bash tests/release/test_builder_tenant_url_smoke.sh
+```
+
+关键 RED 输出：
+
+```text
+FAIL: command unexpectedly succeeded: run_fake_helper
+```
+
+### GREEN
+
+- `scripts/deploy_online_latest_kubesphere.sh`
+  - 改为非 shallow clone，并在 clone 后、registry login/build/push 前执行
+    `git merge-base --is-ancestor 49a4bef4 <full-sha>`；历史不足或 revision
+    不合法立即失败。
+  - online selector 默认改为现有 StatefulSet/template 的唯一标签
+    `app=${APP_NAME}`，dev 与 prod 不再共享
+    `app.kubernetes.io/name=ai-builder` selector。
+  - Podman 保持 wrapper `PUSH=0`，随后一次
+    `podman push --digestfile`；Docker 在 wrapper 前同时验证
+    `buildx version` 与 `buildx imagetools inspect --help`，不可用时不 build/push。
+  - 新增无 image 的 `--online-prebuild` 输入/工具/provenance/context preflight；
+    digest 产生后 `--online-preflight` 对既有 workload 执行严格 topology/image
+    检查，对 fresh namespace 仅允许 StatefulSet 缺席，之后才会 apply Kubernetes。
+- `scripts/verify_builder_tenant_url_smoke.sh`
+  - `--preflight` 保持 CI 严格模式；新增 online 的 prebuild 与允许首次部署模式。
+  - StatefulSet template 和每个 Ready Pod 的 backend/dist-init `.image` 必须精确
+    等于 digest 形式的 `BUILDER_IMAGE`；所有 selector Pod 还必须由目标
+    StatefulSet ownerReference 持有，并继续校验 imageID、controller revision 和
+    web SHA。
+  - reconciliation 仅接受单行、完整且无重复的六个 `key=value` 字段；严格验证
+    数值/list 格式、null list/count、一致性和零值，拒绝缺失、未知、畸形、换行/
+    制表符追加输出。
+  - password 用 shell 内存比较，不传入 grep/Python argv、输出或临时文件；log
+    扫描同时识别 plain/JSON Authorization Bearer、Cookie 与 JWT-like，并在
+    browser secret-bearing traffic 前后各扫描一次。命中仅报 category 和 Pod。
+- `tests/e2e/builder-tenant-url-release-smoke.spec.mjs` 要求恰好一次新 activation；
+  可选 `BUILDER_SMOKE_AGENT_ID` 存在时，path 中 agent 必须精确匹配。
+- `tests/release/test_builder_tenant_url_smoke.sh` 增加上述 fake Docker/Podman、
+  kubectl 多 Pod、selector collision、fresh/legacy、reconcile 和 secret log
+  动态合同；`backend/tests/test_tenant_url_build_contract.py` 将 online caller
+  从无条件 `PUSH=1` 公共断言拆为 immutable CLI 分支断言，同时保留 Git archive
+  snapshot wrapper 合同。
+
+本波次 GREEN 与规定验证：
+
+```bash
+bash tests/release/test_builder_tenant_url_smoke.sh
+python3 -m pytest -q backend/tests/test_tenant_url_build_contract.py
+podman run --rm --entrypoint /bin/sh \
+  -v "$PWD:/workspace:ro" \
+  -v /mnt/d/workspaces/d-ai-code/apaas-builder-ai/.git:/mnt/d/workspaces/d-ai-code/apaas-builder-ai/.git:ro \
+  -w /workspace \
+  om-harbor.dfy.definesys.cn/om-demo/ai-builder:2026.07.20-3f90e08a-runtime-expiry-timezone \
+  -lc 'git config --global --add safe.directory /workspace && python -m pytest -q -p no:cacheprovider backend/tests/test_tenant_url_build_contract.py'
+bash -n scripts/verify_builder_tenant_url_smoke.sh \
+  scripts/deploy_online_latest_kubesphere.sh \
+  tests/release/test_builder_tenant_url_smoke.sh
+node --check tests/e2e/builder-tenant-url-release-smoke.spec.mjs
+ruby -e 'require "yaml"; YAML.load_file(".gitlab-ci.yml"); puts "gitlab yaml parse OK"'
+git diff --check
+```
+
+关键 GREEN 输出：
+
+```text
+ONLINE_BUILD_CLI_BRANCHES=PASS
+ONLINE_SOURCE_DOCKER_PREFLIGHT=PASS
+ONLINE_SELECTOR_CONTRACT=PASS
+FAKE_KUBECTL_RELEASE_CONTRACT=PASS
+RELEASE_SPEC_CONTRACT=PASS
+28 passed
+gitlab yaml parse OK
+```
+
+变更文件：
+
+- `scripts/deploy_online_latest_kubesphere.sh`
+- `scripts/verify_builder_tenant_url_smoke.sh`
+- `tests/release/test_builder_tenant_url_smoke.sh`
+- `tests/e2e/builder-tenant-url-release-smoke.spec.mjs`
+- `backend/tests/test_tenant_url_build_contract.py`
+- `.superpowers/sdd/task-7-report.md`
+
+### 第二修复波次 Concerns
+
+- 严格遵守任务约束：未连接/修改 Kubernetes，未构建或推送镜像，未运行线上账号、
+  Edge 或 Code session smoke。
+- Builder image 内运行公共合同需要同时只读挂载 linked worktree 与主仓库 `.git`，
+  因为该 worktree 的 `.git` 指向主仓库的绝对 gitdir；容器内仅设置临时
+  `safe.directory`，未写入宿主仓库。
+- GitLab runner 的实际 protected variables、registry、kubeconfig、在线
+  Playwright/Edge 与现有 workload topology 仍需在隔离发布 pipeline 中提供真实
+  证据；缺失任何输入会按设计 fail closed。

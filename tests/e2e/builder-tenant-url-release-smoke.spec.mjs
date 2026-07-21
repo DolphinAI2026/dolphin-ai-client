@@ -124,14 +124,20 @@ function codeUrl(tenantPublicId) {
   return url.toString();
 }
 
-function isNewActivation(response) {
+function newActivationAgentId(response) {
   const request = response.request();
   const url = new URL(response.url());
-  return request.method() === "POST"
-    && url.pathname.startsWith(
-      `/ai-builder/api/code/sessions/${required.codeSessionId}/agent-sessions/`,
-    )
-    && url.pathname.endsWith("/activate");
+  const match = url.pathname.match(
+    new RegExp(
+      `^/ai-builder/api/code/sessions/${encodeURIComponent(required.codeSessionId)}/agent-sessions/([^/]+)/activate$`,
+    ),
+  );
+  if (request.method() !== "POST" || !match) return null;
+  return decodeURIComponent(match[1]);
+}
+
+function isNewActivation(response) {
+  return newActivationAgentId(response) !== null;
 }
 
 function isLegacyActivation(request) {
@@ -217,9 +223,16 @@ try {
       "outer tenantId leaked into Code iframe src",
     );
     await page.waitForTimeout(500);
-    assert.ok(newActivations.length > 0, "new Code activation endpoint was not called");
+    assert.equal(newActivations.length, 1, "expected exactly one new Code activation");
     for (const response of newActivations) {
       assert.equal(response.status(), 200, "new Code activation did not return 200");
+    }
+    if (agentId) {
+      assert.equal(
+        newActivationAgentId(newActivations[0]),
+        agentId,
+        "new Code activation used the wrong configured agent",
+      );
     }
     assert.equal(legacyActivations.length, 0, "legacy Code activation endpoint was called");
     assert.equal(code401s.length, 0, "Code endpoint returned 401");
