@@ -111,6 +111,8 @@ docker_login_if_requested() {
 }
 
 build_and_push_image() {
+  local image_tag_ref image_digest
+
   GIT_FULL_SHA="$(git -C "$WORKDIR" rev-parse HEAD)"
   [[ "$GIT_FULL_SHA" =~ ^[0-9a-f]{40}$ ]] || die "HEAD is not a full lowercase Git SHA"
   if [ -z "$IMAGE_TAG" ]; then
@@ -129,7 +131,29 @@ build_and_push_image() {
   VITE_MCP_PUBLIC_BASE="${VITE_MCP_PUBLIC_BASE:-https://${HOST}/ai-builder}" \
   PUSH=1 \
     "$WORKDIR/scripts/build_builder_image.sh"
+  image_tag_ref="$IMAGE"
+  image_digest="$(resolve_pushed_image_digest "$image_tag_ref")"
+  IMAGE="${IMAGE_REPO}@${image_digest}"
   ok "image pushed: ${IMAGE}"
+}
+
+resolve_pushed_image_digest() {
+  local image_tag_ref="$1" digest image_id
+
+  if "$CONTAINER_CLI" buildx version >/dev/null 2>&1; then
+    digest="$("$CONTAINER_CLI" buildx imagetools inspect "$image_tag_ref" \
+      --format '{{.Manifest.Digest}}')" \
+      || die "unable to resolve pushed image digest: ${image_tag_ref}"
+  else
+    image_id="$("$CONTAINER_CLI" image inspect "$image_tag_ref" \
+      --format '{{index .RepoDigests 0}}')" \
+      || die "unable to inspect pushed image digest: ${image_tag_ref}"
+    digest="${image_id##*@}"
+  fi
+
+  [[ "$digest" =~ ^sha256:[0-9a-f]{64}$ ]] \
+    || die "invalid pushed image digest: ${digest}"
+  printf '%s\n' "$digest"
 }
 
 apply_namespace() {
@@ -415,6 +439,21 @@ rollout_and_verify() {
       -w "HTTP %{http_code}\nURL %{url_effective}\nTYPE %{content_type}\nSIZE %{size_download}\n" \
       "$PUBLIC_URL" || warn "public URL check failed; inspect ingress and pod logs"
   fi
+
+  run_release_builder_smoke
+}
+
+run_release_builder_smoke() {
+  log "run immutable digest and tenant URL release smoke"
+  BUILDER_IMAGE="$IMAGE" \
+  DEPLOYED_REVISION="$GIT_FULL_SHA" \
+  KUBE_NAMESPACE="$NAMESPACE" \
+  KUBE_POD_SELECTOR="app=${APP_NAME}" \
+  KUBE_BACKEND_CONTAINER="apaas-builder" \
+  KUBE_DIST_INIT_CONTAINER="copy-frontend-dist" \
+  KUBE_WEB_CONTAINER="web" \
+  BUILDER_BASE_URL="${BUILDER_BASE_URL:-https://${HOST}}" \
+    bash "$WORKDIR/scripts/verify_builder_tenant_url_smoke.sh"
 }
 
 main() {

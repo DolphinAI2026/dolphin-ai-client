@@ -101,8 +101,12 @@ build_release_image:
         --opt "build-arg:DOCKER_CLI_IMAGE=${BUILDER_DOCKER_CLI_IMAGE}" \
         --opt "build-arg:NPM_REGISTRY=${BUILDER_NPM_REGISTRY}" \
         --opt "build-arg:PIP_INDEX_URL=${BUILDER_PIP_INDEX_URL}" \
-        --output "type=image,name=${BUILDER_IMAGE},push=true"
-    - printf 'BUILDER_IMAGE=%s\n' "${BUILDER_IMAGE}" > build/release.env
+        --output "type=image,name=${BUILDER_IMAGE},push=true" \
+        --metadata-file build/metadata.json
+    - digest="$(python3 -c 'import json; print(json.load(open("build/metadata.json"))["containerimage.digest"])')"
+    - test "${digest#sha256:}" != "${digest}"
+    - printf 'BUILDER_IMAGE=%s@%s\n' "${BUILDER_IMAGE_REPOSITORY}" "${digest}" > build/release.env
+    - printf 'DEPLOYED_REVISION=%s\n' "${CI_COMMIT_SHA}" >> build/release.env
   artifacts:
     expire_in: 1 day
     reports:
@@ -139,3 +143,39 @@ release_and_update_server:
         "statefulset/${BUILDER_K8S_STATEFULSET}" \
         --timeout="${BUILDER_ROLLOUT_TIMEOUT}"
       printf 'builderImage=%s\n' "${BUILDER_IMAGE}"
+  artifacts:
+    expire_in: 1 day
+    reports:
+      dotenv: build/release.env
+
+release_builder_browser_smoke:
+  stage: release
+  image:
+    name: mcr.microsoft.com/playwright:v1.61.1-noble
+    entrypoint: [""]
+  needs:
+    - job: release_and_update_server
+      artifacts: true
+  rules:
+    - if: '$RUN_RELEASE_AND_UPDATE_SERVER == "1" && $BUILDER_RELEASE_CONFIRM == "release-and-update-server"'
+      when: on_success
+    - when: never
+  before_script:
+    - curl -fsSLo /usr/local/bin/kubectl https://dl.k8s.io/release/v1.30.7/bin/linux/amd64/kubectl
+    - chmod +x /usr/local/bin/kubectl
+    - kubectl version --client
+    - npm ci
+    - npm exec -- playwright install msedge
+    - |
+      test -n "${APAAS_KUBECONFIG_B64:-}${APAAS_KUBECONFIG:-}"
+      if [ -n "${APAAS_KUBECONFIG_B64:-}" ]; then
+        printf '%s' "${APAAS_KUBECONFIG_B64}" | base64 -d > /tmp/kubeconfig
+      else
+        cp "${APAAS_KUBECONFIG}" /tmp/kubeconfig
+      fi
+      chmod 600 /tmp/kubeconfig
+      export KUBECONFIG=/tmp/kubeconfig
+  script:
+    - test -n "${BUILDER_IMAGE:-}"
+    - test -n "${DEPLOYED_REVISION:-}"
+    - bash scripts/verify_builder_tenant_url_smoke.sh
