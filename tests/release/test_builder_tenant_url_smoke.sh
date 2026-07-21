@@ -2,6 +2,8 @@
 set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
+PARENT_CI_PATH="${ROOT_DIR}/.gitlab-ci.yml"
+CHILD_CI_PATH="${ROOT_DIR}/.gitlab/ci/release-builder-child.yml"
 TMP_DIR="$(mktemp -d -t builder-release-contract.XXXXXX)"
 FAKE_BIN="${TMP_DIR}/bin"
 REAL_NODE="$(command -v node)"
@@ -848,9 +850,12 @@ EOF
 }
 
 assert_ci_metadata_and_mapping() {
-  ruby -ryaml - "${ROOT_DIR}/.gitlab-ci.yml" <<'RUBY'
-path = ARGV.fetch(0)
-config = YAML.load_file(path)
+  ruby -ryaml - "$PARENT_CI_PATH" "$CHILD_CI_PATH" <<'RUBY'
+parent_path = ARGV.fetch(0)
+child_path = ARGV.fetch(1)
+abort "missing release builder child config" unless File.file?(child_path)
+config = YAML.load_file(parent_path)
+child = YAML.load_file(child_path)
 abort "missing build_release_image" unless config["build_release_image"]
 build = config.fetch("build_release_image")
 build_script = build.fetch("script").join("\n")
@@ -863,10 +868,14 @@ abort "metadata job must need build artifact" unless metadata.fetch("needs").any
 metadata_script = metadata.fetch("script").join("\n")
 abort "metadata parser is not strict" unless metadata_script.include?("sha256:[0-9a-f]{64}")
 abort "metadata dotenv missing deployed revision" unless metadata_script.include?("DEPLOYED_REVISION")
+abort "metadata must generate strict child variables" unless metadata_script.include?("release-builder-child-vars.yml")
+abort "metadata must validate the deployed revision" unless metadata_script.include?("[0-9a-f]{40}")
 
 preflight = config.fetch("release_builder_preflight")
-smoke = config.fetch("release_builder_browser_smoke")
-recovery = config.fetch("release_builder_recovery")
+trigger = config.fetch("release_builder_pipeline")
+update = child.fetch("release_and_update_server")
+smoke = child.fetch("release_builder_browser_smoke")
+recovery = child.fetch("release_builder_recovery")
 expected = {
   "KUBE_NAMESPACE" => "$BUILDER_K8S_NAMESPACE",
   "KUBE_STATEFULSET" => "$BUILDER_K8S_STATEFULSET",
@@ -890,12 +899,37 @@ abort "wrong default ingress" unless config.dig("variables", "BUILDER_K8S_INGRES
 abort "wrong default service" unless config.dig("variables", "BUILDER_K8S_SERVICE") == "ai-builder"
 abort "wrong default ingress path" unless config.dig("variables", "BUILDER_K8S_INGRESS_PATH") == "/ai-builder"
 abort "wrong default expected origin" unless config.dig("variables", "BUILDER_K8S_EXPECTED_ORIGIN") == "https://om-demo.dfy.definesys.cn"
-abort "release must need preflight" unless config.fetch("release_and_update_server").fetch("needs").any? { |need| need["job"] == "release_builder_preflight" && need["artifacts"] }
+abort "release trigger must need preflight" \
+  unless trigger.fetch("needs").any? { |need| need["job"] == "release_builder_preflight" && need["artifacts"] == false }
+abort "release trigger must serialize the workload" \
+  unless trigger["resource_group"] == "$BUILDER_K8S_NAMESPACE/$BUILDER_K8S_STATEFULSET"
+abort "release trigger must wait for the complete child pipeline" \
+  unless trigger.dig("trigger", "strategy") == "depend"
+child_include = Array(trigger.dig("trigger", "include"))
+abort "release trigger must consume generated child variables" \
+  unless child_include.any? do |entry|
+    entry["artifact"] == "build/release-builder-child-vars.yml" \
+      && entry["job"] == "publish_release_metadata"
+  end
+abort "release trigger must not forward arbitrary pipeline variables" \
+  unless trigger.dig("trigger", "forward", "pipeline_variables") == false
+abort "release trigger must not forward parent YAML variables" \
+  unless trigger.dig("trigger", "forward", "yaml_variables") == false
+%w[release_and_update_server release_builder_browser_smoke release_builder_recovery].each do |job|
+  abort "parent pipeline still owns child job #{job}" if config.key?(job)
+  abort "child job #{job} must not hold the parent resource group" if child.fetch(job).key?("resource_group")
+end
+abort "child update must run before smoke" \
+  unless child.fetch("stages").index(update.fetch("stage")) < child.fetch("stages").index(smoke.fetch("stage"))
+abort "child smoke must run before recovery" \
+  unless child.fetch("stages").index(smoke.fetch("stage")) < child.fetch("stages").index(recovery.fetch("stage"))
+abort "child smoke must consume update dotenv" \
+  unless smoke.fetch("needs").any? { |need| need["job"] == "release_and_update_server" && need["artifacts"] }
 abort "smoke must use release spec" unless smoke.fetch("script").join("\n").include?("verify_builder_tenant_url_smoke.sh")
-update = config.fetch("release_and_update_server")
 abort "update job must persist artifacts after failure" unless update.dig("artifacts", "when") == "always"
-abort "release jobs must serialize the workload" unless update["resource_group"] == "$BUILDER_K8S_NAMESPACE/$BUILDER_K8S_STATEFULSET"
 update_script = update.fetch("script").join("\n")
+abort "update job must originate its dotenv from immutable child variables" \
+  unless update_script.include?("BUILDER_IMAGE=%s\\nDEPLOYED_REVISION=%s\\n")
 abort "update job must own ConfigMap release lock" unless update_script.include?("release_lock_owner")
 create_at = update_script.index('if ! identity="$(kubectl -n "${BUILDER_K8S_NAMESPACE}" create configmap')
 fence_at = create_at && update_script.index("fence_statefulset_for_generation", create_at)
@@ -909,8 +943,6 @@ abort "update job must mutate images with StatefulSet JSON Patch" unless set_at
 abort "update job must validate baseline before mutation" unless patch_at < set_at
 abort "update job must export lease generation" unless update_script.include?("LEASE_GENERATION=")
 abort "browser job must verify ConfigMap release lock" unless smoke.fetch("script").join("\n").include?("release_lock_owner")
-abort "missing recovery stage" unless config.fetch("stages").include?("recovery")
-abort "recovery must run after release" unless config.fetch("stages").index("recovery") > config.fetch("stages").index("release")
 abort "recovery must use fixed kubectl" unless recovery.dig("image", "name") == "hub-mirror.dfy.definesys.cn/bitnami/kubectl:1.30.7"
 abort "recovery must always run" unless recovery.fetch("rules").any? { |rule| rule["when"] == "always" }
 abort "recovery must not consume browser artifacts" if recovery.fetch("needs", []).any? { |need| need["artifacts"] }
@@ -920,7 +952,7 @@ abort "recovery must read lock previous refs" unless recovery_script.include?("p
 abort "recovery must not read browser dotenv" if recovery_script.include?("PREVIOUS_BACKEND_IMAGE")
 abort "recovery lock existence check must distinguish NotFound from API failures" \
   unless recovery_script.include?("--ignore-not-found") && recovery_script.include?("-o name")
-online_source = File.read(File.join(File.dirname(path), "scripts/deploy_online_latest_kubesphere.sh"))
+online_source = File.read(File.join(File.dirname(parent_path), "scripts/deploy_online_latest_kubesphere.sh"))
 [update.fetch("script").join("\n"), smoke.fetch("script").join("\n"), recovery_script, online_source].each do |source|
   abort "release lock baseline/release must use JSON Patch CAS" unless source.include?("--type=json")
   %w[/metadata/uid /metadata/resourceVersion /data/owner /data/target_image].each do |path|
@@ -1001,7 +1033,7 @@ RUBY
 }
 
 ci_metadata_script() {
-  ruby -ryaml - "${ROOT_DIR}/.gitlab-ci.yml" <<'RUBY'
+  ruby -ryaml - "$PARENT_CI_PATH" <<'RUBY'
 config = YAML.load_file(ARGV.fetch(0))
 puts config.fetch("publish_release_metadata").fetch("script").join("\n")
 RUBY
@@ -1009,14 +1041,14 @@ RUBY
 
 ci_job_script() {
   local job="$1"
-  ruby -ryaml - "${ROOT_DIR}/.gitlab-ci.yml" "$job" <<'RUBY'
+  ruby -ryaml - "$CHILD_CI_PATH" "$job" <<'RUBY'
 config = YAML.load_file(ARGV.fetch(0))
 puts config.fetch(ARGV.fetch(1)).fetch("script").join("\n")
 RUBY
 }
 
 assert_ci_metadata_flow() {
-  local script metadata_dir output
+  local script metadata_dir output child_vars
   script="$(ci_metadata_script)"
   metadata_dir="${TMP_DIR}/metadata"
   mkdir -p "${metadata_dir}/build"
@@ -1026,15 +1058,37 @@ assert_ci_metadata_flow() {
     cd "$metadata_dir"
     BUILDER_IMAGE_REPOSITORY="registry.example/ai-builder" \
     CI_COMMIT_SHA="$TEST_REVISION" \
+    BUILDER_IMAGE="registry.example/attacker@sha256:ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff" \
+    DEPLOYED_REVISION="ffffffffffffffffffffffffffffffffffffffff" \
       bash -c "$script"
   )
   output="$(<"${metadata_dir}/build/release.env")"
   assert_contains "$output" "BUILDER_IMAGE=registry.example/ai-builder@${TEST_DIGEST}"
   assert_contains "$output" "DEPLOYED_REVISION=${TEST_REVISION}"
+  child_vars="$(
+    ruby -ryaml - "${metadata_dir}/build/release-builder-child-vars.yml" <<'RUBY'
+config = YAML.load_file(ARGV.fetch(0))
+abort "generated child config has unexpected top-level keys" \
+  unless config.keys.sort == %w[include variables]
+abort "generated child config must include the repository-owned child pipeline" \
+  unless config["include"] == [{"local" => ".gitlab/ci/release-builder-child.yml"}]
+variables = config.fetch("variables")
+abort "generated child config has unexpected variables" \
+  unless variables.keys.sort == %w[BUILDER_IMAGE DEPLOYED_REVISION]
+puts variables.fetch("BUILDER_IMAGE")
+puts variables.fetch("DEPLOYED_REVISION")
+RUBY
+  )"
+  assert_contains "$child_vars" "registry.example/ai-builder@${TEST_DIGEST}"
+  assert_contains "$child_vars" "$TEST_REVISION"
 
   printf '{"containerimage.digest":"sha256:invalid"}\n' \
     >"${metadata_dir}/build/metadata.json"
   assert_command_fails_without_secret bash -c "cd '$metadata_dir' && BUILDER_IMAGE_REPOSITORY=registry.example/ai-builder CI_COMMIT_SHA=$TEST_REVISION bash -c \"\$0\"" "$script" \
+    >/dev/null
+  printf '{"containerimage.digest":"%s"}\n' "$TEST_DIGEST" \
+    >"${metadata_dir}/build/metadata.json"
+  assert_command_fails_without_secret bash -c "cd '$metadata_dir' && BUILDER_IMAGE_REPOSITORY=registry.example/ai-builder CI_COMMIT_SHA=invalid bash -c \"\$0\"" "$script" \
     >/dev/null
   printf 'CI_METADATA_FLOW=PASS\n'
 }
@@ -1627,6 +1681,7 @@ assert_ci_recovery_contract() {
     PATH="${FAKE_BIN}:$PATH" \
     APAAS_KUBECONFIG="${job_dir}/kubeconfig" \
     BUILDER_IMAGE="registry.example/ai-builder@${TEST_DIGEST}" \
+    DEPLOYED_REVISION="$TEST_REVISION" \
     BUILDER_K8S_NAMESPACE="release-ns" \
     BUILDER_K8S_STATEFULSET="ai-builder" \
     BUILDER_K8S_BACKEND_CONTAINER="ai-builder" \
@@ -1764,6 +1819,7 @@ assert_ci_recovery_contract() {
     PATH="${FAKE_BIN}:$PATH" \
     APAAS_KUBECONFIG="${job_dir}/kubeconfig" \
     BUILDER_IMAGE="registry.example/ai-builder@${TEST_DIGEST}" \
+    DEPLOYED_REVISION="$TEST_REVISION" \
     BUILDER_K8S_NAMESPACE="release-ns" \
     BUILDER_K8S_STATEFULSET="ai-builder" \
     BUILDER_K8S_BACKEND_CONTAINER="ai-builder" \
@@ -1800,7 +1856,11 @@ assert_ci_recovery_contract() {
     export FAKE_REAL_NODE="$REAL_NODE"
     export FAKE_KUBE_STATE="$state_file"
     export FAKE_KUBE_LOG="$kube_log"
-    bash -e -c "$browser_script"
+    if ! browser_output="$(bash -e -c "$browser_script" 2>&1)"; then
+      assert_not_contains "$browser_output" "$TEST_PASSWORD"
+      printf '%s\n' "$browser_output" >&2
+      fail "browser success contract failed"
+    fi
   )
   [ -z "$(state_file_value "$state_file" lock_owner)" ] || fail "browser success did not release its lock"
   output="$(
@@ -1875,6 +1935,7 @@ assert_ci_update_failure_and_lock_contract() {
       PATH="${FAKE_BIN}:$PATH" \
       APAAS_KUBECONFIG="${job_dir}/kubeconfig" \
       BUILDER_IMAGE="registry.example/ai-builder@${TEST_DIGEST}" \
+      DEPLOYED_REVISION="$TEST_REVISION" \
       BUILDER_K8S_NAMESPACE="release-ns" \
       BUILDER_K8S_STATEFULSET="ai-builder" \
       BUILDER_K8S_BACKEND_CONTAINER="ai-builder" \
@@ -1912,6 +1973,7 @@ assert_ci_update_failure_and_lock_contract() {
       PATH="${FAKE_BIN}:$PATH" \
       APAAS_KUBECONFIG="${job_dir}/kubeconfig" \
       BUILDER_IMAGE="registry.example/ai-builder@${TEST_DIGEST}" \
+      DEPLOYED_REVISION="$TEST_REVISION" \
       BUILDER_K8S_NAMESPACE="release-ns" \
       BUILDER_K8S_STATEFULSET="ai-builder" \
       BUILDER_K8S_BACKEND_CONTAINER="ai-builder" \
@@ -1939,6 +2001,7 @@ assert_ci_update_failure_and_lock_contract() {
       PATH="${FAKE_BIN}:$PATH" \
       APAAS_KUBECONFIG="${job_dir}/kubeconfig" \
       BUILDER_IMAGE="registry.example/ai-builder@${TEST_DIGEST}" \
+      DEPLOYED_REVISION="$TEST_REVISION" \
       BUILDER_K8S_NAMESPACE="release-ns" \
       BUILDER_K8S_STATEFULSET="ai-builder" \
       BUILDER_K8S_BACKEND_CONTAINER="ai-builder" \
@@ -2170,6 +2233,7 @@ assert_replacement_lock_cas_contract() {
       PATH="${FAKE_BIN}:$PATH" \
       APAAS_KUBECONFIG="${job_dir}/kubeconfig" \
       BUILDER_IMAGE="registry.example/ai-builder@${TEST_DIGEST}" \
+      DEPLOYED_REVISION="$TEST_REVISION" \
       BUILDER_K8S_NAMESPACE="release-ns" \
       BUILDER_K8S_STATEFULSET="ai-builder" \
       BUILDER_K8S_BACKEND_CONTAINER="ai-builder" \

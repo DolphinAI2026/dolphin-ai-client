@@ -1,0 +1,716 @@
+workflow:
+  rules:
+    - if: '$CI_PIPELINE_SOURCE == "parent_pipeline"'
+      when: always
+    - when: never
+
+stages:
+  - update
+  - smoke
+  - recovery
+
+variables:
+  BUILDER_K8S_NAMESPACE: "orcamatrix-demo"
+  BUILDER_K8S_STATEFULSET: "ai-builder"
+  BUILDER_K8S_BACKEND_CONTAINER: "ai-builder"
+  BUILDER_K8S_DIST_INIT_CONTAINER: "copy-frontend-dist"
+  BUILDER_K8S_LABEL_SELECTOR: "app.kubernetes.io/name=ai-builder"
+  BUILDER_K8S_WEB_CONTAINER: "web"
+  BUILDER_K8S_EXPECTED_HOST: "om-demo.dfy.definesys.cn"
+  BUILDER_K8S_EXPECTED_ORIGIN: "https://om-demo.dfy.definesys.cn"
+  BUILDER_K8S_INGRESS: "ai-builder"
+  BUILDER_K8S_SERVICE: "ai-builder"
+  BUILDER_K8S_INGRESS_PATH: "/ai-builder"
+  BUILDER_ROLLOUT_TIMEOUT: "300s"
+
+release_and_update_server:
+  stage: update
+  image:
+    name: hub-mirror.dfy.definesys.cn/bitnami/kubectl:1.30.7
+    entrypoint: [""]
+  script:
+    - test -n "${BUILDER_IMAGE:-}"
+    - test -n "${DEPLOYED_REVISION:-}"
+    - mkdir -p build
+    - printf 'BUILDER_IMAGE=%s\nDEPLOYED_REVISION=%s\n' "${BUILDER_IMAGE}" "${DEPLOYED_REVISION}" > build/release.env
+    - test -n "${APAAS_KUBECONFIG_B64:-}${APAAS_KUBECONFIG:-}"
+    - |
+      if [ -n "${APAAS_KUBECONFIG_B64:-}" ]; then
+        printf '%s' "${APAAS_KUBECONFIG_B64}" | base64 -d > /tmp/kubeconfig
+      else
+        cp "${APAAS_KUBECONFIG}" /tmp/kubeconfig
+      fi
+      chmod 600 /tmp/kubeconfig
+      export KUBECONFIG=/tmp/kubeconfig
+      release_lock_name="${BUILDER_K8S_STATEFULSET}-release-lock"
+      release_lock_owner="ci-${CI_PIPELINE_ID:-unknown}"
+      release_lock_uid=""
+      release_lock_resource_version=""
+      release_lock_generation="${release_lock_owner}-${CI_JOB_ID:-unknown}-$(date -u +%Y%m%dT%H%M%SZ)-$$"
+      statefulset_fence_key="builder.ai/release-generation"
+      statefulset_fence_path="/metadata/annotations/builder.ai~1release-generation"
+      lock_value() {
+        kubectl -n "${BUILDER_K8S_NAMESPACE}" get "configmap/${release_lock_name}" \
+          -o "jsonpath={.data.$1}"
+      }
+      refresh_release_lock_identity() {
+        identity="$(kubectl -n "${BUILDER_K8S_NAMESPACE}" get "configmap/${release_lock_name}" \
+          -o jsonpath='{.metadata.uid}{" "}{.metadata.resourceVersion}')" || return 1
+        current_lock_uid="${identity%% *}"
+        current_lock_resource_version="${identity#* }"
+        [ "${current_lock_resource_version}" != "${identity}" ] || return 1
+        printf '%s\n' "${current_lock_uid}" | grep -Eq '^[A-Za-z0-9.-]+$' || return 1
+        printf '%s\n' "${current_lock_resource_version}" | grep -Eq '^[0-9]+$' || return 1
+        [ -z "${release_lock_uid}" ] || [ "${current_lock_uid}" = "${release_lock_uid}" ] || return 1
+        release_lock_uid="${current_lock_uid}"
+        release_lock_resource_version="${current_lock_resource_version}"
+      }
+      lock_matches() {
+        refresh_release_lock_identity || return 1
+        [ "$(lock_value owner)" = "${release_lock_owner}" ] \
+          && [ "$(lock_value target_image)" = "${BUILDER_IMAGE}" ] \
+          && [ "$(lock_value state)" = "active" ] \
+          && [ "$(lock_value lease_generation)" = "${release_lock_generation}" ]
+      }
+      patch_release_lock_cas() {
+        patch="$1"
+        identity="$(kubectl -n "${BUILDER_K8S_NAMESPACE}" patch configmap "${release_lock_name}" \
+          --type=json --patch "${patch}" \
+          -o jsonpath='{.metadata.uid}{" "}{.metadata.resourceVersion}')" || return 1
+        patched_lock_uid="${identity%% *}"
+        patched_lock_resource_version="${identity#* }"
+        [ "${patched_lock_resource_version}" != "${identity}" ] || return 1
+        [ "${patched_lock_uid}" = "${release_lock_uid}" ] || return 1
+        printf '%s\n' "${patched_lock_resource_version}" | grep -Eq '^[0-9]+$' || return 1
+        release_lock_resource_version="${patched_lock_resource_version}"
+      }
+      immutable_image_ref() {
+        printf '%s\n' "$1" | grep -Eq '^[^[:space:]@]+@sha256:[0-9a-f]{64}$'
+      }
+      template_matches() {
+        [ "$(kubectl -n "${BUILDER_K8S_NAMESPACE}" get "statefulset/${BUILDER_K8S_STATEFULSET}" \
+          -o jsonpath="{range .spec.template.spec.containers[?(@.name==\"${BUILDER_K8S_BACKEND_CONTAINER}\")]}{.image}{end}")" = "$1" ] \
+          && [ "$(kubectl -n "${BUILDER_K8S_NAMESPACE}" get "statefulset/${BUILDER_K8S_STATEFULSET}" \
+          -o jsonpath="{range .spec.template.spec.initContainers[?(@.name==\"${BUILDER_K8S_DIST_INIT_CONTAINER}\")]}{.image}{end}")" = "$2" ]
+      }
+      load_validated_baseline() {
+        previous_backend_image="$(lock_value previous_backend_image)" || return 1
+        previous_init_image="$(lock_value previous_init_image)" || return 1
+        validated_statefulset_uid="$(lock_value validated_statefulset_uid)" || return 1
+        validated_statefulset_resource_version="$(lock_value validated_statefulset_resource_version)" || return 1
+        baseline_generation="$(lock_value baseline_generation)" || return 1
+        lease_generation="$(lock_value lease_generation)" || return 1
+        immutable_image_ref "${previous_backend_image}" \
+          && immutable_image_ref "${previous_init_image}" \
+          && printf '%s\n' "${validated_statefulset_uid}" | grep -Eq '^[A-Za-z0-9.-]+$' \
+          && printf '%s\n' "${validated_statefulset_resource_version}" | grep -Eq '^[0-9]+$' \
+          && [ -n "${baseline_generation}" ] \
+          && [ "${baseline_generation}" = "${lease_generation}" ] \
+          && [ "${lease_generation}" = "${release_lock_generation}" ]
+      }
+      current_statefulset_identity() {
+        kubectl -n "${BUILDER_K8S_NAMESPACE}" get "statefulset/${BUILDER_K8S_STATEFULSET}" \
+          -o jsonpath='{.metadata.uid}{" "}{.metadata.resourceVersion}'
+      }
+      find_container_index() {
+        kind="$1"
+        name="$2"
+        index=0
+        found=""
+        case "${kind}" in
+          backend)
+            names="$(kubectl -n "${BUILDER_K8S_NAMESPACE}" get "statefulset/${BUILDER_K8S_STATEFULSET}" \
+              -o jsonpath='{range .spec.template.spec.containers[*]}{.name}{"\n"}{end}')" || return 1
+            ;;
+          init)
+            names="$(kubectl -n "${BUILDER_K8S_NAMESPACE}" get "statefulset/${BUILDER_K8S_STATEFULSET}" \
+              -o jsonpath='{range .spec.template.spec.initContainers[*]}{.name}{"\n"}{end}')" || return 1
+            ;;
+          *) return 1 ;;
+        esac
+        while IFS= read -r candidate; do
+          [ -n "${candidate}" ] || continue
+          if [ "${candidate}" = "${name}" ]; then
+            [ -z "${found}" ] || return 1
+            found="${index}"
+          fi
+          index=$((index + 1))
+        done <<<"${names}"
+        [ -n "${found}" ] || return 1
+        printf '%s\n' "${found}"
+      }
+      read_statefulset_snapshot() {
+        identity="$(current_statefulset_identity)" || return 1
+        snapshot_statefulset_uid="${identity%% *}"
+        snapshot_statefulset_resource_version="${identity#* }"
+        [ "${snapshot_statefulset_resource_version}" != "${identity}" ] || return 1
+        printf '%s\n' "${snapshot_statefulset_uid}" | grep -Eq '^[A-Za-z0-9.-]+$' || return 1
+        printf '%s\n' "${snapshot_statefulset_resource_version}" | grep -Eq '^[0-9]+$' || return 1
+        backend_index="$(find_container_index backend "${BUILDER_K8S_BACKEND_CONTAINER}")" || return 1
+        init_index="$(find_container_index init "${BUILDER_K8S_DIST_INIT_CONTAINER}")" || return 1
+        statefulset_annotations="$(kubectl -n "${BUILDER_K8S_NAMESPACE}" get "statefulset/${BUILDER_K8S_STATEFULSET}" \
+          -o go-template='{{if .metadata.annotations}}{{range $key, $value := .metadata.annotations}}{{$key}}={{$value}}{{"\n"}}{{end}}{{end}}')" \
+          || return 1
+        statefulset_fence_present=0
+        statefulset_fence_generation=""
+        while IFS= read -r annotation; do
+          case "${annotation}" in
+            "${statefulset_fence_key}="*)
+              statefulset_fence_present=1
+              statefulset_fence_generation="${annotation#*=}"
+              ;;
+          esac
+        done <<<"${statefulset_annotations}"
+        snapshot_backend_image="$(kubectl -n "${BUILDER_K8S_NAMESPACE}" get "statefulset/${BUILDER_K8S_STATEFULSET}" \
+          -o jsonpath="{range .spec.template.spec.containers[?(@.name==\"${BUILDER_K8S_BACKEND_CONTAINER}\")]}{.image}{end}")" \
+          || return 1
+        snapshot_init_image="$(kubectl -n "${BUILDER_K8S_NAMESPACE}" get "statefulset/${BUILDER_K8S_STATEFULSET}" \
+          -o jsonpath="{range .spec.template.spec.initContainers[?(@.name==\"${BUILDER_K8S_DIST_INIT_CONTAINER}\")]}{.image}{end}")" \
+          || return 1
+        [ -n "${snapshot_backend_image}" ] && [ -n "${snapshot_init_image}" ]
+      }
+      fence_statefulset_for_generation() {
+        read_statefulset_snapshot || return 1
+        if [ "${statefulset_fence_present}" = "1" ]; then
+          patch="$(printf '[{"op":"test","path":"/metadata/uid","value":"%s"},{"op":"test","path":"/metadata/resourceVersion","value":"%s"},{"op":"test","path":"%s","value":"%s"},{"op":"replace","path":"%s","value":"%s"}]' \
+            "${snapshot_statefulset_uid}" "${snapshot_statefulset_resource_version}" \
+            "${statefulset_fence_path}" "${statefulset_fence_generation}" \
+            "${statefulset_fence_path}" "${release_lock_generation}")"
+        elif [ -z "${statefulset_annotations}" ]; then
+          patch="$(printf '[{"op":"test","path":"/metadata/uid","value":"%s"},{"op":"test","path":"/metadata/resourceVersion","value":"%s"},{"op":"add","path":"/metadata/annotations","value":{"builder.ai/release-generation":"%s"}}]' \
+            "${snapshot_statefulset_uid}" "${snapshot_statefulset_resource_version}" "${release_lock_generation}")"
+        else
+          patch="$(printf '[{"op":"test","path":"/metadata/uid","value":"%s"},{"op":"test","path":"/metadata/resourceVersion","value":"%s"},{"op":"add","path":"%s","value":"%s"}]' \
+            "${snapshot_statefulset_uid}" "${snapshot_statefulset_resource_version}" \
+            "${statefulset_fence_path}" "${release_lock_generation}")"
+        fi
+        identity="$(kubectl -n "${BUILDER_K8S_NAMESPACE}" patch "statefulset/${BUILDER_K8S_STATEFULSET}" \
+          --type=json --patch "${patch}" \
+          -o jsonpath='{.metadata.uid}{" "}{.metadata.resourceVersion}')" || return 1
+        patched_statefulset_uid="${identity%% *}"
+        patched_statefulset_resource_version="${identity#* }"
+        [ "${patched_statefulset_resource_version}" != "${identity}" ] \
+          && [ "${patched_statefulset_uid}" = "${snapshot_statefulset_uid}" ] \
+          && printf '%s\n' "${patched_statefulset_resource_version}" | grep -Eq '^[0-9]+$'
+      }
+      patch_statefulset_images_cas() {
+        expected_backend_image="$1"
+        expected_init_image="$2"
+        next_backend_image="$3"
+        next_init_image="$4"
+        read_statefulset_snapshot || return 1
+        [ "${statefulset_fence_generation}" = "${release_lock_generation}" ] \
+          && [ "${snapshot_backend_image}" = "${expected_backend_image}" ] \
+          && [ "${snapshot_init_image}" = "${expected_init_image}" ] \
+          || return 1
+        patch="$(printf '[{"op":"test","path":"/metadata/uid","value":"%s"},{"op":"test","path":"/metadata/resourceVersion","value":"%s"},{"op":"test","path":"%s","value":"%s"},{"op":"test","path":"/spec/template/spec/containers/%s/name","value":"%s"},{"op":"test","path":"/spec/template/spec/containers/%s/image","value":"%s"},{"op":"test","path":"/spec/template/spec/initContainers/%s/name","value":"%s"},{"op":"test","path":"/spec/template/spec/initContainers/%s/image","value":"%s"},{"op":"replace","path":"/spec/template/spec/containers/%s/image","value":"%s"},{"op":"replace","path":"/spec/template/spec/initContainers/%s/image","value":"%s"}]' \
+          "${snapshot_statefulset_uid}" "${snapshot_statefulset_resource_version}" \
+          "${statefulset_fence_path}" "${release_lock_generation}" \
+          "${backend_index}" "${BUILDER_K8S_BACKEND_CONTAINER}" \
+          "${backend_index}" "${expected_backend_image}" \
+          "${init_index}" "${BUILDER_K8S_DIST_INIT_CONTAINER}" \
+          "${init_index}" "${expected_init_image}" \
+          "${backend_index}" "${next_backend_image}" \
+          "${init_index}" "${next_init_image}")"
+        identity="$(kubectl -n "${BUILDER_K8S_NAMESPACE}" patch "statefulset/${BUILDER_K8S_STATEFULSET}" \
+          --type=json --patch "${patch}" \
+          -o jsonpath='{.metadata.uid}{" "}{.metadata.resourceVersion}')" || return 1
+        patched_statefulset_uid="${identity%% *}"
+        patched_statefulset_resource_version="${identity#* }"
+        [ "${patched_statefulset_resource_version}" != "${identity}" ] \
+          && [ "${patched_statefulset_uid}" = "${snapshot_statefulset_uid}" ] \
+          && printf '%s\n' "${patched_statefulset_resource_version}" | grep -Eq '^[0-9]+$'
+      }
+      statefulset_uid_matches_baseline() {
+        read_statefulset_snapshot || return 1
+        [ "${snapshot_statefulset_uid}" = "${validated_statefulset_uid}" ] \
+          && [ "${statefulset_fence_generation}" = "${release_lock_generation}" ]
+      }
+      baseline_matches_current_workload() {
+        lock_matches || return 1
+        load_validated_baseline || return 1
+        read_statefulset_snapshot || return 1
+        [ "${snapshot_statefulset_uid}" = "${validated_statefulset_uid}" ] \
+          && [ "${snapshot_statefulset_resource_version}" = "${validated_statefulset_resource_version}" ] \
+          && [ "${statefulset_fence_generation}" = "${release_lock_generation}" ] \
+          && [ "${snapshot_backend_image}" = "${previous_backend_image}" ] \
+          && [ "${snapshot_init_image}" = "${previous_init_image}" ]
+      }
+      verify_previous_workload() {
+        load_validated_baseline || return 1
+        statefulset_uid_matches_baseline || return 1
+        kubectl -n "${BUILDER_K8S_NAMESPACE}" rollout status \
+          "statefulset/${BUILDER_K8S_STATEFULSET}" --timeout="${BUILDER_ROLLOUT_TIMEOUT}" \
+          || return 1
+        template_matches "${previous_backend_image}" "${previous_init_image}" || return 1
+        revisions="$(kubectl -n "${BUILDER_K8S_NAMESPACE}" get "statefulset/${BUILDER_K8S_STATEFULSET}" \
+          -o jsonpath='{.status.currentRevision}{" "}{.status.updateRevision}')"
+        [ "${revisions%% *}" = "${revisions##* }" ] || return 1
+        pods="$(kubectl -n "${BUILDER_K8S_NAMESPACE}" get pods -l "${BUILDER_K8S_LABEL_SELECTOR}" \
+          -o jsonpath='{range .items[*]}{.metadata.name}{"\n"}{end}')"
+        [ -n "${pods}" ] || return 1
+        while IFS= read -r pod; do
+          [ -n "${pod}" ] || continue
+          [ "$(kubectl -n "${BUILDER_K8S_NAMESPACE}" get pod "${pod}" \
+            -o jsonpath='{range .status.conditions[?(@.type=="Ready")]}{.status}{end}')" = "True" ] || return 1
+          [ "$(kubectl -n "${BUILDER_K8S_NAMESPACE}" get pod "${pod}" \
+            -o jsonpath='{range .metadata.ownerReferences[?(@.kind=="StatefulSet")]}{.name}{end}')" = "${BUILDER_K8S_STATEFULSET}" ] || return 1
+        done <<<"${pods}"
+      }
+      release_lock_if_owned() {
+        lock_matches || return 1
+        patch="$(printf '[{"op":"test","path":"/metadata/uid","value":"%s"},{"op":"test","path":"/metadata/resourceVersion","value":"%s"},{"op":"test","path":"/data/owner","value":"%s"},{"op":"test","path":"/data/target_image","value":"%s"},{"op":"test","path":"/data/state","value":"active"},{"op":"test","path":"/data/lease_generation","value":"%s"},{"op":"replace","path":"/data/owner","value":""},{"op":"replace","path":"/data/target_image","value":""},{"op":"replace","path":"/data/state","value":"released"},{"op":"replace","path":"/data/baseline_generation","value":""},{"op":"replace","path":"/data/validated_statefulset_uid","value":""},{"op":"replace","path":"/data/validated_statefulset_resource_version","value":""},{"op":"replace","path":"/data/previous_backend_image","value":""},{"op":"replace","path":"/data/previous_init_image","value":""},{"op":"add","path":"/data/released_by","value":"%s"}]' \
+          "${release_lock_uid}" "${release_lock_resource_version}" "${release_lock_owner}" \
+          "${BUILDER_IMAGE}" "${release_lock_generation}" "${release_lock_owner}")"
+        patch_release_lock_cas "${patch}" || return 1
+      }
+      rollback_update_job() {
+        lock_matches || { printf 'release lock owner or target changed; refusing rollback\n' >&2; return 1; }
+        load_validated_baseline || { printf 'release lock baseline is invalid; refusing rollback\n' >&2; return 1; }
+        statefulset_uid_matches_baseline || { printf 'rollback CAS rejected because StatefulSet UID changed\n' >&2; return 1; }
+        if template_matches "${BUILDER_IMAGE}" "${BUILDER_IMAGE}"; then
+          patch_statefulset_images_cas \
+            "${BUILDER_IMAGE}" "${BUILDER_IMAGE}" \
+            "${previous_backend_image}" "${previous_init_image}" || return 1
+        elif ! template_matches "${previous_backend_image}" "${previous_init_image}"; then
+          printf 'rollback CAS rejected because StatefulSet no longer uses this release image\n' >&2
+          return 1
+        fi
+        verify_previous_workload || return 1
+        release_lock_if_owned
+      }
+      abort_before_mutation() {
+        reason="$1"
+        if ! release_lock_if_owned; then
+          printf '%s; release lock cleanup failed\n' "${reason}" >&2
+          exit 1
+        fi
+        printf '%s\n' "${reason}" >&2
+        exit 1
+      }
+      immutable_image_ref "${BUILDER_IMAGE}" || { printf 'BUILDER_IMAGE must be immutable\n' >&2; exit 1; }
+      if ! identity="$(kubectl -n "${BUILDER_K8S_NAMESPACE}" create configmap "${release_lock_name}" \
+        --from-literal="owner=${release_lock_owner}" \
+        --from-literal="target_image=${BUILDER_IMAGE}" \
+        --from-literal="state=active" \
+        --from-literal="lease_generation=${release_lock_generation}" \
+        --from-literal="baseline_generation=" \
+        --from-literal="validated_statefulset_uid=" \
+        --from-literal="validated_statefulset_resource_version=" \
+        --from-literal="previous_backend_image=" \
+        --from-literal="previous_init_image=" \
+        --from-literal="acquired_at=$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+        -o jsonpath='{.metadata.uid}{" "}{.metadata.resourceVersion}')"; then
+        identity="$(kubectl -n "${BUILDER_K8S_NAMESPACE}" get "configmap/${release_lock_name}" \
+          -o jsonpath='{.metadata.uid}{"|"}{.metadata.resourceVersion}{"|"}{.data.state}{"|"}{.data.owner}{"|"}{.data.target_image}')" \
+          || { printf 'release lock exists or cannot be acquired; manual recovery is required\n' >&2; exit 1; }
+        IFS='|' read -r release_lock_uid release_lock_resource_version release_lock_state \
+          observed_lock_owner observed_lock_target <<<"${identity}"
+        [ "${release_lock_state}" = "released" ] \
+          && [ -z "${observed_lock_owner}" ] \
+          && [ -z "${observed_lock_target}" ] \
+          && printf '%s\n' "${release_lock_uid}" | grep -Eq '^[A-Za-z0-9.-]+$' \
+          && printf '%s\n' "${release_lock_resource_version}" | grep -Eq '^[0-9]+$' \
+          || { printf 'release lock exists or cannot be acquired; manual recovery is required\n' >&2; exit 1; }
+        patch="$(printf '[{"op":"test","path":"/metadata/uid","value":"%s"},{"op":"test","path":"/metadata/resourceVersion","value":"%s"},{"op":"test","path":"/data/state","value":"released"},{"op":"test","path":"/data/owner","value":""},{"op":"test","path":"/data/target_image","value":""},{"op":"replace","path":"/data/owner","value":"%s"},{"op":"replace","path":"/data/target_image","value":"%s"},{"op":"replace","path":"/data/state","value":"active"},{"op":"replace","path":"/data/lease_generation","value":"%s"},{"op":"replace","path":"/data/baseline_generation","value":""},{"op":"replace","path":"/data/validated_statefulset_uid","value":""},{"op":"replace","path":"/data/validated_statefulset_resource_version","value":""},{"op":"replace","path":"/data/previous_backend_image","value":""},{"op":"replace","path":"/data/previous_init_image","value":""},{"op":"add","path":"/data/acquired_at","value":"%s"}]' \
+          "${release_lock_uid}" "${release_lock_resource_version}" \
+          "${release_lock_owner}" "${BUILDER_IMAGE}" "${release_lock_generation}" \
+          "$(date -u +%Y-%m-%dT%H:%M:%SZ)")"
+        patch_release_lock_cas "${patch}" \
+          || { printf 'release lock changed before released lease reuse\n' >&2; exit 1; }
+      else
+        release_lock_uid="${identity%% *}"
+        release_lock_resource_version="${identity#* }"
+      fi
+      [ "${release_lock_resource_version}" != "${identity}" ] \
+        && printf '%s\n' "${release_lock_uid}" | grep -Eq '^[A-Za-z0-9.-]+$' \
+        && printf '%s\n' "${release_lock_resource_version}" | grep -Eq '^[0-9]+$' \
+        || { printf 'release lock create did not return UID/resourceVersion\n' >&2; exit 1; }
+      fence_statefulset_for_generation \
+        || abort_before_mutation "unable to fence StatefulSet for this lease generation"
+      read_statefulset_snapshot \
+        || abort_before_mutation "unable to capture StatefulSet baseline"
+      [ "${statefulset_fence_generation}" = "${release_lock_generation}" ] \
+        || abort_before_mutation "StatefulSet release fence does not match this lease generation"
+      validated_statefulset_uid="${snapshot_statefulset_uid}"
+      validated_statefulset_resource_version="${snapshot_statefulset_resource_version}"
+      previous_backend_image="${snapshot_backend_image}"
+      previous_init_image="${snapshot_init_image}"
+      immutable_image_ref "${previous_backend_image}" \
+        && immutable_image_ref "${previous_init_image}" \
+        || abort_before_mutation "previous StatefulSet image refs must be immutable digest references"
+      patch="$(printf '[{"op":"test","path":"/metadata/uid","value":"%s"},{"op":"test","path":"/metadata/resourceVersion","value":"%s"},{"op":"test","path":"/data/owner","value":"%s"},{"op":"test","path":"/data/target_image","value":"%s"},{"op":"test","path":"/data/state","value":"active"},{"op":"test","path":"/data/lease_generation","value":"%s"},{"op":"replace","path":"/data/validated_statefulset_uid","value":"%s"},{"op":"replace","path":"/data/validated_statefulset_resource_version","value":"%s"},{"op":"replace","path":"/data/previous_backend_image","value":"%s"},{"op":"replace","path":"/data/previous_init_image","value":"%s"},{"op":"replace","path":"/data/baseline_generation","value":"%s"}]' \
+        "${release_lock_uid}" "${release_lock_resource_version}" "${release_lock_owner}" "${BUILDER_IMAGE}" \
+        "${release_lock_generation}" \
+        "${validated_statefulset_uid}" "${validated_statefulset_resource_version}" \
+        "${previous_backend_image}" "${previous_init_image}" "${release_lock_generation}")"
+      patch_release_lock_cas "${patch}" \
+        || abort_before_mutation "unable to persist release lock baseline"
+      printf 'PREVIOUS_BACKEND_IMAGE=%s\nPREVIOUS_DIST_INIT_IMAGE=%s\n' \
+        "${previous_backend_image}" "${previous_init_image}" >> build/release.env
+      printf 'RELEASE_LOCK_NAME=%s\nRELEASE_LOCK_OWNER=%s\nLEASE_GENERATION=%s\n' \
+        "${release_lock_name}" "${release_lock_owner}" "${release_lock_generation}" >> build/release.env
+      baseline_matches_current_workload \
+        || abort_before_mutation "StatefulSet changed after release lock acquisition; refusing image mutation"
+      if ! patch_statefulset_images_cas \
+        "${previous_backend_image}" "${previous_init_image}" \
+        "${BUILDER_IMAGE}" "${BUILDER_IMAGE}"; then
+        rollback_update_job || { printf 'image update failed and rollback failed\n' >&2; exit 1; }
+        printf 'image update failed; rollback completed\n' >&2
+        exit 1
+      fi
+      if ! kubectl -n "${BUILDER_K8S_NAMESPACE}" rollout status \
+        "statefulset/${BUILDER_K8S_STATEFULSET}" \
+        --timeout="${BUILDER_ROLLOUT_TIMEOUT}"; then
+        rollback_update_job || { printf 'rollout failed and rollback failed\n' >&2; exit 1; }
+        printf 'rollout failed; rollback completed\n' >&2
+        exit 1
+      fi
+      printf 'builderImage=%s\n' "${BUILDER_IMAGE}"
+  artifacts:
+    when: always
+    expire_in: 1 day
+    paths:
+      - build/release.env
+    reports:
+      dotenv: build/release.env
+
+release_builder_browser_smoke:
+  stage: smoke
+  image:
+    name: mcr.microsoft.com/playwright:v1.61.1-noble
+    entrypoint: [""]
+  needs:
+    - job: release_and_update_server
+      artifacts: true
+  variables:
+    GIT_DEPTH: "0"
+    KUBE_NAMESPACE: $BUILDER_K8S_NAMESPACE
+    KUBE_STATEFULSET: $BUILDER_K8S_STATEFULSET
+    KUBE_BACKEND_CONTAINER: $BUILDER_K8S_BACKEND_CONTAINER
+    KUBE_DIST_INIT_CONTAINER: $BUILDER_K8S_DIST_INIT_CONTAINER
+    KUBE_LABEL_SELECTOR: $BUILDER_K8S_LABEL_SELECTOR
+    KUBE_WEB_CONTAINER: $BUILDER_K8S_WEB_CONTAINER
+    KUBE_EXPECTED_HOST: $BUILDER_K8S_EXPECTED_HOST
+    KUBE_EXPECTED_ORIGIN: $BUILDER_K8S_EXPECTED_ORIGIN
+    KUBE_INGRESS: $BUILDER_K8S_INGRESS
+    KUBE_SERVICE: $BUILDER_K8S_SERVICE
+    KUBE_INGRESS_PATH: $BUILDER_K8S_INGRESS_PATH
+  before_script:
+    - curl -fsSLo /usr/local/bin/kubectl https://dl.k8s.io/release/v1.30.7/bin/linux/amd64/kubectl
+    - chmod +x /usr/local/bin/kubectl
+    - kubectl version --client
+    - npm ci
+    - npm exec -- playwright install msedge
+    - |
+      test -n "${APAAS_KUBECONFIG_B64:-}${APAAS_KUBECONFIG:-}"
+      if [ -n "${APAAS_KUBECONFIG_B64:-}" ]; then
+        printf '%s' "${APAAS_KUBECONFIG_B64}" | base64 -d > /tmp/kubeconfig
+      else
+        cp "${APAAS_KUBECONFIG}" /tmp/kubeconfig
+      fi
+      chmod 600 /tmp/kubeconfig
+      export KUBECONFIG=/tmp/kubeconfig
+  script:
+    - test -n "${BUILDER_IMAGE:-}"
+    - test -n "${DEPLOYED_REVISION:-}"
+    - test -n "${LEASE_GENERATION:-}"
+    - |
+      release_lock_name="${KUBE_STATEFULSET}-release-lock"
+      release_lock_owner="ci-${CI_PIPELINE_ID:-unknown}"
+      release_lock_uid=""
+      release_lock_resource_version=""
+      release_lock_generation="${LEASE_GENERATION}"
+      statefulset_fence_key="builder.ai/release-generation"
+      lock_value() {
+        kubectl -n "${KUBE_NAMESPACE}" get "configmap/${release_lock_name}" \
+          -o "jsonpath={.data.$1}"
+      }
+      refresh_release_lock_identity() {
+        identity="$(kubectl -n "${KUBE_NAMESPACE}" get "configmap/${release_lock_name}" \
+          -o jsonpath='{.metadata.uid}{" "}{.metadata.resourceVersion}')" || return 1
+        current_lock_uid="${identity%% *}"
+        current_lock_resource_version="${identity#* }"
+        [ "${current_lock_resource_version}" != "${identity}" ] || return 1
+        printf '%s\n' "${current_lock_uid}" | grep -Eq '^[A-Za-z0-9.-]+$' || return 1
+        printf '%s\n' "${current_lock_resource_version}" | grep -Eq '^[0-9]+$' || return 1
+        [ -z "${release_lock_uid}" ] || [ "${current_lock_uid}" = "${release_lock_uid}" ] || return 1
+        release_lock_uid="${current_lock_uid}"
+        release_lock_resource_version="${current_lock_resource_version}"
+      }
+      lock_matches() {
+        refresh_release_lock_identity || return 1
+        [ "$(lock_value owner)" = "${release_lock_owner}" ] \
+          && [ "$(lock_value target_image)" = "${BUILDER_IMAGE}" ] \
+          && [ "$(lock_value state)" = "active" ] \
+          && [ "$(lock_value lease_generation)" = "${release_lock_generation}" ] \
+          && [ "$(lock_value baseline_generation)" = "${release_lock_generation}" ]
+      }
+      patch_release_lock_cas() {
+        patch="$1"
+        identity="$(kubectl -n "${KUBE_NAMESPACE}" patch configmap "${release_lock_name}" \
+          --type=json --patch "${patch}" \
+          -o jsonpath='{.metadata.uid}{" "}{.metadata.resourceVersion}')" || return 1
+        patched_lock_uid="${identity%% *}"
+        patched_lock_resource_version="${identity#* }"
+        [ "${patched_lock_resource_version}" != "${identity}" ] || return 1
+        [ "${patched_lock_uid}" = "${release_lock_uid}" ] || return 1
+        printf '%s\n' "${patched_lock_resource_version}" | grep -Eq '^[0-9]+$' || return 1
+        release_lock_resource_version="${patched_lock_resource_version}"
+      }
+      template_matches_target() {
+        [ "$(kubectl -n "${KUBE_NAMESPACE}" get "statefulset/${KUBE_STATEFULSET}" \
+          -o jsonpath="{range .spec.template.spec.containers[?(@.name==\"${KUBE_BACKEND_CONTAINER}\")]}{.image}{end}")" = "${BUILDER_IMAGE}" ] \
+          && [ "$(kubectl -n "${KUBE_NAMESPACE}" get "statefulset/${KUBE_STATEFULSET}" \
+          -o jsonpath="{range .spec.template.spec.initContainers[?(@.name==\"${KUBE_DIST_INIT_CONTAINER}\")]}{.image}{end}")" = "${BUILDER_IMAGE}" ]
+      }
+      statefulset_fence_matches() {
+        [ "$(kubectl -n "${KUBE_NAMESPACE}" get "statefulset/${KUBE_STATEFULSET}" \
+          -o go-template='{{index .metadata.annotations "builder.ai/release-generation"}}')" \
+          = "${release_lock_generation}" ]
+      }
+      release_lock_if_owned() {
+        lock_matches || return 1
+        patch="$(printf '[{"op":"test","path":"/metadata/uid","value":"%s"},{"op":"test","path":"/metadata/resourceVersion","value":"%s"},{"op":"test","path":"/data/owner","value":"%s"},{"op":"test","path":"/data/target_image","value":"%s"},{"op":"test","path":"/data/state","value":"active"},{"op":"test","path":"/data/lease_generation","value":"%s"},{"op":"replace","path":"/data/owner","value":""},{"op":"replace","path":"/data/target_image","value":""},{"op":"replace","path":"/data/state","value":"released"},{"op":"replace","path":"/data/baseline_generation","value":""},{"op":"replace","path":"/data/validated_statefulset_uid","value":""},{"op":"replace","path":"/data/validated_statefulset_resource_version","value":""},{"op":"replace","path":"/data/previous_backend_image","value":""},{"op":"replace","path":"/data/previous_init_image","value":""},{"op":"add","path":"/data/released_by","value":"%s"}]' \
+          "${release_lock_uid}" "${release_lock_resource_version}" "${release_lock_owner}" \
+          "${BUILDER_IMAGE}" "${release_lock_generation}" "${release_lock_owner}")"
+        patch_release_lock_cas "${patch}" || return 1
+      }
+      lock_matches || { printf 'release lock state or generation changed before browser smoke\n' >&2; exit 1; }
+      statefulset_fence_matches || { printf 'StatefulSet release fence changed before browser smoke\n' >&2; exit 1; }
+      template_matches_target || { printf 'StatefulSet no longer uses this release image before browser smoke\n' >&2; exit 1; }
+      bash scripts/verify_builder_tenant_url_smoke.sh
+      lock_matches || { printf 'release lock state or generation changed after browser smoke\n' >&2; exit 1; }
+      statefulset_fence_matches || { printf 'StatefulSet release fence changed after browser smoke\n' >&2; exit 1; }
+      template_matches_target || { printf 'StatefulSet changed after browser smoke; refusing lock release\n' >&2; exit 1; }
+      release_lock_if_owned || { printf 'browser smoke passed but lock release failed\n' >&2; exit 1; }
+
+release_builder_recovery:
+  stage: recovery
+  dependencies: []
+  image:
+    name: hub-mirror.dfy.definesys.cn/bitnami/kubectl:1.30.7
+    entrypoint: [""]
+  rules:
+    - when: always
+  script:
+    - test -n "${APAAS_KUBECONFIG_B64:-}${APAAS_KUBECONFIG:-}"
+    - |
+      if [ -n "${APAAS_KUBECONFIG_B64:-}" ]; then
+        printf '%s' "${APAAS_KUBECONFIG_B64}" | base64 -d > /tmp/kubeconfig
+      else
+        cp "${APAAS_KUBECONFIG}" /tmp/kubeconfig
+      fi
+      chmod 600 /tmp/kubeconfig
+      export KUBECONFIG=/tmp/kubeconfig
+      release_lock_name="${BUILDER_K8S_STATEFULSET}-release-lock"
+      release_lock_owner="ci-${CI_PIPELINE_ID:-unknown}"
+      release_lock_uid=""
+      release_lock_resource_version=""
+      release_lock_generation=""
+      statefulset_fence_path="/metadata/annotations/builder.ai~1release-generation"
+      lock_value() {
+        kubectl -n "${BUILDER_K8S_NAMESPACE}" get "configmap/${release_lock_name}" \
+          -o "jsonpath={.data.$1}"
+      }
+      refresh_release_lock_identity() {
+        identity="$(kubectl -n "${BUILDER_K8S_NAMESPACE}" get "configmap/${release_lock_name}" \
+          -o jsonpath='{.metadata.uid}{" "}{.metadata.resourceVersion}')" || return 1
+        current_lock_uid="${identity%% *}"
+        current_lock_resource_version="${identity#* }"
+        [ "${current_lock_resource_version}" != "${identity}" ] || return 1
+        printf '%s\n' "${current_lock_uid}" | grep -Eq '^[A-Za-z0-9.-]+$' || return 1
+        printf '%s\n' "${current_lock_resource_version}" | grep -Eq '^[0-9]+$' || return 1
+        [ -z "${release_lock_uid}" ] || [ "${current_lock_uid}" = "${release_lock_uid}" ] || return 1
+        release_lock_uid="${current_lock_uid}"
+        release_lock_resource_version="${current_lock_resource_version}"
+      }
+      patch_release_lock_cas() {
+        patch="$1"
+        identity="$(kubectl -n "${BUILDER_K8S_NAMESPACE}" patch configmap "${release_lock_name}" \
+          --type=json --patch "${patch}" \
+          -o jsonpath='{.metadata.uid}{" "}{.metadata.resourceVersion}')" || return 1
+        patched_lock_uid="${identity%% *}"
+        patched_lock_resource_version="${identity#* }"
+        [ "${patched_lock_resource_version}" != "${identity}" ] || return 1
+        [ "${patched_lock_uid}" = "${release_lock_uid}" ] || return 1
+        printf '%s\n' "${patched_lock_resource_version}" | grep -Eq '^[0-9]+$' || return 1
+        release_lock_resource_version="${patched_lock_resource_version}"
+      }
+      immutable_image_ref() {
+        printf '%s\n' "$1" | grep -Eq '^[^[:space:]@]+@sha256:[0-9a-f]{64}$'
+      }
+      template_matches() {
+        [ "$(kubectl -n "${BUILDER_K8S_NAMESPACE}" get "statefulset/${BUILDER_K8S_STATEFULSET}" \
+          -o jsonpath="{range .spec.template.spec.containers[?(@.name==\"${BUILDER_K8S_BACKEND_CONTAINER}\")]}{.image}{end}")" = "$1" ] \
+          && [ "$(kubectl -n "${BUILDER_K8S_NAMESPACE}" get "statefulset/${BUILDER_K8S_STATEFULSET}" \
+          -o jsonpath="{range .spec.template.spec.initContainers[?(@.name==\"${BUILDER_K8S_DIST_INIT_CONTAINER}\")]}{.image}{end}")" = "$2" ]
+      }
+      lock_matches() {
+        refresh_release_lock_identity \
+          && [ "$(lock_value owner)" = "${release_lock_owner}" ] \
+          && [ "$(lock_value target_image)" = "${target_image}" ] \
+          && [ "$(lock_value state)" = "active" ] \
+          && [ "$(lock_value lease_generation)" = "${release_lock_generation}" ]
+      }
+      find_container_index() {
+        kind="$1"
+        name="$2"
+        index=0
+        found=""
+        case "${kind}" in
+          backend)
+            names="$(kubectl -n "${BUILDER_K8S_NAMESPACE}" get "statefulset/${BUILDER_K8S_STATEFULSET}" \
+              -o jsonpath='{range .spec.template.spec.containers[*]}{.name}{"\n"}{end}')" || return 1
+            ;;
+          init)
+            names="$(kubectl -n "${BUILDER_K8S_NAMESPACE}" get "statefulset/${BUILDER_K8S_STATEFULSET}" \
+              -o jsonpath='{range .spec.template.spec.initContainers[*]}{.name}{"\n"}{end}')" || return 1
+            ;;
+          *) return 1 ;;
+        esac
+        while IFS= read -r candidate; do
+          [ -n "${candidate}" ] || continue
+          if [ "${candidate}" = "${name}" ]; then
+            [ -z "${found}" ] || return 1
+            found="${index}"
+          fi
+          index=$((index + 1))
+        done <<<"${names}"
+        [ -n "${found}" ] || return 1
+        printf '%s\n' "${found}"
+      }
+      read_statefulset_snapshot() {
+        identity="$(kubectl -n "${BUILDER_K8S_NAMESPACE}" get "statefulset/${BUILDER_K8S_STATEFULSET}" \
+          -o jsonpath='{.metadata.uid}{" "}{.metadata.resourceVersion}')" || return 1
+        snapshot_statefulset_uid="${identity%% *}"
+        snapshot_statefulset_resource_version="${identity#* }"
+        [ "${snapshot_statefulset_resource_version}" != "${identity}" ] || return 1
+        printf '%s\n' "${snapshot_statefulset_uid}" | grep -Eq '^[A-Za-z0-9.-]+$' || return 1
+        printf '%s\n' "${snapshot_statefulset_resource_version}" | grep -Eq '^[0-9]+$' || return 1
+        backend_index="$(find_container_index backend "${BUILDER_K8S_BACKEND_CONTAINER}")" || return 1
+        init_index="$(find_container_index init "${BUILDER_K8S_DIST_INIT_CONTAINER}")" || return 1
+        statefulset_fence_generation="$(kubectl -n "${BUILDER_K8S_NAMESPACE}" \
+          get "statefulset/${BUILDER_K8S_STATEFULSET}" \
+          -o go-template='{{index .metadata.annotations "builder.ai/release-generation"}}')" \
+          || return 1
+        snapshot_backend_image="$(kubectl -n "${BUILDER_K8S_NAMESPACE}" get "statefulset/${BUILDER_K8S_STATEFULSET}" \
+          -o jsonpath="{range .spec.template.spec.containers[?(@.name==\"${BUILDER_K8S_BACKEND_CONTAINER}\")]}{.image}{end}")" \
+          || return 1
+        snapshot_init_image="$(kubectl -n "${BUILDER_K8S_NAMESPACE}" get "statefulset/${BUILDER_K8S_STATEFULSET}" \
+          -o jsonpath="{range .spec.template.spec.initContainers[?(@.name==\"${BUILDER_K8S_DIST_INIT_CONTAINER}\")]}{.image}{end}")" \
+          || return 1
+        [ -n "${snapshot_backend_image}" ] && [ -n "${snapshot_init_image}" ]
+      }
+      patch_statefulset_images_cas() {
+        expected_backend_image="$1"
+        expected_init_image="$2"
+        next_backend_image="$3"
+        next_init_image="$4"
+        read_statefulset_snapshot || return 1
+        [ "${snapshot_statefulset_uid}" = "${validated_statefulset_uid}" ] \
+          && [ "${statefulset_fence_generation}" = "${release_lock_generation}" ] \
+          && [ "${snapshot_backend_image}" = "${expected_backend_image}" ] \
+          && [ "${snapshot_init_image}" = "${expected_init_image}" ] \
+          || return 1
+        patch="$(printf '[{"op":"test","path":"/metadata/uid","value":"%s"},{"op":"test","path":"/metadata/resourceVersion","value":"%s"},{"op":"test","path":"%s","value":"%s"},{"op":"test","path":"/spec/template/spec/containers/%s/name","value":"%s"},{"op":"test","path":"/spec/template/spec/containers/%s/image","value":"%s"},{"op":"test","path":"/spec/template/spec/initContainers/%s/name","value":"%s"},{"op":"test","path":"/spec/template/spec/initContainers/%s/image","value":"%s"},{"op":"replace","path":"/spec/template/spec/containers/%s/image","value":"%s"},{"op":"replace","path":"/spec/template/spec/initContainers/%s/image","value":"%s"}]' \
+          "${snapshot_statefulset_uid}" "${snapshot_statefulset_resource_version}" \
+          "${statefulset_fence_path}" "${release_lock_generation}" \
+          "${backend_index}" "${BUILDER_K8S_BACKEND_CONTAINER}" \
+          "${backend_index}" "${expected_backend_image}" \
+          "${init_index}" "${BUILDER_K8S_DIST_INIT_CONTAINER}" \
+          "${init_index}" "${expected_init_image}" \
+          "${backend_index}" "${next_backend_image}" \
+          "${init_index}" "${next_init_image}")"
+        identity="$(kubectl -n "${BUILDER_K8S_NAMESPACE}" patch "statefulset/${BUILDER_K8S_STATEFULSET}" \
+          --type=json --patch "${patch}" \
+          -o jsonpath='{.metadata.uid}{" "}{.metadata.resourceVersion}')" || return 1
+        patched_statefulset_uid="${identity%% *}"
+        patched_statefulset_resource_version="${identity#* }"
+        [ "${patched_statefulset_resource_version}" != "${identity}" ] \
+          && [ "${patched_statefulset_uid}" = "${snapshot_statefulset_uid}" ] \
+          && printf '%s\n' "${patched_statefulset_resource_version}" | grep -Eq '^[0-9]+$'
+      }
+      release_lock_if_owned() {
+        lock_matches || return 1
+        patch="$(printf '[{"op":"test","path":"/metadata/uid","value":"%s"},{"op":"test","path":"/metadata/resourceVersion","value":"%s"},{"op":"test","path":"/data/owner","value":"%s"},{"op":"test","path":"/data/target_image","value":"%s"},{"op":"test","path":"/data/state","value":"active"},{"op":"test","path":"/data/lease_generation","value":"%s"},{"op":"replace","path":"/data/owner","value":""},{"op":"replace","path":"/data/target_image","value":""},{"op":"replace","path":"/data/state","value":"released"},{"op":"replace","path":"/data/baseline_generation","value":""},{"op":"replace","path":"/data/validated_statefulset_uid","value":""},{"op":"replace","path":"/data/validated_statefulset_resource_version","value":""},{"op":"replace","path":"/data/previous_backend_image","value":""},{"op":"replace","path":"/data/previous_init_image","value":""},{"op":"add","path":"/data/released_by","value":"%s"}]' \
+          "${release_lock_uid}" "${release_lock_resource_version}" "${release_lock_owner}" \
+          "${target_image}" "${release_lock_generation}" "${release_lock_owner}")"
+        patch_release_lock_cas "${patch}" || return 1
+      }
+      verify_previous_workload() {
+        read_statefulset_snapshot || return 1
+        [ "${snapshot_statefulset_uid}" = "${validated_statefulset_uid}" ] \
+          && [ "${statefulset_fence_generation}" = "${release_lock_generation}" ] \
+          && [ "${snapshot_backend_image}" = "${previous_backend_image}" ] \
+          && [ "${snapshot_init_image}" = "${previous_init_image}" ] \
+          || return 1
+        kubectl -n "${BUILDER_K8S_NAMESPACE}" rollout status \
+          "statefulset/${BUILDER_K8S_STATEFULSET}" --timeout="${BUILDER_ROLLOUT_TIMEOUT}" \
+          || return 1
+        template_matches "${previous_backend_image}" "${previous_init_image}" || return 1
+        revisions="$(kubectl -n "${BUILDER_K8S_NAMESPACE}" get "statefulset/${BUILDER_K8S_STATEFULSET}" \
+          -o jsonpath='{.status.currentRevision}{" "}{.status.updateRevision}')" || return 1
+        [ "${revisions%% *}" = "${revisions##* }" ] || return 1
+        pods="$(kubectl -n "${BUILDER_K8S_NAMESPACE}" get pods -l "${BUILDER_K8S_LABEL_SELECTOR}" \
+          -o jsonpath='{range .items[*]}{.metadata.name}{"\n"}{end}')" || return 1
+        [ -n "${pods}" ] || return 1
+        for pod in ${pods}; do
+          [ "$(kubectl -n "${BUILDER_K8S_NAMESPACE}" get pod "${pod}" \
+            -o jsonpath='{range .status.conditions[?(@.type=="Ready")]}{.status}{end}')" = "True" ] || return 1
+          [ "$(kubectl -n "${BUILDER_K8S_NAMESPACE}" get pod "${pod}" \
+            -o jsonpath='{range .metadata.ownerReferences[?(@.kind=="StatefulSet")]}{.name}{end}')" = "${BUILDER_K8S_STATEFULSET}" ] || return 1
+        done
+      }
+      kubectl auth can-i get configmaps -n "${BUILDER_K8S_NAMESPACE}" | grep -qx yes \
+        || { printf 'recovery cannot read release lock\n' >&2; exit 1; }
+      if ! release_lock_ref="$(kubectl -n "${BUILDER_K8S_NAMESPACE}" \
+        get "configmap/${release_lock_name}" --ignore-not-found -o name)"; then
+        printf 'unable to inspect release lock for recovery\n' >&2
+        exit 1
+      fi
+      if [ -z "${release_lock_ref}" ]; then
+        printf 'no release lock to recover\n'
+        exit 0
+      fi
+      [ "$(lock_value state)" != "released" ] || { printf 'released release lock requires no recovery\n'; exit 0; }
+      [ "$(lock_value owner)" = "${release_lock_owner}" ] \
+        || { printf 'release lock belongs to a different pipeline; refusing recovery\n' >&2; exit 1; }
+      target_image="$(lock_value target_image)" || exit 1
+      release_lock_generation="$(lock_value lease_generation)" || exit 1
+      baseline_generation="$(lock_value baseline_generation)" || exit 1
+      previous_backend_image="$(lock_value previous_backend_image)" || exit 1
+      previous_init_image="$(lock_value previous_init_image)" || exit 1
+      validated_statefulset_uid="$(lock_value validated_statefulset_uid)" || exit 1
+      validated_statefulset_resource_version="$(lock_value validated_statefulset_resource_version)" || exit 1
+      immutable_image_ref "${target_image}" \
+        && immutable_image_ref "${previous_backend_image}" \
+        && immutable_image_ref "${previous_init_image}" \
+        && printf '%s\n' "${validated_statefulset_uid}" | grep -Eq '^[A-Za-z0-9.-]+$' \
+        && printf '%s\n' "${validated_statefulset_resource_version}" | grep -Eq '^[0-9]+$' \
+        && [ -n "${release_lock_generation}" ] \
+        && [ "${baseline_generation}" = "${release_lock_generation}" ] \
+        || { printf 'release lock baseline is invalid; refusing recovery\n' >&2; exit 1; }
+      read_statefulset_snapshot \
+        || { printf 'unable to read StatefulSet for recovery\n' >&2; exit 1; }
+      [ "${snapshot_statefulset_uid}" = "${validated_statefulset_uid}" ] \
+        || { printf 'recovery CAS rejected because StatefulSet UID changed\n' >&2; exit 1; }
+      [ "${statefulset_fence_generation}" = "${release_lock_generation}" ] \
+        || { printf 'recovery CAS rejected because StatefulSet release fence changed\n' >&2; exit 1; }
+      if template_matches "${target_image}" "${target_image}"; then
+        if ! patch_statefulset_images_cas \
+          "${target_image}" "${target_image}" \
+          "${previous_backend_image}" "${previous_init_image}"; then
+          printf 'recovery rollback image CAS patch failed\n' >&2
+          exit 1
+        fi
+      elif ! template_matches "${previous_backend_image}" "${previous_init_image}"; then
+        printf 'recovery rollback CAS rejected because StatefulSet no longer uses this release image\n' >&2
+        exit 1
+      fi
+      if ! verify_previous_workload; then
+        printf 'recovery rollback rollout or health verification failed\n' >&2
+        exit 1
+      fi
+      release_lock_if_owned || { printf 'recovery rollback succeeded but lock release failed\n' >&2; exit 1; }
+      printf 'recovery rollback completed\n'
