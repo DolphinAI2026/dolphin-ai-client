@@ -2,15 +2,19 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
+import fcntl
+import hashlib
 import json
 import os
 import re
 import socket
-import tempfile
+import time
+import uuid
 from collections.abc import Callable
 from pathlib import Path
 from typing import Any
-from urllib.parse import quote, urlsplit
+from urllib.parse import quote, unquote, urlsplit
 
 import httpx
 from fastapi import HTTPException
@@ -33,11 +37,14 @@ _INSTANCE_INVALID = "LOCAL_RUNTIME_INSTANCE_ID_INVALID"
 _PREPARATION_FAILED = "LOCAL_RUNTIME_PREPARATION_FAILED"
 _START_FAILED = "LOCAL_RUNTIME_START_FAILED"
 _MODEL_REQUIRED = "LOCAL_RUNTIME_MODEL_PROVIDER_REQUIRED"
+_MODEL_CONFLICT = "LOCAL_RUNTIME_MODEL_PROVIDER_CONFLICT"
 _WORKSPACE_REQUIRED = "LOCAL_APPLICATION_WORKSPACE_REQUIRED"
 _WORKSPACE_FORBIDDEN = "LOCAL_APPLICATION_WORKSPACE_FORBIDDEN"
 _WORKSPACE_INVALID = "LOCAL_APPLICATION_WORKSPACE_INVALID"
 _APPLICATION_INVALID = "LOCAL_APPLICATION_ID_INVALID"
 _INSTANCE_LOCKS: dict[tuple[int, str], asyncio.Lock] = {}
+_STARTING_TIMEOUT_SECONDS = 30
+_STARTING_POLL_SECONDS = 0.2
 
 
 def _error(status_code: int, code: str, message: str) -> HTTPException:
@@ -58,6 +65,11 @@ def _application_id(session: Any) -> str:
     return application_id
 
 
+def _runtime_scope_id(ctx: Any, application_id: str) -> str:
+    material = f"{int(ctx.tenant_id)}:{int(ctx.user.id)}:{application_id}".encode("utf-8")
+    return f"scope-{hashlib.sha256(material).hexdigest()[:32]}"
+
+
 def _manager_url(value: str) -> str:
     try:
         parsed = urlsplit(_text(value))
@@ -68,6 +80,7 @@ def _manager_url(value: str) -> str:
         parsed.scheme != "http"
         or parsed.hostname != "127.0.0.1"
         or port is None
+        or not 1 <= port <= 65535
         or parsed.username is not None
         or parsed.password is not None
         or parsed.path
@@ -263,46 +276,151 @@ def build_runtime_context(
     }
 
 
-def _secure_mkdir(path: Path) -> None:
-    path.mkdir(parents=True, exist_ok=True, mode=0o700)
-    os.chmod(path, 0o700)
+def _open_directory_at(parent_fd: int, component: str, *, create: bool) -> int:
+    if not _APPLICATION_COMPONENT.fullmatch(component):
+        raise ValueError("unsafe runtime path component")
+    if create:
+        try:
+            os.mkdir(component, mode=0o700, dir_fd=parent_fd)
+        except FileExistsError:
+            pass
+    flags = os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW
+    directory_fd = os.open(component, flags, dir_fd=parent_fd)
+    os.fchmod(directory_fd, 0o700)
+    return directory_fd
 
 
-def _atomic_write_json(target: Path, payload: dict[str, Any]) -> Path:
-    temporary_name: str | None = None
-    try:
-        with tempfile.NamedTemporaryFile(
-            mode="w",
-            encoding="utf-8",
-            dir=target.parent,
-            prefix=f".{target.name}.",
-            suffix=".tmp",
-            delete=False,
-        ) as temporary:
-            temporary_name = temporary.name
-            os.chmod(temporary_name, 0o600)
-            json.dump(payload, temporary, ensure_ascii=False, sort_keys=True)
-            temporary.write("\n")
-            temporary.flush()
-            os.fsync(temporary.fileno())
-        os.replace(temporary_name, target)
-        os.chmod(target, 0o600)
-        return target
-    finally:
-        if temporary_name:
-            try:
-                Path(temporary_name).unlink()
-            except FileNotFoundError:
-                pass
-
-
-def _instance_id(engineering_session: Any) -> str:
-    engineering_session_id = _text(getattr(engineering_session, "id", None)).lower()
-    sandbox_instance_id = f"local-{engineering_session_id}"
+def _runtime_root_fd(data_dir: Path) -> tuple[Path, int]:
+    raw_path = str(data_dir)
     if (
-        not engineering_session_id
-        or len(sandbox_instance_id) > _MAX_INSTANCE_ID_LENGTH
-        or not _INSTANCE_COMPONENT.fullmatch(sandbox_instance_id)
+        not raw_path
+        or not os.path.isabs(raw_path)
+        or os.path.abspath(raw_path) != raw_path
+        or os.path.normpath(raw_path) != raw_path
+    ):
+        raise ValueError("desktop data directory must be a canonical absolute path")
+    os.lstat(raw_path)
+    resolved = Path(raw_path).resolve(strict=True)
+    if str(resolved) != raw_path:
+        raise ValueError("desktop data directory must not be an alias")
+    current_fd = os.open("/", os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+    try:
+        for component in Path(raw_path).parts[1:]:
+            next_fd = os.open(
+                component,
+                os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW,
+                dir_fd=current_fd,
+            )
+            os.close(current_fd)
+            current_fd = next_fd
+        return resolved, current_fd
+    except Exception:
+        os.close(current_fd)
+        raise
+
+
+@contextlib.contextmanager
+def _scope_directory_fds(
+    data_dir: Path,
+    runtime_scope_id: str,
+):
+    root_path, root_fd = _runtime_root_fd(data_dir)
+    descriptors = [root_fd]
+    try:
+        local_runtimes_fd = _open_directory_at(root_fd, "local-runtimes", create=True)
+        descriptors.append(local_runtimes_fd)
+        scope_fd = _open_directory_at(local_runtimes_fd, runtime_scope_id, create=True)
+        descriptors.append(scope_fd)
+        yield {
+            "root_path": root_path,
+            "scope_path": root_path / "local-runtimes" / runtime_scope_id,
+            "scope_fd": scope_fd,
+        }
+    finally:
+        for descriptor in reversed(descriptors):
+            os.close(descriptor)
+
+
+@contextlib.contextmanager
+def _runtime_directory_fds(
+    data_dir: Path,
+    runtime_scope_id: str,
+    sandbox_instance_id: str,
+    *,
+    create_instance: bool,
+):
+    with _scope_directory_fds(data_dir, runtime_scope_id) as scope:
+        descriptors: list[int] = []
+        try:
+            codex_home_fd = _open_directory_at(scope["scope_fd"], "codex-home", create=True)
+            descriptors.append(codex_home_fd)
+            instances_fd = _open_directory_at(scope["scope_fd"], "instances", create=True)
+            descriptors.append(instances_fd)
+            runtime_fd = _open_directory_at(
+                instances_fd,
+                sandbox_instance_id,
+                create=create_instance,
+            )
+            descriptors.append(runtime_fd)
+            yield {
+                **scope,
+                "codex_home": scope["scope_path"] / "codex-home",
+                "runtime_dir": scope["scope_path"] / "instances" / sandbox_instance_id,
+                "runtime_fd": runtime_fd,
+            }
+        finally:
+            for descriptor in reversed(descriptors):
+                os.close(descriptor)
+
+
+def _atomic_write_json_at(parent_fd: int, name: str, payload: dict[str, Any]) -> None:
+    if not _APPLICATION_COMPONENT.fullmatch(name):
+        raise ValueError("unsafe runtime file name")
+    temporary_name = f".{name}.{uuid.uuid4().hex}.tmp"
+    file_fd = -1
+    try:
+        file_fd = os.open(
+            temporary_name,
+            os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW,
+            0o600,
+            dir_fd=parent_fd,
+        )
+        serialized = (json.dumps(payload, ensure_ascii=False, sort_keys=True) + "\n").encode("utf-8")
+        offset = 0
+        while offset < len(serialized):
+            offset += os.write(file_fd, serialized[offset:])
+        os.fsync(file_fd)
+        os.close(file_fd)
+        file_fd = -1
+        os.replace(temporary_name, name, src_dir_fd=parent_fd, dst_dir_fd=parent_fd)
+        os.fsync(parent_fd)
+    finally:
+        if file_fd >= 0:
+            os.close(file_fd)
+        try:
+            os.unlink(temporary_name, dir_fd=parent_fd)
+        except FileNotFoundError:
+            pass
+
+
+def _read_json_at(parent_fd: int, name: str) -> dict[str, Any]:
+    file_fd = os.open(name, os.O_RDONLY | os.O_NOFOLLOW, dir_fd=parent_fd)
+    try:
+        content = b""
+        while chunk := os.read(file_fd, 65536):
+            content += chunk
+        value = json.loads(content.decode("utf-8"))
+    finally:
+        os.close(file_fd)
+    if not isinstance(value, dict):
+        raise ValueError("runtime JSON must be an object")
+    return value
+
+
+def _new_instance_id() -> str:
+    sandbox_instance_id = f"local-{uuid.uuid4().hex}"
+    if len(sandbox_instance_id) > _MAX_INSTANCE_ID_LENGTH or not _INSTANCE_COMPONENT.fullmatch(
+        sandbox_instance_id
     ):
         raise _error(409, _INSTANCE_INVALID, "本地 Runtime 实例标识无效")
     return sandbox_instance_id
@@ -323,6 +441,7 @@ def _runtime_url(value: object) -> tuple[str, tuple[str, str, int]]:
         parsed.scheme != "http"
         or parsed.hostname != "127.0.0.1"
         or port is None
+        or not 1 <= port <= 65535
         or parsed.username is not None
         or parsed.password is not None
         or parsed.query
@@ -336,11 +455,33 @@ def _runtime_url(value: object) -> tuple[str, tuple[str, str, int]]:
     return raw, (parsed.scheme, parsed.hostname, port)
 
 
+def _normalized_builder_path(value: str) -> str:
+    decoded = unquote(value)
+    if (
+        "\\" in decoded
+        or any(ord(character) < 32 for character in decoded)
+        or any(segment in {".", ".."} for segment in decoded.split("/"))
+    ):
+        raise _error(
+            502,
+            _MANAGER_INVALID_RESPONSE,
+            "本地 Runtime manager 返回了无效 Runtime URL",
+        )
+    if not decoded.startswith("/builder/"):
+        raise _error(
+            502,
+            _MANAGER_INVALID_RESPONSE,
+            "本地 Runtime manager 返回了无效 Runtime URL",
+        )
+    return decoded
+
+
 def _validated_manager_urls(payload: dict[str, Any]) -> tuple[str, str]:
     runtime_base_url, runtime_origin = _runtime_url(payload.get("runtime_base_url"))
     builder_url, builder_origin = _runtime_url(payload.get("builder_url"))
-    builder_path = urlsplit(builder_url).path
-    if builder_origin != runtime_origin or not builder_path.startswith("/builder/"):
+    runtime_path = urlsplit(runtime_base_url).path
+    _normalized_builder_path(urlsplit(builder_url).path)
+    if builder_origin != runtime_origin or runtime_path not in {"", "/"}:
         raise _error(
             502,
             _MANAGER_INVALID_RESPONSE,
@@ -377,6 +518,125 @@ async def _repo_url(
         ):
             return raw
     return f"https://local.invalid/{quote(application_id, safe='')}.git"
+
+
+def _validated_model_config(model: Any) -> tuple[str, str, str, str]:
+    model_name = _text(getattr(model, "model", None))
+    base_url = _text(getattr(model, "base_url", None))
+    token = _text(getattr(model, "api_key", None))
+    provider = _text(getattr(model, "provider", None)).lower() or "openai"
+    try:
+        parsed = urlsplit(base_url)
+    except ValueError as exc:
+        raise _error(409, _MODEL_REQUIRED, "Coding 模型配置无效") from exc
+    if (
+        not model_name
+        or not token
+        or parsed.scheme not in {"http", "https"}
+        or not parsed.hostname
+        or parsed.username is not None
+        or parsed.password is not None
+        or parsed.fragment
+        or any(ord(character) < 32 for character in base_url)
+    ):
+        raise _error(409, _MODEL_REQUIRED, "Coding 模型配置无效")
+    return provider, base_url.rstrip("/"), token, model_name
+
+
+def _provider_identity(model: Any) -> tuple[str, str, str]:
+    provider, base_url, token, _model_name = _validated_model_config(model)
+    return provider, base_url, token
+
+
+async def _provider_document(
+    db: AsyncSession,
+    tenant_id: int,
+    selected_config_id: int | None,
+) -> tuple[dict[str, Any], tuple[str, str, str]]:
+    from app.crypto import decrypt_password
+    from app.harness.llm_resolver import resolve_llm_config
+    from app.routes.llm_configs import list_llm_configs_for_purpose
+
+    try:
+        selected = await resolve_llm_config(
+            db,
+            tenant_id,
+            purpose="coding",
+            selected_config_id=selected_config_id,
+        )
+    except HTTPException:
+        raise
+    except Exception as exc:
+        raise _error(503, _PREPARATION_FAILED, "无法解析本地 Runtime 模型配置") from exc
+    if selected is None:
+        raise _error(409, _MODEL_REQUIRED, "请先配置可用的 Coding 模型")
+    identity = _provider_identity(selected)
+    compatible: dict[str, str] = {}
+    candidates = await list_llm_configs_for_purpose(db, tenant_id, "coding")
+    if not candidates:
+        candidates = await list_llm_configs_for_purpose(db, None, "coding")
+    for candidate in candidates:
+        try:
+            candidate_view = type(
+                "CandidateModel",
+                (),
+                {
+                    "provider": candidate.provider,
+                    "base_url": candidate.base_url,
+                    "api_key": decrypt_password(candidate.api_key_enc),
+                    "model": candidate.model,
+                },
+            )()
+            if _provider_identity(candidate_view) == identity:
+                compatible[_validated_model_config(candidate_view)[3]] = _validated_model_config(
+                    candidate_view
+                )[3]
+        except Exception:
+            continue
+    selected_model = _validated_model_config(selected)[3]
+    compatible[selected_model] = selected_model
+    provider_fingerprint = hashlib.sha256(
+        "\x00".join(identity).encode("utf-8")
+    ).hexdigest()[:20]
+    provider_id = f"local.{provider_fingerprint}"
+    return (
+        {
+            "defaultProviderId": provider_id,
+            "providers": [
+                {
+                    "providerId": provider_id,
+                    "providerType": "openai-compatible",
+                    "runtimeProviderKind": identity[0],
+                    "apiBaseUrl": identity[1],
+                    "token": identity[2],
+                    "defaultModel": selected_model,
+                    "models": [
+                        {"id": model_name, "displayName": model_name}
+                        for model_name in sorted(compatible)
+                    ],
+                }
+            ],
+        },
+        identity,
+    )
+
+
+def _provider_identity_from_document(document: dict[str, Any]) -> tuple[str, str, str]:
+    providers = document.get("providers")
+    if not isinstance(providers, list) or len(providers) != 1 or not isinstance(providers[0], dict):
+        raise ValueError("invalid runtime model provider document")
+    provider = providers[0]
+    view = type(
+        "PersistedModel",
+        (),
+        {
+            "provider": provider.get("runtimeProviderKind"),
+            "base_url": provider.get("apiBaseUrl"),
+            "api_key": provider.get("token"),
+            "model": provider.get("defaultModel"),
+        },
+    )()
+    return _provider_identity(view)
 
 
 class LocalRuntimeClient:
@@ -457,10 +717,11 @@ class LocalRuntimeClient:
     @staticmethod
     def _manager_status(
         response: httpx.Response,
+        runtime_scope_id: str,
         application_id: str,
-        sandbox_instance_id: str,
+        sandbox_instance_id: str | None = None,
     ) -> dict[str, Any]:
-        if response.status_code >= 400:
+        if response.status_code != 200:
             raise LocalRuntimeClient._manager_error(response)
         try:
             payload = response.json()
@@ -473,8 +734,13 @@ class LocalRuntimeClient:
         if not isinstance(payload, dict):
             raise _error(502, _MANAGER_INVALID_RESPONSE, "本地 Runtime manager 返回了无效响应")
         if (
+            _text(payload.get("runtime_scope_id")) != runtime_scope_id
+            or
             _text(payload.get("application_id")) != application_id
-            or _text(payload.get("sandbox_instance_id")) != sandbox_instance_id
+            or (
+                sandbox_instance_id is not None
+                and _text(payload.get("sandbox_instance_id")) != sandbox_instance_id
+            )
         ):
             raise _error(
                 502,
@@ -504,48 +770,65 @@ class LocalRuntimeClient:
         }
 
     @staticmethod
-    def _lock(application_id: str) -> asyncio.Lock:
-        key = (id(asyncio.get_running_loop()), application_id)
+    def _lock(runtime_scope_id: str) -> asyncio.Lock:
+        key = (id(asyncio.get_running_loop()), runtime_scope_id)
         return _INSTANCE_LOCKS.setdefault(key, asyncio.Lock())
 
     async def _existing_status(
         self,
         status_path: str,
+        runtime_scope_id: str,
         application_id: str,
-        sandbox_instance_id: str,
     ) -> dict[str, Any] | None:
-        response = await self._manager_request("GET", status_path)
-        if response.status_code == 404:
-            return None
-        status = self._manager_status(response, application_id, sandbox_instance_id)
-        if _text(status.get("state")) not in {"ready", "starting"}:
-            raise _error(409, _INSTANCE_CONFLICT, "本地应用已有不可复用的 Runtime 实例")
-        _validated_manager_urls(status)
-        return status
+        deadline = time.monotonic() + _STARTING_TIMEOUT_SECONDS
+        while True:
+            response = await self._manager_request("GET", status_path)
+            if response.status_code == 404:
+                return None
+            status = self._manager_status(response, runtime_scope_id, application_id)
+            state = _text(status.get("state"))
+            if state == "ready":
+                _validated_manager_urls(status)
+                return status
+            if state != "starting":
+                raise _error(409, _INSTANCE_CONFLICT, "本地应用已有不可复用的 Runtime 实例")
+            if time.monotonic() >= deadline:
+                raise _error(503, _MANAGER_UNAVAILABLE, "本地 Runtime 启动超时")
+            await asyncio.sleep(_STARTING_POLL_SECONDS)
 
-    def _runtime_paths(
+    async def _assert_reused_provider(
         self,
-        application_id: str,
+        db: AsyncSession,
+        session: Any,
+        ctx: Any,
+        runtime_scope_id: str,
         sandbox_instance_id: str,
-    ) -> tuple[Path, Path, Path]:
-        if self.desktop_data_dir is None or self.agent_runtime_path is None:
+    ) -> None:
+        if self.desktop_data_dir is None:
             raise _error(503, _MANAGER_UNAVAILABLE, "本地 Runtime manager 未配置")
-        data_dir = self.desktop_data_dir.resolve()
-        local_runtimes_dir = data_dir / "local-runtimes"
-        application_dir = local_runtimes_dir / application_id
-        codex_home = application_dir / "codex-home"
-        instances_dir = application_dir / "instances"
-        runtime_dir = instances_dir / sandbox_instance_id
-        for directory in (
-            data_dir,
-            local_runtimes_dir,
-            application_dir,
-            codex_home,
-            instances_dir,
-            runtime_dir,
-        ):
-            _secure_mkdir(directory)
-        return codex_home, runtime_dir, self.agent_runtime_path.resolve()
+        _document, selected_identity = await _provider_document(
+            db,
+            int(ctx.tenant_id),
+            getattr(session, "selected_llm_config_id", None),
+        )
+        try:
+            with _runtime_directory_fds(
+                self.desktop_data_dir,
+                runtime_scope_id,
+                sandbox_instance_id,
+                create_instance=False,
+            ) as paths:
+                stored = _read_json_at(paths["runtime_fd"], "model-provider.json")
+                if _provider_identity_from_document(stored) != selected_identity:
+                    raise _error(
+                        409,
+                        _MODEL_CONFLICT,
+                        "当前会话选择的 Coding 模型与应用 Runtime 不兼容",
+                    )
+        except HTTPException:
+            raise
+        except (OSError, RuntimeError, ValueError, json.JSONDecodeError) as exc:
+            raise _error(503, _PREPARATION_FAILED, "无法读取本地 Runtime 模型配置") from exc
 
     async def _start(
         self,
@@ -555,90 +838,67 @@ class LocalRuntimeClient:
         workspace: RegisteredWorkspace,
         repository_path: Path,
         engineering_session: Any,
+        runtime_scope_id: str,
         application_id: str,
         sandbox_instance_id: str,
         conversation_id: str,
+        provider_document: dict[str, Any],
     ) -> dict[str, Any]:
-        from app.harness.llm_resolver import resolve_llm_config
-
-        try:
-            resolved_model = await resolve_llm_config(
-                db,
-                int(ctx.tenant_id),
-                purpose="coding",
-                selected_config_id=getattr(session, "selected_llm_config_id", None),
-            )
-        except HTTPException:
-            raise
-        except Exception as exc:
-            raise _error(
-                503,
-                _PREPARATION_FAILED,
-                "无法解析本地 Runtime 模型配置",
-            ) from exc
-        if resolved_model is None:
-            raise _error(409, _MODEL_REQUIRED, "请先配置可用的 Coding 模型")
-
         try:
             managed_worktree = _text(getattr(engineering_session, "worktree_path", None))
             if not managed_worktree:
                 raise _error(409, _WORKSPACE_INVALID, "应用工程会话未提供受管工作区")
             managed_worktree_path = Path(managed_worktree).resolve(strict=True)
             managed_git_common_dir = git_common_dir(managed_worktree_path)
-            codex_home, runtime_dir, agent_runtime_path = self._runtime_paths(
-                application_id,
-                sandbox_instance_id,
-            )
+            if self.desktop_data_dir is None or self.agent_runtime_path is None:
+                raise _error(503, _MANAGER_UNAVAILABLE, "本地 Runtime manager 未配置")
+            agent_runtime_path = self.agent_runtime_path.resolve(strict=True)
+            if not agent_runtime_path.is_file() or agent_runtime_path.is_symlink():
+                raise ValueError("agent runtime executable is invalid")
             runtime_address = _allocate_loopback_address()
             repo_url = await _repo_url(db, workspace, application_id, ctx)
             display_name = _text(getattr(ctx.user, "display_name", None)) or _text(
                 getattr(ctx.user, "username", None)
             )
-            context = build_runtime_context(
-                tenant_id=int(ctx.tenant_id),
-                application_id=application_id,
-                workspace_id=workspace.ws_id,
-                sandbox_instance_id=sandbox_instance_id,
-                conversation_id=conversation_id,
-                repo_url=repo_url,
-                default_branch=_text(getattr(engineering_session, "base_branch", None))
-                or "main",
-                user_id=int(ctx.user.id),
-                display_name=display_name,
-                codex_home=codex_home,
-                runtime_dir=runtime_dir,
-            )
-            context_path = _atomic_write_json(runtime_dir / "runtime-context.json", context)
-            config_id = _text(getattr(resolved_model, "config_id", None)) or "default"
-            provider_id = f"llmcfg.{config_id}"
-            model_name = _text(resolved_model.model)
-            model_path = _atomic_write_json(
-                runtime_dir / "model-provider.json",
-                {
-                    "defaultProviderId": provider_id,
-                    "providers": [
-                        {
-                            "providerId": provider_id,
-                            "providerType": "openai-compatible",
-                            "apiBaseUrl": _text(resolved_model.base_url),
-                            "token": _text(resolved_model.api_key),
-                            "defaultModel": model_name,
-                            "models": [{"id": model_name, "displayName": model_name}],
-                        }
-                    ],
-                },
-            )
-            ci_path = _atomic_write_json(
-                runtime_dir / "ci-provider.json",
-                {
-                    "provider": "mock",
-                    "apiBaseUrl": "https://ci-fixture.example.invalid/api/v4",
-                    "projectId": "local-fixture",
-                    "triggerMode": "api",
-                    "defaultBranch": "main",
-                    "token": "local-ci-fixture-token-not-a-credential",
-                },
-            )
+            with _runtime_directory_fds(
+                self.desktop_data_dir,
+                runtime_scope_id,
+                sandbox_instance_id,
+                create_instance=True,
+            ) as paths:
+                codex_home = paths["codex_home"]
+                runtime_dir = paths["runtime_dir"]
+                context = build_runtime_context(
+                    tenant_id=int(ctx.tenant_id),
+                    application_id=application_id,
+                    workspace_id=workspace.ws_id,
+                    sandbox_instance_id=sandbox_instance_id,
+                    conversation_id=conversation_id,
+                    repo_url=repo_url,
+                    default_branch=_text(getattr(engineering_session, "base_branch", None))
+                    or "main",
+                    user_id=int(ctx.user.id),
+                    display_name=display_name,
+                    codex_home=codex_home,
+                    runtime_dir=runtime_dir,
+                )
+                _atomic_write_json_at(paths["runtime_fd"], "runtime-context.json", context)
+                _atomic_write_json_at(paths["runtime_fd"], "model-provider.json", provider_document)
+                _atomic_write_json_at(
+                    paths["runtime_fd"],
+                    "ci-provider.json",
+                    {
+                        "provider": "mock",
+                        "apiBaseUrl": "https://ci-fixture.example.invalid/api/v4",
+                        "projectId": "local-fixture",
+                        "triggerMode": "api",
+                        "defaultBranch": "main",
+                        "token": "local-ci-fixture-token-not-a-credential",
+                    },
+                )
+                context_path = runtime_dir / "runtime-context.json"
+                model_path = runtime_dir / "model-provider.json"
+                ci_path = runtime_dir / "ci-provider.json"
         except HTTPException:
             raise
         except (GitCommandError, OSError, RuntimeError, ValueError) as exc:
@@ -658,6 +918,7 @@ class LocalRuntimeClient:
             "APAAS_AUTH_MODE": "disabled",
         }
         start_payload = {
+            "runtime_scope_id": runtime_scope_id,
             "application_id": application_id,
             "sandbox_instance_id": sandbox_instance_id,
             "workspace_id": workspace.ws_id,
@@ -676,6 +937,7 @@ class LocalRuntimeClient:
                 "/v1/local-runtime/instances/start",
                 payload=start_payload,
             ),
+            runtime_scope_id,
             application_id,
             sandbox_instance_id,
         )
@@ -691,6 +953,7 @@ class LocalRuntimeClient:
         ctx: Any,
     ) -> dict[str, Any]:
         application_id = _application_id(session)
+        runtime_scope_id = _runtime_scope_id(ctx, application_id)
         workspace = await resolve_registered_workspace(db, session, ctx)
         repository_path = _validate_workspace_path(workspace)
         application = await _application_for_session(db, session, ctx)
@@ -712,37 +975,85 @@ class LocalRuntimeClient:
                 "无法准备本地应用 Runtime 工作区",
             ) from exc
 
-        sandbox_instance_id = _instance_id(engineering_session)
         conversation_id = _text(getattr(session, "public_id", None)) or _text(
             getattr(session, "id", None)
         )
-        status_path = (
-            f"/v1/local-runtime/instances/{application_id}/{sandbox_instance_id}"
-        )
+        status_path = f"/v1/local-runtime/instances/{runtime_scope_id}"
         manager_status = await self._existing_status(
             status_path,
+            runtime_scope_id,
             application_id,
-            sandbox_instance_id,
         )
+        if manager_status is not None:
+            sandbox_instance_id = _text(manager_status.get("sandbox_instance_id"))
+            await self._assert_reused_provider(
+                db,
+                session,
+                ctx,
+                runtime_scope_id,
+                sandbox_instance_id,
+            )
         if manager_status is None:
-            async with self._lock(application_id):
-                manager_status = await self._existing_status(
-                    status_path,
-                    application_id,
-                    sandbox_instance_id,
-                )
-                if manager_status is None:
-                    manager_status = await self._start(
-                        db,
-                        session,
-                        ctx,
-                        workspace,
-                        repository_path,
-                        engineering_session,
-                        application_id,
-                        sandbox_instance_id,
-                        conversation_id,
-                    )
+            async with self._lock(runtime_scope_id):
+                if self.desktop_data_dir is None:
+                    raise _error(503, _MANAGER_UNAVAILABLE, "本地 Runtime manager 未配置")
+                try:
+                    with _scope_directory_fds(self.desktop_data_dir, runtime_scope_id) as paths:
+                        lock_fd = os.open(
+                            "runtime.lock",
+                            os.O_RDWR | os.O_CREAT | os.O_NOFOLLOW,
+                            0o600,
+                            dir_fd=paths["scope_fd"],
+                        )
+                        try:
+                            await asyncio.to_thread(fcntl.flock, lock_fd, fcntl.LOCK_EX)
+                            manager_status = await self._existing_status(
+                                status_path,
+                                runtime_scope_id,
+                                application_id,
+                            )
+                            if manager_status is not None:
+                                sandbox_instance_id = _text(
+                                    manager_status.get("sandbox_instance_id")
+                                )
+                                await self._assert_reused_provider(
+                                    db,
+                                    session,
+                                    ctx,
+                                    runtime_scope_id,
+                                    sandbox_instance_id,
+                                )
+                            else:
+                                sandbox_instance_id = _new_instance_id()
+                                provider_document, _identity = await _provider_document(
+                                    db,
+                                    int(ctx.tenant_id),
+                                    getattr(session, "selected_llm_config_id", None),
+                                )
+                                manager_status = await self._start(
+                                    db,
+                                    session,
+                                    ctx,
+                                    workspace,
+                                    repository_path,
+                                    engineering_session,
+                                    runtime_scope_id,
+                                    application_id,
+                                    sandbox_instance_id,
+                                    conversation_id,
+                                    provider_document,
+                                )
+                        finally:
+                            await asyncio.to_thread(fcntl.flock, lock_fd, fcntl.LOCK_UN)
+                            os.close(lock_fd)
+                except HTTPException:
+                    raise
+                except (OSError, RuntimeError, ValueError) as exc:
+                    raise _error(
+                        503,
+                        _PREPARATION_FAILED,
+                        "无法准备本地 Runtime 配置",
+                    ) from exc
 
         return self._opened(
             manager_status,

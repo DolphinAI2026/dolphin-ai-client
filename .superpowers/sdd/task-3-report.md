@@ -1,4 +1,4 @@
-# Task 3 Report: Python 本地 Runtime 编排审查修复
+# Task 3 Report: Python 本地 Runtime 编排与第二轮安全修复
 
 ## 改动文件
 
@@ -6,7 +6,7 @@
 - `backend/tests/test_code_runtime_local_runtime.py`
 - `.superpowers/sdd/task-3-report.md`
 
-未修改 routes、service、frontend、Rust、agent-runtime 或
+未修改 service、frontend、Rust、agent-runtime 或
 `open_code_session`。
 
 ## 修复摘要
@@ -26,25 +26,34 @@
 - manager URL 仅允许 `http://127.0.0.1:<port>`，拒绝 userinfo、HTTPS、
   非 loopback host、路径、query、fragment 和缺失端口，避免 Bearer token
   发往外部地址。
-- 先确保应用级 Engineering Session，再 GET status。`ready/starting`
-  直接复用，不创建目录、不分配端口、不解析模型、不覆盖配置；仅 404 时在
-  应用锁内复查并执行一次 start。
-- `sandbox_instance_id` 固定为
-  `local-<engineering-session-id-lower>`，并执行安全组件及 160 字符上限校验。
+- `runtime_scope_id` 由 `tenant_id + user_id + application_id` 的稳定摘要生成，
+  用于本地目录、Python/OS 锁和 manager status/start；产品 `application_id`
+  保留为独立 RuntimeContext 字段。不同用户的同名应用不会复用 Runtime、Codex
+  Home 或模型文件。
+- status 按 `runtime_scope_id` 查询当前活跃 Runtime。`starting` 仅有界轮询，
+  只有 `ready` 才返回 Builder URL；没有活跃实例时在 scope OS 锁内二次查询后生成
+  新的 `local-<uuid>` 实例代际并 start。
 - start JSON 锁定为：
-  `application_id`、`sandbox_instance_id`、`workspace_id`、
+  `runtime_scope_id`、`application_id`、`sandbox_instance_id`、`workspace_id`、
   `worktree_path`、`git_common_dir`、`codex_home`、`runtime_dir`、
   `runtime_context_path`、`agent_runtime_path`、`runtime_addr`、
   `environment`。
-- POST start 只接受 `state=ready`。`runtime_base_url` 必须为 loopback
-  HTTP，`builder_url` 必须同 origin 且位于 `/builder/`。
+- POST/status 只接受 HTTP 200；最终 start 只接受 `state=ready`。manager/runtime
+  URL 必须是端口 `1..65535` 的 loopback HTTP，Runtime base URL 只能为根路径，
+  Builder URL 解码规范化后必须严格位于 `/builder/`，拒绝点段、编码点段、反斜杠
+  和控制字符。
 - 外部应用绑定使用最多两条结果判断；多个 owned 绑定返回稳定 409，多个
   foreign 绑定返回 403，不再触发 `MultipleResultsFound`。
 - 注册工作区路径必须是规范绝对文本路径；拒绝 `.`/`..`、重复分隔符、
   尾部分隔符、symlink、非 Git 目录和仓库子目录。
-- desktop data、应用 runtime、Codex 目录权限为 0700；runtime context、
-  model provider、CI provider 文件权限为 0600。mkdir、resolve、write、
-  socket 和模型解析失败均映射为稳定、脱敏的 `HTTPException`。
+- desktop data 根必须已存在、规范且不是 symlink。其下目录、锁文件和 JSON 全部
+  使用 `dir_fd + O_NOFOLLOW`；JSON 在同目录 FD 内临时写入、文件 fsync、
+  rename 和父目录 fsync，避免 symlink 把模型 token 写到受管目录外。目录为
+  0700，runtime context、model provider、CI provider 和锁文件为 0600。
+- 模型 provider 身份是应用 Runtime 级约束，包含 provider、规范 base URL 和
+  token。首次启动写入同一身份下可用 Coding 模型；后续 Conversation 选择不兼容
+  provider 返回 `409/LOCAL_RUNTIME_MODEL_PROVIDER_CONFLICT`，不静默沿用首个
+  会话配置。
 - manager 网络/非 JSON/401/403/409/5xx 和无效响应均使用稳定错误语义，
   不返回 manager 正文、Bearer token、模型 token 或环境凭据。
 
@@ -90,7 +99,7 @@ cd backend
 输出：
 
 ```text
-50 passed, 174 warnings in 6.32s
+59 passed, 215 warnings in 10.69s
 ```
 
 直接关联回归：
@@ -120,17 +129,15 @@ git diff --check
 
 ## 提交
 
-- 修复提交：
-  `95ab70b06a5dcc735f84c9d39b5a20797adaebc1`
-- 提交信息：`fix: harden local runtime preparation`
+- 本轮安全修复提交：待本轮验证后统一提交。
 
 ## 遗留关注点
 
-- 本轮遵循 Task 3 brief：实例 ID 从稳定的应用级 Engineering Session
-  身份派生，同一应用多个 Conversation 复用同一实例。
-- 设计 spec 另有“每次 Runtime restart 使用新 sandbox_instance_id”的要求。
-  本任务未自行引入代际存储；该跨文档差异留给 Task 4 或最终审查处理。
+- 本轮已将实例代际与 Engineering Session 解耦：同一活跃 Runtime 可被多个
+  Conversation 复用，但每次真实 restart 使用新的 `sandbox_instance_id`。
 - 端口分配释放后的抢占窗口由 Task 4 manager 的同步 start 失败语义处理，
   Python 未保留 socket，也未启动 agent-runtime 或 MXC。
+- Task 4 必须实现按 `runtime_scope_id` 的 status、journal 和 OS 锁，并提供真实
+  MXC + agent-runtime 的端到端证据。
 - 测试中的 `datetime.utcnow()` 弃用警告来自既有 SQLAlchemy/Jose 代码，
   未在本任务范围内修改。

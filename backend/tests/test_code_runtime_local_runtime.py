@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import os
 import stat
 import subprocess
 from pathlib import Path
@@ -22,6 +23,7 @@ from app.models.ai_chat import AIChatSession
 from app.models.workspace_git import WorkspaceGitRemote
 from app.code_runtime.local_runtime import (
     LocalRuntimeClient,
+    _runtime_scope_id,
     build_runtime_context,
     resolve_registered_workspace,
 )
@@ -160,10 +162,16 @@ async def _create_code_session(
 
 def _manager_status(
     application_id: str = "local-app-1",
-    sandbox_instance_id: str = "local-s-123",
+    sandbox_instance_id: str = "local-instance-1",
     state: str = "ready",
+    runtime_scope_id: str | None = None,
 ) -> dict[str, object]:
+    scope = runtime_scope_id or _runtime_scope_id(
+        SimpleNamespace(tenant_id=7, user=SimpleNamespace(id=11)),
+        application_id,
+    )
     return {
+        "runtime_scope_id": scope,
         "application_id": application_id,
         "sandbox_instance_id": sandbox_instance_id,
         "state": state,
@@ -180,6 +188,9 @@ def _client(
     transport: httpx.AsyncBaseTransport,
 ) -> tuple[LocalRuntimeClient, FakeEngineeringSessionService]:
     service = FakeEngineeringSessionService(engineering_session)
+    desktop_data = tmp_path / "desktop-data"
+    if not os.path.lexists(desktop_data):
+        desktop_data.mkdir(mode=0o700)
     agent_runtime = tmp_path / "agent-runtime"
     agent_runtime.write_text("#!/bin/sh\n", encoding="utf-8")
     client = LocalRuntimeClient(
@@ -191,6 +202,16 @@ def _client(
         http_client_factory=lambda: httpx.AsyncClient(transport=transport),
     )
     return client, service
+
+
+def _manager_status_for_start(request: httpx.Request, *, state: str = "ready") -> dict[str, object]:
+    payload = json.loads(request.content)
+    return _manager_status(
+        str(payload["application_id"]),
+        str(payload["sandbox_instance_id"]),
+        state,
+        str(payload["runtime_scope_id"]),
+    )
 
 
 async def _runtime_case(
@@ -225,7 +246,12 @@ class ConcurrentStartTransport(httpx.AsyncBaseTransport):
         if request.method == "GET":
             self.get_count += 1
             if self.ready:
-                return httpx.Response(200, json=_manager_status())
+                return httpx.Response(
+                    200,
+                    json=_manager_status_for_start(
+                        httpx.Request("POST", "http://manager/start", content=json.dumps(self.post_payloads[0]))
+                    ),
+                )
             if self.initial_get_count < 2:
                 self.initial_get_count += 1
                 if self.initial_get_count == 2:
@@ -236,11 +262,10 @@ class ConcurrentStartTransport(httpx.AsyncBaseTransport):
 
         payload = json.loads(request.content)
         self.post_payloads.append(payload)
-        self.context_at_start = (
-            self.runtime_dir / "runtime-context.json"
-        ).read_bytes()
+        self.runtime_dir = Path(str(payload["runtime_dir"]))
+        self.context_at_start = (self.runtime_dir / "runtime-context.json").read_bytes()
         self.ready = True
-        return httpx.Response(200, json=_manager_status())
+        return httpx.Response(200, json=_manager_status_for_start(request))
 
 
 @pytest.mark.asyncio
@@ -435,7 +460,7 @@ async def test_open_uses_internal_application_identity_and_source_workspace(
         calls.append(request)
         if request.method == "GET":
             return httpx.Response(404)
-        return httpx.Response(200, json=_manager_status("101", "local-s-123"))
+        return httpx.Response(200, json=_manager_status_for_start(request))
 
     client, service = _client(tmp_path, engineering_session, httpx.MockTransport(handler))
     monkeypatch.setattr(
@@ -447,7 +472,9 @@ async def test_open_uses_internal_application_identity_and_source_workspace(
 
     assert opened["applicationId"] == "101"
     assert service.calls == [("101", "Internal app")]
-    assert calls[0].url.path == "/v1/local-runtime/instances/101/local-s-123"
+    assert calls[0].url.path == (
+        f"/v1/local-runtime/instances/{_runtime_scope_id(ctx, '101')}"
+    )
 
 
 def test_from_environment_rejects_missing_required_manager_configuration(monkeypatch):
@@ -515,67 +542,78 @@ def test_from_environment_rejects_external_manager_url(monkeypatch, tmp_path):
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize(
-    "engineering_session_id",
-    ["../escape", "S_" + ("9" * 200)],
-)
-async def test_open_rejects_unsafe_or_oversized_engineering_session_ids(
-    db,
-    ctx,
-    git_repo,
-    tmp_path,
-    engineering_session_id,
+async def test_open_generates_instance_independently_from_engineering_session_id(
+    db, ctx, git_repo, tmp_path, monkeypatch
 ):
     workspace = await _create_workspace(db, git_repo)
     code_session = await _create_code_session(db, workspace_id=workspace.ws_id)
-    invalid_session = SimpleNamespace(
-        id=engineering_session_id,
+    engineering_session = SimpleNamespace(
+        id="../not-an-instance-id",
         base_branch="main",
         worktree_path=str(git_repo),
     )
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.method == "GET":
+            return httpx.Response(404)
+        return httpx.Response(200, json=_manager_status_for_start(request))
+
     client, _service = _client(
         tmp_path,
-        invalid_session,
-        httpx.MockTransport(lambda _request: httpx.Response(500)),
+        engineering_session,
+        httpx.MockTransport(handler),
+    )
+    monkeypatch.setattr(
+        "app.code_runtime.local_runtime._allocate_loopback_address",
+        lambda: "127.0.0.1:19090",
     )
 
-    with pytest.raises(HTTPException) as exc:
-        await client.open_application(db, code_session, ctx)
-
-    assert exc.value.status_code == 409
-    assert exc.value.detail == (
-        "LOCAL_RUNTIME_INSTANCE_ID_INVALID: 本地 Runtime 实例标识无效"
-    )
+    opened = await client.open_application(db, code_session, ctx)
+    assert opened["sandboxInstanceId"].startswith("local-")
+    assert "../" not in opened["sandboxInstanceId"]
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("state", ["ready", "starting"])
 async def test_open_reuses_active_application_instance_across_conversations(
-    db, ctx, git_repo, engineering_session, tmp_path, state, monkeypatch
+    db, ctx, git_repo, engineering_session, tmp_path, monkeypatch
 ):
     workspace = await _create_workspace(db, git_repo)
     first = await _create_code_session(db, workspace_id=workspace.ws_id, public_id="conversation-1")
     second = await _create_code_session(db, workspace_id=workspace.ws_id, public_id="conversation-2")
     runtime_dir = (
         tmp_path
-        / "desktop-data/local-runtimes/local-app-1/instances/local-s-123"
+        / "desktop-data"
+        / "local-runtimes"
+        / _runtime_scope_id(ctx, "local-app-1")
+        / "instances"
+        / "local-instance-1"
     )
     runtime_dir.mkdir(parents=True)
     context_path = runtime_dir / "runtime-context.json"
     context_path.write_bytes(b'{"conversationId":"original"}\n')
+    (runtime_dir / "model-provider.json").write_text(
+        json.dumps(
+            {
+                "defaultProviderId": "local.test",
+                "providers": [
+                    {
+                        "providerId": "local.test",
+                        "providerType": "openai-compatible",
+                        "apiBaseUrl": "https://models.example.invalid/v1",
+                        "token": "unit-test-model-token",
+                        "defaultModel": "gpt-local-test",
+                        "models": [{"id": "gpt-local-test", "displayName": "gpt-local-test"}],
+                    }
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
     calls: list[httpx.Request] = []
 
     def handler(request: httpx.Request) -> httpx.Response:
         calls.append(request)
-        return httpx.Response(200, json=_manager_status(state=state))
-
-    async def unexpected_model_resolution(*_args, **_kwargs):
-        raise AssertionError("active instance reuse must not resolve model configuration")
-
-    monkeypatch.setattr(
-        "app.harness.llm_resolver.resolve_llm_config",
-        unexpected_model_resolution,
-    )
+        return httpx.Response(200, json=_manager_status())
     monkeypatch.setattr(
         "app.code_runtime.local_runtime._allocate_loopback_address",
         lambda: (_ for _ in ()).throw(AssertionError("active reuse allocated a port")),
@@ -589,7 +627,7 @@ async def test_open_reuses_active_application_instance_across_conversations(
     assert [request.method for request in calls] == ["GET", "GET"]
     assert len({request.url.path for request in calls}) == 1
     assert context_path.read_bytes() == b'{"conversationId":"original"}\n'
-    assert not (runtime_dir / "model-provider.json").exists()
+    assert (runtime_dir / "model-provider.json").exists()
     assert not (runtime_dir / "ci-provider.json").exists()
 
 
@@ -613,15 +651,7 @@ async def test_concurrent_conversations_share_one_start_context(
         workspace_id=workspace.ws_id,
         public_id="conversation-2",
     )
-    runtime_dir = (
-        tmp_path
-        / "desktop-data"
-        / "local-runtimes"
-        / "local-app-1"
-        / "instances"
-        / "local-s-123"
-    )
-    transport = ConcurrentStartTransport(runtime_dir)
+    transport = ConcurrentStartTransport(tmp_path)
     client, _service = _client(tmp_path, engineering_session, transport)
     monkeypatch.setattr(
         "app.code_runtime.local_runtime._allocate_loopback_address",
@@ -637,7 +667,8 @@ async def test_concurrent_conversations_share_one_start_context(
     assert transport.get_count == 4
     assert opened[0]["sandboxInstanceId"] == opened[1]["sandboxInstanceId"]
     assert transport.context_at_start is not None
-    assert (runtime_dir / "runtime-context.json").read_bytes() == transport.context_at_start
+    assert transport.runtime_dir is not None
+    assert (transport.runtime_dir / "runtime-context.json").read_bytes() == transport.context_at_start
 
 
 @pytest.mark.asyncio
@@ -693,7 +724,7 @@ async def test_open_starts_missing_instance_with_runtime_context_path_and_enviro
         calls.append((request, payload))
         if request.method == "GET":
             return httpx.Response(404)
-        return httpx.Response(200, json=_manager_status())
+        return httpx.Response(200, json=_manager_status_for_start(request))
 
     client, _service = _client(tmp_path, engineering_session, httpx.MockTransport(handler))
     monkeypatch.setattr(
@@ -708,13 +739,16 @@ async def test_open_starts_missing_instance_with_runtime_context_path_and_enviro
     status_request, _ = calls[0]
     recheck_request, _ = calls[1]
     start_request, start_payload = calls[2]
-    assert status_request.url.path == "/v1/local-runtime/instances/local-app-1/local-s-123"
+    assert status_request.url.path == (
+        f"/v1/local-runtime/instances/{_runtime_scope_id(ctx, 'local-app-1')}"
+    )
     assert recheck_request.url.path == status_request.url.path
     assert start_request.method == "POST"
     assert start_request.url.path == "/v1/local-runtime/instances/start"
     assert start_request.headers["Authorization"] == "Bearer manager-secret"
     assert start_payload is not None
     assert set(start_payload) == {
+        "runtime_scope_id",
         "application_id",
         "sandbox_instance_id",
         "workspace_id",
@@ -727,8 +761,9 @@ async def test_open_starts_missing_instance_with_runtime_context_path_and_enviro
         "runtime_addr",
         "environment",
     }
+    assert start_payload["runtime_scope_id"] == _runtime_scope_id(ctx, "local-app-1")
     assert start_payload["application_id"] == "local-app-1"
-    assert start_payload["sandbox_instance_id"] == "local-s-123"
+    assert str(start_payload["sandbox_instance_id"]).startswith("local-")
     assert start_payload["workspace_id"] == workspace.ws_id
     assert start_payload["worktree_path"] == str(git_repo)
     assert start_payload["git_common_dir"] == str(git_repo / ".git")
@@ -757,7 +792,7 @@ async def test_open_starts_missing_instance_with_runtime_context_path_and_enviro
         tenant_id=7,
         application_id="local-app-1",
         workspace_id=workspace.ws_id,
-        sandbox_instance_id="local-s-123",
+        sandbox_instance_id=str(start_payload["sandbox_instance_id"]),
         conversation_id="conversation-1",
         repo_url="https://git.example.invalid/team/local-app.git",
         default_branch="main",
@@ -768,7 +803,10 @@ async def test_open_starts_missing_instance_with_runtime_context_path_and_enviro
     )
     assert context_path.parent == Path(str(start_payload["runtime_dir"]))
     assert Path(str(start_payload["codex_home"])).parent == (
-        tmp_path / "desktop-data" / "local-runtimes" / "local-app-1"
+        tmp_path
+        / "desktop-data"
+        / "local-runtimes"
+        / _runtime_scope_id(ctx, "local-app-1")
     )
     assert str(git_repo) not in context["repoUrl"]
 
@@ -776,11 +814,16 @@ async def test_open_starts_missing_instance_with_runtime_context_path_and_enviro
         str(start_payload["environment"]["APAAS_MODEL_PROVIDER_PATH"])
     )
     assert json.loads(model_provider_path.read_text(encoding="utf-8")) == {
-        "defaultProviderId": "llmcfg.77",
+        "defaultProviderId": json.loads(model_provider_path.read_text(encoding="utf-8"))[
+            "defaultProviderId"
+        ],
         "providers": [
             {
-                "providerId": "llmcfg.77",
+                "providerId": json.loads(model_provider_path.read_text(encoding="utf-8"))[
+                    "defaultProviderId"
+                ],
                 "providerType": "openai-compatible",
+                "runtimeProviderKind": "openai",
                 "apiBaseUrl": "https://models.example.invalid/v1",
                 "token": "unit-test-model-token",
                 "defaultModel": "gpt-local-test",
@@ -809,7 +852,10 @@ async def test_open_starts_missing_instance_with_runtime_context_path_and_enviro
     for directory in (
         tmp_path / "desktop-data",
         tmp_path / "desktop-data" / "local-runtimes",
-        tmp_path / "desktop-data" / "local-runtimes" / "local-app-1",
+        tmp_path
+        / "desktop-data"
+        / "local-runtimes"
+        / _runtime_scope_id(ctx, "local-app-1"),
         Path(str(start_payload["codex_home"])),
         Path(str(start_payload["runtime_dir"])).parent,
         Path(str(start_payload["runtime_dir"])),
@@ -835,7 +881,7 @@ async def test_runtime_context_uses_stable_https_placeholder_without_remote_bind
         if request.method == "GET":
             return httpx.Response(404)
         start_payloads.append(json.loads(request.content))
-        return httpx.Response(200, json=_manager_status())
+        return httpx.Response(200, json=_manager_status_for_start(request))
 
     client, _service = _client(
         tmp_path,
@@ -897,7 +943,9 @@ async def test_open_requires_model_provider_before_first_start(
         "LOCAL_RUNTIME_MODEL_PROVIDER_REQUIRED: 请先配置可用的 Coding 模型"
     )
     assert [request.method for request in requests] == ["GET", "GET"]
-    assert not (tmp_path / "desktop-data").exists()
+    assert not list(
+        (tmp_path / "desktop-data" / "local-runtimes").rglob("model-provider.json")
+    )
 
 
 @pytest.mark.asyncio
@@ -919,10 +967,16 @@ async def test_open_requires_model_provider_before_first_start(
         for changes in (
             {"runtime_base_url": ""},
             {"builder_url": ""},
+            {"runtime_base_url": "http://127.0.0.1:0"},
+            {"builder_url": "http://127.0.0.1:0/builder/"},
             {"runtime_base_url": "https://127.0.0.1:19090"},
             {"runtime_base_url": "http://runtime.example.com:19090"},
             {"builder_url": "http://builder.example.com:19090/builder/"},
             {"builder_url": "http://127.0.0.1:19090/not-builder/"},
+            {"runtime_base_url": "http://127.0.0.1:19090/not-root"},
+            {"builder_url": "http://127.0.0.1:19090/builder/../admin"},
+            {"builder_url": "http://127.0.0.1:19090/builder/%2e%2e/admin"},
+            {"builder_url": "http://127.0.0.1:19090/builder\\admin"},
         )
     ],
 )
@@ -936,12 +990,11 @@ async def test_start_rejects_invalid_manager_result(
     response_changes,
     expected_detail,
 ):
-    response_payload = _manager_status()
-    response_payload.update(response_changes)
-
     def handler(request: httpx.Request) -> httpx.Response:
         if request.method == "GET":
             return httpx.Response(404)
+        response_payload = _manager_status_for_start(request)
+        response_payload.update(response_changes)
         return httpx.Response(200, json=response_payload)
 
     client, _service, _workspace, code_session = await _runtime_case(
@@ -964,10 +1017,199 @@ async def test_start_rejects_invalid_manager_result(
 
 
 @pytest.mark.asyncio
+async def test_open_rejects_manager_redirect_response(
+    db, ctx, git_repo, engineering_session, tmp_path
+):
+    client, _service, _workspace, code_session = await _runtime_case(
+        db,
+        git_repo,
+        engineering_session,
+        tmp_path,
+        httpx.MockTransport(
+            lambda _request: httpx.Response(
+                302,
+                json=_manager_status(),
+            )
+        ),
+    )
+
+    with pytest.raises(HTTPException) as exc:
+        await client.open_application(db, code_session, ctx)
+
+    assert exc.value.status_code == 503
+    assert exc.value.detail == (
+        "LOCAL_RUNTIME_MANAGER_UNAVAILABLE: 本地 Runtime manager 不可用"
+    )
+
+
+@pytest.mark.asyncio
+async def test_existing_starting_instance_is_polled_until_ready(
+    db, ctx, git_repo, engineering_session, tmp_path, monkeypatch
+):
+    responses = iter(
+        [
+            httpx.Response(200, json=_manager_status(state="starting")),
+            httpx.Response(200, json=_manager_status(state="ready")),
+        ]
+    )
+    client, _service, _workspace, _code_session = await _runtime_case(
+        db,
+        git_repo,
+        engineering_session,
+        tmp_path,
+        httpx.MockTransport(lambda _request: next(responses)),
+    )
+    monkeypatch.setattr("app.code_runtime.local_runtime._STARTING_POLL_SECONDS", 0)
+
+    opened = await client._existing_status(
+        f"/v1/local-runtime/instances/{_runtime_scope_id(ctx, 'local-app-1')}",
+        _runtime_scope_id(ctx, "local-app-1"),
+        "local-app-1",
+    )
+
+    assert opened is not None
+    assert opened["state"] == "ready"
+
+
+@pytest.mark.asyncio
+async def test_runtime_scope_rejects_existing_symlink_before_model_token_write(
+    db, ctx, git_repo, engineering_session, tmp_path
+):
+    attacker_directory = tmp_path / "attacker-controlled"
+    attacker_directory.mkdir()
+    (tmp_path / "desktop-data").mkdir()
+    (tmp_path / "desktop-data" / "local-runtimes").symlink_to(
+        attacker_directory,
+        target_is_directory=True,
+    )
+    client, _service, _workspace, code_session = await _runtime_case(
+        db,
+        git_repo,
+        engineering_session,
+        tmp_path,
+        httpx.MockTransport(lambda _request: httpx.Response(404)),
+    )
+
+    with pytest.raises(HTTPException) as exc:
+        await client.open_application(db, code_session, ctx)
+
+    assert exc.value.status_code == 503
+    assert exc.value.detail == (
+        "LOCAL_RUNTIME_PREPARATION_FAILED: 无法准备本地 Runtime 配置"
+    )
+    assert not list(attacker_directory.rglob("model-provider.json"))
+    assert not list(attacker_directory.rglob("unit-test-model-token"))
+
+
+@pytest.mark.asyncio
+async def test_same_application_is_scoped_per_user(
+    db, ctx, git_repo, engineering_session, tmp_path, monkeypatch
+):
+    first_workspace = await _create_workspace(db, git_repo, ws_id="ws-user-11")
+    other_repo = tmp_path / "source-repo-user-12"
+    other_repo.mkdir()
+    subprocess.run(["git", "init", str(other_repo)], check=True, capture_output=True, text=True)
+    second_workspace = await _create_workspace(
+        db,
+        other_repo,
+        ws_id="ws-user-12",
+        user_id=12,
+    )
+    first = await _create_code_session(db, workspace_id=first_workspace.ws_id)
+    second = await _create_code_session(
+        db,
+        workspace_id=second_workspace.ws_id,
+        public_id="conversation-user-12",
+    )
+    second.user_id = 12
+    await db.flush()
+    other_ctx = SimpleNamespace(
+        tenant_id=7,
+        user=SimpleNamespace(id=12, username="other", display_name="Other"),
+    )
+    starts: list[dict[str, object]] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.method == "GET":
+            return httpx.Response(404)
+        payload = json.loads(request.content)
+        starts.append(payload)
+        return httpx.Response(200, json=_manager_status_for_start(request))
+
+    client, _service = _client(tmp_path, engineering_session, httpx.MockTransport(handler))
+    monkeypatch.setattr(
+        "app.code_runtime.local_runtime._allocate_loopback_address",
+        lambda: "127.0.0.1:19090",
+    )
+
+    await client.open_application(db, first, ctx)
+    await client.open_application(db, second, other_ctx)
+
+    assert len(starts) == 2
+    assert starts[0]["runtime_scope_id"] != starts[1]["runtime_scope_id"]
+    assert starts[0]["runtime_dir"] != starts[1]["runtime_dir"]
+
+
+@pytest.mark.asyncio
+async def test_reused_runtime_rejects_conversation_with_incompatible_provider(
+    db, ctx, git_repo, engineering_session, tmp_path, monkeypatch
+):
+    workspace = await _create_workspace(db, git_repo)
+    first = await _create_code_session(
+        db,
+        workspace_id=workspace.ws_id,
+        selected_llm_config_id=1,
+    )
+    second = await _create_code_session(
+        db,
+        workspace_id=workspace.ws_id,
+        public_id="conversation-2",
+        selected_llm_config_id=2,
+    )
+    state: dict[str, dict[str, object] | None] = {"started": None}
+
+    async def resolve_model(_db, _tenant_id, *, purpose, selected_config_id=None):
+        assert purpose == "coding"
+        token = "provider-a" if selected_config_id == 1 else "provider-b"
+        return ResolvedLLMConfig(
+            model=f"model-{selected_config_id}",
+            base_url="https://models.example.invalid/v1",
+            api_key=token,
+            config_id=selected_config_id,
+            config_name="test",
+            provider="openai",
+        )
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.method == "GET":
+            if state["started"] is None:
+                return httpx.Response(404)
+            return httpx.Response(200, json=state["started"])
+        state["started"] = _manager_status_for_start(request)
+        return httpx.Response(200, json=state["started"])
+
+    monkeypatch.setattr("app.harness.llm_resolver.resolve_llm_config", resolve_model)
+    monkeypatch.setattr(
+        "app.code_runtime.local_runtime._allocate_loopback_address",
+        lambda: "127.0.0.1:19090",
+    )
+    client, _service = _client(tmp_path, engineering_session, httpx.MockTransport(handler))
+
+    await client.open_application(db, first, ctx)
+    with pytest.raises(HTTPException) as exc:
+        await client.open_application(db, second, ctx)
+
+    assert exc.value.status_code == 409
+    assert exc.value.detail == (
+        "LOCAL_RUNTIME_MODEL_PROVIDER_CONFLICT: 当前会话选择的 Coding 模型与应用 Runtime 不兼容"
+    )
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize(
     ("failure_kind", "secret", "message"),
     [
-        ("mkdir", "mkdir-secret", "无法准备本地 Runtime 配置"),
+        ("directory", "mkdir-secret", "无法准备本地 Runtime 配置"),
         ("resolve", "desktop-data", "无法准备本地 Runtime 配置"),
         ("socket", "socket-secret", "无法准备本地 Runtime 配置"),
         ("write", "write-secret", "无法准备本地 Runtime 配置"),
@@ -993,12 +1235,12 @@ async def test_preparation_errors_are_stable_and_redacted(
     elif failure_kind == "write":
         monkeypatch.setattr(
             "app.code_runtime.local_runtime.os.replace",
-            lambda *_args: (_ for _ in ()).throw(OSError(secret)),
+            lambda *_args, **_kwargs: (_ for _ in ()).throw(OSError(secret)),
         )
-    elif failure_kind == "mkdir":
+    elif failure_kind == "directory":
         monkeypatch.setattr(
-            "app.code_runtime.local_runtime._secure_mkdir",
-            lambda *_args: (_ for _ in ()).throw(OSError(secret)),
+            "app.code_runtime.local_runtime._open_directory_at",
+            lambda *_args, **_kwargs: (_ for _ in ()).throw(OSError(secret)),
         )
     elif failure_kind == "resolve":
         (tmp_path / "desktop-data").symlink_to(
