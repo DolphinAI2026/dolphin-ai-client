@@ -179,9 +179,11 @@ curl -s -H 'Host: df-aigc.dfy.definesys.cn' http://<节点IP>/api/health
 
 ```bash
 # 1. 本地构建新镜像
+BUILD_SHA=$(git rev-parse HEAD)
 docker build --platform linux/amd64 \
   -f deploy/docker/Dockerfile \
   --build-arg VITE_BASE_URL=/ai-builder/ \
+  --build-arg VITE_BUILD_SHA=${BUILD_SHA} \
   -t apaas-builder:local .
 
 # 2. 推到私库（日期 tag）

@@ -35,6 +35,7 @@ services:
       dockerfile: deploy/docker/Dockerfile
       args:
         VITE_BASE_URL: ${VITE_BASE_URL:-/ai-builder/}
+        VITE_BUILD_SHA: ${VITE_BUILD_SHA:?set VITE_BUILD_SHA to a 40-character lowercase Git commit SHA}
     image: apaas-builder:${IMAGE_TAG:-latest}
     container_name: ${CONTAINER_NAME:-apaas-builder}
     restart: unless-stopped

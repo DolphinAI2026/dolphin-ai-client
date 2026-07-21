@@ -120,3 +120,55 @@ exit code 0
 - production build 保留既有的大 chunk warning，无新增 typecheck/build 失败。
 
 未推送、未部署、未开始 Task 7。
+
+## 独立评审修复
+
+以下内容取代上文初始实现阶段的浏览器证据；初始 Chromium/Edge 运行发生在
+Task 6 提交前，因工作树包含未提交构建输入，不作为 revision 绑定证据。
+
+### 构建 provenance
+
+- Dockerfile 现在要求 `VITE_BUILD_SHA` 为 40 位小写 Git SHA，而不是仅检查非空。
+- GitLab 使用完整 `CI_COMMIT_SHA`。
+- 本地、开发、热修和在线构建脚本在相关构建输入干净时读取完整 HEAD，并显式传入
+  `VITE_BUILD_SHA`。
+- Compose、客户部署示例和部署文档要求调用方提供明确的 40 位 revision。
+- build contract 枚举现有 Dockerfile caller，防止新增必填 build arg 后遗漏调用方。
+- E2E fixture 在构建前拒绝影响 frontend、backend、Docker 和 E2E 输入的 staged、
+  unstaged 或相关 untracked 文件，防止脏树内容冒充 HEAD。
+
+### 授权与浏览器场景
+
+- 普通用户 `/auth/switch-tenant` 在签发 token 前联查 active membership 与
+  `Tenant.status == 1`；停用租户返回 403。
+- fixture 保存停用租户 numeric ID，并直接断言 switch endpoint 拒绝，不再只依赖前端
+  active tenant list 过滤。
+- Windows Node 使用全新、精确的 `WSLENV` allowlist，不继承调用 shell 的任意变量或
+  modifier。
+- 页面 init script 在 fetch/XHR 发起时记录当时 location 和请求 URL，并记录
+  `iframe.code-frame` 是否曾经挂载；拒绝目标不再只检查最终 DOM。
+- 多标签场景新增第三个 active tenant，通过延迟 B candidate `/auth/me`、快速完成 C，
+  验证真实 B 慢/C 快乱序下两个标签最终收敛到 C。
+- Code activate response 显式断言 200，成功路径 secret scan 包含 seed log。
+
+### 提交后 revision 证据
+
+Task 6 修复先提交，再在干净 HEAD 上运行 Chromium 和 Windows Edge。最终输出写入
+`.superpowers/sdd/task-6-post-commit-verification.log`；该日志不属于构建输入，也不进入
+commit，因此可以记录并核对最终 HEAD，而不会再次改变被验证 revision。
+
+提交前快速门禁：
+
+```text
+backend build/auth contracts: 64 passed
+Task 3-5 frontend: 9 files, 175 passed
+vue-tsc --build --noEmit: PASS
+bash -n / node --check / git diff --check: PASS
+```
+
+Task 6 只有在 post-commit 日志同时包含以下结果且 `git status` 保持干净时才完成：
+
+```text
+TENANT_URL_FIXTURE=PASS channel=chromium build_sha=<final HEAD>
+TENANT_URL_FIXTURE=PASS channel=msedge build_sha=<final HEAD>
+```

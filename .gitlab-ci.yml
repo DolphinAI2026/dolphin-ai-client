@@ -92,6 +92,7 @@ build_release_image:
         --local dockerfile=. \
         --opt filename=deploy/docker/Dockerfile \
         --opt "build-arg:VITE_BASE_URL=${BUILDER_VITE_BASE_URL}" \
+        --opt "build-arg:VITE_BUILD_SHA=${CI_COMMIT_SHA}" \
         --opt "build-arg:NODE_IMAGE=${BUILDER_NODE_IMAGE}" \
         --opt "build-arg:JDK8_IMAGE=${BUILDER_JDK8_IMAGE}" \
         --opt "build-arg:JDK17_IMAGE=${BUILDER_JDK17_IMAGE}" \

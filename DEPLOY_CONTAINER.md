@@ -123,9 +123,11 @@ docker image inspect vibe-sandbox:latest --format '{{.Id}}'
 ## 构建镜像
 
 ```bash
+BUILD_SHA=$(git rev-parse HEAD)
 docker build --platform linux/amd64 \
   -f deploy/docker/Dockerfile \
   --build-arg VITE_BASE_URL=/ai-builder/ \
+  --build-arg VITE_BUILD_SHA=${BUILD_SHA} \
   -t apaas-builder:latest .
 ```
 
@@ -147,6 +149,7 @@ Apple Silicon 本机给线上 amd64 机器构建时必须显式传 `--platform l
 export IMAGE_TAG="$(date +%Y.%m.%d)-$(git rev-parse --short=8 HEAD)"
 export IMAGE="om-harbor.dfy.definesys.cn/om-demo/ai-builder:${IMAGE_TAG}"
 export KUBECONFIG_FILE=/path/to/orcamatrix-demo-kubeconfig
+export BUILD_SHA="$(git rev-parse HEAD)"
 
 printf '%s' "${HARBOR_PASSWORD}" \
   | podman login om-harbor.dfy.definesys.cn \
@@ -157,6 +160,7 @@ podman build --layers \
   -f deploy/docker/Dockerfile \
   -t "${IMAGE}" \
   --build-arg VITE_BASE_URL=/ai-builder/ \
+  --build-arg VITE_BUILD_SHA=${BUILD_SHA} \
   --build-arg NODE_IMAGE=hub-mirror.dfy.definesys.cn/library/node:20-bookworm-slim \
   --build-arg JDK8_IMAGE=hub-mirror.dfy.definesys.cn/library/eclipse-temurin:8-jdk-jammy \
   --build-arg JDK17_IMAGE=hub-mirror.dfy.definesys.cn/library/eclipse-temurin:17-jdk-jammy \

@@ -13,9 +13,11 @@
 cd /Users/admin/Desktop/AI/ai-builder-new/apaas-builder-ai
 
 TAG=customer-$(date +%Y%m%d)
+BUILD_SHA=$(git rev-parse HEAD)
 docker build --platform linux/amd64 \
   -f deploy/docker/Dockerfile \
   --build-arg VITE_BASE_URL=/ai-builder/ \
+  --build-arg VITE_BUILD_SHA=${BUILD_SHA} \
   -t apaas-builder:$TAG \
   .
 

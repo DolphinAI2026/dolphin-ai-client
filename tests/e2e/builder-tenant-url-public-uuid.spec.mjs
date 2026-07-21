@@ -10,6 +10,9 @@ const required = {
   buildSha: process.env.BUILDER_BUILD_SHA,
   currentTenantId: process.env.BUILDER_CURRENT_TENANT_UUID,
   targetTenantId: process.env.BUILDER_TARGET_TENANT_UUID,
+  targetTenantNumericId: process.env.BUILDER_TARGET_TENANT_ID,
+  targetCTenantId: process.env.BUILDER_TARGET_C_TENANT_UUID,
+  targetCTenantNumericId: process.env.BUILDER_TARGET_C_TENANT_ID,
   disabledTenantId: process.env.BUILDER_DISABLED_TENANT_UUID,
   unauthorizedTenantId: process.env.BUILDER_UNAUTHORIZED_TENANT_UUID,
   username: process.env.BUILDER_E2E_USERNAME,
@@ -23,6 +26,7 @@ for (const [name, value] of Object.entries(required)) {
 }
 
 assert.match(required.buildSha, /^[0-9a-f]{40}$/);
+assert.equal(process.env.TASK6_WSLENV_SENTINEL, undefined);
 assert.ok(
   required.browserChannel === "chromium" || required.browserChannel === "msedge",
   `unsupported browser channel: ${required.browserChannel}`,
@@ -33,7 +37,6 @@ const authWhitelist = new Set([
   "/ai-builder/api/auth/me",
   "/ai-builder/api/auth/me/tenants",
   "/ai-builder/api/auth/switch-tenant",
-  "/ai-builder/api/apaas/status",
 ]);
 
 function appUrl(path) {
@@ -83,6 +86,84 @@ function isTenantSwitchResponse(response) {
   const url = new URL(response.url());
   return request.method() === "POST"
     && url.pathname === "/ai-builder/api/auth/switch-tenant";
+}
+
+function tokenTenantId(authorization) {
+  if (!authorization?.startsWith("Bearer ")) return null;
+  const token = authorization.slice("Bearer ".length);
+  try {
+    return String(JSON.parse(Buffer.from(token.split(".")[1], "base64url")).tid);
+  } catch {
+    return null;
+  }
+}
+
+function isCandidateTenantMeRequest(request, tenantId) {
+  const url = new URL(request.url());
+  return request.method() === "GET"
+    && url.pathname === "/ai-builder/api/auth/me"
+    && tokenTenantId(request.headers().authorization) === String(tenantId);
+}
+
+async function addRejectedStageEvidence(page) {
+  await page.addInitScript(() => {
+    const evidence = {
+      requests: [],
+      iframeAttachments: [],
+    };
+    Object.defineProperty(window, "__task6RejectedEvidence", {
+      configurable: true,
+      value: evidence,
+    });
+    const recordRequest = (kind, value) => {
+      let url;
+      try {
+        url = new URL(
+          typeof value === "string" ? value : value?.url,
+          window.location.href,
+        ).href;
+      } catch {
+        url = String(value);
+      }
+      evidence.requests.push({
+        kind,
+        location: window.location.href,
+        url,
+      });
+    };
+
+    const originalFetch = window.fetch;
+    window.fetch = function task6Fetch(input, init) {
+      recordRequest("fetch", input);
+      return originalFetch.call(this, input, init);
+    };
+
+    const originalOpen = XMLHttpRequest.prototype.open;
+    const originalSend = XMLHttpRequest.prototype.send;
+    XMLHttpRequest.prototype.open = function task6Open(method, url, ...rest) {
+      this.__task6RequestUrl = url;
+      return originalOpen.call(this, method, url, ...rest);
+    };
+    XMLHttpRequest.prototype.send = function task6Send(...args) {
+      recordRequest("xhr", this.__task6RequestUrl);
+      return originalSend.apply(this, args);
+    };
+
+    const recordFrame = (node) => {
+      if (!(node instanceof Element)) return;
+      if (node.matches("iframe.code-frame")) {
+        evidence.iframeAttachments.push({ location: window.location.href });
+      }
+      for (const frame of node.querySelectorAll?.("iframe.code-frame") || []) {
+        evidence.iframeAttachments.push({ location: window.location.href });
+      }
+    };
+    new MutationObserver((mutations) => {
+      for (const mutation of mutations) {
+        for (const node of mutation.addedNodes) recordFrame(node);
+      }
+    }).observe(document, { childList: true, subtree: true });
+  });
 }
 
 async function navigateAndWaitForTenantSwitch(page, url, tenantId) {
@@ -142,24 +223,10 @@ try {
   ]) {
     await withContext(browser, async (context) => {
       const page = await context.newPage();
-      const rejectedBusinessRequests = [];
-      let rejectedNavigationActive = false;
-
-      page.on("request", (request) => {
-        if (!rejectedNavigationActive) return;
-        const url = new URL(request.url());
-        if (
-          routeTenantId(page) === rejectedTenantId
-          && url.pathname.startsWith("/ai-builder/api/")
-          && !authWhitelist.has(url.pathname)
-        ) {
-          rejectedBusinessRequests.push(request.url());
-        }
-      });
+      await addRejectedStageEvidence(page);
 
       await login(page);
       await waitForTenant(page, required.currentTenantId);
-      rejectedNavigationActive = true;
       await page.goto(
         appUrl(
           `/code/${required.codeSessionRef}?tenantId=${rejectedTenantId}`
@@ -167,13 +234,26 @@ try {
         ),
       );
       await waitForTenant(page, required.currentTenantId);
-      rejectedNavigationActive = false;
+      const evidence = await page.evaluate(() => window.__task6RejectedEvidence);
+      const targetRequests = evidence.requests.filter((entry) => (
+        new URL(entry.location).searchParams.get("tenantId") === rejectedTenantId
+        && new URL(entry.url).pathname.startsWith("/ai-builder/api/")
+      ));
+      const rejectedBusinessRequests = targetRequests.filter(
+        (entry) => !authWhitelist.has(new URL(entry.url).pathname),
+      );
+      const targetIframeAttachments = evidence.iframeAttachments.filter(
+        (entry) => (
+          new URL(entry.location).searchParams.get("tenantId") === rejectedTenantId
+        ),
+      );
 
       assert.deepEqual(
         rejectedBusinessRequests,
         [],
-        `rejected target issued business requests:\n${rejectedBusinessRequests.join("\n")}`,
+          `rejected target issued business requests:\n${JSON.stringify(rejectedBusinessRequests)}`,
       );
+      assert.deepEqual(targetIframeAttachments, []);
       assert.equal(await page.locator("iframe.code-frame").count(), 0);
     });
   }
@@ -181,6 +261,7 @@ try {
   await withContext(browser, async (context) => {
     const page = await context.newPage();
     const activationRequests = [];
+    const activationResponses = [];
     const legacyActivationRequests = [];
     const code401s = [];
 
@@ -204,6 +285,14 @@ try {
     });
     page.on("response", (response) => {
       const url = new URL(response.url());
+      if (
+        response.request().method() === "POST"
+        && url.pathname
+          === `/ai-builder/api/code/sessions/${required.codeSessionRef}`
+            + `/agent-sessions/${required.agentSessionId}/activate`
+      ) {
+        activationResponses.push(response);
+      }
       if (
         response.status() === 401
         && (
@@ -236,6 +325,8 @@ try {
     assert.ok(frameSrc, "Code iframe src is missing");
     assert.equal(new URL(frameSrc, required.builderBaseUrl).searchParams.has("tenantId"), false);
     assert.equal(activationRequests.length, 1, JSON.stringify(activationRequests));
+    assert.equal(activationResponses.length, 1);
+    assert.equal(activationResponses[0].status(), 200);
     assert.deepEqual(legacyActivationRequests, []);
     assert.deepEqual(code401s, []);
   });
@@ -243,40 +334,46 @@ try {
   await withContext(browser, async (context) => {
     const first = await context.newPage();
     const second = await context.newPage();
-    let switchCount = 0;
-
-    for (const page of [first, second]) {
-      page.on("request", (request) => {
-        const url = new URL(request.url());
-        if (
-          request.method() === "POST"
-          && url.pathname === "/ai-builder/api/auth/switch-tenant"
-        ) {
-          switchCount += 1;
-        }
-      });
-    }
 
     await login(first);
     await waitForTenant(first, required.currentTenantId);
     await second.goto(appUrl(`/?tenantId=${required.currentTenantId}`));
     await waitForTenant(second, required.currentTenantId);
 
-    await navigateAndWaitForTenantSwitch(
-      first,
+    const slowCandidateRequest = first.waitForRequest(
+      (request) => isCandidateTenantMeRequest(
+        request,
+        required.targetTenantNumericId,
+      ),
+      { timeout: 20_000 },
+    );
+    const slowBNavigation = first.goto(
       appUrl(`/?tenantId=${required.targetTenantId}`),
-      required.targetTenantId,
     );
-    await waitForTenant(second, required.targetTenantId);
+    await slowCandidateRequest;
 
-    await navigateAndWaitForTenantSwitch(
-      second,
-      appUrl(`/?tenantId=${required.currentTenantId}`),
-      required.currentTenantId,
+    const fastCResponse = second.waitForResponse(isTenantSwitchResponse, {
+      timeout: 20_000,
+    });
+    const fastCNavigation = second.goto(
+      appUrl(`/?tenantId=${required.targetCTenantId}`),
     );
-    await waitForTenant(first, required.currentTenantId);
+    const response = await fastCResponse;
+    assert.equal(response.status(), 200, `tenant C switch failed: ${response.status()}`);
+    await Promise.allSettled([slowBNavigation, fastCNavigation]);
 
-    assert.equal(switchCount, 2, `unexpected cross-tab switch count: ${switchCount}`);
+    await waitForTenant(first, required.targetCTenantId);
+    await waitForTenant(second, required.targetCTenantId);
+    await first.waitForTimeout(2_000);
+    assert.equal(routeTenantId(first), required.targetCTenantId);
+    assert.equal(routeTenantId(second), required.targetCTenantId);
+    for (const page of [first, second]) {
+      const token = await page.evaluate(() => localStorage.getItem("token"));
+      assert.equal(
+        tokenTenantId(`Bearer ${token}`),
+        required.targetCTenantNumericId,
+      );
+    }
   });
 
   assert.deepEqual(browserErrors, [], browserErrors.join("\n"));

@@ -41,7 +41,8 @@ ENV VITE_BASE_URL=${VITE_BASE_URL}
 ENV VITE_BUILD_SHA=${VITE_BUILD_SHA}
 # 与 DEPLOY.md 第 37 行的线上构建命令一致：直接 vite build，
 # 跳过 vue-tsc 类型检查（项目代码有遗留 TS 错误，主机部署流程也跳过）
-RUN test -n "${VITE_BUILD_SHA}" && node_modules/.bin/vite build
+RUN printf '%s\n' "${VITE_BUILD_SHA}" | grep -Eq '^[0-9a-f]{40}$' \
+    && node_modules/.bin/vite build
 
 
 # ------------------------------------------------------------

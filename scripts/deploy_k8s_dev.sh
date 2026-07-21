@@ -77,6 +77,16 @@ need() {
   command -v "$1" >/dev/null 2>&1 || die "missing command: $1"
 }
 
+assert_clean_build_inputs() {
+  (
+    cd "$REPO_ROOT"
+    build_inputs=(frontend backend admin-spa deploy/docker)
+    git diff --quiet --cached -- "${build_inputs[@]}"
+    git diff --quiet -- "${build_inputs[@]}"
+    [ -z "$(git ls-files --others --exclude-standard -- "${build_inputs[@]}")" ]
+  ) || die "Docker build inputs are dirty; commit them before building"
+}
+
 setup_kubeconfig() {
   if [ -n "${KUBECONFIG:-}" ]; then
     export KUBECONFIG
@@ -116,8 +126,11 @@ push_dev_branch() {
 }
 
 build_and_push_image() {
-  local sha
-  sha="$(git rev-parse --short HEAD)"
+  assert_clean_build_inputs
+  local BUILD_SHA sha
+  BUILD_SHA="$(git rev-parse HEAD)"
+  [[ "$BUILD_SHA" =~ ^[0-9a-f]{40}$ ]] || die "HEAD is not a full lowercase Git SHA"
+  sha="${BUILD_SHA:0:7}"
   if [ -z "$IMAGE_TAG" ]; then
     IMAGE_TAG="dev-$(date +%Y%m%d)-${sha}"
   fi
@@ -128,6 +141,7 @@ build_and_push_image() {
     docker buildx build \
       --platform "$PLATFORM" \
       --build-arg "VITE_BASE_URL=${VITE_BASE_URL}" \
+      --build-arg "VITE_BUILD_SHA=${BUILD_SHA}" \
       --build-arg "VITE_ADMIN_BASE=${VITE_ADMIN_BASE}" \
       --build-arg "VITE_API_BASE_URL=${VITE_API_BASE_URL}" \
       --build-arg "VITE_MCP_PUBLIC_BASE=${VITE_MCP_PUBLIC_BASE}" \
@@ -138,6 +152,7 @@ build_and_push_image() {
   else
     docker build \
       --build-arg "VITE_BASE_URL=${VITE_BASE_URL}" \
+      --build-arg "VITE_BUILD_SHA=${BUILD_SHA}" \
       --build-arg "VITE_ADMIN_BASE=${VITE_ADMIN_BASE}" \
       --build-arg "VITE_API_BASE_URL=${VITE_API_BASE_URL}" \
       --build-arg "VITE_MCP_PUBLIC_BASE=${VITE_MCP_PUBLIC_BASE}" \

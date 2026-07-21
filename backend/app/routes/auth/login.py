@@ -1672,10 +1672,13 @@ async def switch_tenant(
     else:
         membership = (
             await db.execute(
-                select(UserTenant).where(
+                select(UserTenant)
+                .join(Tenant, Tenant.id == UserTenant.tenant_id)
+                .where(
                     UserTenant.user_id == ctx.user.id,
                     UserTenant.tenant_id == data.tenant_id,
                     UserTenant.status == 1,
+                    Tenant.status == 1,
                 )
             )
         ).scalar_one_or_none()

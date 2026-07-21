@@ -35,6 +35,27 @@ for executable in \
   fi
 done
 
+assert_clean_build_inputs() {
+  (
+    cd "${ROOT_DIR}"
+    build_inputs=(
+      frontend
+      backend
+      tests/e2e
+      deploy/docker/Dockerfile
+      package.json
+      package-lock.json
+    )
+    git diff --quiet --cached -- "${build_inputs[@]}"
+    git diff --quiet -- "${build_inputs[@]}"
+    [[ -z "$(git ls-files --others --exclude-standard -- "${build_inputs[@]}")" ]]
+  ) || {
+    printf 'Task 6 build inputs are dirty; commit them before running the fixture\n' >&2
+    exit 2
+  }
+}
+
+assert_clean_build_inputs
 BUILD_SHA="$(git -C "${ROOT_DIR}" rev-parse HEAD)"
 if [[ ! "${BUILD_SHA}" =~ ^[0-9a-f]{40}$ ]]; then
   printf 'git HEAD is not a full lowercase SHA: %s\n' "${BUILD_SHA}" >&2
@@ -272,9 +293,12 @@ from uuid import uuid4
 
 from app.auth import get_password_hash
 from app.database import AsyncSessionLocal
+from app.deps import AuthContext
 from app.models import User
 from app.models.ai_chat import AIChatSession, CodeRuntimeAgentSession
 from app.models.tenant import Role, Tenant, UserTenant
+from app.routes.auth.login import TenantSwitchRequest, switch_tenant
+from fastapi import HTTPException
 
 
 async def main():
@@ -296,7 +320,13 @@ async def main():
                 public_id=str(uuid4()),
                 tenant_name="Task 6 Disabled",
                 tenant_code="task6-disabled",
-                status=0,
+                status=1,
+            ),
+            Tenant(
+                public_id=str(uuid4()),
+                tenant_name="Task 6 Target C",
+                tenant_code="task6-target-c",
+                status=1,
             ),
             Tenant(
                 public_id=str(uuid4()),
@@ -355,8 +385,35 @@ async def main():
                     is_default=False,
                     status=1,
                 ),
+                UserTenant(
+                    user_id=user.id,
+                    tenant_id=tenants[3].id,
+                    role_id=roles[3].id,
+                    is_default=False,
+                    status=1,
+                ),
             ]
         )
+        tenants[2].status = 0
+        await db.flush()
+        ctx = AuthContext(
+            user=user,
+            tenant_id=tenants[0].id,
+            tenant_role="tenant_admin",
+            org_permissions={},
+        )
+        try:
+            await switch_tenant(
+                TenantSwitchRequest(tenant_id=tenants[2].id),
+                ctx,
+                db,
+            )
+        except HTTPException as exc:
+            if exc.status_code != 403:
+                raise
+        else:
+            raise RuntimeError("disabled tenant switch unexpectedly signed a token")
+
         session = AIChatSession(
             tenant_id=tenants[0].id,
             user_id=user.id,
@@ -386,9 +443,14 @@ async def main():
             json.dumps(
                 {
                     "current_tenant_uuid": tenants[0].public_id,
+                    "current_tenant_id": tenants[0].id,
                     "target_tenant_uuid": tenants[1].public_id,
+                    "target_tenant_id": tenants[1].id,
                     "disabled_tenant_uuid": tenants[2].public_id,
-                    "unauthorized_tenant_uuid": tenants[3].public_id,
+                    "disabled_tenant_id": tenants[2].id,
+                    "target_c_tenant_uuid": tenants[3].public_id,
+                    "target_c_tenant_id": tenants[3].id,
+                    "unauthorized_tenant_uuid": tenants[4].public_id,
                     "code_session_ref": session.public_id,
                     "agent_session_id": agent_session_id,
                 },
@@ -418,8 +480,13 @@ json_value() {
 }
 
 current_tenant_uuid="$(json_value current_tenant_uuid)"
+current_tenant_id="$(json_value current_tenant_id)"
 target_tenant_uuid="$(json_value target_tenant_uuid)"
+target_tenant_id="$(json_value target_tenant_id)"
 disabled_tenant_uuid="$(json_value disabled_tenant_uuid)"
+disabled_tenant_id="$(json_value disabled_tenant_id)"
+target_c_tenant_uuid="$(json_value target_c_tenant_uuid)"
+target_c_tenant_id="$(json_value target_c_tenant_id)"
 unauthorized_tenant_uuid="$(json_value unauthorized_tenant_uuid)"
 code_session_ref="$(json_value code_session_ref)"
 agent_session_id="$(json_value agent_session_id)"
@@ -428,8 +495,11 @@ printf 'FIXTURE_PHASE=parsed\n'
 cat >"${TMP_DIR}/frontend_server.py" <<'PY'
 from __future__ import annotations
 
+import base64
+import json
 import mimetypes
 import os
+import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.error import HTTPError
@@ -438,6 +508,19 @@ from urllib.request import Request, urlopen
 
 DIST = Path(os.environ["DIST_DIR"]).resolve()
 BACKEND = os.environ["BACKEND_ORIGIN"].rstrip("/")
+DELAY_TENANT_ID = int(os.environ["DELAY_TENANT_ID"])
+
+
+def bearer_tenant_id(value):
+    if not value or not value.startswith("Bearer "):
+        return None
+    token = value.removeprefix("Bearer ").strip()
+    try:
+        payload = token.split(".", 2)[1]
+        payload += "=" * (-len(payload) % 4)
+        return int(json.loads(base64.urlsafe_b64decode(payload))["tid"])
+    except (ValueError, KeyError, IndexError, json.JSONDecodeError):
+        return None
 
 
 class Handler(BaseHTTPRequestHandler):
@@ -461,6 +544,13 @@ class Handler(BaseHTTPRequestHandler):
         }
         headers["X-Forwarded-Prefix"] = "/ai-builder"
         headers["X-Forwarded-Proto"] = "http"
+        if (
+            suffix == "/auth/me"
+            and bearer_tenant_id(headers.get("Authorization")) == DELAY_TENANT_ID
+        ):
+            print("frontend_proxy candidate_me_delay=started tenant=target-b", flush=True)
+            time.sleep(1.5)
+            print("frontend_proxy candidate_me_delay=finished tenant=target-b", flush=True)
         request = Request(target, data=body, headers=headers, method=self.command)
         try:
             response = urlopen(request, timeout=65)
@@ -535,6 +625,7 @@ PY
 
 DIST_DIR="${ROOT_DIR}/frontend/dist" \
 BACKEND_ORIGIN="${backend_base_url}" \
+DELAY_TENANT_ID="${target_tenant_id}" \
 FRONTEND_PORT="${frontend_port}" \
 "${PYTHON}" "${TMP_DIR}/frontend_server.py" >"${FRONTEND_LOG}" 2>&1 &
 frontend_pid=$!
@@ -561,7 +652,15 @@ e2e_builder_base_url="${builder_base_url}"
 e2e_node=(node)
 e2e_spec="${ROOT_DIR}/tests/e2e/builder-tenant-url-public-uuid.spec.mjs"
 e2e_playwright_module=""
-e2e_wslenv="${WSLENV:-}"
+e2e_wslenv="BUILDER_BASE_URL:BUILDER_BUILD_SHA:BUILDER_CURRENT_TENANT_UUID"
+e2e_wslenv="${e2e_wslenv}:BUILDER_TARGET_TENANT_UUID:BUILDER_TARGET_TENANT_ID"
+e2e_wslenv="${e2e_wslenv}:BUILDER_TARGET_C_TENANT_UUID:BUILDER_TARGET_C_TENANT_ID"
+e2e_wslenv="${e2e_wslenv}:BUILDER_DISABLED_TENANT_UUID"
+e2e_wslenv="${e2e_wslenv}:BUILDER_UNAUTHORIZED_TENANT_UUID:BUILDER_E2E_USERNAME"
+e2e_wslenv="${e2e_wslenv}:BUILDER_E2E_PASSWORD:BUILDER_CODE_SESSION_REF"
+e2e_wslenv="${e2e_wslenv}:BUILDER_AGENT_SESSION_ID:BUILDER_PLAYWRIGHT_MODULE"
+e2e_wslenv="${e2e_wslenv}:BROWSER_CHANNEL"
+export TASK6_WSLENV_SENTINEL="must-not-cross-to-windows"
 
 if [[ "${BROWSER_CHANNEL}" == "msedge" ]]; then
   WINDOWS_NODE="${WINDOWS_NODE:-$(command -v node.exe || true)}"
@@ -571,16 +670,9 @@ if [[ "${BROWSER_CHANNEL}" == "msedge" ]]; then
     e2e_playwright_module="${windows_root}\\node_modules\\playwright"
     e2e_node=("${WINDOWS_NODE}")
     e2e_spec="${windows_spec}"
-    e2e_wslenv="${e2e_wslenv:+${e2e_wslenv}:}BUILDER_BASE_URL"
-    e2e_wslenv="${e2e_wslenv}:BUILDER_BUILD_SHA:BUILDER_CURRENT_TENANT_UUID"
-    e2e_wslenv="${e2e_wslenv}:BUILDER_TARGET_TENANT_UUID:BUILDER_DISABLED_TENANT_UUID"
-    e2e_wslenv="${e2e_wslenv}:BUILDER_UNAUTHORIZED_TENANT_UUID:BUILDER_E2E_USERNAME"
-    e2e_wslenv="${e2e_wslenv}:BUILDER_E2E_PASSWORD:BUILDER_CODE_SESSION_REF"
-    e2e_wslenv="${e2e_wslenv}:BUILDER_AGENT_SESSION_ID:BUILDER_PLAYWRIGHT_MODULE"
-    e2e_wslenv="${e2e_wslenv}:BROWSER_CHANNEL"
 
-    if ! "${WINDOWS_NODE}" -e \
-      'fetch(process.argv[1], {signal: AbortSignal.timeout(5000)}).then(r => process.exit(r.ok ? 0 : 1), () => process.exit(1))' \
+    if ! WSLENV="" "${WINDOWS_NODE}" -e \
+      'if (process.env.TASK6_WSLENV_SENTINEL) process.exit(2); fetch(process.argv[1], {signal: AbortSignal.timeout(5000)}).then(r => process.exit(r.ok ? 0 : 1), () => process.exit(1))' \
       "${builder_base_url}/ai-builder/" </dev/null >/dev/null 2>&1; then
       wsl_ip="$(hostname -I | awk '{ print $1 }')"
       if [[ -z "${wsl_ip}" ]]; then
@@ -588,8 +680,8 @@ if [[ "${BROWSER_CHANNEL}" == "msedge" ]]; then
         exit 1
       fi
       e2e_builder_base_url="http://${wsl_ip}:${frontend_port}"
-      if ! "${WINDOWS_NODE}" -e \
-        'fetch(process.argv[1], {signal: AbortSignal.timeout(5000)}).then(r => process.exit(r.ok ? 0 : 1), () => process.exit(1))' \
+      if ! WSLENV="" "${WINDOWS_NODE}" -e \
+        'if (process.env.TASK6_WSLENV_SENTINEL) process.exit(2); fetch(process.argv[1], {signal: AbortSignal.timeout(5000)}).then(r => process.exit(r.ok ? 0 : 1), () => process.exit(1))' \
         "${e2e_builder_base_url}/ai-builder/" </dev/null >/dev/null 2>&1; then
         printf 'Windows Node cannot reach WSL static service via localhost or %s\n' \
           "${e2e_builder_base_url}" >&2
@@ -606,6 +698,9 @@ env \
   BUILDER_BUILD_SHA="${BUILD_SHA}" \
   BUILDER_CURRENT_TENANT_UUID="${current_tenant_uuid}" \
   BUILDER_TARGET_TENANT_UUID="${target_tenant_uuid}" \
+  BUILDER_TARGET_TENANT_ID="${target_tenant_id}" \
+  BUILDER_TARGET_C_TENANT_UUID="${target_c_tenant_uuid}" \
+  BUILDER_TARGET_C_TENANT_ID="${target_c_tenant_id}" \
   BUILDER_DISABLED_TENANT_UUID="${disabled_tenant_uuid}" \
   BUILDER_UNAUTHORIZED_TENANT_UUID="${unauthorized_tenant_uuid}" \
   BUILDER_E2E_USERNAME="${E2E_USERNAME}" \
@@ -619,7 +714,8 @@ env \
 cat "${PLAYWRIGHT_LOG}"
 
 if rg -n -F "${E2E_PASSWORD}" \
-  "${BUILD_LOG}" "${RUNTIME_LOG}" "${BACKEND_LOG}" "${FRONTEND_LOG}" "${PLAYWRIGHT_LOG}"; then
+  "${BUILD_LOG}" "${RUNTIME_LOG}" "${BACKEND_LOG}" "${SEED_LOG}" \
+  "${FRONTEND_LOG}" "${PLAYWRIGHT_LOG}"; then
   echo "credential canary found in Task 6 logs" >&2
   exit 1
 fi
@@ -631,7 +727,8 @@ fi
 
 if rg -n \
   'Authorization:|Cookie:|Bearer [A-Za-z0-9._-]+|[A-Za-z0-9_-]{20,}\.[A-Za-z0-9_-]{20,}\.[A-Za-z0-9_-]{20,}' \
-  "${RUNTIME_LOG}" "${BACKEND_LOG}" "${FRONTEND_LOG}" "${PLAYWRIGHT_LOG}"; then
+  "${RUNTIME_LOG}" "${BACKEND_LOG}" "${SEED_LOG}" \
+  "${FRONTEND_LOG}" "${PLAYWRIGHT_LOG}"; then
   echo "credential-shaped content found in Task 6 logs" >&2
   exit 1
 fi

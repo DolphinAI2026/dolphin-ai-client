@@ -51,6 +51,16 @@ need() {
   command -v "$1" >/dev/null 2>&1 || die "missing command: $1"
 }
 
+assert_clean_build_inputs() {
+  (
+    cd "$REPO_ROOT"
+    build_inputs=(frontend backend admin-spa deploy/docker)
+    git diff --quiet --cached -- "${build_inputs[@]}"
+    git diff --quiet -- "${build_inputs[@]}"
+    [ -z "$(git ls-files --others --exclude-standard -- "${build_inputs[@]}")" ]
+  ) || die "Docker build inputs are dirty; commit them before building"
+}
+
 need kubectl
 
 resolve_image() {
@@ -83,11 +93,15 @@ build_and_push_image() {
     return
   fi
 
+  assert_clean_build_inputs
+  BUILD_SHA="$(git -C "$REPO_ROOT" rev-parse HEAD)"
+  [[ "$BUILD_SHA" =~ ^[0-9a-f]{40}$ ]] || die "HEAD is not a full lowercase Git SHA"
   log "build and push image: ${IMAGE}"
   if docker buildx version >/dev/null 2>&1; then
     docker buildx build \
       --platform "$PLATFORM" \
       --build-arg "VITE_BASE_URL=${VITE_BASE_URL}" \
+      --build-arg "VITE_BUILD_SHA=${BUILD_SHA}" \
       --build-arg "VITE_ADMIN_BASE=${VITE_ADMIN_BASE}" \
       --build-arg "VITE_API_BASE_URL=${VITE_API_BASE_URL}" \
       --build-arg "VITE_MCP_PUBLIC_BASE=${VITE_MCP_PUBLIC_BASE}" \
@@ -98,6 +112,7 @@ build_and_push_image() {
   else
     docker build \
       --build-arg "VITE_BASE_URL=${VITE_BASE_URL}" \
+      --build-arg "VITE_BUILD_SHA=${BUILD_SHA}" \
       --build-arg "VITE_ADMIN_BASE=${VITE_ADMIN_BASE}" \
       --build-arg "VITE_API_BASE_URL=${VITE_API_BASE_URL}" \
       --build-arg "VITE_MCP_PUBLIC_BASE=${VITE_MCP_PUBLIC_BASE}" \

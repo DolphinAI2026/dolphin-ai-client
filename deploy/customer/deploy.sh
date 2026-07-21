@@ -86,7 +86,10 @@ ensure_image() {
        客户环境通常拉不到内网私库，请二选一：
          a) 由交付方预构建后 docker save 成 tar，部署时 IMAGE_TAR=/path/xxx.tar ./deploy.sh
          b) 在能联网的机器上构建：
-            cd $REPO_ROOT && docker build -t apaas-builder:$IMAGE_TAG -f deploy/docker/Dockerfile ."
+            cd $REPO_ROOT
+            BUILD_SHA=\$(git rev-parse HEAD)
+            docker build --build-arg VITE_BUILD_SHA=\$BUILD_SHA \
+              -t apaas-builder:$IMAGE_TAG -f deploy/docker/Dockerfile ."
   fi
   ok "镜像 apaas-builder:$IMAGE_TAG 已就绪"
 }

@@ -33,6 +33,16 @@ need() {
   command -v "$1" >/dev/null 2>&1 || { echo "missing command: $1" >&2; exit 1; }
 }
 
+assert_clean_build_inputs() {
+  (
+    cd "$REPO_ROOT"
+    build_inputs=(frontend backend admin-spa deploy/docker)
+    git diff --quiet --cached -- "${build_inputs[@]}"
+    git diff --quiet -- "${build_inputs[@]}"
+    [ -z "$(git ls-files --others --exclude-standard -- "${build_inputs[@]}")" ]
+  ) || { echo "Docker build inputs are dirty; commit them before building" >&2; exit 1; }
+}
+
 build_image() {
   local tag="$1"
   local mcp_public="$2"
@@ -44,6 +54,7 @@ build_image() {
     docker buildx build \
       --platform "$PLATFORM" \
       --build-arg "VITE_BASE_URL=${VITE_BASE_URL}" \
+      --build-arg "VITE_BUILD_SHA=${BUILD_SHA}" \
       --build-arg "VITE_ADMIN_BASE=${VITE_ADMIN_BASE}" \
       --build-arg "VITE_API_BASE_URL=${VITE_API_BASE_URL}" \
       --build-arg "VITE_MCP_PUBLIC_BASE=${mcp_public}" \
@@ -54,6 +65,7 @@ build_image() {
   else
     docker build \
       --build-arg "VITE_BASE_URL=${VITE_BASE_URL}" \
+      --build-arg "VITE_BUILD_SHA=${BUILD_SHA}" \
       --build-arg "VITE_ADMIN_BASE=${VITE_ADMIN_BASE}" \
       --build-arg "VITE_API_BASE_URL=${VITE_API_BASE_URL}" \
       --build-arg "VITE_MCP_PUBLIC_BASE=${mcp_public}" \
@@ -69,6 +81,12 @@ build_image() {
 main() {
   need docker
   need git
+  assert_clean_build_inputs
+  BUILD_SHA="$(git -C "$REPO_ROOT" rev-parse HEAD)"
+  [[ "$BUILD_SHA" =~ ^[0-9a-f]{40}$ ]] || {
+    echo "HEAD is not a full lowercase Git SHA" >&2
+    exit 1
+  }
 
   echo "repository: $REPO_ROOT"
   echo "platform: $PLATFORM"

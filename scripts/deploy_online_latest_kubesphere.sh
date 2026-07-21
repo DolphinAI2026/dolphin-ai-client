@@ -70,6 +70,16 @@ need() {
   command -v "$1" >/dev/null 2>&1 || die "missing command: $1"
 }
 
+assert_clean_build_inputs() {
+  (
+    cd "$WORKDIR"
+    build_inputs=(frontend backend admin-spa deploy/docker)
+    git diff --quiet --cached -- "${build_inputs[@]}"
+    git diff --quiet -- "${build_inputs[@]}"
+    [ -z "$(git ls-files --others --exclude-standard -- "${build_inputs[@]}")" ]
+  ) || die "Docker build inputs are dirty; commit them before building"
+}
+
 base64_decode() {
   if base64 --help 2>&1 | grep -q -- '-d'; then
     base64 -d
@@ -109,6 +119,9 @@ docker_login_if_requested() {
 }
 
 build_and_push_image() {
+  assert_clean_build_inputs
+  GIT_FULL_SHA="$(git -C "$WORKDIR" rev-parse HEAD)"
+  [[ "$GIT_FULL_SHA" =~ ^[0-9a-f]{40}$ ]] || die "HEAD is not a full lowercase Git SHA"
   if [ -z "$IMAGE_TAG" ]; then
     IMAGE_TAG="${IMAGE_TAG_PREFIX}-$(date +%Y%m%d-%H%M%S)-${GIT_SHA}"
   fi
@@ -119,6 +132,7 @@ build_and_push_image() {
     docker buildx build \
       --platform "$PLATFORM" \
       --build-arg "VITE_BASE_URL=${VITE_BASE_URL}" \
+      --build-arg "VITE_BUILD_SHA=${GIT_FULL_SHA}" \
       --build-arg "VITE_ADMIN_BASE=${VITE_ADMIN_BASE}" \
       --build-arg "VITE_API_BASE_URL=${VITE_API_BASE_URL}" \
       --build-arg "VITE_MCP_PUBLIC_BASE=${VITE_MCP_PUBLIC_BASE:-https://${HOST}/ai-builder}" \
@@ -129,6 +143,7 @@ build_and_push_image() {
   else
     docker build \
       --build-arg "VITE_BASE_URL=${VITE_BASE_URL}" \
+      --build-arg "VITE_BUILD_SHA=${GIT_FULL_SHA}" \
       --build-arg "VITE_ADMIN_BASE=${VITE_ADMIN_BASE}" \
       --build-arg "VITE_API_BASE_URL=${VITE_API_BASE_URL}" \
       --build-arg "VITE_MCP_PUBLIC_BASE=${VITE_MCP_PUBLIC_BASE:-https://${HOST}/ai-builder}" \

@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import importlib
 from types import SimpleNamespace
+from unittest.mock import Mock
 
 import pytest
 import pytest_asyncio
@@ -232,6 +233,29 @@ async def test_switch_tenant_response_remains_token_only(client, auth_db_factory
 
     assert response.status_code == 200
     assert set(response.json()) == {"access_token", "token_type"}
+
+
+@pytest.mark.asyncio
+async def test_switch_tenant_rejects_disabled_tenant_without_signing(
+    client,
+    auth_db_factory,
+    monkeypatch,
+):
+    user, tenants = await seed_tenant_user(auth_db_factory, tenant_count=2)
+    token = create_access_token(user, tenant_id=tenants[0].id)
+    async with auth_db_factory() as session:
+        await disable_tenant(session, tenants[1].id)
+    token_signer = Mock(wraps=login_routes.create_access_token)
+    monkeypatch.setattr(login_routes, "create_access_token", token_signer)
+
+    response = await client.post(
+        "/api/auth/switch-tenant",
+        headers=bearer(token),
+        json={"tenant_id": tenants[1].id},
+    )
+
+    assert response.status_code == 403
+    token_signer.assert_not_called()
 
 
 @pytest.mark.asyncio

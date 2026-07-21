@@ -1,4 +1,7 @@
 """租户切换接口测试 — switch-tenant + me/tenants + 租户管理 CRUD。"""
+import importlib
+from unittest.mock import Mock
+
 import pytest
 from jose import jwt
 from fastapi import HTTPException
@@ -32,6 +35,8 @@ from app.routes.auth import (
     _apaas_membership_role_preference,
     _sync_user_membership,
 )
+
+login_routes = importlib.import_module("app.routes.auth.login")
 
 
 async def _seed_user_and_tenants(db_session, *, num_tenants: int, member_indices: list[int]):
@@ -95,6 +100,38 @@ async def test_switch_tenant_rejects_non_member(db_session):
             db_session,
         )
     assert exc.value.status_code == 403
+
+
+@pytest.mark.asyncio
+async def test_switch_tenant_rejects_active_membership_for_disabled_tenant(
+    db_session,
+    monkeypatch,
+):
+    user, tenants = await _seed_user_and_tenants(
+        db_session,
+        num_tenants=2,
+        member_indices=[0, 1],
+    )
+    tenants[1].status = 0
+    await db_session.flush()
+    ctx = AuthContext(
+        user=user,
+        tenant_id=tenants[0].id,
+        tenant_role="member",
+        org_permissions={},
+    )
+    token_signer = Mock(wraps=login_routes.create_access_token)
+    monkeypatch.setattr(login_routes, "create_access_token", token_signer)
+
+    with pytest.raises(HTTPException) as exc:
+        await switch_tenant(
+            TenantSwitchRequest(tenant_id=tenants[1].id),
+            ctx,
+            db_session,
+        )
+
+    assert exc.value.status_code == 403
+    token_signer.assert_not_called()
 
 
 @pytest.mark.asyncio
