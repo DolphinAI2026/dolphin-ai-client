@@ -73,6 +73,73 @@ EOF
   cat >"${FAKE_BIN}/curl" <<EOF
 #!/usr/bin/env bash
 set -euo pipefail
+
+state_value() {
+  local key="\$1" line
+  [ -n "\${FAKE_KUBE_STATE:-}" ] || return 0
+  [ -f "\${FAKE_KUBE_STATE}" ] || return 0
+  line="\$(/usr/bin/grep -E "^\${key}=" "\${FAKE_KUBE_STATE}" || true)"
+  printf '%s' "\${line#*=}"
+}
+
+set_state_value() {
+  local key="\$1" value="\$2" tmp
+  [ -n "\${FAKE_KUBE_STATE:-}" ] || return 0
+  tmp="\${FAKE_KUBE_STATE}.tmp"
+  if [ -f "\${FAKE_KUBE_STATE}" ]; then
+    /usr/bin/grep -Ev "^\${key}=" "\${FAKE_KUBE_STATE}" >"\${tmp}" || true
+  else
+    : >"\${tmp}"
+  fi
+  printf '%s=%s\n' "\${key}" "\${value}" >>"\${tmp}"
+  mv "\${tmp}" "\${FAKE_KUBE_STATE}"
+}
+
+replace_lock_with_owner_b() {
+  set_state_value lock_owner "\${FAKE_REPLACEMENT_OWNER:-owner-b}"
+  set_state_value lock_target "\${FAKE_REPLACEMENT_TARGET:-registry.example/ai-builder@sha256:eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee}"
+  set_state_value lock_state "\${FAKE_REPLACEMENT_LOCK_STATE:-active}"
+  set_state_value lock_uid "\${FAKE_REPLACEMENT_LOCK_UID:-lock-uid-b}"
+  set_state_value lock_resource_version "\${FAKE_REPLACEMENT_LOCK_RESOURCE_VERSION:-1}"
+  set_state_value lock_previous_backend "\${FAKE_REPLACEMENT_PREVIOUS_BACKEND:-}"
+  set_state_value lock_previous_init "\${FAKE_REPLACEMENT_PREVIOUS_INIT:-}"
+  set_state_value lock_sts_uid "\${FAKE_REPLACEMENT_STS_UID:-}"
+  set_state_value lock_sts_resource_version "\${FAKE_REPLACEMENT_STS_RESOURCE_VERSION:-}"
+  [ -z "\${FAKE_KUBE_LOG:-}" ] || printf 'lock-replace owner=%s\n' "\$(state_value lock_owner)" >>"\${FAKE_KUBE_LOG}"
+}
+
+if [[ " \$* " == *" -X DELETE "* && " \$* " == *"/configmaps/ai-builder-release-lock"* ]]; then
+  if [ "\${FAKE_REPLACE_LOCK_ON_DELETE:-0}" = "1" ] \
+    && [ "\$(state_value lock_replaced_on_delete)" != "1" ]; then
+    set_state_value lock_replaced_on_delete 1
+    replace_lock_with_owner_b
+  fi
+  body=""
+  previous=""
+  for argument in "\$@"; do
+    if [ "\${previous}" = "--data" ] || [ "\${previous}" = "--data-raw" ]; then
+      body="\${argument}"
+      break
+    fi
+    previous="\${argument}"
+  done
+  expected_uid="\$(printf '%s' "\${body}" | /usr/bin/sed -nE 's/.*"uid":"([^"]+)".*/\1/p')"
+  expected_rv="\$(printf '%s' "\${body}" | /usr/bin/sed -nE 's/.*"resourceVersion":"([^"]+)".*/\1/p')"
+  [ -n "\${expected_uid}" ] && [ -n "\${expected_rv}" ] || exit 64
+  [ "\$(state_value lock_uid)" = "\${expected_uid}" ] || exit 1
+  [ "\$(state_value lock_resource_version)" = "\${expected_rv}" ] || exit 1
+  set_state_value lock_owner ""
+  set_state_value lock_target ""
+  set_state_value lock_uid ""
+  set_state_value lock_resource_version ""
+  set_state_value lock_previous_backend ""
+  set_state_value lock_previous_init ""
+  set_state_value lock_sts_uid ""
+  set_state_value lock_sts_resource_version ""
+  [ -z "\${FAKE_KUBE_LOG:-}" ] || printf 'lock-delete-cas\n' >>"\${FAKE_KUBE_LOG}"
+  exit 0
+fi
+
 printf '<meta name="builder-build-sha" content="${TEST_REVISION}">'
 EOF
 
@@ -136,6 +203,19 @@ set_state_value() {
   mv "${tmp}" "${FAKE_KUBE_STATE}"
 }
 
+replace_lock_with_owner_b() {
+  set_state_value lock_owner "${FAKE_REPLACEMENT_OWNER:-owner-b}"
+  set_state_value lock_target "${FAKE_REPLACEMENT_TARGET:-registry.example/ai-builder@sha256:eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee}"
+  set_state_value lock_state "${FAKE_REPLACEMENT_LOCK_STATE:-active}"
+  set_state_value lock_uid "${FAKE_REPLACEMENT_LOCK_UID:-lock-uid-b}"
+  set_state_value lock_resource_version "${FAKE_REPLACEMENT_LOCK_RESOURCE_VERSION:-1}"
+  set_state_value lock_previous_backend "${FAKE_REPLACEMENT_PREVIOUS_BACKEND:-}"
+  set_state_value lock_previous_init "${FAKE_REPLACEMENT_PREVIOUS_INIT:-}"
+  set_state_value lock_sts_uid "${FAKE_REPLACEMENT_STS_UID:-}"
+  set_state_value lock_sts_resource_version "${FAKE_REPLACEMENT_STS_RESOURCE_VERSION:-}"
+  [ -z "${FAKE_KUBE_LOG:-}" ] || printf 'lock-replace owner=%s\n' "$(state_value lock_owner)" >>"${FAKE_KUBE_LOG}"
+}
+
 if [[ "$args" == *" auth can-i "* ]]; then
   printf '%s\n' "${FAKE_RBAC:-yes}"
   exit 0
@@ -154,49 +234,91 @@ if [[ "$args" == *" create configmap ai-builder-release-lock "* ]]; then
     case "$argument" in
       --from-literal=owner=*) set_state_value lock_owner "${argument#--from-literal=owner=}" ;;
       --from-literal=target_image=*) set_state_value lock_target "${argument#--from-literal=target_image=}" ;;
+      --from-literal=state=*) set_state_value lock_state "${argument#--from-literal=state=}" ;;
       --from-literal=previous_backend_image=*) set_state_value lock_previous_backend "${argument#--from-literal=previous_backend_image=}" ;;
       --from-literal=previous_init_image=*) set_state_value lock_previous_init "${argument#--from-literal=previous_init_image=}" ;;
     esac
   done
   [ -n "$(state_value lock_owner)" ] && [ -n "$(state_value lock_target)" ] || exit 64
+  [ -n "$(state_value lock_state)" ] || set_state_value lock_state active
+  [ -n "$(state_value lock_uid)" ] || set_state_value lock_uid "${FAKE_LOCK_UID_ON_CREATE:-lock-uid-a}"
+  [ -n "$(state_value lock_resource_version)" ] || set_state_value lock_resource_version "${FAKE_LOCK_RESOURCE_VERSION_ON_CREATE:-1}"
   [ -z "${FAKE_KUBE_LOG:-}" ] || printf 'lock-create owner=%s target=%s\n' "$(state_value lock_owner)" "$(state_value lock_target)" >>"${FAKE_KUBE_LOG}"
+  if [[ "$args" == *"metadata.uid"* && "$args" == *"metadata.resourceVersion"* ]]; then
+    printf '%s %s\n' "$(state_value lock_uid)" "$(state_value lock_resource_version)"
+  elif [[ "$args" == *"metadata.resourceVersion"* ]]; then
+    printf '%s\n' "$(state_value lock_resource_version)"
+  fi
   exit 0
 fi
 if [[ "$args" == *" patch configmap ai-builder-release-lock "* ]]; then
   [ -n "$(state_value lock_owner)" ] || exit 1
+  if [ "${FAKE_REPLACE_LOCK_ON_PATCH:-0}" = "1" ] \
+    && [ "$(state_value lock_replaced_on_patch)" != "1" ]; then
+    set_state_value lock_replaced_on_patch 1
+    replace_lock_with_owner_b
+  fi
   patch=""
+  previous=""
   for argument in "$@"; do
-    case "$argument" in
-      *validated_statefulset_uid*) patch="$argument" ;;
-    esac
+    if [ "$previous" = "--patch" ]; then
+      patch="$argument"
+      break
+    fi
+    previous="$argument"
   done
   [ -n "$patch" ] || exit 64
-  for key in \
-    validated_statefulset_uid \
-    validated_statefulset_resource_version \
-    previous_backend_image \
-    previous_init_image; do
-    value="$(printf '%s' "$patch" | sed -nE "s/.*\"${key}\":\"([^\"]*)\".*/\\1/p")"
-    [ -n "$value" ] || exit 64
-    case "$key" in
-      validated_statefulset_uid) set_state_value lock_sts_uid "$value" ;;
-      validated_statefulset_resource_version) set_state_value lock_sts_resource_version "$value" ;;
-      previous_backend_image) set_state_value lock_previous_backend "$value" ;;
-      previous_init_image) set_state_value lock_previous_init "$value" ;;
+  if [[ "$args" == *" --type=json "* ]] \
+    && [ "$(state_value lock_replaced_on_patch)" = "1" ]; then
+    # The replacement occurs after A's stale read. A JSON Patch with UID/RV tests
+    # must fail before it can write B's lease fields.
+    exit 1
+  fi
+  for key in owner target_image state; do
+    value="$(printf '%s' "$patch" | sed -nE "s~.*\"path\":\"/data/${key}\",\"value\":\"([^\"]*)\".*~\\1~p")"
+    [[ "$patch" != *"\"path\":\"/data/${key}\""* ]] || case "$key" in
+      owner) set_state_value lock_owner "$value" ;;
+      target_image) set_state_value lock_target "$value" ;;
+      state) set_state_value lock_state "$value" ;;
     esac
   done
+  if [[ "$patch" == *"validated_statefulset_uid"* ]]; then
+    for key in validated_statefulset_uid validated_statefulset_resource_version previous_backend_image previous_init_image; do
+      value="$(printf '%s' "$patch" | tr '}' '\n' \
+        | sed -nE "s~.*\"path\":\"/data/${key}\",\"value\":\"([^\"]*)\".*~\\1~p")"
+      [ -n "$value" ] || exit 64
+      case "$key" in
+        validated_statefulset_uid) set_state_value lock_sts_uid "$value" ;;
+        validated_statefulset_resource_version) set_state_value lock_sts_resource_version "$value" ;;
+        previous_backend_image) set_state_value lock_previous_backend "$value" ;;
+        previous_init_image) set_state_value lock_previous_init "$value" ;;
+      esac
+    done
+  fi
+  set_state_value lock_resource_version "$(( $(state_value lock_resource_version) + 1 ))"
   [ -z "${FAKE_KUBE_LOG:-}" ] || printf 'lock-patch uid=%s rv=%s\n' \
     "$(state_value lock_sts_uid)" "$(state_value lock_sts_resource_version)" >>"${FAKE_KUBE_LOG}"
+  if [[ "$args" == *"metadata.uid"* && "$args" == *"metadata.resourceVersion"* ]]; then
+    printf '%s %s\n' "$(state_value lock_uid)" "$(state_value lock_resource_version)"
+  elif [[ "$args" == *"metadata.resourceVersion"* ]]; then
+    printf '%s\n' "$(state_value lock_resource_version)"
+  fi
   exit 0
 fi
 if [[ "$args" == *" get configmap ai-builder-release-lock "* || "$args" == *" get configmap/ai-builder-release-lock "* ]]; then
-  [ -n "$(state_value lock_owner)" ] || exit 1
+  [ -n "$(state_value lock_owner)" ] || [ "$(state_value lock_state)" = "released" ] || exit 1
   case "$args" in
+    *"metadata.uid"*"metadata.resourceVersion"*)
+      printf '%s %s\n' "$(state_value lock_uid)" "$(state_value lock_resource_version)"
+      ;;
+    *"metadata.uid"*) printf '%s\n' "$(state_value lock_uid)" ;;
+    *"metadata.resourceVersion"*) printf '%s\n' "$(state_value lock_resource_version)" ;;
     *"target_image"*) printf '%s\n' "$(state_value lock_target)" ;;
     *"previous_backend_image"*) printf '%s\n' "$(state_value lock_previous_backend)" ;;
     *"previous_init_image"*) printf '%s\n' "$(state_value lock_previous_init)" ;;
     *"validated_statefulset_uid"*) printf '%s\n' "$(state_value lock_sts_uid)" ;;
     *"validated_statefulset_resource_version"*) printf '%s\n' "$(state_value lock_sts_resource_version)" ;;
+    *"state"*) printf '%s\n' "$(state_value lock_state)" ;;
     *"owner"*) printf '%s\n' "$(state_value lock_owner)" ;;
     *) printf 'configmap/ai-builder-release-lock\n' ;;
   esac
@@ -204,14 +326,24 @@ if [[ "$args" == *" get configmap ai-builder-release-lock "* || "$args" == *" ge
 fi
 if [[ "$args" == *" delete configmap ai-builder-release-lock "* ]]; then
   [ -n "$(state_value lock_owner)" ] || exit 1
+  if [ "${FAKE_REPLACE_LOCK_ON_DELETE:-0}" = "1" ] \
+    && [ "$(state_value lock_replaced_on_delete)" != "1" ]; then
+    set_state_value lock_replaced_on_delete 1
+    replace_lock_with_owner_b
+  fi
   set_state_value lock_owner ""
   set_state_value lock_target ""
+  set_state_value lock_state ""
   set_state_value lock_previous_backend ""
   set_state_value lock_previous_init ""
   set_state_value lock_sts_uid ""
   set_state_value lock_sts_resource_version ""
   [ -z "${FAKE_KUBE_LOG:-}" ] || printf 'lock-delete\n' >>"${FAKE_KUBE_LOG}"
   exit 0
+fi
+if [[ "$args" == *" proxy "* ]]; then
+  printf 'Starting to serve on 127.0.0.1:%s\n' "${RELEASE_LOCK_PROXY_PORT:-18081}" >&2
+  while :; do sleep 1; done
 fi
 if [[ "$args" == *" config current-context "* ]]; then
   printf 'fake-context\n'
@@ -473,9 +605,9 @@ abort "update job must persist artifacts after failure" unless update.dig("artif
 abort "release jobs must serialize the workload" unless update["resource_group"] == "$BUILDER_K8S_NAMESPACE/$BUILDER_K8S_STATEFULSET"
 update_script = update.fetch("script").join("\n")
 abort "update job must own ConfigMap release lock" unless update_script.include?("release_lock_owner")
-create_at = update_script.index('if ! kubectl -n "${BUILDER_K8S_NAMESPACE}" create configmap')
+create_at = update_script.index('if ! identity="$(kubectl -n "${BUILDER_K8S_NAMESPACE}" create configmap')
 capture_at = update_script.index('identity="$(current_statefulset_identity)"', create_at)
-patch_at = update_script.index('patch configmap', capture_at)
+patch_at = update_script.index('patch_release_lock_cas "${patch}"', capture_at)
 set_at = update_script.index('set image', patch_at)
 abort "update job must acquire lock before capture" unless create_at && capture_at && create_at < capture_at
 abort "update job must validate baseline before mutation" unless patch_at && set_at && patch_at < set_at
@@ -485,9 +617,20 @@ abort "recovery must run after release" unless config.fetch("stages").index("rec
 abort "recovery must use fixed kubectl" unless recovery.dig("image", "name") == "hub-mirror.dfy.definesys.cn/bitnami/kubectl:1.30.7"
 abort "recovery must always run" unless recovery.fetch("rules").any? { |rule| rule["when"] == "always" }
 abort "recovery must not consume browser artifacts" if recovery.fetch("needs", []).any? { |need| need["artifacts"] }
+abort "recovery must explicitly disable previous-stage artifact downloads" unless recovery["dependencies"] == []
 recovery_script = recovery.fetch("script").join("\n")
 abort "recovery must read lock previous refs" unless recovery_script.include?("previous_backend_image")
 abort "recovery must not read browser dotenv" if recovery_script.include?("PREVIOUS_BACKEND_IMAGE")
+online_source = File.read(File.join(File.dirname(path), "scripts/deploy_online_latest_kubesphere.sh"))
+[update.fetch("script").join("\n"), smoke.fetch("script").join("\n"), recovery_script, online_source].each do |source|
+  abort "release lock baseline/release must use JSON Patch CAS" unless source.include?("--type=json")
+  %w[/metadata/uid /metadata/resourceVersion /data/owner /data/target_image].each do |path|
+    abort "release lock CAS test missing #{path}" unless source.include?(path)
+  end
+end
+[update.fetch("script").join("\n"), recovery_script].each do |source|
+  abort "kubectl-only job must not require curl" if source.match?(/\bcurl\b/)
+end
 puts "CI_METADATA_MAPPING=PASS"
 RUBY
 }
@@ -646,6 +789,7 @@ EOF
     FAKE_SEQUENCE_LOG="$sequence" \
     FAKE_BUILD_WRAPPER_LOG="$wrapper_log" \
       assert_command_fails_without_secret bash -c '
+        export FAKE_REPLACE_LOCK_ON_PATCH=1
         source "$1/scripts/deploy_online_latest_kubesphere.sh"
         build_and_push_image
       ' bash "$ROOT_DIR"
@@ -671,6 +815,7 @@ assert_online_source_and_docker_preflight() {
     FAKE_DOCKER_IMAGETOOLS=0 \
     CONTAINER_CLI="${FAKE_BIN}/docker" \
       assert_command_fails_without_secret bash -c '
+        export FAKE_REPLACE_LOCK_ON_PATCH=1
         source "$1/scripts/deploy_online_latest_kubesphere.sh"
         verify_docker_digest_capability
       ' bash "$ROOT_DIR"
@@ -1028,6 +1173,7 @@ assert_ci_recovery_contract() {
     "sts_resource_version=9" \
     "lock_owner=ci-pipeline-a" \
     "lock_target=registry.example/ai-builder@${TEST_DIGEST}" \
+    "lock_state=active" \
     "lock_previous_backend=registry.example/ai-builder@sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc" \
     "lock_previous_init=registry.example/ai-builder@sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd" \
     "lock_sts_uid=sts-uid-1" \
@@ -1116,7 +1262,7 @@ assert_ci_recovery_contract() {
     FAKE_KUBE_LOG="$kube_log" \
       bash -c "$recovery_script"
   )"
-  assert_contains "$output" "no release lock to recover"
+  assert_contains "$output" "released release lock requires no recovery"
 
   printf '%s\n' \
     "backend_image=registry.example/ai-builder@${TEST_DIGEST}" \
@@ -1124,6 +1270,7 @@ assert_ci_recovery_contract() {
     "sts_resource_version=3" \
     "lock_owner=ci-pipeline-d" \
     "lock_target=registry.example/ai-builder@${TEST_DIGEST}" \
+    "lock_state=active" \
     "lock_previous_backend=registry.example/ai-builder@sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc" \
     "lock_previous_init=registry.example/ai-builder@sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd" \
     "lock_sts_uid=sts-uid-1" \
@@ -1183,7 +1330,10 @@ assert_ci_update_failure_and_lock_contract() {
     )
   )"
   assert_not_contains "$output" "$TEST_PASSWORD"
-  assert_contains "$output" "rollout failed; rollback completed"
+  if [[ "$output" != *"rollout failed; rollback completed"* ]]; then
+    printf 'CI update rollback output: %s\n' "$output" >&2
+    fail "expected rollout failed; rollback completed"
+  fi
   assert_contains "$(<"$kube_log")" "set-image backend=registry.example/ai-builder@${TEST_DIGEST}"
   assert_contains "$(<"$kube_log")" "set-image backend=registry.example/ai-builder@sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
   assert_contains "$(<"$state_file")" "backend_image=registry.example/ai-builder@sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
@@ -1350,6 +1500,197 @@ assert_online_lock_baseline_interleave_contract() {
   printf 'ONLINE_LOCK_BASELINE_INTERLEAVE=PASS\n'
 }
 
+assert_replacement_lock_cas_contract() {
+  local state_file kube_log job_dir update_script browser_script recovery_script output
+  state_file="${TMP_DIR}/replacement-lock.state"
+  kube_log="${TMP_DIR}/replacement-lock.log"
+  job_dir="${TMP_DIR}/replacement-lock-ci"
+  update_script="$(ci_job_script release_and_update_server)"
+  browser_script="$(ci_job_script release_builder_browser_smoke)"
+  recovery_script="$(ci_job_script release_builder_recovery)"
+  mkdir -p "${job_dir}/build"
+  ln -s "${ROOT_DIR}/scripts" "${job_dir}/scripts"
+  ln -s "${ROOT_DIR}/node_modules" "${job_dir}/node_modules"
+  : >"${job_dir}/kubeconfig"
+
+  printf '%s\n' \
+    "lock_owner=online-a" \
+    "lock_target=registry.example/ai-builder@${TEST_DIGEST}" \
+    "lock_state=active" \
+    "lock_uid=lock-uid-a" \
+    "lock_resource_version=7" >"$state_file"
+  : >"$kube_log"
+  output="$(
+    PATH="${FAKE_BIN}:$PATH" \
+    FAKE_KUBE_STATE="$state_file" \
+    FAKE_KUBE_LOG="$kube_log" \
+    FAKE_REPLACE_LOCK_ON_PATCH=1 \
+      assert_command_fails_without_secret bash -c '
+        source "$1/scripts/deploy_online_latest_kubesphere.sh"
+        NAMESPACE="release-ns"
+        APP_NAME="ai-builder"
+        RELEASE_LOCK_NAME="ai-builder-release-lock"
+        IMAGE="registry.example/ai-builder@$2"
+        RELEASE_LOCK_OWNER="online-a"
+        RELEASE_LOCK_UID="lock-uid-a"
+        RELEASE_LOCK_RESOURCE_VERSION="7"
+        VALIDATED_STATEFULSET_UID="sts-uid-1"
+        VALIDATED_STATEFULSET_RESOURCE_VERSION="1"
+        PREVIOUS_BACKEND_IMAGE="registry.example/ai-builder@sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
+        PREVIOUS_DIST_INIT_IMAGE="registry.example/ai-builder@sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd"
+        persist_validated_baseline
+      ' bash "$ROOT_DIR" "$TEST_DIGEST"
+  )"
+  assert_not_contains "$output" "$TEST_PASSWORD"
+  if [ "$(state_file_value "$state_file" lock_owner)" != "owner-b" ]; then
+    printf 'online replacement baseline output: %s\nstate:\n%s\n' "$output" "$(<"$state_file")" >&2
+    fail "online stale baseline patch changed replacement lock owner"
+  fi
+  [ -z "$(state_file_value "$state_file" lock_previous_backend)" ] \
+    || fail "online stale baseline patch wrote replacement lock baseline"
+
+  printf '%s\n' \
+    "lock_owner=online-a" \
+    "lock_target=registry.example/ai-builder@${TEST_DIGEST}" \
+    "lock_state=active" \
+    "lock_uid=lock-uid-a" \
+    "lock_resource_version=7" >"$state_file"
+  output="$(
+    PATH="${FAKE_BIN}:$PATH" \
+    FAKE_KUBE_STATE="$state_file" \
+    FAKE_KUBE_LOG="$kube_log" \
+    FAKE_REPLACE_LOCK_ON_PATCH=1 \
+      assert_command_fails_without_secret bash -c '
+        source "$1/scripts/deploy_online_latest_kubesphere.sh"
+        NAMESPACE="release-ns"
+        APP_NAME="ai-builder"
+        RELEASE_LOCK_NAME="ai-builder-release-lock"
+        IMAGE="registry.example/ai-builder@$2"
+        RELEASE_LOCK_OWNER="online-a"
+        RELEASE_LOCK_UID="lock-uid-a"
+        RELEASE_LOCK_RESOURCE_VERSION="7"
+        LOCK_ACQUIRED=1
+        release_lock_if_owned
+      ' bash "$ROOT_DIR" "$TEST_DIGEST"
+  )"
+  assert_not_contains "$output" "$TEST_PASSWORD"
+  [ "$(state_file_value "$state_file" lock_owner)" = "owner-b" ] \
+    || fail "online stale release deleted replacement lock"
+  [ "$(state_file_value "$state_file" lock_uid)" = "lock-uid-b" ] \
+    || fail "online stale release changed replacement lock identity"
+
+  printf '%s\n' \
+    "backend_image=registry.example/ai-builder@sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc" \
+    "init_image=registry.example/ai-builder@sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd" \
+    "sts_resource_version=1" >"$state_file"
+  printf 'BUILDER_IMAGE=registry.example/ai-builder@%s\nDEPLOYED_REVISION=%s\n' \
+    "$TEST_DIGEST" "$TEST_REVISION" >"${job_dir}/build/release.env"
+  output="$(
+    (
+      cd "$job_dir"
+      PATH="${FAKE_BIN}:$PATH" \
+      APAAS_KUBECONFIG="${job_dir}/kubeconfig" \
+      BUILDER_IMAGE="registry.example/ai-builder@${TEST_DIGEST}" \
+      BUILDER_K8S_NAMESPACE="release-ns" \
+      BUILDER_K8S_STATEFULSET="ai-builder" \
+      BUILDER_K8S_BACKEND_CONTAINER="ai-builder" \
+      BUILDER_K8S_DIST_INIT_CONTAINER="copy-frontend-dist" \
+      BUILDER_K8S_LABEL_SELECTOR="app.kubernetes.io/name=ai-builder" \
+      BUILDER_ROLLOUT_TIMEOUT="30s" \
+      CI_PIPELINE_ID="pipeline-a" \
+      CI_JOB_ID="update-a" \
+      FAKE_REPLACE_LOCK_ON_PATCH=1 \
+      FAKE_KUBE_STATE="$state_file" \
+      FAKE_KUBE_LOG="$kube_log" \
+        assert_command_fails_without_secret bash -c "$update_script"
+    )
+  )"
+  assert_not_contains "$output" "$TEST_PASSWORD"
+  [ "$(state_file_value "$state_file" lock_owner)" = "owner-b" ] \
+    || fail "CI update stale baseline patch changed replacement lock owner"
+  [ -z "$(state_file_value "$state_file" lock_previous_backend)" ] \
+    || fail "CI update stale baseline patch wrote replacement lock baseline"
+
+  printf '%s\n' \
+    "backend_image=registry.example/ai-builder@${TEST_DIGEST}" \
+    "init_image=registry.example/ai-builder@${TEST_DIGEST}" \
+    "lock_owner=ci-pipeline-a" \
+    "lock_target=registry.example/ai-builder@${TEST_DIGEST}" \
+    "lock_state=active" \
+    "lock_uid=lock-uid-a" \
+    "lock_resource_version=7" >"$state_file"
+  output="$(
+    (
+      cd "$job_dir"
+      PATH="${FAKE_BIN}:$PATH" \
+      APAAS_KUBECONFIG="${job_dir}/kubeconfig" \
+      BUILDER_IMAGE="registry.example/ai-builder@${TEST_DIGEST}" \
+      DEPLOYED_REVISION="$TEST_REVISION" \
+      KUBE_NAMESPACE="release-ns" \
+      KUBE_STATEFULSET="ai-builder" \
+      KUBE_LABEL_SELECTOR="app.kubernetes.io/name=ai-builder" \
+      KUBE_BACKEND_CONTAINER="ai-builder" \
+      KUBE_DIST_INIT_CONTAINER="copy-frontend-dist" \
+      KUBE_WEB_CONTAINER="web" \
+      KUBE_EXPECTED_HOST="builder.example" \
+      KUBE_EXPECTED_ORIGIN="https://builder.example" \
+      KUBE_INGRESS="ai-builder" \
+      KUBE_SERVICE="ai-builder" \
+      KUBE_INGRESS_PATH="/ai-builder" \
+      BUILDER_ORIGIN="https://builder.example" \
+      BUILDER_SMOKE_USERNAME="release-user" \
+      BUILDER_SMOKE_PASSWORD="$TEST_PASSWORD" \
+      BUILDER_SMOKE_TENANT_NAME="Release Tenant" \
+      BUILDER_SMOKE_CODE_SESSION_ID="session-1" \
+      CI_PIPELINE_ID="pipeline-a" \
+      FAKE_REAL_NODE="$REAL_NODE" \
+      FAKE_REPLACE_LOCK_ON_PATCH=1 \
+      FAKE_KUBE_STATE="$state_file" \
+      FAKE_KUBE_LOG="$kube_log" \
+        assert_command_fails_without_secret bash -e -c "$browser_script"
+    )
+  )"
+  assert_not_contains "$output" "$TEST_PASSWORD"
+  [ "$(state_file_value "$state_file" lock_owner)" = "owner-b" ] \
+    || fail "CI browser stale release deleted replacement lock"
+
+  printf '%s\n' \
+    "backend_image=registry.example/ai-builder@${TEST_DIGEST}" \
+    "init_image=registry.example/ai-builder@${TEST_DIGEST}" \
+    "sts_resource_version=1" \
+    "lock_owner=ci-pipeline-a" \
+    "lock_target=registry.example/ai-builder@${TEST_DIGEST}" \
+    "lock_state=active" \
+    "lock_uid=lock-uid-a" \
+    "lock_resource_version=7" \
+    "lock_previous_backend=registry.example/ai-builder@sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc" \
+    "lock_previous_init=registry.example/ai-builder@sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd" \
+    "lock_sts_uid=sts-uid-1" \
+    "lock_sts_resource_version=1" >"$state_file"
+  output="$(
+    (
+      cd "$job_dir"
+      PATH="${FAKE_BIN}:$PATH" \
+      APAAS_KUBECONFIG="${job_dir}/kubeconfig" \
+      BUILDER_K8S_NAMESPACE="release-ns" \
+      BUILDER_K8S_STATEFULSET="ai-builder" \
+      BUILDER_K8S_BACKEND_CONTAINER="ai-builder" \
+      BUILDER_K8S_DIST_INIT_CONTAINER="copy-frontend-dist" \
+      BUILDER_K8S_LABEL_SELECTOR="app.kubernetes.io/name=ai-builder" \
+      BUILDER_ROLLOUT_TIMEOUT="30s" \
+      CI_PIPELINE_ID="pipeline-a" \
+      FAKE_REPLACE_LOCK_ON_PATCH=1 \
+      FAKE_KUBE_STATE="$state_file" \
+      FAKE_KUBE_LOG="$kube_log" \
+        assert_command_fails_without_secret bash -c "$recovery_script"
+    )
+  )"
+  assert_not_contains "$output" "$TEST_PASSWORD"
+  [ "$(state_file_value "$state_file" lock_owner)" = "owner-b" ] \
+    || fail "CI recovery stale release deleted replacement lock"
+  printf 'REPLACEMENT_LOCK_CAS_CONTRACT=PASS\n'
+}
+
 main() {
   write_fake_tools
   assert_fake_helper_contract
@@ -1364,6 +1705,7 @@ main() {
   assert_ci_update_failure_and_lock_contract
   assert_online_image_only_contract
   assert_online_lock_baseline_interleave_contract
+  assert_replacement_lock_cas_contract
   assert_release_spec_contract
   assert_activation_observer_contract
   printf 'PASS: builder tenant URL release smoke contract\n'

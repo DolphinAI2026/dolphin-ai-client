@@ -232,13 +232,41 @@ release_and_update_server:
       export KUBECONFIG=/tmp/kubeconfig
       release_lock_name="${BUILDER_K8S_STATEFULSET}-release-lock"
       release_lock_owner="ci-${CI_PIPELINE_ID:-unknown}"
+      release_lock_uid=""
+      release_lock_resource_version=""
       lock_value() {
         kubectl -n "${BUILDER_K8S_NAMESPACE}" get "configmap/${release_lock_name}" \
           -o "jsonpath={.data.$1}"
       }
+      refresh_release_lock_identity() {
+        identity="$(kubectl -n "${BUILDER_K8S_NAMESPACE}" get "configmap/${release_lock_name}" \
+          -o jsonpath='{.metadata.uid}{" "}{.metadata.resourceVersion}')" || return 1
+        current_lock_uid="${identity%% *}"
+        current_lock_resource_version="${identity#* }"
+        [ "${current_lock_resource_version}" != "${identity}" ] || return 1
+        printf '%s\n' "${current_lock_uid}" | grep -Eq '^[A-Za-z0-9.-]+$' || return 1
+        printf '%s\n' "${current_lock_resource_version}" | grep -Eq '^[0-9]+$' || return 1
+        [ -z "${release_lock_uid}" ] || [ "${current_lock_uid}" = "${release_lock_uid}" ] || return 1
+        release_lock_uid="${current_lock_uid}"
+        release_lock_resource_version="${current_lock_resource_version}"
+      }
       lock_matches() {
+        refresh_release_lock_identity || return 1
         [ "$(lock_value owner)" = "${release_lock_owner}" ] \
-          && [ "$(lock_value target_image)" = "${BUILDER_IMAGE}" ]
+          && [ "$(lock_value target_image)" = "${BUILDER_IMAGE}" ] \
+          && [ "$(lock_value state)" = "active" ]
+      }
+      patch_release_lock_cas() {
+        patch="$1"
+        identity="$(kubectl -n "${BUILDER_K8S_NAMESPACE}" patch configmap "${release_lock_name}" \
+          --type=json --patch "${patch}" \
+          -o jsonpath='{.metadata.uid}{" "}{.metadata.resourceVersion}')" || return 1
+        patched_lock_uid="${identity%% *}"
+        patched_lock_resource_version="${identity#* }"
+        [ "${patched_lock_resource_version}" != "${identity}" ] || return 1
+        [ "${patched_lock_uid}" = "${release_lock_uid}" ] || return 1
+        printf '%s\n' "${patched_lock_resource_version}" | grep -Eq '^[0-9]+$' || return 1
+        release_lock_resource_version="${patched_lock_resource_version}"
       }
       immutable_image_ref() {
         printf '%s\n' "$1" | grep -Eq '^[^[:space:]@]+@sha256:[0-9a-f]{64}$'
@@ -302,8 +330,9 @@ release_and_update_server:
       }
       release_lock_if_owned() {
         lock_matches || return 1
-        kubectl -n "${BUILDER_K8S_NAMESPACE}" delete configmap "${release_lock_name}" >/dev/null \
-          || return 1
+        patch="$(printf '[{"op":"test","path":"/metadata/uid","value":"%s"},{"op":"test","path":"/metadata/resourceVersion","value":"%s"},{"op":"test","path":"/data/owner","value":"%s"},{"op":"test","path":"/data/target_image","value":"%s"},{"op":"test","path":"/data/state","value":"active"},{"op":"replace","path":"/data/owner","value":""},{"op":"replace","path":"/data/target_image","value":""},{"op":"replace","path":"/data/state","value":"released"},{"op":"add","path":"/data/released_by","value":"%s"}]' \
+          "${release_lock_uid}" "${release_lock_resource_version}" "${release_lock_owner}" "${BUILDER_IMAGE}" "${release_lock_owner}")"
+        patch_release_lock_cas "${patch}" || return 1
       }
       rollback_update_job() {
         lock_matches || { printf 'release lock owner or target changed; refusing rollback\n' >&2; return 1; }
@@ -331,13 +360,35 @@ release_and_update_server:
         exit 1
       }
       immutable_image_ref "${BUILDER_IMAGE}" || { printf 'BUILDER_IMAGE must be immutable\n' >&2; exit 1; }
-      if ! kubectl -n "${BUILDER_K8S_NAMESPACE}" create configmap "${release_lock_name}" \
+      if ! identity="$(kubectl -n "${BUILDER_K8S_NAMESPACE}" create configmap "${release_lock_name}" \
         --from-literal="owner=${release_lock_owner}" \
         --from-literal="target_image=${BUILDER_IMAGE}" \
-        --from-literal="acquired_at=$(date -u +%Y-%m-%dT%H:%M:%SZ)" >/dev/null; then
-        printf 'release lock exists or cannot be acquired; manual recovery is required\n' >&2
-        exit 1
+        --from-literal="state=active" \
+        --from-literal="acquired_at=$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+        -o jsonpath='{.metadata.uid}{" "}{.metadata.resourceVersion}')"; then
+        identity="$(kubectl -n "${BUILDER_K8S_NAMESPACE}" get "configmap/${release_lock_name}" \
+          -o jsonpath='{.metadata.uid}{" "}{.metadata.resourceVersion}{" "}{.data.state}')" \
+          || { printf 'release lock exists or cannot be acquired; manual recovery is required\n' >&2; exit 1; }
+        release_lock_uid="${identity%% *}"
+        remaining_identity="${identity#* }"
+        release_lock_resource_version="${remaining_identity%% *}"
+        release_lock_state="${remaining_identity#* }"
+        [ "${release_lock_state}" = "released" ] \
+          && printf '%s\n' "${release_lock_uid}" | grep -Eq '^[A-Za-z0-9.-]+$' \
+          && printf '%s\n' "${release_lock_resource_version}" | grep -Eq '^[0-9]+$' \
+          || { printf 'release lock exists or cannot be acquired; manual recovery is required\n' >&2; exit 1; }
+        patch="$(printf '[{"op":"test","path":"/metadata/uid","value":"%s"},{"op":"test","path":"/metadata/resourceVersion","value":"%s"},{"op":"test","path":"/data/state","value":"released"},{"op":"replace","path":"/data/owner","value":"%s"},{"op":"replace","path":"/data/target_image","value":"%s"},{"op":"replace","path":"/data/state","value":"active"},{"op":"add","path":"/data/acquired_at","value":"%s"}]' \
+          "${release_lock_uid}" "${release_lock_resource_version}" "${release_lock_owner}" "${BUILDER_IMAGE}" "$(date -u +%Y-%m-%dT%H:%M:%SZ)")"
+        patch_release_lock_cas "${patch}" \
+          || { printf 'release lock changed before released lease reuse\n' >&2; exit 1; }
+      else
+        release_lock_uid="${identity%% *}"
+        release_lock_resource_version="${identity#* }"
       fi
+      [ "${release_lock_resource_version}" != "${identity}" ] \
+        && printf '%s\n' "${release_lock_uid}" | grep -Eq '^[A-Za-z0-9.-]+$' \
+        && printf '%s\n' "${release_lock_resource_version}" | grep -Eq '^[0-9]+$' \
+        || { printf 'release lock create did not return UID/resourceVersion\n' >&2; exit 1; }
       identity="$(current_statefulset_identity)" \
         || abort_before_mutation "unable to capture StatefulSet baseline"
       validated_statefulset_uid="${identity%% *}"
@@ -357,11 +408,11 @@ release_and_update_server:
       immutable_image_ref "${previous_backend_image}" \
         && immutable_image_ref "${previous_init_image}" \
         || abort_before_mutation "previous StatefulSet image refs must be immutable digest references"
-      patch="$(printf '{"data":{"validated_statefulset_uid":"%s","validated_statefulset_resource_version":"%s","previous_backend_image":"%s","previous_init_image":"%s"}}' \
+      patch="$(printf '[{"op":"test","path":"/metadata/uid","value":"%s"},{"op":"test","path":"/metadata/resourceVersion","value":"%s"},{"op":"test","path":"/data/owner","value":"%s"},{"op":"test","path":"/data/target_image","value":"%s"},{"op":"test","path":"/data/state","value":"active"},{"op":"add","path":"/data/validated_statefulset_uid","value":"%s"},{"op":"add","path":"/data/validated_statefulset_resource_version","value":"%s"},{"op":"add","path":"/data/previous_backend_image","value":"%s"},{"op":"add","path":"/data/previous_init_image","value":"%s"}]' \
+        "${release_lock_uid}" "${release_lock_resource_version}" "${release_lock_owner}" "${BUILDER_IMAGE}" \
         "${validated_statefulset_uid}" "${validated_statefulset_resource_version}" \
         "${previous_backend_image}" "${previous_init_image}")"
-      kubectl -n "${BUILDER_K8S_NAMESPACE}" patch configmap "${release_lock_name}" \
-        --type=merge --patch "${patch}" >/dev/null \
+      patch_release_lock_cas "${patch}" \
         || abort_before_mutation "unable to persist release lock baseline"
       printf 'PREVIOUS_BACKEND_IMAGE=%s\nPREVIOUS_DIST_INIT_IMAGE=%s\n' \
         "${previous_backend_image}" "${previous_init_image}" >> build/release.env
@@ -439,13 +490,41 @@ release_builder_browser_smoke:
     - |
       release_lock_name="${KUBE_STATEFULSET}-release-lock"
       release_lock_owner="ci-${CI_PIPELINE_ID:-unknown}"
+      release_lock_uid=""
+      release_lock_resource_version=""
       lock_value() {
         kubectl -n "${KUBE_NAMESPACE}" get "configmap/${release_lock_name}" \
           -o "jsonpath={.data.$1}"
       }
+      refresh_release_lock_identity() {
+        identity="$(kubectl -n "${KUBE_NAMESPACE}" get "configmap/${release_lock_name}" \
+          -o jsonpath='{.metadata.uid}{" "}{.metadata.resourceVersion}')" || return 1
+        current_lock_uid="${identity%% *}"
+        current_lock_resource_version="${identity#* }"
+        [ "${current_lock_resource_version}" != "${identity}" ] || return 1
+        printf '%s\n' "${current_lock_uid}" | grep -Eq '^[A-Za-z0-9.-]+$' || return 1
+        printf '%s\n' "${current_lock_resource_version}" | grep -Eq '^[0-9]+$' || return 1
+        [ -z "${release_lock_uid}" ] || [ "${current_lock_uid}" = "${release_lock_uid}" ] || return 1
+        release_lock_uid="${current_lock_uid}"
+        release_lock_resource_version="${current_lock_resource_version}"
+      }
       lock_matches() {
+        refresh_release_lock_identity || return 1
         [ "$(lock_value owner)" = "${release_lock_owner}" ] \
-          && [ "$(lock_value target_image)" = "${BUILDER_IMAGE}" ]
+          && [ "$(lock_value target_image)" = "${BUILDER_IMAGE}" ] \
+          && [ "$(lock_value state)" = "active" ]
+      }
+      patch_release_lock_cas() {
+        patch="$1"
+        identity="$(kubectl -n "${KUBE_NAMESPACE}" patch configmap "${release_lock_name}" \
+          --type=json --patch "${patch}" \
+          -o jsonpath='{.metadata.uid}{" "}{.metadata.resourceVersion}')" || return 1
+        patched_lock_uid="${identity%% *}"
+        patched_lock_resource_version="${identity#* }"
+        [ "${patched_lock_resource_version}" != "${identity}" ] || return 1
+        [ "${patched_lock_uid}" = "${release_lock_uid}" ] || return 1
+        printf '%s\n' "${patched_lock_resource_version}" | grep -Eq '^[0-9]+$' || return 1
+        release_lock_resource_version="${patched_lock_resource_version}"
       }
       template_matches_target() {
         [ "$(kubectl -n "${KUBE_NAMESPACE}" get "statefulset/${KUBE_STATEFULSET}" \
@@ -455,8 +534,9 @@ release_builder_browser_smoke:
       }
       release_lock_if_owned() {
         lock_matches || return 1
-        kubectl -n "${KUBE_NAMESPACE}" delete configmap "${release_lock_name}" >/dev/null \
-          || return 1
+        patch="$(printf '[{"op":"test","path":"/metadata/uid","value":"%s"},{"op":"test","path":"/metadata/resourceVersion","value":"%s"},{"op":"test","path":"/data/owner","value":"%s"},{"op":"test","path":"/data/target_image","value":"%s"},{"op":"test","path":"/data/state","value":"active"},{"op":"replace","path":"/data/owner","value":""},{"op":"replace","path":"/data/target_image","value":""},{"op":"replace","path":"/data/state","value":"released"},{"op":"add","path":"/data/released_by","value":"%s"}]' \
+          "${release_lock_uid}" "${release_lock_resource_version}" "${release_lock_owner}" "${BUILDER_IMAGE}" "${release_lock_owner}")"
+        patch_release_lock_cas "${patch}" || return 1
       }
       lock_matches || { printf 'release lock owner or target changed before browser smoke\n' >&2; exit 1; }
       template_matches_target || { printf 'StatefulSet no longer uses this release image before browser smoke\n' >&2; exit 1; }
@@ -467,6 +547,7 @@ release_builder_browser_smoke:
 
 release_builder_recovery:
   stage: recovery
+  dependencies: []
   resource_group: "$BUILDER_K8S_NAMESPACE/$BUILDER_K8S_STATEFULSET"
   image:
     name: hub-mirror.dfy.definesys.cn/bitnami/kubectl:1.30.7
@@ -487,9 +568,35 @@ release_builder_recovery:
       export KUBECONFIG=/tmp/kubeconfig
       release_lock_name="${BUILDER_K8S_STATEFULSET}-release-lock"
       release_lock_owner="ci-${CI_PIPELINE_ID:-unknown}"
+      release_lock_uid=""
+      release_lock_resource_version=""
       lock_value() {
         kubectl -n "${BUILDER_K8S_NAMESPACE}" get "configmap/${release_lock_name}" \
           -o "jsonpath={.data.$1}"
+      }
+      refresh_release_lock_identity() {
+        identity="$(kubectl -n "${BUILDER_K8S_NAMESPACE}" get "configmap/${release_lock_name}" \
+          -o jsonpath='{.metadata.uid}{" "}{.metadata.resourceVersion}')" || return 1
+        current_lock_uid="${identity%% *}"
+        current_lock_resource_version="${identity#* }"
+        [ "${current_lock_resource_version}" != "${identity}" ] || return 1
+        printf '%s\n' "${current_lock_uid}" | grep -Eq '^[A-Za-z0-9.-]+$' || return 1
+        printf '%s\n' "${current_lock_resource_version}" | grep -Eq '^[0-9]+$' || return 1
+        [ -z "${release_lock_uid}" ] || [ "${current_lock_uid}" = "${release_lock_uid}" ] || return 1
+        release_lock_uid="${current_lock_uid}"
+        release_lock_resource_version="${current_lock_resource_version}"
+      }
+      patch_release_lock_cas() {
+        patch="$1"
+        identity="$(kubectl -n "${BUILDER_K8S_NAMESPACE}" patch configmap "${release_lock_name}" \
+          --type=json --patch "${patch}" \
+          -o jsonpath='{.metadata.uid}{" "}{.metadata.resourceVersion}')" || return 1
+        patched_lock_uid="${identity%% *}"
+        patched_lock_resource_version="${identity#* }"
+        [ "${patched_lock_resource_version}" != "${identity}" ] || return 1
+        [ "${patched_lock_uid}" = "${release_lock_uid}" ] || return 1
+        printf '%s\n' "${patched_lock_resource_version}" | grep -Eq '^[0-9]+$' || return 1
+        release_lock_resource_version="${patched_lock_resource_version}"
       }
       immutable_image_ref() {
         printf '%s\n' "$1" | grep -Eq '^[^[:space:]@]+@sha256:[0-9a-f]{64}$'
@@ -501,11 +608,14 @@ release_builder_recovery:
           -o jsonpath="{range .spec.template.spec.initContainers[?(@.name==\"${BUILDER_K8S_DIST_INIT_CONTAINER}\")]}{.image}{end}")" = "$2" ]
       }
       release_lock_if_owned() {
-        [ "$(lock_value owner)" = "${release_lock_owner}" ] \
+        refresh_release_lock_identity \
+          && [ "$(lock_value owner)" = "${release_lock_owner}" ] \
           && [ "$(lock_value target_image)" = "${target_image}" ] \
+          && [ "$(lock_value state)" = "active" ] \
           || return 1
-        kubectl -n "${BUILDER_K8S_NAMESPACE}" delete configmap "${release_lock_name}" >/dev/null \
-          || return 1
+        patch="$(printf '[{"op":"test","path":"/metadata/uid","value":"%s"},{"op":"test","path":"/metadata/resourceVersion","value":"%s"},{"op":"test","path":"/data/owner","value":"%s"},{"op":"test","path":"/data/target_image","value":"%s"},{"op":"test","path":"/data/state","value":"active"},{"op":"replace","path":"/data/owner","value":""},{"op":"replace","path":"/data/target_image","value":""},{"op":"replace","path":"/data/state","value":"released"},{"op":"add","path":"/data/released_by","value":"%s"}]' \
+          "${release_lock_uid}" "${release_lock_resource_version}" "${release_lock_owner}" "${target_image}" "${release_lock_owner}")"
+        patch_release_lock_cas "${patch}" || return 1
       }
       verify_previous_workload() {
         kubectl -n "${BUILDER_K8S_NAMESPACE}" rollout status \
@@ -531,6 +641,7 @@ release_builder_recovery:
         printf 'no release lock to recover\n'
         exit 0
       fi
+      [ "$(lock_value state)" != "released" ] || { printf 'released release lock requires no recovery\n'; exit 0; }
       [ "$(lock_value owner)" = "${release_lock_owner}" ] \
         || { printf 'release lock belongs to a different pipeline; refusing recovery\n' >&2; exit 1; }
       target_image="$(lock_value target_image)" || exit 1

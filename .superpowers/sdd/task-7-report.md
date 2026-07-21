@@ -602,3 +602,70 @@ GitLab YAML parse: PASS
   lock。
 - 真实 GitLab stage failure/cancellation、ConfigMap RBAC、StatefulSet
   resourceVersion 行为和跨 runner 资源组调度仍需在隔离 release pipeline 中演练。
+
+## 最终锁 CAS 收敛
+
+### RED
+
+复审指出两个剩余问题：recovery 默认会下载前序 artifact，且 lock 的 baseline patch/release
+是 read-then-write/delete。先扩展动态 release contract，要求 recovery 明确
+`dependencies: []`，并在 A 已验证 lock 后模拟删除/rebuild 为 owner B 的同名锁。
+
+初始 RED：
+
+```bash
+bash tests/release/test_builder_tenant_url_smoke.sh
+```
+
+关键输出：
+
+```text
+recovery must explicitly disable previous-stage artifact downloads
+```
+
+随后确认 `bitnami/kubectl:1.30.7` 没有 `curl`，因此放弃需要 proxy/curl 的 physical
+delete。实现改为纯 kubectl 的可复用 lease/tombstone：active lease 以 JSON Patch CAS
+转为 released，后续发布仅能以 JSON Patch CAS 复用 released lease。
+
+### GREEN
+
+- `release_builder_recovery` 明确声明 `dependencies: []`，不下载任何前序 artifact。
+- CI update/browser/recovery 与 online 均记录 ConfigMap UID/resourceVersion；baseline
+  和 release patch 都原子测试 UID、resourceVersion、owner、target_image、state。
+- release 将 lock 原子置为 `released` 并清空 owner/target；CI/online acquire 仅在
+  `state=released` 时 CAS 接管，active foreign lock 继续 fail-closed。
+- recovery 对 released tombstone 明确 no-op。
+- fake kubectl 按 JSON Patch 的单个 op 解析并持久化四个 baseline 字段；竞态在 patch
+  API 调用前把 A 的 lock 替换为 B，确认 A 的 baseline/release 不会改写 B。
+- CI update/recovery 合同断言 kubectl-only 镜像不依赖 `curl`。
+
+验证：
+
+```bash
+bash tests/release/test_builder_tenant_url_smoke.sh
+python3 -m pytest -q backend/tests/test_tenant_url_build_contract.py
+bash -n scripts/deploy_online_latest_kubesphere.sh \
+  scripts/verify_builder_tenant_url_smoke.sh \
+  tests/release/test_builder_tenant_url_smoke.sh
+node --check tests/e2e/builder-tenant-url-release-smoke.spec.mjs
+ruby -e 'require "yaml"; YAML.load_file(".gitlab-ci.yml"); puts "GitLab YAML parse: PASS"'
+git diff --check
+```
+
+关键输出：
+
+```text
+REPLACEMENT_LOCK_CAS_CONTRACT=PASS
+CI_RECOVERY_CONTRACT=PASS
+CI_UPDATE_LOCK_CONTRACT=PASS
+ONLINE_LOCK_BASELINE_INTERLEAVE=PASS
+29 passed
+GitLab YAML parse: PASS
+```
+
+### 本轮 Concerns
+
+- 未连接真实 Kubernetes、registry 或线上账号；ConfigMap JSON Patch 与 RBAC 仍需隔离
+  pipeline 演练。
+- released tombstone 保留在 namespace 中并作为下一次 release 的 CAS lease；active 或
+  异常状态不自动抢占，保持 fail-closed。

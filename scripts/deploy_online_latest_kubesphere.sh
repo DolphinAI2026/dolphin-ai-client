@@ -50,6 +50,8 @@ IMAGE=""
 GIT_SHA=""
 GIT_FULL_SHA=""
 LOCK_ACQUIRED=0
+RELEASE_LOCK_UID=""
+RELEASE_LOCK_RESOURCE_VERSION=""
 
 log() { printf '[online-deploy] %s\n' "$*"; }
 ok() { printf '[online-deploy][ok] %s\n' "$*"; }
@@ -234,35 +236,87 @@ lock_value() {
   kubectl -n "$NAMESPACE" get "configmap/${RELEASE_LOCK_NAME}" -o "jsonpath={.data.${field}}"
 }
 
+refresh_release_lock_identity() {
+  local identity current_uid current_resource_version
+  identity="$(kubectl -n "$NAMESPACE" get "configmap/${RELEASE_LOCK_NAME}" \
+    -o jsonpath='{.metadata.uid}{" "}{.metadata.resourceVersion}')" || return 1
+  read -r current_uid current_resource_version <<<"$identity"
+  [[ "$current_uid" =~ ^[A-Za-z0-9.-]+$ ]] \
+    && [[ "$current_resource_version" =~ ^[0-9]+$ ]] \
+    || { warn "release lock identity is invalid"; return 1; }
+  if [ -n "$RELEASE_LOCK_UID" ] && [ "$current_uid" != "$RELEASE_LOCK_UID" ]; then
+    warn "release lock identity changed; refusing mutation"
+    return 1
+  fi
+  RELEASE_LOCK_UID="$current_uid"
+  RELEASE_LOCK_RESOURCE_VERSION="$current_resource_version"
+}
+
 verify_release_lock() {
+  refresh_release_lock_identity || return 1
   [ "$(lock_value owner)" = "$RELEASE_LOCK_OWNER" ] \
     || { warn "release lock owner changed; refusing mutation"; return 1; }
   [ "$(lock_value target_image)" = "$IMAGE" ] \
     || { warn "release lock target changed; refusing mutation"; return 1; }
+  [ "$(lock_value state)" = "active" ] \
+    || { warn "release lock is not active; refusing mutation"; return 1; }
+}
+
+update_release_lock_identity() {
+  local identity="$1" patched_uid patched_resource_version
+  read -r patched_uid patched_resource_version <<<"$identity"
+  [ "$patched_uid" = "$RELEASE_LOCK_UID" ] \
+    && [[ "$patched_resource_version" =~ ^[0-9]+$ ]] \
+    || { warn "release lock patch returned unexpected identity"; return 1; }
+  RELEASE_LOCK_RESOURCE_VERSION="$patched_resource_version"
 }
 
 acquire_release_lock() {
-  if kubectl -n "$NAMESPACE" create configmap "$RELEASE_LOCK_NAME" \
+  local identity patch observed_uid observed_resource_version observed_state
+  if identity="$(kubectl -n "$NAMESPACE" create configmap "$RELEASE_LOCK_NAME" \
     --from-literal="owner=${RELEASE_LOCK_OWNER}" \
     --from-literal="target_image=${IMAGE}" \
-    --from-literal="acquired_at=$(date -u +%Y-%m-%dT%H:%M:%SZ)" >/dev/null; then
+    --from-literal="state=active" \
+    --from-literal="acquired_at=$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+    -o jsonpath='{.metadata.uid}{" "}{.metadata.resourceVersion}')"; then
+    read -r RELEASE_LOCK_UID RELEASE_LOCK_RESOURCE_VERSION <<<"$identity"
+    [[ "$RELEASE_LOCK_UID" =~ ^[A-Za-z0-9.-]+$ ]] \
+      && [[ "$RELEASE_LOCK_RESOURCE_VERSION" =~ ^[0-9]+$ ]] \
+      || die "release lock create did not return UID/resourceVersion"
     LOCK_ACQUIRED=1
     return 0
   fi
-  if kubectl -n "$NAMESPACE" get "configmap/${RELEASE_LOCK_NAME}" >/dev/null 2>&1; then
-    die "release lock exists (${RELEASE_LOCK_NAME}); manual recovery is required"
-  fi
-  die "unable to acquire release lock: ${RELEASE_LOCK_NAME}"
+  identity="$(kubectl -n "$NAMESPACE" get "configmap/${RELEASE_LOCK_NAME}" \
+    -o jsonpath='{.metadata.uid}{" "}{.metadata.resourceVersion}{" "}{.data.state}')" \
+    || die "unable to acquire release lock: ${RELEASE_LOCK_NAME}"
+  read -r observed_uid observed_resource_version observed_state <<<"$identity"
+  [[ "$observed_uid" =~ ^[A-Za-z0-9.-]+$ ]] \
+    && [[ "$observed_resource_version" =~ ^[0-9]+$ ]] \
+    || die "release lock identity is invalid"
+  [ "$observed_state" = "released" ] \
+    || die "release lock exists (${RELEASE_LOCK_NAME}); manual recovery is required"
+  RELEASE_LOCK_UID="$observed_uid"
+  RELEASE_LOCK_RESOURCE_VERSION="$observed_resource_version"
+  patch="$(printf '[{"op":"test","path":"/metadata/uid","value":"%s"},{"op":"test","path":"/metadata/resourceVersion","value":"%s"},{"op":"test","path":"/data/state","value":"released"},{"op":"replace","path":"/data/owner","value":"%s"},{"op":"replace","path":"/data/target_image","value":"%s"},{"op":"replace","path":"/data/state","value":"active"},{"op":"add","path":"/data/acquired_at","value":"%s"}]' \
+    "$RELEASE_LOCK_UID" "$RELEASE_LOCK_RESOURCE_VERSION" "$RELEASE_LOCK_OWNER" "$IMAGE" "$(date -u +%Y-%m-%dT%H:%M:%SZ)")"
+  identity="$(kubectl -n "$NAMESPACE" patch configmap "$RELEASE_LOCK_NAME" \
+    --type=json --patch "$patch" -o jsonpath='{.metadata.uid}{" "}{.metadata.resourceVersion}')" \
+    || die "release lock changed before released lease reuse"
+  update_release_lock_identity "$identity" || die "release lock reuse returned unexpected identity"
+  LOCK_ACQUIRED=1
 }
 
 persist_validated_baseline() {
-  local patch
-
+  local patch identity
   verify_release_lock || return 1
-  patch="$(printf '{"data":{"validated_statefulset_uid":"%s","validated_statefulset_resource_version":"%s","previous_backend_image":"%s","previous_init_image":"%s"}}' \
+  patch="$(printf '[{"op":"test","path":"/metadata/uid","value":"%s"},{"op":"test","path":"/metadata/resourceVersion","value":"%s"},{"op":"test","path":"/data/owner","value":"%s"},{"op":"test","path":"/data/target_image","value":"%s"},{"op":"test","path":"/data/state","value":"active"},{"op":"add","path":"/data/validated_statefulset_uid","value":"%s"},{"op":"add","path":"/data/validated_statefulset_resource_version","value":"%s"},{"op":"add","path":"/data/previous_backend_image","value":"%s"},{"op":"add","path":"/data/previous_init_image","value":"%s"}]' \
+    "$RELEASE_LOCK_UID" "$RELEASE_LOCK_RESOURCE_VERSION" "$RELEASE_LOCK_OWNER" "$IMAGE" \
     "$VALIDATED_STATEFULSET_UID" "$VALIDATED_STATEFULSET_RESOURCE_VERSION" \
     "$PREVIOUS_BACKEND_IMAGE" "$PREVIOUS_DIST_INIT_IMAGE")"
-  kubectl -n "$NAMESPACE" patch configmap "$RELEASE_LOCK_NAME" --type=merge --patch "$patch" >/dev/null
+  identity="$(kubectl -n "$NAMESPACE" patch configmap "$RELEASE_LOCK_NAME" \
+    --type=json --patch "$patch" -o jsonpath='{.metadata.uid}{" "}{.metadata.resourceVersion}')" \
+    || return 1
+  update_release_lock_identity "$identity"
 }
 
 load_validated_baseline_from_lock() {
@@ -290,9 +344,14 @@ validated_baseline_matches_current_workload() {
 }
 
 release_lock_if_owned() {
+  local patch identity
   verify_release_lock || return 1
-  kubectl -n "$NAMESPACE" delete configmap "$RELEASE_LOCK_NAME" >/dev/null \
+  patch="$(printf '[{"op":"test","path":"/metadata/uid","value":"%s"},{"op":"test","path":"/metadata/resourceVersion","value":"%s"},{"op":"test","path":"/data/owner","value":"%s"},{"op":"test","path":"/data/target_image","value":"%s"},{"op":"test","path":"/data/state","value":"active"},{"op":"replace","path":"/data/owner","value":""},{"op":"replace","path":"/data/target_image","value":""},{"op":"replace","path":"/data/state","value":"released"},{"op":"add","path":"/data/released_by","value":"%s"}]' \
+    "$RELEASE_LOCK_UID" "$RELEASE_LOCK_RESOURCE_VERSION" "$RELEASE_LOCK_OWNER" "$IMAGE" "$RELEASE_LOCK_OWNER")"
+  identity="$(kubectl -n "$NAMESPACE" patch configmap "$RELEASE_LOCK_NAME" \
+    --type=json --patch "$patch" -o jsonpath='{.metadata.uid}{" "}{.metadata.resourceVersion}')" \
     || return 1
+  update_release_lock_identity "$identity" || return 1
   LOCK_ACQUIRED=0
 }
 
