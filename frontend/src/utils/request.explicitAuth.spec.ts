@@ -3,7 +3,10 @@ import { AxiosHeaders } from 'axios'
 import { readFileSync, readdirSync } from 'node:fs'
 import { join, relative } from 'node:path'
 
-import request from './request'
+import request, {
+  beginAuthSessionAlignment,
+  commitAuthSession,
+} from './request'
 import { authApi } from '@/api/auth'
 import { authSettingsApi } from '@/api/authSettings'
 import { desktopLogin } from '@/api/desktopAuth'
@@ -127,6 +130,23 @@ describe('request explicit Authorization', () => {
     })
 
     expect(config.headers?.Authorization).toBeUndefined()
+  })
+
+  it('lets public and explicit candidate requests bypass cross-tab alignment pending', async () => {
+    commitAuthSession('source-token')
+    beginAuthSessionAlignment('candidate-token')
+    localStorage.setItem('token', 'candidate-token')
+
+    const publicConfig = await runRequestInterceptor({
+      headers: {},
+      authPolicy: 'public',
+    })
+    const candidateConfig = await runRequestInterceptor({
+      headers: { Authorization: 'Bearer candidate-token' },
+    })
+
+    expect(publicConfig.headers?.Authorization).toBeUndefined()
+    expect(candidateConfig.headers?.Authorization).toBe('Bearer candidate-token')
   })
 
   it.each([

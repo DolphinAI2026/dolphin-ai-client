@@ -15,6 +15,9 @@ const modeStore = vi.hoisted(() => ({
   mode: 'builder',
   setMode: vi.fn(),
 }))
+const tenantUrlMocks = vi.hoisted(() => ({
+  resolveTenantUrl: vi.fn().mockResolvedValue(true),
+}))
 
 vi.mock('vue-router', () => ({
   createWebHistory: vi.fn(),
@@ -22,6 +25,7 @@ vi.mock('vue-router', () => ({
     beforeEach: (guard: typeof routerHarness.guard) => {
       routerHarness.guard = guard
     },
+    afterEach: vi.fn(),
     onError: vi.fn(),
   }),
 }))
@@ -39,6 +43,11 @@ vi.mock('@/stores/mode', () => ({
   useModeStore: () => modeStore,
 }))
 
+vi.mock('./tenantUrlGuard', () => ({
+  normalizeTenantPublicId: vi.fn(() => null),
+  resolveTenantUrl: tenantUrlMocks.resolveTenantUrl,
+}))
+
 vi.mock('@/utils/request', async (importOriginal) => {
   const actual = await importOriginal<typeof import('@/utils/request')>()
   return {
@@ -53,7 +62,11 @@ vi.mock('@/composables/useOnboardingState', () => ({
   markOnboardingConfirmed: vi.fn(),
 }))
 
-import { beginAuthSessionBootstrap, commitAuthSession } from '@/utils/request'
+import {
+  beginAuthSessionAlignment,
+  beginAuthSessionBootstrap,
+  commitAuthSession,
+} from '@/utils/request'
 import './index'
 
 function installStorage() {
@@ -90,6 +103,7 @@ describe('router auth session guard', () => {
     userStore.isPlatformAdmin = false
     userStore.tenantId = 1
     modeStore.mode = 'builder'
+    tenantUrlMocks.resolveTenantUrl.mockResolvedValue(true)
   })
 
   afterEach(() => {
@@ -123,6 +137,42 @@ describe('router auth session guard', () => {
     })
 
     expect(next).toHaveBeenCalledWith('/apps')
+  })
+
+  it('does not resolve tenant URLs while cross-tab auth alignment is pending', async () => {
+    commitAuthSession('source-token')
+    beginAuthSessionAlignment('candidate-token')
+    userStore.token = 'source-token'
+    userStore.user = { id: 1 }
+
+    const next = await runGuard({
+      path: '/code/session-42',
+      fullPath: '/code/session-42?agent=codex',
+      query: { agent: 'codex' },
+      meta: { requiresAuth: true, tenantContext: 'required' },
+    })
+
+    expect(tenantUrlMocks.resolveTenantUrl).not.toHaveBeenCalled()
+    expect(next).toHaveBeenCalledWith(false)
+  })
+
+  it('keeps a protected route blocked when reloaded alignment validation has a transient failure', async () => {
+    commitAuthSession('source-token')
+    beginAuthSessionAlignment('candidate-token')
+    userStore.token = 'source-token'
+    userStore.user = null
+    userStore.fetchUser.mockResolvedValue(undefined)
+
+    const next = await runGuard({
+      path: '/code/session-42',
+      fullPath: '/code/session-42?agent=codex',
+      query: { agent: 'codex' },
+      meta: { requiresAuth: true, tenantContext: 'required' },
+    })
+
+    expect(userStore.fetchUser).toHaveBeenCalledTimes(1)
+    expect(tenantUrlMocks.resolveTenantUrl).not.toHaveBeenCalled()
+    expect(next).toHaveBeenCalledWith(false)
   })
 
   it('sends an unresolved bootstrap candidate from a protected route to login', async () => {

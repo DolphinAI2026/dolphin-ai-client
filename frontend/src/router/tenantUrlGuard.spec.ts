@@ -15,6 +15,7 @@ const routerHarness = vi.hoisted(() => ({
 
 const routerGuardState = vi.hoisted(() => ({
   session: { initialized: false, token: null as string | null },
+  alignmentPending: false,
   userStore: {} as Record<string, any>,
   modeStore: {} as Record<string, any>,
 }))
@@ -74,6 +75,7 @@ vi.mock('@/stores/mode', () => ({
 vi.mock('@/utils/request', () => ({
   default: { get: requestHarness.get },
   getAuthSessionState: () => routerGuardState.session,
+  isAuthSessionAlignmentPending: () => routerGuardState.alignmentPending,
 }))
 vi.mock('@/composables/useOnboardingState', () => ({
   fetchOnboardingState: vi.fn(),

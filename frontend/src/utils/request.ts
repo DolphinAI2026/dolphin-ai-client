@@ -46,6 +46,7 @@ let committedAuthToken: string | null = null
 let authSessionRevision = 0
 let authSessionInitialized = false
 let authSessionBootstrapToken: string | null = null
+let authSessionAlignmentPending = false
 const authSessionClearListeners = new Set<() => void>()
 
 function currentSessionStorage(): Storage | null {
@@ -65,6 +66,7 @@ function hydrateAuthSession() {
     authSessionRevision = 0
     authSessionInitialized = false
     authSessionBootstrapToken = null
+    authSessionAlignmentPending = false
   }
   if (authSessionHydrated) return
 
@@ -126,6 +128,19 @@ export function getAuthSessionBootstrapToken(): string | null {
 export function beginAuthSessionBootstrap(token: string) {
   hydrateAuthSession()
   authSessionBootstrapToken = token
+  authSessionAlignmentPending = false
+}
+
+export function beginAuthSessionAlignment(token: string) {
+  hydrateAuthSession()
+  authSessionRevision += 1
+  authSessionBootstrapToken = token
+  authSessionAlignmentPending = true
+}
+
+export function isAuthSessionAlignmentPending(): boolean {
+  hydrateAuthSession()
+  return authSessionAlignmentPending
 }
 
 function updateAuthSession(token: string | null, notifyClearListeners: boolean): AuthSessionState {
@@ -134,6 +149,7 @@ function updateAuthSession(token: string | null, notifyClearListeners: boolean):
   authSessionRevision += 1
   authSessionInitialized = true
   authSessionBootstrapToken = null
+  authSessionAlignmentPending = false
   persistAuthSession()
   if (notifyClearListeners) {
     for (const listener of authSessionClearListeners) {

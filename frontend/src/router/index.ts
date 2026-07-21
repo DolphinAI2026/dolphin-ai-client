@@ -8,7 +8,10 @@ import {
 import { useUserStore } from '@/stores/user'
 import { usePreviewStore } from '@/stores/preview'
 import { modeForRoutePath, useModeStore } from '@/stores/mode'
-import request, { getAuthSessionState } from '@/utils/request'
+import request, {
+  getAuthSessionState,
+  isAuthSessionAlignmentPending,
+} from '@/utils/request'
 import { resolveDesktopRedirect } from './desktopGuard'
 import { normalizeTenantPublicId, resolveTenantUrl } from './tenantUrlGuard'
 import { safeLoginRedirectPath } from './loginRedirect'
@@ -319,6 +322,11 @@ export function installRouterGuards(targetRouter: Router): void {
         return
       }
     }
+  }
+
+  if (to.meta.requiresAuth && isAuthSessionAlignmentPending()) {
+    next(false)
+    return
   }
 
   if (to.meta.requiresAuth && !hasCommittedSession) {

@@ -5,6 +5,7 @@ import type { User, TenantOption } from '@/types'
 import { resetOnboardingCache } from '@/composables/useOnboardingState'
 import { MODE_META, modeForRoutePath, useModeStore } from '@/stores/mode'
 import {
+  beginAuthSessionAlignment,
   beginAuthSessionBootstrap,
   clearAuthSession,
   commitAuthSession,
@@ -42,12 +43,18 @@ export const useUserStore = defineStore('user', () => {
   )
     ? sharedInitialToken
     : null
+  const initialAlignmentToken = (
+    initialSession.initialized
+    && typeof sharedInitialToken === 'string'
+    && sharedInitialToken
+    && sharedInitialToken !== initialSession.token
+  )
+    ? sharedInitialToken
+    : null
   const token = ref<string | null>(
     initialSession.initialized ? initialSession.token : initialBootstrapToken,
   )
   const availableTenants = ref<TenantOption[]>([])
-  let storageAlignmentGeneration = 0
-  let storageAlignmentAbortController: AbortController | null = null
   let tenantSwitchGeneration = 0
   let tenantSwitchAbortController: AbortController | null = null
   let tenantSelectionGeneration = 0
@@ -56,14 +63,10 @@ export const useUserStore = defineStore('user', () => {
   let sessionOwner: symbol | null = null
   let sessionOwnerReleased = false
 
-  if (initialBootstrapToken) {
+  if (initialAlignmentToken) {
+    beginAuthSessionAlignment(initialAlignmentToken)
+  } else if (initialBootstrapToken) {
     beginAuthSessionBootstrap(initialBootstrapToken)
-  }
-
-  const invalidateStorageAlignment = () => {
-    storageAlignmentGeneration += 1
-    storageAlignmentAbortController?.abort()
-    storageAlignmentAbortController = null
   }
 
   const invalidateTenantSwitch = () => {
@@ -136,20 +139,14 @@ export const useUserStore = defineStore('user', () => {
     return `${prefix}${home}?tenantId=${encodeURIComponent(tenantPublicId)}`
   }
 
-  const storageAlignmentDestination = (alignedUser: User): string | null => {
-    if (alignedUser.tenant_id === null && alignedUser.tenant_public_id === null) {
-      const basePath = currentAppBasePath()
-      const prefix = basePath === '/' ? '' : basePath
-      return `${prefix}/platform-admin/`
-    }
-    if (
-      typeof alignedUser.tenant_id !== 'number'
-      || typeof alignedUser.tenant_public_id !== 'string'
-      || !alignedUser.tenant_public_id
-    ) {
-      return null
-    }
-    return currentModeTenantHome(alignedUser.tenant_public_id)
+  const storageAlignmentReloadDestination = (): string | null => {
+    if (typeof window === 'undefined') return null
+    const query = new URLSearchParams(window.location.search)
+    query.delete('tenantId')
+    const search = query.toString()
+    return normalizeTenantDestination(
+      `${window.location.pathname}${search ? `?${search}` : ''}${window.location.hash}`,
+    )
   }
 
   // 多租户状态
@@ -173,7 +170,6 @@ export const useUserStore = defineStore('user', () => {
   )
 
   const commitLocalToken = (newToken: string) => {
-    invalidateStorageAlignment()
     advanceTenantNavigationEpoch()
     token.value = newToken
     commitAuthSession(newToken)
@@ -208,7 +204,6 @@ export const useUserStore = defineStore('user', () => {
       throw error
     }
 
-    invalidateStorageAlignment()
     commitAuthSession(newToken)
     token.value = newToken
     user.value = nextUser
@@ -218,7 +213,6 @@ export const useUserStore = defineStore('user', () => {
 
   const commitVerifiedSession = (newToken: string, nextUser: User) => {
     localStorage.setItem('token', newToken)
-    invalidateStorageAlignment()
     advanceTenantNavigationEpoch()
     const committedSession = commitAuthSession(newToken)
     token.value = newToken
@@ -233,7 +227,6 @@ export const useUserStore = defineStore('user', () => {
   }
 
   const clearSessionMemory = () => {
-    invalidateStorageAlignment()
     advanceTenantNavigationEpoch()
     token.value = null
     user.value = null
@@ -242,7 +235,6 @@ export const useUserStore = defineStore('user', () => {
   }
 
   const clearToken = () => {
-    invalidateStorageAlignment()
     advanceTenantNavigationEpoch()
     clearAuthSession()
     localStorage.removeItem('token')
@@ -517,43 +509,6 @@ export const useUserStore = defineStore('user', () => {
     )
   }
 
-  const alignTokenFromStorage = async (eventToken: string) => {
-    const generation = ++storageAlignmentGeneration
-    storageAlignmentAbortController?.abort()
-    const controller = new AbortController()
-    storageAlignmentAbortController = controller
-
-    try {
-      const alignedUser = await authApi.getMeWithToken(eventToken, controller.signal)
-      const destination = storageAlignmentDestination(alignedUser)
-      const normalizedDestination = destination
-        ? normalizeTenantDestination(destination)
-        : null
-      if (
-        controller.signal.aborted
-        || generation !== storageAlignmentGeneration
-        || !ownsSessionOwner()
-        || localStorage.getItem('token') !== eventToken
-        || !normalizedDestination
-      ) {
-        return
-      }
-
-      window.location.replace(normalizedDestination)
-      commitAuthSession(eventToken)
-      token.value = eventToken
-      user.value = alignedUser
-      try { localStorage.removeItem('ai-builder-tabs-v1') } catch { /* ignore */ }
-      if (storageAlignmentAbortController === controller) {
-        storageAlignmentAbortController = null
-      }
-    } catch {
-      if (storageAlignmentAbortController === controller) {
-        storageAlignmentAbortController = null
-      }
-    }
-  }
-
   activeSessionOwnerCleanup?.()
   sessionOwner = Symbol('auth-session-owner')
   activeSessionOwner = sessionOwner
@@ -569,8 +524,17 @@ export const useUserStore = defineStore('user', () => {
     }
 
     if (localStorage.getItem('token') !== eventToken) return
+    if (!ownsSessionOwner()) return
+    beginAuthSessionAlignment(eventToken)
     advanceTenantNavigationEpoch()
-    void alignTokenFromStorage(eventToken)
+    const destination = storageAlignmentReloadDestination()
+    if (destination) {
+      try {
+        window.location.replace(destination)
+      } catch {
+        // The old page remains auth-pending if browser navigation is blocked.
+      }
+    }
   }
   if (typeof window !== 'undefined') {
     window.addEventListener('storage', storageListener)
@@ -582,7 +546,6 @@ export const useUserStore = defineStore('user', () => {
     tenantSelectionGeneration += 1
     tenantSelectionAbortController?.abort()
     tenantSelectionAbortController = null
-    invalidateStorageAlignment()
     advanceTenantNavigationEpoch()
     unsubscribeFromSessionClear()
     if (typeof window !== 'undefined') {
@@ -597,17 +560,6 @@ export const useUserStore = defineStore('user', () => {
   }
   activeSessionOwnerCleanup = releaseSessionOwner
   onScopeDispose(releaseSessionOwner)
-
-  const currentSession = getAuthSessionState()
-  const sharedToken = localStorage.getItem('token')
-  if (
-    currentSession.initialized
-    && typeof sharedToken === 'string'
-    && sharedToken
-    && sharedToken !== currentSession.token
-  ) {
-    void alignTokenFromStorage(sharedToken)
-  }
 
   const logout = () => {
     clearToken()
