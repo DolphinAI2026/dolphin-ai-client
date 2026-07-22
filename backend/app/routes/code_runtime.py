@@ -432,8 +432,11 @@ async def open_code_runtime_session(
     ctx: Annotated[AuthContext, Depends(get_auth_context)],
     db: Annotated[AsyncSession, Depends(get_db)],
 ):
-    async with _code_session_open_lock(session_ref):
-        session = await resolve_code_session(db, session_ref)
+    session = await resolve_code_session(db, session_ref)
+    lock_key = str(getattr(session, "id", None) or session_ref)
+    async with _code_session_open_lock(lock_key):
+        if session is None:
+            session = await resolve_code_session(db, session_ref)
         uses_local_builder = bool(
             session
             and not session.app_id

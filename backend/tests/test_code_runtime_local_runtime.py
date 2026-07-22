@@ -798,7 +798,7 @@ async def test_open_starts_missing_instance_with_runtime_context_path_and_enviro
         application_id="local-app-1",
         workspace_id=workspace.ws_id,
         sandbox_instance_id=str(start_payload["sandbox_instance_id"]),
-        conversation_id="conversation-1",
+        conversation_id="",
         repo_url="https://git.example.invalid/team/local-app.git",
         default_branch="main",
         user_id=11,
@@ -912,6 +912,63 @@ async def test_repeated_open_reuses_the_same_private_entry_token(
     ).digest()
     if first_token in first.values() or second_token in second.values():
         pytest.fail("sandbox entry token leaked into an opened application response")
+    assert len(start_payloads) == 1
+
+
+@pytest.mark.asyncio
+async def test_application_runtime_context_uses_one_stable_scope_across_code_sessions(
+    db,
+    ctx,
+    git_repo,
+    engineering_session,
+    tmp_path,
+    monkeypatch,
+):
+    workspace = await _create_workspace(db, git_repo)
+    first_session = await _create_code_session(
+        db,
+        workspace_id=workspace.ws_id,
+        public_id="conversation-first",
+    )
+    second_session = await _create_code_session(
+        db,
+        workspace_id=workspace.ws_id,
+        public_id="conversation-second",
+    )
+    start_payloads: list[dict[str, object]] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.method == "GET" and start_payloads:
+            return httpx.Response(
+                200,
+                json=_manager_status(
+                    sandbox_instance_id=str(start_payloads[0]["sandbox_instance_id"])
+                ),
+            )
+        if request.method == "GET":
+            return httpx.Response(404)
+        payload = json.loads(request.content)
+        start_payloads.append(payload)
+        return httpx.Response(200, json=_manager_status_for_start(request))
+
+    client, _service = _client(
+        tmp_path,
+        engineering_session,
+        httpx.MockTransport(handler),
+    )
+    monkeypatch.setattr(
+        "app.code_runtime.local_runtime._allocate_loopback_address",
+        lambda: "127.0.0.1:19090",
+    )
+
+    first, _first_token = await client.open_application_with_entry_token(db, first_session, ctx)
+    second, _second_token = await client.open_application_with_entry_token(db, second_session, ctx)
+    context = json.loads(
+        Path(str(start_payloads[0]["runtime_context_path"])).read_text(encoding="utf-8")
+    )
+    assert first["conversationId"] == ""
+    assert second["conversationId"] == ""
+    assert context["conversationId"] == ""
     assert len(start_payloads) == 1
 
 

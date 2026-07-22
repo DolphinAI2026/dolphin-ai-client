@@ -2014,6 +2014,53 @@ async def test_open_code_runtime_session_serializes_same_session_first_open(monk
     assert max_active == 1
 
 
+@pytest.mark.asyncio
+async def test_open_code_runtime_session_serializes_public_and_numeric_session_refs(monkeypatch):
+    import app.routes.code_runtime as code_runtime_routes
+    from app.routes.code_runtime import open_code_runtime_session
+
+    session = SimpleNamespace(
+        id=42,
+        app_id=None,
+        external_application_id="app-e2e",
+    )
+    active = 0
+    max_active = 0
+
+    async def fake_resolve(*_args, **_kwargs):
+        return session
+
+    async def fake_auth(*_args, **_kwargs):
+        return "Bearer access", None
+
+    async def fake_open_code_session(*_args, **_kwargs):
+        nonlocal active, max_active
+        active += 1
+        max_active = max(max_active, active)
+        await asyncio.sleep(0.02)
+        active -= 1
+        return {"ok": True}
+
+    class FakeDB:
+        async def commit(self):
+            return None
+
+        async def rollback(self):
+            return None
+
+    monkeypatch.setattr(code_runtime_routes, "resolve_code_session", fake_resolve)
+    monkeypatch.setattr(code_runtime_routes, "_control_plane_request_auth", fake_auth)
+    monkeypatch.setattr(code_runtime_routes, "open_code_session", fake_open_code_session)
+
+    results = await asyncio.gather(
+        open_code_runtime_session("shell-public-id", _request(), _ctx(), FakeDB()),
+        open_code_runtime_session("42", _request(), _ctx(), FakeDB()),
+    )
+
+    assert all(result["ok"] is True for result in results)
+    assert max_active == 1
+
+
 def test_code_sandbox_cache_config_resolves_performance_profile(monkeypatch):
     import app.routes.code_runtime as code_runtime_routes
     from app.config import settings

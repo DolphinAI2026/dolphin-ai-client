@@ -1042,9 +1042,10 @@ class LocalRuntimeClient:
                 "无法准备本地应用 Runtime 工作区",
             ) from exc
 
-        conversation_id = _text(getattr(session, "public_id", None)) or _text(
-            getattr(session, "id", None)
-        )
+        # The Runtime is shared by an application scope. Agent-runtime derives
+        # the sidecar conversation ID from each runtime agent session when this
+        # context field is empty, so it must not capture the first shell session.
+        conversation_id = ""
         status_path = f"/v1/local-runtime/instances/{runtime_scope_id}"
         manager_status = await self._existing_status(
             status_path,

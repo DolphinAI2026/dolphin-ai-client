@@ -50,6 +50,74 @@ _DESKTOP_RUNTIME_ENVIRONMENT_KEYS = (
 )
 
 
+async def _create_desktop_runtime_agent_session(
+    runtime_base_url: str,
+    entry_token: str,
+) -> str:
+    """Create one Runtime agent session without exposing the desktop entry token."""
+    try:
+        async with httpx.AsyncClient(
+            timeout=httpx.Timeout(connect=5, read=30, write=10, pool=10)
+        ) as client:
+            response = await client.post(
+                f"{runtime_base_url.rstrip('/')}/api/agent/sessions",
+                headers={"Authorization": f"Bearer {entry_token}"},
+            )
+    except httpx.HTTPError as exc:
+        raise HTTPException(status_code=502, detail="本地 Runtime 无法创建 agent session") from exc
+
+    if response.status_code != 200:
+        raise HTTPException(status_code=502, detail="本地 Runtime 创建 agent session 失败")
+    try:
+        payload = response.json()
+    except ValueError as exc:
+        raise HTTPException(status_code=502, detail="本地 Runtime agent session 响应无效") from exc
+    if not isinstance(payload, dict):
+        raise HTTPException(status_code=502, detail="本地 Runtime agent session 响应无效")
+    runtime_session_id = str(payload.get("runtimeSessionId") or "").strip()
+    if not runtime_session_id:
+        raise HTTPException(status_code=502, detail="本地 Runtime 未返回 agent session 标识")
+    return runtime_session_id
+
+
+async def _remember_runtime_agent_session(
+    db: AsyncSession,
+    *,
+    session: AIChatSession,
+    binding: CodeRuntimeBinding,
+) -> None:
+    runtime_session_id = str(binding.runtime_session_id or "").strip()
+    if not runtime_session_id:
+        return
+    record = (
+        await db.execute(
+            select(CodeRuntimeAgentSession).where(
+                CodeRuntimeAgentSession.session_id == session.id,
+                CodeRuntimeAgentSession.runtime_session_id == runtime_session_id,
+            )
+        )
+    ).scalar_one_or_none()
+    if record is None:
+        record = CodeRuntimeAgentSession(
+            tenant_id=session.tenant_id,
+            user_id=session.user_id,
+            app_id=int(session.app_id) if session.app_id else None,
+            session_id=session.id,
+            external_application_id=binding.external_application_id,
+            runtime_session_id=runtime_session_id,
+        )
+        db.add(record)
+
+    record.tenant_id = session.tenant_id
+    record.user_id = session.user_id
+    record.app_id = int(session.app_id) if session.app_id else None
+    record.external_application_id = binding.external_application_id
+    record.workspace_id = binding.workspace_id
+    record.sandbox_instance_id = binding.sandbox_instance_id
+    record.conversation_id = binding.conversation_id
+    record.status = binding.status
+
+
 def derive_runtime_base_url(builder_url: str) -> str:
     parsed = urlsplit(str(builder_url or "").strip())
     if not parsed.scheme or not parsed.netloc:
@@ -729,6 +797,14 @@ async def open_code_session(
     browser_session_id: str | None = None,
 ) -> dict[str, Any]:
     session = await resolve_code_session(db, session_id)
+    if session is not None:
+        session = (
+            await db.execute(
+                select(AIChatSession)
+                .where(AIChatSession.id == session.id)
+                .with_for_update()
+            )
+        ).scalar_one_or_none()
     if not session or session.tenant_id != int(ctx.tenant_id) or session.user_id != int(ctx.user.id):
         raise HTTPException(status_code=404, detail="Code 会话不存在")
     if session.mode != "code":
@@ -832,6 +908,18 @@ async def open_code_session(
     binding.builder_url = clean_builder_url
     binding.workspace_id = opened.get("workspaceId") or binding.workspace_id
     binding.sandbox_instance_id = opened.get("sandboxInstanceId") or binding.sandbox_instance_id
+    if desktop_runtime:
+        if not desktop_entry_token:
+            raise HTTPException(status_code=503, detail="本地 Runtime entry token 不可用")
+        current_runtime_session_id = str(binding.runtime_session_id or "").strip()
+        runtime_session_id = (
+            current_runtime_session_id
+            if current_runtime_session_id
+            else await _create_desktop_runtime_agent_session(
+                runtime_base_url,
+                desktop_entry_token,
+            )
+        )
     if runtime_session_id:
         current_runtime_session_id = str(binding.runtime_session_id or "").strip()
         current_is_scoped = False
@@ -850,11 +938,12 @@ async def open_code_session(
     binding.status = "ready"
     binding.last_error = None
     if desktop_runtime:
-        if not desktop_entry_token:
-            raise HTTPException(status_code=503, detail="本地 Runtime entry token 不可用")
         binding.execution_target = ExecutionTarget.DESKTOP_AGENT_RUNTIME.value
         binding.desktop_agent_runtime_token_enc = encrypt_runtime_cookie(desktop_entry_token)
     await db.flush()
+    if desktop_runtime:
+        await _remember_runtime_agent_session(db, session=session, binding=binding)
+        await db.flush()
 
     resolved_browser_session_id = None
     if bootstrap is not None:

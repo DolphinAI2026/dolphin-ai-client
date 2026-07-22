@@ -1471,7 +1471,7 @@ async def test_open_code_session_prefers_configured_desktop_runtime_and_keeps_en
     from app.code_runtime import service
     from app.code_runtime.sandbox_auth import decrypt_runtime_cookie
     from app.code_runtime.service import open_code_session
-    from app.models.ai_chat import CodeRuntimeBinding
+    from app.models.ai_chat import CodeRuntimeAgentSession, CodeRuntimeBinding
 
     session = AIChatSession(
         tenant_id=7,
@@ -1500,7 +1500,7 @@ async def test_open_code_session_prefers_configured_desktop_runtime_and_keeps_en
                     "applicationId": "desktop-code-app",
                     "workspaceId": "workspace-desktop",
                     "sandboxInstanceId": "desktop-instance",
-                    "conversationId": "desktop-conversation",
+                    "conversationId": "",
                     "runtimeBaseUrl": "http://127.0.0.1:19090",
                     "specReviewUrl": "http://127.0.0.1:19090/builder/",
                 },
@@ -1518,6 +1518,17 @@ async def test_open_code_session_prefers_configured_desktop_runtime_and_keeps_en
     monkeypatch.setenv("DOLPHIN_AGENT_RUNTIME_PATH", "/tmp/agent-runtime")
     monkeypatch.setattr(service, "LocalRuntimeClient", FakeLocalRuntimeClient)
     monkeypatch.setattr(service, "bootstrap_runtime_session", unexpected_bootstrap)
+    created_with: list[tuple[str, str]] = []
+
+    async def fake_create_agent_session(runtime_base_url: str, token: str) -> str:
+        created_with.append((runtime_base_url, token))
+        return "desktop-runtime-session-1"
+
+    monkeypatch.setattr(
+        service,
+        "_create_desktop_runtime_agent_session",
+        fake_create_agent_session,
+    )
 
     result = await open_code_session(
         db=db_session,
@@ -1537,12 +1548,130 @@ async def test_open_code_session_prefers_configured_desktop_runtime_and_keeps_en
     assert opened_calls == 1
     assert bootstrap_calls == 0
     assert binding.execution_target == "desktop_agent_runtime"
+    assert binding.runtime_session_id == "desktop-runtime-session-1"
     assert hashlib.sha256(
         decrypt_runtime_cookie(binding.desktop_agent_runtime_token_enc).encode("ascii")
     ).digest() == hashlib.sha256(entry_token.encode("ascii")).digest()
+    assert created_with == [("http://127.0.0.1:19090", entry_token)]
+    ownership = (
+        await db_session.execute(
+            select(CodeRuntimeAgentSession).where(
+                CodeRuntimeAgentSession.session_id == session.id,
+                CodeRuntimeAgentSession.runtime_session_id == "desktop-runtime-session-1",
+            )
+        )
+    ).scalar_one()
+    assert ownership.conversation_id is None
     if entry_token in repr(result):
         pytest.fail("desktop runtime entry token leaked into public response")
     assert "desktop_agent_runtime_token_enc" not in result
+
+
+@pytest.mark.asyncio
+async def test_desktop_runtime_creates_one_agent_session_per_shell_and_reuses_it(
+    db_session,
+    monkeypatch,
+):
+    from sqlalchemy import select
+
+    from app.code_runtime import service
+    from app.code_runtime.service import open_code_session
+    from app.models.ai_chat import CodeRuntimeAgentSession, CodeRuntimeBinding
+
+    first = AIChatSession(
+        tenant_id=7,
+        user_id=11,
+        external_application_id="desktop-code-app",
+        title="Desktop Code 1",
+        mode="code",
+        status="active",
+    )
+    second = AIChatSession(
+        tenant_id=7,
+        user_id=11,
+        external_application_id="desktop-code-app",
+        title="Desktop Code 2",
+        mode="code",
+        status="active",
+    )
+    db_session.add_all([first, second])
+    await db_session.commit()
+
+    class FakeLocalRuntimeClient:
+        @classmethod
+        def from_environment(cls):
+            return cls()
+
+        async def open_application_with_entry_token(self, _db, _session, _ctx):
+            return (
+                {
+                    "applicationId": "desktop-code-app",
+                    "workspaceId": "workspace-desktop",
+                    "sandboxInstanceId": "desktop-instance",
+                    "conversationId": "",
+                    "runtimeBaseUrl": "http://127.0.0.1:19090",
+                    "specReviewUrl": "http://127.0.0.1:19090/builder/",
+                },
+                "desktop-entry-token",
+            )
+
+    created: list[str] = []
+
+    async def fake_create_agent_session(_runtime_base_url: str, _token: str) -> str:
+        runtime_session_id = f"desktop-runtime-session-{len(created) + 1}"
+        created.append(runtime_session_id)
+        return runtime_session_id
+
+    monkeypatch.setenv("DOLPHIN_LOCAL_RUNTIME_MANAGER_URL", "http://127.0.0.1:9988")
+    monkeypatch.setenv("DOLPHIN_LOCAL_RUNTIME_MANAGER_TOKEN", "manager-token")
+    monkeypatch.setenv("DOLPHIN_DESKTOP_DATA_DIR", "/tmp/desktop-data")
+    monkeypatch.setenv("DOLPHIN_AGENT_RUNTIME_PATH", "/tmp/agent-runtime")
+    monkeypatch.setattr(service, "LocalRuntimeClient", FakeLocalRuntimeClient)
+    monkeypatch.setattr(
+        service,
+        "_create_desktop_runtime_agent_session",
+        fake_create_agent_session,
+    )
+
+    first_open = await open_code_session(
+        db=db_session,
+        session_id=first.id,
+        ctx=SimpleNamespace(user=SimpleNamespace(id=11), tenant_id=7),
+    )
+    second_open = await open_code_session(
+        db=db_session,
+        session_id=second.id,
+        ctx=SimpleNamespace(user=SimpleNamespace(id=11), tenant_id=7),
+    )
+    reopened_first = await open_code_session(
+        db=db_session,
+        session_id=first.id,
+        ctx=SimpleNamespace(user=SimpleNamespace(id=11), tenant_id=7),
+    )
+    await db_session.commit()
+
+    assert created == ["desktop-runtime-session-1", "desktop-runtime-session-2"]
+    assert first_open["runtime_session_id"] == "desktop-runtime-session-1"
+    assert second_open["runtime_session_id"] == "desktop-runtime-session-2"
+    assert reopened_first["runtime_session_id"] == "desktop-runtime-session-1"
+    ownership = (
+        await db_session.execute(
+            select(CodeRuntimeAgentSession).order_by(CodeRuntimeAgentSession.session_id)
+        )
+    ).scalars().all()
+    assert [(record.session_id, record.runtime_session_id) for record in ownership] == [
+        (first.id, "desktop-runtime-session-1"),
+        (second.id, "desktop-runtime-session-2"),
+    ]
+    bindings = (
+        await db_session.execute(
+            select(CodeRuntimeBinding).order_by(CodeRuntimeBinding.session_id)
+        )
+    ).scalars().all()
+    assert [(binding.session_id, binding.runtime_session_id) for binding in bindings] == [
+        (first.id, "desktop-runtime-session-1"),
+        (second.id, "desktop-runtime-session-2"),
+    ]
 
 
 @pytest.mark.asyncio
