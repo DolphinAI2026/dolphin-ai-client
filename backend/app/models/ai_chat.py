@@ -16,7 +16,7 @@ from uuid import uuid4
 
 from sqlalchemy import Boolean, String, Text, DateTime, Integer, ForeignKey, JSON, BigInteger, UniqueConstraint
 from sqlalchemy.dialects.mysql import LONGTEXT
-from sqlalchemy.orm import Mapped, mapped_column
+from sqlalchemy.orm import Mapped, mapped_column, validates
 from sqlalchemy.types import TypeDecorator
 
 from app.code_runtime.execution_target import ExecutionTarget, ExecutionTargetType
@@ -27,6 +27,18 @@ from app.database import Base
 BigText = Text().with_variant(LONGTEXT, "mysql")
 
 
+def _validate_encrypted_runtime_token(value: Optional[str]) -> Optional[str]:
+    if value is None:
+        return None
+    from app.code_runtime.sandbox_auth import decrypt_runtime_cookie
+
+    try:
+        decrypt_runtime_cookie(value)
+    except ValueError as exc:
+        raise ValueError("desktop runtime token must be encrypted") from exc
+    return value
+
+
 class EncryptedRuntimeTokenType(TypeDecorator[str]):
     """Reject unencrypted desktop runtime tokens for ORM and Core writes."""
 
@@ -34,15 +46,7 @@ class EncryptedRuntimeTokenType(TypeDecorator[str]):
     cache_ok = True
 
     def process_bind_param(self, value: Optional[str], _dialect) -> Optional[str]:
-        if value is None:
-            return None
-        from app.code_runtime.sandbox_auth import decrypt_runtime_cookie
-
-        try:
-            decrypt_runtime_cookie(value)
-        except ValueError as exc:
-            raise ValueError("desktop runtime token must be encrypted") from exc
-        return value
+        return _validate_encrypted_runtime_token(value)
 
 
 class AIChatSession(Base):
@@ -125,6 +129,11 @@ class CodeRuntimeBinding(Base):
     updated_at: Mapped[datetime] = mapped_column(
         DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False
     )
+
+    @validates("desktop_agent_runtime_token_enc")
+    def _validate_desktop_agent_runtime_token_enc(self, _key: str, value: Optional[str]) -> Optional[str]:
+        return _validate_encrypted_runtime_token(value)
+
 
 class CodeRuntimeBrowserSession(Base):
     """Isolated browser session credentials for a Code runtime binding."""

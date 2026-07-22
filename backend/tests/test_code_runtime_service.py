@@ -55,6 +55,17 @@ def test_code_runtime_binding_model_is_registered():
     assert sa_inspect(CodeRuntimeBinding).columns.execution_target.server_default.arg == "control_plane"
 
 
+def test_runtime_binding_rejects_plaintext_token_on_construction_and_assignment():
+    from app.models.ai_chat import CodeRuntimeBinding
+
+    with pytest.raises(ValueError, match="desktop runtime token must be encrypted"):
+        CodeRuntimeBinding(desktop_agent_runtime_token_enc="plaintext-token")
+
+    binding = CodeRuntimeBinding()
+    with pytest.raises(ValueError, match="desktop runtime token must be encrypted"):
+        binding.desktop_agent_runtime_token_enc = "plaintext-token"
+
+
 def test_execution_target_classifies_desktop_runtime_and_legacy_values():
     from app.code_runtime.execution_target import (
         ExecutionTarget,
