@@ -46,8 +46,28 @@ def test_code_runtime_binding_model_is_registered():
         "runtime_session_id",
         "runtime_service_session_enc",
         "auth_generation",
+        "execution_target",
+        "desktop_agent_runtime_token_enc",
     }.issubset(cols)
     assert sa_inspect(CodeRuntimeBinding).columns.app_id.nullable is True
+    assert sa_inspect(CodeRuntimeBinding).columns.execution_target.default.arg == "control_plane"
+    assert sa_inspect(CodeRuntimeBinding).columns.execution_target.server_default.arg == "control_plane"
+    with pytest.raises(ValueError, match="encrypted"):
+        CodeRuntimeBinding(desktop_agent_runtime_token_enc="plaintext-token")
+
+
+def test_execution_target_classifies_desktop_runtime_and_legacy_values():
+    from app.code_runtime.execution_target import (
+        ExecutionTarget,
+        is_desktop_agent_runtime_target,
+        resolve_execution_target,
+    )
+
+    assert resolve_execution_target(None) is ExecutionTarget.CONTROL_PLANE
+    assert resolve_execution_target("") is ExecutionTarget.CONTROL_PLANE
+    assert resolve_execution_target("desktop_agent_runtime") is ExecutionTarget.DESKTOP_AGENT_RUNTIME
+    assert is_desktop_agent_runtime_target(ExecutionTarget.DESKTOP_AGENT_RUNTIME)
+    assert not is_desktop_agent_runtime_target(ExecutionTarget.CONTROL_PLANE)
 
 
 def test_code_runtime_agent_session_model_has_rail_snapshot_columns():
@@ -251,12 +271,19 @@ async def test_init_db_expands_old_runtime_binding_schema_without_cleaning_build
                 database.text("PRAGMA table_info(code_runtime_bindings)")
             )).mappings()
         }
-        assert {"runtime_service_session_enc", "auth_generation"}.issubset(binding_columns)
+        assert {
+            "runtime_service_session_enc",
+            "auth_generation",
+            "execution_target",
+            "desktop_agent_runtime_token_enc",
+        }.issubset(binding_columns)
         binding = (await conn.execute(database.text(
-            "SELECT builder_url, auth_generation FROM code_runtime_bindings WHERE id = 1"
+            "SELECT builder_url, auth_generation, execution_target "
+            "FROM code_runtime_bindings WHERE id = 1"
         ))).one()
         assert binding.builder_url == builder_url
         assert binding.auth_generation == 1
+        assert binding.execution_target == "control_plane"
 
         browser_fk = (await conn.execute(database.text(
             "PRAGMA foreign_key_list(code_runtime_browser_sessions)"
@@ -1343,6 +1370,7 @@ async def test_open_code_session_bootstraps_token_free_binding_and_new_browser_s
     from app.code_runtime.sandbox_auth import (
         RuntimeBootstrap,
         decrypt_runtime_cookie,
+        encrypt_runtime_cookie,
     )
     from app.code_runtime.service import open_code_session, validate_embed_token
     from app.models.ai_chat import CodeRuntimeBinding, CodeRuntimeBrowserSession
@@ -1391,6 +1419,15 @@ async def test_open_code_session_bootstraps_token_free_binding_and_new_browser_s
         workspace_open=fake_open,
     )
     await db_session.commit()
+    binding = (
+        await db_session.execute(
+            select(CodeRuntimeBinding).where(CodeRuntimeBinding.session_id == session.id)
+        )
+    ).scalar_one()
+    binding.desktop_agent_runtime_token_enc = encrypt_runtime_cookie(
+        "desktop-agent-runtime-token-secret"
+    )
+    await db_session.commit()
     second = await open_code_session(
         db=db_session,
         session_id=session.id,
@@ -1421,6 +1458,9 @@ async def test_open_code_session_bootstraps_token_free_binding_and_new_browser_s
     )
     assert "entry-secret" not in binding.builder_url
     assert decrypt_runtime_cookie(binding.runtime_service_session_enc) == "runtime-cookie-secret"
+    assert decrypt_runtime_cookie(binding.desktop_agent_runtime_token_enc) == (
+        "desktop-agent-runtime-token-secret"
+    )
     assert binding.auth_generation == 2
     assert len(browser_rows) == 2
     assert len({row.browser_session_id for row in browser_rows}) == 2
@@ -1433,6 +1473,8 @@ async def test_open_code_session_bootstraps_token_free_binding_and_new_browser_s
     assert [row.generation for row in browser_rows] == [1, 2]
     assert "entry-secret" not in first["embed_url"]
     assert "runtime-cookie-secret" not in first["embed_url"]
+    assert "desktop_agent_runtime_token_enc" not in second
+    assert "desktop-agent-runtime-token-secret" not in repr(second)
     first_token = dict(parse_qsl(urlsplit(first["embed_url"]).query))["dolphin_token"]
     validate_embed_token(
         first_token,
