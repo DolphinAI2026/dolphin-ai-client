@@ -16,14 +16,33 @@ from uuid import uuid4
 
 from sqlalchemy import Boolean, String, Text, DateTime, Integer, ForeignKey, JSON, BigInteger, UniqueConstraint
 from sqlalchemy.dialects.mysql import LONGTEXT
-from sqlalchemy.orm import Mapped, mapped_column, validates
+from sqlalchemy.orm import Mapped, mapped_column
+from sqlalchemy.types import TypeDecorator
 
-from app.code_runtime.execution_target import ExecutionTarget
+from app.code_runtime.execution_target import ExecutionTarget, ExecutionTargetType
 from app.database import Base
 
 
 # 支持 dev SQLite + prod MySQL：MySQL 用 LONGTEXT (4GB)，其他用 Text
 BigText = Text().with_variant(LONGTEXT, "mysql")
+
+
+class EncryptedRuntimeTokenType(TypeDecorator[str]):
+    """Reject unencrypted desktop runtime tokens for ORM and Core writes."""
+
+    impl = Text
+    cache_ok = True
+
+    def process_bind_param(self, value: Optional[str], _dialect) -> Optional[str]:
+        if value is None:
+            return None
+        from app.code_runtime.sandbox_auth import decrypt_runtime_cookie
+
+        try:
+            decrypt_runtime_cookie(value)
+        except ValueError as exc:
+            raise ValueError("desktop runtime token must be encrypted") from exc
+        return value
 
 
 class AIChatSession(Base):
@@ -87,14 +106,17 @@ class CodeRuntimeBinding(Base):
     runtime_session_id: Mapped[Optional[str]] = mapped_column(String(160), nullable=True, index=True)
     runtime_service_session_enc: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     execution_target: Mapped[str] = mapped_column(
-        String(32),
+        ExecutionTargetType(),
         default=ExecutionTarget.CONTROL_PLANE.value,
         server_default=ExecutionTarget.CONTROL_PLANE.value,
         nullable=False,
     )
     # The desktop runtime launcher must use encrypt_runtime_cookie before assigning.
     # This field is intentionally not included in any public binding response.
-    desktop_agent_runtime_token_enc: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    desktop_agent_runtime_token_enc: Mapped[Optional[str]] = mapped_column(
+        EncryptedRuntimeTokenType(),
+        nullable=True,
+    )
     auth_generation: Mapped[int] = mapped_column(Integer, default=1, server_default="1", nullable=False)
     conversation_id: Mapped[Optional[str]] = mapped_column(String(160), nullable=True)
     status: Mapped[str] = mapped_column(String(32), default="ready", nullable=False)
@@ -103,19 +125,6 @@ class CodeRuntimeBinding(Base):
     updated_at: Mapped[datetime] = mapped_column(
         DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False
     )
-
-    @validates("desktop_agent_runtime_token_enc")
-    def _validate_desktop_agent_runtime_token_enc(self, _key: str, value: Optional[str]) -> Optional[str]:
-        if value is None:
-            return None
-        from app.code_runtime.sandbox_auth import decrypt_runtime_cookie
-
-        try:
-            decrypt_runtime_cookie(value)
-        except ValueError as exc:
-            raise ValueError("desktop runtime token must be encrypted") from exc
-        return value
-
 
 class CodeRuntimeBrowserSession(Base):
     """Isolated browser session credentials for a Code runtime binding."""

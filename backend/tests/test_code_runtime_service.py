@@ -6,7 +6,8 @@ from urllib.parse import parse_qsl, urlsplit
 
 import pytest
 from fastapi import HTTPException
-from sqlalchemy import inspect as sa_inspect
+from sqlalchemy import inspect as sa_inspect, text, update
+from sqlalchemy.exc import StatementError
 from sqlalchemy.ext.asyncio import create_async_engine
 
 from app.models import Application
@@ -52,8 +53,6 @@ def test_code_runtime_binding_model_is_registered():
     assert sa_inspect(CodeRuntimeBinding).columns.app_id.nullable is True
     assert sa_inspect(CodeRuntimeBinding).columns.execution_target.default.arg == "control_plane"
     assert sa_inspect(CodeRuntimeBinding).columns.execution_target.server_default.arg == "control_plane"
-    with pytest.raises(ValueError, match="encrypted"):
-        CodeRuntimeBinding(desktop_agent_runtime_token_enc="plaintext-token")
 
 
 def test_execution_target_classifies_desktop_runtime_and_legacy_values():
@@ -68,6 +67,99 @@ def test_execution_target_classifies_desktop_runtime_and_legacy_values():
     assert resolve_execution_target("desktop_agent_runtime") is ExecutionTarget.DESKTOP_AGENT_RUNTIME
     assert is_desktop_agent_runtime_target(ExecutionTarget.DESKTOP_AGENT_RUNTIME)
     assert not is_desktop_agent_runtime_target(ExecutionTarget.CONTROL_PLANE)
+
+
+@pytest.mark.asyncio
+async def test_execution_target_rejects_invalid_bind_values_and_normalizes_legacy_empty_rows(db_session):
+    from app.code_runtime.execution_target import ExecutionTarget
+    from app.models.ai_chat import CodeRuntimeBinding
+
+    with pytest.raises(StatementError, match="unsupported execution target"):
+        await db_session.execute(
+            update(CodeRuntimeBinding).values(execution_target="unsupported-target")
+        )
+
+    session = AIChatSession(
+        tenant_id=7,
+        user_id=11,
+        external_application_id="code-app-legacy-target",
+        title="Legacy target",
+        mode="code",
+        status="active",
+    )
+    db_session.add(session)
+    await db_session.flush()
+    binding = CodeRuntimeBinding(
+        tenant_id=7,
+        user_id=11,
+        session_id=session.id,
+        external_application_id="code-app-legacy-target",
+        runtime_base_url="https://sandbox.example.com/workspaces/ws-legacy-target",
+        builder_url="https://sandbox.example.com/workspaces/ws-legacy-target/builder",
+        execution_target=ExecutionTarget.LOCAL_FIXTURE.value,
+    )
+    db_session.add(binding)
+    await db_session.flush()
+    binding_id = binding.id
+    await db_session.commit()
+
+    await db_session.execute(
+        text("UPDATE code_runtime_bindings SET execution_target = '' WHERE id = :id"),
+        {"id": binding_id},
+    )
+    await db_session.commit()
+    db_session.expire_all()
+
+    legacy_binding = await db_session.get(CodeRuntimeBinding, binding_id)
+    assert legacy_binding.execution_target == ExecutionTarget.CONTROL_PLANE.value
+
+
+@pytest.mark.asyncio
+async def test_runtime_binding_token_type_rejects_plaintext_bulk_update(db_session):
+    from app.code_runtime.sandbox_auth import encrypt_runtime_cookie
+    from app.models.ai_chat import CodeRuntimeBinding
+
+    session = AIChatSession(
+        tenant_id=7,
+        user_id=11,
+        external_application_id="code-app-token",
+        title="Token binding",
+        mode="code",
+        status="active",
+    )
+    db_session.add(session)
+    await db_session.flush()
+    binding = CodeRuntimeBinding(
+        tenant_id=7,
+        user_id=11,
+        session_id=session.id,
+        external_application_id="code-app-token",
+        runtime_base_url="https://sandbox.example.com/workspaces/ws-token",
+        builder_url="https://sandbox.example.com/workspaces/ws-token/builder",
+    )
+    db_session.add(binding)
+    await db_session.flush()
+    binding_id = binding.id
+    await db_session.commit()
+
+    with pytest.raises(StatementError, match="desktop runtime token must be encrypted"):
+        await db_session.execute(
+            update(CodeRuntimeBinding)
+            .where(CodeRuntimeBinding.id == binding_id)
+            .values(desktop_agent_runtime_token_enc="plaintext-token")
+        )
+
+    encrypted_token = encrypt_runtime_cookie("desktop-runtime-token")
+    await db_session.execute(
+        update(CodeRuntimeBinding)
+        .where(CodeRuntimeBinding.id == binding_id)
+        .values(desktop_agent_runtime_token_enc=encrypted_token)
+    )
+    await db_session.commit()
+    db_session.expire_all()
+
+    saved_binding = await db_session.get(CodeRuntimeBinding, binding_id)
+    assert saved_binding.desktop_agent_runtime_token_enc == encrypted_token
 
 
 def test_code_runtime_agent_session_model_has_rail_snapshot_columns():
