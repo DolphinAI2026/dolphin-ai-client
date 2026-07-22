@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import base64
+import hashlib
 from types import SimpleNamespace
 from urllib.parse import parse_qsl, urlsplit
 
@@ -1458,6 +1459,189 @@ async def test_open_code_session_upserts_runtime_binding(db_session):
     assert binding.workspace_id == "93001"
     assert binding.sandbox_instance_id == "sandbox-93001"
     assert binding.runtime_base_url == "https://sandbox.example.com/workspaces/93001"
+
+
+@pytest.mark.asyncio
+async def test_open_code_session_prefers_configured_desktop_runtime_and_keeps_entry_token_private(
+    db_session,
+    monkeypatch,
+):
+    from sqlalchemy import select
+
+    from app.code_runtime import service
+    from app.code_runtime.sandbox_auth import decrypt_runtime_cookie
+    from app.code_runtime.service import open_code_session
+    from app.models.ai_chat import CodeRuntimeBinding
+
+    session = AIChatSession(
+        tenant_id=7,
+        user_id=11,
+        external_application_id="desktop-code-app",
+        title="Desktop Code",
+        mode="code",
+        status="active",
+    )
+    db_session.add(session)
+    await db_session.commit()
+    entry_token = "desktop-entry-token-secret"
+    opened_calls = 0
+    bootstrap_calls = 0
+
+    class FakeLocalRuntimeClient:
+        @classmethod
+        def from_environment(cls):
+            return cls()
+
+        async def open_application_with_entry_token(self, _db, _session, _ctx):
+            nonlocal opened_calls
+            opened_calls += 1
+            return (
+                {
+                    "applicationId": "desktop-code-app",
+                    "workspaceId": "workspace-desktop",
+                    "sandboxInstanceId": "desktop-instance",
+                    "conversationId": "desktop-conversation",
+                    "runtimeBaseUrl": "http://127.0.0.1:19090",
+                    "specReviewUrl": "http://127.0.0.1:19090/builder/",
+                },
+                entry_token,
+            )
+
+    async def unexpected_bootstrap(_builder_url: str):
+        nonlocal bootstrap_calls
+        bootstrap_calls += 1
+        raise AssertionError("desktop runtime must not bootstrap a control-plane session")
+
+    monkeypatch.setenv("DOLPHIN_LOCAL_RUNTIME_MANAGER_URL", "http://127.0.0.1:9988")
+    monkeypatch.setenv("DOLPHIN_LOCAL_RUNTIME_MANAGER_TOKEN", "manager-token")
+    monkeypatch.setenv("DOLPHIN_DESKTOP_DATA_DIR", "/tmp/desktop-data")
+    monkeypatch.setenv("DOLPHIN_AGENT_RUNTIME_PATH", "/tmp/agent-runtime")
+    monkeypatch.setattr(service, "LocalRuntimeClient", FakeLocalRuntimeClient)
+    monkeypatch.setattr(service, "bootstrap_runtime_session", unexpected_bootstrap)
+
+    result = await open_code_session(
+        db=db_session,
+        session_id=session.id,
+        ctx=SimpleNamespace(user=SimpleNamespace(id=11), tenant_id=7),
+        workspace_open=lambda *_args: (_ for _ in ()).throw(
+            AssertionError("desktop runtime must not use Control Plane")
+        ),
+    )
+    await db_session.commit()
+
+    binding = (
+        await db_session.execute(
+            select(CodeRuntimeBinding).where(CodeRuntimeBinding.session_id == session.id)
+        )
+    ).scalar_one()
+    assert opened_calls == 1
+    assert bootstrap_calls == 0
+    assert binding.execution_target == "desktop_agent_runtime"
+    assert hashlib.sha256(
+        decrypt_runtime_cookie(binding.desktop_agent_runtime_token_enc).encode("ascii")
+    ).digest() == hashlib.sha256(entry_token.encode("ascii")).digest()
+    if entry_token in repr(result):
+        pytest.fail("desktop runtime entry token leaked into public response")
+    assert "desktop_agent_runtime_token_enc" not in result
+
+
+@pytest.mark.asyncio
+async def test_open_code_session_does_not_fallback_when_configured_desktop_runtime_fails(
+    db_session,
+    monkeypatch,
+):
+    from app.code_runtime import service
+    from app.code_runtime.service import open_code_session
+
+    session = AIChatSession(
+        tenant_id=7,
+        user_id=11,
+        external_application_id="desktop-code-app",
+        title="Desktop Code",
+        mode="code",
+        status="active",
+    )
+    db_session.add(session)
+    await db_session.commit()
+    control_plane_calls = 0
+
+    class FailingLocalRuntimeClient:
+        @classmethod
+        def from_environment(cls):
+            return cls()
+
+        async def open_application_with_entry_token(self, _db, _session, _ctx):
+            raise HTTPException(status_code=503, detail="LOCAL_RUNTIME_MANAGER_UNAVAILABLE: unavailable")
+
+    async def unexpected_control_plane(*_args, **_kwargs):
+        nonlocal control_plane_calls
+        control_plane_calls += 1
+        raise AssertionError("desktop failure must not fall back")
+
+    monkeypatch.setenv("DOLPHIN_LOCAL_RUNTIME_MANAGER_URL", "http://127.0.0.1:9988")
+    monkeypatch.setenv("DOLPHIN_LOCAL_RUNTIME_MANAGER_TOKEN", "manager-token")
+    monkeypatch.setenv("DOLPHIN_DESKTOP_DATA_DIR", "/tmp/desktop-data")
+    monkeypatch.setenv("DOLPHIN_AGENT_RUNTIME_PATH", "/tmp/agent-runtime")
+    monkeypatch.setattr(service, "LocalRuntimeClient", FailingLocalRuntimeClient)
+    monkeypatch.setattr(service, "default_workspace_open", unexpected_control_plane)
+
+    with pytest.raises(HTTPException, match="LOCAL_RUNTIME_MANAGER_UNAVAILABLE") as exc:
+        await open_code_session(
+            db=db_session,
+            session_id=session.id,
+            ctx=SimpleNamespace(user=SimpleNamespace(id=11), tenant_id=7),
+        )
+
+    assert exc.value.status_code == 503
+    assert control_plane_calls == 0
+
+
+@pytest.mark.asyncio
+async def test_open_code_session_uses_control_plane_when_desktop_manager_is_not_configured(
+    db_session,
+    monkeypatch,
+):
+    from app.code_runtime import service
+    from app.code_runtime.service import open_code_session
+
+    session = AIChatSession(
+        tenant_id=7,
+        user_id=11,
+        external_application_id="code-app-1",
+        title="Control plane Code",
+        mode="code",
+        status="active",
+    )
+    db_session.add(session)
+    await db_session.commit()
+    calls = 0
+
+    async def fake_open(_external_application_id: str, _handoff_id: str | None = None):
+        nonlocal calls
+        calls += 1
+        return {
+            "workspaceId": "ws-1",
+            "sandboxInstanceId": "sandbox-1",
+            "specReviewUrl": "https://sandbox.example.com/workspaces/ws-1/builder?token=entry-token",
+        }
+
+    for key in (
+        "DOLPHIN_LOCAL_RUNTIME_MANAGER_URL",
+        "DOLPHIN_LOCAL_RUNTIME_MANAGER_TOKEN",
+        "DOLPHIN_DESKTOP_DATA_DIR",
+        "DOLPHIN_AGENT_RUNTIME_PATH",
+    ):
+        monkeypatch.delenv(key, raising=False)
+
+    result = await open_code_session(
+        db=db_session,
+        session_id=session.id,
+        ctx=SimpleNamespace(user=SimpleNamespace(id=11), tenant_id=7),
+        workspace_open=fake_open,
+    )
+
+    assert calls == 1
+    assert result["external_application_id"] == "code-app-1"
 
 
 @pytest.mark.asyncio

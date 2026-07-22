@@ -23,6 +23,8 @@ from app.code_runtime.sandbox_auth import (
     runtime_session_expiry_for_storage,
     split_entry_token,
 )
+from app.code_runtime.local_runtime import LocalRuntimeClient
+from app.code_runtime.execution_target import ExecutionTarget
 from app.models import Application
 from app.models.ai_chat import (
     AIChatSession,
@@ -40,6 +42,12 @@ _DEFAULT_CONTROL_PLANE_URL = "http://127.0.0.1:8080"
 _DEFAULT_SEED_PROJECT_ID = "1781233861147"
 _LOCAL_APPLICATION_PREFIX = "local-"
 _LEGACY_BROWSER_SESSION_ID = "legacy-browser-session"
+_DESKTOP_RUNTIME_ENVIRONMENT_KEYS = (
+    "DOLPHIN_LOCAL_RUNTIME_MANAGER_URL",
+    "DOLPHIN_LOCAL_RUNTIME_MANAGER_TOKEN",
+    "DOLPHIN_DESKTOP_DATA_DIR",
+    "DOLPHIN_AGENT_RUNTIME_PATH",
+)
 
 
 def derive_runtime_base_url(builder_url: str) -> str:
@@ -319,6 +327,10 @@ def default_seed_project_id() -> str:
         or (settings.dolphin_code_default_seed_project_id or "").strip()
         or _DEFAULT_SEED_PROJECT_ID
     )
+
+
+def _desktop_runtime_environment_present() -> bool:
+    return any(os.getenv(key, "").strip() for key in _DESKTOP_RUNTIME_ENVIRONMENT_KEYS)
 
 
 def _builder_prefix_path(builder_url: str) -> str:
@@ -728,6 +740,12 @@ async def open_code_session(
     if not external_app_id:
         raise HTTPException(status_code=400, detail="Code 会话未绑定应用")
 
+    desktop_entry_token: str | None = None
+    desktop_runtime = (
+        not is_local_code_application_id(external_app_id)
+        and _desktop_runtime_environment_present()
+    )
+
     async def workspace_open_once() -> dict[str, Any]:
         if workspace_open is not None:
             return await workspace_open(external_app_id, handoff_id)
@@ -740,13 +758,20 @@ async def open_code_session(
             auth_provider=auth_provider,
         )
 
-    opened = await workspace_open_once()
+    if desktop_runtime:
+        opened, desktop_entry_token = await LocalRuntimeClient.from_environment().open_application_with_entry_token(
+            db,
+            session,
+            ctx,
+        )
+    else:
+        opened = await workspace_open_once()
     builder_url = str(opened.get("specReviewUrl") or opened.get("builderUrl") or "").strip()
     if not builder_url:
         raise HTTPException(status_code=502, detail="Code Control Plane 未返回 builder URL")
 
     bootstrap = None
-    if is_local_code_application_id(external_app_id):
+    if desktop_runtime or is_local_code_application_id(external_app_id):
         clean_builder_url = builder_url
         runtime_base_url = derive_runtime_base_url(builder_url)
     else:
@@ -824,6 +849,11 @@ async def open_code_session(
     binding.conversation_id = opened.get("conversationId") or binding.conversation_id
     binding.status = "ready"
     binding.last_error = None
+    if desktop_runtime:
+        if not desktop_entry_token:
+            raise HTTPException(status_code=503, detail="本地 Runtime entry token 不可用")
+        binding.execution_target = ExecutionTarget.DESKTOP_AGENT_RUNTIME.value
+        binding.desktop_agent_runtime_token_enc = encrypt_runtime_cookie(desktop_entry_token)
     await db.flush()
 
     resolved_browser_session_id = None

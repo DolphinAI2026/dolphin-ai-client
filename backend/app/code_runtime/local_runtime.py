@@ -8,7 +8,9 @@ import hashlib
 import json
 import os
 import re
+import secrets
 import socket
+import stat
 import time
 import uuid
 from collections.abc import Callable
@@ -45,6 +47,7 @@ _APPLICATION_INVALID = "LOCAL_APPLICATION_ID_INVALID"
 _INSTANCE_LOCKS: dict[tuple[int, str], asyncio.Lock] = {}
 _STARTING_TIMEOUT_SECONDS = 30
 _STARTING_POLL_SECONDS = 0.2
+_SANDBOX_TOKEN_FILE = "sandbox-token"
 
 
 def _error(status_code: int, code: str, message: str) -> HTTPException:
@@ -403,6 +406,38 @@ def _atomic_write_json_at(parent_fd: int, name: str, payload: dict[str, Any]) ->
             pass
 
 
+def _atomic_write_secret_at(parent_fd: int, name: str, value: str) -> None:
+    if not _APPLICATION_COMPONENT.fullmatch(name):
+        raise ValueError("unsafe runtime file name")
+    if not value or "\x00" in value:
+        raise ValueError("runtime secret is invalid")
+    temporary_name = f".{name}.{uuid.uuid4().hex}.tmp"
+    file_fd = -1
+    try:
+        file_fd = os.open(
+            temporary_name,
+            os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW,
+            0o600,
+            dir_fd=parent_fd,
+        )
+        encoded = value.encode("ascii")
+        offset = 0
+        while offset < len(encoded):
+            offset += os.write(file_fd, encoded[offset:])
+        os.fsync(file_fd)
+        os.close(file_fd)
+        file_fd = -1
+        os.replace(temporary_name, name, src_dir_fd=parent_fd, dst_dir_fd=parent_fd)
+        os.fsync(parent_fd)
+    finally:
+        if file_fd >= 0:
+            os.close(file_fd)
+        try:
+            os.unlink(temporary_name, dir_fd=parent_fd)
+        except FileNotFoundError:
+            pass
+
+
 def _read_json_at(parent_fd: int, name: str) -> dict[str, Any]:
     file_fd = os.open(name, os.O_RDONLY | os.O_NOFOLLOW, dir_fd=parent_fd)
     try:
@@ -414,6 +449,26 @@ def _read_json_at(parent_fd: int, name: str) -> dict[str, Any]:
         os.close(file_fd)
     if not isinstance(value, dict):
         raise ValueError("runtime JSON must be an object")
+    return value
+
+
+def _read_secret_at(parent_fd: int, name: str) -> str:
+    file_fd = os.open(name, os.O_RDONLY | os.O_NOFOLLOW, dir_fd=parent_fd)
+    try:
+        metadata = os.fstat(file_fd)
+        if not stat.S_ISREG(metadata.st_mode) or stat.S_IMODE(metadata.st_mode) != 0o600:
+            raise ValueError("runtime secret file is unsafe")
+        content = b""
+        while chunk := os.read(file_fd, 65536):
+            content += chunk
+    finally:
+        os.close(file_fd)
+    try:
+        value = content.decode("ascii")
+    except UnicodeDecodeError as exc:
+        raise ValueError("runtime secret is invalid") from exc
+    if not value or "\x00" in value or any(ord(character) < 33 or ord(character) > 126 for character in value):
+        raise ValueError("runtime secret is invalid")
     return value
 
 
@@ -830,6 +885,24 @@ class LocalRuntimeClient:
         except (OSError, RuntimeError, ValueError, json.JSONDecodeError) as exc:
             raise _error(503, _PREPARATION_FAILED, "无法读取本地 Runtime 模型配置") from exc
 
+    def _entry_token(
+        self,
+        runtime_scope_id: str,
+        sandbox_instance_id: str,
+    ) -> str:
+        if self.desktop_data_dir is None:
+            raise _error(503, _MANAGER_UNAVAILABLE, "本地 Runtime manager 未配置")
+        try:
+            with _runtime_directory_fds(
+                self.desktop_data_dir,
+                runtime_scope_id,
+                sandbox_instance_id,
+                create_instance=False,
+            ) as paths:
+                return _read_secret_at(paths["runtime_fd"], _SANDBOX_TOKEN_FILE)
+        except (OSError, RuntimeError, ValueError) as exc:
+            raise _error(503, _START_FAILED, "无法读取本地 Runtime entry token") from exc
+
     async def _start(
         self,
         db: AsyncSession,
@@ -884,21 +957,14 @@ class LocalRuntimeClient:
                 )
                 _atomic_write_json_at(paths["runtime_fd"], "runtime-context.json", context)
                 _atomic_write_json_at(paths["runtime_fd"], "model-provider.json", provider_document)
-                _atomic_write_json_at(
+                _atomic_write_secret_at(
                     paths["runtime_fd"],
-                    "ci-provider.json",
-                    {
-                        "provider": "mock",
-                        "apiBaseUrl": "https://ci-fixture.example.invalid/api/v4",
-                        "projectId": "local-fixture",
-                        "triggerMode": "api",
-                        "defaultBranch": "main",
-                        "token": "local-ci-fixture-token-not-a-credential",
-                    },
+                    _SANDBOX_TOKEN_FILE,
+                    secrets.token_urlsafe(32),
                 )
                 context_path = runtime_dir / "runtime-context.json"
                 model_path = runtime_dir / "model-provider.json"
-                ci_path = runtime_dir / "ci-provider.json"
+                token_path = runtime_dir / _SANDBOX_TOKEN_FILE
         except HTTPException:
             raise
         except (GitCommandError, OSError, RuntimeError, ValueError) as exc:
@@ -907,15 +973,16 @@ class LocalRuntimeClient:
         environment = {
             "APAAS_RUNTIME_CONTEXT_PATH": str(context_path),
             "APAAS_MODEL_PROVIDER_PATH": str(model_path),
-            "APAAS_CI_PROVIDER_PATH": str(ci_path),
-            "APAAS_WORKSPACE_INIT_MODE": "local_fixture",
-            "APAAS_CI_HANDOFF_MODE": "local_ci_provider",
+            "APAAS_WORKSPACE_INIT_MODE": "desktop_existing_workspace",
+            "APAAS_CI_HANDOFF_MODE": "disabled",
+            "APAAS_CODEX_SESSION_MODE": "codex",
             "APAAS_REPO_WORKSPACE_PATH": str(managed_worktree_path),
             "APAAS_WORKSPACE_PATH": str(managed_worktree_path),
             "APAAS_RUNTIME_WORKSPACE_PATH": str(runtime_dir),
             "APAAS_CODEX_HOME": str(codex_home),
             "APAAS_RUNTIME_ADDR": runtime_address,
-            "APAAS_AUTH_MODE": "disabled",
+            "APAAS_AUTH_MODE": "token",
+            "APAAS_SANDBOX_TOKEN_PATH": str(token_path),
         }
         start_payload = {
             "runtime_scope_id": runtime_scope_id,
@@ -946,12 +1013,12 @@ class LocalRuntimeClient:
         _validated_manager_urls(manager_status)
         return manager_status
 
-    async def open_application(
+    async def open_application_with_entry_token(
         self,
         db: AsyncSession,
         session: Any,
         ctx: Any,
-    ) -> dict[str, Any]:
+    ) -> tuple[dict[str, Any], str]:
         application_id = _application_id(session)
         runtime_scope_id = _runtime_scope_id(ctx, application_id)
         workspace = await resolve_registered_workspace(db, session, ctx)
@@ -1055,10 +1122,20 @@ class LocalRuntimeClient:
                         "无法准备本地 Runtime 配置",
                     ) from exc
 
-        return self._opened(
+        opened = self._opened(
             manager_status,
             application_id=application_id,
             workspace_id=workspace.ws_id,
             sandbox_instance_id=sandbox_instance_id,
             conversation_id=conversation_id,
         )
+        return opened, self._entry_token(runtime_scope_id, sandbox_instance_id)
+
+    async def open_application(
+        self,
+        db: AsyncSession,
+        session: Any,
+        ctx: Any,
+    ) -> dict[str, Any]:
+        opened, _entry_token = await self.open_application_with_entry_token(db, session, ctx)
+        return opened

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import json
 import os
 import stat
@@ -609,6 +610,9 @@ async def test_open_reuses_active_application_instance_across_conversations(
         ),
         encoding="utf-8",
     )
+    token_path = runtime_dir / "sandbox-token"
+    token_path.write_text("reused-entry-token", encoding="ascii")
+    token_path.chmod(0o600)
     calls: list[httpx.Request] = []
 
     def handler(request: httpx.Request) -> httpx.Response:
@@ -774,17 +778,18 @@ async def test_open_starts_missing_instance_with_runtime_context_path_and_enviro
         "APAAS_MODEL_PROVIDER_PATH": str(
             Path(str(start_payload["runtime_dir"])) / "model-provider.json"
         ),
-        "APAAS_CI_PROVIDER_PATH": str(
-            Path(str(start_payload["runtime_dir"])) / "ci-provider.json"
-        ),
-        "APAAS_WORKSPACE_INIT_MODE": "local_fixture",
-        "APAAS_CI_HANDOFF_MODE": "local_ci_provider",
+        "APAAS_WORKSPACE_INIT_MODE": "desktop_existing_workspace",
+        "APAAS_CI_HANDOFF_MODE": "disabled",
+        "APAAS_CODEX_SESSION_MODE": "codex",
         "APAAS_REPO_WORKSPACE_PATH": str(git_repo),
         "APAAS_WORKSPACE_PATH": str(git_repo),
         "APAAS_RUNTIME_WORKSPACE_PATH": start_payload["runtime_dir"],
         "APAAS_CODEX_HOME": start_payload["codex_home"],
         "APAAS_RUNTIME_ADDR": "127.0.0.1:19090",
-        "APAAS_AUTH_MODE": "disabled",
+        "APAAS_AUTH_MODE": "token",
+        "APAAS_SANDBOX_TOKEN_PATH": str(
+            Path(str(start_payload["runtime_dir"])) / "sandbox-token"
+        ),
     }
     context_path = Path(str(start_payload["runtime_context_path"]))
     context = json.loads(context_path.read_text(encoding="utf-8"))
@@ -836,18 +841,15 @@ async def test_open_starts_missing_instance_with_runtime_context_path_and_enviro
             }
         ],
     }
-    ci_provider_path = Path(
-        str(start_payload["environment"]["APAAS_CI_PROVIDER_PATH"])
-    )
-    assert json.loads(ci_provider_path.read_text(encoding="utf-8")) == {
-        "provider": "mock",
-        "apiBaseUrl": "https://ci-fixture.example.invalid/api/v4",
-        "projectId": "local-fixture",
-        "triggerMode": "api",
-        "defaultBranch": "main",
-        "token": "local-ci-fixture-token-not-a-credential",
-    }
-    for config_path in (context_path, model_provider_path, ci_provider_path):
+    token_path = Path(str(start_payload["environment"]["APAAS_SANDBOX_TOKEN_PATH"]))
+    entry_token = token_path.read_text(encoding="utf-8")
+    assert entry_token
+    assert "\x00" not in entry_token
+    assert "sandbox-token" not in json.dumps(opened)
+    if entry_token in json.dumps(start_payload) or entry_token in json.dumps(opened):
+        pytest.fail("sandbox entry token leaked into a public payload")
+    assert not (token_path.parent / "ci-provider.json").exists()
+    for config_path in (context_path, model_provider_path, token_path):
         assert stat.S_IMODE(config_path.stat().st_mode) == 0o600
     for directory in (
         tmp_path / "desktop-data",
@@ -862,6 +864,106 @@ async def test_open_starts_missing_instance_with_runtime_context_path_and_enviro
     ):
         assert stat.S_IMODE(directory.stat().st_mode) == 0o700
     assert "unit-test-model-token" not in json.dumps(start_payload)
+
+
+@pytest.mark.asyncio
+async def test_repeated_open_reuses_the_same_private_entry_token(
+    db,
+    ctx,
+    git_repo,
+    engineering_session,
+    tmp_path,
+    monkeypatch,
+):
+    workspace = await _create_workspace(db, git_repo)
+    code_session = await _create_code_session(db, workspace_id=workspace.ws_id)
+    start_payloads: list[dict[str, object]] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.method == "GET" and start_payloads:
+            return httpx.Response(
+                200,
+                json=_manager_status(
+                    sandbox_instance_id=str(start_payloads[0]["sandbox_instance_id"])
+                ),
+            )
+        if request.method == "GET":
+            return httpx.Response(404)
+        payload = json.loads(request.content)
+        start_payloads.append(payload)
+        return httpx.Response(200, json=_manager_status_for_start(request))
+
+    client, _service = _client(
+        tmp_path,
+        engineering_session,
+        httpx.MockTransport(handler),
+    )
+    monkeypatch.setattr(
+        "app.code_runtime.local_runtime._allocate_loopback_address",
+        lambda: "127.0.0.1:19090",
+    )
+
+    first, first_token = await client.open_application_with_entry_token(db, code_session, ctx)
+    second, second_token = await client.open_application_with_entry_token(db, code_session, ctx)
+
+    assert first["sandboxInstanceId"] == second["sandboxInstanceId"]
+    assert hashlib.sha256(first_token.encode("ascii")).digest() == hashlib.sha256(
+        second_token.encode("ascii")
+    ).digest()
+    if first_token in first.values() or second_token in second.values():
+        pytest.fail("sandbox entry token leaked into an opened application response")
+    assert len(start_payloads) == 1
+
+
+@pytest.mark.asyncio
+async def test_reused_runtime_without_entry_token_returns_503(
+    db,
+    ctx,
+    git_repo,
+    engineering_session,
+    tmp_path,
+):
+    workspace = await _create_workspace(db, git_repo)
+    code_session = await _create_code_session(db, workspace_id=workspace.ws_id)
+    runtime_dir = (
+        tmp_path
+        / "desktop-data"
+        / "local-runtimes"
+        / _runtime_scope_id(ctx, "local-app-1")
+        / "instances"
+        / "local-instance-1"
+    )
+    runtime_dir.mkdir(parents=True)
+    (runtime_dir / "model-provider.json").write_text(
+        json.dumps(
+            {
+                "defaultProviderId": "local.test",
+                "providers": [
+                    {
+                        "providerId": "local.test",
+                        "providerType": "openai-compatible",
+                        "runtimeProviderKind": "openai",
+                        "apiBaseUrl": "https://models.example.invalid/v1",
+                        "token": "unit-test-model-token",
+                        "defaultModel": "gpt-local-test",
+                        "models": [{"id": "gpt-local-test", "displayName": "gpt-local-test"}],
+                    }
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+    client, _service = _client(
+        tmp_path,
+        engineering_session,
+        httpx.MockTransport(lambda _request: httpx.Response(200, json=_manager_status())),
+    )
+
+    with pytest.raises(HTTPException) as exc:
+        await client.open_application(db, code_session, ctx)
+
+    assert exc.value.status_code == 503
+    assert exc.value.detail == "LOCAL_RUNTIME_START_FAILED: 无法读取本地 Runtime entry token"
 
 
 @pytest.mark.asyncio

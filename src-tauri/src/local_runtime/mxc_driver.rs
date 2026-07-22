@@ -357,15 +357,16 @@ fn is_allowed_environment_key(key: &str) -> bool {
         key,
         "APAAS_RUNTIME_CONTEXT_PATH"
             | "APAAS_MODEL_PROVIDER_PATH"
-            | "APAAS_CI_PROVIDER_PATH"
             | "APAAS_WORKSPACE_INIT_MODE"
             | "APAAS_CI_HANDOFF_MODE"
+            | "APAAS_CODEX_SESSION_MODE"
             | "APAAS_REPO_WORKSPACE_PATH"
             | "APAAS_WORKSPACE_PATH"
             | "APAAS_RUNTIME_WORKSPACE_PATH"
             | "APAAS_CODEX_HOME"
             | "APAAS_RUNTIME_ADDR"
             | "APAAS_AUTH_MODE"
+            | "APAAS_SANDBOX_TOKEN_PATH"
     )
 }
 
@@ -538,6 +539,10 @@ mod tests {
             runtime_addr: "127.0.0.1:41001".into(),
             environment: [
                 ("APAAS_RUNTIME_ADDR".into(), "127.0.0.1:41001".into()),
+                (
+                    "APAAS_SANDBOX_TOKEN_PATH".into(),
+                    "/tmp/runtime/sandbox-token".into(),
+                ),
                 ("UNTRUSTED_HOST_ENV".into(), "must-not-pass".into()),
             ]
             .into_iter()
@@ -553,6 +558,9 @@ mod tests {
             .iter()
             .any(|(key, value)| { key == "APAAS_RUNTIME_OWNERSHIP_NONCE" && value == "nonce-a" }));
         assert!(!environment.iter().any(|(key, _)| key == "PATH"));
+        assert!(environment.iter().any(|(key, value)| {
+            key == "APAAS_SANDBOX_TOKEN_PATH" && value == "/tmp/runtime/sandbox-token"
+        }));
     }
 
     #[test]

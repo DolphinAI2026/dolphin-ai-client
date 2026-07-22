@@ -10,6 +10,8 @@ use std::net::SocketAddr;
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 
+const SANDBOX_TOKEN_FILE: &str = "sandbox-token";
+
 pub trait RuntimeDriver {
     fn spawn(
         &self,
@@ -347,16 +349,65 @@ fn validate_request(data_root: &Path, request: &StartRequest) -> Result<(), Loca
                 "runtime environment contains an unsupported key",
             ));
         }
-        if matches!(
-            key.as_str(),
-            "APAAS_MODEL_PROVIDER_PATH" | "APAAS_CI_PROVIDER_PATH"
-        ) && !canonical(Path::new(value))?.starts_with(&runtime_dir)
+        if matches!(key.as_str(), "APAAS_MODEL_PROVIDER_PATH")
+            && !canonical(Path::new(value))?.starts_with(&runtime_dir)
         {
             return Err(LocalRuntimeError::new(
                 LocalRuntimeErrorCode::InvalidRequest,
                 "runtime secret path escapes instance directory",
             ));
         }
+    }
+    let sandbox_token_path = request
+        .environment
+        .get("APAAS_SANDBOX_TOKEN_PATH")
+        .ok_or_else(|| {
+            LocalRuntimeError::new(
+                LocalRuntimeErrorCode::InvalidRequest,
+                "runtime sandbox token path is required",
+            )
+        })?;
+    validate_sandbox_token_path(sandbox_token_path, &runtime_dir)?;
+    Ok(())
+}
+
+fn validate_sandbox_token_path(value: &str, runtime_dir: &Path) -> Result<(), LocalRuntimeError> {
+    if value.is_empty() || value.contains('\0') {
+        return Err(LocalRuntimeError::new(
+            LocalRuntimeErrorCode::InvalidRequest,
+            "runtime sandbox token path is invalid",
+        ));
+    }
+    let expected = runtime_dir.join(SANDBOX_TOKEN_FILE);
+    if Path::new(value) != expected {
+        return Err(LocalRuntimeError::new(
+            LocalRuntimeErrorCode::InvalidRequest,
+            "runtime sandbox token path escapes instance directory",
+        ));
+    }
+    let metadata = fs::symlink_metadata(&expected).map_err(|_| {
+        LocalRuntimeError::new(
+            LocalRuntimeErrorCode::InvalidRequest,
+            "runtime sandbox token path is invalid",
+        )
+    })?;
+    if metadata.file_type().is_symlink() || !metadata.is_file() || metadata.len() == 0 {
+        return Err(LocalRuntimeError::new(
+            LocalRuntimeErrorCode::InvalidRequest,
+            "runtime sandbox token file is invalid",
+        ));
+    }
+    let token = fs::read(&expected).map_err(|_| {
+        LocalRuntimeError::new(
+            LocalRuntimeErrorCode::InvalidRequest,
+            "runtime sandbox token file is invalid",
+        )
+    })?;
+    if token.is_empty() || token.contains(&0) {
+        return Err(LocalRuntimeError::new(
+            LocalRuntimeErrorCode::InvalidRequest,
+            "runtime sandbox token file is invalid",
+        ));
     }
     Ok(())
 }
@@ -410,15 +461,16 @@ fn allowed_environment_key(key: &str) -> bool {
         key,
         "APAAS_RUNTIME_CONTEXT_PATH"
             | "APAAS_MODEL_PROVIDER_PATH"
-            | "APAAS_CI_PROVIDER_PATH"
             | "APAAS_WORKSPACE_INIT_MODE"
             | "APAAS_CI_HANDOFF_MODE"
+            | "APAAS_CODEX_SESSION_MODE"
             | "APAAS_REPO_WORKSPACE_PATH"
             | "APAAS_WORKSPACE_PATH"
             | "APAAS_RUNTIME_WORKSPACE_PATH"
             | "APAAS_CODEX_HOME"
             | "APAAS_RUNTIME_ADDR"
             | "APAAS_AUTH_MODE"
+            | "APAAS_SANDBOX_TOKEN_PATH"
     )
 }
 
@@ -512,7 +564,7 @@ mod tests {
         fs::create_dir_all(&runtime).unwrap();
         fs::write(runtime.join("runtime-context.json"), "{}").unwrap();
         fs::write(runtime.join("model-provider.json"), "{}").unwrap();
-        fs::write(runtime.join("ci-provider.json"), "{}").unwrap();
+        fs::write(runtime.join("sandbox-token"), "entry-token").unwrap();
         let executable = root.join("agent-runtime");
         fs::write(&executable, "#!/bin/sh\n").unwrap();
         StartRequest {
@@ -533,8 +585,8 @@ mod tests {
                     runtime.join("model-provider.json").display().to_string(),
                 ),
                 (
-                    "APAAS_CI_PROVIDER_PATH".into(),
-                    runtime.join("ci-provider.json").display().to_string(),
+                    "APAAS_SANDBOX_TOKEN_PATH".into(),
+                    runtime.join("sandbox-token").display().to_string(),
                 ),
             ]
             .into_iter()
@@ -654,6 +706,29 @@ mod tests {
             Some(LocalRuntimeErrorCode::ReconcileIdentityMismatch)
         );
         assert_eq!(manager.driver.stops.load(Ordering::SeqCst), 0);
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn request_allows_only_the_contained_sandbox_token_file() {
+        let root = temp_root();
+        let request = request(&root, "instance-a");
+        assert!(validate_request(&root, &request).is_ok());
+
+        let outside = root.join("outside-token");
+        fs::write(&outside, "outside-token").unwrap();
+        let mut escaped = request.clone();
+        escaped.environment.insert(
+            "APAAS_SANDBOX_TOKEN_PATH".into(),
+            outside.display().to_string(),
+        );
+        let error = validate_request(&root, &escaped).unwrap_err();
+        assert_eq!(error.code, LocalRuntimeErrorCode::InvalidRequest);
+
+        let mut missing = request;
+        missing.environment.remove("APAAS_SANDBOX_TOKEN_PATH");
+        let error = validate_request(&root, &missing).unwrap_err();
+        assert_eq!(error.code, LocalRuntimeErrorCode::InvalidRequest);
         fs::remove_dir_all(root).unwrap();
     }
 }
