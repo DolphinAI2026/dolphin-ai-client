@@ -10,7 +10,8 @@ from jose import JWTError
 from app.database import get_db
 from app.models import User
 from app.models.tenant import UserTenant, Role, Tenant
-from app.auth import security, decode_token
+from app.auth import _DESKTOP_ISSUER, security, decode_token
+from app import runtime
 
 logger = logging.getLogger(__name__)
 
@@ -29,6 +30,8 @@ class AuthContext:
     org_permissions: dict  # Org-level permissions (from role.permissions)
     apaas_user_id: Optional[str] = None  # aPaaS 平台 user_id（21 位 string）
     apaas_tenant_id: Optional[str] = None  # aPaaS 平台 tenant_id（21 位 string）
+    control_plane_tenant_id: Optional[str] = None
+    control_plane_tenant_name: Optional[str] = None
 
 
 async def resolve_default_tenant_id_for_user(db: AsyncSession, user_id: int) -> int | None:
@@ -116,6 +119,31 @@ async def _resolve_role_context(db: AsyncSession, role_id: int | None) -> tuple[
     return tenant_role, org_permissions
 
 
+def _desktop_control_plane_context(user: User, payload: dict) -> AuthContext:
+    permissions = payload.get("cp_perms")
+    control_plane_tenant_id = (
+        str(payload.get("cp_tid") or user.coding_tenant_id or "").strip() or None
+    )
+    control_plane_tenant_role = str(
+        payload.get("cp_trole")
+        or ("platform_admin" if user.is_platform_admin else "member")
+    )
+    return AuthContext(
+        user=user,
+        tenant_id=0,
+        tenant_role=control_plane_tenant_role,
+        org_permissions=(
+            permissions
+            if isinstance(permissions, dict)
+            else {"*": True}
+            if control_plane_tenant_role == "platform_admin"
+            else {}
+        ),
+        control_plane_tenant_id=control_plane_tenant_id,
+        control_plane_tenant_name=str(payload.get("cp_tname") or "").strip() or None,
+    )
+
+
 async def get_auth_context(
     credentials: Annotated[any, Depends(security)],
     db: Annotated[AsyncSession, Depends(get_db)]
@@ -142,12 +170,30 @@ async def get_auth_context(
 
         user_id = int(user_id)
 
+        desktop_control_plane_ticket = (
+            runtime.is_desktop()
+            and payload.get("iss") == _DESKTOP_ISSUER
+            and bool(str(payload.get("cp_tid") or "").strip())
+        )
+
         # Older platform-admin tokens may not carry tenant_id. Most settings
         # pages are still tenant-scoped, so resolve the admin's default tenant.
         if tenant_id is None:
-            # Check if platform admin
             result = await db.execute(select(User).where(User.id == user_id))
             user = result.scalar_one_or_none()
+            if desktop_control_plane_ticket:
+                if not user or not user.is_active:
+                    raise credentials_exception
+                return _desktop_control_plane_context(user, payload)
+            if (
+                runtime.is_desktop()
+                and user
+                and user.is_active
+                and user.account_source == "control_plane"
+                and bool((user.coding_tenant_id or "").strip())
+            ):
+                return _desktop_control_plane_context(user, payload)
+            # Check if platform admin
             if not user or not user.is_active or not user.is_platform_admin:
                 logger.warning(
                     "auth_context forbidden: token has no tenant_id but user is not platform admin user_id=%s",
@@ -178,6 +224,12 @@ async def get_auth_context(
     user = result.scalar_one_or_none()
     if not user or not user.is_active:
         raise credentials_exception
+    if (
+        runtime.is_desktop()
+        and user.account_source == "control_plane"
+        and bool((user.coding_tenant_id or "").strip())
+    ):
+        return _desktop_control_plane_context(user, payload)
 
     # 双 ID 解析：JWT 优先，回退 user 行
     eff_apaas_uid = jwt_apaas_uid or user.apaas_user_id or None
@@ -261,8 +313,21 @@ async def get_auth_context_from_token(token: str) -> AuthContext:
             raise ValueError("User not found")
 
         eff_apaas_uid = jwt_apaas_uid or user.apaas_user_id or None
+        desktop_control_plane_ticket = (
+            runtime.is_desktop()
+            and payload.get("iss") == _DESKTOP_ISSUER
+            and bool(str(payload.get("cp_tid") or "").strip())
+        )
+        if (
+            runtime.is_desktop()
+            and user.account_source == "control_plane"
+            and bool((user.coding_tenant_id or "").strip())
+        ):
+            return _desktop_control_plane_context(user, payload)
 
         if raw_tenant_id is None:
+            if desktop_control_plane_ticket:
+                return _desktop_control_plane_context(user, payload)
             if user.is_platform_admin:
                 tenant_id = await resolve_default_tenant_id_for_user(db, user_id) or 0
                 bound_apaas_tid = await resolve_bound_apaas_tenant_id(db, tenant_id)

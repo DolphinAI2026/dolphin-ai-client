@@ -95,8 +95,8 @@ export const useUserStore = defineStore('user', () => {
     return availableTenants.value
   }
 
-  const switchTenant = async (targetTenantId: number) => {
-    if (targetTenantId === tenantId.value) return
+  const switchTenant = async (targetTenantId: number | string) => {
+    if (String(targetTenantId) === String(tenantId.value || '')) return
     const res = await authApi.switchTenant(targetTenantId)
     setToken(res.access_token)
     await fetchUser()
@@ -108,8 +108,9 @@ export const useUserStore = defineStore('user', () => {
     // 重置工作环境的行为, 副作用 (in-flight SSE 断 / 填一半表单丢) 可接受.
     if (typeof window !== 'undefined') {
       try { localStorage.removeItem('ai-builder-tabs-v1') } catch { /* ignore */ }
-      // 切到首页再 reload 防止用户停在 /chat?app_id=N 那种含其他租户 app id 的 url
-      window.location.href = '/ai-builder/'
+      // 切到当前构建的首页再 reload，避免保留其他租户的应用路由。
+      // 在线版是 /ai-builder/，桌面包是 /。
+      window.location.href = import.meta.env.BASE_URL
     }
   }
 

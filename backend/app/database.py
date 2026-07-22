@@ -143,6 +143,7 @@ async def init_db():
             "ALTER TABLE users ADD COLUMN coding_base_url VARCHAR(255)",
             "ALTER TABLE users ADD COLUMN coding_access_token TEXT",
             "ALTER TABLE users ADD COLUMN coding_refresh_token TEXT",
+            "ALTER TABLE users ADD COLUMN remote_builder_access_token TEXT",
             # Tenant quota/contact columns added after early multi-tenant installs.
             "ALTER TABLE tenants ADD COLUMN max_applications INTEGER NOT NULL DEFAULT 10",
             "ALTER TABLE tenants ADD COLUMN max_workspaces INTEGER NOT NULL DEFAULT 20",

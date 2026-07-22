@@ -256,3 +256,109 @@ async def test_exchange_apaas_token_uses_dolphin_binding_api(monkeypatch):
     assert result.access_token == "workspace-access"
     assert result.refresh_token == "workspace-refresh"
     assert result.tenant_id == "default"
+
+
+@pytest.mark.asyncio
+async def test_exchange_control_plane_session_uses_remote_builder_api(monkeypatch):
+    from app.code_runtime import auth as coding_auth
+    from app.config import settings
+
+    calls = []
+
+    class FakeClient:
+        def __init__(self, *args, **kwargs):
+            pass
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *_args):
+            return False
+
+        async def post(self, url, **kwargs):
+            calls.append((url, kwargs))
+            return FakeResponse({
+                "access_token": "builder-access",
+                "token_type": "bearer",
+            })
+
+    monkeypatch.setattr(coding_auth.httpx, "AsyncClient", FakeClient)
+    monkeypatch.setattr(
+        settings,
+        "dolphin_workspace_base_url",
+        "https://dolphin.example.com/",
+        raising=False,
+    )
+
+    result = await coding_auth.exchange_control_plane_session(
+        "control-plane-access",
+        "tenant-1",
+    )
+
+    assert result == "builder-access"
+    assert calls == [(
+        "https://dolphin.example.com/ai-builder/api/auth/control-plane/session",
+        {
+            "headers": {
+                "Authorization": "Bearer control-plane-access",
+                "X-Tenant-Id": "tenant-1",
+            },
+        },
+    )]
+
+
+def test_remote_builder_session_token_is_encrypted_before_local_cache():
+    from types import SimpleNamespace
+
+    from app.code_runtime.auth import (
+        remote_builder_access_token,
+        store_remote_builder_credentials,
+    )
+
+    user = SimpleNamespace(remote_builder_access_token=None)
+
+    store_remote_builder_credentials(user, "remote-builder-access")
+
+    assert user.remote_builder_access_token.startswith("enc:v1:")
+    assert "remote-builder-access" not in user.remote_builder_access_token
+    assert remote_builder_access_token(user) == "remote-builder-access"
+
+
+@pytest.mark.asyncio
+async def test_fetch_remote_builder_rail_history_uses_builder_session_token(monkeypatch):
+    from app.code_runtime import auth as coding_auth
+    from app.config import settings
+
+    calls = []
+
+    class FakeClient:
+        def __init__(self, *args, **kwargs):
+            pass
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *_args):
+            return False
+
+        async def get(self, url, **kwargs):
+            calls.append((url, kwargs))
+            return FakeResponse({"apps": [{"shell_session_id": "remote-shell"}]})
+
+    monkeypatch.setattr(coding_auth.httpx, "AsyncClient", FakeClient)
+    monkeypatch.setattr(
+        settings,
+        "dolphin_workspace_base_url",
+        "https://dolphin.example.com/",
+        raising=False,
+    )
+
+    result = await coding_auth.fetch_remote_builder_rail_history(
+        "remote-builder-access",
+    )
+
+    assert result == {"apps": [{"shell_session_id": "remote-shell"}]}
+    assert calls == [(
+        "https://dolphin.example.com/ai-builder/api/code/rail/history",
+        {"headers": {"Authorization": "Bearer remote-builder-access"}},
+    )]

@@ -49,7 +49,7 @@ def test_build_env_sets_real_key_and_no_bypass(tmp_path):
 def test_build_env_uses_web_auth_contract(tmp_path):
     env = desktop_sidecar.build_env(data_dir=tmp_path, port=9999)
     assert env["PUBLIC_ACCOUNT_BASE_URL"] == ""
-    assert env["ACCEPTED_TOKEN_ISSUERS"] == "ai-builder"
+    assert env["ACCEPTED_TOKEN_ISSUERS"] == "ai-builder,desktop-sidecar"
     assert env["AUTH_PROVIDER"] == "control_plane"
 
 

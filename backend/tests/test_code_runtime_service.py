@@ -705,6 +705,53 @@ def test_control_plane_headers_prefer_active_builder_tenant_mapping(monkeypatch)
     assert headers["X-Tenant-Id"] == "0"
 
 
+@pytest.mark.asyncio
+async def test_verify_control_plane_application_access_uses_current_user_and_tenant(monkeypatch):
+    from app.code_runtime import service
+
+    calls: list[dict] = []
+
+    class FakeResponse:
+        status_code = 200
+
+        def json(self):
+            return {"applicationId": "app-1"}
+
+    class FakeClient:
+        def __init__(self, *args, **kwargs):
+            pass
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *_args):
+            return False
+
+        async def get(self, url: str, **kwargs):
+            calls.append({"url": url, **kwargs})
+            return FakeResponse()
+
+    monkeypatch.setenv("DOLPHIN_CODE_CONTROL_PLANE_URL", "https://code.example.com/control-plane")
+    monkeypatch.setattr(service.httpx, "AsyncClient", FakeClient)
+
+    await service.verify_control_plane_application_access(
+        "app-1",
+        authorization_header="Bearer user-token",
+        delegated_context=SimpleNamespace(
+            control_plane_tenant_id="tenant-current",
+            user=SimpleNamespace(coding_tenant_id="tenant-stale"),
+        ),
+    )
+
+    assert calls == [{
+        "url": "https://code.example.com/control-plane/api/applications/app-1",
+        "headers": {
+            "Authorization": "Bearer user-token",
+            "X-Tenant-Id": "tenant-current",
+        },
+    }]
+
+
 def test_control_plane_headers_include_delegation_secret(monkeypatch):
     from app.config import settings
     from app.code_runtime import service
@@ -1518,6 +1565,12 @@ async def test_open_code_session_prefers_configured_desktop_runtime_and_keeps_en
     monkeypatch.setenv("DOLPHIN_AGENT_RUNTIME_PATH", "/tmp/agent-runtime")
     monkeypatch.setattr(service, "LocalRuntimeClient", FakeLocalRuntimeClient)
     monkeypatch.setattr(service, "bootstrap_runtime_session", unexpected_bootstrap)
+    verified: list[str] = []
+
+    async def allow_application(external_application_id: str, **_kwargs):
+        verified.append(external_application_id)
+
+    monkeypatch.setattr(service, "verify_control_plane_application_access", allow_application)
     created_with: list[tuple[str, str]] = []
 
     async def fake_create_agent_session(runtime_base_url: str, token: str) -> str:
@@ -1546,6 +1599,7 @@ async def test_open_code_session_prefers_configured_desktop_runtime_and_keeps_en
         )
     ).scalar_one()
     assert opened_calls == 1
+    assert verified == ["desktop-code-app"]
     assert bootstrap_calls == 0
     assert binding.execution_target == "desktop_agent_runtime"
     assert binding.runtime_session_id == "desktop-runtime-session-1"
@@ -1627,6 +1681,11 @@ async def test_desktop_runtime_creates_one_agent_session_per_shell_and_reuses_it
     monkeypatch.setenv("DOLPHIN_DESKTOP_DATA_DIR", "/tmp/desktop-data")
     monkeypatch.setenv("DOLPHIN_AGENT_RUNTIME_PATH", "/tmp/agent-runtime")
     monkeypatch.setattr(service, "LocalRuntimeClient", FakeLocalRuntimeClient)
+
+    async def allow_application(*_args, **_kwargs):
+        return None
+
+    monkeypatch.setattr(service, "verify_control_plane_application_access", allow_application)
     monkeypatch.setattr(
         service,
         "_create_desktop_runtime_agent_session",
@@ -1714,6 +1773,11 @@ async def test_open_code_session_does_not_fallback_when_configured_desktop_runti
     monkeypatch.setattr(service, "LocalRuntimeClient", FailingLocalRuntimeClient)
     monkeypatch.setattr(service, "default_workspace_open", unexpected_control_plane)
 
+    async def allow_application(*_args, **_kwargs):
+        return None
+
+    monkeypatch.setattr(service, "verify_control_plane_application_access", allow_application)
+
     with pytest.raises(HTTPException, match="LOCAL_RUNTIME_MANAGER_UNAVAILABLE") as exc:
         await open_code_session(
             db=db_session,
@@ -1723,6 +1787,54 @@ async def test_open_code_session_does_not_fallback_when_configured_desktop_runti
 
     assert exc.value.status_code == 503
     assert control_plane_calls == 0
+
+
+@pytest.mark.asyncio
+async def test_desktop_runtime_does_not_start_when_control_plane_application_check_fails(
+    db_session,
+    monkeypatch,
+):
+    from app.code_runtime import service
+    from app.code_runtime.service import open_code_session
+
+    session = AIChatSession(
+        tenant_id=7,
+        user_id=11,
+        external_application_id="desktop-code-app",
+        title="Desktop Code",
+        mode="code",
+        status="active",
+    )
+    db_session.add(session)
+    await db_session.commit()
+
+    class UnexpectedLocalRuntimeClient:
+        @classmethod
+        def from_environment(cls):
+            return cls()
+
+        async def open_application_with_entry_token(self, *_args):
+            raise AssertionError("local runtime must not start before application authorization")
+
+    async def denied(*_args, **_kwargs):
+        raise HTTPException(status_code=403, detail="Tenant is not accessible")
+
+    monkeypatch.setenv("DOLPHIN_LOCAL_RUNTIME_MANAGER_URL", "http://127.0.0.1:9988")
+    monkeypatch.setenv("DOLPHIN_LOCAL_RUNTIME_MANAGER_TOKEN", "manager-token")
+    monkeypatch.setenv("DOLPHIN_DESKTOP_DATA_DIR", "/tmp/desktop-data")
+    monkeypatch.setenv("DOLPHIN_AGENT_RUNTIME_PATH", "/tmp/agent-runtime")
+    monkeypatch.setattr(service, "LocalRuntimeClient", UnexpectedLocalRuntimeClient)
+    monkeypatch.setattr(service, "verify_control_plane_application_access", denied)
+
+    with pytest.raises(HTTPException, match="Tenant is not accessible") as exc:
+        await open_code_session(
+            db=db_session,
+            session_id=session.id,
+            ctx=SimpleNamespace(user=SimpleNamespace(id=11), tenant_id=7),
+            authorization_header="Bearer user-token",
+        )
+
+    assert exc.value.status_code == 403
 
 
 @pytest.mark.asyncio

@@ -7269,21 +7269,22 @@ onMounted(async () => {
     await uploadDocFile(file)
   }
 
-  // 检查平台连接状态
-  try {
-    const token = localStorage.getItem('token')
-    if (token) {
-      const data = await request.get<any, any>('/apaas/status')
-      if (data) {
-        store.connected = data.connected
+  if (!__DESKTOP__) {
+    try {
+      const token = localStorage.getItem('token')
+      if (token) {
+        const data = await request.get<any, any>('/apaas/status')
+        if (data) {
+          store.connected = data.connected
+        }
       }
-    }
-  } catch (e) { /* ignore */ }
+    } catch (e) { /* ignore */ }
 
-  await loadBuilderModelOptions()
-  if (store.pendingBuilderModelId != null) {
-    applyBuilderModelSelection(store.pendingBuilderModelId)
-    store.pendingBuilderModelId = null
+    await loadBuilderModelOptions()
+    if (store.pendingBuilderModelId != null) {
+      applyBuilderModelSelection(store.pendingBuilderModelId)
+      store.pendingBuilderModelId = null
+    }
   }
 
   // ── 优先通过 app_id 加载应用（应用为锚点）──

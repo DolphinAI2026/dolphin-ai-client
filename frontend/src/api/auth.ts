@@ -144,7 +144,7 @@ export const authApi = {
     return request.post<any, Token>('/auth/select-tenant', data)
   },
 
-  switchTenant(tenantId: number) {
+  switchTenant(tenantId: number | string) {
     return request.post<any, Token>('/auth/switch-tenant', { tenant_id: tenantId })
   },
 

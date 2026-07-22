@@ -1,9 +1,11 @@
 import logging
 import re
 import secrets
+from dataclasses import replace
 from datetime import datetime
-from typing import Annotated, Optional
-from fastapi import APIRouter, Depends, HTTPException, status
+from typing import Annotated, Optional, Union
+from fastapi import APIRouter, Depends, Header, HTTPException, status
+from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from sqlalchemy import func, select
 from sqlalchemy.exc import IntegrityError, SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -15,10 +17,18 @@ from app.schemas import (
     UserLogin, Token,
     LoginResponse, TenantOption, TenantSelectRequest
 )
-from app.auth import verify_password, get_password_hash, create_access_token, create_selection_token
+from app.auth import (
+    _DESKTOP_ISSUER,
+    verify_password,
+    get_password_hash,
+    create_access_token,
+    create_selection_token,
+)
 from app.code_runtime.auth import (
     ControlPlaneAuthResult,
+    control_plane_access_token,
     exchange_apaas_token,
+    fetch_control_plane_identity,
     fetch_dolphin_captcha,
     login_to_control_plane,
     store_control_plane_credentials,
@@ -30,12 +40,14 @@ from app.deps import (
     resolve_default_tenant_id_for_user,
 )
 from app.config import settings
+from app import runtime
 from app.error_messages import SELECT_TOKEN_INVALID, SELECT_TOKEN_EXPIRED
 from pydantic import BaseModel
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter()
+control_plane_bearer = HTTPBearer()
 
 
 def _normalize_apaas_origin(base_url: str) -> str:
@@ -1221,6 +1233,12 @@ async def _ensure_control_plane_user(
     user.is_platform_admin = _control_plane_identity_is_platform_admin(identity)
     await db.flush()
 
+    # The desktop sidecar keeps this User record only as a cache for encrypted
+    # Control Plane tokens and local code-session ownership.  It must not
+    # materialize a second local tenant/member/role authority.
+    if runtime.is_desktop():
+        return user
+
     preferred_roles = (
         ("R_tenant_admin", "admin", "R_developer")
         if _control_plane_identity_is_tenant_admin(identity)
@@ -1277,14 +1295,15 @@ async def _ensure_control_plane_user(
             db.add(tenant)
             await db.flush()
         await seed_default_roles(db, tenant.id, commit=False)
-        try:
-            await sync_builtin_llm_configs(db, tenant_ids=[tenant.id], commit=False)
-        except Exception as exc:
-            logger.warning(
-                "sync_builtin_llm_configs failed for Control Plane tenant %s: %s",
-                tenant.id,
-                exc,
-            )
+        if not runtime.is_desktop():
+            try:
+                await sync_builtin_llm_configs(db, tenant_ids=[tenant.id], commit=False)
+            except Exception as exc:
+                logger.warning(
+                    "sync_builtin_llm_configs failed for Control Plane tenant %s: %s",
+                    tenant.id,
+                    exc,
+                )
         existing_default = (
             await db.execute(
                 select(UserTenant)
@@ -1322,6 +1341,81 @@ async def _control_plane_login_response(user_data: UserLogin, db: AsyncSession) 
     user = await _ensure_control_plane_user(db, identity)
     if settings.control_plane_binding_enabled:
         await _require_control_plane_platform_binding(db, user, identity)
+    if runtime.is_desktop():
+        tenant_role = (
+            "platform_admin"
+            if _control_plane_identity_is_platform_admin(identity)
+            else "tenant_admin"
+            if _control_plane_identity_is_tenant_admin(identity)
+            else "member"
+        )
+        response = LoginResponse(
+            access_token=create_access_token(
+                user,
+                issuer=_DESKTOP_ISSUER,
+                control_plane_tenant_id=identity.tenant_id,
+                control_plane_tenant_name=getattr(identity, "tenant_name", None),
+                control_plane_tenant_role=tenant_role,
+                control_plane_permissions=getattr(identity, "org_permissions", None),
+            ),
+            entry_path="/code/apps",
+            is_platform_admin=user.is_platform_admin,
+            has_tenant_context=bool(identity.tenant_id),
+        )
+        await db.commit()
+        return response
+    response = await _issue_login_response_for_user(db, user)
+    await db.commit()
+    return response
+
+
+@router.post("/control-plane/session", response_model=LoginResponse)
+async def exchange_control_plane_session(
+    credentials: Annotated[
+        HTTPAuthorizationCredentials,
+        Depends(control_plane_bearer),
+    ],
+    x_tenant_id: Annotated[Optional[str], Header(alias="X-Tenant-Id")],
+    db: AsyncSession = Depends(get_db),
+) -> LoginResponse:
+    """Exchange a verified Control Plane bearer token for a Builder session.
+
+    This is the desktop federation boundary: the sidecar never signs a token
+    accepted by the shared Builder deployment and does not send a password.
+    """
+    control_plane_token = str(credentials.credentials or "").strip()
+    if not control_plane_token:
+        raise HTTPException(status_code=401, detail="Control Plane 认证凭证无效")
+
+    identity = await fetch_control_plane_identity(control_plane_token)
+    requested_tenant_id = str(x_tenant_id or identity.tenant_id or "").strip()
+    if not requested_tenant_id:
+        raise HTTPException(status_code=403, detail="未指定可访问的 Control Plane 组织")
+
+    available_tenants = {
+        str(item.get("tenant_id") or "").strip(): str(
+            item.get("tenant_name") or item.get("tenant_id") or ""
+        ).strip()
+        for item in identity.available_tenants
+        if str(item.get("tenant_id") or "").strip()
+    }
+    if identity.tenant_id:
+        available_tenants.setdefault(
+            str(identity.tenant_id).strip(),
+            str(identity.tenant_name or identity.tenant_id).strip(),
+        )
+    if requested_tenant_id not in available_tenants:
+        raise HTTPException(status_code=403, detail="该 Control Plane 组织不可访问")
+
+    selected_identity = replace(
+        identity,
+        tenant_id=requested_tenant_id,
+        tenant_name=available_tenants[requested_tenant_id] or requested_tenant_id,
+        access_token=control_plane_token,
+    )
+    user = await _ensure_control_plane_user(db, selected_identity)
+    if settings.control_plane_binding_enabled:
+        await _require_control_plane_platform_binding(db, user, selected_identity)
     response = await _issue_login_response_for_user(db, user)
     await db.commit()
     return response
@@ -1370,9 +1464,19 @@ async def _try_apaas_provider_login_response(
 
 @router.get("/captcha")
 async def captcha():
-    if _auth_provider() != "control_plane" or not settings.control_plane_captcha_enabled:
+    if _auth_provider() != "control_plane":
         return {"required": False}
-    return {"required": True, **(await fetch_dolphin_captcha())}
+    if settings.control_plane_captcha_enabled:
+        return {"required": True, **(await fetch_dolphin_captcha())}
+    if runtime.is_desktop():
+        try:
+            return {"required": True, **(await fetch_dolphin_captcha())}
+        except HTTPException as exc:
+            # Older Control Plane deployments may not expose a captcha endpoint.
+            # Do not turn that compatibility case into a broken desktop login.
+            if exc.status_code not in (404, 405):
+                raise
+    return {"required": False}
 
 
 @router.post("/login", response_model=LoginResponse)
@@ -1608,7 +1712,7 @@ async def exchange_apaas_token(
 
 
 class TenantSwitchRequest(BaseModel):
-    tenant_id: int
+    tenant_id: Union[int, str]
 
 
 @router.post("/switch-tenant", response_model=Token)
@@ -1622,6 +1726,41 @@ async def switch_tenant(
     本地兜底平台管理员可以切到任意 active 租户；aPaaS 登录用户仅限自己可登录的
     active membership。aPaaS 平台管理员的全量租户同步不等于拥有工作台登录权限。
     """
+    if runtime.is_desktop() and ctx.user.account_source == "control_plane":
+        token = control_plane_access_token(ctx.user)
+        if not token:
+            raise HTTPException(status_code=401, detail="远端登录已失效，请重新登录")
+        identity = await fetch_control_plane_identity(token)
+        target_tenant_id = str(data.tenant_id).strip()
+        target = next(
+            (
+                item for item in identity.available_tenants
+                if item["tenant_id"] == target_tenant_id
+            ),
+            None,
+        )
+        if not target:
+            raise HTTPException(status_code=403, detail="该远端租户不可访问")
+        tenant_role = (
+            "platform_admin"
+            if _control_plane_identity_is_platform_admin(identity)
+            else "tenant_admin"
+            if _control_plane_identity_is_tenant_admin(identity)
+            else "member"
+        )
+        ctx.user.coding_tenant_id = target_tenant_id
+        await db.commit()
+        return Token(
+            access_token=create_access_token(
+                ctx.user,
+                issuer=_DESKTOP_ISSUER,
+                control_plane_tenant_id=target_tenant_id,
+                control_plane_tenant_name=target["tenant_name"],
+                control_plane_tenant_role=tenant_role,
+                control_plane_permissions=identity.org_permissions,
+            ),
+        )
+
     is_apaas_account = ctx.user.account_source == "apaas" or bool(ctx.user.apaas_user_id)
     is_unbound_coding_account = (
         ctx.user.account_source == "coding" and not ctx.user.apaas_user_id

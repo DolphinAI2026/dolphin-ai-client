@@ -14,8 +14,7 @@ export const HUB_TABS: HubTab[] = [
   { key: 'skills', label: '技能库', access: 'all', desktopHidden: false },
   { key: 'knowledge', label: '知识库', access: 'platformAdmin', desktopHidden: true },
   { key: 'mcp', label: 'MCP', access: 'platformAdmin', desktopHidden: true },
-  // AI 网关 = 模型配置(llm_configs, 按租户), 原生 PlatformEnvs(only=llm), 显示本租户实际模型。
-  { key: 'gateway', label: 'AI 网关', access: 'tenantAdmin', desktopHidden: false },
+  { key: 'gateway', label: 'AI 网关', access: 'tenantAdmin', desktopHidden: true },
 ]
 
 export function visibleTabs(opts: { isPlatformAdmin: boolean; isTenantAdmin: boolean; isDesktop: boolean }): HubTab[] {

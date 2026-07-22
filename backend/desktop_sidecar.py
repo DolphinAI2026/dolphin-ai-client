@@ -68,7 +68,10 @@ def build_env(data_dir: Path, port: int) -> dict:
         # 企业部署可用 CODE_AUTH_PROVIDER=apaas 覆盖默认的 control_plane。
         "AUTH_PROVIDER": os.environ.get("CODE_AUTH_PROVIDER", "control_plane"),
         "PUBLIC_ACCOUNT_BASE_URL": "",
-        "ACCEPTED_TOKEN_ISSUERS": "ai-builder",
+        # The sidecar may issue its own desktop-sidecar ticket after remote
+        # Control Plane authentication. This whitelist is local-only; shared
+        # backends still reject that issuer at startup.
+        "ACCEPTED_TOKEN_ISSUERS": "ai-builder,desktop-sidecar",
         # app 托管工作区落 app_data_dir 下(稳定持久), 修冻结包相对二进制诡异路径
         "APAAS_WORKSPACE_ROOT": os.path.join(str(data_dir), "workspaces"),
     }

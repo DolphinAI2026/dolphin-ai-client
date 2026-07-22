@@ -39,8 +39,13 @@ from app.code_runtime.auth import (
     control_plane_access_token,
     control_plane_refresh_token,
     control_plane_token_needs_refresh,
+    exchange_control_plane_session,
+    fetch_remote_builder_rail_history,
+    fetch_control_plane_identity,
+    remote_builder_access_token,
     refresh_control_plane_token,
     store_control_plane_credentials,
+    store_remote_builder_credentials,
 )
 from app.code_runtime.sandbox_auth import (
     RUNTIME_AUTH_ERROR_HEADER,
@@ -54,6 +59,7 @@ from app.code_runtime.sandbox_auth import (
 from app.code_runtime.sandbox_metrics import sandbox_auth_metrics
 from app.code_runtime.execution_target import is_desktop_agent_runtime_target
 from app.config import APP_VERSION, settings
+from app import runtime
 from app.database import AsyncSessionLocal, get_db
 from app.deps import AuthContext, get_auth_context
 from app.models import Application, User
@@ -200,6 +206,17 @@ async def _resolve_control_plane_tenant_id(
     db: AsyncSession,
     ctx: AuthContext,
 ) -> str | None:
+    current_tenant_id = str(
+        getattr(ctx, "control_plane_tenant_id", "") or ""
+    ).strip()
+    if current_tenant_id:
+        return current_tenant_id
+    coding_tenant_id = str(
+        getattr(ctx.user, "coding_tenant_id", "") or ""
+    ).strip()
+    if coding_tenant_id:
+        return coding_tenant_id
+
     tenant_id = int(getattr(ctx, "tenant_id", 0) or 0)
     if tenant_id:
         tenant = await db.get(Tenant, tenant_id)
@@ -210,7 +227,7 @@ async def _resolve_control_plane_tenant_id(
             mapped_id = tenant_code.removeprefix("workspace-").strip()
             if mapped_id:
                 return mapped_id
-    return str(getattr(ctx.user, "coding_tenant_id", "") or "").strip() or None
+    return None
 
 
 def _session_to_dict(session: AIChatSession) -> dict:
@@ -247,6 +264,22 @@ async def _control_plane_request_auth(
     ctx.control_plane_tenant_id = await _resolve_control_plane_tenant_id(db, ctx)
     token = control_plane_access_token(ctx.user)
     if token and not control_plane_token_needs_refresh(token):
+        if runtime.is_desktop():
+            try:
+                identity = await fetch_control_plane_identity(token)
+                ctx.control_plane_tenant_id = (
+                    getattr(ctx, "control_plane_tenant_id", None) or identity.tenant_id
+                )
+                ctx.control_plane_tenant_name = getattr(
+                    ctx,
+                    "control_plane_tenant_name",
+                    None,
+                ) or identity.tenant_name
+            except HTTPException:
+                # Remote identity is authoritative.  A valid cached snapshot is
+                # used only to keep an already-open local workspace available
+                # while the Control Plane is temporarily unreachable.
+                pass
         return f"Bearer {token}", None
 
     try:
@@ -278,6 +311,158 @@ async def _control_plane_request_auth(
             control_plane_refresh_token(ctx.user),
         )
     return authorization, None
+
+
+async def _desktop_remote_builder_access_token(
+    ctx: AuthContext,
+    db: AsyncSession,
+) -> str:
+    """Return the cached remote Builder token, exchanging the CP token if needed."""
+    token = remote_builder_access_token(ctx.user)
+    if token and not control_plane_token_needs_refresh(token):
+        return token
+
+    control_plane_token = control_plane_access_token(ctx.user)
+    tenant_id = await _resolve_control_plane_tenant_id(db, ctx)
+    if not control_plane_token or not tenant_id:
+        raise HTTPException(status_code=401, detail="远端登录已失效，请重新登录")
+    token = await exchange_control_plane_session(control_plane_token, tenant_id)
+    store_remote_builder_credentials(ctx.user, token)
+    await db.commit()
+    return token
+
+
+async def _fetch_desktop_remote_builder_rail_history(
+    builder_access_token: str,
+) -> dict[str, Any]:
+    return await fetch_remote_builder_rail_history(builder_access_token)
+
+
+async def _desktop_remote_rail_history(
+    ctx: AuthContext,
+    db: AsyncSession,
+) -> dict[str, Any]:
+    builder_access_token = await _desktop_remote_builder_access_token(ctx, db)
+    try:
+        remote_history = await _fetch_desktop_remote_builder_rail_history(
+            builder_access_token
+        )
+    except HTTPException as exc:
+        if exc.status_code != 401:
+            raise
+        # A remote Builder JWT has expired. The Control Plane credential remains
+        # the upstream identity source and can mint one replacement session.
+        control_plane_token = control_plane_access_token(ctx.user)
+        tenant_id = await _resolve_control_plane_tenant_id(db, ctx)
+        if not control_plane_token or not tenant_id:
+            raise
+        builder_access_token = await exchange_control_plane_session(
+            control_plane_token,
+            tenant_id,
+        )
+        store_remote_builder_credentials(ctx.user, builder_access_token)
+        await db.commit()
+        remote_history = await _fetch_desktop_remote_builder_rail_history(
+            builder_access_token
+        )
+
+    remote_apps = remote_history.get("apps")
+    if not isinstance(remote_apps, list):
+        raise HTTPException(status_code=502, detail="远端 AI Builder 会话数据异常")
+
+    shell_ids = [
+        str(app.get("shell_session_id") or "").strip()
+        for app in remote_apps
+        if isinstance(app, dict) and str(app.get("shell_session_id") or "").strip()
+    ]
+    existing_by_public_id: dict[str, AIChatSession] = {}
+    if shell_ids:
+        existing = (
+            await db.execute(
+                select(AIChatSession).where(
+                    AIChatSession.public_id.in_(shell_ids),
+                    AIChatSession.tenant_id == ctx.tenant_id,
+                    AIChatSession.user_id == ctx.user.id,
+                )
+            )
+        ).scalars().all()
+        existing_by_public_id = {
+            str(session.public_id): session
+            for session in existing
+            if session.public_id
+        }
+
+    local_sessions: dict[str, AIChatSession] = {}
+    for app in remote_apps:
+        if not isinstance(app, dict):
+            continue
+        shell_id = str(app.get("shell_session_id") or "").strip()
+        external_application_id = str(
+            app.get("external_application_id") or ""
+        ).strip()
+        if not shell_id or not external_application_id:
+            continue
+        title = str(app.get("app_name") or app.get("app_code") or external_application_id)
+        session = existing_by_public_id.get(shell_id)
+        if session is None:
+            session = AIChatSession(
+                public_id=shell_id,
+                tenant_id=ctx.tenant_id,
+                user_id=ctx.user.id,
+                title=title,
+                mode="code",
+                status="active",
+                external_application_id=external_application_id,
+                external_app_name=str(app.get("app_name") or "").strip() or None,
+                external_app_code=str(app.get("app_code") or "").strip() or None,
+            )
+            db.add(session)
+            existing_by_public_id[shell_id] = session
+        else:
+            session.title = title
+            session.status = "active"
+            session.external_application_id = external_application_id
+            session.external_app_name = str(app.get("app_name") or "").strip() or None
+            session.external_app_code = str(app.get("app_code") or "").strip() or None
+        local_sessions[shell_id] = session
+    await db.flush()
+
+    local_session_ids = [session.id for session in local_sessions.values()]
+    bindings_by_session_id: dict[int, CodeRuntimeBinding] = {}
+    if local_session_ids:
+        bindings = (
+            await db.execute(
+                select(CodeRuntimeBinding).where(
+                    CodeRuntimeBinding.session_id.in_(local_session_ids)
+                )
+            )
+        ).scalars().all()
+        bindings_by_session_id = {
+            int(binding.session_id): binding for binding in bindings
+        }
+    await db.commit()
+
+    # The remote service owns which shells exist. Agent-session runtime state is
+    # intentionally local because a desktop sandbox cannot resume a server-side
+    # Codex runtime session.
+    apps: list[dict[str, Any]] = []
+    for app in remote_apps:
+        if not isinstance(app, dict):
+            continue
+        shell_id = str(app.get("shell_session_id") or "").strip()
+        session = local_sessions.get(shell_id)
+        if not shell_id or session is None:
+            continue
+        binding = bindings_by_session_id.get(int(session.id))
+        apps.append({
+            "shell_session_id": shell_id,
+            "external_application_id": session.external_application_id or "",
+            "app_name": session.external_app_name or session.title,
+            "app_code": session.external_app_code,
+            "runtime_session_id": binding.runtime_session_id if binding else None,
+            "sessions": [],
+        })
+    return {"apps": apps}
 
 
 @router.get("/applications")
@@ -987,6 +1172,23 @@ async def list_code_runtime_rail_history(
     db: Annotated[AsyncSession, Depends(get_db)],
 ):
     started = time.monotonic()
+    if runtime.is_desktop() and ctx.user.account_source == "control_plane":
+        try:
+            result = await _desktop_remote_rail_history(ctx, db)
+        except Exception:
+            sandbox_auth_metrics.record_builder_stage(
+                "rail_history_remote",
+                "failure",
+                time.monotonic() - started,
+            )
+            raise
+        sandbox_auth_metrics.record_builder_stage(
+            "rail_history_remote",
+            "success",
+            time.monotonic() - started,
+        )
+        return result
+
     try:
         external_application_id = func.coalesce(
             func.nullif(func.trim(CodeRuntimeBinding.external_application_id), ""),

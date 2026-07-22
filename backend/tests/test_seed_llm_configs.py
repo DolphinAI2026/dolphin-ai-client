@@ -108,3 +108,22 @@ def test_builtin_llm_specs_do_not_seed_gpt54(monkeypatch):
 
     assert {spec["model"] for spec in specs} == {"gpt-5.5", "qwen3.6-plus"}
     assert all(spec["config_name"] != "内置 Coding GPT (gpt-5.4)" for spec in specs)
+
+
+@pytest.mark.asyncio
+async def test_desktop_seed_skips_apaas_and_llm_initialization(db_session, monkeypatch):
+    monkeypatch.setenv("DESKTOP_MODE", "1")
+    calls: list[str] = []
+
+    async def track_platform_env(*_args, **_kwargs):
+        calls.append("apaas")
+
+    async def track_llm(*_args, **_kwargs):
+        calls.append("llm")
+
+    monkeypatch.setattr(seed_data, "bind_default_tenant_platform_env", track_platform_env)
+    monkeypatch.setattr(seed_data, "sync_builtin_llm_configs", track_llm)
+
+    await seed_data.seed_initial_data(db_session)
+
+    assert calls == []

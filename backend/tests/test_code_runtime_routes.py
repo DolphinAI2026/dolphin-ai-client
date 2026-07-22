@@ -529,7 +529,9 @@ async def test_remember_runtime_agent_session_atomically_rejects_stale_snapshot(
 
 
 @pytest.mark.asyncio
-async def test_resolve_control_plane_tenant_id_uses_workspace_tenant_code(db_session):
+async def test_resolve_control_plane_tenant_id_prefers_remote_account_tenant(
+    db_session,
+):
     from app.models.tenant import Tenant
     from app.routes.code_runtime import _resolve_control_plane_tenant_id
 
@@ -541,7 +543,43 @@ async def test_resolve_control_plane_tenant_id_uses_workspace_tenant_code(db_ses
         user=SimpleNamespace(coding_tenant_id="new-tenant"),
     )
 
-    assert await _resolve_control_plane_tenant_id(db_session, ctx) == "0"
+    assert await _resolve_control_plane_tenant_id(db_session, ctx) == "new-tenant"
+
+
+@pytest.mark.asyncio
+async def test_resolve_control_plane_tenant_id_uses_account_tenant_for_legacy_default_context(
+    db_session,
+):
+    from app.models.tenant import Tenant
+    from app.routes.code_runtime import _resolve_control_plane_tenant_id
+
+    tenant = Tenant(tenant_name="Legacy Default", tenant_code="default")
+    db_session.add(tenant)
+    await db_session.flush()
+    ctx = SimpleNamespace(
+        tenant_id=tenant.id,
+        user=SimpleNamespace(coding_tenant_id="2077284540335579137"),
+    )
+
+    assert await _resolve_control_plane_tenant_id(db_session, ctx) == "2077284540335579137"
+
+
+@pytest.mark.asyncio
+async def test_resolve_control_plane_tenant_id_preserves_control_plane_default_tenant(
+    db_session,
+):
+    from app.models.tenant import Tenant
+    from app.routes.code_runtime import _resolve_control_plane_tenant_id
+
+    tenant = Tenant(tenant_name="Default", tenant_code="default")
+    db_session.add(tenant)
+    await db_session.flush()
+    ctx = SimpleNamespace(
+        tenant_id=tenant.id,
+        user=SimpleNamespace(coding_tenant_id="default"),
+    )
+
+    assert await _resolve_control_plane_tenant_id(db_session, ctx) == "default"
 
 
 def test_code_runtime_proxy_rewrites_upstream_location_headers():
@@ -2402,6 +2440,75 @@ async def test_list_code_runtime_rail_history_includes_shell_session_without_bin
         "runtime_session_id": None,
         "sessions": [],
     }
+
+
+@pytest.mark.asyncio
+async def test_desktop_rail_history_uses_remote_builder_shells_and_caches_openable_ids(
+    db_session,
+    monkeypatch,
+):
+    import app.routes.code_runtime as code_runtime_routes
+    from app.routes.code_runtime import list_code_runtime_rail_history
+
+    monkeypatch.setenv("DESKTOP_MODE", "1")
+    ctx = SimpleNamespace(
+        tenant_id=0,
+        user=SimpleNamespace(
+            id=11,
+            account_source="control_plane",
+            coding_tenant_id="tenant-1",
+            remote_builder_access_token="enc:v1:unused",
+        ),
+        control_plane_tenant_id="tenant-1",
+    )
+    remote_shell_id = "33333333-3333-3333-3333-333333333333"
+
+    async def fake_remote_history(_token: str):
+        return {
+            "apps": [{
+                "shell_session_id": remote_shell_id,
+                "external_application_id": "remote-crm",
+                "app_name": "远端 CRM",
+                "app_code": "remote_crm",
+                "runtime_session_id": "remote-runtime",
+                "sessions": [{"runtimeSessionId": "remote-runtime"}],
+            }],
+        }
+
+    async def fake_remote_token(*_args):
+        return "remote-builder-token"
+
+    monkeypatch.setattr(
+        code_runtime_routes,
+        "_fetch_desktop_remote_builder_rail_history",
+        fake_remote_history,
+    )
+    monkeypatch.setattr(
+        code_runtime_routes,
+        "_desktop_remote_builder_access_token",
+        fake_remote_token,
+    )
+
+    result = await list_code_runtime_rail_history(_request(), ctx, db_session)
+
+    assert result == {
+        "apps": [{
+            "shell_session_id": remote_shell_id,
+            "external_application_id": "remote-crm",
+            "app_name": "远端 CRM",
+            "app_code": "remote_crm",
+            "runtime_session_id": None,
+            "sessions": [],
+        }],
+    }
+    cached = (
+        await db_session.execute(
+            select(AIChatSession).where(AIChatSession.public_id == remote_shell_id)
+        )
+    ).scalar_one()
+    assert cached.tenant_id == 0
+    assert cached.user_id == 11
+    assert cached.external_application_id == "remote-crm"
 
 
 @pytest.mark.asyncio

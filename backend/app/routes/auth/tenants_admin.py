@@ -4,6 +4,8 @@ from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 from app.config import settings
+from app import runtime
+from app.code_runtime.auth import control_plane_access_token, fetch_control_plane_identity
 from app.database import get_db
 from app.models import User
 from app.models.tenant import Tenant, UserTenant, Role
@@ -944,6 +946,19 @@ async def list_my_tenants(
     aPaaS 登录用户只返回自己可登录的 active membership。平台管理员的全量租户同步
     只供平台管理使用，不等于这些租户都能进入工作台。
     """
+    if runtime.is_desktop() and ctx.user.account_source == "control_plane":
+        token = control_plane_access_token(ctx.user)
+        if token:
+            identity = await fetch_control_plane_identity(token)
+            return [
+                TenantOption(
+                    tenant_id=item["tenant_id"],
+                    tenant_name=item["tenant_name"] or item["tenant_id"],
+                    tenant_code=item["tenant_id"],
+                )
+                for item in identity.available_tenants
+            ]
+        return []
     is_apaas_account = bool(ctx.user.apaas_user_id)
     is_unbound_coding_account = ctx.user.account_source == "coding" and not ctx.user.apaas_user_id
     if ctx.user.is_platform_admin and not is_apaas_account and not is_unbound_coding_account:
@@ -1319,6 +1334,31 @@ async def get_me(ctx: Annotated[AuthContext, Depends(get_auth_context)], db: Ann
         if tenant:
             tenant_name = tenant.tenant_name
 
+    is_desktop_control_plane_account = (
+        runtime.is_desktop()
+        and ctx.user.account_source == "control_plane"
+        and bool((ctx.user.coding_tenant_id or "").strip())
+    )
+    control_plane_tenant_id = (
+        getattr(ctx, "control_plane_tenant_id", None)
+        or (ctx.user.coding_tenant_id or "").strip()
+        or None
+    )
+    control_plane_tenant_name = getattr(ctx, "control_plane_tenant_name", None)
+    control_plane_permissions = ctx.org_permissions or {}
+    if is_desktop_control_plane_account:
+        token = control_plane_access_token(ctx.user)
+        if token:
+            try:
+                identity = await fetch_control_plane_identity(token)
+                control_plane_tenant_id = control_plane_tenant_id or identity.tenant_id
+                control_plane_tenant_name = control_plane_tenant_name or identity.tenant_name
+                control_plane_permissions = identity.org_permissions or control_plane_permissions
+            except HTTPException:
+                # The signed desktop ticket is the offline cache.  It is used
+                # only when the remote identity endpoint cannot be reached.
+                pass
+
     return UserInfo(
         id=ctx.user.id,
         username=ctx.user.username,
@@ -1326,8 +1366,12 @@ async def get_me(ctx: Annotated[AuthContext, Depends(get_auth_context)], db: Ann
         is_active=ctx.user.is_active,
         is_platform_admin=ctx.user.is_platform_admin,
         created_at=ctx.user.created_at,
-        tenant_id=ctx.tenant_id if ctx.tenant_id else None,
-        tenant_name=tenant_name,
+        # Desktop local tenant is only an opaque sandbox storage partition.  It
+        # must never become the product-facing tenant identity.
+        tenant_id=control_plane_tenant_id if is_desktop_control_plane_account else (ctx.tenant_id if ctx.tenant_id else None),
+        tenant_name=control_plane_tenant_name if is_desktop_control_plane_account else tenant_name,
+        control_plane_tenant_id=control_plane_tenant_id if is_desktop_control_plane_account else None,
+        control_plane_tenant_name=control_plane_tenant_name if is_desktop_control_plane_account else None,
         tenant_role=ctx.tenant_role,
-        org_permissions=ctx.org_permissions or {}
+        org_permissions=control_plane_permissions
     )

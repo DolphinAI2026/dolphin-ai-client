@@ -53,6 +53,9 @@ class User(Base):
     coding_base_url: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
     coding_access_token: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     coding_refresh_token: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    # Desktop sidecar cache of the remote AI Builder session. This is distinct
+    # from the Control Plane credential above and is always encrypted.
+    remote_builder_access_token: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     # 账号来源: 'apaas' | 'desktop' | 'control_plane'；'coding' 仅兼容历史数据。
     # 用于把桌面登录与 aPaaS 登录链路隔离, 避免 username 撞名被 aPaaS 抢先认证。
     account_source: Mapped[str] = mapped_column(String(20), default="apaas", nullable=False, server_default="apaas")

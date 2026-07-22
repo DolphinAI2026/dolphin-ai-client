@@ -2,12 +2,14 @@ from types import SimpleNamespace
 
 import pytest
 from fastapi import HTTPException
+from fastapi.security import HTTPAuthorizationCredentials
 from sqlalchemy import func, select
 
 import app.routes.auth  # noqa: F401 - ensure login submodule is loaded
 import app.seed_data as seed_data
-from app.auth import decode_token, get_password_hash, verify_password
+from app.auth import create_access_token, decode_token, get_password_hash, verify_password
 from app.config import settings
+from app.deps import get_auth_context
 from app.models import PlatformEnv, User
 from app.models.tenant import Role, Tenant, UserTenant
 from app.routes.auth import login
@@ -295,6 +297,134 @@ async def test_control_plane_auth_provider_allows_login_without_captcha_when_dis
 
 
 @pytest.mark.asyncio
+async def test_desktop_control_plane_login_keeps_identity_as_cache_only(
+    db_session,
+    monkeypatch,
+):
+    _set_auth_provider(monkeypatch, "control_plane")
+    _set_control_plane_captcha_enabled(monkeypatch, False)
+    monkeypatch.setenv("DESKTOP_MODE", "1")
+    monkeypatch.setattr(settings, "control_plane_binding_enabled", False)
+    monkeypatch.setattr(settings, "accepted_token_issuers", "ai-builder,desktop-sidecar")
+    tenant_count_before = await db_session.scalar(select(func.count(Tenant.id)))
+
+    async def fake_control_plane_login(*_args):
+        return SimpleNamespace(
+            username="desktop_admin",
+            display_name="Desktop Admin",
+            external_user_id="remote-user-1",
+            roles=["CONTROL_PLANE_ADMIN"],
+            org_permissions={"system.*": True},
+            tenant_id="2077284540335579137",
+            tenant_name="示例租户",
+            access_token="desktop-control-plane-token",
+            refresh_token="desktop-refresh-token",
+        )
+
+    monkeypatch.setattr(auth_routes, "login_to_control_plane", fake_control_plane_login)
+
+    response = await login(
+        UserLogin(username="desktop_admin", password="password"),
+        db_session,
+    )
+
+    payload = decode_token(response.access_token)
+    user = await db_session.get(User, int(payload["sub"]))
+    memberships = (
+        await db_session.execute(
+            select(UserTenant).where(UserTenant.user_id == user.id)
+        )
+    ).scalars().all()
+
+    assert payload["iss"] == "desktop-sidecar"
+    assert "tid" not in payload
+    assert payload["cp_tid"] == "2077284540335579137"
+    assert payload["cp_tname"] == "示例租户"
+    assert payload["cp_trole"] == "platform_admin"
+    assert response.entry_path == "/code/apps"
+    assert user.coding_tenant_id == "2077284540335579137"
+    assert memberships == []
+    assert await db_session.scalar(select(func.count(Tenant.id))) == tenant_count_before
+
+
+@pytest.mark.asyncio
+async def test_control_plane_session_exchange_issues_builder_token_for_selected_remote_tenant(
+    db_session,
+    monkeypatch,
+):
+    monkeypatch.delenv("DESKTOP_MODE", raising=False)
+    monkeypatch.setattr(settings, "control_plane_binding_enabled", False)
+
+    async def fake_control_plane_identity(token: str):
+        assert token == "control-plane-token"
+        return auth_routes.ControlPlaneAuthResult(
+            username="remote_admin",
+            display_name="Remote Admin",
+            external_user_id="remote-user-1",
+            roles=["TENANT_ADMIN"],
+            tenant_id="tenant-default",
+            tenant_name="Default tenant",
+            available_tenants=[
+                {"tenant_id": "tenant-default", "tenant_name": "Default tenant"},
+                {"tenant_id": "tenant-selected", "tenant_name": "Selected tenant"},
+            ],
+            access_token=token,
+        )
+
+    monkeypatch.setattr(
+        auth_routes,
+        "fetch_control_plane_identity",
+        fake_control_plane_identity,
+    )
+
+    response = await auth_routes.exchange_control_plane_session(
+        HTTPAuthorizationCredentials(scheme="Bearer", credentials="control-plane-token"),
+        "tenant-selected",
+        db_session,
+    )
+
+    payload = decode_token(response.access_token)
+    user = await db_session.get(User, int(payload["sub"]))
+    tenant = await db_session.get(Tenant, int(payload["tid"]))
+
+    assert user is not None
+    assert user.coding_tenant_id == "tenant-selected"
+    assert tenant is not None
+    assert tenant.tenant_code == "workspace-tenant-selected"
+    assert tenant.tenant_name == "Selected tenant"
+
+
+@pytest.mark.asyncio
+async def test_desktop_control_plane_context_ignores_legacy_local_tenant_ticket(
+    db_session,
+    monkeypatch,
+):
+    monkeypatch.setenv("DESKTOP_MODE", "1")
+    tenant = Tenant(tenant_name="历史本地租户", tenant_code="legacy-local")
+    user = User(
+        username="desktop_legacy",
+        hashed_password=get_password_hash("secret"),
+        account_source="control_plane",
+        coding_tenant_id="2077284540335579137",
+        is_active=True,
+    )
+    db_session.add_all([tenant, user])
+    await db_session.flush()
+    db_session.add(UserTenant(user_id=user.id, tenant_id=tenant.id, status=1, is_default=True))
+    await db_session.flush()
+    legacy_token = create_access_token(user, tenant_id=tenant.id)
+
+    ctx = await get_auth_context(
+        SimpleNamespace(credentials=legacy_token),
+        db_session,
+    )
+
+    assert ctx.tenant_id == 0
+    assert ctx.control_plane_tenant_id == "2077284540335579137"
+    assert ctx.tenant_role == "member"
+
+
+@pytest.mark.asyncio
 async def test_control_plane_captcha_endpoint_reports_not_required_when_disabled(monkeypatch):
     _set_auth_provider(monkeypatch, "control_plane")
     _set_control_plane_captcha_enabled(monkeypatch, False)
@@ -305,6 +435,24 @@ async def test_control_plane_captcha_endpoint_reports_not_required_when_disabled
     monkeypatch.setattr(auth_routes, "fetch_dolphin_captcha", unexpected_captcha_fetch)
 
     assert await auth_routes.captcha() == {"required": False}
+
+
+@pytest.mark.asyncio
+async def test_desktop_control_plane_captcha_probes_remote_when_not_explicitly_enabled(monkeypatch):
+    _set_auth_provider(monkeypatch, "control_plane")
+    _set_control_plane_captcha_enabled(monkeypatch, False)
+    monkeypatch.setenv("DESKTOP_MODE", "1")
+
+    async def fake_fetch_dolphin_captcha():
+        return {"captcha_id": "remote-captcha-id", "image_data": "data:image/png;base64,abc"}
+
+    monkeypatch.setattr(auth_routes, "fetch_dolphin_captcha", fake_fetch_dolphin_captcha)
+
+    assert await auth_routes.captcha() == {
+        "required": True,
+        "captcha_id": "remote-captcha-id",
+        "image_data": "data:image/png;base64,abc",
+    }
 
 
 @pytest.mark.asyncio

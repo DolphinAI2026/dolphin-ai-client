@@ -82,10 +82,25 @@ describe('RailSidebar unified session source (SP2b)', () => {
   })
 
   it('starts independent rail loads in parallel', () => {
-    expect(railSidebarSource).toContain('Promise.allSettled([')
+    expect(railSidebarSource).toContain('Promise.allSettled(startupTasks)')
     expect(railSidebarSource).toContain('loadRailApps()')
-    expect(railSidebarSource).toContain('user.fetchAvailableTenants()')
     expect(railSidebarSource).toContain('loadRailSessions()')
+  })
+
+  it('uses the remote tenant selection list in the desktop package', () => {
+    expect(railSidebarSource).toContain('const tenantOptions = computed(() => user.availableTenants || [])')
+    expect(railSidebarSource).toContain('startupTasks.push(user.fetchAvailableTenants())')
+    expect(railSidebarSource).toContain('control_plane_tenant_name')
+    expect(railSidebarSource).toContain('@click="selectTenant(String(tenant.tenant_id))"')
+  })
+
+  it('keeps the desktop organization switcher directly reachable in the rail footer', () => {
+    const tenantSwitcher = railSidebarSource.indexOf('<div class="tenant-switch-wrap" @click.stop>')
+    const userMenu = railSidebarSource.indexOf('<div v-show="userMenuOpen" class="rail-user-menu">')
+
+    expect(tenantSwitcher).toBeGreaterThan(-1)
+    expect(userMenu).toBeGreaterThan(-1)
+    expect(tenantSwitcher).toBeLessThan(userMenu)
   })
 
   it('listens for Code rail refresh events from the app list', () => {

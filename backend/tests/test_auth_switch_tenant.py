@@ -1,10 +1,12 @@
 """租户切换接口测试 — switch-tenant + me/tenants + 租户管理 CRUD。"""
 import pytest
+import sys
 from jose import jwt
 from fastapi import HTTPException
 from sqlalchemy import select
 
-from app.auth import get_password_hash
+from app.auth import decode_token, get_password_hash
+from app.code_runtime.auth import store_control_plane_credentials
 from app.config import settings
 from app.deps import AuthContext
 from app.models import APaaSUserCredential, User
@@ -32,6 +34,7 @@ from app.routes.auth import (
     _apaas_membership_role_preference,
     _sync_user_membership,
 )
+from app.routes.auth.tenants_admin import get_me
 
 
 async def _seed_user_and_tenants(db_session, *, num_tenants: int, member_indices: list[int]):
@@ -210,6 +213,194 @@ async def test_list_my_tenants_returns_only_active_memberships(db_session):
     res = await list_my_tenants(ctx, db_session)
     ids = sorted(t.tenant_id for t in res)
     assert ids == sorted([tenants[0].id, tenants[1].id])
+
+
+@pytest.mark.asyncio
+async def test_desktop_control_plane_me_hides_local_storage_tenant(db_session, monkeypatch):
+    monkeypatch.setenv("DESKTOP_MODE", "1")
+    local_tenant = Tenant(
+        tenant_name="本地缓存租户",
+        tenant_code="workspace-2077284540335579137",
+        status=1,
+    )
+    user = User(
+        username="remote-admin",
+        hashed_password=get_password_hash("secret"),
+        account_source="control_plane",
+        coding_tenant_id="2077284540335579137",
+        is_active=True,
+    )
+    db_session.add_all([local_tenant, user])
+    await db_session.flush()
+    db_session.add(
+        UserTenant(
+            user_id=user.id,
+            tenant_id=local_tenant.id,
+            status=1,
+            is_default=True,
+        )
+    )
+    await db_session.flush()
+    store_control_plane_credentials(user, "remote-access-token")
+
+    async def fake_fetch_control_plane_identity(_token):
+        return type(
+            "Identity",
+            (),
+            {
+                "tenant_id": "2077284540335579137",
+                "tenant_name": "示例租户",
+                "org_permissions": {"system.*": True},
+            },
+        )()
+
+    monkeypatch.setattr(
+        "app.routes.auth.tenants_admin.fetch_control_plane_identity",
+        fake_fetch_control_plane_identity,
+    )
+
+    ctx = AuthContext(
+        user=user,
+        tenant_id=local_tenant.id,
+        tenant_role="tenant_admin",
+        org_permissions={},
+    )
+
+    me = await get_me(ctx, db_session)
+
+    assert me.tenant_id == "2077284540335579137"
+    assert me.tenant_name == "示例租户"
+    assert me.control_plane_tenant_id == "2077284540335579137"
+    assert me.control_plane_tenant_name == "示例租户"
+    assert me.org_permissions == {"system.*": True}
+
+
+@pytest.mark.asyncio
+async def test_desktop_control_plane_me_preserves_selected_remote_tenant(db_session, monkeypatch):
+    monkeypatch.setenv("DESKTOP_MODE", "1")
+    user = User(
+        username="remote-admin",
+        hashed_password=get_password_hash("secret"),
+        account_source="control_plane",
+        coding_tenant_id="0",
+        is_active=True,
+    )
+    db_session.add(user)
+    await db_session.flush()
+    store_control_plane_credentials(user, "remote-access-token")
+
+    async def fake_fetch_control_plane_identity(_token):
+        return type(
+            "Identity",
+            (),
+            {
+                "tenant_id": "2077284540335579137",
+                "tenant_name": "示例租户",
+                "org_permissions": {"system.*": True},
+            },
+        )()
+
+    monkeypatch.setattr(
+        "app.routes.auth.tenants_admin.fetch_control_plane_identity",
+        fake_fetch_control_plane_identity,
+    )
+    ctx = AuthContext(
+        user=user,
+        tenant_id=0,
+        tenant_role="platform_admin",
+        org_permissions={},
+        control_plane_tenant_id="0",
+        control_plane_tenant_name="admin 的组织",
+    )
+
+    me = await get_me(ctx, db_session)
+
+    assert me.tenant_id == "0"
+    assert me.tenant_name == "admin 的组织"
+    assert me.org_permissions == {"system.*": True}
+
+
+@pytest.mark.asyncio
+async def test_desktop_control_plane_lists_remote_available_tenants(db_session, monkeypatch):
+    monkeypatch.setenv("DESKTOP_MODE", "1")
+    user = User(
+        username="remote-admin",
+        hashed_password=get_password_hash("secret"),
+        account_source="control_plane",
+        coding_tenant_id="2077284540335579137",
+        is_active=True,
+    )
+    db_session.add(user)
+    await db_session.flush()
+    store_control_plane_credentials(user, "remote-access-token")
+
+    async def fake_fetch_control_plane_identity(_token):
+        return type(
+            "Identity",
+            (),
+            {
+                "available_tenants": [
+                    {"tenant_id": "0", "tenant_name": "默认组织"},
+                    {"tenant_id": "2077284540335579137", "tenant_name": "示例租户"},
+                ],
+            },
+        )()
+
+    monkeypatch.setattr(
+        "app.routes.auth.tenants_admin.fetch_control_plane_identity",
+        fake_fetch_control_plane_identity,
+        raising=False,
+    )
+    ctx = AuthContext(user=user, tenant_id=0, tenant_role="platform_admin", org_permissions={"*": True})
+
+    options = await list_my_tenants(ctx, db_session)
+
+    assert [(item.tenant_id, item.tenant_name) for item in options] == [
+        ("0", "默认组织"),
+        ("2077284540335579137", "示例租户"),
+    ]
+
+
+@pytest.mark.asyncio
+async def test_desktop_control_plane_switches_remote_tenant_context(db_session, monkeypatch):
+    monkeypatch.setenv("DESKTOP_MODE", "1")
+    monkeypatch.setattr(settings, "accepted_token_issuers", "ai-builder,desktop-sidecar")
+    user = User(
+        username="remote-admin",
+        hashed_password=get_password_hash("secret"),
+        account_source="control_plane",
+        coding_tenant_id="2077284540335579137",
+        is_active=True,
+    )
+    db_session.add(user)
+    await db_session.flush()
+    store_control_plane_credentials(user, "remote-access-token")
+
+    async def fake_fetch_control_plane_identity(_token):
+        return type(
+            "Identity",
+            (),
+            {
+                "available_tenants": [
+                    {"tenant_id": "0", "tenant_name": "默认组织"},
+                    {"tenant_id": "2077284540335579137", "tenant_name": "示例租户"},
+                ],
+                "roles": ["PLATFORM_ADMIN"],
+                "org_permissions": {"*": True},
+            },
+        )()
+
+    monkeypatch.setattr(
+        sys.modules["app.routes.auth.login"],
+        "fetch_control_plane_identity",
+        fake_fetch_control_plane_identity,
+    )
+    ctx = AuthContext(user=user, tenant_id=0, tenant_role="platform_admin", org_permissions={"*": True})
+
+    response = await switch_tenant(TenantSwitchRequest(tenant_id="0"), ctx, db_session)
+
+    assert user.coding_tenant_id == "0"
+    assert decode_token(response.access_token)["cp_tid"] == "0"
 
 
 @pytest.mark.asyncio

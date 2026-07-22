@@ -11,7 +11,7 @@
           v-for="tenant in tenants"
           :key="tenant.tenant_id"
           class="tenant-card"
-          @click="handleSelect(tenant.tenant_id)"
+          @click="handleSelect(Number(tenant.tenant_id))"
         >
           <div class="tenant-icon">
             <span>{{ tenant.tenant_name.charAt(0) }}</span>

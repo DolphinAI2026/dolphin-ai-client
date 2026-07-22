@@ -304,10 +304,8 @@ const NAV = computed<NavItem[]>(() => {
   }))
   return items.filter(item => !desktopHidden(item.path))
 })
-// 桌面包不含 admin-spa, /platform-admin 内嵌 iframe 会白屏; 桌面下直接进自渲染的配置页 /platform-envs。
-const platformNavItem: NavItem = __DESKTOP__
-  ? { key: 'platform', label: '平台配置', icon: 'shield', path: '/platform-envs' }
-  : { key: 'platform', label: '平台管理', icon: 'shield', path: '/platform-admin' }
+// 在线版的平台管理入口。
+const platformNavItem: NavItem = { key: 'platform', label: '平台管理', icon: 'shield', path: '/platform-admin' }
 
 // 三模式共用的「能力中心」入口 → hub 页(技能/知识/MCP/AI网关 4 tab)
 const hubNavItem: NavItem = { key: 'hub', label: '能力中心', icon: 'spark', path: '/hub' }
@@ -339,6 +337,9 @@ function tenantSubtitle(tenant?: { tenant_name?: string | null; tenant_code?: st
 }
 
 const currentTenantLabel = computed(() => {
+  if (__DESKTOP__) {
+    return user.user?.control_plane_tenant_name || user.user?.tenant_name || '未选择组织'
+  }
   const match = tenantOptions.value.find((tenant) => String(tenant.tenant_id) === currentTenantValue.value)
   return tenantLabel(match || {
     tenant_name: user.user?.tenant_name,
@@ -349,9 +350,7 @@ const currentTenantLabel = computed(() => {
 const isDark = computed(() => theme.mode === 'dark')
 const platformActive = computed(() => route.path.startsWith(platformNavItem.path))
 const platformHref = computed(() => resolveHref(platformNavItem.path))
-// 桌面: 租户管理员就能进 /platform-envs 配自己的 LLM/aPaaS(每人独立租户)。
-// 在线版: 那条入口指向 admin-spa(仅平台管理员), 保持 isPlatformAdmin 避免租户管理员点进去被弹。
-const platformEntryVisible = computed(() => __DESKTOP__ ? user.isTenantAdmin : user.isPlatformAdmin)
+const platformEntryVisible = computed(() => !__DESKTOP__ && user.isPlatformAdmin)
 
 const userMenuOpen = ref(false)
 function toggleUserMenu(e: MouseEvent) {
@@ -365,11 +364,12 @@ function closeTenantMenu() {
 }
 
 onMounted(() => {
-  void Promise.allSettled([
+  const startupTasks: Promise<unknown>[] = [
     loadRailApps(),
-    user.fetchAvailableTenants(),
     loadRailSessions(),
-  ])
+  ]
+  startupTasks.push(user.fetchAvailableTenants())
+  void Promise.allSettled(startupTasks)
   window.addEventListener('click', closeTenantMenu)
   window.addEventListener('code-rail-refresh', refreshCodeRail)
 })
@@ -400,9 +400,9 @@ function toggleTenantMenu(event: MouseEvent) {
   tenantMenuOpen.value = !tenantMenuOpen.value
 }
 
-async function selectTenant(value: number) {
+async function selectTenant(value: string) {
   tenantMenuOpen.value = false
-  if (!Number.isFinite(value) || !value || value === user.tenantId) return
+  if (!value || value === String(user.tenantId || '')) return
   await user.switchTenant(value)
   router.push('/')
 }
@@ -640,9 +640,7 @@ function renderIcon(name: string): string {
       <!-- 老的 .rail-collapse-btn 已移到顶部 brand 区，这里删掉减少重复入口 -->
 
       <div v-if="!effectiveCollapsed" class="rail-console" @click.stop>
-        <!-- 头像点开的菜单(参考 Claude): 租户 / 平台管理 / 主题 / 检查更新 / 退出 —— 平时收起, 底部只留头像行 -->
-        <div v-show="userMenuOpen" class="rail-user-menu">
-        <div class="rail-console-label">当前租户</div>
+        <div class="rail-console-label">{{ isDesktop ? '当前组织' : '当前租户' }}</div>
         <div class="tenant-switch-wrap" @click.stop>
           <button
             type="button"
@@ -664,7 +662,7 @@ function renderIcon(name: string): string {
               class="tenant-option"
               :class="{ active: String(tenant.tenant_id) === currentTenantValue }"
               role="menuitem"
-              @click="selectTenant(Number(tenant.tenant_id))"
+              @click="selectTenant(String(tenant.tenant_id))"
             >
               <span class="tenant-option-name" :title="tenant.tenant_name">{{ tenantLabel(tenant) }}</span>
               <span v-if="tenantSubtitle(tenant)" class="tenant-option-code">{{ tenantSubtitle(tenant) }}</span>
@@ -673,6 +671,8 @@ function renderIcon(name: string): string {
           </div>
         </div>
 
+        <!-- 头像点开的菜单只保留账户操作，组织切换在左下角常驻。 -->
+        <div v-show="userMenuOpen" class="rail-user-menu">
         <a
           v-if="platformEntryVisible && !desktopHidden(platformNavItem.path)"
           class="console-row platform-row"

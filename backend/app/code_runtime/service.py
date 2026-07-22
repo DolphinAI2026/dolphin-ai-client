@@ -6,7 +6,7 @@ import re
 import secrets
 from datetime import datetime, timedelta, timezone
 from typing import Any, Awaitable, Callable
-from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
+from urllib.parse import parse_qsl, quote, urlencode, urlsplit, urlunsplit
 from uuid import NAMESPACE_URL, uuid4, uuid5
 
 import httpx
@@ -731,6 +731,45 @@ async def create_code_application(
     return _normalize_code_application(data)
 
 
+async def verify_control_plane_application_access(
+    external_application_id: str,
+    *,
+    authorization_header: str | None = None,
+    delegated_context: Any | None = None,
+    auth_provider: str | None = None,
+) -> None:
+    application_id = str(external_application_id or "").strip()
+    if not application_id:
+        raise HTTPException(status_code=400, detail="external_application_id 不能为空")
+
+    base_url = control_plane_base_url()
+    target = f"{base_url}/api/applications/{quote(application_id, safe='')}"
+    try:
+        async with httpx.AsyncClient(timeout=httpx.Timeout(connect=10, read=30, write=10, pool=10)) as client:
+            response = await client.get(
+                target,
+                headers=_control_plane_headers(
+                    authorization_header,
+                    delegated_context=delegated_context,
+                    auth_provider=auth_provider,
+                ),
+            )
+    except httpx.RequestError as exc:
+        raise HTTPException(status_code=503, detail=f"无法连接 Code Control Plane: {base_url}") from exc
+    if response.status_code >= 400:
+        raise HTTPException(
+            status_code=response.status_code,
+            detail=_control_plane_error_detail(response),
+        )
+
+    try:
+        payload = response.json()
+    except ValueError as exc:
+        raise HTTPException(status_code=502, detail="Code Control Plane 返回了无效应用数据") from exc
+    if not isinstance(payload, dict) or str(payload.get("applicationId") or "").strip() != application_id:
+        raise HTTPException(status_code=502, detail="Code Control Plane 返回了无效应用数据")
+
+
 def local_builder_workspace_open(external_application_id: str) -> dict[str, Any]:
     builder_url = local_builder_url()
     if not builder_url:
@@ -835,6 +874,12 @@ async def open_code_session(
         )
 
     if desktop_runtime:
+        await verify_control_plane_application_access(
+            external_app_id,
+            authorization_header=authorization_header,
+            delegated_context=ctx,
+            auth_provider=auth_provider,
+        )
         opened, desktop_entry_token = await LocalRuntimeClient.from_environment().open_application_with_entry_token(
             db,
             session,

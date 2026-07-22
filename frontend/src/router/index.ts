@@ -4,7 +4,6 @@ import { usePreviewStore } from '@/stores/preview'
 import { modeForRoutePath, useModeStore } from '@/stores/mode'
 import request from '@/utils/request'
 import { resolveDesktopRedirect } from './desktopGuard'
-import { fetchOnboardingState, isOnboardingConfirmed, markOnboardingConfirmed } from '@/composables/useOnboardingState'
 
 const router = createRouter({
   history: createWebHistory(import.meta.env.BASE_URL),
@@ -22,6 +21,7 @@ const router = createRouter({
       // 首页 = AI Builder 融合页(新建欢迎草稿 + 对话流), 与 /ai-chat 同组件。
       // (2026-06-21 撤回 ModeHome —— 用已有的新会话欢迎页, 不重复造。)
       component: () => import('@/views/AIChatPage.vue'),
+      beforeEnter: () => __DESKTOP__ ? { path: '/code/apps' } : true,
       meta: { requiresAuth: true, navExpanded: true }
     },
     {
@@ -152,6 +152,7 @@ const router = createRouter({
       path: '/settings',
       name: 'Settings',
       redirect: to => {
+        if (__DESKTOP__) return { path: '/code/apps' }
         const rawTab = Array.isArray(to.query.tab) ? to.query.tab[0] : to.query.tab
         const tab = String(rawTab || 'llm')
         if (tab === 'envs') return { path: '/platform-envs', query: { tab: 'envs' } }
@@ -197,7 +198,7 @@ const router = createRouter({
       path: '/platform-envs',
       name: 'PlatformEnvs',
       component: () => import('@/views/PlatformEnvs.vue'),
-      meta: { requiresAuth: true, requiresTenantAdmin: true, navExpanded: true }
+      meta: { requiresAuth: true, requiresTenantAdmin: true, navExpanded: true, desktop: 'hidden' }
     },
     {
       path: '/platform-admin/:pathMatch(.*)*',
@@ -226,7 +227,7 @@ const router = createRouter({
     {
       path: '/desktop-setup',
       name: 'DesktopSetup',
-      component: () => import('@/views/DesktopSetupWizard.vue'),
+      redirect: () => ({ path: '/code/apps' }),
       meta: { requiresAuth: true }
     },
     {
@@ -266,14 +267,15 @@ router.beforeEach(async (to, _from, next) => {
   if (userStore.token && !userStore.user) {
     try {
       await userStore.fetchUser()
-      // 同时恢复 aPaaS 连接状态
-      const previewStore = usePreviewStore()
-      try {
-        const data = await request.get<any, any>('/apaas/status')
-        if (data) {
-          previewStore.connected = data.connected
-        }
-      } catch { /* ignore */ }
+      if (!__DESKTOP__) {
+        const previewStore = usePreviewStore()
+        try {
+          const data = await request.get<any, any>('/apaas/status')
+          if (data) {
+            previewStore.connected = data.connected
+          }
+        } catch { /* ignore */ }
+      }
     } catch {
       // token 过期或无效，跳登录
       next({ path: '/login', query: { redirect: to.fullPath } })
@@ -298,6 +300,7 @@ router.beforeEach(async (to, _from, next) => {
     to.meta.requiresAuth
     && userStore.isPlatformAdmin
     && !userStore.tenantId
+    && !__DESKTOP__
     && !to.path.startsWith('/platform-admin')
   ) {
     next('/platform-admin')
@@ -308,16 +311,6 @@ router.beforeEach(async (to, _from, next) => {
     // 功能边界: hidden 路由落降级页
     const red = resolveDesktopRedirect(true, (to.meta as any), to.path)
     if (red) { next({ path: red, replace: true }); return }
-    // 首启分流: 未配齐 aPaaS+LLM → 向导 (排除向导/登录/降级页自身防环; 已确认配齐则跳过拉取)
-    const exempt = ['/desktop-setup', '/desktop-unavailable', '/login'].some(p => to.path.startsWith(p))
-    if (!exempt && !isOnboardingConfirmed()) {
-      const st = await fetchOnboardingState()
-      if (st.configured) {
-        markOnboardingConfirmed()
-      } else {
-        next({ path: '/desktop-setup', replace: true }); return
-      }
-    }
   }
 
   if (to.meta.requiresAuth) {

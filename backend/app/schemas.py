@@ -24,15 +24,17 @@ class UserInfo(BaseModel):
     is_active: bool
     is_platform_admin: bool = False
     created_at: datetime
-    tenant_id: Optional[int] = None
+    tenant_id: Optional[Union[int, str]] = None
     tenant_name: Optional[str] = None
+    control_plane_tenant_id: Optional[str] = None
+    control_plane_tenant_name: Optional[str] = None
     tenant_role: Optional[str] = None
     org_permissions: Optional[dict] = None
 
 
 class TenantOption(BaseModel):
     """租户选项（多租户登录时返回）"""
-    tenant_id: int
+    tenant_id: Union[int, str]
     tenant_name: str
     tenant_code: str
 

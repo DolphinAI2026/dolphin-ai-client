@@ -4,6 +4,7 @@ from collections.abc import Sequence
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 from app.config import settings
+from app import runtime
 from app.crypto import encrypt_password
 from app.models import LLMConfig, PlatformEnv
 from app.models.tenant import Tenant, Role
@@ -351,8 +352,9 @@ async def seed_initial_data(db: AsyncSession):
     # 2. 为默认租户创建角色
     await seed_default_roles(db, default_tenant.id)
 
-    # 3. 本地运行时如果配置了 APAAS_TENANT_ID，自动把 default 租户绑定到该平台租户。
-    await bind_default_tenant_platform_env(db, default_tenant)
-
-    # 4. 同步环境变量中的内置模型到 llm_configs
-    await sync_builtin_llm_configs(db)
+    # Desktop Code only needs the local database for sandbox state. aPaaS and
+    # model configuration are managed by the remote Control Plane, not seeded
+    # into the desktop product.
+    if not runtime.is_desktop():
+        await bind_default_tenant_platform_env(db, default_tenant)
+        await sync_builtin_llm_configs(db)

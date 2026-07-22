@@ -5,8 +5,10 @@ export interface User {
   is_active: boolean
   is_platform_admin?: boolean
   created_at: string
-  tenant_id?: number
+  tenant_id?: number | string
   tenant_name?: string
+  control_plane_tenant_id?: string
+  control_plane_tenant_name?: string
   tenant_role?: string
   org_permissions?: Record<string, boolean>
 }
@@ -44,7 +46,7 @@ export interface PublicBuilderAuthSettings {
 }
 
 export interface TenantOption {
-  tenant_id: number
+  tenant_id: number | string
   tenant_name: string
   tenant_code: string
 }
