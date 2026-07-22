@@ -9,7 +9,7 @@ from app.models import User
 from app.models.tenant import Tenant, UserTenant, Role
 from app.deps import (
     AuthContext,
-    get_auth_context,
+    get_platform_auth_context,
 )
 from pydantic import BaseModel
 
@@ -89,7 +89,7 @@ def _serialize_tenant_member(
 @router.get("/tenants/{tenant_id}/members", response_model=list[TenantMemberItem])
 async def list_tenant_members(
     tenant_id: int,
-    ctx: Annotated[AuthContext, Depends(get_auth_context)],
+    ctx: Annotated[AuthContext, Depends(get_platform_auth_context)],
     db: Annotated[AsyncSession, Depends(get_db)],
 ):
     """列出指定租户的成员（仅平台管理员）。"""
@@ -114,7 +114,7 @@ async def list_tenant_members(
 @router.get("/tenants/{tenant_id}/roles")
 async def list_roles_for_tenant(
     tenant_id: int,
-    ctx: Annotated[AuthContext, Depends(get_auth_context)],
+    ctx: Annotated[AuthContext, Depends(get_platform_auth_context)],
     db: Annotated[AsyncSession, Depends(get_db)],
 ):
     """列出指定租户角色（仅平台管理员）。
@@ -150,7 +150,7 @@ async def list_roles_for_tenant(
 async def add_tenant_member(
     tenant_id: int,
     data: TenantMemberAddRequest,
-    ctx: Annotated[AuthContext, Depends(get_auth_context)],
+    ctx: Annotated[AuthContext, Depends(get_platform_auth_context)],
     db: Annotated[AsyncSession, Depends(get_db)],
 ):
     """跨租户给指定租户加成员（仅平台管理员）。
@@ -233,7 +233,7 @@ async def update_tenant_member_role(
     tenant_id: int,
     user_id: int,
     data: TenantMemberRoleUpdateRequest,
-    ctx: Annotated[AuthContext, Depends(get_auth_context)],
+    ctx: Annotated[AuthContext, Depends(get_platform_auth_context)],
     db: Annotated[AsyncSession, Depends(get_db)],
 ):
     """改租户内某个成员的角色（仅平台管理员）。
@@ -292,7 +292,7 @@ async def update_tenant_member_role(
 async def remove_tenant_member(
     tenant_id: int,
     user_id: int,
-    ctx: Annotated[AuthContext, Depends(get_auth_context)],
+    ctx: Annotated[AuthContext, Depends(get_platform_auth_context)],
     db: Annotated[AsyncSession, Depends(get_db)],
 ):
     """把成员从租户移除（仅平台管理员）。

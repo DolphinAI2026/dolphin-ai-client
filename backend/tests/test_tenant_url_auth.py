@@ -26,6 +26,7 @@ from app.database import Base, get_db
 from app.deps import (
     get_auth_context,
     get_auth_context_from_token,
+    get_platform_auth_context,
     require_platform_admin,
     require_tenant_admin,
 )
@@ -695,17 +696,64 @@ async def test_external_platform_admin_without_tid_is_platform_only_after_member
 
     async with auth_db_factory() as session:
         await remove_membership(session, user.id, tenants[0].id)
-        header_ctx = await get_auth_context(credentials_for(token), session)
-    query_ctx = await get_auth_context_from_token(token)
-
-    for ctx in (header_ctx, query_ctx):
-        assert ctx.tenant_id == 0
-        assert ctx.tenant_role == "platform_admin"
-        assert ctx.org_permissions == {"*": True}
-        assert ctx.tenant_access_scope == "platform_only"
         with pytest.raises(HTTPException, match="需要租户上下文"):
-            await require_tenant_admin(ctx)
-        assert await require_platform_admin(ctx) is ctx
+            await get_auth_context(credentials_for(token), session)
+        platform_ctx = await get_platform_auth_context(credentials_for(token), session)
+
+    with pytest.raises(ValueError, match="Tenant context required"):
+        await get_auth_context_from_token(token)
+
+    assert platform_ctx.tenant_id == 0
+    assert platform_ctx.tenant_role == "platform_admin"
+    assert platform_ctx.org_permissions == {"*": True}
+    assert platform_ctx.tenant_access_scope == "platform_only"
+    assert await require_platform_admin(platform_ctx) is platform_ctx
+
+
+@pytest.mark.parametrize(
+    ("account_source", "apaas_base_url"),
+    [
+        ("apaas", "https://apaas.example"),
+        ("coding", None),
+        ("control_plane", None),
+    ],
+)
+@pytest.mark.asyncio
+async def test_external_platform_only_admin_route_matrix_is_fail_closed(
+    auth_db_factory,
+    client,
+    account_source,
+    apaas_base_url,
+):
+    user, tenants = await seed_tenant_user(
+        auth_db_factory,
+        is_platform_admin=True,
+        account_source=account_source,
+        apaas_base_url=apaas_base_url,
+    )
+    token = create_access_token(user, tenant_id=None)
+    async with auth_db_factory() as session:
+        await remove_membership(session, user.id, tenants[0].id)
+
+    users_response = await client.get("/api/auth/users", headers=bearer(token))
+    me_response = await client.get("/api/auth/me", headers=bearer(token))
+    tenants_response = await client.get("/api/auth/me/tenants", headers=bearer(token))
+    platform_tenants_response = await client.get("/api/auth/tenants", headers=bearer(token))
+    tenant_members_response = await client.get(
+        f"/api/auth/tenants/{tenants[0].id}/members",
+        headers=bearer(token),
+    )
+
+    assert users_response.status_code == 403
+    assert users_response.json()["detail"] == "需要租户上下文"
+    assert me_response.status_code == 200
+    assert me_response.json()["tenant_id"] is None
+    assert tenants_response.status_code == 200
+    assert tenants_response.json() == []
+    assert platform_tenants_response.status_code == 200
+    assert [item["id"] for item in platform_tenants_response.json()] == [tenants[0].id]
+    assert tenant_members_response.status_code == 200
+    assert tenant_members_response.json() == []
 
 
 @pytest.mark.asyncio

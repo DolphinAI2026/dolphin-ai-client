@@ -14,7 +14,7 @@ from app.builder_auth.settings import (
     to_public_builder_auth_settings,
 )
 from app.database import get_db
-from app.deps import AuthContext, get_auth_context
+from app.deps import AuthContext, get_platform_auth_context
 
 public_router = APIRouter(tags=["认证配置"])
 admin_router = APIRouter(tags=["认证配置"])
@@ -35,7 +35,7 @@ async def get_public_auth_settings(
 
 @admin_router.get("/settings", response_model=BuilderAuthSettings)
 async def get_admin_auth_settings(
-    ctx: Annotated[AuthContext, Depends(get_auth_context)],
+    ctx: Annotated[AuthContext, Depends(get_platform_auth_context)],
     db: Annotated[AsyncSession, Depends(get_db)],
 ) -> BuilderAuthSettings:
     _require_platform_admin(ctx)
@@ -45,7 +45,7 @@ async def get_admin_auth_settings(
 @admin_router.put("/settings", response_model=PublicBuilderAuthSettings)
 async def put_admin_auth_settings(
     data: BuilderAuthSettings,
-    ctx: Annotated[AuthContext, Depends(get_auth_context)],
+    ctx: Annotated[AuthContext, Depends(get_platform_auth_context)],
     db: Annotated[AsyncSession, Depends(get_db)],
 ) -> PublicBuilderAuthSettings:
     _require_platform_admin(ctx)

@@ -13,7 +13,7 @@ from typing import Annotated, Optional
 from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, status
 from pydantic import BaseModel
 
-from app.deps import AuthContext, get_auth_context
+from app.deps import AuthContext, get_platform_auth_context
 
 router = APIRouter(prefix="/templates", tags=["模板管理"])
 
@@ -121,7 +121,7 @@ def _scan_templates() -> list[dict]:
 
 @router.get("")
 async def list_templates(
-    ctx: Annotated[AuthContext, Depends(get_auth_context)],
+    ctx: Annotated[AuthContext, Depends(get_platform_auth_context)],
 ):
     """获取模板列表（仅登录用户）"""
     return _scan_templates()
@@ -130,7 +130,7 @@ async def list_templates(
 @router.get("/{code}")
 async def get_template(
     code: str,
-    ctx: Annotated[AuthContext, Depends(get_auth_context)],
+    ctx: Annotated[AuthContext, Depends(get_platform_auth_context)],
 ):
     """获取指定模板的完整 MD 内容（仅登录用户）"""
     if not TEMPLATES_DIR.exists():
@@ -189,7 +189,7 @@ class TemplateUpdateRequest(BaseModel):
 @router.post("")
 async def create_template(
     req: TemplateCreateRequest,
-    ctx: Annotated[AuthContext, Depends(get_auth_context)],
+    ctx: Annotated[AuthContext, Depends(get_platform_auth_context)],
 ):
     """创建新模板（仅平台管理员）"""
     _require_platform_admin(ctx)
@@ -214,7 +214,7 @@ async def create_template(
 async def update_template(
     code: str,
     req: TemplateUpdateRequest,
-    ctx: Annotated[AuthContext, Depends(get_auth_context)],
+    ctx: Annotated[AuthContext, Depends(get_platform_auth_context)],
 ):
     """更新模板（仅平台管理员）"""
     _require_platform_admin(ctx)
@@ -247,7 +247,7 @@ async def update_template(
 @router.delete("/{code}")
 async def delete_template(
     code: str,
-    ctx: Annotated[AuthContext, Depends(get_auth_context)],
+    ctx: Annotated[AuthContext, Depends(get_platform_auth_context)],
 ):
     """删除模板（仅平台管理员）"""
     _require_platform_admin(ctx)
@@ -265,7 +265,7 @@ async def delete_template(
 
 @router.post("/upload")
 async def upload_template(
-    ctx: Annotated[AuthContext, Depends(get_auth_context)],
+    ctx: Annotated[AuthContext, Depends(get_platform_auth_context)],
     file: UploadFile = File(...),
 ):
     """上传 MD 文件作为模板（仅平台管理员）"""

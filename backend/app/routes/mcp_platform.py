@@ -29,7 +29,7 @@ from app.auth import get_password_hash
 from app.config import settings
 from app.crypto import decrypt_password, encrypt_password
 from app.database import AsyncSessionLocal, get_db
-from app.deps import AuthContext, get_auth_context
+from app.deps import AuthContext, get_platform_auth_context
 from app.models import APaaSPlatformCredential, MCPCallLog, PlatformEnv, Tenant, User
 from app.schemas import LoginResponse, UserLogin
 
@@ -468,7 +468,7 @@ async def _sync_platform_user(db: AsyncSession, row: dict[str, Any], plain_passw
 
 @router.get("/apaas-admins")
 async def list_apaas_admins(
-    ctx: Annotated[AuthContext, Depends(get_auth_context)],
+    ctx: Annotated[AuthContext, Depends(get_platform_auth_context)],
     db: Annotated[AsyncSession, Depends(get_db)],
 ):
     _require_platform_admin(ctx)
@@ -477,7 +477,7 @@ async def list_apaas_admins(
 
 
 @router.get("/mcp-access")
-async def get_mcp_access(ctx: Annotated[AuthContext, Depends(get_auth_context)]):
+async def get_mcp_access(ctx: Annotated[AuthContext, Depends(get_platform_auth_context)]):
     _require_platform_admin(ctx)
     key = _current_mcp_key()
     return {
@@ -494,7 +494,7 @@ async def get_mcp_access(ctx: Annotated[AuthContext, Depends(get_auth_context)])
 
 @router.get("/call-logs")
 async def list_mcp_call_logs(
-    ctx: Annotated[AuthContext, Depends(get_auth_context)],
+    ctx: Annotated[AuthContext, Depends(get_platform_auth_context)],
     db: Annotated[AsyncSession, Depends(get_db)],
     limit: int = Query(100, ge=1, le=500),
 ):
@@ -505,7 +505,7 @@ async def list_mcp_call_logs(
 @router.post("/apaas-admins")
 async def create_apaas_admin(
     body: APaaSAdminCreate,
-    ctx: Annotated[AuthContext, Depends(get_auth_context)],
+    ctx: Annotated[AuthContext, Depends(get_platform_auth_context)],
     db: Annotated[AsyncSession, Depends(get_db)],
 ):
     _require_platform_admin(ctx)
@@ -530,7 +530,7 @@ async def create_apaas_admin(
 async def update_apaas_admin(
     admin_id: str,
     body: APaaSAdminUpdate,
-    ctx: Annotated[AuthContext, Depends(get_auth_context)],
+    ctx: Annotated[AuthContext, Depends(get_platform_auth_context)],
     db: Annotated[AsyncSession, Depends(get_db)],
 ):
     _require_platform_admin(ctx)
@@ -557,7 +557,7 @@ async def update_apaas_admin(
 @router.delete("/apaas-admins/{admin_id}")
 async def delete_apaas_admin(
     admin_id: str,
-    ctx: Annotated[AuthContext, Depends(get_auth_context)],
+    ctx: Annotated[AuthContext, Depends(get_platform_auth_context)],
     db: Annotated[AsyncSession, Depends(get_db)],
 ):
     _require_platform_admin(ctx)
@@ -586,7 +586,7 @@ async def delete_apaas_admin(
 @router.post("/apaas-admins/{admin_id}/login")
 async def login_apaas_admin(
     admin_id: str,
-    ctx: Annotated[AuthContext, Depends(get_auth_context)],
+    ctx: Annotated[AuthContext, Depends(get_platform_auth_context)],
     db: Annotated[AsyncSession, Depends(get_db)],
 ):
     _require_platform_admin(ctx)
@@ -602,7 +602,7 @@ async def login_apaas_admin(
 @router.post("/apaas-admins/{admin_id}/token")
 async def get_apaas_admin_token(
     admin_id: str,
-    ctx: Annotated[AuthContext, Depends(get_auth_context)],
+    ctx: Annotated[AuthContext, Depends(get_platform_auth_context)],
     db: Annotated[AsyncSession, Depends(get_db)],
 ):
     _require_platform_admin(ctx)
@@ -620,7 +620,7 @@ async def get_apaas_admin_token(
 @router.post("/apaas-user-token")
 async def get_apaas_user_token(
     body: APaaSUserTokenRequest,
-    ctx: Annotated[AuthContext, Depends(get_auth_context)],
+    ctx: Annotated[AuthContext, Depends(get_platform_auth_context)],
     db: Annotated[AsyncSession, Depends(get_db)],
 ):
     _require_platform_admin(ctx)
@@ -702,7 +702,7 @@ async def get_apaas_user_token(
 async def bind_apaas_tenant_environment(
     local_tenant_id: int,
     body: APaaSTenantBindingRequest,
-    ctx: Annotated[AuthContext, Depends(get_auth_context)],
+    ctx: Annotated[AuthContext, Depends(get_platform_auth_context)],
     db: Annotated[AsyncSession, Depends(get_db)],
 ):
     _require_platform_admin(ctx)
@@ -785,7 +785,7 @@ async def bind_apaas_tenant_environment(
 
 @router.get("/apaas-tenants")
 async def list_apaas_tenants(
-    ctx: Annotated[AuthContext, Depends(get_auth_context)],
+    ctx: Annotated[AuthContext, Depends(get_platform_auth_context)],
     db: Annotated[AsyncSession, Depends(get_db)],
     admin_id: str | None = None,
     page: int = 1,

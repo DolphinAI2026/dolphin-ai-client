@@ -13,6 +13,7 @@ from app.tenant_public_id import ensure_tenant_public_id
 from app.deps import (
     AuthContext,
     get_auth_context,
+    get_platform_auth_context,
     platform_admin_has_unscoped_tenant_access,
     require_tenant_admin,
     resolve_default_tenant_id_for_user,
@@ -310,7 +311,7 @@ async def _attach_apaas_env_info_batch(items: list[TenantAdminItem], db: AsyncSe
 
 @router.get("/tenants", response_model=list[TenantAdminItem])
 async def list_all_tenants(
-    ctx: Annotated[AuthContext, Depends(get_auth_context)],
+    ctx: Annotated[AuthContext, Depends(get_platform_auth_context)],
     db: Annotated[AsyncSession, Depends(get_db)],
     q: Optional[str] = None,
     status: Optional[int] = None,
@@ -356,7 +357,7 @@ async def list_all_tenants(
 @router.post("/tenants", response_model=TenantAdminItem)
 async def create_new_tenant(
     data: TenantCreateRequest,
-    ctx: Annotated[AuthContext, Depends(get_auth_context)],
+    ctx: Annotated[AuthContext, Depends(get_platform_auth_context)],
     db: Annotated[AsyncSession, Depends(get_db)],
 ):
     """新建租户（仅平台管理员）。"""
@@ -403,7 +404,7 @@ async def create_new_tenant(
 
 @router.get("/tenants/dashboard")
 async def tenant_dashboard(
-    ctx: Annotated[AuthContext, Depends(get_auth_context)],
+    ctx: Annotated[AuthContext, Depends(get_platform_auth_context)],
     db: Annotated[AsyncSession, Depends(get_db)],
 ):
     """平台总览（仅平台管理员）：所有租户的资源使用量聚合。"""
@@ -447,7 +448,7 @@ async def tenant_dashboard(
 async def update_tenant(
     tenant_id: int,
     data: TenantUpdateRequest,
-    ctx: Annotated[AuthContext, Depends(get_auth_context)],
+    ctx: Annotated[AuthContext, Depends(get_platform_auth_context)],
     db: Annotated[AsyncSession, Depends(get_db)],
 ):
     """编辑租户基本信息（仅平台管理员）。tenant_code 一旦创建不可改。"""
@@ -540,7 +541,7 @@ async def update_tenant(
 @router.delete("/tenants/{tenant_id}")
 async def delete_tenant(
     tenant_id: int,
-    ctx: Annotated[AuthContext, Depends(get_auth_context)],
+    ctx: Annotated[AuthContext, Depends(get_platform_auth_context)],
     db: Annotated[AsyncSession, Depends(get_db)],
     force: bool = False,
 ):
@@ -646,7 +647,7 @@ async def delete_tenant(
 @router.get("/tenants/{tenant_id}/usage")
 async def get_tenant_usage_endpoint(
     tenant_id: int,
-    ctx: Annotated[AuthContext, Depends(get_auth_context)],
+    ctx: Annotated[AuthContext, Depends(get_platform_auth_context)],
     db: Annotated[AsyncSession, Depends(get_db)],
 ):
     """返回某租户的资源使用情况（仅平台管理员）。"""
@@ -659,7 +660,7 @@ async def get_tenant_usage_endpoint(
 async def update_tenant_status(
     tenant_id: int,
     data: TenantStatusRequest,
-    ctx: Annotated[AuthContext, Depends(get_auth_context)],
+    ctx: Annotated[AuthContext, Depends(get_platform_auth_context)],
     db: Annotated[AsyncSession, Depends(get_db)],
 ):
     """启用 / 禁用租户（仅平台管理员）。被禁用的租户成员仍可见但无法切入。"""
@@ -728,7 +729,7 @@ async def set_my_default_tenant(
 async def bind_user_apaas_account(
     user_id: int,
     data: BindApaasAccountRequest,
-    ctx: Annotated[AuthContext, Depends(get_auth_context)],
+    ctx: Annotated[AuthContext, Depends(get_platform_auth_context)],
     db: Annotated[AsyncSession, Depends(get_db)],
 ):
     """给本地/Control Plane 账号绑定 aPaaS 用户与租户。
@@ -916,7 +917,7 @@ async def admin_reset_user_password(
 
 @router.get("/platform-users")
 async def list_platform_users(
-    ctx: Annotated[AuthContext, Depends(get_auth_context)],
+    ctx: Annotated[AuthContext, Depends(get_platform_auth_context)],
     db: Annotated[AsyncSession, Depends(get_db)],
 ):
     """列出全平台 active 账号（仅平台管理员），供「租户管理 → 加成员」从已有账号里选。
@@ -942,7 +943,7 @@ async def list_platform_users(
 
 @router.get("/me/tenants", response_model=list[TenantOption])
 async def list_my_tenants(
-    ctx: Annotated[AuthContext, Depends(get_auth_context)],
+    ctx: Annotated[AuthContext, Depends(get_platform_auth_context)],
     db: Annotated[AsyncSession, Depends(get_db)],
 ):
     """返回当前用户可切换的租户列表（用于顶栏 dropdown）。
@@ -1314,7 +1315,7 @@ async def update_tenant_user_role(
 
 
 @router.get("/me", response_model=UserInfo)
-async def get_me(ctx: Annotated[AuthContext, Depends(get_auth_context)], db: Annotated[AsyncSession, Depends(get_db)]):
+async def get_me(ctx: Annotated[AuthContext, Depends(get_platform_auth_context)], db: Annotated[AsyncSession, Depends(get_db)]):
     # 获取租户信息
     tenant_name = None
     tenant_public_id = None

@@ -168,7 +168,7 @@ async def _resolve_role_context(db: AsyncSession, role_id: int | None) -> tuple[
     return tenant_role, org_permissions
 
 
-async def get_auth_context(
+async def _get_auth_context_allow_platform_only(
     credentials: Annotated[any, Depends(security)],
     db: Annotated[AsyncSession, Depends(get_db)]
 ) -> AuthContext:
@@ -308,6 +308,28 @@ async def get_auth_context(
     )
 
 
+async def get_platform_auth_context(
+    credentials: Annotated[any, Depends(security)],
+    db: Annotated[AsyncSession, Depends(get_db)],
+) -> AuthContext:
+    """Authenticate an explicitly platform-scoped route."""
+    return await _get_auth_context_allow_platform_only(credentials, db)
+
+
+async def get_auth_context(
+    credentials: Annotated[any, Depends(security)],
+    db: Annotated[AsyncSession, Depends(get_db)],
+) -> AuthContext:
+    """Authenticate a tenant-scoped route and require an active tenant."""
+    ctx = await _get_auth_context_allow_platform_only(credentials, db)
+    if ctx.tenant_access_scope == "platform_only":
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="需要租户上下文",
+        )
+    return ctx
+
+
 async def get_auth_context_from_token(token: str) -> AuthContext:
     """从 token 字符串获取 auth context（供非标准路由使用，如 proxy 入口）"""
     from app.database import AsyncSessionLocal
@@ -341,6 +363,13 @@ async def get_auth_context_from_token(token: str) -> AuthContext:
                         raise ValueError("Tenant is inactive") from exc
                 bound_apaas_tid = await resolve_bound_apaas_tenant_id(db, tenant_id)
                 eff_apaas_tid = _first_text(jwt_apaas_tid, bound_apaas_tid, user.apaas_tenant_id)
+                tenant_access_scope = (
+                    "unscoped"
+                    if platform_admin_has_unscoped_tenant_access(user)
+                    else ("tenant" if tenant_id else "platform_only")
+                )
+                if tenant_access_scope == "platform_only":
+                    raise ValueError("Tenant context required")
                 return AuthContext(
                     user=user,
                     tenant_id=tenant_id,
@@ -348,11 +377,7 @@ async def get_auth_context_from_token(token: str) -> AuthContext:
                     org_permissions={"*": True},
                     apaas_user_id=eff_apaas_uid,
                     apaas_tenant_id=eff_apaas_tid,
-                    tenant_access_scope=(
-                        "unscoped"
-                        if platform_admin_has_unscoped_tenant_access(user)
-                        else ("tenant" if tenant_id else "platform_only")
-                    ),
+                    tenant_access_scope=tenant_access_scope,
                 )
             tenant_id = 0
         else:
@@ -462,7 +487,7 @@ async def require_tenant_admin(
 
 
 async def require_platform_admin(
-    ctx: Annotated[AuthContext, Depends(get_auth_context)]
+    ctx: Annotated[AuthContext, Depends(get_platform_auth_context)]
 ) -> AuthContext:
     """Require platform admin role."""
     if ctx.tenant_role != "platform_admin" and not ctx.user.is_platform_admin:
