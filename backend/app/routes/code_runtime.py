@@ -52,6 +52,7 @@ from app.code_runtime.sandbox_auth import (
     validate_expired_proxy_cookie_token,
 )
 from app.code_runtime.sandbox_metrics import sandbox_auth_metrics
+from app.code_runtime.execution_target import is_desktop_agent_runtime_target
 from app.config import APP_VERSION, settings
 from app.database import AsyncSessionLocal, get_db
 from app.deps import AuthContext, get_auth_context
@@ -462,6 +463,14 @@ async def open_code_runtime_session(
         }
 
 
+def _desktop_runtime_authorization(binding: CodeRuntimeBinding) -> str:
+    try:
+        token = decrypt_runtime_cookie(binding.desktop_agent_runtime_token_enc or "")
+    except ValueError as exc:
+        raise HTTPException(status_code=503, detail="Desktop Code runtime token unavailable") from exc
+    return f"Bearer {token}"
+
+
 async def _runtime_json_request(
     binding: CodeRuntimeBinding,
     method: str,
@@ -472,7 +481,9 @@ async def _runtime_json_request(
 ) -> Any:
     target = f"{binding.runtime_base_url.rstrip('/')}/{path.lstrip('/')}"
     headers = {"accept": "application/json"}
-    if binding.runtime_service_session_enc:
+    if is_desktop_agent_runtime_target(binding.execution_target):
+        headers["authorization"] = _desktop_runtime_authorization(binding)
+    elif binding.runtime_service_session_enc:
         try:
             runtime_cookie = decrypt_runtime_cookie(binding.runtime_service_session_enc)
         except ValueError as exc:
@@ -508,6 +519,11 @@ async def _refresh_runtime_binding(
     ctx: AuthContext,
     db: AsyncSession,
 ) -> None:
+    if is_desktop_agent_runtime_target(binding.execution_target):
+        raise HTTPException(
+            status_code=503,
+            detail="Desktop Code runtime does not support Control Plane refresh",
+        )
     uses_local_builder = bool(
         not session.app_id
         and is_local_code_application_id(session.external_application_id or "")
@@ -547,6 +563,8 @@ async def _runtime_json_request_for_session(
             timeout=timeout,
         )
     except HTTPException as exc:
+        if is_desktop_agent_runtime_target(binding.execution_target):
+            raise
         if not (
             exc.status_code == 401
             and (exc.headers or {}).get(RUNTIME_AUTH_ERROR_HEADER)
@@ -1284,7 +1302,10 @@ def _runtime_request_headers(
 ) -> dict[str, str]:
     headers = _copyable_request_headers(request, session_id)
     headers.pop("authorization", None)
-    inject_runtime_cookie(headers, runtime_cookie or "")
+    if is_desktop_agent_runtime_target(binding.execution_target):
+        headers["authorization"] = _desktop_runtime_authorization(binding)
+    else:
+        inject_runtime_cookie(headers, runtime_cookie or "")
     return headers
 
 
@@ -1341,6 +1362,18 @@ async def _browser_runtime_json_request_for_session(
     db: AsyncSession,
     json_body: Any = None,
 ) -> tuple[Any, ProxyAuthorization]:
+    if is_desktop_agent_runtime_target(binding.execution_target):
+        return (
+            await _browser_runtime_json_request(
+                binding,
+                method,
+                path,
+                request=request,
+                session_id=session_id,
+                json_body=json_body,
+            ),
+            authorization,
+        )
     try:
         payload = await _browser_runtime_json_request(
             binding,
@@ -1849,6 +1882,12 @@ async def _renew_proxy_runtime_authorization(
     *,
     reason: str,
 ) -> ProxyAuthorization:
+    if is_desktop_agent_runtime_target(binding.execution_target):
+        raise HTTPException(
+            status_code=503,
+            detail="Desktop Code runtime does not support Control Plane renewal",
+        )
+
     async def authorization_provider(
         *,
         force_refresh: bool,
@@ -1925,6 +1964,9 @@ async def _proxy_authorization_from_payload(
         )
     ):
         raise HTTPException(status_code=401, detail="Code runtime token invalid")
+    if is_desktop_agent_runtime_target(binding.execution_target):
+        _desktop_runtime_authorization(binding)
+        return ProxyAuthorization(browser_session_id=browser_session_id)
     browser_session = (
         await db.execute(
             select(CodeRuntimeBrowserSession).where(
@@ -2107,6 +2149,7 @@ async def _authorize_proxy_request(
             and binding is not None
             and shell_session is not None
             and not is_local_code_application_id(binding.external_application_id)
+            and not is_desktop_agent_runtime_target(binding.execution_target)
         ):
             return await _recover_proxy_browser_session(
                 payload,
@@ -2642,7 +2685,9 @@ async def proxy_code_runtime(
         body=body,
         timeout=60.0 if is_builder_html or is_buffered_dev_asset else None,
     )
-    if attempt.recoverable_auth_error:
+    if attempt.recoverable_auth_error and not is_desktop_agent_runtime_target(
+        binding.execution_target
+    ):
         recoverable_auth_error = attempt.recoverable_auth_error
         await _close_upstream_attempt(attempt)
         try:

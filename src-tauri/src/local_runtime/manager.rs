@@ -6,6 +6,7 @@ use super::journal::{JournalRecord, JournalStore};
 use chrono::Utc;
 use std::collections::HashMap;
 use std::fs::{self, OpenOptions};
+use std::io::Read;
 use std::net::SocketAddr;
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
@@ -18,7 +19,7 @@ pub trait RuntimeDriver {
         request: &StartRequest,
         ownership_nonce: &str,
     ) -> Result<ProcessIdentity, LocalRuntimeError>;
-    fn wait_ready(&self, runtime_addr: &str) -> Result<(), LocalRuntimeError>;
+    fn wait_ready(&self, request: &StartRequest) -> Result<(), LocalRuntimeError>;
     fn stop(&self, pid: u32) -> Result<(), LocalRuntimeError>;
     fn identity(&self, pid: u32) -> Result<Option<ProcessIdentity>, LocalRuntimeError>;
 }
@@ -66,7 +67,7 @@ impl<D: RuntimeDriver> LocalRuntimeManager<D> {
                         && identity.ownership_nonce == record.ownership_nonce
                         && record.sandbox_instance_id == request.sandbox_instance_id =>
                 {
-                    self.driver.wait_ready(&request.runtime_addr)?;
+                    self.driver.wait_ready(&request)?;
                     let status = status_from_record(&request, &record);
                     active.insert(status.runtime_scope_id.clone(), status.clone());
                     return Ok(status);
@@ -105,7 +106,7 @@ impl<D: RuntimeDriver> LocalRuntimeManager<D> {
             let _ = self.driver.stop(identity.pid);
             return Err(error);
         }
-        if let Err(error) = self.driver.wait_ready(&request.runtime_addr) {
+        if let Err(error) = self.driver.wait_ready(&request) {
             let _ = self.driver.stop(identity.pid);
             let _ = self.journal.remove(&request.runtime_scope_id);
             return Err(error);
@@ -391,6 +392,16 @@ fn validate_sandbox_token_path(value: &str, runtime_dir: &Path) -> Result<(), Lo
             "runtime sandbox token path is invalid",
         )
     })?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        if metadata.permissions().mode() & 0o777 != 0o600 {
+            return Err(LocalRuntimeError::new(
+                LocalRuntimeErrorCode::InvalidRequest,
+                "runtime sandbox token file is invalid",
+            ));
+        }
+    }
     if metadata.file_type().is_symlink() || !metadata.is_file() || metadata.len() == 0 {
         return Err(LocalRuntimeError::new(
             LocalRuntimeErrorCode::InvalidRequest,
@@ -410,6 +421,70 @@ fn validate_sandbox_token_path(value: &str, runtime_dir: &Path) -> Result<(), Lo
         ));
     }
     Ok(())
+}
+
+pub(crate) fn read_sandbox_token(request: &StartRequest) -> Result<String, LocalRuntimeError> {
+    let runtime_dir = canonical(&request.runtime_dir)?;
+    let token_path = request
+        .environment
+        .get("APAAS_SANDBOX_TOKEN_PATH")
+        .ok_or_else(|| {
+            LocalRuntimeError::new(
+                LocalRuntimeErrorCode::InvalidRequest,
+                "runtime sandbox token path is required",
+            )
+        })?;
+    validate_sandbox_token_path(token_path, &runtime_dir)?;
+
+    let mut options = OpenOptions::new();
+    options.read(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        options.custom_flags(libc::O_NOFOLLOW);
+    }
+    let mut token_file = options.open(token_path).map_err(|_| {
+        LocalRuntimeError::new(
+            LocalRuntimeErrorCode::InvalidRequest,
+            "runtime sandbox token file is invalid",
+        )
+    })?;
+    let metadata = token_file.metadata().map_err(|_| {
+        LocalRuntimeError::new(
+            LocalRuntimeErrorCode::InvalidRequest,
+            "runtime sandbox token file is invalid",
+        )
+    })?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        if metadata.permissions().mode() & 0o777 != 0o600 {
+            return Err(LocalRuntimeError::new(
+                LocalRuntimeErrorCode::InvalidRequest,
+                "runtime sandbox token file is invalid",
+            ));
+        }
+    }
+    if !metadata.is_file() || metadata.len() == 0 {
+        return Err(LocalRuntimeError::new(
+            LocalRuntimeErrorCode::InvalidRequest,
+            "runtime sandbox token file is invalid",
+        ));
+    }
+    let mut token = String::new();
+    token_file.read_to_string(&mut token).map_err(|_| {
+        LocalRuntimeError::new(
+            LocalRuntimeErrorCode::InvalidRequest,
+            "runtime sandbox token file is invalid",
+        )
+    })?;
+    if token.is_empty() || token.contains('\0') {
+        return Err(LocalRuntimeError::new(
+            LocalRuntimeErrorCode::InvalidRequest,
+            "runtime sandbox token file is invalid",
+        ));
+    }
+    Ok(token)
 }
 
 fn canonical(path: &Path) -> Result<PathBuf, LocalRuntimeError> {
@@ -520,6 +595,8 @@ impl Drop for ScopeLock {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[cfg(unix)]
+    use std::os::unix::fs::PermissionsExt;
     use std::sync::atomic::{AtomicUsize, Ordering};
     use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -541,7 +618,7 @@ mod tests {
                 ownership_nonce: nonce.into(),
             })
         }
-        fn wait_ready(&self, _: &str) -> Result<(), LocalRuntimeError> {
+        fn wait_ready(&self, _: &StartRequest) -> Result<(), LocalRuntimeError> {
             Ok(())
         }
         fn stop(&self, _: u32) -> Result<(), LocalRuntimeError> {
@@ -565,6 +642,12 @@ mod tests {
         fs::write(runtime.join("runtime-context.json"), "{}").unwrap();
         fs::write(runtime.join("model-provider.json"), "{}").unwrap();
         fs::write(runtime.join("sandbox-token"), "entry-token").unwrap();
+        #[cfg(unix)]
+        fs::set_permissions(
+            runtime.join("sandbox-token"),
+            std::fs::Permissions::from_mode(0o600),
+        )
+        .unwrap();
         let executable = root.join("agent-runtime");
         fs::write(&executable, "#!/bin/sh\n").unwrap();
         StartRequest {

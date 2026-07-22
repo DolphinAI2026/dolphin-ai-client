@@ -141,6 +141,40 @@ async def _seed_browser_runtime(
     return session, binding, rows
 
 
+async def _seed_desktop_runtime(
+    db_session,
+    *,
+    public_id: str = "22222222-2222-2222-2222-222222222222",
+):
+    from app.code_runtime.sandbox_auth import encrypt_runtime_cookie
+
+    session = AIChatSession(
+        public_id=public_id,
+        tenant_id=7,
+        user_id=11,
+        title="Desktop Code",
+        mode="code",
+        status="active",
+        external_application_id="desktop-crm",
+    )
+    db_session.add(session)
+    await db_session.flush()
+    binding = CodeRuntimeBinding(
+        tenant_id=7,
+        user_id=11,
+        session_id=session.id,
+        external_application_id="desktop-crm",
+        runtime_base_url="http://127.0.0.1:19090",
+        builder_url="http://127.0.0.1:19090/builder/",
+        execution_target="desktop_agent_runtime",
+        desktop_agent_runtime_token_enc=encrypt_runtime_cookie("desktop-entry-token"),
+        status="ready",
+    )
+    db_session.add(binding)
+    await db_session.commit()
+    return session, binding
+
+
 @pytest.mark.asyncio
 async def test_remember_runtime_agent_session_persists_rail_snapshot(db_session):
     from app.routes.code_runtime import _remember_runtime_agent_session
@@ -839,6 +873,53 @@ async def test_browser_runtime_request_keeps_local_binding_without_runtime_cooki
 
 
 @pytest.mark.asyncio
+async def test_browser_runtime_request_uses_desktop_entry_token_without_cookie(monkeypatch):
+    import httpx
+    import app.routes.code_runtime as code_runtime_routes
+    from app.code_runtime.sandbox_auth import encrypt_runtime_cookie
+    from app.routes.code_runtime import _browser_runtime_json_request
+    from starlette.datastructures import Headers
+
+    binding = CodeRuntimeBinding(
+        session_id=12,
+        runtime_base_url="http://127.0.0.1:19090",
+        builder_url="http://127.0.0.1:19090/builder/",
+        execution_target="desktop_agent_runtime",
+        desktop_agent_runtime_token_enc=encrypt_runtime_cookie("desktop-entry-token"),
+    )
+    request = SimpleNamespace(headers=Headers({
+        "authorization": "Bearer browser-token",
+        "cookie": "dolphin_code_runtime_12=proxy-token; apaas_sandbox_token=browser-cookie",
+    }))
+
+    def handler(upstream: httpx.Request) -> httpx.Response:
+        if upstream.headers.get("authorization") != "Bearer desktop-entry-token":
+            pytest.fail("desktop entry token was not sent as upstream bearer authorization")
+        if "cookie" in upstream.headers:
+            pytest.fail("desktop runtime request forwarded a browser runtime cookie")
+        return httpx.Response(200, json={"sessions": []})
+
+    transport = httpx.MockTransport(handler)
+    original = code_runtime_routes.httpx.AsyncClient
+    monkeypatch.setattr(
+        code_runtime_routes.httpx,
+        "AsyncClient",
+        lambda **kwargs: original(transport=transport, **kwargs),
+    )
+
+    result = await _browser_runtime_json_request(
+        binding,
+        "GET",
+        "/api/agent/sessions",
+        request=request,
+        session_id=12,
+        runtime_cookie="browser-cookie",
+    )
+
+    assert result == {"sessions": []}
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize(
     ("incoming_runtime_cookie", "cookie_reissue_required"),
     [
@@ -910,6 +991,125 @@ async def test_proxy_uses_server_owned_browser_runtime_cookie(
     assert rows["browser-a"].generation == 3
     assert rows["browser-b"].generation == 4
     assert binding.auth_generation == 7
+
+
+@pytest.mark.asyncio
+async def test_proxy_uses_desktop_entry_token_without_browser_session_or_cookie(
+    db_session,
+    monkeypatch,
+):
+    import httpx
+    import app.routes.code_runtime as code_runtime_routes
+    from app.code_runtime.service import create_proxy_cookie_token
+    from app.routes.code_runtime import proxy_code_runtime
+
+    session, binding = await _seed_desktop_runtime(db_session)
+    proxy_token = create_proxy_cookie_token(
+        session_id=session.public_id,
+        user_id=11,
+        tenant_id=7,
+        browser_session_id="desktop-browser",
+    )
+    request = _proxy_request(
+        session.public_id,
+        cookie=f"dolphin_code_runtime_{session.public_id}={proxy_token}",
+        path="api/status",
+    )
+
+    def handler(upstream: httpx.Request) -> httpx.Response:
+        if upstream.headers.get("authorization") != "Bearer desktop-entry-token":
+            pytest.fail("raw desktop proxy did not send the entry token as bearer authorization")
+        if "cookie" in upstream.headers:
+            pytest.fail("raw desktop proxy forwarded a browser runtime cookie")
+        return httpx.Response(200, content=b'{"ok":true}', headers={"content-type": "application/json"})
+
+    async def unexpected_renew(*_args, **_kwargs):
+        raise AssertionError("desktop runtime must not renew a Control Plane browser session")
+
+    transport = httpx.MockTransport(handler)
+    original = code_runtime_routes.httpx.AsyncClient
+    monkeypatch.setattr(
+        code_runtime_routes.httpx,
+        "AsyncClient",
+        lambda **kwargs: original(transport=transport, **kwargs),
+    )
+    monkeypatch.setattr(code_runtime_routes, "_renew_proxy_runtime_authorization", unexpected_renew)
+
+    response = await proxy_code_runtime(
+        session.public_id,
+        "api/status",
+        request,
+        db_session,
+    )
+    body = b"".join([chunk async for chunk in response.body_iterator])
+    if response.background:
+        await response.background()
+
+    assert response.status_code == 200
+    assert body == b'{"ok":true}'
+    if "desktop-entry-token" in str(response.headers) or "desktop-entry-token" in body.decode():
+        pytest.fail("desktop entry token leaked into proxy response")
+    assert binding.desktop_agent_runtime_token_enc
+
+
+@pytest.mark.asyncio
+async def test_desktop_proxy_returns_unauthorized_without_control_plane_renewal(
+    db_session,
+    monkeypatch,
+):
+    import httpx
+    import app.routes.code_runtime as code_runtime_routes
+    from app.code_runtime.service import create_proxy_cookie_token
+    from app.routes.code_runtime import proxy_code_runtime
+
+    session, _binding = await _seed_desktop_runtime(db_session)
+    proxy_token = create_proxy_cookie_token(
+        session_id=session.public_id,
+        user_id=11,
+        tenant_id=7,
+        browser_session_id="desktop-browser",
+    )
+    request = _proxy_request(
+        session.public_id,
+        cookie=f"dolphin_code_runtime_{session.public_id}={proxy_token}",
+        path="api/status",
+    )
+    renew_calls = 0
+
+    def handler(_upstream: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            401,
+            content=b"unauthorized",
+            headers={"X-APAAS-Sandbox-Auth-Error": "sandbox_session_expired"},
+        )
+
+    async def unexpected_renew(*_args, **_kwargs):
+        nonlocal renew_calls
+        renew_calls += 1
+        raise AssertionError("desktop proxy must not renew through Control Plane")
+
+    transport = httpx.MockTransport(handler)
+    original = code_runtime_routes.httpx.AsyncClient
+    monkeypatch.setattr(
+        code_runtime_routes.httpx,
+        "AsyncClient",
+        lambda **kwargs: original(transport=transport, **kwargs),
+    )
+    monkeypatch.setattr(code_runtime_routes, "_renew_proxy_runtime_authorization", unexpected_renew)
+
+    response = await proxy_code_runtime(
+        session.public_id,
+        "api/status",
+        request,
+        db_session,
+    )
+    body = b"".join([chunk async for chunk in response.body_iterator])
+    if response.background:
+        await response.background()
+
+    assert response.status_code == 401
+    assert body == b"unauthorized"
+    assert renew_calls == 0
 
 
 @pytest.mark.asyncio
@@ -1083,6 +1283,105 @@ async def test_server_runtime_request_without_service_cookie_forwards_local_json
     )
 
     assert result == {"ok": True}
+
+
+@pytest.mark.asyncio
+async def test_server_runtime_request_uses_desktop_entry_token_without_cookie(monkeypatch):
+    import httpx
+    import app.routes.code_runtime as code_runtime_routes
+    from app.code_runtime.sandbox_auth import encrypt_runtime_cookie
+    from app.routes.code_runtime import _runtime_json_request
+
+    binding = CodeRuntimeBinding(
+        session_id=12,
+        runtime_base_url="http://127.0.0.1:19090",
+        builder_url="http://127.0.0.1:19090/builder/",
+        execution_target="desktop_agent_runtime",
+        desktop_agent_runtime_token_enc=encrypt_runtime_cookie("desktop-entry-token"),
+    )
+
+    def handler(upstream: httpx.Request) -> httpx.Response:
+        if upstream.headers.get("authorization") != "Bearer desktop-entry-token":
+            pytest.fail("desktop entry token was not sent as upstream bearer authorization")
+        if "cookie" in upstream.headers:
+            pytest.fail("desktop server request forwarded a runtime cookie")
+        return httpx.Response(200, json={"ok": True})
+
+    transport = httpx.MockTransport(handler)
+    original = code_runtime_routes.httpx.AsyncClient
+    monkeypatch.setattr(
+        code_runtime_routes.httpx,
+        "AsyncClient",
+        lambda **kwargs: original(transport=transport, **kwargs),
+    )
+
+    result = await _runtime_json_request(binding, "GET", "/api/status")
+
+    assert result == {"ok": True}
+
+
+@pytest.mark.asyncio
+async def test_desktop_runtime_without_encrypted_entry_token_returns_503():
+    from fastapi import HTTPException
+    from app.routes.code_runtime import _runtime_json_request
+
+    binding = CodeRuntimeBinding(
+        session_id=12,
+        runtime_base_url="http://127.0.0.1:19090",
+        builder_url="http://127.0.0.1:19090/builder/",
+        execution_target="desktop_agent_runtime",
+    )
+
+    with pytest.raises(HTTPException) as exc:
+        await _runtime_json_request(binding, "GET", "/api/status")
+
+    assert exc.value.status_code == 503
+    assert "Desktop Code runtime token unavailable" == exc.value.detail
+
+
+@pytest.mark.asyncio
+async def test_desktop_runtime_unauthorized_does_not_refresh_control_plane_binding(monkeypatch):
+    from fastapi import HTTPException
+    import app.routes.code_runtime as code_runtime_routes
+    from app.code_runtime.sandbox_auth import encrypt_runtime_cookie
+
+    binding = CodeRuntimeBinding(
+        session_id=12,
+        runtime_base_url="http://127.0.0.1:19090",
+        builder_url="http://127.0.0.1:19090/builder/",
+        execution_target="desktop_agent_runtime",
+        desktop_agent_runtime_token_enc=encrypt_runtime_cookie("desktop-entry-token"),
+    )
+    refreshes = 0
+
+    async def fake_runtime_request(*_args, **_kwargs):
+        raise HTTPException(
+            status_code=401,
+            detail="runtime unauthorized",
+            headers={"X-APAAS-Sandbox-Auth-Error": "sandbox_session_expired"},
+        )
+
+    async def unexpected_refresh(*_args, **_kwargs):
+        nonlocal refreshes
+        refreshes += 1
+        raise AssertionError("desktop runtime must not refresh through Control Plane")
+
+    monkeypatch.setattr(code_runtime_routes, "_runtime_json_request", fake_runtime_request)
+    monkeypatch.setattr(code_runtime_routes, "_refresh_runtime_binding", unexpected_refresh)
+
+    with pytest.raises(HTTPException) as exc:
+        await code_runtime_routes._runtime_json_request_for_session(
+            SimpleNamespace(id=12, app_id=None, external_application_id="desktop-crm"),
+            binding,
+            "GET",
+            "/api/status",
+            request=_request(),
+            ctx=_ctx(),
+            db=SimpleNamespace(),
+        )
+
+    assert exc.value.status_code == 401
+    assert refreshes == 0
 
 
 @pytest.mark.asyncio

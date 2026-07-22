@@ -1,5 +1,5 @@
 use super::contract::{LocalRuntimeError, LocalRuntimeErrorCode, ProcessIdentity, StartRequest};
-use super::manager::RuntimeDriver;
+use super::manager::{read_sandbox_token, RuntimeDriver};
 use mxc_sdk::policy::{FilesystemSection, NetworkSection};
 use mxc_sdk::{Sandbox, SandboxPolicy};
 use std::collections::HashMap;
@@ -206,28 +206,9 @@ impl RuntimeDriver for MxcRuntimeDriver {
         Ok(identity)
     }
 
-    fn wait_ready(&self, runtime_addr: &str) -> Result<(), LocalRuntimeError> {
-        let url = format!("http://{runtime_addr}/api/status");
-        let agent = ureq::AgentBuilder::new()
-            .timeout_connect(Duration::from_secs(1))
-            .timeout_read(Duration::from_secs(1))
-            .build();
-        let deadline = Instant::now() + Duration::from_secs(30);
-        while Instant::now() < deadline {
-            if agent
-                .get(&url)
-                .call()
-                .map(|response| response.status() == 200)
-                .unwrap_or(false)
-            {
-                return Ok(());
-            }
-            thread::sleep(Duration::from_millis(200));
-        }
-        Err(LocalRuntimeError::new(
-            LocalRuntimeErrorCode::ReadinessFailed,
-            "MXC local runtime did not become ready within 30 seconds",
-        ))
+    fn wait_ready(&self, request: &StartRequest) -> Result<(), LocalRuntimeError> {
+        let token = read_sandbox_token(request)?;
+        wait_ready_with_token(&request.runtime_addr, &token, Duration::from_secs(30))
     }
 
     fn stop(&self, pid: u32) -> Result<(), LocalRuntimeError> {
@@ -275,6 +256,36 @@ impl RuntimeDriver for MxcRuntimeDriver {
     fn identity(&self, pid: u32) -> Result<Option<ProcessIdentity>, LocalRuntimeError> {
         process_identity(pid)
     }
+}
+
+fn wait_ready_with_token(
+    runtime_addr: &str,
+    token: &str,
+    timeout: Duration,
+) -> Result<(), LocalRuntimeError> {
+    let url = format!("http://{runtime_addr}/api/status");
+    let agent = ureq::AgentBuilder::new()
+        .timeout_connect(Duration::from_secs(1))
+        .timeout_read(Duration::from_secs(1))
+        .build();
+    let authorization = format!("Bearer {token}");
+    let deadline = Instant::now() + timeout;
+    while Instant::now() < deadline {
+        if agent
+            .get(&url)
+            .set("Authorization", &authorization)
+            .call()
+            .map(|response| response.status() == 200)
+            .unwrap_or(false)
+        {
+            return Ok(());
+        }
+        thread::sleep(Duration::from_millis(200));
+    }
+    Err(LocalRuntimeError::new(
+        LocalRuntimeErrorCode::ReadinessFailed,
+        "MXC local runtime did not become ready within 30 seconds",
+    ))
 }
 
 impl MxcRuntimeDriver {
@@ -561,6 +572,39 @@ mod tests {
         assert!(environment.iter().any(|(key, value)| {
             key == "APAAS_SANDBOX_TOKEN_PATH" && value == "/tmp/runtime/sandbox-token"
         }));
+    }
+
+    #[test]
+    fn readiness_probe_sends_sandbox_token_as_bearer_authorization() {
+        use std::sync::{Arc, Mutex};
+
+        let server = tiny_http::Server::http("127.0.0.1:0").expect("start test server");
+        let runtime_addr = server.server_addr().to_string();
+        let authorization = Arc::new(Mutex::new(None));
+        let observed = Arc::clone(&authorization);
+        let responder = std::thread::spawn(move || {
+            let request = server
+                .recv_timeout(Duration::from_secs(2))
+                .expect("receive readiness request")
+                .expect("readiness request received");
+            *observed.lock().expect("authorization lock") = request
+                .headers()
+                .iter()
+                .find(|header| header.field.equiv("Authorization"))
+                .map(|header| header.value.as_str().to_string());
+            request
+                .respond(tiny_http::Response::empty(200))
+                .expect("respond to readiness request");
+        });
+
+        wait_ready_with_token(&runtime_addr, "test-sandbox-token", Duration::from_secs(2))
+            .expect("readiness succeeds");
+        responder.join().expect("readiness responder joins");
+
+        assert_eq!(
+            authorization.lock().expect("authorization lock").as_deref(),
+            Some("Bearer test-sandbox-token")
+        );
     }
 
     #[test]
