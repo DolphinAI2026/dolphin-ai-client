@@ -76,8 +76,8 @@ async def test_login_to_control_plane_uses_dolphin_token_and_current_user(monkey
             assert kwargs["json"] == {
                 "username": "admin",
                 "password": "password",
-                "captcha_id": "captcha-1",
-                "captcha_code": "0854",
+                "captchaId": "captcha-1",
+                "captchaCode": "0854",
             }
             return FakeResponse({
                 "access_token": "access-1",

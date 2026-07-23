@@ -148,8 +148,8 @@ async def login_to_control_plane(
     }
     if captcha_id and captcha_code:
         login_payload.update({
-            "captcha_id": captcha_id,
-            "captcha_code": captcha_code,
+            "captchaId": captcha_id,
+            "captchaCode": captcha_code,
         })
     try:
         async with httpx.AsyncClient(timeout=30.0) as client:
