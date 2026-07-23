@@ -560,7 +560,10 @@ scan_rollout_logs() {
       category="smoke_password"
     elif printf '%s' "$logs" | grep -Eiq '(^|[[:space:][:punct:]])authorization[[:space:][:punct:]]*(bearer|basic|token)[[:space:]]+'; then
       category="authorization"
-    elif printf '%s' "$logs" | grep -Eq '[A-Za-z0-9_-]{2,}\.[A-Za-z0-9_-]{2,}\.[A-Za-z0-9_-]*'; then
+    elif printf '%s' "$logs" \
+      | grep -Eo '[A-Za-z0-9_-]{2,}\.[A-Za-z0-9_-]{2,}\.[A-Za-z0-9_-]*' \
+      | grep -Ev '^[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}$' \
+      | grep -q .; then
       category="jwt_like"
     elif printf '%s' "$logs" | grep -Eiq '(^|[[:space:][:punct:]])(set-)?cookie[[:space:][:punct:]]*'; then
       category="cookie"

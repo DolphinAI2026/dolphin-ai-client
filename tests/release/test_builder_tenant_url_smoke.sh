@@ -1446,6 +1446,9 @@ assert_fake_helper_contract() {
   output="$(FAKE_LOG='eyJhbGciOiJub25lIn0.e30.' assert_command_fails_without_secret run_fake_helper)"
   assert_contains "$output" "category=jwt_like"
 
+  FAKE_LOG='INFO:     10.244.204.123:58504 - "GET /api/health HTTP/1.1" 200 OK' \
+    run_fake_helper >/dev/null
+
   printf 'FAKE_KUBECTL_RELEASE_CONTRACT=PASS\n'
 }
 
