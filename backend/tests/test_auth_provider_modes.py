@@ -30,19 +30,6 @@ def _set_auth_provider(monkeypatch, provider: str) -> None:
     )
 
 
-def _set_control_plane_captcha_enabled(monkeypatch, enabled: bool) -> None:
-    monkeypatch.setattr(
-        settings.__class__,
-        "control_plane_captcha_enabled",
-        property(lambda _settings: enabled),
-        raising=False,
-    )
-
-
-def test_control_plane_captcha_is_enabled_by_default():
-    assert settings.control_plane_captcha_enabled is True
-
-
 async def _seed_login_user(
     db_session,
     *,
@@ -258,7 +245,6 @@ async def test_control_plane_auth_provider_allows_login_without_captcha_when_dis
     monkeypatch,
 ):
     _set_auth_provider(monkeypatch, "control_plane")
-    _set_control_plane_captcha_enabled(monkeypatch, False)
     monkeypatch.setattr(settings, "control_plane_binding_enabled", False)
     calls = []
 
@@ -306,7 +292,6 @@ async def test_desktop_control_plane_login_keeps_identity_as_cache_only(
     monkeypatch,
 ):
     _set_auth_provider(monkeypatch, "control_plane")
-    _set_control_plane_captcha_enabled(monkeypatch, False)
     monkeypatch.setenv("DESKTOP_MODE", "1")
     monkeypatch.setattr(settings, "control_plane_binding_enabled", False)
     monkeypatch.setattr(settings, "accepted_token_issuers", "ai-builder,desktop-sidecar")
@@ -429,23 +414,20 @@ async def test_desktop_control_plane_context_ignores_legacy_local_tenant_ticket(
 
 
 @pytest.mark.asyncio
-async def test_control_plane_captcha_endpoint_reports_not_required_when_disabled(monkeypatch):
+async def test_control_plane_captcha_endpoint_hides_incomplete_upstream_response(monkeypatch):
     _set_auth_provider(monkeypatch, "control_plane")
-    _set_control_plane_captcha_enabled(monkeypatch, False)
 
-    async def unexpected_captcha_fetch():
-        raise AssertionError("disabled captcha must not call the upstream captcha endpoint")
+    async def incomplete_captcha_fetch():
+        return None
 
-    monkeypatch.setattr(auth_routes, "fetch_dolphin_captcha", unexpected_captcha_fetch)
+    monkeypatch.setattr(auth_routes, "fetch_dolphin_captcha", incomplete_captcha_fetch)
 
     assert await auth_routes.captcha() == {"required": False}
 
 
 @pytest.mark.asyncio
-async def test_desktop_control_plane_captcha_probes_remote_when_not_explicitly_enabled(monkeypatch):
+async def test_control_plane_captcha_shows_complete_upstream_response(monkeypatch):
     _set_auth_provider(monkeypatch, "control_plane")
-    _set_control_plane_captcha_enabled(monkeypatch, False)
-    monkeypatch.setenv("DESKTOP_MODE", "1")
 
     async def fake_fetch_dolphin_captcha():
         return {"captcha_id": "remote-captcha-id", "image_data": "data:image/png;base64,abc"}

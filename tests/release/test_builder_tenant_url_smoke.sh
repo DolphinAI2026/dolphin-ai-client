@@ -1056,8 +1056,8 @@ source = File.read(ARGV.fetch(0))
 ].each { |contract| abort "release spec does not bind activation exactly: #{contract}" unless source.include?(contract) }
 repo_root = File.expand_path("../..", File.dirname(ARGV.fetch(0)))
 deploy_source = File.read(File.join(repo_root, "scripts/deploy_orcamatrix_demo.sh"))
-abort "deploy default must enable control-plane captcha" \
-  unless deploy_source.include?('CONTROL_PLANE_CAPTCHA_ENABLED="${CONTROL_PLANE_CAPTCHA_ENABLED:-true}"')
+abort "deploy must not force a control-plane captcha setting" \
+  if deploy_source.include?("CONTROL_PLANE_CAPTCHA_ENABLED")
 abort "deploy default must use the formal control-plane deployment" \
   unless deploy_source.include?('CONTROL_PLANE_DEPLOYMENT="${CONTROL_PLANE_DEPLOYMENT:-control-plane}"')
 puts "RELEASE_SPEC_CONTRACT=PASS"

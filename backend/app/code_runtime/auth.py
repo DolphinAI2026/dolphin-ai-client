@@ -114,7 +114,7 @@ def _response_payload(
     return payload
 
 
-async def fetch_dolphin_captcha() -> dict[str, str]:
+async def fetch_dolphin_captcha() -> dict[str, str] | None:
     base_url = _dolphin_workspace_base_url()
     try:
         async with httpx.AsyncClient(timeout=30.0) as client:
@@ -131,7 +131,7 @@ async def fetch_dolphin_captcha() -> dict[str, str]:
     captcha_id = str(payload.get("captcha_id") or "").strip()
     image_data = str(payload.get("image_data") or "").strip()
     if not captcha_id or not image_data:
-        raise HTTPException(status_code=502, detail="Dolphin 验证码返回异常")
+        return None
     return {"captcha_id": captcha_id, "image_data": image_data}
 
 

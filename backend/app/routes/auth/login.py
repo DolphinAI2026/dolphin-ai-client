@@ -1344,8 +1344,6 @@ async def _ensure_control_plane_user(
 async def _control_plane_login_response(user_data: UserLogin, db: AsyncSession) -> LoginResponse:
     captcha_id = str(user_data.captcha_id or "").strip()
     captcha_code = str(user_data.captcha_code or "").strip()
-    if settings.control_plane_captcha_enabled and (not captcha_id or not captcha_code):
-        raise HTTPException(status_code=400, detail="请输入 Control Plane 验证码")
     identity = await login_to_control_plane(
         user_data.username,
         user_data.password,
@@ -1452,9 +1450,10 @@ async def _try_apaas_provider_login_response(
 
 @router.get("/captcha")
 async def captcha():
-    if _auth_provider() != "control_plane" or not settings.control_plane_captcha_enabled:
+    if _auth_provider() != "control_plane":
         return {"required": False}
-    return {"required": True, **(await fetch_dolphin_captcha())}
+    result = await fetch_dolphin_captcha()
+    return {"required": bool(result), **(result or {})}
 
 
 @router.post("/login", response_model=LoginResponse)
