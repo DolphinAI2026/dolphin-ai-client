@@ -16,8 +16,11 @@ import app.engineering_sessions.git_state as engineering_session_git_state
 import app.engineering_sessions.service as engineering_session_service
 from app.engineering_sessions.git_state import GitCommandError
 from app.engineering_sessions.models import SessionStatus, SessionType
-from app.engineering_sessions.registry import SessionRegistry
-from app.engineering_sessions.service import EngineeringSessionService
+from app.engineering_sessions.registry import SessionRegistry, SessionRegistryError
+from app.engineering_sessions.service import (
+    EngineeringSessionOperationError,
+    EngineeringSessionService,
+)
 
 _SYNCING_ENTRYPOINTS = (
     "sync",
@@ -98,6 +101,738 @@ def test_create_builds_registry_and_worktree(tmp_path: Path):
     assert loaded.branch == session.branch
     assert loaded.status == SessionStatus.RUNNING
     assert loaded.git_state.merged_to_base is False
+
+
+def test_ensure_application_session_reuses_the_same_worktree(tmp_path: Path):
+    repo = make_repo(tmp_path)
+    service = make_service(tmp_path, repo)
+
+    first = service.ensure_application_session("app-1", "App One")
+    second = service.ensure_application_session("app-1", "App One")
+
+    assert first.id == second.id
+    assert first.application_id == "app-1"
+    assert first.worktree_path == second.worktree_path
+
+
+def test_ensure_application_session_is_unique_across_concurrent_services(
+    tmp_path: Path,
+):
+    repo = make_repo(tmp_path)
+    registry_root = tmp_path / "sessions"
+    worktree_parent = tmp_path / "worktrees"
+    first_service = EngineeringSessionService(
+        repo,
+        registry_root=registry_root,
+        worktree_parent=worktree_parent,
+    )
+    second_service = EngineeringSessionService(
+        repo,
+        registry_root=registry_root,
+        worktree_parent=worktree_parent,
+    )
+
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        first, second = [
+            future.result()
+            for future in (
+                executor.submit(
+                    service.ensure_application_session,
+                    "app-1",
+                    "App One",
+                )
+                for service in (first_service, second_service)
+            )
+        ]
+
+    assert first.id == second.id
+    assert [item.id for item in first_service.registry.list()] == [first.id]
+    assert Path(first.worktree_path).exists()
+
+
+def test_ensure_application_session_rejects_duplicate_active_ownership(
+    tmp_path: Path,
+):
+    repo = make_repo(tmp_path)
+    service = make_service(tmp_path, repo)
+    first = service.create(SessionType.NEW_APP, "First app")
+    second = service.create(SessionType.NEW_APP, "Second app")
+    first.application_id = "app-1"
+    second.application_id = "app-1"
+    service.registry.save(first)
+    service.registry.save(second)
+
+    with pytest.raises(
+        ValueError,
+        match="multiple active sessions claim application: app-1",
+    ):
+        service.ensure_application_session("app-1", "App One")
+
+
+def test_ensure_application_session_rejects_blank_application_id(tmp_path: Path):
+    repo = make_repo(tmp_path)
+    service = make_service(tmp_path, repo)
+
+    with pytest.raises(ValueError, match="application_id must not be blank"):
+        service.ensure_application_session("  ", "App One")
+
+
+def test_ensure_application_session_fails_closed_for_unreadable_registry(
+    tmp_path: Path,
+):
+    repo = make_repo(tmp_path)
+    service = make_service(tmp_path, repo)
+    assert service.registry.list() == []
+    corrupt_record = service.registry.root / "S-001.yaml"
+    corrupt_record.write_text("id: [broken\n", encoding="utf-8")
+    worktrees_before = run_git(repo, "worktree", "list", "--porcelain")
+
+    with pytest.raises(SessionRegistryError):
+        service.ensure_application_session("app-1", "App One")
+
+    assert run_git(repo, "worktree", "list", "--porcelain") == worktrees_before
+    assert corrupt_record.read_text(encoding="utf-8") == "id: [broken\n"
+    assert run_git(repo, "branch", "--list", "session/*") == ""
+
+
+def test_merge_keeps_worktree_and_marks_merged_retained(tmp_path: Path):
+    repo = make_repo(tmp_path)
+    service = make_service(tmp_path, repo)
+    session = service.ensure_application_session("app-1", "App One")
+    Path(session.worktree_path, "feature.txt").write_text(
+        "done\n",
+        encoding="utf-8",
+    )
+    assert service.checkpoint(session.id, "feat: local runtime change") is True
+
+    merged = service.merge(session.id)
+
+    assert merged.status == SessionStatus.MERGED_RETAINED
+    assert Path(merged.worktree_path).exists()
+    assert merged.merged_commit == run_git(repo, "rev-parse", "HEAD")
+
+
+def test_merge_with_origin_uses_local_base_for_lifecycle_and_dispose(
+    tmp_path: Path,
+):
+    repo = make_repo(tmp_path)
+    add_origin(repo, tmp_path)
+    service = make_service(tmp_path, repo)
+    session = service.ensure_application_session("app-1", "App One")
+    worktree = Path(session.worktree_path)
+    (worktree / "feature.txt").write_text("done\n", encoding="utf-8")
+    assert service.checkpoint(session.id) is True
+    remote_head = run_git(repo, "rev-parse", "origin/main")
+
+    merged = service.merge(session.id)
+
+    assert run_git(repo, "rev-parse", "main") != remote_head
+    assert run_git(repo, "rev-parse", "origin/main") == remote_head
+    assert merged.status == SessionStatus.MERGED_RETAINED
+    assert merged.git_state.merged_to_base is False
+
+    service.dispose(session.id)
+
+    assert not worktree.exists()
+    assert run_git(repo, "branch", "--list", session.branch) == ""
+    assert not service.registry.path_for(session.id).exists()
+
+
+def test_merge_uses_controlled_commit_identity(tmp_path: Path):
+    repo = make_repo(tmp_path)
+    service = make_service(tmp_path, repo)
+    session = service.ensure_application_session("app-1", "App One")
+    worktree = Path(session.worktree_path)
+    (worktree / "identity.txt").write_text("identity\n", encoding="utf-8")
+    assert service.checkpoint(session.id) is True
+    run_git(repo, "config", "--unset", "user.name")
+    run_git(repo, "config", "--unset", "user.email")
+
+    merged = service.merge(session.id)
+
+    assert merged.status == SessionStatus.MERGED_RETAINED
+    assert run_git(repo, "show", "-s", "--format=%an <%ae>") == (
+        "ai-builder <ai-builder@local>"
+    )
+
+
+def test_non_conflict_merge_commit_failure_is_not_reported_as_conflict(
+    tmp_path: Path,
+):
+    repo = make_repo(tmp_path)
+    service = make_service(tmp_path, repo)
+    session = service.ensure_application_session("app-1", "App One")
+    worktree = Path(session.worktree_path)
+    (worktree / "hooked.txt").write_text("hooked\n", encoding="utf-8")
+    assert service.checkpoint(session.id) is True
+    hook = repo / ".git" / "hooks" / "pre-merge-commit"
+    hook.write_text("#!/bin/sh\nexit 23\n", encoding="utf-8")
+    hook.chmod(0o755)
+
+    with pytest.raises(GitCommandError, match="git merge failed"):
+        service.merge(session.id)
+
+    assert run_git(repo, "ls-files", "--unmerged") == ""
+    assert run_git(repo, "status", "--porcelain") == ""
+    assert service.registry.load(session.id).status != SessionStatus.BLOCKED_RETAINED
+
+
+def test_merge_non_timeout_git_exception_is_preserved(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    repo = make_repo(tmp_path)
+    service = make_service(tmp_path, repo)
+    session = service.ensure_application_session("app-1", "App One")
+    worktree = Path(session.worktree_path)
+    (worktree / "feature.txt").write_text("done\n", encoding="utf-8")
+    assert service.checkpoint(session.id) is True
+    original_git = engineering_session_service.git
+    merge_error = GitCommandError("simulated merge infrastructure failure")
+
+    def fail_merge(repo_path: str | Path, *args: str, **kwargs):
+        if args[-4:] == (
+            "merge",
+            "--no-ff",
+            "--no-edit",
+            session.branch,
+        ):
+            raise merge_error
+        return original_git(repo_path, *args, **kwargs)
+
+    monkeypatch.setattr(engineering_session_service, "git", fail_merge)
+
+    with pytest.raises(GitCommandError) as exc_info:
+        service.merge(session.id)
+
+    assert exc_info.value is merge_error
+    assert run_git(repo, "rev-parse", "main") != run_git(
+        worktree,
+        "rev-parse",
+        "HEAD",
+    )
+
+
+def test_merge_timeout_with_operation_aborts_and_reports_conflict(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    repo = make_repo(tmp_path)
+    service = make_service(tmp_path, repo)
+    session = service.ensure_application_session("app-1", "App One")
+    worktree = Path(session.worktree_path)
+    (worktree / "README.md").write_text("session change\n", encoding="utf-8")
+    assert service.checkpoint(session.id) is True
+    (repo / "README.md").write_text("base change\n", encoding="utf-8")
+    run_git(repo, "add", "README.md")
+    run_git(repo, "commit", "-m", "base conflict")
+    original_git = engineering_session_service.git
+
+    def timeout_after_merge_starts(
+        repo_path: str | Path,
+        *args: str,
+        **kwargs,
+    ):
+        if args[-4:] == (
+            "merge",
+            "--no-ff",
+            "--no-edit",
+            session.branch,
+        ):
+            result = original_git(repo_path, *args, **kwargs)
+            assert result.returncode != 0
+            try:
+                raise subprocess.TimeoutExpired(["git", *args], timeout=90)
+            except subprocess.TimeoutExpired as exc:
+                raise GitCommandError("git merge timed out after 90s") from exc
+        return original_git(repo_path, *args, **kwargs)
+
+    monkeypatch.setattr(
+        engineering_session_service,
+        "git",
+        timeout_after_merge_starts,
+    )
+
+    with pytest.raises(EngineeringSessionOperationError) as exc_info:
+        service.merge(session.id)
+
+    assert exc_info.value.code == "WORKTREE_MERGE_CONFLICT"
+    assert run_git(repo, "ls-files", "--unmerged") == ""
+    assert run_git(repo, "status", "--porcelain") == ""
+
+
+def test_merge_timeout_after_success_recovers_merged_session(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    repo = make_repo(tmp_path)
+    add_origin(repo, tmp_path)
+    service = make_service(tmp_path, repo)
+    session = service.ensure_application_session("app-1", "App One")
+    worktree = Path(session.worktree_path)
+    (worktree / "feature.txt").write_text("done\n", encoding="utf-8")
+    assert service.checkpoint(session.id) is True
+    original_git = engineering_session_service.git
+
+    def timeout_after_merge_completes(
+        repo_path: str | Path,
+        *args: str,
+        **kwargs,
+    ):
+        if args[-4:] == (
+            "merge",
+            "--no-ff",
+            "--no-edit",
+            session.branch,
+        ):
+            result = original_git(repo_path, *args, **kwargs)
+            assert result.returncode == 0
+            try:
+                raise subprocess.TimeoutExpired(["git", *args], timeout=90)
+            except subprocess.TimeoutExpired as exc:
+                raise GitCommandError("git merge timed out after 90s") from exc
+        return original_git(repo_path, *args, **kwargs)
+
+    monkeypatch.setattr(
+        engineering_session_service,
+        "git",
+        timeout_after_merge_completes,
+    )
+
+    merged = service.merge(session.id)
+    control_head = run_git(repo, "rev-parse", "HEAD")
+
+    assert merged.status == SessionStatus.MERGED_RETAINED
+    assert merged.merged_commit == control_head
+    assert merged.git_state.merged_to_base is False
+    persisted = service.registry.load(session.id)
+    assert persisted.status == SessionStatus.MERGED_RETAINED
+    assert persisted.merged_commit == control_head
+
+
+def test_merge_conflict_aborts_and_retains_session_worktree(tmp_path: Path):
+    repo = make_repo(tmp_path)
+    service = make_service(tmp_path, repo)
+    session = service.ensure_application_session("app-1", "App One")
+    worktree = Path(session.worktree_path)
+    (worktree / "README.md").write_text("session change\n", encoding="utf-8")
+    assert service.checkpoint(session.id, "feat: conflicting session change") is True
+    (repo / "README.md").write_text("base change\n", encoding="utf-8")
+    run_git(repo, "add", "README.md")
+    run_git(repo, "commit", "-m", "base conflict")
+
+    with pytest.raises(ValueError, match="WORKTREE_MERGE_CONFLICT"):
+        service.merge(session.id)
+
+    assert worktree.exists()
+    assert run_git(worktree, "branch", "--show-current") == session.branch
+    assert run_git(repo, "status", "--porcelain") == ""
+
+
+@pytest.mark.parametrize("abort_failure", ["returncode", "exception"])
+def test_merge_conflict_with_abort_failure_blocks_session(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    abort_failure: str,
+):
+    repo = make_repo(tmp_path)
+    service = make_service(tmp_path, repo)
+    session = service.ensure_application_session("app-1", "App One")
+    worktree = Path(session.worktree_path)
+    (worktree / "README.md").write_text("session change\n", encoding="utf-8")
+    assert service.checkpoint(session.id) is True
+    (repo / "README.md").write_text("base change\n", encoding="utf-8")
+    run_git(repo, "add", "README.md")
+    run_git(repo, "commit", "-m", "base conflict")
+    original_git = engineering_session_service.git
+
+    def fail_merge_abort(repo_path: str | Path, *args: str, **kwargs):
+        if args == ("merge", "--abort"):
+            if abort_failure == "exception":
+                raise GitCommandError("simulated abort exception")
+            return subprocess.CompletedProcess(
+                ["git", "merge", "--abort"],
+                1,
+                "",
+                "simulated abort failure",
+            )
+        return original_git(repo_path, *args, **kwargs)
+
+    monkeypatch.setattr(
+        engineering_session_service,
+        "git",
+        fail_merge_abort,
+    )
+
+    with pytest.raises(EngineeringSessionOperationError) as exc_info:
+        service.merge(session.id)
+
+    assert exc_info.value.code == "WORKTREE_MERGE_ABORT_FAILED"
+    persisted = service.registry.load(session.id)
+    assert persisted.status == SessionStatus.BLOCKED_RETAINED
+    assert persisted.cleanup.suggested is False
+    assert run_git(repo, "ls-files", "--unmerged")
+
+    with pytest.raises(ValueError, match="blocked"):
+        service.merge(session.id)
+
+
+def test_merge_abort_failure_recovers_after_control_operation_is_cleared(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    repo = make_repo(tmp_path)
+    service = make_service(tmp_path, repo)
+    session = service.ensure_application_session("app-1", "App One")
+    worktree = Path(session.worktree_path)
+    (worktree / "README.md").write_text("session change\n", encoding="utf-8")
+    assert service.checkpoint(session.id) is True
+    (repo / "README.md").write_text("base change\n", encoding="utf-8")
+    run_git(repo, "add", "README.md")
+    run_git(repo, "commit", "-m", "base conflict")
+    original_git = engineering_session_service.git
+
+    def fail_merge_abort(repo_path: str | Path, *args: str, **kwargs):
+        if args == ("merge", "--abort"):
+            return subprocess.CompletedProcess(
+                ["git", "merge", "--abort"],
+                1,
+                "",
+                "simulated abort failure",
+            )
+        return original_git(repo_path, *args, **kwargs)
+
+    monkeypatch.setattr(
+        engineering_session_service,
+        "git",
+        fail_merge_abort,
+    )
+
+    with pytest.raises(EngineeringSessionOperationError) as exc_info:
+        service.merge(session.id)
+
+    assert exc_info.value.code == "WORKTREE_MERGE_ABORT_FAILED"
+    blocked = service.registry.load(session.id)
+    assert blocked.status == SessionStatus.BLOCKED_RETAINED
+    assert blocked.recovery_reason == "merge_abort_failed"
+    assert service.sync(session.id).status == SessionStatus.BLOCKED_RETAINED
+
+    run_git(repo, "merge", "--abort")
+    (repo / "README.md").write_text("session change\n", encoding="utf-8")
+    run_git(repo, "add", "README.md")
+    run_git(repo, "commit", "-m", "resolve merge retry")
+
+    resumed = service.resume(session.id)
+
+    assert resumed.status == SessionStatus.RUNNING
+    assert resumed.recovery_reason is None
+
+    merged = service.merge(session.id)
+
+    assert merged.status == SessionStatus.MERGED_RETAINED
+
+
+def test_manual_blocked_session_without_recovery_reason_stays_blocked(
+    tmp_path: Path,
+):
+    repo = make_repo(tmp_path)
+    service = make_service(tmp_path, repo)
+    session = service.create(SessionType.FEATURE, "Manual blocked")
+    session.status = SessionStatus.BLOCKED_RETAINED
+    session.recovery_reason = None
+    service.registry.save(session)
+
+    synced = service.sync(session.id)
+    resumed = service.resume(session.id)
+
+    assert synced.status == SessionStatus.BLOCKED_RETAINED
+    assert resumed.status == SessionStatus.BLOCKED_RETAINED
+    assert resumed.recovery_reason is None
+
+
+def test_merge_with_origin_archive_stays_merged_and_can_dispose(
+    tmp_path: Path,
+):
+    repo = make_repo(tmp_path)
+    add_origin(repo, tmp_path)
+    service = make_service(tmp_path, repo)
+    session = service.ensure_application_session("app-1", "App One")
+    worktree = Path(session.worktree_path)
+    (worktree / "feature.txt").write_text("done\n", encoding="utf-8")
+    assert service.checkpoint(session.id) is True
+
+    merged = service.merge(session.id)
+    archived = service.archive(session.id)
+
+    assert merged.status == SessionStatus.MERGED_RETAINED
+    assert archived.status == SessionStatus.MERGED_RETAINED
+    assert archived.git_state.merged_to_base is False
+    assert archived.cleanup.suggested is True
+
+    service.dispose(session.id)
+
+    assert not worktree.exists()
+    assert run_git(repo, "branch", "--list", session.branch) == ""
+    assert not service.registry.path_for(session.id).exists()
+
+
+@pytest.mark.parametrize("merged_commit_mode", ["missing", "null"])
+def test_origin_merge_recovers_without_persisted_merged_commit(
+    tmp_path: Path,
+    merged_commit_mode: str,
+):
+    repo = make_repo(tmp_path)
+    add_origin(repo, tmp_path)
+    service = make_service(tmp_path, repo)
+    session = service.ensure_application_session("app-1", "App One")
+    worktree = Path(session.worktree_path)
+    (worktree / "feature.txt").write_text("done\n", encoding="utf-8")
+    assert service.checkpoint(session.id) is True
+    service.merge(session.id)
+    record = service.registry.path_for(session.id)
+
+    def clear_merged_commit(status: str) -> None:
+        payload = yaml.safe_load(record.read_text(encoding="utf-8"))
+        if merged_commit_mode == "missing":
+            payload.pop("merged_commit", None)
+        else:
+            payload["merged_commit"] = None
+        payload["status"] = status
+        payload["cleanup"]["suggested"] = False
+        record.write_text(
+            yaml.safe_dump(payload, allow_unicode=True, sort_keys=False),
+            encoding="utf-8",
+        )
+
+    clear_merged_commit(SessionStatus.RUNNING.value)
+    synced = service.sync(session.id)
+
+    assert synced.status == SessionStatus.MERGED_RETAINED
+    assert synced.merged_commit is None
+    assert synced.git_state.merged_to_base is False
+
+    clear_merged_commit(SessionStatus.RUNNING.value)
+    archived = service.archive(session.id)
+
+    assert archived.status == SessionStatus.MERGED_RETAINED
+    assert archived.merged_commit is None
+    assert archived.git_state.merged_to_base is False
+
+    clear_merged_commit(SessionStatus.MERGED_RETAINED.value)
+    service.dispose(session.id)
+
+    assert not worktree.exists()
+    assert run_git(repo, "branch", "--list", session.branch) == ""
+    assert not record.exists()
+
+
+@pytest.mark.parametrize("merged_commit_mode", ["missing", "null"])
+def test_dispose_syncs_running_local_merge_before_retained_check(
+    tmp_path: Path,
+    merged_commit_mode: str,
+):
+    repo = make_repo(tmp_path)
+    add_origin(repo, tmp_path)
+    service = make_service(tmp_path, repo)
+    session = service.ensure_application_session("app-1", "App One")
+    worktree = Path(session.worktree_path)
+    (worktree / "feature.txt").write_text("done\n", encoding="utf-8")
+    assert service.checkpoint(session.id) is True
+    service.merge(session.id)
+    record = service.registry.path_for(session.id)
+    payload = yaml.safe_load(record.read_text(encoding="utf-8"))
+    if merged_commit_mode == "missing":
+        payload.pop("merged_commit", None)
+    else:
+        payload["merged_commit"] = None
+    payload["status"] = SessionStatus.RUNNING.value
+    payload["cleanup"]["suggested"] = False
+    record.write_text(
+        yaml.safe_dump(payload, allow_unicode=True, sort_keys=False),
+        encoding="utf-8",
+    )
+
+    service.dispose(session.id)
+
+    assert not worktree.exists()
+    assert run_git(repo, "branch", "--list", session.branch) == ""
+    assert not record.exists()
+
+
+@pytest.mark.parametrize(
+    "base_commit_mode",
+    ["missing", "null", "invalid", "zero_delta"],
+)
+def test_branch_recovery_requires_trustworthy_advancing_base_commit(
+    tmp_path: Path,
+    base_commit_mode: str,
+):
+    repo = make_repo(tmp_path)
+    add_origin(repo, tmp_path)
+    service = make_service(tmp_path, repo)
+    session = service.ensure_application_session("app-1", "App One")
+    worktree = Path(session.worktree_path)
+    if base_commit_mode != "zero_delta":
+        (worktree / "feature.txt").write_text("done\n", encoding="utf-8")
+        assert service.checkpoint(session.id) is True
+        run_git(
+            repo,
+            "merge",
+            "--no-ff",
+            session.branch,
+            "-m",
+            "merge session",
+        )
+    record = service.registry.path_for(session.id)
+    payload = yaml.safe_load(record.read_text(encoding="utf-8"))
+    payload["status"] = SessionStatus.RUNNING.value
+    payload["merged_commit"] = None
+    payload["cleanup"]["suggested"] = False
+    if base_commit_mode == "missing":
+        payload.pop("base_commit", None)
+    elif base_commit_mode == "null":
+        payload["base_commit"] = None
+    elif base_commit_mode == "invalid":
+        payload["base_commit"] = "f" * 40
+    record.write_text(
+        yaml.safe_dump(payload, allow_unicode=True, sort_keys=False),
+        encoding="utf-8",
+    )
+
+    synced = service.sync(session.id)
+
+    assert synced.status == SessionStatus.RUNNING
+    assert synced.cleanup.suggested is False
+    assert run_git(repo, "branch", "--list", session.branch)
+
+
+def test_dispose_refuses_dirty_or_unmerged_session(tmp_path: Path):
+    repo = make_repo(tmp_path)
+    service = make_service(tmp_path, repo)
+    session = service.ensure_application_session("app-1", "App One")
+    Path(session.worktree_path, "dirty.txt").write_text("dirty", encoding="utf-8")
+
+    with pytest.raises(ValueError, match="clean and merged"):
+        service.dispose(session.id)
+
+
+def test_dispose_removes_clean_merged_retained_worktree_and_branch(
+    tmp_path: Path,
+):
+    repo = make_repo(tmp_path)
+    service = make_service(tmp_path, repo)
+    session = service.ensure_application_session("app-1", "App One")
+    worktree = Path(session.worktree_path)
+    (worktree / "feature.txt").write_text("done\n", encoding="utf-8")
+    assert service.checkpoint(session.id) is True
+    service.merge(session.id)
+
+    service.dispose(session.id)
+
+    assert not worktree.exists()
+    assert run_git(repo, "branch", "--list", session.branch) == ""
+    assert not service.registry.path_for(session.id).exists()
+
+
+@pytest.mark.parametrize("fail_first_prune", [False, True])
+def test_dispose_prunes_missing_worktree_metadata_before_branch_delete(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    fail_first_prune: bool,
+):
+    repo = make_repo(tmp_path)
+    service = make_service(tmp_path, repo)
+    session = service.ensure_application_session("app-1", "App One")
+    worktree = Path(session.worktree_path)
+    (worktree / "feature.txt").write_text("done\n", encoding="utf-8")
+    assert service.checkpoint(session.id) is True
+    service.merge(session.id)
+    shutil.rmtree(worktree)
+    assert "prunable" in run_git(repo, "worktree", "list", "--porcelain")
+    original_git = engineering_session_service.git
+    prune_failed = False
+
+    def fail_prune_once(repo_path: str | Path, *args: str, **kwargs):
+        nonlocal prune_failed
+        if (
+            fail_first_prune
+            and not prune_failed
+            and args[:2] == ("worktree", "prune")
+        ):
+            prune_failed = True
+            raise GitCommandError("simulated worktree prune failure")
+        return original_git(repo_path, *args, **kwargs)
+
+    monkeypatch.setattr(
+        engineering_session_service,
+        "git",
+        fail_prune_once,
+    )
+
+    if fail_first_prune:
+        with pytest.raises(
+            GitCommandError,
+            match="simulated worktree prune failure",
+        ):
+            service.dispose(session.id)
+        assert run_git(repo, "branch", "--list", session.branch)
+        assert service.registry.path_for(session.id).exists()
+
+    service.dispose(session.id)
+
+    assert "prunable" not in run_git(
+        repo,
+        "worktree",
+        "list",
+        "--porcelain",
+    )
+    assert run_git(repo, "branch", "--list", session.branch) == ""
+    assert not service.registry.path_for(session.id).exists()
+
+
+def test_dispose_retries_after_worktree_remove_succeeds_and_branch_delete_fails(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    repo = make_repo(tmp_path)
+    service = make_service(tmp_path, repo)
+    session = service.ensure_application_session("app-1", "App One")
+    worktree = Path(session.worktree_path)
+    (worktree / "feature.txt").write_text("done\n", encoding="utf-8")
+    assert service.checkpoint(session.id) is True
+    service.merge(session.id)
+    original_git = engineering_session_service.git
+    branch_delete_failed = False
+
+    def fail_first_branch_delete(repo_path: str | Path, *args: str, **kwargs):
+        nonlocal branch_delete_failed
+        if (
+            not branch_delete_failed
+            and args[:2] == ("branch", "-d")
+            and args[2:] == (session.branch,)
+        ):
+            branch_delete_failed = True
+            raise GitCommandError("simulated branch delete failure")
+        return original_git(repo_path, *args, **kwargs)
+
+    monkeypatch.setattr(
+        engineering_session_service,
+        "git",
+        fail_first_branch_delete,
+    )
+
+    with pytest.raises(GitCommandError, match="branch delete failure"):
+        service.dispose(session.id)
+
+    assert branch_delete_failed is True
+    assert not worktree.exists()
+    assert run_git(repo, "branch", "--list", session.branch)
+    assert service.registry.path_for(session.id).exists()
+
+    service.dispose(session.id)
+
+    assert run_git(repo, "branch", "--list", session.branch) == ""
+    assert not service.registry.path_for(session.id).exists()
 
 
 def test_create_uses_explicit_base_branch_head(tmp_path: Path):

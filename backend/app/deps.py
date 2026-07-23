@@ -10,7 +10,8 @@ from jose import JWTError
 from app.database import get_db
 from app.models import User
 from app.models.tenant import UserTenant, Role, Tenant
-from app.auth import security, decode_token
+from app.auth import _DESKTOP_ISSUER, security, decode_token
+from app import runtime
 
 logger = logging.getLogger(__name__)
 
@@ -30,6 +31,8 @@ class AuthContext:
     apaas_user_id: Optional[str] = None  # aPaaS 平台 user_id（21 位 string）
     apaas_tenant_id: Optional[str] = None  # aPaaS 平台 tenant_id（21 位 string）
     tenant_access_scope: str = "tenant"  # tenant | unscoped | platform_only
+    control_plane_tenant_id: Optional[str] = None
+    control_plane_tenant_name: Optional[str] = None
 
 
 async def resolve_default_tenant_id_for_user(db: AsyncSession, user_id: int) -> int | None:
@@ -193,6 +196,11 @@ async def _get_auth_context_allow_platform_only(
             raise credentials_exception
 
         user_id = int(user_id)
+        desktop_control_plane_ticket = (
+            runtime.is_desktop()
+            and payload.get("iss") == _DESKTOP_ISSUER
+            and bool(str(payload.get("cp_tid") or "").strip())
+        )
 
         # Older platform-admin tokens may not carry tenant_id. Most settings
         # pages are still tenant-scoped, so resolve the admin's default tenant.
@@ -200,6 +208,10 @@ async def _get_auth_context_allow_platform_only(
             # Check if platform admin
             result = await db.execute(select(User).where(User.id == user_id))
             user = result.scalar_one_or_none()
+            if desktop_control_plane_ticket:
+                if not user or not user.is_active:
+                    raise credentials_exception
+                return _desktop_control_plane_context(user, payload)
             if not user or not user.is_active or not user.is_platform_admin:
                 logger.warning(
                     "auth_context forbidden: token has no tenant_id but user is not platform admin user_id=%s",
@@ -238,6 +250,8 @@ async def _get_auth_context_allow_platform_only(
     user = result.scalar_one_or_none()
     if not user or not user.is_active:
         raise credentials_exception
+    if runtime.is_desktop() and user.account_source == "control_plane":
+        return _desktop_control_plane_context(user, payload)
 
     await _require_active_tenant(db, tenant_id)
 
@@ -305,6 +319,19 @@ async def _get_auth_context_allow_platform_only(
         org_permissions=org_permissions,
         apaas_user_id=eff_apaas_uid,
         apaas_tenant_id=eff_apaas_tid,
+    )
+
+
+def _desktop_control_plane_context(user: User, payload: dict) -> AuthContext:
+    role = str(payload.get("cp_trole") or ("platform_admin" if user.is_platform_admin else "member"))
+    permissions = payload.get("cp_perms")
+    return AuthContext(
+        user=user,
+        tenant_id=0,
+        tenant_role=role,
+        org_permissions=permissions if isinstance(permissions, dict) else ({"*": True} if role == "platform_admin" else {}),
+        control_plane_tenant_id=str(payload.get("cp_tid") or user.coding_tenant_id or "").strip() or None,
+        control_plane_tenant_name=str(payload.get("cp_tname") or "").strip() or None,
     )
 
 

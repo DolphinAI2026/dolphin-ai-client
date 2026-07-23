@@ -35,21 +35,19 @@ describe('Login page brand layout', () => {
   })
 })
 
-// 2026-06-22: 桌面登录页统一用 Login.vue(和 web 同一套 UI), 删 DesktopLogin.vue。
-// 桌面端登录走 desktopLogin(account-service); web 端走 login(可能要选租户)。
-describe('Login page handles both web and desktop auth', () => {
-  it('branches the auth call on isDesktop (desktopLogin on desktop)', () => {
-    expect(loginSource).toContain("from '@/utils/desktop'")
-    expect(loginSource).toContain('isDesktop')
-    expect(loginSource).toContain('desktopLogin')
+// 桌面端和 Web 共用同一认证与租户选择协议。
+describe('Login page reuses web auth on desktop', () => {
+  it('does not branch to the legacy desktop account login', () => {
+    expect(loginSource).not.toContain("from '@/utils/desktop'")
+    expect(loginSource).not.toContain('desktopLogin')
   })
 
-  it('keeps the web tenant-selection path', () => {
+  it('keeps tenant selection for every client', () => {
     expect(loginSource).toContain('requiresSelection')
     expect(loginSource).toContain('/tenant-select')
   })
 
-  it('collects the Dolphin captcha for web login', () => {
+  it('collects the configured captcha for every client', () => {
     expect(loginSource).toContain('captcha_code')
     expect(loginSource).toContain('captchaImage')
     expect(loginSource).toContain('refreshCaptcha')

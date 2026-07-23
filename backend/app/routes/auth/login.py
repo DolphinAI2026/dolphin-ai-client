@@ -1,9 +1,11 @@
 import logging
 import re
 import secrets
+from dataclasses import replace
 from datetime import datetime
-from typing import Annotated, Optional
-from fastapi import APIRouter, Depends, HTTPException, status
+from typing import Annotated, Optional, Union
+from fastapi import APIRouter, Depends, Header, HTTPException, status
+from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from sqlalchemy import func, select
 from sqlalchemy.exc import IntegrityError, SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -15,10 +17,12 @@ from app.schemas import (
     UserLogin, Token,
     LoginResponse, TenantOption, TenantSelectRequest
 )
-from app.auth import verify_password, get_password_hash, create_access_token, create_selection_token
+from app.auth import _DESKTOP_ISSUER, verify_password, get_password_hash, create_access_token, create_selection_token
 from app.code_runtime.auth import (
     ControlPlaneAuthResult,
+    control_plane_access_token,
     exchange_apaas_token,
+    fetch_control_plane_identity,
     fetch_dolphin_captcha,
     login_to_control_plane,
     store_control_plane_credentials,
@@ -31,6 +35,7 @@ from app.deps import (
     resolve_default_tenant_id_for_user,
 )
 from app.config import settings
+from app import runtime
 from app.error_messages import SELECT_TOKEN_INVALID, SELECT_TOKEN_EXPIRED
 from app.tenant_public_id import ensure_tenant_public_id
 from pydantic import BaseModel
@@ -38,6 +43,7 @@ from pydantic import BaseModel
 logger = logging.getLogger(__name__)
 
 router = APIRouter()
+control_plane_bearer = HTTPBearer()
 
 
 async def _tenant_option(db: AsyncSession, tenant: Tenant) -> TenantOption:
@@ -1245,6 +1251,8 @@ async def _ensure_control_plane_user(
     user.is_active = True
     user.is_platform_admin = _control_plane_identity_is_platform_admin(identity)
     await db.flush()
+    if runtime.is_desktop():
+        return user
 
     preferred_roles = (
         ("R_tenant_admin", "admin", "R_developer")
@@ -1347,6 +1355,32 @@ async def _control_plane_login_response(user_data: UserLogin, db: AsyncSession) 
     user = await _ensure_control_plane_user(db, identity)
     if settings.control_plane_binding_enabled:
         await _require_control_plane_platform_binding(db, user, identity)
+    response = await _issue_login_response_for_user(db, user)
+    await db.commit()
+    return response
+
+
+@router.post("/control-plane/session", response_model=LoginResponse)
+async def exchange_control_plane_session(
+    credentials: Annotated[HTTPAuthorizationCredentials, Depends(control_plane_bearer)],
+    x_tenant_id: Annotated[Optional[str], Header(alias="X-Tenant-Id")],
+    db: AsyncSession = Depends(get_db),
+) -> LoginResponse:
+    identity = await fetch_control_plane_identity(credentials.credentials)
+    tenant_id = str(x_tenant_id or identity.tenant_id or "").strip()
+    tenants = {
+        str(item.get("tenant_id") or "").strip(): str(item.get("tenant_name") or "").strip()
+        for item in identity.available_tenants
+        if str(item.get("tenant_id") or "").strip()
+    }
+    if identity.tenant_id:
+        tenants.setdefault(str(identity.tenant_id), str(identity.tenant_name or ""))
+    if tenant_id not in tenants:
+        raise HTTPException(status_code=403, detail="该 Control Plane 组织不可访问")
+    user = await _ensure_control_plane_user(
+        db,
+        replace(identity, tenant_id=tenant_id, tenant_name=tenants[tenant_id] or tenant_id),
+    )
     response = await _issue_login_response_for_user(db, user)
     await db.commit()
     return response

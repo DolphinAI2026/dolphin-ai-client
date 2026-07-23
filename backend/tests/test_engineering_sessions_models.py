@@ -95,3 +95,32 @@ def test_engineering_session_annotations_match_string_runtime_contract():
     assert type(session.status) is str
     assert session.type == "bugfix"
     assert session.status == "waiting_merge"
+
+
+def test_engineering_session_recovery_reason_is_backward_compatible():
+    legacy = EngineeringSession.model_validate(
+        {
+            "id": "S-005",
+            "type": "feature",
+            "title": "Legacy session",
+            "repo": "apaas-builder-ai",
+            "repo_path": "/repo",
+            "branch": "session/S-005-feature-legacy-session",
+        }
+    )
+
+    assert legacy.recovery_reason is None
+    assert legacy.model_dump(mode="json")["recovery_reason"] is None
+
+    recovering = EngineeringSession.model_validate(
+        {
+            **legacy.model_dump(mode="json"),
+            "recovery_reason": "merge_abort_failed",
+        }
+    )
+
+    assert recovering.recovery_reason == "merge_abort_failed"
+    assert (
+        recovering.model_dump(mode="json")["recovery_reason"]
+        == "merge_abort_failed"
+    )

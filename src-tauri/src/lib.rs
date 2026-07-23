@@ -3,7 +3,26 @@ use tauri::{Manager, RunEvent, WebviewUrl, WebviewWindowBuilder};
 use tauri_plugin_shell::process::{CommandChild, CommandEvent};
 use tauri_plugin_shell::ShellExt;
 
+pub mod local_runtime;
+
 struct SidecarChild(Mutex<Option<CommandChild>>);
+struct LocalRuntimeManagerState(Mutex<Option<local_runtime::api::LocalRuntimeApiServer>>);
+
+fn packaged_agent_runtime_root(handle: &tauri::AppHandle) -> std::path::PathBuf {
+    if let Some(path) = std::env::var_os("DOLPHIN_AGENT_RUNTIME_PATH") {
+        let path: std::path::PathBuf = path.into();
+        return path
+            .parent()
+            .and_then(std::path::Path::parent)
+            .map(std::path::Path::to_path_buf)
+            .unwrap_or(path);
+    }
+    handle
+        .path()
+        .resource_dir()
+        .expect("resource directory is available")
+        .join("agent-runtime")
+}
 
 /// Kill a sidecar process and all its descendants.
 ///
@@ -69,7 +88,10 @@ fn stable_port(data_dir: &std::path::Path) -> u16 {
 fn wait_healthy(port: u16) -> bool {
     let url = format!("http://127.0.0.1:{}/api/health", port);
     for _ in 0..60 {
-        if let Ok(resp) = ureq::get(&url).timeout(std::time::Duration::from_secs(2)).call() {
+        if let Ok(resp) = ureq::get(&url)
+            .timeout(std::time::Duration::from_secs(2))
+            .call()
+        {
             if resp.status() == 200 {
                 return true;
             }
@@ -92,6 +114,21 @@ pub fn run() {
 
             let data_dir = handle.path().app_data_dir().expect("app_data_dir");
             std::fs::create_dir_all(&data_dir).ok();
+            let agent_runtime_root = packaged_agent_runtime_root(&handle);
+            let appliance_bwrap = agent_runtime_root.join("bin").join("bwrap");
+            if appliance_bwrap.is_file() {
+                local_runtime::mxc_driver::configure_bubblewrap_from_appliance(&agent_runtime_root)
+                    .expect("failed to configure local runtime Bubblewrap");
+            }
+            let local_runtime_manager =
+                local_runtime::api::LocalRuntimeApiServer::start(&data_dir, &agent_runtime_root)
+                    .expect("failed to start local runtime manager");
+            let local_runtime_manager_url = local_runtime_manager.base_url.clone();
+            let local_runtime_manager_token = local_runtime_manager.token.clone();
+            let agent_runtime_path = agent_runtime_root.join("bin").join("agent-runtime");
+            handle.manage(LocalRuntimeManagerState(Mutex::new(Some(
+                local_runtime_manager,
+            ))));
 
             // 跨启动稳定端口 → WebView origin 不变 → 登录 token(localStorage)保留,不用每次重登。
             let port = stable_port(&data_dir);
@@ -106,6 +143,22 @@ pub fn run() {
                     "--data-dir".to_string(),
                     data_dir.to_string_lossy().to_string(),
                 ])
+                .env(
+                    "DOLPHIN_LOCAL_RUNTIME_MANAGER_URL",
+                    local_runtime_manager_url,
+                )
+                .env(
+                    "DOLPHIN_LOCAL_RUNTIME_MANAGER_TOKEN",
+                    local_runtime_manager_token,
+                )
+                .env(
+                    "DOLPHIN_DESKTOP_DATA_DIR",
+                    data_dir.to_string_lossy().to_string(),
+                )
+                .env(
+                    "DOLPHIN_AGENT_RUNTIME_PATH",
+                    agent_runtime_path.to_string_lossy().to_string(),
+                )
                 // Phase 1' cutover 验证:桌面包里让 Code 模式走统一引擎 run_agent(dev-apaas profile),
                 // 而 tests/本地 dev 仍走默认关(旧 coding 流水线)→ A/B 验证。验证通过后翻代码默认 + 退役旧码。
                 .env("CODING_USE_RUNAGENT", "1")
@@ -151,6 +204,15 @@ pub fn run() {
         .run(|app, event| {
             match event {
                 RunEvent::ExitRequested { .. } | RunEvent::Exit => {
+                    if let Some(mut manager) = app
+                        .state::<LocalRuntimeManagerState>()
+                        .0
+                        .lock()
+                        .unwrap()
+                        .take()
+                    {
+                        manager.shutdown();
+                    }
                     if let Some(child) = app.state::<SidecarChild>().0.lock().unwrap().take() {
                         let pid = child.pid();
                         // Collect and kill children BEFORE killing the bootloader,

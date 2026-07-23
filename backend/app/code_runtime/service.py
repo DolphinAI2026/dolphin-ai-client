@@ -6,7 +6,7 @@ import re
 import secrets
 from datetime import datetime, timedelta, timezone
 from typing import Any, Awaitable, Callable
-from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
+from urllib.parse import parse_qsl, quote, urlencode, urlsplit, urlunsplit
 from uuid import NAMESPACE_URL, uuid4, uuid5
 
 import httpx
@@ -23,6 +23,8 @@ from app.code_runtime.sandbox_auth import (
     runtime_session_expiry_for_storage,
     split_entry_token,
 )
+from app.code_runtime.local_runtime import LocalRuntimeClient
+from app.code_runtime.execution_target import ExecutionTarget
 from app.models import Application
 from app.models.ai_chat import (
     AIChatSession,
@@ -40,6 +42,80 @@ _DEFAULT_CONTROL_PLANE_URL = "http://127.0.0.1:8080"
 _DEFAULT_SEED_PROJECT_ID = "1781233861147"
 _LOCAL_APPLICATION_PREFIX = "local-"
 _LEGACY_BROWSER_SESSION_ID = "legacy-browser-session"
+_DESKTOP_RUNTIME_ENVIRONMENT_KEYS = (
+    "DOLPHIN_LOCAL_RUNTIME_MANAGER_URL",
+    "DOLPHIN_LOCAL_RUNTIME_MANAGER_TOKEN",
+    "DOLPHIN_DESKTOP_DATA_DIR",
+    "DOLPHIN_AGENT_RUNTIME_PATH",
+)
+
+
+async def _create_desktop_runtime_agent_session(
+    runtime_base_url: str,
+    entry_token: str,
+) -> str:
+    """Create one Runtime agent session without exposing the desktop entry token."""
+    try:
+        async with httpx.AsyncClient(
+            timeout=httpx.Timeout(connect=5, read=30, write=10, pool=10)
+        ) as client:
+            response = await client.post(
+                f"{runtime_base_url.rstrip('/')}/api/agent/sessions",
+                headers={"Authorization": f"Bearer {entry_token}"},
+            )
+    except httpx.HTTPError as exc:
+        raise HTTPException(status_code=502, detail="本地 Runtime 无法创建 agent session") from exc
+
+    if response.status_code != 200:
+        raise HTTPException(status_code=502, detail="本地 Runtime 创建 agent session 失败")
+    try:
+        payload = response.json()
+    except ValueError as exc:
+        raise HTTPException(status_code=502, detail="本地 Runtime agent session 响应无效") from exc
+    if not isinstance(payload, dict):
+        raise HTTPException(status_code=502, detail="本地 Runtime agent session 响应无效")
+    runtime_session_id = str(payload.get("runtimeSessionId") or "").strip()
+    if not runtime_session_id:
+        raise HTTPException(status_code=502, detail="本地 Runtime 未返回 agent session 标识")
+    return runtime_session_id
+
+
+async def _remember_runtime_agent_session(
+    db: AsyncSession,
+    *,
+    session: AIChatSession,
+    binding: CodeRuntimeBinding,
+) -> None:
+    runtime_session_id = str(binding.runtime_session_id or "").strip()
+    if not runtime_session_id:
+        return
+    record = (
+        await db.execute(
+            select(CodeRuntimeAgentSession).where(
+                CodeRuntimeAgentSession.session_id == session.id,
+                CodeRuntimeAgentSession.runtime_session_id == runtime_session_id,
+            )
+        )
+    ).scalar_one_or_none()
+    if record is None:
+        record = CodeRuntimeAgentSession(
+            tenant_id=session.tenant_id,
+            user_id=session.user_id,
+            app_id=int(session.app_id) if session.app_id else None,
+            session_id=session.id,
+            external_application_id=binding.external_application_id,
+            runtime_session_id=runtime_session_id,
+        )
+        db.add(record)
+
+    record.tenant_id = session.tenant_id
+    record.user_id = session.user_id
+    record.app_id = int(session.app_id) if session.app_id else None
+    record.external_application_id = binding.external_application_id
+    record.workspace_id = binding.workspace_id
+    record.sandbox_instance_id = binding.sandbox_instance_id
+    record.conversation_id = binding.conversation_id
+    record.status = binding.status
 
 
 def derive_runtime_base_url(builder_url: str) -> str:
@@ -319,6 +395,10 @@ def default_seed_project_id() -> str:
         or (settings.dolphin_code_default_seed_project_id or "").strip()
         or _DEFAULT_SEED_PROJECT_ID
     )
+
+
+def _desktop_runtime_environment_present() -> bool:
+    return any(os.getenv(key, "").strip() for key in _DESKTOP_RUNTIME_ENVIRONMENT_KEYS)
 
 
 def _builder_prefix_path(builder_url: str) -> str:
@@ -651,6 +731,45 @@ async def create_code_application(
     return _normalize_code_application(data)
 
 
+async def verify_control_plane_application_access(
+    external_application_id: str,
+    *,
+    authorization_header: str | None = None,
+    delegated_context: Any | None = None,
+    auth_provider: str | None = None,
+) -> None:
+    application_id = str(external_application_id or "").strip()
+    if not application_id:
+        raise HTTPException(status_code=400, detail="external_application_id 不能为空")
+
+    base_url = control_plane_base_url()
+    target = f"{base_url}/api/applications/{quote(application_id, safe='')}"
+    try:
+        async with httpx.AsyncClient(timeout=httpx.Timeout(connect=10, read=30, write=10, pool=10)) as client:
+            response = await client.get(
+                target,
+                headers=_control_plane_headers(
+                    authorization_header,
+                    delegated_context=delegated_context,
+                    auth_provider=auth_provider,
+                ),
+            )
+    except httpx.RequestError as exc:
+        raise HTTPException(status_code=503, detail=f"无法连接 Code Control Plane: {base_url}") from exc
+    if response.status_code >= 400:
+        raise HTTPException(
+            status_code=response.status_code,
+            detail=_control_plane_error_detail(response),
+        )
+
+    try:
+        payload = response.json()
+    except ValueError as exc:
+        raise HTTPException(status_code=502, detail="Code Control Plane 返回了无效应用数据") from exc
+    if not isinstance(payload, dict) or str(payload.get("applicationId") or "").strip() != application_id:
+        raise HTTPException(status_code=502, detail="Code Control Plane 返回了无效应用数据")
+
+
 def local_builder_workspace_open(external_application_id: str) -> dict[str, Any]:
     builder_url = local_builder_url()
     if not builder_url:
@@ -717,6 +836,14 @@ async def open_code_session(
     browser_session_id: str | None = None,
 ) -> dict[str, Any]:
     session = await resolve_code_session(db, session_id)
+    if session is not None:
+        session = (
+            await db.execute(
+                select(AIChatSession)
+                .where(AIChatSession.id == session.id)
+                .with_for_update()
+            )
+        ).scalar_one_or_none()
     if not session or session.tenant_id != int(ctx.tenant_id) or session.user_id != int(ctx.user.id):
         raise HTTPException(status_code=404, detail="Code 会话不存在")
     if session.mode != "code":
@@ -727,6 +854,12 @@ async def open_code_session(
         external_app_id = external_application_id_for(app)
     if not external_app_id:
         raise HTTPException(status_code=400, detail="Code 会话未绑定应用")
+
+    desktop_entry_token: str | None = None
+    desktop_runtime = (
+        not is_local_code_application_id(external_app_id)
+        and _desktop_runtime_environment_present()
+    )
 
     async def workspace_open_once() -> dict[str, Any]:
         if workspace_open is not None:
@@ -740,13 +873,26 @@ async def open_code_session(
             auth_provider=auth_provider,
         )
 
-    opened = await workspace_open_once()
+    if desktop_runtime:
+        await verify_control_plane_application_access(
+            external_app_id,
+            authorization_header=authorization_header,
+            delegated_context=ctx,
+            auth_provider=auth_provider,
+        )
+        opened, desktop_entry_token = await LocalRuntimeClient.from_environment().open_application_with_entry_token(
+            db,
+            session,
+            ctx,
+        )
+    else:
+        opened = await workspace_open_once()
     builder_url = str(opened.get("specReviewUrl") or opened.get("builderUrl") or "").strip()
     if not builder_url:
         raise HTTPException(status_code=502, detail="Code Control Plane 未返回 builder URL")
 
     bootstrap = None
-    if is_local_code_application_id(external_app_id):
+    if desktop_runtime or is_local_code_application_id(external_app_id):
         clean_builder_url = builder_url
         runtime_base_url = derive_runtime_base_url(builder_url)
     else:
@@ -807,6 +953,18 @@ async def open_code_session(
     binding.builder_url = clean_builder_url
     binding.workspace_id = opened.get("workspaceId") or binding.workspace_id
     binding.sandbox_instance_id = opened.get("sandboxInstanceId") or binding.sandbox_instance_id
+    if desktop_runtime:
+        if not desktop_entry_token:
+            raise HTTPException(status_code=503, detail="本地 Runtime entry token 不可用")
+        current_runtime_session_id = str(binding.runtime_session_id or "").strip()
+        runtime_session_id = (
+            current_runtime_session_id
+            if current_runtime_session_id
+            else await _create_desktop_runtime_agent_session(
+                runtime_base_url,
+                desktop_entry_token,
+            )
+        )
     if runtime_session_id:
         current_runtime_session_id = str(binding.runtime_session_id or "").strip()
         current_is_scoped = False
@@ -824,7 +982,13 @@ async def open_code_session(
     binding.conversation_id = opened.get("conversationId") or binding.conversation_id
     binding.status = "ready"
     binding.last_error = None
+    if desktop_runtime:
+        binding.execution_target = ExecutionTarget.DESKTOP_AGENT_RUNTIME.value
+        binding.desktop_agent_runtime_token_enc = encrypt_runtime_cookie(desktop_entry_token)
     await db.flush()
+    if desktop_runtime:
+        await _remember_runtime_agent_session(db, session=session, binding=binding)
+        await db.flush()
 
     resolved_browser_session_id = None
     if bootstrap is not None:

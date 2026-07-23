@@ -155,6 +155,14 @@ class SessionRegistry:
             raise SessionRegistryError(f"session not found: {session_id}")
         return self._load_path(path)
 
+    def delete(self, session_id: str) -> None:
+        self._ensure_owner()
+        path = self.path_for(session_id)
+        if not path.exists():
+            raise SessionRegistryError(f"session not found: {session_id}")
+        path.unlink()
+        self._fsync_directory()
+
     def list(self) -> list[EngineeringSession]:
         self.last_read_errors = []
         self.last_unreadable_ids = set()

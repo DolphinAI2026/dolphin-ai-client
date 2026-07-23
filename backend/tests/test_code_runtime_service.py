@@ -1,12 +1,14 @@
 from __future__ import annotations
 
 import base64
+import hashlib
 from types import SimpleNamespace
 from urllib.parse import parse_qsl, urlsplit
 
 import pytest
 from fastapi import HTTPException
-from sqlalchemy import inspect as sa_inspect
+from sqlalchemy import inspect as sa_inspect, text, update
+from sqlalchemy.exc import StatementError
 from sqlalchemy.ext.asyncio import create_async_engine
 
 from app.models import Application
@@ -46,8 +48,130 @@ def test_code_runtime_binding_model_is_registered():
         "runtime_session_id",
         "runtime_service_session_enc",
         "auth_generation",
+        "execution_target",
+        "desktop_agent_runtime_token_enc",
     }.issubset(cols)
     assert sa_inspect(CodeRuntimeBinding).columns.app_id.nullable is True
+    assert sa_inspect(CodeRuntimeBinding).columns.execution_target.default.arg == "control_plane"
+    assert sa_inspect(CodeRuntimeBinding).columns.execution_target.server_default.arg == "control_plane"
+
+
+def test_runtime_binding_rejects_plaintext_token_on_construction_and_assignment():
+    from app.models.ai_chat import CodeRuntimeBinding
+
+    with pytest.raises(ValueError, match="desktop runtime token must be encrypted"):
+        CodeRuntimeBinding(desktop_agent_runtime_token_enc="plaintext-token")
+
+    binding = CodeRuntimeBinding()
+    with pytest.raises(ValueError, match="desktop runtime token must be encrypted"):
+        binding.desktop_agent_runtime_token_enc = "plaintext-token"
+
+
+def test_execution_target_classifies_desktop_runtime_and_legacy_values():
+    from app.code_runtime.execution_target import (
+        ExecutionTarget,
+        is_desktop_agent_runtime_target,
+        resolve_execution_target,
+    )
+
+    assert resolve_execution_target(None) is ExecutionTarget.CONTROL_PLANE
+    assert resolve_execution_target("") is ExecutionTarget.CONTROL_PLANE
+    assert resolve_execution_target("desktop_agent_runtime") is ExecutionTarget.DESKTOP_AGENT_RUNTIME
+    assert is_desktop_agent_runtime_target(ExecutionTarget.DESKTOP_AGENT_RUNTIME)
+    assert not is_desktop_agent_runtime_target(ExecutionTarget.CONTROL_PLANE)
+
+
+@pytest.mark.asyncio
+async def test_execution_target_rejects_invalid_bind_values_and_normalizes_legacy_empty_rows(db_session):
+    from app.code_runtime.execution_target import ExecutionTarget
+    from app.models.ai_chat import CodeRuntimeBinding
+
+    with pytest.raises(StatementError, match="unsupported execution target"):
+        await db_session.execute(
+            update(CodeRuntimeBinding).values(execution_target="unsupported-target")
+        )
+
+    session = AIChatSession(
+        tenant_id=7,
+        user_id=11,
+        external_application_id="code-app-legacy-target",
+        title="Legacy target",
+        mode="code",
+        status="active",
+    )
+    db_session.add(session)
+    await db_session.flush()
+    binding = CodeRuntimeBinding(
+        tenant_id=7,
+        user_id=11,
+        session_id=session.id,
+        external_application_id="code-app-legacy-target",
+        runtime_base_url="https://sandbox.example.com/workspaces/ws-legacy-target",
+        builder_url="https://sandbox.example.com/workspaces/ws-legacy-target/builder",
+        execution_target=ExecutionTarget.LOCAL_FIXTURE.value,
+    )
+    db_session.add(binding)
+    await db_session.flush()
+    binding_id = binding.id
+    await db_session.commit()
+
+    await db_session.execute(
+        text("UPDATE code_runtime_bindings SET execution_target = '' WHERE id = :id"),
+        {"id": binding_id},
+    )
+    await db_session.commit()
+    db_session.expire_all()
+
+    legacy_binding = await db_session.get(CodeRuntimeBinding, binding_id)
+    assert legacy_binding.execution_target == ExecutionTarget.CONTROL_PLANE.value
+
+
+@pytest.mark.asyncio
+async def test_runtime_binding_token_type_rejects_plaintext_bulk_update(db_session):
+    from app.code_runtime.sandbox_auth import encrypt_runtime_cookie
+    from app.models.ai_chat import CodeRuntimeBinding
+
+    session = AIChatSession(
+        tenant_id=7,
+        user_id=11,
+        external_application_id="code-app-token",
+        title="Token binding",
+        mode="code",
+        status="active",
+    )
+    db_session.add(session)
+    await db_session.flush()
+    binding = CodeRuntimeBinding(
+        tenant_id=7,
+        user_id=11,
+        session_id=session.id,
+        external_application_id="code-app-token",
+        runtime_base_url="https://sandbox.example.com/workspaces/ws-token",
+        builder_url="https://sandbox.example.com/workspaces/ws-token/builder",
+    )
+    db_session.add(binding)
+    await db_session.flush()
+    binding_id = binding.id
+    await db_session.commit()
+
+    with pytest.raises(StatementError, match="desktop runtime token must be encrypted"):
+        await db_session.execute(
+            update(CodeRuntimeBinding)
+            .where(CodeRuntimeBinding.id == binding_id)
+            .values(desktop_agent_runtime_token_enc="plaintext-token")
+        )
+
+    encrypted_token = encrypt_runtime_cookie("desktop-runtime-token")
+    await db_session.execute(
+        update(CodeRuntimeBinding)
+        .where(CodeRuntimeBinding.id == binding_id)
+        .values(desktop_agent_runtime_token_enc=encrypted_token)
+    )
+    await db_session.commit()
+    db_session.expire_all()
+
+    saved_binding = await db_session.get(CodeRuntimeBinding, binding_id)
+    assert saved_binding.desktop_agent_runtime_token_enc == encrypted_token
 
 
 def test_code_runtime_agent_session_model_has_rail_snapshot_columns():
@@ -251,12 +375,19 @@ async def test_init_db_expands_old_runtime_binding_schema_without_cleaning_build
                 database.text("PRAGMA table_info(code_runtime_bindings)")
             )).mappings()
         }
-        assert {"runtime_service_session_enc", "auth_generation"}.issubset(binding_columns)
+        assert {
+            "runtime_service_session_enc",
+            "auth_generation",
+            "execution_target",
+            "desktop_agent_runtime_token_enc",
+        }.issubset(binding_columns)
         binding = (await conn.execute(database.text(
-            "SELECT builder_url, auth_generation FROM code_runtime_bindings WHERE id = 1"
+            "SELECT builder_url, auth_generation, execution_target "
+            "FROM code_runtime_bindings WHERE id = 1"
         ))).one()
         assert binding.builder_url == builder_url
         assert binding.auth_generation == 1
+        assert binding.execution_target == "control_plane"
 
         browser_fk = (await conn.execute(database.text(
             "PRAGMA foreign_key_list(code_runtime_browser_sessions)"
@@ -572,6 +703,53 @@ def test_control_plane_headers_prefer_active_builder_tenant_mapping(monkeypatch)
     )
 
     assert headers["X-Tenant-Id"] == "0"
+
+
+@pytest.mark.asyncio
+async def test_verify_control_plane_application_access_uses_current_user_and_tenant(monkeypatch):
+    from app.code_runtime import service
+
+    calls: list[dict] = []
+
+    class FakeResponse:
+        status_code = 200
+
+        def json(self):
+            return {"applicationId": "app-1"}
+
+    class FakeClient:
+        def __init__(self, *args, **kwargs):
+            pass
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *_args):
+            return False
+
+        async def get(self, url: str, **kwargs):
+            calls.append({"url": url, **kwargs})
+            return FakeResponse()
+
+    monkeypatch.setenv("DOLPHIN_CODE_CONTROL_PLANE_URL", "https://code.example.com/control-plane")
+    monkeypatch.setattr(service.httpx, "AsyncClient", FakeClient)
+
+    await service.verify_control_plane_application_access(
+        "app-1",
+        authorization_header="Bearer user-token",
+        delegated_context=SimpleNamespace(
+            control_plane_tenant_id="tenant-current",
+            user=SimpleNamespace(coding_tenant_id="tenant-stale"),
+        ),
+    )
+
+    assert calls == [{
+        "url": "https://code.example.com/control-plane/api/applications/app-1",
+        "headers": {
+            "Authorization": "Bearer user-token",
+            "X-Tenant-Id": "tenant-current",
+        },
+    }]
 
 
 def test_control_plane_headers_include_delegation_secret(monkeypatch):
@@ -1331,6 +1509,383 @@ async def test_open_code_session_upserts_runtime_binding(db_session):
 
 
 @pytest.mark.asyncio
+async def test_open_code_session_prefers_configured_desktop_runtime_and_keeps_entry_token_private(
+    db_session,
+    monkeypatch,
+):
+    from sqlalchemy import select
+
+    from app.code_runtime import service
+    from app.code_runtime.sandbox_auth import decrypt_runtime_cookie
+    from app.code_runtime.service import open_code_session
+    from app.models.ai_chat import CodeRuntimeAgentSession, CodeRuntimeBinding
+
+    session = AIChatSession(
+        tenant_id=7,
+        user_id=11,
+        external_application_id="desktop-code-app",
+        title="Desktop Code",
+        mode="code",
+        status="active",
+    )
+    db_session.add(session)
+    await db_session.commit()
+    entry_token = "desktop-entry-token-secret"
+    opened_calls = 0
+    bootstrap_calls = 0
+
+    class FakeLocalRuntimeClient:
+        @classmethod
+        def from_environment(cls):
+            return cls()
+
+        async def open_application_with_entry_token(self, _db, _session, _ctx):
+            nonlocal opened_calls
+            opened_calls += 1
+            return (
+                {
+                    "applicationId": "desktop-code-app",
+                    "workspaceId": "workspace-desktop",
+                    "sandboxInstanceId": "desktop-instance",
+                    "conversationId": "",
+                    "runtimeBaseUrl": "http://127.0.0.1:19090",
+                    "specReviewUrl": "http://127.0.0.1:19090/builder/",
+                },
+                entry_token,
+            )
+
+    async def unexpected_bootstrap(_builder_url: str):
+        nonlocal bootstrap_calls
+        bootstrap_calls += 1
+        raise AssertionError("desktop runtime must not bootstrap a control-plane session")
+
+    monkeypatch.setenv("DOLPHIN_LOCAL_RUNTIME_MANAGER_URL", "http://127.0.0.1:9988")
+    monkeypatch.setenv("DOLPHIN_LOCAL_RUNTIME_MANAGER_TOKEN", "manager-token")
+    monkeypatch.setenv("DOLPHIN_DESKTOP_DATA_DIR", "/tmp/desktop-data")
+    monkeypatch.setenv("DOLPHIN_AGENT_RUNTIME_PATH", "/tmp/agent-runtime")
+    monkeypatch.setattr(service, "LocalRuntimeClient", FakeLocalRuntimeClient)
+    monkeypatch.setattr(service, "bootstrap_runtime_session", unexpected_bootstrap)
+    verified: list[str] = []
+
+    async def allow_application(external_application_id: str, **_kwargs):
+        verified.append(external_application_id)
+
+    monkeypatch.setattr(service, "verify_control_plane_application_access", allow_application)
+    created_with: list[tuple[str, str]] = []
+
+    async def fake_create_agent_session(runtime_base_url: str, token: str) -> str:
+        created_with.append((runtime_base_url, token))
+        return "desktop-runtime-session-1"
+
+    monkeypatch.setattr(
+        service,
+        "_create_desktop_runtime_agent_session",
+        fake_create_agent_session,
+    )
+
+    result = await open_code_session(
+        db=db_session,
+        session_id=session.id,
+        ctx=SimpleNamespace(user=SimpleNamespace(id=11), tenant_id=7),
+        workspace_open=lambda *_args: (_ for _ in ()).throw(
+            AssertionError("desktop runtime must not use Control Plane")
+        ),
+    )
+    await db_session.commit()
+
+    binding = (
+        await db_session.execute(
+            select(CodeRuntimeBinding).where(CodeRuntimeBinding.session_id == session.id)
+        )
+    ).scalar_one()
+    assert opened_calls == 1
+    assert verified == ["desktop-code-app"]
+    assert bootstrap_calls == 0
+    assert binding.execution_target == "desktop_agent_runtime"
+    assert binding.runtime_session_id == "desktop-runtime-session-1"
+    assert hashlib.sha256(
+        decrypt_runtime_cookie(binding.desktop_agent_runtime_token_enc).encode("ascii")
+    ).digest() == hashlib.sha256(entry_token.encode("ascii")).digest()
+    assert created_with == [("http://127.0.0.1:19090", entry_token)]
+    ownership = (
+        await db_session.execute(
+            select(CodeRuntimeAgentSession).where(
+                CodeRuntimeAgentSession.session_id == session.id,
+                CodeRuntimeAgentSession.runtime_session_id == "desktop-runtime-session-1",
+            )
+        )
+    ).scalar_one()
+    assert ownership.conversation_id is None
+    if entry_token in repr(result):
+        pytest.fail("desktop runtime entry token leaked into public response")
+    assert "desktop_agent_runtime_token_enc" not in result
+
+
+@pytest.mark.asyncio
+async def test_desktop_runtime_creates_one_agent_session_per_shell_and_reuses_it(
+    db_session,
+    monkeypatch,
+):
+    from sqlalchemy import select
+
+    from app.code_runtime import service
+    from app.code_runtime.service import open_code_session
+    from app.models.ai_chat import CodeRuntimeAgentSession, CodeRuntimeBinding
+
+    first = AIChatSession(
+        tenant_id=7,
+        user_id=11,
+        external_application_id="desktop-code-app",
+        title="Desktop Code 1",
+        mode="code",
+        status="active",
+    )
+    second = AIChatSession(
+        tenant_id=7,
+        user_id=11,
+        external_application_id="desktop-code-app",
+        title="Desktop Code 2",
+        mode="code",
+        status="active",
+    )
+    db_session.add_all([first, second])
+    await db_session.commit()
+
+    class FakeLocalRuntimeClient:
+        @classmethod
+        def from_environment(cls):
+            return cls()
+
+        async def open_application_with_entry_token(self, _db, _session, _ctx):
+            return (
+                {
+                    "applicationId": "desktop-code-app",
+                    "workspaceId": "workspace-desktop",
+                    "sandboxInstanceId": "desktop-instance",
+                    "conversationId": "",
+                    "runtimeBaseUrl": "http://127.0.0.1:19090",
+                    "specReviewUrl": "http://127.0.0.1:19090/builder/",
+                },
+                "desktop-entry-token",
+            )
+
+    created: list[str] = []
+
+    async def fake_create_agent_session(_runtime_base_url: str, _token: str) -> str:
+        runtime_session_id = f"desktop-runtime-session-{len(created) + 1}"
+        created.append(runtime_session_id)
+        return runtime_session_id
+
+    monkeypatch.setenv("DOLPHIN_LOCAL_RUNTIME_MANAGER_URL", "http://127.0.0.1:9988")
+    monkeypatch.setenv("DOLPHIN_LOCAL_RUNTIME_MANAGER_TOKEN", "manager-token")
+    monkeypatch.setenv("DOLPHIN_DESKTOP_DATA_DIR", "/tmp/desktop-data")
+    monkeypatch.setenv("DOLPHIN_AGENT_RUNTIME_PATH", "/tmp/agent-runtime")
+    monkeypatch.setattr(service, "LocalRuntimeClient", FakeLocalRuntimeClient)
+
+    async def allow_application(*_args, **_kwargs):
+        return None
+
+    monkeypatch.setattr(service, "verify_control_plane_application_access", allow_application)
+    monkeypatch.setattr(
+        service,
+        "_create_desktop_runtime_agent_session",
+        fake_create_agent_session,
+    )
+
+    first_open = await open_code_session(
+        db=db_session,
+        session_id=first.id,
+        ctx=SimpleNamespace(user=SimpleNamespace(id=11), tenant_id=7),
+    )
+    second_open = await open_code_session(
+        db=db_session,
+        session_id=second.id,
+        ctx=SimpleNamespace(user=SimpleNamespace(id=11), tenant_id=7),
+    )
+    reopened_first = await open_code_session(
+        db=db_session,
+        session_id=first.id,
+        ctx=SimpleNamespace(user=SimpleNamespace(id=11), tenant_id=7),
+    )
+    await db_session.commit()
+
+    assert created == ["desktop-runtime-session-1", "desktop-runtime-session-2"]
+    assert first_open["runtime_session_id"] == "desktop-runtime-session-1"
+    assert second_open["runtime_session_id"] == "desktop-runtime-session-2"
+    assert reopened_first["runtime_session_id"] == "desktop-runtime-session-1"
+    ownership = (
+        await db_session.execute(
+            select(CodeRuntimeAgentSession).order_by(CodeRuntimeAgentSession.session_id)
+        )
+    ).scalars().all()
+    assert [(record.session_id, record.runtime_session_id) for record in ownership] == [
+        (first.id, "desktop-runtime-session-1"),
+        (second.id, "desktop-runtime-session-2"),
+    ]
+    bindings = (
+        await db_session.execute(
+            select(CodeRuntimeBinding).order_by(CodeRuntimeBinding.session_id)
+        )
+    ).scalars().all()
+    assert [(binding.session_id, binding.runtime_session_id) for binding in bindings] == [
+        (first.id, "desktop-runtime-session-1"),
+        (second.id, "desktop-runtime-session-2"),
+    ]
+
+
+@pytest.mark.asyncio
+async def test_open_code_session_does_not_fallback_when_configured_desktop_runtime_fails(
+    db_session,
+    monkeypatch,
+):
+    from app.code_runtime import service
+    from app.code_runtime.service import open_code_session
+
+    session = AIChatSession(
+        tenant_id=7,
+        user_id=11,
+        external_application_id="desktop-code-app",
+        title="Desktop Code",
+        mode="code",
+        status="active",
+    )
+    db_session.add(session)
+    await db_session.commit()
+    control_plane_calls = 0
+
+    class FailingLocalRuntimeClient:
+        @classmethod
+        def from_environment(cls):
+            return cls()
+
+        async def open_application_with_entry_token(self, _db, _session, _ctx):
+            raise HTTPException(status_code=503, detail="LOCAL_RUNTIME_MANAGER_UNAVAILABLE: unavailable")
+
+    async def unexpected_control_plane(*_args, **_kwargs):
+        nonlocal control_plane_calls
+        control_plane_calls += 1
+        raise AssertionError("desktop failure must not fall back")
+
+    monkeypatch.setenv("DOLPHIN_LOCAL_RUNTIME_MANAGER_URL", "http://127.0.0.1:9988")
+    monkeypatch.setenv("DOLPHIN_LOCAL_RUNTIME_MANAGER_TOKEN", "manager-token")
+    monkeypatch.setenv("DOLPHIN_DESKTOP_DATA_DIR", "/tmp/desktop-data")
+    monkeypatch.setenv("DOLPHIN_AGENT_RUNTIME_PATH", "/tmp/agent-runtime")
+    monkeypatch.setattr(service, "LocalRuntimeClient", FailingLocalRuntimeClient)
+    monkeypatch.setattr(service, "default_workspace_open", unexpected_control_plane)
+
+    async def allow_application(*_args, **_kwargs):
+        return None
+
+    monkeypatch.setattr(service, "verify_control_plane_application_access", allow_application)
+
+    with pytest.raises(HTTPException, match="LOCAL_RUNTIME_MANAGER_UNAVAILABLE") as exc:
+        await open_code_session(
+            db=db_session,
+            session_id=session.id,
+            ctx=SimpleNamespace(user=SimpleNamespace(id=11), tenant_id=7),
+        )
+
+    assert exc.value.status_code == 503
+    assert control_plane_calls == 0
+
+
+@pytest.mark.asyncio
+async def test_desktop_runtime_does_not_start_when_control_plane_application_check_fails(
+    db_session,
+    monkeypatch,
+):
+    from app.code_runtime import service
+    from app.code_runtime.service import open_code_session
+
+    session = AIChatSession(
+        tenant_id=7,
+        user_id=11,
+        external_application_id="desktop-code-app",
+        title="Desktop Code",
+        mode="code",
+        status="active",
+    )
+    db_session.add(session)
+    await db_session.commit()
+
+    class UnexpectedLocalRuntimeClient:
+        @classmethod
+        def from_environment(cls):
+            return cls()
+
+        async def open_application_with_entry_token(self, *_args):
+            raise AssertionError("local runtime must not start before application authorization")
+
+    async def denied(*_args, **_kwargs):
+        raise HTTPException(status_code=403, detail="Tenant is not accessible")
+
+    monkeypatch.setenv("DOLPHIN_LOCAL_RUNTIME_MANAGER_URL", "http://127.0.0.1:9988")
+    monkeypatch.setenv("DOLPHIN_LOCAL_RUNTIME_MANAGER_TOKEN", "manager-token")
+    monkeypatch.setenv("DOLPHIN_DESKTOP_DATA_DIR", "/tmp/desktop-data")
+    monkeypatch.setenv("DOLPHIN_AGENT_RUNTIME_PATH", "/tmp/agent-runtime")
+    monkeypatch.setattr(service, "LocalRuntimeClient", UnexpectedLocalRuntimeClient)
+    monkeypatch.setattr(service, "verify_control_plane_application_access", denied)
+
+    with pytest.raises(HTTPException, match="Tenant is not accessible") as exc:
+        await open_code_session(
+            db=db_session,
+            session_id=session.id,
+            ctx=SimpleNamespace(user=SimpleNamespace(id=11), tenant_id=7),
+            authorization_header="Bearer user-token",
+        )
+
+    assert exc.value.status_code == 403
+
+
+@pytest.mark.asyncio
+async def test_open_code_session_uses_control_plane_when_desktop_manager_is_not_configured(
+    db_session,
+    monkeypatch,
+):
+    from app.code_runtime import service
+    from app.code_runtime.service import open_code_session
+
+    session = AIChatSession(
+        tenant_id=7,
+        user_id=11,
+        external_application_id="code-app-1",
+        title="Control plane Code",
+        mode="code",
+        status="active",
+    )
+    db_session.add(session)
+    await db_session.commit()
+    calls = 0
+
+    async def fake_open(_external_application_id: str, _handoff_id: str | None = None):
+        nonlocal calls
+        calls += 1
+        return {
+            "workspaceId": "ws-1",
+            "sandboxInstanceId": "sandbox-1",
+            "specReviewUrl": "https://sandbox.example.com/workspaces/ws-1/builder?token=entry-token",
+        }
+
+    for key in (
+        "DOLPHIN_LOCAL_RUNTIME_MANAGER_URL",
+        "DOLPHIN_LOCAL_RUNTIME_MANAGER_TOKEN",
+        "DOLPHIN_DESKTOP_DATA_DIR",
+        "DOLPHIN_AGENT_RUNTIME_PATH",
+    ):
+        monkeypatch.delenv(key, raising=False)
+
+    result = await open_code_session(
+        db=db_session,
+        session_id=session.id,
+        ctx=SimpleNamespace(user=SimpleNamespace(id=11), tenant_id=7),
+        workspace_open=fake_open,
+    )
+
+    assert calls == 1
+    assert result["external_application_id"] == "code-app-1"
+
+
+@pytest.mark.asyncio
 async def test_open_code_session_bootstraps_token_free_binding_and_new_browser_session(
     db_session,
     monkeypatch,
@@ -1343,6 +1898,7 @@ async def test_open_code_session_bootstraps_token_free_binding_and_new_browser_s
     from app.code_runtime.sandbox_auth import (
         RuntimeBootstrap,
         decrypt_runtime_cookie,
+        encrypt_runtime_cookie,
     )
     from app.code_runtime.service import open_code_session, validate_embed_token
     from app.models.ai_chat import CodeRuntimeBinding, CodeRuntimeBrowserSession
@@ -1391,6 +1947,15 @@ async def test_open_code_session_bootstraps_token_free_binding_and_new_browser_s
         workspace_open=fake_open,
     )
     await db_session.commit()
+    binding = (
+        await db_session.execute(
+            select(CodeRuntimeBinding).where(CodeRuntimeBinding.session_id == session.id)
+        )
+    ).scalar_one()
+    binding.desktop_agent_runtime_token_enc = encrypt_runtime_cookie(
+        "desktop-agent-runtime-token-secret"
+    )
+    await db_session.commit()
     second = await open_code_session(
         db=db_session,
         session_id=session.id,
@@ -1421,6 +1986,9 @@ async def test_open_code_session_bootstraps_token_free_binding_and_new_browser_s
     )
     assert "entry-secret" not in binding.builder_url
     assert decrypt_runtime_cookie(binding.runtime_service_session_enc) == "runtime-cookie-secret"
+    assert decrypt_runtime_cookie(binding.desktop_agent_runtime_token_enc) == (
+        "desktop-agent-runtime-token-secret"
+    )
     assert binding.auth_generation == 2
     assert len(browser_rows) == 2
     assert len({row.browser_session_id for row in browser_rows}) == 2
@@ -1433,6 +2001,8 @@ async def test_open_code_session_bootstraps_token_free_binding_and_new_browser_s
     assert [row.generation for row in browser_rows] == [1, 2]
     assert "entry-secret" not in first["embed_url"]
     assert "runtime-cookie-secret" not in first["embed_url"]
+    assert "desktop_agent_runtime_token_enc" not in second
+    assert "desktop-agent-runtime-token-secret" not in repr(second)
     first_token = dict(parse_qsl(urlsplit(first["embed_url"]).query))["dolphin_token"]
     validate_embed_token(
         first_token,

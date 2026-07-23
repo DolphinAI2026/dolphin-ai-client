@@ -152,6 +152,7 @@ async def init_db():
             "ALTER TABLE users ADD COLUMN coding_base_url VARCHAR(255)",
             "ALTER TABLE users ADD COLUMN coding_access_token TEXT",
             "ALTER TABLE users ADD COLUMN coding_refresh_token TEXT",
+            "ALTER TABLE users ADD COLUMN remote_builder_access_token TEXT",
             # Tenant quota/contact columns added after early multi-tenant installs.
             "ALTER TABLE tenants ADD COLUMN max_applications INTEGER NOT NULL DEFAULT 10",
             "ALTER TABLE tenants ADD COLUMN max_workspaces INTEGER NOT NULL DEFAULT 20",
@@ -275,6 +276,11 @@ async def init_db():
             # Code runtime browser-session expand (Task 4); token cleanup is deferred.
             "ALTER TABLE code_runtime_bindings ADD COLUMN runtime_service_session_enc TEXT",
             "ALTER TABLE code_runtime_bindings ADD COLUMN auth_generation INTEGER NOT NULL DEFAULT 1",
+            # Execution target defaults to Control Plane for existing bindings.
+            "ALTER TABLE code_runtime_bindings ADD COLUMN execution_target "
+            "VARCHAR(32) NOT NULL DEFAULT 'control_plane'",
+            # Desktop runtime tokens must be Fernet-encrypted before persistence.
+            "ALTER TABLE code_runtime_bindings ADD COLUMN desktop_agent_runtime_token_enc TEXT",
             "CREATE INDEX IF NOT EXISTS ix_code_runtime_browser_sessions_binding_id "
             "ON code_runtime_browser_sessions(binding_id)",
             "CREATE UNIQUE INDEX IF NOT EXISTS uq_code_runtime_browser_sessions_binding_browser "

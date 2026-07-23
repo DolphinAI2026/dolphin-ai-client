@@ -26,9 +26,11 @@ from app.engineering_sessions.git_state import (
     git_common_dir,
     git_control_worktree,
     git_operation_in_progress,
+    has_unmerged_index,
     has_ref,
     inspect_git_state,
     list_git_worktrees,
+    merged_to_base,
     resolve_base_ref,
 )
 from app.engineering_sessions.models import (
@@ -60,6 +62,12 @@ class _SessionIdentityConflict(RuntimeError):
 
 class _WorktreeClaimConflict(RuntimeError):
     pass
+
+
+class EngineeringSessionOperationError(ValueError):
+    def __init__(self, code: str, message: str) -> None:
+        self.code = code
+        super().__init__(f"{code}: {message}")
 
 
 @dataclass
@@ -123,90 +131,164 @@ class EngineeringSessionService:
             )
 
         self._fetch_origin_or_raise()
-        base = base_branch or self._default_base_branch()
         with self.registry.transaction_lock(), self._git_mutation_lock():
-            base_ref = resolve_base_ref(self.repo_path, base)
-            if base_ref is None:
-                raise ValueError(f"base branch does not exist: {base}")
-            base_commit = git(self.repo_path, "rev-parse", base_ref).stdout.strip()
-            self.registry.reserve_ids(self._git_session_ids())
-            for _attempt in range(_CREATE_RETRY_LIMIT):
-                session = self.registry.create(
-                    session_type=normalized_type,
-                    title=title,
-                    base_branch=base,
-                    worktree_path=None,
-                    base_commit=base_commit,
-                    roles=roles,
+            return self._create_locked(
+                normalized_type,
+                title,
+                base_branch=base_branch,
+                create_worktree=create_worktree,
+                roles=roles,
+            )
+
+    def ensure_application_session(
+        self,
+        application_id: str,
+        title: str,
+        *,
+        base_branch: str | None = None,
+    ) -> EngineeringSession:
+        normalized = application_id.strip()
+        if not normalized:
+            raise ValueError("application_id must not be blank")
+
+        self._fetch_origin_or_raise()
+        with self.registry.transaction_lock(), self._git_mutation_lock():
+            sessions = self.registry.list()
+            if (
+                self.registry.last_read_errors
+                or self.registry.last_unreadable_ids
+            ):
+                unreadable = ", ".join(
+                    sorted(self.registry.last_unreadable_ids)
                 )
-                reservation: _SessionReservation | None = None
-                try:
-                    reservation = self._reserve_session_identity(
-                        session,
-                        base_commit,
-                    )
-                    if create_worktree:
-                        path = (
-                            self.worktree_parent
-                            / session.branch.replace("/", "-")
-                        )
-                        session.worktree_path = str(path)
-                        self._ensure_worktree(session, reservation)
-                    self._sync_session(session)
-                    return self.registry.save(session)
-                except (
-                    _SessionIdentityConflict,
-                    _WorktreeClaimConflict,
-                ):
-                    if reservation is not None:
-                        self._rollback_reservation(reservation)
-                    self.registry.reserve_ids(self._git_session_ids())
-                    continue
-                except Exception as exc:
-                    if reservation is not None:
-                        if self._registry_record_is_published(session):
-                            self._attach_rollback_notes(
-                                exc,
-                                [
-                                    f"registry record {session.id} was already "
-                                    "published; retained reserved Git resources"
-                                ],
-                            )
-                        else:
-                            self._attach_rollback_notes(
-                                exc,
-                                self._rollback_reservation(reservation),
-                            )
-                    raise
-            raise SessionRegistryError(
-                f"unable to reserve a unique session identity after "
-                f"{_CREATE_RETRY_LIMIT} attempts"
+                detail = "; ".join(self.registry.last_read_errors)
+                raise SessionRegistryError(
+                    "cannot ensure application session while registry "
+                    f"records are unreadable: {unreadable or detail}"
+                )
+            matches = [
+                session
+                for session in sessions
+                if session.application_id == normalized
+                and session.status
+                not in {
+                    SessionStatus.MERGED_RETAINED,
+                    SessionStatus.ABANDONED_RETAINED,
+                }
+            ]
+            if len(matches) > 1:
+                raise ValueError(
+                    f"multiple active sessions claim application: {normalized}"
+                )
+            if matches:
+                return self._resume_locked(matches[0].id)
+            return self._create_locked(
+                SessionType.NEW_APP,
+                title,
+                base_branch=base_branch,
+                create_worktree=True,
+                application_id=normalized,
             )
 
     def resume(self, session_id: str) -> EngineeringSession:
         self._fetch_origin_or_raise()
-        with self.registry.transaction_lock():
-            session = self.registry.load(session_id)
-            self._sync_session(session)
-            if (
-                not session.git_state.missing_worktree
-                and not session.git_state.base_missing
-                and not session.git_state.branch_mismatch
-                and not session.git_state.worktree_ambiguous
-                and not session.git_state.merged_to_base
-                and session.status
-                not in {
-                    SessionStatus.BLOCKED_RETAINED,
-                    SessionStatus.ORPHAN_SESSION,
-                }
+        with self.registry.transaction_lock(), self._git_mutation_lock():
+            return self._resume_locked(session_id)
+
+    def _create_locked(
+        self,
+        session_type: SessionType,
+        title: str,
+        *,
+        base_branch: str | None,
+        create_worktree: bool,
+        roles: list[str] | None = None,
+        application_id: str | None = None,
+    ) -> EngineeringSession:
+        base = base_branch or self._default_base_branch()
+        base_ref = resolve_base_ref(self.repo_path, base)
+        if base_ref is None:
+            raise ValueError(f"base branch does not exist: {base}")
+        base_commit = git(self.repo_path, "rev-parse", base_ref).stdout.strip()
+        self.registry.reserve_ids(self._git_session_ids())
+        for _attempt in range(_CREATE_RETRY_LIMIT):
+            session = self.registry.create(
+                session_type=session_type,
+                title=title,
+                base_branch=base,
+                worktree_path=None,
+                base_commit=base_commit,
+                roles=roles,
+            )
+            reservation: _SessionReservation | None = None
+            try:
+                reservation = self._reserve_session_identity(
+                    session,
+                    base_commit,
+                )
+                if create_worktree:
+                    path = (
+                        self.worktree_parent
+                        / session.branch.replace("/", "-")
+                    )
+                    session.worktree_path = str(path)
+                    self._ensure_worktree(session, reservation)
+                session.application_id = application_id
+                self._sync_session(session)
+                return self.registry.save(session)
+            except (
+                _SessionIdentityConflict,
+                _WorktreeClaimConflict,
             ):
-                session.status = SessionStatus.RUNNING
-                session.cleanup.suggested = False
-            return self.registry.save(session)
+                if reservation is not None:
+                    self._rollback_reservation(reservation)
+                self.registry.reserve_ids(self._git_session_ids())
+                continue
+            except Exception as exc:
+                if reservation is not None:
+                    if self._registry_record_is_published(session):
+                        self._attach_rollback_notes(
+                            exc,
+                            [
+                                f"registry record {session.id} was already "
+                                "published; retained reserved Git resources"
+                            ],
+                        )
+                    else:
+                        self._attach_rollback_notes(
+                            exc,
+                            self._rollback_reservation(reservation),
+                        )
+                raise
+        raise SessionRegistryError(
+            f"unable to reserve a unique session identity after "
+            f"{_CREATE_RETRY_LIMIT} attempts"
+        )
+
+    def _resume_locked(self, session_id: str) -> EngineeringSession:
+        session = self.registry.load(session_id)
+        self._sync_session(session)
+        self._recover_merge_abort_failure_locked(session)
+        if (
+            not session.git_state.missing_worktree
+            and not session.git_state.base_missing
+            and not session.git_state.branch_mismatch
+            and not session.git_state.worktree_ambiguous
+            and not session.git_state.merged_to_base
+            and session.status
+            not in {
+                SessionStatus.BLOCKED_RETAINED,
+                SessionStatus.MERGED_RETAINED,
+                SessionStatus.ORPHAN_SESSION,
+            }
+        ):
+            session.status = SessionStatus.RUNNING
+            session.cleanup.suggested = False
+        return self.registry.save(session)
 
     def sync(self, session_id: str) -> EngineeringSession:
         self._fetch_origin_or_raise()
-        with self.registry.transaction_lock():
+        with self.registry.transaction_lock(), self._git_mutation_lock():
             return self._sync_and_save_locked(session_id)
 
     def sync_model(self, session: EngineeringSession) -> EngineeringSession:
@@ -314,6 +396,9 @@ class EngineeringSessionService:
         elif previous_status == SessionStatus.ORPHAN_SESSION:
             session.status = SessionStatus.ORPHAN_SESSION
             session.cleanup.suggested = state.clean and state.merged_to_base
+        elif state.clean and self._merged_to_local_base(session):
+            session.status = SessionStatus.MERGED_RETAINED
+            session.cleanup.suggested = True
         elif previous_status == SessionStatus.ARCHIVED_DIRTY and state.clean:
             if state.merged_to_base:
                 session.status = SessionStatus.MERGED_RETAINED
@@ -385,7 +470,10 @@ class EngineeringSessionService:
                 ):
                     return session
 
-            if session.git_state.clean and session.git_state.merged_to_base:
+            if session.git_state.clean and (
+                session.git_state.merged_to_base
+                or self._merged_to_local_base(session)
+            ):
                 session.status = SessionStatus.MERGED_RETAINED
                 session.cleanup.suggested = True
             elif session.git_state.clean:
@@ -396,6 +484,141 @@ class EngineeringSessionService:
                 session.git_state.dirty_uncheckpointed = True
                 session.cleanup.suggested = False
             return self.registry.save(session)
+
+    def merge(self, session_id: str) -> EngineeringSession:
+        self._fetch_origin_or_raise()
+        with self.registry.transaction_lock(), self._git_mutation_lock():
+            session = self.registry.load(session_id)
+            self._sync_session(session)
+            self._recover_merge_abort_failure_locked(session)
+            session = self.registry.save(session)
+            self._require_mergeable_session(session)
+            if git_operation_in_progress(self.repo_path):
+                raise ValueError("control worktree has a Git operation in progress")
+            if current_branch(self.repo_path) != session.base_branch:
+                raise ValueError(
+                    "control worktree must be on the session base branch: "
+                    f"{session.base_branch}"
+                )
+
+            if not session.git_state.clean:
+                _, session = self._checkpoint_locked(session)
+                self._require_mergeable_session(session)
+
+            try:
+                result = git(
+                    self.repo_path,
+                    *_COMMIT_IDENTITY,
+                    "merge",
+                    "--no-ff",
+                    "--no-edit",
+                    session.branch,
+                    check=False,
+                )
+            except GitCommandError as exc:
+                if not self._is_ambiguous_git_timeout(exc):
+                    raise
+                merge_conflict = has_unmerged_index(self.repo_path)
+                if git_operation_in_progress(self.repo_path):
+                    self._abort_control_merge_or_raise(
+                        session,
+                        str(exc)[:500],
+                    )
+                    if merge_conflict:
+                        raise EngineeringSessionOperationError(
+                            "WORKTREE_MERGE_CONFLICT",
+                            str(exc)[:500],
+                        ) from exc
+                    raise
+                if self._merged_to_local_base(session):
+                    return self._finalize_merged_session(session)
+                raise
+            if result.returncode != 0:
+                detail = (result.stderr or result.stdout).strip()[:500]
+                merge_conflict = has_unmerged_index(self.repo_path)
+                if git_operation_in_progress(self.repo_path):
+                    self._abort_control_merge_or_raise(session, detail)
+                if merge_conflict:
+                    raise EngineeringSessionOperationError(
+                        "WORKTREE_MERGE_CONFLICT",
+                        detail or "merge conflict",
+                    )
+                raise GitCommandError(f"git merge failed: {detail}")
+
+            return self._finalize_merged_session(session)
+
+    def dispose(self, session_id: str) -> None:
+        self._fetch_origin_or_raise()
+        with self.registry.transaction_lock(), self._git_mutation_lock():
+            session = self.registry.load(session_id)
+            persisted_status = session.status
+            if session.status == SessionStatus.BLOCKED_RETAINED:
+                raise ValueError("blocked session cannot be disposed")
+            worktrees = self._worktrees_after_pruning_session_entries(
+                session.branch
+            )
+            paths_by_branch = self._worktree_paths_by_branch(worktrees)
+            actual_paths = paths_by_branch.get(session.branch, [])
+            if len(actual_paths) > 1:
+                raise ValueError("session worktree is ambiguous")
+            if actual_paths:
+                self._sync_session(
+                    session,
+                    paths_by_branch=paths_by_branch,
+                )
+            locally_merged = (
+                session.git_state.merged_to_base
+                or self._merged_to_local_base(session)
+            )
+            if actual_paths:
+                retained_status = (
+                    session.status == SessionStatus.MERGED_RETAINED
+                )
+            else:
+                retained_status = (
+                    persisted_status == SessionStatus.MERGED_RETAINED
+                    or session.unavailable_lifecycle_status
+                    == SessionStatus.MERGED_RETAINED
+                )
+            if (
+                not retained_status
+                or not locally_merged
+                or (
+                    actual_paths
+                    and (
+                        not session.git_state.clean
+                        or session.git_state.branch_mismatch
+                        or session.git_state.worktree_ambiguous
+                    )
+                )
+            ):
+                raise ValueError(
+                    "session must be clean and merged before disposal"
+                )
+
+            if actual_paths:
+                git(
+                    self.repo_path,
+                    "worktree",
+                    "remove",
+                    actual_paths[0],
+                )
+            branch_ref = f"refs/heads/{session.branch}"
+            if has_ref(self.repo_path, branch_ref):
+                git(
+                    self.repo_path,
+                    "branch",
+                    "-d",
+                    session.branch,
+                )
+            git(
+                self.repo_path,
+                "worktree",
+                "prune",
+                "--expire",
+                "now",
+            )
+            self.registry.delete(session.id)
 
     def list(self, *, sync: bool = False) -> list[EngineeringSession]:
         if not sync:
@@ -514,7 +737,140 @@ class EngineeringSessionService:
     def _sync_and_save_locked(self, session_id: str) -> EngineeringSession:
         session = self.registry.load(session_id)
         self._sync_session(session)
+        self._recover_merge_abort_failure_locked(session)
         return self.registry.save(session)
+
+    def _recover_merge_abort_failure_locked(
+        self,
+        session: EngineeringSession,
+    ) -> None:
+        if (
+            session.status != SessionStatus.BLOCKED_RETAINED
+            or session.recovery_reason != "merge_abort_failed"
+            or session.git_state.missing_worktree
+            or session.git_state.base_missing
+            or session.git_state.branch_mismatch
+            or session.git_state.worktree_ambiguous
+            or git_operation_in_progress(self.repo_path)
+        ):
+            return
+        session.status = SessionStatus.RUNNING
+        session.recovery_reason = None
+        session.cleanup.suggested = False
+
+    def _merged_to_local_base(self, session: EngineeringSession) -> bool:
+        local_base_ref = f"refs/heads/{session.base_branch}"
+        if not has_ref(self.repo_path, local_base_ref):
+            return False
+        branch_ref = f"refs/heads/{session.branch}"
+        if has_ref(self.repo_path, branch_ref):
+            if session.base_commit is None:
+                return False
+            base_commit_ref = f"{session.base_commit}^{{commit}}"
+            if not has_ref(self.repo_path, base_commit_ref):
+                return False
+            if not merged_to_base(
+                self.repo_path,
+                branch_ref,
+                base_commit_ref,
+            ):
+                return False
+            ahead, _ = ahead_behind(
+                self.repo_path,
+                base_commit_ref,
+                branch_ref,
+            )
+            if ahead == 0:
+                return False
+            return merged_to_base(
+                self.repo_path,
+                local_base_ref,
+                branch_ref,
+            )
+        if session.merged_commit is None:
+            return False
+        merged_commit_ref = f"{session.merged_commit}^{{commit}}"
+        if not has_ref(
+            self.repo_path,
+            merged_commit_ref,
+        ):
+            return False
+        return merged_to_base(
+            self.repo_path,
+            local_base_ref,
+            merged_commit_ref,
+        )
+
+    def _abort_control_merge_or_raise(
+        self,
+        session: EngineeringSession,
+        merge_detail: str,
+    ) -> None:
+        abort_exception: Exception | None = None
+        try:
+            abort_result = git(
+                self.repo_path,
+                "merge",
+                "--abort",
+                check=False,
+            )
+        except Exception as exc:
+            abort_exception = exc
+            abort_detail = str(exc)[:500]
+        else:
+            abort_detail = (
+                abort_result.stderr or abort_result.stdout
+            ).strip()[:500]
+        if abort_exception is None and abort_result.returncode == 0:
+            return
+
+        session.status = SessionStatus.BLOCKED_RETAINED
+        session.recovery_reason = "merge_abort_failed"
+        session.cleanup.suggested = False
+        self.registry.save(session)
+        operation_error = EngineeringSessionOperationError(
+            "WORKTREE_MERGE_ABORT_FAILED",
+            (
+                f"{merge_detail or 'git merge failed'}; "
+                "git merge --abort failed: "
+                f"{abort_detail or 'unknown error'}"
+            ),
+        )
+        if abort_exception is not None:
+            raise operation_error from abort_exception
+        raise operation_error
+
+    def _finalize_merged_session(
+        self,
+        session: EngineeringSession,
+    ) -> EngineeringSession:
+        session.merged_commit = git(
+            self.repo_path,
+            "rev-parse",
+            "HEAD",
+        ).stdout.strip()
+        self._sync_session(session)
+        if session.git_state.clean and self._merged_to_local_base(session):
+            session.status = SessionStatus.MERGED_RETAINED
+            session.cleanup.suggested = True
+        return self.registry.save(session)
+
+    @staticmethod
+    def _require_mergeable_session(session: EngineeringSession) -> None:
+        if session.status == SessionStatus.BLOCKED_RETAINED:
+            raise ValueError("session is blocked after an incomplete merge recovery")
+        if session.worktree_path is None:
+            raise ValueError("session worktree is required for merge")
+        if session.git_state.missing_worktree:
+            raise ValueError("session worktree is missing")
+        if session.git_state.base_missing:
+            raise ValueError("session base branch is missing")
+        if session.git_state.branch_mismatch:
+            raise ValueError("session worktree branch does not match session branch")
+        if session.git_state.worktree_ambiguous:
+            raise ValueError("session worktree is ambiguous")
+        if git_operation_in_progress(session.worktree_path):
+            raise ValueError("session worktree has a Git operation in progress")
 
     def _checkpoint_locked(
         self,
@@ -838,6 +1194,36 @@ class EngineeringSessionService:
         return {
             path: item
             for path, item in list_git_worktrees(self.repo_path).items()
+            if not item["prunable"]
+        }
+
+    def _worktrees_after_pruning_session_entries(
+        self,
+        branch: str,
+    ) -> dict[str, GitWorktreeEntry]:
+        worktrees = list_git_worktrees(self.repo_path)
+        if any(
+            item["prunable"] and item["branch"] == branch
+            for item in worktrees.values()
+        ):
+            git(
+                self.repo_path,
+                "worktree",
+                "prune",
+                "--expire",
+                "now",
+            )
+            worktrees = list_git_worktrees(self.repo_path)
+            if any(
+                item["prunable"] and item["branch"] == branch
+                for item in worktrees.values()
+            ):
+                raise GitCommandError(
+                    "git worktree prune left a prunable session worktree"
+                )
+        return {
+            path: item
+            for path, item in worktrees.items()
             if not item["prunable"]
         }
 

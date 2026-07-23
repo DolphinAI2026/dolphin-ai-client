@@ -22,6 +22,7 @@ class ControlPlaneAuthResult:
     org_permissions: dict[str, bool] = field(default_factory=dict)
     tenant_id: str | None = None
     tenant_name: str | None = None
+    available_tenants: list[dict[str, str]] = field(default_factory=list)
     access_token: str = ""
     refresh_token: str | None = None
 
@@ -68,6 +69,16 @@ def control_plane_access_token(user: Any) -> str | None:
 
 def control_plane_refresh_token(user: Any) -> str | None:
     return _stored_token(user, "coding_refresh_token")
+
+
+def store_remote_builder_credentials(user: Any, access_token: str) -> None:
+    user.remote_builder_access_token = (
+        _ENCRYPTED_TOKEN_PREFIX + encrypt_password(access_token)
+    )
+
+
+def remote_builder_access_token(user: Any) -> str | None:
+    return _stored_token(user, "remote_builder_access_token")
 
 
 def control_plane_token_needs_refresh(token: str, *, skew_seconds: int = 60) -> bool:
@@ -185,8 +196,72 @@ async def login_to_control_plane(
         } if isinstance(permissions, dict) else {},
         tenant_id=str(current_user.get("tenant_id") or "").strip() or None,
         tenant_name=str(current_user.get("tenant_name") or "").strip() or None,
+        available_tenants=[
+            {
+                "tenant_id": str(item.get("tenant_id") or item.get("tenantId") or "").strip(),
+                "tenant_name": str(item.get("tenant_name") or item.get("tenantName") or "").strip(),
+            }
+            for item in (
+                current_user.get("available_tenants")
+                or current_user.get("availableTenants")
+                or current_user.get("tenants")
+                or []
+            )
+            if isinstance(item, dict)
+            and str(item.get("tenant_id") or item.get("tenantId") or "").strip()
+        ],
         access_token=access_token,
         refresh_token=str(token.get("refresh_token") or "").strip() or None,
+    )
+
+
+async def fetch_control_plane_identity(access_token: str) -> ControlPlaneAuthResult:
+    """Read the current Control Plane identity for a cached desktop session."""
+    base_url = _dolphin_workspace_base_url()
+    try:
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            current_user = _response_payload(
+                await client.get(
+                    f"{base_url}/api/auth/me",
+                    headers={"Authorization": f"Bearer {access_token}"},
+                ),
+                fallback="Dolphin 当前用户读取失败",
+                failure_status=401,
+            )
+    except HTTPException:
+        raise
+    except httpx.RequestError as exc:
+        raise HTTPException(status_code=503, detail="Dolphin 当前用户读取失败") from exc
+
+    role = str(current_user.get("role") or "").strip()
+    permissions = current_user.get("org_permissions")
+    username = str(current_user.get("username") or "").strip()
+    return ControlPlaneAuthResult(
+        username=username,
+        display_name=str(current_user.get("nickname") or username).strip() or None,
+        external_user_id=str(current_user.get("id") or "").strip() or None,
+        roles=[role] if role else [],
+        org_permissions={
+            str(code): bool(allowed)
+            for code, allowed in permissions.items()
+        } if isinstance(permissions, dict) else {},
+        tenant_id=str(current_user.get("tenant_id") or "").strip() or None,
+        tenant_name=str(current_user.get("tenant_name") or "").strip() or None,
+        available_tenants=[
+            {
+                "tenant_id": str(item.get("tenant_id") or item.get("tenantId") or "").strip(),
+                "tenant_name": str(item.get("tenant_name") or item.get("tenantName") or "").strip(),
+            }
+            for item in (
+                current_user.get("available_tenants")
+                or current_user.get("availableTenants")
+                or current_user.get("tenants")
+                or []
+            )
+            if isinstance(item, dict)
+            and str(item.get("tenant_id") or item.get("tenantId") or "").strip()
+        ],
+        access_token=access_token,
     )
 
 
@@ -247,3 +322,54 @@ async def exchange_apaas_token(
         refresh_token=str(payload.get("refresh_token") or "").strip() or None,
         tenant_id=str(payload.get("tenant_id") or "").strip() or None,
     )
+
+
+async def exchange_control_plane_session(
+    control_plane_token: str,
+    tenant_id: str,
+) -> str:
+    """Exchange a Control Plane session for a remote AI Builder session."""
+    base_url = _dolphin_workspace_base_url()
+    try:
+        async with httpx.AsyncClient(timeout=15.0) as client:
+            payload = _response_payload(
+                await client.post(
+                    f"{base_url}/ai-builder/api/auth/control-plane/session",
+                    headers={
+                        "Authorization": f"Bearer {control_plane_token}",
+                        "X-Tenant-Id": tenant_id,
+                    },
+                ),
+                fallback="远端 AI Builder 会话换取失败",
+                failure_status=401,
+            )
+    except HTTPException:
+        raise
+    except httpx.RequestError as exc:
+        raise HTTPException(status_code=503, detail="远端 AI Builder 暂不可用") from exc
+
+    access_token = str(payload.get("access_token") or "").strip()
+    if not access_token:
+        raise HTTPException(status_code=502, detail="远端 AI Builder 未返回 access_token")
+    return access_token
+
+
+async def fetch_remote_builder_rail_history(
+    builder_access_token: str,
+) -> dict[str, Any]:
+    """Read Code rail history from the authoritative remote AI Builder."""
+    base_url = _dolphin_workspace_base_url()
+    try:
+        async with httpx.AsyncClient(timeout=15.0) as client:
+            return _response_payload(
+                await client.get(
+                    f"{base_url}/ai-builder/api/code/rail/history",
+                    headers={"Authorization": f"Bearer {builder_access_token}"},
+                ),
+                fallback="远端 AI Builder 会话读取失败",
+                failure_status=502,
+            )
+    except HTTPException:
+        raise
+    except httpx.RequestError as exc:
+        raise HTTPException(status_code=503, detail="远端 AI Builder 暂不可用") from exc

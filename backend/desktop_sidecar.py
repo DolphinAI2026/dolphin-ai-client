@@ -64,12 +64,13 @@ def build_env(data_dir: Path, port: int) -> dict:
         # 每实例持久化的加密主密钥 (crypto.py 对它 sha256 派生 Fernet key)。
         "ENCRYPTION_KEY": ensure_encryption_key(data_dir),
         "JWT_SECRET_KEY": ensure_jwt_secret(data_dir),
-        # 默认 federation 模式: 转发到公网 account-service 认证(已部署 agent.dfy/account-api)。
-        # 新机器用公网账号即可登, 不用复制 app.db。设 PUBLIC_ACCOUNT_BASE_URL="" 可切回本地 authority(离线兜底)。
-        "PUBLIC_ACCOUNT_BASE_URL": os.environ.get(
-            "PUBLIC_ACCOUNT_BASE_URL", "https://agent.dfy.definesys.cn/account-api"
-        ),
-        # 桌面 sidecar 接受 ai-builder(内部短票)+ desktop-sidecar(联邦会话票)。
+        # 桌面与 Web 复用 Control Plane/aPaaS 登录协议，不再走独立 desktop 账号服务。
+        # 企业部署可用 CODE_AUTH_PROVIDER=apaas 覆盖默认的 control_plane。
+        "AUTH_PROVIDER": os.environ.get("CODE_AUTH_PROVIDER", "control_plane"),
+        "PUBLIC_ACCOUNT_BASE_URL": "",
+        # The sidecar may issue its own desktop-sidecar ticket after remote
+        # Control Plane authentication. This whitelist is local-only; shared
+        # backends still reject that issuer at startup.
         "ACCEPTED_TOKEN_ISSUERS": "ai-builder,desktop-sidecar",
         # app 托管工作区落 app_data_dir 下(稳定持久), 修冻结包相对二进制诡异路径
         "APAAS_WORKSPACE_ROOT": os.path.join(str(data_dir), "workspaces"),

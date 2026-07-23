@@ -108,6 +108,10 @@ def create_access_token(
     apaas_tenant_id: Optional[str] = None,
     username: Optional[str] = None,
     issuer: str = _ISSUER,
+    control_plane_tenant_id: Optional[str] = None,
+    control_plane_tenant_name: Optional[str] = None,
+    control_plane_tenant_role: Optional[str] = None,
+    control_plane_permissions: Optional[Mapping[str, Any]] = None,
 ) -> str:
     """主登录 JWT。优先从 user 对象取 apaas claims；调用方覆盖参数优先级最高。
 
@@ -148,6 +152,15 @@ def create_access_token(
         payload["apaas_tid"] = str(u_apaas_tid)
     if u_username:
         payload["username"] = u_username
+    if control_plane_tenant_id:
+        # `tid` remains reserved for the legacy local Tenant primary key.
+        payload["cp_tid"] = str(control_plane_tenant_id)
+    if control_plane_tenant_name:
+        payload["cp_tname"] = str(control_plane_tenant_name)
+    if control_plane_tenant_role:
+        payload["cp_trole"] = str(control_plane_tenant_role)
+    if control_plane_permissions:
+        payload["cp_perms"] = dict(control_plane_permissions)
     return _encode(payload)
 
 

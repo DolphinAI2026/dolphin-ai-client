@@ -6,7 +6,7 @@ authors = ["you"]
 license = ""
 repository = ""
 edition = "2021"
-rust-version = "1.77.2"
+rust-version = "1.93"
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
@@ -28,3 +28,9 @@ tauri-plugin-updater = "2"
 tauri-plugin-process = "2"
 tauri-plugin-dialog = "2"
 ureq = "2"
+mxc-sdk = { git = "https://github.com/microsoft/mxc.git", rev = "fd7e9061fabb5188955b79e8a26bd5e476e4d613", package = "mxc-sdk" }
+thiserror = "2"
+chrono = { version = "0.4", features = ["serde"] }
+libc = "0.2"
+getrandom = "0.3"
+tiny_http = "0.12"
