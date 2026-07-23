@@ -10,7 +10,7 @@
 #   KUBE_NAMESPACE=orcamatrix-demo
 #   KUBE_CONTEXT=<context>
 #   CONTROL_PLANE_URL=https://om-demo.dfy.definesys.cn/control-plane
-#   CONTROL_PLANE_DEPLOYMENT=control-plane-fw-auth-preview
+#   CONTROL_PLANE_DEPLOYMENT=control-plane
 #   DOLPHIN_WORKSPACE_BASE_URL=https://om-demo.dfy.definesys.cn
 #   CONTROL_PLANE_CAPTCHA_ENABLED=true
 #   CONTROL_PLANE_BINDING_ENABLED=false
@@ -29,7 +29,7 @@ KUBE_CONTEXT="${KUBE_CONTEXT:-}"
 IMAGE="${IMAGE:-}"
 BACKEND_ENV_FILE="${BACKEND_ENV_FILE:-}"
 CONTROL_PLANE_URL="${CONTROL_PLANE_URL:-https://om-demo.dfy.definesys.cn/control-plane}"
-CONTROL_PLANE_DEPLOYMENT="${CONTROL_PLANE_DEPLOYMENT:-control-plane-fw-auth-preview}"
+CONTROL_PLANE_DEPLOYMENT="${CONTROL_PLANE_DEPLOYMENT:-control-plane}"
 DOLPHIN_WORKSPACE_BASE_URL="${DOLPHIN_WORKSPACE_BASE_URL:-https://om-demo.dfy.definesys.cn}"
 CONTROL_PLANE_CAPTCHA_ENABLED="${CONTROL_PLANE_CAPTCHA_ENABLED:-true}"
 CONTROL_PLANE_BINDING_ENABLED="${CONTROL_PLANE_BINDING_ENABLED:-false}"

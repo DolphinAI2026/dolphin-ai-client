@@ -81,7 +81,7 @@ ANTHROPIC_MODEL=MiniMax-M2.7
 DATABASE_URL=postgresql+asyncpg://<control-plane-username>:<control-plane-password>@om-postgresql.orcamatrix-demo.svc.cluster.local:5432/orcamatrix
 AUTH_PROVIDER=control_plane
 DOLPHIN_WORKSPACE_BASE_URL=https://dolphin.dfy.definesys.cn
-DOLPHIN_CODE_CONTROL_PLANE_URL=https://om-demo.dfy.definesys.cn/control-plane-fw-auth-preview
+DOLPHIN_CODE_CONTROL_PLANE_URL=https://om-demo.dfy.definesys.cn/control-plane
 
 JWT_SECRET_KEY=<换成随机长字符串>
 JWT_ALGORITHM=HS256
