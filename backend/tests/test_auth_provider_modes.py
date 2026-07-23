@@ -39,6 +39,10 @@ def _set_control_plane_captcha_enabled(monkeypatch, enabled: bool) -> None:
     )
 
 
+def test_control_plane_captcha_is_enabled_by_default():
+    assert settings.control_plane_captcha_enabled is True
+
+
 async def _seed_login_user(
     db_session,
     *,

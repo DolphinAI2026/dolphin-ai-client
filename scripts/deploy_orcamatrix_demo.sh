@@ -12,7 +12,7 @@
 #   CONTROL_PLANE_URL=https://om-demo.dfy.definesys.cn/control-plane
 #   CONTROL_PLANE_DEPLOYMENT=control-plane-fw-auth-preview
 #   DOLPHIN_WORKSPACE_BASE_URL=https://om-demo.dfy.definesys.cn
-#   CONTROL_PLANE_CAPTCHA_ENABLED=false
+#   CONTROL_PLANE_CAPTCHA_ENABLED=true
 #   CONTROL_PLANE_BINDING_ENABLED=false
 #   MODEL_PROVIDER_SECRET=sandbox-runtime-model-provider-real
 #
@@ -31,7 +31,7 @@ BACKEND_ENV_FILE="${BACKEND_ENV_FILE:-}"
 CONTROL_PLANE_URL="${CONTROL_PLANE_URL:-https://om-demo.dfy.definesys.cn/control-plane}"
 CONTROL_PLANE_DEPLOYMENT="${CONTROL_PLANE_DEPLOYMENT:-control-plane-fw-auth-preview}"
 DOLPHIN_WORKSPACE_BASE_URL="${DOLPHIN_WORKSPACE_BASE_URL:-https://om-demo.dfy.definesys.cn}"
-CONTROL_PLANE_CAPTCHA_ENABLED="${CONTROL_PLANE_CAPTCHA_ENABLED:-false}"
+CONTROL_PLANE_CAPTCHA_ENABLED="${CONTROL_PLANE_CAPTCHA_ENABLED:-true}"
 CONTROL_PLANE_BINDING_ENABLED="${CONTROL_PLANE_BINDING_ENABLED:-false}"
 PUBLIC_BASE_URL="${PUBLIC_BASE_URL:-https://om-demo.dfy.definesys.cn/ai-builder}"
 DATABASE_SECRET="${DATABASE_SECRET:-control-plane-db-secret}"

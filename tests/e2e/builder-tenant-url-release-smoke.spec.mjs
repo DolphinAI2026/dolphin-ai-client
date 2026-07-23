@@ -72,11 +72,34 @@ async function jsonResponse(response, message) {
   return response.json();
 }
 
+async function loginCaptcha(api) {
+  const response = await api.get("/ai-builder/api/auth/captcha");
+  const payload = await jsonResponse(response, "captcha request failed");
+  if (!payload.required) {
+    return {};
+  }
+
+  assert.ok(payload.captcha_id, "captcha id is missing");
+  assert.match(payload.image_data || "", /^data:image\/svg\+xml;base64,/);
+  const svg = Buffer.from(
+    payload.image_data.replace(/^data:image\/svg\+xml;base64,/, ""),
+    "base64",
+  ).toString("utf8");
+  const match = svg.match(/<text\b[^>]*>([A-Za-z0-9]+)<\/text>/);
+  assert.ok(match, "captcha SVG does not contain a readable code");
+  return {
+    captcha_id: payload.captcha_id,
+    captcha_code: match[1],
+  };
+}
+
 async function login(api) {
+  const captcha = await loginCaptcha(api);
   const response = await api.post("/ai-builder/api/auth/login", {
     data: {
       username: required.username,
       password: required.password,
+      ...captcha,
     },
   });
   const payload = await jsonResponse(response, "controlled login failed");

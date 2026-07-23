@@ -38,8 +38,8 @@ class Settings(BaseSettings):
     control_plane_binding_enabled: bool = False
     # 可选项：Control Plane 登录页所在环境的根地址。
     dolphin_workspace_base_url: str = "https://om-demo.dfy.definesys.cn"
-    # 可选项：Control Plane 登录是否要求验证码；新认证页默认不要求。
-    control_plane_captcha_enabled: bool = False
+    # Control Plane 登录默认要求验证码；仅在上游明确不要求时通过环境变量关闭。
+    control_plane_captcha_enabled: bool = True
     apaas_base_url: str = ""
     # 桌面 sidecar: 公网账号权威地址(authority)。空=本实例自身就是 authority。
     public_account_base_url: str = ""

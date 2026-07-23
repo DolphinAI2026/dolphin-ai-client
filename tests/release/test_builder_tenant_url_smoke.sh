@@ -1031,6 +1031,11 @@ source = File.read(ARGV.fetch(0))
   BUILDER_SMOKE_CODE_SESSION_ID
 ].each { |input| abort "release spec is missing #{input}" unless source.include?(input) }
 %w[
+  /auth/captcha
+  captcha_id
+  captcha_code
+].each { |input| abort "release spec is missing captcha flow #{input}" unless source.include?(input) }
+%w[
   BUILDER_TARGET_TENANT_ID
   BUILDER_TARGET_C_TENANT_ID
   BUILDER_DISABLED_TENANT_UUID
@@ -1049,6 +1054,10 @@ source = File.read(ARGV.fetch(0))
   newActivations.length, 1
   wrong configured agent
 ].each { |contract| abort "release spec does not bind activation exactly: #{contract}" unless source.include?(contract) }
+repo_root = File.expand_path("../..", File.dirname(ARGV.fetch(0)))
+deploy_source = File.read(File.join(repo_root, "scripts/deploy_orcamatrix_demo.sh"))
+abort "deploy default must enable control-plane captcha" \
+  unless deploy_source.include?('CONTROL_PLANE_CAPTCHA_ENABLED="${CONTROL_PLANE_CAPTCHA_ENABLED:-true}"')
 puts "RELEASE_SPEC_CONTRACT=PASS"
 RUBY
 }
