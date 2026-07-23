@@ -148,7 +148,7 @@ export const authApi = {
     )
   },
 
-  switchTenant(tenantId: number, signal?: AbortSignal) {
+  switchTenant(tenantId: number | string, signal?: AbortSignal) {
     return request.post<any, Token>('/auth/switch-tenant', { tenant_id: tenantId }, { signal })
   },
 

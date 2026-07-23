@@ -1355,6 +1355,29 @@ async def _control_plane_login_response(user_data: UserLogin, db: AsyncSession) 
     user = await _ensure_control_plane_user(db, identity)
     if settings.control_plane_binding_enabled:
         await _require_control_plane_platform_binding(db, user, identity)
+    if runtime.is_desktop():
+        tenant_role = (
+            "platform_admin"
+            if _control_plane_identity_is_platform_admin(identity)
+            else "tenant_admin"
+            if _control_plane_identity_is_tenant_admin(identity)
+            else "member"
+        )
+        response = LoginResponse(
+            access_token=create_access_token(
+                user,
+                issuer=_DESKTOP_ISSUER,
+                control_plane_tenant_id=identity.tenant_id,
+                control_plane_tenant_name=getattr(identity, "tenant_name", None),
+                control_plane_tenant_role=tenant_role,
+                control_plane_permissions=getattr(identity, "org_permissions", None),
+            ),
+            entry_path="/code/apps",
+            is_platform_admin=user.is_platform_admin,
+            has_tenant_context=bool(identity.tenant_id),
+        )
+        await db.commit()
+        return response
     response = await _issue_login_response_for_user(db, user)
     await db.commit()
     return response
@@ -1678,7 +1701,7 @@ async def exchange_apaas_token(
 
 
 class TenantSwitchRequest(BaseModel):
-    tenant_id: int
+    tenant_id: Union[int, str]
 
 
 @router.post("/switch-tenant", response_model=Token)
@@ -1692,6 +1715,43 @@ async def switch_tenant(
     本地兜底平台管理员可以切到任意 active 租户；aPaaS 登录用户仅限自己可登录的
     active membership。aPaaS 平台管理员的全量租户同步不等于拥有工作台登录权限。
     """
+    if runtime.is_desktop() and ctx.user.account_source == "control_plane":
+        token = control_plane_access_token(ctx.user)
+        if not token:
+            raise HTTPException(status_code=401, detail="远端登录已失效，请重新登录")
+        identity = await fetch_control_plane_identity(token)
+        target_tenant_id = str(data.tenant_id).strip()
+        target = next(
+            (
+                item for item in identity.available_tenants
+                if str(item.get("tenant_id") or "").strip() == target_tenant_id
+            ),
+            None,
+        )
+        if not target:
+            raise HTTPException(status_code=403, detail="该远端租户不可访问")
+        tenant_role = (
+            "platform_admin"
+            if _control_plane_identity_is_platform_admin(identity)
+            else "tenant_admin"
+            if _control_plane_identity_is_tenant_admin(identity)
+            else "member"
+        )
+        ctx.user.coding_tenant_id = target_tenant_id
+        await db.commit()
+        return Token(
+            access_token=create_access_token(
+                ctx.user,
+                issuer=_DESKTOP_ISSUER,
+                control_plane_tenant_id=target_tenant_id,
+                control_plane_tenant_name=str(
+                    target.get("tenant_name") or target_tenant_id
+                ),
+                control_plane_tenant_role=tenant_role,
+                control_plane_permissions=identity.org_permissions,
+            ),
+        )
+
     if platform_admin_has_unscoped_tenant_access(ctx.user):
         tenant = (
             await db.execute(

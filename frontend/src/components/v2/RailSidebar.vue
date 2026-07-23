@@ -325,7 +325,7 @@ const userAccount = computed(() => user.user?.username || '')
 const userName = computed(() => user.user?.display_name || userAccount.value || '未登录')
 const userAvatarText = computed(() => Array.from(userName.value.trim())[0]?.toUpperCase() || 'U')
 const tenantOptions = computed(() => user.availableTenants || [])
-const currentTenantValue = computed(() => user.user?.tenant_public_id || '')
+const currentTenantValue = computed(() => user.tenantId ? String(user.tenantId) : '')
 function looksLikeLongId(value?: string | null) {
   return /^\d{12,}$/.test(String(value || '').trim())
 }
@@ -348,8 +348,11 @@ function tenantSubtitle(tenant?: { tenant_name?: string | null; tenant_code?: st
 }
 
 const currentTenantLabel = computed(() => {
+  if (__DESKTOP__) {
+    return user.user?.control_plane_tenant_name || user.user?.tenant_name || '未选择组织'
+  }
   const match = tenantOptions.value.find(
-    tenant => tenant.tenant_public_id === currentTenantValue.value,
+    tenant => String(tenant.tenant_id) === currentTenantValue.value,
   )
   return tenantLabel(match || {
     tenant_name: user.user?.tenant_name,
@@ -376,11 +379,12 @@ function closeTenantMenu() {
 }
 
 onMounted(() => {
-  void Promise.allSettled([
+  const startupTasks: Promise<unknown>[] = [
     loadRailApps(),
-    user.fetchAvailableTenants(),
     loadRailSessions(),
-  ])
+  ]
+  startupTasks.push(user.fetchAvailableTenants())
+  void Promise.allSettled(startupTasks)
   window.addEventListener('click', closeTenantMenu)
   window.addEventListener('code-rail-refresh', refreshCodeRail)
 })
@@ -420,11 +424,17 @@ function withTenantId(path: string, targetPublicId: string): string {
   return `${parsed.pathname}${parsed.search}${parsed.hash}`
 }
 
-async function selectTenant(targetPublicId: string) {
+async function selectTenant(value: string) {
   tenantMenuOpen.value = false
+  const tenant = tenantOptions.value.find(item => String(item.tenant_id) === value)
+  if (!tenant || value === currentTenantValue.value) return
+  if (__DESKTOP__) {
+    await user.switchTenant(value)
+    return
+  }
+  const targetPublicId = tenant.tenant_public_id
+  if (!targetPublicId) return
   const navigationEpoch = user.advanceTenantNavigationEpoch()
-  const tenant = tenantOptions.value.find(item => item.tenant_public_id === targetPublicId)
-  if (!tenant || tenant.tenant_id === user.tenantId) return
   const destination = withTenantId(MODE_META[currentMode.value].home, targetPublicId)
   await user.switchTenantContext(
     tenant.tenant_id,
@@ -667,9 +677,7 @@ function renderIcon(name: string): string {
       <!-- 老的 .rail-collapse-btn 已移到顶部 brand 区，这里删掉减少重复入口 -->
 
       <div v-if="!effectiveCollapsed" class="rail-console" @click.stop>
-        <!-- 头像点开的菜单(参考 Claude): 租户 / 平台管理 / 主题 / 检查更新 / 退出 —— 平时收起, 底部只留头像行 -->
-        <div v-show="userMenuOpen" class="rail-user-menu">
-        <div class="rail-console-label">当前租户</div>
+        <div class="rail-console-label">{{ isDesktop ? '当前组织' : '当前租户' }}</div>
         <div class="tenant-switch-wrap" @click.stop>
           <button
             type="button"
@@ -686,12 +694,12 @@ function renderIcon(name: string): string {
           <div v-if="tenantMenuOpen" class="tenant-menu" role="menu">
             <button
               v-for="tenant in tenantOptions"
-              :key="tenant.tenant_public_id"
+              :key="tenant.tenant_id"
               type="button"
               class="tenant-option"
-              :class="{ active: tenant.tenant_public_id === currentTenantValue }"
+              :class="{ active: String(tenant.tenant_id) === currentTenantValue }"
               role="menuitem"
-              @click="selectTenant(tenant.tenant_public_id)"
+              @click="selectTenant(String(tenant.tenant_id))"
             >
               <span class="tenant-option-name" :title="tenant.tenant_name">{{ tenantLabel(tenant) }}</span>
               <span v-if="tenantSubtitle(tenant)" class="tenant-option-code">{{ tenantSubtitle(tenant) }}</span>
@@ -700,6 +708,8 @@ function renderIcon(name: string): string {
           </div>
         </div>
 
+        <!-- 头像点开的菜单只保留账户操作，组织切换在左下角常驻。 -->
+        <div v-show="userMenuOpen" class="rail-user-menu">
         <a
           v-if="platformEntryVisible && !desktopHidden(platformNavItem.path)"
           class="console-row platform-row"

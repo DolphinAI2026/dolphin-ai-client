@@ -495,9 +495,19 @@ export const useUserStore = defineStore('user', () => {
     }
   }
 
-  const switchTenant = async (targetTenantId: number) => {
+  const switchTenant = async (targetTenantId: number | string) => {
     const navigationEpoch = advanceTenantNavigationEpoch()
-    if (targetTenantId === tenantId.value) return
+    if (String(targetTenantId) === String(tenantId.value || '')) return
+    if (typeof targetTenantId === 'string') {
+      const candidate = await authApi.switchTenant(targetTenantId)
+      setToken(candidate.access_token)
+      await fetchUser()
+      if (typeof window !== 'undefined') {
+        try { localStorage.removeItem('ai-builder-tabs-v1') } catch { /* ignore */ }
+        window.location.href = import.meta.env.BASE_URL
+      }
+      return
+    }
     const targetTenant = availableTenants.value.find(
       (tenant) => tenant.tenant_id === targetTenantId,
     )

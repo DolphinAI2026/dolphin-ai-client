@@ -113,17 +113,18 @@ describe('RailSidebar unified session source (SP2b)', () => {
   })
 })
 
-describe('RailSidebar tenant UUID navigation', () => {
-  it('uses tenant_public_id as the option value and maps numeric ids from available tenants', () => {
+describe('RailSidebar tenant navigation', () => {
+  it('maps the visible tenant id to the public id only for web navigation', () => {
     expect(railSidebarSource).toContain(
-      '@click="selectTenant(tenant.tenant_public_id)"',
+      '@click="selectTenant(String(tenant.tenant_id))"',
     )
     expect(railSidebarSource).toContain(
-      'tenant.tenant_public_id === currentTenantValue',
+      'const targetPublicId = tenant.tenant_public_id',
     )
     expect(railSidebarSource).toContain(
-      'tenantOptions.value.find(item => item.tenant_public_id === targetPublicId)',
+      'if (__DESKTOP__) {',
     )
+    expect(railSidebarSource).toContain('await user.switchTenant(value)')
   })
 
   it('enters the current mode home through the shared epoch switch contract', () => {
@@ -133,8 +134,9 @@ describe('RailSidebar tenant UUID navigation', () => {
     expect(railSidebarSource).toContain('withTenantId(')
   })
 
-  it('does not navigate a second time after the tenant switch adapter replaces location', () => {
-    expect(railSidebarSource).not.toContain('await user.switchTenant(value)')
+  it('leaves navigation replacement to the selected switch path', () => {
+    expect(railSidebarSource).toContain('if (__DESKTOP__) {')
+    expect(railSidebarSource).toContain('await user.switchTenant(value)')
     expect(railSidebarSource).not.toContain("router.push('/')")
   })
 })

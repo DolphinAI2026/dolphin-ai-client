@@ -8,6 +8,8 @@ export interface User {
   tenant_id?: number | null
   tenant_public_id?: string | null
   tenant_name?: string
+  control_plane_tenant_id?: string | null
+  control_plane_tenant_name?: string | null
   tenant_role?: string
   org_permissions?: Record<string, boolean>
 }
