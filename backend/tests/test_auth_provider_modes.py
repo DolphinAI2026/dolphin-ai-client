@@ -288,6 +288,39 @@ async def test_control_plane_auth_provider_allows_login_without_captcha_when_dis
 
 
 @pytest.mark.asyncio
+async def test_control_plane_login_prefers_the_users_own_organization_over_shared_default(
+    db_session,
+    monkeypatch,
+):
+    _set_auth_provider(monkeypatch, "control_plane")
+    monkeypatch.setattr(settings, "control_plane_binding_enabled", False)
+
+    async def fake_control_plane_login(*_args):
+        return auth_routes.ControlPlaneAuthResult(
+            username="admin",
+            display_name="Admin",
+            external_user_id="admin-user",
+            roles=["CONTROL_PLANE_ADMIN"],
+            tenant_id="2077284540335579137",
+            tenant_name="示例租户",
+            available_tenants=[
+                {"tenant_id": "0", "tenant_name": "admin 的组织"},
+                {"tenant_id": "2077284540335579137", "tenant_name": "示例租户"},
+            ],
+            access_token="control-plane-access-token",
+        )
+
+    monkeypatch.setattr(auth_routes, "login_to_control_plane", fake_control_plane_login)
+
+    response = await login(UserLogin(username="admin", password="password"), db_session)
+
+    payload = decode_token(response.access_token)
+    assert payload["type"] == "control_plane_code"
+    assert payload["cp_tid"] == "0"
+    assert payload["cp_tname"] == "admin 的组织"
+
+
+@pytest.mark.asyncio
 async def test_desktop_control_plane_login_keeps_identity_as_cache_only(
     db_session,
     monkeypatch,

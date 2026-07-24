@@ -1286,6 +1286,23 @@ def _control_plane_code_token(
     )
 
 
+def _prefer_control_plane_personal_tenant(
+    identity: ControlPlaneAuthResult,
+) -> ControlPlaneAuthResult:
+    """Use the account's own Code organization when the remote default is shared."""
+    username = str(identity.username or "").strip()
+    personal_name = f"{username} 的组织" if username else ""
+    if not personal_name:
+        return identity
+
+    for tenant in getattr(identity, "available_tenants", None) or []:
+        tenant_id = str(tenant.get("tenant_id") or "").strip()
+        tenant_name = str(tenant.get("tenant_name") or "").strip()
+        if tenant_id and tenant_name == personal_name:
+            return replace(identity, tenant_id=tenant_id, tenant_name=tenant_name)
+    return identity
+
+
 async def _control_plane_login_response(user_data: UserLogin, db: AsyncSession) -> LoginResponse:
     captcha_id = str(user_data.captcha_id or "").strip()
     captcha_code = str(user_data.captcha_code or "").strip()
@@ -1295,6 +1312,8 @@ async def _control_plane_login_response(user_data: UserLogin, db: AsyncSession) 
         captcha_id,
         captcha_code,
     )
+    if not runtime.is_desktop():
+        identity = _prefer_control_plane_personal_tenant(identity)
     user = await _ensure_control_plane_user(db, identity)
     if runtime.is_desktop():
         tenant_role = (
