@@ -65,7 +65,9 @@ export const routes: RouteRecordRaw[] = [
     {
       path: '/code',
       component: () => import('@/views/CodeShellLayout.vue'),
-      meta: { requiresAuth: true, tenantContext: 'required' },
+      // Code uses the per-tab Control Plane ticket (`cp_tid`), not the
+      // Builder/aPaaS local tenant URL contract.
+      meta: { requiresAuth: true, tenantContext: 'none' },
       children: [
         {
           path: '',

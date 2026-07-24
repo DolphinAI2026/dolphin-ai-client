@@ -17,7 +17,14 @@ from app.schemas import (
     UserLogin, Token,
     LoginResponse, TenantOption, TenantSelectRequest
 )
-from app.auth import _DESKTOP_ISSUER, verify_password, get_password_hash, create_access_token, create_selection_token
+from app.auth import (
+    _DESKTOP_ISSUER,
+    create_access_token,
+    create_control_plane_code_token,
+    create_selection_token,
+    get_password_hash,
+    verify_password,
+)
 from app.code_runtime.auth import (
     ControlPlaneAuthResult,
     control_plane_access_token,
@@ -31,6 +38,7 @@ from app.crypto import decrypt_password, encrypt_password
 from app.deps import (
     AuthContext,
     get_auth_context,
+    get_platform_auth_context,
     platform_admin_has_unscoped_tenant_access,
     resolve_default_tenant_id_for_user,
 )
@@ -1246,99 +1254,36 @@ async def _ensure_control_plane_user(
     user.username = identity.username
     user.display_name = identity.display_name or identity.username
     user.coding_user_id = identity.external_user_id
-    user.coding_tenant_id = identity.tenant_id
+    if runtime.is_desktop():
+        user.coding_tenant_id = identity.tenant_id
     store_control_plane_credentials(user, identity.access_token, identity.refresh_token)
     user.is_active = True
     user.is_platform_admin = _control_plane_identity_is_platform_admin(identity)
     await db.flush()
-    if runtime.is_desktop():
-        return user
-
-    preferred_roles = (
-        ("R_tenant_admin", "admin", "R_developer")
-        if _control_plane_identity_is_tenant_admin(identity)
-        else ("R_developer", "R_tenant_admin", "admin")
-    )
-    if settings.control_plane_binding_enabled:
-        mapped_envs = (
-            await db.execute(
-                select(PlatformEnv)
-                .where(func.lower(PlatformEnv.username) == identity.username.strip().lower())
-                .order_by(PlatformEnv.is_default.desc(), PlatformEnv.id.asc())
-            )
-        ).scalars().all()
-        for index, env in enumerate(mapped_envs):
-            tenant = (
-                await db.execute(
-                    select(Tenant).where(Tenant.id == env.tenant_id, Tenant.status == 1)
-                )
-            ).scalar_one_or_none()
-            if tenant:
-                await _sync_user_membership(
-                    db,
-                    user,
-                    tenant,
-                    is_default=index == 0,
-                    preferred_role_codes=preferred_roles,
-                )
-    elif identity.tenant_id:
-        from app.seed_data import seed_default_roles, sync_builtin_llm_configs
-
-        workspace_tenant_code = _normalize_tenant_code(
-            f"workspace-{identity.tenant_id}",
-            identity.tenant_id,
-        )
-        tenant_codes = [workspace_tenant_code]
-        if identity.tenant_id.strip().lower() == "default":
-            tenant_codes.append("default")
-        tenant = None
-        for tenant_code in tenant_codes:
-            tenant = (
-                await db.execute(select(Tenant).where(Tenant.tenant_code == tenant_code))
-            ).scalar_one_or_none()
-            if tenant:
-                break
-        if not tenant:
-            tenant = Tenant(
-                tenant_name=identity.tenant_name or identity.tenant_id,
-                tenant_code=(
-                    "default"
-                    if identity.tenant_id.strip().lower() == "default"
-                    else workspace_tenant_code
-                ),
-            )
-            db.add(tenant)
-            await db.flush()
-        await seed_default_roles(db, tenant.id, commit=False)
-        try:
-            await sync_builtin_llm_configs(db, tenant_ids=[tenant.id], commit=False)
-        except Exception as exc:
-            logger.warning(
-                "sync_builtin_llm_configs failed for Control Plane tenant %s: %s",
-                tenant.id,
-                exc,
-            )
-        existing_default = (
-            await db.execute(
-                select(UserTenant)
-                .where(
-                    UserTenant.user_id == user.id,
-                    UserTenant.status == 1,
-                    UserTenant.is_default == True,
-                )
-                .order_by(UserTenant.joined_at.asc(), UserTenant.id.asc())
-                .limit(1)
-            )
-        ).scalar_one_or_none()
-        await _sync_user_membership(
-            db,
-            user,
-            tenant,
-            is_default=existing_default is None or existing_default.tenant_id == tenant.id,
-            preferred_role_codes=preferred_roles,
-        )
-        await db.flush()
     return user
+
+
+def _control_plane_code_role(identity: ControlPlaneAuthResult) -> str:
+    if _control_plane_identity_is_platform_admin(identity):
+        return "platform_admin"
+    if _control_plane_identity_is_tenant_admin(identity):
+        return "tenant_admin"
+    return "member"
+
+
+def _control_plane_code_token(
+    user: User,
+    identity: ControlPlaneAuthResult,
+    tenant_id: str,
+    tenant_name: str | None,
+) -> str:
+    return create_control_plane_code_token(
+        user,
+        control_plane_tenant_id=tenant_id,
+        control_plane_tenant_name=tenant_name,
+        control_plane_tenant_role=_control_plane_code_role(identity),
+        control_plane_permissions=getattr(identity, "org_permissions", None),
+    )
 
 
 async def _control_plane_login_response(user_data: UserLogin, db: AsyncSession) -> LoginResponse:
@@ -1351,8 +1296,6 @@ async def _control_plane_login_response(user_data: UserLogin, db: AsyncSession) 
         captcha_code,
     )
     user = await _ensure_control_plane_user(db, identity)
-    if settings.control_plane_binding_enabled:
-        await _require_control_plane_platform_binding(db, user, identity)
     if runtime.is_desktop():
         tenant_role = (
             "platform_admin"
@@ -1376,7 +1319,20 @@ async def _control_plane_login_response(user_data: UserLogin, db: AsyncSession) 
         )
         await db.commit()
         return response
-    response = await _issue_login_response_for_user(db, user)
+    tenant_id = str(identity.tenant_id or "").strip()
+    if not tenant_id:
+        raise HTTPException(status_code=403, detail="Control Plane 登录未返回当前组织")
+    response = LoginResponse(
+        access_token=_control_plane_code_token(
+            user,
+            identity,
+            tenant_id,
+            str(getattr(identity, "tenant_name", None) or tenant_id),
+        ),
+        entry_path="/code/apps",
+        is_platform_admin=user.is_platform_admin,
+        has_tenant_context=True,
+    )
     await db.commit()
     return response
 
@@ -1398,11 +1354,23 @@ async def exchange_control_plane_session(
         tenants.setdefault(str(identity.tenant_id), str(identity.tenant_name or ""))
     if tenant_id not in tenants:
         raise HTTPException(status_code=403, detail="该 Control Plane 组织不可访问")
-    user = await _ensure_control_plane_user(
-        db,
-        replace(identity, tenant_id=tenant_id, tenant_name=tenants[tenant_id] or tenant_id),
+    selected_identity = replace(
+        identity,
+        tenant_id=tenant_id,
+        tenant_name=tenants[tenant_id] or tenant_id,
     )
-    response = await _issue_login_response_for_user(db, user)
+    user = await _ensure_control_plane_user(db, selected_identity)
+    response = LoginResponse(
+        access_token=_control_plane_code_token(
+            user,
+            selected_identity,
+            tenant_id,
+            tenants[tenant_id] or tenant_id,
+        ),
+        entry_path="/code/apps",
+        is_platform_admin=user.is_platform_admin,
+        has_tenant_context=True,
+    )
     await db.commit()
     return response
 
@@ -1703,6 +1671,51 @@ class TenantSwitchRequest(BaseModel):
     tenant_id: Union[int, str]
 
 
+class ControlPlaneCodeTenantSwitchRequest(BaseModel):
+    tenant_id: str
+
+
+@router.post("/control-plane/code/switch-tenant", response_model=Token)
+async def switch_control_plane_code_tenant(
+    data: ControlPlaneCodeTenantSwitchRequest,
+    ctx: Annotated[AuthContext, Depends(get_platform_auth_context)],
+    db: Annotated[AsyncSession, Depends(get_db)],
+):
+    """Sign a Code ticket for another authorized CP organization.
+
+    The selected organization is encoded in the returned short-lived ticket.
+    Nothing is written to local Tenant/UserTenant/current-app state and no
+    upstream switch endpoint is called.
+    """
+    if ctx.user.account_source != "control_plane":
+        raise HTTPException(status_code=403, detail="当前账号不是 Control Plane Code 账号")
+    target_tenant_id = str(data.tenant_id or "").strip()
+    if not target_tenant_id:
+        raise HTTPException(status_code=400, detail="Control Plane 组织不能为空")
+    upstream_token = control_plane_access_token(ctx.user)
+    if not upstream_token:
+        raise HTTPException(status_code=401, detail="远端登录已失效，请重新登录")
+    identity = await fetch_control_plane_identity(upstream_token)
+    target = next(
+        (
+            item
+            for item in identity.available_tenants
+            if str(item.get("tenant_id") or "").strip() == target_tenant_id
+        ),
+        None,
+    )
+    if not target:
+        raise HTTPException(status_code=403, detail="该 Control Plane 组织不可访问")
+    return Token(
+        access_token=_control_plane_code_token(
+            ctx.user,
+            identity,
+            target_tenant_id,
+            str(target.get("tenant_name") or target_tenant_id),
+        )
+    )
+
+
 @router.post("/switch-tenant", response_model=Token)
 async def switch_tenant(
     data: TenantSwitchRequest,
@@ -1774,6 +1787,9 @@ async def switch_tenant(
         ).scalar_one_or_none()
         if not membership:
             raise HTTPException(status_code=403, detail="你不是该租户的成员")
+        tenant = await db.get(Tenant, int(data.tenant_id))
+        if not tenant or tenant.status != 1:
+            raise HTTPException(status_code=404, detail="租户不存在或未启用")
 
     # 切租户后重写 slot 到新 tenant_id
     try:

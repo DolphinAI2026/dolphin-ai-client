@@ -181,6 +181,41 @@ async def test_login_to_control_plane_omits_empty_captcha_fields(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_switch_control_plane_tenant_uses_full_workspace_switch_api(monkeypatch):
+    from app.code_runtime import auth as coding_auth
+    from app.config import settings
+
+    class FakeClient:
+        def __init__(self, *args, **kwargs):
+            pass
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *_args):
+            return False
+
+        async def post(self, url, **kwargs):
+            assert url == "https://dolphin.example.com/api/auth/switch-tenant"
+            assert kwargs["headers"] == {
+                "Authorization": "Bearer access-1",
+                "X-Tenant-Id": "0",
+            }
+            assert kwargs["json"] == {"tenant_id": "0"}
+            return FakeResponse({"ok": True})
+
+    monkeypatch.setattr(coding_auth.httpx, "AsyncClient", FakeClient)
+    monkeypatch.setattr(
+        settings,
+        "dolphin_workspace_base_url",
+        "https://dolphin.example.com",
+        raising=False,
+    )
+
+    await coding_auth.switch_control_plane_tenant("access-1", "0")
+
+
+@pytest.mark.asyncio
 async def test_refresh_control_plane_token_uses_dolphin_refresh_api(monkeypatch):
     from app.code_runtime import auth as coding_auth
     from app.config import settings

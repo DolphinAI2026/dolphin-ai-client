@@ -152,6 +152,14 @@ export const authApi = {
     return request.post<any, Token>('/auth/switch-tenant', { tenant_id: tenantId }, { signal })
   },
 
+  switchControlPlaneCodeTenant(tenantId: string, token: string) {
+    return request.post<any, Token>(
+      '/auth/control-plane/code/switch-tenant',
+      { tenant_id: tenantId },
+      { headers: { Authorization: `Bearer ${token}` } },
+    )
+  },
+
   listMyTenants() {
     return request.get<any, TenantOption[]>('/auth/me/tenants')
   },

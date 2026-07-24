@@ -228,7 +228,7 @@ async def test_control_plane_auth_provider_uses_platform_binding_without_merging
     user = result.scalar_one()
     assert user.display_name == "Control Plane Admin"
     assert user.coding_user_id == "code-user-1"
-    assert user.coding_tenant_id == "default"
+    assert user.coding_tenant_id is None
     assert control_plane_access_token(user) == "control-plane-access-token"
     assert user.coding_refresh_token.startswith("enc:v1:")
     assert await db_session.scalar(select(func.count(Tenant.id))) == tenant_count_before
@@ -236,7 +236,9 @@ async def test_control_plane_auth_provider_uses_platform_binding_without_merging
 
     payload = decode_token(response.access_token)
     assert payload["sub"] == str(user.id)
-    assert payload["tid"] == tenant.id
+    assert payload["type"] == "control_plane_code"
+    assert payload["cp_tid"] == "default"
+    assert "tid" not in payload
 
 
 @pytest.mark.asyncio
@@ -278,12 +280,11 @@ async def test_control_plane_auth_provider_allows_login_without_captcha_when_dis
     assert calls == [("workspace_admin", "password", "", "")]
     payload = decode_token(response.access_token)
     user = await db_session.get(User, int(payload["sub"]))
-    tenant = await db_session.get(Tenant, int(payload["tid"]))
     assert user is not None
-    assert user.coding_tenant_id == "tenant-1"
-    assert tenant is not None
-    assert tenant.tenant_code == "workspace-tenant-1"
-    assert tenant.tenant_name == "Tenant 1"
+    assert user.coding_tenant_id is None
+    assert payload["type"] == "control_plane_code"
+    assert payload["cp_tid"] == "tenant-1"
+    assert "tid" not in payload
 
 
 @pytest.mark.asyncio
@@ -374,13 +375,11 @@ async def test_control_plane_session_exchange_issues_builder_token_for_selected_
 
     payload = decode_token(response.access_token)
     user = await db_session.get(User, int(payload["sub"]))
-    tenant = await db_session.get(Tenant, int(payload["tid"]))
-
     assert user is not None
-    assert user.coding_tenant_id == "tenant-selected"
-    assert tenant is not None
-    assert tenant.tenant_code == "workspace-tenant-selected"
-    assert tenant.tenant_name == "Selected tenant"
+    assert user.coding_tenant_id is None
+    assert payload["type"] == "control_plane_code"
+    assert payload["cp_tid"] == "tenant-selected"
+    assert "tid" not in payload
 
 
 @pytest.mark.asyncio
@@ -504,27 +503,11 @@ async def test_control_plane_login_without_binding_uses_only_control_plane_curre
     assert response.access_token
     assert response.requires_tenant_selection is False
     payload = decode_token(response.access_token)
-    tenant = (
-        await db_session.execute(
-            select(Tenant).where(Tenant.id == payload["tid"])
-        )
-    ).scalar_one()
-    assert tenant.id == fallback_tenant.id
-    assert tenant.tenant_code == "default"
+    assert payload["type"] == "control_plane_code"
+    assert payload["cp_tid"] == "default"
+    assert "tid" not in payload
     assert await db_session.scalar(select(func.count(Tenant.id))) == tenant_count_before
-    membership = (
-        await db_session.execute(
-            select(UserTenant).where(
-                UserTenant.user_id == int(payload["sub"]),
-                UserTenant.tenant_id == tenant.id,
-            )
-        )
-    ).scalar_one()
-    role = await db_session.get(Role, membership.role_id)
-    assert role is not None
-    assert role.role_code == "R_tenant_admin"
-    assert role.permissions["application:create"] is True
-    assert synced_tenant_ids == [tenant.id]
+    assert synced_tenant_ids == []
 
 
 @pytest.mark.asyncio
@@ -572,10 +555,7 @@ async def test_control_plane_login_preserves_existing_builder_default_tenant(
 
     assert len(default_memberships) == 1
     assert default_memberships[0].tenant_id == existing_tenant.id
-    assert any(
-        membership.tenant_id != existing_tenant.id and not membership.is_default
-        for membership in memberships
-    )
+    assert len(memberships) == 1
 
 
 @pytest.mark.asyncio

@@ -543,7 +543,7 @@ async def test_resolve_control_plane_tenant_id_prefers_remote_account_tenant(
         user=SimpleNamespace(coding_tenant_id="new-tenant"),
     )
 
-    assert await _resolve_control_plane_tenant_id(db_session, ctx) == "new-tenant"
+    assert await _resolve_control_plane_tenant_id(db_session, ctx) is None
 
 
 @pytest.mark.asyncio
@@ -561,7 +561,7 @@ async def test_resolve_control_plane_tenant_id_uses_account_tenant_for_legacy_de
         user=SimpleNamespace(coding_tenant_id="2077284540335579137"),
     )
 
-    assert await _resolve_control_plane_tenant_id(db_session, ctx) == "2077284540335579137"
+    assert await _resolve_control_plane_tenant_id(db_session, ctx) is None
 
 
 @pytest.mark.asyncio
@@ -579,7 +579,7 @@ async def test_resolve_control_plane_tenant_id_preserves_control_plane_default_t
         user=SimpleNamespace(coding_tenant_id="default"),
     )
 
-    assert await _resolve_control_plane_tenant_id(db_session, ctx) == "default"
+    assert await _resolve_control_plane_tenant_id(db_session, ctx) is None
 
 
 def test_code_runtime_proxy_rewrites_upstream_location_headers():
@@ -2408,6 +2408,46 @@ async def test_create_code_session_from_external_app_reuses_existing_app_shell_s
     ).scalars().all()
     assert second["id"] == first["id"]
     assert len(rows) == 1
+
+
+@pytest.mark.asyncio
+async def test_control_plane_code_sessions_are_isolated_by_remote_tenant(db_session):
+    from app.routes.code_runtime import (
+        CreateExternalCodeSessionRequest,
+        create_code_session_from_external_app,
+    )
+
+    cp_user = SimpleNamespace(id=11, account_source="control_plane")
+    first_context = SimpleNamespace(
+        user=cp_user,
+        tenant_id=0,
+        tenant_role="member",
+        control_plane_tenant_id="0",
+    )
+    second_context = SimpleNamespace(
+        user=cp_user,
+        tenant_id=0,
+        tenant_role="member",
+        control_plane_tenant_id="2077284540335579137",
+    )
+    request = CreateExternalCodeSessionRequest(
+        external_application_id="code-app-1",
+        app_name="客户门户",
+    )
+
+    first = await create_code_session_from_external_app(request, first_context, db_session)
+    second = await create_code_session_from_external_app(request, second_context, db_session)
+
+    assert first["id"] != second["id"]
+    rows = (await db_session.execute(
+        select(AIChatSession)
+        .where(AIChatSession.external_application_id == "code-app-1")
+        .order_by(AIChatSession.id)
+    )).scalars().all()
+    assert [row.control_plane_tenant_id for row in rows] == [
+        "0",
+        "2077284540335579137",
+    ]
 
 
 @pytest.mark.asyncio

@@ -1,6 +1,7 @@
 import request from '@/utils/request'
 import type { AIChatSession } from '@/api/aiChat'
 import type { MergedApplication } from '@/types'
+import { controlPlaneCodeAuthorization } from '@/utils/controlPlaneCodeSession'
 
 // This owner must change with any automatic activate retry added by the client.
 export const CODE_RUNTIME_ACTIVATION_RETRY_DELAYS_MS = [] as const
@@ -85,17 +86,17 @@ export function resolveCodeRuntimeEmbedUrl(url: string, baseUrl = import.meta.en
 
 export const codeRuntimeApi = {
   listApplications(params?: { keyword?: string; provisionStatus?: string; page?: number; pageSize?: number }) {
-    return request.get<any, CodeApplicationListResponse>('/code/applications', { params })
+    return request.get<any, CodeApplicationListResponse>('/code/applications', { params, headers: controlPlaneCodeAuthorization() })
   },
   createApplication(body: CreateCodeApplicationRequest) {
-    return request.post<any, CodeApplication>('/code/applications', body)
+    return request.post<any, CodeApplication>('/code/applications', body, { headers: controlPlaneCodeAuthorization() })
   },
   createSessionFromApp(appId: number, body?: { title?: string; selected_llm_config_id?: number | null }) {
     return request.post<any, AIChatSession>('/code/sessions/from-app', {
       app_id: appId,
       ...(body?.title ? { title: body.title } : {}),
       ...(body?.selected_llm_config_id != null ? { selected_llm_config_id: body.selected_llm_config_id } : {}),
-    })
+    }, { headers: controlPlaneCodeAuthorization() })
   },
   createSessionFromExternalApp(
     app: { external_application_id: string; app_name?: string | null; app_code?: string | null },
@@ -107,41 +108,41 @@ export const codeRuntimeApi = {
       ...(app.app_code ? { app_code: app.app_code } : {}),
       ...(body?.title ? { title: body.title } : {}),
       ...(body?.selected_llm_config_id != null ? { selected_llm_config_id: body.selected_llm_config_id } : {}),
-    })
+    }, { headers: controlPlaneCodeAuthorization() })
   },
   async openSession(sessionRef: number | string) {
     const encodedSessionRef = encodeURIComponent(String(sessionRef))
-    const opened = await request.post<any, CodeRuntimeOpenResponse>(`/code/sessions/${encodedSessionRef}/open`)
+    const opened = await request.post<any, CodeRuntimeOpenResponse>(`/code/sessions/${encodedSessionRef}/open`, undefined, { headers: controlPlaneCodeAuthorization() })
     return {
       ...opened,
       embed_url: resolveCodeRuntimeEmbedUrl(opened.embed_url),
     }
   },
   listRailHistory() {
-    return request.get<any, CodeRailHistoryResponse>('/code/rail/history')
+    return request.get<any, CodeRailHistoryResponse>('/code/rail/history', { headers: controlPlaneCodeAuthorization() })
   },
   listAgentSessions(shellSessionId: string) {
     return request.get<any, { sessions: CodeAgentSessionRecord[] }>(
-      `/code-runtime/${shellSessionId}/shell/agent-sessions`,
+      `/code-runtime/${shellSessionId}/shell/agent-sessions`, { headers: controlPlaneCodeAuthorization() },
     )
   },
   createAgentSession(shellSessionId: string) {
     // 外层工作台尚未持有 iframe 的 Runtime Cookie，必须复用 Builder 登录态。
     const encodedShellSessionId = encodeURIComponent(shellSessionId)
     return request.post<any, CodeAgentSessionActivateResponse>(
-      `/code/sessions/${encodedShellSessionId}/agent-sessions`,
+      `/code/sessions/${encodedShellSessionId}/agent-sessions`, undefined, { headers: controlPlaneCodeAuthorization() },
     )
   },
   activateAgentSession(shellSessionId: string, runtimeSessionId: string) {
     const encodedShellSessionId = encodeURIComponent(shellSessionId)
     return request.post<any, CodeAgentSessionActivateResponse>(
-      `/code/sessions/${encodedShellSessionId}/agent-sessions/${encodeURIComponent(runtimeSessionId)}/activate`,
+      `/code/sessions/${encodedShellSessionId}/agent-sessions/${encodeURIComponent(runtimeSessionId)}/activate`, undefined, { headers: controlPlaneCodeAuthorization() },
     )
   },
   deleteAgentSession(shellSessionId: string, runtimeSessionId: string) {
     const encodedShellSessionId = encodeURIComponent(shellSessionId)
     return request.delete<any, { ok?: boolean }>(
-      `/code/sessions/${encodedShellSessionId}/agent-sessions/${encodeURIComponent(runtimeSessionId)}`,
+      `/code/sessions/${encodedShellSessionId}/agent-sessions/${encodeURIComponent(runtimeSessionId)}`, { headers: controlPlaneCodeAuthorization() },
     )
   },
 }

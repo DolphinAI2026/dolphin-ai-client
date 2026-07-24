@@ -433,7 +433,7 @@ describe('user tenant switching', () => {
   })
 
   it('commits token and user only after candidate numeric ID and UUID match', async () => {
-    const { replace } = installBrowserGlobals()
+    const { replace, sessionStorage } = installBrowserGlobals()
     const targetUser = makeUser({
       tenant_id: 2,
       tenant_name: 'Target tenant',
@@ -447,6 +447,9 @@ describe('user tenant switching', () => {
     store.user = makeUser()
     localStorage.setItem('token', 'source-token')
     localStorage.setItem('ai-builder-tabs-v1', 'source-tabs')
+    replace.mockImplementation(() => {
+      expect(sessionStorage.get('ai-builder-auth-session-v1')).toContain('candidate-token')
+    })
 
     await expect(store.switchTenantContext(2, targetUuid, targetPath))
       .resolves.toBe('committed_reload')
@@ -527,7 +530,8 @@ describe('user tenant switching', () => {
       store.switchTenantContext(2, targetUuid, targetPath),
     ).rejects.toBe(navigationError)
 
-    expect(getAuthSessionState().revision).toBe(sourceRevision)
+    expect(getAuthSessionState().revision).toBeGreaterThan(sourceRevision)
+    expect(getAuthSessionState().token).toBe('source-token')
     expect(store.token).toBe('source-token')
     expect(store.user).toEqual(sourceUser)
     expect(localStorage.getItem('token')).toBe('source-token')

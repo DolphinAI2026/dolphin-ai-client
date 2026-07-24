@@ -11,6 +11,7 @@ check_resource_permission Layer1 抛 403「你的角色没有 application:Action
 """
 import pytest
 import pytest_asyncio
+from fastapi.security import HTTPAuthorizationCredentials
 from sqlalchemy.ext.asyncio import create_async_engine, async_sessionmaker, AsyncSession
 from sqlalchemy.pool import StaticPool
 
@@ -96,6 +97,32 @@ async def test_token_ctx_loads_member_permissions(shared_db):
 
     assert ctx.tenant_role == "member"
     assert has_org_permission(ctx.org_permissions, "application", Action.VIEW) is True
+
+
+@pytest.mark.asyncio
+async def test_control_plane_tenant_claim_is_preserved_for_header_and_query_contexts(shared_db):
+    from app.deps import get_auth_context, get_auth_context_from_token
+
+    user_id, tenant_id = await _seed(
+        shared_db,
+        role_code="R_tenant_admin",
+        permissions={},
+    )
+    token = create_access_token(
+        user_id,
+        tenant_id=tenant_id,
+        control_plane_tenant_id="0",
+    )
+
+    async with shared_db() as db:
+        header_ctx = await get_auth_context(
+            HTTPAuthorizationCredentials(scheme="Bearer", credentials=token),
+            db,
+        )
+    query_ctx = await get_auth_context_from_token(token)
+
+    assert header_ctx.control_plane_tenant_id == "0"
+    assert query_ctx.control_plane_tenant_id == "0"
 
 
 def test_wildcard_org_permission_allows_specific_actions():

@@ -15,6 +15,7 @@ from app.deps import AuthContext
 from app.models import APaaSUserCredential, User
 from app.models.tenant import Tenant, UserTenant
 from app.routes.auth import (
+    ControlPlaneCodeTenantSwitchRequest,
     ResetPasswordRequest,
     TenantCreateRequest,
     TenantMemberAddRequest,
@@ -31,6 +32,7 @@ from app.routes.auth import (
     list_tenant_members,
     remove_tenant_member,
     switch_tenant,
+    switch_control_plane_code_tenant,
     update_tenant,
     update_tenant_member_role,
     update_tenant_status,
@@ -479,6 +481,113 @@ async def test_desktop_control_plane_switches_remote_tenant_context(db_session, 
 
     assert user.coding_tenant_id == "0"
     assert decode_token(response.access_token)["cp_tid"] == "0"
+
+
+@pytest.mark.asyncio
+async def test_web_control_plane_switch_does_not_reintroduce_control_plane_mapping(db_session, monkeypatch):
+    user = User(
+        username="remote-admin",
+        hashed_password=get_password_hash("secret"),
+        account_source="control_plane",
+        coding_tenant_id="2077284540335579137",
+        is_active=True,
+    )
+    current = Tenant(tenant_name="示例租户", tenant_code="workspace-2077284540335579137")
+    target = Tenant(tenant_name="admin 的组织", tenant_code="workspace-0")
+    db_session.add_all([user, current, target])
+    await db_session.flush()
+    db_session.add_all([
+        UserTenant(user_id=user.id, tenant_id=current.id, status=1),
+        UserTenant(user_id=user.id, tenant_id=target.id, status=1),
+    ])
+    await db_session.flush()
+    store_control_plane_credentials(user, "remote-access-token")
+
+    async def fake_fetch_control_plane_identity(_token):
+        return type(
+            "Identity",
+            (),
+            {
+                "available_tenants": [
+                    {"tenant_id": "0", "tenant_name": "admin 的组织"},
+                    {"tenant_id": "2077284540335579137", "tenant_name": "示例租户"},
+                ],
+            },
+        )()
+
+    monkeypatch.setattr(
+        sys.modules["app.routes.auth.login"],
+        "fetch_control_plane_identity",
+        fake_fetch_control_plane_identity,
+    )
+    ctx = AuthContext(
+        user=user,
+        tenant_id=current.id,
+        tenant_role="tenant_admin",
+        org_permissions={},
+    )
+
+    response = await switch_tenant(TenantSwitchRequest(tenant_id=target.id), ctx, db_session)
+
+    assert user.coding_tenant_id == "2077284540335579137"
+    payload = decode_token(response.access_token)
+    assert payload["tid"] == target.id
+    assert "cp_tid" not in payload
+
+
+@pytest.mark.asyncio
+async def test_control_plane_code_switch_is_tab_scoped_and_does_not_touch_local_tenant(
+    db_session,
+    monkeypatch,
+):
+    user = User(
+        username="remote-admin",
+        hashed_password=get_password_hash("secret"),
+        account_source="control_plane",
+        coding_tenant_id="legacy-tenant",
+        is_active=True,
+    )
+    db_session.add(user)
+    await db_session.flush()
+    store_control_plane_credentials(user, "remote-access-token")
+
+    async def fake_fetch_control_plane_identity(_token):
+        return type(
+            "Identity",
+            (),
+            {
+                "available_tenants": [
+                    {"tenant_id": "0", "tenant_name": "admin 的组织"},
+                    {"tenant_id": "2077284540335579137", "tenant_name": "示例租户"},
+                ],
+                "roles": ["PLATFORM_ADMIN"],
+                "org_permissions": {"*": True},
+            },
+        )()
+
+    monkeypatch.setattr(
+        sys.modules["app.routes.auth.login"],
+        "fetch_control_plane_identity",
+        fake_fetch_control_plane_identity,
+    )
+    ctx = AuthContext(
+        user=user,
+        tenant_id=0,
+        tenant_role="platform_admin",
+        org_permissions={"*": True},
+        control_plane_tenant_id="legacy-tenant",
+    )
+
+    response = await switch_control_plane_code_tenant(
+        ControlPlaneCodeTenantSwitchRequest(tenant_id="0"),
+        ctx,
+        db_session,
+    )
+
+    payload = decode_token(response.access_token)
+    assert payload["cp_tid"] == "0"
+    assert "tid" not in payload
+    assert user.coding_tenant_id == "legacy-tenant"
 
 
 @pytest.mark.asyncio

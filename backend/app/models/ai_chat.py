@@ -58,6 +58,11 @@ class AIChatSession(Base):
     public_id: Mapped[Optional[str]] = mapped_column(
         String(36), default=lambda: str(uuid4()), nullable=True, unique=True, index=True
     )
+    # Online Code uses the Control Plane organization as its authoritative
+    # isolation boundary. Local tenant_id remains for legacy/aPaaS sessions.
+    control_plane_tenant_id: Mapped[Optional[str]] = mapped_column(
+        String(80), nullable=True, index=True
+    )
     tenant_id: Mapped[int] = mapped_column(Integer, nullable=False, index=True)
     user_id: Mapped[int] = mapped_column(Integer, nullable=False, index=True)
     title: Mapped[str] = mapped_column(String(200), default="新会话", nullable=False)
@@ -96,6 +101,9 @@ class CodeRuntimeBinding(Base):
     )
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    control_plane_tenant_id: Mapped[Optional[str]] = mapped_column(
+        String(80), nullable=True, index=True
+    )
     tenant_id: Mapped[int] = mapped_column(Integer, nullable=False, index=True)
     user_id: Mapped[int] = mapped_column(Integer, nullable=False, index=True)
     app_id: Mapped[Optional[int]] = mapped_column(Integer, nullable=True, index=True)
@@ -179,6 +187,9 @@ class CodeRuntimeAgentSession(Base):
     )
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    control_plane_tenant_id: Mapped[Optional[str]] = mapped_column(
+        String(80), nullable=True, index=True
+    )
     tenant_id: Mapped[int] = mapped_column(Integer, nullable=False, index=True)
     user_id: Mapped[int] = mapped_column(Integer, nullable=False, index=True)
     app_id: Mapped[Optional[int]] = mapped_column(Integer, nullable=True, index=True)

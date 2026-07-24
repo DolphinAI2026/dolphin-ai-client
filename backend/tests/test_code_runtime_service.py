@@ -34,7 +34,7 @@ def _stub_service_runtime_bootstrap(monkeypatch):
 
 
 def test_code_runtime_binding_model_is_registered():
-    from app.models.ai_chat import CodeRuntimeBinding
+    from app.models.ai_chat import AIChatSession, CodeRuntimeAgentSession, CodeRuntimeBinding
 
     cols = {c.name for c in sa_inspect(CodeRuntimeBinding).columns}
     assert {
@@ -50,7 +50,14 @@ def test_code_runtime_binding_model_is_registered():
         "auth_generation",
         "execution_target",
         "desktop_agent_runtime_token_enc",
+        "control_plane_tenant_id",
     }.issubset(cols)
+    assert "control_plane_tenant_id" in {
+        c.name for c in sa_inspect(AIChatSession).columns
+    }
+    assert "control_plane_tenant_id" in {
+        c.name for c in sa_inspect(CodeRuntimeAgentSession).columns
+    }
     assert sa_inspect(CodeRuntimeBinding).columns.app_id.nullable is True
     assert sa_inspect(CodeRuntimeBinding).columns.execution_target.default.arg == "control_plane"
     assert sa_inspect(CodeRuntimeBinding).columns.execution_target.server_default.arg == "control_plane"
@@ -947,6 +954,39 @@ async def test_list_code_applications_fetches_and_maps_control_plane_apps(monkey
         "created_at": "2026-06-30T10:00:00Z",
         "updated_at": "2026-06-30T11:00:00Z",
     }
+
+
+@pytest.mark.asyncio
+async def test_list_code_applications_rejects_non_json_success_response(monkeypatch):
+    from app.code_runtime import service
+
+    class FakeResponse:
+        status_code = 200
+        text = "<html><body>frontend fallback</body></html>"
+
+        def json(self):
+            raise ValueError("Expecting value")
+
+    class FakeClient:
+        def __init__(self, *args, **kwargs):
+            pass
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *_args):
+            return False
+
+        async def get(self, *_args, **_kwargs):
+            return FakeResponse()
+
+    monkeypatch.setenv("DOLPHIN_CODE_CONTROL_PLANE_URL", "https://code.example.com/control-plane")
+    monkeypatch.setattr(service.httpx, "AsyncClient", FakeClient)
+
+    with pytest.raises(HTTPException, match="应用列表响应无效") as exc_info:
+        await service.list_code_applications()
+
+    assert exc_info.value.status_code == 502
 
 
 @pytest.mark.asyncio
