@@ -428,7 +428,6 @@ describe('route redirect tenant context', () => {
     ['/work/42', '/chat', { app_id: '42' }],
     ['/knowledge', '/hub', { tab: 'knowledge' }],
     ['/generate/42', '/chat', { deploy_app_id: '42' }],
-    ['/code', '/code/apps', {}],
   ])('preserves tenant context through %s redirects', async (sourcePath, targetPath, redirectQuery) => {
     const { memoryRouter, switchTenantContext } = createRedirectRouter()
     const source = `${sourcePath}?tenantId=${targetUuid}&keep=1${sourcePath === '/settings' ? '&tab=envs' : ''}#deep-link`
@@ -447,6 +446,17 @@ describe('route redirect tenant context', () => {
     for (const [key, value] of Object.entries(redirectQuery)) {
       expect(destination.searchParams.get(key)).toBe(value)
     }
+  })
+
+  it('does not use the Builder tenant URL context for /code redirects', async () => {
+    const { memoryRouter, switchTenantContext } = createRedirectRouter()
+
+    await memoryRouter.push(`/code?tenantId=${targetUuid}&keep=1#deep-link`)
+
+    expect(switchTenantContext).not.toHaveBeenCalled()
+    expect(memoryRouter.currentRoute.value.path).toBe('/code/apps')
+    expect(memoryRouter.currentRoute.value.query).toEqual({ keep: '1' })
+    expect(memoryRouter.currentRoute.value.hash).toBe('#deep-link')
   })
 
   it.each([

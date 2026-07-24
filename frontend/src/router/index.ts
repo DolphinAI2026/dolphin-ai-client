@@ -371,16 +371,6 @@ export function installRouterGuards(targetRouter: Router): void {
     return
   }
 
-  if (
-    to.meta.requiresAuth
-    && userStore.isPlatformAdmin
-    && !userStore.tenantId
-    && !to.path.startsWith('/platform-admin')
-  ) {
-    next('/platform-admin')
-    return
-  }
-
   if (__DESKTOP__ && hasCommittedSession) {
     // 功能边界: hidden 路由落降级页
     const red = resolveDesktopRedirect(true, (to.meta as any), to.path)

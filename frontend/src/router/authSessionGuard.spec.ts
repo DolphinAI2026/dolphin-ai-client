@@ -9,7 +9,7 @@ const userStore = vi.hoisted(() => ({
   fetchUser: vi.fn(),
   isTenantAdmin: true,
   isPlatformAdmin: false,
-  tenantId: 1,
+  tenantId: 1 as number | null,
 }))
 const modeStore = vi.hoisted(() => ({
   mode: 'builder',
@@ -155,6 +155,26 @@ describe('router auth session guard', () => {
     expect(tenantUrlMocks.resolveTenantUrl).not.toHaveBeenCalled()
     expect(next).toHaveBeenCalledWith(false)
   })
+
+  it.each(['/apps', '/code/apps'])(
+    'keeps a platform administrator on %s when no local tenant is present',
+    async (path) => {
+      commitAuthSession('platform-token')
+      userStore.token = 'platform-token'
+      userStore.user = { id: 1 }
+      userStore.isPlatformAdmin = true
+      userStore.tenantId = null
+
+      const next = await runGuard({
+        path,
+        fullPath: path,
+        query: {},
+        meta: { requiresAuth: true, tenantContext: 'none' },
+      })
+
+      expect(next).toHaveBeenCalledWith()
+    },
+  )
 
   it('keeps a protected route blocked when reloaded alignment validation has a transient failure', async () => {
     commitAuthSession('source-token')
