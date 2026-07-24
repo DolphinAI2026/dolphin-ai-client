@@ -14,6 +14,10 @@ import {
   getAuthSessionState,
   subscribeToAuthSessionClear,
 } from '@/utils/request'
+import {
+  clearControlPlaneCodeSession,
+  setControlPlaneCodeSession,
+} from '@/utils/controlPlaneCodeSession'
 
 let activeSessionOwnerCleanup: (() => void) | null = null
 let activeSessionOwner: symbol | null = null
@@ -179,6 +183,7 @@ export const useUserStore = defineStore('user', () => {
     token.value = newToken
     commitAuthSession(newToken)
     localStorage.setItem('token', newToken)
+    if (!setControlPlaneCodeSession(newToken)) clearControlPlaneCodeSession()
   }
 
   const setToken = (newToken: string) => {
@@ -200,6 +205,7 @@ export const useUserStore = defineStore('user', () => {
     try {
       localStorage.setItem('token', newToken)
       commitAuthSession(newToken)
+      if (!setControlPlaneCodeSession(newToken)) clearControlPlaneCodeSession()
       candidateCommitted = true
       token.value = newToken
       user.value = nextUser
@@ -235,6 +241,7 @@ export const useUserStore = defineStore('user', () => {
     localStorage.setItem('token', newToken)
     advanceTenantNavigationEpoch()
     const committedSession = commitAuthSession(newToken)
+    if (!setControlPlaneCodeSession(newToken)) clearControlPlaneCodeSession()
     token.value = newToken
     user.value = nextUser
     return committedSession
@@ -258,6 +265,7 @@ export const useUserStore = defineStore('user', () => {
     advanceTenantNavigationEpoch()
     clearAuthSession()
     localStorage.removeItem('token')
+    clearControlPlaneCodeSession()
   }
 
   const ownsCurrentSession = (requestToken: string, requestRevision: number) => {

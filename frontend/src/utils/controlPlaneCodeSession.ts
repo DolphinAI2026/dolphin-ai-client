@@ -30,15 +30,18 @@ function fromToken(token: string | null): ControlPlaneCodeSession | null {
 }
 
 export function getControlPlaneCodeSession(): ControlPlaneCodeSession | null {
+  const initial = fromToken(getCommittedAuthToken())
+  if (initial) {
+    setControlPlaneCodeSession(initial.token)
+    return initial
+  }
   try {
     const stored = fromToken(sessionStorage.getItem(STORAGE_KEY))
     if (stored) return stored
   } catch {
     // Fall through to the initial login ticket when storage is unavailable.
   }
-  const initial = fromToken(getCommittedAuthToken())
-  if (initial) setControlPlaneCodeSession(initial.token)
-  return initial
+  return null
 }
 
 export function setControlPlaneCodeSession(token: string): ControlPlaneCodeSession | null {
@@ -46,6 +49,10 @@ export function setControlPlaneCodeSession(token: string): ControlPlaneCodeSessi
   if (!session) return null
   try { sessionStorage.setItem(STORAGE_KEY, token) } catch { /* private mode */ }
   return session
+}
+
+export function clearControlPlaneCodeSession() {
+  try { sessionStorage.removeItem(STORAGE_KEY) } catch { /* private mode */ }
 }
 
 export function controlPlaneCodeAuthorization() {
