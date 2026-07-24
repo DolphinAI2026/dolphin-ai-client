@@ -1196,7 +1196,7 @@ describe('resolveTenantUrl', () => {
     expect(userStore.switchTenantContext).not.toHaveBeenCalled()
   })
 
-  it('returns a tenantless platform administrator to platform admin', async () => {
+  it('keeps a Control Plane administrator without an aPaaS public tenant URL on the requested route', async () => {
     installSessionStorage()
 
     await expect(resolveTenantUrl(
@@ -1209,10 +1209,7 @@ describe('resolveTenantUrl', () => {
         isPlatformAdmin: true,
       }),
       builderModeStore,
-    )).resolves.toEqual({
-      path: '/platform-admin',
-      replace: true,
-    })
+    )).resolves.toBe(true)
   })
 
   it('stops a repeated tenant switch within the 30 second marker window', async () => {

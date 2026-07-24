@@ -268,6 +268,17 @@ export async function resolveTenantUrl(
     return tenantHome(currentTenantPublicId, modeStore, userStore.isPlatformAdmin)
   }
 
+  // A Control Plane session has its tenant scope in the signed Code token,
+  // but does not necessarily have an aPaaS public tenant UUID. URL
+  // canonicalization is not an authorization boundary, so keep the requested
+  // Builder route reachable and leave resource authorization to the backend.
+  if (tenantContext === 'required' && !currentTenantPublicId) {
+    if (to.query.tenantId === undefined) return true
+    const query = { ...to.query }
+    delete query.tenantId
+    return routeReplace(to, query)
+  }
+
   const isEpochCurrent = () => userStore.isTenantNavigationEpochCurrent(resolverEpoch)
   const isPreflightCurrent = () => (
     isEpochCurrent()

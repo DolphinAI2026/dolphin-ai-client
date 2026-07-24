@@ -190,7 +190,9 @@ const handleLogin = async () => {
         })
       } else {
         ElMessage.success('登录成功')
-        router.replace(safeLoginRedirectPath(route.query.redirect) || '/')
+        router.replace(
+          safeLoginRedirectPath(route.query.redirect) || result.entryPath || '/',
+        )
       }
     } catch (error: any) {
       const detail =

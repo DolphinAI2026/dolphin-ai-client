@@ -4,6 +4,7 @@ import { authApi } from '@/api/auth'
 import type { User, TenantOption } from '@/types'
 import { resetOnboardingCache } from '@/composables/useOnboardingState'
 import { MODE_META, modeForRoutePath, useModeStore } from '@/stores/mode'
+import { safeLoginRedirectPath } from '@/router/loginRedirect'
 import {
   beginAuthSessionAlignment,
   beginAuthSessionBootstrap,
@@ -345,7 +346,12 @@ export const useUserStore = defineStore('user', () => {
     // 单租户或已选择租户 — 直接登录
     setToken(res.access_token!)
     await fetchUser()
-    return { requiresSelection: false }
+    return {
+      requiresSelection: false,
+      // Control Plane login selects the Code shell explicitly. Do not discard
+      // the server-directed internal entry route and fall back to Builder home.
+      entryPath: safeLoginRedirectPath(res.entry_path) || '/',
+    }
   }
 
   const desktopLogin = async (username: string, password: string) => {

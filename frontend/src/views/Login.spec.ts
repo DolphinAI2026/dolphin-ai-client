@@ -47,6 +47,11 @@ describe('Login page reuses web auth on desktop', () => {
     expect(loginSource).toContain('/tenant-select')
   })
 
+  it('honors the Control Plane server entry path after a direct login', () => {
+    expect(userStoreSource).toContain('entryPath: safeLoginRedirectPath(res.entry_path)')
+    expect(loginSource).toContain('result.entryPath')
+  })
+
   it('collects the configured captcha for every client', () => {
     expect(loginSource).toContain('captcha_code')
     expect(loginSource).toContain('captchaImage')
