@@ -1999,9 +1999,8 @@ async def test_open_local_code_runtime_session_does_not_require_control_plane_au
     )
 
     assert result["external_application_id"] == "local-code-smoke"
-    assert result["embed_url"].startswith(
-        f"/api/code-runtime/{session.public_id}/builder/?"
-    )
+    assert result["route_id"] == "s1"
+    assert result["embed_url"].startswith("/api/code-runtime/s1/builder/?")
 
 
 @pytest.mark.asyncio

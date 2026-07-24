@@ -161,9 +161,9 @@ describe('CodeConversationPage', () => {
     expect(pageSource).toContain('确认创建')
     expect(pageSource).toContain('codeRuntimeApi.createApplication')
     expect(pageSource).toContain('codeRuntimeApi.createSessionFromExternalApp')
-    expect(pageSource).toContain('`/code/${created.public_id}`')
+    expect(pageSource).toContain('`/code/${created.route_id || created.public_id}`')
     expect(pageSource).toContain('query: nextAgentQuery(route.query)')
-    expect(pageSource).toContain('opened.session_id !== sessionRef')
+    expect(pageSource).toContain('opened.route_id && opened.route_id !== sessionRef')
     expect(pageSource).toContain('router.replace')
   })
 

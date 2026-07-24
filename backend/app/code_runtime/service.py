@@ -150,6 +150,35 @@ def _builder_suffix(builder_url: str) -> tuple[str, list[tuple[str, str]]]:
 
 CodeSessionRef = str | int
 
+_CODE_SESSION_ROUTE_RE = re.compile(r"^s([0-9a-z]+)$")
+_MAX_CODE_SESSION_ID = 2_147_483_647
+_BASE36_DIGITS = "0123456789abcdefghijklmnopqrstuvwxyz"
+
+
+def code_session_route_id(session_id: int) -> str:
+    if isinstance(session_id, bool) or not isinstance(session_id, int):
+        raise ValueError("session_id must be an integer")
+    if session_id <= 0 or session_id > _MAX_CODE_SESSION_ID:
+        raise ValueError("session_id is outside the supported range")
+
+    value = session_id
+    encoded = ""
+    while value:
+        value, remainder = divmod(value, 36)
+        encoded = _BASE36_DIGITS[remainder] + encoded
+    return f"s{encoded}"
+
+
+def decode_code_session_route_id(route_id: str) -> int | None:
+    normalized = str(route_id or "").strip()
+    match = _CODE_SESSION_ROUTE_RE.fullmatch(normalized)
+    if not match:
+        return None
+    value = int(match.group(1), 36)
+    if value <= 0 or value > _MAX_CODE_SESSION_ID:
+        return None
+    return value if code_session_route_id(value) == normalized else None
+
 
 def ensure_code_session_public_id(session: AIChatSession) -> str:
     public_id = str(getattr(session, "public_id", "") or "").strip()
@@ -168,13 +197,17 @@ async def resolve_code_session(db: AsyncSession, session_ref: CodeSessionRef) ->
     normalized = str(session_ref or "").strip()
     if not normalized:
         return None
-    session = (
-        await db.execute(
-            select(AIChatSession).where(AIChatSession.public_id == normalized)
-        )
-    ).scalar_one_or_none()
-    if session is None and normalized.isdigit():
-        session = await db.get(AIChatSession, int(normalized))
+    route_session_id = decode_code_session_route_id(normalized)
+    if normalized.startswith("s"):
+        session = await db.get(AIChatSession, route_session_id) if route_session_id else None
+    else:
+        session = (
+            await db.execute(
+                select(AIChatSession).where(AIChatSession.public_id == normalized)
+            )
+        ).scalar_one_or_none()
+        if session is None and normalized.isdigit():
+            session = await db.get(AIChatSession, int(normalized))
     if session is not None:
         ensure_code_session_public_id(session)
     return session
@@ -867,7 +900,20 @@ async def open_code_session(
                 .with_for_update()
             )
         ).scalar_one_or_none()
-    if not session or session.tenant_id != int(ctx.tenant_id) or session.user_id != int(ctx.user.id):
+    control_plane_tenant_id = str(getattr(ctx, "control_plane_tenant_id", "") or "").strip()
+    is_control_plane_code = (
+        str(getattr(getattr(ctx, "user", None), "account_source", "") or "").strip().lower()
+        == "control_plane"
+    )
+    matches_tenant = (
+        session is not None
+        and (
+            session.control_plane_tenant_id == control_plane_tenant_id
+            if is_control_plane_code and control_plane_tenant_id
+            else session.tenant_id == int(ctx.tenant_id)
+        )
+    )
+    if not session or not matches_tenant or session.user_id != int(ctx.user.id):
         raise HTTPException(status_code=404, detail="Code 会话不存在")
     if session.mode != "code":
         raise HTTPException(status_code=400, detail="该会话不是 Code 会话")
@@ -1051,6 +1097,7 @@ async def open_code_session(
         await db.flush()
 
     public_id = ensure_code_session_public_id(session)
+    route_id = code_session_route_id(session.id)
     token = embed_token_factory(
         session_id=public_id,
         user_id=session.user_id,
@@ -1060,11 +1107,12 @@ async def open_code_session(
     )
     return {
         "session_id": public_id,
+        "route_id": route_id,
         "app_id": session.app_id,
         "external_application_id": external_app_id,
         "workspace_id": binding.workspace_id,
         "sandbox_instance_id": binding.sandbox_instance_id,
         "runtime_session_id": binding.runtime_session_id,
-        "external_base_path": code_runtime_proxy_prefix(public_id),
-        "embed_url": build_embed_url(public_id, clean_builder_url, token),
+        "external_base_path": code_runtime_proxy_prefix(route_id),
+        "embed_url": build_embed_url(route_id, clean_builder_url, token),
     }

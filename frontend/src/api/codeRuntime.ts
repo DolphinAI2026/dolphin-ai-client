@@ -31,6 +31,7 @@ export interface CreateCodeApplicationRequest {
 
 export interface CodeRuntimeOpenResponse {
   session_id: string
+  route_id: string
   app_id: number | null
   external_application_id: string
   workspace_id?: string | null

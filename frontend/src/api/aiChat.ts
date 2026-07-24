@@ -3,6 +3,7 @@ import request, { API_PREFIX, getCommittedAuthTokenOrThrow } from '@/utils/reque
 export interface AIChatSession {
   id: number
   public_id?: string
+  route_id?: string
   title: string
   status: string
   generation?: {

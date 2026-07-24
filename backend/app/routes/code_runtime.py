@@ -21,6 +21,7 @@ from starlette.responses import RedirectResponse, Response, StreamingResponse
 
 from app.code_runtime.service import (
     CodeSessionRef,
+    code_session_route_id,
     code_runtime_proxy_prefix,
     create_code_application,
     create_proxy_cookie_token,
@@ -239,6 +240,7 @@ def _session_to_dict(session: AIChatSession) -> dict:
     return {
         "id": session.id,
         "public_id": ensure_code_session_public_id(session),
+        "route_id": code_session_route_id(session.id),
         "title": session.title,
         "status": session.status,
         "mode": session.mode,

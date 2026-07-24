@@ -298,7 +298,7 @@ async function confirmCreateCodeApplication() {
     })
     refreshOuterCodeRail()
     router.push({
-      path: `/code/${created.public_id}`,
+      path: `/code/${created.route_id || created.public_id}`,
       query: nextAgentQuery(route.query),
     })
   } catch (error: any) {
@@ -377,9 +377,9 @@ async function openCurrentSession() {
     }
 
     const opened = await codeRuntimeApi.openSession(sessionRef)
-    if (opened.session_id !== sessionRef) {
+    if (opened.route_id && opened.route_id !== sessionRef) {
       await router.replace({
-        path: `/code/${opened.session_id}`,
+        path: `/code/${opened.route_id}`,
         query: route.query,
       })
       return

@@ -1533,8 +1533,9 @@ async def test_open_code_session_upserts_runtime_binding(db_session):
 
     assert calls == ["91001"]
     assert result["session_id"] == session.public_id
-    assert result["external_base_path"] == f"/api/code-runtime/{session.public_id}"
-    assert result["embed_url"].startswith(f"/api/code-runtime/{session.public_id}/builder/?")
+    assert result["route_id"] == "s1"
+    assert result["external_base_path"] == "/api/code-runtime/s1"
+    assert result["embed_url"].startswith("/api/code-runtime/s1/builder/?")
     assert "dolphin_token=dolphin-embed" in result["embed_url"]
 
     binding = (
@@ -2485,3 +2486,50 @@ async def test_open_code_session_rejects_non_code_session(db_session):
         )
 
     assert exc.value.status_code == 400
+@pytest.mark.parametrize(
+    ("session_id", "route_id"),
+    [(1, "s1"), (35, "sz"), (36, "s10"), (123, "s3f")],
+)
+def test_code_session_route_id_round_trips(session_id, route_id):
+    from app.code_runtime.service import code_session_route_id, decode_code_session_route_id
+
+    assert code_session_route_id(session_id) == route_id
+    assert decode_code_session_route_id(route_id) == session_id
+
+
+@pytest.mark.parametrize("route_id", ["", "s", "s0", "s01", "S3F", "s-1", "s2147483648"])
+def test_code_session_route_id_rejects_noncanonical_values(route_id):
+    from app.code_runtime.service import decode_code_session_route_id
+
+    assert decode_code_session_route_id(route_id) is None
+
+
+@pytest.mark.asyncio
+async def test_short_code_route_rejects_another_control_plane_tenant(db_session):
+    from app.code_runtime.service import open_code_session
+
+    session = AIChatSession(
+        tenant_id=0,
+        control_plane_tenant_id="cp-tenant-a",
+        user_id=11,
+        title="Tenant A Code",
+        mode="code",
+        status="active",
+        external_application_id="crm",
+    )
+    db_session.add(session)
+    await db_session.commit()
+    await db_session.refresh(session)
+
+    ctx = SimpleNamespace(
+        tenant_id=0,
+        control_plane_tenant_id="cp-tenant-b",
+        user=SimpleNamespace(id=11, account_source="control_plane"),
+    )
+    with pytest.raises(HTTPException, match="Code 会话不存在"):
+        await open_code_session(
+            db=db_session,
+            session_id="s1",
+            ctx=ctx,
+            workspace_open=lambda *_args: pytest.fail("must not open another tenant workspace"),
+        )
