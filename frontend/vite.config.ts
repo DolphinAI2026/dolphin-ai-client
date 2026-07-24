@@ -12,6 +12,7 @@ const __APP_VERSION__ = (() => {
     return ''
   }
 })()
+const backendProxyTarget = process.env.VITE_BACKEND_PROXY_TARGET || 'http://localhost:8000'
 
 // https://vite.dev/config/
 export default defineConfig({
@@ -29,7 +30,7 @@ export default defineConfig({
         server.middlewares.use((req, res, next) => {
           if (req.url && /^\/[0-9a-f]{32}\//.test(req.url)) {
             const proxyReq = http.request(
-              `http://localhost:8000${req.url}`,
+              `${backendProxyTarget}${req.url}`,
               { method: req.method, headers: req.headers },
               (proxyRes) => {
                 res.writeHead(proxyRes.statusCode || 200, proxyRes.headers)
@@ -61,56 +62,56 @@ export default defineConfig({
     port: 5173,
     proxy: {
       '/api': {
-        target: 'http://localhost:8000',
+        target: backendProxyTarget,
         changeOrigin: true,
         ws: true
       },
       '/ai-builder/api': {
-        target: 'http://localhost:8000',
+        target: backendProxyTarget,
         changeOrigin: true,
         ws: true,
         rewrite: (path) => path.replace(/^\/ai-builder\/api/, '/api')
       },
       '/ai-builder/admin': {
-        target: 'http://localhost:8000',
+        target: backendProxyTarget,
         changeOrigin: true,
         rewrite: (path) => path.replace(/^\/ai-builder\/admin/, '/admin')
       },
       '^/admin(/|$)': {
-        target: 'http://localhost:8000',
+        target: backendProxyTarget,
         changeOrigin: true
       },
       '^/platform(/|$)': {
-        target: 'http://localhost:8000',
+        target: backendProxyTarget,
         changeOrigin: true
       },
       // 2026-05-28: apaas 应用运行态 (自开发整页 Vue 预览) — /app/{tenantCode}/{appCode}/
       '^/app(/|$)': {
-        target: 'http://localhost:8000',
+        target: backendProxyTarget,
         changeOrigin: true
       },
       '^/m(/|$)': {
-        target: 'http://localhost:8000',
+        target: backendProxyTarget,
         changeOrigin: true
       },
       '/backend': {
-        target: 'http://localhost:8000',
+        target: backendProxyTarget,
         changeOrigin: true
       },
       '/plugin': {
-        target: 'http://localhost:8000',
+        target: backendProxyTarget,
         changeOrigin: true
       },
       '/xdap-admin': {
-        target: 'http://localhost:8000',
+        target: backendProxyTarget,
         changeOrigin: true
       },
       '/xdap-plugin': {
-        target: 'http://localhost:8000',
+        target: backendProxyTarget,
         changeOrigin: true
       },
       '/xdap-open': {
-        target: 'http://localhost:8000',
+        target: backendProxyTarget,
         changeOrigin: true
       },
       '/smartbi': {

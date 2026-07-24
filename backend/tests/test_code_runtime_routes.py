@@ -1255,6 +1255,36 @@ async def test_dolphin_token_redirect_sets_proxy_and_database_runtime_cookies(
 
 
 @pytest.mark.asyncio
+async def test_short_code_route_accepts_embed_token_bound_to_public_session_id(
+    db_session,
+):
+    from app.code_runtime.service import code_session_route_id, create_embed_token
+    from app.routes.code_runtime import proxy_code_runtime
+
+    session, _binding, _rows = await _seed_browser_runtime(db_session)
+    route_id = code_session_route_id(session.id)
+    embed_token = create_embed_token(
+        session_id=session.public_id,
+        user_id=11,
+        tenant_id=7,
+        browser_session_id="browser-a",
+    )
+    request = _proxy_request(
+        route_id,
+        query_string=f"dolphin_token={embed_token}&tab=spec".encode("ascii"),
+    )
+
+    response = await proxy_code_runtime(route_id, "builder", request, db_session)
+
+    assert response.status_code == 307
+    assert response.headers["location"].startswith(f"/api/code-runtime/{route_id}/builder")
+    assert any(
+        value.startswith(f"dolphin_code_runtime_{route_id}=")
+        for value in response.headers.getlist("set-cookie")
+    )
+
+
+@pytest.mark.asyncio
 async def test_server_runtime_request_uses_encrypted_runtime_service_cookie(monkeypatch):
     import httpx
     import app.routes.code_runtime as code_runtime_routes
@@ -1958,6 +1988,45 @@ async def test_control_plane_request_refreshes_expired_user_token(
     assert authorization == "Bearer fresh-access-token"
     assert provider is None
     assert control_plane_access_token(user) == "fresh-access-token"
+
+
+@pytest.mark.asyncio
+async def test_control_plane_code_request_uses_stored_token_without_deployment_switch(
+    db_session,
+    monkeypatch,
+):
+    import app.routes.code_runtime as code_runtime_routes
+    from app.auth import get_password_hash
+    from app.code_runtime.auth import store_control_plane_credentials
+    from app.config import settings
+    from app.models import User
+
+    user = User(
+        username="control-plane-code-user",
+        hashed_password=get_password_hash("unused"),
+        account_source="control_plane",
+        is_active=True,
+    )
+    store_control_plane_credentials(user, "control-plane-access-token")
+    db_session.add(user)
+    await db_session.commit()
+    ctx = SimpleNamespace(
+        user=user,
+        control_plane_tenant_id="2077284540335579137",
+    )
+
+    monkeypatch.setattr(settings, "auth_provider", "")
+    monkeypatch.setattr(settings, "control_plane_binding_enabled", False)
+
+    authorization, provider = await code_runtime_routes._control_plane_request_auth(
+        SimpleNamespace(headers={"authorization": "Bearer builder-code-ticket"}),
+        ctx,
+        db_session,
+    )
+
+    assert authorization == "Bearer control-plane-access-token"
+    assert provider is None
+    assert ctx.control_plane_tenant_id == "2077284540335579137"
 
 
 @pytest.mark.asyncio

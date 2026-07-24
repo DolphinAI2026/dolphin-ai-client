@@ -263,7 +263,9 @@ async def _control_plane_request_auth(
 ) -> tuple[str | None, str | None]:
     provider = str(settings.auth_provider or "").strip().lower()
     uses_dolphin_token = (
-        settings.control_plane_binding_enabled
+        str(getattr(ctx.user, "account_source", "") or "").strip().lower()
+        == "control_plane"
+        or settings.control_plane_binding_enabled
         or provider in {"control_plane", "coding"}
     )
     if not uses_dolphin_token:
@@ -2290,9 +2292,18 @@ async def _authorize_proxy_request(
     query_token = request.query_params.get("dolphin_token", "").strip()
     cookie_token = request.cookies.get(_embed_cookie_name(session_id), "").strip()
     if query_token:
+        # The public UUID is the token subject, while the browser may already
+        # have navigated to the compact s<base36(id)> route.  Validate against
+        # the stable public ID for this first hop, then issue a route-scoped
+        # proxy cookie below.
+        token_session_id = (
+            ensure_code_session_public_id(shell_session)
+            if shell_session is not None
+            else session_id
+        )
         payload = validate_embed_token(
             query_token,
-            session_id=session_id,
+            session_id=token_session_id,
             legacy_session_id=legacy_session_id,
         )
         authorized = await _proxy_authorization_from_payload(
