@@ -100,6 +100,7 @@ async def _remember_runtime_agent_session(
     if record is None:
         record = CodeRuntimeAgentSession(
             tenant_id=session.tenant_id,
+            control_plane_tenant_id=session.control_plane_tenant_id,
             user_id=session.user_id,
             app_id=int(session.app_id) if session.app_id else None,
             session_id=session.id,
@@ -109,6 +110,7 @@ async def _remember_runtime_agent_session(
         db.add(record)
 
     record.tenant_id = session.tenant_id
+    record.control_plane_tenant_id = session.control_plane_tenant_id
     record.user_id = session.user_id
     record.app_id = int(session.app_id) if session.app_id else None
     record.external_application_id = binding.external_application_id
@@ -220,6 +222,7 @@ def _create_runtime_token(
     session_id: CodeSessionRef,
     user_id: int,
     tenant_id: int,
+    control_plane_tenant_id: str | None,
     browser_session_id: str | None,
     minutes: int,
 ) -> str:
@@ -235,6 +238,8 @@ def _create_runtime_token(
         "exp": now + timedelta(minutes=minutes),
         "iss": _EMBED_TOKEN_ISSUER,
     }
+    if control_plane_tenant_id:
+        payload["cp_tid"] = str(control_plane_tenant_id)
     return jwt.encode(payload, settings.jwt_secret_key, algorithm=settings.jwt_algorithm)
 
 
@@ -250,6 +255,7 @@ def create_embed_token(
     session_id: CodeSessionRef,
     user_id: int,
     tenant_id: int,
+    control_plane_tenant_id: str | None = None,
     browser_session_id: str | None = None,
     minutes: int = 10,
 ) -> str:
@@ -258,6 +264,7 @@ def create_embed_token(
         session_id=session_id,
         user_id=user_id,
         tenant_id=tenant_id,
+        control_plane_tenant_id=control_plane_tenant_id,
         browser_session_id=browser_session_id,
         minutes=minutes,
     )
@@ -268,6 +275,7 @@ def create_proxy_cookie_token(
     session_id: CodeSessionRef,
     user_id: int,
     tenant_id: int,
+    control_plane_tenant_id: str | None = None,
     browser_session_id: str | None = None,
     minutes: int = 12 * 60,
 ) -> str:
@@ -276,6 +284,7 @@ def create_proxy_cookie_token(
         session_id=session_id,
         user_id=user_id,
         tenant_id=tenant_id,
+        control_plane_tenant_id=control_plane_tenant_id,
         browser_session_id=browser_session_id,
         minutes=minutes,
     )
@@ -666,13 +675,27 @@ async def list_code_applications(
     if response.status_code >= 400:
         raise HTTPException(status_code=response.status_code, detail=_control_plane_error_detail(response))
 
-    data = response.json()
-    items = data.get("items") if isinstance(data, dict) else []
+    try:
+        data = response.json()
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=502,
+            detail="Code Control Plane 应用列表响应无效，请检查 DOLPHIN_CODE_CONTROL_PLANE_URL",
+        ) from exc
+    if not isinstance(data, dict):
+        raise HTTPException(
+            status_code=502,
+            detail="Code Control Plane 应用列表响应无效，请检查 DOLPHIN_CODE_CONTROL_PLANE_URL",
+        )
+
+    items = data.get("items")
+    if not isinstance(items, list):
+        raise HTTPException(status_code=502, detail="Code Control Plane 应用列表数据无效")
     return {
-        "items": [_normalize_code_application(item) for item in (items or []) if isinstance(item, dict)],
-        "page": data.get("page", params["page"]) if isinstance(data, dict) else params["page"],
-        "pageSize": data.get("pageSize", params["pageSize"]) if isinstance(data, dict) else params["pageSize"],
-        "total": data.get("total", len(items or [])) if isinstance(data, dict) else 0,
+        "items": [_normalize_code_application(item) for item in items if isinstance(item, dict)],
+        "page": data.get("page", params["page"]),
+        "pageSize": data.get("pageSize", params["pageSize"]),
+        "total": data.get("total", len(items)),
         "source": "d-ai-code",
     }
 
@@ -936,6 +959,7 @@ async def open_code_session(
     if not binding:
         binding = CodeRuntimeBinding(
             tenant_id=session.tenant_id,
+            control_plane_tenant_id=session.control_plane_tenant_id,
             user_id=session.user_id,
             app_id=int(session.app_id) if session.app_id else None,
             session_id=session.id,
@@ -946,6 +970,7 @@ async def open_code_session(
         db.add(binding)
 
     binding.tenant_id = session.tenant_id
+    binding.control_plane_tenant_id = session.control_plane_tenant_id
     binding.user_id = session.user_id
     binding.app_id = int(session.app_id) if session.app_id else None
     binding.external_application_id = external_app_id
@@ -1030,6 +1055,7 @@ async def open_code_session(
         session_id=public_id,
         user_id=session.user_id,
         tenant_id=session.tenant_id,
+        control_plane_tenant_id=session.control_plane_tenant_id,
         browser_session_id=resolved_browser_session_id,
     )
     return {

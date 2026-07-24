@@ -103,6 +103,7 @@ def create_access_token(
     user: "User | int | Mapping[str, Any]",
     tenant_id: Optional[int] = None,
     *,
+    token_type: str = "access",
     expire_minutes: Optional[int] = None,
     apaas_user_id: Optional[str] = None,
     apaas_tenant_id: Optional[str] = None,
@@ -138,7 +139,7 @@ def create_access_token(
     now = _now_utc()
     payload: dict[str, Any] = {
         "sub": str(sub),
-        "type": "access",
+        "type": token_type,
         "iat": now,
         "exp": now + timedelta(minutes=minutes),
         "iss": issuer,
@@ -162,6 +163,27 @@ def create_access_token(
     if control_plane_permissions:
         payload["cp_perms"] = dict(control_plane_permissions)
     return _encode(payload)
+
+
+def create_control_plane_code_token(
+    user: "User | int | Mapping[str, Any]",
+    *,
+    control_plane_tenant_id: str,
+    control_plane_tenant_name: Optional[str] = None,
+    control_plane_tenant_role: Optional[str] = None,
+    control_plane_permissions: Optional[Mapping[str, Any]] = None,
+    expire_minutes: Optional[int] = None,
+) -> str:
+    """Issue a Code-only ticket scoped to one Control Plane organization."""
+    return create_access_token(
+        user,
+        token_type="control_plane_code",
+        expire_minutes=expire_minutes,
+        control_plane_tenant_id=control_plane_tenant_id,
+        control_plane_tenant_name=control_plane_tenant_name,
+        control_plane_tenant_role=control_plane_tenant_role,
+        control_plane_permissions=control_plane_permissions,
+    )
 
 
 def create_selection_token(user_id: int) -> str:

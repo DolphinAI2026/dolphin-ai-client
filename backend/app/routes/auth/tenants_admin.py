@@ -953,7 +953,13 @@ async def list_my_tenants(
     aPaaS 登录用户只返回自己可登录的 active membership。平台管理员的全量租户同步
     只供平台管理使用，不等于这些租户都能进入工作台。
     """
-    if runtime.is_desktop() and ctx.user.account_source == "control_plane":
+    if (
+        ctx.user.account_source == "control_plane"
+        and (
+            runtime.is_desktop()
+            or ctx.tenant_access_scope == "control_plane_code"
+        )
+    ):
         token = control_plane_access_token(ctx.user)
         if not token:
             return []
@@ -1346,9 +1352,14 @@ async def get_me(ctx: Annotated[AuthContext, Depends(get_platform_auth_context)]
                 await db.commit()
 
     is_desktop_control_plane_account = (
-        runtime.is_desktop()
-        and ctx.user.account_source == "control_plane"
-        and bool((ctx.user.coding_tenant_id or "").strip())
+        ctx.user.account_source == "control_plane"
+        and (
+            (
+                runtime.is_desktop()
+                and bool((ctx.user.coding_tenant_id or "").strip())
+            )
+            or ctx.tenant_access_scope == "control_plane_code"
+        )
     )
     control_plane_tenant_id = (
         getattr(ctx, "control_plane_tenant_id", None)

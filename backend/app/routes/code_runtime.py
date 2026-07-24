@@ -132,6 +132,27 @@ def _code_session_open_lock(session_ref: str) -> asyncio.Lock:
     return lock
 
 
+def _control_plane_code_tenant_id(ctx: AuthContext) -> str | None:
+    if str(getattr(ctx.user, "account_source", "") or "").strip().lower() != "control_plane":
+        return None
+    value = str(getattr(ctx, "control_plane_tenant_id", "") or "").strip()
+    return value or None
+
+
+def _code_session_scope(model: Any, ctx: AuthContext):
+    control_plane_tenant_id = _control_plane_code_tenant_id(ctx)
+    if control_plane_tenant_id:
+        return model.control_plane_tenant_id == control_plane_tenant_id
+    return model.tenant_id == ctx.tenant_id
+
+
+def _code_session_matches_context(session: AIChatSession, ctx: AuthContext) -> bool:
+    control_plane_tenant_id = _control_plane_code_tenant_id(ctx)
+    if control_plane_tenant_id:
+        return session.control_plane_tenant_id == control_plane_tenant_id
+    return session.tenant_id == ctx.tenant_id
+
+
 def _resolved_code_sandbox_cache_config() -> dict[str, int | str]:
     profile = str(settings.dolphin_code_cache_profile or "normal").strip().lower()
     if profile not in {"normal", "performance"}:
@@ -211,22 +232,6 @@ async def _resolve_control_plane_tenant_id(
     ).strip()
     if current_tenant_id:
         return current_tenant_id
-    coding_tenant_id = str(
-        getattr(ctx.user, "coding_tenant_id", "") or ""
-    ).strip()
-    if coding_tenant_id:
-        return coding_tenant_id
-
-    tenant_id = int(getattr(ctx, "tenant_id", 0) or 0)
-    if tenant_id:
-        tenant = await db.get(Tenant, tenant_id)
-        tenant_code = str(getattr(tenant, "tenant_code", "") or "").strip()
-        if tenant_code == "default":
-            return "default"
-        if tenant_code.startswith("workspace-"):
-            mapped_id = tenant_code.removeprefix("workspace-").strip()
-            if mapped_id:
-                return mapped_id
     return None
 
 
@@ -560,7 +565,7 @@ async def create_code_session_from_external_app(
         await db.execute(
             select(AIChatSession)
             .where(
-                AIChatSession.tenant_id == ctx.tenant_id,
+                _code_session_scope(AIChatSession, ctx),
                 AIChatSession.user_id == ctx.user.id,
                 AIChatSession.mode == "code",
                 AIChatSession.status != "archived",
@@ -594,6 +599,7 @@ async def create_code_session_from_external_app(
 
     session = AIChatSession(
         tenant_id=ctx.tenant_id,
+        control_plane_tenant_id=_control_plane_code_tenant_id(ctx),
         user_id=ctx.user.id,
         app_id=None,
         external_application_id=external_id,
@@ -858,7 +864,7 @@ async def _authorized_code_runtime_binding(
     session = await resolve_code_session(db, session_id)
     if (
         not session
-        or session.tenant_id != ctx.tenant_id
+        or not _code_session_matches_context(session, ctx)
         or session.user_id != ctx.user.id
         or session.mode != "code"
     ):
@@ -869,7 +875,7 @@ async def _authorized_code_runtime_binding(
             .join(CodeRuntimeBinding, CodeRuntimeBinding.session_id == AIChatSession.id)
             .where(
                 AIChatSession.id == session.id,
-                AIChatSession.tenant_id == ctx.tenant_id,
+                _code_session_scope(AIChatSession, ctx),
                 AIChatSession.user_id == ctx.user.id,
                 AIChatSession.mode == "code",
             )
@@ -1213,7 +1219,7 @@ async def list_code_runtime_rail_history(
             .outerjoin(CodeRuntimeBinding, CodeRuntimeBinding.session_id == AIChatSession.id)
             .outerjoin(Application, Application.id == AIChatSession.app_id)
             .where(
-                AIChatSession.tenant_id == ctx.tenant_id,
+                _code_session_scope(AIChatSession, ctx),
                 AIChatSession.user_id == ctx.user.id,
                 AIChatSession.mode == "code",
                 AIChatSession.status != "archived",
@@ -1254,7 +1260,7 @@ async def list_code_runtime_rail_history(
                 await db.execute(
                     select(CodeRuntimeAgentSession)
                     .where(
-                        CodeRuntimeAgentSession.tenant_id == ctx.tenant_id,
+                        _code_session_scope(CodeRuntimeAgentSession, ctx),
                         CodeRuntimeAgentSession.user_id == ctx.user.id,
                         CodeRuntimeAgentSession.session_id.in_(shell_session_ids),
                         CodeRuntimeAgentSession.deleted_at.is_(None),
@@ -2152,20 +2158,27 @@ async def _proxy_authorization_from_payload(
         raise HTTPException(status_code=401, detail="Code runtime token invalid") from exc
     if binding is None or db is None:
         return ProxyAuthorization(browser_session_id=browser_session_id)
+    control_plane_tenant_id = str(payload.get("cp_tid") or "").strip() or None
     if (
         int(binding.user_id) != user_id
         or int(binding.tenant_id) != tenant_id
+        or binding.control_plane_tenant_id != control_plane_tenant_id
         or (
             shell_session is not None
             and (
                 int(binding.session_id) != int(shell_session.id)
                 or int(shell_session.user_id) != user_id
                 or int(shell_session.tenant_id) != tenant_id
+                or shell_session.control_plane_tenant_id != control_plane_tenant_id
             )
         )
         or (
             ctx is not None
-            and (int(ctx.user.id) != user_id or int(ctx.tenant_id) != tenant_id)
+            and (
+                int(ctx.user.id) != user_id
+                or int(ctx.tenant_id) != tenant_id
+                or _control_plane_code_tenant_id(ctx) != control_plane_tenant_id
+            )
         )
     ):
         raise HTTPException(status_code=401, detail="Code runtime token invalid")
@@ -2229,10 +2242,7 @@ async def _recover_proxy_browser_session(
             tenant_id=int(shell_session.tenant_id),
             tenant_role="member",
             org_permissions={},
-        )
-        recovery_ctx.control_plane_tenant_id = await _resolve_control_plane_tenant_id(
-            db,
-            recovery_ctx,
+            control_plane_tenant_id=shell_session.control_plane_tenant_id,
         )
         authorization = await _locked_control_plane_user_authorization(
             user_id=int(shell_session.user_id),
@@ -2259,6 +2269,7 @@ async def _recover_proxy_browser_session(
                 session_id=session_id,
                 user_id=int(payload["sub"]),
                 tenant_id=int(payload["tid"]),
+                control_plane_tenant_id=str(payload.get("cp_tid") or "").strip() or None,
                 browser_session_id=browser_session_id,
             ),
         )
@@ -2293,6 +2304,7 @@ async def _authorize_proxy_request(
             session_id=session_id,
             user_id=int(payload["sub"]),
             tenant_id=int(payload["tid"]),
+            control_plane_tenant_id=str(payload.get("cp_tid") or "").strip() or None,
             browser_session_id=authorized.browser_session_id,
         )
         redirect = RedirectResponse(
@@ -2371,6 +2383,7 @@ async def _authorize_proxy_request(
                     session_id=session_id,
                     user_id=int(payload["sub"]),
                     tenant_id=int(payload["tid"]),
+                    control_plane_tenant_id=str(payload.get("cp_tid") or "").strip() or None,
                     browser_session_id=authorized.browser_session_id,
                 ),
             )
@@ -2452,6 +2465,7 @@ def _renew_authenticated_proxy_cookie(
         session_id=session_id,
         user_id=int(ctx.user.id),
         tenant_id=int(ctx.tenant_id),
+        control_plane_tenant_id=_control_plane_code_tenant_id(ctx),
         browser_session_id=browser_session_id,
     )
     _set_proxy_cookie(

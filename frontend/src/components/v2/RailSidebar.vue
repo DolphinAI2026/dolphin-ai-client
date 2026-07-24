@@ -8,6 +8,11 @@ import { useCodeApplicationsStore } from '@/stores/codeApplications'
 import { isCodeRoutePath, useModeStore, MODE_META, MODE_ORDER, type AppMode } from '@/stores/mode'
 import { aiChatApi, type AIChatSession } from '@/api/aiChat'
 import { codeRuntimeApi } from '@/api/codeRuntime'
+import { authApi } from '@/api/auth'
+import {
+  getControlPlaneCodeSession,
+  setControlPlaneCodeSession,
+} from '@/utils/controlPlaneCodeSession'
 import { ElMessage } from 'element-plus'
 import {
   normalizeAiSessions,
@@ -325,7 +330,9 @@ const userAccount = computed(() => user.user?.username || '')
 const userName = computed(() => user.user?.display_name || userAccount.value || '未登录')
 const userAvatarText = computed(() => Array.from(userName.value.trim())[0]?.toUpperCase() || 'U')
 const tenantOptions = computed(() => user.availableTenants || [])
-const currentTenantValue = computed(() => user.tenantId ? String(user.tenantId) : '')
+const currentTenantValue = computed(() => currentMode.value === 'code'
+  ? (getControlPlaneCodeSession()?.tenantId || '')
+  : (user.tenantId ? String(user.tenantId) : ''))
 function looksLikeLongId(value?: string | null) {
   return /^\d{12,}$/.test(String(value || '').trim())
 }
@@ -348,6 +355,9 @@ function tenantSubtitle(tenant?: { tenant_name?: string | null; tenant_code?: st
 }
 
 const currentTenantLabel = computed(() => {
+  if (currentMode.value === 'code') {
+    return getControlPlaneCodeSession()?.tenantName || '未选择组织'
+  }
   if (__DESKTOP__) {
     return user.user?.control_plane_tenant_name || user.user?.tenant_name || '未选择组织'
   }
@@ -428,6 +438,14 @@ async function selectTenant(value: string) {
   tenantMenuOpen.value = false
   const tenant = tenantOptions.value.find(item => String(item.tenant_id) === value)
   if (!tenant || value === currentTenantValue.value) return
+  if (currentMode.value === 'code' && !__DESKTOP__) {
+    const session = getControlPlaneCodeSession()
+    if (!session) return
+    const next = await authApi.switchControlPlaneCodeTenant(value, session.token)
+    setControlPlaneCodeSession(next.access_token)
+    window.location.reload()
+    return
+  }
   if (__DESKTOP__) {
     await user.switchTenant(value)
     return

@@ -265,6 +265,32 @@ async def fetch_control_plane_identity(access_token: str) -> ControlPlaneAuthRes
     )
 
 
+async def switch_control_plane_tenant(access_token: str, tenant_id: str) -> None:
+    """Switch the active Full Workspace tenant for a cached control-plane session."""
+    base_url = _dolphin_workspace_base_url()
+    target_tenant_id = str(tenant_id or "").strip()
+    if not target_tenant_id:
+        raise HTTPException(status_code=400, detail="Dolphin 租户不能为空")
+    try:
+        async with httpx.AsyncClient(timeout=15.0) as client:
+            _response_payload(
+                await client.post(
+                    f"{base_url}/api/auth/switch-tenant",
+                    headers={
+                        "Authorization": f"Bearer {access_token}",
+                        "X-Tenant-Id": target_tenant_id,
+                    },
+                    json={"tenant_id": target_tenant_id},
+                ),
+                fallback="Dolphin 租户切换失败",
+                failure_status=401,
+            )
+    except HTTPException:
+        raise
+    except httpx.RequestError as exc:
+        raise HTTPException(status_code=503, detail="Dolphin 租户切换暂不可用") from exc
+
+
 async def refresh_control_plane_token(refresh_token: str) -> ControlPlaneTokenResult:
     base_url = _dolphin_workspace_base_url()
     try:

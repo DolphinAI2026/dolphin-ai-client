@@ -110,6 +110,36 @@ def _first_text(*values: object) -> str | None:
     return None
 
 
+def _control_plane_code_context(user: User, payload: dict) -> AuthContext | None:
+    """Build a Code-only context without consulting local Tenant/UserTenant."""
+    if (
+        payload.get("type") != "control_plane_code"
+        or str(user.account_source or "").strip().lower() != "control_plane"
+    ):
+        return None
+    control_plane_tenant_id = str(payload.get("cp_tid") or "").strip()
+    if not control_plane_tenant_id:
+        return None
+    role = str(
+        payload.get("cp_trole")
+        or ("platform_admin" if user.is_platform_admin else "member")
+    )
+    permissions = payload.get("cp_perms")
+    return AuthContext(
+        user=user,
+        tenant_id=0,
+        tenant_role=role,
+        org_permissions=(
+            permissions
+            if isinstance(permissions, dict)
+            else ({"*": True} if role == "platform_admin" else {})
+        ),
+        tenant_access_scope="control_plane_code",
+        control_plane_tenant_id=control_plane_tenant_id,
+        control_plane_tenant_name=str(payload.get("cp_tname") or "").strip() or None,
+    )
+
+
 def platform_admin_has_unscoped_tenant_access(user: User) -> bool:
     """Return whether a platform admin may enter any active local tenant.
 
@@ -201,6 +231,15 @@ async def _get_auth_context_allow_platform_only(
             and payload.get("iss") == _DESKTOP_ISSUER
             and bool(str(payload.get("cp_tid") or "").strip())
         )
+        if token_type == "control_plane_code":
+            result = await db.execute(select(User).where(User.id == user_id))
+            user = result.scalar_one_or_none()
+            if not user or not user.is_active:
+                raise credentials_exception
+            control_plane_context = _control_plane_code_context(user, payload)
+            if not control_plane_context:
+                raise credentials_exception
+            return control_plane_context
 
         # Older platform-admin tokens may not carry tenant_id. Most settings
         # pages are still tenant-scoped, so resolve the admin's default tenant.
@@ -307,6 +346,7 @@ async def _get_auth_context_allow_platform_only(
             org_permissions={"*": True},
             apaas_user_id=eff_apaas_uid,
             apaas_tenant_id=eff_apaas_tid,
+            control_plane_tenant_id=str(payload.get("cp_tid") or user.coding_tenant_id or "").strip() or None,
         )
 
     # Get role and permissions (shared resolver — keep header/token paths in sync)
@@ -319,6 +359,7 @@ async def _get_auth_context_allow_platform_only(
         org_permissions=org_permissions,
         apaas_user_id=eff_apaas_uid,
         apaas_tenant_id=eff_apaas_tid,
+        control_plane_tenant_id=str(payload.get("cp_tid") or user.coding_tenant_id or "").strip() or None,
     )
 
 
@@ -367,6 +408,9 @@ async def get_auth_context_from_token(token: str) -> AuthContext:
     token_type = payload.get("type")
     jwt_apaas_uid = payload.get("apaas_sub")
     jwt_apaas_tid = payload.get("apaas_tid")
+    control_plane_tenant_id = str(
+        payload.get("cp_tid") or ""
+    ).strip() or None
     if not user_id:
         raise ValueError("Invalid token")
 
@@ -377,6 +421,9 @@ async def get_auth_context_from_token(token: str) -> AuthContext:
             raise ValueError("User not found")
         if not user.is_active:
             raise ValueError("User is disabled")
+        control_plane_context = _control_plane_code_context(user, payload)
+        if control_plane_context:
+            return control_plane_context
 
         eff_apaas_uid = jwt_apaas_uid or user.apaas_user_id or None
 
@@ -405,6 +452,7 @@ async def get_auth_context_from_token(token: str) -> AuthContext:
                     apaas_user_id=eff_apaas_uid,
                     apaas_tenant_id=eff_apaas_tid,
                     tenant_access_scope=tenant_access_scope,
+                    control_plane_tenant_id=control_plane_tenant_id,
                 )
             tenant_id = 0
         else:
@@ -428,6 +476,7 @@ async def get_auth_context_from_token(token: str) -> AuthContext:
                 apaas_user_id=eff_apaas_uid,
                 apaas_tenant_id=eff_apaas_tid,
                 tenant_access_scope="tenant",
+                control_plane_tenant_id=control_plane_tenant_id,
             )
 
         if platform_admin_has_unscoped_tenant_access(user):
@@ -439,6 +488,7 @@ async def get_auth_context_from_token(token: str) -> AuthContext:
                 apaas_user_id=eff_apaas_uid,
                 apaas_tenant_id=eff_apaas_tid,
                 tenant_access_scope="unscoped",
+                control_plane_tenant_id=control_plane_tenant_id,
             )
         # 普通租户用户：查 UserTenant→Role 拿真实角色权限，与 header 路径一致。
         # （旧实现硬编码 member/{} → 自开发整页预览/SSE 等 query-token 入口丢权限。）
@@ -459,6 +509,7 @@ async def get_auth_context_from_token(token: str) -> AuthContext:
                 org_permissions={"*": True},
                 apaas_user_id=eff_apaas_uid,
                 apaas_tenant_id=eff_apaas_tid,
+                control_plane_tenant_id=control_plane_tenant_id,
             )
         tenant_role, org_permissions = await _resolve_role_context(
             db, user_tenant.role_id
@@ -470,6 +521,7 @@ async def get_auth_context_from_token(token: str) -> AuthContext:
             org_permissions=org_permissions,
             apaas_user_id=eff_apaas_uid,
             apaas_tenant_id=eff_apaas_tid,
+            control_plane_tenant_id=control_plane_tenant_id,
         )
 
 

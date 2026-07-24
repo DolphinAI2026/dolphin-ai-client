@@ -242,8 +242,12 @@ async def init_db():
             "ALTER TABLE ai_chat_sessions ADD COLUMN external_app_name VARCHAR(200)",
             "ALTER TABLE ai_chat_sessions ADD COLUMN external_app_code VARCHAR(120)",
             "CREATE INDEX IF NOT EXISTS ix_ai_chat_sessions_external_application_id ON ai_chat_sessions(external_application_id)",
+            "ALTER TABLE ai_chat_sessions ADD COLUMN control_plane_tenant_id VARCHAR(80)",
+            "CREATE INDEX IF NOT EXISTS ix_ai_chat_sessions_control_plane_tenant_id ON ai_chat_sessions(control_plane_tenant_id)",
             # 纯 Code 会话没有本地 applications.id，运行时绑定允许 app_id 为空。
             "ALTER TABLE code_runtime_bindings MODIFY COLUMN app_id INTEGER NULL",
+            "ALTER TABLE code_runtime_bindings ADD COLUMN control_plane_tenant_id VARCHAR(80)",
+            "CREATE INDEX IF NOT EXISTS ix_code_runtime_bindings_control_plane_tenant_id ON code_runtime_bindings(control_plane_tenant_id)",
             # 早期多会话表包含以下必填字段；当前模型已不再写入，旧库必须释放非空约束。
             "ALTER TABLE code_runtime_agent_sessions ADD COLUMN conversation_id VARCHAR(160)",
             "ALTER TABLE code_runtime_agent_sessions ADD COLUMN conversation_purpose VARCHAR(32)",
@@ -263,6 +267,8 @@ async def init_db():
             "ALTER TABLE code_runtime_agent_sessions ADD COLUMN deleted_at DATETIME",
             "ALTER TABLE code_runtime_agent_sessions ADD COLUMN capability_stale BOOLEAN NOT NULL DEFAULT FALSE",
             "ALTER TABLE code_runtime_agent_sessions ADD COLUMN codex_session_resumable BOOLEAN NOT NULL DEFAULT TRUE",
+            "ALTER TABLE code_runtime_agent_sessions ADD COLUMN control_plane_tenant_id VARCHAR(80)",
+            "CREATE INDEX IF NOT EXISTS ix_code_runtime_agent_sessions_control_plane_tenant_id ON code_runtime_agent_sessions(control_plane_tenant_id)",
             # 桌面产品账号来源标记(2026-06-16): 'apaas'=aPaaS同步账号 | 'desktop'=桌面账号
             "ALTER TABLE users ADD COLUMN account_source VARCHAR(20) NOT NULL DEFAULT 'apaas'",
             # account-service: username 全局唯一 → 复合 (username, account_source)
@@ -360,6 +366,7 @@ async def _migrate_code_runtime_binding_app_id_nullable(conn, inspect_fn) -> Non
     async def ensure_current_agent_session_indexes() -> None:
         for stmt in [
             "CREATE INDEX IF NOT EXISTS ix_code_runtime_agent_sessions_tenant_id ON code_runtime_agent_sessions(tenant_id)",
+            "CREATE INDEX IF NOT EXISTS ix_code_runtime_agent_sessions_control_plane_tenant_id ON code_runtime_agent_sessions(control_plane_tenant_id)",
             "CREATE INDEX IF NOT EXISTS ix_code_runtime_agent_sessions_user_id ON code_runtime_agent_sessions(user_id)",
             "CREATE INDEX IF NOT EXISTS ix_code_runtime_agent_sessions_app_id ON code_runtime_agent_sessions(app_id)",
             "CREATE INDEX IF NOT EXISTS ix_code_runtime_agent_sessions_session_id ON code_runtime_agent_sessions(session_id)",
@@ -436,6 +443,7 @@ async def _migrate_code_runtime_binding_app_id_nullable(conn, inspect_fn) -> Non
     async def ensure_current_indexes() -> None:
         for stmt in [
             "CREATE INDEX IF NOT EXISTS ix_code_runtime_bindings_tenant_id ON code_runtime_bindings(tenant_id)",
+            "CREATE INDEX IF NOT EXISTS ix_code_runtime_bindings_control_plane_tenant_id ON code_runtime_bindings(control_plane_tenant_id)",
             "CREATE INDEX IF NOT EXISTS ix_code_runtime_bindings_user_id ON code_runtime_bindings(user_id)",
             "CREATE INDEX IF NOT EXISTS ix_code_runtime_bindings_app_id ON code_runtime_bindings(app_id)",
             "CREATE INDEX IF NOT EXISTS ix_code_runtime_bindings_session_id ON code_runtime_bindings(session_id)",

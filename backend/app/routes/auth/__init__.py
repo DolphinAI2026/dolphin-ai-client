@@ -33,6 +33,7 @@ from app.routes.auth.login import (  # noqa: F401
     select_tenant,
     exchange_apaas_token,
     switch_tenant,
+    switch_control_plane_code_tenant,
 )
 # 内部 helpers（测试用）
 from app.routes.auth.login import (  # noqa: F401
@@ -48,6 +49,7 @@ from app.routes.auth.login import (  # noqa: F401
     ExchangeApaasTokenRequest,
     ExchangeApaasTokenResponse,
     TenantSwitchRequest,
+    ControlPlaneCodeTenantSwitchRequest,
 )
 
 # ── re-exports: tenants_admin 模块 ────────────────────────────────────────────

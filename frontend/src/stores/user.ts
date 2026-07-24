@@ -189,11 +189,19 @@ export const useUserStore = defineStore('user', () => {
     nextUser: User,
     destination: string,
   ) => {
-    // Shared storage and navigation may throw. Keep both ahead of all per-tab
-    // adapter, Pinia, and tab mutations so failure preserves the source session.
+    // A reload must see the candidate in both shared and per-tab storage. If
+    // sessionStorage is updated after location.replace(), the next page can
+    // revive the previous token and send Code requests to the old tenant.
+    const sourceSession = getAuthSessionState()
     const sourceSharedToken = localStorage.getItem('token')
-    localStorage.setItem('token', newToken)
+    const sourceUser = user.value
+    let candidateCommitted = false
     try {
+      localStorage.setItem('token', newToken)
+      commitAuthSession(newToken)
+      candidateCommitted = true
+      token.value = newToken
+      user.value = nextUser
       window.location.replace(destination)
     } catch (error) {
       try {
@@ -202,15 +210,22 @@ export const useUserStore = defineStore('user', () => {
         } else {
           localStorage.setItem('token', sourceSharedToken)
         }
+        if (candidateCommitted) {
+          if (sourceSession.token) {
+            commitAuthSession(sourceSession.token)
+            token.value = sourceSession.token
+          } else {
+            clearAuthSession()
+            token.value = null
+          }
+          user.value = sourceUser
+        }
       } catch {
-        // The per-tab session remains untouched even if storage rollback fails.
+        // Preserve the navigation error; a browser storage failure is not
+        // recoverable here.
       }
       throw error
     }
-
-    commitAuthSession(newToken)
-    token.value = newToken
-    user.value = nextUser
 
     try { localStorage.removeItem('ai-builder-tabs-v1') } catch { /* ignore */ }
   }
