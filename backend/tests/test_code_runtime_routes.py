@@ -2414,6 +2414,37 @@ async def test_create_code_session_from_app_creates_mode_code_session(db_session
 
 
 @pytest.mark.asyncio
+async def test_create_code_session_from_app_records_control_plane_tenant(db_session):
+    from app.routes.code_runtime import CreateCodeSessionRequest, create_code_session_from_app
+
+    db_session.add(Application(
+        tenant_id=0,
+        user_id=11,
+        created_by=11,
+        app_name="组织内 Code 应用",
+        app_code="org-code",
+        app_type="ai-code",
+        status="completed",
+    ))
+    await db_session.commit()
+    ctx = SimpleNamespace(
+        user=SimpleNamespace(id=11, account_source="control_plane"),
+        tenant_id=0,
+        tenant_role="member",
+        control_plane_tenant_id="0",
+    )
+
+    result = await create_code_session_from_app(
+        CreateCodeSessionRequest(app_id=1),
+        ctx,
+        db_session,
+    )
+
+    session = await db_session.get(AIChatSession, result["id"])
+    assert session.control_plane_tenant_id == "0"
+
+
+@pytest.mark.asyncio
 async def test_create_code_session_from_external_app_creates_mode_code_session_without_local_app(db_session):
     from app.routes.code_runtime import (
         CreateExternalCodeSessionRequest,
@@ -2551,7 +2582,7 @@ async def test_list_code_runtime_rail_history_includes_shell_session_without_bin
 
 
 @pytest.mark.asyncio
-async def test_list_code_runtime_rail_history_includes_same_user_legacy_shells_for_control_plane_scope(db_session):
+async def test_list_code_runtime_rail_history_excludes_unscoped_shells_for_control_plane_scope(db_session):
     from app.routes.code_runtime import list_code_runtime_rail_history
 
     db_session.add_all([
@@ -2601,10 +2632,7 @@ async def test_list_code_runtime_rail_history_includes_same_user_legacy_shells_f
 
     result = await list_code_runtime_rail_history(_request(), context, db_session)
 
-    assert {app["external_application_id"] for app in result["apps"]} == {
-        "legacy-crm",
-        "admin-code",
-    }
+    assert {app["external_application_id"] for app in result["apps"]} == {"admin-code"}
 
 
 @pytest.mark.asyncio

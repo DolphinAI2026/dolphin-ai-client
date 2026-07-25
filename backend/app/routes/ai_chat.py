@@ -53,6 +53,15 @@ router = APIRouter(prefix="/ai-chat", tags=["ai-chat"])
 _DEFAULT_SESSION_TITLES = {"", "新会话"}
 
 
+def _control_plane_code_tenant_id(ctx: AuthContext, mode: str | None) -> str | None:
+    if str(mode or "").strip().lower() != "code":
+        return None
+    if str(getattr(ctx.user, "account_source", "") or "").strip().lower() != "control_plane":
+        return None
+    value = str(getattr(ctx, "control_plane_tenant_id", "") or "").strip()
+    return value or None
+
+
 # ─────────────────────────── 请求 / 响应 schemas ───────────────────────────
 
 class CreateSessionRequest(BaseModel):
@@ -515,6 +524,7 @@ async def create_session(
             pass
     s = AIChatSession(
         tenant_id=ctx.tenant_id,
+        control_plane_tenant_id=_control_plane_code_tenant_id(ctx, body.mode),
         user_id=ctx.user.id,
         title=title,
         selected_llm_config_id=selected_llm_config_id,

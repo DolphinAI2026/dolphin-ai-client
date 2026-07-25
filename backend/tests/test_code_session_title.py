@@ -15,6 +15,17 @@ def _ctx(user: User, tenant_id: int) -> AuthContext:
     return AuthContext(user=user, tenant_id=tenant_id, tenant_role="member", org_permissions={})
 
 
+def _control_plane_ctx(user: User) -> AuthContext:
+    user.account_source = "control_plane"
+    return AuthContext(
+        user=user,
+        tenant_id=0,
+        tenant_role="member",
+        org_permissions={},
+        control_plane_tenant_id="0",
+    )
+
+
 @pytest.mark.asyncio
 async def test_code_session_title_uses_workspace_display_name(db_session):
     tenant = Tenant(tenant_name="t_t", tenant_code="t_t"); db_session.add(tenant); await db_session.flush()
@@ -68,6 +79,22 @@ async def test_code_session_no_app_when_workspace_unbound(db_session):
                return_value={"display_name": "练手仓", "project_id": None}):
         result = await create_session(body, ctx, db_session)
     assert result["app_id"] is None
+
+
+@pytest.mark.asyncio
+async def test_generic_code_session_records_control_plane_tenant(db_session):
+    tenant = Tenant(tenant_name="t_cp", tenant_code="t_cp"); db_session.add(tenant); await db_session.flush()
+    user = User(username="cp_code_user", hashed_password="x"); db_session.add(user); await db_session.flush()
+
+    result = await create_session(
+        CreateSessionRequest(mode="code", title="组织 Code"),
+        _control_plane_ctx(user),
+        db_session,
+    )
+
+    from app.models.ai_chat import AIChatSession
+    session = await db_session.get(AIChatSession, result["id"])
+    assert session.control_plane_tenant_id == "0"
 
 
 @pytest.mark.asyncio
