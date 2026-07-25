@@ -6,6 +6,9 @@ import { controlPlaneCodeAuthorization } from '@/utils/controlPlaneCodeSession'
 // This owner must change with any automatic activate retry added by the client.
 export const CODE_RUNTIME_ACTIVATION_RETRY_DELAYS_MS = [] as const
 
+// 首次冷启动会同步等待 Control Plane 部署 Sandbox；必须长于后端的 workspace/open 预算。
+export const CODE_RUNTIME_WORKSPACE_OPEN_TIMEOUT_MS = 690_000
+
 export interface CodeApplication extends MergedApplication {
   id: string
   external_application_id: string
@@ -113,7 +116,14 @@ export const codeRuntimeApi = {
   },
   async openSession(sessionRef: number | string) {
     const encodedSessionRef = encodeURIComponent(String(sessionRef))
-    const opened = await request.post<any, CodeRuntimeOpenResponse>(`/code/sessions/${encodedSessionRef}/open`, undefined, { headers: controlPlaneCodeAuthorization() })
+    const opened = await request.post<any, CodeRuntimeOpenResponse>(
+      `/code/sessions/${encodedSessionRef}/open`,
+      undefined,
+      {
+        headers: controlPlaneCodeAuthorization(),
+        timeout: CODE_RUNTIME_WORKSPACE_OPEN_TIMEOUT_MS,
+      },
+    )
     return {
       ...opened,
       embed_url: resolveCodeRuntimeEmbedUrl(opened.embed_url),

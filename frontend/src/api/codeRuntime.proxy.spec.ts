@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import {
   CODE_RUNTIME_ACTIVATION_RETRY_DELAYS_MS,
+  CODE_RUNTIME_WORKSPACE_OPEN_TIMEOUT_MS,
   resolveCodeRuntimeEmbedUrl,
 } from './codeRuntime'
 import apiSource from './codeRuntime.ts?raw'
@@ -28,5 +29,10 @@ describe('Code runtime browser-authenticated session APIs', () => {
   it('declares the complete automatic activation retry schedule', () => {
     expect(CODE_RUNTIME_ACTIVATION_RETRY_DELAYS_MS).toEqual([])
     expect(apiSource).toContain('CODE_RUNTIME_ACTIVATION_RETRY_DELAYS_MS = [] as const')
+  })
+
+  it('keeps the browser open request alive beyond the Control Plane cold-start budget', () => {
+    expect(CODE_RUNTIME_WORKSPACE_OPEN_TIMEOUT_MS).toBe(690_000)
+    expect(apiSource).toContain('timeout: CODE_RUNTIME_WORKSPACE_OPEN_TIMEOUT_MS')
   })
 })
