@@ -877,6 +877,42 @@ async def test_default_workspace_open_rebases_builder_urls_to_local_builder(monk
 
 
 @pytest.mark.asyncio
+async def test_default_workspace_open_uses_configured_cold_start_timeout(monkeypatch):
+    from app.config import settings
+    from app.code_runtime import service
+
+    timeouts: list[object] = []
+
+    class FakeResponse:
+        status_code = 200
+        text = ""
+
+        def json(self):
+            return {"specReviewUrl": "https://sandbox.example.com/builder"}
+
+    class FakeClient:
+        def __init__(self, *args, **kwargs):
+            timeouts.append(kwargs["timeout"])
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *_args):
+            return False
+
+        async def post(self, _url: str, **_kwargs):
+            return FakeResponse()
+
+    monkeypatch.setenv("DOLPHIN_CODE_CONTROL_PLANE_URL", "https://code.example.com/control-plane")
+    monkeypatch.setattr(settings, "dolphin_code_workspace_open_timeout_seconds", 660)
+    monkeypatch.setattr(service.httpx, "AsyncClient", FakeClient)
+
+    await service.default_workspace_open("app-1")
+
+    assert timeouts[0].read == 660
+
+
+@pytest.mark.asyncio
 async def test_list_code_applications_fetches_and_maps_control_plane_apps(monkeypatch):
     from app.code_runtime import service
 

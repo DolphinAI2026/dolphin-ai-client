@@ -855,7 +855,12 @@ async def default_workspace_open(
     body = {"handoffId": handoff_id} if handoff_id else None
     target = f"{base_url}/api/applications/{external_application_id}/workspace/open"
     try:
-        async with httpx.AsyncClient(timeout=httpx.Timeout(connect=10, read=60, write=10, pool=10)) as client:
+        async with httpx.AsyncClient(timeout=httpx.Timeout(
+            connect=10,
+            read=settings.dolphin_code_workspace_open_timeout_seconds,
+            write=10,
+            pool=10,
+        )) as client:
             response = await client.post(
                 target,
                 headers=_control_plane_headers(

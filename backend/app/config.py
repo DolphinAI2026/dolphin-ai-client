@@ -140,6 +140,9 @@ class Settings(BaseSettings):
     dolphin_code_control_plane_url: str = ""
     dolphin_code_control_plane_token: str = ""
     dolphin_code_control_plane_delegation_secret: str = ""
+    # 首次打开真实 Code workspace 会同步等待 Control Plane 完成 Sandbox 部署和运行时就绪。
+    # 默认值覆盖其 Helm 安装、部署就绪和运行时探测的组合预算。
+    dolphin_code_workspace_open_timeout_seconds: int = 660
     dolphin_code_builder_url: str = ""
     dolphin_code_default_seed_project_id: str = "1781233861147"
     dolphin_code_allow_cookieless_loopback_runtime: bool = False
