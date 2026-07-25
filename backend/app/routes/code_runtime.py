@@ -154,6 +154,17 @@ def _code_session_matches_context(session: AIChatSession, ctx: AuthContext) -> b
     return session.tenant_id == ctx.tenant_id
 
 
+def _code_rail_history_scope(model: Any, ctx: AuthContext):
+    """Read pre-scope shells for their owner without widening runtime authorization."""
+    control_plane_tenant_id = _control_plane_code_tenant_id(ctx)
+    if control_plane_tenant_id:
+        return or_(
+            model.control_plane_tenant_id == control_plane_tenant_id,
+            model.control_plane_tenant_id.is_(None),
+        )
+    return model.tenant_id == ctx.tenant_id
+
+
 def _resolved_code_sandbox_cache_config() -> dict[str, int | str]:
     profile = str(settings.dolphin_code_cache_profile or "normal").strip().lower()
     if profile not in {"normal", "performance"}:
@@ -1223,7 +1234,7 @@ async def list_code_runtime_rail_history(
             .outerjoin(CodeRuntimeBinding, CodeRuntimeBinding.session_id == AIChatSession.id)
             .outerjoin(Application, Application.id == AIChatSession.app_id)
             .where(
-                _code_session_scope(AIChatSession, ctx),
+                _code_rail_history_scope(AIChatSession, ctx),
                 AIChatSession.user_id == ctx.user.id,
                 AIChatSession.mode == "code",
                 AIChatSession.status != "archived",
@@ -1264,7 +1275,7 @@ async def list_code_runtime_rail_history(
                 await db.execute(
                     select(CodeRuntimeAgentSession)
                     .where(
-                        _code_session_scope(CodeRuntimeAgentSession, ctx),
+                        _code_rail_history_scope(CodeRuntimeAgentSession, ctx),
                         CodeRuntimeAgentSession.user_id == ctx.user.id,
                         CodeRuntimeAgentSession.session_id.in_(shell_session_ids),
                         CodeRuntimeAgentSession.deleted_at.is_(None),

@@ -2551,6 +2551,63 @@ async def test_list_code_runtime_rail_history_includes_shell_session_without_bin
 
 
 @pytest.mark.asyncio
+async def test_list_code_runtime_rail_history_includes_same_user_legacy_shells_for_control_plane_scope(db_session):
+    from app.routes.code_runtime import list_code_runtime_rail_history
+
+    db_session.add_all([
+        AIChatSession(
+            tenant_id=0,
+            user_id=11,
+            title="历史 CRM Code",
+            mode="code",
+            status="active",
+            external_application_id="legacy-crm",
+        ),
+        AIChatSession(
+            tenant_id=0,
+            user_id=11,
+            control_plane_tenant_id="0",
+            title="当前组织 Code",
+            mode="code",
+            status="active",
+            external_application_id="admin-code",
+        ),
+        AIChatSession(
+            tenant_id=0,
+            user_id=11,
+            control_plane_tenant_id="2077284540335579137",
+            title="示例组织 Code",
+            mode="code",
+            status="active",
+            external_application_id="example-code",
+        ),
+        AIChatSession(
+            tenant_id=0,
+            user_id=12,
+            title="其他用户历史 Code",
+            mode="code",
+            status="active",
+            external_application_id="other-user-code",
+        ),
+    ])
+    await db_session.commit()
+
+    context = SimpleNamespace(
+        user=SimpleNamespace(id=11, account_source="control_plane"),
+        tenant_id=0,
+        tenant_role="member",
+        control_plane_tenant_id="0",
+    )
+
+    result = await list_code_runtime_rail_history(_request(), context, db_session)
+
+    assert {app["external_application_id"] for app in result["apps"]} == {
+        "legacy-crm",
+        "admin-code",
+    }
+
+
+@pytest.mark.asyncio
 async def test_desktop_rail_history_uses_remote_builder_shells_and_caches_openable_ids(
     db_session,
     monkeypatch,
