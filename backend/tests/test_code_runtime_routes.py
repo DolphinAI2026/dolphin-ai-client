@@ -1906,6 +1906,7 @@ def test_code_runtime_shell_config_exposes_external_session_rail_flag():
     assert b'"externalSessionRail":true' in injected
     assert b'"hideHistory":true' in injected
     assert b'"hideNewSession":true' in injected
+    assert b"window.__DOLPHIN_CODE_SHELL__" in injected
     assert b"window.__APAAS_SHELL__" in injected
     assert b"MutationObserver" not in injected
     assert b"querySelectorAll" not in injected
@@ -1937,10 +1938,15 @@ def test_code_runtime_shell_config_uses_script_safe_json():
         dangerous_origin,
         '/ai-builder/"quoted"</script>',
     ).decode("utf-8")
-    config_source = injected.split("window.__APAAS_SHELL__||{},", 1)[1].split(
-        ");})();</script>",
+    config_source = injected.split("var config=", 1)[1].split(
+        ";window.__DOLPHIN_CODE_SHELL__",
         1,
     )[0]
+
+    # Runtime Builder reads __DOLPHIN_CODE_SHELL__. __APAAS_SHELL__ remains as a
+    # compatibility alias for older embedded clients.
+    assert "window.__DOLPHIN_CODE_SHELL__" in injected
+    assert "window.__APAAS_SHELL__" in injected
 
     assert "</script>" not in config_source.lower()
     assert "\\u003c/script\\u003e" in config_source.lower()

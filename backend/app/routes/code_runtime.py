@@ -1954,7 +1954,9 @@ def _inject_shell_config(
     injection = (
         '<script id="dolphin-code-shell-config">'
         "(function(){"
-        "window.__APAAS_SHELL__=Object.assign({},window.__APAAS_SHELL__||{},__SHELL_CONFIG__);"
+        "var config=__SHELL_CONFIG__;"
+        "window.__DOLPHIN_CODE_SHELL__=Object.assign({},window.__DOLPHIN_CODE_SHELL__||{},config);"
+        "window.__APAAS_SHELL__=Object.assign({},window.__APAAS_SHELL__||{},config);"
         "})();"
         "</script>"
     ).replace("__SHELL_CONFIG__", shell_config).encode("utf-8")
