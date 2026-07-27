@@ -149,6 +149,8 @@ const creatingCodeApplication = ref(false)
 let railRefreshTimer: number | undefined
 let openRequestSeq = 0
 let runtimeAuthRecoveryPromise: Promise<void> | null = null
+let openInFlightKey = ''
+let runtimeAuthInvalidFrameKey = ''
 let pendingReadyTimer: {
   handle: number
   requestId: number
@@ -320,15 +322,29 @@ async function openCurrentSession() {
   const sessionRef = currentSessionRef()
   if (!sessionRef) {
     openRequestSeq += 1
+    openInFlightKey = ''
+    runtimeAuthInvalidFrameKey = ''
     errorMessage.value = '缺少 Code 会话'
     resetCodeFrames()
     return
   }
+  const routeLocation = currentCodeRouteLocation()
+  const openKey = `${sessionRef}:${codeRouteLocationKey(routeLocation)}`
+  if (loading.value && openInFlightKey === openKey) return
+  const currentRequest = frameLifecycle.value.request
+  if (
+    currentRequest?.sessionRef === sessionRef
+    && codeRouteLocationsEqual(currentRequest.route, routeLocation)
+  ) {
+    return
+  }
+  openInFlightKey = openKey
   const requestSeq = ++openRequestSeq
+  runtimeAuthInvalidFrameKey = ''
   frameLifecycle.value = beginCodeFrameOpen(frameLifecycle.value, {
     requestId: requestSeq,
     sessionRef,
-    route: currentCodeRouteLocation(),
+    route: routeLocation,
   })
   loading.value = true
   errorMessage.value = ''
@@ -344,6 +360,7 @@ async function openCurrentSession() {
   if (exactCachedState !== frameLifecycle.value) {
     frameLifecycle.value = exactCachedState
     loading.value = false
+    if (openInFlightKey === openKey) openInFlightKey = ''
     refreshOuterCodeRail()
     return
   }
@@ -423,7 +440,10 @@ async function openCurrentSession() {
       })
     }
   } finally {
-    if (requestSeq === openRequestSeq) loading.value = false
+    if (requestSeq === openRequestSeq) {
+      loading.value = false
+      if (openInFlightKey === openKey) openInFlightKey = ''
+    }
   }
 }
 
@@ -518,6 +538,7 @@ function failCurrentFrameOpen(failure: CodeFrameFailureInput): boolean {
 }
 
 function retryFailedSession() {
+  runtimeAuthInvalidFrameKey = ''
   const target = frameLifecycle.value.failed?.route
   if (!target || codeRouteLocationsEqual(currentCodeRouteLocation(), target)) {
     void openCurrentSession()
@@ -529,10 +550,12 @@ function retryFailedSession() {
   })
 }
 
-function recoverRuntimeAuthentication() {
+function recoverRuntimeAuthentication(frameKey: string) {
+  if (runtimeAuthInvalidFrameKey === frameKey) return
+  runtimeAuthInvalidFrameKey = frameKey
   if (runtimeAuthRecoveryPromise) return
-  errorMessage.value = ''
-  runtimeAuthRecoveryPromise = openCurrentSession()
+  errorMessage.value = 'Code Runtime 连接已失效，请手动重试'
+  runtimeAuthRecoveryPromise = Promise.resolve()
     .finally(() => {
       runtimeAuthRecoveryPromise = null
     })
@@ -621,6 +644,8 @@ function closeHostedActivityDrawer() {
 function resetCodeFrames() {
   clearPendingReadyTimer()
   clearHostedActivityModal()
+  openInFlightKey = ''
+  runtimeAuthInvalidFrameKey = ''
   publishCodeFrameDeactivation()
   frameLifecycle.value = createCodeFrameLifecycle()
   frameElements.clear()
@@ -671,7 +696,7 @@ function onShellMessage(event: MessageEvent) {
       && message.payload.code === 'runtime_auth_invalid'
       && isFrameInteractive(frame)
     ) {
-      recoverRuntimeAuthentication()
+      recoverRuntimeAuthentication(frame.key)
       return
     }
     if (frame.phase === 'pending' && frameLifecycle.value.request) {
