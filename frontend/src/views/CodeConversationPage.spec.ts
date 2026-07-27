@@ -46,11 +46,21 @@ describe('CodeConversationPage', () => {
     expect(pageSource).toContain("from './codeShellProtocol'")
     expect(pageSource).toContain('resolveTrustedShellMessage')
     expect(pageSource).toContain("message.type === 'builder.ready'")
-    expect(pageSource).toContain("frame.phase !== 'pending'")
+    expect(pageSource).toContain("frame.phase === 'pending'")
     expect(pageSource).toContain('promoteReadyCodeFrame')
     expect(pageSource).toContain('event.origin')
     expect(pageSource).toContain('event.source')
     expect(pageSource).toContain('frame.key')
+  })
+
+  it('replays the current shell state when an active sandbox reports builder.ready again', () => {
+    const readyHandlerSource = pageSource.slice(
+      pageSource.indexOf("if (message.type === 'builder.ready')"),
+      pageSource.indexOf("if (message.type === 'sandbox.failed')"),
+    )
+
+    expect(readyHandlerSource).toContain('nextTick(publishCodeFrameShellState)')
+    expect(readyHandlerSource).toContain("frame.phase === 'active'")
   })
 
   it('publishes visibility and session activation state to every mounted frame', () => {

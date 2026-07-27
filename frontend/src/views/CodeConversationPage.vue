@@ -680,13 +680,19 @@ function onShellMessage(event: MessageEvent) {
   const frame = frames.value.find(candidate => candidate.key === resolved.frame.key)
   if (!frame) return
   if (message.type === 'builder.ready') {
-    if (frameLifecycle.value.pending?.key !== frame.key || frame.phase !== 'pending') return
-    const previousState = frameLifecycle.value
-    frameLifecycle.value = promoteReadyCodeFrame(previousState, frame.key)
-    if (frameLifecycle.value === previousState) return
-    clearPendingReadyTimer()
-    errorMessage.value = ''
-    scheduleOuterCodeRailRefresh(500)
+    if (frameLifecycle.value.pending?.key === frame.key && frame.phase === 'pending') {
+      const previousState = frameLifecycle.value
+      frameLifecycle.value = promoteReadyCodeFrame(previousState, frame.key)
+      if (frameLifecycle.value === previousState) return
+      clearPendingReadyTimer()
+      errorMessage.value = ''
+      scheduleOuterCodeRailRefresh(500)
+      return
+    }
+
+    // 沙箱仍保留时，活动 iframe 也可能重载 Builder 文档；新文档初始为
+    // 未激活状态，需要重放宿主状态才能恢复输入。
+    if (frame.phase === 'active') void nextTick(publishCodeFrameShellState)
     return
   }
 

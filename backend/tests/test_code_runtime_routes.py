@@ -1255,6 +1255,69 @@ async def test_dolphin_token_redirect_sets_proxy_and_database_runtime_cookies(
 
 
 @pytest.mark.asyncio
+async def test_proxy_uses_saved_runtime_session_when_embed_token_is_invalid(
+    db_session,
+    monkeypatch,
+):
+    import httpx
+    import app.routes.code_runtime as code_runtime_routes
+    from app.routes.code_runtime import proxy_code_runtime
+
+    session, _binding, _rows = await _seed_browser_runtime(db_session)
+    request = _proxy_request(
+        session.public_id,
+        query_string=b"dolphin_token=invalid-token",
+    )
+
+    def handler(upstream: httpx.Request) -> httpx.Response:
+        assert upstream.headers["cookie"] == "apaas_sandbox_token=service-cookie"
+        return httpx.Response(200, content=b"ok", headers={"content-type": "text/plain"})
+
+    transport = httpx.MockTransport(handler)
+    original = code_runtime_routes.httpx.AsyncClient
+    monkeypatch.setattr(
+        code_runtime_routes.httpx,
+        "AsyncClient",
+        lambda **kwargs: original(transport=transport, **kwargs),
+    )
+
+    response = await proxy_code_runtime(session.public_id, "builder", request, db_session)
+
+    assert response.status_code == 200
+    assert response.body == b"ok"
+
+
+@pytest.mark.asyncio
+async def test_proxy_uses_saved_runtime_session_when_embed_token_is_missing(
+    db_session,
+    monkeypatch,
+):
+    import httpx
+    import app.routes.code_runtime as code_runtime_routes
+    from app.routes.code_runtime import proxy_code_runtime
+
+    session, _binding, _rows = await _seed_browser_runtime(db_session)
+    request = _proxy_request(session.public_id)
+
+    def handler(upstream: httpx.Request) -> httpx.Response:
+        assert upstream.headers["cookie"] == "apaas_sandbox_token=service-cookie"
+        return httpx.Response(200, content=b"ok", headers={"content-type": "text/plain"})
+
+    transport = httpx.MockTransport(handler)
+    original = code_runtime_routes.httpx.AsyncClient
+    monkeypatch.setattr(
+        code_runtime_routes.httpx,
+        "AsyncClient",
+        lambda **kwargs: original(transport=transport, **kwargs),
+    )
+
+    response = await proxy_code_runtime(session.public_id, "builder", request, db_session)
+
+    assert response.status_code == 200
+    assert response.body == b"ok"
+
+
+@pytest.mark.asyncio
 async def test_short_code_route_accepts_embed_token_bound_to_public_session_id(
     db_session,
 ):

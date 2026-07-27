@@ -2282,6 +2282,21 @@ async def _recover_proxy_browser_session(
         )
 
 
+def _unchecked_proxy_authorization(binding: CodeRuntimeBinding) -> ProxyAuthorization:
+    if is_desktop_agent_runtime_target(binding.execution_target):
+        return ProxyAuthorization(browser_session_id="proxy-auth-disabled")
+    if not binding.runtime_service_session_enc:
+        return ProxyAuthorization(browser_session_id="proxy-auth-disabled")
+    try:
+        runtime_cookie = decrypt_runtime_cookie(binding.runtime_service_session_enc)
+    except ValueError as exc:
+        raise HTTPException(status_code=503, detail="Code runtime session unavailable") from exc
+    return ProxyAuthorization(
+        browser_session_id="proxy-auth-disabled",
+        runtime_cookie=runtime_cookie,
+    )
+
+
 async def _authorize_proxy_request(
     request: Request,
     session_id: CodeSessionRef,
@@ -2304,18 +2319,23 @@ async def _authorize_proxy_request(
             if shell_session is not None
             else session_id
         )
-        payload = validate_embed_token(
-            query_token,
-            session_id=token_session_id,
-            legacy_session_id=legacy_session_id,
-        )
-        authorized = await _proxy_authorization_from_payload(
-            payload,
-            db=db,
-            binding=binding,
-            shell_session=shell_session,
-            ctx=ctx,
-        )
+        try:
+            payload = validate_embed_token(
+                query_token,
+                session_id=token_session_id,
+                legacy_session_id=legacy_session_id,
+            )
+            authorized = await _proxy_authorization_from_payload(
+                payload,
+                db=db,
+                binding=binding,
+                shell_session=shell_session,
+                ctx=ctx,
+            )
+        except HTTPException:
+            if binding is None:
+                raise
+            return _unchecked_proxy_authorization(binding)
         proxy_token = create_proxy_cookie_token(
             session_id=session_id,
             user_id=int(payload["sub"]),
@@ -2355,27 +2375,32 @@ async def _authorize_proxy_request(
         )
     if cookie_token:
         try:
-            payload = validate_proxy_cookie_token(
-                cookie_token,
-                session_id=session_id,
-                legacy_session_id=legacy_session_id,
+            try:
+                payload = validate_proxy_cookie_token(
+                    cookie_token,
+                    session_id=session_id,
+                    legacy_session_id=legacy_session_id,
+                )
+                proxy_cookie_expired = False
+            except HTTPException:
+                payload = validate_expired_proxy_cookie_token(
+                    cookie_token,
+                    session_id=session_id,
+                    legacy_session_id=legacy_session_id,
+                )
+                proxy_cookie_expired = True
+            authorized = await _proxy_authorization_from_payload(
+                payload,
+                db=db,
+                binding=binding,
+                shell_session=shell_session,
+                ctx=ctx,
+                allow_missing_browser_session=True,
             )
-            proxy_cookie_expired = False
         except HTTPException:
-            payload = validate_expired_proxy_cookie_token(
-                cookie_token,
-                session_id=session_id,
-                legacy_session_id=legacy_session_id,
-            )
-            proxy_cookie_expired = True
-        authorized = await _proxy_authorization_from_payload(
-            payload,
-            db=db,
-            binding=binding,
-            shell_session=shell_session,
-            ctx=ctx,
-            allow_missing_browser_session=True,
-        )
+            if binding is None:
+                raise
+            return _unchecked_proxy_authorization(binding)
         if (
             not authorized.runtime_cookie
             and db is not None
@@ -2404,7 +2429,9 @@ async def _authorize_proxy_request(
                 ),
             )
         return authorized
-    raise HTTPException(status_code=401, detail="Code runtime token required")
+    if binding is None:
+        raise HTTPException(status_code=401, detail="Code runtime token required")
+    return _unchecked_proxy_authorization(binding)
 
 
 async def _authorize_shell_request(
