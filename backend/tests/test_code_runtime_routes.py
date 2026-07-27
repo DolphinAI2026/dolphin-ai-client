@@ -1091,6 +1091,70 @@ async def test_proxy_uses_desktop_entry_token_without_browser_session_or_cookie(
 
 
 @pytest.mark.asyncio
+async def test_proxy_degrades_observability_issue_list_for_unavailable_runtime_scope(
+    db_session,
+    monkeypatch,
+):
+    import httpx
+    import app.routes.code_runtime as code_runtime_routes
+    from app.code_runtime.service import create_proxy_cookie_token
+    from app.routes.code_runtime import proxy_code_runtime
+
+    session, _binding, _rows = await _seed_browser_runtime(db_session)
+    proxy_token = create_proxy_cookie_token(
+        session_id=session.public_id,
+        user_id=11,
+        tenant_id=7,
+        browser_session_id="browser-a",
+    )
+    request = _proxy_request(
+        session.public_id,
+        cookie=(
+            f"dolphin_code_runtime_{session.public_id}={proxy_token}; "
+            "apaas_sandbox_token=db-cookie-a"
+        ),
+        path="api/builder/observability/issues",
+        query_string=b"applicationId=app-001&environmentId=dev",
+    )
+    upstream_paths: list[str] = []
+
+    def handler(upstream: httpx.Request) -> httpx.Response:
+        upstream_paths.append(str(upstream.url))
+        return httpx.Response(
+            403,
+            json={"ok": False, "errorCode": "OBSERVABILITY_ISSUE_FORBIDDEN"},
+            headers={"content-type": "application/json"},
+        )
+
+    transport = httpx.MockTransport(handler)
+    original = code_runtime_routes.httpx.AsyncClient
+    monkeypatch.setattr(
+        code_runtime_routes.httpx,
+        "AsyncClient",
+        lambda **kwargs: original(transport=transport, **kwargs),
+    )
+
+    response = await proxy_code_runtime(
+        session.public_id,
+        "api/builder/observability/issues",
+        request,
+        db_session,
+    )
+    body = json.loads(response.body.decode("utf-8"))
+
+    assert response.status_code == 200
+    assert body == {
+        "applicationId": "app-001",
+        "environmentId": "dev",
+        "issues": [],
+        "traceId": "",
+    }
+    assert upstream_paths == [
+        "https://runtime.test/workspaces/crm/api/builder/observability/issues?applicationId=app-001&environmentId=dev"
+    ]
+
+
+@pytest.mark.asyncio
 async def test_desktop_proxy_returns_unauthorized_without_control_plane_renewal(
     db_session,
     monkeypatch,
