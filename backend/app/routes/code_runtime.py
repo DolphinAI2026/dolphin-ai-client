@@ -1954,7 +1954,9 @@ def _inject_shell_config(
     injection = (
         '<script id="dolphin-code-shell-config">'
         "(function(){"
-        "window.__APAAS_SHELL__=Object.assign({},window.__APAAS_SHELL__||{},__SHELL_CONFIG__);"
+        "var config=__SHELL_CONFIG__;"
+        "window.__DOLPHIN_CODE_SHELL__=Object.assign({},window.__DOLPHIN_CODE_SHELL__||{},config);"
+        "window.__APAAS_SHELL__=Object.assign({},window.__APAAS_SHELL__||{},config);"
         "})();"
         "</script>"
     ).replace("__SHELL_CONFIG__", shell_config).encode("utf-8")
@@ -2055,6 +2057,34 @@ def _recoverable_runtime_auth_error(response: httpx.Response) -> str | None:
     if auth_error in {"sandbox_session_expired", "sandbox_session_invalid"}:
         return auth_error
     return None
+
+
+def _observability_issue_list_fallback_response(
+    *,
+    method: str,
+    path: str,
+    request: Request,
+    upstream: httpx.Response,
+) -> Response | None:
+    if method != "GET":
+        return None
+    if path.strip("/") != "api/builder/observability/issues":
+        return None
+    if upstream.status_code not in {403, 404}:
+        return None
+
+    payload = {
+        "applicationId": request.query_params.get("applicationId", ""),
+        "environmentId": request.query_params.get("environmentId", ""),
+        "issues": [],
+        "traceId": "",
+    }
+    return Response(
+        content=json.dumps(payload, ensure_ascii=False, separators=(",", ":")),
+        status_code=200,
+        media_type="application/json",
+        headers={"cache-control": "no-store"},
+    )
 
 
 async def _send_upstream_once(
@@ -2988,6 +3018,26 @@ async def proxy_code_runtime(
         cookie_reissue_required = True
 
     upstream = attempt.response
+    fallback_response = _observability_issue_list_fallback_response(
+        method=request.method,
+        path=path,
+        request=request,
+        upstream=upstream,
+    )
+    if fallback_response is not None:
+        try:
+            return _decorate_runtime_response(
+                fallback_response,
+                upstream,
+                session_id=session_id,
+                forwarded_prefix=forwarded_prefix,
+                runtime_cookie=authorization.runtime_cookie,
+                cookie_reissue_required=cookie_reissue_required,
+                proxy_cookie_token=authorization.proxy_cookie_token,
+            )
+        finally:
+            await _close_upstream_attempt(attempt)
+
     if is_builder_html or is_buffered_dev_asset:
         try:
             content_type = upstream.headers.get("content-type", "")
