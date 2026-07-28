@@ -1032,6 +1032,70 @@ async def test_proxy_uses_server_owned_browser_runtime_cookie(
 
 
 @pytest.mark.asyncio
+async def test_proxy_cookie_with_missing_browser_session_does_not_reopen_workspace(
+    db_session,
+    monkeypatch,
+):
+    from fastapi import HTTPException
+
+    import app.routes.code_runtime as code_runtime_routes
+    from app.auth import get_password_hash
+    from app.code_runtime.service import create_proxy_cookie_token
+    from app.models import User
+    from app.routes.code_runtime import proxy_code_runtime
+
+    db_session.add(User(
+        id=11,
+        username="missing-browser-session-user",
+        hashed_password=get_password_hash("unused"),
+        account_source="control_plane",
+        is_active=True,
+    ))
+    session, _binding, rows = await _seed_browser_runtime(db_session)
+    await db_session.delete(rows["browser-a"])
+    await db_session.commit()
+    proxy_token = create_proxy_cookie_token(
+        session_id=session.public_id,
+        user_id=11,
+        tenant_id=7,
+        browser_session_id="browser-a",
+    )
+    request = _proxy_request(
+        session.public_id,
+        cookie=f"dolphin_code_runtime_{session.public_id}={proxy_token}",
+        path="api/status",
+    )
+    open_calls = 0
+
+    async def fake_authorization(**_kwargs):
+        return "Bearer user-token"
+
+    async def fake_open_code_session(**_kwargs):
+        nonlocal open_calls
+        open_calls += 1
+        return {}
+
+    monkeypatch.setattr(
+        code_runtime_routes,
+        "_locked_control_plane_user_authorization",
+        fake_authorization,
+    )
+    monkeypatch.setattr(code_runtime_routes, "open_code_session", fake_open_code_session)
+
+    with pytest.raises(HTTPException) as exc_info:
+        await proxy_code_runtime(
+            session.public_id,
+            "api/status",
+            request,
+            db_session,
+        )
+
+    assert exc_info.value.status_code == 401
+    assert exc_info.value.detail == "Code runtime token invalid"
+    assert open_calls == 0
+
+
+@pytest.mark.asyncio
 async def test_proxy_uses_desktop_entry_token_without_browser_session_or_cookie(
     db_session,
     monkeypatch,
@@ -2734,7 +2798,10 @@ async def test_code_runtime_proxy_recovers_when_bound_runtime_session_is_missing
     from fastapi import HTTPException
 
     import app.routes.code_runtime as code_runtime_routes
-    from app.routes.code_runtime import _ensure_runtime_current_session
+    from app.routes.code_runtime import (
+        ProxyAuthorization,
+        _ensure_browser_runtime_current_session,
+    )
 
     binding = CodeRuntimeBinding(
         session_id=14,
@@ -2743,34 +2810,43 @@ async def test_code_runtime_proxy_recovers_when_bound_runtime_session_is_missing
     )
     calls: list[tuple[str, str]] = []
 
-    async def fake_browser_request(
+    authorization = ProxyAuthorization(browser_session_id="browser-a")
+
+    async def fake_browser_request_for_session(
+        _session,
         _binding,
+        current_authorization,
         method,
         path,
         *,
         request,
         session_id,
+        db,
         json_body=None,
     ):
         calls.append((method, path))
         if method == "POST":
             raise HTTPException(status_code=404, detail="agent session not found")
-        return {"runtimeSessionId": "runtime-current"}
+        return {"runtimeSessionId": "runtime-current"}, current_authorization
 
     monkeypatch.setattr(
         code_runtime_routes,
-        "_browser_runtime_json_request",
-        fake_browser_request,
+        "_browser_runtime_json_request_for_session",
+        fake_browser_request_for_session,
     )
 
-    changed = await _ensure_runtime_current_session(
+    changed, returned_authorization = await _ensure_browser_runtime_current_session(
+        SimpleNamespace(),
         binding,
+        authorization,
         "api/agent/sessions/current",
         request=SimpleNamespace(),
         session_id="shell-public-id",
+        db=SimpleNamespace(),
     )
 
     assert changed is True
+    assert returned_authorization is authorization
     assert binding.runtime_session_id == "runtime-current"
     assert calls == [
         ("POST", "/api/agent/sessions/runtime-stale/activate"),
@@ -2813,7 +2889,10 @@ async def test_code_runtime_proxy_does_not_align_non_current_requests(monkeypatc
 async def test_code_runtime_proxy_aligns_current_session_with_browser_runtime_cookie(monkeypatch):
     import app.routes.code_runtime as code_runtime_routes
     from starlette.datastructures import Headers
-    from app.routes.code_runtime import _ensure_runtime_current_session
+    from app.routes.code_runtime import (
+        ProxyAuthorization,
+        _ensure_browser_runtime_current_session,
+    )
 
     binding = CodeRuntimeBinding(
         session_id=14,
@@ -2826,28 +2905,164 @@ async def test_code_runtime_proxy_aligns_current_session_with_browser_runtime_co
     }))
     seen: dict = {}
 
-    async def fake_browser_request(binding, method, path, *, request, session_id, json_body=None):
+    authorization = ProxyAuthorization(
+        browser_session_id="browser-a",
+        runtime_cookie="runtime-cookie",
+    )
+
+    async def fake_browser_request(
+        binding,
+        method,
+        path,
+        *,
+        request,
+        session_id,
+        json_body=None,
+        runtime_cookie=None,
+    ):
         seen.update({
             "method": method,
             "path": path,
             "request": request,
             "session_id": session_id,
+            "runtime_cookie": runtime_cookie,
         })
         return {"runtimeSessionId": "runtime-demo"}
 
     monkeypatch.setattr(code_runtime_routes, "_browser_runtime_json_request", fake_browser_request)
 
-    await _ensure_runtime_current_session(
+    changed, returned_authorization = await _ensure_browser_runtime_current_session(
+        SimpleNamespace(),
         binding,
+        authorization,
         "api/agent/sessions/current/conversation",
         request=request,
         session_id=14,
+        db=SimpleNamespace(),
     )
 
+    assert changed is False
+    assert returned_authorization is authorization
     assert seen["method"] == "POST"
     assert seen["path"] == "/api/agent/sessions/runtime-demo/activate"
     assert seen["request"] is request
     assert seen["session_id"] == 14
+    assert seen["runtime_cookie"] == "runtime-cookie"
+
+
+@pytest.mark.asyncio
+async def test_proxy_current_sse_alignment_renews_expired_session_before_response(
+    db_session,
+    monkeypatch,
+):
+    from dataclasses import replace
+
+    import httpx
+    import app.routes.code_runtime as code_runtime_routes
+    from app.code_runtime.service import create_proxy_cookie_token
+    from app.routes.code_runtime import proxy_code_runtime
+
+    session, binding, _rows = await _seed_browser_runtime(db_session)
+    binding.runtime_session_id = "runtime-bound"
+    await db_session.commit()
+    proxy_token = create_proxy_cookie_token(
+        session_id=session.public_id,
+        user_id=11,
+        tenant_id=7,
+        browser_session_id="browser-a",
+    )
+    request = _proxy_request(
+        session.public_id,
+        cookie=(
+            f"dolphin_code_runtime_{session.public_id}={proxy_token}; "
+            "apaas_sandbox_token=db-cookie-a"
+        ),
+        path="api/agent/sessions/current/events",
+    )
+    attempts: list[tuple[str, str, str]] = []
+    renew_calls = 0
+
+    def handler(upstream: httpx.Request) -> httpx.Response:
+        attempts.append((
+            upstream.method,
+            upstream.url.path,
+            upstream.headers.get("cookie", ""),
+        ))
+        if len(attempts) == 1:
+            return httpx.Response(
+                401,
+                content=b"expired",
+                headers={
+                    "X-APAAS-Sandbox-Auth-Error": "sandbox_session_expired",
+                },
+            )
+        if len(attempts) == 2:
+            return httpx.Response(200, json={"runtimeSessionId": "runtime-bound"})
+        return httpx.Response(
+            200,
+            content=b"data: ready\n\n",
+            headers={"content-type": "text/event-stream"},
+        )
+
+    async def fake_renew(_session, _binding, authorization, _db, *, reason):
+        nonlocal renew_calls
+        assert reason == "sandbox_session_expired"
+        renew_calls += 1
+        return replace(
+            authorization,
+            runtime_cookie="renewed-cookie",
+            runtime_cookie_hash=hashlib.sha256(b"renewed-cookie").hexdigest(),
+            observed_generation=int(authorization.observed_generation or 0) + 1,
+            proxy_cookie_reissue_required=True,
+        )
+
+    transport = httpx.MockTransport(handler)
+    original = code_runtime_routes.httpx.AsyncClient
+    monkeypatch.setattr(
+        code_runtime_routes.httpx,
+        "AsyncClient",
+        lambda **kwargs: original(transport=transport, **kwargs),
+    )
+    monkeypatch.setattr(
+        code_runtime_routes,
+        "_renew_proxy_runtime_authorization",
+        fake_renew,
+    )
+
+    response = await proxy_code_runtime(
+        session.public_id,
+        "api/agent/sessions/current/events",
+        request,
+        db_session,
+    )
+    body = b"".join([chunk async for chunk in response.body_iterator])
+    if response.background:
+        await response.background()
+
+    assert response.status_code == 200
+    assert body == b"data: ready\n\n"
+    assert attempts == [
+        (
+            "POST",
+            "/workspaces/crm/api/agent/sessions/runtime-bound/activate",
+            "apaas_sandbox_token=db-cookie-a",
+        ),
+        (
+            "POST",
+            "/workspaces/crm/api/agent/sessions/runtime-bound/activate",
+            "apaas_sandbox_token=renewed-cookie",
+        ),
+        (
+            "GET",
+            "/workspaces/crm/api/agent/sessions/current/events",
+            "apaas_sandbox_token=renewed-cookie",
+        ),
+    ]
+    assert renew_calls == 1
+    assert any(
+        "apaas_sandbox_token=renewed-cookie" in value
+        for value in response.headers.getlist("set-cookie")
+    )
 
 
 @pytest.mark.asyncio
@@ -4298,12 +4513,23 @@ async def test_two_browser_forced_control_plane_refresh_is_singleflight(
 
 
 @pytest.mark.asyncio
-async def test_renew_bootstrap_failure_reopens_once_without_loop(
+@pytest.mark.parametrize(
+    "failure_kind",
+    [
+        "service_unavailable",
+        "missing_cookie",
+        "network_error",
+        "launch_token_expired",
+    ],
+)
+async def test_renew_bootstrap_failure_propagates_without_reopen(
     tmp_path,
+    failure_kind,
 ):
+    import httpx
     from fastapi import HTTPException
     from app.code_runtime.sandbox_auth import (
-        RuntimeBootstrap,
+        SandboxRenewalFailure,
         renew_browser_runtime_session,
     )
 
@@ -4323,37 +4549,49 @@ async def test_renew_bootstrap_failure_reopens_once_without_loop(
         open_calls += 1
         return {"specReviewUrl": f"https://runtime.test/builder?token=launch-{open_calls}"}
 
-    async def bootstrap(builder_url):
+    async def bootstrap(_builder_url):
         nonlocal bootstrap_calls
         bootstrap_calls += 1
-        if bootstrap_calls == 1:
+        if failure_kind == "service_unavailable":
             raise HTTPException(status_code=503, detail="Runtime bootstrap unavailable")
-        return RuntimeBootstrap(
-            clean_builder_url="https://runtime.test/builder",
-            runtime_base_url="https://runtime.test",
-            runtime_cookie="renewed-cookie",
-            runtime_cookie_hash=hashlib.sha256(b"renewed-cookie").hexdigest(),
-            expires_at=None,
+        if failure_kind == "missing_cookie":
+            raise HTTPException(
+                status_code=502,
+                detail="Runtime bootstrap response missing session cookie",
+            )
+        if failure_kind == "network_error":
+            raise httpx.ConnectError(
+                "connection refused",
+                request=httpx.Request("GET", "https://runtime.test/api/status"),
+            )
+        raise HTTPException(
+            status_code=401,
+            detail="Runtime launch authorization expired",
+            headers={
+                "X-APAAS-Sandbox-Auth-Error": "sandbox_launch_token_expired",
+            },
         )
 
-    result = await renew_browser_runtime_session(
-        binding_id=binding_id,
-        browser_session_id="browser-a",
-        observed_generation=observed_generation,
-        session_factory=Session,
-        authorization_provider=authorization_provider,
-        workspace_open=workspace_open,
-        bootstrap=bootstrap,
-    )
+    with pytest.raises(SandboxRenewalFailure) as exc_info:
+        await renew_browser_runtime_session(
+            binding_id=binding_id,
+            browser_session_id="browser-a",
+            observed_generation=observed_generation,
+            session_factory=Session,
+            authorization_provider=authorization_provider,
+            workspace_open=workspace_open,
+            bootstrap=bootstrap,
+        )
 
-    assert result.generation == 8
-    assert open_calls == 2
-    assert bootstrap_calls == 2
+    assert exc_info.value.code == "workspace_temporarily_unavailable"
+    assert exc_info.value.stage == "bootstrap"
+    assert open_calls == 1
+    assert bootstrap_calls == 1
     await engine.dispose()
 
 
 @pytest.mark.asyncio
-async def test_renew_forces_control_plane_refresh_at_most_once_across_reopen(
+async def test_renew_control_plane_refresh_does_not_reopen_after_bootstrap_failure(
     tmp_path,
 ):
     from fastapi import HTTPException
@@ -4385,9 +4623,7 @@ async def test_renew_forces_control_plane_refresh_at_most_once_across_reopen(
         open_calls += 1
         if open_calls == 1:
             raise HTTPException(status_code=401, detail="expired access token")
-        if open_calls == 3:
-            assert authorization == "Bearer fresh-token"
-            raise HTTPException(status_code=401, detail="rejected again")
+        assert authorization == "Bearer fresh-token"
         return {"specReviewUrl": "https://runtime.test/builder?token=launch"}
 
     async def bootstrap(_builder_url):
@@ -4414,9 +4650,10 @@ async def test_renew_forces_control_plane_refresh_at_most_once_across_reopen(
             bootstrap=bootstrap,
         )
 
-    assert exc_info.value.code == "login_required"
+    assert exc_info.value.code == "workspace_temporarily_unavailable"
+    assert exc_info.value.stage == "bootstrap"
     assert refresh_calls == 1
-    assert open_calls == 3
+    assert open_calls == 2
     assert bootstrap_calls == 1
     await engine.dispose()
 
