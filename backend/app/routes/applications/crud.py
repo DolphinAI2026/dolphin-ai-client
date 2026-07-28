@@ -1306,8 +1306,55 @@ async def auto_create_application(
 # ============================================================
 
 class ImportFromPlatformRequest(BaseModel):
-    env_id: int
+    env_id: Optional[int] = None
     apaas_app_id: str
+
+
+async def _resolve_import_apaas_context(
+    db: AsyncSession,
+    ctx: AuthContext,
+    requested_env_id: int | None,
+) -> tuple[PlatformEnv | None, str, str, str, str]:
+    """Resolve the aPaaS context used by platform-app import.
+
+    Import used to hard-require ``requested_env_id`` to be a PlatformEnv row in
+    the current Builder tenant. The app list path already supports tenant/user
+    aPaaS bindings, so a stale env id from the UI should not block import when
+    the current tenant still has a valid default env or user credential.
+    """
+    env = await _resolve_platform_env_for_tenant(db, ctx.tenant_id, requested_env_id)
+    if env:
+        token = ((env.token or getattr(ctx.user, "apaas_token", "")) or "").strip()
+        if token or (env.username and env.password_enc):
+            return env, env.base_url, env.platform_tenant_id, token, f"platform_env:{env.id}"
+        logger.warning(
+            "import platform app: resolved env=%s for tenant=%s has no usable token or credentials, falling back to user credential",
+            env.id,
+            ctx.tenant_id,
+        )
+
+    base_url, tenant_id, token, source = await _resolve_apaas_call_context(db, ctx)
+    if not base_url or not tenant_id or not token:
+        raise HTTPException(status_code=400, detail="当前用户平台 token 不可用，请重新登录")
+
+    source_env = None
+    if source.startswith("platform_env:"):
+        try:
+            source_env_id = int(source.split(":", 1)[1])
+            source_env = (
+                await db.execute(
+                    select(PlatformEnv).where(
+                        PlatformEnv.id == source_env_id,
+                        PlatformEnv.tenant_id == ctx.tenant_id,
+                    )
+                )
+            ).scalar_one_or_none()
+        except Exception:
+            source_env = None
+    elif env and str(env.platform_tenant_id or "").strip() == str(tenant_id or "").strip():
+        source_env = env
+
+    return source_env, base_url, tenant_id, token, source
 
 
 @router.post("/import-from-platform", response_model=ApplicationResponse)
@@ -1320,19 +1367,14 @@ async def import_from_platform(
     from app.platform_sync import sync_from_platform_full
     from app.services.config_to_spec import config_to_markdown
 
-    # 1. 获取环境
-    env_result = await db.execute(
-        select(PlatformEnv).where(
-            PlatformEnv.id == body.env_id,
-            PlatformEnv.tenant_id == ctx.tenant_id,
-        )
+    # 1. 获取当前租户可用的 aPaaS 调用上下文。env_id 只作为优先项，避免新绑定链路
+    # 已能列应用，但导入仍卡在旧 PlatformEnv.id 强校验上。
+    env, base_url, platform_tenant_id, token, credential_source = await _resolve_import_apaas_context(
+        db,
+        ctx,
+        body.env_id,
     )
-    env = env_result.scalar_one_or_none()
-    if not env:
-        raise HTTPException(status_code=404, detail="环境不存在")
-    token = env.token or getattr(ctx.user, "apaas_token", None)
-    if not token:
-        raise HTTPException(status_code=400, detail="当前用户平台 token 不可用，请重新登录")
+    resolved_env_id = env.id if env else None
 
     # 2. 检查是否已导入
     existing = await db.execute(
@@ -1345,8 +1387,8 @@ async def import_from_platform(
 
     # 3. 创建 client，获取应用信息
     client = APaaSClient(
-        base_url=env.base_url,
-        tenant_id=env.platform_tenant_id,
+        base_url=base_url,
+        tenant_id=platform_tenant_id,
         token=token,
     )
 
@@ -1354,7 +1396,7 @@ async def import_from_platform(
         app_detail = await client.query_app_detail(body.apaas_app_id)
     except Exception:
         # token 可能过期，尝试刷新
-        if env.username and env.password_enc:
+        if env and env.username and env.password_enc:
             try:
                 password = decrypt_password(env.password_enc)
                 login_result = await client.login(env.username, password)
@@ -1439,7 +1481,7 @@ async def import_from_platform(
         existing_app.description = app_desc
         existing_app.config_preview = _dump_preview_config(config)
         existing_app.requirement_doc = markdown_spec
-        existing_app.platform_env_id = body.env_id
+        existing_app.platform_env_id = resolved_env_id
         existing_app.current_doc_version = new_version
         existing_app.status = "completed"
 
@@ -1447,10 +1489,12 @@ async def import_from_platform(
         await db.refresh(existing_app)
 
         logger.info(
-            "应用重新导入成功: %s (apaas_id=%s, version=%s)",
+            "应用重新导入成功: %s (apaas_id=%s, version=%s, env_id=%s, credential_source=%s)",
             app_name,
             body.apaas_app_id,
             new_version,
+            resolved_env_id,
+            credential_source,
         )
         return _enrich(existing_app)
 
@@ -1466,7 +1510,7 @@ async def import_from_platform(
         config_preview=config_str,
         requirement_doc=markdown_spec,
         apaas_app_id=body.apaas_app_id,
-        platform_env_id=body.env_id,
+        platform_env_id=resolved_env_id,
         status="completed",
     )
     db.add(new_app)
@@ -1482,7 +1526,13 @@ async def import_from_platform(
     await db.commit()
     await db.refresh(new_app)
 
-    logger.info(f"应用导入成功: {app_name} (apaas_id={body.apaas_app_id})")
+    logger.info(
+        "应用导入成功: %s (apaas_id=%s, env_id=%s, credential_source=%s)",
+        app_name,
+        body.apaas_app_id,
+        resolved_env_id,
+        credential_source,
+    )
     return _enrich(new_app)
 
 
