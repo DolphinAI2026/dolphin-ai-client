@@ -1190,6 +1190,7 @@ class LocalRuntimeClient:
         token: str,
         *,
         desktop_data_dir: str | Path | None = None,
+        runtime_data_dir: str | Path | None = None,
         agent_runtime_path: str | Path | None = None,
         engineering_service_factory: Callable[[Path], EngineeringSessionService] = EngineeringSessionService,
         http_client_factory: Callable[[], httpx.AsyncClient] | None = None,
@@ -1198,6 +1199,11 @@ class LocalRuntimeClient:
         self.token = _text(token)
         self.desktop_data_dir = (
             Path(desktop_data_dir).expanduser() if desktop_data_dir is not None else None
+        )
+        self.runtime_data_dir = (
+            Path(runtime_data_dir).expanduser()
+            if runtime_data_dir is not None
+            else self.desktop_data_dir
         )
         self.agent_runtime_path = (
             Path(agent_runtime_path).expanduser() if agent_runtime_path is not None else None
@@ -1223,10 +1229,16 @@ class LocalRuntimeClient:
         }
         if any(not _text(value) for value in required.values()):
             raise _error(503, _MANAGER_UNAVAILABLE, "本地 Runtime manager 未配置")
+        runtime_data_dir = os.getenv("DOLPHIN_LOCAL_RUNTIME_DATA_DIR")
+        if not _text(runtime_data_dir):
+            runtime_data_dir = str(
+                Path(str(required["DOLPHIN_DESKTOP_DATA_DIR"])) / "runtime"
+            )
         return cls(
             str(required["DOLPHIN_LOCAL_RUNTIME_MANAGER_URL"]),
             str(required["DOLPHIN_LOCAL_RUNTIME_MANAGER_TOKEN"]),
             desktop_data_dir=str(required["DOLPHIN_DESKTOP_DATA_DIR"]),
+            runtime_data_dir=runtime_data_dir,
             agent_runtime_path=str(required["DOLPHIN_AGENT_RUNTIME_PATH"]),
         )
 
@@ -1438,7 +1450,7 @@ class LocalRuntimeClient:
         runtime_scope_id: str,
         sandbox_instance_id: str,
     ) -> None:
-        if self.desktop_data_dir is None:
+        if self.runtime_data_dir is None:
             raise _error(503, _MANAGER_UNAVAILABLE, "本地 Runtime manager 未配置")
         _document, selected_identity = await _provider_document(
             db,
@@ -1447,7 +1459,7 @@ class LocalRuntimeClient:
         )
         try:
             with _runtime_directory_fds(
-                self.desktop_data_dir,
+                self.runtime_data_dir,
                 runtime_scope_id,
                 sandbox_instance_id,
                 create_instance=False,
@@ -1469,11 +1481,11 @@ class LocalRuntimeClient:
         runtime_scope_id: str,
         sandbox_instance_id: str,
     ) -> str:
-        if self.desktop_data_dir is None:
+        if self.runtime_data_dir is None:
             raise _error(503, _MANAGER_UNAVAILABLE, "本地 Runtime manager 未配置")
         try:
             with _runtime_directory_fds(
-                self.desktop_data_dir,
+                self.runtime_data_dir,
                 runtime_scope_id,
                 sandbox_instance_id,
                 create_instance=False,
@@ -1498,7 +1510,7 @@ class LocalRuntimeClient:
         try:
             managed_worktree_path = repository_path.resolve(strict=True)
             managed_git_common_dir = git_common_dir(repository_path)
-            if self.desktop_data_dir is None or self.agent_runtime_path is None:
+            if self.runtime_data_dir is None or self.agent_runtime_path is None:
                 raise _error(503, _MANAGER_UNAVAILABLE, "本地 Runtime manager 未配置")
             agent_runtime_path = self.agent_runtime_path.resolve(strict=True)
             if not agent_runtime_path.is_file() or agent_runtime_path.is_symlink():
@@ -1515,7 +1527,7 @@ class LocalRuntimeClient:
                 getattr(ctx.user, "username", None)
             )
             with _runtime_directory_fds(
-                self.desktop_data_dir,
+                self.runtime_data_dir,
                 runtime_scope_id,
                 sandbox_instance_id,
                 create_instance=True,
@@ -1634,10 +1646,10 @@ class LocalRuntimeClient:
             )
         if manager_status is None:
             async with self._lock(runtime_scope_id):
-                if self.desktop_data_dir is None:
+                if self.runtime_data_dir is None:
                     raise _error(503, _MANAGER_UNAVAILABLE, "本地 Runtime manager 未配置")
                 try:
-                    with _scope_directory_fds(self.desktop_data_dir, runtime_scope_id) as paths:
+                    with _scope_directory_fds(self.runtime_data_dir, runtime_scope_id) as paths:
                         with _runtime_lock_file(paths) as lock_file:
                             await asyncio.to_thread(_lock_runtime_file, lock_file)
                             try:

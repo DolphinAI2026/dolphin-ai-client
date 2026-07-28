@@ -570,6 +570,18 @@ def test_from_environment_rejects_missing_required_manager_configuration(monkeyp
     assert exc.value.detail == "LOCAL_RUNTIME_MANAGER_UNAVAILABLE: 本地 Runtime manager 未配置"
 
 
+def test_from_environment_uses_explicit_runtime_data_dir(monkeypatch, tmp_path):
+    runtime_dir = tmp_path / ".appdata" / "runtime"
+    runtime_dir.mkdir(parents=True)
+    monkeypatch.setenv("DOLPHIN_LOCAL_RUNTIME_MANAGER_URL", "http://127.0.0.1:9988")
+    monkeypatch.setenv("DOLPHIN_LOCAL_RUNTIME_MANAGER_TOKEN", "manager-secret")
+    monkeypatch.setenv("DOLPHIN_DESKTOP_DATA_DIR", str(tmp_path / ".appdata"))
+    monkeypatch.setenv("DOLPHIN_LOCAL_RUNTIME_DATA_DIR", str(runtime_dir))
+    monkeypatch.setenv("DOLPHIN_AGENT_RUNTIME_PATH", str(tmp_path / "agent-runtime"))
+    client = LocalRuntimeClient.from_environment()
+    assert client.runtime_data_dir == runtime_dir
+
+
 @pytest.mark.parametrize(
     "manager_url",
     [
