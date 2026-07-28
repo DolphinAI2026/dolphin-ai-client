@@ -1,5 +1,8 @@
 import { describe, it, expect } from 'vitest'
-import { resolveDesktopRedirect } from './desktopGuard'
+import {
+  resolveDesktopBootstrapRedirect,
+  resolveDesktopRedirect,
+} from './desktopGuard'
 import routerSource from './index.ts?raw'
 
 describe('resolveDesktopRedirect', () => {
@@ -17,16 +20,34 @@ describe('resolveDesktopRedirect', () => {
     expect(resolveDesktopRedirect(true, { desktop: 'hidden' }, '/desktop-unavailable')).toBeNull()
   })
 
-  it('桌面端废弃的配置向导入口重定向到 Code 应用页', () => {
-    expect(routerSource).toContain("path: '/desktop-setup'")
-    expect(routerSource).toContain("redirect: () => ({ path: '/code/apps' })")
+  it('未初始化和启动失败都在认证前进入桌面初始化页', () => {
+    expect(resolveDesktopBootstrapRedirect('needs_setup', '/login')).toBe('/desktop-setup')
+    expect(resolveDesktopBootstrapRedirect('starting_runtime', '/')).toBe('/desktop-setup')
+    expect(resolveDesktopBootstrapRedirect('failed', '/code/apps')).toBe('/desktop-setup')
   })
 
-  it('桌面端不会因隐藏的本地 tenant_id 把平台管理员导向平台管理', () => {
-    expect(routerSource).toContain('&& !__DESKTOP__')
+  it('ready 后放行业务路由，初始化页自身防环', () => {
+    expect(resolveDesktopBootstrapRedirect('ready', '/login')).toBeNull()
+    expect(resolveDesktopBootstrapRedirect('needs_setup', '/desktop-setup')).toBeNull()
   })
 
-  it('桌面端根入口进入 Code 应用页，不启动 Builder 模型流程', () => {
-    expect(routerSource).toContain("beforeEnter: () => __DESKTOP__ ? { path: '/code/apps' } : true")
+  it('旧 aPaaS 和 LLM onboarding 守卫已退役', () => {
+    const setupRouteStart = routerSource.indexOf("path: '/desktop-setup'")
+    const setupRouteEnd = routerSource.indexOf("path: '/desktop-unavailable'")
+    const setupRouteSource = routerSource.slice(setupRouteStart, setupRouteEnd)
+
+    expect(routerSource).not.toContain('fetchOnboardingState')
+    expect(routerSource).not.toContain('isOnboardingConfirmed')
+    expect(setupRouteSource).not.toContain('redirect:')
+    expect(setupRouteSource).not.toContain('requiresAuth')
+    expect(setupRouteSource).toContain("meta: { tenantContext: 'none' }")
+  })
+
+  it('桌面 bootstrap 在用户 store 和认证恢复前执行', () => {
+    const bootstrapGuardIndex = routerSource.indexOf("if (typeof __DESKTOP__ !== 'undefined' && __DESKTOP__) {")
+    const userStoreIndex = routerSource.indexOf('const userStore = useUserStore()')
+
+    expect(bootstrapGuardIndex).toBeGreaterThan(-1)
+    expect(bootstrapGuardIndex).toBeLessThan(userStoreIndex)
   })
 })

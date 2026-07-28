@@ -2,7 +2,6 @@ import { defineStore } from 'pinia'
 import { ref, computed, onScopeDispose } from 'vue'
 import { authApi } from '@/api/auth'
 import type { User, TenantOption } from '@/types'
-import { resetOnboardingCache } from '@/composables/useOnboardingState'
 import { MODE_META, modeForRoutePath, useModeStore } from '@/stores/mode'
 import { safeLoginRedirectPath } from '@/router/loginRedirect'
 import {
@@ -258,7 +257,6 @@ export const useUserStore = defineStore('user', () => {
     token.value = null
     user.value = null
     localStorage.removeItem('admin_token')
-    resetOnboardingCache()
   }
 
   const clearToken = () => {

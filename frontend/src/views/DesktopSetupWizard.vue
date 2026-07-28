@@ -55,7 +55,6 @@ import { ElMessage } from 'element-plus'
 import { platformEnvApi } from '@/api/platformEnv'
 import { llmConfigApi } from '@/api/llmConfig'
 import type { LlmConfigForm } from '@/api/llmConfig'
-import { markOnboardingConfirmed } from '@/composables/useOnboardingState'
 
 const router = useRouter()
 
@@ -164,7 +163,6 @@ function skip() {
 }
 
 function enterWorkbench() {
-  markOnboardingConfirmed()
   router.replace('/')
 }
 </script>

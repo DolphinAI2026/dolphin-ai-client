@@ -12,10 +12,13 @@ import request, {
   getAuthSessionState,
   isAuthSessionAlignmentPending,
 } from '@/utils/request'
-import { resolveDesktopRedirect } from './desktopGuard'
+import { getDesktopState } from '@/utils/desktop'
+import {
+  resolveDesktopBootstrapRedirect,
+  resolveDesktopRedirect,
+} from './desktopGuard'
 import { normalizeTenantPublicId, resolveTenantUrl } from './tenantUrlGuard'
 import { safeLoginRedirectPath } from './loginRedirect'
-import { fetchOnboardingState, isOnboardingConfirmed, markOnboardingConfirmed } from '@/composables/useOnboardingState'
 
 export const routes: RouteRecordRaw[] = [
     { path: '/login', name: 'Login',
@@ -259,7 +262,7 @@ export const routes: RouteRecordRaw[] = [
       path: '/desktop-setup',
       name: 'DesktopSetup',
       component: () => import('@/views/DesktopSetupWizard.vue'),
-      meta: { requiresAuth: true, tenantContext: 'none' }
+      meta: { tenantContext: 'none' }
     },
     {
       path: '/desktop-unavailable',
@@ -296,6 +299,7 @@ let previewStatusRestoreInFlightGeneration: number | null = null
 let previewStatusRestoreFailures = 0
 let previewStatusRestoreRetryAt = 0
 const PREVIEW_STATUS_RETRY_DELAYS_MS = [0, 1_000, 5_000, 30_000]
+let desktopBootstrapReadyForDocument = false
 
 async function restorePreviewStatus(): Promise<boolean> {
   const previewStore = usePreviewStore()
@@ -311,6 +315,18 @@ async function restorePreviewStatus(): Promise<boolean> {
 
 export function installRouterGuards(targetRouter: Router): void {
   targetRouter.beforeEach(async (to, _from, next) => {
+  if (typeof __DESKTOP__ !== 'undefined' && __DESKTOP__) {
+    if (!desktopBootstrapReadyForDocument) {
+      const desktopState = await getDesktopState()
+      desktopBootstrapReadyForDocument = desktopState.phase === 'ready'
+      const desktopRedirect = resolveDesktopBootstrapRedirect(desktopState.phase, to.path)
+      if (desktopRedirect) {
+        next({ path: desktopRedirect, replace: true })
+        return
+      }
+    }
+  }
+
   const userStore = useUserStore()
   const modeStore = useModeStore()
   let hasCommittedSession = hasCommittedAuthSession()
@@ -375,16 +391,6 @@ export function installRouterGuards(targetRouter: Router): void {
     // 功能边界: hidden 路由落降级页
     const red = resolveDesktopRedirect(true, (to.meta as any), to.path)
     if (red) { next({ path: red, replace: true }); return }
-    // 首启分流: 未配齐 aPaaS+LLM → 向导 (排除向导/登录/降级页自身防环; 已确认配齐则跳过拉取)
-    const exempt = ['/desktop-setup', '/desktop-unavailable', '/login'].some(p => to.path.startsWith(p))
-    if (!exempt && !isOnboardingConfirmed()) {
-      const st = await fetchOnboardingState()
-      if (st.configured) {
-        markOnboardingConfirmed()
-      } else {
-        next({ path: '/desktop-setup', replace: true }); return
-      }
-    }
   }
 
   if (to.meta.requiresAuth) {
