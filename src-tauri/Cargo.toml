@@ -36,3 +36,4 @@ tiny_http = "0.12"
 
 [target.'cfg(windows)'.dependencies]
 winreg = "0.55"
+windows-sys = { version = "0.61", features = ["Win32_Storage_FileSystem"] }

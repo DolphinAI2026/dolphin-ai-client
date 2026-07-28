@@ -95,6 +95,7 @@ dependencies = [
  "thiserror 2.0.18",
  "tiny_http",
  "ureq",
+ "windows-sys 0.61.2",
  "winreg",
 ]
 

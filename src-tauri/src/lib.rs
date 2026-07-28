@@ -3,6 +3,7 @@ use tauri::{Manager, RunEvent, WebviewUrl, WebviewWindowBuilder};
 use tauri_plugin_shell::process::{CommandChild, CommandEvent};
 use tauri_plugin_shell::ShellExt;
 
+pub mod desktop_config;
 pub mod local_runtime;
 
 struct SidecarChild(Mutex<Option<CommandChild>>);
