@@ -1319,12 +1319,12 @@ async def test_dolphin_token_redirect_sets_proxy_and_database_runtime_cookies(
 
 
 @pytest.mark.asyncio
-async def test_proxy_uses_saved_runtime_session_when_embed_token_is_invalid(
+async def test_proxy_rejects_invalid_embed_token_even_when_binding_has_saved_runtime_session(
     db_session,
     monkeypatch,
 ):
-    import httpx
     import app.routes.code_runtime as code_runtime_routes
+    from fastapi import HTTPException
     from app.routes.code_runtime import proxy_code_runtime
 
     session, _binding, _rows = await _seed_browser_runtime(db_session)
@@ -1333,52 +1333,60 @@ async def test_proxy_uses_saved_runtime_session_when_embed_token_is_invalid(
         query_string=b"dolphin_token=invalid-token",
     )
 
-    def handler(upstream: httpx.Request) -> httpx.Response:
-        assert upstream.headers["cookie"] == "apaas_sandbox_token=service-cookie"
-        return httpx.Response(200, content=b"ok", headers={"content-type": "text/plain"})
-
-    transport = httpx.MockTransport(handler)
-    original = code_runtime_routes.httpx.AsyncClient
     monkeypatch.setattr(
-        code_runtime_routes.httpx,
-        "AsyncClient",
-        lambda **kwargs: original(transport=transport, **kwargs),
+        code_runtime_routes,
+        "_send_upstream_once",
+        lambda **_kwargs: pytest.fail("invalid embed token reached Runtime"),
     )
 
-    response = await proxy_code_runtime(session.public_id, "builder", request, db_session)
+    with pytest.raises(HTTPException) as exc_info:
+        await proxy_code_runtime(session.public_id, "builder", request, db_session)
 
-    assert response.status_code == 200
-    assert response.body == b"ok"
+    assert exc_info.value.status_code == 401
+    assert exc_info.value.detail == "Code runtime token invalid"
 
 
 @pytest.mark.asyncio
-async def test_proxy_uses_saved_runtime_session_when_embed_token_is_missing(
+async def test_proxy_rejects_missing_embed_token_and_proxy_cookie_even_when_binding_has_saved_runtime_session(
     db_session,
     monkeypatch,
 ):
-    import httpx
     import app.routes.code_runtime as code_runtime_routes
+    from fastapi import HTTPException
     from app.routes.code_runtime import proxy_code_runtime
 
     session, _binding, _rows = await _seed_browser_runtime(db_session)
     request = _proxy_request(session.public_id)
 
-    def handler(upstream: httpx.Request) -> httpx.Response:
-        assert upstream.headers["cookie"] == "apaas_sandbox_token=service-cookie"
-        return httpx.Response(200, content=b"ok", headers={"content-type": "text/plain"})
-
-    transport = httpx.MockTransport(handler)
-    original = code_runtime_routes.httpx.AsyncClient
     monkeypatch.setattr(
-        code_runtime_routes.httpx,
-        "AsyncClient",
-        lambda **kwargs: original(transport=transport, **kwargs),
+        code_runtime_routes,
+        "_send_upstream_once",
+        lambda **_kwargs: pytest.fail("missing proxy credential reached Runtime"),
     )
 
-    response = await proxy_code_runtime(session.public_id, "builder", request, db_session)
+    with pytest.raises(HTTPException) as exc_info:
+        await proxy_code_runtime(session.public_id, "builder", request, db_session)
 
-    assert response.status_code == 200
-    assert response.body == b"ok"
+    assert exc_info.value.status_code == 401
+    assert exc_info.value.detail == "Code runtime token required"
+
+
+@pytest.mark.asyncio
+async def test_proxy_rejects_invalid_proxy_cookie_without_binding_fallback(db_session):
+    from fastapi import HTTPException
+    from app.routes.code_runtime import proxy_code_runtime
+
+    session, _binding, _rows = await _seed_browser_runtime(db_session)
+    request = _proxy_request(
+        session.public_id,
+        cookie=f"dolphin_code_runtime_{session.public_id}=tampered",
+    )
+
+    with pytest.raises(HTTPException) as exc_info:
+        await proxy_code_runtime(session.public_id, "api/status", request, db_session)
+
+    assert exc_info.value.status_code == 401
+    assert exc_info.value.detail == "Code runtime token invalid"
 
 
 @pytest.mark.asyncio
