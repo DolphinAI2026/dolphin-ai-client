@@ -530,6 +530,7 @@ async def test_open_uses_internal_application_identity_and_source_workspace(
         external_application_id="external-ignored",
     )
     engineering_session.application_id = "101"
+    engineering_session.worktree_path = str(tmp_path / "unused-session-worktree")
     calls: list[httpx.Request] = []
 
     def handler(request: httpx.Request) -> httpx.Response:
@@ -547,7 +548,7 @@ async def test_open_uses_internal_application_identity_and_source_workspace(
     opened = await client.open_application(db, code_session, ctx)
 
     assert opened["applicationId"] == "101"
-    assert service.calls == [("101", "Internal app")]
+    assert service.calls == []
     assert calls[0].url.path == (
         f"/v1/local-runtime/instances/{_runtime_scope_id(ctx, '101')}"
     )

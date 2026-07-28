@@ -938,12 +938,13 @@ def _validated_manager_urls(payload: dict[str, Any]) -> tuple[str, str]:
     return runtime_base_url, builder_url
 
 
-async def _repo_url(
+async def _repo_metadata(
     db: AsyncSession,
     workspace: RegisteredWorkspace,
     application_id: str,
     ctx: Any,
-) -> str:
+    repository_path: Path,
+) -> tuple[str, str]:
     remote = (
         await db.execute(
             select(WorkspaceGitRemote).where(
@@ -953,6 +954,17 @@ async def _repo_url(
             )
         )
     ).scalar_one_or_none()
+    default_branch = _text(getattr(remote, "default_branch", None))
+    if not default_branch:
+        branch_result = git(
+            repository_path,
+            "symbolic-ref",
+            "--quiet",
+            "--short",
+            "HEAD",
+            check=False,
+        )
+        default_branch = _text(branch_result.stdout) or "main"
     if remote is not None:
         raw = _text(remote.remote_url)
         parsed = urlsplit(raw)
@@ -964,8 +976,8 @@ async def _repo_url(
             and not parsed.query
             and not parsed.fragment
         ):
-            return raw
-    return f"https://local.invalid/{quote(application_id, safe='')}.git"
+            return raw, default_branch
+    return f"https://local.invalid/{quote(application_id, safe='')}.git", default_branch
 
 
 def _validated_model_config(model: Any) -> tuple[str, str, str, str]:
@@ -1477,7 +1489,6 @@ class LocalRuntimeClient:
         ctx: Any,
         workspace: RegisteredWorkspace,
         repository_path: Path,
-        engineering_session: Any,
         runtime_scope_id: str,
         application_id: str,
         sandbox_instance_id: str,
@@ -1485,18 +1496,21 @@ class LocalRuntimeClient:
         provider_document: dict[str, Any],
     ) -> dict[str, Any]:
         try:
-            managed_worktree = _text(getattr(engineering_session, "worktree_path", None))
-            if not managed_worktree:
-                raise _error(409, _WORKSPACE_INVALID, "应用工程会话未提供受管工作区")
-            managed_worktree_path = Path(managed_worktree).resolve(strict=True)
-            managed_git_common_dir = git_common_dir(managed_worktree_path)
+            managed_worktree_path = repository_path.resolve(strict=True)
+            managed_git_common_dir = git_common_dir(repository_path)
             if self.desktop_data_dir is None or self.agent_runtime_path is None:
                 raise _error(503, _MANAGER_UNAVAILABLE, "本地 Runtime manager 未配置")
             agent_runtime_path = self.agent_runtime_path.resolve(strict=True)
             if not agent_runtime_path.is_file() or agent_runtime_path.is_symlink():
                 raise ValueError("agent runtime executable is invalid")
             runtime_address = _allocate_loopback_address()
-            repo_url = await _repo_url(db, workspace, application_id, ctx)
+            repo_url, default_branch = await _repo_metadata(
+                db,
+                workspace,
+                application_id,
+                ctx,
+                repository_path,
+            )
             display_name = _text(getattr(ctx.user, "display_name", None)) or _text(
                 getattr(ctx.user, "username", None)
             )
@@ -1515,8 +1529,7 @@ class LocalRuntimeClient:
                     sandbox_instance_id=sandbox_instance_id,
                     conversation_id=conversation_id,
                     repo_url=repo_url,
-                    default_branch=_text(getattr(engineering_session, "base_branch", None))
-                    or "main",
+                    default_branch=default_branch,
                     user_id=int(ctx.user.id),
                     display_name=display_name,
                     codex_home=codex_home,
@@ -1645,24 +1658,6 @@ class LocalRuntimeClient:
                                         sandbox_instance_id,
                                     )
                                 else:
-                                    application = await _application_for_session(db, session, ctx)
-                                    title = (
-                                        _text(getattr(application, "app_name", None))
-                                        or _text(getattr(session, "external_app_name", None))
-                                        or application_id
-                                    )
-                                    try:
-                                        engineering_session = self.engineering_service_factory(
-                                            repository_path
-                                        ).ensure_application_session(application_id, title)
-                                    except HTTPException:
-                                        raise
-                                    except Exception as exc:
-                                        raise _error(
-                                            503,
-                                            _PREPARATION_FAILED,
-                                            "无法准备本地应用 Runtime 工作区",
-                                        ) from exc
                                     sandbox_instance_id = _new_instance_id()
                                     provider_document, _identity = await _provider_document(
                                         db,
@@ -1675,14 +1670,17 @@ class LocalRuntimeClient:
                                         ctx,
                                         workspace,
                                         repository_path,
-                                        engineering_session,
                                         runtime_scope_id,
                                         application_id,
                                         sandbox_instance_id,
                                         conversation_id,
                                         provider_document,
                                     )
-                            finally:
+                            except BaseException:
+                                with contextlib.suppress(OSError, RuntimeError):
+                                    await asyncio.to_thread(_unlock_runtime_file, lock_file)
+                                raise
+                            else:
                                 await asyncio.to_thread(_unlock_runtime_file, lock_file)
                 except HTTPException:
                     raise
