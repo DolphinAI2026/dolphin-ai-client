@@ -59,6 +59,27 @@ _INSTANCE_LOCKS: dict[tuple[int, str], asyncio.Lock] = {}
 _STARTING_TIMEOUT_SECONDS = 120
 _STARTING_POLL_SECONDS = 0.2
 _SANDBOX_TOKEN_FILE = "sandbox-token"
+_MANAGER_DIAGNOSTIC_LIMIT = 600
+_MANAGER_ERROR_CODES = frozenset(
+    {
+        "UnsupportedPlatform",
+        "ProbeFailed",
+        "InvalidRequest",
+        "InstanceConflict",
+        "SpawnFailed",
+        "ReadinessFailed",
+        "StopFailed",
+        "JournalFailed",
+        "ReconcileIdentityMismatch",
+    }
+)
+_MANAGER_AUTHORIZATION = re.compile(
+    r"(?i)(\bauthorization\s*:\s*(?:bearer|basic)\s+)[^\s,;]+"
+)
+_MANAGER_INLINE_SECRET = re.compile(
+    r"(?i)(\b(?:token|password|secret|api[_-]?key)\s*=\s*)[^\s,;]+"
+)
+_MANAGER_URL_CREDENTIALS = re.compile(r"(?i)(https?://)[^/\s@]+@")
 
 
 def _error(status_code: int, code: str, message: str) -> HTTPException:
@@ -67,6 +88,30 @@ def _error(status_code: int, code: str, message: str) -> HTTPException:
 
 def _text(value: object) -> str:
     return str(value or "").strip()
+
+
+def _manager_diagnostic(response: httpx.Response) -> tuple[str, str] | None:
+    try:
+        payload = response.json()
+    except (json.JSONDecodeError, ValueError):
+        return None
+    if not isinstance(payload, dict):
+        return None
+    code = _text(payload.get("error"))
+    raw_message = _text(payload.get("message"))
+    if code not in _MANAGER_ERROR_CODES or not raw_message:
+        return None
+    printable_message = "".join(
+        character if ord(character) >= 32 and ord(character) != 127 else " "
+        for character in raw_message
+    )
+    message = " ".join(printable_message.split())
+    message = _MANAGER_AUTHORIZATION.sub(r"\1<redacted>", message)
+    message = _MANAGER_INLINE_SECRET.sub(r"\1<redacted>", message)
+    message = _MANAGER_URL_CREDENTIALS.sub(r"\1<redacted>@", message)
+    if not message:
+        return None
+    return code, message[:_MANAGER_DIAGNOSTIC_LIMIT]
 
 
 def _application_id(session: Any) -> str:
@@ -1113,6 +1158,9 @@ class LocalRuntimeClient:
     def _manager_error(response: httpx.Response) -> HTTPException:
         if response.status_code == 409:
             return _error(409, _INSTANCE_CONFLICT, "本地应用已有冲突的 Runtime 实例")
+        if diagnostic := _manager_diagnostic(response):
+            code, message = diagnostic
+            return _error(503, _START_FAILED, f"{code}: {message}")
         return _error(503, _MANAGER_UNAVAILABLE, "本地 Runtime manager 不可用")
 
     @staticmethod

@@ -1605,3 +1605,48 @@ async def test_manager_errors_are_stable_and_redacted(
         if status_code == 409
         else "LOCAL_RUNTIME_MANAGER_UNAVAILABLE"
     )
+
+
+def test_manager_error_preserves_known_tauri_diagnostic():
+    error = LocalRuntimeClient._manager_error(
+        httpx.Response(
+            503,
+            json={
+                "error": "SpawnFailed",
+                "message": (
+                    "cannot start local runtime: The system cannot find the file "
+                    "specified. (os error 2)"
+                ),
+            },
+        )
+    )
+
+    assert error.status_code == 503
+    assert error.detail == (
+        "LOCAL_RUNTIME_START_FAILED: SpawnFailed: cannot start local runtime: "
+        "The system cannot find the file specified. (os error 2)"
+    )
+
+
+def test_manager_error_redacts_credentials_from_known_tauri_diagnostic():
+    error = LocalRuntimeClient._manager_error(
+        httpx.Response(
+            503,
+            json={
+                "error": "ReadinessFailed",
+                "message": (
+                    "probe failed Authorization: Bearer bearer-secret "
+                    "token=query-secret https://user:password@example.invalid/path"
+                ),
+            },
+        )
+    )
+
+    assert error.status_code == 503
+    assert str(error.detail).startswith(
+        "LOCAL_RUNTIME_START_FAILED: ReadinessFailed: probe failed"
+    )
+    assert "bearer-secret" not in str(error.detail)
+    assert "query-secret" not in str(error.detail)
+    assert "password" not in str(error.detail)
+    assert str(error.detail).count("<redacted>") == 3
