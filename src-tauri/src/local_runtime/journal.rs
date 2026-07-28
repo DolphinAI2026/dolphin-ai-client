@@ -1,7 +1,9 @@
 use super::contract::{InstanceState, LocalRuntimeError, LocalRuntimeErrorCode};
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
-use std::fs::{self, File, OpenOptions};
+#[cfg(unix)]
+use std::fs::File;
+use std::fs::{self, OpenOptions};
 use std::io::Write;
 use std::path::{Path, PathBuf};
 
@@ -156,6 +158,7 @@ impl JournalStore {
     }
 }
 
+#[cfg(unix)]
 fn sync_directory(path: &Path) -> Result<(), LocalRuntimeError> {
     File::open(path)
         .and_then(|file| file.sync_all())
@@ -165,6 +168,12 @@ fn sync_directory(path: &Path) -> Result<(), LocalRuntimeError> {
                 format!("cannot sync local runtime journal directory: {error}"),
             )
         })
+}
+
+#[cfg(not(unix))]
+fn sync_directory(_path: &Path) -> Result<(), LocalRuntimeError> {
+    // Windows rejects directory handles opened through std::fs::File.
+    Ok(())
 }
 
 #[cfg(test)]

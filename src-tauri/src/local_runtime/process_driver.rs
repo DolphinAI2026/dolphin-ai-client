@@ -1191,6 +1191,13 @@ fn appliance_environment(appliance_root: &Path) -> Vec<(String, String)> {
                 .to_string(),
         ),
         (
+            "DOLPHIN_CODE_BUILDER_DIST_DIR".to_string(),
+            appliance_root
+                .join("web/builder/dist")
+                .display()
+                .to_string(),
+        ),
+        (
             "AGENTIC_ROOT".to_string(),
             appliance_root.join("agentic-coding").display().to_string(),
         ),
@@ -1749,6 +1756,22 @@ mod tests {
         );
         assert_eq!(value(&environment, "APAAS_CODEX_APP_SERVER_BINARY"), None);
         assert_eq!(value(&environment, "APAAS_AGENTIC_PACK_DIR"), None);
+    }
+
+    #[test]
+    fn appliance_environment_declares_builder_distribution() {
+        let appliance_root = Path::new("/opt/dolphin-code");
+        let environment = appliance_environment(appliance_root);
+
+        assert_eq!(
+            value(&environment, "DOLPHIN_CODE_BUILDER_DIST_DIR"),
+            Some(
+                appliance_root
+                    .join("web/builder/dist")
+                    .display()
+                    .to_string()
+            )
+        );
     }
 
     #[test]
