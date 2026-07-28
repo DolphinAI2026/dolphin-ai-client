@@ -3207,6 +3207,190 @@ async def test_proxy_current_alignment_shares_recovery_budget_with_forwarding(
     )
 
 
+async def _proxy_after_renewed_activate_returns_404(
+    db_session,
+    monkeypatch,
+    *,
+    fallback_expired: bool,
+):
+    from dataclasses import replace
+
+    import httpx
+    import app.routes.code_runtime as code_runtime_routes
+    from app.code_runtime.service import create_proxy_cookie_token
+    from app.routes.code_runtime import proxy_code_runtime
+
+    session, binding, _rows = await _seed_browser_runtime(db_session)
+    binding.runtime_session_id = "runtime-bound"
+    await db_session.commit()
+    proxy_token = create_proxy_cookie_token(
+        session_id=session.public_id,
+        user_id=11,
+        tenant_id=7,
+        browser_session_id="browser-a",
+    )
+    request = _proxy_request(
+        session.public_id,
+        cookie=(
+            f"dolphin_code_runtime_{session.public_id}={proxy_token}; "
+            "apaas_sandbox_token=db-cookie-a"
+        ),
+        path="api/agent/sessions/current/events",
+    )
+    attempts: list[tuple[str, str, str]] = []
+    renew_calls = 0
+
+    def handler(upstream: httpx.Request) -> httpx.Response:
+        attempts.append((
+            upstream.method,
+            upstream.url.path,
+            upstream.headers.get("cookie", ""),
+        ))
+        if len(attempts) == 1:
+            return httpx.Response(
+                401,
+                content=b"activate-expired",
+                headers={
+                    "X-APAAS-Sandbox-Auth-Error": "sandbox_session_expired",
+                },
+            )
+        if len(attempts) == 2:
+            return httpx.Response(404, content=b"runtime session missing")
+        if len(attempts) == 3:
+            if fallback_expired:
+                return httpx.Response(
+                    401,
+                    content=b"fallback-expired",
+                    headers={
+                        "X-APAAS-Sandbox-Auth-Error": "sandbox_session_expired",
+                    },
+                )
+            return httpx.Response(200, json={"runtimeSessionId": "runtime-current"})
+        return httpx.Response(
+            200,
+            content=b"data: ready\n\n",
+            headers={"content-type": "text/event-stream"},
+        )
+
+    async def fake_renew(_session, _binding, authorization, _db, *, reason):
+        nonlocal renew_calls
+        assert reason == "sandbox_session_expired"
+        renew_calls += 1
+        return replace(
+            authorization,
+            runtime_cookie="renewed-cookie",
+            runtime_cookie_hash=hashlib.sha256(b"renewed-cookie").hexdigest(),
+            observed_generation=int(authorization.observed_generation or 0) + 1,
+            proxy_cookie_reissue_required=True,
+        )
+
+    transport = httpx.MockTransport(handler)
+    original = code_runtime_routes.httpx.AsyncClient
+    monkeypatch.setattr(
+        code_runtime_routes.httpx,
+        "AsyncClient",
+        lambda **kwargs: original(transport=transport, **kwargs),
+    )
+    monkeypatch.setattr(
+        code_runtime_routes,
+        "_renew_proxy_runtime_authorization",
+        fake_renew,
+    )
+
+    response = await proxy_code_runtime(
+        session.public_id,
+        "api/agent/sessions/current/events",
+        request,
+        db_session,
+    )
+    if hasattr(response, "body_iterator"):
+        body = b"".join([chunk async for chunk in response.body_iterator])
+        if response.background:
+            await response.background()
+    else:
+        body = response.body
+    return response, body, attempts, renew_calls
+
+
+@pytest.mark.asyncio
+async def test_proxy_renewed_activate_404_uses_new_cookie_for_fallback_and_response(
+    db_session,
+    monkeypatch,
+):
+    response, body, attempts, renew_calls = await _proxy_after_renewed_activate_returns_404(
+        db_session,
+        monkeypatch,
+        fallback_expired=False,
+    )
+
+    assert response.status_code == 200
+    assert body == b"data: ready\n\n"
+    assert renew_calls == 1
+    assert attempts == [
+        (
+            "POST",
+            "/workspaces/crm/api/agent/sessions/runtime-bound/activate",
+            "apaas_sandbox_token=db-cookie-a",
+        ),
+        (
+            "POST",
+            "/workspaces/crm/api/agent/sessions/runtime-bound/activate",
+            "apaas_sandbox_token=renewed-cookie",
+        ),
+        (
+            "GET",
+            "/workspaces/crm/api/agent/sessions/current",
+            "apaas_sandbox_token=renewed-cookie",
+        ),
+        (
+            "GET",
+            "/workspaces/crm/api/agent/sessions/current/events",
+            "apaas_sandbox_token=renewed-cookie",
+        ),
+    ]
+    assert any(
+        "apaas_sandbox_token=renewed-cookie" in value
+        for value in response.headers.getlist("set-cookie")
+    )
+
+
+@pytest.mark.asyncio
+async def test_proxy_renewed_activate_404_returns_fallback_expired_with_new_cookie(
+    db_session,
+    monkeypatch,
+):
+    response, body, attempts, renew_calls = await _proxy_after_renewed_activate_returns_404(
+        db_session,
+        monkeypatch,
+        fallback_expired=True,
+    )
+
+    assert response.status_code == 401
+    assert json.loads(body) == {"detail": "fallback-expired"}
+    assert renew_calls == 1
+    assert attempts == [
+        (
+            "POST",
+            "/workspaces/crm/api/agent/sessions/runtime-bound/activate",
+            "apaas_sandbox_token=db-cookie-a",
+        ),
+        (
+            "POST",
+            "/workspaces/crm/api/agent/sessions/runtime-bound/activate",
+            "apaas_sandbox_token=renewed-cookie",
+        ),
+        (
+            "GET",
+            "/workspaces/crm/api/agent/sessions/current",
+            "apaas_sandbox_token=renewed-cookie",
+        ),
+    ]
+    assert any(
+        "apaas_sandbox_token=renewed-cookie" in value
+        for value in response.headers.getlist("set-cookie")
+    )
+
+
 @pytest.mark.asyncio
 async def test_create_code_session_from_app_creates_mode_code_session(db_session):
     from app.routes.code_runtime import CreateCodeSessionRequest, create_code_session_from_app

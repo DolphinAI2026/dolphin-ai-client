@@ -1727,6 +1727,23 @@ class ProxyRecoveryBudget:
     recovery_used: bool = False
 
 
+class BrowserRuntimeRequestFailure(HTTPException):
+    def __init__(
+        self,
+        error: HTTPException,
+        authorization: ProxyAuthorization,
+        *,
+        renewed: bool,
+    ) -> None:
+        super().__init__(
+            status_code=error.status_code,
+            detail=error.detail,
+            headers=error.headers,
+        )
+        self.authorization = authorization
+        self.renewed = renewed
+
+
 async def _browser_runtime_json_request_for_session(
     session: AIChatSession,
     binding: CodeRuntimeBinding,
@@ -1769,7 +1786,11 @@ async def _browser_runtime_json_request_for_session(
         if exc.status_code != 401 or auth_error != "sandbox_session_expired":
             raise
         if budget.recovery_used:
-            raise
+            raise BrowserRuntimeRequestFailure(
+                exc,
+                authorization,
+                renewed=True,
+            ) from exc
     budget.recovery_used = True
     renewed = await _renew_proxy_runtime_authorization(
         session,
@@ -1778,15 +1799,22 @@ async def _browser_runtime_json_request_for_session(
         db,
         reason=auth_error,
     )
-    payload = await _browser_runtime_json_request(
-        binding,
-        method,
-        path,
-        request=request,
-        session_id=session_id,
-        json_body=json_body,
-        runtime_cookie=renewed.runtime_cookie,
-    )
+    try:
+        payload = await _browser_runtime_json_request(
+            binding,
+            method,
+            path,
+            request=request,
+            session_id=session_id,
+            json_body=json_body,
+            runtime_cookie=renewed.runtime_cookie,
+        )
+    except HTTPException as exc:
+        raise BrowserRuntimeRequestFailure(
+            exc,
+            renewed,
+            renewed=True,
+        ) from exc
     return payload, renewed
 
 
@@ -1807,6 +1835,7 @@ async def _ensure_browser_runtime_current_session(
         return False, authorization
     encoded_id = quote(runtime_session_id, safe="")
     target_path = f"/api/agent/sessions/{encoded_id}/activate"
+    fallback_required = False
     try:
         _, authorization = await _browser_runtime_json_request_for_session(
             session,
@@ -1819,9 +1848,16 @@ async def _ensure_browser_runtime_current_session(
             db=db,
             recovery_budget=budget,
         )
+    except BrowserRuntimeRequestFailure as exc:
+        authorization = exc.authorization
+        if exc.status_code != 404:
+            raise
+        fallback_required = True
     except HTTPException as exc:
         if exc.status_code != 404:
             raise
+        fallback_required = True
+    if fallback_required:
         current, authorization = await _browser_runtime_json_request_for_session(
             session,
             binding,
@@ -2715,6 +2751,45 @@ def _sandbox_renewal_failure_response(
     return response
 
 
+def _browser_runtime_request_failure_response(
+    failure: BrowserRuntimeRequestFailure,
+    *,
+    session_id: CodeSessionRef,
+    forwarded_prefix: str = "",
+    cookie_reissue_required: bool = False,
+) -> Response:
+    response = Response(
+        content=json.dumps(
+            {"detail": failure.detail},
+            ensure_ascii=False,
+            separators=(",", ":"),
+        ),
+        status_code=failure.status_code,
+        headers=failure.headers,
+        media_type="application/json",
+    )
+    authorization = failure.authorization
+    if (
+        cookie_reissue_required
+        or failure.renewed
+        or authorization.proxy_cookie_reissue_required
+    ) and authorization.runtime_cookie:
+        _set_runtime_cookie(
+            response,
+            authorization.runtime_cookie,
+            session_id,
+            forwarded_prefix,
+        )
+    if authorization.proxy_cookie_token:
+        _set_proxy_cookie(
+            response,
+            authorization.proxy_cookie_token,
+            session_id,
+            forwarded_prefix,
+        )
+    return response
+
+
 async def _authorized_browser_shell(
     request: Request,
     response: Response,
@@ -3053,6 +3128,13 @@ async def proxy_code_runtime(
             session_id=session_id,
             db=db,
             recovery_budget=recovery_budget,
+        )
+    except BrowserRuntimeRequestFailure as exc:
+        return _browser_runtime_request_failure_response(
+            exc,
+            session_id=session_id,
+            forwarded_prefix=forwarded_prefix,
+            cookie_reissue_required=cookie_reissue_required,
         )
     except SandboxRenewalFailure as exc:
         return _sandbox_renewal_failure_response(
