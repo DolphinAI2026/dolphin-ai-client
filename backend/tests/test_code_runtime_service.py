@@ -1602,6 +1602,67 @@ async def test_bootstrap_runtime_session_uses_entry_token_only_upstream_and_retu
     assert "runtime-cookie-secret" not in repr(bootstrap)
 
 
+@pytest.mark.asyncio
+async def test_bootstrap_runtime_session_accepts_verified_cookieless_remote_runtime():
+    import hashlib
+
+    import httpx
+
+    from app.code_runtime.sandbox_auth import bootstrap_runtime_session
+
+    request_urls: list[str] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        request_urls.append(str(request.url))
+        return httpx.Response(200)
+
+    transport = httpx.MockTransport(handler)
+    bootstrap = await bootstrap_runtime_session(
+        "https://sandbox.example.com/workspaces/ws-1/builder?token=entry-secret",
+        client_factory=lambda: httpx.AsyncClient(transport=transport),
+    )
+
+    assert request_urls == [
+        "https://sandbox.example.com/workspaces/ws-1/api/status?token=entry-secret",
+        "https://sandbox.example.com/workspaces/ws-1/api/status",
+    ]
+    assert bootstrap.runtime_cookie == "local-auth-disabled"
+    assert bootstrap.runtime_cookie_hash == hashlib.sha256(
+        b"local-auth-disabled"
+    ).hexdigest()
+    assert bootstrap.expires_at is None
+
+
+@pytest.mark.asyncio
+async def test_bootstrap_runtime_session_rejects_missing_cookie_when_anonymous_probe_requires_auth():
+    import httpx
+    from fastapi import HTTPException
+
+    from app.code_runtime.sandbox_auth import bootstrap_runtime_session
+
+    request_urls: list[str] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        request_urls.append(str(request.url))
+        if request.url.query:
+            return httpx.Response(200)
+        return httpx.Response(401)
+
+    transport = httpx.MockTransport(handler)
+    with pytest.raises(HTTPException) as exc_info:
+        await bootstrap_runtime_session(
+            "https://sandbox.example.com/workspaces/ws-1/builder?token=entry-secret",
+            client_factory=lambda: httpx.AsyncClient(transport=transport),
+        )
+
+    assert request_urls == [
+        "https://sandbox.example.com/workspaces/ws-1/api/status?token=entry-secret",
+        "https://sandbox.example.com/workspaces/ws-1/api/status",
+    ]
+    assert exc_info.value.status_code == 502
+    assert exc_info.value.detail == "Runtime bootstrap response missing session cookie"
+
+
 def test_runtime_session_expiry_for_storage_normalizes_aware_datetime_to_naive_utc():
     from datetime import datetime, timedelta, timezone
 
