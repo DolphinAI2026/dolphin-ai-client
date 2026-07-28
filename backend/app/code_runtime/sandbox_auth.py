@@ -508,27 +508,7 @@ async def bootstrap_runtime_session(
     if response.status_code >= 400:
         raise HTTPException(status_code=response.status_code, detail="Runtime bootstrap failed")
 
-    try:
-        runtime_cookie, expires_at = _runtime_cookie(response)
-    except HTTPException as cookie_error:
-        hostname = (urlsplit(runtime_base_url).hostname or "").lower()
-        allow_cookieless_runtime = (
-            settings.dolphin_code_allow_cookieless_loopback_runtime
-            and hostname in {"127.0.0.1", "localhost", "::1"}
-        )
-        if not allow_cookieless_runtime:
-            try:
-                async with factory() as client:
-                    anonymous_response = await client.get(
-                        f"{runtime_base_url}/api/status",
-                        timeout=10.0,
-                    )
-            except httpx.RequestError:
-                raise cookie_error from None
-            if anonymous_response.status_code != 200:
-                raise cookie_error
-        runtime_cookie = "local-auth-disabled"
-        expires_at = None
+    runtime_cookie, expires_at = _runtime_cookie(response)
     return RuntimeBootstrap(
         clean_builder_url=clean_builder_url,
         runtime_base_url=runtime_base_url,

@@ -947,7 +947,7 @@ async def _runtime_json_request_for_session(
         if not (
             exc.status_code == 401
             and (exc.headers or {}).get(RUNTIME_AUTH_ERROR_HEADER)
-            in {"sandbox_session_expired", "sandbox_session_invalid"}
+            == "sandbox_session_expired"
         ):
             raise
     await _refresh_runtime_binding(session, binding, request, ctx, db)
@@ -1783,10 +1783,7 @@ async def _browser_runtime_json_request_for_session(
         return payload, authorization
     except HTTPException as exc:
         auth_error = (exc.headers or {}).get(RUNTIME_AUTH_ERROR_HEADER)
-        if exc.status_code != 401 or auth_error not in {
-            "sandbox_session_expired",
-            "sandbox_session_invalid",
-        }:
+        if exc.status_code != 401 or auth_error != "sandbox_session_expired":
             raise
     renewed = await _renew_proxy_runtime_authorization(
         session,
@@ -2232,7 +2229,7 @@ def _recoverable_runtime_auth_error(response: httpx.Response) -> str | None:
     auth_error = str(
         response.headers.get(RUNTIME_AUTH_ERROR_HEADER) or ""
     ).strip()
-    if auth_error in {"sandbox_session_expired", "sandbox_session_invalid"}:
+    if auth_error == "sandbox_session_expired":
         return auth_error
     return None
 

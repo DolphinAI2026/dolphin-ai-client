@@ -269,7 +269,6 @@ export AUTH_PROVIDER=local
 export BUILDER_AUTH_DEFAULT_LOGIN_PROVIDER=local
 export ACCEPTED_TOKEN_ISSUERS=ai-builder
 export DOLPHIN_CODE_BUILDER_URL="${runtime_base_url}/builder/"
-export DOLPHIN_CODE_ALLOW_COOKIELESS_LOOPBACK_RUNTIME=1
 
 (
   cd "${ROOT_DIR}/backend"

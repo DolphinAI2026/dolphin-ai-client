@@ -145,7 +145,6 @@ class Settings(BaseSettings):
     dolphin_code_workspace_open_timeout_seconds: int = 660
     dolphin_code_builder_url: str = ""
     dolphin_code_default_seed_project_id: str = "1781233861147"
-    dolphin_code_allow_cookieless_loopback_runtime: bool = False
     # 浏览器热 iframe 只影响切换缓存数量，不改变 Runtime Cookie、Secret
     # 轮换或失败恢复协议。Control Plane 租户覆盖接入前，这里作为部署级默认值。
     dolphin_code_cache_profile: str = "normal"
