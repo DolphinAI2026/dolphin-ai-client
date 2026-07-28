@@ -3,7 +3,6 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
-import fcntl
 import hashlib
 import json
 import os
@@ -28,6 +27,17 @@ from app.engineering_sessions.git_state import GitCommandError, git, git_common_
 from app.engineering_sessions.service import EngineeringSessionService
 from app.models import Application, RegisteredWorkspace
 from app.models.workspace_git import WorkspaceGitRemote
+
+
+try:
+    import fcntl as _fcntl
+except ImportError:
+    _fcntl = None
+
+try:
+    import msvcrt as _msvcrt
+except ImportError:
+    _msvcrt = None
 
 
 _APPLICATION_COMPONENT = re.compile(r"^(?!\.{1,2}$)[A-Za-z0-9][A-Za-z0-9._-]{0,127}$")
@@ -478,7 +488,7 @@ def _open_directory_at(parent_fd: int, component: str, *, create: bool) -> int:
     return directory_fd
 
 
-def _runtime_root_fd(data_dir: Path) -> tuple[Path, int]:
+def _runtime_root_path(data_dir: Path) -> Path:
     raw_path = str(data_dir)
     if (
         not raw_path
@@ -491,6 +501,12 @@ def _runtime_root_fd(data_dir: Path) -> tuple[Path, int]:
     resolved = Path(raw_path).resolve(strict=True)
     if str(resolved) != raw_path:
         raise ValueError("desktop data directory must not be an alias")
+    return resolved
+
+
+def _runtime_root_fd(data_dir: Path) -> tuple[Path, int]:
+    resolved = _runtime_root_path(data_dir)
+    raw_path = str(resolved)
     current_fd = os.open("/", os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
     try:
         for component in Path(raw_path).parts[1:]:
@@ -512,6 +528,25 @@ def _scope_directory_fds(
     data_dir: Path,
     runtime_scope_id: str,
 ):
+    if os.name == "nt":
+        root_path = _runtime_root_path(data_dir)
+        local_runtimes_path = _open_runtime_directory(
+            root_path,
+            "local-runtimes",
+            create=True,
+        )
+        scope_path = _open_runtime_directory(
+            local_runtimes_path,
+            runtime_scope_id,
+            create=True,
+        )
+        yield {
+            "root_path": root_path,
+            "scope_path": scope_path,
+            "scope_fd": scope_path,
+        }
+        return
+
     root_path, root_fd = _runtime_root_fd(data_dir)
     descriptors = [root_fd]
     try:
@@ -538,6 +573,30 @@ def _runtime_directory_fds(
     create_instance: bool,
 ):
     with _scope_directory_fds(data_dir, runtime_scope_id) as scope:
+        if os.name == "nt":
+            codex_home = _open_runtime_directory(
+                scope["scope_path"],
+                "codex-home",
+                create=True,
+            )
+            instances_path = _open_runtime_directory(
+                scope["scope_path"],
+                "instances",
+                create=True,
+            )
+            runtime_dir = _open_runtime_directory(
+                instances_path,
+                sandbox_instance_id,
+                create=create_instance,
+            )
+            yield {
+                **scope,
+                "codex_home": codex_home,
+                "runtime_dir": runtime_dir,
+                "runtime_fd": runtime_dir,
+            }
+            return
+
         descriptors: list[int] = []
         try:
             codex_home_fd = _open_directory_at(scope["scope_fd"], "codex-home", create=True)
@@ -561,10 +620,43 @@ def _runtime_directory_fds(
                 os.close(descriptor)
 
 
-def _atomic_write_json_at(parent_fd: int, name: str, payload: dict[str, Any]) -> None:
+def _open_runtime_directory(parent: Path, component: str, *, create: bool) -> Path:
+    if not _APPLICATION_COMPONENT.fullmatch(component):
+        raise ValueError("unsafe runtime path component")
+    target = parent / component
+    if create:
+        target.mkdir(mode=0o700, exist_ok=True)
+    resolved = target.resolve(strict=True)
+    if resolved != target or target.is_symlink() or not target.is_dir():
+        raise ValueError("runtime directory is unsafe")
+    return resolved
+
+
+def _runtime_file_path(parent: int | Path, name: str) -> Path | None:
+    if not _APPLICATION_COMPONENT.fullmatch(name):
+        raise ValueError("unsafe runtime file name")
+    if isinstance(parent, Path):
+        return parent / name
+    return None
+
+
+def _atomic_write_json_at(parent_fd: int | Path, name: str, payload: dict[str, Any]) -> None:
     if not _APPLICATION_COMPONENT.fullmatch(name):
         raise ValueError("unsafe runtime file name")
     temporary_name = f".{name}.{uuid.uuid4().hex}.tmp"
+    parent_path = _runtime_file_path(parent_fd, name)
+    if parent_path is not None:
+        temporary_path = parent_path.parent / temporary_name
+        serialized = (json.dumps(payload, ensure_ascii=False, sort_keys=True) + "\n").encode(
+            "utf-8"
+        )
+        with temporary_path.open("xb") as file:
+            file.write(serialized)
+            file.flush()
+            os.fsync(file.fileno())
+        os.replace(temporary_path, parent_path)
+        return
+
     file_fd = -1
     try:
         file_fd = os.open(
@@ -591,12 +683,22 @@ def _atomic_write_json_at(parent_fd: int, name: str, payload: dict[str, Any]) ->
             pass
 
 
-def _atomic_write_secret_at(parent_fd: int, name: str, value: str) -> None:
+def _atomic_write_secret_at(parent_fd: int | Path, name: str, value: str) -> None:
     if not _APPLICATION_COMPONENT.fullmatch(name):
         raise ValueError("unsafe runtime file name")
     if not value or "\x00" in value:
         raise ValueError("runtime secret is invalid")
     temporary_name = f".{name}.{uuid.uuid4().hex}.tmp"
+    parent_path = _runtime_file_path(parent_fd, name)
+    if parent_path is not None:
+        temporary_path = parent_path.parent / temporary_name
+        with temporary_path.open("xb") as file:
+            file.write(value.encode("ascii"))
+            file.flush()
+            os.fsync(file.fileno())
+        os.replace(temporary_path, parent_path)
+        return
+
     file_fd = -1
     try:
         file_fd = os.open(
@@ -623,7 +725,16 @@ def _atomic_write_secret_at(parent_fd: int, name: str, value: str) -> None:
             pass
 
 
-def _read_json_at(parent_fd: int, name: str) -> dict[str, Any]:
+def _read_json_at(parent_fd: int | Path, name: str) -> dict[str, Any]:
+    parent_path = _runtime_file_path(parent_fd, name)
+    if parent_path is not None:
+        if parent_path.is_symlink():
+            raise ValueError("runtime JSON file is unsafe")
+        value = json.loads(parent_path.read_text(encoding="utf-8"))
+        if not isinstance(value, dict):
+            raise ValueError("runtime JSON must be an object")
+        return value
+
     file_fd = os.open(name, os.O_RDONLY | os.O_NOFOLLOW, dir_fd=parent_fd)
     try:
         content = b""
@@ -637,17 +748,23 @@ def _read_json_at(parent_fd: int, name: str) -> dict[str, Any]:
     return value
 
 
-def _read_secret_at(parent_fd: int, name: str) -> str:
-    file_fd = os.open(name, os.O_RDONLY | os.O_NOFOLLOW, dir_fd=parent_fd)
-    try:
-        metadata = os.fstat(file_fd)
-        if not stat.S_ISREG(metadata.st_mode) or stat.S_IMODE(metadata.st_mode) != 0o600:
+def _read_secret_at(parent_fd: int | Path, name: str) -> str:
+    parent_path = _runtime_file_path(parent_fd, name)
+    if parent_path is not None:
+        if parent_path.is_symlink() or not parent_path.is_file():
             raise ValueError("runtime secret file is unsafe")
-        content = b""
-        while chunk := os.read(file_fd, 65536):
-            content += chunk
-    finally:
-        os.close(file_fd)
+        content = parent_path.read_bytes()
+    else:
+        file_fd = os.open(name, os.O_RDONLY | os.O_NOFOLLOW, dir_fd=parent_fd)
+        try:
+            metadata = os.fstat(file_fd)
+            if not stat.S_ISREG(metadata.st_mode) or stat.S_IMODE(metadata.st_mode) != 0o600:
+                raise ValueError("runtime secret file is unsafe")
+            content = b""
+            while chunk := os.read(file_fd, 65536):
+                content += chunk
+        finally:
+            os.close(file_fd)
     try:
         value = content.decode("ascii")
     except UnicodeDecodeError as exc:
@@ -655,6 +772,50 @@ def _read_secret_at(parent_fd: int, name: str) -> str:
     if not value or "\x00" in value or any(ord(character) < 33 or ord(character) > 126 for character in value):
         raise ValueError("runtime secret is invalid")
     return value
+
+
+@contextlib.contextmanager
+def _runtime_lock_file(scope: dict[str, Any]):
+    scope_fd = scope["scope_fd"]
+    if isinstance(scope_fd, Path):
+        lock_path = scope["scope_path"] / "runtime.lock"
+        if lock_path.is_symlink():
+            raise ValueError("runtime lock file is unsafe")
+        with lock_path.open("a+b") as lock_file:
+            yield lock_file
+        return
+
+    lock_fd = os.open(
+        "runtime.lock",
+        os.O_RDWR | os.O_CREAT | os.O_NOFOLLOW,
+        0o600,
+        dir_fd=scope_fd,
+    )
+    with os.fdopen(lock_fd, "a+b") as lock_file:
+        yield lock_file
+
+
+def _lock_runtime_file(lock_file) -> None:
+    if _fcntl is not None:
+        _fcntl.flock(lock_file.fileno(), _fcntl.LOCK_EX)
+        return
+    if _msvcrt is not None:
+        lock_file.seek(0, os.SEEK_END)
+        if lock_file.tell() == 0:
+            lock_file.write(b"\0")
+            lock_file.flush()
+        lock_file.seek(0)
+        _msvcrt.locking(lock_file.fileno(), _msvcrt.LK_LOCK, 1)
+        return
+    raise RuntimeError("no supported file locking implementation")
+
+
+def _unlock_runtime_file(lock_file) -> None:
+    if _fcntl is not None:
+        _fcntl.flock(lock_file.fileno(), _fcntl.LOCK_UN)
+    elif _msvcrt is not None:
+        lock_file.seek(0)
+        _msvcrt.locking(lock_file.fileno(), _msvcrt.LK_UNLCK, 1)
 
 
 def _new_instance_id() -> str:
@@ -1332,71 +1493,65 @@ class LocalRuntimeClient:
                     raise _error(503, _MANAGER_UNAVAILABLE, "本地 Runtime manager 未配置")
                 try:
                     with _scope_directory_fds(self.desktop_data_dir, runtime_scope_id) as paths:
-                        lock_fd = os.open(
-                            "runtime.lock",
-                            os.O_RDWR | os.O_CREAT | os.O_NOFOLLOW,
-                            0o600,
-                            dir_fd=paths["scope_fd"],
-                        )
-                        try:
-                            await asyncio.to_thread(fcntl.flock, lock_fd, fcntl.LOCK_EX)
-                            manager_status = await self._existing_status(
-                                status_path,
-                                runtime_scope_id,
-                                application_id,
-                            )
-                            if manager_status is not None:
-                                sandbox_instance_id = _text(
-                                    manager_status.get("sandbox_instance_id")
-                                )
-                                await self._assert_reused_provider(
-                                    db,
-                                    session,
-                                    ctx,
-                                    runtime_scope_id,
-                                    sandbox_instance_id,
-                                )
-                            else:
-                                application = await _application_for_session(db, session, ctx)
-                                title = (
-                                    _text(getattr(application, "app_name", None))
-                                    or _text(getattr(session, "external_app_name", None))
-                                    or application_id
-                                )
-                                try:
-                                    engineering_session = self.engineering_service_factory(
-                                        repository_path
-                                    ).ensure_application_session(application_id, title)
-                                except HTTPException:
-                                    raise
-                                except Exception as exc:
-                                    raise _error(
-                                        503,
-                                        _PREPARATION_FAILED,
-                                        "无法准备本地应用 Runtime 工作区",
-                                    ) from exc
-                                sandbox_instance_id = _new_instance_id()
-                                provider_document, _identity = await _provider_document(
-                                    db,
-                                    int(ctx.tenant_id),
-                                    getattr(session, "selected_llm_config_id", None),
-                                )
-                                manager_status = await self._start(
-                                    db,
-                                    session,
-                                    ctx,
-                                    workspace,
-                                    repository_path,
-                                    engineering_session,
+                        with _runtime_lock_file(paths) as lock_file:
+                            await asyncio.to_thread(_lock_runtime_file, lock_file)
+                            try:
+                                manager_status = await self._existing_status(
+                                    status_path,
                                     runtime_scope_id,
                                     application_id,
-                                    sandbox_instance_id,
-                                    conversation_id,
-                                    provider_document,
                                 )
-                        finally:
-                            await asyncio.to_thread(fcntl.flock, lock_fd, fcntl.LOCK_UN)
-                            os.close(lock_fd)
+                                if manager_status is not None:
+                                    sandbox_instance_id = _text(
+                                        manager_status.get("sandbox_instance_id")
+                                    )
+                                    await self._assert_reused_provider(
+                                        db,
+                                        session,
+                                        ctx,
+                                        runtime_scope_id,
+                                        sandbox_instance_id,
+                                    )
+                                else:
+                                    application = await _application_for_session(db, session, ctx)
+                                    title = (
+                                        _text(getattr(application, "app_name", None))
+                                        or _text(getattr(session, "external_app_name", None))
+                                        or application_id
+                                    )
+                                    try:
+                                        engineering_session = self.engineering_service_factory(
+                                            repository_path
+                                        ).ensure_application_session(application_id, title)
+                                    except HTTPException:
+                                        raise
+                                    except Exception as exc:
+                                        raise _error(
+                                            503,
+                                            _PREPARATION_FAILED,
+                                            "无法准备本地应用 Runtime 工作区",
+                                        ) from exc
+                                    sandbox_instance_id = _new_instance_id()
+                                    provider_document, _identity = await _provider_document(
+                                        db,
+                                        int(ctx.tenant_id),
+                                        getattr(session, "selected_llm_config_id", None),
+                                    )
+                                    manager_status = await self._start(
+                                        db,
+                                        session,
+                                        ctx,
+                                        workspace,
+                                        repository_path,
+                                        engineering_session,
+                                        runtime_scope_id,
+                                        application_id,
+                                        sandbox_instance_id,
+                                        conversation_id,
+                                        provider_document,
+                                    )
+                            finally:
+                                await asyncio.to_thread(_unlock_runtime_file, lock_file)
                 except HTTPException:
                     raise
                 except (OSError, RuntimeError, ValueError) as exc:
