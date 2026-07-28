@@ -206,4 +206,51 @@ mod tests {
         assert_eq!(loaded.ownership_nonce, "nonce-a");
         fs::remove_dir_all(root).unwrap();
     }
+
+    #[test]
+    fn journal_payload_has_no_driver_selector() {
+        let root = temp_root();
+        let record = JournalRecord {
+            runtime_scope_id: "scope-a".into(),
+            application_id: "app-a".into(),
+            sandbox_instance_id: "instance-a".into(),
+            pid: 41001,
+            process_started_at: "1234".into(),
+            ownership_nonce: "nonce-a".into(),
+            worktree_path: root.join("worktree"),
+            state: InstanceState::Ready,
+            updated_at: Utc::now(),
+        };
+        let payload = serde_json::to_value(&record).unwrap();
+        assert!(payload.get(&["runtime", "mode"].join("_")).is_none());
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn journal_load_ignores_a_legacy_selector_field() {
+        let root = temp_root();
+        let store = JournalStore::new(&root);
+        let mut payload = serde_json::json!({
+            "runtime_scope_id": "scope-a",
+            "application_id": "app-a",
+            "sandbox_instance_id": "instance-a",
+            "pid": 41001,
+            "process_started_at": "1234",
+            "ownership_nonce": "nonce-a",
+            "worktree_path": root.join("worktree"),
+            "state": "ready",
+            "updated_at": Utc::now(),
+        });
+        payload
+            .as_object_mut()
+            .unwrap()
+            .insert(["runtime", "mode"].join("_"), "fast_local".into());
+        let path = root.join("scope-a").join("runtime-journal.json");
+        fs::create_dir_all(path.parent().unwrap()).unwrap();
+        fs::write(path, serde_json::to_vec(&payload).unwrap()).unwrap();
+
+        let loaded = store.load("scope-a").unwrap().unwrap();
+        assert_eq!(loaded.ownership_nonce, "nonce-a");
+        fs::remove_dir_all(root).unwrap();
+    }
 }

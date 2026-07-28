@@ -19,9 +19,15 @@ pub trait RuntimeDriver {
         request: &StartRequest,
         ownership_nonce: &str,
     ) -> Result<ProcessIdentity, LocalRuntimeError>;
-    fn wait_ready(&self, request: &StartRequest) -> Result<(), LocalRuntimeError>;
+    fn wait_ready(&self, pid: u32, request: &StartRequest) -> Result<(), LocalRuntimeError>;
     fn stop(&self, pid: u32) -> Result<(), LocalRuntimeError>;
     fn identity(&self, pid: u32) -> Result<Option<ProcessIdentity>, LocalRuntimeError>;
+    fn recover_identity(
+        &self,
+        expected: &ProcessIdentity,
+    ) -> Result<Option<ProcessIdentity>, LocalRuntimeError> {
+        self.identity(expected.pid)
+    }
 }
 
 pub struct LocalRuntimeManager<D> {
@@ -51,23 +57,38 @@ impl<D: RuntimeDriver> LocalRuntimeManager<D> {
                 "local runtime state lock is poisoned",
             )
         })?;
-        if let Some(existing) = active.get(&request.runtime_scope_id) {
+        if let Some(existing) = active.get(&request.runtime_scope_id).cloned() {
             if existing.sandbox_instance_id == request.sandbox_instance_id {
-                return Ok(existing.clone());
+                let record = self.journal.load(&request.runtime_scope_id)?;
+                let identity = self.driver.identity(existing.pid)?;
+                if record.as_ref().is_some_and(|record| {
+                    record.pid == existing.pid
+                        && record.sandbox_instance_id == existing.sandbox_instance_id
+                        && identity.as_ref().is_some_and(|identity| {
+                            identity.process_started_at == record.process_started_at
+                                && identity.ownership_nonce == record.ownership_nonce
+                        })
+                }) {
+                    return Ok(existing);
+                }
+                active.remove(&request.runtime_scope_id);
+                self.journal.remove(&request.runtime_scope_id)?;
+            } else {
+                return Err(LocalRuntimeError::new(
+                    LocalRuntimeErrorCode::InstanceConflict,
+                    "another local runtime instance is already active for this scope",
+                ));
             }
-            return Err(LocalRuntimeError::new(
-                LocalRuntimeErrorCode::InstanceConflict,
-                "another local runtime instance is already active for this scope",
-            ));
         }
         if let Some(record) = self.journal.load(&request.runtime_scope_id)? {
-            match self.driver.identity(record.pid)? {
+            let expected = process_identity_from_record(&record);
+            match self.driver.recover_identity(&expected)? {
                 Some(identity)
                     if identity.process_started_at == record.process_started_at
                         && identity.ownership_nonce == record.ownership_nonce
                         && record.sandbox_instance_id == request.sandbox_instance_id =>
                 {
-                    self.driver.wait_ready(&request)?;
+                    self.driver.wait_ready(record.pid, &request)?;
                     let status = status_from_record(&request, &record);
                     active.insert(status.runtime_scope_id.clone(), status.clone());
                     return Ok(status);
@@ -106,7 +127,7 @@ impl<D: RuntimeDriver> LocalRuntimeManager<D> {
             let _ = self.driver.stop(identity.pid);
             return Err(error);
         }
-        if let Err(error) = self.driver.wait_ready(&request) {
+        if let Err(error) = self.driver.wait_ready(identity.pid, &request) {
             let _ = self.driver.stop(identity.pid);
             let _ = self.journal.remove(&request.runtime_scope_id);
             return Err(error);
@@ -181,6 +202,15 @@ impl<D: RuntimeDriver> LocalRuntimeManager<D> {
                 "local runtime instance is missing its journal",
             )
         })?;
+        if record.pid != status.pid
+            || record.application_id != status.application_id
+            || record.sandbox_instance_id != status.sandbox_instance_id
+        {
+            return Err(LocalRuntimeError::new(
+                LocalRuntimeErrorCode::ReconcileIdentityMismatch,
+                "local runtime active state does not match its journal",
+            ));
+        }
         match self.driver.identity(record.pid)? {
             Some(identity)
                 if identity.process_started_at == record.process_started_at
@@ -228,7 +258,8 @@ impl<D: RuntimeDriver> LocalRuntimeManager<D> {
                         error_code: Some(LocalRuntimeErrorCode::JournalFailed),
                     };
                 }
-                let error_code = match self.driver.identity(record.pid) {
+                let expected = process_identity_from_record(&record);
+                let error_code = match self.driver.recover_identity(&expected) {
                     Ok(Some(identity))
                         if identity.process_started_at == record.process_started_at
                             && identity.ownership_nonce == record.ownership_nonce =>
@@ -242,7 +273,10 @@ impl<D: RuntimeDriver> LocalRuntimeManager<D> {
                             Err(error) => Some(error.code),
                         }
                     }
-                    Ok(_) => Some(LocalRuntimeErrorCode::ReconcileIdentityMismatch),
+                    Ok(_) => match self.journal.remove(&record.runtime_scope_id) {
+                        Ok(()) => Some(LocalRuntimeErrorCode::ReconcileIdentityMismatch),
+                        Err(error) => Some(error.code),
+                    },
                     Err(error) => Some(error.code),
                 };
                 ReconcileResult {
@@ -252,6 +286,14 @@ impl<D: RuntimeDriver> LocalRuntimeManager<D> {
                 }
             })
             .collect()
+    }
+}
+
+fn process_identity_from_record(record: &JournalRecord) -> ProcessIdentity {
+    ProcessIdentity {
+        pid: record.pid,
+        process_started_at: record.process_started_at.clone(),
+        ownership_nonce: record.ownership_nonce.clone(),
     }
 }
 
@@ -549,7 +591,9 @@ fn allowed_environment_key(key: &str) -> bool {
     )
 }
 
-struct ScopeLock(std::fs::File);
+struct ScopeLock {
+    _file: std::fs::File,
+}
 impl ScopeLock {
     fn acquire(data_root: &Path, scope: &str) -> Result<Self, LocalRuntimeError> {
         let path = data_root.join("local-runtimes").join(scope);
@@ -580,20 +624,22 @@ impl ScopeLock {
                 ));
             }
         }
-        Ok(Self(file))
+        Ok(Self { _file: file })
     }
 }
 impl Drop for ScopeLock {
     fn drop(&mut self) {
         #[cfg(unix)]
         unsafe {
-            libc::flock(std::os::fd::AsRawFd::as_raw_fd(&self.0), libc::LOCK_UN);
+            libc::flock(std::os::fd::AsRawFd::as_raw_fd(&self._file), libc::LOCK_UN);
         }
     }
 }
 
 #[cfg(test)]
 mod tests {
+    #[cfg(target_os = "linux")]
+    use super::super::process_driver::LocalProcessRuntimeDriver;
     use super::*;
     #[cfg(unix)]
     use std::os::unix::fs::PermissionsExt;
@@ -618,7 +664,7 @@ mod tests {
                 ownership_nonce: nonce.into(),
             })
         }
-        fn wait_ready(&self, _: &StartRequest) -> Result<(), LocalRuntimeError> {
+        fn wait_ready(&self, _: u32, _: &StartRequest) -> Result<(), LocalRuntimeError> {
             Ok(())
         }
         fn stop(&self, _: u32) -> Result<(), LocalRuntimeError> {
@@ -627,6 +673,40 @@ mod tests {
         }
         fn identity(&self, _: u32) -> Result<Option<ProcessIdentity>, LocalRuntimeError> {
             Ok(self.identity.clone())
+        }
+    }
+
+    struct ReadinessFailureDriver {
+        stops: AtomicUsize,
+    }
+
+    impl RuntimeDriver for ReadinessFailureDriver {
+        fn spawn(
+            &self,
+            _request: &StartRequest,
+            ownership_nonce: &str,
+        ) -> Result<ProcessIdentity, LocalRuntimeError> {
+            Ok(ProcessIdentity {
+                pid: 41001,
+                process_started_at: "start".into(),
+                ownership_nonce: ownership_nonce.into(),
+            })
+        }
+
+        fn wait_ready(&self, _: u32, _: &StartRequest) -> Result<(), LocalRuntimeError> {
+            Err(LocalRuntimeError::new(
+                LocalRuntimeErrorCode::ReadinessFailed,
+                "runtime did not become ready",
+            ))
+        }
+
+        fn stop(&self, _: u32) -> Result<(), LocalRuntimeError> {
+            self.stops.fetch_add(1, Ordering::SeqCst);
+            Ok(())
+        }
+
+        fn identity(&self, _: u32) -> Result<Option<ProcessIdentity>, LocalRuntimeError> {
+            Ok(None)
         }
     }
 
@@ -690,8 +770,63 @@ mod tests {
         root
     }
 
+    #[cfg(target_os = "linux")]
+    fn build_sleeping_runtime(appliance_root: &Path) -> PathBuf {
+        let bin_dir = appliance_root.join("bin");
+        fs::create_dir_all(&bin_dir).unwrap();
+        let source = appliance_root.join("sleeping-runtime.rs");
+        fs::write(
+            &source,
+            "fn main() { loop { std::thread::sleep(std::time::Duration::from_secs(60)); } }\n",
+        )
+        .unwrap();
+        let executable = bin_dir.join("agent-runtime");
+        let status = std::process::Command::new("rustc")
+            .arg("--edition=2021")
+            .arg(&source)
+            .arg("-o")
+            .arg(&executable)
+            .status()
+            .unwrap();
+        assert!(status.success(), "compile sleeping test runtime");
+        executable
+    }
+
+    #[cfg(target_os = "linux")]
+    fn journal_for(identity: &ProcessIdentity, worktree_path: PathBuf) -> JournalRecord {
+        JournalRecord {
+            runtime_scope_id: "scope-a".into(),
+            application_id: "app-a".into(),
+            sandbox_instance_id: "instance-a".into(),
+            pid: identity.pid,
+            process_started_at: identity.process_started_at.clone(),
+            ownership_nonce: identity.ownership_nonce.clone(),
+            worktree_path,
+            state: InstanceState::Ready,
+            updated_at: Utc::now(),
+        }
+    }
+
+    #[cfg(target_os = "linux")]
+    fn process_exists(pid: u32) -> bool {
+        unsafe { libc::kill(pid as i32, 0) == 0 }
+    }
+
+    #[cfg(target_os = "linux")]
+    struct TestProcess(u32);
+
+    #[cfg(target_os = "linux")]
+    impl Drop for TestProcess {
+        fn drop(&mut self) {
+            unsafe {
+                libc::kill(self.0 as i32, libc::SIGKILL);
+                libc::waitpid(self.0 as i32, std::ptr::null_mut(), 0);
+            }
+        }
+    }
+
     #[test]
-    fn repeated_start_of_same_instance_is_idempotent() {
+    fn repeated_start_without_a_retained_identity_spawns_a_fresh_instance() {
         let root = temp_root();
         let driver = FakeDriver {
             spawns: AtomicUsize::new(0),
@@ -703,7 +838,7 @@ mod tests {
         let first = manager.start(request.clone()).unwrap();
         let second = manager.start(request).unwrap();
         assert_eq!(first.pid, second.pid);
-        assert_eq!(manager.driver.spawns.load(Ordering::SeqCst), 1);
+        assert_eq!(manager.driver.spawns.load(Ordering::SeqCst), 2);
         fs::remove_dir_all(root).unwrap();
     }
 
@@ -721,6 +856,93 @@ mod tests {
         manager.start(request(&root, "instance-a")).unwrap();
         let error = manager.start(request(&root, "instance-b")).unwrap_err();
         assert_eq!(error.code, LocalRuntimeErrorCode::InstanceConflict);
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn readiness_failure_stops_the_spawned_process_once() {
+        let root = temp_root();
+        let manager = LocalRuntimeManager::new(
+            &root,
+            ReadinessFailureDriver {
+                stops: AtomicUsize::new(0),
+            },
+        );
+
+        let error = manager.start(request(&root, "instance-a")).unwrap_err();
+        assert_eq!(error.code, LocalRuntimeErrorCode::ReadinessFailed);
+        assert_eq!(manager.driver.stops.load(Ordering::SeqCst), 1);
+        assert!(manager.journal.load("scope-a").unwrap().is_none());
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn fresh_process_driver_reconciles_a_real_journaled_runtime() {
+        let root = temp_root();
+        let appliance_root = root.join("trusted-appliance");
+        let runtime = build_sleeping_runtime(&appliance_root);
+        let mut start_request = request(&root, "instance-a");
+        start_request.agent_runtime_path = runtime;
+        let first_driver = LocalProcessRuntimeDriver::with_appliance_root(&appliance_root);
+        let identity = first_driver
+            .spawn(&start_request, "journal-recovery-nonce")
+            .unwrap();
+        let process = TestProcess(identity.pid);
+        drop(first_driver);
+
+        let manager = LocalRuntimeManager::new(
+            &root,
+            LocalProcessRuntimeDriver::with_appliance_root(&appliance_root),
+        );
+        manager
+            .journal
+            .write(&journal_for(&identity, start_request.worktree_path))
+            .unwrap();
+
+        let result = manager.reconcile();
+
+        assert_eq!(result[0].error_code, None);
+        assert!(manager.journal.load("scope-a").unwrap().is_none());
+        assert!(!process_exists(identity.pid));
+        drop(process);
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn fresh_process_driver_does_not_stop_a_journal_pid_with_an_untrusted_executable() {
+        let root = temp_root();
+        let trusted_appliance = root.join("trusted-appliance");
+        build_sleeping_runtime(&trusted_appliance);
+        let other_appliance = root.join("other-appliance");
+        let other_runtime = build_sleeping_runtime(&other_appliance);
+        let mut start_request = request(&root, "instance-a");
+        start_request.agent_runtime_path = other_runtime;
+        let first_driver = LocalProcessRuntimeDriver::with_appliance_root(&other_appliance);
+        let identity = first_driver
+            .spawn(&start_request, "journal-recovery-nonce")
+            .unwrap();
+        let process = TestProcess(identity.pid);
+        drop(first_driver);
+
+        let manager = LocalRuntimeManager::new(
+            &root,
+            LocalProcessRuntimeDriver::with_appliance_root(&trusted_appliance),
+        );
+        manager
+            .journal
+            .write(&journal_for(&identity, start_request.worktree_path))
+            .unwrap();
+
+        let result = manager.reconcile();
+
+        assert_eq!(
+            result[0].error_code,
+            Some(LocalRuntimeErrorCode::ReconcileIdentityMismatch)
+        );
+        assert!(process_exists(identity.pid));
+        drop(process);
         fs::remove_dir_all(root).unwrap();
     }
 
@@ -789,6 +1011,102 @@ mod tests {
             Some(LocalRuntimeErrorCode::ReconcileIdentityMismatch)
         );
         assert_eq!(manager.driver.stops.load(Ordering::SeqCst), 0);
+        assert_eq!(manager.journal.load("scope-a").unwrap(), None);
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    struct CountingDriver {
+        pid: u32,
+        spawns: AtomicUsize,
+        waits: AtomicUsize,
+        stops: AtomicUsize,
+        identity_reads: AtomicUsize,
+        identities: Mutex<HashMap<u32, ProcessIdentity>>,
+    }
+
+    impl CountingDriver {
+        fn new(pid: u32) -> Self {
+            Self {
+                pid,
+                spawns: AtomicUsize::new(0),
+                waits: AtomicUsize::new(0),
+                stops: AtomicUsize::new(0),
+                identity_reads: AtomicUsize::new(0),
+                identities: Mutex::new(HashMap::new()),
+            }
+        }
+    }
+
+    impl RuntimeDriver for CountingDriver {
+        fn spawn(
+            &self,
+            _request: &StartRequest,
+            ownership_nonce: &str,
+        ) -> Result<ProcessIdentity, LocalRuntimeError> {
+            self.spawns.fetch_add(1, Ordering::SeqCst);
+            let identity = ProcessIdentity {
+                pid: self.pid,
+                process_started_at: format!("start-{}", self.pid),
+                ownership_nonce: ownership_nonce.into(),
+            };
+            self.identities
+                .lock()
+                .unwrap()
+                .insert(self.pid, identity.clone());
+            Ok(identity)
+        }
+
+        fn wait_ready(&self, _: u32, _: &StartRequest) -> Result<(), LocalRuntimeError> {
+            self.waits.fetch_add(1, Ordering::SeqCst);
+            Ok(())
+        }
+
+        fn stop(&self, pid: u32) -> Result<(), LocalRuntimeError> {
+            self.stops.fetch_add(1, Ordering::SeqCst);
+            self.identities.lock().unwrap().remove(&pid);
+            Ok(())
+        }
+
+        fn identity(&self, pid: u32) -> Result<Option<ProcessIdentity>, LocalRuntimeError> {
+            self.identity_reads.fetch_add(1, Ordering::SeqCst);
+            Ok(self.identities.lock().unwrap().get(&pid).cloned())
+        }
+    }
+
+    #[test]
+    fn stop_refuses_active_status_that_does_not_match_its_journal() {
+        let root = temp_root();
+        let driver = CountingDriver::new(41001);
+        let manager = LocalRuntimeManager::new(&root, driver);
+        let request = request(&root, "instance-a");
+        manager.start(request.clone()).unwrap();
+        let record = manager.journal.load("scope-a").unwrap().unwrap();
+        for mut mismatched in [
+            JournalRecord {
+                pid: 41002,
+                ..record.clone()
+            },
+            JournalRecord {
+                application_id: "other-app".into(),
+                ..record.clone()
+            },
+            JournalRecord {
+                sandbox_instance_id: "other-instance".into(),
+                ..record.clone()
+            },
+        ] {
+            mismatched.updated_at = Utc::now();
+            manager.journal.write(&mismatched).unwrap();
+            assert_eq!(
+                manager
+                    .stop("scope-a", &request.sandbox_instance_id)
+                    .unwrap_err()
+                    .code,
+                LocalRuntimeErrorCode::ReconcileIdentityMismatch
+            );
+        }
+        assert_eq!(manager.driver.stops.load(Ordering::SeqCst), 0);
+        assert_eq!(manager.driver.identity_reads.load(Ordering::SeqCst), 0);
         fs::remove_dir_all(root).unwrap();
     }
 

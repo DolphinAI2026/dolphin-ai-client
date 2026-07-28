@@ -32,13 +32,13 @@ fn packaged_agent_runtime_root(handle: &tauri::AppHandle) -> std::path::PathBuf 
 ///    (after kill the children get reparented to init and pgrep -P won't find them)
 /// 2. Kills the bootloader
 /// 3. Kills the collected children
-fn kill_sidecar_deep(bootloader_pid: u32) {
+fn kill_sidecar_deep(_bootloader_pid: u32) {
     #[cfg(unix)]
     {
         // Step 1: Collect children BEFORE killing the bootloader
         let mut child_pids: Vec<u32> = Vec::new();
         if let Ok(out) = std::process::Command::new("pgrep")
-            .args(["-P", &format!("{}", bootloader_pid)])
+            .args(["-P", &format!("{}", _bootloader_pid)])
             .output()
         {
             let output = String::from_utf8_lossy(&out.stdout);
@@ -50,7 +50,7 @@ fn kill_sidecar_deep(bootloader_pid: u32) {
         }
         // Step 2: Kill the bootloader itself
         let _ = std::process::Command::new("kill")
-            .args(["-KILL", &format!("{}", bootloader_pid)])
+            .args(["-KILL", &format!("{}", _bootloader_pid)])
             .status();
         // Step 3: Kill the children (e.g. uvicorn process spawned by PyInstaller)
         for child_pid in child_pids {
@@ -115,17 +115,13 @@ pub fn run() {
             let data_dir = handle.path().app_data_dir().expect("app_data_dir");
             std::fs::create_dir_all(&data_dir).ok();
             let agent_runtime_root = packaged_agent_runtime_root(&handle);
-            let appliance_bwrap = agent_runtime_root.join("bin").join("bwrap");
-            if appliance_bwrap.is_file() {
-                local_runtime::mxc_driver::configure_bubblewrap_from_appliance(&agent_runtime_root)
-                    .expect("failed to configure local runtime Bubblewrap");
-            }
             let local_runtime_manager =
                 local_runtime::api::LocalRuntimeApiServer::start(&data_dir, &agent_runtime_root)
                     .expect("failed to start local runtime manager");
             let local_runtime_manager_url = local_runtime_manager.base_url.clone();
             let local_runtime_manager_token = local_runtime_manager.token.clone();
-            let agent_runtime_path = agent_runtime_root.join("bin").join("agent-runtime");
+            let agent_runtime_path =
+                local_runtime::process_driver::agent_runtime_executable(&agent_runtime_root);
             handle.manage(LocalRuntimeManagerState(Mutex::new(Some(
                 local_runtime_manager,
             ))));

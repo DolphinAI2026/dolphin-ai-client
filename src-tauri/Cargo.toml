@@ -28,7 +28,6 @@ tauri-plugin-updater = "2"
 tauri-plugin-process = "2"
 tauri-plugin-dialog = "2"
 ureq = "2"
-mxc-sdk = { git = "https://github.com/microsoft/mxc.git", rev = "fd7e9061fabb5188955b79e8a26bd5e476e4d613", package = "mxc-sdk" }
 thiserror = "2"
 chrono = { version = "0.4", features = ["serde"] }
 libc = "0.2"

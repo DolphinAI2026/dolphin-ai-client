@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# 构建仅供 Linux MXC 本地运行时使用的受信任 appliance。
+# 构建 Linux 桌面本地运行时使用的受信任 appliance。
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -66,7 +66,6 @@ printf '[local-runtime-appliance] build agent-runtime\n'
 
 printf '[local-runtime-appliance] copy native Codex\n'
 cp -a "${CODEX_VENDOR}" "${APPLIANCE_DIR}/codex"
-cp -a "${CODEX_VENDOR}/codex-resources/bwrap" "${APPLIANCE_DIR}/bin/bwrap"
 
 printf '[local-runtime-appliance] copy agentic-coding runtime\n'
 mkdir -p "${APPLIANCE_DIR}/agentic-coding"
@@ -84,7 +83,6 @@ printf '[local-runtime-appliance] build offline agentic pack\n'
 
 printf '[local-runtime-appliance] validate Codex and pack reconcile\n'
 "${APPLIANCE_DIR}/codex/bin/codex" --version >/dev/null
-"${APPLIANCE_DIR}/bin/bwrap" --version >/dev/null
 test -x "${APPLIANCE_DIR}/agentic-coding/.venv/bin/python" ||
   fail "agentic-coding Python runtime is unavailable in appliance"
 TMP_CODEX_HOME="$(mktemp -d)"

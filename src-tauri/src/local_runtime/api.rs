@@ -2,7 +2,9 @@ use super::contract::{
     InstanceStatus, LocalRuntimeError, LocalRuntimeErrorCode, ReconcileResult, StartRequest,
 };
 use super::manager::{LocalRuntimeManager, RuntimeDriver};
-use super::mxc_driver::MxcRuntimeDriver;
+use super::process_driver::LocalProcessRuntimeDriver;
+#[cfg(test)]
+use super::process_driver::{READINESS_TIMEOUT, STOP_TIMEOUT};
 use std::io::Read;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -12,6 +14,7 @@ use std::time::Duration;
 use tiny_http::{Header, Method, Request, Response, Server, StatusCode};
 
 const MAX_REQUEST_BYTES: u64 = 64 * 1024;
+const INFLIGHT_DRAIN_TIMEOUT: Duration = Duration::from_secs(155);
 
 pub trait RuntimeManagerApi: Send + Sync {
     fn start(&self, request: StartRequest) -> Result<InstanceStatus, LocalRuntimeError>;
@@ -63,10 +66,11 @@ impl LocalRuntimeApiServer {
         data_root: impl Into<PathBuf>,
         appliance_root: impl Into<PathBuf>,
     ) -> Result<Self, LocalRuntimeError> {
-        let manager = Arc::new(LocalRuntimeManager::new(
-            data_root,
-            MxcRuntimeDriver::with_appliance_root(appliance_root),
-        ));
+        let manager: Arc<LocalRuntimeManager<LocalProcessRuntimeDriver>> =
+            Arc::new(LocalRuntimeManager::new(
+                data_root,
+                LocalProcessRuntimeDriver::with_appliance_root(appliance_root),
+            ));
         let _ = manager.reconcile();
         Self::start_with_manager(manager)
     }
@@ -128,12 +132,17 @@ impl LocalRuntimeApiServer {
     }
 
     pub fn shutdown(&mut self) {
+        self.shutdown_with_timeout(INFLIGHT_DRAIN_TIMEOUT);
+    }
+
+    fn shutdown_with_timeout(&mut self, timeout: Duration) {
         self.shutdown.store(true, Ordering::Relaxed);
         if let Some(worker) = self.worker.take() {
             let _ = worker.join();
         }
-        self.inflight.wait_for_drain(Duration::from_secs(35));
-        let _ = self.manager.reconcile();
+        if self.inflight.wait_for_drain(timeout) {
+            let _ = self.manager.reconcile();
+        }
     }
 }
 
@@ -158,14 +167,16 @@ impl InFlightRequests {
         InFlightGuard(self.clone())
     }
 
-    fn wait_for_drain(&self, timeout: Duration) {
+    fn wait_for_drain(&self, timeout: Duration) -> bool {
         let count = self
             .count
             .lock()
             .expect("in-flight request lock is poisoned");
-        let _ = self
+        let (count, _) = self
             .drained
-            .wait_timeout_while(count, timeout, |count| *count > 0);
+            .wait_timeout_while(count, timeout, |count| *count > 0)
+            .expect("in-flight request lock is poisoned while draining");
+        *count == 0
     }
 }
 
@@ -315,6 +326,7 @@ mod tests {
     #[derive(Default)]
     struct FakeManager {
         status: Mutex<Option<InstanceStatus>>,
+        reconciles: std::sync::atomic::AtomicUsize,
     }
 
     impl RuntimeManagerApi for FakeManager {
@@ -351,6 +363,7 @@ mod tests {
         }
 
         fn reconcile(&self) -> Vec<ReconcileResult> {
+            self.reconciles.fetch_add(1, Ordering::SeqCst);
             Vec::new()
         }
     }
@@ -417,5 +430,28 @@ mod tests {
         status.into_reader().read_to_string(&mut body).unwrap();
         let body: serde_json::Value = serde_json::from_str(&body).unwrap();
         assert_eq!(body["sandbox_instance_id"], "instance-a");
+        assert!(body.get(&["runtime", "mode"].join("_")).is_none());
+    }
+
+    #[test]
+    fn shutdown_drain_models_one_readiness_and_stop_deadline() {
+        assert_eq!(
+            INFLIGHT_DRAIN_TIMEOUT,
+            READINESS_TIMEOUT + STOP_TIMEOUT + Duration::from_secs(30)
+        );
+    }
+
+    #[test]
+    fn shutdown_does_not_reconcile_while_a_request_is_still_in_flight() {
+        let manager = Arc::new(FakeManager::default());
+        let mut server = LocalRuntimeApiServer::start_with_manager(manager.clone()).unwrap();
+        let guard = server.inflight.enter();
+
+        server.shutdown_with_timeout(Duration::ZERO);
+        assert_eq!(manager.reconciles.load(Ordering::SeqCst), 0);
+
+        drop(guard);
+        server.shutdown_with_timeout(Duration::ZERO);
+        assert_eq!(manager.reconciles.load(Ordering::SeqCst), 1);
     }
 }
