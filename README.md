@@ -221,6 +221,13 @@ DOLPHIN_CODE_BUILDER_URL=http://127.0.0.1:5173/builder/ # 可选，本地 runtim
 DOLPHIN_CODE_DEFAULT_SEED_PROJECT_ID=<seed-project-id>
 ```
 
+每个客户实例只配置一种登录模式，登录页和管理端不提供运行时切换入口：
+
+- `AUTH_PROVIDER=control_plane`：默认模式，使用 Control Plane 账号登录。
+- `AUTH_PROVIDER=apaas`：使用 aPaaS 账号登录，并需要配置对应的 `APAAS_BASE_URL`。
+
+修改 `AUTH_PROVIDER` 后需要重启后端 Pod、容器或进程，后续登录请求才会使用新的认证源；已经签发的 Builder 会话不会立即失效。Control Plane 模式下，用户仍可单独绑定 aPaaS 账号访问租户、应用和低代码能力，该绑定不会增加第二个登录入口，也不会改变 `AUTH_PROVIDER`。
+
 Control Plane 服务端还必须配置
 `CONTROL_PLANE_AUTH_FULL_WORKSPACE_BASE_URL=https://dolphin.dfy.definesys.cn`，
 否则它无法校验 Builder 转发的 Dolphin 用户 Token。
