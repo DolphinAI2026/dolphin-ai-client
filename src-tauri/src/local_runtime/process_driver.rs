@@ -1262,9 +1262,11 @@ where
     let environment = filtered_environment(request, ownership_nonce)?;
     #[cfg(target_os = "windows")]
     {
+        let system_proxy = windows_system_proxy();
         return windows_runtime_environment(
             environment,
             host_environment,
+            system_proxy.as_deref(),
             &request.codex_home,
             &request.runtime_dir,
         );
@@ -1307,10 +1309,75 @@ fn mapped_environment_key(key: &str) -> Option<&'static str> {
     }
 }
 
+#[cfg(target_os = "windows")]
+fn windows_system_proxy() -> Option<String> {
+    use std::net::{Ipv4Addr, SocketAddr, TcpStream};
+    use winreg::enums::HKEY_CURRENT_USER;
+    use winreg::RegKey;
+
+    let internet_settings = RegKey::predef(HKEY_CURRENT_USER)
+        .open_subkey("Software\\Microsoft\\Windows\\CurrentVersion\\Internet Settings")
+        .ok()?;
+    let proxy_server: String = internet_settings.get_value("ProxyServer").ok()?;
+    let proxy_url = normalize_windows_proxy(&proxy_server)?;
+    let proxy_enabled = internet_settings
+        .get_value::<u32, _>("ProxyEnable")
+        .unwrap_or_default()
+        != 0;
+    if proxy_enabled {
+        return Some(proxy_url);
+    }
+
+    let authority = proxy_url
+        .split_once("://")
+        .map(|(_, value)| value)
+        .unwrap_or(proxy_url.as_str())
+        .split('/')
+        .next()?;
+    let (host, port) = authority.rsplit_once(':')?;
+    if !matches!(
+        host.trim_matches(['[', ']']),
+        "127.0.0.1" | "localhost" | "::1"
+    ) {
+        return None;
+    }
+    let address = SocketAddr::from((Ipv4Addr::LOCALHOST, port.parse::<u16>().ok()?));
+    TcpStream::connect_timeout(&address, Duration::from_millis(150))
+        .ok()
+        .map(|_| proxy_url)
+}
+
+#[cfg(any(target_os = "windows", test))]
+fn normalize_windows_proxy(value: &str) -> Option<String> {
+    let value = value.trim();
+    if value.is_empty() || value.chars().any(char::is_control) {
+        return None;
+    }
+    let selected = if value.contains(';') {
+        ["https", "http", "socks"].into_iter().find_map(|scheme| {
+            value.split(';').find_map(|entry| {
+                let (key, target) = entry.split_once('=')?;
+                (key.trim().eq_ignore_ascii_case(scheme)).then(|| target.trim())
+            })
+        })?
+    } else {
+        value
+    };
+    if selected.is_empty() || selected.chars().any(char::is_whitespace) {
+        return None;
+    }
+    if selected.contains("://") {
+        Some(selected.to_string())
+    } else {
+        Some(format!("http://{selected}"))
+    }
+}
+
 #[cfg(any(target_os = "windows", test))]
 fn windows_runtime_environment<I>(
     runtime_environment: Vec<(String, String)>,
     host_environment: I,
+    system_proxy: Option<&str>,
     runtime_home: &Path,
     runtime_temp: &Path,
 ) -> Result<Vec<(String, String)>, LocalRuntimeError>
@@ -1361,6 +1428,36 @@ where
     );
     environment.insert("TEMP".to_string(), runtime_temp.clone());
     environment.insert("TMP".to_string(), runtime_temp);
+
+    for key in ["HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY"] {
+        if let Some(value) = host.get(key).filter(|value| !value.is_empty()) {
+            environment.insert(key.to_string(), value.clone());
+        }
+    }
+    let fallback_proxy = environment
+        .get("HTTPS_PROXY")
+        .or_else(|| environment.get("HTTP_PROXY"))
+        .or_else(|| environment.get("ALL_PROXY"))
+        .cloned()
+        .or_else(|| system_proxy.map(str::to_string));
+    if let Some(proxy) = fallback_proxy {
+        environment
+            .entry("HTTP_PROXY".to_string())
+            .or_insert_with(|| proxy.clone());
+        environment
+            .entry("HTTPS_PROXY".to_string())
+            .or_insert(proxy);
+    }
+    let mut no_proxy = host.get("NO_PROXY").cloned().unwrap_or_default();
+    for local_host in ["127.0.0.1", "localhost", "::1"] {
+        if !no_proxy.split(',').any(|entry| entry.trim() == local_host) {
+            if !no_proxy.is_empty() {
+                no_proxy.push(',');
+            }
+            no_proxy.push_str(local_host);
+        }
+    }
+    environment.insert("NO_PROXY".to_string(), no_proxy);
 
     for (key, value) in runtime_environment {
         if key.is_empty() || value.contains('\0') {
@@ -1776,6 +1873,10 @@ mod tests {
 
     #[test]
     fn windows_environment_keeps_bootstrap_and_runtime_paths_controlled() {
+        assert_eq!(
+            normalize_windows_proxy("http=127.0.0.1:7897;https=127.0.0.1:7897"),
+            Some("http://127.0.0.1:7897".to_string())
+        );
         let environment = windows_runtime_environment(
             vec![("DOLPHIN_CODE_RUNTIME_ADDR".into(), "127.0.0.1:41001".into())],
             vec![
@@ -1783,6 +1884,7 @@ mod tests {
                 ("ComSpec".into(), "C:\\Windows\\System32\\cmd.exe".into()),
                 ("Path".into(), "C:\\Windows\\System32".into()),
             ],
+            Some("http://127.0.0.1:7897"),
             Path::new("C:\\runtime\\codex-home"),
             Path::new("C:\\runtime\\instance"),
         )
@@ -1805,7 +1907,14 @@ mod tests {
             environment.get("DOLPHIN_CODE_RUNTIME_ADDR"),
             Some(&"127.0.0.1:41001".to_string())
         );
-        assert!(!environment.contains_key("HTTPS_PROXY"));
+        assert_eq!(
+            environment.get("HTTPS_PROXY"),
+            Some(&"http://127.0.0.1:7897".to_string())
+        );
+        assert_eq!(
+            environment.get("NO_PROXY"),
+            Some(&"127.0.0.1,localhost,::1".to_string())
+        );
     }
 
     #[test]
@@ -1820,6 +1929,7 @@ mod tests {
                 ("ComSpec".into(), "C:\\Windows\\System32\\cmd.exe".into()),
                 ("Path".into(), "C:\\Windows\\System32".into()),
             ],
+            None,
             Path::new("C:\\runtime\\codex-home"),
             Path::new("C:\\runtime\\instance"),
         )

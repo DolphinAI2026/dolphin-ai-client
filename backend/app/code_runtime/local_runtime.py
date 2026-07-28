@@ -11,6 +11,7 @@ import secrets
 import socket
 import stat
 import time
+import tomllib
 import uuid
 from collections.abc import Callable
 from datetime import datetime
@@ -23,6 +24,7 @@ from fastapi import HTTPException
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app import runtime
 from app.engineering_sessions.git_state import GitCommandError, git, git_common_dir
 from app.engineering_sessions.service import EngineeringSessionService
 from app.models import Application, RegisteredWorkspace
@@ -994,11 +996,93 @@ def _provider_identity(model: Any) -> tuple[str, str, str]:
     return provider, base_url, token
 
 
+def _host_codex_provider_document() -> tuple[dict[str, Any], tuple[str, str, str]] | None:
+    if not runtime.is_desktop():
+        return None
+    if _text(os.getenv("DOLPHIN_CODE_HOST_CODEX_PROVIDER", "1")).lower() in {
+        "0",
+        "false",
+        "no",
+        "off",
+    }:
+        return None
+
+    configured_home = _text(os.getenv("DOLPHIN_CODE_HOST_CODEX_HOME"))
+    home = configured_home or _text(os.getenv("USERPROFILE")) or _text(os.getenv("HOME"))
+    if not home:
+        return None
+    codex_home = Path(home) if configured_home else Path(home) / ".codex"
+    config_path = codex_home / "config.toml"
+    auth_path = codex_home / "auth.json"
+
+    try:
+        config = tomllib.loads(config_path.read_text(encoding="utf-8"))
+        auth = json.loads(auth_path.read_text(encoding="utf-8"))
+    except (OSError, ValueError, tomllib.TOMLDecodeError, json.JSONDecodeError):
+        return None
+    if not isinstance(config, dict) or not isinstance(auth, dict):
+        return None
+
+    provider_name = _text(config.get("model_provider"))
+    model_name = _text(config.get("model"))
+    providers = config.get("model_providers")
+    if not provider_name or not model_name or not isinstance(providers, dict):
+        return None
+    provider_config = providers.get(provider_name)
+    if not isinstance(provider_config, dict):
+        return None
+
+    base_url = _text(provider_config.get("base_url"))
+    env_key = _text(provider_config.get("env_key"))
+    token = _text(os.getenv(env_key)) if env_key else ""
+    token = token or _text(auth.get("OPENAI_API_KEY"))
+    provider_view = type(
+        "HostCodexProvider",
+        (),
+        {
+            "provider": "openai",
+            "base_url": base_url,
+            "api_key": token,
+            "model": model_name,
+        },
+    )()
+    try:
+        identity = _provider_identity(provider_view)
+    except HTTPException:
+        return None
+
+    provider_fingerprint = hashlib.sha256(
+        "\x00".join(identity).encode("utf-8")
+    ).hexdigest()[:20]
+    provider_id = f"host.{provider_fingerprint}"
+    return (
+        {
+            "defaultProviderId": provider_id,
+            "providers": [
+                {
+                    "providerId": provider_id,
+                    "providerType": "openai-compatible",
+                    "runtimeProviderKind": "openai",
+                    "apiBaseUrl": identity[1],
+                    "token": identity[2],
+                    "defaultModel": model_name,
+                    "models": [{"id": model_name, "displayName": model_name}],
+                }
+            ],
+        },
+        identity,
+    )
+
+
 async def _provider_document(
     db: AsyncSession,
     tenant_id: int,
     selected_config_id: int | None,
 ) -> tuple[dict[str, Any], tuple[str, str, str]]:
+    host_codex_provider = _host_codex_provider_document()
+    if host_codex_provider is not None:
+        return host_codex_provider
+
     from app.crypto import decrypt_password
     from app.harness.llm_resolver import resolve_llm_config
     from app.routes.llm_configs import list_llm_configs_for_purpose

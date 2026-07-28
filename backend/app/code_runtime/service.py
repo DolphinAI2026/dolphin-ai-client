@@ -13,7 +13,7 @@ from uuid import NAMESPACE_URL, uuid4, uuid5
 import httpx
 from fastapi import HTTPException
 from jose import JWTError, jwt
-from sqlalchemy import select
+from sqlalchemy import delete, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import settings
@@ -1132,6 +1132,15 @@ async def open_code_session(
         )
         db.add(binding)
 
+    previous_sandbox_instance_id = str(binding.sandbox_instance_id or "").strip()
+    opened_sandbox_instance_id = str(opened.get("sandboxInstanceId") or "").strip()
+    desktop_runtime_instance_changed = bool(
+        desktop_runtime
+        and previous_sandbox_instance_id
+        and opened_sandbox_instance_id
+        and previous_sandbox_instance_id != opened_sandbox_instance_id
+    )
+
     binding.tenant_id = session.tenant_id
     binding.control_plane_tenant_id = session.control_plane_tenant_id
     binding.user_id = session.user_id
@@ -1140,11 +1149,21 @@ async def open_code_session(
     binding.runtime_base_url = runtime_base_url
     binding.builder_url = clean_builder_url
     binding.workspace_id = opened.get("workspaceId") or binding.workspace_id
-    binding.sandbox_instance_id = opened.get("sandboxInstanceId") or binding.sandbox_instance_id
+    binding.sandbox_instance_id = opened_sandbox_instance_id or binding.sandbox_instance_id
     if desktop_runtime:
         if not desktop_entry_token:
             raise HTTPException(status_code=503, detail="本地 Runtime entry token 不可用")
-        current_runtime_session_id = str(binding.runtime_session_id or "").strip()
+        if desktop_runtime_instance_changed:
+            await db.execute(
+                delete(CodeRuntimeAgentSession).where(
+                    CodeRuntimeAgentSession.session_id == session.id
+                )
+            )
+        current_runtime_session_id = (
+            ""
+            if desktop_runtime_instance_changed
+            else str(binding.runtime_session_id or "").strip()
+        )
         runtime_session_id = (
             current_runtime_session_id
             if current_runtime_session_id
@@ -1153,6 +1172,7 @@ async def open_code_session(
                 desktop_entry_token,
             )
         )
+        binding.runtime_session_id = runtime_session_id
     if runtime_session_id:
         current_runtime_session_id = str(binding.runtime_session_id or "").strip()
         current_is_scoped = False
