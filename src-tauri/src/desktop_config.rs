@@ -1,9 +1,11 @@
 use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
 #[cfg(unix)]
 use std::fs::File;
 use std::fs::{self, OpenOptions};
 use std::io::Write;
-use std::path::{Path, PathBuf};
+use std::path::{Component, Path, PathBuf};
+use std::sync::{Arc, Mutex, OnceLock, Weak};
 use std::time::{SystemTime, UNIX_EPOCH};
 use tauri::Url;
 
@@ -11,6 +13,10 @@ pub const CONTROL_PLANE_DEFAULT_URL: &str = "https://om-demo.dfy.definesys.cn";
 pub const APAAS_DEFAULT_URL: &str = "https://apaas-trial.definesys.cn/backend";
 
 const DESKTOP_CONFIG_SCHEMA_VERSION: u32 = 1;
+
+type TransactionLock = Arc<Mutex<()>>;
+
+static TRANSACTION_LOCKS: OnceLock<Mutex<HashMap<String, Weak<Mutex<()>>>>> = OnceLock::new();
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
@@ -104,16 +110,24 @@ impl DesktopConfigError {
 #[derive(Debug, Clone)]
 pub struct DesktopConfigStore {
     system_data_dir: PathBuf,
+    transaction_lock: TransactionLock,
 }
 
 impl DesktopConfigStore {
     pub fn new(system_data_dir: impl Into<PathBuf>) -> Self {
+        let system_data_dir = system_data_dir.into();
         Self {
-            system_data_dir: system_data_dir.into(),
+            transaction_lock: shared_transaction_lock(&system_data_dir),
+            system_data_dir,
         }
     }
 
     pub fn load(&self) -> Result<Option<SavedDesktopConfig>, DesktopConfigError> {
+        let _transaction_guard = self
+            .transaction_lock
+            .lock()
+            .map_err(|_| DesktopConfigError::invalid("桌面配置事务锁不可用"))?;
+        let system_data_identity = resolve_path_for_comparison(&self.system_data_dir)?;
         let bootstrap_path = self.system_data_dir.join("bootstrap.json");
         if !bootstrap_path.try_exists().map_err(|error| {
             DesktopConfigError::invalid(format!("无法检查桌面启动配置: {error}"))
@@ -130,13 +144,21 @@ impl DesktopConfigStore {
         if !root_dir.is_absolute() {
             return Err(DesktopConfigError::invalid("桌面根目录必须是绝对路径"));
         }
+        let root_identity = fs::canonicalize(&root_dir).map_err(|error| {
+            DesktopConfigError::invalid(format!("无法规范化桌面根目录: {error}"))
+        })?;
+        if !paths_equal(&root_identity, &root_dir) {
+            return Err(DesktopConfigError::invalid("桌面根目录不是规范化路径"));
+        }
+        ensure_storage_roots_are_disjoint(&root_identity, &system_data_identity)?;
 
-        let paths = DesktopPaths::from_root(root_dir.clone());
+        let paths = DesktopPaths::from_root(root_identity.clone());
+        reject_existing_links_in_derived_paths(&paths)?;
         let mut config: DesktopConfig = read_json(&paths.config_path)?;
         if config.schema_version != DESKTOP_CONFIG_SCHEMA_VERSION {
             return Err(DesktopConfigError::invalid("桌面根配置版本不受支持"));
         }
-        if !config.root_dir.is_absolute() || config.root_dir != root_dir {
+        if !config.root_dir.is_absolute() || !paths_equal(&config.root_dir, &root_identity) {
             return Err(DesktopConfigError::invalid(
                 "桌面根配置与启动配置中的根目录不一致",
             ));
@@ -147,6 +169,10 @@ impl DesktopConfigStore {
     }
 
     pub fn save(&self, input: DesktopSetupInput) -> Result<SavedDesktopConfig, DesktopConfigError> {
+        let _transaction_guard = self
+            .transaction_lock
+            .lock()
+            .map_err(|_| DesktopConfigError::invalid("桌面配置事务锁不可用"))?;
         let requested_root = PathBuf::from(input.root_dir.trim());
         if requested_root.as_os_str().is_empty() || !requested_root.is_absolute() {
             return Err(DesktopConfigError::invalid("桌面根目录必须是绝对路径"));
@@ -157,12 +183,19 @@ impl DesktopConfigStore {
             base_url: normalize_login_url(&input.login.base_url)?,
         };
 
+        let requested_root_identity = resolve_path_for_comparison(&requested_root)?;
+        let system_data_identity = resolve_path_for_comparison(&self.system_data_dir)?;
+        ensure_storage_roots_are_disjoint(&requested_root_identity, &system_data_identity)?;
+
         fs::create_dir_all(&requested_root)
             .map_err(|error| DesktopConfigError::invalid(format!("无法创建桌面根目录: {error}")))?;
         let root_dir = fs::canonicalize(&requested_root).map_err(|error| {
             DesktopConfigError::invalid(format!("无法规范化桌面根目录: {error}"))
         })?;
+        let system_data_identity = resolve_path_for_comparison(&self.system_data_dir)?;
+        ensure_storage_roots_are_disjoint(&root_dir, &system_data_identity)?;
         let paths = DesktopPaths::from_root(root_dir.clone());
+        reject_existing_links_in_derived_paths(&paths)?;
 
         for path in [
             &paths.applications_dir,
@@ -175,6 +208,7 @@ impl DesktopConfigStore {
                 DesktopConfigError::invalid(format!("无法创建桌面目录 {}: {error}", path.display()))
             })?;
         }
+        validate_resolved_derived_directories(&paths, &system_data_identity)?;
 
         verify_root_is_writable(&root_dir)?;
 
@@ -195,6 +229,37 @@ impl DesktopConfigStore {
         atomic_write_json(&self.system_data_dir.join("bootstrap.json"), &pointer)?;
 
         Ok(SavedDesktopConfig { config, paths })
+    }
+}
+
+fn shared_transaction_lock(system_data_dir: &Path) -> TransactionLock {
+    let key = transaction_lock_key(system_data_dir);
+    let registry = TRANSACTION_LOCKS.get_or_init(|| Mutex::new(HashMap::new()));
+    let mut registry = registry
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    registry.retain(|_, lock| lock.strong_count() > 0);
+    if let Some(lock) = registry.get(&key).and_then(Weak::upgrade) {
+        return lock;
+    }
+
+    let lock = Arc::new(Mutex::new(()));
+    registry.insert(key, Arc::downgrade(&lock));
+    lock
+}
+
+fn transaction_lock_key(system_data_dir: &Path) -> String {
+    let resolved = resolve_path_for_comparison(system_data_dir)
+        .or_else(|_| normalize_absolute_path(system_data_dir))
+        .unwrap_or_else(|_| system_data_dir.to_path_buf());
+    let key = resolved.as_os_str().to_string_lossy().into_owned();
+    #[cfg(windows)]
+    {
+        key.to_ascii_lowercase()
+    }
+    #[cfg(not(windows))]
+    {
+        key
     }
 }
 
@@ -229,6 +294,240 @@ fn root_dir_to_string(root_dir: &Path) -> Result<String, DesktopConfigError> {
         .to_str()
         .map(str::to_owned)
         .ok_or_else(|| DesktopConfigError::invalid("桌面根目录必须是有效 UTF-8 路径"))
+}
+
+fn resolve_path_for_comparison(path: &Path) -> Result<PathBuf, DesktopConfigError> {
+    let normalized = normalize_absolute_path(path)?;
+    let mut existing = normalized.clone();
+    let mut missing = Vec::new();
+
+    loop {
+        match fs::symlink_metadata(&existing) {
+            Ok(_) => {
+                let mut resolved = fs::canonicalize(&existing).map_err(|error| {
+                    DesktopConfigError::invalid(format!(
+                        "无法解析路径 {}: {error}",
+                        existing.display()
+                    ))
+                })?;
+                for component in missing.iter().rev() {
+                    resolved.push(component);
+                }
+                return normalize_absolute_path(&resolved);
+            }
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                let component = existing.file_name().ok_or_else(|| {
+                    DesktopConfigError::invalid(format!(
+                        "无法找到路径 {} 的现存祖先",
+                        normalized.display()
+                    ))
+                })?;
+                missing.push(component.to_os_string());
+                if !existing.pop() {
+                    return Err(DesktopConfigError::invalid(format!(
+                        "无法解析路径 {}",
+                        normalized.display()
+                    )));
+                }
+            }
+            Err(error) => {
+                return Err(DesktopConfigError::invalid(format!(
+                    "无法检查路径 {}: {error}",
+                    existing.display()
+                )))
+            }
+        }
+    }
+}
+
+fn normalize_absolute_path(path: &Path) -> Result<PathBuf, DesktopConfigError> {
+    if !path.is_absolute() {
+        return Err(DesktopConfigError::invalid("桌面路径必须是绝对路径"));
+    }
+
+    let mut normalized = PathBuf::new();
+    for component in path.components() {
+        match component {
+            Component::Prefix(_) | Component::RootDir | Component::Normal(_) => {
+                normalized.push(component.as_os_str());
+            }
+            Component::CurDir => {}
+            Component::ParentDir => {
+                if !normalized.pop() {
+                    return Err(DesktopConfigError::invalid(
+                        "桌面路径不能越过文件系统根目录",
+                    ));
+                }
+            }
+        }
+    }
+    Ok(normalized)
+}
+
+fn ensure_storage_roots_are_disjoint(
+    root_dir: &Path,
+    system_data_dir: &Path,
+) -> Result<(), DesktopConfigError> {
+    if path_starts_with(root_dir, system_data_dir) || path_starts_with(system_data_dir, root_dir) {
+        return Err(DesktopConfigError::invalid(
+            "桌面根目录与系统应用数据目录不能重叠",
+        ));
+    }
+    Ok(())
+}
+
+fn reject_existing_links_in_derived_paths(paths: &DesktopPaths) -> Result<(), DesktopConfigError> {
+    for path in [
+        &paths.applications_dir,
+        &paths.data_dir,
+        &paths.runtime_dir,
+        &paths.sessions_dir,
+        &paths.cache_dir,
+        &paths.logs_dir,
+        &paths.config_path,
+    ] {
+        reject_existing_links_below_root(&paths.root_dir, path)?;
+    }
+    Ok(())
+}
+
+fn reject_existing_links_below_root(
+    root_dir: &Path,
+    target: &Path,
+) -> Result<(), DesktopConfigError> {
+    let relative = target.strip_prefix(root_dir).map_err(|_| {
+        DesktopConfigError::invalid(format!("桌面派生路径不在根目录内: {}", target.display()))
+    })?;
+    let mut current = root_dir.to_path_buf();
+    for component in relative.components() {
+        current.push(component.as_os_str());
+        match fs::symlink_metadata(&current) {
+            Ok(_) => {
+                if path_is_link_or_reparse_point(&current).map_err(|error| {
+                    DesktopConfigError::invalid(format!(
+                        "无法检查桌面派生路径 {}: {error}",
+                        current.display()
+                    ))
+                })? {
+                    return Err(DesktopConfigError::invalid(format!(
+                        "桌面派生路径不能包含链接或 reparse point: {}",
+                        current.display()
+                    )));
+                }
+            }
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => break,
+            Err(error) => {
+                return Err(DesktopConfigError::invalid(format!(
+                    "无法检查桌面派生路径 {}: {error}",
+                    current.display()
+                )))
+            }
+        }
+    }
+    Ok(())
+}
+
+fn validate_resolved_derived_directories(
+    paths: &DesktopPaths,
+    system_data_dir: &Path,
+) -> Result<(), DesktopConfigError> {
+    for path in [
+        &paths.applications_dir,
+        &paths.data_dir,
+        &paths.runtime_dir,
+        &paths.sessions_dir,
+        &paths.cache_dir,
+        &paths.logs_dir,
+    ] {
+        let resolved = fs::canonicalize(path).map_err(|error| {
+            DesktopConfigError::invalid(format!(
+                "无法规范化桌面派生目录 {}: {error}",
+                path.display()
+            ))
+        })?;
+        if paths_equal(&resolved, &paths.root_dir)
+            || !path_starts_with(&resolved, &paths.root_dir)
+            || path_starts_with(&resolved, system_data_dir)
+            || path_starts_with(system_data_dir, &resolved)
+        {
+            return Err(DesktopConfigError::invalid(format!(
+                "桌面派生目录越过允许的数据边界: {}",
+                path.display()
+            )));
+        }
+    }
+    Ok(())
+}
+
+#[cfg(not(windows))]
+fn paths_equal(left: &Path, right: &Path) -> bool {
+    left == right
+}
+
+#[cfg(windows)]
+fn paths_equal(left: &Path, right: &Path) -> bool {
+    let mut left = left.components();
+    let mut right = right.components();
+    loop {
+        match (left.next(), right.next()) {
+            (Some(left), Some(right))
+                if left
+                    .as_os_str()
+                    .to_string_lossy()
+                    .eq_ignore_ascii_case(&right.as_os_str().to_string_lossy()) => {}
+            (None, None) => return true,
+            _ => return false,
+        }
+    }
+}
+
+#[cfg(not(windows))]
+fn path_starts_with(path: &Path, base: &Path) -> bool {
+    path.starts_with(base)
+}
+
+#[cfg(windows)]
+fn path_starts_with(path: &Path, base: &Path) -> bool {
+    let mut path = path.components();
+    for base_component in base.components() {
+        let Some(path_component) = path.next() else {
+            return false;
+        };
+        if !path_component
+            .as_os_str()
+            .to_string_lossy()
+            .eq_ignore_ascii_case(&base_component.as_os_str().to_string_lossy())
+        {
+            return false;
+        }
+    }
+    true
+}
+
+#[cfg(unix)]
+fn path_is_link_or_reparse_point(path: &Path) -> std::io::Result<bool> {
+    Ok(fs::symlink_metadata(path)?.file_type().is_symlink())
+}
+
+#[cfg(windows)]
+fn path_is_link_or_reparse_point(path: &Path) -> std::io::Result<bool> {
+    use std::os::windows::ffi::OsStrExt;
+    use windows_sys::Win32::Storage::FileSystem::{
+        GetFileAttributesW, FILE_ATTRIBUTE_REPARSE_POINT, INVALID_FILE_ATTRIBUTES,
+    };
+
+    let path: Vec<u16> = path.as_os_str().encode_wide().chain(Some(0)).collect();
+    let attributes = unsafe { GetFileAttributesW(path.as_ptr()) };
+    if attributes == INVALID_FILE_ATTRIBUTES {
+        Err(std::io::Error::last_os_error())
+    } else {
+        Ok(attributes & FILE_ATTRIBUTE_REPARSE_POINT != 0)
+    }
+}
+
+#[cfg(not(any(unix, windows)))]
+fn path_is_link_or_reparse_point(path: &Path) -> std::io::Result<bool> {
+    Ok(fs::symlink_metadata(path)?.file_type().is_symlink())
 }
 
 fn verify_root_is_writable(root_dir: &Path) -> Result<(), DesktopConfigError> {
@@ -331,6 +630,8 @@ mod tests {
     use serde_json::json;
     use std::fs;
     use std::path::PathBuf;
+    use std::sync::{mpsc, Barrier};
+    use std::thread;
     use std::time::{SystemTime, UNIX_EPOCH};
 
     fn unique_test_dir(label: &str) -> PathBuf {
@@ -529,5 +830,128 @@ mod tests {
         assert_eq!(error.code, "DESKTOP_SETUP_CONFIG_INVALID");
         assert!(!temp.join("system/bootstrap.json").exists());
         fs::remove_dir_all(temp).unwrap();
+    }
+
+    #[test]
+    fn save_rejects_root_and_system_data_overlap_before_creating_derived_directories() {
+        for (label, root_from_temp, system_from_temp) in [
+            ("same", "system", "system"),
+            ("root-inside-system", "system/DolphinCode", "system"),
+            (
+                "system-inside-root",
+                "DolphinCode",
+                "DolphinCode/.appdata/system",
+            ),
+        ] {
+            let temp = unique_test_dir(label);
+            let root = temp.join(root_from_temp);
+            let system_data = temp.join(system_from_temp);
+            let result = DesktopConfigStore::new(system_data.clone()).save(DesktopSetupInput {
+                root_dir: root.to_string_lossy().into_owned(),
+                login: DesktopLoginConfig {
+                    mode: DesktopLoginMode::ControlPlane,
+                    base_url: CONTROL_PLANE_DEFAULT_URL.to_string(),
+                },
+            });
+            let applications_created = root.join("applications").exists();
+            let data_created = root.join(".appdata").exists();
+            let bootstrap_created = system_data.join("bootstrap.json").exists();
+            let _ = fs::remove_dir_all(&temp);
+
+            let error = result.expect_err(label);
+            assert_eq!(error.code, "DESKTOP_SETUP_CONFIG_INVALID", "{label}");
+            assert!(!applications_created, "{label}");
+            assert!(!data_created, "{label}");
+            assert!(!bootstrap_created, "{label}");
+        }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn save_rejects_existing_appdata_symlink_before_following_it() {
+        let temp = unique_test_dir("appdata-symlink");
+        let root = temp.join("DolphinCode");
+        let external = temp.join("external-data");
+        let system_data = temp.join("system");
+        fs::create_dir_all(&root).unwrap();
+        fs::create_dir_all(&external).unwrap();
+        std::os::unix::fs::symlink(&external, root.join(".appdata")).unwrap();
+
+        let result = DesktopConfigStore::new(system_data.clone()).save(DesktopSetupInput {
+            root_dir: root.to_string_lossy().into_owned(),
+            login: DesktopLoginConfig {
+                mode: DesktopLoginMode::ControlPlane,
+                base_url: CONTROL_PLANE_DEFAULT_URL.to_string(),
+            },
+        });
+        let external_runtime_created = external.join("runtime").exists();
+        let bootstrap_created = system_data.join("bootstrap.json").exists();
+        let _ = fs::remove_dir_all(&temp);
+
+        let error = result.expect_err("an existing .appdata symlink must be rejected");
+        assert_eq!(error.code, "DESKTOP_SETUP_CONFIG_INVALID");
+        assert!(!external_runtime_created);
+        assert!(!bootstrap_created);
+    }
+
+    #[test]
+    fn concurrent_saves_finish_with_the_last_successful_configuration_loadable() {
+        let temp = unique_test_dir("concurrent-save");
+        let system_data = temp.join("system");
+        let root = temp.join("DolphinCode");
+        let store = DesktopConfigStore::new(system_data.clone());
+        let independent_store = DesktopConfigStore::new(system_data);
+        let mut mismatch = None;
+
+        for round in 0..64 {
+            let barrier = Arc::new(Barrier::new(3));
+            let (sender, receiver) = mpsc::channel();
+            let mut handles = Vec::new();
+
+            for ((writer, mode), store) in [
+                ("control", DesktopLoginMode::ControlPlane),
+                ("apaas", DesktopLoginMode::Apaas),
+            ]
+            .into_iter()
+            .zip([store.clone(), independent_store.clone()])
+            {
+                let root = root.clone();
+                let barrier = barrier.clone();
+                let sender = sender.clone();
+                handles.push(thread::spawn(move || {
+                    barrier.wait();
+                    let saved = store
+                        .save(DesktopSetupInput {
+                            root_dir: root.to_string_lossy().into_owned(),
+                            login: DesktopLoginConfig {
+                                mode,
+                                base_url: format!("https://example.com/{writer}/{round}"),
+                            },
+                        })
+                        .unwrap();
+                    sender.send(saved.config).unwrap();
+                }));
+            }
+
+            barrier.wait();
+            drop(sender);
+            let _first_completed = receiver.recv().unwrap();
+            let last_completed = receiver.recv().unwrap();
+            for handle in handles {
+                handle.join().unwrap();
+            }
+
+            let loaded = store.load().unwrap().unwrap();
+            if loaded.config != last_completed {
+                mismatch = Some((round, last_completed, loaded.config));
+                break;
+            }
+        }
+
+        let _ = fs::remove_dir_all(&temp);
+        assert!(
+            mismatch.is_none(),
+            "last successful save was not durable: {mismatch:?}"
+        );
     }
 }
