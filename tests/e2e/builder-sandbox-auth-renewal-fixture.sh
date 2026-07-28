@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
 set -euo pipefail
+umask 077
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 RUNTIME_REPO="${AGENT_RUNTIME_REPO:?AGENT_RUNTIME_REPO is required}"
@@ -18,6 +19,8 @@ BUILDER_LOG="${TMP_DIR}/builder.log"
 RUNTIME_READY="${TMP_DIR}/runtime.json"
 DB_PATH="${TMP_DIR}/builder.db"
 BROWSER_SECRET_EVIDENCE="${TMP_DIR}/browser-secrets.json"
+CP_SECRET_EVIDENCE="${TMP_DIR}/control-plane-secrets.json"
+BUILDER_SECRET_EVIDENCE="${TMP_DIR}/builder-secrets.json"
 runtime_pid=""
 cp_pid=""
 builder_pid=""
@@ -27,13 +30,20 @@ dump_logs() {
   if [[ "${status}" -ne 0 ]]; then
     for log in "${RUNTIME_LOG}" "${CP_LOG}" "${BUILDER_LOG}"; do
       printf '\n===== %s =====\n' "${log}" >&2
-      "${PYTHON}" - "${log}" "${RUNTIME_READY}" "${BROWSER_SECRET_EVIDENCE}" <<'PY' >&2 || true
+      "${PYTHON}" - "${log}" "${RUNTIME_READY}" "${BROWSER_SECRET_EVIDENCE}" \
+        "${CP_SECRET_EVIDENCE}" "${BUILDER_SECRET_EVIDENCE}" <<'PY' >&2 || true
 import json
 import re
 import sys
 
-log_path, runtime_ready, browser_evidence = sys.argv[1:]
-secrets = []
+log_path, runtime_ready, browser_evidence, cp_evidence, builder_evidence = sys.argv[1:]
+secrets = [
+    "access-initial",
+    "refresh-initial",
+    "builder-e2e-jwt-secret",
+    "builder-e2e-llm-key",
+    "builder-e2e-encryption-key-32byte",
+]
 for path, key in (
     (runtime_ready, "initial_launch_token"),
     (runtime_ready, "clock_nonce"),
@@ -51,11 +61,22 @@ try:
         secrets.extend(str(value) for value in json.load(handle).get("runtime_cookies", []))
 except (FileNotFoundError, json.JSONDecodeError, OSError):
     pass
+try:
+    with open(cp_evidence, encoding="utf-8") as handle:
+        secrets.extend(str(value) for value in json.load(handle).get("launch_tokens", []))
+except (FileNotFoundError, json.JSONDecodeError, OSError):
+    pass
+try:
+    with open(builder_evidence, encoding="utf-8") as handle:
+        secrets.extend(str(value) for value in json.load(handle).get("secret_values", []))
+except (FileNotFoundError, json.JSONDecodeError, OSError):
+    pass
 
 with open(log_path, encoding="utf-8", errors="replace") as handle:
     text = "".join(handle.readlines()[-120:])
 for value in secrets:
     text = text.replace(value, "[REDACTED]")
+text = re.sub(r"access-refreshed-\d+", "[REDACTED]", text)
 text = re.sub(r"(AUTH_RENEWAL_FIXTURE=).*", r"\1[REDACTED]", text)
 text = re.sub(
     r"(\?\s*token\s*=\s*)(?:[A-Za-z0-9_-]\s*){20,}",
@@ -91,7 +112,6 @@ wait_line() {
     sleep 0.1
   done
   printf 'readiness timeout: %s\n' "${file}" >&2
-  tail -80 "${file}" >&2 || true
   return 1
 }
 
@@ -104,7 +124,6 @@ wait_http() {
     sleep 0.1
   done
   printf 'HTTP readiness timeout: %s\n' "${url}" >&2
-  tail -80 "${log}" >&2 || true
   return 1
 }
 
@@ -118,7 +137,8 @@ printf '%s\n' "${runtime_json}" >"${RUNTIME_READY}"
 sed -i 's/^AUTH_RENEWAL_FIXTURE=.*/AUTH_RENEWAL_FIXTURE=[REDACTED]/' "${RUNTIME_LOG}"
 
 "${PYTHON}" "${ROOT_DIR}/tests/e2e/fixtures/fake_control_plane.py" \
-  --runtime-readiness "${RUNTIME_READY}" >"${CP_LOG}" 2>&1 &
+  --runtime-readiness "${RUNTIME_READY}" \
+  --launch-token-evidence "${CP_SECRET_EVIDENCE}" >"${CP_LOG}" 2>&1 &
 cp_pid=$!
 cp_json="$(wait_line "${CP_LOG}" "FAKE_CONTROL_PLANE=")"
 cp_base_url="$(printf '%s' "${cp_json}" | "${PYTHON}" -c 'import json,sys; print(json.load(sys.stdin)["base_url"])')"
@@ -208,6 +228,37 @@ asyncio.run(main())
 PY
 )"
 
+printf '%s' "${fixture_json}" | "${PYTHON}" -c '
+import json
+import os
+import sys
+import tempfile
+
+destination = sys.argv[1]
+payload = json.load(sys.stdin)
+descriptor, temporary_path = tempfile.mkstemp(
+    dir=os.path.dirname(destination),
+    prefix=f".{os.path.basename(destination)}.",
+)
+try:
+    os.fchmod(descriptor, 0o600)
+    with os.fdopen(descriptor, "w", encoding="utf-8") as handle:
+        json.dump({"secret_values": [payload["access_token"]]}, handle)
+        handle.flush()
+        os.fsync(handle.fileno())
+    os.replace(temporary_path, destination)
+except BaseException:
+    try:
+        os.close(descriptor)
+    except OSError:
+        pass
+    try:
+        os.unlink(temporary_path)
+    except FileNotFoundError:
+        pass
+    raise
+' "${BUILDER_SECRET_EVIDENCE}"
+
 clock_url="$(printf '%s' "${runtime_json}" | "${PYTHON}" -c 'import json,sys; print(json.load(sys.stdin)["clock_control_url"])')"
 clock_nonce="$(printf '%s' "${runtime_json}" | "${PYTHON}" -c 'import json,sys; print(json.load(sys.stdin)["clock_nonce"])')"
 access_token="$(printf '%s' "${fixture_json}" | "${PYTHON}" -c 'import json,sys; print(json.load(sys.stdin)["access_token"])')"
@@ -224,47 +275,73 @@ BUILDER_DATABASE_PATH="${DB_PATH}" \
 BROWSER_SECRET_EVIDENCE_PATH="${BROWSER_SECRET_EVIDENCE}" \
 npm exec -- node "${ROOT_DIR}/tests/e2e/builder-sandbox-auth-renewal.spec.mjs"
 
-initial_launch_token="$(printf '%s' "${runtime_json}" \
-  | "${PYTHON}" -c 'import json,sys; print(json.load(sys.stdin)["initial_launch_token"])')"
-printf '{"database_path":"%s","launch_tokens":["%s"]}' \
-  "${DB_PATH}" "${initial_launch_token}" \
+"${PYTHON}" - "${DB_PATH}" "${RUNTIME_READY}" "${CP_SECRET_EVIDENCE}" <<'PY' \
   | "${PYTHON}" "${ROOT_DIR}/tests/e2e/fixtures/verify_sandbox_auth_db.py"
-unset initial_launch_token
-
-"${PYTHON}" -c '
 import json
-import re
+import os
+import stat
 import sys
 
-runtime_ready, browser_evidence, *logs = sys.argv[1:]
+database_path, runtime_ready, cp_evidence = sys.argv[1:]
 with open(runtime_ready, encoding="utf-8") as handle:
-    launch_token = str(json.load(handle)["initial_launch_token"])
+    launch_tokens = [str(json.load(handle)["initial_launch_token"])]
+with open(cp_evidence, encoding="utf-8") as handle:
+    launch_tokens.extend(str(value) for value in json.load(handle)["launch_tokens"])
+if stat.S_IMODE(os.stat(cp_evidence).st_mode) != 0o600:
+    raise SystemExit("Control Plane launch token evidence mode is not 0600")
+print(json.dumps({
+    "database_path": database_path,
+    "launch_tokens": list(dict.fromkeys(launch_tokens)),
+}))
+PY
+
+"${PYTHON}" - "${RUNTIME_READY}" "${CP_SECRET_EVIDENCE}" \
+  "${BROWSER_SECRET_EVIDENCE}" "${BUILDER_SECRET_EVIDENCE}" \
+  "${RUNTIME_LOG}" "${CP_LOG}" "${BUILDER_LOG}" <<'PY' \
+  | "${PYTHON}" "${ROOT_DIR}/tests/e2e/fixtures/verify_sandbox_auth_logs.py"
+import json
+import os
+import stat
+import sys
+
+runtime_ready, cp_evidence, browser_evidence, builder_evidence, *logs = sys.argv[1:]
+with open(runtime_ready, encoding="utf-8") as handle:
+    runtime = json.load(handle)
+with open(cp_evidence, encoding="utf-8") as handle:
+    launch_tokens = [str(value) for value in json.load(handle)["launch_tokens"]]
 with open(browser_evidence, encoding="utf-8") as handle:
     runtime_cookies = [str(value) for value in json.load(handle)["runtime_cookies"]]
-if not runtime_cookies:
-    raise SystemExit("runtime cookie evidence is empty")
-
-literal_canaries = [
-    "access-initial",
-    "refresh-initial",
-    "clock_nonce",
-    "initial_launch_token",
-    "internal_token",
-    "local-auth-disabled",
-]
-secret_canaries = [launch_token, *runtime_cookies]
-url_canary = re.compile(r"\?\s*token\s*=\s*(?:[A-Za-z0-9_-]\s*){20,}")
-for log_path in logs:
-    with open(log_path, encoding="utf-8", errors="replace") as handle:
-        text = handle.read()
-    compact_text = re.sub(r"\s+", "", text)
-    if (
-        any(value and value in text for value in literal_canaries)
-        or any(value and (value in text or value in compact_text) for value in secret_canaries)
-        or url_canary.search(text)
-    ):
-        raise SystemExit(f"credential canary found in service log: {log_path}")
-' "${RUNTIME_READY}" "${BROWSER_SECRET_EVIDENCE}" \
-  "${RUNTIME_LOG}" "${CP_LOG}" "${BUILDER_LOG}"
+with open(builder_evidence, encoding="utf-8") as handle:
+    builder_secrets = [str(value) for value in json.load(handle)["secret_values"]]
+for path, label in (
+    (cp_evidence, "Control Plane launch token evidence"),
+    (browser_evidence, "browser cookie evidence"),
+    (builder_evidence, "Builder secret evidence"),
+):
+    if stat.S_IMODE(os.stat(path).st_mode) != 0o600:
+        raise SystemExit(f"{label} mode is not 0600")
+launch_tokens.insert(0, str(runtime["initial_launch_token"]))
+print(json.dumps({
+    "launch_tokens": list(dict.fromkeys(launch_tokens)),
+    "runtime_cookies": list(dict.fromkeys(runtime_cookies)),
+    "other_secrets": [
+        str(runtime["clock_nonce"]),
+        str(runtime["internal_token"]),
+        *builder_secrets,
+        "access-initial",
+        "refresh-initial",
+        "builder-e2e-jwt-secret",
+        "builder-e2e-llm-key",
+        "builder-e2e-encryption-key-32byte",
+    ],
+    "literal_canaries": [
+        "clock_nonce",
+        "initial_launch_token",
+        "internal_token",
+        "local-auth-disabled",
+    ],
+    "log_paths": logs,
+}))
+PY
 
 echo "L3_SANDBOX_AUTH_RENEWAL=PASS"

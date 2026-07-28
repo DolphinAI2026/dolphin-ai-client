@@ -28,6 +28,25 @@ const browserErrors = [];
 const response401s = [];
 const runtimeCookies = new Set();
 
+function writeSecretEvidence() {
+  const temporaryPath = `${secretEvidencePath}.${process.pid}.tmp`;
+  try {
+    fs.writeFileSync(
+      temporaryPath,
+      JSON.stringify({ runtime_cookies: [...runtimeCookies] }),
+      { encoding: "utf8", mode: 0o600 },
+    );
+    fs.chmodSync(temporaryPath, 0o600);
+    fs.renameSync(temporaryPath, secretEvidencePath);
+  } finally {
+    try {
+      fs.unlinkSync(temporaryPath);
+    } catch (error) {
+      if (error?.code !== "ENOENT") throw error;
+    }
+  }
+}
+
 async function jsonFetch(page, path, options = {}) {
   return page.evaluate(
     async ({ path, options }) => {
@@ -42,6 +61,26 @@ async function jsonFetch(page, path, options = {}) {
       return { status: response.status, body };
     },
     { path, options },
+  );
+}
+
+async function concurrentJsonFetch(page, path, count) {
+  return page.evaluate(
+    async ({ path, count }) =>
+      Promise.all(
+        Array.from({ length: count }, async () => {
+          const response = await fetch(path);
+          const text = await response.text();
+          let body = null;
+          try {
+            body = text ? JSON.parse(text) : null;
+          } catch {
+            body = text;
+          }
+          return { status: response.status, body };
+        }),
+      ),
+    { path, count },
   );
 }
 
@@ -65,6 +104,7 @@ async function runtimeCookie(context) {
   const cookie = cookies.find((item) => item.name === "apaas_sandbox_token");
   assert.ok(cookie?.value, "runtime cookie missing");
   runtimeCookies.add(cookie.value);
+  writeSecretEvidence();
   return cookie.value;
 }
 
@@ -102,10 +142,13 @@ async function advance(duration = "20m") {
   return response.json();
 }
 
-const chromiumBrowser = await chromium.launch();
-const firefoxBrowser = await firefox.launch();
+let chromiumBrowser;
+let firefoxBrowser;
+writeSecretEvidence();
 
 try {
+  chromiumBrowser = await chromium.launch();
+  firefoxBrowser = await firefox.launch();
   const contexts = await Promise.all(
     [chromiumBrowser, firefoxBrowser].map((browser) =>
       browser.newContext({
@@ -169,9 +212,15 @@ try {
   }
 
   await advance("20m");
-  const absoluteRecovery = await jsonFetch(pages[0], statusPath);
-  assert.equal(absoluteRecovery.status, 200, JSON.stringify(absoluteRecovery.body));
+  const absoluteRecoveries = await concurrentJsonFetch(pages[0], statusPath, 8);
   const recoveredChromiumCookie = await runtimeCookie(contexts[0]);
+  absoluteRecoveries.forEach((recovery, index) => {
+    assert.equal(
+      recovery.status,
+      200,
+      `absolute recovery request ${index}: ${JSON.stringify(recovery.body)}`,
+    );
+  });
   assert.ok(
     recoveredChromiumCookie !== chromiumCookie,
     "absolute expiry did not create one new Session",
@@ -197,6 +246,7 @@ try {
   await advance("31m");
   const refreshed = await jsonFetch(pages[0], statusPath);
   assert.equal(refreshed.status, 200, JSON.stringify(refreshed.body));
+  await runtimeCookie(contexts[0]);
   const refreshedState = await state();
   assert.equal(refreshedState.refresh_count, 1, "access rejection must force one refresh");
 
@@ -240,12 +290,15 @@ try {
   assert.equal((await state()).open_count, tenantUnboundOpens, "unbound tenant must not loop");
 
   assert.ok(fs.statSync(databasePath).size > 0, "SQLite fixture database is empty");
-  fs.writeFileSync(
-    secretEvidencePath,
-    JSON.stringify({ runtime_cookies: [...runtimeCookies] }),
-    { encoding: "utf8", mode: 0o600 },
-  );
   console.log("L3_BROWSER_AUTH_RENEWAL=PASS");
 } finally {
-  await Promise.allSettled([chromiumBrowser.close(), firefoxBrowser.close()]);
+  try {
+    writeSecretEvidence();
+  } finally {
+    await Promise.allSettled(
+      [chromiumBrowser, firefoxBrowser]
+        .filter(Boolean)
+        .map((browser) => browser.close()),
+    );
+  }
 }

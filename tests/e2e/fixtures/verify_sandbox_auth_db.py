@@ -10,6 +10,8 @@ def main() -> None:
     payload = json.load(sys.stdin)
     database_path = Path(str(payload["database_path"])).resolve()
     launch_tokens = [str(value) for value in payload.get("launch_tokens", []) if value]
+    if not launch_tokens:
+        raise SystemExit("launch token evidence is empty")
 
     with sqlite3.connect(database_path) as db:
         sessions = db.execute(

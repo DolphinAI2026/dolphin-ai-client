@@ -4,23 +4,53 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import os
 import secrets
+import tempfile
 import threading
 import urllib.error
 import urllib.request
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from pathlib import Path
 from typing import Any
 
 
+def atomic_write_secret_json(path: Path, payload: dict[str, Any]) -> None:
+    descriptor, temporary_path = tempfile.mkstemp(
+        dir=path.parent,
+        prefix=f".{path.name}.",
+    )
+    try:
+        os.fchmod(descriptor, 0o600)
+        with os.fdopen(descriptor, "w", encoding="utf-8") as handle:
+            json.dump(payload, handle, separators=(",", ":"))
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.replace(temporary_path, path)
+    except BaseException:
+        try:
+            os.close(descriptor)
+        except OSError:
+            pass
+        try:
+            os.unlink(temporary_path)
+        except FileNotFoundError:
+            pass
+        raise
+
+
 class State:
-    def __init__(self, runtime: dict[str, str]) -> None:
+    def __init__(self, runtime: dict[str, str], launch_token_evidence: Path) -> None:
         self.runtime = runtime
+        self.launch_token_evidence = launch_token_evidence
         self.lock = threading.Lock()
         self.mode = "ok"
         self.open_count = 0
         self.refresh_count = 0
         self.rotate_count = 0
         self.accepted_access_tokens = {"access-initial"}
+        self.launch_tokens: list[str] = []
+        atomic_write_secret_json(self.launch_token_evidence, {"launch_tokens": []})
 
     def snapshot(self) -> dict[str, Any]:
         with self.lock:
@@ -54,6 +84,14 @@ class State:
             if self.mode == "access_expired":
                 return token != "access-initial" and token in self.accepted_access_tokens
             return token in self.accepted_access_tokens
+
+    def record_launch_token(self, token: str) -> None:
+        with self.lock:
+            self.launch_tokens.append(token)
+            atomic_write_secret_json(
+                self.launch_token_evidence,
+                {"launch_tokens": self.launch_tokens},
+            )
 
 
 def json_request(url: str, body: dict[str, Any], token: str) -> dict[str, Any]:
@@ -154,6 +192,11 @@ class Handler(BaseHTTPRequestHandler):
             return
 
         launch_token = secrets.token_urlsafe(32)
+        try:
+            state.record_launch_token(launch_token)
+        except OSError:
+            self._json(503, {"detail": "launch_token_evidence_failed"})
+            return
         expected_hash = "sha256:" + hashlib.sha256(launch_token.encode()).hexdigest()
         try:
             json_request(
@@ -193,11 +236,15 @@ class Server(ThreadingHTTPServer):
 def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--runtime-readiness", required=True)
+    parser.add_argument("--launch-token-evidence", required=True)
     parser.add_argument("--port", type=int, default=0)
     args = parser.parse_args()
     with open(args.runtime_readiness, encoding="utf-8") as handle:
         runtime = json.load(handle)
-    server = Server(("127.0.0.1", args.port), State(runtime))
+    server = Server(
+        ("127.0.0.1", args.port),
+        State(runtime, Path(args.launch_token_evidence).resolve()),
+    )
     print(
         "FAKE_CONTROL_PLANE="
         + json.dumps({"base_url": f"http://127.0.0.1:{server.server_port}"}),
