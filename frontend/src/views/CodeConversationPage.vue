@@ -71,7 +71,20 @@
         @load="onCodeFrameLoad(frame.key)"
         @error="onCodeFrameError(frame.key)"
       />
-      <div v-if="showInitialLoading" class="code-status">正在打开 Code 工作台...</div>
+      <CodeWorkspaceOpening
+        v-if="showWorkspaceOpening"
+        :phase="workspaceOpeningPhase"
+        :started-at="workspaceOpeningStartedAt"
+        :error="errorMessage"
+        :can-restart="canRestartLocalRuntime"
+        :can-rebind="canRebindLocalWorkspace"
+        :busy="workspaceRecoveryBusy"
+        @retry="retryFailedSession"
+        @back="backToCodeApplications"
+        @restart="restartLocalRuntime"
+        @rebind="rebindLocalWorkspace"
+      />
+      <div v-else-if="showInitialLoading" class="code-status">正在打开 Code 工作台...</div>
       <div v-else-if="errorMessage && !hasAnyFrame" class="code-error">
         <strong>Code 工作台暂时无法打开</strong>
         <span>{{ errorMessage }}</span>
@@ -105,6 +118,9 @@ import { useRoute, useRouter } from 'vue-router'
 import { codeRuntimeApi } from '@/api/codeRuntime'
 import { nextAgentQuery } from '@/composables/railSessions'
 import AppIcon from '@/components/common/AppIcon.vue'
+import CodeWorkspaceOpening from '@/components/code/CodeWorkspaceOpening.vue'
+import { pickDirectory } from '@/utils/desktop'
+import type { CodeWorkspaceOpenPhase } from '@/api/codeRuntime'
 import {
   activateCachedCodeFrame,
   beginCodeFrameOpen,
@@ -132,7 +148,8 @@ import {
 
 const route = useRoute()
 const router = useRouter()
-const READY_TIMEOUT_MS = 30_000
+const READY_TIMEOUT_MS = 120_000
+const OPEN_STATUS_POLL_MS = 500
 const frameLifecycle = ref(createCodeFrameLifecycle())
 const codePageElement = ref<HTMLElement | null>(null)
 const frameElements = new Map<string, HTMLIFrameElement>()
@@ -146,7 +163,13 @@ const newCodeAppName = ref('')
 const newCodeAppPrompt = ref('')
 const newCodeAppError = ref('')
 const creatingCodeApplication = ref(false)
+const localWorkspaceOpening = ref(false)
+const workspaceOpeningPhase = ref<CodeWorkspaceOpenPhase>('checking_project')
+const workspaceOpeningStartedAt = ref(Date.now())
+const workspaceRecoveryBusy = ref(false)
 let railRefreshTimer: number | undefined
+let openStatusTimer: number | undefined
+let openStatusPollingSeq = 0
 let openRequestSeq = 0
 let runtimeAuthRecoveryPromise: Promise<void> | null = null
 let openInFlightKey = ''
@@ -195,8 +218,14 @@ const pendingFrame = computed(() => frameLifecycle.value.pending)
 const hasAnyFrame = computed(() => frames.value.length > 0)
 const initialFramePending = computed(() => Boolean(frameLifecycle.value.request && !activeFrame.value))
 const showInitialLoading = computed(() =>
-  (loading.value || initialFramePending.value) && !activeFrame.value && !errorMessage.value
+  (loading.value || initialFramePending.value)
+  && !activeFrame.value
+  && !errorMessage.value
+  && !localWorkspaceOpening.value
 )
+const showWorkspaceOpening = computed(() => localWorkspaceOpening.value && !activeFrame.value)
+const canRestartLocalRuntime = computed(() => errorMessage.value.includes('LOCAL_RUNTIME_'))
+const canRebindLocalWorkspace = computed(() => errorMessage.value.includes('LOCAL_APPLICATION_WORKSPACE_'))
 const frameSwitching = computed(() => isCodeFrameSwitching(frameLifecycle.value))
 
 function currentSessionRef(): string {
@@ -258,6 +287,59 @@ function clearRouteAgentQueryIfCurrent(runtimeAgentId: string) {
     path: route.path,
     query: nextAgentQuery(route.query),
   })
+}
+
+function stopOpenStatusPolling() {
+  openStatusPollingSeq += 1
+  if (openStatusTimer != null) window.clearTimeout(openStatusTimer)
+  openStatusTimer = undefined
+}
+
+function resetWorkspaceOpening() {
+  stopOpenStatusPolling()
+  localWorkspaceOpening.value = false
+  workspaceOpeningPhase.value = 'checking_project'
+  workspaceOpeningStartedAt.value = Date.now()
+  workspaceRecoveryBusy.value = false
+}
+
+function workspaceErrorPhase(message: string): CodeWorkspaceOpenPhase {
+  if (message.includes('LOCAL_APPLICATION_WORKSPACE_')) return 'checking_project'
+  if (message.includes('LOCAL_RUNTIME_')) return 'starting_runtime'
+  return 'opening_workbench'
+}
+
+function isLocalWorkspaceError(message: string): boolean {
+  return message.includes('LOCAL_APPLICATION_') || message.includes('LOCAL_RUNTIME_')
+}
+
+function startOpenStatusPolling(sessionRef: string, requestSeq: number) {
+  stopOpenStatusPolling()
+  const pollingSeq = openStatusPollingSeq
+  workspaceOpeningStartedAt.value = Date.now()
+  workspaceOpeningPhase.value = 'checking_project'
+
+  const poll = async () => {
+    if (pollingSeq !== openStatusPollingSeq || requestSeq !== openRequestSeq) return
+    try {
+      const status = await codeRuntimeApi.getOpenStatus(sessionRef)
+      if (pollingSeq !== openStatusPollingSeq || requestSeq !== openRequestSeq) return
+      localWorkspaceOpening.value = true
+      workspaceOpeningPhase.value = status.phase
+    } catch (error: any) {
+      const statusCode = Number(error?.response?.status || 0)
+      const detail = String(error?.response?.data?.detail || error?.message || '')
+      if (statusCode === 400 && detail.includes('不是本地 Code 应用')) {
+        stopOpenStatusPolling()
+        localWorkspaceOpening.value = false
+        return
+      }
+    }
+    if (pollingSeq !== openStatusPollingSeq || requestSeq !== openRequestSeq) return
+    openStatusTimer = window.setTimeout(poll, OPEN_STATUS_POLL_MS)
+  }
+
+  void poll()
 }
 
 function generateCodeAppCode(appName: string) {
@@ -393,7 +475,15 @@ async function openCurrentSession() {
       return
     }
 
+    startOpenStatusPolling(sessionRef, requestSeq)
     const opened = await codeRuntimeApi.openSession(sessionRef)
+    stopOpenStatusPolling()
+    if (opened.external_application_id.startsWith('local-')) {
+      localWorkspaceOpening.value = true
+      workspaceOpeningPhase.value = 'opening_workbench'
+    } else {
+      localWorkspaceOpening.value = false
+    }
     if (opened.route_id && opened.route_id !== sessionRef) {
       await router.replace({
         path: `/code/${opened.route_id}`,
@@ -434,6 +524,10 @@ async function openCurrentSession() {
   } catch (error: any) {
     if (requestSeq === openRequestSeq) {
       const message = error?.response?.data?.detail || error?.message || '打开失败'
+      if (isLocalWorkspaceError(message)) {
+        localWorkspaceOpening.value = true
+        workspaceOpeningPhase.value = workspaceErrorPhase(message)
+      }
       failCurrentFrameOpen({
         requestId: requestSeq,
         message,
@@ -441,6 +535,7 @@ async function openCurrentSession() {
     }
   } finally {
     if (requestSeq === openRequestSeq) {
+      stopOpenStatusPolling()
       loading.value = false
       if (openInFlightKey === openKey) openInFlightKey = ''
     }
@@ -550,6 +645,40 @@ function retryFailedSession() {
   })
 }
 
+function backToCodeApplications() {
+  void router.push('/code/apps')
+}
+
+async function restartLocalRuntime() {
+  if (workspaceRecoveryBusy.value) return
+  workspaceRecoveryBusy.value = true
+  try {
+    await codeRuntimeApi.restartLocalRuntime(currentSessionRef())
+    errorMessage.value = ''
+    await openCurrentSession()
+  } catch (error: any) {
+    errorMessage.value = error?.response?.data?.detail || error?.message || '本地环境重启失败'
+  } finally {
+    workspaceRecoveryBusy.value = false
+  }
+}
+
+async function rebindLocalWorkspace() {
+  if (workspaceRecoveryBusy.value) return
+  const selected = await pickDirectory('重新选择本地应用目录')
+  if (!selected) return
+  workspaceRecoveryBusy.value = true
+  try {
+    await codeRuntimeApi.rebindLocalWorkspace(currentSessionRef(), selected)
+    errorMessage.value = ''
+    await openCurrentSession()
+  } catch (error: any) {
+    errorMessage.value = error?.response?.data?.detail || error?.message || '本地应用目录绑定失败'
+  } finally {
+    workspaceRecoveryBusy.value = false
+  }
+}
+
 function recoverRuntimeAuthentication(frameKey: string) {
   if (runtimeAuthInvalidFrameKey === frameKey) return
   runtimeAuthInvalidFrameKey = frameKey
@@ -642,6 +771,7 @@ function closeHostedActivityDrawer() {
 }
 
 function resetCodeFrames() {
+  resetWorkspaceOpening()
   clearPendingReadyTimer()
   clearHostedActivityModal()
   openInFlightKey = ''
@@ -686,6 +816,7 @@ function onShellMessage(event: MessageEvent) {
       if (frameLifecycle.value === previousState) return
       clearPendingReadyTimer()
       errorMessage.value = ''
+      resetWorkspaceOpening()
       scheduleOuterCodeRailRefresh(500)
       return
     }
@@ -768,6 +899,7 @@ onMounted(() => {
 })
 
 onBeforeUnmount(() => {
+  stopOpenStatusPolling()
   clearPendingReadyTimer()
   publishCodeFrameDeactivation()
   clearHostedActivityModal()

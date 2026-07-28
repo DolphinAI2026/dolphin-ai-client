@@ -6,6 +6,19 @@
           <h1 class="page-title">{{ pageTitle }}</h1>
           <p class="page-subtitle">{{ pageSubtitle }}</p>
         </div>
+        <div v-if="isCodeMode && isDesktop" class="apps-source-switch" role="tablist" aria-label="应用来源">
+          <button
+            v-for="source in codeApplicationSources"
+            :key="source.value"
+            type="button"
+            role="tab"
+            :class="{ active: codeApplicationSource === source.value }"
+            :aria-selected="codeApplicationSource === source.value"
+            @click="codeApplicationSource = source.value"
+          >
+            {{ source.label }}
+          </button>
+        </div>
       </section>
 
       <section class="apps-toolbar" aria-label="应用筛选和视图切换">
@@ -35,9 +48,9 @@
             <el-icon><Plus /></el-icon>
             <span>{{ newAppLabel }}</span>
           </button>
-          <button v-if="isCodeMode" class="btn btn-primary apps-toolbar-action" type="button" :disabled="creatingCodeApp" @click="startNewCodeApp">
+          <button v-if="isCodeMode" class="btn btn-primary apps-toolbar-action" type="button" @click="startNewCodeApp">
             <el-icon><Plus /></el-icon>
-            <span>{{ creatingCodeApp ? '创建中' : '新建应用' }}</span>
+            <span>{{ codeApplicationSource === 'local' ? '新建本地应用' : '新建远程应用' }}</span>
           </button>
           <button v-if="isCodeMode" class="btn btn-secondary apps-toolbar-action" type="button" @click="refreshApps(true)">
             <el-icon><Refresh /></el-icon>
@@ -71,6 +84,11 @@
         <div v-if="loading" class="apps-state apps-empty-v2">
           <SkeletonCard :lines="3" with-avatar with-footer />
         </div>
+        <div v-else-if="codeListError" class="apps-state apps-source-error">
+          <strong>{{ codeApplicationSource === 'local' ? '本地应用暂时无法加载' : '远程应用暂时无法加载' }}</strong>
+          <span>{{ codeListError }}</span>
+          <button class="btn btn-secondary btn-sm" type="button" @click="refreshApps(true)">重试</button>
+        </div>
         <div v-else-if="filteredApps.length === 0" class="apps-state apps-empty-v2">
           <EmptyState
             :title="emptyTitle"
@@ -89,9 +107,9 @@
                 <el-icon><Plus /></el-icon>
                 <span>{{ newAppLabel }}</span>
               </button>
-              <button v-else class="btn btn-primary btn-sm apps-empty-cta" type="button" :disabled="creatingCodeApp" @click="startNewCodeApp">
+              <button v-else class="btn btn-primary btn-sm apps-empty-cta" type="button" @click="startNewCodeApp">
                 <el-icon><Plus /></el-icon>
-                <span>{{ creatingCodeApp ? '创建中' : '新建应用' }}</span>
+                <span>{{ codeApplicationSource === 'local' ? '新建本地应用' : '新建远程应用' }}</span>
               </button>
             </template>
           </EmptyState>
@@ -100,7 +118,7 @@
         <div v-else-if="viewMode === 'list'" class="apps-table">
           <div class="apps-table-head">
             <span>应用</span>
-            <span>组成</span>
+            <span>{{ isCodeMode ? '位置' : '组成' }}</span>
             <span>更新</span>
             <span class="apps-table-actions-head">操作</span>
           </div>
@@ -120,7 +138,10 @@
                 <strong>{{ app.app_name }}</strong>
                 <span class="apps-row-meta">
                   <code>{{ app.app_code || `app-${app.id}` }}</code>
-                  <BaseTag :tone="app.app_type === 'ai-code' ? 'brand' : 'neutral'">{{ app.app_type === 'ai-code' ? 'AI 代码' : '低代码' }}</BaseTag>
+                  <BaseTag v-if="isCodeMode" :tone="isLocalCodeApplication(app) ? 'neutral' : 'brand'">
+                    {{ isLocalCodeApplication(app) ? '本地' : '远程' }}
+                  </BaseTag>
+                  <BaseTag v-else :tone="app.app_type === 'ai-code' ? 'brand' : 'neutral'">{{ app.app_type === 'ai-code' ? 'AI 代码' : '低代码' }}</BaseTag>
                   <template v-if="!isCodeMode && latestHistory(app)">
                     <span class="apps-dot-sep"></span>
                     <button class="apps-history-link" type="button" @click.stop="openLatestConversation(app)">
@@ -134,7 +155,10 @@
             <!-- Fix 14 (2026-05-21): 列表视图加 "组成" 一列展示模型/表单/角色/字典 4 项核心元数据，
                  解决"列表 vs 卡片信息密度落差"问题。无数据应用占位 - 不打扰阅读节奏。 -->
             <div class="apps-row-metrics">
-              <template v-if="hasAppStats(app)">
+              <span v-if="isCodeMode" class="apps-code-location" :title="codeApplicationLocation(app)">
+                {{ codeApplicationLocation(app) }}
+              </span>
+              <template v-else-if="hasAppStats(app)">
                 <span class="apps-metric-chip" :title="`${app.models || 0} 模型`"><strong>{{ app.models || 0 }}</strong>模型</span>
                 <span class="apps-metric-chip" :title="`${app.forms || 0} 表单`"><strong>{{ app.forms || 0 }}</strong>表单</span>
                 <span class="apps-metric-chip" :title="`${app.roles || 0} 角色`"><strong>{{ app.roles || 0 }}</strong>角色</span>
@@ -183,8 +207,14 @@
             <h2>{{ app.app_name }}</h2>
             <div class="apps-card-code">
               <code>{{ app.app_code || `app-${app.id}` }}</code>
-              <BaseTag :tone="app.app_type === 'ai-code' ? 'brand' : 'neutral'">{{ app.app_type === 'ai-code' ? 'AI 代码' : '低代码' }}</BaseTag>
+              <BaseTag v-if="isCodeMode" :tone="isLocalCodeApplication(app) ? 'neutral' : 'brand'">
+                {{ isLocalCodeApplication(app) ? '本地' : '远程' }}
+              </BaseTag>
+              <BaseTag v-else :tone="app.app_type === 'ai-code' ? 'brand' : 'neutral'">{{ app.app_type === 'ai-code' ? 'AI 代码' : '低代码' }}</BaseTag>
               <span>{{ appUpdatedLabel(app) }}</span>
+            </div>
+            <div v-if="isCodeMode" class="apps-card-location" :title="codeApplicationLocation(app)">
+              {{ codeApplicationLocation(app) }}
             </div>
             <div v-if="hasAppStats(app)" class="apps-card-stats">
               <span>{{ app.models || 0 }} 模型</span>
@@ -259,6 +289,12 @@
         </div>
       </section>
     </main>
+
+    <LocalCodeApplicationDialog
+      v-if="isCodeMode && isDesktop"
+      v-model="localApplicationDialogOpen"
+      @created="handleLocalApplicationCreated"
+    />
 
     <!-- 导入应用弹窗 -->
     <ImportAppDialog v-if="!isCodeMode" v-model="importDialogOpen" @imported="refreshApps" />
@@ -380,9 +416,9 @@ import { Download, Grid, List, MoreFilled, Plus, Refresh } from '@element-plus/i
 import { ElMessage, ElMessageBox } from 'element-plus'
 import AppIcon from '@/components/common/AppIcon.vue'
 import { handleError } from '@/utils/errorHandler'
-import { openExternal } from '@/utils/desktop'
+import { isDesktop, openExternal } from '@/utils/desktop'
 import { applicationApi, type ApplicationDeliveryAssetItem, type ApplicationDeliveryAssetsResponse } from '@/api/application'
-import { codeRuntimeApi } from '@/api/codeRuntime'
+import { codeRuntimeApi, type CodeApplication, type CodeApplicationSource } from '@/api/codeRuntime'
 import { conversationApi, type ConversationWithApp } from '@/api/conversation'
 import { useCodeApplicationsStore } from '@/stores/codeApplications'
 import { isCodeRoutePath } from '@/stores/mode'
@@ -394,6 +430,7 @@ import EmptyState from '@/components/states/EmptyState.vue'
 import SkeletonCard from '@/components/states/SkeletonCard.vue'
 import BaseBadge from '@/components/BaseBadge.vue'
 import BaseTag from '@/components/BaseTag.vue'
+import LocalCodeApplicationDialog from '@/components/code/LocalCodeApplicationDialog.vue'
 import type { MergedApplication } from '@/types'
 
 type AppTab = 'all' | 'active' | 'deployed' | 'draft'
@@ -416,21 +453,33 @@ const viewMode = ref<ViewMode>('list')
 const searchQ = ref('')
 const importDialogOpen = ref(false)
 const publishingIds = ref<Set<number>>(new Set())
-const creatingCodeApp = ref(false)
+const localApplicationDialogOpen = ref(false)
+const codeListError = ref('')
 const handledCodeCreateIntent = ref('')
 let refreshAppsSeq = 0
 
 const isCodeMode = computed(() => isCodeRoutePath(route.path))
+const codeApplicationSources: Array<{ label: string; value: CodeApplicationSource }> = [
+  { label: '本地应用', value: 'local' },
+  { label: '远程应用', value: 'remote' },
+]
+const codeApplicationSource = ref<CodeApplicationSource>(isDesktop ? loadStoredCodeSource() : 'remote')
 const pageTitle = computed(() => isCodeMode.value ? 'Code 应用' : '我的应用')
 const pageSubtitle = computed(() =>
   isCodeMode.value
-    ? '来自 Code 平台的全代码应用，点击应用进入独立 Code 会话。'
+    ? (codeApplicationSource.value === 'local'
+        ? '本机项目，点击应用直接进入 Code 工作台。'
+        : '当前远程租户中的全代码应用。')
     : '统一查看低代码应用状态、资产组成和最近更新。',
 )
-const emptyTitle = computed(() => isCodeMode.value ? '暂无 Code 应用' : '暂无应用')
+const emptyTitle = computed(() => isCodeMode.value
+  ? (codeApplicationSource.value === 'local' ? '暂无本地应用' : '暂无远程应用')
+  : '暂无应用')
 const emptyDesc = computed(() =>
   isCodeMode.value
-    ? '当前账号在 Code 平台暂无可见应用，或 Control Plane 认证未配置。'
+    ? (codeApplicationSource.value === 'local'
+        ? '创建本地应用后，会在这里继续开发。'
+        : '当前远程租户中没有可见应用。')
     : '从首页新建应用后，会在这里继续构建、部署和查看历史对话。',
 )
 const newAppLabel = computed(() => '新建应用')
@@ -493,48 +542,26 @@ function startNewApp() {
   router.push('/')
 }
 
-function generateCodeAppCode(appName: string) {
-  const normalized = appName
-    .trim()
-    .toLowerCase()
-    .normalize('NFKD')
-    .replace(/[\u0300-\u036f]/g, '')
-    .replace(/[^a-z0-9]+/g, '-')
-    .replace(/^-+|-+$/g, '')
-  const prefix = /^[a-z]/.test(normalized) ? normalized : 'code-app'
-  return `${prefix.slice(0, 42)}-${Date.now().toString(36)}`
+function loadStoredCodeSource(): CodeApplicationSource {
+  try {
+    return localStorage.getItem('dolphin-code-application-source-v1') === 'remote' ? 'remote' : 'local'
+  } catch {
+    return 'local'
+  }
 }
 
-async function startNewCodeApp() {
-  if (creatingCodeApp.value) return
-  try {
-    const result = await ElMessageBox.prompt('请输入 Code 应用名称', '新建应用', {
-      confirmButtonText: '创建并打开',
-      cancelButtonText: '取消',
-      inputPlaceholder: '例如：销售线索评分助手',
-      inputValidator: value => {
-        const name = String(value || '').trim()
-        if (!name) return '请输入应用名称'
-        if (name.length > 80) return '应用名称不能超过 80 个字符'
-        return true
-      },
-    })
-    const appName = String(result.value || '').trim()
-    if (!appName) return
-    creatingCodeApp.value = true
-    const created = await codeRuntimeApi.createApplication({
-      app_name: appName,
-      app_code: generateCodeAppCode(appName),
-    })
-    ElMessage.success('Code 应用已创建')
-    await refreshApps(true)
-    await openCodeSessionForApp(created)
-  } catch (error: any) {
-    if (error === 'cancel' || error === 'close' || error?.action === 'cancel' || error?.action === 'close') return
-    ElMessage.error(error?.response?.data?.detail || error?.message || '创建 Code 应用失败')
-  } finally {
-    creatingCodeApp.value = false
+function startNewCodeApp() {
+  if (codeApplicationSource.value === 'local' && isDesktop) {
+    localApplicationDialogOpen.value = true
+    return
   }
+  router.push('/code/new')
+}
+
+async function handleLocalApplicationCreated(application: CodeApplication) {
+  ElMessage.success('本地应用已创建')
+  await refreshApps(true)
+  await openCodeSessionForApp(application)
 }
 
 function clearCodeCreateQuery() {
@@ -550,8 +577,19 @@ async function handleCodeCreateIntent() {
   const token = String(raw || '1')
   if (handledCodeCreateIntent.value === token) return
   handledCodeCreateIntent.value = token
-  await startNewCodeApp()
+  if (token === 'local' && isDesktop) codeApplicationSource.value = 'local'
+  startNewCodeApp()
   clearCodeCreateQuery()
+}
+
+function isLocalCodeApplication(app: MergedApplication) {
+  return app.source === 'desktop-local' || String((app as any).external_application_id || '').startsWith('local-')
+}
+
+function codeApplicationLocation(app: MergedApplication) {
+  if (isLocalCodeApplication(app)) return String((app as any).local_workspace_path || '本地项目')
+  const owner = (app as any).owner
+  return String(owner?.displayName || owner?.name || '远程租户')
 }
 
 function matchesTab(app: MergedApplication, tab: AppTab) {
@@ -989,12 +1027,14 @@ async function confirmDelete(app: MergedApplication) {
 async function refreshApps(forceCode = false) {
   const seq = ++refreshAppsSeq
   const codeMode = isCodeMode.value
+  const source = codeApplicationSource.value
   loading.value = true
+  codeListError.value = ''
   try {
     const codeList = codeMode
       ? codeApplications.load(
           { tenantId: user.tenantId || 0, tenantEpoch: 0 },
-          { pageSize: 100 },
+          { source: codeApplicationSource.value, pageSize: 100 },
           { force: forceCode },
         )
       : applicationApi.list({ include_remote: false, app_type: 'low-code' })
@@ -1002,12 +1042,18 @@ async function refreshApps(forceCode = false) {
       codeList,
       codeMode ? Promise.resolve([]) : conversationApi.listWithApps({ agent_type: 'builder' }).catch(() => []),
     ])
-    if (seq !== refreshAppsSeq || codeMode !== isCodeMode.value) return
+    if (seq !== refreshAppsSeq || codeMode !== isCodeMode.value || source !== codeApplicationSource.value) return
     apps.value = Array.isArray(list) ? list : (list?.items || [])
     appHistoryMap.value = buildAppHistoryMap(Array.isArray(conversations) ? conversations : [])
   } catch (error) {
-    if (seq !== refreshAppsSeq || codeMode !== isCodeMode.value) return
-    handleError(error, { fallback: '应用列表加载失败' })
+    if (seq !== refreshAppsSeq || codeMode !== isCodeMode.value || source !== codeApplicationSource.value) return
+    if (codeMode) {
+      const typedError = error as any
+      codeListError.value = typedError?.response?.data?.detail || typedError?.message || '应用列表加载失败'
+      apps.value = []
+    } else {
+      handleError(error, { fallback: '应用列表加载失败' })
+    }
   } finally {
     if (seq === refreshAppsSeq) loading.value = false
   }
@@ -1018,6 +1064,16 @@ onMounted(() => {
   void handleCodeCreateIntent()
 })
 watch(isCodeMode, () => {
+  activeTab.value = 'all'
+  currentPage.value = 1
+  void refreshApps()
+})
+watch(codeApplicationSource, source => {
+  if (!isCodeMode.value) return
+  if (isDesktop) {
+    try { localStorage.setItem('dolphin-code-application-source-v1', source) } catch { /* private mode */ }
+  }
+  apps.value = []
   activeTab.value = 'all'
   currentPage.value = 1
   void refreshApps()
@@ -1091,6 +1147,41 @@ watch(() => route.fullPath, () => {
   margin: 8px 0 0;
   color: var(--text-3);
   font-size: 13px;
+}
+
+.apps-source-switch {
+  flex: 0 0 auto;
+  display: inline-grid;
+  grid-template-columns: repeat(2, minmax(92px, 1fr));
+  min-height: 36px;
+  border: 1px solid var(--line);
+  border-radius: var(--r-3, 8px);
+  background: var(--surface-2);
+  padding: 2px;
+}
+
+.apps-source-switch button {
+  min-width: 0;
+  border: 0;
+  border-radius: var(--r-2, 6px);
+  background: transparent;
+  color: var(--text-3);
+  padding: 0 14px;
+  font: inherit;
+  font-size: 13px;
+  font-weight: var(--fw-medium, 500);
+  cursor: pointer;
+}
+
+.apps-source-switch button:hover:not(.active) {
+  color: var(--text);
+}
+
+.apps-source-switch button.active {
+  background: var(--surface);
+  color: var(--brand);
+  font-weight: var(--fw-semibold, 600);
+  box-shadow: var(--sh-1);
 }
 
 .apps-toolbar {
@@ -1252,6 +1343,15 @@ watch(() => route.fullPath, () => {
   color: var(--text);
   font-size: 14.5px;
   font-weight: var(--fw-semibold, 600);
+}
+
+.apps-source-error span {
+  max-width: min(560px, calc(100% - 40px));
+  overflow-wrap: anywhere;
+}
+
+.apps-source-error .btn {
+  margin-top: 8px;
 }
 
 .apps-state-icon {
@@ -1431,6 +1531,23 @@ watch(() => route.fullPath, () => {
   line-height: 1.4;
 }
 
+.apps-code-location,
+.apps-card-location {
+  min-width: 0;
+  color: var(--text-3);
+  font-family: var(--font-mono);
+  font-size: 11.5px;
+  line-height: 1.45;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.apps-code-location {
+  display: block;
+  max-width: 100%;
+}
+
 .apps-metric-chip {
   display: inline-flex;
   align-items: baseline;
@@ -1540,6 +1657,12 @@ watch(() => route.fullPath, () => {
   gap: 8px;
   color: var(--text-3);
   font-size: 12px;
+}
+
+.apps-card-location {
+  width: 100%;
+  border-top: 1px solid var(--line);
+  padding-top: 10px;
 }
 
 .apps-card-stats {
@@ -2067,6 +2190,10 @@ watch(() => route.fullPath, () => {
     gap: 16px;
     min-height: 0;
     padding: 18px;
+  }
+
+  .apps-source-switch {
+    width: 100%;
   }
 
   .apps-toolbar {

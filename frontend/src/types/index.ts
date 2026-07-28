@@ -123,7 +123,7 @@ export interface MergedApplication {
   app_code?: string
   icon_svg?: string
   description?: string
-  source: 'local' | 'remote' | 'linked' | 'd-ai-code'
+  source: 'local' | 'remote' | 'linked' | 'd-ai-code' | 'desktop-local'
   status: string
   local_status?: string
   remote_status?: string

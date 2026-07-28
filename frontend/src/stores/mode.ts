@@ -3,7 +3,13 @@ import { defineStore } from 'pinia'
 // 桌面三模式(参考设计): 构建/智能体/全代码。各有色标 + 首页路由 + 左栏导航。
 export type AppMode = 'builder' | 'agent' | 'code'
 
-export interface ModeNavItem { key: string; label: string; icon: string; path: string }
+export interface ModeNavItem {
+  key: string
+  label: string
+  icon: string
+  path: string
+  desktopOnly?: boolean
+}
 
 export interface ModeMeta {
   key: AppMode
@@ -37,7 +43,7 @@ export const MODE_META: Record<AppMode, ModeMeta> = {
   code: {
     key: 'code', label: 'Code', sub: '全代码开发', colorVar: '--fullcode', home: '/code/apps',
     nav: [
-      { key: 'c-new', label: '新建应用', icon: 'plus', path: '/code/new' },
+      { key: 'c-local-new', label: '新建本地应用', icon: 'plus', path: '/code/apps?create=local', desktopOnly: true },
       { key: 'c-apps', label: '我的应用', icon: 'apps', path: '/code/apps' },
     ],
   },
@@ -45,6 +51,10 @@ export const MODE_META: Record<AppMode, ModeMeta> = {
 
 // Agent 暂未接入(得小帆功能后续); Builder / Code 作为一等壳层模式。
 export const MODE_ORDER: AppMode[] = ['builder', 'code']
+
+export function visibleModeNav(mode: AppMode, desktop: boolean): ModeNavItem[] {
+  return MODE_META[mode].nav.filter(item => desktop || !item.desktopOnly)
+}
 
 export function isCodeRoutePath(path: string): boolean {
   return path === '/code' || path.startsWith('/code/')

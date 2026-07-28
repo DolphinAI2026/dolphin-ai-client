@@ -5,7 +5,7 @@ import { checkAndPromptUpdate } from '@/utils/desktop'
 import { useUserStore } from '@/stores/user'
 import { useThemeStore } from '@/stores/theme'
 import { useCodeApplicationsStore } from '@/stores/codeApplications'
-import { isCodeRoutePath, useModeStore, MODE_META, MODE_ORDER, type AppMode } from '@/stores/mode'
+import { isCodeRoutePath, useModeStore, MODE_META, MODE_ORDER, visibleModeNav, type AppMode } from '@/stores/mode'
 import { aiChatApi, type AIChatSession } from '@/api/aiChat'
 import { codeRuntimeApi } from '@/api/codeRuntime'
 import { authApi } from '@/api/auth'
@@ -312,7 +312,7 @@ function desktopHidden(path: string): boolean {
 
 // 导航 = 当前模式自带的左栏(参考设计: 每模式不同)。apps 项带应用计数 badge。
 const NAV = computed<NavItem[]>(() => {
-  const items = MODE_META[currentMode.value].nav.map<NavItem>(it => ({
+  const items = visibleModeNav(currentMode.value, __DESKTOP__).map<NavItem>(it => ({
     ...it,
     badge: it.key.endsWith('-apps') ? (appCount.value || undefined) : undefined,
   }))

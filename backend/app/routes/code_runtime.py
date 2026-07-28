@@ -6,13 +6,13 @@ import json
 import time
 from dataclasses import dataclass, field, replace
 from datetime import datetime, timezone
-from typing import Annotated, Any, Optional
+from typing import Annotated, Any, Literal, Optional
 from urllib.parse import parse_qsl, quote, unquote_plus, urlsplit
 
 import httpx
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from pydantic import BaseModel
-from sqlalchemy import String, and_, cast, func, literal, or_, select, update
+from sqlalchemy import String, and_, cast, delete, func, literal, or_, select, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from starlette.background import BackgroundTask
@@ -25,6 +25,7 @@ from app.code_runtime.service import (
     code_runtime_proxy_prefix,
     create_code_application,
     create_proxy_cookie_token,
+    default_local_code_application_workspace,
     default_workspace_open,
     ensure_code_session_public_id,
     ensure_code_application,
@@ -59,6 +60,10 @@ from app.code_runtime.sandbox_auth import (
 )
 from app.code_runtime.sandbox_metrics import sandbox_auth_metrics
 from app.code_runtime.execution_target import is_desktop_agent_runtime_target
+from app.code_runtime.local_runtime import (
+    LocalRuntimeClient,
+    rebind_registered_local_workspace,
+)
 from app.config import APP_VERSION, settings
 from app import runtime
 from app.database import AsyncSessionLocal, get_db
@@ -94,6 +99,17 @@ class CreateCodeApplicationRequest(BaseModel):
     app_name: str
     app_code: str
     seed_project_id: Optional[str] = None
+    local_application: bool = False
+    local_workspace_path: Optional[str] = None
+
+
+class RebindLocalCodeWorkspaceRequest(BaseModel):
+    local_workspace_path: str
+
+
+@router.get("/applications/default-workspace")
+async def default_code_application_workspace(app_code: str = Query(..., min_length=1)):
+    return default_local_code_application_workspace(app_code)
 
 
 @router.get("/internal/sandbox-auth-metrics", include_in_schema=False)
@@ -114,6 +130,7 @@ async def sandbox_auth_state_endpoint() -> dict[str, str]:
 
 _control_plane_user_locks: dict[int, asyncio.Lock] = {}
 _code_session_open_locks: dict[str, asyncio.Lock] = {}
+_local_code_open_phases: dict[tuple[int, int, str], str] = {}
 
 
 def _control_plane_user_lock(user_id: int) -> asyncio.Lock:
@@ -131,6 +148,21 @@ def _code_session_open_lock(session_ref: str) -> asyncio.Lock:
         lock = asyncio.Lock()
         _code_session_open_locks[key] = lock
     return lock
+
+
+def _local_code_open_phase_key(
+    session: AIChatSession,
+    ctx: AuthContext,
+    session_ref: str,
+) -> tuple[int, int, str]:
+    session_identity = str(
+        getattr(session, "public_id", None)
+        or getattr(session, "id", None)
+        or session_ref
+    )
+    tenant_id = int(getattr(session, "tenant_id", None) or ctx.tenant_id)
+    user_id = int(getattr(session, "user_id", None) or ctx.user.id)
+    return tenant_id, user_id, session_identity
 
 
 def _control_plane_code_tenant_id(ctx: AuthContext) -> str | None:
@@ -152,6 +184,57 @@ def _code_session_matches_context(session: AIChatSession, ctx: AuthContext) -> b
     if control_plane_tenant_id:
         return session.control_plane_tenant_id == control_plane_tenant_id
     return session.tenant_id == ctx.tenant_id
+
+
+async def _owned_local_code_session(
+    db: AsyncSession,
+    session_ref: str,
+    ctx: AuthContext,
+) -> AIChatSession:
+    session = await resolve_code_session(db, session_ref)
+    if (
+        session is None
+        or not _code_session_matches_context(session, ctx)
+        or int(session.user_id) != int(ctx.user.id)
+    ):
+        raise HTTPException(status_code=404, detail="Code 会话不存在")
+    if session.mode != "code":
+        raise HTTPException(status_code=400, detail="该会话不是 Code 会话")
+    if session.app_id or not is_local_code_application_id(
+        session.external_application_id or ""
+    ):
+        raise HTTPException(status_code=400, detail="该会话不是本地 Code 应用")
+    return session
+
+
+async def _reset_local_runtime_binding_state(
+    db: AsyncSession,
+    session: AIChatSession,
+) -> None:
+    await db.execute(
+        update(CodeRuntimeBinding)
+        .where(
+            CodeRuntimeBinding.tenant_id == session.tenant_id,
+            CodeRuntimeBinding.user_id == session.user_id,
+            CodeRuntimeBinding.external_application_id
+            == session.external_application_id,
+        )
+        .values(
+            sandbox_instance_id=None,
+            runtime_session_id=None,
+            desktop_agent_runtime_token_enc=None,
+            status="pending",
+            last_error=None,
+        )
+    )
+    await db.execute(
+        delete(CodeRuntimeAgentSession).where(
+            CodeRuntimeAgentSession.tenant_id == session.tenant_id,
+            CodeRuntimeAgentSession.user_id == session.user_id,
+            CodeRuntimeAgentSession.external_application_id
+            == session.external_application_id,
+        )
+    )
 
 
 def _resolved_code_sandbox_cache_config() -> dict[str, int | str]:
@@ -481,6 +564,7 @@ async def list_code_runtime_applications(
     request: Request,
     ctx: Annotated[AuthContext, Depends(get_auth_context)],
     db: Annotated[AsyncSession, Depends(get_db)],
+    source: Literal["local", "remote"] = "remote",
     keyword: Optional[str] = None,
     provision_status: Optional[str] = Query(default=None, alias="provisionStatus"),
     page: int = 1,
@@ -488,8 +572,12 @@ async def list_code_runtime_applications(
 ):
     started = time.monotonic()
     try:
-        authorization, auth_provider = await _control_plane_request_auth(request, ctx, db)
+        if source == "local":
+            authorization, auth_provider = None, None
+        else:
+            authorization, auth_provider = await _control_plane_request_auth(request, ctx, db)
         result = await list_code_applications(
+            source=source,
             keyword=keyword,
             provision_status=provision_status,
             page=page,
@@ -497,6 +585,8 @@ async def list_code_runtime_applications(
             authorization_header=authorization,
             delegated_context=ctx,
             auth_provider=auth_provider,
+            db=db,
+            ctx=ctx,
         )
     except Exception:
         sandbox_auth_metrics.record_builder_stage(
@@ -520,11 +610,18 @@ async def create_code_runtime_application(
     ctx: Annotated[AuthContext, Depends(get_auth_context)],
     db: Annotated[AsyncSession, Depends(get_db)],
 ):
-    authorization, auth_provider = await _control_plane_request_auth(request, ctx, db)
+    if body.local_application:
+        authorization, auth_provider = None, None
+    else:
+        authorization, auth_provider = await _control_plane_request_auth(request, ctx, db)
     return await create_code_application(
         app_name=body.app_name,
         app_code=body.app_code,
         seed_project_id=body.seed_project_id,
+        local_application=body.local_application,
+        local_workspace_path=body.local_workspace_path,
+        db=db,
+        ctx=ctx,
         authorization_header=authorization,
         delegated_context=ctx,
         auth_provider=auth_provider,
@@ -642,15 +739,26 @@ async def open_code_runtime_session(
         )
         if uses_local_builder:
             authorization, auth_provider = None, None
+            phase_key = _local_code_open_phase_key(session, ctx, session_ref)
+            _local_code_open_phases[phase_key] = "checking_project"
         else:
             authorization, auth_provider = await _control_plane_request_auth(request, ctx, db)
+        open_kwargs: dict[str, Any] = {}
+        if uses_local_builder:
+            open_kwargs["on_local_phase"] = lambda phase: _local_code_open_phases.__setitem__(
+                phase_key,
+                phase,
+            )
         result = await open_code_session(
             db=db,
             session_id=session_ref,
             ctx=ctx,
             authorization_header=authorization,
             auth_provider=auth_provider,
+            **open_kwargs,
         )
+        if uses_local_builder:
+            _local_code_open_phases[phase_key] = "opening_workbench"
         try:
             await db.commit()
         except Exception as exc:
@@ -662,6 +770,76 @@ async def open_code_runtime_session(
             **result,
             **_resolved_code_sandbox_cache_config(),
         }
+
+
+@router.get("/sessions/{session_ref}/open-status")
+async def get_code_runtime_open_status(
+    session_ref: str,
+    ctx: Annotated[AuthContext, Depends(get_auth_context)],
+    db: Annotated[AsyncSession, Depends(get_db)],
+):
+    session = await _owned_local_code_session(db, session_ref, ctx)
+    in_flight_phase = _local_code_open_phases.get(
+        _local_code_open_phase_key(session, ctx, session_ref)
+    )
+    if in_flight_phase:
+        return {
+            "phase": in_flight_phase,
+            "runtime_state": "opening",
+        }
+    return await LocalRuntimeClient.from_environment().application_open_status(
+        db,
+        session,
+        ctx,
+    )
+
+
+@router.post("/sessions/{session_ref}/local-runtime/restart")
+async def restart_local_code_runtime(
+    session_ref: str,
+    ctx: Annotated[AuthContext, Depends(get_auth_context)],
+    db: Annotated[AsyncSession, Depends(get_db)],
+):
+    session = await _owned_local_code_session(db, session_ref, ctx)
+    _local_code_open_phases.pop(_local_code_open_phase_key(session, ctx, session_ref), None)
+    result = await LocalRuntimeClient.from_environment().restart_application(
+        db,
+        session,
+        ctx,
+    )
+    await _reset_local_runtime_binding_state(db, session)
+    await db.commit()
+    return result
+
+
+@router.patch("/sessions/{session_ref}/local-workspace")
+async def rebind_local_code_workspace(
+    session_ref: str,
+    body: RebindLocalCodeWorkspaceRequest,
+    ctx: Annotated[AuthContext, Depends(get_auth_context)],
+    db: Annotated[AsyncSession, Depends(get_db)],
+):
+    session = await _owned_local_code_session(db, session_ref, ctx)
+    _local_code_open_phases.pop(_local_code_open_phase_key(session, ctx, session_ref), None)
+    client = LocalRuntimeClient.from_environment()
+    await client.restart_application(
+        db,
+        session,
+        ctx,
+        validate_workspace=False,
+    )
+    await _reset_local_runtime_binding_state(db, session)
+    workspace = await rebind_registered_local_workspace(
+        db,
+        session,
+        ctx,
+        workspace_path=body.local_workspace_path,
+    )
+    await db.commit()
+    return {
+        "workspace_id": workspace.ws_id,
+        "local_workspace_path": workspace.abs_path,
+    }
 
 
 def _desktop_runtime_authorization(binding: CodeRuntimeBinding) -> str:

@@ -22,11 +22,15 @@ describe('Apps Code mode entry', () => {
     expect(appsSource).not.toContain('codeMode ? codeRuntimeApi.listApplications')
   })
 
-  it('creates a Code application from the Code application list', () => {
-    expect(appsSource).toContain('codeRuntimeApi.createApplication')
-    expect(appsSource).toContain('startNewCodeApp')
-    expect(appsSource).toContain('新建应用')
-    expect(appsSource).toContain('创建并打开')
-    expect(appsSource).toContain('generateCodeAppCode')
+  it('separates desktop local and remote applications without exposing local UI on web', () => {
+    expect(appsSource).toContain('LocalCodeApplicationDialog')
+    expect(appsSource).toContain("type CodeApplicationSource")
+    expect(appsSource).toContain("isDesktop ? loadStoredCodeSource() : 'remote'")
+    expect(appsSource).toContain("source: codeApplicationSource.value")
+    expect(appsSource).toContain('本地应用')
+    expect(appsSource).toContain('远程应用')
+    expect(appsSource).toContain('新建本地应用')
+    expect(appsSource).toContain('新建远程应用')
+    expect(appsSource).not.toContain('ElMessageBox.prompt')
   })
 })
