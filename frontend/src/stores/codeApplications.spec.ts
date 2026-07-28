@@ -3,14 +3,14 @@ import { createPinia, setActivePinia } from 'pinia'
 import { codeRuntimeApi, type CodeApplicationListResponse } from '@/api/codeRuntime'
 import { useCodeApplicationsStore } from './codeApplications'
 
-function page(tenant: string): CodeApplicationListResponse {
+function page(tenant: string, source: 'd-ai-code' | 'desktop-local' = 'd-ai-code'): CodeApplicationListResponse {
   return {
     items: [{
       id: `${tenant}-app`,
       external_application_id: `${tenant}-app`,
       app_name: `${tenant} App`,
       app_code: `${tenant}_app`,
-      source: 'd-ai-code',
+      source,
       app_type: 'ai-code',
       status: 'ready',
       models: 0,
@@ -21,7 +21,7 @@ function page(tenant: string): CodeApplicationListResponse {
     page: 1,
     pageSize: 100,
     total: 1,
-    source: 'd-ai-code',
+    source,
   }
 }
 
@@ -60,6 +60,21 @@ describe('code applications store', () => {
     await expect(store.load({ tenantId: 3 }, { pageSize: 100 }))
       .resolves.toEqual(page('tenant-3'))
     expect(list).toHaveBeenCalledTimes(2)
+  })
+
+  it('never shares cached pages across local and remote sources', async () => {
+    const list = vi.spyOn(codeRuntimeApi, 'listApplications')
+      .mockResolvedValueOnce(page('local', 'desktop-local'))
+      .mockResolvedValueOnce(page('remote'))
+    const store = useCodeApplicationsStore()
+    const scope = { tenantId: 3 }
+
+    await expect(store.load(scope, { source: 'local', pageSize: 100 }))
+      .resolves.toEqual(page('local', 'desktop-local'))
+    await expect(store.load(scope, { source: 'remote', pageSize: 100 }))
+      .resolves.toEqual(page('remote'))
+    expect(list).toHaveBeenNthCalledWith(1, expect.objectContaining({ source: 'local' }))
+    expect(list).toHaveBeenNthCalledWith(2, expect.objectContaining({ source: 'remote' }))
   })
 
   it('uses the fresh TTL cache and supports an explicit refresh', async () => {

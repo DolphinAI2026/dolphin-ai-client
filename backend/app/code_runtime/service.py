@@ -5,7 +5,8 @@ import base64
 import re
 import secrets
 from datetime import datetime, timedelta, timezone
-from typing import Any, Awaitable, Callable
+from pathlib import Path
+from typing import Any, Awaitable, Callable, Literal
 from urllib.parse import parse_qsl, quote, urlencode, urlsplit, urlunsplit
 from uuid import NAMESPACE_URL, uuid4, uuid5
 
@@ -23,9 +24,14 @@ from app.code_runtime.sandbox_auth import (
     runtime_session_expiry_for_storage,
     split_entry_token,
 )
-from app.code_runtime.local_runtime import LocalRuntimeClient
+from app.code_runtime.local_runtime import (
+    LocalRuntimeClient,
+    default_local_workspace_path,
+    default_local_workspace_root,
+    ensure_registered_local_workspace,
+)
 from app.code_runtime.execution_target import ExecutionTarget
-from app.models import Application
+from app.models import Application, RegisteredWorkspace
 from app.models.ai_chat import (
     AIChatSession,
     CodeRuntimeAgentSession,
@@ -431,6 +437,11 @@ def local_builder_url() -> str:
     )
 
 
+def local_code_applications_enabled() -> bool:
+    raw = os.getenv("DOLPHIN_CODE_LOCAL_CODE_APPLICATIONS", "").strip().lower()
+    return raw in {"1", "true", "yes", "on"}
+
+
 def default_seed_project_id() -> str:
     return (
         os.getenv("DOLPHIN_CODE_DEFAULT_SEED_PROJECT_ID", "").strip()
@@ -634,6 +645,12 @@ def _local_application_data(*, app_name: str, app_code: str) -> dict[str, Any]:
     }
 
 
+def default_local_code_application_workspace(app_code: str) -> dict[str, str]:
+    root = default_local_workspace_root().expanduser().resolve(strict=False)
+    path = default_local_workspace_path(app_code).expanduser().resolve(strict=False)
+    return {"workspace_root": str(root), "workspace_path": str(path)}
+
+
 def is_local_code_application_id(application_id: str) -> bool:
     return str(application_id or "").strip().startswith(_LOCAL_APPLICATION_PREFIX)
 
@@ -678,6 +695,7 @@ def _normalize_code_application(item: dict[str, Any]) -> dict[str, Any]:
 
 async def list_code_applications(
     *,
+    source: Literal["local", "remote"] = "remote",
     keyword: str | None = None,
     provision_status: str | None = None,
     page: int = 1,
@@ -685,7 +703,75 @@ async def list_code_applications(
     authorization_header: str | None = None,
     delegated_context: Any | None = None,
     auth_provider: str | None = None,
+    db: AsyncSession | None = None,
+    ctx: Any | None = None,
 ) -> dict[str, Any]:
+    if source == "local":
+        if db is None or ctx is None:
+            raise HTTPException(status_code=400, detail="本地应用列表缺少工作区上下文")
+        rows = (
+            await db.execute(
+                select(RegisteredWorkspace)
+                .where(
+                    RegisteredWorkspace.tenant_id == int(ctx.tenant_id),
+                    RegisteredWorkspace.user_id == int(ctx.user.id),
+                    RegisteredWorkspace.apaas_app_id.like(f"{_LOCAL_APPLICATION_PREFIX}%"),
+                )
+                .order_by(RegisteredWorkspace.last_opened_at.desc(), RegisteredWorkspace.id.desc())
+            )
+        ).scalars().all()
+        normalized_keyword = str(keyword or "").strip().lower()
+        items: list[dict[str, Any]] = []
+        for workspace in rows:
+            application_id = str(workspace.apaas_app_id or "").strip()
+            app_code = Path(workspace.abs_path).name
+            app_name = str(workspace.display_name or app_code).strip() or app_code
+            if normalized_keyword and normalized_keyword not in " ".join(
+                (app_name, app_code, workspace.abs_path)
+            ).lower():
+                continue
+            created_at = workspace.created_at.isoformat() if workspace.created_at else None
+            updated_at = workspace.last_opened_at.isoformat() if workspace.last_opened_at else created_at
+            items.append({
+                "id": application_id,
+                "external_application_id": application_id,
+                "app_name": app_name,
+                "app_code": app_code,
+                "description": None,
+                "source": "desktop-local",
+                "app_type": "ai-code",
+                "status": "READY",
+                "local_status": "completed",
+                "remote_status": None,
+                "models": 0,
+                "forms": 0,
+                "roles": 0,
+                "dicts": 0,
+                "local_workspace_path": workspace.abs_path,
+                "workspace_id": workspace.ws_id,
+                "repository": None,
+                "owner": None,
+                "created_at": created_at,
+                "updated_at": updated_at,
+            })
+        current_page = max(1, int(page or 1))
+        current_page_size = max(1, int(page_size or 50))
+        start = (current_page - 1) * current_page_size
+        return {
+            "items": items[start:start + current_page_size],
+            "page": current_page,
+            "pageSize": current_page_size,
+            "total": len(items),
+            "source": "desktop-local",
+        }
+    if local_code_applications_enabled():
+        return {
+            "items": [],
+            "page": max(1, int(page or 1)),
+            "pageSize": max(1, int(page_size or 50)),
+            "total": 0,
+            "source": "d-ai-code-local",
+        }
     base_url = control_plane_base_url()
     params: dict[str, Any] = {"page": max(1, int(page or 1)), "pageSize": max(1, int(page_size or 50))}
     if str(keyword or "").strip():
@@ -738,6 +824,10 @@ async def create_code_application(
     app_name: str,
     app_code: str,
     seed_project_id: str | None = None,
+    local_application: bool = False,
+    local_workspace_path: str | None = None,
+    db: AsyncSession | None = None,
+    ctx: Any | None = None,
     authorization_header: str | None = None,
     delegated_context: Any | None = None,
     auth_provider: str | None = None,
@@ -751,6 +841,27 @@ async def create_code_application(
         raise HTTPException(status_code=400, detail="app_code 不能为空")
     if not seed_id:
         raise HTTPException(status_code=400, detail="seed_project_id 不能为空")
+
+    if local_application or str(local_workspace_path or "").strip():
+        if db is None or ctx is None:
+            raise HTTPException(status_code=400, detail="本地应用创建缺少工作区上下文")
+        data = _local_application_data(app_name=name, app_code=code)
+        workspace = await ensure_registered_local_workspace(
+            db,
+            ctx,
+            application_id=str(data["applicationId"]),
+            display_name=name,
+            workspace_path=local_workspace_path or default_local_workspace_path(code),
+        )
+        normalized = _normalize_code_application(data)
+        normalized["source"] = "desktop-local"
+        normalized["remote_status"] = None
+        normalized["local_workspace_path"] = workspace.abs_path
+        normalized["workspace_id"] = workspace.ws_id
+        return normalized
+
+    if local_code_applications_enabled():
+        return _normalize_code_application(_local_application_data(app_name=name, app_code=code))
 
     base_url = control_plane_base_url()
     body = {
@@ -895,6 +1006,7 @@ async def open_code_session(
     authorization_header: str | None = None,
     auth_provider: str | None = None,
     browser_session_id: str | None = None,
+    on_local_phase: Callable[[str], None] | None = None,
 ) -> dict[str, Any]:
     session = await resolve_code_session(db, session_id)
     if session is not None:
@@ -930,10 +1042,7 @@ async def open_code_session(
         raise HTTPException(status_code=400, detail="Code 会话未绑定应用")
 
     desktop_entry_token: str | None = None
-    desktop_runtime = (
-        not is_local_code_application_id(external_app_id)
-        and _desktop_runtime_environment_present()
-    )
+    desktop_runtime = is_local_code_application_id(external_app_id)
 
     async def workspace_open_once() -> dict[str, Any]:
         if workspace_open is not None:
@@ -948,17 +1057,20 @@ async def open_code_session(
         )
 
     if desktop_runtime:
-        await verify_control_plane_application_access(
-            external_app_id,
-            authorization_header=authorization_header,
-            delegated_context=ctx,
-            auth_provider=auth_provider,
-        )
-        opened, desktop_entry_token = await LocalRuntimeClient.from_environment().open_application_with_entry_token(
-            db,
-            session,
-            ctx,
-        )
+        local_runtime = LocalRuntimeClient.from_environment()
+        if on_local_phase is None:
+            opened, desktop_entry_token = await local_runtime.open_application_with_entry_token(
+                db,
+                session,
+                ctx,
+            )
+        else:
+            opened, desktop_entry_token = await local_runtime.open_application_with_entry_token(
+                db,
+                session,
+                ctx,
+                on_phase=on_local_phase,
+            )
     else:
         opened = await workspace_open_once()
     builder_url = str(opened.get("specReviewUrl") or opened.get("builderUrl") or "").strip()

@@ -112,7 +112,7 @@ describe('CodeConversationPage', () => {
   })
 
   it('fails a pending frame after a request-bound builder.ready timeout and clears timers', () => {
-    expect(pageSource).toContain('READY_TIMEOUT_MS = 30_000')
+    expect(pageSource).toContain('READY_TIMEOUT_MS = 120_000')
     expect(pageSource).toContain('pendingReadyTimer')
     expect(pageSource).toContain('startPendingReadyTimer')
     expect(pageSource).toContain('clearPendingReadyTimer')
@@ -122,6 +122,18 @@ describe('CodeConversationPage', () => {
     expect(pageSource).toContain('Code 工作台准备超时')
     expect(pageSource).toContain('failCodeFrameOpen')
     expect(pageSource).toContain('onBeforeUnmount')
+  })
+
+  it('polls local startup status and exposes in-page recovery actions', () => {
+    expect(pageSource).toContain('CodeWorkspaceOpening')
+    expect(pageSource).toContain('codeRuntimeApi.getOpenStatus(sessionRef)')
+    expect(pageSource).toContain('OPEN_STATUS_POLL_MS = 500')
+    expect(pageSource).toContain('startOpenStatusPolling')
+    expect(pageSource).toContain('stopOpenStatusPolling')
+    expect(pageSource).toContain('codeRuntimeApi.restartLocalRuntime')
+    expect(pageSource).toContain('codeRuntimeApi.rebindLocalWorkspace')
+    expect(pageSource).toContain("pickDirectory('重新选择本地应用目录')")
+    expect(pageSource).toContain("router.push('/code/apps')")
   })
 
   it('restores the last ready route after pending failure without reopening the active frame', () => {

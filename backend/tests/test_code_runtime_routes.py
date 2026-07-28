@@ -2066,10 +2066,64 @@ async def test_create_code_runtime_application_delegates_to_control_plane(
         "app_name": "销售线索评分助手",
         "app_code": "sales-lead-helper",
         "seed_project_id": "90001",
+        "local_application": False,
+        "local_workspace_path": None,
+        "db": db_session,
+        "ctx": ctx,
         "authorization_header": "Bearer user-token",
         "delegated_context": ctx,
         "auth_provider": None,
     }]
+
+
+@pytest.mark.asyncio
+async def test_local_code_application_routes_skip_control_plane_auth(
+    db_session,
+    monkeypatch,
+):
+    import app.routes.code_runtime as code_runtime_routes
+    from app.routes.code_runtime import (
+        CreateCodeApplicationRequest,
+        create_code_runtime_application,
+        list_code_runtime_applications,
+    )
+
+    async def unexpected_auth(*_args, **_kwargs):
+        raise AssertionError("local application route must not request Control Plane auth")
+
+    calls: list[dict] = []
+
+    async def fake_list_code_applications(**kwargs):
+        calls.append({"kind": "list", **kwargs})
+        return {"items": [], "page": 1, "pageSize": 50, "total": 0, "source": "desktop-local"}
+
+    async def fake_create_code_application(**kwargs):
+        calls.append({"kind": "create", **kwargs})
+        return {"external_application_id": "local-one"}
+
+    monkeypatch.setattr(code_runtime_routes, "_control_plane_request_auth", unexpected_auth)
+    monkeypatch.setattr(code_runtime_routes, "list_code_applications", fake_list_code_applications)
+    monkeypatch.setattr(code_runtime_routes, "create_code_application", fake_create_code_application)
+    ctx = _ctx()
+    request = SimpleNamespace(headers={})
+
+    await list_code_runtime_applications(request, ctx, db_session, source="local")
+    await create_code_runtime_application(
+        CreateCodeApplicationRequest(
+            app_name="本地应用",
+            app_code="local-app",
+            local_application=True,
+            local_workspace_path="/tmp/local-app",
+        ),
+        request,
+        ctx,
+        db_session,
+    )
+
+    assert calls[0]["kind"] == "list"
+    assert calls[0]["source"] == "local"
+    assert calls[1]["kind"] == "create"
+    assert calls[1]["local_application"] is True
 
 
 @pytest.mark.asyncio
@@ -2182,16 +2236,23 @@ async def test_open_local_code_runtime_session_does_not_require_control_plane_au
     )
     db_session.add(session)
     await db_session.flush()
-    monkeypatch.setenv("DOLPHIN_CODE_BUILDER_URL", "http://127.0.0.1:61137/builder/")
 
     async def fail_if_control_plane_auth_is_requested(*_args, **_kwargs):
         raise AssertionError("local Code sessions must not request Control Plane auth")
+
+    async def fake_open_code_session(**_kwargs):
+        return {
+            "external_application_id": "local-code-smoke",
+            "route_id": "s1",
+            "embed_url": "/api/code-runtime/s1/builder/?token=test",
+        }
 
     monkeypatch.setattr(
         code_runtime_routes,
         "_control_plane_request_auth",
         fail_if_control_plane_auth_is_requested,
     )
+    monkeypatch.setattr(code_runtime_routes, "open_code_session", fake_open_code_session)
 
     result = await open_code_runtime_session(
         session.public_id,
@@ -2203,6 +2264,165 @@ async def test_open_local_code_runtime_session_does_not_require_control_plane_au
     assert result["external_application_id"] == "local-code-smoke"
     assert result["route_id"] == "s1"
     assert result["embed_url"].startswith("/api/code-runtime/s1/builder/?")
+
+
+@pytest.mark.asyncio
+async def test_local_runtime_status_restart_and_rebind_skip_control_plane_auth(
+    db_session,
+    monkeypatch,
+    tmp_path,
+):
+    import app.routes.code_runtime as code_runtime_routes
+    from app.routes.code_runtime import (
+        RebindLocalCodeWorkspaceRequest,
+        get_code_runtime_open_status,
+        rebind_local_code_workspace,
+        restart_local_code_runtime,
+    )
+
+    session = AIChatSession(
+        tenant_id=7,
+        user_id=11,
+        title="本地 Code",
+        mode="code",
+        status="active",
+        external_application_id="local-code-recovery",
+        external_app_name="本地 Code",
+        external_app_code="local-code-recovery",
+    )
+    db_session.add(session)
+    await db_session.flush()
+    calls: list[tuple[str, object]] = []
+
+    class FakeLocalRuntimeClient:
+        @classmethod
+        def from_environment(cls):
+            return cls()
+
+        async def application_open_status(self, _db, runtime_session, _ctx):
+            calls.append(("status", runtime_session.id))
+            return {"phase": "starting_runtime", "runtime_state": "starting"}
+
+        async def restart_application(
+            self,
+            _db,
+            runtime_session,
+            _ctx,
+            *,
+            validate_workspace=True,
+        ):
+            calls.append(("restart", (runtime_session.id, validate_workspace)))
+            return {"runtime_state": "stopped", "stopped": True}
+
+    async def fake_rebind(_db, runtime_session, _ctx, *, workspace_path):
+        calls.append(("rebind", (runtime_session.id, workspace_path)))
+        return SimpleNamespace(ws_id="ws-rebound", abs_path=workspace_path)
+
+    async def fail_if_control_plane_auth_is_requested(*_args, **_kwargs):
+        raise AssertionError("local recovery routes must not request Control Plane auth")
+
+    monkeypatch.setattr(code_runtime_routes, "LocalRuntimeClient", FakeLocalRuntimeClient)
+    monkeypatch.setattr(
+        code_runtime_routes,
+        "rebind_registered_local_workspace",
+        fake_rebind,
+    )
+    monkeypatch.setattr(
+        code_runtime_routes,
+        "_control_plane_request_auth",
+        fail_if_control_plane_auth_is_requested,
+    )
+
+    status = await get_code_runtime_open_status(session.public_id, _ctx(), db_session)
+    restarted = await restart_local_code_runtime(session.public_id, _ctx(), db_session)
+    rebound = await rebind_local_code_workspace(
+        session.public_id,
+        RebindLocalCodeWorkspaceRequest(local_workspace_path=str(tmp_path / "replacement")),
+        _ctx(),
+        db_session,
+    )
+
+    assert status["phase"] == "starting_runtime"
+    assert restarted["stopped"] is True
+    assert rebound == {
+        "workspace_id": "ws-rebound",
+        "local_workspace_path": str(tmp_path / "replacement"),
+    }
+    assert calls == [
+        ("status", session.id),
+        ("restart", (session.id, True)),
+        ("restart", (session.id, False)),
+        ("rebind", (session.id, str(tmp_path / "replacement"))),
+    ]
+
+
+@pytest.mark.asyncio
+async def test_local_open_status_tracks_in_flight_open_without_manager_probe(
+    db_session,
+    monkeypatch,
+):
+    import app.routes.code_runtime as code_runtime_routes
+    from app.routes.code_runtime import (
+        get_code_runtime_open_status,
+        open_code_runtime_session,
+    )
+
+    session = AIChatSession(
+        tenant_id=7,
+        user_id=11,
+        title="本地 Code",
+        mode="code",
+        status="active",
+        external_application_id="local-code-phases",
+    )
+    db_session.add(session)
+    await db_session.flush()
+    entered = asyncio.Event()
+    advance = asyncio.Event()
+    starting = asyncio.Event()
+    finish = asyncio.Event()
+
+    async def fake_open_code_session(*, on_local_phase, **_kwargs):
+        entered.set()
+        await advance.wait()
+        on_local_phase("starting_runtime")
+        starting.set()
+        await finish.wait()
+        return {
+            "external_application_id": "local-code-phases",
+            "route_id": "phase-route",
+            "embed_url": "/api/code-runtime/phase-route/builder/?token=test",
+        }
+
+    class UnexpectedLocalRuntimeClient:
+        @classmethod
+        def from_environment(cls):
+            raise AssertionError("in-flight status must not block on the manager")
+
+    monkeypatch.setattr(code_runtime_routes, "open_code_session", fake_open_code_session)
+    monkeypatch.setattr(code_runtime_routes, "LocalRuntimeClient", UnexpectedLocalRuntimeClient)
+
+    open_task = asyncio.create_task(
+        open_code_runtime_session(
+            session.public_id,
+            SimpleNamespace(headers={}),
+            _ctx(),
+            db_session,
+        )
+    )
+    await entered.wait()
+
+    checking = await get_code_runtime_open_status(session.public_id, _ctx(), db_session)
+    advance.set()
+    await starting.wait()
+    starting_status = await get_code_runtime_open_status(session.public_id, _ctx(), db_session)
+    finish.set()
+    await open_task
+    opening = await get_code_runtime_open_status(session.public_id, _ctx(), db_session)
+
+    assert checking["phase"] == "checking_project"
+    assert starting_status["phase"] == "starting_runtime"
+    assert opening["phase"] == "opening_workbench"
 
 
 @pytest.mark.asyncio

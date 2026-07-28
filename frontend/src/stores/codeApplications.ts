@@ -28,6 +28,7 @@ const CACHE_TTL_MS = 30_000
 
 function normalizeParams(params: CodeApplicationListParams = {}) {
   return {
+    source: params.source || 'remote',
     keyword: String(params.keyword || '').trim(),
     provisionStatus: String(params.provisionStatus || '').trim(),
     page: Number(params.page || 1),

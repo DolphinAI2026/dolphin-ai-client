@@ -993,6 +993,102 @@ async def test_list_code_applications_fetches_and_maps_control_plane_apps(monkey
 
 
 @pytest.mark.asyncio
+async def test_list_code_applications_uses_local_mode_without_control_plane(monkeypatch):
+    from app.code_runtime import service
+
+    class UnexpectedClient:
+        def __init__(self, *args, **kwargs):
+            raise AssertionError("control plane should not be called in local mode")
+
+    monkeypatch.setenv("DOLPHIN_CODE_LOCAL_CODE_APPLICATIONS", "true")
+    monkeypatch.setattr(service.httpx, "AsyncClient", UnexpectedClient)
+
+    result = await service.list_code_applications(keyword="crm", page=2, page_size=5)
+
+    assert result == {
+        "items": [],
+        "page": 2,
+        "pageSize": 5,
+        "total": 0,
+        "source": "d-ai-code-local",
+    }
+
+
+@pytest.mark.asyncio
+async def test_list_code_applications_restores_local_workspaces(
+    db_session,
+    tmp_path,
+    monkeypatch,
+):
+    from app.code_runtime import service
+    from app.models import RegisteredWorkspace
+
+    class UnexpectedClient:
+        def __init__(self, *args, **kwargs):
+            raise AssertionError("local application list must not call Control Plane")
+
+    local_path = tmp_path / "sales-assistant"
+    local_path.mkdir()
+    other_path = tmp_path / "other-app"
+    other_path.mkdir()
+    db_session.add_all([
+        RegisteredWorkspace(
+            ws_id="11_local",
+            abs_path=str(local_path.resolve()),
+            user_id=11,
+            tenant_id=7,
+            workspace_type="code-local-application",
+            apaas_app_id="local-sales",
+            display_name="销售助手",
+        ),
+        RegisteredWorkspace(
+            ws_id="12_other",
+            abs_path=str(other_path.resolve()),
+            user_id=12,
+            tenant_id=7,
+            workspace_type="code-local-application",
+            apaas_app_id="local-other",
+            display_name="其他应用",
+        ),
+    ])
+    await db_session.commit()
+    monkeypatch.setattr(service.httpx, "AsyncClient", UnexpectedClient)
+    ctx = SimpleNamespace(user=SimpleNamespace(id=11), tenant_id=7)
+
+    result = await service.list_code_applications(
+        source="local",
+        keyword="销售",
+        db=db_session,
+        ctx=ctx,
+    )
+
+    assert result["source"] == "desktop-local"
+    assert result["total"] == 1
+    assert result["items"] == [{
+        "id": "local-sales",
+        "external_application_id": "local-sales",
+        "app_name": "销售助手",
+        "app_code": "sales-assistant",
+        "description": None,
+        "source": "desktop-local",
+        "app_type": "ai-code",
+        "status": "READY",
+        "local_status": "completed",
+        "remote_status": None,
+        "models": 0,
+        "forms": 0,
+        "roles": 0,
+        "dicts": 0,
+        "local_workspace_path": str(local_path.resolve()),
+        "workspace_id": "11_local",
+        "repository": None,
+        "owner": None,
+        "created_at": result["items"][0]["created_at"],
+        "updated_at": result["items"][0]["updated_at"],
+    }]
+
+
+@pytest.mark.asyncio
 async def test_list_code_applications_rejects_non_json_success_response(monkeypatch):
     from app.code_runtime import service
 
@@ -1085,6 +1181,72 @@ async def test_create_code_application_posts_to_control_plane_with_default_seed(
     assert result["app_name"] == "销售线索评分助手"
     assert result["app_code"] == "sales-lead-helper"
     assert result["local_status"] == "completed"
+
+
+@pytest.mark.asyncio
+async def test_create_code_application_uses_local_mode_without_control_plane(monkeypatch):
+    from app.code_runtime import service
+
+    class UnexpectedClient:
+        def __init__(self, *args, **kwargs):
+            raise AssertionError("control plane should not be called in local mode")
+
+    monkeypatch.setenv("DOLPHIN_CODE_LOCAL_CODE_APPLICATIONS", "true")
+    monkeypatch.setattr(service.httpx, "AsyncClient", UnexpectedClient)
+
+    result = await service.create_code_application(
+        app_name="Dolphin Code CRM",
+        app_code="dolphin-code-crm",
+    )
+
+    assert result["external_application_id"].startswith("local-")
+    assert result["app_name"] == "Dolphin Code CRM"
+    assert result["app_code"] == "dolphin-code-crm"
+    assert result["status"] == "READY"
+    assert result["local_status"] == "completed"
+
+
+@pytest.mark.asyncio
+async def test_create_code_application_registers_local_workspace(
+    db_session,
+    tmp_path,
+    monkeypatch,
+):
+    from sqlalchemy import select
+
+    from app.code_runtime import service
+    from app.models import RegisteredWorkspace
+
+    class UnexpectedClient:
+        def __init__(self, *args, **kwargs):
+            raise AssertionError("local application create must not call Control Plane")
+
+    monkeypatch.setattr(service.httpx, "AsyncClient", UnexpectedClient)
+    project_path = tmp_path / "sales-local"
+    ctx = SimpleNamespace(user=SimpleNamespace(id=11), tenant_id=7)
+
+    result = await service.create_code_application(
+        app_name="本地销售助手",
+        app_code="sales-local",
+        local_application=True,
+        local_workspace_path=str(project_path),
+        db=db_session,
+        ctx=ctx,
+    )
+
+    workspace = (
+        await db_session.execute(
+            select(RegisteredWorkspace).where(
+                RegisteredWorkspace.apaas_app_id == result["external_application_id"]
+            )
+        )
+    ).scalar_one()
+    assert result["external_application_id"].startswith("local-")
+    assert result["local_workspace_path"] == str(project_path.resolve())
+    assert result["workspace_id"] == workspace.ws_id
+    assert workspace.workspace_type == "code-local-application"
+    assert workspace.display_name == "本地销售助手"
+    assert (project_path / ".git").is_dir()
 
 
 @pytest.mark.asyncio
@@ -1586,6 +1748,77 @@ async def test_open_code_session_upserts_runtime_binding(db_session):
 
 
 @pytest.mark.asyncio
+async def test_open_local_code_session_uses_desktop_runtime_without_control_plane(
+    db_session,
+    monkeypatch,
+):
+    from app.code_runtime import service
+    from app.code_runtime.service import open_code_session
+
+    session = AIChatSession(
+        tenant_id=7,
+        user_id=11,
+        external_application_id="local-desktop-app",
+        title="Local Desktop Code",
+        mode="code",
+        status="active",
+    )
+    db_session.add(session)
+    await db_session.commit()
+    manager_calls = 0
+
+    class FakeLocalRuntimeClient:
+        @classmethod
+        def from_environment(cls):
+            return cls()
+
+        async def open_application_with_entry_token(self, _db, _session, _ctx):
+            nonlocal manager_calls
+            manager_calls += 1
+            return (
+                {
+                    "applicationId": "local-desktop-app",
+                    "workspaceId": "workspace-local",
+                    "sandboxInstanceId": "local-instance",
+                    "conversationId": "",
+                    "runtimeBaseUrl": "http://127.0.0.1:19090",
+                    "specReviewUrl": "http://127.0.0.1:19090/builder/",
+                },
+                "desktop-entry-token",
+            )
+
+    async def unexpected_control_plane(*_args, **_kwargs):
+        raise AssertionError("local application must not call Control Plane")
+
+    monkeypatch.setattr(service, "LocalRuntimeClient", FakeLocalRuntimeClient)
+    monkeypatch.setattr(
+        service,
+        "verify_control_plane_application_access",
+        unexpected_control_plane,
+    )
+
+    async def create_runtime_agent_session(*_args):
+        return "local-runtime-session"
+
+    monkeypatch.setattr(
+        service,
+        "_create_desktop_runtime_agent_session",
+        create_runtime_agent_session,
+    )
+
+    result = await open_code_session(
+        db=db_session,
+        session_id=session.id,
+        ctx=SimpleNamespace(user=SimpleNamespace(id=11), tenant_id=7),
+        workspace_open=unexpected_control_plane,
+    )
+
+    assert manager_calls == 1
+    assert result["external_application_id"] == "local-desktop-app"
+    assert result["runtime_session_id"] == "local-runtime-session"
+
+
+@pytest.mark.asyncio
 async def test_open_code_session_prefers_configured_desktop_runtime_and_keeps_entry_token_private(
     db_session,
     monkeypatch,
@@ -1600,7 +1833,7 @@ async def test_open_code_session_prefers_configured_desktop_runtime_and_keeps_en
     session = AIChatSession(
         tenant_id=7,
         user_id=11,
-        external_application_id="desktop-code-app",
+        external_application_id="local-desktop-code-app",
         title="Desktop Code",
         mode="code",
         status="active",
@@ -1621,7 +1854,7 @@ async def test_open_code_session_prefers_configured_desktop_runtime_and_keeps_en
             opened_calls += 1
             return (
                 {
-                    "applicationId": "desktop-code-app",
+                    "applicationId": "local-desktop-code-app",
                     "workspaceId": "workspace-desktop",
                     "sandboxInstanceId": "desktop-instance",
                     "conversationId": "",
@@ -1642,12 +1875,14 @@ async def test_open_code_session_prefers_configured_desktop_runtime_and_keeps_en
     monkeypatch.setenv("DOLPHIN_AGENT_RUNTIME_PATH", "/tmp/agent-runtime")
     monkeypatch.setattr(service, "LocalRuntimeClient", FakeLocalRuntimeClient)
     monkeypatch.setattr(service, "bootstrap_runtime_session", unexpected_bootstrap)
-    verified: list[str] = []
+    async def unexpected_control_plane(*_args, **_kwargs):
+        raise AssertionError("local application must not call Control Plane")
 
-    async def allow_application(external_application_id: str, **_kwargs):
-        verified.append(external_application_id)
-
-    monkeypatch.setattr(service, "verify_control_plane_application_access", allow_application)
+    monkeypatch.setattr(
+        service,
+        "verify_control_plane_application_access",
+        unexpected_control_plane,
+    )
     created_with: list[tuple[str, str]] = []
 
     async def fake_create_agent_session(runtime_base_url: str, token: str) -> str:
@@ -1676,7 +1911,6 @@ async def test_open_code_session_prefers_configured_desktop_runtime_and_keeps_en
         )
     ).scalar_one()
     assert opened_calls == 1
-    assert verified == ["desktop-code-app"]
     assert bootstrap_calls == 0
     assert binding.execution_target == "desktop_agent_runtime"
     assert binding.runtime_session_id == "desktop-runtime-session-1"
@@ -1712,7 +1946,7 @@ async def test_desktop_runtime_creates_one_agent_session_per_shell_and_reuses_it
     first = AIChatSession(
         tenant_id=7,
         user_id=11,
-        external_application_id="desktop-code-app",
+        external_application_id="local-desktop-code-app",
         title="Desktop Code 1",
         mode="code",
         status="active",
@@ -1720,7 +1954,7 @@ async def test_desktop_runtime_creates_one_agent_session_per_shell_and_reuses_it
     second = AIChatSession(
         tenant_id=7,
         user_id=11,
-        external_application_id="desktop-code-app",
+        external_application_id="local-desktop-code-app",
         title="Desktop Code 2",
         mode="code",
         status="active",
@@ -1736,7 +1970,7 @@ async def test_desktop_runtime_creates_one_agent_session_per_shell_and_reuses_it
         async def open_application_with_entry_token(self, _db, _session, _ctx):
             return (
                 {
-                    "applicationId": "desktop-code-app",
+                    "applicationId": "local-desktop-code-app",
                     "workspaceId": "workspace-desktop",
                     "sandboxInstanceId": "desktop-instance",
                     "conversationId": "",
@@ -1759,10 +1993,14 @@ async def test_desktop_runtime_creates_one_agent_session_per_shell_and_reuses_it
     monkeypatch.setenv("DOLPHIN_AGENT_RUNTIME_PATH", "/tmp/agent-runtime")
     monkeypatch.setattr(service, "LocalRuntimeClient", FakeLocalRuntimeClient)
 
-    async def allow_application(*_args, **_kwargs):
-        return None
+    async def unexpected_control_plane(*_args, **_kwargs):
+        raise AssertionError("local application must not call Control Plane")
 
-    monkeypatch.setattr(service, "verify_control_plane_application_access", allow_application)
+    monkeypatch.setattr(
+        service,
+        "verify_control_plane_application_access",
+        unexpected_control_plane,
+    )
     monkeypatch.setattr(
         service,
         "_create_desktop_runtime_agent_session",
@@ -1821,7 +2059,7 @@ async def test_open_code_session_does_not_fallback_when_configured_desktop_runti
     session = AIChatSession(
         tenant_id=7,
         user_id=11,
-        external_application_id="desktop-code-app",
+        external_application_id="local-desktop-code-app",
         title="Desktop Code",
         mode="code",
         status="active",
@@ -1850,10 +2088,14 @@ async def test_open_code_session_does_not_fallback_when_configured_desktop_runti
     monkeypatch.setattr(service, "LocalRuntimeClient", FailingLocalRuntimeClient)
     monkeypatch.setattr(service, "default_workspace_open", unexpected_control_plane)
 
-    async def allow_application(*_args, **_kwargs):
-        return None
+    async def unexpected_application_check(*_args, **_kwargs):
+        raise AssertionError("local application must not call Control Plane")
 
-    monkeypatch.setattr(service, "verify_control_plane_application_access", allow_application)
+    monkeypatch.setattr(
+        service,
+        "verify_control_plane_application_access",
+        unexpected_application_check,
+    )
 
     with pytest.raises(HTTPException, match="LOCAL_RUNTIME_MANAGER_UNAVAILABLE") as exc:
         await open_code_session(
@@ -1867,7 +2109,7 @@ async def test_open_code_session_does_not_fallback_when_configured_desktop_runti
 
 
 @pytest.mark.asyncio
-async def test_desktop_runtime_does_not_start_when_control_plane_application_check_fails(
+async def test_remote_code_session_uses_control_plane_even_when_desktop_runtime_is_configured(
     db_session,
     monkeypatch,
 ):
@@ -1901,7 +2143,6 @@ async def test_desktop_runtime_does_not_start_when_control_plane_application_che
     monkeypatch.setenv("DOLPHIN_DESKTOP_DATA_DIR", "/tmp/desktop-data")
     monkeypatch.setenv("DOLPHIN_AGENT_RUNTIME_PATH", "/tmp/agent-runtime")
     monkeypatch.setattr(service, "LocalRuntimeClient", UnexpectedLocalRuntimeClient)
-    monkeypatch.setattr(service, "verify_control_plane_application_access", denied)
 
     with pytest.raises(HTTPException, match="Tenant is not accessible") as exc:
         await open_code_session(
@@ -1909,6 +2150,7 @@ async def test_desktop_runtime_does_not_start_when_control_plane_application_che
             session_id=session.id,
             ctx=SimpleNamespace(user=SimpleNamespace(id=11), tenant_id=7),
             authorization_header="Bearer user-token",
+            workspace_open=denied,
         )
 
     assert exc.value.status_code == 403
