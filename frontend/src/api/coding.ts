@@ -66,6 +66,8 @@ export interface WorkspaceInfo {
   project_id?: number
   project_type: string
   project_name: string
+  workspace_type?: string
+  disk_path?: string
   display_name?: string
   user_id: number
   status: string

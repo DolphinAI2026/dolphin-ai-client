@@ -276,6 +276,17 @@
           @remove-attachment="removePendingFileByIndex"
         >
           <template #footer-left>
+            <span
+              v-if="codeWorkspaceContext"
+              class="code-workspace-context"
+              :data-source="codeWorkspaceContext.source"
+              :title="`${codeWorkspaceContext.sourceLabel}：${codeWorkspaceContext.fullPath}`"
+            >
+              <AppIcon name="folder" :size="13" />
+              <span class="code-workspace-context-label">{{ codeWorkspaceContext.sourceLabel }}</span>
+              <span aria-hidden="true">·</span>
+              <span class="code-workspace-context-name">{{ codeWorkspaceContext.directoryName }}</span>
+            </span>
             <BuilderModelPicker
               v-model="selectedLlmId"
               :options="llmOptions"
@@ -565,9 +576,11 @@ import { useCodexPanels, type CodexPanelId, type CodexCommandId } from './coding
 import { buildFileTree, type TreeNode } from './coding/fileTree'
 import { usePanelResize } from '@/components/v2/config-assistant/composables/usePanelResize'
 import {
+  codingApi,
   listWorkspaceFiles,
   getWorkspaceChanges,
   acceptWorkspaceChanges,
+  type WorkspaceInfo,
   type WorkspaceChanges,
   type WorkspaceChangeEntry,
 } from '@/api/coding'
@@ -830,6 +843,54 @@ type ActivePreview = {
 
 const codexPanelWsId = computed<string | null>(() => currentSession.value?.workspace_id ?? null)
 const isCodeSession = computed(() => currentSession.value?.mode === 'code' && !!codexPanelWsId.value)
+
+type CodeWorkspaceContext = {
+  source: 'local' | 'remote'
+  sourceLabel: '本地目录' | '远程目录'
+  directoryName: string
+  fullPath: string
+}
+
+const LOCAL_WORKSPACE_TYPES = new Set(['external', 'code-local-application', 'local'])
+const codeWorkspaceMeta = ref<WorkspaceInfo | null>(null)
+let codeWorkspaceMetaRequest = 0
+
+function workspaceDirectoryName(path: string): string {
+  const normalized = path.replace(/\\/g, '/').replace(/\/+$/, '')
+  return normalized.split('/').pop() || normalized || path
+}
+
+const codeWorkspaceContext = computed<CodeWorkspaceContext | null>(() => {
+  const workspace = codeWorkspaceMeta.value
+  const fullPath = String(workspace?.disk_path || '').trim()
+  if (!workspace || !fullPath) return null
+  const workspaceType = String(workspace.workspace_type || workspace.project_type || '').trim()
+  const source = LOCAL_WORKSPACE_TYPES.has(workspaceType) ? 'local' : 'remote'
+  return {
+    source,
+    sourceLabel: source === 'local' ? '本地目录' : '远程目录',
+    directoryName: workspaceDirectoryName(fullPath),
+    fullPath,
+  }
+})
+
+async function loadCodeWorkspaceMeta(wsId: string) {
+  const request = ++codeWorkspaceMetaRequest
+  try {
+    const workspace = await codingApi.getWorkspace(wsId)
+    if (request === codeWorkspaceMetaRequest && codexPanelWsId.value === wsId) {
+      codeWorkspaceMeta.value = workspace
+    }
+  } catch {
+    if (request === codeWorkspaceMetaRequest) codeWorkspaceMeta.value = null
+  }
+}
+
+watch([codexPanelWsId, isCodeSession], ([wsId, codeSession]) => {
+  codeWorkspaceMetaRequest += 1
+  codeWorkspaceMeta.value = null
+  if (codeSession && wsId) void loadCodeWorkspaceMeta(wsId)
+}, { immediate: true })
 
 // ── 代码会话专属空状态(与 Builder 搭应用的开场区分)──────────────
 const codeWelcomeTitle = '告诉 AI 要改什么，它读代码、改文件、联调验证。'
@@ -4268,6 +4329,31 @@ onMounted(async () => {
 .input-area :deep(.ucc-footer),
 .input-area :deep(.ucc-footer-left) {
   overflow: visible;
+}
+
+.code-workspace-context {
+  display: inline-flex;
+  min-width: 0;
+  max-width: min(240px, 42vw);
+  flex: 0 1 240px;
+  align-items: center;
+  gap: 5px;
+  color: var(--ac-text-mute, #64748b);
+  font-size: 12px;
+  line-height: 20px;
+  white-space: nowrap;
+}
+
+.code-workspace-context-label {
+  flex: 0 0 auto;
+}
+
+.code-workspace-context-name {
+  min-width: 0;
+  overflow: hidden;
+  color: var(--ac-text, #1f2937);
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  text-overflow: ellipsis;
 }
 
 /* 对话界面风格队列提示卡 */
