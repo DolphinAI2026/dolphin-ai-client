@@ -14,6 +14,7 @@ import stat
 import time
 import uuid
 from collections.abc import Callable
+from datetime import datetime
 from pathlib import Path
 from typing import Any
 from urllib.parse import quote, unquote, urlsplit
@@ -45,7 +46,7 @@ _WORKSPACE_FORBIDDEN = "LOCAL_APPLICATION_WORKSPACE_FORBIDDEN"
 _WORKSPACE_INVALID = "LOCAL_APPLICATION_WORKSPACE_INVALID"
 _APPLICATION_INVALID = "LOCAL_APPLICATION_ID_INVALID"
 _INSTANCE_LOCKS: dict[tuple[int, str], asyncio.Lock] = {}
-_STARTING_TIMEOUT_SECONDS = 30
+_STARTING_TIMEOUT_SECONDS = 120
 _STARTING_POLL_SECONDS = 0.2
 _SANDBOX_TOKEN_FILE = "sandbox-token"
 
@@ -101,8 +102,7 @@ def _allocate_loopback_address() -> str:
     return f"{host}:{port}"
 
 
-def _validate_workspace_path(workspace: RegisteredWorkspace) -> Path:
-    raw_path = str(workspace.abs_path or "")
+def _validate_workspace_directory(raw_path: str) -> Path:
     if (
         not raw_path
         or not os.path.isabs(raw_path)
@@ -132,6 +132,10 @@ def _validate_workspace_path(workspace: RegisteredWorkspace) -> Path:
     if git_top_level != repository_path:
         raise _error(409, _WORKSPACE_INVALID, "注册路径必须是 Git 顶层目录")
     return repository_path
+
+
+def _validate_workspace_path(workspace: RegisteredWorkspace) -> Path:
+    return _validate_workspace_directory(str(workspace.abs_path or ""))
 
 
 async def _application_for_session(
@@ -189,6 +193,8 @@ async def resolve_registered_workspace(
     db: AsyncSession,
     session: Any,
     ctx: Any,
+    *,
+    validate_git: bool = True,
 ) -> RegisteredWorkspace:
     """Resolve one owned registered workspace without falling back to local paths."""
     session_tenant_id = getattr(session, "tenant_id", None)
@@ -241,7 +247,186 @@ async def resolve_registered_workspace(
     if not workspace_id:
         raise _error(409, _WORKSPACE_REQUIRED, "应用必须先绑定本地 Git 工作区")
     workspace = await _workspace_for_id(db, workspace_id, ctx)
-    _validate_workspace_path(workspace)
+    if validate_git:
+        _validate_workspace_path(workspace)
+    return workspace
+
+
+def _safe_workspace_component(value: object) -> str:
+    safe_name = re.sub(r"[^A-Za-z0-9._-]", "-", _text(value))[:60].strip(".-_")
+    return safe_name or "local-app"
+
+
+def default_local_workspace_root() -> Path:
+    configured_root = _text(os.environ.get("APAAS_WORKSPACE_ROOT"))
+    if configured_root:
+        return Path(configured_root).expanduser()
+    data_dir = _text(os.environ.get("DOLPHIN_DESKTOP_DATA_DIR"))
+    if data_dir:
+        return Path(data_dir) / "workspaces"
+    return Path.home() / ".ruijing-builder" / "workspaces"
+
+
+def default_local_workspace_path(app_code: str) -> Path:
+    return default_local_workspace_root() / _safe_workspace_component(app_code)
+
+
+async def ensure_registered_local_workspace(
+    db: AsyncSession,
+    ctx: Any,
+    *,
+    application_id: str,
+    display_name: str,
+    workspace_path: str | Path | None = None,
+) -> RegisteredWorkspace:
+    import subprocess
+
+    external_app_id = _text(application_id)
+    if not external_app_id or not _APPLICATION_COMPONENT.fullmatch(external_app_id):
+        raise _error(400, _APPLICATION_INVALID, "应用标识不安全")
+
+    ws_dir = Path(workspace_path) if workspace_path is not None else default_local_workspace_path(external_app_id)
+    ws_dir = ws_dir.expanduser()
+    if not ws_dir.is_absolute():
+        raise _error(409, _WORKSPACE_INVALID, "本地应用目录必须是绝对路径")
+    resolved_abs = str(ws_dir.resolve(strict=False))
+
+    existing = (
+        await db.execute(
+            select(RegisteredWorkspace).where(
+                RegisteredWorkspace.tenant_id == int(ctx.tenant_id),
+                RegisteredWorkspace.abs_path == resolved_abs,
+            )
+        )
+    ).scalar_one_or_none()
+    if existing is not None:
+        if existing.user_id != int(ctx.user.id):
+            raise _error(403, _WORKSPACE_FORBIDDEN, "无权使用该本地应用目录")
+        bound_application = _text(existing.apaas_app_id)
+        if bound_application and bound_application != external_app_id:
+            raise _error(409, _WORKSPACE_INVALID, "本地应用目录已被其他应用使用")
+        existing.workspace_type = "code-local-application"
+        existing.apaas_app_id = external_app_id
+        existing.display_name = _text(display_name)[:200] or _safe_workspace_component(external_app_id)
+        existing.last_opened_at = datetime.utcnow()
+        await db.commit()
+        await db.refresh(existing)
+        return existing
+
+    if ws_dir.exists() and (not ws_dir.is_dir() or any(ws_dir.iterdir())):
+        raise _error(409, _WORKSPACE_INVALID, "本地应用目录已存在且不为空")
+    ws_dir.mkdir(parents=True, exist_ok=True)
+
+    try:
+        subprocess.run(
+            ["git", "init"],
+            cwd=str(ws_dir),
+            capture_output=True,
+            check=True,
+            timeout=30,
+        )
+        subprocess.run(
+            ["git", "commit", "--allow-empty", "-m", "init"],
+            cwd=str(ws_dir),
+            capture_output=True,
+            check=True,
+            timeout=30,
+            env={
+                **os.environ,
+                "GIT_AUTHOR_NAME": "dolphin-code",
+                "GIT_AUTHOR_EMAIL": "code@local",
+                "GIT_COMMITTER_NAME": "dolphin-code",
+                "GIT_COMMITTER_EMAIL": "code@local",
+            },
+        )
+    except (OSError, subprocess.SubprocessError) as exc:
+        raise _error(503, _PREPARATION_FAILED, "无法初始化本地应用 Git 目录") from exc
+
+    workspace = RegisteredWorkspace(
+        ws_id=f"{int(ctx.user.id)}_{uuid.uuid4().hex[:8]}",
+        abs_path=str(ws_dir.resolve()),
+        user_id=int(ctx.user.id),
+        tenant_id=int(ctx.tenant_id),
+        workspace_type="code-local-application",
+        apaas_app_id=external_app_id,
+        display_name=_text(display_name)[:200] or _safe_workspace_component(external_app_id),
+    )
+    db.add(workspace)
+    await db.commit()
+    await db.refresh(workspace)
+    return workspace
+
+
+async def rebind_registered_local_workspace(
+    db: AsyncSession,
+    session: Any,
+    ctx: Any,
+    *,
+    workspace_path: str | Path,
+) -> RegisteredWorkspace:
+    import subprocess
+
+    workspace = await resolve_registered_workspace(
+        db,
+        session,
+        ctx,
+        validate_git=False,
+    )
+    ws_dir = Path(workspace_path).expanduser()
+    if not ws_dir.is_absolute():
+        raise _error(409, _WORKSPACE_INVALID, "本地应用目录必须是绝对路径")
+    resolved_abs = str(ws_dir.resolve(strict=False))
+    occupied = (
+        await db.execute(
+            select(RegisteredWorkspace).where(
+                RegisteredWorkspace.tenant_id == int(ctx.tenant_id),
+                RegisteredWorkspace.abs_path == resolved_abs,
+                RegisteredWorkspace.id != workspace.id,
+            )
+        )
+    ).scalar_one_or_none()
+    if occupied is not None:
+        if occupied.user_id != int(ctx.user.id):
+            raise _error(403, _WORKSPACE_FORBIDDEN, "无权使用该本地应用目录")
+        raise _error(409, _WORKSPACE_INVALID, "本地应用目录已被其他应用使用")
+
+    initialize_git = not ws_dir.exists() or (
+        ws_dir.is_dir() and not any(ws_dir.iterdir())
+    )
+    if ws_dir.exists() and not ws_dir.is_dir():
+        raise _error(409, _WORKSPACE_INVALID, "本地应用目录不是目录")
+    if initialize_git:
+        ws_dir.mkdir(parents=True, exist_ok=True)
+        try:
+            subprocess.run(
+                ["git", "init"],
+                cwd=str(ws_dir),
+                capture_output=True,
+                check=True,
+                timeout=30,
+            )
+            subprocess.run(
+                ["git", "commit", "--allow-empty", "-m", "init"],
+                cwd=str(ws_dir),
+                capture_output=True,
+                check=True,
+                timeout=30,
+                env={
+                    **os.environ,
+                    "GIT_AUTHOR_NAME": "dolphin-code",
+                    "GIT_AUTHOR_EMAIL": "code@local",
+                    "GIT_COMMITTER_NAME": "dolphin-code",
+                    "GIT_COMMITTER_EMAIL": "code@local",
+                },
+            )
+        except (OSError, subprocess.SubprocessError) as exc:
+            raise _error(503, _PREPARATION_FAILED, "无法初始化本地应用 Git 目录") from exc
+
+    _validate_workspace_directory(resolved_abs)
+    workspace.abs_path = resolved_abs
+    workspace.last_opened_at = datetime.utcnow()
+    await db.commit()
+    await db.refresh(workspace)
     return workspace
 
 
@@ -718,7 +903,7 @@ class LocalRuntimeClient:
         self.engineering_service_factory = engineering_service_factory
         self.http_client_factory = http_client_factory or (
             lambda: httpx.AsyncClient(
-                timeout=httpx.Timeout(connect=5, read=30, write=10, pool=10)
+                timeout=httpx.Timeout(connect=5, read=140, write=10, pool=10)
             )
         )
 
@@ -850,6 +1035,95 @@ class LocalRuntimeClient:
             if time.monotonic() >= deadline:
                 raise _error(503, _MANAGER_UNAVAILABLE, "本地 Runtime 启动超时")
             await asyncio.sleep(_STARTING_POLL_SECONDS)
+
+    async def application_open_status(
+        self,
+        db: AsyncSession,
+        session: Any,
+        ctx: Any,
+    ) -> dict[str, Any]:
+        application_id = _application_id(session)
+        runtime_scope_id = _runtime_scope_id(ctx, application_id)
+        workspace = await resolve_registered_workspace(
+            db,
+            session,
+            ctx,
+            validate_git=False,
+        )
+        _validate_workspace_path(workspace)
+        response = await self._manager_request(
+            "GET",
+            f"/v1/local-runtime/instances/{runtime_scope_id}",
+        )
+        if response.status_code == 404:
+            return {
+                "phase": "checking_project",
+                "runtime_state": "missing",
+                "runtime_scope_id": runtime_scope_id,
+            }
+        status = self._manager_status(response, runtime_scope_id, application_id)
+        state = _text(status.get("state"))
+        if state == "starting":
+            phase = "starting_runtime"
+        elif state == "ready":
+            _validated_manager_urls(status)
+            phase = "opening_workbench"
+        else:
+            raise _error(409, _INSTANCE_CONFLICT, "本地应用已有不可复用的 Runtime 实例")
+        return {
+            "phase": phase,
+            "runtime_state": state,
+            "runtime_scope_id": runtime_scope_id,
+            "sandbox_instance_id": _text(status.get("sandbox_instance_id")) or None,
+        }
+
+    async def restart_application(
+        self,
+        db: AsyncSession,
+        session: Any,
+        ctx: Any,
+        *,
+        validate_workspace: bool = True,
+    ) -> dict[str, Any]:
+        application_id = _application_id(session)
+        runtime_scope_id = _runtime_scope_id(ctx, application_id)
+        if validate_workspace:
+            workspace = await resolve_registered_workspace(
+                db,
+                session,
+                ctx,
+                validate_git=False,
+            )
+            _validate_workspace_path(workspace)
+        status_path = f"/v1/local-runtime/instances/{runtime_scope_id}"
+        response = await self._manager_request("GET", status_path)
+        if response.status_code == 404:
+            return {
+                "runtime_state": "missing",
+                "runtime_scope_id": runtime_scope_id,
+                "stopped": True,
+            }
+        status = self._manager_status(response, runtime_scope_id, application_id)
+        sandbox_instance_id = _text(status.get("sandbox_instance_id"))
+        if not sandbox_instance_id:
+            raise _error(502, _MANAGER_INVALID_RESPONSE, "本地 Runtime manager 返回了无效响应")
+        stopped = self._manager_status(
+            await self._manager_request(
+                "DELETE",
+                f"{status_path}/{sandbox_instance_id}",
+            ),
+            runtime_scope_id,
+            application_id,
+            sandbox_instance_id,
+        )
+        if _text(stopped.get("state")) != "stopped":
+            raise _error(502, _MANAGER_INVALID_RESPONSE, "本地 Runtime manager 未停止实例")
+        return {
+            "runtime_state": "stopped",
+            "runtime_scope_id": runtime_scope_id,
+            "sandbox_instance_id": sandbox_instance_id,
+            "stopped": True,
+        }
 
     async def _assert_reused_provider(
         self,
@@ -1018,29 +1292,20 @@ class LocalRuntimeClient:
         db: AsyncSession,
         session: Any,
         ctx: Any,
+        *,
+        on_phase: Callable[[str], None] | None = None,
     ) -> tuple[dict[str, Any], str]:
         application_id = _application_id(session)
         runtime_scope_id = _runtime_scope_id(ctx, application_id)
-        workspace = await resolve_registered_workspace(db, session, ctx)
-        repository_path = _validate_workspace_path(workspace)
-        application = await _application_for_session(db, session, ctx)
-        title = (
-            _text(getattr(application, "app_name", None))
-            or _text(getattr(session, "external_app_name", None))
-            or application_id
+        workspace = await resolve_registered_workspace(
+            db,
+            session,
+            ctx,
+            validate_git=False,
         )
-        try:
-            engineering_session = self.engineering_service_factory(
-                repository_path
-            ).ensure_application_session(application_id, title)
-        except HTTPException:
-            raise
-        except Exception as exc:
-            raise _error(
-                503,
-                _PREPARATION_FAILED,
-                "无法准备本地应用 Runtime 工作区",
-            ) from exc
+        repository_path = _validate_workspace_path(workspace)
+        if on_phase is not None:
+            on_phase("starting_runtime")
 
         # The Runtime is shared by an application scope. Agent-runtime derives
         # the sidecar conversation ID from each runtime agent session when this
@@ -1092,6 +1357,24 @@ class LocalRuntimeClient:
                                     sandbox_instance_id,
                                 )
                             else:
+                                application = await _application_for_session(db, session, ctx)
+                                title = (
+                                    _text(getattr(application, "app_name", None))
+                                    or _text(getattr(session, "external_app_name", None))
+                                    or application_id
+                                )
+                                try:
+                                    engineering_session = self.engineering_service_factory(
+                                        repository_path
+                                    ).ensure_application_session(application_id, title)
+                                except HTTPException:
+                                    raise
+                                except Exception as exc:
+                                    raise _error(
+                                        503,
+                                        _PREPARATION_FAILED,
+                                        "无法准备本地应用 Runtime 工作区",
+                                    ) from exc
                                 sandbox_instance_id = _new_instance_id()
                                 provider_document, _identity = await _provider_document(
                                     db,

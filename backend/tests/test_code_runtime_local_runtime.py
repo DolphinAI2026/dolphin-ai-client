@@ -26,6 +26,8 @@ from app.code_runtime.local_runtime import (
     LocalRuntimeClient,
     _runtime_scope_id,
     build_runtime_context,
+    ensure_registered_local_workspace,
+    rebind_registered_local_workspace,
     resolve_registered_workspace,
 )
 
@@ -215,6 +217,20 @@ def _manager_status_for_start(request: httpx.Request, *, state: str = "ready") -
     )
 
 
+@pytest.mark.asyncio
+async def test_default_manager_client_allows_long_runtime_start_reads():
+    client = LocalRuntimeClient("http://127.0.0.1:9988", "manager-secret")
+    http_client = client.http_client_factory()
+
+    try:
+        assert http_client.timeout.connect == 5
+        assert http_client.timeout.read == 140
+        assert http_client.timeout.write == 10
+        assert http_client.timeout.pool == 10
+    finally:
+        await http_client.aclose()
+
+
 async def _runtime_case(
     db: AsyncSession,
     git_repo: Path,
@@ -303,6 +319,65 @@ async def test_open_rejects_workspace_owned_by_another_user(
 
     assert exc.value.status_code == 403
     assert "LOCAL_APPLICATION_WORKSPACE_FORBIDDEN" in str(exc.value.detail)
+
+
+@pytest.mark.asyncio
+async def test_register_existing_workspace_rejects_path_owned_by_another_user(
+    db,
+    ctx,
+    tmp_path,
+):
+    workspace_path = tmp_path / "foreign-local-app"
+    workspace_path.mkdir()
+    foreign = await _create_workspace(
+        db,
+        workspace_path,
+        user_id=12,
+        apaas_app_id="local-app-1",
+    )
+
+    with pytest.raises(HTTPException) as exc:
+        await ensure_registered_local_workspace(
+            db,
+            ctx,
+            application_id="local-app-1",
+            display_name="Local app",
+            workspace_path=workspace_path,
+        )
+
+    assert exc.value.status_code == 403
+    assert "LOCAL_APPLICATION_WORKSPACE_FORBIDDEN" in str(exc.value.detail)
+    assert foreign.user_id == 12
+
+
+@pytest.mark.asyncio
+async def test_rebind_workspace_keeps_local_application_identity(
+    db,
+    ctx,
+    git_repo,
+):
+    workspace = await _create_workspace(db, git_repo)
+    code_session = await _create_code_session(db, workspace_id=workspace.ws_id)
+    replacement = git_repo.parent / "replacement-repo"
+    replacement.mkdir()
+    subprocess.run(
+        ["git", "init", str(replacement)],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+
+    rebound = await rebind_registered_local_workspace(
+        db,
+        code_session,
+        ctx,
+        workspace_path=replacement,
+    )
+
+    assert rebound.id == workspace.id
+    assert rebound.ws_id == workspace.ws_id
+    assert rebound.apaas_app_id == "local-app-1"
+    assert rebound.abs_path == str(replacement)
 
 
 @pytest.mark.asyncio
@@ -622,7 +697,7 @@ async def test_open_reuses_active_application_instance_across_conversations(
         "app.code_runtime.local_runtime._allocate_loopback_address",
         lambda: (_ for _ in ()).throw(AssertionError("active reuse allocated a port")),
     )
-    client, _service = _client(tmp_path, engineering_session, httpx.MockTransport(handler))
+    client, service = _client(tmp_path, engineering_session, httpx.MockTransport(handler))
 
     first_opened = await client.open_application(db, first, ctx)
     second_opened = await client.open_application(db, second, ctx)
@@ -630,9 +705,88 @@ async def test_open_reuses_active_application_instance_across_conversations(
     assert first_opened["sandboxInstanceId"] == second_opened["sandboxInstanceId"]
     assert [request.method for request in calls] == ["GET", "GET"]
     assert len({request.url.path for request in calls}) == 1
+    assert service.calls == []
     assert context_path.read_bytes() == b'{"conversationId":"original"}\n'
     assert (runtime_dir / "model-provider.json").exists()
     assert not (runtime_dir / "ci-provider.json").exists()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("manager_response", "expected_phase", "expected_state"),
+    [
+        (httpx.Response(404), "checking_project", "missing"),
+        (
+            httpx.Response(200, json=_manager_status(state="starting")),
+            "starting_runtime",
+            "starting",
+        ),
+        (
+            httpx.Response(200, json=_manager_status(state="ready")),
+            "opening_workbench",
+            "ready",
+        ),
+    ],
+)
+async def test_application_open_status_maps_manager_state_without_preparing_git_session(
+    db,
+    ctx,
+    git_repo,
+    engineering_session,
+    tmp_path,
+    manager_response,
+    expected_phase,
+    expected_state,
+):
+    workspace = await _create_workspace(db, git_repo)
+    code_session = await _create_code_session(db, workspace_id=workspace.ws_id)
+    client, service = _client(
+        tmp_path,
+        engineering_session,
+        httpx.MockTransport(lambda _request: manager_response),
+    )
+
+    status = await client.application_open_status(db, code_session, ctx)
+
+    assert status["phase"] == expected_phase
+    assert status["runtime_state"] == expected_state
+    assert service.calls == []
+
+
+@pytest.mark.asyncio
+async def test_restart_application_stops_the_current_manager_instance(
+    db,
+    ctx,
+    git_repo,
+    engineering_session,
+    tmp_path,
+):
+    workspace = await _create_workspace(db, git_repo)
+    code_session = await _create_code_session(db, workspace_id=workspace.ws_id)
+    requests: list[httpx.Request] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        requests.append(request)
+        if request.method == "GET":
+            return httpx.Response(200, json=_manager_status())
+        return httpx.Response(200, json=_manager_status(state="stopped"))
+
+    client, service = _client(
+        tmp_path,
+        engineering_session,
+        httpx.MockTransport(handler),
+    )
+
+    stopped = await client.restart_application(db, code_session, ctx)
+
+    scope_id = _runtime_scope_id(ctx, "local-app-1")
+    assert [(request.method, request.url.path) for request in requests] == [
+        ("GET", f"/v1/local-runtime/instances/{scope_id}"),
+        ("DELETE", f"/v1/local-runtime/instances/{scope_id}/local-instance-1"),
+    ]
+    assert stopped["runtime_state"] == "stopped"
+    assert stopped["stopped"] is True
+    assert service.calls == []
 
 
 @pytest.mark.asyncio

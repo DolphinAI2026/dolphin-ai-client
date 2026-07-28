@@ -9,11 +9,15 @@ export const CODE_RUNTIME_ACTIVATION_RETRY_DELAYS_MS = [] as const
 // 首次冷启动会同步等待 Control Plane 部署 Sandbox；必须长于后端的 workspace/open 预算。
 export const CODE_RUNTIME_WORKSPACE_OPEN_TIMEOUT_MS = 690_000
 
+export type CodeApplicationSource = 'local' | 'remote'
+
 export interface CodeApplication extends MergedApplication {
   id: string
   external_application_id: string
-  source: 'd-ai-code'
+  source: 'd-ai-code' | 'desktop-local'
   app_type: 'ai-code'
+  local_workspace_path?: string | null
+  workspace_id?: string | null
   repository?: Record<string, any> | null
   owner?: Record<string, any> | null
 }
@@ -23,13 +27,15 @@ export interface CodeApplicationListResponse {
   page: number
   pageSize: number
   total: number
-  source: 'd-ai-code'
+  source: 'd-ai-code' | 'desktop-local'
 }
 
 export interface CreateCodeApplicationRequest {
   app_name: string
   app_code: string
   seed_project_id?: string | null
+  local_application?: boolean
+  local_workspace_path?: string | null
 }
 
 export interface CodeRuntimeOpenResponse {
@@ -45,6 +51,15 @@ export interface CodeRuntimeOpenResponse {
   cache_profile?: 'normal' | 'performance'
   browser_hot_frames?: number
   server_warm_sandboxes_per_user?: number
+}
+
+export type CodeWorkspaceOpenPhase = 'checking_project' | 'starting_runtime' | 'opening_workbench'
+
+export interface CodeWorkspaceOpenStatus {
+  phase: CodeWorkspaceOpenPhase
+  runtime_state: string
+  runtime_scope_id?: string
+  sandbox_instance_id?: string | null
 }
 
 export interface CodeAgentSessionRecord {
@@ -89,11 +104,21 @@ export function resolveCodeRuntimeEmbedUrl(url: string, baseUrl = import.meta.en
 }
 
 export const codeRuntimeApi = {
-  listApplications(params?: { keyword?: string; provisionStatus?: string; page?: number; pageSize?: number }) {
-    return request.get<any, CodeApplicationListResponse>('/code/applications', { params, headers: controlPlaneCodeAuthorization() })
+  listApplications(params?: { source?: CodeApplicationSource; keyword?: string; provisionStatus?: string; page?: number; pageSize?: number }) {
+    return request.get<any, CodeApplicationListResponse>('/code/applications', {
+      params,
+      ...(params?.source === 'local' ? {} : { headers: controlPlaneCodeAuthorization() }),
+    })
   },
   createApplication(body: CreateCodeApplicationRequest) {
-    return request.post<any, CodeApplication>('/code/applications', body, { headers: controlPlaneCodeAuthorization() })
+    return request.post<any, CodeApplication>('/code/applications', body, body.local_application
+      ? undefined
+      : { headers: controlPlaneCodeAuthorization() })
+  },
+  defaultWorkspace(appCode: string) {
+    return request.get<any, { workspace_root: string; workspace_path: string }>('/code/applications/default-workspace', {
+      params: { app_code: appCode },
+    })
   },
   createSessionFromApp(appId: number, body?: { title?: string; selected_llm_config_id?: number | null }) {
     return request.post<any, AIChatSession>('/code/sessions/from-app', {
@@ -128,6 +153,25 @@ export const codeRuntimeApi = {
       ...opened,
       embed_url: resolveCodeRuntimeEmbedUrl(opened.embed_url),
     }
+  },
+  getOpenStatus(sessionRef: number | string) {
+    const encodedSessionRef = encodeURIComponent(String(sessionRef))
+    return request.get<any, CodeWorkspaceOpenStatus>(
+      `/code/sessions/${encodedSessionRef}/open-status`,
+    )
+  },
+  restartLocalRuntime(sessionRef: number | string) {
+    const encodedSessionRef = encodeURIComponent(String(sessionRef))
+    return request.post<any, { runtime_state: string; stopped: boolean }>(
+      `/code/sessions/${encodedSessionRef}/local-runtime/restart`,
+    )
+  },
+  rebindLocalWorkspace(sessionRef: number | string, localWorkspacePath: string) {
+    const encodedSessionRef = encodeURIComponent(String(sessionRef))
+    return request.patch<any, { workspace_id: string; local_workspace_path: string }>(
+      `/code/sessions/${encodedSessionRef}/local-workspace`,
+      { local_workspace_path: localWorkspacePath },
+    )
   },
   listRailHistory() {
     return request.get<any, CodeRailHistoryResponse>('/code/rail/history', { headers: controlPlaneCodeAuthorization() })
